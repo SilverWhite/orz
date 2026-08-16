@@ -74,6 +74,13 @@ impl ToolDispatcher {
             // auto-allowed under every policy; side effects happen only at
             // the mechanical issuance exit).
             || tool_name == "blackboard.action_write"
+            // PLAN-FIRST 阶段 A (2026-08-16, ADR-0010 §14.17): `plan_write`
+            // writes ONLY the in-memory blackboard plan section — no file,
+            // no network, no external side effect — so it is ReadOnly-classed
+            // like the whitelist/action-bar writes (auto-allowed under every
+            // policy; the plan epoch archive write is a mechanical best-
+            // effort audit append, not a worktree mutation).
+            || tool_name == "plan_write"
             // GAP-RETRIEVAL-TOOLS (2026-08-10): `project_doc_index` is a
             // workspace-local read (discovery + query) — ReadOnly class
             // (auto-allowed under every policy; the retrieval subagent's
@@ -132,6 +139,10 @@ impl ToolDispatcher {
         } else if tool_name == "blackboard.action_write" {
             // P0-C S2: the action-bar order write is session bookkeeping
             // (same honest fold as the whitelist — in-memory only).
+            "other"
+        } else if tool_name == "plan_write" {
+            // PLAN-FIRST 阶段 A: the plan-section write is session
+            // bookkeeping (in-memory blackboard only) — honest "other" fold.
             "other"
         } else if Self::is_shell_tool(tool_name) {
             "terminal"
@@ -293,6 +304,13 @@ mod tests {
             RiskClass::ReadOnly
         );
         assert!(!ToolDispatcher::modifies_files("blackboard.action_write"));
+        // PLAN-FIRST 阶段 A (2026-08-16): `plan_write` writes only the
+        // in-memory blackboard plan section — ReadOnly class (auto-allowed).
+        assert_eq!(
+            ToolDispatcher::risk_class("plan_write"),
+            RiskClass::ReadOnly
+        );
+        assert!(!ToolDispatcher::modifies_files("plan_write"));
     }
 
     #[test]

@@ -344,6 +344,44 @@ pub fn apply_event(app: &mut TuiApp, event: TuiEvent) -> Vec<String> {
             );
             vec![format!("模板检查点: {checkpoint_id} → {outcome}")]
         }
+        // PLAN-FIRST 阶段 A (2026-08-16, ADR-0010 §14.17): first-round plan
+        // gate result — outcome and validation summary only.
+        TuiEvent::PlanWrite {
+            plan_id,
+            goal,
+            step_count,
+            outcome,
+            validation_valid,
+            validation_error_count,
+            degrade_reason,
+        } => {
+            let state = match (outcome.as_str(), validation_valid, degrade_reason.as_deref()) {
+                ("accepted", true, _) => "校验通过".to_string(),
+                ("refill_requested", _, _) => {
+                    format!("校验失败({validation_error_count} 项)")
+                }
+                ("degraded", _, Some("plan_not_submitted")) => {
+                    "未提交计划（机械降级）".to_string()
+                }
+                ("degraded", _, Some("plan_rotate_failed")) => {
+                    "落板失败（机械降级）".to_string()
+                }
+                ("degraded", false, _) => {
+                    format!("校验失败({validation_error_count} 项，机械降级)")
+                }
+                ("degraded", _, reason) => {
+                    format!("机械降级（{}）", reason.unwrap_or("unknown"))
+                }
+                (other, _, _) => other.to_string(),
+            };
+            app.content.add_system_message(
+                &format!(
+                    "[计划写入] {plan_id} 「{goal}」({step_count} 步): {outcome}（校验{state}）"
+                ),
+                false,
+            );
+            vec![format!("计划写入: {plan_id} → {outcome}")]
+        }
         TuiEvent::InformationSufficiencyAssessment {
             assessment_id,
             status,

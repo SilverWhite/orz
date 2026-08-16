@@ -7,6 +7,7 @@ description = "Agent builder, definition parsing, and system prompt assembly"
 
 [dependencies]
 dunce = { workspace = true }
+orz-assurance = { path = "../../orz-assurance" }
 orz-hooks = { path = "../orz-hooks" }
 orz-sampling-types = { path = "../orz-sampling-types" }
 orz-tools = { path = "../orz-tools" }

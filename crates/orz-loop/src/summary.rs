@@ -168,7 +168,7 @@ fn render_plan(steps: &[PlanStep]) -> String {
             "{}. [{}] {}",
             i + 1,
             step_status_label(&step.status),
-            step.description
+            step.goal
         );
         if out.chars().count() + line.chars().count() + 1 > SUMMARY_SLOT_LIMITS[1] {
             break;
@@ -476,7 +476,10 @@ mod tests {
             w.plan.goal = Some("修复 bug".into());
             w.plan.steps.push(PlanStep {
                 id: "s1".into(),
-                description: "复现".into(),
+                goal: "复现".into(),
+                actions: Vec::new(),
+                acceptance: String::new(),
+                evidence: Vec::new(),
                 status: StepStatus::InProgress,
             });
             w.edits.push(EditRecord {

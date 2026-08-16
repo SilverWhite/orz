@@ -238,6 +238,11 @@ struct StoredSession {
     /// copy is the authoritative write; the sidecar is best-effort). Taken
     /// out during a run, written back on success (orientation pattern).
     conversation: Option<Vec<Message>>,
+    /// PLAN-FIRST 阶段 A (2026-08-16, ADR-0010 §14.17): whether this
+    /// session has already completed its first-round plan gate. Restored
+    /// sessions (with a conversation sidecar) count as done; the flag is
+    /// set after the first successful run.
+    plan_gate_done: bool,
 }
 
 /// GAP-RETRIEVAL-TOOLS (2026-08-10): the persisted retrieval-mode +
@@ -854,7 +859,10 @@ impl AcpServer {
                 orientation: Some(orientation),
                 activation_snapshot: Some(activation_snapshot),
                 browser: None,
-                conversation,
+                conversation: conversation.clone(),
+                // Restored history ⇒ this session already had its first
+                // round before; do not re-trigger the plan gate.
+                plan_gate_done: conversation.is_some(),
             },
         );
 
@@ -1034,6 +1042,17 @@ impl AcpServer {
             session.browser = Some(host.browser_session().clone());
         }
         let controller = AgentLoopController::with_gateway(self.model_gateway.clone())
+            // PLAN-FIRST 阶段 A (2026-08-16, ADR-0010 §14.17): production
+            // sessions start with the first-round plan gate.
+            .with_plan_first_enabled(true)
+            .with_plan_first_session_done(
+                self.sessions
+                    .lock()
+                    .unwrap()
+                    .get(session_id)
+                    .map(|s| s.plan_gate_done)
+                    .unwrap_or(true),
+            )
             .with_snapshot_store(Some(handle.snapshot_store.clone()))
             .with_retrieval_mode(
                 activation_snapshot.retrieval_mode,
@@ -1115,6 +1134,7 @@ impl AcpServer {
             persist_conversation_sidecar(&base_dir, session_id, &conversation);
             if let Some(session) = self.sessions.lock().unwrap().get_mut(session_id) {
                 session.conversation = Some(conversation);
+                session.plan_gate_done = true;
             }
         }
 

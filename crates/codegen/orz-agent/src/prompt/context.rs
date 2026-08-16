@@ -855,7 +855,7 @@ mod tests {
         assert!(!rendered.contains("## No time estimates"));
     }
     #[test]
-    fn child_rendered_prompt_includes_role_and_persona_sections() {
+    fn child_rendered_prompt_includes_role_but_not_persona_sections() {
         let ctx = minijinja::context! {
             os_name => "linux",
             shell_path => "/bin/bash",
@@ -878,8 +878,14 @@ mod tests {
         let rendered = render_subagent_template(ctx);
         assert!(rendered.contains("<role-instructions>"));
         assert!(rendered.contains("Follow Rust conventions"));
-        assert!(rendered.contains("<persona>"));
-        assert!(rendered.contains("You are a code reviewer"));
+        assert!(
+            !rendered.contains("<persona>"),
+            "persona section must be retired (PLAN-FIRST D1)"
+        );
+        assert!(
+            !rendered.contains("You are a code reviewer"),
+            "persona instructions must not reach the subagent system prompt (PLAN-FIRST D1)"
+        );
         assert!(
             !rendered.contains("<memory>"),
             "memory should be absent when disabled"

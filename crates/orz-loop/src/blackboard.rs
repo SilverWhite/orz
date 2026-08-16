@@ -13,11 +13,36 @@ use std::sync::RwLock;
 
 use serde::{Deserialize, Serialize};
 
-/// A single step in the execution plan.
+/// One action instance inside a plan step (design §5: `{"step_id", "do",
+/// "with"}` — the step-id binds the action to its owning step; `with` is the
+/// action's parameter object).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PlanAction {
+    #[serde(rename = "step_id")]
+    pub step_id: String,
+    #[serde(rename = "do")]
+    pub do_action: String,
+    #[serde(rename = "with")]
+    pub with: serde_json::Value,
+}
+
+/// A single step in the execution plan (PLAN-FIRST 阶段 A structured plan:
+/// id / goal / actions / acceptance / evidence; status is mechanically
+/// managed by the assistant layer, not by the model).
+/// 2026-08-16 审查收口：旧 epoch 归档（description-only 步骤）经
+/// `alias="description"` + serde 默认值兼容读取——升级前归档仍可回查，
+/// 不静默丢弃（P2 修复，测试锁定）。
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PlanStep {
     pub id: String,
-    pub description: String,
+    #[serde(default, alias = "description")]
+    pub goal: String,
+    #[serde(default)]
+    pub actions: Vec<PlanAction>,
+    #[serde(default)]
+    pub acceptance: String,
+    #[serde(default)]
+    pub evidence: Vec<String>,
     pub status: StepStatus,
 }
 
@@ -295,7 +320,56 @@ impl Blackboard {
         steps: Vec<String>,
         persisted_at: &str,
     ) -> Result<Option<EpochSnapshot>, PlanEpochError> {
+        self.rotate_impl(plan_id, plan_epoch, goal, Self::steps_from_descriptions(steps), persisted_at)
+    }
+
+    /// PLAN-FIRST 阶段 A (2026-08-16, ADR-0010 §14.17): same plan-epoch
+    /// rotation semantics as [`Self::rotate_to_plan`], but accepts the
+    /// structured steps from the first-round `plan_write` gate (design §5).
+    /// Step statuses are taken as provided — the gate submits `pending`
+    /// steps; the assistant layer owns status transitions later.
+    pub fn rotate_to_structured_plan(
+        &mut self,
+        plan_id: String,
+        plan_epoch: u64,
+        goal: String,
+        steps: Vec<PlanStep>,
+        persisted_at: &str,
+    ) -> Result<Option<EpochSnapshot>, PlanEpochError> {
+        self.rotate_impl(plan_id, plan_epoch, goal, steps, persisted_at)
+    }
+
+    /// Legacy description-only steps (pre-PLAN-FIRST plan mode): first step
+    /// in-progress, the rest pending — preserves the old status-line
+    /// behavior for `with_plan` call sites.
+    fn steps_from_descriptions(steps: Vec<String>) -> Vec<PlanStep> {
         use crate::blackboard::StepStatus;
+        steps
+            .into_iter()
+            .enumerate()
+            .map(|(i, description)| PlanStep {
+                id: format!("step-{}", i + 1),
+                goal: description,
+                actions: Vec::new(),
+                acceptance: String::new(),
+                evidence: Vec::new(),
+                status: if i == 0 {
+                    StepStatus::InProgress
+                } else {
+                    StepStatus::Pending
+                },
+            })
+            .collect()
+    }
+
+    fn rotate_impl(
+        &mut self,
+        plan_id: String,
+        plan_epoch: u64,
+        goal: String,
+        steps: Vec<PlanStep>,
+        persisted_at: &str,
+    ) -> Result<Option<EpochSnapshot>, PlanEpochError> {
         if plan_epoch == 0 {
             return Err(PlanEpochError::ZeroEpoch);
         }
@@ -311,17 +385,7 @@ impl Blackboard {
                 // Same-epoch revision: no rotation, no clearing.
                 self.plan.goal = Some(goal);
                 self.plan.steps.clear();
-                for (i, desc) in steps.into_iter().enumerate() {
-                    self.plan.steps.push(PlanStep {
-                        id: format!("step-{}", i + 1),
-                        description: desc,
-                        status: if i == 0 {
-                            StepStatus::InProgress
-                        } else {
-                            StepStatus::Pending
-                        },
-                    });
-                }
+                self.plan.steps.extend(steps);
                 return Ok(None);
             }
             if plan_epoch <= self.plan.plan_epoch {
@@ -345,17 +409,7 @@ impl Blackboard {
             decisions: Vec::new(),
             auth_grants: Vec::new(),
         };
-        for (i, desc) in steps.into_iter().enumerate() {
-            self.plan.steps.push(PlanStep {
-                id: format!("step-{}", i + 1),
-                description: desc,
-                status: if i == 0 {
-                    StepStatus::InProgress
-                } else {
-                    StepStatus::Pending
-                },
-            });
-        }
+        self.plan.steps.extend(steps);
         self.edits.clear();
         self.tool_actions.clear();
         self.exec = ExecSection::default();
@@ -477,7 +531,10 @@ mod tests {
             w.plan.goal = Some("test goal".into());
             w.plan.steps.push(PlanStep {
                 id: "step-1".into(),
-                description: "do something".into(),
+                goal: "do something".into(),
+                actions: Vec::new(),
+                acceptance: String::new(),
+                evidence: Vec::new(),
                 status: StepStatus::Pending,
             });
         }
@@ -486,6 +543,23 @@ mod tests {
         let r = bb.read();
         assert_eq!(r.plan.goal.as_deref(), Some("test goal"));
         assert_eq!(r.plan.steps.len(), 1);
+    }
+
+    /// 2026-08-16 审查收口：旧（description-only）PlanStep 归档仍可反序列化
+    /// ——description 映射到 goal，新字段取默认值，状态保留（升级前 epoch
+    /// 快照不静默丢弃）。
+    #[test]
+    fn legacy_description_plan_step_deserializes_with_compat() {
+        let old: PlanStep = serde_json::from_str(
+            r#"{"id":"step-1","description":"旧步骤","status":"InProgress"}"#,
+        )
+        .expect("legacy plan step must deserialize");
+        assert_eq!(old.id, "step-1");
+        assert_eq!(old.goal, "旧步骤");
+        assert!(old.actions.is_empty());
+        assert!(old.acceptance.is_empty());
+        assert!(old.evidence.is_empty());
+        assert_eq!(old.status, StepStatus::InProgress);
     }
 
     #[test]

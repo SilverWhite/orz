@@ -431,6 +431,10 @@ fn access_kind(tool: &str, args: &serde_json::Value) -> AccessKind {
         // effect (side effects happen at the mechanical issuance exit) —
         // so the permission gate auto-allows it like the whitelist write.
         || tool == "blackboard.action_write"
+        // PLAN-FIRST 阶段 A (2026-08-16, ADR-0010 §14.17): `plan_write`
+        // writes ONLY the in-memory blackboard plan section — the same
+        // controller-owned in-memory class as the action-bar write.
+        || tool == "plan_write"
     {
         // Controller-owned in-memory tools (A3 blackboard_read / A6 §8 C.2
         // compaction_whitelist_add): NO external side effect — no file, no
@@ -562,6 +566,13 @@ mod tests {
         ));
         assert!(matches!(
             access_kind("blackboard_read", &serde_json::json!({"section": "plan"})),
+            AccessKind::Read(None)
+        ));
+        assert!(matches!(
+            access_kind(
+                "plan_write",
+                &serde_json::json!({"plan": {"plan_id": "p", "goal": "g", "steps": []}})
+            ),
             AccessKind::Read(None)
         ));
     }

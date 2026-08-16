@@ -230,7 +230,7 @@ mod tests {
     #[test]
     fn test_base_template_renders() {
         let prompt = render_base(&default_renderer(), &default_placeholders());
-        assert!(prompt.contains(crate::prompt::context::DEFAULT_SYSTEM_PROMPT_LABEL));
+        assert!(prompt.contains("AI coding agent"));
         assert!(prompt.contains("user_query"));
     }
 
@@ -362,8 +362,8 @@ mod tests {
         let p = default_placeholders();
         let prompt = render_base(&default_renderer(), &p);
         assert!(
-            prompt.contains(crate::prompt::context::DEFAULT_SYSTEM_PROMPT_LABEL),
-            "Must contain agent identity"
+            prompt.contains("AI coding agent"),
+            "Must contain the neutral agent contract"
         );
         assert!(
             prompt.contains("user_query"),
@@ -793,14 +793,6 @@ mod tests {
             prompt.contains("<user_guide>"),
             "interactive prompt must keep the <user_guide> block"
         );
-        assert!(
-            prompt.contains("interactive CLI tool"),
-            "interactive prompt must declare interactive mode in the header"
-        );
-        assert!(
-            !prompt.contains("autonomous agent"),
-            "interactive prompt must NOT advertise non-interactive (autonomous) mode"
-        );
     }
 
     #[test]
@@ -816,17 +808,44 @@ mod tests {
             !prompt.contains("<user_guide>"),
             "non-interactive prompt must suppress the <user_guide> block"
         );
-        assert!(
-            prompt.contains("autonomous agent"),
-            "non-interactive prompt must declare autonomous mode in the header"
-        );
-        assert!(
-            !prompt.contains("interactive CLI tool"),
-            "non-interactive prompt must NOT claim to be the interactive CLI"
-        );
         // Sanity: rest of the template still renders.
-        assert!(prompt.contains(crate::prompt::context::DEFAULT_SYSTEM_PROMPT_LABEL));
+        assert!(prompt.contains("AI coding agent"));
         assert!(prompt.contains("user_query"));
+    }
+
+    // ── PLAN-FIRST 阶段 A (2026-08-16, ADR-0010 §14.17): 模板去人格 —
+    // 渲染后不得出现人格/身份关键词；测试锁定，防止回潮。
+
+    const PERSONALITY_KEYWORDS: &[&str] = &[
+        "released by xAI",
+        "Grok Build subagent",
+        "interactive CLI tool",
+        "autonomous agent",
+        "expert peers",
+        "aggressively and liberally",
+        "trust their judgment",
+        "light, friendly, curious",
+        "excellent technical blog post",
+        "<persona>",
+        "small touches of personality",
+        "concise teammate",
+    ];
+
+    #[test]
+    fn templates_render_without_personality_keywords() {
+        let p = default_placeholders();
+        for (label, rendered) in [
+            ("base", render_base(&default_renderer(), &p)),
+            ("subagent", render_subagent(&default_renderer(), &p)),
+            ("apply-patch", render_apply_patch(&default_renderer(), &p)),
+        ] {
+            for keyword in PERSONALITY_KEYWORDS {
+                assert!(
+                    !rendered.contains(keyword),
+                    "{label} template must not contain personality keyword: {keyword:?}"
+                );
+            }
+        }
     }
 
     #[test]

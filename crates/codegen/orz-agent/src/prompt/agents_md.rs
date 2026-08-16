@@ -318,6 +318,16 @@ pub fn format_agents_md_section(configs: &[AgentConfigFile]) -> Option<String> {
 pub const LEGACY_AGENTS_MD_REMINDER_PREFIX: &str =
     "\n\n<system-reminder>\nAs you answer the user's questions, you can use the following context";
 
+/// PLAN-FIRST 阶段 A (2026-08-16, ADR-0010 §14.17 / PLAN_FIRST_BLACKBOARD
+/// _DESIGN §8): the mechanical plan-first execution-style wrapper injected
+/// BEFORE every AGENTS.md file's content — the fixed prefix of
+/// `render_agents_md`, so it lands before the user content for BOTH main
+/// and subagent reminders. 唯一机制：不做规范模板、不做 schema 校验（§10）。
+/// Canonical copy lives in orz-assurance (`plan::framework`); orz-loop
+/// injects the same block unconditionally at the system-prompt level for
+/// plan-first sessions (independent of AGENTS.md presence).
+pub use orz_assurance::plan::framework::PLAN_FIRST_FRAMEWORK_BLOCK;
+
 /// Open/close `system-reminder` (Grok) or `system_reminder` (Cursor/IDE), case-insensitive.
 /// Shared with unit tests so CI fails if the pattern is ever invalid or too narrow.
 const SYSTEM_REMINDER_TAG_PATTERN: &str = r"(?i)<(\s*/?\s*system[-_]reminder)";
@@ -343,6 +353,14 @@ fn render_agents_md(configs: &[AgentConfigFile]) -> Option<String> {
     section.push_str(
         " (ordered from repo root to current directory - deeper files take precedence on conflicts):\n",
     );
+
+    // PLAN-FIRST 阶段 A (2026-08-16, ADR-0010 §14.17): the mechanical
+    // wrapper is the FIRST content of the reminder — every AGENTS.md file
+    // (main and subagent) comes after it, so the execution-style framework
+    // precedes all project instructions.
+    section.push('\n');
+    section.push_str(PLAN_FIRST_FRAMEWORK_BLOCK);
+    section.push('\n');
 
     for config in configs {
         section.push_str(&format!(
@@ -498,6 +516,30 @@ mod tests {
             !section.contains("truncated"),
             "content must not be truncated"
         );
+    }
+
+    // ── PLAN-FIRST 阶段 A (2026-08-16, ADR-0010 §14.17): the mechanical
+    // plan-first wrapper precedes every AGENTS.md file's content.
+
+    #[test]
+    fn plan_first_framework_precedes_agents_content() {
+        let configs = vec![AgentConfigFile {
+            file_name: "AGENTS.md".to_string(),
+            file_path: "/repo/AGENTS.md".to_string(),
+            content: "Project instructions".to_string(),
+        }];
+        let section = format_agents_md_section(&configs).unwrap();
+        let framework_at = section
+            .find("<plan_first_framework>")
+            .expect("plan-first wrapper must be present");
+        let content_at = section
+            .find("## From: /repo/AGENTS.md")
+            .expect("agents file must be present");
+        assert!(
+            framework_at < content_at,
+            "plan-first wrapper must be injected BEFORE the AGENTS.md content"
+        );
+        assert!(section.contains("本框架只约束执行风格"));
     }
 
     // ── Feature 2: Workspace user AGENTS.md via read_agents_config ───

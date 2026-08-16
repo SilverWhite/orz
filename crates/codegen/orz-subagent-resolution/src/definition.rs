@@ -262,7 +262,6 @@ pub fn render_subagent_system_prompt(
         prompt_body: definition.prompt_body.clone(),
         system_prompt: definition.system_prompt.clone(),
         role_instructions: runtime.role_prompt.clone(),
-        persona_instructions: runtime.persona_instructions.clone(),
         os_name: Some(format!(
             "{} {}",
             std::env::consts::OS,

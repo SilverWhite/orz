@@ -285,7 +285,7 @@ pub fn build_status_line(goal: Option<&str>, steps: &[crate::blackboard::PlanSte
             .filter(|s| s.status == StepStatus::Completed)
             .count();
         let middle = match current {
-            Some(i) => format!("当前第 {i} 步「{}」", steps[i - 1].description,),
+            Some(i) => format!("当前第 {i} 步「{}」", steps[i - 1].goal,),
             None => "当前步骤: (无)".to_string(),
         };
         lines.push(format!("目标: {goal}"));
@@ -691,12 +691,18 @@ mod tests {
         let steps = vec![
             PlanStep {
                 id: "step-1".into(),
-                description: "调查".into(),
+                goal: "调查".into(),
+                actions: Vec::new(),
+                acceptance: String::new(),
+                evidence: Vec::new(),
                 status: StepStatus::InProgress,
             },
             PlanStep {
                 id: "step-2".into(),
-                description: "实施".into(),
+                goal: "实施".into(),
+                actions: Vec::new(),
+                acceptance: String::new(),
+                evidence: Vec::new(),
                 status: StepStatus::Pending,
             },
         ];
@@ -720,17 +726,26 @@ mod tests {
         let steps = vec![
             PlanStep {
                 id: "step-1".into(),
-                description: "调查".into(),
+                goal: "调查".into(),
+                actions: Vec::new(),
+                acceptance: String::new(),
+                evidence: Vec::new(),
                 status: StepStatus::Completed,
             },
             PlanStep {
                 id: "step-2".into(),
-                description: "实施".into(),
+                goal: "实施".into(),
+                actions: Vec::new(),
+                acceptance: String::new(),
+                evidence: Vec::new(),
                 status: StepStatus::InProgress,
             },
             PlanStep {
                 id: "step-3".into(),
-                description: "验证".into(),
+                goal: "验证".into(),
+                actions: Vec::new(),
+                acceptance: String::new(),
+                evidence: Vec::new(),
                 status: StepStatus::Pending,
             },
         ];

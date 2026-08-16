@@ -5877,6 +5877,7 @@ dependencies = [
  "git2",
  "ignore",
  "minijinja",
+ "orz-assurance",
  "orz-config",
  "orz-hooks",
  "orz-sampling-types",

@@ -347,6 +347,17 @@ pub struct AgentLoopController {
     /// Flushed as `epoch_archive_write_failed` v0.2 events at run start so
     /// the loss of an old epoch's durable snapshot leaves an audit trace.
     epoch_archive_errors: Mutex<Vec<(u64, EpochArchiveWriteKind)>>,
+    /// PLAN-FIRST 阶段 A (2026-08-16, ADR-0010 §14.17): whether the
+    /// first-round plan gate is active for main-lane sessions. Production
+    /// wiring (ACP server / CLI run) enables it; tests keep the legacy
+    /// tool surface by default.
+    plan_first_enabled: bool,
+    /// PLAN-FIRST 阶段 A (2026-08-16, ADR-0010 §14.17): whether this
+    /// session has already completed its first-round plan gate (session-
+    /// level, not run-level — the gate fires once per session; restored
+    /// sessions with history are marked done). Runs in the same session
+    /// after the first one skip the gate.
+    plan_first_session_done: bool,
     /// Monotonic model-round counter across turns (streaming pacing guard).
     /// Kept on the controller (not per-turn) so a turn ≥ 2's FIRST round is
     /// also paced: a programmatic stdio client issuing prompt #2 immediately
@@ -2074,6 +2085,8 @@ impl AgentLoopController {
             console_registry: crate::console::default_service_registry(),
             console_traces: Mutex::new(TraceStore::new()),
             console_order_seq: std::sync::atomic::AtomicU64::new(0),
+            plan_first_enabled: false,
+            plan_first_session_done: false,
         }
     }
 
@@ -2267,6 +2280,10 @@ impl AgentLoopController {
                     // P0-C S2 (2026-08-15): the console write button is
                     // main-lane only — subagents never write action orders.
                     && t.name != "blackboard.action_write"
+                    // PLAN-FIRST 阶段 A (2026-08-16, ADR-0010 §14.17): the
+                    // plan-gate write surface is main-lane only — subagents
+                    // never write plans (P2-1 审查收口).
+                    && t.name != "plan_write"
             })
             .cloned()
             .collect();
@@ -3505,6 +3522,55 @@ impl AgentLoopController {
         Ok(self)
     }
 
+    /// PLAN-FIRST 阶段 A (2026-08-16, ADR-0010 §14.17): land a validated
+    /// structured plan (design §5) on the blackboard plan epoch — the
+    /// `&self` twin of [`Self::try_with_plan`] for the `plan_write` tool
+    /// handler (the blackboard is shared). Same identity invariants and
+    /// same archive discipline (F7 failures queued for the run-start flush).
+    fn apply_structured_plan(
+        &self,
+        plan_id: String,
+        plan_epoch: u64,
+        goal: String,
+        steps: Vec<crate::blackboard::PlanStep>,
+    ) -> Result<(), crate::blackboard::PlanEpochError> {
+        let rotated = {
+            let mut w = self.blackboard.write();
+            w.rotate_to_structured_plan(plan_id, plan_epoch, goal, steps, &chrono_utc_now())?
+        };
+        if let Some(dir) = &self.blackboard_archive_dir {
+            if let Some(snapshot) = rotated {
+                if !crate::epoch::write_epoch_archive_retry(dir, &snapshot) {
+                    tracing::warn!(
+                        "epoch archive write failed ({}): epoch {} — rotation still committed",
+                        dir.display(),
+                        snapshot.plan_epoch,
+                    );
+                    self.epoch_archive_errors
+                        .lock()
+                        .unwrap()
+                        .push((snapshot.plan_epoch, EpochArchiveWriteKind::Rotated));
+                }
+            }
+            let current = {
+                let bb = self.blackboard.read();
+                bb.epoch_snapshot(&chrono_utc_now())
+            };
+            if !crate::epoch::write_epoch_archive_retry(dir, &current) {
+                tracing::warn!(
+                    "epoch archive write failed ({}): epoch {} — live board still committed",
+                    dir.display(),
+                    current.plan_epoch,
+                );
+                self.epoch_archive_errors
+                    .lock()
+                    .unwrap()
+                    .push((current.plan_epoch, EpochArchiveWriteKind::Current));
+            }
+        }
+        Ok(())
+    }
+
     /// F7 (2026-08-15, BACKLOG 6e 复查遗留): flush plan-epoch archive
     /// write failures queued during the builder phase into the journal as
     /// `epoch_archive_write_failed` events. The rotation/approval already
@@ -3735,11 +3801,37 @@ impl AgentLoopController {
             console_registry: crate::console::default_service_registry(),
             console_traces: Mutex::new(TraceStore::new()),
             console_order_seq: std::sync::atomic::AtomicU64::new(0),
+            plan_first_enabled: false,
+            plan_first_session_done: false,
         }
     }
 
     pub fn blackboard(&self) -> &Arc<SharedBlackboard> {
         &self.blackboard
+    }
+
+    /// PLAN-FIRST 阶段 A (2026-08-16, ADR-0010 §14.17): enable the
+    /// first-round plan gate for main-lane sessions. Production wiring
+    /// (ACP server / CLI run) calls this; tests keep the legacy surface.
+    pub fn with_plan_first_enabled(mut self, enabled: bool) -> Self {
+        self.plan_first_enabled = enabled;
+        self
+    }
+
+    /// PLAN-FIRST 阶段 A (2026-08-16): mark the session's first-round plan
+    /// gate as already completed (or restored with history) — later runs in
+    /// the same session skip the gate.
+    pub fn with_plan_first_session_done(mut self, done: bool) -> Self {
+        self.plan_first_session_done = done;
+        self
+    }
+
+    pub(crate) fn plan_first_enabled(&self) -> bool {
+        self.plan_first_enabled
+    }
+
+    pub(crate) fn plan_first_session_done(&self) -> bool {
+        self.plan_first_session_done
     }
 
     /// 2026-08-08 blackboard partition (A3) + v1.15 (2026-08-14): render one
@@ -4221,6 +4313,113 @@ impl AgentLoopController {
                         },
                     },
                     "required": ["action", "arguments"],
+                }),
+            });
+        }
+        // PLAN-FIRST 阶段 A (2026-08-16, ADR-0010 §14.17 / PLAN_FIRST_BLACKBOARD
+        // _DESIGN §3-§5): `plan_write` — 首轮计划轮的唯一写面（结构化分步
+        // 计划落黑板 plan epoch）；首轮之外保留用于计划修订。ReadOnly 类
+        // （只写内存黑板计划槽，无外部副作用）→ 所有策略自动放行。
+        // 2026-08-16 审查收口（P3-4）：声明面随 plan_first_enabled 收敛——
+        // 关闭态/grill 不声明，调用时另由 handler 拒绝（不旋转黑板）。
+        if self.plan_first_enabled && !tool_defs.iter().any(|t| t.name == "plan_write") {
+            tool_defs.push(ToolDef {
+                name: "plan_write".to_string(),
+                description: "Write the structured step-by-step plan (PLAN-FIRST). \
+                     `plan` is an object with plan_id, goal and an ordered steps \
+                     array; every step carries id, goal, actions (each \
+                     {step_id, do, with}), acceptance and evidence. The plan \
+                     lands in the blackboard plan section (plan epoch). On the \
+                     FIRST round of a run this is the only write tool available; \
+                     an invalid plan is rejected with mechanical validation \
+                     errors (one refill opportunity, then degrade)."
+                    .to_string(),
+                parameters: serde_json::json!({
+                    "type": "object",
+                    "properties": {
+                        "plan": {
+                            "type": "object",
+                            "description": "Structured plan: plan_id, goal, ordered steps[].",
+                            "properties": {
+                                "plan_id": {
+                                    "type": "string",
+                                    "minLength": 1,
+                                    "maxLength": 128,
+                                },
+                                "goal": {
+                                    "type": "string",
+                                    "minLength": 1,
+                                    "maxLength": 2000,
+                                },
+                                "steps": {
+                                    "type": "array",
+                                    "minItems": 1,
+                                    "maxItems": 32,
+                                    "items": {
+                                        "type": "object",
+                                        "required": [
+                                            "id",
+                                            "goal",
+                                            "actions",
+                                            "acceptance",
+                                            "evidence",
+                                        ],
+                                        "properties": {
+                                            "id": {
+                                                "type": "string",
+                                                "minLength": 1,
+                                                "maxLength": 64,
+                                            },
+                                            "goal": {
+                                                "type": "string",
+                                                "minLength": 1,
+                                                "maxLength": 2000,
+                                            },
+                                            "actions": {
+                                                "type": "array",
+                                                "minItems": 1,
+                                                "maxItems": 8,
+                                                "items": {
+                                                    "type": "object",
+                                                    "required": ["step_id", "do", "with"],
+                                                    "properties": {
+                                                        "step_id": {
+                                                            "type": "string",
+                                                            "minLength": 1,
+                                                            "maxLength": 64,
+                                                        },
+                                                        "do": {
+                                                            "type": "string",
+                                                            "minLength": 1,
+                                                            "maxLength": 128,
+                                                        },
+                                                        "with": { "type": "object" },
+                                                    },
+                                                },
+                                            },
+                                            "acceptance": {
+                                                "type": "string",
+                                                "minLength": 1,
+                                                "maxLength": 2000,
+                                            },
+                                            "evidence": {
+                                                "type": "array",
+                                                "maxItems": 16,
+                                                "items": {
+                                                    "type": "string",
+                                                    "minLength": 1,
+                                                    "maxLength": 500,
+                                                },
+                                            },
+                                            "status": { "const": "pending" },
+                                        },
+                                    },
+                                },
+                            },
+                            "required": ["plan_id", "goal", "steps"],
+                        },
+                    },
+                    "required": ["plan"],
                 }),
             });
         }
@@ -6706,6 +6905,9 @@ impl AgentLoopController {
                 None,
                 true,
                 true,
+                // PLAN-FIRST 阶段 A (2026-08-16): console issuance runs
+                // outside the first-round plan gate — never a gate attempt.
+                None,
                 timeout,
             )
             .await
@@ -6777,6 +6979,47 @@ impl AgentLoopController {
         // as spurious recovery-flip events in the main audit stream).
         probe_writeback: bool,
     ) -> Result<(ToolResult, Option<PolicyFeedback>), AgentLoopError> {
+        self.run_host_tool_with_plan_gate(
+            host,
+            writer,
+            tc,
+            _prompt,
+            _workspace_trust,
+            messages,
+            tool_rounds,
+            heartbeat,
+            activation_id,
+            fetch_candidates,
+            permission_gated,
+            probe_writeback,
+            None,
+        )
+        .await
+    }
+
+    /// PLAN-FIRST 阶段 A (2026-08-16, ADR-0010 §14.17): `run_host_tool`
+    /// with the first-round plan gate's current submission attempt (1 =
+    /// first, 2 = refill). `None` = plan_write outside the gate (plan
+    /// revision) — invalid plans are rejected without a forced refill
+    /// round. Only the main loop calls this; test and console call sites
+    /// keep the plain 12-argument form.
+    #[allow(clippy::too_many_arguments)] // mirrors run_host_tool's contract
+    pub(crate) async fn run_host_tool_with_plan_gate(
+        &self,
+        host: &dyn LoopHost,
+        writer: &mut EventWriter<'_>,
+        tc: &ToolCall,
+        _prompt: &str,
+        _workspace_trust: orz_assurance::gates::ipg::WorkspaceTrust,
+        messages: &mut Vec<Message>,
+        tool_rounds: u32,
+        heartbeat: Option<&crate::gateway::model::ActivityClock>,
+        activation_id: Option<&str>,
+        fetch_candidates: Option<&Mutex<Vec<String>>>,
+        permission_gated: bool,
+        probe_writeback: bool,
+        plan_gate_attempt: Option<u32>,
+    ) -> Result<(ToolResult, Option<PolicyFeedback>), AgentLoopError> {
         self.run_host_tool_with_timeout(
             host,
             writer,
@@ -6790,6 +7033,7 @@ impl AgentLoopController {
             fetch_candidates,
             permission_gated,
             probe_writeback,
+            plan_gate_attempt,
             None,
         )
         .await
@@ -6813,6 +7057,10 @@ impl AgentLoopController {
         fetch_candidates: Option<&Mutex<Vec<String>>>,
         permission_gated: bool,
         probe_writeback: bool,
+        // PLAN-FIRST 阶段 A (2026-08-16, ADR-0010 §14.17): the first-round
+        // plan gate's current submission attempt (1 = first, 2 = refill);
+        // `None` = plan revision outside the gate.
+        plan_gate_attempt: Option<u32>,
         timeout: Option<std::time::Duration>,
     ) -> Result<(ToolResult, Option<PolicyFeedback>), AgentLoopError> {
         // The second tuple element is a pending policy feedback (a denial
@@ -7838,6 +8086,200 @@ impl AgentLoopController {
                 }
             }
         }
+        // PLAN-FIRST 阶段 A (2026-08-16, ADR-0010 §14.17 / PLAN_FIRST_BLACKBOARD
+        // _DESIGN §3-§5): `plan_write` — 首轮计划轮唯一写面（计划修订时也可
+        // 使用）。机械校验 + 一次重填 + 降级留痕；通过后结构化计划落黑板
+        // plan epoch。main lane only（检索车道由投影 + ToolFilter 写门 +
+        // 此处 activation 守卫三重拒绝）。ReadOnly 类 → 权限门自动放行；
+        // ToolStarted 已在上方记录，ToolCompleted 在此收口。
+        if tc.name == crate::planning::PLAN_WRITE_TOOL {
+            // 2026-08-16 审查收口（P3-4）：声明面随开关收敛后，调用面同样
+            // fail-closed —— 关闭态/grill 的 plan_write 一律拒绝，不落板。
+            if !self.plan_first_enabled {
+                let msg = "plan_write refused — the plan gate is disabled in this session";
+                writer
+                    .record(
+                        EventType::ToolCompleted,
+                        serde_json::json!({
+                            "tool": tc.name,
+                            "call_id": tc.call_id,
+                            "exit_code": 1,
+                            "status": "error",
+                            "error": "plan_write_disabled",
+                        }),
+                    )
+                    .await?;
+                messages.push(Message {
+                    role: Role::Tool,
+                    content: msg.to_string(),
+                    tool_call_id: Some(tc.call_id.clone()),
+                    tool_calls: Vec::new(),
+                    reasoning_content: None,
+                });
+                return Ok((
+                    ToolResult {
+                        output: msg.to_string(),
+                        exit_code: Some(1),
+                        output_encoding: None,
+                        structured: None,
+                        ..Default::default()
+                    },
+                    None,
+                ));
+            }
+            if activation_id.is_some() {
+                let msg = "plan_write refused — the plan gate is main-lane only";
+                writer
+                    .record(
+                        EventType::ToolCompleted,
+                        serde_json::json!({
+                            "tool": tc.name,
+                            "call_id": tc.call_id,
+                            "exit_code": 1,
+                            "status": "error",
+                            "error": "plan_write_lane_denied",
+                        }),
+                    )
+                    .await?;
+                messages.push(Message {
+                    role: Role::Tool,
+                    content: msg.to_string(),
+                    tool_call_id: Some(tc.call_id.clone()),
+                    tool_calls: Vec::new(),
+                    reasoning_content: None,
+                });
+                return Ok((
+                    ToolResult {
+                        output: msg.to_string(),
+                        exit_code: Some(1),
+                        output_encoding: None,
+                        structured: None,
+                        ..Default::default()
+                    },
+                    None,
+                ));
+            }
+            let verdict = crate::planning::parse_and_validate_plan(&tc.arguments);
+            let attempt = plan_gate_attempt.unwrap_or(1);
+            let outcome = if verdict.errors.is_empty() {
+                crate::planning::PlanWriteOutcome::Accepted
+            } else if plan_gate_attempt.is_some() {
+                crate::planning::decide_outcome(attempt, &verdict.errors)
+            } else {
+                // 计划修订（首轮门之外）：失败即拒绝，不强制重填轮。
+                crate::planning::PlanWriteOutcome::Degraded {
+                    reason: "validation_failed",
+                }
+            };
+            let (outcome_str, degrade_reason) = match outcome {
+                crate::planning::PlanWriteOutcome::Accepted => ("accepted", None),
+                crate::planning::PlanWriteOutcome::RefillRequested => {
+                    ("refill_requested", None)
+                }
+                crate::planning::PlanWriteOutcome::Degraded { reason } => {
+                    ("degraded", Some(reason))
+                }
+            };
+            let mut plan_id = verdict.plan_id.clone().unwrap_or_default();
+            let mut goal = verdict.goal.clone().unwrap_or_default();
+            let step_count = verdict.steps.len();
+            let mut plan_epoch = self.blackboard.read().plan.plan_epoch;
+            let mut final_outcome = outcome_str;
+            let mut final_degrade = degrade_reason;
+            if matches!(outcome, crate::planning::PlanWriteOutcome::Accepted) {
+                let current_id = self.blackboard.read().plan.plan_id.clone();
+                let epoch = if current_id.as_deref() == Some(plan_id.as_str()) {
+                    plan_epoch
+                } else {
+                    match &self.blackboard_archive_dir {
+                        Some(dir) => crate::epoch::next_plan_epoch_from_archive(dir),
+                        None => plan_epoch.saturating_add(1).max(1),
+                    }
+                };
+                match self.apply_structured_plan(
+                    plan_id.clone(),
+                    epoch,
+                    goal.clone(),
+                    verdict.steps.clone(),
+                ) {
+                    Ok(()) => plan_epoch = epoch,
+                    Err(_) => {
+                        // 落板失败（epoch 身份/归档异常）——机械降级，不挂死。
+                        final_outcome = "degraded";
+                        final_degrade = Some("plan_rotate_failed");
+                        plan_id = String::new();
+                        goal = String::new();
+                    }
+                }
+            }
+            let output = match (final_outcome, final_degrade) {
+                ("accepted", _) => format!(
+                    "plan accepted: {plan_id} ({step_count} steps) — landed in \
+                     blackboard plan_epoch {plan_epoch}"
+                ),
+                ("refill_requested", _) => format!(
+                    "[PLAN_REFILL v0.1] 计划校验未通过：{}；\
+                     请只重填 plan_write（唯一一次重填机会，之后机械降级）。",
+                    verdict.errors.join("；")
+                ),
+                _ => format!(
+                    "plan rejected: {} — 本次运行无已批准计划，继续执行。",
+                    final_degrade.unwrap_or("validation_failed")
+                ),
+            };
+            writer
+                .record(
+                    EventType::PlanWrite,
+                    crate::planning::plan_write_payload(
+                        &plan_id,
+                        &goal,
+                        step_count,
+                        final_outcome,
+                        attempt,
+                        &verdict,
+                        final_degrade,
+                    ),
+                )
+                .await?;
+            let exit_code = if final_outcome == "accepted" { 0 } else { 1 };
+            // 2026-08-16 审查收口（P1）：ToolCompleted 收敛到通用契约形状——
+            // 成功只带 exit_code（status/extras 移除，避免 additionalProperties
+            // 与 status=const("error") 冲突）；失败带 status=error + error。
+            // 计划的 outcome/attempt/plan_epoch 由 PlanWrite 事件承载。
+            let mut completed = serde_json::json!({
+                "tool": tc.name,
+                "call_id": tc.call_id,
+                "exit_code": exit_code,
+            });
+            if exit_code != 0 {
+                completed["status"] = serde_json::json!("error");
+                completed["error"] =
+                    serde_json::json!(final_degrade.unwrap_or(final_outcome));
+            }
+            writer.record(EventType::ToolCompleted, completed).await?;
+            messages.push(Message {
+                role: Role::Tool,
+                content: output.clone(),
+                tool_call_id: Some(tc.call_id.clone()),
+                tool_calls: Vec::new(),
+                reasoning_content: None,
+            });
+            return Ok((
+                ToolResult {
+                    output,
+                    exit_code: Some(exit_code),
+                    output_encoding: None,
+                    structured: Some(serde_json::json!({
+                        "outcome": final_outcome,
+                        "attempt": attempt,
+                        "plan_id": plan_id,
+                        "plan_epoch": plan_epoch,
+                    })),
+                    ..Default::default()
+                },
+                None,
+            ));
+        }
         // P1-1 (2026-08-08 stall guards): mirror the run_tests stamp — a
         // tool that journals nothing between ToolStarted/ToolCompleted must
         // not trip the stall watchdog (the tool itself is bounded by the
@@ -8548,6 +8990,47 @@ mod tests {
             arguments: serde_json::json!({ "url": url }),
             call_id: call_id.to_string(),
         }
+    }
+
+    /// PLAN-FIRST 阶段 A (2026-08-16, ADR-0010 §14.17): a `plan_write` tool
+    /// call carrying the structured plan object (design §5).
+    fn plan_write_call(call_id: &str, plan: serde_json::Value) -> ToolCall {
+        ToolCall {
+            name: "plan_write".to_string(),
+            arguments: serde_json::json!({ "plan": plan }),
+            call_id: call_id.to_string(),
+        }
+    }
+
+    fn valid_plan_json() -> serde_json::Value {
+        serde_json::json!({
+            "plan_id": "plan-1",
+            "goal": "修复缓存回归",
+            "steps": [
+                {
+                    "id": "s1",
+                    "goal": "复现问题",
+                    "actions": [
+                        {"step_id": "s1", "do": "workspace.read_file", "with": {"path": "src/cache.rs"}}
+                    ],
+                    "acceptance": "已定位回归点",
+                    "evidence": ["src/cache.rs"]
+                },
+                {
+                    "id": "s2",
+                    "goal": "实施修复",
+                    "actions": [
+                        {"step_id": "s2", "do": "workspace.search_replace", "with": {"path": "src/cache.rs"}}
+                    ],
+                    "acceptance": "修复已落地",
+                    "evidence": ["src/cache.rs"]
+                }
+            ]
+        })
+    }
+
+    fn invalid_plan_json() -> serde_json::Value {
+        serde_json::json!({ "plan_id": "plan-bad", "goal": "", "steps": [] })
     }
 
     /// FUS-RETRIEVAL-MECH P0-B step 4 (2026-08-14): a browser_read call
@@ -18714,6 +19197,7 @@ mod tests {
             "compaction_whitelist_add",
             "retrieval_disposition",
             "blackboard.action_write",
+            "plan_write",
         ]
         .iter()
         .map(|n| ToolDef {
@@ -21359,5 +21843,586 @@ mod tests {
             subagent_req.messages
         );
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    // ── PLAN-FIRST 阶段 A (2026-08-16, ADR-0010 §14.17) ─────────────
+
+    /// 首轮计划轮硬门：首轮请求 header 工具面 = blackboard_read +
+    /// plan_write；有效计划落黑板 plan epoch（`plan_write` 事件 accepted）
+    /// 并放行后续轮次。
+    #[tokio::test]
+    async fn plan_first_round_surface_is_plan_only_and_valid_plan_lands() {
+        let dir = test_dir();
+        let journal = JournalRecorder::new(dir.clone());
+        let host = TestHost {
+            journal,
+            tool_result: Some(ToolResult {
+                output: "ok".to_string(),
+                exit_code: Some(0),
+                output_encoding: None,
+                structured: None,
+                ..Default::default()
+            }),
+        };
+        let gateway: Arc<dyn ModelGateway> = Arc::new(FakeProvider::new(vec![
+            ScriptedResponse::tool_calls(vec![plan_write_call("call-plan-1", valid_plan_json())]),
+            ScriptedResponse::text("完成"),
+            ScriptedResponse::text("完成"),
+        ]));
+        let controller = AgentLoopController::with_gateway(gateway).with_plan_first_enabled(true);
+        controller
+            .run_turn(&host, "修复缓存回归", "RUN-PF1", MANIFEST, 0, None, None, None)
+            .await
+            .unwrap();
+
+        let events = events(&dir);
+        let initial = events
+            .iter()
+            .find(|e| {
+                e.event_type == EventType::RequestHeaderChange
+                    && e.payload.get("reason").and_then(|v| v.as_str()) == Some("initial")
+            })
+            .expect("initial request header");
+        let tools: Vec<String> = initial.payload["tools"]
+            .as_array()
+            .expect("tools list")
+            .iter()
+            .map(|v| v.as_str().unwrap().to_string())
+            .collect();
+        assert_eq!(tools, vec!["blackboard_read", "plan_write"], "{tools:?}");
+
+        let writes: Vec<_> = events
+            .iter()
+            .filter(|e| e.event_type == EventType::PlanWrite)
+            .collect();
+        assert_eq!(writes.len(), 1, "{:?}", event_types(&dir));
+        assert_eq!(writes[0].payload["outcome"].as_str(), Some("accepted"));
+        assert_eq!(writes[0].payload["step_count"].as_u64(), Some(2));
+        assert_eq!(writes[0].payload["attempt"].as_u64(), Some(1));
+        assert_eq!(
+            controller.blackboard().read().plan.plan_id.as_deref(),
+            Some("plan-1")
+        );
+        assert!(controller.blackboard().read().plan.plan_epoch >= 1);
+        assert_eq!(controller.blackboard().read().plan.steps.len(), 2);
+        let completed = events
+            .iter()
+            .find(|e| {
+                e.event_type == EventType::ToolCompleted
+                    && e.payload.get("tool").and_then(|v| v.as_str()) == Some("plan_write")
+            })
+            .expect("plan_write ToolCompleted");
+        assert_eq!(completed.payload["exit_code"].as_u64(), Some(0));
+        assert!(
+            completed.payload.get("status").is_none()
+                && completed.payload.get("plan_id").is_none()
+                && completed.payload.get("plan_epoch").is_none()
+                && completed.payload.get("outcome").is_none(),
+            "plan_write ToolCompleted must stay in the generic contract shape: {:?}",
+            completed.payload
+        );
+        assert_eq!(
+            events.last().unwrap().event_type,
+            EventType::RunFinished,
+            "run continues after the accepted plan round"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// 一次错误反馈重填：首次无效计划 → refill_requested；第二次有效计划
+    /// → accepted；两次提交都留痕。
+    #[tokio::test]
+    async fn plan_first_round_refills_once_then_accepts() {
+        let dir = test_dir();
+        let journal = JournalRecorder::new(dir.clone());
+        let host = TestHost {
+            journal,
+            tool_result: None,
+        };
+        let gateway: Arc<dyn ModelGateway> = Arc::new(FakeProvider::new(vec![
+            ScriptedResponse::tool_calls(vec![plan_write_call("call-bad-1", invalid_plan_json())]),
+            ScriptedResponse::tool_calls(vec![plan_write_call("call-ok-2", valid_plan_json())]),
+            ScriptedResponse::text("完成"),
+            ScriptedResponse::text("完成"),
+        ]));
+        let controller = AgentLoopController::with_gateway(gateway).with_plan_first_enabled(true);
+        controller
+            .run_turn(&host, "修复缓存回归", "RUN-PF2", MANIFEST, 0, None, None, None)
+            .await
+            .unwrap();
+
+        let writes: Vec<_> = events(&dir)
+            .into_iter()
+            .filter(|e| e.event_type == EventType::PlanWrite)
+            .collect();
+        let outcomes: Vec<Option<&str>> = writes
+            .iter()
+            .map(|e| e.payload["outcome"].as_str())
+            .collect();
+        assert_eq!(outcomes, vec![Some("refill_requested"), Some("accepted")]);
+        let attempts: Vec<u64> = writes
+            .iter()
+            .map(|e| e.payload["attempt"].as_u64().unwrap())
+            .collect();
+        assert_eq!(attempts, vec![1, 2]);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// 两次无效提交 → 机械降级（validation_failed_after_refill 留痕），
+    /// 门解除、运行继续，不挂死。
+    #[tokio::test]
+    async fn plan_first_round_invalid_twice_degrades_and_continues() {
+        let dir = test_dir();
+        let journal = JournalRecorder::new(dir.clone());
+        let host = TestHost {
+            journal,
+            tool_result: None,
+        };
+        let gateway: Arc<dyn ModelGateway> = Arc::new(FakeProvider::new(vec![
+            ScriptedResponse::tool_calls(vec![plan_write_call("call-bad-1", invalid_plan_json())]),
+            ScriptedResponse::tool_calls(vec![plan_write_call("call-bad-2", invalid_plan_json())]),
+            ScriptedResponse::text("完成"),
+            ScriptedResponse::text("完成"),
+        ]));
+        let controller = AgentLoopController::with_gateway(gateway).with_plan_first_enabled(true);
+        controller
+            .run_turn(&host, "修复缓存回归", "RUN-PF3", MANIFEST, 0, None, None, None)
+            .await
+            .unwrap();
+
+        let writes: Vec<_> = events(&dir)
+            .into_iter()
+            .filter(|e| e.event_type == EventType::PlanWrite)
+            .collect();
+        let outcomes: Vec<Option<&str>> = writes
+            .iter()
+            .map(|e| e.payload["outcome"].as_str())
+            .collect();
+        assert_eq!(outcomes, vec![Some("refill_requested"), Some("degraded")]);
+        assert_eq!(
+            writes[1].payload["degrade_reason"].as_str(),
+            Some("validation_failed_after_refill")
+        );
+        assert!(controller.blackboard().read().plan.plan_id.is_none());
+        assert_eq!(
+            events(&dir).last().unwrap().event_type,
+            EventType::RunFinished
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// 计划轮内不允许任何其他工具：read_file 在首轮被机械拒绝
+    /// （plan_round_tool_denied），随后有效计划仍可落板。
+    #[tokio::test]
+    async fn plan_first_round_refuses_non_plan_tools() {
+        let dir = test_dir();
+        let journal = JournalRecorder::new(dir.clone());
+        let host = TestHost {
+            journal,
+            tool_result: Some(ToolResult {
+                output: "ok".to_string(),
+                exit_code: Some(0),
+                output_encoding: None,
+                structured: None,
+                ..Default::default()
+            }),
+        };
+        let gateway: Arc<dyn ModelGateway> = Arc::new(FakeProvider::new(vec![
+            ScriptedResponse::tool_calls(vec![tool_call("read_file", "call-r1")]),
+            ScriptedResponse::tool_calls(vec![plan_write_call("call-plan-1", valid_plan_json())]),
+            ScriptedResponse::text("完成"),
+            ScriptedResponse::text("完成"),
+        ]));
+        let controller = AgentLoopController::with_gateway(gateway).with_plan_first_enabled(true);
+        controller
+            .run_turn(&host, "修复缓存回归", "RUN-PF4", MANIFEST, 0, None, None, None)
+            .await
+            .unwrap();
+
+        let refused = events(&dir)
+            .into_iter()
+            .find(|e| {
+                e.event_type == EventType::ToolCompleted
+                    && e.payload.get("error").and_then(|v| v.as_str())
+                        == Some("plan_round_tool_denied")
+            })
+            .expect("plan-round refusal journaled");
+        assert_eq!(
+            refused.payload.get("tool").and_then(|v| v.as_str()),
+            Some("read_file")
+        );
+        assert_eq!(refused.payload["exit_code"].as_u64(), Some(1));
+        let refused_started = events(&dir)
+            .into_iter()
+            .find(|e| {
+                e.event_type == EventType::ToolStarted
+                    && e.payload.get("tool").and_then(|v| v.as_str()) == Some("read_file")
+            })
+            .expect("plan-round refusal ToolStarted journaled");
+        assert!(
+            refused_started.payload.get("target").is_none(),
+            "main-lane ToolStarted must not carry a retrieval target: {:?}",
+            refused_started.payload
+        );
+        assert_eq!(
+            controller.blackboard().read().plan.plan_id.as_deref(),
+            Some("plan-1")
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// 连续三轮不提交计划 → plan_not_submitted 机械降级并放行（不挂死）。
+    #[tokio::test]
+    async fn plan_first_round_no_submission_degrades_after_cap() {
+        let dir = test_dir();
+        let journal = JournalRecorder::new(dir.clone());
+        let host = TestHost {
+            journal,
+            tool_result: None,
+        };
+        let gateway: Arc<dyn ModelGateway> = Arc::new(FakeProvider::new(vec![
+            ScriptedResponse::text("还在思考"),
+            ScriptedResponse::text("还在思考"),
+            ScriptedResponse::text("还在思考"),
+            ScriptedResponse::text("完成"),
+        ]));
+        let controller = AgentLoopController::with_gateway(gateway).with_plan_first_enabled(true);
+        controller
+            .run_turn(&host, "修复缓存回归", "RUN-PF5", MANIFEST, 0, None, None, None)
+            .await
+            .unwrap();
+
+        let writes: Vec<_> = events(&dir)
+            .into_iter()
+            .filter(|e| e.event_type == EventType::PlanWrite)
+            .collect();
+        assert_eq!(writes.len(), 1, "{:?}", event_types(&dir));
+        assert_eq!(writes[0].payload["outcome"].as_str(), Some("degraded"));
+        assert_eq!(
+            writes[0].payload["degrade_reason"].as_str(),
+            Some("plan_not_submitted")
+        );
+        assert_eq!(
+            events(&dir).last().unwrap().event_type,
+            EventType::RunFinished
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// 已有已批准计划的会话（恢复/后续 run）不重复触发计划门——首轮工具
+    /// 面即正常探针面。
+    #[tokio::test]
+    async fn planned_session_skips_plan_gate() {
+        let dir = test_dir();
+        let journal = JournalRecorder::new(dir.clone());
+        let host = TestHost {
+            journal,
+            tool_result: Some(ToolResult {
+                output: "ok".to_string(),
+                exit_code: Some(0),
+                output_encoding: None,
+                structured: None,
+                ..Default::default()
+            }),
+        };
+        let gateway: Arc<dyn ModelGateway> = Arc::new(FakeProvider::new(vec![
+            ScriptedResponse::tool_calls(vec![tool_call("read_file", "call-r1")]),
+            ScriptedResponse::text("完成"),
+            ScriptedResponse::text("完成"),
+        ]));
+        let controller = AgentLoopController::with_gateway(gateway)
+            .with_plan_first_enabled(true)
+            .with_plan("PLAN-1".into(), 1, "旧目标".into(), vec!["旧步骤".into()]);
+        controller
+            .run_turn(&host, "继续", "RUN-PF6", MANIFEST, 0, None, None, None)
+            .await
+            .unwrap();
+
+        let events = events(&dir);
+        assert!(
+            !events
+                .iter()
+                .any(|e| e.event_type == EventType::PlanWrite),
+            "no plan gate for a session that already has an approved plan"
+        );
+        let initial = events
+            .iter()
+            .find(|e| {
+                e.event_type == EventType::RequestHeaderChange
+                    && e.payload.get("reason").and_then(|v| v.as_str()) == Some("initial")
+            })
+            .expect("initial request header");
+        let tools: Vec<String> = initial.payload["tools"]
+            .as_array()
+            .expect("tools list")
+            .iter()
+            .map(|v| v.as_str().unwrap().to_string())
+            .collect();
+        // 计划已存在 → 不触发计划门：工具面是正常探针面（含非工作工具），
+        // 而非仅 blackboard_read + plan_write。
+        assert_ne!(tools, vec!["blackboard_read", "plan_write"], "{tools:?}");
+        assert!(
+            tools.contains(&"compaction_whitelist_add".to_string()),
+            "{tools:?}"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    // ── 2026-08-16 阶段 A 审查收口（用户裁决 + P1/P2/P3 修复）────────
+
+    /// 用户裁决：计划轮不消耗 tool-round 预算。max=1 时计划落板后仍有一个
+    /// 完整工具轮可执行 read_file（若计划轮计 1，第二轮会预算耗尽被拒）。
+    #[tokio::test]
+    async fn plan_first_round_does_not_consume_tool_round_budget() {
+        let dir = test_dir();
+        let journal = JournalRecorder::new(dir.clone());
+        let host = TestHost {
+            journal,
+            tool_result: Some(ToolResult {
+                output: "ok".to_string(),
+                exit_code: Some(0),
+                output_encoding: None,
+                structured: None,
+                ..Default::default()
+            }),
+        };
+        let gateway: Arc<dyn ModelGateway> = Arc::new(FakeProvider::new(vec![
+            ScriptedResponse::tool_calls(vec![plan_write_call("call-plan-1", valid_plan_json())]),
+            ScriptedResponse::tool_calls(vec![tool_call("read_file", "call-r1")]),
+            ScriptedResponse::text("完成"),
+        ]));
+        let controller = AgentLoopController::with_gateway(gateway)
+            .with_plan_first_enabled(true)
+            .with_max_tool_rounds(1);
+        controller
+            .run_turn(&host, "修复缓存回归", "RUN-PF-BUDGET", MANIFEST, 0, None, None, None)
+            .await
+            .unwrap();
+
+        let events = events(&dir);
+        let read_completed = events
+            .iter()
+            .find(|e| {
+                e.event_type == EventType::ToolCompleted
+                    && e.payload.get("tool").and_then(|v| v.as_str()) == Some("read_file")
+            })
+            .expect("read_file must execute after the plan round (budget preserved)");
+        assert_eq!(read_completed.payload["exit_code"].as_u64(), Some(0));
+        assert_eq!(
+            events.last().unwrap().event_type,
+            EventType::RunFinished
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// P2-2 用户裁决（顺延）：whitelist 的 tool_rounds==0 窗口随计划轮不
+    /// 消耗预算而顺延——计划落板后的首个执行轮可正常写 whitelist。
+    #[tokio::test]
+    async fn plan_first_round_defers_whitelist_window_to_first_execution_round() {
+        let dir = test_dir();
+        let journal = JournalRecorder::new(dir.clone());
+        let host = TestHost {
+            journal,
+            tool_result: Some(ToolResult {
+                output: "ok".to_string(),
+                exit_code: Some(0),
+                output_encoding: None,
+                structured: None,
+                ..Default::default()
+            }),
+        };
+        let gateway: Arc<dyn ModelGateway> = Arc::new(FakeProvider::new(vec![
+            ScriptedResponse::tool_calls(vec![plan_write_call("call-plan-1", valid_plan_json())]),
+            ScriptedResponse::tool_calls(vec![ToolCall {
+                name: "compaction_whitelist_add".to_string(),
+                arguments: serde_json::json!({"content": "task fact"}),
+                call_id: "call-wl-1".to_string(),
+            }]),
+            ScriptedResponse::text("完成"),
+            ScriptedResponse::text("完成"),
+        ]));
+        let controller =
+            AgentLoopController::with_gateway(gateway).with_plan_first_enabled(true);
+        controller
+            .run_turn(&host, "修复缓存回归", "RUN-PF-WL", MANIFEST, 0, None, None, None)
+            .await
+            .unwrap();
+
+        let events = events(&dir);
+        let wl = events
+            .iter()
+            .find(|e| {
+                e.event_type == EventType::ToolCompleted
+                    && e.payload.get("tool").and_then(|v| v.as_str())
+                        == Some("compaction_whitelist_add")
+            })
+            .expect("whitelist write after the plan round");
+        assert_eq!(
+            wl.payload["exit_code"].as_u64(),
+            Some(0),
+            "whitelist window must be deferred to the first execution round: {:?}",
+            wl.payload
+        );
+        assert!(wl.payload.get("error").is_none(), "{:?}", wl.payload);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// P3-5：同一计划轮最多一次 plan_write——同轮第二次提交机械拒绝
+    /// （plan_write_already_submitted），不落板、不留 PlanWrite 事件。
+    #[tokio::test]
+    async fn plan_first_round_rejects_second_plan_write_in_same_round() {
+        let dir = test_dir();
+        let journal = JournalRecorder::new(dir.clone());
+        let host = TestHost {
+            journal,
+            tool_result: None,
+        };
+        let gateway: Arc<dyn ModelGateway> = Arc::new(FakeProvider::new(vec![
+            ScriptedResponse::tool_calls(vec![
+                plan_write_call("call-plan-1", valid_plan_json()),
+                plan_write_call("call-plan-2", valid_plan_json()),
+            ]),
+            ScriptedResponse::text("完成"),
+            ScriptedResponse::text("完成"),
+        ]));
+        let controller =
+            AgentLoopController::with_gateway(gateway).with_plan_first_enabled(true);
+        controller
+            .run_turn(&host, "修复缓存回归", "RUN-PF-DUP", MANIFEST, 0, None, None, None)
+            .await
+            .unwrap();
+
+        let events = events(&dir);
+        let writes: Vec<_> = events
+            .iter()
+            .filter(|e| e.event_type == EventType::PlanWrite)
+            .collect();
+        assert_eq!(writes.len(), 1, "only one PlanWrite event per plan round");
+        assert_eq!(writes[0].payload["outcome"].as_str(), Some("accepted"));
+        let denied = events
+            .iter()
+            .find(|e| {
+                e.event_type == EventType::ToolCompleted
+                    && e.payload.get("error").and_then(|v| v.as_str())
+                        == Some("plan_write_already_submitted")
+            })
+            .expect("second plan_write in the same round must be refused");
+        assert_eq!(denied.payload["exit_code"].as_u64(), Some(1));
+        assert_eq!(
+            controller.blackboard().read().plan.plan_id.as_deref(),
+            Some("plan-1")
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// P3-4：plan_first 关闭时 plan_write 不声明且调用被拒
+    /// （plan_write_disabled），不产生 PlanWrite 事件、不落板。
+    #[tokio::test]
+    async fn plan_write_disabled_refuses_when_gate_off() {
+        let dir = test_dir();
+        let journal = JournalRecorder::new(dir.clone());
+        let host = TestHost {
+            journal,
+            tool_result: None,
+        };
+        let gateway: Arc<dyn ModelGateway> = Arc::new(FakeProvider::new(vec![
+            ScriptedResponse::tool_calls(vec![plan_write_call("call-plan-1", valid_plan_json())]),
+            ScriptedResponse::text("完成"),
+            ScriptedResponse::text("完成"),
+        ]));
+        let controller = AgentLoopController::with_gateway(gateway);
+        controller
+            .run_turn(&host, "修复缓存回归", "RUN-PF-OFF", MANIFEST, 0, None, None, None)
+            .await
+            .unwrap();
+
+        let events = events(&dir);
+        assert!(
+            !events
+                .iter()
+                .any(|e| e.event_type == EventType::PlanWrite),
+            "no PlanWrite event when the gate is disabled"
+        );
+        let denied = events
+            .iter()
+            .find(|e| {
+                e.event_type == EventType::ToolCompleted
+                    && e.payload.get("error").and_then(|v| v.as_str())
+                        == Some("plan_write_disabled")
+            })
+            .expect("plan_write must be refused when the gate is disabled");
+        assert_eq!(denied.payload["exit_code"].as_u64(), Some(1));
+        assert!(controller.blackboard().read().plan.plan_id.is_none());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// D2 全覆盖（2026-08-16 审查收口）：plan_first 会话的系统提示词注入
+    /// <plan_first_framework>（不依赖 AGENTS.md）；关闭态不注入。
+    #[tokio::test]
+    async fn plan_first_framework_block_follows_gate_switch() {
+        let enabled_dir = test_dir();
+        let enabled_fake = Arc::new(FakeProvider::new(vec![
+            ScriptedResponse::tool_calls(vec![plan_write_call("call-plan-fw", valid_plan_json())]),
+            ScriptedResponse::text("完成"),
+            ScriptedResponse::text("完成"),
+        ]));
+        let enabled_gateway: Arc<dyn ModelGateway> = enabled_fake.clone();
+        let enabled_controller =
+            AgentLoopController::with_gateway(enabled_gateway)
+                .with_plan_first_enabled(true)
+                .with_max_tool_rounds(1);
+        enabled_controller
+            .run_turn(
+                &TestHost {
+                    journal: JournalRecorder::new(enabled_dir.clone()),
+                    tool_result: None,
+                },
+                "hi",
+                "RUN-PF-FW-ON",
+                MANIFEST,
+                0,
+                None,
+                None,
+                None,
+            )
+            .await
+            .unwrap();
+        let received = enabled_fake.received_requests();
+        assert!(
+            received[0].system.contains("<plan_first_framework>"),
+            "plan-first system prompt must carry the framework block"
+        );
+        let _ = std::fs::remove_dir_all(&enabled_dir);
+
+        let off_dir = test_dir();
+        let off_fake = Arc::new(FakeProvider::new(vec![
+            ScriptedResponse::text("完成"),
+            ScriptedResponse::text("完成"),
+        ]));
+        let off_gateway: Arc<dyn ModelGateway> = off_fake.clone();
+        let off_controller =
+            AgentLoopController::with_gateway(off_gateway).with_max_tool_rounds(1);
+        off_controller
+            .run_turn(
+                &TestHost {
+                    journal: JournalRecorder::new(off_dir.clone()),
+                    tool_result: None,
+                },
+                "hi",
+                "RUN-PF-FW-OFF",
+                MANIFEST,
+                0,
+                None,
+                None,
+                None,
+            )
+            .await
+            .unwrap();
+        let received = off_fake.received_requests();
+        assert!(
+            !received[0].system.contains("<plan_first_framework>"),
+            "legacy (gate-off) system prompt must not carry the framework block"
+        );
+        let _ = std::fs::remove_dir_all(&off_dir);
     }
 }

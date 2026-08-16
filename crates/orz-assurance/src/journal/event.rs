@@ -128,6 +128,11 @@ pub enum EventType {
     PlanApproved,
     PlanRejected,
     ActionApproved,
+    // PLAN-FIRST 阶段 A (2026-08-16, ADR-0010 §14.17 / PLAN_FIRST_BLACKBOARD
+    // _DESIGN §3-§5): the first-round plan gate's plan_write result — plan
+    // identity/goal/step count, mechanical validation verdict, one-refill
+    // attempt progression and degrade reason. Main lane only.
+    PlanWrite,
 }
 
 impl EventType {

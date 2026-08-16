@@ -1291,6 +1291,37 @@ mod tests {
                 std::fs::write(base.join("a.txt"), "v1").unwrap();
 
                 let server = Arc::new(AcpServer::with_gateway(Arc::new(FakeProvider::new(vec![
+                    // PLAN-FIRST 阶段 A (2026-08-16): production sessions
+                    // start with the first-round plan gate.
+                    ScriptedResponse::tool_calls(vec![ToolCall {
+                        name: "plan_write".to_string(),
+                        arguments: serde_json::json!({
+                            "plan": {
+                                "plan_id": "plan-runner-test",
+                                "goal": "把 v1 改成 v2",
+                                "steps": [
+                                    {
+                                        "id": "s1",
+                                        "goal": "修改文件",
+                                        "actions": [
+                                            {
+                                                "step_id": "s1",
+                                                "do": "search_replace",
+                                                "with": {
+                                                    "file_path": "a.txt",
+                                                    "old_string": "v1",
+                                                    "new_string": "v2",
+                                                },
+                                            }
+                                        ],
+                                        "acceptance": "文件已修改",
+                                        "evidence": ["a.txt"],
+                                    }
+                                ],
+                            }
+                        }),
+                        call_id: "call-plan".to_string(),
+                    }]),
                     ScriptedResponse::tool_calls(vec![ToolCall {
                         name: "search_replace".to_string(),
                         arguments: serde_json::json!({

@@ -122,6 +122,11 @@ impl ToolFilter {
                     // P0-C S2 (2026-08-15): the console write button is
                     // main-lane only — subagents never write action orders.
                     Some("console_action_write_lane_denied")
+                } else if tool == crate::planning::PLAN_WRITE_TOOL {
+                    // PLAN-FIRST 阶段 A (2026-08-16, ADR-0010 §14.17): the
+                    // plan-gate write surface is main-lane only (P2-1
+                    // 审查收口 — 投影剥除之外的机械兜底)。
+                    Some("plan_write_lane_denied")
                 } else if ToolDispatcher::modifies_files(tool) {
                     Some("retrieval_role_write_denied")
                 } else if ToolDispatcher::risk_class(tool) == RiskClass::SandboxEscape {
@@ -781,6 +786,18 @@ pub(crate) async fn run_agent_loop(
     // compaction and further fires, offers NO tools, and runs the template
     // round at the next loop-top.
     let mut pending_checkpoint: Option<PendingCheckpoint> = None;
+    // PLAN-FIRST 阶段 A (2026-08-16, ADR-0010 §14.17): 首轮计划轮硬门 —
+    // 主车道且黑板尚无已批准计划（新会话/新 plan epoch）时触发；已有计划
+    // （恢复会话或本会话后续 run）不重复触发；检索车道不触发。计划轮计入
+    // 已完成逻辑模型轮（feed_round 照常），通过后计划落黑板 plan epoch。
+    let mut plan_gate: Option<crate::planning::PlanGateState> = None;
+    if controller.plan_first_enabled()
+        && !controller.plan_first_session_done()
+        && profile.role == AgentRole::Main
+        && svc.blackboard.read().plan.plan_id.is_none()
+    {
+        plan_gate = Some(crate::planning::PlanGateState::start());
+    }
     // P0-D (2026-08-14, ADR-0010 v1.10 / v1.14): template-summary state —
     // the previous round's MEASURED prompt tokens (provider usage; None
     // until the first round reports usage), the rounds since the last
@@ -1020,6 +1037,16 @@ pub(crate) async fn run_agent_loop(
             };
         let current_tool_defs: Vec<ToolDef> = if pending_checkpoint.is_some() {
             Vec::new()
+        } else if plan_gate.is_some() {
+            // 首轮计划轮面：只暴露黑板读取 + plan_write（设计 §2.3/§3）。
+            tool_defs
+                .iter()
+                .filter(|t| {
+                    t.name == crate::planning::PLAN_WRITE_TOOL
+                        || t.name == crate::planning::BLACKBOARD_READ_TOOL
+                })
+                .cloned()
+                .collect()
         } else if let Some(snapshot) = probe_snapshot.as_ref() {
             AgentLoopController::project_main_agent_tool_defs(tool_defs, snapshot)
         } else {
@@ -1084,6 +1111,19 @@ pub(crate) async fn run_agent_loop(
                     &budget_block,
                 )
             }
+        };
+        // PLAN-FIRST 阶段 A (2026-08-16, ADR-0010 §14.17): 计划型执行框架
+        // 在系统提示词层无条件注入（plan_first 会话；主/检索子代理同一
+        // 入口）——不依赖 AGENTS.md 是否存在（D2 全覆盖，审查收口
+        // 2026-08-16）。常量跨轮稳定，不影响前缀缓存。
+        let system = if controller.plan_first_enabled() {
+            format!(
+                "{}\n\n{}",
+                crate::planning::PLAN_FIRST_FRAMEWORK_BLOCK,
+                system
+            )
+        } else {
+            system
         };
         // D-6 (FIX_PLAN 2026-08-06): subagents get the full 160K budget
         // too (the main agent's request-level cap — §3.4.2 same defaults).
@@ -1361,6 +1401,46 @@ pub(crate) async fn run_agent_loop(
             continue;
         }
 
+        // PLAN-FIRST 阶段 A (2026-08-16, ADR-0010 §14.17): 首轮计划轮——
+        // 无工具回复（未写 plan_write）不算最终答案：继续计划面；连续
+        // MAX_PLAN_ROUNDS_WITHOUT_SUBMISSION 轮未提交则机械降级
+        // （plan_not_submitted 留痕）并放行，绝不挂死。
+        if plan_gate.is_some() && response.tool_calls.is_empty() {
+            let gate = plan_gate.as_mut().expect("checked above");
+            gate.rounds_without_submission += 1;
+            if gate.rounds_without_submission
+                >= crate::planning::MAX_PLAN_ROUNDS_WITHOUT_SUBMISSION
+            {
+                let g = plan_gate.take().expect("checked above");
+                writer
+                    .record(
+                        EventType::PlanWrite,
+                        crate::planning::plan_write_payload(
+                            "",
+                            "",
+                            0,
+                            "degraded",
+                            g.attempt,
+                            &crate::planning::PlanVerdict::default(),
+                            Some("plan_not_submitted"),
+                        ),
+                    )
+                    .await?;
+                // 降级后按普通最终答案路径继续（下面的 final-answer 分支处理）。
+            } else {
+                if let Some(text) = response.text.clone().filter(|t| !t.is_empty()) {
+                    messages.push(Message {
+                        role: Role::Assistant,
+                        content: text,
+                        tool_call_id: None,
+                        tool_calls: Vec::new(),
+                        reasoning_content: None,
+                    });
+                }
+                continue;
+            }
+        }
+
         // D-8: the post-exhaustion final round may only produce TEXT — a
         // tool request there is refused (no execution after the budget is
         // gone) and the run ends with the partial result. Checked BEFORE
@@ -1552,6 +1632,14 @@ pub(crate) async fn run_agent_loop(
         // budget, the remaining calls of the batch are refused without
         // execution and told to continue with offset/grep-first.
         let mut round_inject_tokens: u64 = 0;
+        // PLAN-FIRST 阶段 A (2026-08-16, ADR-0010 §14.17): 本轮是否提交过
+        // plan_write —— 无提交的工具轮计入 plan_not_submitted 降级计数。
+        let mut plan_write_called = false;
+        // 2026-08-16 审查收口：计划轮不消耗 tool-round 预算（用户裁决）——
+        // 在批处理前固定本轮的“计划轮身份”，即使 plan_write 中途 accepted
+        // 解除门，本轮仍按计划轮处理（不 +1）；whitelist 的 tool_rounds==0
+        // 窗口因此顺延到计划落板后的首个工具轮（P2-2 顺延裁决）。
+        let plan_round_active = plan_gate.is_some();
         // 2026-08-08 blackboard partition (A2): snapshot the edit-action
         // length BEFORE this round's tools — the incremental push after
         // the batch reports exactly the records this round added.
@@ -1577,6 +1665,52 @@ pub(crate) async fn run_agent_loop(
                     None => {}
                 }
                 assistant_parts.push(format!("[{}] {}", tc.name, result.output));
+                continue;
+            }
+            // PLAN-FIRST 阶段 A (2026-08-16, ADR-0010 §14.17): 计划轮只允许
+            // blackboard_read + plan_write；其余工具即使被声明也机械拒绝
+            // （首轮禁止 执行/变更/shell/子代理/检索/action_write）。
+            if plan_round_active
+                && tc.name == crate::planning::PLAN_WRITE_TOOL
+                && plan_write_called
+            {
+                // P3-5 (2026-08-16): 同一计划轮最多一次 plan_write ——
+                // 重填反馈在下一轮注入，同轮第二次提交无意义且会绕过
+                // “错误反馈后重填”的交互语义。
+                let (r, f) = plan_round_denied(
+                    writer,
+                    messages,
+                    tc,
+                    "plan_write_already_submitted",
+                    svc.policy_revision
+                        .load(std::sync::atomic::Ordering::SeqCst),
+                )
+                .await?;
+                match f {
+                    PolicyFeedback::Denied(key) => round_denials.push(key),
+                    PolicyFeedback::Succeeded => round_had_success = true,
+                }
+                assistant_parts.push(format!("[{}] {}", tc.name, r.output));
+                continue;
+            }
+            if plan_gate.is_some()
+                && tc.name != crate::planning::PLAN_WRITE_TOOL
+                && tc.name != crate::planning::BLACKBOARD_READ_TOOL
+            {
+                let (r, f) = plan_round_denied(
+                    writer,
+                    messages,
+                    tc,
+                    "plan_round_tool_denied",
+                    svc.policy_revision
+                        .load(std::sync::atomic::Ordering::SeqCst),
+                )
+                .await?;
+                match f {
+                    PolicyFeedback::Denied(key) => round_denials.push(key),
+                    PolicyFeedback::Succeeded => round_had_success = true,
+                }
+                assistant_parts.push(format!("[{}] {}", tc.name, r.output));
                 continue;
             }
             let target = route(&tc.name);
@@ -1677,7 +1811,7 @@ pub(crate) async fn run_agent_loop(
                         r
                     } else {
                         let (result, feedback) = controller
-                            .run_host_tool(
+                            .run_host_tool_with_plan_gate(
                                 host,
                                 writer,
                                 tc,
@@ -1702,6 +1836,11 @@ pub(crate) async fn run_agent_loop(
                                 // probe work tools (main/grill) write call
                                 // failures back into the probe map.
                                 profile.probe_work_tools,
+                                // PLAN-FIRST 阶段 A (2026-08-16): the plan
+                                // gate's current submission attempt — the
+                                // plan_write handler decides refill vs
+                                // degrade from it.
+                                plan_gate.as_ref().map(|g| g.attempt),
                             )
                             .await?;
                         // GAP-RETRIEVAL-TOOLS (2026-08-10): evidence
@@ -1725,6 +1864,29 @@ pub(crate) async fn run_agent_loop(
                     }
                 }
             };
+            // PLAN-FIRST 阶段 A (2026-08-16, ADR-0010 §14.17): 更新计划门
+            // 状态——accepted/degraded 解除门，refill_requested 进入第二次
+            // （最后一次）提交机会。
+            if tc.name == crate::planning::PLAN_WRITE_TOOL {
+                plan_write_called = true;
+                if let Some(outcome) = result
+                    .structured
+                    .as_ref()
+                    .and_then(|s| s.get("outcome"))
+                    .and_then(serde_json::Value::as_str)
+                {
+                    match outcome {
+                        "accepted" | "degraded" => plan_gate = None,
+                        "refill_requested" => {
+                            if let Some(g) = plan_gate.as_mut() {
+                                g.attempt += 1;
+                                g.rounds_without_submission = 0;
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+            }
             match round_feedback {
                 Some(PolicyFeedback::Denied(key)) => round_denials.push(key),
                 // A successful call resets the breaker; None
@@ -1761,6 +1923,33 @@ pub(crate) async fn run_agent_loop(
                 tool_calls: Vec::new(),
                 reasoning_content: None,
             });
+        }
+        // PLAN-FIRST 阶段 A (2026-08-16, ADR-0010 §14.17): 一轮工具轮未写
+        // plan_write（仅 blackboard_read 等）→ 无提交计数；达到上限机械
+        // 降级放行（plan_not_submitted 留痕，不挂死）。
+        if let Some(gate) = plan_gate.as_mut()
+            && !plan_write_called
+        {
+            gate.rounds_without_submission += 1;
+            if gate.rounds_without_submission
+                >= crate::planning::MAX_PLAN_ROUNDS_WITHOUT_SUBMISSION
+            {
+                let g = plan_gate.take().expect("checked above");
+                writer
+                    .record(
+                        EventType::PlanWrite,
+                        crate::planning::plan_write_payload(
+                            "",
+                            "",
+                            0,
+                            "degraded",
+                            g.attempt,
+                            &crate::planning::PlanVerdict::default(),
+                            Some("plan_not_submitted"),
+                        ),
+                    )
+                    .await?;
+            }
         }
         // Post-tool-batch injections — AFTER every tool reply of this
         // round, so no user message breaks the assistant-declaration →
@@ -1876,7 +2065,9 @@ pub(crate) async fn run_agent_loop(
         // tool-round 预算（直接订单 1、脚本每步 1）——下一轮 remaining 块
         // 机械反映；耗尽后同样进入最后无工具轮并结束。
         tool_rounds = tool_rounds.saturating_add(console_consumed);
-        tool_rounds += 1;
+        if !plan_round_active {
+            tool_rounds += 1;
+        }
         // D-8: mechanically re-declare the remaining budget after each
         // tool round — the model does not guess or drift (the previous
         // round's `[TOOL_ROUND_BUDGET]` text is already in history).
@@ -2026,6 +2217,74 @@ async fn role_gate_denied(
             reason_code: reason.to_string(),
             // GAP-DENIAL-POLICY-REVISION (2026-08-12): live value — a bump is
             // a key change, resetting the breaker (ADR-0010 §3.5.4).
+            policy_revision,
+        }),
+    ))
+}
+
+/// PLAN-FIRST 阶段 A (2026-08-16, ADR-0010 §14.17): 计划轮的机械拒绝 —
+/// 首轮只允许 `blackboard_read` + `plan_write`；任何其他工具调用（即使被
+/// 声明）都在派发前拒绝并留痕（ToolStarted → ToolCompleted(status=error)），
+/// 与角色门的审计形状一致。
+async fn plan_round_denied(
+    writer: &mut EventWriter<'_>,
+    messages: &mut Vec<Message>,
+    tc: &ToolCall,
+    reason: &'static str,
+    policy_revision: u64,
+) -> Result<(ToolResult, PolicyFeedback), AgentLoopError> {
+    writer
+        .record(
+            EventType::ToolStarted,
+            serde_json::json!({
+                "tool": tc.name,
+                "call_id": tc.call_id,
+            }),
+        )
+        .await?;
+    let output = match reason {
+        "plan_round_tool_denied" => format!(
+            "tool '{}' denied — 首轮计划轮只允许 blackboard_read 与 plan_write；\
+             执行/变更/检索/子代理等工具在计划落板前不可用（PLAN-FIRST 阶段 A）。",
+            tc.name,
+        ),
+        "plan_write_already_submitted" => {
+            "plan_write denied — 本轮已提交过 plan_write；请等待校验反馈\
+             （若需重填，反馈将在下一轮注入）。"
+                .to_string()
+        }
+        _ => format!("tool '{}' denied — {reason}", tc.name),
+    };
+    writer
+        .record(
+            EventType::ToolCompleted,
+            serde_json::json!({
+                "tool": tc.name,
+                "call_id": tc.call_id,
+                "exit_code": 1,
+                "status": "error",
+                "error": reason,
+            }),
+        )
+        .await?;
+    messages.push(Message {
+        role: Role::Tool,
+        content: output.clone(),
+        tool_call_id: Some(tc.call_id.clone()),
+        tool_calls: Vec::new(),
+        reasoning_content: None,
+    });
+    Ok((
+        ToolResult {
+            output,
+            exit_code: Some(1),
+            output_encoding: None,
+            structured: None,
+            ..Default::default()
+        },
+        PolicyFeedback::Denied(DenialKey {
+            tool_name: tc.name.clone(),
+            reason_code: reason.to_string(),
             policy_revision,
         }),
     ))

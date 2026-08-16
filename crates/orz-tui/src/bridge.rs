@@ -227,6 +227,30 @@ pub fn run_event_to_tui(event: &RunEvent) -> TuiEvent {
                 .map(|a| a.len() as i64)
                 .unwrap_or(0),
         },
+        // PLAN-FIRST 阶段 A (2026-08-16, ADR-0010 §14.17): first-round plan
+        // gate result — outcome and validation summary only.
+        EventType::PlanWrite => TuiEvent::PlanWrite {
+            plan_id: get_str(p, "plan_id"),
+            goal: get_str(p, "goal"),
+            step_count: p
+                .pointer("/step_count")
+                .and_then(serde_json::Value::as_i64)
+                .unwrap_or(0),
+            outcome: get_str(p, "outcome"),
+            validation_valid: p
+                .pointer("/validation/valid")
+                .and_then(serde_json::Value::as_bool)
+                .unwrap_or(false),
+            validation_error_count: p
+                .pointer("/validation/errors")
+                .and_then(serde_json::Value::as_array)
+                .map(|a| a.len() as i64)
+                .unwrap_or(0),
+            degrade_reason: p
+                .get("degrade_reason")
+                .and_then(serde_json::Value::as_str)
+                .map(str::to_string),
+        },
         EventType::InformationSufficiencyAssessment => TuiEvent::InformationSufficiencyAssessment {
             assessment_id: get_str(p, "assessment_id"),
             status: get_str(p, "status"),
@@ -527,6 +551,16 @@ mod tests {
                     "checkpoint_id": "ORIENT-RUN-1-0000",
                     "inquiry_kind": "orientation_checkpoint",
                     "attempt": 1,
+                    "outcome": "accepted",
+                    "validation": {"valid": true, "errors": [], "ignored_fields": []},
+                }),
+            ),
+            (
+                EventType::PlanWrite,
+                json!({
+                    "plan_id": "plan-1",
+                    "goal": "修复缓存回归",
+                    "step_count": 2,
                     "outcome": "accepted",
                     "validation": {"valid": true, "errors": [], "ignored_fields": []},
                 }),

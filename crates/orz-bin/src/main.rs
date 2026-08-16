@@ -1012,6 +1012,9 @@ async fn run(
         let host = build_cli_host(&handle, &run_id, &cwd)?;
 
         let controller = orz_loop::AgentLoopController::with_gateway(build_gateway())
+            // PLAN-FIRST 阶段 A (2026-08-16, ADR-0010 §14.17): production
+            // CLI runs start with the first-round plan gate.
+            .with_plan_first_enabled(true)
             .with_snapshot_store(Some(handle.snapshot_store.clone()))
             // ACAF Slice 1 (ADR-0011 §4.4): optional signer-process client
             // (env-gated; unconfigured → unticketed control events, zero

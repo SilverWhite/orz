@@ -266,7 +266,12 @@ pub fn render_section(
                     crate::blackboard::StepStatus::Completed => "completed",
                     crate::blackboard::StepStatus::Blocked => "blocked",
                 };
-                lines.push(format!("- [{status}] {}", step.description));
+                lines.push(format!(
+                    "- [{status}] {} (actions: {}; evidence: {})",
+                    step.goal,
+                    step.actions.len(),
+                    step.evidence.len(),
+                ));
             }
             lines.join("\n")
         }
@@ -530,7 +535,10 @@ mod tests {
         bb.plan.goal = Some("旧任务".into());
         bb.plan.steps.push(PlanStep {
             id: "s1".into(),
-            description: "旧步骤".into(),
+            goal: "旧步骤".into(),
+            actions: Vec::new(),
+            acceptance: String::new(),
+            evidence: Vec::new(),
             status: StepStatus::InProgress,
         });
         bb.edits.push(EditRecord {

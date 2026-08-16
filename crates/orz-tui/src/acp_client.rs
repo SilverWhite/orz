@@ -262,6 +262,9 @@ mod tests {
 
     fn bash_script() -> Vec<ScriptedResponse> {
         vec![
+            // PLAN-FIRST 阶段 A (2026-08-16): ACP production sessions start
+            // with the first-round plan gate — the script answers it first.
+            plan_write_response(),
             ScriptedResponse::tool_calls(vec![ToolCall {
                 name: "bash".to_string(),
                 arguments: serde_json::json!({"command": "dir"}),
@@ -270,6 +273,30 @@ mod tests {
             ScriptedResponse::text("完成（bash 已执行）。"),
             ScriptedResponse::text("完成（bash 已执行）。"),
         ]
+    }
+
+    fn plan_write_response() -> ScriptedResponse {
+        ScriptedResponse::tool_calls(vec![ToolCall {
+            name: "plan_write".to_string(),
+            arguments: serde_json::json!({
+                "plan": {
+                    "plan_id": "plan-acp-test",
+                    "goal": "运行 dir",
+                    "steps": [
+                        {
+                            "id": "s1",
+                            "goal": "执行任务",
+                            "actions": [
+                                {"step_id": "s1", "do": "bash", "with": {"command": "dir"}}
+                            ],
+                            "acceptance": "命令已执行",
+                            "evidence": []
+                        }
+                    ]
+                }
+            }),
+            call_id: "call-plan".to_string(),
+        }])
     }
 
     async fn run_prompt_until_permission(
@@ -412,8 +439,12 @@ mod tests {
                 // Two identical gate-round texts (the counterexample gate
                 // intercepts the first), chunked by 3 chars each.
                 let server = Arc::new(AcpServer::with_gateway(Arc::new(
-                    FakeProvider::from_texts(vec!["第一轮回答。", "第一轮回答。"])
-                        .with_chunk_size(3),
+                    FakeProvider::new(vec![
+                        plan_write_response(),
+                        ScriptedResponse::text("第一轮回答。"),
+                        ScriptedResponse::text("第一轮回答。"),
+                    ])
+                    .with_chunk_size(3),
                 )));
                 let mut client = connect_inprocess(server, TrustPolicy::Skip);
                 client.start_session(base.to_path_buf()).await.unwrap();
@@ -498,6 +529,7 @@ mod tests {
             .run_until(async {
                 let base = test_dir();
                 let server = scripted_server(vec![
+                    plan_write_response(),
                     ScriptedResponse::text("第一轮回答。"),
                     ScriptedResponse::text("第一轮回答。"),
                     ScriptedResponse::text("第二轮回答。"),
@@ -586,7 +618,12 @@ mod tests {
                 let content = std::fs::read_to_string(&events_path).unwrap();
                 assert!(content.contains("\"deny\""));
                 assert!(
-                    !content.contains("\"tool_started\""),
+                    !content.lines().any(|line| {
+                        let v: serde_json::Value = serde_json::from_str(line).unwrap();
+                        v.get("event_type").and_then(|t| t.as_str()) == Some("tool_started")
+                            && v.get("payload").and_then(|p| p.get("tool")).and_then(|t| t.as_str())
+                                == Some("bash")
+                    }),
                     "denied tool must not execute"
                 );
                 let _ = std::fs::remove_dir_all(&base);

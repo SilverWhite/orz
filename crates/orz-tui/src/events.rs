@@ -169,6 +169,18 @@ pub enum TuiEvent {
         validation_valid: bool,
         validation_error_count: i64,
     },
+    // PLAN-FIRST 阶段 A (2026-08-16, ADR-0010 §14.17): first-round plan gate
+    // result — outcome and validation summary only; the full cleaned plan
+    // stays in the journal payload.
+    PlanWrite {
+        plan_id: String,
+        goal: String,
+        step_count: i64,
+        outcome: String,
+        validation_valid: bool,
+        validation_error_count: i64,
+        degrade_reason: Option<String>,
+    },
     InformationSufficiencyAssessment {
         assessment_id: String,
         status: String,
@@ -337,6 +349,7 @@ impl TuiEvent {
             TuiEvent::RetrievalCompletionCheck { .. } => "retrieval_completion_check",
             TuiEvent::DiagnosticCoverageCheckpoint { .. } => "diagnostic_coverage_checkpoint",
             TuiEvent::CheckpointResponse { .. } => "checkpoint_response",
+            TuiEvent::PlanWrite { .. } => "plan_write",
             TuiEvent::InformationSufficiencyAssessment { .. } => {
                 "information_sufficiency_assessment"
             }
