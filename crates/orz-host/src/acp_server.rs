@@ -14,6 +14,7 @@ use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
 
 use orz_assurance::{EventTrack, EventType, JournalRecorderError, Redaction, RunEvent, seal_event};
+use orz_loop::acaf::AcafClient;
 use orz_loop::AgentLoopController;
 use orz_loop::controller::{RetrievalCapability, RetrievalMode};
 use orz_loop::gateway::model::{Message, Role};
@@ -609,6 +610,15 @@ pub struct AcpServer {
     gateway: Arc<Mutex<Option<AcpAgentGatewaySender>>>,
     /// Model gateway for agent turns (scripted FakeProvider offline).
     model_gateway: Arc<dyn ModelGateway>,
+    /// ACAF (ADR-0011): optional signer-process client threaded into every
+    /// session controller. `None` = unticketed; combined with
+    /// `acaf_fail_closed` the controller refuses runs without a fabric
+    /// (D-15 fail-fast).
+    acaf: Option<Arc<tokio::sync::Mutex<AcafClient>>>,
+    /// ACAF fail-closed enforcement for sessions started by this server
+    /// (production flip 2026-08-16: the binary entrypoint sets this from
+    /// `ORZ_ACAF_FAIL_CLOSED`; unset = enforced).
+    acaf_fail_closed: bool,
     /// Per-session in-flight run state (Phase 3 slice #7 token map, extended
     /// slice #11 P2-2 to cover restores). One lock, one map: check + insert
     /// happen in a single critical section, so prompt-vs-restore and
@@ -733,12 +743,30 @@ impl AcpServer {
             sessions: Arc::new(Mutex::new(HashMap::new())),
             gateway: Arc::new(Mutex::new(None)),
             model_gateway,
+            acaf: None,
+            acaf_fail_closed: false,
             runs: Arc::new(Mutex::new(HashMap::new())),
             pending_cancels: Arc::new(Mutex::new(HashMap::new())),
             hub_permission: Arc::new(Mutex::new(None)),
             grill: Mutex::new(None),
             grill_episode: AtomicU32::new(0),
         }
+    }
+
+    /// ACAF (ADR-0011): optional signer-process client threaded into every
+    /// session controller (same shape as the CLI run path). `None` keeps the
+    /// zero-behaviour-change unticketed default.
+    pub fn with_acaf(mut self, acaf: Option<Arc<tokio::sync::Mutex<AcafClient>>>) -> Self {
+        self.acaf = acaf;
+        self
+    }
+
+    /// ACAF fail-closed enforcement for sessions started by this server
+    /// (D-14/D-15/D-16 semantics — an unconfigured fabric under fail-closed
+    /// refuses runs at the controller boundary).
+    pub fn with_acaf_fail_closed(mut self, fail_closed: bool) -> Self {
+        self.acaf_fail_closed = fail_closed;
+        self
     }
 
     /// Route interactive permission prompts through `hub` (the codex
@@ -1080,6 +1108,11 @@ impl AcpServer {
                     .unwrap_or(true),
             )
             .with_snapshot_store(Some(handle.snapshot_store.clone()))
+            // ACAF production flip (2026-08-16): the ACP session path shares
+            // the signer-process client + fail-closed posture of the CLI run
+            // path (previously the ACP path ran unticketed).
+            .with_acaf(self.acaf.clone())
+            .with_acaf_fail_closed(self.acaf_fail_closed)
             .with_retrieval_mode(
                 activation_snapshot.retrieval_mode,
                 capability,
@@ -1250,7 +1283,13 @@ impl AcpServer {
             PermissionPolicy::ReadOnly,
         )?;
         let controller = AgentLoopController::with_gateway(self.model_gateway.clone())
-            .with_snapshot_store(Some(bootstrap.snapshot_store.clone()));
+            .with_snapshot_store(Some(bootstrap.snapshot_store.clone()))
+            // ACAF production flip (2026-08-16): grill turns run read-only
+            // (no action tickets), but the controller shares the server's
+            // fail-closed posture so an unconfigured fabric refuses loudly
+            // instead of silently degrading.
+            .with_acaf(self.acaf.clone())
+            .with_acaf_fail_closed(self.acaf_fail_closed);
 
         // 2026-08-08 review P2-2: the turn runs OUTSIDE the `grill` lock —
         // no std MutexGuard lives across an await (a concurrent caller
@@ -1956,6 +1995,41 @@ mod tests {
         assert!(result.is_err());
 
         let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// ACAF production flip (2026-08-16): the ACP session path now carries
+    /// the fail-closed posture — a server with no signer fabric refuses
+    /// prompts with the D-15 startup error instead of running unticketed.
+    #[tokio::test]
+    async fn acaf_fail_closed_without_fabric_refuses_prompt() {
+        tokio::task::LocalSet::new()
+            .run_until(async {
+                let base = test_dir();
+                let server = AcpServer::with_gateway(Arc::new(FakeProvider::new(vec![
+                    ScriptedResponse::text("完成"),
+                ])))
+                .with_acaf_fail_closed(true);
+                server
+                    .handle_session_new(
+                        "sess-fc",
+                        Some(base.clone()),
+                        crate::session::TrustPolicy::Skip,
+                    )
+                    .await
+                    .unwrap();
+
+                let err = server
+                    .handle_session_prompt("sess-fc", "任何任务")
+                    .await
+                    .expect_err("fail-closed + no fabric must refuse the prompt");
+                assert!(
+                    err.to_string().contains("fail-closed"),
+                    "error must name fail-closed: {err}"
+                );
+
+                let _ = std::fs::remove_dir_all(&base);
+            })
+            .await
     }
 
     /// Phase 3 wiring: the ACP path must drive the REAL OrzHost toolset

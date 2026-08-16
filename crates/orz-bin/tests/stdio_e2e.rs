@@ -11,6 +11,10 @@ fn spawn_stdio(cwd: &std::path::Path) -> Child {
     Command::new(env!("CARGO_BIN_EXE_orz"))
         .arg("--stdio")
         .current_dir(cwd)
+        // ACAF production flip (2026-08-16): fail-closed is the default;
+        // this wire-shape E2E does not exercise the fabric, so it runs in
+        // explicit shadow mode.
+        .env("ORZ_ACAF_FAIL_CLOSED", "0")
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::null())

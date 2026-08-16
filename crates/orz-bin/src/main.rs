@@ -250,8 +250,18 @@ fn run_tui() {
         }
     };
     let local = tokio::task::LocalSet::new();
-    let cfg = orz_tui::TuiConfig { cwd, replay: None };
-    let result = local.block_on(&rt, orz_tui::run(cfg, build_gateway()));
+    let result = local.block_on(&rt, async {
+        // ACAF production flip (2026-08-16): the TUI workbench shares the
+        // signer-process client + fail-closed posture of the CLI/ACP paths.
+        let acaf = build_acaf_client().await.map_err(|e| format!("acaf: {e}"))?;
+        let cfg = orz_tui::TuiConfig {
+            cwd,
+            replay: None,
+            acaf,
+            acaf_fail_closed: acaf_fail_closed_enabled(),
+        };
+        orz_tui::run(cfg, build_gateway()).await.map_err(|e| e.to_string())
+    });
     if let Err(e) = result {
         eprintln!("error: {e}");
         std::process::exit(1);
@@ -301,15 +311,25 @@ async fn build_acaf_client() -> Result<
     Ok(Some(std::sync::Arc::new(tokio::sync::Mutex::new(client))))
 }
 
-/// Slice 2 fail-closed switch (2026-08-13): enabled only by an explicit
-/// `ORZ_ACAF_FAIL_CLOSED=1` / `=true` (case-insensitive). Any other value
-/// (including `0`, `false`, or unset) keeps the default shadow mode —
-/// value semantics, not presence: `ORZ_ACAF_FAIL_CLOSED=0` must not
-/// silently flip a security gate on (review fix 2026-08-13).
+/// Slice 2 fail-closed production flip (2026-08-16, user-ruled enablement):
+/// fail-closed is the DEFAULT — unset means enforced. Explicit
+/// `ORZ_ACAF_FAIL_CLOSED=0|false|no|off` opts back into shadow mode;
+/// `1|true|yes|on` confirms enforcement. Any other value is malformed and
+/// fails closed (exit 2) — a typo must never silently disable a security
+/// gate (value semantics preserved from the 2026-08-13 review fix).
 fn acaf_fail_closed_enabled() -> bool {
-    std::env::var("ORZ_ACAF_FAIL_CLOSED")
-        .map(|v| v.eq_ignore_ascii_case("1") || v.eq_ignore_ascii_case("true"))
-        .unwrap_or(false)
+    match std::env::var("ORZ_ACAF_FAIL_CLOSED") {
+        Ok(v) if matches!(v.to_ascii_lowercase().as_str(), "0" | "false" | "no" | "off") => false,
+        Ok(v) if matches!(v.to_ascii_lowercase().as_str(), "1" | "true" | "yes" | "on") => true,
+        Ok(v) => {
+            eprintln!(
+                "error: ORZ_ACAF_FAIL_CLOSED={v:?} is not a valid value \
+                 (1/true/yes/on enforce, 0/false/no/off shadow; unset = enforce)"
+            );
+            std::process::exit(2);
+        }
+        Err(_) => true,
+    }
 }
 
 /// ACP stdio server entry: serve `session/new` + `session/prompt` over the
@@ -331,10 +351,19 @@ fn run_stdio() {
     };
     let local = tokio::task::LocalSet::new();
     let result = local.block_on(&rt, async {
-        let server = std::sync::Arc::new(orz_host::acp_server::AcpServer::with_gateway(
-            build_gateway(),
-        ));
-        orz_host::stdio::run_stdio_server(server, retrieval_mode_from_env()).await
+        // ACAF production flip (2026-08-16): the ACP server path now shares
+        // the signer-process client + fail-closed posture of the CLI run
+        // path (previously unticketed). Unset `ORZ_ACAF_FAIL_CLOSED` =
+        // enforced; an unconfigured fabric then refuses runs (D-15).
+        let acaf = build_acaf_client().await.map_err(|e| format!("acaf: {e}"))?;
+        let server = std::sync::Arc::new(
+            orz_host::acp_server::AcpServer::with_gateway(build_gateway())
+                .with_acaf(acaf)
+                .with_acaf_fail_closed(acaf_fail_closed_enabled()),
+        );
+        orz_host::stdio::run_stdio_server(server, retrieval_mode_from_env())
+            .await
+            .map_err(|e| e.to_string())
     });
     if let Err(e) = result {
         eprintln!("error: {e}");
@@ -1269,6 +1298,29 @@ mod tests {
         );
         assert!(parse_max_wallclock(Some("abc".into())).is_err());
         assert!(parse_max_wallclock(Some("".into())).is_err());
+    }
+
+    /// ACAF production flip (2026-08-16): fail-closed is the DEFAULT —
+    /// unset enforces; only an explicit 0/false/no/off opts back into
+    /// shadow; 1/true/yes/on confirms. A malformed value is handled by
+    /// `acaf_fail_closed_enabled` as exit(2) (fail-closed), so it is not
+    /// asserted here.
+    #[test]
+    fn acaf_fail_closed_defaults_enforced_with_explicit_opt_out() {
+        unsafe { std::env::remove_var("ORZ_ACAF_FAIL_CLOSED") };
+        assert!(
+            acaf_fail_closed_enabled(),
+            "unset ORZ_ACAF_FAIL_CLOSED must enforce fail-closed"
+        );
+        for off in ["0", "false", "no", "off", "FALSE", "Off"] {
+            unsafe { std::env::set_var("ORZ_ACAF_FAIL_CLOSED", off) };
+            assert!(!acaf_fail_closed_enabled(), "{off} must opt out");
+        }
+        for on in ["1", "true", "yes", "on", "TRUE", "On"] {
+            unsafe { std::env::set_var("ORZ_ACAF_FAIL_CLOSED", on) };
+            assert!(acaf_fail_closed_enabled(), "{on} must enforce");
+        }
+        unsafe { std::env::remove_var("ORZ_ACAF_FAIL_CLOSED") };
     }
 
     /// P0-2 (2026-08-08 stall guards): the wallclock terminal write

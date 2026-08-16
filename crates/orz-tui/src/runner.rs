@@ -56,13 +56,32 @@ fn find_newest_run_dir(cwd: &Path, session8: &str) -> Option<PathBuf> {
 }
 
 /// Workbench configuration.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct TuiConfig {
     /// Session working directory (host session cwd; journals land in
     /// `{cwd}/.gsa/runs/`).
     pub cwd: PathBuf,
     /// Replay a journal file instead of starting a live session.
     pub replay: Option<PathBuf>,
+    /// ACAF (ADR-0011): optional signer-process client threaded into the
+    /// in-process ACP host. `None` = unticketed (with `acaf_fail_closed` the
+    /// controller then refuses runs — D-15).
+    pub acaf: Option<Arc<tokio::sync::Mutex<orz_loop::acaf::AcafClient>>>,
+    /// ACAF fail-closed enforcement for sessions started by the workbench
+    /// (production flip 2026-08-16; the orz binary entrypoint sets this from
+    /// `ORZ_ACAF_FAIL_CLOSED`, unset = enforced).
+    pub acaf_fail_closed: bool,
+}
+
+impl std::fmt::Debug for TuiConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("TuiConfig")
+            .field("cwd", &self.cwd)
+            .field("replay", &self.replay)
+            .field("acaf", &self.acaf.as_ref().map(|_| "<signer-client>"))
+            .field("acaf_fail_closed", &self.acaf_fail_closed)
+            .finish()
+    }
 }
 
 impl Default for TuiConfig {
@@ -70,6 +89,8 @@ impl Default for TuiConfig {
         Self {
             cwd: std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
             replay: None,
+            acaf: None,
+            acaf_fail_closed: false,
         }
     }
 }
@@ -152,7 +173,11 @@ pub async fn run(config: TuiConfig, gateway: Arc<dyn ModelGateway>) -> Result<()
             "warning: install dir and cwd/.gsa both unwritable — $GROK_HOME stays on the user directory (last resort)"
         );
     }
-    let server = Arc::new(AcpServer::with_gateway(gateway));
+    let server = Arc::new(
+        AcpServer::with_gateway(gateway)
+            .with_acaf(config.acaf.clone())
+            .with_acaf_fail_closed(config.acaf_fail_closed),
+    );
     // The restore path keeps its own handle — connect_inprocess moves the
     // Arc into the agent-side handler (slice #10).
     let restore_server = server.clone();

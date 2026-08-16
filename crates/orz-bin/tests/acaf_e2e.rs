@@ -1665,6 +1665,109 @@ async fn fail_closed_startup_refuses_unconfigured_fabric() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// ⑦ (Slice 2B §6 checklist, closed 2026-08-16): `web_search` is the
+/// registered UNMAPPED network surface — its query goes to the configured
+/// provider's own search endpoint (same key / same billing face as the
+/// model transport; ADR-0010 §3.7 条 10 — no second search provider), so it
+/// carries no third-party URL target and is deliberately excluded from
+/// ticketing. Under fail-closed it must execute normally with ZERO
+/// control-ticket events (regression lock: the exclusion is explicit, not
+/// accidental).
+#[tokio::test]
+async fn fail_closed_web_search_executes_unticketed_with_zero_ticket_events() {
+    let fixture = SignerFixture::new();
+    let client = Arc::new(tokio::sync::Mutex::new(spawn_client(&fixture).await));
+
+    let dir = test_dir();
+    let store = Arc::new(
+        orz_assurance::session::snapshot::SnapshotStore::new(
+            dir.join(".gsa").join("snapshots"),
+            dir.clone(),
+        )
+        .unwrap(),
+    );
+    let journal = JournalRecorder::new(dir.clone());
+    let host = TestHost {
+        journal,
+        tool_result: Some(ToolResult {
+            output: "web search result".to_string(),
+            exit_code: Some(0),
+            output_encoding: None,
+            structured: None,
+            ..Default::default()
+        }),
+        test_runner: None,
+    };
+
+    let gateway: Arc<dyn ModelGateway> = Arc::new(FakeProvider::new(vec![
+        ScriptedResponse::tool_calls(vec![ToolCall {
+            name: "web_search".to_string(),
+            arguments: serde_json::json!({ "query": "example doc" }),
+            call_id: "call-1".to_string(),
+        }]),
+        // The external retrieval subagent runs the search in its own lane.
+        ScriptedResponse::tool_calls(vec![ToolCall {
+            name: "web_search".to_string(),
+            arguments: serde_json::json!({ "query": "example doc" }),
+            call_id: "call-s1".to_string(),
+        }]),
+        ScriptedResponse::text("检索完成"),
+        ScriptedResponse::tool_calls(vec![disposition_call("close", None, "call-d1")]),
+        ScriptedResponse::text("完成"),
+        ScriptedResponse::text("完成"),
+    ]));
+    let controller = AgentLoopController::with_gateway(gateway)
+        .with_retrieval_mode(
+            RetrievalMode::FrameworkFallback,
+            RetrievalCapability::Available,
+            false,
+            None,
+            None,
+        )
+        .with_snapshot_store(Some(store))
+        .with_acaf(Some(client))
+        .with_acaf_fail_closed(true);
+    controller
+        .run_turn(
+            &host,
+            "检索示例",
+            "RUN-FC-WS",
+            MANIFEST,
+            0,
+            None,
+            None,
+            None,
+        )
+        .await
+        .expect("run turn");
+
+    let events = events(&dir);
+    let ticket_events: Vec<String> = events
+        .iter()
+        .filter(|e| e.event_type.to_string().starts_with("control_ticket_"))
+        .map(|e| e.event_type.to_string())
+        .collect();
+    assert!(
+        ticket_events.is_empty(),
+        "web_search must stay unticketed under fail-closed: {ticket_events:?}"
+    );
+    assert!(
+        events.iter().any(|e| {
+            e.event_type.to_string() == "tool_started"
+                && e.payload.get("tool").and_then(|v| v.as_str()) == Some("web_search")
+        }),
+        "web_search must execute under fail-closed"
+    );
+    assert!(
+        events.iter().any(|e| {
+            e.event_type.to_string() == "tool_completed"
+                && e.payload.get("tool").and_then(|v| v.as_str()) == Some("web_search")
+        }),
+        "web_search must complete under fail-closed"
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 // ── Review fixes (2026-08-13): sign→verify RPC failure + D-16 rejection ──
 
 /// Review fix (2026-08-13): a verify RPC failure between sign and consume
