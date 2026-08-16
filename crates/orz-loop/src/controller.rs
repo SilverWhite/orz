@@ -50,8 +50,9 @@ use crate::blackboard::{
 };
 use crate::console::{
     ActionExecutor, ActionKind, CODE_BUDGET_INSUFFICIENT, CODE_ORDER_STALE, ConsoleError,
-    MAX_SCRIPT_STEPS_PER_ORDER, STEP_PROTOCOL, ServiceRegistry, TraceStore, failure_envelope,
-    issue_action_inner, static_validate_script,
+    MAX_SCRIPT_STEPS_PER_ORDER, STEP_CONTRACT, STEP_POLICY, STEP_PROTOCOL, STEP_REGISTRY,
+    STEP_TARGET, ServiceRegistry, TraceStore, failure_envelope, issue_action_inner,
+    static_validate_script,
 };
 use crate::gateway::fake::FakeProvider;
 use crate::gateway::model::{Message, ModelGateway, Role, ToolCall};
@@ -6899,6 +6900,32 @@ impl AgentLoopController {
         self.console_registry.registrations_for(profile, probe)
     }
 
+    /// P0-E 第 4 项 (2026-08-17, ADR-0010 §14.21 项 3): 发放前拒绝事件
+    /// 的统一 payload——订单身份 + 信封 step + phase（pre_issue/issue）+
+    /// 拒绝码 + 原因 + 订单机械盖章（round/plan_epoch/run_id 与
+    /// `console_order_written` 记录一致，verifier 交叉核对）。step 只取
+    /// 拒绝门步（protocol / registry / contract / target / policy），
+    /// 永不取 execute/verify（已执行订单经 tool_started/tool_completed
+    /// 留痕）。
+    fn console_order_rejected_payload(
+        order: &ActionOrder,
+        step: &str,
+        phase: &str,
+        code: &str,
+        reason: &str,
+    ) -> serde_json::Value {
+        serde_json::json!({
+            "order_id": order.order_id,
+            "step": step,
+            "phase": phase,
+            "code": code,
+            "reason": reason,
+            "round": order.round,
+            "plan_epoch": order.plan_epoch,
+            "run_id": order.run_id,
+        })
+    }
+
     /// P0-C S2 (2026-08-15): 轮末机械发放入口——动作栏有未消费订单时，
     /// round/plan_epoch 防重放与过期校验 → 取单（消费一次）→
     /// `console::issue_action`（注册表/契约/目标/执行/验证；执行委托复用
@@ -6954,6 +6981,21 @@ impl AgentLoopController {
                     "current_run_id": current_run,
                 })),
             };
+            // P0-E 第 4 项 (2026-08-17, ADR-0010 §14.21 项 3): 发放前
+            // 拒绝统一入 v0.2 事件面（此前只进结果栏 receipt + TraceStore，
+            // 事后核对看不到拒绝码）。
+            writer
+                .record(
+                    EventType::ConsoleOrderRejected,
+                    Self::console_order_rejected_payload(
+                        &order,
+                        STEP_PROTOCOL,
+                        "pre_issue",
+                        CODE_ORDER_STALE,
+                        &err.message,
+                    ),
+                )
+                .await?;
             self.blackboard.write().actions.take_order();
             self.consume_console_order(order, err);
             return Ok(0);
@@ -6986,6 +7028,18 @@ impl AgentLoopController {
                         "step_id": order.step_id,
                     })),
                 };
+                writer
+                    .record(
+                        EventType::ConsoleOrderRejected,
+                        Self::console_order_rejected_payload(
+                            &order,
+                            STEP_PROTOCOL,
+                            "pre_issue",
+                            err.code,
+                            &err.message,
+                        ),
+                    )
+                    .await?;
                 self.blackboard.write().actions.take_order();
                 self.consume_console_order(order, err);
                 return Ok(0);
@@ -7034,6 +7088,18 @@ impl AgentLoopController {
                     "max_tool_rounds": self.max_tool_rounds,
                 })),
             };
+            writer
+                .record(
+                    EventType::ConsoleOrderRejected,
+                    Self::console_order_rejected_payload(
+                        &order,
+                        STEP_PROTOCOL,
+                        "pre_issue",
+                        CODE_BUDGET_INSUFFICIENT,
+                        &err.message,
+                    ),
+                )
+                .await?;
             self.blackboard.write().actions.take_order();
             self.consume_console_order(order, err);
             return Ok(0);
@@ -7131,6 +7197,31 @@ impl AgentLoopController {
                 );
             }
             Err(err) => {
+                // P0-E 第 4 项 (2026-08-17, ADR-0010 §14.21 项 3): 发放期
+                // 门（registry / contract / target / ACAF / policy / mode）
+                // 拒绝统一入事件面（phase=issue）；执行失败（execute/
+                // verify）不入本事件——那些路径已经 tool_started/
+                // tool_completed 留痕。
+                if matches!(
+                    err.step,
+                    STEP_REGISTRY | STEP_CONTRACT | STEP_TARGET | STEP_POLICY
+                ) {
+                    executor
+                        .writer
+                        .lock()
+                        .await
+                        .record(
+                            EventType::ConsoleOrderRejected,
+                            Self::console_order_rejected_payload(
+                                &order,
+                                err.step,
+                                "issue",
+                                err.code,
+                                &err.message,
+                            ),
+                        )
+                        .await?;
+                }
                 let envelope = failure_envelope(&mut trace, Some(&order.action), &err, 10);
                 self.record_console_receipt(
                     &order,
@@ -15228,6 +15319,16 @@ mod tests {
             "round 2 budget block: {:?}",
             round2.messages
         );
+        // P0-E 第 4 项 (2026-08-17): 发放前拒绝入事件面。
+        let rejected = events(&dir)
+            .into_iter()
+            .filter(|e| e.event_type == EventType::ConsoleOrderRejected)
+            .collect::<Vec<_>>();
+        assert_eq!(rejected.len(), 1, "{rejected:?}");
+        assert_eq!(rejected[0].payload["phase"], "pre_issue");
+        assert_eq!(rejected[0].payload["step"], "protocol");
+        assert_eq!(rejected[0].payload["code"], "budget_insufficient");
+        assert_eq!(rejected[0].payload["round"], 0);
 
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -15295,6 +15396,16 @@ mod tests {
             r.tool_actions
         );
         drop(r);
+        // P0-E 第 4 项: 预算预检不掩盖内层错误时，发放期 registry 门拒绝
+        // 仍入事件面（phase=issue）。
+        let rejected = events(&dir)
+            .into_iter()
+            .filter(|e| e.event_type == EventType::ConsoleOrderRejected)
+            .collect::<Vec<_>>();
+        assert_eq!(rejected.len(), 1, "{rejected:?}");
+        assert_eq!(rejected[0].payload["phase"], "issue");
+        assert_eq!(rejected[0].payload["step"], "registry");
+        assert_eq!(rejected[0].payload["code"], "unknown_service");
 
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -15365,6 +15476,15 @@ mod tests {
             r.tool_actions
         );
         drop(r);
+        // P0-E 第 4 项: 发放期 contract 门拒绝入事件面（phase=issue）。
+        let rejected = events(&dir)
+            .into_iter()
+            .filter(|e| e.event_type == EventType::ConsoleOrderRejected)
+            .collect::<Vec<_>>();
+        assert_eq!(rejected.len(), 1, "{rejected:?}");
+        assert_eq!(rejected[0].payload["phase"], "issue");
+        assert_eq!(rejected[0].payload["step"], "contract");
+        assert_eq!(rejected[0].payload["code"], "invalid_arguments");
 
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -15934,7 +16054,7 @@ mod tests {
         let dir = test_dir();
         let journal = JournalRecorder::new(dir.clone());
         let host = TestHost {
-            journal,
+            journal: journal.clone(),
             tool_result: Some(ToolResult {
                 output: "never".to_string(),
                 exit_code: Some(0),
@@ -15959,7 +16079,15 @@ mod tests {
                 })
                 .unwrap();
         }
-        let mut writer = discard_event_writer("RUN-S2S");
+        let mut writer = EventWriter::new(
+            Some(&journal),
+            EventTrack::V02,
+            "RUN-S2S",
+            "",
+            0,
+            None,
+            None,
+        );
         controller
             .issue_pending_console_order(
                 &host,
@@ -15995,6 +16123,20 @@ mod tests {
             trace.events.last().unwrap().code.as_deref(),
             Some(crate::console::CODE_ORDER_STALE)
         );
+        // P0-E 第 4 项 (2026-08-17): 发放前拒绝统一入事件面——stale 订单
+        // 的 journal 必须携带结构化拒绝码（此前只进结果栏 receipt）。
+        let rejected = events(&dir)
+            .into_iter()
+            .filter(|e| e.event_type == EventType::ConsoleOrderRejected)
+            .collect::<Vec<_>>();
+        assert_eq!(rejected.len(), 1, "{rejected:?}");
+        assert_eq!(rejected[0].payload["order_id"], "ORD-000009");
+        assert_eq!(rejected[0].payload["phase"], "pre_issue");
+        assert_eq!(rejected[0].payload["step"], "protocol");
+        assert_eq!(rejected[0].payload["code"], "order_stale");
+        assert_eq!(rejected[0].payload["round"], 0);
+        assert_eq!(rejected[0].payload["plan_epoch"], 1);
+        assert_eq!(rejected[0].payload["run_id"], "RUN-OLD");
 
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -16006,7 +16148,7 @@ mod tests {
         let dir = test_dir();
         let journal = JournalRecorder::new(dir.clone());
         let host = TestHost {
-            journal,
+            journal: journal.clone(),
             tool_result: Some(ToolResult {
                 output: "never".to_string(),
                 exit_code: Some(0),
@@ -16031,7 +16173,15 @@ mod tests {
                 })
                 .unwrap();
         }
-        let mut writer = discard_event_writer("RUN-S2X");
+        let mut writer = EventWriter::new(
+            Some(&journal),
+            EventTrack::V02,
+            "RUN-S2X",
+            "",
+            0,
+            None,
+            None,
+        );
         controller
             .issue_pending_console_order(
                 &host,
@@ -16057,6 +16207,15 @@ mod tests {
             receipt.error.as_ref().unwrap()["upstream"]["current_run_id"],
             "RUN-S2X"
         );
+        let rejected = events(&dir)
+            .into_iter()
+            .filter(|e| e.event_type == EventType::ConsoleOrderRejected)
+            .collect::<Vec<_>>();
+        assert_eq!(rejected.len(), 1, "{rejected:?}");
+        assert_eq!(rejected[0].payload["order_id"], "ORD-000010");
+        assert_eq!(rejected[0].payload["phase"], "pre_issue");
+        assert_eq!(rejected[0].payload["code"], "order_stale");
+        assert_eq!(rejected[0].payload["run_id"], "RUN-PREVIOUS");
 
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -16120,6 +16279,17 @@ mod tests {
                 .is_some_and(|r| r.contains("未获权限门禁放行")),
             "reason is the neutral denial text: {error}"
         );
+        // P0-E 第 4 项 (2026-08-17): 发放期 policy 门（权限/ACAF/模式
+        // 归一化）拒绝统一入事件面（phase=issue）。
+        let rejected = events(&dir)
+            .into_iter()
+            .filter(|e| e.event_type == EventType::ConsoleOrderRejected)
+            .collect::<Vec<_>>();
+        assert_eq!(rejected.len(), 1, "{rejected:?}");
+        assert_eq!(rejected[0].payload["order_id"], "ORD-000001");
+        assert_eq!(rejected[0].payload["phase"], "issue");
+        assert_eq!(rejected[0].payload["step"], "policy");
+        assert_eq!(rejected[0].payload["code"], "policy_denied");
 
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -23982,6 +24152,16 @@ mod tests {
             Some("s2"),
             "order identity + step binding ride the console_order_written event"
         );
+        // P0-E 第 4 项 (2026-08-17): 步骤门拒绝统一入事件面——发放前
+        // step_not_done 拒绝带结构化拒绝码（此前只进结果栏 receipt）。
+        let rejected = events(&dir)
+            .into_iter()
+            .filter(|e| e.event_type == EventType::ConsoleOrderRejected)
+            .collect::<Vec<_>>();
+        assert_eq!(rejected.len(), 1, "{rejected:?}");
+        assert_eq!(rejected[0].payload["phase"], "pre_issue");
+        assert_eq!(rejected[0].payload["step"], "protocol");
+        assert_eq!(rejected[0].payload["code"], "step_not_done");
         let _ = std::fs::remove_dir_all(&dir);
     }
 

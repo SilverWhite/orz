@@ -197,6 +197,14 @@ pub enum TuiEvent {
         action: String,
         step_id: Option<String>,
     },
+    // P0-E 第 4 项 (2026-08-17, ADR-0010 §14.21 项 3): 发放前拒绝记录
+    // （订单身份 + 信封 step + phase + 拒绝码）。
+    ConsoleOrderRejected {
+        order_id: String,
+        step: String,
+        phase: String,
+        code: String,
+    },
     InformationSufficiencyAssessment {
         assessment_id: String,
         status: String,
@@ -368,6 +376,7 @@ impl TuiEvent {
             TuiEvent::PlanWrite { .. } => "plan_write",
             TuiEvent::ConsoleModeTransition { .. } => "console_mode_transition",
             TuiEvent::ConsoleOrderWritten { .. } => "console_order_written",
+            TuiEvent::ConsoleOrderRejected { .. } => "console_order_rejected",
             TuiEvent::InformationSufficiencyAssessment { .. } => {
                 "information_sufficiency_assessment"
             }

@@ -146,6 +146,16 @@ pub enum EventType {
     // used to ride the action_write ToolCompleted (S2 payload-shape debt,
     // stage-A audit §7.4); the ToolCompleted converges to the generic shape.
     ConsoleOrderWritten,
+    // P0-E 第 4 项 (2026-08-17, ADR-0010 §14.21 项 3 / PLAN_FIRST
+    // _BLACKBOARD_DESIGN §5-§6): a written order refused before execution —
+    // pre-issuance gates (order_stale / step_not_done /
+    // budget_insufficient, phase=pre_issue) and issuance-time gates
+    // (registry / contract / target / ACAF / policy / mode, phase=issue).
+    // Unifies the structured rejection code into the journal; the
+    // result-bar receipt stays the human-readable view. Never emitted for
+    // execute/verify outcomes (those already journal tool_started /
+    // tool_completed).
+    ConsoleOrderRejected,
 }
 
 impl EventType {

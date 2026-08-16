@@ -412,6 +412,21 @@ pub fn apply_event(app: &mut TuiApp, event: TuiEvent) -> Vec<String> {
             );
             vec![format!("订单写入: {order_id} {action}")]
         }
+        // P0-E 第 4 项 (2026-08-17, ADR-0010 §14.21 项 3): 发放前拒绝。
+        TuiEvent::ConsoleOrderRejected {
+            order_id,
+            step,
+            phase,
+            code,
+        } => {
+            app.content.add_system_message(
+                &format!(
+                    "[订单拒绝] {order_id} {phase}/{step}: {code}（结果栏 receipt 保留）"
+                ),
+                false,
+            );
+            vec![format!("订单拒绝: {order_id} {code}")]
+        }
         TuiEvent::InformationSufficiencyAssessment {
             assessment_id,
             status,

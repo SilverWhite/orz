@@ -269,6 +269,13 @@ pub fn run_event_to_tui(event: &RunEvent) -> TuiEvent {
                 .and_then(serde_json::Value::as_str)
                 .map(str::to_string),
         },
+        // P0-E 第 4 项 (2026-08-17, ADR-0010 §14.21 项 3): 发放前拒绝记录。
+        EventType::ConsoleOrderRejected => TuiEvent::ConsoleOrderRejected {
+            order_id: get_str(p, "order_id"),
+            step: get_str(p, "step"),
+            phase: get_str(p, "phase"),
+            code: get_str(p, "code"),
+        },
         EventType::InformationSufficiencyAssessment => TuiEvent::InformationSufficiencyAssessment {
             assessment_id: get_str(p, "assessment_id"),
             status: get_str(p, "status"),
