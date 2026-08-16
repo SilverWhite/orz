@@ -18,19 +18,22 @@
 > P0-C 转正式组件（决策门闭合）+ PLAN-FIRST 阶段 A 闭合，未闭合总数
 > 34 → 32；2026-08-16 PLAN-FIRST 阶段 B 实施闭合，未闭合总数
 > 32 → 31；2026-08-16 PLAN-FIRST 阶段 C 实施闭合，未闭合总数
-> 31 → 30）。
+> 31 → 30；2026-08-16 ACAF fail-closed 生产启用翻转闭合，未闭合总数
+> 30 → 29）。
 > 本快照只做计数与分组召回，明细以下方各分组勾选清单为唯一入口，不新增独立条目；
 > 后续扫描更新时同步替换本快照日期与计数。
 
-- 未闭合总数：**30 项**
+- 未闭合总数：**29 项**
   - P0-C：0 项（PLAN-FIRST 阶段 A/B/C 全部闭合，2026-08-16）
   - P1 可并行审计/证据：11 项（组件登记 1、Windows 证据 3、DeepSeek 2、会话上下文监测 5）
-  - P2 生产化决策门：6 项（ACAF fail-closed 生产启用、Slice 3、Slice 4、ACAF 可选工程项、OPS 裁剪设计、OPS 生产接线裁决）
+  - P2 生产化决策门：5 项（Slice 3、Slice 4、ACAF 可选工程项、OPS 裁剪设计、OPS 生产接线裁决）
   - P3 收尾/清理：7 项（EVIDENCE-LOCAL-BROWSER、GATE-CHAIN、observed-scope 枚举、V11-IMPL-003、V11-IMPL-007、orz-host flaky、DC 硬信号 4/6）
   - 条件触发/审计登记边界：6 项（不占当前优先级）
   - 成熟复用调研（2026-08-16，只读）：明确可复用 8 项、部分可参考 15 项、无可复用 11 项；逐项注记见各分组条目后。
-- 备注：ACAF fail-closed 生产启用已获用户裁决放行（2026-08-15），翻转执行未完成，
-  仍计入未闭合；其余用户裁决门为 OPS 生产接线与 P0-C 正式组件决策门。
+- 备注：ACAF fail-closed 生产启用已闭合（2026-08-16，用户 2026-08-15 裁决
+  放行；翻转执行 + 核查清单 ⑦⑨⑩⑪ 收口 + 审计/文档同步完成，见
+  `docs/audits/GAP_ACAF_FAILCLOSED_PRODUCTION_ENABLEMENT_IMPL_AUDIT_2026-08-16.md`）；
+  其余用户裁决门为 OPS 生产接线与 P0-C 正式组件决策门（已闭合）。
 
 ## P0 — 当前工作集
 
@@ -298,8 +301,12 @@
 
 ### IMPL-CONTROL-FABRIC（`partial`）
 
-- [ ] fail-closed 生产启用（2026-08-15 用户已裁决放行；待实施：生产翻转 +
-  核查清单 ⑦⑨⑩⑪ 收口/边界登记 + 审计与 BACKLOG/TODO/索引同步）。
+- [x] fail-closed 生产启用（2026-08-16 闭合）——默认翻转（未设置即强制，
+  显式 `0|false|no|off` 影子，非法值 exit 2）；CLI run / ACP stdio / TUI
+  三入口接线；核查清单 ⑦⑨⑩⑪ 收口（web_search 显式排除、host 稳定面、
+  URL 规范化等价、重定向逐跳 gate）；`orz-acaf-provision` 供应工具 +
+  `scripts/orz_acaf_run.ps1` 启动链；审计见
+  `docs/audits/GAP_ACAF_FAILCLOSED_PRODUCTION_ENABLEMENT_IMPL_AUDIT_2026-08-16.md`。
   - 成熟复用评估（2026-08-16，只读）：无——机制已自研完成，剩翻转+核查清单+审计。
 - [ ] Slice 3：ModeChangeTicket → `bump_policy_revision` 首个生产递增来源 + policy_digest 真摘要切换 + 会话级计数器 gate（D3-1）。
   - 成熟复用评估（2026-08-16，只读）：部分——HKDF-SHA256/HMAC 与单调计数器为成熟标准原语；ACP 模式切换为成熟先例。

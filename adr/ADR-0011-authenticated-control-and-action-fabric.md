@@ -20,9 +20,17 @@
   缺参/缺依赖硬拒绝（D-14/D-15，新拒绝码
   missing_target_argument / missing_snapshot_store / missing_goal_context
   入 Schema）、rejected GoalRevisionV1 不迁移（D-16）；`ORZ_ACAF_FAIL_CLOSED=1`
-  显式翻转（默认影子；2026-08-15 用户已裁决生产启用放行，翻转执行与
-  核查清单 ⑦⑨⑩⑪ 收口/边界登记待实施），见
-  [`GAP_ACAF_SLICE2_FAILCLOSED_IMPL_AUDIT`](../docs/audits/GAP_ACAF_SLICE2_FAILCLOSED_IMPL_AUDIT_2026-08-13.md)；
+  显式翻转（默认影子）；**2026-08-16 生产启用翻转已实施**（用户 2026-08-15
+  裁决放行）——fail-closed 改为**默认**（未设置即强制；`0|false|no|off` 显式
+  影子；非法值 exit 2 fail-closed），CLI run / ACP stdio / TUI 三个生产入口
+  全部接线（ACP/TUI 此前未挂签名器客户端，随翻转补齐），核查清单 ⑦⑨⑩⑪
+  收口（⑦ web_search 显式排除——走 provider 原生搜索、无第三方 URL 目标，
+  ADR-0010 §3.7 条 10；⑨ host 稳定面不补绑定；⑩ URL gate 与票据摘要规范化
+  等价；⑪ 重定向逐跳 URL gate 覆盖，票据一次 consumed 语义登记），新增
+  `orz-acaf-provision` 供应工具 + `scripts/orz_acaf_run.ps1` 启动链，见
+  [`GAP_ACAF_SLICE2_FAILCLOSED_IMPL_AUDIT`](../docs/audits/GAP_ACAF_SLICE2_FAILCLOSED_IMPL_AUDIT_2026-08-13.md)
+  与
+  [`GAP_ACAF_FAILCLOSED_PRODUCTION_ENABLEMENT_IMPL_AUDIT`](../docs/audits/GAP_ACAF_FAILCLOSED_PRODUCTION_ENABLEMENT_IMPL_AUDIT_2026-08-16.md)；
   Slice 3/4 待实施）
 - 决策范围：跨信任边界控制事件与外部效果动作的票据授权面；独立签发器；三运行模式；
   威胁模型边界；实施切片的独立性

@@ -443,10 +443,14 @@
 
 ### 7. IMPL-CONTROL-FABRIC（`partial`）
 
-- 决策门：**2026-08-15 用户已裁决 fail-closed 生产启用放行**——机制与
-  `ORZ_ACAF_FAIL_CLOSED=1` 开关就绪；翻转执行 + 核查清单 ⑦⑨⑩⑪ 收口/边界
-  登记 + 审计与索引同步待实施。
-- 剩余核查项：web_search 票化形态；host 侧执行参数绑定面；执行面与票据绑定面错位；network 重定向不重新票据。
+- 决策门：**2026-08-15 用户裁决 fail-closed 生产启用放行；2026-08-16
+  翻转执行已闭合**——fail-closed 改为默认（未设置即强制；显式
+  `0|false|no|off` 影子；非法值 exit 2），CLI run / ACP stdio / TUI 三个
+  生产入口全部接线（ACP/TUI 此前未挂签名器客户端），核查清单 ⑦⑨⑩⑪ 收口
+  （⑦ web_search 显式排除走 provider 原生搜索；⑨ host 稳定面不补绑定；
+  ⑩ URL gate 与票据摘要规范化等价；⑪ 重定向逐跳 URL gate 覆盖），新增
+  `orz-acaf-provision` 供应工具 + `scripts/orz_acaf_run.ps1` 启动链；审计见
+  [`GAP_ACAF_FAILCLOSED_PRODUCTION_ENABLEMENT_IMPL_AUDIT_2026-08-16.md`](audits/GAP_ACAF_FAILCLOSED_PRODUCTION_ENABLEMENT_IMPL_AUDIT_2026-08-16.md)。
 - Slice 3：ModeChangeTicket → `bump_policy_revision` 首个生产递增来源 + policy_digest 真摘要切换 + 会话级计数器 gate（D3-1）。
 - Slice 4：Windows Sandbox backend（D-11）。
 - 可选：检索车道 web_fetch activation 绑定接线；conformance capture 票据场景；normalize_lexical 单源化；ACP 会话路径接 ACAF。
