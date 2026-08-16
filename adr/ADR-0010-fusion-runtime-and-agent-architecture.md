@@ -1654,3 +1654,23 @@ ADR §3.6 正文修订随实施登记。
       正常收尾（对比旧运行 400 即死）；console 全链路（计划落板/修订/订单发放/
       上下文压缩）无 400。
    来源：2026-08-17 评测冒烟暴露；BACKLOG 0a / TODO P0-E。
+
+### 14.21 v1.21 补写裁决索引（2026-08-17）
+
+本节记录冻结后的显式补写；规范正文以所指章节为准，补写明确取代以下既往条款。
+
+1. **ACAF 评测跑分供应链决策（2026-08-17 用户裁决，GAP-ACAF-HARNESS-PASSTHROUGH）**：
+   正式跑分时 ACAF 保持强制开启——在 TB2 任务容器内供应
+   `ORZ_ACAF_MANIFEST`/`ORZ_ACAF_KEYSTORE`/签发器（参考
+   `scripts/orz_acaf_run.ps1` 供应链），不采用影子模式；临时解阻
+   （`D:\tb-eval\.env` 的 `ORZ_ACAF_FAIL_CLOSED=0`）在实施完成后移除。
+   性质：评测链路运营决策（ADR-0011 机制不变），实施登记 BACKLOG 0a / TODO P0-E。
+2. **步骤门模型面缺口登记（2026-08-17 冒烟重跑定位，§14.17⑱ 补充）**：
+   `blackboard_read section=plan` 渲染不包含步骤 `id`（epoch.rs 仅
+   `[status] goal (actions: N; evidence: M)`），而步骤门要求 console 订单 `step_id`
+   精确绑定当前可执行步骤；冒烟重跑中模型只能猜测 step_id（轨迹 13/18/23 步自述），
+   导致大量读板/计划重写轮次（4 次 plan_write）并最终 wallclock 耗尽
+   （reward 0.0）。修复方向=计划视图（含归档 epoch 读）补渲染 `step.id`，步骤门
+   模型面闭环；另记 grep 侦查低效观察（目标字符串不存在→空结果被泛化为「无源码」，
+   属提示词/侦查策略强化范畴，非工具故障）。实施登记 BACKLOG 0a / TODO P0-E。
+   来源：2026-08-17 冒烟重跑 `D:\tb-eval\jobs\2026-08-17__03-48-57`。

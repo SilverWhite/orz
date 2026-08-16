@@ -9,7 +9,7 @@
 
 | 优先级 | 含义 | 未闭合项 |
 |---|---|---|
-| P0 | 当前工作集：设计已冻结，裁决后立即实施 | 评测冒烟暴露问题（ACAF 评测链路 + console 工具名点号，2026-08-17 最优先，见 0a）；CLASSICAL-EXEC-ASSISTANT（生产组件，2026-08-16 用户裁决转正式）；PLAN-FIRST-BLACKBOARD（阶段 A/B/C 全部闭合 2026-08-16） |
+| P0 | 当前工作集：设计已冻结，裁决后立即实施 | 评测冒烟暴露问题（P0-E 四项：ACAF 容器供应实施、plan_write 提示词强化、actions 形状校验、计划视图步骤 ID 渲染；2026-08-17 最优先，见 0a）；CLASSICAL-EXEC-ASSISTANT（生产组件，2026-08-16 用户裁决转正式）；PLAN-FIRST-BLACKBOARD（阶段 A/B/C 全部闭合 2026-08-16） |
 | P1 | 无需裁决，可与 P0 并行 | FUS-COMPONENT-REGISTER、GAP-WINDOWS-EVIDENCE、IMPL-DEEPSEEK-TRANSPORT / SEC-CREDENTIALS、ORZ-CACHE-CONTEXT-COST、ORZ-SESSION-CONTEXT-MONITOR |
 | P2 | 生产化决策门：需用户裁决 | IMPL-CONTROL-FABRIC（fail-closed 启用、Slice 3/4）、OPS-PROTOCOL |
 | P3 | 收尾 / 清理 | EVIDENCE-LOCAL-BROWSER、GATE-CHAIN、DC 剩余信号、V11-IMPL-003/007、工作区收尾 |
@@ -35,9 +35,10 @@
   （`ORZ_ACAF_MANIFEST`/`ORZ_ACAF_KEYSTORE`/`ORZ_ACAF_FAIL_CLOSED`）无法进入容器，
   `orz --real` 启动即拒（`assurance invariant: ACAF fail-closed is enabled but no signer
   client is configured`）。本轮已做临时解阻：`D:\tb-eval\.env` 加 `ORZ_ACAF_FAIL_CLOSED=0`
-  （影子模式）+ 适配器增该变量透传。正式跑分需裁决：容器内供应 manifest/keystore/signer
-  （保持强制，参考 [`scripts/orz_acaf_run.ps1`](../scripts/orz_acaf_run.ps1)）或明确接受
-  影子模式。
+  （影子模式）+ 适配器增该变量透传。**2026-08-17 用户裁决：跑分保持 ACAF 强制开启**——
+  容器内供应 manifest/keystore/signer（参考 [`scripts/orz_acaf_run.ps1`](../scripts/orz_acaf_run.ps1)
+  供应链），不接受影子模式；实施=适配器透传签发器配置 + 任务容器挂载/供应 + 移除
+  `D:\tb-eval\.env` 的 `ORZ_ACAF_FAIL_CLOSED=0` 覆盖 + 冒烟验证 `orz --real` 带签发器启动。
 - **GAP-CONSOLE-TOOLNAME-PATTERN**（P0，2026-08-17；**已闭合 2026-08-17**）：console 默认面三个工具名含点号
   （`blackboard.action_write`/`console.step_done`/`console.return_to_console`），违反
   OpenAI 兼容工具名模式 `^[a-zA-Z0-9_-]+$`；计划落板后下一轮请求 400（`invalid_request_error`）
@@ -50,9 +51,22 @@
   clippy 无新增告警；manifest 重生成 1401 条目、仓库门禁 valid；Linux musl 重建后冒烟
   重跑 `D:\tb-eval\jobs\2026-08-17__03-48-57`（30m21s 跑满 1740s 预算、
   `run_invalidated{wallclock}` 正常收尾，对比旧运行 400 即死）。
-- 顺带观察（P1，修复时一并确认）：① 首次 `plan_write` 模型把计划序列化为 JSON 字符串被拒
-  （`refill_requested`），重填对象后通过——提示词/示例可强化；② `steps[].actions` 传空字符串
-  仍通过校验——动作形状校验偏宽。
+- 冒烟重跑（`D:\tb-eval\jobs\2026-08-17__03-48-57`，工具名修复后）任务结果 reward 0.0——
+  机制层面通过（无 400/无异常/跑满 1740s 预算），任务层面未完成（无 ELF/无帧）。失败原因
+  定位：① **步骤门模型面缺口**——`blackboard_read section=plan` 只渲染
+  `[status] goal (actions: N; evidence: M)`，不渲染步骤 `id`；步骤门又要求订单
+  `step_id` 精确绑定，模型只能猜测（轨迹 13/18/23 步自述 "the plan view strips them /
+  my guessed step_id values get rejected"），导致大量读板/计划重写轮次（4 次 plan_write）；
+  ② grep 侦查低效——模型用不存在的目标字符串（`doomgeneric_mips|frame\.bmp`）grep 全树，
+  空结果被过度泛化为「/app 无 C 源码」，一度错误转向；③ 预算耗尽于侦查/步骤门摩擦，
+  未及完成 ELF 构建（vm.js 契约已正确读出，最终发起 search_replace 但未闭环）。
+- **P0-E 下一步实施项**（2026-08-17 对齐确认）：
+  1. GAP-ACAF-HARNESS-PASSTHROUGH 实施（用户裁决：跑分保持 ACAF 强制，容器内供应）；
+  2. plan_write 提示词/示例强化（P1 观察①：首次模型把计划序列化为 JSON 字符串被拒
+     `missing_required_field: plan` → refill，重填对象后通过）；
+  3. `steps[].actions` 形状校验收紧（P1 观察②：实证审计空/宽松形状并补探针测试）；
+  4. **计划视图渲染步骤 ID**（新发现，步骤门模型面闭环：`section=plan` 补 `step.id`，
+     模型无需猜测；ADR-0010 §14.21 登记）。
 
 ### 0. 前置收尾（提交前需用户确认）
 
@@ -537,6 +551,16 @@
 
 ## 变更记录
 
+- 2026-08-17：ACAF 跑分决策登记（用户裁决）+ P0-E 下一步实施项对齐——① GAP-ACAF-
+  HARNESS-PASSTHROUGH：跑分保持 ACAF 强制开启（容器内供应 manifest/keystore/signer，
+  不接受影子模式），实施=适配器透传 + 容器供应 + 移除临时 `ORZ_ACAF_FAIL_CLOSED=0`
+  覆盖 + 冒烟验证；② 两项 P1 观察升为实施项（plan_write 提示词/示例强化、
+  `steps[].actions` 形状校验收紧）；③ 冒烟重跑定位新增步骤门模型面缺口——计划视图
+  `section=plan` 不渲染步骤 `id`（`epoch.rs` 渲染仅 `[status] goal (actions; evidence)`），
+  而订单 step_id 需精确绑定，模型靠猜测导致大量空转（轨迹 13/18/23 步、4 次 plan_write）；
+  同时记录 grep 侦查低效（目标字符串不存在 → 空结果被泛化为「无源码」）。证据：
+  `D:\tb-eval\jobs\2026-08-17__03-48-57`（reward 0.0、3 项 verifier 失败：
+  test_vm_execution Timeout / test_frame_bmp_exists / _similar_to_reference FileNotFound）。
 - 2026-08-17：GAP-CONSOLE-TOOLNAME-PATTERN 闭合——三个 console 面工具名点号改下划线
   （`blackboard.action_write`→`blackboard_action_write`、
   `console.step_done`→`console_step_done`、

@@ -24,14 +24,16 @@
 > 未闭合总数 28 → 27；2026-08-17 评测冒烟暴露问题登记（P0 +2：ACAF 评测链路 /
 > console 工具名点号；P1 +2：plan_write 提示词、actions 校验），未闭合总数
 > 27 → 31；2026-08-17 GAP-CONSOLE-TOOLNAME-PATTERN 闭合（改名下划线 +
-> verifier/schema/文档同步 + Linux 重建 + 冒烟重跑验证，未闭合 31 → 30）。
+> verifier/schema/文档同步 + Linux 重建 + 冒烟重跑验证，未闭合 31 → 30；
+> 2026-08-17 ACAF 跑分决策 + 下一步实施项对齐（两项 P1 观察升 P0-E；冒烟重跑定位
+> 新增计划视图步骤 ID 渲染项，未闭合 30 → 31）。
 > 本快照只做计数与分组召回，明细以下方各分组勾选清单为唯一入口，不新增独立条目；
 > 后续扫描更新时同步替换本快照日期与计数。
 
 - 未闭合总数：**31 项**
   - P0-C：0 项（PLAN-FIRST 阶段 A/B/C 全部闭合，2026-08-16）
-  - P0 评测冒烟暴露：1 项（GAP-ACAF-HARNESS-PASSTHROUGH；GAP-CONSOLE-TOOLNAME-PATTERN 已闭合 2026-08-17）
-  - P1 可并行审计/证据：11 项（组件登记 1、Windows 证据 3、DeepSeek 1、会话上下文监测 4、plan_write 提示词 1、actions 校验 1）
+  - P0 评测冒烟暴露：4 项（GAP-ACAF-HARNESS-PASSTHROUGH 实施、plan_write 提示词强化、actions 形状校验、计划视图步骤 ID 渲染）
+  - P1 可并行审计/证据：9 项（组件登记 1、Windows 证据 3、DeepSeek 1、会话上下文监测 4）
   - P2 生产化决策门：5 项（Slice 3、Slice 4、ACAF 可选工程项、OPS 裁剪设计、OPS 生产接线裁决）
   - P3 收尾/清理：7 项（EVIDENCE-LOCAL-BROWSER、GATE-CHAIN、observed-scope 枚举、V11-IMPL-003、V11-IMPL-007、orz-host flaky、DC 硬信号 4/6）
   - 条件触发/审计登记边界：6 项（不占当前优先级）
@@ -46,9 +48,11 @@
 ### P0-E 评测冒烟暴露问题（最优先；2026-08-17；用户将在新窗口处理）
 
 - [ ] GAP-ACAF-HARNESS-PASSTHROUGH：TB2 适配器 ACAF 配置透传 / 容器内供应——正式跑分
-  强制模式决策（容器内 manifest/keystore/signer，参考 `scripts/orz_acaf_run.ps1`）或定案
-  影子模式。本轮临时解阻：`D:\tb-eval\.env` 加 `ORZ_ACAF_FAIL_CLOSED=0` +
-  `tb_agents/orz.py` 增该变量透传。
+  强制模式决策（容器内 manifest/keystore/signer，参考 `scripts/orz_acaf_run.ps1`）。
+  **2026-08-17 用户裁决：跑分保持 ACAF 强制开启**（容器内供应，不接受影子模式）。
+  实施：`tb_agents/orz.py` 透传签发器配置 + 任务容器挂载/供应 manifest/keystore/signer
+  + 移除 `D:\tb-eval\.env` 的 `ORZ_ACAF_FAIL_CLOSED=0` 覆盖 + 冒烟验证 `orz --real`
+  带签发器启动。本轮临时解阻保留至实施完成。
   - 证据：`D:\tb-eval\jobs\2026-08-17__01-05-31`、`2026-08-17__01-07-59`；
     错误 `ACAF fail-closed is enabled but no signer client is configured`。
 - [x] GAP-CONSOLE-TOOLNAME-PATTERN：console 面工具名点号→下划线改名
@@ -64,8 +68,13 @@
   - 证据：`D:\tb-eval\jobs\2026-08-17__01-09-43`；journal events 1-18（plan-first
     全链后 run_failed）；错误 `Invalid 'tools[5].function.name' ... '^[a-zA-Z0-9_-]+$'`。
 - [ ] （P1 观察）plan_write 提示词/示例强化：首次模型把计划序列化为 JSON 字符串被拒
-  （refill_requested），重填对象后通过。
+  （`missing_required_field: plan` → refill_requested），重填对象后通过。提示词/示例
+  强化，并补回归测试（字符串计划 → 机械拒绝 → 对象重填）。
 - [ ] （P1 观察）`steps[].actions` 形状校验收紧：空字符串当前仍通过校验，动作形状校验偏宽。
+- [ ] （新发现，冒烟重跑定位）计划视图渲染步骤 ID：`blackboard_read section=plan` 当前
+  仅渲染 `[status] goal (actions: N; evidence: M)`，不渲染 `step.id`；步骤门要求订单
+  `step_id` 精确绑定 → 模型靠猜测大量空转（轨迹 13/18/23 步、4 次 plan_write）。补渲染
+  `step.id`（含归档 epoch 读）+ 测试；ADR-0010 §14.21 登记。
 
 ### P0-B FUS-RETRIEVAL-MECH（`implemented`；批次 1-6 已全部闭合，2026-08-14，保留供核对）
 
