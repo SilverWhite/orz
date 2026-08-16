@@ -17,12 +17,13 @@
 > 收口；2026-08-16 S4 实施闭合，未闭合总数 35 → 34；2026-08-16 用户裁决
 > P0-C 转正式组件（决策门闭合）+ PLAN-FIRST 阶段 A 闭合，未闭合总数
 > 34 → 32；2026-08-16 PLAN-FIRST 阶段 B 实施闭合，未闭合总数
-> 32 → 31）。
+> 32 → 31；2026-08-16 PLAN-FIRST 阶段 C 实施闭合，未闭合总数
+> 31 → 30）。
 > 本快照只做计数与分组召回，明细以下方各分组勾选清单为唯一入口，不新增独立条目；
 > 后续扫描更新时同步替换本快照日期与计数。
 
-- 未闭合总数：**31 项**
-  - P0-C：1 项（PLAN-FIRST 阶段 C）
+- 未闭合总数：**30 项**
+  - P0-C：0 项（PLAN-FIRST 阶段 A/B/C 全部闭合，2026-08-16）
   - P1 可并行审计/证据：11 项（组件登记 1、Windows 证据 3、DeepSeek 2、会话上下文监测 5）
   - P2 生产化决策门：6 项（ACAF fail-closed 生产启用、Slice 3、Slice 4、ACAF 可选工程项、OPS 裁剪设计、OPS 生产接线裁决）
   - P3 收尾/清理：7 项（EVIDENCE-LOCAL-BROWSER、GATE-CHAIN、observed-scope 枚举、V11-IMPL-003、V11-IMPL-007、orz-host flaky、DC 硬信号 4/6）
@@ -57,7 +58,7 @@
 - [x] 槽位表由工作区索引动态生成（POC 闭合；生产接线复用 orz `project_doc_index` 缓存）。
 - [x] 小样 2：编辑执行器 `workspace.search_replace`（2026-08-15 闭合，用户裁决通过 + 独立判定一致；结果工件 `prototype/classical_console/sample2_result.json`）。
 - [x] 小样 3：机械组合脚本模式（线性脚本 + `$ref` 数据引用 + 逐行 trace + fail-closed）——已闭合（2026-08-15 用户裁决通过 + 独立判定一致）；结果工件 `prototype/classical_console/sample3_result.json`。
-- [ ] orz 内嵌集成：HA 操作台接线（薄接缝在 orz ↔ 底座模型后端；黑板动作栏为生产协作接缝；POC stdio 仅原型隔离）。
+- [x] orz 内嵌集成：HA 操作台接线（薄接缝在 orz ↔ 底座模型后端；黑板动作栏为生产协作接缝；POC stdio 仅原型隔离）。
   - [x] S1：操作台核心与黑板动作栏数据面——`orz-loop/src/console.rs`
     （ServiceRegistry / ActionSpec 契约 / issue_action 五步路由 /
     fail-closed 信封 / 有界 Trace+TraceStore，执行经 ActionExecutor 抽象
@@ -162,10 +163,28 @@
   实施审计见
   `docs/audits/GAP_PLAN_FIRST_STAGE_B_IMPL_AUDIT_2026-08-16.md`。
   - 成熟复用评估（2026-08-16，只读）：部分——复用已闭合的 FUS-TOOL-PROBE 单一探针面（自研成熟机制）。
-- [ ] PLAN-FIRST 阶段 C：双模式（console 默认 + direct 受控降级）——投影切换、
+- [x] PLAN-FIRST 阶段 C：双模式（console 默认 + direct 受控降级）——投影切换、
   3 连败助理层故障面计数、无工具询问轮、`console_mode_transition` + gate_log、
   `console.step_done` 证据门、`console.return_to_console`、plan_write/分步计划
-  状态机、ActionOrder 增 `step_id`。
+  状态机、ActionOrder 增 `step_id`。2026-08-16 闭合：
+  - [x] 契约层：v0.2 `console_mode_transition` / `console_order_written` 事件
+    （Schema/verifier/fixtures 先行；action_write ToolCompleted 收敛通用形状，
+    阶段 A 审计 §7.4 债务收口）；tool-started/completed 增 direct 盖章字段；
+    `ActionOrder.step_id`；`StepStatus` 状态机化（done/failed 带 receipt，旧归档兼容）。
+  - [x] 双模式状态机：run 级模式/连败/询问标记/transition_id/direct trace
+    证据面；故障面机械分类（默认阈值 3，`ORZ_CONSOLE_DIRECT_FALLBACK_THRESHOLD`
+    可调）；无工具询问轮（一次重填、降级默认 stay、每 run 至多一次）；
+    switch/stay/return 写 `console_mode_transition` + gate_log。
+  - [x] 步骤门：console 订单必须绑定当前可执行步骤，`step_not_done` 显式拒绝；
+    发放时 in_progress、receipt 置 done/failed；`console.step_done` 证据门
+    （transition_id + trace_id 交叉，不匹配拒绝）。
+  - [x] 模型面收敛：console 默认面（黑板读写 + 只读核查，无执行工具）+ 调用面
+    门禁 `console_mode_tool_denied`；direct 恢复工作工具投影、直接动作事件
+    全链路盖章；生产接线 CLI run + ACP server。
+  - [x] 测试与审计：orz-loop 433 / orz-tui 178 / orz-assurance / orz-bin /
+    orz-host acp_server 36 / Python runtime 306 + assurance 1614 通过；
+    实施审计见
+    `docs/audits/GAP_PLAN_FIRST_STAGE_C_IMPL_AUDIT_2026-08-16.md`。
   - 成熟复用评估（2026-08-16，只读）：部分——Codex plan/approval 与 ACP 模式切换可参考，主体自研。
 
 入口：[设计](docs/PLAN_FIRST_BLACKBOARD_DESIGN_2026-08-15.md) / [ADR-0010 §14.17](adr/ADR-0010-fusion-runtime-and-agent-architecture.md)。

@@ -1,7 +1,7 @@
 # ADR-0010：ORZ 融合运行时、同构 Agent 与设计权威重整
 
 - 状态：**accepted / frozen**（2026-08-09；本文件是 ORZ 当前自然语言设计的唯一权威基线）
-- 冻结版本：1.1（2026-08-10 追加 v1.2 补写，见 §14.2；2026-08-11 追加 v1.3 补写，见 §14.3；2026-08-11 追加 v1.4 补写，见 §14.4；2026-08-12 追加 v1.5 补写，见 §14.5；2026-08-12 追加 v1.6 补写，见 §14.6；2026-08-13 追加 v1.7 补写，见 §14.7；2026-08-13 追加 v1.8 补写，见 §14.8；2026-08-14 追加 v1.9 补写，见 §14.9；2026-08-14 追加 v1.10 补写，见 §14.10；2026-08-14 追加 v1.11 补写，见 §14.11；2026-08-14 追加 v1.12 补写，见 §14.12；2026-08-14 追加 v1.13-v1.15 补写，见 §14.13-§14.15；2026-08-15 v1.15⑧/⑨ 补强，见 §14.15 ⑧/⑨；2026-08-15 追加 v1.16 补写，见 §14.16；2026-08-15 追加 v1.17 补写，见 §14.17；2026-08-16 v1.17⑩ 审查收口登记，见 §14.17⑩；2026-08-16 v1.17⑪ S4 实施登记，见 §14.17⑪；2026-08-16 v1.17⑫ 审查收口登记，见 §14.17⑫；2026-08-16 v1.17⑬ 超时语义复核登记，见 §14.17⑬；2026-08-16 v1.17⑭/⑮ 决策门与阶段 A 登记，见 §14.17⑭/⑮；2026-08-16 v1.17⑯ 阶段 A 审查收口登记，见 §14.17⑯）
+- 冻结版本：1.1（2026-08-10 追加 v1.2 补写，见 §14.2；2026-08-11 追加 v1.3 补写，见 §14.3；2026-08-11 追加 v1.4 补写，见 §14.4；2026-08-12 追加 v1.5 补写，见 §14.5；2026-08-12 追加 v1.6 补写，见 §14.6；2026-08-13 追加 v1.7 补写，见 §14.7；2026-08-13 追加 v1.8 补写，见 §14.8；2026-08-14 追加 v1.9 补写，见 §14.9；2026-08-14 追加 v1.10 补写，见 §14.10；2026-08-14 追加 v1.11 补写，见 §14.11；2026-08-14 追加 v1.12 补写，见 §14.12；2026-08-14 追加 v1.13-v1.15 补写，见 §14.13-§14.15；2026-08-15 v1.15⑧/⑨ 补强，见 §14.15 ⑧/⑨；2026-08-15 追加 v1.16 补写，见 §14.16；2026-08-15 追加 v1.17 补写，见 §14.17；2026-08-16 v1.17⑩ 审查收口登记，见 §14.17⑩；2026-08-16 v1.17⑪ S4 实施登记，见 §14.17⑪；2026-08-16 v1.17⑫ 审查收口登记，见 §14.17⑫；2026-08-16 v1.17⑬ 超时语义复核登记，见 §14.17⑬；2026-08-16 v1.17⑭/⑮ 决策门与阶段 A 登记，见 §14.17⑭/⑮；2026-08-16 v1.17⑯ 阶段 A 审查收口登记，见 §14.17⑯；2026-08-16 v1.17⑰ 阶段 B 实施登记，见 §14.17⑰；2026-08-16 v1.17⑱ 阶段 C 实施登记，见 §14.17⑱）
 - 日期：2026-08-09（v1.1 补充裁决同日冻结）
 - 决策范围：产品 runtime 所有权、成熟组件复用、自研准入、主/子 Agent 架构、模型与 transport、工具与权限、检索证据、context/compaction、问询与活性守卫、journal/snapshot、隐私、UI、Windows 兼容性、Schema 演进与设计文档治理
 - 取代/修订：
@@ -1541,5 +1541,48 @@ ADR §3.6 正文修订随实施登记。
          clippy 无新增告警；仓库门禁仅剩「orz submodule working tree is
          dirty」（本阶段代码未提交）。实施审计：
          `docs/audits/GAP_PLAN_FIRST_STAGE_B_IMPL_AUDIT_2026-08-16.md`。
+   ⑱ PLAN-FIRST 阶段 C 实施登记（2026-08-16；console 默认 + direct 受控
+      降级双模式）——
+      a) 契约层先行：v0.2 事件 +2——`console_mode_transition`（transition_id/
+         from/to/trigger/streak/order_ids/model_decision/model_reason/run_id/
+         round/plan_epoch/related_transition_id；覆盖 switch/stay/return）与
+         `console_order_written`（order_id/write_call_id/action/step_id/
+         round/plan_epoch/run_id；`blackboard.action_write` ToolCompleted
+         收敛到通用形状，阶段 A 审计 §7.4 的 S2 payload-shape 债务随本次
+         收口）；run-event v0.2 枚举 48→50；tool-started/tool-completed 增
+         可选 console_mode/transition_id/trace_id（direct 事件链盖章）；
+         Python verifier + 方向↔trigger↔decision 交叉、每 run 至多一次
+         询问、direct 事件必须匹配当前 direct transition、return 引用本
+         run 早先切换、order 记录须有先行的 action_write 成功（write_call_id
+         对拍）；fixtures 与 conformance 计数同步。
+      b) 双模式状态机（§7）：run 级 `ConsoleModeState`（模式/连败/询问标记/
+         transition_id/direct trace 证据面；run 起始复位、plan epoch 轮换
+         不清除）；故障面机械分类（verify 与 execute 无业务 exit_code 递增；
+         业务非零退出/policy/protocol/registry/contract/order_stale/
+         step_not_done 不计；`ORZ_CONSOLE_DIRECT_FALLBACK_THRESHOLD` 默认 3）；
+         无工具询问轮（复用强制模板轮语义，一次重填、降级默认 stay、
+         每 run 至多一次）；switch 写 `console_mode_transition` + gate_log、
+         当前步骤置 in_progress；stay/`console.return_to_console` 复位留痕。
+      c) 步骤状态机（§5/§6）：`StepStatus` 状态机化
+         `pending → in_progress → done(receipt_id[, direct 证据]) |
+         failed(receipt_id)`（自定义 serde 兼容旧归档单位变体与
+         description-only 快照）；`ActionOrder.step_id`（Schema 先行）；
+         步骤门=console 订单必须绑定当前可执行步骤，否则 `step_not_done`
+         显式拒绝；发放时 in_progress、receipt 置 done/failed；direct 为
+         有记录例外——`console.step_done` 需 transition_id（本 run direct
+         切换）+ trace_id（对应已发生 ToolCompleted）双重证据，不匹配拒绝。
+      d) 模型面收敛（§4/§9）：console 默认面=黑板读写（plan_write +
+         action_write）+ 只读核查（read/list/grep 类），执行/变更/shell/
+         子代理/检索隐藏（投影 + `console_mode_tool_denied` 调用面门禁）；
+         direct 恢复探针过滤后的工作工具投影；direct 直接动作 ToolStarted/
+         ToolCompleted 携带 console_mode:"direct" + transition_id +
+         trace_id（事件链关联），权限/ACAF/模式门/IPG/预算/探针全部照旧；
+         生产接线=CLI run + ACP server 随 plan_first 一并开启。
+      e) 验证：orz-loop 433 / orz-tui 178 / orz-assurance / orz-bin
+         stdio_e2e 通过；orz-host acp_server 36 通过（12 项既有 ACP 测试
+         按 console 默认面收敛为计划→订单形态）；Python runtime 305 /
+         assurance 1614+14 skipped 通过；仓库门禁仅剩
+         「orz submodule working tree is dirty」（未提交）。实施审计：
+         `docs/audits/GAP_PLAN_FIRST_STAGE_C_IMPL_AUDIT_2026-08-16.md`。
    来源：`docs/PLAN_FIRST_BLACKBOARD_DESIGN_2026-08-15.md`；关联：
    CLASSICAL-EXEC-ASSISTANT v0.6。

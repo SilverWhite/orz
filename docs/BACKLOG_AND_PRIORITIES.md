@@ -9,7 +9,7 @@
 
 | 优先级 | 含义 | 未闭合项 |
 |---|---|---|
-| P0 | 当前工作集：设计已冻结，裁决后立即实施 | CLASSICAL-EXEC-ASSISTANT（生产组件，2026-08-16 用户裁决转正式）；PLAN-FIRST-BLACKBOARD（阶段 C 待实施，2026-08-15 定案；阶段 B 已闭合 2026-08-16） |
+| P0 | 当前工作集：设计已冻结，裁决后立即实施 | CLASSICAL-EXEC-ASSISTANT（生产组件，2026-08-16 用户裁决转正式）；PLAN-FIRST-BLACKBOARD（阶段 A/B/C 全部闭合 2026-08-16；P0 当前无开放项） |
 | P1 | 无需裁决，可与 P0 并行 | FUS-COMPONENT-REGISTER、GAP-WINDOWS-EVIDENCE、IMPL-DEEPSEEK-TRANSPORT / SEC-CREDENTIALS、ORZ-CACHE-CONTEXT-COST、ORZ-SESSION-CONTEXT-MONITOR |
 | P2 | 生产化决策门：需用户裁决 | IMPL-CONTROL-FABRIC（fail-closed 启用、Slice 3/4）、OPS-PROTOCOL |
 | P3 | 收尾 / 清理 | EVIDENCE-LOCAL-BROWSER、GATE-CHAIN、DC 剩余信号、V11-IMPL-003/007、工作区收尾 |
@@ -265,6 +265,13 @@
   投影与注册板块共用同一探针源（同源一致性测试锁定；审查收口：run 起始复位
   与归档读不派生单测）。实施审计见
   `docs/audits/GAP_PLAN_FIRST_STAGE_B_IMPL_AUDIT_2026-08-16.md`。
+- 进度（2026-08-16）：**阶段 C 已闭合**——console 默认 + direct 受控降级
+  双模式：v0.2 事件 +2（`console_mode_transition` / `console_order_written`，
+  action_write ToolCompleted 收敛通用形状）、双模式状态机（故障连败/询问轮/
+  switch/stay/return）、步骤状态机（`pending → in_progress → done|failed`、
+  步骤门 step_not_done、`console.step_done` 证据门）、模型面收敛（console 面=
+  黑板读写+只读核查；direct 恢复工作工具投影并全链路盖章）；实施审计见
+  `docs/audits/GAP_PLAN_FIRST_STAGE_C_IMPL_AUDIT_2026-08-16.md`。
 
 ### 3b. ORZ-COMPACTION-REDESIGN（`implemented`；P0，S1-S4 已闭合 2026-08-14）
 
