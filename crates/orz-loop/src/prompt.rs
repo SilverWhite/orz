@@ -254,12 +254,15 @@ pub fn recovery_truncation_marker(
 pub const STATUS_LINE_PREFIX: &str = "[任务状态";
 
 /// A4 (2026-08-08): build the resident 极简状态行 over the blackboard plan
-/// section — goal + plan summary (total steps, current step, remaining) —
-/// 2-3 lines. Rendered from STABLE plan state only: the controller keeps
-/// the block byte-identical across rounds while the plan is unchanged, so
-/// the rebuilt system prompt keeps its provider prefix-cache hit (2026-08-07
-/// discipline — per-round-varying content lives in trailing messages, e.g.
-/// `[本轮编辑]` / `[TOOL_ROUND_BUDGET] REMAINING`).
+/// section — goal + plan summary (total steps, current step id + goal,
+/// remaining) — 2-3 lines. P0-E 计划视图补渲染步骤 ID (2026-08-17): the
+/// current step line carries its `id` so the console step gate's exact
+/// `step_id` binding is visible without a blackboard_read. Rendered from
+/// STABLE plan state only: ids never vary while the plan is unchanged, so
+/// the controller keeps the block byte-identical across rounds and the
+/// provider prefix-cache hit survives (2026-08-07 discipline — per-round-
+/// varying content lives in trailing messages, e.g. `[本轮编辑]` /
+/// `[TOOL_ROUND_BUDGET] REMAINING`).
 ///
 /// Edit counts are deliberately EXCLUDED from the resident block: they
 /// change per edit round, and a per-round-varying system prompt recreates
@@ -286,7 +289,11 @@ pub fn build_status_line(goal: Option<&str>, steps: &[crate::blackboard::PlanSte
             .map(|i| i + 1);
         let done = steps.iter().filter(|s| s.status.is_done()).count();
         let middle = match current {
-            Some(i) => format!("当前第 {i} 步「{}」", steps[i - 1].goal,),
+            Some(i) => format!(
+                "当前第 {i} 步 [{}]「{}」",
+                steps[i - 1].id,
+                steps[i - 1].goal,
+            ),
             None => "当前步骤: (无)".to_string(),
         };
         lines.push(format!("目标: {goal}"));
@@ -712,7 +719,7 @@ mod tests {
         assert!(line.ends_with("[/任务状态]"));
         assert!(line.contains("目标: 修复 bug"));
         assert!(line.contains("共 2 步，已完成 0"));
-        assert!(line.contains("当前第 1 步「调查」"));
+        assert!(line.contains("当前第 1 步 [step-1]「调查」"));
         assert!(line.contains("待办 2 步"));
 
         // No plan section → fallback goal text.
@@ -755,7 +762,7 @@ mod tests {
         ];
         let line = build_status_line(Some("修复 bug"), &steps);
         assert!(line.contains("已完成 1"));
-        assert!(line.contains("当前第 2 步「实施」"));
+        assert!(line.contains("当前第 2 步 [step-2]「实施」"));
         assert!(line.contains("待办 2 步"));
     }
 

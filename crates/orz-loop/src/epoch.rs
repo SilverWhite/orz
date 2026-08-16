@@ -267,8 +267,13 @@ pub fn render_section(
                     crate::blackboard::StepStatus::Failed(_) => "failed",
                     crate::blackboard::StepStatus::Blocked => "blocked",
                 };
+                // P0-E 计划视图补渲染步骤 ID (2026-08-17, ADR-0010 §14.21 项 2):
+                // 步骤门要求 console 订单 step_id 精确绑定当前可执行步骤；渲染
+                // 每步 id 作为行首标识，模型从计划视图直接取用，无需猜测。
+                // 本函数同时服务 live 视图与归档 epoch 读（controller 同源）。
                 lines.push(format!(
-                    "- [{status}] {} (actions: {}; evidence: {})",
+                    "- [{status}] {}: {} (actions: {}; evidence: {})",
+                    step.id,
                     step.goal,
                     step.actions.len(),
                     step.evidence.len(),
@@ -493,6 +498,77 @@ mod tests {
         );
         assert!(unknown.contains("unknown blackboard section: bogus"));
         assert!(unknown.contains("actions"));
+    }
+
+    /// P0-E 计划视图补渲染步骤 ID (2026-08-17, ADR-0010 §14.21 项 2): every
+    /// plan step line carries its id as the leading token after the status —
+    /// the model echoes it into `step_id` when writing console orders, no
+    /// guessing. The same renderer serves live views and archived epoch
+    /// reads, so one test locks both surfaces.
+    #[test]
+    fn render_plan_section_includes_step_ids() {
+        use crate::blackboard::PlanAction;
+        let mut plan = crate::blackboard::PlanSection {
+            plan_id: Some("PLAN-VIEW-1".into()),
+            plan_epoch: 3,
+            goal: Some("构建 ELF".into()),
+            ..Default::default()
+        };
+        plan.steps.push(PlanStep {
+            id: "s1".into(),
+            goal: "侦查源码".into(),
+            actions: vec![PlanAction {
+                step_id: "s1".into(),
+                do_action: "workspace.list_dir".into(),
+                with: serde_json::json!({"path": "."}),
+            }],
+            acceptance: "清单".into(),
+            evidence: vec!["tree.txt".into()],
+            status: StepStatus::InProgress,
+        });
+        plan.steps.push(PlanStep {
+            id: "s2".into(),
+            goal: "构建并验证".into(),
+            actions: Vec::new(),
+            acceptance: String::new(),
+            evidence: Vec::new(),
+            status: StepStatus::Pending,
+        });
+
+        let text = render_section(
+            &plan,
+            &[],
+            &[],
+            &ExecSection::default(),
+            &ActionBoard::default(),
+            "plan",
+            None,
+        );
+        assert!(text.contains("goal: 构建 ELF"), "{text}");
+        assert!(text.contains("plan_id: PLAN-VIEW-1"), "{text}");
+        assert!(text.contains("plan_epoch: 3"), "{text}");
+        // The step id is the leading token after the status bracket —
+        // exactly what the model echoes into `step_id`.
+        assert!(
+            text.contains("- [in-progress] s1: 侦查源码 (actions: 1; evidence: 1)"),
+            "{text}"
+        );
+        assert!(
+            text.contains("- [pending] s2: 构建并验证 (actions: 0; evidence: 0)"),
+            "{text}"
+        );
+
+        // Empty plan stays explicit about having no steps.
+        let empty = render_section(
+            &crate::blackboard::PlanSection::default(),
+            &[],
+            &[],
+            &ExecSection::default(),
+            &ActionBoard::default(),
+            "plan",
+            None,
+        );
+        assert!(empty.contains("(no steps)"), "{empty}");
     }
 
     #[test]

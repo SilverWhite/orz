@@ -4466,13 +4466,16 @@ impl AgentLoopController {
             tool_defs.push(ToolDef {
                 name: "blackboard_read".to_string(),
                 description: "Read a blackboard partition. `section` is one \
-                     of: plan (current goal + step statuses), edits (file-edit \
-                     records: file, line-range delta, timestamp), tool_actions \
-                     (executed tool calls folded by category read/edit/terminal/\
-                     retrieval with timestamps), exec (tool results — the full \
-                     accumulated log; read_file still works for files), actions \
-                     (P0-C console: current registration board buttons, the \
-                     pending action-bar order and recent result receipts). \
+                     of: plan (current goal + step statuses; each step line \
+                     starts with its id: `- [状态] <step_id>: <目标> ...` — \
+                     use that id for the step_id binding when writing console \
+                     orders), edits (file-edit records: file, line-range \
+                     delta, timestamp), tool_actions (executed tool calls \
+                     folded by category read/edit/terminal/retrieval with \
+                     timestamps), exec (tool results — the full accumulated \
+                     log; read_file still works for files), actions (P0-C \
+                     console: current registration board buttons, the pending \
+                     action-bar order and recent result receipts). \
                      Optional `since_timestamp` (RFC 3339, e.g. the timestamp \
                      this tool returned earlier) filters the edits / tool_actions \
                      entries to those at or after that time. Optional `epoch` \
@@ -4536,7 +4539,7 @@ impl AgentLoopController {
                         "step_id": {
                             "type": "string",
                             "minLength": 1,
-                            "description": "PLAN-FIRST 阶段 C (2026-08-16): optional plan step binding — the order is issued only when the step gate passes (pending → in_progress → done/failed; a non-current step is refused with step_not_done). Required in console default mode when a structured plan is in force.",
+                            "description": "PLAN-FIRST 阶段 C (2026-08-16): optional plan step binding — the order is issued only when the step gate passes (pending → in_progress → done/failed; a non-current step is refused with step_not_done). Required in console default mode when a structured plan is in force. Take the exact id from the plan view (blackboard_read section=plan — each step line starts with `- [状态] <step_id>: ...`); do not guess.",
                         },
                         "arguments": {
                             "type": "object",
@@ -12014,7 +12017,7 @@ mod tests {
             "status line in system prompt: {system}"
         );
         assert!(system.contains("目标: 修复 bug"));
-        assert!(system.contains("当前第 1 步「调查」"));
+        assert!(system.contains("当前第 1 步 [step-1]「调查」"));
         assert!(system.contains("[/任务状态]"));
 
         let _ = std::fs::remove_dir_all(&dir);
@@ -12280,8 +12283,21 @@ mod tests {
         let live = controller.render_blackboard_section("plan", None, None);
         assert!(live.contains("新任务"));
         assert!(live.contains("plan_epoch: 2"));
+        // P0-E 计划视图补渲染步骤 ID (2026-08-17, ADR-0010 §14.21 项 2):
+        // both the live view and the archived epoch read carry each step's
+        // id as the leading token — the console step gate's exact `step_id`
+        // binding is visible without guessing.
+        assert!(
+            live.contains("- [in-progress] step-1: 新步骤 (actions: 0; evidence: 0)"),
+            "live plan view must render step id: {live}"
+        );
         let archived = controller.render_blackboard_section("edits", None, Some(1));
         assert!(archived.contains("old.py"), "cross-epoch read: {archived}");
+        let archived_plan = controller.render_blackboard_section("plan", None, Some(1));
+        assert!(
+            archived_plan.contains("- [in-progress] step-1: 旧步骤 (actions: 0; evidence: 0)"),
+            "archived plan view must render step id: {archived_plan}"
+        );
         let missing = controller.render_blackboard_section("plan", None, Some(99));
         assert!(missing.contains("epoch snapshot 99 not found"));
 
@@ -12293,6 +12309,87 @@ mod tests {
         assert_eq!(r.plan.plan_id.as_deref(), Some("PLAN-RESTORE-B"));
         assert_eq!(r.plan.plan_epoch, 2);
         assert_eq!(r.plan.goal.as_deref(), Some("新任务"));
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// P0-E 计划视图补渲染步骤 ID (2026-08-17, ADR-0010 §14.21 项 2): the
+    /// actual `blackboard_read section=plan` tool reply reaches the model
+    /// with each step's id — the console step gate's exact `step_id`
+    /// binding is visible, no guessing.
+    #[tokio::test]
+    async fn blackboard_read_serves_plan_partition_with_step_ids() {
+        let dir = test_dir();
+        let journal = JournalRecorder::new(dir.clone());
+        let host = TestHost {
+            journal,
+            tool_result: Some(ToolResult {
+                output: "irrelevant".to_string(),
+                exit_code: Some(0),
+                output_encoding: None,
+                structured: None,
+                ..Default::default()
+            }),
+        };
+        let fake = Arc::new(FakeProvider::new(vec![
+            ScriptedResponse::tool_calls(vec![ToolCall {
+                name: "blackboard_read".to_string(),
+                arguments: serde_json::json!({"section": "plan"}),
+                call_id: "call-pv1".to_string(),
+            }]),
+            ScriptedResponse::text("完成"),
+            ScriptedResponse::text("完成"),
+        ]));
+        let gateway: Arc<dyn ModelGateway> = fake.clone();
+        let controller = AgentLoopController::with_gateway(gateway).with_plan(
+            "PLAN-VIEW-TEST".to_string(),
+            1,
+            "构建 ELF".to_string(),
+            vec!["侦查源码".to_string(), "构建并验证".to_string()],
+        );
+        controller
+            .run_turn(
+                &host,
+                "读计划视图",
+                "RUN-PV1",
+                MANIFEST,
+                0,
+                None,
+                None,
+                None,
+            )
+            .await
+            .unwrap();
+
+        let received = fake.received_requests();
+        let round = received
+            .iter()
+            .find(|r| {
+                r.messages
+                    .iter()
+                    .any(|m| m.tool_call_id.as_deref() == Some("call-pv1"))
+            })
+            .expect("round carrying blackboard_read plan reply");
+        assert!(
+            round
+                .messages
+                .iter()
+                .any(|m| m.tool_call_id.as_deref() == Some("call-pv1")
+                    && m.content
+                        .contains("- [in-progress] step-1: 侦查源码 (actions: 0; evidence: 0)")),
+            "plan reply must render the current step id: {:?}",
+            round.messages
+        );
+        assert!(
+            round
+                .messages
+                .iter()
+                .any(|m| m.tool_call_id.as_deref() == Some("call-pv1")
+                    && m.content
+                        .contains("- [pending] step-2: 构建并验证 (actions: 0; evidence: 0)")),
+            "plan reply must render every step id: {:?}",
+            round.messages
+        );
 
         let _ = std::fs::remove_dir_all(&dir);
     }
