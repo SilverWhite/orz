@@ -183,6 +183,12 @@ LangChain「一步≈一次工具调用 + 有界重规划」）——上限是�
 - 机械门：下一步订单发放要求上一步 `done` 且 receipt_id 非空；不满足拒绝并返回明确错误。
 - 防惯性幻觉：模型无法在未核查的情况下按计划惯性推进；执行结果以 receipt + trace_id 为准，
   不以计划文本中的预期为准。
+- 事件面（P0-E 第 4 项，2026-08-17，ADR-0010 §14.21 项 3）：所有发放前拒绝统一写 v0.2
+  `console_order_rejected`（order_id / step / phase / code / reason / round / plan_epoch /
+  run_id）——pre_issue = order_stale / step_not_done / budget_insufficient；
+  issue = 注册表 / 契约 / 目标 / ACAF / 策略 / 模式门（ACAF/模式/权限归一化
+  step=policy / code=policy_denied）；结果栏 receipt 保留为人类可读视图，执行失败
+  （execute/verify）仍只经 tool_started/tool_completed 留痕。
 - 模式范围：本机械门约束 **console 订单发放**；direct 模式为有记录的例外（§7.5），
   不借降级绕过权限/ACAF/模式门。
 

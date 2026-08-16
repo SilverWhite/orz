@@ -46,6 +46,18 @@
 > 436 / orz-tui 178 / orz-assurance 152 / orz-bin 全量通过、clippy 无新增告警、
 > manifest 1401、仓库门禁 valid。P0-E 剩 4 项、未闭合 31 项。
 > 详见 BACKLOG 0a / TODO P0-E / ADR-0010 §14.21。
+> 2026-08-17 订单发放前拒绝入事件面实施闭合登记（P0-E 第 4 项，用户指示处理）——
+> 新增 v0.2 `console_order_rejected`（order_id/step/phase/code/reason/round/
+> plan_epoch/run_id），发放前拒绝统一入事件面（pre_issue=order_stale/
+> step_not_done/budget_insufficient；issue=registry/contract/target/ACAF/
+> policy/mode 门，归一化 policy_denied；execute/verify 不入本事件）；
+> Schema/verifier/fixtures 先行（verifier 交叉核对=先有同 run 同 order_id
+> 的 console_order_written、盖章一致、每订单至多一次拒绝、phase/step/code
+> 一致性），结果栏 receipt 保留；orz 子模块 c67a452（事件变体 + 三处
+> pre_issue / 发放期 issue 路径发事件 + TUI 投影 + 测试断言）；
+> orz-loop 436 / orz-tui 178 / orz-assurance 152 / orz-bin 全量通过、
+> clippy 与基线一致、manifest 1401、仓库门禁 valid。P0-E 剩 3 项、
+> 未闭合 30 项。详见 BACKLOG 0a / TODO P0-E / ADR-0010 §14.21。
 >
 > 当前唯一自然语言设计权威是 [`ADR-0010`](adr/ADR-0010-fusion-runtime-and-agent-architecture.md)。本文件只负责召回和路由，不替代 ADR、Schema、审计结论、测试证据或源代码。
 >

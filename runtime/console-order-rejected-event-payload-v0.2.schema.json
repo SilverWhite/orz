@@ -1,0 +1,47 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://local.scientific-assurance.invalid/schema/console-order-rejected-event-payload-v0.2.schema.json",
+  "title": "console_order_rejected event payload v0.2 (P0-E pre-issuance rejection)",
+  "description": "ADR-0010 §14.21 项 3 / PLAN_FIRST_BLACKBOARD_DESIGN §5-§6: a blackboard action order written by blackboard_action_write was refused before execution. Unifies every pre-issuance rejection into the v0.2 event surface so the journal carries the structured rejection code (previously only the result-bar receipt + TraceStore did): order_stale / step_not_done / budget_insufficient (phase=pre_issue, step=protocol) and the issuance-time gates registry / contract / target / ACAF / policy / mode (phase=issue, step=registry|contract|target|policy; ACAF/mode/permission denials normalize to step=policy, code=policy_denied). step is the console failure-envelope step (never execute/verify — executed orders journal their outcome through tool_started/tool_completed). round/plan_epoch/run_id are the order's mechanical stamps and must match the preceding console_order_written record (verifier cross-check). The result-bar receipt remains the human-readable view.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "order_id",
+    "step",
+    "phase",
+    "code",
+    "reason",
+    "round",
+    "plan_epoch",
+    "run_id"
+  ],
+  "properties": {
+    "order_id": {
+      "type": "string",
+      "minLength": 1,
+      "description": "The rejected order's identity (matches the preceding console_order_written order_id)."
+    },
+    "step": {
+      "type": "string",
+      "minLength": 1,
+      "description": "The console failure-envelope step: protocol for the pre-issue gates, registry/contract/target/policy for the issuance-time gates. Never execute/verify."
+    },
+    "phase": {
+      "enum": ["pre_issue", "issue"],
+      "description": "pre_issue = rejected before issuance (order_stale / step_not_done / budget_insufficient); issue = refused at issuance time before any execution (registry / contract / target / ACAF / policy / mode gates)."
+    },
+    "code": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Machine-readable rejection code (order_stale / step_not_done / budget_insufficient / unknown_service / invalid_arguments / out_of_scope / policy_denied / ...)."
+    },
+    "reason": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Human-readable rejection message (the console error envelope message)."
+    },
+    "round": { "type": "integer", "minimum": 0 },
+    "plan_epoch": { "type": "integer", "minimum": 0 },
+    "run_id": { "type": "string", "minLength": 1 }
+  }
+}

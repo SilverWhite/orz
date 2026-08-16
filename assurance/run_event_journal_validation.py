@@ -207,6 +207,14 @@ PAYLOAD_SCHEMA_BY_EVENT_TYPE_V02: dict[str, tuple[str, Path]] = {
           "console-order-written",
           RUNTIME / "console-order-written-event-payload-v0.2.schema.json",
       ),
+      # P0-E 第 4 项 (2026-08-17, ADR-0010 §14.21 项 3): pre-issuance
+      # rejection of a written order — order identity, envelope step,
+      # phase (pre_issue/issue), rejection code and reason; the receipt
+      # stays the human-readable view (PLAN_FIRST_BLACKBOARD_DESIGN §5-§6).
+      "console_order_rejected": (
+          "console-order-rejected",
+          RUNTIME / "console-order-rejected-event-payload-v0.2.schema.json",
+      ),
   }
 
 # Track-resolution table (contract §5 enforcement): every registered
@@ -931,6 +939,100 @@ def _verify_v02_console_order_written(events: list[dict[str, Any]]) -> list[str]
             )
         else:
             consumed[run_id].add(matched)
+    return errors
+
+
+def _verify_v02_console_order_rejected(events: list[dict[str, Any]]) -> list[str]:
+    """ADR-0010 §14.21 项 3 / PLAN_FIRST_BLACKBOARD_DESIGN §5-§6 cross-checks
+    (P0-E 第 4 项, 2026-08-17):
+
+    - every console_order_rejected carries the rejected order's mechanical
+      stamps (round/plan_epoch/run_id) and a phase/step/code triple:
+      * phase=pre_issue → step=protocol and code ∈ {order_stale,
+        step_not_done, budget_insufficient} (refused before issuance);
+      * phase=issue → step ∈ {registry, contract, target, policy}
+        (refused at issuance before any execution; ACAF/mode/permission
+        denials normalize to step=policy / code=policy_denied);
+      execute/verify steps never appear here — executed orders journal
+      their outcome through tool_started/tool_completed.
+    - a console_order_rejected must be preceded by a console_order_written
+      of the same run carrying the same order_id and the same
+      round/plan_epoch/run_id stamps (the order record precedes its
+      rejection; the stamps are the order's own);
+    - at most one console_order_rejected per order_id per run (a rejected
+      order is consumed and never re-issued).
+    """
+    errors: list[str] = []
+    written_by_run: dict[str, dict[str, dict[str, Any]]] = {}
+    for event in events:
+        if not _is_v02(event) or event.get("event_type") != "console_order_written":
+            continue
+        payload = event["payload"]
+        run_id = event.get("run_id", "")
+        written_by_run.setdefault(run_id, {})[payload["order_id"]] = payload
+
+    rejected_per_run: dict[str, set[str]] = {}
+    for index, event in enumerate(events):
+        if not _is_v02(event) or event.get("event_type") != "console_order_rejected":
+            continue
+        payload = event["payload"]
+        run_id = event.get("run_id", "")
+        order_id = payload["order_id"]
+        seen = rejected_per_run.setdefault(run_id, set())
+        if order_id in seen:
+            errors.append(
+                f"event {index}: duplicate console_order_rejected order_id "
+                f"{order_id!r} in run {run_id}"
+            )
+        seen.add(order_id)
+
+        phase = payload.get("phase")
+        step = payload.get("step")
+        code = payload.get("code")
+        if phase not in ("pre_issue", "issue"):
+            errors.append(
+                f"event {index}: console_order_rejected phase must be "
+                f"pre_issue or issue, got {phase!r}"
+            )
+        if phase == "pre_issue":
+            if step != "protocol":
+                errors.append(
+                    f"event {index}: console_order_rejected pre_issue phase "
+                    f"requires step=protocol, got {step!r}"
+                )
+            if code not in ("order_stale", "step_not_done", "budget_insufficient"):
+                errors.append(
+                    f"event {index}: console_order_rejected pre_issue code "
+                    f"must be order_stale/step_not_done/budget_insufficient, "
+                    f"got {code!r}"
+                )
+        elif phase == "issue":
+            if step not in ("registry", "contract", "target", "policy"):
+                errors.append(
+                    f"event {index}: console_order_rejected issue phase step "
+                    f"must be registry/contract/target/policy, got {step!r}"
+                )
+        reason = payload.get("reason")
+        if not isinstance(reason, str) or not reason:
+            errors.append(
+                f"event {index}: console_order_rejected reason must be a "
+                "non-empty string"
+            )
+
+        written = written_by_run.get(run_id, {}).get(order_id)
+        if written is None:
+            errors.append(
+                f"event {index}: console_order_rejected {order_id!r} without "
+                "a prior console_order_written of the same run"
+            )
+            continue
+        for stamp in ("round", "plan_epoch", "run_id"):
+            if payload.get(stamp) != written.get(stamp):
+                errors.append(
+                    f"event {index}: console_order_rejected {order_id!r} "
+                    f"{stamp}={payload.get(stamp)!r} != written order "
+                    f"{stamp}={written.get(stamp)!r}"
+                )
     return errors
 
 
@@ -2864,6 +2966,7 @@ def validate_journal_text(text: str) -> list[str]:
         errors.extend(_verify_v02_plan_write(events))
         errors.extend(_verify_v02_console_mode_transition(events))
         errors.extend(_verify_v02_console_order_written(events))
+        errors.extend(_verify_v02_console_order_rejected(events))
         errors.extend(_verify_v02_lifecycle(events))
         errors.extend(_verify_v02_retrieval_mode(events))
         errors.extend(_verify_v02_result_consistency(events))

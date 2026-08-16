@@ -1678,15 +1678,23 @@ ADR §3.6 正文修订随实施登记。
    参数提示补空结果语义 + 回归验证（重跑 round 数/计划重写次数下降）。实施登记
    BACKLOG 0a / TODO P0-E。
    来源：2026-08-17 冒烟重跑 `D:\tb-eval\jobs\2026-08-17__03-48-57`。
-3. **订单发放前拒绝事件面缺口登记（2026-08-17 用户指示处理，§14.17⑱ 补充）**：
+3. **订单发放前拒绝事件面（2026-08-17 用户指示处理，§14.17⑱ 补充；已实施闭合）**：
    冒烟重跑中 ORD-000011（workspace.run_tests，`arguments:{}`）写入后发放前被拒，
    失败只进结果栏 receipt + TraceStore（`consume_console_order` 不写 journal 事件），
-   runtime journal 无结构化拒绝记录，事后核对看不到拒绝码。目标=发放前拒绝
-   （order_stale / step_not_done / budget_insufficient / registry / contract / target /
-   ACAF / policy / mode 门）统一入 v0.2 事件面——新增 `console_order_rejected`
-   （order_id / step / phase / code / reason / round / plan_epoch / run_id），
-   Schema/verifier/fixtures 先行，结果栏 receipt 保留为人类可读视图。
-   实施登记 BACKLOG 0a / TODO P0-E。
+   runtime journal 无结构化拒绝记录，事后核对看不到拒绝码。定案=新增 v0.2
+   `console_order_rejected`（order_id / step / phase / code / reason / round /
+   plan_epoch / run_id），发放前拒绝统一入事件面：phase=pre_issue（order_stale /
+   step_not_done / budget_insufficient，step=protocol）+ phase=issue（registry /
+   contract / target / ACAF / policy / mode 门，ACAF/模式/权限归一化
+   step=policy / code=policy_denied）；execute/verify 不入本事件（已执行订单经
+   tool_started/tool_completed 留痕）。Schema/verifier/fixtures 先行；verifier
+   交叉核对——拒绝必须先有同 run 同 order_id 的 `console_order_written`、机械盖章
+   （round/plan_epoch/run_id）一致、每订单至多一次拒绝、phase/step/code 一致性；
+   结果栏 receipt 保留为人类可读视图。实施：orz 子模块 c67a452（事件变体 +
+   三处 pre_issue 路径 + 发放期 Err 分支 issue 路径发事件 + TUI 投影 +
+   测试断言）；orz-loop 436 / orz-tui 178 / orz-assurance 152 / orz-bin 全量通过、
+   clippy 与基线一致（lib 21 / lib test 26）、manifest 重生成 1401 条目、
+   仓库门禁 valid。实施登记 BACKLOG 0a / TODO P0-E。
 4. **Linux 文件型安装密钥库后端（2026-08-17 用户裁决，GAP-ACAF-HARNESS-PASSTHROUGH
    前置）**：签发器与 provision 在非 Windows 下原 fail-closed（DPAPI 不可用，
    Slice1 审计 §6 登记为设计边界——评测容器内签发器不可用）。用户裁决放行新增

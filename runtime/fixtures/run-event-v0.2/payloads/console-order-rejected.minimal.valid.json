@@ -1,0 +1,10 @@
+{
+  "order_id": "ORD-000011",
+  "step": "protocol",
+  "phase": "pre_issue",
+  "code": "step_not_done",
+  "reason": "order refused — step_not_done: the current executable step is s1",
+  "round": 3,
+  "plan_epoch": 1,
+  "run_id": "RUN-CONF-CREJ"
+}

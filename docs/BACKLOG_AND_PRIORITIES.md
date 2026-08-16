@@ -9,7 +9,7 @@
 
 | 优先级 | 含义 | 未闭合项 |
 |---|---|---|
-| P0 | 当前工作集：设计已冻结，裁决后立即实施 | 评测冒烟暴露问题（P0-E 剩余四项：plan_write 提示词强化、actions 形状校验、grep 侦查纪律、发放前拒绝入事件面；ACAF 容器供应与计划视图步骤 ID 渲染已闭合 2026-08-17，见 0a）；CLASSICAL-EXEC-ASSISTANT（生产组件，2026-08-16 用户裁决转正式）；PLAN-FIRST-BLACKBOARD（阶段 A/B/C 全部闭合 2026-08-16） |
+| P0 | 当前工作集：设计已冻结，裁决后立即实施 | 评测冒烟暴露问题（P0-E 剩余三项：plan_write 提示词强化、actions 形状校验、grep 侦查纪律；ACAF 容器供应、计划视图步骤 ID 渲染与订单发放前拒绝入事件面已闭合 2026-08-17，见 0a）；CLASSICAL-EXEC-ASSISTANT（生产组件，2026-08-16 用户裁决转正式）；PLAN-FIRST-BLACKBOARD（阶段 A/B/C 全部闭合 2026-08-16） |
 | P1 | 无需裁决，可与 P0 并行 | FUS-COMPONENT-REGISTER、GAP-WINDOWS-EVIDENCE、IMPL-DEEPSEEK-TRANSPORT / SEC-CREDENTIALS、ORZ-CACHE-CONTEXT-COST、ORZ-SESSION-CONTEXT-MONITOR |
 | P2 | 生产化决策门：需用户裁决 | IMPL-CONTROL-FABRIC（fail-closed 启用、Slice 3/4）、OPS-PROTOCOL |
 | P3 | 收尾 / 清理 | EVIDENCE-LOCAL-BROWSER、GATE-CHAIN、DC 剩余信号、V11-IMPL-003/007、工作区收尾 |
@@ -93,13 +93,22 @@
      计划框架补侦查纪律（先 list_dir 建清单、pattern 用实际存在的字符串、空结果≠无
      文件）+ 注册板块 grep 参数提示补空结果语义 + 回归验证（重跑 round 数/计划重写
      次数下降）；
-  6. **订单发放前拒绝入事件面**（新观察，用户 2026-08-17 指示处理）：冒烟重跑中
-     ORD-000011（workspace.run_tests，`arguments:{}`）写入后发放前被拒，失败只进结果栏
-     receipt + TraceStore（`consume_console_order` 不写 journal 事件），事后核对看不到
-     拒绝码。目标=发放前拒绝（order_stale / step_not_done / budget_insufficient /
-     registry / contract / target / ACAF / policy / mode 门）统一入 v0.2 事件面（新增
-     `console_order_rejected`：order_id / step / phase / code / reason / round /
-     plan_epoch / run_id），Schema/verifier/fixtures 先行，结果栏 receipt 保留。
+  6. **订单发放前拒绝入事件面**（新观察，用户 2026-08-17 指示处理；**2026-08-17 已闭合**）：
+     冒烟重跑中 ORD-000011（workspace.run_tests，`arguments:{}`）写入后发放前被拒，
+     失败只进结果栏 receipt + TraceStore（`consume_console_order` 不写 journal 事件），
+     事后核对看不到拒绝码。实施=v0.2 `console_order_rejected`（order_id / step /
+     phase / code / reason / round / plan_epoch / run_id），发放前拒绝统一入事件面——
+     phase=pre_issue（order_stale / step_not_done / budget_insufficient，
+     step=protocol）+ phase=issue（registry / contract / target / ACAF / policy /
+     mode 门，ACAF/模式/权限归一化 step=policy / code=policy_denied）；
+     execute/verify 不入本事件（已执行订单经 tool_started/tool_completed 留痕）。
+     Schema/verifier/fixtures 先行（verifier 交叉核对：拒绝须先有同 run 同 order_id
+     的 `console_order_written`、机械盖章一致、每订单至多一次拒绝、phase/step/code
+     一致性）；结果栏 receipt 保留为人类可读视图。orz 子模块 c67a452（事件变体 +
+     三处 pre_issue 路径 + 发放期 Err 分支 issue 路径发事件 + TUI 投影 +
+     测试断言 stale/step_not_done/budget×3/policy）；orz-loop 436 / orz-tui 178 /
+     orz-assurance 152 / orz-bin 全量通过、clippy 与基线一致（lib 21 / lib test 26）、
+     manifest 重生成 1401、仓库门禁 valid。
 
 ### 0. 前置收尾（提交前需用户确认）
 
@@ -601,6 +610,20 @@
   归档读）；orz 子模块 0d1e01b（已推送 cli）；orz-loop 436 / orz-tui 178 /
   orz-assurance 152 / orz-bin 全量通过、clippy 无新增告警、manifest 1401、
   仓库门禁 valid。P0-E 4 项、未闭合 31 项。
+- 2026-08-17：订单发放前拒绝入事件面实施闭合——v0.2 `console_order_rejected`
+  （order_id / step / phase / code / reason / round / plan_epoch / run_id），
+  发放前拒绝统一入事件面：phase=pre_issue（order_stale / step_not_done /
+  budget_insufficient，step=protocol）+ phase=issue（registry / contract /
+  target / ACAF / policy / mode 门，ACAF/模式/权限归一化 step=policy /
+  code=policy_denied）；execute/verify 不入本事件（已执行订单经
+  tool_started/tool_completed 留痕）。Schema/verifier/fixtures 先行（verifier
+  交叉核对：拒绝须先有同 run 同 order_id 的 `console_order_written`、机械盖章
+  一致、每订单至多一次拒绝、phase/step/code 一致性）；结果栏 receipt 保留为
+  人类可读视图。orz 子模块 c67a452（已推送 cli；事件变体 + 三处 pre_issue
+  路径 + 发放期 Err 分支 issue 路径发事件 + TUI 投影 + 测试断言）；
+  orz-loop 436 / orz-tui 178 / orz-assurance 152 / orz-bin 全量通过、clippy
+  与基线一致（lib 21 / lib test 26）、manifest 重生成 1401、仓库门禁 valid。
+  P0-E 3 项、未闭合 30 项。
 - 2026-08-17：ACAF 跑分决策登记（用户裁决）+ P0-E 下一步实施项对齐——① GAP-ACAF-
   HARNESS-PASSTHROUGH：跑分保持 ACAF 强制开启（容器内供应 manifest/keystore/signer，
   不接受影子模式），实施=适配器透传 + 容器供应 + 移除临时 `ORZ_ACAF_FAIL_CLOSED=0`

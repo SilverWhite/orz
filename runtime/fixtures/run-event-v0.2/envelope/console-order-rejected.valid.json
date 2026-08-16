@@ -1,0 +1,24 @@
+{
+  "schema_version": "0.2.0-draft",
+  "run_id": "RUN-CONF-CREJ",
+  "event_id": "EVT-CONF-CREJ-000",
+  "sequence": 0,
+  "timestamp": "2026-08-17T00:00:00Z",
+  "event_type": "console_order_rejected",
+  "run_manifest_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+  "previous_event_sha256": null,
+  "payload_schema": "run-event-v0.2.schema.json",
+  "payload": {
+    "order_id": "ORD-000011",
+    "step": "protocol",
+    "phase": "pre_issue",
+    "code": "step_not_done",
+    "reason": "order refused — step_not_done: the current executable step is s1",
+    "round": 3,
+    "plan_epoch": 1,
+    "run_id": "RUN-CONF-CREJ"
+  },
+  "payload_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+  "redaction": "none",
+  "event_sha256": "0000000000000000000000000000000000000000000000000000000000000000"
+}

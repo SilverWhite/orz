@@ -869,6 +869,152 @@ class ConsoleModeTransitionRuleTests(unittest.TestCase):
         errors = _verify_v02_console_order_written(reused)
         self.assertEqual(len(errors), 1, errors)
 
+    def test_order_rejected_requires_prior_written_order_and_matching_stamps(
+        self,
+    ) -> None:
+        """P0-E 第 4 项 (2026-08-17, ADR-0010 §14.21 项 3): a
+        console_order_rejected must be preceded by a console_order_written of
+        the same run carrying the same order_id and the same mechanical
+        stamps; at most one rejection per order."""
+        from assurance.run_event_journal_validation import (
+            _verify_v02_console_order_rejected,
+        )
+
+        written = {
+            "payload_schema": "run-event-v0.2.schema.json",
+            "event_type": "console_order_written",
+            "run_id": "RUN-T",
+            "payload": {
+                "order_id": "ORD-1",
+                "write_call_id": "call-write-1",
+                "action": "workspace.read_file",
+                "step_id": "s1",
+                "round": 2,
+                "plan_epoch": 1,
+                "run_id": "RUN-T",
+            },
+        }
+        rejected = {
+            "payload_schema": "run-event-v0.2.schema.json",
+            "event_type": "console_order_rejected",
+            "run_id": "RUN-T",
+            "payload": {
+                "order_id": "ORD-1",
+                "step": "protocol",
+                "phase": "pre_issue",
+                "code": "step_not_done",
+                "reason": "order refused",
+                "round": 2,
+                "plan_epoch": 1,
+                "run_id": "RUN-T",
+            },
+        }
+        # Without the written order the rejection cannot be attributed.
+        errors = _verify_v02_console_order_rejected([rejected])
+        self.assertTrue(
+            any("without a prior console_order_written" in e for e in errors), errors
+        )
+        self.assertEqual(_verify_v02_console_order_rejected([written, rejected]), [])
+
+        # Stamp mismatch against the written order must be caught.
+        bad_stamp = {
+            "payload_schema": "run-event-v0.2.schema.json",
+            "event_type": "console_order_rejected",
+            "run_id": "RUN-T",
+            "payload": {
+                **rejected["payload"],
+                "round": 9,
+            },
+        }
+        errors = _verify_v02_console_order_rejected([written, bad_stamp])
+        self.assertTrue(any("round=9" in e for e in errors), errors)
+
+        # A rejected order is consumed — one rejection per written order.
+        dup = dict(rejected)
+        dup["payload"] = dict(rejected["payload"])
+        errors = _verify_v02_console_order_rejected([written, rejected, dup])
+        self.assertTrue(any("duplicate console_order_rejected" in e for e in errors), errors)
+
+    def test_order_rejected_phase_step_code_consistency(self) -> None:
+        """P0-E 第 4 项: pre_issue rejections are protocol-step with the three
+        pre-issuance codes; issue rejections are registry/contract/target/
+        policy steps — execute/verify never appear (executed orders journal
+        through tool_started/tool_completed)."""
+        from assurance.run_event_journal_validation import (
+            _verify_v02_console_order_rejected,
+        )
+
+        base_written = {
+            "payload_schema": "run-event-v0.2.schema.json",
+            "event_type": "console_order_written",
+            "run_id": "RUN-T",
+            "payload": {
+                "order_id": "ORD-1",
+                "write_call_id": "call-write-1",
+                "action": "workspace.read_file",
+                "step_id": "s1",
+                "round": 2,
+                "plan_epoch": 1,
+                "run_id": "RUN-T",
+            },
+        }
+
+        def rejected(order_id: str, phase: str, step: str, code: str) -> dict:
+            return {
+                "payload_schema": "run-event-v0.2.schema.json",
+                "event_type": "console_order_rejected",
+                "run_id": "RUN-T",
+                "payload": {
+                    "order_id": order_id,
+                    "step": step,
+                    "phase": phase,
+                    "code": code,
+                    "reason": "refused",
+                    "round": 2,
+                    "plan_epoch": 1,
+                    "run_id": "RUN-T",
+                },
+            }
+
+        # Valid: pre_issue + protocol + step_not_done; issue + policy +
+        # policy_denied (ACAF/mode/permission normalization).
+        events = [
+            base_written,
+            rejected("ORD-1", "pre_issue", "protocol", "step_not_done"),
+            {
+                **base_written,
+                "payload": {
+                    **base_written["payload"],
+                    "order_id": "ORD-2",
+                },
+            },
+            rejected("ORD-2", "issue", "policy", "policy_denied"),
+        ]
+        self.assertEqual(_verify_v02_console_order_rejected(events), [])
+
+        # pre_issue must be protocol-step with a pre-issuance code.
+        bad1 = rejected("ORD-1", "pre_issue", "contract", "step_not_done")
+        errors = _verify_v02_console_order_rejected([base_written, bad1])
+        self.assertTrue(any("requires step=protocol" in e for e in errors), errors)
+        bad2 = rejected("ORD-1", "pre_issue", "protocol", "policy_denied")
+        errors = _verify_v02_console_order_rejected([base_written, bad2])
+        self.assertTrue(
+            any("must be order_stale/step_not_done/budget_insufficient" in e for e in errors),
+            errors,
+        )
+
+        # issue must be a gate step — execute/verify are excluded.
+        bad3 = rejected("ORD-1", "issue", "execute", "execution_failed")
+        errors = _verify_v02_console_order_rejected([base_written, bad3])
+        self.assertTrue(
+            any("must be registry/contract/target/policy" in e for e in errors), errors
+        )
+
+        # Unknown phase must be caught.
+        bad4 = rejected("ORD-1", "executed", "protocol", "step_not_done")
+        errors = _verify_v02_console_order_rejected([base_written, bad4])
+        self.assertTrue(any("phase must be pre_issue or issue" in e for e in errors), errors)
+
 
 class SyntheticBadJournalTests(unittest.TestCase):
     """Fail-closed behavior on tampered/partial journals (built from the
