@@ -150,6 +150,11 @@ impl CandidatePrefilterConfig {
     /// compiled into the binary as the default (repo boundary note mirrors
     /// source_weighting: the file lives in the parent workspace repo and
     /// must be committed there before a fresh `orz`-only checkout builds).
+    /// CONTAINER MOUNT CONTRACT (ORZ-BUILD-MOUNT-001, 2026-08-17):
+    /// `../../../runtime` resolves from `CARGO_MANIFEST_DIR` — a container
+    /// build must mount the parent repo at `/orz` and run with workdir
+    /// `/orz/orz` (i.e. `/orz/orz/crates/orz-assurance/../../../runtime` =
+    /// `/orz/runtime`); mounting only this submodule breaks compilation.
     pub fn embedded() -> Self {
         Self::from_json_str(include_str!(concat!(
             env!("CARGO_MANIFEST_DIR"),

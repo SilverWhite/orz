@@ -131,6 +131,11 @@ impl SourceWeightConfig {
     /// `runtime/` directory (outside this git repository) and must be
     /// committed there before a fresh checkout of `orz` alone can build; see
     /// GAP_SOURCE_WEIGHTING_IMPL_AUDIT_2026-08-13.md §7.
+    /// CONTAINER MOUNT CONTRACT (ORZ-BUILD-MOUNT-001, 2026-08-17):
+    /// same as `candidate_prefilter` — a container build must mount the
+    /// parent repo at `/orz` with workdir `/orz/orz` so `../../../runtime`
+    /// resolves to `/orz/runtime`; mounting only this submodule breaks
+    /// compilation with a misleading "couldn't read ...runtime/...json".
     pub fn embedded() -> Self {
         Self::from_json_str(include_str!(concat!(
             env!("CARGO_MANIFEST_DIR"),
