@@ -29,10 +29,10 @@
 **当前 `D:\tb-eval\orz-linux\orz` 是 20:55 构建（含 P0-P2 守卫，但不含昨晚 L1 + 三代理审查修复）**——验证"当前修改可用性"必须重建。构建命令（交接文档 `TERMINAL_BENCH_2_EVAL` §2）：
 
 ```powershell
-MSYS_NO_PATHCONV=1 docker run --rm -v D:/CLI/orz:/orz -v D:/tb-eval/cargo-config.toml:/root/.cargo/config.toml -v D:/tb-eval/orz-target:/target -v D:/tb-eval/orz-linux:/out -w /orz rust:1.97-slim bash -c "$(cat /d/tb-eval/build_orz_aliyun.sh)"
+MSYS_NO_PATHCONV=1 docker run --rm -v D:/CLI:/orz -v D:/tb-eval/cargo-config.toml:/root/.cargo/config.toml -v D:/tb-eval/orz-target:/target -v D:/tb-eval/orz-linux:/out -w /orz/orz rust:1.97-slim bash -c "$(cat /d/tb-eval/build_orz_aliyun.sh)"
 ```
 
-- 脚本：`build_orz_aliyun.sh`（aliyun 镜像 + rsproxy + musl 静态 + `-p orz-bin -j 1`；增量构建复用 `orz-target` 缓存，预计 ~1h）。
+- 脚本：`build_orz_aliyun.sh`（aliyun 镜像 + rsproxy + musl 静态 + `-p orz-bin -j 1`；增量构建复用 `orz-target` 缓存，预计 ~1h）。**挂载修正（2026-08-17）**：父仓库挂载为 `/orz`、工作目录 `/orz/orz`——orz-assurance `include_str!("../../../runtime/...")` 需解析到 `/orz/runtime`；脚本同时输出 orz / orz-signer / orz-acaf-provision 三件套。
 - **构建后验证**：`strings /d/tb-eval/orz-linux/orz | grep -c "max-wallclock"`（守卫符号命中）+ `ls -la`（~66MB）+ 确认构建时间戳为新。
 - **stale-binary 教训**（`TERMINAL_BENCH_2_EVAL` §6）：本次 5 题**必须全部用新二进制**，禁止旧二进制混跑。
 

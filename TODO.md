@@ -28,13 +28,14 @@
 > 2026-08-17 ACAF 跑分决策 + 下一步实施项对齐（两项 P1 观察升 P0-E；冒烟重跑定位
 > 新增计划视图步骤 ID 渲染项，未闭合 30 → 31；2026-08-17 grep 侦查纪律项登记
 > （用户确认一并处理，未闭合 31 → 32）；2026-08-17 订单发放前拒绝入事件面项登记
-> （用户指示，未闭合 32 → 33）。
+> （用户指示，未闭合 32 → 33）；2026-08-17 GAP-ACAF-HARNESS-PASSTHROUGH 闭合
+> （文件型密钥库 + 适配器容器供应 + Linux 重建 + 冒烟通过，未闭合 33 → 32）。
 > 本快照只做计数与分组召回，明细以下方各分组勾选清单为唯一入口，不新增独立条目；
 > 后续扫描更新时同步替换本快照日期与计数。
 
-- 未闭合总数：**33 项**
+- 未闭合总数：**32 项**
   - P0-C：0 项（PLAN-FIRST 阶段 A/B/C 全部闭合，2026-08-16）
-  - P0 评测冒烟暴露：6 项（GAP-ACAF-HARNESS-PASSTHROUGH 实施、plan_write 提示词强化、actions 形状校验、计划视图步骤 ID 渲染、grep 侦查纪律、发放前拒绝入事件面）
+  - P0 评测冒烟暴露：5 项（plan_write 提示词强化、actions 形状校验、计划视图步骤 ID 渲染、grep 侦查纪律、发放前拒绝入事件面；GAP-ACAF-HARNESS-PASSTHROUGH 已闭合 2026-08-17）
   - P1 可并行审计/证据：9 项（组件登记 1、Windows 证据 3、DeepSeek 1、会话上下文监测 4）
   - P2 生产化决策门：5 项（Slice 3、Slice 4、ACAF 可选工程项、OPS 裁剪设计、OPS 生产接线裁决）
   - P3 收尾/清理：7 项（EVIDENCE-LOCAL-BROWSER、GATE-CHAIN、observed-scope 枚举、V11-IMPL-003、V11-IMPL-007、orz-host flaky、DC 硬信号 4/6）
@@ -49,15 +50,18 @@
 
 ### P0-E 评测冒烟暴露问题（最优先；2026-08-17；用户将在新窗口处理）
 
-- [ ] GAP-ACAF-HARNESS-PASSTHROUGH：TB2 适配器 ACAF 配置透传 / 容器内供应——正式跑分
+- [x] GAP-ACAF-HARNESS-PASSTHROUGH：TB2 适配器 ACAF 配置透传 / 容器内供应——正式跑分
   强制模式决策（容器内 manifest/keystore/signer，参考 `scripts/orz_acaf_run.ps1`）。
   **2026-08-17 用户裁决：跑分保持 ACAF 强制开启**（容器内供应，不接受影子模式）。
-  **2026-08-17 实施完成（待冒烟）**：前置设计变更——Linux 下 DPAPI 不可用，用户裁决
+  **2026-08-17 闭合**：前置设计变更——Linux 下 DPAPI 不可用，用户裁决
   新增 `file-0600-installation` 文件型安装密钥库（ADR-0010 §14.21 项 4）；orz 子模块
   e8274e1（keystore 文件型后端 + storage 分派 + provision/signer 非 Windows 分支），
   orz-bin 全量通过、仓库门禁 valid；适配器 install 容器内落 manifest+keystore、run 设
   ORZ_ACAF_MANIFEST/KEYSTORE/BINARY/FAIL_CLOSED=1；`.env` 已移除 FAIL_CLOSED=0 覆盖。
-  剩余=Linux musl 重建 + 冒烟验证 `orz --real` 带签发器启动。
+  Linux musl 重建后容器冒烟通过：provision 0600 keystore + manifest 真哈希；signer
+  stdio initialize_session 应答；`orz --real` 带签发器启动 3 次成功（启动期 fail-closed
+  不变量通过、wallclock 正常收尾、退出码 0）。证据：
+  `D:\tb-eval\jobs\2026-08-17__05-45-ACAF-SMOKE`。
   - 证据：`D:\tb-eval\jobs\2026-08-17__01-05-31`、`2026-08-17__01-07-59`；
     错误 `ACAF fail-closed is enabled but no signer client is configured`。
 - [x] GAP-CONSOLE-TOOLNAME-PATTERN：console 面工具名点号→下划线改名

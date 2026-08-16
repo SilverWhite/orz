@@ -69,15 +69,15 @@ harbor run -d terminal-bench@2.0 -i <task> -a tb_agents.orz:Orz \
 ```
 
 **⚠️ 必带 PYTHONPATH**：`PYTHONPATH=D:/tb-eval`（否则 `No module named 'tb_agents'` 启动即失败——2026-08-08 晚实测）。
-**⚠️ 每次评测前必须重建 orz-linux 二进制**（见 §6 stale-binary 教训）：`MSYS_NO_PATHCONV=1 docker run --rm -v D:/CLI/orz:/orz -v D:/tb-eval/cargo-config.toml:/root/.cargo/config.toml -v D:/tb-eval/orz-target:/target -v D:/tb-eval/orz-linux:/out -w /orz rust:1.97-slim bash -c "$(cat /d/tb-eval/build_orz_aliyun.sh)"`（增量 ~1h20m 全量；MSYS_NO_PATHCONV 防 `-w /orz` 被转成 `B:/Git/orz`）。
+**⚠️ 每次评测前必须重建 orz-linux 二进制**（见 §6 stale-binary 教训）：`MSYS_NO_PATHCONV=1 docker run --rm -v D:/CLI:/orz -v D:/tb-eval/cargo-config.toml:/root/.cargo/config.toml -v D:/tb-eval/orz-target:/target -v D:/tb-eval/orz-linux:/out -w /orz/orz rust:1.97-slim bash -c "$(cat /d/tb-eval/build_orz_aliyun.sh)"`（增量 ~1h20m 全量；**父仓库必须挂载为 `/orz`、工作目录 `/orz/orz`**——orz-assurance `include_str!("../../../runtime/...")` 需解析到 `/orz/runtime`；MSYS_NO_PATHCONV 防 `-w` 被转成 `B:/Git/...`；2026-08-17 起脚本同时输出 orz / orz-signer / orz-acaf-provision 三件套）。
 - `--ak max_wallclock` 按 job 级全局：900s×2 超时任务分 job 跑（900s 任务 agent 1800s → 1740；1800s 任务 3600s → 3540）
 
 - **Harbor**（Terminal-Bench 2.0 官方 harness，0.20.0 → `D:\tb-eval\venv`，勿动 C: 系统 Python）：容器生命周期 + verifier 判定（CTRF JSON + reward.txt，二进制 reward，只看容器最终状态）
 - **adapter** `D:\tb-eval\tb_agents\orz.py`（自定义 BaseInstalledAgent，`--agent tb_agents.orz:Orz` import path 注册，无需改 factory）：
-  - `install()`：exec_as_root 装依赖（curl/procps）→ `environment.upload_file` 上传 orz 二进制 → chmod +x → `test -x` 可执行性检查（**orz 无 `--version`**——裸跑进 TUI 需 TTY）
-  - `run()`：容器内 `orz -p "<instruction>" --real --allow-write --max-tool-rounds 999` + exit-file 看门狗（harbor 外圈超时兜底）；`ORZ_DEEPSEEK_API_KEY` 经 env 注入（harbor `--env-file`）
+  - `install()`：exec_as_root 装依赖（curl/procps）→ `environment.upload_file` 上传 orz / orz-signer / orz-acaf-provision 三件套（默认取 `orz_binary` 同目录）→ chmod +x → **容器内运行 `orz-acaf-provision` 落 `/etc/orz-acaf` 的 signer-manifest.json + keystore（0600）**（GAP-ACAF-HARNESS-PASSTHROUGH，2026-08-17：跑分保持 ACAF 强制开启，不接受影子模式）→ `test -x` + ACAF 工件存在性检查（**orz 无 `--version`**——裸跑进 TUI 需 TTY）
+  - `run()`：容器内 `orz -p "<instruction>" --real --allow-write --max-tool-rounds 999` + exit-file 看门狗（harbor 外圈超时兜底）；`ORZ_DEEPSEEK_API_KEY` 经 env 注入（harbor `--env-file`）；ACAF env 恒设 `ORZ_ACAF_MANIFEST` / `ORZ_ACAF_KEYSTORE` / `ORZ_ACAF_BINARY` / `ORZ_ACAF_FAIL_CLOSED=1`
   - `populate_context_post_run()`：journal（`.gsa/runs/RUN-*/events.jsonl`，拷出容器）→ **ATIF trajectory.json** 转换（system/agent/tool 事件映射，10 步骤轨迹已验证）
-- **orz Linux 二进制**：`D:\tb-eval\orz-linux\orz`（当前守卫构建约 66.5MB，**musl 静态**，任何容器可跑）；构建脚本 `D:\tb-eval\build_orz.sh` + rust:1.97-slim Docker 镜像 + `CARGO_TARGET_DIR` 挂载（`D:\tb-eval\orz-target` 缓存）
+- **orz Linux 二进制**：`D:\tb-eval\orz-linux\orz`（约 74MB，**musl 静态**，任何容器可跑）+ 同目录 `orz-signer` / `orz-acaf-provision`（ACAF 容器供应三件套，2026-08-17）；构建脚本 `D:\tb-eval\build_orz_aliyun.sh` + rust:1.97-slim Docker 镜像 + `CARGO_TARGET_DIR` 挂载（`D:\tb-eval\orz-target` 缓存）
 
 ## 3. 环境（全在 D:，C:/B: 不动——用户裁决）
 
