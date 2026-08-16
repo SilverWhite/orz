@@ -424,7 +424,12 @@ pub trait LoopHost: Send + Sync {
     /// the whole call with the shorter of the override and their configured
     /// budget, and on expiry kill the tool's process tree and fail with
     /// `ToolError::Timeout` — a script layer timeout alone must never
-    /// substitute for host-side process-tree reclamation.
+    /// substitute for host-side process-tree reclamation. The default
+    /// implementation ignores the override: hosts that do NOT override it
+    /// do not provide per-step host deadlines (script steps then rely on
+    /// step-boundary checks only, and the script runner enforces the total
+    /// wall clock ex-post after each step). Production `OrzHost` honors
+    /// the override.
     async fn call_tool_with_timeout(
         &self,
         name: &str,

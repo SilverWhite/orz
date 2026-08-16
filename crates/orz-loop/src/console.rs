@@ -1136,7 +1136,7 @@ pub(crate) async fn issue_action_inner<E: ActionExecutor + ?Sized>(
 }
 
 /// 脚本步骤的静态元数据（POC `script_runner.py::_static_validate` 同构）。
-struct ScriptStepMeta {
+pub(crate) struct ScriptStepMeta {
     index: usize,
     action: String,
     arguments: Value,
@@ -1251,7 +1251,7 @@ fn resolve_leaf_type(response_schema: &Value, parts: &[&str]) -> Option<Vec<Stri
 
 /// 整个脚本执行前的静态校验（fail-closed：任一错误先于任何执行返回）：
 /// 名称唯一、服务已知、禁嵌套脚本、`$ref` 形状/作用域/类型（POC 同构）。
-fn static_validate_script(
+pub(crate) fn static_validate_script(
     script: &[Value],
     registry: &ServiceRegistry,
 ) -> Result<Vec<ScriptStepMeta>, ConsoleError> {
@@ -1589,6 +1589,24 @@ async fn run_script_with_limits<E: ActionExecutor + ?Sized>(
                 });
             }
         };
+        // P0-C S4 审查收口（2026-08-16）：步骤完成后核对总截止。host-owned
+        // 同步工具（如 project_doc_index）不经 host timeout 包装，无法中断
+        // 在途工作；事后核对保证「30s 总墙钟」对这类步骤也 fail-closed——
+        // 步骤已计 1 单位，脚本整体返回 `script_timeout`，不产出成功结果。
+        if Instant::now() > deadline {
+            return Err(ConsoleError {
+                step: STEP_EXECUTE,
+                code: CODE_SCRIPT_TIMEOUT,
+                message: format!(
+                    "script step {} ({}) exceeded the {max_wallclock:.0}s total wall clock",
+                    meta.index, meta.action
+                ),
+                upstream: Some(json!({
+                    "script_step": meta.index,
+                    "action": meta.action,
+                })),
+            });
+        }
         let entry = json!({
             "index": meta.index,
             "do": meta.action,
@@ -3208,6 +3226,73 @@ mod tests {
         assert_eq!(consumed, 1);
     }
 
+    /// P0-C S4 审查收口（2026-08-16）：host-owned 同步工具（不经 host
+    /// timeout 包装）使单步实际耗时超过剩余截止时，脚本在步骤完成后按
+    /// 总墙钟事后 fail-closed——`script_timeout` + `script_step`，该步已
+    /// 执行计 1 单位。
+    #[tokio::test]
+    async fn script_step_overrunning_wallclock_fails_after_step() {
+        let mut registry = ServiceRegistry::new();
+        registry
+            .register(ActionSpec {
+                name: "workspace.read_file".to_string(),
+                description: "ref test action".to_string(),
+                target_tool: Some("read_file".to_string()),
+                kind: ActionKind::Host,
+                bundle: ActionBundle::ALL,
+                input_schema: json!({
+                    "type": "object",
+                    "properties": {"path": {"type": "string"}},
+                    "required": ["path"],
+                    "additionalProperties": false,
+                }),
+                response_schema: json!({
+                    "type": "object",
+                    "properties": {
+                        "path": {"type": "string"},
+                        "content": {"type": "string"},
+                    },
+                    "required": ["path", "content"],
+                    "additionalProperties": false,
+                }),
+            })
+            .unwrap();
+        let executor = OverrunExecutor {
+            sleep: Duration::from_millis(60),
+            seen: std::sync::Arc::new(std::sync::Mutex::new(Vec::new())),
+        };
+        let mut trace = Trace {
+            trace_id: "t000111".to_string(),
+            request_id: None,
+            events: Vec::new(),
+        };
+        let mut consumed = 0u32;
+        let err = run_script_with_limits(
+            &registry,
+            &executor,
+            None,
+            &json!({"script": [
+                {"do": "workspace.read_file", "with": {"path": "a.txt"}},
+            ]}),
+            &mut trace,
+            "call-s",
+            MAX_SCRIPT_STEPS_PER_ORDER,
+            0.01,
+            MAX_SCRIPT_RESPONSE_BYTES,
+            &mut consumed,
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(err.step, STEP_EXECUTE);
+        assert_eq!(err.code, CODE_SCRIPT_TIMEOUT);
+        let upstream = err.upstream.as_ref().unwrap();
+        assert_eq!(upstream["script_step"], 1);
+        assert_eq!(upstream["action"], "workspace.read_file");
+        // 步骤已越过执行边界（模拟同步工具不可中断）：执行 1 次、计 1 单位。
+        assert_eq!(executor.seen.lock().unwrap().len(), 1);
+        assert_eq!(consumed, 1);
+    }
+
     /// P0-C S4 (2026-08-16)：按实际执行步数减计——host 已执行但返回非零
     /// 的失败步骤也计 1 单位；后续步骤不执行也不计数。
     #[tokio::test]
@@ -3434,6 +3519,28 @@ mod tests {
             output_encoding: None,
             structured: Some(json!({"path": "a.txt", "content": "hello"})),
             ..Default::default()
+        }
+    }
+
+    /// 模拟 host-owned 同步工具：忽略单步覆盖、直接睡满时长后成功返回
+    /// （project_doc_index 等不经 host timeout 包装的工具语义）。
+    struct OverrunExecutor {
+        sleep: Duration,
+        seen: std::sync::Arc<std::sync::Mutex<Vec<String>>>,
+    }
+
+    #[async_trait]
+    impl ActionExecutor for OverrunExecutor {
+        async fn execute(
+            &self,
+            target_tool: &str,
+            _arguments: &Value,
+            _call_id: &str,
+            _timeout: Option<Duration>,
+        ) -> Result<ToolResult, ExecuteError> {
+            self.seen.lock().unwrap().push(target_tool.to_string());
+            tokio::time::sleep(self.sleep).await;
+            Ok(ref_result())
         }
     }
 

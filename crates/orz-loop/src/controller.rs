@@ -50,7 +50,8 @@ use crate::blackboard::{
 };
 use crate::console::{
     ActionExecutor, ActionKind, CODE_BUDGET_INSUFFICIENT, CODE_ORDER_STALE, ConsoleError,
-    STEP_PROTOCOL, ServiceRegistry, TraceStore, failure_envelope, issue_action_inner,
+    MAX_SCRIPT_STEPS_PER_ORDER, STEP_PROTOCOL, ServiceRegistry, TraceStore, failure_envelope,
+    issue_action_inner, static_validate_script,
 };
 use crate::gateway::fake::FakeProvider;
 use crate::gateway::model::{Message, ModelGateway, Role, ToolCall};
@@ -6465,14 +6466,21 @@ impl AgentLoopController {
         // P0-C S4 (2026-08-16)：发放前预算预检——当前模型轮已消耗 1 单位
         // （本轮结束后 `tool_rounds += 1`），剩余 = max − (tool_rounds + 1)。
         // 脚本订单要求长度 ≤ 剩余（直接订单恒 1 单位）；不足零执行拒绝、
-        // 显式错误码、不消耗预算。未知动作/畸形脚本不预检，交注册表/
-        // 契约校验产生对应错误。
+        // 显式错误码、不消耗预算。
+        // P0-C S4 审查收口（2026-08-16）：预检不掩盖内层错误——脚本先做
+        // 轻量静态校验（无执行），失败或超上限（>8 步）不预检，交注册表/
+        // 契约校验产生对应错误码（unknown_service / invalid_script 等）。
         let required = match self.console_registry.get(&order.action).map(|s| s.kind) {
-            Some(ActionKind::RunScript) => order
-                .arguments
-                .get("script")
-                .and_then(Value::as_array)
-                .map(|steps| steps.len() as u32),
+            Some(ActionKind::RunScript) => {
+                match order.arguments.get("script").and_then(Value::as_array) {
+                    Some(steps) if steps.len() > MAX_SCRIPT_STEPS_PER_ORDER => None,
+                    Some(steps) => match static_validate_script(steps, &self.console_registry) {
+                        Ok(_) => Some(steps.len() as u32),
+                        Err(_) => None,
+                    },
+                    None => None,
+                }
+            }
             Some(ActionKind::TraceRead) | Some(ActionKind::Host) => Some(1),
             _ => None,
         };
@@ -13680,6 +13688,218 @@ mod tests {
                 .messages
                 .iter()
                 .any(|m| m.content.contains("REMAINING: 1 tool rounds left")),
+            "round 2 budget block: {:?}",
+            round2.messages
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// P0-C S4 审查收口（2026-08-16）：预算预检不掩盖内层错误——脚本含
+    /// 未知动作且预算不足时，先报注册表 `unknown_service`（而非
+    /// `budget_insufficient`），模型获得真实失败原因。
+    #[tokio::test]
+    async fn console_s4_budget_precheck_does_not_mask_unknown_service() {
+        let dir = test_dir();
+        let journal = JournalRecorder::new(dir.clone());
+        let host = TestHost {
+            journal,
+            tool_result: Some(ToolResult {
+                output: "never".to_string(),
+                exit_code: Some(0),
+                output_encoding: None,
+                structured: None,
+                ..Default::default()
+            }),
+        };
+        let fake = Arc::new(FakeProvider::new(vec![
+            ScriptedResponse::tool_calls(vec![ToolCall {
+                name: "blackboard.action_write".to_string(),
+                arguments: serde_json::json!({
+                    "action": "workspace.run_script",
+                    "arguments": {
+                        "script": [
+                            {"do": "workspace.no_such", "with": {}},
+                            {"do": "workspace.read_file", "with": {"target_file": "a.txt"}},
+                        ]
+                    }
+                }),
+                call_id: "call-w1".to_string(),
+            }]),
+            ScriptedResponse::text("完成"),
+            ScriptedResponse::text("完成"),
+        ]));
+        let mut controller = AgentLoopController::with_gateway(fake.clone());
+        controller.max_tool_rounds = 2;
+        controller
+            .run_turn(
+                &host,
+                "未知动作脚本",
+                "RUN-S4U",
+                MANIFEST,
+                0,
+                None,
+                None,
+                None,
+            )
+            .await
+            .unwrap();
+
+        let r = controller.blackboard().read();
+        assert_eq!(r.actions.results.len(), 1, "{:?}", r.actions.results);
+        let receipt = &r.actions.results[0];
+        assert!(!receipt.ok);
+        let error = receipt.error.as_ref().unwrap();
+        assert_eq!(error["step"], "registry");
+        assert_eq!(error["code"], "unknown_service");
+        assert!(
+            r.tool_actions.iter().all(|t| t.tool != "read_file"),
+            "{:?}",
+            r.tool_actions
+        );
+        drop(r);
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// P0-C S4 审查收口（2026-08-16）：预算预检不掩盖超上限脚本——9 步
+    /// 脚本（> 8 步硬上限）在预算不足时先报契约错误（schema `maxItems`
+    /// → `invalid_arguments`），而非 `budget_insufficient`。
+    #[tokio::test]
+    async fn console_s4_budget_precheck_does_not_mask_over_cap_script() {
+        let dir = test_dir();
+        let journal = JournalRecorder::new(dir.clone());
+        let host = TestHost {
+            journal,
+            tool_result: Some(ToolResult {
+                output: "never".to_string(),
+                exit_code: Some(0),
+                output_encoding: None,
+                structured: None,
+                ..Default::default()
+            }),
+        };
+        let script: Vec<serde_json::Value> = (1..=9)
+            .map(|i| {
+                serde_json::json!({
+                    "do": "workspace.read_file",
+                    "with": {"target_file": format!("a{i}.txt")},
+                })
+            })
+            .collect();
+        let fake = Arc::new(FakeProvider::new(vec![
+            ScriptedResponse::tool_calls(vec![ToolCall {
+                name: "blackboard.action_write".to_string(),
+                arguments: serde_json::json!({
+                    "action": "workspace.run_script",
+                    "arguments": {"script": script},
+                }),
+                call_id: "call-w1".to_string(),
+            }]),
+            ScriptedResponse::text("完成"),
+            ScriptedResponse::text("完成"),
+        ]));
+        let mut controller = AgentLoopController::with_gateway(fake.clone());
+        controller.max_tool_rounds = 2;
+        controller
+            .run_turn(
+                &host,
+                "超上限脚本",
+                "RUN-S4O",
+                MANIFEST,
+                0,
+                None,
+                None,
+                None,
+            )
+            .await
+            .unwrap();
+
+        let r = controller.blackboard().read();
+        assert_eq!(r.actions.results.len(), 1, "{:?}", r.actions.results);
+        let receipt = &r.actions.results[0];
+        assert!(!receipt.ok);
+        let error = receipt.error.as_ref().unwrap();
+        assert_eq!(error["step"], "contract");
+        assert_eq!(error["code"], "invalid_arguments");
+        assert!(
+            r.tool_actions.iter().all(|t| t.tool != "read_file"),
+            "{:?}",
+            r.tool_actions
+        );
+        drop(r);
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// P0-C S4 审查收口（2026-08-16）：max=1 时当前模型轮已占满预算——
+    /// 直接订单预检 `remaining=0` 零执行拒绝（审计 §5 边界显式锁定）。
+    #[tokio::test]
+    async fn console_s4_max_one_round_rejects_order_with_zero_remaining() {
+        let dir = test_dir();
+        let journal = JournalRecorder::new(dir.clone());
+        let host = TestHost {
+            journal,
+            tool_result: Some(ToolResult {
+                output: "never".to_string(),
+                exit_code: Some(0),
+                output_encoding: None,
+                structured: None,
+                ..Default::default()
+            }),
+        };
+        let fake = Arc::new(FakeProvider::new(vec![
+            ScriptedResponse::tool_calls(vec![ToolCall {
+                name: "blackboard.action_write".to_string(),
+                arguments: serde_json::json!({
+                    "action": "workspace.read_file",
+                    "arguments": {"target_file": "a.txt"},
+                }),
+                call_id: "call-w1".to_string(),
+            }]),
+            ScriptedResponse::text("完成"),
+            ScriptedResponse::text("完成"),
+        ]));
+        let mut controller = AgentLoopController::with_gateway(fake.clone());
+        controller.max_tool_rounds = 1;
+        controller
+            .run_turn(
+                &host,
+                "零预算订单",
+                "RUN-S4Z",
+                MANIFEST,
+                0,
+                None,
+                None,
+                None,
+            )
+            .await
+            .unwrap();
+
+        let r = controller.blackboard().read();
+        assert_eq!(r.actions.results.len(), 1, "{:?}", r.actions.results);
+        let receipt = &r.actions.results[0];
+        assert!(!receipt.ok);
+        let error = receipt.error.as_ref().unwrap();
+        assert_eq!(error["step"], "protocol");
+        assert_eq!(error["code"], "budget_insufficient");
+        assert_eq!(error["upstream"]["required"], 1);
+        assert_eq!(error["upstream"]["remaining"], 0);
+        assert_eq!(error["upstream"]["max_tool_rounds"], 1);
+        assert!(
+            r.tool_actions.iter().all(|t| t.tool != "read_file"),
+            "{:?}",
+            r.tool_actions
+        );
+        drop(r);
+        // 预算耗尽：下一轮 remaining 块为 0（最后无工具轮）。
+        let received = fake.received_requests();
+        let round2 = &received[1];
+        assert!(
+            round2
+                .messages
+                .iter()
+                .any(|m| m.content.contains("REMAINING: 0 tool rounds left")),
             "round 2 budget block: {:?}",
             round2.messages
         );
