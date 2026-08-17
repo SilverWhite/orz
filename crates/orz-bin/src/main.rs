@@ -61,6 +61,29 @@ fn main() {
             std::env::set_var("ORZ_ALLOW_WRITE", "1");
         }
     }
+    // FUS-BENCHMARK-FULL-EXEC (2026-08-18): `--allow-shell` /
+    // `--allow-network` (headless benchmark only) → ORZ_ALLOW_SHELL /
+    // ORZ_ALLOW_NETWORK (precedent: `--allow-write` → ORZ_ALLOW_WRITE).
+    // Fail-closed pairing: either flag without `--allow-write` is an error
+    // (exit 2) — a silently ignored shell/network grant must never happen.
+    if args
+        .iter()
+        .any(|a| a == "--allow-shell" || a == "--allow-network")
+        && !args.iter().any(|a| a == "--allow-write")
+    {
+        eprintln!("error: --allow-shell/--allow-network require --allow-write (Benchmark policy)");
+        std::process::exit(2);
+    }
+    if args.iter().any(|a| a == "--allow-shell") {
+        unsafe {
+            std::env::set_var("ORZ_ALLOW_SHELL", "1");
+        }
+    }
+    if args.iter().any(|a| a == "--allow-network") {
+        unsafe {
+            std::env::set_var("ORZ_ALLOW_NETWORK", "1");
+        }
+    }
     // P0-2 (2026-08-08 stall guards): `--max-wallclock <sec>` → env
     // (precedent: `--allow-write` → `ORZ_ALLOW_WRITE`). Model-invisible
     // total-time budget for headless runs; on expiry the run ends itself
@@ -147,7 +170,10 @@ fn main() {
             "       --real selects the real DeepSeek transport (ADR-0006 credential registry)"
         );
         eprintln!(
-            "       --allow-write grants headless local file edits (harness; bash/network still denied)"
+            "       --allow-write grants headless local file edits (Benchmark policy; bash/network fail closed unless opened)"
+        );
+        eprintln!(
+            "       --allow-shell / --allow-network open the Benchmark shell/network axes (headless; require --allow-write)"
         );
         eprintln!(
             "       --max-wallclock <sec> bounds the whole run (model-invisible; run_invalidated on expiry)"
@@ -1132,7 +1158,9 @@ async fn run(
 /// fail-closed dead gateway (headless — no ACP client to answer prompts).
 /// `--allow-write` (ORZ_ALLOW_WRITE, harness opt-in) switches the bridge to
 /// the Benchmark policy: reads + local file edits auto-allow, bash/network
-/// still fail closed.
+/// follow the FUS-BENCHMARK-FULL-EXEC axes (`--allow-shell` →
+/// ORZ_ALLOW_SHELL, `--allow-network` → ORZ_ALLOW_NETWORK; both default
+/// false — fail closed).
 ///
 /// D-9 (FIX_PLAN 2026-08-06): `ORZ_TEST_RUNNER` (harness opt-in) injects a
 /// fixed test command — the `run_tests` tool appears in the model's tool
@@ -1144,7 +1172,10 @@ fn build_cli_host(
     cwd: &Path,
 ) -> Result<orz_host::OrzHost, String> {
     let policy = if std::env::var("ORZ_ALLOW_WRITE").is_ok() {
-        orz_host::permission::PermissionPolicy::Benchmark
+        orz_host::permission::PermissionPolicy::Benchmark {
+            allow_shell: std::env::var("ORZ_ALLOW_SHELL").is_ok(),
+            allow_network: std::env::var("ORZ_ALLOW_NETWORK").is_ok(),
+        }
     } else {
         orz_host::permission::PermissionPolicy::Interactive
     };

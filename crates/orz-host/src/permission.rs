@@ -51,6 +51,15 @@ pub const PERMISSION_PROMPT_TIMEOUT: Duration = Duration::from_secs(300);
 /// read-class and local-mutation tools auto-allow — the loop can edit files
 /// without a client — while network and shell-escape fail closed like
 /// ReadOnly.
+///
+/// FUS-BENCHMARK-FULL-EXEC (2026-08-18): `Benchmark` is parameterized on two
+/// axes — `allow_shell` (shell tools and SandboxEscape auto-allow) and
+/// `allow_network` (NetworkCall auto-allow). Default false/false keeps the
+/// historical fail-closed semantics exactly; TB2 scoring passes
+/// `Benchmark{allow_shell: true, allow_network: true}` via the adapter
+/// (`--allow-shell` / `--allow-network`). Opening an axis is a policy-allow
+/// surface only — the ACAF ticket gate, audit chain and mode gates are
+/// unchanged.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum PermissionPolicy {
     /// Normal prompt-decides behavior (reads auto-allow; the rest prompts).
@@ -59,14 +68,22 @@ pub enum PermissionPolicy {
     /// Read-only sandbox — mutation/network/escape requests fail closed
     /// without prompting.
     ReadOnly,
-    /// Headless benchmark — read + local file edits auto-allow; network and
-    /// shell-escape fail closed without prompting.
-    Benchmark,
+    /// Headless benchmark — read + local file edits auto-allow; shell and
+    /// network follow the `allow_shell` / `allow_network` axes (both default
+    /// false — fail closed).
+    Benchmark {
+        /// Shell execution auto-allow (`run_terminal_cmd`/`bash`/`sh`/`cmd`/
+        /// `powershell`/`pwsh` + SandboxEscape aliases).
+        allow_shell: bool,
+        /// Network calls auto-allow (`web_fetch`/`web_search` direct-call
+        /// surface).
+        allow_network: bool,
+    },
 }
 
-/// Shell-execution tool names (Benchmark policy exclusion — the controller
+/// Shell-execution tool names (Benchmark policy shell axis — the controller
 /// classifies `run_terminal_cmd` as LocalMutation, so the policy needs an
-/// explicit name-level exclusion; `bash` is SandboxEscape already).
+/// explicit name-level arm; `bash` is SandboxEscape already).
 fn is_shell_tool(tool: &str) -> bool {
     matches!(
         tool,
@@ -196,16 +213,37 @@ impl PermissionBridge {
         // controller (`run_terminal_cmd` is the GrokBuild bash name), so
         // they need an explicit exclusion here — Benchmark grants file
         // edits, never shell execution.
-        if self.policy == PermissionPolicy::Benchmark {
+        //
+        // FUS-BENCHMARK-FULL-EXEC (2026-08-18): the `allow_shell` /
+        // `allow_network` axes open the policy's allow surface only —
+        // shell tools (incl. SandboxEscape aliases) auto-allow under
+        // `allow_shell`, NetworkCall auto-allows under `allow_network`, and
+        // the default false/false preserves the original deny semantics.
+        // The audit chain and the ACAF ticket gate remain the final
+        // authorization backstop.
+        if let PermissionPolicy::Benchmark {
+            allow_shell,
+            allow_network,
+        } = self.policy
+        {
             match risk {
                 RiskClass::ReadOnly => {}
                 RiskClass::LocalMutation => {
-                    if tool.contains("__") || is_shell_tool(tool) {
+                    if tool.contains("__") || (is_shell_tool(tool) && !allow_shell) {
                         return Ok(PermitDecision::Deny);
                     }
                     return Ok(PermitDecision::AllowOnce);
                 }
-                RiskClass::NetworkCall | RiskClass::SandboxEscape => {
+                RiskClass::SandboxEscape => {
+                    if allow_shell && is_shell_tool(tool) {
+                        return Ok(PermitDecision::AllowOnce);
+                    }
+                    return Ok(PermitDecision::Deny);
+                }
+                RiskClass::NetworkCall => {
+                    if allow_network {
+                        return Ok(PermitDecision::AllowOnce);
+                    }
                     return Ok(PermitDecision::Deny);
                 }
             }
@@ -747,7 +785,10 @@ mod tests {
         for policy in [
             PermissionPolicy::Interactive,
             PermissionPolicy::ReadOnly,
-            PermissionPolicy::Benchmark,
+            PermissionPolicy::Benchmark {
+                allow_shell: false,
+                allow_network: false,
+            },
         ] {
             let bridge = bridge_with_policy(&dir, policy);
             for (tool, args) in [
@@ -873,11 +914,20 @@ mod tests {
     // ── Benchmark policy (2026-08-06 polyglot harness) ──────────────────
 
     #[tokio::test]
-    async fn benchmark_policy_allows_local_mutation_denies_network_and_shell() {
+    async fn benchmark_default_policy_allows_local_mutation_denies_network_and_shell() {
         let dir = test_dir();
         std::fs::create_dir_all(dir.join("inside")).unwrap();
         std::fs::write(dir.join("inside").join("a.txt"), "x").unwrap();
-        let bridge = bridge_with_policy(&dir, PermissionPolicy::Benchmark);
+        // Default fail-closed axes: `Benchmark{allow_shell:false,
+        // allow_network:false}` must behave exactly like the pre-parameter
+        // unit variant (FUS-BENCHMARK-FULL-EXEC old-semantics guard).
+        let bridge = bridge_with_policy(
+            &dir,
+            PermissionPolicy::Benchmark {
+                allow_shell: false,
+                allow_network: false,
+            },
+        );
 
         // Local edits auto-allow — the loop must be able to modify files
         // with no client to answer prompts.
@@ -895,9 +945,10 @@ mod tests {
             "search_replace must auto-allow under Benchmark policy"
         );
 
-        // Shell execution stays fail-closed — `run_terminal_cmd` classifies
-        // LocalMutation in the controller but is the GrokBuild bash name;
-        // Benchmark grants file edits, never shell.
+        // Shell execution stays fail-closed under the default axes —
+        // `run_terminal_cmd` classifies LocalMutation in the controller but
+        // is the GrokBuild bash name; Benchmark grants file edits, never
+        // shell, unless `allow_shell` is set.
         for (risk, tool, args) in [
             (
                 RiskClass::SandboxEscape,
@@ -944,6 +995,158 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(decision, PermitDecision::AllowOnce);
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    // ── FUS-BENCHMARK-FULL-EXEC (2026-08-18): shell/network axes ────────
+
+    #[tokio::test]
+    async fn benchmark_shell_axis_allows_shell_keeps_network_fail_closed() {
+        let dir = test_dir();
+        std::fs::create_dir_all(dir.join("inside")).unwrap();
+        std::fs::write(dir.join("inside").join("a.txt"), "x").unwrap();
+        let bridge = bridge_with_policy(
+            &dir,
+            PermissionPolicy::Benchmark {
+                allow_shell: true,
+                allow_network: false,
+            },
+        );
+
+        // Shell tools auto-allow under `allow_shell` — `run_terminal_cmd`
+        // classifies LocalMutation in the controller; `bash` is
+        // SandboxEscape. Both open (the console action bar routes the
+        // former; the latter is the direct-call alias).
+        for (risk, tool, args) in [
+            (
+                RiskClass::LocalMutation,
+                "run_terminal_cmd",
+                serde_json::json!({"command": "dir"}),
+            ),
+            (
+                RiskClass::LocalMutation,
+                "powershell",
+                serde_json::json!({"command": "ls"}),
+            ),
+            (
+                RiskClass::SandboxEscape,
+                "bash",
+                serde_json::json!({"command": "dir"}),
+            ),
+        ] {
+            let decision = bridge.request(risk, tool, &args).await.unwrap();
+            assert_eq!(
+                decision,
+                PermitDecision::AllowOnce,
+                "{tool} must auto-allow under Benchmark{{allow_shell:true}}"
+            );
+        }
+
+        // Network stays fail-closed without `allow_network`.
+        let decision = bridge
+            .request(
+                RiskClass::NetworkCall,
+                "web_fetch",
+                &serde_json::json!({"url": "https://x"}),
+            )
+            .await
+            .unwrap();
+        assert_eq!(decision, PermitDecision::Deny);
+
+        // Local file edits still auto-allow; MCP names never do.
+        let decision = bridge
+            .request(
+                RiskClass::LocalMutation,
+                "search_replace",
+                &serde_json::json!({"path": "a.txt"}),
+            )
+            .await
+            .unwrap();
+        assert_eq!(decision, PermitDecision::AllowOnce);
+        let decision = bridge
+            .request(
+                RiskClass::LocalMutation,
+                "write_server__write",
+                &serde_json::json!({}),
+            )
+            .await
+            .unwrap();
+        assert_eq!(decision, PermitDecision::Deny);
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[tokio::test]
+    async fn benchmark_network_axis_allows_network_keeps_shell_fail_closed() {
+        let dir = test_dir();
+        std::fs::create_dir_all(dir.join("inside")).unwrap();
+        std::fs::write(dir.join("inside").join("a.txt"), "x").unwrap();
+        let bridge = bridge_with_policy(
+            &dir,
+            PermissionPolicy::Benchmark {
+                allow_shell: false,
+                allow_network: true,
+            },
+        );
+
+        // Network calls auto-allow under `allow_network` (the direct-call
+        // web surface; the console default face has no web actions).
+        for (tool, args) in [
+            ("web_fetch", serde_json::json!({"url": "https://x"})),
+            ("web_search", serde_json::json!({"query": "x"})),
+        ] {
+            let decision = bridge
+                .request(RiskClass::NetworkCall, tool, &args)
+                .await
+                .unwrap();
+            assert_eq!(
+                decision,
+                PermitDecision::AllowOnce,
+                "{tool} must auto-allow under Benchmark{{allow_network:true}}"
+            );
+        }
+
+        // Shell stays fail-closed without `allow_shell`.
+        for (risk, tool, args) in [
+            (
+                RiskClass::LocalMutation,
+                "run_terminal_cmd",
+                serde_json::json!({"command": "dir"}),
+            ),
+            (
+                RiskClass::SandboxEscape,
+                "bash",
+                serde_json::json!({"command": "dir"}),
+            ),
+        ] {
+            let decision = bridge.request(risk, tool, &args).await.unwrap();
+            assert_eq!(
+                decision,
+                PermitDecision::Deny,
+                "{tool} must be denied without allow_shell"
+            );
+        }
+
+        // Local file edits still auto-allow; MCP names never do.
+        let decision = bridge
+            .request(
+                RiskClass::LocalMutation,
+                "search_replace",
+                &serde_json::json!({"path": "a.txt"}),
+            )
+            .await
+            .unwrap();
+        assert_eq!(decision, PermitDecision::AllowOnce);
+        let decision = bridge
+            .request(
+                RiskClass::LocalMutation,
+                "read_server__extract",
+                &serde_json::json!({}),
+            )
+            .await
+            .unwrap();
+        assert_eq!(decision, PermitDecision::Deny);
 
         let _ = std::fs::remove_dir_all(&dir);
     }

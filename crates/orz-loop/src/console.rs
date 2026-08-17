@@ -26,6 +26,12 @@
 //! （PTC 线性脚本）作为控制台内部动作接线（`ActionKind::TraceRead` /
 //! `ActionKind::RunScript`，不委托 host 工具）；注册板块升级为
 //! 「Profile/Bundle 加载集 ∩ 探针完整集」投影（`registrations_for`）。
+//!
+//! FUS-BENCHMARK-FULL-EXEC (2026-08-18)：`workspace.run_terminal` 动作
+//! （target=`run_terminal_cmd`、kind=Host、bundle=READ_WRITE）——shell 仍不
+//! 开放为模型直接工具，执行全经助理层订单（与 run_tests 同构）；输入镜像
+//! BashToolInput（command/description 必填、timeout/is_background 可选、
+//! 不暴露 env/cwd），动作栏由探针完整集收敛（`ToolPolicy::BenchmarkFull`）。
 
 use std::collections::{BTreeMap, VecDeque};
 use std::sync::Arc;
@@ -47,6 +53,8 @@ pub const TRACE_TAIL_DEFAULT: usize = 20;
 
 /// PTC 线性脚本服务名（小样 3 定档）。
 pub const SCRIPT_SERVICE_NAME: &str = "workspace.run_script";
+/// 终端执行服务名（FUS-BENCHMARK-FULL-EXEC，2026-08-18 定档）。
+pub const TERMINAL_SERVICE_NAME: &str = "workspace.run_terminal";
 /// 只读 trace 服务名（v0.4 定档）。
 pub const TRACE_SERVICE_NAME: &str = "assistant.trace";
 /// PTC 脚本单订单上限（小样 3 定档 20 步；2026-08-16 审查收口改为 8——
@@ -246,6 +254,47 @@ pub fn default_service_registry() -> ServiceRegistry {
             input_schema: json!({
                 "type": "object",
                 "properties": {},
+                "additionalProperties": false,
+            }),
+            response_schema: text_output_response_schema(),
+        },
+        // FUS-BENCHMARK-FULL-EXEC (2026-08-18)：终端执行动作——shell 仍不
+        // 开放为模型直接工具，执行全经助理层订单（与 run_tests 同构）。
+        // 输入镜像 BashToolInput：command/description 必填、timeout/
+        // is_background 可选；不暴露 env/cwd——环境与工作目录由 host 决定
+        // （ACAF command_exec 目标摘要基于 host 侧 cwd/env，模型不可注入）。
+        // 动作栏由探针完整集收敛（BenchmarkFull + terminal_available →
+        // 出现；旧 Benchmark/ReadOnly → 不出现）。
+        ActionSpec {
+            name: TERMINAL_SERVICE_NAME.to_string(),
+            description: "执行一条终端命令（模型只下单；命令与环境由助理层按会话决定，\
+                结果经 host 工具返回）。".to_string(),
+            target_tool: Some("run_terminal_cmd".to_string()),
+            kind: ActionKind::Host,
+            bundle: ActionBundle::READ_WRITE,
+            input_schema: json!({
+                "type": "object",
+                "properties": {
+                    "command": {
+                        "type": "string",
+                        "description": "要执行的命令（shell 由 host 决定）。",
+                    },
+                    "description": {
+                        "type": "string",
+                        "description": "一句话说明该命令的用途。",
+                    },
+                    "timeout": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "maximum": 300000,
+                        "description": "超时毫秒（默认 120000）。",
+                    },
+                    "is_background": {
+                        "type": "boolean",
+                        "description": "后台运行（默认 false）。",
+                    },
+                },
+                "required": ["command", "description"],
                 "additionalProperties": false,
             }),
             response_schema: text_output_response_schema(),
@@ -551,6 +600,10 @@ impl ActionBundle {
         match profile {
             ToolPolicy::Interactive => self.standard,
             ToolPolicy::ReadOnly => self.read_only,
+            // FUS-BENCHMARK-FULL-EXEC (2026-08-18)：完整基准（读+写+终端）
+            // 复用 benchmark 档——动作栏仍由探针收敛（旧 Benchmark 下终端
+            // 探针不完整 → 按钮不出现，无需新档位字段）。
+            ToolPolicy::BenchmarkFull => self.benchmark,
             ToolPolicy::Benchmark => self.benchmark,
         }
     }
@@ -1811,6 +1864,7 @@ mod tests {
                 "workspace.read_file",
                 "workspace.run_script",
                 "workspace.run_tests",
+                "workspace.run_terminal",
                 "workspace.search_replace",
             ]
         );
@@ -2328,6 +2382,9 @@ mod tests {
         let bm = names(ToolPolicy::Benchmark, None);
         assert!(bm.contains(&"workspace.search_replace".to_string()));
         assert!(bm.contains(&"workspace.run_tests".to_string()));
+        // FUS-BENCHMARK-FULL-EXEC：终端动作属 READ_WRITE 档——无探针时按
+        // bundle 加载（基准档含）；探针完整集收敛见下。
+        assert!(bm.contains(&"workspace.run_terminal".to_string()));
         // 探针过滤：run_tests 不完整 → 移除；非工作工具目标
         // （project_doc_index）不探不标、按注册表声明保留。
         let snapshot = crate::tool_probe::ToolProbeSnapshot {
@@ -2344,9 +2401,23 @@ mod tests {
         };
         let proj = names(ToolPolicy::Interactive, Some(&snapshot));
         assert!(!proj.contains(&"workspace.run_tests".to_string()));
+        assert!(!proj.contains(&"workspace.run_terminal".to_string()));
         assert!(proj.contains(&"workspace.index".to_string()));
         assert!(proj.contains(&"workspace.run_script".to_string()));
         assert!(proj.contains(&"workspace.read_file".to_string()));
+
+        // FUS-BENCHMARK-FULL-EXEC：完整基准 + 终端探针完整 → 动作栏出现；
+        // 终端探针不完整 → 移除（与 run_tests 同探针语义）。
+        let full = names(ToolPolicy::BenchmarkFull, Some(&snapshot));
+        assert!(!full.contains(&"workspace.run_terminal".to_string()));
+        assert!(full.contains(&"workspace.search_replace".to_string()));
+        let mut full_snapshot = snapshot.clone();
+        full_snapshot.complete.push("run_terminal_cmd".to_string());
+        let full = names(ToolPolicy::BenchmarkFull, Some(&full_snapshot));
+        assert!(full.contains(&"workspace.run_terminal".to_string()));
+        // 旧 Benchmark（shell-less）的终端按钮由探针层锁死——
+        // `policy_allows_exec` 不含 Benchmark → 实机快照恒不完整，注册板块
+        // 不做名级二道门（探针语义测试见 tool_probe.rs）。
     }
 
     /// P0-C S3：`assistant.trace` 只读服务——按 trace_id 取回有界事件。

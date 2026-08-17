@@ -812,7 +812,14 @@ impl LoopHost for OrzHost {
         use orz_loop::host::ToolPolicy;
         match self.permission.as_ref().map(|b| b.policy()) {
             Some(PermissionPolicy::ReadOnly) => ToolPolicy::ReadOnly,
-            Some(PermissionPolicy::Benchmark) => ToolPolicy::Benchmark,
+            // FUS-BENCHMARK-FULL-EXEC (2026-08-18): a Benchmark policy with
+            // the shell axis open maps to `BenchmarkFull` (read + write +
+            // terminal projection); the default false/false axes keep the
+            // original `Benchmark` semantics.
+            Some(PermissionPolicy::Benchmark {
+                allow_shell: true, ..
+            }) => ToolPolicy::BenchmarkFull,
+            Some(PermissionPolicy::Benchmark { .. }) => ToolPolicy::Benchmark,
             _ => ToolPolicy::Interactive,
         }
     }

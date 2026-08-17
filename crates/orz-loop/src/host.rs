@@ -40,6 +40,12 @@ pub enum ToolPolicy {
     /// Headless benchmark — read + local file edits declared; network and
     /// shell-escape excluded by name.
     Benchmark,
+    /// FUS-BENCHMARK-FULL-EXEC (2026-08-18): headless benchmark with the
+    /// shell axis open (read + write + terminal declared). Network does not
+    /// participate in the name-level projection — web tools are not on the
+    /// work-tool/console face; the permission gate is their only gate.
+    /// Mapped from `PermissionPolicy::Benchmark { allow_shell: true, .. }`.
+    BenchmarkFull,
 }
 
 /// The refusing gate family behind a structured policy denial

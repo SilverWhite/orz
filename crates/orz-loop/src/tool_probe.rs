@@ -225,17 +225,18 @@ pub fn is_main_agent_work_tool(name: &str) -> bool {
 }
 
 /// Policy half of the write probe: `ReadOnly` never passes; `Interactive`
-/// and `Benchmark` pass at policy level (the call-time permission gate
-/// still makes the final decision per arguments).
+/// `Benchmark` and `BenchmarkFull` pass at policy level (the call-time
+/// permission gate still makes the final decision per arguments).
 pub fn policy_allows_write(policy: ToolPolicy) -> bool {
     policy != ToolPolicy::ReadOnly
 }
 
-/// Policy half of the exec probe: only Interactive sessions pass at policy
-/// level — ReadOnly refuses non-reads and Benchmark excludes shell-escape
-/// by policy (the call-time permission gate remains the final backstop).
+/// Policy half of the exec probe: `Interactive` and `BenchmarkFull`
+/// (FUS-BENCHMARK-FULL-EXEC 2026-08-18) pass at policy level — ReadOnly
+/// refuses non-reads and the default `Benchmark` excludes shell-escape by
+/// policy (the call-time permission gate remains the final backstop).
 pub fn policy_allows_exec(policy: ToolPolicy) -> bool {
-    policy == ToolPolicy::Interactive
+    matches!(policy, ToolPolicy::Interactive | ToolPolicy::BenchmarkFull)
 }
 
 /// Workspace read chain: the session cwd exists, is a directory and yields
@@ -666,6 +667,19 @@ mod tests {
                 "{policy:?}"
             );
         }
+        // FUS-BENCHMARK-FULL-EXEC (2026-08-18): the full benchmark policy
+        // (shell axis open) passes at policy level — with a terminal
+        // backend the exec chain is complete, so the action-bar button is
+        // rendered (the console still routes execution via orders, never a
+        // direct model tool call).
+        let full = ProbeContext {
+            policy: ToolPolicy::BenchmarkFull,
+            ..ctx.clone()
+        };
+        assert_eq!(
+            probe_tool("run_terminal_cmd", &full).verdict,
+            ProbeVerdict::Complete
+        );
     }
 
     #[test]
@@ -724,12 +738,14 @@ mod tests {
     fn policy_allows_write_mapping() {
         assert!(policy_allows_write(ToolPolicy::Interactive));
         assert!(policy_allows_write(ToolPolicy::Benchmark));
+        assert!(policy_allows_write(ToolPolicy::BenchmarkFull));
         assert!(!policy_allows_write(ToolPolicy::ReadOnly));
     }
 
     #[test]
     fn policy_allows_exec_mapping() {
         assert!(policy_allows_exec(ToolPolicy::Interactive));
+        assert!(policy_allows_exec(ToolPolicy::BenchmarkFull));
         assert!(!policy_allows_exec(ToolPolicy::ReadOnly));
         assert!(!policy_allows_exec(ToolPolicy::Benchmark));
     }
