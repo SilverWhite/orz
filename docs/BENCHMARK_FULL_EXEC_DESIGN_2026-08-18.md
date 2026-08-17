@@ -1,6 +1,7 @@
 # Benchmark 完全体执行面设计（终端/网络两轴放开）
 
-- 状态：`current-design`（2026-08-18 用户裁决；纯文档、未实施）
+- 状态：`implementing`（2026-08-18 用户裁决；2026-08-18 实施完成、验证暂缓
+  ——用户指示「完成后暂时不进行测试」；待验证闭环后转 `implemented`）
 - 关联：[`ADR-0010 §14.24`](../adr/ADR-0010-fusion-runtime-and-agent-architecture.md)（v1.24）；
   [`CLASSICAL-EXEC-ASSISTANT §13`](CLASSICAL_EXECUTION_ASSISTANT_DESIGN_2026-08-13.md)；
   [`PLAN_FIRST_BLACKBOARD §4`](PLAN_FIRST_BLACKBOARD_DESIGN_2026-08-15.md)
@@ -110,8 +111,12 @@ MCP 恒 deny、读限定（工作区外拒绝）不变；Interactive/ReadOnly �
 ## 8. 适配器与任务合规
 
 - `tb_agents/orz.py` `run()`：`allow_shell = True`（TB 本质是 shell 评测）；
-  `allow_network = environment.task_env_config.network_mode == NetworkMode.PUBLIC`
-  （`allow_internet` 已被 harbor 清除，活字段为 network_mode）。
+  `allow_network = environment.network_policy.network_mode == NetworkMode.PUBLIC`
+  （**实施注记（2026-08-18）**：取 `environment.network_policy`（trial 按
+  agent 阶段策略 set 的有效策略，base.py `set_network_policy` / trial.py
+  接线）而非 `task_env_config.network_mode` 基线——对 89 题全 PUBLIC 结果
+  一致，且 NO_NETWORK/ALLOWLIST 任务按容器实际生效策略 fail-closed，严格不
+  比设计更宽；`allow_internet` 已被 harbor 清除，活字段为 network_mode）。
 - env 增 `ORZ_ALLOW_SHELL=1`、`ORZ_ALLOW_NETWORK=1`（按任务计算）；运行脚本
   belt-and-braces 同传 `--allow-shell`/`--allow-network`。
 - 数据集现状：89 题（terminal-bench-2-1@sha256:7d7bdc…）全部 PUBLIC → 实际每次
@@ -130,6 +135,9 @@ MCP 恒 deny、读限定（工作区外拒绝）不变；Interactive/ReadOnly �
 - 不新增平行执行层：终端仍走 run_host_tool 既有门链与事件链。
 
 ## 10. 验证计划（实施阶段执行）
+
+> 2026-08-18 用户指示：本实施轮**暂不进行测试**——以下验证项在后续窗口
+> 执行（TODO P0-F 验证①–⑤未勾选）。
 
 1. orz 子模块 cargo 全量测试（新增/更新用例先行）：权限决策表、探针映射、
    console 注册表投影、订单→run_host_tool→ACAF 票据路径；clippy 无新增告警。

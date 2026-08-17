@@ -71,12 +71,16 @@
 > (scope: ...) 脚注）+ grep files_searched 全结局探针收敛（v1 `rg --files`
 > 探针扩展为每次完成搜索都运行，命中摘要内嵌 searched N files）——
 > 未闭合 29 → 27，P0 评测冒烟暴露 2 → 0 项（P0-E 后续项全部闭合）。
+> 2026-08-18 FUS-BENCHMARK-FULL-EXEC 入账（本窗口，用户裁决实施、暂不测试）
+> ——Benchmark 完全体执行面三层使能 + CLI 旗标 + TB 适配器透传实施完成待验证
+> （实施前登记见下；验证项未勾选）——未闭合 27 → 28，P0 0 → 1 项。
 > 本快照只做计数与分组召回，明细以下方各分组勾选清单为唯一入口，不新增独立条目；
 > 后续扫描更新时同步替换本快照日期与计数。
 
-- 未闭合总数：**27 项**
+- 未闭合总数：**28 项**
   - P0-C：0 项（PLAN-FIRST 阶段 A/B/C 全部闭合，2026-08-16）
   - P0 评测冒烟暴露：0 项（P0-E 主项 7 项 + FUS-TOOL-SCOPE-CONTRACT 后续 2 项全部闭合 2026-08-18，见 P0-E grep 项后续①/②）
+  - P0 Benchmark 完全体：1 项（FUS-BENCHMARK-FULL-EXEC 实施完成待验证，见 P0-F；验证闭环后回 27）
   - P1 可并行审计/证据：9 项（组件登记 1、Windows 证据 3、DeepSeek 1、会话上下文监测 4）
   - P2 生产化决策门：5 项（Slice 3、Slice 4、ACAF 可选工程项、OPS 裁剪设计、OPS 生产接线裁决）
   - P3 收尾/清理：7 项（EVIDENCE-LOCAL-BROWSER、GATE-CHAIN、observed-scope 枚举、V11-IMPL-003、V11-IMPL-007、orz-host flaky、DC 硬信号 4/6）
@@ -217,6 +221,47 @@
   路径 + 发放期 Err 分支 issue 路径发事件 + TUI 投影 + 测试断言）；
   orz-loop 436 / orz-tui 178 / orz-assurance 152 / orz-bin 全量通过、
   clippy 与基线一致、manifest 重生成 1401、仓库门禁 valid。结果栏 receipt 保留。
+
+### P0-F FUS-BENCHMARK-FULL-EXEC（`pending`=实施完成待验证；P0，2026-08-18 用户裁决实施）
+
+> 入口：[设计](docs/BENCHMARK_FULL_EXEC_DESIGN_2026-08-18.md)；ADR-0010 §14.24
+> （v1.24）；BACKLOG 0b。实施路由=实施前登记本项与 BACKLOG（已登记）。
+> 2026-08-18 用户指示：实施完成、暂不进行测试（验证项保留未勾选）。
+> orz 子模块：`3f43478`（feat/fusion-architecture，6 文件）。
+
+- [x] 实施前登记：BACKLOG 0b / 本清单（设计轮不动计数；实施轮 27 → 28）。
+- [x] 权限层：`PermissionPolicy::Benchmark { allow_shell, allow_network }`
+  两轴参数化（默认 false/false）；决策表=LocalMutation 非 shell AllowOnce、
+  shell 工具/SandboxEscape 在 allow_shell 下 AllowOnce、NetworkCall 在
+  allow_network 下 AllowOnce、MCP 恒 deny、ReadOnly 恒走 manager；旧测试
+  语义同步 + 新增两轴用例。
+- [x] 探针层：`ToolPolicy::BenchmarkFull`（`tool_policy()` 由
+  `Benchmark{allow_shell:true,..}` 映射）；`policy_allows_exec` 增
+  BenchmarkFull；console `ActionBundle::allows` 加臂复用 benchmark 档。
+- [x] console 注册表：`workspace.run_terminal`（target=run_terminal_cmd、
+  kind=Host、bundle=READ_WRITE；input 镜像 BashToolInput：command/description
+  必填、timeout/is_background 可选、不暴露 env/cwd；响应 text_output 信封）；
+  注册板块默认列表/投影测试同步。
+- [x] CLI：`--allow-shell`/`--allow-network`（→ ORZ_ALLOW_SHELL/ORZ_ALLOW_NETWORK，
+  沿用 --allow-write 先例）；未带 `--allow-write` 时 exit 2；`--help` 文本同步；
+  `build_cli_host` 构造 Benchmark{allow_shell,allow_network}。
+- [x] 适配器：`tb_agents/orz.py` allow_shell=True、allow_network 按任务
+  有效 agent-phase `network_policy.network_mode == PUBLIC` 透传（实施注记：
+  取 environment.network_policy 而非 task_env_config 基线，89 题全 PUBLIC
+  结果一致、严格不更宽）；env 按存在性增 ORZ_ALLOW_SHELL/ORZ_ALLOW_NETWORK；
+  运行脚本 belt-and-braces 同传 `--allow-shell`/`--allow-network`。
+- [ ] 验证①（用户指示暂缓）：orz cargo 全量测试（权限决策表、探针映射、
+  console 注册表投影、订单→run_host_tool→ACAF 票据路径）+ clippy 无新增告警。
+- [ ] 验证②（用户指示暂缓）：Linux musl 重建（ORZ-BUILD-MOUNT-001 契约，输出
+  `D:/tb-eval/orz-linux`）。
+- [ ] 验证③（用户指示暂缓）：单题 make-doom-for-mips 复验——reward > 0、
+  journal 出现 `workspace.run_terminal` 订单→run_host_tool→ACAF
+  `command_exec` issued/consumed、机制门不回归（无 400、step_id 绑定、
+  无异常 policy_denied）。
+- [ ] 验证④（用户指示暂缓）：2–3 题交叉（compile-compcert、hf-model-inference
+  等 build/run 与网络类）。
+- [ ] 验证⑤（用户指示暂缓）：`run_official_2.1.sh` 89 题 5 批。
+- [ ] 闭合：验证全过 → BACKLOG/TODO/索引状态同步，未闭合 28 → 27。
 
 ### P0-B FUS-RETRIEVAL-MECH（`implemented`；批次 1-6 已全部闭合，2026-08-14，保留供核对）
 

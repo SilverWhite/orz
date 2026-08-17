@@ -145,6 +145,26 @@
 > FUS-BENCHMARK-FULL-EXEC `current-design`；设计文档
 > `docs/BENCHMARK_FULL_EXEC_DESIGN_2026-08-18.md`；实施路由=实施前登记
 > BACKLOG / TODO。未闭合计数不变。
+> 2026-08-18 Benchmark 完全体执行面实施登记（用户指示：实施、暂不测试）——
+> 三层同时使能：① 权限 `PermissionPolicy::Benchmark { allow_shell,
+> allow_network }`（默认 false/false 保旧语义；shell/SandboxEscape 在
+> allow_shell、NetworkCall 在 allow_network 下 AllowOnce；MCP 恒 deny）；
+> ② 探针 `ToolPolicy::BenchmarkFull`（tool_policy() 由
+> `Benchmark{allow_shell:true,..}` 映射；policy_allows_exec 增
+> BenchmarkFull；ActionBundle::allows 复用 benchmark 档）；③ console 注册表
+> `workspace.run_terminal`（target=run_terminal_cmd、READ_WRITE、input 镜像
+> BashToolInput：command/description 必填、timeout/is_background 可选、
+> 不暴露 env/cwd）。CLI 增 `--allow-shell`/`--allow-network`（须与
+> `--allow-write` 同用，否则 exit 2）。适配器 `tb_agents/orz.py`：
+> allow_shell=True、allow_network 按任务有效 agent-phase network_policy==
+> PUBLIC 透传（实施注记：取 environment.network_policy 而非
+> task_env_config 基线，89 题全 PUBLIC 结果一致、严格不更宽）；env + 运行
+> 脚本 belt-and-braces 同传。FUS-BENCHMARK-FULL-EXEC `pending`（实施完成
+> 待验证）；orz 子模块 3f43478；BACKLOG 0b / TODO P0-F；未闭合计数
+> 27 → 28（验证闭环后回 27）。
+> 验证（用户指示暂缓）：orz 测试 + clippy、Linux musl 重建、单题
+> make-doom-for-mips 复验（reward>0 + journal workspace.run_terminal→ACAF
+> command_exec issued/consumed）、2–3 题交叉、89 题 5 批。
 > 2026-08-18 状态行缓存纪律 + 订单拒绝步骤语义设计定案登记（用户裁决；纯文档、
 > 未实施）——① `[任务状态]` 常驻状态行移出系统提示词，改为变化时追加的尾随
 > 用户消息（与预算剩余块同纪律）：根因=console 步骤机每笔订单 receipt 推进步骤
@@ -328,7 +348,7 @@
 - **FUS-LARGE-FILE-READ-CONTRACT** (`implemented`; 2026-08-17)：大文件读取契约——读取工具契约有界返回（超过粗门默认 16KB、可配 8–32KB 的文件返回读取句柄信封 path/size/encoding/content_sha256/可用范围/有界预览 ≤4KB/truncated/offset 续读指针，不返回全文；精门=50K 注入预算兜底；小文件保持全文一次返回）；语义适配留模型、助理层只提供机械原语（引用 + 范围读）；模型以 read_file(offset)/grep 结构化续读（提示词策略化读取落成工具契约，对齐 pdf_read document_id+page_range 先例）；黑板/结果栏只放指针不放内容本体（内容留盘上/证据区，维持不新增自由随记区）；**实施已闭合（2026-08-17，orz 172b14e）**——GrokBuild read_file 文本路径信封 + 有界预览 + offset 续读，SKILL.md/`skills` 全量豁免，FileTooLarge 文本路径被取代保留为防御兜底。关键词：大文件读取、读取句柄、有界返回、结构化续读、offset、内容指针、黑板只存指针。入口：[`CLASSICAL-EXEC-ASSISTANT §11`](docs/CLASSICAL_EXECUTION_ASSISTANT_DESIGN_2026-08-13.md) / [`PLAN_FIRST_BLACKBOARD §4`](docs/PLAN_FIRST_BLACKBOARD_DESIGN_2026-08-15.md) / [`ADR-0010 §14.22`](adr/ADR-0010-fusion-runtime-and-agent-architecture.md) / [`实施审计`](docs/audits/GAP_LARGE_FILE_READ_CONTRACT_IMPL_AUDIT_2026-08-17.md) / [`BACKLOG 6f`](docs/BACKLOG_AND_PRIORITIES.md)。
    **2026-08-17 全面检查修复**：信封空窗口/越界 offset 语义收口（past-EOF 无续读指针、范围内空窗口从请求行续读、最后一行行内截断 offset=None）；`[toolset.read_file]` 配置节端到端接线（coarse_gate_bytes 经 orz-config 装载注入、优先于 env；orz 7c4a99e + bd8d485，ADR-0010 §14.22 项 4）。
 - **FUS-TOOL-SCOPE-CONTRACT** (`implemented`; 2026-08-17；2026-08-18 读/搜/列三族全部闭合)：工具契约家族——「范围/截断必须机械报告」：grep 返回结构化搜索信封（resolved root/files_searched/match_count/truncated；结局三型分型：searched>0 有匹配 / searched>0 无匹配=真无匹配 / searched=0=范围空显式报过滤类别，绝不叫 "No matches found"；非零退出 + stderr 非空先显式报错）+ 搜索范围语义显式化（保留 rg 默认 + 提供 --no-ignore/--hidden 开关，容器冒烟定案）；机械来源=定稿 `rg --files` 探针全结局运行（2026-08-18 扩展：命中路径亦返回 files_searched，摘要行内嵌 searched N files；弃用 --stats——rg 15 stdout / 旧版 stderr 位置差异污染流式面，--json 需重写输出契约，均不采用）；读取信封见 FUS-LARGE-FILE-READ-CONTRACT；**目录信封 2026-08-18 闭合**——list_dir 增 listed/ignored/truncated 机械计数（ignored=未过滤走−可见走、同过滤语义、200K 封顶；truncated=可见总数−实际渲染）+ 卡片尾部 (scope: ...) 脚注；legacy/codex 面不报。关键词：搜索信封、目录信封、范围报告、空结果语义、结局分型、ignore 语义、工具契约、files 探针。入口：[`ADR-0010 §14.23`](adr/ADR-0010-fusion-runtime-and-agent-architecture.md) / [`CLASSICAL-EXEC-ASSISTANT §12`](docs/CLASSICAL_EXECUTION_ASSISTANT_DESIGN_2026-08-13.md) / [`实施审计`](docs/audits/FUS_TOOL_SCOPE_CONTRACT_GREP_IMPL_AUDIT_2026-08-17.md) / [`BACKLOG 0a`](docs/BACKLOG_AND_PRIORITIES.md) / [`TODO P0-E`](TODO.md)。
-- **FUS-BENCHMARK-FULL-EXEC** (`current-design`; 2026-08-18)：Benchmark 完全体执行面——TB2 跑分按任务合规放开 shell/网络（orz 完全体），但 shell 不开放为模型直接工具：console 默认面仍只读+下单，执行全经助理层订单（`workspace.run_terminal`，与 run_tests 同构）。三层使能=权限 `Benchmark{allow_shell,allow_network}` 两轴参数化（默认 fail-closed）+ 探针 `ToolPolicy::BenchmarkFull` + 注册表终端动作；CLI `--allow-shell`/`--allow-network`；适配器按任务 network_mode 透传。ACAF 票据/预算/墙钟/事件审计不变；「放开」=策略允许面。关键词：Benchmark 完全体、allow_shell、allow_network、BenchmarkFull、workspace.run_terminal、终端动作、TB2。入口：[`BENCHMARK_FULL_EXEC_DESIGN`](docs/BENCHMARK_FULL_EXEC_DESIGN_2026-08-18.md) / [`ADR-0010 §14.24`](adr/ADR-0010-fusion-runtime-and-agent-architecture.md) / [`CLASSICAL-EXEC-ASSISTANT §13`](docs/CLASSICAL_EXECUTION_ASSISTANT_DESIGN_2026-08-13.md) / [`PLAN_FIRST_BLACKBOARD §4`](docs/PLAN_FIRST_BLACKBOARD_DESIGN_2026-08-15.md)。
+- **FUS-BENCHMARK-FULL-EXEC** (`pending`=实施完成待验证; 2026-08-18)：Benchmark 完全体执行面——TB2 跑分按任务合规放开 shell/网络（orz 完全体），但 shell 不开放为模型直接工具：console 默认面仍只读+下单，执行全经助理层订单（`workspace.run_terminal`，与 run_tests 同构）。三层使能=权限 `Benchmark{allow_shell,allow_network}` 两轴参数化（默认 fail-closed）+ 探针 `ToolPolicy::BenchmarkFull` + 注册表终端动作；CLI `--allow-shell`/`--allow-network`（须与 `--allow-write` 同用，否则 exit 2）；适配器按任务 network_mode 透传（实施取有效 agent-phase network_policy，89 题全 PUBLIC）。ACAF 票据/预算/墙钟/事件审计不变；「放开」=策略允许面。**2026-08-18 实施完成（用户指示：暂不测试）**——orz 子模块见 [TODO P0-F](TODO.md)；待验证：orz 测试/clippy、Linux musl 重建、make-doom-for-mips 复验、2–3 题交叉、89 题分批。关键词：Benchmark 完全体、allow_shell、allow_network、BenchmarkFull、workspace.run_terminal、终端动作、TB2。入口：[`BENCHMARK_FULL_EXEC_DESIGN`](docs/BENCHMARK_FULL_EXEC_DESIGN_2026-08-18.md) / [`ADR-0010 §14.24`](adr/ADR-0010-fusion-runtime-and-agent-architecture.md) / [`CLASSICAL-EXEC-ASSISTANT §13`](docs/CLASSICAL_EXECUTION_ASSISTANT_DESIGN_2026-08-13.md) / [`PLAN_FIRST_BLACKBOARD §4`](docs/PLAN_FIRST_BLACKBOARD_DESIGN_2026-08-15.md) / [`BACKLOG 0b`](docs/BACKLOG_AND_PRIORITIES.md)。
 
 ## 3. 当前实现与符合性路由
 
@@ -428,10 +448,10 @@
 
 本节只列 canonical ID，不重复定义：
 
-- `current-design`：AUTH-ADR-0010、AUTH-CURRENT-PROJECTION、FUS-CORE、FUS-AGENT-TOPOLOGY、FUS-CONCURRENCY、FUS-RETRIEVAL-MODE、FUS-INFORMATION-SUFFICIENCY、FUS-ORIENTATION、FUS-DIAGNOSTIC-COVERAGE、FUS-COUNTEREXAMPLE、FUS-STAGNATION、FUS-BUDGET、FUS-STATE-RECOVERY、FUS-WINDOWS-BOUNDARY、FUS-UI-BOUNDARY、FUS-CONTROL-FABRIC、FUS-SOURCE-WEIGHTING、AUTH-PLAN-FIRST-BLACKBOARD、FUS-BENCHMARK-FULL-EXEC。
+- `current-design`：AUTH-ADR-0010、AUTH-CURRENT-PROJECTION、FUS-CORE、FUS-AGENT-TOPOLOGY、FUS-CONCURRENCY、FUS-RETRIEVAL-MODE、FUS-INFORMATION-SUFFICIENCY、FUS-ORIENTATION、FUS-DIAGNOSTIC-COVERAGE、FUS-COUNTEREXAMPLE、FUS-STAGNATION、FUS-BUDGET、FUS-STATE-RECOVERY、FUS-WINDOWS-BOUNDARY、FUS-UI-BOUNDARY、FUS-CONTROL-FABRIC、FUS-SOURCE-WEIGHTING、AUTH-PLAN-FIRST-BLACKBOARD。
 - `implemented`：IMPL-WRITE-PLACEMENT、IMPL-GLOBAL-REVIEW、IMPL-RUN-EVENT-SCHEMA、GAP-TOOL-BUDGET、GAP-INQUIRY-SPLIT、GAP-SUBAGENT-RUNTIME、GAP-SUFFICIENCY-SCHEMA、GAP-RETRIEVAL-TOOLS、GAP-LOCAL-BROWSER、GAP-WEB-SEARCH-SEMAPHORE、GAP-CONVERSATION-RESTORE、GAP-PROJECT-DOC-INDEX-CACHE、GAP-PDF-EVIDENCE、GAP-RUN-TESTS、GAP-STREAM-RETRY、GAP-ACAF-SLICE1、GAP-ACAF-SLICE2A、GAP-ACAF-SLICE2B、GAP-DENIAL-POLICY-REVISION、GAP-ACAF-SLICE2-FAILCLOSED、GAP-ENCODING-GATE、GAP-SOURCE-WEIGHTING-IMPL、FUS-TOOL-PROBE、FUS-RETRIEVAL-MECH、FUS-COMPACTION-REDESIGN、AUTH-BLACKBOARD-PLAN-EPOCH、FUS-BLACKBOARD-PLAN-EPOCH、AUTH-ORIENTATION-FORCED-TEMPLATE、FUS-ORIENTATION-FORCED-TEMPLATE、FUS-CONSOLE-POLICY-DENIAL、FUS-REQUEST-CACHE、CLASSICAL-EXEC-ASSISTANT、FUS-AGENTS-MD-PLAN-WRAPPER、FUS-PROMPT-DEPERSONALIZE、FUS-PLAN-FIRST-MODEL-SURFACE、FUS-CONSOLE-DUAL-MODE、FUS-PLAN-STEP-GATE、GAP-CONSOLE-TOOLNAME-PATTERN、GAP-ACAF-HARNESS-PASSTHROUGH、FUS-LARGE-FILE-READ-CONTRACT、FUS-LEDGER-FOLD-STATE、FUS-TOOL-SCOPE-CONTRACT。
 - `partial`：IMPL-RUST-RUNTIME、IMPL-DEEPSEEK-TRANSPORT、GAP-WINDOWS-EVIDENCE、FUS-COMPONENT-REGISTER、GATE-CHAIN、SEC-CREDENTIALS、EVIDENCE-LOCAL-BROWSER、IMPL-CONTROL-FABRIC。
-- `pending`：OPS-PROTOCOL、AUTH-SESSION-CONTEXT-MONITOR、FUS-SESSION-CONTEXT-MONITOR、FUS-RECOVERY-TOOL-OUTCOME。
+- `pending`：OPS-PROTOCOL、AUTH-SESSION-CONTEXT-MONITOR、FUS-SESSION-CONTEXT-MONITOR、FUS-RECOVERY-TOOL-OUTCOME、FUS-BENCHMARK-FULL-EXEC（实施完成待验证）。
 - `reference`：AUTH-BACKLOG、AUTH-TODO、AUTH-V1.1-REVIEW、AUTH-FREEZE-AUDIT、IMPL-PYTHON-REFERENCE、P0-DATA-CONTRACT、P1-SESSION-LIFECYCLE、P2-SANDBOX、P2.5-GUARDED-EXECUTION、P3-INSTRUCTION-AUTHORITY、P4-AUDIT-RECOVERY、P4.5-WORKSPACE-FIRST、P5-TASK-PREFLIGHT、EVAL-POLYGLOT、EVAL-TERMINAL-BENCH、EVAL-SWE-BENCH、FUS-DSH-BORROW-REVIEW。
 - `historical`：AUTH-ARCHIVE、AUTH-INDEX-SNAPSHOT。
 

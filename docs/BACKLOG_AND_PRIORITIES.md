@@ -9,7 +9,7 @@
 
 | 优先级 | 含义 | 未闭合项 |
 |---|---|---|
-| P0 | 当前工作集：设计已冻结，裁决后立即实施 | 评测冒烟暴露问题（P0-E 主项 7 项 + FUS-TOOL-SCOPE-CONTRACT 后续 2 项全部闭合 2026-08-18：ACAF 容器供应、console 工具名、计划视图步骤 ID、订单发放前拒绝入事件面、grep 搜索范围契约、plan_write 校验消息形状、actions 形状探针、list_dir 范围计数、grep files_searched 全结局探针，见 0a）；CLASSICAL-EXEC-ASSISTANT（生产组件，2026-08-16 用户裁决转正式，S1-S4 全部闭合）；PLAN-FIRST-BLACKBOARD（阶段 A/B/C 全部闭合 2026-08-16） |
+| P0 | 当前工作集：设计已冻结，裁决后立即实施 | 评测冒烟暴露问题（P0-E 主项 7 项 + FUS-TOOL-SCOPE-CONTRACT 后续 2 项全部闭合 2026-08-18：ACAF 容器供应、console 工具名、计划视图步骤 ID、订单发放前拒绝入事件面、grep 搜索范围契约、plan_write 校验消息形状、actions 形状探针、list_dir 范围计数、grep files_searched 全结局探针，见 0a）；CLASSICAL-EXEC-ASSISTANT（生产组件，2026-08-16 用户裁决转正式，S1-S4 全部闭合）；PLAN-FIRST-BLACKBOARD（阶段 A/B/C 全部闭合 2026-08-16）；**FUS-BENCHMARK-FULL-EXEC（P0，实施完成待验证——2026-08-18 用户指示实施、暂不测试；验证闭环后闭合，见 0b）** |
 | P1 | 无需裁决，可与 P0 并行 | FUS-COMPONENT-REGISTER、GAP-WINDOWS-EVIDENCE、IMPL-DEEPSEEK-TRANSPORT / SEC-CREDENTIALS、ORZ-SESSION-CONTEXT-MONITOR |
 | P2 | 生产化决策门：需用户裁决 | IMPL-CONTROL-FABRIC（fail-closed 启用、Slice 3/4）、OPS-PROTOCOL |
 | P3 | 收尾 / 清理 | EVIDENCE-LOCAL-BROWSER、GATE-CHAIN、DC 剩余信号、V11-IMPL-003/007、工作区收尾 |
@@ -194,6 +194,57 @@
   orz-tools 全量 2761 通过、clippy 无新增告警。入口见
   [`grep 面实施审计`](audits/FUS_TOOL_SCOPE_CONTRACT_GREP_IMPL_AUDIT_2026-08-17.md)
   边界与后续项 / [TODO P0-E](../TODO.md) / ADR-0010 §14.23。
+
+### 0b. FUS-BENCHMARK-FULL-EXEC（P0；`pending`=实施完成待验证，2026-08-18 用户裁决实施）
+
+- 入口：[设计](BENCHMARK_FULL_EXEC_DESIGN_2026-08-18.md)；索引：
+  [CLI_PROJECT_INDEX.md](../CLI_PROJECT_INDEX.md)；ADR-0010 §14.24（v1.24）/
+  CLASSICAL-EXEC-ASSISTANT §13 / PLAN_FIRST_BLACKBOARD §4。
+- 来源（2026-08-17 TB2 冒烟，`D:\tb-eval\jobs\2026-08-17__23-29-44`，
+  make-doom-for-mips reward 0）：Benchmark 配置 shell-less 导致三层全关——
+  权限层按名级排除 shell 工具、探针层 `policy_allows_exec` 仅 Interactive、
+  console 注册表无 `run_terminal_cmd` 动作；2026-08-18 用户裁决 orz 完全体
+  （shell 不开放为模型直接工具，执行全经助理层订单，与 run_tests 同构）。
+- 实施路由登记：2026-08-18 实施前登记本项与 [TODO P0-F](../TODO.md)（设计轮
+  不动计数；本实施轮入账 1 项，未闭合 27 → 28，验证闭环后 28 → 27）。
+- **2026-08-18 实施完成（用户指示：实施、暂不测试）**，orz 子模块
+  `3f43478`（feat/fusion-architecture，6 文件 358+/24-，见 TODO P0-F）。
+  三层同时使能：
+  1. 权限层 `PermissionPolicy::Benchmark { allow_shell, allow_network }`
+     （默认 false/false 保持旧语义与旧测试）；决策表=ReadOnly 恒走 manager、
+     LocalMutation 非 shell AllowOnce（不变）、shell 工具与 SandboxEscape
+     （bash/sh/cmd/pwsh）在 allow_shell 下 AllowOnce、NetworkCall 在
+     allow_network 下 AllowOnce（web_fetch/web_search 直调面）、MCP 恒 deny、
+     工作区读限定不变。
+  2. 探针层 `ToolPolicy::BenchmarkFull`（`tool_policy()` 由
+     `Benchmark{allow_shell:true,..}` 映射；`policy_allows_exec` 增
+     BenchmarkFull；console `ActionBundle::allows` 加臂复用 benchmark 档）。
+  3. console 注册表 `workspace.run_terminal`（target=run_terminal_cmd、
+     kind=Host、bundle=READ_WRITE；input 镜像 BashToolInput：command/
+     description 必填、timeout 1–300000 可选默认 120000、is_background 可选
+     默认 false、additionalProperties=false、不暴露 env/cwd；响应
+     `{"output": string}` 信封；动作栏仍由探针收敛）。
+  4. CLI `--allow-shell`/`--allow-network`（headless benchmark 专用 →
+     ORZ_ALLOW_SHELL/ORZ_ALLOW_NETWORK，沿用 --allow-write 先例）；未带
+     `--allow-write` 时 exit 2（fail-closed，防静默无效）；`--help` 同步。
+  5. 适配器 `tb_agents/orz.py`：`allow_shell=True`（TB 本质 shell 评测）、
+     `allow_network = environment.network_policy.network_mode == PUBLIC`
+     （实施注记：取 trial 按 agent 阶段设置的有效 network_policy 而非
+     task_env_config 基线——89 题全 PUBLIC 结果一致、严格不更宽；
+     allow_internet 已废弃）；env 按存在性增 ORZ_ALLOW_SHELL/ORZ_ALLOW_NETWORK，
+     运行脚本 belt-and-braces 同传 `--allow-shell`/`--allow-network`。
+- 安全面不变：ACAF fail-closed 票据（command_exec_v1/network_v1）仍为最终
+  授权兜底；PermissionRequested/PermissionDecision、ACAF issued/consumed、
+  ToolStarted/ToolCompleted、console_order_written/rejected 审计链全部保留；
+  预算/墙钟/停滞守卫与模式门不变；「放开」=策略允许面，非审计面。
+- 待验证（2026-08-18 用户指示暂缓）：① orz cargo 测试（权限决策表、探针
+  映射、console 注册表投影、订单→run_host_tool→ACAF 票据路径）+ clippy
+  无新增告警；② Linux musl 重建（ORZ-BUILD-MOUNT-001，输出
+  `D:/tb-eval/orz-linux`）；③ 单题 make-doom-for-mips 复验（reward > 0、
+  journal 出现 `workspace.run_terminal` 订单→run_host_tool→ACAF
+  `command_exec` issued/consumed、无 400/无异常 policy_denied）；④ 2–3 题
+  交叉（build/run 类 compile-compcert、网络类 hf-model-inference）；
+  ⑤ `run_official_2.1.sh` 89 题 5 批。
 
 ### 0. 前置收尾（提交前需用户确认）
 

@@ -2038,3 +2038,17 @@ ADR §3.6 正文修订随实施登记。
    BACKLOG / TODO（本设计轮不动未闭合计数）。
    来源：2026-08-17 TB2 冒烟 `D:\tb-eval\jobs\2026-08-17__23-29-44`（reward 0）
    + 用户裁决（orz 完全体、shell 挂助理层）；CLI_PROJECT_INDEX 登记。
+   实施登记（2026-08-18，用户指示实施、暂不测试）：orz 子模块
+   3f43478（见 TODO P0-F）——权限层 `Benchmark{allow_shell,allow_network}` 决策表
+   （shell/SandboxEscape 在 allow_shell、NetworkCall 在 allow_network 下
+   AllowOnce；MCP 恒 deny；默认 false/false 保旧语义）；探针层
+   `ToolPolicy::BenchmarkFull` + `policy_allows_exec` +
+   `ActionBundle::allows` 复用 benchmark 档；console 注册表
+   `workspace.run_terminal`（READ_WRITE、input 镜像 BashToolInput 且不暴露
+   env/cwd）；CLI `--allow-shell`/`--allow-network`（须与 `--allow-write`
+   同用否则 exit 2）；适配器 `tb_agents/orz.py` allow_shell=True、
+   allow_network 按有效 agent-phase `network_policy.network_mode == PUBLIC`
+   透传（实施注记：取 environment.network_policy 而非 task_env_config 基线，
+   严格不更宽）。验证暂缓（用户指示）：orz 测试/clippy、Linux musl 重建、
+   单题 make-doom-for-mips 复验、2–3 题交叉、89 题分批；未闭合计数
+   27 → 28（BACKLOG 0b / TODO P0-F）。
