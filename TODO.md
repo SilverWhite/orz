@@ -35,12 +35,25 @@
 > （v0.2 `console_order_rejected`：Schema/verifier/fixtures 先行 + 生产者
 > 三处 pre_issue / 发放期 issue 路径发事件 + TUI 投影 + 测试断言，未闭合
 > 31 → 30）。
+> 2026-08-17 P0-E 第四/六项复核更正（用户复核 + 证据回查；纯文档/待办更正，
+> 计数不变，未闭合仍 30 项）——第四项 plan_write 放弃特化示例方向，收窄为校验
+> 错误消息形状明确；第六项 grep 归因更正为系统性工具层空结果（前两次 grep 实际
+> 未执行、其余 7 次全无匹配含实测存在的字符串），实施前置=容器内 grep 冒烟定位
+> 根因 + 结果补搜索范围报告。
+> 2026-08-17 grep 搜索范围方向再修正（用户复核定案；纯文档/待办更正，计数不变，
+> 未闭合仍 30 项）——撤回「补文本范围报告」方向：根因定位=finalize_grep 合并
+> 「搜索 0 文件」与「真无匹配」（ORZ 总传显式路径、rg 不打印 "No files were
+> searched" 警告、该分支死代码）；定案=grep 搜索信封（resolved root /
+> files_searched / files_skipped / match_count / truncated）+ 结局三型分型
+> （searched=0 显式报范围空，不叫 "No matches found"）+ 范围语义显式化（与只读
+> 工具可见集对齐或 --no-ignore/--hidden 开关）+ 读/搜/列三族统一契约
+> （ADR-0010 §14.23 v1.23 / FUS-TOOL-SCOPE-CONTRACT / 操作台设计 §12）。
 > 本快照只做计数与分组召回，明细以下方各分组勾选清单为唯一入口，不新增独立条目；
 > 后续扫描更新时同步替换本快照日期与计数。
 
 - 未闭合总数：**30 项**
   - P0-C：0 项（PLAN-FIRST 阶段 A/B/C 全部闭合，2026-08-16）
-  - P0 评测冒烟暴露：3 项（plan_write 提示词强化、actions 形状校验、grep 侦查纪律；GAP-ACAF-HARNESS-PASSTHROUGH、计划视图步骤 ID 渲染与订单发放前拒绝入事件面已闭合 2026-08-17）
+  - P0 评测冒烟暴露：3 项（plan_write 校验消息/形状机械明确、actions 形状校验、grep 搜索范围与空结果语义；GAP-ACAF-HARNESS-PASSTHROUGH、计划视图步骤 ID 渲染与订单发放前拒绝入事件面已闭合 2026-08-17）
   - P1 可并行审计/证据：9 项（组件登记 1、Windows 证据 3、DeepSeek 1、会话上下文监测 4）
   - P2 生产化决策门：5 项（Slice 3、Slice 4、ACAF 可选工程项、OPS 裁剪设计、OPS 生产接线裁决）
   - P3 收尾/清理：7 项（EVIDENCE-LOCAL-BROWSER、GATE-CHAIN、observed-scope 枚举、V11-IMPL-003、V11-IMPL-007、orz-host flaky、DC 硬信号 4/6）
@@ -81,9 +94,12 @@
   `run_invalidated{wallclock}` 正常收尾（对比旧运行 400 即死）。
   - 证据：`D:\tb-eval\jobs\2026-08-17__01-09-43`；journal events 1-18（plan-first
     全链后 run_failed）；错误 `Invalid 'tools[5].function.name' ... '^[a-zA-Z0-9_-]+$'`。
-- [ ] （P1 观察）plan_write 提示词/示例强化：首次模型把计划序列化为 JSON 字符串被拒
-  （`missing_required_field: plan` → refill_requested），重填对象后通过。提示词/示例
-  强化，并补回归测试（字符串计划 → 机械拒绝 → 对象重填）。
+- [ ] （P1 观察，2026-08-17 复核收窄）plan_write 校验消息/形状机械明确：首次模型把
+  计划序列化为 JSON 字符串被拒（`missing_required_field: plan` → refill_requested），
+  重填对象后通过——单点偶发（首个试跑第 1 次，重跑 4 次 plan_write 均为正确对象），
+  **放弃特化示例方向**（过拟合、无回归价值）。实施=校验错误消息写明形状（plan 必须
+  是含 plan_id / goal / steps[] 的对象，got string 时明示）+ 补回归测试（字符串计划
+  → 机械拒绝 → 对象重填 → 错误消息含形状说明）。
 - [ ] （P1 观察）`steps[].actions` 形状校验收紧：空字符串当前仍通过校验，动作形状校验偏宽。
 - [x] （新发现，冒烟重跑定位）计划视图渲染步骤 ID：`blackboard_read section=plan` 当前
     仅渲染 `[status] goal (actions: N; evidence: M)`，不渲染 `step.id`；步骤门要求订单
@@ -96,11 +112,30 @@
     （epoch 渲染单测、工具级 `blackboard_read section=plan` 回达、跨 epoch
     归档读）；orz 子模块 0d1e01b；orz-loop 436 / orz-tui 178 / orz-assurance
     152 / orz-bin 全量通过、clippy 无新增告警、manifest 1401、仓库门禁 valid。
-- [ ] （新观察，用户确认一并处理）grep 侦查纪律与空结果解读：冒烟重跑中模型用不存在的
-  目标字符串（`doomgeneric_mips|frame\.bmp`）grep 全树，空结果（exit_code=1，工具行为
-  正确）被过度泛化为「/app 无 C 源码」，一度错误转向。强化方向=提示词/计划框架补侦查
-  纪律（先 list_dir 建立文件清单、pattern 用实际存在的字符串、空结果≠无文件）+ 注册
-  板块 grep 动作最小参数提示补空结果语义 + 回归验证（重跑 round 数/计划重写次数下降）。
+- [ ] （新观察，2026-08-17 复核更正归因 + **用户复核定案**）grep 搜索范围与空结果
+  语义：冒烟重跑中两次 `doomgeneric_mips|frame\.bmp` grep 实际被 plan/console 门
+  机械拒绝未执行（journal 序列 24/38）；执行的 7 次 grep 全部无匹配（wall_ms
+  1–36ms），含 vm.js 中实测存在的 entryPoint/symbolName/sectionsToLoad/
+  syscallNum/runElf/program counter。**根因在工具层**：`finalize_grep` 将
+  exit 1 + 空 stdout（或 exit 2 + "No files were searched"）统一转为
+  "No matches found"，而 ORZ 总传显式路径、rg 不打印 "No files were searched"
+  警告（该分支死代码），「rg 搜索 0 文件」（ignore/隐藏/glob/二进制/超限过滤）
+  与「真无匹配」机械不可分；模型将浅层 list_dir 与系统性空 grep 叠加泛化为
+  「/app 无 C 源码」错误转向。**撤回「补文本范围报告」方向**，定案=工具契约
+  升级：
+  - [ ] grep 返回结构化搜索信封：`{resolved_root, files_searched,
+    files_skipped, match_count, truncated}`，机械来源 `rg --stats`（stderr
+    解析）或 `--json`，不依赖模型自报；
+  - [ ] 结局三型分型：searched>0 且有匹配 / searched>0 且无匹配（真无匹配）/
+    searched=0（范围空，显式报过滤类别，绝不叫 "No matches found"）；
+  - [ ] 搜索范围语义显式化：grep 默认与只读工具可见集对齐，或显式
+    `--no-ignore`/`--hidden` 开关（与 glob 同进参数面），二选一按容器内冒烟
+    结果定；skipped 计数必须可见；
+  - [ ] 契约泛化：读/搜/列三族统一（list_dir 补 ignored/truncated 计数）；
+    exit 2 语法错误保持硬失败（既有行为保留）；
+  - [ ] 实施前置=容器内 grep 冒烟（对已知字符串断言匹配 + `rg --debug` 定位
+    过滤来源）；回归验证（重跑 round 数/计划重写次数下降 + searched=0 分型
+    断言）；模型侧侦查纪律与注册板块 grep 参数提示降为次要契约提示。
 - [x] （新观察，用户 2026-08-17 指示处理）订单发放前拒绝入事件面：冒烟重跑中
   ORD-000011（workspace.run_tests，`arguments:{}`）写入后发放前被拒，失败只进结果栏
   receipt + TraceStore（`consume_console_order` 不写 journal 事件），journal 无结构化
@@ -380,6 +415,24 @@
 - [x] S7 复查遗留闭合（2026-08-15，v1.15⑨）：F2 归档写盘原子化（临时文件+rename、恢复降序回退）、F4 跨进程 `.claim-<n>` 原子占号、F5 归档目录单一来源、F6 非法 epoch 显式报错、F7 归档失败入事件面（新 v0.2 `epoch_archive_write_failed`）、F9 `persisted_at` 更名（serde alias 兼容）、F10 设计 §5 措辞对齐；BACKLOG 6e / ADR §14.15 ⑨ / 审计 §7 同步。
 
 入口：[设计](docs/BLACKBOARD_PLAN_EPOCH_DESIGN_2026-08-14.md) / [ADR-0010 §14.15](adr/ADR-0010-fusion-runtime-and-agent-architecture.md) / [实施审计](docs/audits/GAP_BLACKBOARD_PLAN_EPOCH_IMPL_AUDIT_2026-08-14.md) / [BACKLOG 6e](docs/BACKLOG_AND_PRIORITIES.md)。
+
+### ORZ-LARGE-FILE-READ-CONTRACT（`approved`；P1，2026-08-17 设计定案，实施待排）
+
+- [ ] 读取工具契约：超过粗门（默认 16KB、可配 8–32KB，env/TOML 口子）的文件返回
+  读取句柄信封（path / size / encoding / content_sha256 / 可用范围 / 有界预览
+  ≤2–4KB / truncated / offset 续读指针），不返回全文；小文件保持全文一次返回；
+  精门=50K 单轮注入预算兜底。
+- [ ] 模型面契约提示：grep/结构提取优先、证据关键文件才全文、大文件 offset 分段、
+  grep 空结果语义（空结果 ≠ 无文件）——提示词策略化读取落成工具契约。
+- [ ] 黑板/结果栏只放指针（path/document_id/size/digest/offset），内容本体留盘上/
+  内容寻址证据区；维持不新增自由随记区。
+- [ ] 测试（阈值边界、信封字段完整性、offset 续读、小文件全文路径）+ 实施审计 +
+  BACKLOG/TODO/索引状态同步。
+
+入口：[设计 §11](docs/CLASSICAL_EXECUTION_ASSISTANT_DESIGN_2026-08-13.md) /
+[黑板设计 §4](docs/PLAN_FIRST_BLACKBOARD_DESIGN_2026-08-15.md) /
+[ADR-0010 §14.22](adr/ADR-0010-fusion-runtime-and-agent-architecture.md) /
+[BACKLOG 6f](docs/BACKLOG_AND_PRIORITIES.md)。
 
 ## P2 — 生产化决策门
 

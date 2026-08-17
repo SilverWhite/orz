@@ -9,7 +9,7 @@
 
 | 优先级 | 含义 | 未闭合项 |
 |---|---|---|
-| P0 | 当前工作集：设计已冻结，裁决后立即实施 | 评测冒烟暴露问题（P0-E 剩余三项：plan_write 提示词强化、actions 形状校验、grep 侦查纪律；ACAF 容器供应、计划视图步骤 ID 渲染与订单发放前拒绝入事件面已闭合 2026-08-17，见 0a）；CLASSICAL-EXEC-ASSISTANT（生产组件，2026-08-16 用户裁决转正式）；PLAN-FIRST-BLACKBOARD（阶段 A/B/C 全部闭合 2026-08-16） |
+| P0 | 当前工作集：设计已冻结，裁决后立即实施 | 评测冒烟暴露问题（P0-E 剩余三项：plan_write 校验消息/形状机械明确（2026-08-17 复核放弃特化示例）、actions 形状校验、grep 搜索范围与空结果语义（2026-08-17 复核定案=搜索信封契约，见 0a 项 5）；ACAF 容器供应、计划视图步骤 ID 渲染与订单发放前拒绝入事件面已闭合 2026-08-17，见 0a）；CLASSICAL-EXEC-ASSISTANT（生产组件，2026-08-16 用户裁决转正式）；PLAN-FIRST-BLACKBOARD（阶段 A/B/C 全部闭合 2026-08-16） |
 | P1 | 无需裁决，可与 P0 并行 | FUS-COMPONENT-REGISTER、GAP-WINDOWS-EVIDENCE、IMPL-DEEPSEEK-TRANSPORT / SEC-CREDENTIALS、ORZ-CACHE-CONTEXT-COST、ORZ-SESSION-CONTEXT-MONITOR |
 | P2 | 生产化决策门：需用户裁决 | IMPL-CONTROL-FABRIC（fail-closed 启用、Slice 3/4）、OPS-PROTOCOL |
 | P3 | 收尾 / 清理 | EVIDENCE-LOCAL-BROWSER、GATE-CHAIN、DC 剩余信号、V11-IMPL-003/007、工作区收尾 |
@@ -74,13 +74,21 @@
   `[status] goal (actions: N; evidence: M)`，不渲染步骤 `id`；步骤门又要求订单
   `step_id` 精确绑定，模型只能猜测（轨迹 13/18/23 步自述 "the plan view strips them /
   my guessed step_id values get rejected"），导致大量读板/计划重写轮次（4 次 plan_write）；
-  ② grep 侦查低效——模型用不存在的目标字符串（`doomgeneric_mips|frame\.bmp`）grep 全树，
-  空结果被过度泛化为「/app 无 C 源码」，一度错误转向；③ 预算耗尽于侦查/步骤门摩擦，
-  未及完成 ELF 构建（vm.js 契约已正确读出，最终发起 search_replace 但未闭环）。
+  ② grep 系统性空结果（2026-08-17 复核更正归因）——轨迹中两次
+  `doomgeneric_mips|frame\.bmp` grep 实际被 plan/console 门机械拒绝、未执行
+  （journal 序列 24/38）；执行的 7 次 grep 全部无匹配（wall_ms 1–36ms，含 vm.js
+  实测存在的 entryPoint/syscallNum/runElf 等），模型将浅层 list_dir 与系统性空
+  grep 叠加泛化为「/app 无 C 源码」并一度错误转向（疑工具层搜索范围/路径解析异常，
+  非模型纪律问题）；③ 预算耗尽于侦查/步骤门摩擦，未及完成 ELF 构建（vm.js 契约已
+  正确读出，最终发起 search_replace 但未闭环）。
 - **P0-E 下一步实施项**（2026-08-17 对齐确认）：
   1. GAP-ACAF-HARNESS-PASSTHROUGH 实施（用户裁决：跑分保持 ACAF 强制，容器内供应）；
-  2. plan_write 提示词/示例强化（P1 观察①：首次模型把计划序列化为 JSON 字符串被拒
-     `missing_required_field: plan` → refill，重填对象后通过）；
+  2. plan_write 校验消息/形状机械明确（P1 观察①：首次模型把计划序列化为 JSON 字符串
+     被拒 `missing_required_field: plan` → refill，重填对象后通过；**2026-08-17
+     用户复核：放弃特化示例方向**——单点偶发（重跑 4 次 plan_write 均为正确对象），
+     示例强化属过拟合；改为校验错误消息写明形状（plan 必须是含 plan_id/goal/
+     steps[] 的对象，got string 时明示）并补回归测试：字符串计划 → 机械拒绝 →
+     对象重填）；
   3. `steps[].actions` 形状校验收紧（P1 观察②：实证审计空/宽松形状并补探针测试）；
   4. **计划视图渲染步骤 ID**（新发现，步骤门模型面闭环：`section=plan` 补 `step.id`，
      模型无需猜测；ADR-0010 §14.21 登记；**2026-08-17 闭合**——`epoch.rs` plan 段
@@ -89,10 +97,27 @@
      测试三层（epoch 渲染单测 / 工具级回达 / 跨 epoch 归档读），orz-loop 436、
      orz-tui 178、orz-assurance 152、orz-bin 全量通过，clippy 无新增告警，
      manifest 1401、仓库门禁 valid；orz 子模块 0d1e01b）；
-  5. **grep 侦查纪律与空结果解读**（新观察，用户 2026-08-17 确认一并处理）：提示词/
-     计划框架补侦查纪律（先 list_dir 建清单、pattern 用实际存在的字符串、空结果≠无
-     文件）+ 注册板块 grep 参数提示补空结果语义 + 回归验证（重跑 round 数/计划重写
-     次数下降）；
+  5. **grep 搜索范围与空结果语义**（新观察，用户 2026-08-17 确认一并处理；
+     **2026-08-17 复核更正归因 + 用户复核定案**——撤回「补文本范围报告」方向，
+     定案=工具契约升级）：两次 `doomgeneric_mips|frame\.bmp` grep 实际被门机械
+     拒绝未执行；执行的 7 次 grep 全部无匹配（wall_ms 1–36ms），含 vm.js 实测存在
+     的 entryPoint/symbolName/sectionsToLoad/syscallNum/runElf/program counter。
+     根因在工具层：`finalize_grep` 将 exit 1 + 空 stdout（或 exit 2 +
+     "No files were searched"）统一转为 "No matches found"，而 ORZ 总传显式路径、
+     rg 不打印 "No files were searched" 警告（该分支死代码），「rg 搜索 0 文件」
+     （ignore/隐藏/glob/二进制/超限过滤干净）与「真无匹配」机械不可分。定案实施
+     方向=grep 返回结构化搜索信封（resolved root / files_searched /
+     files_skipped / match_count / truncated，机械来源 `rg --stats` 或
+     `--json`）+ 结局三型分型（searched>0 有匹配 / searched>0 无匹配=真无匹配 /
+     searched=0=范围空，显式报过滤类别，不叫 "No matches found"）+ 搜索范围语义
+     显式化（grep 默认与只读工具可见集对齐，或显式 `--no-ignore`/`--hidden`
+     开关，二选一按容器内冒烟结果定）+ 契约泛化（读/搜/列三族统一，list_dir 补
+     ignored/truncated 计数）；exit 2 语法错误保持硬失败。实施前置=容器内 grep
+     冒烟（对已知字符串断言匹配 + `rg --debug` 定位过滤来源）；回归验证（重跑
+     round 数/计划重写次数下降 + searched=0 分型断言）。设计登记 ADR-0010
+     §14.23（v1.23）/ 操作台设计 §12 / FUS-TOOL-SCOPE-CONTRACT；模型侧侦查纪律
+     （先 list_dir 建清单、pattern 用实测存在的字符串、空结果≠无文件）与注册板块
+     grep 参数提示降为次要契约提示；
   6. **订单发放前拒绝入事件面**（新观察，用户 2026-08-17 指示处理；**2026-08-17 已闭合**）：
      冒烟重跑中 ORD-000011（workspace.run_tests，`arguments:{}`）写入后发放前被拒，
      失败只进结果栏 receipt + TraceStore（`consume_console_order` 不写 journal 事件），
@@ -535,6 +560,26 @@
   [实施审计](audits/GAP_BLACKBOARD_PLAN_EPOCH_IMPL_AUDIT_2026-08-14.md)；
   [TODO](../TODO.md)。
 
+### 6f. ORZ-LARGE-FILE-READ-CONTRACT（`approved`；P1，2026-08-17 设计定案）
+
+- 定位：大文件读取工具契约有界返回——读取超过粗门（默认 16KB、可配 8–32KB、
+  env/TOML 口子）的文件返回读取句柄信封（path / size / encoding /
+  content_sha256 / 可用范围 / 有界预览 ≤2–4KB / truncated / offset 续读指针），
+  不返回全文；小文件保持全文一次返回（一次往返）；精门=单轮注入预算
+  （默认 50K、`ORZ_MAX_INJECT_TOKENS_PER_ROUND`）为最终兜底。
+- 决策依据：全文返回迫使模型全量接受（最坏情况中文 128KB ≈ 40K+ token ≈ 预算
+  80–90%，仍撞注入层事后拒批）；语义适配留模型、助理层只提供机械原语；注入层
+  事后拒批前移为契约层事先有界返回；黑板承担内容会膨胀 epoch 快照并产生过期
+  副本（2026-08-17 用户裁决定稿）。
+- 状态：**设计已定案（2026-08-17 用户裁决），实施待排**——工具契约（读取句柄
+  信封）+ 阈值配置（16KB 默认、8–32KB 可配）+ 模型面契约提示（grep/结构优先、
+  offset 分段、空结果语义）+ 黑板/结果栏只放指针 + 测试与实施审计 +
+  BACKLOG/TODO/索引状态同步。
+- 入口：[设计 §11](CLASSICAL_EXECUTION_ASSISTANT_DESIGN_2026-08-13.md) /
+  [黑板设计 §4](PLAN_FIRST_BLACKBOARD_DESIGN_2026-08-15.md) /
+  [ADR-0010 §14.22](../adr/ADR-0010-fusion-runtime-and-agent-architecture.md) /
+  [TODO](../TODO.md)。
+
 ## P2 — 生产化决策门
 
 ### 7. IMPL-CONTROL-FABRIC（`partial`）
@@ -593,6 +638,13 @@
 
 ## 变更记录
 
+- 2026-08-17：大文件读取契约设计定案登记（用户裁决；纯文档、未实施）——读取
+  工具契约有界返回：超过粗门（默认 16KB、可配 8–32KB）的文件返回读取句柄信封
+  （path/size/encoding/content_sha256/可用范围/有界预览 ≤2–4KB/truncated/offset
+  续读指针）而非全文；精门=50K 单轮注入预算兜底；小文件保持全文一次返回；语义
+  适配留模型、助理层只提供机械原语；黑板/结果栏只放指针不放内容本体。ADR-0010
+  v1.22/§14.22、FUS-LARGE-FILE-READ-CONTRACT `current-design`、BACKLOG 6f /
+  TODO P1。未闭合计数不变。
 - 2026-08-17：订单发放前拒绝入事件面项登记（用户指示处理）——冒烟重跑 ORD-000011
   （workspace.run_tests，arguments={}）写入后发放前被拒，失败只进结果栏 receipt +
   TraceStore（`consume_console_order` 未写 journal 事件），journal 无结构化拒绝记录。
@@ -603,6 +655,13 @@
   目标字符串 grep 全树、空结果被过度泛化为「/app 无 C 源码」；工具行为正确（无匹配
   exit_code=1），属侦查策略/反馈解读问题。实施方向：提示词/计划框架侦查纪律 + 注册
   板块 grep 参数提示空结果语义 + 回归验证。P0-E 5 项、未闭合 32 项。
+- 2026-08-17：grep 项复核更正登记（用户同意判断；纯文档/待办更正、无代码变更）——
+  上述归因经 journal/trajectory/orz.txt 证据复核不成立：两次
+  `doomgeneric_mips|frame\.bmp` grep 实际被 plan/console 门拒绝未执行（journal
+  序列 24/38）；执行的 7 次 grep 全部无匹配（wall_ms 1–36ms），含 vm.js 实测存在的
+  entryPoint/syscallNum/runElf 等字符串 → 系统性工具层空结果，疑搜索范围/路径解析
+  异常；「工具行为正确」撤回。同轮按用户复核放弃 plan_write 特化示例方向，改为校验
+  消息形状明确（错误消息写明 plan 对象形状）。P0-E 仍 3 项、未闭合仍 30 项。
 - 2026-08-17：计划视图渲染步骤 ID 实施闭合——`blackboard_read section=plan`
   每步行首渲染 `step.id`（`- [状态] <step_id>: <目标> (actions: N; evidence: M)`，
   live 视图与归档 epoch 读同源）+ 系统提示词状态行当前步补 `[step_id]` +

@@ -2,7 +2,7 @@
 
 ORZ 是一个本地优先、保障优先的 CLI Agent。项目采用融合架构：尽量复用 Grok Build 等成熟组件，同时由 ORZ 自己拥有 Agent control plane、循环编排、保障事件、权限边界和可验证状态链。
 
-> 当前设计：[`ADR-0010`](adr/ADR-0010-fusion-runtime-and-agent-architecture.md)（冻结基线 v1.1；2026-08-10 至 2026-08-14 追加 v1.2–v1.14 补写），`accepted / frozen`。
+> 当前设计：[`ADR-0010`](adr/ADR-0010-fusion-runtime-and-agent-architecture.md)（冻结基线 v1.1；2026-08-10 至 2026-08-17 追加 v1.2–v1.23 补写），`accepted / frozen`。
 >
 > 当前实现：`partial`。现有 Rust workspace 尚未完全符合冻结设计，已知差距集中登记在 [`CLI_PROJECT_INDEX.md`](CLI_PROJECT_INDEX.md) 和冻结审计中。
 >

@@ -423,3 +423,112 @@
   工具栏刷新绑定黑板模型栏；**2026-08-16 实施闭合**，审计见
   `docs/audits/GAP_PLAN_FIRST_STAGE_B_IMPL_AUDIT_2026-08-16.md`）、C（助理层
   实战验证后模型面收敛为黑板+只读核查；direct 受控降级保留，不永久移除）。
+
+## 11. 大文件读取契约（2026-08-17 用户裁决）
+
+> 用户裁决（2026-08-17）：语义适配留在模型，助理层只提供机械原语（引用 + 范围读），
+> 不做语义总结；超过粗门的文件返回读取句柄信封而非全文；黑板只放指针、不放内容本体。
+> 权威登记 ADR-0010 §14.22（v1.22）；实施路由 BACKLOG 6f / TODO P1。
+> 状态：**定案**（2026-08-17 用户裁决；纯设计登记，未实施）。
+
+### 11.1 问题与原则
+
+- 现状：读取工具对文件返回全部内容，模型只能全量接受；最坏情况（中文 UTF-8，
+  1 字符 ≈ 1 token）128KB ≈ 40K+ token，约占单轮 50K 注入预算 80–90%，仍会撞上
+  注入层事后拒批，「全文返回」路径不可持续。
+- 原则：助理层不理解动作语义（§1 不变量），语义适配（判断哪些内容相关、如何组织
+  证据）留在模型；助理层只提供机械的结构化读取原语与引用。
+
+### 11.2 读取句柄信封（工具契约层有界返回）
+
+- 读取超过粗门的文件时，读取工具返回读取句柄信封，不返回全文：
+  `{path, size, encoding, content_sha256, 可用范围, 有界预览, truncated, offset 续读指针}`。
+- 有界预览 ≤2–4KB；`truncated` 标志 + `offset` 续读指针供模型按需续读。
+- 小文件（低于粗门）保持全文一次返回（一次往返，不增加工具轮开销）。
+- 粗门默认 16KB、可配 8–32KB（env/TOML 口子）；精门=单轮注入预算
+  （默认 50K、`ORZ_MAX_INJECT_TOKENS_PER_ROUND`）为最终兜底。
+- 设计意图：把「注入层事后拒批」前移为「契约层事先有界返回」，避免先生成全量再被
+  预算拦截；与 pdf_read 的 `document_id` + `page_range` 先例对齐
+  （文本文件用 path + offset）。
+
+### 11.3 模型侧结构化读取
+
+- 模型对超过粗门的文件采用结构化读取：grep/结构提取优先 → 证据关键文件才全文 →
+  大文件 offset 分段；既有提示词策略化读取（ADR-0010 §3.6 v1.9）落成工具契约，
+  不再依赖纯提示词纪律。
+- 读取句柄信封是模型读面的机械契约（console 默认面与 direct 一致）：拿到信封后
+  用 `read_file(offset)` / `grep` 自取所需范围；grep 空结果语义不再依赖纯提示词
+  纪律——grep 工具契约升级为搜索信封（§12，2026-08-17 用户复核定案），
+  「搜索 0 文件」与「真无匹配」机械分型。
+
+### 11.4 黑板边界：只存指针、不存内容
+
+- 黑板是控制面状态视图，不是内容缓冲；文件全文等大内容不得写入黑板。
+- 黑板/结果栏只放指针（path/document_id/size/digest/offset），内容本体留在盘上
+  或内容寻址证据区（如 pdf-evidence 管线），避免 epoch 快照膨胀、retention/恢复
+  成本上升与过期副本；维持「不新增自由随记区」约束（ADR-0010 §3.6）。
+- 与既有机制一致：压缩动作台账行（工具/目标/结果指针-digest）、黑板路径槽
+  （Top-40 + 5K 字符 + 溢出指针）均为指针模式先例。
+
+### 11.5 登记
+
+- ADR-0010 §14.22（v1.22）；FUS-LARGE-FILE-READ-CONTRACT（`current-design`）；
+  `docs/PLAN_FIRST_BLACKBOARD_DESIGN_2026-08-15.md` §4（读面机械契约）；
+  BACKLOG 6f / TODO P1（实施路由）。
+
+## 12. 搜索范围契约（grep 搜索信封）（2026-08-17 用户复核定案）
+
+> 用户复核（2026-08-17）：撤回「补文本范围报告」的方向——那只是让空结果更可
+> 诊断，不修搜索本身，且局限在 grep 单点；定案=工具契约升级为搜索信封，与 §11
+> 读取信封同属「范围/截断必须机械报告」契约家族。权威登记 ADR-0010 §14.23
+> （v1.23）；实施路由 BACKLOG 0a / TODO P0-E。
+> 状态：**定案**（2026-08-17 用户复核；纯设计登记，未实施）。
+
+### 12.1 问题与证据
+
+- 冒烟重跑（`D:\tb-eval\jobs\2026-08-17__03-48-57`）中 7 次 grep 全部
+  exit_code=1、wall 1–36ms；pattern 含 vm.js 实测存在的字符串
+  （syscallNum/entryPoint/sectionsToLoad/runElf 等），read_file/list_dir 正常——
+  说明 rg 没有搜到文件，而非「无匹配」。
+- 根因（工具层）：`finalize_grep` 把 exit 1 + 空 stdout（或 exit 2 +
+  "No files were searched"）统一转成 "No matches found"；ORZ 总是显式传路径，
+  而 ripgrep 只在隐式路径时打印 "No files were searched" 警告，该分支在 ORZ 下
+  是死代码——「搜索 0 文件」（ignore/隐藏/glob/二进制/超限过滤干净）与
+  「真无匹配」被合并。
+- 后果：模型收到空结果只能猜（轨迹中自述「可能在工作区外被限制」），并叠加浅层
+  list_dir 把空结果泛化为「无 C 源码」错误转向。
+
+### 12.2 搜索信封（工具契约层范围报告）
+
+- grep 返回结构化搜索信封：`{resolved_root, files_searched, files_skipped,
+  match_count, truncated}`；机械来源 `rg --stats`（stderr 解析）或 `--json`，
+  不依赖模型自报。
+- 结局三型分型：
+  - searched>0 且 match_count>0：正常命中；
+  - searched>0 且 match_count=0：真无匹配；
+  - searched=0：范围空——显式报「resolved root 下候选全部被过滤」及过滤类别
+    （ignore/隐藏/glob/二进制/超限），绝不表述为 "No matches found"。
+- exit 2 语法错误（非法正则/glob/type）保持硬失败（既有行为保留，不并入空结果）。
+
+### 12.3 搜索范围语义
+
+- 现状缺口：read_file/list_dir 可见而 grep 全空，三工具可见集不一致；rg 默认
+  尊重 ignore/隐藏文件，read_file/list_dir 不。
+- 定案方向（实施时按容器内冒烟结果定其一）：
+  a. grep 默认与只读工具可见集对齐（关 ignore/隐藏过滤），或
+  b. 保留 rg 默认语义但显式提供 `--no-ignore`/`--hidden` 开关（与 glob 同进参数
+     面），且 skipped 计数必须可见。
+- 模型侧：空结果不再等于「无文件」；范围空时按信封反馈换范围（--no-ignore/换
+  路径），先 list_dir 建清单仍为次要契约提示。
+
+### 12.4 泛化
+
+- 「范围/截断必须机械报告」是工具契约家族约束：读取信封（§11/ADR-0010 §14.22）、
+  搜索信封（本节/§14.23）、目录信封（list_dir 补 ignored/truncated 计数，随实施）——
+  同一模式，避免逐工具打补丁。
+
+### 12.5 登记
+
+- ADR-0010 §14.23（v1.23）；FUS-TOOL-SCOPE-CONTRACT（`current-design`）；
+  `docs/PLAN_FIRST_BLACKBOARD_DESIGN_2026-08-15.md` §4（读面机械契约）；
+  BACKLOG 0a / TODO P0-E（实施路由）。

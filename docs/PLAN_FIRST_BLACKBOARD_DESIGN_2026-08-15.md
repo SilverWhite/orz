@@ -142,6 +142,24 @@ persona 机制：
 > 只读豁免：`read_file` / `list_dir` / `grep` 等只读核查工具保留；执行/变更/shell/
 > 检索/子代理等执行与发送面隐藏。
 
+读面机械契约（2026-08-17 用户裁决，大文件读取契约）：工作区只读读取超过粗门
+（默认 16KB、可配 8–32KB）的文件返回读取句柄信封（path / size / encoding /
+content_sha256 / 可用范围 / 有界预览 ≤2–4KB / truncated / offset 续读指针），
+不返回全文；小文件保持全文一次返回。模型用 `read_file(offset)` / `grep` 做结构化
+续读，语义适配留在模型（助理层只提供机械原语）。黑板/结果栏只放指针
+（path/document_id/size/digest/offset），不放内容本体；内容留在盘上或内容寻址
+证据区；维持「不新增自由随记区」约束（ADR-0010 §3.6）。详见
+[`CLASSICAL_EXECUTION_ASSISTANT_DESIGN_2026-08-13.md`](CLASSICAL_EXECUTION_ASSISTANT_DESIGN_2026-08-13.md)
+§11 / ADR-0010 §14.22（v1.22）。
+
+grep 搜索范围契约（2026-08-17 用户复核定案）：grep 返回结构化搜索信封
+（resolved root / files_searched / files_skipped / match_count / truncated），
+「搜索 0 文件」与「真无匹配」机械分型（searched=0 显式报范围空与过滤类别，不叫
+"No matches found"）；「范围/截断必须机械报告」为读/搜/列三族统一契约（与读取
+信封同构，list_dir 补 ignored/truncated 计数）。详见
+[`CLASSICAL_EXECUTION_ASSISTANT_DESIGN_2026-08-13.md`](CLASSICAL_EXECUTION_ASSISTANT_DESIGN_2026-08-13.md)
+§12 / ADR-0010 §14.23（v1.23）。
+
 ## 5. 分步计划 Schema（草案）
 
 ```json
@@ -322,3 +340,4 @@ LangChain「一步≈一次工具调用 + 有界重规划」）——上限是�
 - FUS-BLACKBOARD-PLAN-EPOCH（计划落板与轮换）；
 - FUS-TOOL-PROBE（注册板块=探针投影）。
 - FUS-CONSOLE-DUAL-MODE（双模式定案，§7）。
+- FUS-LARGE-FILE-READ-CONTRACT（大文件读取契约，2026-08-17 用户裁决；§4 读面机械契约）。
