@@ -113,6 +113,14 @@ const MAX_GLOBAL_ITEMS: usize = 100_000;
 /// the cutoff notice's shared count stays correct whichever cap triggers truncation.
 const MAX_SEED_ITEMS: usize = 100_000;
 const _: () = assert!(MAX_SEED_ITEMS == MAX_GLOBAL_ITEMS);
+
+/// FUS-TOOL-SCOPE-CONTRACT (directory envelope): counting cap for the
+/// scope-count walks (visible total and the unfiltered "ignored" walk).
+/// Pinned to the sum of the two materialization caps because the visible
+/// count is produced by two walks (depth-1 seed + deep walk); the unfiltered
+/// walk counts the whole tree in one pass. Counts at or below this cap are
+/// exact; beyond it they are documented lower bounds.
+const SCOPE_COUNT_CAP: u64 = (MAX_SEED_ITEMS + MAX_GLOBAL_ITEMS) as u64;
 #[derive(Debug, Default)]
 struct DirAccum {
     total_files: usize,
@@ -290,13 +298,16 @@ fn list_dir_walk_builder(root: &Path, respect_gitignore: bool) -> ignore::WalkBu
     builder
 }
 /// Seed depth-1 before budgeted walk so later siblings survive `MAX_GLOBAL_ITEMS` starvation.
-/// Returns `true` if the seed hit `max_seed` (more depth-1 entries exist).
+/// Returns `(truncated, depth1_total)`; `truncated` is true if the seed hit
+/// `max_seed` (more depth-1 entries exist). `depth1_total` is the number of
+/// depth-1 entries counted (a lower bound when `truncated`, since counting
+/// stops at the same cap as materialization).
 fn seed_depth1_children(
     root: &Path,
     root_node: &mut DirNode,
     respect_gitignore: bool,
     max_seed: usize,
-) -> bool {
+) -> (bool, u64) {
     let walker = list_dir_walk_builder(root, respect_gitignore)
         .max_depth(Some(1))
         .build();
@@ -314,23 +325,28 @@ fn seed_depth1_children(
         };
         seed_count += 1;
         if seed_count > max_seed {
-            return true;
+            return (true, seed_count as u64);
         }
         root_node.add_item(&[name], ft.is_dir());
     }
-    false
+    (false, seed_count as u64)
 }
 /// Depth-1 seed first, then deep walk; only depth ≥ 2 counts toward `max_items`.
-fn build_tree(root: &Path, respect_gitignore: bool) -> (DirNode, bool) {
+///
+/// Returns `(tree, truncated, visible_total)` where `visible_total` is the
+/// number of entries the filtered walker yields (seed depth-1 + deep depth ≥ 2),
+/// bounded by the two materialization caps (each ≤ 100_001); when `truncated`
+/// is true it is a lower bound.
+fn build_tree(root: &Path, respect_gitignore: bool) -> (DirNode, bool, u64) {
     build_tree_with_limit(root, respect_gitignore, MAX_GLOBAL_ITEMS)
 }
 fn build_tree_with_limit(
     root: &Path,
     respect_gitignore: bool,
     max_items: usize,
-) -> (DirNode, bool) {
+) -> (DirNode, bool, u64) {
     let mut root_node = DirNode::new(0);
-    let seed_truncated =
+    let (seed_truncated, seed_total) =
         seed_depth1_children(root, &mut root_node, respect_gitignore, MAX_SEED_ITEMS);
     let walker = list_dir_walk_builder(root, respect_gitignore).build();
     let mut item_count: usize = 0;
@@ -358,7 +374,42 @@ fn build_tree_with_limit(
         root_node.add_item(&parts, ft.is_dir());
     }
     root_node.sort_recursive();
-    (root_node, seed_truncated || walk_truncated)
+    (
+        root_node,
+        seed_truncated || walk_truncated,
+        seed_total + item_count as u64,
+    )
+}
+
+/// FUS-TOOL-SCOPE-CONTRACT (directory envelope): count every entry under
+/// `root` without the walker's standard filters (hidden files and ignore
+/// rules), so the `ignored` count is mechanical:
+/// `unfiltered_total - visible_total`. Counting stops at `SCOPE_COUNT_CAP`
+/// (returns the capped value, a documented lower bound).
+fn count_unfiltered_entries(root: &Path) -> (u64, bool) {
+    let mut builder = ignore::WalkBuilder::new(root);
+    builder
+        .standard_filters(false)
+        .hidden(false)
+        .parents(false)
+        .ignore(false)
+        .git_ignore(false)
+        .git_global(false)
+        .git_exclude(false);
+    let mut count: u64 = 0;
+    let mut capped = false;
+    for entry in builder.build() {
+        let Ok(entry) = entry else { continue };
+        if entry.depth() == 0 {
+            continue;
+        }
+        count += 1;
+        if count > SCOPE_COUNT_CAP {
+            capped = true;
+            break;
+        }
+    }
+    (count, capped)
 }
 /// BFS-expand directories within the character budget, return rendered body.
 fn budget_expand(
@@ -534,14 +585,17 @@ impl xai_tool_runtime::Tool for ListDirTool {
                 )),
             });
         }
-        let body = if is_legacy {
+        // FUS-TOOL-SCOPE-CONTRACT (directory envelope): `(listed, ignored,
+        // truncated)` for the current renderer; `None` on the legacy contract.
+        let (body, scope) = if is_legacy {
             let max_output_bytes = resources
                 .lock()
                 .await
                 .get::<Params<ListDirParams>>()
                 .and_then(|p| p.0.max_output_chars)
                 .unwrap_or(crate::DEFAULT_TOOL_OUTPUT_BYTES);
-            versions::legacy_0_4_10::render_legacy(&path, max_output_bytes)
+            let body = versions::legacy_0_4_10::render_legacy(&path, max_output_bytes);
+            (body, None)
         } else {
             let (max_output_chars, respect_gitignore, truncation_notice) = {
                 let res = resources.lock().await;
@@ -553,24 +607,59 @@ impl xai_tool_runtime::Tool for ListDirTool {
                 let truncation_notice = root_truncation_notice(res.get::<TemplateRenderer>());
                 (max_output_chars, respect_gitignore, truncation_notice)
             };
-            let (mut tree, truncated) = build_tree(&path, respect_gitignore);
-            budget_expand(
+            let (mut tree, truncated, visible_total) = build_tree(&path, respect_gitignore);
+            let body = budget_expand(
                 &mut tree,
                 max_output_chars,
                 TOP_K_EXTENSIONS,
                 truncated,
                 &truncation_notice,
+            );
+            // Each rendered entry is an indented "- " line; summaries and
+            // notices are not entries.
+            let listed = body
+                .lines()
+                .filter(|l| l.trim_start().starts_with("- "))
+                .count() as u64;
+            // `ignored` needs the visible scope fully counted; when the
+            // visible walk hit its cap the subtraction is not mechanically
+            // distinguishable, so it stays `None`.
+            let ignored = if truncated {
+                None
+            } else {
+                let (unfiltered_total, _unfiltered_capped) = count_unfiltered_entries(&path);
+                Some(unfiltered_total.saturating_sub(visible_total))
+            };
+            (
+                body,
+                Some((listed, ignored, visible_total.saturating_sub(listed))),
             )
         };
         let trimmed_body = body.trim_end();
+        let scope_footer = scope.map_or(String::new(), |(listed, ignored, truncated)| {
+            let mut parts = vec![format!("listed={listed}")];
+            if let Some(ignored) = ignored {
+                parts.push(format!("ignored={ignored}"));
+            }
+            parts.push(format!("truncated={truncated}"));
+            format!("\n(scope: {})", parts.join(", "))
+        });
         let output = if trimmed_body.is_empty() && is_legacy {
             format!("- {}/\n  no children found", display_path.display())
         } else {
-            format!("- {}/\n{}", display_path.display(), trimmed_body)
+            format!(
+                "- {}/{}{}",
+                display_path.display(),
+                trimmed_body,
+                scope_footer
+            )
         };
         Ok(ListDirOutput::Content(ListDirContent {
             content: output,
             absolute_root_path: path,
+            listed: scope.map(|(listed, _, _)| listed),
+            ignored: scope.and_then(|(_, ignored, _)| ignored),
+            truncated: scope.map(|(_, _, truncated)| truncated),
         }))
     }
 }
@@ -588,7 +677,10 @@ The '${{ params.list.target_directory }}' parameter can be relative to the works
 Other details:
     - The result does not display dot-files and dot-directories.
     - Respects .gitignore patterns (files/directories ignored by git are not shown).
-    - Large directories are summarized with file counts and extension breakdowns instead of listing all files."#
+    - Large directories are summarized with file counts and extension breakdowns instead of listing all files.
+    - The result footer reports the mechanical scope: how many entries were listed,
+      how many were ignored (hidden / ignore rules), and how many were truncated
+      by output limits. An empty listing with `ignored=0` is genuinely empty."#
     }
 }
 #[cfg(test)]
@@ -648,7 +740,7 @@ mod tests {
         let deep = tmp.path().join("a").join("b").join("c");
         fs::create_dir_all(&deep).unwrap();
         File::create(deep.join("deep.rs")).unwrap();
-        let (mut tree, trunc) = build_tree(tmp.path(), true);
+        let (mut tree, trunc, _) = build_tree(tmp.path(), true);
         let body = budget_expand(
             &mut tree,
             DEFAULT_MAX_OUTPUT_CHARS,
@@ -672,7 +764,7 @@ mod tests {
         for i in 0..50 {
             File::create(subdir.join(format!("file{}.rs", i))).unwrap();
         }
-        let (mut tree, trunc) = build_tree(tmp.path(), true);
+        let (mut tree, trunc, _) = build_tree(tmp.path(), true);
         let body = budget_expand(
             &mut tree,
             200,
@@ -693,7 +785,7 @@ mod tests {
     #[test]
     fn empty_directory_renders_nothing() {
         let tmp = TempDir::new().unwrap();
-        let (mut tree, trunc) = build_tree(tmp.path(), true);
+        let (mut tree, trunc, _) = build_tree(tmp.path(), true);
         let body = budget_expand(
             &mut tree,
             DEFAULT_MAX_OUTPUT_CHARS,
@@ -712,7 +804,7 @@ mod tests {
         File::create(tmp.path().join(".hidden")).unwrap();
         File::create(tmp.path().join(".secret.txt")).unwrap();
         File::create(tmp.path().join("visible.rs")).unwrap();
-        let (mut tree, trunc) = build_tree(tmp.path(), true);
+        let (mut tree, trunc, _) = build_tree(tmp.path(), true);
         let body = budget_expand(
             &mut tree,
             DEFAULT_MAX_OUTPUT_CHARS,
@@ -734,7 +826,7 @@ mod tests {
                 File::create(subdir.join(format!("file_{}.rs", j))).unwrap();
             }
         }
-        let (mut tree, trunc) = build_tree(tmp.path(), true);
+        let (mut tree, trunc, _) = build_tree(tmp.path(), true);
         let body = budget_expand(
             &mut tree,
             200,
@@ -770,7 +862,7 @@ mod tests {
     fn walk_truncation_shows_cutoff_message() {
         let tmp = TempDir::new().unwrap();
         File::create(tmp.path().join("file.rs")).unwrap();
-        let (mut tree, _) = build_tree(tmp.path(), true);
+        let (mut tree, _, _) = build_tree(tmp.path(), true);
         let body = budget_expand(
             &mut tree,
             DEFAULT_MAX_OUTPUT_CHARS,
@@ -792,7 +884,7 @@ mod tests {
         fs::create_dir(&dir_b).unwrap();
         File::create(dir_a.join("a.rs")).unwrap();
         File::create(dir_b.join("b.rs")).unwrap();
-        let (mut tree, trunc) = build_tree(tmp.path(), true);
+        let (mut tree, trunc, _) = build_tree(tmp.path(), true);
         let body = budget_expand(
             &mut tree,
             DEFAULT_MAX_OUTPUT_CHARS,
@@ -814,7 +906,7 @@ mod tests {
         for i in 0..50 {
             File::create(big.join(format!("f{}.rs", i))).unwrap();
         }
-        let (mut tree, trunc) = build_tree(tmp.path(), true);
+        let (mut tree, trunc, _) = build_tree(tmp.path(), true);
         let body = budget_expand(
             &mut tree,
             400,
@@ -842,7 +934,7 @@ mod tests {
         let small = tmp.path().join("zzz_small");
         fs::create_dir(&small).unwrap();
         File::create(small.join("s.rs")).unwrap();
-        let (mut tree, trunc) = build_tree(tmp.path(), true);
+        let (mut tree, trunc, _) = build_tree(tmp.path(), true);
         let body = budget_expand(
             &mut tree,
             200,
@@ -883,7 +975,7 @@ mod tests {
         fs::create_dir(&ddd).unwrap();
         File::create(bbb.join("s1.rs")).unwrap();
         File::create(ddd.join("s2.rs")).unwrap();
-        let (mut tree, trunc) = build_tree(tmp.path(), true);
+        let (mut tree, trunc, _) = build_tree(tmp.path(), true);
         let body = budget_expand(
             &mut tree,
             BUDGET,
@@ -934,7 +1026,7 @@ mod tests {
             File::create(tmp.path().join(format!("f{}.rs", i))).unwrap();
         }
         let mut root_node = DirNode::new(0);
-        let truncated = seed_depth1_children(tmp.path(), &mut root_node, true, SEED_LIMIT);
+        let (truncated, _) = seed_depth1_children(tmp.path(), &mut root_node, true, SEED_LIMIT);
         assert!(truncated, "10 depth-1 entries should exceed seed cap of 3");
         root_node.sort_recursive();
         let body = budget_expand(
@@ -969,7 +1061,7 @@ mod tests {
         }
         File::create(zzz.join("late.rs")).unwrap();
         const WALK_LIMIT: usize = 5;
-        let (mut tree, truncated) = build_tree_with_limit(tmp.path(), true, WALK_LIMIT);
+        let (mut tree, truncated, _) = build_tree_with_limit(tmp.path(), true, WALK_LIMIT);
         assert!(truncated, "30 depth≥2 files should exceed limit of 5");
         assert!(
             tree.subdirs.iter().any(|s| s == "zzz/"),
@@ -1002,7 +1094,7 @@ mod tests {
         }
         File::create(late.join("marker.rs")).unwrap();
         File::create(tmp.path().join("readme.md")).unwrap();
-        let (mut tree, trunc) = build_tree(tmp.path(), true);
+        let (mut tree, trunc, _) = build_tree(tmp.path(), true);
         let body = budget_expand(
             &mut tree,
             DEFAULT_MAX_OUTPUT_CHARS,
@@ -1033,7 +1125,7 @@ mod tests {
         fs::create_dir(tmp.path().join("zzz_ignored")).unwrap();
         File::create(tmp.path().join("zzz_ignored").join("inner.rs")).unwrap();
         fs::write(tmp.path().join(".gitignore"), "*.log\nzzz_ignored/\n").unwrap();
-        let (mut tree_off, trunc_off) = build_tree(tmp.path(), false);
+        let (mut tree_off, trunc_off, _) = build_tree(tmp.path(), false);
         let body_off = budget_expand(
             &mut tree_off,
             DEFAULT_MAX_OUTPUT_CHARS,
@@ -1049,7 +1141,7 @@ mod tests {
             body_off.contains("- zzz_ignored/"),
             "respect_gitignore=false must seed gitignored dir: {body_off}"
         );
-        let (mut tree_on, trunc_on) = build_tree(tmp.path(), true);
+        let (mut tree_on, trunc_on, _) = build_tree(tmp.path(), true);
         let body_on = budget_expand(
             &mut tree_on,
             DEFAULT_MAX_OUTPUT_CHARS,
@@ -1082,7 +1174,7 @@ mod tests {
         let scripts = tmp.path().join("scripts");
         fs::create_dir(&scripts).unwrap();
         File::create(scripts.join("one.py")).unwrap();
-        let (mut tree, trunc) = build_tree(tmp.path(), true);
+        let (mut tree, trunc, _) = build_tree(tmp.path(), true);
         let body = budget_expand(
             &mut tree,
             BUDGET,
@@ -1343,5 +1435,205 @@ mod tests {
                 .contains("${{ params.list.target_directory }}"),
             "param name should use MiniJinja template, not be hardcoded"
         );
+    }
+
+    /// FUS-TOOL-SCOPE-CONTRACT: the directory envelope counts hidden entries
+    /// as ignored (unfiltered_total - visible_total) and reports the rendered
+    /// count; nothing is truncated in a small listing.
+    #[test]
+    fn scope_counts_report_hidden_and_ignored() {
+        let tmp = TempDir::new().unwrap();
+        File::create(tmp.path().join(".hidden")).unwrap();
+        File::create(tmp.path().join("visible.rs")).unwrap();
+
+        let (mut tree, truncated, visible_total) = build_tree(tmp.path(), true);
+        assert!(!truncated);
+        assert_eq!(visible_total, 1, "only the visible file counts");
+        let body = budget_expand(
+            &mut tree,
+            DEFAULT_MAX_OUTPUT_CHARS,
+            TOP_K_EXTENSIONS,
+            truncated,
+            ROOT_TRUNCATION_NOTICE_FALLBACK,
+        );
+        let listed = body
+            .lines()
+            .filter(|l| l.trim_start().starts_with("- "))
+            .count() as u64;
+        assert_eq!(listed, 1);
+        assert_eq!(body, "  - visible.rs\n");
+
+        let (unfiltered_total, unfiltered_capped) = count_unfiltered_entries(tmp.path());
+        assert!(!unfiltered_capped);
+        assert_eq!(unfiltered_total, 2);
+        assert_eq!(
+            unfiltered_total - visible_total,
+            1,
+            "ignored = hidden entry"
+        );
+    }
+
+    /// FUS-TOOL-SCOPE-CONTRACT: `ignored` follows the same respect_gitignore
+    /// toggle as the visible walk — gitignored entries are ignored only when
+    /// gitignore rules are respected.
+    #[test]
+    fn scope_counts_follow_respect_gitignore() {
+        let tmp = TempDir::new().unwrap();
+        init_minimal_git_worktree(tmp.path());
+        File::create(tmp.path().join("kept.txt")).unwrap();
+        File::create(tmp.path().join("ignored.log")).unwrap();
+        fs::write(tmp.path().join(".gitignore"), "*.log\n").unwrap();
+        let (unfiltered_total, unfiltered_capped) = count_unfiltered_entries(tmp.path());
+        assert!(!unfiltered_capped);
+        // .git subtree (6 entries) + kept.txt + ignored.log + .gitignore.
+        assert_eq!(unfiltered_total, 9);
+
+        // respect=true: kept.txt only; .git subtree + .gitignore + ignored.log
+        // are filtered.
+        let (mut tree_on, trunc_on, visible_on) = build_tree(tmp.path(), true);
+        assert!(!trunc_on);
+        assert_eq!(visible_on, 1, "only kept.txt is visible");
+        let body_on = budget_expand(
+            &mut tree_on,
+            DEFAULT_MAX_OUTPUT_CHARS,
+            TOP_K_EXTENSIONS,
+            trunc_on,
+            ROOT_TRUNCATION_NOTICE_FALLBACK,
+        );
+        let listed_on = body_on
+            .lines()
+            .filter(|l| l.trim_start().starts_with("- "))
+            .count() as u64;
+        assert_eq!(listed_on, 1);
+        assert_eq!(unfiltered_total - visible_on, 8, "ignored under gitignore");
+
+        // respect=false: .gitignore content no longer filters, so the
+        // gitignored file is visible and the ignored delta shrinks.
+        let (mut tree_off, trunc_off, visible_off) = build_tree(tmp.path(), false);
+        assert!(!trunc_off);
+        assert_eq!(
+            visible_off, 2,
+            "kept.txt + ignored.log (.gitignore stays hidden)"
+        );
+        let body_off = budget_expand(
+            &mut tree_off,
+            DEFAULT_MAX_OUTPUT_CHARS,
+            TOP_K_EXTENSIONS,
+            trunc_off,
+            ROOT_TRUNCATION_NOTICE_FALLBACK,
+        );
+        assert!(body_off.contains("ignored.log"));
+        let listed_off = body_off
+            .lines()
+            .filter(|l| l.trim_start().starts_with("- "))
+            .count() as u64;
+        assert_eq!(listed_off, 2);
+        assert_eq!(
+            unfiltered_total - visible_off,
+            7,
+            "ignored without gitignore"
+        );
+    }
+
+    /// FUS-TOOL-SCOPE-CONTRACT: when the visible walk hits its counting cap,
+    /// `ignored` is not mechanically distinguishable and stays `None`; the
+    /// truncated count is the counted lower bound.
+    #[test]
+    fn scope_counts_walk_truncation_is_lower_bound() {
+        let tmp = TempDir::new().unwrap();
+        let aaa = tmp.path().join("aaa");
+        fs::create_dir(&aaa).unwrap();
+        for i in 0..30 {
+            File::create(aaa.join(format!("f{}.rs", i))).unwrap();
+        }
+        const WALK_LIMIT: usize = 5;
+        let (mut tree, truncated, visible_total) =
+            build_tree_with_limit(tmp.path(), true, WALK_LIMIT);
+        assert!(truncated);
+        // seed (aaa) + deep count (5 materialized + 1 cap trigger).
+        assert_eq!(visible_total, WALK_LIMIT as u64 + 2);
+        let body = budget_expand(
+            &mut tree,
+            DEFAULT_MAX_OUTPUT_CHARS,
+            TOP_K_EXTENSIONS,
+            truncated,
+            ROOT_TRUNCATION_NOTICE_FALLBACK,
+        );
+        let listed = body
+            .lines()
+            .filter(|l| l.trim_start().starts_with("- "))
+            .count() as u64;
+        // aaa/ + 5 materialized files rendered; the cap-triggering file is
+        // counted but not rendered.
+        assert_eq!(listed, 6);
+        assert_eq!(visible_total - listed, 1);
+    }
+
+    /// FUS-TOOL-SCOPE-CONTRACT: the tool result carries the scope footer in
+    /// the card text and the mechanical counts in the envelope.
+    #[tokio::test]
+    async fn tool_content_footer_reports_scope() {
+        let tmp = TempDir::new().unwrap();
+        File::create(tmp.path().join(".hidden")).unwrap();
+        File::create(tmp.path().join("visible.rs")).unwrap();
+        let mut resources = Resources::new();
+        resources.insert(Cwd(tmp.path().to_path_buf()));
+        let tool = ListDirTool;
+        let output = xai_tool_runtime::Tool::run(
+            &tool,
+            test_ctx(resources.into_shared()),
+            ListDirInput {
+                target_directory: ".".to_string(),
+            },
+        )
+        .await
+        .unwrap();
+        match output {
+            ListDirOutput::Content(c) => {
+                assert!(
+                    c.content
+                        .contains("(scope: listed=1, ignored=1, truncated=0)"),
+                    "scope footer: {}",
+                    c.content
+                );
+                assert_eq!(c.listed, Some(1));
+                assert_eq!(c.ignored, Some(1));
+                assert_eq!(c.truncated, Some(0));
+            }
+            other => panic!("unexpected error: {other:?}"),
+        }
+    }
+
+    /// FUS-TOOL-SCOPE-CONTRACT: the legacy contract keeps the historical card
+    /// and does not report the scope envelope.
+    #[tokio::test]
+    async fn legacy_path_reports_no_scope() {
+        let tmp = TempDir::new().unwrap();
+        File::create(tmp.path().join("file.rs")).unwrap();
+        let mut resources = Resources::new();
+        resources.insert(Cwd(tmp.path().to_path_buf()));
+        let tool = ListDirTool;
+        let mut ctx = test_ctx(resources.into_shared());
+        ctx.extensions.insert(xai_tool_runtime::BehaviorVersion(
+            "legacy-0.4.10".to_string(),
+        ));
+        let output = xai_tool_runtime::Tool::run(
+            &tool,
+            ctx,
+            ListDirInput {
+                target_directory: ".".to_string(),
+            },
+        )
+        .await
+        .unwrap();
+        match output {
+            ListDirOutput::Content(c) => {
+                assert!(!c.content.contains("(scope:"), "card: {}", c.content);
+                assert_eq!(c.listed, None);
+                assert_eq!(c.ignored, None);
+                assert_eq!(c.truncated, None);
+            }
+            other => panic!("unexpected error: {other:?}"),
+        }
     }
 }

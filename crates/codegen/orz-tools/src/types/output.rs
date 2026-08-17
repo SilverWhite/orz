@@ -175,6 +175,25 @@ pub struct ListDirContent {
     pub content: String,
     /// Root directory path (absolute) for this listing
     pub absolute_root_path: PathBuf,
+    /// FUS-TOOL-SCOPE-CONTRACT (directory envelope): number of entries
+    /// rendered as individual lines in `content`. `None` when the renderer
+    /// does not report scope counts (legacy contract / non-grok_build
+    /// implementations).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub listed: Option<u64>,
+    /// FUS-TOOL-SCOPE-CONTRACT (directory envelope): number of entries
+    /// filtered out by the walker's standard filters (hidden files and
+    /// ignore rules), counted mechanically as
+    /// `unfiltered_total - visible_total`. `None` when the count cannot be
+    /// distinguished (visible scope itself hit the counting cap) or the
+    /// renderer does not report scope counts.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ignored: Option<u64>,
+    /// FUS-TOOL-SCOPE-CONTRACT (directory envelope): number of entries that
+    /// exist in the visible scope but were not rendered (item cap / character
+    /// budget). A lower bound when the visible walk hit its counting cap.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub truncated: Option<u64>,
 }
 #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
 pub enum ListDirOutput {
@@ -208,10 +227,12 @@ pub struct GrepSearchOutput {
     pub match_count: usize,
     #[serde(default)]
     pub file_matches: Vec<GrepFileMatch>,
-    /// FUS-TOOL-SCOPE-CONTRACT (2026-08-17): how many files ripgrep actually
-    /// searched under the resolved root and filters. `None` when the search
-    /// never produced a result (binary failed to run) or the caller did not
-    /// probe; `Some(0)` means the search scope was EMPTY (every candidate was
+    /// FUS-TOOL-SCOPE-CONTRACT (2026-08-17/2026-08-18): how many files
+    /// ripgrep actually searched under the resolved root and filters. The
+    /// mechanical source is the `rg --files` scope probe, which now runs on
+    /// every completed search (hits included). `None` when the search never
+    /// ran (binary failed to start / path pre-check) or the probe could not
+    /// run; `Some(0)` means the search scope was EMPTY (every candidate was
     /// filtered) — mechanically distinct from a genuine no-match.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub files_searched: Option<u64>,

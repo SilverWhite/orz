@@ -351,6 +351,11 @@ impl xai_tool_runtime::Tool for CodexListDirTool {
         Ok(ListDirOutput::Content(ListDirContent {
             content,
             absolute_root_path: path,
+            // Codex-namespace paginated listing does not report the grok_build
+            // scope envelope (FUS-TOOL-SCOPE-CONTRACT fields stay None).
+            listed: None,
+            ignored: None,
+            truncated: None,
         }))
     }
 }

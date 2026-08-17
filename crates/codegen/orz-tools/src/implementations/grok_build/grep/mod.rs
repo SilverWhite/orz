@@ -440,10 +440,11 @@ impl xai_tool_runtime::Tool for GrepTool {
             "grep finished"
         );
 
-        // FUS-TOOL-SCOPE-CONTRACT: on an empty result (non-zero exit, nothing
-        // on either stream) probe the scope so "0 files searched" is distinct
-        // from "searched files, no matches".
-        if exit_code != 0 && stdout_buf.is_empty() && stderr_buf.is_empty() {
+        // FUS-TOOL-SCOPE-CONTRACT (2026-08-18): the scope probe now runs on
+        // every completed search (hits included) so `files_searched` is
+        // mechanically reported in every envelope; an error path (stderr
+        // output) has no meaningful scope to count and stays `None`.
+        if stderr_buf.is_empty() {
             config.files_searched = probe_files_searched(&probe, timeout).await;
         }
 
@@ -674,8 +675,9 @@ fn grep_progress_stream(
             );
         });
 
-        // FUS-TOOL-SCOPE-CONTRACT: same empty-result triage as the batch path.
-        if exit_code != 0 && stdout_buf.is_empty() && stderr_buf.is_empty() {
+        // FUS-TOOL-SCOPE-CONTRACT (2026-08-18): same scope probe as the batch
+        // path — every completed search reports `files_searched`.
+        if stderr_buf.is_empty() {
             config.files_searched = probe_files_searched(&probe, timeout).await;
         }
 
@@ -704,9 +706,9 @@ struct GrepFormatConfig {
     max_output_bytes: usize,
     /// Stable display path used in the `<workspace_result …>` wrapper / errors.
     cwd_display: String,
-    /// FUS-TOOL-SCOPE-CONTRACT: populated after the run when the empty-result
-    /// triage needs to distinguish "0 files searched" from "searched files,
-    /// no matches". `None` on hits / failed probes.
+    /// FUS-TOOL-SCOPE-CONTRACT: populated by the scope probe on every
+    /// completed search (hits included) so the envelope always reports how
+    /// many files were searched. `None` when the probe could not run.
     files_searched: Option<u64>,
 }
 
@@ -1282,18 +1284,21 @@ fn finalize_grep(
                 is_truncated,
                 config.max_chars_per_line,
                 config.max_output_bytes,
+                files_searched,
             ),
             OutputMode::FilesWithMatches => format_files_with_matches_output(
                 output_lines,
                 is_truncated,
                 config.max_chars_per_line,
                 config.max_output_bytes,
+                files_searched,
             ),
             OutputMode::Count => format_count_output(
                 output_lines,
                 is_truncated,
                 config.max_chars_per_line,
                 config.max_output_bytes,
+                files_searched,
             ),
         };
         (formatted, match_count_value, file_matches)
@@ -1541,12 +1546,16 @@ pub fn format_content_output(
     is_truncated: bool,
     max_chars_per_line: usize,
     max_output_bytes: usize,
+    files_searched: Option<u64>,
 ) -> String {
     let is_truncated_str = if is_truncated { "at least " } else { "" };
     let num_matching_lines = count_matches(&output_lines);
+    let scope_str = files_searched
+        .map(|n| format!(" (searched {n} files)"))
+        .unwrap_or_default();
     let mut final_output_lines = vec![format!(
-        "Found {}{} matching lines",
-        is_truncated_str, num_matching_lines
+        "Found {}{} matching lines{}",
+        is_truncated_str, num_matching_lines, scope_str
     )];
 
     let trimmed_lines: Vec<String> = output_lines
@@ -1573,12 +1582,17 @@ pub fn format_files_with_matches_output(
     is_truncated: bool,
     max_chars_per_line: usize,
     max_output_bytes: usize,
+    files_searched: Option<u64>,
 ) -> String {
     let is_truncated_str = if is_truncated { "at least " } else { "" };
+    let scope_str = files_searched
+        .map(|n| format!(" (searched {n} files)"))
+        .unwrap_or_default();
     let mut final_output_lines = vec![format!(
-        "Found {}{} files",
+        "Found {}{} files{}",
         is_truncated_str,
-        output_lines.len()
+        output_lines.len(),
+        scope_str
     )];
 
     let trimmed_lines: Vec<String> = output_lines
@@ -1605,8 +1619,12 @@ pub fn format_count_output(
     is_truncated: bool,
     max_chars_per_line: usize,
     max_output_bytes: usize,
+    files_searched: Option<u64>,
 ) -> String {
     let is_truncated_str = if is_truncated { "at least " } else { "" };
+    let scope_str = files_searched
+        .map(|n| format!(" (searched {n} files)"))
+        .unwrap_or_default();
 
     let mut sum_matches = 0;
     for line in &output_lines {
@@ -1618,10 +1636,11 @@ pub fn format_count_output(
     }
 
     let mut final_output_lines = vec![format!(
-        "Found {} across {}{} files",
+        "Found {} across {}{} files{}",
         sum_matches,
         is_truncated_str,
-        output_lines.len()
+        output_lines.len(),
+        scope_str
     )];
 
     let trimmed_lines: Vec<String> = output_lines
@@ -1836,6 +1855,7 @@ mod tests {
             false,
             DEFAULT_MAX_CHARS_PER_LINE,
             DEFAULT_TOOL_OUTPUT_BYTES,
+            None,
         );
         assert!(result.starts_with("Found 1 matching lines"));
     }
@@ -1852,6 +1872,7 @@ mod tests {
             true,
             DEFAULT_MAX_CHARS_PER_LINE,
             DEFAULT_TOOL_OUTPUT_BYTES,
+            None,
         );
         assert!(result.starts_with("Found at least 1 matching lines"));
     }
@@ -2520,6 +2541,54 @@ mod tests {
         let card = String::from_utf8_lossy(&out.stdout);
         assert!(card.contains("No matches found in 3 files"), "card: {card}");
         assert_eq!(out.files_searched, Some(3));
+    }
+
+    /// FUS-TOOL-SCOPE-CONTRACT (2026-08-18): a hit result carries the searched
+    /// count in both the envelope and the terminal summary.
+    #[test]
+    fn finalize_grep_hit_summary_includes_searched_count() {
+        let mut config = grep_config(OutputMode::Content, DEFAULT_TOOL_OUTPUT_BYTES, None);
+        config.files_searched = Some(12);
+        let out = finalize_grep(
+            b"src/a.rs\n1:alpha match one\n2:beta match two\n".to_vec(),
+            false,
+            Vec::new(),
+            0,
+            &config,
+        );
+        let card = String::from_utf8_lossy(&out.stdout);
+        assert!(
+            card.contains("Found 2 matching lines (searched 12 files)"),
+            "card: {card}"
+        );
+        assert_eq!(out.files_searched, Some(12));
+    }
+
+    /// FUS-TOOL-SCOPE-CONTRACT (2026-08-18): the scope probe also runs on hit
+    /// results — `files_searched` is populated for a successful search.
+    #[tokio::test]
+    async fn tool_run_reports_files_searched_on_hits() {
+        let tmp = TempDir::new().unwrap();
+        fs::write(tmp.path().join("hit.txt"), "findme here\n").unwrap();
+        fs::write(tmp.path().join("miss.txt"), "nothing\n").unwrap();
+        let mut resources = Resources::new();
+        resources.insert(Cwd(tmp.path().to_path_buf()));
+        let tool = GrepTool;
+        let output = xai_tool_runtime::Tool::run(
+            &tool,
+            test_ctx(resources.into_shared()),
+            make_grep_input("findme"),
+        )
+        .await
+        .unwrap();
+        assert!(output.match_count > 0, "expected a hit");
+        assert_eq!(
+            output.files_searched,
+            Some(2),
+            "probe must count both files in the scope"
+        );
+        let card = String::from_utf8_lossy(&output.stdout);
+        assert!(card.contains("(searched 2 files)"), "card: {card}");
     }
 
     /// FUS-TOOL-SCOPE-CONTRACT: the scope probe counts files under the same
