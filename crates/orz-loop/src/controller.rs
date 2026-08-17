@@ -133,6 +133,29 @@ fn parse_max_inject_tokens_per_round(s: &str) -> Option<u64> {
     s.trim().parse().ok().filter(|v| *v > 0)
 }
 
+/// FUS-LEDGER-FOLD-STATE (2026-08-18, ADR-0010 §14.26): the mechanical
+/// fold-advance threshold — the estimated request view that triggers one
+/// stateful fold advance at the loop-top gap. Default 128K (2026-08-18
+/// user adjudication; MRCR-8-needle quality plateau boundary for
+/// V4-Flash-Max; allows reading the full key-document set — index 30.5K
+/// + ADR 43K + BACKLOG 27.8K ≈ 101K + preamble 8K — without a fold).
+pub const DEFAULT_FOLD_TRIGGER_TOKENS: u64 = 128_000;
+
+/// Env override for the fold-advance threshold
+/// (`ORZ_FOLD_TRIGGER_TOKENS`). Parsed at controller construction;
+/// absent/invalid/zero = the default.
+pub fn fold_trigger_tokens_override() -> Option<u64> {
+    std::env::var("ORZ_FOLD_TRIGGER_TOKENS")
+        .ok()
+        .and_then(|s| parse_fold_trigger_tokens(&s))
+}
+
+/// Pure parse rule for the fold-threshold env value (tested without env
+/// mutation): trimmed, positive integer; absent/invalid/zero → None.
+fn parse_fold_trigger_tokens(s: &str) -> Option<u64> {
+    s.trim().parse().ok().filter(|v| *v > 0)
+}
+
 /// Streaming pacing (Phase 3 slice #6): a round's `model_output` (journaled,
 /// fsync-acked) must be projected by a live client before the next round's
 /// first text delta arrives (deltas travel in-memory at arrival rate). The
@@ -154,9 +177,11 @@ pub const DEFAULT_WHITELIST_CAP: usize = 16 * 1024;
 /// revoked.
 ///
 /// - Template summary (S3): fires at any loop-top gap when the previous
-///   round's MEASURED prompt tokens exceed `trigger_tokens` (160K) with a
-///   ≥`min_rounds` (2 model rounds — review fix 2026-08-14) cooldown, or
-///   exceed `safety_tokens` (200K fallback) regardless of cooldown.
+///   round's MEASURED prompt tokens exceed `trigger_tokens` (192K —
+///   2026-08-18 adjudication, ADR-0010 §14.26) with a ≥`min_rounds`
+///   (2 model rounds — review fix 2026-08-14) cooldown, or exceed
+///   `safety_tokens` (256K fallback — 2026-08-18 adjudication, ADR-0010
+///   §14.26) regardless of cooldown.
 ///   Reduction guards: removable content ≥ `min_compactable` (5K) and kept
 ///   ≤ `max_reduction_ratio` (0.6) of before. A guard that cannot be
 ///   satisfied retries across trigger rounds and forces one compaction
@@ -166,8 +191,13 @@ pub const DEFAULT_WHITELIST_CAP: usize = 16 * 1024;
 ///   carries the pointer.
 /// - Mechanical collapse (S2): every completed OLD tool round collapses
 ///   into a deterministic action-ledger row in the MODEL-VISIBLE request
-///   (zero model calls, no cooldown, `recent_tail_rounds` kept verbatim);
-///   the persisted conversation keeps the full records.
+///   (zero model calls, `recent_tail_rounds` kept verbatim); the
+///   persisted conversation keeps the full records. FUS-LEDGER-FOLD-STATE
+///   (2026-08-18, ADR-0010 §14.26): the collapse is stateful — the fold
+///   point advances only when the estimated request view reaches
+///   `fold_trigger_tokens` (128K), and between advances the request view
+///   prefix is byte-stable (pure append), restoring the v1.9 prefix-cache
+///   discipline that the old per-request stateless recomputation broke.
 /// - Recovery pre-check (D2-2): a restored conversation estimated over
 ///   `recovery_trigger_tokens` (200K conservative) is mechanically
 ///   truncated toward `recovery_target_tokens` (160K) before the first
@@ -182,6 +212,13 @@ pub struct ContextCompactConfig {
     pub target_tokens: u64,
     pub min_rounds: u32,
     pub safety_tokens: u64,
+    /// FUS-LEDGER-FOLD-STATE (2026-08-18, ADR-0010 §14.26): mechanical
+    /// fold-advance threshold — when the ESTIMATED request view
+    /// (folded view, chars/2) is ≥ this, the loop folds the next complete
+    /// old rounds into the frozen ledger once (loop-top gap, checkpoint
+    /// rounds first). Default 128K = the MRCR quality plateau boundary
+    /// (V4-Flash-Max 0.870); env `ORZ_FOLD_TRIGGER_TOKENS` overrides.
+    pub fold_trigger_tokens: u64,
     /// D2-2 (2026-08-14, ADR-0010 v1.10 / CONTEXT_COMPACTION_DESIGN §6):
     /// a restored conversation is pre-checked before the first request;
     /// when the ESTIMATE exceeds this conservative threshold (min of the
@@ -212,10 +249,11 @@ pub struct ContextCompactConfig {
 impl Default for ContextCompactConfig {
     fn default() -> Self {
         Self {
-            trigger_tokens: 160_000,
+            trigger_tokens: 192_000,
             target_tokens: 90_000,
             min_rounds: 2,
-            safety_tokens: 200_000,
+            safety_tokens: 256_000,
+            fold_trigger_tokens: DEFAULT_FOLD_TRIGGER_TOKENS,
             recovery_trigger_tokens: 200_000,
             recovery_target_tokens: 160_000,
             session_end_trigger_tokens: 160_000,
@@ -2080,7 +2118,14 @@ impl AgentLoopController {
             epoch_archive_errors: Mutex::new(Vec::new()),
             pacing_rounds: std::sync::atomic::AtomicU32::new(0),
             denial_state: Mutex::new(DenialState::default()),
-            context_compact: ContextCompactConfig::default(),
+            // FUS-LEDGER-FOLD-STATE (2026-08-18, ADR-0010 §14.26):
+            // production reads `ORZ_FOLD_TRIGGER_TOKENS` at construction;
+            // tests pin tiny thresholds via `with_fold_trigger_tokens`.
+            context_compact: ContextCompactConfig {
+                fold_trigger_tokens: fold_trigger_tokens_override()
+                    .unwrap_or(DEFAULT_FOLD_TRIGGER_TOKENS),
+                ..ContextCompactConfig::default()
+            },
             whitelist: Mutex::new(Vec::new()),
             whitelist_cap: DEFAULT_WHITELIST_CAP,
             activations: Mutex::new(ActivationRegistry::default()),
@@ -3715,6 +3760,14 @@ impl AgentLoopController {
         self
     }
 
+    /// FUS-LEDGER-FOLD-STATE (2026-08-18, ADR-0010 §14.26): pin the
+    /// fold-advance threshold (test seam; production reads
+    /// `ORZ_FOLD_TRIGGER_TOKENS` at construction, default 128K).
+    pub fn with_fold_trigger_tokens(mut self, tokens: u64) -> Self {
+        self.context_compact.fold_trigger_tokens = tokens.max(1);
+        self
+    }
+
     /// P0-D S3: override the summary reduction guards (tests relax them).
     pub fn with_summary_guards(mut self, min_compactable: u64, max_reduction_ratio: f64) -> Self {
         self.context_compact.min_compactable = min_compactable;
@@ -5049,6 +5102,7 @@ impl AgentLoopController {
             last_text,
             tool_rounds,
             rounds_since_compact,
+            mut fold_state,
             ..
         } = outcome;
 
@@ -5126,6 +5180,7 @@ impl AgentLoopController {
                     false,
                     rounds_since_compact,
                     self.context_compact.recent_tail_rounds,
+                    &mut fold_state,
                     cancel,
                     heartbeat,
                 )
@@ -5770,6 +5825,13 @@ impl AgentLoopController {
                             max_inject_tokens_per_round: self.max_inject_tokens_per_round,
                             blackboard_archive_dir: self.blackboard_archive_dir(),
                         };
+                        // FUS-LEDGER-FOLD-STATE (2026-08-18, ADR-0010
+                        // §14.26): the session-end compaction uses the
+                        // loop's final fold state — the summary input is
+                        // the same stateful view the main requests saw and
+                        // the drain cut is `fold_cut` (never a recomputed
+                        // stateless tail).
+                        let mut fold_state = outcome_ref.fold_state.clone();
                         let _ = run_template_compact(
                             &svc,
                             writer,
@@ -5782,6 +5844,7 @@ impl AgentLoopController {
                             false,
                             outcome_ref.rounds_since_compact,
                             self.context_compact.recent_tail_rounds,
+                            &mut fold_state,
                             cancel,
                             heartbeat,
                         )
@@ -7363,18 +7426,11 @@ impl AgentLoopController {
                 state.push_streak_order(&order.order_id);
             }
         }
-        if mutate_step
-            && let Some(step_id) = order.step_id.as_deref()
-        {
+        if mutate_step && let Some(step_id) = order.step_id.as_deref() {
             let mut w = self.blackboard.write();
             if let Some(idx) = w.plan.steps.iter().position(|s| s.id == step_id) {
                 if ok {
-                    crate::planning::mark_step_done(
-                        &mut w.plan.steps,
-                        idx,
-                        &order.order_id,
-                        None,
-                    );
+                    crate::planning::mark_step_done(&mut w.plan.steps, idx, &order.order_id, None);
                 } else {
                     crate::planning::mark_step_failed(&mut w.plan.steps, idx, &order.order_id);
                 }
@@ -12162,7 +12218,10 @@ mod tests {
             .filter(|m| matches!(m.role, Role::User) && m.content.contains("[任务状态 v0.1]"))
             .map(|m| m.content.clone())
             .collect();
-        assert!(!status_texts.is_empty(), "status line missing from messages");
+        assert!(
+            !status_texts.is_empty(),
+            "status line missing from messages"
+        );
         assert!(status_texts[0].contains("目标: 修复 bug"));
         assert!(status_texts[0].contains("当前第 1 步 [step-1]「调查」"));
         assert!(status_texts[0].contains("[/任务状态]"));
@@ -12678,16 +12737,7 @@ mod tests {
             vec!["第一步".to_string(), "第二步".to_string()],
         );
         controller
-            .run_turn(
-                &host,
-                "推进步骤",
-                "RUN-STEP",
-                MANIFEST,
-                0,
-                None,
-                None,
-                None,
-            )
+            .run_turn(&host, "推进步骤", "RUN-STEP", MANIFEST, 0, None, None, None)
             .await
             .unwrap();
 
@@ -12709,9 +12759,15 @@ mod tests {
             }
         }
         assert_eq!(status_texts.len(), 2, "{status_texts:?}");
-        assert!(status_texts[0].contains("当前第 1 步 [step-1]「第一步」"), "{status_texts:?}");
+        assert!(
+            status_texts[0].contains("当前第 1 步 [step-1]「第一步」"),
+            "{status_texts:?}"
+        );
         assert!(status_texts[1].contains("已完成 1"), "{status_texts:?}");
-        assert!(status_texts[1].contains("当前第 2 步 [step-2]「第二步」"), "{status_texts:?}");
+        assert!(
+            status_texts[1].contains("当前第 2 步 [step-2]「第二步」"),
+            "{status_texts:?}"
+        );
 
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -12748,16 +12804,7 @@ mod tests {
             vec!["第一步".to_string()],
         );
         controller
-            .run_turn(
-                &host,
-                "被拒订单",
-                "RUN-DENY",
-                MANIFEST,
-                0,
-                None,
-                None,
-                None,
-            )
+            .run_turn(&host, "被拒订单", "RUN-DENY", MANIFEST, 0, None, None, None)
             .await
             .unwrap();
 
@@ -14275,8 +14322,9 @@ mod tests {
         }
     }
 
-    /// P0-D review fix (2026-08-14, ADR-0010 v1.14): a reduction guard that
-    /// cannot be satisfied retries across trigger rounds WITHOUT interrupting
+    /// P0-D review fix (2026-08-14, ADR-0010 v1.14) + FUS-LEDGER-FOLD-STATE
+    /// (2026-08-18, ADR-0010 §14.26): a reduction guard that cannot be
+    /// satisfied retries across trigger rounds WITHOUT interrupting
     /// content or raw truncation; after GUARD_RETRY_LIMIT consecutive
     /// failures one compaction is forced and reported `guard_failed`.
     #[test]
@@ -14290,6 +14338,324 @@ mod tests {
         assert_eq!(cfg.recovery_trigger_tokens, 200_000);
         assert_eq!(cfg.recovery_target_tokens, 160_000);
         assert_eq!(cfg.recent_tail_rounds, 2);
+        // 2026-08-18 adjudication (ADR-0010 §14.26): 192K rhythm / 256K
+        // fallback / 128K fold-advance trigger.
+        assert_eq!(cfg.trigger_tokens, 192_000);
+        assert_eq!(cfg.safety_tokens, 256_000);
+        assert_eq!(cfg.fold_trigger_tokens, DEFAULT_FOLD_TRIGGER_TOKENS);
+        assert_eq!(DEFAULT_FOLD_TRIGGER_TOKENS, 128_000);
+    }
+
+    /// FUS-LEDGER-FOLD-STATE (2026-08-18, ADR-0010 §14.26): the fold point
+    /// advances mechanically once the ESTIMATED request view reaches
+    /// `fold_trigger_tokens` (loop-top gap, zero model calls). Before the
+    /// advance every request view is `messages` verbatim (no per-request
+    /// stateless collapse — byte-stable from the first round); between
+    /// advances the request view is the anchored view + pure append
+    /// (byte-identical prefix), and only a mechanical advance (a new
+    /// frozen ledger version) rewrites the prefix — one accepted rewrite
+    /// per fold window.
+    #[tokio::test]
+    async fn fold_state_advances_once_and_prefix_stays_stable() {
+        struct SeqHost {
+            journal: JournalRecorder,
+            outputs: Vec<String>,
+            calls: AtomicU64,
+            cwd: PathBuf,
+        }
+        #[async_trait]
+        impl LoopHost for SeqHost {
+            fn journal(&self) -> &JournalRecorder {
+                &self.journal
+            }
+            fn tools_registry(&self) -> &dyn ToolRegistry {
+                &EmptyRegistry
+            }
+            fn session_cwd(&self) -> PathBuf {
+                self.cwd.clone()
+            }
+            async fn call_tool(
+                &self,
+                _name: &str,
+                _arguments: serde_json::Value,
+                _call_id: &str,
+            ) -> Result<ToolResult, ToolError> {
+                let n = self.calls.fetch_add(1, Ordering::SeqCst) as usize;
+                Ok(ToolResult {
+                    output: self.outputs[n % self.outputs.len()].clone(),
+                    exit_code: Some(0),
+                    output_encoding: None,
+                    structured: None,
+                    ..Default::default()
+                })
+            }
+            async fn request_permission(
+                &self,
+                _risk: RiskClass,
+                _tool: &str,
+                _arguments: &serde_json::Value,
+            ) -> Result<PermitDecision, PermitError> {
+                Ok(PermitDecision::AllowOnce)
+            }
+        }
+        let dir = test_dir();
+        let journal = JournalRecorder::new(dir.clone());
+        let host = SeqHost {
+            journal,
+            outputs: vec![
+                "AAAA".repeat(200),
+                "BBBB".repeat(200),
+                "CCCC".repeat(200),
+                "DDDD".repeat(200),
+            ],
+            calls: AtomicU64::new(0),
+            cwd: dir.clone(),
+        };
+        let tool_call = |id: &str| ScriptedResponse {
+            text: None,
+            tool_calls: vec![ToolCall {
+                name: "read_file".to_string(),
+                arguments: serde_json::json!({"target_file": "a.txt"}),
+                call_id: id.to_string(),
+            }],
+            finish_reason: FinishReason::ToolCalls,
+            reasoning_content: None,
+            prompt_tokens: Some(1_000),
+        };
+        let mut script = Vec::new();
+        for k in 0..9 {
+            script.push(tool_call(&format!("call-{k}")));
+        }
+        // The counterexample gate adds one text-only round before the
+        // final answer — keep the script ahead of the loop.
+        script.push(ScriptedResponse::text("反例自查通过").with_prompt_tokens(1_000));
+        script.push(ScriptedResponse::text("最终答案").with_prompt_tokens(1_000));
+        let fake = Arc::new(FakeProvider::new(script));
+        let gateway: Arc<dyn ModelGateway> = fake.clone();
+        // Compaction kept far away (huge triggers + long cooldown) — the
+        // test isolates the fold mechanism.
+        let controller = AgentLoopController::with_gateway(gateway)
+            .with_context_compact(100_000_000, 400, 20, 100_000_000)
+            .with_fold_trigger_tokens(1_000);
+        controller
+            .run_turn(&host, "折叠测试", "RUN-FOLD", MANIFEST, 0, None, None, None)
+            .await
+            .unwrap();
+
+        let received = fake.received_requests();
+        assert!(received.len() >= 9, "{received:?}");
+        let ledger_idx = received
+            .iter()
+            .position(|r| {
+                r.messages
+                    .iter()
+                    .any(|m| m.content.starts_with("[动作台账"))
+            })
+            .expect("a mechanical fold advance happened");
+        assert!(ledger_idx > 0, "the first request must stay verbatim");
+        for r in &received[..ledger_idx] {
+            assert!(
+                r.messages
+                    .iter()
+                    .all(|m| !m.content.starts_with("[动作台账")),
+                "no ledger before the mechanical trigger: {r:?}"
+            );
+        }
+        // After the advance: preamble + frozen ledger byte-identical,
+        // view grows by pure append — anchored per frozen ledger version
+        // (a mechanical advance legitimately rewrites the prefix once).
+        let ledger_of = |r: &ModelRequest| {
+            r.messages
+                .iter()
+                .find(|m| m.content.starts_with("[动作台账"))
+                .map(|m| m.content.clone())
+        };
+        let mut anchor = ledger_idx;
+        let mut prev_ledger: Option<String> = None;
+        let mut advances = 0usize;
+        for (i, r) in received.iter().enumerate().skip(ledger_idx) {
+            let ledger = ledger_of(r);
+            if let Some(ledger) = &ledger {
+                if prev_ledger.as_ref().is_some_and(|p| p != ledger) {
+                    advances += 1;
+                    anchor = i; // one-time rewrite, re-anchor
+                }
+                prev_ledger = Some(ledger.clone());
+            }
+            if i > anchor {
+                let anchored = &received[anchor];
+                assert!(
+                    r.messages.len() >= anchored.messages.len(),
+                    "view shrank between advances: {i}"
+                );
+                assert_eq!(
+                    &r.messages[..anchored.messages.len()],
+                    anchored.messages.as_slice(),
+                    "folded prefix rewritten outside an advance at request {i}"
+                );
+            }
+        }
+        assert!(
+            advances < received.len() - ledger_idx,
+            "advances must be strictly fewer than post-fold requests: \
+             {advances} / {}",
+            received.len() - ledger_idx
+        );
+    }
+
+    /// FUS-LEDGER-FOLD-STATE (2026-08-18, ADR-0010 §14.26) × compaction:
+    /// the fold advances BEFORE the summary fires; the summary call's
+    /// input is the SAME stateful folded view (摘要输入与主请求同源 — it
+    /// carries the frozen ledger block); compaction then resets the fold
+    /// state (marker request has no ledger) and the fold re-accumulates
+    /// from the marker (a later request shows the ledger again).
+    #[tokio::test]
+    async fn fold_state_resets_after_compaction_and_summary_uses_same_view() {
+        struct SeqHost {
+            journal: JournalRecorder,
+            outputs: Vec<String>,
+            calls: AtomicU64,
+            cwd: PathBuf,
+        }
+        #[async_trait]
+        impl LoopHost for SeqHost {
+            fn journal(&self) -> &JournalRecorder {
+                &self.journal
+            }
+            fn tools_registry(&self) -> &dyn ToolRegistry {
+                &EmptyRegistry
+            }
+            fn session_cwd(&self) -> PathBuf {
+                self.cwd.clone()
+            }
+            async fn call_tool(
+                &self,
+                _name: &str,
+                _arguments: serde_json::Value,
+                _call_id: &str,
+            ) -> Result<ToolResult, ToolError> {
+                let n = self.calls.fetch_add(1, Ordering::SeqCst) as usize;
+                Ok(ToolResult {
+                    output: self.outputs[n % self.outputs.len()].clone(),
+                    exit_code: Some(0),
+                    output_encoding: None,
+                    structured: None,
+                    ..Default::default()
+                })
+            }
+            async fn request_permission(
+                &self,
+                _risk: RiskClass,
+                _tool: &str,
+                _arguments: &serde_json::Value,
+            ) -> Result<PermitDecision, PermitError> {
+                Ok(PermitDecision::AllowOnce)
+            }
+        }
+        let dir = test_dir();
+        let journal = JournalRecorder::new(dir.clone());
+        let host = SeqHost {
+            journal,
+            outputs: vec![
+                "AAAA".repeat(300),
+                "BBBB".repeat(300),
+                "CCCC".repeat(300),
+                "DDDD".repeat(300),
+            ],
+            calls: AtomicU64::new(0),
+            cwd: dir.clone(),
+        };
+        let tool_call = |id: &str| ScriptedResponse {
+            text: None,
+            tool_calls: vec![ToolCall {
+                name: "read_file".to_string(),
+                arguments: serde_json::json!({"target_file": "a.txt"}),
+                call_id: id.to_string(),
+            }],
+            finish_reason: FinishReason::ToolCalls,
+            reasoning_content: None,
+            prompt_tokens: Some(2_000), // over the tiny rhythm trigger
+        };
+        // Rounds 1..6 consume the first six tool calls; the rhythm
+        // cooldown (5) makes the summary fire at round 7's loop-top, where
+        // the scripted `summary_response()` sits. Rounds 7..12 then
+        // re-grow the view after the marker (fold re-accumulation), and
+        // two text rounds cover the counterexample gate + final answer.
+        let mut script = Vec::new();
+        for k in 0..6 {
+            script.push(tool_call(&format!("call-{k}")));
+        }
+        script.push(summary_response());
+        for k in 6..12 {
+            script.push(tool_call(&format!("call-{k}")));
+        }
+        script.push(ScriptedResponse::text("反例自查通过").with_prompt_tokens(2_000));
+        script.push(ScriptedResponse::text("最终答案").with_prompt_tokens(2_000));
+        let fake = Arc::new(FakeProvider::new(script));
+        let gateway: Arc<dyn ModelGateway> = fake.clone();
+        // Rhythm cooldown 5 → the fold (trigger 1K) advances several
+        // rounds BEFORE the summary (trigger 1K + cooldown 5) fires.
+        let controller = AgentLoopController::with_gateway(gateway)
+            .with_context_compact(1_000, 400, 5, 100_000_000)
+            .with_summary_guards(1, 1.0)
+            .with_fold_trigger_tokens(1_000);
+        controller
+            .run_turn(
+                &host,
+                "折叠压缩联动",
+                "RUN-FOLD-COMPACT",
+                MANIFEST,
+                0,
+                None,
+                None,
+                None,
+            )
+            .await
+            .unwrap();
+
+        let received = fake.received_requests();
+        let has_ledger = |r: &ModelRequest| {
+            r.messages
+                .iter()
+                .any(|m| m.content.starts_with("[动作台账"))
+        };
+        let has_marker = |r: &ModelRequest| {
+            r.messages
+                .iter()
+                .any(|m| m.content.starts_with("[前文上下文已压缩"))
+        };
+        let ledger_idx = received.iter().position(has_ledger).expect("fold advance");
+        let marker_idx = received
+            .iter()
+            .position(has_marker)
+            .expect("compaction marker");
+        assert!(
+            ledger_idx < marker_idx,
+            "the fold must advance before the summary fires (fold {ledger_idx} / marker {marker_idx})"
+        );
+        // The summary call is the request right before the marker request —
+        // its input is the SAME folded view (contains the frozen ledger).
+        let summary_idx = marker_idx - 1;
+        let summary_req = &received[summary_idx];
+        assert!(
+            summary_req
+                .messages
+                .iter()
+                .any(|m| m.content.contains("已坍缩的历史前缀")),
+            "summary call present: {summary_req:?}"
+        );
+        assert!(
+            has_ledger(summary_req),
+            "summary input is the same stateful folded view: {summary_req:?}"
+        );
+        // The fold re-accumulates from the marker — the next advance may
+        // even happen at the same loop-top (the estimate is still over the
+        // tiny threshold), so we require the ledger in the marker request
+        // itself or any later request.
+        assert!(
+            received[marker_idx..].iter().any(has_ledger),
+            "fold re-accumulates after compaction: {received:?}"
+        );
     }
 
     #[tokio::test]

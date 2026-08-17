@@ -281,7 +281,10 @@ pub fn build_status_line(goal: Option<&str>, steps: &[crate::blackboard::PlanSte
         // 2026-08-18 (ADR-0010 §14.25 项 2): 当前步 = 第一个非 done（与
         // `planning::current_step_index` 步骤门一致）；failed 步骤保持
         // 当前、可重试（旧逻辑跳过 failed 会与门禁显示不一致）。
-        let current = steps.iter().position(|s| !s.status.is_done()).map(|i| i + 1);
+        let current = steps
+            .iter()
+            .position(|s| !s.status.is_done())
+            .map(|i| i + 1);
         let done = steps.iter().filter(|s| s.status.is_done()).count();
         let middle = match current {
             Some(i) => format!(

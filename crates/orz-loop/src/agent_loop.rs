@@ -434,6 +434,13 @@ pub(crate) struct LoopOutcome {
     /// Rounds since the last compaction at loop exit — the session-end
     /// compaction reports it honestly (P0-D review fix 2026-08-14).
     pub rounds_since_compact: u32,
+    /// FUS-LEDGER-FOLD-STATE (2026-08-18, ADR-0010 §14.26): the loop's
+    /// final fold state — the caller's session-end compaction uses the
+    /// same stateful view for its summary input and drains up to
+    /// `fold_cut`. Per-loop local (each lane has its own conversation;
+    /// a controller-level field would be clobbered by the nested
+    /// subagent dispatch), so it is reset at every loop start.
+    pub fold_state: crate::action_ledger::LedgerFoldState,
     /// Read by the subagent terminal mapping (M3) — the main caller's
     /// terminal event carries `tool_rounds` only.
     #[allow(dead_code)] // consumed by the subagent path (GAP-SUBAGENT-RUNTIME M3)
@@ -482,6 +489,11 @@ pub(crate) async fn run_template_compact(
     guard_failed: bool,
     rounds_since: u32,
     tail: usize,
+    // FUS-LEDGER-FOLD-STATE (2026-08-18, ADR-0010 §14.26): the loop's
+    // stateful fold point — the summary input uses the same folded view
+    // as the main requests (同源), the drain cut is `fold_cut` when
+    // folded, and the state is reset once the conversation is mutated.
+    fold_state: &mut crate::action_ledger::LedgerFoldState,
     cancel: Option<&tokio_util::sync::CancellationToken>,
     heartbeat: Option<&ActivityClock>,
 ) -> Result<CompactDecision, AgentLoopError> {
@@ -491,7 +503,13 @@ pub(crate) async fn run_template_compact(
         !m.content
             .starts_with(crate::prompt::CONTEXT_COMPRESSED_PREFIX)
     });
-    let Some(kept_start) = crate::action_ledger::collapsed_cut(messages, tail) else {
+    // FUS-LEDGER-FOLD-STATE (2026-08-18, ADR-0010 §14.26): the drain cut
+    // comes from the frozen fold state when folded (保留起点基于 fold_cut
+    // 而非重算 tail); otherwise the stateless tail cut as before.
+    let Some(kept_start) = fold_state
+        .fold_cut
+        .or_else(|| crate::action_ledger::collapsed_cut(messages, tail))
+    else {
         return Ok(CompactDecision::NoOp);
     };
     let cfg = svc.context_compact;
@@ -504,7 +522,7 @@ pub(crate) async fn run_template_compact(
         return Ok(CompactDecision::GuardBlocked);
     }
 
-    let rounds_dropped = crate::action_ledger::collapsed_round_count(messages, tail) as u32;
+    let rounds_dropped = crate::action_ledger::rounds_before(messages, kept_start) as u32;
     // The archive id rides the writer's CURRENT seq — no event is recorded
     // between here and the `context_compressed` journal, so the id is
     // stable and unique within the run.
@@ -544,8 +562,12 @@ pub(crate) async fn run_template_compact(
             tool_calls: Vec::new(),
             reasoning_content: None,
         }];
-        input.extend(crate::action_ledger::build_collapsed_request(
-            messages, tail,
+        // FUS-LEDGER-FOLD-STATE (2026-08-18, ADR-0010 §14.26): the
+        // summary input is the SAME stateful folded view as the main
+        // requests — 摘要输入与主请求同源, never a separate stateless
+        // recomputation (avoids a second measurement口径).
+        input.extend(crate::action_ledger::build_request_view(
+            messages, fold_state,
         ));
         input
     };
@@ -622,6 +644,11 @@ pub(crate) async fn run_template_compact(
                 reasoning_content: None,
             },
         );
+        // FUS-LEDGER-FOLD-STATE (2026-08-18, ADR-0010 §14.26): the
+        // conversation was mutated (drain + marker) — the frozen fold
+        // indices are stale. Reset; the view re-accumulates from the
+        // marker (折叠重置为 None，marker 之后重新累积).
+        fold_state.reset();
         writer
             .record(
                 EventType::ContextCompressed,
@@ -693,6 +720,10 @@ pub(crate) async fn run_template_compact(
                 reasoning_content: None,
             },
         );
+        // FUS-LEDGER-FOLD-STATE (2026-08-18, ADR-0010 §14.26): same reset
+        // on the termination path — the conversation changed (marker and
+        // possibly mechanical truncation), stale fold indices are dropped.
+        fold_state.reset();
         if final_after == after {
             final_after = estimate_messages_tokens(messages);
         }
@@ -812,6 +843,14 @@ pub(crate) async fn run_agent_loop(
     // until the first request, so the first request journals `initial` and
     // only real prefix changes journal `change`.
     let mut last_request_header: Option<RequestHeader> = None;
+    // FUS-LEDGER-FOLD-STATE (2026-08-18, ADR-0010 §14.26): the loop's own
+    // stateful fold point — per-loop local (see `LoopOutcome.fold_state`):
+    // the same controller drives the main lane AND the nested retrieval
+    // subagent lanes (each with its own conversation), so a controller-
+    // shared field would be clobbered by the nested dispatch. Every loop
+    // invocation starts unfolded and re-accumulates (restore semantics —
+    // ADR-0010 §14.26 恢复路径: 恢复后均为 None，首次推进重写一次前缀，低频接受).
+    let mut fold_state = crate::action_ledger::LedgerFoldState::default();
 
     loop {
         // Cooperative cancellation checkpoint (Phase 3 slice #7): polled
@@ -851,13 +890,15 @@ pub(crate) async fn run_agent_loop(
         // P0-D (2026-08-14, ADR-0010 v1.10 / CONTEXT_COMPACTION_DESIGN §2-§4):
         // template-summary trigger at any safe loop-top gap (never inside a
         // batch). Measured = the previous round's provider prompt tokens on
-        // the COLLAPSED request. Two triggers:
-        //   - RHYTHM: measured > trigger_tokens (160K) with a ≥ min_rounds
+        // the FOLDED request view. Two triggers:
+        //   - RHYTHM: measured > trigger_tokens (192K, 2026-08-18
+        //     adjudication ADR-0010 §14.26) with a ≥ min_rounds
         //     (2) model-round cooldown (v1.14 review fix).
-        //   - FALLBACK (window guard): measured > safety_tokens (200K),
-        //     bypassing the cooldown — the emergency path must not stay
-        //     over the line even when the summary fails (mechanical
-        //     truncation fallback, D2-2 semantics).
+        //   - FALLBACK (window guard): measured > safety_tokens (256K,
+        //     2026-08-18 adjudication ADR-0010 §14.26), bypassing the
+        //     cooldown — the emergency path must not stay over the line
+        //     even when the summary fails (mechanical truncation
+        //     fallback, D2-2 semantics).
         // Reduction guards: removable content ≥ min_compactable and kept ≤
         // max_reduction_ratio of before. P0-D review fix (2026-08-14): a
         // guard that cannot be satisfied is NOT skipped — it retries on the
@@ -889,6 +930,7 @@ pub(crate) async fn run_agent_loop(
                 false,
                 rounds_since_compact,
                 tail,
+                &mut fold_state,
                 cancel,
                 heartbeat,
             )
@@ -924,6 +966,7 @@ pub(crate) async fn run_agent_loop(
                             true,
                             rounds_since_compact,
                             tail,
+                            &mut fold_state,
                             cancel,
                             heartbeat,
                         )
@@ -938,6 +981,31 @@ pub(crate) async fn run_agent_loop(
                         guard_failures = 0;
                     }
                 }
+            }
+        }
+
+        // FUS-LEDGER-FOLD-STATE (2026-08-18, ADR-0010 §14.26): fold-
+        // advance trigger — the same safe loop-top gap as compaction
+        // (never inside a tool batch; a pending checkpoint round has
+        // priority: `pending_checkpoint` is None here). When the
+        // ESTIMATED request view (chars/2) reaches `fold_trigger_tokens`
+        // (default 128K) and complete old rounds exist outside the tail,
+        // fold them into the frozen ledger ONCE and move `fold_cut`
+        // forward — between advances the request view prefix is
+        // byte-stable (pure append), which is the v1.9 prefix-cache
+        // discipline the old per-request stateless recomputation broke
+        // (measured hit rate ≈ 67% → 2026-08-18 design §1.3/§5). The
+        // advance never mutates `messages` (journal/sidecar keep the
+        // full tool records — audit dual-track unchanged).
+        if pending_checkpoint.is_none() {
+            let fold_tail =
+                svc.context_compact.recent_tail_rounds + if failure_widened_tail { 1 } else { 0 };
+            let view_estimate = {
+                let view = crate::action_ledger::build_request_view(messages, &fold_state);
+                estimate_messages_tokens(&view)
+            };
+            if view_estimate >= svc.context_compact.fold_trigger_tokens {
+                crate::action_ledger::advance_fold(messages, &mut fold_state, fold_tail);
             }
         }
 
@@ -1182,19 +1250,25 @@ pub(crate) async fn run_agent_loop(
 
         let mut partial_text: Vec<String> = Vec::new();
         // P0-D S2 (2026-08-14, ADR-0010 v1.10 / CONTEXT_COMPACTION_DESIGN
-        // §3): the MODEL-VISIBLE view collapses completed old tool rounds
-        // into deterministic action-ledger rows (bounded recent tail kept
-        // verbatim); `messages` itself stays full for journal/sidecar
-        // audit, so the persisted conversation keeps the complete records.
+        // §3) + FUS-LEDGER-FOLD-STATE (2026-08-18, ADR-0010 §14.26): the
+        // MODEL-VISIBLE view folds completed old tool rounds into
+        // deterministic action-ledger rows (bounded recent tail kept
+        // verbatim) — statefully: the fold point advances only at the
+        // mechanical trigger (loop-top, view estimate ≥ 128K), and
+        // between advances the view prefix is byte-stable (pure append,
+        // restoring the v1.9 prefix-cache discipline). `messages` itself
+        // stays full for journal/sidecar audit, so the persisted
+        // conversation keeps the complete records.
         // 2026-08-18 (ADR-0010 §14.25 项 1): 常驻状态行移出系统提示词——
         // 每轮请求前把 `[任务状态]` 作为尾随用户消息、仅在变化时追加
         // （与 `[TOOL_ROUND_BUDGET] REMAINING` 同纪律），system 提示词
         // 保持完全静态，前缀缓存不被步骤推进打断。
         controller.sync_status_line_message(messages);
-        let request_tail =
-            svc.context_compact.recent_tail_rounds + if failure_widened_tail { 1 } else { 0 };
-        let request_messages =
-            crate::action_ledger::build_collapsed_request(messages, request_tail);
+        // FUS-LEDGER-FOLD-STATE (2026-08-18, ADR-0010 §14.26): the request
+        // view comes from the stateful fold point — `messages` verbatim
+        // until the first mechanical advance, then preamble + frozen
+        // ledger + `[fold_cut..]` (byte-stable prefix, pure append).
+        let request_messages = crate::action_ledger::build_request_view(messages, &fold_state);
         let response = match agent
             .run_round(
                 &system,
@@ -2247,6 +2321,7 @@ pub(crate) async fn run_agent_loop(
         last_text,
         tool_rounds,
         rounds_since_compact,
+        fold_state,
         budget_exhausted,
     })
 }
