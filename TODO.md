@@ -48,12 +48,16 @@
 > （searched=0 显式报范围空，不叫 "No matches found"）+ 范围语义显式化（与只读
 > 工具可见集对齐或 --no-ignore/--hidden 开关）+ 读/搜/列三族统一契约
 > （ADR-0010 §14.23 v1.23 / FUS-TOOL-SCOPE-CONTRACT / 操作台设计 §12）。
+> 2026-08-17 grep 搜索范围实施闭合（容器冒烟复现根因=glibc 动态 rg 与 bookworm
+> GLIBC 不匹配 + finalize_grep 吞 stderr；工具契约三型分型 + --files 探针 +
+> hidden/no_ignore 开关 + build.rs 静态守卫 + 构建脚本静态 rg，测试通过；
+> Linux 重建后容器冒烟回归待执行）——未闭合 30 → 29，P0-E 3 → 2 项。
 > 本快照只做计数与分组召回，明细以下方各分组勾选清单为唯一入口，不新增独立条目；
 > 后续扫描更新时同步替换本快照日期与计数。
 
-- 未闭合总数：**30 项**
+- 未闭合总数：**29 项**
   - P0-C：0 项（PLAN-FIRST 阶段 A/B/C 全部闭合，2026-08-16）
-  - P0 评测冒烟暴露：3 项（plan_write 校验消息/形状机械明确、actions 形状校验、grep 搜索范围与空结果语义；GAP-ACAF-HARNESS-PASSTHROUGH、计划视图步骤 ID 渲染与订单发放前拒绝入事件面已闭合 2026-08-17）
+  - P0 评测冒烟暴露：2 项（plan_write 校验消息/形状机械明确、actions 形状校验；GAP-ACAF-HARNESS-PASSTHROUGH、计划视图步骤 ID 渲染、订单发放前拒绝入事件面与 grep 搜索范围契约已闭合 2026-08-17）
   - P1 可并行审计/证据：9 项（组件登记 1、Windows 证据 3、DeepSeek 1、会话上下文监测 4）
   - P2 生产化决策门：5 项（Slice 3、Slice 4、ACAF 可选工程项、OPS 裁剪设计、OPS 生产接线裁决）
   - P3 收尾/清理：7 项（EVIDENCE-LOCAL-BROWSER、GATE-CHAIN、observed-scope 枚举、V11-IMPL-003、V11-IMPL-007、orz-host flaky、DC 硬信号 4/6）
@@ -123,19 +127,40 @@
   与「真无匹配」机械不可分；模型将浅层 list_dir 与系统性空 grep 叠加泛化为
   「/app 无 C 源码」错误转向。**撤回「补文本范围报告」方向**，定案=工具契约
   升级：
-  - [ ] grep 返回结构化搜索信封：`{resolved_root, files_searched,
-    files_skipped, match_count, truncated}`，机械来源 `rg --stats`（stderr
-    解析）或 `--json`，不依赖模型自报；
-  - [ ] 结局三型分型：searched>0 且有匹配 / searched>0 且无匹配（真无匹配）/
-    searched=0（范围空，显式报过滤类别，绝不叫 "No matches found"）；
-  - [ ] 搜索范围语义显式化：grep 默认与只读工具可见集对齐，或显式
-    `--no-ignore`/`--hidden` 开关（与 glob 同进参数面），二选一按容器内冒烟
-    结果定；skipped 计数必须可见；
-  - [ ] 契约泛化：读/搜/列三族统一（list_dir 补 ignored/truncated 计数）；
-    exit 2 语法错误保持硬失败（既有行为保留）；
-  - [ ] 实施前置=容器内 grep 冒烟（对已知字符串断言匹配 + `rg --debug` 定位
-    过滤来源）；回归验证（重跑 round 数/计划重写次数下降 + searched=0 分型
-    断言）；模型侧侦查纪律与注册板块 grep 参数提示降为次要契约提示。
+  - [x] grep 返回结构化搜索信封：`GrepSearchOutput.files_searched` +
+    空结果分型；机械来源定稿=v1 用 `rg --files` 探针（仅空结果路径、同过滤集、
+    10K 截断；弃用 `--stats`——rg 15 stdout / 旧版 stderr 位置差异污染流式面）；
+  - [x] 结局三型分型：非零退出 + stderr 非空→显式报错 / searched=0→
+    "Searched 0 files…Retry with --no-ignore/--hidden" / 空 stdout +
+    searched>0→"No matches found in N files"；exit 2 硬失败保留；
+  - [x] 搜索范围语义显式化：定案=b（保留 rg 默认），参数面新增
+    `--no-ignore`/`--hidden` 开关（GrepSearchInput + console 注册表 schema）；
+  - [ ] 契约泛化：读/搜/列三族统一（list_dir 补 ignored/truncated 计数，
+    后续项）；exit 2 语法错误保持硬失败（既有行为保留）；
+  - [x] 实施前置=容器内 grep 冒烟已执行（根因复现：glibc 动态 rg 与 bookworm
+    GLIBC 不匹配；正常 rg 同命令命中 20 处）；回归验证=Linux 重建后容器冒烟
+    （`rg --version` + 已知字符串断言）待执行；模型侧侦查纪律与注册板块 grep
+    参数提示降为次要契约提示。
+  **2026-08-17 冒烟结论（容器实机复现，`alexgshaw/make-doom-for-mips:20251031`）**：
+  根因=构建侧打包 glibc 动态 rg（`GROK_TOOLS_BUNDLE_RG_PATH=/usr/bin/rg`，trixie
+  产物要求 GLIBC_2.39）进 musl orz；任务容器 bookworm（glibc 2.36）加载失败、
+  退出码 1 + 空 stdout，stderr 被 `finalize_grep` exit-1 分支丢弃 → 全部 grep
+  显示 "No matches found"。正常 rg 同命令命中 20 处（--stats: 10 files
+  searched），默认搜索语义无问题。**a/b 定案=保留 rg 默认语义（b）+ 参数面新增
+  `--no-ignore`/`--hidden` 开关**；工具契约补两点：①非零退出且 stderr 非空
+  显式报错（先于空结果判断）；②`--stats` 解析 files_searched 入信封。构建侧
+  修复=Linux musl 不再用 glibc 覆盖路径，改官方静态 musl rg 下载；冒烟回归=
+  容器内 `rg --version` 可运行 + 已知字符串断言匹配。
+  **2026-08-17 已实施闭合**：`finalize_grep` 结局三型（非零退出 + stderr 非空
+  →显式报错；searched=0→"Searched 0 files…Retry with --no-ignore/--hidden"；
+  空 stdout + searched>0→"No matches found in N files"）；机械来源定稿=v1 用
+  `rg --files` 探针（仅空结果路径、同过滤集、10K 截断；弃用 --stats——rg 15
+  stdout / 旧版 stderr 位置差异污染流式面）；`hidden`/`no_ignore` 开关入
+  GrepSearchInput 与 console 注册表；`GrepSearchOutput.files_searched` 入信封；
+  build.rs 非 Windows 覆盖路径 ELF PT_INTERP 静态守卫；两份构建脚本改静态 musl
+  rg。测试 grep 模块 42 / types 561 / orz-loop console 68 通过；Linux 重建后
+  容器冒烟回归待执行。剩余开放面（FUS-TOOL-SCOPE-CONTRACT 后续）：list_dir
+  ignored/truncated 计数、命中路径每次返回 files_searched。
 - [x] （新观察，用户 2026-08-17 指示处理）订单发放前拒绝入事件面：冒烟重跑中
   ORD-000011（workspace.run_tests，`arguments:{}`）写入后发放前被拒，失败只进结果栏
   receipt + TraceStore（`consume_console_order` 不写 journal 事件），journal 无结构化

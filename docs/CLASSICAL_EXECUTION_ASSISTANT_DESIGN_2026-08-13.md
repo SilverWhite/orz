@@ -501,8 +501,11 @@
 ### 12.2 搜索信封（工具契约层范围报告）
 
 - grep 返回结构化搜索信封：`{resolved_root, files_searched, files_skipped,
-  match_count, truncated}`；机械来源 `rg --stats`（stderr 解析）或 `--json`，
-  不依赖模型自报。
+  match_count, truncated}`；**v1 实施定稿**：机械来源=空结果路径（非零退出 +
+  双流为空）用 `rg --files` 探针计数（与主搜索同过滤集、10K 截断杀子进程），
+  命中路径 `files_searched` 留空；弃用 `--stats`——rg 15 输出到 stdout、旧版
+  输出到 stderr，跨版本位置差异会污染流式面与卡片一致性（后续如需每次返回可改
+  `--json` 面）。
 - 结局三型分型：
   - searched>0 且 match_count>0：正常命中；
   - searched>0 且 match_count=0：真无匹配；
@@ -518,6 +521,17 @@
   a. grep 默认与只读工具可见集对齐（关 ignore/隐藏过滤），或
   b. 保留 rg 默认语义但显式提供 `--no-ignore`/`--hidden` 开关（与 glob 同进参数
      面），且 skipped 计数必须可见。
+- **2026-08-17 冒烟定案=b**：容器实机复现（`alexgshaw/make-doom-for-mips:
+  20251031`）显示默认语义无问题（正常 rg 对 /app 搜 `syscallNum` 命中 20 处、
+  `--stats` 10 files searched；doomgeneric .gitignore 只忽略构建产物）——本次
+  空结果根因是内嵌 rg 的 glibc 版本不匹配（构建容器 trixie 要求 GLIBC_2.39、
+  运行容器 bookworm 2.36），加载失败退出 1 + 空 stdout 被 `finalize_grep`
+  吞成 "No matches found"。因此：保留 rg 默认语义，参数面新增
+  `--no-ignore`/`--hidden` 开关；工具契约补机械规则 ①非零退出且 stderr 非空
+  先显式报错；②`--stats` 解析 files_searched 入信封；构建侧改静态 musl rg。
+  **2026-08-17 实施闭合**：结局三型 + `rg --files` 探针 + `hidden`/`no_ignore`
+  开关 + build.rs 静态守卫 + 构建脚本静态 musl rg；grep 模块 42 / types 561 /
+  orz-loop console 68 测试通过；list_dir ignored/truncated 计数为后续项。
 - 模型侧：空结果不再等于「无文件」；范围空时按信封反馈换范围（--no-ignore/换
   路径），先 list_dir 建清单仍为次要契约提示。
 

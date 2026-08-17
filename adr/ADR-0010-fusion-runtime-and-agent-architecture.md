@@ -1791,3 +1791,39 @@ ADR §3.6 正文修订随实施登记。
    BACKLOG 0a / TODO P0-E。
    来源：2026-08-17 冒烟重跑 `D:\tb-eval\jobs\2026-08-17__03-48-57` +
    用户复核（设计文档讨论）；CLI_PROJECT_INDEX 登记。
+   **2026-08-17 冒烟实机复现结论（同一容器 `alexgshaw/make-doom-for-mips:
+   20251031`）**：根因=构建侧打包 glibc 动态 rg 进 musl orz——`GROK_TOOLS_
+   BUNDLE_RG_PATH=/usr/bin/rg`（rust:1.97-slim/trixie 产物，要求 GLIBC_2.39），
+   任务容器为 bookworm（glibc 2.36），加载失败 `version 'GLIBC_2.39' not
+   found`，退出码恰为 1、stdout 空，stderr 在 exit-1 分支被丢弃，7 次 grep 全部
+   显示 "No matches found"。装正常 rg 后同命令命中（vm.js `syscallNum` 20 处，
+   `--stats`: 10 files searched；doomgeneric .gitignore 只忽略构建产物）——
+   默认搜索语义无问题。**范围语义定案=b（保留 rg 默认 ignore/隐藏语义）**：
+   参数面新增 `--no-ignore`/`--hidden` 开关（与 glob 同进）；工具契约补两点
+   机械规则——①任何非零退出且 stderr 非空先显式报错（先于空结果判断，杜绝把
+   加载/运行失败吞成 "No matches found"）；②`--stats` 解析 files_searched 入
+   搜索信封。构建侧修复（与实施同批）：Linux musl 构建不用 glibc 覆盖路径，
+   走 build.rs 官方静态 musl ripgrep 下载（或显式静态 rg 路径）；冒烟回归=
+   容器内 `rg --version` 可运行 + 已知字符串断言匹配。
+   **2026-08-17 实施闭合（工具契约 + 构建侧）**：
+   - 机械来源定稿=v1 用 `rg --files` 探针而非 `--stats`：rg 15 将 `--stats`
+     写 stdout、旧版写 stderr，且会污染流式面与卡片一致性（跨版本行为差异）；
+     `--files` 探针只跑在空结果路径（非零退出 + 双流为空），与主搜索同过滤集
+     （glob/type/deny/ignore/hidden/max-filesize），计数有界（10K 截断杀子进程），
+     零范围=0、真无匹配=≥1；命中路径 `files_searched` 留空；
+   - `finalize_grep` 结局三型落地：非零退出且 stderr 非空→显式报错（修复把
+     GLIBC 加载失败吞成 "No matches found" 的回归）；`files_searched=Some(0)`→
+     "Searched 0 files … Retry with --no-ignore/--hidden"；空 stdout 且
+     searched>0→"No matches found in N files"；exit 2 保持硬失败；
+   - 参数面新增 `hidden`/`no_ignore` 开关（GrepSearchInput + console 注册表
+     `workspace.grep` schema），映射 rg `--hidden`/`--no-ignore`（主搜索与探针
+     同传）；
+   - 构建侧守卫：build.rs 对非 Windows 的覆盖路径做 ELF PT_INTERP 静态链接
+     校验，动态二进制直接构建失败并提示（musl 静态或省略覆盖走官方静态下载）；
+     两份评测构建脚本改 `cargo install ripgrep 15.0.0 --target
+     x86_64-unknown-linux-musl` 产静态 rg 供覆盖，不再指向 `/usr/bin/rg`；
+   - 测试：grep 模块 42（新增 stderr 显式报错 / 零范围分型 / 带计数 no-match /
+     隐藏目录探针 0 与 --hidden=1）、types 561、orz-loop console 68 全部通过；
+     冒烟回归待 Linux 重建后在任务容器执行（`rg --version` + 已知字符串断言）。
+   剩余开放面（随 FUS-TOOL-SCOPE-CONTRACT 后续项）：list_dir ignored/truncated
+   计数、每次命中都返回 files_searched（需 --json 面或 stats 位置收敛后再定）。

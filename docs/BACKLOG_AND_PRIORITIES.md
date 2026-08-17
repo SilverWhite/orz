@@ -9,7 +9,7 @@
 
 | 优先级 | 含义 | 未闭合项 |
 |---|---|---|
-| P0 | 当前工作集：设计已冻结，裁决后立即实施 | 评测冒烟暴露问题（P0-E 剩余三项：plan_write 校验消息/形状机械明确（2026-08-17 复核放弃特化示例）、actions 形状校验、grep 搜索范围与空结果语义（2026-08-17 复核定案=搜索信封契约，见 0a 项 5）；ACAF 容器供应、计划视图步骤 ID 渲染与订单发放前拒绝入事件面已闭合 2026-08-17，见 0a）；CLASSICAL-EXEC-ASSISTANT（生产组件，2026-08-16 用户裁决转正式）；PLAN-FIRST-BLACKBOARD（阶段 A/B/C 全部闭合 2026-08-16） |
+| P0 | 当前工作集：设计已冻结，裁决后立即实施 | 评测冒烟暴露问题（P0-E 剩余两项：plan_write 校验消息/形状机械明确（2026-08-17 复核放弃特化示例）、actions 形状校验；grep 搜索范围与空结果语义已实施闭合 2026-08-17，见 0a 项 5；ACAF 容器供应、计划视图步骤 ID 渲染与订单发放前拒绝入事件面已闭合 2026-08-17，见 0a）；CLASSICAL-EXEC-ASSISTANT（生产组件，2026-08-16 用户裁决转正式）；PLAN-FIRST-BLACKBOARD（阶段 A/B/C 全部闭合 2026-08-16） |
 | P1 | 无需裁决，可与 P0 并行 | FUS-COMPONENT-REGISTER、GAP-WINDOWS-EVIDENCE、IMPL-DEEPSEEK-TRANSPORT / SEC-CREDENTIALS、ORZ-CACHE-CONTEXT-COST、ORZ-SESSION-CONTEXT-MONITOR |
 | P2 | 生产化决策门：需用户裁决 | IMPL-CONTROL-FABRIC（fail-closed 启用、Slice 3/4）、OPS-PROTOCOL |
 | P3 | 收尾 / 清理 | EVIDENCE-LOCAL-BROWSER、GATE-CHAIN、DC 剩余信号、V11-IMPL-003/007、工作区收尾 |
@@ -118,6 +118,34 @@
      §14.23（v1.23）/ 操作台设计 §12 / FUS-TOOL-SCOPE-CONTRACT；模型侧侦查纪律
      （先 list_dir 建清单、pattern 用实测存在的字符串、空结果≠无文件）与注册板块
      grep 参数提示降为次要契约提示；
+     **2026-08-17 冒烟结论（容器内实机复现，`alexgshaw/make-doom-for-mips:
+     20251031`）**：根因=构建侧打包了 glibc 动态 rg（`GROK_TOOLS_BUNDLE_RG_PATH=
+     /usr/bin/rg`，rust:1.97-slim/trixie 产物，要求 GLIBC_2.39）进 musl-static
+     orz 二进制；任务容器为 bookworm（glibc 2.36）加载失败——`version
+     'GLIBC_2.39' not found`，退出码恰为 1、stdout 空，stderr 在
+     `finalize_grep` exit-1 分支被丢弃，全部 7 次 grep 因此统一显示
+     "No matches found"。同一容器装正常 rg（13.0.0）后：精确 orz 命令对
+     /app/vm.js 搜 `syscallNum` 命中 20 处（`--stats`: 10 files searched），
+     /app/doomgeneric 的 .gitignore 只忽略构建产物——默认搜索语义无问题。
+     **a/b 定案=保留 rg 默认语义（b）**：grep 继续尊重 ignore/隐藏，参数面新增
+     `--no-ignore`/`--hidden` 开关（与 glob 同进）；工具契约必须补两点——
+     ①任何非零退出且 stderr 非空必须显式报错（先于空结果判断，杜绝把加载/运行
+     失败吞成 "No matches found"）；②`--stats` 解析出 files_searched 等入搜索
+     信封。**构建侧修复**（同项实施）：Linux musl 构建不再用 glibc 覆盖路径，
+     改走 build.rs 官方静态 musl ripgrep 下载（或显式静态 rg 路径）；冒烟回归=
+     容器内 `rg --version` 可运行 + 已知字符串断言匹配。
+     **2026-08-17 实施闭合**：工具契约——`finalize_grep` 结局三型（非零退出 +
+     stderr 非空→显式报错；`files_searched=Some(0)`→"Searched 0 files…Retry
+     with --no-ignore/--hidden"；空 stdout + searched>0→"No matches found in
+     N files"；exit 2 硬失败保留）；机械来源定稿=v1 用 `rg --files` 探针（仅空
+     结果路径、与主搜索同过滤集、10K 计数截断；弃用 `--stats`——rg 15 stdout /
+     旧版 stderr 位置差异会污染流式面一致性）；参数面新增 `hidden`/`no_ignore`
+     开关（含 console 注册表 schema）；`GrepSearchOutput.files_searched` 入信封。
+     构建侧——build.rs 对非 Windows 覆盖路径加 ELF PT_INTERP 静态链接守卫
+     （动态即构建失败并提示），两份评测构建脚本改 `cargo install ripgrep
+     --target x86_64-unknown-linux-musl` 产静态 rg。测试：grep 模块 42 /
+     types 561 / orz-loop console 68 通过；Linux 重建后容器冒烟回归待执行
+     （`rg --version` + 已知字符串断言）。P0-E 剩 2 项、未闭合 29 项。
   6. **订单发放前拒绝入事件面**（新观察，用户 2026-08-17 指示处理；**2026-08-17 已闭合**）：
      冒烟重跑中 ORD-000011（workspace.run_tests，`arguments:{}`）写入后发放前被拒，
      失败只进结果栏 receipt + TraceStore（`consume_console_order` 不写 journal 事件），
