@@ -194,6 +194,14 @@ pub fn default_service_registry() -> ServiceRegistry {
                         "type": "boolean",
                         "description": "大小写不敏感（rg -i）。",
                     },
+                    "hidden": {
+                        "type": "boolean",
+                        "description": "搜索隐藏文件/目录（rg --hidden）。",
+                    },
+                    "no_ignore": {
+                        "type": "boolean",
+                        "description": "忽略 .gitignore/.ignore 规则（rg --no-ignore）。",
+                    },
                 },
                 "required": ["pattern"],
                 "additionalProperties": false,

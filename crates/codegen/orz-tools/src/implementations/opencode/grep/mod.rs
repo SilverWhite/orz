@@ -194,6 +194,7 @@ impl xai_tool_runtime::Tool for GrepTool {
                     exit_code: -1,
                     match_count: 0,
                     file_matches: Vec::new(),
+                    files_searched: None,
                 });
             }
         };
@@ -221,6 +222,7 @@ impl xai_tool_runtime::Tool for GrepTool {
                 exit_code,
                 match_count: 0,
                 file_matches: Vec::new(),
+                files_searched: None,
             });
         }
 
@@ -297,6 +299,7 @@ impl xai_tool_runtime::Tool for GrepTool {
                 exit_code,
                 match_count: 0,
                 file_matches: Vec::new(),
+                files_searched: None,
             });
         }
 
@@ -366,6 +369,7 @@ impl xai_tool_runtime::Tool for GrepTool {
             exit_code: 0, // normalized — we have results
             match_count: total_matches,
             file_matches,
+            files_searched: None,
         })
     }
 }

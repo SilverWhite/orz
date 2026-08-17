@@ -105,6 +105,26 @@ fn bundle_rg() -> Result<(), Box<dyn std::error::Error>> {
                 dest.display()
             )
         })?;
+        // FUS-TOOL-SCOPE-CONTRACT (2026-08-17): the override is embedded into
+        // the orz binary and extracted at runtime in arbitrary containers
+        // (e.g. Debian bookworm). A glibc-dynamic rg (e.g. Debian trixie's
+        // /usr/bin/rg, requiring GLIBC_2.39) fails to load in those
+        // containers with exit 1 + empty stdout — which grep used to collapse
+        // into "No matches found". Refuse to bundle a dynamically-linked
+        // binary on non-Windows targets so the failure surfaces at build
+        // time, not in eval. Provide a static build (musl) or omit the
+        // override to auto-download the official static release.
+        if target_os != "windows" && elf_is_dynamically_linked(&dest)? {
+            return Err(format!(
+                "GROK_TOOLS_BUNDLE_RG_PATH ({path}) is a dynamically-linked \
+                 binary; the bundled rg must be statically linked so it runs \
+                 in any task container (FUS-TOOL-SCOPE-CONTRACT, 2026-08-17). \
+                 Build one with `cargo install ripgrep --target \
+                 x86_64-unknown-linux-musl`, or omit the override to \
+                 auto-download the official static release."
+            )
+            .into());
+        }
         return Ok(());
     }
 
@@ -178,4 +198,39 @@ fn bundle_rg() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     Ok(())
+}
+
+/// Minimal ELF check: is the binary dynamically linked (has a PT_INTERP
+/// program header)? Static musl builds have none. Returns `Err` for non-ELF
+/// input (the override is unusable either way).
+fn elf_is_dynamically_linked(path: &std::path::Path) -> Result<bool, Box<dyn std::error::Error>> {
+    let bytes = fs::read(path)?;
+    if bytes.len() < 64 || &bytes[0..4] != b"\x7fELF" {
+        return Err(format!("{} is not an ELF binary", path.display()).into());
+    }
+    let is_64 = bytes[4] == 2;
+    let (phoff, phentsize, phnum): (usize, usize, usize) = if is_64 {
+        (
+            u64::from_le_bytes(bytes[32..40].try_into()?) as usize,
+            u16::from_le_bytes(bytes[54..56].try_into()?) as usize,
+            u16::from_le_bytes(bytes[56..58].try_into()?) as usize,
+        )
+    } else {
+        (
+            u32::from_le_bytes(bytes[28..32].try_into()?) as usize,
+            u16::from_le_bytes(bytes[42..44].try_into()?) as usize,
+            u16::from_le_bytes(bytes[44..46].try_into()?) as usize,
+        )
+    };
+    for i in 0..phnum {
+        let off = phoff.saturating_add(i * phentsize);
+        if off.checked_add(8).is_none_or(|end| end > bytes.len()) {
+            continue;
+        }
+        // PT_INTERP = 3.
+        if u32::from_le_bytes(bytes[off..off + 4].try_into()?) == 3 {
+            return Ok(true);
+        }
+    }
+    Ok(false)
 }

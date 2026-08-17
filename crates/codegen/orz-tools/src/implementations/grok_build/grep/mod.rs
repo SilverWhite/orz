@@ -7,6 +7,7 @@
 //! old implementation via `implementations::grep::ripgrep`.
 
 use std::process::Stdio;
+use std::path::PathBuf;
 use std::sync::LazyLock;
 use std::time::Duration;
 
@@ -121,6 +122,29 @@ pub struct GrepSearchInput {
         deserialize_with = "crate::types::schema::deserialize_lenient_bool"
     )]
     pub multiline: bool,
+
+    /// FUS-TOOL-SCOPE-CONTRACT (2026-08-17): search hidden files and
+    /// directories (rg --hidden). Default false: hidden entries are skipped.
+    #[schemars(
+        description = "Search hidden files and directories (rg --hidden). Default false: hidden entries are skipped."
+    )]
+    #[serde(
+        default,
+        deserialize_with = "crate::types::schema::deserialize_lenient_bool"
+    )]
+    pub hidden: bool,
+
+    /// FUS-TOOL-SCOPE-CONTRACT (2026-08-17): disable respect for ignore files
+    /// (.gitignore/.ignore/.rgignore, rg --no-ignore). Default false: ignore
+    /// rules apply.
+    #[schemars(
+        description = "Ignore .gitignore/.ignore/.rgignore rules (rg --no-ignore). Default false: ignore rules apply."
+    )]
+    #[serde(
+        default,
+        deserialize_with = "crate::types::schema::deserialize_lenient_bool"
+    )]
+    pub no_ignore: bool,
 }
 
 // ───────────────────────────────────────────────────────────────────────────
@@ -334,7 +358,8 @@ impl xai_tool_runtime::Tool for GrepTool {
             mut child,
             stdout_pipe,
             stderr_pipe,
-            config,
+            probe,
+            mut config,
         } = match prepare_grep(&ctx, &input).await? {
             GrepStep::Ready(ready) => ready,
             GrepStep::Early(out) => {
@@ -415,6 +440,13 @@ impl xai_tool_runtime::Tool for GrepTool {
             "grep finished"
         );
 
+        // FUS-TOOL-SCOPE-CONTRACT: on an empty result (non-zero exit, nothing
+        // on either stream) probe the scope so "0 files searched" is distinct
+        // from "searched files, no matches".
+        if exit_code != 0 && stdout_buf.is_empty() && stderr_buf.is_empty() {
+            config.files_searched = probe_files_searched(&probe, timeout).await;
+        }
+
         Ok(finalize_grep(
             stdout_buf,
             stdout_truncated,
@@ -439,7 +471,8 @@ fn grep_progress_stream(
             mut child,
             stdout_pipe,
             stderr_pipe,
-            config,
+            probe,
+            mut config,
         } = match prepare_grep(&ctx, &input).await {
             Ok(GrepStep::Ready(ready)) => ready,
             Ok(GrepStep::Early(out)) => {
@@ -641,6 +674,11 @@ fn grep_progress_stream(
             );
         });
 
+        // FUS-TOOL-SCOPE-CONTRACT: same empty-result triage as the batch path.
+        if exit_code != 0 && stdout_buf.is_empty() && stderr_buf.is_empty() {
+            config.files_searched = probe_files_searched(&probe, timeout).await;
+        }
+
         let output =
             finalize_grep(stdout_buf, stdout_truncated, stderr_buf, exit_code, &config);
         yield xai_tool_runtime::ToolStreamItem::Terminal(Ok(output));
@@ -666,6 +704,10 @@ struct GrepFormatConfig {
     max_output_bytes: usize,
     /// Stable display path used in the `<workspace_result …>` wrapper / errors.
     cwd_display: String,
+    /// FUS-TOOL-SCOPE-CONTRACT: populated after the run when the empty-result
+    /// triage needs to distinguish "0 files searched" from "searched files,
+    /// no matches". `None` on hits / failed probes.
+    files_searched: Option<u64>,
 }
 
 /// A spawned ripgrep ready to be read, plus the resolved formatting config.
@@ -673,7 +715,80 @@ struct GrepReady {
     child: Child,
     stdout_pipe: Option<ChildStdout>,
     stderr_pipe: Option<ChildStderr>,
+    /// Same-scope filters for the empty-result probe (`rg --files`).
+    probe: GrepProbeArgs,
     config: GrepFormatConfig,
+}
+
+/// Filters that define the search scope, mirrored onto the empty-result probe
+/// so "searched 0 files" and "genuine no-match" are mechanically distinct
+/// (FUS-TOOL-SCOPE-CONTRACT).
+#[derive(Clone, Debug)]
+struct GrepProbeArgs {
+    workdir: PathBuf,
+    glob: Option<String>,
+    r#type: Option<String>,
+    deny_read_globs: Vec<String>,
+    no_ignore: bool,
+    hidden: bool,
+}
+
+/// Count the files ripgrep would search under the same filters (`rg --files`),
+/// bounded to a cap. Returns `None` when the probe cannot run (the caller then
+/// reports a plain no-match without a count). Only ever called on the
+/// empty-result path, so the extra walk is bounded to the rare case.
+async fn probe_files_searched(args: &GrepProbeArgs, timeout: Duration) -> Option<u64> {
+    const COUNT_CAP: u64 = 10_000;
+    let mut cmd = Command::new(rg_path());
+    cmd.arg("--files");
+    if args.no_ignore {
+        cmd.arg("--no-ignore");
+    }
+    if args.hidden {
+        cmd.arg("--hidden");
+    }
+    if let Some(glob) = args.glob.as_deref().filter(|g| !g.is_empty()) {
+        cmd.arg("--glob").arg(glob);
+    }
+    for deny in &args.deny_read_globs {
+        cmd.arg("--glob").arg(format!("!{deny}"));
+    }
+    if let Some(t) = args.r#type.as_deref().filter(|t| !t.is_empty()) {
+        cmd.arg("--type").arg(t);
+    }
+    cmd.arg("--max-filesize").arg("5M");
+    cmd.arg(args.workdir.to_string_lossy().as_ref());
+    cmd.stdout(Stdio::piped()).stderr(Stdio::null()).stdin(Stdio::null());
+    crate::util::detach_command(&mut cmd);
+
+    let mut child = match cmd.spawn() {
+        Ok(c) => c,
+        Err(_) => return None,
+    };
+    let Some(mut stdout) = child.stdout.take() else {
+        let _ = child.wait().await;
+        return None;
+    };
+
+    let mut count: u64 = 0;
+    let mut buf = [0u8; 8192];
+    let _ = tokio::time::timeout(timeout, async {
+        loop {
+            match stdout.read(&mut buf).await {
+                Ok(0) | Err(_) => break,
+                Ok(n) => {
+                    count += buf[..n].iter().filter(|&&b| b == b'\n').count() as u64;
+                    if count >= COUNT_CAP {
+                        let _ = child.start_kill();
+                        break;
+                    }
+                }
+            }
+        }
+    })
+    .await;
+    let _ = child.wait().await;
+    Some(count)
 }
 
 /// Outcome of [`prepare_grep`]: either a spawned process to read, or a fully
@@ -745,6 +860,7 @@ async fn prepare_grep(
             exit_code: 2,
             match_count: 0,
             file_matches: Vec::new(),
+            files_searched: None,
         }));
     }
 
@@ -761,6 +877,13 @@ async fn prepare_grep(
         .arg("--max-columns")
         .arg("1000")
         .arg("--max-columns-preview");
+
+    if input.no_ignore {
+        cmd.arg("--no-ignore");
+    }
+    if input.hidden {
+        cmd.arg("--hidden");
+    }
 
     if input.case_insensitive {
         cmd.arg("--ignore-case");
@@ -835,6 +958,7 @@ async fn prepare_grep(
                 exit_code: -1,
                 match_count: 0,
                 file_matches: Vec::new(),
+                files_searched: None,
             }));
         }
     };
@@ -864,12 +988,21 @@ async fn prepare_grep(
         child,
         stdout_pipe,
         stderr_pipe,
+        probe: GrepProbeArgs {
+            workdir: workdir.clone(),
+            glob: input.glob.clone(),
+            r#type: input.r#type.clone(),
+            deny_read_globs,
+            no_ignore: input.no_ignore,
+            hidden: input.hidden,
+        },
         config: GrepFormatConfig {
             output_mode,
             effective_head_limit,
             max_chars_per_line,
             max_output_bytes,
             cwd_display,
+            files_searched: None,
         },
     }))
 }
@@ -1001,6 +1134,7 @@ fn grep_timeout_output(secs: u64) -> GrepSearchOutput {
         exit_code: -1,
         match_count: 0,
         file_matches: Vec::new(),
+        files_searched: None,
     }
 }
 
@@ -1015,28 +1149,15 @@ fn finalize_grep(
 ) -> GrepSearchOutput {
     let stdout = crate::util::encoding::decode_text(&stdout_buf).0;
     let stderr = crate::util::encoding::decode_text(&stderr_buf).0;
+    let files_searched = config.files_searched;
 
-    // Handle exit codes.
-    if (exit_code == 1 && stdout.is_empty())
-        || (exit_code == 2 && stderr.contains("No files were searched"))
-    {
-        let result = format!(
-            "<workspace_result workspace_path=\"{}\">\nNo matches found\n</workspace_result>",
-            config.cwd_display
-        );
-        return GrepSearchOutput {
-            stdout: result.into_bytes(),
-            stderr: Vec::new(),
-            exit_code,
-            match_count: 0,
-            file_matches: Vec::new(),
-        };
-    }
-
+    // FUS-TOOL-SCOPE-CONTRACT (2026-08-17): outcome triage. A non-zero exit
+    // must never be collapsed into "No matches found".
     if exit_code == 2 {
         let error_msg = format!(
             "Error calling tool: {} (exit 2, root: {})",
-            stderr, config.cwd_display
+            stderr.trim(),
+            config.cwd_display
         );
         return GrepSearchOutput {
             stdout: error_msg.into_bytes(),
@@ -1044,10 +1165,71 @@ fn finalize_grep(
             exit_code,
             match_count: 0,
             file_matches: Vec::new(),
+            files_searched,
         };
     }
 
     if exit_code != 0 {
+        // rg (or its binary) reported a real failure with stderr — surface
+        // it. This is the regression that masked the bundled-rg glibc loader
+        // error as "No matches found" (FUS-TOOL-SCOPE-CONTRACT, 2026-08-17).
+        if !stderr.trim().is_empty() {
+            let error_msg = format!(
+                "Error calling tool: {} (exit {}, root: {})",
+                stderr.trim(),
+                exit_code,
+                config.cwd_display
+            );
+            return GrepSearchOutput {
+                stdout: error_msg.into_bytes(),
+                stderr: stderr_buf,
+                exit_code,
+                match_count: 0,
+                file_matches: Vec::new(),
+                files_searched,
+            };
+        }
+        // Empty scope: rg ran but searched zero files (every candidate was
+        // filtered). Mechanically distinct from a genuine no-match.
+        if files_searched == Some(0) {
+            let result = format!(
+                "<workspace_result workspace_path=\"{}\">\n\
+                 Searched 0 files under {}: every candidate was filtered \
+                 (ignore / hidden / glob / type / binary / max-filesize).\n\
+                 Retry with --no-ignore / --hidden, or a narrower path.\n\
+                 </workspace_result>",
+                config.cwd_display, config.cwd_display
+            );
+            return GrepSearchOutput {
+                stdout: result.into_bytes(),
+                stderr: Vec::new(),
+                exit_code,
+                match_count: 0,
+                file_matches: Vec::new(),
+                files_searched,
+            };
+        }
+        // Genuine no-match in a non-empty scope.
+        if stdout.is_empty() {
+            let result = match files_searched {
+                Some(n) => format!(
+                    "<workspace_result workspace_path=\"{}\">\nNo matches found in {n} files\n</workspace_result>",
+                    config.cwd_display
+                ),
+                None => format!(
+                    "<workspace_result workspace_path=\"{}\">\nNo matches found\n</workspace_result>",
+                    config.cwd_display
+                ),
+            };
+            return GrepSearchOutput {
+                stdout: result.into_bytes(),
+                stderr: Vec::new(),
+                exit_code,
+                match_count: 0,
+                file_matches: Vec::new(),
+                files_searched,
+            };
+        }
         let error_msg = format!(
             "Error calling tool: unknown error (exit {}, root: {})",
             exit_code, config.cwd_display
@@ -1058,6 +1240,7 @@ fn finalize_grep(
             exit_code,
             match_count: 0,
             file_matches: Vec::new(),
+            files_searched,
         };
     }
 
@@ -1124,6 +1307,7 @@ fn finalize_grep(
         exit_code,
         match_count,
         file_matches,
+        files_searched,
     }
 }
 
@@ -1483,6 +1667,8 @@ mod tests {
             r#type: None,
             head_limit: None,
             multiline: false,
+            hidden: false,
+            no_ignore: false,
         }
     }
 
@@ -2091,6 +2277,8 @@ mod tests {
                     r#type: None,
                     head_limit: None,
                     multiline: false,
+                    hidden: false,
+                    no_ignore: false,
                 }
             },
         )
@@ -2129,6 +2317,8 @@ mod tests {
                     r#type: None,
                     head_limit: None,
                     multiline: false,
+                    hidden: false,
+                    no_ignore: false,
                 }
             },
         )
@@ -2165,6 +2355,8 @@ mod tests {
                 r#type: None,
                 head_limit: None,
                 multiline: false,
+                hidden: false,
+                no_ignore: false,
             },
         )
         .await
@@ -2248,6 +2440,7 @@ mod tests {
             max_chars_per_line: DEFAULT_MAX_CHARS_PER_LINE,
             max_output_bytes,
             cwd_display: "/ws".to_string(),
+            files_searched: None,
         }
     }
 
@@ -2278,6 +2471,81 @@ mod tests {
         assert_eq!(
             resolve_effective_head_limit(&input, &OutputMode::Content),
             800
+        );
+    }
+
+    /// FUS-TOOL-SCOPE-CONTRACT: a non-zero exit with stderr must surface the
+    /// failure, never "No matches found". This is the regression that masked
+    /// the bundled-rg glibc loader error as an empty result.
+    #[test]
+    fn finalize_grep_surfaces_stderr_on_nonzero_exit() {
+        let config = grep_config(OutputMode::Content, DEFAULT_TOOL_OUTPUT_BYTES, None);
+        let out = finalize_grep(
+            Vec::new(),
+            false,
+            b"libc.so.6: version `GLIBC_2.39' not found (required by /tmp/rg)".to_vec(),
+            1,
+            &config,
+        );
+        let card = String::from_utf8_lossy(&out.stdout);
+        assert!(card.contains("Error calling tool"), "card: {card}");
+        assert!(card.contains("GLIBC_2.39"), "card: {card}");
+        assert!(!card.contains("No matches found"), "card: {card}");
+        assert_eq!(out.files_searched, None);
+    }
+
+    /// FUS-TOOL-SCOPE-CONTRACT: "searched 0 files" (empty scope) is a distinct
+    /// outcome from a genuine no-match.
+    #[test]
+    fn finalize_grep_zero_scope_is_distinct_from_no_match() {
+        let mut config = grep_config(OutputMode::Content, DEFAULT_TOOL_OUTPUT_BYTES, None);
+        config.files_searched = Some(0);
+        let out = finalize_grep(Vec::new(), false, Vec::new(), 1, &config);
+        let card = String::from_utf8_lossy(&out.stdout);
+        assert!(card.contains("Searched 0 files"), "card: {card}");
+        assert!(card.contains("--no-ignore"), "card: {card}");
+        assert!(!card.contains("No matches found"), "card: {card}");
+        assert_eq!(out.files_searched, Some(0));
+    }
+
+    /// FUS-TOOL-SCOPE-CONTRACT: a genuine no-match in a non-empty scope keeps
+    /// the no-match wording but carries the searched-file count.
+    #[test]
+    fn finalize_grep_no_match_reports_searched_count() {
+        let mut config = grep_config(OutputMode::Content, DEFAULT_TOOL_OUTPUT_BYTES, None);
+        config.files_searched = Some(3);
+        let out = finalize_grep(Vec::new(), false, Vec::new(), 1, &config);
+        let card = String::from_utf8_lossy(&out.stdout);
+        assert!(card.contains("No matches found in 3 files"), "card: {card}");
+        assert_eq!(out.files_searched, Some(3));
+    }
+
+    /// FUS-TOOL-SCOPE-CONTRACT: the scope probe counts files under the same
+    /// filters. A directory containing only hidden entries must probe as 0
+    /// (empty scope) without requiring git.
+    #[tokio::test]
+    async fn probe_reports_zero_for_hidden_only_scope() {
+        let tmp = TempDir::new().unwrap();
+        let hidden_dir = tmp.path().join(".hidden");
+        fs::create_dir_all(&hidden_dir).unwrap();
+        fs::write(hidden_dir.join("a.txt"), "findme\n").unwrap();
+
+        let args = GrepProbeArgs {
+            workdir: tmp.path().to_path_buf(),
+            glob: None,
+            r#type: None,
+            deny_read_globs: Vec::new(),
+            no_ignore: false,
+            hidden: false,
+        };
+        assert_eq!(probe_files_searched(&args, Duration::from_secs(20)).await, Some(0));
+
+        // With --hidden the same probe finds the file.
+        let mut visible = args.clone();
+        visible.hidden = true;
+        assert_eq!(
+            probe_files_searched(&visible, Duration::from_secs(20)).await,
+            Some(1)
         );
     }
 

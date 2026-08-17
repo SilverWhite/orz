@@ -178,6 +178,8 @@ mod tests {
             head_limit: None,
             multiline: false,
             r#type: None,
+            hidden: false,
+            no_ignore: false,
         })
         .try_into();
         assert_eq!(grep.unwrap().pattern, "test");

@@ -208,6 +208,13 @@ pub struct GrepSearchOutput {
     pub match_count: usize,
     #[serde(default)]
     pub file_matches: Vec<GrepFileMatch>,
+    /// FUS-TOOL-SCOPE-CONTRACT (2026-08-17): how many files ripgrep actually
+    /// searched under the resolved root and filters. `None` when the search
+    /// never produced a result (binary failed to run) or the caller did not
+    /// probe; `Some(0)` means the search scope was EMPTY (every candidate was
+    /// filtered) — mechanically distinct from a genuine no-match.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub files_searched: Option<u64>,
 }
 #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct FileContent {
@@ -1406,6 +1413,7 @@ mod tests {
             exit_code: 0,
             match_count: 1,
             file_matches: Vec::new(),
+            files_searched: None,
         });
         assert_eq!(output.to_prompt_format(), "中文\n");
     }
