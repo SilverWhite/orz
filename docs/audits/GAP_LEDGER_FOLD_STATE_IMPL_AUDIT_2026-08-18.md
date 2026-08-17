@@ -5,7 +5,9 @@
   `prompt.rs` 格式化收口）
 - 关联：ADR-0010 §14.26（v1.26）；`docs/LEDGER_FOLD_STATE_CACHE_DESIGN_2026-08-18.md`；
   CLI_PROJECT_INDEX（FUS-LEDGER-FOLD-STATE）；BACKLOG 6g / TODO P1
-- orz 子模块：`a5bea77`（feat/fusion-architecture）
+- orz 子模块：`a5bea77`（feat/fusion-architecture）；**2026-08-18 审查收口
+  `5274b39`**（设计 §3.5 归档实现、`ledger_fold_advance` 事件、完整性加固，
+  详见 §6）
 
 ## 1. 背景与根因（折叠滑动重写前缀）
 
@@ -68,9 +70,10 @@ loop-top（与压缩同纪律、checkpoint 轮优先）每请求前用
   （触发前无台账、推进后按冻结台账版本锚定的纯追加断言）；
   `fold_state_resets_after_compaction_and_summary_uses_same_view`
   （折叠先于摘要、摘要输入含冻结台账、压缩后重置并重新累积）。
-- orz-loop 450 通过 / 0 失败（基线 443 + 7 新增）；orz-assurance / orz-tui
-  178 / orz-bin（含 acaf_e2e 23、real_flag）全量通过；clippy 无新增可归因
-  告警；`cargo fmt --all` 收口（含 prompt.rs 上批遗留换行漂移）。
+- orz-loop 452 通过 / 0 失败 / 3 ignored（455 项；审查收口后实测；审计首版
+  记 450 系基线口径偏差）；orz-assurance 152 / orz-tui 178 / orz-bin（含
+  acaf_e2e 23、real_flag）全量通过；clippy 无新增可归因告警；`cargo fmt
+  --all` 收口（含 prompt.rs 上批遗留换行漂移）。
 - manifest 重生成 1401 条目、仓库门禁 `check_repository.py` valid（0 错误）。
 
 ## 4. 预期收益与实机验证
@@ -87,3 +90,44 @@ loop-top（与压缩同纪律、checkpoint 轮优先）每请求前用
 - 未折叠即压缩的罕见情形（单轮超大、无完整轮可折叠）：摘要输入=完整原文
   视图（与主请求同源），成本同主请求量级——设计接受。
 - fold 状态不持久化：恢复/跨 prompt/跨车道一律 None 重新累积（§3.6）。
+
+## 6. 二次全面审查收口（2026-08-18；orz 5274b39）
+
+用户指示对首版实施进行全面检查（设计合理性 / 实现合理性 / 设计—实现符合性）
+并处理全部审查发现。处置如下：
+
+1. **设计 §3.5 第 1 步归档缺口（首版漏实现）**：压缩成功分支此前只做
+   `fold_state.reset()`，冻结台账文本被直接丢弃（`summary_archive_markdown`
+   无台账段）。收口后成功分支把 `folded_ledger` 以「折叠台账（冻结快照）」
+   段追加进摘要存档——drain 后存档成为台账唯一落盘快照。终止态（摘要重试
+   失败）无归档文件、不落盘，登记为接受边界。测试
+   `fold_state_resets_after_compaction_and_summary_uses_same_view` 改为断言
+   两次压缩归档均含冻结台账。
+2. **折叠推进无事件留痕（设计层欠账）**：新增 v0.2 事件 `ledger_fold_advance`
+   （`fold_start`/`fold_cut`/`rounds_folded`/`view_estimate_tokens`/
+   `agent_role`），loop-top 真实推进成功才发（防空转 no-op 不发）。Schema/
+   verifier/fixtures/生成器/TUI 全链同步；verifier 窗口不变量：窗口内
+   `fold_start` 恒定、`fold_cut` 严格递增、`rounds_folded` 不递减，
+   `context_compressed` 重置开新窗。
+3. **完整性加固（首版既有边界）**：`collapsed_cut` 回退只查边界轮，中途不
+   完整轮会被折叠成 `no_result` 行（正常流程不可达、防御加固）。改为
+   `ranges[..collapse_count].all(is_round_complete)`，新增
+   `mid_history_incomplete_round_never_folds` 单测。
+4. **死代码清理**：`collapsed_round_count` 已被 `rounds_before` 取代、无
+   生产调用，删除。
+5. **压缩联动测试修正（暴露既有测试缺陷）**：原测试脚本 prompt_tokens
+   （2K）与真实视图量级（chars/2 ≈ 5–9K）不一致，缩减守卫必然拦截首个
+   rhythm 触发，`summary_response()` 被普通轮次消费、摘要实际走终止态——
+   原断言只查 marker 形状故未暴露。收口后脚本 prompt_tokens 提至 20K，两次
+   rhythm 触发均走成功路径（两次归档均含台账）。
+6. **口径/文档修正**：设计 §4 显式区分 session_end 终局清理（全量估算，
+   既有语义）与 loop-top 两口径（折叠视图）；设计 §3.1 补 per-loop local
+   实施注记；审计测试计数修正 450 → 452（455 项、3 ignored）。
+7. **fixture 生成器脱节修复（既有隐患）**：`generate_run_event_fixtures.py`
+   的 V02 列表缺 console 三事件与身份/时间戳覆盖，重生成会删 console
+   fixtures——已回填列表、payload 与 `V02_ENVELOPE_IDENTITY_OVERRIDES`；
+   重生成后除新事件外仅 console-mode-transition 数组格式规范化（语义不变）。
+
+验证：orz-loop 452 / orz-tui 178 / orz-assurance 152 / 0 失败；Python
+`test_run_event_conformance` 15 / `test_run_event_journal_validation` 214 通过；
+clippy 无新增可归因告警；manifest 1401、仓库门禁 valid。

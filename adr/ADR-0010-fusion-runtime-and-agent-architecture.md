@@ -1945,6 +1945,22 @@ ADR §3.6 正文修订随实施登记。
    450 / orz-assurance / orz-tui 178 / orz-bin 全量通过、clippy 无新增告警、
    manifest 1401、仓库门禁 valid；实施审计见
    `docs/audits/GAP_LEDGER_FOLD_STATE_IMPL_AUDIT_2026-08-18.md`。
+   **2026-08-18 二次全面审查收口（orz 5274b39）**：① 设计 §3.5 第 1 步
+   归档缺口补实现——压缩成功分支把冻结台账块以「折叠台账（冻结快照）」段
+   追加进摘要存档（drain 后存档为唯一台账快照）；② 新增 v0.2 事件
+   `ledger_fold_advance`（fold_start/fold_cut/rounds_folded/
+   view_estimate_tokens/agent_role；真实推进才发、防空转不发），每窗口一次
+   前缀重写可在事件面归因（Schema/verifier/fixtures/TUI 全链同步，verifier
+   窗口不变量：fold_start 恒定、fold_cut 严格递增、rounds_folded 不递减、
+   context_compressed 重置开新窗）；③ `collapsed_cut` 完整性回退覆盖全部
+   被折叠轮（中途不完整轮不再折叠成 no_result 行）；④ 删除死代码
+   `collapsed_round_count`；⑤ 压缩联动测试修正（脚本 prompt_tokens 与真实
+   视图量级一致，首个 rhythm 触发走成功路径——原测试实际走终止态未被断言
+   暴露）；⑥ 口径/文档修正（session_end 全量估算显式区分、设计 §3.1 补
+   per-loop local 注记、审计计数 450→452）；⑦ fixture 生成器回填 console
+   三事件与身份覆盖（既有脱节隐患）。验证：orz-loop 452 / orz-tui 178 /
+   orz-assurance 152、Python conformance 15 + journal validation 214 通过、
+   clippy 无新增可归因告警、manifest 1401、仓库门禁 valid。
    来源：2026-08-18 缓存调研（dsh 对照 + orz 审计 + 复刻模拟）；DeepSeek
    TTL 经用户体感（社区 5 小时说法、长任务正常命中）排除为现实风险；
    CLI_PROJECT_INDEX 登记。

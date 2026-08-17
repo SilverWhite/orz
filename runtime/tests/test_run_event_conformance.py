@@ -278,7 +278,9 @@ class RunEventV02ContractTests(unittest.TestCase):
         PLAN-FIRST 阶段 A (2026-08-16): 47 → 48 (+plan_write).
         PLAN-FIRST 阶段 C (2026-08-16): 48 → 50 (+console_mode_transition,
         +console_order_written).
-        P0-E 第 4 项 (2026-08-17): 50 → 51 (+console_order_rejected)."""
+        P0-E 第 4 项 (2026-08-17): 50 → 51 (+console_order_rejected).
+        FUS-LEDGER-FOLD-STATE (2026-08-18): 51 → 52
+        (+ledger_fold_advance)."""
         schema = load_json(RUN_EVENT_SCHEMA_V02)
         enum_events = set(schema["properties"]["event_type"]["enum"])
         fixture_events = {
@@ -287,7 +289,7 @@ class RunEventV02ContractTests(unittest.TestCase):
             if path.name != "chained-run-finished.valid.json"
         }
         self.assertEqual(fixture_events, enum_events)
-        self.assertEqual(len(enum_events), 51)
+        self.assertEqual(len(enum_events), 52)
         self.assertNotIn("neutral_inquiry", enum_events)
         self.assertNotIn("retrieval_completion_check", enum_events)
 

@@ -55,6 +55,31 @@ V02_ENVELOPE_TIMESTAMP_OVERRIDES = {
     "citation_validation": "2026-08-14T00:00:00Z",
 }
 
+# PLAN-FIRST 阶段 C / P0-E / FUS-LEDGER-FOLD-STATE (2026-08-16/17/18): the
+# console-family and plan_write envelope fixtures in the committed tree
+# carry hand-crafted run/event identities and timestamps (added before the
+# generator covered them). Keep the overrides so a regeneration is
+# byte-identical to the committed tree — (run_id, event_id, timestamp);
+# None keeps the derived value.
+V02_ENVELOPE_IDENTITY_OVERRIDES = {
+    "console_mode_transition": (
+        "RUN-CONF-CMODE",
+        "EVT-CONF-CMODE-000",
+        "2026-08-16T00:00:00Z",
+    ),
+    "console_order_written": (
+        "RUN-CONF-CORDER",
+        "EVT-CONF-CORDER-000",
+        "2026-08-16T00:00:00Z",
+    ),
+    "console_order_rejected": (
+        "RUN-CONF-CREJ",
+        "EVT-CONF-CREJ-000",
+        "2026-08-17T00:00:00Z",
+    ),
+    "plan_write": (None, None, "2026-08-16T00:00:00Z"),
+}
+
 # 33 event types in run-event-v0.1.schema.json enum order.
 EVENT_TYPES = [
     "run_preflight",
@@ -146,6 +171,15 @@ V02_EVENT_TYPES = [
       # gate result — plan identity/goal/step count, mechanical validation,
       # one-refill attempt progression and degrade reason.
       "plan_write",
+      # PLAN-FIRST 阶段 C (2026-08-16, ADR-0010 §14.17⑱): console/direct
+      # dual-mode transition decision record; action-bar order record;
+      # P0-E 第 4 项 (2026-08-17): pre-issuance order rejection.
+      "console_mode_transition",
+      "console_order_written",
+      "console_order_rejected",
+      # FUS-LEDGER-FOLD-STATE (2026-08-18, ADR-0010 §14.26): mechanical
+      # action-ledger fold advance (cache-miss attribution).
+      "ledger_fold_advance",
       "snapshot_created",
     "snapshot_restored",
     "artifact_registered",
@@ -177,6 +211,10 @@ SLUGS_V02 = {
       "context_recovery_truncated": "context-recovery-truncated",
       "epoch_archive_write_failed": "epoch-archive-write-failed",
       "plan_write": "plan-write",
+      "console_mode_transition": "console-mode-transition",
+      "console_order_written": "console-order-written",
+      "console_order_rejected": "console-order-rejected",
+      "ledger_fold_advance": "ledger-fold-advance",
   }
 
 # The v0.2 events with their own v0.2 payload schema (the rest of the v0.2
@@ -219,6 +257,15 @@ V02_PAYLOAD_EVENTS = [
       # gate result — plan identity/goal/step count, mechanical validation,
       # one-refill attempt progression and degrade reason.
       "plan_write",
+      # PLAN-FIRST 阶段 C (2026-08-16, ADR-0010 §14.17⑱): console mode
+      # transition / action-bar order record; P0-E 第 4 项 (2026-08-17):
+      # pre-issuance order rejection.
+      "console_mode_transition",
+      "console_order_written",
+      "console_order_rejected",
+      # FUS-LEDGER-FOLD-STATE (2026-08-18, ADR-0010 §14.26): mechanical
+      # action-ledger fold advance.
+      "ledger_fold_advance",
   ]
 
 SLUGS = {
@@ -945,6 +992,56 @@ PAYLOAD_GOOD_V02: dict[str, dict] = {
           },
           "degrade_reason": None,
       },
+      # PLAN-FIRST 阶段 C (2026-08-16, ADR-0010 §14.17⑱): console mode
+      # transition decision record (PLAN_FIRST_BLACKBOARD_DESIGN §7).
+      "console_mode_transition": {
+          "transition_id": "TRANS-00000000-0000-0000-0000-000000000000",
+          "from": "console",
+          "to": "direct",
+          "trigger": "assistant_failure_streak",
+          "streak": 3,
+          "order_ids": ["ORD-000001", "ORD-000002", "ORD-000003"],
+          "model_decision": "switch",
+          "model_reason": "assistant layer failed three consecutive orders",
+          "run_id": "RUN-CONF-CMODE",
+          "round": 4,
+          "plan_epoch": 1,
+          "related_transition_id": None,
+      },
+      # PLAN-FIRST 阶段 C (2026-08-16, ADR-0010 §14.17⑱): the action-bar
+      # order record — identity, step binding and mechanical stamps
+      # (PLAN_FIRST_BLACKBOARD_DESIGN §5-§6).
+      "console_order_written": {
+          "order_id": "ORD-000001",
+          "write_call_id": "call-write-1",
+          "action": "workspace.read_file",
+          "step_id": "s1",
+          "round": 2,
+          "plan_epoch": 1,
+          "run_id": "RUN-CONF-CORDER",
+      },
+      # P0-E 第 4 项 (2026-08-17, ADR-0010 §14.21 项 3): pre-issuance
+      # rejection of a written order (receipt stays the human view).
+      "console_order_rejected": {
+          "order_id": "ORD-000011",
+          "step": "protocol",
+          "phase": "pre_issue",
+          "code": "step_not_done",
+          "reason": "order refused — step_not_done: the current executable step is s1",
+          "round": 3,
+          "plan_epoch": 1,
+          "run_id": "RUN-CONF-CREJ",
+      },
+      # FUS-LEDGER-FOLD-STATE (2026-08-18, ADR-0010 §14.26): mechanical
+      # action-ledger fold advance — the request-view prefix is rewritten
+      # once per fold window (cache-miss attribution).
+      "ledger_fold_advance": {
+          "fold_start": 1,
+          "fold_cut": 5,
+          "rounds_folded": 2,
+          "view_estimate_tokens": 128000,
+          "agent_role": "main",
+      },
   }
 
 # One constraint violation per v0.2 event (never a bare missing-required when
@@ -1296,6 +1393,55 @@ PAYLOAD_BAD_V02: dict[str, dict] = {
           },
           "degrade_reason": None,
       },
+      # PLAN-FIRST 阶段 C (2026-08-16, ADR-0010 §14.17⑱): one constraint
+      # violation — related_transition_id must be null when the transition
+      # stays on the same mode.
+      "console_mode_transition": {
+          "transition_id": "TRANS-BAD",
+          "from": "console",
+          "to": "direct",
+          "trigger": "assistant_failure_streak",
+          "streak": 0,
+          "order_ids": [],
+          "model_decision": "stay",
+          "model_reason": None,
+          "run_id": "RUN-CONF-CMODE",
+          "round": 4,
+          "plan_epoch": 1,
+          "related_transition_id": "not-null",
+      },
+      # PLAN-FIRST 阶段 C (2026-08-16, ADR-0010 §14.17⑱): one constraint
+      # violation — action must be a string.
+      "console_order_written": {
+          "order_id": "",
+          "write_call_id": "",
+          "action": 7,
+          "step_id": "",
+          "round": -1,
+          "plan_epoch": -1,
+          "run_id": "",
+      },
+      # P0-E 第 4 项 (2026-08-17, ADR-0010 §14.21 项 3): one constraint
+      # violation — phase outside the closed enum.
+      "console_order_rejected": {
+          "order_id": "",
+          "step": "",
+          "phase": "executed",
+          "code": "",
+          "reason": "",
+          "round": -1,
+          "plan_epoch": -1,
+          "run_id": "",
+      },
+      # FUS-LEDGER-FOLD-STATE (2026-08-18, ADR-0010 §14.26): one constraint
+      # violation — agent_role outside the lane enum.
+      "ledger_fold_advance": {
+          "fold_start": 1,
+          "fold_cut": 5,
+          "rounds_folded": 2,
+          "view_estimate_tokens": 128000,
+          "agent_role": "orchestrator",
+      },
   }
 
 # ACAF Slice 2 fail-closed (2026-08-13): extra positive payload fixtures for
@@ -1516,12 +1662,16 @@ def _envelope(event_type: str, payload: dict, sequence: int, previous: str | Non
 
 def _envelope_v02(event_type: str, payload: dict, sequence: int, previous: str | None) -> dict:
     slug = SLUGS_V02.get(event_type) or SLUGS[event_type]
+    identity = V02_ENVELOPE_IDENTITY_OVERRIDES.get(event_type, (None, None, None))
+    run_id = identity[0] or f"RUN-CONF-{slug.upper()}"
+    event_id = identity[1] or f"EVT-CONF-{sequence:03d}"
+    timestamp = identity[2] or V02_ENVELOPE_TIMESTAMP_OVERRIDES.get(event_type, TIMESTAMP)
     return {
         "schema_version": "0.2.0-draft",
-        "run_id": f"RUN-CONF-{slug.upper()}",
-        "event_id": f"EVT-CONF-{sequence:03d}",
+        "run_id": run_id,
+        "event_id": event_id,
         "sequence": sequence,
-        "timestamp": V02_ENVELOPE_TIMESTAMP_OVERRIDES.get(event_type, TIMESTAMP),
+        "timestamp": timestamp,
         "event_type": event_type,
         "run_manifest_sha256": ZERO_HASH,
         "previous_event_sha256": previous,
@@ -1711,7 +1861,8 @@ Scope:
   `tool-completed.policy-denial-bad-source.constraint.invalid` (unknown
   source enum).
 - `envelope/<slug>.valid.json` — a full 13-field v0.2 envelope for **every**
-  event in the v0.2 enum (47 events). The v0.2-payload events carry
+  event in the v0.2 enum (52 events — 51 prior + ledger_fold_advance from
+  FUS-LEDGER-FOLD-STATE 2026-08-18). The v0.2-payload events carry
   their v0.2 payload; the other events reuse the v0.1 payload shape
   unchanged (their payload schema files did not change — adjudicated
   decision: no copied schema files, the v0.1 files remain authoritative for

@@ -1,6 +1,8 @@
 # ORZ 动作台账折叠状态化与缓存稳定设计（2026-08-18）
 
 > 状态：`implemented`（2026-08-18 设计定案；同日用户指示实施闭合，orz a5bea77；
+> 2026-08-18 二次审查收口：冻结台账归档进摘要存档、新增 `ledger_fold_advance`
+> 事件、折叠完整性加固，orz 5274b39；
 > 实施审计见 `docs/audits/GAP_LEDGER_FOLD_STATE_IMPL_AUDIT_2026-08-18.md`）
 > 权威：ADR-0010 §14.26（v1.26 设计定案登记）；本文件取代
 > `CONTEXT_COMPACTION_DESIGN_2026-08-14.md` §3 的「每个模型工具轮完成后坍缩、
@@ -163,6 +165,12 @@ folded_ledger: Option<String> // 冻结台账块文本（推进时一次性渲�
 不变量：`fold_start < fold_cut`；两者同时为 Some 或同时为 None；`folded_ledger`
 非空当且仅当状态已折叠。
 
+> 实施注记（2026-08-18 审查收口）：折叠三态为**每轮循环实例局部**（随
+> `LoopOutcome` 返回），而非字面的 controller 会话级字段——同一 controller
+> 被主车道与嵌套检索子代理共用，共享字段会被子代理调度污染；语义等价（每次
+> 循环起始 fold=None 重新累积，与 §3.6「恢复后重新累积」一致，恢复后首次
+> 推进重写一次前缀为接受的低频成本）。
+
 ### 3.2 请求视图构建（取代无状态重算）
 
 每请求前：
@@ -192,6 +200,11 @@ folded_ledger: Option<String> // 冻结台账块文本（推进时一次性渲�
 - 无完整轮可折叠时不推进（防空转；保留起点推进逻辑复用 `collapsed_cut`
   的整轮配对纪律）。
 - 推进 = 一次前缀重写（每窗口一次，接受；窗口内其余请求全部命中）。
+- 推进留痕（2026-08-18 审查收口）：每次**真实推进**（非防空转 no-op）写入
+  v0.2 事件 `ledger_fold_advance`（`fold_start`/`fold_cut`/`rounds_folded`/
+  `view_estimate_tokens`/`agent_role`）——`request_header_change` 只跟踪
+  system/tools/config 摘要，折叠推进造成的前缀重写此前无法经事件面归因；
+  该事件使每窗口一次的 miss 可定位（配合 provider 缓存统计分窗口核对）。
 - 推进不改变 `messages` 本体（journal/sidecar 完整记录保留，审计双轨不变）。
 
 ### 3.4 tail 语义
@@ -206,6 +219,10 @@ folded_ledger: Option<String> // 冻结台账块文本（推进时一次性渲�
 
 1. 旧冻结台账归档：追加到本次摘要存档 markdown（与旧 marker 同纪律——滚动
    单 marker，旧内容进存档），`messages` 中只保留压缩 marker；
+   **2026-08-18 审查收口已实施**：成功分支把 `folded_ledger` 以
+   「折叠台账（冻结快照）」代码段追加进存档（`summary_archive_markdown`）；
+   终止态（摘要重试失败）无归档文件、台账不落盘——登记为接受边界（journal
+   事件仍保留原始工具记录，台账可确定性重推导）。
 2. drain `[第一个工具声明 .. 保留起点)` + 插入 marker（沿用现状
    `run_template_compact` 逻辑；保留起点基于 `fold_cut` 而非重算 tail）；
 3. `fold_start` / `fold_cut` / `folded_ledger` 重置为 None（marker 之后重新
@@ -232,7 +249,9 @@ folded_ledger: Option<String> // 冻结台账块文本（推进时一次性渲�
 
 注：压缩触发的测量口径为「上一请求实测 prompt tokens（折叠视图）」；折叠推进
 的测量口径为「请求前估算（视图）」——两口径均以**折叠视图**为准，写入文档
-避免混淆。
+避免混淆。**session_end 终局清理例外**（2026-08-18 审查收口显式区分）：主/
+检索车道 session_end 沿用「全量 conversation 估算」门槛（既有语义，压缩折叠
+视图之外的完整持久化内容），不属上述 loop-top 两口径。
 
 ## 5. 命中率与成本估算（复刻模拟，F = 128K / T = 192K）
 
@@ -280,3 +299,12 @@ folded_ledger: Option<String> // 冻结台账块文本（推进时一次性渲�
   实施时在配置注释与审计中标注。
 - `build_collapsed_request` 既有调用点（主请求 + 摘要输入）全部迁移到有状态
   视图，避免两套口径漂移。
+- 折叠推进无事件留痕（2026-08-18 审查收口已补）：每窗口一次前缀重写无法经
+  `request_header_change`（只跟踪 system/tools/config）归因——新增
+  `ledger_fold_advance` 事件（§3.3），实机验证按事件 + provider 缓存统计
+  分窗口核对。
+- 中途不完整轮（折叠边界内的轮次缺结果）可能被折叠成 `no_result` 行且声明
+  从模型视图消失（2026-08-18 审查收口修复）：`collapsed_cut` 完整性回退
+  改为覆盖**全部**将被折叠轮（`ranges[..collapse_count].all(is_round_complete)`），
+  与「不完整轮保留原文」注释契约一致；正常流程不可达（结果在下一声明前必
+  落盘），属防御加固。

@@ -1015,6 +1015,109 @@ class ConsoleModeTransitionRuleTests(unittest.TestCase):
         errors = _verify_v02_console_order_rejected([base_written, bad4])
         self.assertTrue(any("phase must be pre_issue or issue" in e for e in errors), errors)
 
+    def test_ledger_fold_advance_window_invariants(self) -> None:
+        """FUS-LEDGER-FOLD-STATE (2026-08-18, ADR-0010 §14.26): every
+        ledger_fold_advance carries a valid fold point (fold_start <
+        fold_cut, rounds_folded ≥ 1, lane enum); inside a fold window
+        fold_start is constant and fold_cut strictly increases; a
+        context_compressed reset starts a fresh window."""
+        from assurance.run_event_journal_validation import (
+            _verify_v02_ledger_fold_advance,
+        )
+
+        def advance(
+            run_id: str,
+            fold_start: int,
+            fold_cut: int,
+            rounds_folded: int = 2,
+            estimate: int = 128000,
+            agent_role: str = "main",
+        ) -> dict:
+            return {
+                "payload_schema": "run-event-v0.2.schema.json",
+                "event_type": "ledger_fold_advance",
+                "run_id": run_id,
+                "payload": {
+                    "fold_start": fold_start,
+                    "fold_cut": fold_cut,
+                    "rounds_folded": rounds_folded,
+                    "view_estimate_tokens": estimate,
+                    "agent_role": agent_role,
+                },
+            }
+
+        def compact(run_id: str) -> dict:
+            return {
+                "payload_schema": "run-event-v0.2.schema.json",
+                "event_type": "context_compressed",
+                "run_id": run_id,
+                "payload": {
+                    "trigger_tokens": 192000,
+                    "target_tokens": 9000,
+                    "rounds_since_last_compaction": 20,
+                    "rounds_dropped": 10,
+                    "messages_dropped": 30,
+                    "messages_kept": 8,
+                    "estimated_tokens_after": 9000,
+                    "mode": "template_summary",
+                    "reason": "rhythm",
+                    "summary_id": "compaction-RUN-T-0001",
+                    "summary_digest": "a" * 64,
+                    "summary_path": ".gsa/compaction/x.md",
+                    "summary_incomplete": False,
+                    "retained_rounds": 2,
+                    "guard_failed": False,
+                    "archive_write_failed": False,
+                },
+            }
+
+        # Valid window: fold_start constant, fold_cut strictly increasing,
+        # rounds_folded non-decreasing.
+        events = [
+            advance("RUN-T", 1, 5, rounds_folded=2),
+            advance("RUN-T", 1, 9, rounds_folded=4),
+        ]
+        self.assertEqual(_verify_v02_ledger_fold_advance(events), [])
+
+        # A compaction reset opens a fresh window — the next advance may
+        # use any indices (re-accumulation from the marker).
+        events = [
+            advance("RUN-T", 1, 9, rounds_folded=4),
+            compact("RUN-T"),
+            advance("RUN-T", 0, 4, rounds_folded=1),
+        ]
+        self.assertEqual(_verify_v02_ledger_fold_advance(events), [])
+
+        # Invariant violations.
+        bad_invariant = advance("RUN-T", 5, 1)
+        errors = _verify_v02_ledger_fold_advance([bad_invariant])
+        self.assertTrue(any("fold_start < fold_cut" in e for e in errors), errors)
+
+        shrinking_cut = [
+            advance("RUN-T", 1, 9, rounds_folded=4),
+            advance("RUN-T", 1, 5, rounds_folded=5),
+        ]
+        errors = _verify_v02_ledger_fold_advance(shrinking_cut)
+        self.assertTrue(any("fold_cut must" in e for e in errors), errors)
+
+        changed_start = [
+            advance("RUN-T", 1, 9, rounds_folded=4),
+            advance("RUN-T", 2, 11, rounds_folded=5),
+        ]
+        errors = _verify_v02_ledger_fold_advance(changed_start)
+        self.assertTrue(any("fold_start changed" in e for e in errors), errors)
+
+        shrinking_rounds = [
+            advance("RUN-T", 1, 9, rounds_folded=4),
+            advance("RUN-T", 1, 11, rounds_folded=3),
+        ]
+        errors = _verify_v02_ledger_fold_advance(shrinking_rounds)
+        self.assertTrue(any("rounds_folded" in e for e in errors), errors)
+
+        bad_role = advance("RUN-T", 1, 5, agent_role="orchestrator")
+        errors = _verify_v02_ledger_fold_advance([bad_role])
+        self.assertTrue(any("agent_role must be" in e for e in errors), errors)
+
 
 class SyntheticBadJournalTests(unittest.TestCase):
     """Fail-closed behavior on tampered/partial journals (built from the

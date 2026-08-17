@@ -215,6 +215,15 @@ PAYLOAD_SCHEMA_BY_EVENT_TYPE_V02: dict[str, tuple[str, Path]] = {
           "console-order-rejected",
           RUNTIME / "console-order-rejected-event-payload-v0.2.schema.json",
       ),
+      # FUS-LEDGER-FOLD-STATE (2026-08-18, ADR-0010 §14.26): mechanical
+      # action-ledger fold advance — the request-view prefix is rewritten
+      # once per fold window, so the event carries the new fold point, the
+      # folded-round count and the triggering view estimate for cache-miss
+      # attribution (LEDGER_FOLD_STATE_CACHE_DESIGN §3.3/§8).
+      "ledger_fold_advance": (
+          "ledger-fold-advance",
+          RUNTIME / "ledger-fold-advance-event-payload-v0.2.schema.json",
+      ),
   }
 
 # Track-resolution table (contract §5 enforcement): every registered
@@ -1033,6 +1042,106 @@ def _verify_v02_console_order_rejected(events: list[dict[str, Any]]) -> list[str
                     f"{stamp}={payload.get(stamp)!r} != written order "
                     f"{stamp}={written.get(stamp)!r}"
                 )
+    return errors
+
+
+def _verify_v02_ledger_fold_advance(events: list[dict[str, Any]]) -> list[str]:
+    """ADR-0010 §14.26 / LEDGER_FOLD_STATE_CACHE_DESIGN §3.3-§3.5
+    cross-checks (FUS-LEDGER-FOLD-STATE, 2026-08-18 review fix):
+
+    - every ledger_fold_advance carries a valid fold point: fold_start and
+      fold_cut are non-negative integers with fold_start < fold_cut (the
+      design invariant), rounds_folded ≥ 1, view_estimate_tokens ≥ 0 and
+      agent_role in the lane enum (main / internal_retrieval /
+      external_retrieval);
+    - within a fold window (bounded by context_compressed events of the
+      same run) fold_start is CONSTANT (set at the first advance) and
+      fold_cut is STRICTLY increasing (each advance moves the retention
+      start forward; the anti-spin guard refuses kept_start <= fold_cut);
+      rounds_folded is non-decreasing (the ledger never shrinks inside a
+      window);
+    - a context_compressed event resets the fold state — the next
+      ledger_fold_advance starts a fresh window and may legitimately use
+      any indices (re-accumulation from the marker).
+    """
+    errors: list[str] = []
+    # Per-run fold-window state: (fold_start, fold_cut, rounds_folded) or
+    # None after a compaction reset (the next advance starts a fresh window).
+    window: dict[str, tuple[int, int, int] | None] = {}
+    for index, event in enumerate(events):
+        if not _is_v02(event):
+            continue
+        etype = event.get("event_type")
+        run_id = event.get("run_id", "")
+        if etype == "context_compressed":
+            window[run_id] = None
+            continue
+        if etype != "ledger_fold_advance":
+            continue
+        payload = event["payload"]
+        fold_start = payload.get("fold_start")
+        fold_cut = payload.get("fold_cut")
+        rounds_folded = payload.get("rounds_folded")
+        estimate = payload.get("view_estimate_tokens")
+        agent_role = payload.get("agent_role")
+        if not isinstance(fold_start, int) or fold_start < 0:
+            errors.append(
+                f"event {index}: ledger_fold_advance fold_start must be a "
+                f"non-negative integer, got {fold_start!r}"
+            )
+        if not isinstance(fold_cut, int) or fold_cut < 0:
+            errors.append(
+                f"event {index}: ledger_fold_advance fold_cut must be a "
+                f"non-negative integer, got {fold_cut!r}"
+            )
+        if isinstance(fold_start, int) and isinstance(fold_cut, int) and not (
+            fold_start < fold_cut
+        ):
+            errors.append(
+                f"event {index}: ledger_fold_advance invariant "
+                f"fold_start < fold_cut violated ({fold_start} >= {fold_cut})"
+            )
+        if not isinstance(rounds_folded, int) or rounds_folded < 1:
+            errors.append(
+                f"event {index}: ledger_fold_advance rounds_folded must be "
+                f"a positive integer, got {rounds_folded!r}"
+            )
+        if not isinstance(estimate, int) or estimate < 0:
+            errors.append(
+                f"event {index}: ledger_fold_advance view_estimate_tokens "
+                f"must be a non-negative integer, got {estimate!r}"
+            )
+        if agent_role not in ("main", "internal_retrieval", "external_retrieval"):
+            errors.append(
+                f"event {index}: ledger_fold_advance agent_role must be "
+                f"main/internal_retrieval/external_retrieval, got {agent_role!r}"
+            )
+        prev = window.get(run_id)
+        if prev is not None:
+            prev_start, prev_cut, prev_rounds = prev
+            if isinstance(fold_start, int) and fold_start != prev_start:
+                errors.append(
+                    f"event {index}: ledger_fold_advance fold_start changed "
+                    f"inside a fold window ({prev_start} -> {fold_start})"
+                )
+            if isinstance(fold_cut, int) and fold_cut <= prev_cut:
+                errors.append(
+                    f"event {index}: ledger_fold_advance fold_cut must "
+                    f"increase inside a fold window (previous {prev_cut}, "
+                    f"got {fold_cut})"
+                )
+            if isinstance(rounds_folded, int) and rounds_folded < prev_rounds:
+                errors.append(
+                    f"event {index}: ledger_fold_advance rounds_folded "
+                    f"shrank inside a fold window "
+                    f"({prev_rounds} -> {rounds_folded})"
+                )
+        if (
+            isinstance(fold_start, int)
+            and isinstance(fold_cut, int)
+            and isinstance(rounds_folded, int)
+        ):
+            window[run_id] = (fold_start, fold_cut, rounds_folded)
     return errors
 
 
@@ -2967,6 +3076,7 @@ def validate_journal_text(text: str) -> list[str]:
         errors.extend(_verify_v02_console_mode_transition(events))
         errors.extend(_verify_v02_console_order_written(events))
         errors.extend(_verify_v02_console_order_rejected(events))
+        errors.extend(_verify_v02_ledger_fold_advance(events))
         errors.extend(_verify_v02_lifecycle(events))
         errors.extend(_verify_v02_retrieval_mode(events))
         errors.extend(_verify_v02_result_consistency(events))

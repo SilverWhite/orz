@@ -1,0 +1,21 @@
+{
+  "schema_version": "0.2.0-draft",
+  "run_id": "RUN-CONF-LEDGER-FOLD-ADVANCE",
+  "event_id": "EVT-CONF-000",
+  "sequence": 0,
+  "timestamp": "2026-08-06T00:00:00Z",
+  "event_type": "ledger_fold_advance",
+  "run_manifest_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+  "previous_event_sha256": null,
+  "payload_schema": "run-event-v0.2.schema.json",
+  "payload": {
+    "fold_start": 1,
+    "fold_cut": 5,
+    "rounds_folded": 2,
+    "view_estimate_tokens": 128000,
+    "agent_role": "main"
+  },
+  "payload_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+  "redaction": "none",
+  "event_sha256": "0000000000000000000000000000000000000000000000000000000000000000"
+}

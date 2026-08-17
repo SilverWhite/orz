@@ -686,6 +686,15 @@
   LoopOutcome 返回）：同一 controller 被主车道与嵌套检索子代理共用，共享
   字段会被子代理调度污染；语义等价（每次循环起始 None 重新累积）。未闭合
   计数不变（该设计轮按「实施前登记」口径未计入未闭合总数）。
+  **2026-08-18 二次全面审查收口（orz 5274b39）**：① 设计 §3.5 第 1 步
+  归档缺口补实现（冻结台账进摘要存档）；② 新增 v0.2 事件
+  `ledger_fold_advance`（每窗口一次前缀重写可归因；Schema/verifier/
+  fixtures/TUI 全链）；③ 折叠完整性回退覆盖全部被折叠轮；④ 死代码清理；
+  ⑤ 压缩联动测试修正（首个 rhythm 走成功路径、两次归档断言）；⑥ 口径/文档
+  修正（session_end 显式区分、审计计数 450→452）；⑦ fixture 生成器回填
+  console 三事件与身份覆盖。验证：orz-loop 452 / orz-tui 178 / orz-assurance
+  152、Python conformance 15 + journal validation 214 通过、clippy 无新增
+  可归因告警、manifest 1401、仓库门禁 valid。详见实施审计 §6。
 - 入口：[设计文档](LEDGER_FOLD_STATE_CACHE_DESIGN_2026-08-18.md) /
   [ADR-0010 §14.26](../adr/ADR-0010-fusion-runtime-and-agent-architecture.md) /
   [TODO](../TODO.md)。
@@ -759,6 +768,18 @@
   `docs/audits/GAP_LEDGER_FOLD_STATE_IMPL_AUDIT_2026-08-18.md`。未闭合计数
   不变（设计轮按「实施前登记」口径未计入未闭合总数）。ADR-0010 §14.26 /
   BACKLOG 6g / TODO P1 / 索引同步。
+- 2026-08-18：FUS-LEDGER-FOLD-STATE 二次全面审查收口登记（本窗口；用户指示
+  处理全部审查发现）——① 设计 §3.5 第 1 步归档缺口补实现（冻结台账进摘要
+  存档）；② 新增 v0.2 事件 `ledger_fold_advance`（推进留痕，Schema/verifier/
+  fixtures/TUI 全链）；③ 折叠完整性回退覆盖全部被折叠轮（中途不完整轮不再
+  被折叠）；④ 死代码 `collapsed_round_count` 删除；⑤ 压缩联动测试修正（脚本
+  prompt_tokens 与视图量级一致，首个 rhythm 触发走成功路径，两次归档均含
+  冻结台账）；⑥ 口径/文档修正（session_end 全量估算显式区分、设计 §3.1 补
+  per-loop local 注记、审计计数 450→452）；⑦ fixture 生成器回填 console
+  三事件与身份覆盖。orz 子模块 5274b39；orz-loop 452 / orz-tui 178 /
+  orz-assurance 152、Python conformance 15 + journal validation 214 通过、
+  clippy 无新增可归因告警、manifest 1401、仓库门禁 valid；ADR-0010 §14.26 /
+  BACKLOG 6g / TODO P1 / 索引 / 设计文档 / 实施审计同步。
 - 2026-08-18：FUS-LEDGER-FOLD-STATE 设计定案登记（用户裁决：先设计、不实施；
   纯文档）——动作台账折叠状态化：controller 会话级
   `fold_start`/`fold_cut`/`folded_ledger` 三态，请求视图 = preamble + 冻结台账

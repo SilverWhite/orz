@@ -194,6 +194,22 @@
 > clippy 无新增告警、manifest 1401、仓库门禁 valid）；orz 子模块 a5bea77；
 > 实施审计见 `docs/audits/GAP_LEDGER_FOLD_STATE_IMPL_AUDIT_2026-08-18.md`。
 > 未闭合计数不变（设计轮按「实施前登记」口径未计入未闭合总数）。
+> 2026-08-18 动作台账折叠状态化二次全面审查收口登记（用户指示处理全部审查
+> 发现）——① 设计 §3.5 第 1 步归档缺口补实现（压缩成功分支冻结台账进摘要
+> 存档「折叠台账（冻结快照）」段；终止态不落盘=接受边界）；② 新增 v0.2 事件
+> `ledger_fold_advance`（fold_start/fold_cut/rounds_folded/view_estimate_tokens/
+> agent_role，真实推进才发、防空转不发；Schema/verifier/fixtures/TUI 全链，
+> verifier 窗口不变量=fold_start 恒定/fold_cut 严格递增/rounds_folded 不递减/
+> context_compressed 重置开新窗）；③ `collapsed_cut` 完整性回退覆盖全部被
+> 折叠轮（中途不完整轮不再折叠成 no_result 行）；④ 死代码
+> `collapsed_round_count` 删除；⑤ 压缩联动测试修正（脚本 prompt_tokens 与
+> 真实视图量级一致，首个 rhythm 触发走成功路径——原测试实际走终止态未被
+> 断言暴露）；⑥ 口径/文档修正（session_end 全量估算显式区分、设计 §3.1 补
+> per-loop local 注记、审计计数 450→452）；⑦ fixture 生成器回填 console
+> 三事件与身份覆盖（既有脱节隐患）。orz 子模块 5274b39；orz-loop 452 /
+> orz-tui 178 / orz-assurance 152、Python conformance 15 + journal validation
+> 214 通过、clippy 无新增可归因告警、manifest 1401、仓库门禁 valid。未闭合
+> 计数不变。详见 ADR-0010 §14.26 / BACKLOG 6g / TODO P1 / 实施审计 §6。
 >
 > 当前唯一自然语言设计权威是 [`ADR-0010`](adr/ADR-0010-fusion-runtime-and-agent-architecture.md)。本文件只负责召回和路由，不替代 ADR、Schema、审计结论、测试证据或源代码。
 >

@@ -536,6 +536,18 @@
   全量通过、clippy 无新增告警、`cargo fmt --all` 收口、manifest 1401、仓库
   门禁 valid；orz a5bea77；ADR-0010 §14.26 / BACKLOG 6g / 索引 / 实施审计
   `docs/audits/GAP_LEDGER_FOLD_STATE_IMPL_AUDIT_2026-08-18.md` 同步。
+- [x] 2026-08-18 二次全面审查收口：① 设计 §3.5 第 1 步归档补实现（冻结台账
+  进摘要存档，成功分支「折叠台账（冻结快照）」段；终止态不落盘=接受边界）；
+  ② 新增 v0.2 事件 `ledger_fold_advance`（fold_start/fold_cut/rounds_folded/
+  view_estimate_tokens/agent_role；真实推进才发；Schema/verifier/fixtures/
+  TUI 全链，verifier 窗口不变量）；③ `collapsed_cut` 完整性回退覆盖全部
+  被折叠轮（新增中途不完整轮单测）；④ 死代码 `collapsed_round_count` 删除；
+  ⑤ 压缩联动测试修正（prompt_tokens 与视图量级一致、两次 rhythm 成功路径、
+  归档含台账断言）；⑥ 口径/文档修正（session_end 显式区分、设计 §3.1
+  per-loop local 注记、审计计数 450→452）；⑦ fixture 生成器回填 console
+  三事件与身份覆盖。orz 5274b39；orz-loop 452 / orz-tui 178 / orz-assurance
+  152、Python conformance 15 + journal validation 214 通过、clippy 无新增
+  可归因告警、manifest 1401、仓库门禁 valid。
 
 ## P2 — 生产化决策门
 

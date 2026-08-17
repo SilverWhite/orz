@@ -1,0 +1,7 @@
+{
+  "fold_start": 1,
+  "fold_cut": 5,
+  "rounds_folded": 2,
+  "view_estimate_tokens": 128000,
+  "agent_role": "main"
+}
