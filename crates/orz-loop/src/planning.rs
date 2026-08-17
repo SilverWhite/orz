@@ -77,9 +77,24 @@ pub(crate) enum PlanWriteOutcome {
 
 /// Parse + mechanically validate a `plan_write` plan object (design §5).
 pub(crate) fn parse_and_validate_plan(arguments: &Value) -> PlanVerdict {
-    let Some(Value::Object(plan)) = arguments.get("plan") else {
+    let Some(plan) = arguments.get("plan") else {
         return PlanVerdict {
-            errors: vec!["missing_required_field: plan".to_string()],
+            // P0-E (2026-08-17): the refill error must state the expected
+            // shape so a model that serialized the plan as a string can
+            // correct it in the single refill.
+            errors: vec![
+                "missing required field: plan (expected an object with plan_id / goal / steps[])"
+                    .to_string(),
+            ],
+            ..Default::default()
+        };
+    };
+    let Value::Object(plan) = plan else {
+        return PlanVerdict {
+            errors: vec![format!(
+                "plan must be an object with plan_id / goal / steps[] (got {})",
+                json_value_type(plan)
+            )],
             ..Default::default()
         };
     };
@@ -167,6 +182,18 @@ pub(crate) fn parse_and_validate_plan(arguments: &Value) -> PlanVerdict {
         plan_id,
         goal,
         steps,
+    }
+}
+
+/// Human-readable JSON type name for validation messages.
+fn json_value_type(v: &Value) -> &'static str {
+    match v {
+        Value::Null => "null",
+        Value::Bool(_) => "boolean",
+        Value::Number(_) => "number",
+        Value::String(_) => "string",
+        Value::Array(_) => "array",
+        Value::Object(_) => "object",
     }
 }
 
@@ -595,6 +622,124 @@ mod tests {
     fn missing_plan_is_an_error() {
         let v = parse_and_validate_plan(&serde_json::json!({}));
         assert!(v.errors.iter().any(|e| e.contains("plan")));
+    }
+
+    /// P0-E (2026-08-17): a plan serialized as a JSON string must be rejected
+    /// with a message that states the expected shape (the single-refill
+    /// opportunity depends on it).
+    #[test]
+    fn plan_as_string_error_states_shape() {
+        let v = parse_and_validate_plan(&serde_json::json!({
+            "plan": "{\"plan_id\":\"p\",\"goal\":\"g\",\"steps\":[]}"
+        }));
+        assert_eq!(v.errors.len(), 1, "{:?}", v.errors);
+        assert!(
+            v.errors[0].contains("plan must be an object with plan_id / goal / steps[]"),
+            "{:?}",
+            v.errors
+        );
+        assert!(v.errors[0].contains("got string"), "{:?}", v.errors);
+    }
+
+    /// P0-E (2026-08-17): a missing plan error also states the expected shape.
+    #[test]
+    fn missing_plan_error_states_shape() {
+        let v = parse_and_validate_plan(&serde_json::json!({}));
+        assert!(
+            v.errors[0].contains("missing required field: plan"),
+            "{:?}",
+            v.errors
+        );
+        assert!(
+            v.errors[0].contains("plan_id / goal / steps[]"),
+            "{:?}",
+            v.errors
+        );
+    }
+
+    /// P0-E probe audit (2026-08-17): loose/empty action shapes must all be
+    /// mechanically rejected — locks the actions shape against regressions.
+    #[test]
+    fn action_shape_probe_rejects_loose_shapes() {
+        let cases: Vec<(serde_json::Value, &str)> = vec![
+            (serde_json::json!([]), "empty array"),
+            (serde_json::json!([""]), "empty string item"),
+            (serde_json::json!(["workspace.read_file"]), "bare string item"),
+            (serde_json::json!([null]), "null item"),
+            (serde_json::json!([{}]), "empty object item"),
+            (
+                serde_json::json!([{"step_id": "s1", "do": "x"}]),
+                "missing with",
+            ),
+            (
+                serde_json::json!([{"step_id": "s1", "do": "x", "with": ""}]),
+                "string with",
+            ),
+            (
+                serde_json::json!([{"step_id": "s1", "do": "x", "with": []}]),
+                "array with",
+            ),
+            (
+                serde_json::json!([{"step_id": "s1", "do": "", "with": {}}]),
+                "empty do",
+            ),
+            (
+                serde_json::json!([{"step_id": "s1", "do": "   ", "with": {}}]),
+                "whitespace do",
+            ),
+            (
+                serde_json::json!([{"step_id": "", "do": "x", "with": {}}]),
+                "empty step_id",
+            ),
+            (
+                serde_json::json!([{"step_id": "s2", "do": "x", "with": {}}]),
+                "step_id mismatch",
+            ),
+            (serde_json::json!("not-an-array"), "string actions"),
+            (serde_json::json!(null), "null actions"),
+        ];
+        for (actions, label) in cases {
+            let plan = serde_json::json!({
+                "plan": {
+                    "plan_id": "p",
+                    "goal": "g",
+                    "steps": [
+                        {
+                            "id": "s1",
+                            "goal": "g",
+                            "actions": actions,
+                            "acceptance": "a",
+                            "evidence": [],
+                        }
+                    ],
+                }
+            });
+            let v = parse_and_validate_plan(&plan);
+            assert!(!v.errors.is_empty(), "{label}: loose shape passed: {actions}");
+        }
+    }
+
+    /// P0-E probe audit: the minimal well-formed action shape must pass.
+    #[test]
+    fn action_shape_probe_accepts_minimal_valid() {
+        let v = parse_and_validate_plan(&serde_json::json!({
+            "plan": {
+                "plan_id": "p",
+                "goal": "g",
+                "steps": [
+                    {
+                        "id": "s1",
+                        "goal": "g",
+                        "actions": [
+                            {"step_id": "s1", "do": "workspace.read_file", "with": {}}
+                        ],
+                        "acceptance": "a",
+                        "evidence": [],
+                    }
+                ],
+            }
+        }));
+        assert!(v.errors.is_empty(), "{:?}", v.errors);
     }
 
     #[test]
