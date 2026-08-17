@@ -618,6 +618,12 @@ pub(crate) async fn run_template_compact(
             rounds_dropped,
             false,
             guard_failed,
+            // FUS-LEDGER-FOLD-STATE (2026-08-18, ADR-0010 §14.26 / 设计
+            // §3.5 第 1 步): the frozen ledger the model saw is archived
+            // BEFORE the drain removes the folded region — the archive is
+            // the only surviving copy of the ledger snapshot. The fold
+            // state is still folded here (reset happens after the drain).
+            fold_state.folded_ledger.as_deref(),
         );
         let digest = crate::summary::archive_digest(&markdown);
         let archive_write_failed =
@@ -1004,8 +1010,32 @@ pub(crate) async fn run_agent_loop(
                 let view = crate::action_ledger::build_request_view(messages, &fold_state);
                 estimate_messages_tokens(&view)
             };
-            if view_estimate >= svc.context_compact.fold_trigger_tokens {
-                crate::action_ledger::advance_fold(messages, &mut fold_state, fold_tail);
+            if view_estimate >= svc.context_compact.fold_trigger_tokens
+                && crate::action_ledger::advance_fold(messages, &mut fold_state, fold_tail)
+            {
+                // FUS-LEDGER-FOLD-STATE (2026-08-18, ADR-0010 §14.26):
+                // one mechanical fold advance — the request-view prefix is
+                // rewritten once per fold window (the accepted per-window
+                // miss), so the event carries the new fold point and the
+                // triggering estimate for cache-miss attribution. Emitted
+                // only on a real advance: an anti-spin no-op (no complete
+                // round outside the tail) emits nothing — the repeated
+                // O(view) estimation until a new round arrives is accepted.
+                writer
+                    .record(
+                        EventType::LedgerFoldAdvance,
+                        serde_json::json!({
+                            "fold_start": fold_state.fold_start,
+                            "fold_cut": fold_state.fold_cut,
+                            "rounds_folded": fold_state
+                                .fold_cut
+                                .map(|cut| crate::action_ledger::rounds_before(messages, cut))
+                                .unwrap_or(0),
+                            "view_estimate_tokens": view_estimate,
+                            "agent_role": profile.role.as_str(),
+                        }),
+                    )
+                    .await?;
             }
         }
 

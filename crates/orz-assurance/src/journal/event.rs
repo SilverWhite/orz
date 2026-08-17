@@ -156,6 +156,14 @@ pub enum EventType {
     // execute/verify outcomes (those already journal tool_started /
     // tool_completed).
     ConsoleOrderRejected,
+    // FUS-LEDGER-FOLD-STATE (2026-08-18, ADR-0010 §14.26): a mechanical
+    // action-ledger fold advance — the loop folded the next complete old
+    // rounds into the frozen ledger block at the loop-top gap (zero model
+    // calls). Emitted ONLY when the fold point actually advanced (not on
+    // anti-spin no-ops). The request-view prefix is rewritten once per
+    // advance, so the event carries the fold indices, the folded-round
+    // count and the triggering view estimate for cache-miss attribution.
+    LedgerFoldAdvance,
 }
 
 impl EventType {

@@ -205,6 +205,15 @@ pub enum TuiEvent {
         phase: String,
         code: String,
     },
+    // FUS-LEDGER-FOLD-STATE (2026-08-18, ADR-0010 §14.26): 机械折叠推进
+    // ——每窗口一次前缀重写（接受的 miss），事件用于缓存 miss 归因。
+    LedgerFoldAdvance {
+        fold_start: u64,
+        fold_cut: u64,
+        rounds_folded: u64,
+        view_estimate_tokens: u64,
+        agent_role: String,
+    },
     InformationSufficiencyAssessment {
         assessment_id: String,
         status: String,
@@ -377,6 +386,7 @@ impl TuiEvent {
             TuiEvent::ConsoleModeTransition { .. } => "console_mode_transition",
             TuiEvent::ConsoleOrderWritten { .. } => "console_order_written",
             TuiEvent::ConsoleOrderRejected { .. } => "console_order_rejected",
+            TuiEvent::LedgerFoldAdvance { .. } => "ledger_fold_advance",
             TuiEvent::InformationSufficiencyAssessment { .. } => {
                 "information_sufficiency_assessment"
             }

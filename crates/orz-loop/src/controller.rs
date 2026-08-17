@@ -14501,6 +14501,34 @@ mod tests {
              {advances} / {}",
             received.len() - ledger_idx
         );
+        // FUS-LEDGER-FOLD-STATE review fix (2026-08-18): every real fold
+        // advance journals `ledger_fold_advance` with the new fold point
+        // and the triggering estimate — the per-window prefix rewrite is
+        // attributable in the event chain (miss attribution).
+        let fold_events = events(&dir)
+            .into_iter()
+            .filter(|e| e.event_type == EventType::LedgerFoldAdvance)
+            .collect::<Vec<_>>();
+        assert!(!fold_events.is_empty(), "fold advance event missing");
+        for ev in &fold_events {
+            let fold_start = ev.payload["fold_start"].as_u64().unwrap();
+            let fold_cut = ev.payload["fold_cut"].as_u64().unwrap();
+            let rounds_folded = ev.payload["rounds_folded"].as_u64().unwrap();
+            assert!(fold_start < fold_cut, "{ev:?}");
+            assert!(rounds_folded >= 1, "{ev:?}");
+            assert!(
+                ev.payload["view_estimate_tokens"].as_u64().unwrap() >= 1_000,
+                "{ev:?}"
+            );
+            assert_eq!(ev.payload["agent_role"], "main", "{ev:?}");
+        }
+        // Within a fold window fold_cut is strictly increasing (each
+        // advance moves it forward); a reset only happens at compaction.
+        let cuts: Vec<u64> = fold_events
+            .iter()
+            .map(|e| e.payload["fold_cut"].as_u64().unwrap())
+            .collect();
+        assert!(cuts.windows(2).all(|w| w[0] < w[1]), "{cuts:?}");
     }
 
     /// FUS-LEDGER-FOLD-STATE (2026-08-18, ADR-0010 §14.26) × compaction:
@@ -14508,7 +14536,10 @@ mod tests {
     /// input is the SAME stateful folded view (摘要输入与主请求同源 — it
     /// carries the frozen ledger block); compaction then resets the fold
     /// state (marker request has no ledger) and the fold re-accumulates
-    /// from the marker (a later request shows the ledger again).
+    /// from the marker (a later request shows the ledger again). The
+    /// compaction archive preserves the frozen ledger the model saw
+    /// (设计 §3.5 第 1 步 — the archive is the only surviving ledger
+    /// snapshot after the folded region is drained).
     #[tokio::test]
     async fn fold_state_resets_after_compaction_and_summary_uses_same_view() {
         struct SeqHost {
@@ -14574,23 +14605,37 @@ mod tests {
             }],
             finish_reason: FinishReason::ToolCalls,
             reasoning_content: None,
-            prompt_tokens: Some(2_000), // over the tiny rhythm trigger
+            // FUS-LEDGER-FOLD-STATE review fix (2026-08-18): the reported
+            // prompt tokens must be CONSISTENT with the actual view size
+            // (chars/2 ≈ several K with the 300-char results) — otherwise
+            // the reduction guard (after ≤ measured × max_reduction_ratio)
+            // blocks the FIRST rhythm trigger, the scripted
+            // `summary_response()` is consumed by a normal round, and the
+            // forced compaction's summary call receives tool-call script
+            // positions → parse fails → termination state (no archive).
+            // 20K keeps the first rhythm trigger (cooldown 5, round 7's
+            // loop-top) on the intended success path.
+            prompt_tokens: Some(20_000),
         };
-        // Rounds 1..6 consume the first six tool calls; the rhythm
-        // cooldown (5) makes the summary fire at round 7's loop-top, where
-        // the scripted `summary_response()` sits. Rounds 7..12 then
-        // re-grow the view after the marker (fold re-accumulation), and
-        // two text rounds cover the counterexample gate + final answer.
+        // Rhythm (cooldown 5) fires at round 6's loop-top (the counter
+        // reaches 5 when round 5 completes): the scripted summary response
+        // sits at position 5, then rounds 6..11 consume positions 6..11,
+        // the cooldown fires a SECOND summary at round 12's loop-top
+        // (position 12 — scripted success again, so the deterministic
+        // success path is exercised twice and both archives must carry the
+        // frozen ledger), and the two text rounds cover the counterexample
+        // gate + final answer.
         let mut script = Vec::new();
-        for k in 0..6 {
+        for k in 0..5 {
             script.push(tool_call(&format!("call-{k}")));
         }
         script.push(summary_response());
-        for k in 6..12 {
+        for k in 5..11 {
             script.push(tool_call(&format!("call-{k}")));
         }
-        script.push(ScriptedResponse::text("反例自查通过").with_prompt_tokens(2_000));
-        script.push(ScriptedResponse::text("最终答案").with_prompt_tokens(2_000));
+        script.push(summary_response());
+        script.push(ScriptedResponse::text("反例自查通过").with_prompt_tokens(20_000));
+        script.push(ScriptedResponse::text("最终答案").with_prompt_tokens(20_000));
         let fake = Arc::new(FakeProvider::new(script));
         let gateway: Arc<dyn ModelGateway> = fake.clone();
         // Rhythm cooldown 5 → the fold (trigger 1K) advances several
@@ -14648,14 +14693,35 @@ mod tests {
             has_ledger(summary_req),
             "summary input is the same stateful folded view: {summary_req:?}"
         );
-        // The fold re-accumulates from the marker — the next advance may
-        // even happen at the same loop-top (the estimate is still over the
-        // tiny threshold), so we require the ledger in the marker request
-        // itself or any later request.
+        // The fold re-accumulates from the marker — after the first
+        // compaction only the tail rounds survive (no foldable round
+        // outside the tail at first), so the ledger reappears once the
+        // rounds grow again.
         assert!(
             received[marker_idx..].iter().any(has_ledger),
             "fold re-accumulates after compaction: {received:?}"
         );
+        // FUS-LEDGER-FOLD-STATE review fix (2026-08-18, 设计 §3.5 第 1 步):
+        // each compaction archive preserves the frozen ledger the model
+        // saw — the only surviving ledger snapshot after the drain.
+        let archive_dir = dir.join(".gsa").join("compaction");
+        let archives: Vec<_> = std::fs::read_dir(&archive_dir)
+            .expect("archive dir exists")
+            .filter_map(|e| e.ok())
+            .map(|e| e.path())
+            .collect();
+        assert_eq!(archives.len(), 2, "{archives:?}");
+        for path in &archives {
+            let archive = std::fs::read_to_string(path).unwrap();
+            assert!(
+                archive.contains("## 折叠台账（冻结快照）"),
+                "frozen ledger section missing from archive: {archive}"
+            );
+            assert!(
+                archive.contains("[动作台账"),
+                "frozen ledger block missing from archive: {archive}"
+            );
+        }
     }
 
     #[tokio::test]

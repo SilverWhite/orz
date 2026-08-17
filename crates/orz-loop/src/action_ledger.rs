@@ -229,21 +229,23 @@ pub fn collapsed_cut(messages: &[Message], keep_recent_rounds: usize) -> Option<
     }
     let tail = keep_recent_rounds.max(1);
     let mut collapse_count = ranges.len().saturating_sub(tail);
-    while collapse_count > 0 && !is_round_complete(messages, ranges[collapse_count - 1]) {
+    // FUS-LEDGER-FOLD-STATE review fix (2026-08-18): the completeness check
+    // covers EVERY round to be collapsed — not just the boundary round — so
+    // a mid-history incomplete round (declaration without a matching tool
+    // reply) is never folded into ledger rows (`no_result` rows would lose
+    // the in-flight declaration from the model view). Matches the doc
+    // contract "a round missing a tool result is kept verbatim".
+    while collapse_count > 0
+        && !ranges[..collapse_count]
+            .iter()
+            .all(|&r| is_round_complete(messages, r))
+    {
         collapse_count -= 1;
     }
     if collapse_count == 0 {
         return None;
     }
     Some(ranges[collapse_count].0)
-}
-
-/// Number of complete old rounds that would collapse for the given tail.
-pub fn collapsed_round_count(messages: &[Message], keep_recent_rounds: usize) -> usize {
-    let Some(kept_start) = collapsed_cut(messages, keep_recent_rounds) else {
-        return 0;
-    };
-    rounds_before(messages, kept_start)
 }
 
 /// Number of complete round ranges whose start index is strictly before
@@ -528,6 +530,51 @@ mod tests {
         assert!(
             !ledger.content.contains("c2"),
             "the incomplete round must not enter the ledger: {ledger:?}"
+        );
+    }
+
+    #[test]
+    fn mid_history_incomplete_round_never_folds() {
+        // FUS-LEDGER-FOLD-STATE review fix (2026-08-18): the completeness
+        // back-off must cover EVERY collapsed round, not only the boundary
+        // round — a mid-history incomplete declaration must stay verbatim
+        // (folding it would drop the in-flight call from the model view
+        // and register a `no_result` row).
+        let mut messages = vec![msg(Role::User, "任务")];
+        messages.extend(round("c1", "read_file", "a.py", "结果A"));
+        // Round 2 (mid-history) declares c2 without a tool result.
+        messages.push(Message {
+            role: Role::Assistant,
+            content: String::new(),
+            tool_call_id: None,
+            tool_calls: vec![ToolCall {
+                name: "read_file".into(),
+                arguments: serde_json::json!({"path": "b.py"}),
+                call_id: "c2".into(),
+            }],
+            reasoning_content: None,
+        });
+        messages.extend(round("c3", "web_fetch", "https://x.dev", "页面"));
+        messages.extend(round("c4", "read_file", "d.py", "结果D"));
+        let collapsed = build_collapsed_request(&messages, 1);
+        let ledger = collapsed
+            .iter()
+            .find(|m| m.content.starts_with(ACTION_LEDGER_PREFIX))
+            .expect("the complete older round still collapses");
+        // Only the complete round before the incomplete one may fold; the
+        // incomplete declaration and everything after stays verbatim.
+        assert!(ledger.content.contains("a.py"), "{ledger:?}");
+        assert!(!ledger.content.contains("b.py"), "{ledger:?}");
+        assert!(!ledger.content.contains("c3"), "{ledger:?}");
+        assert!(
+            collapsed
+                .iter()
+                .any(|m| m.tool_calls.iter().any(|tc| tc.call_id == "c2")),
+            "the mid-history incomplete declaration stays: {collapsed:?}"
+        );
+        assert!(
+            collapsed.iter().any(|m| m.content == "页面"),
+            "the later complete rounds stay verbatim: {collapsed:?}"
         );
     }
 

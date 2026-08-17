@@ -276,6 +276,27 @@ pub fn run_event_to_tui(event: &RunEvent) -> TuiEvent {
             phase: get_str(p, "phase"),
             code: get_str(p, "code"),
         },
+        // FUS-LEDGER-FOLD-STATE (2026-08-18, ADR-0010 §14.26): 机械折叠推进
+        // （每窗口一次前缀重写，推进才发事件）。
+        EventType::LedgerFoldAdvance => TuiEvent::LedgerFoldAdvance {
+            fold_start: p
+                .pointer("/fold_start")
+                .and_then(serde_json::Value::as_u64)
+                .unwrap_or(0),
+            fold_cut: p
+                .pointer("/fold_cut")
+                .and_then(serde_json::Value::as_u64)
+                .unwrap_or(0),
+            rounds_folded: p
+                .pointer("/rounds_folded")
+                .and_then(serde_json::Value::as_u64)
+                .unwrap_or(0),
+            view_estimate_tokens: p
+                .pointer("/view_estimate_tokens")
+                .and_then(serde_json::Value::as_u64)
+                .unwrap_or(0),
+            agent_role: get_str(p, "agent_role"),
+        },
         EventType::InformationSufficiencyAssessment => TuiEvent::InformationSufficiencyAssessment {
             assessment_id: get_str(p, "assessment_id"),
             status: get_str(p, "status"),

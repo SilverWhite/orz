@@ -425,6 +425,24 @@ pub fn apply_event(app: &mut TuiApp, event: TuiEvent) -> Vec<String> {
             );
             vec![format!("订单拒绝: {order_id} {code}")]
         }
+        // FUS-LEDGER-FOLD-STATE (2026-08-18, ADR-0010 §14.26): 机械折叠推进
+        // ——请求视图前缀每窗口重写一次，事件给出折叠点与触发估算。
+        TuiEvent::LedgerFoldAdvance {
+            fold_start,
+            fold_cut,
+            rounds_folded,
+            view_estimate_tokens,
+            agent_role,
+        } => {
+            app.content.add_system_message(
+                &format!(
+                    "[台账折叠] {agent_role} fold_start={fold_start} fold_cut={fold_cut} \
+                     轮次={rounds_folded} 估算={view_estimate_tokens} tokens（每窗口一次前缀重写）"
+                ),
+                false,
+            );
+            vec![format!("台账折叠: {rounds_folded} 轮")]
+        }
         TuiEvent::InformationSufficiencyAssessment {
             assessment_id,
             status,

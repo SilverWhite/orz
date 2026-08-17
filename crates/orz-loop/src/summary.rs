@@ -295,12 +295,18 @@ pub fn parse_model_output(
 }
 
 /// The archive file (markdown) for one summary — the audit copy with digest.
+/// FUS-LEDGER-FOLD-STATE (2026-08-18, ADR-0010 §14.26 / 设计 §3.5 第 1 步):
+/// when the loop is folded, the frozen action-ledger block is appended as
+/// its own section — the compaction drains the folded region from
+/// `messages`, so the archive is the ONLY place that preserves exactly what
+/// the model saw (工具名/目标/结果指针/最终回复). None when not folded.
 pub fn summary_archive_markdown(
     id: &str,
     slots: &SummarySlots,
     rounds_dropped: u32,
     incomplete: bool,
     guard_failed: bool,
+    ledger: Option<&str>,
 ) -> String {
     let mut out = format!(
         "# ORZ 会话压缩摘要 {id}\n\n\
@@ -334,6 +340,11 @@ pub fn summary_archive_markdown(
     );
     if incomplete {
         out.push_str("\n> 摘要重试后仍失败：仅机械段有效，最近尾已扩大，后续轮次仍可正常执行。\n");
+    }
+    if let Some(ledger) = ledger {
+        out.push_str("\n## 折叠台账（冻结快照）\n\n```\n");
+        out.push_str(ledger);
+        out.push_str("\n```\n");
     }
     out
 }
@@ -573,7 +584,8 @@ mod tests {
     #[test]
     fn marker_carries_content_pointer_and_digest() {
         let slots = slots();
-        let markdown = summary_archive_markdown("compaction-RUN-X-001", &slots, 3, false, false);
+        let markdown =
+            summary_archive_markdown("compaction-RUN-X-001", &slots, 3, false, false, None);
         let digest = archive_digest(&markdown);
         let marker = build_summary_marker(
             "compaction-RUN-X-001",
@@ -593,6 +605,39 @@ mod tests {
         assert!(marker.contains("黑板 plan_epoch: 3"));
         assert!(crate::prompt::is_restore_retained_block(&marker));
         assert!(crate::prompt::is_injected_block_text(&marker));
+    }
+
+    #[test]
+    fn archive_appends_frozen_ledger_section_when_folded() {
+        // FUS-LEDGER-FOLD-STATE (2026-08-18, ADR-0010 §14.26 / 设计 §3.5
+        // 第 1 步): the compaction archive preserves the frozen action-ledger
+        // block the model saw — the only surviving copy after the folded
+        // region is drained from `messages`.
+        let slots = slots();
+        let ledger = "[动作台账 v0.1]\n轮次 1: read_file 目标=a.py 结果=sha256:ab 最终回复=已读\n[/动作台账]";
+        let markdown = summary_archive_markdown(
+            "compaction-RUN-X-001",
+            &slots,
+            3,
+            false,
+            false,
+            Some(ledger),
+        );
+        assert!(markdown.contains("## 折叠台账（冻结快照）"), "{markdown}");
+        assert!(markdown.contains(ledger), "{markdown}");
+        let digest = archive_digest(&markdown);
+        let marker = build_summary_marker(
+            "compaction-RUN-X-001",
+            &digest,
+            Path::new(".gsa/compaction/compaction-RUN-X-001.md"),
+            &slots,
+            3,
+            false,
+            false,
+            false,
+            3,
+        );
+        assert!(marker.starts_with(crate::prompt::CONTEXT_COMPRESSED_PREFIX));
     }
 
     #[test]
