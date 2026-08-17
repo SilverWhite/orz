@@ -258,8 +258,15 @@
   exit 2（parse_benchmark_flags + 4 组单测）；bundle 保持 READ_WRITE 实施
   选择确认；`is_background` 后台完成提醒留验证④观察。详见设计 §12 /
   ADR §14.24 / BACKLOG 0b。
-- [ ] 验证①（用户指示暂缓）：orz cargo 全量测试（权限决策表、探针映射、
-  console 注册表投影、订单→run_host_tool→ACAF 票据路径）+ clippy 无新增告警。
+- [x] 验证①（2026-08-18 执行，用户放行）：orz 各 crate 全量测试——
+  orz-loop 453 / orz-host 221 / orz-tui 178 / orz-assurance 152 /
+  orz-bin（lib 11 + benchmark_flags 14 + acaf_e2e 23 + real_flag 2 +
+  stdio_e2e 1）/ orz-tools 2761，0 失败；clippy --workspace --all-targets
+  无新增可归因告警（43 条均为既有项）；manifest 1401 + 仓库门禁 valid。
+  **过程中修复既有测试漂移**（PLAN-FIRST/console 双模式落地后未同步，
+  orz 子模块 c4772fc）：codex_app 12 项 + acp_server 1 项改写为
+  plan-first + console 订单流；console.rs 注册表默认列表断言按字典序
+  修正；orz-host 需 `--test-threads=1` 规避负载敏感的进程树超时竞争。
 - [ ] 验证②（用户指示暂缓）：Linux musl 重建（ORZ-BUILD-MOUNT-001 契约，输出
   `D:/tb-eval/orz-linux`）。
 - [ ] 验证③（用户指示暂缓）：单题 make-doom-for-mips 复验——reward > 0、

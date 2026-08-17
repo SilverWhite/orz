@@ -2058,3 +2058,10 @@ ADR §3.6 正文修订随实施登记。
    `--allow-network=<v>` 值形式由静默忽略改显式报错 exit 2；bundle 保持
    READ_WRITE 实施选择确认；`is_background` 后台任务完成提醒的 console 面
    可见性留验证④实机观察。详见设计 §12 / BACKLOG 0b / TODO P0-F。
+   验证①闭合（2026-08-18 用户放行执行）：orz 各 crate 全量测试全绿
+   （orz-loop 453 / orz-host 221 / orz-tui 178 / orz-assurance 152 /
+   orz-bin 11+14+23+2+1 / orz-tools 2761，0 失败）；clippy 无新增可归因
+   告警；manifest 1401 + 仓库门禁 valid。过程中修复 PLAN-FIRST/console
+   双模式落地后的既有测试漂移（codex_app 12 + acp_server 1，orz c4772fc；
+   orz-host 需 `--test-threads=1` 规避负载敏感的进程树超时竞争）。验证②
+   （Linux musl 重建）进行中——Docker 引擎卡死，用户裁定重启电脑后续跑。

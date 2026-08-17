@@ -172,6 +172,13 @@
 > 值形式显式报错 exit 2（parse_benchmark_flags + 4 组单测）；bundle 保持
 > READ_WRITE 实施选择确认；`is_background` 后台完成提醒留验证④观察。详见
 > 设计 §12 / ADR §14.24 / BACKLOG 0b / TODO P0-F。
+> 2026-08-18 验证①闭合登记（用户放行执行）——orz 各 crate 全量测试全绿
+> （orz-loop 453 / orz-host 221 / orz-tui 178 / orz-assurance 152 /
+> orz-bin 11+14+23+2+1 / orz-tools 2761，0 失败）；clippy 无新增可归因
+> 告警；manifest 1401 + 仓库门禁 valid。过程中修复 PLAN-FIRST/console
+> 双模式落地后的既有测试漂移（codex_app 12 + acp_server 1，orz c4772fc；
+> orz-host 需 `--test-threads=1`）。验证②（Linux musl 重建）进行中——
+> Docker 引擎卡死，用户裁定重启电脑后续跑。
 > 2026-08-18 状态行缓存纪律 + 订单拒绝步骤语义设计定案登记（用户裁决；纯文档、
 > 未实施）——① `[任务状态]` 常驻状态行移出系统提示词，改为变化时追加的尾随
 > 用户消息（与预算剩余块同纪律）：根因=console 步骤机每笔订单 receipt 推进步骤

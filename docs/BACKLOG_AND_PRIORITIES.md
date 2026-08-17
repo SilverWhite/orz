@@ -247,14 +247,20 @@
   授权兜底；PermissionRequested/PermissionDecision、ACAF issued/consumed、
   ToolStarted/ToolCompleted、console_order_written/rejected 审计链全部保留；
   预算/墙钟/停滞守卫与模式门不变；「放开」=策略允许面，非审计面。
-- 待验证（2026-08-18 用户指示暂缓）：① orz cargo 测试（权限决策表、探针
-  映射、console 注册表投影、订单→run_host_tool→ACAF 票据路径）+ clippy
-  无新增告警；② Linux musl 重建（ORZ-BUILD-MOUNT-001，输出
-  `D:/tb-eval/orz-linux`）；③ 单题 make-doom-for-mips 复验（reward > 0、
-  journal 出现 `workspace.run_terminal` 订单→run_host_tool→ACAF
-  `command_exec` issued/consumed、无 400/无异常 policy_denied）；④ 2–3 题
-  交叉（build/run 类 compile-compcert、网络类 hf-model-inference）；
-  ⑤ `run_official_2.1.sh` 89 题 5 批。
+- 待验证（2026-08-18 用户指示暂缓，同日放行执行）：① orz cargo 测试
+  （权限决策表、探针映射、console 注册表投影、订单→run_host_tool→ACAF
+  票据路径）+ clippy 无新增告警——**2026-08-18 已闭合**：orz-loop 453 /
+  orz-host 221 / orz-tui 178 / orz-assurance 152 / orz-bin（lib 11 +
+  benchmark_flags 14 + acaf_e2e 23 + real_flag 2 + stdio_e2e 1）/
+  orz-tools 2761 全绿；clippy 无新增可归因告警；manifest 1401 + 仓库门禁
+  valid；过程中修复 PLAN-FIRST/console 双模式落地后的既有测试漂移
+  （codex_app 12 + acp_server 1，orz c4772fc；orz-host 需
+  `--test-threads=1` 规避负载敏感超时竞争）；② Linux musl 重建
+  （ORZ-BUILD-MOUNT-001，输出 `D:/tb-eval/orz-linux`）；③ 单题
+  make-doom-for-mips 复验（reward > 0、journal 出现 `workspace.run_terminal`
+  订单→run_host_tool→ACAF `command_exec` issued/consumed、无 400/无异常
+  policy_denied）；④ 2–3 题交叉（build/run 类 compile-compcert、网络类
+  hf-model-inference）；⑤ `run_official_2.1.sh` 89 题 5 批。
 
 ### 0. 前置收尾（提交前需用户确认）
 
