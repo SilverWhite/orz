@@ -1764,6 +1764,22 @@ ADR §3.6 正文修订随实施登记。
    恢复成本上升与过期副本。性质：§3.6 黑板分区边界补充（与 FUS-BLACKBOARD-PLAN-EPOCH
    一致）。
    来源：2026-08-17 用户裁决（大文件读取设计讨论）；CLI_PROJECT_INDEX 登记。
+3. **大文件读取契约实施登记（2026-08-17 本窗口实施闭合；性质：§3.6 修订实施）**：
+   实施落点=GrokBuild `read_file` 工具文本路径（console 默认面
+   `workspace.read_file` 与 direct 面共用同一工具）：超过粗门（默认 16KB；
+   `ORZ_READ_FILE_COARSE_GATE_BYTES` 可配 8–32KB，env/TOML 口子——
+   `ReadFileParams.coarse_gate_bytes` 优先）的文件返回读取句柄信封（path / size /
+   encoding / content_sha256 / available_range / 有界预览 ≤4KB / truncated /
+   offset 续读指针），不返回全文；小文件保持全文一次返回；信封 terminal-only
+   不流式。有界预览沿用 `N→` 行锚点格式；单行超长时在预算内截断并报 truncated
+   （offset 指向下一行，长行尾部经 grep/execute 侧取）；尾部幻影行仅在正常窗口
+   耗尽时追加（预算中断不越界）。边界：SKILL.md / `skills` 路径 Markdown 保持
+   全量读取豁免（技能文档不被静默截断）；PDF/PPTX/图片路径不变；`FileTooLarge`
+   （25K token 事后拒绝）在文本路径被信封取代，保留为防御兜底。测试：orz-tools
+   read_file 199 / output 信封序列化 / orz-loop 440 / orz-host read_file e2e 2
+   通过；clippy 无新增可归因告警；orz 子模块 172b14e；manifest 重生成 1401 条目、
+   仓库门禁 valid。实施登记 BACKLOG 6f / TODO P1 / 实施审计
+   `docs/audits/GAP_LARGE_FILE_READ_CONTRACT_IMPL_AUDIT_2026-08-17.md`。
 
 ### 14.23 v1.23 补写裁决索引（2026-08-17）
 

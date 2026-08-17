@@ -9,8 +9,8 @@
 
 | 优先级 | 含义 | 未闭合项 |
 |---|---|---|
-| P0 | 当前工作集：设计已冻结，裁决后立即实施 | 评测冒烟暴露问题（P0-E 已全部闭合 2026-08-17：ACAF 容器供应、console 工具名、计划视图步骤 ID、订单发放前拒绝入事件面、grep 搜索范围契约、plan_write 校验消息形状、actions 形状探针，见 0a）；CLASSICAL-EXEC-ASSISTANT（生产组件，2026-08-16 用户裁决转正式）；PLAN-FIRST-BLACKBOARD（阶段 A/B/C 全部闭合 2026-08-16） |
-| P1 | 无需裁决，可与 P0 并行 | FUS-COMPONENT-REGISTER、GAP-WINDOWS-EVIDENCE、IMPL-DEEPSEEK-TRANSPORT / SEC-CREDENTIALS、ORZ-CACHE-CONTEXT-COST、ORZ-SESSION-CONTEXT-MONITOR |
+| P0 | 当前工作集：设计已冻结，裁决后立即实施 | 评测冒烟暴露问题（P0-E 主项 7 项已闭合 2026-08-17：ACAF 容器供应、console 工具名、计划视图步骤 ID、订单发放前拒绝入事件面、grep 搜索范围契约、plan_write 校验消息形状、actions 形状探针；FUS-TOOL-SCOPE-CONTRACT 后续 2 项补记进计数：list_dir ignored/truncated 计数、grep 命中路径 files_searched，见 0a）；CLASSICAL-EXEC-ASSISTANT（生产组件，2026-08-16 用户裁决转正式）；PLAN-FIRST-BLACKBOARD（阶段 A/B/C 全部闭合 2026-08-16） |
+| P1 | 无需裁决，可与 P0 并行 | FUS-COMPONENT-REGISTER、GAP-WINDOWS-EVIDENCE、IMPL-DEEPSEEK-TRANSPORT / SEC-CREDENTIALS、ORZ-SESSION-CONTEXT-MONITOR |
 | P2 | 生产化决策门：需用户裁决 | IMPL-CONTROL-FABRIC（fail-closed 启用、Slice 3/4）、OPS-PROTOCOL |
 | P3 | 收尾 / 清理 | EVIDENCE-LOCAL-BROWSER、GATE-CHAIN、DC 剩余信号、V11-IMPL-003/007、工作区收尾 |
 
@@ -21,7 +21,7 @@
 
 > 2026-08-13：P0 决策登记——FUS-TOOL-PROBE、FUS-RETRIEVAL-MECH 经用户裁决放行实施；执行顺序 P0-A（工具探针）优先，P0-B（检索机械控制）紧随，P0-C（经典操作台）POC 已通后进入实施序列。
 
-### 0a. 评测冒烟暴露问题（最优先；2026-08-17 登记，用户将在新窗口处理）
+### 0a. 评测冒烟暴露问题（最优先；2026-08-17 登记；P0-E 主项已闭合、FUS-TOOL-SCOPE-CONTRACT 后续 2 项补记进计数）
 
 > 来源：正式跑分前最难错题试跑——make-doom-for-mips（TB2 2.0，deepseek-v4-flash，
 > plan-first + console 默认 + headless，2026-08-17 01:05–01:12）。证据：
@@ -176,6 +176,16 @@
      测试断言 stale/step_not_done/budget×3/policy）；orz-loop 436 / orz-tui 178 /
      orz-assurance 152 / orz-bin 全量通过、clippy 与基线一致（lib 21 / lib test 26）、
      manifest 重生成 1401、仓库门禁 valid。
+- **FUS-TOOL-SCOPE-CONTRACT 后续项 2 项（2026-08-17 用户指示补记进计数；
+  未闭合 27 → 29）**：grep 面实施审计「边界与后续项」两条正式入账，P0-E 主项
+  仍 0 项、后续 2 项：
+  1. list_dir 补 ignored/truncated 计数——读/搜/列三族统一契约泛化
+     （ADR-0010 §14.23 / FUS-TOOL-SCOPE-CONTRACT，设计已定、实施待排）；
+  2. grep 命中路径 `files_searched` 留空——后续 `--json` 面或 stats 位置
+     收敛后再定（审计边界第 1 条）。
+  两项均无裁决依赖、实施时点自行排布；入口见
+  [`grep 面实施审计`](audits/FUS_TOOL_SCOPE_CONTRACT_GREP_IMPL_AUDIT_2026-08-17.md)
+  边界与后续项 / [TODO P0-E](../TODO.md)。
 
 ### 0. 前置收尾（提交前需用户确认）
 
@@ -602,7 +612,7 @@
   [实施审计](audits/GAP_BLACKBOARD_PLAN_EPOCH_IMPL_AUDIT_2026-08-14.md)；
   [TODO](../TODO.md)。
 
-### 6f. ORZ-LARGE-FILE-READ-CONTRACT（`approved`；P1，2026-08-17 设计定案）
+### 6f. ORZ-LARGE-FILE-READ-CONTRACT（`implemented`；P1，2026-08-17 设计定案，同日实施闭合）
 
 - 定位：大文件读取工具契约有界返回——读取超过粗门（默认 16KB、可配 8–32KB、
   env/TOML 口子）的文件返回读取句柄信封（path / size / encoding /
@@ -613,10 +623,17 @@
   80–90%，仍撞注入层事后拒批）；语义适配留模型、助理层只提供机械原语；注入层
   事后拒批前移为契约层事先有界返回；黑板承担内容会膨胀 epoch 快照并产生过期
   副本（2026-08-17 用户裁决定稿）。
-- 状态：**设计已定案（2026-08-17 用户裁决），实施待排**——工具契约（读取句柄
-  信封）+ 阈值配置（16KB 默认、8–32KB 可配）+ 模型面契约提示（grep/结构优先、
-  offset 分段、空结果语义）+ 黑板/结果栏只放指针 + 测试与实施审计 +
-  BACKLOG/TODO/索引状态同步。
+- 状态：**已实施（2026-08-17 本窗口闭合）**——GrokBuild `read_file` 文本路径
+  超过粗门（默认 16KB、`ORZ_READ_FILE_COARSE_GATE_BYTES` 8–32KB，env/TOML 口子
+  =`ReadFileParams.coarse_gate_bytes`）返回读取句柄信封（path/size/encoding/
+  content_sha256/available_range/有界预览 ≤4KB/truncated/offset 续读指针）而非
+  全文；小文件全文一次返回；信封 terminal-only；单行超长预算内截断并报 truncated；
+  SKILL.md/`skills` 路径保持全量豁免；PDF/PPTX/图片不变；`FileTooLarge` 文本路径
+  被取代保留为防御兜底。模型面契约提示（提示词读取纪律 + console 注册表描述 +
+  工具描述）已同步；黑板/结果栏经信封只承载有界预览+指针（内容本体不上黑板）。
+  测试：orz-tools read_file 199 / output 信封序列化 / orz-loop 440 / orz-host
+  read_file e2e 2；clippy 无新增可归因告警；orz 子模块 172b14e；实施审计见
+  `docs/audits/GAP_LARGE_FILE_READ_CONTRACT_IMPL_AUDIT_2026-08-17.md`。
 - 入口：[设计 §11](CLASSICAL_EXECUTION_ASSISTANT_DESIGN_2026-08-13.md) /
   [黑板设计 §4](PLAN_FIRST_BLACKBOARD_DESIGN_2026-08-15.md) /
   [ADR-0010 §14.22](../adr/ADR-0010-fusion-runtime-and-agent-architecture.md) /
@@ -680,6 +697,23 @@
 
 ## 变更记录
 
+- 2026-08-17：ORZ-LARGE-FILE-READ-CONTRACT 实施闭合（本窗口）——GrokBuild
+  `read_file` 文本路径有界返回：超过粗门（默认 16KB、可配 8–32KB）返回读取句柄
+  信封（path/size/encoding/content_sha256/available_range/有界预览 ≤4KB/
+  truncated/offset）而非全文；小文件全文一次返回；信封 terminal-only；单行超长
+  预算内截断（offset 指向下一行）；SKILL.md/`skills` 全量豁免；`FileTooLarge`
+  文本路径被取代保留为防御兜底。模型面提示（提示词/工具描述/console 注册表）同步。
+  测试 orz-tools read_file 199 / orz-loop 440 / orz-host read_file e2e 2；
+  clippy 无新增可归因告警；orz 子模块 172b14e；manifest 1401、仓库门禁 valid；
+  ADR-0010 §14.22 / 操作台设计 §11 / 黑板设计 §4 / TODO P1 / 索引同步。
+  未闭合计数：该组 4 项此前未计入 P1 分组计数（口径遗漏，若计则 P1 13/总数 33）；
+  本次全部闭合，P1 回 9 项、未闭合总数维持 29 项（补计与闭合相抵）。
+- 2026-08-17：FUS-TOOL-SCOPE-CONTRACT 两项后续补记进计数（用户指示）——
+  grep 面实施审计「边界与后续项」两条正式入账：① list_dir 补
+  ignored/truncated 计数（读/搜/列三族统一）；② grep 命中路径
+  `files_searched` 留空（后续 --json 面或 stats 位置收敛后再定）。
+  P0-E 主项仍 0 项；未闭合 27 → 29（P0-E 后续 2 项）。BACKLOG 0a /
+  TODO P0-E / 索引同步。
 - 2026-08-17：大文件读取契约设计定案登记（用户裁决；纯文档、未实施）——读取
   工具契约有界返回：超过粗门（默认 16KB、可配 8–32KB）的文件返回读取句柄信封
   （path/size/encoding/content_sha256/可用范围/有界预览 ≤2–4KB/truncated/offset

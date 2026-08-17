@@ -55,12 +55,23 @@
 > 2026-08-17 plan_write 校验消息形状 + actions 形状探针闭合（plan 错误消息带
 > 形状说明与 got 类型；actions 实证审计确认 14 种宽松形状全被拒、原观察不成立、
 > 探针测试锁定）——未闭合 29 → 27，P0-E 2 → 0 项（P0-E 全部闭合）。
+> 2026-08-17 FUS-TOOL-SCOPE-CONTRACT 后续两项补记进计数（用户指示）——
+> grep 面实施审计「边界与后续项」两条正式入账：list_dir ignored/truncated
+> 计数（读/搜/列三族统一）、grep 命中路径 files_searched 留空（后续 --json
+> 面或 stats 位置收敛后再定）——未闭合 27 → 29，P0-E 0 → 2 项（后续项）。
+> 2026-08-17 ORZ-LARGE-FILE-READ-CONTRACT 实施闭合（本窗口）——GrokBuild
+> read_file 文本路径有界返回（粗门默认 16KB、可配 8–32KB，env/TOML 口子；
+> 读取句柄信封 + 有界预览 ≤4KB + offset 续读；SKILL.md/`skills` 豁免；
+> FileTooLarge 文本路径被取代为防御兜底）；提示词/工具描述/console 注册表
+> 同步；测试 orz-tools read_file 199 / orz-loop 440 / orz-host e2e 2；
+> orz 172b14e。该组 4 项此前未计入 P1 分组计数（口径遗漏，若计则 P1 13 /
+> 总数 33）；本次全部闭合，P1 回 9、未闭合总数维持 29（补计与闭合相抵）。
 > 本快照只做计数与分组召回，明细以下方各分组勾选清单为唯一入口，不新增独立条目；
 > 后续扫描更新时同步替换本快照日期与计数。
 
-- 未闭合总数：**27 项**
+- 未闭合总数：**29 项**
   - P0-C：0 项（PLAN-FIRST 阶段 A/B/C 全部闭合，2026-08-16）
-  - P0 评测冒烟暴露：0 项（GAP-ACAF-HARNESS-PASSTHROUGH、GAP-CONSOLE-TOOLNAME-PATTERN、计划视图步骤 ID 渲染、订单发放前拒绝入事件面、grep 搜索范围契约、plan_write 校验消息形状、actions 形状探针均已闭合 2026-08-17）
+  - P0 评测冒烟暴露：2 项（P0-E 主项 7 项已闭合 2026-08-17；FUS-TOOL-SCOPE-CONTRACT 后续 2 项：list_dir ignored/truncated 计数、grep 命中路径 files_searched，见 P0-E grep 项后续①/②）
   - P1 可并行审计/证据：9 项（组件登记 1、Windows 证据 3、DeepSeek 1、会话上下文监测 4）
   - P2 生产化决策门：5 项（Slice 3、Slice 4、ACAF 可选工程项、OPS 裁剪设计、OPS 生产接线裁决）
   - P3 收尾/清理：7 项（EVIDENCE-LOCAL-BROWSER、GATE-CHAIN、observed-scope 枚举、V11-IMPL-003、V11-IMPL-007、orz-host flaky、DC 硬信号 4/6）
@@ -128,8 +139,9 @@
     （epoch 渲染单测、工具级 `blackboard_read section=plan` 回达、跨 epoch
     归档读）；orz 子模块 0d1e01b；orz-loop 436 / orz-tui 178 / orz-assurance
     152 / orz-bin 全量通过、clippy 无新增告警、manifest 1401、仓库门禁 valid。
-- [ ] （新观察，2026-08-17 复核更正归因 + **用户复核定案**）grep 搜索范围与空结果
-  语义：冒烟重跑中两次 `doomgeneric_mips|frame\.bmp` grep 实际被 plan/console 门
+- [x] （新观察，2026-08-17 复核更正归因 + **用户复核定案**；主项已闭合，后续
+  2 项见下）grep 搜索范围与空结果语义：冒烟重跑中两次
+  `doomgeneric_mips|frame\.bmp` grep 实际被 plan/console 门
   机械拒绝未执行（journal 序列 24/38）；执行的 7 次 grep 全部无匹配（wall_ms
   1–36ms），含 vm.js 中实测存在的 entryPoint/symbolName/sectionsToLoad/
   syscallNum/runElf/program counter。**根因在工具层**：`finalize_grep` 将
@@ -147,8 +159,12 @@
     searched>0→"No matches found in N files"；exit 2 硬失败保留；
   - [x] 搜索范围语义显式化：定案=b（保留 rg 默认），参数面新增
     `--no-ignore`/`--hidden` 开关（GrepSearchInput + console 注册表 schema）；
-  - [ ] 契约泛化：读/搜/列三族统一（list_dir 补 ignored/truncated 计数，
-    后续项）；exit 2 语法错误保持硬失败（既有行为保留）；
+  - [ ] 后续①（2026-08-17 补记进计数）：契约泛化——list_dir 补
+    ignored/truncated 计数（读/搜/列三族统一；FUS-TOOL-SCOPE-CONTRACT
+    后续项）；exit 2 语法错误保持硬失败（既有行为保留，无工作量）。
+  - [ ] 后续②（2026-08-17 补记进计数）：grep 命中路径 `files_searched`
+    留空——后续 `--json` 面或 stats 位置收敛后再定（grep 实施审计边界
+    第 1 条）。
   - [x] 实施前置=容器内 grep 冒烟已执行（根因复现：glibc 动态 rg 与 bookworm
     GLIBC 不匹配；正常 rg 同命令命中 20 处）；回归验证=Linux 重建后容器冒烟
     （`rg --version` + 已知字符串断言）**2026-08-17 已执行通过**——重建后打包
@@ -174,9 +190,9 @@
   stdout / 旧版 stderr 位置差异污染流式面）；`hidden`/`no_ignore` 开关入
   GrepSearchInput 与 console 注册表；`GrepSearchOutput.files_searched` 入信封；
   build.rs 非 Windows 覆盖路径 ELF PT_INTERP 静态守卫；两份构建脚本改静态 musl
-  rg。测试 grep 模块 42 / types 561 / orz-loop console 68 通过；Linux 重建后
-  容器冒烟回归待执行。剩余开放面（FUS-TOOL-SCOPE-CONTRACT 后续）：list_dir
-  ignored/truncated 计数、命中路径每次返回 files_searched。
+   rg。测试 grep 模块 42 / types 561 / orz-loop console 68 通过；Linux 重建后
+   容器冒烟回归已执行通过（见上）。剩余开放面见上方后续①/②（2026-08-17
+   已补记进计数，未闭合 29 项）。
 - [x] （新观察，用户 2026-08-17 指示处理）订单发放前拒绝入事件面：冒烟重跑中
   ORD-000011（workspace.run_tests，`arguments:{}`）写入后发放前被拒，失败只进结果栏
   receipt + TraceStore（`consume_console_order` 不写 journal 事件），journal 无结构化
@@ -457,18 +473,29 @@
 
 入口：[设计](docs/BLACKBOARD_PLAN_EPOCH_DESIGN_2026-08-14.md) / [ADR-0010 §14.15](adr/ADR-0010-fusion-runtime-and-agent-architecture.md) / [实施审计](docs/audits/GAP_BLACKBOARD_PLAN_EPOCH_IMPL_AUDIT_2026-08-14.md) / [BACKLOG 6e](docs/BACKLOG_AND_PRIORITIES.md)。
 
-### ORZ-LARGE-FILE-READ-CONTRACT（`approved`；P1，2026-08-17 设计定案，实施待排）
+### ORZ-LARGE-FILE-READ-CONTRACT（`implemented`；P1，2026-08-17 设计定案，同日实施闭合）
 
-- [ ] 读取工具契约：超过粗门（默认 16KB、可配 8–32KB，env/TOML 口子）的文件返回
-  读取句柄信封（path / size / encoding / content_sha256 / 可用范围 / 有界预览
-  ≤2–4KB / truncated / offset 续读指针），不返回全文；小文件保持全文一次返回；
-  精门=50K 单轮注入预算兜底。
-- [ ] 模型面契约提示：grep/结构提取优先、证据关键文件才全文、大文件 offset 分段、
-  grep 空结果语义（空结果 ≠ 无文件）——提示词策略化读取落成工具契约。
-- [ ] 黑板/结果栏只放指针（path/document_id/size/digest/offset），内容本体留盘上/
-  内容寻址证据区；维持不新增自由随记区。
-- [ ] 测试（阈值边界、信封字段完整性、offset 续读、小文件全文路径）+ 实施审计 +
-  BACKLOG/TODO/索引状态同步。
+- [x] 读取工具契约：超过粗门（默认 16KB、可配 8–32KB，env/TOML 口子）的文件返回
+  读取句柄信封（path / size / encoding / content_sha256 / available_range /
+  有界预览 ≤4KB / truncated / offset 续读指针），不返回全文；小文件保持全文一次
+  返回；精门=50K 单轮注入预算兜底。**2026-08-17 闭合**：GrokBuild `read_file`
+  文本路径（console 默认面 `workspace.read_file` 与 direct 共用）；信封
+  terminal-only 不流式；单行超长预算内截断并报 truncated（offset 指向下一行）；
+  SKILL.md/`skills` 路径保持全量豁免；PDF/PPTX/图片路径不变；`FileTooLarge`
+  文本路径被信封取代、保留为防御兜底。
+- [x] 模型面契约提示：grep/结构提取优先、证据关键文件才全文、大文件 offset 分段、
+  grep 空结果语义（空结果 ≠ 无文件）——提示词读取纪律（v1.9/v1.22）落成工具契约。
+  **2026-08-17 闭合**：BASE_SYSTEM_PROMPT 读取纪律补信封语义、`read_file` 工具
+  描述（DESCRIPTION_FULL）补粗门/信封说明、console 注册表 `workspace.read_file`
+  描述同步。
+- [x] 黑板/结果栏只放指针（path/document_id/size/digest/offset），内容本体留盘上/
+  内容寻址证据区；维持不新增自由随记区。**2026-08-17 闭合**：信封即结果栏承载的
+  有界负载（≤4KB 预览 + 元数据指针），全文内容不上黑板/结果栏。
+- [x] 测试（阈值边界、信封字段完整性、offset 续读、小文件全文路径）+ 实施审计 +
+  BACKLOG/TODO/索引状态同步。**2026-08-17 闭合**：orz-tools read_file 199 /
+  output 信封序列化 1 / orz-loop 440 / orz-host read_file e2e 2 通过；
+  clippy 无新增可归因告警；orz 172b14e；实施审计
+  `docs/audits/GAP_LARGE_FILE_READ_CONTRACT_IMPL_AUDIT_2026-08-17.md`。
 
 入口：[设计 §11](docs/CLASSICAL_EXECUTION_ASSISTANT_DESIGN_2026-08-13.md) /
 [黑板设计 §4](docs/PLAN_FIRST_BLACKBOARD_DESIGN_2026-08-15.md) /

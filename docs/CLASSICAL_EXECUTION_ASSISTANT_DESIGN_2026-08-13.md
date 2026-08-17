@@ -429,7 +429,7 @@
 > 用户裁决（2026-08-17）：语义适配留在模型，助理层只提供机械原语（引用 + 范围读），
 > 不做语义总结；超过粗门的文件返回读取句柄信封而非全文；黑板只放指针、不放内容本体。
 > 权威登记 ADR-0010 §14.22（v1.22）；实施路由 BACKLOG 6f / TODO P1。
-> 状态：**定案**（2026-08-17 用户裁决；纯设计登记，未实施）。
+> 状态：**已实施**（2026-08-17 用户裁决定案；2026-08-17 本窗口实施闭合）。
 
 ### 11.1 问题与原则
 
@@ -475,6 +475,9 @@
 - ADR-0010 §14.22（v1.22）；FUS-LARGE-FILE-READ-CONTRACT（`current-design`）；
   `docs/PLAN_FIRST_BLACKBOARD_DESIGN_2026-08-15.md` §4（读面机械契约）；
   BACKLOG 6f / TODO P1（实施路由）。
+- 2026-08-17 实施闭合：orz 子模块 172b14e（GrokBuild `read_file` 文本路径
+  信封）；测试 orz-tools read_file 199 / orz-loop 440 / orz-host e2e 2；
+  实施审计 `docs/audits/GAP_LARGE_FILE_READ_CONTRACT_IMPL_AUDIT_2026-08-17.md`。
 
 ## 12. 搜索范围契约（grep 搜索信封）（2026-08-17 用户复核定案）
 
