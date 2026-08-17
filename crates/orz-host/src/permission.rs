@@ -84,10 +84,12 @@ pub enum PermissionPolicy {
 /// Shell-execution tool names (Benchmark policy shell axis — the controller
 /// classifies `run_terminal_cmd` as LocalMutation, so the policy needs an
 /// explicit name-level arm; `bash` is SandboxEscape already).
+/// 2026-08-18 审查收口：`sh` 入名单——与设计 §3「bash/sh/cmd/pwsh」表述一致；
+/// 当前非注册工具，但默认轴下必须对任何 shell 名 fail-closed。
 fn is_shell_tool(tool: &str) -> bool {
     matches!(
         tool,
-        "bash" | "cmd" | "powershell" | "pwsh" | "run_terminal_cmd"
+        "bash" | "sh" | "cmd" | "powershell" | "pwsh" | "run_terminal_cmd"
     )
 }
 
@@ -956,6 +958,13 @@ mod tests {
                 serde_json::json!({"command": "dir"}),
             ),
             (
+                // 2026-08-18 审查收口：`sh` 与其它 shell 名在默认轴一律 deny
+                // （设计 §3 名单一致性；当前非注册工具，fail-closed 兜底）。
+                RiskClass::LocalMutation,
+                "sh",
+                serde_json::json!({"command": "dir"}),
+            ),
+            (
                 RiskClass::LocalMutation,
                 "run_terminal_cmd",
                 serde_json::json!({"command": "dir"}),
@@ -1028,6 +1037,13 @@ mod tests {
                 RiskClass::LocalMutation,
                 "powershell",
                 serde_json::json!({"command": "ls"}),
+            ),
+            (
+                // 2026-08-18 审查收口：`sh` 在 allow_shell 下 AllowOnce
+                // （与设计 §3 名单一致；access_kind 早已按 Bash 映射）。
+                RiskClass::LocalMutation,
+                "sh",
+                serde_json::json!({"command": "dir"}),
             ),
             (
                 RiskClass::SandboxEscape,
@@ -1112,6 +1128,11 @@ mod tests {
             (
                 RiskClass::LocalMutation,
                 "run_terminal_cmd",
+                serde_json::json!({"command": "dir"}),
+            ),
+            (
+                RiskClass::LocalMutation,
+                "sh",
                 serde_json::json!({"command": "dir"}),
             ),
             (

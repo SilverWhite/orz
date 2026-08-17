@@ -15,6 +15,32 @@ use orz_host::session::{SessionHandle, bootstrap_session};
 use orz_loop::gateway::fake::{FakeProvider, ScriptedResponse};
 use orz_loop::gateway::model::{Message, ModelGateway, Role, ToolCall};
 
+/// FUS-BENCHMARK-FULL-EXEC (2026-08-18)：解析 headless benchmark 两轴旗标。
+/// 只接受无值精确形式 `--allow-shell` / `--allow-network`；`=value` 形式
+/// 显式报错（2026-08-18 审查收口——「静默忽略」绝不允许）。任一带
+/// `--allow-write` 缺失即报错（fail-closed 配对，防静默无效）。
+fn parse_benchmark_flags(args: &[String]) -> Result<(bool, bool), String> {
+    let allow_write = args.iter().any(|a| a == "--allow-write");
+    if args
+        .iter()
+        .any(|a| a.starts_with("--allow-shell=") || a.starts_with("--allow-network="))
+    {
+        return Err(
+            "--allow-shell/--allow-network take no value (use --allow-shell / \
+             --allow-network, or ORZ_ALLOW_SHELL / ORZ_ALLOW_NETWORK env presence)"
+                .to_string(),
+        );
+    }
+    let allow_shell = args.iter().any(|a| a == "--allow-shell");
+    let allow_network = args.iter().any(|a| a == "--allow-network");
+    if (allow_shell || allow_network) && !allow_write {
+        return Err(
+            "--allow-shell/--allow-network require --allow-write (Benchmark policy)".to_string(),
+        );
+    }
+    Ok((allow_shell, allow_network))
+}
+
 fn main() {
     // L1 (2026-08-08 write placement): redirect `$GROK_HOME` off the user
     // directory to the orz install dir (degradation chain → `{cwd}/.gsa/
@@ -64,24 +90,24 @@ fn main() {
     // FUS-BENCHMARK-FULL-EXEC (2026-08-18): `--allow-shell` /
     // `--allow-network` (headless benchmark only) → ORZ_ALLOW_SHELL /
     // ORZ_ALLOW_NETWORK (precedent: `--allow-write` → ORZ_ALLOW_WRITE).
-    // Fail-closed pairing: either flag without `--allow-write` is an error
-    // (exit 2) — a silently ignored shell/network grant must never happen.
-    if args
-        .iter()
-        .any(|a| a == "--allow-shell" || a == "--allow-network")
-        && !args.iter().any(|a| a == "--allow-write")
-    {
-        eprintln!("error: --allow-shell/--allow-network require --allow-write (Benchmark policy)");
-        std::process::exit(2);
-    }
-    if args.iter().any(|a| a == "--allow-shell") {
-        unsafe {
-            std::env::set_var("ORZ_ALLOW_SHELL", "1");
+    // Fail-closed: `=value` 形式显式报错；任一轴未带 `--allow-write` 报错
+    // exit 2（2026-08-18 审查收口——静默忽略绝不允许）。
+    match parse_benchmark_flags(&args) {
+        Ok((allow_shell, allow_network)) => {
+            if allow_shell {
+                unsafe {
+                    std::env::set_var("ORZ_ALLOW_SHELL", "1");
+                }
+            }
+            if allow_network {
+                unsafe {
+                    std::env::set_var("ORZ_ALLOW_NETWORK", "1");
+                }
+            }
         }
-    }
-    if args.iter().any(|a| a == "--allow-network") {
-        unsafe {
-            std::env::set_var("ORZ_ALLOW_NETWORK", "1");
+        Err(message) => {
+            eprintln!("error: {message}");
+            std::process::exit(2);
         }
     }
     // P0-2 (2026-08-08 stall guards): `--max-wallclock <sec>` → env
@@ -2984,5 +3010,67 @@ mod conformance_capture {
                 copy_journal(&handle.journal_dir, "citation-validation-block");
             })
             .await
+    }
+}
+
+#[cfg(test)]
+mod benchmark_flags_tests {
+    use super::parse_benchmark_flags;
+
+    fn args(list: &[&str]) -> Vec<String> {
+        list.iter().map(|s| s.to_string()).collect()
+    }
+
+    #[test]
+    fn no_flags_default_fail_closed() {
+        assert_eq!(parse_benchmark_flags(&args(&[])).unwrap(), (false, false));
+        assert_eq!(
+            parse_benchmark_flags(&args(&["--real", "-p", "hi"])).unwrap(),
+            (false, false)
+        );
+    }
+
+    #[test]
+    fn axes_open_only_with_allow_write() {
+        assert_eq!(
+            parse_benchmark_flags(&args(&["--allow-write"])).unwrap(),
+            (false, false)
+        );
+        assert_eq!(
+            parse_benchmark_flags(&args(&["--allow-write", "--allow-shell"])).unwrap(),
+            (true, false)
+        );
+        assert_eq!(
+            parse_benchmark_flags(&args(&["--allow-write", "--allow-network"])).unwrap(),
+            (false, true)
+        );
+        assert_eq!(
+            parse_benchmark_flags(&args(&[
+                "--allow-write",
+                "--allow-shell",
+                "--allow-network"
+            ]))
+            .unwrap(),
+            (true, true)
+        );
+    }
+
+    #[test]
+    fn axes_without_allow_write_fail_closed() {
+        assert!(parse_benchmark_flags(&args(&["--allow-shell"])).is_err());
+        assert!(parse_benchmark_flags(&args(&["--allow-network"])).is_err());
+        assert!(parse_benchmark_flags(&args(&["--allow-shell", "--allow-network"])).is_err());
+    }
+
+    /// 2026-08-18 审查收口：`=value` 形式显式报错，绝不静默忽略。
+    #[test]
+    fn value_forms_are_explicit_errors() {
+        assert!(parse_benchmark_flags(&args(&["--allow-write", "--allow-shell=1"])).is_err());
+        assert!(parse_benchmark_flags(&args(&["--allow-write", "--allow-network=true"])).is_err());
+        // 精确形式不受影响。
+        assert_eq!(
+            parse_benchmark_flags(&args(&["--allow-write", "--allow-shell"])).unwrap(),
+            (true, false)
+        );
     }
 }

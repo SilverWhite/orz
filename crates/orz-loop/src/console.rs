@@ -265,6 +265,9 @@ pub fn default_service_registry() -> ServiceRegistry {
         // （ACAF command_exec 目标摘要基于 host 侧 cwd/env，模型不可注入）。
         // 动作栏由探针完整集收敛（BenchmarkFull + terminal_available →
         // 出现；旧 Benchmark/ReadOnly → 不出现）。
+        // 2026-08-18 审查收口：timeout 接受 integer 或纯数字字符串
+        // （BashToolInput 为兼容模型字符串数字做了 lenient 反序列化，契约
+        // 层对齐该语义；非数字字符串在契约层显式拒绝，错误比 host 层友好）。
         ActionSpec {
             name: TERMINAL_SERVICE_NAME.to_string(),
             description: "执行一条终端命令（模型只下单；命令与环境由助理层按会话决定，\
@@ -284,13 +287,23 @@ pub fn default_service_registry() -> ServiceRegistry {
                         "description": "一句话说明该命令的用途。",
                     },
                     "timeout": {
-                        "type": "integer",
-                        "minimum": 1,
-                        "maximum": 300000,
-                        "description": "超时毫秒（默认 120000）。",
+                        "anyOf": [
+                            {
+                                "type": "integer",
+                                "minimum": 1,
+                                "maximum": 300000,
+                            },
+                            {
+                                "type": "string",
+                                "pattern": "^[0-9]+$",
+                            },
+                        ],
+                        "default": 120000,
+                        "description": "超时毫秒（integer 或数字字符串；默认 120000）。",
                     },
                     "is_background": {
                         "type": "boolean",
+                        "default": false,
                         "description": "后台运行（默认 false）。",
                     },
                 },
@@ -1998,6 +2011,44 @@ mod tests {
         assert!(seen.lock().unwrap().is_empty());
         assert_eq!(trace.events.len(), 1);
         assert_eq!(trace.events[0].step, STEP_REGISTRY);
+    }
+
+    /// FUS-BENCHMARK-FULL-EXEC 审查收口 (2026-08-18)：`workspace.run_terminal`
+    /// 契约对齐 BashToolInput 的 lenient 数字语义——integer 与纯数字字符串
+    /// 均通过，非数字字符串/缺必填/多余键（如 env）在契约层拒绝。
+    #[test]
+    fn run_terminal_contract_accepts_numeric_string_timeout_and_rejects_invalid() {
+        let registry = default_service_registry();
+        let (input_validator, _) = registry
+            .validators
+            .get(TERMINAL_SERVICE_NAME)
+            .expect("workspace.run_terminal registered with cached validators");
+        let ok = [
+            json!({"command": "ls", "description": "list files"}),
+            json!({"command": "ls", "description": "list files", "timeout": 120000}),
+            json!({"command": "ls", "description": "list files", "timeout": "120000"}),
+            json!({"command": "ls", "description": "list files", "is_background": false}),
+        ];
+        for args in ok {
+            assert!(
+                validate_with(input_validator, &args).is_ok(),
+                "valid run_terminal arguments must pass: {args}"
+            );
+        }
+        let invalid = [
+            json!({"description": "missing command"}),
+            json!({"command": "ls"}),
+            json!({"command": "ls", "description": "x", "timeout": "abc"}),
+            json!({"command": "ls", "description": "x", "timeout": "-1"}),
+            json!({"command": "ls", "description": "x", "timeout": 300001}),
+            json!({"command": "ls", "description": "x", "env": {"A": "1"}}),
+        ];
+        for args in invalid {
+            assert!(
+                validate_with(input_validator, &args).is_err(),
+                "invalid run_terminal arguments must be rejected: {args}"
+            );
+        }
     }
 
     #[tokio::test]

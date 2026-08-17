@@ -164,10 +164,12 @@ impl ToolDispatcher {
     /// controller classifies `run_terminal_cmd` as LocalMutation, so policy
     /// filtering needs an explicit name-level exclusion; `bash` is
     /// SandboxEscape already. Mirrors orz-host's `is_shell_tool`.
+    /// 2026-08-18 审查收口：`sh` 入名单（与 permission.rs / 设计 §3 一致；
+    /// 当前非注册工具，名级兜底）。
     fn is_shell_tool(tool: &str) -> bool {
         matches!(
             tool,
-            "bash" | "cmd" | "powershell" | "pwsh" | "run_terminal_cmd"
+            "bash" | "sh" | "cmd" | "powershell" | "pwsh" | "run_terminal_cmd"
         )
     }
 
@@ -285,6 +287,12 @@ mod tests {
             RiskClass::NetworkCall
         );
         assert_eq!(ToolDispatcher::risk_class("bash"), RiskClass::SandboxEscape);
+        // 2026-08-18 审查收口：`sh` 与 `run_terminal_cmd` 一样归
+        // LocalMutation（仅 `bash` 别名归 SandboxEscape），并纳入 shell
+        // 名单——策略层按名 fail-closed 不依赖控制器分类。
+        assert_eq!(ToolDispatcher::risk_class("sh"), RiskClass::LocalMutation);
+        assert!(ToolDispatcher::is_shell_tool("sh"));
+        assert_eq!(ToolDispatcher::action_category("sh"), "terminal");
         assert_eq!(
             ToolDispatcher::risk_class("write_file"),
             RiskClass::LocalMutation
