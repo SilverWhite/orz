@@ -648,7 +648,7 @@
   [ADR-0010 §14.22](../adr/ADR-0010-fusion-runtime-and-agent-architecture.md) /
   [TODO](../TODO.md)。
 
-### 6g. FUS-LEDGER-FOLD-STATE（`current-design`；P1，2026-08-18 设计定案，未实施）
+### 6g. FUS-LEDGER-FOLD-STATE（`implemented`；P1，2026-08-18 设计定案，同日实施闭合）
 
 - 定位：动作台账折叠从「每请求无状态重算」改为「折叠点状态化」——controller
   会话级持有 `fold_start`/`fold_cut`/`folded_ledger` 三态，请求视图 = preamble
@@ -672,9 +672,20 @@
   0.940/0.900/0.920/0.820/0.660/0.590；128K→256K 为下滑最快区段）；Max 档
   官方评估窗口 384K（论文 §5.3.1）；命中率估算 ≈95.5%（现状 72%、实测
   67.4%）、成本约现状 1/4。
-- 状态：**设计定案（2026-08-18 用户裁决：先设计、不实施）**——实施切片
-  S1 fold 三态 + 请求视图构建 / S2 推进触发 / S3 压缩联动 + 摘要同源 + 恢复 /
-  S4 参数接线 + 测试 + 文档同步 + 审计，见设计文档 §7。未闭合计数不变。
+- 状态：**已实施（2026-08-18 本窗口闭合；orz a5bea77）**——S1 fold 三态 +
+  `build_request_view` + `advance_fold`（action_ledger.rs）；S2 loop-top 推进
+  触发（视图估算 ≥128K、checkpoint 轮优先、零模型调用）；S3 压缩联动
+  （摘要输入与主请求同源、drain 保留起点基于 fold_cut、压缩后三态重置）+
+  摘要同源 + 恢复（每轮循环实例局部、恢复后 None 重新累积）；S4 参数接线
+  （默认 128K + `ORZ_FOLD_TRIGGER_TOKENS`；压缩普通触发 160K→192K、兜底
+  200K→256K）+ 测试（action_ledger 5 项 + orz-loop 循环级 2 项；orz-loop
+  450 / orz-assurance / orz-tui 178 / orz-bin 全量通过、clippy 无新增告警、
+  manifest 1401、仓库门禁 valid）+ 文档同步 + 实施审计
+  `docs/audits/GAP_LEDGER_FOLD_STATE_IMPL_AUDIT_2026-08-18.md`。
+  实施状态偏离设计字面「controller 会话级字段」=每轮循环实例局部（随
+  LoopOutcome 返回）：同一 controller 被主车道与嵌套检索子代理共用，共享
+  字段会被子代理调度污染；语义等价（每次循环起始 None 重新累积）。未闭合
+  计数不变（该设计轮按「实施前登记」口径未计入未闭合总数）。
 - 入口：[设计文档](LEDGER_FOLD_STATE_CACHE_DESIGN_2026-08-18.md) /
   [ADR-0010 §14.26](../adr/ADR-0010-fusion-runtime-and-agent-architecture.md) /
   [TODO](../TODO.md)。
@@ -737,6 +748,17 @@
 
 ## 变更记录
 
+- 2026-08-18：FUS-LEDGER-FOLD-STATE 实施闭合登记（本窗口；用户指示实施）——
+  S1 fold 三态 + 有状态视图 + 推进（action_ledger.rs）；S2 loop-top 推进触发
+  （视图估算 ≥128K、checkpoint 轮优先）；S3 压缩联动（摘要输入同源、drain
+  保留起点基于 fold_cut、压缩后三态重置）+ 恢复语义；S4 参数接线
+  （`ORZ_FOLD_TRIGGER_TOKENS` 默认 128K；压缩普通触发 160K→192K、兜底
+  200K→256K）+ 测试 + 文档同步 + 审计。orz 子模块 a5bea77；orz-loop 450 /
+  orz-assurance / orz-tui 178 / orz-bin 全量通过、clippy 无新增告警、manifest
+  1401、仓库门禁 valid；实施审计
+  `docs/audits/GAP_LEDGER_FOLD_STATE_IMPL_AUDIT_2026-08-18.md`。未闭合计数
+  不变（设计轮按「实施前登记」口径未计入未闭合总数）。ADR-0010 §14.26 /
+  BACKLOG 6g / TODO P1 / 索引同步。
 - 2026-08-18：FUS-LEDGER-FOLD-STATE 设计定案登记（用户裁决：先设计、不实施；
   纯文档）——动作台账折叠状态化：controller 会话级
   `fold_start`/`fold_cut`/`folded_ledger` 三态，请求视图 = preamble + 冻结台账

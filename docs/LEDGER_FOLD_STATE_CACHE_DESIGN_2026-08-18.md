@@ -1,6 +1,7 @@
 # ORZ 动作台账折叠状态化与缓存稳定设计（2026-08-18）
 
-> 状态：`current-design`（2026-08-18 用户裁决：先设计、不实施）
+> 状态：`implemented`（2026-08-18 设计定案；同日用户指示实施闭合，orz a5bea77；
+> 实施审计见 `docs/audits/GAP_LEDGER_FOLD_STATE_IMPL_AUDIT_2026-08-18.md`）
 > 权威：ADR-0010 §14.26（v1.26 设计定案登记）；本文件取代
 > `CONTEXT_COMPACTION_DESIGN_2026-08-14.md` §3 的「每个模型工具轮完成后坍缩、
 > 不设冷却」触发语义（产物/配对/指针/审计契约全部保留，仅改触发时机与请求
@@ -259,7 +260,7 @@ folded_ledger: Option<String> // 冻结台账块文本（推进时一次性渲�
 5. 恢复：恢复后 fold=None、重新累积；恢复预检截断不破坏；
 6. 摘要输入与主请求同源一致性。
 
-## 7. 实施切片（待用户放行）
+## 7. 实施切片（2026-08-18 已放行并全部闭合，orz a5bea77）
 
 - S1：fold 三态 + 请求视图构建改造（`action_ledger` 新增
   `build_request_view(messages, fold_state)` 有状态入口）；

@@ -1930,6 +1930,21 @@ ADR §3.6 正文修订随实施登记。
    context 机制家族修订；设计文档
    `docs/LEDGER_FOLD_STATE_CACHE_DESIGN_2026-08-18.md`；实施路由=实施前登记
    BACKLOG / TODO（本设计轮不动未闭合计数）。
+   **2026-08-18 实施闭合（用户指示优先；orz a5bea77）**：S1-S4 全部实施——
+   `action_ledger.rs` 新增 `LedgerFoldState`（三态+不变量）、`build_request_view`
+   （未折叠=原文；已折叠=preamble+冻结台账+`[fold_cut..]`）与 `advance_fold`
+   （整轮配对纪律、轮次号延续、防空转）；`run_agent_loop` 每请求前估算折叠
+   视图、≥ `fold_trigger_tokens`（默认 128K、`ORZ_FOLD_TRIGGER_TOKENS`）时
+   loop-top 机械推进（checkpoint 轮优先）；主请求视图与压缩摘要输入同源；
+   压缩执行后 fold 三态重置、drain 保留起点基于 `fold_cut`；折叠状态为每轮
+   循环实例局部（随 `LoopOutcome` 返回）——同一 controller 被主车道与嵌套
+   检索子代理共用，控制器共享字段会被子代理调度污染，实现偏离设计字面
+   「controller 会话级字段」但语义等价：每次循环起始 fold=None 重新累积，
+   与「恢复后重新累积」一致。参数接线：压缩普通触发 160K→192K、兜底
+   200K→256K。测试：action_ledger 5 项单测 + orz-loop 循环级 2 项；orz-loop
+   450 / orz-assurance / orz-tui 178 / orz-bin 全量通过、clippy 无新增告警、
+   manifest 1401、仓库门禁 valid；实施审计见
+   `docs/audits/GAP_LEDGER_FOLD_STATE_IMPL_AUDIT_2026-08-18.md`。
    来源：2026-08-18 缓存调研（dsh 对照 + orz 审计 + 复刻模拟）；DeepSeek
    TTL 经用户体感（社区 5 小时说法、长任务正常命中）排除为现实风险；
    CLI_PROJECT_INDEX 登记。

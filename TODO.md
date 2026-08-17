@@ -511,6 +511,32 @@
 [ADR-0010 §14.22](adr/ADR-0010-fusion-runtime-and-agent-architecture.md) /
 [BACKLOG 6f](docs/BACKLOG_AND_PRIORITIES.md)。
 
+### FUS-LEDGER-FOLD-STATE（`implemented`；P1，2026-08-18 设计定案，同日实施闭合）
+
+- [x] S1 fold 三态 + 有状态请求视图：`action_ledger.rs` 新增 `LedgerFoldState`
+  （`fold_start`/`fold_cut`/`folded_ledger` + 不变量）、`build_request_view`
+  （未折叠=原文；已折叠=preamble+冻结台账+`[fold_cut..]`）、`advance_fold`
+  （整轮配对、轮次号延续、防空转）、`rounds_before`。**2026-08-18 闭合**：
+  action_ledger 5 项单测（未折叠原文 / 首推进形状 / 防空转 / 轮次连续旧行
+  不变 / 折叠前缀跨追加字节稳定）。
+- [x] S2 loop-top 推进触发：每请求前估算折叠视图 ≥ `fold_trigger_tokens`
+  （默认 128K、`ORZ_FOLD_TRIGGER_TOKENS` 可配）时机械推进（checkpoint 轮
+  优先、零模型调用、不打断批次）。**2026-08-18 闭合**：orz-loop 循环级测试
+  `fold_state_advances_once_and_prefix_stays_stable`（触发前无台账、推进后
+  按冻结台账版本锚定纯追加）。
+- [x] S3 压缩联动 + 摘要同源 + 恢复：`run_template_compact` 摘要输入与主请求
+  同一折叠视图；drain 保留起点=已折叠时 `fold_cut`；压缩后三态重置；折叠
+  状态为每轮循环实例局部（随 `LoopOutcome` 返回，主/检索车道 session_end
+  复用；避免嵌套子代理调度污染共享字段）；恢复/跨 prompt 一律 None 重新
+  累积。**2026-08-18 闭合**：orz-loop 循环级测试
+  `fold_state_resets_after_compaction_and_summary_uses_same_view`。
+- [x] S4 参数接线 + 测试 + 文档同步 + 审计：压缩普通触发 160K→192K、兜底
+  200K→256K；`with_fold_trigger_tokens` 测试 seam；默认值断言补全。
+  **2026-08-18 闭合**：orz-loop 450 / orz-assurance / orz-tui 178 / orz-bin
+  全量通过、clippy 无新增告警、`cargo fmt --all` 收口、manifest 1401、仓库
+  门禁 valid；orz a5bea77；ADR-0010 §14.26 / BACKLOG 6g / 索引 / 实施审计
+  `docs/audits/GAP_LEDGER_FOLD_STATE_IMPL_AUDIT_2026-08-18.md` 同步。
+
 ## P2 — 生产化决策门
 
 ### IMPL-CONTROL-FABRIC（`partial`）
