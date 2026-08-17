@@ -648,6 +648,37 @@
   [ADR-0010 §14.22](../adr/ADR-0010-fusion-runtime-and-agent-architecture.md) /
   [TODO](../TODO.md)。
 
+### 6g. FUS-LEDGER-FOLD-STATE（`current-design`；P1，2026-08-18 设计定案，未实施）
+
+- 定位：动作台账折叠从「每请求无状态重算」改为「折叠点状态化」——controller
+  会话级持有 `fold_start`/`fold_cut`/`folded_ledger` 三态，请求视图 = preamble
+  + 冻结台账 + `messages[fold_cut..]`（纯追加），推进之间前缀字节级稳定；
+  折叠推进改低频机械触发（视图估算 ≥ `ORZ_FOLD_TRIGGER_TOKENS` 默认 128K，
+  2026-08-18 定案；工具轮间隙执行）；压缩执行时旧台账归档进摘要存档、fold
+  三态重置、摘要输入与主请求同源；恢复后 fold=None 重新累积（运行期状态
+  不持久化）。
+- 决策依据：DeepSeek 涨价后命中率目标 ≥90%；实测 67.4%（控制台
+  8,845,056/4,279,939）；根因=`build_collapsed_request` 每轮滑动重写前缀
+  （复刻模拟首次折叠重合率 1.5%）；对照 dsh「严格追加 + 显式 replace」纪律。
+  **参数定案（2026-08-18 用户裁决，统一参数、不做跑分特化）**：折叠推进
+  128K（MRCR 平台期边界 Flash 0.870；本仓库多文档读取 index 30.5K/ADR 43K/
+  BACKLOG 27.8K 全量 ≈101K，允许连续读完关键文档集）＋压缩普通触发 160K→
+  192K（Flash ≈0.81、压缩周期 ≈71 轮）＋兜底 200K→256K（Flash ≈0.76，
+  超线即强制压缩）。384K 为 prompt 维度质量线，192K/256K 直接比较 <384K
+  成立；旧「224K=384K−160K」「352K 缓冲」推导作废。384K 有效窗口出处=
+  DeepSeek V4 技术报告 arXiv:2606.19348 Figure 9（MRCR-8-needle/Average
+  MMR，SVG 逐点读取：Flash-Max 8K=0.910/16K=0.840/32K=0.870/64K=0.850/
+  128K=0.870/256K=0.760/512K=0.600/1M=0.490，Pro-Max 对应 0.900/0.850/
+  0.940/0.900/0.920/0.820/0.660/0.590；128K→256K 为下滑最快区段）；Max 档
+  官方评估窗口 384K（论文 §5.3.1）；命中率估算 ≈95.5%（现状 72%、实测
+  67.4%）、成本约现状 1/4。
+- 状态：**设计定案（2026-08-18 用户裁决：先设计、不实施）**——实施切片
+  S1 fold 三态 + 请求视图构建 / S2 推进触发 / S3 压缩联动 + 摘要同源 + 恢复 /
+  S4 参数接线 + 测试 + 文档同步 + 审计，见设计文档 §7。未闭合计数不变。
+- 入口：[设计文档](LEDGER_FOLD_STATE_CACHE_DESIGN_2026-08-18.md) /
+  [ADR-0010 §14.26](../adr/ADR-0010-fusion-runtime-and-agent-architecture.md) /
+  [TODO](../TODO.md)。
+
 ## P2 — 生产化决策门
 
 ### 7. IMPL-CONTROL-FABRIC（`partial`）
@@ -706,6 +737,22 @@
 
 ## 变更记录
 
+- 2026-08-18：FUS-LEDGER-FOLD-STATE 设计定案登记（用户裁决：先设计、不实施；
+  纯文档）——动作台账折叠状态化：controller 会话级
+  `fold_start`/`fold_cut`/`folded_ledger` 三态，请求视图 = preamble + 冻结台账
+  + `messages[fold_cut..]`（纯追加），推进之间前缀字节级稳定；推进 = 视图估算
+  ≥ `ORZ_FOLD_TRIGGER_TOKENS`（默认 128K，2026-08-18 定案）的机械低频触发；
+  压缩时旧台账归档 + fold 重置 + 摘要输入同源；恢复后重新累积。**参数定案
+  （用户裁决，统一参数、不做跑分特化）**：压缩普通触发 160K→192K、兜底
+  200K→256K；384K 为 prompt 维度质量线直接比较（192K/256K < 384K），旧
+  「224K=384K−160K」「352K 缓冲」推导作废。384K 出处复核=DeepSeek V4 技术
+  报告 arXiv:2606.19348 Figure 9（MRCR-8-needle/Average MMR，SVG 逐点读取：
+  Flash-Max 8K=0.910/16K=0.840/32K=0.870/64K=0.850/128K=0.870/256K=0.760/
+  512K=0.600/1M=0.490，Pro-Max 0.900/0.850/0.940/0.900/0.920/0.820/0.660/
+  0.590；128K→256K 为下滑最快区段）；Max 档官方评估窗口 384K（论文 §5.3.1），
+  V4 输入上限 1M。命中率估算 ≈95.5%（现状 72%、实测 67.4%）、成本约现状
+  1/4。ADR-0010 v1.26/§14.26、BACKLOG 6g、索引同步；设计文档
+  `docs/LEDGER_FOLD_STATE_CACHE_DESIGN_2026-08-18.md`。未闭合计数不变。
 - 2026-08-17：ORZ-LARGE-FILE-READ-CONTRACT 实施闭合（本窗口）——GrokBuild
   `read_file` 文本路径有界返回：超过粗门（默认 16KB、可配 8–32KB）返回读取句柄
   信封（path/size/encoding/content_sha256/available_range/有界预览 ≤4KB/

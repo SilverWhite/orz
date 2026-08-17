@@ -556,3 +556,91 @@
 - ADR-0010 §14.23（v1.23）；FUS-TOOL-SCOPE-CONTRACT（`current-design`）；
   `docs/PLAN_FIRST_BLACKBOARD_DESIGN_2026-08-15.md` §4（读面机械契约）；
   BACKLOG 0a / TODO P0-E（实施路由）。
+
+## 13. Benchmark 完全体执行面（终端/网络两轴放开）（2026-08-18 用户裁决）
+
+### 13.1 问题与原则
+
+TB2 冒烟（`D:\tb-eval\jobs\2026-08-17__23-29-44`，make-doom-for-mips）reward 0
+根因=评测配置 shell-less：Benchmark 策略对 shell/网络 fail-closed，且 console
+默认面注册表缺终端动作——模型「下单无门」与「下单被拒」同时存在。设计原则：
+shell 不开放为模型直接工具，只作为助理层注册动作经订单下发（与
+`workspace.run_tests` 同构）；按任务合规放开策略允许面，审计面不减。
+
+### 13.2 三层使能
+
+1. 权限层（orz-host `permission.rs`）：`PermissionPolicy::Benchmark` 参数化为
+   `Benchmark { allow_shell, allow_network }`（默认 false/false）；shell 工具
+   （run_terminal_cmd/bash/cmd/powershell/pwsh）与 SandboxEscape 别名在
+   allow_shell 下 AllowOnce，NetworkCall 在 allow_network 下 AllowOnce；MCP 恒
+   deny、工作区读限定不变。
+2. 探针层（`tool_probe.rs` / `host.rs`）：`ToolPolicy::BenchmarkFull`；
+   `tool_policy()` 由 `Benchmark{allow_shell:true,..}` 映射；
+   `policy_allows_exec` 增加 BenchmarkFull；`ActionBundle::allows` 加臂复用
+   benchmark 档。
+3. 注册表层（console.rs）：新增 `workspace.run_terminal`（见 §13.3）。
+
+### 13.3 动作契约 workspace.run_terminal
+
+- target_tool：`run_terminal_cmd`；bundle：`READ_WRITE`（standard+benchmark）。
+- input_schema：`command`（必填）、`description`（必填）、`timeout`
+  （1–300000 ms，可选）、`is_background`（可选）；`additionalProperties: false`。
+  不暴露 env/cwd（host 决定；ACAF command_exec 摘要基于 host 侧 cwd/env）。
+- response_schema：text_output 信封。
+- 投影：探针 Complete ∩ bundle allows(BenchmarkFull) → 动作栏出现。
+
+### 13.4 CLI 与适配器
+
+- `--allow-shell` / `--allow-network` → ORZ_ALLOW_SHELL / ORZ_ALLOW_NETWORK；
+  必须与 `--allow-write` 同用（exit 2）。
+- 适配器：allow_shell 恒真；allow_network = task network_mode == PUBLIC。
+
+### 13.5 安全面
+
+- ACAF fail-closed 票据（command_exec_v1/network_v1）仍为最终授权兜底。
+- 预算/墙钟/停滞守卫、事件审计链、订单/step 门不变。
+- 容器层 harbor 按任务建网，NO_NETWORK 任务无网（纵深一致）。
+
+### 13.6 登记
+
+- ADR-0010 §14.24（v1.24）；`docs/BENCHMARK_FULL_EXEC_DESIGN_2026-08-18.md`；
+  `docs/PLAN_FIRST_BLACKBOARD_DESIGN_2026-08-15.md` §4；CLI_PROJECT_INDEX
+  （FUS-BENCHMARK-FULL-EXEC，`current-design`）。
+
+## 14. 状态行缓存纪律与订单拒绝的步骤语义（2026-08-18 用户裁决）
+
+### 14.1 问题与证据
+
+TB2 复验 run（80 请求）命中率 66.5%（旧批次 95–99%）：18 次
+`request_header_change` 全部为 system 变化，tools/config 恒定。根因链：
+① console 步骤机每笔订单 receipt 成功即推进步骤（done），状态行
+`[任务状态 v0.1]`（render_status_line）渲染 goal + 已完成 + 当前步；
+② 状态行嵌入系统提示词（A4 常驻块）；③ 步骤推进 → 状态行变化 →
+system_sha256 变化 → 前缀缓存整段失效（断点后请求命中 0.2–4%、
+未命中 2万–13万 token）。
+
+### 14.2 状态行缓存纪律（修复项 1）
+
+- 系统提示词恢复完全静态：预算块 + 基础提示 + plan-first 框架（删除
+  render_status_line 注入）。
+- 状态行改为**变化时追加**的尾随用户消息（`sync_status_line_message`）：
+  计算 render_status_line，与上次追加值比较，变化才推送并记录；无计划
+  （None）不推送。与 `[TOOL_ROUND_BUDGET] REMAINING` 同纪律——前缀保持
+  命中，变化轮仅小段新状态行未命中。
+- 模型每轮仍可见当前步（尾随消息），不回归 P0-E 第 4 项 step_id 渲染。
+
+### 14.3 订单拒绝的步骤语义（修复项 2）
+
+- `record_console_receipt` 增 `mutate_step`：Ok → true（done）；Err →
+  仅 execute/verify（执行失败）才迁移为 failed；发放期拒绝
+  （registry/contract/target/policy，含 policy_denied/ACAF/模式门）不改
+  步骤状态（保持发放时置的 in_progress，订单可重试）。
+- `build_status_line` 当前步 = 第一个非 done（与
+  `planning::current_step_index` 门禁一致）；failed 步骤显示为当前可重试。
+
+### 14.4 登记
+
+- ADR-0010 §14.25（v1.25）；CLI_PROJECT_INDEX 顶部登记行（状态行缓存纪律 +
+  订单拒绝步骤语义）。**实施已闭合（2026-08-18，orz `ba86910`）**：
+  orz-loop 443 通过 / 0 失败、clippy 与基线一致；实施审计
+  `docs/audits/GAP_STATUS_LINE_CACHE_STEP_RECEIPT_IMPL_AUDIT_2026-08-18.md`。

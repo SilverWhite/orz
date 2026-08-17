@@ -165,6 +165,17 @@ grep 搜索范围契约（2026-08-17 用户复核定案）：grep 返回结构�
 [`CLASSICAL_EXECUTION_ASSISTANT_DESIGN_2026-08-13.md`](CLASSICAL_EXECUTION_ASSISTANT_DESIGN_2026-08-13.md)
 §12 / ADR-0010 §14.23（v1.23）。
 
+Benchmark 完全体执行面（2026-08-18 用户裁决，FUS-BENCHMARK-FULL-EXEC）：
+console 默认面仍无执行工具——shell 不开放为模型直接工具，只作为助理层注册动作
+`workspace.run_terminal`（command/description 必填、timeout/is_background 可选，
+target=run_terminal_cmd）经订单下发，与 `workspace.run_tests` 同构；权限策略
+`Benchmark{allow_shell,allow_network}` 两轴放开 + 探针 `ToolPolicy::BenchmarkFull`
+使助理层执行链与动作栏投影放行；网络按任务 network_mode 透传（TB 89 题全
+PUBLIC）；ACAF 票据/预算/墙钟/事件审计不变。详见
+[`BENCHMARK_FULL_EXEC_DESIGN_2026-08-18.md`](BENCHMARK_FULL_EXEC_DESIGN_2026-08-18.md) /
+[`CLASSICAL_EXECUTION_ASSISTANT_DESIGN_2026-08-13.md`](CLASSICAL_EXECUTION_ASSISTANT_DESIGN_2026-08-13.md)
+§13 / ADR-0010 §14.24（v1.24）。
+
 ## 5. 分步计划 Schema（草案）
 
 ```json

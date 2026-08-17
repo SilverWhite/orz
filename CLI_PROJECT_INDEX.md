@@ -1,6 +1,6 @@
 # CLI_PROJECT_INDEX
 
-> 索引版本：v2.0；状态：`current`；最近整理：2026-08-17（承接 2026-08-13 批次：CLASSICAL-EXEC-ASSISTANT 升 P0、小样 1 跑通与槽位表动态生成、v0.3 集成形态与 DeepSeek Harness 借鉴、fail-closed 返回契约、动作粒度裁决、v0.4 执行日志可见性、v0.5 黑板动作栏登记；工具探针 v0.2 A+C→B 定档、P0-A 批次与 P0-A-2 单一探针面实施闭合、ADR-0010 v1.8 登记；OPS-PROTOCOL 审查判定登记；P0-B B-1 闭合——web_search citations 结构化透传进 loop；2026-08-14 审查复核——投影入口与 README 冻结版本表述对齐 v1.8 补写、CLASSICAL-EXEC-ASSISTANT 与 FUS-TOOL-PROBE 状态头对齐、ADR-0010 §13 来源补齐、新增 AUTH-TODO 待办勾选清单路由；P0-B 步骤 2 闭合——web_fetch 候选机械计数门禁与计数反馈（ORZ_WEB_FETCH_CANDIDATE_CAP 定档 8）；2026-08-14 缓存与上下文成本收敛登记（ADR-0010 v1.9、FUS-REQUEST-CACHE pending）——保持 v1.8 探针可见性、请求 header 变化留痕、探针准确性优先、单轮注入预算 + 策略化读取；2026-08-14 压缩机制重设计定稿登记（ADR-0010 v1.10、FUS-COMPACTION-REDESIGN pending）——384K 有效窗口、160K/200K 触发、工具记录机械坍缩、五段模板摘要、恢复缺口 D2-2/D3-1 实施前置；P0-B 步骤 4 闭合——browser_read 范围/模式参数（full/preview/keywords）与第二段计数域复用；P0-B 步骤 5/6 闭合——输出级引用校验器与提示词相应缩短（ADR-0010 v1.11/v1.12，FUS-RETRIEVAL-MECH 转 implemented）；2026-08-14 步骤 6 复核补记——GAP-SOURCE-WEIGHTING-IMPL 索引条目补取代注记（P3 已处理），审查观察登记（提示词 observed-scope 枚举，P3 可选，见步骤 6 审计 §7）；2026-08-14 DSH 借鉴复核与两项设计确认登记——FUS-DSH-BORROW-REVIEW（A 挂起/B 收编小样 2/C 收编 S2）、FUS-ORIENTATION-FORCED-TEMPLATE 与 FUS-SESSION-CONTEXT-MONITOR（ADR-0010 v1.13、P1 6c/6d）、条件触发 FUS-RECOVERY-TOOL-OUTCOME/ORZ-STAGNATION-TOOL-SIGNAL；2026-08-14 P0-D 压缩机制实施闭合（用户放行）——S1 D2-2/D3-1 恢复前置、S2 动作台账机械坍缩、S3 五段模板摘要接线（context_compressed v0.2 payload + 存档 + retention + TUI）、S4 审计与同步，FUS-COMPACTION-REDESIGN 转 implemented；2026-08-14 黑板 plan epoch 轮换登记（用户裁决）——ADR-0010 v1.15、FUS-BLACKBOARD-PLAN-EPOCH pending、压缩不再滚动黑板；2026-08-14 黑板 plan epoch 实施闭合（用户指示优先）——S1-S5 全部实施（plan_epoch 批准事件/Schema/fixtures、原子轮换与 `.gsa/blackboard/epoch-<n>.json` 归档、压缩解耦 + marker/路径槽、blackboard_read epoch 参数、恢复装载 + retention），FUS-BLACKBOARD-PLAN-EPOCH 转 implemented，ADR-0010 §3.6 正文随实施登记；2026-08-17 console 面缓存注记登记（用户指示补记）见下。
+> 索引版本：v2.0；状态：`current`；最近整理：2026-08-18（承接 2026-08-13 批次：CLASSICAL-EXEC-ASSISTANT 升 P0、小样 1 跑通与槽位表动态生成、v0.3 集成形态与 DeepSeek Harness 借鉴、fail-closed 返回契约、动作粒度裁决、v0.4 执行日志可见性、v0.5 黑板动作栏登记；工具探针 v0.2 A+C→B 定档、P0-A 批次与 P0-A-2 单一探针面实施闭合、ADR-0010 v1.8 登记；OPS-PROTOCOL 审查判定登记；P0-B B-1 闭合——web_search citations 结构化透传进 loop；2026-08-14 审查复核——投影入口与 README 冻结版本表述对齐 v1.8 补写、CLASSICAL-EXEC-ASSISTANT 与 FUS-TOOL-PROBE 状态头对齐、ADR-0010 §13 来源补齐、新增 AUTH-TODO 待办勾选清单路由；P0-B 步骤 2 闭合——web_fetch 候选机械计数门禁与计数反馈（ORZ_WEB_FETCH_CANDIDATE_CAP 定档 8）；2026-08-14 缓存与上下文成本收敛登记（ADR-0010 v1.9、FUS-REQUEST-CACHE pending）——保持 v1.8 探针可见性、请求 header 变化留痕、探针准确性优先、单轮注入预算 + 策略化读取；2026-08-14 压缩机制重设计定稿登记（ADR-0010 v1.10、FUS-COMPACTION-REDESIGN pending）——384K 有效窗口、160K/200K 触发、工具记录机械坍缩、五段模板摘要、恢复缺口 D2-2/D3-1 实施前置；P0-B 步骤 4 闭合——browser_read 范围/模式参数（full/preview/keywords）与第二段计数域复用；P0-B 步骤 5/6 闭合——输出级引用校验器与提示词相应缩短（ADR-0010 v1.11/v1.12，FUS-RETRIEVAL-MECH 转 implemented）；2026-08-14 步骤 6 复核补记——GAP-SOURCE-WEIGHTING-IMPL 索引条目补取代注记（P3 已处理），审查观察登记（提示词 observed-scope 枚举，P3 可选，见步骤 6 审计 §7）；2026-08-14 DSH 借鉴复核与两项设计确认登记——FUS-DSH-BORROW-REVIEW（A 挂起/B 收编小样 2/C 收编 S2）、FUS-ORIENTATION-FORCED-TEMPLATE 与 FUS-SESSION-CONTEXT-MONITOR（ADR-0010 v1.13、P1 6c/6d）、条件触发 FUS-RECOVERY-TOOL-OUTCOME/ORZ-STAGNATION-TOOL-SIGNAL；2026-08-14 P0-D 压缩机制实施闭合（用户放行）——S1 D2-2/D3-1 恢复前置、S2 动作台账机械坍缩、S3 五段模板摘要接线（context_compressed v0.2 payload + 存档 + retention + TUI）、S4 审计与同步，FUS-COMPACTION-REDESIGN 转 implemented；2026-08-14 黑板 plan epoch 轮换登记（用户裁决）——ADR-0010 v1.15、FUS-BLACKBOARD-PLAN-EPOCH pending、压缩不再滚动黑板；2026-08-14 黑板 plan epoch 实施闭合（用户指示优先）——S1-S5 全部实施（plan_epoch 批准事件/Schema/fixtures、原子轮换与 `.gsa/blackboard/epoch-<n>.json` 归档、压缩解耦 + marker/路径槽、blackboard_read epoch 参数、恢复装载 + retention），FUS-BLACKBOARD-PLAN-EPOCH 转 implemented，ADR-0010 §3.6 正文随实施登记；2026-08-17 console 面缓存注记登记（用户指示补记）见下。
 > 2026-08-15 黑板 plan epoch 复查补强登记（ADR-0010 v1.15⑧）——plan_epoch 时间戳单调编号、身份一一对应强制、retention 保留最高编号快照。
 > 2026-08-15 黑板 plan epoch 复查遗留闭合登记（ADR-0010 v1.15⑨）——F2 原子写盘+回退加载、F4 跨进程 `.claim-<n>` 占号、F5 归档目录单一来源、F6 非法 epoch 显式报错、F7 归档失败入事件面（新 v0.2 `epoch_archive_write_failed`）、F9 `persisted_at` 更名、F10 设计 §5 措辞对齐。
 > 2026-08-15 ACAF fail-closed 生产启用裁决登记（用户裁决放行）——P2 IMPL-CONTROL-FABRIC 决策门放行；翻转执行与核查清单 ⑦⑨⑩⑪ 收口/边界登记待实施。
@@ -135,6 +135,55 @@
 > P3-2 concise 描述、P3-3 envelope 不追加 cursor rules 边界登记、P3-4 提示词
 > 措辞；orz 7c4a99e + bd8d485、manifest 1401、门禁 valid；
 > ADR-0010 §14.22 项 4 登记。
+> 2026-08-18 Benchmark 完全体执行面设计定案登记（用户裁决；纯文档、未实施）——
+> TB2 跑分采用 orz 完全体：Benchmark 策略两轴参数化 `Benchmark{allow_shell,
+> allow_network}`（默认 false/false）+ 探针 `ToolPolicy::BenchmarkFull` +
+> console 注册表新增 `workspace.run_terminal` 动作（shell 仍不开放为模型直接
+> 工具，执行全经助理层订单，与 run_tests 同构）；CLI 增 `--allow-shell`/
+> `--allow-network`；适配器按任务 network_mode 透传（89 题全 PUBLIC）；
+> ACAF/预算/墙钟/事件审计门禁不变。ADR-0010 v1.24/§14.24；
+> FUS-BENCHMARK-FULL-EXEC `current-design`；设计文档
+> `docs/BENCHMARK_FULL_EXEC_DESIGN_2026-08-18.md`；实施路由=实施前登记
+> BACKLOG / TODO。未闭合计数不变。
+> 2026-08-18 状态行缓存纪律 + 订单拒绝步骤语义设计定案登记（用户裁决；纯文档、
+> 未实施）——① `[任务状态]` 常驻状态行移出系统提示词，改为变化时追加的尾随
+> 用户消息（与预算剩余块同纪律）：根因=console 步骤机每笔订单 receipt 推进步骤
+> 致状态行每轮变化、system 摘要 18 次变化、前缀缓存整段失效（命中率 66.5% 对
+> 旧批次 95–99%）；② 订单发放期拒绝（registry/contract/target/policy）不再把
+> 绑定步骤标 failed——步骤只随执行 receipt（execute/verify）迁移，状态行当前
+> 步取首个非 done 与门禁对齐。ADR-0010 v1.25/§14.25；CLASSICAL-EXEC §14；
+> FUS-REQUEST-CACHE / CLASSICAL-EXEC-ASSISTANT 条目补注。实施登记见下条。
+> 未闭合计数不变。
+> 2026-08-18 状态行缓存纪律 + 订单拒绝步骤语义实施闭合登记——orz 子模块
+> ba86910：系统组装删 render_status_line（system 完全静态）、controller 增
+> sync_status_line_message（状态行变化时追加尾随 user 消息、去重）、
+> record_console_receipt 增 mutate_step（仅 execute/verify 失败标 failed，
+> 发放期拒绝不迁移步骤）、build_status_line 当前步取首个非 done；orz-loop
+> 443 通过、clippy 与基线一致；ADR-0010 §14.25 项 1/2 / CLASSICAL-EXEC §14
+> / 实施审计 `docs/audits/GAP_STATUS_LINE_CACHE_STEP_RECEIPT_IMPL_AUDIT_2026-08-18.md`。
+> 未闭合计数不变。
+> 2026-08-18 动作台账折叠状态化设计定案登记（用户裁决：先设计、不实施）——
+> 命中率审计（DeepSeek 控制台 8,845,056/4,279,939 ≈ 67.4%）定位到状态行修复
+> 之外的残余主因：`build_collapsed_request` 每请求无状态重算折叠边界（tail=2），
+> 每轮请求多一个完整轮次即滑动一次、前缀每轮被重写（复刻模拟首次折叠重合率
+> 1.5%），与 v1.9 前缀缓存纪律冲突。定案=折叠点状态化（controller 会话级
+> fold_start/fold_cut/folded_ledger 三态，请求视图=preamble+冻结台账+
+> messages[fold_cut..] 纯追加；推进=视图估算 ≥128K 机械触发（2026-08-18
+> 定案；MRCR 平台期边界、本仓库多文档读取需求）；压缩时旧台账归档+fold
+> 重置+摘要输入同源；恢复后重新累积）；**参数定案（用户裁决，统一参数、不做
+> 跑分特化）**：压缩普通触发 160K→192K（Flash≈0.81、压缩周期 ≈71 轮）、
+> 兜底 200K→256K（Flash≈0.76，超线即强制压缩）；384K 为 prompt 维度质量线，
+> 192K/256K 直接比较 <384K 成立，旧「224K=384K−160K」「352K 缓冲」推导
+> 作废。384K 有效窗口出处复核=DeepSeek V4 技术报告 arXiv:2606.19348
+> Figure 9（MRCR-8-needle/Average MMR，SVG 逐点读取：Flash-Max 8K=0.910/16K
+> =0.840/32K=0.870/64K=0.850/128K=0.870/256K=0.760/512K=0.600/1M=0.490；
+> Pro-Max 0.900/0.850/0.940/0.900/0.920/0.820/0.660/0.590；128K→256K 为
+> 下滑最快区段）；Max 档官方评估窗口 384K（论文 §5.3.1），V4 输入上限实为
+> 1M。
+> 命中率估算 ≈95.5%、成本约现状 1/4（128K 阈值）。ADR-0010 v1.26/§14.26；
+> FUS-LEDGER-FOLD-STATE `current-design`；设计文档
+> `docs/LEDGER_FOLD_STATE_CACHE_DESIGN_2026-08-18.md`；实施路由=实施前登记
+> BACKLOG / TODO。未闭合计数不变。
 >
 > 当前唯一自然语言设计权威是 [`ADR-0010`](adr/ADR-0010-fusion-runtime-and-agent-architecture.md)。本文件只负责召回和路由，不替代 ADR、Schema、审计结论、测试证据或源代码。
 >
@@ -242,6 +291,7 @@
 - **FUS-LARGE-FILE-READ-CONTRACT** (`implemented`; 2026-08-17)：大文件读取契约——读取工具契约有界返回（超过粗门默认 16KB、可配 8–32KB 的文件返回读取句柄信封 path/size/encoding/content_sha256/可用范围/有界预览 ≤4KB/truncated/offset 续读指针，不返回全文；精门=50K 注入预算兜底；小文件保持全文一次返回）；语义适配留模型、助理层只提供机械原语（引用 + 范围读）；模型以 read_file(offset)/grep 结构化续读（提示词策略化读取落成工具契约，对齐 pdf_read document_id+page_range 先例）；黑板/结果栏只放指针不放内容本体（内容留盘上/证据区，维持不新增自由随记区）；**实施已闭合（2026-08-17，orz 172b14e）**——GrokBuild read_file 文本路径信封 + 有界预览 + offset 续读，SKILL.md/`skills` 全量豁免，FileTooLarge 文本路径被取代保留为防御兜底。关键词：大文件读取、读取句柄、有界返回、结构化续读、offset、内容指针、黑板只存指针。入口：[`CLASSICAL-EXEC-ASSISTANT §11`](docs/CLASSICAL_EXECUTION_ASSISTANT_DESIGN_2026-08-13.md) / [`PLAN_FIRST_BLACKBOARD §4`](docs/PLAN_FIRST_BLACKBOARD_DESIGN_2026-08-15.md) / [`ADR-0010 §14.22`](adr/ADR-0010-fusion-runtime-and-agent-architecture.md) / [`实施审计`](docs/audits/GAP_LARGE_FILE_READ_CONTRACT_IMPL_AUDIT_2026-08-17.md) / [`BACKLOG 6f`](docs/BACKLOG_AND_PRIORITIES.md)。
    **2026-08-17 全面检查修复**：信封空窗口/越界 offset 语义收口（past-EOF 无续读指针、范围内空窗口从请求行续读、最后一行行内截断 offset=None）；`[toolset.read_file]` 配置节端到端接线（coarse_gate_bytes 经 orz-config 装载注入、优先于 env；orz 7c4a99e + bd8d485，ADR-0010 §14.22 项 4）。
 - **FUS-TOOL-SCOPE-CONTRACT** (`current-design`; 2026-08-17；grep 面 2026-08-17 实施闭合)：工具契约家族——「范围/截断必须机械报告」：grep 返回结构化搜索信封（resolved root/files_searched/match_count/truncated；结局三型分型：searched>0 有匹配 / searched>0 无匹配=真无匹配 / searched=0=范围空显式报过滤类别，绝不叫 "No matches found"；非零退出 + stderr 非空先显式报错）+ 搜索范围语义显式化（保留 rg 默认 + 提供 --no-ignore/--hidden 开关，容器冒烟定案）；机械来源=v1 空结果路径 `rg --files` 探针（弃用 --stats：rg 15 stdout / 旧版 stderr 位置差异污染流式面）；读取信封见 FUS-LARGE-FILE-READ-CONTRACT；**后续 2 项已计入未闭合数（2026-08-17）：list_dir 补 ignored/truncated 计数（读/搜/列三族统一）、grep 命中路径 files_searched 留空（--json/stats 位置收敛后再定）**。关键词：搜索信封、范围报告、空结果语义、结局分型、ignore 语义、工具契约、files 探针。入口：[`ADR-0010 §14.23`](adr/ADR-0010-fusion-runtime-and-agent-architecture.md) / [`CLASSICAL-EXEC-ASSISTANT §12`](docs/CLASSICAL_EXECUTION_ASSISTANT_DESIGN_2026-08-13.md) / [`实施审计`](docs/audits/FUS_TOOL_SCOPE_CONTRACT_GREP_IMPL_AUDIT_2026-08-17.md) / [`BACKLOG 0a`](docs/BACKLOG_AND_PRIORITIES.md) / [`TODO P0-E`](TODO.md)。
+- **FUS-BENCHMARK-FULL-EXEC** (`current-design`; 2026-08-18)：Benchmark 完全体执行面——TB2 跑分按任务合规放开 shell/网络（orz 完全体），但 shell 不开放为模型直接工具：console 默认面仍只读+下单，执行全经助理层订单（`workspace.run_terminal`，与 run_tests 同构）。三层使能=权限 `Benchmark{allow_shell,allow_network}` 两轴参数化（默认 fail-closed）+ 探针 `ToolPolicy::BenchmarkFull` + 注册表终端动作；CLI `--allow-shell`/`--allow-network`；适配器按任务 network_mode 透传。ACAF 票据/预算/墙钟/事件审计不变；「放开」=策略允许面。关键词：Benchmark 完全体、allow_shell、allow_network、BenchmarkFull、workspace.run_terminal、终端动作、TB2。入口：[`BENCHMARK_FULL_EXEC_DESIGN`](docs/BENCHMARK_FULL_EXEC_DESIGN_2026-08-18.md) / [`ADR-0010 §14.24`](adr/ADR-0010-fusion-runtime-and-agent-architecture.md) / [`CLASSICAL-EXEC-ASSISTANT §13`](docs/CLASSICAL_EXECUTION_ASSISTANT_DESIGN_2026-08-13.md) / [`PLAN_FIRST_BLACKBOARD §4`](docs/PLAN_FIRST_BLACKBOARD_DESIGN_2026-08-15.md)。
 
 ## 3. 当前实现与符合性路由
 
@@ -341,7 +391,7 @@
 
 本节只列 canonical ID，不重复定义：
 
-- `current-design`：AUTH-ADR-0010、AUTH-CURRENT-PROJECTION、FUS-CORE、FUS-AGENT-TOPOLOGY、FUS-CONCURRENCY、FUS-RETRIEVAL-MODE、FUS-INFORMATION-SUFFICIENCY、FUS-ORIENTATION、FUS-DIAGNOSTIC-COVERAGE、FUS-COUNTEREXAMPLE、FUS-STAGNATION、FUS-BUDGET、FUS-STATE-RECOVERY、FUS-WINDOWS-BOUNDARY、FUS-UI-BOUNDARY、FUS-CONTROL-FABRIC、FUS-SOURCE-WEIGHTING、AUTH-PLAN-FIRST-BLACKBOARD、FUS-TOOL-SCOPE-CONTRACT。
+- `current-design`：AUTH-ADR-0010、AUTH-CURRENT-PROJECTION、FUS-CORE、FUS-AGENT-TOPOLOGY、FUS-CONCURRENCY、FUS-RETRIEVAL-MODE、FUS-INFORMATION-SUFFICIENCY、FUS-ORIENTATION、FUS-DIAGNOSTIC-COVERAGE、FUS-COUNTEREXAMPLE、FUS-STAGNATION、FUS-BUDGET、FUS-STATE-RECOVERY、FUS-WINDOWS-BOUNDARY、FUS-UI-BOUNDARY、FUS-CONTROL-FABRIC、FUS-SOURCE-WEIGHTING、AUTH-PLAN-FIRST-BLACKBOARD、FUS-TOOL-SCOPE-CONTRACT、FUS-BENCHMARK-FULL-EXEC。
 - `implemented`：IMPL-WRITE-PLACEMENT、IMPL-GLOBAL-REVIEW、IMPL-RUN-EVENT-SCHEMA、GAP-TOOL-BUDGET、GAP-INQUIRY-SPLIT、GAP-SUBAGENT-RUNTIME、GAP-SUFFICIENCY-SCHEMA、GAP-RETRIEVAL-TOOLS、GAP-LOCAL-BROWSER、GAP-WEB-SEARCH-SEMAPHORE、GAP-CONVERSATION-RESTORE、GAP-PROJECT-DOC-INDEX-CACHE、GAP-PDF-EVIDENCE、GAP-RUN-TESTS、GAP-STREAM-RETRY、GAP-ACAF-SLICE1、GAP-ACAF-SLICE2A、GAP-ACAF-SLICE2B、GAP-DENIAL-POLICY-REVISION、GAP-ACAF-SLICE2-FAILCLOSED、GAP-ENCODING-GATE、GAP-SOURCE-WEIGHTING-IMPL、FUS-TOOL-PROBE、FUS-RETRIEVAL-MECH、FUS-COMPACTION-REDESIGN、AUTH-BLACKBOARD-PLAN-EPOCH、FUS-BLACKBOARD-PLAN-EPOCH、AUTH-ORIENTATION-FORCED-TEMPLATE、FUS-ORIENTATION-FORCED-TEMPLATE、FUS-CONSOLE-POLICY-DENIAL、FUS-REQUEST-CACHE、CLASSICAL-EXEC-ASSISTANT、FUS-AGENTS-MD-PLAN-WRAPPER、FUS-PROMPT-DEPERSONALIZE、FUS-PLAN-FIRST-MODEL-SURFACE、FUS-CONSOLE-DUAL-MODE、FUS-PLAN-STEP-GATE、GAP-CONSOLE-TOOLNAME-PATTERN、GAP-ACAF-HARNESS-PASSTHROUGH、FUS-LARGE-FILE-READ-CONTRACT。
 - `partial`：IMPL-RUST-RUNTIME、IMPL-DEEPSEEK-TRANSPORT、GAP-WINDOWS-EVIDENCE、FUS-COMPONENT-REGISTER、GATE-CHAIN、SEC-CREDENTIALS、EVIDENCE-LOCAL-BROWSER、IMPL-CONTROL-FABRIC。
 - `pending`：OPS-PROTOCOL、AUTH-SESSION-CONTEXT-MONITOR、FUS-SESSION-CONTEXT-MONITOR、FUS-RECOVERY-TOOL-OUTCOME。
