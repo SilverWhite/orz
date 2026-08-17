@@ -664,7 +664,10 @@ mod tests {
         let cases: Vec<(serde_json::Value, &str)> = vec![
             (serde_json::json!([]), "empty array"),
             (serde_json::json!([""]), "empty string item"),
-            (serde_json::json!(["workspace.read_file"]), "bare string item"),
+            (
+                serde_json::json!(["workspace.read_file"]),
+                "bare string item",
+            ),
             (serde_json::json!([null]), "null item"),
             (serde_json::json!([{}]), "empty object item"),
             (
@@ -715,7 +718,10 @@ mod tests {
                 }
             });
             let v = parse_and_validate_plan(&plan);
-            assert!(!v.errors.is_empty(), "{label}: loose shape passed: {actions}");
+            assert!(
+                !v.errors.is_empty(),
+                "{label}: loose shape passed: {actions}"
+            );
         }
     }
 

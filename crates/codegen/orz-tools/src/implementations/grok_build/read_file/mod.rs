@@ -10,7 +10,7 @@ use crate::implementations::read_file::{
     handle_pdf, is_pdf_file, raw_text_to_file_content, run_document_extraction,
 };
 use crate::types::context::TruncationConfig;
-use crate::types::output::{FileContent, ReadFileOutput};
+use crate::types::output::{FileContent, LineRange, ReadFileOutput, ReadHandleEnvelope};
 use crate::types::requirements::{Expr, ToolRequirement};
 use crate::types::resources::Params;
 #[allow(unused_imports)]
@@ -23,12 +23,18 @@ use crate::types::tool::{ToolKind, ToolNamespace};
 use std::sync::LazyLock;
 mod versions;
 use crate::types::schema::GrokIntegerSchema;
+use sha2::{Digest, Sha256};
 /// Configuration for the ReadFile tool, stored as `Params<ReadFileParams>` in Resources.
 #[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ReadFileParams {
     #[serde(default)]
     pub cursor_rules_on_read: bool,
+    /// ORZ-LARGE-FILE-READ-CONTRACT (ADR-0010 §14.22): coarse gate in bytes
+    /// (8–32 KiB). Overrides `ORZ_READ_FILE_COARSE_GATE_BYTES` when set
+    /// (TOML/config resource 口子).
+    #[serde(default)]
+    pub coarse_gate_bytes: Option<usize>,
 }
 crate::register_resource!("grok_build", "ReadFile", ReadFileParams);
 /// Internal version discriminant for read_file.
@@ -54,9 +60,153 @@ impl ReadFileVersion {
 }
 pub(crate) const MAX_NUM_TOKENS: usize = 25_000;
 pub const MAX_LINES_READ: usize = 1_000;
+/// ORZ-LARGE-FILE-READ-CONTRACT (ADR-0010 §14.22, 2026-08-17): coarse gate
+/// in bytes — text files at/below this size return full content; larger
+/// files return the bounded read-handle envelope. Default 16 KiB, clamped
+/// to 8–32 KiB.
+const READ_COARSE_GATE_DEFAULT: usize = 16 * 1024;
+const READ_COARSE_GATE_MIN: usize = 8 * 1024;
+const READ_COARSE_GATE_MAX: usize = 32 * 1024;
+/// Envelope preview budget — the formatted preview is capped at 4 KiB
+/// (design: 有界预览 ≤2–4KB).
+const READ_PREVIEW_BYTES: usize = 4 * 1024;
 pub use crate::implementations::read_file::{
     FileMetadata, PDF_MAX_PAGES_PER_READ, bytes_to_metadata, parse_page_range,
 };
+
+/// Env 口子 for the coarse gate (`ORZ_READ_FILE_COARSE_GATE_BYTES`,
+/// default 16 KiB, clamped 8–32 KiB).
+fn read_coarse_gate_bytes_env() -> usize {
+    std::env::var("ORZ_READ_FILE_COARSE_GATE_BYTES")
+        .ok()
+        .and_then(|v| v.trim().parse::<usize>().ok())
+        .map(|v| v.clamp(READ_COARSE_GATE_MIN, READ_COARSE_GATE_MAX))
+        .unwrap_or(READ_COARSE_GATE_DEFAULT)
+}
+
+/// Resolve the coarse gate: `ReadFileParams.coarse_gate_bytes` (TOML/config
+/// 口子) wins over the env var; both are clamped to 8–32 KiB.
+async fn resolve_read_coarse_gate(resources: &SharedResources) -> usize {
+    let res = resources.lock().await;
+    res.get::<Params<ReadFileParams>>()
+        .and_then(|p| p.0.coarse_gate_bytes)
+        .map(|v| v.clamp(READ_COARSE_GATE_MIN, READ_COARSE_GATE_MAX))
+        .unwrap_or_else(read_coarse_gate_bytes_env)
+}
+
+/// Truncate `s` to at most `max_bytes` bytes on a UTF-8 char boundary.
+fn truncate_chars(s: &str, max_bytes: usize) -> &str {
+    if s.len() <= max_bytes {
+        return s;
+    }
+    let mut end = 0;
+    for (idx, ch) in s.char_indices() {
+        if idx + ch.len_utf8() > max_bytes {
+            break;
+        }
+        end = idx + ch.len_utf8();
+    }
+    &s[..end]
+}
+
+/// Build the bounded formatted preview for the read-handle envelope.
+/// Mirrors `extract_file_content_lines` anchor rules (`N→` on the first
+/// visible line and every 10th line) but stops once the accumulated preview
+/// reaches `READ_PREVIEW_BYTES`. Returns `(preview, end_line, line_truncated)`
+/// where `end_line` is the last source line covered (0 = empty window) and
+/// `line_truncated` is true when that line itself was cut at the budget
+/// (a single very long line cannot be narrowed line-wise — grep/execute is
+/// the model-side continuation for its tail).
+fn build_handle_preview(
+    file_content: &str,
+    start_line: usize,
+    limit: Option<usize>,
+    total_lines: usize,
+) -> (String, usize, bool) {
+    fn strip(s: &str) -> &str {
+        let Some(s) = s.strip_suffix('\n') else {
+            return s;
+        };
+        let Some(line) = s.strip_suffix('\r') else {
+            return s;
+        };
+        line
+    }
+    let mut output = String::new();
+    let skip = start_line.saturating_sub(1);
+    let take = limit.unwrap_or(usize::MAX);
+    let mut end_line = 0usize;
+    let mut first_shown = false;
+    let mut line_truncated = false;
+    let mut budget_stop = false;
+    let split_count = file_content.split_inclusive('\n').count();
+    let has_trailing_empty = !file_content.is_empty() && file_content.ends_with('\n');
+    for (i, line) in file_content
+        .split_inclusive('\n')
+        .map(strip)
+        .enumerate()
+        .skip(skip)
+        .take(take)
+    {
+        line_truncated = false;
+        let line_num = i + 1;
+        let anchor = !first_shown || line_num.is_multiple_of(10);
+        // The first piece is always shown (truncated to the budget) so a
+        // single very long line cannot blow the 4 KiB preview bound; later
+        // pieces stop at the budget.
+        let piece = if anchor {
+            let prefix_len = line_num.to_string().len() + "→".len();
+            let content_budget = READ_PREVIEW_BYTES.saturating_sub(prefix_len);
+            line_truncated = line.len() > content_budget;
+            format!("{line_num}→{}", truncate_chars(line, content_budget))
+        } else {
+            truncate_chars(line, READ_PREVIEW_BYTES).to_owned()
+        };
+        let add_len = if output.is_empty() {
+            piece.len()
+        } else {
+            piece.len() + 1
+        };
+        if !output.is_empty() && output.len() + add_len > READ_PREVIEW_BYTES {
+            budget_stop = true;
+            break;
+        }
+        if !output.is_empty() {
+            output.push('\n');
+        }
+        output.push_str(&piece);
+        first_shown = true;
+        end_line = line_num;
+        if output.len() >= READ_PREVIEW_BYTES {
+            budget_stop = true;
+            break;
+        }
+    }
+    // The trailing phantom line is only appended when the main window was
+    // exhausted normally — a budget stop means lines after the preview were
+    // NOT covered, so the phantom would lie about the covered range.
+    if !budget_stop && has_trailing_empty {
+        let trailing_line_idx = split_count;
+        if trailing_line_idx >= skip && trailing_line_idx < skip.saturating_add(take) {
+            let line_num = trailing_line_idx + 1;
+            let piece = format!("{line_num}→");
+            let add_len = if output.is_empty() {
+                piece.len()
+            } else {
+                piece.len() + 1
+            };
+            if output.is_empty() || output.len() + add_len <= READ_PREVIEW_BYTES {
+                if !output.is_empty() {
+                    output.push('\n');
+                }
+                output.push_str(&piece);
+                end_line = line_num;
+            }
+        }
+    }
+    debug_assert!(end_line <= total_lines);
+    (output, end_line, line_truncated)
+}
 /// Max size of one streamed delta: strictly below `stream_chunk`'s 16 KiB
 /// cap (so a delta is never capped/gapped) and char-aligned (so concatenated
 /// deltas reproduce the terminal `content` byte-for-byte).
@@ -106,6 +256,7 @@ Usage:
 - The ${{ params.read.target_file }} parameter can be a relative path in the workspace or an absolute path
 - By default, it reads up to {max_lines_read} lines starting from the beginning of the file
 - Line numbers (1-based) appear as anchors in the format LINE_NUMBER→LINE_CONTENT on the first returned line and on every 10th line of the file; the lines in between show content only. Count from the nearest anchor when referring to a specific line
+- Text files larger than the coarse gate (default 16 KiB, configurable 8–32 KiB via ORZ_READ_FILE_COARSE_GATE_BYTES) return a read-handle envelope — path / size / encoding / content_sha256 / available range / bounded preview (≤4 KiB) / truncated / offset — instead of full content. Continue with offset=… (1-based line) or switch to grep/structure-first.
 - This tool can read PDF files (.pdf), PowerPoint files (.pptx), Jupyter notebooks (.ipynb files), and image files (e.g. PNG, JPG, etc).
 - When reading an image file the contents are presented visually as this tool uses multimodal LLMs."#;
 /// Schema-only advertised default (runtime still treats omit as line 1 via unwrap_or).
@@ -498,6 +649,44 @@ pub(crate) async fn run_read_file(
             .map(|t| t.0.max_lines_read())
             .unwrap_or_else(|| TruncationConfig::default().max_lines_read())
     };
+    // ORZ-LARGE-FILE-READ-CONTRACT (ADR-0010 §14.22, 2026-08-17): text files
+    // above the coarse gate return a bounded read-handle envelope instead of
+    // full content — the model continues with `read_file(offset=…)` or grep.
+    // Skill markdown keeps the historical full-read carve-out (skill docs are
+    // never silently truncated).
+    if !is_skill_markdown && file_bytes.len() > resolve_read_coarse_gate(&resources).await {
+        let limit = input.limit.unwrap_or(usize::MAX).min(max_lines);
+        let start_line = resolve_read_start_line(&file_content, input.offset);
+        let (preview, preview_end, line_truncated) =
+            build_handle_preview(&file_content, start_line, Some(limit), total_lines);
+        let truncated = line_truncated || preview_end < total_lines;
+        let offset = if truncated {
+            Some(preview_end + 1)
+        } else {
+            None
+        };
+        let content_sha256 =
+            crate::implementations::pdf_evidence::hex_string(&Sha256::digest(&file_bytes));
+        return Ok(ReadFileOutput::ReadHandle(ReadHandleEnvelope {
+            path,
+            size: file_bytes.len(),
+            encoding: output_encoding
+                .clone()
+                .unwrap_or_else(|| "utf-8".to_string()),
+            content_sha256,
+            available_range: LineRange {
+                start_line: 1,
+                end_line: total_lines,
+            },
+            preview_range: LineRange {
+                start_line: if preview_end == 0 { 0 } else { start_line },
+                end_line: preview_end,
+            },
+            preview,
+            truncated,
+            offset,
+        }));
+    }
     let (effective_offset, effective_limit) = if is_skill_markdown {
         (None, None)
     } else {
@@ -1094,7 +1283,7 @@ mod tests {
         }
     }
     #[tokio::test]
-    async fn token_limit_error_references_grep() {
+    async fn large_file_returns_read_handle_envelope() {
         let tmp = TempDir::new().unwrap();
         let line = "x".repeat(200);
         let big_content = std::iter::repeat_n(line.as_str(), 1100)
@@ -1102,11 +1291,7 @@ mod tests {
             .join("\n");
         std::fs::write(tmp.path().join("big.txt"), &big_content).unwrap();
         let tool = ReadFileTool;
-        let mut resources = test_resources(tmp.path());
-        resources.insert(TemplateRenderer::new(
-            [(ToolKind::Search, "Grep".to_string())].into(),
-            Default::default(),
-        ));
+        let resources = test_resources(tmp.path());
         let input = ReadFileInput {
             path: "big.txt".to_string(),
             offset: None,
@@ -1118,19 +1303,28 @@ mod tests {
             .await
             .unwrap();
         match result {
-            ReadFileOutput::FileTooLarge(msg) => {
-                assert!(msg.contains("exceeds maximum allowed tokens"));
+            ReadFileOutput::ReadHandle(handle) => {
+                assert!(handle.size > 16 * 1024, "file must be above the gate");
+                assert_eq!(handle.encoding, "utf-8");
+                assert_eq!(handle.content_sha256.len(), 64, "sha256 hex digest");
+                assert_eq!(handle.available_range.start_line, 1);
+                assert_eq!(handle.available_range.end_line, 1100);
+                assert_eq!(handle.preview_range.start_line, 1);
+                assert!(!handle.preview.is_empty());
                 assert!(
-                    msg.contains("Grep"),
-                    "Error should reference renamed grep tool: {}",
-                    msg
+                    handle.preview.len() <= 4 * 1024,
+                    "preview must stay within the 4 KiB bound, got {} bytes",
+                    handle.preview.len()
                 );
+                assert!(handle.truncated, "more content remains after the preview");
+                let offset = handle.offset.expect("truncated handle must carry offset");
+                assert!(offset > handle.preview_range.end_line);
             }
-            other => panic!("Expected FileTooLarge, got {:?}", other),
+            other => panic!("Expected ReadHandle, got {other:?}"),
         }
     }
     #[tokio::test]
-    async fn token_limit_error_when_range_specified_gives_better_message() {
+    async fn large_file_range_specified_starts_preview_at_offset() {
         let tmp = TempDir::new().unwrap();
         let line = "x".repeat(200);
         let big_content = std::iter::repeat_n(line.as_str(), 1100)
@@ -1138,14 +1332,10 @@ mod tests {
             .join("\n");
         std::fs::write(tmp.path().join("big.txt"), &big_content).unwrap();
         let tool = ReadFileTool;
-        let mut resources = test_resources(tmp.path());
-        resources.insert(TemplateRenderer::new(
-            [(ToolKind::Search, "Grep".to_string())].into(),
-            Default::default(),
-        ));
+        let resources = test_resources(tmp.path());
         let input = ReadFileInput {
             path: "big.txt".to_string(),
-            offset: Some(1),
+            offset: Some(500),
             limit: Some(800),
             pages: None,
             format: None,
@@ -1154,25 +1344,21 @@ mod tests {
             .await
             .unwrap();
         match result {
-            ReadFileOutput::FileTooLarge(msg) => {
-                assert!(msg.contains("requested line range"));
-                assert!(msg.contains("offset=1"));
-                assert!(msg.contains("limit=800"));
-                assert!(msg.contains("exceeds the maximum allowed tokens"));
-                assert!(
-                    msg.contains("Grep"),
-                    "Error should still reference the grep tool: {}",
-                    msg
+            ReadFileOutput::ReadHandle(handle) => {
+                assert_eq!(handle.preview_range.start_line, 500);
+                assert!(handle.preview_range.end_line >= 500);
+                assert!(handle.truncated, "500..end still leaves file content");
+                assert_eq!(
+                    handle.offset,
+                    Some(handle.preview_range.end_line + 1),
+                    "continuation pointer must resume right after the preview"
                 );
-                assert!(!msg.contains("Please use offset and limit parameters"));
             }
-            other => panic!("Expected FileTooLarge, got {:?}", other),
+            other => panic!("Expected ReadHandle, got {other:?}"),
         }
     }
-    /// Regression: FileTooLarge must name *this* tool's schema keys, not
-    /// whatever a sibling Read tool last wrote into the kind-wide param map.
     #[tokio::test]
-    async fn token_limit_error_uses_invoking_tool_param_names_not_kind_wide() {
+    async fn large_file_final_range_reaches_end() {
         let tmp = TempDir::new().unwrap();
         let line = "x".repeat(200);
         let big_content = std::iter::repeat_n(line.as_str(), 1100)
@@ -1180,50 +1366,112 @@ mod tests {
             .join("\n");
         std::fs::write(tmp.path().join("big.txt"), &big_content).unwrap();
         let tool = ReadFileTool;
-        let mut resources = test_resources(tmp.path());
-        resources.insert(TemplateRenderer::new(
-            [(ToolKind::Search, "Grep".to_string())].into(),
-            [(
-                ToolKind::Read,
-                [
-                    ("offset".to_string(), "poisoned_offset".to_string()),
-                    ("limit".to_string(), "poisoned_limit".to_string()),
-                ]
-                .into(),
-            )]
-            .into(),
-        ));
+        let resources = test_resources(tmp.path());
         let input = ReadFileInput {
             path: "big.txt".to_string(),
-            offset: Some(1),
-            limit: Some(800),
+            offset: Some(1095),
+            limit: Some(100),
             pages: None,
             format: None,
         };
-        let mut ctx = test_ctx(resources.into_shared());
-        ctx.extensions
-            .insert(crate::types::resources::InvokingToolParamNames(
-                [
-                    ("offset".to_string(), "start_line".to_string()),
-                    ("limit".to_string(), "max_lines".to_string()),
-                ]
-                .into(),
-            ));
-        let result = xai_tool_runtime::Tool::run(&tool, ctx, input)
+        let result = xai_tool_runtime::Tool::run(&tool, test_ctx(resources.into_shared()), input)
             .await
             .unwrap();
         match result {
-            ReadFileOutput::FileTooLarge(msg) => {
+            ReadFileOutput::ReadHandle(handle) => {
+                assert_eq!(handle.preview_range.start_line, 1095);
+                assert_eq!(handle.preview_range.end_line, 1100);
                 assert!(
-                    msg.contains("start_line=1") && msg.contains("max_lines=800"),
-                    "expected invoking-tool names, got: {msg}"
+                    !handle.truncated,
+                    "the final window reaches the end of the file"
                 );
-                assert!(
-                    !msg.contains("poisoned_offset") && !msg.contains("poisoned_limit"),
-                    "must not use kind-wide sibling renames: {msg}"
-                );
+                assert_eq!(handle.offset, None);
             }
-            other => panic!("Expected FileTooLarge, got {:?}", other),
+            other => panic!("Expected ReadHandle, got {other:?}"),
+        }
+    }
+    /// ORZ-LARGE-FILE-READ-CONTRACT: the coarse gate is configurable via the
+    /// TOML/config resource 口子 (`ReadFileParams.coarse_gate_bytes`) — a
+    /// 10 KiB file is full-content with the default gate but returns the
+    /// envelope once the gate is lowered to 8 KiB.
+    #[tokio::test]
+    async fn coarse_gate_param_override_flips_large_file_to_handle() {
+        let tmp = TempDir::new().unwrap();
+        let content = format!("{}\n", "y".repeat(100)).repeat(100); // ~10.2 KiB
+        std::fs::write(tmp.path().join("mid.txt"), &content).unwrap();
+        let input = || ReadFileInput {
+            path: "mid.txt".to_string(),
+            offset: None,
+            limit: None,
+            pages: None,
+            format: None,
+        };
+        let default_resources = test_resources(tmp.path());
+        let default = xai_tool_runtime::Tool::run(
+            &ReadFileTool,
+            test_ctx(default_resources.into_shared()),
+            input(),
+        )
+        .await
+        .unwrap();
+        assert!(
+            matches!(default, ReadFileOutput::FileContent(_)),
+            "10 KiB is below the default 16 KiB gate, got {default:?}"
+        );
+        let mut lowered_resources = test_resources(tmp.path());
+        lowered_resources.insert(Params(ReadFileParams {
+            coarse_gate_bytes: Some(8 * 1024),
+            ..Default::default()
+        }));
+        let lowered = xai_tool_runtime::Tool::run(
+            &ReadFileTool,
+            test_ctx(lowered_resources.into_shared()),
+            input(),
+        )
+        .await
+        .unwrap();
+        match lowered {
+            ReadFileOutput::ReadHandle(handle) => {
+                assert_eq!(handle.available_range.end_line, 101);
+                assert!(handle.truncated);
+                assert!(handle.offset.is_some());
+            }
+            other => panic!("expected ReadHandle with an 8 KiB gate, got {other:?}"),
+        }
+    }
+    /// Skill markdown keeps the historical full-read carve-out: a SKILL.md
+    /// above the gate is still returned as full `FileContent` (skill docs are
+    /// never silently truncated).
+    #[tokio::test]
+    async fn skill_markdown_above_gate_stays_full_content() {
+        let tmp = TempDir::new().unwrap();
+        let body: String = (1..=300).map(|i| format!("rule line {i}\n")).collect(); // ~4.2 KiB — raise above gate with a padded line
+        let content = format!("{body}{}\n", "z".repeat(15_000));
+        assert!(content.len() > 16 * 1024);
+        let skills_dir = tmp.path().join("skills");
+        std::fs::create_dir_all(&skills_dir).unwrap();
+        std::fs::write(skills_dir.join("SKILL.md"), &content).unwrap();
+        let resources = test_resources(tmp.path());
+        let input = ReadFileInput {
+            path: "skills/SKILL.md".to_string(),
+            offset: None,
+            limit: None,
+            pages: None,
+            format: None,
+        };
+        let result =
+            xai_tool_runtime::Tool::run(&ReadFileTool, test_ctx(resources.into_shared()), input)
+                .await
+                .unwrap();
+        match result {
+            ReadFileOutput::FileContent(fc) => {
+                assert!(
+                    fc.raw_output == content,
+                    "skill markdown must be returned in full"
+                );
+                assert_eq!(fc.total_lines, 302);
+            }
+            other => panic!("expected FileContent for SKILL.md, got {other:?}"),
         }
     }
     #[test]
@@ -2339,10 +2587,11 @@ pub fn verify(req: &HttpRequest) -> Result<Claims, Error> {
             }
         }
     }
-    /// Regression: a single formatted line above the 16 KiB cap still streams
-    /// losslessly via fixed-size char-aligned windows.
+    /// ORZ-LARGE-FILE-READ-CONTRACT (ADR-0010 §14.22): a text file above the
+    /// coarse gate returns a terminal-only read-handle envelope — no streaming,
+    /// no full content.
     #[tokio::test]
-    async fn read_file_streams_oversized_line_without_cap_break() {
+    async fn oversized_line_above_gate_is_terminal_only_handle() {
         let tmp = TempDir::new().unwrap();
         let long = "a".repeat(20_000);
         std::fs::write(tmp.path().join("long.txt"), format!("{long}\nshort\n")).unwrap();
@@ -2356,36 +2605,28 @@ pub fn verify(req: &HttpRequest) -> Result<Claims, Error> {
         };
         let (deltas, terminal) = execute_collect(test_ctx(resources.into_shared()), input).await;
         assert!(
-            deltas.len() >= 2,
-            "the >16 KiB line must be split into multiple sub-cap deltas, got {}",
+            deltas.is_empty(),
+            "the read-handle envelope must be terminal-only, got {} deltas",
             deltas.len()
         );
-        for d in &deltas {
-            assert!(
-                d.len() <= STREAM_DELTA_TARGET_BYTES,
-                "every delta must stay within the per-frame budget so stream_chunk never caps \
-                 (and silently drops) it; got {} bytes",
-                d.len()
-            );
-        }
         match terminal {
-            ReadFileOutput::FileContent(fc) => {
-                assert_eq!(
-                    deltas.concat(),
-                    fc.content,
-                    "char-aligned sub-cap windows must reproduce the >16 KiB-line content exactly"
-                )
+            ReadFileOutput::ReadHandle(handle) => {
+                assert!(
+                    handle.preview.len() <= 4 * 1024,
+                    "preview must stay within the 4 KiB bound, got {} bytes",
+                    handle.preview.len()
+                );
+                assert!(handle.truncated);
+                assert_eq!(handle.offset, Some(2));
             }
-            other => panic!("expected FileContent, got {other:?}"),
+            other => panic!("expected ReadHandle, got {other:?}"),
         }
     }
-    /// Regression for the "death spiral" incident: a single-line
-    /// ~49.5KB JSON payload must be readable in full with default config.
-    /// The old 2000-char per-line clip made such files unreadable by
-    /// construction (bash output and MCP results are byte-capped too), so the
-    /// model could never load a payload it needed to re-emit as tool input.
+    /// ORZ-LARGE-FILE-READ-CONTRACT: a single-line ~49.5KB payload is above
+    /// the gate and returns a bounded read-handle preview (the old full-read
+    /// path is superseded by the contract — the model greps/extracts instead).
     #[tokio::test]
-    async fn single_line_payload_reads_in_full_by_default() {
+    async fn single_line_payload_above_gate_returns_bounded_handle() {
         let tmp = TempDir::new().unwrap();
         let payload = format!(
             "{{\"uid\":\"cdlmfnq6x2o74e\",\"panels\":\"{}\"}}",
@@ -2402,25 +2643,24 @@ pub fn verify(req: &HttpRequest) -> Result<Claims, Error> {
         };
         let (_deltas, terminal) = execute_collect(test_ctx(resources.into_shared()), input).await;
         match terminal {
-            ReadFileOutput::FileContent(fc) => {
+            ReadFileOutput::ReadHandle(handle) => {
                 assert!(
-                    fc.content.contains(&payload),
-                    "single-line payload must be returned unclipped (got {} chars)",
-                    fc.content.len()
+                    handle.preview.len() <= 4 * 1024,
+                    "single-line payload preview must stay within the 4 KiB bound, got {} bytes",
+                    handle.preview.len()
                 );
+                assert_eq!(handle.preview_range.start_line, 1);
+                assert_eq!(handle.preview_range.end_line, 1);
+                assert!(handle.truncated, "the line itself was cut at the budget");
+                assert_eq!(handle.offset, Some(2));
             }
-            other => panic!("expected FileContent, got {other:?}"),
+            other => panic!("expected ReadHandle, got {other:?}"),
         }
     }
-    async fn read_huge_file(content: &str, with_execute_tool: bool) -> ReadFileOutput {
+    async fn read_huge_file(content: &str) -> ReadFileOutput {
         let tmp = TempDir::new().unwrap();
         std::fs::write(tmp.path().join("huge.json"), content).unwrap();
-        let mut resources = test_resources(tmp.path());
-        let mut kinds = std::collections::HashMap::from([(ToolKind::Search, "grep".to_string())]);
-        if with_execute_tool {
-            kinds.insert(ToolKind::Execute, "run_terminal_command".to_string());
-        }
-        resources.insert(TemplateRenderer::new(kinds, Default::default()));
+        let resources = test_resources(tmp.path());
         let input = ReadFileInput {
             path: "huge.json".to_string(),
             offset: None,
@@ -2431,54 +2671,39 @@ pub fn verify(req: &HttpRequest) -> Result<Claims, Error> {
         let (_deltas, terminal) = execute_collect(test_ctx(resources.into_shared()), input).await;
         terminal
     }
-    /// A single-line file that busts the whole-read token cap gets the
-    /// shell-tool hint — line-based offset/limit cannot narrow one line.
-    /// ~120KB single line ≈ 30K estimated tokens > MAX_NUM_TOKENS (25K).
+    /// A single-line file above the coarse gate returns a bounded handle —
+    /// the preview is truncated to the 4 KiB budget and the continuation
+    /// pointer moves past the line (grep/execute is the model-side tool for
+    /// very long single lines).
     #[tokio::test]
-    async fn oversized_single_line_gets_shell_hint() {
+    async fn oversized_single_line_returns_bounded_handle() {
         for content in [
             "z".repeat(120_000),
             format!("{}\n", "z".repeat(120_000)),
             format!("{}\r\n", "z".repeat(120_000)),
         ] {
-            match read_huge_file(&content, true).await {
-                ReadFileOutput::FileTooLarge(msg) => {
+            match read_huge_file(&content).await {
+                ReadFileOutput::ReadHandle(handle) => {
                     assert!(
-                        msg.contains("single very long line")
-                            && msg.contains("'run_terminal_command'"),
-                        "single-line overflow must steer to the execute tool, got: {msg}"
+                        handle.preview.len() <= 4 * 1024,
+                        "preview must stay within the 4 KiB bound, got {} bytes",
+                        handle.preview.len()
                     );
+                    assert!(handle.truncated);
+                    assert!(handle.offset.is_some());
                 }
-                other => panic!("expected FileTooLarge, got {other:?}"),
+                other => panic!("expected ReadHandle, got {other:?}"),
             }
         }
     }
-    /// No execute tool in the toolset → no shell hint (never steer the model
-    /// to a tool it cannot call).
+    /// A narrowed read that lands on an oversized line still returns a
+    /// bounded handle for that window.
     #[tokio::test]
-    async fn oversized_single_line_hint_suppressed_without_execute_tool() {
-        match read_huge_file(&"z".repeat(120_000), false).await {
-            ReadFileOutput::FileTooLarge(msg) => {
-                assert!(
-                    !msg.contains("single very long line"),
-                    "hint must be suppressed without an execute tool, got: {msg}"
-                );
-            }
-            other => panic!("expected FileTooLarge, got {other:?}"),
-        }
-    }
-    /// A narrowed read (offset/limit) that still lands on one oversized line
-    /// gets the shell hint — the window, not the whole file, is what
-    /// offset/limit cannot shrink further.
-    #[tokio::test]
-    async fn oversized_narrowed_window_single_line_gets_shell_hint() {
+    async fn oversized_narrowed_window_single_line_returns_bounded_handle() {
         let tmp = TempDir::new().unwrap();
         let content = format!("# header\n{}\nfooter\n", "z".repeat(120_000));
         std::fs::write(tmp.path().join("huge.json"), content).unwrap();
-        let mut resources = test_resources(tmp.path());
-        let mut kinds = std::collections::HashMap::from([(ToolKind::Search, "grep".to_string())]);
-        kinds.insert(ToolKind::Execute, "run_terminal_command".to_string());
-        resources.insert(TemplateRenderer::new(kinds, Default::default()));
+        let resources = test_resources(tmp.path());
         let input = ReadFileInput {
             path: "huge.json".to_string(),
             offset: Some(2),
@@ -2488,27 +2713,36 @@ pub fn verify(req: &HttpRequest) -> Result<Claims, Error> {
         };
         let (_deltas, terminal) = execute_collect(test_ctx(resources.into_shared()), input).await;
         match terminal {
-            ReadFileOutput::FileTooLarge(msg) => {
+            ReadFileOutput::ReadHandle(handle) => {
+                assert_eq!(handle.preview_range.start_line, 2);
+                assert_eq!(handle.preview_range.end_line, 2);
                 assert!(
-                    msg.contains("single very long line"),
-                    "narrowed single-line window must get the shell hint, got: {msg}"
+                    handle.preview.len() <= 4 * 1024,
+                    "preview must stay within the 4 KiB bound, got {} bytes",
+                    handle.preview.len()
                 );
+                assert!(handle.truncated);
+                assert_eq!(handle.offset, Some(3));
             }
-            other => panic!("expected FileTooLarge, got {other:?}"),
+            other => panic!("expected ReadHandle, got {other:?}"),
         }
     }
-    /// Multi-line oversized files keep the standard offset/limit guidance.
+    /// Multi-line oversized files carry the continuation pointer after the
+    /// bounded preview.
     #[tokio::test]
-    async fn oversized_multi_line_gets_standard_guidance() {
+    async fn oversized_multi_line_returns_handle_with_offset_pointer() {
         let content = format!("{}\n", "z".repeat(3_000)).repeat(50);
-        match read_huge_file(&content, true).await {
-            ReadFileOutput::FileTooLarge(msg) => {
+        match read_huge_file(&content).await {
+            ReadFileOutput::ReadHandle(handle) => {
                 assert!(
-                    !msg.contains("single very long line") && msg.contains("offset"),
-                    "multi-line overflow must keep offset/limit guidance, got: {msg}"
+                    handle.preview.len() <= 4 * 1024,
+                    "preview must stay within the 4 KiB bound, got {} bytes",
+                    handle.preview.len()
                 );
+                assert!(handle.truncated);
+                assert_eq!(handle.offset, Some(handle.preview_range.end_line + 1));
             }
-            other => panic!("expected FileTooLarge, got {other:?}"),
+            other => panic!("expected ReadHandle, got {other:?}"),
         }
     }
     #[test]

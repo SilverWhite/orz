@@ -260,7 +260,7 @@ mod tests {
     use crate::types::tool_metadata::test_ctx;
 
     use crate::computer::local::LocalFs;
-    use crate::implementations::grok_build::read_file::{MAX_LINES_READ, ReadFileTool};
+    use crate::implementations::grok_build::read_file::ReadFileTool;
     use crate::notification::types::ToolNotificationHandle;
     use crate::types::resources::{Cwd, FileSystem, NotificationHandle, Resources};
     use std::sync::Arc;
@@ -695,7 +695,9 @@ mod tests {
         }
     }
 
-    /// Regression: a small window into a large file should not trigger FileTooLarge.
+    /// ORZ-LARGE-FILE-READ-CONTRACT: a small window into a file above the
+    /// coarse gate returns a bounded read-handle envelope whose preview
+    /// covers exactly the requested window (no refusal, no full content).
     #[tokio::test]
     async fn small_window_into_large_file_succeeds() {
         let tmp = TempDir::new().unwrap();
@@ -721,18 +723,25 @@ mod tests {
             .await
             .unwrap();
 
-        // Should succeed with FileContent, not FileTooLarge.
+        // Should succeed with a bounded ReadHandle, not FileTooLarge.
         match result {
-            ReadFileOutput::FileContent(fc) => {
-                let content_lines: Vec<&str> = fc.content.lines().collect();
-                assert_eq!(
-                    content_lines.len(),
-                    5,
-                    "expected 5 content lines for small window"
+            ReadFileOutput::ReadHandle(handle) => {
+                assert_eq!(handle.preview_range.start_line, 100);
+                assert_eq!(handle.preview_range.end_line, 104);
+                assert!(
+                    handle.preview.contains("// line 99"),
+                    "preview must carry the window content, got: {}",
+                    handle.preview
                 );
-                assert!(content_lines[0].starts_with("100:"));
+                assert!(
+                    handle.preview.len() <= 4 * 1024,
+                    "preview must stay within the 4 KiB bound, got {} bytes",
+                    handle.preview.len()
+                );
+                assert!(handle.truncated, "the file has content after the window");
+                assert_eq!(handle.offset, Some(105));
             }
-            other => panic!("Expected FileContent for small window, got {:?}", other),
+            other => panic!("Expected ReadHandle for large file window, got {:?}", other),
         }
     }
 
@@ -770,7 +779,9 @@ mod tests {
         }
     }
 
-    /// Regression: no-limit reads must be capped at MAX_LINES_READ.
+    /// ORZ-LARGE-FILE-READ-CONTRACT: no-limit reads on a file above the gate
+    /// return a bounded read-handle envelope (the historical MAX_LINES_READ
+    /// cap is superseded by the preview budget).
     #[tokio::test]
     async fn large_file_truncated_to_max_lines() {
         let tmp = TempDir::new().unwrap();
@@ -792,17 +803,18 @@ mod tests {
             .unwrap();
 
         match result {
-            ReadFileOutput::FileContent(fc) => {
-                let content_lines: Vec<&str> = fc.content.lines().collect();
-                assert_eq!(content_lines.len(), MAX_LINES_READ);
-                assert!(content_lines[0].trim_start().starts_with("1:"));
-                let last = content_lines.last().unwrap();
+            ReadFileOutput::ReadHandle(handle) => {
+                assert_eq!(handle.available_range.end_line, 2001);
+                assert_eq!(handle.preview_range.start_line, 1);
                 assert!(
-                    last.trim_start()
-                        .starts_with(&format!("{}:", MAX_LINES_READ))
+                    handle.preview.len() <= 4 * 1024,
+                    "preview must stay within the 4 KiB bound, got {} bytes",
+                    handle.preview.len()
                 );
+                assert!(handle.truncated);
+                assert!(handle.offset.is_some());
             }
-            other => panic!("Expected FileContent, got {:?}", other),
+            other => panic!("Expected ReadHandle, got {:?}", other),
         }
     }
 
@@ -827,11 +839,16 @@ mod tests {
             .unwrap();
 
         match result {
-            ReadFileOutput::FileContent(fc) => {
-                let content_lines: Vec<&str> = fc.content.lines().collect();
-                assert_eq!(content_lines.len(), 50);
+            ReadFileOutput::ReadHandle(handle) => {
+                assert_eq!(handle.preview_range.start_line, 1);
+                assert!(
+                    handle.preview.len() <= 4 * 1024,
+                    "preview must stay within the 4 KiB bound, got {} bytes",
+                    handle.preview.len()
+                );
+                assert!(handle.truncated);
             }
-            other => panic!("Expected FileContent, got {:?}", other),
+            other => panic!("Expected ReadHandle, got {:?}", other),
         }
     }
 
@@ -857,12 +874,18 @@ mod tests {
             .unwrap();
 
         match result {
-            ReadFileOutput::FileContent(fc) => {
-                let content_lines: Vec<&str> = fc.content.lines().collect();
-                assert_eq!(content_lines.len(), MAX_LINES_READ);
-                assert_eq!(fc.limit, Some(2000));
+            ReadFileOutput::ReadHandle(handle) => {
+                assert_eq!(handle.available_range.end_line, 3001);
+                assert_eq!(handle.preview_range.start_line, 1);
+                assert!(
+                    handle.preview.len() <= 4 * 1024,
+                    "preview must stay within the 4 KiB bound, got {} bytes",
+                    handle.preview.len()
+                );
+                assert!(handle.truncated);
+                assert!(handle.offset.is_some());
             }
-            other => panic!("Expected FileContent, got {:?}", other),
+            other => panic!("Expected ReadHandle, got {:?}", other),
         }
     }
 }

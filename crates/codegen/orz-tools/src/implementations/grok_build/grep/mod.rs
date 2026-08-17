@@ -6,8 +6,8 @@
 //! The ripgrep binary resolution logic (`rg_path()`) is shared with the
 //! old implementation via `implementations::grep::ripgrep`.
 
-use std::process::Stdio;
 use std::path::PathBuf;
+use std::process::Stdio;
 use std::sync::LazyLock;
 use std::time::Duration;
 
@@ -758,7 +758,9 @@ async fn probe_files_searched(args: &GrepProbeArgs, timeout: Duration) -> Option
     }
     cmd.arg("--max-filesize").arg("5M");
     cmd.arg(args.workdir.to_string_lossy().as_ref());
-    cmd.stdout(Stdio::piped()).stderr(Stdio::null()).stdin(Stdio::null());
+    cmd.stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .stdin(Stdio::null());
     crate::util::detach_command(&mut cmd);
 
     let mut child = match cmd.spawn() {
@@ -2538,7 +2540,10 @@ mod tests {
             no_ignore: false,
             hidden: false,
         };
-        assert_eq!(probe_files_searched(&args, Duration::from_secs(20)).await, Some(0));
+        assert_eq!(
+            probe_files_searched(&args, Duration::from_secs(20)).await,
+            Some(0)
+        );
 
         // With --hidden the same probe finds the file.
         let mut visible = args.clone();

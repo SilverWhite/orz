@@ -420,9 +420,7 @@ pub fn apply_event(app: &mut TuiApp, event: TuiEvent) -> Vec<String> {
             code,
         } => {
             app.content.add_system_message(
-                &format!(
-                    "[订单拒绝] {order_id} {phase}/{step}: {code}（结果栏 receipt 保留）"
-                ),
+                &format!("[订单拒绝] {order_id} {phase}/{step}: {code}（结果栏 receipt 保留）"),
                 false,
             );
             vec![format!("订单拒绝: {order_id} {code}")]

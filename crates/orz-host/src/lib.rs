@@ -1677,6 +1677,44 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    /// ORZ-LARGE-FILE-READ-CONTRACT (ADR-0010 §14.22): a file above the
+    /// coarse gate returns the bounded read-handle envelope through the host
+    /// toolset — never full content.
+    #[tokio::test]
+    async fn call_read_file_large_file_returns_handle_envelope() {
+        let dir = test_dir();
+        let path = dir.join("big.txt");
+        let content = format!("{}\n", "x".repeat(200)).repeat(200);
+        assert!(content.len() > 16 * 1024);
+        std::fs::write(&path, &content).unwrap();
+
+        let toolset = shared_toolset();
+        let result = toolset
+            .call(
+                "read_file",
+                serde_json::json!({"target_file": path}),
+                "call-big",
+                None,
+            )
+            .await
+            .expect("read_file call");
+        assert!(
+            result.prompt_text.contains("[read handle]"),
+            "large file must return the read-handle envelope, got: {result:?}"
+        );
+        assert!(
+            result.prompt_text.len() <= 8 * 1024,
+            "envelope must stay bounded, got {} bytes",
+            result.prompt_text.len()
+        );
+        assert!(
+            result.prompt_text.contains("truncated=true"),
+            "large multi-line file must report truncated, got: {result:?}"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     /// 2026-08-08 blackboard-partition review closure (conformance D1-1):
     /// the host derives the ToolResult exit_code from the structured output
     /// — search_replace reports "applied" only via EditsApplied (Ok outputs

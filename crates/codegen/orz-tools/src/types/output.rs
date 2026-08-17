@@ -290,9 +290,50 @@ pub struct PdfPageImages {
     /// File size in bytes
     pub file_size: usize,
 }
+/// 1-based inclusive line range of a text file.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct LineRange {
+    /// 1-based first line.
+    pub start_line: usize,
+    /// 1-based last line.
+    pub end_line: usize,
+}
+/// ORZ-LARGE-FILE-READ-CONTRACT (ADR-0010 §14.22, 2026-08-17): bounded
+/// read-handle envelope returned by `read_file` when the target text file
+/// exceeds the coarse gate (default 16 KiB, configurable 8–32 KiB via
+/// `ORZ_READ_FILE_COARSE_GATE_BYTES`). Carries identity/range metadata plus a
+/// bounded preview (≤ 4 KiB) and an offset continuation pointer; the model
+/// continues with `read_file(offset=…)` or switches to grep/structure-first.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct ReadHandleEnvelope {
+    /// Absolute path of the file.
+    pub path: PathBuf,
+    /// File size in bytes.
+    pub size: usize,
+    /// Decode stage observed (GAP-ENCODING-GATE, OPS-PROTOCOL §8):
+    /// `utf-8` / `utf-8-sig` / `gb18030` / `utf-8-lossy`.
+    pub encoding: String,
+    /// SHA-256 hex digest of the raw file bytes (content identity).
+    pub content_sha256: String,
+    /// Available line range of the file (1-based, inclusive).
+    pub available_range: LineRange,
+    /// Line range covered by this preview (1-based, inclusive). Both fields
+    /// are 0 when the requested window is empty.
+    pub preview_range: LineRange,
+    /// Bounded formatted preview (anchor `N→` lines), ≤ 4 KiB.
+    pub preview: String,
+    /// True when file content remains beyond `preview_range.end_line`.
+    pub truncated: bool,
+    /// 1-based line offset for the next `read_file(offset=…)` call; `None`
+    /// when the preview reaches the end of the file.
+    pub offset: Option<usize>,
+}
 #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
 pub enum ReadFileOutput {
     FileContent(FileContent),
+    /// ORZ-LARGE-FILE-READ-CONTRACT (ADR-0010 §14.22): bounded read-handle
+    /// envelope for files above the coarse gate — never full content.
+    ReadHandle(ReadHandleEnvelope),
     /// Target file does not exist
     FileNotFound(String),
     /// Target path is a directory, not a file
@@ -697,6 +738,7 @@ impl ToolOutput {
         match self {
             ToolOutput::Bash(b) => b.output_encoding.as_deref(),
             ToolOutput::ReadFile(ReadFileOutput::FileContent(fc)) => fc.output_encoding.as_deref(),
+            ToolOutput::ReadFile(ReadFileOutput::ReadHandle(h)) => Some(&h.encoding),
             _ => None,
         }
     }
@@ -715,7 +757,8 @@ impl ToolOutput {
             ToolOutput::ReadFile(
                 ReadFileOutput::FileContent(_)
                 | ReadFileOutput::ImageContent(_)
-                | ReadFileOutput::PdfPageImages(_),
+                | ReadFileOutput::PdfPageImages(_)
+                | ReadFileOutput::ReadHandle(_),
             ) => false,
             ToolOutput::ReadFile(_) => true,
             ToolOutput::TaskOutput(TaskOutputOutput::TaskNotFound(_)) => true,
@@ -754,6 +797,31 @@ impl ToolOutput {
                     }
                 }
                 ReadFileOutput::FileContent(file_content) => file_content.content.clone(),
+                ReadFileOutput::ReadHandle(handle) => {
+                    let preview_range = if handle.preview_range.end_line == 0 {
+                        "(empty window)".to_string()
+                    } else {
+                        format!(
+                            "{}..={}",
+                            handle.preview_range.start_line, handle.preview_range.end_line
+                        )
+                    };
+                    let continuation = match handle.offset {
+                        Some(offset) => format!("read_file(offset={offset})"),
+                        None => "end of file".to_string(),
+                    };
+                    format!(
+                        "[read handle] path={} size={} encoding={} sha256={} lines=1..={} \
+                         preview_lines={preview_range} truncated={} continue={continuation}\n{}",
+                        handle.path.display(),
+                        handle.size,
+                        handle.encoding,
+                        handle.content_sha256,
+                        handle.available_range.end_line,
+                        handle.truncated,
+                        handle.preview,
+                    )
+                }
                 ReadFileOutput::ImageContent(image_content) => {
                     format!(
                         "[Image content of type: {} is included inline in this tool result]",
@@ -1581,6 +1649,45 @@ mod tests {
             json,
             json!({"type": "ReadFile", "FileTooLarge": "File content (37044 tokens) exceeds maximum allowed tokens (25000 tokens)."})
         );
+    }
+    #[test]
+    fn read_handle_envelope_json_round_trips() {
+        let handle = ReadHandleEnvelope {
+            path: PathBuf::from("/tmp/big.txt"),
+            size: 65_536,
+            encoding: "utf-8".to_string(),
+            content_sha256: "a".repeat(64),
+            available_range: LineRange {
+                start_line: 1,
+                end_line: 4096,
+            },
+            preview_range: LineRange {
+                start_line: 1,
+                end_line: 25,
+            },
+            preview: "1→line one\nline two".to_string(),
+            truncated: true,
+            offset: Some(26),
+        };
+        let json = to_json(ReadFileOutput::ReadHandle(handle.clone()).into());
+        assert_eq!(json["type"], "ReadFile");
+        assert_eq!(json["ReadHandle"]["size"], 65_536);
+        assert_eq!(json["ReadHandle"]["encoding"], "utf-8");
+        assert_eq!(json["ReadHandle"]["content_sha256"], "a".repeat(64));
+        assert_eq!(json["ReadHandle"]["available_range"]["end_line"], 4096);
+        assert_eq!(json["ReadHandle"]["preview_range"]["end_line"], 25);
+        assert_eq!(json["ReadHandle"]["truncated"], true);
+        assert_eq!(json["ReadHandle"]["offset"], 26);
+        let ToolOutput::ReadFile(ReadFileOutput::ReadHandle(round_trip)) =
+            serde_json::from_value(json).unwrap()
+        else {
+            panic!("expected ReadHandle round trip");
+        };
+        assert_eq!(round_trip, handle);
+        let prompt = ToolOutput::ReadFile(ReadFileOutput::ReadHandle(handle)).to_prompt_format();
+        assert!(prompt.contains("[read handle]"));
+        assert!(prompt.contains("continue=read_file(offset=26)"));
+        assert!(prompt.contains("1→line one"));
     }
     #[test]
     fn read_file_generic_error_json() {

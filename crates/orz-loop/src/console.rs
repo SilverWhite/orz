@@ -114,7 +114,7 @@ pub fn default_service_registry() -> ServiceRegistry {
     for spec in [
         ActionSpec {
             name: "workspace.read_file".to_string(),
-            description: "读取工作区文件（行号锚点、可 offset/limit 分段续读）。".to_string(),
+            description: "读取工作区文件（行号锚点、可 offset/limit 分段续读；超过粗门默认 16KB 的文件返回读取句柄信封：path/size/encoding/content_sha256/可用范围/有界预览 ≤4KB/truncated/offset，用 offset 续读）。".to_string(),
             target_tool: Some("read_file".to_string()),
             kind: ActionKind::Host,
             bundle: ActionBundle::ALL,
