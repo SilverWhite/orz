@@ -89,8 +89,11 @@ MCP 恒 deny、读限定（工作区外拒绝）不变；Interactive/ReadOnly �
 - input_schema 镜像 BashToolInput：
   - `command`（string，必填）
   - `description`（string，必填——一句话说明用途）
-  - `timeout`（integer，1–300000 ms，可选；默认 120000）
-  - `is_background`（boolean，可选，默认 false）
+  - `timeout`（integer 或纯数字字符串，1–300000 ms，可选；默认 120000；
+    2026-08-18 审查收口：契约层对齐 BashToolInput lenient 数字反序列化，
+    非数字字符串在契约层显式拒绝）
+  - `is_background`（boolean，可选，默认 false；2026-08-18 补 schema
+    `default: false`）
   - `additionalProperties: false`
   - 不暴露 env/cwd：环境与工作目录由 host 决定（ACAF command_exec 目标摘要
     基于 host 侧 cwd/env，模型不可注入）。
@@ -104,6 +107,8 @@ MCP 恒 deny、读限定（工作区外拒绝）不变；Interactive/ReadOnly �
   `ORZ_ALLOW_SHELL` / `ORZ_ALLOW_NETWORK`（沿用 `--allow-write`→`ORZ_ALLOW_WRITE`
   先例）。
 - 校验：未带 `--allow-write` 时 exit 2（fail-closed，防静默无效）。
+  2026-08-18 审查收口：`--allow-shell=<v>` / `--allow-network=<v>` 值形式由
+  「静默忽略」改为显式报错 exit 2（解析抽 `parse_benchmark_flags`）。
 - `build_cli_host`：ORZ_ALLOW_WRITE 时构造
   `Benchmark { allow_shell: ORZ_ALLOW_SHELL.is_ok(), allow_network: ORZ_ALLOW_NETWORK.is_ok() }`。
 - `--help` 文本同步。
@@ -153,3 +158,29 @@ MCP 恒 deny、读限定（工作区外拒绝）不变；Interactive/ReadOnly �
 
 - ADR-0010 §14.24（v1.24）；CLASSICAL-EXEC-ASSISTANT §13；PLAN_FIRST_BLACKBOARD
   §4；CLI_PROJECT_INDEX（FUS-BENCHMARK-FULL-EXEC，`current-design`）。
+
+## 12. 审查收口处理（2026-08-18）
+
+全面审查（设计/实现/符合性三维）后处理登记：
+
+1. **shell 名单一致性（`sh`）**：实现 `is_shell_tool`（permission.rs / tool.rs）
+   补入 `sh`——与 §3 决策表「bash/sh/cmd/pwsh」表述一致；`sh` 当前非注册工具，
+   属名级 fail-closed 兜底（默认轴 Deny、allow_shell 下 AllowOnce）；
+   `access_kind` 早已按 Bash 映射 sh。permission.rs 两轴测试补 sh 断言、
+   tool.rs 补 risk_class / is_shell_tool / action_category 断言。
+2. **timeout 契约 lenient**：`workspace.run_terminal` input_schema 的 timeout 改
+   `anyOf`（integer 1–300000 或纯数字字符串 `^[0-9]+$`）并补
+   `default: 120000`、`is_background` 补 `default: false`——对齐 BashToolInput
+   lenient 数字反序列化（模型把数字序列化为字符串的常见形态），非数字字符串在
+   契约层显式拒绝（错误比 host 层友好）；新增契约测试（整数/数字字符串通过、
+   非数字/越界/缺必填/多余键拒绝）。
+3. **CLI 值形式防静默**：`--allow-shell=<v>` / `--allow-network=<v>` 由「静默
+   忽略」改为显式报错 exit 2（与 `--allow-write` 配对检查同门）；env-only 设置
+   仍惰性（无 `ORZ_ALLOW_WRITE` 不生效）。解析抽 `parse_benchmark_flags` +
+   4 组单测。
+4. **实施选择确认**：§6 的 bundle 保持 `READ_WRITE`（交互式 console 亦出现
+   按钮、经 Interactive 权限询问）——「完全体/正常工作」方向，未改单档常量，
+   无需登记实施差异。
+5. **验证观察项**：`is_background: true` 订单经 `BackgroundTaskStarted` →
+   `exit_code` 归 `Some(0)` 可通过 text_output 信封；后台任务完成提醒在
+   console 面的模型可见性留验证④实机观察，不构成实现缺陷。

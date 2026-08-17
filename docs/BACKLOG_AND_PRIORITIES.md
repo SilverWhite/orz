@@ -233,6 +233,16 @@
      task_env_config 基线——89 题全 PUBLIC 结果一致、严格不更宽；
      allow_internet 已废弃）；env 按存在性增 ORZ_ALLOW_SHELL/ORZ_ALLOW_NETWORK，
      运行脚本 belt-and-braces 同传 `--allow-shell`/`--allow-network`。
+- **2026-08-18 审查收口处理（全面审查后）**：① `is_shell_tool`（permission.rs /
+  tool.rs）补 `sh` 名级兜底（默认轴 Deny / allow_shell 下 AllowOnce，与设计
+  §3 名单一致；两轴测试补断言）；② `workspace.run_terminal` timeout 契约改
+  anyOf（integer 或纯数字字符串、补 default 120000）、is_background 补
+  default false——对齐 BashToolInput lenient 数字语义，非数字字符串在契约层
+  显式拒绝（新增契约测试）；③ CLI `--allow-shell=<v>` / `--allow-network=<v>`
+  值形式由静默忽略改显式报错 exit 2（解析抽 parse_benchmark_flags + 4 组
+  单测）；④ bundle 保持 READ_WRITE 实施选择确认（交互式 console 亦出现按钮、
+  走 Interactive 权限询问）；⑤ `is_background` 后台任务完成提醒的 console 面
+  可见性留验证④实机观察。详见设计 §12。
 - 安全面不变：ACAF fail-closed 票据（command_exec_v1/network_v1）仍为最终
   授权兜底；PermissionRequested/PermissionDecision、ACAF issued/consumed、
   ToolStarted/ToolCompleted、console_order_written/rejected 审计链全部保留；

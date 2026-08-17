@@ -2052,3 +2052,9 @@ ADR §3.6 正文修订随实施登记。
    严格不更宽）。验证暂缓（用户指示）：orz 测试/clippy、Linux musl 重建、
    单题 make-doom-for-mips 复验、2–3 题交叉、89 题分批；未闭合计数
    27 → 28（BACKLOG 0b / TODO P0-F）。
+   审查收口处理（2026-08-18 全面审查后）：`is_shell_tool` 补 `sh` 名级兜底
+   （默认轴 Deny / allow_shell 下 AllowOnce）；`workspace.run_terminal` timeout
+   契约 lenient（integer 或纯数字字符串、补 default）；CLI `--allow-shell=<v>` /
+   `--allow-network=<v>` 值形式由静默忽略改显式报错 exit 2；bundle 保持
+   READ_WRITE 实施选择确认；`is_background` 后台任务完成提醒的 console 面
+   可见性留验证④实机观察。详见设计 §12 / BACKLOG 0b / TODO P0-F。

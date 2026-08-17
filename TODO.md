@@ -228,6 +228,7 @@
 > （v1.24）；BACKLOG 0b。实施路由=实施前登记本项与 BACKLOG（已登记）。
 > 2026-08-18 用户指示：实施完成、暂不进行测试（验证项保留未勾选）。
 > orz 子模块：`3f43478`（feat/fusion-architecture，6 文件）。
+> 2026-08-18 审查收口处理提交：orz `4e9e61b`（4 文件，见下方勾选项）。
 
 - [x] 实施前登记：BACKLOG 0b / 本清单（设计轮不动计数；实施轮 27 → 28）。
 - [x] 权限层：`PermissionPolicy::Benchmark { allow_shell, allow_network }`
@@ -250,6 +251,13 @@
   取 environment.network_policy 而非 task_env_config 基线，89 题全 PUBLIC
   结果一致、严格不更宽）；env 按存在性增 ORZ_ALLOW_SHELL/ORZ_ALLOW_NETWORK；
   运行脚本 belt-and-braces 同传 `--allow-shell`/`--allow-network`。
+- [x] 审查收口处理（2026-08-18 全面审查后）：`is_shell_tool` 补 `sh`
+  （permission.rs/tool.rs + 两轴与 risk_class 断言）；`workspace.run_terminal`
+  timeout 契约 lenient（anyOf integer/纯数字字符串 + default 120000）、
+  is_background 补 default false + 契约测试；CLI `=value` 形式显式报错
+  exit 2（parse_benchmark_flags + 4 组单测）；bundle 保持 READ_WRITE 实施
+  选择确认；`is_background` 后台完成提醒留验证④观察。详见设计 §12 /
+  ADR §14.24 / BACKLOG 0b。
 - [ ] 验证①（用户指示暂缓）：orz cargo 全量测试（权限决策表、探针映射、
   console 注册表投影、订单→run_host_tool→ACAF 票据路径）+ clippy 无新增告警。
 - [ ] 验证②（用户指示暂缓）：Linux musl 重建（ORZ-BUILD-MOUNT-001 契约，输出

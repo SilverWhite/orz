@@ -165,6 +165,13 @@
 > 验证（用户指示暂缓）：orz 测试 + clippy、Linux musl 重建、单题
 > make-doom-for-mips 复验（reward>0 + journal workspace.run_terminal→ACAF
 > command_exec issued/consumed）、2–3 题交叉、89 题 5 批。
+> 2026-08-18 审查收口处理登记（全面审查后）——`is_shell_tool` 补 `sh` 名级
+> 兜底（permission.rs/tool.rs + 断言）；`workspace.run_terminal` timeout 契约
+> lenient（anyOf integer/纯数字字符串 + default 120000）、is_background 补
+> default false + 契约测试；CLI `--allow-shell=<v>` / `--allow-network=<v>`
+> 值形式显式报错 exit 2（parse_benchmark_flags + 4 组单测）；bundle 保持
+> READ_WRITE 实施选择确认；`is_background` 后台完成提醒留验证④观察。详见
+> 设计 §12 / ADR §14.24 / BACKLOG 0b / TODO P0-F。
 > 2026-08-18 状态行缓存纪律 + 订单拒绝步骤语义设计定案登记（用户裁决；纯文档、
 > 未实施）——① `[任务状态]` 常驻状态行移出系统提示词，改为变化时追加的尾随
 > 用户消息（与预算剩余块同纪律）：根因=console 步骤机每笔订单 receipt 推进步骤
