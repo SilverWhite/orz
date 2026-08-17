@@ -69,7 +69,7 @@ harbor run -d terminal-bench@2.0 -i <task> -a tb_agents.orz:Orz \
 ```
 
 **⚠️ 必带 PYTHONPATH**：`PYTHONPATH=D:/tb-eval`（否则 `No module named 'tb_agents'` 启动即失败——2026-08-08 晚实测）。
-**⚠️ 每次评测前必须重建 orz-linux 二进制**（见 §6 stale-binary 教训）：`MSYS_NO_PATHCONV=1 docker run --rm -v D:/CLI:/orz -v D:/tb-eval/cargo-config.toml:/root/.cargo/config.toml -v D:/tb-eval/orz-target:/target -v D:/tb-eval/orz-linux:/out -w /orz/orz rust:1.97-slim bash -c "$(cat /d/tb-eval/build_orz_aliyun.sh)"`（增量 ~1h20m 全量；**父仓库必须挂载为 `/orz`、工作目录 `/orz/orz`**——orz-assurance `include_str!("../../../runtime/...")` 需解析到 `/orz/runtime`；MSYS_NO_PATHCONV 防 `-w` 被转成 `B:/Git/...`；2026-08-17 起脚本同时输出 orz / orz-signer / orz-acaf-provision 三件套）。
+**⚠️ 每次评测前必须重建 orz-linux 二进制**（见 §6 stale-binary 教训）：`MSYS_NO_PATHCONV=1 docker run --rm -v D:/CLI:/orz -v D:/tb-eval/cargo-config.toml:/root/.cargo/config.toml -v D:/tb-eval/orz-target:/target -v D:/tb-eval/orz-linux:/out -w /orz/orz rust:1.97-slim bash -c "$(cat /d/tb-eval/build_orz_aliyun.sh)"`（增量 ~1h20m 全量；**父仓库必须挂载为 `/orz`、工作目录 `/orz/orz`**——orz-assurance `include_str!("../../../runtime/...")` 需解析到 `/orz/runtime`；MSYS_NO_PATHCONV 防 `-w` 被转成 `B:/Git/...`；2026-08-17 起脚本同时输出 orz / orz-signer / orz-acaf-provision 三件套；**静态 rg 要求（2026-08-17，FUS-TOOL-SCOPE-CONTRACT）**——脚本用 `cargo install ripgrep 15.0.0 --target x86_64-unknown-linux-musl` 产静态 rg 作 `GROK_TOOLS_BUNDLE_RG_PATH`，apt 的 `/usr/bin/rg` 是 glibc 动态、任务容器 bookworm 无法加载（ORZ-TOOL-BINARY-COMPAT-001），需容器内 `make`（已入脚本依赖））。
 - `--ak max_wallclock` 按 job 级全局：900s×2 超时任务分 job 跑（900s 任务 agent 1800s → 1740；1800s 任务 3600s → 3540）
 
 - **Harbor**（Terminal-Bench 2.0 官方 harness，0.20.0 → `D:\tb-eval\venv`，勿动 C: 系统 Python）：容器生命周期 + verifier 判定（CTRF JSON + reward.txt，二进制 reward，只看容器最终状态）

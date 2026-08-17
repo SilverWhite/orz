@@ -32,8 +32,8 @@
 MSYS_NO_PATHCONV=1 docker run --rm -v D:/CLI:/orz -v D:/tb-eval/cargo-config.toml:/root/.cargo/config.toml -v D:/tb-eval/orz-target:/target -v D:/tb-eval/orz-linux:/out -w /orz/orz rust:1.97-slim bash -c "$(cat /d/tb-eval/build_orz_aliyun.sh)"
 ```
 
-- 脚本：`build_orz_aliyun.sh`（aliyun 镜像 + rsproxy + musl 静态 + `-p orz-bin -j 1`；增量构建复用 `orz-target` 缓存，预计 ~1h）。**挂载修正（2026-08-17）**：父仓库挂载为 `/orz`、工作目录 `/orz/orz`——orz-assurance `include_str!("../../../runtime/...")` 需解析到 `/orz/runtime`；脚本同时输出 orz / orz-signer / orz-acaf-provision 三件套。
-- **构建后验证**：`strings /d/tb-eval/orz-linux/orz | grep -c "max-wallclock"`（守卫符号命中）+ `ls -la`（~66MB）+ 确认构建时间戳为新。
+- 脚本：`build_orz_aliyun.sh`（aliyun 镜像 + rsproxy + musl 静态 + `-p orz-bin -j 1`；增量构建复用 `orz-target` 缓存，预计 ~1h）。**挂载修正（2026-08-17）**：父仓库挂载为 `/orz`、工作目录 `/orz/orz`——orz-assurance `include_str!("../../../runtime/...")` 需解析到 `/orz/runtime`；脚本同时输出 orz / orz-signer / orz-acaf-provision 三件套。**静态 rg 要求（2026-08-17，FUS-TOOL-SCOPE-CONTRACT）**：脚本用 `cargo install ripgrep 15.0.0 --target x86_64-unknown-linux-musl` 产静态 rg 作 `GROK_TOOLS_BUNDLE_RG_PATH`（apt 的 `/usr/bin/rg` 是 glibc 动态、任务容器 bookworm 无法加载——ORZ-TOOL-BINARY-COMPAT-001），需容器内 `make`（已入脚本依赖）。
+- **构建后验证**：`strings /d/tb-eval/orz-linux/orz | grep -c "max-wallclock"`（守卫符号命中）+ `ls -la`（~66MB）+ 确认构建时间戳为新 + 打包 rg 静态校验（`orz-target/.../out/bundle-rg/rg-15.0.0-override.bin` 无 PT_INTERP）。
 - **stale-binary 教训**（`TERMINAL_BENCH_2_EVAL` §6）：本次 5 题**必须全部用新二进制**，禁止旧二进制混跑。
 
 ### 步骤 2：5 题批 launch（同一二进制）
