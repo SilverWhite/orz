@@ -873,18 +873,115 @@ mod tests {
         Arc::new(AcpServer::with_gateway(Arc::new(fake)))
     }
 
-    /// Bash-class tool under the toolset's real name (`run_terminal_cmd` —
-    /// the `bash` alias classifies as Bash but does not exist in the
-    /// finalized toolset).
-    fn bash_script() -> Vec<ScriptedResponse> {
+    /// PLAN-FIRST 阶段 A (2026-08-16)：首轮计划轮的有效 `plan_write`
+    /// 工具调用（console 默认面先落板结构计划）。
+    fn plan_write_call(call_id: &str) -> ToolCall {
+        plan_write_call_with(call_id, valid_plan_json())
+    }
+
+    /// 带自定义计划对象的 `plan_write` 调用（persist 用例需要双步计划）。
+    fn plan_write_call_with(call_id: &str, plan: serde_json::Value) -> ToolCall {
+        ToolCall {
+            name: "plan_write".to_string(),
+            arguments: serde_json::json!({ "plan": plan }),
+            call_id: call_id.to_string(),
+        }
+    }
+
+    /// 与 orz-loop 测试同构的有效计划对象（单步、动作=workspace.run_terminal）。
+    fn valid_plan_json() -> serde_json::Value {
+        serde_json::json!({
+            "plan_id": "plan-1",
+            "goal": "执行一条终端命令",
+            "steps": [
+                {
+                    "id": "s1",
+                    "goal": "运行命令",
+                    "actions": [
+                        {
+                            "step_id": "s1",
+                            "do": "workspace.run_terminal",
+                            "with": { "command": "dir", "description": "列出目录" },
+                        }
+                    ],
+                    "acceptance": "命令已执行",
+                    "evidence": ["stdout"],
+                }
+            ]
+        })
+    }
+
+    /// 双步计划：两步动作均为同一条 `workspace.run_terminal` 命令（persist
+    /// 用例——第二步绑定 s2，避免步骤门对 done 步骤的 step_not_done）。
+    fn two_step_plan_json() -> serde_json::Value {
+        serde_json::json!({
+            "plan_id": "plan-2",
+            "goal": "执行两条相同的终端命令",
+            "steps": [
+                {
+                    "id": "s1",
+                    "goal": "运行命令 1",
+                    "actions": [
+                        {
+                            "step_id": "s1",
+                            "do": "workspace.run_terminal",
+                            "with": { "command": "dir", "description": "列出目录" },
+                        }
+                    ],
+                    "acceptance": "命令 1 已执行",
+                    "evidence": ["stdout"],
+                },
+                {
+                    "id": "s2",
+                    "goal": "运行命令 2",
+                    "actions": [
+                        {
+                            "step_id": "s2",
+                            "do": "workspace.run_terminal",
+                            "with": { "command": "dir", "description": "列出目录" },
+                        }
+                    ],
+                    "acceptance": "命令 2 已执行",
+                    "evidence": ["stdout"],
+                }
+            ]
+        })
+    }
+
+    /// console 默认面下单：`blackboard_action_write`（订单在轮末机械发放，
+    /// 发放期经注册表/契约/权限/ACAF/模式门——Interactive 下触发审批）。
+    fn action_write_call(
+        action: &str,
+        step_id: &str,
+        arguments: serde_json::Value,
+        call_id: &str,
+    ) -> ToolCall {
+        ToolCall {
+            name: "blackboard_action_write".to_string(),
+            arguments: serde_json::json!({
+                "action": action,
+                "step_id": step_id,
+                "arguments": arguments,
+            }),
+            call_id: call_id.to_string(),
+        }
+    }
+
+    /// 一个完整的 console 执行回合脚本（plan-first + console 默认面）：
+    /// 计划轮 → 下单轮（轮末发放触发审批/执行）→ 草稿 → 终答。目标工具
+    /// 为 `run_terminal_cmd`（GrokBuild bash 名；`bash` 别名只存在于
+    /// 分类器，不在最终工具集）。
+    fn console_exec_script(command: &str) -> Vec<ScriptedResponse> {
         vec![
-            ScriptedResponse::tool_calls(vec![ToolCall {
-                name: "run_terminal_cmd".to_string(),
-                arguments: serde_json::json!({ "command": "dir" }),
-                call_id: "call-1".to_string(),
-            }]),
-            ScriptedResponse::text("完成（bash 已执行）。"),
-            ScriptedResponse::text("完成（bash 已执行）。"),
+            ScriptedResponse::tool_calls(vec![plan_write_call("call-plan-1")]),
+            ScriptedResponse::tool_calls(vec![action_write_call(
+                "workspace.run_terminal",
+                "s1",
+                serde_json::json!({ "command": command, "description": "测试命令" }),
+                "call-act-1",
+            )]),
+            ScriptedResponse::text("草稿（等待执行结果）。"),
+            ScriptedResponse::text("终答（命令已执行）。"),
         ]
     }
 
@@ -1225,6 +1322,9 @@ mod tests {
             .run_until(async {
                 let base = test_dir();
                 let script = vec![
+                    // PLAN-FIRST (2026-08-16)：首轮先落板计划，再进入
+                    // console 默认面的草稿/终答文本流。
+                    ScriptedResponse::tool_calls(vec![plan_write_call("call-plan-1")]),
                     ScriptedResponse::text("第一轮草稿。"),
                     ScriptedResponse::text("终局答案。"),
                 ];
@@ -1302,6 +1402,7 @@ mod tests {
             .run_until(async {
                 let base = test_dir();
                 let script = vec![
+                    ScriptedResponse::tool_calls(vec![plan_write_call("call-plan-1")]),
                     ScriptedResponse::text("草稿"),
                     ScriptedResponse::text("三字答案"),
                 ];
@@ -1347,6 +1448,13 @@ mod tests {
             .run_until(async {
                 let base = test_dir();
                 let script = vec![
+                    // 两回合各需 [计划, 草稿, 终答]；中断发生在首回合
+                    // 流式期间（约消费 1-3 项），剩余项须让第二回合仍能
+                    // 走完计划路径。
+                    ScriptedResponse::tool_calls(vec![plan_write_call("call-plan-1")]),
+                    ScriptedResponse::text("慢速草稿。"),
+                    ScriptedResponse::text("慢速终答。"),
+                    ScriptedResponse::tool_calls(vec![plan_write_call("call-plan-2")]),
                     ScriptedResponse::text("慢速草稿。"),
                     ScriptedResponse::text("慢速终答。"),
                 ];
@@ -1540,7 +1648,7 @@ mod tests {
             .run_until(async {
                 let base = test_dir();
                 let parts = CodexAppServer::new_parts(
-                    server_with(fake(bash_script())),
+                    server_with(fake(console_exec_script("dir"))),
                     base.clone(),
                     TrustPolicy::Skip,
                 );
@@ -1592,7 +1700,7 @@ mod tests {
             .run_until(async {
                 let base = test_dir();
                 let parts = CodexAppServer::new_parts(
-                    server_with(fake(bash_script())),
+                    server_with(fake(console_exec_script("dir"))),
                     base.clone(),
                     TrustPolicy::Skip,
                 );
@@ -1611,7 +1719,7 @@ mod tests {
                 recv_until(&mut r, "turn/completed").await;
                 let events = journal_events(&base, "thr_deny", 0);
                 assert!(
-                    !events.contains("\"tool_started\""),
+                    !events.contains("\"tool\":\"run_terminal_cmd\",\"call_id\":\"ord-000001\",\"exit_code\""),
                     "denied tool must never start: {events}"
                 );
                 assert!(events.contains("\"deny\""), "denial is journaled: {events}");
@@ -1629,17 +1737,19 @@ mod tests {
                 let base = test_dir();
                 std::fs::write(base.join("a.txt"), "hello").unwrap();
                 let script = vec![
+                    ScriptedResponse::tool_calls(vec![plan_write_call("call-plan-1")]),
                     ScriptedResponse::tool_calls(vec![
                         ToolCall {
                             name: "read_file".to_string(),
                             arguments: serde_json::json!({ "target_file": "a.txt" }),
                             call_id: "call-1".to_string(),
                         },
-                        ToolCall {
-                            name: "run_terminal_cmd".to_string(),
-                            arguments: serde_json::json!({ "command": "dir" }),
-                            call_id: "call-2".to_string(),
-                        },
+                        action_write_call(
+                            "workspace.run_terminal",
+                            "s1",
+                            serde_json::json!({ "command": "dir", "description": "测试命令" }),
+                            "call-act-1",
+                        ),
                     ]),
                     ScriptedResponse::text("完成（只读沙箱）。"),
                     ScriptedResponse::text("完成（只读沙箱）。"),
@@ -1682,14 +1792,13 @@ mod tests {
                 assert_eq!(status, "completed", "run must complete after the denial");
 
                 let events = journal_events(&base, "thr_ro", 0);
-                assert_eq!(
-                    events.matches("\"tool_started\"").count(),
-                    1,
-                    "exactly the read executed: {events}"
+                assert!(
+                    !events.contains("\"tool\":\"run_terminal_cmd\",\"call_id\":\"ord-000001\",\"exit_code\""),
+                    "the mutation order must never start the tool: {events}"
                 );
                 assert!(events.contains("\"read_file\""), "read executed: {events}");
                 assert!(
-                    events.contains("\"run_terminal_cmd\""),
+                    events.contains("\"workspace.run_terminal\""),
                     "the mutation was requested: {events}"
                 );
                 assert!(events.contains("\"deny\""), "denial journaled: {events}");
@@ -1719,18 +1828,23 @@ mod tests {
             .run_until(async {
                 let base = test_dir();
                 // Interleave-safe for concurrent pulls from the shared
-                // gateway: A calls, B calls, then two text rounds each.
+                // gateway：两线程各需 [计划, 下单, 草稿, 终答]——A、B 交错
+                // 消费（沿用原 A calls → B calls → 文本轮 的实证模式）。
                 let script = vec![
-                    ScriptedResponse::tool_calls(vec![ToolCall {
-                        name: "run_terminal_cmd".to_string(),
-                        arguments: serde_json::json!({ "command": "echo ro" }),
-                        call_id: "call-ro".to_string(),
-                    }]),
-                    ScriptedResponse::tool_calls(vec![ToolCall {
-                        name: "run_terminal_cmd".to_string(),
-                        arguments: serde_json::json!({ "command": "echo ww" }),
-                        call_id: "call-ww".to_string(),
-                    }]),
+                    ScriptedResponse::tool_calls(vec![plan_write_call("call-plan-ro")]),
+                    ScriptedResponse::tool_calls(vec![plan_write_call("call-plan-ww")]),
+                    ScriptedResponse::tool_calls(vec![action_write_call(
+                        "workspace.run_terminal",
+                        "s1",
+                        serde_json::json!({ "command": "echo ro", "description": "ro" }),
+                        "call-act-ro",
+                    )]),
+                    ScriptedResponse::tool_calls(vec![action_write_call(
+                        "workspace.run_terminal",
+                        "s1",
+                        serde_json::json!({ "command": "echo ww", "description": "ww" }),
+                        "call-act-ww",
+                    )]),
                     ScriptedResponse::text("草稿 A"),
                     ScriptedResponse::text("草稿 B"),
                     ScriptedResponse::text("终答 A"),
@@ -1791,7 +1905,7 @@ mod tests {
                 // the workspace-write thread executed it.
                 let ro_events = journal_events(&base, "thr_ro", 0);
                 assert!(
-                    !ro_events.contains("\"tool_started\""),
+                    !ro_events.contains("\"tool\":\"run_terminal_cmd\",\"call_id\":\"ord-000001\",\"exit_code\""),
                     "read-only thread never writes: {ro_events}"
                 );
                 assert!(
@@ -1816,18 +1930,27 @@ mod tests {
                 let base = test_dir();
                 // Two identical bash calls: the first prompts (always_allow),
                 // the second auto-allows via the persisted grant — the second
-                // identical bash must NOT prompt again.
+                // identical bash must NOT prompt again. 两步计划（s1/s2）——
+                // 步骤门不允许把订单绑到已 done 步骤。
                 let script = vec![
-                    ScriptedResponse::tool_calls(vec![ToolCall {
-                        name: "run_terminal_cmd".to_string(),
-                        arguments: serde_json::json!({ "command": "dir" }),
-                        call_id: "call-1".to_string(),
-                    }]),
-                    ScriptedResponse::tool_calls(vec![ToolCall {
-                        name: "run_terminal_cmd".to_string(),
-                        arguments: serde_json::json!({ "command": "dir" }),
-                        call_id: "call-2".to_string(),
-                    }]),
+                    ScriptedResponse::tool_calls(vec![plan_write_call_with(
+                        "call-plan-1",
+                        two_step_plan_json(),
+                    )]),
+                    // 两次完全相同的工作区订单（命令参数一致）——发放期
+                    // 权限桥按相同 access 命中持久授权。
+                    ScriptedResponse::tool_calls(vec![action_write_call(
+                        "workspace.run_terminal",
+                        "s1",
+                        serde_json::json!({ "command": "dir", "description": "测试命令" }),
+                        "call-act-1",
+                    )]),
+                    ScriptedResponse::tool_calls(vec![action_write_call(
+                        "workspace.run_terminal",
+                        "s2",
+                        serde_json::json!({ "command": "dir", "description": "测试命令" }),
+                        "call-act-2",
+                    )]),
                     ScriptedResponse::text("两轮工具执行完成。"),
                     ScriptedResponse::text("两轮工具执行完成。"),
                 ];
@@ -1849,20 +1972,43 @@ mod tests {
                     ),
                 )
                 .await;
-                let completed = recv_until(&mut r, "turn/completed").await;
+                // 第二笔相同订单必须经持久授权自动放行——wire 上只应出现
+                // 1 次 approval/request（若再提示则无应答，权限超时后订单
+                // 拒绝，turn 不会正常 completed）。
+                let mut wire_approvals = 1u32;
+                let completed = loop {
+                    let msg = recv(&mut r).await;
+                    if msg.method.as_deref() == Some("approval/request") {
+                        wire_approvals += 1;
+                    }
+                    if msg.method.as_deref() == Some("turn/completed") {
+                        break msg;
+                    }
+                };
                 assert_eq!(
                     completed.params.as_ref().unwrap()["turn"]["status"],
                     "completed"
                 );
+                assert_eq!(
+                    wire_approvals, 1,
+                    "the second identical order must auto-allow via the persisted grant"
+                );
                 let events = journal_events(&base, "thr_always", 0);
-                // Both tool calls executed; exactly ONE interactive prompt
-                // (the second identical bash auto-allows via the persisted
-                // grant). Both decisions journal as allow_once — the bridge
-                // maps Decision::Allow → AllowOnce at the LoopHost boundary
-                // (recorded slice #12 note; allow_always never appears on
-                // the journal).
-                assert_eq!(events.matches("\"tool_started\"").count(), 2, "{events}");
-                assert_eq!(events.matches("\"allow_once\"").count(), 2, "{events}");
+                // 两笔订单都真实执行（tool_completed 带 exit_code=0）。
+                assert_eq!(
+                    events
+                        .matches("\"tool\":\"run_terminal_cmd\",\"call_id\":\"ord-000001\",\"exit_code\":0")
+                        .count(),
+                    1,
+                    "{events}"
+                );
+                assert_eq!(
+                    events
+                        .matches("\"tool\":\"run_terminal_cmd\",\"call_id\":\"ord-000002\",\"exit_code\":0")
+                        .count(),
+                    1,
+                    "{events}"
+                );
             })
             .await;
     }
@@ -1873,7 +2019,7 @@ mod tests {
             .run_until(async {
                 let base = test_dir();
                 let parts = CodexAppServer::new_parts_with_permission_timeout(
-                    server_with(fake(bash_script())),
+                    server_with(fake(console_exec_script("dir"))),
                     base.clone(),
                     TrustPolicy::Skip,
                     std::time::Duration::from_millis(80),
@@ -1885,7 +2031,10 @@ mod tests {
                 // Never answer — the transport times out and fails closed.
                 recv_until(&mut r, "turn/completed").await;
                 let events = journal_events(&base, "thr_to", 0);
-                assert!(!events.contains("\"tool_started\""), "{events}");
+                assert!(
+                    !events.contains("\"tool\":\"run_terminal_cmd\",\"call_id\":\"ord-000001\",\"exit_code\""),
+                    "{events}"
+                );
                 assert!(events.contains("\"deny\""), "timeout must deny: {events}");
             })
             .await;
@@ -1899,6 +2048,7 @@ mod tests {
                 let parts = CodexAppServer::new_parts(
                     server_with(
                         fake(vec![
+                            ScriptedResponse::tool_calls(vec![plan_write_call("call-plan-1")]),
                             ScriptedResponse::text("慢草稿"),
                             ScriptedResponse::text("慢终答"),
                         ])
@@ -1944,6 +2094,7 @@ mod tests {
             .run_until(async {
                 let base = test_dir();
                 let script = vec![
+                    ScriptedResponse::tool_calls(vec![plan_write_call("call-plan-1")]),
                     ScriptedResponse::text("第一轮草稿。"),
                     ScriptedResponse::text("第一轮终答。"),
                 ];
@@ -2010,13 +2161,14 @@ mod tests {
             .run_until(async {
                 let base = test_dir();
                 // Both threads share ONE model gateway — the script must be
-                // interleave-safe: each turn pulls exactly 2 texts (gate
-                // round + final); [X, X, Y, Y] keeps every interleaving from
-                // exhausting the script. Final text equality is NOT
-                // asserted — only completion and journal validity.
+                // interleave-safe：计划路径下每回合各需 [计划, 草稿, 终答]
+                // 三轮；[P, P, D, D, F, F] 与 A、B 交替消费匹配。终答内容
+                // 不断言——只断言完成与 journal 有效性。
                 let parts = CodexAppServer::new_parts(
                     server_with(
                         fake(vec![
+                            ScriptedResponse::tool_calls(vec![plan_write_call("call-plan-a")]),
+                            ScriptedResponse::tool_calls(vec![plan_write_call("call-plan-b")]),
                             ScriptedResponse::text("共享草稿"),
                             ScriptedResponse::text("共享草稿"),
                             ScriptedResponse::text("共享终答"),

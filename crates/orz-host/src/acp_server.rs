@@ -2583,12 +2583,39 @@ mod tests {
         tokio::task::LocalSet::new()
             .run_until(async {
                 let base = test_dir();
-                // run #1 consumes 1–2 texts (cancelled mid-round); run #2
-                // needs 2 (counterexample gate + final answer).
+                // run #1 consumes 1–2 项（计划轮 + 可能第一段草稿，中断于
+                // 流式期间）；run #2 需要 [计划, 草稿, 终答]。两组
+                // [P, D, F] 覆盖 run #1 消费 0–2 项的一切情况。
                 let server = Arc::new(AcpServer::with_gateway(Arc::new(
                     FakeProvider::new(vec![
+                        plan_write_response(serde_json::json!({
+                            "plan_id": "plan-cancel-1",
+                            "goal": "执行任务",
+                            "steps": [{
+                                "id": "s1",
+                                "goal": "执行",
+                                "actions": [
+                                    {"step_id": "s1", "do": "workspace.read_file", "with": {"target_file": "sample.txt"}}
+                                ],
+                                "acceptance": "完成",
+                                "evidence": []
+                            }]
+                        })),
                         ScriptedResponse::text("第一轮回答。"),
                         ScriptedResponse::text("第一轮回答。"),
+                        plan_write_response(serde_json::json!({
+                            "plan_id": "plan-cancel-2",
+                            "goal": "执行任务",
+                            "steps": [{
+                                "id": "s1",
+                                "goal": "执行",
+                                "actions": [
+                                    {"step_id": "s1", "do": "workspace.read_file", "with": {"target_file": "sample.txt"}}
+                                ],
+                                "acceptance": "完成",
+                                "evidence": []
+                            }]
+                        })),
                         ScriptedResponse::text("第二轮回答。"),
                         ScriptedResponse::text("第二轮回答。"),
                     ])

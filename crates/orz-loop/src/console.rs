@@ -1876,8 +1876,8 @@ mod tests {
                 "workspace.list_dir",
                 "workspace.read_file",
                 "workspace.run_script",
-                "workspace.run_tests",
                 "workspace.run_terminal",
+                "workspace.run_tests",
                 "workspace.search_replace",
             ]
         );
