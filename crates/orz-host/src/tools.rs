@@ -83,6 +83,22 @@ pub fn web_fetch_config_default(
     }
 }
 
+/// ORZ-LARGE-FILE-READ-CONTRACT (ADR-0010 §14.22): the TOML 口子 for the
+/// read_file coarse gate — `[toolset.read_file] coarse_gate_bytes` from the
+/// effective config (system-managed > managed > user layer merge).
+/// Absent / non-integer → `None` (the tool falls back to the env var);
+/// out-of-range values are clamped to 8–32 KiB exactly like the env 口子.
+pub fn read_file_coarse_gate_from_config(config: &toml::Value) -> Option<usize> {
+    const READ_COARSE_GATE_MIN: usize = 8 * 1024;
+    const READ_COARSE_GATE_MAX: usize = 32 * 1024;
+    config
+        .get("toolset")
+        .and_then(|t| t.get("read_file"))
+        .and_then(|r| r.get("coarse_gate_bytes"))
+        .and_then(|v| v.as_integer())
+        .map(|v| (v.max(0) as usize).clamp(READ_COARSE_GATE_MIN, READ_COARSE_GATE_MAX))
+}
+
 /// Build a finalized toolset for a session working directory.
 ///
 /// SessionContext is constructed with minimal-but-functional defaults:
@@ -95,6 +111,7 @@ pub fn web_fetch_config_default(
 pub fn build_toolset(
     cwd: &Path,
     web_search_config: &WebSearchConfig,
+    read_file_coarse_gate_bytes: Option<usize>,
 ) -> Result<Arc<FinalizedToolset>, String> {
     let backend: Arc<dyn TerminalBackend> = Arc::new(LocalTerminalBackend::new());
     let fs: Arc<dyn AsyncFileSystem> = Arc::new(LocalFs);
@@ -186,6 +203,13 @@ pub fn build_toolset(
                 Some(serde_json::Map::from_iter([(
                     "enabled_background".to_string(),
                     serde_json::Value::Bool(false),
+                )]))
+            } else if id == "GrokBuild:read_file"
+                && let Some(gate) = read_file_coarse_gate_bytes
+            {
+                Some(serde_json::Map::from_iter([(
+                    "coarse_gate_bytes".to_string(),
+                    serde_json::Value::from(gate),
                 )]))
             } else {
                 None
@@ -496,5 +520,55 @@ mod tests {
             consumed_completion_task_id: None,
         });
         assert!(structured_from_output(&other).is_none());
+    }
+}
+
+#[cfg(test)]
+mod config_tests {
+    use super::*;
+
+    fn parse_gate(toml_src: &str) -> Option<usize> {
+        // Document deserializer (`Value::from_str` only parses a single value
+        // expression, not a full TOML document with table headers).
+        let Ok(value) = toml::from_str::<toml::Value>(toml_src) else {
+            return None;
+        };
+        read_file_coarse_gate_from_config(&value)
+    }
+
+    /// ORZ-LARGE-FILE-READ-CONTRACT (P3-1): `[toolset.read_file]
+    /// coarse_gate_bytes` parses from the effective config and is clamped to
+    /// 8–32 KiB exactly like the env 口子.
+    #[test]
+    fn read_file_coarse_gate_from_config_parses_and_clamps() {
+        assert_eq!(parse_gate(""), None, "absent section");
+        assert_eq!(
+            parse_gate("[toolset.read_file]\ncoarse_gate_bytes = 8192\n"),
+            Some(8 * 1024)
+        );
+        assert_eq!(
+            parse_gate("[toolset.read_file]\ncoarse_gate_bytes = 16384\n"),
+            Some(16 * 1024)
+        );
+        assert_eq!(
+            parse_gate("[toolset.read_file]\ncoarse_gate_bytes = 1\n"),
+            Some(8 * 1024),
+            "below minimum clamps up"
+        );
+        assert_eq!(
+            parse_gate("[toolset.read_file]\ncoarse_gate_bytes = 65536\n"),
+            Some(32 * 1024),
+            "above maximum clamps down"
+        );
+        assert_eq!(
+            parse_gate("[toolset.read_file]\ncoarse_gate_bytes = \"16k\"\n"),
+            None,
+            "non-integer is ignored"
+        );
+        assert_eq!(
+            parse_gate("[toolset]\nread_file = {}\n"),
+            None,
+            "empty read_file table is ignored"
+        );
     }
 }

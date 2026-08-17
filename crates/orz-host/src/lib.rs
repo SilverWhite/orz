@@ -161,7 +161,22 @@ impl OrzHost {
         reader: Arc<dyn crate::credentials::CredentialReader>,
     ) -> Result<Self, String> {
         let web_search_config = tools::web_search_config(reader.as_ref());
-        let toolset = tools::build_toolset(cwd, &web_search_config)?;
+        // ORZ-LARGE-FILE-READ-CONTRACT (ADR-0010 §14.22): the `[toolset.read_file]`
+        // coarse gate is resolved once at host build from the effective config
+        // (system-managed > managed > user merge). Absent → None → the tool
+        // falls back to the `ORZ_READ_FILE_COARSE_GATE_BYTES` env var at call
+        // time; present → the injected tool param wins over the env var.
+        let read_file_coarse_gate_bytes = orz_config::load_effective_config_disk_only()
+            .ok()
+            .as_ref()
+            .and_then(tools::read_file_coarse_gate_from_config);
+        if let Some(gate) = read_file_coarse_gate_bytes {
+            tracing::info!(
+                read_file_coarse_gate_bytes = gate,
+                "toolset.read_file coarse gate applied"
+            );
+        }
+        let toolset = tools::build_toolset(cwd, &web_search_config, read_file_coarse_gate_bytes)?;
         // ADR-0006 (2026-08-11): the only sanctioned serialization exit for
         // the config — never log the raw `WebSearchConfig` (its `Debug`
         // contains the api_key; `redacted()` is the production surface).
@@ -1177,7 +1192,7 @@ mod tests {
 
     fn shared_toolset() -> &'static Arc<orz_tools::registry::types::FinalizedToolset> {
         SHARED_TOOLSET.get_or_init(|| {
-            tools::build_toolset(&std::env::temp_dir(), &WebSearchConfig::Disabled)
+            tools::build_toolset(&std::env::temp_dir(), &WebSearchConfig::Disabled, None)
                 .expect("shared toolset")
         })
     }
@@ -1710,6 +1725,51 @@ mod tests {
         assert!(
             result.prompt_text.contains("truncated=true"),
             "large multi-line file must report truncated, got: {result:?}"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// ORZ-LARGE-FILE-READ-CONTRACT (P3-1): the `[toolset.read_file]` coarse
+    /// gate lands in the finalized toolset — a ~10 KiB file returns the
+    /// envelope under an 8 KiB gate and full content under the default.
+    #[tokio::test]
+    async fn read_file_coarse_gate_changes_envelope_threshold() {
+        let dir = test_dir();
+        let path = dir.join("mid.txt");
+        let content = format!("{}\n", "y".repeat(100)).repeat(100); // ~10.2 KiB
+        std::fs::write(&path, &content).unwrap();
+
+        let gated = tools::build_toolset(&dir, &WebSearchConfig::Disabled, Some(8 * 1024))
+            .expect("gated toolset");
+        let result = gated
+            .call(
+                "read_file",
+                serde_json::json!({"target_file": path}),
+                "call-gated",
+                None,
+            )
+            .await
+            .expect("read_file call");
+        assert!(
+            result.prompt_text.contains("[read handle]"),
+            "8 KiB gate must envelope a ~10 KiB file, got: {result:?}"
+        );
+
+        let default =
+            tools::build_toolset(&dir, &WebSearchConfig::Disabled, None).expect("default toolset");
+        let result = default
+            .call(
+                "read_file",
+                serde_json::json!({"target_file": path}),
+                "call-default",
+                None,
+            )
+            .await
+            .expect("read_file call");
+        assert!(
+            !result.prompt_text.contains("[read handle]"),
+            "default 16 KiB gate must return full content for ~10 KiB, got: {result:?}"
         );
 
         let _ = std::fs::remove_dir_all(&dir);
