@@ -95,8 +95,10 @@
 > stderr 位置差异污染流式面）、hidden/no_ignore 开关入参数面与 console 注册表、
 > build.rs 非 Windows 覆盖路径 ELF PT_INTERP 静态守卫、两份评测构建脚本改静态
 > musl rg；测试 grep 模块 42 / types 561 / orz-loop console 68 通过；Linux
-> 重建后容器冒烟回归待执行。P0-E 剩 2 项、未闭合 29 项。详见 BACKLOG 0a /
-> TODO P0-E / ADR-0010 §14.23。
+> 重建后容器冒烟回归**已执行通过**（打包 rg 静态、version+已知字符串断言命中、
+> 端到端 `orz --real` grep vm.js 命中 20 行并 done、exit 0；证据
+> `D:\tb-eval\jobs\2026-08-17__GREP-FIX-SMOKE\smoke-notes.md`）。
+> P0-E 剩 2 项、未闭合 29 项。详见 BACKLOG 0a / TODO P0-E / ADR-0010 §14.23。
 > 2026-08-17 ORZ-TOOL-BINARY-COMPAT-001 事故/案例登记（用户裁决加入案例库 +
 > 归因纪律）——打包 rg（trixie glibc 动态二进制要求 GLIBC_2.39）与任务容器
 > （bookworm glibc 2.36）不匹配、加载失败被 finalize_grep 吞成空结果的完整

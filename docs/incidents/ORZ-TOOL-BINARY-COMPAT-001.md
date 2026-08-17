@@ -1,7 +1,8 @@
 # ORZ-TOOL-BINARY-COMPAT-001 — 打包 rg 与运行容器 glibc 不匹配，失败被工具面吞成空结果（事故登记）
 
 - **状态**：已归因 / 已处置（2026-08-17；机械守卫与工具契约修复已落地；
-  Linux musl 重建后容器冒烟回归待执行）
+  Linux musl 重建后容器冒烟回归已执行通过——见
+  `D:\tb-eval\jobs\2026-08-17__GREP-FIX-SMOKE\smoke-notes.md`）
 - **分类**：`harness_environment`（构建打包 × 运行环境）
 - **现象**：TB2 冒烟重跑（make-doom-for-mips，
   `D:\tb-eval\jobs\2026-08-17__03-48-57`）中 7 次 grep 全部返回

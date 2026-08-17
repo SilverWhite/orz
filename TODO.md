@@ -151,8 +151,12 @@
     后续项）；exit 2 语法错误保持硬失败（既有行为保留）；
   - [x] 实施前置=容器内 grep 冒烟已执行（根因复现：glibc 动态 rg 与 bookworm
     GLIBC 不匹配；正常 rg 同命令命中 20 处）；回归验证=Linux 重建后容器冒烟
-    （`rg --version` + 已知字符串断言）待执行；模型侧侦查纪律与注册板块 grep
-    参数提示降为次要契约提示。
+    （`rg --version` + 已知字符串断言）**2026-08-17 已执行通过**——重建后打包
+    rg 静态、任务容器内 version + 断言命中；端到端 `orz --real` grep
+    vm.js `syscallNum` 命中 20 行并 done、exit 0（对照旧二进制 7/7
+    "No matches found"），证据
+    `D:\tb-eval\jobs\2026-08-17__GREP-FIX-SMOKE\smoke-notes.md`；模型侧侦查
+    纪律与注册板块 grep 参数提示降为次要契约提示。
   **2026-08-17 冒烟结论（容器实机复现，`alexgshaw/make-doom-for-mips:20251031`）**：
   根因=构建侧打包 glibc 动态 rg（`GROK_TOOLS_BUNDLE_RG_PATH=/usr/bin/rg`，trixie
   产物要求 GLIBC_2.39）进 musl orz；任务容器 bookworm（glibc 2.36）加载失败、

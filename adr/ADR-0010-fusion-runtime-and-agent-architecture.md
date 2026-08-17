@@ -1836,6 +1836,11 @@ ADR §3.6 正文修订随实施登记。
      x86_64-unknown-linux-musl` 产静态 rg 供覆盖，不再指向 `/usr/bin/rg`；
    - 测试：grep 模块 42（新增 stderr 显式报错 / 零范围分型 / 带计数 no-match /
      隐藏目录探针 0 与 --hidden=1）、types 561、orz-loop console 68 全部通过；
-     冒烟回归待 Linux 重建后在任务容器执行（`rg --version` + 已知字符串断言）。
+     冒烟回归已执行（2026-08-17，Linux musl 重建后任务容器实机）——打包 rg
+     静态（无 PT_INTERP）、`rg --version`=15.0.0、精确 orz 命令对 /app/vm.js
+     搜 `syscallNum` 命中 20 处；端到端 `orz --real`（ACAF 签发器 + 文件
+     密钥库）模型报告「命中 20 行」并 done，exit 0（对照旧二进制 7/7
+     "No matches found"）。证据：
+     `D:\tb-eval\jobs\2026-08-17__GREP-FIX-SMOKE\smoke-notes.md`。
    剩余开放面（随 FUS-TOOL-SCOPE-CONTRACT 后续项）：list_dir ignored/truncated
    计数、每次命中都返回 files_searched（需 --json 面或 stats 位置收敛后再定）。

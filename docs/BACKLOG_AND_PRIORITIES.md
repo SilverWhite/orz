@@ -153,8 +153,13 @@
      构建侧——build.rs 对非 Windows 覆盖路径加 ELF PT_INTERP 静态链接守卫
      （动态即构建失败并提示），两份评测构建脚本改 `cargo install ripgrep
      --target x86_64-unknown-linux-musl` 产静态 rg。测试：grep 模块 42 /
-     types 561 / orz-loop console 68 通过；Linux 重建后容器冒烟回归待执行
-     （`rg --version` + 已知字符串断言）。P0-E 剩 2 项、未闭合 29 项。
+     types 561 / orz-loop console 68 通过。**2026-08-17 冒烟回归已执行**：
+     Linux musl 重建（10m04s，构建脚本补 `make`）后打包 rg 静态、任务容器内
+     `rg --version`=15.0.0 + 已知字符串断言命中；端到端 `orz --real`
+     （ACAF 签发器 + 文件密钥库）grep vm.js `syscallNum` 报告命中 20 行并
+     done、exit 0（对照旧二进制 7/7 "No matches found"）；证据
+     `D:\tb-eval\jobs\2026-08-17__GREP-FIX-SMOKE\smoke-notes.md`。
+     P0-E 剩 2 项、未闭合 29 项。
   6. **订单发放前拒绝入事件面**（新观察，用户 2026-08-17 指示处理；**2026-08-17 已闭合**）：
      冒烟重跑中 ORD-000011（workspace.run_tests，`arguments:{}`）写入后发放前被拒，
      失败只进结果栏 receipt + TraceStore（`consume_console_order` 不写 journal 事件），

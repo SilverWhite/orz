@@ -23,7 +23,11 @@
 - **验证记录**：2026-08-17 容器实机复现——错误 rg（glibc 动态）加载失败
   exit 1 + 空 stdout；官方静态 musl rg 15.0.0 同命令命中 20 处（--stats:
   10 files searched）。工具测试 grep 模块 42 / types 561 / orz-loop console 68
-  通过、clippy 无新增告警。Linux musl 重建后容器冒烟回归待执行。
+  通过、clippy 无新增告警。**Linux musl 重建后容器冒烟回归已执行通过**
+  （2026-08-17）：打包 rg 静态、`rg --version`=15.0.0 + 已知字符串断言命中；
+  端到端 `orz --real`（ACAF 签发器 + 文件密钥库）grep vm.js `syscallNum`
+  命中 20 行并 done、exit 0；证据
+  `D:\tb-eval\jobs\2026-08-17__GREP-FIX-SMOKE\smoke-notes.md`。
 - **复盘要点（归因纪律）**：命令或操作出现错误、或结果与已知事实明显矛盾（如
   pattern 实测存在却空结果）时，先按顺序排查环境与机械因素：①二进制/运行时兼容
   （动态链接、glibc/musl、架构）；②工具包装是否吞掉 stderr/退出码；③路径与
@@ -31,5 +35,4 @@
   （覆盖路径、产物架构）。确认机械层正常后，才进入模型/命令纪律归因。
 - **边界**：构建守卫只覆盖非 Windows 覆盖路径；`--files` 探针仅空结果路径运行、
   命中路径 `files_searched` 留空（后续 `--json` 面或 stats 位置收敛后再定）；
-  list_dir ignored/truncated 计数未实施（FUS-TOOL-SCOPE-CONTRACT 后续项）；
-  Linux 重建后的容器冒烟正式回归未执行。
+  list_dir ignored/truncated 计数未实施（FUS-TOOL-SCOPE-CONTRACT 后续项）。
