@@ -273,23 +273,15 @@ pub const STATUS_LINE_PREFIX: &str = "[任务状态";
 /// already arrive via the `[本轮编辑]` push; totals are one blackboard_read
 /// (edits partition) away.
 pub fn build_status_line(goal: Option<&str>, steps: &[crate::blackboard::PlanStep]) -> String {
-    use crate::blackboard::StepStatus;
     let goal = goal.unwrap_or("(未设置)");
     let mut lines = vec![format!("{STATUS_LINE_PREFIX} v0.1]")];
     if steps.is_empty() {
         lines.push(format!("目标: {goal}（无计划步骤）"));
     } else {
-        // Current step = the first in-progress step, falling back to the
-        // first pending one when nothing is marked in-progress yet.
-        let current = steps
-            .iter()
-            .position(|s| matches!(s.status, StepStatus::InProgress))
-            .or_else(|| {
-                steps
-                    .iter()
-                    .position(|s| matches!(s.status, StepStatus::Pending))
-            })
-            .map(|i| i + 1);
+        // 2026-08-18 (ADR-0010 §14.25 项 2): 当前步 = 第一个非 done（与
+        // `planning::current_step_index` 步骤门一致）；failed 步骤保持
+        // 当前、可重试（旧逻辑跳过 failed 会与门禁显示不一致）。
+        let current = steps.iter().position(|s| !s.status.is_done()).map(|i| i + 1);
         let done = steps.iter().filter(|s| s.status.is_done()).count();
         let middle = match current {
             Some(i) => format!(

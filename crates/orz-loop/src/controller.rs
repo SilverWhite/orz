@@ -515,6 +515,10 @@ pub struct AgentLoopController {
     /// 状态（模式/故障连败/询问标记/transition_id/direct 证据面）。run
     /// 起始复位；plan epoch 轮换/黑板旋转不清除。
     console_mode_state: Mutex<crate::console_mode::ConsoleModeState>,
+    /// 2026-08-18 (ADR-0010 §14.25 项 1): 上次追加到消息面的
+    /// `[任务状态]` 文本——状态行只在变化时作为尾随用户消息追加
+    /// （前缀缓存纪律，system 提示词保持完全静态）；无计划为 None。
+    status_line_appended: Mutex<Option<String>>,
 }
 
 /// GAP-RETRIEVAL-TOOLS (2026-08-10): one retrieval-lane tool-call evidence
@@ -2110,6 +2114,7 @@ impl AgentLoopController {
             console_mode_state: Mutex::new(crate::console_mode::ConsoleModeState::start(
                 crate::console_mode::DEFAULT_DIRECT_FALLBACK_THRESHOLD,
             )),
+            status_line_appended: Mutex::new(None),
             plan_first_enabled: false,
             plan_first_session_done: false,
         }
@@ -3819,6 +3824,28 @@ impl AgentLoopController {
         ))
     }
 
+    /// 2026-08-18 (ADR-0010 §14.25 项 1): 前缀缓存纪律——`[任务状态]`
+    /// 常驻状态行移出系统提示词，改为尾随用户消息、仅在变化时追加
+    /// （与 `[TOOL_ROUND_BUDGET] REMAINING` 同纪律）。系统提示词保持
+    /// 完全静态，步骤推进不再打断提供方前缀缓存；变化轮仅小段状态行
+    /// 作为新尾随消息计费。无计划（None）不追加。
+    pub(crate) fn sync_status_line_message(&self, messages: &mut Vec<Message>) {
+        let line = self.render_status_line();
+        let mut last = self.status_line_appended.lock().unwrap();
+        if line != *last {
+            if let Some(text) = line.clone() {
+                messages.push(Message {
+                    role: Role::User,
+                    content: text,
+                    tool_call_id: None,
+                    tool_calls: Vec::new(),
+                    reasoning_content: None,
+                });
+            }
+            *last = line;
+        }
+    }
+
     /// Component injection for tests (independent scripted providers).
     pub fn with_components(
         main_agent: MainAgent,
@@ -3872,6 +3899,7 @@ impl AgentLoopController {
             console_mode_state: Mutex::new(crate::console_mode::ConsoleModeState::start(
                 crate::console_mode::DEFAULT_DIRECT_FALLBACK_THRESHOLD,
             )),
+            status_line_appended: Mutex::new(None),
             plan_first_enabled: false,
             plan_first_session_done: false,
         }
@@ -7187,7 +7215,7 @@ impl AgentLoopController {
         }
         match result {
             Ok(response) => {
-                self.record_console_receipt(&order, true, "ok", None);
+                self.record_console_receipt(&order, true, "ok", None, true);
                 self.push_console_result(
                     order.order_id.clone(),
                     true,
@@ -7228,6 +7256,14 @@ impl AgentLoopController {
                     false,
                     &envelope.error.step,
                     envelope.error.upstream.as_ref(),
+                    // 2026-08-18 (ADR-0010 §14.25 项 2): 步骤状态只随执行
+                    // receipt 迁移——发放期拒绝（registry/contract/target/
+                    // policy 等非执行步）不标 failed（未执行任何动作，步骤
+                    // 保持发放时置的 in_progress，订单可重试）。
+                    matches!(
+                        err.step,
+                        crate::console::STEP_EXECUTE | crate::console::STEP_VERIFY
+                    ),
                 );
                 let error_value = serde_json::to_value(&envelope.error).unwrap_or_else(|_| {
                     serde_json::json!({
@@ -7308,13 +7344,16 @@ impl AgentLoopController {
     /// PLAN-FIRST 阶段 C (2026-08-16, ADR-0010 §14.17⑱ / 设计 §6/§7.2):
     /// 订单 receipt 统一记账——① 双模式故障连败计数（ok=true 重置；
     /// 故障面递增；业务/policy/protocol 等不计）；② 步骤状态迁移
-    /// （订单绑定步骤时：成功 → done(receipt_id)；失败 → failed(receipt_id)）。
+    /// （订单绑定步骤且 `mutate_step` 时：成功 → done(receipt_id)；
+    /// 失败 → failed(receipt_id)）。2026-08-18（ADR-0010 §14.25 项 2）：
+    /// `mutate_step=false`（发放期拒绝）只做故障记账、不迁移步骤状态。
     fn record_console_receipt(
         &self,
         order: &ActionOrder,
         ok: bool,
         step: &str,
         upstream: Option<&serde_json::Value>,
+        mutate_step: bool,
     ) {
         let fault = !ok && crate::console_mode::counts_as_assistant_fault(step, upstream);
         {
@@ -7324,11 +7363,18 @@ impl AgentLoopController {
                 state.push_streak_order(&order.order_id);
             }
         }
-        if let Some(step_id) = order.step_id.as_deref() {
+        if mutate_step
+            && let Some(step_id) = order.step_id.as_deref()
+        {
             let mut w = self.blackboard.write();
             if let Some(idx) = w.plan.steps.iter().position(|s| s.id == step_id) {
                 if ok {
-                    crate::planning::mark_step_done(&mut w.plan.steps, idx, &order.order_id, None);
+                    crate::planning::mark_step_done(
+                        &mut w.plan.steps,
+                        idx,
+                        &order.order_id,
+                        None,
+                    );
                 } else {
                     crate::planning::mark_step_failed(&mut w.plan.steps, idx, &order.order_id);
                 }
@@ -12040,11 +12086,12 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
-    /// A4 (2026-08-08): an ingested plan populates the blackboard plan
-    /// section (goal + steps, first step in-progress) and the resident
-    /// status line appears in the system prompt.
+    /// A4 (2026-08-08) + 2026-08-18 (ADR-0010 §14.25 项 1): an ingested
+    /// plan populates the blackboard plan section (goal + steps, first step
+    /// in-progress); the resident status line NO LONGER lives in the system
+    /// prompt — it is appended as a trailing user message (cache discipline).
     #[tokio::test]
-    async fn with_plan_injects_status_line_into_system_prompt() {
+    async fn with_plan_status_line_is_trailing_user_message() {
         let dir = test_dir();
         let journal = JournalRecorder::new(dir.clone());
         let host = TestHost {
@@ -12102,14 +12149,23 @@ mod tests {
 
         let received = fake.received_requests();
         assert!(!received.is_empty(), "at least one request");
-        let system = &received[0].system;
-        assert!(
-            system.contains("[任务状态 v0.1]"),
-            "status line in system prompt: {system}"
-        );
-        assert!(system.contains("目标: 修复 bug"));
-        assert!(system.contains("当前第 1 步 [step-1]「调查」"));
-        assert!(system.contains("[/任务状态]"));
+        for request in &received {
+            assert!(
+                !request.system.contains("[任务状态"),
+                "status line must not live in the system prompt: {}",
+                request.system
+            );
+        }
+        let status_texts: Vec<String> = received
+            .iter()
+            .flat_map(|r| r.messages.iter())
+            .filter(|m| matches!(m.role, Role::User) && m.content.contains("[任务状态 v0.1]"))
+            .map(|m| m.content.clone())
+            .collect();
+        assert!(!status_texts.is_empty(), "status line missing from messages");
+        assert!(status_texts[0].contains("目标: 修复 bug"));
+        assert!(status_texts[0].contains("当前第 1 步 [step-1]「调查」"));
+        assert!(status_texts[0].contains("[/任务状态]"));
 
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -12511,6 +12567,13 @@ mod tests {
                 "no status line without a plan: {}",
                 request.system
             );
+            assert!(
+                !request
+                    .messages
+                    .iter()
+                    .any(|m| m.content.contains("[任务状态")),
+                "no trailing status message without a plan"
+            );
         }
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -12559,7 +12622,216 @@ mod tests {
             received[0].system, received[1].system,
             "system prompt must be byte-identical across rounds"
         );
-        assert!(received[0].system.contains("[任务状态 v0.1]"));
+        assert!(!received[0].system.contains("[任务状态 v0.1]"));
+        // 2026-08-18 (ADR-0010 §14.25 项 1): 状态行作为尾随用户消息、
+        // 仅在变化时追加——计划不变 → 每轮请求恰好一条状态消息（去重）。
+        assert_eq!(
+            received[0]
+                .messages
+                .iter()
+                .filter(|m| m.content.contains("[任务状态"))
+                .count(),
+            1,
+            "status line appended once on the first request"
+        );
+        assert_eq!(
+            received[1]
+                .messages
+                .iter()
+                .filter(|m| m.content.contains("[任务状态"))
+                .count(),
+            1,
+            "unchanged plan state must not append a second status line"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// 2026-08-18 (ADR-0010 §14.25 项 1): 状态行作为尾随用户消息、
+    /// 仅在步骤状态变化时追加——订单 receipt ok → 步骤 done → 当前步
+    /// 前进后追加新状态行，system 提示词保持字节稳定。
+    #[tokio::test]
+    async fn status_line_trailing_appends_only_on_step_change() {
+        let dir = test_dir();
+        let journal = JournalRecorder::new(dir.clone());
+        let host = TestHost {
+            journal,
+            tool_result: Some(ok_result()),
+        };
+        let fake = Arc::new(FakeProvider::new(vec![
+            ScriptedResponse::tool_calls(vec![ToolCall {
+                name: "blackboard_action_write".to_string(),
+                arguments: serde_json::json!({
+                    "action": "workspace.read_file",
+                    "arguments": {"target_file": "a.txt"},
+                    "step_id": "step-1",
+                }),
+                call_id: "call-w1".to_string(),
+            }]),
+            ScriptedResponse::text("第一轮"),
+            ScriptedResponse::text("完成"),
+        ]));
+        let gateway: Arc<dyn ModelGateway> = fake.clone();
+        let controller = AgentLoopController::with_gateway(gateway).with_plan(
+            "PLAN-STEP".to_string(),
+            1,
+            "两步骤".to_string(),
+            vec!["第一步".to_string(), "第二步".to_string()],
+        );
+        controller
+            .run_turn(
+                &host,
+                "推进步骤",
+                "RUN-STEP",
+                MANIFEST,
+                0,
+                None,
+                None,
+                None,
+            )
+            .await
+            .unwrap();
+
+        let received = fake.received_requests();
+        assert!(received.len() >= 2, "{received:?}");
+        assert_eq!(
+            received[0].system, received[1].system,
+            "system prompt must stay byte-identical across step transitions"
+        );
+        assert!(!received[0].system.contains("[任务状态"));
+        // 消息跨请求累积——按内容去重后应恰好两条：初始状态行 + 步骤推进
+        // 后的新状态行。
+        let mut status_texts: Vec<String> = Vec::new();
+        for r in &received {
+            for m in r.messages.iter() {
+                if m.content.contains("[任务状态 v0.1]") && !status_texts.contains(&m.content) {
+                    status_texts.push(m.content.clone());
+                }
+            }
+        }
+        assert_eq!(status_texts.len(), 2, "{status_texts:?}");
+        assert!(status_texts[0].contains("当前第 1 步 [step-1]「第一步」"), "{status_texts:?}");
+        assert!(status_texts[1].contains("已完成 1"), "{status_texts:?}");
+        assert!(status_texts[1].contains("当前第 2 步 [step-2]「第二步」"), "{status_texts:?}");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// 2026-08-18 (ADR-0010 §14.25 项 2): 发放期 policy 拒绝不把绑定步骤
+    /// 标 failed——步骤保持发放时置的 in_progress（订单可重试）。
+    #[tokio::test]
+    async fn policy_denied_order_does_not_fail_bound_step() {
+        let dir = test_dir();
+        let journal = JournalRecorder::new(dir.clone());
+        let host = DenyHost { journal };
+        let fake = Arc::new(FakeProvider::new(vec![
+            ScriptedResponse::tool_calls(vec![ToolCall {
+                name: "blackboard_action_write".to_string(),
+                arguments: serde_json::json!({
+                    "action": "workspace.search_replace",
+                    "arguments": {
+                        "file_path": "a.txt",
+                        "old_string": "x",
+                        "new_string": "y",
+                    },
+                    "step_id": "step-1",
+                }),
+                call_id: "call-w1".to_string(),
+            }]),
+            ScriptedResponse::text("完成"),
+            ScriptedResponse::text("完成"),
+        ]));
+        let gateway: Arc<dyn ModelGateway> = fake.clone();
+        let controller = AgentLoopController::with_gateway(gateway).with_plan(
+            "PLAN-DENY".to_string(),
+            1,
+            "改文件".to_string(),
+            vec!["第一步".to_string()],
+        );
+        controller
+            .run_turn(
+                &host,
+                "被拒订单",
+                "RUN-DENY",
+                MANIFEST,
+                0,
+                None,
+                None,
+                None,
+            )
+            .await
+            .unwrap();
+
+        let r = controller.blackboard().read();
+        assert_eq!(r.plan.steps.len(), 1);
+        assert!(
+            matches!(
+                r.plan.steps[0].status,
+                crate::blackboard::StepStatus::InProgress
+            ),
+            "policy-denied order must not fail the bound step: {:?}",
+            r.plan.steps[0].status
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// 2026-08-18 (ADR-0010 §14.25 项 2): 真实执行失败（execute 步）仍把
+    /// 绑定步骤标 failed（可重试语义保留）。
+    #[tokio::test]
+    async fn execution_failure_marks_bound_step_failed() {
+        let dir = test_dir();
+        let journal = JournalRecorder::new(dir.clone());
+        let host = QueueHost {
+            journal,
+            results: Mutex::new(VecDeque::from([Err(ToolError::ExecutionFailed(
+                "boom".to_string(),
+            ))])),
+        };
+        let fake = Arc::new(FakeProvider::new(vec![
+            ScriptedResponse::tool_calls(vec![ToolCall {
+                name: "blackboard_action_write".to_string(),
+                arguments: serde_json::json!({
+                    "action": "workspace.read_file",
+                    "arguments": {"target_file": "a.txt"},
+                    "step_id": "step-1",
+                }),
+                call_id: "call-w1".to_string(),
+            }]),
+            ScriptedResponse::text("完成"),
+            ScriptedResponse::text("完成"),
+        ]));
+        let gateway: Arc<dyn ModelGateway> = fake.clone();
+        let controller = AgentLoopController::with_gateway(gateway).with_plan(
+            "PLAN-EXECFAIL".to_string(),
+            1,
+            "读文件".to_string(),
+            vec!["第一步".to_string()],
+        );
+        controller
+            .run_turn(
+                &host,
+                "执行失败",
+                "RUN-EXECFAIL",
+                MANIFEST,
+                0,
+                None,
+                None,
+                None,
+            )
+            .await
+            .unwrap();
+
+        let r = controller.blackboard().read();
+        assert_eq!(r.plan.steps.len(), 1);
+        assert!(
+            matches!(
+                r.plan.steps[0].status,
+                crate::blackboard::StepStatus::Failed(_)
+            ),
+            "execution failure must fail the bound step: {:?}",
+            r.plan.steps[0].status
+        );
+
         let _ = std::fs::remove_dir_all(&dir);
     }
 

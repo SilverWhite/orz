@@ -1093,22 +1093,9 @@ pub(crate) async fn run_agent_loop(
         // (BUDGET only) so the rebuilt system prompt is byte-identical
         // across rounds — the provider's prefix cache keeps hitting.
         let budget_block = crate::prompt::tool_round_budget_session_block(profile.max_tool_rounds);
-        // A4 (2026-08-08): the resident status line — plan state only
-        // (goal + steps + current), rendered from the blackboard plan
-        // section. Absent when no plan is set; byte-identical across
-        // rounds while the plan is unchanged (same cache discipline as
-        // the budget block). Edit counts are deliberately NOT here:
-        // per-round edit deltas arrive via `[本轮编辑]` and totals via
-        // blackboard_read — a per-round counter in the system prompt
-        // would recreate the 17.7%→98% cache regression (2026-08-07).
         let system = match &profile.system_kind {
             SystemPromptKind::Main => {
-                let mut system_blocks = budget_block.clone();
-                if profile.role == AgentRole::Main
-                    && let Some(status_line) = controller.render_status_line()
-                {
-                    system_blocks.push_str(&format!("\n\n{status_line}"));
-                }
+                let system_blocks = budget_block.clone();
                 controller
                     .main_agent
                     .prompt_builder
@@ -1199,6 +1186,11 @@ pub(crate) async fn run_agent_loop(
         // into deterministic action-ledger rows (bounded recent tail kept
         // verbatim); `messages` itself stays full for journal/sidecar
         // audit, so the persisted conversation keeps the complete records.
+        // 2026-08-18 (ADR-0010 §14.25 项 1): 常驻状态行移出系统提示词——
+        // 每轮请求前把 `[任务状态]` 作为尾随用户消息、仅在变化时追加
+        // （与 `[TOOL_ROUND_BUDGET] REMAINING` 同纪律），system 提示词
+        // 保持完全静态，前缀缓存不被步骤推进打断。
+        controller.sync_status_line_message(messages);
         let request_tail =
             svc.context_compact.recent_tail_rounds + if failure_widened_tail { 1 } else { 0 };
         let request_messages =
