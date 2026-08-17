@@ -110,6 +110,11 @@ pub struct AgentBuilder {
     compat: orz_tools::types::compat::CompatConfig,
     bash_params_json: Option<serde_json::Map<String, serde_json::Value>>,
     ask_user_question_params_json: Option<serde_json::Map<String, serde_json::Value>>,
+    /// ORZ-LARGE-FILE-READ-CONTRACT (ADR-0010 §14.22): shell-resolved
+    /// `[toolset.read_file]` overrides (e.g. `coarse_gate_bytes`) injected
+    /// into the read_file tool params — the TOML/config 口子 for the coarse
+    /// gate, applied through the same tool-config params pathway as bash.
+    read_file_params_json: Option<serde_json::Map<String, serde_json::Value>>,
     plugin_registry: Option<std::sync::Arc<crate::plugins::PluginRegistry>>,
     context_window_tokens: Option<u64>,
     api_key_provider: Option<orz_tools::types::SharedApiKeyProvider>,
@@ -247,6 +252,7 @@ impl AgentBuilder {
             compat: Default::default(),
             bash_params_json: None,
             ask_user_question_params_json: None,
+            read_file_params_json: None,
             plugin_registry: None,
             context_window_tokens: None,
             api_key_provider: None,
@@ -609,6 +615,15 @@ impl AgentBuilder {
         self.ask_user_question_params_json = Some(params);
         self
     }
+    /// Inject shell-resolved `[toolset.read_file]` params (coarse gate) into
+    /// the read_file tools (standard + concise variants).
+    pub fn with_read_file_params(
+        mut self,
+        params: serde_json::Map<String, serde_json::Value>,
+    ) -> Self {
+        self.read_file_params_json = Some(params);
+        self
+    }
     /// Set the plugin registry for plugin-aware skill/agent discovery.
     pub fn with_plugin_registry(
         mut self,
@@ -867,6 +882,13 @@ impl AgentBuilder {
                 &mut tool_config,
                 &["GrokBuild:ask_user_question"],
                 ask_params,
+            );
+        }
+        if let Some(ref read_params) = self.read_file_params_json {
+            merge_tool_params(
+                &mut tool_config,
+                &["GrokBuild:read_file", "GrokBuildConcise:read_file"],
+                read_params,
             );
         }
         if !definition.disallowed_tools.is_empty() {
@@ -1815,6 +1837,39 @@ mod tests {
             .expect("finalize must insert Params for the injected ask_user_question");
         assert_eq!(applied.0.timeout_enabled, Some(false));
         assert_eq!(applied.0.timeout_secs, Some(5));
+    }
+    /// ORZ-LARGE-FILE-READ-CONTRACT (P3-1 review fix): shell-resolved
+    /// `[toolset.read_file]` params (coarse gate) flow through the
+    /// tool-config params pathway into `Params<ReadFileParams>` — the
+    /// TOML/config 口子 for the coarse gate.
+    #[tokio::test]
+    async fn read_file_coarse_gate_params_reach_read_file_params() {
+        use orz_tools::computer::local::LocalTerminalBackend;
+        use orz_tools::implementations::grok_build::read_file::ReadFileParams;
+        use orz_tools::notification::ToolNotificationHandle;
+        use orz_tools::types::resources::Params;
+        let profile = crate::config::AgentDefinition::default_grok_build();
+        let mut params = serde_json::Map::new();
+        params.insert(
+            "coarse_gate_bytes".into(),
+            serde_json::Value::from(8 * 1024),
+        );
+        let agent = AgentBuilder::new(
+            std::env::temp_dir(),
+            Arc::new(LocalTerminalBackend::new()),
+            ToolNotificationHandle::noop(),
+        )
+        .from_definition(profile)
+        .with_read_file_params(params)
+        .build()
+        .await
+        .expect("agent should build");
+        let applied = agent
+            .tool_bridge()
+            .read_resource::<Params<ReadFileParams>>()
+            .await
+            .expect("finalize must insert Params for read_file");
+        assert_eq!(applied.0.coarse_gate_bytes, Some(8 * 1024));
     }
     async fn build_with_tools(tools: Vec<String>, disallowed: Vec<String>) -> crate::agent::Agent {
         use orz_tools::computer::local::LocalTerminalBackend;

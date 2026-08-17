@@ -659,11 +659,26 @@ pub(crate) async fn run_read_file(
         let start_line = resolve_read_start_line(&file_content, input.offset);
         let (preview, preview_end, line_truncated) =
             build_handle_preview(&file_content, start_line, Some(limit), total_lines);
-        let truncated = line_truncated || preview_end < total_lines;
-        let offset = if truncated {
-            Some(preview_end + 1)
-        } else {
+        // Review fix (2026-08-17, P2-1): empty windows must not fabricate a
+        // continuation pointer.
+        // - past-EOF (`start_line` beyond the last line): no remaining
+        //   content ⇒ truncated=false, offset=None (the renderer reports the
+        //   real line count).
+        // - in-range empty window (e.g. `limit=0`): content remains ⇒
+        //   truncated=true, offset resumes at the requested start line.
+        // - the file's last line was cut mid-line and no further line exists:
+        //   no line-based continuation ⇒ offset=None (the long-line tail is
+        //   reached via grep/execute, design §11.3).
+        let past_eof = preview_end == 0 && start_line > total_lines;
+        let truncated = !past_eof && (line_truncated || preview_end < total_lines);
+        let offset = if !truncated {
             None
+        } else if preview_end == 0 {
+            Some(start_line)
+        } else if preview_end >= total_lines {
+            None
+        } else {
+            Some(preview_end + 1)
         };
         let content_sha256 =
             crate::implementations::pdf_evidence::hex_string(&Sha256::digest(&file_bytes));
@@ -679,7 +694,7 @@ pub(crate) async fn run_read_file(
                 end_line: total_lines,
             },
             preview_range: LineRange {
-                start_line: if preview_end == 0 { 0 } else { start_line },
+                start_line,
                 end_line: preview_end,
             },
             preview,
@@ -2652,7 +2667,11 @@ pub fn verify(req: &HttpRequest) -> Result<Claims, Error> {
                 assert_eq!(handle.preview_range.start_line, 1);
                 assert_eq!(handle.preview_range.end_line, 1);
                 assert!(handle.truncated, "the line itself was cut at the budget");
-                assert_eq!(handle.offset, Some(2));
+                assert_eq!(
+                    handle.offset, None,
+                    "no line-based continuation exists after the file's last line \
+                     (its tail is reached via grep/execute)"
+                );
             }
             other => panic!("expected ReadHandle, got {other:?}"),
         }
@@ -2673,14 +2692,15 @@ pub fn verify(req: &HttpRequest) -> Result<Claims, Error> {
     }
     /// A single-line file above the coarse gate returns a bounded handle —
     /// the preview is truncated to the 4 KiB budget and the continuation
-    /// pointer moves past the line (grep/execute is the model-side tool for
-    /// very long single lines).
+    /// pointer is None when the cut line is the file's last line (grep/execute
+    /// is the model-side tool for very long single lines); a trailing newline
+    /// leaves the phantom line as a real continuation target.
     #[tokio::test]
     async fn oversized_single_line_returns_bounded_handle() {
-        for content in [
-            "z".repeat(120_000),
-            format!("{}\n", "z".repeat(120_000)),
-            format!("{}\r\n", "z".repeat(120_000)),
+        for (content, expected_offset) in [
+            ("z".repeat(120_000), None),
+            (format!("{}\n", "z".repeat(120_000)), Some(2)),
+            (format!("{}\r\n", "z".repeat(120_000)), Some(2)),
         ] {
             match read_huge_file(&content).await {
                 ReadFileOutput::ReadHandle(handle) => {
@@ -2690,7 +2710,7 @@ pub fn verify(req: &HttpRequest) -> Result<Claims, Error> {
                         handle.preview.len()
                     );
                     assert!(handle.truncated);
-                    assert!(handle.offset.is_some());
+                    assert_eq!(handle.offset, expected_offset);
                 }
                 other => panic!("expected ReadHandle, got {other:?}"),
             }
@@ -2741,6 +2761,72 @@ pub fn verify(req: &HttpRequest) -> Result<Claims, Error> {
                 );
                 assert!(handle.truncated);
                 assert_eq!(handle.offset, Some(handle.preview_range.end_line + 1));
+            }
+            other => panic!("expected ReadHandle, got {other:?}"),
+        }
+    }
+    /// Review fix (2026-08-17, P2-1): an offset beyond the last line must not
+    /// fabricate a continuation — the envelope reports an empty past-EOF
+    /// window (truncated=false, offset=None) instead of restarting at line 1.
+    #[tokio::test]
+    async fn envelope_past_eof_window_is_not_truncated() {
+        let tmp = TempDir::new().unwrap();
+        let content = (1..=1100)
+            .map(|i| format!("line {i} {}", "x".repeat(80)))
+            .collect::<Vec<_>>()
+            .join("\n");
+        std::fs::write(tmp.path().join("big.txt"), &content).unwrap();
+        let resources = test_resources(tmp.path());
+        let input = ReadFileInput {
+            path: "big.txt".to_string(),
+            offset: Some(1101),
+            limit: None,
+            pages: None,
+            format: None,
+        };
+        let (_deltas, terminal) = execute_collect(test_ctx(resources.into_shared()), input).await;
+        match terminal {
+            ReadFileOutput::ReadHandle(handle) => {
+                assert_eq!(handle.available_range.end_line, 1100);
+                assert!(handle.preview.is_empty());
+                assert_eq!(handle.preview_range.start_line, 1101);
+                assert_eq!(handle.preview_range.end_line, 0);
+                assert!(!handle.truncated, "nothing remains past a past-EOF window");
+                assert_eq!(handle.offset, None);
+            }
+            other => panic!("expected ReadHandle, got {other:?}"),
+        }
+    }
+    /// Review fix (2026-08-17, P2-1): an in-range empty window (e.g.
+    /// `limit=0`) keeps the file's remaining content and resumes at the
+    /// requested start line — never at line 1.
+    #[tokio::test]
+    async fn envelope_in_range_empty_window_resumes_at_start_line() {
+        let tmp = TempDir::new().unwrap();
+        let content = (1..=1100)
+            .map(|i| format!("line {i} {}", "x".repeat(80)))
+            .collect::<Vec<_>>()
+            .join("\n");
+        std::fs::write(tmp.path().join("big.txt"), &content).unwrap();
+        let resources = test_resources(tmp.path());
+        let input = ReadFileInput {
+            path: "big.txt".to_string(),
+            offset: Some(30),
+            limit: Some(0),
+            pages: None,
+            format: None,
+        };
+        let (_deltas, terminal) = execute_collect(test_ctx(resources.into_shared()), input).await;
+        match terminal {
+            ReadFileOutput::ReadHandle(handle) => {
+                assert!(handle.preview.is_empty());
+                assert_eq!(handle.preview_range.start_line, 30);
+                assert_eq!(handle.preview_range.end_line, 0);
+                assert!(
+                    handle.truncated,
+                    "the file still has content beyond the empty window"
+                );
+                assert_eq!(handle.offset, Some(30));
             }
             other => panic!("expected ReadHandle, got {other:?}"),
         }

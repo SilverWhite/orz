@@ -317,15 +317,19 @@ pub struct ReadHandleEnvelope {
     pub content_sha256: String,
     /// Available line range of the file (1-based, inclusive).
     pub available_range: LineRange,
-    /// Line range covered by this preview (1-based, inclusive). Both fields
-    /// are 0 when the requested window is empty.
+    /// Line range covered by this preview (1-based, inclusive). `end_line`
+    /// is 0 when the requested window is empty (including past-EOF windows,
+    /// where `start_line` exceeds `available_range.end_line`); `start_line`
+    /// always carries the requested start line.
     pub preview_range: LineRange,
     /// Bounded formatted preview (anchor `N→` lines), ≤ 4 KiB.
     pub preview: String,
     /// True when file content remains beyond `preview_range.end_line`.
     pub truncated: bool,
     /// 1-based line offset for the next `read_file(offset=…)` call; `None`
-    /// when the preview reaches the end of the file.
+    /// when no line-based continuation exists — the preview reached the end
+    /// of the file, the requested window is past EOF, or the file's last
+    /// line was cut mid-line (its tail is reached via grep/execute).
     pub offset: Option<usize>,
 }
 #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
@@ -799,7 +803,15 @@ impl ToolOutput {
                 ReadFileOutput::FileContent(file_content) => file_content.content.clone(),
                 ReadFileOutput::ReadHandle(handle) => {
                     let preview_range = if handle.preview_range.end_line == 0 {
-                        "(empty window)".to_string()
+                        if handle.preview_range.start_line > handle.available_range.end_line {
+                            format!(
+                                "(no lines returned: the requested window is past the end of the \
+                                 file; the file has {} lines)",
+                                handle.available_range.end_line
+                            )
+                        } else {
+                            "(empty window)".to_string()
+                        }
                     } else {
                         format!(
                             "{}..={}",
@@ -1688,6 +1700,62 @@ mod tests {
         assert!(prompt.contains("[read handle]"));
         assert!(prompt.contains("continue=read_file(offset=26)"));
         assert!(prompt.contains("1→line one"));
+    }
+    /// Review fix (2026-08-17, P2-1): a past-EOF empty envelope window must
+    /// render the real line count (mirroring the FileContent path), never a
+    /// generic empty-window label or a fabricated continuation.
+    #[test]
+    fn read_handle_past_eof_window_renders_notice() {
+        let handle = ReadHandleEnvelope {
+            path: PathBuf::from("/tmp/big.txt"),
+            size: 65_536,
+            encoding: "utf-8".to_string(),
+            content_sha256: "a".repeat(64),
+            available_range: LineRange {
+                start_line: 1,
+                end_line: 50,
+            },
+            preview_range: LineRange {
+                start_line: 51,
+                end_line: 0,
+            },
+            preview: String::new(),
+            truncated: false,
+            offset: None,
+        };
+        let prompt = ToolOutput::ReadFile(ReadFileOutput::ReadHandle(handle)).to_prompt_format();
+        assert!(
+            prompt.contains("past the end of the file") && prompt.contains("50 lines"),
+            "past-EOF envelope must report the real line count, got: {prompt}"
+        );
+        assert!(prompt.contains("continue=end of file"), "got: {prompt}");
+    }
+    /// Review fix (2026-08-17, P2-1): an in-range empty window (e.g.
+    /// `limit=0`) renders "(empty window)" and resumes at the requested line.
+    #[test]
+    fn read_handle_in_range_empty_window_resumes_at_start() {
+        let handle = ReadHandleEnvelope {
+            path: PathBuf::from("/tmp/big.txt"),
+            size: 65_536,
+            encoding: "utf-8".to_string(),
+            content_sha256: "a".repeat(64),
+            available_range: LineRange {
+                start_line: 1,
+                end_line: 50,
+            },
+            preview_range: LineRange {
+                start_line: 30,
+                end_line: 0,
+            },
+            preview: String::new(),
+            truncated: true,
+            offset: Some(30),
+        };
+        let prompt = ToolOutput::ReadFile(ReadFileOutput::ReadHandle(handle)).to_prompt_format();
+        assert!(
+            prompt.contains("(empty window)") && prompt.contains("continue=read_file(offset=30)"),
+            "in-range empty envelope must resume at the requested line, got: {prompt}"
+        );
     }
     #[test]
     fn read_file_generic_error_json() {

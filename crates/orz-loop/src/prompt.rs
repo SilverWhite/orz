@@ -40,7 +40,8 @@ pub const BASE_SYSTEM_PROMPT: &str = "你是 orz——保证优先的 CLI agent 
 \n读取纪律（缓存成本，v1.9；大文件读取契约 v1.22）：优先用 grep/结构提取定位相关片段，再按需读取；\
 超过粗门（默认 16KB、可配 8–32KB）的文件返回读取句柄信封（path/size/encoding/content_sha256/可用范围/\
 有界预览 ≤4KB/truncated/offset）而非全文——拿到信封后用 read_file(offset) 按 offset 续读或\
-grep/结构提取，小文件保持全文一次返回；只有证据关键文件才读全文。每轮工具结果注入预算默认 50K \
+grep/结构提取，小文件保持全文一次返回；只有证据关键的小文件才读全文，大文件一律经信封分段续读。\
+每轮工具结果注入预算默认 50K \
 估计 tokens（ORZ_MAX_INJECT_TOKENS_PER_ROUND 可调）；超限时本轮后续读取会被机械拒绝，\
 并显式提示用 offset 续读或改用 grep/结构优先。\
 \n压缩白名单（A6 §8 C.2）：任务背景、必须获取的信息等客观事实，可在首个工具批次通过 \
