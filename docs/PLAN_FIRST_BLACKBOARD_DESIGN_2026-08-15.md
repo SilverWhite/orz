@@ -153,6 +153,9 @@ content_sha256 / 可用范围 / 有界预览 ≤2–4KB / truncated / offset 续
 §11 / ADR-0010 §14.22（v1.22）。**2026-08-17 实施闭合**（GrokBuild `read_file`
 文本路径信封 + 有界预览 + offset 续读；实施审计
 `docs/audits/GAP_LARGE_FILE_READ_CONTRACT_IMPL_AUDIT_2026-08-17.md`）。
+**2026-08-17 全面检查修复**：信封 offset 空窗口/越界语义收口（past-EOF 无续读
+指针、范围内空窗口从请求行续读、最后一行行内截断 offset=None），
+ADR-0010 §14.22 项 4 登记。
 
 grep 搜索范围契约（2026-08-17 用户复核定案）：grep 返回结构化搜索信封
 （resolved root / files_searched / files_skipped / match_count / truncated），

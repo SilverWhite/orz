@@ -128,6 +128,12 @@
 > 实施审计 `docs/audits/GAP_LARGE_FILE_READ_CONTRACT_IMPL_AUDIT_2026-08-17.md`。
 > 该组 4 项此前未计入 P1 分组计数（口径遗漏），本次全部闭合后 P1 回 9、未闭合
 > 总数维持 29（补计与闭合相抵）。
+> 2026-08-17 大文件读取契约全面检查修复登记——P2-1 信封空窗口/越界 offset
+> 语义（past-EOF truncated=false/offset=None、范围内空窗口 offset=start_line、
+> 最后一行行内截断 offset=None）、P3-1 工具参数口子接线明确（ToolConfig params
+> 通路 + with_read_file_params 测试）、P3-2 concise 描述、P3-3 envelope 不追加
+> cursor rules 边界登记、P3-4 提示词措辞；orz 7c4a99e、manifest 1401、门禁
+> valid；ADR-0010 §14.22 项 4 登记。
 >
 > 当前唯一自然语言设计权威是 [`ADR-0010`](adr/ADR-0010-fusion-runtime-and-agent-architecture.md)。本文件只负责召回和路由，不替代 ADR、Schema、审计结论、测试证据或源代码。
 >
@@ -233,6 +239,7 @@
 - **FUS-AGENTS-MD-PLAN-WRAPPER** (`implemented`; 2026-08-15；2026-08-16 实施闭合)：AGENTS.md 注入时机械包裹固定计划型执行框架（用户内容之前）；唯一机制，不做规范模板；阶段 A 已实现（`<plan_first_framework>` 固定前缀，主/子代理同一入口）。关键词：AGENTS.md、计划型包裹、plan-first、机械包裹。入口：[`PLAN_FIRST_BLACKBOARD_DESIGN`](docs/PLAN_FIRST_BLACKBOARD_DESIGN_2026-08-15.md) / [`阶段 A 审计`](docs/audits/GAP_PLAN_FIRST_STAGE_A_IMPL_AUDIT_2026-08-16.md) / [`ADR-0010 §14.17`](adr/ADR-0010-fusion-runtime-and-agent-architecture.md)。
 - **FUS-PROMPT-DEPERSONALIZE** (`implemented`; 2026-08-15；2026-08-16 实施闭合)：删除除机械契约外全部人格化内容（主/子代理模板、apply-patch 模板、Orchestrator body）；子代理 `<persona>` 模板段退役、persona 指令不再注入系统提示词（roles 保留；`SubagentPersona` 配置解析保留为外部 shell 兼容层，审计边界登记）；XOR 模板重生成 + 无人格关键词渲染测试锁定。关键词：去人格、模板、persona 退役、机械契约。入口：[`PLAN_FIRST_BLACKBOARD_DESIGN`](docs/PLAN_FIRST_BLACKBOARD_DESIGN_2026-08-15.md) / [`阶段 A 审计`](docs/audits/GAP_PLAN_FIRST_STAGE_A_IMPL_AUDIT_2026-08-16.md) / [`ADR-0010 §14.17`](adr/ADR-0010-fusion-runtime-and-agent-architecture.md)。
 - **FUS-LARGE-FILE-READ-CONTRACT** (`implemented`; 2026-08-17)：大文件读取契约——读取工具契约有界返回（超过粗门默认 16KB、可配 8–32KB 的文件返回读取句柄信封 path/size/encoding/content_sha256/可用范围/有界预览 ≤4KB/truncated/offset 续读指针，不返回全文；精门=50K 注入预算兜底；小文件保持全文一次返回）；语义适配留模型、助理层只提供机械原语（引用 + 范围读）；模型以 read_file(offset)/grep 结构化续读（提示词策略化读取落成工具契约，对齐 pdf_read document_id+page_range 先例）；黑板/结果栏只放指针不放内容本体（内容留盘上/证据区，维持不新增自由随记区）；**实施已闭合（2026-08-17，orz 172b14e）**——GrokBuild read_file 文本路径信封 + 有界预览 + offset 续读，SKILL.md/`skills` 全量豁免，FileTooLarge 文本路径被取代保留为防御兜底。关键词：大文件读取、读取句柄、有界返回、结构化续读、offset、内容指针、黑板只存指针。入口：[`CLASSICAL-EXEC-ASSISTANT §11`](docs/CLASSICAL_EXECUTION_ASSISTANT_DESIGN_2026-08-13.md) / [`PLAN_FIRST_BLACKBOARD §4`](docs/PLAN_FIRST_BLACKBOARD_DESIGN_2026-08-15.md) / [`ADR-0010 §14.22`](adr/ADR-0010-fusion-runtime-and-agent-architecture.md) / [`实施审计`](docs/audits/GAP_LARGE_FILE_READ_CONTRACT_IMPL_AUDIT_2026-08-17.md) / [`BACKLOG 6f`](docs/BACKLOG_AND_PRIORITIES.md)。
+   **2026-08-17 全面检查修复**：信封空窗口/越界 offset 语义收口（past-EOF 无续读指针、范围内空窗口从请求行续读、最后一行行内截断 offset=None）；工具参数口子接线明确（orz 7c4a99e，ADR-0010 §14.22 项 4）。
 - **FUS-TOOL-SCOPE-CONTRACT** (`current-design`; 2026-08-17；grep 面 2026-08-17 实施闭合)：工具契约家族——「范围/截断必须机械报告」：grep 返回结构化搜索信封（resolved root/files_searched/match_count/truncated；结局三型分型：searched>0 有匹配 / searched>0 无匹配=真无匹配 / searched=0=范围空显式报过滤类别，绝不叫 "No matches found"；非零退出 + stderr 非空先显式报错）+ 搜索范围语义显式化（保留 rg 默认 + 提供 --no-ignore/--hidden 开关，容器冒烟定案）；机械来源=v1 空结果路径 `rg --files` 探针（弃用 --stats：rg 15 stdout / 旧版 stderr 位置差异污染流式面）；读取信封见 FUS-LARGE-FILE-READ-CONTRACT；**后续 2 项已计入未闭合数（2026-08-17）：list_dir 补 ignored/truncated 计数（读/搜/列三族统一）、grep 命中路径 files_searched 留空（--json/stats 位置收敛后再定）**。关键词：搜索信封、范围报告、空结果语义、结局分型、ignore 语义、工具契约、files 探针。入口：[`ADR-0010 §14.23`](adr/ADR-0010-fusion-runtime-and-agent-architecture.md) / [`CLASSICAL-EXEC-ASSISTANT §12`](docs/CLASSICAL_EXECUTION_ASSISTANT_DESIGN_2026-08-13.md) / [`实施审计`](docs/audits/FUS_TOOL_SCOPE_CONTRACT_GREP_IMPL_AUDIT_2026-08-17.md) / [`BACKLOG 0a`](docs/BACKLOG_AND_PRIORITIES.md) / [`TODO P0-E`](TODO.md)。
 
 ## 3. 当前实现与符合性路由

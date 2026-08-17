@@ -478,6 +478,11 @@
 - 2026-08-17 实施闭合：orz 子模块 172b14e（GrokBuild `read_file` 文本路径
   信封）；测试 orz-tools read_file 199 / orz-loop 440 / orz-host e2e 2；
   实施审计 `docs/audits/GAP_LARGE_FILE_READ_CONTRACT_IMPL_AUDIT_2026-08-17.md`。
+- 2026-08-17 全面检查修复：P2-1 空窗口/越界 offset 语义（past-EOF
+  truncated=false/offset=None、范围内空窗口 offset=start_line、最后一行行内
+  截断 offset=None）；P3-1 工具参数口子接线明确；P3-2 concise 描述同步；
+  P3-3 envelope 不追加 cursor rules 边界；P3-4 提示词措辞精确化。
+  orz 子模块 7c4a99e；ADR-0010 §14.22 项 4 登记。
 
 ## 12. 搜索范围契约（grep 搜索信封）（2026-08-17 用户复核定案）
 

@@ -66,3 +66,40 @@
 
 ADR-0010 §14.22（v1.22）项 3 / BACKLOG 6f / TODO P1 / CLI_PROJECT_INDEX /
 操作台设计 §11 / 黑板设计 §4；orz 子模块 172b14e；manifest 重生成 1401 条目。
+
+## 全面检查修复（2026-08-17 审查后处理）
+
+按设计合理性 / 实现合理性 / 设计与实现符合性三面复查，处理全部审查问题：
+
+1. **P2-1 空窗口/越界 offset 语义（代码修复 + 测试）**：旧实现空窗口
+   （起始行超 EOF 或 `limit=0`）返回 `truncated=true` + `offset=Some(1)`，
+   误导续读绕回首行；行内截断恰为文件最后一行时返回越界 `offset=Some(end+1)`。
+   修复：past-EOF 窗口 `truncated=false`、`offset=None`、渲染报实际行数
+   （对齐 FileContent 路径 past-EOF 提示）；范围内空窗口 `offset=Some(start_line)`
+   续读；`preview_end >= total_lines` 时 `offset=None`（长行尾部经 grep/execute
+   侧取）；`preview_range.start_line` 恒承载请求起始行（空窗口 `end_line=0`，
+   `to_prompt_format` 按 start_line 与 available_range.end_line 的关系区分
+   past-EOF / 空窗口）。新增测试：`envelope_past_eof_window_is_not_truncated`、
+   `envelope_in_range_empty_window_resumes_at_start_line`、output 渲染两例；
+   单行大文件测试断言更新（无尾换行 → offset=None；有尾换行 → Some(2)）。
+2. **P3-1 TOML 口子接线明确**：生产 host 无独立 config.toml 工具参数管线；
+   `ReadFileParams.coarse_gate_bytes` 为资源层工具参数口子，新增
+   `AgentBuilder::with_read_file_params` 合并进
+   `GrokBuild:read_file` / `GrokBuildConcise:read_file` 工具参数
+   （与 bash/ask_user_question 同一 ToolConfig params 通路），新增测试
+   `read_file_coarse_gate_params_reach_read_file_params` 锁定；文档口径收窄为
+   "env 口子（生产可达）+ 工具参数口子（TOML/config 注入通路）"。
+3. **P3-2 concise 变体描述同步**：`DESCRIPTION_CONCISE` 补粗门/信封/offset 续读
+   说明（原审计只同步了 DESCRIPTION_FULL 与 console 注册表）。
+4. **P3-3 cursor rules 边界登记**：envelope 路径早于
+   `append_cursor_rules_for_read`，大文件信封不追加 cursor rules（有界预览保持
+   纯文件内容）；登记为有意边界，`cursor_rules_on_read` 仅作用于全文路径。
+5. **P3-4 提示词措辞精确化**：BASE_SYSTEM_PROMPT 读取纪律改为"只有证据关键的
+   小文件才读全文，大文件一律经信封分段续读"（原"只有证据关键文件才读全文"与
+   超粗门无全文并存，易误导模型）。
+
+测试证据（本窗口复跑）：orz-tools read_file 201/201、types::output 84/84、
+orz-agent 工具参数通路 1/1、orz-loop lib 440/440（3 ignored）、orz-host
+read_file e2e 3/3；clippy 无新增可归因告警（orz-loop lib 22、orz-host lib 2
+与基线一致）；cargo fmt 已收口；manifest 重生成 1401 条目、仓库门禁 valid。
+orz 子模块 7c4a99e（feat/fusion-architecture）。

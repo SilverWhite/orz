@@ -496,6 +496,15 @@
   output 信封序列化 1 / orz-loop 440 / orz-host read_file e2e 2 通过；
   clippy 无新增可归因告警；orz 172b14e；实施审计
   `docs/audits/GAP_LARGE_FILE_READ_CONTRACT_IMPL_AUDIT_2026-08-17.md`。
+- [x] 全面检查修复（2026-08-17 审查后处理）：P2-1 信封空窗口/越界 offset 语义
+  （past-EOF truncated=false/offset=None + 渲染实际行数；范围内空窗口
+  offset=start_line；最后一行行内截断 offset=None）；P3-1 工具参数口子
+  （`ReadFileParams.coarse_gate_bytes` 经 ToolConfig params 通路 +
+  `with_read_file_params` + builder 测试锁定）；P3-2 concise 描述补信封说明；
+  P3-3 envelope 不追加 cursor rules 边界登记；P3-4 提示词措辞精确化。
+  验证：orz-tools read_file 201 / output 84 / orz-agent 1 / orz-loop 440 /
+  orz-host e2e 3；clippy 无新增可归因告警；orz 7c4a99e；manifest 1401、
+  仓库门禁 valid。
 
 入口：[设计 §11](docs/CLASSICAL_EXECUTION_ASSISTANT_DESIGN_2026-08-13.md) /
 [黑板设计 §4](docs/PLAN_FIRST_BLACKBOARD_DESIGN_2026-08-15.md) /

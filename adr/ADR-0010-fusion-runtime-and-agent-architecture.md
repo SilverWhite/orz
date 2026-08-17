@@ -1780,6 +1780,26 @@ ADR §3.6 正文修订随实施登记。
    通过；clippy 无新增可归因告警；orz 子模块 172b14e；manifest 重生成 1401 条目、
    仓库门禁 valid。实施登记 BACKLOG 6f / TODO P1 / 实施审计
    `docs/audits/GAP_LARGE_FILE_READ_CONTRACT_IMPL_AUDIT_2026-08-17.md`。
+4. **大文件读取契约全面检查修复登记（2026-08-17 本窗口审查修复；性质：项 3 实施
+   修正）**：按设计合理性 / 实现合理性 / 设计与实现符合性三面复查后处理：
+   ① 空窗口/越界 offset 语义——旧实现起始行超过 EOF 或 `limit=0` 时返回
+   `truncated=true` + `offset=Some(1)`（误导续读绕回首行）；修复后 past-EOF
+   窗口 `truncated=false`、`offset=None`、渲染报实际行数（与 FileContent 路径
+   past-EOF 提示对齐）；范围内空窗口 `offset=Some(start_line)` 续读；行内截断
+   恰为文件最后一行时 `offset=None`（长行尾部经 grep/execute 侧取）；
+   `preview_range.start_line` 恒承载请求起始行（空窗口 `end_line=0`）。
+   ② TOML 口子接线明确——生产 host 无独立 config.toml 工具参数管线，
+   `ReadFileParams.coarse_gate_bytes` 为资源层工具参数口子（经 ToolConfig
+   params 通路注入，AgentBuilder `with_read_file_params` + 测试锁定）；
+   env 口子（`ORZ_READ_FILE_COARSE_GATE_BYTES`）为生产可达旋钮；本项对项 3
+   "env/TOML 口子" 措辞作此精确化。③ concise 变体工具描述同步信封说明；
+   提示词读取纪律措辞精确化（只有证据关键的小文件才读全文，大文件一律经信封
+   分段续读）。④ 边界登记：envelope 路径不追加 cursor rules（有界预览保持纯
+   文件内容；`cursor_rules_on_read` 仅作用于全文路径）。测试：orz-tools
+   read_file 201 / output 84 / orz-agent 工具参数通路 1 / orz-loop 440 /
+   orz-host read_file e2e 3 通过；clippy 无新增可归因告警；orz 子模块 7c4a99e；
+   manifest 重生成 1401 条目、仓库门禁 valid。登记见实施审计
+   `docs/audits/GAP_LARGE_FILE_READ_CONTRACT_IMPL_AUDIT_2026-08-17.md`。
 
 ### 14.23 v1.23 补写裁决索引（2026-08-17）
 
