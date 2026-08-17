@@ -61,9 +61,17 @@
 
 ## 边界与后续项
 
-- `--files` 探针仅空结果路径运行；命中路径 `files_searched` 留空（后续
-  `--json` 面或 stats 位置收敛后再定）。
-- list_dir ignored/truncated 计数未实施（FUS-TOOL-SCOPE-CONTRACT 后续项）。
+- ~~`--files` 探针仅空结果路径运行；命中路径 `files_searched` 留空~~——
+  **2026-08-18 已闭合（orz 614bb3b）**：机械来源收敛为 v1 `rg --files`
+  探针并扩展为每次完成搜索都运行（含命中，摘要行内嵌 `(searched N files)`；
+  错误路径 stderr 非空保持 None）；`--stats` 跨 rg 版本 stdout/stderr 位置
+  差异污染流式面、`--json` 需重写输出契约，均不采用。
+- ~~list_dir ignored/truncated 计数未实施~~——**2026-08-18 已闭合
+  （orz 614bb3b）**：`ListDirContent` 增 listed/ignored/truncated 机械计数
+  （ignored=未过滤走−可见走、同过滤语义、SCOPE_COUNT_CAP=200K 封顶；
+  truncated=可见总数−实际渲染）+ 卡片 `(scope: ...)` 脚注；legacy/codex
+  面不报。验证：grep 99 / list_dir 60 / orz-tools 全量 2761 通过、
+  clippy 无新增告警。
 - 构建守卫只覆盖非 Windows 覆盖路径。
 
 ## 登记

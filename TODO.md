@@ -66,12 +66,17 @@
 > 同步；测试 orz-tools read_file 199 / orz-loop 440 / orz-host e2e 2；
 > orz 172b14e。该组 4 项此前未计入 P1 分组计数（口径遗漏，若计则 P1 13 /
 > 总数 33）；本次全部闭合，P1 回 9、未闭合总数维持 29（补计与闭合相抵）。
+> 2026-08-18 FUS-TOOL-SCOPE-CONTRACT 后续两项闭合（本窗口）——list_dir
+> 目录信封（ListDirContent 增 listed/ignored/truncated 计数 + 卡片
+> (scope: ...) 脚注）+ grep files_searched 全结局探针收敛（v1 `rg --files`
+> 探针扩展为每次完成搜索都运行，命中摘要内嵌 searched N files）——
+> 未闭合 29 → 27，P0 评测冒烟暴露 2 → 0 项（P0-E 后续项全部闭合）。
 > 本快照只做计数与分组召回，明细以下方各分组勾选清单为唯一入口，不新增独立条目；
 > 后续扫描更新时同步替换本快照日期与计数。
 
-- 未闭合总数：**29 项**
+- 未闭合总数：**27 项**
   - P0-C：0 项（PLAN-FIRST 阶段 A/B/C 全部闭合，2026-08-16）
-  - P0 评测冒烟暴露：2 项（P0-E 主项 7 项已闭合 2026-08-17；FUS-TOOL-SCOPE-CONTRACT 后续 2 项：list_dir ignored/truncated 计数、grep 命中路径 files_searched，见 P0-E grep 项后续①/②）
+  - P0 评测冒烟暴露：0 项（P0-E 主项 7 项 + FUS-TOOL-SCOPE-CONTRACT 后续 2 项全部闭合 2026-08-18，见 P0-E grep 项后续①/②）
   - P1 可并行审计/证据：9 项（组件登记 1、Windows 证据 3、DeepSeek 1、会话上下文监测 4）
   - P2 生产化决策门：5 项（Slice 3、Slice 4、ACAF 可选工程项、OPS 裁剪设计、OPS 生产接线裁决）
   - P3 收尾/清理：7 项（EVIDENCE-LOCAL-BROWSER、GATE-CHAIN、observed-scope 枚举、V11-IMPL-003、V11-IMPL-007、orz-host flaky、DC 硬信号 4/6）
@@ -159,12 +164,16 @@
     searched>0→"No matches found in N files"；exit 2 硬失败保留；
   - [x] 搜索范围语义显式化：定案=b（保留 rg 默认），参数面新增
     `--no-ignore`/`--hidden` 开关（GrepSearchInput + console 注册表 schema）；
-  - [ ] 后续①（2026-08-17 补记进计数）：契约泛化——list_dir 补
-    ignored/truncated 计数（读/搜/列三族统一；FUS-TOOL-SCOPE-CONTRACT
-    后续项）；exit 2 语法错误保持硬失败（既有行为保留，无工作量）。
-  - [ ] 后续②（2026-08-17 补记进计数）：grep 命中路径 `files_searched`
-    留空——后续 `--json` 面或 stats 位置收敛后再定（grep 实施审计边界
-    第 1 条）。
+  - [x] 后续①（2026-08-17 补记进计数；**2026-08-18 闭合**）：契约泛化——
+    list_dir 目录信封补 listed/ignored/truncated 计数（ignored=未过滤走−
+    可见走、同过滤语义、200K 封顶；truncated=可见总数−实际渲染）+ 卡片
+    `(scope: ...)` 脚注；legacy/codex 面不报；exit 2 语法错误保持硬失败
+    （既有行为保留，无工作量）。orz 614bb3b；list_dir 60 通过。
+  - [x] 后续②（2026-08-17 补记进计数；**2026-08-18 闭合**）：grep 命中
+    路径 `files_searched` 全结局探针收敛——机械来源定稿=v1 `rg --files`
+    探针扩展为每次完成搜索都运行（含命中，摘要行内嵌 searched N files；
+    错误路径 stderr 非空保持 None）；`--stats` 跨 rg 版本位置差异污染
+    流式面、`--json` 需重写输出契约，均不采用。orz 614bb3b；grep 99 通过。
   - [x] 实施前置=容器内 grep 冒烟已执行（根因复现：glibc 动态 rg 与 bookworm
     GLIBC 不匹配；正常 rg 同命令命中 20 处）；回归验证=Linux 重建后容器冒烟
     （`rg --version` + 已知字符串断言）**2026-08-17 已执行通过**——重建后打包
@@ -191,8 +200,8 @@
   GrepSearchInput 与 console 注册表；`GrepSearchOutput.files_searched` 入信封；
   build.rs 非 Windows 覆盖路径 ELF PT_INTERP 静态守卫；两份构建脚本改静态 musl
    rg。测试 grep 模块 42 / types 561 / orz-loop console 68 通过；Linux 重建后
-   容器冒烟回归已执行通过（见上）。剩余开放面见上方后续①/②（2026-08-17
-   已补记进计数，未闭合 29 项）。
+   容器冒烟回归已执行通过（见上）。后续①/② 已于 2026-08-18 闭合（见上，
+   未闭合 29 → 27 项，P0-E 后续项全部闭合）。
 - [x] （新观察，用户 2026-08-17 指示处理）订单发放前拒绝入事件面：冒烟重跑中
   ORD-000011（workspace.run_tests，`arguments:{}`）写入后发放前被拒，失败只进结果栏
   receipt + TraceStore（`consume_console_order` 不写 journal 事件），journal 无结构化

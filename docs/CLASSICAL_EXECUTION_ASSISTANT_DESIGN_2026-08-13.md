@@ -514,8 +514,10 @@
   match_count, truncated}`；**v1 实施定稿**：机械来源=空结果路径（非零退出 +
   双流为空）用 `rg --files` 探针计数（与主搜索同过滤集、10K 截断杀子进程），
   命中路径 `files_searched` 留空；弃用 `--stats`——rg 15 输出到 stdout、旧版
-  输出到 stderr，跨版本位置差异会污染流式面与卡片一致性（后续如需每次返回可改
-  `--json` 面）。
+  输出到 stderr，跨版本位置差异会污染流式面与卡片一致性。**2026-08-18 收敛
+  定案（v2）**：机械来源保持 `rg --files` 探针，扩展为每次完成搜索都运行
+  （含命中；摘要行内嵌 `(searched N files)`；错误路径 stderr 非空保持 None）；
+  `--json` 面需重写输出契约、`--stats` 位置跨版本不稳定，均不采用。
 - 结局三型分型：
   - searched>0 且 match_count>0：正常命中；
   - searched>0 且 match_count=0：真无匹配；
@@ -541,7 +543,8 @@
   先显式报错；②`--stats` 解析 files_searched 入信封；构建侧改静态 musl rg。
   **2026-08-17 实施闭合**：结局三型 + `rg --files` 探针 + `hidden`/`no_ignore`
   开关 + build.rs 静态守卫 + 构建脚本静态 musl rg；grep 模块 42 / types 561 /
-  orz-loop console 68 测试通过；list_dir ignored/truncated 计数为后续项。
+  orz-loop console 68 测试通过；list_dir ignored/truncated 计数为后续项
+  （**2026-08-18 闭合**，见 §12.4）。
 - 模型侧：空结果不再等于「无文件」；范围空时按信封反馈换范围（--no-ignore/换
   路径），先 list_dir 建清单仍为次要契约提示。
 
@@ -549,11 +552,17 @@
 
 - 「范围/截断必须机械报告」是工具契约家族约束：读取信封（§11/ADR-0010 §14.22）、
   搜索信封（本节/§14.23）、目录信封（list_dir 补 ignored/truncated 计数，随实施）——
-  同一模式，避免逐工具打补丁。
+  同一模式，避免逐工具打补丁。**2026-08-18 目录信封闭合（orz 614bb3b）**：
+  `ListDirContent` 增 listed/ignored/truncated 机械计数（ignored=未过滤走−
+  可见走、同过滤语义、SCOPE_COUNT_CAP=200K 封顶、超限为下界、可见侧触顶报
+  None；truncated=可见总数−实际渲染）+ 卡片尾部 `(scope: ...)` 脚注；
+  legacy/codex 面不报。读/搜/列三族统一契约至此全部落地，FUS-TOOL-SCOPE-
+  CONTRACT 转 `implemented`。
 
 ### 12.5 登记
 
-- ADR-0010 §14.23（v1.23）；FUS-TOOL-SCOPE-CONTRACT（`current-design`）；
+- ADR-0010 §14.23（v1.23）；FUS-TOOL-SCOPE-CONTRACT（`implemented`，
+  2026-08-18 读/搜/列三族全部闭合）；
   `docs/PLAN_FIRST_BLACKBOARD_DESIGN_2026-08-15.md` §4（读面机械契约）；
   BACKLOG 0a / TODO P0-E（实施路由）。
 

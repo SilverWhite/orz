@@ -161,7 +161,10 @@ grep 搜索范围契约（2026-08-17 用户复核定案）：grep 返回结构�
 （resolved root / files_searched / files_skipped / match_count / truncated），
 「搜索 0 文件」与「真无匹配」机械分型（searched=0 显式报范围空与过滤类别，不叫
 "No matches found"）；「范围/截断必须机械报告」为读/搜/列三族统一契约（与读取
-信封同构，list_dir 补 ignored/truncated 计数）。详见
+信封同构，list_dir 补 ignored/truncated 计数）。**2026-08-18 目录信封已闭合
+（orz 614bb3b）**——`ListDirContent` 增 listed/ignored/truncated 机械计数
+（ignored=未过滤走−可见走、同过滤语义、200K 封顶；truncated=可见总数−实际
+渲染）+ 卡片 `(scope: ...)` 脚注；legacy/codex 面不报。详见
 [`CLASSICAL_EXECUTION_ASSISTANT_DESIGN_2026-08-13.md`](CLASSICAL_EXECUTION_ASSISTANT_DESIGN_2026-08-13.md)
 §12 / ADR-0010 §14.23（v1.23）。
 

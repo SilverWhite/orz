@@ -9,7 +9,7 @@
 
 | 优先级 | 含义 | 未闭合项 |
 |---|---|---|
-| P0 | 当前工作集：设计已冻结，裁决后立即实施 | 评测冒烟暴露问题（P0-E 主项 7 项已闭合 2026-08-17：ACAF 容器供应、console 工具名、计划视图步骤 ID、订单发放前拒绝入事件面、grep 搜索范围契约、plan_write 校验消息形状、actions 形状探针；FUS-TOOL-SCOPE-CONTRACT 后续 2 项补记进计数：list_dir ignored/truncated 计数、grep 命中路径 files_searched，见 0a）；CLASSICAL-EXEC-ASSISTANT（生产组件，2026-08-16 用户裁决转正式）；PLAN-FIRST-BLACKBOARD（阶段 A/B/C 全部闭合 2026-08-16） |
+| P0 | 当前工作集：设计已冻结，裁决后立即实施 | 评测冒烟暴露问题（P0-E 主项 7 项 + FUS-TOOL-SCOPE-CONTRACT 后续 2 项全部闭合 2026-08-18：ACAF 容器供应、console 工具名、计划视图步骤 ID、订单发放前拒绝入事件面、grep 搜索范围契约、plan_write 校验消息形状、actions 形状探针、list_dir 范围计数、grep files_searched 全结局探针，见 0a）；CLASSICAL-EXEC-ASSISTANT（生产组件，2026-08-16 用户裁决转正式，S1-S4 全部闭合）；PLAN-FIRST-BLACKBOARD（阶段 A/B/C 全部闭合 2026-08-16） |
 | P1 | 无需裁决，可与 P0 并行 | FUS-COMPONENT-REGISTER、GAP-WINDOWS-EVIDENCE、IMPL-DEEPSEEK-TRANSPORT / SEC-CREDENTIALS、ORZ-SESSION-CONTEXT-MONITOR |
 | P2 | 生产化决策门：需用户裁决 | IMPL-CONTROL-FABRIC（fail-closed 启用、Slice 3/4）、OPS-PROTOCOL |
 | P3 | 收尾 / 清理 | EVIDENCE-LOCAL-BROWSER、GATE-CHAIN、DC 剩余信号、V11-IMPL-003/007、工作区收尾 |
@@ -21,7 +21,7 @@
 
 > 2026-08-13：P0 决策登记——FUS-TOOL-PROBE、FUS-RETRIEVAL-MECH 经用户裁决放行实施；执行顺序 P0-A（工具探针）优先，P0-B（检索机械控制）紧随，P0-C（经典操作台）POC 已通后进入实施序列。
 
-### 0a. 评测冒烟暴露问题（最优先；2026-08-17 登记；P0-E 主项已闭合、FUS-TOOL-SCOPE-CONTRACT 后续 2 项补记进计数）
+### 0a. 评测冒烟暴露问题（最优先；2026-08-17 登记；P0-E 主项与 FUS-TOOL-SCOPE-CONTRACT 后续 2 项全部闭合 2026-08-18）
 
 > 来源：正式跑分前最难错题试跑——make-doom-for-mips（TB2 2.0，deepseek-v4-flash，
 > plan-first + console 默认 + headless，2026-08-17 01:05–01:12）。证据：
@@ -177,15 +177,23 @@
      orz-assurance 152 / orz-bin 全量通过、clippy 与基线一致（lib 21 / lib test 26）、
      manifest 重生成 1401、仓库门禁 valid。
 - **FUS-TOOL-SCOPE-CONTRACT 后续项 2 项（2026-08-17 用户指示补记进计数；
-  未闭合 27 → 29）**：grep 面实施审计「边界与后续项」两条正式入账，P0-E 主项
-  仍 0 项、后续 2 项：
-  1. list_dir 补 ignored/truncated 计数——读/搜/列三族统一契约泛化
-     （ADR-0010 §14.23 / FUS-TOOL-SCOPE-CONTRACT，设计已定、实施待排）；
-  2. grep 命中路径 `files_searched` 留空——后续 `--json` 面或 stats 位置
-     收敛后再定（审计边界第 1 条）。
-  两项均无裁决依赖、实施时点自行排布；入口见
+  未闭合 27 → 29；**2026-08-18 全部闭合，29 → 27**）**：grep 面实施审计
+  「边界与后续项」两条正式入账，P0-E 主项仍 0 项、后续 2 项：
+  1. **list_dir 目录信封（2026-08-18 闭合）**——`ListDirContent` 增
+     listed/ignored/truncated 机械计数：ignored=未过滤走（关 hidden/ignore
+     全系过滤）−可见走（同过滤语义；SCOPE_COUNT_CAP=200K 封顶，超限为下界、
+     可见侧触顶报 None）+ truncated=可见总数−实际渲染（含条目上限与字符预算）；
+     卡片尾部附 `(scope: ...)` 脚注；legacy/codex 面保持 None 不报；
+     描述模板补范围脚注说明。
+  2. **grep files_searched 全结局探针（2026-08-18 闭合）**——机械来源收敛
+     为 v1 `rg --files` 探针，扩展为每次完成搜索都运行（命中亦返回；
+     摘要行内嵌 `(searched N files)`；错误路径 stderr 非空保持 None）；
+     `--stats` 跨 rg 版本位置差异污染流式面、`--json` 需重写输出契约，
+     均不采用（位置收敛定案=探针）。
+  两项均无裁决依赖；实施（orz 子模块 614bb3b）：grep 99 / list_dir 60 /
+  orz-tools 全量 2761 通过、clippy 无新增告警。入口见
   [`grep 面实施审计`](audits/FUS_TOOL_SCOPE_CONTRACT_GREP_IMPL_AUDIT_2026-08-17.md)
-  边界与后续项 / [TODO P0-E](../TODO.md)。
+  边界与后续项 / [TODO P0-E](../TODO.md) / ADR-0010 §14.23。
 
 ### 0. 前置收尾（提交前需用户确认）
 
@@ -757,6 +765,17 @@
 
 ## 变更记录
 
+- 2026-08-18：FUS-TOOL-SCOPE-CONTRACT 后续两项闭合登记（P0-E 收尾；本窗口
+  实施）——① list_dir 目录信封：`ListDirContent` 增 listed/ignored/truncated
+  机械计数（ignored=未过滤走−可见走、同过滤语义、SCOPE_COUNT_CAP=200K 封顶；
+  truncated=可见总数−实际渲染）+ 卡片尾部 `(scope: ...)` 脚注；legacy/codex
+  面保持 None 不报；② grep 搜索信封：`files_searched` 机械来源收敛为 v1
+  `rg --files` 探针、每次完成搜索都运行（含命中，摘要行内嵌 searched N files；
+  错误路径 None）——`--stats` 跨版本位置差异污染流式面、`--json` 需重写输出
+  契约，均不采用。orz 子模块 614bb3b；grep 99 / list_dir 60 / orz-tools
+  全量 2761 通过、clippy 无新增告警；ADR-0010 §14.23 / 索引 / TODO P0-E /
+  实施审计 / 操作台设计 §12 / 黑板设计 §4 同步。未闭合 29 → 27 项（P0-E
+  后续项全部闭合）。
 - 2026-08-18：FUS-LEDGER-FOLD-STATE 实施闭合登记（本窗口；用户指示实施）——
   S1 fold 三态 + 有状态视图 + 推进（action_ledger.rs）；S2 loop-top 推进触发
   （视图估算 ≥128K、checkpoint 轮优先）；S3 压缩联动（摘要输入同源、drain

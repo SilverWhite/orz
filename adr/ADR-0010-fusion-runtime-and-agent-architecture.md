@@ -1881,8 +1881,17 @@ ADR §3.6 正文修订随实施登记。
      密钥库）模型报告「命中 20 行」并 done，exit 0（对照旧二进制 7/7
      "No matches found"）。证据：
      `D:\tb-eval\jobs\2026-08-17__GREP-FIX-SMOKE\smoke-notes.md`。
-   剩余开放面（随 FUS-TOOL-SCOPE-CONTRACT 后续项）：list_dir ignored/truncated
-   计数、每次命中都返回 files_searched（需 --json 面或 stats 位置收敛后再定）。
+   剩余开放面（随 FUS-TOOL-SCOPE-CONTRACT 后续项）**2026-08-18 两项闭合
+   （orz 614bb3b）**：① list_dir 目录信封——`ListDirContent` 增
+   listed/ignored/truncated 机械计数（ignored=未过滤走−可见走、同过滤语义、
+   SCOPE_COUNT_CAP=200K 封顶、超限为下界、可见侧触顶报 None；truncated=可见
+   总数−实际渲染）+ 卡片尾部 `(scope: ...)` 脚注；legacy/codex 面不报。
+   ② grep files_searched 全结局探针——机械来源收敛为 v1 `rg --files` 探针，
+   扩展为每次完成搜索都运行（含命中；摘要行内嵌 `(searched N files)`；错误
+   路径 stderr 非空保持 None）；`--stats` 跨 rg 版本 stdout/stderr 位置差异
+   污染流式面、`--json` 需重写输出契约，均不采用（位置收敛定案=探针）。
+   验证：grep 99 / list_dir 60 / orz-tools 全量 2761 通过、clippy 无新增
+   告警；FUS-TOOL-SCOPE-CONTRACT 转 `implemented`。
 
 ### 14.26 v1.26 补写裁决索引（2026-08-18）
 

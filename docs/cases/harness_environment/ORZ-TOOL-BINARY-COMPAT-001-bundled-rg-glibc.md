@@ -35,4 +35,6 @@
   （覆盖路径、产物架构）。确认机械层正常后，才进入模型/命令纪律归因。
 - **边界**：构建守卫只覆盖非 Windows 覆盖路径；`--files` 探针仅空结果路径运行、
   命中路径 `files_searched` 留空（后续 `--json` 面或 stats 位置收敛后再定）；
-  list_dir ignored/truncated 计数未实施（FUS-TOOL-SCOPE-CONTRACT 后续项）。
+  list_dir ignored/truncated 计数未实施（FUS-TOOL-SCOPE-CONTRACT 后续项；
+  **2026-08-18 全部闭合**——grep files_searched 全结局探针 + list_dir 目录
+  信封，见实施审计「边界与后续项」）。
