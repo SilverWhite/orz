@@ -52,12 +52,15 @@
 > GLIBC 不匹配 + finalize_grep 吞 stderr；工具契约三型分型 + --files 探针 +
 > hidden/no_ignore 开关 + build.rs 静态守卫 + 构建脚本静态 rg，测试通过；
 > Linux 重建后容器冒烟回归待执行）——未闭合 30 → 29，P0-E 3 → 2 项。
+> 2026-08-17 plan_write 校验消息形状 + actions 形状探针闭合（plan 错误消息带
+> 形状说明与 got 类型；actions 实证审计确认 14 种宽松形状全被拒、原观察不成立、
+> 探针测试锁定）——未闭合 29 → 27，P0-E 2 → 0 项（P0-E 全部闭合）。
 > 本快照只做计数与分组召回，明细以下方各分组勾选清单为唯一入口，不新增独立条目；
 > 后续扫描更新时同步替换本快照日期与计数。
 
-- 未闭合总数：**29 项**
+- 未闭合总数：**27 项**
   - P0-C：0 项（PLAN-FIRST 阶段 A/B/C 全部闭合，2026-08-16）
-  - P0 评测冒烟暴露：2 项（plan_write 校验消息/形状机械明确、actions 形状校验；GAP-ACAF-HARNESS-PASSTHROUGH、计划视图步骤 ID 渲染、订单发放前拒绝入事件面与 grep 搜索范围契约已闭合 2026-08-17）
+  - P0 评测冒烟暴露：0 项（GAP-ACAF-HARNESS-PASSTHROUGH、GAP-CONSOLE-TOOLNAME-PATTERN、计划视图步骤 ID 渲染、订单发放前拒绝入事件面、grep 搜索范围契约、plan_write 校验消息形状、actions 形状探针均已闭合 2026-08-17）
   - P1 可并行审计/证据：9 项（组件登记 1、Windows 证据 3、DeepSeek 1、会话上下文监测 4）
   - P2 生产化决策门：5 项（Slice 3、Slice 4、ACAF 可选工程项、OPS 裁剪设计、OPS 生产接线裁决）
   - P3 收尾/清理：7 项（EVIDENCE-LOCAL-BROWSER、GATE-CHAIN、observed-scope 枚举、V11-IMPL-003、V11-IMPL-007、orz-host flaky、DC 硬信号 4/6）
@@ -98,13 +101,22 @@
   `run_invalidated{wallclock}` 正常收尾（对比旧运行 400 即死）。
   - 证据：`D:\tb-eval\jobs\2026-08-17__01-09-43`；journal events 1-18（plan-first
     全链后 run_failed）；错误 `Invalid 'tools[5].function.name' ... '^[a-zA-Z0-9_-]+$'`。
-- [ ] （P1 观察，2026-08-17 复核收窄）plan_write 校验消息/形状机械明确：首次模型把
+- [x] （P1 观察，2026-08-17 复核收窄）plan_write 校验消息/形状机械明确：首次模型把
   计划序列化为 JSON 字符串被拒（`missing_required_field: plan` → refill_requested），
   重填对象后通过——单点偶发（首个试跑第 1 次，重跑 4 次 plan_write 均为正确对象），
   **放弃特化示例方向**（过拟合、无回归价值）。实施=校验错误消息写明形状（plan 必须
   是含 plan_id / goal / steps[] 的对象，got string 时明示）+ 补回归测试（字符串计划
-  → 机械拒绝 → 对象重填 → 错误消息含形状说明）。
-- [ ] （P1 观察）`steps[].actions` 形状校验收紧：空字符串当前仍通过校验，动作形状校验偏宽。
+  → 机械拒绝 → 对象重填 → 错误消息含形状说明）。**2026-08-17 闭合**：
+  `parse_and_validate_plan` 区分 plan 缺失（含形状说明）与非对象（`got string`
+  明示类型）；回归测试 `plan_as_string_error_states_shape` /
+  `missing_plan_error_states_shape`；orz 子模块 11540fa。
+- [x] （P1 观察）`steps[].actions` 形状校验收紧：空字符串当前仍通过校验，动作形状
+  校验偏宽。**2026-08-17 闭合=实证审计 + 探针测试锁定**：14 种宽松形状（空串/
+  裸串/空对象/null/缺 with/缺 do/空 step_id/step_id 不匹配/with 错类型/actions
+  非数组等）全部被机械拒绝，原观察不成立（与 grep 归因更正同类）；`with` 内容与
+  `do` 注册表核对仍留订单发放时契约校验（plan 层只约束结构与长度）；
+  测试 `action_shape_probe_rejects_loose_shapes` /
+  `action_shape_probe_accepts_minimal_valid`。
 - [x] （新发现，冒烟重跑定位）计划视图渲染步骤 ID：`blackboard_read section=plan` 当前
     仅渲染 `[status] goal (actions: N; evidence: M)`，不渲染 `step.id`；步骤门要求订单
     `step_id` 精确绑定 → 模型靠猜测大量空转（轨迹 13/18/23 步、4 次 plan_write）。补渲染

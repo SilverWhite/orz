@@ -9,7 +9,7 @@
 
 | 优先级 | 含义 | 未闭合项 |
 |---|---|---|
-| P0 | 当前工作集：设计已冻结，裁决后立即实施 | 评测冒烟暴露问题（P0-E 剩余两项：plan_write 校验消息/形状机械明确（2026-08-17 复核放弃特化示例）、actions 形状校验；grep 搜索范围与空结果语义已实施闭合 2026-08-17，见 0a 项 5；ACAF 容器供应、计划视图步骤 ID 渲染与订单发放前拒绝入事件面已闭合 2026-08-17，见 0a）；CLASSICAL-EXEC-ASSISTANT（生产组件，2026-08-16 用户裁决转正式）；PLAN-FIRST-BLACKBOARD（阶段 A/B/C 全部闭合 2026-08-16） |
+| P0 | 当前工作集：设计已冻结，裁决后立即实施 | 评测冒烟暴露问题（P0-E 已全部闭合 2026-08-17：ACAF 容器供应、console 工具名、计划视图步骤 ID、订单发放前拒绝入事件面、grep 搜索范围契约、plan_write 校验消息形状、actions 形状探针，见 0a）；CLASSICAL-EXEC-ASSISTANT（生产组件，2026-08-16 用户裁决转正式）；PLAN-FIRST-BLACKBOARD（阶段 A/B/C 全部闭合 2026-08-16） |
 | P1 | 无需裁决，可与 P0 并行 | FUS-COMPONENT-REGISTER、GAP-WINDOWS-EVIDENCE、IMPL-DEEPSEEK-TRANSPORT / SEC-CREDENTIALS、ORZ-CACHE-CONTEXT-COST、ORZ-SESSION-CONTEXT-MONITOR |
 | P2 | 生产化决策门：需用户裁决 | IMPL-CONTROL-FABRIC（fail-closed 启用、Slice 3/4）、OPS-PROTOCOL |
 | P3 | 收尾 / 清理 | EVIDENCE-LOCAL-BROWSER、GATE-CHAIN、DC 剩余信号、V11-IMPL-003/007、工作区收尾 |
@@ -88,8 +88,17 @@
      用户复核：放弃特化示例方向**——单点偶发（重跑 4 次 plan_write 均为正确对象），
      示例强化属过拟合；改为校验错误消息写明形状（plan 必须是含 plan_id/goal/
      steps[] 的对象，got string 时明示）并补回归测试：字符串计划 → 机械拒绝 →
-     对象重填）；
-  3. `steps[].actions` 形状校验收紧（P1 观察②：实证审计空/宽松形状并补探针测试）；
+     对象重填）；**2026-08-17 闭合**——`parse_and_validate_plan`：plan 缺失报
+     `missing required field: plan (expected an object with plan_id / goal /
+     steps[])`、非对象报 `plan must be an object with plan_id / goal / steps[]
+     (got string)`；回归测试=字符串计划→机械拒绝→错误含形状说明（orz 子模块
+     11540fa）；
+  3. `steps[].actions` 形状校验收紧（P1 观察②：实证审计空/宽松形状并补探针测试；
+     **2026-08-17 闭合=实证审计 + 探针测试锁定**——14 种宽松形状（空串/裸串/
+     空对象/null/缺 with/缺 do/空 step_id/step_id 不匹配/with 错类型/actions
+     非数组等）全部被机械拒绝，「空字符串仍通过校验」原观察不成立（与 grep 归因
+     更正同类），无需收紧；`with` 内容与 `do` 注册表核对仍留订单发放时契约校验
+     （plan 层只约束结构与长度，ADR-0010 §10 不变量））；
   4. **计划视图渲染步骤 ID**（新发现，步骤门模型面闭环：`section=plan` 补 `step.id`，
      模型无需猜测；ADR-0010 §14.21 登记；**2026-08-17 闭合**——`epoch.rs` plan 段
      每步行首渲染 `step.id`（live 视图与归档 epoch 读同源）+ 状态行当前步补

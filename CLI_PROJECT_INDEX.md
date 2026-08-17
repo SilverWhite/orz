@@ -103,6 +103,13 @@
 > 反面教材；归因纪律=命令/操作错误先排查环境与机械因素（二进制/运行时兼容、
 > 工具包装吞错误、路径/作用域解析、沙箱/权限/ignore 语义、构建打包来源），
 > 再归因模型或命令纪律。案例库 README 同步登记。未闭合计数不变（29 项）。
+> 2026-08-17 P0-E 收尾两项闭合登记——plan_write 校验消息形状明确（plan 缺失/
+> 非对象错误写明 `expected an object with plan_id / goal / steps[]` 与 got
+> 类型；回归测试字符串计划→机械拒绝→错误含形状）；`steps[].actions` 实证审计
+> +探针测试锁定（14 种宽松形状全被拒，原「空字符串通过校验」观察不成立、无需
+> 收紧；with 内容/do 注册表核对仍留订单发放契约校验）。orz 子模块 11540fa；
+> planning 13 / plan_first 9 测试通过、clippy 无新增告警。**P0-E 全部闭合
+> （0 项）、未闭合 27 项**。详见 BACKLOG 0a / TODO P0-E / ADR-0010 §14.21 项 2。
 >
 > 当前唯一自然语言设计权威是 [`ADR-0010`](adr/ADR-0010-fusion-runtime-and-agent-architecture.md)。本文件只负责召回和路由，不替代 ADR、Schema、审计结论、测试证据或源代码。
 >

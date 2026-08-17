@@ -1698,6 +1698,18 @@ ADR §3.6 正文修订随实施登记。
    次要契约提示；回归验证仍以重跑 round 数/计划重写次数为度量。实施登记
    BACKLOG 0a / TODO P0-E。
    来源：2026-08-17 冒烟重跑 `D:\tb-eval\jobs\2026-08-17__03-48-57`。
+   **2026-08-17 实施闭合（P0-E 第 1/2 项）**：①plan_write 校验消息形状明确——
+   `plan` 缺失报 `missing required field: plan (expected an object with
+   plan_id / goal / steps[])`；`plan` 非对象（如 got string）报
+   `plan must be an object with plan_id / goal / steps[] (got string)`；
+   回归测试=字符串计划→机械拒绝→错误消息含形状说明。②`steps[].actions`
+   形状实证审计+探针测试锁定——14 种宽松形状（空串/裸串/空对象/null/缺 with/
+   缺 do/空 step_id/step_id 不匹配/with 错类型/actions 非数组等）全部被机械
+   拒绝，「空字符串仍通过校验」原观察不成立（与 grep 归因更正同类），无需收紧、
+   以探针测试防回归；`with` 内容与 `do` 注册表核对仍留订单发放时契约校验
+   （v0.5 操作台模型，plan 层只约束结构与长度，不判断语义——§10 不变量）。
+   orz 子模块 11540fa；测试 planning 13 / plan_first 9 通过、clippy 无新增
+   告警。P0-E 全部闭合（0 项）、未闭合 27 项。
 3. **订单发放前拒绝事件面（2026-08-17 用户指示处理，§14.17⑱ 补充；已实施闭合）**：
    冒烟重跑中 ORD-000011（workspace.run_tests，`arguments:{}`）写入后发放前被拒，
    失败只进结果栏 receipt + TraceStore（`consume_console_order` 不写 journal 事件），
