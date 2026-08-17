@@ -82,13 +82,16 @@ ADR-0010 §14.22（v1.22）项 3 / BACKLOG 6f / TODO P1 / CLI_PROJECT_INDEX /
    past-EOF / 空窗口）。新增测试：`envelope_past_eof_window_is_not_truncated`、
    `envelope_in_range_empty_window_resumes_at_start_line`、output 渲染两例；
    单行大文件测试断言更新（无尾换行 → offset=None；有尾换行 → Some(2)）。
-2. **P3-1 TOML 口子接线明确**：生产 host 无独立 config.toml 工具参数管线；
-   `ReadFileParams.coarse_gate_bytes` 为资源层工具参数口子，新增
-   `AgentBuilder::with_read_file_params` 合并进
-   `GrokBuild:read_file` / `GrokBuildConcise:read_file` 工具参数
-   （与 bash/ask_user_question 同一 ToolConfig params 通路），新增测试
-   `read_file_coarse_gate_params_reach_read_file_params` 锁定；文档口径收窄为
-   "env 口子（生产可达）+ 工具参数口子（TOML/config 注入通路）"。
+2. **P3-1 `[toolset.read_file]` 配置节端到端接线**：新增配置节
+   `[toolset.read_file] coarse_gate_bytes`（8–32KB 钳制，非法/缺失回退 env）：
+   orz-host 构建时经 `orz_config::load_effective_config_disk_only()`
+   （system-managed > managed > user 分层合并）解析，注入
+   `GrokBuild:read_file` 的 ToolConfig params（`ReadFileParams.coarse_gate_bytes`
+   优先于 env）；AgentBuilder 侧同步提供 `with_read_file_params` 注入通路。
+   新增测试：`tools::config_tests::read_file_coarse_gate_from_config_parses_and_clamps`
+   （解析/钳制/非法值）、`read_file_coarse_gate_changes_envelope_threshold`
+   （8KB 门限 e2e：~10KB 文件 gated=信封 / default=全文）、
+   `read_file_coarse_gate_params_reach_read_file_params`（builder 通路）。
 3. **P3-2 concise 变体描述同步**：`DESCRIPTION_CONCISE` 补粗门/信封/offset 续读
    说明（原审计只同步了 DESCRIPTION_FULL 与 console 注册表）。
 4. **P3-3 cursor rules 边界登记**：envelope 路径早于
@@ -100,6 +103,7 @@ ADR-0010 §14.22（v1.22）项 3 / BACKLOG 6f / TODO P1 / CLI_PROJECT_INDEX /
 
 测试证据（本窗口复跑）：orz-tools read_file 201/201、types::output 84/84、
 orz-agent 工具参数通路 1/1、orz-loop lib 440/440（3 ignored）、orz-host
-read_file e2e 3/3；clippy 无新增可归因告警（orz-loop lib 22、orz-host lib 2
-与基线一致）；cargo fmt 已收口；manifest 重生成 1401 条目、仓库门禁 valid。
-orz 子模块 7c4a99e（feat/fusion-architecture）。
+read_file e2e 5/5（含配置节解析/钳制与 8KB 门限 e2e）；clippy 无新增可归因
+告警（orz-loop lib 22、orz-host lib 2 与基线一致）；cargo fmt 已收口；
+manifest 重生成 1401 条目、仓库门禁 valid。orz 子模块 7c4a99e + bd8d485
+（feat/fusion-architecture）。

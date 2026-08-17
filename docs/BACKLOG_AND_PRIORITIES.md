@@ -636,13 +636,13 @@
   `docs/audits/GAP_LARGE_FILE_READ_CONTRACT_IMPL_AUDIT_2026-08-17.md`。
   **2026-08-17 全面检查修复（本窗口）**：P2-1 空窗口/越界 offset 语义
   （past-EOF truncated=false/offset=None、范围内空窗口 offset=start_line、
-  最后一行行内截断 offset=None，渲染报实际行数）；P3-1 工具参数口子接线明确
-  （`ReadFileParams.coarse_gate_bytes` 经 ToolConfig params 通路注入 +
-  `with_read_file_params` 测试锁定；生产 host 无 config.toml 管线，env 为生产
-  可达旋钮）；P3-2 concise 描述同步；P3-3 envelope 不追加 cursor rules 边界
-  登记；P3-4 提示词措辞精确化。测试 orz-tools read_file 201 / output 84 /
-  orz-agent 1 / orz-loop 440 / orz-host e2e 3；clippy 无新增可归因告警；
-  orz 7c4a99e；manifest 1401、门禁 valid。
+  最后一行行内截断 offset=None，渲染报实际行数）；P3-1 `[toolset.read_file]`
+  配置节端到端接线（coarse_gate_bytes 经 orz-config 分层装载注入工具参数，
+  优先于 env；AgentBuilder `with_read_file_params` 通路）；P3-2 concise 描述
+  同步；P3-3 envelope 不追加 cursor rules 边界登记；P3-4 提示词措辞精确化。
+  测试 orz-tools read_file 201 / output 84 / orz-agent 1 / orz-loop 440 /
+  orz-host read_file e2e 5；clippy 无新增可归因告警；orz 7c4a99e + bd8d485；
+  manifest 1401、门禁 valid。
 - 入口：[设计 §11](CLASSICAL_EXECUTION_ASSISTANT_DESIGN_2026-08-13.md) /
   [黑板设计 §4](PLAN_FIRST_BLACKBOARD_DESIGN_2026-08-15.md) /
   [ADR-0010 §14.22](../adr/ADR-0010-fusion-runtime-and-agent-architecture.md) /
