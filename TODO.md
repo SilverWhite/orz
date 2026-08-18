@@ -74,13 +74,19 @@
 > 2026-08-18 FUS-BENCHMARK-FULL-EXEC 入账（本窗口，用户裁决实施、暂不测试）
 > ——Benchmark 完全体执行面三层使能 + CLI 旗标 + TB 适配器透传实施完成待验证
 > （实施前登记见下；验证项未勾选）——未闭合 27 → 28，P0 0 → 1 项。
+> 2026-08-18 LEDGER-FOLD-EXTERNAL-FILE 入账（本窗口，用户指示优先实施——
+> 「得先处理命中率问题，不然成本太高了」；设计轮先定案不动计数，实施轮
+> 入账 1 项）——折叠历史外挂文件：固定指针消息 + 最近 1 轮原文视图、
+> 折叠行外挂追加（序号跨压缩连续）；S1/S2 已闭合、S3/S4 待验证——
+> 未闭合 28 → 29，P0 1 → 2 项（P0-F 1 + LEDGER-FOLD-EXTERNAL-FILE 1）。
 > 本快照只做计数与分组召回，明细以下方各分组勾选清单为唯一入口，不新增独立条目；
 > 后续扫描更新时同步替换本快照日期与计数。
 
-- 未闭合总数：**28 项**
+- 未闭合总数：**29 项**
   - P0-C：0 项（PLAN-FIRST 阶段 A/B/C 全部闭合，2026-08-16）
   - P0 评测冒烟暴露：0 项（P0-E 主项 7 项 + FUS-TOOL-SCOPE-CONTRACT 后续 2 项全部闭合 2026-08-18，见 P0-E grep 项后续①/②）
   - P0 Benchmark 完全体：1 项（FUS-BENCHMARK-FULL-EXEC 实施完成待验证，见 P0-F；验证闭环后回 27）
+  - P0 折叠历史外挂：1 项（LEDGER-FOLD-EXTERNAL-FILE，S1/S2 已闭合、S3/S4 待验证，见 P0-0c；验证闭环后回 28）
   - P1 可并行审计/证据：9 项（组件登记 1、Windows 证据 3、DeepSeek 1、会话上下文监测 4）
   - P2 生产化决策门：5 项（Slice 3、Slice 4、ACAF 可选工程项、OPS 裁剪设计、OPS 生产接线裁决）
   - P3 收尾/清理：7 项（EVIDENCE-LOCAL-BROWSER、GATE-CHAIN、observed-scope 枚举、V11-IMPL-003、V11-IMPL-007、orz-host flaky、DC 硬信号 4/6）
@@ -308,6 +314,45 @@
   等 build/run 与网络类）。
 - [ ] 验证⑤（用户指示暂缓）：`run_official_2.1.sh` 89 题 5 批。
 - [ ] 闭合：验证全过 → BACKLOG/TODO/索引状态同步，未闭合 28 → 27。
+
+### P0-0c LEDGER-FOLD-EXTERNAL-FILE（P0；2026-08-18 用户裁决：先设计、不实施；
+同日用户指示优先实施——命中率问题优先于 P0-F 验证；S1/S2 闭合，S3/S4 待验证）
+
+> 入口：[设计](docs/LEDGER_FOLD_EXTERNAL_FILE_DESIGN_2026-08-18.md)；
+> ADR-0010 §14.28（v1.28）；BACKLOG 0c。取代
+> `docs/LEDGER_FOLD_STATE_CACHE_DESIGN_2026-08-18.md` §3.2/§3.5 视图内
+> 台账块；§14.27 400 修复不变量全部保留。
+> 来源：复验运行 `D:\tb-eval\jobs\2026-08-18__19-40-12` 命中率 81.9%
+> （39 次折叠推进 + 1 次压缩贡献 93.5% miss）。
+> 2026-08-18 用户指示：优先实施（暂缓 P0-F 验证序列）；实施前登记本项
+> 与 BACKLOG（实施轮入账 1 项，未闭合 28 → 29）。
+> orz 子模块提交：见 ADR-0010 §14.28（待提交）。
+
+- [x] S1 代码（2026-08-18 闭合）：
+  - [x] action_ledger：`ledger_file_path`（`{session_cwd}/.gsa/ledger/current.md`）、
+    `build_pointer_message`（字节级固定指针消息，`LEDGER_FOLD_POINTER_PREFIX`）、
+    `external_row_line`（`[<全局序号>] 轮次 <序号>: …`）、`append_ledger_rows`
+    （尾行续号 + O_APPEND 原子追加 + flush）；`advance_fold` 返回
+    `Option<Vec<ActionLedgerRow>>`（仅本次新增折叠行，纯函数、IO 由调用方
+    执行；指针消息首次推进设置后不再重写）。
+  - [x] agent_loop：推进触发点写外挂文件（失败回滚 fold 状态 + warn 重试、
+    不阻塞会话）；折叠视图尾轮改用 `fold_tail_rounds`。
+  - [x] controller：`ContextCompactConfig.fold_tail_rounds` 默认 1 +
+    `ORZ_FOLD_TAIL_ROUNDS` 解析 + `with_fold_tail_rounds` 测试缝。
+  - [x] summary：marker 追加「历史摘要累积于 <abs-path>」；归档段改
+    「折叠视图（冻结快照：外挂指针）」。
+- [x] S2 测试（2026-08-18 闭合）：action_ledger 18 项（新增：外挂追加续号、
+  跨压缩续号（fold reset 后文件续号）、指针字节稳定、advance 仅返回新增行、
+  前缀跨推进稳定）；summary 12 项；controller 折叠 e2e 2 项更新（指针前缀
+  全请求字节稳定 + 外挂文件断言 + marker 路径提示 + 压缩后继续续号）；
+  orz-loop 全量 462 通过（-j 1）、fmt 干净、clippy 与基线一致
+  （lib 21 / lib test 26）。
+- [ ] S3（待验证）：Linux musl 重建（ORZ-BUILD-MOUNT-001，输出
+  `D:/tb-eval/orz-linux`）+ 时间戳校验。
+- [ ] S4（待验证）：make-doom-for-mips 单题复验——命中率 ≥90%（provider
+  usage 口径）、无 400、journal 断言不变（`workspace.run_terminal` 订单 →
+  ACAF 票据路径）；`ORZ_DEBUG_VIEW=1` 在验证③闭合时一并移除。
+- [ ] 闭合：S3/S4 全过 → BACKLOG/TODO/索引状态同步，未闭合 29 → 28。
 
 ### P0-B FUS-RETRIEVAL-MECH（`implemented`；批次 1-6 已全部闭合，2026-08-14，保留供核对）
 

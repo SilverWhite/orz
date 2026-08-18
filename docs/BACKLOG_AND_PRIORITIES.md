@@ -9,7 +9,7 @@
 
 | 优先级 | 含义 | 未闭合项 |
 |---|---|---|
-| P0 | 当前工作集：设计已冻结，裁决后立即实施 | 评测冒烟暴露问题（P0-E 主项 7 项 + FUS-TOOL-SCOPE-CONTRACT 后续 2 项全部闭合 2026-08-18：ACAF 容器供应、console 工具名、计划视图步骤 ID、订单发放前拒绝入事件面、grep 搜索范围契约、plan_write 校验消息形状、actions 形状探针、list_dir 范围计数、grep files_searched 全结局探针，见 0a）；CLASSICAL-EXEC-ASSISTANT（生产组件，2026-08-16 用户裁决转正式，S1-S4 全部闭合）；PLAN-FIRST-BLACKBOARD（阶段 A/B/C 全部闭合 2026-08-16）；**FUS-BENCHMARK-FULL-EXEC（P0，实施完成待验证——2026-08-18 用户指示实施、暂不测试；验证闭环后闭合，见 0b）** |
+| P0 | 当前工作集：设计已冻结，裁决后立即实施 | 评测冒烟暴露问题（P0-E 主项 7 项 + FUS-TOOL-SCOPE-CONTRACT 后续 2 项全部闭合 2026-08-18：ACAF 容器供应、console 工具名、计划视图步骤 ID、订单发放前拒绝入事件面、grep 搜索范围契约、plan_write 校验消息形状、actions 形状探针、list_dir 范围计数、grep files_searched 全结局探针，见 0a）；CLASSICAL-EXEC-ASSISTANT（生产组件，2026-08-16 用户裁决转正式，S1-S4 全部闭合）；PLAN-FIRST-BLACKBOARD（阶段 A/B/C 全部闭合 2026-08-16）；**FUS-BENCHMARK-FULL-EXEC（P0，实施完成待验证——2026-08-18 用户指示实施、暂不测试；验证闭环后闭合，见 0b）**；**LEDGER-FOLD-EXTERNAL-FILE（P0，2026-08-18 用户指示优先实施——命中率问题优先于 P0-F 验证；S1/S2 已闭合，S3/S4 待验证，见 0c）** |
 | P1 | 无需裁决，可与 P0 并行 | FUS-COMPONENT-REGISTER、GAP-WINDOWS-EVIDENCE、IMPL-DEEPSEEK-TRANSPORT / SEC-CREDENTIALS、ORZ-SESSION-CONTEXT-MONITOR |
 | P2 | 生产化决策门：需用户裁决 | IMPL-CONTROL-FABRIC（fail-closed 启用、Slice 3/4）、OPS-PROTOCOL |
 | P3 | 收尾 / 清理 | EVIDENCE-LOCAL-BROWSER、GATE-CHAIN、DC 剩余信号、V11-IMPL-003/007、工作区收尾 |
@@ -283,6 +283,35 @@
   暂保留并登记为常驻诊断（验证③闭合后移除）；④ 2–3 题交叉
   （build/run 类 compile-compcert、网络类
   hf-model-inference）；⑤ `run_official_2.1.sh` 89 题 5 批。
+
+### 0c. LEDGER-FOLD-EXTERNAL-FILE（P0；2026-08-18 用户裁决：先设计、不实施；
+同日用户指示优先实施——命中率问题优先于 P0-F 验证；S1/S2 闭合，S3/S4 待验证）
+
+- 入口：[设计](LEDGER_FOLD_EXTERNAL_FILE_DESIGN_2026-08-18.md)；索引：
+  [CLI_PROJECT_INDEX.md](../CLI_PROJECT_INDEX.md)；ADR-0010 §14.28（v1.28）；
+  取代 `LEDGER_FOLD_STATE_CACHE_DESIGN_2026-08-18.md` §3.2/§3.5 视图内台账块。
+- 来源：缓存命中率复验（`D:\tb-eval\jobs\2026-08-18__19-40-12`，57 请求）
+  实测 81.9%（miss 1,116K；39 次折叠推进 + 1 次压缩贡献 ~1,044K = 93.5%）；
+  根因 A 触发线不复位 / B 每次推进重写视图内台账块 / C 压缩整段重写。
+  2026-08-18 用户裁定：先设计、不实施（设计轮不动计数）。
+- **2026-08-18 用户指示优先实施**（「得先处理命中率问题，不然成本太高了」）
+  ——实施前登记本项与 [TODO 0c](../TODO.md)（实施轮入账 1 项，未闭合
+  28 → 29；验证闭环后 29 → 28）。
+- **2026-08-18 S1/S2 已闭合（orz 子模块提交见 ADR-0010 §14.28）**：
+  S1 代码——action_ledger 外挂文件（`{session_cwd}/.gsa/ledger/current.md`，
+  per-row 全局序号跨压缩连续、尾行续号 + 原子追加）、固定指针消息
+  （`folded_ledger` 语义改写，首次推进设置后字节稳定）、`advance_fold`
+  返回 `Option<Vec<ActionLedgerRow>>`（仅新增行、IO 由调用方执行）；
+  agent_loop 推进写文件（失败回滚 fold + 重试）+ 压缩 marker 路径提示；
+  controller `fold_tail_rounds` 默认 1 + `ORZ_FOLD_TAIL_ROUNDS`；
+  summary marker「历史摘要累积于」行 + 归档段改外挂指针。S2 测试——
+  action_ledger 18 / summary 12 / controller 折叠 e2e 2；orz-loop 全量
+  462 通过（-j 1）、fmt 干净、clippy 与基线一致（lib 21 / lib test 26）。
+- 待验证：S3 Linux musl 重建（ORZ-BUILD-MOUNT-001，输出
+  `D:/tb-eval/orz-linux`）+ 时间戳校验；S4 make-doom-for-mips 单题复验
+  （断言命中率 ≥90%（provider usage 口径）、无 400、journal 断言不变
+  ——`workspace.run_terminal` 订单→ACAF 票据路径；`ORZ_DEBUG_VIEW=1` 在
+  验证③闭合时一并移除）。验收 DoD 见设计文档 §7。
 
 ### 0. 前置收尾（提交前需用户确认）
 

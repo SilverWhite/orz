@@ -207,6 +207,33 @@
 > 非机制回归），验证③ reward 项保持开放；`ORZ_DEBUG_VIEW=1` 暂保留登记
 > 为常驻诊断（验证③闭合后移除）。ADR-0010 §14.27（v1.27）/ 折叠设计
 > §3.5+§8 / BACKLOG 0b / TODO P0-F 已同步。未闭合计数不变（28）。
+> 2026-08-18 折叠历史外挂文件设计登记（用户裁决：先设计、不实施）——缓存
+> 命中率复验 81.9% 根因=推进触发线不复位（视图内台账累积）致每 1.5 轮重写
+> 一次（39 次/57 轮、93.5% miss 由推进+压缩贡献）。定案=单纯外挂文件：
+> 已折叠视图改为 `[U0][固定指针消息][最近 1 轮原文]`，推进=每窗口一次纯机械
+> 追加摘要行到 `{session_cwd}/.gsa/ledger/current.md`（只增、全局序号、跨压缩
+> 连续），指针路径/文本字节级固定；不激活 memory_get/search（用户裁定：不需要
+> 记忆本身、接口=固定路径+既有 read_file/grep）、不做模型总结负担、视图内
+> 工具结果截断列为第二阶段候选。设计文档
+> `docs/LEDGER_FOLD_EXTERNAL_FILE_DESIGN_2026-08-18.md`（取代折叠设计视图内
+> 台账块部分；S1-S5 实施草案、验收=复验命中率 ≥90%、风险回滚）。预期 82% →
+> ~91-93%（第二阶段冲 95%+）。未闭合计数不变（28）。
+> 2026-08-18 折叠历史外挂实施登记（**用户指示优先实施**——「得先处理命中率
+> 问题，不然成本太高了」，优先于 P0-F 验证序列）——S1 代码闭合：
+> action_ledger 外挂文件（`ledger_file_path`/`build_pointer_message`/
+> `external_row_line`/`append_ledger_rows`：尾行续号 + O_APPEND 原子追加；
+> `folded_ledger` 语义=固定指针消息，首次推进设置后字节稳定）、
+> `advance_fold` 返回 `Option<Vec<ActionLedgerRow>>`（仅新增行、IO 由调用方
+> 执行）；agent_loop 推进写文件（失败回滚 fold + 重试不阻塞）、折叠视图尾轮
+> 改用 `fold_tail_rounds`（默认 1、`ORZ_FOLD_TAIL_ROUNDS` 可配；压缩 drain
+> 尾 `recent_tail_rounds` 不变）；summary marker「历史摘要累积于 <abs-path>」
+> + 归档段「折叠视图（冻结快照：外挂指针）」。S2 测试闭合：action_ledger 18 /
+> summary 12 / controller 折叠 e2e 2（指针前缀全请求字节稳定 + 外挂文件断言
+> + marker 路径提示 + 压缩后续号）；orz-loop 全量 462 通过（-j 1）、fmt 干净、
+> clippy 与基线一致（lib 21 / lib test 26）。ADR-0010 §14.28（v1.28）/
+> BACKLOG 0c / TODO P0-0c 已同步。S3（Linux musl 重建）/ S4（make-doom-for-
+> mips 复验命中率 ≥90%）待验证；未闭合 28 → 29（实施轮入账，验证闭环后
+> 29 → 28）。
 > 2026-08-18 状态行缓存纪律 + 订单拒绝步骤语义设计定案登记（用户裁决；纯文档、
 > 未实施）——① `[任务状态]` 常驻状态行移出系统提示词，改为变化时追加的尾随
 > 用户消息（与预算剩余块同纪律）：根因=console 步骤机每笔订单 receipt 推进步骤
