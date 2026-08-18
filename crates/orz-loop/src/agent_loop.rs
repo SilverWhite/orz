@@ -1098,7 +1098,9 @@ pub(crate) async fn run_agent_loop(
                     fold_tail,
                     &ledger_path,
                 ) {
-                    if crate::action_ledger::append_ledger_rows(&ledger_path, &rows).is_err() {
+                    if let Err(append_err) =
+                        crate::action_ledger::append_ledger_rows(&ledger_path, &rows)
+                    {
                         // External-file write failure must NOT advance the
                         // fold — the rows would be lost from both the view
                         // and the file. Roll back, count the failure and
@@ -1120,6 +1122,7 @@ pub(crate) async fn run_agent_loop(
                             rows = rows.len(),
                             attempts = fold_write_failures,
                             disabled,
+                            error = %append_err,
                             "external ledger append failed — fold state rolled back; folding disabled after the budget"
                         );
                         writer

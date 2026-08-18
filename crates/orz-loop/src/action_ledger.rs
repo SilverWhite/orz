@@ -64,21 +64,40 @@ pub fn build_pointer_message(ledger_path: &std::path::Path) -> String {
 /// 即可续号；`轮次` 沿用现有台账行语义 = `round_index + 1`（窗口内 0 基
 /// 声明序号 +1，跨压缩重置，与 `build_ledger_block` 标注一致）——2026-08-18
 /// 审查修复：此前两者共用一个 per-row 序号，多工具轮会把轮次标错。
+/// 2026-08-18 S4 复验修复：嵌入字段（目标/结果/最终回复）先做换行转义 +
+/// 长度上限——否则多行最终回复会把一条逻辑记录拆成多个物理行，`tail_seq`
+/// 把续行当损坏尾巴（InvalidData）→ 追加失败 → 连续 3 次后折叠被禁用
+/// （实测 `[31] 轮次 27: blackboard_read ...` 记录跨 15 行）。单行契约是
+/// 「追加续号」正确性的前提；上限符合设计「摘要行 ~200–350 字符/行」。
 pub fn external_row_line(seq: u64, row: &ActionLedgerRow) -> String {
+    /// Per-field cap for the single-line row contract（设计 §2.3 摘要行规模）。
+    const LEDGER_ROW_FIELD_CAP: usize = 300;
+    /// Escape embedded line breaks so a logical row is exactly one physical
+    /// line, then bound the field so the file stays a compact grep-able
+    /// summary (full content remains in `messages` / journal).
+    fn sanitize_field(value: &str) -> String {
+        let escaped = value.replace(['\r', '\n'], "\\n");
+        if escaped.chars().count() <= LEDGER_ROW_FIELD_CAP {
+            return escaped;
+        }
+        let mut truncated: String = escaped.chars().take(LEDGER_ROW_FIELD_CAP).collect();
+        truncated.push('…');
+        truncated
+    }
     format!(
         "[{seq}] 轮次 {}: {} 目标={} 结果={} 最终回复={}",
         row.round_index + 1,
         row.tool,
         if row.target.is_empty() {
-            "（无）"
+            "（无）".to_string()
         } else {
-            &row.target
+            sanitize_field(&row.target)
         },
-        row.pointer,
+        sanitize_field(&row.pointer),
         if row.final_reply.is_empty() {
-            "（无）"
+            "（无）".to_string()
         } else {
-            &row.final_reply
+            sanitize_field(&row.final_reply)
         },
     )
 }
@@ -1348,6 +1367,9 @@ mod tests {
 
     /// 2026-08-18 审查修复：尾行超过 4KiB 时 `tail_seq` 仍取到完整末行，
     /// 续号不因截断而重置（此前 4KiB 尾窗会静默从 1 重新编号）。
+    /// 2026-08-18 S4 复验修复后：`external_row_line` 对嵌入字段做换行转义 +
+    /// 300 字符上限，正常追加路径不再产生超长行；本测试改为直接写盘一条
+    /// >4KiB 单行记录，保留对 `tail_seq` 尾窗逐级倍增路径的防御覆盖。
     #[test]
     fn tail_seq_survives_long_last_row() {
         let dir = std::env::temp_dir().join(format!(
@@ -1358,38 +1380,117 @@ mod tests {
                 .as_nanos()
         ));
         let path = ledger_file_path(&dir);
-        let long_reply = "很长的最终回复".repeat(3_000); // ~36KB > 4KiB 尾窗
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        // 单行 >4KiB：尾窗必须逐级倍增取到完整末行，不得截断续号。
+        let long_row = format!(
+            "[41] 轮次 7: run_terminal 目标=make 结果=sha256:1 最终回复={}",
+            "x".repeat(36_000)
+        );
+        std::fs::write(&path, long_row).unwrap();
+        assert_eq!(
+            tail_seq(&path).unwrap(),
+            41,
+            "long single-line row keeps its seq"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// 2026-08-18 S4 复验修复：嵌入字段（目标/结果/最终回复）中的换行必须
+    /// 转义——多行最终回复会把一条逻辑记录拆成多个物理行，`tail_seq` 将续行
+    /// 当损坏尾巴（InvalidData）导致追加失败、连续 3 次后折叠被禁用。单行
+    /// 契约是「追加续号」正确性的前提；字段上限符合设计「摘要行 ~200–350
+    /// 字符/行」。
+    #[test]
+    fn external_row_line_escapes_embedded_newlines_and_caps() {
+        let row = ActionLedgerRow {
+            round_index: 3,
+            tool: "blackboard_read".to_string(),
+            target: "多行\n目标".to_string(),
+            pointer: "sha256:ab".to_string(),
+            final_reply: "[blackboard_read] == registration ==\nstep1: build\nstep2: verify\n"
+                .to_string(),
+        };
+        let line = external_row_line(31, &row);
+        assert_eq!(
+            line.lines().count(),
+            1,
+            "row must be a single physical line: {line}"
+        );
+        assert!(
+            line.starts_with("[31] 轮次 4: blackboard_read 目标=多行\\n目标"),
+            "{line}"
+        );
+        assert!(
+            line.contains(
+                "最终回复=[blackboard_read] == registration ==\\nstep1: build\\nstep2: verify\\n"
+            ),
+            "{line}"
+        );
+        // 字段上限：>300 字符截断并以 … 标记。
+        let row2 = ActionLedgerRow {
+            round_index: 4,
+            tool: "grep".to_string(),
+            target: "a.py".to_string(),
+            pointer: "sha256:cd".to_string(),
+            final_reply: "很长".repeat(500),
+        };
+        let line2 = external_row_line(32, &row2);
+        assert_eq!(line2.lines().count(), 1);
+        assert!(
+            line2.ends_with('…'),
+            "truncated field ends with marker: {line2}"
+        );
+        assert!(
+            line2.chars().count() < 400,
+            "row bounded by field cap + prefix: {}",
+            line2.chars().count()
+        );
+    }
+
+    /// 2026-08-18 S4 复验回归：多行最终回复的批次写入后，下一次追加必须
+    /// 继续续号（`tail_seq` 不被续行误导），文件保持一行一条逻辑记录。
+    #[test]
+    fn append_ledger_rows_continues_after_multiline_reply() {
+        let dir = std::env::temp_dir().join(format!(
+            "orz-ledger-ext-multiline-{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let path = ledger_file_path(&dir);
         let batch1 = vec![
             ActionLedgerRow {
-                round_index: 0,
-                tool: "read_file".to_string(),
-                target: "a.py".to_string(),
+                round_index: 26,
+                tool: "blackboard_read".to_string(),
+                target: "（无）".to_string(),
                 pointer: "sha256:1".to_string(),
-                final_reply: "短回复".to_string(),
+                final_reply: "[blackboard_read] == registration ==\nstep1: build\nstep2: verify"
+                    .to_string(),
             },
             ActionLedgerRow {
-                round_index: 1,
-                tool: "run_tests".to_string(),
-                target: "make-doom".to_string(),
+                round_index: 27,
+                tool: "run_terminal".to_string(),
+                target: "make".to_string(),
                 pointer: "sha256:2".to_string(),
-                final_reply: long_reply,
+                final_reply: "exit: 0\ncompiled ok".to_string(),
             },
         ];
         append_ledger_rows(&path, &batch1).unwrap();
         let batch2 = vec![ActionLedgerRow {
-            round_index: 2,
+            round_index: 28,
             tool: "read_file".to_string(),
-            target: "c.py".to_string(),
+            target: "vm.js".to_string(),
             pointer: "sha256:3".to_string(),
-            final_reply: "短回复".to_string(),
+            final_reply: "ok".to_string(),
         }];
         append_ledger_rows(&path, &batch2).unwrap();
         let text = std::fs::read_to_string(&path).unwrap();
         let lines: Vec<&str> = text.lines().collect();
-        assert_eq!(lines.len(), 3);
+        assert_eq!(lines.len(), 3, "one physical line per logical row:\n{text}");
         assert!(
-            lines[2].starts_with("[3] 轮次 3: read_file 目标=c.py"),
-            "续号必须从文件尾行继续（而非从 1 重置）: {}",
+            lines[2].starts_with("[3] 轮次 29: read_file 目标=vm.js"),
+            "续号必须从文件尾行继续: {}",
             lines[2]
         );
         let _ = std::fs::remove_dir_all(&dir);
