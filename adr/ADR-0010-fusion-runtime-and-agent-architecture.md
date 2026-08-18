@@ -1893,6 +1893,54 @@ ADR §3.6 正文修订随实施登记。
    验证：grep 99 / list_dir 60 / orz-tools 全量 2761 通过、clippy 无新增
    告警；FUS-TOOL-SCOPE-CONTRACT 转 `implemented`。
 
+### 14.31 v1.31 补写裁决索引（2026-08-19）
+
+本节记录冻结后的显式补写；规范正文以所指章节为准，补写明确取代以下既往条款。
+
+1. **黑板读取缓存成本处理设计定稿（2026-08-19 用户裁决：大机制不再更改、只
+   补回应命中而未命中的缓存成本；FUS-REQUEST-CACHE / ORZ-CACHE-CONTEXT-COST
+   修订——S4 换题复验归因）**：path-tracing 正式 1800s 预算复验（40 次请求、
+   reward 0.0、无 400）provider 口径命中率 85.43% / journal 86.04%；归因=
+   **8/8 大 miss 尖峰（≥10K，合计约 190K = 总 miss 64%）全部紧跟
+   `blackboard_read`（actions/exec）**——单次分区结果 17–32K token 作为全新
+   工具结果注入，前缀缓存按位置匹配无法命中；非折叠频率、非大机制问题。
+   **定案**：大机制（折叠 + 机械压缩 + 黑板/外挂台账）保留；`blackboard_read`
+   渲染瘦身——actions 结果板去 response JSON（`order_id/ok/step/code/trace_id`，
+   缺失回退 `?`）、exec 行截断 200 字符 + 段总长 4K 字符上限、registration/order
+   板不变；（阶段 2 可选）`since` 扩展至 actions + 读取频率提示词引导；零模型
+   调用、工具契约/schema 不变、折叠（128K）/压缩（192K/200K）阈值不动。
+   预期命中率 86% → 约 95%。设计细节见
+   `BLACKBOARD_READ_CACHE_COST_DESIGN_2026-08-19.md`。性质：FUS-REQUEST-CACHE
+   修订；实施路由 S1 渲染瘦身 → S2 测试 → S3 重建 → S4 复验（0c S4 前置，
+   不新增未闭合计数）。**2026-08-19 账单核对补充**：Codex 窗口账单
+   （`api_key_name=codex`，08-19 00:00–03:00）563 请求、聚合命中率 97.91%
+   （97.12%/98.05%/99.53%）、单请求 miss 均值 3,937（1.45–5.4K 递减）——
+   orz 复验为 85.43%、单请求 miss 均值 7,428，差距全部集中在 blackboard_read
+   尖峰；修复后 orz 命中率约 95% = Codex 水平下沿（详见设计 §2.1）。纯文档
+   登记、未实施。
+
+2. **S1/S2 渲染瘦身实施完成 + 全面审查发现 F1 + F1 处理定稿=方案 B 按需点读
+   （2026-08-19）**：S1 渲染瘦身已实施（orz 子模块工作树，未提交）——actions
+   结果板固定形态行（`order_id/ok/step/code/trace_id`，缺失回退 `?`，复用
+   summary `failure_envelope_fields`）、exec 行截断 200 字符（复用
+   `truncate_chars`）+ 段总长 4K 上限（超限仅头行+计数行）；orz-loop 479
+   通过 / fmt 干净 / clippy 与基线一致。**审查发现 F1（P1，设计层面）**：
+   设计假设「详情留 TraceStore、模型按需经 trace 回查」在 console 默认面
+   机械上不成立——`assistant.trace` 不在 console 直接工具面（只能经订单
+   下发），其响应同样是结果栏 receipt、同样被瘦身隐藏；执行类订单
+   （run_script / run_tests / run_terminal）的成功 response 与失败信封
+   message/upstream 因此不可回查。**用户 2026-08-19 裁决：方案 B（按需
+   点读）**——`blackboard_read` 新增可选 `receipt_id`（仅 actions 分区；
+   值=结果行行首 order_id；支持 epoch 归档点读；与 since 组合时忽略
+   since；非法/未找到显式报错），点读返回固定形态行 + 有界完整内容
+   （成功 response / 失败 error 全文，`RECEIPT_DETAIL_MAX_CHARS=8_000`
+   字符，超限截断 + 存档/TraceStore 指针）；无 receipt_id 时整段输出与
+   S1 逐字节一致（缓存最优）。零模型、纯机械、黑板数据面/事件面不动，
+   仅工具定义增量扩展（header 指纹部署首轮一次性变化，v1.19 纪律）。
+   实施路由 S1 代码（epoch.rs 点读分支 + controller 参数解析 + 工具定义）
+   → S2 测试 → S3 重建 → S4 复验；计数不变（0c S4 前置修订）。设计细节
+   见 `BLACKBOARD_READ_CACHE_COST_DESIGN_2026-08-19.md` §4.5。
+
 ### 14.30 v1.30 补写裁决索引（2026-08-19）
 
 本节记录冻结后的显式补写；规范正文以所指章节为准，补写明确取代以下既往条款。

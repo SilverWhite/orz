@@ -434,6 +434,24 @@
 - [ ] D1=(c) S3（待验证）：Linux musl 重建（ORZ-BUILD-MOUNT-001，输出
   `D:/tb-eval/orz-linux`）+ 时间戳校验。
 - [ ] D1=(c) S4（待验证）：命中率复验（≥90% provider usage 口径、无 400）。
+- [x] 2026-08-19 命中率归因 + 黑板读取缓存成本设计定稿（S4 前置；用户裁决：
+  大机制不再更改、只补回应命中而未命中的部分；ADR-0010 §14.31 /
+  BLACKBOARD_READ_CACHE_COST_DESIGN）——path-tracing 复验（正式 1800s 预算、
+  40 请求）provider 85.43% / journal 86.04%；归因=8/8 大 miss 尖峰（~190K=
+  64%）紧跟 `blackboard_read`（actions/exec），单次分区 17–32K token 作为
+  全新工具结果注入无法命中；非折叠频率、非大机制。定案=actions 结果板去
+  response JSON（order_id/ok/step/code/trace_id）、exec 行截断 200 字符 +
+  段总长 4K、registration/order 板不变；（阶段 2 可选）since 扩展 actions +
+  读取频率引导；零模型、契约/schema 不变、阈值不动；预期 86%→95%。
+- [ ] 黑板读取缓存成本处理（S1/S2 渲染瘦身已实施、未提交；F1 处理=方案 B
+  已定稿登记，待放行实施）：S1 渲染瘦身 + 单测与 S2 测试已完成（orz-loop
+  479 通过）；2026-08-19 全面审查发现 F1（console 面动作详情不可回查——
+  assistant.trace 不在直接工具面、receipt 响应同样被瘦身隐藏）→ 用户裁决
+  =方案 B 按需点读（设计 §4.5 / ADR §14.31 第 2 项，已登记）：
+  `blackboard_read` 新增可选 `receipt_id`（单条完整内容、8K 上限截断+指针、
+  epoch 归档点读、非法/未找到显式报错、无 receipt_id 整段逐字节恒定）→
+  S1 代码（epoch.rs 点读分支 + controller 参数解析 + 工具定义）→ S2 测试
+  → S3 重建 → S4 复验（≥90%、无 400）；0c S4 前置，计数不变。
 - [ ] 闭合：S3/S4 全过 → BACKLOG/TODO/索引状态同步，未闭合 29 → 28。
 
 ### P0-B FUS-RETRIEVAL-MECH（`implemented`；批次 1-6 已全部闭合，2026-08-14，保留供核对）

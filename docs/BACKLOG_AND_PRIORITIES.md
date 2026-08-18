@@ -379,6 +379,31 @@
   为已知边界、控制器侧加保留上限属可选后续（不占计数）——登记于压缩设计
   §4.4.1/§4.4.3 与 ADR §14.30；③CLI_PROJECT_INDEX 条目杂散控制字符清理。
   计数不变（0c S3/S4 复验闭环后 29 → 28）。
+- **2026-08-19 命中率归因与黑板读取缓存成本设计定稿（S4 前置；用户裁决：
+  大机制不再更改、只补回应命中而未命中的缓存成本）**：path-tracing 复验
+  （正式 1800s 预算、40 请求、reward 0.0、无 400）provider 口径 85.43% /
+  journal 86.04%；归因=**8/8 大 miss 尖峰（≥10K，合计约 190K = 总 miss
+  64%）全部紧跟 `blackboard_read`（actions/exec）**——单次分区结果 17–32K
+  token 作为全新工具结果注入，前缀缓存按位置匹配无法命中；非折叠频率、非
+  大机制问题。定案=`blackboard_read` 渲染瘦身：actions 结果板去 response
+  JSON（order_id/ok/step/code/trace_id，缺失回退 `?`）、exec 行截断 200
+  字符 + 段总长 4K 字符上限、registration/order 板不变；（阶段 2 可选）
+  `since` 扩展至 actions + 读取频率提示词引导；零模型调用、工具契约/schema
+  不变、折叠（128K）/压缩（192K/200K）阈值不动；预期命中率 86%→95%。
+  登记 ADR-0010 §14.31 / `BLACKBOARD_READ_CACHE_COST_DESIGN_2026-08-19.md`；
+  实施路由 S1 渲染瘦身 → S2 测试 → S3 重建 → S4 复验（0c S4 前置，计数
+  不变 29）。
+- **2026-08-19 S1/S2 实施完成 + 全面审查 + F1 处理=方案 B 定稿（0c S4
+  前置修订，未提交；B 未实施）**：S1 渲染瘦身已实施（orz 工作树未提交）——
+  actions 结果板固定形态行（去 response JSON、缺失回退 `?`）、exec 行截断
+  200 + 段 4K 上限；orz-loop 479 / fmt / clippy 基线一致。审查发现 F1
+  （P1）：console 面动作详情不可回查（assistant.trace 不在直接工具面、其
+  receipt 响应同样被瘦身隐藏；执行类订单 response / 失败 message/upstream
+  均不可取回）——设计假设「经 trace 回查」机械上不成立。用户裁决=方案 B：
+  `blackboard_read` 新增可选 `receipt_id` 点读（仅 actions；8K 字符上限
+  截断+指针；支持 epoch 归档点读；非法/未找到显式报错；无 receipt_id 整段
+  与 S1 逐字节一致）。零模型、数据面/事件面不动、工具定义增量扩展；路由
+  S1 代码 → S2 测试 → S3 重建 → S4 复验；计数不变（仍在 29）。
 
 ### 0. 前置收尾（提交前需用户确认）
 
