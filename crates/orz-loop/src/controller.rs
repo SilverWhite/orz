@@ -5209,7 +5209,6 @@ impl AgentLoopController {
                     &svc,
                     writer,
                     host,
-                    &self.main_agent,
                     &mut messages,
                     estimate,
                     "session_end",
@@ -5223,8 +5222,6 @@ impl AgentLoopController {
                     // 文件存在/已折叠过滤）。
                     Some(&crate::action_ledger::ledger_file_path(&host.session_cwd())),
                     &mut fold_state,
-                    cancel,
-                    heartbeat,
                 )
                 .await?;
             }
@@ -5878,7 +5875,6 @@ impl AgentLoopController {
                             &svc,
                             writer,
                             host,
-                            subagent,
                             &mut act.conversation,
                             estimate,
                             "session_end",
@@ -5889,8 +5885,6 @@ impl AgentLoopController {
                             // 检索车道不折叠：marker 不携带外挂台账提示。
                             None,
                             &mut fold_state,
-                            cancel,
-                            heartbeat,
                         )
                         .await?;
                     }
@@ -13368,9 +13362,8 @@ mod tests {
             tool_call("call-a1"),
             tool_call("call-a2"),
             tool_call("call-a3"),
-            // The summary fires after round 3 (cooldown 2 reached) — the
-            // summary call is a pure chat round consuming one script item.
-            summary_response(),
+            // 机械模式（2026-08-18 B 定案）：压缩零模型调用——脚本不消费
+            // 任何摘要项，收到的请求数即为主循环请求数。
             ScriptedResponse::text("候选答案").with_prompt_tokens(5_000),
             ScriptedResponse::text("最终答案").with_prompt_tokens(5_000),
         ]));
@@ -13404,7 +13397,7 @@ mod tests {
         // Three completed tool rounds before the summary.
         assert_eq!(compact_events[0]["rounds_since_last_compaction"], 3);
         assert_eq!(compact_events[0]["rounds_dropped"], 1);
-        assert_eq!(compact_events[0]["mode"], "template_summary");
+        assert_eq!(compact_events[0]["mode"], "mechanical");
         assert_eq!(compact_events[0]["reason"], "rhythm");
         assert_eq!(compact_events[0]["summary_incomplete"], false);
         assert_eq!(compact_events[0]["retained_rounds"], 2);
@@ -13421,12 +13414,16 @@ mod tests {
             archive_text.contains("# ORZ 会话压缩摘要"),
             "{archive_text}"
         );
-        assert!(archive_text.contains("derived_unverified"));
+        assert!(archive_text.contains("机械模式"));
 
         // The MID-TASK gap (request 4, after tool round 3) carries the
         // marker — the old "final-answer gap only" semantics are revoked.
         let received = fake.received_requests();
-        assert!(received.len() >= 5, "{received:?}");
+        assert_eq!(
+            received.len(),
+            5,
+            "机械压缩零模型调用：3 工具轮 + 候选答案 + 最终答案 = 5 请求，{received:?}"
+        );
         let marker_idx = received
             .iter()
             .position(|r| {
@@ -13697,9 +13694,7 @@ mod tests {
             whitelist_calls,
             tool_call("call-w2"),
             tool_call("call-w3"),
-            // The template summary fires after the third tool round (the
-            // first loop-top with a droppable round under the tail).
-            summary_response(),
+            // 机械模式（2026-08-18 B 定案）：压缩零模型调用，无摘要项。
             ScriptedResponse::text("候选答案").with_prompt_tokens(5_000),
             ScriptedResponse::text("最终答案").with_prompt_tokens(5_000),
         ]));
@@ -14177,13 +14172,9 @@ mod tests {
             tool_call("call-s1"),
             tool_call("call-s2"),
             tool_call("call-s3"),
-            // First summary fires after round 3 (first point with a
-            // droppable round under the tail).
-            summary_response(),
             tool_call("call-s4"),
-            // Second summary fires after round 4 — the fallback ignores
-            // the just-reset cooldown.
-            summary_response(),
+            // 机械模式（2026-08-18 B 定案）：两次 fallback 压缩均零模型
+            // 调用——round 3 后与 round 4 后各触发一次，脚本无摘要项。
             ScriptedResponse::text("候选答案"),
             ScriptedResponse::text("最终答案"),
         ]));
@@ -14237,14 +14228,11 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
-    /// P0-D (2026-08-14, ADR-0010 v1.10 / CONTEXT_COMPACTION_DESIGN §4.2):
-    /// when the LLM slots fail validation on all ≤3 attempts, the run ends
-    /// in the termination state — mechanical slots only, marker flagged
-    /// `summary_incomplete`, no archive; on the FALLBACK path the
-    /// conversation is still mechanically truncated so the run never stays
-    /// over the window.
+    /// 2026-08-18 B 定案（ADR-0010 §14.29）：压缩为纯机械——零模型调用、
+    /// 无 summary_incomplete 终止态；fallback 触发下存档恒写入、marker 恒
+    /// 携带真实 digest/路径，会话机械截断不滞留窗口之上。
     #[tokio::test]
-    async fn context_compact_summary_failure_termination_state() {
+    async fn context_compact_mechanical_mode_zero_model_calls() {
         let dir = test_dir();
         let journal = JournalRecorder::new(dir.clone());
         let host = TestHost {
@@ -14272,10 +14260,7 @@ mod tests {
             tool_call("call-f1"),
             tool_call("call-f2"),
             tool_call("call-f3"),
-            // Three failed summary attempts (no slot markers).
-            ScriptedResponse::text("无效摘要"),
-            ScriptedResponse::text("无效摘要"),
-            ScriptedResponse::text("无效摘要"),
+            // 机械模式：脚本即主循环请求数——压缩不消费任何模型项。
             ScriptedResponse::text("候选答案"),
             ScriptedResponse::text("最终答案"),
         ]));
@@ -14302,15 +14287,19 @@ mod tests {
             .filter(|e| e.event_type == EventType::ContextCompressed)
             .map(|e| e.payload)
             .collect();
-        assert_eq!(compact_events.len(), 1, "one termination-state summary");
-        assert_eq!(compact_events[0]["summary_incomplete"], true);
+        assert_eq!(compact_events.len(), 1, "one mechanical compaction");
+        assert_eq!(compact_events[0]["mode"], "mechanical");
+        assert_eq!(compact_events[0]["summary_incomplete"], false);
         assert_eq!(compact_events[0]["reason"], "fallback");
-        assert!(compact_events[0]["summary_id"].is_null());
-        assert!(compact_events[0]["summary_digest"].is_null());
-        assert!(compact_events[0]["summary_path"].is_null());
+        assert!(compact_events[0]["summary_id"].as_str().is_some());
+        assert!(compact_events[0]["summary_digest"].as_str().is_some());
+        assert!(compact_events[0]["summary_path"].as_str().is_some());
 
-        // The marker reaches the model and carries the incomplete flag.
+        // 零模型调用：3 工具轮 + 候选答案 + 最终答案 = 5 请求。
         let received = fake.received_requests();
+        assert_eq!(received.len(), 5, "{received:?}");
+        // The marker reaches the model and carries the placeholder slots —
+        // no `summary_incomplete` termination flag.
         let last = received.last().unwrap();
         assert!(
             last.messages
@@ -14320,10 +14309,11 @@ mod tests {
             last.messages
         );
         assert!(
-            last.messages
+            !last
+                .messages
                 .iter()
                 .any(|m| m.content.contains("summary_incomplete")),
-            "incomplete flag in marker: {:?}",
+            "机械模式 marker 不得携带 termination 标志: {:?}",
             last.messages
         );
 
@@ -14758,14 +14748,14 @@ mod tests {
     /// FUS-LEDGER-FOLD-STATE (2026-08-18, ADR-0010 §14.26) × compaction:
     /// the fold advances BEFORE the summary fires; the summary call's
     /// input is the SAME stateful folded view (摘要输入与主请求同源 — it
-    /// carries the frozen ledger block); compaction then resets the fold
-    /// state (marker request has no ledger) and the fold re-accumulates
-    /// from the marker (a later request shows the ledger again). The
-    /// compaction archive preserves the frozen ledger the model saw
-    /// (设计 §3.5 第 1 步 — the archive is the only surviving ledger
-    /// snapshot after the folded region is drained).
+    /// carries the frozen ledger block); mechanical compaction (2026-08-18
+    /// B 定案) then resets the fold state (marker request has no ledger)
+    /// and the fold re-accumulates from the marker (a later request shows
+    /// the ledger again). The compaction archive preserves the frozen
+    /// ledger the model saw (设计 §3.5 第 1 步 — the archive is the only
+    /// surviving ledger snapshot after the folded region is drained).
     #[tokio::test]
-    async fn fold_state_resets_after_compaction_and_summary_uses_same_view() {
+    async fn fold_state_resets_after_mechanical_compaction_and_archive_keeps_pointer() {
         struct SeqHost {
             journal: JournalRecorder,
             outputs: Vec<String>,
@@ -14829,35 +14819,22 @@ mod tests {
             }],
             finish_reason: FinishReason::ToolCalls,
             reasoning_content: None,
-            // FUS-LEDGER-FOLD-STATE review fix (2026-08-18): the reported
-            // prompt tokens must be CONSISTENT with the actual view size
-            // (chars/2 ≈ several K with the 300-char results) — otherwise
-            // the reduction guard (after ≤ measured × max_reduction_ratio)
-            // blocks the FIRST rhythm trigger, the scripted
-            // `summary_response()` is consumed by a normal round, and the
-            // forced compaction's summary call receives tool-call script
-            // positions → parse fails → termination state (no archive).
-            // 20K keeps the first rhythm trigger (cooldown 5, round 7's
-            // loop-top) on the intended success path.
+            // 20K keeps the first rhythm trigger (cooldown 5, round 6's
+            // loop-top) on the intended mechanical compaction path.
             prompt_tokens: Some(20_000),
         };
         // Rhythm (cooldown 5) fires at round 6's loop-top (the counter
-        // reaches 5 when round 5 completes): the scripted summary response
-        // sits at position 5, then rounds 6..11 consume positions 6..11,
-        // the cooldown fires a SECOND summary at round 12's loop-top
-        // (position 12 — scripted success again, so the deterministic
-        // success path is exercised twice and both archives must carry the
-        // frozen ledger), and the two text rounds cover the counterexample
-        // gate + final answer.
+        // reaches 5 when round 5 completes): rounds 0..10 (11 tool rounds)
+        // cross two rhythm triggers, both compactions are mechanical (no
+        // model items consumed), and the two text rounds cover the
+        // counterexample gate + final answer.
         let mut script = Vec::new();
         for k in 0..5 {
             script.push(tool_call(&format!("call-{k}")));
         }
-        script.push(summary_response());
         for k in 5..11 {
             script.push(tool_call(&format!("call-{k}")));
         }
-        script.push(summary_response());
         script.push(ScriptedResponse::text("反例自查通过").with_prompt_tokens(20_000));
         script.push(ScriptedResponse::text("最终答案").with_prompt_tokens(20_000));
         let fake = Arc::new(FakeProvider::new(script));
@@ -14903,21 +14880,9 @@ mod tests {
             ledger_idx < marker_idx,
             "the fold must advance before the summary fires (fold {ledger_idx} / marker {marker_idx})"
         );
-        // The summary call is the request right before the marker request —
-        // its input is the SAME folded view (contains the frozen ledger).
-        let summary_idx = marker_idx - 1;
-        let summary_req = &received[summary_idx];
-        assert!(
-            summary_req
-                .messages
-                .iter()
-                .any(|m| m.content.contains("已坍缩的历史前缀")),
-            "summary call present: {summary_req:?}"
-        );
-        assert!(
-            has_ledger(summary_req),
-            "summary input is the same stateful folded view: {summary_req:?}"
-        );
+        // 机械模式（2026-08-18 B 定案）：压缩零模型调用——11 工具轮 +
+        // 反例自查 + 最终答案 = 13 请求，脚本即主循环请求数。
+        assert_eq!(received.len(), 13, "机械压缩零模型调用: {received:?}");
         // The fold re-accumulates from the marker — after the first
         // compaction only the tail rounds survive (no foldable round
         // outside the tail at first), so the ledger reappears once the
@@ -15006,7 +14971,7 @@ mod tests {
             tool_call("call-f5"),
             // Three guard-blocked rounds → the forced compaction fires on
             // the next loop-top (round 6's gap) and reports guard_failed.
-            summary_response(),
+            // 机械模式（2026-08-18 B 定案）：压缩零模型调用，无摘要项。
             ScriptedResponse {
                 text: Some("第六轮".to_string()),
                 tool_calls: vec![ToolCall {
@@ -15092,7 +15057,6 @@ mod tests {
                 reasoning_content: None,
                 prompt_tokens: Some(100),
             },
-            summary_response(),
         ]));
         let controller = AgentLoopController::with_gateway(fake.clone())
             .with_session_end_trigger(1)
@@ -15209,11 +15173,9 @@ mod tests {
             tool_call("call-a1"),
             tool_call("call-a2"),
             tool_call("call-a3"),
-            summary_response(),
             tool_call("call-a4"),
             // Round a4 also reports 300K — the fallback re-fires on the next
-            // loop-top (the first summary did not shrink measured tokens).
-            summary_response(),
+            // loop-top (机械模式：两次压缩均零模型调用，无摘要项).
             ScriptedResponse::text("候选答案"),
             ScriptedResponse::text("最终答案"),
         ]));
@@ -23763,15 +23725,6 @@ mod tests {
 
     /// A valid five-section summary response (mechanical slots are filled
     /// by the controller; only the two model slots matter here).
-    fn summary_response() -> ScriptedResponse {
-        ScriptedResponse::text(format!(
-            "[注意事项] 关键事实：前缀缓存导致回归；{}\n[/注意事项]\n\
-                 [后续衔接] 下一步：跑回归测试；{}\n[/后续衔接]",
-            "补充说明。".repeat(60),
-            "继续执行。".repeat(60),
-        ))
-    }
-
     /// The conversation seeds the model context (prior history + new prompt)
     /// and the full conversation comes back on success — reasoning content
     /// included (the DeepSeek multi-turn replay requirement).

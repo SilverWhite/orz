@@ -2,11 +2,12 @@
 //!
 //! ADR-0010 v1.10 §14.10 ③ / CONTEXT_COMPACTION_DESIGN §4: the template
 //! summary has five fixed slots — 目的 / 计划 / 变动文件路径 are mechanically
-//! filled from the blackboard (plan + edit actions), 注意事项 / 后续衔接 are
-//! model-generated and marked `derived_unverified`. Character limits
-//! 3/3/5/3/3K = 17K total; the LLM output is validated mechanically and
-//! redone ≤3 times; the termination state keeps the mechanical slots and
-//! marks the marker `summary_incomplete`.
+//! filled from the blackboard (plan + edit actions); 注意事项 / 后续衔接 are
+//! mechanical placeholders (2026-08-18 B 定案，ADR-0010 §14.29) until the
+//! HA structured-fact aggregation phase lands (阶段 (c)) — the compaction
+//! makes ZERO model calls so it never re-bills the folded view under a
+//! foreign prefix. Character limits 3/3/5/3/3K = 17K total bound the marker
+//! and archive rendering.
 //!
 //! P0-D review fix (2026-08-14, ADR-0010 v1.14): the degeneration guard is
 //! ORZ's own 300-effective-char gate (CJK ideographs count double — the
@@ -22,24 +23,17 @@ use orz_assurance::journal::sha256_hex;
 pub const SUMMARY_MAX_TOTAL_CHARS: usize = 17_000;
 /// 目的 / 计划 / 变动文件路径 / 注意事项 / 后续衔接 — 3/3/5/3/3K.
 pub const SUMMARY_SLOT_LIMITS: [usize; 5] = [3_000, 3_000, 5_000, 3_000, 3_000];
-pub const SUMMARY_MAX_ATTEMPTS: u32 = 3;
-/// Completion budget for one summary call (17K chars ≈ ≤12K tokens).
-pub const SUMMARY_MAX_TOKENS: u32 = 12_000;
-/// ORZ's own degeneration gate (P0-D review fix 2026-08-14): a summary
-/// whose EFFECTIVE length is below 300 is degenerate. The orz-compaction
-/// 500-char gate was calibrated for English text; CJK ideographs carry
-/// roughly twice the information of one English character, so each CJK
-/// char counts as 2 effective chars (150 CJK chars pass the gate).
-pub const SUMMARY_MIN_EFFECTIVE_CHARS: usize = 300;
 
 /// Bounded retries for persisting the summary archive — a write failure is
 /// an audit gap and must be retried explicitly, then reported.
 pub const ARCHIVE_WRITE_MAX_ATTEMPTS: usize = 3;
 
-pub const NOTES_OPEN: &str = "[注意事项]";
-pub const NOTES_CLOSE: &str = "[/注意事项]";
-pub const CONTINUATION_OPEN: &str = "[后续衔接]";
-pub const CONTINUATION_CLOSE: &str = "[/后续衔接]";
+/// 机械模式占位（2026-08-18 B 定案，D1=(b)）：压缩不再调用模型生成
+/// 注意事项/后续衔接；阶段 (c)（HA 结构化事实聚合）落地前，这两槽以
+/// 固定占位呈现，主模型按 marker 的回查入口自行承接。
+pub const MECHANICAL_NOTES_PLACEHOLDER: &str =
+    "（机械模式：无模型槽位；阶段 (c) 事实聚合落地前由主模型按 marker 回查自行判断）";
+pub const MECHANICAL_CONTINUATION_PLACEHOLDER: &str = "（机械模式：回查 blackboard_read 分区 plan/edits/tool_actions/exec/actions（历史用 epoch 参数）与摘要存档）";
 
 /// Estimated tokens of one summary marker in the kept context. The marker
 /// carries the five slots (up to ~17K chars ≈ 8.5K tokens under the
@@ -47,11 +41,6 @@ pub const CONTINUATION_CLOSE: &str = "[/后续衔接]";
 /// (P0-D review fix 2026-08-14: the previous 2K constant undercounted the
 /// marker by up to ~4× and skewed the reduction guard.)
 pub const SUMMARY_MARKER_ESTIMATE_TOKENS: u64 = 9_000;
-
-/// One summary chat call's wall-clock budget (ADR-0010 v1.10 §4.2 "超时
-/// 120s" — the session transport's own timeouts are far longer and must
-/// not hold the emergency path).
-pub const SUMMARY_CALL_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(120);
 
 /// The five summary slots.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -74,31 +63,6 @@ impl SummarySlots {
     }
 }
 
-/// Effective character length for the degeneration gate: CJK ideographs
-/// count as 2, everything else as 1.
-pub fn effective_summary_chars(s: &str) -> usize {
-    s.chars()
-        .map(|c| if is_cjk_ideograph(c) { 2 } else { 1 })
-        .sum()
-}
-
-fn is_cjk_ideograph(c: char) -> bool {
-    matches!(c as u32,
-        0x3400..=0x4DBF   // CJK Extension A
-        | 0x4E00..=0x9FFF // CJK Unified Ideographs
-        | 0xF900..=0xFAFF // CJK Compatibility Ideographs
-        | 0x20000..=0x2A6DF // Extension B
-        | 0x2A700..=0x2B73F // Extension C
-        | 0x2B740..=0x2B81F // Extension D
-        | 0x2B820..=0x2CEAF // Extension E
-    )
-}
-
-/// ORZ degeneration guard — replaces the orz-compaction 500-char gate.
-pub fn is_degenerate_summary(output: &str) -> bool {
-    effective_summary_chars(output) < SUMMARY_MIN_EFFECTIVE_CHARS
-}
-
 /// Persist the summary archive with bounded retries. Returns whether the
 /// file exists after the attempts; a failure is NEVER silent here — the
 /// caller surfaces it in the marker and the `context_compressed` event.
@@ -112,18 +76,6 @@ pub fn write_archive_retry(archive_dir: &Path, archive_path: &Path, markdown: &s
         }
     }
     false
-}
-
-#[derive(Debug, thiserror::Error)]
-pub enum SummaryError {
-    #[error("summary slot {0} missing from model output")]
-    MissingSlot(String),
-    #[error("summary slot {0} exceeds {1} chars")]
-    SlotTooLong(&'static str, usize),
-    #[error("summary total exceeds {0} chars")]
-    TotalTooLong(usize),
-    #[error("degenerate summary output")]
-    Degenerate,
 }
 
 /// Path-slot Top-N (design §10 / audit D-4): at most 40 plan-epoch edits by
@@ -225,75 +177,6 @@ fn render_paths(
     out
 }
 
-/// The five-section summary system prompt — instructs the model to fill
-/// ONLY 注意事项 / 后续衔接 from verifiable ledger/blackboard facts.
-pub fn summary_system_prompt() -> String {
-    "你是 ORZ 会话压缩器。你只填写两个槽位：\n\
-     [注意事项] — 本窗口内必须记住的关键事实、风险与推断（推断内容须标注“（未验证）”）；\n\
-     [后续衔接] — 下一步应继续做什么、回查入口（文件/证据路径、blackboard_read 分区）。\n\
-     纪律：只能引用输入中台账/黑板可验证的事实；不得编造路径或结论；每槽不超过 3000 字符；\
-     输出只包含这两个槽位，不要输出其他内容。"
-        .to_string()
-}
-
-/// Build the summary user input: the mechanical slots block followed by the
-/// already-collapsed history prefix (tool records were mechanically handled
-/// by the first layer before this call).
-pub fn summary_user_prompt(mechanical: &SummarySlots) -> String {
-    format!(
-        "机械槽位（你不需要修改）：\n目的: {}\n计划: {}\n变动文件路径: {}\n\n\
-         以下为已坍缩的历史前缀（动作台账 + 最近轮），请据此填写 [注意事项] 与 [后续衔接]：",
-        mechanical.purpose, mechanical.plan, mechanical.paths
-    )
-}
-
-fn extract_slot(output: &str, open: &str, close: &str) -> Result<String, SummaryError> {
-    let start = output
-        .find(open)
-        .ok_or_else(|| SummaryError::MissingSlot(open.to_string()))?;
-    let after_open = start + open.len();
-    let end = output[after_open..]
-        .find(close)
-        .map(|i| after_open + i)
-        .ok_or_else(|| SummaryError::MissingSlot(close.to_string()))?;
-    Ok(output[after_open..end].trim().to_string())
-}
-
-/// Parse and validate the model's two generated slots against the limits.
-pub fn parse_model_output(
-    output: &str,
-    mechanical: &SummarySlots,
-) -> Result<SummarySlots, SummaryError> {
-    let notes = extract_slot(output, NOTES_OPEN, NOTES_CLOSE)?;
-    let continuation = extract_slot(output, CONTINUATION_OPEN, CONTINUATION_CLOSE)?;
-    if is_degenerate_summary(output) {
-        return Err(SummaryError::Degenerate);
-    }
-    if notes.chars().count() > SUMMARY_SLOT_LIMITS[3] {
-        return Err(SummaryError::SlotTooLong(
-            "注意事项",
-            SUMMARY_SLOT_LIMITS[3],
-        ));
-    }
-    if continuation.chars().count() > SUMMARY_SLOT_LIMITS[4] {
-        return Err(SummaryError::SlotTooLong(
-            "后续衔接",
-            SUMMARY_SLOT_LIMITS[4],
-        ));
-    }
-    let slots = SummarySlots {
-        purpose: mechanical.purpose.clone(),
-        plan: mechanical.plan.clone(),
-        paths: mechanical.paths.clone(),
-        notes,
-        continuation,
-    };
-    if slots.total_chars() > SUMMARY_MAX_TOTAL_CHARS {
-        return Err(SummaryError::TotalTooLong(SUMMARY_MAX_TOTAL_CHARS));
-    }
-    Ok(slots)
-}
-
 /// The archive file (markdown) for one summary — the audit copy with digest.
 /// FUS-LEDGER-FOLD-STATE (2026-08-18, ADR-0010 §14.26 / 设计 §3.5 第 1 步):
 /// when the loop is folded, the frozen action-ledger block is appended as
@@ -304,21 +187,15 @@ pub fn summary_archive_markdown(
     id: &str,
     slots: &SummarySlots,
     rounds_dropped: u32,
-    incomplete: bool,
     guard_failed: bool,
     ledger: Option<&str>,
 ) -> String {
     let mut out = format!(
         "# ORZ 会话压缩摘要 {id}\n\n\
-         - 状态: {}\n- derived_unverified: 注意事项/后续衔接为模型生成，未机械验证\n\
+         - 状态: complete（机械模式，零模型调用——2026-08-18 B 定案，ADR-0010 §14.29）\n\
          - 被压轮次: {rounds_dropped}\n\
          - 守卫强制: {}\n\n\
          ## 目的\n{}\n\n## 计划\n{}\n\n## 变动文件路径\n{}\n\n## 注意事项\n{}\n\n## 后续衔接\n{}\n",
-        if incomplete {
-            "summary_incomplete"
-        } else {
-            "complete"
-        },
         if guard_failed {
             "是（缩减守卫连续不满足，已强制压缩）"
         } else {
@@ -328,19 +205,16 @@ pub fn summary_archive_markdown(
         slots.plan,
         slots.paths,
         if slots.notes.is_empty() {
-            "（生成失败）"
+            MECHANICAL_NOTES_PLACEHOLDER
         } else {
             &slots.notes
         },
         if slots.continuation.is_empty() {
-            "（生成失败）"
+            MECHANICAL_CONTINUATION_PLACEHOLDER
         } else {
             &slots.continuation
         },
     );
-    if incomplete {
-        out.push_str("\n> 摘要重试后仍失败：仅机械段有效，最近尾已扩大，后续轮次仍可正常执行。\n");
-    }
     if let Some(ledger) = ledger {
         // FUS-LEDGER-FOLD-STATE external-file design (2026-08-18,
         // ADR-0010 §14.28): the frozen "ledger" the model saw is now the
@@ -364,7 +238,6 @@ pub fn build_summary_marker(
     archive_path: &Path,
     slots: &SummarySlots,
     rounds_dropped: u32,
-    incomplete: bool,
     guard_failed: bool,
     archive_write_failed: bool,
     plan_epoch: u64,
@@ -373,23 +246,13 @@ pub fn build_summary_marker(
     // restored conversation at the surviving append-only history.
     ledger_path: Option<&Path>,
 ) -> String {
-    let state = if incomplete {
-        "（summary_incomplete）"
-    } else {
-        ""
-    };
-    // P0-D S6 (2026-08-14): when no archive was written (termination state)
-    // the digest placeholder must be explicit instead of a misleading
-    // 64-zero digest — the event already carries `summary_digest: null`.
-    let digest_line = if digest.is_empty() {
-        "摘要 digest: （未生成——摘要重试失败）".to_string()
-    } else {
-        format!("摘要 digest: sha256:{digest}")
-    };
+    // 机械模式（2026-08-18 B 定案，ADR-0010 §14.29）：压缩恒写存档，
+    // digest 恒存在——无「摘要重试失败」终止态。
+    let digest_line = format!("摘要 digest: sha256:{digest}");
     let ledger_line =
         ledger_path.map_or_else(String::new, |p| format!("历史摘要累积于 {}\n", p.display()));
     format!(
-        "[前文上下文已压缩 v0.2 {state}]\n\
+        "[前文上下文已压缩 v0.2]\n\
          {guard_note}\
          {archive_note}\
          {ledger_line}\
@@ -413,12 +276,12 @@ pub fn build_summary_marker(
         slots.plan,
         slots.paths,
         if slots.notes.is_empty() {
-            "（生成失败）"
+            MECHANICAL_NOTES_PLACEHOLDER
         } else {
             &slots.notes
         },
         if slots.continuation.is_empty() {
-            "（生成失败）"
+            MECHANICAL_CONTINUATION_PLACEHOLDER
         } else {
             &slots.continuation
         },
@@ -454,44 +317,6 @@ mod tests {
             notes: "确认由前缀缓存引起".into(),
             continuation: "下一步：跑回归测试".into(),
         }
-    }
-
-    #[test]
-    fn parse_valid_model_output() {
-        let mechanical = slots();
-        let output = format!(
-            "{NOTES_OPEN} 确认由前缀缓存引起；{} [/注意事项]\n\
-                 {CONTINUATION_OPEN} 下一步：跑回归测试；{}{CONTINUATION_CLOSE}",
-            "补充说明。".repeat(60),
-            "继续执行。".repeat(60),
-        );
-        let parsed = parse_model_output(&output, &mechanical).unwrap();
-        assert!(parsed.notes.starts_with("确认由前缀缓存引起"));
-        assert!(parsed.continuation.starts_with("下一步：跑回归测试"));
-        assert!(parsed.total_chars() <= SUMMARY_MAX_TOTAL_CHARS);
-    }
-
-    #[test]
-    fn parse_missing_slot_rejected() {
-        let mechanical = slots();
-        let output = "[注意事项] 只有注意事项";
-        assert!(matches!(
-            parse_model_output(output, &mechanical),
-            Err(SummaryError::MissingSlot(_))
-        ));
-    }
-
-    #[test]
-    fn parse_oversized_slot_rejected() {
-        let mechanical = slots();
-        let output = format!(
-            "{NOTES_OPEN}{}{NOTES_CLOSE}{CONTINUATION_OPEN}x{CONTINUATION_CLOSE}",
-            "长".repeat(SUMMARY_SLOT_LIMITS[3] + 1)
-        );
-        assert!(matches!(
-            parse_model_output(&output, &mechanical),
-            Err(SummaryError::SlotTooLong(..))
-        ));
     }
 
     #[test]
@@ -553,25 +378,6 @@ mod tests {
     }
 
     #[test]
-    fn degenerate_guard_english_threshold() {
-        let short = "x".repeat(SUMMARY_MIN_EFFECTIVE_CHARS - 1);
-        assert!(is_degenerate_summary(&short));
-        let boundary = "x".repeat(SUMMARY_MIN_EFFECTIVE_CHARS);
-        assert!(!is_degenerate_summary(&boundary));
-    }
-
-    #[test]
-    fn degenerate_guard_chinese_counts_double() {
-        // 149 CJK chars = 298 effective chars — degenerate.
-        assert!(is_degenerate_summary(&"汉".repeat(149)));
-        // 150 CJK chars = 300 effective chars — accepted.
-        assert!(!is_degenerate_summary(&"汉".repeat(150)));
-        // Mixed: 100 CJK + 100 ASCII = 300 effective chars — accepted.
-        let mixed = format!("{}{}", "汉".repeat(100), "x".repeat(100));
-        assert!(!is_degenerate_summary(&mixed));
-    }
-
-    #[test]
     fn archive_write_retry_persists_and_reports_failure() {
         let dir = std::env::temp_dir().join(format!(
             "orz-summary-archive-test-{}",
@@ -598,8 +404,7 @@ mod tests {
     #[test]
     fn marker_carries_content_pointer_and_digest() {
         let slots = slots();
-        let markdown =
-            summary_archive_markdown("compaction-RUN-X-001", &slots, 3, false, false, None);
+        let markdown = summary_archive_markdown("compaction-RUN-X-001", &slots, 3, false, None);
         let digest = archive_digest(&markdown);
         let marker = build_summary_marker(
             "compaction-RUN-X-001",
@@ -607,7 +412,6 @@ mod tests {
             Path::new(".gsa/compaction/compaction-RUN-X-001.md"),
             &slots,
             3,
-            false,
             false,
             false,
             3,
@@ -633,14 +437,8 @@ mod tests {
         let slots = slots();
         let pointer =
             crate::action_ledger::build_pointer_message(Path::new(".gsa/ledger/current.md"));
-        let markdown = summary_archive_markdown(
-            "compaction-RUN-X-001",
-            &slots,
-            3,
-            false,
-            false,
-            Some(&pointer),
-        );
+        let markdown =
+            summary_archive_markdown("compaction-RUN-X-001", &slots, 3, false, Some(&pointer));
         assert!(
             markdown.contains("## 折叠视图（冻结快照：外挂指针）"),
             "{markdown}"
@@ -655,7 +453,6 @@ mod tests {
             3,
             false,
             false,
-            false,
             3,
             Some(Path::new(".gsa/ledger/current.md")),
         );
@@ -663,28 +460,35 @@ mod tests {
     }
 
     #[test]
-    fn incomplete_marker_flags_state() {
+    fn mechanical_placeholder_slots_in_marker_and_archive() {
+        // 2026-08-18 B 定案（D1=(b)）：压缩零模型调用，注意事项/后续衔接
+        // 为固定机械占位——无 summary_incomplete 终止态、无「生成失败」。
         let slots = SummarySlots {
             notes: String::new(),
             continuation: String::new(),
             ..slots()
         };
+        let markdown = summary_archive_markdown("compaction-RUN-X-002", &slots, 2, false, None);
+        assert!(markdown.contains("机械模式"));
+        assert!(markdown.contains(MECHANICAL_NOTES_PLACEHOLDER));
+        assert!(markdown.contains(MECHANICAL_CONTINUATION_PLACEHOLDER));
+        assert!(!markdown.contains("生成失败"));
+        let digest = archive_digest(&markdown);
         let marker = build_summary_marker(
             "compaction-RUN-X-002",
-            "",
+            &digest,
             Path::new(".gsa/compaction/x.md"),
             &slots,
             2,
-            true,
             false,
             false,
             2,
             None,
         );
-        assert!(marker.contains("summary_incomplete"));
-        assert!(marker.contains("（生成失败）"));
-        assert!(marker.contains("摘要 digest: （未生成"));
-        assert!(!marker.contains("sha256:000000"));
+        assert!(!marker.contains("summary_incomplete"));
+        assert!(marker.contains(MECHANICAL_NOTES_PLACEHOLDER));
+        assert!(marker.contains(MECHANICAL_CONTINUATION_PLACEHOLDER));
+        assert!(marker.contains(&format!("sha256:{digest}")));
         assert!(marker.contains("黑板 plan_epoch: 2"));
     }
 
@@ -697,7 +501,6 @@ mod tests {
             Path::new(".gsa/compaction/x.md"),
             &slots,
             2,
-            false,
             true,
             true,
             0,

@@ -469,27 +469,29 @@ pub(crate) enum CompactDecision {
     /// Collapsible content exists but the reduction guard is not
     /// satisfiable and the compaction was not forced.
     GuardBlocked,
-    /// A compaction executed (summary complete or `summary_incomplete`
-    /// termination state).
-    Executed { incomplete: bool },
+    /// A compaction executed (机械模式：零模型调用，2026-08-18 B 定案，
+    /// ADR-0010 §14.29——无 summary_incomplete 终止态).
+    Executed,
 }
 
-/// The shared five-section template-summary flow (P0-D S3 + review fixes).
+/// The shared five-section mechanical compaction flow (P0-D S3 + review
+/// fixes + 2026-08-18 B 定案, ADR-0010 §14.29).
 ///
 /// Used by the loop-top rhythm/fallback trigger and by the end-of-session
-/// compaction (reason = "session_end", forced). Runs the summary ≤3 times,
-/// persists the archive with bounded retries (an archive failure is
-/// explicitly reported in the marker and the event), truncates the
-/// conversation, inserts the rolling single marker and journals
-/// `context_compressed` v0.2. v1.15 (2026-08-14): compaction never touches
-/// the blackboard — the blackboard lifecycle is the plan epoch, not the
+/// compaction (reason = "session_end", forced). Makes ZERO model calls:
+/// the five slots come from the blackboard + mechanical placeholders
+/// (注意事项/后续衔接 — 阶段 (c) 事实聚合落地前), the archive is persisted
+/// with bounded retries (an archive failure is explicitly reported in the
+/// marker and the event), the conversation is truncated, the rolling single
+/// marker is inserted and `context_compressed` v0.2 is journaled with
+/// `mode: "mechanical"`. v1.15 (2026-08-14): compaction never touches the
+/// blackboard — the blackboard lifecycle is the plan epoch, not the
 /// context window.
 #[allow(clippy::too_many_arguments)]
 pub(crate) async fn run_template_compact(
     svc: &SharedLoopServices<'_>,
     writer: &mut EventWriter<'_>,
     host: &dyn LoopHost,
-    agent: &dyn RoundAgent,
     messages: &mut Vec<Message>,
     measured: u64,
     reason: &str,
@@ -508,8 +510,6 @@ pub(crate) async fn run_template_compact(
     // as the main requests (同源), the drain cut is `fold_cut` when
     // folded, and the state is reset once the conversation is mutated.
     fold_state: &mut crate::action_ledger::LedgerFoldState,
-    cancel: Option<&tokio_util::sync::CancellationToken>,
-    heartbeat: Option<&ActivityClock>,
 ) -> Result<CompactDecision, AgentLoopError> {
     // FUS-LEDGER-FOLD-STATE 400 修复 (2026-08-18, ADR-0010 §14.27 / 处理文档
     // LEDGER_FOLD_MARKER_INDEX_FIX_HANDLING_2026-08-18 §2.1): the rolling
@@ -592,7 +592,7 @@ pub(crate) async fn run_template_compact(
             .map(|dir| dir.join(format!("epoch-{plan_epoch}.json")))
     });
     let epoch_archive = epoch_archive.flatten();
-    let mechanical = {
+    let slots = {
         let bb = svc.blackboard.read();
         let (purpose, plan, paths) =
             crate::summary::mechanical_slots(&bb, &archive_path, epoch_archive.as_deref());
@@ -600,220 +600,108 @@ pub(crate) async fn run_template_compact(
             purpose,
             plan,
             paths,
-            notes: String::new(),
-            continuation: String::new(),
+            // 2026-08-18 B 定案（D1=(b)，ADR-0010 §14.29）：压缩零模型
+            // 调用——注意事项/后续衔接为固定机械占位；阶段 (c)（HA 结构
+            // 化事实聚合）落地前由主模型按 marker 回查入口自行承接。
+            notes: crate::summary::MECHANICAL_NOTES_PLACEHOLDER.to_string(),
+            continuation: crate::summary::MECHANICAL_CONTINUATION_PLACEHOLDER.to_string(),
         }
     };
-    // Summary input = mechanical slots + the collapsed history prefix
-    // (tool records already mechanically handled by the first layer).
-    let summary_input = {
-        let mut input = vec![Message {
-            role: Role::User,
-            content: crate::summary::summary_user_prompt(&mechanical),
-            tool_call_id: None,
-            tool_calls: Vec::new(),
-            reasoning_content: None,
-        }];
-        // FUS-LEDGER-FOLD-STATE (2026-08-18, ADR-0010 §14.26): the
-        // summary input is the SAME stateful folded view as the main
-        // requests — 摘要输入与主请求同源, never a separate stateless
-        // recomputation (avoids a second measurement口径).
-        input.extend(crate::action_ledger::build_request_view(
-            messages, fold_state,
-        ));
-        input
-    };
-    let mut outcome: Option<crate::summary::SummarySlots> = None;
-    for _attempt in 0..crate::summary::SUMMARY_MAX_ATTEMPTS {
-        // P0-D review fix (2026-08-14): the summary call has its own 120s
-        // wall-clock budget — a hung summarizer must fall through to the
-        // retry/termination path instead of holding the run at the session
-        // transport's far longer timeouts.
-        let timed = tokio::time::timeout(
-            crate::summary::SUMMARY_CALL_TIMEOUT,
-            agent.run_round(
-                &crate::summary::summary_system_prompt(),
-                summary_input.clone(),
-                Vec::new(),
-                crate::summary::SUMMARY_MAX_TOKENS,
-                cancel,
-                heartbeat,
-                &mut |_| {},
-            ),
-        )
-        .await;
-        match timed {
-            Ok(Ok(resp)) => {
-                match crate::summary::parse_model_output(
-                    resp.text.as_deref().unwrap_or(""),
-                    &mechanical,
-                ) {
-                    Ok(slots) => {
-                        outcome = Some(slots);
-                        break;
-                    }
-                    Err(_) => continue,
-                }
-            }
-            Ok(Err(_)) | Err(_) => continue,
-        }
-    }
-
+    // 机械模式（2026-08-18 B 定案）：存档恒写入（审计副本 + digest），
+    // marker 恒携带真实 digest/路径——无 summary_incomplete 终止态。
+    let markdown = crate::summary::summary_archive_markdown(
+        &id,
+        &slots,
+        rounds_dropped,
+        guard_failed,
+        // FUS-LEDGER-FOLD-STATE (2026-08-18, ADR-0010 §14.26 + §14.28
+        // external-file design): the archive preserves the folded view the
+        // model saw — the byte-fixed pointer message. The folded ROWS
+        // survive in the append-only external ledger file (never drained
+        // by compaction), which the marker points a restored conversation
+        // at. The fold state is still folded here (reset happens after the
+        // drain).
+        fold_state.folded_ledger.as_deref(),
+    );
+    let digest = crate::summary::archive_digest(&markdown);
+    let archive_write_failed =
+        !crate::summary::write_archive_retry(&archive_dir, &archive_path, &markdown);
+    let marker = crate::summary::build_summary_marker(
+        &id,
+        &digest,
+        &archive_path,
+        &slots,
+        rounds_dropped,
+        guard_failed,
+        archive_write_failed,
+        plan_epoch,
+        ledger_hint,
+    );
     let first_round_start = messages
         .iter()
         .position(|m| m.role == Role::Assistant && !m.tool_calls.is_empty())
         .unwrap_or(messages.len());
-    if let Some(slots) = outcome {
-        let markdown = crate::summary::summary_archive_markdown(
-            &id,
-            &slots,
-            rounds_dropped,
-            false,
-            guard_failed,
-            // FUS-LEDGER-FOLD-STATE (2026-08-18, ADR-0010 §14.26 + §14.28
-            // external-file design): the archive preserves the folded view
-            // the model saw — the byte-fixed pointer message. The folded
-            // ROWS survive in the append-only external ledger file (never
-            // drained by compaction), which the marker points a restored
-            // conversation at. The fold state is still folded here (reset
-            // happens after the drain).
-            fold_state.folded_ledger.as_deref(),
-        );
-        let digest = crate::summary::archive_digest(&markdown);
-        let archive_write_failed =
-            !crate::summary::write_archive_retry(&archive_dir, &archive_path, &markdown);
-        let marker = crate::summary::build_summary_marker(
-            &id,
-            &digest,
-            &archive_path,
-            &slots,
-            rounds_dropped,
-            false,
-            guard_failed,
-            archive_write_failed,
-            plan_epoch,
-            ledger_hint,
-        );
-        let messages_dropped = messages.drain(first_round_start..kept_start).count();
-        messages.insert(
-            first_round_start,
-            Message {
-                role: Role::User,
-                content: marker,
-                tool_call_id: None,
-                tool_calls: Vec::new(),
-                reasoning_content: None,
-            },
-        );
-        // FUS-LEDGER-FOLD-STATE (2026-08-18, ADR-0010 §14.26): the
-        // conversation was mutated (drain + marker) — the frozen fold
-        // indices are stale. Reset; the view re-accumulates from the
-        // marker (折叠重置为 None，marker 之后重新累积).
-        fold_state.reset();
-        writer
-            .record(
-                EventType::ContextCompressed,
-                serde_json::json!({
-                    "trigger_tokens": measured,
-                    "target_tokens": after,
-                    "rounds_since_last_compaction": rounds_since,
-                    "rounds_dropped": rounds_dropped,
-                    "messages_dropped": messages_dropped,
-                    "messages_kept": messages.len(),
-                    "estimated_tokens_after": after,
-                    "mode": "template_summary",
-                    "reason": reason,
-                    "summary_id": id,
-                    "summary_digest": digest,
-                    "summary_path": archive_path.display().to_string(),
-                    "summary_incomplete": false,
-                    "retained_rounds": tail,
-                    "guard_failed": guard_failed,
-                    "archive_write_failed": archive_write_failed,
-                }),
-            )
-            .await?;
-        Ok(CompactDecision::Executed { incomplete: false })
-    } else {
-        // Termination state: mechanical slots only, marker flagged
-        // `summary_incomplete`, wider recent tail; on the FALLBACK trigger
-        // the conversation is still mechanically truncated so the run never
-        // stays over the window (D2-2 emergency — the guard-failure path
-        // itself never uses raw truncation, per the review fix).
-        let mechanical_slots = crate::summary::SummarySlots {
-            notes: String::new(),
-            continuation: String::new(),
-            ..mechanical
-        };
-        let marker = crate::summary::build_summary_marker(
-            "summary-incomplete",
-            "",
-            &archive_dir,
-            &mechanical_slots,
-            rounds_dropped,
-            true,
-            guard_failed,
-            false,
-            plan_epoch,
-            ledger_hint,
-        );
-        let mut dropped = rounds_dropped;
-        let mut messages_dropped = 0usize;
-        let mut final_after = after;
-        if reason == "fallback" {
-            let stats = compact_messages(messages, cfg.recovery_target_tokens);
-            if stats.rounds_dropped > 0 {
-                dropped = stats.rounds_dropped;
-                messages_dropped = stats.messages_dropped;
-                final_after = stats.estimated_tokens_after;
-            }
+    let mut dropped = rounds_dropped;
+    let mut messages_dropped = messages.drain(first_round_start..kept_start).count();
+    // FALLBACK 紧急口径保持（D2-2）：200K 兜底触发时，常规 drain 后再按
+    // recovery_target_tokens 机械截断，保证 run 绝不滞留在窗口之上
+    // （机械模式无失败路径，此步为纯兜底）。
+    let mut final_after = after;
+    let mut insert_at = first_round_start;
+    if reason == "fallback" {
+        let stats = compact_messages(messages, cfg.recovery_target_tokens);
+        if stats.rounds_dropped > 0 {
+            dropped = stats.rounds_dropped;
+            messages_dropped += stats.messages_dropped;
+            final_after = stats.estimated_tokens_after;
+            insert_at = messages
+                .iter()
+                .position(|m| m.role == Role::Assistant && !m.tool_calls.is_empty())
+                .unwrap_or(messages.len());
         }
-        let insert_at = messages
-            .iter()
-            .position(|m| m.role == Role::Assistant && !m.tool_calls.is_empty())
-            .unwrap_or(messages.len());
-        messages.insert(
-            insert_at,
-            Message {
-                role: Role::User,
-                content: marker,
-                tool_call_id: None,
-                tool_calls: Vec::new(),
-                reasoning_content: None,
-            },
-        );
-        // FUS-LEDGER-FOLD-STATE (2026-08-18, ADR-0010 §14.26): same reset
-        // on the termination path — the conversation changed (marker and
-        // possibly mechanical truncation), stale fold indices are dropped.
-        fold_state.reset();
-        if final_after == after {
-            final_after = estimate_messages_tokens(messages);
-        }
-        writer
-            .record(
-                EventType::ContextCompressed,
-                serde_json::json!({
-                    "trigger_tokens": measured,
-                    "target_tokens": final_after,
-                    "rounds_since_last_compaction": rounds_since,
-                    "rounds_dropped": dropped,
-                    "messages_dropped": messages_dropped,
-                    "messages_kept": messages.len(),
-                    "estimated_tokens_after": final_after,
-                    "mode": "template_summary",
-                    "reason": reason,
-                    "summary_id": null,
-                    "summary_digest": null,
-                    "summary_path": null,
-                    "summary_incomplete": true,
-                    "retained_rounds": tail + 1,
-                    "guard_failed": guard_failed,
-                    "archive_write_failed": false,
-                }),
-            )
-            .await?;
-        Ok(CompactDecision::Executed { incomplete: true })
     }
+    messages.insert(
+        insert_at,
+        Message {
+            role: Role::User,
+            content: marker,
+            tool_call_id: None,
+            tool_calls: Vec::new(),
+            reasoning_content: None,
+        },
+    );
+    // FUS-LEDGER-FOLD-STATE (2026-08-18, ADR-0010 §14.26): the conversation
+    // was mutated (drain + marker + possibly mechanical truncation) — the
+    // frozen fold indices are stale. Reset; the view re-accumulates from
+    // the marker (折叠重置为 None，marker 之后重新累积).
+    fold_state.reset();
+    if final_after == after {
+        final_after = estimate_messages_tokens(messages);
+    }
+    writer
+        .record(
+            EventType::ContextCompressed,
+            serde_json::json!({
+                "trigger_tokens": measured,
+                "target_tokens": final_after,
+                "rounds_since_last_compaction": rounds_since,
+                "rounds_dropped": dropped,
+                "messages_dropped": messages_dropped,
+                "messages_kept": messages.len(),
+                "estimated_tokens_after": final_after,
+                "mode": "mechanical",
+                "reason": reason,
+                "summary_id": id,
+                "summary_digest": digest,
+                "summary_path": archive_path.display().to_string(),
+                "summary_incomplete": false,
+                "retained_rounds": tail,
+                "guard_failed": guard_failed,
+                "archive_write_failed": archive_write_failed,
+            }),
+        )
+        .await?;
+    Ok(CompactDecision::Executed)
 }
 
 /// The shared model↔tool loop (M1 extraction, 2026-08-10).
@@ -983,7 +871,6 @@ pub(crate) async fn run_agent_loop(
             && last_prompt_tokens.is_some_and(|m| m > svc.context_compact.trigger_tokens)
             && rounds_since_compact >= svc.context_compact.min_rounds;
         let summary_now = fallback_now || rhythm_now;
-        let mut failure_widened_tail = false;
         if summary_now && let Some(measured) = last_prompt_tokens {
             let reason = if fallback_now { "fallback" } else { "rhythm" };
             let tail = svc.context_compact.recent_tail_rounds;
@@ -997,7 +884,6 @@ pub(crate) async fn run_agent_loop(
                 svc,
                 writer,
                 host,
-                agent,
                 messages,
                 measured,
                 reason,
@@ -1007,18 +893,14 @@ pub(crate) async fn run_agent_loop(
                 tail,
                 ledger_hint.as_deref(),
                 &mut fold_state,
-                cancel,
-                heartbeat,
             )
             .await?
             {
-                CompactDecision::Executed { incomplete } => {
-                    // A compaction consumed the window (complete or
-                    // termination state): the cooldown restarts and the
-                    // guard retry chain resets.
+                CompactDecision::Executed => {
+                    // A compaction consumed the window (机械模式): the
+                    // cooldown restarts and the guard retry chain resets.
                     guard_failures = 0;
                     rounds_since_compact = 0;
-                    failure_widened_tail = incomplete;
                 }
                 CompactDecision::NoOp => {
                     guard_failures = 0;
@@ -1034,7 +916,6 @@ pub(crate) async fn run_agent_loop(
                             svc,
                             writer,
                             host,
-                            agent,
                             messages,
                             measured,
                             reason,
@@ -1044,14 +925,11 @@ pub(crate) async fn run_agent_loop(
                             tail,
                             ledger_hint.as_deref(),
                             &mut fold_state,
-                            cancel,
-                            heartbeat,
                         )
                         .await?
                         {
-                            CompactDecision::Executed { incomplete } => {
+                            CompactDecision::Executed => {
                                 rounds_since_compact = 0;
-                                failure_widened_tail = incomplete;
                             }
                             _ => {}
                         }
@@ -1083,8 +961,7 @@ pub(crate) async fn run_agent_loop(
             // session_cwd，外挂文件是主会话的模型可读投影；子车道窗口小，
             // 压缩机制已覆盖，避免多车道行混入同一文件（指针消息「本会话
             // 内固定」契约）。`fold_disabled` = 连续写失败后的降级开关。
-            let fold_tail =
-                svc.context_compact.fold_tail_rounds + if failure_widened_tail { 1 } else { 0 };
+            let fold_tail = svc.context_compact.fold_tail_rounds;
             let view_estimate = {
                 let view = crate::action_ledger::build_request_view(messages, &fold_state);
                 estimate_messages_tokens(&view)
@@ -3007,26 +2884,6 @@ mod tests {
         }
     }
 
-    struct CompactSummaryAgent {
-        response: ModelResponse,
-    }
-
-    #[async_trait::async_trait]
-    impl RoundAgent for CompactSummaryAgent {
-        async fn run_round(
-            &self,
-            _system: &str,
-            _messages: Vec<Message>,
-            _tools: Vec<ToolDef>,
-            _max_tokens: u32,
-            _cancel: Option<&tokio_util::sync::CancellationToken>,
-            _heartbeat: Option<&ActivityClock>,
-            _on_chunk: &mut (dyn for<'a> FnMut(&'a str) + Send),
-        ) -> Result<ModelResponse, GatewayError> {
-            Ok(self.response.clone())
-        }
-    }
-
     fn compact_test_svc<'a>(
         cfg: &'a ContextCompactConfig,
         blackboard: &'a Arc<SharedBlackboard>,
@@ -3097,20 +2954,6 @@ mod tests {
         }
     }
 
-    fn compact_dummy_response() -> ModelResponse {
-        ModelResponse {
-            text: None,
-            tool_calls: Vec::new(),
-            finish_reason: FinishReason::Stop,
-            reasoning_content: None,
-            reasoning_tokens: None,
-            completion_tokens: None,
-            cache_hit_tokens: None,
-            cache_miss_tokens: None,
-            prompt_tokens: None,
-        }
-    }
-
     /// 压缩触发但缩减守卫不满足 → `GuardBlocked`：messages 与折叠三态均
     /// 不变（旧代码在此路径删除了 marker、折叠索引未失效 → 后续视图
     /// preamble 裸露声明 → provider 400）。
@@ -3128,9 +2971,6 @@ mod tests {
         let policy = AtomicU64::new(0);
         let svc = compact_test_svc(&cfg, &blackboard, &denial_state, &pacing, &dc, &policy);
         let mut writer = crate::controller::discard_event_writer("test-run");
-        let agent = CompactSummaryAgent {
-            response: compact_dummy_response(),
-        };
         let mut messages = compact_test_messages();
         let mut fold = compact_folded_state();
         let before_messages = messages.clone();
@@ -3139,7 +2979,6 @@ mod tests {
             &svc,
             &mut writer,
             &host,
-            &agent,
             &mut messages,
             0, // measured=0 → removable=0 < min_compactable → 守卫必不满足
             "rhythm",
@@ -3149,8 +2988,6 @@ mod tests {
             2,
             None,
             &mut fold,
-            None,
-            None,
         )
         .await
         .expect("guard path returns a decision");
@@ -3182,19 +3019,12 @@ mod tests {
         let policy = AtomicU64::new(0);
         let svc = compact_test_svc(&cfg, &blackboard, &denial_state, &pacing, &dc, &policy);
         let mut writer = crate::controller::discard_event_writer("test-run");
-        // 可解析的五段模板输出：两个模型生成槽（≥300 有效字符）。
-        let notes = format!("[注意事项]\n{}\n[/注意事项]", "n".repeat(160));
-        let continuation = format!("[后续衔接]\n{}\n[/后续衔接]", "c".repeat(160));
-        let agent = CompactSummaryAgent {
-            response: ModelResponse::text_response(format!("{notes}\n{continuation}")),
-        };
         let mut messages = compact_test_messages();
         let mut fold = compact_folded_state();
         let decision = run_template_compact(
             &svc,
             &mut writer,
             &host,
-            &agent,
             &mut messages,
             100_000, // force=true 跳过缩减守卫，measured 仅用于事件口径
             "rhythm",
@@ -3204,12 +3034,10 @@ mod tests {
             2,
             None,
             &mut fold,
-            None,
-            None,
         )
         .await
         .expect("execution path returns a decision");
-        assert_eq!(decision, CompactDecision::Executed { incomplete: false });
+        assert_eq!(decision, CompactDecision::Executed);
         // marker 删除使 fold_cut 4→3；drain [first_round_start=1..3) 丢弃
         // c1 轮（声明+回复 2 条）；新 marker 插入索引 1 → U0+marker+c2 轮。
         assert_eq!(messages.len(), 4, "U0 + marker + c2 轮");
