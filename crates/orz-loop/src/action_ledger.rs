@@ -305,6 +305,20 @@ pub fn build_request_view(messages: &[Message], fold: &LedgerFoldState) -> Vec<M
     let Some(ledger) = fold.folded_ledger.as_deref() else {
         return messages.to_vec();
     };
+    // FUS-LEDGER-FOLD-STATE 复验修复 (2026-08-18, make-doom-for-mips 单题
+    // 复验 400 根因)：`fold_cut` 必须落在完整轮起点——尾部 `[cut..]` 不得
+    // 以孤儿 tool 消息开头（其轮起点在 cut 之前）或含未配对 assistant
+    // 声明，否则 provider 报 `invalid_request_error`（assistant tool_calls
+    // 后 tool 消息不足）。压缩（marker 插入）与状态行尾随消息会移动消息
+    // 索引，防御性回退到最近安全轮起点，并留痕供审计。
+    let cut = safe_fold_cut(messages, fold_cut);
+    if cut != fold_cut {
+        tracing::warn!(
+            fold_cut,
+            cut,
+            "ledger fold cut adjusted to a complete round start (provider pairing guard)"
+        );
+    }
     let mut view = messages[..fold_start].to_vec();
     view.push(Message {
         role: Role::User,
@@ -313,8 +327,42 @@ pub fn build_request_view(messages: &[Message], fold: &LedgerFoldState) -> Vec<M
         tool_calls: Vec::new(),
         reasoning_content: None,
     });
-    view.extend_from_slice(&messages[fold_cut..]);
+    view.extend_from_slice(&messages[cut..]);
     view
+}
+
+/// 折叠态下的安全保留起点：`cut` 若落在某个工具轮的中间（尾部以孤儿
+/// tool 消息开头）或起点轮不完整，向前回退到最近的完整轮起点——保证
+/// 视图尾部任何 assistant 工具声明都带足 tool 回复（provider 协议配对
+/// 不变量）。`round_ranges` 的起点恒为 assistant 声明；正常情况下
+/// `advance_fold` 的 `kept_start` 已是轮起点，此函数为压缩/状态行等
+/// 索引漂移场景的防御兜底。
+fn safe_fold_cut(messages: &[Message], cut: usize) -> usize {
+    let ranges = round_ranges(messages);
+    let mut c = cut;
+    loop {
+        // 最后一个起点 <= c 的轮（c 落在其内部或其后缘）。
+        let Some(idx) = ranges.iter().rposition(|&(s, _)| s <= c) else {
+            return c;
+        };
+        let (s, e) = ranges[idx];
+        if c == s {
+            // 起点恰为轮起点：若该轮完整则安全；否则（防御场景）前移
+            // 到上一轮起点继续检查，直至 fold 区起点（preamble 边界）。
+            if is_round_complete(messages, (s, e)) {
+                return c;
+            }
+            if idx == 0 {
+                // 最前轮仍不完整——保留原 cut（loop-top 不变量保证正常
+                // 路径不会到达；此处仅避免死循环）。
+                return cut;
+            }
+            c = ranges[idx - 1].0;
+            continue;
+        }
+        // cut 落在轮中间（孤儿 tool 消息风险）——回退到该轮起点。
+        c = s;
+    }
 }
 
 /// FUS-LEDGER-FOLD-STATE (2026-08-18, ADR-0010 §14.26): advance the fold
@@ -402,6 +450,52 @@ mod tests {
             .filter(|m| m.role == Role::Assistant)
             .flat_map(|m| m.tool_calls.iter().map(|tc| tc.call_id.clone()))
             .collect()
+    }
+
+    /// FUS-LEDGER-FOLD-STATE 复验修复 (2026-08-18)：`fold_cut` 落在轮中间
+    /// （孤儿 tool 消息风险）时回退到最近完整轮起点。
+    #[test]
+    fn safe_fold_cut_mid_round_falls_back_to_round_start() {
+        let mut messages = vec![msg(Role::User, "任务")];
+        messages.extend(round("c1", "read_file", "a.py", "A"));
+        messages.extend(round("c2", "grep", "b.rs", "B"));
+        // 消息结构：0=user, 1=assistant(c1), 2=tool(c1), 3=assistant(c2),
+        // 4=tool(c2)。
+        assert_eq!(safe_fold_cut(&messages, 2), 1, "cut at tool msg of round 1");
+        assert_eq!(safe_fold_cut(&messages, 4), 3, "cut at tool msg of round 2");
+        assert_eq!(safe_fold_cut(&messages, 3), 3, "complete round start");
+        assert_eq!(safe_fold_cut(&messages, 5), 3, "cut past the end");
+    }
+
+    /// 折叠态下视图尾部不得含孤儿 tool 消息——cut 回退后第一条必须是
+    /// assistant 声明，且所有声明都有 tool 回复。
+    #[test]
+    fn build_request_view_adjusts_orphan_tool_tail() {
+        let mut messages = vec![msg(Role::User, "任务")];
+        messages.extend(round("c1", "read_file", "a.py", "A"));
+        messages.extend(round("c2", "grep", "b.rs", "B"));
+        let fold = LedgerFoldState {
+            fold_start: Some(1),
+            fold_cut: Some(2),
+            folded_ledger: Some("ledger".to_string()),
+        };
+        let view = build_request_view(&messages, &fold);
+        // 视图 = [user(0), ledger, 尾部[1..]（c1 轮 + c2 轮，4 条）] = 6 条。
+        assert_eq!(view.len(), 6);
+        assert_eq!(view[0], messages[0]);
+        assert_eq!(view[1].role, Role::User);
+        assert!(view[1].content.contains("ledger"));
+        assert_eq!(view[2], messages[1], "tail starts at assistant declaration");
+        let declared = declared_ids(&view[2..]);
+        let replied: Vec<&str> = view[2..]
+            .iter()
+            .filter(|m| m.role == Role::Tool)
+            .filter_map(|m| m.tool_call_id.as_deref())
+            .collect();
+        assert!(
+            declared.iter().all(|d| replied.contains(&d.as_str())),
+            "every declared call has a tool reply"
+        );
     }
 
     #[test]
