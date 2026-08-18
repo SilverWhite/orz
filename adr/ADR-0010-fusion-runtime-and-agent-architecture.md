@@ -2065,3 +2065,9 @@ ADR §3.6 正文修订随实施登记。
    双模式落地后的既有测试漂移（codex_app 12 + acp_server 1，orz c4772fc；
    orz-host 需 `--test-threads=1` 规避负载敏感的进程树超时竞争）。验证②
    （Linux musl 重建）进行中——Docker 引擎卡死，用户裁定重启电脑后续跑。
+   验证③取证（2026-08-18）：make-doom-for-mips 三次复验均 400
+   `insufficient tool messages` 退出；核心机制已验证（订单→发放→
+   run_terminal_cmd exit=0 + ACAF 票据路径）；根因链闭合=折叠 cut 破坏
+   plan_write 轮配对 + safe_fold_cut idx==0 兜底（取证存档
+   `D:\tb-eval\jobs\2026-08-18__08-44-56\ROOTCAUSE_FORENSICS_20260818.md`；
+   orz 3bd09fc/5bc3add 取证 WIP），修复待下一窗口。

@@ -259,7 +259,13 @@
   （ORZ-BUILD-MOUNT-001，输出 `D:/tb-eval/orz-linux`）；③ 单题
   make-doom-for-mips 复验（reward > 0、journal 出现 `workspace.run_terminal`
   订单→run_host_tool→ACAF `command_exec` issued/consumed、无 400/无异常
-  policy_denied）；④ 2–3 题交叉（build/run 类 compile-compcert、网络类
+  policy_denied）——**2026-08-18 取证进展**：核心机制已验证（订单→发放→
+  run_terminal_cmd exit=0、ACAF 票据路径生效），但三次复验均因 400
+  （`insufficient tool messages`）退出；根因链已闭合=折叠 cut 破坏
+  plan_write 轮配对 + `safe_fold_cut` idx==0 兜底（取证存档
+  `D:\tb-eval\jobs\2026-08-18__08-44-56\ROOTCAUSE_FORENSICS_20260818.md`，
+  orz 3bd09fc/5bc3add 取证 WIP），修复待下一窗口；④ 2–3 题交叉
+  （build/run 类 compile-compcert、网络类
   hf-model-inference）；⑤ `run_official_2.1.sh` 89 题 5 批。
 
 ### 0. 前置收尾（提交前需用户确认）

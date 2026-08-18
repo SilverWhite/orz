@@ -273,6 +273,14 @@
   journal 出现 `workspace.run_terminal` 订单→run_host_tool→ACAF
   `command_exec` issued/consumed、机制门不回归（无 400、step_id 绑定、
   无异常 policy_denied）。
+  **2026-08-18 取证进展**：三次复验均 reward 0（400 `insufficient tool
+  messages` 退出）。核心机制已验证：`workspace.run_terminal` 订单→发放→
+  `run_terminal_cmd` 执行 exit=0、ACAF 票据路径生效（journal 证据）。
+  400 根因链已闭合（取证存档
+  `D:\tb-eval\jobs\2026-08-18__08-44-56\ROOTCAUSE_FORENSICS_20260818.md`）：
+  折叠 cut 破坏 plan_write 轮配对（视图保留 assistant 声明、回复被折叠
+  侧吞掉）+ `safe_fold_cut` idx==0 兜底原样保留不完整首轮。修复待下
+  一窗口（orz 3bd09fc/5bc3add 为取证 WIP 提交）。
 - [ ] 验证④（用户指示暂缓）：2–3 题交叉（compile-compcert、hf-model-inference
   等 build/run 与网络类）。
 - [ ] 验证⑤（用户指示暂缓）：`run_official_2.1.sh` 89 题 5 批。

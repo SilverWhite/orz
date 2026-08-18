@@ -179,6 +179,13 @@
 > 双模式落地后的既有测试漂移（codex_app 12 + acp_server 1，orz c4772fc；
 > orz-host 需 `--test-threads=1`）。验证②（Linux musl 重建）进行中——
 > Docker 引擎卡死，用户裁定重启电脑后续跑。
+> 2026-08-18 验证③取证存档登记——make-doom-for-mips 单题复验三次均
+> reward 0（400 `insufficient tool messages` 退出）；核心机制已验证
+> （workspace.run_terminal 订单→发放→run_terminal_cmd exit=0 + ACAF
+> 票据路径），400 根因链闭合=折叠 cut 破坏 plan_write 轮配对 +
+> safe_fold_cut idx==0 兜底（取证存档
+> `D:\tb-eval\jobs\2026-08-18__08-44-56\ROOTCAUSE_FORENSICS_20260818.md`；
+> orz 3bd09fc/5bc3add 取证 WIP）。修复待下一窗口。
 > 2026-08-18 状态行缓存纪律 + 订单拒绝步骤语义设计定案登记（用户裁决；纯文档、
 > 未实施）——① `[任务状态]` 常驻状态行移出系统提示词，改为变化时追加的尾随
 > 用户消息（与预算剩余块同纪律）：根因=console 步骤机每笔订单 receipt 推进步骤
