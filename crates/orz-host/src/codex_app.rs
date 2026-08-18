@@ -1719,7 +1719,9 @@ mod tests {
                 recv_until(&mut r, "turn/completed").await;
                 let events = journal_events(&base, "thr_deny", 0);
                 assert!(
-                    !events.contains("\"tool\":\"run_terminal_cmd\",\"call_id\":\"ord-000001\",\"exit_code\""),
+                    !events.contains(
+                        "\"tool\":\"run_terminal_cmd\",\"call_id\":\"ord-000001\",\"exit_code\""
+                    ),
                     "denied tool must never start: {events}"
                 );
                 assert!(events.contains("\"deny\""), "denial is journaled: {events}");
@@ -1793,7 +1795,9 @@ mod tests {
 
                 let events = journal_events(&base, "thr_ro", 0);
                 assert!(
-                    !events.contains("\"tool\":\"run_terminal_cmd\",\"call_id\":\"ord-000001\",\"exit_code\""),
+                    !events.contains(
+                        "\"tool\":\"run_terminal_cmd\",\"call_id\":\"ord-000001\",\"exit_code\""
+                    ),
                     "the mutation order must never start the tool: {events}"
                 );
                 assert!(events.contains("\"read_file\""), "read executed: {events}");
@@ -1905,7 +1909,9 @@ mod tests {
                 // the workspace-write thread executed it.
                 let ro_events = journal_events(&base, "thr_ro", 0);
                 assert!(
-                    !ro_events.contains("\"tool\":\"run_terminal_cmd\",\"call_id\":\"ord-000001\",\"exit_code\""),
+                    !ro_events.contains(
+                        "\"tool\":\"run_terminal_cmd\",\"call_id\":\"ord-000001\",\"exit_code\""
+                    ),
                     "read-only thread never writes: {ro_events}"
                 );
                 assert!(
@@ -2032,7 +2038,9 @@ mod tests {
                 recv_until(&mut r, "turn/completed").await;
                 let events = journal_events(&base, "thr_to", 0);
                 assert!(
-                    !events.contains("\"tool\":\"run_terminal_cmd\",\"call_id\":\"ord-000001\",\"exit_code\""),
+                    !events.contains(
+                        "\"tool\":\"run_terminal_cmd\",\"call_id\":\"ord-000001\",\"exit_code\""
+                    ),
                     "{events}"
                 );
                 assert!(events.contains("\"deny\""), "timeout must deny: {events}");
