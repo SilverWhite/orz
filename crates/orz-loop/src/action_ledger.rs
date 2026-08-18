@@ -316,6 +316,21 @@ pub fn build_request_view(messages: &[Message], fold: &LedgerFoldState) -> Vec<M
         tracing::warn!(
             fold_cut,
             cut,
+            window = ?messages[cut.saturating_sub(2)..cut.saturating_add(10)]
+                .iter()
+                .map(|m| match m.role {
+                    Role::Assistant => format!(
+                        "A[{}]",
+                        m.tool_calls
+                            .iter()
+                            .map(|t| t.call_id.as_str())
+                            .collect::<Vec<_>>()
+                            .join(",")
+                    ),
+                    Role::Tool => format!("T[{}]", m.tool_call_id.as_deref().unwrap_or("?")),
+                    _ => "U".to_string(),
+                })
+                .collect::<Vec<_>>(),
             "ledger fold cut adjusted to a complete round start (provider pairing guard)"
         );
     }
@@ -332,11 +347,13 @@ pub fn build_request_view(messages: &[Message], fold: &LedgerFoldState) -> Vec<M
 }
 
 /// 折叠态下的安全保留起点：`cut` 若落在某个工具轮的中间（尾部以孤儿
-/// tool 消息开头）或起点轮不完整，向前回退到最近的完整轮起点——保证
-/// 视图尾部任何 assistant 工具声明都带足 tool 回复（provider 协议配对
-/// 不变量）。`round_ranges` 的起点恒为 assistant 声明；正常情况下
-/// `advance_fold` 的 `kept_start` 已是轮起点，此函数为压缩/状态行等
-/// 索引漂移场景的防御兜底。
+/// tool 消息开头）或起点轮不平衡，向前回退到最近的平衡轮起点——保证
+/// 视图尾部任何 assistant 工具声明都带足 tool 回复、且任何 tool 消息
+/// 都有前导声明（provider 协议配对不变量，双向——2026-08-18 复验补强：
+/// console 订单发放的 ord-xxx 额外 tool 消息属"孤儿"，单向检查漏网）。
+/// `round_ranges` 的起点恒为 assistant 声明；正常情况下 `advance_fold`
+/// 的 `kept_start` 已是轮起点，此函数为压缩/状态行等索引漂移场景的
+/// 防御兜底。
 fn safe_fold_cut(messages: &[Message], cut: usize) -> usize {
     let ranges = round_ranges(messages);
     let mut c = cut;
@@ -347,9 +364,9 @@ fn safe_fold_cut(messages: &[Message], cut: usize) -> usize {
         };
         let (s, e) = ranges[idx];
         if c == s {
-            // 起点恰为轮起点：若该轮完整则安全；否则（防御场景）前移
+            // 起点恰为轮起点：若该轮双向平衡则安全；否则（防御场景）前移
             // 到上一轮起点继续检查，直至 fold 区起点（preamble 边界）。
-            if is_round_complete(messages, (s, e)) {
+            if is_round_balanced(messages, (s, e)) {
                 return c;
             }
             if idx == 0 {
@@ -363,6 +380,26 @@ fn safe_fold_cut(messages: &[Message], cut: usize) -> usize {
         // cut 落在轮中间（孤儿 tool 消息风险）——回退到该轮起点。
         c = s;
     }
+}
+
+/// 双向配对检查：轮内每条声明的 call_id 都有 tool 回复，且每条 tool
+/// 消息的 call_id 都来自轮内声明（孤儿 tool 消息——如 console 订单发放
+/// 的 ord-xxx 额外回复——会被判不平衡，从而整轮回退保留，不折叠）。
+fn is_round_balanced(messages: &[Message], range: (usize, usize)) -> bool {
+    if !is_round_complete(messages, range) {
+        return false;
+    }
+    let (start, end) = range;
+    let declared: Vec<String> = messages[start..end]
+        .iter()
+        .filter(|m| m.role == Role::Assistant)
+        .flat_map(|m| m.tool_calls.iter().map(|tc| tc.call_id.clone()))
+        .collect();
+    messages[start..end]
+        .iter()
+        .filter(|m| m.role == Role::Tool)
+        .filter_map(|m| m.tool_call_id.as_deref())
+        .all(|id| declared.iter().any(|d| d == id))
 }
 
 /// FUS-LEDGER-FOLD-STATE (2026-08-18, ADR-0010 §14.26): advance the fold

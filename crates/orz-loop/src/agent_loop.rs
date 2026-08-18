@@ -1299,6 +1299,30 @@ pub(crate) async fn run_agent_loop(
         // until the first mechanical advance, then preamble + frozen
         // ledger + `[fold_cut..]` (byte-stable prefix, pure append).
         let request_messages = crate::action_ledger::build_request_view(messages, &fold_state);
+        // FUS-LEDGER-FOLD-STATE 复验取证 (2026-08-18)：`ORZ_DEBUG_VIEW=1`
+        // 时在请求失败路径 dump 实际发送的视图角色序列（定位折叠/压缩
+        // 交互下的消息配对破坏点；正常路径零成本）。
+        let view_debug = std::env::var("ORZ_DEBUG_VIEW")
+            .is_ok()
+            .then(|| {
+                request_messages
+                    .iter()
+                    .map(|m| match m.role {
+                        Role::Assistant => format!(
+                            "A[{}]",
+                            m.tool_calls
+                                .iter()
+                                .map(|t| t.call_id.as_str())
+                                .collect::<Vec<_>>()
+                                .join(",")
+                        ),
+                        Role::Tool => {
+                            format!("T[{}]", m.tool_call_id.as_deref().unwrap_or("?"))
+                        }
+                        _ => "U".to_string(),
+                    })
+                    .collect::<Vec<_>>()
+            });
         let response = match agent
             .run_round(
                 &system,
@@ -1329,6 +1353,12 @@ pub(crate) async fn run_agent_loop(
                 return Err(AgentLoopError::Cancelled);
             }
             Err(other) => {
+                if let Some(roles) = view_debug.as_ref() {
+                    tracing::error!(
+                        "model request failed ({other}); view roles: {}",
+                        roles.join(" ")
+                    );
+                }
                 // F-06 (D-7 "保留输出 + incomplete 标记 + 明确终止原因"): a
                 // stream that aborted after producing partial content
                 // must not lose it from the audit trail — journal it as
