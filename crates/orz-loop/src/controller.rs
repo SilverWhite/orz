@@ -4161,6 +4161,10 @@ impl AgentLoopController {
     /// archive dir returns an explicit message — never a silent fallback to
     /// the live board.
     ///
+    /// `receipt_id` (方案 B，2026-08-19，ADR-0010 §14.31 / 设计 §4.5)：结果栏
+    /// 单条 receipt 点读——仅与 section=actions 组合有效；与 epoch 组合 =
+    /// 归档快照点读；无 receipt_id 时整段输出与 S1 逐字节一致。
+    ///
     /// Review closure (P2-2, 2026-08-08): `since` is parsed as RFC 3339 —
     /// a bare string compare silently dropped same-instant records when the
     /// model passed 'Z' or truncated precision. Unparseable values fall
@@ -4170,6 +4174,7 @@ impl AgentLoopController {
         section: &str,
         since: Option<&str>,
         epoch: Option<u64>,
+        receipt_id: Option<&str>,
     ) -> String {
         if let Some(epoch) = epoch {
             let Some(dir) = &self.blackboard_archive_dir else {
@@ -4186,6 +4191,7 @@ impl AgentLoopController {
                     &snapshot.actions,
                     section,
                     since,
+                    receipt_id,
                 ),
                 None => format!(
                     "epoch snapshot {epoch} not found (archive: {})",
@@ -4209,6 +4215,7 @@ impl AgentLoopController {
             &bb.actions,
             section,
             since,
+            receipt_id,
         )
     }
 
@@ -4600,9 +4607,16 @@ impl AgentLoopController {
                      entries to those at or after that time. Optional `epoch` \
                      (integer) reads that plan-epoch ARCHIVE instead of the \
                      live view — use it to recall a previous task's plan/edits \
-                     after a new plan epoch rotated the blackboard. Call this \
-                     when you need to recall what changed or what you did \
-                     earlier — it costs nothing when you do not call it."
+                     after a new plan epoch rotated the blackboard. Optional \
+                     `receipt_id` (an order_id from the actions results board, \
+                     e.g. ORD-000012) point-reads ONE result receipt's full \
+                     response/error content (bounded ≤8K chars) that the slim \
+                     board hides — only valid with `section=actions`; combine \
+                     with `epoch` to read archived receipts; \
+                     `since_timestamp` is ignored when `receipt_id` is \
+                     present. Call this when you need to recall what changed \
+                     or what you did earlier — it costs nothing when you do \
+                     not call it."
                     .to_string(),
                 parameters: serde_json::json!({
                     "type": "object",
@@ -4616,6 +4630,11 @@ impl AgentLoopController {
                             "type": "integer",
                             "minimum": 1,
                             "description": "Optional plan-epoch archive to read (cross-epoch look-back).",
+                        },
+                        "receipt_id": {
+                            "type": "string",
+                            "minLength": 1,
+                            "description": "Optional single-receipt point-read: an order_id from the actions results board (e.g. ORD-000012). Returns that receipt's full response/error content, bounded at 8000 chars. Only valid with section=actions; combine with epoch to point-read an archived receipt; since_timestamp is ignored when present.",
                         },
                     },
                     "required": ["section"],
@@ -8688,7 +8707,56 @@ impl AgentLoopController {
                 },
                 None => None,
             };
-            let content = self.render_blackboard_section(&section, since, epoch);
+            // 方案 B（2026-08-19，ADR-0010 §14.31 / 设计 §4.5）：可选
+            // `receipt_id` 点读——值 = 结果栏 receipt 的 order_id（如
+            // ORD-000012），仅与 section=actions 组合有效（非 actions 由
+            // render_section 显式报错）；格式非法（非字符串/空串）= 显式
+            // 报错，绝不静默回退整段。
+            let receipt_id = match tc.arguments.get("receipt_id") {
+                Some(raw) => match raw.as_str() {
+                    Some(s) if !s.trim().is_empty() => Some(s.trim().to_string()),
+                    _ => {
+                        let content = format!(
+                            "invalid blackboard_read receipt_id: {raw} — receipt_id \
+                             必须是非空字符串（结果栏 receipt 的 order_id，如 \
+                             ORD-000012）；省略该参数读取整个 actions 分区"
+                        );
+                        let mut completed = serde_json::json!({
+                            "tool": tc.name,
+                            "call_id": tc.call_id,
+                            "exit_code": 1,
+                            "section": section,
+                            "error": content,
+                        });
+                        // F3 (2026-08-16 审查收口): direct 盖章对称。
+                        stamp_direct(&mut completed);
+                        writer.record(EventType::ToolCompleted, completed).await?;
+                        self.blackboard.write().tool_actions.push(ToolActionRecord {
+                            category: ToolDispatcher::action_category(&tc.name).to_string(),
+                            tool: tc.name.clone(),
+                            timestamp: chrono_utc_now(),
+                        });
+                        let result = ToolResult {
+                            output: content,
+                            exit_code: Some(1),
+                            output_encoding: None,
+                            structured: None,
+                            ..Default::default()
+                        };
+                        messages.push(Message {
+                            role: Role::Tool,
+                            content: result.output.clone(),
+                            tool_call_id: Some(tc.call_id.clone()),
+                            tool_calls: Vec::new(),
+                            reasoning_content: None,
+                        });
+                        return Ok((result, None));
+                    }
+                },
+                None => None,
+            };
+            let content =
+                self.render_blackboard_section(&section, since, epoch, receipt_id.as_deref());
             let mut completed = serde_json::json!({
                 "tool": tc.name,
                 "call_id": tc.call_id,
@@ -12541,7 +12609,7 @@ mod tests {
             "新任务".to_string(),
             vec!["新步骤".to_string()],
         );
-        let live = controller.render_blackboard_section("plan", None, None);
+        let live = controller.render_blackboard_section("plan", None, None, None);
         assert!(live.contains("新任务"));
         assert!(live.contains("plan_epoch: 2"));
         // P0-E 计划视图补渲染步骤 ID (2026-08-17, ADR-0010 §14.21 项 2):
@@ -12552,14 +12620,14 @@ mod tests {
             live.contains("- [in-progress] step-1: 新步骤 (actions: 0; evidence: 0)"),
             "live plan view must render step id: {live}"
         );
-        let archived = controller.render_blackboard_section("edits", None, Some(1));
+        let archived = controller.render_blackboard_section("edits", None, Some(1), None);
         assert!(archived.contains("old.py"), "cross-epoch read: {archived}");
-        let archived_plan = controller.render_blackboard_section("plan", None, Some(1));
+        let archived_plan = controller.render_blackboard_section("plan", None, Some(1), None);
         assert!(
             archived_plan.contains("- [in-progress] step-1: 旧步骤 (actions: 0; evidence: 0)"),
             "archived plan view must render step id: {archived_plan}"
         );
-        let missing = controller.render_blackboard_section("plan", None, Some(99));
+        let missing = controller.render_blackboard_section("plan", None, Some(99), None);
         assert!(missing.contains("epoch snapshot 99 not found"));
 
         // A new controller with the same archive dir restores the latest
@@ -12794,6 +12862,343 @@ mod tests {
             "{:?}",
             exec_round.messages
         );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// 2026-08-19 黑板缓存成本设计（ADR-0010 §14.31 / §4.5，方案 B，S2
+    /// 工具级断言）：`blackboard_read` 携带 `receipt_id` 经真实工具链回达——
+    /// 单条 receipt 点读的完整 response 全文到达模型（瘦身整段不注入大载荷）。
+    #[tokio::test]
+    async fn blackboard_read_receipt_point_read_reaches_model() {
+        let dir = test_dir();
+        let journal = JournalRecorder::new(dir.clone());
+        let host = TestHost {
+            journal,
+            tool_result: Some(ToolResult {
+                output: "irrelevant".to_string(),
+                exit_code: Some(0),
+                output_encoding: None,
+                structured: None,
+                ..Default::default()
+            }),
+        };
+        let fake = Arc::new(FakeProvider::new(vec![
+            ScriptedResponse::tool_calls(vec![ToolCall {
+                name: "blackboard_read".to_string(),
+                arguments: serde_json::json!({
+                    "section": "actions",
+                    "receipt_id": "ORD-PR-1",
+                }),
+                call_id: "call-pr1".to_string(),
+            }]),
+            ScriptedResponse::text("完成"),
+            ScriptedResponse::text("完成"),
+        ]));
+        let gateway: Arc<dyn ModelGateway> = fake.clone();
+        let controller = AgentLoopController::with_gateway(gateway);
+        {
+            let mut bb = controller.blackboard().write();
+            bb.actions.push_result(ActionResult {
+                order_id: "ORD-PR-1".into(),
+                ok: true,
+                response: Some(serde_json::json!({
+                    "output": "完整成功输出",
+                    "nested": {"key": "value"},
+                })),
+                error: None,
+                trace_id: "t-pr-1".into(),
+                timestamp: "2026-08-19T04:00:00Z".into(),
+            });
+        }
+        controller
+            .run_turn(
+                &host,
+                "点读 receipt",
+                "RUN-PR1",
+                MANIFEST,
+                0,
+                None,
+                None,
+                None,
+            )
+            .await
+            .unwrap();
+
+        let received = fake.received_requests();
+        let round = received
+            .iter()
+            .find(|r| {
+                r.messages
+                    .iter()
+                    .any(|m| m.tool_call_id.as_deref() == Some("call-pr1"))
+            })
+            .expect("round carrying blackboard_read point-read reply");
+        let reply = round
+            .messages
+            .iter()
+            .find(|m| m.tool_call_id.as_deref() == Some("call-pr1"))
+            .expect("point-read tool result message");
+        assert!(
+            reply
+                .content
+                .starts_with("ORD-PR-1 ok=true step=? code=? trace_id=t-pr-1\nresponse={"),
+            "{:?}",
+            round.messages
+        );
+        assert!(
+            reply.content.contains("\"output\":\"完整成功输出\""),
+            "{:?}",
+            round.messages
+        );
+        assert!(
+            reply.content.contains("\"nested\":{\"key\":\"value\"}"),
+            "{:?}",
+            round.messages
+        );
+        // 点读回达不携带整段注册/订单/结果板。
+        assert!(
+            !reply.content.contains("== registration =="),
+            "{:?}",
+            round.messages
+        );
+        // 工具定义增量扩展：blackboard_read 声明了可选 receipt_id 参数。
+        let bb_def = round
+            .tools
+            .iter()
+            .find(|t| t.name == "blackboard_read")
+            .expect("blackboard_read declared in request tools");
+        assert!(
+            bb_def
+                .parameters
+                .get("properties")
+                .and_then(|p| p.get("receipt_id"))
+                .is_some(),
+            "receipt_id must be declared: {bb_def:?}"
+        );
+        assert_eq!(
+            bb_def.parameters["properties"]["receipt_id"]["minLength"],
+            1
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// 2026-08-19 黑板缓存成本设计（ADR-0010 §14.31 / §4.5，方案 B，S2
+    /// 工具级断言）：非法 `receipt_id`（非字符串/空串）= 显式报错
+    /// （exit_code 1），绝不静默回退整段读取。
+    #[tokio::test]
+    async fn blackboard_read_invalid_receipt_id_is_explicit_error() {
+        let dir = test_dir();
+        let journal = JournalRecorder::new(dir.clone());
+        let host = TestHost {
+            journal,
+            tool_result: None,
+        };
+        let fake = Arc::new(FakeProvider::new(vec![
+            ScriptedResponse::tool_calls(vec![ToolCall {
+                name: "blackboard_read".to_string(),
+                arguments: serde_json::json!({
+                    "section": "actions",
+                    "receipt_id": 123,
+                }),
+                call_id: "call-inv".to_string(),
+            }]),
+            ScriptedResponse::text("完成"),
+            ScriptedResponse::text("完成"),
+        ]));
+        let gateway: Arc<dyn ModelGateway> = fake.clone();
+        let controller = AgentLoopController::with_gateway(gateway);
+        controller
+            .run_turn(
+                &host,
+                "非法点读",
+                "RUN-PRINV",
+                MANIFEST,
+                0,
+                None,
+                None,
+                None,
+            )
+            .await
+            .unwrap();
+
+        let received = fake.received_requests();
+        let round = received
+            .iter()
+            .find(|r| {
+                r.messages
+                    .iter()
+                    .any(|m| m.tool_call_id.as_deref() == Some("call-inv"))
+            })
+            .expect("round carrying invalid receipt_id error");
+        let reply = round
+            .messages
+            .iter()
+            .find(|m| m.tool_call_id.as_deref() == Some("call-inv"))
+            .expect("invalid receipt_id tool result message");
+        assert!(
+            reply.content.contains("invalid blackboard_read receipt_id"),
+            "{:?}",
+            round.messages
+        );
+        // 事件面不变：ToolCompleted 仍只带 section（receipt_id 不进事件面）。
+        let completed: Vec<serde_json::Value> = events(&dir)
+            .into_iter()
+            .filter(|e| e.event_type == EventType::ToolCompleted)
+            .map(|e| e.payload)
+            .collect();
+        let inv_payload = completed
+            .iter()
+            .find(|p| p["tool"] == "blackboard_read" && p["exit_code"] == 1)
+            .expect("invalid read completed");
+        assert_eq!(inv_payload["section"], "actions", "{inv_payload:?}");
+        assert!(inv_payload.get("receipt_id").is_none(), "{inv_payload:?}");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// 2026-08-19 黑板缓存成本设计（ADR-0010 §14.31 / §4.5，方案 B，S2
+    /// 工具级断言）：非 actions 分区携带 `receipt_id` = 显式报错（fail
+    /// loud，同未知分区风格），工具结果回达模型。
+    #[tokio::test]
+    async fn blackboard_read_receipt_id_with_non_actions_section_errors() {
+        let dir = test_dir();
+        let journal = JournalRecorder::new(dir.clone());
+        let host = TestHost {
+            journal,
+            tool_result: None,
+        };
+        let fake = Arc::new(FakeProvider::new(vec![
+            ScriptedResponse::tool_calls(vec![ToolCall {
+                name: "blackboard_read".to_string(),
+                arguments: serde_json::json!({
+                    "section": "plan",
+                    "receipt_id": "ORD-1",
+                }),
+                call_id: "call-sec".to_string(),
+            }]),
+            ScriptedResponse::text("完成"),
+            ScriptedResponse::text("完成"),
+        ]));
+        let gateway: Arc<dyn ModelGateway> = fake.clone();
+        let controller = AgentLoopController::with_gateway(gateway);
+        controller
+            .run_turn(
+                &host,
+                "错误组合",
+                "RUN-PRSEC",
+                MANIFEST,
+                0,
+                None,
+                None,
+                None,
+            )
+            .await
+            .unwrap();
+
+        let received = fake.received_requests();
+        let round = received
+            .iter()
+            .find(|r| {
+                r.messages
+                    .iter()
+                    .any(|m| m.tool_call_id.as_deref() == Some("call-sec"))
+            })
+            .expect("round carrying receipt_id section error");
+        let reply = round
+            .messages
+            .iter()
+            .find(|m| m.tool_call_id.as_deref() == Some("call-sec"))
+            .expect("section error tool result message");
+        assert!(
+            reply
+                .content
+                .contains("receipt_id 仅与 section=actions 组合有效"),
+            "{:?}",
+            round.messages
+        );
+        assert!(
+            reply.content.contains("section=plan"),
+            "{:?}",
+            round.messages
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// 2026-08-19 黑板缓存成本设计（ADR-0010 §14.31 / §4.5，方案 B，S2
+    /// 跨 epoch 断言）：`receipt_id` 与 `epoch` 组合 = 归档快照点读——轮转
+    /// 后 live 板点读旧 receipt = 显式 not found（提示旧 epoch 归档），
+    /// epoch-1 快照点读 = 完整 response 回达；当前 epoch 点读正常。
+    #[test]
+    fn blackboard_read_receipt_point_read_live_and_archived() {
+        let dir = test_dir().join("gsa").join("blackboard");
+        let controller = AgentLoopController::with_gateway(Arc::new(FakeProvider::new(Vec::new())))
+            .with_blackboard_archive_dir(Some(dir.clone()))
+            .with_plan(
+                "PLAN-PR-A".to_string(),
+                1,
+                "旧任务".to_string(),
+                vec!["旧步骤".to_string()],
+            );
+        {
+            let mut bb = controller.blackboard().write();
+            bb.actions.push_result(ActionResult {
+                order_id: "ORD-OLD-1".into(),
+                ok: true,
+                response: Some(serde_json::json!({"output": "archived payload"})),
+                error: None,
+                trace_id: "t-old-1".into(),
+                timestamp: "2026-08-19T03:00:00Z".into(),
+            });
+        }
+        // Rotate: epoch-1 archived WITH the receipt; the live board clears.
+        let controller = controller.with_plan(
+            "PLAN-PR-B".to_string(),
+            2,
+            "新任务".to_string(),
+            vec!["新步骤".to_string()],
+        );
+        // Live point-read of the rotated-away receipt = explicit not-found.
+        let live_missing =
+            controller.render_blackboard_section("actions", None, None, Some("ORD-OLD-1"));
+        assert!(
+            live_missing.contains("ORD-OLD-1 not found"),
+            "{live_missing}"
+        );
+        assert!(live_missing.contains("旧 epoch 归档"), "{live_missing}");
+        // Archived point-read = full response.
+        let archived =
+            controller.render_blackboard_section("actions", None, Some(1), Some("ORD-OLD-1"));
+        assert!(
+            archived.starts_with("ORD-OLD-1 ok=true step=? code=? trace_id=t-old-1\nresponse="),
+            "{archived}"
+        );
+        assert!(archived.contains("archived payload"), "{archived}");
+        // Current-epoch point-read works on the live board.
+        {
+            let mut bb = controller.blackboard().write();
+            bb.actions.push_result(ActionResult {
+                order_id: "ORD-NEW-1".into(),
+                ok: false,
+                response: None,
+                error: Some(serde_json::json!({
+                    "step": "execute",
+                    "code": "boom",
+                    "message": "m",
+                    "upstream": {"x": 1},
+                })),
+                trace_id: "t-new-1".into(),
+                timestamp: "2026-08-19T03:00:01Z".into(),
+            });
+        }
+        let live = controller.render_blackboard_section("actions", None, None, Some("ORD-NEW-1"));
+        assert!(
+            live.starts_with("ORD-NEW-1 ok=false step=execute code=boom trace_id=t-new-1\nerror="),
+            "{live}"
+        );
+        assert!(live.contains("\"upstream\":{\"x\":1}"), "{live}");
 
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -16866,7 +17271,7 @@ mod tests {
                 parameters: serde_json::json!({}),
             }]);
         controller.set_console_probe_source(crate::host::ToolPolicy::Interactive, snapshot);
-        let text = controller.render_blackboard_section("actions", None, None);
+        let text = controller.render_blackboard_section("actions", None, None, None);
         assert!(text.contains("workspace.read_file"), "{text}");
         assert!(text.contains("workspace.run_script"), "{text}");
         assert!(text.contains("assistant.trace"), "{text}");
@@ -16897,7 +17302,7 @@ mod tests {
                 description: "retained".to_string(),
                 parameters: serde_json::json!({}),
             }]);
-        let text = controller.render_blackboard_section("actions", None, None);
+        let text = controller.render_blackboard_section("actions", None, None, None);
         assert!(text.contains("assistant.trace"), "{text}");
         assert!(text.contains("(no pending order)"), "{text}");
         let board = controller.blackboard().read();
@@ -17003,10 +17408,10 @@ mod tests {
             }],
         };
         controller.set_console_probe_source(crate::host::ToolPolicy::Interactive, snapshot);
-        let archived = controller.render_blackboard_section("actions", None, Some(1));
+        let archived = controller.render_blackboard_section("actions", None, Some(1), None);
         assert!(archived.contains("workspace.archived_legacy"), "{archived}");
         assert!(!archived.contains("workspace.read_file"), "{archived}");
-        let live = controller.render_blackboard_section("actions", None, None);
+        let live = controller.render_blackboard_section("actions", None, None, None);
         assert!(live.contains("workspace.read_file"), "{live}");
         assert!(!live.contains("workspace.archived_legacy"), "{live}");
         let _ = std::fs::remove_dir_all(&dir);
@@ -17040,7 +17445,7 @@ mod tests {
         };
         controller.set_console_probe_source(crate::host::ToolPolicy::Interactive, snapshot);
         controller.reset_console_probe_source();
-        let text = controller.render_blackboard_section("actions", None, None);
+        let text = controller.render_blackboard_section("actions", None, None, None);
         assert!(text.contains("assistant.trace"), "{text}");
         assert!(!text.contains("workspace.read_file"), "{text}");
         let board = controller.blackboard().read();

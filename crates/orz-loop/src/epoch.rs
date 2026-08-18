@@ -231,6 +231,12 @@ pub fn latest_epoch_snapshot(archive_dir: &Path) -> Option<EpochSnapshot> {
 /// Render one blackboard partition for `blackboard_read`, shared by the
 /// live view and archived epoch snapshots. `since` (RFC 3339) filters
 /// timestamped entries; plan/exec carry no per-entry timestamps.
+///
+/// 2026-08-19 黑板缓存成本设计（ADR-0010 §14.31 / §4.5，方案 B 按需点读）：
+/// `receipt_id` = 结果栏单条 receipt 的 order_id 点读（仅与 `section=actions`
+/// 组合有效；与 `epoch` 组合 = 归档快照点读；与 `since` 同时给 = 忽略 since——
+/// 点读按 id 寻址，时间过滤不适用）；无 `receipt_id` 时输出与 S1 逐字节一致。
+#[allow(clippy::too_many_arguments)] // 分区渲染签名 = 5 分区 + section/since + 方案B 点读参数（与 run_turn 同纪律）
 pub fn render_section(
     plan: &PlanSection,
     edits: &[EditRecord],
@@ -239,7 +245,16 @@ pub fn render_section(
     actions: &ActionBoard,
     section: &str,
     since: Option<&str>,
+    receipt_id: Option<&str>,
 ) -> String {
+    // 方案 B 参数组合守卫：receipt_id 仅对 actions 分区有效；非 actions 分区
+    // 携带 receipt_id = 显式报错（fail loud，同未知分区风格），绝不静默忽略。
+    if receipt_id.is_some() && section != "actions" {
+        return format!(
+            "receipt_id 仅与 section=actions 组合有效（点读结果栏单条 receipt）；\
+             当前 section={section} 不支持 receipt_id"
+        );
+    }
     let since_dt = since.and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok());
     let after_since = |ts: &str| -> bool {
         match since_dt {
@@ -377,6 +392,13 @@ pub fn render_section(
         // board's result list is already capped at 50, and the text view
         // shows the latest 10 with an explicit count.
         "actions" => {
+            // 2026-08-19 黑板缓存成本设计（ADR-0010 §14.31 / §4.5，方案 B）：
+            // 按需点读优先——receipt_id 给定即返回单条 receipt 的固定形态行 +
+            // 有界完整内容（response/error 全文），整段渲染不参与（避免大载荷
+            // 再次注入消息面）。
+            if let Some(receipt_id) = receipt_id {
+                return render_receipt_point_read(actions, receipt_id, plan.plan_epoch);
+            }
             let mut lines: Vec<String> = Vec::new();
             lines.push("== registration ==".to_string());
             if actions.registration.is_empty() {
@@ -441,6 +463,66 @@ pub fn render_section(
     }
 }
 
+/// 方案 B 点读上限（2026-08-19 用户定档：8K 够用，再多去原文档/存档查找）；
+/// 约 4K token，单次点读载荷有界。
+pub const RECEIPT_DETAIL_MAX_CHARS: usize = 8_000;
+
+/// 方案 B 按需点读（2026-08-19 黑板缓存成本设计 §4.5）：结果栏单条 receipt
+/// 的完整内容——固定形态行 + `response=<JSON 原文>`（成功）/ `error=<JSON
+/// 原文>`（失败，含 message/upstream，此前模型从未见过这两项）。整体超
+/// `RECEIPT_DETAIL_MAX_CHARS` 按字符截断 detail + 「…」+ 指针行（完整内容
+/// 见存档 epoch-N.json / TraceStore trace_id=…）；合法但未找到 = 显式
+/// 「not found」+ 提示旧 epoch 归档（live 板仅保留最近 50 条）。
+fn render_receipt_point_read(actions: &ActionBoard, receipt_id: &str, plan_epoch: u64) -> String {
+    let Some(result) = actions.results.iter().find(|r| r.order_id == receipt_id) else {
+        return format!(
+            "blackboard_read receipt_id={receipt_id} not found — 结果栏仅保留 \
+             最近 50 条 receipt；检查 order_id 拼写（结果行行首）；更早轮次 \
+             请试旧 epoch 归档（epoch-N.json）"
+        );
+    };
+    let (step, code) = failure_envelope_fields(&result.error);
+    let head = format!(
+        "{} ok={} step={} code={} trace_id={}",
+        result.order_id, result.ok, step, code, result.trace_id,
+    );
+    let detail = if result.ok {
+        match &result.response {
+            Some(json) => format!(
+                "response={}",
+                serde_json::to_string(json).unwrap_or_else(|_| "<unserializable>".to_string())
+            ),
+            None => "response=(none)".to_string(),
+        }
+    } else {
+        match &result.error {
+            Some(json) => format!(
+                "error={}",
+                serde_json::to_string(json).unwrap_or_else(|_| "<unserializable>".to_string())
+            ),
+            None => "error=(none)".to_string(),
+        }
+    };
+    let body = format!("{head}\n{detail}");
+    if body.chars().count() <= RECEIPT_DETAIL_MAX_CHARS {
+        return body;
+    }
+    let pointer = format!(
+        "完整内容见存档（epoch-{plan_epoch}.json）/ TraceStore trace_id={}",
+        result.trace_id
+    );
+    // 截断 detail 使整体（头行 + 截断 detail + 「…」 + 指针行）≤ 上限；截断
+    // 复用 summary.rs truncate_chars 口径（上限内自动以「…」结尾）。
+    let head_chars = head.chars().count() + 1; // 头行 + '\n'
+    let tail_chars = 2 + pointer.chars().count(); // '\n' + 「…」 + '\n' + 指针行
+    let detail_budget = RECEIPT_DETAIL_MAX_CHARS
+        .saturating_sub(head_chars)
+        .saturating_sub(tail_chars)
+        .max(1);
+    let truncated = truncate_chars(&detail, detail_budget);
+    format!("{head}\n{truncated}\n{pointer}")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -496,6 +578,7 @@ mod tests {
             &board,
             "actions",
             None,
+            None,
         );
         assert!(text.contains("== registration =="));
         assert!(text.contains("workspace.read_file"));
@@ -526,6 +609,7 @@ mod tests {
             &ExecSection::default(),
             &board,
             "bogus",
+            None,
             None,
         );
         assert!(unknown.contains("unknown blackboard section: bogus"));
@@ -580,6 +664,7 @@ mod tests {
             &board,
             "actions",
             None,
+            None,
         );
         assert!(
             text.contains("ORD-OK-1 ok=true step=? code=? trace_id=t-ok-1"),
@@ -627,6 +712,7 @@ mod tests {
             &board,
             "actions",
             None,
+            None,
         );
         assert!(
             text.contains("[actions: 共 50 条，仅显示最近 10 条（较早省略 40 条）]"),
@@ -663,6 +749,7 @@ mod tests {
             &ActionBoard::default(),
             "exec",
             None,
+            None,
         );
         let lines: Vec<&str> = text.lines().collect();
         assert_eq!(lines.len(), 2, "{text}");
@@ -694,6 +781,7 @@ mod tests {
             &exec_section,
             &ActionBoard::default(),
             "exec",
+            None,
             None,
         );
         let lines: Vec<&str> = text.lines().collect();
@@ -728,6 +816,7 @@ mod tests {
             &ActionBoard::default(),
             "exec",
             None,
+            None,
         );
         assert_eq!(text.lines().count(), 2, "{text}");
         assert!(
@@ -754,6 +843,7 @@ mod tests {
             &ActionBoard::default(),
             "exec",
             None,
+            None,
         );
         assert_eq!(text.lines().count(), 2, "{text}");
         assert!(
@@ -765,6 +855,253 @@ mod tests {
             "{text}"
         );
         assert!(!text.contains("错错"), "{text}");
+    }
+
+    /// 2026-08-19 黑板缓存成本设计（ADR-0010 §14.31 / §4.5，方案 B）：点读
+    /// 成功/失败 receipt 返回固定形态行 + 完整内容——成功 `response=<JSON
+    /// 原文>`、失败 `error=<JSON 原文>`（含 message/upstream，此前模型从未
+    /// 见过这两项）；`since` 与 receipt_id 同时给 = 忽略 since（点读按 id
+    /// 寻址，时间过滤不适用）。
+    #[test]
+    fn render_actions_receipt_point_read_returns_full_response_and_error() {
+        let mut board = ActionBoard::default();
+        board.push_result(ActionResult {
+            order_id: "ORD-PR-1".into(),
+            ok: true,
+            response: Some(serde_json::json!({
+                "output": "完整成功输出",
+                "nested": {"key": "value"},
+            })),
+            error: None,
+            trace_id: "t-pr-1".into(),
+            timestamp: "2026-08-19T01:00:00Z".into(),
+        });
+        board.push_result(ActionResult {
+            order_id: "ORD-PR-2".into(),
+            ok: false,
+            response: None,
+            error: Some(serde_json::json!({
+                "step": "execute",
+                "code": "boom",
+                "message": "执行失败详情",
+                "upstream": {"exit_code": 1, "stderr": "tail"},
+            })),
+            trace_id: "t-pr-2".into(),
+            timestamp: "2026-08-19T01:00:01Z".into(),
+        });
+
+        // 成功 receipt 点读（since 与 receipt_id 同时给 → 忽略 since）。
+        let ok_text = render_section(
+            &PlanSection::default(),
+            &[],
+            &[],
+            &ExecSection::default(),
+            &board,
+            "actions",
+            Some("2999-01-01T00:00:00Z"),
+            Some("ORD-PR-1"),
+        );
+        assert!(
+            ok_text.starts_with("ORD-PR-1 ok=true step=? code=? trace_id=t-pr-1\nresponse={"),
+            "{ok_text}"
+        );
+        assert!(ok_text.contains("\"output\":\"完整成功输出\""), "{ok_text}");
+        assert!(
+            ok_text.contains("\"nested\":{\"key\":\"value\"}"),
+            "{ok_text}"
+        );
+        // 失败 receipt 点读：完整信封（含 message/upstream）。
+        let err_text = render_section(
+            &PlanSection::default(),
+            &[],
+            &[],
+            &ExecSection::default(),
+            &board,
+            "actions",
+            None,
+            Some("ORD-PR-2"),
+        );
+        assert!(
+            err_text
+                .starts_with("ORD-PR-2 ok=false step=execute code=boom trace_id=t-pr-2\nerror={"),
+            "{err_text}"
+        );
+        assert!(
+            err_text.contains("\"message\":\"执行失败详情\""),
+            "{err_text}"
+        );
+        assert!(
+            err_text.contains("\"upstream\":{\"exit_code\":1,\"stderr\":\"tail\"}"),
+            "{err_text}"
+        );
+        // 点读不掺入注册/订单/整段渲染。
+        assert!(!err_text.contains("== registration =="), "{err_text}");
+        assert!(!err_text.contains("== order =="), "{err_text}");
+    }
+
+    /// 2026-08-19 黑板缓存成本设计（ADR-0010 §14.31 / §4.5，方案 B）：点读
+    /// 上限 `RECEIPT_DETAIL_MAX_CHARS=8_000`——超限按字符截断 detail + 「…」
+    /// + 指针行（完整内容见存档 epoch-N.json / TraceStore trace_id=…）。
+    #[test]
+    fn render_actions_receipt_point_read_truncates_at_8k_with_pointer() {
+        let mut board = ActionBoard::default();
+        board.push_result(ActionResult {
+            order_id: "ORD-PR-3".into(),
+            ok: true,
+            response: Some(serde_json::json!({"output": "x".repeat(20_000)})),
+            error: None,
+            trace_id: "t-pr-3".into(),
+            timestamp: "2026-08-19T01:00:02Z".into(),
+        });
+        let plan = PlanSection {
+            plan_epoch: 7,
+            ..Default::default()
+        };
+        let text = render_section(
+            &plan,
+            &[],
+            &[],
+            &ExecSection::default(),
+            &board,
+            "actions",
+            None,
+            Some("ORD-PR-3"),
+        );
+        assert!(
+            text.chars().count() <= RECEIPT_DETAIL_MAX_CHARS,
+            "len {} > {RECEIPT_DETAIL_MAX_CHARS}: {text}",
+            text.chars().count()
+        );
+        assert!(
+            text.starts_with("ORD-PR-3 ok=true step=? code=? trace_id=t-pr-3\nresponse="),
+            "{text}"
+        );
+        // 截断以「…」收尾，随后是指针行。
+        let detail_line = text.lines().nth(1).expect("detail line");
+        assert!(detail_line.ends_with('…'), "{text}");
+        assert!(
+            text.ends_with("完整内容见存档（epoch-7.json）/ TraceStore trace_id=t-pr-3"),
+            "{text}"
+        );
+    }
+
+    /// 2026-08-19 黑板缓存成本设计（ADR-0010 §14.31 / §4.5，方案 B）：合法
+    /// 但未找到 = 显式「not found」+ 提示旧 epoch 归档（live 板仅保留最近
+    /// 50 条），绝不静默回退整段。
+    #[test]
+    fn render_actions_receipt_point_read_not_found_is_explicit() {
+        let mut board = ActionBoard::default();
+        board.push_result(ActionResult {
+            order_id: "ORD-PR-9".into(),
+            ok: true,
+            response: Some(serde_json::json!({"output": "x"})),
+            error: None,
+            trace_id: "t-pr-9".into(),
+            timestamp: "2026-08-19T01:00:09Z".into(),
+        });
+        let text = render_section(
+            &PlanSection::default(),
+            &[],
+            &[],
+            &ExecSection::default(),
+            &board,
+            "actions",
+            None,
+            Some("ORD-NOPE"),
+        );
+        assert!(text.contains("ORD-NOPE not found"), "{text}");
+        assert!(text.contains("旧 epoch 归档"), "{text}");
+        assert!(!text.contains("== results =="), "{text}");
+    }
+
+    /// 2026-08-19 黑板缓存成本设计（ADR-0010 §14.31 / §4.5，方案 B）：非
+    /// actions 分区携带 receipt_id = 显式报错（fail loud，同未知分区风格），
+    /// 未知分区同守卫（receipt_id 校验先于未知分区报错）。
+    #[test]
+    fn render_receipt_id_with_non_actions_section_errors() {
+        let plan_text = render_section(
+            &PlanSection::default(),
+            &[],
+            &[],
+            &ExecSection::default(),
+            &ActionBoard::default(),
+            "plan",
+            None,
+            Some("ORD-1"),
+        );
+        assert!(
+            plan_text.contains("receipt_id 仅与 section=actions 组合有效"),
+            "{plan_text}"
+        );
+        assert!(plan_text.contains("section=plan"), "{plan_text}");
+
+        let bogus_text = render_section(
+            &PlanSection::default(),
+            &[],
+            &[],
+            &ExecSection::default(),
+            &ActionBoard::default(),
+            "bogus",
+            None,
+            Some("ORD-1"),
+        );
+        assert!(
+            bogus_text.contains("receipt_id 仅与 section=actions 组合有效"),
+            "{bogus_text}"
+        );
+    }
+
+    /// 方案 B 缓存纪律：无 receipt_id 时整段输出与 S1 逐字节一致——对含成功/
+    /// 失败 receipt 的板做全量渲染并锁定精确输出（头行 / 固定形态行 / 无
+    /// response 载荷），防止点读分支改动污染整段渲染。
+    #[test]
+    fn render_actions_without_receipt_id_matches_s1_output_byte_for_byte() {
+        let mut board = ActionBoard::default();
+        board.set_registration(vec![crate::blackboard::ActionRegistration {
+            name: "workspace.read_file".into(),
+            description: "read".into(),
+            parameters: serde_json::json!({"required": ["target_file"]}),
+        }]);
+        board.push_result(ActionResult {
+            order_id: "ORD-B1".into(),
+            ok: true,
+            response: Some(serde_json::json!({"output": "secret"})),
+            error: None,
+            trace_id: "t-b1".into(),
+            timestamp: "2026-08-19T02:00:00Z".into(),
+        });
+        board.push_result(ActionResult {
+            order_id: "ORD-B2".into(),
+            ok: false,
+            response: None,
+            error: Some(serde_json::json!({
+                "step": "policy",
+                "code": "denied",
+                "message": "m",
+            })),
+            trace_id: "t-b2".into(),
+            timestamp: "2026-08-19T02:00:01Z".into(),
+        });
+        let text = render_section(
+            &PlanSection::default(),
+            &[],
+            &[],
+            &ExecSection::default(),
+            &board,
+            "actions",
+            None,
+            None,
+        );
+        assert_eq!(
+            text,
+            "== registration ==\n\
+             workspace.read_file — read params={\"required\":[\"target_file\"]}\n\
+             == order ==\n\
+             (no pending order)\n\
+             == results ==\n\
+             ORD-B2 ok=false step=policy code=denied trace_id=t-b2\n\
+             ORD-B1 ok=true step=? code=? trace_id=t-b1"
+        );
     }
 
     /// P0-E 计划视图补渲染步骤 ID (2026-08-17, ADR-0010 §14.21 项 2): every
@@ -810,6 +1147,7 @@ mod tests {
             &ActionBoard::default(),
             "plan",
             None,
+            None,
         );
         assert!(text.contains("goal: 构建 ELF"), "{text}");
         assert!(text.contains("plan_id: PLAN-VIEW-1"), "{text}");
@@ -833,6 +1171,7 @@ mod tests {
             &ExecSection::default(),
             &ActionBoard::default(),
             "plan",
+            None,
             None,
         );
         assert!(empty.contains("(no steps)"), "{empty}");
