@@ -9,7 +9,7 @@
 
 | 优先级 | 含义 | 未闭合项 |
 |---|---|---|
-| P0 | 当前工作集：设计已冻结，裁决后立即实施 | 评测冒烟暴露问题（P0-E 主项 7 项 + FUS-TOOL-SCOPE-CONTRACT 后续 2 项全部闭合 2026-08-18：ACAF 容器供应、console 工具名、计划视图步骤 ID、订单发放前拒绝入事件面、grep 搜索范围契约、plan_write 校验消息形状、actions 形状探针、list_dir 范围计数、grep files_searched 全结局探针，见 0a）；CLASSICAL-EXEC-ASSISTANT（生产组件，2026-08-16 用户裁决转正式，S1-S4 全部闭合）；PLAN-FIRST-BLACKBOARD（阶段 A/B/C 全部闭合 2026-08-16）；**FUS-BENCHMARK-FULL-EXEC（P0，实施完成待验证——2026-08-18 用户指示实施、暂不测试；验证闭环后闭合，见 0b）**；**LEDGER-FOLD-EXTERNAL-FILE（P0，2026-08-18 用户指示优先实施——命中率问题优先于 P0-F 验证；S1/S2 已闭合，S3/S4 待验证，见 0c）** |
+| P0 | 当前工作集：设计已冻结，裁决后立即实施 | 评测冒烟暴露问题（P0-E 主项 7 项 + FUS-TOOL-SCOPE-CONTRACT 后续 2 项全部闭合 2026-08-18：ACAF 容器供应、console 工具名、计划视图步骤 ID、订单发放前拒绝入事件面、grep 搜索范围契约、plan_write 校验消息形状、actions 形状探针、list_dir 范围计数、grep files_searched 全结局探针，见 0a）；CLASSICAL-EXEC-ASSISTANT（生产组件，2026-08-16 用户裁决转正式，S1-S4 全部闭合）；PLAN-FIRST-BLACKBOARD（阶段 A/B/C 全部闭合 2026-08-16）；**FUS-BENCHMARK-FULL-EXEC（P0，实施完成待验证——2026-08-18 用户指示实施、暂不测试；验证闭环后闭合，见 0b）**；**LEDGER-FOLD-EXTERNAL-FILE（P0，S1-S4 验证闭环 2026-08-19——命中率问题优先于 P0-F 验证；provider 口径 95.33% ≥90% 达标，见 0c）** |
 | P1 | 无需裁决，可与 P0 并行 | FUS-COMPONENT-REGISTER、GAP-WINDOWS-EVIDENCE、IMPL-DEEPSEEK-TRANSPORT / SEC-CREDENTIALS、ORZ-SESSION-CONTEXT-MONITOR |
 | P2 | 生产化决策门：需用户裁决 | IMPL-CONTROL-FABRIC（fail-closed 启用、Slice 3/4）、OPS-PROTOCOL |
 | P3 | 收尾 / 清理 | EVIDENCE-LOCAL-BROWSER、GATE-CHAIN、DC 剩余信号、V11-IMPL-003/007、工作区收尾 |
@@ -458,6 +458,28 @@
   冻结机制补记；O1 中间 assistant 文本口径；O2 索引越界防御守卫；
   O3 非默认配置文案固定不变。S3 重建 → S4 复验（≥90%、无 400、每窗
   折叠重付 ≤ ~15K、截断频率 ≤30%）待续；计数不变（仍在 29）。
+- **2026-08-19 S3/S4 复验执行 + 换算系数校准（用户指示重建 + 单题
+  复验；orz 校准调整待提交；ADR-0010 §14.32 第 3 项 / 设计文档
+  §3.2/§3.6）**：S3 重建成功（orz-linux 07:07 新二进制；USTC/清华镜像
+  源 502 不可达，改用阿里云镜像源）。S4 单题复验（path-tracing 1800s，
+  07:08 运行，job 2026-08-19__07-08-57）：reward 0.0（wallclock 耗尽）、
+  **无 400**、113 请求；**journal 口径命中率 95.54%**（hit 4,775,422 /
+  miss 222,869，对照上次 88.57%）；折叠 2 次（37/82 轮），**折叠后首
+  请求重付 3,742 / 6,493 真实 token**（DoD ≤ ~15K，对照上次
+  47.8K/50.4K/56.4K）、**截断频率 0%**（≤30% 达标）。校准：第二次折叠
+  桥 12,948 字符 → 重付 6,493 → 实测 ≈ **2 字符/真实 token**，
+  `FOLD_TAIL_CHARS_PER_TOKEN` 4 → 2（桥回到 8K 真实 token 目标；最新轮
+  6.5K < 8K 不截断）；orz-loop 503 通过 / fmt 干净 / clippy 基线一致。
+  provider 口径待账单 CSV（07:00–08:00 时段）对拍；计数不变（29，
+  provider 对拍确认后 29 → 28）。
+- **2026-08-19 provider 口径对拍确认 + 0c 验证闭环（用户上传新账单）**：
+  provider 口径命中率 **95.33%**（hit 4,896,384 / miss 239,752 / 115
+  请求，≥90% DoD 达标）；与 journal 口径（95.54%）差 2 请求（重试/
+  边界），费用 1.9082 元验算吻合。S4 四项判定全达标（命中率 ≥90%、
+  无 400、每窗折叠重付 3,742/6,493 ≤ ~15K、截断频率 0% ≤30%）——
+  **0c 验证闭环，未闭合计数 29 → 28**；换算系数校准（4 → 2）为 S4
+  既定产出，校准后代码待提交、下次正式跑分使用。登记于 ADR-0010
+  §14.32 第 4 项 / 设计文档 §3.2/§3.6 / TODO P0-0c / 索引。
 
 ### 0. 前置收尾（提交前需用户确认）
 

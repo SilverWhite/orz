@@ -82,11 +82,11 @@
 > 本快照只做计数与分组召回，明细以下方各分组勾选清单为唯一入口，不新增独立条目；
 > 后续扫描更新时同步替换本快照日期与计数。
 
-- 未闭合总数：**29 项**
+- 未闭合总数：**28 项**（2026-08-19 0c 验证闭环 29 → 28）
   - P0-C：0 项（PLAN-FIRST 阶段 A/B/C 全部闭合，2026-08-16）
   - P0 评测冒烟暴露：0 项（P0-E 主项 7 项 + FUS-TOOL-SCOPE-CONTRACT 后续 2 项全部闭合 2026-08-18，见 P0-E grep 项后续①/②）
   - P0 Benchmark 完全体：1 项（FUS-BENCHMARK-FULL-EXEC 实施完成待验证，见 P0-F；验证闭环后回 27）
-  - P0 折叠历史外挂：1 项（LEDGER-FOLD-EXTERNAL-FILE，S1/S2 已闭合、S3/S4 待验证，见 P0-0c；验证闭环后回 28）
+  - P0 折叠历史外挂：0 项（LEDGER-FOLD-EXTERNAL-FILE，S3/S4 验证闭环 2026-08-19，见 P0-0c）
   - P1 可并行审计/证据：9 项（组件登记 1、Windows 证据 3、DeepSeek 1、会话上下文监测 4）
   - P2 生产化决策门：5 项（Slice 3、Slice 4、ACAF 可选工程项、OPS 裁剪设计、OPS 生产接线裁决）
   - P3 收尾/清理：7 项（EVIDENCE-LOCAL-BROWSER、GATE-CHAIN、observed-scope 枚举、V11-IMPL-003、V11-IMPL-007、orz-host flaky、DC 硬信号 4/6）
@@ -473,7 +473,13 @@
   §14.32 第 2 项；orz-loop 503 通过 / fmt 干净 / 无新增 clippy 告警）。
   路由：S1 代码 ✓ → S2 测试 ✓ → S3 重建 → S4 复验（≥90%、无 400、
   每窗重付 ≤~15K、截断频率 ≤30% 校准）。
-- [ ] 闭合：S3/S4 全过 → BACKLOG/TODO/索引状态同步，未闭合 29 → 28。
+- [x] 闭合（2026-08-19）：S4 复验 + provider 对拍完成——journal 口径
+  95.54% / **provider 口径 95.33%**（hit 4,896,384 / miss 239,752 /
+  115 请求，≥90% 达标）、无 400、折叠后首请求重付 3,742 / 6,493
+  （≤~15K）、截断频率 0%（≤30%）；换算系数按实测校准 4 → 2
+  （`FOLD_TAIL_CHARS_PER_TOKEN`，桥回到 8K 真实 token；orz 校准调整待
+  提交、下次正式跑分使用）。**0c 验证闭环，未闭合 29 → 28**；BACKLOG/
+  TODO/索引状态同步完成（ADR-0010 §14.32 第 4 项）。
 
 ### P0-B FUS-RETRIEVAL-MECH（`implemented`；批次 1-6 已全部闭合，2026-08-14，保留供核对）
 
