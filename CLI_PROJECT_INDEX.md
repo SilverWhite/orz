@@ -186,6 +186,27 @@
 > safe_fold_cut idx==0 兜底（取证存档
 > `D:\tb-eval\jobs\2026-08-18__08-44-56\ROOTCAUSE_FORENSICS_20260818.md`；
 > orz 3bd09fc/5bc3add 取证 WIP）。修复待下一窗口。
+> 2026-08-18 折叠视图 400 修复处理文档登记（用户指示：先落实处理文档）——
+> 验证③ 400 根因复核修正：真正破坏点=压缩触发（未执行）时
+> `run_template_compact` 顶部 retain 删除 marker 而折叠索引未失效
+> （GuardBlocked 无 reset），冻结 preamble 吞入首轮 plan_write 声明（其
+> 回复在折叠区），而非「折叠 cut 硬截断」（cut 始终在完整轮起点；
+> `safe_fold_cut` 只防 cut 不防 fold_start）。处理文档
+> `docs/LEDGER_FOLD_MARKER_INDEX_FIX_HANDLING_2026-08-18.md`：主修复=
+> retain 后移（guard 判定后）+ 执行路径 kept_start 重算；防御补强=
+> `safe_fold_cut` idx==0 放弃折叠 + `build_request_view` preamble 边界
+> 校验；S1-S5 步骤（修复/测试/重建/复验/文档同步）与验收标准已明确。
+> 实施待下一窗口；未闭合计数不变（28）。
+> 2026-08-18 折叠视图 400 修复实施闭合（处理文档 S1-S5）——S1 代码修复
+> （retain 后移 + 执行路径 kept_start 重算 + `safe_fold_cut`→`Option` +
+> preamble 校验）；S2 新增 6 项单测、orz-loop 全量 460 通过、fmt/clippy
+> 无新增告警；S3 Linux musl 重建三件套（19:39 新构建）；S4 复验
+> （`jobs\2026-08-18__19-40-12`）：0 异常、无 400、压缩执行后会话继续
+> 102 条事件零失败、6 笔 console 订单→5 组 ACAF 票据、零 permission 拒绝
+> ——机制断言全过；reward 仍 0（墙钟内未产出可运行 ELF，任务完成度问题，
+> 非机制回归），验证③ reward 项保持开放；`ORZ_DEBUG_VIEW=1` 暂保留登记
+> 为常驻诊断（验证③闭合后移除）。ADR-0010 §14.27（v1.27）/ 折叠设计
+> §3.5+§8 / BACKLOG 0b / TODO P0-F 已同步。未闭合计数不变（28）。
 > 2026-08-18 状态行缓存纪律 + 订单拒绝步骤语义设计定案登记（用户裁决；纯文档、
 > 未实施）——① `[任务状态]` 常驻状态行移出系统提示词，改为变化时追加的尾随
 > 用户消息（与预算剩余块同纪律）：根因=console 步骤机每笔订单 receipt 推进步骤

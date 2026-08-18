@@ -231,6 +231,18 @@ folded_ledger: Option<String> // 冻结台账块文本（推进时一次性渲�
 摘要输入（`run_template_compact` 的 `summary_input`）改与主请求同一有状态
 折叠视图（同源，不单独重算），控制摘要调用成本的同时保持一致性。
 
+**触发未执行零副作用不变量（2026-08-18 400 修复定案，ADR-0010 §14.27 /
+处理文档 `LEDGER_FOLD_MARKER_INDEX_FIX_HANDLING_2026-08-18.md`）**：冻结的
+折叠索引（`fold_start`/`fold_cut`）仅在 `messages` 纯追加时有效；任何就地
+变更必须走折叠状态失效（执行压缩路径 = `fold_state.reset()`），未执行路径
+（`GuardBlocked`/`NoOp`）必须零副作用。具体落实：`run_template_compact`
+的旧 marker 删除（`retain`）从函数首部移到守卫判定之后——触发未执行时
+数组与折叠三态均不变；执行确认后删除 marker 并重算 `kept_start`
+（marker 删除使冻结索引左移：折叠态 `fold_cut - had_marker`，未折叠态重算
+`collapsed_cut`），`after` 同步按无 marker 口径重算。防御第二道：
+`safe_fold_cut` 首轮不完整返回 `None`（放弃折叠回原文）+ `build_request_view`
+preamble 末条为 assistant 声明即放弃折叠（其回复必在折叠区）。
+
 ### 3.6 恢复路径
 
 - `fold` 三态为运行期内存状态，不持久化；
@@ -308,3 +320,11 @@ folded_ledger: Option<String> // 冻结台账块文本（推进时一次性渲�
   改为覆盖**全部**将被折叠轮（`ranges[..collapse_count].all(is_round_complete)`），
   与「不完整轮保留原文」注释契约一致；正常流程不可达（结果在下一声明前必
   落盘），属防御加固。
+- 压缩触发（未执行）删除 marker 使冻结折叠索引失效（2026-08-18 复验 400
+  根因，已修复）：旧实现 `run_template_compact` 首部无条件 `retain()` 删除
+  旧 marker，而 `GuardBlocked`/`NoOp` 返回前折叠三态未 reset——冻结
+  `fold_start` 过期后 preamble 吞入首轮声明（回复在折叠区）→ provider 400。
+  修复=retain 后移 + 执行路径索引重算 + `build_request_view` preamble/
+  idx==0 放弃折叠（ADR-0010 §14.27；处理文档
+  `LEDGER_FOLD_MARKER_INDEX_FIX_HANDLING_2026-08-18.md`）。复验：压缩执行后
+  会话继续零 400。放弃折叠的最坏代价=触发时一次全量视图（低频，接受）。

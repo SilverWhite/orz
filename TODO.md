@@ -269,18 +269,41 @@
   修正；orz-host 需 `--test-threads=1` 规避负载敏感的进程树超时竞争。
 - [ ] 验证②（用户指示暂缓）：Linux musl 重建（ORZ-BUILD-MOUNT-001 契约，输出
   `D:/tb-eval/orz-linux`）。
-- [ ] 验证③（用户指示暂缓）：单题 make-doom-for-mips 复验——reward > 0、
-  journal 出现 `workspace.run_terminal` 订单→run_host_tool→ACAF
-  `command_exec` issued/consumed、机制门不回归（无 400、step_id 绑定、
-  无异常 policy_denied）。
+- [ ] 验证③（2026-08-18 修复后复验一次，机制断言全过、reward 项未达标，
+  待加预算重跑）：单题 make-doom-for-mips 复验——reward > 0、journal 出现
+  `workspace.run_terminal` 订单→run_host_tool→ACAF `command_exec`
+  issued/consumed、机制门不回归（无 400、step_id 绑定、无异常
+  policy_denied）。复验 `D:\tb-eval\jobs\2026-08-18__19-40-12`：0 异常、
+  无 400、6 笔订单→5 组票据、零拒绝；`context_compressed` 后会话继续
+  102 条事件零失败（400 场景闭环）；reward 0=墙钟内未产出可运行 ELF
+  （`node vm.js` 超时、无 `/tmp/frame.bmp`），非机制回归。
+- [x] 修复：折叠视图 400 根因（验证③前置；处理文档
+  `docs/LEDGER_FOLD_MARKER_INDEX_FIX_HANDLING_2026-08-18.md`）——
+  - [x] S1 代码修复（orz 子模块）：`run_template_compact` retain 后移
+    （guard 判定后，GuardBlocked/NoOp 零副作用）+ 执行路径 `kept_start`
+    重算（marker 删除左移 1）；`safe_fold_cut` → `Option`（idx==0 放弃
+    折叠）；`build_request_view` preamble 边界校验（末条为声明即回原文）。
+  - [x] S2 测试：新增 6 项单测（guard 无副作用 / kept_start 重算 /
+    preamble 校验 / idx==0 None / 中轮回退适配 / 旧 bug 场景回原文）；
+    `cargo check -p orz-loop` + `cargo test -p orz-loop -j 1` + fmt +
+    clippy 无新增（460 通过、基线一致）。
+  - [x] S3 Linux musl 重建（build_orz_aliyun.sh，ORZ-BUILD-MOUNT-001）+
+    时间戳校验（orz/orz-signer/orz-acaf-provision 三件套 19:39 新构建）。
+  - [x] S4 单题复验（验证③断言：无 400、ACAF 票据路径全过；reward 项
+    未达标——见下）+ 取证开关 `ORZ_DEBUG_VIEW=1` 暂保留登记为常驻诊断
+    （验证③闭合后移除）。
+  - [x] S5 文档同步：ADR-0010 §14.27（v1.27）/ 折叠设计 §3.5 / BACKLOG
+    0b / TODO 勾选 / CLI_PROJECT_INDEX；提交 orz 子模块 + 父仓库。
   **2026-08-18 取证进展**：三次复验均 reward 0（400 `insufficient tool
   messages` 退出）。核心机制已验证：`workspace.run_terminal` 订单→发放→
   `run_terminal_cmd` 执行 exit=0、ACAF 票据路径生效（journal 证据）。
   400 根因链已闭合（取证存档
-  `D:\tb-eval\jobs\2026-08-18__08-44-56\ROOTCAUSE_FORENSICS_20260818.md`）：
-  折叠 cut 破坏 plan_write 轮配对（视图保留 assistant 声明、回复被折叠
-  侧吞掉）+ `safe_fold_cut` idx==0 兜底原样保留不完整首轮。修复待下
-  一窗口（orz 3bd09fc/5bc3add 为取证 WIP 提交）。
+  `D:\tb-eval\jobs\2026-08-18__08-44-56\ROOTCAUSE_FORENSICS_20260818.md`；
+  根因复核修正见处理文档 §1.3）：真正破坏点=压缩触发（未执行）时
+  `run_template_compact` 顶部 retain 删除 marker 而折叠索引未失效
+  （GuardBlocked 无 reset），冻结 preamble 吞入首轮 plan_write 声明——
+  非「折叠 cut 硬截断」。修复已实施闭合（上方勾选项，orz 提交见下）；
+  修复后复验（19:40-20:10）0 异常、无 400、压缩执行后会话继续零失败。
 - [ ] 验证④（用户指示暂缓）：2–3 题交叉（compile-compcert、hf-model-inference
   等 build/run 与网络类）。
 - [ ] 验证⑤（用户指示暂缓）：`run_official_2.1.sh` 89 题 5 批。

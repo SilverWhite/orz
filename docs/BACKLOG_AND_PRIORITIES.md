@@ -261,10 +261,26 @@
   订单→run_host_tool→ACAF `command_exec` issued/consumed、无 400/无异常
   policy_denied）——**2026-08-18 取证进展**：核心机制已验证（订单→发放→
   run_terminal_cmd exit=0、ACAF 票据路径生效），但三次复验均因 400
-  （`insufficient tool messages`）退出；根因链已闭合=折叠 cut 破坏
-  plan_write 轮配对 + `safe_fold_cut` idx==0 兜底（取证存档
-  `D:\tb-eval\jobs\2026-08-18__08-44-56\ROOTCAUSE_FORENSICS_20260818.md`，
-  orz 3bd09fc/5bc3add 取证 WIP），修复待下一窗口；④ 2–3 题交叉
+  （`insufficient tool messages`）退出；**根因复核修正（处理文档
+  `docs/LEDGER_FOLD_MARKER_INDEX_FIX_HANDLING_2026-08-18.md`）**：真正
+  破坏点=压缩触发（未执行）时 `run_template_compact` 顶部 retain 删除
+  marker 而折叠索引未失效（GuardBlocked 无 reset），冻结 preamble 吞入
+  首轮 plan_write 声明（其回复在折叠区）——折叠 cut 本身始终在完整轮起点；
+  `safe_fold_cut` 只防 cut 不防 fold_start（idx==0 兜底为防御项之一）；
+  取证存档 `D:\tb-eval\jobs\2026-08-18__08-44-56\ROOTCAUSE_FORENSICS_20260818.md`
+  （orz 3bd09fc/5bc3add 取证 WIP）。**修复已实施闭合（2026-08-18，处理
+  文档 S1-S5）**：S1 代码修复（`run_template_compact` retain 后移 + 执行
+  路径 kept_start 重算；`safe_fold_cut`→`Option` + `build_request_view`
+  preamble 校验）；S2 新增 6 项单测，orz-loop 全量 460 通过、fmt 干净、
+  clippy 无新增告警；S3 Linux musl 重建三件套时间戳更新；**S4 复验
+  （`D:\tb-eval\jobs\2026-08-18__19-40-12`）**：0 异常、无 400，会话跑满
+  29 分钟墙钟——`context_compressed`（fallback 终止态）执行后继续 102 条
+  事件零失败（此前必现 400 的场景已闭环）；6 笔 console 订单→5 组 ACAF
+  control_ticket issued/consumed、零 permission 拒绝，机制断言全过；
+  **reward 仍 0**：agent 未在墙钟内产出可运行 `doomgeneric_mips` ELF
+  （验证器 `node vm.js` 超时、`/tmp/frame.bmp` 缺失）——任务完成度问题，
+  非机制回归，验证③ reward 项保持开放（可加预算重跑）；`ORZ_DEBUG_VIEW=1`
+  暂保留并登记为常驻诊断（验证③闭合后移除）；④ 2–3 题交叉
   （build/run 类 compile-compcert、网络类
   hf-model-inference）；⑤ `run_official_2.1.sh` 89 题 5 批。
 
