@@ -545,8 +545,8 @@ pub(crate) async fn run_template_compact(
     // 执行已确认：删除旧 marker 并重算 kept_start——marker 删除使冻结索引
     // 整体左移一位（折叠态 `fold_cut - had_marker`；marker 恒在 fold_cut
     // 之前：marker 插入点为首个声明，折叠 cut 恒在其后）。未折叠态按无
-    // marker 数组重算 `collapsed_cut`。`after` 同步按无 marker 口径重算，
-    // 事件估计与执行后数组一致。
+    // marker 数组重算 `collapsed_cut`。事件估计在 drain + marker 插入后
+    // 由实际数组重算（见下方 final_after），与执行后数组一致。
     let had_marker = messages.iter().any(|m| {
         m.content
             .starts_with(crate::prompt::CONTEXT_COMPRESSED_PREFIX)
@@ -562,9 +562,6 @@ pub(crate) async fn run_template_compact(
         .map(|cut| cut.saturating_sub(usize::from(had_marker)))
         .or_else(|| crate::action_ledger::collapsed_cut(messages, tail))
         .expect("guard path already resolved a kept_start for the same messages");
-    let after = estimate_messages_tokens(&messages[..kept_start])
-        + estimate_messages_tokens(&messages[kept_start..])
-        + crate::summary::SUMMARY_MARKER_ESTIMATE_TOKENS;
 
     let rounds_dropped = crate::action_ledger::rounds_before(messages, kept_start) as u32;
     // FUS-LEDGER-FOLD-STATE external-file design (2026-08-18, ADR-0010
@@ -607,12 +604,38 @@ pub(crate) async fn run_template_compact(
             continuation: crate::summary::MECHANICAL_CONTINUATION_PLACEHOLDER.to_string(),
         }
     };
+    let first_round_start = messages
+        .iter()
+        .position(|m| m.role == Role::Assistant && !m.tool_calls.is_empty())
+        .unwrap_or(messages.len());
+    let mut dropped = rounds_dropped;
+    let mut messages_dropped = messages.drain(first_round_start..kept_start).count();
+    // FALLBACK 紧急口径保持（D2-2）：200K 兜底触发时，常规 drain 后再按
+    // recovery_target_tokens 机械截断，保证 run 绝不滞留在窗口之上
+    // （机械模式无失败路径，此步为纯兜底）。
+    let mut insert_at = first_round_start;
+    if reason == "fallback" {
+        let stats = compact_messages(messages, cfg.recovery_target_tokens);
+        if stats.rounds_dropped > 0 {
+            // 审查修复（2026-08-19）：事件/存档/marker 的轮数 = 常规 drain
+            // + fallback 截断之和（此前覆盖赋值导致事件少报，且 marker/
+            // 存档与事件三方口径不一致）。
+            dropped += stats.rounds_dropped;
+            messages_dropped += stats.messages_dropped;
+            insert_at = messages
+                .iter()
+                .position(|m| m.role == Role::Assistant && !m.tool_calls.is_empty())
+                .unwrap_or(messages.len());
+        }
+    }
     // 机械模式（2026-08-18 B 定案）：存档恒写入（审计副本 + digest），
     // marker 恒携带真实 digest/路径——无 summary_incomplete 终止态。
+    // 审查修复（2026-08-19）：存档/marker 在 drain + fallback 截断后定稿，
+    // 「被压轮次」= 总轮数，与事件口径一致。
     let markdown = crate::summary::summary_archive_markdown(
         &id,
         &slots,
-        rounds_dropped,
+        dropped,
         guard_failed,
         // FUS-LEDGER-FOLD-STATE (2026-08-18, ADR-0010 §14.26 + §14.28
         // external-file design): the archive preserves the folded view the
@@ -631,35 +654,12 @@ pub(crate) async fn run_template_compact(
         &digest,
         &archive_path,
         &slots,
-        rounds_dropped,
+        dropped,
         guard_failed,
         archive_write_failed,
         plan_epoch,
         ledger_hint,
     );
-    let first_round_start = messages
-        .iter()
-        .position(|m| m.role == Role::Assistant && !m.tool_calls.is_empty())
-        .unwrap_or(messages.len());
-    let mut dropped = rounds_dropped;
-    let mut messages_dropped = messages.drain(first_round_start..kept_start).count();
-    // FALLBACK 紧急口径保持（D2-2）：200K 兜底触发时，常规 drain 后再按
-    // recovery_target_tokens 机械截断，保证 run 绝不滞留在窗口之上
-    // （机械模式无失败路径，此步为纯兜底）。
-    let mut final_after = after;
-    let mut insert_at = first_round_start;
-    if reason == "fallback" {
-        let stats = compact_messages(messages, cfg.recovery_target_tokens);
-        if stats.rounds_dropped > 0 {
-            dropped = stats.rounds_dropped;
-            messages_dropped += stats.messages_dropped;
-            final_after = stats.estimated_tokens_after;
-            insert_at = messages
-                .iter()
-                .position(|m| m.role == Role::Assistant && !m.tool_calls.is_empty())
-                .unwrap_or(messages.len());
-        }
-    }
     messages.insert(
         insert_at,
         Message {
@@ -675,9 +675,10 @@ pub(crate) async fn run_template_compact(
     // frozen fold indices are stale. Reset; the view re-accumulates from
     // the marker (折叠重置为 None，marker 之后重新累积).
     fold_state.reset();
-    if final_after == after {
-        final_after = estimate_messages_tokens(messages);
-    }
+    // 审查修复（2026-08-19）：事件估计在 marker 插入后重算（含 marker，
+    // 与 schema「marker + preamble + recent tail」口径一致；fallback 的
+    // 截断目标估算不再单独使用——真值含 marker）。
+    let final_after = estimate_messages_tokens(messages);
     writer
         .record(
             EventType::ContextCompressed,
@@ -3061,5 +3062,103 @@ mod tests {
             archive.exists(),
             "summary archive written under session_cwd"
         );
+    }
+
+    /// 审查修复（2026-08-19）：fallback 触发下常规 drain + 紧急截断双段
+    /// 都可能丢轮——事件/存档/marker 的「被压轮次」必须是两段之和（此前
+    /// 覆盖赋值导致事件只报第二段，且 marker/存档/事件三方口径不一致）。
+    #[tokio::test]
+    async fn fallback_second_stage_truncation_accounts_total_rounds() {
+        let dir = std::env::temp_dir().join(format!("orz-compact-fallback-{}", std::process::id()));
+        let host = CompactTestHost {
+            journal: JournalRecorder::new(dir.clone()),
+        };
+        // 小回收目标 + 大轮内容：第一段 drain（tail=2 保留 c3/c4）后，
+        // compact_messages 仍需再丢 1 轮（保留最新 c4）。
+        let cfg = ContextCompactConfig {
+            recovery_target_tokens: 1_000,
+            recent_tail_rounds: 2,
+            ..ContextCompactConfig::default()
+        };
+        let blackboard = Arc::new(SharedBlackboard::new());
+        let denial_state = Mutex::new(DenialState::default());
+        let pacing = AtomicU32::new(0);
+        let dc = Mutex::new(DebugEpisodeState::default());
+        let policy = AtomicU64::new(0);
+        let svc = compact_test_svc(&cfg, &blackboard, &denial_state, &pacing, &dc, &policy);
+        let mut writer = crate::controller::journal_event_writer(&host.journal, "test-run");
+        // 4 轮 c1..c4，每轮工具结果 ~4K 字符（≈2K tokens 估算）——远超
+        // recovery_target_tokens，保证第二段截断确实丢轮。
+        let mut messages = vec![Message {
+            role: Role::User,
+            content: "U0".to_string(),
+            tool_call_id: None,
+            tool_calls: Vec::new(),
+            reasoning_content: None,
+        }];
+        for (id, target) in [
+            ("c1", "a.py"),
+            ("c2", "b.rs"),
+            ("c3", "c.rs"),
+            ("c4", "d.rs"),
+        ] {
+            messages.push(Message {
+                role: Role::Assistant,
+                content: String::new(),
+                tool_call_id: None,
+                tool_calls: vec![ToolCall {
+                    name: "read_file".to_string(),
+                    arguments: serde_json::json!({"path": target}),
+                    call_id: id.to_string(),
+                }],
+                reasoning_content: None,
+            });
+            messages.push(Message {
+                role: Role::Tool,
+                content: "x".repeat(4_000),
+                tool_call_id: Some(id.to_string()),
+                tool_calls: Vec::new(),
+                reasoning_content: None,
+            });
+        }
+        let mut fold = LedgerFoldState::default();
+        let decision = run_template_compact(
+            &svc,
+            &mut writer,
+            &host,
+            &mut messages,
+            100_000, // force=true 跳过缩减守卫，measured 仅用于事件口径
+            "fallback",
+            true,
+            false,
+            0,
+            2, // recent_tail_rounds
+            None,
+            &mut fold,
+        )
+        .await
+        .expect("fallback execution path returns a decision");
+        assert_eq!(decision, CompactDecision::Executed);
+        // 第一段 drain 丢 c1/c2（tail=2 保留 c3/c4），第二段截断再丢 c3
+        // ——共 3 轮。marker、事件与存档均须报 3。
+        assert_eq!(messages.len(), 4, "U0 + marker + c4 轮");
+        let marker = &messages[1];
+        assert!(marker.content.contains("被压轮次: 3 轮"), "{marker:?}");
+        let events = std::fs::read_to_string(dir.join("events.jsonl")).unwrap();
+        let compact: serde_json::Value = events
+            .lines()
+            .map(|l| serde_json::from_str::<serde_json::Value>(l).unwrap())
+            .find(|e| e["event_type"] == "context_compressed")
+            .expect("context_compressed event journaled");
+        assert_eq!(compact["payload"]["rounds_dropped"], 3, "{compact}");
+        assert_eq!(compact["payload"]["mode"], "mechanical");
+        assert_eq!(compact["payload"]["reason"], "fallback");
+        let archive = dir
+            .join(".gsa")
+            .join("compaction")
+            .join("compaction-test-run-0000.md");
+        let archive_text = std::fs::read_to_string(archive).unwrap();
+        assert!(archive_text.contains("被压轮次: 3"), "{archive_text}");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

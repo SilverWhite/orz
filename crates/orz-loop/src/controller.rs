@@ -9878,6 +9878,23 @@ pub(crate) fn discard_event_writer(run_id: &str) -> EventWriter<'static> {
     EventWriter::new(None, EventTrack::V02, run_id, "", 0, None, None)
 }
 
+/// Test-only journal-backed writer for unit-level event assertions.
+#[cfg(test)]
+pub(crate) fn journal_event_writer<'a>(
+    journal: &'a JournalRecorder,
+    run_id: &str,
+) -> EventWriter<'a> {
+    EventWriter::new(
+        Some(journal),
+        EventTrack::V02,
+        run_id,
+        &"0".repeat(64),
+        0,
+        None,
+        None,
+    )
+}
+
 impl<'a> EventWriter<'a> {
     fn new(
         journal: Option<&'a JournalRecorder>,

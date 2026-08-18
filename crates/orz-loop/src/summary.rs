@@ -9,11 +9,10 @@
 //! foreign prefix. Character limits 3/3/5/3/3K = 17K total bound the marker
 //! and archive rendering.
 //!
-//! P0-D review fix (2026-08-14, ADR-0010 v1.14): the degeneration guard is
-//! ORZ's own 300-effective-char gate (CJK ideographs count double — the
-//! orz-compaction 500 gate was calibrated for English); the path slot is
-//! capped by Top-40 AND 5K chars; archive writes retry explicitly and the
-//! failure is surfaced in the marker/event instead of being swallowed.
+//! 2026-08-18 B 定案（ADR-0010 §14.29）：原 LLM 槽位的退化门（300 等效字符
+//! /CJK 双计）、重试与解析全部退役——压缩零模型调用、无失败槽位；路径槽
+//! 仍受 Top-40 AND 5K 双上限约束；存档写失败显式重试并在 marker/事件中
+//! 上报，绝不静默。
 
 use std::path::Path;
 
