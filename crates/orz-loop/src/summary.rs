@@ -342,7 +342,13 @@ pub fn summary_archive_markdown(
         out.push_str("\n> 摘要重试后仍失败：仅机械段有效，最近尾已扩大，后续轮次仍可正常执行。\n");
     }
     if let Some(ledger) = ledger {
-        out.push_str("\n## 折叠台账（冻结快照）\n\n```\n");
+        // FUS-LEDGER-FOLD-STATE external-file design (2026-08-18,
+        // ADR-0010 §14.28): the frozen "ledger" the model saw is now the
+        // byte-fixed pointer message — the folded rows themselves survive
+        // in the append-only external ledger file (never drained by
+        // compaction). The archive still records exactly what the model
+        // saw plus the pointer to the surviving projection.
+        out.push_str("\n## 折叠视图（冻结快照：外挂指针）\n\n```\n");
         out.push_str(ledger);
         out.push_str("\n```\n");
     }
@@ -362,6 +368,10 @@ pub fn build_summary_marker(
     guard_failed: bool,
     archive_write_failed: bool,
     plan_epoch: u64,
+    // FUS-LEDGER-FOLD-STATE external-file design (2026-08-18, ADR-0010
+    // §14.28): the fixed external ledger path — the marker line points a
+    // restored conversation at the surviving append-only history.
+    ledger_path: Option<&Path>,
 ) -> String {
     let state = if incomplete {
         "（summary_incomplete）"
@@ -376,10 +386,13 @@ pub fn build_summary_marker(
     } else {
         format!("摘要 digest: sha256:{digest}")
     };
+    let ledger_line =
+        ledger_path.map_or_else(String::new, |p| format!("历史摘要累积于 {}\n", p.display()));
     format!(
         "[前文上下文已压缩 v0.2 {state}]\n\
          {guard_note}\
          {archive_note}\
+         {ledger_line}\
          摘要 ID: {id}\n被压轮次: {rounds_dropped} 轮\n\
          摘要存档: {}\n{digest_line}\n\
          黑板 plan_epoch: {}\n\
@@ -388,7 +401,7 @@ pub fn build_summary_marker(
          变动文件路径: {}\n\
          注意事项: {}\n\
          后续衔接: {}\n\
- 回查: blackboard_read（分区 plan / edits / tool_actions / exec / actions；历史 plan epoch 用 epoch 参数）\n\
+         回查: blackboard_read（分区 plan / edits / tool_actions / exec / actions；历史 plan epoch 用 epoch 参数）\n\
          [/前文上下文已压缩]",
         archive_path.display(),
         if plan_epoch > 0 {
@@ -419,6 +432,7 @@ pub fn build_summary_marker(
         } else {
             ""
         },
+        ledger_line = ledger_line,
     )
 }
 
@@ -597,10 +611,12 @@ mod tests {
             false,
             false,
             3,
+            Some(Path::new(".gsa/ledger/current.md")),
         );
         assert!(marker.starts_with(crate::prompt::CONTEXT_COMPRESSED_PREFIX));
         assert!(marker.contains(&digest));
         assert!(marker.contains("compaction-RUN-X-001.md"));
+        assert!(marker.contains("历史摘要累积于 .gsa/ledger/current.md"));
         assert!(marker.contains("修复缓存回归"));
         assert!(marker.contains("黑板 plan_epoch: 3"));
         assert!(crate::prompt::is_restore_retained_block(&marker));
@@ -608,23 +624,28 @@ mod tests {
     }
 
     #[test]
-    fn archive_appends_frozen_ledger_section_when_folded() {
-        // FUS-LEDGER-FOLD-STATE (2026-08-18, ADR-0010 §14.26 / 设计 §3.5
-        // 第 1 步): the compaction archive preserves the frozen action-ledger
-        // block the model saw — the only surviving copy after the folded
-        // region is drained from `messages`.
+    fn archive_appends_frozen_pointer_section_when_folded() {
+        // FUS-LEDGER-FOLD-STATE (2026-08-18, ADR-0010 §14.26 + §14.28
+        // external-file design): the compaction archive preserves the
+        // frozen view the model saw — the byte-fixed pointer message (the
+        // folded rows themselves survive in the append-only external
+        // ledger file, which compaction never drains).
         let slots = slots();
-        let ledger = "[动作台账 v0.1]\n轮次 1: read_file 目标=a.py 结果=sha256:ab 最终回复=已读\n[/动作台账]";
+        let pointer =
+            crate::action_ledger::build_pointer_message(Path::new(".gsa/ledger/current.md"));
         let markdown = summary_archive_markdown(
             "compaction-RUN-X-001",
             &slots,
             3,
             false,
             false,
-            Some(ledger),
+            Some(&pointer),
         );
-        assert!(markdown.contains("## 折叠台账（冻结快照）"), "{markdown}");
-        assert!(markdown.contains(ledger), "{markdown}");
+        assert!(
+            markdown.contains("## 折叠视图（冻结快照：外挂指针）"),
+            "{markdown}"
+        );
+        assert!(markdown.contains(&pointer), "{markdown}");
         let digest = archive_digest(&markdown);
         let marker = build_summary_marker(
             "compaction-RUN-X-001",
@@ -636,6 +657,7 @@ mod tests {
             false,
             false,
             3,
+            Some(Path::new(".gsa/ledger/current.md")),
         );
         assert!(marker.starts_with(crate::prompt::CONTEXT_COMPRESSED_PREFIX));
     }
@@ -657,6 +679,7 @@ mod tests {
             false,
             false,
             2,
+            None,
         );
         assert!(marker.contains("summary_incomplete"));
         assert!(marker.contains("（生成失败）"));
@@ -678,6 +701,7 @@ mod tests {
             true,
             true,
             0,
+            None,
         );
         assert!(marker.contains("机制失败：缩减守卫连续不满足"));
         assert!(marker.contains("存档写入失败：摘要未落盘"));

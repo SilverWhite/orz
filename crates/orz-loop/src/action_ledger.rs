@@ -28,6 +28,113 @@ pub const ACTION_LEDGER_VERSION: &str = "v0.1";
 /// exact tail; older rounds collapse into ledger rows).
 pub const DEFAULT_RECENT_TAIL_ROUNDS: usize = 2;
 
+/// FUS-LEDGER-FOLD-STATE external-file design (2026-08-18, ADR-0010
+/// §14.28): the fixed pointer-message prefix injected into the folded
+/// request view (`[U0][preamble][pointer][最近 1 轮原文]`). The message is
+/// byte-fixed for the session — the external ledger file is the only
+/// growing part, so the request prefix stays byte-stable across advances
+/// (the per-window rewrite is gone; measured hit rate 81.9% → ~91–93%).
+pub const LEDGER_FOLD_POINTER_PREFIX: &str = "【历史折叠】";
+
+/// The append-only model-readable ledger projection file (per session;
+/// run dirs are naturally isolated). Design: 追加式写入、只增不轮转（压缩
+/// 不重置）；序号续点以文件为准——推进时读文件尾行取最大序号 +1。
+pub fn ledger_file_path(session_cwd: &std::path::Path) -> std::path::PathBuf {
+    session_cwd.join(".gsa").join("ledger").join("current.md")
+}
+
+/// The byte-fixed pointer message for the folded request view. 路径/文本
+/// 均固定（本会话内不变），不含任何变化 ID/序号——推进不重渲染，前缀稳定。
+pub fn build_pointer_message(ledger_path: &std::path::Path) -> String {
+    format!(
+        "{LEDGER_FOLD_POINTER_PREFIX}更早轮次的机械摘要已外挂存档：{}（本会话内固定）。\n\
+         需要回顾历史时按行检索该文件，例如 grep \"轮次\" {}、\n\
+         grep <工具名> {}。当前会话仅保留最近 1 轮原文，更早内容一律在该文件中。",
+        ledger_path.display(),
+        ledger_path.display(),
+        ledger_path.display(),
+    )
+}
+
+/// One external-file row: `[<全局序号>] 轮次 <序号>: <工具> 目标=… 结果=…
+/// 最终回复=…`。全局序号为按行续点的 per-row 序号（跨压缩连续；多结果轮
+/// 按条各占一行、序号连续递增），文件只增，读尾行即可续号。
+pub fn external_row_line(seq: u64, row: &ActionLedgerRow) -> String {
+    format!(
+        "[{seq}] 轮次 {seq}: {} 目标={} 结果={} 最终回复={}",
+        row.tool,
+        if row.target.is_empty() {
+            "（无）"
+        } else {
+            &row.target
+        },
+        row.pointer,
+        if row.final_reply.is_empty() {
+            "（无）"
+        } else {
+            &row.final_reply
+        },
+    )
+}
+
+/// Read the last complete line's leading `[seq]` — the next per-row seq to
+/// assign. The file is append-only with monotonically increasing seqs, so
+/// the LAST line carries the max; a missing/empty file starts at 1. Reads
+/// only the tail chunk (O(1) — 4KiB covers the longest single row by far).
+fn tail_seq(path: &std::path::Path) -> std::io::Result<u64> {
+    use std::io::{Read, Seek, SeekFrom};
+    let mut file = match std::fs::File::open(path) {
+        Ok(f) => f,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(0),
+        Err(e) => return Err(e),
+    };
+    const TAIL_BYTES: u64 = 4096;
+    let len = file.metadata()?.len();
+    let start = len.saturating_sub(TAIL_BYTES);
+    file.seek(SeekFrom::Start(start))?;
+    let mut buf = Vec::new();
+    file.take(TAIL_BYTES).read_to_end(&mut buf)?;
+    let text = String::from_utf8_lossy(&buf);
+    let last = text.lines().rev().find(|l| !l.trim().is_empty());
+    let Some(last) = last else { return Ok(0) };
+    let seq = last
+        .trim_start_matches(|c: char| c.is_whitespace())
+        .trim_start_matches('[')
+        .split(']')
+        .next()
+        .and_then(|s| s.trim().parse::<u64>().ok())
+        .unwrap_or(0);
+    Ok(seq)
+}
+
+/// Append the newly folded rows to the external ledger file (atomic
+/// O_APPEND single write + flush). Assigns the per-row global seqs from
+/// the file tail (`tail_seq` + 1, +2, …). Failure is reported to the
+/// caller — a failed append must NOT advance the fold state (the rows
+/// would be lost from both the view and the file; the next trigger retries).
+pub fn append_ledger_rows(path: &std::path::Path, rows: &[ActionLedgerRow]) -> std::io::Result<()> {
+    use std::io::Write;
+    if rows.is_empty() {
+        return Ok(());
+    }
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    let mut seq = tail_seq(path)?;
+    let mut buf = String::new();
+    for row in rows {
+        seq += 1;
+        buf.push_str(&external_row_line(seq, row));
+        buf.push('\n');
+    }
+    let mut file = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(path)?;
+    file.write_all(buf.as_bytes())?;
+    file.flush()
+}
+
 /// FUS-LEDGER-FOLD-STATE (2026-08-18, ADR-0010 §14.26): the stateful fold
 /// point of one loop invocation.
 ///
@@ -38,9 +145,14 @@ pub const DEFAULT_RECENT_TAIL_ROUNDS: usize = 2;
 /// 2026-08-18 ledger-fold design). This struct freezes the fold point:
 /// between advances the request view is `messages[..fold_start]` +
 /// `folded_ledger` + `messages[fold_cut..]` — byte-stable, pure append.
+/// FUS-LEDGER-FOLD-STATE external-file design (2026-08-18, ADR-0010
+/// §14.28): `folded_ledger` is the byte-FIXED pointer message (not a
+/// growing ledger block) — the folded rows are appended to the external
+/// ledger file by the caller, so advances never rewrite the view prefix.
 ///
 /// Invariant: `fold_start` and `fold_cut` are Some together (folded) or
-/// None together; `folded_ledger` is non-empty iff the state is folded.
+/// None together; `folded_ledger` is the pointer message and is set on
+/// the first advance, then byte-identical for the rest of the window.
 /// The indices are positions into the CURRENT `messages` slice of the
 /// loop; they are valid only for that slice (the state is reset after
 /// compaction mutates the conversation and at every loop start).
@@ -52,8 +164,9 @@ pub struct LedgerFoldState {
     /// Closed-end index of the folded region — the verbatim retention
     /// region of the request view is `[fold_cut..]`.
     pub fold_cut: Option<usize>,
-    /// The frozen ledger block text (re-rendered once per advance, then
-    /// byte-identical across requests).
+    /// The byte-fixed pointer message (external-file design; set once on
+    /// the first advance — the folded rows live in the external ledger
+    /// file, not in the request view).
     pub folded_ledger: Option<String>,
 }
 
@@ -293,8 +406,9 @@ pub fn build_collapsed_request(messages: &[Message], keep_recent_rounds: usize) 
 /// - Not folded: `messages` verbatim (no per-request stateless collapse —
 ///   the prefix stays byte-stable from the first round; the single fold
 ///   advance happens at the mechanical trigger instead).
-/// - Folded: `messages[..fold_start]` (preamble) + the frozen ledger block
-///   (user message) + `messages[fold_cut..]` (recent tail verbatim).
+/// - Folded: `messages[..fold_start]` (preamble) + the byte-fixed pointer
+///   message (user message; the folded rows live in the external ledger
+///   file) + `messages[fold_cut..]` (recent tail verbatim).
 ///
 /// The source `messages` slice is never modified — the journal/sidecar
 /// keeps the complete tool records (audit dual-track unchanged).
@@ -426,46 +540,70 @@ fn is_round_balanced(messages: &[Message], range: (usize, usize)) -> bool {
         .all(|id| declared.iter().any(|d| d == id))
 }
 
-/// FUS-LEDGER-FOLD-STATE (2026-08-18, ADR-0010 §14.26): advance the fold
-/// point — fold every complete old round before the `keep_recent_rounds`
-/// tail into a fresh frozen ledger block and move `fold_cut` forward.
+/// FUS-LEDGER-FOLD-STATE (2026-08-18, ADR-0010 §14.26 + §14.28
+/// external-file design): advance the fold point — fold the NEW complete
+/// old rounds before the `keep_recent_rounds` tail and move `fold_cut`
+/// forward.
 ///
-/// The ledger is re-rendered from the FULL history before the new cut
-/// (global round indices keep the numbering continuous with the previous
-/// frozen block; rows for already-folded rounds are byte-identical), so
-/// `folded_ledger` = 旧台账行 + 新增行. `fold_start` is set on the first
+/// Returns `Some(rows)` — ONLY the rows newly folded since the last
+/// advance — and the caller appends them to the external ledger file
+/// (IO is deliberately outside this pure function). `folded_ledger` is
+/// set to the byte-fixed pointer message on the FIRST advance and never
+/// rewritten (the request-view prefix stays byte-stable across advances:
+/// preamble + pointer + `[fold_cut..]`). `fold_start` is set on the first
 /// advance (first tool declaration) and never changes. `messages` itself
 /// is never mutated.
 ///
-/// Returns `false` (no-op, anti-spin) when there is no complete round to
+/// Returns `None` (no-op, anti-spin) when there is no complete round to
 /// fold — i.e. fewer than `keep_recent_rounds + 1` complete rounds, or the
-/// recomputed cut equals the current `fold_cut` (nothing new outside the
-/// tail since the last advance).
+/// recomputed cut does not move past the current `fold_cut` (nothing new
+/// outside the tail since the last advance).
 pub fn advance_fold(
     messages: &[Message],
     fold: &mut LedgerFoldState,
     keep_recent_rounds: usize,
-) -> bool {
-    let Some(kept_start) = collapsed_cut(messages, keep_recent_rounds) else {
-        return false;
-    };
-    if fold.fold_cut.is_some_and(|cut| kept_start <= cut) {
-        return false;
+    ledger_path: &std::path::Path,
+) -> Option<Vec<ActionLedgerRow>> {
+    let kept_start = collapsed_cut(messages, keep_recent_rounds)?;
+    let old_cut = fold.fold_cut;
+    if old_cut.is_some_and(|cut| kept_start <= cut) {
+        return None;
     }
     let ranges = round_ranges(messages);
     let collapse_count = ranges
         .iter()
         .position(|&(start, _)| start == kept_start)
         .unwrap_or(ranges.len());
+    // Only the rounds newly folded since the last advance produce rows:
+    // `[old_cut .. kept_start)` — previously folded rounds are already in
+    // the external file (and were never part of the view).
+    let first_new = old_cut
+        .map(|cut| {
+            ranges
+                .iter()
+                .position(|&(start, _)| start >= cut)
+                .unwrap_or(collapse_count)
+        })
+        .unwrap_or(0);
     let mut rows = Vec::new();
-    for (idx, &range) in ranges.iter().take(collapse_count).enumerate() {
+    for (idx, &range) in ranges
+        .iter()
+        .enumerate()
+        .take(collapse_count)
+        .skip(first_new)
+    {
         rows.extend(rows_for_round(messages, range, idx));
+    }
+    if rows.is_empty() {
+        return None;
     }
     let fold_start = fold.fold_start.unwrap_or(ranges[0].0);
     fold.fold_start = Some(fold_start);
     fold.fold_cut = Some(kept_start);
-    fold.folded_ledger = Some(build_ledger_block(&rows));
-    true
+    if fold.folded_ledger.is_none() {
+        fold.folded_ledger = Some(build_pointer_message(ledger_path));
+    }
+    Some(rows)
 }
 
 #[cfg(test)]
@@ -845,105 +983,123 @@ mod tests {
         assert!(!fold.is_folded());
     }
 
+    // ---- FUS-LEDGER-FOLD-STATE external-file design (2026-08-18,
+    // ADR-0010 §14.28) ----
+
     #[test]
-    fn first_advance_folds_old_rounds_into_frozen_ledger() {
+    fn first_advance_folds_old_rounds_behind_fixed_pointer() {
         let mut messages = vec![msg(Role::User, "任务")];
         messages.extend(round("c1", "read_file", "a.py", "内容A"));
         messages.extend(round("c2", "search_replace", "b.rs", "已编辑"));
         messages.extend(round("c3", "web_fetch", "https://x.dev", "页面"));
         messages.extend(round("c4", "read_file", "c.py", "内容C"));
+        let ledger_path = std::path::Path::new(".gsa/ledger/current.md");
         let mut fold = LedgerFoldState::default();
-        assert!(advance_fold(&messages, &mut fold, 2));
+        let rows = advance_fold(&messages, &mut fold, 1, ledger_path)
+            .expect("first advance folds old rounds");
         assert!(fold.is_folded());
         assert_eq!(fold.fold_start, Some(1), "first tool declaration index");
-        // kept_start = the first of the newest tail=2 rounds (c3 at idx 5).
-        assert_eq!(fold.fold_cut, Some(5));
-        let ledger = fold.folded_ledger.as_deref().unwrap();
-        assert!(ledger.starts_with(ACTION_LEDGER_PREFIX));
-        assert!(ledger.contains("read_file 目标=a.py"), "{ledger}");
-        assert!(ledger.contains("search_replace 目标=b.rs"), "{ledger}");
+        // kept_start = the start of the newest tail=1 round (c4 at idx 7).
+        assert_eq!(fold.fold_cut, Some(7));
+        assert_eq!(rows.len(), 3, "rows for rounds c1/c2/c3");
         assert!(
-            !ledger.contains("c3"),
-            "tail rounds stay verbatim: {ledger}"
+            rows.iter()
+                .any(|r| r.tool == "read_file" && r.target == "a.py")
+        );
+        assert!(rows.iter().any(|r| r.tool == "search_replace"));
+        assert!(
+            rows.iter()
+                .any(|r| r.tool == "web_fetch" && r.target == "https://x.dev")
+        );
+        // folded_ledger = the byte-fixed pointer message, NOT the rows.
+        let pointer = fold.folded_ledger.as_deref().unwrap();
+        assert!(pointer.starts_with(LEDGER_FOLD_POINTER_PREFIX), "{pointer}");
+        assert!(pointer.contains(".gsa/ledger/current.md"), "{pointer}");
+        assert!(
+            !pointer.contains("read_file"),
+            "rows never enter the view: {pointer}"
         );
 
         let view = build_request_view(&messages, &fold);
-        assert!(view[0].content == "任务", "{view:?}");
-        assert!(
-            view[1].content.starts_with(ACTION_LEDGER_PREFIX),
-            "{view:?}"
+        assert_eq!(view[0].content, "任务");
+        assert_eq!(
+            view[1].content, pointer,
+            "the view carries the fixed pointer message"
         );
-        // The retained region starts at fold_cut — c3/c4 stay verbatim.
-        assert!(view.iter().any(|m| m.content == "页面"), "{view:?}");
+        // The retained region starts at fold_cut — c4 stays verbatim; the
+        // folded rounds' raw results are gone from the view.
         assert!(view.iter().any(|m| m.content == "内容C"), "{view:?}");
         assert!(view.iter().all(|m| m.content != "内容A"), "{view:?}");
+        assert!(view.iter().all(|m| m.content != "页面"), "{view:?}");
     }
 
     #[test]
     fn advance_is_anti_spin_without_new_rounds() {
+        let ledger_path = std::path::Path::new(".gsa/ledger/current.md");
         let mut messages = vec![msg(Role::User, "任务")];
         messages.extend(round("c1", "read_file", "a.py", "内容A"));
         messages.extend(round("c2", "read_file", "b.py", "内容B"));
         messages.extend(round("c3", "read_file", "c.py", "内容C"));
         let mut fold = LedgerFoldState::default();
-        assert!(advance_fold(&messages, &mut fold, 2));
+        assert!(advance_fold(&messages, &mut fold, 2, ledger_path).is_some());
         let before = fold.clone();
         // No new complete round outside the tail — no-op.
-        assert!(!advance_fold(&messages, &mut fold, 2));
+        assert!(advance_fold(&messages, &mut fold, 2, ledger_path).is_none());
         assert_eq!(fold, before);
         // Fewer than tail+1 complete rounds — no-op.
         let mut sparse = vec![msg(Role::User, "任务")];
         sparse.extend(round("c1", "read_file", "a.py", "内容A"));
         let mut sparse_fold = LedgerFoldState::default();
-        assert!(!advance_fold(&sparse, &mut sparse_fold, 2));
+        assert!(advance_fold(&sparse, &mut sparse_fold, 2, ledger_path).is_none());
         assert!(!sparse_fold.is_folded());
     }
 
     #[test]
-    fn advance_extends_ledger_with_continuous_round_numbers() {
+    fn advance_returns_only_newly_folded_rows_and_keeps_pointer() {
+        let ledger_path = std::path::Path::new(".gsa/ledger/current.md");
         let mut messages = vec![msg(Role::User, "任务")];
         messages.extend(round("c1", "read_file", "a.py", "A"));
         messages.extend(round("c2", "read_file", "b.py", "B"));
         messages.extend(round("c3", "read_file", "c.py", "C"));
         messages.extend(round("c4", "read_file", "d.py", "D"));
         let mut fold = LedgerFoldState::default();
-        assert!(advance_fold(&messages, &mut fold, 2));
-        let first = fold.folded_ledger.clone().unwrap();
+        let first = advance_fold(&messages, &mut fold, 2, ledger_path).unwrap();
+        assert_eq!(first.len(), 2, "rounds c1/c2");
         assert!(
-            first.contains("轮次 1:") && first.contains("轮次 2:"),
-            "{first}"
+            first
+                .iter()
+                .all(|r| r.target == "a.py" || r.target == "b.py")
         );
+        let pointer = fold.folded_ledger.clone().unwrap();
 
-        // Two more complete rounds: the next advance folds c3/c4 as well
-        // (tail=2 now keeps c5/c6) — rows 1..4, numbering continuous.
+        // Two more complete rounds: the next advance returns ONLY the
+        // newly folded c3/c4 rows — the pointer is never rewritten.
         messages.extend(round("c5", "read_file", "e.py", "E"));
         messages.extend(round("c6", "read_file", "f.py", "F"));
-        assert!(advance_fold(&messages, &mut fold, 2));
-        let second = fold.folded_ledger.clone().unwrap();
+        let second = advance_fold(&messages, &mut fold, 2, ledger_path).unwrap();
+        assert_eq!(second.len(), 2, "rounds c3/c4 only");
         assert!(
-            second.contains("轮次 1:") && second.contains("轮次 4:"),
-            "{second}"
-        );
-        // The old rows are re-rendered byte-identically (the closing tag
-        // naturally moves to the end of the extended block).
-        let first_rows: Vec<&str> = first.lines().filter(|l| *l != "[/动作台账]").collect();
-        let second_lines: Vec<&str> = second.lines().collect();
-        assert!(
-            second_lines.starts_with(&first_rows),
-            "old rows stay byte-identical: {second}"
+            second
+                .iter()
+                .all(|r| r.target == "c.py" || r.target == "d.py")
         );
         assert!(
-            second.contains("read_file 目标=c.py") && second.contains("read_file 目标=d.py"),
-            "newly folded rows appended: {second}"
+            second
+                .iter()
+                .all(|r| r.target != "a.py" && r.target != "b.py"),
+            "already-written rows are never returned again"
         );
-        assert!(
-            !second.contains("e.py") && !second.contains("f.py"),
-            "the newest tail=2 rounds stay verbatim: {second}"
+        assert_eq!(
+            fold.folded_ledger.as_deref(),
+            Some(pointer.as_str()),
+            "pointer message byte-identical across advances"
         );
+        assert!(fold.fold_cut.is_some_and(|cut| cut > 7));
     }
 
     #[test]
-    fn folded_view_prefix_is_byte_stable_across_appends() {
+    fn folded_view_prefix_is_byte_stable_across_advances() {
+        let ledger_path = std::path::Path::new(".gsa/ledger/current.md");
         let mut messages = vec![msg(Role::User, "任务")];
         for k in 1..=4 {
             messages.extend(round(
@@ -954,11 +1110,12 @@ mod tests {
             ));
         }
         let mut fold = LedgerFoldState::default();
-        assert!(advance_fold(&messages, &mut fold, 2));
+        assert!(advance_fold(&messages, &mut fold, 1, ledger_path).is_some());
         let view1 = build_request_view(&messages, &fold);
-        // The folded prefix (preamble + frozen ledger) is byte-stable.
+        // Preamble + fixed pointer: byte-stable across ALL advances.
         let prefix_len = fold.fold_start.unwrap() + 1;
-        let prefix1: Vec<&Message> = view1.iter().take(prefix_len).collect();
+        let prefix1: Vec<Message> = view1.iter().take(prefix_len).cloned().collect();
+        let mut prev_view = view1;
         for k in 5..=10 {
             messages.extend(round(
                 &format!("c{k}"),
@@ -966,11 +1123,138 @@ mod tests {
                 &format!("{k}.py"),
                 &format!("内容{k}"),
             ));
+            let advanced = advance_fold(&messages, &mut fold, 1, ledger_path).is_some();
             let view = build_request_view(&messages, &fold);
-            let prefix: Vec<&Message> = view.iter().take(prefix_len).collect();
+            let prefix: Vec<Message> = view.iter().take(prefix_len).cloned().collect();
             assert_eq!(prefix, prefix1, "folded prefix rewritten at round {k}");
-            // And the whole request view is pure append of the previous.
-            assert_eq!(&view[..view1.len()], view1.as_slice(), "round {k}");
+            if advanced {
+                // A mechanical advance trims the tail to the new cut (the
+                // round that just crossed the line) — the only accepted
+                // view rewrite, beyond the never-changing pointer.
+                assert!(
+                    view.len() <= prev_view.len(),
+                    "advance must not grow the tail: round {k}"
+                );
+            } else {
+                // Between advances the view is pure append of the previous.
+                assert_eq!(
+                    &view[..prev_view.len()],
+                    prev_view.as_slice(),
+                    "view rewritten outside an advance at round {k}"
+                );
+            }
+            prev_view = view;
         }
+    }
+
+    #[test]
+    fn external_file_append_continues_sequence_across_windows() {
+        let dir = std::env::temp_dir().join(format!(
+            "orz-ledger-ext-{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let path = ledger_file_path(&dir);
+        let rows = |targets: &[&str]| {
+            targets
+                .iter()
+                .enumerate()
+                .map(|(i, t)| ActionLedgerRow {
+                    round_index: i,
+                    tool: "read_file".to_string(),
+                    target: (*t).to_string(),
+                    pointer: format!("sha256:{i:064x}"),
+                    final_reply: format!("已读 {t}"),
+                })
+                .collect::<Vec<_>>()
+        };
+        append_ledger_rows(&path, &rows(&["a.py", "b.py", "c.py"])).unwrap();
+        append_ledger_rows(&path, &rows(&["d.py", "e.py"])).unwrap();
+        let text = std::fs::read_to_string(&path).unwrap();
+        let lines: Vec<&str> = text.lines().collect();
+        assert_eq!(lines.len(), 5);
+        assert!(
+            lines[0].starts_with("[1] 轮次 1: read_file 目标=a.py"),
+            "{}",
+            lines[0]
+        );
+        assert!(
+            lines[1].starts_with("[2] 轮次 2: read_file 目标=b.py"),
+            "{}",
+            lines[1]
+        );
+        assert!(
+            lines[3].starts_with("[4] 轮次 4: read_file 目标=d.py"),
+            "{}",
+            lines[3]
+        );
+        assert!(
+            lines[4].starts_with("[5] 轮次 5: read_file 目标=e.py"),
+            "{}",
+            lines[4]
+        );
+        assert!(lines[0].contains("结果=sha256:") && lines[0].contains("最终回复=已读 a.py"));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn fold_reset_continues_external_file_sequence() {
+        // Compaction semantics: fold_state.reset() clears the in-memory
+        // fold, but the external file is append-only and its seqs continue
+        // — a later advance (fresh window after the marker) numbers from
+        // the file tail, NOT from 1 again (跨压缩连续).
+        let dir = std::env::temp_dir().join(format!(
+            "orz-ledger-ext-reset-{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let path = ledger_file_path(&dir);
+        let mut messages = vec![msg(Role::User, "任务")];
+        for k in 1..=3 {
+            messages.extend(round(
+                &format!("c{k}"),
+                "read_file",
+                &format!("{k}.py"),
+                &format!("内容{k}"),
+            ));
+        }
+        let mut fold = LedgerFoldState::default();
+        let rows = advance_fold(&messages, &mut fold, 1, &path).unwrap();
+        append_ledger_rows(&path, &rows).unwrap();
+        assert_eq!(std::fs::read_to_string(&path).unwrap().lines().count(), 2);
+
+        // Compaction: messages truncated (marker replaces the folded
+        // region) and the fold state resets — a brand-new window.
+        fold.reset();
+        let mut fresh = vec![
+            msg(Role::User, "任务"),
+            msg(Role::User, "[前文上下文已压缩 v0.2] 摘要"),
+        ];
+        for k in 10..=12 {
+            fresh.extend(round(
+                &format!("c{k}"),
+                "read_file",
+                &format!("{k}.py"),
+                &format!("内容{k}"),
+            ));
+        }
+        let mut fresh_fold = LedgerFoldState::default();
+        let rows2 = advance_fold(&fresh, &mut fresh_fold, 1, &path).unwrap();
+        append_ledger_rows(&path, &rows2).unwrap();
+        let text = std::fs::read_to_string(&path).unwrap();
+        let lines: Vec<&str> = text.lines().collect();
+        assert_eq!(lines.len(), 4, "file is append-only across compaction");
+        assert!(lines[2].starts_with("[3]"), "{}", lines[2]);
+        assert!(lines[2].contains("目标=10.py"), "{}", lines[2]);
+        assert!(
+            lines[3].starts_with("[4] 轮次 4: read_file 目标=11.py"),
+            "{}",
+            lines[3]
+        );
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

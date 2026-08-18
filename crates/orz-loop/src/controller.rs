@@ -156,6 +156,22 @@ fn parse_fold_trigger_tokens(s: &str) -> Option<u64> {
     s.trim().parse().ok().filter(|v| *v > 0)
 }
 
+/// FUS-LEDGER-FOLD-STATE external-file design (2026-08-18, ADR-0010
+/// §14.28): complete rounds kept verbatim in the FOLDED request view
+/// (`[U0][固定指针消息][最近 N 轮原文]`). Default 1 (2026-08-18 design
+/// 定案: 最近 1 轮原文; 压缩失败 widened tail 时 +1 → 2); `recent_tail_rounds`
+/// (compaction drain tail) is untouched. Env `ORZ_FOLD_TAIL_ROUNDS`
+/// overrides (trimmed positive integer; absent/invalid/zero = default).
+pub fn fold_tail_rounds_override() -> Option<usize> {
+    std::env::var("ORZ_FOLD_TAIL_ROUNDS")
+        .ok()
+        .and_then(|s| parse_fold_tail_rounds(&s))
+}
+
+fn parse_fold_tail_rounds(s: &str) -> Option<usize> {
+    s.trim().parse().ok().filter(|v| *v > 0)
+}
+
 /// Streaming pacing (Phase 3 slice #6): a round's `model_output` (journaled,
 /// fsync-acked) must be projected by a live client before the next round's
 /// first text delta arrives (deltas travel in-memory at arrival rate). The
@@ -219,6 +235,12 @@ pub struct ContextCompactConfig {
     /// rounds first). Default 128K = the MRCR quality plateau boundary
     /// (V4-Flash-Max 0.870); env `ORZ_FOLD_TRIGGER_TOKENS` overrides.
     pub fold_trigger_tokens: u64,
+    /// FUS-LEDGER-FOLD-STATE external-file design (2026-08-18, ADR-0010
+    /// §14.28): complete rounds kept verbatim in the FOLDED request view
+    /// after the fixed pointer message (default 1; env
+    /// `ORZ_FOLD_TAIL_ROUNDS` overrides). Separate from `recent_tail_rounds`
+    /// (the compaction drain tail, unchanged).
+    pub fold_tail_rounds: usize,
     /// D2-2 (2026-08-14, ADR-0010 v1.10 / CONTEXT_COMPACTION_DESIGN §6):
     /// a restored conversation is pre-checked before the first request;
     /// when the ESTIMATE exceeds this conservative threshold (min of the
@@ -254,6 +276,7 @@ impl Default for ContextCompactConfig {
             min_rounds: 2,
             safety_tokens: 256_000,
             fold_trigger_tokens: DEFAULT_FOLD_TRIGGER_TOKENS,
+            fold_tail_rounds: 1,
             recovery_trigger_tokens: 200_000,
             recovery_target_tokens: 160_000,
             session_end_trigger_tokens: 160_000,
@@ -2124,6 +2147,7 @@ impl AgentLoopController {
             context_compact: ContextCompactConfig {
                 fold_trigger_tokens: fold_trigger_tokens_override()
                     .unwrap_or(DEFAULT_FOLD_TRIGGER_TOKENS),
+                fold_tail_rounds: fold_tail_rounds_override().unwrap_or(1),
                 ..ContextCompactConfig::default()
             },
             whitelist: Mutex::new(Vec::new()),
@@ -3765,6 +3789,14 @@ impl AgentLoopController {
     /// `ORZ_FOLD_TRIGGER_TOKENS` at construction, default 128K).
     pub fn with_fold_trigger_tokens(mut self, tokens: u64) -> Self {
         self.context_compact.fold_trigger_tokens = tokens.max(1);
+        self
+    }
+
+    /// FUS-LEDGER-FOLD-STATE external-file design (2026-08-18, ADR-0010
+    /// §14.28): pin the folded-view recent-tail length (test seam;
+    /// production reads `ORZ_FOLD_TAIL_ROUNDS` at construction, default 1).
+    pub fn with_fold_tail_rounds(mut self, rounds: usize) -> Self {
+        self.context_compact.fold_tail_rounds = rounds.max(1);
         self
     }
 
@@ -14338,6 +14370,10 @@ mod tests {
         assert_eq!(cfg.recovery_trigger_tokens, 200_000);
         assert_eq!(cfg.recovery_target_tokens, 160_000);
         assert_eq!(cfg.recent_tail_rounds, 2);
+        // FUS-LEDGER-FOLD-STATE external-file design (2026-08-18,
+        // ADR-0010 §14.28): the folded view keeps 1 round verbatim after
+        // the fixed pointer (compaction drain tail stays 2).
+        assert_eq!(cfg.fold_tail_rounds, 1);
         // 2026-08-18 adjudication (ADR-0010 §14.26): 192K rhythm / 256K
         // fallback / 128K fold-advance trigger.
         assert_eq!(cfg.trigger_tokens, 192_000);
@@ -14447,69 +14483,77 @@ mod tests {
         let ledger_idx = received
             .iter()
             .position(|r| {
-                r.messages
-                    .iter()
-                    .any(|m| m.content.starts_with("[动作台账"))
+                r.messages.iter().any(|m| {
+                    m.content
+                        .starts_with(crate::action_ledger::LEDGER_FOLD_POINTER_PREFIX)
+                })
             })
             .expect("a mechanical fold advance happened");
         assert!(ledger_idx > 0, "the first request must stay verbatim");
         for r in &received[..ledger_idx] {
             assert!(
-                r.messages
-                    .iter()
-                    .all(|m| !m.content.starts_with("[动作台账")),
+                r.messages.iter().all(|m| !m
+                    .content
+                    .starts_with(crate::action_ledger::LEDGER_FOLD_POINTER_PREFIX)),
                 "no ledger before the mechanical trigger: {r:?}"
             );
         }
-        // After the advance: preamble + frozen ledger byte-identical,
-        // view grows by pure append — anchored per frozen ledger version
-        // (a mechanical advance legitimately rewrites the prefix once).
-        let ledger_of = |r: &ModelRequest| {
+        // FUS-LEDGER-FOLD-STATE external-file design (2026-08-18, ADR-0010
+        // §14.28): after the first advance the [preamble + fixed pointer]
+        // prefix is BYTE-IDENTICAL in every later request — the folded
+        // rows live in the external file, so advances never rewrite the
+        // view prefix (the cache-critical invariant; measured 81.9% →
+        // ~91–93%).
+        let pointer_of = |r: &ModelRequest| {
             r.messages
                 .iter()
-                .find(|m| m.content.starts_with("[动作台账"))
+                .find(|m| {
+                    m.content
+                        .starts_with(crate::action_ledger::LEDGER_FOLD_POINTER_PREFIX)
+                })
                 .map(|m| m.content.clone())
         };
-        let mut anchor = ledger_idx;
-        let mut prev_ledger: Option<String> = None;
-        let mut advances = 0usize;
+        let anchor_ptr = pointer_of(&received[ledger_idx]).unwrap();
+        let anchor_prefix: Vec<Message> = received[ledger_idx]
+            .messages
+            .iter()
+            .take_while(|m| {
+                !m.content
+                    .starts_with(crate::action_ledger::LEDGER_FOLD_POINTER_PREFIX)
+            })
+            .cloned()
+            .collect();
         for (i, r) in received.iter().enumerate().skip(ledger_idx) {
-            let ledger = ledger_of(r);
-            if let Some(ledger) = &ledger {
-                if prev_ledger.as_ref().is_some_and(|p| p != ledger) {
-                    advances += 1;
-                    anchor = i; // one-time rewrite, re-anchor
-                }
-                prev_ledger = Some(ledger.clone());
-            }
-            if i > anchor {
-                let anchored = &received[anchor];
-                assert!(
-                    r.messages.len() >= anchored.messages.len(),
-                    "view shrank between advances: {i}"
-                );
-                assert_eq!(
-                    &r.messages[..anchored.messages.len()],
-                    anchored.messages.as_slice(),
-                    "folded prefix rewritten outside an advance at request {i}"
-                );
-            }
+            assert_eq!(
+                pointer_of(r).as_deref(),
+                Some(anchor_ptr.as_str()),
+                "pointer message rewritten at request {i}"
+            );
+            assert!(
+                r.messages
+                    .iter()
+                    .take(anchor_prefix.len())
+                    .eq(anchor_prefix.iter()),
+                "preamble rewritten at request {i}"
+            );
         }
-        assert!(
-            advances < received.len() - ledger_idx,
-            "advances must be strictly fewer than post-fold requests: \
-             {advances} / {}",
-            received.len() - ledger_idx
-        );
-        // FUS-LEDGER-FOLD-STATE review fix (2026-08-18): every real fold
-        // advance journals `ledger_fold_advance` with the new fold point
-        // and the triggering estimate — the per-window prefix rewrite is
-        // attributable in the event chain (miss attribution).
+        // Every real fold advance journals `ledger_fold_advance` with the
+        // new fold point and the triggering estimate — the mechanical
+        // advances (and their miss cost) are attributable in the event
+        // chain. Trigger reset: advances must be strictly fewer than the
+        // post-fold requests (the view after an advance is pointer + 1
+        // round < threshold — no per-request fold storm).
         let fold_events = events(&dir)
             .into_iter()
             .filter(|e| e.event_type == EventType::LedgerFoldAdvance)
             .collect::<Vec<_>>();
         assert!(!fold_events.is_empty(), "fold advance event missing");
+        assert!(
+            fold_events.len() < received.len() - ledger_idx,
+            "advances must be strictly fewer than post-fold requests: {} / {}",
+            fold_events.len(),
+            received.len() - ledger_idx
+        );
         for ev in &fold_events {
             let fold_start = ev.payload["fold_start"].as_u64().unwrap();
             let fold_cut = ev.payload["fold_cut"].as_u64().unwrap();
@@ -14529,6 +14573,21 @@ mod tests {
             .map(|e| e.payload["fold_cut"].as_u64().unwrap())
             .collect();
         assert!(cuts.windows(2).all(|w| w[0] < w[1]), "{cuts:?}");
+        // The folded rows land in the external append-only projection.
+        let ledger_file = dir.join(".gsa").join("ledger").join("current.md");
+        let text = std::fs::read_to_string(&ledger_file).expect("external ledger file written");
+        let lines: Vec<&str> = text.lines().collect();
+        assert!(!lines.is_empty(), "external ledger must hold folded rows");
+        assert!(
+            lines.iter().all(|l| l.starts_with('[')),
+            "every external row carries a global seq: {text}"
+        );
+        assert!(
+            lines
+                .iter()
+                .any(|l| l.contains("read_file") && l.contains("目标=")),
+            "rows carry tool/target/pointer/reply: {text}"
+        );
     }
 
     /// FUS-LEDGER-FOLD-STATE (2026-08-18, ADR-0010 §14.26) × compaction:
@@ -14660,9 +14719,10 @@ mod tests {
 
         let received = fake.received_requests();
         let has_ledger = |r: &ModelRequest| {
-            r.messages
-                .iter()
-                .any(|m| m.content.starts_with("[动作台账"))
+            r.messages.iter().any(|m| {
+                m.content
+                    .starts_with(crate::action_ledger::LEDGER_FOLD_POINTER_PREFIX)
+            })
         };
         let has_marker = |r: &ModelRequest| {
             r.messages
@@ -14703,7 +14763,9 @@ mod tests {
         );
         // FUS-LEDGER-FOLD-STATE review fix (2026-08-18, 设计 §3.5 第 1 步):
         // each compaction archive preserves the frozen ledger the model
-        // saw — the only surviving ledger snapshot after the drain.
+        // saw — the fixed pointer message (the folded rows survive in the
+        // append-only external ledger file, which compaction never drains;
+        // ADR-0010 §14.28 external-file design).
         let archive_dir = dir.join(".gsa").join("compaction");
         let archives: Vec<_> = std::fs::read_dir(&archive_dir)
             .expect("archive dir exists")
@@ -14711,17 +14773,39 @@ mod tests {
             .map(|e| e.path())
             .collect();
         assert_eq!(archives.len(), 2, "{archives:?}");
+        let ledger_file = dir.join(".gsa").join("ledger").join("current.md");
+        let ledger_path_display = ledger_file.display().to_string();
+        let pointer = crate::action_ledger::build_pointer_message(&ledger_file);
         for path in &archives {
             let archive = std::fs::read_to_string(path).unwrap();
             assert!(
-                archive.contains("## 折叠台账（冻结快照）"),
+                archive.contains("## 折叠视图（冻结快照：外挂指针）"),
                 "frozen ledger section missing from archive: {archive}"
             );
             assert!(
-                archive.contains("[动作台账"),
+                archive.contains(&pointer),
                 "frozen ledger block missing from archive: {archive}"
             );
         }
+        // The marker points a restored conversation at the surviving
+        // append-only external ledger.
+        let marker_req = &received[marker_idx];
+        let marker = marker_req
+            .messages
+            .iter()
+            .find(|m| m.content.starts_with("[前文上下文已压缩"))
+            .map(|m| m.content.clone())
+            .unwrap();
+        assert!(
+            marker.contains(&format!("历史摘要累积于 {ledger_path_display}")),
+            "marker must carry the external ledger path: {marker}"
+        );
+        // The external ledger exists, holds rows, and its seqs continue
+        // after the compaction (fold reset does not reset the file).
+        let text = std::fs::read_to_string(&ledger_file).expect("external ledger file written");
+        let lines: Vec<&str> = text.lines().collect();
+        assert!(!lines.is_empty(), "external ledger must hold folded rows");
+        assert!(lines.iter().all(|l| l.starts_with('[')), "{text}");
     }
 
     #[tokio::test]

@@ -553,6 +553,11 @@ pub(crate) async fn run_template_compact(
         + crate::summary::SUMMARY_MARKER_ESTIMATE_TOKENS;
 
     let rounds_dropped = crate::action_ledger::rounds_before(messages, kept_start) as u32;
+    // FUS-LEDGER-FOLD-STATE external-file design (2026-08-18, ADR-0010
+    // §14.28): the marker carries the fixed external-ledger path hint so a
+    // restored conversation points the model at the surviving history
+    // (the file is append-only and NOT reset by compaction).
+    let ledger_path = crate::action_ledger::ledger_file_path(&host.session_cwd());
     // The archive id rides the writer's CURRENT seq — no event is recorded
     // between here and the `context_compressed` journal, so the id is
     // stable and unique within the run.
@@ -668,6 +673,7 @@ pub(crate) async fn run_template_compact(
             guard_failed,
             archive_write_failed,
             plan_epoch,
+            Some(&ledger_path),
         );
         let messages_dropped = messages.drain(first_round_start..kept_start).count();
         messages.insert(
@@ -730,6 +736,7 @@ pub(crate) async fn run_template_compact(
             guard_failed,
             false,
             plan_epoch,
+            Some(&ledger_path),
         );
         let mut dropped = rounds_dropped;
         let mut messages_dropped = 0usize;
@@ -1020,52 +1027,79 @@ pub(crate) async fn run_agent_loop(
             }
         }
 
-        // FUS-LEDGER-FOLD-STATE (2026-08-18, ADR-0010 §14.26): fold-
-        // advance trigger — the same safe loop-top gap as compaction
-        // (never inside a tool batch; a pending checkpoint round has
-        // priority: `pending_checkpoint` is None here). When the
-        // ESTIMATED request view (chars/2) reaches `fold_trigger_tokens`
-        // (default 128K) and complete old rounds exist outside the tail,
-        // fold them into the frozen ledger ONCE and move `fold_cut`
-        // forward — between advances the request view prefix is
-        // byte-stable (pure append), which is the v1.9 prefix-cache
-        // discipline the old per-request stateless recomputation broke
-        // (measured hit rate ≈ 67% → 2026-08-18 design §1.3/§5). The
-        // advance never mutates `messages` (journal/sidecar keep the
-        // full tool records — audit dual-track unchanged).
+        // FUS-LEDGER-FOLD-STATE (2026-08-18, ADR-0010 §14.26 + §14.28
+        // external-file design): fold-advance trigger — the same safe
+        // loop-top gap as compaction (never inside a tool batch; a
+        // pending checkpoint round has priority: `pending_checkpoint` is
+        // None here). When the ESTIMATED request view (chars/2) reaches
+        // `fold_trigger_tokens` (default 128K) and complete old rounds
+        // exist outside the tail, fold the NEW rounds into the external
+        // ledger file ONCE and move `fold_cut` forward. The request view
+        // becomes preamble + byte-fixed pointer + `[fold_cut..]` — the
+        // prefix stays byte-stable across ALL advances (no per-window
+        // rewrite), which is the v1.9 prefix-cache discipline the old
+        // per-request stateless recomputation broke (measured hit rate
+        // 81.9% → ~91–93%; 2026-08-18 design §1.3/§5). The advance never
+        // mutates `messages` (journal/sidecar keep the full tool records
+        // — audit dual-track unchanged; the external file is a
+        // deterministically re-derivable projection).
         if pending_checkpoint.is_none() {
             let fold_tail =
-                svc.context_compact.recent_tail_rounds + if failure_widened_tail { 1 } else { 0 };
+                svc.context_compact.fold_tail_rounds + if failure_widened_tail { 1 } else { 0 };
             let view_estimate = {
                 let view = crate::action_ledger::build_request_view(messages, &fold_state);
                 estimate_messages_tokens(&view)
             };
-            if view_estimate >= svc.context_compact.fold_trigger_tokens
-                && crate::action_ledger::advance_fold(messages, &mut fold_state, fold_tail)
-            {
-                // FUS-LEDGER-FOLD-STATE (2026-08-18, ADR-0010 §14.26):
-                // one mechanical fold advance — the request-view prefix is
-                // rewritten once per fold window (the accepted per-window
-                // miss), so the event carries the new fold point and the
-                // triggering estimate for cache-miss attribution. Emitted
-                // only on a real advance: an anti-spin no-op (no complete
-                // round outside the tail) emits nothing — the repeated
-                // O(view) estimation until a new round arrives is accepted.
-                writer
-                    .record(
-                        EventType::LedgerFoldAdvance,
-                        serde_json::json!({
-                            "fold_start": fold_state.fold_start,
-                            "fold_cut": fold_state.fold_cut,
-                            "rounds_folded": fold_state
-                                .fold_cut
-                                .map(|cut| crate::action_ledger::rounds_before(messages, cut))
-                                .unwrap_or(0),
-                            "view_estimate_tokens": view_estimate,
-                            "agent_role": profile.role.as_str(),
-                        }),
-                    )
-                    .await?;
+            if view_estimate >= svc.context_compact.fold_trigger_tokens {
+                let ledger_path = crate::action_ledger::ledger_file_path(&host.session_cwd());
+                let prev_fold = fold_state.clone();
+                if let Some(rows) = crate::action_ledger::advance_fold(
+                    messages,
+                    &mut fold_state,
+                    fold_tail,
+                    &ledger_path,
+                ) {
+                    // External-file write failure must NOT advance the fold
+                    // — the rows would be lost from both the view and the
+                    // file. Roll back and retry on the next trigger
+                    // (design §8: 推进失败不阻塞会话; journal remains the
+                    // authority).
+                    if crate::action_ledger::append_ledger_rows(&ledger_path, &rows).is_err() {
+                        fold_state = prev_fold;
+                        tracing::warn!(
+                            ledger_path = %ledger_path.display(),
+                            rows = rows.len(),
+                            "external ledger append failed — fold state rolled back, will retry"
+                        );
+                        continue;
+                    }
+                    // FUS-LEDGER-FOLD-STATE (2026-08-18, ADR-0010 §14.26):
+                    // one mechanical fold advance — the request-view prefix
+                    // is stable (pointer never rewritten), but `fold_cut`
+                    // moves and the view grows by pure append; the event
+                    // carries the new fold point and the triggering
+                    // estimate for cache-miss attribution. Emitted only on
+                    // a real advance.
+                    writer
+                        .record(
+                            EventType::LedgerFoldAdvance,
+                            serde_json::json!({
+                                "fold_start": fold_state.fold_start,
+                                "fold_cut": fold_state.fold_cut,
+                                "rounds_folded": fold_state
+                                    .fold_cut
+                                    .map(|cut| crate::action_ledger::rounds_before(messages, cut))
+                                    .unwrap_or(0),
+                                "view_estimate_tokens": view_estimate,
+                                "agent_role": profile.role.as_str(),
+                            }),
+                        )
+                        .await?;
+                } else {
+                    // Anti-spin no-op (no complete round outside the
+                    // tail): emits nothing — the repeated O(view)
+                    // estimation until a new round arrives is accepted.
+                }
             }
         }
 
