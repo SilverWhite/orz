@@ -1943,6 +1943,25 @@ ADR §3.6 正文修订随实施登记。
    26，无新增可归因告警）。S3（Linux musl 重建）与 S4（make-doom-for-mips
    复验断言命中率 ≥90%、无 400、journal 断言不变）待执行；验收 DoD 见设计
    文档 §7。
+   **2026-08-18 二次审查修复（S1 收口；orz 子模块提交见后）**：全面审查
+   逐项处理——(a) 推进写失败不再 `continue` 跳过模型请求（持久失败 = 会话
+   空转）；改为回滚 + 计数 + 事件留痕，连续 3 次失败后本循环禁用折叠、
+   视图退回全量原文（压缩兜底），新增事件面 `ledger_fold_write_failed`
+   （payload: ledger_path / attempt / disabled / rows / view_estimate_tokens
+   / agent_role；run-event-v0.2 schema 同步）；(b) 外挂文件仅主车道折叠
+   （检索车道共享 session_cwd，避免多车道行混入同一文件），检索车道压缩
+   marker 不携带台账提示；(c) 行格式 `[<全局序号>]`（per-row 全局序号，
+   跨压缩连续）与 `轮次`（窗口内 round_index+1，沿用现有台账语义）解耦；
+   (d) `tail_seq` 长行稳健化（尾窗增长至完整末行）+ 非空文件尾行无
+   `[seq]` 报错回滚，杜绝静默从 1 重新编号；(e) `advance_fold` 落行前补
+   preamble / safe_fold_cut 校验（视图拒绝折叠时行不入文件，与视图一致）；
+   (f) marker「历史摘要累积于」行仅在外挂文件已存在或本窗口已折叠时写入
+   （避免悬空提示）；(g) `with_context_compact` 不再重置
+   `fold_tail_rounds`；`ledger_fold_advance` 增 `view_estimate_after`
+   （推进后估算，补足「触发复位」直接断言）。S2 增 6 项测试（action_ledger
+   5 + controller 写失败降级 e2e 1），orz-loop 全量 **468 通过**（-j 1）、
+   fmt 干净、clippy 与基线一致（lib 21 / test 26）；orz-assurance 152 +
+   orz-tui 178 通过、`cargo check --workspace` 通过。
 
 ### 14.27 v1.27 补写裁决索引（2026-08-18）
 

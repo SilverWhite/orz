@@ -341,6 +341,19 @@
     `ORZ_FOLD_TAIL_ROUNDS` 解析 + `with_fold_tail_rounds` 测试缝。
   - [x] summary：marker 追加「历史摘要累积于 <abs-path>」；归档段改
     「折叠视图（冻结快照：外挂指针）」。
+- [x] 二次审查修复（2026-08-18 闭合，S1 收口）：
+  - [x] 写失败降级：不再 `continue` 空转——回滚 + 计数，连续 3 次失败后
+    本循环禁用折叠（视图退回全量原文，压缩兜底）；新增事件面
+    `ledger_fold_write_failed`（schema v0.2 同步 + TUI 映射）。
+  - [x] 外挂文件仅主车道：检索车道不折叠，其压缩 marker 不携带台账提示。
+  - [x] 行格式解耦：`[<全局序号>]`（per-row 跨压缩连续）与 `轮次`
+    （窗口内 round_index+1）分离；`tail_seq` 长行稳健化 + 非空文件尾行
+    无 `[seq]` 报错回滚。
+  - [x] 推进侧 400 校验：`advance_fold` 落行前 preamble/safe_fold_cut
+    校验（视图拒绝折叠时行不入文件）。
+  - [x] marker 路径提示条件化（文件已存在或本窗口已折叠）；`with_context_compact`
+    保留 `fold_tail_rounds`；`ledger_fold_advance` 增 `view_estimate_after`
+    触发复位断言。
 - [x] S2 测试（2026-08-18 闭合）：action_ledger 18 项（新增：外挂追加续号、
   跨压缩续号（fold reset 后文件续号）、指针字节稳定、advance 仅返回新增行、
   前缀跨推进稳定）；summary 12 项；controller 折叠 e2e 2 项更新（指针前缀

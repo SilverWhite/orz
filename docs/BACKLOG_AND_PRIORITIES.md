@@ -307,6 +307,14 @@
   summary marker「历史摘要累积于」行 + 归档段改外挂指针。S2 测试——
   action_ledger 18 / summary 12 / controller 折叠 e2e 2；orz-loop 全量
   462 通过（-j 1）、fmt 干净、clippy 与基线一致（lib 21 / lib test 26）。
+- **2026-08-18 二次审查修复（S1 收口，orz 提交见 ADR-0010 §14.28）**：
+  写失败不再 `continue` 空转（连续 3 次失败禁用折叠 + 新增事件面
+  `ledger_fold_write_failed`，schema v0.2 同步）、外挂文件仅主车道（检索
+  车道不折叠）、行格式 `[全局序号]`/`轮次` 解耦、`tail_seq` 长行稳健化 +
+  损坏报错、`advance_fold` 落行前 preamble/safe_fold_cut 校验、marker
+  条件路径提示、`view_estimate_after` 触发复位断言。orz-loop 全量 468
+  通过、fmt 干净、clippy 与基线一致；计数不变（仍在 29，S3/S4 验证闭环
+  后 29 → 28）。
 - 待验证：S3 Linux musl 重建（ORZ-BUILD-MOUNT-001，输出
   `D:/tb-eval/orz-linux`）+ 时间戳校验；S4 make-doom-for-mips 单题复验
   （断言命中率 ≥90%（provider usage 口径）、无 400、journal 断言不变

@@ -234,6 +234,15 @@
 > BACKLOG 0c / TODO P0-0c 已同步。S3（Linux musl 重建）/ S4（make-doom-for-
 > mips 复验命中率 ≥90%）待验证；未闭合 28 → 29（实施轮入账，验证闭环后
 > 29 → 28）。
+> 2026-08-18 折叠历史外挂二次审查修复闭合登记（用户指示处理全部审查发现）
+> ——写失败不再 `continue` 空转（连续 3 次失败禁用折叠 + 新增 v0.2 事件
+> `ledger_fold_write_failed`，Schema/TUI 全链同步）、外挂文件仅主车道（检索
+> 车道不折叠）、行格式 `[全局序号]`/`轮次` 解耦、`tail_seq` 长行稳健化 +
+> 损坏报错、`advance_fold` 落行前 preamble/safe_fold_cut 校验、marker 条件
+> 路径提示、`ledger_fold_advance` 增 `view_estimate_after`（触发复位断言）。
+> orz-loop 468 / orz-tui 178 / orz-assurance 152 通过、clippy 与基线一致、
+> `cargo check --workspace` 通过。ADR-0010 §14.28 / BACKLOG 0c / TODO
+> P0-0c / 设计文档已同步。未闭合计数不变（29，S3/S4 验证闭环后 29 → 28）。
 > 2026-08-18 状态行缓存纪律 + 订单拒绝步骤语义设计定案登记（用户裁决；纯文档、
 > 未实施）——① `[任务状态]` 常驻状态行移出系统提示词，改为变化时追加的尾随
 > 用户消息（与预算剩余块同纪律）：根因=console 步骤机每笔订单 receipt 推进步骤
