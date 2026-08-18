@@ -164,7 +164,7 @@ fn parse_fold_trigger_tokens(s: &str) -> Option<u64> {
 /// 校准换算系数). `recent_tail_rounds` (compaction drain tail) is untouched.
 /// Env `ORZ_FOLD_TAIL_TOKENS` overrides (trimmed positive integer;
 /// absent/invalid/zero = default). 换算: 真实 token → 字符预算
-/// (`action_ledger::FOLD_TAIL_CHARS_PER_TOKEN` = 4) → 估计口径
+/// (`action_ledger::FOLD_TAIL_CHARS_PER_TOKEN` = 2，S4 实测校准) → 估计口径
 /// (`estimate_messages_tokens`, chars/2)。
 pub fn fold_tail_tokens_override() -> Option<u64> {
     std::env::var("ORZ_FOLD_TAIL_TOKENS")
@@ -183,7 +183,8 @@ fn parse_fold_tail_tokens(s: &str) -> Option<u64> {
 /// 5–7K——多数折叠时刻能整轮装下（截断为例外；截断频率 >30% 视为桥偏小，
 /// S4 校准）；4K 命中率仅多约 0.5pp 但会频繁截断正常终端轮；10K+ 收益递减。
 /// `ORZ_FOLD_TAIL_TOKENS` 可配；实现按
-/// `action_ledger::FOLD_TAIL_CHARS_PER_TOKEN`（4 字符/真实 token）换算。
+/// `action_ledger::FOLD_TAIL_CHARS_PER_TOKEN`（2 字符/真实 token，S4 实测
+/// 校准——path-tracing 07:08 运行桥 12,948 字符 → 重付 6,493）换算。
 pub const DEFAULT_FOLD_TAIL_TOKENS: u64 = 8_000;
 
 /// Streaming pacing (Phase 3 slice #6): a round's `model_output` (journaled,
@@ -15243,7 +15244,7 @@ mod tests {
         // test isolates the fold mechanism.
         let controller = AgentLoopController::with_gateway(gateway)
             .with_context_compact(100_000_000, 400, 20, 100_000_000)
-            // 阈值高于「preamble + 指针 + 桥（100 token → 200 估计）」的
+            // 阈值高于「preamble + 指针 + 桥（100 token → 100 估计）」的
             // 固定基线，使触发复位断言（推进后估算 < 阈值）真实成立。
             .with_fold_trigger_tokens(2_000)
             // FUS-LEDGER-FOLD-BRIDGE (2026-08-19, ADR-0010 §14.32): 测试轮

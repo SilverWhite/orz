@@ -64,11 +64,15 @@ pub fn build_pointer_message(ledger_path: &std::path::Path) -> String {
 }
 
 /// FUS-LEDGER-FOLD-BRIDGE (2026-08-19, ADR-0010 §14.32 / 设计 §3.2): 桥预算
-/// 字符换算系数——初始 4 字符/真实 token（英文/代码为主保守值；S4 以折叠后
-/// 首请求实际重付校准换算偏差）。`estimate_messages_tokens` 估计口径 =
-/// chars/2，故桥的估计预算 = `fold_tail_tokens × FOLD_TAIL_CHARS_PER_TOKEN ÷ 2`
-/// （默认 8_000 → 32_000 字符 → 16_000 估计 token）。
-pub const FOLD_TAIL_CHARS_PER_TOKEN: u64 = 4;
+/// 字符换算系数——S4 单题复验（path-tracing 2026-08-19 07:08，job
+/// 2026-08-19__07-08-57）以折叠后首请求实际重付校准：第二次折叠后桥
+/// 12,948 字符（view_estimate_after 6,474 估计 = chars/2）对应首请求重付
+/// 6,493 真实 token → 实测 ≈ 2 字符/真实 token（英文/代码负载），初始
+/// 保守值 4 高估一倍，按设计 §6 DoD 校准为 2。`estimate_messages_tokens`
+/// 估计口径 = chars/2，故桥的估计预算 = `fold_tail_tokens ×
+/// FOLD_TAIL_CHARS_PER_TOKEN ÷ 2`（默认 8_000 → 16_000 字符 → 8_000 估计
+/// token ≈ 8K 真实 token）。
+pub const FOLD_TAIL_CHARS_PER_TOKEN: u64 = 2;
 
 /// 桥预算换算（真实 token 目标 → `estimate_messages_tokens` 估计口径）。
 pub fn fold_tail_estimate_budget(fold_tail_tokens: u64) -> u64 {
@@ -1928,9 +1932,11 @@ mod tests {
 
     #[test]
     fn fold_tail_estimate_budget_converts_tokens_to_chars_half() {
-        // 默认 8K 真实 token → 32K 字符 → 16K 估计口径（chars/2）。
-        assert_eq!(fold_tail_estimate_budget(8_000), 16_000);
-        assert_eq!(fold_tail_estimate_budget(1), 2);
+        // 默认 8K 真实 token → 16K 字符 → 8K 估计口径（chars/2）——
+        // S4 实测校准（2026-08-19）：≈ 2 字符/真实 token，估计口径 ≈ 真实
+        // token（path-tracing 07:08 运行，桥 12,948 字符 → 重付 6,493）。
+        assert_eq!(fold_tail_estimate_budget(8_000), 8_000);
+        assert_eq!(fold_tail_estimate_budget(1), 1);
         assert_eq!(fold_tail_estimate_budget(0), 0);
         assert_eq!(
             fold_tail_estimate_budget(u64::MAX),

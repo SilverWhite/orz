@@ -967,7 +967,8 @@ pub(crate) async fn run_agent_loop(
             // 内固定」契约）。`fold_disabled` = 连续写失败后的降级开关。
             // FUS-LEDGER-FOLD-BRIDGE (2026-08-19, ADR-0010 §14.32): 桥预算
             // 换算（真实 token → estimate_messages_tokens 估计口径，
-            // 4 字符/token ÷ 2）；`fold_tail_rounds` 已退役。
+            // 2 字符/token ÷ 2（S4 实测校准，2026-08-19））；
+            // `fold_tail_rounds` 已退役。
             let fold_tail_budget = crate::action_ledger::fold_tail_estimate_budget(
                 svc.context_compact.fold_tail_tokens,
             );
