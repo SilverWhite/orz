@@ -258,7 +258,11 @@ const NOTES_FACTS_ACTION_FAILURES_MAX: usize = 3;
 const NOTES_FACTS_EXEC_ERROR_LINE_MAX_CHARS: usize = 200;
 
 /// 按字符截断并加「…」提示（不超过 `max_chars`）。
-fn truncate_chars(s: &str, max_chars: usize) -> String {
+///
+/// 2026-08-19 黑板缓存成本设计（ADR-0010 §14.31）：exec 段单行渲染复用本
+/// 口径（199 字符 + 「…」）——epoch.rs 与注意事项槽共用同一截断语义，避免
+/// 两处口径漂移。
+pub(crate) fn truncate_chars(s: &str, max_chars: usize) -> String {
     if s.chars().count() <= max_chars {
         return s.to_string();
     }
@@ -269,7 +273,11 @@ fn truncate_chars(s: &str, max_chars: usize) -> String {
 
 /// 失败 receipt 的 error 信封字段（controller 结构化写入 `{step, code, ...}`）；
 /// 字段缺失时机械回退到 `?`（fail-closed，不编造）。
-fn failure_envelope_fields(error: &Option<serde_json::Value>) -> (String, String) {
+///
+/// 2026-08-19 黑板缓存成本设计（ADR-0010 §14.31）：actions 结果板固定形态
+/// 行（`step/code` 缺失回退 `?`）复用本函数——与 D1=(c) 注意事项槽失败
+/// receipt 同口径。
+pub(crate) fn failure_envelope_fields(error: &Option<serde_json::Value>) -> (String, String) {
     let obj = error.as_ref().and_then(|v| v.as_object());
     let get = |key: &str| -> String {
         obj.and_then(|m| m.get(key))

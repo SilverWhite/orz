@@ -12655,6 +12655,149 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    /// 2026-08-19 黑板缓存成本设计（ADR-0010 §14.31 / 设计 §4.1+§4.2，S2
+    /// 工具级断言）：`blackboard_read` 经真实工具链回达模型的 actions/exec
+    /// 分区载荷已瘦身——结果板不再携带 response JSON / 完整 error 对象
+    /// （固定形态行，缺失回退 `?`）；exec 行截断 200 字符、段总长受 4K
+    /// 字符上限约束（超限仅头行 + 计数行）。
+    #[tokio::test]
+    async fn blackboard_read_serves_slimmed_actions_and_exec_sections() {
+        let dir = test_dir();
+        let journal = JournalRecorder::new(dir.clone());
+        let host = TestHost {
+            journal,
+            tool_result: Some(ToolResult {
+                output: "irrelevant".to_string(),
+                exit_code: Some(0),
+                output_encoding: None,
+                structured: None,
+                ..Default::default()
+            }),
+        };
+        let fake = Arc::new(FakeProvider::new(vec![
+            ScriptedResponse::tool_calls(vec![ToolCall {
+                name: "blackboard_read".to_string(),
+                arguments: serde_json::json!({"section": "actions"}),
+                call_id: "call-slim-a".to_string(),
+            }]),
+            ScriptedResponse::tool_calls(vec![ToolCall {
+                name: "blackboard_read".to_string(),
+                arguments: serde_json::json!({"section": "exec"}),
+                call_id: "call-slim-e".to_string(),
+            }]),
+            ScriptedResponse::text("完成"),
+            ScriptedResponse::text("完成"),
+        ]));
+        let gateway: Arc<dyn ModelGateway> = fake.clone();
+        let controller = AgentLoopController::with_gateway(gateway);
+        {
+            let mut bb = controller.blackboard().write();
+            bb.actions.push_result(ActionResult {
+                order_id: "ORD-SLIM-1".into(),
+                ok: true,
+                response: Some(serde_json::json!({"output": "x".repeat(5_000)})),
+                error: None,
+                trace_id: "t-slim-1".into(),
+                timestamp: "2026-08-19T00:00:00Z".into(),
+            });
+            bb.actions.push_result(ActionResult {
+                order_id: "ORD-SLIM-2".into(),
+                ok: false,
+                response: None,
+                error: Some(serde_json::json!({
+                    "step": "execute",
+                    "code": "boom",
+                    "message": "y".repeat(4_000),
+                })),
+                trace_id: "t-slim-2".into(),
+                timestamp: "2026-08-19T00:00:01Z".into(),
+            });
+            // 40 条超长 exec 行：逐行截断后段总长仍超 4K → 头行 + 计数行。
+            for _ in 0..40 {
+                bb.exec.results.push("z".repeat(500));
+            }
+        }
+        controller
+            .run_turn(&host, "看黑板", "RUN-SLIM", MANIFEST, 0, None, None, None)
+            .await
+            .unwrap();
+
+        let received = fake.received_requests();
+        let actions_round = received
+            .iter()
+            .find(|r| {
+                r.messages
+                    .iter()
+                    .any(|m| m.tool_call_id.as_deref() == Some("call-slim-a"))
+            })
+            .expect("round carrying blackboard_read actions reply");
+        let actions_reply = actions_round
+            .messages
+            .iter()
+            .find(|m| m.tool_call_id.as_deref() == Some("call-slim-a"))
+            .expect("actions tool result message");
+        assert!(
+            actions_reply
+                .content
+                .contains("ORD-SLIM-1 ok=true step=? code=? trace_id=t-slim-1"),
+            "{:?}",
+            actions_round.messages
+        );
+        assert!(
+            actions_reply
+                .content
+                .contains("ORD-SLIM-2 ok=false step=execute code=boom trace_id=t-slim-2"),
+            "{:?}",
+            actions_round.messages
+        );
+        assert!(
+            !actions_reply.content.contains("xxxx"),
+            "response JSON must not reach the model: {:?}",
+            actions_round.messages
+        );
+        assert!(
+            !actions_reply.content.contains("response="),
+            "{:?}",
+            actions_round.messages
+        );
+
+        let exec_round = received
+            .iter()
+            .find(|r| {
+                r.messages
+                    .iter()
+                    .any(|m| m.tool_call_id.as_deref() == Some("call-slim-e"))
+            })
+            .expect("round carrying blackboard_read exec reply");
+        let exec_reply = exec_round
+            .messages
+            .iter()
+            .find(|m| m.tool_call_id.as_deref() == Some("call-slim-e"))
+            .expect("exec tool result message");
+        assert!(
+            exec_reply
+                .content
+                .contains("[exec: 共 40 条，未省略；明细超 4K 字符上限]"),
+            "{:?}",
+            exec_round.messages
+        );
+        assert!(
+            exec_reply
+                .content
+                .contains("完整内容见 blackboard_read 分区 exec 与存档"),
+            "{:?}",
+            exec_round.messages
+        );
+        assert_eq!(
+            exec_reply.content.lines().count(),
+            2,
+            "{:?}",
+            exec_round.messages
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     /// A4: without a plan the status line is absent — zero dilution for
     /// non-plan runs.
     #[tokio::test]

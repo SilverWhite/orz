@@ -16,6 +16,9 @@ use std::path::{Path, PathBuf};
 use crate::blackboard::{
     ActionBoard, EditRecord, EpochSnapshot, ExecSection, PlanSection, ToolActionRecord,
 };
+// 2026-08-19 黑板缓存成本设计（ADR-0010 §14.31）：actions 结果板固定形态行
+// 与 exec 行截断复用 summary.rs 同口径辅助（D1=(c) 已确立的机械语义）。
+use crate::summary::{failure_envelope_fields, truncate_chars};
 
 /// Archive directory name under the session cwd's `.gsa` root.
 pub const EPOCH_ARCHIVE_DIR: &str = ".gsa/blackboard";
@@ -320,24 +323,52 @@ pub fn render_section(
             }
         }
         "exec" => {
-            let mut lines = Vec::new();
-            lines.extend(exec.results.iter().cloned());
-            lines.extend(exec.errors.iter().cloned());
-            if lines.is_empty() {
-                "(no exec results yet)".to_string()
-            } else {
-                const EXEC_RENDER_CAP: usize = 50;
-                if lines.len() > EXEC_RENDER_CAP {
-                    let omitted = lines.len() - EXEC_RENDER_CAP;
-                    let head = format!(
-                        "[exec: 共 {} 条，仅显示最近 {EXEC_RENDER_CAP} 条（较早条目省略 {omitted} 条）]",
-                        lines.len(),
-                    );
-                    lines.drain(0..omitted);
-                    lines.insert(0, head);
-                }
-                lines.join("\n")
+            // 2026-08-19 黑板缓存成本设计（ADR-0010 §14.31 / §4.2）：
+            // - 每条结果/错误行按字符截断到 200 字符（复用 summary.rs
+            //   truncate_chars 口径：199 字符 + 「…」）；
+            // - EXEC_RENDER_CAP=50 保留（较早条目省略 + 头行）；
+            // - 段总长上限 4K 字符（约 2K token）：超限时明细行整体省略，
+            //   仅保留头行 + 计数行（与 actions 段计数行同 bracket 风格），
+            //   完整内容仍可经 blackboard_read 分区/存档回查。
+            const EXEC_RENDER_CAP: usize = 50;
+            const EXEC_LINE_MAX_CHARS: usize = 200;
+            const EXEC_SECTION_MAX_CHARS: usize = 4_000;
+
+            let total = exec.results.len() + exec.errors.len();
+            if total == 0 {
+                return "(no exec results yet)".to_string();
             }
+            let mut lines: Vec<String> = exec
+                .results
+                .iter()
+                .chain(exec.errors.iter())
+                .map(|s| truncate_chars(s, EXEC_LINE_MAX_CHARS))
+                .collect();
+            if lines.len() > EXEC_RENDER_CAP {
+                let omitted = lines.len() - EXEC_RENDER_CAP;
+                lines.drain(0..omitted);
+                lines.insert(
+                    0,
+                    format!(
+                        "[exec: 共 {total} 条，仅显示最近 {EXEC_RENDER_CAP} 条（较早条目省略 {omitted} 条）]"
+                    ),
+                );
+            }
+            let mut text = lines.join("\n");
+            if text.chars().count() > EXEC_SECTION_MAX_CHARS {
+                let omitted = total.saturating_sub(EXEC_RENDER_CAP);
+                let head = if omitted > 0 {
+                    format!(
+                        "[exec: 共 {total} 条，仅显示最近 {EXEC_RENDER_CAP} 条（较早条目省略 {omitted} 条）]"
+                    )
+                } else {
+                    format!("[exec: 共 {total} 条，未省略；明细超 4K 字符上限]")
+                };
+                text = format!(
+                    "{head}\n[exec: 全部省略（共 {total} 条）；完整内容见 blackboard_read 分区 exec 与存档]"
+                );
+            }
+            text
         }
         // P0-C orz 内嵌集成 S2 (2026-08-15): the console action board —
         // registration (assistant-refreshed buttons), the pending order
@@ -384,31 +415,19 @@ pub fn render_section(
                     ));
                 }
                 for result in actions.results.iter().rev().take(RESULTS_RENDER_CAP) {
-                    let line = if result.ok {
-                        let response = serde_json::to_string(&result.response)
-                            .unwrap_or_else(|_| "{}".to_string());
-                        format!(
-                            "{} ok=true trace_id={} response={response}",
-                            result.order_id, result.trace_id,
-                        )
-                    } else {
-                        let detail = result
-                            .error
-                            .as_ref()
-                            .and_then(|e| e.get("step"))
-                            .and_then(serde_json::Value::as_str)
-                            .unwrap_or("?");
-                        let code = result
-                            .error
-                            .as_ref()
-                            .and_then(|e| e.get("code"))
-                            .and_then(serde_json::Value::as_str)
-                            .unwrap_or("?");
-                        format!(
-                            "{} ok=false step={detail} code={code} trace_id={}",
-                            result.order_id, result.trace_id,
-                        )
-                    };
+                    // 2026-08-19 黑板缓存成本设计（ADR-0010 §14.31 / §4.1）：
+                    // 结果板不再嵌入 response JSON / 完整 error 对象——每条
+                    // 固定形态（约 ≤90 字符）：
+                    //   <order_id> ok=<bool> step=<step|?> code=<code|?>
+                    //   trace_id=<trace_id>
+                    // step/code 取信封既有字段，缺失回退 `?`（与 D1=(c)
+                    // failure_envelope_fields 同口径）；大载荷留在存档与
+                    // TraceStore，模型按需经 trace 回查。
+                    let (step, code) = failure_envelope_fields(&result.error);
+                    let line = format!(
+                        "{} ok={} step={} code={} trace_id={}",
+                        result.order_id, result.ok, step, code, result.trace_id,
+                    );
                     lines.push(line);
                 }
             }
@@ -483,8 +502,21 @@ mod tests {
         assert!(text.contains("== order =="));
         assert!(text.contains("ORD-000001 action=workspace.read_file round=0 plan_epoch=1"));
         assert!(text.contains("== results =="));
-        assert!(text.contains("ORD-000001 ok=true trace_id=t000001"));
-        assert!(text.contains("ORD-000002 ok=false step=policy code=policy_denied"));
+        // 2026-08-19 黑板缓存成本设计（ADR-0010 §14.31 / §4.1）：结果板固定
+        // 形态行——成功/失败 receipt 均不再嵌入 response JSON / 完整 error
+        // 对象；step/code 缺失回退 `?`。
+        assert!(text.contains("ORD-000001 ok=true step=? code=? trace_id=t000001"));
+        assert!(
+            text.contains("ORD-000002 ok=false step=policy code=policy_denied trace_id=t000002")
+        );
+        assert!(
+            !text.contains("response="),
+            "result lines must not embed response JSON: {text}"
+        );
+        assert!(
+            !text.contains("\"output\""),
+            "result lines must not embed response JSON: {text}"
+        );
 
         // 未知分区显式报错并列出新分区。
         let unknown = render_section(
@@ -498,6 +530,241 @@ mod tests {
         );
         assert!(unknown.contains("unknown blackboard section: bogus"));
         assert!(unknown.contains("actions"));
+    }
+
+    /// 2026-08-19 黑板缓存成本设计（ADR-0010 §14.31 / §4.1）：actions 结果
+    /// 板瘦身——大 response JSON / 完整 error 对象不再进渲染面；每条固定
+    /// 形态 `<order_id> ok=<bool> step=<step|?> code=<code|?> trace_id=...`
+    /// （缺失回退 `?`，与 D1=(c) failure_envelope_fields 同口径）。
+    #[test]
+    fn render_actions_results_slim_fixed_shape_no_response_json() {
+        let mut board = ActionBoard::default();
+        board.push_result(ActionResult {
+            order_id: "ORD-OK-1".into(),
+            ok: true,
+            response: Some(serde_json::json!({
+                "output": "x".repeat(10_000),
+                "nested": {"deep": "y".repeat(5_000)},
+            })),
+            error: None,
+            trace_id: "t-ok-1".into(),
+            timestamp: "2026-08-19T00:00:00Z".into(),
+        });
+        board.push_result(ActionResult {
+            order_id: "ORD-ERR-1".into(),
+            ok: false,
+            response: None,
+            error: Some(serde_json::json!({
+                "step": "execute",
+                "code": "boom",
+                "message": "m".repeat(5_000),
+            })),
+            trace_id: "t-err-1".into(),
+            timestamp: "2026-08-19T00:00:01Z".into(),
+        });
+        // 信封字段整体缺失 → step/code 机械回退 `?`（不编造、不隐藏）。
+        board.push_result(ActionResult {
+            order_id: "ORD-ERR-2".into(),
+            ok: false,
+            response: None,
+            error: None,
+            trace_id: "t-err-2".into(),
+            timestamp: "2026-08-19T00:00:02Z".into(),
+        });
+
+        let text = render_section(
+            &PlanSection::default(),
+            &[],
+            &[],
+            &ExecSection::default(),
+            &board,
+            "actions",
+            None,
+        );
+        assert!(
+            text.contains("ORD-OK-1 ok=true step=? code=? trace_id=t-ok-1"),
+            "{text}"
+        );
+        assert!(
+            text.contains("ORD-ERR-1 ok=false step=execute code=boom trace_id=t-err-1"),
+            "{text}"
+        );
+        assert!(
+            text.contains("ORD-ERR-2 ok=false step=? code=? trace_id=t-err-2"),
+            "{text}"
+        );
+        // 大载荷一律不进渲染面。
+        assert!(!text.contains("xxxx"), "{text}");
+        assert!(!text.contains("mmmm"), "{text}");
+        assert!(!text.contains("response="), "{text}");
+        assert!(!text.contains("nested"), "{text}");
+        // 每条结果行有界（固定形态约 ≤90 字符，宽松断言 ≤200）。
+        for line in text.lines() {
+            assert!(line.chars().count() <= 200, "line too long: {line}");
+        }
+    }
+
+    /// 2026-08-19 黑板缓存成本设计（ADR-0010 §14.31 / §4.1）：RESULTS_RENDER_CAP
+    /// =10 与总数头行保留——50 条 receipt 只渲染最近 10 条，头行机械可数。
+    #[test]
+    fn render_actions_results_caps_at_latest_10_with_count_line() {
+        let mut board = ActionBoard::default();
+        for i in 0..50 {
+            board.push_result(ActionResult {
+                order_id: format!("ORD-{i:03}"),
+                ok: true,
+                response: Some(serde_json::json!({"output": format!("payload-{i}")})),
+                error: None,
+                trace_id: format!("t-{i:03}"),
+                timestamp: format!("2026-08-19T00:{i:02}:00Z"),
+            });
+        }
+        let text = render_section(
+            &PlanSection::default(),
+            &[],
+            &[],
+            &ExecSection::default(),
+            &board,
+            "actions",
+            None,
+        );
+        assert!(
+            text.contains("[actions: 共 50 条，仅显示最近 10 条（较早省略 40 条）]"),
+            "{text}"
+        );
+        // 最近 10 条 = ORD-040..ORD-049；更早的 receipt 不渲染。
+        assert!(
+            text.contains("ORD-049 ok=true step=? code=? trace_id=t-049"),
+            "{text}"
+        );
+        assert!(
+            text.contains("ORD-040 ok=true step=? code=? trace_id=t-040"),
+            "{text}"
+        );
+        assert!(!text.contains("ORD-039 ok="), "{text}");
+        assert!(!text.contains("ORD-000 ok="), "{text}");
+        // 瘦身后 response 载荷一律不出现。
+        assert!(!text.contains("payload-"), "{text}");
+    }
+
+    /// 2026-08-19 黑板缓存成本设计（ADR-0010 §14.31 / §4.2）：exec 每条
+    /// 结果/错误行按字符截断到 200 字符（199 字符 + 「…」，复用 summary.rs
+    /// truncate_chars 口径）。
+    #[test]
+    fn render_exec_truncates_lines_to_200_chars() {
+        let mut exec_section = ExecSection::default();
+        exec_section.results.push(format!("ok {}", "x".repeat(500)));
+        exec_section.errors.push(format!("err {}", "y".repeat(500)));
+        let text = render_section(
+            &PlanSection::default(),
+            &[],
+            &[],
+            &exec_section,
+            &ActionBoard::default(),
+            "exec",
+            None,
+        );
+        let lines: Vec<&str> = text.lines().collect();
+        assert_eq!(lines.len(), 2, "{text}");
+        // 每条截断到 200 字符：199 字符 + 「…」。
+        for line in &lines {
+            assert_eq!(line.chars().count(), 200, "line: {line}");
+            assert!(line.ends_with('…'), "line must end with ellipsis: {line}");
+        }
+        assert!(lines[0].starts_with("ok xxx"), "{text}");
+        assert!(lines[1].starts_with("err yyy"), "{text}");
+        // 原文尾部不得残留。
+        assert!(!text.contains("xxx00"), "{text}");
+    }
+
+    /// 2026-08-19 黑板缓存成本设计（ADR-0010 §14.31 / §4.2）：EXEC_RENDER_CAP
+    /// =50 保留——60 条短行只渲染最近 50 条（较早条目省略 + 头行），段总长
+    /// 仍在 4K 上限内则保留明细。
+    #[test]
+    fn render_exec_caps_at_latest_50_with_head_line() {
+        let mut exec_section = ExecSection::default();
+        for i in 0..60 {
+            exec_section.results.push(format!("line-{i:02} run"));
+        }
+        exec_section.errors.push("short error".into());
+        let text = render_section(
+            &PlanSection::default(),
+            &[],
+            &[],
+            &exec_section,
+            &ActionBoard::default(),
+            "exec",
+            None,
+        );
+        let lines: Vec<&str> = text.lines().collect();
+        // 头行 + 最近 50 条（结果 line-11..line-59 + 错误 short error）。
+        assert_eq!(lines.len(), 51, "{text}");
+        assert!(
+            lines[0].starts_with("[exec: 共 61 条，仅显示最近 50 条（较早条目省略 11 条）]"),
+            "{text}"
+        );
+        assert!(text.contains("line-11 run"), "{text}");
+        assert!(text.contains("line-59 run"), "{text}");
+        assert!(text.contains("short error"), "{text}");
+        assert!(!text.contains("line-00 run"), "{text}");
+        assert!(!text.contains("line-10 run"), "{text}");
+    }
+
+    /// 2026-08-19 黑板缓存成本设计（ADR-0010 §14.31 / §4.2）：段总长上限
+    /// 4K 字符（约 2K token）——明细行整体省略，仅保留头行 + 计数行（与
+    /// actions 段计数行同 bracket 风格），完整内容仍可经分区/存档回查。
+    #[test]
+    fn render_exec_section_caps_total_chars_at_4k() {
+        // ① 50 条超长行：行数未超 EXEC_RENDER_CAP，但逐行截断后仍远超 4K。
+        let mut exec_section = ExecSection::default();
+        for _ in 0..50 {
+            exec_section.results.push("长".repeat(500));
+        }
+        let text = render_section(
+            &PlanSection::default(),
+            &[],
+            &[],
+            &exec_section,
+            &ActionBoard::default(),
+            "exec",
+            None,
+        );
+        assert_eq!(text.lines().count(), 2, "{text}");
+        assert!(
+            text.starts_with("[exec: 共 50 条，未省略；明细超 4K 字符上限]"),
+            "{text}"
+        );
+        assert!(
+            text.contains("完整内容见 blackboard_read 分区 exec 与存档"),
+            "{text}"
+        );
+        assert!(!text.contains("长长"), "{text}");
+
+        // ② 60 条超长行：50 上限先触发（省略 10 条），段总长仍超限 →
+        // 保留头行（含省略计数）+ 计数行。
+        let mut exec_section = ExecSection::default();
+        for _ in 0..60 {
+            exec_section.errors.push("错".repeat(500));
+        }
+        let text = render_section(
+            &PlanSection::default(),
+            &[],
+            &[],
+            &exec_section,
+            &ActionBoard::default(),
+            "exec",
+            None,
+        );
+        assert_eq!(text.lines().count(), 2, "{text}");
+        assert!(
+            text.starts_with("[exec: 共 60 条，仅显示最近 50 条（较早条目省略 10 条）]"),
+            "{text}"
+        );
+        assert!(
+            text.contains("完整内容见 blackboard_read 分区 exec 与存档"),
+            "{text}"
+        );
+        assert!(!text.contains("错错"), "{text}");
     }
 
     /// P0-E 计划视图补渲染步骤 ID (2026-08-17, ADR-0010 §14.21 项 2): every
