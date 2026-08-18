@@ -1893,6 +1893,52 @@ ADR §3.6 正文修订随实施登记。
    验证：grep 99 / list_dir 60 / orz-tools 全量 2761 通过、clippy 无新增
    告警；FUS-TOOL-SCOPE-CONTRACT 转 `implemented`。
 
+### 14.30 v1.30 补写裁决索引（2026-08-19）
+
+本节记录冻结后的显式补写；规范正文以所指章节为准，补写明确取代以下既往条款。
+
+1. **压缩注意事项槽 HA 结构化事实聚合设计定稿（2026-08-19 用户裁决：D1=(c)
+   设计定稿、先设计不直接动作；FUS-COMPACTION-REDESIGN 修订——接续 §14.29
+   D1=(b) 的阶段 (c)）**：重看 HA（Home Assistant，助理层借鉴的上游开源项目）
+   当前实现与相关源码后定稿——HA 的 State/CompressedState（`s/a/c/lc/lu`
+   压缩、`lu==lc` 省略、context 仅 id 时降字符串）、StateMachine 变更判定
+   （same_state && same_attr 只推 last_reported 不重登记）、recorder 字典化/
+   哈希去重、assist 管线事件流、`GetLiveContextTool` 静态投影+动态回查分离，
+   映射为本设计的机械事实聚合边界。**注意事项槽=HA 结构化事实聚合（助理层唯一
+   新增输出）**：数据源全部为 controller 已机械写入的结构化记录——`plan.steps`
+   中 `Failed(receipt_id)` / `Blocked` 步骤（step id + 目标 + receipt_id）、
+   `exec.errors` 最近 5 条（每条截断约 200 字符）、`actions.results` 最近 3 条
+   失败 receipt（order_id / step / code / trace_id）；排序=计划面失败/阻塞 →
+   执行错误 → 动作失败；空时显示「（无注意事项）」；上限 ≤3K，超限截断并给
+   「其余 N 条见 blackboard_read 分区/摘要存档」指针（2026-08-19 全面审查补充：单条超长整行放不下时退化为仅指针、N 计 1，由 blackboard_read 回查恢复；同一失败事件可同时以步骤行与动作失败行双视角呈现，属有意冗余）；压缩内部失败
+   （`guard_failed` / `archive_write_failed` / 外挂台账写入失败）继续走 marker
+   既有独立标注、不进本槽。**后续衔接槽不交助理层**（用户裁决）：不聚合任何
+   「当前步/下一步/待办」内容，避免限制或机械性误导（助理层不变量=不理解语义，
+   机械建议可能与主模型实际评估冲突）；保持固定中性占位，措辞显式声明「后续
+   衔接由主模型自行判断」，仅保留回查入口（`blackboard_read` 分区 + 摘要存档 +
+   外挂台账路径）。**不变项**：零模型调用；五槽结构与 17K 合计上限；存档恒写入、
+   marker 恒带 digest；schema 无变化（两槽仍为字符串）；仅 `summary.rs` 聚合
+   渲染与 `run_template_compact` 接线变化。**已知边界**：同一 plan epoch 内
+   多次压缩时 `exec.errors`/失败步骤跨 marker 重复——滚动单 marker 模型只见
+   最新一份、重复为仍成立的事实，接受；`exec.errors` 黑板侧无界累积（渲染取最近 5）为已知边界，控制器侧加保留上限属可选后续、不占计数。性质：FUS-COMPACTION-REDESIGN
+   （§14.10/§14.29）修订；实施路由 BACKLOG 0c / TODO P0-0c（S1 代码 → S2 测试
+   → S3 重建 → S4 命中复验）；设计细节见 CONTEXT_COMPACTION_DESIGN §4.4。
+   纯文档登记、未实施；未闭合计数不变。
+   **2026-08-19 S1/S2 实施闭合登记（用户放行实施）**：S1 代码——
+   `summary.rs` 新增 `render_facts_notes`（HA 结构化事实聚合：plan 失败/
+   受阻步骤 + exec 错误最近 5 条（每条截断约 200 字符）+ 动作失败 receipt
+   最近 3 条；排序=计划面→执行错误→动作失败；空时「（无注意事项）」；
+   ≤3K 超限截断 + 「其余 N 条见 blackboard_read 分区/摘要存档」指针）与
+   `render_notes_capped`/`truncate_chars`/`failure_envelope_fields` 辅助；
+   后续衔接占位改中性措辞（「后续衔接由主模型自行判断」+ 回查入口含外挂
+   台账路径）；`run_template_compact` notes 槽接线 `render_facts_notes`；
+   存档/marker 空 notes 防御回退同步为「（无注意事项）」。S2 测试——
+   summary 事实聚合单测 6 项（空态/三源排序/最近 5+截断/最近 3 失败含
+   信封缺失回退/3K 溢出指针/单条超长退化指针）+ 压缩 e2e 1 项（marker+存档三源事实槽同序）
+   + 空黑板 e2e 断言「（无注意事项）」；orz-loop 473 / 0 失败、fmt 干净、
+   clippy 与基线一致（lib 21 / test 26）。S3/S4 待验证；计数不变
+   （0c 验证闭环后 29 → 28）。
+
 ### 14.29 v1.29 补写裁决索引（2026-08-18）
 
 本节记录冻结后的显式补写；规范正文以所指章节为准，补写明确取代以下既往条款。

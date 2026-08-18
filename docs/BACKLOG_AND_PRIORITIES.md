@@ -344,6 +344,41 @@
   退化门注释、schema 终止态字段、LEDGER 设计 widened tail）。
   orz-loop 466 / Python verifier+conformance 230 / 仓库门禁 valid。
   计数不变（0c S3/S4 复验闭环后 29 → 28）。
+- **2026-08-19 D1=(c) HA 结构化事实聚合设计定稿（用户裁决：先设计、不直接
+  动作；纯文档登记、未实施；ADR-0010 §14.30 / 压缩设计 §4.4）**：重看 HA
+  （Home Assistant）上游实现与源码后定稿——注意事项槽=HA 结构化事实聚合
+  （助理层唯一新增输出；数据源=controller 已机械写入的 `plan.steps`
+  Failed/Blocked + `exec.errors` 最近 5 + `actions.results` 失败 receipt
+  最近 3；排序=计划面→执行错误→动作失败；空时「（无注意事项）」；≤3K 超限
+  截断+指针；压缩内部失败继续走 marker 标注不进本槽）；后续衔接槽不交助理层
+  （固定中性占位 + 回查入口，由主模型自行判断，避免机械性误导）；零模型调用、
+  五槽 17K 上限、存档恒写入、marker 恒带 digest、schema 不变。实施路由：S1
+  代码（`summary.rs` 聚合函数 + `run_template_compact` 接线）→ S2 测试 →
+  S3 重建 → S4 命中复验。未闭合计数不变（29，0c 验证闭环后 29 → 28）。
+- **2026-08-19 D1=(c) S1/S2 已闭合（用户放行实施；orz 子模块待提交）**：
+  S1 代码——`summary.rs` 新增 `render_facts_notes`（HA 结构化事实聚合：
+  `plan.steps` Failed/Blocked 步骤（step id+目标+receipt_id）→ `exec.errors`
+  最近 5 条（每条截断约 200 字符）→ `actions.results` 最近 3 条失败 receipt
+  （order_id/step/code/trace_id，信封字段缺失机械回退 `?`）；排序=计划面→
+  执行错误→动作失败；空时「（无注意事项）」；≤3K 超限截断 + 「其余 N 条见
+  blackboard_read 分区/摘要存档」指针；辅助 `render_notes_capped` /
+  `truncate_chars` / `failure_envelope_fields`；后续衔接占位改中性措辞
+  （「由主模型自行判断」+ 回查入口含外挂台账路径）；`run_template_compact`
+  notes 槽接线 `render_facts_notes`；存档/marker 空 notes 防御回退同步为
+  「（无注意事项）」）。S2 测试——summary 新增 6 项事实聚合单测（空态/三源
+  排序/最近 5+截断/最近 3 失败含信封缺失回退/3K 溢出指针/单条超长退化指针）
+  + 压缩 e2e 新增
+  1 项（marker+存档三源事实槽同序）+ 空黑板 e2e 断言「（无注意事项）」；
+  orz-loop 473 通过 / 0 失败、fmt 干净、clippy 与基线一致（lib 21 /
+  test 26）。计数不变（0c S3/S4 复验闭环后 29 → 28）。
+- **2026-08-19 D1=(c) S1 全面审查处理（审查结论：实现无代码缺陷、设计/
+  实现/符合性成立）**：①登记口径更正——summary 事实聚合单测实为 6 项、
+  orz-loop 473 通过（原 5 项 / 472）；②设计补充登记——O1 同一失败事件可
+  同时以步骤行+动作失败行双视角呈现、属有意冗余；O2 单条超长整行退化为仅
+  指针、N 计 1，由 blackboard_read 回查恢复；O3 `exec.errors` 黑板侧无界
+  为已知边界、控制器侧加保留上限属可选后续（不占计数）——登记于压缩设计
+  §4.4.1/§4.4.3 与 ADR §14.30；③CLI_PROJECT_INDEX 条目杂散控制字符清理。
+  计数不变（0c S3/S4 复验闭环后 29 → 28）。
 
 ### 0. 前置收尾（提交前需用户确认）
 

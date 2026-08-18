@@ -398,6 +398,42 @@
   - [x] 文档/注释/schema 描述清理：summary.rs 退化门注释、schema
     `summary_incomplete`/`retained_rounds` 终止态描述、LEDGER 设计
     widened tail 文本。
+- [x] D1=(c) HA 结构化事实聚合设计定稿（2026-08-19 用户裁决：先设计、不直接
+  动作；纯文档登记、未实施；ADR-0010 §14.30 / 压缩设计 §4.4）：
+  - [x] 查看 HA 上游实现与源码（State/CompressedState 压缩、StateMachine
+    变更判定、recorder 字典化/哈希去重、assist 管线事件流、GetLiveContext
+    静态投影+动态回查分离）。
+  - [x] 注意事项槽=HA 结构化事实聚合（助理层唯一新增输出）：数据源全部为
+    controller 已机械写入的结构化记录（`plan.steps` Failed/Blocked +
+    `exec.errors` 最近 5 + `actions.results` 失败 receipt 最近 3）；排序=
+    计划面失败/阻塞 → 执行错误 → 动作失败；空时「（无注意事项）」；≤3K
+    超限截断+指针；压缩内部失败继续走 marker 既有标注不进本槽。
+  - [x] 后续衔接槽不交助理层：固定中性占位 + 回查入口，由主模型自行判断
+    （避免限制或机械性误导）；不聚合任何当前步/下一步/待办内容。
+  - [x] 不变项：零模型调用；五槽结构与 17K 上限；存档恒写入、marker 恒带
+    digest；schema 无变化；仅 `summary.rs` 聚合渲染与 `run_template_compact`
+    接线变化。
+- [x] D1=(c) S1 代码（2026-08-19 闭合）：`summary.rs` 新增
+  `render_facts_notes`（HA 结构化事实聚合：plan 失败/受阻步骤 + exec 错误
+  最近 5 条（每条截断约 200 字符）+ 动作失败 receipt 最近 3 条；排序=计划面
+  →执行错误→动作失败；空时「（无注意事项）」；≤3K 超限截断+「其余 N 条见
+  blackboard_read 分区/摘要存档」指针）与 `render_notes_capped` /
+  `truncate_chars` / `failure_envelope_fields` 辅助；后续衔接占位改中性
+  措辞（「由主模型自行判断」+ 回查入口含外挂台账）；`run_template_compact`
+  notes 槽接线 `render_facts_notes`；存档/marker 空 notes 防御回退同步为
+  「（无注意事项）」。
+- [x] D1=(c) S2 测试（2026-08-19 闭合）：summary 新增 6 项事实聚合单测
+  （空态/三源排序/最近 5+截断/最近 3 失败含信封缺失回退/3K 溢出指针/单条
+  超长退化指针）；
+  压缩 e2e 新增 1 项（marker+存档三源事实槽同序）+ 空黑板 e2e 断言
+  「（无注意事项）」；orz-loop 473 通过 / 0 失败、fmt 干净、clippy 与
+  基线一致（lib 21 / test 26）。
+- [x] 2026-08-19 全面审查处理：登记口径更正（6 项 / 473）＋设计补充登记
+  （O1 双视角有意冗余、O2 单条超长退化指针、O3 黑板无界可选后续，见压缩
+  设计 §4.4.1/§4.4.3 与 ADR §14.30）；计数不变。
+- [ ] D1=(c) S3（待验证）：Linux musl 重建（ORZ-BUILD-MOUNT-001，输出
+  `D:/tb-eval/orz-linux`）+ 时间戳校验。
+- [ ] D1=(c) S4（待验证）：命中率复验（≥90% provider usage 口径、无 400）。
 - [ ] 闭合：S3/S4 全过 → BACKLOG/TODO/索引状态同步，未闭合 29 → 28。
 
 ### P0-B FUS-RETRIEVAL-MECH（`implemented`；批次 1-6 已全部闭合，2026-08-14，保留供核对）
