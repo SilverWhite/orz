@@ -305,13 +305,35 @@ pub fn build_request_view(messages: &[Message], fold: &LedgerFoldState) -> Vec<M
     let Some(ledger) = fold.folded_ledger.as_deref() else {
         return messages.to_vec();
     };
+    // FUS-LEDGER-FOLD-STATE 400 修复 (2026-08-18, ADR-0010 §14.27 / 处理
+    // 文档 §2.2)：preamble 边界校验——`messages[..fold_start]` 末条若为
+    // assistant 声明（tool_calls 非空），其 tool 回复必在折叠区（索引 ≥
+    // fold_start），折叠视图会裸露声明 → provider 400 `insufficient tool
+    // messages`。该形态发生在压缩触发（未执行）删除 marker 后冻结折叠
+    // 索引未失效（索引左移）；此时放弃折叠回原文。
+    if messages[..fold_start]
+        .last()
+        .is_some_and(|m| m.role == Role::Assistant && !m.tool_calls.is_empty())
+    {
+        tracing::warn!(
+            fold_start,
+            "ledger fold preamble ends with an assistant declaration — stale fold indices, returning the full view"
+        );
+        return messages.to_vec();
+    }
     // FUS-LEDGER-FOLD-STATE 复验修复 (2026-08-18, make-doom-for-mips 单题
     // 复验 400 根因)：`fold_cut` 必须落在完整轮起点——尾部 `[cut..]` 不得
     // 以孤儿 tool 消息开头（其轮起点在 cut 之前）或含未配对 assistant
     // 声明，否则 provider 报 `invalid_request_error`（assistant tool_calls
     // 后 tool 消息不足）。压缩（marker 插入）与状态行尾随消息会移动消息
     // 索引，防御性回退到最近安全轮起点，并留痕供审计。
-    let cut = safe_fold_cut(messages, fold_cut);
+    let Some(cut) = safe_fold_cut(messages, fold_cut) else {
+        tracing::warn!(
+            fold_cut,
+            "ledger fold cut has no safe complete round start — returning the full view"
+        );
+        return messages.to_vec();
+    };
     if cut != fold_cut {
         tracing::warn!(
             fold_cut,
@@ -353,26 +375,28 @@ pub fn build_request_view(messages: &[Message], fold: &LedgerFoldState) -> Vec<M
 /// console 订单发放的 ord-xxx 额外 tool 消息属"孤儿"，单向检查漏网）。
 /// `round_ranges` 的起点恒为 assistant 声明；正常情况下 `advance_fold`
 /// 的 `kept_start` 已是轮起点，此函数为压缩/状态行等索引漂移场景的
-/// 防御兜底。
-fn safe_fold_cut(messages: &[Message], cut: usize) -> usize {
+/// 防御兜底。FUS-LEDGER-FOLD-STATE 400 修复 (2026-08-18, ADR-0010 §14.27)：
+/// 返回 `Option<usize>`——首轮（fold 区起点）即不完整时无安全轮起点可
+/// 回退，返回 `None`（调用方放弃折叠回原文），不再原样返回旧 cut。
+fn safe_fold_cut(messages: &[Message], cut: usize) -> Option<usize> {
     let ranges = round_ranges(messages);
     let mut c = cut;
     loop {
         // 最后一个起点 <= c 的轮（c 落在其内部或其后缘）。
         let Some(idx) = ranges.iter().rposition(|&(s, _)| s <= c) else {
-            return c;
+            return Some(c);
         };
         let (s, e) = ranges[idx];
         if c == s {
             // 起点恰为轮起点：若该轮双向平衡则安全；否则（防御场景）前移
             // 到上一轮起点继续检查，直至 fold 区起点（preamble 边界）。
             if is_round_balanced(messages, (s, e)) {
-                return c;
+                return Some(c);
             }
             if idx == 0 {
-                // 最前轮仍不完整——保留原 cut（loop-top 不变量保证正常
-                // 路径不会到达；此处仅避免死循环）。
-                return cut;
+                // 最前轮仍不完整——无安全轮起点可回退，放弃折叠（调用方
+                // 回原文；loop-top 不变量保证正常路径不会到达）。
+                return None;
             }
             c = ranges[idx - 1].0;
             continue;
@@ -498,10 +522,95 @@ mod tests {
         messages.extend(round("c2", "grep", "b.rs", "B"));
         // 消息结构：0=user, 1=assistant(c1), 2=tool(c1), 3=assistant(c2),
         // 4=tool(c2)。
-        assert_eq!(safe_fold_cut(&messages, 2), 1, "cut at tool msg of round 1");
-        assert_eq!(safe_fold_cut(&messages, 4), 3, "cut at tool msg of round 2");
-        assert_eq!(safe_fold_cut(&messages, 3), 3, "complete round start");
-        assert_eq!(safe_fold_cut(&messages, 5), 3, "cut past the end");
+        assert_eq!(
+            safe_fold_cut(&messages, 2),
+            Some(1),
+            "cut at tool msg of round 1"
+        );
+        assert_eq!(
+            safe_fold_cut(&messages, 4),
+            Some(3),
+            "cut at tool msg of round 2"
+        );
+        assert_eq!(safe_fold_cut(&messages, 3), Some(3), "complete round start");
+        assert_eq!(safe_fold_cut(&messages, 5), Some(3), "cut past the end");
+    }
+
+    /// FUS-LEDGER-FOLD-STATE 400 修复 (2026-08-18, ADR-0010 §14.27)：
+    /// `safe_fold_cut` 无安全轮起点可回退（idx==0 首轮不完整）→ `None`
+    /// （放弃折叠），不再原样返回旧 cut。
+    #[test]
+    fn safe_fold_cut_first_round_unbalanced_returns_none() {
+        let mut messages = vec![msg(Role::User, "任务")];
+        messages.extend(round("c1", "read_file", "a.py", "A"));
+        messages.pop(); // 删除 tool 回复 → 首轮不完整（声明裸露）
+        assert_eq!(
+            safe_fold_cut(&messages, 1),
+            None,
+            "cut at the unbalanced first round start"
+        );
+        assert_eq!(
+            safe_fold_cut(&messages, 2),
+            None,
+            "cut mid-round also backtracks to the unbalanced first round"
+        );
+    }
+
+    /// FUS-LEDGER-FOLD-STATE 400 修复 (2026-08-18, ADR-0010 §14.27)：折叠
+    /// 态 preamble 末条为 assistant 声明（其 tool 回复被折叠）时放弃折叠
+    /// 回原文——补齐「safe_fold_cut 只防 cut 不防 fold_start」的缺口。
+    #[test]
+    fn build_request_view_abandons_fold_when_preamble_ends_with_declaration() {
+        // 模拟压缩触发（未执行）删除 marker 后冻结折叠索引失效：fold_start=2
+        // 使 preamble = [U0, A[c1]]——声明无回复，折叠视图必 400。
+        let mut messages = vec![msg(Role::User, "任务")];
+        messages.extend(round("c1", "read_file", "a.py", "A"));
+        messages.extend(round("c2", "grep", "b.rs", "B"));
+        let fold = LedgerFoldState {
+            fold_start: Some(2),
+            fold_cut: Some(4),
+            folded_ledger: Some("ledger".to_string()),
+        };
+        let view = build_request_view(&messages, &fold);
+        assert_eq!(view, messages, "stale fold falls back to the full view");
+    }
+
+    /// FUS-LEDGER-FOLD-STATE 400 修复 (2026-08-18, ADR-0010 §14.27)：旧 bug
+    /// 场景全链——marker 在索引 1、fold 三态冻结；压缩触发 retain 删除
+    /// marker（未 reset）后索引左移。build_request_view 必须回原文，且
+    /// 视图中每个声明的 call_id 都有 tool 回复（无 400 形态）。
+    #[test]
+    fn marker_removal_without_fold_reset_builds_full_view() {
+        let mut messages = vec![msg(Role::User, "任务")];
+        messages.push(msg(Role::User, "[前文上下文已压缩 v0.2] 摘要"));
+        messages.extend(round("c1", "read_file", "a.py", "A"));
+        messages.extend(round("c2", "grep", "b.rs", "B"));
+        // 旧代码：压缩触发首行无条件 retain 删除 marker，折叠三态未失效。
+        messages.retain(|m| {
+            !m.content
+                .starts_with(crate::prompt::CONTEXT_COMPRESSED_PREFIX)
+        });
+        let fold = LedgerFoldState {
+            fold_start: Some(2),
+            fold_cut: Some(4),
+            folded_ledger: Some("ledger".to_string()),
+        };
+        let view = build_request_view(&messages, &fold);
+        assert_eq!(view, messages, "stale indices fall back to the full view");
+        let declared: Vec<String> = view
+            .iter()
+            .filter(|m| m.role == Role::Assistant)
+            .flat_map(|m| m.tool_calls.iter().map(|tc| tc.call_id.clone()))
+            .collect();
+        let replied: Vec<String> = view
+            .iter()
+            .filter(|m| m.role == Role::Tool)
+            .filter_map(|m| m.tool_call_id.clone())
+            .collect();
+        assert!(
+            declared.iter().all(|d| replied.iter().any(|r| r == d)),
+            "every declared call has a tool reply: {view:?}"
+        );
     }
 
     /// 折叠态下视图尾部不得含孤儿 tool 消息——cut 回退后第一条必须是

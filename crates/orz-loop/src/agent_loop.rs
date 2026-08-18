@@ -497,12 +497,17 @@ pub(crate) async fn run_template_compact(
     cancel: Option<&tokio_util::sync::CancellationToken>,
     heartbeat: Option<&ActivityClock>,
 ) -> Result<CompactDecision, AgentLoopError> {
-    // The rolling single marker: any older marker is archived with the
-    // summary chain (审计存档) — only the newest stays.
-    messages.retain(|m| {
-        !m.content
-            .starts_with(crate::prompt::CONTEXT_COMPRESSED_PREFIX)
-    });
+    // FUS-LEDGER-FOLD-STATE 400 修复 (2026-08-18, ADR-0010 §14.27 / 处理文档
+    // LEDGER_FOLD_MARKER_INDEX_FIX_HANDLING_2026-08-18 §2.1): the rolling
+    // single marker is NOT removed on the guard path — the frozen fold
+    // indices (`fold_start`/`fold_cut`) are positions into the CURRENT
+    // `messages` slice, and any in-place mutation before the fold state is
+    // reset invalidates them. The previous unconditional `retain()` deleted
+    // the marker even when the reduction guard then returned
+    // `GuardBlocked` (fold untouched) → stale preamble `[U0, A[...]]`
+    // (declaration without its tool reply in the fold region) → provider
+    // 400 `insufficient tool messages`. The marker is removed only once
+    // execution is confirmed; the indices are recomputed below.
     // FUS-LEDGER-FOLD-STATE (2026-08-18, ADR-0010 §14.26): the drain cut
     // comes from the frozen fold state when folded (保留起点基于 fold_cut
     // 而非重算 tail); otherwise the stateless tail cut as before.
@@ -513,6 +518,7 @@ pub(crate) async fn run_template_compact(
         return Ok(CompactDecision::NoOp);
     };
     let cfg = svc.context_compact;
+    // Guard 口径：含旧 marker 的数组 + 冻结 kept_start（触发时不动数组）。
     let after = estimate_messages_tokens(&messages[..kept_start])
         + estimate_messages_tokens(&messages[kept_start..])
         + crate::summary::SUMMARY_MARKER_ESTIMATE_TOKENS;
@@ -521,6 +527,30 @@ pub(crate) async fn run_template_compact(
     if !force && (removable < cfg.min_compactable || !reduction_ok) {
         return Ok(CompactDecision::GuardBlocked);
     }
+
+    // 执行已确认：删除旧 marker 并重算 kept_start——marker 删除使冻结索引
+    // 整体左移一位（折叠态 `fold_cut - had_marker`；marker 恒在 fold_cut
+    // 之前：marker 插入点为首个声明，折叠 cut 恒在其后）。未折叠态按无
+    // marker 数组重算 `collapsed_cut`。`after` 同步按无 marker 口径重算，
+    // 事件估计与执行后数组一致。
+    let had_marker = messages.iter().any(|m| {
+        m.content
+            .starts_with(crate::prompt::CONTEXT_COMPRESSED_PREFIX)
+    });
+    if had_marker {
+        messages.retain(|m| {
+            !m.content
+                .starts_with(crate::prompt::CONTEXT_COMPRESSED_PREFIX)
+        });
+    }
+    let kept_start = fold_state
+        .fold_cut
+        .map(|cut| cut.saturating_sub(usize::from(had_marker)))
+        .or_else(|| crate::action_ledger::collapsed_cut(messages, tail))
+        .expect("guard path already resolved a kept_start for the same messages");
+    let after = estimate_messages_tokens(&messages[..kept_start])
+        + estimate_messages_tokens(&messages[kept_start..])
+        + crate::summary::SUMMARY_MARKER_ESTIMATE_TOKENS;
 
     let rounds_dropped = crate::action_ledger::rounds_before(messages, kept_start) as u32;
     // The archive id rides the writer's CURRENT seq — no event is recorded
@@ -2826,5 +2856,270 @@ mod tests {
         // Empty round (no denials) resets too (conservative baseline).
         assert_eq!(aggregate_denial_round(&mut denial, &[], false), None);
         assert_eq!(denial.consecutive_rounds, 0);
+    }
+
+    // ---- FUS-LEDGER-FOLD-STATE 400 修复 (2026-08-18, ADR-0010 §14.27) ----
+
+    use crate::action_ledger::LedgerFoldState;
+    use crate::host::ToolRegistry;
+    use orz_assurance::journal::JournalRecorder;
+    use std::path::PathBuf;
+    use std::sync::atomic::{AtomicU32, AtomicU64};
+
+    struct CompactTestHost {
+        journal: JournalRecorder,
+    }
+
+    struct CompactEmptyRegistry;
+
+    impl ToolRegistry for CompactEmptyRegistry {
+        fn get(&self, _name: &str) -> Option<ToolDef> {
+            None
+        }
+        fn list(&self) -> Vec<ToolDef> {
+            Vec::new()
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl LoopHost for CompactTestHost {
+        fn journal(&self) -> &JournalRecorder {
+            &self.journal
+        }
+        fn tools_registry(&self) -> &dyn ToolRegistry {
+            &CompactEmptyRegistry
+        }
+        // Summary archives land under session_cwd/.gsa/compaction — point
+        // the mock at the per-test journal dir (same pattern as the
+        // controller test hosts).
+        fn session_cwd(&self) -> PathBuf {
+            self.journal.journal_dir().to_path_buf()
+        }
+    }
+
+    struct CompactSummaryAgent {
+        response: ModelResponse,
+    }
+
+    #[async_trait::async_trait]
+    impl RoundAgent for CompactSummaryAgent {
+        async fn run_round(
+            &self,
+            _system: &str,
+            _messages: Vec<Message>,
+            _tools: Vec<ToolDef>,
+            _max_tokens: u32,
+            _cancel: Option<&tokio_util::sync::CancellationToken>,
+            _heartbeat: Option<&ActivityClock>,
+            _on_chunk: &mut (dyn for<'a> FnMut(&'a str) + Send),
+        ) -> Result<ModelResponse, GatewayError> {
+            Ok(self.response.clone())
+        }
+    }
+
+    fn compact_test_svc<'a>(
+        cfg: &'a ContextCompactConfig,
+        blackboard: &'a Arc<SharedBlackboard>,
+        denial_state: &'a Mutex<DenialState>,
+        pacing: &'a AtomicU32,
+        dc: &'a Mutex<DebugEpisodeState>,
+        policy: &'a AtomicU64,
+    ) -> SharedLoopServices<'a> {
+        SharedLoopServices {
+            blackboard,
+            denial_state,
+            pacing_rounds: pacing,
+            context_compact: cfg,
+            dc_state: dc,
+            evidence: None,
+            policy_revision: policy,
+            max_inject_tokens_per_round: 50_000,
+            blackboard_archive_dir: None,
+        }
+    }
+
+    /// 取证形态：0=user, 1=marker, 2=assistant(c1), 3=tool(c1),
+    /// 4=assistant(c2), 5=tool(c2)——折叠冻结态 fold_start=2/fold_cut=4
+    /// （与 make-doom-for-mips 复验 400 的 marker 在索引 1 场景同构）。
+    fn compact_test_messages() -> Vec<Message> {
+        let mut messages = vec![Message {
+            role: Role::User,
+            content: "任务".to_string(),
+            tool_call_id: None,
+            tool_calls: Vec::new(),
+            reasoning_content: None,
+        }];
+        messages.push(Message {
+            role: Role::User,
+            content: format!("{} v0.2] 摘要", crate::prompt::CONTEXT_COMPRESSED_PREFIX),
+            tool_call_id: None,
+            tool_calls: Vec::new(),
+            reasoning_content: None,
+        });
+        for (id, target, result) in [("c1", "a.py", "A"), ("c2", "b.rs", "B")] {
+            messages.push(Message {
+                role: Role::Assistant,
+                content: String::new(),
+                tool_call_id: None,
+                tool_calls: vec![ToolCall {
+                    name: "read_file".to_string(),
+                    arguments: serde_json::json!({"path": target}),
+                    call_id: id.to_string(),
+                }],
+                reasoning_content: None,
+            });
+            messages.push(Message {
+                role: Role::Tool,
+                content: result.to_string(),
+                tool_call_id: Some(id.to_string()),
+                tool_calls: Vec::new(),
+                reasoning_content: None,
+            });
+        }
+        messages
+    }
+
+    fn compact_folded_state() -> LedgerFoldState {
+        LedgerFoldState {
+            fold_start: Some(2),
+            fold_cut: Some(4),
+            folded_ledger: Some("ledger".to_string()),
+        }
+    }
+
+    fn compact_dummy_response() -> ModelResponse {
+        ModelResponse {
+            text: None,
+            tool_calls: Vec::new(),
+            finish_reason: FinishReason::Stop,
+            reasoning_content: None,
+            reasoning_tokens: None,
+            completion_tokens: None,
+            cache_hit_tokens: None,
+            cache_miss_tokens: None,
+            prompt_tokens: None,
+        }
+    }
+
+    /// 压缩触发但缩减守卫不满足 → `GuardBlocked`：messages 与折叠三态均
+    /// 不变（旧代码在此路径删除了 marker、折叠索引未失效 → 后续视图
+    /// preamble 裸露声明 → provider 400）。
+    #[tokio::test]
+    async fn guard_blocked_leaves_messages_and_fold_untouched() {
+        let dir = std::env::temp_dir().join(format!("orz-compact-guard-{}", std::process::id()));
+        let host = CompactTestHost {
+            journal: JournalRecorder::new(dir),
+        };
+        let cfg = ContextCompactConfig::default();
+        let blackboard = Arc::new(SharedBlackboard::new());
+        let denial_state = Mutex::new(DenialState::default());
+        let pacing = AtomicU32::new(0);
+        let dc = Mutex::new(DebugEpisodeState::default());
+        let policy = AtomicU64::new(0);
+        let svc = compact_test_svc(&cfg, &blackboard, &denial_state, &pacing, &dc, &policy);
+        let mut writer = crate::controller::discard_event_writer("test-run");
+        let agent = CompactSummaryAgent {
+            response: compact_dummy_response(),
+        };
+        let mut messages = compact_test_messages();
+        let mut fold = compact_folded_state();
+        let before_messages = messages.clone();
+        let before_fold = fold.clone();
+        let decision = run_template_compact(
+            &svc,
+            &mut writer,
+            &host,
+            &agent,
+            &mut messages,
+            0, // measured=0 → removable=0 < min_compactable → 守卫必不满足
+            "rhythm",
+            false,
+            false,
+            0,
+            2,
+            &mut fold,
+            None,
+            None,
+        )
+        .await
+        .expect("guard path returns a decision");
+        assert_eq!(decision, CompactDecision::GuardBlocked);
+        assert_eq!(
+            messages, before_messages,
+            "guard path must not mutate messages (marker stays)"
+        );
+        assert_eq!(
+            fold, before_fold,
+            "guard path must not touch the fold state"
+        );
+    }
+
+    /// 执行路径：确认执行后删除旧 marker 并重算 kept_start（折叠态
+    /// `fold_cut - had_marker`）——drain 数量与事件口径一致，折叠状态
+    /// 在 drain 后重置。
+    #[tokio::test]
+    async fn compaction_execution_recomputes_kept_start_after_marker_removal() {
+        let dir = std::env::temp_dir().join(format!("orz-compact-exec-{}", std::process::id()));
+        let host = CompactTestHost {
+            journal: JournalRecorder::new(dir.clone()),
+        };
+        let cfg = ContextCompactConfig::default();
+        let blackboard = Arc::new(SharedBlackboard::new());
+        let denial_state = Mutex::new(DenialState::default());
+        let pacing = AtomicU32::new(0);
+        let dc = Mutex::new(DebugEpisodeState::default());
+        let policy = AtomicU64::new(0);
+        let svc = compact_test_svc(&cfg, &blackboard, &denial_state, &pacing, &dc, &policy);
+        let mut writer = crate::controller::discard_event_writer("test-run");
+        // 可解析的五段模板输出：两个模型生成槽（≥300 有效字符）。
+        let notes = format!("[注意事项]\n{}\n[/注意事项]", "n".repeat(160));
+        let continuation = format!("[后续衔接]\n{}\n[/后续衔接]", "c".repeat(160));
+        let agent = CompactSummaryAgent {
+            response: ModelResponse::text_response(format!("{notes}\n{continuation}")),
+        };
+        let mut messages = compact_test_messages();
+        let mut fold = compact_folded_state();
+        let decision = run_template_compact(
+            &svc,
+            &mut writer,
+            &host,
+            &agent,
+            &mut messages,
+            100_000, // force=true 跳过缩减守卫，measured 仅用于事件口径
+            "rhythm",
+            true,
+            false,
+            0,
+            2,
+            &mut fold,
+            None,
+            None,
+        )
+        .await
+        .expect("execution path returns a decision");
+        assert_eq!(decision, CompactDecision::Executed { incomplete: false });
+        // marker 删除使 fold_cut 4→3；drain [first_round_start=1..3) 丢弃
+        // c1 轮（声明+回复 2 条）；新 marker 插入索引 1 → U0+marker+c2 轮。
+        assert_eq!(messages.len(), 4, "U0 + marker + c2 轮");
+        assert_eq!(messages[0].role, Role::User);
+        assert_eq!(messages[1].role, Role::User);
+        assert!(
+            messages[1]
+                .content
+                .starts_with(crate::prompt::CONTEXT_COMPRESSED_PREFIX),
+            "new rolling marker inserted at index 1"
+        );
+        assert_eq!(messages[2].tool_calls.len(), 1, "c2 声明保留");
+        assert_eq!(messages[2].tool_calls[0].call_id, "c2");
+        assert_eq!(messages[3].tool_call_id.as_deref(), Some("c2"));
+        assert!(!fold.is_folded(), "执行后折叠状态重置");
+        let archive = dir
+            .join(".gsa")
+            .join("compaction")
+            .join("compaction-test-run-0000.md");
+        assert!(
+            archive.exists(),
+            "summary archive written under session_cwd"
+        );
     }
 }
