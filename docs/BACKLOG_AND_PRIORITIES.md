@@ -320,6 +320,20 @@
   （断言命中率 ≥90%（provider usage 口径）、无 400、journal 断言不变
   ——`workspace.run_terminal` 订单→ACAF 票据路径；`ORZ_DEBUG_VIEW=1` 在
   验证③闭合时一并移除）。验收 DoD 见设计文档 §7。
+- **B 定案（机械压缩；2026-08-18 用户裁决：D1=(b)，ADR-0010 §14.29）——
+  实施已闭合**：S4 复验账单对账暴露「未处理的部分」= 压缩摘要调用以独立
+  系统提示词重付整段视图 miss（22:17 运行 10 个账单请求无 journal 对应、
+  额外 miss ≈ 676K、账单口径命中率 89.71% <90%；摘要调用两轮全部失败零
+  产出）。定案=纯机械压缩：`run_template_compact` 移除模型摘要调用
+  （agent/cancel/heartbeat 退役、`CompactDecision::Executed` 简化），
+  五段槽位=黑板（目的/计划/路径）+ 固定机械占位（注意事项/后续衔接，
+  阶段 (c) HA 结构化事实聚合落地前）；存档恒写入、marker 恒带 digest、
+  无 `summary_incomplete` 终止态；事件 `mode=mechanical`（schema enum 保留
+  template_summary 回放）；fallback 紧急截断保留。实现=orz 子模块提交
+  （2026-08-18）；orz-loop 465 通过、fmt 干净、clippy 与基线一致
+  （lib 21 / test 26）、Python verifier 214 通过。计数不变（仍在 29——
+  0c 的 S3/S4 复验闭环后 29 → 28；阶段 (c) HA 事实聚合待重看 HA 项目后
+  另行裁决）。
 
 ### 0. 前置收尾（提交前需用户确认）
 

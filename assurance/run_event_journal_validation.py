@@ -2036,11 +2036,14 @@ def _verify_v02_recovery_truncation(events: list[dict[str, Any]]) -> list[str]:
 
 def _verify_v02_context_compressed(events: list[dict[str, Any]]) -> list[str]:
     """P0-D S3 (2026-08-14, ADR-0010 v1.10 / CONTEXT_COMPACTION_DESIGN §4):
-    the v0.2 `context_compressed` event is a five-section template summary:
-    - mode must be `template_summary`, reason one of rhythm/fallback;
+    the v0.2 `context_compressed` event is a five-section summary:
+    - mode is `mechanical` for the 2026-08-18 B 定案 producer (ADR-0010
+      §14.29 — compaction makes zero model calls) and `template_summary`
+      for historical journals; reason one of rhythm/fallback;
     - a complete summary must carry a non-null archive id/digest/path;
     - the termination state (summary_incomplete=true) must carry null
-      archive fields (no archive was written).
+      archive fields (no archive was written); a mechanical-mode event
+      must never be incomplete.
 
     P0-D review fix (2026-08-14, ADR-0010 v1.14): reason may also be
     `session_end` (the end-of-session compaction); the reduction-guard
@@ -2053,9 +2056,11 @@ def _verify_v02_context_compressed(events: list[dict[str, Any]]) -> list[str]:
         if not _is_v02(event) or event.get("event_type") != "context_compressed":
             continue
         payload = event["payload"]
-        if payload.get("mode") != "template_summary":
+        mode = payload.get("mode")
+        if mode not in ("template_summary", "mechanical"):
             errors.append(
-                f"event {index}: context_compressed mode must be template_summary"
+                f"event {index}: context_compressed mode must be "
+                "template_summary/mechanical"
             )
         reason = payload.get("reason")
         if reason not in ("rhythm", "fallback", "session_end"):
@@ -2070,6 +2075,11 @@ def _verify_v02_context_compressed(events: list[dict[str, Any]]) -> list[str]:
                 "triggers, never session_end"
             )
         incomplete = payload.get("summary_incomplete", False)
+        if mode == "mechanical" and incomplete:
+            errors.append(
+                f"event {index}: mechanical compaction must never be "
+                "summary_incomplete (no model slots to fail)"
+            )
         archive_fields = (
             payload.get("summary_id"),
             payload.get("summary_digest"),

@@ -1,8 +1,8 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://local.scientific-assurance.invalid/schema/context-compressed-event-payload-v0.2.schema.json",
-  "title": "Context compaction runtime event payload (v0.2 template summary)",
-  "description": "P0-D S3 (2026-08-14, ADR-0010 v1.10 / CONTEXT_COMPACTION_DESIGN §4): the five-section template summary replaces the A6 whole-round drop as the primary compaction mechanism. All v0.1 counters stay; the v0.2 fields describe the summary trigger (rhythm 160K / fallback 200K / session_end), the archive pointer (id/digest/path), completeness (summary_incomplete termination state), the retained recent tail, guard-retry force (guard_failed) and archive write outcome (archive_write_failed). 2026-08-14 review fix: cooldown is 2 model rounds; guard failures retry up to 3 times then force one compaction and report guard_failed; the session-end compaction pins the marker into the sidecar.",
+  "title": "Context compaction runtime event payload (v0.2 mechanical summary)",
+  "description": "P0-D S3 (2026-08-14, ADR-0010 v1.10 / CONTEXT_COMPACTION_DESIGN §4): the five-section template summary replaces the A6 whole-round drop as the primary compaction mechanism. 2026-08-18 B 定案 (ADR-0010 §14.29): compaction is now fully MECHANICAL — the producer emits mode \"mechanical\" and makes ZERO model calls; the two LLM slots (注意事项/后续衔接) are fixed placeholders until the HA structured-fact aggregation phase lands. \"template_summary\" remains a valid value for historical journal replay. All v0.1 counters stay; the v0.2 fields describe the trigger (rhythm 160K / fallback 200K / session_end), the archive pointer (id/digest/path), completeness (summary_incomplete is always false for the mechanical producer), the retained recent tail, guard-retry force (guard_failed) and archive write outcome (archive_write_failed). 2026-08-14 review fix: cooldown is 2 model rounds; guard failures retry up to 3 times then force one compaction and report guard_failed; the session-end compaction pins the marker into the sidecar.",
   "type": "object",
   "additionalProperties": false,
   "properties": {
@@ -42,7 +42,7 @@
       "minimum": 0
     },
     "mode": {
-      "const": "template_summary"
+      "enum": ["template_summary", "mechanical"]
     },
     "reason": {
       "description": "Trigger class: rhythm = measured tokens crossed the 160K ordinary trigger with the 2-round cooldown met; fallback = the 200K window guard bypassed the cooldown; session_end = the end-of-session compaction that pins the summary into the sidecar before write-back.",

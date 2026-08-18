@@ -6,7 +6,7 @@
   "messages_dropped": 40,
   "messages_kept": 9,
   "estimated_tokens_after": 11000,
-  "mode": "template_summary",
+  "mode": "mechanical",
   "reason": "session_end",
   "summary_id": "compaction-RUN-CONF-0001-0001",
   "summary_digest": "0000000000000000000000000000000000000000000000000000000000000000",

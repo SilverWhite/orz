@@ -13,6 +13,13 @@
 > 保留为已实施状态记录；当前代码行为为 v1.15（压缩不再清空黑板，路径槽为本 plan epoch
 > 增量，溢出指针指向 epoch 快照；实施审计见
 > `docs/audits/GAP_BLACKBOARD_PLAN_EPOCH_IMPL_AUDIT_2026-08-14.md`）。
+>
+> v1.29 注（2026-08-18 用户裁决：B 定案，D1=(b)；ADR-0010 §14.29）：「五段模板摘要的
+> LLM 调用」撤销——压缩改纯机械、零模型调用（账单对账：压缩摘要以独立系统提示词重付
+> 整段视图 miss，22:17 复验 10 个账单请求无 journal 对应、额外 miss ≈ 676K、账单口径
+> 命中率 89.71% <90%，且摘要调用两轮全部失败零产出）。五段结构/冷却/守卫/存档/事件面
+> 保留；注意事项/后续衔接为固定机械占位（阶段 (c) HA 结构化事实聚合落地前由主模型按
+> marker 回查入口自行承接）；事件 `mode=mechanical`；存档恒写入、marker 恒带 digest。
 
 ## 1. 设计目标与边界
 
@@ -60,7 +67,11 @@
   改按 plan epoch 轮换，见 `BLACKBOARD_PLAN_EPOCH_DESIGN_2026-08-14.md`；本条保留为
   v1.14 实施记录）。
 
-## 4. 第二层：五段模板摘要（LLM 调用，受冷却约束）
+## 4. 第二层：五段模板摘要（机械模式，零模型调用）
+
+> v1.29 修订（2026-08-18 B 定案，ADR-0010 §14.29）：本层不再调用模型——原
+> `summary_system_prompt`/`summary_user_prompt`/`parse_model_output`/重试循环全部
+> 退役；注意事项/后续衔接为固定机械占位（阶段 (c) HA 结构化事实聚合落地前）。
 
 ### 4.1 模板结构（固定槽位）
 
@@ -69,8 +80,8 @@
 | 目的 | 黑板/plan 机械填充（当前任务目的，随任务更新） | 3K |
 | 计划 | 黑板/plan 机械填充（当前步骤与软约束） | 3K |
 | 变动文件路径 | 黑板 edit actions 机械填充（路径+行范围+时间戳）；Top-40 条 + 5K 字符双上限，溢出指针指向本次摘要存档 | 5K |
-| 注意事项 | 模型生成（derived_unverified） | 3K |
-| 后续衔接 | 模型生成（derived_unverified） | 3K |
+| 注意事项 | 固定机械占位（阶段 (c) 事实聚合落地前） | 3K |
+| 后续衔接 | 固定机械占位（阶段 (c) 事实聚合落地前） | 3K |
 | 合计 | — | 17K |
 
 - v1.15 注：路径槽语义随黑板解耦改为「本 plan epoch 增量」；Top-40 条 + 5K 字符双上限不变，
@@ -84,24 +95,24 @@
 
 - 机械校验：五槽齐全、每槽 ≤ 上限、合计 ≤17K 字符、路径槽条目来自当前黑板编辑窗口（压缩后窗口
   滚动，天然为本窗口增量；v1.15 起改为本 plan epoch 增量，压缩不再滚动黑板，见
-  `BLACKBOARD_PLAN_EPOCH_DESIGN_2026-08-14.md`）、digest 绑定、derived_unverified 标记。
-- LLM 槽超限/缺失/退化：拒绝并重做 ≤3 次；退化判定为 ORZ 自定 300 等效字符门（CJK 表意字一字
-  折算 2 等效字符，替代 orz-compaction 英文向 500 字符门，v1.14 审查修复）；单次摘要调用设
-  120s 专用超时。
-- 终止态（重试仍失败）：保留机械段（目的/计划/路径）+ 扩大最近尾 + marker 标
-  `summary_incomplete` + journal 记录；不静默截断、不卡死 run。
+  `BLACKBOARD_PLAN_EPOCH_DESIGN_2026-08-14.md`）、digest 绑定。
+- v1.29（2026-08-18 B 定案）：无 LLM 槽——校验/重试/退化门/`summary_incomplete` 终止态
+  全部退役；存档恒写入（机械槽 + 占位），marker 恒携带真实 digest/路径。
 - 存档写失败（v1.14 审查修复）：显式重试 ≤3 次；仍失败时事件带 `archive_write_failed=true`、
   marker 附"存档写入失败：摘要未落盘，需处理"，不再静默。
 - 机械槽超限（路径 >5K 字符或 >40 条）：Top-40 + 「其余 N 条见本次摘要存档 <path>」指针；
   全量窗口路径由摘要存档承载。
 
-### 4.3 摘要调用约束
+### 4.3 机械模式约束（v1.29，2026-08-18 B 定案）
 
-- 摘要模型：会话模型（DeepSeek V4）覆盖 orz-compaction crate 默认 grok-4.20；纯文本 chat 调用，
-  无工具面，不进入探针/压缩回路；调用带 120s 专用超时（v1.14 审查修复）。
-- 摘要输入 = 已坍缩的历史前缀（工具记录已先被第一层处理），控制调用成本。
-- 输出契约：`derived_unverified` + digest；prompt 明确「只能引用台账/黑板中可验证事实，
-  推断性内容标注未验证」。
+- 零模型调用：`run_template_compact` 不发起任何 provider 请求——压缩的缓存代价仅剩
+  「marker 起的重写 miss」一次，且不再有换前缀的整段视图 miss 与失败调用的纯浪费。
+- 事件：`context_compressed.mode=mechanical`、`summary_incomplete=false`、
+  `summary_id/digest/path` 恒非空；schema enum 保留 `template_summary` 供旧 journal 回放。
+- 口径：压缩零模型调用后，账单请求数 = 主循环 `model_output` 数——事件口径与账单口径对齐，
+  可用账单 CSV 直接验证 DoD 命中率。
+- fallback 紧急机械截断保留（D2-2）：200K 兜底触发时常规 drain 后再按
+  `recovery_target_tokens` 截断，run 绝不滞留窗口之上。
 - 事件 reason：`rhythm`（160K 普通触发）/ `fallback`（200K 兜底）/ `session_end`（会话结束
   自动压缩，v1.14 审查修复）。
 

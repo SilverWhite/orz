@@ -365,6 +365,24 @@
 - [ ] S4（待验证）：make-doom-for-mips 单题复验——命中率 ≥90%（provider
   usage 口径）、无 400、journal 断言不变（`workspace.run_terminal` 订单 →
   ACAF 票据路径）；`ORZ_DEBUG_VIEW=1` 在验证③闭合时一并移除。
+- [x] B 定案（机械压缩；2026-08-18 用户裁决 D1=(b)，ADR-0010 §14.29）
+  ——S4 复验账单对账定位「未处理的部分」= 压缩摘要调用换前缀重付整段视图
+  miss（账单 89.71% vs 事件 93.26%；摘要调用两轮全失败零产出）：
+  - [x] summary.rs：`summary_system_prompt`/`summary_user_prompt`/
+    `parse_model_output`/退化门/重试常量全部退役；`MECHANICAL_NOTES/
+    CONTINUATION_PLACEHOLDER` 固定占位；archive/marker 去掉
+    `summary_incomplete` 终止态文案与「生成失败」。
+  - [x] agent_loop.rs：`run_template_compact` 移除模型摘要调用
+    （`agent`/`cancel`/`heartbeat` 参数退役、`CompactDecision::Executed`
+    简化）；五段槽位=黑板 + 占位；存档恒写入、marker 恒带 digest；
+    fallback 紧急机械截断保留；事件 `mode=mechanical`。
+  - [x] schema/fixtures/verifier：`context-compressed-event-payload-v0.2`
+    mode 改 enum（mechanical + template_summary 回放）；5 个 fixtures 改
+    mechanical；verifier 增 mechanical 恒完整交叉校验。
+  - [x] controller e2e：终止态测试改写为机械模式零模型调用断言
+    （received==脚本数）；6 处 summary_response 脚本项退役；orz-loop 465
+    通过、fmt 干净、clippy 与基线一致（lib 21 / test 26）、Python
+    verifier 214 通过。
 - [ ] 闭合：S3/S4 全过 → BACKLOG/TODO/索引状态同步，未闭合 29 → 28。
 
 ### P0-B FUS-RETRIEVAL-MECH（`implemented`；批次 1-6 已全部闭合，2026-08-14，保留供核对）

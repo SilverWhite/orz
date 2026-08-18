@@ -1,6 +1,19 @@
 # CLI_PROJECT_INDEX
 
 > 索引版本：v2.0；状态：`current`；最近整理：2026-08-18（承接 2026-08-13 批次：CLASSICAL-EXEC-ASSISTANT 升 P0、小样 1 跑通与槽位表动态生成、v0.3 集成形态与 DeepSeek Harness 借鉴、fail-closed 返回契约、动作粒度裁决、v0.4 执行日志可见性、v0.5 黑板动作栏登记；工具探针 v0.2 A+C→B 定档、P0-A 批次与 P0-A-2 单一探针面实施闭合、ADR-0010 v1.8 登记；OPS-PROTOCOL 审查判定登记；P0-B B-1 闭合——web_search citations 结构化透传进 loop；2026-08-14 审查复核——投影入口与 README 冻结版本表述对齐 v1.8 补写、CLASSICAL-EXEC-ASSISTANT 与 FUS-TOOL-PROBE 状态头对齐、ADR-0010 §13 来源补齐、新增 AUTH-TODO 待办勾选清单路由；P0-B 步骤 2 闭合——web_fetch 候选机械计数门禁与计数反馈（ORZ_WEB_FETCH_CANDIDATE_CAP 定档 8）；2026-08-14 缓存与上下文成本收敛登记（ADR-0010 v1.9、FUS-REQUEST-CACHE pending）——保持 v1.8 探针可见性、请求 header 变化留痕、探针准确性优先、单轮注入预算 + 策略化读取；2026-08-14 压缩机制重设计定稿登记（ADR-0010 v1.10、FUS-COMPACTION-REDESIGN pending）——384K 有效窗口、160K/200K 触发、工具记录机械坍缩、五段模板摘要、恢复缺口 D2-2/D3-1 实施前置；P0-B 步骤 4 闭合——browser_read 范围/模式参数（full/preview/keywords）与第二段计数域复用；P0-B 步骤 5/6 闭合——输出级引用校验器与提示词相应缩短（ADR-0010 v1.11/v1.12，FUS-RETRIEVAL-MECH 转 implemented）；2026-08-14 步骤 6 复核补记——GAP-SOURCE-WEIGHTING-IMPL 索引条目补取代注记（P3 已处理），审查观察登记（提示词 observed-scope 枚举，P3 可选，见步骤 6 审计 §7）；2026-08-14 DSH 借鉴复核与两项设计确认登记——FUS-DSH-BORROW-REVIEW（A 挂起/B 收编小样 2/C 收编 S2）、FUS-ORIENTATION-FORCED-TEMPLATE 与 FUS-SESSION-CONTEXT-MONITOR（ADR-0010 v1.13、P1 6c/6d）、条件触发 FUS-RECOVERY-TOOL-OUTCOME/ORZ-STAGNATION-TOOL-SIGNAL；2026-08-14 P0-D 压缩机制实施闭合（用户放行）——S1 D2-2/D3-1 恢复前置、S2 动作台账机械坍缩、S3 五段模板摘要接线（context_compressed v0.2 payload + 存档 + retention + TUI）、S4 审计与同步，FUS-COMPACTION-REDESIGN 转 implemented；2026-08-14 黑板 plan epoch 轮换登记（用户裁决）——ADR-0010 v1.15、FUS-BLACKBOARD-PLAN-EPOCH pending、压缩不再滚动黑板；2026-08-14 黑板 plan epoch 实施闭合（用户指示优先）——S1-S5 全部实施（plan_epoch 批准事件/Schema/fixtures、原子轮换与 `.gsa/blackboard/epoch-<n>.json` 归档、压缩解耦 + marker/路径槽、blackboard_read epoch 参数、恢复装载 + retention），FUS-BLACKBOARD-PLAN-EPOCH 转 implemented，ADR-0010 §3.6 正文随实施登记；2026-08-17 console 面缓存注记登记（用户指示补记）见下。
+> 2026-08-18 压缩机械模式定案与实施闭合登记（用户裁决 B 定案、D1=(b)）——S4
+> 复验账单对账定位「未处理的部分」：压缩摘要调用以独立系统提示词重付整段视图
+> miss（22:17 运行 10 个账单请求无 journal 对应、额外 miss ≈ 676K、账单口径
+> 命中率 89.71% <90%，事件口径 93.26% 虚高；摘要调用两轮全部失败零产出）。
+> 定案=纯机械压缩（ADR-0010 §14.29 v1.29）：`run_template_compact` 移除模型
+> 摘要调用（agent/cancel/heartbeat 退役、`CompactDecision::Executed` 简化），
+> 五段槽位=黑板 + 固定机械占位（注意事项/后续衔接，阶段 (c) HA 结构化事实
+> 聚合落地前）；存档恒写入、marker 恒带 digest、无 `summary_incomplete`
+> 终止态；事件 `mode=mechanical`（schema enum 保留 template_summary 回放）；
+> fallback 紧急机械截断保留。实现=orz 子模块提交（2026-08-18）；orz-loop 465
+> 通过、fmt 干净、clippy 与基线一致（lib 21 / test 26）、Python verifier 214
+> 通过；CONTEXT_COMPACTION_DESIGN §4 修订、BACKLOG 0c / TODO P0-0c 同步；
+> 计数不变（0c S3/S4 复验闭环后 29 → 28；阶段 (c) 待重看 HA 项目后另行裁决）。
 > 2026-08-15 黑板 plan epoch 复查补强登记（ADR-0010 v1.15⑧）——plan_epoch 时间戳单调编号、身份一一对应强制、retention 保留最高编号快照。
 > 2026-08-15 黑板 plan epoch 复查遗留闭合登记（ADR-0010 v1.15⑨）——F2 原子写盘+回退加载、F4 跨进程 `.claim-<n>` 占号、F5 归档目录单一来源、F6 非法 epoch 显式报错、F7 归档失败入事件面（新 v0.2 `epoch_archive_write_failed`）、F9 `persisted_at` 更名、F10 设计 §5 措辞对齐。
 > 2026-08-15 ACAF fail-closed 生产启用裁决登记（用户裁决放行）——P2 IMPL-CONTROL-FABRIC 决策门放行；翻转执行与核查清单 ⑦⑨⑩⑪ 收口/边界登记待实施。
@@ -233,7 +246,12 @@
 > clippy 与基线一致（lib 21 / lib test 26）。ADR-0010 §14.28（v1.28）/
 > BACKLOG 0c / TODO P0-0c 已同步。S3（Linux musl 重建）/ S4（make-doom-for-
 > mips 复验命中率 ≥90%）待验证；未闭合 28 → 29（实施轮入账，验证闭环后
-> 29 → 28）。
+> 29 → 28）。**2026-08-18 B 定案（机械压缩）实施闭合**——S4 复验账单对账
+> 定位「未处理的部分」= 压缩摘要调用换前缀重付整段视图 miss（账单口径
+> 89.71% <90%）；定案=纯机械压缩（ADR-0010 §14.29）：移除模型摘要调用、
+> 五段槽位=黑板 + 固定机械占位（阶段 (c) HA 事实聚合落地前）、存档恒写入、
+> 事件 `mode=mechanical`；orz-loop 465 通过、clippy 基线一致、Python verifier
+> 214 通过；0c 计数不变（S3/S4 复验闭环后 29 → 28）。
 > 2026-08-18 折叠历史外挂二次审查修复闭合登记（用户指示处理全部审查发现）
 > ——写失败不再 `continue` 空转（连续 3 次失败禁用折叠 + 新增 v0.2 事件
 > `ledger_fold_write_failed`，Schema/TUI 全链同步）、外挂文件仅主车道（检索
