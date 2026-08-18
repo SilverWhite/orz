@@ -1302,27 +1302,25 @@ pub(crate) async fn run_agent_loop(
         // FUS-LEDGER-FOLD-STATE 复验取证 (2026-08-18)：`ORZ_DEBUG_VIEW=1`
         // 时在请求失败路径 dump 实际发送的视图角色序列（定位折叠/压缩
         // 交互下的消息配对破坏点；正常路径零成本）。
-        let view_debug = std::env::var("ORZ_DEBUG_VIEW")
-            .is_ok()
-            .then(|| {
-                request_messages
-                    .iter()
-                    .map(|m| match m.role {
-                        Role::Assistant => format!(
-                            "A[{}]",
-                            m.tool_calls
-                                .iter()
-                                .map(|t| t.call_id.as_str())
-                                .collect::<Vec<_>>()
-                                .join(",")
-                        ),
-                        Role::Tool => {
-                            format!("T[{}]", m.tool_call_id.as_deref().unwrap_or("?"))
-                        }
-                        _ => "U".to_string(),
-                    })
-                    .collect::<Vec<_>>()
-            });
+        let view_debug = std::env::var("ORZ_DEBUG_VIEW").is_ok().then(|| {
+            request_messages
+                .iter()
+                .map(|m| match m.role {
+                    Role::Assistant => format!(
+                        "A[{}]",
+                        m.tool_calls
+                            .iter()
+                            .map(|t| t.call_id.as_str())
+                            .collect::<Vec<_>>()
+                            .join(",")
+                    ),
+                    Role::Tool => {
+                        format!("T[{}]", m.tool_call_id.as_deref().unwrap_or("?"))
+                    }
+                    _ => "U".to_string(),
+                })
+                .collect::<Vec<_>>()
+        });
         let response = match agent
             .run_round(
                 &system,
