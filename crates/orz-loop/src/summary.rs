@@ -2,12 +2,13 @@
 //!
 //! ADR-0010 v1.10 §14.10 ③ / CONTEXT_COMPACTION_DESIGN §4: the template
 //! summary has five fixed slots — 目的 / 计划 / 变动文件路径 are mechanically
-//! filled from the blackboard (plan + edit actions); 注意事项 / 后续衔接 are
-//! mechanical placeholders (2026-08-18 B 定案，ADR-0010 §14.29) until the
-//! HA structured-fact aggregation phase lands (阶段 (c)) — the compaction
-//! makes ZERO model calls so it never re-bills the folded view under a
-//! foreign prefix. Character limits 3/3/5/3/3K = 17K total bound the marker
-//! and archive rendering.
+//! filled from the blackboard (plan + edit actions); 注意事项 = HA 结构化
+//! 事实聚合（阶段 (c) 定稿，ADR-0010 §14.30 / 设计 §4.4.1——只机械聚合
+//! controller 已写入的结构化记录，零模型调用）；后续衔接 = 固定中性占位
+//! （不交助理层，由主模型自行判断，设计 §4.4.2）。The compaction makes
+//! ZERO model calls so it never re-bills the folded view under a foreign
+//! prefix. Character limits 3/3/5/3/3K = 17K total bound the marker and
+//! archive rendering.
 //!
 //! 2026-08-18 B 定案（ADR-0010 §14.29）：原 LLM 槽位的退化门（300 等效字符
 //! /CJK 双计）、重试与解析全部退役——压缩零模型调用、无失败槽位；路径槽
@@ -27,12 +28,16 @@ pub const SUMMARY_SLOT_LIMITS: [usize; 5] = [3_000, 3_000, 5_000, 3_000, 3_000];
 /// an audit gap and must be retried explicitly, then reported.
 pub const ARCHIVE_WRITE_MAX_ATTEMPTS: usize = 3;
 
-/// 机械模式占位（2026-08-18 B 定案，D1=(b)）：压缩不再调用模型生成
-/// 注意事项/后续衔接；阶段 (c)（HA 结构化事实聚合）落地前，这两槽以
-/// 固定占位呈现，主模型按 marker 的回查入口自行承接。
-pub const MECHANICAL_NOTES_PLACEHOLDER: &str =
-    "（机械模式：无模型槽位；阶段 (c) 事实聚合落地前由主模型按 marker 回查自行判断）";
-pub const MECHANICAL_CONTINUATION_PLACEHOLDER: &str = "（机械模式：回查 blackboard_read 分区 plan/edits/tool_actions/exec/actions（历史用 epoch 参数）与摘要存档）";
+/// 注意事项槽空态文案（阶段 (c) 定稿，ADR-0010 §14.30 / 设计 §4.4.1）：
+/// 三数据源均无失败事实时显示「（无注意事项）」——不再使用阶段 (b)
+/// 「机械模式无模型槽位」措辞。
+pub const NOTES_FACTS_EMPTY: &str = "（无注意事项）";
+
+/// 后续衔接槽固定中性占位（阶段 (c) 定稿，设计 §4.4.2）：不聚合任何
+/// 「当前步/下一步/待办」——助理层不变量=不理解语义，机械建议可能与主
+/// 模型实际评估冲突；措辞显式声明「后续衔接由主模型自行判断」，仅保留
+/// 回查入口（blackboard_read 分区 + 摘要存档 + 外挂台账路径）。
+pub const MECHANICAL_CONTINUATION_PLACEHOLDER: &str = "（后续衔接由主模型自行判断：可回查 blackboard_read 分区 plan/edits/tool_actions/exec/actions（历史用 epoch 参数）、摘要存档与外挂台账）";
 
 /// Estimated tokens of one summary marker in the kept context. The marker
 /// carries the five slots (up to ~17K chars ≈ 8.5K tokens under the
@@ -176,6 +181,154 @@ fn render_paths(
     out
 }
 
+/// HA 结构化事实聚合（阶段 (c) 定稿，2026-08-19，ADR-0010 §14.30 /
+/// CONTEXT_COMPACTION_DESIGN §4.4.1）：注意事项槽 = 助理层唯一新增输出，
+/// 只机械聚合 controller 已写入的结构化记录——
+///   1. `plan.steps` 中 `Failed(receipt_id)` / `Blocked` 的步骤
+///      （step id + 目标 + receipt_id）；
+///   2. `exec.errors` 最近 5 条（每条截断约 200 字符）；
+///   3. `actions.results` 最近 3 条失败 receipt（order_id / step / code /
+///      trace_id）。
+///
+/// 排序=计划面失败/阻塞 → 执行错误 → 动作失败（计划面优先，影响最大）；
+/// 空时「（无注意事项）」；≤3K 超限截断并给「其余 N 条见 blackboard_read
+/// 分区/摘要存档」指针。压缩内部失败（guard/archive/外挂台账）继续走
+/// marker 既有独立标注，不进本槽。零模型调用。
+pub fn render_facts_notes(blackboard: &Blackboard) -> String {
+    let mut lines: Vec<String> = Vec::new();
+
+    // 1) 计划面失败/阻塞步骤（按计划顺序，设计排序第一位）。
+    for step in &blackboard.plan.steps {
+        let (label, receipt) = match &step.status {
+            StepStatus::Failed(ev) => ("失败", Some(ev.receipt_id.as_str())),
+            StepStatus::Blocked => ("受阻", None),
+            _ => continue,
+        };
+        let line = match receipt {
+            Some(r) => format!(
+                "[步骤 {}] {}（{}，receipt: {}）",
+                step.id, step.goal, label, r
+            ),
+            None => format!("[步骤 {}] {}（{}）", step.id, step.goal, label),
+        };
+        lines.push(line);
+    }
+
+    // 2) 执行错误（最近 5 条，保持原顺序；每条截断约 200 字符）。
+    for err in blackboard
+        .exec
+        .errors
+        .iter()
+        .rev()
+        .take(NOTES_FACTS_EXEC_ERRORS_MAX)
+        .rev()
+    {
+        lines.push(format!(
+            "[执行错误] {}",
+            truncate_chars(err, NOTES_FACTS_EXEC_ERROR_LINE_MAX_CHARS)
+        ));
+    }
+
+    // 3) 动作失败 receipt（最近 3 条失败，保持原顺序；
+    //    order_id / step / code / trace_id）。
+    let recent_failures: Vec<_> = blackboard
+        .actions
+        .results
+        .iter()
+        .rev()
+        .filter(|r| !r.ok)
+        .take(NOTES_FACTS_ACTION_FAILURES_MAX)
+        .collect();
+    for result in recent_failures.into_iter().rev() {
+        let (step, code) = failure_envelope_fields(&result.error);
+        lines.push(format!(
+            "[动作失败] {} step={} code={} trace_id={}",
+            result.order_id, step, code, result.trace_id
+        ));
+    }
+
+    render_notes_capped(lines)
+}
+
+/// 执行错误条数上限（最近 5 条）——控制器写入侧无界，渲染侧取尾。
+const NOTES_FACTS_EXEC_ERRORS_MAX: usize = 5;
+/// 动作失败 receipt 上限（最近 3 条失败）。
+const NOTES_FACTS_ACTION_FAILURES_MAX: usize = 3;
+/// 单条执行错误截断上限（约 200 字符，CJK 单字符计数）。
+const NOTES_FACTS_EXEC_ERROR_LINE_MAX_CHARS: usize = 200;
+
+/// 按字符截断并加「…」提示（不超过 `max_chars`）。
+fn truncate_chars(s: &str, max_chars: usize) -> String {
+    if s.chars().count() <= max_chars {
+        return s.to_string();
+    }
+    let mut out: String = s.chars().take(max_chars.saturating_sub(1)).collect();
+    out.push('…');
+    out
+}
+
+/// 失败 receipt 的 error 信封字段（controller 结构化写入 `{step, code, ...}`）；
+/// 字段缺失时机械回退到 `?`（fail-closed，不编造）。
+fn failure_envelope_fields(error: &Option<serde_json::Value>) -> (String, String) {
+    let obj = error.as_ref().and_then(|v| v.as_object());
+    let get = |key: &str| -> String {
+        obj.and_then(|m| m.get(key))
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string())
+            .unwrap_or_else(|| "?".to_string())
+    };
+    (get("step"), get("code"))
+}
+
+/// 注意事项槽 ≤3K 上限渲染：按行顺序填放；放不下的行计入「其余 N 条」；
+/// 末尾给 blackboard_read 分区/摘要存档指针（指针必须可见——必要时弹出
+/// 已容纳行腾位，被弹出的行同样计入 N）。
+fn render_notes_capped(lines: Vec<String>) -> String {
+    if lines.is_empty() {
+        return NOTES_FACTS_EMPTY.to_string();
+    }
+    let mut out = String::new();
+    let mut hidden = 0usize;
+    for line in &lines {
+        let candidate = if out.is_empty() {
+            line.clone()
+        } else {
+            format!("{out}\n{line}")
+        };
+        if candidate.chars().count() <= SUMMARY_SLOT_LIMITS[3] {
+            out = candidate;
+        } else {
+            hidden += 1;
+        }
+    }
+    if hidden > 0 {
+        loop {
+            let pointer = format!("其余 {hidden} 条见 blackboard_read 分区/摘要存档");
+            // 指针必须可见：放不下时挤出已容纳行（被挤出的行同样计入 N）。
+            if out.is_empty()
+                || out.chars().count() + 1 + pointer.chars().count() <= SUMMARY_SLOT_LIMITS[3]
+            {
+                if !out.is_empty() {
+                    out.push('\n');
+                }
+                out.push_str(&pointer);
+                break;
+            }
+            match out.rfind('\n') {
+                Some(idx) => {
+                    out.truncate(idx);
+                    hidden += 1;
+                }
+                None => {
+                    out.clear();
+                    hidden += 1;
+                }
+            }
+        }
+    }
+    out
+}
+
 /// The archive file (markdown) for one summary — the audit copy with digest.
 /// FUS-LEDGER-FOLD-STATE (2026-08-18, ADR-0010 §14.26 / 设计 §3.5 第 1 步):
 /// when the loop is folded, the frozen action-ledger block is appended as
@@ -204,7 +357,7 @@ pub fn summary_archive_markdown(
         slots.plan,
         slots.paths,
         if slots.notes.is_empty() {
-            MECHANICAL_NOTES_PLACEHOLDER
+            NOTES_FACTS_EMPTY
         } else {
             &slots.notes
         },
@@ -275,7 +428,7 @@ pub fn build_summary_marker(
         slots.plan,
         slots.paths,
         if slots.notes.is_empty() {
-            MECHANICAL_NOTES_PLACEHOLDER
+            NOTES_FACTS_EMPTY
         } else {
             &slots.notes
         },
@@ -306,7 +459,9 @@ pub fn archive_digest(markdown: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::blackboard::{EditRecord, PlanStep, SharedBlackboard, StepStatus};
+    use crate::blackboard::{
+        ActionResult, EditRecord, FailedEvidence, PlanStep, SharedBlackboard, StepStatus,
+    };
 
     fn slots() -> SummarySlots {
         SummarySlots {
@@ -374,6 +529,244 @@ mod tests {
         // the compaction archive.
         assert!(paths.contains(epoch_archive.to_string_lossy().as_ref()));
         assert!(!paths.contains(archive.to_string_lossy().as_ref()));
+    }
+
+    fn failed_step(id: &str, goal: &str, receipt: &str) -> PlanStep {
+        PlanStep {
+            id: id.into(),
+            goal: goal.into(),
+            actions: Vec::new(),
+            acceptance: String::new(),
+            evidence: Vec::new(),
+            status: StepStatus::Failed(FailedEvidence {
+                receipt_id: receipt.into(),
+            }),
+        }
+    }
+
+    fn blocked_step(id: &str, goal: &str) -> PlanStep {
+        PlanStep {
+            id: id.into(),
+            goal: goal.into(),
+            actions: Vec::new(),
+            acceptance: String::new(),
+            evidence: Vec::new(),
+            status: StepStatus::Blocked,
+        }
+    }
+
+    fn action_result(
+        order_id: &str,
+        ok: bool,
+        error: Option<serde_json::Value>,
+        trace: &str,
+    ) -> ActionResult {
+        ActionResult {
+            order_id: order_id.into(),
+            ok,
+            response: None,
+            error,
+            trace_id: trace.into(),
+            timestamp: "2026-08-19T00:00:00Z".into(),
+        }
+    }
+
+    #[test]
+    fn facts_notes_empty_shows_no_notes() {
+        // 阶段 (c) 定稿（ADR-0010 §14.30 / 设计 §4.4.1）：三数据源均无
+        // 失败事实时显示「（无注意事项）」——不再用「机械模式无模型槽位」。
+        let bb = SharedBlackboard::new();
+        assert_eq!(render_facts_notes(&bb.read()), NOTES_FACTS_EMPTY);
+        // 只有成功动作/已完成步骤不算注意事项。
+        {
+            let mut w = bb.write();
+            w.plan.steps.push(PlanStep {
+                id: "s1".into(),
+                goal: "已成功".into(),
+                actions: Vec::new(),
+                acceptance: String::new(),
+                evidence: Vec::new(),
+                status: StepStatus::Done(crate::blackboard::DoneEvidence {
+                    receipt_id: "ORD-1".into(),
+                    direct: None,
+                }),
+            });
+            w.actions
+                .results
+                .push(action_result("ORD-2", true, None, "t2"));
+        }
+        assert_eq!(render_facts_notes(&bb.read()), NOTES_FACTS_EMPTY);
+    }
+
+    #[test]
+    fn facts_notes_orders_plan_then_exec_then_actions() {
+        let bb = SharedBlackboard::new();
+        {
+            let mut w = bb.write();
+            w.plan.steps.push(failed_step("s1", "失败步骤", "ORD-1"));
+            w.plan.steps.push(blocked_step("s2", "受阻步骤"));
+            w.plan.steps.push(PlanStep {
+                id: "s3".into(),
+                goal: "进行中步骤".into(),
+                actions: Vec::new(),
+                acceptance: String::new(),
+                evidence: Vec::new(),
+                status: StepStatus::InProgress,
+            });
+            w.exec.errors.push("执行错误一".into());
+            w.exec.errors.push("执行错误二".into());
+            w.actions.results.push(action_result(
+                "ORD-2",
+                false,
+                Some(serde_json::json!({
+                    "step": "policy",
+                    "code": "policy_denied",
+                    "message": "denied",
+                })),
+                "t2",
+            ));
+            w.actions
+                .results
+                .push(action_result("ORD-3", true, None, "t3"));
+        }
+        let notes = render_facts_notes(&bb.read());
+        let lines: Vec<&str> = notes.lines().collect();
+        // 排序=计划面失败/阻塞 → 执行错误 → 动作失败；成功 receipt 不入列。
+        assert_eq!(
+            lines,
+            vec![
+                "[步骤 s1] 失败步骤（失败，receipt: ORD-1）",
+                "[步骤 s2] 受阻步骤（受阻）",
+                "[执行错误] 执行错误一",
+                "[执行错误] 执行错误二",
+                "[动作失败] ORD-2 step=policy code=policy_denied trace_id=t2",
+            ]
+        );
+    }
+
+    #[test]
+    fn facts_notes_takes_last_5_exec_errors_and_truncates_lines() {
+        let bb = SharedBlackboard::new();
+        {
+            let mut w = bb.write();
+            for i in 0..8 {
+                w.exec.errors.push(format!("错误{i}"));
+            }
+            // 超长单条截断约 200 字符（CJK 单字符计数，截断带「…」）。
+            w.exec.errors.push("长".repeat(500));
+        }
+        let notes = render_facts_notes(&bb.read());
+        let lines: Vec<&str> = notes.lines().collect();
+        // 最近 5 条（保持原顺序）：错误4..错误7 + 超长条。
+        assert_eq!(lines.len(), 5);
+        assert_eq!(lines[0], "[执行错误] 错误4");
+        assert_eq!(lines[3], "[执行错误] 错误7");
+        let last = lines[4];
+        assert!(last.starts_with("[执行错误] "));
+        // 载荷截断到约 200 字符（199 字符 + 「…」），不再携带尾部原文。
+        let payload = last.trim_start_matches("[执行错误] ");
+        assert_eq!(
+            payload.chars().count(),
+            NOTES_FACTS_EXEC_ERROR_LINE_MAX_CHARS
+        );
+        assert!(payload.ends_with('…'));
+        assert!(payload.starts_with('长'));
+        assert!(payload.chars().filter(|c| *c == '长').count() <= 199);
+    }
+
+    #[test]
+    fn facts_notes_takes_last_3_failed_receipts_skipping_ok() {
+        let bb = SharedBlackboard::new();
+        {
+            let mut w = bb.write();
+            // 失败：r1/r3/r4/r6；成功：r0/r2/r5 —— 最近 3 条失败 = r3/r4/r6。
+            w.actions
+                .results
+                .push(action_result("r0", true, None, "t0"));
+            w.actions.results.push(action_result(
+                "r1",
+                false,
+                Some(serde_json::json!({"step": "execute", "code": "boom"})),
+                "t1",
+            ));
+            w.actions
+                .results
+                .push(action_result("r2", true, None, "t2"));
+            w.actions.results.push(action_result(
+                "r3",
+                false,
+                Some(serde_json::json!({"step": "policy", "code": "policy_denied"})),
+                "t3",
+            ));
+            w.actions.results.push(action_result(
+                "r4",
+                false,
+                Some(serde_json::json!({"step": "execute", "code": "boom"})),
+                "t4",
+            ));
+            w.actions
+                .results
+                .push(action_result("r5", true, None, "t5"));
+            w.actions
+                .results
+                .push(action_result("r6", false, None, "t6"));
+        }
+        let notes = render_facts_notes(&bb.read());
+        let lines: Vec<&str> = notes.lines().collect();
+        assert_eq!(
+            lines,
+            vec![
+                "[动作失败] r3 step=policy code=policy_denied trace_id=t3",
+                "[动作失败] r4 step=execute code=boom trace_id=t4",
+                // 信封缺失时机械回退 `?`，trace_id 取 receipt 自带字段。
+                "[动作失败] r6 step=? code=? trace_id=t6",
+            ]
+        );
+    }
+
+    #[test]
+    fn facts_notes_caps_at_3k_with_overflow_pointer() {
+        let bb = SharedBlackboard::new();
+        {
+            let mut w = bb.write();
+            // 足够多的失败步骤保证溢出（每行 ~110 字符 × 40 ≈ 4.4K）。
+            for i in 0..40 {
+                w.plan.steps.push(failed_step(
+                    &format!("s{i}"),
+                    &format!("目标 {i} {}", "长".repeat(80)),
+                    &format!("ORD-{i}"),
+                ));
+            }
+        }
+        let notes = render_facts_notes(&bb.read());
+        assert!(
+            notes.chars().count() <= SUMMARY_SLOT_LIMITS[3],
+            "notes slot must stay within 3K: {}",
+            notes.chars().count()
+        );
+        assert!(notes.contains("其余"), "{notes}");
+        assert!(
+            notes.contains("见 blackboard_read 分区/摘要存档"),
+            "{notes}"
+        );
+        assert!(notes.lines().last().unwrap().starts_with("其余 "));
+        // 溢出指针是末尾一行，且被截掉的条目数机械可数（行数 < 40）。
+        assert!(notes.lines().count() < 40, "{notes}");
+    }
+
+    #[test]
+    fn facts_notes_single_overlong_line_falls_back_to_pointer_only() {
+        // 边界：单条事实超过 3K 时整行无法容纳——槽位退化为仅指针，
+        // 且「其余 N 条」须计入这条超长行本身（N=1）。
+        let bb = SharedBlackboard::new();
+        {
+            let mut w = bb.write();
+            w.plan
+                .steps
+                .push(failed_step("s1", &"长".repeat(4_000), "ORD-1"));
+        }
+        let notes = render_facts_notes(&bb.read());
+        assert_eq!(notes, "其余 1 条见 blackboard_read 分区/摘要存档");
     }
 
     #[test]
@@ -459,19 +852,20 @@ mod tests {
     }
 
     #[test]
-    fn mechanical_placeholder_slots_in_marker_and_archive() {
-        // 2026-08-18 B 定案（D1=(b)）：压缩零模型调用，注意事项/后续衔接
-        // 为固定机械占位——无 summary_incomplete 终止态、无「生成失败」。
+    fn continuation_placeholder_and_empty_notes_in_marker_and_archive() {
+        // 2026-08-19 阶段 (c) 定稿（ADR-0010 §14.30）：注意事项空态为
+        // 「（无注意事项）」；后续衔接为固定中性占位（不交助理层、由主
+        // 模型自行判断）——无 summary_incomplete 终止态、无「生成失败」。
         let slots = SummarySlots {
             notes: String::new(),
             continuation: String::new(),
             ..slots()
         };
         let markdown = summary_archive_markdown("compaction-RUN-X-002", &slots, 2, false, None);
-        assert!(markdown.contains("机械模式"));
-        assert!(markdown.contains(MECHANICAL_NOTES_PLACEHOLDER));
+        assert!(markdown.contains(NOTES_FACTS_EMPTY));
         assert!(markdown.contains(MECHANICAL_CONTINUATION_PLACEHOLDER));
         assert!(!markdown.contains("生成失败"));
+        assert!(!markdown.contains("机械模式无模型槽位"));
         let digest = archive_digest(&markdown);
         let marker = build_summary_marker(
             "compaction-RUN-X-002",
@@ -485,7 +879,7 @@ mod tests {
             None,
         );
         assert!(!marker.contains("summary_incomplete"));
-        assert!(marker.contains(MECHANICAL_NOTES_PLACEHOLDER));
+        assert!(marker.contains(NOTES_FACTS_EMPTY));
         assert!(marker.contains(MECHANICAL_CONTINUATION_PLACEHOLDER));
         assert!(marker.contains(&format!("sha256:{digest}")));
         assert!(marker.contains("黑板 plan_epoch: 2"));

@@ -480,13 +480,14 @@ pub(crate) enum CompactDecision {
 /// Used by the loop-top rhythm/fallback trigger and by the end-of-session
 /// compaction (reason = "session_end", forced). Makes ZERO model calls:
 /// the five slots come from the blackboard + mechanical placeholders
-/// (注意事项/后续衔接 — 阶段 (c) 事实聚合落地前), the archive is persisted
-/// with bounded retries (an archive failure is explicitly reported in the
-/// marker and the event), the conversation is truncated, the rolling single
-/// marker is inserted and `context_compressed` v0.2 is journaled with
-/// `mode: "mechanical"`. v1.15 (2026-08-14): compaction never touches the
-/// blackboard — the blackboard lifecycle is the plan epoch, not the
-/// context window.
+/// (注意事项 = HA 结构化事实聚合阶段 (c) 定稿，ADR-0010 §14.30 / 设计
+/// §4.4.1；后续衔接 = 固定中性占位，不交助理层，设计 §4.4.2), the
+/// archive is persisted with bounded retries (an archive failure is
+/// explicitly reported in the marker and the event), the conversation is
+/// truncated, the rolling single marker is inserted and
+/// `context_compressed` v0.2 is journaled with `mode: "mechanical"`.
+/// v1.15 (2026-08-14): compaction never touches the blackboard — the
+/// blackboard lifecycle is the plan epoch, not the context window.
 #[allow(clippy::too_many_arguments)]
 pub(crate) async fn run_template_compact(
     svc: &SharedLoopServices<'_>,
@@ -597,10 +598,12 @@ pub(crate) async fn run_template_compact(
             purpose,
             plan,
             paths,
-            // 2026-08-18 B 定案（D1=(b)，ADR-0010 §14.29）：压缩零模型
-            // 调用——注意事项/后续衔接为固定机械占位；阶段 (c)（HA 结构
-            // 化事实聚合）落地前由主模型按 marker 回查入口自行承接。
-            notes: crate::summary::MECHANICAL_NOTES_PLACEHOLDER.to_string(),
+            // 2026-08-19 阶段 (c) 定稿（ADR-0010 §14.30 / 设计 §4.4.1）：
+            // 注意事项槽 = HA 结构化事实聚合（零模型、只机械聚合 controller
+            // 已写入的 plan 失败步骤 / exec 错误 / 动作失败 receipt）。
+            notes: crate::summary::render_facts_notes(&bb),
+            // 阶段 (c) 定稿（设计 §4.4.2）：后续衔接槽不交助理层——固定
+            // 中性占位 + 回查入口，由主模型自行判断，避免限制或机械性误导。
             continuation: crate::summary::MECHANICAL_CONTINUATION_PLACEHOLDER.to_string(),
         }
     };
@@ -3054,6 +3057,20 @@ mod tests {
         assert_eq!(messages[2].tool_calls[0].call_id, "c2");
         assert_eq!(messages[3].tool_call_id.as_deref(), Some("c2"));
         assert!(!fold.is_folded(), "执行后折叠状态重置");
+        // 阶段 (c)（ADR-0010 §14.30 / 设计 §4.4.1）：空黑板 → 注意事项槽
+        // 显示「（无注意事项）」；marker 携带回查入口与后续衔接占位。
+        assert!(
+            messages[1]
+                .content
+                .contains(crate::summary::NOTES_FACTS_EMPTY),
+            "marker must carry the empty-notes text: {}",
+            messages[1].content
+        );
+        assert!(
+            messages[1]
+                .content
+                .contains(crate::summary::MECHANICAL_CONTINUATION_PLACEHOLDER)
+        );
         let archive = dir
             .join(".gsa")
             .join("compaction")
@@ -3062,6 +3079,102 @@ mod tests {
             archive.exists(),
             "summary archive written under session_cwd"
         );
+    }
+
+    /// 阶段 (c) e2e（2026-08-19，ADR-0010 §14.30 / 设计 §4.4.1）：黑板上
+    /// 已有结构化失败事实时，压缩 marker 与存档的「注意事项」槽均为 HA
+    /// 结构化事实聚合（计划面失败/阻塞 → 执行错误 → 动作失败），零模型调用。
+    #[tokio::test]
+    async fn compaction_marker_and_archive_carry_facts_notes() {
+        let dir = std::env::temp_dir().join(format!("orz-compact-facts-{}", std::process::id()));
+        let host = CompactTestHost {
+            journal: JournalRecorder::new(dir.clone()),
+        };
+        let cfg = ContextCompactConfig::default();
+        let blackboard = Arc::new(SharedBlackboard::new());
+        {
+            let mut w = blackboard.write();
+            w.plan.steps.push(crate::blackboard::PlanStep {
+                id: "s1".into(),
+                goal: "编译 MIPS 镜像".into(),
+                actions: Vec::new(),
+                acceptance: String::new(),
+                evidence: Vec::new(),
+                status: crate::blackboard::StepStatus::Failed(crate::blackboard::FailedEvidence {
+                    receipt_id: "ORD-000001".into(),
+                }),
+            });
+            w.plan.steps.push(crate::blackboard::PlanStep {
+                id: "s2".into(),
+                goal: "链接符号表".into(),
+                actions: Vec::new(),
+                acceptance: String::new(),
+                evidence: Vec::new(),
+                status: crate::blackboard::StepStatus::Blocked,
+            });
+            w.exec.errors.push("[read_file] 目标不存在".into());
+            w.actions.results.push(crate::blackboard::ActionResult {
+                order_id: "ORD-000002".into(),
+                ok: false,
+                response: None,
+                error: Some(serde_json::json!({
+                    "step": "policy",
+                    "code": "policy_denied",
+                    "message": "denied",
+                })),
+                trace_id: "t000002".into(),
+                timestamp: "2026-08-19T00:00:00Z".into(),
+            });
+        }
+        let denial_state = Mutex::new(DenialState::default());
+        let pacing = AtomicU32::new(0);
+        let dc = Mutex::new(DebugEpisodeState::default());
+        let policy = AtomicU64::new(0);
+        let svc = compact_test_svc(&cfg, &blackboard, &denial_state, &pacing, &dc, &policy);
+        let mut writer = crate::controller::discard_event_writer("test-run");
+        let mut messages = compact_test_messages();
+        // 与既有执行路径测试同构：折叠冻结态 fold_cut=4 → 压掉 c1 轮。
+        let mut fold = compact_folded_state();
+        let decision = run_template_compact(
+            &svc,
+            &mut writer,
+            &host,
+            &mut messages,
+            100_000,
+            "rhythm",
+            true,
+            false,
+            0,
+            2,
+            None,
+            &mut fold,
+        )
+        .await
+        .expect("execution path returns a decision");
+        assert_eq!(decision, CompactDecision::Executed);
+        let marker = &messages[1].content;
+        // 排序=计划面 → 执行错误 → 动作失败；marker 与存档同源同序。
+        let plan_pos = marker.find("[步骤 s1]").expect("failed step in marker");
+        let block_pos = marker.find("[步骤 s2]").expect("blocked step in marker");
+        let exec_pos = marker.find("[执行错误]").expect("exec error in marker");
+        let action_pos = marker
+            .find("[动作失败] ORD-000002 step=policy code=policy_denied trace_id=t000002")
+            .expect("failed receipt in marker");
+        assert!(plan_pos < block_pos && block_pos < exec_pos && exec_pos < action_pos);
+        assert!(marker.contains("receipt: ORD-000001"));
+        assert!(marker.contains("（受阻）"));
+
+        let archive = dir
+            .join(".gsa")
+            .join("compaction")
+            .join("compaction-test-run-0000.md");
+        let archive_text = std::fs::read_to_string(&archive).unwrap();
+        let a_plan = archive_text.find("[步骤 s1]").unwrap();
+        let a_block = archive_text.find("[步骤 s2]").unwrap();
+        let a_exec = archive_text.find("[执行错误]").unwrap();
+        let a_action = archive_text.find("[动作失败] ORD-000002").unwrap();
+        assert!(a_plan < a_block && a_block < a_exec && a_exec < a_action);
+        assert!(!archive_text.contains(crate::summary::NOTES_FACTS_EMPTY));
     }
 
     /// 审查修复（2026-08-19）：fallback 触发下常规 drain + 紧急截断双段
