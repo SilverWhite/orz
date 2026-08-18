@@ -78,11 +78,11 @@
       ]
     },
     "summary_incomplete": {
-      "description": "Termination state — the LLM slots failed validation after ≤3 attempts; only mechanical slots were kept and the marker carries the flag.",
+      "description": "Completeness flag — always false for the mechanical producer (2026-08-18 B 定案, ADR-0010 §14.29): compaction makes zero model calls, so there is no LLM-slot failure path. Historical template_summary journals may carry true (the retired termination state: the LLM slots failed validation after ≤3 attempts and only the mechanical slots were kept).",
       "type": "boolean"
     },
     "retained_rounds": {
-      "description": "Recent tail rounds kept verbatim after the summary (2 normally; widened by 1 on the termination state).",
+      "description": "Recent tail rounds configured for verbatim retention after the summary (2 normally). The retired termination state widened it by 1 — historical template_summary journals only (2026-08-18 B 定案 removed the widening along with the LLM slots).",
       "type": "integer",
       "minimum": 0
     }

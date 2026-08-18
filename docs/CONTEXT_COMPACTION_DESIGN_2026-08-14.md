@@ -115,6 +115,10 @@
   `recovery_target_tokens` 截断，run 绝不滞留窗口之上。
 - 事件 reason：`rhythm`（160K 普通触发）/ `fallback`（200K 兜底）/ `session_end`（会话结束
   自动压缩，v1.14 审查修复）。
+- 审查处理（2026-08-19）：fallback 双段截断时「被压轮次」= 常规 drain +
+  紧急截断之和（事件/存档/marker 同口径）；事件估计在 marker 插入后按实际
+  数组重算（含 marker，与 schema「marker + preamble + recent tail」口径
+  一致）。
 
 ## 5. 回查清单 marker（滚动单 marker）
 

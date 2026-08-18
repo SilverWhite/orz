@@ -58,7 +58,8 @@
 执行（与现有 `advance_fold` 同触发点，行为改为）：
 
 1. `kept_start` = 最近 **1** 轮起点（`collapsed_cut(messages, tail=1)` 语义；
-   fallback 压缩 widened tail 时按 `tail+1`）；
+   B 定案机械压缩（2026-08-18，ADR-0010 §14.29）无失败路径，原「fallback
+   widened tail」退役，不再按 `tail+1`）；
 2. 将 `messages[上次 fold_cut .. kept_start)` 中**新增**折叠轮次的摘要行
    **追加**进外挂文件（原子追加：O_APPEND 单行写 + flush，或写临时文件后
    rename；带轮次分隔标记）；
@@ -161,7 +162,7 @@
 |---|---|---|
 | 1 | `action_ledger.rs` | `LedgerFoldState.folded_ledger` 语义改为「固定指针消息文本」（或新增 path 字段）；`advance_fold` 产出本次新增摘要行（保持纯函数可测，IO 由调用方执行）；`build_request_view` 已折叠 → `[preamble][指针][fold_cut..]`（尾部=最近 1 轮） |
 | 2 | `agent_loop.rs` / `controller.rs` | 推进触发点写文件（`session_cwd/.gsa/ledger/current.md`，原子追加 + 序号续点）；压缩 marker 追加路径提示行 |
-| 3 | 配置 | 新增 `fold_tail_rounds` 默认 1（保留 1 轮；fallback widened 时 +1 → 2；与压缩 drain 尾 `recent_tail_rounds`=2 分离）；`ORZ_FOLD_TAIL_ROUNDS` 可配 |
+| 3 | 配置 | 新增 `fold_tail_rounds` 默认 1（保留 1 轮；与压缩 drain 尾 `recent_tail_rounds`=2 分离；B 定案机械压缩无失败路径，原「fallback widened +1 → 2」已退役）；`ORZ_FOLD_TAIL_ROUNDS` 可配 |
 
 ### S2 测试
 

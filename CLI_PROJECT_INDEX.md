@@ -14,6 +14,14 @@
 > 通过、fmt 干净、clippy 与基线一致（lib 21 / test 26）、Python verifier 214
 > 通过；CONTEXT_COMPACTION_DESIGN §4 修订、BACKLOG 0c / TODO P0-0c 同步；
 > 计数不变（0c S3/S4 复验闭环后 29 → 28；阶段 (c) 待重看 HA 项目后另行裁决）。
+> 2026-08-19 压缩机械模式全面审查处理登记（B 定案收口）——fallback 双段
+> 截断轮数口径修复（事件/存档/marker「被压轮次」= 常规 drain + 紧急截断
+> 之和 + 事件估计 marker 插入后重算）、`ledger_fold_write_failed` 事件契约
+> 补齐（payload schema / fixtures / verifier 交叉校验 / 生成器，conformance
+> 52→53 闭合 2b755d6 遗留红）、`orz_source_manifest.sha256` 重生成、生成器
+> `context_compressed` 模板对齐 mechanical（防重生成回退）、文档/注释/schema
+> 描述清理；orz-loop 466 / Python verifier+conformance 230 / 仓库门禁
+> valid；计数不变（0c S3/S4 复验闭环后 29 → 28）。
 > 2026-08-15 黑板 plan epoch 复查补强登记（ADR-0010 v1.15⑧）——plan_epoch 时间戳单调编号、身份一一对应强制、retention 保留最高编号快照。
 > 2026-08-15 黑板 plan epoch 复查遗留闭合登记（ADR-0010 v1.15⑨）——F2 原子写盘+回退加载、F4 跨进程 `.claim-<n>` 占号、F5 归档目录单一来源、F6 非法 epoch 显式报错、F7 归档失败入事件面（新 v0.2 `epoch_archive_write_failed`）、F9 `persisted_at` 更名、F10 设计 §5 措辞对齐。
 > 2026-08-15 ACAF fail-closed 生产启用裁决登记（用户裁决放行）——P2 IMPL-CONTROL-FABRIC 决策门放行；翻转执行与核查清单 ⑦⑨⑩⑪ 收口/边界登记待实施。

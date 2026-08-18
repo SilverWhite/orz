@@ -1,0 +1,46 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://local.scientific-assurance.invalid/schema/ledger-fold-write-failed-event-payload-v0.2.schema.json",
+  "title": "ledger_fold_write_failed event payload v0.2 (FUS-LEDGER-FOLD-STATE)",
+  "description": "ADR-0010 §14.28 审查修复 (FUS-LEDGER-FOLD-STATE external-file design): an external-ledger append failure at a fold advance — the fold state is rolled back (the rows stay in the view, never lost), the failure is counted (attempt = 1-based consecutive failure count since the last successful append), and after the failure budget (FOLD_WRITE_FAILURE_LIMIT = 3; disabled=true) folding is disabled for the rest of the loop (the view falls back to the full original messages and compaction remains the backstop). rows = the number of rows the failed append carried; view_estimate_tokens = the chars/2 estimate that triggered the advance; agent_role is the lane — folding is main-lane only, so the producer always writes \"main\" (the enum mirrors request_header_change for shape uniformity).",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "ledger_path",
+    "attempt",
+    "disabled",
+    "rows",
+    "view_estimate_tokens",
+    "agent_role"
+  ],
+  "properties": {
+    "ledger_path": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Path of the external ledger file the append failed for ({session_cwd}/.gsa/ledger/current.md)."
+    },
+    "attempt": {
+      "type": "integer",
+      "minimum": 1,
+      "description": "1-based consecutive failure count since the last successful append — strictly increasing by 1 across consecutive failures of the same run; the budget is exhausted at FOLD_WRITE_FAILURE_LIMIT = 3."
+    },
+    "disabled": {
+      "type": "boolean",
+      "description": "True when the failure budget is exhausted — folding is disabled for the rest of the loop (attempt >= FOLD_WRITE_FAILURE_LIMIT)."
+    },
+    "rows": {
+      "type": "integer",
+      "minimum": 1,
+      "description": "Number of ledger rows the failed append carried."
+    },
+    "view_estimate_tokens": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "The chars/2 estimate of the request view that triggered the fold advance."
+    },
+    "agent_role": {
+      "enum": ["main", "internal_retrieval", "external_retrieval"],
+      "description": "The agent lane — folding is main-lane only, so the producer always writes \"main\"."
+    }
+  }
+}

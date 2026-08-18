@@ -1118,6 +1118,104 @@ class ConsoleModeTransitionRuleTests(unittest.TestCase):
         errors = _verify_v02_ledger_fold_advance([bad_role])
         self.assertTrue(any("agent_role must be" in e for e in errors), errors)
 
+    def test_ledger_fold_write_failed_burst_invariants(self) -> None:
+        """ADR-0010 §14.28 审查修复: every ledger_fold_write_failed carries
+        the full audit shape (non-empty ledger_path, attempt ≥ 1, disabled
+        bool, rows ≥ 1, lane enum); consecutive failures increase attempt
+        by 1; disabled == (attempt >= 3) per the producer budget; no
+        further events after the budget is exhausted."""
+        from assurance.run_event_journal_validation import (
+            _verify_v02_ledger_fold_write_failed,
+        )
+
+        def failed(
+            run_id: str,
+            attempt: int,
+            disabled: bool,
+            agent_role: str = "main",
+            rows: int = 3,
+        ) -> dict:
+            return {
+                "payload_schema": "run-event-v0.2.schema.json",
+                "event_type": "ledger_fold_write_failed",
+                "run_id": run_id,
+                "payload": {
+                    "ledger_path": "/app/.gsa/ledger/current.md",
+                    "attempt": attempt,
+                    "disabled": disabled,
+                    "rows": rows,
+                    "view_estimate_tokens": 135000,
+                    "agent_role": agent_role,
+                },
+            }
+
+        def advance(run_id: str) -> dict:
+            return {
+                "payload_schema": "run-event-v0.2.schema.json",
+                "event_type": "ledger_fold_advance",
+                "run_id": run_id,
+                "payload": {
+                    "fold_start": 1,
+                    "fold_cut": 5,
+                    "rounds_folded": 2,
+                    "view_estimate_tokens": 128000,
+                    "agent_role": "main",
+                },
+            }
+
+        # Valid burst: attempts 1,2,3 with disabled flipping at the budget.
+        events = [
+            failed("RUN-F", 1, False),
+            failed("RUN-F", 2, False),
+            failed("RUN-F", 3, True),
+        ]
+        self.assertEqual(_verify_v02_ledger_fold_write_failed(events), [])
+
+        # A successful append (ledger_fold_advance) resets the counter — a
+        # fresh burst starts at 1.
+        events = [
+            failed("RUN-F", 1, False),
+            failed("RUN-F", 2, False),
+            advance("RUN-F"),
+            failed("RUN-F", 1, False),
+        ]
+        self.assertEqual(_verify_v02_ledger_fold_write_failed(events), [])
+
+        # Attempt must increase by exactly 1 within a burst.
+        gap = [
+            failed("RUN-F", 1, False),
+            failed("RUN-F", 3, True),
+        ]
+        errors = _verify_v02_ledger_fold_write_failed(gap)
+        self.assertTrue(any("increase by 1" in e for e in errors), errors)
+
+        # disabled must follow the producer budget (attempt >= 3).
+        wrong_disabled = failed("RUN-F", 2, True)
+        errors = _verify_v02_ledger_fold_write_failed([wrong_disabled])
+        self.assertTrue(any("disabled must" in e for e in errors), errors)
+
+        # No further events once the budget is exhausted.
+        after_exhaustion = [
+            failed("RUN-F", 3, True),
+            failed("RUN-F", 4, True),
+        ]
+        errors = _verify_v02_ledger_fold_write_failed(after_exhaustion)
+        self.assertTrue(any("budget was exhausted" in e for e in errors), errors)
+
+        # Shape violations.
+        bad_role = failed("RUN-F", 1, False, agent_role="orchestrator")
+        errors = _verify_v02_ledger_fold_write_failed([bad_role])
+        self.assertTrue(any("agent_role must be" in e for e in errors), errors)
+
+        zero_rows = failed("RUN-F", 1, False, rows=0)
+        errors = _verify_v02_ledger_fold_write_failed([zero_rows])
+        self.assertTrue(any("rows must be" in e for e in errors), errors)
+
+        missing_path = failed("RUN-F", 1, False)
+        missing_path["payload"]["ledger_path"] = ""
+        errors = _verify_v02_ledger_fold_write_failed([missing_path])
+        self.assertTrue(any("ledger_path must" in e for e in errors), errors)
+
 
 class SyntheticBadJournalTests(unittest.TestCase):
     """Fail-closed behavior on tampered/partial journals (built from the

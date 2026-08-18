@@ -224,6 +224,14 @@ PAYLOAD_SCHEMA_BY_EVENT_TYPE_V02: dict[str, tuple[str, Path]] = {
           "ledger-fold-advance",
           RUNTIME / "ledger-fold-advance-event-payload-v0.2.schema.json",
       ),
+      # FUS-LEDGER-FOLD-STATE (2026-08-18, ADR-0010 §14.28 审查修复):
+      # external-ledger append failure — fold rollback + consecutive failure
+      # count + budget-exhaustion disable (the audit trace of the degrade
+      # path that keeps the session moving with the unfolded view).
+      "ledger_fold_write_failed": (
+          "ledger-fold-write-failed",
+          RUNTIME / "ledger-fold-write-failed-event-payload-v0.2.schema.json",
+      ),
   }
 
 # Track-resolution table (contract §5 enforcement): every registered
@@ -1142,6 +1150,102 @@ def _verify_v02_ledger_fold_advance(events: list[dict[str, Any]]) -> list[str]:
             and isinstance(rounds_folded, int)
         ):
             window[run_id] = (fold_start, fold_cut, rounds_folded)
+    return errors
+
+
+def _verify_v02_ledger_fold_write_failed(events: list[dict[str, Any]]) -> list[str]:
+    """ADR-0010 §14.28 审查修复 (FUS-LEDGER-FOLD-STATE external-file design)
+    cross-checks — the external-ledger append failure audit trace:
+
+    - every ledger_fold_write_failed carries the full audit shape: a
+      non-empty ledger_path, attempt >= 1, disabled bool, rows >= 1,
+      view_estimate_tokens >= 0 and agent_role in the lane enum (folding is
+      main-lane only — the producer always writes "main");
+    - within a run, consecutive failures increase attempt by exactly 1 (the
+      producer increments the counter per failure); a successful append
+      (a ledger_fold_advance event) resets the counter, so the next failure
+      starts a fresh burst at attempt 1;
+    - the disabled flag follows the producer budget
+      (FOLD_WRITE_FAILURE_LIMIT = 3, ADR-0010 §14.28): disabled ==
+      (attempt >= 3), and no further write failures may follow once the
+      budget is exhausted (folding is disabled for the rest of the loop).
+    """
+    errors: list[str] = []
+    # Per-run failure-burst state: (previous attempt, budget exhausted).
+    bursts: dict[str, tuple[int, bool]] = {}
+    for index, event in enumerate(events):
+        if not _is_v02(event):
+            continue
+        etype = event.get("event_type")
+        run_id = event.get("run_id", "")
+        if etype == "ledger_fold_advance":
+            # A successful append resets the consecutive-failure counter —
+            # the next write failure starts a fresh burst at attempt 1.
+            bursts[run_id] = (0, False)
+            continue
+        if etype != "ledger_fold_write_failed":
+            continue
+        payload = event["payload"]
+        ledger_path = payload.get("ledger_path")
+        attempt = payload.get("attempt")
+        disabled = payload.get("disabled")
+        rows = payload.get("rows")
+        estimate = payload.get("view_estimate_tokens")
+        agent_role = payload.get("agent_role")
+        if not isinstance(ledger_path, str) or not ledger_path:
+            errors.append(
+                f"event {index}: ledger_fold_write_failed ledger_path must "
+                f"be a non-empty string, got {ledger_path!r}"
+            )
+        if not isinstance(attempt, int) or attempt < 1:
+            errors.append(
+                f"event {index}: ledger_fold_write_failed attempt must be a "
+                f"positive integer, got {attempt!r}"
+            )
+        if not isinstance(disabled, bool):
+            errors.append(
+                f"event {index}: ledger_fold_write_failed disabled must be "
+                f"a boolean, got {disabled!r}"
+            )
+        if not isinstance(rows, int) or rows < 1:
+            errors.append(
+                f"event {index}: ledger_fold_write_failed rows must be a "
+                f"positive integer, got {rows!r}"
+            )
+        if not isinstance(estimate, int) or estimate < 0:
+            errors.append(
+                f"event {index}: ledger_fold_write_failed "
+                f"view_estimate_tokens must be a non-negative integer, got "
+                f"{estimate!r}"
+            )
+        if agent_role not in ("main", "internal_retrieval", "external_retrieval"):
+            errors.append(
+                f"event {index}: ledger_fold_write_failed agent_role must "
+                f"be main/internal_retrieval/external_retrieval, got "
+                f"{agent_role!r}"
+            )
+        prev_attempt, exhausted = bursts.get(run_id, (0, False))
+        if exhausted:
+            errors.append(
+                f"event {index}: ledger_fold_write_failed after the failure "
+                f"budget was exhausted (disabled=true) for run {run_id!r} — "
+                "folding is disabled, no further events"
+            )
+        if isinstance(attempt, int) and attempt != prev_attempt + 1:
+            errors.append(
+                f"event {index}: ledger_fold_write_failed attempt must "
+                f"increase by 1 across consecutive failures (previous "
+                f"{prev_attempt}, got {attempt})"
+            )
+        if isinstance(attempt, int) and isinstance(disabled, bool):
+            # Producer budget: FOLD_WRITE_FAILURE_LIMIT = 3 (ADR-0010 §14.28).
+            if disabled != (attempt >= 3):
+                errors.append(
+                    f"event {index}: ledger_fold_write_failed disabled must "
+                    f"equal (attempt >= 3) per the producer budget, got "
+                    f"attempt={attempt} disabled={disabled}"
+                )
+            bursts[run_id] = (attempt, disabled)
     return errors
 
 
@@ -3087,6 +3191,7 @@ def validate_journal_text(text: str) -> list[str]:
         errors.extend(_verify_v02_console_order_written(events))
         errors.extend(_verify_v02_console_order_rejected(events))
         errors.extend(_verify_v02_ledger_fold_advance(events))
+        errors.extend(_verify_v02_ledger_fold_write_failed(events))
         errors.extend(_verify_v02_lifecycle(events))
         errors.extend(_verify_v02_retrieval_mode(events))
         errors.extend(_verify_v02_result_consistency(events))

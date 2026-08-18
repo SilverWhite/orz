@@ -1,0 +1,8 @@
+{
+  "ledger_path": "/app/.gsa/ledger/current.md",
+  "attempt": 2,
+  "disabled": false,
+  "rows": 3,
+  "view_estimate_tokens": 135000,
+  "agent_role": "orchestrator"
+}

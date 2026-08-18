@@ -334,6 +334,16 @@
   （lib 21 / test 26）、Python verifier 214 通过。计数不变（仍在 29——
   0c 的 S3/S4 复验闭环后 29 → 28；阶段 (c) HA 事实聚合待重看 HA 项目后
   另行裁决）。
+- **2026-08-19 全面审查处理（B 定案收口）**：fallback 轮数口径修复
+  （`dropped` 累加 + 存档/marker 总轮数 + 事件估计 marker 后重算，新增
+  单测 `fallback_second_stage_truncation_accounts_total_rounds`）；补
+  `ledger_fold_write_failed` payload schema / fixtures / verifier 交叉
+  校验 / 生成器（conformance 52→53，闭合 2b755d6 遗留红）；
+  `orz_source_manifest.sha256` 重生成；生成器 `context_compressed` 模板
+  对齐 mechanical（防重生成回退）；文档/注释/schema 描述清理（summary.rs
+  退化门注释、schema 终止态字段、LEDGER 设计 widened tail）。
+  orz-loop 466 / Python verifier+conformance 230 / 仓库门禁 valid。
+  计数不变（0c S3/S4 复验闭环后 29 → 28）。
 
 ### 0. 前置收尾（提交前需用户确认）
 

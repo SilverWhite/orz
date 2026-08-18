@@ -180,6 +180,10 @@ V02_EVENT_TYPES = [
       # FUS-LEDGER-FOLD-STATE (2026-08-18, ADR-0010 §14.26): mechanical
       # action-ledger fold advance (cache-miss attribution).
       "ledger_fold_advance",
+      # FUS-LEDGER-FOLD-STATE (2026-08-18, ADR-0010 §14.28 审查修复):
+      # external-ledger append failure — fold rollback + failure count +
+      # budget-exhaustion disable (audit trace of the degrade path).
+      "ledger_fold_write_failed",
       "snapshot_created",
     "snapshot_restored",
     "artifact_registered",
@@ -215,6 +219,7 @@ SLUGS_V02 = {
       "console_order_written": "console-order-written",
       "console_order_rejected": "console-order-rejected",
       "ledger_fold_advance": "ledger-fold-advance",
+      "ledger_fold_write_failed": "ledger-fold-write-failed",
   }
 
 # The v0.2 events with their own v0.2 payload schema (the rest of the v0.2
@@ -266,6 +271,9 @@ V02_PAYLOAD_EVENTS = [
       # FUS-LEDGER-FOLD-STATE (2026-08-18, ADR-0010 §14.26): mechanical
       # action-ledger fold advance.
       "ledger_fold_advance",
+      # FUS-LEDGER-FOLD-STATE (2026-08-18, ADR-0010 §14.28 审查修复):
+      # external-ledger append failure audit trace.
+      "ledger_fold_write_failed",
   ]
 
 SLUGS = {
@@ -949,6 +957,8 @@ PAYLOAD_GOOD_V02: dict[str, dict] = {
         "audit_path": ".gsa/runs/RUN-CONF-0001/recovery-conversation-full.json",
     },
     # P0-D S3 (2026-08-14): five-section template summary (v0.2 shape).
+    # 2026-08-18 B 定案 (ADR-0010 §14.29): mode is mechanical (zero model
+    # calls) — the canonical generator must stay in sync with the producer.
       "context_compressed": {
           "trigger_tokens": 165000,
           "target_tokens": 12000,
@@ -957,7 +967,7 @@ PAYLOAD_GOOD_V02: dict[str, dict] = {
         "messages_dropped": 40,
         "messages_kept": 9,
         "estimated_tokens_after": 11000,
-        "mode": "template_summary",
+        "mode": "mechanical",
         "reason": "rhythm",
         "summary_id": "compaction-RUN-CONF-0001-0001",
         "summary_digest": ZERO_HASH,
@@ -1040,6 +1050,17 @@ PAYLOAD_GOOD_V02: dict[str, dict] = {
           "fold_cut": 5,
           "rounds_folded": 2,
           "view_estimate_tokens": 128000,
+          "agent_role": "main",
+      },
+      # FUS-LEDGER-FOLD-STATE (2026-08-18, ADR-0010 §14.28 审查修复):
+      # external-ledger append failure — mid-burst (attempt 2 of 3,
+      # disabled=false); the budget-exhaustion shape is the third event.
+      "ledger_fold_write_failed": {
+          "ledger_path": "/app/.gsa/ledger/current.md",
+          "attempt": 2,
+          "disabled": False,
+          "rows": 3,
+          "view_estimate_tokens": 135000,
           "agent_role": "main",
       },
   }
@@ -1440,6 +1461,16 @@ PAYLOAD_BAD_V02: dict[str, dict] = {
           "fold_cut": 5,
           "rounds_folded": 2,
           "view_estimate_tokens": 128000,
+          "agent_role": "orchestrator",
+      },
+      # FUS-LEDGER-FOLD-STATE (2026-08-18, ADR-0010 §14.28 审查修复): one
+      # constraint violation — agent_role outside the lane enum.
+      "ledger_fold_write_failed": {
+          "ledger_path": "/app/.gsa/ledger/current.md",
+          "attempt": 2,
+          "disabled": False,
+          "rows": 3,
+          "view_estimate_tokens": 135000,
           "agent_role": "orchestrator",
       },
   }
@@ -1861,8 +1892,9 @@ Scope:
   `tool-completed.policy-denial-bad-source.constraint.invalid` (unknown
   source enum).
 - `envelope/<slug>.valid.json` — a full 13-field v0.2 envelope for **every**
-  event in the v0.2 enum (52 events — 51 prior + ledger_fold_advance from
-  FUS-LEDGER-FOLD-STATE 2026-08-18). The v0.2-payload events carry
+  event in the v0.2 enum (53 events — 51 prior + ledger_fold_advance and
+  ledger_fold_write_failed from FUS-LEDGER-FOLD-STATE 2026-08-18). The
+  v0.2-payload events carry
   their v0.2 payload; the other events reuse the v0.1 payload shape
   unchanged (their payload schema files did not change — adjudicated
   decision: no copied schema files, the v0.1 files remain authoritative for

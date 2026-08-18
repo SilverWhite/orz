@@ -1921,6 +1921,26 @@ ADR §3.6 正文修订随实施登记。
    本阶段只做固定占位。性质：FUS-COMPACTION-REDESIGN（§14.10）修订——五段
    结构/冷却/守卫/存档/事件面保留，LLM 槽位退役。实现见 orz 子模块提交
    （2026-08-18，B 定案实施）。
+   **2026-08-19 全面审查处理登记（B 定案收口）**：三项收口——(a) fallback
+   双段截断轮数口径修复：事件/存档/marker「被压轮次」= 常规 drain + 紧急
+   截断之和（此前覆盖赋值少报、三方不一致），事件估计改在 marker 插入后
+   按实际数组重算；(b) `ledger_fold_write_failed` 契约补齐：payload
+   schema / envelope+payload fixtures / verifier 交叉校验 / 生成器
+   （conformance 52→53，修复 2b755d6 遗留红）；(c)
+   `orz_source_manifest.sha256` 重生成、生成器 `context_compressed` 模板
+   对齐 mechanical（防重生成回退）、文档/注释/schema 描述清理（summary.rs
+   退化门注释、schema 终止态字段描述、LEDGER 设计 widened tail 文本）。
+   验证：orz-loop 466 / verifier+conformance 230 / 仓库门禁 valid。
+   **2026-08-19 全面审查处理登记（B 定案收口）**：三项收口——(a) fallback
+   双段截断轮数口径修复：事件/存档/marker「被压轮次」= 常规 drain + 紧急
+   截断之和（此前覆盖赋值少报、三方不一致），事件估计改在 marker 插入后
+   按实际数组重算；(b) `ledger_fold_write_failed` 契约补齐：payload
+   schema / envelope+payload fixtures / verifier 交叉校验 / 生成器
+   （conformance 52→53，修复 2b755d6 遗留红）；(c)
+   `orz_source_manifest.sha256` 重生成、生成器 `context_compressed` 模板
+   对齐 mechanical（防重生成回退）、文档/注释/schema 描述清理（summary.rs
+   退化门注释、schema 终止态字段描述、LEDGER 设计 widened tail 文本）。
+   验证：orz-loop 466 / verifier+conformance 230 / 仓库门禁 valid。
 
 ### 14.28 v1.28 补写裁决索引（2026-08-18）
 

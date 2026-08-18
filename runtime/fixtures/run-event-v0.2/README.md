@@ -58,8 +58,9 @@ Scope:
   `tool-completed.policy-denial-bad-source.constraint.invalid` (unknown
   source enum).
 - `envelope/<slug>.valid.json` — a full 13-field v0.2 envelope for **every**
-  event in the v0.2 enum (52 events — 51 prior + ledger_fold_advance from
-  FUS-LEDGER-FOLD-STATE 2026-08-18). The v0.2-payload events carry
+  event in the v0.2 enum (53 events — 51 prior + ledger_fold_advance and
+  ledger_fold_write_failed from FUS-LEDGER-FOLD-STATE 2026-08-18). The
+  v0.2-payload events carry
   their v0.2 payload; the other events reuse the v0.1 payload shape
   unchanged (their payload schema files did not change — adjudicated
   decision: no copied schema files, the v0.1 files remain authoritative for

@@ -383,6 +383,21 @@
     （received==脚本数）；6 处 summary_response 脚本项退役；orz-loop 465
     通过、fmt 干净、clippy 与基线一致（lib 21 / test 26）、Python
     verifier 214 通过。
+- [x] 2026-08-19 全面审查处理（B 定案收口）：
+  - [x] fallback 轮数口径：`dropped` 累加、存档/marker「被压轮次」用总
+    轮数、事件估计 marker 插入后重算（agent_loop.rs + 新增单测
+    `fallback_second_stage_truncation_accounts_total_rounds`；
+    orz-loop 466 通过、fmt 干净、clippy 回基线 21/26）。
+  - [x] `ledger_fold_write_failed` 契约补齐：payload schema + envelope/
+    payload fixtures + verifier 交叉校验（attempt 连续 +1、disabled 预算
+    契约、成功追加重置计数）+ 生成器 + conformance 52→53（闭合 2b755d6
+    遗留红；Python verifier+conformance 230 通过）。
+  - [x] 生成器 `context_compressed` 模板对齐 mechanical（防重生成把已提交
+    fixtures 回退为 template_summary）。
+  - [x] `orz_source_manifest.sha256` 重生成（orz 提交后）+ 仓库门禁 valid。
+  - [x] 文档/注释/schema 描述清理：summary.rs 退化门注释、schema
+    `summary_incomplete`/`retained_rounds` 终止态描述、LEDGER 设计
+    widened tail 文本。
 - [ ] 闭合：S3/S4 全过 → BACKLOG/TODO/索引状态同步，未闭合 29 → 28。
 
 ### P0-B FUS-RETRIEVAL-MECH（`implemented`；批次 1-6 已全部闭合，2026-08-14，保留供核对）
