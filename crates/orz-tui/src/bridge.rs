@@ -297,6 +297,28 @@ pub fn run_event_to_tui(event: &RunEvent) -> TuiEvent {
                 .unwrap_or(0),
             agent_role: get_str(p, "agent_role"),
         },
+        // FUS-LEDGER-FOLD-STATE external-file design (2026-08-18, ADR-0010
+        // §14.28 审查修复): 外挂台账追加失败——审计告警（attempt/disabled）。
+        EventType::LedgerFoldWriteFailed => TuiEvent::LedgerFoldWriteFailed {
+            ledger_path: get_str(p, "ledger_path"),
+            attempt: p
+                .pointer("/attempt")
+                .and_then(serde_json::Value::as_u64)
+                .unwrap_or(0),
+            disabled: p
+                .pointer("/disabled")
+                .and_then(serde_json::Value::as_bool)
+                .unwrap_or(false),
+            rows: p
+                .pointer("/rows")
+                .and_then(serde_json::Value::as_u64)
+                .unwrap_or(0),
+            view_estimate_tokens: p
+                .pointer("/view_estimate_tokens")
+                .and_then(serde_json::Value::as_u64)
+                .unwrap_or(0),
+            agent_role: get_str(p, "agent_role"),
+        },
         EventType::InformationSufficiencyAssessment => TuiEvent::InformationSufficiencyAssessment {
             assessment_id: get_str(p, "assessment_id"),
             status: get_str(p, "status"),

@@ -45,23 +45,29 @@ pub fn ledger_file_path(session_cwd: &std::path::Path) -> std::path::PathBuf {
 
 /// The byte-fixed pointer message for the folded request view. 路径/文本
 /// 均固定（本会话内不变），不含任何变化 ID/序号——推进不重渲染，前缀稳定。
+/// 2026-08-18 审查修复：措辞避免绝对化——压缩会另存「未折叠即被 drain」的
+/// 轮次（压缩存档 + marker），外挂文件是折叠轮次的归档投影。
 pub fn build_pointer_message(ledger_path: &std::path::Path) -> String {
     format!(
         "{LEDGER_FOLD_POINTER_PREFIX}更早轮次的机械摘要已外挂存档：{}（本会话内固定）。\n\
          需要回顾历史时按行检索该文件，例如 grep \"轮次\" {}、\n\
-         grep <工具名> {}。当前会话仅保留最近 1 轮原文，更早内容一律在该文件中。",
+         grep <工具名> {}。当前会话仅保留最近 1 轮原文，更早内容按行归档在该文件中。",
         ledger_path.display(),
         ledger_path.display(),
         ledger_path.display(),
     )
 }
 
-/// One external-file row: `[<全局序号>] 轮次 <序号>: <工具> 目标=… 结果=…
-/// 最终回复=…`。全局序号为按行续点的 per-row 序号（跨压缩连续；多结果轮
-/// 按条各占一行、序号连续递增），文件只增，读尾行即可续号。
+/// One external-file row: `[<全局序号>] 轮次 <窗口内轮次>: <工具> 目标=…
+/// 结果=… 最终回复=…`。`[<全局序号>]` 为按行续点的 per-row 全局序号
+/// （跨压缩连续；多结果轮按条各占一行、序号连续递增），文件只增，读尾行
+/// 即可续号；`轮次` 沿用现有台账行语义 = `round_index + 1`（窗口内 0 基
+/// 声明序号 +1，跨压缩重置，与 `build_ledger_block` 标注一致）——2026-08-18
+/// 审查修复：此前两者共用一个 per-row 序号，多工具轮会把轮次标错。
 pub fn external_row_line(seq: u64, row: &ActionLedgerRow) -> String {
     format!(
-        "[{seq}] 轮次 {seq}: {} 目标={} 结果={} 最终回复={}",
+        "[{seq}] 轮次 {}: {} 目标={} 结果={} 最终回复={}",
+        row.round_index + 1,
         row.tool,
         if row.target.is_empty() {
             "（无）"
@@ -77,10 +83,15 @@ pub fn external_row_line(seq: u64, row: &ActionLedgerRow) -> String {
     )
 }
 
-/// Read the last complete line's leading `[seq]` — the next per-row seq to
+/// Read the last complete row's leading `[seq]` — the next per-row seq to
 /// assign. The file is append-only with monotonically increasing seqs, so
-/// the LAST line carries the max; a missing/empty file starts at 1. Reads
-/// only the tail chunk (O(1) — 4KiB covers the longest single row by far).
+/// the LAST row carries the max; a missing/empty file starts at 1. Reads
+/// only the file tail — the window grows until the last row is fully
+/// captured (a single row can exceed 4 KiB: long command targets / verbatim
+/// final replies; parsing a partial row would silently restart the numbering
+/// and break the 跨压缩连续 contract). A non-empty file whose last row has no
+/// parseable `[seq]` is corruption — reported as an error so the caller rolls
+/// back and degrades instead of renumbering from 1 (2026-08-18 审查修复).
 fn tail_seq(path: &std::path::Path) -> std::io::Result<u64> {
     use std::io::{Read, Seek, SeekFrom};
     let mut file = match std::fs::File::open(path) {
@@ -90,21 +101,52 @@ fn tail_seq(path: &std::path::Path) -> std::io::Result<u64> {
     };
     const TAIL_BYTES: u64 = 4096;
     let len = file.metadata()?.len();
-    let start = len.saturating_sub(TAIL_BYTES);
-    file.seek(SeekFrom::Start(start))?;
-    let mut buf = Vec::new();
-    file.take(TAIL_BYTES).read_to_end(&mut buf)?;
-    let text = String::from_utf8_lossy(&buf);
-    let last = text.lines().rev().find(|l| !l.trim().is_empty());
-    let Some(last) = last else { return Ok(0) };
-    let seq = last
-        .trim_start_matches(|c: char| c.is_whitespace())
-        .trim_start_matches('[')
-        .split(']')
-        .next()
-        .and_then(|s| s.trim().parse::<u64>().ok())
-        .unwrap_or(0);
-    Ok(seq)
+    if len == 0 {
+        return Ok(0);
+    }
+    let mut window = TAIL_BYTES;
+    loop {
+        let start = len.saturating_sub(window);
+        file.seek(SeekFrom::Start(start))?;
+        let mut buf = Vec::new();
+        (&mut file).take(window).read_to_end(&mut buf)?;
+        let text = String::from_utf8_lossy(&buf);
+        // Walk newline-separated segments from the end; a segment is a
+        // complete row iff it is preceded by a newline inside the window
+        // (k > 0) or the window covers the file head (start == 0).
+        let mut last_row: Option<&str> = None;
+        let segments: Vec<&str> = text.split('\n').collect();
+        for (k, segment) in segments.iter().enumerate().rev() {
+            if segment.trim().is_empty() {
+                continue;
+            }
+            if k > 0 || start == 0 {
+                last_row = Some(*segment);
+            }
+            break;
+        }
+        if start == 0 && last_row.is_none() {
+            // Empty or blank-only file — nothing written yet.
+            return Ok(0);
+        }
+        if let Some(row) = last_row {
+            let seq = row
+                .trim_start_matches(|c: char| c.is_whitespace())
+                .trim_start_matches('[')
+                .split(']')
+                .next()
+                .and_then(|s| s.trim().parse::<u64>().ok());
+            return match seq {
+                Some(n) => Ok(n),
+                None => Err(std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    format!("external ledger tail row has no parseable [seq]: {row:?}"),
+                )),
+            };
+        }
+        // The last row starts before the window — grow and retry.
+        window = window.saturating_mul(2).max(len);
+    }
 }
 
 /// Append the newly folded rows to the external ledger file (atomic
@@ -555,9 +597,12 @@ fn is_round_balanced(messages: &[Message], range: (usize, usize)) -> bool {
 /// is never mutated.
 ///
 /// Returns `None` (no-op, anti-spin) when there is no complete round to
-/// fold — i.e. fewer than `keep_recent_rounds + 1` complete rounds, or the
+/// fold — i.e. fewer than `keep_recent_rounds + 1` complete rounds, the
 /// recomputed cut does not move past the current `fold_cut` (nothing new
-/// outside the tail since the last advance).
+/// outside the tail since the last advance), or the same preamble/cut
+/// safety checks that make `build_request_view` abandon the fold fire
+/// (stale fold indices / unbalanced rounds — rows must never be appended
+/// for rounds the view would keep verbatim).
 pub fn advance_fold(
     messages: &[Message],
     fold: &mut LedgerFoldState,
@@ -570,18 +615,37 @@ pub fn advance_fold(
         return None;
     }
     let ranges = round_ranges(messages);
+    let fold_start = fold.fold_start.unwrap_or(ranges[0].0);
+    // FUS-LEDGER-FOLD-STATE 400 修复 (ADR-0010 §14.27) × external-file
+    // design (2026-08-18 审查修复): the same preamble/cut safety checks
+    // that make `build_request_view` abandon the fold must gate the
+    // ADVANCE itself — rows must never be appended to the external file
+    // for rounds the view would refuse to fold (defensive stale-index /
+    // unbalanced-round paths). Preamble 末条为 assistant 声明 → 放弃;
+    // `safe_fold_cut` 回退到最近平衡轮起点（`cut` 可能早于 `kept_start`——
+    // 该区间留作原文，行不入文件，与视图一致）。
+    if messages[..fold_start]
+        .last()
+        .is_some_and(|m| m.role == Role::Assistant && !m.tool_calls.is_empty())
+    {
+        return None;
+    }
+    let cut = safe_fold_cut(messages, kept_start)?;
+    if old_cut.is_some_and(|c| cut <= c) {
+        return None;
+    }
     let collapse_count = ranges
         .iter()
-        .position(|&(start, _)| start == kept_start)
+        .position(|&(start, _)| start == cut)
         .unwrap_or(ranges.len());
     // Only the rounds newly folded since the last advance produce rows:
-    // `[old_cut .. kept_start)` — previously folded rounds are already in
+    // `[old_cut .. cut)` — previously folded rounds are already in
     // the external file (and were never part of the view).
     let first_new = old_cut
-        .map(|cut| {
+        .map(|c| {
             ranges
                 .iter()
-                .position(|&(start, _)| start >= cut)
+                .position(|&(start, _)| start >= c)
                 .unwrap_or(collapse_count)
         })
         .unwrap_or(0);
@@ -597,9 +661,8 @@ pub fn advance_fold(
     if rows.is_empty() {
         return None;
     }
-    let fold_start = fold.fold_start.unwrap_or(ranges[0].0);
     fold.fold_start = Some(fold_start);
-    fold.fold_cut = Some(kept_start);
+    fold.fold_cut = Some(cut);
     if fold.folded_ledger.is_none() {
         fold.folded_ledger = Some(build_pointer_message(ledger_path));
     }
@@ -1186,12 +1249,12 @@ mod tests {
             lines[1]
         );
         assert!(
-            lines[3].starts_with("[4] 轮次 4: read_file 目标=d.py"),
+            lines[3].starts_with("[4] 轮次 1: read_file 目标=d.py"),
             "{}",
             lines[3]
         );
         assert!(
-            lines[4].starts_with("[5] 轮次 5: read_file 目标=e.py"),
+            lines[4].starts_with("[5] 轮次 2: read_file 目标=e.py"),
             "{}",
             lines[4]
         );
@@ -1251,10 +1314,185 @@ mod tests {
         assert!(lines[2].starts_with("[3]"), "{}", lines[2]);
         assert!(lines[2].contains("目标=10.py"), "{}", lines[2]);
         assert!(
-            lines[3].starts_with("[4] 轮次 4: read_file 目标=11.py"),
+            lines[3].starts_with("[4] 轮次 2: read_file 目标=11.py"),
             "{}",
             lines[3]
         );
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// 2026-08-18 审查修复：`[seq]`（per-row 全局序号）与 `轮次`（窗口内
+    /// round_index+1）解耦——多工具轮各行轮次标注一致，跨窗口时全局序号
+    /// 继续而轮次从 1 重新计数。
+    #[test]
+    fn external_row_round_label_uses_round_index_not_global_seq() {
+        let row = ActionLedgerRow {
+            round_index: 2,
+            tool: "read_file".to_string(),
+            target: "a.py".to_string(),
+            pointer: "sha256:ab".to_string(),
+            final_reply: "已读".to_string(),
+        };
+        let line = external_row_line(7, &row);
+        assert!(
+            line.starts_with("[7] 轮次 3: read_file 目标=a.py"),
+            "{line}"
+        );
+        // 同一轮的第二条（同 round_index）全局序号 +1、轮次不变。
+        let line2 = external_row_line(8, &row);
+        assert!(
+            line2.starts_with("[8] 轮次 3: read_file 目标=a.py"),
+            "{line2}"
+        );
+    }
+
+    /// 2026-08-18 审查修复：尾行超过 4KiB 时 `tail_seq` 仍取到完整末行，
+    /// 续号不因截断而重置（此前 4KiB 尾窗会静默从 1 重新编号）。
+    #[test]
+    fn tail_seq_survives_long_last_row() {
+        let dir = std::env::temp_dir().join(format!(
+            "orz-ledger-ext-long-{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let path = ledger_file_path(&dir);
+        let long_reply = "很长的最终回复".repeat(3_000); // ~36KB > 4KiB 尾窗
+        let batch1 = vec![
+            ActionLedgerRow {
+                round_index: 0,
+                tool: "read_file".to_string(),
+                target: "a.py".to_string(),
+                pointer: "sha256:1".to_string(),
+                final_reply: "短回复".to_string(),
+            },
+            ActionLedgerRow {
+                round_index: 1,
+                tool: "run_tests".to_string(),
+                target: "make-doom".to_string(),
+                pointer: "sha256:2".to_string(),
+                final_reply: long_reply,
+            },
+        ];
+        append_ledger_rows(&path, &batch1).unwrap();
+        let batch2 = vec![ActionLedgerRow {
+            round_index: 2,
+            tool: "read_file".to_string(),
+            target: "c.py".to_string(),
+            pointer: "sha256:3".to_string(),
+            final_reply: "短回复".to_string(),
+        }];
+        append_ledger_rows(&path, &batch2).unwrap();
+        let text = std::fs::read_to_string(&path).unwrap();
+        let lines: Vec<&str> = text.lines().collect();
+        assert_eq!(lines.len(), 3);
+        assert!(
+            lines[2].starts_with("[3] 轮次 3: read_file 目标=c.py"),
+            "续号必须从文件尾行继续（而非从 1 重置）: {}",
+            lines[2]
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// 2026-08-18 审查修复：非空文件尾行无 `[seq]` 视为损坏——返回错误让
+    /// 调用方回滚并降级，而不是静默从 1 重新编号造成重复序号。
+    #[test]
+    fn tail_seq_rejects_unparseable_tail() {
+        let dir = std::env::temp_dir().join(format!(
+            "orz-ledger-ext-corrupt-{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let path = ledger_file_path(&dir);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(&path, "不是台账行的垃圾内容\n").unwrap();
+        let row = ActionLedgerRow {
+            round_index: 0,
+            tool: "read_file".to_string(),
+            target: "a.py".to_string(),
+            pointer: "sha256:1".to_string(),
+            final_reply: "已读".to_string(),
+        };
+        assert!(
+            append_ledger_rows(&path, std::slice::from_ref(&row)).is_err(),
+            "corrupt tail must fail loudly, not restart numbering at 1"
+        );
+        // 空文件（或仅空行）仍从 1 开始。
+        let empty = ledger_file_path(&dir.join("empty"));
+        append_ledger_rows(&empty, std::slice::from_ref(&row)).unwrap();
+        let text = std::fs::read_to_string(&empty).unwrap();
+        assert!(
+            text.starts_with("[1] 轮次 1: read_file 目标=a.py"),
+            "{text}"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// 2026-08-18 审查修复：`safe_fold_cut` 防御在推进侧生效——最新保留轮
+    /// 不完整（声明无回复）时 cut 回退到最近平衡轮起点，未折叠轮次留在
+    /// 原文视图、不入外挂文件，行与视图一致。
+    #[test]
+    fn advance_fold_defers_cut_to_last_balanced_round() {
+        let mut messages = vec![msg(Role::User, "任务")];
+        messages.extend(round("c1", "read_file", "a.py", "A"));
+        messages.extend(round("c2", "read_file", "b.py", "B"));
+        // c3 轮不完整：assistant 声明无对应 tool 回复。
+        messages.push(Message {
+            role: Role::Assistant,
+            content: String::new(),
+            tool_call_id: None,
+            tool_calls: vec![ToolCall {
+                name: "read_file".to_string(),
+                arguments: serde_json::json!({"path": "c.py"}),
+                call_id: "c3".to_string(),
+            }],
+            reasoning_content: None,
+        });
+        let ledger_path = std::path::Path::new(".gsa/ledger/current.md");
+        let mut fold = LedgerFoldState::default();
+        let rows = advance_fold(&messages, &mut fold, 1, ledger_path).unwrap();
+        assert_eq!(rows.len(), 1, "只有 c1 被折叠");
+        assert_eq!(fold.fold_cut, Some(3), "cut 回退到 c2 轮起点");
+        let view = build_request_view(&messages, &fold);
+        assert!(
+            view.iter().any(|m| m.content == "B"),
+            "c2 原文保留: {view:?}"
+        );
+        assert!(
+            view.iter()
+                .any(|m| m.tool_calls.iter().any(|t| t.call_id == "c3")),
+            "不完整的 c3 声明保留在视图: {view:?}"
+        );
+        assert!(
+            view.iter().all(|m| m.content != "A"),
+            "c1 内容折叠出视图: {view:?}"
+        );
+    }
+
+    /// 2026-08-18 审查修复：preamble 边界校验在推进侧生效——`fold_start`
+    /// 过期（末条为 assistant 声明）时放弃推进，折叠状态保持不动，不落行。
+    #[test]
+    fn advance_fold_abandons_when_preamble_ends_with_declaration() {
+        let mut messages = vec![msg(Role::User, "任务")];
+        messages.extend(round("c1", "read_file", "a.py", "A"));
+        messages.extend(round("c2", "read_file", "b.py", "B"));
+        messages.extend(round("c3", "read_file", "c.py", "C"));
+        // 过期 fold_start=2：messages[..2] 末条为 c1 声明（其回复在折叠区）。
+        let mut fold = LedgerFoldState {
+            fold_start: Some(2),
+            fold_cut: None,
+            folded_ledger: None,
+        };
+        let ledger_path = std::path::Path::new(".gsa/ledger/current.md");
+        assert!(
+            advance_fold(&messages, &mut fold, 1, ledger_path).is_none(),
+            "preamble 边界不合格必须放弃推进"
+        );
+        assert_eq!(fold.fold_start, Some(2), "状态保持不动");
+        assert_eq!(fold.fold_cut, None, "状态保持不动");
+        assert!(fold.folded_ledger.is_none(), "状态保持不动");
     }
 }

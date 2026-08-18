@@ -3757,6 +3757,11 @@ impl AgentLoopController {
             target_tokens,
             min_rounds,
             safety_tokens,
+            // FUS-LEDGER-FOLD-STATE external-file design (2026-08-18,
+            // ADR-0010 §14.28 审查修复): 结构更新不再重置 fold_tail_rounds
+            // ——`with_fold_tail_rounds` 与 `with_context_compact` 的调用
+            // 顺序从此无关（此前 `..Default::default()` 会把其重置回 1）。
+            fold_tail_rounds: self.context_compact.fold_tail_rounds,
             ..ContextCompactConfig::default()
         };
         self
@@ -5212,6 +5217,11 @@ impl AgentLoopController {
                     false,
                     rounds_since_compact,
                     self.context_compact.recent_tail_rounds,
+                    // FUS-LEDGER-FOLD-STATE external-file design
+                    // (2026-08-18, ADR-0010 §14.28 审查修复): 主车道收尾
+                    // 压缩的 marker 携带外挂台账路径提示（内部再按
+                    // 文件存在/已折叠过滤）。
+                    Some(&crate::action_ledger::ledger_file_path(&host.session_cwd())),
                     &mut fold_state,
                     cancel,
                     heartbeat,
@@ -5876,6 +5886,8 @@ impl AgentLoopController {
                             false,
                             outcome_ref.rounds_since_compact,
                             self.context_compact.recent_tail_rounds,
+                            // 检索车道不折叠：marker 不携带外挂台账提示。
+                            None,
                             &mut fold_state,
                             cancel,
                             heartbeat,
@@ -14472,7 +14484,9 @@ mod tests {
         // test isolates the fold mechanism.
         let controller = AgentLoopController::with_gateway(gateway)
             .with_context_compact(100_000_000, 400, 20, 100_000_000)
-            .with_fold_trigger_tokens(1_000);
+            // 阈值高于「preamble + 指针 + 最近 1 轮」的固定基线（~1.0K），
+            // 使触发复位断言（推进后估算 < 阈值）在测试数据下真实成立。
+            .with_fold_trigger_tokens(2_000);
         controller
             .run_turn(&host, "折叠测试", "RUN-FOLD", MANIFEST, 0, None, None, None)
             .await
@@ -14561,8 +14575,14 @@ mod tests {
             assert!(fold_start < fold_cut, "{ev:?}");
             assert!(rounds_folded >= 1, "{ev:?}");
             assert!(
-                ev.payload["view_estimate_tokens"].as_u64().unwrap() >= 1_000,
+                ev.payload["view_estimate_tokens"].as_u64().unwrap() >= 2_000,
                 "{ev:?}"
+            );
+            // 触发复位（2026-08-18 审查修复补足 S2 测试 #3 的直接口径）：
+            // 推进后视图估算必须回落到阈值之下。
+            assert!(
+                ev.payload["view_estimate_after"].as_u64().unwrap() < 2_000,
+                "post-advance estimate must reset below the trigger: {ev:?}"
             );
             assert_eq!(ev.payload["agent_role"], "main", "{ev:?}");
         }
@@ -14588,6 +14608,151 @@ mod tests {
                 .any(|l| l.contains("read_file") && l.contains("目标=")),
             "rows carry tool/target/pointer/reply: {text}"
         );
+    }
+
+    /// FUS-LEDGER-FOLD-STATE external-file design (2026-08-18, ADR-0010
+    /// §14.28 审查修复): a persistent external-ledger append failure must
+    /// NOT spin the loop — after FOLD_WRITE_FAILURE_LIMIT consecutive
+    /// failures folding is disabled for the loop, the session keeps making
+    /// model requests with the unfolded view, and every failure is
+    /// journaled (`ledger_fold_write_failed`; 此前 `continue` 会在持久写
+    /// 失败时形成无模型调用的空转).
+    #[tokio::test]
+    async fn fold_append_failure_disables_fold_and_keeps_session_going() {
+        struct SeqHost {
+            journal: JournalRecorder,
+            outputs: Vec<String>,
+            calls: AtomicU64,
+            cwd: PathBuf,
+        }
+        #[async_trait]
+        impl LoopHost for SeqHost {
+            fn journal(&self) -> &JournalRecorder {
+                &self.journal
+            }
+            fn tools_registry(&self) -> &dyn ToolRegistry {
+                &EmptyRegistry
+            }
+            fn session_cwd(&self) -> PathBuf {
+                self.cwd.clone()
+            }
+            async fn call_tool(
+                &self,
+                _name: &str,
+                _arguments: serde_json::Value,
+                _call_id: &str,
+            ) -> Result<ToolResult, ToolError> {
+                let n = self.calls.fetch_add(1, Ordering::SeqCst) as usize;
+                Ok(ToolResult {
+                    output: self.outputs[n % self.outputs.len()].clone(),
+                    exit_code: Some(0),
+                    output_encoding: None,
+                    structured: None,
+                    ..Default::default()
+                })
+            }
+            async fn request_permission(
+                &self,
+                _risk: RiskClass,
+                _tool: &str,
+                _arguments: &serde_json::Value,
+            ) -> Result<PermitDecision, PermitError> {
+                Ok(PermitDecision::AllowOnce)
+            }
+        }
+        let dir = test_dir();
+        // 用文件占住 `.gsa/ledger` 目录位：`create_dir_all` 必然失败，
+        // 复现持久写失败路径。
+        std::fs::create_dir_all(dir.join(".gsa")).unwrap();
+        std::fs::write(dir.join(".gsa").join("ledger"), "不是目录").unwrap();
+        let journal = JournalRecorder::new(dir.clone());
+        let host = SeqHost {
+            journal,
+            outputs: vec![
+                "AAAA".repeat(200),
+                "BBBB".repeat(200),
+                "CCCC".repeat(200),
+                "DDDD".repeat(200),
+            ],
+            calls: AtomicU64::new(0),
+            cwd: dir.clone(),
+        };
+        let tool_call = |id: &str| ScriptedResponse {
+            text: None,
+            tool_calls: vec![ToolCall {
+                name: "read_file".to_string(),
+                arguments: serde_json::json!({"target_file": "a.txt"}),
+                call_id: id.to_string(),
+            }],
+            finish_reason: FinishReason::ToolCalls,
+            reasoning_content: None,
+            prompt_tokens: Some(1_000),
+        };
+        let mut script = Vec::new();
+        for k in 0..9 {
+            script.push(tool_call(&format!("call-{k}")));
+        }
+        script.push(ScriptedResponse::text("反例自查通过").with_prompt_tokens(1_000));
+        script.push(ScriptedResponse::text("最终答案").with_prompt_tokens(1_000));
+        let expected_requests = script.len();
+        let fake = Arc::new(FakeProvider::new(script));
+        let gateway: Arc<dyn ModelGateway> = fake.clone();
+        let controller = AgentLoopController::with_gateway(gateway)
+            .with_context_compact(100_000_000, 400, 20, 100_000_000)
+            .with_fold_trigger_tokens(1_000);
+        controller
+            .run_turn(
+                &host,
+                "折叠写失败",
+                "RUN-FOLD-FAIL",
+                MANIFEST,
+                0,
+                None,
+                None,
+                None,
+            )
+            .await
+            .unwrap();
+
+        let received = fake.received_requests();
+        assert_eq!(
+            received.len(),
+            expected_requests,
+            "会话必须走完所有脚本请求（持久写失败不得空转）"
+        );
+        assert!(
+            received.iter().all(|r| !r.messages.iter().any(|m| {
+                m.content
+                    .starts_with(crate::action_ledger::LEDGER_FOLD_POINTER_PREFIX)
+            })),
+            "折叠从未成功：任何请求都不含指针消息"
+        );
+        let failed = events(&dir)
+            .into_iter()
+            .filter(|e| e.event_type == EventType::LedgerFoldWriteFailed)
+            .collect::<Vec<_>>();
+        assert!(
+            failed.len() >= crate::agent_loop::FOLD_WRITE_FAILURE_LIMIT as usize,
+            "每次失败都要 journal 留痕: {}",
+            failed.len()
+        );
+        assert!(
+            failed.iter().all(|e| e.payload["agent_role"] == "main"),
+            "{failed:?}"
+        );
+        assert!(
+            failed
+                .last()
+                .map(|e| e.payload["disabled"].as_bool().unwrap())
+                .unwrap_or(false),
+            "预算耗尽后折叠必须被禁用: {failed:?}"
+        );
+        // 失败序列的 attempt 严格递增。
+        let attempts: Vec<u64> = failed
+            .iter()
+            .map(|e| e.payload["attempt"].as_u64().unwrap())
+            .collect();
+        assert!(attempts.windows(2).all(|w| w[0] < w[1]), "{attempts:?}");
     }
 
     /// FUS-LEDGER-FOLD-STATE (2026-08-18, ADR-0010 §14.26) × compaction:

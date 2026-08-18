@@ -214,6 +214,17 @@ pub enum TuiEvent {
         view_estimate_tokens: u64,
         agent_role: String,
     },
+    // FUS-LEDGER-FOLD-STATE external-file design (2026-08-18, ADR-0010
+    // §14.28 审查修复): 外挂台账追加失败——折叠回滚 + 失败计数；预算耗尽
+    // 后折叠被禁用（审计告警）。
+    LedgerFoldWriteFailed {
+        ledger_path: String,
+        attempt: u64,
+        disabled: bool,
+        rows: u64,
+        view_estimate_tokens: u64,
+        agent_role: String,
+    },
     InformationSufficiencyAssessment {
         assessment_id: String,
         status: String,
@@ -387,6 +398,7 @@ impl TuiEvent {
             TuiEvent::ConsoleOrderWritten { .. } => "console_order_written",
             TuiEvent::ConsoleOrderRejected { .. } => "console_order_rejected",
             TuiEvent::LedgerFoldAdvance { .. } => "ledger_fold_advance",
+            TuiEvent::LedgerFoldWriteFailed { .. } => "ledger_fold_write_failed",
             TuiEvent::InformationSufficiencyAssessment { .. } => {
                 "information_sufficiency_assessment"
             }

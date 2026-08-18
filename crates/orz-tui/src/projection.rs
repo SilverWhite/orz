@@ -443,6 +443,29 @@ pub fn apply_event(app: &mut TuiApp, event: TuiEvent) -> Vec<String> {
             );
             vec![format!("台账折叠: {rounds_folded} 轮")]
         }
+        // FUS-LEDGER-FOLD-STATE external-file design (2026-08-18, ADR-0010
+        // §14.28 审查修复): 外挂台账写失败——审计告警；预算耗尽后折叠被
+        // 禁用（会话继续走全量视图，不空转）。
+        TuiEvent::LedgerFoldWriteFailed {
+            ledger_path,
+            attempt,
+            disabled,
+            rows,
+            ..
+        } => {
+            app.content.add_system_message(
+                &format!(
+                    "[折叠台账写失败] 第 {attempt} 次追加失败（{rows} 行）: {ledger_path}{}",
+                    if disabled {
+                        " — 折叠已禁用，继续全量视图"
+                    } else {
+                        ""
+                    }
+                ),
+                true,
+            );
+            vec![format!("折叠台账写失败: {ledger_path}")]
+        }
         TuiEvent::InformationSufficiencyAssessment {
             assessment_id,
             status,

@@ -453,6 +453,14 @@ pub(crate) struct LoopOutcome {
 /// failures forces one compaction and reports `guard_failed`.
 pub(crate) const GUARD_RETRY_LIMIT: u32 = 3;
 
+/// FUS-LEDGER-FOLD-STATE external-file design (2026-08-18, ADR-0010
+/// §14.28 审查修复): consecutive external-ledger append failures tolerated
+/// before folding is disabled for the rest of the loop invocation — a
+/// persistent write failure (disk full / permission / `.gsa/ledger` path
+/// conflict) must degrade to the pre-fold full view, never spin the loop
+/// on retries (设计 §8「推进失败不阻塞会话」).
+pub(crate) const FOLD_WRITE_FAILURE_LIMIT: u32 = 3;
+
 /// Outcome of one template-summary attempt.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum CompactDecision {
@@ -489,6 +497,12 @@ pub(crate) async fn run_template_compact(
     guard_failed: bool,
     rounds_since: u32,
     tail: usize,
+    // FUS-LEDGER-FOLD-STATE external-file design (2026-08-18, ADR-0010
+    // §14.28 审查修复): the external-ledger path hint for the marker —
+    // main lane only (检索车道不折叠); the hint is further filtered to
+    // files that exist or a fold that happened, so a restored
+    // conversation never gets a dangling pointer.
+    ledger_path: Option<&std::path::Path>,
     // FUS-LEDGER-FOLD-STATE (2026-08-18, ADR-0010 §14.26): the loop's
     // stateful fold point — the summary input uses the same folded view
     // as the main requests (同源), the drain cut is `fold_cut` when
@@ -554,10 +568,13 @@ pub(crate) async fn run_template_compact(
 
     let rounds_dropped = crate::action_ledger::rounds_before(messages, kept_start) as u32;
     // FUS-LEDGER-FOLD-STATE external-file design (2026-08-18, ADR-0010
-    // §14.28): the marker carries the fixed external-ledger path hint so a
-    // restored conversation points the model at the surviving history
-    // (the file is append-only and NOT reset by compaction).
-    let ledger_path = crate::action_ledger::ledger_file_path(&host.session_cwd());
+    // §14.28 审查修复): the marker carries the fixed external-ledger path
+    // hint so a restored conversation points the model at the surviving
+    // history (the file is append-only and NOT reset by compaction). The
+    // hint is written only when the file exists or the current window is
+    // folded — never a dangling pointer for a conversation that never
+    // folded.
+    let ledger_hint = ledger_path.filter(|p| p.exists() || fold_state.is_folded());
     // The archive id rides the writer's CURRENT seq — no event is recorded
     // between here and the `context_compressed` journal, so the id is
     // stable and unique within the run.
@@ -653,11 +670,13 @@ pub(crate) async fn run_template_compact(
             rounds_dropped,
             false,
             guard_failed,
-            // FUS-LEDGER-FOLD-STATE (2026-08-18, ADR-0010 §14.26 / 设计
-            // §3.5 第 1 步): the frozen ledger the model saw is archived
-            // BEFORE the drain removes the folded region — the archive is
-            // the only surviving copy of the ledger snapshot. The fold
-            // state is still folded here (reset happens after the drain).
+            // FUS-LEDGER-FOLD-STATE (2026-08-18, ADR-0010 §14.26 + §14.28
+            // external-file design): the archive preserves the folded view
+            // the model saw — the byte-fixed pointer message. The folded
+            // ROWS survive in the append-only external ledger file (never
+            // drained by compaction), which the marker points a restored
+            // conversation at. The fold state is still folded here (reset
+            // happens after the drain).
             fold_state.folded_ledger.as_deref(),
         );
         let digest = crate::summary::archive_digest(&markdown);
@@ -673,7 +692,7 @@ pub(crate) async fn run_template_compact(
             guard_failed,
             archive_write_failed,
             plan_epoch,
-            Some(&ledger_path),
+            ledger_hint,
         );
         let messages_dropped = messages.drain(first_round_start..kept_start).count();
         messages.insert(
@@ -736,7 +755,7 @@ pub(crate) async fn run_template_compact(
             guard_failed,
             false,
             plan_epoch,
-            Some(&ledger_path),
+            ledger_hint,
         );
         let mut dropped = rounds_dropped;
         let mut messages_dropped = 0usize;
@@ -894,6 +913,13 @@ pub(crate) async fn run_agent_loop(
     // invocation starts unfolded and re-accumulates (restore semantics —
     // ADR-0010 §14.26 恢复路径: 恢复后均为 None，首次推进重写一次前缀，低频接受).
     let mut fold_state = crate::action_ledger::LedgerFoldState::default();
+    // FUS-LEDGER-FOLD-STATE external-file design (2026-08-18, ADR-0010
+    // §14.28 审查修复): consecutive append-failure budget + degrade flag.
+    // 失败时不再 `continue` 跳过本轮请求（持久失败 = 会话空转）；连续
+    // FOLD_WRITE_FAILURE_LIMIT 次失败后本循环禁用折叠，视图退回全量原文，
+    // 压缩仍兜底窗口。
+    let mut fold_write_failures: u32 = 0;
+    let mut fold_disabled = false;
 
     loop {
         // Cooperative cancellation checkpoint (Phase 3 slice #7): polled
@@ -961,6 +987,12 @@ pub(crate) async fn run_agent_loop(
         if summary_now && let Some(measured) = last_prompt_tokens {
             let reason = if fallback_now { "fallback" } else { "rhythm" };
             let tail = svc.context_compact.recent_tail_rounds;
+            // FUS-LEDGER-FOLD-STATE external-file design (2026-08-18,
+            // ADR-0010 §14.28 审查修复): the external ledger is the MAIN
+            // lane's conversation projection — retrieval lanes never fold,
+            // so their compaction marker carries no ledger hint.
+            let ledger_hint = (profile.role == AgentRole::Main)
+                .then(|| crate::action_ledger::ledger_file_path(&host.session_cwd()));
             match run_template_compact(
                 svc,
                 writer,
@@ -973,6 +1005,7 @@ pub(crate) async fn run_agent_loop(
                 false,
                 rounds_since_compact,
                 tail,
+                ledger_hint.as_deref(),
                 &mut fold_state,
                 cancel,
                 heartbeat,
@@ -1009,6 +1042,7 @@ pub(crate) async fn run_agent_loop(
                             true,
                             rounds_since_compact,
                             tail,
+                            ledger_hint.as_deref(),
                             &mut fold_state,
                             cancel,
                             heartbeat,
@@ -1043,7 +1077,12 @@ pub(crate) async fn run_agent_loop(
         // mutates `messages` (journal/sidecar keep the full tool records
         // — audit dual-track unchanged; the external file is a
         // deterministically re-derivable projection).
-        if pending_checkpoint.is_none() {
+        if pending_checkpoint.is_none() && profile.role == AgentRole::Main && !fold_disabled {
+            // FUS-LEDGER-FOLD-STATE external-file design (2026-08-18,
+            // ADR-0010 §14.28 审查修复): 仅主车道折叠——检索子车道共享
+            // session_cwd，外挂文件是主会话的模型可读投影；子车道窗口小，
+            // 压缩机制已覆盖，避免多车道行混入同一文件（指针消息「本会话
+            // 内固定」契约）。`fold_disabled` = 连续写失败后的降级开关。
             let fold_tail =
                 svc.context_compact.fold_tail_rounds + if failure_widened_tail { 1 } else { 0 };
             let view_estimate = {
@@ -1059,42 +1098,76 @@ pub(crate) async fn run_agent_loop(
                     fold_tail,
                     &ledger_path,
                 ) {
-                    // External-file write failure must NOT advance the fold
-                    // — the rows would be lost from both the view and the
-                    // file. Roll back and retry on the next trigger
-                    // (design §8: 推进失败不阻塞会话; journal remains the
-                    // authority).
                     if crate::action_ledger::append_ledger_rows(&ledger_path, &rows).is_err() {
+                        // External-file write failure must NOT advance the
+                        // fold — the rows would be lost from both the view
+                        // and the file. Roll back, count the failure and
+                        // journal it; after the budget folding is disabled
+                        // for this loop. Deliberately NOT `continue`: the
+                        // session keeps making progress with the
+                        // rolled-back (unfolded) view and the next loop-top
+                        // retries — a persistent failure must never spin
+                        // the loop without a model call (设计 §8「推进失败
+                        // 不阻塞会话」, 2026-08-18 审查修复).
                         fold_state = prev_fold;
+                        fold_write_failures += 1;
+                        let disabled = fold_write_failures >= FOLD_WRITE_FAILURE_LIMIT;
+                        if disabled {
+                            fold_disabled = true;
+                        }
                         tracing::warn!(
                             ledger_path = %ledger_path.display(),
                             rows = rows.len(),
-                            "external ledger append failed — fold state rolled back, will retry"
+                            attempts = fold_write_failures,
+                            disabled,
+                            "external ledger append failed — fold state rolled back; folding disabled after the budget"
                         );
-                        continue;
+                        writer
+                            .record(
+                                EventType::LedgerFoldWriteFailed,
+                                serde_json::json!({
+                                    "ledger_path": ledger_path.display().to_string(),
+                                    "attempt": fold_write_failures,
+                                    "disabled": disabled,
+                                    "rows": rows.len(),
+                                    "view_estimate_tokens": view_estimate,
+                                    "agent_role": profile.role.as_str(),
+                                }),
+                            )
+                            .await?;
+                    } else {
+                        fold_write_failures = 0;
+                        // FUS-LEDGER-FOLD-STATE (2026-08-18, ADR-0010
+                        // §14.26): one mechanical fold advance — the
+                        // request-view prefix is stable (pointer never
+                        // rewritten), but `fold_cut` moves and the view
+                        // grows by pure append; the event carries the new
+                        // fold point, the triggering estimate and the
+                        // POST-advance estimate (触发复位证明：推进后视图
+                        // < 阈值——2026-08-18 审查修复补足 S2 测试 #3 的直接
+                        // 断言口径). Emitted only on a real advance.
+                        let view_after = {
+                            let view =
+                                crate::action_ledger::build_request_view(messages, &fold_state);
+                            estimate_messages_tokens(&view)
+                        };
+                        writer
+                            .record(
+                                EventType::LedgerFoldAdvance,
+                                serde_json::json!({
+                                    "fold_start": fold_state.fold_start,
+                                    "fold_cut": fold_state.fold_cut,
+                                    "rounds_folded": fold_state
+                                        .fold_cut
+                                        .map(|cut| crate::action_ledger::rounds_before(messages, cut))
+                                        .unwrap_or(0),
+                                    "view_estimate_tokens": view_estimate,
+                                    "view_estimate_after": view_after,
+                                    "agent_role": profile.role.as_str(),
+                                }),
+                            )
+                            .await?;
                     }
-                    // FUS-LEDGER-FOLD-STATE (2026-08-18, ADR-0010 §14.26):
-                    // one mechanical fold advance — the request-view prefix
-                    // is stable (pointer never rewritten), but `fold_cut`
-                    // moves and the view grows by pure append; the event
-                    // carries the new fold point and the triggering
-                    // estimate for cache-miss attribution. Emitted only on
-                    // a real advance.
-                    writer
-                        .record(
-                            EventType::LedgerFoldAdvance,
-                            serde_json::json!({
-                                "fold_start": fold_state.fold_start,
-                                "fold_cut": fold_state.fold_cut,
-                                "rounds_folded": fold_state
-                                    .fold_cut
-                                    .map(|cut| crate::action_ledger::rounds_before(messages, cut))
-                                    .unwrap_or(0),
-                                "view_estimate_tokens": view_estimate,
-                                "agent_role": profile.role.as_str(),
-                            }),
-                        )
-                        .await?;
                 } else {
                     // Anti-spin no-op (no complete round outside the
                     // tail): emits nothing — the repeated O(view)
@@ -3071,6 +3144,7 @@ mod tests {
             false,
             0,
             2,
+            None,
             &mut fold,
             None,
             None,
@@ -3125,6 +3199,7 @@ mod tests {
             false,
             0,
             2,
+            None,
             &mut fold,
             None,
             None,

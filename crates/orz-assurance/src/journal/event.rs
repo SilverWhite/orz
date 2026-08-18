@@ -164,6 +164,15 @@ pub enum EventType {
     // advance, so the event carries the fold indices, the folded-round
     // count and the triggering view estimate for cache-miss attribution.
     LedgerFoldAdvance,
+    // FUS-LEDGER-FOLD-STATE external-file design (2026-08-18, ADR-0010
+    // §14.28 审查修复): the external-ledger append failed at a fold
+    // advance — the fold state was rolled back and the failure counted;
+    // after FOLD_WRITE_FAILURE_LIMIT consecutive failures folding is
+    // disabled for the loop (`disabled: true`) so a persistent write
+    // failure degrades to the pre-fold full view instead of spinning the
+    // session on retries. Payload: ledger_path / attempt / disabled /
+    // rows / view_estimate_tokens / agent_role.
+    LedgerFoldWriteFailed,
 }
 
 impl EventType {
