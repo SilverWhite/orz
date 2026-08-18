@@ -1940,10 +1940,13 @@ ADR §3.6 正文修订随实施登记。
    实施路由 S1 代码（epoch.rs 点读分支 + controller 参数解析 + 工具定义）
    → S2 测试 → S3 重建 → S4 复验；计数不变（0c S4 前置修订）。设计细节
    见 `BLACKBOARD_READ_CACHE_COST_DESIGN_2026-08-19.md` §4.5。
-   **2026-08-19 方案 B S1 代码 + S2 测试已实施（用户放行；orz 工作树未提交）**：
+   **2026-08-19 方案 B S1 代码 + S2 测试已实施（用户放行；orz 提交 ad74714、
+   未推送）**：
    epoch.rs `render_section` 增可选 `receipt_id`（非 actions 分区携带=显式
    报错；actions 分支点读优先）+ `render_receipt_point_read`（固定形态行 +
-   成功 `response=<JSON 原文>` / 失败 `error=<JSON 原文>`，`RECEIPT_DETAIL_
+   成功 `response=<JSON 完整内容（重序列化）>` / 失败 `error=<JSON 完整内容
+   （重序列化）>`——键/值/嵌套完整、非字节级原文（键序/空白可能规范化，
+   全面审查 O3 登记），`RECEIPT_DETAIL_
    MAX_CHARS=8_000` 超限截断 + 「…」+ 存档/TraceStore 指针行；未找到显式
    not found + 旧 epoch 归档提示）；controller.rs 参数解析（非字符串/空串=
    显式报错、exit_code 1）与透传（live 与 epoch 归档两条路径共用）、
@@ -1952,6 +1955,19 @@ ADR §3.6 正文修订随实施登记。
    receipt_id 与 S1 逐字节相等）+ 工具级 4 项（点读回达、非法参数报错、
    非 actions 报错、跨 epoch 点读）；orz-loop 488 通过 / fmt 干净 / clippy
    与基线一致（lib 21 / test 26）。S3 重建 → S4 复验（≥90%、无 400）待续。
+   **2026-08-19 全面审查处理登记（用户指示处理审查全部问题；orz 提交 +
+   父仓库指针、未推送）**：N1 点读截断尾部记账注释修正（「…」已计入
+   truncate_chars 输出，注释与数学口径对齐）；N2 receipt_id trim 规范化口径
+   登记（前后空白忽略、trim 后为空同空串报错，schema minLength 1 与运行时
+   一致性）；N3 `blackboard_read` section 非字符串显式报错（同非法
+   epoch/receipt_id 纪律，绝不静默回退 "plan"，消除与 receipt_id 组合时的
+   误导性报错；新增工具级测试）；N4 本项及设计稿/BACKLOG/TODO 提交状态措辞
+   统一为「已提交、未推送」；O1 点读次数无机械上限登记为已接受边界（单次
+   ≤8K 字符；频率引导属阶段 2 §4.4 可选后续、不占计数）；O2 当前 epoch 超
+   8K live receipt 的存档指针轮转前不成立、TraceStore 不在 console 直接
+   工具面，登记为已接受边界（8K 为用户定档，console 面文件读取可按
+   trace_id 直达）；O3 「JSON 原文」措辞收敛为「重序列化完整内容」（见上）。
+   实施侧：orz-loop 489 通过 / fmt 干净 / 无新增 clippy 告警。
 
 ### 14.30 v1.30 补写裁决索引（2026-08-19）
 

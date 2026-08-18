@@ -89,6 +89,20 @@
 > S3 重建 → S4 复验（≥90%、无 400）待续；计数不变（仍在 29）。登记于
 > ADR-0010 §14.31 第 2 项 / BLACKBOARD_READ_CACHE_COST_DESIGN §4.5 /
 > BACKLOG 0c / TODO P0-0c。
+> 2026-08-19 方案B 全面审查处理登记（用户指示处理审查全部问题；orz 提交 +
+> 父仓库指针、未推送）——N1 点读截断尾部记账注释修正（「…」已计入
+> truncate_chars 输出）；N2 receipt_id trim 规范化口径登记（前后空白忽略、
+> trim 后为空同空串报错）；N3 `blackboard_read` section 非字符串显式报错
+> （同非法 epoch/receipt_id 纪律、绝不静默回退 "plan"，消除与 receipt_id
+> 组合时的误导性报错；新增工具级测试，orz-loop 489 通过 / fmt 干净 / 无
+> 新增 clippy 告警）；N4 提交状态措辞统一为「已提交、未推送」（S1 提交
+> 8dbaa01 / 方案 B 提交 ad74714）；O1 点读次数无机械上限登记为已接受边界
+> （频率引导属阶段 2 §4.4 可选后续、不占计数）；O2 当前 epoch 超 8K live
+> receipt 存档指针轮转前不成立、TraceStore 不在 console 直接工具面，登记
+> 为已接受边界（8K 用户定档）；O3 「JSON 原文」措辞收敛为「重序列化完整
+> 内容」（键/值/嵌套完整、非字节级原文）。登记于 ADR-0010 §14.31 第 2 项 /
+> BLACKBOARD_READ_CACHE_COST_DESIGN §4.5 / BACKLOG 0c / TODO P0-0c；
+> S3 重建 → S4 复验（≥90%、无 400）待续；计数不变（仍在 29）。
 > 
 2026-08-15 黑板 plan epoch 复查补强登记（ADR-0010 v1.15⑧）——plan_epoch 时间戳单调编号、身份一一对应强制、retention 保留最高编号快照。
 > 2026-08-15 黑板 plan epoch 复查遗留闭合登记（ADR-0010 v1.15⑨）——F2 原子写盘+回退加载、F4 跨进程 `.claim-<n>` 占号、F5 归档目录单一来源、F6 非法 epoch 显式报错、F7 归档失败入事件面（新 v0.2 `epoch_archive_write_failed`）、F9 `persisted_at` 更名、F10 设计 §5 措辞对齐。
