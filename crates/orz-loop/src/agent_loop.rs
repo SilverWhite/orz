@@ -965,9 +965,18 @@ pub(crate) async fn run_agent_loop(
             // session_cwd，外挂文件是主会话的模型可读投影；子车道窗口小，
             // 压缩机制已覆盖，避免多车道行混入同一文件（指针消息「本会话
             // 内固定」契约）。`fold_disabled` = 连续写失败后的降级开关。
-            let fold_tail = svc.context_compact.fold_tail_rounds;
+            // FUS-LEDGER-FOLD-BRIDGE (2026-08-19, ADR-0010 §14.32): 桥预算
+            // 换算（真实 token → estimate_messages_tokens 估计口径，
+            // 4 字符/token ÷ 2）；`fold_tail_rounds` 已退役。
+            let fold_tail_budget = crate::action_ledger::fold_tail_estimate_budget(
+                svc.context_compact.fold_tail_tokens,
+            );
             let view_estimate = {
-                let view = crate::action_ledger::build_request_view(messages, &fold_state);
+                let view = crate::action_ledger::build_request_view(
+                    messages,
+                    &fold_state,
+                    fold_tail_budget,
+                );
                 estimate_messages_tokens(&view)
             };
             if view_estimate >= svc.context_compact.fold_trigger_tokens {
@@ -976,7 +985,7 @@ pub(crate) async fn run_agent_loop(
                 if let Some(rows) = crate::action_ledger::advance_fold(
                     messages,
                     &mut fold_state,
-                    fold_tail,
+                    fold_tail_budget,
                     &ledger_path,
                 ) {
                     if let Err(append_err) =
@@ -1031,8 +1040,11 @@ pub(crate) async fn run_agent_loop(
                         // < 阈值——2026-08-18 审查修复补足 S2 测试 #3 的直接
                         // 断言口径). Emitted only on a real advance.
                         let view_after = {
-                            let view =
-                                crate::action_ledger::build_request_view(messages, &fold_state);
+                            let view = crate::action_ledger::build_request_view(
+                                messages,
+                                &fold_state,
+                                fold_tail_budget,
+                            );
                             estimate_messages_tokens(&view)
                         };
                         writer
@@ -1319,7 +1331,13 @@ pub(crate) async fn run_agent_loop(
         // view comes from the stateful fold point — `messages` verbatim
         // until the first mechanical advance, then preamble + frozen
         // ledger + `[fold_cut..]` (byte-stable prefix, pure append).
-        let request_messages = crate::action_ledger::build_request_view(messages, &fold_state);
+        // FUS-LEDGER-FOLD-BRIDGE (2026-08-19, ADR-0010 §14.32): the request
+        // view applies the bridge budget (reasoning stripped + content
+        // truncated to the budget when the newest rounds overrun it).
+        let fold_tail_budget =
+            crate::action_ledger::fold_tail_estimate_budget(svc.context_compact.fold_tail_tokens);
+        let request_messages =
+            crate::action_ledger::build_request_view(messages, &fold_state, fold_tail_budget);
         // FUS-LEDGER-FOLD-STATE 复验取证 (2026-08-18)：`ORZ_DEBUG_VIEW=1`
         // 时在请求失败路径 dump 实际发送的视图角色序列（定位折叠/压缩
         // 交互下的消息配对破坏点；正常路径零成本）。
@@ -2955,6 +2973,7 @@ mod tests {
             fold_start: Some(2),
             fold_cut: Some(4),
             folded_ledger: Some("ledger".to_string()),
+            ..Default::default()
         }
     }
 

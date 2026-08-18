@@ -156,21 +156,35 @@ fn parse_fold_trigger_tokens(s: &str) -> Option<u64> {
     s.trim().parse().ok().filter(|v| *v > 0)
 }
 
-/// FUS-LEDGER-FOLD-STATE external-file design (2026-08-18, ADR-0010
-/// §14.28): complete rounds kept verbatim in the FOLDED request view
-/// (`[U0][固定指针消息][最近 N 轮原文]`). Default 1 (2026-08-18 design
-/// 定案: 最近 1 轮原文; 压缩失败 widened tail 时 +1 → 2); `recent_tail_rounds`
-/// (compaction drain tail) is untouched. Env `ORZ_FOLD_TAIL_ROUNDS`
-/// overrides (trimmed positive integer; absent/invalid/zero = default).
-pub fn fold_tail_rounds_override() -> Option<usize> {
-    std::env::var("ORZ_FOLD_TAIL_ROUNDS")
+/// FUS-LEDGER-FOLD-BRIDGE (2026-08-19, ADR-0010 §14.32): the folded request
+/// view keeps only the newest complete rounds within this real-token bridge
+/// budget (`[U0][固定指针消息][桥]`); older rounds are appended to the
+/// external ledger file as before. Default 8K (实测读/计划轮 1–3K、终端执行
+/// 轮 5–7K——多数折叠时刻能整轮装下，截断为例外；S4 以折叠后首请求实际重付
+/// 校准换算系数). `recent_tail_rounds` (compaction drain tail) is untouched.
+/// Env `ORZ_FOLD_TAIL_TOKENS` overrides (trimmed positive integer;
+/// absent/invalid/zero = default). 换算: 真实 token → 字符预算
+/// (`action_ledger::FOLD_TAIL_CHARS_PER_TOKEN` = 4) → 估计口径
+/// (`estimate_messages_tokens`, chars/2)。
+pub fn fold_tail_tokens_override() -> Option<u64> {
+    std::env::var("ORZ_FOLD_TAIL_TOKENS")
         .ok()
-        .and_then(|s| parse_fold_tail_rounds(&s))
+        .and_then(|s| parse_fold_tail_tokens(&s))
 }
 
-fn parse_fold_tail_rounds(s: &str) -> Option<usize> {
+/// Pure parse rule for the bridge-budget env value (tested without env
+/// mutation): trimmed, positive integer; absent/invalid/zero → None.
+fn parse_fold_tail_tokens(s: &str) -> Option<u64> {
     s.trim().parse().ok().filter(|v| *v > 0)
 }
+
+/// FUS-LEDGER-FOLD-BRIDGE (2026-08-19, ADR-0010 §14.32 / 设计 §3.6): 折叠后
+/// 视图桥的默认真实 token 预算。8K 依据=S4 实测读/计划轮 1–3K、终端执行轮
+/// 5–7K——多数折叠时刻能整轮装下（截断为例外；截断频率 >30% 视为桥偏小，
+/// S4 校准）；4K 命中率仅多约 0.5pp 但会频繁截断正常终端轮；10K+ 收益递减。
+/// `ORZ_FOLD_TAIL_TOKENS` 可配；实现按
+/// `action_ledger::FOLD_TAIL_CHARS_PER_TOKEN`（4 字符/真实 token）换算。
+pub const DEFAULT_FOLD_TAIL_TOKENS: u64 = 8_000;
 
 /// Streaming pacing (Phase 3 slice #6): a round's `model_output` (journaled,
 /// fsync-acked) must be projected by a live client before the next round's
@@ -235,12 +249,13 @@ pub struct ContextCompactConfig {
     /// rounds first). Default 128K = the MRCR quality plateau boundary
     /// (V4-Flash-Max 0.870); env `ORZ_FOLD_TRIGGER_TOKENS` overrides.
     pub fold_trigger_tokens: u64,
-    /// FUS-LEDGER-FOLD-STATE external-file design (2026-08-18, ADR-0010
-    /// §14.28): complete rounds kept verbatim in the FOLDED request view
-    /// after the fixed pointer message (default 1; env
-    /// `ORZ_FOLD_TAIL_ROUNDS` overrides). Separate from `recent_tail_rounds`
-    /// (the compaction drain tail, unchanged).
-    pub fold_tail_rounds: usize,
+    /// FUS-LEDGER-FOLD-BRIDGE (2026-08-19, ADR-0010 §14.32): the bridge
+    /// real-token budget of the FOLDED request view after the fixed pointer
+    /// message (default `DEFAULT_FOLD_TAIL_TOKENS` = 8K; env
+    /// `ORZ_FOLD_TAIL_TOKENS` overrides). `fold_tail_rounds` semantics
+    /// retired. Separate from `recent_tail_rounds` (the compaction drain
+    /// tail, unchanged).
+    pub fold_tail_tokens: u64,
     /// D2-2 (2026-08-14, ADR-0010 v1.10 / CONTEXT_COMPACTION_DESIGN §6):
     /// a restored conversation is pre-checked before the first request;
     /// when the ESTIMATE exceeds this conservative threshold (min of the
@@ -276,7 +291,7 @@ impl Default for ContextCompactConfig {
             min_rounds: 2,
             safety_tokens: 256_000,
             fold_trigger_tokens: DEFAULT_FOLD_TRIGGER_TOKENS,
-            fold_tail_rounds: 1,
+            fold_tail_tokens: DEFAULT_FOLD_TAIL_TOKENS,
             recovery_trigger_tokens: 200_000,
             recovery_target_tokens: 160_000,
             session_end_trigger_tokens: 160_000,
@@ -2147,7 +2162,7 @@ impl AgentLoopController {
             context_compact: ContextCompactConfig {
                 fold_trigger_tokens: fold_trigger_tokens_override()
                     .unwrap_or(DEFAULT_FOLD_TRIGGER_TOKENS),
-                fold_tail_rounds: fold_tail_rounds_override().unwrap_or(1),
+                fold_tail_tokens: fold_tail_tokens_override().unwrap_or(DEFAULT_FOLD_TAIL_TOKENS),
                 ..ContextCompactConfig::default()
             },
             whitelist: Mutex::new(Vec::new()),
@@ -3757,11 +3772,11 @@ impl AgentLoopController {
             target_tokens,
             min_rounds,
             safety_tokens,
-            // FUS-LEDGER-FOLD-STATE external-file design (2026-08-18,
-            // ADR-0010 §14.28 审查修复): 结构更新不再重置 fold_tail_rounds
-            // ——`with_fold_tail_rounds` 与 `with_context_compact` 的调用
-            // 顺序从此无关（此前 `..Default::default()` 会把其重置回 1）。
-            fold_tail_rounds: self.context_compact.fold_tail_rounds,
+            // FUS-LEDGER-FOLD-BRIDGE (2026-08-19, ADR-0010 §14.32): 结构更新
+            // 不再重置 fold_tail_tokens ——`with_fold_tail_tokens` 与
+            // `with_context_compact` 的调用顺序从此无关（此前
+            // `..Default::default()` 会把 fold_tail_rounds 重置回 1）。
+            fold_tail_tokens: self.context_compact.fold_tail_tokens,
             ..ContextCompactConfig::default()
         };
         self
@@ -3797,11 +3812,11 @@ impl AgentLoopController {
         self
     }
 
-    /// FUS-LEDGER-FOLD-STATE external-file design (2026-08-18, ADR-0010
-    /// §14.28): pin the folded-view recent-tail length (test seam;
-    /// production reads `ORZ_FOLD_TAIL_ROUNDS` at construction, default 1).
-    pub fn with_fold_tail_rounds(mut self, rounds: usize) -> Self {
-        self.context_compact.fold_tail_rounds = rounds.max(1);
+    /// FUS-LEDGER-FOLD-BRIDGE (2026-08-19, ADR-0010 §14.32): pin the bridge
+    /// real-token budget (test seam; production reads
+    /// `ORZ_FOLD_TAIL_TOKENS` at construction, default 8K).
+    pub fn with_fold_tail_tokens(mut self, tokens: u64) -> Self {
+        self.context_compact.fold_tail_tokens = tokens.max(1);
         self
     }
 
@@ -15110,16 +15125,32 @@ mod tests {
         assert_eq!(cfg.recovery_trigger_tokens, 200_000);
         assert_eq!(cfg.recovery_target_tokens, 160_000);
         assert_eq!(cfg.recent_tail_rounds, 2);
-        // FUS-LEDGER-FOLD-STATE external-file design (2026-08-18,
-        // ADR-0010 §14.28): the folded view keeps 1 round verbatim after
-        // the fixed pointer (compaction drain tail stays 2).
-        assert_eq!(cfg.fold_tail_rounds, 1);
+        // FUS-LEDGER-FOLD-BRIDGE (2026-08-19, ADR-0010 §14.32): the folded
+        // view keeps the newest complete rounds within an 8K real-token
+        // bridge budget after the fixed pointer (`fold_tail_rounds`
+        // semantics retired; compaction drain tail stays 2).
+        assert_eq!(cfg.fold_tail_tokens, DEFAULT_FOLD_TAIL_TOKENS);
+        assert_eq!(DEFAULT_FOLD_TAIL_TOKENS, 8_000);
         // 2026-08-18 adjudication (ADR-0010 §14.26): 192K rhythm / 256K
         // fallback / 128K fold-advance trigger.
         assert_eq!(cfg.trigger_tokens, 192_000);
         assert_eq!(cfg.safety_tokens, 256_000);
         assert_eq!(cfg.fold_trigger_tokens, DEFAULT_FOLD_TRIGGER_TOKENS);
         assert_eq!(DEFAULT_FOLD_TRIGGER_TOKENS, 128_000);
+    }
+
+    /// FUS-LEDGER-FOLD-BRIDGE (2026-08-19, ADR-0010 §14.32): env parse rule
+    /// for `ORZ_FOLD_TAIL_TOKENS` — trimmed positive integer; absent/invalid/
+    /// zero = default.
+    #[test]
+    fn fold_tail_tokens_parse_rule() {
+        assert_eq!(parse_fold_tail_tokens("8000"), Some(8_000));
+        assert_eq!(parse_fold_tail_tokens(" 8000 "), Some(8_000));
+        assert_eq!(parse_fold_tail_tokens("1"), Some(1));
+        assert_eq!(parse_fold_tail_tokens("0"), None);
+        assert_eq!(parse_fold_tail_tokens("-1"), None);
+        assert_eq!(parse_fold_tail_tokens("abc"), None);
+        assert_eq!(parse_fold_tail_tokens(""), None);
     }
 
     /// FUS-LEDGER-FOLD-STATE (2026-08-18, ADR-0010 §14.26): the fold point
@@ -15212,9 +15243,13 @@ mod tests {
         // test isolates the fold mechanism.
         let controller = AgentLoopController::with_gateway(gateway)
             .with_context_compact(100_000_000, 400, 20, 100_000_000)
-            // 阈值高于「preamble + 指针 + 最近 1 轮」的固定基线（~1.0K），
-            // 使触发复位断言（推进后估算 < 阈值）在测试数据下真实成立。
-            .with_fold_trigger_tokens(2_000);
+            // 阈值高于「preamble + 指针 + 桥（100 token → 200 估计）」的
+            // 固定基线，使触发复位断言（推进后估算 < 阈值）真实成立。
+            .with_fold_trigger_tokens(2_000)
+            // FUS-LEDGER-FOLD-BRIDGE (2026-08-19, ADR-0010 §14.32): 测试轮
+            // 输出 ~800 字符（估计 ~400），桥预算 100 token（估计 200）
+            // 使推进时只保留最新 1 轮——否则 9 轮全在 8K 桥内、永不推进。
+            .with_fold_tail_tokens(100);
         controller
             .run_turn(&host, "折叠测试", "RUN-FOLD", MANIFEST, 0, None, None, None)
             .await
@@ -15427,7 +15462,11 @@ mod tests {
         let gateway: Arc<dyn ModelGateway> = fake.clone();
         let controller = AgentLoopController::with_gateway(gateway)
             .with_context_compact(100_000_000, 400, 20, 100_000_000)
-            .with_fold_trigger_tokens(1_000);
+            .with_fold_trigger_tokens(1_000)
+            // FUS-LEDGER-FOLD-BRIDGE (2026-08-19, ADR-0010 §14.32): 桥预算
+            // 100 token（估计 200）——否则 9 轮全在桥内、推进永不发生、
+            // 写失败路径无法复现。
+            .with_fold_tail_tokens(100);
         controller
             .run_turn(
                 &host,
@@ -15582,7 +15621,11 @@ mod tests {
         let controller = AgentLoopController::with_gateway(gateway)
             .with_context_compact(1_000, 400, 5, 100_000_000)
             .with_summary_guards(1, 1.0)
-            .with_fold_trigger_tokens(1_000);
+            .with_fold_trigger_tokens(1_000)
+            // FUS-LEDGER-FOLD-BRIDGE (2026-08-19, ADR-0010 §14.32): 桥预算
+            // 100 token（估计 200）——否则 11 轮全在桥内、折叠不推进，
+            // 「折叠先于压缩」的联动断言无法成立。
+            .with_fold_tail_tokens(100);
         controller
             .run_turn(
                 &host,

@@ -30,10 +30,14 @@ pub const DEFAULT_RECENT_TAIL_ROUNDS: usize = 2;
 
 /// FUS-LEDGER-FOLD-STATE external-file design (2026-08-18, ADR-0010
 /// §14.28): the fixed pointer-message prefix injected into the folded
-/// request view (`[U0][preamble][pointer][最近 1 轮原文]`). The message is
-/// byte-fixed for the session — the external ledger file is the only
-/// growing part, so the request prefix stays byte-stable across advances
-/// (the per-window rewrite is gone; measured hit rate 81.9% → ~91–93%).
+/// request view (`[U0][preamble][pointer][桥]`). The message is byte-fixed
+/// for the session — the external ledger file is the only growing part, so
+/// the request prefix stays byte-stable across advances (the per-window
+/// rewrite is gone; measured hit rate 81.9% → ~91–93%). FUS-LEDGER-FOLD-
+/// BRIDGE (2026-08-19, ADR-0010 §14.32): the bridge is the newest complete
+/// rounds within the 8K real-token budget (形态甲: 先定裁剪、再内容截断);
+/// the pointer text was updated once for the bridge wording (deployment
+/// fingerprint change accepted by §3.4).
 pub const LEDGER_FOLD_POINTER_PREFIX: &str = "【历史折叠】";
 
 /// The append-only model-readable ledger projection file (per session;
@@ -51,11 +55,24 @@ pub fn build_pointer_message(ledger_path: &std::path::Path) -> String {
     format!(
         "{LEDGER_FOLD_POINTER_PREFIX}更早轮次的机械摘要已外挂存档：{}（本会话内固定）。\n\
          需要回顾历史时按行检索该文件，例如 grep \"轮次\" {}、\n\
-         grep <工具名> {}。当前会话仅保留最近 1 轮原文，更早内容按行归档在该文件中。",
+         grep <工具名> {}。当前会话仅保留最近约 8K 桥接内容，更早轮次已按行归档于 {}。",
+        ledger_path.display(),
         ledger_path.display(),
         ledger_path.display(),
         ledger_path.display(),
     )
+}
+
+/// FUS-LEDGER-FOLD-BRIDGE (2026-08-19, ADR-0010 §14.32 / 设计 §3.2): 桥预算
+/// 字符换算系数——初始 4 字符/真实 token（英文/代码为主保守值；S4 以折叠后
+/// 首请求实际重付校准换算偏差）。`estimate_messages_tokens` 估计口径 =
+/// chars/2，故桥的估计预算 = `fold_tail_tokens × FOLD_TAIL_CHARS_PER_TOKEN ÷ 2`
+/// （默认 8_000 → 32_000 字符 → 16_000 估计 token）。
+pub const FOLD_TAIL_CHARS_PER_TOKEN: u64 = 4;
+
+/// 桥预算换算（真实 token 目标 → `estimate_messages_tokens` 估计口径）。
+pub fn fold_tail_estimate_budget(fold_tail_tokens: u64) -> u64 {
+    fold_tail_tokens.saturating_mul(FOLD_TAIL_CHARS_PER_TOKEN) / 2
 }
 
 /// One external-file row: `[<全局序号>] 轮次 <窗口内轮次>: <工具> 目标=…
@@ -225,6 +242,15 @@ pub struct LedgerFoldState {
     /// Closed-end index of the folded region — the verbatim retention
     /// region of the request view is `[fold_cut..]`.
     pub fold_cut: Option<usize>,
+    /// FUS-LEDGER-FOLD-BRIDGE (2026-08-19, ADR-0010 §14.32 / 设计 §3.1):
+    /// closed-end index of the FROZEN bridge — `messages.len()` at the last
+    /// advance. The request view renders `[fold_cut..bridge_end)` as the
+    /// bridge (reasoning stripped; content truncated to the budget only when
+    /// the newest round alone overran it) and `[bridge_end..]` verbatim —
+    /// between advances the bridge is fixed, so the view stays a pure
+    /// append of the previous request (byte-stable prefix, cache discipline;
+    /// the growing tail is never re-truncated per request).
+    pub bridge_end: Option<usize>,
     /// The byte-fixed pointer message (external-file design; set once on
     /// the first advance — the folded rows live in the external ledger
     /// file, not in the request view).
@@ -422,6 +448,44 @@ pub fn collapsed_cut(messages: &[Message], keep_recent_rounds: usize) -> Option<
     Some(ranges[collapse_count].0)
 }
 
+/// FUS-LEDGER-FOLD-BRIDGE (2026-08-19, ADR-0010 §14.32 / 设计 §3.2): 折叠
+/// 推进的保留起点——桥预算版（取代外挂文件设计 §2.2「最近 1 轮」）。
+/// 从最新完整轮往回累加整轮估计（`estimate_messages_tokens`，chars/2
+/// 口径），直至再纳入更早一轮会超出桥预算；**最新一轮恒保留**（单独超预算
+/// 时由视图内容截断 §3.3 处理），预算剩余时按时间从新到旧容纳更早完整轮。
+/// `fold_tail_rounds` 语义退役（桥恒含 ≥1 轮结构，无需轮数下限）。
+///
+/// 完整性纪律不变：被折叠区（cut 之前）必须全为完整轮——第一个不完整轮
+/// 及其后全部保留原文（绝不折叠，同 `collapsed_cut` 的 completeness
+/// back-off；不完整轮进桥造成的预算超出由视图截断兜底，声明内容通常很小）。
+pub fn bridge_cut(messages: &[Message], budget_estimate: u64) -> Option<usize> {
+    let ranges = round_ranges(messages);
+    if ranges.is_empty() {
+        return None;
+    }
+    let mut kept_total: u64 = 0;
+    let mut kept_from = ranges.len();
+    for k in (0..ranges.len()).rev() {
+        let estimate =
+            crate::controller::estimate_messages_tokens(&messages[ranges[k].0..ranges[k].1]);
+        // `kept_from == ranges.len()` 表示尚未计入任何轮——最新一轮恒入桥。
+        if kept_from != ranges.len() && kept_total.saturating_add(estimate) > budget_estimate {
+            break;
+        }
+        kept_total += estimate;
+        kept_from = k;
+    }
+    if let Some(first_incomplete) = ranges.iter().position(|&r| !is_round_complete(messages, r))
+        && kept_from > first_incomplete
+    {
+        kept_from = first_incomplete;
+    }
+    if kept_from == 0 {
+        return None;
+    }
+    Some(ranges[kept_from].0)
+}
+
 /// Number of complete round ranges whose start index is strictly before
 /// `cut` — the rounds a compaction draining `[first_declaration..cut)`
 /// would drop (FUS-LEDGER-FOLD-STATE: the cut may be the frozen
@@ -469,17 +533,46 @@ pub fn build_collapsed_request(messages: &[Message], keep_recent_rounds: usize) 
 ///   advance happens at the mechanical trigger instead).
 /// - Folded: `messages[..fold_start]` (preamble) + the byte-fixed pointer
 ///   message (user message; the folded rows live in the external ledger
-///   file) + `messages[fold_cut..]` (recent tail verbatim).
+///   file) + the bridge (`messages[fold_cut..]` transformed).
+///
+/// FUS-LEDGER-FOLD-BRIDGE (2026-08-19, ADR-0010 §14.32 / 设计 §3.1/§3.3):
+/// the bridge is the newest complete rounds within the `budget_estimate`
+/// (`estimate_messages_tokens` 口径) — `reasoning_content` is stripped from
+/// every bridge message (思维链不进桥; 审计仅保留计数); when the whole
+/// bridge still exceeds the budget, content is truncated oldest→newest
+/// (tool replies keep their TAIL + 「…（前略）」+ 指针行, assistant final
+/// reply text follows the existing `truncate_chars` head-199+… discipline,
+/// declarations keep visible content + tool_calls complete). Messages are
+/// never removed and rounds are never split, so the pairing invariant holds.
 ///
 /// The source `messages` slice is never modified — the journal/sidecar
 /// keeps the complete tool records (audit dual-track unchanged).
-pub fn build_request_view(messages: &[Message], fold: &LedgerFoldState) -> Vec<Message> {
+pub fn build_request_view(
+    messages: &[Message],
+    fold: &LedgerFoldState,
+    budget_estimate: u64,
+) -> Vec<Message> {
     let (Some(fold_start), Some(fold_cut)) = (fold.fold_start, fold.fold_cut) else {
         return messages.to_vec();
     };
     let Some(ledger) = fold.folded_ledger.as_deref() else {
         return messages.to_vec();
     };
+    // FUS-LEDGER-FOLD-BRIDGE 审查处理 (2026-08-19, O2)：防御性索引越界
+    // 守卫——压缩/恢复等路径在极端陈旧状态下可能让冻结索引超过当前
+    // `messages` 长度（正常路径由推进与视图两侧的 preamble/safe_fold_cut
+    // 防线覆盖，压缩路径会 reset 状态）；此时 `messages[..fold_start]` 或
+    // `messages[cut..]` 会越界 panic，直接放弃折叠回原文（与 stale fold
+    // 回退一致，最坏代价=每窗一次全量视图，低频接受）。
+    if fold_start >= messages.len() || fold_cut > messages.len() {
+        tracing::warn!(
+            fold_start,
+            fold_cut,
+            len = messages.len(),
+            "ledger fold indices out of bounds — returning the full view"
+        );
+        return messages.to_vec();
+    }
     // FUS-LEDGER-FOLD-STATE 400 修复 (2026-08-18, ADR-0010 §14.27 / 处理
     // 文档 §2.2)：preamble 边界校验——`messages[..fold_start]` 末条若为
     // assistant 声明（tool_calls 非空），其 tool 回复必在折叠区（索引 ≥
@@ -539,8 +632,137 @@ pub fn build_request_view(messages: &[Message], fold: &LedgerFoldState) -> Vec<M
         tool_calls: Vec::new(),
         reasoning_content: None,
     });
-    view.extend_from_slice(&messages[cut..]);
+    // FUS-LEDGER-FOLD-BRIDGE (2026-08-19, ADR-0010 §14.32 / 设计 §3.1/§3.2):
+    // 桥 = 最近一次推进冻结的 `[cut..bridge_end)`（推进时 messages 末尾）——
+    // 该区间内容级截断到预算（仅最新一轮单独超预算的例外情形）；`bridge_end`
+    // 之后的轮次（推进后追加）原样保留、纯追加——折叠之间前缀字节稳定，
+    // 推进后的增长尾部绝不被逐请求重截（缓存纪律与模型工作窗口）。
+    let bridge_end = fold
+        .bridge_end
+        .unwrap_or(messages.len())
+        .min(messages.len());
+    let bridge_end = bridge_end.max(cut);
+    view.extend(build_bridge(&messages[cut..bridge_end], budget_estimate));
+    view.extend_from_slice(&messages[bridge_end..]);
     view
+}
+
+/// FUS-LEDGER-FOLD-BRIDGE (2026-08-19, ADR-0010 §14.32 / 设计 §3.1/§3.5):
+/// 桥视图变换——剔除 `reasoning_content`（不修改 `messages` 本身）；整桥
+/// 估计超预算时从旧到新逐消息内容截断直至 ≤ 预算。不删消息、不拆轮：
+/// 任何声明的 call_id 都保留其工具回复在场（配对不变量）。
+fn build_bridge(bridge: &[Message], budget_estimate: u64) -> Vec<Message> {
+    let mut out: Vec<Message> = bridge
+        .iter()
+        .cloned()
+        .map(|mut m| {
+            m.reasoning_content = None;
+            m
+        })
+        .collect();
+    if crate::controller::estimate_messages_tokens(&out) > budget_estimate {
+        truncate_bridge_to_budget(&mut out, bridge, budget_estimate);
+    }
+    out
+}
+
+/// 工具回复截断形态行首前缀（「…（前略）」）。
+const BRIDGE_TOOL_REPLY_OMIT_PREFIX: &str = "…（前略）\n";
+
+/// 桥工具回复尾部保留的初始档位（字符）；全部压到当前档位仍超预算则减半。
+const BRIDGE_TOOL_REPLY_INITIAL_TAIL: usize = 4 * 1024;
+
+/// 桥工具回复尾部保留的最小档位——指针行恒可见（同 `render_notes_capped`
+/// 的指针可见纪律）；低于该档位仍超预算属物理下限（消息不可删、轮不可拆），
+/// 接受并留痕。
+const BRIDGE_TOOL_REPLY_MIN_TAIL: usize = 256;
+
+/// assistant 无 tool_calls 文本按既有 `truncate_chars` 口径（头部 199
+/// 字符接「…」；设计 §3.3——轮内中间说明文本与最终回复统一按此口径，
+/// 审查处理 2026-08-19 O1）。
+const BRIDGE_FINAL_REPLY_MAX_CHARS: usize = 200;
+
+/// 截断分配（设计 §3.3）：从旧到新逐消息压缩，直至整桥估计 ≤ 预算。
+/// 声明消息（assistant + tool_calls）可见 content 与 tool_calls 完整保留；
+/// 工具回复超档位时截断**保留尾部**（最新状态/错误/退出码最相关）+
+/// 「…（前略）」+ 指针行（sha256 与台账行同口径，完整内容在日志/对话存档）；
+/// assistant 无 tool_calls 文本（含轮内中间说明与最终回复）按
+/// `truncate_chars`（头部 199 字符 + …）。
+/// 指针行计入预算但必须可见。
+///
+/// `source` 为桥的源切片（与 `bridge` 一一对应）——每次截断都从**原文**
+/// 截取，同一条消息在同一档位下幂等（指针行不会因重复截断而叠入尾部，
+/// 「保留尾部」= 原文尾部），档位因此在无变更时可靠下降并终止。
+fn truncate_bridge_to_budget(bridge: &mut [Message], source: &[Message], budget_estimate: u64) {
+    debug_assert_eq!(
+        bridge.len(),
+        source.len(),
+        "bridge is a 1:1 clone of the source tail"
+    );
+    let mut cap = BRIDGE_TOOL_REPLY_INITIAL_TAIL;
+    loop {
+        if crate::controller::estimate_messages_tokens(bridge) <= budget_estimate {
+            return;
+        }
+        let mut changed = false;
+        for (m, src) in bridge.iter_mut().zip(source.iter()) {
+            match m.role {
+                Role::Tool => {
+                    if m.content.chars().count() > cap {
+                        let truncated = truncate_tool_reply_tail(&src.content, cap);
+                        // 截断形态（前缀 + 尾 + 指针）的长度可能不低于原文
+                        // ——仅在**确实更短**时采纳，否则计为无变更、档位
+                        // 减半，保证档位单调下降并终止。
+                        if truncated.chars().count() < m.content.chars().count() {
+                            m.content = truncated;
+                            changed = true;
+                        }
+                    }
+                }
+                Role::Assistant
+                    if m.tool_calls.is_empty()
+                        && m.content.chars().count() > BRIDGE_FINAL_REPLY_MAX_CHARS =>
+                {
+                    let truncated =
+                        crate::summary::truncate_chars(&src.content, BRIDGE_FINAL_REPLY_MAX_CHARS);
+                    if truncated.chars().count() < m.content.chars().count() {
+                        m.content = truncated;
+                        changed = true;
+                    }
+                }
+                _ => {}
+            }
+        }
+        if !changed {
+            if cap <= BRIDGE_TOOL_REPLY_MIN_TAIL {
+                tracing::debug!(
+                    budget_estimate,
+                    bridge_messages = bridge.len(),
+                    "ledger bridge at minimal tool-reply form still over budget — physical floor (messages are never removed)"
+                );
+                return;
+            }
+            cap /= 2;
+        }
+    }
+}
+
+/// 工具回复截断形态：行首「…（前略）」+ 保留尾部（`tail_chars` 字符）+
+/// 指针行「完整内容见 日志/对话存档 sha256:<hex>」——与台账行 `结果=sha256:`
+/// 同口径；完整内容不丢失（messages/日志/存档全量保留，审计双轨不变）。
+fn truncate_tool_reply_tail(content: &str, tail_chars: usize) -> String {
+    let tail: String = content
+        .chars()
+        .rev()
+        .take(tail_chars)
+        .collect::<Vec<_>>()
+        .into_iter()
+        .rev()
+        .collect();
+    format!(
+        "{BRIDGE_TOOL_REPLY_OMIT_PREFIX}{tail}\n完整内容见 日志/对话存档 sha256:{}",
+        sha256_hex(content.as_bytes())
+    )
 }
 
 /// 折叠态下的安全保留起点：`cut` 若落在某个工具轮的中间（尾部以孤儿
@@ -602,9 +824,10 @@ fn is_round_balanced(messages: &[Message], range: (usize, usize)) -> bool {
 }
 
 /// FUS-LEDGER-FOLD-STATE (2026-08-18, ADR-0010 §14.26 + §14.28
-/// external-file design): advance the fold point — fold the NEW complete
-/// old rounds before the `keep_recent_rounds` tail and move `fold_cut`
-/// forward.
+/// external-file design) × FUS-LEDGER-FOLD-BRIDGE (2026-08-19, ADR-0010
+/// §14.32): advance the fold point — fold the NEW complete old rounds
+/// before the bridge (newest complete rounds within `budget_estimate`,
+/// `estimate_messages_tokens` 口径) and move `fold_cut` forward.
 ///
 /// Returns `Some(rows)` — ONLY the rows newly folded since the last
 /// advance — and the caller appends them to the external ledger file
@@ -616,19 +839,19 @@ fn is_round_balanced(messages: &[Message], range: (usize, usize)) -> bool {
 /// is never mutated.
 ///
 /// Returns `None` (no-op, anti-spin) when there is no complete round to
-/// fold — i.e. fewer than `keep_recent_rounds + 1` complete rounds, the
-/// recomputed cut does not move past the current `fold_cut` (nothing new
-/// outside the tail since the last advance), or the same preamble/cut
+/// fold — i.e. every complete round fits in the bridge (cut stays at 0),
+/// the recomputed cut does not move past the current `fold_cut` (nothing
+/// new outside the bridge since the last advance), or the same preamble/cut
 /// safety checks that make `build_request_view` abandon the fold fire
 /// (stale fold indices / unbalanced rounds — rows must never be appended
 /// for rounds the view would keep verbatim).
 pub fn advance_fold(
     messages: &[Message],
     fold: &mut LedgerFoldState,
-    keep_recent_rounds: usize,
+    budget_estimate: u64,
     ledger_path: &std::path::Path,
 ) -> Option<Vec<ActionLedgerRow>> {
-    let kept_start = collapsed_cut(messages, keep_recent_rounds)?;
+    let kept_start = bridge_cut(messages, budget_estimate)?;
     let old_cut = fold.fold_cut;
     if old_cut.is_some_and(|cut| kept_start <= cut) {
         return None;
@@ -682,6 +905,9 @@ pub fn advance_fold(
     }
     fold.fold_start = Some(fold_start);
     fold.fold_cut = Some(cut);
+    // 冻结桥末端 = 推进时的消息末尾；此后追加的轮次不属于桥（视图纯追加，
+    // 直到下一次推进才把新桥冻结）。
+    fold.bridge_end = Some(messages.len());
     if fold.folded_ledger.is_none() {
         fold.folded_ledger = Some(build_pointer_message(ledger_path));
     }
@@ -731,6 +957,13 @@ mod tests {
             .filter(|m| m.role == Role::Assistant)
             .flat_map(|m| m.tool_calls.iter().map(|tc| tc.call_id.clone()))
             .collect()
+    }
+
+    /// 桥预算测试助手：直接给出 `estimate_messages_tokens` 估计口径的整段
+    /// 预算（与生产换算 `fold_tail_estimate_budget` 解耦，便于按轮精确控制
+    /// 桥内轮数）。
+    fn est_budget(messages: &[Message], from: usize) -> u64 {
+        crate::controller::estimate_messages_tokens(&messages[from..])
     }
 
     /// FUS-LEDGER-FOLD-STATE 复验修复 (2026-08-18)：`fold_cut` 落在轮中间
@@ -790,8 +1023,9 @@ mod tests {
             fold_start: Some(2),
             fold_cut: Some(4),
             folded_ledger: Some("ledger".to_string()),
+            ..Default::default()
         };
-        let view = build_request_view(&messages, &fold);
+        let view = build_request_view(&messages, &fold, 1_000_000);
         assert_eq!(view, messages, "stale fold falls back to the full view");
     }
 
@@ -814,8 +1048,9 @@ mod tests {
             fold_start: Some(2),
             fold_cut: Some(4),
             folded_ledger: Some("ledger".to_string()),
+            ..Default::default()
         };
-        let view = build_request_view(&messages, &fold);
+        let view = build_request_view(&messages, &fold, 1_000_000);
         assert_eq!(view, messages, "stale indices fall back to the full view");
         let declared: Vec<String> = view
             .iter()
@@ -833,6 +1068,41 @@ mod tests {
         );
     }
 
+    /// FUS-LEDGER-FOLD-BRIDGE 审查处理 (2026-08-19, O2)：极端陈旧状态下
+    /// 冻结折叠索引可能超出当前 `messages` 长度——必须放弃折叠回原文，
+    /// 不得 `messages[..fold_start]` / `messages[cut..]` 越界 panic。
+    #[test]
+    fn build_request_view_defends_out_of_bounds_fold_indices() {
+        let mut messages = vec![msg(Role::User, "任务")];
+        messages.extend(round("c1", "read_file", "a.py", "A"));
+        // fold_start / fold_cut 均超出当前消息长度（压缩删除后索引未失效
+        // 的极端场景）；folded_ledger 已设置——守卫必须优先于切片访问。
+        let fold = LedgerFoldState {
+            fold_start: Some(5),
+            fold_cut: Some(9),
+            folded_ledger: Some("ledger".to_string()),
+            ..Default::default()
+        };
+        let view = build_request_view(&messages, &fold, 1_000_000);
+        assert_eq!(
+            view, messages,
+            "out-of-bounds fold indices fall back to the full view"
+        );
+
+        // fold_cut 单独越界（fold_start 仍有效）同样回原文。
+        let fold_cut_oob = LedgerFoldState {
+            fold_start: Some(1),
+            fold_cut: Some(99),
+            folded_ledger: Some("ledger".to_string()),
+            ..Default::default()
+        };
+        let view2 = build_request_view(&messages, &fold_cut_oob, 1_000_000);
+        assert_eq!(
+            view2, messages,
+            "out-of-bounds fold_cut falls back to the full view"
+        );
+    }
+
     /// 折叠态下视图尾部不得含孤儿 tool 消息——cut 回退后第一条必须是
     /// assistant 声明，且所有声明都有 tool 回复。
     #[test]
@@ -844,8 +1114,9 @@ mod tests {
             fold_start: Some(1),
             fold_cut: Some(2),
             folded_ledger: Some("ledger".to_string()),
+            ..Default::default()
         };
-        let view = build_request_view(&messages, &fold);
+        let view = build_request_view(&messages, &fold, 1_000_000);
         // 视图 = [user(0), ledger, 尾部[1..]（c1 轮 + c2 轮，4 条）] = 6 条。
         assert_eq!(view.len(), 6);
         assert_eq!(view[0], messages[0]);
@@ -1061,7 +1332,7 @@ mod tests {
         messages.extend(round("c2", "search_replace", "b.rs", "已编辑"));
         messages.extend(round("c3", "web_fetch", "https://x.dev", "页面"));
         let fold = LedgerFoldState::default();
-        assert_eq!(build_request_view(&messages, &fold), messages);
+        assert_eq!(build_request_view(&messages, &fold, 1_000_000), messages);
         assert!(!fold.is_folded());
     }
 
@@ -1077,7 +1348,8 @@ mod tests {
         messages.extend(round("c4", "read_file", "c.py", "内容C"));
         let ledger_path = std::path::Path::new(".gsa/ledger/current.md");
         let mut fold = LedgerFoldState::default();
-        let rows = advance_fold(&messages, &mut fold, 1, ledger_path)
+        // 预算恰容纳最新一轮（c4）：c1–c3 折进台账，桥 = c4。
+        let rows = advance_fold(&messages, &mut fold, est_budget(&messages, 7), ledger_path)
             .expect("first advance folds old rounds");
         assert!(fold.is_folded());
         assert_eq!(fold.fold_start, Some(1), "first tool declaration index");
@@ -1102,7 +1374,7 @@ mod tests {
             "rows never enter the view: {pointer}"
         );
 
-        let view = build_request_view(&messages, &fold);
+        let view = build_request_view(&messages, &fold, est_budget(&messages, 7));
         assert_eq!(view[0].content, "任务");
         assert_eq!(
             view[1].content, pointer,
@@ -1123,16 +1395,21 @@ mod tests {
         messages.extend(round("c2", "read_file", "b.py", "内容B"));
         messages.extend(round("c3", "read_file", "c.py", "内容C"));
         let mut fold = LedgerFoldState::default();
-        assert!(advance_fold(&messages, &mut fold, 2, ledger_path).is_some());
+        // 预算恰容纳最新两轮（c2+c3）：c1 折进台账。
+        assert!(
+            advance_fold(&messages, &mut fold, est_budget(&messages, 3), ledger_path).is_some()
+        );
         let before = fold.clone();
         // No new complete round outside the tail — no-op.
-        assert!(advance_fold(&messages, &mut fold, 2, ledger_path).is_none());
+        assert!(
+            advance_fold(&messages, &mut fold, est_budget(&messages, 3), ledger_path).is_none()
+        );
         assert_eq!(fold, before);
-        // Fewer than tail+1 complete rounds — no-op.
+        // 仅 1 个完整轮：桥恒含 ≥1 轮结构、无可折叠轮 — no-op。
         let mut sparse = vec![msg(Role::User, "任务")];
         sparse.extend(round("c1", "read_file", "a.py", "内容A"));
         let mut sparse_fold = LedgerFoldState::default();
-        assert!(advance_fold(&sparse, &mut sparse_fold, 2, ledger_path).is_none());
+        assert!(advance_fold(&sparse, &mut sparse_fold, 1_000_000, ledger_path).is_none());
         assert!(!sparse_fold.is_folded());
     }
 
@@ -1145,7 +1422,10 @@ mod tests {
         messages.extend(round("c3", "read_file", "c.py", "C"));
         messages.extend(round("c4", "read_file", "d.py", "D"));
         let mut fold = LedgerFoldState::default();
-        let first = advance_fold(&messages, &mut fold, 2, ledger_path).unwrap();
+        // 预算恰容纳 c3+c4：首次推进折 c1/c2；预算先取一次、跨追加复用
+        // （第二次推进前 messages 已含 c5/c6，重算会把预算放大到整段）。
+        let budget = est_budget(&messages, 5);
+        let first = advance_fold(&messages, &mut fold, budget, ledger_path).unwrap();
         assert_eq!(first.len(), 2, "rounds c1/c2");
         assert!(
             first
@@ -1158,7 +1438,7 @@ mod tests {
         // newly folded c3/c4 rows — the pointer is never rewritten.
         messages.extend(round("c5", "read_file", "e.py", "E"));
         messages.extend(round("c6", "read_file", "f.py", "F"));
-        let second = advance_fold(&messages, &mut fold, 2, ledger_path).unwrap();
+        let second = advance_fold(&messages, &mut fold, budget, ledger_path).unwrap();
         assert_eq!(second.len(), 2, "rounds c3/c4 only");
         assert!(
             second
@@ -1192,8 +1472,9 @@ mod tests {
             ));
         }
         let mut fold = LedgerFoldState::default();
-        assert!(advance_fold(&messages, &mut fold, 1, ledger_path).is_some());
-        let view1 = build_request_view(&messages, &fold);
+        let budget = est_budget(&messages, 7);
+        assert!(advance_fold(&messages, &mut fold, budget, ledger_path).is_some());
+        let view1 = build_request_view(&messages, &fold, budget);
         // Preamble + fixed pointer: byte-stable across ALL advances.
         let prefix_len = fold.fold_start.unwrap() + 1;
         let prefix1: Vec<Message> = view1.iter().take(prefix_len).cloned().collect();
@@ -1205,8 +1486,8 @@ mod tests {
                 &format!("{k}.py"),
                 &format!("内容{k}"),
             ));
-            let advanced = advance_fold(&messages, &mut fold, 1, ledger_path).is_some();
-            let view = build_request_view(&messages, &fold);
+            let advanced = advance_fold(&messages, &mut fold, budget, ledger_path).is_some();
+            let view = build_request_view(&messages, &fold, budget);
             let prefix: Vec<Message> = view.iter().take(prefix_len).cloned().collect();
             assert_eq!(prefix, prefix1, "folded prefix rewritten at round {k}");
             if advanced {
@@ -1305,7 +1586,7 @@ mod tests {
             ));
         }
         let mut fold = LedgerFoldState::default();
-        let rows = advance_fold(&messages, &mut fold, 1, &path).unwrap();
+        let rows = advance_fold(&messages, &mut fold, est_budget(&messages, 5), &path).unwrap();
         append_ledger_rows(&path, &rows).unwrap();
         assert_eq!(std::fs::read_to_string(&path).unwrap().lines().count(), 2);
 
@@ -1325,7 +1606,7 @@ mod tests {
             ));
         }
         let mut fresh_fold = LedgerFoldState::default();
-        let rows2 = advance_fold(&fresh, &mut fresh_fold, 1, &path).unwrap();
+        let rows2 = advance_fold(&fresh, &mut fresh_fold, est_budget(&fresh, 5), &path).unwrap();
         append_ledger_rows(&path, &rows2).unwrap();
         let text = std::fs::read_to_string(&path).unwrap();
         let lines: Vec<&str> = text.lines().collect();
@@ -1554,10 +1835,12 @@ mod tests {
         });
         let ledger_path = std::path::Path::new(".gsa/ledger/current.md");
         let mut fold = LedgerFoldState::default();
-        let rows = advance_fold(&messages, &mut fold, 1, ledger_path).unwrap();
+        // 预算恰容纳 c2+c3（c3 为不完整声明）：行走会停在 c1 之后。
+        let rows =
+            advance_fold(&messages, &mut fold, est_budget(&messages, 3), ledger_path).unwrap();
         assert_eq!(rows.len(), 1, "只有 c1 被折叠");
         assert_eq!(fold.fold_cut, Some(3), "cut 回退到 c2 轮起点");
-        let view = build_request_view(&messages, &fold);
+        let view = build_request_view(&messages, &fold, est_budget(&messages, 3));
         assert!(
             view.iter().any(|m| m.content == "B"),
             "c2 原文保留: {view:?}"
@@ -1586,14 +1869,417 @@ mod tests {
             fold_start: Some(2),
             fold_cut: None,
             folded_ledger: None,
+            ..Default::default()
         };
         let ledger_path = std::path::Path::new(".gsa/ledger/current.md");
         assert!(
-            advance_fold(&messages, &mut fold, 1, ledger_path).is_none(),
+            advance_fold(&messages, &mut fold, 1_000_000, ledger_path).is_none(),
             "preamble 边界不合格必须放弃推进"
         );
         assert_eq!(fold.fold_start, Some(2), "状态保持不动");
         assert_eq!(fold.fold_cut, None, "状态保持不动");
         assert!(fold.folded_ledger.is_none(), "状态保持不动");
+    }
+
+    // ---- FUS-LEDGER-FOLD-BRIDGE (2026-08-19, ADR-0010 §14.32) ----
+
+    #[test]
+    fn bridge_cut_walks_newest_first_until_budget() {
+        let mut messages = vec![msg(Role::User, "任务")];
+        messages.extend(round("c1", "read_file", "a.py", "A"));
+        messages.extend(round("c2", "run_terminal", "make", &"out".repeat(200)));
+        messages.extend(round("c3", "read_file", "c.py", "C"));
+        // 预算恰容纳 c2+c3：从最新往回累加，c1 必须折进台账。
+        let cut = bridge_cut(&messages, est_budget(&messages, 3)).unwrap();
+        assert_eq!(cut, 3, "cut = c2 轮起点（c2+c3 入桥）");
+    }
+
+    #[test]
+    fn bridge_cut_keeps_newest_round_when_alone_exceeds_budget() {
+        let mut messages = vec![msg(Role::User, "任务")];
+        messages.extend(round("c1", "read_file", "a.py", "A"));
+        messages.extend(round("c2", "run_terminal", "make", &"x".repeat(20_000)));
+        // 极小预算：最新一轮单独超预算仍恒入桥，更早轮照常折叠。
+        let cut = bridge_cut(&messages, 10).unwrap();
+        assert_eq!(cut, 3, "c2 单独入桥、c1 折叠");
+    }
+
+    #[test]
+    fn bridge_cut_defers_to_first_incomplete_round() {
+        // c1 巨大（单独占满预算）→ 预算行走会折掉 c1 保留 c2/c3；
+        // c2 不完整 → cut 必须停在 c2 轮起点，不得把不完整轮折进台账。
+        let mut messages = vec![msg(Role::User, "任务")];
+        messages.extend(round("c1", "run_terminal", "make", &"x".repeat(20_000)));
+        messages.push(Message {
+            role: Role::Assistant,
+            content: String::new(),
+            tool_call_id: None,
+            tool_calls: vec![ToolCall {
+                name: "read_file".into(),
+                arguments: serde_json::json!({"path": "b.py"}),
+                call_id: "c2".into(),
+            }],
+            reasoning_content: None,
+        });
+        messages.extend(round("c3", "read_file", "c.py", "C"));
+        let cut = bridge_cut(&messages, 10).unwrap();
+        assert_eq!(cut, 3, "cut = c2 轮起点（不完整轮永不折叠）");
+    }
+
+    #[test]
+    fn fold_tail_estimate_budget_converts_tokens_to_chars_half() {
+        // 默认 8K 真实 token → 32K 字符 → 16K 估计口径（chars/2）。
+        assert_eq!(fold_tail_estimate_budget(8_000), 16_000);
+        assert_eq!(fold_tail_estimate_budget(1), 2);
+        assert_eq!(fold_tail_estimate_budget(0), 0);
+        assert_eq!(
+            fold_tail_estimate_budget(u64::MAX),
+            u64::MAX / 2,
+            "饱和乘法后 ÷2"
+        );
+    }
+
+    #[test]
+    fn pointer_message_mentions_8k_bridge() {
+        let pointer = build_pointer_message(std::path::Path::new(".gsa/ledger/current.md"));
+        assert!(pointer.starts_with(LEDGER_FOLD_POINTER_PREFIX), "{pointer}");
+        assert!(pointer.contains(".gsa/ledger/current.md"), "{pointer}");
+        assert!(pointer.contains("约 8K 桥接内容"), "{pointer}");
+        assert!(
+            pointer.contains("更早轮次已按行归档于 .gsa/ledger/current.md"),
+            "指针文案与设计 §3.4 定稿措辞一致（审查处理 N1）: {pointer}"
+        );
+        assert!(!pointer.contains("归档在该文件中"), "{pointer}");
+        assert!(!pointer.contains("最近 1 轮原文"), "{pointer}");
+    }
+
+    #[test]
+    fn bridge_view_strips_reasoning_and_keeps_structure() {
+        let mut messages = vec![msg(Role::User, "任务")];
+        messages.push(Message {
+            role: Role::Assistant,
+            content: "进行中".to_string(),
+            tool_call_id: None,
+            tool_calls: vec![ToolCall {
+                name: "read_file".into(),
+                arguments: serde_json::json!({"path": "a.py"}),
+                call_id: "c1".into(),
+            }],
+            reasoning_content: Some("思考链内容".to_string()),
+        });
+        messages.push(Message {
+            role: Role::Tool,
+            content: "结果A".to_string(),
+            tool_call_id: Some("c1".to_string()),
+            tool_calls: Vec::new(),
+            reasoning_content: None,
+        });
+        let fold = LedgerFoldState {
+            fold_start: Some(1),
+            fold_cut: Some(1),
+            folded_ledger: Some("ledger".to_string()),
+            bridge_end: Some(messages.len()),
+        };
+        let view = build_request_view(&messages, &fold, 1_000_000);
+        assert_eq!(view.len(), 4, "U0 + pointer + A + T");
+        let decl = &view[2];
+        assert_eq!(decl.role, Role::Assistant);
+        assert!(
+            decl.reasoning_content.is_none(),
+            "思维链必须从桥剔除: {decl:?}"
+        );
+        assert_eq!(decl.content, "进行中", "声明可见 content 完整保留");
+        assert_eq!(decl.tool_calls.len(), 1);
+        assert_eq!(decl.tool_calls[0].call_id, "c1", "tool_calls 完整保留");
+        assert_eq!(view[3].content, "结果A", "预算内工具回复原文保留");
+        assert_eq!(
+            messages[1].reasoning_content.as_deref(),
+            Some("思考链内容"),
+            "视图变换不得修改 messages 本身"
+        );
+        let declared = declared_ids(&view[2..]);
+        let replied: Vec<&str> = view[2..]
+            .iter()
+            .filter(|m| m.role == Role::Tool)
+            .filter_map(|m| m.tool_call_id.as_deref())
+            .collect();
+        assert!(declared.iter().all(|d| replied.contains(&d.as_str())));
+    }
+
+    #[test]
+    fn bridge_within_budget_is_verbatim_except_reasoning() {
+        let mut messages = vec![msg(Role::User, "任务")];
+        messages.push(Message {
+            role: Role::Assistant,
+            content: String::new(),
+            tool_call_id: None,
+            tool_calls: vec![ToolCall {
+                name: "read_file".into(),
+                arguments: serde_json::json!({"path": "a.py"}),
+                call_id: "c1".into(),
+            }],
+            reasoning_content: Some("思考链".to_string()),
+        });
+        messages.push(Message {
+            role: Role::Tool,
+            content: "结果A".to_string(),
+            tool_call_id: Some("c1".to_string()),
+            tool_calls: Vec::new(),
+            reasoning_content: None,
+        });
+        let fold = LedgerFoldState {
+            fold_start: Some(1),
+            fold_cut: Some(1),
+            folded_ledger: Some("ledger".to_string()),
+            bridge_end: Some(messages.len()),
+        };
+        let view = build_request_view(&messages, &fold, 1_000_000);
+        let expected: Vec<Message> = messages[1..]
+            .iter()
+            .cloned()
+            .map(|mut m| {
+                m.reasoning_content = None;
+                m
+            })
+            .collect();
+        assert_eq!(&view[2..], &expected[..], "预算内桥 = 原文（仅剔除思维链）");
+    }
+
+    #[test]
+    fn bridge_view_truncates_over_budget_tool_reply_tail_with_pointer() {
+        let mut messages = vec![msg(Role::User, "任务")];
+        messages.push(Message {
+            role: Role::Assistant,
+            content: String::new(),
+            tool_call_id: None,
+            tool_calls: vec![ToolCall {
+                name: "read_file".into(),
+                arguments: serde_json::json!({"path": "a.py"}),
+                call_id: "c1".into(),
+            }],
+            reasoning_content: Some("思考链".to_string()),
+        });
+        messages.push(Message {
+            role: Role::Tool,
+            content: "原始输出".repeat(5_000), // 2 万字符 ≈ 1 万估计 token
+            tool_call_id: Some("c1".to_string()),
+            tool_calls: Vec::new(),
+            reasoning_content: None,
+        });
+        let fold = LedgerFoldState {
+            fold_start: Some(1),
+            fold_cut: Some(1),
+            folded_ledger: Some("ledger".to_string()),
+            bridge_end: Some(messages.len()),
+        };
+        // 预算 200 估计 token：整桥必然超限，工具回复必须截断到预算内。
+        let budget = 200;
+        let view = build_request_view(&messages, &fold, budget);
+        let tool = view.iter().find(|m| m.role == Role::Tool).unwrap();
+        assert!(tool.content.starts_with("…（前略）\n"), "{tool:?}");
+        assert!(
+            tool.content.contains("完整内容见 日志/对话存档 sha256:"),
+            "{tool:?}"
+        );
+        assert!(
+            tool.content.contains("输出"),
+            "保留尾部（最新内容）: {tool:?}"
+        );
+        let bridge_estimate = crate::controller::estimate_messages_tokens(&view[2..]);
+        assert!(
+            bridge_estimate <= budget,
+            "桥估计必须落入预算: {bridge_estimate}"
+        );
+        // 配对不变量不因截断破坏；源 messages 不动。
+        let declared = declared_ids(&view[2..]);
+        let replied: Vec<&str> = view[2..]
+            .iter()
+            .filter(|m| m.role == Role::Tool)
+            .filter_map(|m| m.tool_call_id.as_deref())
+            .collect();
+        assert!(declared.iter().all(|d| replied.contains(&d.as_str())));
+        assert_eq!(messages[2].content, "原始输出".repeat(5_000));
+    }
+
+    #[test]
+    fn bridge_view_truncates_assistant_final_reply_head_style() {
+        let mut messages = vec![msg(Role::User, "任务")];
+        messages.push(Message {
+            role: Role::Assistant,
+            content: String::new(),
+            tool_call_id: None,
+            tool_calls: vec![ToolCall {
+                name: "read_file".into(),
+                arguments: serde_json::json!({"path": "a.py"}),
+                call_id: "c1".into(),
+            }],
+            reasoning_content: None,
+        });
+        messages.push(Message {
+            role: Role::Tool,
+            content: "结果A".to_string(),
+            tool_call_id: Some("c1".to_string()),
+            tool_calls: Vec::new(),
+            reasoning_content: None,
+        });
+        // 轮内 assistant 最终回复文本（无 tool_calls）超限。
+        messages.push(Message {
+            role: Role::Assistant,
+            content: "最终回复".repeat(200), // 600 字符
+            tool_call_id: None,
+            tool_calls: Vec::new(),
+            reasoning_content: None,
+        });
+        let fold = LedgerFoldState {
+            fold_start: Some(1),
+            fold_cut: Some(1),
+            folded_ledger: Some("ledger".to_string()),
+            bridge_end: Some(messages.len()),
+        };
+        let view = build_request_view(&messages, &fold, 200);
+        let final_text = view
+            .iter()
+            .find(|m| m.role == Role::Assistant && m.tool_calls.is_empty())
+            .expect("final reply message survives");
+        assert_eq!(final_text.content.chars().count(), 200, "{final_text:?}");
+        assert!(final_text.content.starts_with("最终回复"), "{final_text:?}");
+        assert!(final_text.content.ends_with('…'), "{final_text:?}");
+        assert!(
+            crate::controller::estimate_messages_tokens(&view[2..]) <= 200,
+            "桥估计必须落入预算"
+        );
+    }
+
+    #[test]
+    fn bridge_truncation_preserves_role_order_and_pairing() {
+        let mut messages = vec![msg(Role::User, "任务")];
+        for k in 1..=3 {
+            messages.extend(round(
+                &format!("c{k}"),
+                "read_file",
+                &format!("{k}.py"),
+                &"大".repeat(2_000),
+            ));
+        }
+        let fold = LedgerFoldState {
+            fold_start: Some(1),
+            fold_cut: Some(1),
+            folded_ledger: Some("ledger".to_string()),
+            bridge_end: Some(messages.len()),
+        };
+        let budget = 600;
+        let view = build_request_view(&messages, &fold, budget);
+        let roles: Vec<Role> = view.iter().map(|m| m.role).collect();
+        assert_eq!(
+            roles,
+            vec![
+                Role::User,
+                Role::User,
+                Role::Assistant,
+                Role::Tool,
+                Role::Assistant,
+                Role::Tool,
+                Role::Assistant,
+                Role::Tool,
+            ],
+            "消息不删、轮不拆、角色顺序保持: {view:?}"
+        );
+        let declared = declared_ids(&view[2..]);
+        let replied: Vec<&str> = view[2..]
+            .iter()
+            .filter(|m| m.role == Role::Tool)
+            .filter_map(|m| m.tool_call_id.as_deref())
+            .collect();
+        assert!(declared.iter().all(|d| replied.contains(&d.as_str())));
+        for m in view.iter().filter(|m| m.role == Role::Tool) {
+            assert!(m.content.starts_with("…（前略）\n"), "{m:?}");
+            assert!(m.content.contains("sha256:"), "{m:?}");
+        }
+        for m in view
+            .iter()
+            .filter(|m| m.role == Role::Assistant && !m.tool_calls.is_empty())
+        {
+            assert_eq!(m.content, "", "声明可见 content 保留原样: {m:?}");
+            assert!(!m.tool_calls.is_empty());
+        }
+        let bridge_estimate = crate::controller::estimate_messages_tokens(&view[2..]);
+        assert!(
+            bridge_estimate <= budget,
+            "桥估计必须落入预算: {bridge_estimate}"
+        );
+    }
+
+    #[test]
+    fn bridge_truncation_stops_at_physical_floor_without_spinning() {
+        // 预算低于最小形态的物理下限（消息不可删/轮不可拆）：循环必须终止
+        // （不得同档位无限重截），桥停在最小形态、估计略超预算为已接受边界。
+        let mut messages = vec![msg(Role::User, "任务")];
+        for k in 1..=3 {
+            messages.extend(round(
+                &format!("c{k}"),
+                "read_file",
+                &format!("{k}.py"),
+                &"大".repeat(2_000),
+            ));
+        }
+        let fold = LedgerFoldState {
+            fold_start: Some(1),
+            fold_cut: Some(1),
+            folded_ledger: Some("ledger".to_string()),
+            bridge_end: Some(messages.len()),
+        };
+        let view = build_request_view(&messages, &fold, 100);
+        assert_eq!(
+            view.iter().filter(|m| m.role == Role::Tool).count(),
+            3,
+            "消息不删、轮不拆"
+        );
+        for m in view.iter().filter(|m| m.role == Role::Tool) {
+            assert!(m.content.starts_with("…（前略）\n"), "{m:?}");
+            assert!(m.content.contains("sha256:"), "{m:?}");
+        }
+    }
+
+    #[test]
+    fn bridge_truncation_only_touches_frozen_bridge_and_appended_rounds_stay_verbatim() {
+        // 推进时冻结桥（`[fold_cut..bridge_end)`）；此后追加的轮次不属于桥
+        // ——即使整段（桥 + 追加）超过预算，桥也绝不因追加内容被逐请求重截
+        // （前缀字节稳定、折叠之间纯追加——缓存纪律），追加轮原样保留。
+        let mut messages = vec![msg(Role::User, "任务")];
+        messages.extend(round("c1", "run_terminal", "make", &"大".repeat(5_000)));
+        let bridge_end = messages.len(); // 推进时冻结点
+        messages.extend(round("c2", "read_file", "b.py", &"追加".repeat(3_000)));
+        let fold = LedgerFoldState {
+            fold_start: Some(1),
+            fold_cut: Some(1),
+            folded_ledger: Some("ledger".to_string()),
+            bridge_end: Some(bridge_end),
+        };
+        let budget = 200;
+        let view = build_request_view(&messages, &fold, budget);
+        let tool_c1 = view
+            .iter()
+            .find(|m| m.tool_call_id.as_deref() == Some("c1"))
+            .expect("c1 tool reply survives");
+        assert!(
+            tool_c1.content.starts_with("…（前略）\n"),
+            "桥内工具回复被截断到预算: {tool_c1:?}"
+        );
+        let tool_c2 = view
+            .iter()
+            .find(|m| m.tool_call_id.as_deref() == Some("c2"))
+            .expect("c2 tool reply survives");
+        assert_eq!(
+            tool_c2.content,
+            "追加".repeat(3_000),
+            "桥外追加轮原样保留（不被重截）: {tool_c2:?}"
+        );
+        // 桥（视图索引 2..2+(bridge_end-cut)）的估计 ≤ 预算；追加轮不计入。
+        let bridge_estimate =
+            crate::controller::estimate_messages_tokens(&view[2..2 + bridge_end - 1]);
+        assert!(
+            bridge_estimate <= budget,
+            "桥估计必须落入预算: {bridge_estimate}"
+        );
     }
 }
