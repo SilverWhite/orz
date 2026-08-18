@@ -120,6 +120,25 @@
 > BACKLOG 0c / TODO P0-0c；实施路由 S1 代码 → S2 测试 → S3 重建 → S4 复验
 > （≥90%、无 400、每窗重付 ≤~15K、截断频率 ≤30% 校准）；0c S4 前置，计数
 > 不变（仍在 29）。
+> 2026-08-19 折叠桥接截断 S1/S2 实施闭合 + 全面审查处理登记（用户放行
+> 实施；orz 提交 52d698c、未推送）——S1 代码：`bridge_cut` 桥预算裁剪
+> （完整轮累加至预算、最新轮恒入桥、不完整轮回退；4 字符/token ÷ 2 换算，
+> 默认 8K → 16K 估计口径）、`build_request_view` 桥视图（reasoning 剔除、
+> 超预算内容级截断=工具回复保留尾部 + 「…（前略）」+ sha256 指针、最终
+> 回复 199+…、声明 content/tool_calls 完整、消息不删轮不拆；`bridge_end`
+> 冻结=推进时消息末尾、折叠之间纯追加）、`advance_fold` 入账范围不变、
+> 指针文案更新（「约 8K 桥接内容，更早轮次已按行归档于 <abs-path>」）；
+> `controller.rs` `fold_tail_rounds` 退役 → `fold_tail_tokens`
+> （`ORZ_FOLD_TAIL_TOKENS` 可配）；`agent_loop.rs` 推进与请求视图两处
+> 透传。S2 测试：orz-loop 503 通过（+13 桥测试 +1 越界防御）/ fmt 干净 /
+> clippy 与基线一致（lib 21 / test 26）。审查处理（实现无功能缺陷）：
+> N1 指针文案按设计 §3.4 定稿原文落地；N2 实现决策登记（新增 `bridge_cut`、
+> `collapsed_cut` 保留服务压缩）；N3 `bridge_end` 冻结机制补记；O1 中间
+> assistant 文本口径；O2 索引越界防御守卫；O3 非默认配置文案固定不变。
+> 设计文档 §3.1–§3.4/§7 修订。S3 重建 → S4 复验（≥90%、无 400、每窗
+> 折叠重付 ≤ ~15K、截断频率 ≤30%）待续；计数不变（仍在 29）。登记于
+> ADR-0010 §14.32 第 2 项 / LEDGER_FOLD_BRIDGE_TRUNCATION_DESIGN_2026-08-19 /
+> BACKLOG 0c / TODO P0-0c。
 > 
 2026-08-15 黑板 plan epoch 复查补强登记（ADR-0010 v1.15⑧）——plan_epoch 时间戳单调编号、身份一一对应强制、retention 保留最高编号快照。
 > 2026-08-15 黑板 plan epoch 复查遗留闭合登记（ADR-0010 v1.15⑨）——F2 原子写盘+回退加载、F4 跨进程 `.claim-<n>` 占号、F5 归档目录单一来源、F6 非法 epoch 显式报错、F7 归档失败入事件面（新 v0.2 `epoch_archive_write_failed`）、F9 `persisted_at` 更名、F10 设计 §5 措辞对齐。
