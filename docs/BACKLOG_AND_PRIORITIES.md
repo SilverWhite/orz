@@ -404,6 +404,19 @@
   截断+指针；支持 epoch 归档点读；非法/未找到显式报错；无 receipt_id 整段
   与 S1 逐字节一致）。零模型、数据面/事件面不动、工具定义增量扩展；路由
   S1 代码 → S2 测试 → S3 重建 → S4 复验；计数不变（仍在 29）。
+- **2026-08-19 方案 B S1 代码 + S2 测试已实施（用户放行；orz 工作树未提交；
+  0c S4 前置修订）**：epoch.rs `render_section` 增可选 `receipt_id`（非
+  actions 分区携带=显式报错；actions 分支点读优先）+ `render_receipt_point_
+  read`（固定形态行 + 成功 `response=<JSON 原文>` / 失败 `error=<JSON 原文>`，
+  `RECEIPT_DETAIL_MAX_CHARS=8_000` 超限截断 + 「…」+ 存档/TraceStore 指针行；
+  未找到显式 not found + 旧 epoch 归档提示）；controller.rs 参数解析
+  （非字符串/空串=显式报错、exit_code 1）与透传（live 与 epoch 归档两条路径
+  共用）、blackboard_read 工具定义参数/描述增量扩展（事件面不变）；S2 单测
+  5 项（完整 response/error、8K 截断+指针、未找到、非 actions 报错、无
+  receipt_id 与 S1 逐字节相等）+ 工具级 4 项（点读回达、非法参数报错、非
+  actions 报错、跨 epoch 点读）；orz-loop 488 通过 / fmt 干净 / clippy 与
+  基线一致（lib 21 / test 26）。S3 重建 → S4 复验（≥90%、无 400）待续；
+  计数不变（仍在 29）。
 
 ### 0. 前置收尾（提交前需用户确认）
 
