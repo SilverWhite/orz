@@ -8653,12 +8653,51 @@ impl AgentLoopController {
         // every policy); the event chain is complete (PermissionRequested/
         // PermissionDecision/ToolStarted above, ToolCompleted below).
         if tc.name == "blackboard_read" {
-            let section = tc
-                .arguments
-                .get("section")
-                .and_then(|s| s.as_str())
-                .unwrap_or("plan")
-                .to_string();
+            // 2026-08-19 方案B 全面审查处理（N3）：section 非字符串 = 显式报错
+            // （同非法 epoch/receipt_id 纪律——绝不静默回退到 "plan" 默认值，
+            // 否则与 receipt_id 组合时守卫报错会显示误导性的 section=plan）。
+            let section = match tc.arguments.get("section") {
+                Some(raw) => match raw.as_str() {
+                    Some(s) => s.to_string(),
+                    None => {
+                        let content = format!(
+                            "invalid blackboard_read section: {raw} — section 必须 \
+                             是字符串（plan|edits|tool_actions|exec|actions）"
+                        );
+                        let mut completed = serde_json::json!({
+                            "tool": tc.name,
+                            "call_id": tc.call_id,
+                            "exit_code": 1,
+                            "section": "<invalid>",
+                            "error": content,
+                        });
+                        // F3 (2026-08-16 审查收口): direct 盖章对称。
+                        stamp_direct(&mut completed);
+                        writer.record(EventType::ToolCompleted, completed).await?;
+                        self.blackboard.write().tool_actions.push(ToolActionRecord {
+                            category: ToolDispatcher::action_category(&tc.name).to_string(),
+                            tool: tc.name.clone(),
+                            timestamp: chrono_utc_now(),
+                        });
+                        let result = ToolResult {
+                            output: content,
+                            exit_code: Some(1),
+                            output_encoding: None,
+                            structured: None,
+                            ..Default::default()
+                        };
+                        messages.push(Message {
+                            role: Role::Tool,
+                            content: result.output.clone(),
+                            tool_call_id: Some(tc.call_id.clone()),
+                            tool_calls: Vec::new(),
+                            reasoning_content: None,
+                        });
+                        return Ok((result, None));
+                    }
+                },
+                None => "plan".to_string(),
+            };
             let since = tc.arguments.get("since_timestamp").and_then(|s| s.as_str());
             // F6 (2026-08-15, BACKLOG 6e 复查遗留): distinguish "epoch
             // omitted" (live view) from "epoch present but invalid" (0,
@@ -13056,6 +13095,140 @@ mod tests {
         assert!(inv_payload.get("receipt_id").is_none(), "{inv_payload:?}");
 
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// 2026-08-19 方案B 全面审查处理（N3）：`section` 非字符串 = 显式报错
+    /// （绝不静默回退到 "plan" 默认值）——单独传非法 section 与 receipt_id
+    /// 组合两条路径均回达显式错误，且不落到误导性的「section=plan 不支持
+    /// receipt_id」守卫消息。
+    #[tokio::test]
+    async fn blackboard_read_non_string_section_is_explicit_error() {
+        let dir = test_dir();
+        let journal = JournalRecorder::new(dir.clone());
+        let host = TestHost {
+            journal,
+            tool_result: None,
+        };
+        let fake = Arc::new(FakeProvider::new(vec![
+            ScriptedResponse::tool_calls(vec![ToolCall {
+                name: "blackboard_read".to_string(),
+                arguments: serde_json::json!({
+                    "section": 123,
+                    "receipt_id": "ORD-1",
+                }),
+                call_id: "call-secnum".to_string(),
+            }]),
+            ScriptedResponse::text("完成"),
+            ScriptedResponse::text("完成"),
+        ]));
+        let gateway: Arc<dyn ModelGateway> = fake.clone();
+        let controller = AgentLoopController::with_gateway(gateway);
+        controller
+            .run_turn(
+                &host,
+                "非法分区类型",
+                "RUN-PRSECNUM",
+                MANIFEST,
+                0,
+                None,
+                None,
+                None,
+            )
+            .await
+            .unwrap();
+
+        let received = fake.received_requests();
+        let round = received
+            .iter()
+            .find(|r| {
+                r.messages
+                    .iter()
+                    .any(|m| m.tool_call_id.as_deref() == Some("call-secnum"))
+            })
+            .expect("round carrying invalid section error");
+        let reply = round
+            .messages
+            .iter()
+            .find(|m| m.tool_call_id.as_deref() == Some("call-secnum"))
+            .expect("invalid section tool result message");
+        assert!(
+            reply.content.contains("invalid blackboard_read section"),
+            "{:?}",
+            round.messages
+        );
+        assert!(reply.content.contains("123"), "{:?}", round.messages);
+        assert!(
+            !reply.content.contains("receipt_id 仅与 section=actions"),
+            "{:?}",
+            round.messages
+        );
+        // 事件面：section 以哨兵字符串呈现（保持事件字段类型稳定）。
+        let completed: Vec<serde_json::Value> = events(&dir)
+            .into_iter()
+            .filter(|e| e.event_type == EventType::ToolCompleted)
+            .map(|e| e.payload)
+            .collect();
+        let sec_payload = completed
+            .iter()
+            .find(|p| p["tool"] == "blackboard_read" && p["exit_code"] == 1)
+            .expect("invalid section completed");
+        assert_eq!(sec_payload["section"], "<invalid>", "{sec_payload:?}");
+        assert!(sec_payload.get("receipt_id").is_none(), "{sec_payload:?}");
+
+        // 单独传非字符串 section（无 receipt_id）同样显式报错，不回退 plan。
+        let dir2 = test_dir();
+        let journal2 = JournalRecorder::new(dir2.clone());
+        let host2 = TestHost {
+            journal: journal2,
+            tool_result: None,
+        };
+        let fake2 = Arc::new(FakeProvider::new(vec![
+            ScriptedResponse::tool_calls(vec![ToolCall {
+                name: "blackboard_read".to_string(),
+                arguments: serde_json::json!({"section": 456}),
+                call_id: "call-secnum2".to_string(),
+            }]),
+            ScriptedResponse::text("完成"),
+            ScriptedResponse::text("完成"),
+        ]));
+        let gateway2: Arc<dyn ModelGateway> = fake2.clone();
+        let controller2 = AgentLoopController::with_gateway(gateway2);
+        controller2
+            .run_turn(
+                &host2,
+                "非法分区类型（无点读）",
+                "RUN-PRSECNUM2",
+                MANIFEST,
+                0,
+                None,
+                None,
+                None,
+            )
+            .await
+            .unwrap();
+        let received2 = fake2.received_requests();
+        let round2 = received2
+            .iter()
+            .find(|r| {
+                r.messages
+                    .iter()
+                    .any(|m| m.tool_call_id.as_deref() == Some("call-secnum2"))
+            })
+            .expect("round carrying second invalid section error");
+        let reply2 = round2
+            .messages
+            .iter()
+            .find(|m| m.tool_call_id.as_deref() == Some("call-secnum2"))
+            .expect("second invalid section tool result message");
+        assert!(
+            reply2.content.contains("invalid blackboard_read section"),
+            "{:?}",
+            round2.messages
+        );
+        assert!(reply2.content.contains("456"), "{:?}", round2.messages);
+
+        let _ = std::fs::remove_dir_all(&dir);
+        let _ = std::fs::remove_dir_all(&dir2);
     }
 
     /// 2026-08-19 黑板缓存成本设计（ADR-0010 §14.31 / §4.5，方案 B，S2

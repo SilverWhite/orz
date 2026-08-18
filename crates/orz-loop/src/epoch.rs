@@ -444,7 +444,8 @@ pub fn render_section(
                     //   trace_id=<trace_id>
                     // step/code 取信封既有字段，缺失回退 `?`（与 D1=(c)
                     // failure_envelope_fields 同口径）；大载荷留在存档与
-                    // TraceStore，模型按需经 trace 回查。
+                    // TraceStore；模型按需经 blackboard_read receipt_id
+                    // 点读回查（方案 B，ADR-0010 §14.31 / 设计 §4.5）。
                     let (step, code) = failure_envelope_fields(&result.error);
                     let line = format!(
                         "{} ok={} step={} code={} trace_id={}",
@@ -468,8 +469,10 @@ pub fn render_section(
 pub const RECEIPT_DETAIL_MAX_CHARS: usize = 8_000;
 
 /// 方案 B 按需点读（2026-08-19 黑板缓存成本设计 §4.5）：结果栏单条 receipt
-/// 的完整内容——固定形态行 + `response=<JSON 原文>`（成功）/ `error=<JSON
-/// 原文>`（失败，含 message/upstream，此前模型从未见过这两项）。整体超
+/// 的完整内容——固定形态行 + `response=<JSON 完整内容>`（成功）/ `error=<JSON
+/// 完整内容>`（失败，含 message/upstream，此前模型从未见过这两项）。内容为
+/// 存储结构化值的重序列化（键/值/嵌套完整，非字节级原文——键序/空白可能
+/// 规范化，2026-08-19 全面审查 O3 登记）。整体超
 /// `RECEIPT_DETAIL_MAX_CHARS` 按字符截断 detail + 「…」+ 指针行（完整内容
 /// 见存档 epoch-N.json / TraceStore trace_id=…）；合法但未找到 = 显式
 /// 「not found」+ 提示旧 epoch 归档（live 板仅保留最近 50 条）。
@@ -513,8 +516,11 @@ fn render_receipt_point_read(actions: &ActionBoard, receipt_id: &str, plan_epoch
     );
     // 截断 detail 使整体（头行 + 截断 detail + 「…」 + 指针行）≤ 上限；截断
     // 复用 summary.rs truncate_chars 口径（上限内自动以「…」结尾）。
+    // 尾部记账：detail 之后只追加 '\n' + 指针行（「…」已计入 truncate_chars
+    // 输出的 detail_budget 内，不另行占位）——整体 ≤ 8_000（2026-08-19
+    // 全面审查 N1 修正注释，数学口径不变）。
     let head_chars = head.chars().count() + 1; // 头行 + '\n'
-    let tail_chars = 2 + pointer.chars().count(); // '\n' + 「…」 + '\n' + 指针行
+    let tail_chars = 1 + pointer.chars().count(); // '\n' + 指针行
     let detail_budget = RECEIPT_DETAIL_MAX_CHARS
         .saturating_sub(head_chars)
         .saturating_sub(tail_chars)
