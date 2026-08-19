@@ -535,6 +535,28 @@
   计数：S3/S4 验证闭环 **29 → 28**。登记于 ADR-0010 §14.33 第 3 项 /
   [设计 §6/§9](OUTPUT_DEGENERATION_GUARD_DESIGN_2026-08-19.md) /
   CLI_PROJECT_INDEX / TODO P0-0d。
+- **2026-08-20 换题复验（gpt2-codegolf）+ 流式重试节奏设计定稿（用户
+  裁决：重试间隔缩短——idle 无数据判定 5s 一轮、10 次上限（总 50s
+  窗口），zero-chunk 重试窗口同步 50s；先设计、不动作）**：P0-0d 闭环
+  后按用户指示换题复验稳定性（gpt2-codegolf，历史 7 次失败、build/run
+  型需读约 500MB 权重），三轮运行（00-22-19 / 00-24-29 / 00-41-54）：
+  第一轮首请求 20s idle → 90s 内连接中断 → zero-chunk 重试 2 次后
+  **32s 窗口耗尽**（瞬时连接错误）；第二/三轮首轮 request→model_output
+  约 10.5/10.6 分钟（`AgentTimeoutError` 正常收尾），有效工作时间约
+  3 分钟、8 请求、命中率 85.19%（样本不足非机制退化；三轮零 400、无
+  退化中断、ACAF 票据全过）。**环境排查结论=容器/网络/API 均正常**
+  （容器 TTFB 0.38s、宿主机流式 0.19s、带 tools 大请求 60–80s 完整流完、
+  对照昨天 make-doom 首轮 8.3s；差异在 DeepSeek 端首轮生成慢 + 一次
+  瞬时连接错误，非机制退化）。**定案**：`stream_idle_warn` 20s→5s、
+  `stream_idle_timeout` 90s→50s（=5s×10 轮）、`request_retry_window`
+  32s→50s（zero-chunk 重试窗口同步；非流式 create 退避窗口同步放宽）、
+  `request_max_retries` 10 次不变；idle 只看完全无数据（慢速 reasoning
+  流不误杀）、重试仍指数退避、退化中断不重试纪律不变、无新增旋钮、
+  retry 参数参与请求头指纹（部署后首次请求一次性指纹变化，既有纪律）。
+  实施路由 S1 代码 → S2 测试 → S3 重建 → S4 复验（≥90%、无 400、无
+  退化中断、首轮不再 10 分钟级长等）；设计轮不动计数（28）。登记于
+  ADR-0010 §14.34（v1.34）/ [设计](STREAM_RETRY_RHYTHM_DESIGN_2026-08-20.md)
+  / CLI_PROJECT_INDEX / TODO P0-0d。
 
 ### 0. 前置收尾（提交前需用户确认）
 

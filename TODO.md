@@ -522,10 +522,49 @@
 > 比较），orz-host 单测 221 通过 / fmt 干净 / clippy 无新增；端到端探针
 > 确认模型按指针 read_file 三次成功（1200 行完整取回）。计数：验证闭环
 > 29 → 28。
+> **2026-08-20 换题复验（gpt2-codegolf）+ 流式重试节奏设计定稿（用户
+> 裁决：先设计、不动作）**：P0-0d 闭环后按用户指示换题复验稳定性——
+> gpt2-codegolf（历史 7 次失败、需读约 500MB GPT-2 权重、写 <5000 字节
+> C 程序）三轮运行：第一轮瞬时连接错误（20s idle → 90s 内中断 →
+> zero-chunk 重试 2 次后 32s 窗口耗尽）；第二/三轮首轮 request→
+> model_output 约 10.5/10.6 分钟（AgentTimeoutError 正常收尾）、有效
+> 工作时间约 3 分钟、8 请求、命中率 85.19%（样本不足非机制退化；零
+> 400、无退化中断、ACAF 全过）。环境排查=容器/网络/API 均正常（对照
+> 昨天 make-doom 首轮 8.3s；差异在 DeepSeek 端首轮生成慢 + 瞬时连接
+> 错误）。**定案（用户裁决：重试间隔缩短）**：`stream_idle_warn`
+> 20s→5s、`stream_idle_timeout` 90s→50s（=5s×10 轮）、
+> `request_retry_window` 32s→50s、`request_max_retries` 10 次不变；
+> idle 只看完全无数据（慢速 reasoning 流不误杀）、重试仍指数退避、
+> 退化中断不重试纪律不变、无新增旋钮；实施路由 S1 代码 → S2 测试 →
+> S3 重建 → S4 复验（≥90%、无 400、无退化中断、首轮不再 10 分钟级
+> 长等）；设计轮不动计数（28）。登记于 ADR-0010 §14.34 /
+> STREAM_RETRY_RHYTHM_DESIGN_2026-08-20 / BACKLOG 0d /
+> CLI_PROJECT_INDEX。
 > [x] S1 代码
 > [x] S2 测试（含审查处理补项）
 > [x] S3 重建（Linux musl，ORZ-BUILD-MOUNT-001 契约）
 > [x] S4 复验（无退化中断、无 400、命中率 ≥90%、补读路径可用）
+
+### P0-0d 后续：STREAM-RETRY-RHYTHM（P0 派生；2026-08-20 设计定稿，
+待实施）
+
+> 入口：[设计](docs/STREAM_RETRY_RHYTHM_DESIGN_2026-08-20.md)；
+> ADR-0010 §14.34（v1.34）；BACKLOG 0d。
+> 来源：P0-0d 换题复验（gpt2-codegolf）——第一轮瞬时连接错误在 32s
+> 窗口内仅重试 2 次即放弃；第二/三轮首轮请求约 10 分钟（DeepSeek 端
+> 首轮生成慢，idle 20s/90s 判定粒度粗）；环境排查确认容器/网络/API
+> 均正常。
+> 定案（用户裁决）：idle 无数据判定 5s 一轮、10 次上限（总 50s 窗口）
+> ——`stream_idle_warn` 20s→5s、`stream_idle_timeout` 90s→50s、
+> `request_retry_window` 32s→50s、`request_max_retries` 10 次不变；
+> idle 只看完全无数据、重试仍指数退避、退化中断不重试纪律不变。
+> 实施路由：S1 代码 → S2 测试 → S3 重建 → S4 复验（≥90%、无 400、
+> 无退化中断、首轮不再 10 分钟级长等）。设计轮不动计数（28）。
+
+- [ ] S1 代码（RetryPolicy 默认值三参数修订 + 注释同步）
+- [ ] S2 测试（默认值/指纹断言 + 既有策略测试核对）
+- [ ] S3 重建（Linux musl，ORZ-BUILD-MOUNT-001 契约）
+- [ ] S4 复验（≥90%、无 400、无退化中断、首轮不再 10 分钟级长等）
 
 ### P0-B FUS-RETRIEVAL-MECH（`implemented`；批次 1-6 已全部闭合，2026-08-14，保留供核对）
 
