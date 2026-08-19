@@ -7,8 +7,10 @@ pub use orz_version::VERSION;
 pub const DEFAULT_TOOL_OUTPUT_BYTES: usize = 40_000;
 
 /// Default maximum output size (in characters) for bash/terminal tool results.
-/// 20 000 chars ≈ 5 000 tokens. Matches the common `SHELL_CHAR_HARD_LIMIT`.
-pub const DEFAULT_TOOL_OUTPUT_CHARS: usize = 20_000;
+/// 8 000 chars ≈ 2 000 tokens (OUTPUT-DEGENERATION-GUARD 2026-08-19,
+/// ADR-0010 §14.33: 终端工具输出统一限值 20K → 8K——「只做一个限值」；
+/// 超限截断末尾机械附加 read_file 补读闭环指针，8K 以内正常结果完整可见).
+pub const DEFAULT_TOOL_OUTPUT_CHARS: usize = 8_000;
 
 /// MCP inline tool-result cap (`MCP_MAX_OUTPUT_BYTES` and host/env helpers).
 pub use util::mcp_truncate::{

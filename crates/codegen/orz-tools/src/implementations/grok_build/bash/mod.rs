@@ -36,7 +36,7 @@ use crate::notification::types::{
     ToolNotificationHandle,
 };
 use crate::types::definition::ToolDefinition;
-use crate::types::output::{BackgroundTaskStarted, BashOutput};
+use crate::types::output::{BackgroundTaskStarted, BashOutput, truncation_read_back_pointer};
 use crate::types::requirements::{Expr, ToolParamsRequirement, ToolRequirement};
 #[allow(unused_imports)]
 use crate::types::resources::{
@@ -157,7 +157,8 @@ pub struct BashParams {
     /// behavior with a 5-minute foreground default.
     #[serde(default)]
     pub max_timeout_secs: Option<f64>,
-    /// Max output chars. None → DEFAULT_TOOL_OUTPUT_CHARS (20k).
+    /// Max output chars. None → DEFAULT_TOOL_OUTPUT_CHARS (8k,
+    /// OUTPUT-DEGENERATION-GUARD 2026-08-19, ADR-0010 §14.33).
     pub output_byte_limit: Option<usize>,
     /// Command prefix to prepend to all bash commands.
     pub cmd_prefix: Option<String>,
@@ -406,8 +407,8 @@ fn annotations(bash: &BashOutput) -> String {
         let shown = format_bytes(bash.output.len());
         let total = format_bytes(bash.total_bytes);
         s.push_str(&format!(
-            " [truncated: showing first/last {} of {} - full output at: {}]",
-            shown, total, bash.output_file
+            " [truncated: showing first/last {} of {}]",
+            shown, total
         ));
     }
     if let Some(signal) = &bash.signal {
@@ -497,7 +498,17 @@ pub(crate) fn format_default_prompt(bash: &BashOutput, append_noop_reminder: boo
             Some(reason) => format!("exit: killed ({}){}", reason, annotations(bash)),
             None => format!("exit: {}{}", bash.exit_code, annotations(bash)),
         };
-        let prompt = format!("{}\n{}", header, output_str);
+        // OUTPUT-DEGENERATION-GUARD (2026-08-19, ADR-0010 §14.33 / 设计
+        // §3.1/§3.2): 截断末尾机械附加补读闭环指针（非模型生成）——
+        // 完整内容见落盘路径，请使用 read_file（offset/limit 分页）；
+        // 路径经 display 规范化（工作区相对路径优先）。
+        let mut prompt = format!("{}\n{}", header, output_str);
+        if bash.truncated {
+            prompt.push_str(&format!(
+                "\n\n{}",
+                truncation_read_back_pointer(&bash.output_file, &bash.current_dir)
+            ));
+        }
         if append_noop_reminder && bash.signal.is_none() && is_noop_command(&bash.command) {
             format!("{}\n\n{}", prompt.trim_end(), NOOP_END_TURN_REMINDER)
         } else {
@@ -3611,6 +3622,33 @@ mod tests {
         assert!(!bash.output_for_prompt.contains("[signal=timeout]"));
         assert!(!bash.output_for_prompt.contains("[timeout]"));
         assert!(!bash.output_for_prompt.starts_with("exit: -1"));
+    }
+
+    /// OUTPUT-DEGENERATION-GUARD (2026-08-19, ADR-0010 §14.33 / 设计 §3.1/
+    /// §3.2)：终端截断统一格式——头部 `[truncated: showing first/last X of Y]`
+    /// + 末尾机械附加补读闭环指针（完整内容见落盘路径 + read_file 指引，
+    /// 路径经 display 规范化）。
+    #[test]
+    fn default_prompt_truncated_appends_read_back_pointer() {
+        let mut bash = make_bash_output(0, "partial output\n");
+        bash.truncated = true;
+        bash.total_bytes = 50_000;
+        bash.output_file = "/tmp/.gsa/session/terminal/ord-1.log".into();
+        bash.current_dir = "/tmp".into();
+        bash.output_for_prompt = format_default_prompt(&bash, /* append_noop_reminder */ true);
+        assert!(
+            bash.output_for_prompt
+                .contains("[truncated: showing first/last"),
+            "{}",
+            bash.output_for_prompt
+        );
+        assert!(
+            bash.output_for_prompt.ends_with(
+                "完整内容见 .gsa/session/terminal/ord-1.log，请使用 read_file 读取（大文件用 offset/limit 分页）"
+            ),
+            "{}",
+            bash.output_for_prompt
+        );
     }
 
     #[test]

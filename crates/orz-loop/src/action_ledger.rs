@@ -751,9 +751,13 @@ fn truncate_bridge_to_budget(bridge: &mut [Message], source: &[Message], budget_
     }
 }
 
-/// 工具回复截断形态：行首「…（前略）」+ 保留尾部（`tail_chars` 字符）+
-/// 指针行「完整内容见 日志/对话存档 sha256:<hex>」——与台账行 `结果=sha256:`
-/// 同口径；完整内容不丢失（messages/日志/存档全量保留，审计双轨不变）。
+/// 工具回复截断形态：行首「…（前略）」+ 保留尾部（`tail_chars` 字符）+ 指针
+/// 行。OUTPUT-DEGENERATION-GUARD (2026-08-19, ADR-0010 §14.33 / 设计 §3.2)：
+/// 源 content 已含工具结果自身落盘指针（终端截断指针行「完整内容见
+/// <路径>，请使用 read_file」）时，保留尾部即天然留存该行（桥 8K 信息损失
+/// 可恢复），不再追加兜底；仅当源 content 无落盘指针（未截断过的工具结果）
+/// 才生成「完整内容见 日志/对话存档 sha256:<hex>」兜底（与台账行
+/// `结果=sha256:` 同口径；messages/日志/存档全量保留，审计双轨不变）。
 fn truncate_tool_reply_tail(content: &str, tail_chars: usize) -> String {
     let tail: String = content
         .chars()
@@ -763,10 +767,23 @@ fn truncate_tool_reply_tail(content: &str, tail_chars: usize) -> String {
         .into_iter()
         .rev()
         .collect();
-    format!(
-        "{BRIDGE_TOOL_REPLY_OMIT_PREFIX}{tail}\n完整内容见 日志/对话存档 sha256:{}",
-        sha256_hex(content.as_bytes())
-    )
+    if has_tool_result_read_back_pointer(content) {
+        format!("{BRIDGE_TOOL_REPLY_OMIT_PREFIX}{tail}")
+    } else {
+        format!(
+            "{BRIDGE_TOOL_REPLY_OMIT_PREFIX}{tail}\n完整内容见 日志/对话存档 sha256:{}",
+            sha256_hex(content.as_bytes())
+        )
+    }
+}
+
+/// OUTPUT-DEGENERATION-GUARD (2026-08-19, ADR-0010 §14.33 / 设计 §3.2):
+/// 工具结果自身落盘指针行的机械判定——终端截断统一格式为
+/// 「完整内容见 <路径>，请使用 read_file 读取（大文件用 offset/limit 分页）」
+/// （types::output::truncation_read_back_pointer）。两个标志同时出现才算
+/// 命中，避免与存档/TraceStore 指针（「完整内容见存档（epoch-…）」）混淆。
+fn has_tool_result_read_back_pointer(content: &str) -> bool {
+    content.contains("完整内容见") && content.contains("请使用 read_file")
 }
 
 /// 折叠态下的安全保留起点：`cut` 若落在某个工具轮的中间（尾部以孤儿
@@ -2105,6 +2122,64 @@ mod tests {
             .collect();
         assert!(declared.iter().all(|d| replied.contains(&d.as_str())));
         assert_eq!(messages[2].content, "原始输出".repeat(5_000));
+    }
+
+    /// OUTPUT-DEGENERATION-GUARD (2026-08-19, ADR-0010 §14.33 / 设计 §3.2):
+    /// 源工具回复已含终端截断的落盘指针（「完整内容见 <路径>，请使用
+    /// read_file」）时，桥截断保留尾部即天然留存该行——不再追加 sha256
+    /// 兜底（信息损失可经 read_file 恢复）。
+    #[test]
+    fn bridge_truncation_keeps_tool_result_read_back_pointer_without_sha256() {
+        let mut messages = vec![msg(Role::User, "任务")];
+        messages.push(Message {
+            role: Role::Assistant,
+            content: String::new(),
+            tool_call_id: None,
+            tool_calls: vec![ToolCall {
+                name: "run_terminal_cmd".into(),
+                arguments: serde_json::json!({"command": "cat big"}),
+                call_id: "c1".into(),
+            }],
+            reasoning_content: None,
+        });
+        // 模拟终端 8K 截断后的工具结果：长输出 + 末尾机械指针行。
+        messages.push(Message {
+            role: Role::Tool,
+            content: format!(
+                "{}完整内容见 .gsa/session/terminal/ord-1.log，请使用 read_file 读取（大文件用 offset/limit 分页）",
+                "大段输出".repeat(3_000)
+            ),
+            tool_call_id: Some("c1".to_string()),
+            tool_calls: Vec::new(),
+            reasoning_content: None,
+        });
+        let fold = LedgerFoldState {
+            fold_start: Some(1),
+            fold_cut: Some(1),
+            folded_ledger: Some("ledger".to_string()),
+            bridge_end: Some(messages.len()),
+        };
+        let view = build_request_view(&messages, &fold, 200);
+        let tool = view.iter().find(|m| m.role == Role::Tool).unwrap();
+        assert!(tool.content.starts_with("…（前略）\n"), "{tool:?}");
+        assert!(
+            tool.content.contains(".gsa/session/terminal/ord-1.log"),
+            "尾部必须保留工具结果自身落盘指针: {tool:?}"
+        );
+        assert!(
+            tool.content
+                .ends_with("请使用 read_file 读取（大文件用 offset/limit 分页）"),
+            "read_file 指引必须留存: {tool:?}"
+        );
+        assert!(
+            !tool.content.contains("sha256:"),
+            "已有落盘指针时不得追加 sha256 兜底: {tool:?}"
+        );
+        let bridge_estimate = crate::controller::estimate_messages_tokens(&view[2..]);
+        assert!(
+            bridge_estimate <= 200,
+            "桥估计必须落入预算: {bridge_estimate}"
+        );
     }
 
     #[test]

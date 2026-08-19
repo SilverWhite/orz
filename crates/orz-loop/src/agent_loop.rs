@@ -19,6 +19,7 @@ use std::path::Path;
 use std::sync::{Arc, Mutex};
 
 use orz_assurance::journal::chain::{payload_hash, sha256_hex};
+use orz_assurance::orientation::stagnation::{StagnationInput, evaluate_runtime_stagnation_guard};
 use orz_assurance::{EventType, GateDecision};
 
 use crate::agents::SubagentRole;
@@ -46,7 +47,10 @@ use crate::tool::ToolDispatcher;
 /// request-level value is min-capped by it — equal today, so the full
 /// budget is available (D-6: a thinking subagent with a 1024-token cap
 /// would spend everything on reasoning and die before producing output).
-pub const REQUEST_MAX_TOKENS: u32 = 160_000;
+/// OUTPUT-DEGENERATION-GUARD (2026-08-19, ADR-0010 §14.33): 160K → 32K
+/// （止损——退化复读 201K 字符 ≈ 10 万 token 由 160K max_tokens 放大；
+/// 正常轮次 reasoning p95 5.2K + completion max 23.7K，32K 覆盖 99%+）。
+pub const REQUEST_MAX_TOKENS: u32 = 32_000;
 
 /// One model generation round — the uniform round entry every agent
 /// implements (ADR-0010 §3.4: identical model request shape).
@@ -1258,8 +1262,9 @@ pub(crate) async fn run_agent_loop(
         } else {
             system
         };
-        // D-6 (FIX_PLAN 2026-08-06): subagents get the full 160K budget
-        // too (the main agent's request-level cap — §3.4.2 same defaults).
+        // D-6 (FIX_PLAN 2026-08-06): subagents get the full 32K budget too
+        // (the main agent's request-level cap — §3.4.2 same defaults;
+        // OUTPUT-DEGENERATION-GUARD 2026-08-19: 160K → 32K).
         // Review F3 (2026-08-10): ONE constant for both lanes — the three
         // agents must never carry their own literals.
         let max_tokens = match &profile.system_kind {
@@ -1423,6 +1428,40 @@ pub(crate) async fn run_agent_loop(
                             }),
                         )
                         .await?;
+                }
+                // OUTPUT-DEGENERATION-GUARD (2026-08-19, ADR-0010 §14.33 /
+                // 设计 §3.3): 失败轮次（run_failed 路径）补充评估一次已输出
+                // 文本的重复信号——审计留痕（tracing），不改变终止语义
+                // （停滞守卫仍是跨轮事后评估；实时检测管生成期止损）。
+                if !partial_text.is_empty() {
+                    let partial = partial_text.concat();
+                    if let Ok((_, metrics)) = evaluate_runtime_stagnation_guard(&StagnationInput {
+                        public_outputs: vec![partial.clone()],
+                        ..Default::default()
+                    }) && !metrics.reason_codes.is_empty()
+                    {
+                        tracing::warn!(
+                            text_chars = partial.chars().count(),
+                            max_consecutive = metrics.max_consecutive_repeated_content,
+                            max_ngram_repeat = metrics.max_ngram_repeat,
+                            reason_codes = ?metrics.reason_codes,
+                            "failed model round shows repetition signals (audit-only)"
+                        );
+                    }
+                }
+                // OUTPUT-DEGENERATION-GUARD (2026-08-19, ADR-0010 §14.33):
+                // 退化中断分流——达到 DEGENERATION_LIMIT（会话级连续）→
+                // `AgentLoopError::Degeneration`（run 层记 run_invalidated，
+                // 计入 stagnation 同类终止态）；未达上限 → run_failed 同路径。
+                if let GatewayError::StreamInterrupted { detail, .. } = &other
+                    && crate::gateway::transport::is_degeneration_detail(detail)
+                {
+                    if detail.starts_with(crate::gateway::transport::DEGENERATION_LIMIT_PREFIX) {
+                        return Err(AgentLoopError::Degeneration(detail.clone()));
+                    }
+                    return Err(AgentLoopError::Model(format!(
+                        "stream degeneration guard: {detail}"
+                    )));
                 }
                 return Err(AgentLoopError::Model(other.to_string()));
             }

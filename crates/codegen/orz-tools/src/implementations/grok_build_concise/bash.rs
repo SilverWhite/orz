@@ -6,6 +6,7 @@ use crate::implementations::grok_build::bash::{
     BashTool, BashToolInput, BashToolOutput, KillReason,
 };
 use crate::types::output::BashOutput;
+use crate::types::output::truncation_read_back_pointer;
 use crate::types::requirements::{Expr, ToolParamsRequirement, ToolRequirement};
 use crate::types::tool::{ToolKind, ToolNamespace};
 
@@ -17,8 +18,8 @@ fn annotations(bash: &BashOutput) -> String {
         let shown = format_bytes(bash.output.len());
         let total = format_bytes(bash.total_bytes);
         s.push_str(&format!(
-            " [truncated: showing last {} of {} - full output at: {}]",
-            shown, total, bash.output_file
+            " [truncated: showing last {} of {}]",
+            shown, total
         ));
     }
     if let Some(signal) = &bash.signal {
@@ -47,7 +48,7 @@ fn format_concise_foreground_prompt(bash: &BashOutput) -> String {
         Some(reason) => format!("Exit code: killed ({}){}", reason, annotations(bash)),
         None => format!("Exit code: {}{}", bash.exit_code, annotations(bash)),
     };
-    format!(
+    let mut prompt = format!(
         "{}\n\n\
          Command output:\n\n\
          ```\n{}\n```\n\n\
@@ -56,7 +57,16 @@ fn format_concise_foreground_prompt(bash: &BashOutput) -> String {
          you will be using a new shell session.\n\n\
          On the next terminal tool call, the directory of the shell will be {}.",
         header, output_str, bash.current_dir
-    )
+    );
+    // OUTPUT-DEGENERATION-GUARD (2026-08-19, ADR-0010 §14.33 / 设计 §3.2):
+    // 截断末尾机械附加补读闭环指针（与 DEFAULT 面同格式）。
+    if bash.truncated {
+        prompt.push_str(&format!(
+            "\n\n{}",
+            truncation_read_back_pointer(&bash.output_file, &bash.current_dir)
+        ));
+    }
+    prompt
 }
 
 /// CONCISE backgrounded format: same as DEFAULT backgrounded (code-fenced partial output).
@@ -230,6 +240,25 @@ mod tests {
         assert!(!prompt.contains("[signal=timeout]"));
         assert!(!prompt.contains("[timeout]"));
         assert!(!prompt.starts_with("Exit code: -1"));
+    }
+
+    /// OUTPUT-DEGENERATION-GUARD (2026-08-19, ADR-0010 §14.33 / 设计 §3.2):
+    /// CONCISE 面截断同样机械附加补读闭环指针（与 DEFAULT 面同格式）。
+    #[test]
+    fn concise_prompt_truncated_appends_read_back_pointer() {
+        let mut bash = make_bash(0, "partial\n");
+        bash.truncated = true;
+        bash.total_bytes = 50_000;
+        bash.output_file = "/tmp/.gsa/session/terminal/ord-2.log".into();
+        bash.current_dir = "/tmp".into();
+        let prompt = format_concise_foreground_prompt(&bash);
+        assert!(prompt.contains("[truncated: showing last"), "{prompt}");
+        assert!(
+            prompt.ends_with(
+                "完整内容见 .gsa/session/terminal/ord-2.log，请使用 read_file 读取（大文件用 offset/limit 分页）"
+            ),
+            "{prompt}"
+        );
     }
 
     #[test]

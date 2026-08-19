@@ -14,7 +14,8 @@
 use std::path::{Path, PathBuf};
 
 use crate::blackboard::{
-    ActionBoard, EditRecord, EpochSnapshot, ExecSection, PlanSection, ToolActionRecord,
+    ActionBoard, ActionResult, EditRecord, EpochSnapshot, ExecSection, PlanSection,
+    ToolActionRecord,
 };
 // 2026-08-19 黑板缓存成本设计（ADR-0010 §14.31）：actions 结果板固定形态行
 // 与 exec 行截断复用 summary.rs 同口径辅助（D1=(c) 已确立的机械语义）。
@@ -510,10 +511,22 @@ fn render_receipt_point_read(actions: &ActionBoard, receipt_id: &str, plan_epoch
     if body.chars().count() <= RECEIPT_DETAIL_MAX_CHARS {
         return body;
     }
-    let pointer = format!(
-        "完整内容见存档（epoch-{plan_epoch}.json）/ TraceStore trace_id={}",
-        result.trace_id
-    );
+    // OUTPUT-DEGENERATION-GUARD (2026-08-19, ADR-0010 §14.33 / 设计 §3.2):
+    // 点读指针改向——receipt 为 run_terminal 结果（响应信封
+    // `{"output": string}`，console.rs text_output_response_schema 同构）时
+    // 优先指向落盘文件 `.gsa/session/terminal/<order_id>.log`（发放时
+    // tool_call_id = order_id 小写，bash 输出按 call_id 落盘）并附 read_file
+    // 指引；非终端 receipt（无落盘文件）保留存档/TraceStore 指针兜底
+    // （顺带闭合 F1：TraceStore 不在模型直接工具面）。
+    let pointer = match receipt_terminal_log_path(result) {
+        Some(path) => {
+            format!("完整内容见 {path}，请使用 read_file 读取（大文件用 offset/limit 分页）")
+        }
+        None => format!(
+            "完整内容见存档（epoch-{plan_epoch}.json）/ TraceStore trace_id={}",
+            result.trace_id
+        ),
+    };
     // 截断 detail 使整体（头行 + 截断 detail + 「…」 + 指针行）≤ 上限；截断
     // 复用 summary.rs truncate_chars 口径（上限内自动以「…」结尾）。
     // 尾部记账：detail 之后只追加 '\n' + 指针行（「…」已计入 truncate_chars
@@ -527,6 +540,22 @@ fn render_receipt_point_read(actions: &ActionBoard, receipt_id: &str, plan_epoch
         .max(1);
     let truncated = truncate_chars(&detail, detail_budget);
     format!("{head}\n{truncated}\n{pointer}")
+}
+
+/// OUTPUT-DEGENERATION-GUARD (2026-08-19, ADR-0010 §14.33 / 设计 §3.2):
+/// receipt 是否为 run_terminal 结果的机械判定——响应信封
+/// `{"output": <string>}`（console `workspace.run_terminal` 的
+/// `text_output_response_schema` 同构）。命中返回落盘文件相对路径。
+fn receipt_terminal_log_path(result: &ActionResult) -> Option<String> {
+    let response = result.response.as_ref()?;
+    let obj = response.as_object()?;
+    match obj.get("output") {
+        Some(serde_json::Value::String(_)) => Some(format!(
+            ".gsa/session/terminal/{}.log",
+            result.order_id.to_lowercase()
+        )),
+        _ => None,
+    }
 }
 
 #[cfg(test)]
@@ -947,7 +976,10 @@ mod tests {
 
     /// 2026-08-19 黑板缓存成本设计（ADR-0010 §14.31 / §4.5，方案 B）：点读
     /// 上限 `RECEIPT_DETAIL_MAX_CHARS=8_000`——超限按字符截断 detail + 「…」
-    /// + 指针行（完整内容见存档 epoch-N.json / TraceStore trace_id=…）。
+    /// 指针行。OUTPUT-DEGENERATION-GUARD (2026-08-19, ADR-0010 §14.33 /
+    /// 设计 §3.2)：run_terminal receipt（响应信封 `{"output": string}`）
+    /// 的指针改向落盘文件 `.gsa/session/terminal/<order_id>.log` + read_file
+    /// 指引；非终端 receipt 保留存档/TraceStore 兜底。
     #[test]
     fn render_actions_receipt_point_read_truncates_at_8k_with_pointer() {
         let mut board = ActionBoard::default();
@@ -986,7 +1018,43 @@ mod tests {
         let detail_line = text.lines().nth(1).expect("detail line");
         assert!(detail_line.ends_with('…'), "{text}");
         assert!(
-            text.ends_with("完整内容见存档（epoch-7.json）/ TraceStore trace_id=t-pr-3"),
+            text.ends_with(
+                "完整内容见 .gsa/session/terminal/ord-pr-3.log，请使用 read_file 读取（大文件用 offset/limit 分页）"
+            ),
+            "{text}"
+        );
+    }
+
+    /// OUTPUT-DEGENERATION-GUARD (2026-08-19, ADR-0010 §14.33 / 设计 §3.2):
+    /// 非终端 receipt（无 `{"output": string}` 信封，如 read_file 动作）超限
+    /// 时保留存档/TraceStore 指针兜底。
+    #[test]
+    fn render_actions_receipt_point_read_non_terminal_keeps_archive_pointer() {
+        let mut board = ActionBoard::default();
+        board.push_result(ActionResult {
+            order_id: "ORD-PR-4".into(),
+            ok: true,
+            response: Some(serde_json::json!({"preview": "z".repeat(20_000)})),
+            error: None,
+            trace_id: "t-pr-4".into(),
+            timestamp: "2026-08-19T01:00:03Z".into(),
+        });
+        let plan = PlanSection {
+            plan_epoch: 8,
+            ..Default::default()
+        };
+        let text = render_section(
+            &plan,
+            &[],
+            &[],
+            &ExecSection::default(),
+            &board,
+            "actions",
+            None,
+            Some("ORD-PR-4"),
+        );
+        assert!(
+            text.ends_with("完整内容见存档（epoch-8.json）/ TraceStore trace_id=t-pr-4"),
             "{text}"
         );
     }

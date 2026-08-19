@@ -548,6 +548,34 @@ impl BashOutput {
         soft_wrap_lines(&stripped, DEFAULT_SOFT_WRAP_WIDTH)
     }
 }
+
+/// OUTPUT-DEGENERATION-GUARD (2026-08-19, ADR-0010 §14.33 / 设计 §3.1/§3.2):
+/// 终端工具结果截断的统一指针块——机械附加（非模型生成），末尾必须带
+/// read_file 指引（补读闭环硬约束）。落盘路径经 [`display_output_file`]
+/// 规范化。
+pub fn truncation_read_back_pointer(output_file: &str, current_dir: &str) -> String {
+    format!(
+        "完整内容见 {}，请使用 read_file 读取（大文件用 offset/limit 分页）",
+        display_output_file(output_file, current_dir)
+    )
+}
+
+/// 落盘路径 display 规范化：`output_file` 落在 `current_dir`（工作区/当前
+/// shell 目录）之下时返回工作区相对路径（如
+/// `.gsa/session/terminal/<order_id>.log`），否则保留原样；分隔符统一为
+/// `/`（模型可读性）。read_file 支持相对/绝对路径与 offset/limit 分页。
+pub fn display_output_file(output_file: &str, current_dir: &str) -> String {
+    let normalized = output_file.replace('\\', "/");
+    let cwd = current_dir.replace('\\', "/");
+    if let Some(rel) = normalized
+        .strip_prefix(cwd.as_str())
+        .and_then(|r| r.strip_prefix('/'))
+        && !rel.is_empty()
+    {
+        return rel.to_string();
+    }
+    normalized
+}
 /// Output when a background task is started (matches the vendor-compat XML format)
 #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct BackgroundTaskStarted {
@@ -1383,8 +1411,8 @@ impl xai_tool_runtime::ToolOutput for BashOutput {
             let shown = crate::util::truncate::format_bytes(self.output.len());
             let total = crate::util::truncate::format_bytes(self.total_bytes);
             stdout.push_str(&format!(
-                "\n[truncated: showing first/last {shown} of {total} - full output at: {}]",
-                self.output_file
+                "\n[truncated: showing first/last {shown} of {total}]\n{}",
+                truncation_read_back_pointer(&self.output_file, &self.current_dir)
             ));
             extra.insert("truncated".into(), serde_json::Value::Bool(true));
             extra.insert(
@@ -2789,7 +2817,12 @@ mod tests {
         let stdout = &result.code_execution_result.as_ref().unwrap().stdout;
         assert!(stdout.starts_with("head...tail"));
         assert!(stdout.contains("[truncated:"));
-        assert!(stdout.contains("full output at: /tmp/out.log"));
+        assert!(
+            stdout.contains(
+                "完整内容见 out.log，请使用 read_file 读取（大文件用 offset/limit 分页）"
+            ),
+            "truncation must end with the read_file back-read pointer, got: {stdout}"
+        );
         assert_eq!(
             result.extra.get("truncated"),
             Some(&serde_json::Value::Bool(true))

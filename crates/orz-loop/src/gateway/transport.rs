@@ -10,10 +10,11 @@
 //! (recorded D3-2, 2026-08-06 design review).
 //!
 //! Thinking (IP1 → D-6, FIX_PLAN 2026-08-06): the restored max-config is
-//! `thinking: {type: "enabled"}` + `reasoning_effort: "max"` + 160K budget
-//! (default); `ThinkingMode::Disabled` keeps the P2-era mitigation (all
-//! output to `content`) for parity/tests/benchmarks. `ModelRequest` carries
-//! no thinking knob — `ModelConfig::thinking` is the single switch.
+//! `thinking: {type: "enabled"}` + `reasoning_effort: "max"` + 32K single-round
+//! output budget (OUTPUT-DEGENERATION-GUARD 2026-08-19, ADR-0010 §14.33;
+//! previously 160K); `ThinkingMode::Disabled` keeps the P2-era mitigation
+//! (all output to `content`) for parity/tests/benchmarks. `ModelRequest`
+//! carries no thinking knob — `ModelConfig::thinking` is the single switch.
 //!
 //! Live tests are gated behind `ORZ_TEST_LIVE=1` so the offline test suite
 //! stays deterministic (FakeProvider is the acceptance path).
@@ -39,7 +40,9 @@ use async_trait::async_trait;
 use backoff::backoff::Backoff;
 use futures::StreamExt;
 use serde_json::Value;
+use std::collections::{HashMap, VecDeque};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU32, Ordering};
 use tokio_util::sync::CancellationToken;
 
 use super::model::{
@@ -62,6 +65,113 @@ pub fn main_agent_model() -> String {
     std::env::var("ORZ_MAIN_AGENT_MODEL").unwrap_or_else(|_| MAIN_AGENT_MODEL.to_string())
 }
 
+// ───────────────────────────────────────────────────────────────────────────
+// OUTPUT-DEGENERATION-GUARD (2026-08-19, ADR-0010 §14.33 / 设计 §3.3)
+// ───────────────────────────────────────────────────────────────────────────
+
+/// 连续相同 content delta 触发阈值（N=5；设计 §3.3 检测算法，保守初值）。
+pub const DEGENERATION_CONSECUTIVE_DELTAS: usize = 5;
+
+/// 重复率检测的累计 token 门槛——累计输出 ≥ 1K token 后才检查最近 1K token
+/// 窗口（设计 §3.3；复读诱因=超长输出，窗口足够小前不误报）。
+pub const DEGENERATION_MIN_TOKENS: usize = 1_000;
+
+/// 最近窗口内 3-gram 重复率阈值（>60% 触发；设计 §3.3）。
+pub const DEGENERATION_NGRAM_REPEAT_RATIO: f64 = 0.60;
+
+/// 同一会话连续退化中断上限（默认 3；设计 §3.3 防循环——第 3 次起以
+/// `degeneration_limit_reached` 标记，run 层据此记 `run_invalidated`，
+/// 计入 stagnation 同类终止态）。
+pub const DEGENERATION_LIMIT: u32 = 3;
+
+/// 退化中断 detail 前缀（命中但未达上限——run 走 run_failed 同路径）。
+pub const DEGENERATION_DETAIL_PREFIX: &str = "degeneration_detected:";
+
+/// 退化中断达上限 detail 前缀（run 层映射为 `run_invalidated`）。
+pub const DEGENERATION_LIMIT_PREFIX: &str = "degeneration_limit_reached:";
+
+/// 生成期实时复读检测器（设计 §3.3，第一层治本）：喂入 content delta，
+/// 命中任一阈值后持续返回触发原因。纯机械、零模型调用；token 口径复用
+/// `orz_assurance::orientation::stagnation`（Unicode 词 + CJK 正则），
+/// 轻量实现（窗口 ≤1K token 的 3-gram 计数）。
+#[derive(Debug, Default)]
+struct DegenerationDetector {
+    /// 最近 N 个 content delta（连续相同检测）。
+    recent_deltas: VecDeque<String>,
+    /// 累计输出 token 数（重复率检测的启用门槛）。
+    total_tokens: usize,
+    /// 最近 1K token 的滑动窗口。
+    window_tokens: Vec<String>,
+    /// 触发原因（触发后恒定，避免同流重复报错）。
+    trip: Option<String>,
+}
+
+impl DegenerationDetector {
+    fn feed(&mut self, delta: &str) {
+        if self.trip.is_some() || delta.is_empty() {
+            return;
+        }
+        // ① 连续相同块：最近连续 N 个 content delta 完全相同 → 触发。
+        self.recent_deltas.push_back(delta.to_string());
+        if self.recent_deltas.len() > DEGENERATION_CONSECUTIVE_DELTAS {
+            self.recent_deltas.pop_front();
+        }
+        if self.recent_deltas.len() == DEGENERATION_CONSECUTIVE_DELTAS && {
+            let last = self.recent_deltas.back().expect("len == N");
+            self.recent_deltas.iter().all(|d| d == last)
+        } {
+            self.trip = Some(format!(
+                "{DEGENERATION_DETAIL_PREFIX} {n} identical content deltas in a row",
+                n = DEGENERATION_CONSECUTIVE_DELTAS
+            ));
+            return;
+        }
+        // ② 重复率：累计 ≥ 1K token 且最近 1K token 内 3-gram 重复率 > 60%
+        //    → 触发（复用 stagnation 的 n-gram 思路，轻量实现）。
+        let tokens = orz_assurance::orientation::stagnation::tokenize(delta);
+        self.total_tokens += tokens.len();
+        self.window_tokens.extend(tokens);
+        let overflow = self
+            .window_tokens
+            .len()
+            .saturating_sub(DEGENERATION_MIN_TOKENS);
+        if overflow > 0 {
+            self.window_tokens.drain(..overflow);
+        }
+        if self.total_tokens >= DEGENERATION_MIN_TOKENS {
+            let total_ngrams = self.window_tokens.len().saturating_sub(2);
+            if total_ngrams >= 1 {
+                let mut counts: HashMap<&[String], u32> = HashMap::new();
+                for index in 0..total_ngrams {
+                    *counts
+                        .entry(&self.window_tokens[index..index + 3])
+                        .or_insert(0) += 1;
+                }
+                let distinct = counts.len();
+                let duplicated = total_ngrams.saturating_sub(distinct);
+                let ratio = duplicated as f64 / total_ngrams as f64;
+                if ratio > DEGENERATION_NGRAM_REPEAT_RATIO {
+                    self.trip = Some(format!(
+                        "{DEGENERATION_DETAIL_PREFIX} 3-gram repetition ratio {ratio:.2} \
+                         in the recent {} tokens",
+                        self.window_tokens.len()
+                    ));
+                }
+            }
+        }
+    }
+
+    fn trip_reason(&self) -> Option<String> {
+        self.trip.clone()
+    }
+}
+
+/// 退化中断 detail 判定（stream_once_with_retry 据此跳过重试——已见输出，
+/// ADR-0007 纪律；run 层据此区分 run_failed / run_invalidated）。
+pub(crate) fn is_degeneration_detail(detail: &str) -> bool {
+    detail.starts_with(DEGENERATION_DETAIL_PREFIX) || detail.starts_with(DEGENERATION_LIMIT_PREFIX)
+}
+
 /// Build the production real-model gateway from the ADR-0006 credential
 /// registry (main-agent target `orz-deepseek/agent`).
 ///
@@ -82,30 +192,39 @@ pub fn real_gateway_from_credentials()
 #[derive(Debug, Clone)]
 pub struct DeepSeekTransport {
     pub config: ModelConfig,
+    /// OUTPUT-DEGENERATION-GUARD (2026-08-19, ADR-0010 §14.33)：会话级连续
+    /// 退化中断计数（Arc 共享——Clone 不复制计数；任何成功请求重置）。
+    /// 达到 `DEGENERATION_LIMIT` 后下一次退化中断带
+    /// `degeneration_limit_reached` 标记，run 层据此记 run_invalidated
+    /// （防会话级循环；设计 §3.3）。
+    degeneration_consecutive: Arc<AtomicU32>,
 }
 
 impl DeepSeekTransport {
     pub fn new(config: ModelConfig) -> Self {
-        Self { config }
+        Self {
+            config,
+            degeneration_consecutive: Arc::new(AtomicU32::new(0)),
+        }
     }
 
     /// Convenience constructor for DeepSeek V4 models.
     pub fn deepseek_v4(api_key: impl Into<String>, model_id: impl Into<String>) -> Self {
-        Self {
-            config: ModelConfig {
-                provider: "deepseek".to_string(),
-                model_id: model_id.into(),
-                api_base: DEFAULT_DEEPSEEK_API_BASE.to_string(),
-                api_key: api_key.into(),
-                // D-6: 160K total budget (128K thinking + 32K content target
-                // split; DeepSeek has no sub-budget parameter — 160K is the
-                // whole-token cap, 384K is the legal max). Calibrated by the
-                // 2026-08-07 live probe.
-                max_tokens: 160_000,
-                retry: Default::default(),
-                thinking: Default::default(),
-            },
-        }
+        Self::new(ModelConfig {
+            provider: "deepseek".to_string(),
+            model_id: model_id.into(),
+            api_base: DEFAULT_DEEPSEEK_API_BASE.to_string(),
+            api_key: api_key.into(),
+            // OUTPUT-DEGENERATION-GUARD (2026-08-19, ADR-0010 §14.33):
+            // 单轮输出上限 160K → 32K（止损；退化复读 201K 字符 ≈ 10 万
+            // token 的放大源）。正常轮次 reasoning p95 5.2K + completion
+            // max 23.7K，32K 覆盖正常分布 99%+；退化输出在 32K 截断
+            // （约 1–2 分钟流），消除 10 分钟 hang。请求头指纹含
+            // max_tokens，部署后首次请求一次性指纹变化（既有纪律）。
+            max_tokens: 32_000,
+            retry: Default::default(),
+            thinking: Default::default(),
+        })
     }
 
     fn client(&self) -> Client<OpenAIConfig> {
@@ -437,6 +556,18 @@ impl DeepSeekTransport {
                 .await
             {
                 Ok(response) => return Ok(response),
+                // OUTPUT-DEGENERATION-GUARD (2026-08-19, ADR-0010 §14.33):
+                // 退化中断绝不重试——检测时已见输出（重发会重复工具调用，
+                // ADR-0007 已见输出不重试纪律）；直接透传，attempts 保持 0。
+                Err(GatewayError::StreamInterrupted { attempts, detail })
+                    if is_degeneration_detail(&detail) =>
+                {
+                    tracing::warn!(
+                        "stream interrupted by the degeneration guard — already saw output, \
+                         not retried: {detail}"
+                    );
+                    return Err(GatewayError::StreamInterrupted { attempts, detail });
+                }
                 Err(GatewayError::StreamInterrupted { detail, .. }) => {
                     if attempts >= policy.request_max_retries {
                         tracing::warn!(
@@ -528,6 +659,10 @@ impl DeepSeekTransport {
         // included — because the provider then owns output for this request.
         let mut saw_chunk = false;
         let mut text_parts: Vec<String> = Vec::new();
+        // OUTPUT-DEGENERATION-GUARD (2026-08-19, ADR-0010 §14.33): 生成期
+        // 实时检测——on_chunk content delta 逐块喂入，任一阈值命中即中断
+        // 流式请求（StreamInterrupted + 标记），止损于生成期而非事后。
+        let mut degeneration = DegenerationDetector::default();
         // DeepSeek interleaves reasoning_content deltas with content deltas;
         // accumulated separately, then joined verbatim onto the response
         // (alpha-test 2026-08-06 closure).
@@ -659,12 +794,26 @@ impl DeepSeekTransport {
                     &mut text_parts,
                     &mut reasoning_parts,
                     &mut tool_calls,
-                    &mut |text| on_chunk(text),
+                    &mut |text| {
+                        on_chunk(text);
+                        degeneration.feed(text);
+                    },
                 );
                 if let Some(fr) = choice.finish_reason {
                     saw_finish_reason = true;
                     finish_reason = map_finish_reason(Some(fr));
                 }
+            }
+            // OUTPUT-DEGENERATION-GUARD (2026-08-19, ADR-0010 §14.33): 命中
+            // 检测阈值 → 主动中断。防循环计数：会话级连续退化次数达到
+            // `DEGENERATION_LIMIT` 后带 `degeneration_limit_reached` 标记
+            // （run 层映射 run_invalidated，计入 stagnation 同类终止态）。
+            if let Some(detail) = degeneration.trip_reason() {
+                let detail = self.degeneration_interrupt_detail(detail);
+                return Err(GatewayError::StreamInterrupted {
+                    attempts: 0,
+                    detail,
+                });
             }
         }
 
@@ -708,6 +857,10 @@ impl DeepSeekTransport {
             None
         };
 
+        // OUTPUT-DEGENERATION-GUARD (2026-08-19, ADR-0010 §14.33): 一次成功
+        // 完成的请求重置会话级连续退化计数（「连续」= 无成功请求插入）。
+        self.degeneration_consecutive.store(0, Ordering::SeqCst);
+
         Ok(ModelResponse {
             text,
             tool_calls,
@@ -730,6 +883,20 @@ impl DeepSeekTransport {
             // usage chunk — the compaction trigger.
             prompt_tokens: stream_usage.as_ref().map(|u| u.prompt_tokens as u64),
         })
+    }
+
+    /// OUTPUT-DEGENERATION-GUARD (2026-08-19, ADR-0010 §14.33)：退化中断
+    /// 的防循环计数与 detail 标记——会话级连续计数递增；达到
+    /// `DEGENERATION_LIMIT` 后以 `degeneration_limit_reached` 前缀标记
+    /// （run 层映射 `run_invalidated`），否则 `degeneration_detected`
+    /// （run_failed 同路径）。任何成功请求经 `stream_once` 重置计数。
+    fn degeneration_interrupt_detail(&self, detail: String) -> String {
+        let consecutive = self.degeneration_consecutive.fetch_add(1, Ordering::SeqCst) + 1;
+        if consecutive >= DEGENERATION_LIMIT {
+            format!("{DEGENERATION_LIMIT_PREFIX} consecutive={consecutive} ({detail})")
+        } else {
+            format!("{detail} consecutive={consecutive}")
+        }
     }
 }
 
@@ -1062,8 +1229,9 @@ mod tests {
         // reasoning tokens are observable on the streaming path.
         let t = DeepSeekTransport::deepseek_v4("sk-test", "deepseek-v4-flash");
         let mut req = request();
-        // The request-level max_tokens is the min-cap over the config's 160K
-        // — a request asking for MORE than the config cap gets the cap, a
+        // The request-level max_tokens is the min-cap over the config's 32K
+        // (OUTPUT-DEGENERATION-GUARD 2026-08-19, ADR-0010 §14.33) — a
+        // request asking for MORE than the config cap gets the cap, a
         // request asking for less (e.g. gate rounds at 1024) gets less.
         req.max_tokens = 200_000;
         let json = serde_json::to_value(t.build_request(&req)).unwrap();
@@ -1071,8 +1239,8 @@ mod tests {
         assert_eq!(json["thinking"]["type"], "enabled", "{s}");
         assert_eq!(json["reasoning_effort"], "max", "{s}");
         assert_eq!(
-            json["max_tokens"], 160_000,
-            "config 160K caps the request-level budget: {s}"
+            json["max_tokens"], 32_000,
+            "config 32K caps the request-level budget: {s}"
         );
         assert_eq!(
             json["stream_options"]["include_usage"], true,
@@ -1091,12 +1259,121 @@ mod tests {
                 thinking: ThinkingMode::Disabled,
                 ..DeepSeekTransport::deepseek_v4("sk-test", "deepseek-v4-flash").config
             },
+            degeneration_consecutive: Arc::new(AtomicU32::new(0)),
         };
         let req = t.build_request(&request());
         let json = serde_json::to_value(&req).unwrap();
         let s = json.to_string();
         assert_eq!(json["thinking"]["type"], "disabled", "{s}");
         assert!(!s.contains("reasoning_effort"), "{s}");
+    }
+
+    // ── OUTPUT-DEGENERATION-GUARD (2026-08-19, ADR-0010 §14.33) ────────────
+
+    #[test]
+    fn degeneration_detector_trips_on_five_identical_deltas() {
+        let mut d = DegenerationDetector::default();
+        for _ in 0..4 {
+            d.feed("same");
+            assert!(d.trip_reason().is_none());
+        }
+        d.feed("same");
+        let reason = d.trip_reason().expect("5 identical deltas must trip");
+        assert!(reason.starts_with(DEGENERATION_DETAIL_PREFIX), "{reason}");
+        assert!(reason.contains("identical content deltas"), "{reason}");
+    }
+
+    #[test]
+    fn degeneration_detector_no_trip_below_thresholds() {
+        let mut d = DegenerationDetector::default();
+        for i in 0..200 {
+            d.feed(&format!("distinct {i} token"));
+            assert!(
+                d.trip_reason().is_none(),
+                "short varied output must not trip"
+            );
+        }
+    }
+
+    #[test]
+    fn degeneration_detector_trips_on_high_repetition_ratio() {
+        // >1K tokens with a heavily duplicated 3-gram profile; alternating
+        // two phrase spellings keeps the consecutive-delta check silent so
+        // the repetition-ratio path is the one under test.
+        let a = "elided middle see archived log for full content";
+        let b = "see archived log for full content elided middle";
+        let mut d = DegenerationDetector::default();
+        for i in 0..200 {
+            d.feed(if i % 2 == 0 { a } else { b });
+        }
+        let reason = d.trip_reason().expect("high repetition must trip");
+        assert!(reason.contains("3-gram repetition ratio"), "{reason}");
+    }
+
+    #[test]
+    fn degeneration_consecutive_counter_reaches_limit_then_resets() {
+        let t = DeepSeekTransport::deepseek_v4("sk-test", "deepseek-v4-flash");
+        for i in 1..=2 {
+            let detail = t.degeneration_interrupt_detail("degeneration_detected: x".into());
+            assert!(detail.starts_with(DEGENERATION_DETAIL_PREFIX), "{detail}");
+            assert!(detail.contains(&format!("consecutive={i}")), "{detail}");
+        }
+        let detail = t.degeneration_interrupt_detail("degeneration_detected: x".into());
+        assert!(detail.starts_with(DEGENERATION_LIMIT_PREFIX), "{detail}");
+        // A successful request resets the consecutive counter (design §3.3:
+        // 「连续」= 无成功请求插入).
+        t.degeneration_consecutive.store(0, Ordering::SeqCst);
+        let detail = t.degeneration_interrupt_detail("degeneration_detected: x".into());
+        assert!(detail.starts_with(DEGENERATION_DETAIL_PREFIX), "{detail}");
+        assert!(detail.contains("consecutive=1"), "{detail}");
+    }
+
+    /// SSE body with `n` identical content-delta frames (degeneration probe).
+    fn degenerate_sse_body(delta: &str, n: usize) -> String {
+        let frame = format!(
+            r#"{{"id":"x","object":"chat.completion.chunk","created":0,"model":"m","choices":[{{"index":0,"delta":{{"role":"assistant","content":"{delta}"}},"finish_reason":null}}]}}"#
+        );
+        let mut body = String::new();
+        for _ in 0..n {
+            body.push_str(&format!("data: {frame}\n\n"));
+        }
+        body.push_str("data: [DONE]\n\n");
+        body
+    }
+
+    #[tokio::test]
+    async fn generate_stream_degeneration_interrupts_without_retry() {
+        // Design §3.3: the detector trips mid-generation → the stream is
+        // interrupted with `degeneration_detected`; the interruption is NOT
+        // retried (output already seen — ADR-0007 discipline).
+        let body = degenerate_sse_body("hi", 5);
+        let attempts = std::sync::Arc::new(std::sync::atomic::AtomicU32::new(0));
+        let attempts_handle = attempts.clone();
+        let base = spawn_mock(move |_line, _body| {
+            attempts_handle.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            MockResponse::sse(vec![&body], std::time::Duration::ZERO)
+        })
+        .await;
+        let t = mock_transport_with_retry(&base, short_retry_policy());
+        let mut chunks = Vec::new();
+        let err = t
+            .generate_stream(request(), None, None, &mut |c| chunks.push(c.to_string()))
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(&err, GatewayError::StreamInterrupted { attempts: 0, detail } if detail.starts_with(DEGENERATION_DETAIL_PREFIX)),
+            "degeneration must surface StreamInterrupted(attempts=0) with the marker, got {err:?}"
+        );
+        assert_eq!(
+            chunks,
+            vec!["hi".to_string(); 5],
+            "all deltas up to the trip must reach the journal"
+        );
+        let n = attempts.load(std::sync::atomic::Ordering::SeqCst);
+        assert_eq!(
+            n, 1,
+            "degeneration must never be retried (output already seen): {n} connections"
+        );
     }
 
     #[test]
@@ -1618,6 +1895,7 @@ mod tests {
                 retry,
                 thinking,
             },
+            degeneration_consecutive: Arc::new(AtomicU32::new(0)),
         }
     }
 

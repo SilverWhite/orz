@@ -319,6 +319,11 @@ pub enum AgentLoopError {
     /// `run_failed` (Phase 3 slice #7).
     #[error("run cancelled by user")]
     Cancelled,
+    /// OUTPUT-DEGENERATION-GUARD (2026-08-19, ADR-0010 §14.33): 会话级连续
+    /// 退化中断达到 `DEGENERATION_LIMIT`——run 层记 `run_invalidated`
+    /// （reason=degeneration，计入 stagnation 同类终止态）而非 run_failed。
+    #[error("degeneration limit reached: {0}")]
+    Degeneration(String),
 }
 
 /// ACAF Slice 2 fail-closed (2026-08-13): the ticket lifecycle's decision
@@ -4402,10 +4407,18 @@ impl AgentLoopController {
                     AgentLoopError::Cancelled => {
                         serde_json::json!({"reason": "user_cancelled"})
                     }
+                    AgentLoopError::Degeneration(_) => {
+                        // OUTPUT-DEGENERATION-GUARD (2026-08-19, ADR-0010
+                        // §14.33): run_invalidated{status: degeneration}——
+                        // schema 枚举 2026-08-19 先行扩展（计数同 stagnation
+                        // 同类终止态）。
+                        serde_json::json!({"status": "degeneration"})
+                    }
                     _ => serde_json::json!({"error": e.to_string()}),
                 };
                 let event = match &e {
                     AgentLoopError::Cancelled => EventType::RunCancelled,
+                    AgentLoopError::Degeneration(_) => EventType::RunInvalidated,
                     _ => EventType::RunFailed,
                 };
                 let _ = writer.record(event, payload).await;
