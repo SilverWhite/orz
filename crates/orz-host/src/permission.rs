@@ -301,6 +301,16 @@ impl PermissionBridge {
     /// cwd and outside the runtime's own `.gsa` tree (journals/session state
     /// are agent-invisible — keeps the evidence chain out of the model's
     /// feedback loop). Non-read accesses pass through untouched.
+    ///
+    /// OUTPUT-DEGENERATION-GUARD (2026-08-19, ADR-0010 §14.33 / 设计 §3.2):
+    /// terminal truncation receipts point the model at
+    /// `{cwd}/.gsa/session/terminal/<order>.log` and instruct read_file —
+    /// those files are the runtime's own full-output artifacts for terminal
+    /// tools (the model already saw the truncated view), the same class as
+    /// `run_tests_output.txt`. They are whitelisted by the model-addressable
+    /// lexical path AND the canonical target must stay inside the session
+    /// cwd or the session's own `.gsa` volume (a symlink planted inside
+    /// `session/terminal/` cannot escape).
     fn access_in_scope(&self, access: &AccessKind) -> bool {
         let path = match access {
             AccessKind::Read(p) | AccessKind::Grep { path: p, .. } => p.as_deref(),
@@ -315,19 +325,49 @@ impl PermissionBridge {
         } else {
             normalize_lexical(&self.cwd.join(path).to_path_buf())
         };
-        let canonical = dunce::canonicalize(&resolved).unwrap_or(resolved);
+        let canonical = dunce::canonicalize(&resolved).unwrap_or_else(|_| resolved.clone());
         let gsa_root = self.cwd.join(".gsa");
-        path_under(self.cwd.as_path(), &canonical)
-            && (!path_under(gsa_root.as_path(), &canonical)
-                // GAP-RUN-TESTS (2026-08-11): the run_tests output artifact
-                // (`{cwd}/.gsa/run_tests_output.txt`) is the model's
-                // permission-gated window into the FULL test output —
-                // ADR-0010 §3.8.3 / F-09: "完整输出保存在受控任务 artifact
-                // 中，可按 permission 读取"; the conversation only carries
-                // the 32KB tail. The whitelist is an exact fixed filename —
-                // everything else under `.gsa` (journals, session state,
-                // keystore, snapshots) stays agent-invisible.
-                || canonical == normalize_lexical(gsa_root.join("run_tests_output.txt").as_path()))
+        // `.gsa` may itself be a symlink (eval containers mount a session
+        // volume, e.g. `/orz-gsa/<uuid>`); the canonical root is what the
+        // whitelists must compare against, otherwise the same real file
+        // resolves outside the lexical cwd and every `.gsa` read is denied.
+        let gsa_canon = dunce::canonicalize(gsa_root.as_path())
+            .unwrap_or_else(|_| gsa_root.as_path().to_path_buf());
+        let terminal_dir = gsa_root.join("session").join("terminal");
+        let terminal_log = path_under(terminal_dir.as_path(), &resolved)
+            && resolved
+                .extension()
+                .map(|e| e.eq_ignore_ascii_case("log"))
+                .unwrap_or(false);
+        // GAP-RUN-TESTS (2026-08-11): the run_tests output artifact
+        // (`{cwd}/.gsa/run_tests_output.txt`) is the model's
+        // permission-gated window into the FULL test output —
+        // ADR-0010 §3.8.3 / F-09: "完整输出保存在受控任务 artifact
+        // 中，可按 permission 读取"; the conversation only carries
+        // the 32KB tail. The whitelist is an exact fixed filename —
+        // everything else under `.gsa` (journals, session state,
+        // keystore, snapshots) stays agent-invisible. The canonical-root
+        // comparison is the symlink-aware form (eval containers symlink
+        // `.gsa` onto a session volume).
+        let run_tests = canonical
+            == normalize_lexical(gsa_root.join("run_tests_output.txt").as_path())
+            || canonical == gsa_canon.join("run_tests_output.txt");
+        // OUTPUT-DEGENERATION-GUARD: terminal output logs are readable only
+        // when the model-addressable path sits under `session/terminal/`
+        // AND the canonical target resolves inside the session's own `.gsa`
+        // volume — a symlink planted inside `session/terminal/` cannot
+        // escape to other `.gsa` internals or arbitrary host paths.
+        if terminal_log {
+            path_under(&gsa_canon, &canonical) && path_under(self.cwd.as_path(), &resolved)
+        } else if run_tests {
+            // The exact-filename whitelist pins the real file via canonical
+            // (symlink-aware); only the model-addressable lexical path must
+            // additionally stay under the session cwd.
+            path_under(self.cwd.as_path(), &resolved)
+        } else {
+            path_under(self.cwd.as_path(), &canonical)
+                && !path_under(gsa_root.as_path(), &canonical)
+        }
     }
 }
 
@@ -665,9 +705,18 @@ mod tests {
         let dir = test_dir();
         std::fs::create_dir_all(dir.join("inside")).unwrap();
         std::fs::create_dir_all(dir.join(".gsa").join("runs")).unwrap();
+        std::fs::create_dir_all(dir.join(".gsa").join("session").join("terminal")).unwrap();
         // Existing file → `canonicalize` succeeds → the Windows `\\?\` prefix
         // path is exercised (regression: prefixed paths were all denied).
         std::fs::write(dir.join("inside").join("a.txt"), "x").unwrap();
+        std::fs::write(
+            dir.join(".gsa")
+                .join("session")
+                .join("terminal")
+                .join("ord-000001.log"),
+            "full output",
+        )
+        .unwrap();
         let outside = test_dir(); // sibling temp dir — outside cwd
         let bridge = bridge_over(&dir);
 
@@ -736,6 +785,66 @@ mod tests {
                 &bridge,
                 &dir.join(".gsa")
                     .join("run_tests_output.txt.bak")
+                    .to_string_lossy()
+            )
+            .await,
+            PermitDecision::Deny
+        );
+        // OUTPUT-DEGENERATION-GUARD (2026-08-19, ADR-0010 §14.33 / 设计
+        // §3.2): terminal output logs under `session/terminal/` are the
+        // model's permission-gated window into the FULL terminal output —
+        // the truncation receipt points at them and instructs read_file.
+        let term_log = dir
+            .join(".gsa")
+            .join("session")
+            .join("terminal")
+            .join("ord-000001.log");
+        assert_eq!(
+            read_req(&bridge, &term_log.to_string_lossy()).await,
+            PermitDecision::AllowOnce,
+            "terminal output log readable per OUTPUT-DEGENERATION-GUARD 补读闭环"
+        );
+        assert_eq!(
+            read_req(&bridge, ".gsa/session/terminal/ord-000001.log").await,
+            PermitDecision::AllowOnce,
+            "relative terminal output log readable"
+        );
+        // grep shares the same scope rule for the terminal log path.
+        assert_eq!(
+            bridge
+                .request(
+                    RiskClass::ReadOnly,
+                    "grep",
+                    &serde_json::json!({"path": term_log.to_string_lossy(), "pattern": "x"}),
+                )
+                .await
+                .unwrap(),
+            PermitDecision::AllowOnce
+        );
+        // `..` escaping out of `session/terminal/` into other `.gsa`
+        // internals stays denied (no wildcard / no parent escape).
+        assert_eq!(
+            read_req(
+                &bridge,
+                &dir.join(".gsa")
+                    .join("session")
+                    .join("terminal")
+                    .join("..")
+                    .join("keystore")
+                    .join("installation-key.bin")
+                    .to_string_lossy()
+            )
+            .await,
+            PermitDecision::Deny
+        );
+        // Non-`.log` siblings under `session/terminal/` are not whitelisted.
+        assert_eq!(
+            read_req(
+                &bridge,
+                &dir.join(".gsa")
+                    .join("session")
+                    .join("terminal")
+                    .join("ord-000001.log.bak")
                     .to_string_lossy()
             )
             .await,
