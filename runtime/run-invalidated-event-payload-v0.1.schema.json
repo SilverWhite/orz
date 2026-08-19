@@ -8,7 +8,9 @@
     "status"
   ],
   "properties": {
-    "status": { "enum": ["restart_requested", "handoff_required", "wallclock", "stall"] },
+    "status": {
+      "enum": ["restart_requested", "handoff_required", "wallclock", "stall", "degeneration"]
+    },
     "turn_count": { "type": "integer", "minimum": 0 },
     "tool_rounds": { "type": "integer", "minimum": 0 }
   }

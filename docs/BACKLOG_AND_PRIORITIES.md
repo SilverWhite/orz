@@ -9,7 +9,7 @@
 
 | 优先级 | 含义 | 未闭合项 |
 |---|---|---|
-| P0 | 当前工作集：设计已冻结，裁决后立即实施 | 评测冒烟暴露问题（P0-E 主项 7 项 + FUS-TOOL-SCOPE-CONTRACT 后续 2 项全部闭合 2026-08-18：ACAF 容器供应、console 工具名、计划视图步骤 ID、订单发放前拒绝入事件面、grep 搜索范围契约、plan_write 校验消息形状、actions 形状探针、list_dir 范围计数、grep files_searched 全结局探针，见 0a）；CLASSICAL-EXEC-ASSISTANT（生产组件，2026-08-16 用户裁决转正式，S1-S4 全部闭合）；PLAN-FIRST-BLACKBOARD（阶段 A/B/C 全部闭合 2026-08-16）；**FUS-BENCHMARK-FULL-EXEC（P0，实施完成待验证——2026-08-18 用户指示实施、暂不测试；验证闭环后闭合，见 0b）**；**LEDGER-FOLD-EXTERNAL-FILE（P0，S1-S4 验证闭环 2026-08-19——命中率问题优先于 P0-F 验证；provider 口径 95.33% ≥90% 达标，见 0c）** |
+| P0 | 当前工作集：设计已冻结，裁决后立即实施 | 评测冒烟暴露问题（P0-E 主项 7 项 + FUS-TOOL-SCOPE-CONTRACT 后续 2 项全部闭合 2026-08-18：ACAF 容器供应、console 工具名、计划视图步骤 ID、订单发放前拒绝入事件面、grep 搜索范围契约、plan_write 校验消息形状、actions 形状探针、list_dir 范围计数、grep files_searched 全结局探针，见 0a）；CLASSICAL-EXEC-ASSISTANT（生产组件，2026-08-16 用户裁决转正式，S1-S4 全部闭合）；PLAN-FIRST-BLACKBOARD（阶段 A/B/C 全部闭合 2026-08-16）；**FUS-BENCHMARK-FULL-EXEC（P0，实施完成待验证——2026-08-18 用户指示实施、暂不测试；验证闭环后闭合，见 0b）**；**LEDGER-FOLD-EXTERNAL-FILE（P0，S1-S4 验证闭环 2026-08-19——命中率问题优先于 P0-F 验证；provider 口径 95.33% ≥90% 达标，见 0c）**；**OUTPUT-DEGENERATION-GUARD（P0，2026-08-19 设计定稿未实施——make-doom 退化复读失败防护；8K 全统一 + 补读闭环 + 实时检测 + 32K，见 0d）** |
 | P1 | 无需裁决，可与 P0 并行 | FUS-COMPONENT-REGISTER、GAP-WINDOWS-EVIDENCE、IMPL-DEEPSEEK-TRANSPORT / SEC-CREDENTIALS、ORZ-SESSION-CONTEXT-MONITOR |
 | P2 | 生产化决策门：需用户裁决 | IMPL-CONTROL-FABRIC（fail-closed 启用、Slice 3/4）、OPS-PROTOCOL |
 | P3 | 收尾 / 清理 | EVIDENCE-LOCAL-BROWSER、GATE-CHAIN、DC 剩余信号、V11-IMPL-003/007、工作区收尾 |
@@ -480,6 +480,42 @@
   **0c 验证闭环，未闭合计数 29 → 28**；换算系数校准（4 → 2）为 S4
   既定产出，校准后代码待提交、下次正式跑分使用。登记于 ADR-0010
   §14.32 第 4 项 / 设计文档 §3.2/§3.6 / TODO P0-0c / 索引。
+
+### 0d. OUTPUT-DEGENERATION-GUARD（P0；2026-08-19 用户裁决：先设计、不实施）
+
+- 入口：[设计](OUTPUT_DEGENERATION_GUARD_DESIGN_2026-08-19.md)；索引：
+  [CLI_PROJECT_INDEX.md](../CLI_PROJECT_INDEX.md)；ADR-0010 §14.33（v1.33）。
+- 来源：2026-08-19 make-doom-for-mips 两次失败（模型退化复读 201K 字符 +
+  160K max_tokens 放大 + 工具结果截断无可再读闭环；历史先例 2026-08-11
+  479K 字符同任务；探针 60/60 排除网络；停滞守卫事后评估未拦截）。
+- **2026-08-19 设计定稿（用户裁决：8K 全统一 + 桥 8K 不动 + 补读闭环
+  硬约束 + 前两层补强）**：①限值统一 8K——终端工具输出 20K→8K、点读 8K
+  确认、桥 8K 不动；②补读闭环硬约束——截断末尾"完整内容见 \<路径\>，
+  请使用 read_file（offset/limit 分页）"，落盘 `.gsa/session/terminal/
+  *.log` 可读性已验证，点读指针改向、桥截断保留工具结果自身指针；
+  ③生成期实时复读检测（on_chunk 连续相同块 N=5 / 1K token 窗口重复率
+  >60% / 连续 3 次退化中断 → run_invalidated）；④`REQUEST_MAX_TOKENS`
+  160K→32K。准确度判定=8K 截断信息守恒、闭环吸收差异；桥 8K 不扩窗。
+  实施路由 S1 代码 → S2 测试 → S3 重建 → S4 复验（无退化中断、无 400、
+  命中率 ≥90%、补读路径可用）；设计轮不动计数（28）。
+- **2026-08-19 S1 代码 + S2 测试实施闭合（用户放行）+ 全面审查处理**：
+  S1 落地（orz 提交 5e968ec + 审查处理 19b839f，未推送）——on_chunk 实时退化检测
+  （连续相同 delta N=5 / 1K token 窗口 3-gram 重复率 >60%）、退化中断
+  不重试、会话级连续计数达 3 转 `run_invalidated{status: degeneration}`
+  （schema 先行）、`REQUEST_MAX_TOKENS`/`ModelConfig::max_tokens`
+  160K→32K、终端 8K + read_file 补读指针三面、点读指针改向落盘文件、
+  桥截断保留工具结果自身指针、失败轮次 stagnation 审计评估。S2 测试：
+  orz-loop 510 通过 / orz-tools 2763 通过（沙箱外）/ fmt 干净 / clippy
+  基线一致 / 仓库门禁 valid。**全面审查处理**：P1=点读终端判定改按发放
+  时订单动作名（`ActionResult.action`）——响应信封 `{"output": string}`
+  被 read_file/grep/run_tests 等共用，原按信封判定会给非终端 receipt
+  死指针（违反「指针路径必须真实可读」），修复 + 非终端 text-output
+  回归测试；P3=指针块计入 8K 截断预算、160K 陈旧注释清理（live 探针改
+  32K）、.gsa 符号链接可读性专属测试、登记同步；解释登记=「同一 run
+  连续 3 次」字面不可达，实现为会话级连续计数（成功请求重置）。计数
+  纪律：实施放行入账（28→29），S3/S4 验证闭环后 29→28。S3 重建 → S4
+  复验（无退化中断、无 400、命中率 ≥90%、补读路径可用）待续。详见
+  [设计 §9](OUTPUT_DEGENERATION_GUARD_DESIGN_2026-08-19.md)。
 
 ### 0. 前置收尾（提交前需用户确认）
 

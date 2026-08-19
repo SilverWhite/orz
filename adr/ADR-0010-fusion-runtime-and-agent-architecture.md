@@ -1972,6 +1972,70 @@ ADR §3.6 正文修订随实施登记。
    待提交与下次正式跑分使用（本次判定基于已测 07:07 二进制，校准
    方向=桥 16K→8K 真实 token、最新轮 6.5K < 8K 不截断，行为风险低）。
 
+### 14.33 v1.33 补写裁决索引（2026-08-19）
+
+本节记录冻结后的显式补写；规范正文以所指章节为准，补写明确
+取代以下既往条款。
+
+1. **输出退化防护与工具结果可再读闭环设计定稿（2026-08-19 用户裁决：
+   8K 全统一限值 + 桥 8K 不动 + 补读闭环硬约束 + 前两层补强；
+   FUS-STAGNATION / ORZ-CACHE-CONTEXT-COST 修订——make-doom 两次失败
+   归因）**：2026-08-19 19:04/19:16 make-doom-for-mips 两次运行在
+   35/56 请求后被模型请求 hang/传输中断终止（第一次 transport error、
+   第二次 AgentTimeoutError）；第一次失败前最后一次模型输出 201,230
+   字符 = 点读响应复述 + **2,316 次省略标注重复**（退化复读），
+   `finish_reason=length` 后流中断；**历史先例 2026-08-11（479,957
+   字符，复述 read_file 结果，同任务）**。排除网络（探针 60/60 稳定、
+   容器内 deepseek 401 正常）；停滞守卫仅事后评估、失败轮次未调用；
+   根因=模型退化复读 + `REQUEST_MAX_TOKENS=160_000` 放大 + 工具结果
+   截断后无可再读闭环（指针不在模型工具面）。**定案**：①限值统一 8K
+   ——终端工具输出 20K→8K、点读 8K 确认、桥 8K 不动（"只做一个限值"）；
+   ②补读闭环硬约束——截断末尾机械附加"完整内容见 \<路径\>，请使用
+   read_file（offset/limit 分页）"，落盘 `.gsa/session/terminal/*.log`
+   可读性已验证（符号链接 canonical 在 git root 外，gitignore 放行）；
+   点读指针改向落盘文件（存档兜底）、桥截断保留尾部含工具结果自身
+   指针（sha256 兜底）；③生成期实时复读检测（on_chunk 连续相同块
+   N=5 / 1K token 窗口重复率 >60% / 连续 3 次退化中断 →
+   run_invalidated，治本）；④`REQUEST_MAX_TOKENS` 160K→32K（止损，
+   正常轮次 p95 合计约 7K、max 23.7K）。准确度判定：8K 截断信息守恒、
+   差异被闭环吸收，高严谨性任务"宁可多补读、不可缺信息"。桥 8K 不扩窗
+   （扩窗收益递减，命中 -0.3~0.5pp）。性质：FUS-STAGNATION 修订 +
+   ORZ-CACHE-CONTEXT-COST 参数修订。设计细节见
+   `OUTPUT_DEGENERATION_GUARD_DESIGN_2026-08-19.md`。实施路由 S1 代码
+   → S2 测试 → S3 重建 → S4 复验（无退化中断、无 400、命中率 ≥90%、
+   补读路径可用）；纯文档登记、未实施；设计轮不动计数（28）。
+
+2. **S1 代码 + S2 测试实施闭合 + 全面审查处理（2026-08-19 用户放行
+   实施；orz 提交 5e968ec + 审查处理 19b839f，未推送）**：S1 已落地——
+   transport `on_chunk` 生成期退化检测（连续相同 delta N=5 / 累计 ≥1K
+   token 且最近 1K token
+   3-gram 重复率 >60%）、`StreamInterrupted{degeneration_detected}` 主动
+   中断且不重试（已见输出，ADR-0007）、会话级连续计数
+   `DEGENERATION_LIMIT=3` 达限带 `degeneration_limit_reached` 转
+   `run_invalidated{status: "degeneration"}`（schema 枚举先行扩展）；
+   `REQUEST_MAX_TOKENS`/`ModelConfig::max_tokens` 160K→32K（三 agent
+   统一）；终端工具输出 20K→8K + 统一 read_file 补读指针（default/
+   concise/chat-completion 三面）+ 落盘路径 display 规范化；点读指针改向
+   落盘文件（存档兜底）；桥截断保留工具结果自身落盘指针（sha256 兜底）；
+   失败轮次补 stagnation 重复信号审计评估。S2 测试：检测器单测、流式
+   中断不重试（连接数=1）、计数达限/重置、32K 请求头断言、8K 截断指针
+   三面、点读改向 + 非终端兜底、桥指针保留；orz-loop 510 通过 / orz-tools
+   2763 通过（沙箱外）/ fmt 干净 / clippy 与基线一致（lib 21）；仓库门禁
+   valid。**全面审查处理（2026-08-19）**：P1=点读指针改向原按响应信封
+   `{"output": string}` 判定终端，该信封被 read_file/grep/run_tests 等
+   text-output 动作共用（同一 `text_output_response_schema`），非终端
+   receipt 超 8K 会得到不存在的落盘路径死指针、违反「指针路径必须真实
+   可读」——修复为发放时落盘订单动作名（`ActionResult.action`，serde 默认
+   None、旧归档安全回退），点读按动作 + 信封双判定，并补非终端 text-output
+   回归测试；P3=终端指针块计入截断预算（内容 + 指针 ≤ 8K）、160K 陈旧
+   注释清理（含 live 探针改 32K 与生产一致）、新增 .gsa 符号链接可读性
+   专属测试、登记同步；解释登记=「同一 run 连续 3 次」字面不可达
+   （run_failed 即终止 run），实现为会话级连续计数（成功请求重置），是
+   防循环意图的可行实现。计数纪律：实施放行入账（28→29），S3/S4 验证
+   闭环后 29→28；S3 重建 → S4 复验（无退化中断、无 400、命中率 ≥90%、
+   补读路径可用）待续。登记于 BACKLOG 0d / TODO P0-0d / CLI_PROJECT_INDEX
+   / OUTPUT_DEGENERATION_GUARD_DESIGN_2026-08-19（§9 审查处理登记）。
+
 ### 14.31 v1.31 补写裁决索引（2026-08-19）
 
 本节记录冻结后的显式补写；规范正文以所指章节为准，补写明确取代以下既往条款。

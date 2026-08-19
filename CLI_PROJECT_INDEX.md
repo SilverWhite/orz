@@ -161,7 +161,43 @@
 > 闭环，未闭合计数 29 → 28**；换算系数校准（4→2）待提交。登记于
 > ADR-0010 §14.32 第 4 项 / LEDGER_FOLD_BRIDGE_TRUNCATION_DESIGN
 > 2026-08-19 / BACKLOG 0c / TODO P0-0c。
-> 
+> 2026-08-19 输出退化防护与工具结果可再读闭环设计定稿登记（用户裁决：
+> 8K 全统一限值 + 桥 8K 不动 + 补读闭环硬约束 + 前两层补强；先设计、
+> 不动作）——make-doom-for-mips 两次失败归因：模型退化复读（201K 字符、
+> 2,316 次省略标注重复；历史先例 2026-08-11 479K 字符同任务）+ 160K
+> max_tokens 放大 + 工具结果截断后无可再读闭环；排除网络（探针 60/60）；
+> 停滞守卫仅事后评估未拦截。定案=①限值统一 8K（终端 20K→8K、点读 8K
+> 确认、桥 8K 不动）；②补读闭环硬约束（截断末尾"完整内容见 \<路径\>，
+> 请使用 read_file"；落盘 `.gsa/session/terminal/*.log` 可读性已验证；
+> 点读指针改向、桥截断保留工具结果自身指针）；③生成期实时复读检测
+> （on_chunk 连续块/重复率，治本）；④`REQUEST_MAX_TOKENS` 160K→32K
+> （止损）。准确度判定=8K 截断信息守恒、闭环吸收差异、桥 8K 不扩窗。
+> 登记于 ADR-0010 §14.33 / OUTPUT_DEGENERATION_GUARD_DESIGN_2026-08-19 /
+> BACKLOG 0d / TODO P0-0d；实施路由 S1 代码 → S2 测试 → S3 重建 → S4
+> 复验；设计轮不动计数（28）。
+> 2026-08-19 输出退化防护 S1/S2 实施闭合 + 全面审查处理登记（用户放行
+> 实施；orz 提交 5e968ec + 审查处理 19b839f、未推送）——S1 代码：on_chunk 生成期实时退化
+> 检测（连续相同 delta N=5 / 累计 ≥1K token 且最近 1K token 3-gram
+> 重复率 >60%）、`StreamInterrupted{degeneration_detected}` 主动中断且
+> 不重试、会话级连续计数 `DEGENERATION_LIMIT=3` 达限转
+> `run_invalidated{status: degeneration}`（schema 先行）、
+> `REQUEST_MAX_TOKENS`/`ModelConfig::max_tokens` 160K→32K、终端工具输出
+> 20K→8K + 统一 read_file 补读指针三面（default/concise/chat-completion）
+> + 指针块计入 8K 截断预算、点读指针改向落盘文件、桥截断保留工具结果
+> 自身指针（sha256 兜底）、失败轮次 stagnation 审计评估。S2 测试：
+> orz-loop 510 通过 / orz-tools 2763 通过（沙箱外，grep/glob 44 项为沙箱
+> 拦截 rg 所致非回归）/ fmt 干净 / clippy 基线一致（lib 21）/ 仓库门禁
+> valid。全面审查处理：P1=点读终端判定改按发放时订单动作名
+> （`ActionResult.action`）——响应信封 `{"output": string}` 被
+> read_file/grep/run_tests 等 text-output 动作共用，原按信封判定会给
+> 非终端 receipt 死指针（违反「指针路径必须真实可读」），修复 + 非终端
+> text-output 回归测试；P3=160K 陈旧注释清理（live 探针改 32K）、.gsa
+> 符号链接可读性专属测试、登记同步；解释登记=「同一 run 连续 3 次」字面
+> 不可达，实现为会话级连续计数（成功请求重置）。计数纪律：实施放行入账
+> （28→29），S3/S4 验证闭环后 29→28。S3 重建 → S4 复验（无退化中断、
+> 无 400、命中率 ≥90%、补读路径可用）待续。登记于 ADR-0010 §14.33
+> 第 2 项 / OUTPUT_DEGENERATION_GUARD_DESIGN_2026-08-19 §9 / BACKLOG 0d /
+> TODO P0-0d。
 2026-08-15 黑板 plan epoch 复查补强登记（ADR-0010 v1.15⑧）——plan_epoch 时间戳单调编号、身份一一对应强制、retention 保留最高编号快照。
 > 2026-08-15 黑板 plan epoch 复查遗留闭合登记（ADR-0010 v1.15⑨）——F2 原子写盘+回退加载、F4 跨进程 `.claim-<n>` 占号、F5 归档目录单一来源、F6 非法 epoch 显式报错、F7 归档失败入事件面（新 v0.2 `epoch_archive_write_failed`）、F9 `persisted_at` 更名、F10 设计 §5 措辞对齐。
 > 2026-08-15 ACAF fail-closed 生产启用裁决登记（用户裁决放行）——P2 IMPL-CONTROL-FABRIC 决策门放行；翻转执行与核查清单 ⑦⑨⑩⑪ 收口/边界登记待实施。
