@@ -5435,10 +5435,10 @@ impl AgentLoopController {
 
     /// Default max tokens for the main agent (configurable later).
     /// D-6 (FIX_PLAN 2026-08-06): single-round output budget
-    /// (OUTPUT-DEGENERATION-GUARD 2026-08-19, ADR-0010 §14.33: 160K → 32K;
-    /// the transport's `ModelConfig::max_tokens` is the cap; this
-    /// request-level value is min-capped by it — equal here so the full
-    /// budget is available).
+    /// (OUTPUT-BUDGET-RESTORE-AND-STALL-GUARD 2026-08-20, ADR-0010 §14.35:
+    /// 32K → 256K，回落档 128K；the transport's `ModelConfig::max_tokens`
+    /// is the cap; this request-level value is min-capped by it — equal
+    /// here so the full budget is available).
     /// Review F3 (2026-08-10): the retrieval lane reads the SAME constant
     /// (`agent_loop::REQUEST_MAX_TOKENS`) — one source for all three agents.
     pub(crate) fn main_agent_max_tokens(&self) -> u32 {

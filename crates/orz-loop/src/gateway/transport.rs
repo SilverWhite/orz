@@ -10,11 +10,14 @@
 //! (recorded D3-2, 2026-08-06 design review).
 //!
 //! Thinking (IP1 → D-6, FIX_PLAN 2026-08-06): the restored max-config is
-//! `thinking: {type: "enabled"}` + `reasoning_effort: "max"` + 32K single-round
-//! output budget (OUTPUT-DEGENERATION-GUARD 2026-08-19, ADR-0010 §14.33;
-//! previously 160K); `ThinkingMode::Disabled` keeps the P2-era mitigation
-//! (all output to `content`) for parity/tests/benchmarks. `ModelRequest`
-//! carries no thinking knob — `ModelConfig::thinking` is the single switch.
+//! `thinking: {type: "enabled"}` + `reasoning_effort: "max"` + 256K
+//! single-round output budget (OUTPUT-BUDGET-RESTORE-AND-STALL-GUARD
+//! 2026-08-20, ADR-0010 §14.35 — 输出预算恢复 32K → 256K，回落档 128K，
+//! S4 实测校准；OUTPUT-DEGENERATION-GUARD 2026-08-19 的 32K 止损由输出
+//! 健康哨兵 + 空转预算兜底取代；previously 160K);
+//! `ThinkingMode::Disabled` keeps the P2-era mitigation (all output to
+//! `content`) for parity/tests/benchmarks. `ModelRequest` carries no
+//! thinking knob — `ModelConfig::thinking` is the single switch.
 //!
 //! Live tests are gated behind `ORZ_TEST_LIVE=1` so the offline test suite
 //! stays deterministic (FakeProvider is the acceptance path).
@@ -43,6 +46,7 @@ use serde_json::Value;
 use std::collections::{HashMap, VecDeque};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU32, Ordering};
+use std::time::Duration;
 use tokio_util::sync::CancellationToken;
 
 use super::model::{
@@ -90,38 +94,157 @@ pub const DEGENERATION_DETAIL_PREFIX: &str = "degeneration_detected:";
 /// 退化中断达上限 detail 前缀（run 层映射为 `run_invalidated`）。
 pub const DEGENERATION_LIMIT_PREFIX: &str = "degeneration_limit_reached:";
 
-/// 生成期实时复读检测器（设计 §3.3，第一层治本）：喂入 content delta，
-/// 命中任一阈值后持续返回触发原因。纯机械、零模型调用；token 口径复用
-/// `orz_assurance::orientation::stagnation`（Unicode 词 + CJK 正则），
-/// 轻量实现（窗口 ≤1K token 的 3-gram 计数）。
+// ───────────────────────────────────────────────────────────────────────────
+// OUTPUT-BUDGET-RESTORE-AND-STALL-GUARD (2026-08-20, ADR-0010 §14.35 /
+// 设计 §3.2/§3.3)：D-6 空流链官方化收窄 + 退化检测器升级为输出健康哨兵。
+// ───────────────────────────────────────────────────────────────────────────
+
+/// 完成型空响应（`empty_content_abnormal`）快速有界重试上限（设计 §3.2：
+/// 官方 llm-retry 5 次收窄版——256K+max 下 5 次原样重试成本不可接受；
+/// 长烧型空转由 stall 哨兵提前中断、不进入原样重试）。
+pub const EMPTY_RESPONSE_MAX_RETRIES: u32 = 2;
+
+/// 空流重试退避初值（官方默认形状，设计 §3.2/§3.5）。
+pub const EMPTY_RESPONSE_BACKOFF_INITIAL: Duration = Duration::from_millis(500);
+
+/// 空流重试退避上限（官方默认形状，设计 §3.2/§3.5）。
+pub const EMPTY_RESPONSE_BACKOFF_MAX: Duration = Duration::from_secs(10);
+
+/// 空流重试退避抖动（官方默认 ±10%，设计 §3.2/§3.5）。
+pub const EMPTY_RESPONSE_BACKOFF_JITTER: f64 = 0.10;
+
+/// reasoning-stall 时间信号：自首 chunk 起无 content/tool_calls 的等待上限
+/// （设计 §3.3 预算兜底层；初值 600s，S4 校准 300–900s）。
+pub const STALL_FIRST_CONTENT_TIMEOUT: Duration = Duration::from_secs(600);
+
+/// reasoning-stall token 信号：reasoning 估算累计无 content/tool_calls 的
+/// 空转预算（设计 §3.3——**与 max_tokens 解耦**，256K 恢复后空转不随预算
+/// 放大；初值 64K，S4 校准 32–128K；单次最坏 ≈ ¥0.29 ≈ 现状整条空流链）。
+pub const STALL_REASONING_BUDGET_TOKENS: usize = 64_000;
+
+/// reasoning 字符 → token 估算系数（设计 §3.3；沿用折叠桥 8K 实测校准值
+/// 2 字符/token，S4 用 usage 真实 reasoning_tokens 复核）。
+pub const REASONING_CHARS_PER_TOKEN: usize = 2;
+
+/// content 复读族 detail 前缀（已见输出 → 不重试，ADR-0007）。
+pub const CONTENT_REPETITION_DETAIL_PREFIX: &str = "degeneration_detected:content_repetition:";
+
+/// reasoning 复读族 detail 前缀（灵敏层——无可见输出 → 不原样、直接降级）。
+pub const REASONING_REPETITION_DETAIL_PREFIX: &str = "degeneration_detected:reasoning_repetition:";
+
+/// reasoning-stall 族 detail 前缀（预算兜底层——无可见输出 → 直接降级）。
+pub const REASONING_STALL_DETAIL_PREFIX: &str = "degeneration_detected:reasoning_stall:";
+
+/// 生成期输出健康哨兵（设计 §3.3，第一层治本）：喂入 content delta +
+/// reasoning delta + tool_call arguments delta，三族信号（content_repetition
+/// / reasoning_repetition / reasoning_stall）命中后持续返回触发原因。纯
+/// 机械、零模型调用；token 口径复用 `orz_assurance::orientation::stagnation`
+/// （Unicode 词 + CJK 正则），轻量实现（窗口 ≤1K token 的 3-gram 计数）。
 #[derive(Debug, Default)]
 struct DegenerationDetector {
-    /// 最近 N 个 content delta（连续相同检测）。
-    recent_deltas: VecDeque<String>,
-    /// 累计输出 token 数（重复率检测的启用门槛）。
-    total_tokens: usize,
-    /// 最近 1K token 的滑动窗口。
-    window_tokens: Vec<String>,
+    /// content 族：最近 N 个 delta（连续相同检测）。
+    recent_content_deltas: VecDeque<String>,
+    /// content 族：累计 token 数（重复率检测的启用门槛）。
+    content_total_tokens: usize,
+    /// content 族：最近 1K token 的滑动窗口。
+    content_window_tokens: Vec<String>,
+    /// reasoning 族：最近 N 个 delta（连续相同检测）。
+    recent_reasoning_deltas: VecDeque<String>,
+    /// reasoning 族：累计 token 数（重复率检测的启用门槛）。
+    reasoning_total_tokens: usize,
+    /// reasoning 族：最近 1K token 的滑动窗口。
+    reasoning_window_tokens: Vec<String>,
+    /// reasoning 累计字符 → 估算 token（字符 ÷ `REASONING_CHARS_PER_TOKEN`；
+    /// 空转预算信号，与 max_tokens 解耦；S4 用 usage 真实值复核）。
+    reasoning_chars: usize,
+    /// 已见可见输出（content 或 tool_calls 出现）——此后 reasoning 族信号
+    /// 停用（设计 §3.3：reasoning 复读/stall 仅 content/tool_calls 全空时
+    /// 启用；工具轮为合法形态，不误判）。
+    saw_visible_output: bool,
+    /// 首 chunk 时刻（stall 时间信号的起算点；任意族首个非空 delta 置位）。
+    first_chunk_at: Option<std::time::Instant>,
     /// 触发原因（触发后恒定，避免同流重复报错）。
     trip: Option<String>,
 }
 
 impl DegenerationDetector {
-    fn feed(&mut self, delta: &str) {
+    /// content 族 feed：内容即可见输出——标记 visible（reasoning 族停用）
+    /// 后走复读检测（连续相同 / 1K 窗口 3-gram 重复率）。
+    fn feed_content(&mut self, delta: &str) {
         if self.trip.is_some() || delta.is_empty() {
             return;
         }
-        // ① 连续相同块：最近连续 N 个 content delta 完全相同 → 触发。
-        self.recent_deltas.push_back(delta.to_string());
-        if self.recent_deltas.len() > DEGENERATION_CONSECUTIVE_DELTAS {
-            self.recent_deltas.pop_front();
+        self.mark_first_chunk();
+        self.saw_visible_output = true;
+        self.feed_repetition(
+            "content",
+            CONTENT_REPETITION_DETAIL_PREFIX,
+            delta,
+            &mut self.recent_content_deltas,
+            &mut self.content_total_tokens,
+            &mut self.content_window_tokens,
+        );
+    }
+
+    /// reasoning 族 feed（灵敏层，设计 §3.3）：累计字符 → 估算 token 供
+    /// stall 预算；复读检测仅 content/tool_calls 全空时启用。
+    fn feed_reasoning(&mut self, delta: &str) {
+        if self.trip.is_some() || delta.is_empty() {
+            return;
         }
-        if self.recent_deltas.len() == DEGENERATION_CONSECUTIVE_DELTAS && {
-            let last = self.recent_deltas.back().expect("len == N");
-            self.recent_deltas.iter().all(|d| d == last)
+        self.mark_first_chunk();
+        self.reasoning_chars = self.reasoning_chars.saturating_add(delta.chars().count());
+        if self.saw_visible_output {
+            return;
+        }
+        self.feed_repetition(
+            "reasoning",
+            REASONING_REPETITION_DETAIL_PREFIX,
+            delta,
+            &mut self.recent_reasoning_deltas,
+            &mut self.reasoning_total_tokens,
+            &mut self.reasoning_window_tokens,
+        );
+    }
+
+    /// tool_call arguments 族 feed（观测面，设计 §3.3）：arguments 出现即
+    /// tool_calls 非空——可见输出成型，reasoning 族信号停用。复读检测仅
+    /// 定义 content/reasoning 两族，tool 参数不参与 n-gram 判定（JSON 参数
+    /// 结构重复易误报，设计信号表无此族）。
+    fn feed_tool_arguments(&mut self, delta: &str) {
+        if self.trip.is_some() || delta.is_empty() {
+            return;
+        }
+        self.mark_first_chunk();
+        self.saw_visible_output = true;
+    }
+
+    /// 复读检测共用核心（content 与 reasoning 同一算法，设计 §3.3）：
+    /// ① 连续相同 delta N=5 → 触发；② 累计 ≥1K token 且最近 1K token 内
+    /// 3-gram 重复率 >60% → 触发。
+    fn feed_repetition(
+        &mut self,
+        family: &str,
+        detail_prefix: &str,
+        delta: &str,
+        recent_deltas: &mut VecDeque<String>,
+        total_tokens: &mut usize,
+        window_tokens: &mut Vec<String>,
+    ) {
+        if self.trip.is_some() || delta.is_empty() {
+            return;
+        }
+        // ① 连续相同块：最近连续 N 个 delta 完全相同 → 触发。
+        recent_deltas.push_back(delta.to_string());
+        if recent_deltas.len() > DEGENERATION_CONSECUTIVE_DELTAS {
+            recent_deltas.pop_front();
+        }
+        if recent_deltas.len() == DEGENERATION_CONSECUTIVE_DELTAS && {
+            let last = recent_deltas.back().expect("len == N");
+            recent_deltas.iter().all(|d| d == last)
         } {
             self.trip = Some(format!(
-                "{DEGENERATION_DETAIL_PREFIX} {n} identical content deltas in a row",
+                "{detail_prefix} {n} identical {family} deltas in a row",
                 n = DEGENERATION_CONSECUTIVE_DELTAS
             ));
             return;
@@ -129,22 +252,19 @@ impl DegenerationDetector {
         // ② 重复率：累计 ≥ 1K token 且最近 1K token 内 3-gram 重复率 > 60%
         //    → 触发（复用 stagnation 的 n-gram 思路，轻量实现）。
         let tokens = orz_assurance::orientation::stagnation::tokenize(delta);
-        self.total_tokens += tokens.len();
-        self.window_tokens.extend(tokens);
-        let overflow = self
-            .window_tokens
-            .len()
-            .saturating_sub(DEGENERATION_MIN_TOKENS);
+        *total_tokens += tokens.len();
+        window_tokens.extend(tokens);
+        let overflow = window_tokens.len().saturating_sub(DEGENERATION_MIN_TOKENS);
         if overflow > 0 {
-            self.window_tokens.drain(..overflow);
+            window_tokens.drain(..overflow);
         }
-        if self.total_tokens >= DEGENERATION_MIN_TOKENS {
-            let total_ngrams = self.window_tokens.len().saturating_sub(2);
+        if *total_tokens >= DEGENERATION_MIN_TOKENS {
+            let total_ngrams = window_tokens.len().saturating_sub(2);
             if total_ngrams >= 1 {
                 let mut counts: HashMap<&[String], u32> = HashMap::new();
                 for index in 0..total_ngrams {
                     *counts
-                        .entry(&self.window_tokens[index..index + 3])
+                        .entry(&window_tokens[index..index + 3])
                         .or_insert(0) += 1;
                 }
                 let distinct = counts.len();
@@ -152,12 +272,51 @@ impl DegenerationDetector {
                 let ratio = duplicated as f64 / total_ngrams as f64;
                 if ratio > DEGENERATION_NGRAM_REPEAT_RATIO {
                     self.trip = Some(format!(
-                        "{DEGENERATION_DETAIL_PREFIX} 3-gram repetition ratio {ratio:.2} \
-                         in the recent {} tokens",
-                        self.window_tokens.len()
+                        "{detail_prefix} 3-gram repetition ratio {ratio:.2} \
+                         in the recent {} {family} tokens",
+                        window_tokens.len()
                     ));
                 }
             }
+        }
+    }
+
+    fn mark_first_chunk(&mut self) {
+        if self.first_chunk_at.is_none() {
+            self.first_chunk_at = Some(std::time::Instant::now());
+        }
+    }
+
+    /// reasoning 估算 token（字符 ÷ `REASONING_CHARS_PER_TOKEN`）。
+    fn reasoning_est_tokens(&self) -> usize {
+        self.reasoning_chars / REASONING_CHARS_PER_TOKEN
+    }
+
+    /// 预算兜底层（设计 §3.3）：自首 chunk 起无 content/tool_calls 且
+    /// reasoning 在流动，超过时间预算（600s）或估算 token ≥64K（OR）→
+    /// 触发 reasoning_stall。逐 chunk 调用（chunk 持续到达时在预算点附近
+    /// 触发；完全静默由 idle 死线处理——两者互补不重叠）。
+    fn check_stall(&mut self, now: std::time::Instant) {
+        if self.trip.is_some() {
+            return;
+        }
+        let Some(first) = self.first_chunk_at else {
+            return;
+        };
+        if self.saw_visible_output {
+            return;
+        }
+        let est_tokens = self.reasoning_est_tokens();
+        let elapsed = now.saturating_duration_since(first);
+        if elapsed >= STALL_FIRST_CONTENT_TIMEOUT || est_tokens >= STALL_REASONING_BUDGET_TOKENS
+        {
+            self.trip = Some(format!(
+                "{REASONING_STALL_DETAIL_PREFIX} no content/tool_calls for {:.0}s with \
+                 ~{est_tokens} estimated reasoning tokens (budget {}s / {} tokens)",
+                elapsed.as_secs_f64(),
+                STALL_FIRST_CONTENT_TIMEOUT.as_secs(),
+                STALL_REASONING_BUDGET_TOKENS,
+            ));
         }
     }
 
@@ -166,10 +325,36 @@ impl DegenerationDetector {
     }
 }
 
-/// 退化中断 detail 判定（stream_once_with_retry 据此跳过重试——已见输出，
-/// ADR-0007 纪律；run 层据此区分 run_failed / run_invalidated）。
+/// content 族退化中断 detail 判定（语义收窄为 content 族「不重试」判定，
+/// 设计 §3.3——已见输出，ADR-0007 纪律；limit 前缀三族共享，达限转
+/// run_invalidated）。`stream_once_with_retry` / run 层以
+/// `is_degeneration_detail || is_reasoning_guard_detail` 合并使用。
 pub(crate) fn is_degeneration_detail(detail: &str) -> bool {
-    detail.starts_with(DEGENERATION_DETAIL_PREFIX) || detail.starts_with(DEGENERATION_LIMIT_PREFIX)
+    detail.starts_with(CONTENT_REPETITION_DETAIL_PREFIX)
+        || detail.starts_with(DEGENERATION_LIMIT_PREFIX)
+}
+
+/// reasoning 族退化中断 detail 判定（设计 §3.3：reasoning_repetition /
+/// reasoning_stall——无可见输出，不原样重试、直接降级）。
+pub(crate) fn is_reasoning_guard_detail(detail: &str) -> bool {
+    detail.starts_with(REASONING_REPETITION_DETAIL_PREFIX)
+        || detail.starts_with(REASONING_STALL_DETAIL_PREFIX)
+}
+
+/// 审计/日志用触发族标签（detail 可能被 limit 前缀包裹，用 contains 判定
+/// 内部族；仅留痕、不改终止语义）。
+pub(crate) fn guard_family_label(detail: &str) -> &'static str {
+    if detail.contains(CONTENT_REPETITION_DETAIL_PREFIX) {
+        "content_repetition"
+    } else if detail.contains(REASONING_REPETITION_DETAIL_PREFIX) {
+        "reasoning_repetition"
+    } else if detail.contains(REASONING_STALL_DETAIL_PREFIX) {
+        "reasoning_stall"
+    } else if detail.starts_with(DEGENERATION_LIMIT_PREFIX) {
+        "degeneration_limit"
+    } else {
+        "other"
+    }
 }
 
 /// Build the production real-model gateway from the ADR-0006 credential
@@ -215,15 +400,16 @@ impl DeepSeekTransport {
             model_id: model_id.into(),
             api_base: DEFAULT_DEEPSEEK_API_BASE.to_string(),
             api_key: api_key.into(),
-            // OUTPUT-DEGENERATION-GUARD (2026-08-19, ADR-0010 §14.33):
-            // 单轮输出上限 160K → 32K（止损；退化复读 201K 字符 ≈ 10 万
-            // token 的放大源）。正常轮次 reasoning p95 5.2K + completion
-            // max 23.7K，32K 覆盖正常分布 99%+；退化输出在 32K 截断
-            // （约 1–2 分钟流），消除 10 分钟 hang。请求头指纹含
-            // max_tokens 与 retry 参数（STREAM-RETRY-RHYTHM 2026-08-20：
-            // idle 5s/50s、重试窗口 50s），部署后首次请求一次性指纹变化
-            // （既有纪律）。
-            max_tokens: 32_000,
+            // OUTPUT-BUDGET-RESTORE-AND-STALL-GUARD (2026-08-20,
+            // ADR-0010 §14.35): 输出预算恢复 32K → 256K（官方 maxTokens
+            // 默认值，与 effort 独立维度；回落档 128K，S4 实测不可接受才
+            // 回落，编译期常量）。止损由输出健康哨兵承担——content 复读
+            // 检测（P0-0d）+ reasoning 复读灵敏层 + reasoning-stall
+            // 600s/64K 预算兜底（与 max_tokens 解耦），空流不原样重试
+            // （D-6 快速有界 ≤2 次 + 降级出口）。请求头指纹含 max_tokens
+            // 与 retry 参数（idle 5s/30s、重试窗口 50s），部署后首次请求
+            // 一次性指纹变化（既有纪律）。
+            max_tokens: 256_000,
             retry: Default::default(),
             thinking: Default::default(),
         })
@@ -470,8 +656,9 @@ impl DeepSeekTransport {
             // preserved so the controller can replay it on the next request.
             reasoning_content: message.reasoning_content.clone(),
             // D-6 usage observation: reasoning_tokens + completion_tokens
-            // feed budget/latency calibration (the 160K decision rolls back
-            // on the data).
+            // feed budget/latency calibration (the single-round budget
+            // decision rolls back on the data; S4 用真实值复核
+            // REASONING_CHARS_PER_TOKEN 估算系数).
             reasoning_tokens: body
                 .usage
                 .as_ref()
@@ -559,15 +746,18 @@ impl DeepSeekTransport {
                 .await
             {
                 Ok(response) => return Ok(response),
-                // OUTPUT-DEGENERATION-GUARD (2026-08-19, ADR-0010 §14.33):
-                // 退化中断绝不重试——检测时已见输出（重发会重复工具调用，
-                // ADR-0007 已见输出不重试纪律）；直接透传，attempts 保持 0。
+                // OUTPUT-DEGENERATION-GUARD (2026-08-19) + OUTPUT-BUDGET-
+                // RESTORE-AND-STALL-GUARD (2026-08-20, ADR-0010 §14.35):
+                // 输出健康哨兵中断绝不 zero-chunk 重试——content 族已见
+                // 输出（重发会重复工具调用，ADR-0007 纪律）；reasoning 族
+                // 无可见输出但长烧型原样重试大概率复现且贵（由 D-6 链直接
+                // 降级，§3.2）。直接透传，attempts 保持 0。
                 Err(GatewayError::StreamInterrupted { attempts, detail })
-                    if is_degeneration_detail(&detail) =>
+                    if is_degeneration_detail(&detail) || is_reasoning_guard_detail(&detail) =>
                 {
                     tracing::warn!(
-                        "stream interrupted by the degeneration guard — already saw output, \
-                         not retried: {detail}"
+                        "stream interrupted by the output-health guard — not zero-chunk \
+                         retried: {detail}"
                     );
                     return Err(GatewayError::StreamInterrupted { attempts, detail });
                 }
@@ -637,9 +827,10 @@ impl DeepSeekTransport {
         // select! watchdog loop — a TCP connection accepted but never
         // answering would hang forever with no timeout and no cancel. Wrap
         // the handshake in the idle-timeout: no response headers within
-        // that window is a dead wire (the idle watchdog's 50s semantics —
-        // STREAM-RETRY-RHYTHM 2026-08-20, was 90s; headers arrive long
-        // before the first data chunk even under slow thinking).
+        // that window is a dead wire (the idle watchdog's 30s semantics —
+        // OUTPUT-BUDGET-RESTORE-AND-STALL-GUARD 2026-08-20, ADR-0010
+        // §14.35: 取代 STREAM-RETRY-RHYTHM 未实施的 50s; was 90s; headers
+        // arrive long before the first data chunk even under slow thinking).
         let mut stream = tokio::time::timeout(
             self.config.retry.stream_idle_timeout,
             client.chat().create_stream(req),
@@ -692,9 +883,10 @@ impl DeepSeekTransport {
         //    with progress is NOT a timeout — only a dead wire is; the
         //    2026-08-07 live probe showed a max-effort stream with reasoning
         //    deltas flowing 0.5s after connect).
-        //  - idle_timeout (50s): hard abort on complete silence (= 5s × 10
-        //    rounds, was 90s; TCP timeouts cannot catch a hung keep-alive
-        //    connection).
+        //  - idle_timeout (30s): hard abort on complete silence (= 5s × 6
+        //    rounds — OUTPUT-BUDGET-RESTORE-AND-STALL-GUARD 2026-08-20,
+        //    ADR-0010 §14.35, 取代 STREAM-RETRY-RHYTHM 未实施的 50s; was
+        //    90s; TCP timeouts cannot catch a hung keep-alive connection).
         //  - total budget (30min): auxiliary backstop over the whole stream.
         // All parameterized via `ModelConfig::retry`.
         let idle_warn = self.config.retry.stream_idle_warn;
@@ -799,20 +991,21 @@ impl DeepSeekTransport {
                     &mut text_parts,
                     &mut reasoning_parts,
                     &mut tool_calls,
-                    &mut |text| {
-                        on_chunk(text);
-                        degeneration.feed(text);
-                    },
+                    &mut degeneration,
+                    &mut |text| on_chunk(text),
                 );
                 if let Some(fr) = choice.finish_reason {
                     saw_finish_reason = true;
                     finish_reason = map_finish_reason(Some(fr));
                 }
             }
-            // OUTPUT-DEGENERATION-GUARD (2026-08-19, ADR-0010 §14.33): 命中
+            // OUTPUT-DEGENERATION-GUARD (2026-08-19) + OUTPUT-BUDGET-
+            // RESTORE-AND-STALL-GUARD (2026-08-20, ADR-0010 §14.35): 预算
+            // 兜底层逐 chunk 检查（stall 时间/预算 OR 触发）后，命中任一
             // 检测阈值 → 主动中断。防循环计数：会话级连续退化次数达到
             // `DEGENERATION_LIMIT` 后带 `degeneration_limit_reached` 标记
             // （run 层映射 run_invalidated，计入 stagnation 同类终止态）。
+            degeneration.check_stall(std::time::Instant::now());
             if let Some(detail) = degeneration.trip_reason() {
                 let detail = self.degeneration_interrupt_detail(detail);
                 return Err(GatewayError::StreamInterrupted {
@@ -830,6 +1023,25 @@ impl DeepSeekTransport {
                 saw_chunk,
                 GatewayError::Transport("stream ended without finish_reason".to_string()),
             ));
+        }
+
+        // OUTPUT-BUDGET-RESTORE-AND-STALL-GUARD (2026-08-20, ADR-0010
+        // §14.35): usage 到达（final chunk）时以真实 reasoning_tokens 复核
+        // 字符估算——审计留痕、不改中断决策（中断发生在 usage 前）；S4
+        // 用该数据校准 `REASONING_CHARS_PER_TOKEN`。
+        if let Some(u) = &stream_usage
+            && let Some(actual) = u
+                .completion_tokens_details
+                .as_ref()
+                .and_then(|d| d.reasoning_tokens)
+        {
+            let estimate = degeneration.reasoning_est_tokens();
+            tracing::debug!(
+                estimate = estimate,
+                actual = actual,
+                delta = actual as i64 - estimate as i64,
+                "reasoning token estimate vs usage (S4 calibration)"
+            );
         }
 
         let text = if text_parts.is_empty() {
@@ -1015,6 +1227,21 @@ struct StreamToolCall {
     call_id: String,
 }
 
+/// OUTPUT-BUDGET-RESTORE-AND-STALL-GUARD (2026-08-20, ADR-0010 §14.35):
+/// 完成型空响应重试的退避（设计 §3.2/§3.5——官方 llm-retry 默认形状：
+/// 500ms 起、指数增长至 10s 上限、±10% jitter；`max_elapsed_time` 只作
+/// 兜底，实际由 `EMPTY_RESPONSE_MAX_RETRIES` 次数约束）。
+fn empty_response_backoff() -> backoff::ExponentialBackoff {
+    backoff::ExponentialBackoff {
+        initial_interval: EMPTY_RESPONSE_BACKOFF_INITIAL,
+        max_interval: EMPTY_RESPONSE_BACKOFF_MAX,
+        randomization_factor: EMPTY_RESPONSE_BACKOFF_JITTER,
+        multiplier: 2.0,
+        max_elapsed_time: Some(std::time::Duration::from_secs(60)),
+        ..Default::default()
+    }
+}
+
 #[async_trait]
 impl ModelGateway for DeepSeekTransport {
     fn config_fingerprint(&self) -> String {
@@ -1064,59 +1291,98 @@ impl ModelGateway for DeepSeekTransport {
         heartbeat: Option<&crate::gateway::model::ActivityClock>,
         on_chunk: &mut (dyn for<'a> FnMut(&'a str) + Send),
     ) -> Result<ModelResponse, GatewayError> {
-        // D-6 empty-content retry chain on the streaming path (same shape as
-        // `generate`): normal → byte-identical retry → thinking-disabled
-        // degrade. Only ZERO-OUTPUT streams are re-attempted — a stream
-        // that produced any chunk is never retried (D-7 已见输出不重试:
-        // re-sending would duplicate tool execution).
+        // D-6 empty-content retry chain on the streaming path
+        // (OUTPUT-BUDGET-RESTORE-AND-STALL-GUARD 2026-08-20, ADR-0010
+        // §14.35 / 设计 §3.2 —— 官方化收窄版):
+        //   1. normal request (thinking per config, max + 256K);
+        //   2. completed EMPTY response (`empty_content_abnormal`) → fast
+        //      bounded retry: same params, backoff 500ms→10s + 10% jitter,
+        //      ≤ `EMPTY_RESPONSE_MAX_RETRIES` (official rhythm, narrowed
+        //      from 5 — 256K+max 下 5 次原样重试成本不可接受);
+        //   3. still empty → thinking DISABLED degrade (all output routed
+        //      to content);
+        //   4. still empty → explicit failure, never a silent blank.
+        // Reasoning-family guard interruptions (reasoning_repetition /
+        // reasoning_stall) during stages 1-2 do NOT re-run the identical
+        // request (长烧型空转原样重试大概率复现且贵) — they jump straight
+        // to the degraded stage. Content-family interruptions keep the
+        // no-retry passthrough (ADR-0007 已见输出不重试). Zero-chunk
+        // transport interruptions are handled inside
+        // `stream_once_with_retry` and are orthogonal to this chain.
         //
-        // Each stage additionally carries the GAP-STREAM-RETRY zero-chunk
-        // interruption retry (`stream_once_with_retry`): a stage that fails
-        // before any chunk existed re-sends the identical body with bounded
-        // backoff. Orthogonal to the D-6 chain — a stage succeeds only when
-        // a stream ran to completion (its own retries included).
-        let first = self
-            .stream_once_with_retry(
-                &request,
-                self.effective_thinking(&request),
-                cancel,
-                heartbeat,
-                on_chunk,
-            )
-            .await?;
-        if !Self::empty_content_abnormal(&first) {
-            return Ok(first);
+        let mut thinking = self.effective_thinking(&request);
+        let mut empty_retries: u32 = 0;
+        let mut backoff = empty_response_backoff();
+        loop {
+            match self
+                .stream_once_with_retry(&request, thinking, cancel, heartbeat, on_chunk)
+                .await
+            {
+                Ok(response) if !Self::empty_content_abnormal(&response) => {
+                    return Ok(response);
+                }
+                Ok(_empty) => {
+                    // 完成型空响应。降级阶段（thinking 禁用）仍空 → 显式失败。
+                    if thinking == ThinkingMode::Disabled {
+                        return Err(GatewayError::Model(
+                            "budget exhausted with zero output — D-6 chain \
+                             (fast bounded empty retries + thinking-disabled \
+                             degrade) all produced empty content"
+                                .to_string(),
+                        ));
+                    }
+                    if empty_retries >= EMPTY_RESPONSE_MAX_RETRIES {
+                        tracing::warn!(
+                            "completed empty response after {empty_retries} retries — \
+                             degrading to thinking-disabled"
+                        );
+                        thinking = ThinkingMode::Disabled;
+                        continue;
+                    }
+                    let Some(delay) = backoff.next_backoff() else {
+                        tracing::warn!(
+                            "completed empty response: backoff exhausted — degrading to \
+                             thinking-disabled"
+                        );
+                        thinking = ThinkingMode::Disabled;
+                        continue;
+                    };
+                    tracing::warn!(
+                        "completed empty response (retry {} of {}) — retrying in {delay:?}",
+                        empty_retries + 1,
+                        EMPTY_RESPONSE_MAX_RETRIES
+                    );
+                    match cancel {
+                        Some(c) => tokio::select! {
+                            biased;
+                            _ = c.cancelled() => return Err(GatewayError::Cancelled),
+                            _ = tokio::time::sleep(delay) => {}
+                        },
+                        None => tokio::time::sleep(delay).await,
+                    }
+                    // P1-1 (2026-08-08 stall guards): 退避是静默时间，停滞
+                    // 看门狗不得在此期间误判。
+                    if let Some(h) = heartbeat {
+                        h.stamp();
+                    }
+                    empty_retries += 1;
+                }
+                Err(GatewayError::StreamInterrupted { detail, .. })
+                    if is_reasoning_guard_detail(&detail)
+                        && thinking == ThinkingMode::EnabledMax =>
+                {
+                    // reasoning 族哨兵（复读/stall）→ 不原样快速重试、直接
+                    // 跳降级（设计 §3.2；limit 前缀三族共享、达限转
+                    // run_invalidated，由下方透传分支处理）。
+                    tracing::warn!(
+                        "reasoning-family guard interrupted the stream — skipping \
+                         identical retries, degrading to thinking-disabled: {detail}"
+                    );
+                    thinking = ThinkingMode::Disabled;
+                }
+                Err(e) => return Err(e),
+            }
         }
-        let second = self
-            .stream_once_with_retry(
-                &request,
-                self.effective_thinking(&request),
-                cancel,
-                heartbeat,
-                on_chunk,
-            )
-            .await?;
-        if !Self::empty_content_abnormal(&second) {
-            return Ok(second);
-        }
-        let degraded = self
-            .stream_once_with_retry(
-                &request,
-                ThinkingMode::Disabled,
-                cancel,
-                heartbeat,
-                on_chunk,
-            )
-            .await?;
-        if !Self::empty_content_abnormal(&degraded) {
-            return Ok(degraded);
-        }
-        Err(GatewayError::Model(
-            "budget exhausted with zero output — thinking max retry chain \
-             (byte-identical retry + thinking-disabled degrade) all produced \
-             empty content"
-                .to_string(),
-        ))
     }
 }
 
@@ -1125,12 +1391,14 @@ fn apply_delta(
     text_parts: &mut Vec<String>,
     reasoning_parts: &mut Vec<String>,
     tool_calls: &mut Vec<(u32, StreamToolCall)>,
+    degeneration: &mut DegenerationDetector,
     on_chunk: &mut dyn FnMut(&str),
 ) {
     if let Some(content) = &delta.content
         && !content.is_empty()
     {
         text_parts.push(content.clone());
+        degeneration.feed_content(content);
         on_chunk(content);
     }
     if let Some(reasoning) = &delta.reasoning_content
@@ -1139,10 +1407,11 @@ fn apply_delta(
         // Reasoning deltas are joined verbatim; they are never delivered as
         // live text deltas (TUI shows answers, not chains of thought).
         reasoning_parts.push(reasoning.clone());
+        degeneration.feed_reasoning(reasoning);
     }
     if let Some(chunks) = &delta.tool_calls {
         for tc in chunks {
-            apply_tool_call_chunk(tc, tool_calls);
+            apply_tool_call_chunk(tc, tool_calls, degeneration);
         }
     }
 }
@@ -1150,6 +1419,7 @@ fn apply_delta(
 fn apply_tool_call_chunk(
     chunk: &ChatCompletionMessageToolCallChunk,
     tool_calls: &mut Vec<(u32, StreamToolCall)>,
+    degeneration: &mut DegenerationDetector,
 ) {
     let entry = match tool_calls
         .iter_mut()
@@ -1165,6 +1435,11 @@ fn apply_tool_call_chunk(
         entry.1.call_id.clone_from(id);
     }
     if let Some(function) = &chunk.function {
+        if let Some(arguments) = &function.arguments
+            && !arguments.is_empty()
+        {
+            degeneration.feed_tool_arguments(arguments);
+        }
         apply_function_chunk(function, &mut entry.1);
     }
 }
@@ -1227,25 +1502,28 @@ mod tests {
     #[test]
     fn build_request_sets_thinking_enabled_max_d6() {
         // D-6 (FIX_PLAN 2026-08-06) — the restored max-config: thinking
-        // enabled + reasoning_effort "max" + 32K single-round budget
-        // (OUTPUT-DEGENERATION-GUARD 2026-08-19, ADR-0010 §14.33; previously
-        // 160K after the 2026-08-07 live probe). The 32K value is the
+        // enabled + reasoning_effort "max" + 256K single-round budget
+        // (OUTPUT-BUDGET-RESTORE-AND-STALL-GUARD 2026-08-20, ADR-0010
+        // §14.35 — 输出预算恢复 32K → 256K，回落档 128K; previously 160K
+        // after the 2026-08-07 live probe, 32K under
+        // OUTPUT-DEGENERATION-GUARD 2026-08-19). The 256K value is the
         // whole-token single-round cap; the stream requests include_usage so
         // reasoning tokens are observable on the streaming path.
         let t = DeepSeekTransport::deepseek_v4("sk-test", "deepseek-v4-flash");
         let mut req = request();
-        // The request-level max_tokens is the min-cap over the config's 32K
-        // (OUTPUT-DEGENERATION-GUARD 2026-08-19, ADR-0010 §14.33) — a
-        // request asking for MORE than the config cap gets the cap, a
-        // request asking for less (e.g. gate rounds at 1024) gets less.
-        req.max_tokens = 200_000;
+        // The request-level max_tokens is the min-cap over the config's 256K
+        // (OUTPUT-BUDGET-RESTORE-AND-STALL-GUARD 2026-08-20, ADR-0010
+        // §14.35) — a request asking for MORE than the config cap gets the
+        // cap, a request asking for less (e.g. gate rounds at 1024) gets
+        // less.
+        req.max_tokens = 300_000;
         let json = serde_json::to_value(t.build_request(&req)).unwrap();
         let s = json.to_string();
         assert_eq!(json["thinking"]["type"], "enabled", "{s}");
         assert_eq!(json["reasoning_effort"], "max", "{s}");
         assert_eq!(
-            json["max_tokens"], 32_000,
-            "config 32K caps the request-level budget: {s}"
+            json["max_tokens"], 256_000,
+            "config 256K caps the request-level budget: {s}"
         );
         assert_eq!(
             json["stream_options"]["include_usage"], true,
@@ -1279,10 +1557,10 @@ mod tests {
     fn degeneration_detector_trips_on_five_identical_deltas() {
         let mut d = DegenerationDetector::default();
         for _ in 0..4 {
-            d.feed("same");
+            d.feed_content("same");
             assert!(d.trip_reason().is_none());
         }
-        d.feed("same");
+        d.feed_content("same");
         let reason = d.trip_reason().expect("5 identical deltas must trip");
         assert!(reason.starts_with(DEGENERATION_DETAIL_PREFIX), "{reason}");
         assert!(reason.contains("identical content deltas"), "{reason}");
@@ -1292,7 +1570,7 @@ mod tests {
     fn degeneration_detector_no_trip_below_thresholds() {
         let mut d = DegenerationDetector::default();
         for i in 0..200 {
-            d.feed(&format!("distinct {i} token"));
+            d.feed_content(&format!("distinct {i} token"));
             assert!(
                 d.trip_reason().is_none(),
                 "short varied output must not trip"
@@ -1309,7 +1587,7 @@ mod tests {
         let b = "see archived log for full content elided middle";
         let mut d = DegenerationDetector::default();
         for i in 0..200 {
-            d.feed(if i % 2 == 0 { a } else { b });
+            d.feed_content(if i % 2 == 0 { a } else { b });
         }
         let reason = d.trip_reason().expect("high repetition must trip");
         assert!(reason.contains("3-gram repetition ratio"), "{reason}");
@@ -1633,12 +1911,14 @@ mod tests {
         let mut tool_calls: Vec<(u32, StreamToolCall)> = Vec::new();
         let mut chunks = Vec::new();
         let mut emit = |c: &str| chunks.push(c.to_string());
+        let mut degeneration = DegenerationDetector::default();
 
         apply_delta(
             &delta(Some("Hel"), Some("think-"), None),
             &mut text_parts,
             &mut reasoning_parts,
             &mut tool_calls,
+            &mut degeneration,
             &mut emit,
         );
         apply_delta(
@@ -1651,6 +1931,7 @@ mod tests {
             &mut text_parts,
             &mut reasoning_parts,
             &mut tool_calls,
+            &mut degeneration,
             &mut emit,
         );
         apply_delta(
@@ -1663,6 +1944,7 @@ mod tests {
             &mut text_parts,
             &mut reasoning_parts,
             &mut tool_calls,
+            &mut degeneration,
             &mut emit,
         );
         apply_delta(
@@ -1674,6 +1956,7 @@ mod tests {
             &mut text_parts,
             &mut reasoning_parts,
             &mut tool_calls,
+            &mut degeneration,
             &mut emit,
         );
 
@@ -2323,11 +2606,12 @@ mod tests {
         }
     }
 
-    /// STREAM-RETRY-RHYTHM (2026-08-20, ADR-0010 §14.34): retry params take
-    /// part in the request-header fingerprint — a value change is a real
-    /// header change (cache-miss attribution). The default digest must equal
-    /// the digest built from the explicit new values (5s / 50s / 50s) and
-    /// differ from the legacy digest (20s / 90s / 32s).
+    /// STREAM-RETRY-RHYTHM (2026-08-20, ADR-0010 §14.34) + OUTPUT-BUDGET-
+    /// RESTORE-AND-STALL-GUARD (2026-08-20, ADR-0010 §14.35): retry params
+    /// take part in the request-header fingerprint — a value change is a
+    /// real header change (cache-miss attribution). The default digest must
+    /// equal the digest built from the explicit new values (5s / 30s / 50s)
+    /// and differ from the legacy digest (20s / 90s / 32s).
     #[test]
     fn config_fingerprint_reflects_stream_retry_rhythm_defaults() {
         let fingerprint_for = |retry: RetryPolicy| {

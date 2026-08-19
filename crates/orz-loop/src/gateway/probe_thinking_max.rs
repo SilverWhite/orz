@@ -2,12 +2,12 @@
 //!
 //! Measures the real DeepSeek V4 surface under the production thinking
 //! config: `thinking: {type: "enabled"}` + `reasoning_effort: "max"` +
-//! `max_tokens: 32_000` (OUTPUT-DEGENERATION-GUARD 2026-08-19, ADR-0010
-//! §14.33: single-round budget 160K → 32K; previously 160_000) — latency,
-//! convergence, content behavior (empty content on tool rounds is legal),
-//! tool-round protocol (reasoning_content replay), and
-//! `usage.reasoning_tokens` (raw JSON — the fork's typed `CompletionUsage`
-//! drops unknown fields).
+//! `max_tokens: 256_000` (OUTPUT-BUDGET-RESTORE-AND-STALL-GUARD
+//! 2026-08-20, ADR-0010 §14.35: 输出预算恢复 32K → 256K，回落档 128K;
+//! previously 160_000 / 32_000) — latency, convergence, content behavior
+//! (empty content on tool rounds is legal), tool-round protocol
+//! (reasoning_content replay), and `usage.reasoning_tokens` (raw JSON —
+//! the fork's typed `CompletionUsage` drops unknown fields).
 //!
 //! TWO probes:
 //!   1. `probe_thinking_max_tool_task`  — file-based multi-round tool task
@@ -15,8 +15,9 @@
 //!      shape. Exercises the full tool-round protocol with replay.
 //!   2. `probe_thinking_max_streaming_ttft` — streaming TTFT: time to first
 //!      reasoning delta vs first content delta. Calibrates the D-7 stream
-//!      idle watchdog (5s warn / 50s hard abort, STREAM-RETRY-RHYTHM
-//!      2026-08-20).
+//!      idle watchdog (5s warn / 30s hard abort — OUTPUT-BUDGET-RESTORE-
+//!      AND-STALL-GUARD 2026-08-20, ADR-0010 §14.35, 取代 STREAM-RETRY-
+//!      RHYTHM 未实施的 50s).
 //!
 //! Both are `#[ignore]` + double-gated on `ORZ_TEST_LIVE=1` and read the
 //! ADR-0006 Windows Credential Manager key — same convention as the existing
@@ -36,7 +37,7 @@ use crate::gateway::transport::DEFAULT_DEEPSEEK_API_BASE;
 
 const MODEL: &str = "deepseek-v4-flash";
 const ROUND_CAP: usize = 6;
-/// Per-request wall-clock guard (thinking max on the 32K single-round
+/// Per-request wall-clock guard (thinking max on the 256K single-round
 /// budget is still slow by design — this only catches true hangs).
 const ROUND_TIMEOUT: Duration = Duration::from_secs(20 * 60);
 
@@ -155,12 +156,12 @@ mod tests {
 
         println!("── probe_thinking_max_tool_task ──");
         println!(
-            "model={MODEL} thinking=enabled effort=max max_tokens=32000 task=read×3+sum+write"
+            "model={MODEL} thinking=enabled effort=max max_tokens=256000 task=read×3+sum+write"
         );
         let t0 = Instant::now();
         let mut rounds = 0usize;
         loop {
-            let body = request_body(&messages, true, 32_000, false);
+            let body = request_body(&messages, true, 256_000, false);
             let round_start = Instant::now();
             let resp = match timeout(
                 ROUND_TIMEOUT,
@@ -274,7 +275,7 @@ mod tests {
             json!({"role": "user", "content":
                 "Think carefully, then answer: what is 123456789 * 987654321? Give only the number."}),
         ];
-        let body = request_body(&messages, false, 32_000, true);
+        let body = request_body(&messages, false, 256_000, true);
 
         println!("── probe_thinking_max_streaming_ttft ──");
         let t0 = Instant::now();

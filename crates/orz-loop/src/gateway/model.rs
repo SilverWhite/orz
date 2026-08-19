@@ -3,10 +3,12 @@
 //! Thinking policy (IP1 → D-6, FIX_PLAN 2026-08-06): thinking is carried by
 //! `ModelConfig::thinking` (a transport-level knob — `ModelRequest` stays
 //! thinking-free so a caller cannot enable it by accident). The restored
-//! max-config is `enabled` + effort `max` + 160K budget, decided after the
-//! 2026-08-07 live probe (reasoning deltas flow ~0.5s after connect; content
-//! arrives ~30s later on hard tasks; `usage.reasoning_tokens` is reported
-//! per round). The empty-final-content retry chain lives in the transport.
+//! max-config is `enabled` + effort `max` + 256K budget (OUTPUT-BUDGET-
+//! RESTORE-AND-STALL-GUARD 2026-08-20, ADR-0010 §14.35; 32K 止损值
+//! 2026-08-19 由输出预算恢复取代), decided after the 2026-08-07 live probe
+//! (reasoning deltas flow ~0.5s after connect; content arrives ~30s later
+//! on hard tasks; `usage.reasoning_tokens` is reported per round). The
+//! empty-final-content retry chain lives in the transport.
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -31,7 +33,7 @@ pub struct RetryPolicy {
     /// Claude Code).
     pub request_retry_window: Duration,
     /// Single-request wall-clock timeout for the non-streaming path
-    /// (18min level — F-03, 2026-08-07: the 160K max-config thinking budget
+    /// (18min level — F-03, 2026-08-07: the max-config thinking budget
     /// can legitimately exceed 10min; 18min covers slow thinking plus
     /// network jitter. Non-streaming paths only — streaming paths are
     /// governed by the idle watchdog + total budget.)
@@ -39,12 +41,15 @@ pub struct RetryPolicy {
     /// Stream idle watchdog: after this much silence, warn (5s — 2026-08-20
     /// user ruling: quicker user-visible warning; was 20s, Claude Code).
     pub stream_idle_warn: Duration,
-    /// Stream idle watchdog: after this much silence, hard abort (50s = 5s ×
-    /// 10 rounds — STREAM-RETRY-RHYTHM 2026-08-20; was 90s, Claude Code).
-    /// Slow thinking with progress is NOT a timeout — only a dead wire.
+    /// Stream idle watchdog: after this much silence, hard abort (30s = 5s ×
+    /// 6 rounds — OUTPUT-BUDGET-RESTORE-AND-STALL-GUARD 2026-08-20,
+    /// ADR-0010 §14.35, 取代 STREAM-RETRY-RHYTHM 未实施的 50s 定值; was
+    /// 90s, Claude Code). Slow thinking with progress is NOT a timeout —
+    /// only a dead wire (实测 DeepSeek 流式约 47 包/秒持续流动，无 >秒级
+    /// 合法完全静默).
     pub stream_idle_timeout: Duration,
     /// Total stream budget (auxiliary, generous — a relaxed backstop on top
-    /// of the idle watchdog; full 160K thinking could exceed 10min).
+    /// of the idle watchdog; full max-config thinking could exceed 10min).
     pub stream_total_timeout: Duration,
 }
 
@@ -55,7 +60,7 @@ impl Default for RetryPolicy {
             request_retry_window: Duration::from_secs(50),
             request_timeout: Duration::from_secs(18 * 60),
             stream_idle_warn: Duration::from_secs(5),
-            stream_idle_timeout: Duration::from_secs(50),
+            stream_idle_timeout: Duration::from_secs(30),
             stream_total_timeout: Duration::from_secs(30 * 60),
         }
     }
@@ -176,7 +181,7 @@ pub struct ModelResponse {
     /// Token usage observation (D-6): reasoning tokens for this completion,
     /// when the provider reports them (DeepSeek `usage.completion_tokens_
     /// details.reasoning_tokens`). Journaled for budget/latency calibration —
-    /// the 160K budget decision rolls back on the data.
+    /// the single-round budget decision rolls back on the data.
     pub reasoning_tokens: Option<u32>,
     /// Total completion tokens for this response (usage.completion_tokens).
     pub completion_tokens: Option<u32>,
@@ -409,18 +414,20 @@ mod tests {
         assert_eq!(response.text.as_deref(), Some("buffered"));
     }
 
-    /// STREAM-RETRY-RHYTHM (2026-08-20, ADR-0010 §14.34): the default retry
-    /// policy carries the user-ruled rhythm — idle warn 5s, idle hard abort
-    /// 50s (= 5s × 10 rounds), zero-chunk / non-stream retry window 50s,
-    /// retry cap 10. The unchanged backstops are pinned too, so a future
-    /// tune cannot silently break the contract.
+    /// STREAM-RETRY-RHYTHM (2026-08-20, ADR-0010 §14.34) + OUTPUT-BUDGET-
+    /// RESTORE-AND-STALL-GUARD (2026-08-20, ADR-0010 §14.35): the default
+    /// retry policy carries the user-ruled rhythm — idle warn 5s, idle hard
+    /// abort 30s (= 5s × 6 rounds, 取代 STREAM-RETRY-RHYTHM 未实施的 50s),
+    /// zero-chunk / non-stream retry window 50s, retry cap 10. The unchanged
+    /// backstops are pinned too, so a future tune cannot silently break the
+    /// contract.
     #[test]
     fn default_retry_policy_matches_stream_retry_rhythm() {
         let p = RetryPolicy::default();
         assert_eq!(p.request_max_retries, 10);
         assert_eq!(p.request_retry_window, Duration::from_secs(50));
         assert_eq!(p.stream_idle_warn, Duration::from_secs(5));
-        assert_eq!(p.stream_idle_timeout, Duration::from_secs(50));
+        assert_eq!(p.stream_idle_timeout, Duration::from_secs(30));
         assert_eq!(p.request_timeout, Duration::from_secs(18 * 60));
         assert_eq!(p.stream_total_timeout, Duration::from_secs(30 * 60));
     }

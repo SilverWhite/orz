@@ -47,10 +47,13 @@ use crate::tool::ToolDispatcher;
 /// request-level value is min-capped by it — equal today, so the full
 /// budget is available (D-6: a thinking subagent with a 1024-token cap
 /// would spend everything on reasoning and die before producing output).
-/// OUTPUT-DEGENERATION-GUARD (2026-08-19, ADR-0010 §14.33): 160K → 32K
-/// （止损——退化复读 201K 字符 ≈ 10 万 token 由 160K max_tokens 放大；
-/// 正常轮次 reasoning p95 5.2K + completion max 23.7K，32K 覆盖 99%+）。
-pub const REQUEST_MAX_TOKENS: u32 = 32_000;
+/// OUTPUT-BUDGET-RESTORE-AND-STALL-GUARD (2026-08-20, ADR-0010 §14.35):
+/// 输出预算恢复 32K → 256K（官方 maxTokens 默认值；回落档 128K，S4 实测
+/// 不可接受才回落，编译期常量）。止损由输出健康哨兵承担——content 复读
+/// 检测（P0-0d）+ reasoning 复读灵敏层 + reasoning-stall 600s/64K 预算
+/// 兜底（与 max_tokens 解耦），空流不原样重试（D-6 快速有界 ≤2 次 +
+/// 降级出口）。
+pub const REQUEST_MAX_TOKENS: u32 = 256_000;
 
 /// One model generation round — the uniform round entry every agent
 /// implements (ADR-0010 §3.4: identical model request shape).
@@ -1262,9 +1265,10 @@ pub(crate) async fn run_agent_loop(
         } else {
             system
         };
-        // D-6 (FIX_PLAN 2026-08-06): subagents get the full 32K budget too
+        // D-6 (FIX_PLAN 2026-08-06): subagents get the full 256K budget too
         // (the main agent's request-level cap — §3.4.2 same defaults;
-        // OUTPUT-DEGENERATION-GUARD 2026-08-19: 160K → 32K).
+        // OUTPUT-BUDGET-RESTORE-AND-STALL-GUARD 2026-08-20, ADR-0010
+        // §14.35: 32K → 256K).
         // Review F3 (2026-08-10): ONE constant for both lanes — the three
         // agents must never carry their own literals.
         let max_tokens = match &profile.system_kind {
@@ -1449,13 +1453,23 @@ pub(crate) async fn run_agent_loop(
                         );
                     }
                 }
-                // OUTPUT-DEGENERATION-GUARD (2026-08-19, ADR-0010 §14.33):
-                // 退化中断分流——达到 DEGENERATION_LIMIT（会话级连续）→
-                // `AgentLoopError::Degeneration`（run 层记 run_invalidated，
-                // 计入 stagnation 同类终止态）；未达上限 → run_failed 同路径。
+                // OUTPUT-DEGENERATION-GUARD (2026-08-19) + OUTPUT-BUDGET-
+                // RESTORE-AND-STALL-GUARD (2026-08-20, ADR-0010 §14.35):
+                // 输出健康哨兵中断分流——达到 DEGENERATION_LIMIT（会话级
+                // 连续，三族共享）→ `AgentLoopError::Degeneration`（run 层
+                // 记 run_invalidated，计入 stagnation 同类终止态）；未达
+                // 上限 → run_failed 同路径。审计留痕（tracing）携带触发族
+                // 与 detail（reasoning 估算 token / 首 content 延迟在 stall
+                // detail 内），不改终止语义（设计 §3.3 journal/审计）。
                 if let GatewayError::StreamInterrupted { detail, .. } = &other
-                    && crate::gateway::transport::is_degeneration_detail(detail)
+                    && (crate::gateway::transport::is_degeneration_detail(detail)
+                        || crate::gateway::transport::is_reasoning_guard_detail(detail))
                 {
+                    tracing::warn!(
+                        guard_family = crate::gateway::transport::guard_family_label(detail),
+                        detail = %detail,
+                        "output-health guard interrupted the model round (audit-only)"
+                    );
                     if detail.starts_with(crate::gateway::transport::DEGENERATION_LIMIT_PREFIX) {
                         return Err(AgentLoopError::Degeneration(detail.clone()));
                     }
@@ -1493,8 +1507,10 @@ pub(crate) async fn run_agent_loop(
                     },
                     // D-6 usage observation — reasoning tokens per round
                     // calibrate the single-round budget decision (data →
-                    // whether the 32K cap needs calibration; 160K→32K per
-                    // OUTPUT-DEGENERATION-GUARD 2026-08-19, ADR-0010 §14.33).
+                    // whether the 256K cap needs calibration; 32K→256K per
+                    // OUTPUT-BUDGET-RESTORE-AND-STALL-GUARD 2026-08-20,
+                    // ADR-0010 §14.35; S4 用 usage 复核
+                    // REASONING_CHARS_PER_TOKEN 估算系数).
                     "reasoning_tokens": response.reasoning_tokens,
                     "completion_tokens": response.completion_tokens,
                     // Cache-hit observation (2026-08-07 fix): per-round

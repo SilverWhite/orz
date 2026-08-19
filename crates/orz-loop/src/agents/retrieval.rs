@@ -60,7 +60,7 @@ impl RetrievalSubagent {
 
 /// GAP-SUBAGENT-RUNTIME (2026-08-10): the subagent's model round — same
 /// shape as `MainAgent::run_round` (ADR-0010 §3.4.2: identical model
-/// config; D-6: full 160K budget — a thinking subagent with a 1024 token
+/// config; D-6: full 256K budget — a thinking subagent with a 1024 token
 /// cap would spend everything on reasoning and die before producing
 /// output, the Anthropic subagent 8K hard-cap lesson).
 #[async_trait::async_trait]
@@ -288,7 +288,8 @@ mod tests {
     #[tokio::test]
     async fn subagent_run_round_uses_gateway_and_full_budget() {
         // The RoundAgent implementation forwards to the gateway with the
-        // same request shape as the main agent (160K budget — D-6).
+        // same request shape as the main agent (256K budget — D-6,
+        // OUTPUT-BUDGET-RESTORE-AND-STALL-GUARD 2026-08-20 §14.35).
         let subagent = RetrievalSubagent::new(
             SubagentRole::ExternalRetrieval,
             Arc::new(FakeProvider::from_texts(vec!["网页检索完成"])),
