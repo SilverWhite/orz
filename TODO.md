@@ -566,6 +566,35 @@
 - [ ] S3 重建（Linux musl，ORZ-BUILD-MOUNT-001 契约）
 - [ ] S4 复验（≥90%、无 400、无退化中断、首轮不再 10 分钟级长等）
 
+### P0-0d 后续：OUTPUT-BUDGET-RESTORE-AND-STALL-GUARD（P0 派生；2026-08-20
+设计定稿，待实施）
+
+> 入口：[设计](docs/DEEPSEEK_OUTPUT_BUDGET_AND_STALL_GUARD_DESIGN_2026-08-20.md)；
+> ADR-0010 §14.35（v1.35）；BACKLOG 0d。
+> 来源：官方 deepseek-harness 对照（默认 high/256K/EMPTY_RESPONSE 快速有界
+> 重试）+ 今晚空流链实证（max+32K 截断→空响应→D-6 原样重试放大；检测器
+> content 盲区）。
+> 定案（用户方向，先设计不实施）：`REQUEST_MAX_TOKENS` 32K→256K（回落档
+> 128K）；D-6 空流链官方化收窄（完成型空响应快速有界重试 ≤2 次、500ms→10s+
+> 10% jitter → thinking 禁用降级；reasoning 族异常不原样、直接降级）；退化
+> 检测器升级为输出健康哨兵（content+reasoning+tool 观测、reasoning 复读、
+> reasoning-stall 600s/64K 双信号（预算兜底）——空转预算与 max_tokens 解耦、
+> 重试分类=有可见输出不重试/无可见输出降级、DEGENERATION_LIMIT=3 三族共享）；
+> 二轮修订（实测校准）：合法难题首轮 17,757 reasoning/184s 正常产出
+> （RUN-CLI-6a85f668），120s/16K 会误杀；三轮修订（用户裁决：兜底兼容 max
+> 思考）：成本账（32K≈¥0.147、64K≈¥0.294、现状空流链 2×32K≈¥0.30）——
+> 64K 兜底单次最坏 ≈ 现状整条链且消除链式等待，兜底定 600s/64K（S4 校准
+> 300–900s/32–128K）；同日修订——idle 死线 50s→30s（取代
+> STREAM-RETRY-RHYTHM 未实施的 50s）、160K 复读归因已修正作为恢复依据、
+> 重试层保留 transport 内链 + 官方节奏。
+> 实施路由：S1 代码 → S2 测试 → S3 重建 → S4 复验（难题单题、账单对账、
+> 空流率观测、stall 校准）。设计轮不动计数（28）。
+
+- [ ] S1 代码（256K + D-6 链改造 + 检测器升级）
+- [ ] S2 测试（请求头/stall 双信号/链路径/估算校准/回归）
+- [ ] S3 重建（Linux musl，ORZ-BUILD-MOUNT-001 契约）
+- [ ] S4 复验（≥90%、无 400、无空流链、账单对账、stall 校准；不可接受回落 128K）
+
 ### P0-B FUS-RETRIEVAL-MECH（`implemented`；批次 1-6 已全部闭合，2026-08-14，保留供核对）
 
 依赖顺序：1（B-1，已闭合）→ 2/3/5（已闭合）→ 4（已闭合）→ 6。

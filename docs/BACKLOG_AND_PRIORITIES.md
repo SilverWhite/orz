@@ -558,6 +558,36 @@
   ADR-0010 §14.34（v1.34）/ [设计](STREAM_RETRY_RHYTHM_DESIGN_2026-08-20.md)
   / CLI_PROJECT_INDEX / TODO P0-0d。
 
+- **2026-08-20 官方 harness 对照 + 输出预算恢复与空流止损设计定稿（用户
+  方向：评估 256K+max、空流处理官方化、退化检测器大升级；先设计、不动作）**
+  ：官方 llm-deepseek/llm-retry 源码对照（默认 high/256K/5min idle；
+  EMPTY_RESPONSE 空即错即退 5 次、退避 500ms→10s+10% jitter、重试在
+  step 边界；无生成期退化防护）。今晚 7 次运行 + pcap + 账单定论根因链
+  =max 档思考 + 32K 截断→完成型空响应→D-6 原样重试放大（10 分钟级）；
+  检测器只喂 content delta、空流全程沉默。**定案**：①`REQUEST_MAX_TOKENS`
+  32K→256K（回落档 128K、S4 实测校准）；②D-6 链官方化收窄——完成型空响应
+  快速有界重试 ≤2 次（500ms→10s+10% jitter）→ thinking 禁用降级；
+  reasoning 族异常（stall/复读）不原样、直接降级；③退化检测器大升级为
+  输出健康哨兵——观测面扩到 content+reasoning+tool arguments、新增
+  reasoning 复读（灵敏层，循环特征即触发）+ reasoning-stall（预算兜底：
+  首 chunk 起 600s 无 content/tool_calls、或 reasoning 估算 ≥64K tokens，
+  OR 触发——**空转预算与 max_tokens 解耦**；系数 2 字符/token）、重试分类=
+  有可见输出不重试（content 族，ADR-0007）/无可见输出降级、
+  `DEGENERATION_LIMIT=3` 三族共享。**同日修订**：idle 死线 50s→30s（取代
+  STREAM-RETRY-RHYTHM 未实施的 50s 定值；warn 5s/retry window 50s 不变）；
+  160K 复读归因=架构工具设计（无再读闭环）已由 P0-0d 修正、作为恢复 256K
+  安全依据；重试层结论=保留 transport 内链 + 吸收官方空流节奏，不迁移 step
+  边界。**二轮修订（实测校准）**：合法难题首轮 17,757 reasoning/184s 正常
+  产出（RUN-CLI-6a85f668）——120s/16K 会误杀合法轮。**三轮修订（用户裁决：
+  兜底兼容 max 思考、灵敏层负责快速）**：成本账（实测 ¥4.592/M output，
+  32K≈¥0.147/64K≈¥0.294/256K≈¥1.176；现状空流链 2×32K≈¥0.30）——64K
+  兜底单次最坏 ≈ 现状整条链且消除链式等待，兜底定 **600s/64K**（S4 校准
+  300–900s/32–128K，合法锚点 3.6 倍思考空间）；兜底管单次上限、D-6 管重试
+  次数，两本账解耦。设计轮不动计数（28）。登记于
+  ADR-0010 §14.35（v1.35）/
+  [设计](DEEPSEEK_OUTPUT_BUDGET_AND_STALL_GUARD_DESIGN_2026-08-20.md)
+  / CLI_PROJECT_INDEX / TODO P0-0d。
+
 ### 0. 前置收尾（提交前需用户确认）
 
 - 已完成（995a384）：提交当前未提交登记——CLI_PROJECT_INDEX 索引更新、两份设计文档（含优先级标记）、本文件与各指针更新。

@@ -243,6 +243,37 @@
 > 400、无退化中断、首轮不再 10 分钟级长等）；设计轮不动计数（28）。
 > 登记于 ADR-0010 §14.34（v1.34）/ [设计](docs/STREAM_RETRY_RHYTHM_DESIGN_2026-08-20.md)
 > / BACKLOG 0d / TODO P0-0d。
+> 2026-08-20 官方 harness 对照 + 输出预算恢复与空流止损设计定稿登记（用户
+> 方向：评估 256K+max、空流处理官方化、退化检测器大升级；先设计、不动作）
+> ——官方 deepseek-harness（llm-deepseek/llm-retry，2026-08 master）源码
+> 对照：默认 `reasoning_effort=high`、`maxTokens=256_000`、idle 5 分钟、
+> EMPTY_RESPONSE 空即错即退（normal 5 次、退避 500ms→10s+10% jitter、重试
+> 在 durable step 边界、无生成期退化防护）。今晚 7 次运行对照 + pcap + 账单
+> 对账定论：空流根因链=max 档思考 + 32K max_tokens 截断 reasoning → 完成型
+> 空响应 → D-6 原样重试放大（10 分钟级）；退化检测器只喂 content delta、空流
+> 场景全程沉默。**定案**：①`REQUEST_MAX_TOKENS` 32K→256K（回落档 128K、
+> S4 实测校准）；②D-6 空流链官方化收窄——完成型空响应快速有界重试 ≤2 次
+> （500ms→10s+10% jitter）→ thinking 禁用降级；reasoning 族异常不原样、
+> 直接降级；③退化检测器升级为输出健康哨兵——观测面扩到 content+reasoning+
+> tool arguments，新增 reasoning 复读（灵敏层，循环特征即触发）与
+> reasoning-stall（首 chunk 起 600s 无 content/tool_calls、或 reasoning
+> 估算 ≥64K tokens，OR 触发——空转预算与 max_tokens 解耦；系数 2 字符/
+> token）；**二轮修订（实测校准）**：合法难题首轮 17,757 reasoning/184s
+> 正常产出（RUN-CLI-6a85f668）——原定 120s/16K 会误杀合法轮；**三轮修订
+> （用户裁决：兜底兼容 max 思考、灵敏层负责快速）**：成本账（实测
+> ¥4.592/M output，32K≈¥0.147/64K≈¥0.294/256K≈¥1.176；现状空流链
+> 2×32K≈¥0.30）——64K 兜底单次最坏 ≈ 现状整条链且消除链式等待，兜底定
+> **600s/64K**（S4 校准 300–900s/32–128K，合法锚点 3.6 倍思考空间）；
+> 兜底管单次上限、D-6 管重试次数，两本账解耦。同日修订
+> ——idle 死线 50s→30s
+> （取代 STREAM-RETRY-RHYTHM 未实施的 50s）、160K 复读归因=架构工具设计
+> （无再读闭环）已由 P0-0d 修正、作为恢复 256K 安全依据、重试层结论=保留
+> transport 内链 + 吸收官方空流节奏（不迁移 step 边界）；重试分类=有可见
+> 输出不重试（content 族，ADR-0007）、无可见输出降级；`DEGENERATION_LIMIT=3`
+> 三族共享。设计轮不动计数（28）。登记于
+> ADR-0010 §14.35（v1.35）/
+> [设计](docs/DEEPSEEK_OUTPUT_BUDGET_AND_STALL_GUARD_DESIGN_2026-08-20.md)
+> / BACKLOG 0d / TODO P0-0d。
 2026-08-15 黑板 plan epoch 复查补强登记（ADR-0010 v1.15⑧）——plan_epoch 时间戳单调编号、身份一一对应强制、retention 保留最高编号快照。
 > 2026-08-15 黑板 plan epoch 复查遗留闭合登记（ADR-0010 v1.15⑨）——F2 原子写盘+回退加载、F4 跨进程 `.claim-<n>` 占号、F5 归档目录单一来源、F6 非法 epoch 显式报错、F7 归档失败入事件面（新 v0.2 `epoch_archive_write_failed`）、F9 `persisted_at` 更名、F10 设计 §5 措辞对齐。
 > 2026-08-15 ACAF fail-closed 生产启用裁决登记（用户裁决放行）——P2 IMPL-CONTROL-FABRIC 决策门放行；翻转执行与核查清单 ⑦⑨⑩⑪ 收口/边界登记待实施。
