@@ -1,12 +1,14 @@
-# 输出退化防护与工具结果可再读闭环设计（2026-08-19 设计定稿；S1/S2 已实施）
+# 输出退化防护与工具结果可再读闭环设计（2026-08-19 设计定稿；S1-S4 已全部闭合）
 
-> 状态：`design-final`（2026-08-19 用户裁决：8K 全统一限值 + 桥 8K 不动 +
+> 状态：`implemented`（2026-08-19 用户裁决：8K 全统一限值 + 桥 8K 不动 +
 > 补读闭环硬约束 + 前两层补强；先设计、不动作）。
 > 2026-08-19 S1 代码 + S2 测试实施闭合（用户放行；orz 提交 5e968ec +
 > 审查处理 19b839f）；同日
 > 全面审查处理（P1 点读判定改按订单动作名 + P3 指针预算/注释/可读性测试/
-> 登记），见 §3.2/§3.3 修订与文末「审查处理登记」。
-> 登记：ADR-0010 §14.33（v1.33，2026-08-19）/ BACKLOG 0d / TODO P0-0d /
+> 登记），见 §3.2/§3.3 修订与文末「审查处理登记」；2026-08-20 S3 重建 +
+> S4 复验闭环（含 S4 发现缺口修复：权限层放行会话 .gsa 卷内终端输出日志
+> 的 read_file/grep），见 §6 验证结果与 §9。
+> 登记：ADR-0010 §14.33（v1.33，第 3 项）/ BACKLOG 0d / TODO P0-0d /
 > CLI_PROJECT_INDEX。
 > 关联：FUS-LEDGER-FOLD-BRIDGE（§14.32 桥 8K）、BLACKBOARD_READ_CACHE_COST
 > DESIGN（§4.5 方案 B 点读 8K）、FUS-STAGNATION（§4.5 停滞守卫）、
@@ -197,6 +199,15 @@ search_replace/index 等 text-output 动作共用（同一
 - S4：无退化复读中断（或有触发但按设计终止、无 hang）、无 400、命中率
   ≥90%、补读路径可用（模型实际 read_file 落盘文件成功）；
 - 计数：实施放行时入账 1 项（28 → 29），验证闭环后 29 → 28。
+- **验证结果（2026-08-20，S3/S4 闭环）**：S3 两轮 Linux musl 重建成功
+  且时间戳更新（build-20260819.log 11m04s / build-20260819b.log 3m56s，
+  三件套齐全）；S4 三轮 make-doom-for-mips 单题复验 + 端到端探针——无
+  退化复读中断 / 无 hang（agent 全程活跃至 900s 任务预算耗尽）、零 400、
+  journal 口径命中率 94.25%（124 请求）与 91.91%（73 请求）均 ≥90%、
+  补读路径真实可用（模型按截断收据指针 read_file 落盘文件三次成功：
+  1–1000 行、offset/limit 分页 1001–1200 行、操作台订单复核
+  line-1190–1200，1200 行完整取回）。S4 发现并修复缺口（权限层拒绝
+  .gsa 读取使补读指针不可用，见 §9）后闭环；计数 29 → 28。
 
 ## 9. 审查处理登记（2026-08-19 全面审查）
 
@@ -214,6 +225,18 @@ search_replace/index 等 text-output 动作共用（同一
   （ADR-0010 §14.33 / BACKLOG 0d / TODO P0-0d / CLI_PROJECT_INDEX）。
 - **解释登记**：「同一 run 连续 3 次退化中断」字面不可达（run_failed 即
   终止 run），实现为会话级连续计数（成功请求重置），见 §3.3。
+- **S4 复验发现与修复（2026-08-20）**：终端截断收据指向
+  `.gsa/session/terminal/<order>.log` 并指示 read_file，但权限层
+  `access_in_scope` 按「.gsa 树 agent-invisible」拒绝全部 .gsa 读取——
+  make-doom 第二轮复验中模型按指针补读被 `policy_denied`（对台账
+  current.md 的 grep 同被拒），补读闭环实际不可用，违反 §2「补读闭环
+  为硬约束」。修复=白名单会话 .gsa 卷内 `session/terminal/*.log` 的
+  read_file/grep（对齐 run_tests_output.txt 受控 artifact 先例）：
+  lexical 路径限 `session/terminal/` 目录 + `.log` 扩展名，canonical
+  目标必须落在会话 cwd 或会话自身 .gsa 卷内（防符号链接外逃）；顺带
+  修正 run_tests 白名单为 symlink-aware 比较（`.gsa` 为符号链接时
+  canonical 与 lexical 不同）。验证：orz-host 单测 221 通过 / fmt 干净 /
+  clippy 无新增；端到端探针确认截断→指针→read_file 全链路成功。
 
 ## 7. 风险与回滚
 

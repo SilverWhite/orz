@@ -82,11 +82,13 @@
 > 本快照只做计数与分组召回，明细以下方各分组勾选清单为唯一入口，不新增独立条目；
 > 后续扫描更新时同步替换本快照日期与计数。
 
-- 未闭合总数：**28 项**（2026-08-19 0c 验证闭环 29 → 28）
+- 未闭合总数：**28 项**（2026-08-19 0c 验证闭环 29 → 28；2026-08-20
+  0d 验证闭环 29 → 28）
   - P0-C：0 项（PLAN-FIRST 阶段 A/B/C 全部闭合，2026-08-16）
   - P0 评测冒烟暴露：0 项（P0-E 主项 7 项 + FUS-TOOL-SCOPE-CONTRACT 后续 2 项全部闭合 2026-08-18，见 P0-E grep 项后续①/②）
   - P0 Benchmark 完全体：1 项（FUS-BENCHMARK-FULL-EXEC 实施完成待验证，见 P0-F；验证闭环后回 27）
   - P0 折叠历史外挂：0 项（LEDGER-FOLD-EXTERNAL-FILE，S3/S4 验证闭环 2026-08-19，见 P0-0c）
+  - P0 输出退化防护：0 项（OUTPUT-DEGENERATION-GUARD，S3/S4 验证闭环 2026-08-20，见 P0-0d）
   - P1 可并行审计/证据：9 项（组件登记 1、Windows 证据 3、DeepSeek 1、会话上下文监测 4）
   - P2 生产化决策门：5 项（Slice 3、Slice 4、ACAF 可选工程项、OPS 裁剪设计、OPS 生产接线裁决）
   - P3 收尾/清理：7 项（EVIDENCE-LOCAL-BROWSER、GATE-CHAIN、observed-scope 枚举、V11-IMPL-003、V11-IMPL-007、orz-host flaky、DC 硬信号 4/6）
@@ -482,7 +484,7 @@
   TODO/索引状态同步完成（ADR-0010 §14.32 第 4 项）。
 
 ### P0-0d OUTPUT-DEGENERATION-GUARD（P0；2026-08-19 用户裁决：先设计、
-不实施；设计定稿；S1 代码 + S2 测试已实施闭合 + 全面审查处理，S3/S4 待续）
+不实施；设计定稿；**S1-S4 全部闭合 2026-08-20**）
 
 > 入口：[设计](docs/OUTPUT_DEGENERATION_GUARD_DESIGN_2026-08-19.md)；
 > ADR-0010 §14.33（v1.33）；BACKLOG 0d。
@@ -509,10 +511,21 @@
 > 共用，原判定给非终端 receipt 死指针）+ 回归测试；P3 指针块计入 8K
 > 预算、160K 注释清理（探针改 32K）、.gsa 可读性专属测试、登记同步。
 > 计数：实施放行入账（28→29），S3/S4 验证闭环后 29→28。
+> **2026-08-20 S3 重建 + S4 复验闭环 + S4 缺口修复（用户放行）**：S3
+> Linux musl 重建（ORZ-BUILD-MOUNT-001 契约，两轮重建成功、三件套
+> 时间戳更新）；S4 make-doom-for-mips 单题复验（三轮 + 端到端探针）——
+> 无退化复读中断/无 hang、零 400、journal 口径命中率 94.25% 与 91.91%
+> 均 ≥90%、补读路径真实可用。S4 发现并修复缺口：权限层拒绝 .gsa 读取
+> 使截断收据的补读指针不可用（第二轮回执尝试补读被 policy_denied），
+> 修复=白名单会话 .gsa 卷内 `session/terminal/*.log` 的 read_file/grep
+> （lexical 限目录 + canonical 限会话卷；run_tests 白名单补 symlink-aware
+> 比较），orz-host 单测 221 通过 / fmt 干净 / clippy 无新增；端到端探针
+> 确认模型按指针 read_file 三次成功（1200 行完整取回）。计数：验证闭环
+> 29 → 28。
 > [x] S1 代码
 > [x] S2 测试（含审查处理补项）
-> [ ] S3 重建（Linux musl，ORZ-BUILD-MOUNT-001 契约）
-> [ ] S4 复验（无退化中断、无 400、命中率 ≥90%、补读路径可用）
+> [x] S3 重建（Linux musl，ORZ-BUILD-MOUNT-001 契约）
+> [x] S4 复验（无退化中断、无 400、命中率 ≥90%、补读路径可用）
 
 ### P0-B FUS-RETRIEVAL-MECH（`implemented`；批次 1-6 已全部闭合，2026-08-14，保留供核对）
 

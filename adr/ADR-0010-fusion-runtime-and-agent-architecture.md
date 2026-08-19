@@ -2036,6 +2036,34 @@ ADR §3.6 正文修订随实施登记。
    补读路径可用）待续。登记于 BACKLOG 0d / TODO P0-0d / CLI_PROJECT_INDEX
    / OUTPUT_DEGENERATION_GUARD_DESIGN_2026-08-19（§9 审查处理登记）。
 
+3. **S3 重建 + S4 复验闭环 + S4 缺口修复（2026-08-20 用户放行；orz
+   提交 f2cb1e0，已推送）**：S3 Linux musl 重建（ORZ-BUILD-MOUNT-001
+   契约，两轮：build-20260819.log 11m04s / build-20260819b.log 3m56s，
+   三件套时间戳更新）。S4 make-doom-for-mips 单题复验（三轮运行 +
+   端到端探针）——无退化复读中断 / 无 hang（agent 全程活跃至 900s 任务
+   预算耗尽）、零 400、journal 口径命中率 94.25%（124 请求，job
+   2026-08-19__22-50-01）与 91.91%（73 请求，job 2026-08-19__23-25-53）
+   均 ≥90%、补读路径真实可用（模型按截断收据指针 read_file 落盘文件
+   三次成功：1–1000 行、offset/limit 分页 1001–1200 行、操作台订单
+   复核 line-1190–1200）。**S4 发现并修复缺口（2026-08-19/20）**：终端
+   截断收据指向 `.gsa/session/terminal/<order>.log` 并指示 read_file，
+   但 orz-host `access_in_scope` 的「.gsa 树 agent-invisible」规则拒绝
+   全部 .gsa 读取——第二轮复验中模型按指针补读被 `policy_denied`（对
+   台账 current.md 的 grep 同被拒），补读闭环实际不可用，违反设计 §2
+   「补读闭环为硬约束」。修复=在 `access_in_scope` 白名单会话 .gsa 卷内
+   `session/terminal/*.log` 的 read_file/grep（对齐 GAP-RUN-TESTS 的
+   `run_tests_output.txt` 受控 artifact 先例，ADR-0010 §3.8.3/F-09）：
+   lexical 路径限 `session/terminal/` 目录 + `.log` 扩展名，canonical
+   目标必须落在会话 cwd 或会话自身 .gsa 卷内（防符号链接外逃到其它
+   .gsa 内部或任意主机路径）；顺带修正 run_tests 白名单为 symlink-aware
+   比较（`.gsa` 为符号链接时 canonical 与 lexical 不同）。验证：orz-host
+   单测 221 通过（并发下 1 条既有时序偶发超时测试单跑复过）、fmt 干净、
+   clippy 无新增、重建成功；端到端探针（debian 容器 + 生产三件套 +
+   ORZ_DEEPSEEK_API_KEY）确认截断→指针→read_file 全链路成功。计数：
+   S3/S4 验证闭环 **29 → 28**。登记于 BACKLOG 0d / TODO P0-0d /
+   CLI_PROJECT_INDEX / OUTPUT_DEGENERATION_GUARD_DESIGN_2026-08-19
+   （§6 DoD / §9 复验发现登记）。
+
 ### 14.31 v1.31 补写裁决索引（2026-08-19）
 
 本节记录冻结后的显式补写；规范正文以所指章节为准，补写明确取代以下既往条款。

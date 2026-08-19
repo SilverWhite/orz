@@ -9,7 +9,7 @@
 
 | 优先级 | 含义 | 未闭合项 |
 |---|---|---|
-| P0 | 当前工作集：设计已冻结，裁决后立即实施 | 评测冒烟暴露问题（P0-E 主项 7 项 + FUS-TOOL-SCOPE-CONTRACT 后续 2 项全部闭合 2026-08-18：ACAF 容器供应、console 工具名、计划视图步骤 ID、订单发放前拒绝入事件面、grep 搜索范围契约、plan_write 校验消息形状、actions 形状探针、list_dir 范围计数、grep files_searched 全结局探针，见 0a）；CLASSICAL-EXEC-ASSISTANT（生产组件，2026-08-16 用户裁决转正式，S1-S4 全部闭合）；PLAN-FIRST-BLACKBOARD（阶段 A/B/C 全部闭合 2026-08-16）；**FUS-BENCHMARK-FULL-EXEC（P0，实施完成待验证——2026-08-18 用户指示实施、暂不测试；验证闭环后闭合，见 0b）**；**LEDGER-FOLD-EXTERNAL-FILE（P0，S1-S4 验证闭环 2026-08-19——命中率问题优先于 P0-F 验证；provider 口径 95.33% ≥90% 达标，见 0c）**；**OUTPUT-DEGENERATION-GUARD（P0，2026-08-19 设计定稿未实施——make-doom 退化复读失败防护；8K 全统一 + 补读闭环 + 实时检测 + 32K，见 0d）** |
+| P0 | 当前工作集：设计已冻结，裁决后立即实施 | 评测冒烟暴露问题（P0-E 主项 7 项 + FUS-TOOL-SCOPE-CONTRACT 后续 2 项全部闭合 2026-08-18：ACAF 容器供应、console 工具名、计划视图步骤 ID、订单发放前拒绝入事件面、grep 搜索范围契约、plan_write 校验消息形状、actions 形状探针、list_dir 范围计数、grep files_searched 全结局探针，见 0a）；CLASSICAL-EXEC-ASSISTANT（生产组件，2026-08-16 用户裁决转正式，S1-S4 全部闭合）；PLAN-FIRST-BLACKBOARD（阶段 A/B/C 全部闭合 2026-08-16）；**FUS-BENCHMARK-FULL-EXEC（P0，实施完成待验证——2026-08-18 用户指示实施、暂不测试；验证闭环后闭合，见 0b）**；**LEDGER-FOLD-EXTERNAL-FILE（P0，S1-S4 验证闭环 2026-08-19——命中率问题优先于 P0-F 验证；provider 口径 95.33% ≥90% 达标，见 0c）**；**OUTPUT-DEGENERATION-GUARD（P0，S1-S4 全部闭合 2026-08-20——make-doom 退化复读失败防护；8K 全统一 + 补读闭环 + 实时检测 + 32K，见 0d）** |
 | P1 | 无需裁决，可与 P0 并行 | FUS-COMPONENT-REGISTER、GAP-WINDOWS-EVIDENCE、IMPL-DEEPSEEK-TRANSPORT / SEC-CREDENTIALS、ORZ-SESSION-CONTEXT-MONITOR |
 | P2 | 生产化决策门：需用户裁决 | IMPL-CONTROL-FABRIC（fail-closed 启用、Slice 3/4）、OPS-PROTOCOL |
 | P3 | 收尾 / 清理 | EVIDENCE-LOCAL-BROWSER、GATE-CHAIN、DC 剩余信号、V11-IMPL-003/007、工作区收尾 |
@@ -481,7 +481,7 @@
   既定产出，校准后代码待提交、下次正式跑分使用。登记于 ADR-0010
   §14.32 第 4 项 / 设计文档 §3.2/§3.6 / TODO P0-0c / 索引。
 
-### 0d. OUTPUT-DEGENERATION-GUARD（P0；2026-08-19 用户裁决：先设计、不实施）
+### 0d. OUTPUT-DEGENERATION-GUARD（P0；2026-08-19 用户裁决：先设计、不实施；**S1-S4 全部闭合 2026-08-20**）
 
 - 入口：[设计](OUTPUT_DEGENERATION_GUARD_DESIGN_2026-08-19.md)；索引：
   [CLI_PROJECT_INDEX.md](../CLI_PROJECT_INDEX.md)；ADR-0010 §14.33（v1.33）。
@@ -516,6 +516,25 @@
   纪律：实施放行入账（28→29），S3/S4 验证闭环后 29→28。S3 重建 → S4
   复验（无退化中断、无 400、命中率 ≥90%、补读路径可用）待续。详见
   [设计 §9](OUTPUT_DEGENERATION_GUARD_DESIGN_2026-08-19.md)。
+- **2026-08-20 S3 重建 + S4 复验闭环 + S4 缺口修复（用户放行；orz
+  提交 f2cb1e0，已推送）**：S3 Linux musl 重建（ORZ-BUILD-MOUNT-001
+  契约，两轮：build-20260819.log 11m04s / build-20260819b.log 3m56s，
+  三件套时间戳更新）。S4 make-doom-for-mips 单题复验（三轮运行 + 端到端
+  探针）：无退化复读中断 / 无 hang（agent 全程活跃至 900s 任务预算
+  耗尽）、零 400、journal 口径命中率 94.25%（124 请求，job
+  2026-08-19__22-50-01）与 91.91%（73 请求，job 2026-08-19__23-25-53）
+  均 ≥90%、补读路径真实可用。**S4 发现并修复缺口**：终端截断收据指向
+  `.gsa/session/terminal/<order>.log`，但权限层 `access_in_scope` 按
+  「.gsa 树 agent-invisible」拒绝全部 .gsa 读取（第二轮回执尝试补读被
+  policy_denied）——修复=白名单会话 .gsa 卷内 `session/terminal/*.log`
+  的 read_file/grep（对齐 run_tests_output.txt 先例；lexical 限目录 +
+  canonical 限会话卷防符号链接外逃；run_tests 白名单补 symlink-aware
+  比较），orz-host 单测 221 通过 / fmt 干净 / clippy 无新增；端到端
+  探针确认模型按指针 read_file 三次成功（1–1000 行、offset/limit 分页
+  1001–1200 行、操作台订单复核 line-1190–1200，1200 行完整取回）。
+  计数：S3/S4 验证闭环 **29 → 28**。登记于 ADR-0010 §14.33 第 3 项 /
+  [设计 §6/§9](OUTPUT_DEGENERATION_GUARD_DESIGN_2026-08-19.md) /
+  CLI_PROJECT_INDEX / TODO P0-0d。
 
 ### 0. 前置收尾（提交前需用户确认）
 

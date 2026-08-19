@@ -198,6 +198,26 @@
 > 无 400、命中率 ≥90%、补读路径可用）待续。登记于 ADR-0010 §14.33
 > 第 2 项 / OUTPUT_DEGENERATION_GUARD_DESIGN_2026-08-19 §9 / BACKLOG 0d /
 > TODO P0-0d。
+> 2026-08-20 输出退化防护 S3 重建 + S4 复验闭环 + S4 缺口修复登记（用户
+> 放行；orz 提交 f2cb1e0，已推送）——S3 Linux musl 重建（ORZ-BUILD-MOUNT-001
+> 契约，两轮：build-20260819.log 11m04s / build-20260819b.log 3m56s，
+> 三件套时间戳更新）；S4 make-doom-for-mips 单题复验（三轮运行 + 端到端
+> 探针）：无退化复读中断 / 无 hang（agent 全程活跃至 900s 任务预算耗尽）、
+> 零 400、journal 口径命中率 94.25%（124 请求）与 91.91%（73 请求）均
+> ≥90%、补读路径真实可用。**S4 发现并修复缺口**：终端截断收据指向
+> `.gsa/session/terminal/<order>.log` 并指示 read_file，但权限层
+> `access_in_scope` 按「.gsa 树 agent-invisible + canonical 限会话 cwd」
+> 拒绝全部 .gsa 读取（第二轮回执尝试补读被 policy_denied；对台账
+> current.md 的 grep 同被拒）——修复=白名单会话 .gsa 卷内
+> `session/terminal/*.log` 的 read_file/grep（对齐 run_tests_output.txt
+> 先例；lexical 限目录 + canonical 限会话卷防符号链接外逃；run_tests
+> 白名单补 symlink-aware 比较），orz-host 单测 221 通过（并发下 1 条
+> 既有时序偶发单跑复过）/ fmt 干净 / clippy 无新增；端到端探针确认模型
+> 按截断指针 read_file 三次成功（首次 1–1000 行、offset/limit 分页续读
+> 1001–1200 行、操作台订单复核 line-1190–1200，1200 行完整取回）。
+> 计数：S3/S4 验证闭环 29 → 28。登记于 ADR-0010 §14.33 第 3 项 /
+> OUTPUT_DEGENERATION_GUARD_DESIGN_2026-08-19 §6/§9 / BACKLOG 0d /
+> TODO P0-0d。
 2026-08-15 黑板 plan epoch 复查补强登记（ADR-0010 v1.15⑧）——plan_epoch 时间戳单调编号、身份一一对应强制、retention 保留最高编号快照。
 > 2026-08-15 黑板 plan epoch 复查遗留闭合登记（ADR-0010 v1.15⑨）——F2 原子写盘+回退加载、F4 跨进程 `.claim-<n>` 占号、F5 归档目录单一来源、F6 非法 epoch 显式报错、F7 归档失败入事件面（新 v0.2 `epoch_archive_write_failed`）、F9 `persisted_at` 更名、F10 设计 §5 措辞对齐。
 > 2026-08-15 ACAF fail-closed 生产启用裁决登记（用户裁决放行）——P2 IMPL-CONTROL-FABRIC 决策门放行；翻转执行与核查清单 ⑦⑨⑩⑪ 收口/边界登记待实施。
