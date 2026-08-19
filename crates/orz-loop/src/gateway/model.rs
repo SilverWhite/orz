@@ -26,7 +26,9 @@ pub struct RetryPolicy {
     /// fork's own loop is additionally window-capped by `request_retry_window`
     /// — the lower bound wins). 10 = Claude Code's maxConsecutive-scale cap.
     pub request_max_retries: u32,
-    /// Backoff window cap for the non-streaming path (32s = Claude Code).
+    /// Backoff window cap for the non-streaming path (50s — STREAM-RETRY-
+    /// RHYTHM 2026-08-20, aligned with the 5s×10 idle window; was 32s =
+    /// Claude Code).
     pub request_retry_window: Duration,
     /// Single-request wall-clock timeout for the non-streaming path
     /// (18min level — F-03, 2026-08-07: the 160K max-config thinking budget
@@ -34,10 +36,12 @@ pub struct RetryPolicy {
     /// network jitter. Non-streaming paths only — streaming paths are
     /// governed by the idle watchdog + total budget.)
     pub request_timeout: Duration,
-    /// Stream idle watchdog: after this much silence, warn (20s, Claude Code).
+    /// Stream idle watchdog: after this much silence, warn (5s — 2026-08-20
+    /// user ruling: quicker user-visible warning; was 20s, Claude Code).
     pub stream_idle_warn: Duration,
-    /// Stream idle watchdog: after this much silence, hard abort (90s, Claude
-    /// Code). Slow thinking with progress is NOT a timeout — only a dead wire.
+    /// Stream idle watchdog: after this much silence, hard abort (50s = 5s ×
+    /// 10 rounds — STREAM-RETRY-RHYTHM 2026-08-20; was 90s, Claude Code).
+    /// Slow thinking with progress is NOT a timeout — only a dead wire.
     pub stream_idle_timeout: Duration,
     /// Total stream budget (auxiliary, generous — a relaxed backstop on top
     /// of the idle watchdog; full 160K thinking could exceed 10min).
@@ -48,10 +52,10 @@ impl Default for RetryPolicy {
     fn default() -> Self {
         Self {
             request_max_retries: 10,
-            request_retry_window: Duration::from_secs(32),
+            request_retry_window: Duration::from_secs(50),
             request_timeout: Duration::from_secs(18 * 60),
-            stream_idle_warn: Duration::from_secs(20),
-            stream_idle_timeout: Duration::from_secs(90),
+            stream_idle_warn: Duration::from_secs(5),
+            stream_idle_timeout: Duration::from_secs(50),
             stream_total_timeout: Duration::from_secs(30 * 60),
         }
     }
@@ -403,5 +407,21 @@ mod tests {
             .unwrap();
         assert_eq!(chunks, vec!["buffered"]);
         assert_eq!(response.text.as_deref(), Some("buffered"));
+    }
+
+    /// STREAM-RETRY-RHYTHM (2026-08-20, ADR-0010 §14.34): the default retry
+    /// policy carries the user-ruled rhythm — idle warn 5s, idle hard abort
+    /// 50s (= 5s × 10 rounds), zero-chunk / non-stream retry window 50s,
+    /// retry cap 10. The unchanged backstops are pinned too, so a future
+    /// tune cannot silently break the contract.
+    #[test]
+    fn default_retry_policy_matches_stream_retry_rhythm() {
+        let p = RetryPolicy::default();
+        assert_eq!(p.request_max_retries, 10);
+        assert_eq!(p.request_retry_window, Duration::from_secs(50));
+        assert_eq!(p.stream_idle_warn, Duration::from_secs(5));
+        assert_eq!(p.stream_idle_timeout, Duration::from_secs(50));
+        assert_eq!(p.request_timeout, Duration::from_secs(18 * 60));
+        assert_eq!(p.stream_total_timeout, Duration::from_secs(30 * 60));
     }
 }

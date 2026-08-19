@@ -15,7 +15,8 @@
 //!      shape. Exercises the full tool-round protocol with replay.
 //!   2. `probe_thinking_max_streaming_ttft` — streaming TTFT: time to first
 //!      reasoning delta vs first content delta. Calibrates the D-7 stream
-//!      idle watchdog (20s prompt / 90s silent).
+//!      idle watchdog (5s warn / 50s hard abort, STREAM-RETRY-RHYTHM
+//!      2026-08-20).
 //!
 //! Both are `#[ignore]` + double-gated on `ORZ_TEST_LIVE=1` and read the
 //! ADR-0006 Windows Credential Manager key — same convention as the existing

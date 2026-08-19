@@ -220,7 +220,9 @@ impl DeepSeekTransport {
             // token 的放大源）。正常轮次 reasoning p95 5.2K + completion
             // max 23.7K，32K 覆盖正常分布 99%+；退化输出在 32K 截断
             // （约 1–2 分钟流），消除 10 分钟 hang。请求头指纹含
-            // max_tokens，部署后首次请求一次性指纹变化（既有纪律）。
+            // max_tokens 与 retry 参数（STREAM-RETRY-RHYTHM 2026-08-20：
+            // idle 5s/50s、重试窗口 50s），部署后首次请求一次性指纹变化
+            // （既有纪律）。
             max_tokens: 32_000,
             retry: Default::default(),
             thinking: Default::default(),
@@ -229,9 +231,10 @@ impl DeepSeekTransport {
 
     fn client(&self) -> Client<OpenAIConfig> {
         let policy = &self.config.retry;
-        // D-7: bounded backoff — 32s window cap on top of the fork's retry
-        // loop, plus a hard retry-count cap. The fork default is a 15-minute
-        // window; a stuck upstream must not hold the request for 15 minutes.
+        // D-7: bounded backoff — 50s window cap (STREAM-RETRY-RHYTHM
+        // 2026-08-20, was 32s) on top of the fork's retry loop, plus a hard
+        // retry-count cap. The fork default is a 15-minute window; a stuck
+        // upstream must not hold the request for 15 minutes.
         let backoff = backoff::ExponentialBackoff {
             max_elapsed_time: Some(policy.request_retry_window),
             ..Default::default()
@@ -634,9 +637,9 @@ impl DeepSeekTransport {
         // select! watchdog loop — a TCP connection accepted but never
         // answering would hang forever with no timeout and no cancel. Wrap
         // the handshake in the idle-timeout: no response headers within
-        // that window is a dead wire (the idle watchdog's 90s semantics —
-        // headers arrive long before the first data chunk even under slow
-        // thinking).
+        // that window is a dead wire (the idle watchdog's 50s semantics —
+        // STREAM-RETRY-RHYTHM 2026-08-20, was 90s; headers arrive long
+        // before the first data chunk even under slow thinking).
         let mut stream = tokio::time::timeout(
             self.config.retry.stream_idle_timeout,
             client.chat().create_stream(req),
@@ -684,12 +687,14 @@ impl DeepSeekTransport {
         let mut stream_usage: Option<async_openai::types::chat::CompletionUsage> = None;
 
         // D-7 (FIX_PLAN 2026-08-06) — stream idle watchdog + total budget:
-        //  - idle_warn (20s): log once per silence stretch that the wire is
-        //    quiet (slow thinking with progress is NOT a timeout — only a
-        //    dead wire is; the 2026-08-07 live probe showed a max-effort
-        //    stream with reasoning deltas flowing 0.5s after connect).
-        //  - idle_timeout (90s): hard abort on complete silence (TCP timeouts
-        //    cannot catch a hung keep-alive connection).
+        //  - idle_warn (5s): log once per silence stretch that the wire is
+        //    quiet (STREAM-RETRY-RHYTHM 2026-08-20, was 20s; slow thinking
+        //    with progress is NOT a timeout — only a dead wire is; the
+        //    2026-08-07 live probe showed a max-effort stream with reasoning
+        //    deltas flowing 0.5s after connect).
+        //  - idle_timeout (50s): hard abort on complete silence (= 5s × 10
+        //    rounds, was 90s; TCP timeouts cannot catch a hung keep-alive
+        //    connection).
         //  - total budget (30min): auxiliary backstop over the whole stream.
         // All parameterized via `ModelConfig::retry`.
         let idle_warn = self.config.retry.stream_idle_warn;
@@ -2316,6 +2321,41 @@ mod tests {
             stream_idle_timeout: std::time::Duration::from_millis(150),
             stream_total_timeout: std::time::Duration::from_millis(500),
         }
+    }
+
+    /// STREAM-RETRY-RHYTHM (2026-08-20, ADR-0010 §14.34): retry params take
+    /// part in the request-header fingerprint — a value change is a real
+    /// header change (cache-miss attribution). The default digest must equal
+    /// the digest built from the explicit new values (5s / 50s / 50s) and
+    /// differ from the legacy digest (20s / 90s / 32s).
+    #[test]
+    fn config_fingerprint_reflects_stream_retry_rhythm_defaults() {
+        let fingerprint_for = |retry: RetryPolicy| {
+            let mut cfg = DeepSeekTransport::deepseek_v4("sk-test", "deepseek-v4-flash").config;
+            cfg.retry = retry;
+            DeepSeekTransport::new(cfg).config_fingerprint()
+        };
+
+        let new_values = RetryPolicy::default();
+        let legacy = RetryPolicy {
+            request_retry_window: std::time::Duration::from_secs(32),
+            stream_idle_warn: std::time::Duration::from_secs(20),
+            stream_idle_timeout: std::time::Duration::from_secs(90),
+            ..new_values.clone()
+        };
+
+        let default_fp = fingerprint_for(new_values.clone());
+        let explicit_new_fp = fingerprint_for(new_values);
+        let legacy_fp = fingerprint_for(legacy);
+
+        assert_eq!(
+            default_fp, explicit_new_fp,
+            "default must carry the new rhythm values into the digest"
+        );
+        assert_ne!(
+            default_fp, legacy_fp,
+            "legacy 20s/90s/32s values must produce a different digest"
+        );
     }
 
     #[tokio::test]
