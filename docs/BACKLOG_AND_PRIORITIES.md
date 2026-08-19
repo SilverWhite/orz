@@ -587,6 +587,25 @@
   ADR-0010 §14.35（v1.35）/
   [设计](DEEPSEEK_OUTPUT_BUDGET_AND_STALL_GUARD_DESIGN_2026-08-20.md)
   / CLI_PROJECT_INDEX / TODO P0-0d。
+- **2026-08-20 S1 代码实施完成（用户放行实施；暂不重建/测试，S2-S4
+  待续）**：`REQUEST_MAX_TOKENS`/`ModelConfig::max_tokens` 32K → **256K**
+  （回落档 128K 注释保留）；`stream_idle_timeout` 50s → **30s**（RetryPolicy
+  默认值 + 注释同步）；D-6 流式空流链官方化收窄（`generate_stream`：
+  完成型空响应快速有界重试 ≤2 次、退避 500ms→10s+10% jitter → thinking
+  禁用降级 → 仍空显式失败；reasoning 族哨兵中断不原样、直接跳降级；content
+  族维持不重试透传）；退化检测器升级为输出健康哨兵（观测面扩到 content +
+  reasoning + tool arguments；`content_repetition` / `reasoning_repetition`
+  （灵敏层，仅 content/tool_calls 全空时启用）/ `reasoning_stall`
+  （600s/64K 预算兜底，OR 触发，空转预算与 max_tokens 解耦）三族信号；
+  `REASONING_CHARS_PER_TOKEN=2` 估算 + usage 到达时复核留痕；detail 前缀
+  `degeneration_detected:content_repetition|reasoning_repetition|reasoning_stall`；
+  `is_degeneration_detail` 收窄为 content 族 + `is_reasoning_guard_detail`
+  新增；`DEGENERATION_LIMIT=3` 三族共享不变；run 层失败轮次审计补触发族
+  标签留痕）。既有断言同步（256K 请求头 / idle 30s 默认值 / 检测器 feed
+  签名）；live 探针 probe_thinking_max 与指纹/注释同步。计数：实施放行
+  入账 1 项（**28 → 29**），S3/S4 验证闭环后 29 → 28。登记于
+  ADR-0010 §14.35 第 2 项 / [设计](DEEPSEEK_OUTPUT_BUDGET_AND_STALL_GUARD_DESIGN_2026-08-20.md)
+  / CLI_PROJECT_INDEX / TODO P0-0d。
 
 ### 0. 前置收尾（提交前需用户确认）
 

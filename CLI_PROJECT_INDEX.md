@@ -274,6 +274,24 @@
 > ADR-0010 §14.35（v1.35）/
 > [设计](docs/DEEPSEEK_OUTPUT_BUDGET_AND_STALL_GUARD_DESIGN_2026-08-20.md)
 > / BACKLOG 0d / TODO P0-0d。
+> 2026-08-20 输出预算恢复与空流止损 S1 实施完成登记（用户放行实施、暂不
+> 重建/测试——S2-S4 待续）——`REQUEST_MAX_TOKENS`/`ModelConfig::max_tokens`
+> 32K→**256K**（回落档 128K 注释保留）；`stream_idle_timeout` 50s→**30s**
+> （warn 5s / retry window 50s 不变）；D-6 流式空流链官方化收窄
+> （`generate_stream`：完成型空响应快速有界重试 ≤2 次、退避 500ms→10s+
+> 10% jitter → thinking 禁用降级 → 仍空显式失败；reasoning 族哨兵中断
+> 不原样、直接跳降级；content 族不重试透传）；退化检测器升级为输出健康
+> 哨兵（观测面 content+reasoning+tool arguments；三族信号 content 复读 /
+> reasoning 复读灵敏层 / reasoning-stall 600s/64K 预算兜底、与 max_tokens
+> 解耦；`REASONING_CHARS_PER_TOKEN=2` 估算 + usage 复核留痕；detail 前缀
+> `degeneration_detected:content_repetition|reasoning_repetition|
+> reasoning_stall`、`is_degeneration_detail` 收窄 + `is_reasoning_guard_detail`
+> 新增、`DEGENERATION_LIMIT=3` 三族共享；run 层失败轮次审计补触发族标签）；
+> 既有断言同步（256K 请求头 / idle 30s / 检测器 feed 签名）、live 探针与
+> 指纹/注释同步。计数：实施放行入账（**28 → 29**），S3/S4 验证闭环后
+> 29 → 28。登记于 ADR-0010 §14.35 第 2 项 /
+> [设计 §4.1](docs/DEEPSEEK_OUTPUT_BUDGET_AND_STALL_GUARD_DESIGN_2026-08-20.md)
+> / BACKLOG 0d / TODO P0-0d。
 2026-08-15 黑板 plan epoch 复查补强登记（ADR-0010 v1.15⑧）——plan_epoch 时间戳单调编号、身份一一对应强制、retention 保留最高编号快照。
 > 2026-08-15 黑板 plan epoch 复查遗留闭合登记（ADR-0010 v1.15⑨）——F2 原子写盘+回退加载、F4 跨进程 `.claim-<n>` 占号、F5 归档目录单一来源、F6 非法 epoch 显式报错、F7 归档失败入事件面（新 v0.2 `epoch_archive_write_failed`）、F9 `persisted_at` 更名、F10 设计 §5 措辞对齐。
 > 2026-08-15 ACAF fail-closed 生产启用裁决登记（用户裁决放行）——P2 IMPL-CONTROL-FABRIC 决策门放行；翻转执行与核查清单 ⑦⑨⑩⑪ 收口/边界登记待实施。

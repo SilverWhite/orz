@@ -82,13 +82,15 @@
 > 本快照只做计数与分组召回，明细以下方各分组勾选清单为唯一入口，不新增独立条目；
 > 后续扫描更新时同步替换本快照日期与计数。
 
-- 未闭合总数：**28 项**（2026-08-19 0c 验证闭环 29 → 28；2026-08-20
-  0d 验证闭环 29 → 28）
+- 未闭合总数：**29 项**（2026-08-19 0c 验证闭环 29 → 28；2026-08-20
+  0d 验证闭环 29 → 28；2026-08-20 OUTPUT-BUDGET-RESTORE-AND-STALL-GUARD
+  S1 实施放行入账 28 → 29，S3/S4 验证闭环后 29 → 28）
   - P0-C：0 项（PLAN-FIRST 阶段 A/B/C 全部闭合，2026-08-16）
   - P0 评测冒烟暴露：0 项（P0-E 主项 7 项 + FUS-TOOL-SCOPE-CONTRACT 后续 2 项全部闭合 2026-08-18，见 P0-E grep 项后续①/②）
   - P0 Benchmark 完全体：1 项（FUS-BENCHMARK-FULL-EXEC 实施完成待验证，见 P0-F；验证闭环后回 27）
   - P0 折叠历史外挂：0 项（LEDGER-FOLD-EXTERNAL-FILE，S3/S4 验证闭环 2026-08-19，见 P0-0c）
   - P0 输出退化防护：0 项（OUTPUT-DEGENERATION-GUARD，S3/S4 验证闭环 2026-08-20，见 P0-0d）
+  - P0 输出预算恢复与空流止损：1 项（OUTPUT-BUDGET-RESTORE-AND-STALL-GUARD，S1 实施完成待 S2-S4，见 P0-0d 后续；验证闭环后回 28）
   - P1 可并行审计/证据：9 项（组件登记 1、Windows 证据 3、DeepSeek 1、会话上下文监测 4）
   - P2 生产化决策门：5 项（Slice 3、Slice 4、ACAF 可选工程项、OPS 裁剪设计、OPS 生产接线裁决）
   - P3 收尾/清理：7 项（EVIDENCE-LOCAL-BROWSER、GATE-CHAIN、observed-scope 枚举、V11-IMPL-003、V11-IMPL-007、orz-host flaky、DC 硬信号 4/6）
@@ -590,7 +592,16 @@
 > 实施路由：S1 代码 → S2 测试 → S3 重建 → S4 复验（难题单题、账单对账、
 > 空流率观测、stall 校准）。设计轮不动计数（28）。
 
-- [ ] S1 代码（256K + D-6 链改造 + 检测器升级）
+- [x] S1 代码（256K + D-6 链改造 + 检测器升级）——**2026-08-20 实施完成**
+  （用户放行实施、暂不重建/测试）：`REQUEST_MAX_TOKENS`/max_tokens
+  32K→256K、idle 死线 50s→30s、`generate_stream` D-6 链官方化收窄
+  （完成型空响应快速重试 ≤2 次 + 降级出口；reasoning 族直接降级）、
+  退化检测器升级为输出健康哨兵（content+reasoning+tool 观测、
+  reasoning 复读灵敏层、reasoning-stall 600s/64K 预算兜底与 max_tokens
+  解耦、detail 前缀/分类器、run 层审计留痕）；既有断言与注释同步。
+  计数：实施放行入账（28 → 29）。登记于 ADR-0010 §14.35 第 2 项 /
+  [设计 §4.1](docs/DEEPSEEK_OUTPUT_BUDGET_AND_STALL_GUARD_DESIGN_2026-08-20.md)
+  / BACKLOG 0d / CLI_PROJECT_INDEX。
 - [ ] S2 测试（请求头/stall 双信号/链路径/估算校准/回归）
 - [ ] S3 重建（Linux musl，ORZ-BUILD-MOUNT-001 契约）
 - [ ] S4 复验（≥90%、无 400、无空流链、账单对账、stall 校准；不可接受回落 128K）

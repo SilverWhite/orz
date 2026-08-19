@@ -1,7 +1,7 @@
-# DeepSeek 输出预算恢复与空流止损设计（2026-08-20 设计定稿；纯文档登记、未实施）
+# DeepSeek 输出预算恢复与空流止损设计（2026-08-20 设计定稿；S1 已实施）
 
-> 状态：`designed`（2026-08-20 用户方向：评估 256K+max、空流处理向官方
-> harness 靠拢、退化检测器大升级；先设计、不直接做）。
+> 状态：`S1 实施完成`（2026-08-20 用户放行实施、暂不重建/测试——S2 测试、
+> S3 重建、S4 复验待续；实施登记见 §4.1）。
 > 性质：P0-0d 后续（输出预算恢复，32K → 256K 评估）+ D-6 空流链改造（官方
 > EMPTY_RESPONSE 节奏适配）+ 退化检测器大升级（OUTPUT-DEGENERATION-GUARD
 > 从「content 复读检测」升级为「输出健康哨兵」）。
@@ -293,6 +293,50 @@ run_invalidated（reason 保持 degeneration，detail 区分族）。
   （区分循环型=复读灵敏层拦截 vs 非循环型=兜底拦截，校准 32–128K /
   300–900s / idle 20–30s）；若空流率或成本不可接受 → 回落 128K 档复验
   （编译期常量）。
+
+### 4.1 S1 实施登记（2026-08-20，用户放行实施；暂不重建/测试）
+
+- `agent_loop.rs`：`REQUEST_MAX_TOKENS` 32_000 → **256_000**（三 agent
+  统一，ADR-0010 §3.4.2 不变；回落档 128K 注释保留）。
+- `model.rs`：`RetryPolicy::default().stream_idle_timeout` 50s → **30s**
+  （warn 5s / retry window 50s 不变）。
+- `transport.rs`：
+  - 新常量——`EMPTY_RESPONSE_MAX_RETRIES=2`、
+    `EMPTY_RESPONSE_BACKOFF_INITIAL=500ms`、`EMPTY_RESPONSE_BACKOFF_MAX=10s`、
+    `EMPTY_RESPONSE_BACKOFF_JITTER=0.10`（官方节奏收窄版）、
+    `STALL_FIRST_CONTENT_TIMEOUT=600s`、`STALL_REASONING_BUDGET_TOKENS=64_000`
+    （与 max_tokens 解耦）、`REASONING_CHARS_PER_TOKEN=2`；detail 前缀
+    `CONTENT_REPETITION_DETAIL_PREFIX` / `REASONING_REPETITION_DETAIL_PREFIX`
+    / `REASONING_STALL_DETAIL_PREFIX`。
+  - `DegenerationDetector` 升级为输出健康哨兵：观测面=content delta +
+    reasoning delta + tool_call arguments delta（`feed_content` /
+    `feed_reasoning` / `feed_tool_arguments`）；三族信号——content 复读
+    （保留）、reasoning 复读（灵敏层：同一算法、仅 content/tool_calls
+    全空时启用）、reasoning_stall（预算兜底层：自首 chunk 起 600s 无
+    content/tool_calls、或估算 token ≥64K，OR 触发；`check_stall` 逐
+    chunk 调用）；reasoning 字符 → 估算 token（÷2），usage 到达时以真实
+    `reasoning_tokens` 复核留痕（不改中断决策）。
+  - 分类器：`is_degeneration_detail` 收窄为 content 族（+limit 前缀）；
+    新增 `is_reasoning_guard_detail`（reasoning 复读/stall）；新增
+    `guard_family_label`（审计用）。
+  - `stream_once_with_retry`：输出健康哨兵中断（content/reasoning 族）
+    一律不 zero-chunk 重试（透传）。
+  - `generate_stream` D-6 链改造：正常（max+256K）→ 完成型空响应快速
+    有界重试 ≤2 次（退避 500ms→10s+10% jitter、cancel 可中断、心跳盖章）
+    → thinking 禁用降级 → 仍空显式失败；reasoning 族哨兵中断不原样、
+    直接跳降级；content 族中断透传不重试。
+  - `ModelConfig::max_tokens`（`deepseek_v4`）32_000 → **256_000**；
+    请求头指纹随 max_tokens/idle 变化（部署后首次请求一次性变化，既有
+    纪律）。
+- `agent_loop.rs` run 层：哨兵中断分流合并 content/reasoning 两族（limit
+  前缀 → run_invalidated；未达限 → run_failed）；失败轮次审计补
+  `guard_family` 标签留痕（不改终止语义）。
+- 同步：既有断言更新（请求头 256K / idle 30s / 检测器 feed 签名）；live
+  探针 `probe_thinking_max` 256K；检索/controller/模块注释 32K/160K 陈旧
+  引用清理。
+- 计数：实施放行入账 1 项（**28 → 29**），S3/S4 验证闭环后 29 → 28。
+- 待续：S2 测试（请求头/stall 双信号/链路径/估算校准/回归）→ S3 重建 →
+  S4 复验。
 
 ## 5. 验收标准（DoD）
 

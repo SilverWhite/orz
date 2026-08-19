@@ -2142,6 +2142,26 @@ ADR §3.6 正文修订随实施登记。
    实施路由 S1 代码 → S2 测试 → S3 重建 → S4 复验（难题单题 + 账单对账 +
    空流率观测）；纯文档登记、未实施。
 
+2. **S1 代码实施登记（2026-08-20 用户放行实施；暂不重建/测试）**：
+   `REQUEST_MAX_TOKENS` / `ModelConfig::max_tokens` 32K → **256K**（回落档
+   128K 注释保留）；`stream_idle_timeout` 50s → **30s**（warn 5s / retry
+   window 50s 不变）；D-6 流式空流链官方化收窄（`generate_stream`：完成型
+   空响应快速有界重试 ≤2 次、退避 500ms→10s+10% jitter → thinking 禁用
+   降级 → 仍空显式失败；reasoning 族哨兵中断不原样、直接跳降级；content
+   族维持不重试透传）；退化检测器升级为输出健康哨兵——观测面扩到
+   content+reasoning+tool arguments，三族信号
+   `content_repetition`（保留）/ `reasoning_repetition`（灵敏层，仅
+   content/tool_calls 全空时启用）/ `reasoning_stall`（600s/64K 预算兜底、
+   OR 触发、与 max_tokens 解耦），`REASONING_CHARS_PER_TOKEN=2` 估算 +
+   usage 复核留痕；detail 前缀
+   `degeneration_detected:content_repetition|reasoning_repetition|
+   reasoning_stall`，`is_degeneration_detail` 收窄为 content 族 +
+   新增 `is_reasoning_guard_detail`，`DEGENERATION_LIMIT=3` 三族共享不变；
+   run 层失败轮次审计补触发族标签。既有断言同步（256K 请求头 / idle 30s
+   默认值 / 检测器 feed 签名）；live 探针与指纹/注释同步。计数：实施放行
+   入账 1 项（**28 → 29**），S3/S4 验证闭环后 29 → 28。登记于设计 §4.1 /
+   BACKLOG 0d / CLI_PROJECT_INDEX / TODO P0-0d。
+
 ### 14.31 v1.31 补写裁决索引（2026-08-19）
 
 本节记录冻结后的显式补写；规范正文以所指章节为准，补写明确取代以下既往条款。
