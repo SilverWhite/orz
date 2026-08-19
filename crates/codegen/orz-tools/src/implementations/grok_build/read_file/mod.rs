@@ -1714,6 +1714,62 @@ mod tests {
             }
         }
     }
+    /// OUTPUT-DEGENERATION-GUARD (2026-08-19, ADR-0010 §14.33 / 设计 §3.2，
+    /// 全面审查处理 P3 / S2 清单补项)：终端截断指针指向
+    /// `.gsa/session/terminal/<order_id>.log`——`.gsa` 为指向 git root 之外
+    /// 的符号链接时，read_file 的 gitignore 检查 canonicalize 后
+    /// `strip_prefix(git_root)` 失败返回 not-ignored，直接放行（设计
+    /// 「落盘路径可读性已验证」的专属回归测试：即使 `.gsa/` 与 `*.log`
+    /// 都在 gitignore 模式内也必须可读）。
+    #[tokio::test]
+    async fn read_file_allows_gsa_symlink_outside_git_root_even_when_gitignored() {
+        let tmp = TempDir::new().unwrap();
+        let canonical_root = dunce::canonicalize(tmp.path()).unwrap();
+        // `.gsa` 符号链接指向 git root 之外的真实目录（终端日志落盘形态）。
+        let outside = TempDir::new().unwrap();
+        let gsa_real = outside.path().join("gsa-real");
+        let log_dir = gsa_real.join("session").join("terminal");
+        std::fs::create_dir_all(&log_dir).unwrap();
+        std::fs::write(log_dir.join("ord-1.log"), "terminal output line\n").unwrap();
+        let link = canonical_root.join(".gsa");
+        #[cfg(unix)]
+        let link_ok = std::os::unix::fs::symlink(&gsa_real, &link).is_ok();
+        #[cfg(windows)]
+        let link_ok = std::os::windows::fs::symlink_dir(&gsa_real, &link).is_ok();
+        if !link_ok {
+            eprintln!("symlink creation unsupported, skipping");
+            return;
+        }
+        let mut resources = test_resources(tmp.path());
+        let gi = build_gitignore(&canonical_root, &[".gsa/", "*.log"]);
+        resources.insert(GitignoreFilter::new(gi, canonical_root));
+        resources.insert(RespectGitignore(true));
+        let tool = ReadFileTool;
+        let input = ReadFileInput {
+            path: ".gsa/session/terminal/ord-1.log".to_string(),
+            offset: None,
+            limit: None,
+            pages: None,
+            format: None,
+        };
+        let result = xai_tool_runtime::Tool::run(&tool, test_ctx(resources.into_shared()), input)
+            .await
+            .unwrap();
+        match result {
+            ReadFileOutput::FileContent(content) => {
+                assert!(
+                    content.raw_output.contains("terminal output line"),
+                    "symlink-resolved .gsa log must be readable"
+                );
+            }
+            other => {
+                panic!(
+                    "Expected FileContent for symlinked .gsa log, got {:?}",
+                    other
+                )
+            }
+        }
+    }
     #[tokio::test]
     async fn legacy_read_file_allows_gitignored_files() {
         let tmp = TempDir::new().unwrap();

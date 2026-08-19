@@ -1492,8 +1492,9 @@ pub(crate) async fn run_agent_loop(
                         FinishReason::Length => "length",
                     },
                     // D-6 usage observation — reasoning tokens per round
-                    // calibrate the 160K budget decision (data → whether
-                    // the budget rolls back).
+                    // calibrate the single-round budget decision (data →
+                    // whether the 32K cap needs calibration; 160K→32K per
+                    // OUTPUT-DEGENERATION-GUARD 2026-08-19, ADR-0010 §14.33).
                     "reasoning_tokens": response.reasoning_tokens,
                     "completion_tokens": response.completion_tokens,
                     // Cache-hit observation (2026-08-07 fix): per-round
@@ -3174,6 +3175,7 @@ mod tests {
             w.exec.errors.push("[read_file] 目标不存在".into());
             w.actions.results.push(crate::blackboard::ActionResult {
                 order_id: "ORD-000002".into(),
+                action: Some("workspace.run_tests".into()),
                 ok: false,
                 response: None,
                 error: Some(serde_json::json!({

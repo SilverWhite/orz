@@ -5434,9 +5434,11 @@ impl AgentLoopController {
     }
 
     /// Default max tokens for the main agent (configurable later).
-    /// D-6 (FIX_PLAN 2026-08-06): 160K total budget (the transport's
-    /// `ModelConfig::max_tokens` is the cap; this request-level value is
-    /// min-capped by it — equal here so the full budget is available).
+    /// D-6 (FIX_PLAN 2026-08-06): single-round output budget
+    /// (OUTPUT-DEGENERATION-GUARD 2026-08-19, ADR-0010 §14.33: 160K → 32K;
+    /// the transport's `ModelConfig::max_tokens` is the cap; this
+    /// request-level value is min-capped by it — equal here so the full
+    /// budget is available).
     /// Review F3 (2026-08-10): the retrieval lane reads the SAME constant
     /// (`agent_loop::REQUEST_MAX_TOKENS`) — one source for all three agents.
     pub(crate) fn main_agent_max_tokens(&self) -> u32 {
@@ -7367,6 +7369,7 @@ impl AgentLoopController {
                 self.record_console_receipt(&order, true, "ok", None, true);
                 self.push_console_result(
                     order.order_id.clone(),
+                    order.action.clone(),
                     true,
                     Some(response),
                     None,
@@ -7423,6 +7426,7 @@ impl AgentLoopController {
                 });
                 self.push_console_result(
                     order.order_id.clone(),
+                    order.action.clone(),
                     false,
                     None,
                     Some(error_value),
@@ -7460,6 +7464,7 @@ impl AgentLoopController {
         });
         self.push_console_result(
             order.order_id,
+            order.action,
             false,
             None,
             Some(error_value),
@@ -7471,6 +7476,7 @@ impl AgentLoopController {
     fn push_console_result(
         &self,
         order_id: String,
+        action: String,
         ok: bool,
         response: Option<serde_json::Value>,
         error: Option<serde_json::Value>,
@@ -7478,6 +7484,7 @@ impl AgentLoopController {
     ) {
         self.blackboard.write().actions.push_result(ActionResult {
             order_id,
+            action: Some(action),
             ok,
             response,
             error,
@@ -12830,6 +12837,7 @@ mod tests {
             let mut bb = controller.blackboard().write();
             bb.actions.push_result(ActionResult {
                 order_id: "ORD-SLIM-1".into(),
+                action: Some("workspace.run_terminal".into()),
                 ok: true,
                 response: Some(serde_json::json!({"output": "x".repeat(5_000)})),
                 error: None,
@@ -12838,6 +12846,7 @@ mod tests {
             });
             bb.actions.push_result(ActionResult {
                 order_id: "ORD-SLIM-2".into(),
+                action: Some("workspace.run_tests".into()),
                 ok: false,
                 response: None,
                 error: Some(serde_json::json!({
@@ -12969,6 +12978,7 @@ mod tests {
             let mut bb = controller.blackboard().write();
             bb.actions.push_result(ActionResult {
                 order_id: "ORD-PR-1".into(),
+                action: Some("workspace.read_file".into()),
                 ok: true,
                 response: Some(serde_json::json!({
                     "output": "完整成功输出",
@@ -13348,6 +13358,7 @@ mod tests {
             let mut bb = controller.blackboard().write();
             bb.actions.push_result(ActionResult {
                 order_id: "ORD-OLD-1".into(),
+                action: Some("workspace.read_file".into()),
                 ok: true,
                 response: Some(serde_json::json!({"output": "archived payload"})),
                 error: None,
@@ -13383,6 +13394,7 @@ mod tests {
             let mut bb = controller.blackboard().write();
             bb.actions.push_result(ActionResult {
                 order_id: "ORD-NEW-1".into(),
+                action: Some("workspace.run_tests".into()),
                 ok: false,
                 response: None,
                 error: Some(serde_json::json!({

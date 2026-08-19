@@ -511,13 +511,16 @@ fn render_receipt_point_read(actions: &ActionBoard, receipt_id: &str, plan_epoch
     if body.chars().count() <= RECEIPT_DETAIL_MAX_CHARS {
         return body;
     }
-    // OUTPUT-DEGENERATION-GUARD (2026-08-19, ADR-0010 §14.33 / 设计 §3.2):
-    // 点读指针改向——receipt 为 run_terminal 结果（响应信封
-    // `{"output": string}`，console.rs text_output_response_schema 同构）时
-    // 优先指向落盘文件 `.gsa/session/terminal/<order_id>.log`（发放时
-    // tool_call_id = order_id 小写，bash 输出按 call_id 落盘）并附 read_file
-    // 指引；非终端 receipt（无落盘文件）保留存档/TraceStore 指针兜底
-    // （顺带闭合 F1：TraceStore 不在模型直接工具面）。
+    // OUTPUT-DEGENERATION-GUARD (2026-08-19, ADR-0010 §14.33 / 设计 §3.2)：
+    // 点读指针改向——receipt 为 run_terminal 结果时优先指向落盘文件
+    // `.gsa/session/terminal/<order_id>.log`（发放时 tool_call_id =
+    // order_id 小写，bash 输出按 call_id 落盘）并附 read_file 指引；
+    // 非终端 receipt（无落盘文件）保留存档/TraceStore 指针兜底
+    // （顺带闭合 F1：TraceStore 不在模型直接工具面）。判定按发放时订单
+    // 动作名（`ActionResult.action`，审查处理 P1）——响应信封形状
+    // `{"output": string}` 被 read_file/grep/run_tests 等 text-output
+    // 动作共用，不能作为终端判据；旧 epoch 归档无 action 字段时回退存档
+    // 指针（安全方向）。
     let pointer = match receipt_terminal_log_path(result) {
         Some(path) => {
             format!("完整内容见 {path}，请使用 read_file 读取（大文件用 offset/limit 分页）")
@@ -542,11 +545,15 @@ fn render_receipt_point_read(actions: &ActionBoard, receipt_id: &str, plan_epoch
     format!("{head}\n{truncated}\n{pointer}")
 }
 
-/// OUTPUT-DEGENERATION-GUARD (2026-08-19, ADR-0010 §14.33 / 设计 §3.2):
-/// receipt 是否为 run_terminal 结果的机械判定——响应信封
-/// `{"output": <string>}`（console `workspace.run_terminal` 的
-/// `text_output_response_schema` 同构）。命中返回落盘文件相对路径。
+/// OUTPUT-DEGENERATION-GUARD (2026-08-19, ADR-0010 §14.33 / 设计 §3.2)：
+/// receipt 是否为 run_terminal 结果的机械判定——按发放时订单动作名
+/// `workspace.run_terminal`（`ActionResult.action`，审查处理 P1 修复）且
+/// 响应信封为 `{"output": <string>}`（console `text_output_response_schema`
+/// 契约防御）。命中返回落盘文件相对路径；否则 None（存档指针兜底）。
 fn receipt_terminal_log_path(result: &ActionResult) -> Option<String> {
+    if result.action.as_deref() != Some(crate::console::TERMINAL_SERVICE_NAME) {
+        return None;
+    }
     let response = result.response.as_ref()?;
     let obj = response.as_object()?;
     match obj.get("output") {
@@ -584,6 +591,7 @@ mod tests {
             .unwrap();
         board.push_result(ActionResult {
             order_id: "ORD-000001".into(),
+            action: Some("workspace.read_file".into()),
             ok: true,
             response: Some(serde_json::json!({"output": "hi"})),
             error: None,
@@ -592,6 +600,7 @@ mod tests {
         });
         board.push_result(ActionResult {
             order_id: "ORD-000002".into(),
+            action: Some("workspace.read_file".into()),
             ok: false,
             response: None,
             error: Some(serde_json::json!({
@@ -660,6 +669,7 @@ mod tests {
         let mut board = ActionBoard::default();
         board.push_result(ActionResult {
             order_id: "ORD-OK-1".into(),
+            action: Some("workspace.read_file".into()),
             ok: true,
             response: Some(serde_json::json!({
                 "output": "x".repeat(10_000),
@@ -671,6 +681,7 @@ mod tests {
         });
         board.push_result(ActionResult {
             order_id: "ORD-ERR-1".into(),
+            action: Some("workspace.run_tests".into()),
             ok: false,
             response: None,
             error: Some(serde_json::json!({
@@ -684,6 +695,7 @@ mod tests {
         // 信封字段整体缺失 → step/code 机械回退 `?`（不编造、不隐藏）。
         board.push_result(ActionResult {
             order_id: "ORD-ERR-2".into(),
+            action: Some("workspace.run_tests".into()),
             ok: false,
             response: None,
             error: None,
@@ -732,6 +744,7 @@ mod tests {
         for i in 0..50 {
             board.push_result(ActionResult {
                 order_id: format!("ORD-{i:03}"),
+                action: Some("workspace.run_terminal".into()),
                 ok: true,
                 response: Some(serde_json::json!({"output": format!("payload-{i}")})),
                 error: None,
@@ -902,6 +915,7 @@ mod tests {
         let mut board = ActionBoard::default();
         board.push_result(ActionResult {
             order_id: "ORD-PR-1".into(),
+            action: Some("workspace.read_file".into()),
             ok: true,
             response: Some(serde_json::json!({
                 "output": "完整成功输出",
@@ -913,6 +927,7 @@ mod tests {
         });
         board.push_result(ActionResult {
             order_id: "ORD-PR-2".into(),
+            action: Some("workspace.run_tests".into()),
             ok: false,
             response: None,
             error: Some(serde_json::json!({
@@ -977,14 +992,16 @@ mod tests {
     /// 2026-08-19 黑板缓存成本设计（ADR-0010 §14.31 / §4.5，方案 B）：点读
     /// 上限 `RECEIPT_DETAIL_MAX_CHARS=8_000`——超限按字符截断 detail + 「…」
     /// 指针行。OUTPUT-DEGENERATION-GUARD (2026-08-19, ADR-0010 §14.33 /
-    /// 设计 §3.2)：run_terminal receipt（响应信封 `{"output": string}`）
-    /// 的指针改向落盘文件 `.gsa/session/terminal/<order_id>.log` + read_file
-    /// 指引；非终端 receipt 保留存档/TraceStore 兜底。
+    /// 设计 §3.2)：run_terminal receipt（订单动作 `workspace.run_terminal`
+    /// + 响应信封 `{"output": string}`）的指针改向落盘文件
+    /// `.gsa/session/terminal/<order_id>.log` + read_file 指引；非终端
+    /// receipt 保留存档/TraceStore 兜底。
     #[test]
     fn render_actions_receipt_point_read_truncates_at_8k_with_pointer() {
         let mut board = ActionBoard::default();
         board.push_result(ActionResult {
             order_id: "ORD-PR-3".into(),
+            action: Some(crate::console::TERMINAL_SERVICE_NAME.into()),
             ok: true,
             response: Some(serde_json::json!({"output": "x".repeat(20_000)})),
             error: None,
@@ -1026,15 +1043,20 @@ mod tests {
     }
 
     /// OUTPUT-DEGENERATION-GUARD (2026-08-19, ADR-0010 §14.33 / 设计 §3.2):
-    /// 非终端 receipt（无 `{"output": string}` 信封，如 read_file 动作）超限
-    /// 时保留存档/TraceStore 指针兜底。
+    /// 非终端 receipt（动作非 workspace.run_terminal）超限时保留存档/
+    /// TraceStore 指针兜底——即使响应信封同为 `{"output": string}`
+    /// （read_file/grep/run_tests 等 text-output 动作共用契约，审查处理
+    /// P1 回归锁定：不得按信封形状误判为终端落盘指针）。
     #[test]
     fn render_actions_receipt_point_read_non_terminal_keeps_archive_pointer() {
         let mut board = ActionBoard::default();
         board.push_result(ActionResult {
             order_id: "ORD-PR-4".into(),
+            action: Some("workspace.read_file".into()),
             ok: true,
-            response: Some(serde_json::json!({"preview": "z".repeat(20_000)})),
+            // read_file 动作与 run_terminal 共用 text_output_response_schema
+            // ——`{"output": string}` 信封 + 非终端动作必须回退存档指针。
+            response: Some(serde_json::json!({"output": "z".repeat(20_000)})),
             error: None,
             trace_id: "t-pr-4".into(),
             timestamp: "2026-08-19T01:00:03Z".into(),
@@ -1067,6 +1089,7 @@ mod tests {
         let mut board = ActionBoard::default();
         board.push_result(ActionResult {
             order_id: "ORD-PR-9".into(),
+            action: Some("workspace.read_file".into()),
             ok: true,
             response: Some(serde_json::json!({"output": "x"})),
             error: None,
@@ -1138,6 +1161,7 @@ mod tests {
         }]);
         board.push_result(ActionResult {
             order_id: "ORD-B1".into(),
+            action: Some("workspace.read_file".into()),
             ok: true,
             response: Some(serde_json::json!({"output": "secret"})),
             error: None,
@@ -1146,6 +1170,7 @@ mod tests {
         });
         board.push_result(ActionResult {
             order_id: "ORD-B2".into(),
+            action: Some("workspace.run_tests".into()),
             ok: false,
             response: None,
             error: Some(serde_json::json!({

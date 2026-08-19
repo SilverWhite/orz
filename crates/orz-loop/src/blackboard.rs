@@ -283,9 +283,16 @@ pub struct ActionOrder {
 
 /// 结果栏 receipt（v0.5 操作台模型）：助理层写；成功携带 response，
 /// 失败携带 fail-closed 错误信封（step/code/message/upstream）+ trace_id。
+/// `action` 为发放时订单的动作名（OUTPUT-DEGENERATION-GUARD 2026-08-19
+/// 审查处理 P1：点读指针改向须按动作判定 run_terminal，响应信封形状
+/// `{"output": string}` 被 read_file/grep/run_tests 等 text-output 动作
+/// 共用，不能作为终端判据）；旧 epoch 归档缺该字段时 serde 回退 None
+/// （点读走存档指针兜底，安全方向）。
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct ActionResult {
     pub order_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub action: Option<String>,
     pub ok: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub response: Option<serde_json::Value>,
@@ -756,6 +763,7 @@ mod tests {
         for i in 0..(ActionBoard::RESULTS_MAX + 5) {
             board.push_result(ActionResult {
                 order_id: format!("ORD-{i}"),
+                action: Some("workspace.read_file".into()),
                 ok: true,
                 response: Some(serde_json::json!({})),
                 error: None,

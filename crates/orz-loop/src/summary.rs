@@ -571,6 +571,7 @@ mod tests {
     ) -> ActionResult {
         ActionResult {
             order_id: order_id.into(),
+            action: None,
             ok,
             response: None,
             error,

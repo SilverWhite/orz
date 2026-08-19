@@ -422,6 +422,18 @@ fn annotations(bash: &BashOutput) -> String {
     s
 }
 
+/// OUTPUT-DEGENERATION-GUARD (2026-08-19, ADR-0010 §14.33 / 设计 §3.1/§3.2，
+/// 全面审查处理 P3)：截断字符预算预留机械指针块——截断内容 + 指针块
+/// （"\n\n" + 「完整内容见 <路径>，请使用 read_file …」）合计 ≤ 原上限，
+/// 与点读「整体 ≤ 上限」口径对齐；未截断时指针不附加、预算全额用于内容。
+fn truncation_char_budget(limit: usize, output_file: &str, current_dir: &str) -> usize {
+    let pointer_block = format!(
+        "\n\n{}",
+        truncation_read_back_pointer(output_file, current_dir)
+    );
+    limit.saturating_sub(pointer_block.chars().count())
+}
+
 const NOOP_END_TURN_REMINDER: &str = "<system-reminder>\n\
     You appear to be running empty commands to stay active while waiting for background work. \
     End your turn — you will be woken automatically when there is something to do.\n\
@@ -2037,6 +2049,16 @@ impl xai_tool_runtime::Tool for BashTool {
         let output_file = session_folder
             .join("terminal")
             .join(format!("{}.log", tool_call_id.as_str()));
+        // OUTPUT-DEGENERATION-GUARD (2026-08-19, ADR-0010 §14.33 / 设计
+        // §3.1/§3.2，全面审查处理 P3)：指针块计入截断预算——截断内容 +
+        // 机械指针块（"\n\n" + 「完整内容见 <路径>，请使用 read_file …」）
+        // 合计 ≤ 8K，与点读「整体 ≤ 上限」的口径对齐（头部/截断标注为既有
+        // 渲染开销，非本设计新增）。未截断时指针不附加、预算全额用于内容。
+        let output_byte_limit = truncation_char_budget(
+            output_byte_limit,
+            &output_file.to_string_lossy(),
+            &cwd.to_string_lossy(),
+        );
 
         if input.is_background {
             // ─── Background execution ───
@@ -3649,6 +3671,26 @@ mod tests {
             "{}",
             bash.output_for_prompt
         );
+    }
+
+    /// OUTPUT-DEGENERATION-GUARD (2026-08-19, ADR-0010 §14.33 / 设计 §3.1/
+    /// §3.2，全面审查处理 P3)：截断字符预算预留指针块——截断内容 + 指针块
+    /// 合计 ≤ 原上限（截断后整体不因指针越限）。
+    #[test]
+    fn truncation_char_budget_reserves_pointer_block() {
+        let output_file = "/tmp/.gsa/session/terminal/ord-1.log";
+        let cwd = "/tmp";
+        let limit = crate::DEFAULT_TOOL_OUTPUT_CHARS;
+        let pointer_block = format!("\n\n{}", truncation_read_back_pointer(output_file, cwd));
+        let budget = truncation_char_budget(limit, output_file, cwd);
+        assert_eq!(budget, limit - pointer_block.chars().count());
+        assert!(
+            pointer_block.chars().count() < 200,
+            "pointer block unexpectedly large: {}",
+            pointer_block
+        );
+        // 预算永不回绕（小上限 + saturating_sub）。
+        assert_eq!(truncation_char_budget(10, output_file, cwd), 0);
     }
 
     #[test]

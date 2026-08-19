@@ -1222,10 +1222,10 @@ mod tests {
     #[test]
     fn build_request_sets_thinking_enabled_max_d6() {
         // D-6 (FIX_PLAN 2026-08-06) — the restored max-config: thinking
-        // enabled + reasoning_effort "max" + 160K budget, decided after the
-        // 2026-08-07 live probe (559ms to first reasoning delta, ~30s to
-        // content, per-round usage.reasoning_tokens). The 160K budget is
-        // the whole-token cap; the stream requests include_usage so
+        // enabled + reasoning_effort "max" + 32K single-round budget
+        // (OUTPUT-DEGENERATION-GUARD 2026-08-19, ADR-0010 §14.33; previously
+        // 160K after the 2026-08-07 live probe). The 32K value is the
+        // whole-token single-round cap; the stream requests include_usage so
         // reasoning tokens are observable on the streaming path.
         let t = DeepSeekTransport::deepseek_v4("sk-test", "deepseek-v4-flash");
         let mut req = request();

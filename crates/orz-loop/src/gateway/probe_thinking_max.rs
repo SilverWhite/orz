@@ -1,11 +1,13 @@
 //! Live probe — FIX_PLAN 2026-08-06 item ① (max 档实测, independent first).
 //!
-//! Measures the real DeepSeek V4 surface under the new thinking config:
-//! `thinking: {type: "enabled"}` + `reasoning_effort: "max"` +
-//! `max_tokens: 160_000` — latency, convergence, content behavior (empty
-//! content on tool rounds is legal), tool-round protocol (reasoning_content
-//! replay), and `usage.reasoning_tokens` (raw JSON — the fork's typed
-//! `CompletionUsage` drops unknown fields).
+//! Measures the real DeepSeek V4 surface under the production thinking
+//! config: `thinking: {type: "enabled"}` + `reasoning_effort: "max"` +
+//! `max_tokens: 32_000` (OUTPUT-DEGENERATION-GUARD 2026-08-19, ADR-0010
+//! §14.33: single-round budget 160K → 32K; previously 160_000) — latency,
+//! convergence, content behavior (empty content on tool rounds is legal),
+//! tool-round protocol (reasoning_content replay), and
+//! `usage.reasoning_tokens` (raw JSON — the fork's typed `CompletionUsage`
+//! drops unknown fields).
 //!
 //! TWO probes:
 //!   1. `probe_thinking_max_tool_task`  — file-based multi-round tool task
@@ -33,8 +35,8 @@ use crate::gateway::transport::DEFAULT_DEEPSEEK_API_BASE;
 
 const MODEL: &str = "deepseek-v4-flash";
 const ROUND_CAP: usize = 6;
-/// Per-request wall-clock guard (thinking max on 160K budget is slow by
-/// design — this only catches true hangs).
+/// Per-request wall-clock guard (thinking max on the 32K single-round
+/// budget is still slow by design — this only catches true hangs).
 const ROUND_TIMEOUT: Duration = Duration::from_secs(20 * 60);
 
 fn gate() -> Option<String> {
@@ -152,12 +154,12 @@ mod tests {
 
         println!("── probe_thinking_max_tool_task ──");
         println!(
-            "model={MODEL} thinking=enabled effort=max max_tokens=160000 task=read×3+sum+write"
+            "model={MODEL} thinking=enabled effort=max max_tokens=32000 task=read×3+sum+write"
         );
         let t0 = Instant::now();
         let mut rounds = 0usize;
         loop {
-            let body = request_body(&messages, true, 160_000, false);
+            let body = request_body(&messages, true, 32_000, false);
             let round_start = Instant::now();
             let resp = match timeout(
                 ROUND_TIMEOUT,
@@ -271,7 +273,7 @@ mod tests {
             json!({"role": "user", "content":
                 "Think carefully, then answer: what is 123456789 * 987654321? Give only the number."}),
         ];
-        let body = request_body(&messages, false, 160_000, true);
+        let body = request_body(&messages, false, 32_000, true);
 
         println!("── probe_thinking_max_streaming_ttft ──");
         let t0 = Instant::now();
