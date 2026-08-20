@@ -317,6 +317,22 @@
 > ADR-0010 §14.35 第 4 项 /
 > [设计 §4.3](docs/DEEPSEEK_OUTPUT_BUDGET_AND_STALL_GUARD_DESIGN_2026-08-20.md)
 > / BACKLOG 0d / TODO P0-0d。
+> 2026-08-20 默认档 high + 三级降级梯修订设计定稿登记（用户裁决：方案 B
+> + 中间档；先设计、不动作）——S4 实测（256K+max）机制已稳（空流 0、
+> 命中率 95.28%、复读灵敏层拦截 1/85 并降级收尾、stall 兜底零误杀），
+> max 不再是必要工作点；思考禁用本身质量影响大（「快答模式」）。
+> **定案**：①默认 `reasoning_effort` max→**high**（官方默认档，
+> `EnabledMax` 保留显式可选档，仍受哨兵保护）；②降级梯插入 **low** 中间
+> 档——**high → low → disabled → 失败**（空响应快速重试与 reasoning 族
+> 哨兵跳转共用；「middle」= `reasoning_effort=low`）；③兜底/重试节奏
+> 不变（stall 600s/64K、idle 30s、退避 500ms→10s+10% jitter）；④指纹含
+> thinking → 部署后一次性变化。代价=失败路径多一轮完整思考（每级受
+> 64K/600s 兜底保护），病态率低（S4 1/85）可接受。实施路由 S1 代码 →
+> S2 测试 → S3 重建 → S4 复验（难题单题 + high vs max 成本/产出对照）。
+> 设计轮不动计数（28）；实施放行 28→29，验证闭环 29→28。登记于
+> ADR-0010 §14.35 第 5 项 /
+> [设计 §3.6/§4.4](docs/DEEPSEEK_OUTPUT_BUDGET_AND_STALL_GUARD_DESIGN_2026-08-20.md)
+> / BACKLOG 0d / TODO P0-0d。
 2026-08-15 黑板 plan epoch 复查补强登记（ADR-0010 v1.15⑧）——plan_epoch 时间戳单调编号、身份一一对应强制、retention 保留最高编号快照。
 > 2026-08-15 黑板 plan epoch 复查遗留闭合登记（ADR-0010 v1.15⑨）——F2 原子写盘+回退加载、F4 跨进程 `.claim-<n>` 占号、F5 归档目录单一来源、F6 非法 epoch 显式报错、F7 归档失败入事件面（新 v0.2 `epoch_archive_write_failed`）、F9 `persisted_at` 更名、F10 设计 §5 措辞对齐。
 > 2026-08-15 ACAF fail-closed 生产启用裁决登记（用户裁决放行）——P2 IMPL-CONTROL-FABRIC 决策门放行；翻转执行与核查清单 ⑦⑨⑩⑪ 收口/边界登记待实施。

@@ -623,6 +623,27 @@
   [设计 §4.3](docs/DEEPSEEK_OUTPUT_BUDGET_AND_STALL_GUARD_DESIGN_2026-08-20.md)
   / BACKLOG 0d / CLI_PROJECT_INDEX。
 
+### P0-0d 后续 2：THINKING-DEFAULT-HIGH-LADDER（P0 派生；2026-08-20
+设计定稿，待实施）
+
+> 入口：[设计 §3.6/§4.4](docs/DEEPSEEK_OUTPUT_BUDGET_AND_STALL_GUARD_DESIGN_2026-08-20.md)；
+> ADR-0010 §14.35（v1.35 第 5 项）；BACKLOG 0d。
+> 来源：S4 复验（256K+max）实测机制已稳（空流 0、命中率 95.28%、复读
+> 灵敏层拦截 1/85 并降级收尾、stall 兜底零误杀），max 不再是必要工作点；
+> 思考禁用本身质量影响大（「快答模式」）。
+> 定案（用户裁决：方案 B + 中间档）：①默认 `reasoning_effort` max →
+> **high**（官方默认档；`EnabledMax` 保留显式可选档，仍受哨兵保护）；
+> ②降级梯插入 **low** 中间档——**high → low → disabled → 失败**（空
+> 响应快速重试与 reasoning 族哨兵跳转共用；「middle」= DeepSeek
+> `reasoning_effort=low`）；③兜底/重试节奏不变（stall 600s/64K、idle
+> 30s、`EMPTY_RESPONSE_MAX_RETRIES=2`、退避 500ms→10s+10% jitter）；
+> ④指纹含 thinking → 部署后一次性变化。设计轮不动计数（28）。
+
+- [ ] S1 代码（`ThinkingMode` 增 `EnabledLow`、默认 `EnabledHigh`、三级梯接线）
+- [ ] S2 测试（high/low 请求头断言、三级梯路径、回归全绿）
+- [ ] S3 重建（Linux musl，ORZ-BUILD-MOUNT-001 契约）
+- [ ] S4 复验（难题单题 + high vs max 成本/产出对照；空流 0、零 400、命中率 ≥90%；计数 29→28）
+
 ### P0-B FUS-RETRIEVAL-MECH（`implemented`；批次 1-6 已全部闭合，2026-08-14，保留供核对）
 
 依赖顺序：1（B-1，已闭合）→ 2/3/5（已闭合）→ 4（已闭合）→ 6。

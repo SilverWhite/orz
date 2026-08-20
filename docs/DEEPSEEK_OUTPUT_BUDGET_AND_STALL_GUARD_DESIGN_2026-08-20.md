@@ -1,7 +1,9 @@
-# DeepSeek 输出预算恢复与空流止损设计（2026-08-20 设计定稿；S1-S4 全部闭合）
+# DeepSeek 输出预算恢复与空流止损设计（2026-08-20 设计定稿；S1-S4 已闭合，修订：默认 high + 三级降级梯待实施）
 
-> 状态：`S1-S4 全部闭合`（2026-08-20 用户放行实施 + 指示重建/复验/对账；
-> 实施登记见 §4.1–§4.3）。
+> 状态：`S1-S4 全部闭合（max 基线）`；**2026-08-20 修订定稿（用户裁决：
+> 方案 B + 中间档）——默认 thinking 档 max → high（官方默认），降级梯
+> 插入 low 中间档（high → low → disabled → 失败），max 保留为可选档；
+> 待实施（§3.6 / §4.4）**。实施登记见 §4.1–§4.3。
 > 性质：P0-0d 后续（输出预算恢复，32K → 256K 评估）+ D-6 空流链改造（官方
 > EMPTY_RESPONSE 节奏适配）+ 退化检测器大升级（OUTPUT-DEGENERATION-GUARD
 > 从「content 复读检测」升级为「输出健康哨兵」）。
@@ -273,6 +275,58 @@ run_invalidated（reason 保持 degeneration，detail 区分族）。
 | 退化信号族 | content 复读 2 条 | + reasoning 复读 + reasoning-stall 2 条 | transport.rs |
 | `stream_idle_timeout` | 50s（STREAM-RETRY-RHYTHM 定值，未实施） | **30s**（校准 20–30s） | model.rs RetryPolicy |
 
+> **2026-08-20 修订（用户裁决：方案 B + 中间档，见 §3.6）**：新增两行——
+> `ThinkingMode` 默认档改 **high**（max 保留为可选档）；降级梯
+> **high → low → disabled → 失败**（原 max 直跳 disabled 基线）。表中
+> 其余参数不变。
+
+| `ThinkingMode` 默认档 | `EnabledMax`（S1-S4 基线） | **`EnabledHigh`**（官方默认；`EnabledMax` 显式可选） | model.rs / transport.rs |
+| 降级梯 | max 直跳 disabled（S1-S4 基线） | **high → low → disabled → 失败**（空响应与 reasoning 族哨兵共用） | transport.rs generate_stream |
+
+### 3.6 默认档与降级梯修订（2026-08-20 用户裁决：方案 B + 中间档；待实施）
+
+**决策**：
+
+- **默认 thinking 档 max → high**（官方 deepseek-harness 默认
+  `reasoning_effort=high`，官方工作点即 256K+high）；`EnabledMax` 保留为
+  显式可选档（难题专用，仍受哨兵保护）。
+- **降级梯插入 low 中间档**：**high → low → disabled → 失败**（空响应
+  快速重试与 reasoning 族哨兵跳转共用；「middle」映射为 DeepSeek
+  `reasoning_effort=low`，官方四档 off/low/high/max 中的中间档）。
+
+**依据（2026-08-20 用户讨论 + S4 实测）**：
+
+- S4（256K+max）实测：完成型空流 0、命中率 95.28%、复读灵敏层拦截 1/85
+  并降级收尾、stall 兜底零误杀——**机制已稳，max 不再是必要工作点**；
+  官方默认 high，常态延迟/成本更低（S4 reasoning 占 output 约 89%，
+  high 可明显削减）。
+- 思考禁用本身质量影响大（模型退化为「快答模式」）；low 保留浅思考链，
+  多数病态可被低深度救回，比直跳禁用更温和。
+- 代价：失败路径多一轮完整思考（每级受 64K/600s 兜底保护；空响应完成在
+  兜底下不出现）。病态率低（S4 1/85）且复读在数 K 内被抓，额外成本可
+  接受；最坏情形=2 个病态轮 + 1 秒降级（原 1 个病态轮 + 1 秒降级）。
+
+**变更**：
+
+- `ThinkingMode` 增加 `EnabledLow`（映射 `reasoning_effort: "low"`）；
+  默认改 `EnabledHigh`（映射 `reasoning_effort: "high"`）；`EnabledMax`
+  保留。`Disabled` 不变（最终降级档 + 测试/基准路径）。
+- D-6 空流链（§3.2 修订）：阶段 1 正常（**high** + 256K）→ 完成型空响应
+  快速有界重试 ≤2 次（high，500ms→10s+10% jitter）→ 仍空 → **low** →
+  仍空 → **disabled** → 仍空 → 失败。
+- 哨兵跳转（§3.3 修订）：reasoning 族中断（复读/stall）不原样重试，
+  **逐级 high → low → disabled**；content 族仍不重试透传；
+  `DEGENERATION_LIMIT=3` 三族共享不变；detail 前缀/分类器不变。
+- 兜底与重试节奏全部不变：stall 600s/64K（与 max_tokens 解耦）、idle
+  30s、`EMPTY_RESPONSE_MAX_RETRIES=2`、退避 500ms→10s+10% jitter、
+  `REASONING_CHARS_PER_TOKEN=2`。
+- 请求头指纹含 thinking 档 → 部署后首次请求一次性指纹变化（既有纪律）。
+
+**实施路由**：S1 代码（`ThinkingMode` 三档 + 默认 high + 三级梯接线 +
+  注释/fingerprint 同步）→ S2 测试（high/low 请求头断言、三级梯路径、
+  回归全绿）→ S3 重建 → S4 复验（难题单题 + high vs max 成本/产出对照）。
+**计数：设计轮不动（28）**；实施放行 28 → 29，验证闭环 29 → 28。
+
 ## 4. 实施路由
 
 - **S1 代码**（orz）：REQUEST_MAX_TOKENS 256K；`stream_idle_timeout`
@@ -391,6 +445,21 @@ run_invalidated（reason 保持 degeneration，detail 区分族）。
 - 计数：**S3/S4 验证闭环 29 → 28**。登记于 ADR-0010 §14.35 第 4 项 /
   BACKLOG 0d / TODO P0-0d / CLI_PROJECT_INDEX。
 
+### 4.4 修订实施路由（2026-08-20 用户裁决：默认 high + 三级降级梯；待实施）
+
+- **S1 代码**：`ThinkingMode` 增 `EnabledLow`（`reasoning_effort=low`）、
+  默认改 `EnabledHigh`（`reasoning_effort=high`）；`build_request` 映射
+  high/low；`generate_stream` 降级梯接线 **high → low → disabled → 失败**
+  （空响应快速重试与 reasoning 族哨兵跳转共用）；注释/fingerprint 同步。
+- **S2 测试**：high/low 请求头断言（默认 high、low 档映射，原 max 默认
+  断言改 high）；三级梯路径（空响应 high→low→disabled→失败、哨兵
+  high→low、low 级哨兵→disabled）；既有测试核对；回归全绿（fmt/clippy
+  基线）。
+- **S3 重建**：Linux musl（ORZ-BUILD-MOUNT-001 契约）。
+- **S4 复验**：难题单题 + **high vs max 成本/产出对照**（output tokens、
+  命中率、空流率、stall 触发、首轮延迟）；判定=空流 0、零 400、命中率
+  ≥90%、无 stall 误杀；计数 29 → 28。
+
 ## 5. 验收标准（DoD）
 
 - S2 全绿、fmt 干净、clippy 与基线一致；
@@ -399,6 +468,9 @@ run_invalidated（reason 保持 degeneration，detail 区分族）。
   ≥90%、账单对账无异常尖峰（单请求废弃 output ≤ 预算内）、stall 双信号与
   idle 30s 按实测校准一次（误杀与漏判平衡）；
 - 计数：实施放行时入账 1 项（28 → 29），验证闭环后 29 → 28。
+- 修订轮（2026-08-20：默认 high + 三级梯）：S2 含 high/low 请求头断言与
+  三级梯路径（high→low→disabled→失败）全绿；S4 复验含 high vs max 成本/
+  产出对照（output tokens、命中率、空流率、stall 触发、首轮延迟）。
 
 ## 6. 风险与回滚
 

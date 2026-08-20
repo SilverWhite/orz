@@ -2193,6 +2193,26 @@ ADR §3.6 正文修订随实施登记。
    S3/S4 验证闭环 29 → 28**。登记于设计 §4.3 / BACKLOG 0d /
    CLI_PROJECT_INDEX / TODO P0-0d。
 
+5. **默认档 high + 三级降级梯修订定稿（2026-08-20 用户裁决：方案 B +
+   中间档；先设计、不动作）**：S4 实测（256K+max：空流 0、命中率
+   95.28%、复读灵敏层拦截 1/85 并降级收尾、stall 兜底零误杀）表明机制
+   已稳、max 不再是必要工作点；思考禁用本身质量影响大（「快答模式」），
+   用户裁决：①默认 `reasoning_effort` **max → high**（官方 harness
+   默认档，官方工作点即 256K+high），`EnabledMax` 保留为显式可选档
+   （难题专用，仍受哨兵保护）；②降级梯插入 **low** 中间档——**high →
+   low → disabled → 失败**（空响应快速重试与 reasoning 族哨兵跳转共用；
+   「middle」映射 DeepSeek `reasoning_effort=low`，官方四档 off/low/high/
+   max 的中间档）；③兜底/重试节奏不变（stall 600s/64K 与 max_tokens
+   解耦、idle 30s、`EMPTY_RESPONSE_MAX_RETRIES=2`、退避 500ms→10s+10%
+   jitter、`REASONING_CHARS_PER_TOKEN=2`）；④指纹含 thinking 档 → 部署
+   后首次请求一次性变化（既有纪律）。代价=失败路径多一轮完整思考（每级
+   受 64K/600s 兜底保护），病态率低（S4 1/85）且复读数 K 内被抓，可
+   接受。实施路由 S1 代码（`ThinkingMode` 增 `EnabledLow`、默认
+   `EnabledHigh`、三级梯接线）→ S2 测试（high/low 请求头、三级梯路径、
+   回归）→ S3 重建 → S4 复验（难题单题 + high vs max 成本/产出对照）。
+   设计轮不动计数（28）；实施放行 28 → 29，验证闭环 29 → 28。登记于
+   设计 §3.6/§4.4 / BACKLOG 0d / CLI_PROJECT_INDEX / TODO P0-0d。
+
 ### 14.31 v1.31 补写裁决索引（2026-08-19）
 
 本节记录冻结后的显式补写；规范正文以所指章节为准，补写明确取代以下既往条款。
