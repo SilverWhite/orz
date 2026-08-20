@@ -61,7 +61,12 @@ impl Default for RetryPolicy {
     fn default() -> Self {
         Self {
             request_max_retries: 10,
-            request_retry_window: Duration::from_secs(50),
+            // 2026-08-21 用户裁决（sweep r1-g1 llm-inference-batching-scheduler
+            // 断连归因）：zero-chunk 重试窗口 50s → 180s——网络抖动本质是
+            // DeepSeek 节点超时（约 1 分钟级），降级无实际作用，拉长窗口让
+            // 重试链骑过节点抖动；次数上限 10 不变（双上限先到者止，实测
+            // 10 次 ≈ 约 2 分钟重试跨度，窗口不成为主要约束）。
+            request_retry_window: Duration::from_secs(180),
             request_timeout: Duration::from_secs(18 * 60),
             stream_idle_warn: Duration::from_secs(5),
             stream_idle_timeout: Duration::from_secs(30),
@@ -435,14 +440,16 @@ mod tests {
     /// RESTORE-AND-STALL-GUARD (2026-08-20, ADR-0010 §14.35): the default
     /// retry policy carries the user-ruled rhythm — idle warn 5s, idle hard
     /// abort 30s (= 5s × 6 rounds, 取代 STREAM-RETRY-RHYTHM 未实施的 50s),
-    /// zero-chunk / non-stream retry window 50s, retry cap 10. The unchanged
-    /// backstops are pinned too, so a future tune cannot silently break the
-    /// contract.
+    /// zero-chunk / non-stream retry window 180s (2026-08-21 用户裁决,
+    /// sweep r1-g1 llm-inference-batching-scheduler 断连归因——节点超时
+    /// 约 1 分钟级, 拉长窗口骑过抖动; STREAM-RETRY-RHYTHM 50s 修订),
+    /// retry cap 10. The unchanged backstops are pinned too, so a future
+    /// tune cannot silently break the contract.
     #[test]
     fn default_retry_policy_matches_stream_retry_rhythm() {
         let p = RetryPolicy::default();
         assert_eq!(p.request_max_retries, 10);
-        assert_eq!(p.request_retry_window, Duration::from_secs(50));
+        assert_eq!(p.request_retry_window, Duration::from_secs(180));
         assert_eq!(p.stream_idle_warn, Duration::from_secs(5));
         assert_eq!(p.stream_idle_timeout, Duration::from_secs(30));
         assert_eq!(p.request_timeout, Duration::from_secs(18 * 60));
