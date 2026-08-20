@@ -591,6 +591,10 @@ impl DeepSeekTransport {
                     .collect::<Vec<_>>(),
             )
         };
+        // NOTE (2026-08-20 审查处理 O2): 此映射与 `apply_thinking` 保持
+        // 同步——此处只负责 config 默认档（`create_once`/`stream_once`
+        // 会再经 `apply_thinking` 按梯级/覆盖档覆盖双旋钮；直调
+        // `build_request` 的仅测试场景）。改档位时两处须同时更新。
         let (thinking, reasoning_effort) = match self.config.thinking {
             ThinkingMode::EnabledHigh => (
                 Some(async_openai::types::chat::ThinkingConfig {
@@ -3259,6 +3263,36 @@ mod tests {
             default_fp, legacy_fp,
             "legacy 20s/90s/32s values must produce a different digest"
         );
+    }
+
+    #[test]
+    fn config_fingerprint_reflects_thinking_tier() {
+        // 2026-08-20 审查处理 O4（设计 §3.6）：「请求头指纹含 thinking 档 →
+        // 部署后首次请求一次性变化」补断言——默认档（EnabledHigh）指纹与
+        // 显式 EnabledHigh 一致，且与 EnabledLow / EnabledMax / Disabled
+        // 各档互不相同（指纹为 payload_hash，档位值变化即摘要变化）。
+        let fingerprint_for = |thinking: ThinkingMode| {
+            let mut cfg = DeepSeekTransport::deepseek_v4("sk-test", "deepseek-v4-flash").config;
+            cfg.thinking = thinking;
+            DeepSeekTransport::new(cfg).config_fingerprint()
+        };
+        let default_fp = fingerprint_for(ThinkingMode::default());
+        let high_fp = fingerprint_for(ThinkingMode::EnabledHigh);
+        assert_eq!(
+            default_fp, high_fp,
+            "default must carry enabled_high into the digest"
+        );
+        for tier in [
+            ThinkingMode::EnabledLow,
+            ThinkingMode::EnabledMax,
+            ThinkingMode::Disabled,
+        ] {
+            assert_ne!(
+                default_fp,
+                fingerprint_for(tier),
+                "a thinking-tier change must alter the digest"
+            );
+        }
     }
 
     #[tokio::test]
