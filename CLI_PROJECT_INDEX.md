@@ -292,6 +292,17 @@
 > 29 → 28。登记于 ADR-0010 §14.35 第 2 项 /
 > [设计 §4.1](docs/DEEPSEEK_OUTPUT_BUDGET_AND_STALL_GUARD_DESIGN_2026-08-20.md)
 > / BACKLOG 0d / TODO P0-0d。
+> 2026-08-20 输出预算恢复与空流止损 S2 测试实施完成登记（用户指示进行 S2）
+> ——新增 15 项测试（退化检测器单测 10 项：reasoning 复读灵敏层、可见输出
+> 停用 reasoning 族、stall 双信号 600s/64K OR 语义、估算校准、空转预算与
+> max_tokens 解耦、空流重试参数/退避形状；空流链 e2e 5 项：完成型空响应
+> 快速重试 2 次→降级、链尾显式失败、reasoning 复读/stall→直接降级、重试
+> 中途哨兵→跳过剩余原样重试）；orz-loop lib 527 通过 / 0 失败 / 3
+> ignored；fmt 干净、clippy 无新增告警（transport.rs 零告警，lib 21 与
+> 基线一致）、`cargo check --workspace` 通过。计数不变（仍 29），S3/S4
+> 验证闭环后 29 → 28。登记于 ADR-0010 §14.35 第 3 项 /
+> [设计 §4.2](docs/DEEPSEEK_OUTPUT_BUDGET_AND_STALL_GUARD_DESIGN_2026-08-20.md)
+> / BACKLOG 0d / TODO P0-0d。
 2026-08-15 黑板 plan epoch 复查补强登记（ADR-0010 v1.15⑧）——plan_epoch 时间戳单调编号、身份一一对应强制、retention 保留最高编号快照。
 > 2026-08-15 黑板 plan epoch 复查遗留闭合登记（ADR-0010 v1.15⑨）——F2 原子写盘+回退加载、F4 跨进程 `.claim-<n>` 占号、F5 归档目录单一来源、F6 非法 epoch 显式报错、F7 归档失败入事件面（新 v0.2 `epoch_archive_write_failed`）、F9 `persisted_at` 更名、F10 设计 §5 措辞对齐。
 > 2026-08-15 ACAF fail-closed 生产启用裁决登记（用户裁决放行）——P2 IMPL-CONTROL-FABRIC 决策门放行；翻转执行与核查清单 ⑦⑨⑩⑪ 收口/边界登记待实施。

@@ -602,7 +602,13 @@
   计数：实施放行入账（28 → 29）。登记于 ADR-0010 §14.35 第 2 项 /
   [设计 §4.1](docs/DEEPSEEK_OUTPUT_BUDGET_AND_STALL_GUARD_DESIGN_2026-08-20.md)
   / BACKLOG 0d / CLI_PROJECT_INDEX。
-- [ ] S2 测试（请求头/stall 双信号/链路径/估算校准/回归）
+- [x] S2 测试（请求头/stall 双信号/链路径/估算校准/回归）——**2026-08-20
+  实施完成**：新增 15 项（退化检测器单测 10 项 + 空流链 e2e 5 项），
+  orz-loop lib 527 通过 / 0 失败 / 3 ignored；fmt 干净、clippy 无新增
+  告警、`cargo check --workspace` 通过。计数不变（仍 29）。登记于
+  ADR-0010 §14.35 第 3 项 /
+  [设计 §4.2](docs/DEEPSEEK_OUTPUT_BUDGET_AND_STALL_GUARD_DESIGN_2026-08-20.md)
+  / BACKLOG 0d / CLI_PROJECT_INDEX。
 - [ ] S3 重建（Linux musl，ORZ-BUILD-MOUNT-001 契约）
 - [ ] S4 复验（≥90%、无 400、无空流链、账单对账、stall 校准；不可接受回落 128K）
 

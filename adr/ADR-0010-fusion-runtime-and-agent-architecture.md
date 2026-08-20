@@ -2162,6 +2162,19 @@ ADR §3.6 正文修订随实施登记。
    入账 1 项（**28 → 29**），S3/S4 验证闭环后 29 → 28。登记于设计 §4.1 /
    BACKLOG 0d / CLI_PROJECT_INDEX / TODO P0-0d。
 
+3. **S2 测试实施登记（2026-08-20 用户指示进行 S2）**：新增 15 项测试
+   （orz-loop lib，527 通过 / 0 失败 / 3 ignored）——退化检测器单测 10 项
+   （reasoning 复读灵敏层、content/tool 可见输出停用 reasoning 族、stall
+   双信号 600s/64K OR 语义、无首 chunk 不触发、估算校准、空转预算与
+   max_tokens 解耦、空流重试参数/退避形状）+ 空流链 e2e 5 项（完成型空
+   响应快速重试 2 次→降级、链尾显式失败、reasoning 复读→降级、
+   reasoning-stall→降级、重试中途哨兵→跳过剩余原样重试）；S1 已同步断言
+   继续覆盖 256K 请求头 / idle 30s / content 退化不重试。回归：fmt 干净、
+   clippy 无新增告警（transport.rs 零告警；lib 21 与基线一致）、
+   `cargo check --workspace` 通过。计数不变（仍 29），S3/S4 验证闭环后
+   29 → 28。登记于设计 §4.2 / BACKLOG 0d / CLI_PROJECT_INDEX / TODO
+   P0-0d。
+
 ### 14.31 v1.31 补写裁决索引（2026-08-19）
 
 本节记录冻结后的显式补写；规范正文以所指章节为准，补写明确取代以下既往条款。

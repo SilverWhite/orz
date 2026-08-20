@@ -606,6 +606,19 @@
   入账 1 项（**28 → 29**），S3/S4 验证闭环后 29 → 28。登记于
   ADR-0010 §14.35 第 2 项 / [设计](DEEPSEEK_OUTPUT_BUDGET_AND_STALL_GUARD_DESIGN_2026-08-20.md)
   / CLI_PROJECT_INDEX / TODO P0-0d。
+- **2026-08-20 S2 测试实施完成（用户指示进行 S2）**：新增 15 项测试
+  （orz-loop lib，527 通过 / 0 失败 / 3 ignored）——退化检测器单测 10 项
+  （reasoning 复读灵敏层、content/tool 可见输出停用 reasoning 族、stall
+  双信号 600s/64K OR 语义、无首 chunk 不触发（idle 互补）、估算校准、
+  空转预算与 max_tokens 解耦、空流重试参数/退避形状）+ 空流链 e2e 5 项
+  （完成型空响应快速重试 2 次→降级、链尾显式失败、reasoning 复读→降级、
+  reasoning-stall→降级、重试中途哨兵→跳过剩余原样重试）；S1 已同步断言
+  继续覆盖 256K 请求头 / idle 30s / content 退化不重试。回归：fmt 干净、
+  clippy 无新增告警（transport.rs 零告警，lib 21 与基线一致）、
+  `cargo check --workspace` 通过。计数不变（仍 29），S3/S4 验证闭环后
+  29 → 28。登记于 ADR-0010 §14.35 第 3 项 /
+  [设计 §4.2](DEEPSEEK_OUTPUT_BUDGET_AND_STALL_GUARD_DESIGN_2026-08-20.md)
+  / CLI_PROJECT_INDEX / TODO P0-0d。
 
 ### 0. 前置收尾（提交前需用户确认）
 

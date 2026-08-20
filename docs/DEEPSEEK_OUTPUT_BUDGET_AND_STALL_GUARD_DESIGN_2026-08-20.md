@@ -1,7 +1,7 @@
-# DeepSeek 输出预算恢复与空流止损设计（2026-08-20 设计定稿；S1 已实施）
+# DeepSeek 输出预算恢复与空流止损设计（2026-08-20 设计定稿；S1/S2 已实施）
 
-> 状态：`S1 实施完成`（2026-08-20 用户放行实施、暂不重建/测试——S2 测试、
-> S3 重建、S4 复验待续；实施登记见 §4.1）。
+> 状态：`S1/S2 实施完成`（2026-08-20 用户放行实施；S1 代码 + S2 测试已闭合，
+> S3 重建、S4 复验待续；实施登记见 §4.1/§4.2）。
 > 性质：P0-0d 后续（输出预算恢复，32K → 256K 评估）+ D-6 空流链改造（官方
 > EMPTY_RESPONSE 节奏适配）+ 退化检测器大升级（OUTPUT-DEGENERATION-GUARD
 > 从「content 复读检测」升级为「输出健康哨兵」）。
@@ -337,6 +337,27 @@ run_invalidated（reason 保持 degeneration，detail 区分族）。
 - 计数：实施放行入账 1 项（**28 → 29**），S3/S4 验证闭环后 29 → 28。
 - 待续：S2 测试（请求头/stall 双信号/链路径/估算校准/回归）→ S3 重建 →
   S4 复验。
+
+### 4.2 S2 测试实施登记（2026-08-20，用户指示进行 S2）
+
+- **新增 15 项测试**（orz-loop lib，527 通过 / 0 失败 / 3 ignored）：
+  - 退化检测器单测 10 项——reasoning 复读灵敏层（连续相同 N=5 / 1K 窗口
+    3-gram >60%）、content/tool arguments 出现后 reasoning 族停用、
+    stall 双信号（600s 时间 / 64K token 预算，OR 语义）、无首 chunk 不
+    触发（idle 互补）、reasoning 估算校准（字符 ÷2）、空转预算与
+    max_tokens 解耦（64K < 256K 常量钉死）、空流重试参数/退避形状
+    （≤2 次、500ms→10s、±10% jitter）。
+  - 空流链 e2e 5 项——完成型空响应快速重试 2 次→降级产出、链尾全空显式
+    失败（zero output）、reasoning 复读→直接降级（不原样重试）、
+    reasoning-stall（≥64K 估算）→直接降级、空响应重试中触发 reasoning
+    哨兵→跳过剩余原样重试直接降级。
+  - S1 已同步断言继续覆盖：256K 请求头 min-cap、idle 30s 默认值、content
+    退化不重试（既有测试回归）。
+- 回归：`cargo fmt --check` 干净；clippy 无新增告警（transport.rs 零告警，
+  lib 21 与基线一致；test 28 均为既有位置）；`cargo check --workspace`
+  通过（orz-bin/orz-tui 等下游无破坏）。
+- 计数：S2 不改变未闭合计数（仍 29），S3/S4 验证闭环后 29 → 28。
+- 待续：S3 重建（Linux musl，ORZ-BUILD-MOUNT-001 契约）→ S4 复验。
 
 ## 5. 验收标准（DoD）
 
