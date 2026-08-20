@@ -390,6 +390,16 @@
 > （跑分目录内）。跑分入口就绪：`bash D:/tb-eval/run_official_2.1.sh`
 > （TB 2.1 89 题 5 批次）；单题冒烟模板参照 run_pro_gpt2.sh。计数不变
 > （28）；正式跑分启动另行登记。
+> 2026-08-20 冻结刷新登记（用户指示推送后重建含模型舒适度引导的产物）——
+> 重建成功（13:11 本地，orz 104,375,344 B）；二进制验证含「会话数据边界」
+> 提示词（grep -a 命中）；**冻结刷新：源码 1651f59 → d250f11**，orz SHA256
+> 6F20CA00… → **471A9A2437D6A73AB59638BF50F5734674F809029C817D1BB83A05567A346A8E**
+> （orz-signer / orz-acaf-provision 与提示词无关、哈希不变）；
+> [FROZEN-2026-08-20.md](D:/tb-eval/orz-linux/FROZEN-2026-08-20.md) 已刷新。
+> 镜像源维护：rsproxy.cn /dist/ TLS 失败、aliyun rustup manifest 过期，
+> build_orz_aliyun.sh 改用官方 static.rust-lang.org（容器内实测 200）；
+> crates index 仍 rsproxy-sparse 实测可用；脚本 LF/无 BOM 修正。计数不变
+> （28）。
 > 2026-08-20 模型舒适度原则 + 会话数据边界先导引导登记（用户指示：不过度
 > 限制模型、适度控制幻觉、让模型舒服些；orz d250f11，已提交、未推送）——
 > 「模型舒适度」确立为显性设计原则：机械层负责兜底与防错（哨兵/门禁/
