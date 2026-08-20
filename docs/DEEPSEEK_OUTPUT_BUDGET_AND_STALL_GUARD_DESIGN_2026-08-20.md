@@ -3,7 +3,8 @@
 > 状态：`S1-S4 全部闭合（max 基线）`；**2026-08-20 修订定稿（用户裁决：
 > 方案 B + 中间档）——默认 thinking 档 max → high（官方默认），降级梯
 > 插入 low 中间档（high → low → disabled → 失败），max 保留为可选档；
-> 待实施（§3.6 / §4.4）**。实施登记见 §4.1–§4.3。
+> S1 代码 + S2 测试已完成（§4.5，orz b72a0a4），S3/S4 待续（§4.4）**。
+> 实施登记见 §4.1–§4.3/§4.5。
 > 性质：P0-0d 后续（输出预算恢复，32K → 256K 评估）+ D-6 空流链改造（官方
 > EMPTY_RESPONSE 节奏适配）+ 退化检测器大升级（OUTPUT-DEGENERATION-GUARD
 > 从「content 复读检测」升级为「输出健康哨兵」）。
@@ -445,7 +446,8 @@ run_invalidated（reason 保持 degeneration，detail 区分族）。
 - 计数：**S3/S4 验证闭环 29 → 28**。登记于 ADR-0010 §14.35 第 4 项 /
   BACKLOG 0d / TODO P0-0d / CLI_PROJECT_INDEX。
 
-### 4.4 修订实施路由（2026-08-20 用户裁决：默认 high + 三级降级梯；待实施）
+### 4.4 修订实施路由（2026-08-20 用户裁决：默认 high + 三级降级梯；
+S1/S2 已完成——见 §4.5；S3/S4 待续）
 
 - **S1 代码**：`ThinkingMode` 增 `EnabledLow`（`reasoning_effort=low`）、
   默认改 `EnabledHigh`（`reasoning_effort=high`）；`build_request` 映射
@@ -459,6 +461,43 @@ run_invalidated（reason 保持 degeneration，detail 区分族）。
 - **S4 复验**：难题单题 + **high vs max 成本/产出对照**（output tokens、
   命中率、空流率、stall 触发、首轮延迟）；判定=空流 0、零 400、命中率
   ≥90%、无 stall 误杀；计数 29 → 28。
+
+### 4.5 S1 代码 + S2 测试实施登记（2026-08-20，用户指示进行 S1 与 S2；
+orz b72a0a4 已推送）
+
+- **S1 代码**：
+  - `ThinkingMode` 增 `EnabledLow`（`reasoning_effort=low`）；默认档
+    `EnabledMax` → **`EnabledHigh`**（官方默认档）；`EnabledMax` 保留
+    显式可选档（难题专用）。`Disabled` 不变（最终降级档）。
+  - 新增 `apply_thinking`：thinking 块 + `reasoning_effort` 双旋钮统一
+    按档位覆盖（`create_once` / `stream_once` 共用）——修复「high 配置
+    降级到 low 时 effort 仍为 high」的隐患（原实现只按 config 映射
+    effort、仅 Disabled 才清空）。
+  - `build_request` 映射补 high/low（thinking enabled + 对应 effort）。
+  - `generate_stream` 降级梯接线 **high → low → disabled → 失败**：
+    空响应每档快速有界重试 ≤2 次（换档重置计数与退避——每档独立
+    「快速 500ms→10s+10% jitter」节奏，设计 §3.2 按阶段重试语义）；
+    reasoning 族哨兵逐级下降一档。**`EnabledMax` 显式档保留 S4 验证
+    基线**：哨兵命中/空流链耗尽直跳 disabled（三级梯按默认 high 起定义；
+    max 不额外多烧 high/low 两轮——避免超出已裁决的「失败路径多一轮」
+    成本）。
+  - 请求头指纹 thinking 映射含 high/low（部署后首次请求一次性变化）；
+    live 探针注释同步（探针为 max 显式档实测路径）。
+- **S2 测试**：
+  - 请求头断言：默认 high（原 `build_request_sets_thinking_enabled_max_d6`
+    改为默认档 high）；max/low 显式档映射断言（新增）。
+  - 三级梯 e2e 3 项：空响应 high→low→disabled→显式失败（3+3+1=7 次
+    请求、每档 0.5s→1s 退避重置）；哨兵 high→low（low 档产出）；low 级
+    哨兵→disabled（disabled 档产出，无 reasoning 旋钮）。
+  - 既有 max 基线测试核对：max 直跳 disabled 语义不变（S4 基线保留）。
+  - 回归：orz-loop lib **531 通过 / 0 失败 / 3 ignored**（+4 项）；fmt
+    干净；clippy 与基线一致（lib 21 / test 28 均既有位置，transport.rs
+    零告警）；`cargo check --workspace` 通过（orz-bin/orz-tui 等下游
+    无破坏）。
+- 计数：S1 实施放行入账 1 项（**28 → 29**）；S2 不改变未闭合计数（仍
+  29）；S3/S4 验证闭环后 29 → 28。
+- 待续：S3 重建（Linux musl，ORZ-BUILD-MOUNT-001 契约）→ S4 复验（难题
+  单题 + high vs max 成本/产出对照）。
 
 ## 5. 验收标准（DoD）
 

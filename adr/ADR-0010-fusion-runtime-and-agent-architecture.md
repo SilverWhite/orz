@@ -2213,6 +2213,27 @@ ADR §3.6 正文修订随实施登记。
    设计轮不动计数（28）；实施放行 28 → 29，验证闭环 29 → 28。登记于
    设计 §3.6/§4.4 / BACKLOG 0d / CLI_PROJECT_INDEX / TODO P0-0d。
 
+6. **默认 high + 三级降级梯 S1 代码 + S2 测试实施登记（2026-08-20 用户
+   指示进行 S1 与 S2；orz b72a0a4 已推送）**：`ThinkingMode` 增
+   `EnabledLow`（`reasoning_effort=low`）、默认档 `EnabledMax` →
+   `EnabledHigh`（官方默认档）、`EnabledMax` 保留显式可选档；新增
+   `apply_thinking` 统一 thinking 块 + `reasoning_effort` 双旋钮（
+   `build_request` 仅按 config 映射，梯级/覆盖档必须同时覆盖两旋钮——
+   修复「high 配置降级到 low 时 effort 仍为 high」的隐患）；
+   `generate_stream` 降级梯 **high → low → disabled → 失败**——空响应
+   每档快速有界重试 ≤2 次（换档重置计数与退避，每档独立 500ms→10s+10%
+   jitter 节奏）、reasoning 族哨兵逐级下降一档；**`EnabledMax` 显式档
+   保留 S4 验证基线**（哨兵命中/空流链耗尽直跳 disabled，三级梯按默认
+   high 起定义，不额外多烧 high/low 两轮）；请求头指纹 thinking 映射
+   含 high/low；探针注释同步。**S2 测试**：默认 high + max/low 显式档
+   请求头断言（原 max 默认断言改 high）、三级梯 e2e（空响应
+   high→low→disabled→失败、哨兵 high→low、low 级哨兵→disabled）、既有
+   max 基线测试核对。回归：orz-loop lib **531 通过 / 0 失败 / 3 ignored**
+   （+4 项）、fmt 干净、clippy 与基线一致（lib 21 / test 28 均既有位置，
+   transport.rs 零告警）、`cargo check --workspace` 通过。计数：S1 实施
+   放行入账 28 → 29（S2 不改变未闭合计数），S3/S4 验证闭环后 29 → 28。
+   登记于设计 §4.5 / BACKLOG 0d / CLI_PROJECT_INDEX / TODO P0-0d。
+
 ### 14.31 v1.31 补写裁决索引（2026-08-19）
 
 本节记录冻结后的显式补写；规范正文以所指章节为准，补写明确取代以下既往条款。

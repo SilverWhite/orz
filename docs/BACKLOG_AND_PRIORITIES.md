@@ -656,6 +656,20 @@
   ADR-0010 §14.35 第 5 项 /
   [设计 §3.6/§4.4](DEEPSEEK_OUTPUT_BUDGET_AND_STALL_GUARD_DESIGN_2026-08-20.md)
   / CLI_PROJECT_INDEX / TODO P0-0d。
+  **2026-08-20 S1/S2 实施登记**（用户指示进行 S1 与 S2；orz b72a0a4 已
+  推送）：`ThinkingMode` 增 `EnabledLow`、默认档 max → high（max 保留
+  显式可选档）；`apply_thinking` 双旋钮统一（修复 high 配置降级到 low 时
+  effort 仍为 high 的隐患）；`generate_stream` 降级梯 high → low →
+  disabled → 失败（空响应每档 ≤2 次快速重试、换档重置计数与退避；
+  reasoning 族哨兵逐级下降；max 显式档保留 S4 直跳 disabled 基线）；
+  请求头指纹含 high/low；S2 测试=默认 high/max/low 请求头断言 + 三级梯
+  e2e 3 项（空响应全链失败、哨兵 high→low、low 级哨兵→disabled）+ 既有
+  max 基线核对；orz-loop lib 531 通过 / 0 失败 / 3 ignored、fmt 干净、
+  clippy 基线一致、`cargo check --workspace` 通过。计数：S1 放行入账
+  28 → 29，S2 不变（仍 29），S3/S4 闭环后 29 → 28。登记于
+  ADR-0010 §14.35 第 6 项 /
+  [设计 §4.5](DEEPSEEK_OUTPUT_BUDGET_AND_STALL_GUARD_DESIGN_2026-08-20.md)
+  / CLI_PROJECT_INDEX / TODO P0-0d。
 
 ### 0. 前置收尾（提交前需用户确认）
 
