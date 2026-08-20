@@ -499,6 +499,33 @@ orz b72a0a4 已推送）
 - 待续：S3 重建（Linux musl，ORZ-BUILD-MOUNT-001 契约）→ S4 复验（难题
   单题 + high vs max 成本/产出对照）。
 
+### 4.6 S1 全面审查处理登记（2026-08-20，用户指示处理审查全部问题；
+orz 1651f59，已提交、未推送）
+
+审查结论（用户指示对本轮 S1 代码全面检查）：**未发现功能缺陷，设计合理、
+实现合理、设计与实现符合**；提出 5 项观察级建议，处理如下：
+
+- **O1（已知边界登记）**：非流式 `generate` 链保持既有「原样重试 1 次 →
+  thinking 禁用」基线，不引入 low 档——本设计三级梯作用域明确为
+  `generate_stream`（§3.2/§3.6）；`generate` 仅服务 preflight/gate
+  （max_tokens=1024 快轮），低风险路径。登记为**有意不对称（已知边界）**，
+  非遗漏。
+- **O2（代码处理）**：`build_request` 与 `apply_thinking` 双份 thinking
+  映射——`build_request` 直调仅测试场景，生产路径均再经 `apply_thinking`
+  按梯级/覆盖档覆盖双旋钮；已补同步注释（改档位两处须同时更新，P3 维护性）。
+- **O3（参数登记）**：`empty_response_backoff` 的 `max_elapsed_time=60s`
+  为设计参数表外实现细节——每档 ≤2 次重试（500ms→1s）合计约 1.5s，60s
+  纯兜底不可达；注释已说明，参数表不加项。
+- **O4（测试补强）**：新增 `config_fingerprint_reflects_thinking_tier`
+  ——默认档（EnabledHigh）指纹与显式 EnabledHigh 一致，且与
+  EnabledLow / EnabledMax / Disabled 各档互异（设计 §3.6「请求头指纹含
+  thinking 档 → 部署后首次请求一次性变化」补断言）；orz-loop lib
+  **532 通过 / 0 失败 / 3 ignored**（+1 项）、fmt 干净、clippy 与基线
+  一致（lib 21 均既有位置，transport.rs 零告警）。
+- **O5（已接受登记）**：三级梯 e2e 请求体子串匹配（`"\"high\""` 等）登记
+  为已接受边界——mock 请求体可控、当前断言集合无实际误匹配风险。
+- 计数：审查处理不改变未闭合计数（仍 29），S3/S4 闭环后 29 → 28。
+
 ## 5. 验收标准（DoD）
 
 - S2 全绿、fmt 干净、clippy 与基线一致；

@@ -646,6 +646,13 @@
 > 531 通过 / 0 失败 / 3 ignored、fmt 干净、clippy 基线一致、workspace
 > check 通过。登记于 ADR-0010 §14.35 第 6 项 /
 > [设计 §4.5](docs/DEEPSEEK_OUTPUT_BUDGET_AND_STALL_GUARD_DESIGN_2026-08-20.md)。
+> 审查处理（2026-08-20，用户指示处理审查全部问题；orz 1651f59，已提交、
+> 未推送）：未发现功能缺陷；O1 非流式 generate 链不引入 low 档登记为
+> 有意不对称（已知边界）；O2 双份映射补同步注释；O3 60s 退避兜底登记；
+> O4 新增指纹 thinking 档断言（+1 项，orz-loop lib 532 通过 / 0 失败 /
+> 3 ignored）；O5 子串匹配登记为已接受。计数不变（仍 29）。登记于
+> ADR-0010 §14.35 第 7 项 /
+> [设计 §4.6](docs/DEEPSEEK_OUTPUT_BUDGET_AND_STALL_GUARD_DESIGN_2026-08-20.md)。
 
 - [x] S1 代码（`ThinkingMode` 增 `EnabledLow`、默认 `EnabledHigh`、三级梯接线）
 - [x] S2 测试（high/low 请求头断言、三级梯路径、回归全绿）

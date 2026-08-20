@@ -2234,6 +2234,25 @@ ADR §3.6 正文修订随实施登记。
    放行入账 28 → 29（S2 不改变未闭合计数），S3/S4 验证闭环后 29 → 28。
    登记于设计 §4.5 / BACKLOG 0d / CLI_PROJECT_INDEX / TODO P0-0d。
 
+7. **默认 high + 三级梯 S1 全面审查处理登记（2026-08-20 用户指示处理
+   审查全部问题；orz 1651f59，已提交、未推送）**：审查结论=未发现功能
+   缺陷，设计合理、实现合理、设计与实现符合；处理 5 项观察级建议——
+   **O1（已知边界）**：非流式 `generate` 链保持「原样重试 1 次 →
+   thinking 禁用」基线、不引入 low 档（三级梯作用域明确为
+   `generate_stream`；`generate` 仅服务 preflight/gate 快轮），登记为
+   有意不对称；**O2（代码）**：`build_request` 与 `apply_thinking` 双份
+   thinking 映射补同步注释（直调 build_request 仅测试场景，改档位两处
+   须同步）；**O3（登记）**：`empty_response_backoff` 的 60s
+   max_elapsed_time 为参数表外兜底（每档 ≤2 次重试不可达）；**O4（测试
+   补强）**：新增 `config_fingerprint_reflects_thinking_tier`——默认档
+   指纹 == 显式 EnabledHigh，且与 low/max/disabled 互异（设计 §3.6
+   「指纹含 thinking 档」补断言），orz-loop lib 532 通过 / 0 失败 / 3
+   ignored（+1 项）、fmt 干净、clippy 基线一致（lib 21 均既有位置，
+   transport.rs 零告警）；**O5（已接受）**：e2e 请求体子串匹配登记为
+   已接受边界（mock 可控、无实际风险）。计数：审查处理不改变未闭合计数
+   （仍 29），S3/S4 闭环后 29 → 28。登记于设计 §4.6 / BACKLOG 0d /
+   CLI_PROJECT_INDEX / TODO P0-0d。
+
 ### 14.31 v1.31 补写裁决索引（2026-08-19）
 
 本节记录冻结后的显式补写；规范正文以所指章节为准，补写明确取代以下既往条款。

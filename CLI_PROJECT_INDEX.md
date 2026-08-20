@@ -344,6 +344,23 @@
 > ADR-0010 §14.35 第 6 项 /
 > [设计 §4.5](docs/DEEPSEEK_OUTPUT_BUDGET_AND_STALL_GUARD_DESIGN_2026-08-20.md)
 > / BACKLOG 0d / TODO P0-0d。
+> 2026-08-20 默认 high + 三级梯 S1 全面审查处理登记（用户指示处理审查
+> 全部问题；orz 1651f59，已提交、未推送）——审查结论=未发现功能缺陷，
+> 设计合理、实现合理、设计与实现符合；处理 5 项观察级建议：O1 非流式
+> `generate` 链不引入 low 档登记为有意不对称（已知边界，三级梯作用域=
+> generate_stream，generate 仅服务 preflight/gate 快轮）；O2
+> `build_request` 与 `apply_thinking` 双份映射补同步注释（直调仅测试
+> 场景）；O3 `empty_response_backoff` 60s max_elapsed_time 登记为参数表
+> 外兜底（每档 ≤2 次重试不可达）；O4 新增
+> `config_fingerprint_reflects_thinking_tier`（默认档指纹==显式
+> EnabledHigh、与 low/max/disabled 互异；设计 §3.6「指纹含 thinking 档」
+> 补断言）——orz-loop lib 532 通过 / 0 失败 / 3 ignored（+1 项）、fmt
+> 干净、clippy 基线一致（lib 21 均既有位置、transport.rs 零告警）；O5
+> e2e 请求体子串匹配登记为已接受边界（mock 可控、无实际风险）。计数：
+> 审查处理不改变未闭合计数（仍 29），S3/S4 闭环后 29→28。登记于
+> ADR-0010 §14.35 第 7 项 /
+> [设计 §4.6](docs/DEEPSEEK_OUTPUT_BUDGET_AND_STALL_GUARD_DESIGN_2026-08-20.md)
+> / BACKLOG 0d / TODO P0-0d。
 2026-08-15 黑板 plan epoch 复查补强登记（ADR-0010 v1.15⑧）——plan_epoch 时间戳单调编号、身份一一对应强制、retention 保留最高编号快照。
 > 2026-08-15 黑板 plan epoch 复查遗留闭合登记（ADR-0010 v1.15⑨）——F2 原子写盘+回退加载、F4 跨进程 `.claim-<n>` 占号、F5 归档目录单一来源、F6 非法 epoch 显式报错、F7 归档失败入事件面（新 v0.2 `epoch_archive_write_failed`）、F9 `persisted_at` 更名、F10 设计 §5 措辞对齐。
 > 2026-08-15 ACAF fail-closed 生产启用裁决登记（用户裁决放行）——P2 IMPL-CONTROL-FABRIC 决策门放行；翻转执行与核查清单 ⑦⑨⑩⑪ 收口/边界登记待实施。

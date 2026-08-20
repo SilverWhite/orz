@@ -670,6 +670,21 @@
   ADR-0010 §14.35 第 6 项 /
   [设计 §4.5](DEEPSEEK_OUTPUT_BUDGET_AND_STALL_GUARD_DESIGN_2026-08-20.md)
   / CLI_PROJECT_INDEX / TODO P0-0d。
+  **2026-08-20 S1 全面审查处理登记**（用户指示处理审查全部问题；orz
+  1651f59，已提交、未推送）：审查结论=未发现功能缺陷，设计合理、实现
+  合理、设计与实现符合；处理 5 项观察级建议——O1 非流式 `generate` 链
+  不引入 low 档登记为有意不对称（已知边界，三级梯作用域=generate_stream，
+  generate 仅服务 preflight/gate 快轮）；O2 `build_request` 与
+  `apply_thinking` 双份映射补同步注释；O3 `empty_response_backoff` 60s
+  max_elapsed_time 登记为参数表外兜底（每档 ≤2 次重试不可达）；O4 新增
+  `config_fingerprint_reflects_thinking_tier`（默认档指纹 == 显式
+  EnabledHigh、与 low/max/disabled 互异；设计 §3.6「指纹含 thinking 档」
+  补断言）——orz-loop lib 532 通过 / 0 失败 / 3 ignored（+1 项）、fmt
+  干净、clippy 基线一致（lib 21 均既有位置）；O5 e2e 请求体子串匹配登记
+  为已接受边界（mock 可控、无实际风险）。计数：审查处理不改变未闭合计数
+  （仍 29），S3/S4 闭环后 29 → 28。登记于 ADR-0010 §14.35 第 7 项 /
+  [设计 §4.6](DEEPSEEK_OUTPUT_BUDGET_AND_STALL_GUARD_DESIGN_2026-08-20.md)
+  / CLI_PROJECT_INDEX / TODO P0-0d。
 
 ### 0. 前置收尾（提交前需用户确认）
 
