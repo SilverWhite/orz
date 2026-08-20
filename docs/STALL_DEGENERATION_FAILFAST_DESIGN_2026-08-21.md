@@ -28,6 +28,38 @@
 stall 占大头（8×64K）；rep 均为「连续 5 个相同 delta」秒级触发、成本可忽略。
 零 HTTP 400、零 run_invalidated、零折叠。
 
+> 注（2026-08-21 S0 采集期核对）："零 run_invalidated" 在事件级不准确——g1
+> schemelike 与 g2 qemu-startup/vulnerable-secret 的 journal 末尾均存在
+> `runtime_stagnation_guard{restart_requested, STAGNATION-NGRAM-REPEAT}` →
+> `run_invalidated{status:restart_requested}`（终答停滞守卫：counterexample_gate
+> 触发重复终答后重启，verifier 仍通过，属良性重启、非终止失败）。该守卫与
+> 传输层输出健康哨兵（reasoning_stall/repetition）不同机制，不在本设计范围。
+
+### 1.1a sweep r1-g2 哨兵数据（S0 证据门采集批次，2026-08-21，冻结版 cf0be20）
+
+| 题目 | Reward | 哨兵（触发对） | 触发上下文 | 归因 |
+|---|---|---|---|---|
+| vulnerable-secret | 1 | 0 | 29 轮，无哨兵 | 干净通过 |
+| qemu-startup | 1 | 0 | 46 轮，1 次折叠（seq345，40 轮后），无哨兵 | 干净通过（终答良性重启） |
+| sqlite-db-truncate | 1 | 0 | 19 轮，无哨兵 | 干净通过 |
+| feal-differential-cryptanalysis | 0 | 1× reasoning_stall | **首请求即触发**（374s/64K，consec=1→low）；低档重试约 18 分钟后 `error decoding response body` 非零退出 | 失败链=stall→解码错误（同 g1 dna-assembly） |
+| polyglot-c-py | 1* | 0 | 首请求 900s 未产出任何轮次、无哨兵（流在产 token 但低于阈值），900s 超时 | 模型侧慢生成；*verifier 通过系容器内交付物既成，非代理成果 |
+
+合计 1 次 stall 触发（1×64K）。零 HTTP 400。失败 run（feal-differential）
+无 journal，触发上下文仅 orz.txt + 容器实时日志（启动 21:53:47 → stall
+22:00:12，间隔 374s，无任何工具事件，确认首请求）。
+
+### 1.1b S0 采集口径与方法（sweep-s0/collect_s0.ps1，产物 sweep-s0/）
+
+- 每对 WARN（stream interrupted + degrading to）计 1 次哨兵触发；记录 kind、
+  consecutive、降档目标、持续秒数、估算 token。
+- 有 journal 时按时间戳对齐到工具轮：触发轮次 = 该请求完成对应的 model_output
+  轮；前 3 事件 = 该轮 model_output 之前的 model_output/tool_started/
+  tool_completed 序列；旗标 = 紧邻 blackboard_read(session/actions)、折叠/
+  压缩后首请求、截断指针后（后者在持久化产物中不可观测，以折叠事件为代理）。
+- 基率对照：每个 run 全部轮次中「紧邻 bb(session/actions)」占比，用于判断
+  触发点分布是否显著高于常态（g1 schemelike 基率 36% 紧邻 / 52% 前3）。
+
 ### 1.2 跨请求烧 stall 的机制根因（实现核对）
 
 现状机制（transport.rs 实现核对）：
@@ -78,6 +110,22 @@ stall 占大头（8×64K）；rep 均为「连续 5 个相同 delta」秒级触�
   （8K max_tokens 同上下文 3.7s 自然收尾）——判定为模型/任务侧原因。
 - 不通过（暂停）：出现 ≥2 例哨兵与机械块强相关（如折叠后首请求重复
   触发、blackboard 大分区重读后连续 stall），先修架构侧诱因再回来。
+
+**S0 中间判定（r1-g1 + r1-g2 两批、10 题、7 次触发对=5 stall+2 rep）：**
+
+- 机械结构相关性：**0 例强相关**。g2 feal-differential 的 stall 为**首请求**
+  （启动后 374s，无任何工具事件前置），直接构成机械块无关的反例；g1
+  schemelike 两次 stall（round 34/47）虽紧邻 blackboard_read(actions)，
+  但该 run 紧邻基率 36% / 前3基率 52%，与随机分布一致，非稳定相关；两批
+  均为 0 例「折叠/压缩后首请求触发」。
+- 跨任务分布：触发集中于复杂实现类任务（schemelike 求值器、dna 组装、
+  llm batching、feal 差分密码分析），简单/中等问题（build-pov-ray、
+  vulnerable-secret、qemu-startup、sqlite-db-truncate）零触发，分布不均。
+- 口径修正：g1 文档「首 stall 在 20–33 次模型输出之后」被 g2 首请求 stall
+  证伪——stall 可出现在任意轮（含第 1 轮），进一步支持「非机械门控」。
+- **结论：通过（放行 S1）**。触发点与机械结构块无稳定相关、跨任务分布不
+  均，且与既有探针结论（256K×high×输出/上下文重复循环、8K max_tokens 同
+  上下文自然收尾）一致，判定为模型/任务侧原因。待用户确认后实施 S1。
 
 ### 2.2 主案：跨请求 fail-fast 化（哨兵预算有界 + 显式终止）
 

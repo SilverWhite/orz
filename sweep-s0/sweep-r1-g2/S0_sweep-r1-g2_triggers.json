@@ -1,0 +1,20 @@
+{
+  "task": "feal-differential-cryptanalysis",
+  "kind": "reasoning_stall",
+  "consec": 1,
+  "target": "EnabledLow",
+  "ts": "2026-08-20T22:00:12.547Z",
+  "dur_s": 374,
+  "est_tok": 64000,
+  "detail": "no content/tool_calls for 374s with ~64000 estimated reasoning tokens (budget 600s / 64000 tokens)",
+  "round": null,
+  "prev3": [],
+  "near_bb": false,
+  "bb_sections": [],
+  "after_fold": false,
+  "after_trunc": false,
+  "ev_source": "orz.txt only (no journal)",
+  "bb_imm": false,
+  "bb_imm_base": 0.0,
+  "bb_prev3_base": 0.0
+}
