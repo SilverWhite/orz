@@ -673,6 +673,37 @@
 - [x] S3 重建（Linux musl，ORZ-BUILD-MOUNT-001 契约）
 - [x] S4 复验（换题 make-doom-for-mips；空流 0、零 400、命中率 92.18% ≥90%、无 stall 误杀；计数 29→28）
 
+### P0-0e CONTEXT-SCAFFOLDING-PULL-REDESIGN（P0；2026-08-21 设计定稿，
+S1 实施 + 全面审查处理已闭合，S3/S4 待验证）
+
+> 入口：[设计](docs/CONTEXT_SCAFFOLDING_PULL_REDESIGN_DESIGN_2026-08-21.md)；
+> ADR-0010 §14.35 第 10 项；BACKLOG 0e。
+> 来源：2026-08-20 跑分冒烟失控（content_repetition 0.87 / reasoning 64K
+> 空转）——API 实测钉死触发条件=256K × high × 重复性上下文；重复性上下文
+> 源自每轮 PUSH 的 `[TOOL_ROUND_BUDGET] REMAINING` 机械块（333 轮 ≈333 条，
+> 2026-08-07 前缀缓存修复副作用）。
+> 定案（用户裁决）：方案 A 预算块 PUSH→PULL——退役每工具轮 REMAINING 尾随
+> 注入；`blackboard_read` 新增 `section=session` 按需读（预算剩余 + 状态行；
+> live 面不进归档；越权组合显式报错）；机械硬门禁兜底；总预算块保留。C 暂缓
+> （S4 复验后裁决）；状态行保留现状。实施路由 S1 代码 → S2 测试 → S3 重建 →
+> S4 复验（重点观测缓存命中率对照 98%+ 不减、零 400、哨兵触发率下降、输入
+> 增长放缓）。设计/实施轮不动计数（28），S3/S4 闭环后 28→27。
+> **2026-08-21 S1 实施 + 全面审查处理闭合（用户放行；orz 7529a71）**：
+> 退役 REMAINING 尾随注入（零残留）；session 面（BUDGET/USED/REMAINING +
+> `render_status_line`；数据源=in-run tool_rounds 含 activation 累计 /
+> max_tool_rounds；越权组合参数级显式报错 exit_code 1 + error 字段）；
+> 工具定义 enum/描述增量；系统提示词总预算块改为指向按需读取。S2 测试随
+> S1 交付：协议形态 5→4、无 REMAINING 尾随断言、session 面渲染/越权单测 +
+> 工具级回达、`budget_insufficient` 拒绝文本仍含剩余；orz-loop 536 通过 /
+> fmt / clippy 基线（31）/ workspace check / 事件一致性 15 通过。全面审查
+> 处理：O1/O2/O3 已接受边界（口径差异/PULL 读取消耗轮/状态行双通道）、O4
+> 越权组合口径收紧、O5 工具级测试补齐、O6 工具描述去内部标签（设计 §8）。
+
+- [x] S1 代码（退役 REMAINING 尾随注入 + session 面 + 工具定义增量 + 机械门禁回归）
+- [x] S2 测试（无 REMAINING 尾随、session 面渲染/越权、拒绝文本含剩余、既有断言更新）
+- [ ] S3 重建（Linux musl，ORZ-BUILD-MOUNT-001 契约）
+- [ ] S4 复验（缓存命中率对照 98%+ 不减、零 400、哨兵触发率下降、输入增长放缓）
+
 ### P0-B FUS-RETRIEVAL-MECH（`implemented`；批次 1-6 已全部闭合，2026-08-14，保留供核对）
 
 依赖顺序：1（B-1，已闭合）→ 2/3/5（已闭合）→ 4（已闭合）→ 6。

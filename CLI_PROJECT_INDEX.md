@@ -411,6 +411,122 @@
 > 变化 → 部署后首次请求一次性指纹变化（既有纪律）；新增提示词测试，
 > orz-loop lib 533 通过 / 0 失败 / 3 ignored、fmt 干净、clippy 基线一致。
 > 登记于 ADR-0010 §14.35 第 9 项；未闭合计数不变（28）。
+> 2026-08-20 冒烟跑分启动 + 合规预检处理 + 第 1 组结果登记（用户裁决：5 轮×
+> 89 题、每组 5 题、每题一遍 k=1、仅本地 jobs-sweep、不构成最终提交）——合规
+> 预检：三件套 SHA256 与冻结清单一致；数据集 2.1 sha256 与 leaderboard
+> DATASET_REF 一致；静态检查口径（89 题 × ≥5 trials、无超时/覆盖/挂载）满足。
+> 预检发现并处理 3 项：① `tb_agents/orz.py` 取证遗留 `ORZ_DEBUG_VIEW=1` 移除
+> （预登记清理项，冻结二进制未动）；② 2.1 数据集任务名需带 `terminal-bench/`
+> 命名空间前缀（run_sweep_5.ps1/.sh 与 run_official_2.1.sh 修正；原 `-i 裸名`
+> 无法匹配——印证官方脚本此前未实跑）；③ 本机无 git-bash、WSL 不解析 D:/ 路径
+> 且不传 PYTHONPATH → 新增 PowerShell 执行入口
+> [run_sweep_5.ps1](D:/tb-eval/run_sweep_5.ps1)（list + print-config 验证
+> 通过）；harbor 未登录（本地跑不需，上传/合并前需 auth login）。第 1 组
+> （r1-g1=sweep-r1-g1，1 并发）结果：5 题仅 2 题完成、均 reward 0，3 题未跑
+> （job 进程崩溃）——① schemelike-metacircular-eval：content_repetition
+> （3-gram 重复率 0.87）→ orz exit 1（content 族已见输出不重试，设计内）；
+> ② dna-assembly：reasoning_repetition（连续 5 段相同 delta）→ high→low，
+> 随后 reasoning_stall（64K 估算 token、356s）再降档，最终 stream idle 30s
+> 无数据 → model error；哨兵均按设计工作、止损生效，但两题连续触发说明模型层
+> 今夜仍不稳定（与当晚症状同源）；③ 第 3 题起 harbor 拉任务时注册表 RPC
+> `resolve_task_version` ConnectError（瞬时网络抖动；litellm 亦报 SSL EOF，
+> 事后三主机 443 均可达）→ TaskGroup 未捕获使整个 job 进程崩溃（harbor
+> 健壮性缺口：应只失败单 trial 而非整个 job）。**待用户裁决：暂停等模型稳定后
+> 补跑 g1b（build-pov-ray / llm-inference-batching-scheduler /
+> feal-linear-cryptanalysis 3 题），或按现状继续收集 89 题哨兵触发统计**。
+> 计数不变（28）。
+> 2026-08-20 模型侧退化定位取证登记（用户指示定位 + 网络波动确认：用户 Clash
+> 节点超时已切换）——取证复跑 schemelike-metacircular-eval（带 gsa 卷实时
+> journal，`jobs-diag/diag-schemelike-r1`，同冻结二进制）结论：① 前段行为健康
+> （52 次工具调用、plan_write、操作台订单→ACAF 票据→发放全通、步骤门
+> step_not_done fail-closed 正确拒绝），同提示词同题无「误导点」证据；②
+> **reasoning_stall 复现**（335s、~64K 估算 token 纯推理无输出，14:11:43）→
+> 按设计 high→low 降档后模型恢复工具调用——长推理空转是模型在难题上的真实
+> 行为（dna-assembly 同形态）；③ 最终死因=**transport error: error decoding
+> response body**（流多次 idle 5s 停滞、解码失败，14:14:21 run_failed）——
+> DeepSeek 流今晚仍不稳定，网络是主导因素（harbor ConnectError、LiteLLM SSL
+> EOF/握手超时同源）；④ 首跑 schemelike 的 content_repetition（0.87）在稳定
+> 网络下未复现，判为网络压力下的流异常或单次劣采样，非哨兵误杀模式。结论：
+> 冻结版无回归，r1-g1 失败主因=网络层 + 难题长思考（哨兵均按设计兜住）；
+> 复跑仍 reward 0。待用户裁决后续跑法（等网络稳定后补跑 g1b 3 题 / 调整哨兵
+> 预算 / 继续）。计数不变（28）。
+> 2026-08-20 g1b/g1c 环境受阻 + 网络取证收口登记（用户裁决：先停；用户已重开
+> 代理）——g1b（3 题）全败因=关代理后 docker.io 不可达 + 容器内 apt 超时
+> （镜像经 docker.1ms.run 预拉已补齐，非架构问题）；g1c 第 1 题
+> llm-inference-batching-scheduler 挂死 17+ 分钟（用户指示停止，job 已中断、
+> 残留容器已清理）。**容器网络取证（决定性）**：容器无代理环境变量、DNS 正常、
+> 小请求 curl 0.46s 返回、2MB 大请求体 4.6s 完整送达（排除 MTU/路径丢包）；
+> orz 的 ESTABLISHED 连接 tx_queue=0、重传=0——请求体已完整送达 DeepSeek，
+> 服务器 17 分钟零响应。结论：**非容器、非设计、非我方网络路径**——DeepSeek
+> 服务端对大请求（10 万+ token 上下文 / 256K 输出预算 / reasoning=high）无
+> 响应，与今晚账单/延迟异常同源（其他窗口请求小故正常）。跑分暂停；恢复方案
+> 已定：镜像预拉齐（关代理可用）+ 容器 apt 直连验证 + DeepSeek 直连或稳定
+> 代理下再跑。计数不变（28）。
+> 2026-08-20 输出预算失控根因定位登记（用户怀疑「一次性输出太多」）——实测
+> api.deepseek.com（deepseek-v4-flash，stream+reasoning_effort=high）：
+> ① 同请求 max_tokens=8K：3.7s 自然收尾；② max_tokens=262144：首字节 0.8s
+> 后**150s 收到 12.5MB 流仍未停止**（超时中断），25s 抽样确认为 reasoning 流；
+> ③ 再跑一次 256K 则 25s 内自然收尾——**失控是概率性的**。结论：**256K 输出
+> 预算使 deepseek-v4-flash 概率性无限生成（几十万 token），其他项目 max_tokens
+> 小故正常；我方哨兵（content_repetition/reasoning_stall 64K/idle）实际成为
+> 唯一刹车**，与今晚巨额 output 账单、r1-g1 两题退化、g1c 挂死同源。设计层面
+> 待用户裁决：主代理 `REQUEST_MAX_TOKENS` 由 256K 收紧（建议 32K–64K，S4
+> make-doom 194 请求/单轮输出远低于此）或维持 256K 仅靠哨兵兜底。冻结版
+> 未动。计数不变（28）。
+> 2026-08-20 失控触发条件精确定位 + 官方 DSH 对照登记——追加探针：①
+> 256K+reasoning_effort=high+**重复性上下文**（2600 句相同填充）→ 150s 12.5MB
+> 失控；② 同请求 256K 不带 effort / low / medium → 1.9–5.3s 自然收尾；③
+> 256K+high+**非重复真实源码上下文**（166KB）→ 4s 自然收尾。**失控触发条件
+> = max_tokens=256K × reasoning=high × 上下文/输出出现重复循环**——模型一旦
+> 在难题上进入复读循环，256K 预算允许其无限延续（哨兵成唯一刹车）；官方 DSH
+> （deepseek-harness v0.1）源码核验：`DEFAULT_MAX_TOKENS=256_000`、默认
+> reasoningEffort=high 均与 orz 相同，但其架构笔记明确警告 256K 输出预算在
+> 预分配端点会占满 1M 上下文、「gateway/模型只支持较小预算时必须调低
+> maxTokens」——官方把 256K 当可配置上限且部署可调低；官方上下文形态不触发
+> 重复循环，故用户侧未见失控。**待用户裁决（冻结版未动）**：A. 主代理
+> `REQUEST_MAX_TOKENS` 256K→64K（正常轮次不受影响，S4 单轮均值 <1K；循环轮
+> 快速触顶）保留 high 与三级梯；B. 维持 256K 仅靠哨兵兜底（现状成本/失败率）。
+> 计数不变（28）。
+> 2026-08-21 上下文机械结构块 PUSH→PULL 重设计定稿登记（用户裁决方向：从根本
+> 上解决，架构独有问题）——根因链：失控 = 256K × reasoning=high × 重复性
+> 上下文（API 实测四组对照钉死）；重复性上下文源自我们每轮 PUSH 的框架自有
+> 机械块（`[TOOL_ROUND_BUDGET] REMAINING` 每工具轮 1 条且旧条不删、333 轮
+> ≈333 条；`[任务状态]` 变化追加旧条不删；`[本轮编辑]`/压缩标记），这是
+> 2026-08-07 前缀缓存修复（17%→98%）的副作用——用上下文重复换缓存稳定，
+> 并放大复读失控触发面。官方 deepseek-harness minimal 模式（无运行时上下文
+> 注入、无压缩、仅双工具、contextWindow 1M、idle 48h）为结构性避免参照。
+> 设计：
+> [CONTEXT_SCAFFOLDING_PULL_REDESIGN_DESIGN_2026-08-21.md](docs/CONTEXT_SCAFFOLDING_PULL_REDESIGN_DESIGN_2026-08-21.md)
+> ——方案 A（推荐）：预算块 PUSH→PULL（退役 REMAINING 尾随消息，
+> blackboard_read 新增 session 面按需读，机械门禁 budget_insufficient/
+> 上限耗尽兜底）；方案 B（历史替换去重）因破坏前缀缓存否决；方案 C（兜底）：
+> REQUEST_MAX_TOKENS 256K→64K；方案 D（可选）：状态行视 A 效果再定。路由
+> S1→S4；待用户裁决实施范围。计数不变（28）。
+> 2026-08-21 设计定稿登记（用户裁决：方案 A 先行、C 暂缓、状态行保留；
+> S4 重点观测缓存命中）——`blackboard_read` 新增 `section=session`（remaining
+> = controller activation tool_rounds_used/max_tool_rounds + render_status_line，
+> live 面不进 epoch 归档，工具定义增量）；退役每工具轮 `[TOOL_ROUND_BUDGET]
+> REMAINING` 尾随注入（D-8），总预算声明块保留，机械门禁（budget_insufficient
+> 拒绝文本含剩余/耗尽块/run_invalidated）兜底；S2 需更新既有
+> TOOL_ROUND_BUDGET 断言（controller.rs 12078 附近）；S4 观测：逐请求缓存
+> 命中率（对照 S4 make-doom 98%+ 基线不减）、零 400、哨兵触发率下降、输入
+> token 增长放缓。设计文档已更新为定稿。计数不变（28）。
+> 2026-08-21 PUSH→PULL 重设计 S1 实施 + 全面审查处理登记（用户放行实施，
+> 审查后指示处理全部问题；orz 7529a71）——退役每工具轮 `[TOOL_ROUND_BUDGET]
+> REMAINING` 尾随注入（agent_loop D-8 注入点 + prompt `remaining_block` 移除，
+> 零残留）；`blackboard_read` 新增 `section=session` live 会话面（controller
+> `render_session_section`：BUDGET/USED/REMAINING + `render_status_line`，
+> 数据源=in-run tool_rounds 含 activation 累计/max_tool_rounds；不进 epoch
+> 归档；session+epoch / session+receipt_id 越权组合参数级显式报错 exit_code
+> 1 + error 字段）；工具定义 enum/描述增量；系统提示词总预算块保留改为指向
+> 按需读取（静态一次、前缀缓存纪律不变）；机械硬门禁原样保留。S2 测试随
+> S1 交付：协议形态 5→4、无 REMAINING 尾随断言、session 面渲染/越权单测 +
+> 工具级回达、budget_insufficient 拒绝文本仍含剩余；orz-loop 536 通过 /
+> fmt 干净 / clippy 基线一致（31）/ workspace check / 事件一致性 15 通过。
+> 全面审查=无功能缺陷；O1/O2/O3 已接受边界登记（口径差异/PULL 读取消耗轮/
+> 状态行双通道，设计 §8）、O4 越权组合口径收紧、O5 工具级测试补齐、O6
+> 工具描述去内部标签。登记于 ADR-0010 §14.35 第 10 项 / BACKLOG 0e /
+> TODO P0-0e；计数不变（28）至 S3/S4 闭环。
 2026-08-15 黑板 plan epoch 复查补强登记（ADR-0010 v1.15⑧）——plan_epoch 时间戳单调编号、身份一一对应强制、retention 保留最高编号快照。
 > 2026-08-15 黑板 plan epoch 复查遗留闭合登记（ADR-0010 v1.15⑨）——F2 原子写盘+回退加载、F4 跨进程 `.claim-<n>` 占号、F5 归档目录单一来源、F6 非法 epoch 显式报错、F7 归档失败入事件面（新 v0.2 `epoch_archive_write_failed`）、F9 `persisted_at` 更名、F10 设计 §5 措辞对齐。
 > 2026-08-15 ACAF fail-closed 生产启用裁决登记（用户裁决放行）——P2 IMPL-CONTROL-FABRIC 决策门放行；翻转执行与核查清单 ⑦⑨⑩⑪ 收口/边界登记待实施。

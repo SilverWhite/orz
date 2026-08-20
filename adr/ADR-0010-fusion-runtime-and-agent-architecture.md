@@ -2292,6 +2292,37 @@ ADR §3.6 正文修订随实施登记。
    orz-loop lib 533 通过 / 0 失败 / 3 ignored、fmt 干净、clippy 基线
    一致。登记于 CLI_PROJECT_INDEX；未闭合计数不变（28）。
 
+10. **上下文机械结构块 PUSH→PULL 重设计 S1 实施 + 全面审查处理登记
+    （2026-08-21 用户放行实施 S1，审查后指示处理全部问题；orz 7529a71）**：
+    设计定稿见
+    `docs/CONTEXT_SCAFFOLDING_PULL_REDESIGN_DESIGN_2026-08-21.md`（方案 A
+    先行、C 暂缓、状态行保留；§8 全面审查处理登记）。S1 代码：退役每工具轮
+    `[TOOL_ROUND_BUDGET] REMAINING` 尾随注入（agent_loop.rs D-8 注入点 +
+    prompt.rs `tool_round_budget_remaining_block` 移除，零残留）；系统提示词
+    总预算块保留并改为「按需经 `blackboard_read section=session` 读取」
+    （静态一次，前缀缓存纪律不变）。`blackboard_read` 新增 `section=session`
+    live 会话面——controller `render_session_section` 返回 BUDGET/USED/
+    REMAINING（数据源=in-run tool_rounds，含 activation 累计 /
+    max_tool_rounds）+ `render_status_line`；live 面不进 epoch 归档
+    （session+epoch 显式报错）；session+receipt_id 越权显式报错；工具定义
+    enum/描述增量。机械硬门禁（`budget_insufficient` 预检文本含剩余 / 上限
+    耗尽块 / `run_invalidated`）原样保留。S2 测试随 S1 交付：协议形态 5→4
+    消息、无 REMAINING 尾随断言、session 面渲染/越权单测 + 工具级回达
+    （`blackboard_read_serves_session_section` /
+    `blackboard_read_session_combination_errors_are_explicit`）、
+    `budget_insufficient` 拒绝文本仍含剩余、既有 TOOL_ROUND_BUDGET 断言更新
+    （console_s4 三例改「无 REMAINING + 拒绝文本含剩余」、
+    `round_budget_declared_static_no_per_round_remaining`）。验证：orz-loop
+    536 通过 / 0 失败 / 3 ignored、fmt 干净、clippy 与基线一致（31）、
+    workspace check 通过、事件一致性 15 通过。全面审查（设计合理性/实现
+    合理性/符合性）结论=无功能缺陷；处理：O4 session 越权组合升级参数级
+    显式报错（ToolCompleted exit_code 1 + error 字段，同非法 epoch/receipt_id
+    纪律；既有 receipt_id+非 actions 渲染层先例保持 exit_code 0，差异登记
+    设计 §8）、O5 补工具级越权回达测试、O6 工具描述去内部标签、O1/O2/O3
+    登记已接受边界（REMAINING 口径含在飞轮差 1 / PULL 读取消耗工具轮 /
+    状态行双通道）。登记于 CLI_PROJECT_INDEX / BACKLOG 0e / TODO P0-0e；
+    未闭合计数不变（28）至 S3/S4 闭环。
+
 ### 14.31 v1.31 补写裁决索引（2026-08-19）
 
 本节记录冻结后的显式补写；规范正文以所指章节为准，补写明确取代以下既往条款。

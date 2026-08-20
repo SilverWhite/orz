@@ -701,6 +701,35 @@
   [设计 §4.7](DEEPSEEK_OUTPUT_BUDGET_AND_STALL_GUARD_DESIGN_2026-08-20.md)
   / CLI_PROJECT_INDEX / TODO P0-0d。
 
+### 0e. CONTEXT-SCAFFOLDING-PULL-REDESIGN（P0；2026-08-21 设计定稿，
+S1 实施 + 全面审查处理已闭合，S3/S4 待验证）
+
+- 入口：[设计](CONTEXT_SCAFFOLDING_PULL_REDESIGN_DESIGN_2026-08-21.md)；
+  索引：[CLI_PROJECT_INDEX.md](../CLI_PROJECT_INDEX.md)；ADR-0010 §14.35
+  第 10 项（v1.35）。
+- 来源：2026-08-20 跑分冒烟失控（content_repetition 0.87 / reasoning 64K
+  空转 / 256K 概率性无限生成）→ API 实测钉死触发条件=256K × high × 重复性
+  上下文；重复性上下文源自我们每轮 PUSH 的框架自有机械块（333 轮 ≈333 条
+  `[TOOL_ROUND_BUDGET] REMAINING`，2026-08-07 前缀缓存修复副作用）。
+- **2026-08-21 设计定稿（用户裁决：方案 A 先行、C 暂缓、状态行保留）**：
+  方案 A=预算块 PUSH→PULL——退役每工具轮 REMAINING 尾随注入；`blackboard_read`
+  新增 `section=session` 按需读（预算剩余 + 状态行；live 面不进归档）；机械
+  硬门禁兜底；系统提示词总预算块保留。方案 B（历史替换去重）破坏前缀缓存
+  否决；方案 C（256K→64K）S4 复验后裁决；方案 D 状态行保留现状。S4 重点
+  观测缓存命中率（对照 98%+ 基线不减）、零 400、哨兵触发率下降、输入增长
+  放缓。计数纪律：设计/实施轮不动计数（28），S3/S4 验证闭环后 28→27。
+- **2026-08-21 S1 实施 + 全面审查处理闭合（用户放行；orz 7529a71）**：
+  退役 REMAINING 尾随注入（零残留）；session 面（BUDGET/USED/REMAINING +
+  `render_status_line`，数据源=in-run tool_rounds 含 activation 累计 /
+  max_tool_rounds；越权组合参数级显式报错 exit_code 1 + error 字段）；
+  工具定义 enum/描述增量；系统提示词总预算块文案改为指向按需读取。S2 测试
+  随 S1 交付（协议形态 5→4、无 REMAINING 尾随、session 面渲染/越权单测 +
+  工具级回达、`budget_insufficient` 拒绝文本仍含剩余）；orz-loop 536 通过 /
+  fmt / clippy 基线（31）/ workspace check / 事件一致性 15 通过。全面审查=
+  无功能缺陷；处理 O1-O6（口径差异/PULL 读取消耗轮/状态行双通道登记已接受
+  边界，越权组合口径收紧，工具级测试补齐，工具描述去内部标签——详见设计
+  §8）。S3 重建 → S4 复验（重点观测缓存命中率）待续。
+
 ### 0. 前置收尾（提交前需用户确认）
 
 - 已完成（995a384）：提交当前未提交登记——CLI_PROJECT_INDEX 索引更新、两份设计文档（含优先级标记）、本文件与各指针更新。
