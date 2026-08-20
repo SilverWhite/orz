@@ -706,11 +706,21 @@ S1 实施 + 全面审查处理已闭合，S3/S4 待验证）
 > 以 Role::Tool 完整落库，协议形态 4→3；顺带每轮输入 token 节省）；两处
 > 协议形状测试同步更新；orz-loop 536 通过 / fmt / clippy 无新增。登记于
 > ADR-0010 §14.35 第 11 项 / 设计 §9 / BACKLOG 0e。
+> **2026-08-21 S3 重建（修复版）+ S4 make-doom 复验闭环（计数 28→27）**：
+> 修复版 Linux musl 重建（orz cf0be20，三件套哈希见 FROZEN）；S4 单题
+> 复验（make-doom-for-mips，job `2026-08-21__01-48-26`，RUN-CLI-6a873e04，
+> wallclock 1740s 跑满、reward 0.0、零异常）：147 请求、journal 命中率
+> 94.45%（hit 6,503,808 / miss 382,108）≥90% 且高于上轮同题 92.18%；
+> 零 HTTP 400、零 idle 死线、零哨兵触发（content_repetition /
+> reasoning_stall 全零）；output 165,644 tokens（reasoning 77.8%）对照
+> 基线 169,182/77% 基本持平；工具轮 226（基线 333）——REMAINING 零残留
+> + 汇总消息退役，输入增长放缓达成；首输出 8.1s（基线 5.5s，样本差异）。
+> 终态 `run_invalidated{status:wallclock}`（正常预算耗尽）。
 
 - [x] S1 代码（退役 REMAINING 尾随注入 + session 面 + 工具定义增量 + 机械门禁回归）
 - [x] S2 测试（无 REMAINING 尾随、session 面渲染/越权、拒绝文本含剩余、既有断言更新）
-- [ ] S3 重建（Linux musl，ORZ-BUILD-MOUNT-001 契约）
-- [ ] S4 复验（缓存命中率对照 98%+ 不减、零 400、哨兵触发率下降、输入增长放缓）
+- [x] S3 重建（Linux musl，ORZ-BUILD-MOUNT-001 契约；两轮：7529a71 初建 + cf0be20 修复版）
+- [x] S4 复验（make-doom-for-mips：命中率 94.45% ≥90%、零 400、零哨兵触发、输入增长放缓；计数 28→27）
 
 ### P0-B FUS-RETRIEVAL-MECH（`implemented`；批次 1-6 已全部闭合，2026-08-14，保留供核对）
 

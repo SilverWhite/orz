@@ -702,7 +702,7 @@
   / CLI_PROJECT_INDEX / TODO P0-0d。
 
 ### 0e. CONTEXT-SCAFFOLDING-PULL-REDESIGN（P0；2026-08-21 设计定稿，
-S1 实施 + 全面审查处理已闭合，S3/S4 待验证）
+**S1-S4 全部闭合 2026-08-21，计数 28 → 27**）
 
 - 入口：[设计](CONTEXT_SCAFFOLDING_PULL_REDESIGN_DESIGN_2026-08-21.md)；
   索引：[CLI_PROJECT_INDEX.md](../CLI_PROJECT_INDEX.md)；ADR-0010 §14.35
@@ -744,6 +744,19 @@ S1 实施 + 全面审查处理已闭合，S3/S4 待验证）
   CLI_PROJECT_INDEX / TODO P0-0e。S3 重建（修复版）→ S4 make-doom 重跑
   （命中率 ≥90% 对照基线不减、零 400、哨兵触发率下降、输入增长放缓）
   待续；计数纪律不变（28），S3/S4 闭环后 28→27。
+- **2026-08-21 S3 重建（修复版）+ S4 复验闭环（0e 转 implemented，计数
+  28→27）**：修复版 Linux musl 重建成功（orz cf0be20，三件套哈希已刷新
+  FROZEN；bookworm 冒烟：provision/signer/fake headless 全过）。S4 单题
+  复验（make-doom-for-mips，job `2026-08-21__01-48-26`，RUN-CLI-6a873e04，
+  wallclock 1740s 跑满、reward 0.0、零异常）——**147 请求、journal 命中率
+  94.45%**（hit 6,503,808 / miss 382,108）≥90% 且高于上轮同题 92.18%；
+  零 HTTP 400、零 idle 死线、**哨兵/stall 全零触发**（content_repetition /
+  reasoning_stall 0）；output 165,644 tokens（reasoning 77.8%）对照基线
+  169,182/77% 基本持平；工具轮 226（基线 333）——REMAINING 零残留 + 汇总
+  消息退役，输入增长放缓达成；首输出 8.1s（基线 5.5s，样本差异）。终态
+  `run_invalidated{status:wallclock}`（正常预算耗尽）。**S1-S4 全部闭合，
+  计数 28 → 27**。登记于 ADR-0010 §14.35 第 11 项 / 设计 §9 /
+  CLI_PROJECT_INDEX / TODO P0-0e。
 
 ### 0. 前置收尾（提交前需用户确认）
 

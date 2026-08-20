@@ -860,7 +860,11 @@
 > （工具结果已以 Role::Tool 完整落库，协议形态 4→3；顺带每轮输入 token
 > 节省）；orz-loop 536 通过 / fmt / clippy 无新增。登记于 ADR-0010
 > §14.35 第 11 项 / 设计 §9 / BACKLOG 0e / TODO P0-0e；S3 重建（修复版）
-> → S4 make-doom 重跑待续；计数纪律不变（28）。
+> → S4 make-doom 重跑闭环（job `2026-08-21__01-48-26`，RUN-CLI-6a873e04）：
+> 147 请求、journal 命中率 94.45% ≥90%（高于上轮同题 92.18%）、零 400、
+> 零 idle 死线、哨兵/stall 全零触发、output 165,644（reasoning 77.8%）、
+> 工具轮 226（基线 333）输入增长放缓达成；终态 wallclock 正常耗尽。
+> **0e S1-S4 全部闭合，计数 28 → 27**。
 >
 > 当前唯一自然语言设计权威是 [`ADR-0010`](adr/ADR-0010-fusion-runtime-and-agent-architecture.md)。本文件只负责召回和路由，不替代 ADR、Schema、审计结论、测试证据或源代码。
 >

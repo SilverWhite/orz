@@ -188,3 +188,14 @@ reasoning_content」；纯文本轮不受影响（对照官方
 （命中率 ≥90% 且对照基线不减、零 400、哨兵触发率下降、输入增长放缓）；
 全绿后闭环登记（TODO P0-0e 勾 S3/S4、BACKLOG 0e 转 implemented、计数
 28→27、ADR-0010 §14.35 追加、CLI_PROJECT_INDEX 登记）。
+
+**2026-08-21 S4 复验结果（修复版，闭环）**：job `2026-08-21__01-48-26`、
+RUN-CLI-6a873e04、wallclock 1740s 跑满、reward 0.0、零异常。147 请求，
+journal 命中率 **94.45%**（hit 6,503,808 / miss 382,108）——≥90% 达成且
+高于上轮同题 92.18%（对照目标「基线不减」）；零 HTTP 400、零 idle 死线、
+哨兵/stall 全零触发（content_repetition / reasoning_stall 0）；output
+165,644 tokens（reasoning 77.8%）对照基线 169,182/77% 基本持平；工具轮
+226（基线 333）——REMAINING 零残留 + 汇总消息退役，§5 第 4 项「输入随
+会话增长放缓」达成；首输出 8.1s（基线 5.5s，单样本差异，非机制回归）。
+终态 `run_invalidated{status:wallclock}`（正常预算耗尽）。**0e 闭环，
+计数 28 → 27。**

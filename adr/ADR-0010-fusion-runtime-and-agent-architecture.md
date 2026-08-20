@@ -2338,7 +2338,16 @@ ADR §3.6 正文修订随实施登记。
     形状测试 + clippy 未用变量清理；orz-loop 536 通过 / 0 失败 / 3
     ignored、fmt 干净、clippy 无新增。设计细节见
     `docs/CONTEXT_SCAFFOLDING_PULL_REDESIGN_DESIGN_2026-08-21.md` §9。
-    计数纪律不变（28），S3 重建（修复版）+ S4 重跑闭环后 28→27。
+    **2026-08-21 S3 重建（修复版）+ S4 复验闭环（计数 28→27）**：修复版
+    Linux musl 重建（orz cf0be20，三件套哈希刷新 FROZEN；bookworm 冒烟全过）。
+    S4 单题复验（make-doom-for-mips，job `2026-08-21__01-48-26`，
+    RUN-CLI-6a873e04，wallclock 1740s 跑满、reward 0.0、零异常）——
+    **journal 命中率 94.45%**（147 请求，hit 6,503,808 / miss 382,108）
+    ≥90% 且高于上轮同题 92.18%；零 HTTP 400、零 idle 死线、哨兵/stall 全零
+    触发；output 165,644 tokens（reasoning 77.8%）对照基线 169,182/77%
+    基本持平；工具轮 226（基线 333）——REMAINING 零残留 + 汇总消息退役，
+    输入增长放缓达成；终态 `run_invalidated{status:wallclock}`（正常预算
+    耗尽）。S1-S4 全部闭合，计数 28 → 27。
 
 ### 14.31 v1.31 补写裁决索引（2026-08-19）
 
