@@ -74,12 +74,13 @@ use crate::tool::ToolDispatcher;
 /// (2026-08-07); **frozen at 120 by ADR-0010 v1.1 (2026-08-09)** — the main
 /// agent and both retrieval subagents each carry a 120-tool-round budget,
 /// counted independently per session (FUS-BUDGET). The model is told the
-/// budget explicitly and informed of the remaining rounds after each tool
-/// round (mechanical, controller-injected — the model does not guess).
-/// Anti-runaway protection is layered: the global round budget is the
-/// backstop, the consecutive-denial circuit breaker (IP2a/D-3) is the
-/// primary control. ADR-0008's remaining semantics (deny rounds count,
-/// session/remaining/exhaustion blocks) stay unchanged.
+/// budget explicitly (static session block) and can read the live remaining
+/// count on demand via `blackboard_read section=session` (PUSH→PULL
+/// 2026-08-21 — the per-round mechanical re-declaration is retired; the
+/// mechanical hard gates stay fail-closed). Anti-runaway protection is
+/// layered: the global round budget is the backstop, the consecutive-denial
+/// circuit breaker (IP2a/D-3) is the primary control. ADR-0008's remaining
+/// semantics (deny rounds count, session/exhaustion blocks) stay unchanged.
 pub const MAX_TOOL_ROUNDS: u32 = 120;
 
 /// Env override for the global round budget (benchmark harnesses — SWE-bench
@@ -3937,9 +3938,9 @@ impl AgentLoopController {
 
     /// 2026-08-18 (ADR-0010 §14.25 项 1): 前缀缓存纪律——`[任务状态]`
     /// 常驻状态行移出系统提示词，改为尾随用户消息、仅在变化时追加
-    /// （与 `[TOOL_ROUND_BUDGET] REMAINING` 同纪律）。系统提示词保持
-    /// 完全静态，步骤推进不再打断提供方前缀缓存；变化轮仅小段状态行
-    /// 作为新尾随消息计费。无计划（None）不追加。
+    /// （尾随消息纪律；退役前的 `[TOOL_ROUND_BUDGET] REMAINING` 同此
+    /// 纪律）。系统提示词保持完全静态，步骤推进不再打断提供方前缀缓存；
+    /// 变化轮仅小段状态行作为新尾随消息计费。无计划（None）不追加。
     pub(crate) fn sync_status_line_message(&self, messages: &mut Vec<Message>) {
         let line = self.render_status_line();
         let mut last = self.status_line_appended.lock().unwrap();
@@ -4238,6 +4239,47 @@ impl AgentLoopController {
             since,
             receipt_id,
         )
+    }
+
+    /// PUSH→PULL (2026-08-21, CONTEXT_SCAFFOLDING_PULL_REDESIGN §4 方案 A):
+    /// the `blackboard_read section=session` face — live session state only
+    /// (never archived): tool-round budget used/remaining + the resident
+    /// status line (`render_status_line`). `tool_rounds` is the in-run
+    /// consumed count (completed rounds; the in-flight round counts against
+    /// the budget when it completes — the same accounting as the retired
+    /// per-round REMAINING block). `epoch` with this section = explicit
+    /// error (the face is live-only, nothing is archived under "session");
+    /// `receipt_id` with this section = explicit error (point-read is an
+    /// actions-board addressing concept). `since` is ignored — the face is
+    /// a single live snapshot (same lenient treatment as plan/exec/actions).
+    /// 2026-08-21 全面审查处理（O4）：组合错误以 `Err` 返回——调用方按
+    /// 参数级显式报错处理（ToolCompleted exit_code 1 + error 字段），与
+    /// 非法 epoch/receipt_id 同纪律（区别于纯渲染层的 receipt_id+非
+    /// actions 文本错误先例，后者保持 exit_code 0，差异登记于设计 §8）。
+    fn render_session_section(
+        &self,
+        epoch: Option<u64>,
+        receipt_id: Option<&str>,
+        tool_rounds: u32,
+    ) -> Result<String, String> {
+        if let Some(epoch) = epoch {
+            return Err(format!(
+                "invalid blackboard_read session read: session 面是 live 会话状态，\
+                 不进 epoch 归档；省略 epoch 参数读取实时状态（epoch={epoch}）"
+            ));
+        }
+        if receipt_id.is_some() {
+            return Err(
+                "receipt_id 仅与 section=actions 组合有效（点读结果栏单条 receipt）；\
+                 当前 section=session 不支持 receipt_id"
+                    .to_string(),
+            );
+        }
+        Ok(crate::prompt::session_face_block(
+            tool_rounds,
+            self.max_tool_rounds,
+            self.render_status_line().as_deref(),
+        ))
     }
 
     /// Run a single turn of the agent loop for a given user prompt.
@@ -4630,7 +4672,11 @@ impl AgentLoopController {
                      timestamps), exec (tool results — the full accumulated \
                      log; read_file still works for files), actions (P0-C \
                      console: current registration board buttons, the pending \
-                     action-bar order and recent result receipts). \
+                     action-bar order and recent result receipts), session \
+                     (live tool-round budget — used/remaining — plus the \
+                     resident 状态行; read it on demand to gauge how many \
+                     tool rounds are left; the controller enforces the cap \
+                     mechanically either way). \
                      Optional `since_timestamp` (RFC 3339, e.g. the timestamp \
                      this tool returned earlier) filters the edits / tool_actions \
                      entries to those at or after that time. Optional `epoch` \
@@ -4652,7 +4698,7 @@ impl AgentLoopController {
                     "properties": {
                         "section": {
                             "type": "string",
-                            "enum": ["plan", "edits", "tool_actions", "exec", "actions"],
+                            "enum": ["plan", "edits", "tool_actions", "exec", "actions", "session"],
                         },
                         "since_timestamp": {"type": "string"},
                         "epoch": {
@@ -8698,7 +8744,7 @@ impl AgentLoopController {
                     None => {
                         let content = format!(
                             "invalid blackboard_read section: {raw} — section 必须 \
-                             是字符串（plan|edits|tool_actions|exec|actions）"
+                             是字符串（plan|edits|tool_actions|exec|actions|session）"
                         );
                         let mut completed = serde_json::json!({
                             "tool": tc.name,
@@ -8830,8 +8876,51 @@ impl AgentLoopController {
                 },
                 None => None,
             };
-            let content =
-                self.render_blackboard_section(&section, since, epoch, receipt_id.as_deref());
+            // PUSH→PULL (2026-08-21, CONTEXT_SCAFFOLDING_PULL_REDESIGN §4
+            // 方案 A): `section=session` 是 live 会话面（预算剩余 + 状态行），
+            // 由 controller 直接渲染、不进 epoch 归档；其余分区走黑板渲染。
+            // 2026-08-21 全面审查处理（O4）：session 组合错误（epoch /
+            // receipt_id）走参数级显式报错——exit_code 1 + error 字段，
+            // 绝不静默回退（同非法 epoch/receipt_id 纪律）。
+            let content = if section == "session" {
+                match self.render_session_section(epoch, receipt_id.as_deref(), tool_rounds) {
+                    Ok(text) => text,
+                    Err(error) => {
+                        let mut completed = serde_json::json!({
+                            "tool": tc.name,
+                            "call_id": tc.call_id,
+                            "exit_code": 1,
+                            "section": section,
+                            "error": error,
+                        });
+                        // F3 (2026-08-16 审查收口): direct 盖章对称。
+                        stamp_direct(&mut completed);
+                        writer.record(EventType::ToolCompleted, completed).await?;
+                        self.blackboard.write().tool_actions.push(ToolActionRecord {
+                            category: ToolDispatcher::action_category(&tc.name).to_string(),
+                            tool: tc.name.clone(),
+                            timestamp: chrono_utc_now(),
+                        });
+                        let result = ToolResult {
+                            output: error,
+                            exit_code: Some(1),
+                            output_encoding: None,
+                            structured: None,
+                            ..Default::default()
+                        };
+                        messages.push(Message {
+                            role: Role::Tool,
+                            content: result.output.clone(),
+                            tool_call_id: Some(tc.call_id.clone()),
+                            tool_calls: Vec::new(),
+                            reasoning_content: None,
+                        });
+                        return Ok((result, None));
+                    }
+                }
+            } else {
+                self.render_blackboard_section(&section, since, epoch, receipt_id.as_deref())
+            };
             let mut completed = serde_json::json!({
                 "tool": tc.name,
                 "call_id": tc.call_id,
@@ -12065,8 +12154,8 @@ mod tests {
         assert!(received.len() >= 2, "round 2 request exists: {received:?}");
         let round2 = &received[1].messages;
         // user + assistant declaration + tool result + text summary +
-        // D-8 budget re-declaration.
-        assert_eq!(round2.len(), 5, "protocol shape: {round2:?}");
+        // (no per-round budget re-declaration — PUSH→PULL 2026-08-21).
+        assert_eq!(round2.len(), 4, "protocol shape: {round2:?}");
         assert_eq!(round2[1].role, Role::Assistant);
         assert_eq!(round2[1].tool_calls.len(), 1, "declaration replayed");
         assert_eq!(round2[1].tool_calls[0].call_id, "call-1");
@@ -12075,9 +12164,8 @@ mod tests {
         assert_eq!(round2[2].tool_call_id.as_deref(), Some("call-1"));
         assert_eq!(round2[3].role, Role::Assistant, "text summary kept");
         assert!(
-            round2[4].content.contains("TOOL_ROUND_BUDGET"),
-            "D-8: remaining-budget re-declaration: {:?}",
-            round2[4]
+            round2.iter().all(|m| !m.content.contains("REMAINING")),
+            "PUSH→PULL: no per-round REMAINING trailing block: {round2:?}"
         );
 
         let _ = std::fs::remove_dir_all(&dir);
@@ -12793,6 +12881,254 @@ mod tests {
                         .contains("- [pending] step-2: 构建并验证 (actions: 0; evidence: 0)")),
             "plan reply must render every step id: {:?}",
             round.messages
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// PUSH→PULL (2026-08-21, CONTEXT_SCAFFOLDING_PULL_REDESIGN §4 方案 A):
+    /// `blackboard_read section=session` 的渲染——live 会话面：工具轮预算
+    /// 已用/剩余 + 常驻状态行；越权组合（epoch / receipt_id）= 显式报错
+    /// （live 面不进归档；点读仅属 actions 板）。
+    #[test]
+    fn render_session_section_reports_budget_and_status_line() {
+        let controller = AgentLoopController::with_gateway(Arc::new(FakeProvider::new(Vec::new())))
+            .with_max_tool_rounds(120)
+            .with_plan(
+                "PLAN-SES".to_string(),
+                1,
+                "构建".to_string(),
+                vec!["侦查".to_string()],
+            );
+        let text = controller.render_session_section(None, None, 3).unwrap();
+        assert!(text.contains("[SESSION v0.1]"), "{text}");
+        assert!(
+            text.contains("TOOL_ROUND_BUDGET: 120 tool rounds per turn"),
+            "{text}"
+        );
+        assert!(text.contains("TOOL_ROUNDS_USED: 3"), "{text}");
+        assert!(text.contains("TOOL_ROUNDS_REMAINING: 117"), "{text}");
+        assert!(
+            text.contains("[任务状态 v0.1]"),
+            "status line rides the session face: {text}"
+        );
+        assert!(text.ends_with("[/SESSION]"), "{text}");
+        // 越权组合：epoch（live 面不进归档）与 receipt_id（仅 actions 点读）。
+        assert!(
+            controller
+                .render_session_section(Some(1), None, 0)
+                .unwrap_err()
+                .contains("session 面是 live 会话状态"),
+            "epoch with session must error explicitly"
+        );
+        assert!(
+            controller
+                .render_session_section(None, Some("ORD-1"), 0)
+                .unwrap_err()
+                .contains("receipt_id 仅与 section=actions"),
+            "receipt_id with session must error explicitly"
+        );
+        // 无计划：无状态行，预算面照常。
+        let no_plan = AgentLoopController::with_gateway(Arc::new(FakeProvider::new(Vec::new())))
+            .with_max_tool_rounds(120);
+        let text2 = no_plan.render_session_section(None, None, 0).unwrap();
+        assert!(text2.contains("TOOL_ROUNDS_REMAINING: 120"), "{text2}");
+        assert!(!text2.contains("任务状态"), "{text2}");
+    }
+
+    /// PUSH→PULL (2026-08-21, CONTEXT_SCAFFOLDING_PULL_REDESIGN §4 方案 A):
+    /// `blackboard_read section=session` 经真实工具链回达模型——live 预算面
+    /// （已用/剩余 + 状态行）；同时校验工具定义已声明 session 分区
+    /// （工具定义增量扩展）。
+    #[tokio::test]
+    async fn blackboard_read_serves_session_section() {
+        let dir = test_dir();
+        let journal = JournalRecorder::new(dir.clone());
+        let host = TestHost {
+            journal,
+            tool_result: Some(ToolResult {
+                output: "irrelevant".to_string(),
+                exit_code: Some(0),
+                output_encoding: None,
+                structured: None,
+                ..Default::default()
+            }),
+        };
+        let fake = Arc::new(FakeProvider::new(vec![
+            ScriptedResponse::tool_calls(vec![ToolCall {
+                name: "blackboard_read".to_string(),
+                arguments: serde_json::json!({"section": "session"}),
+                call_id: "call-se1".to_string(),
+            }]),
+            ScriptedResponse::text("完成"),
+            ScriptedResponse::text("完成"),
+        ]));
+        let gateway: Arc<dyn ModelGateway> = fake.clone();
+        let controller = AgentLoopController::with_gateway(gateway)
+            .with_max_tool_rounds(120)
+            .with_plan(
+                "PLAN-SES-T".to_string(),
+                1,
+                "构建".to_string(),
+                vec!["侦查".to_string()],
+            );
+        controller
+            .run_turn(&host, "读会话面", "RUN-SES1", MANIFEST, 0, None, None, None)
+            .await
+            .unwrap();
+
+        let received = fake.received_requests();
+        let round = received
+            .iter()
+            .find(|r| {
+                r.messages
+                    .iter()
+                    .any(|m| m.tool_call_id.as_deref() == Some("call-se1"))
+            })
+            .expect("round carrying blackboard_read session reply");
+        let reply = round
+            .messages
+            .iter()
+            .find(|m| m.tool_call_id.as_deref() == Some("call-se1"))
+            .expect("session tool result message");
+        assert!(
+            reply.content.contains("TOOL_ROUNDS_USED: 0")
+                && reply.content.contains("TOOL_ROUNDS_REMAINING: 120")
+                && reply
+                    .content
+                    .contains("TOOL_ROUND_BUDGET: 120 tool rounds per turn")
+                && reply.content.contains("[任务状态 v0.1]"),
+            "session reply: {:?}",
+            round.messages
+        );
+        // 工具定义增量扩展：blackboard_read 的 section 枚举含 session。
+        let bb_def = round
+            .tools
+            .iter()
+            .find(|t| t.name == "blackboard_read")
+            .expect("blackboard_read declared in request tools");
+        let sections = bb_def
+            .parameters
+            .get("properties")
+            .and_then(|p| p.get("section"))
+            .and_then(|s| s.get("enum"))
+            .and_then(|e| e.as_array())
+            .expect("section enum declared");
+        assert!(
+            sections.iter().any(|v| v.as_str() == Some("session")),
+            "session must be declared in the section enum: {sections:?}"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// PUSH→PULL (2026-08-21) 全面审查处理（O4/O5）：session 面的越权组合
+    /// （epoch / receipt_id）走参数级显式报错——事件 ToolCompleted exit_code
+    /// 1 + error 字段、工具结果 exit_code 1、错误文本回达模型（与非法
+    /// epoch/receipt_id 同纪律，绝不静默回退）。
+    #[tokio::test]
+    async fn blackboard_read_session_combination_errors_are_explicit() {
+        let dir = test_dir();
+        let journal = JournalRecorder::new(dir.clone());
+        let host = TestHost {
+            journal,
+            tool_result: None,
+        };
+        let fake = Arc::new(FakeProvider::new(vec![
+            ScriptedResponse::tool_calls(vec![ToolCall {
+                name: "blackboard_read".to_string(),
+                arguments: serde_json::json!({"section": "session", "epoch": 1}),
+                call_id: "call-se-e".to_string(),
+            }]),
+            ScriptedResponse::tool_calls(vec![ToolCall {
+                name: "blackboard_read".to_string(),
+                arguments: serde_json::json!({"section": "session", "receipt_id": "ORD-1"}),
+                call_id: "call-se-r".to_string(),
+            }]),
+            ScriptedResponse::text("完成"),
+            ScriptedResponse::text("完成"),
+        ]));
+        let gateway: Arc<dyn ModelGateway> = fake.clone();
+        let controller = AgentLoopController::with_gateway(gateway);
+        controller
+            .run_turn(
+                &host,
+                "越权组合",
+                "RUN-SESCOMBO",
+                MANIFEST,
+                0,
+                None,
+                None,
+                None,
+            )
+            .await
+            .unwrap();
+
+        // 事件面：两个 ToolCompleted 均 exit_code 1 且带 error 字段。
+        let payloads: Vec<serde_json::Value> = events(&dir)
+            .into_iter()
+            .filter(|e| e.event_type == EventType::ToolCompleted)
+            .map(|e| e.payload)
+            .collect();
+        assert_eq!(payloads.len(), 2, "{payloads:?}");
+        let epoch_payload = payloads
+            .iter()
+            .find(|p| p["call_id"] == "call-se-e")
+            .expect("epoch combo completed");
+        assert_eq!(epoch_payload["exit_code"], 1, "{epoch_payload:?}");
+        assert!(
+            epoch_payload["error"]
+                .as_str()
+                .unwrap()
+                .contains("session 面是 live 会话状态"),
+            "{epoch_payload:?}"
+        );
+        let receipt_payload = payloads
+            .iter()
+            .find(|p| p["call_id"] == "call-se-r")
+            .expect("receipt combo completed");
+        assert_eq!(receipt_payload["exit_code"], 1, "{receipt_payload:?}");
+        assert!(
+            receipt_payload["error"]
+                .as_str()
+                .unwrap()
+                .contains("receipt_id 仅与 section=actions"),
+            "{receipt_payload:?}"
+        );
+
+        // 模型面：错误文本回达模型。
+        let received = fake.received_requests();
+        let epoch_round = received
+            .iter()
+            .find(|r| {
+                r.messages
+                    .iter()
+                    .any(|m| m.tool_call_id.as_deref() == Some("call-se-e"))
+            })
+            .expect("epoch combo round");
+        assert!(
+            epoch_round.messages.iter().any(|m| {
+                m.tool_call_id.as_deref() == Some("call-se-e")
+                    && m.content.contains("session 面是 live 会话状态")
+            }),
+            "{:?}",
+            epoch_round.messages
+        );
+        let receipt_round = received
+            .iter()
+            .find(|r| {
+                r.messages
+                    .iter()
+                    .any(|m| m.tool_call_id.as_deref() == Some("call-se-r"))
+            })
+            .expect("receipt combo round");
+        assert!(
+            receipt_round.messages.iter().any(|m| {
+                m.tool_call_id.as_deref() == Some("call-se-r")
+                    && m.content.contains("receipt_id 仅与 section=actions")
+            }),
+            "{:?}",
+            receipt_round.messages
         );
 
         let _ = std::fs::remove_dir_all(&dir);
@@ -16965,7 +17301,9 @@ mod tests {
 
     /// P0-C S4 (2026-08-16)：tool-round 预算发放前预检——脚本长度超出剩余
     /// 预算（含当前模型轮 1 单位）时零执行拒绝，显式
-    /// `budget_insufficient`，不消耗预算，下一轮 remaining 块机械反映。
+    /// `budget_insufficient`，不消耗预算；拒绝文本仍含剩余预算
+    /// （PUSH→PULL 2026-08-21：每轮 REMAINING 尾随块退役，剩余预算经
+    /// 拒绝文本与 `blackboard_read section=session` 按需读取）。
     #[tokio::test]
     async fn console_s4_budget_precheck_rejects_over_budget_script() {
         let dir = test_dir();
@@ -17030,15 +17368,16 @@ mod tests {
             r.tool_actions
         );
         drop(r);
-        // 下一轮预算块机械反映：剩余 1（2 − 当前轮 1，拒绝未消耗）。
+        // PUSH→PULL：下一轮不再注入 REMAINING 尾随块；拒绝文本中的
+        // remaining（上方 receipt 断言）与 session 面承载剩余预算。
         let received = fake.received_requests();
         let round2 = &received[1];
         assert!(
             round2
                 .messages
                 .iter()
-                .any(|m| m.content.contains("REMAINING: 1 tool rounds left")),
-            "round 2 budget block: {:?}",
+                .all(|m| !m.content.contains("REMAINING")),
+            "round 2 must carry no per-round REMAINING block: {:?}",
             round2.messages
         );
         // P0-E 第 4 项 (2026-08-17): 发放前拒绝入事件面。
@@ -17271,24 +17610,26 @@ mod tests {
             r.tool_actions
         );
         drop(r);
-        // 预算耗尽：下一轮 remaining 块为 0（最后无工具轮）。
+        // 预算耗尽：拒绝文本 remaining=0（上方 receipt 断言）；下一轮
+        // 不再注入 REMAINING 尾随块（PUSH→PULL 2026-08-21）。
         let received = fake.received_requests();
         let round2 = &received[1];
         assert!(
             round2
                 .messages
                 .iter()
-                .any(|m| m.content.contains("REMAINING: 0 tool rounds left")),
-            "round 2 budget block: {:?}",
+                .all(|m| !m.content.contains("REMAINING")),
+            "round 2 must carry no per-round REMAINING block: {:?}",
             round2.messages
         );
 
         let _ = std::fs::remove_dir_all(&dir);
     }
 
-    /// P0-C S4 (2026-08-16)：脚本按实际执行步数消耗 tool-round 预算——
-    /// 2 步脚本消耗 2 单位（叠加当前模型轮 1 单位），下一轮 remaining 块
-    /// 从 3 降到 1（max=4）。
+    /// P0-C S4 (2026-08-16) + PUSH→PULL (2026-08-21)：脚本按实际执行步数
+    /// 消耗 tool-round 预算——2 步脚本消耗 2 单位（叠加当前模型轮 1 单位，
+    /// max=4），下一轮 `blackboard_read section=session` 按需读取返回
+    /// USED: 3 / REMAINING: 1（每轮 REMAINING 尾随块不再注入）。
     #[tokio::test]
     async fn console_s4_script_consumes_budget_and_next_block_reflects() {
         let dir = test_dir();
@@ -17317,7 +17658,11 @@ mod tests {
                 }),
                 call_id: "call-w1".to_string(),
             }]),
-            ScriptedResponse::text("完成"),
+            ScriptedResponse::tool_calls(vec![ToolCall {
+                name: "blackboard_read".to_string(),
+                arguments: serde_json::json!({"section": "session"}),
+                call_id: "call-s1".to_string(),
+            }]),
             ScriptedResponse::text("完成"),
         ]));
         let mut controller = AgentLoopController::with_gateway(fake.clone());
@@ -17346,16 +17691,28 @@ mod tests {
             2
         );
         drop(r);
-        // 2 步执行 + 当前模型轮 = 3 单位；max=4 → 下一轮 REMAINING: 1。
+        // 2 步执行 + 当前模型轮 = 3 单位；max=4 → session 面
+        // USED: 3 / REMAINING: 1（按需读取，PUSH→PULL）。
         let received = fake.received_requests();
+        assert!(received.len() >= 3, "three rounds: {received:?}");
         let round2 = &received[1];
+        let round3 = &received[2];
         assert!(
             round2
                 .messages
                 .iter()
-                .any(|m| m.content.contains("REMAINING: 1 tool rounds left")),
-            "round 2 budget block must reflect consumed script steps: {:?}",
+                .all(|m| !m.content.contains("REMAINING")),
+            "round 2 must carry no per-round REMAINING block: {:?}",
             round2.messages
+        );
+        assert!(
+            round3.messages.iter().any(|m| {
+                m.role == Role::Tool
+                    && m.content.contains("TOOL_ROUNDS_USED: 3")
+                    && m.content.contains("TOOL_ROUNDS_REMAINING: 1")
+            }),
+            "session face must reflect consumed script steps: {:?}",
+            round3.messages
         );
 
         let _ = std::fs::remove_dir_all(&dir);
@@ -18767,8 +19124,8 @@ mod tests {
         assert!(received.len() >= 2, "round 2 request exists: {received:?}");
         let round2 = &received[1].messages;
         // user + assistant declaration (with reasoning) + tool result +
-        // text + D-8 budget re-declaration (5 messages, budget last).
-        assert_eq!(round2.len(), 5, "protocol shape: {round2:?}");
+        // text (no per-round budget re-declaration — PUSH→PULL 2026-08-21).
+        assert_eq!(round2.len(), 4, "protocol shape: {round2:?}");
         assert_eq!(round2[1].role, Role::Assistant);
         assert_eq!(
             round2[1].reasoning_content.as_deref(),
@@ -18777,9 +19134,8 @@ mod tests {
         );
         assert_eq!(round2[1].tool_calls.len(), 1);
         assert!(
-            round2[4].content.contains("TOOL_ROUND_BUDGET"),
-            "D-8: remaining-budget re-declaration after the tool round: {:?}",
-            round2[4]
+            round2.iter().all(|m| !m.content.contains("REMAINING")),
+            "PUSH→PULL: no per-round REMAINING trailing block: {round2:?}"
         );
 
         let _ = std::fs::remove_dir_all(&dir);
@@ -23496,10 +23852,12 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn round_budget_declared_and_decremented_mechanically() {
-        // D-8 (FIX_PLAN 2026-08-06): the budget is declared in the session
-        // system prompt, and the remaining count is re-declared mechanically
-        // after every tool round — the model does not guess or drift.
+    async fn round_budget_declared_static_no_per_round_remaining() {
+        // D-8 (FIX_PLAN 2026-08-06) + PUSH→PULL (2026-08-21): the budget is
+        // declared once in the session system prompt; the per-round REMAINING
+        // re-declaration is retired — the live count is read on demand via
+        // `blackboard_read section=session`, and the mechanical cap still
+        // stops the run at the limit.
         let dir = test_dir();
         let journal = JournalRecorder::new(dir.clone());
         let host = TestHost {
@@ -23547,28 +23905,18 @@ mod tests {
             received[0].system, received[1].system,
             "system prompt must be stable across rounds (prefix cache)"
         );
-        // Round 1 after the first tool round: 119 remaining (mechanical).
-        let round2: Vec<&str> = received[1]
-            .messages
-            .iter()
-            .filter(|m| m.content.contains("REMAINING"))
-            .map(|m| m.content.as_str())
-            .collect();
-        assert!(
-            round2.iter().any(|c| c.contains("REMAINING: 119")),
-            "119 remaining after round 1: {round2:?}"
-        );
-        // Round 2: 118 remaining.
-        let round3: Vec<&str> = received[2]
-            .messages
-            .iter()
-            .filter(|m| m.content.contains("REMAINING"))
-            .map(|m| m.content.as_str())
-            .collect();
-        assert!(
-            round3.iter().any(|c| c.contains("REMAINING: 118")),
-            "118 remaining after round 2: {round3:?}"
-        );
+        // No trailing message in ANY round carries the retired per-round
+        // REMAINING block (the old injection was a User message; the session
+        // face, when read, is a Tool result instead).
+        for (i, req) in received.iter().enumerate() {
+            assert!(
+                req.messages
+                    .iter()
+                    .all(|m| m.role != Role::User || !m.content.contains("REMAINING")),
+                "round {i}: no per-round REMAINING block: {:?}",
+                req.messages
+            );
+        }
 
         let _ = std::fs::remove_dir_all(&dir);
     }

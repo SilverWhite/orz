@@ -459,7 +459,8 @@ pub fn render_section(
         }
         other => {
             format!(
-                "unknown blackboard section: {other} (expected plan|edits|tool_actions|exec|actions)"
+                "unknown blackboard section: {other} (expected plan|edits|tool_actions|exec|actions|session; \
+                 session 面是 live 会话状态、由 controller 直接渲染，不进归档)"
             )
         }
     }

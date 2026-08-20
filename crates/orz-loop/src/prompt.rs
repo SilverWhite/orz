@@ -312,8 +312,11 @@ pub fn build_status_line(goal: Option<&str>, steps: &[crate::blackboard::PlanSte
 }
 
 /// D-8 (FIX_PLAN 2026-08-06): prefix for the mechanically injected tool-round
-/// budget declarations (session budget + per-round remaining + exhaustion).
-/// Counted as injected text — never stagnation input.
+/// budget declarations (session budget + exhaustion). PUSH→PULL
+/// (2026-08-21): the per-round remaining declaration is retired — the live
+/// count is read on demand via `blackboard_read section=session` (a tool
+/// result, not an injected block). Counted as injected text — never
+/// stagnation input.
 ///
 /// Deliberately matches the versioned marker form (`[TOOL_ROUND_BUDGET v0.1]`)
 /// as well as the bare form — the previous constant ended in `]` and never
@@ -346,25 +349,46 @@ pub fn tool_policy_breaker_block(tool_name: &str, consecutive: u32) -> String {
 /// into the system prompt once per run. The remaining count is deliberately
 /// NOT part of the system prompt: the system is rebuilt each round, so any
 /// per-round state inside it breaks the provider's prefix cache on every
-/// round (2026-08-07 fix — hit rate was ~17%; the count is declared by the
-/// trailing `tool_round_budget_remaining_block` messages instead).
+/// round (2026-08-07 fix — hit rate was ~17%). PUSH→PULL (2026-08-21,
+/// CONTEXT_SCAFFOLDING_PULL_REDESIGN §4 方案 A): the per-round trailing
+/// remaining re-declaration is retired — the live count is read on demand
+/// via `blackboard_read section=session` (`session_face_block`).
 pub fn tool_round_budget_session_block(budget: u32) -> String {
     format!(
         "{TOOL_ROUND_BUDGET_PREFIX} v0.1]\n\
          BUDGET: {budget} tool rounds per turn\n\
-         After each tool round the controller reports the updated \
-         remaining count. Finish your work within the budget; if it \
-         is exhausted the run ends with a partial result.\n\
+         The controller enforces this budget mechanically and rejects \
+         calls that would exceed it. Read the live remaining count on \
+         demand via `blackboard_read section=session`; if the budget is \
+         exhausted the run ends with a partial result.\n\
          [/TOOL_ROUND_BUDGET]"
     )
 }
 
-/// D-8: per-round mechanical re-declaration of the remaining budget.
-pub fn tool_round_budget_remaining_block(remaining: u32) -> String {
-    format!(
-        "{TOOL_ROUND_BUDGET_PREFIX} v0.1] REMAINING: {remaining} tool rounds left\n\
-         [/TOOL_ROUND_BUDGET]"
-    )
+/// PUSH→PULL (2026-08-21, CONTEXT_SCAFFOLDING_PULL_REDESIGN §4 方案 A):
+/// the `blackboard_read section=session` face — the on-demand replacement
+/// for the retired per-round `[TOOL_ROUND_BUDGET] REMAINING` trailing
+/// injection. `used` = tool rounds consumed so far (completed rounds; the
+/// round currently in flight counts against the budget when it completes);
+/// `remaining` = budget − used. `status_line` = the resident `[任务状态]`
+/// block (`None` when no plan is set). The mechanical hard gates
+/// (`budget_insufficient` precheck, exhaustion block, `run_invalidated`)
+/// stay untouched — this face is advisory, never a correctness premise.
+pub fn session_face_block(used: u32, budget: u32, status_line: Option<&str>) -> String {
+    let mut out = format!(
+        "[SESSION v0.1]\n\
+         TOOL_ROUND_BUDGET: {budget} tool rounds per turn\n\
+         TOOL_ROUNDS_USED: {used} (completed so far; the round in flight \
+         counts when it completes)\n\
+         TOOL_ROUNDS_REMAINING: {}\n",
+        budget.saturating_sub(used),
+    );
+    if let Some(line) = status_line {
+        out.push_str(line);
+        out.push('\n');
+    }
+    out.push_str("[/SESSION]");
+    out
 }
 
 /// D-8: budget-exhaustion notice — the run ends after this round with a
@@ -647,9 +671,6 @@ mod tests {
         )));
         assert!(is_injected_block_text(&tool_round_budget_session_block(
             120
-        )));
-        assert!(is_injected_block_text(&tool_round_budget_remaining_block(
-            38
         )));
         assert!(is_injected_block_text(&tool_round_budget_exhaustion_block(
             120

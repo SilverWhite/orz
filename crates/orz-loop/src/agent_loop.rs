@@ -722,7 +722,9 @@ pub(crate) async fn run_template_compact(
 /// model round → model_output journal → orientation feed → budget
 /// exhaustion / final answer / counterexample gate / IPG → tool dispatch
 /// (role-gated) → batch injections (denial breaker / edit push /
-/// orientation post-tool-batch gap) → budget re-declaration.
+/// orientation post-tool-batch gap) → budget exhaustion check (the live
+/// remaining count is read on demand via `blackboard_read section=session`,
+/// PUSH→PULL 2026-08-21).
 ///
 /// `tool_defs` is the BASE list for main/grill turns (registry + main-only
 /// additions + mode projection) — the loop re-probes the work tools before
@@ -1226,8 +1228,10 @@ pub(crate) async fn run_agent_loop(
         // 零可用性承诺）；可用性判定完全发生在调用时。prompt 不再承载
         // 任何"可用性声明"（不固定在 prompt 中）。
         // D-8 (FIX_PLAN 2026-08-06): the round budget is declared to the
-        // model up front — it does not guess or drift. The remaining
-        // count is re-declared mechanically after every tool round.
+        // model up front — it does not guess or drift. PUSH→PULL
+        // (2026-08-21, CONTEXT_SCAFFOLDING_PULL_REDESIGN §4 方案 A): the
+        // per-round remaining re-declaration is retired — the live count
+        // is read on demand via `blackboard_read section=session`.
         // Cache-prefix fix (2026-08-07): the session block is static
         // (BUDGET only) so the rebuilt system prompt is byte-identical
         // across rounds — the provider's prefix cache keeps hitting.
@@ -1334,8 +1338,8 @@ pub(crate) async fn run_agent_loop(
         // conversation keeps the complete records.
         // 2026-08-18 (ADR-0010 §14.25 项 1): 常驻状态行移出系统提示词——
         // 每轮请求前把 `[任务状态]` 作为尾随用户消息、仅在变化时追加
-        // （与 `[TOOL_ROUND_BUDGET] REMAINING` 同纪律），system 提示词
-        // 保持完全静态，前缀缓存不被步骤推进打断。
+        // （尾随消息纪律；退役前的 `[TOOL_ROUND_BUDGET] REMAINING` 同此
+        // 纪律），system 提示词保持完全静态，前缀缓存不被步骤推进打断。
         controller.sync_status_line_message(messages);
         // FUS-LEDGER-FOLD-STATE (2026-08-18, ADR-0010 §14.26): the request
         // view comes from the stateful fold point — `messages` verbatim
@@ -2425,24 +2429,14 @@ pub(crate) async fn run_agent_loop(
         }
 
         // P0-C S4 (2026-08-16): 发放的 console 动作按实际执行单位计入同一
-        // tool-round 预算（直接订单 1、脚本每步 1）——下一轮 remaining 块
-        // 机械反映；耗尽后同样进入最后无工具轮并结束。
+        // tool-round 预算（直接订单 1、脚本每步 1）——剩余预算按需经
+        // `blackboard_read section=session` 读取（PUSH→PULL 2026-08-21，
+        // 每轮 REMAINING 尾随注入已退役）；耗尽后同样进入最后无工具轮
+        // 并结束。
         tool_rounds = tool_rounds.saturating_add(console_consumed);
         if !plan_round_active {
             tool_rounds += 1;
         }
-        // D-8: mechanically re-declare the remaining budget after each
-        // tool round — the model does not guess or drift (the previous
-        // round's `[TOOL_ROUND_BUDGET]` text is already in history).
-        messages.push(Message {
-            role: Role::User,
-            content: crate::prompt::tool_round_budget_remaining_block(
-                profile.max_tool_rounds.saturating_sub(tool_rounds),
-            ),
-            tool_call_id: None,
-            tool_calls: Vec::new(),
-            reasoning_content: None,
-        });
         if tool_rounds >= profile.max_tool_rounds {
             // Anti-runaway backstop — mark the truncation so the journal
             // records why pending tool calls were dropped. D-8: the cap
