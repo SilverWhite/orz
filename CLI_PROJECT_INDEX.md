@@ -376,6 +376,20 @@
 > **计数：S3/S4 验证闭环 29→28**。登记于 ADR-0010 §14.35 第 8 项 /
 > [设计 §4.7](docs/DEEPSEEK_OUTPUT_BUDGET_AND_STALL_GUARD_DESIGN_2026-08-20.md)
 > / BACKLOG 0d / TODO P0-0d。
+> 2026-08-20 冻结版本准备登记（用户指示：深入审查流转无问题后冻结跑分）——
+> 深入流转审查结论：本轮改动部件接线无断点（请求构造 build_request +
+> apply_thinking 双旋钮 → 流式 stream_once 哨兵 → generate_stream 三级梯
+> → agent_loop 分类分流 → run_invalidated/run_failed；工具轮 175/194 正常
+> 流转、哨兵/空流/idle 全零触发、指纹 request_header_change 实证 config
+> 稳定）。冻结：orz-linux 三件套对应 orz commit 1651f59（工作树干净、
+> 构建 12:08 UTC）——orz SHA256 6F20CA00CC736FE9222A1E7C7C93F46849A60C715
+> D17BD21BD0DA17E13677068（104,375,344 B）、orz-signer AEB7630DC7E9A224BAE
+> 267ADCC1F7081DC8BFDEB65175058BAA7D9D037AB92A7、orz-acaf-provision
+> 6BF66CBC5A59F2366D2ACEA82E42DB32416E92F8F45ABF9F2FA4817FC9FC90C0；
+> 冻结标记 [FROZEN-2026-08-20.md](D:/tb-eval/orz-linux/FROZEN-2026-08-20.md)
+> （跑分目录内）。跑分入口就绪：`bash D:/tb-eval/run_official_2.1.sh`
+> （TB 2.1 89 题 5 批次）；单题冒烟模板参照 run_pro_gpt2.sh。计数不变
+> （28）；正式跑分启动另行登记。
 2026-08-15 黑板 plan epoch 复查补强登记（ADR-0010 v1.15⑧）——plan_epoch 时间戳单调编号、身份一一对应强制、retention 保留最高编号快照。
 > 2026-08-15 黑板 plan epoch 复查遗留闭合登记（ADR-0010 v1.15⑨）——F2 原子写盘+回退加载、F4 跨进程 `.claim-<n>` 占号、F5 归档目录单一来源、F6 非法 epoch 显式报错、F7 归档失败入事件面（新 v0.2 `epoch_archive_write_failed`）、F9 `persisted_at` 更名、F10 设计 §5 措辞对齐。
 > 2026-08-15 ACAF fail-closed 生产启用裁决登记（用户裁决放行）——P2 IMPL-CONTROL-FABRIC 决策门放行；翻转执行与核查清单 ⑦⑨⑩⑪ 收口/边界登记待实施。
