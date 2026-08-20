@@ -2323,6 +2323,23 @@ ADR §3.6 正文修订随实施登记。
     状态行双通道）。登记于 CLI_PROJECT_INDEX / BACKLOG 0e / TODO P0-0e；
     未闭合计数不变（28）至 S3/S4 闭环。
 
+11. **上下文机械结构块 PUSH→PULL S4 复验阻断与缺口修复（2026-08-21）**：
+    7529a71 冻结版 S4 单题复验（make-doom-for-mips，job
+    `2026-08-21__01-18-47`）首轮工具轮后第二轮请求被 DeepSeek 拒绝：
+    `reasoning_content must be passed back`（invalid_request_error）→
+    `run_failed`。根因=PUSH→PULL 退役 REMAINING 尾随 user 消息后，暴露
+    2026-08-04 遗留的「工具输出汇总 assistant 文本消息」（`assistant_parts`
+    块，2026-08-06 协议修复后已是冗余副本）成为请求末条；DeepSeek thinking
+    模式对「工具结果后紧跟的 assistant 文本轮」强制要求回传
+    reasoning_content。API 探针 V1–V7 实测钉死触发面（V1 400 / V2 旧形态
+    200 / V3 带 rc 200 / V4 无汇总 200 / V5–V7 纯文本轮 200）。修复=
+    退役 `assistant_parts` 汇总消息（工具结果已以 Role::Tool 完整落库，
+    冗余移除同时节省每轮输入 token），协议形态 4→3；同步更新两处协议
+    形状测试 + clippy 未用变量清理；orz-loop 536 通过 / 0 失败 / 3
+    ignored、fmt 干净、clippy 无新增。设计细节见
+    `docs/CONTEXT_SCAFFOLDING_PULL_REDESIGN_DESIGN_2026-08-21.md` §9。
+    计数纪律不变（28），S3 重建（修复版）+ S4 重跑闭环后 28→27。
+
 ### 14.31 v1.31 补写裁决索引（2026-08-19）
 
 本节记录冻结后的显式补写；规范正文以所指章节为准，补写明确取代以下既往条款。

@@ -850,6 +850,17 @@
 > list_dir 60 通过、clippy 无新增告警；ADR-0010 §14.23 / BACKLOG 0a / TODO
 > P0-E / 实施审计 / 操作台设计 §12 / 黑板设计 §4 同步。未闭合 29 → 27 项
 > （P0-E 后续项全部闭合）。
+> 2026-08-21 PUSH→PULL S4 复验阻断与缺口修复登记——7529a71 冻结版
+> make-doom-for-mips 单题复验首轮工具轮后第二轮请求 400
+> （`reasoning_content must be passed back`）；根因=PUSH→PULL 退役
+> REMAINING 尾随消息后暴露 2026-08-04 遗留「工具输出汇总 assistant 文本
+> 消息」（`assistant_parts` 冗余副本）为请求末条，DeepSeek thinking 模式
+> 对「工具结果后紧跟的 assistant 文本轮」强制回传 reasoning_content
+> （API 探针 V1–V7 实测钉死）。修复=退役 `assistant_parts` 汇总消息
+> （工具结果已以 Role::Tool 完整落库，协议形态 4→3；顺带每轮输入 token
+> 节省）；orz-loop 536 通过 / fmt / clippy 无新增。登记于 ADR-0010
+> §14.35 第 11 项 / 设计 §9 / BACKLOG 0e / TODO P0-0e；S3 重建（修复版）
+> → S4 make-doom 重跑待续；计数纪律不变（28）。
 >
 > 当前唯一自然语言设计权威是 [`ADR-0010`](adr/ADR-0010-fusion-runtime-and-agent-architecture.md)。本文件只负责召回和路由，不替代 ADR、Schema、审计结论、测试证据或源代码。
 >

@@ -729,6 +729,21 @@ S1 实施 + 全面审查处理已闭合，S3/S4 待验证）
   无功能缺陷；处理 O1-O6（口径差异/PULL 读取消耗轮/状态行双通道登记已接受
   边界，越权组合口径收紧，工具级测试补齐，工具描述去内部标签——详见设计
   §8）。S3 重建 → S4 复验（重点观测缓存命中率）待续。
+- **2026-08-21 S4 复验阻断 + 缺口修复（make-doom-for-mips 单题复验启动
+  即失败；orz 修复提交，见下）**：7529a71 冻结版 S4 首轮工具轮后第二轮
+  请求被 DeepSeek 拒绝（`reasoning_content must be passed back`，
+  invalid_request_error）。根因=PUSH→PULL 退役 REMAINING 尾随 user 消息
+  后暴露 2026-08-04 遗留的「工具输出汇总 assistant 文本消息」
+  （`assistant_parts` 冗余副本）成为请求末条，DeepSeek thinking 模式对
+  「工具结果后紧跟的 assistant 文本轮」强制回传 reasoning_content；
+  API 探针 V1–V7 实测钉死（V1 400 / V2 旧形态 200 / V3 带 rc 200 /
+  V4 无汇总 200 / V5–V7 纯文本轮 200）。**修复=退役 `assistant_parts`
+  汇总消息**（工具结果已以 Role::Tool 完整落库，协议形态 4→3；顺带每轮
+  输入 token 节省）；orz-loop 536 通过 / 0 失败 / 3 ignored、fmt 干净、
+  clippy 无新增。登记于 ADR-0010 §14.35 第 11 项 / 设计 §9 /
+  CLI_PROJECT_INDEX / TODO P0-0e。S3 重建（修复版）→ S4 make-doom 重跑
+  （命中率 ≥90% 对照基线不减、零 400、哨兵触发率下降、输入增长放缓）
+  待续；计数纪律不变（28），S3/S4 闭环后 28→27。
 
 ### 0. 前置收尾（提交前需用户确认）
 

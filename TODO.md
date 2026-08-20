@@ -698,6 +698,14 @@ S1 实施 + 全面审查处理已闭合，S3/S4 待验证）
 > fmt / clippy 基线（31）/ workspace check / 事件一致性 15 通过。全面审查
 > 处理：O1/O2/O3 已接受边界（口径差异/PULL 读取消耗轮/状态行双通道）、O4
 > 越权组合口径收紧、O5 工具级测试补齐、O6 工具描述去内部标签（设计 §8）。
+> **2026-08-21 S4 复验阻断 + 缺口修复**：make-doom-for-mips 单题复验首轮
+> 工具轮后第二轮请求 400（`reasoning_content must be passed back`）——
+> PUSH→PULL 退役 REMAINING 尾随消息后暴露 2026-08-04 遗留「工具输出汇总
+> assistant 文本消息」（`assistant_parts` 冗余副本）为请求末条；API 探针
+> V1–V7 实测钉死触发面。修复=退役 `assistant_parts` 汇总消息（工具结果已
+> 以 Role::Tool 完整落库，协议形态 4→3；顺带每轮输入 token 节省）；两处
+> 协议形状测试同步更新；orz-loop 536 通过 / fmt / clippy 无新增。登记于
+> ADR-0010 §14.35 第 11 项 / 设计 §9 / BACKLOG 0e。
 
 - [x] S1 代码（退役 REMAINING 尾随注入 + session 面 + 工具定义增量 + 机械门禁回归）
 - [x] S2 测试（无 REMAINING 尾随、session 面渲染/越权、拒绝文本含剩余、既有断言更新）

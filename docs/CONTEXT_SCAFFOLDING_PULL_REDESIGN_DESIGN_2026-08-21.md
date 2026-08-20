@@ -143,3 +143,48 @@ S1 全面审查结论：设计合理、实现合理、设计与实现符合性�
   error 字段、错误文本回达模型），补足单测之外的端到端覆盖。
 - **O6（文案清理）**：`blackboard_read` 工具描述去除内部标签「PUSH→PULL
   2026-08-21」，改为纯语义文案（模型面），与其余模型可见描述保持一致。
+
+## 9. S4 复验阻断与修复（2026-08-21）
+
+**阻断现象**：7529a71 冻结版 S4 单题复验（make-doom-for-mips，job
+`2026-08-21__01-18-47`）首轮工具轮后，第二轮请求即被 DeepSeek 拒绝：
+`The reasoning_content in the thinking mode must be passed back to the
+API. (code=invalid_request_error)` → `run_failed`。
+
+**根因链**：PUSH→PULL 退役每轮 REMAINING 尾随 user 消息后，暴露了一条
+2026-08-04 遗留的「工具输出汇总 assistant 文本消息」（`assistant_parts`
+块：每轮把 `[tool] output` 汇总成一条无 tool_calls、无 reasoning_content
+的 assistant 消息）。2026-08-06 协议修复后工具结果已以 Role::Tool 消息
+落库，该汇总本已是冗余副本；此前它一直被 REMAINING 尾随消息「遮住」，
+现在成为请求序列末条，恰好命中 DeepSeek thinking 模式校验。
+
+**API 实测（2026-08-21 探针 V1–V7，最小成本直连 api.deepseek.com）**：
+
+| 变体 | 序列 | 结果 |
+|---|---|---|
+| V1 | 工具结果后紧跟 assistant 文本（无 rc，末条） | **400**（同线上报错） |
+| V2 | 同 V1 + 尾部 user REMAINING（旧形态） | 200 |
+| V3 | 同 V1 + 汇总消息带 reasoning_content | 200 |
+| V4 | 无汇总消息（末条=最后一条 Role::Tool） | 200 |
+| V5 | 纯文本轮（无 tools 参数）无 rc | 200 |
+| V6 | 纯文本轮（带 tools 参数）无 rc | 200 |
+| V7 | 同 V6 + rc | 200 |
+
+结论：触发条件精确为「工具结果之后紧跟的 assistant 文本消息且未回传
+reasoning_content」；纯文本轮不受影响（对照官方
+`packages/llm/llm-deepseek/src/serialize.ts`：工具轮回传、纯文本轮丢弃）。
+
+**修复（S4 缺口修复，orz 新提交）**：退役 `assistant_parts` 汇总消息——
+工具结果本身已完整以 Role::Tool 落库，汇总为冗余副本；移除同时带来每轮
+输入 token 节省（make-doom 333 轮量级下收益显著），与方案 A 的上下文
+极简目标一致。消息协议形态 4→3（user + assistant 声明 + tool 结果）。
+同步更新两处协议形状测试（`protocol_shape_…` / 
+`tool_round_replays_reasoning_content_on_declaration`）；clippy 清理
+`refuse_inject_budget`/`plan_round_denied` 返回值的未用变量。
+验证：orz-loop 536 通过 / 0 失败 / 3 ignored、fmt 干净、clippy 无新增
+（基线 31 不变）。
+
+**后续**：S3 重建（新 orz 提交）→ S4 make-doom 重跑，重点观测与 §5 一致
+（命中率 ≥90% 且对照基线不减、零 400、哨兵触发率下降、输入增长放缓）；
+全绿后闭环登记（TODO P0-0e 勾 S3/S4、BACKLOG 0e 转 implemented、计数
+28→27、ADR-0010 §14.35 追加、CLI_PROJECT_INDEX 登记）。
