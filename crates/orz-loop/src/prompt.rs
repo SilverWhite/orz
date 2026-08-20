@@ -44,6 +44,11 @@ grep/结构提取，小文件保持全文一次返回；只有证据关键的小
 每轮工具结果注入预算默认 50K \
 估计 tokens（ORZ_MAX_INJECT_TOKENS_PER_ROUND 可调）；超限时本轮后续读取会被机械拒绝，\
 并显式提示用 offset 续读或改用 grep/结构优先。\
+\n会话数据边界（v1.36，模型舒适度原则）：`.gsa` 树（journal/台账/会话日志）是\
+运行时内部数据，不进入直接工具面，无需也不应直接 grep/read/list `.gsa` 路径；\
+需要查看台账或会话信息时，用 blackboard_read 分区读取（plan/edits/tool_actions/\
+exec/actions）或经操作台动作反馈——运行时会在受控面呈现你需要的信息，\
+直接访问只会得到拒绝，请直接走受控面。\
 \n压缩白名单（A6 §8 C.2）：任务背景、必须获取的信息等客观事实，可在首个工具批次通过 \
 compaction_whitelist_add 写入压缩白名单——该内容不被上下文压缩、全程保留；\
 写入仅限首轮，存档于 .gsa 记录树（保留 7 天）。白名单只写客观事实，\
@@ -487,6 +492,27 @@ mod tests {
         let builder = PromptBuilder::new();
         let bare = builder.build_system_prompt(None);
         assert_eq!(bare, BASE_SYSTEM_PROMPT);
+    }
+
+    #[test]
+    fn base_system_prompt_carries_session_data_boundary_guidance() {
+        // 2026-08-20 模型舒适度原则（ADR-0010 §14.35 第 9 项）：`.gsa`
+        // 树是运行时内部数据，提示词先导引导直接走受控面（blackboard_read
+        // 分区 / 操作台反馈），避免模型反复尝试直接读 `.gsa` 被拒（本次
+        // make-doom 复验 14 次碰壁的提示词层改善）。只陈述边界与正向替代，
+        // 不引入新的机械限制。
+        assert!(
+            BASE_SYSTEM_PROMPT.contains("会话数据边界"),
+            "session-data boundary guidance present in the main-agent prompt"
+        );
+        assert!(
+            BASE_SYSTEM_PROMPT.contains("blackboard_read 分区读取"),
+            "positive alternative (blackboard_read) guidance present"
+        );
+        assert!(
+            BASE_SYSTEM_PROMPT.contains("直接访问只会得到拒绝"),
+            "honest expectation-setting present"
+        );
     }
 
     #[test]
