@@ -9,12 +9,15 @@
 //! non-streaming `create` path only — the stream path does not retry
 //! (recorded D3-2, 2026-08-06 design review).
 //!
-//! Thinking (IP1 → D-6, FIX_PLAN 2026-08-06): the restored max-config is
-//! `thinking: {type: "enabled"}` + `reasoning_effort: "max"` + 256K
+//! Thinking (IP1 → D-6, FIX_PLAN 2026-08-06): the default workpoint is
+//! `thinking: {type: "enabled"}` + `reasoning_effort: "high"` + 256K
 //! single-round output budget (OUTPUT-BUDGET-RESTORE-AND-STALL-GUARD
 //! 2026-08-20, ADR-0010 §14.35 — 输出预算恢复 32K → 256K，回落档 128K，
-//! S4 实测校准；OUTPUT-DEGENERATION-GUARD 2026-08-19 的 32K 止损由输出
-//! 健康哨兵 + 空转预算兜底取代；previously 160K);
+//! S4 实测校准；2026-08-20 修订: 默认档 max → high（官方 harness 默认），
+//! `EnabledMax` 保留为显式可选档、`EnabledLow` 为降级梯中间档——
+//! generate_stream 降级梯 high → low → disabled → 失败；OUTPUT-
+//! DEGENERATION-GUARD 2026-08-19 的 32K 止损由输出健康哨兵 + 空转预算
+//! 兜底取代；previously 160K);
 //! `ThinkingMode::Disabled` keeps the P2-era mitigation (all output to
 //! `content`) for parity/tests/benchmarks. `ModelRequest` carries no
 //! thinking knob — `ModelConfig::thinking` is the single switch.
@@ -408,7 +411,9 @@ impl DeepSeekTransport {
             // 600s/64K 预算兜底（与 max_tokens 解耦），空流不原样重试
             // （D-6 快速有界 ≤2 次 + 降级出口）。请求头指纹含 max_tokens
             // 与 retry 参数（idle 5s/30s、重试窗口 50s），部署后首次请求
-            // 一次性指纹变化（既有纪律）。
+            // 一次性指纹变化（既有纪律）。2026-08-20 修订: 默认 thinking
+            // 档 max → high（官方默认；`EnabledMax` 显式可选），降级梯
+            // high → low → disabled（ADR-0010 §14.35 第 5 项 / 设计 §3.6）。
             max_tokens: 256_000,
             retry: Default::default(),
             thinking: Default::default(),
@@ -451,6 +456,8 @@ impl DeepSeekTransport {
             "api_base": self.config.api_base,
             "max_tokens": self.config.max_tokens,
             "thinking": match self.config.thinking {
+                ThinkingMode::EnabledHigh => "enabled_high",
+                ThinkingMode::EnabledLow => "enabled_low",
                 ThinkingMode::EnabledMax => "enabled_max",
                 ThinkingMode::Disabled => "disabled",
             },
@@ -482,6 +489,29 @@ impl DeepSeekTransport {
         request.thinking.unwrap_or(self.config.thinking)
     }
 
+    /// Apply a thinking tier to an already-built request — BOTH the
+    /// `thinking` block AND `reasoning_effort` follow the tier (D-6;
+    /// `build_request` derives both from `config.thinking`, so a ladder /
+    /// override tier must override both knobs — e.g. a high-config
+    /// transport degrading to `EnabledLow` must send
+    /// `reasoning_effort: "low"`, not the config's high).
+    fn apply_thinking(req: &mut CreateChatCompletionRequest, thinking: ThinkingMode) {
+        req.thinking = Some(async_openai::types::chat::ThinkingConfig {
+            thinking_type: match thinking {
+                ThinkingMode::EnabledHigh | ThinkingMode::EnabledLow | ThinkingMode::EnabledMax => {
+                    "enabled".to_string()
+                }
+                ThinkingMode::Disabled => "disabled".to_string(),
+            },
+        });
+        req.reasoning_effort = match thinking {
+            ThinkingMode::EnabledHigh => Some(ReasoningEffort::High),
+            ThinkingMode::EnabledLow => Some(ReasoningEffort::Low),
+            ThinkingMode::EnabledMax => Some(ReasoningEffort::Max),
+            ThinkingMode::Disabled => None,
+        };
+    }
+
     /// One raw create attempt with the given thinking mode.
     async fn create_once(
         &self,
@@ -490,16 +520,7 @@ impl DeepSeekTransport {
     ) -> Result<ModelResponse, GatewayError> {
         let client = self.client();
         let mut req = self.build_request(request);
-        req.thinking = Some(async_openai::types::chat::ThinkingConfig {
-            thinking_type: match thinking {
-                ThinkingMode::EnabledMax => "enabled".to_string(),
-                ThinkingMode::Disabled => "disabled".to_string(),
-            },
-        });
-        // D-6 retry chain: the degraded attempt drops the reasoning knob.
-        if thinking == ThinkingMode::Disabled {
-            req.reasoning_effort = None;
-        }
+        Self::apply_thinking(&mut req, thinking);
         // D-7: single-request wall-clock timeout (10min level) — the fork's
         // create path has no read timeout of its own (P8).
         let response =
@@ -517,12 +538,14 @@ impl DeepSeekTransport {
 
     /// Model request → typed chat completion request.
     ///
-    /// D-6 (FIX_PLAN 2026-08-06): thinking is restored — `EnabledMax` sends
-    /// `thinking: {type: "enabled"}` + top-level `reasoning_effort: "max"`
-    /// (wire shape validated by the 2026-08-07 live probe: 559ms to the
-    /// first reasoning delta, ~30s to content on a hard task, per-round
-    /// `usage.reasoning_tokens`). `Disabled` keeps the P2-era mitigation
-    /// (all output to `content`).
+    /// D-6 (FIX_PLAN 2026-08-06 + 2026-08-20 修订): the default sends
+    /// `thinking: {type: "enabled"}` + top-level `reasoning_effort: "high"`
+    /// (official harness default; wire shape validated by the 2026-08-07
+    /// live probe: 559ms to the first reasoning delta, ~30s to content on
+    /// a hard task, per-round `usage.reasoning_tokens`). `EnabledLow` maps
+    /// to `reasoning_effort: "low"` (ladder middle tier); `EnabledMax`
+    /// stays the explicit optional max tier. `Disabled` keeps the P2-era
+    /// mitigation (all output to `content`).
     ///
     /// `stream` is left unset: `create` / `create_stream` validate and
     /// set it themselves.
@@ -569,6 +592,18 @@ impl DeepSeekTransport {
             )
         };
         let (thinking, reasoning_effort) = match self.config.thinking {
+            ThinkingMode::EnabledHigh => (
+                Some(async_openai::types::chat::ThinkingConfig {
+                    thinking_type: "enabled".to_string(),
+                }),
+                Some(ReasoningEffort::High),
+            ),
+            ThinkingMode::EnabledLow => (
+                Some(async_openai::types::chat::ThinkingConfig {
+                    thinking_type: "enabled".to_string(),
+                }),
+                Some(ReasoningEffort::Low),
+            ),
             ThinkingMode::EnabledMax => (
                 Some(async_openai::types::chat::ThinkingConfig {
                     thinking_type: "enabled".to_string(),
@@ -814,15 +849,7 @@ impl DeepSeekTransport {
         }
         let client = self.client();
         let mut req = self.build_request(request);
-        req.thinking = Some(async_openai::types::chat::ThinkingConfig {
-            thinking_type: match thinking {
-                ThinkingMode::EnabledMax => "enabled".to_string(),
-                ThinkingMode::Disabled => "disabled".to_string(),
-            },
-        });
-        if thinking == ThinkingMode::Disabled {
-            req.reasoning_effort = None;
-        }
+        Self::apply_thinking(&mut req, thinking);
         // F-08 (2026-08-07 review): the HTTP/TLS handshake sits OUTSIDE the
         // select! watchdog loop — a TCP connection accepted but never
         // answering would hang forever with no timeout and no cancel. Wrap
@@ -1242,6 +1269,20 @@ fn empty_response_backoff() -> backoff::ExponentialBackoff {
     }
 }
 
+/// Next lower degradation tier for the D-6 ladder (2026-08-20 修订,
+/// ADR-0010 §14.35 第 5 项 / 设计 §3.6): **high → low → disabled → 失败**
+/// —— 空响应快速重试与 reasoning 族哨兵跳转共用。`EnabledMax` 是显式可选
+/// 档（难题专用）：保留 S4 验证的基线行为——哨兵命中/空流链耗尽直跳
+/// `Disabled`（三级梯按默认档 high 起定义；max 不额外多烧 high/low 两轮）。
+fn next_degraded_thinking(thinking: ThinkingMode) -> Option<ThinkingMode> {
+    match thinking {
+        ThinkingMode::EnabledHigh => Some(ThinkingMode::EnabledLow),
+        ThinkingMode::EnabledLow => Some(ThinkingMode::Disabled),
+        ThinkingMode::EnabledMax => Some(ThinkingMode::Disabled),
+        ThinkingMode::Disabled => None,
+    }
+}
+
 #[async_trait]
 impl ModelGateway for DeepSeekTransport {
     fn config_fingerprint(&self) -> String {
@@ -1249,9 +1290,9 @@ impl ModelGateway for DeepSeekTransport {
     }
 
     async fn generate(&self, request: ModelRequest) -> Result<ModelResponse, GatewayError> {
-        // D-6 empty-content retry chain: thinking max can legitimately burn
-        // the whole budget on reasoning_content and leave content empty
-        // (finish=length, zero output). The chain:
+        // D-6 empty-content retry chain: an enabled thinking tier can
+        // legitimately burn the whole budget on reasoning_content and leave
+        // content empty (finish=length, zero output). The chain:
         //   1. normal request (thinking per config);
         //   2. byte-identical retry ONCE (same messages, same config — the
         //      provider's reasoning allocation varies run to run);
@@ -1278,7 +1319,7 @@ impl ModelGateway for DeepSeekTransport {
             return Ok(degraded);
         }
         Err(GatewayError::Model(
-            "budget exhausted with zero output — thinking max retry chain \
+            "budget exhausted with zero output — thinking retry chain \
              (byte-identical retry + thinking-disabled degrade) all produced \
              empty content"
                 .to_string(),
@@ -1293,20 +1334,23 @@ impl ModelGateway for DeepSeekTransport {
     ) -> Result<ModelResponse, GatewayError> {
         // D-6 empty-content retry chain on the streaming path
         // (OUTPUT-BUDGET-RESTORE-AND-STALL-GUARD 2026-08-20, ADR-0010
-        // §14.35 / 设计 §3.2 —— 官方化收窄版):
-        //   1. normal request (thinking per config, max + 256K);
+        // §14.35 / 设计 §3.2 + §3.6 —— 官方化收窄版 + 三级降级梯):
+        //   1. normal request (thinking per config, default high + 256K);
         //   2. completed EMPTY response (`empty_content_abnormal`) → fast
-        //      bounded retry: same params, backoff 500ms→10s + 10% jitter,
-        //      ≤ `EMPTY_RESPONSE_MAX_RETRIES` (official rhythm, narrowed
-        //      from 5 — 256K+max 下 5 次原样重试成本不可接受);
-        //   3. still empty → thinking DISABLED degrade (all output routed
-        //      to content);
-        //   4. still empty → explicit failure, never a silent blank.
+        //      bounded retry within the current tier: same params, backoff
+        //      500ms→10s + 10% jitter, ≤ `EMPTY_RESPONSE_MAX_RETRIES`
+        //      (official rhythm, narrowed from 5 — 256K 下 5 次原样重试
+        //      成本不可接受);
+        //   3. still empty → next lower tier: **high → low → disabled**
+        //      (2026-08-20 修订, ADR-0010 §14.35 第 5 项; `EnabledMax`
+        //      keeps the S4-validated direct jump to disabled);
+        //   4. disabled tier still empty → explicit failure, never a
+        //      silent blank.
         // Reasoning-family guard interruptions (reasoning_repetition /
-        // reasoning_stall) during stages 1-2 do NOT re-run the identical
-        // request (长烧型空转原样重试大概率复现且贵) — they jump straight
-        // to the degraded stage. Content-family interruptions keep the
-        // no-retry passthrough (ADR-0007 已见输出不重试). Zero-chunk
+        // reasoning_stall) do NOT re-run the identical request
+        // (长烧型空转原样重试大概率复现且贵) — they step down ONE ladder
+        // tier (high → low → disabled). Content-family interruptions keep
+        // the no-retry passthrough (ADR-0007 已见输出不重试). Zero-chunk
         // transport interruptions are handled inside
         // `stream_once_with_retry` and are orthogonal to this chain.
         //
@@ -1326,25 +1370,37 @@ impl ModelGateway for DeepSeekTransport {
                     if thinking == ThinkingMode::Disabled {
                         return Err(GatewayError::Model(
                             "budget exhausted with zero output — D-6 chain \
-                             (fast bounded empty retries + thinking-disabled \
-                             degrade) all produced empty content"
+                             (per-tier fast bounded empty retries + high→low→ \
+                             disabled degrade) all produced empty content"
                                 .to_string(),
                         ));
                     }
+                    // 当前档位快速重试耗尽 → 逐级下降（high → low → disabled）；
+                    // 换档时重试计数与退避重置（每档独立「快速 ≤2 次」节奏，
+                    // 设计 §3.2/§3.6）。
                     if empty_retries >= EMPTY_RESPONSE_MAX_RETRIES {
+                        let Some(next) = next_degraded_thinking(thinking) else {
+                            unreachable!("enabled tier always has a next tier");
+                        };
                         tracing::warn!(
                             "completed empty response after {empty_retries} retries — \
-                             degrading to thinking-disabled"
+                             degrading to {next:?}"
                         );
-                        thinking = ThinkingMode::Disabled;
+                        thinking = next;
+                        empty_retries = 0;
+                        backoff = empty_response_backoff();
                         continue;
                     }
                     let Some(delay) = backoff.next_backoff() else {
+                        let Some(next) = next_degraded_thinking(thinking) else {
+                            unreachable!("enabled tier always has a next tier");
+                        };
                         tracing::warn!(
-                            "completed empty response: backoff exhausted — degrading to \
-                             thinking-disabled"
+                            "completed empty response: backoff exhausted — degrading to {next:?}"
                         );
-                        thinking = ThinkingMode::Disabled;
+                        thinking = next;
+                        empty_retries = 0;
+                        backoff = empty_response_backoff();
                         continue;
                     };
                     tracing::warn!(
@@ -1369,16 +1425,25 @@ impl ModelGateway for DeepSeekTransport {
                 }
                 Err(GatewayError::StreamInterrupted { detail, .. })
                     if is_reasoning_guard_detail(&detail)
-                        && thinking == ThinkingMode::EnabledMax =>
+                        && matches!(
+                            thinking,
+                            ThinkingMode::EnabledHigh
+                                | ThinkingMode::EnabledLow
+                                | ThinkingMode::EnabledMax
+                        ) =>
                 {
-                    // reasoning 族哨兵（复读/stall）→ 不原样快速重试、直接
-                    // 跳降级（设计 §3.2；limit 前缀三族共享、达限转
+                    // reasoning 族哨兵（复读/stall）→ 不原样快速重试、逐级
+                    // 下降一档（设计 §3.2/§3.6；limit 前缀三族共享、达限转
                     // run_invalidated，由下方透传分支处理）。
+                    let next = next_degraded_thinking(thinking)
+                        .expect("reasoning guard only fires on enabled tiers");
                     tracing::warn!(
                         "reasoning-family guard interrupted the stream — skipping \
-                         identical retries, degrading to thinking-disabled: {detail}"
+                         identical retries, degrading to {next:?}: {detail}"
                     );
-                    thinking = ThinkingMode::Disabled;
+                    thinking = next;
+                    empty_retries = 0;
+                    backoff = empty_response_backoff();
                 }
                 Err(e) => return Err(e),
             }
@@ -1500,15 +1565,13 @@ mod tests {
     }
 
     #[test]
-    fn build_request_sets_thinking_enabled_max_d6() {
-        // D-6 (FIX_PLAN 2026-08-06) — the restored max-config: thinking
-        // enabled + reasoning_effort "max" + 256K single-round budget
-        // (OUTPUT-BUDGET-RESTORE-AND-STALL-GUARD 2026-08-20, ADR-0010
-        // §14.35 — 输出预算恢复 32K → 256K，回落档 128K; previously 160K
-        // after the 2026-08-07 live probe, 32K under
-        // OUTPUT-DEGENERATION-GUARD 2026-08-19). The 256K value is the
-        // whole-token single-round cap; the stream requests include_usage so
-        // reasoning tokens are observable on the streaming path.
+    fn build_request_default_thinking_is_enabled_high() {
+        // D-6 (FIX_PLAN 2026-08-06) — 2026-08-20 修订 (ADR-0010 §14.35
+        // 第 5 项 / 设计 §3.6): the DEFAULT workpoint is thinking enabled +
+        // reasoning_effort "high" (official harness default) + 256K
+        // single-round budget. The 256K value is the whole-token
+        // single-round cap; the stream requests include_usage so reasoning
+        // tokens are observable on the streaming path.
         let t = DeepSeekTransport::deepseek_v4("sk-test", "deepseek-v4-flash");
         let mut req = request();
         // The request-level max_tokens is the min-cap over the config's 256K
@@ -1520,7 +1583,7 @@ mod tests {
         let json = serde_json::to_value(t.build_request(&req)).unwrap();
         let s = json.to_string();
         assert_eq!(json["thinking"]["type"], "enabled", "{s}");
-        assert_eq!(json["reasoning_effort"], "max", "{s}");
+        assert_eq!(json["reasoning_effort"], "high", "{s}");
         assert_eq!(
             json["max_tokens"], 256_000,
             "config 256K caps the request-level budget: {s}"
@@ -1530,6 +1593,35 @@ mod tests {
             "include_usage requested for reasoning_tokens observation: {s}"
         );
         assert_eq!(json["model"], "deepseek-v4-flash");
+    }
+
+    #[test]
+    fn build_request_explicit_thinking_tiers_map_reasoning_effort() {
+        // 2026-08-20 修订 (ADR-0010 §14.35 第 5 项 / 设计 §3.6):
+        // `EnabledMax` 保留为显式可选档（max）、`EnabledLow` 为降级梯中间
+        // 档（low）；二者均为 thinking enabled + 对应 effort。
+        let transport_for = |thinking: ThinkingMode| DeepSeekTransport {
+            config: ModelConfig {
+                thinking,
+                ..DeepSeekTransport::deepseek_v4("sk-test", "deepseek-v4-flash").config
+            },
+            degeneration_consecutive: Arc::new(AtomicU32::new(0)),
+        };
+        let max_json =
+            serde_json::to_value(transport_for(ThinkingMode::EnabledMax).build_request(&request()))
+                .unwrap();
+        assert_eq!(max_json["thinking"]["type"], "enabled");
+        assert_eq!(max_json["reasoning_effort"], "max", "{max_json}");
+        let low_json =
+            serde_json::to_value(transport_for(ThinkingMode::EnabledLow).build_request(&request()))
+                .unwrap();
+        assert_eq!(low_json["thinking"]["type"], "enabled");
+        assert_eq!(low_json["reasoning_effort"], "low", "{low_json}");
+        let high_json = serde_json::to_value(
+            transport_for(ThinkingMode::EnabledHigh).build_request(&request()),
+        )
+        .unwrap();
+        assert_eq!(high_json["reasoning_effort"], "high", "{high_json}");
     }
 
     #[test]
@@ -1872,7 +1964,8 @@ mod tests {
     #[tokio::test]
     async fn generate_stream_empty_content_retries_twice_then_degrades() {
         // 设计 §3.2：完成型空响应 → 快速有界重试 ≤2 次（同参 max）→
-        // thinking 禁用降级；降级轮产出答案。
+        // thinking 禁用降级；降级轮产出答案。`EnabledMax` 显式档保留 S4
+        // 基线：空流链耗尽直跳 disabled（三级梯按默认 high 起定义）。
         let empty = empty_completed_sse_body();
         let ok = ok_sse_body("降级答案");
         let attempts = std::sync::Arc::new(std::sync::atomic::AtomicU32::new(0));
@@ -1934,7 +2027,8 @@ mod tests {
     #[tokio::test]
     async fn generate_stream_reasoning_repetition_jumps_to_degrade() {
         // 设计 §3.2/§3.3：max 阶段触发 reasoning 复读哨兵 → 不原样快速
-        // 重试（长烧型原样重试大概率复现且贵）、直接跳降级。
+        // 重试（长烧型原样重试大概率复现且贵）、直接跳降级（max 显式档
+        // 保留 S4 基线直跳 disabled）。
         let rep = reasoning_repetition_sse_body("think", 5);
         let ok = ok_sse_body("降级答案");
         let attempts = std::sync::Arc::new(std::sync::atomic::AtomicU32::new(0));
@@ -1973,7 +2067,8 @@ mod tests {
     #[tokio::test]
     async fn generate_stream_reasoning_stall_jumps_to_degrade() {
         // 设计 §3.3 预算兜底：reasoning 估算 ≥64K 仍无 content/tool_calls
-        // → reasoning_stall → 跳过原样重试、直接降级。
+        // → reasoning_stall → 跳过原样重试、直接降级（max 显式档直跳
+        // disabled 基线）。
         let stall = reasoning_stall_sse_body();
         let ok = ok_sse_body("降级答案");
         let attempts = std::sync::Arc::new(std::sync::atomic::AtomicU32::new(0));
@@ -2041,6 +2136,145 @@ mod tests {
             attempts.load(std::sync::atomic::Ordering::SeqCst),
             3,
             "empty → reasoning guard on retry → degrade (no 3rd identical retry)"
+        );
+    }
+
+    // ── 2026-08-20 修订: 三级降级梯（high → low → disabled → 失败）─────
+
+    #[tokio::test]
+    async fn generate_stream_empty_content_ladder_high_low_disabled_fails() {
+        // 设计 §3.6：默认 high 档完成型空响应 → 每档快速重试 ≤2 次 →
+        // high → low → disabled → 显式失败（链尾绝不静默空答案）。换档时
+        // 重试计数与退避重置——每档独立「快速 ≤2 次」节奏（0.5s→1s×2 档）。
+        let empty = empty_completed_sse_body();
+        let attempts = std::sync::Arc::new(std::sync::atomic::AtomicU32::new(0));
+        let attempts_handle = attempts.clone();
+        let base = spawn_mock(move |_line, body| {
+            let n = attempts_handle.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            match n {
+                0..=2 => {
+                    assert!(
+                        body.contains("\"type\":\"enabled\"") && body.contains("\"high\""),
+                        "attempts 1-3 use the high tier: {body}"
+                    );
+                    MockResponse::sse(vec![&empty], std::time::Duration::ZERO)
+                }
+                3..=5 => {
+                    assert!(
+                        body.contains("\"type\":\"enabled\"") && body.contains("\"low\""),
+                        "attempts 4-6 use the low tier: {body}"
+                    );
+                    MockResponse::sse(vec![&empty], std::time::Duration::ZERO)
+                }
+                _ => {
+                    assert!(
+                        body.contains("\"type\":\"disabled\"")
+                            && !body.contains("reasoning_effort"),
+                        "degraded attempt drops reasoning: {body}"
+                    );
+                    MockResponse::sse(vec![&empty], std::time::Duration::ZERO)
+                }
+            }
+        })
+        .await;
+        let t = mock_transport_with_retry_thinking(
+            &base,
+            Default::default(),
+            ThinkingMode::EnabledHigh,
+        );
+        let err = t
+            .generate_stream(request(), None, None, &mut |_| {})
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(&err, GatewayError::Model(m) if m.contains("zero output")),
+            "ladder end must error explicitly: {err:?}"
+        );
+        assert_eq!(
+            attempts.load(std::sync::atomic::Ordering::SeqCst),
+            7,
+            "3 high + 3 low + 1 disabled"
+        );
+    }
+
+    #[tokio::test]
+    async fn generate_stream_reasoning_guard_ladder_high_to_low() {
+        // 设计 §3.6：high 档 reasoning 复读哨兵 → 不原样重试、下降一档到
+        // low（保留浅思考链）；low 档产出答案。
+        let rep = reasoning_repetition_sse_body("think", 5);
+        let ok = ok_sse_body("low 答案");
+        let attempts = std::sync::Arc::new(std::sync::atomic::AtomicU32::new(0));
+        let attempts_handle = attempts.clone();
+        let base = spawn_mock(move |_line, body| {
+            let n = attempts_handle.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            if n == 0 {
+                assert!(
+                    body.contains("\"type\":\"enabled\"") && body.contains("\"high\""),
+                    "first attempt uses the high tier: {body}"
+                );
+                MockResponse::sse(vec![&rep], std::time::Duration::ZERO)
+            } else {
+                assert!(
+                    body.contains("\"type\":\"enabled\"") && body.contains("\"low\""),
+                    "second attempt steps down one tier to low: {body}"
+                );
+                MockResponse::sse(vec![&ok], std::time::Duration::ZERO)
+            }
+        })
+        .await;
+        let t = mock_transport_with_retry_thinking(
+            &base,
+            Default::default(),
+            ThinkingMode::EnabledHigh,
+        );
+        let r = t
+            .generate_stream(request(), None, None, &mut |_| {})
+            .await
+            .unwrap();
+        assert_eq!(r.text.as_deref(), Some("low 答案"));
+        assert_eq!(
+            attempts.load(std::sync::atomic::Ordering::SeqCst),
+            2,
+            "reasoning guard must step down exactly one tier (high → low)"
+        );
+    }
+
+    #[tokio::test]
+    async fn generate_stream_reasoning_guard_ladder_low_to_disabled() {
+        // 设计 §3.6：low 档 reasoning 复读哨兵 → 下降一档到 disabled；
+        // disabled 档产出答案（全部输出走 content，无 reasoning 旋钮）。
+        let rep = reasoning_repetition_sse_body("think", 5);
+        let ok = ok_sse_body("降级答案");
+        let attempts = std::sync::Arc::new(std::sync::atomic::AtomicU32::new(0));
+        let attempts_handle = attempts.clone();
+        let base = spawn_mock(move |_line, body| {
+            let n = attempts_handle.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            if n == 0 {
+                assert!(
+                    body.contains("\"type\":\"enabled\"") && body.contains("\"low\""),
+                    "first attempt uses the low tier: {body}"
+                );
+                MockResponse::sse(vec![&rep], std::time::Duration::ZERO)
+            } else {
+                assert!(
+                    body.contains("\"type\":\"disabled\"") && !body.contains("reasoning_effort"),
+                    "degraded attempt drops reasoning: {body}"
+                );
+                MockResponse::sse(vec![&ok], std::time::Duration::ZERO)
+            }
+        })
+        .await;
+        let t =
+            mock_transport_with_retry_thinking(&base, Default::default(), ThinkingMode::EnabledLow);
+        let r = t
+            .generate_stream(request(), None, None, &mut |_| {})
+            .await
+            .unwrap();
+        assert_eq!(r.text.as_deref(), Some("降级答案"));
+        assert_eq!(
+            attempts.load(std::sync::atomic::Ordering::SeqCst),
+            2,
+            "reasoning guard at the low tier must step down to disabled"
         );
     }
 

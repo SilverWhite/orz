@@ -2,13 +2,17 @@
 //!
 //! Thinking policy (IP1 → D-6, FIX_PLAN 2026-08-06): thinking is carried by
 //! `ModelConfig::thinking` (a transport-level knob — `ModelRequest` stays
-//! thinking-free so a caller cannot enable it by accident). The restored
-//! max-config is `enabled` + effort `max` + 256K budget (OUTPUT-BUDGET-
-//! RESTORE-AND-STALL-GUARD 2026-08-20, ADR-0010 §14.35; 32K 止损值
-//! 2026-08-19 由输出预算恢复取代), decided after the 2026-08-07 live probe
-//! (reasoning deltas flow ~0.5s after connect; content arrives ~30s later
-//! on hard tasks; `usage.reasoning_tokens` is reported per round). The
-//! empty-final-content retry chain lives in the transport.
+//! thinking-free so a caller cannot enable it by accident). The default
+//! workpoint is `enabled` + effort `high` + 256K budget (official harness
+//! default — OUTPUT-BUDGET-RESTORE-AND-STALL-GUARD 2026-08-20 修订,
+//! ADR-0010 §14.35 第 5 项: 默认档 max → high), decided after the
+//! 2026-08-07 live probe (reasoning deltas flow ~0.5s after connect;
+//! content arrives ~30s later on hard tasks; `usage.reasoning_tokens` is
+//! reported per round). `EnabledMax` remains an explicit optional tier for
+//! hard tasks; the stream degradation ladder steps high → low → disabled
+//! (`EnabledLow` = DeepSeek `reasoning_effort: "low"`, the ladder's middle
+//! tier, 设计 §3.6). The empty-final-content retry chain lives in the
+//! transport.
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -69,12 +73,25 @@ impl Default for RetryPolicy {
 /// Thinking mode for the provider request (D-6, FIX_PLAN 2026-08-06).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum ThinkingMode {
-    /// DeepSeek `thinking: {type: "enabled"}` + `reasoning_effort: "max"`
-    /// (the restored max-config; default).
+    /// DeepSeek `thinking: {type: "enabled"}` + `reasoning_effort: "high"`
+    /// (official harness default — 2026-08-20 修订, ADR-0010 §14.35 第 5
+    /// 项: 默认档 max → high; the degradation ladder steps high → low →
+    /// disabled). Default.
     #[default]
+    EnabledHigh,
+    /// DeepSeek `thinking: {type: "enabled"}` + `reasoning_effort: "low"`
+    /// (the ladder's middle tier — 方案 B + 中间档: degradation keeps a
+    /// shallow thinking chain instead of jumping straight to the
+    /// fast-answer mode).
+    EnabledLow,
+    /// DeepSeek `thinking: {type: "enabled"}` + `reasoning_effort: "max"`
+    /// (explicit optional tier for hard tasks — S4-validated baseline,
+    /// still sentinel-protected; on guard hits / empty-chain exhaustion it
+    /// degrades straight to `Disabled`, keeping the validated max path).
     EnabledMax,
     /// DeepSeek `thinking: {type: "disabled"}` — all output routed to
-    /// `content` (the P2-era mitigation; kept for parity/tests).
+    /// `content` (the P2-era mitigation; final degradation tier, kept for
+    /// parity/tests).
     Disabled,
 }
 
@@ -88,7 +105,7 @@ pub struct ModelConfig {
     pub max_tokens: u32,
     /// Retry/timeout policy (D-7). Defaults are the decided values.
     pub retry: RetryPolicy,
-    /// Thinking policy (D-6). Defaults to the restored max-config.
+    /// Thinking policy (D-6). Defaults to `EnabledHigh` (官方默认档).
     pub thinking: ThinkingMode,
 }
 

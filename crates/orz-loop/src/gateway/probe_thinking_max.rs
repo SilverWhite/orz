@@ -1,13 +1,15 @@
 //! Live probe — FIX_PLAN 2026-08-06 item ① (max 档实测, independent first).
 //!
-//! Measures the real DeepSeek V4 surface under the production thinking
-//! config: `thinking: {type: "enabled"}` + `reasoning_effort: "max"` +
+//! Measures the real DeepSeek V4 surface under the EXPLICIT max thinking
+//! tier: `thinking: {type: "enabled"}` + `reasoning_effort: "max"` +
 //! `max_tokens: 256_000` (OUTPUT-BUDGET-RESTORE-AND-STALL-GUARD
 //! 2026-08-20, ADR-0010 §14.35: 输出预算恢复 32K → 256K，回落档 128K;
-//! previously 160_000 / 32_000) — latency, convergence, content behavior
-//! (empty content on tool rounds is legal), tool-round protocol
-//! (reasoning_content replay), and `usage.reasoning_tokens` (raw JSON —
-//! the fork's typed `CompletionUsage` drops unknown fields).
+//! 2026-08-20 修订: 生产默认档为 high（官方默认），max 保留为显式可选档、
+//! 本探针即其实测路径; previously 160_000 / 32_000) — latency,
+//! convergence, content behavior (empty content on tool rounds is legal),
+//! tool-round protocol (reasoning_content replay), and
+//! `usage.reasoning_tokens` (raw JSON — the fork's typed `CompletionUsage`
+//! drops unknown fields).
 //!
 //! TWO probes:
 //!   1. `probe_thinking_max_tool_task`  — file-based multi-round tool task
