@@ -361,6 +361,21 @@
 > ADR-0010 §14.35 第 7 项 /
 > [设计 §4.6](docs/DEEPSEEK_OUTPUT_BUDGET_AND_STALL_GUARD_DESIGN_2026-08-20.md)
 > / BACKLOG 0d / TODO P0-0d。
+> 2026-08-20 默认 high + 三级梯 S3 重建 + S4 复验登记（用户指示推送后
+> 重建、换题复验；S3/S4 验证闭环 29→28）——S3 Linux musl 重建成功
+> （三件套时间戳 12:08，orz 104.4MB）。S4 **换题 make-doom-for-mips**
+> （P0-0d 退化防护起源题）单题复验（job `2026-08-20__20-08-50`，
+> RUN-CLI-6a86ee6c，wallclock 1740s 跑满、reward 0.0、零异常）——
+> 完成型空流 0、零 HTTP 400、零 idle 死线、**journal 命中率 92.18%**
+> （194 请求，hit 8,122,240 / miss 689,249，≥90% 达成）、哨兵/stall
+> 全零触发零误杀（600s/64K/30s 初值维持不调）、首输出 5.5s（对照 max
+> 基线约 66s）、output 169,182 tokens（reasoning 77%）输出成本估算
+> ¥0.78（对照 max ¥0.88）。high vs max 跨题参照（任务不同非严格同题）：
+> high 档 30 分钟内 194 请求/333 工具轮（max 85 请求）、每轮更快、
+> output 成本更低；命中率差异属跨题非档位回归；input 侧不可直接对照。
+> **计数：S3/S4 验证闭环 29→28**。登记于 ADR-0010 §14.35 第 8 项 /
+> [设计 §4.7](docs/DEEPSEEK_OUTPUT_BUDGET_AND_STALL_GUARD_DESIGN_2026-08-20.md)
+> / BACKLOG 0d / TODO P0-0d。
 2026-08-15 黑板 plan epoch 复查补强登记（ADR-0010 v1.15⑧）——plan_epoch 时间戳单调编号、身份一一对应强制、retention 保留最高编号快照。
 > 2026-08-15 黑板 plan epoch 复查遗留闭合登记（ADR-0010 v1.15⑨）——F2 原子写盘+回退加载、F4 跨进程 `.claim-<n>` 占号、F5 归档目录单一来源、F6 非法 epoch 显式报错、F7 归档失败入事件面（新 v0.2 `epoch_archive_write_failed`）、F9 `persisted_at` 更名、F10 设计 §5 措辞对齐。
 > 2026-08-15 ACAF fail-closed 生产启用裁决登记（用户裁决放行）——P2 IMPL-CONTROL-FABRIC 决策门放行；翻转执行与核查清单 ⑦⑨⑩⑪ 收口/边界登记待实施。

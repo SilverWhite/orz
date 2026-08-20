@@ -3,7 +3,8 @@
 > 状态：`S1-S4 全部闭合（max 基线）`；**2026-08-20 修订定稿（用户裁决：
 > 方案 B + 中间档）——默认 thinking 档 max → high（官方默认），降级梯
 > 插入 low 中间档（high → low → disabled → 失败），max 保留为可选档；
-> S1 代码 + S2 测试已完成（§4.5，orz b72a0a4），S3/S4 待续（§4.4）**。
+> S1 代码 + S2 测试（§4.5）、S1 全面审查处理（§4.6）、S3 重建 + S4 复验
+> （§4.7，换题 make-doom-for-mips）已全部闭合；计数 29 → 28**。
 > 实施登记见 §4.1–§4.3/§4.5。
 > 性质：P0-0d 后续（输出预算恢复，32K → 256K 评估）+ D-6 空流链改造（官方
 > EMPTY_RESPONSE 节奏适配）+ 退化检测器大升级（OUTPUT-DEGENERATION-GUARD
@@ -525,6 +526,44 @@ orz 1651f59，已提交、未推送）
 - **O5（已接受登记）**：三级梯 e2e 请求体子串匹配（`"\"high\""` 等）登记
   为已接受边界——mock 请求体可控、当前断言集合无实际误匹配风险。
 - 计数：审查处理不改变未闭合计数（仍 29），S3/S4 闭环后 29 → 28。
+
+### 4.7 S3 重建 + S4 复验登记（2026-08-20，用户指示推送后重建、换题复验；
+orz 1651f59 已推送；S3/S4 验证闭环 29 → 28）
+
+- **S3 重建**：Linux musl（ORZ-BUILD-MOUNT-001 契约，`build_orz_aliyun.sh`，
+  阿里云镜像源；输出 `D:/tb-eval/orz-linux`）；三件套时间戳更新 12:08
+  （orz 104,375,344 B / orz-signer 1,388,544 B / orz-acaf-provision
+  1,206,536 B）；构建日志 `build-20260820.log`。
+- **S4 复验（换题 make-doom-for-mips，harbor job `2026-08-20__20-08-50`，
+  trial `make-doom-for-mips__rTheTXd`，RUN-CLI-6a86ee6c，
+  12:09:16→12:38:16，wallclock 1740s 跑满、reward 0.0、零异常）**：
+  - **完成型空流：0**（194 个 model_output 中 text/tool_calls 双空 = 0；
+    orz.txt 零「completed empty response」重试警告）——32K 截断空流链
+    根因在换题后同样不出现。
+  - **零 HTTP 400、零 idle 死线、零 timeout**（events 中 126 处 "400"
+    均为字段数值：时间戳/effective_head_limit，非 HTTP 状态）。
+  - **命中率 journal 口径 92.18%**（hit 8,122,240 / miss 689,249，
+    194 请求，DoD ≥90% 达成）。
+  - **哨兵/stall 观测**：`reasoning_repetition` / `reasoning_stall`
+    / idle 死线全部 0 触发——本次无病态轮、无需降级；**stall 兜底零误杀**
+    （600s/64K 初值继续维持不调）。
+  - **首输出延迟 5.5s**（对照 max 基线 gpt2-codegolf 首请求约 66s——
+    high 档思考更短，首轮即出 blackboard_read 计划轮）。
+  - **用量/成本（journal 口径）**：194 请求；output tokens 169,182
+    （含 reasoning 130,689，占 77%，对照 max 基线 89%）；prompt
+    8,811,489（hit 8,122,240 / miss 689,249）；单请求最大 completion
+    7,082（无 >100K 异常、无预算放大）；按 ¥4.592/M 估算输出成本
+    ≈ **¥0.78**（对照 max 基线 ¥0.88，同口径下降约 12%）。
+  - **high vs max 跨题参照**（口径注意：任务不同——make-doom 源码探索
+    密集型 vs gpt2-codegolf 写作型，非严格同题对照）：high 档在相同
+    30 分钟预算内跑出 194 请求 / 333 工具轮（max 基线 85 请求），
+    每轮更快（首输出 5.5s vs 66s）、reasoning 占比更低（77% vs 89%）、
+    输出成本更低（¥0.78 vs ¥0.88）；命中率 92.18%（≥90% 达标，低于
+    max 基线 95.28%，属跨题差异，非档位回归）。input 侧跨题不可直接
+    对照（本轮 prompt 8.8M vs 基线 3.3M，来源=工具轮次多 2.3 倍）。
+- **校准结论**：600s/64K/30s 初值维持不调（零漏判零误杀）；默认 high
+  档本轮全链路无退化、无空流、无 400，机制稳定。
+- 计数：**S3/S4 验证闭环 29 → 28**。
 
 ## 5. 验收标准（DoD）
 

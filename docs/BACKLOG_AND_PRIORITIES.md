@@ -685,6 +685,21 @@
   （仍 29），S3/S4 闭环后 29 → 28。登记于 ADR-0010 §14.35 第 7 项 /
   [设计 §4.6](DEEPSEEK_OUTPUT_BUDGET_AND_STALL_GUARD_DESIGN_2026-08-20.md)
   / CLI_PROJECT_INDEX / TODO P0-0d。
+  **2026-08-20 S3 重建 + S4 复验登记（用户指示推送后重建、换题复验；
+  S3/S4 验证闭环 29 → 28）**：S3 Linux musl 重建成功（三件套时间戳
+  12:08，orz 104.4MB）。S4 **换题 make-doom-for-mips**（P0-0d 退化
+  防护起源题）单题复验（job `2026-08-20__20-08-50`，RUN-CLI-6a86ee6c，
+  wallclock 1740s 跑满、reward 0.0、零异常）——**完成型空流 0**、
+  零 HTTP 400、零 idle 死线、**journal 命中率 92.18%**（194 请求，
+  hit 8,122,240 / miss 689,249，≥90% 达成）、哨兵/stall 全零触发零误杀
+  （600s/64K/30s 初值维持不调）、首输出 5.5s（对照 max 基线约 66s）、
+  output 169,182 tokens（reasoning 77%）输出成本估算 ¥0.78（对照 max
+  ¥0.88）。high vs max 跨题参照：high 档 30 分钟内 194 请求/333 工具轮
+  （max 85 请求）、每轮更快、output 成本更低；命中率 92.18% 达标但低于
+  max 95.28%，属跨题差异非档位回归；input 侧不可直接对照。**计数：
+  S3/S4 验证闭环 29 → 28**。登记于 ADR-0010 §14.35 第 8 项 /
+  [设计 §4.7](DEEPSEEK_OUTPUT_BUDGET_AND_STALL_GUARD_DESIGN_2026-08-20.md)
+  / CLI_PROJECT_INDEX / TODO P0-0d。
 
 ### 0. 前置收尾（提交前需用户确认）
 

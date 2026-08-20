@@ -84,13 +84,16 @@
 
 - 未闭合总数：**28 项**（2026-08-19 0c 验证闭环 29 → 28；2026-08-20
   0d 验证闭环 29 → 28；2026-08-20 OUTPUT-BUDGET-RESTORE-AND-STALL-GUARD
-  S1 实施放行入账 28 → 29，**S3/S4 验证闭环 29 → 28**）
+  S1 实施放行入账 28 → 29，**S3/S4 验证闭环 29 → 28**；2026-08-20
+  THINKING-DEFAULT-HIGH-LADDER S1 实施放行入账 28 → 29，**S3/S4 换题
+  复验（make-doom-for-mips）验证闭环 29 → 28**）
   - P0-C：0 项（PLAN-FIRST 阶段 A/B/C 全部闭合，2026-08-16）
   - P0 评测冒烟暴露：0 项（P0-E 主项 7 项 + FUS-TOOL-SCOPE-CONTRACT 后续 2 项全部闭合 2026-08-18，见 P0-E grep 项后续①/②）
   - P0 Benchmark 完全体：1 项（FUS-BENCHMARK-FULL-EXEC 实施完成待验证，见 P0-F；验证闭环后回 27）
   - P0 折叠历史外挂：0 项（LEDGER-FOLD-EXTERNAL-FILE，S3/S4 验证闭环 2026-08-19，见 P0-0c）
   - P0 输出退化防护：0 项（OUTPUT-DEGENERATION-GUARD，S3/S4 验证闭环 2026-08-20，见 P0-0d）
   - P0 输出预算恢复与空流止损：0 项（OUTPUT-BUDGET-RESTORE-AND-STALL-GUARD，S1-S4 全部闭合 2026-08-20，见 P0-0d 后续）
+  - P0 默认 high + 三级降级梯：0 项（THINKING-DEFAULT-HIGH-LADDER，S3/S4 换题复验闭环 2026-08-20，见 P0-0d 后续 2）
   - P1 可并行审计/证据：9 项（组件登记 1、Windows 证据 3、DeepSeek 1、会话上下文监测 4）
   - P2 生产化决策门：5 项（Slice 3、Slice 4、ACAF 可选工程项、OPS 裁剪设计、OPS 生产接线裁决）
   - P3 收尾/清理：7 项（EVIDENCE-LOCAL-BROWSER、GATE-CHAIN、observed-scope 枚举、V11-IMPL-003、V11-IMPL-007、orz-host flaky、DC 硬信号 4/6）
@@ -653,11 +656,22 @@
 > 3 ignored）；O5 子串匹配登记为已接受。计数不变（仍 29）。登记于
 > ADR-0010 §14.35 第 7 项 /
 > [设计 §4.6](docs/DEEPSEEK_OUTPUT_BUDGET_AND_STALL_GUARD_DESIGN_2026-08-20.md)。
+> S3/S4 复验登记（2026-08-20，用户指示换题复验）：S3 Linux musl 重建
+> 成功（三件套 12:08）；S4 **换题 make-doom-for-mips**（P0-0d 退化起源
+> 题）单题复验（job `2026-08-20__20-08-50`，RUN-CLI-6a86ee6c，wallclock
+> 1740s 跑满、reward 0.0、零异常）——完成型空流 0、零 HTTP 400、零 idle
+> 死线、journal 命中率 92.18%（194 请求，≥90% 达成）、哨兵/stall 全零
+> 触发零误杀（600s/64K/30s 维持不调）、首输出 5.5s（对照 max 66s）、
+> output 169,182（reasoning 77%）估算 ¥0.78（对照 max ¥0.88）；high vs
+> max 跨题参照（任务不同非严格同题）：194 请求/333 工具轮 vs 85 请求，
+> 每轮更快、output 成本更低；命中率差异属跨题非档位回归。**计数：
+> S3/S4 验证闭环 29 → 28**。登记于 ADR-0010 §14.35 第 8 项 /
+> [设计 §4.7](docs/DEEPSEEK_OUTPUT_BUDGET_AND_STALL_GUARD_DESIGN_2026-08-20.md)。
 
 - [x] S1 代码（`ThinkingMode` 增 `EnabledLow`、默认 `EnabledHigh`、三级梯接线）
 - [x] S2 测试（high/low 请求头断言、三级梯路径、回归全绿）
-- [ ] S3 重建（Linux musl，ORZ-BUILD-MOUNT-001 契约）
-- [ ] S4 复验（难题单题 + high vs max 成本/产出对照；空流 0、零 400、命中率 ≥90%；计数 29→28）
+- [x] S3 重建（Linux musl，ORZ-BUILD-MOUNT-001 契约）
+- [x] S4 复验（换题 make-doom-for-mips；空流 0、零 400、命中率 92.18% ≥90%、无 stall 误杀；计数 29→28）
 
 ### P0-B FUS-RETRIEVAL-MECH（`implemented`；批次 1-6 已全部闭合，2026-08-14，保留供核对）
 

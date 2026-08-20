@@ -2253,6 +2253,28 @@ ADR §3.6 正文修订随实施登记。
    （仍 29），S3/S4 闭环后 29 → 28。登记于设计 §4.6 / BACKLOG 0d /
    CLI_PROJECT_INDEX / TODO P0-0d。
 
+8. **默认 high + 三级梯 S3 重建 + S4 复验登记（2026-08-20 用户指示推送
+   后重建、换题复验；orz 1651f59 已推送；S3/S4 验证闭环 29 → 28）**：
+   S3 Linux musl 重建成功（ORZ-BUILD-MOUNT-001 契约，三件套时间戳
+   12:08，orz 104.4MB）。S4 **换题 make-doom-for-mips**（P0-0d 退化
+   防护起源题）单题复验（harbor job `2026-08-20__20-08-50`，trial
+   `make-doom-for-mips__rTheTXd`，RUN-CLI-6a86ee6c，wallclock 1740s
+   跑满、reward 0.0、零异常）——**完成型空流 0**（194 个 model_output
+   双空 = 0、零空响应重试警告）；**零 HTTP 400、零 idle 死线、零
+   timeout**；**journal 口径命中率 92.18%**（hit 8,122,240 /
+   miss 689,249，194 请求，≥90% 达成）；reasoning 复读 / stall / idle
+   全零触发、**stall 兜底零误杀**（600s/64K/30s 初值维持不调）；首输出
+   延迟 5.5s（对照 max 基线约 66s）；用量（journal）：output 169,182
+   tokens（reasoning 130,689，占 77%，对照 max 89%）、prompt
+   8,811,489（hit 8,122,240 / miss 689,249）、单请求最大 completion
+   7,082；输出成本估算 ≈ **¥0.78**（对照 max 基线 ¥0.88）。**high vs
+   max 跨题参照**（任务不同，非严格同题）：high 档 30 分钟内 194 请求 /
+   333 工具轮（max 85 请求），每轮更快、reasoning 占比更低、输出成本
+   更低；命中率 92.18% 达标但低于 max 95.28%，属跨题差异非档位回归；
+   input 侧不可直接对照（工具轮多 2.3 倍致 prompt 8.8M vs 3.3M）。
+   **计数：S3/S4 验证闭环 29 → 28**。登记于设计 §4.7 / BACKLOG 0d /
+   CLI_PROJECT_INDEX / TODO P0-0d。
+
 ### 14.31 v1.31 补写裁决索引（2026-08-19）
 
 本节记录冻结后的显式补写；规范正文以所指章节为准，补写明确取代以下既往条款。
