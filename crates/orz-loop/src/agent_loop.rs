@@ -1910,7 +1910,6 @@ pub(crate) async fn run_agent_loop(
             tool_calls: response.tool_calls.clone(),
             reasoning_content: response.reasoning_content.clone(),
         });
-        let mut assistant_parts: Vec<String> = Vec::new();
         // Pending policy messages (denial breaker) — appended AFTER the
         // tool batch completes so no user message lands between the
         // assistant declaration and its tool replies (provider protocol;
@@ -1944,7 +1943,7 @@ pub(crate) async fn run_agent_loop(
                 return Err(AgentLoopError::Cancelled);
             }
             if round_inject_tokens >= svc.max_inject_tokens_per_round {
-                let (result, feedback) = refuse_inject_budget(
+                let (_, feedback) = refuse_inject_budget(
                     writer,
                     messages,
                     tc,
@@ -1959,7 +1958,6 @@ pub(crate) async fn run_agent_loop(
                     Some(PolicyFeedback::Succeeded) => round_had_success = true,
                     None => {}
                 }
-                assistant_parts.push(format!("[{}] {}", tc.name, result.output));
                 continue;
             }
             // PLAN-FIRST 阶段 A (2026-08-16, ADR-0010 §14.17): 计划轮只允许
@@ -1970,7 +1968,7 @@ pub(crate) async fn run_agent_loop(
                 // P3-5 (2026-08-16): 同一计划轮最多一次 plan_write ——
                 // 重填反馈在下一轮注入，同轮第二次提交无意义且会绕过
                 // “错误反馈后重填”的交互语义。
-                let (r, f) = plan_round_denied(
+                let (_, f) = plan_round_denied(
                     writer,
                     messages,
                     tc,
@@ -1983,14 +1981,13 @@ pub(crate) async fn run_agent_loop(
                     PolicyFeedback::Denied(key) => round_denials.push(key),
                     PolicyFeedback::Succeeded => round_had_success = true,
                 }
-                assistant_parts.push(format!("[{}] {}", tc.name, r.output));
                 continue;
             }
             if plan_gate.is_some()
                 && tc.name != crate::planning::PLAN_WRITE_TOOL
                 && tc.name != crate::planning::BLACKBOARD_READ_TOOL
             {
-                let (r, f) = plan_round_denied(
+                let (_, f) = plan_round_denied(
                     writer,
                     messages,
                     tc,
@@ -2003,7 +2000,6 @@ pub(crate) async fn run_agent_loop(
                     PolicyFeedback::Denied(key) => round_denials.push(key),
                     PolicyFeedback::Succeeded => round_had_success = true,
                 }
-                assistant_parts.push(format!("[{}] {}", tc.name, r.output));
                 continue;
             }
             // PLAN-FIRST 阶段 C (2026-08-16, ADR-0010 §14.17⑱ / 设计 §4):
@@ -2015,7 +2011,7 @@ pub(crate) async fn run_agent_loop(
                 && profile.role == AgentRole::Main
                 && !AgentLoopController::is_console_surface_tool(&tc.name)
             {
-                let (r, f) = plan_round_denied(
+                let (_, f) = plan_round_denied(
                     writer,
                     messages,
                     tc,
@@ -2028,7 +2024,6 @@ pub(crate) async fn run_agent_loop(
                     PolicyFeedback::Denied(key) => round_denials.push(key),
                     PolicyFeedback::Succeeded => round_had_success = true,
                 }
-                assistant_parts.push(format!("[{}] {}", tc.name, r.output));
                 continue;
             }
             let target = route(&tc.name);
@@ -2239,7 +2234,6 @@ pub(crate) async fn run_agent_loop(
                 Some(PolicyFeedback::Succeeded) => round_had_success = true,
                 None => {}
             }
-            assistant_parts.push(format!("[{}] {}", tc.name, result.output));
             // Count this result against the per-round injection budget (the
             // same `[tool] output` text the model receives).
             round_inject_tokens =
@@ -2258,15 +2252,6 @@ pub(crate) async fn run_agent_loop(
             // lane's orientation round count happens at the model-round
             // completion point (one completed logical model round counts
             // 1 regardless of tool-call count).
-        }
-        if !assistant_parts.is_empty() {
-            messages.push(Message {
-                role: Role::Assistant,
-                content: assistant_parts.join("\n"),
-                tool_call_id: None,
-                tool_calls: Vec::new(),
-                reasoning_content: None,
-            });
         }
         // PLAN-FIRST 阶段 A (2026-08-16, ADR-0010 §14.17): 一轮工具轮未写
         // plan_write（仅 blackboard_read 等）→ 无提交计数；达到上限机械
