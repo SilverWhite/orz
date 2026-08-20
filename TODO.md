@@ -82,18 +82,20 @@
 > 本快照只做计数与分组召回，明细以下方各分组勾选清单为唯一入口，不新增独立条目；
 > 后续扫描更新时同步替换本快照日期与计数。
 
-- 未闭合总数：**28 项**（2026-08-19 0c 验证闭环 29 → 28；2026-08-20
+- 未闭合总数：**27 项**（2026-08-19 0c 验证闭环 29 → 28；2026-08-20
   0d 验证闭环 29 → 28；2026-08-20 OUTPUT-BUDGET-RESTORE-AND-STALL-GUARD
   S1 实施放行入账 28 → 29，**S3/S4 验证闭环 29 → 28**；2026-08-20
   THINKING-DEFAULT-HIGH-LADDER S1 实施放行入账 28 → 29，**S3/S4 换题
-  复验（make-doom-for-mips）验证闭环 29 → 28**）
+  复验（make-doom-for-mips）验证闭环 29 → 28**；2026-08-21
+  CONTEXT-SCAFFOLDING-PULL-REDESIGN（0e）S1-S4 验证闭环 28 → 27）
   - P0-C：0 项（PLAN-FIRST 阶段 A/B/C 全部闭合，2026-08-16）
   - P0 评测冒烟暴露：0 项（P0-E 主项 7 项 + FUS-TOOL-SCOPE-CONTRACT 后续 2 项全部闭合 2026-08-18，见 P0-E grep 项后续①/②）
-  - P0 Benchmark 完全体：1 项（FUS-BENCHMARK-FULL-EXEC 实施完成待验证，见 P0-F；验证闭环后回 27）
+  - P0 Benchmark 完全体：1 项（FUS-BENCHMARK-FULL-EXEC 实施完成待验证，见 P0-F；验证闭环后回 26）
   - P0 折叠历史外挂：0 项（LEDGER-FOLD-EXTERNAL-FILE，S3/S4 验证闭环 2026-08-19，见 P0-0c）
   - P0 输出退化防护：0 项（OUTPUT-DEGENERATION-GUARD，S3/S4 验证闭环 2026-08-20，见 P0-0d）
   - P0 输出预算恢复与空流止损：0 项（OUTPUT-BUDGET-RESTORE-AND-STALL-GUARD，S1-S4 全部闭合 2026-08-20，见 P0-0d 后续）
   - P0 默认 high + 三级降级梯：0 项（THINKING-DEFAULT-HIGH-LADDER，S3/S4 换题复验闭环 2026-08-20，见 P0-0d 后续 2）
+  - P0 上下文结构块 PUSH→PULL：0 项（CONTEXT-SCAFFOLDING-PULL-REDESIGN，S1-S4 验证闭环 2026-08-21，见 P0-0e）
   - P1 可并行审计/证据：9 项（组件登记 1、Windows 证据 3、DeepSeek 1、会话上下文监测 4）
   - P2 生产化决策门：5 项（Slice 3、Slice 4、ACAF 可选工程项、OPS 裁剪设计、OPS 生产接线裁决）
   - P3 收尾/清理：7 项（EVIDENCE-LOCAL-BROWSER、GATE-CHAIN、observed-scope 枚举、V11-IMPL-003、V11-IMPL-007、orz-host flaky、DC 硬信号 4/6）
@@ -320,10 +322,11 @@
 - [ ] 验证④（用户指示暂缓）：2–3 题交叉（compile-compcert、hf-model-inference
   等 build/run 与网络类）。
 - [ ] 验证⑤（用户指示暂缓）：`run_official_2.1.sh` 89 题 5 批。
-- [ ] 闭合：验证全过 → BACKLOG/TODO/索引状态同步，未闭合 28 → 27。
+- [ ] 闭合：验证全过 → BACKLOG/TODO/索引状态同步，未闭合 27 → 26。
 
 ### P0-0c LEDGER-FOLD-EXTERNAL-FILE（P0；2026-08-18 用户裁决：先设计、不实施；
-同日用户指示优先实施——命中率问题优先于 P0-F 验证；S1/S2 闭合，S3/S4 待验证）
+同日用户指示优先实施——命中率问题优先于 P0-F 验证；S1-S4 全部闭合
+2026-08-19，计数 29 → 28）
 
 > 入口：[设计](docs/LEDGER_FOLD_EXTERNAL_FILE_DESIGN_2026-08-18.md)；
 > ADR-0010 §14.28（v1.28）；BACKLOG 0c。取代
@@ -367,11 +370,13 @@
   全请求字节稳定 + 外挂文件断言 + marker 路径提示 + 压缩后继续续号）；
   orz-loop 全量 462 通过（-j 1）、fmt 干净、clippy 与基线一致
   （lib 21 / lib test 26）。
-- [ ] S3（待验证）：Linux musl 重建（ORZ-BUILD-MOUNT-001，输出
-  `D:/tb-eval/orz-linux`）+ 时间戳校验。
-- [ ] S4（待验证）：make-doom-for-mips 单题复验——命中率 ≥90%（provider
-  usage 口径）、无 400、journal 断言不变（`workspace.run_terminal` 订单 →
-  ACAF 票据路径）；`ORZ_DEBUG_VIEW=1` 在验证③闭合时一并移除。
+- [x] S3（2026-08-19 闭合）：Linux musl 重建（ORZ-BUILD-MOUNT-001，输出
+  `D:/tb-eval/orz-linux` 07:07 新二进制；USTC/清华镜像源 502 不可达改
+  用阿里云镜像源）+ 时间戳校验。
+- [x] S4（2026-08-19 闭合）：path-tracing 单题复验（job
+  `2026-08-19__07-08-57`）——provider 口径命中率 95.33%（journal
+  95.54%）≥90%、无 400、折叠重付 3,742/6,493 ≤ ~15K、截断频率 0%
+  ≤30%；`ORZ_DEBUG_VIEW=1` 遗留清理项已于 2026-08-20 冒烟预检移除。
 - [x] B 定案（机械压缩；2026-08-18 用户裁决 D1=(b)，ADR-0010 §14.29）
   ——S4 复验账单对账定位「未处理的部分」= 压缩摘要调用换前缀重付整段视图
   miss（账单 89.71% vs 事件 93.26%；摘要调用两轮全失败零产出）：
@@ -674,7 +679,7 @@
 - [x] S4 复验（换题 make-doom-for-mips；空流 0、零 400、命中率 92.18% ≥90%、无 stall 误杀；计数 29→28）
 
 ### P0-0e CONTEXT-SCAFFOLDING-PULL-REDESIGN（P0；2026-08-21 设计定稿，
-S1 实施 + 全面审查处理已闭合，S3/S4 待验证）
+S1-S4 全部闭合 2026-08-21，计数 28 → 27）
 
 > 入口：[设计](docs/CONTEXT_SCAFFOLDING_PULL_REDESIGN_DESIGN_2026-08-21.md)；
 > ADR-0010 §14.35 第 10 项；BACKLOG 0e。
@@ -716,6 +721,11 @@ S1 实施 + 全面审查处理已闭合，S3/S4 待验证）
 > 基线 169,182/77% 基本持平；工具轮 226（基线 333）——REMAINING 零残留
 > + 汇总消息退役，输入增长放缓达成；首输出 8.1s（基线 5.5s，样本差异）。
 > 终态 `run_invalidated{status:wallclock}`（正常预算耗尽）。
+> **2026-08-21 方案 C 裁决（用户：无必需性、先看当前情况）**：0e S4 复验
+> 闭环后哨兵/stall 全零触发、命中率 94.45%，`REQUEST_MAX_TOKENS` 维持
+> 256K 暂不收紧；后续正式跑分中观察哨兵触发率与输出预算，若复发再评估
+> 64K。登记于设计 §6 / ADR-0010 §14.35 第 12 项 / BACKLOG 0e /
+> CLI_PROJECT_INDEX。
 
 - [x] S1 代码（退役 REMAINING 尾随注入 + session 面 + 工具定义增量 + 机械门禁回归）
 - [x] S2 测试（无 REMAINING 尾随、session 面渲染/越权、拒绝文本含剩余、既有断言更新）

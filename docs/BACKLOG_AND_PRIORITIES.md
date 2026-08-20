@@ -9,7 +9,7 @@
 
 | 优先级 | 含义 | 未闭合项 |
 |---|---|---|
-| P0 | 当前工作集：设计已冻结，裁决后立即实施 | 评测冒烟暴露问题（P0-E 主项 7 项 + FUS-TOOL-SCOPE-CONTRACT 后续 2 项全部闭合 2026-08-18：ACAF 容器供应、console 工具名、计划视图步骤 ID、订单发放前拒绝入事件面、grep 搜索范围契约、plan_write 校验消息形状、actions 形状探针、list_dir 范围计数、grep files_searched 全结局探针，见 0a）；CLASSICAL-EXEC-ASSISTANT（生产组件，2026-08-16 用户裁决转正式，S1-S4 全部闭合）；PLAN-FIRST-BLACKBOARD（阶段 A/B/C 全部闭合 2026-08-16）；**FUS-BENCHMARK-FULL-EXEC（P0，实施完成待验证——2026-08-18 用户指示实施、暂不测试；验证闭环后闭合，见 0b）**；**LEDGER-FOLD-EXTERNAL-FILE（P0，S1-S4 验证闭环 2026-08-19——命中率问题优先于 P0-F 验证；provider 口径 95.33% ≥90% 达标，见 0c）**；**OUTPUT-DEGENERATION-GUARD（P0，S1-S4 全部闭合 2026-08-20——make-doom 退化复读失败防护；8K 全统一 + 补读闭环 + 实时检测 + 32K，见 0d）** |
+| P0 | 当前工作集：设计已冻结，裁决后立即实施 | 评测冒烟暴露问题（P0-E 主项 7 项 + FUS-TOOL-SCOPE-CONTRACT 后续 2 项全部闭合 2026-08-18：ACAF 容器供应、console 工具名、计划视图步骤 ID、订单发放前拒绝入事件面、grep 搜索范围契约、plan_write 校验消息形状、actions 形状探针、list_dir 范围计数、grep files_searched 全结局探针，见 0a）；CLASSICAL-EXEC-ASSISTANT（生产组件，2026-08-16 用户裁决转正式，S1-S4 全部闭合）；PLAN-FIRST-BLACKBOARD（阶段 A/B/C 全部闭合 2026-08-16）；**FUS-BENCHMARK-FULL-EXEC（P0，实施完成待验证——2026-08-18 用户指示实施、暂不测试；验证闭环后闭合，见 0b）**；**LEDGER-FOLD-EXTERNAL-FILE（P0，S1-S4 验证闭环 2026-08-19——命中率问题优先于 P0-F 验证；provider 口径 95.33% ≥90% 达标，见 0c）**；**OUTPUT-DEGENERATION-GUARD（P0，S1-S4 全部闭合 2026-08-20——make-doom 退化复读失败防护；8K 全统一 + 补读闭环 + 实时检测 + 32K，见 0d）**；**CONTEXT-SCAFFOLDING-PULL-REDESIGN（P0，S1-S4 全部闭合 2026-08-21——预算块 PUSH→PULL + 工具输出汇总消息退役；命中率 94.45%、零哨兵触发、输入增长放缓；方案 C 维持 256K 暂不收紧（用户裁决），见 0e）** |
 | P1 | 无需裁决，可与 P0 并行 | FUS-COMPONENT-REGISTER、GAP-WINDOWS-EVIDENCE、IMPL-DEEPSEEK-TRANSPORT / SEC-CREDENTIALS、ORZ-SESSION-CONTEXT-MONITOR |
 | P2 | 生产化决策门：需用户裁决 | IMPL-CONTROL-FABRIC（fail-closed 启用、Slice 3/4）、OPS-PROTOCOL |
 | P3 | 收尾 / 清理 | EVIDENCE-LOCAL-BROWSER、GATE-CHAIN、DC 剩余信号、V11-IMPL-003/007、工作区收尾 |
@@ -285,7 +285,8 @@
   hf-model-inference）；⑤ `run_official_2.1.sh` 89 题 5 批。
 
 ### 0c. LEDGER-FOLD-EXTERNAL-FILE（P0；2026-08-18 用户裁决：先设计、不实施；
-同日用户指示优先实施——命中率问题优先于 P0-F 验证；S1/S2 闭合，S3/S4 待验证）
+同日用户指示优先实施——命中率问题优先于 P0-F 验证；S1-S4 全部闭合
+2026-08-19，计数 29 → 28）
 
 - 入口：[设计](LEDGER_FOLD_EXTERNAL_FILE_DESIGN_2026-08-18.md)；索引：
   [CLI_PROJECT_INDEX.md](../CLI_PROJECT_INDEX.md)；ADR-0010 §14.28（v1.28）；
@@ -757,6 +758,12 @@
   `run_invalidated{status:wallclock}`（正常预算耗尽）。**S1-S4 全部闭合，
   计数 28 → 27**。登记于 ADR-0010 §14.35 第 11 项 / 设计 §9 /
   CLI_PROJECT_INDEX / TODO P0-0e。
+- **2026-08-21 方案 C 裁决登记（用户裁决：暂不收紧、先看当前情况）**：0e
+  S4 复验闭环后实测哨兵/stall 全零触发（0/147）、命中率 94.45%，
+  `REQUEST_MAX_TOKENS` 256K 无收紧必需性，维持现状；后续正式跑分
+  （冒烟扫描 → 89 题 5 批）中观察哨兵触发率与输出预算，若回升/失控再
+  评估 64K（方案 C 重新启用）。登记于设计 §6 / ADR-0010 §14.35 第 12 项 /
+  TODO P0-0e / CLI_PROJECT_INDEX；计数不变（27）。
 
 ### 0. 前置收尾（提交前需用户确认）
 
