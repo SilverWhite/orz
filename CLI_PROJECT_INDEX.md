@@ -303,6 +303,20 @@
 > 验证闭环后 29 → 28。登记于 ADR-0010 §14.35 第 3 项 /
 > [设计 §4.2](docs/DEEPSEEK_OUTPUT_BUDGET_AND_STALL_GUARD_DESIGN_2026-08-20.md)
 > / BACKLOG 0d / TODO P0-0d。
+> 2026-08-20 输出预算恢复与空流止损 S3/S4 闭合登记（用户指示重建与复验＋
+> 对账；S1-S4 全部闭合）——S3 Linux musl 重建成功（ORZ-BUILD-MOUNT-001
+> 契约，三件套时间戳更新，orz 104.4MB）；S4 gpt2-codegolf 单题复验
+> （job `2026-08-20__18-46-52`，RUN-CLI-6a86db35，wallclock 跑满、
+> reward 0.0、无异常）：**完成型空流 0**（32K 截断空流链根因消除，首
+> 输出约 66s，对照 32K 时代 10.5 分钟级）、零 400、**journal 口径命中率
+> 95.28%**（85 请求，hit 3,110,656 / miss 153,990）、`reasoning_repetition`
+> 灵敏层拦截 1 次并降级收尾、stall 兜底（600s/64K）零触发零误杀、单请求
+> 最大 completion 20,776（无预算放大异常）；output 191,623 tokens、按
+> ¥4.592/M 估算输出成本 ≈ ¥0.88；控制台 CSV 待刷新补精确对账；600s/64K/
+> 30s 初值维持不调。**计数：S3/S4 验证闭环 29 → 28**。登记于
+> ADR-0010 §14.35 第 4 项 /
+> [设计 §4.3](docs/DEEPSEEK_OUTPUT_BUDGET_AND_STALL_GUARD_DESIGN_2026-08-20.md)
+> / BACKLOG 0d / TODO P0-0d。
 2026-08-15 黑板 plan epoch 复查补强登记（ADR-0010 v1.15⑧）——plan_epoch 时间戳单调编号、身份一一对应强制、retention 保留最高编号快照。
 > 2026-08-15 黑板 plan epoch 复查遗留闭合登记（ADR-0010 v1.15⑨）——F2 原子写盘+回退加载、F4 跨进程 `.claim-<n>` 占号、F5 归档目录单一来源、F6 非法 epoch 显式报错、F7 归档失败入事件面（新 v0.2 `epoch_archive_write_failed`）、F9 `persisted_at` 更名、F10 设计 §5 措辞对齐。
 > 2026-08-15 ACAF fail-closed 生产启用裁决登记（用户裁决放行）——P2 IMPL-CONTROL-FABRIC 决策门放行；翻转执行与核查清单 ⑦⑨⑩⑪ 收口/边界登记待实施。

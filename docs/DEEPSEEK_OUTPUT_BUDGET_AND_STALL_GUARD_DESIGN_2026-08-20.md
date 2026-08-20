@@ -1,7 +1,7 @@
-# DeepSeek 输出预算恢复与空流止损设计（2026-08-20 设计定稿；S1/S2 已实施）
+# DeepSeek 输出预算恢复与空流止损设计（2026-08-20 设计定稿；S1-S4 全部闭合）
 
-> 状态：`S1/S2 实施完成`（2026-08-20 用户放行实施；S1 代码 + S2 测试已闭合，
-> S3 重建、S4 复验待续；实施登记见 §4.1/§4.2）。
+> 状态：`S1-S4 全部闭合`（2026-08-20 用户放行实施 + 指示重建/复验/对账；
+> 实施登记见 §4.1–§4.3）。
 > 性质：P0-0d 后续（输出预算恢复，32K → 256K 评估）+ D-6 空流链改造（官方
 > EMPTY_RESPONSE 节奏适配）+ 退化检测器大升级（OUTPUT-DEGENERATION-GUARD
 > 从「content 复读检测」升级为「输出健康哨兵」）。
@@ -358,6 +358,38 @@ run_invalidated（reason 保持 degeneration，detail 区分族）。
   通过（orz-bin/orz-tui 等下游无破坏）。
 - 计数：S2 不改变未闭合计数（仍 29），S3/S4 验证闭环后 29 → 28。
 - 待续：S3 重建（Linux musl，ORZ-BUILD-MOUNT-001 契约）→ S4 复验。
+
+### 4.3 S3 重建 + S4 复验 + 对账登记（2026-08-20，用户指示重建与复验＋对账）
+
+- **S3 重建**：Linux musl（ORZ-BUILD-MOUNT-001 契约，
+  `build_orz_aliyun.sh`，输出 `D:/tb-eval/orz-linux`）；三件套时间戳更新
+  （orz 104,374,912 B / orz-signer / orz-acaf-provision，18:45）；
+  日志 `orz-linux/build-20260820.log`。
+- **S4 复验**（gpt2-codegolf 单题，harbor job `2026-08-20__18-46-52`，
+  trial `gpt2-codegolf__tgdGruX`，RUN-CLI-6a86db35，18:46:57→19:16:45，
+  wallclock 1740s 跑满、reward 0.0、无异常）：
+  - **完成型空流：0**（零 `empty_content_abnormal` 完成；stderr 无空响应
+    重试警告）——32K 截断空流链根因消除；首请求 10:47:17 prompt →
+    10:48:23 首输出（约 **66s**，对照 32K 时代 10.5 分钟级）。
+  - **零 400、零 idle 死线触发、零 timeout**。
+  - **命中率 journal 口径 95.28%**（hit 3,110,656 / miss 153,990，
+    85 请求，DoD ≥90% 达成）；provider 口径待控制台 CSV 刷新对账。
+  - **stall/哨兵观测**：`reasoning_repetition` 灵敏层触发 1 次
+    （10:58:24，5 个相同 reasoning delta）→ 不原样重试、直接 thinking
+    禁用降级 → 10:58:34 降级轮正常产出（text=Y、comp=878、reas=None）并
+    继续运行至预算；**reasoning-stall 兜底（600s/64K）零触发、零误杀**
+    （合法 reasoning 峰值 20,234 tokens / 约 2.5 min，远低于兜底；
+    对照合法锚点 17.7K/184s）；idle 30s 无完全静默事件。
+  - **用量/成本（journal 口径）**：85 请求；output tokens 191,623
+    （含 reasoning 170,906）；prompt tokens 3,264,646（hit 3,110,656 /
+    miss 153,990）；按设计实测 ¥4.592/M output 估算输出成本 ≈ **¥0.88**；
+    单次最大 completion 20,776（无 >100K 单请求、无预算放大异常）。
+    控制台 CSV（cost/amount-2026-08-20）未在磁盘可及路径，精确对账待
+    用户刷新附件后补登。
+  - **校准结论**：600s/64K 兜底初值在本负载无误杀、idle 30s 无漏判——
+    维持初值不调（S4 校准区间 300–900s / 32–128K / 20–30s 内）。
+- 计数：**S3/S4 验证闭环 29 → 28**。登记于 ADR-0010 §14.35 第 4 项 /
+  BACKLOG 0d / TODO P0-0d / CLI_PROJECT_INDEX。
 
 ## 5. 验收标准（DoD）
 
