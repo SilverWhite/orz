@@ -702,6 +702,44 @@
   [设计 §4.7](DEEPSEEK_OUTPUT_BUDGET_AND_STALL_GUARD_DESIGN_2026-08-20.md)
   / CLI_PROJECT_INDEX / TODO P0-0d。
 
+> - **2026-08-21 第一轮 5 题冒烟扫描（sweep-r1-g1）+ zero-chunk 重试窗口
+>   50s → 180s 修订（用户裁决：简单拉长窗口；节点超时降级无实际作用）**：
+>   冻结版 cf0be20 跑分环境预检全绿（Docker/镜像/数据集/orz 三件套哈希/
+>   API 探活），r1-g1 五题 2 通过（schemelike-metacircular-eval、
+>   build-pov-ray）3 未过（dna-assembly 哨兵链→Disabled 档解码错误非零退出、
+>   llm-inference-batching-scheduler 网络零 chunk 重试窗口耗尽非零退出、
+>   feal-linear-cryptanalysis 1800s 超时）；零 HTTP 400、零 run_invalidated、
+>   12 次哨兵（8× reasoning_stall + 4× reasoning_repetition，约 ¥2.5）。
+>   **归因**：llm-batching 约 1 分钟级 DeepSeek 节点抖动，transport 内链
+>   50s 窗口内 5 次重试即耗尽、run 非零退出（30 分钟 trial 被 1 分钟抖动
+>   杀死）；dna-assembly 哨兵链=降级梯按请求重置（每次新请求回 high）+ 
+>   Disabled 档重试遇 `error decoding response body`（已见 chunk 截断按
+>   ADR-0007 不重试）→ 直接杀 run。**修订**：`request_retry_window`
+>   50s → **180s**（model.rs 默认 + 测试断言；`request_max_retries` 10
+>   不变，双上限先到者止、实测 10 次 ≈ 约 2 分钟重试跨度）；终端解码
+>   错误重试兜底设计待用户确认边界（与本次修订批次合并 S3 重建一次到位）。
+>   S1/S2 已闭合、S3/S4 待续。登记于 ADR-0010 §14.36（v1.36）/
+>   [设计修订](STREAM_RETRY_RHYTHM_DESIGN_2026-08-20.md) /
+>   CLI_PROJECT_INDEX / TODO P0-0d 后续。
+
+> - **2026-08-21 哨兵 fail-fast 化 + 流式中段解码重试设计定稿登记（用户
+>   裁决：fail-fast 方向有道理、确认非架构原因后实施并显式标明；解码
+>   兜底按「无完整 tool_calls 即重试（有界）」；先设计、不动作）**：
+>   sweep r1-g1 12 次哨兵（8× stall + 4× rep，约 ¥2.5）归因=跨请求烧
+>   stall 是恢复机制副产品（降级梯每请求回 high、成功清零计数器）；
+>   harness 源码对照=step 边界有界重试（normal 默认 2 次）、无降级/无
+>   生成期哨兵、空即 step 失败。**主案**=会话级 thinking 档位（哨兵后
+>   不再回 high）+ 哨兵计数单调（成功不清零、达 3 显式 run_invalidated）
+>   + disabled 档哨兵即终止；严格案（哨兵即 step 失败）留对照。S0 证据
+>   门=下一批扫描采集哨兵触发上下文、与机械结构块无稳定相关才放行 S1。
+>   **解码兜底**=重试判定从「零 chunk」改「无完整 tool_calls」——已见
+>   chunk 的 Transport/解码截断（含 dna 的 `error decoding response
+>   body`）有界重试 1 次后显式失败；错误路径工具从未执行、重发幂等；
+>   重试计数入事件面。设计轮不动计数（27）。登记于 ADR-0010 §14.37
+>   （v1.37）/ ADR-0007 修订注记 / [fail-fast 设计](STALL_DEGENERATION_FAILFAST_DESIGN_2026-08-21.md)
+>   / [解码重试设计](MIDSTREAM_DECODE_RETRY_DESIGN_2026-08-21.md) /
+>   CLI_PROJECT_INDEX / TODO P0-0d 后续。
+
 ### 0e. CONTEXT-SCAFFOLDING-PULL-REDESIGN（P0；2026-08-21 设计定稿，
 **S1-S4 全部闭合 2026-08-21，计数 28 → 27**）
 

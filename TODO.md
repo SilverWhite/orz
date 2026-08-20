@@ -678,6 +678,68 @@
 - [x] S3 重建（Linux musl，ORZ-BUILD-MOUNT-001 契约）
 - [x] S4 复验（换题 make-doom-for-mips；空流 0、零 400、命中率 92.18% ≥90%、无 stall 误杀；计数 29→28）
 
+### P0-0d 后续 3：ZERO-CHUNK-RETRY-WINDOW-180S（P0 派生；2026-08-21
+用户裁决：简单拉长窗口，S1/S2 已闭合、S3/S4 待续）
+
+> 入口：[设计修订](docs/STREAM_RETRY_RHYTHM_DESIGN_2026-08-20.md)；
+> ADR-0010 §14.36（v1.36）；BACKLOG 0d（变更记录注记）。
+> 来源：第一轮 5 题冒烟扫描（sweep-r1-g1）llm-inference-batching-
+> scheduler trial——约 1 分钟级 DeepSeek 节点抖动，zero-chunk 重试在
+> 50s 窗口内 5 次即耗尽、run 非零退出（reward 0）。网络抖动本质是
+> 节点超时，降级无实际作用（用户裁决）。
+> 定案：`RetryPolicy::request_retry_window` 50s → **180s**；
+> `request_max_retries` 10 不变（双上限先到者止，实测 10 次 ≈ 约 2 分钟
+> 重试跨度，窗口放宽后次数上限成为主要约束）；非流式 create 退避窗口
+> 同步放宽；retry 参数参与请求头指纹（部署后首次请求一次性指纹变化）。
+> 终端解码错误重试兜底设计（dna-assembly Disabled 档 `error decoding
+> response body`）待用户确认边界后与本项批次合并 S3 重建一次到位。
+
+- [x] S1 代码（model.rs `request_retry_window` 默认值 50s→180s + 注释同步）
+- [x] S2 测试（`default_retry_policy_matches_stream_retry_rhythm` 断言
+  50s→180s；orz-loop 测试全绿）
+- [ ] S3 重建（Linux musl，ORZ-BUILD-MOUNT-001 契约；与终端解码重试
+  兜底批次合并时一次到位）
+- [ ] S4 复验（无 400、命中率 ≥90%、断连窗口内可骑过节点抖动）
+
+### P0-0d 后续 4：STALL-DEGENERATION-FAILFAST（P0 派生；2026-08-21
+设计定稿，纯文档登记、未实施）
+
+> 入口：[设计](docs/STALL_DEGENERATION_FAILFAST_DESIGN_2026-08-21.md)；
+> ADR-0010 §14.37 第 1 项；BACKLOG 0d。
+> 来源：sweep r1-g1 12 次哨兵归因——跨请求烧 stall 是恢复机制副产品
+> （降级梯每请求回 high、成功清零计数器，stall→成功→stall 可无限烧
+> 64K）；harness 对照=step 边界有界重试、空即 step 失败。
+> 用户裁决：fail-fast 方向有道理；前置证据门（S0）=确认空转/重复与
+> 架构无关；确认后实施、显式标明终止原因。
+> 主案：会话级 thinking 档位（哨兵后不再回 high）+ 哨兵计数单调
+> （成功不清零、达 3 → run_invalidated 显式终止）+ disabled 档哨兵
+> 即终止；严格案（哨兵即 step 失败）留对照。
+
+- [ ] S0 证据门（下一批扫描采集哨兵触发上下文，按设计 §2.1 判定）
+- [ ] S1 代码（会话级档位 + 计数单调 + disabled 档终止 + detail 显式化）
+- [ ] S2 测试（跨请求档位保持、计数不重置、达限/disabled 终止、回归全绿）
+- [ ] S3 重建（Linux musl；与窗口 180s + 解码兜底批次合并一次到位）
+- [ ] S4 复验（单 run 哨兵预算有界、显式终止可观测、命中率 ≥90%、零 400）
+
+### P0-0d 后续 5：MIDSTREAM-DECODE-RETRY（P0 派生；2026-08-21
+设计定稿，纯文档登记、未实施）
+
+> 入口：[设计](docs/MIDSTREAM_DECODE_RETRY_DESIGN_2026-08-21.md)；
+> ADR-0010 §14.37 第 2 项 / ADR-0007 修订注记；BACKLOG 0d。
+> 来源：dna-assembly Disabled 档重试遇 `error decoding response body`
+> （已见 chunk 后截断）按「已见输出不重试」直接杀 run；幂等性核对=
+> 错误路径工具从未执行、重发无副作用。
+> 用户裁决：按「无完整 tool_calls 即重试（有界）」实施，无异议。
+> 定案：重试判定从「零 chunk」改「无完整 tool_calls」——已见 chunk 的
+> Transport/解码截断有界重试 1 次后显式失败；已见完整 tool_calls /
+> Model / Parse / Cancelled 不重试；重试计数入事件面。
+
+- [ ] S1 代码（判定改「无完整 tool_calls」+ chunked 有界 1 次 + 事件面计数）
+- [ ] S2 测试（中段截断重试成功/耗尽、完整 tool_calls 不重试、Parse 不重试、
+  与降级梯交互、零 chunk 纪律回归全绿）
+- [ ] S3 重建（Linux musl；与窗口 180s + fail-fast 批次合并一次到位）
+- [ ] S4 复验（dna 类场景不再因解码错误杀 run、零 400、命中率 ≥90%）
+
 ### P0-0e CONTEXT-SCAFFOLDING-PULL-REDESIGN（P0；2026-08-21 设计定稿，
 S1-S4 全部闭合 2026-08-21，计数 28 → 27）
 

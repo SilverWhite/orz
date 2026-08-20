@@ -2,6 +2,14 @@
 
 > 状态：`designed`（2026-08-20 用户裁决：重试间隔缩短——idle 无数据
 > 判定 5s 一轮、10 次上限（总 50s 窗口），zero-chunk 重试窗口同步 50s）。
+> **2026-08-21 修订（用户裁决：简单拉长窗口）**：zero-chunk 重试窗口
+> 50s → **180s**——第一轮 5 题冒烟扫描（sweep-r1-g1）llm-batching
+> trial 约 1 分钟级 DeepSeek 节点抖动在 50s 窗口内 5 次重试后耗尽、
+> run 非零退出；节点超时场景降级无实际作用，拉长窗口让重试链骑过抖动；
+> `request_max_retries` 10 不变（双上限先到者止，实测 10 次 ≈ 约 2 分钟
+> 重试跨度，窗口放宽后次数上限成为主要约束）。ADR-0010 §14.36（v1.36）/
+> BACKLOG 变更记录 / TODO P0-0d 后续。S3 重建 → S4 复验（与终端解码
+> 重试兜底批次合并时一次到位）待续。
 > 性质：OUTPUT-DEGENERATION-GUARD 复验后续（P0-0d 延伸）+ transport
 > retry/timeout 参数修订（ADR-0007 / D-7 参数面，无新增旋钮）。
 > 实施路由：S1 代码 → S2 测试 → S3 重建 → S4 复验（≥90%、无 400、
@@ -65,7 +73,7 @@ zero-chunk 重试窗口同步 50s、上限 10 次。**
 |------|------|------|------|
 | `stream_idle_warn` | 20s | **5s** | 完全无数据 5s 即警告（每静默段一次） |
 | `stream_idle_timeout` | 90s | **50s** | 完全无数据 50s（= 5s×10 轮）硬中断，进入 zero-chunk 重试链 |
-| `request_retry_window` | 32s | **50s** | zero-chunk 重试链窗口上限（对齐 10 次 × 5s；非流式 create 退避窗口同步） |
+| `request_retry_window` | 32s | **50s**（2026-08-21 修订 **180s**） | zero-chunk 重试链窗口上限（对齐 10 次 × 5s；非流式 create 退避窗口同步；2026-08-21 用户裁决 50s→180s——节点超时约 1 分钟级、简单拉长窗口骑过抖动，次数上限 10 不变） |
 | `request_max_retries` | 10 | 10（不变） | 重试次数上限保持 |
 | `request_timeout` | 18min | 18min（不变） | 非流式路径单请求墙钟 |
 | `stream_total_timeout` | 30min | 30min（不变） | 流式总预算兜底 |

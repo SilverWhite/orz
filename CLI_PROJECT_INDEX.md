@@ -870,6 +870,26 @@
 > 256K 暂不收紧；后续正式跑分中观察哨兵触发率与输出预算，若复发再评估 64K。
 > 登记于 ADR-0010 §14.35 第 12 项 / 设计 §6 / BACKLOG 0e / TODO P0-0e；
 > 计数不变（27）。
+> 2026-08-21 第一轮 5 题冒烟扫描 + zero-chunk 重试窗口 50s→180s 修订登记
+> （用户裁决：简单拉长窗口）——冻结版 cf0be20 环境预检全绿后跑 sweep-r1-g1
+> 五题 2 通过 3 未过（零 400、零 run_invalidated、12 次哨兵约 ¥2.5）；
+> llm-batching 断连归因=约 1 分钟级 DeepSeek 节点抖动在 50s 窗口内 5 次
+> 重试耗尽、run 非零退出——节点超时降级无实际作用，`request_retry_window`
+> 50s→180s（次数上限 10 不变、双上限先到者止）；S1/S2 已闭合、S3/S4 待续
+> （与终端解码重试兜底批次合并一次重建）。登记于 ADR-0010 §14.36 / 设计
+> STREAM-RETRY-RHYTHM 修订 / BACKLOG 0d / TODO P0-0d 后续 3；计数不变（27）。
+> 2026-08-21 哨兵 fail-fast 化 + 流式中段解码重试设计定稿登记（用户裁决：
+> fail-fast 方向有道理、前置证据门确认非架构原因后实施并显式标明；解码
+> 兜底按「无完整 tool_calls 即重试（有界）」；先设计、不动作）——跨请求
+> 烧 stall 归因=恢复机制副产品（降级梯每请求回 high、成功清零计数器）；
+> harness 对照=step 边界有界重试、无降级、空即 step 失败。主案=会话级
+> 档位 + 计数单调达限显式 run_invalidated + disabled 档即终止（严格案留
+> 对照）；S0 证据门=下批扫描采集哨兵上下文判定。解码兜底=重试判定从
+> 「零 chunk」改「无完整 tool_calls」，已见 chunk 的 Transport/解码截断
+> 有界重试 1 次。登记于 ADR-0010 §14.37 / ADR-0007 修订注记 /
+> [fail-fast 设计](docs/STALL_DEGENERATION_FAILFAST_DESIGN_2026-08-21.md) /
+> [解码重试设计](docs/MIDSTREAM_DECODE_RETRY_DESIGN_2026-08-21.md) /
+> BACKLOG 0d / TODO P0-0d 后续 4/5；设计轮不动计数（27）。
 >
 > 当前唯一自然语言设计权威是 [`ADR-0010`](adr/ADR-0010-fusion-runtime-and-agent-architecture.md)。本文件只负责召回和路由，不替代 ADR、Schema、审计结论、测试证据或源代码。
 >

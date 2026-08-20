@@ -2,6 +2,14 @@
 
 - 状态：accepted
 - 日期：2026-08-07
+- **2026-08-21 修订注记（ADR-0010 §14.37 第 2 项 / MIDSTREAM_DECODE_RETRY_
+  DESIGN_2026-08-21）**：流式中断重试判定从「零 chunk」扩展为「无完整
+  tool_calls」——Transport/Timeout 类中断（含 `error decoding response
+  body` 中段截断、`stream ended without finish_reason`）且失败流未解码出
+  完整 tool_calls 均可重试（错误路径工具从未执行、重发幂等）；零 chunk
+  维持 180s 窗口/10 次上限（ADR-0010 §14.36），已见 chunk 至多 1 次额外
+  重试；已见完整 tool_calls / Model / Parse / Cancelled 维持不重试。
+  纯文档登记、未实施（设计轮）。
 - 关联：`存档/docs/implementation-history/FIX_PLAN_2026-08-06.md` D-7（跑分 P1/LOOP-16、P8）、`architecture/DEEPSEEK_ADAPTER_CONTRACT_v0.1.md` §2.5/§4（首事件 timeout、bounded retry、首事件 vs 中断分开记录）、`integration/grok/README.md`（08-02「零重试边界」记录）、`orz-loop/src/gateway/transport.rs`、`orz-loop/src/gateway/model.rs`（`RetryPolicy`）、fork `third_party/async-openai/async-openai/src/client.rs`
 
 ## 1. 背景
