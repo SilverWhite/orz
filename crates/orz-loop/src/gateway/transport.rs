@@ -176,7 +176,8 @@ impl DegenerationDetector {
         }
         self.mark_first_chunk();
         self.saw_visible_output = true;
-        self.feed_repetition(
+        feed_repetition(
+            &mut self.trip,
             "content",
             CONTENT_REPETITION_DETAIL_PREFIX,
             delta,
@@ -197,7 +198,8 @@ impl DegenerationDetector {
         if self.saw_visible_output {
             return;
         }
-        self.feed_repetition(
+        feed_repetition(
+            &mut self.trip,
             "reasoning",
             REASONING_REPETITION_DETAIL_PREFIX,
             delta,
@@ -217,68 +219,6 @@ impl DegenerationDetector {
         }
         self.mark_first_chunk();
         self.saw_visible_output = true;
-    }
-
-    /// 复读检测共用核心（content 与 reasoning 同一算法，设计 §3.3）：
-    /// ① 连续相同 delta N=5 → 触发；② 累计 ≥1K token 且最近 1K token 内
-    /// 3-gram 重复率 >60% → 触发。
-    fn feed_repetition(
-        &mut self,
-        family: &str,
-        detail_prefix: &str,
-        delta: &str,
-        recent_deltas: &mut VecDeque<String>,
-        total_tokens: &mut usize,
-        window_tokens: &mut Vec<String>,
-    ) {
-        if self.trip.is_some() || delta.is_empty() {
-            return;
-        }
-        // ① 连续相同块：最近连续 N 个 delta 完全相同 → 触发。
-        recent_deltas.push_back(delta.to_string());
-        if recent_deltas.len() > DEGENERATION_CONSECUTIVE_DELTAS {
-            recent_deltas.pop_front();
-        }
-        if recent_deltas.len() == DEGENERATION_CONSECUTIVE_DELTAS && {
-            let last = recent_deltas.back().expect("len == N");
-            recent_deltas.iter().all(|d| d == last)
-        } {
-            self.trip = Some(format!(
-                "{detail_prefix} {n} identical {family} deltas in a row",
-                n = DEGENERATION_CONSECUTIVE_DELTAS
-            ));
-            return;
-        }
-        // ② 重复率：累计 ≥ 1K token 且最近 1K token 内 3-gram 重复率 > 60%
-        //    → 触发（复用 stagnation 的 n-gram 思路，轻量实现）。
-        let tokens = orz_assurance::orientation::stagnation::tokenize(delta);
-        *total_tokens += tokens.len();
-        window_tokens.extend(tokens);
-        let overflow = window_tokens.len().saturating_sub(DEGENERATION_MIN_TOKENS);
-        if overflow > 0 {
-            window_tokens.drain(..overflow);
-        }
-        if *total_tokens >= DEGENERATION_MIN_TOKENS {
-            let total_ngrams = window_tokens.len().saturating_sub(2);
-            if total_ngrams >= 1 {
-                let mut counts: HashMap<&[String], u32> = HashMap::new();
-                for index in 0..total_ngrams {
-                    *counts
-                        .entry(&window_tokens[index..index + 3])
-                        .or_insert(0) += 1;
-                }
-                let distinct = counts.len();
-                let duplicated = total_ngrams.saturating_sub(distinct);
-                let ratio = duplicated as f64 / total_ngrams as f64;
-                if ratio > DEGENERATION_NGRAM_REPEAT_RATIO {
-                    self.trip = Some(format!(
-                        "{detail_prefix} 3-gram repetition ratio {ratio:.2} \
-                         in the recent {} {family} tokens",
-                        window_tokens.len()
-                    ));
-                }
-            }
-        }
     }
 
     fn mark_first_chunk(&mut self) {
@@ -308,8 +248,7 @@ impl DegenerationDetector {
         }
         let est_tokens = self.reasoning_est_tokens();
         let elapsed = now.saturating_duration_since(first);
-        if elapsed >= STALL_FIRST_CONTENT_TIMEOUT || est_tokens >= STALL_REASONING_BUDGET_TOKENS
-        {
+        if elapsed >= STALL_FIRST_CONTENT_TIMEOUT || est_tokens >= STALL_REASONING_BUDGET_TOKENS {
             self.trip = Some(format!(
                 "{REASONING_STALL_DETAIL_PREFIX} no content/tool_calls for {:.0}s with \
                  ~{est_tokens} estimated reasoning tokens (budget {}s / {} tokens)",
@@ -322,6 +261,67 @@ impl DegenerationDetector {
 
     fn trip_reason(&self) -> Option<String> {
         self.trip.clone()
+    }
+}
+
+/// 复读检测共用核心（content 与 reasoning 同一算法，设计 §3.3）：
+/// ① 连续相同 delta N=5 → 触发；② 累计 ≥1K token 且最近 1K token 内
+/// 3-gram 重复率 >60% → 触发。自由函数（非方法）——调用方以不相交的
+/// 字段借用传入，避免方法整体借用与字段借用冲突。
+fn feed_repetition(
+    trip: &mut Option<String>,
+    family: &str,
+    detail_prefix: &str,
+    delta: &str,
+    recent_deltas: &mut VecDeque<String>,
+    total_tokens: &mut usize,
+    window_tokens: &mut Vec<String>,
+) {
+    if trip.is_some() || delta.is_empty() {
+        return;
+    }
+    // ① 连续相同块：最近连续 N 个 delta 完全相同 → 触发。
+    recent_deltas.push_back(delta.to_string());
+    if recent_deltas.len() > DEGENERATION_CONSECUTIVE_DELTAS {
+        recent_deltas.pop_front();
+    }
+    if recent_deltas.len() == DEGENERATION_CONSECUTIVE_DELTAS && {
+        let last = recent_deltas.back().expect("len == N");
+        recent_deltas.iter().all(|d| d == last)
+    } {
+        *trip = Some(format!(
+            "{detail_prefix} {n} identical {family} deltas in a row",
+            n = DEGENERATION_CONSECUTIVE_DELTAS
+        ));
+        return;
+    }
+    // ② 重复率：累计 ≥ 1K token 且最近 1K token 内 3-gram 重复率 > 60%
+    //    → 触发（复用 stagnation 的 n-gram 思路，轻量实现）。
+    let tokens = orz_assurance::orientation::stagnation::tokenize(delta);
+    *total_tokens += tokens.len();
+    window_tokens.extend(tokens);
+    let overflow = window_tokens.len().saturating_sub(DEGENERATION_MIN_TOKENS);
+    if overflow > 0 {
+        window_tokens.drain(..overflow);
+    }
+    if *total_tokens >= DEGENERATION_MIN_TOKENS {
+        let total_ngrams = window_tokens.len().saturating_sub(2);
+        if total_ngrams >= 1 {
+            let mut counts: HashMap<&[String], u32> = HashMap::new();
+            for index in 0..total_ngrams {
+                *counts.entry(&window_tokens[index..index + 3]).or_insert(0) += 1;
+            }
+            let distinct = counts.len();
+            let duplicated = total_ngrams.saturating_sub(distinct);
+            let ratio = duplicated as f64 / total_ngrams as f64;
+            if ratio > DEGENERATION_NGRAM_REPEAT_RATIO {
+                *trip = Some(format!(
+                    "{detail_prefix} 3-gram repetition ratio {ratio:.2} \
+                     in the recent {} {family} tokens",
+                    window_tokens.len()
+                ));
+            }
+        }
     }
 }
 
@@ -1656,6 +1656,391 @@ mod tests {
         assert_eq!(
             n, 1,
             "degeneration must never be retried (output already seen): {n} connections"
+        );
+    }
+
+    // ── OUTPUT-BUDGET-RESTORE-AND-STALL-GUARD (2026-08-20, ADR-0010 §14.35
+    // / 设计 §3.2/§3.3) ─────────────────────────────────────────────────────
+
+    /// SSE body: a COMPLETED stream with zero output (finish=length, no
+    /// content/reasoning/tool_calls) — the D-6 empty-response case.
+    fn empty_completed_sse_body() -> String {
+        "data: {\"id\":\"x\",\"object\":\"chat.completion.chunk\",\"created\":0,\"model\":\"m\",\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"length\"}]}\n\ndata: [DONE]\n\n".to_string()
+    }
+
+    /// SSE body with `n` identical reasoning-only delta frames (reasoning
+    /// repetition probe — content/tool_calls stay empty).
+    fn reasoning_repetition_sse_body(delta: &str, n: usize) -> String {
+        let frame = format!(
+            r#"{{"id":"x","object":"chat.completion.chunk","created":0,"model":"m","choices":[{{"index":0,"delta":{{"role":"assistant","reasoning_content":"{delta}"}},"finish_reason":null}}]}}"#
+        );
+        let mut body = String::new();
+        for _ in 0..n {
+            body.push_str(&format!("data: {frame}\n\n"));
+        }
+        body.push_str("data: [DONE]\n\n");
+        body
+    }
+
+    /// SSE body with one large low-repetition reasoning delta (~≥64K
+    /// estimated tokens — the reasoning-stall token-budget probe; distinct
+    /// tokens keep the 3-gram repetition detector silent so the stall
+    /// budget is the signal under test).
+    fn reasoning_stall_sse_body() -> String {
+        let mut reasoning = String::new();
+        for i in 0..16_000 {
+            reasoning.push_str(&format!("token{i} "));
+        }
+        let frame = format!(
+            r#"{{"id":"x","object":"chat.completion.chunk","created":0,"model":"m","choices":[{{"index":0,"delta":{{"role":"assistant","reasoning_content":"{reasoning}"}},"finish_reason":null}}]}}"#
+        );
+        format!("data: {frame}\n\ndata: [DONE]\n\n")
+    }
+
+    #[test]
+    fn detector_reasoning_repetition_trips_on_five_identical_deltas() {
+        // 灵敏层（设计 §3.3）：同一算法作用于 reasoning delta——连续相同
+        // N=5 → reasoning_repetition；循环型空转可在数 K 内识别，不依赖
+        // 大预算兜底。
+        let mut d = DegenerationDetector::default();
+        for _ in 0..4 {
+            d.feed_reasoning("think");
+            assert!(d.trip_reason().is_none());
+        }
+        d.feed_reasoning("think");
+        let reason = d
+            .trip_reason()
+            .expect("5 identical reasoning deltas must trip");
+        assert!(
+            reason.starts_with(REASONING_REPETITION_DETAIL_PREFIX),
+            "{reason}"
+        );
+        assert!(reason.contains("identical reasoning deltas"), "{reason}");
+    }
+
+    #[test]
+    fn detector_reasoning_repetition_trips_on_high_ratio() {
+        // 与 content 复读同一 1K 窗口 3-gram 重复率算法（>60% 触发）。
+        let a = "elided middle see archived log for full content";
+        let b = "see archived log for full content elided middle";
+        let mut d = DegenerationDetector::default();
+        for i in 0..200 {
+            d.feed_reasoning(if i % 2 == 0 { a } else { b });
+        }
+        let reason = d
+            .trip_reason()
+            .expect("high reasoning repetition must trip");
+        assert!(
+            reason.starts_with(REASONING_REPETITION_DETAIL_PREFIX),
+            "{reason}"
+        );
+        assert!(reason.contains("3-gram repetition ratio"), "{reason}");
+    }
+
+    #[test]
+    fn detector_reasoning_guards_stand_down_after_visible_output() {
+        // 设计 §3.3：reasoning 族信号仅 content/tool_calls 全空时启用——
+        // content 出现后复读与 stall 均不得再触发。
+        let mut d = DegenerationDetector::default();
+        d.feed_content("answer");
+        for _ in 0..5 {
+            d.feed_reasoning("think");
+        }
+        assert!(
+            d.trip_reason().is_none(),
+            "reasoning repetition must be disabled once content is seen"
+        );
+        d.reasoning_chars = STALL_REASONING_BUDGET_TOKENS * REASONING_CHARS_PER_TOKEN;
+        d.first_chunk_at = Some(
+            std::time::Instant::now()
+                - STALL_FIRST_CONTENT_TIMEOUT
+                - std::time::Duration::from_secs(1),
+        );
+        d.check_stall(std::time::Instant::now());
+        assert!(
+            d.trip_reason().is_none(),
+            "stall must be disabled once content is seen"
+        );
+    }
+
+    #[test]
+    fn detector_tool_arguments_stand_down_reasoning_guards() {
+        // tool_call arguments 进观测面——arguments 出现即 tool_calls 非空
+        // （可见输出成型），reasoning 族信号停用（工具轮为合法形态）。
+        let mut d = DegenerationDetector::default();
+        d.feed_tool_arguments("{\"path\":\"a.txt\"}");
+        for _ in 0..5 {
+            d.feed_reasoning("think");
+        }
+        assert!(
+            d.trip_reason().is_none(),
+            "tool args are visible output — reasoning guards off"
+        );
+        d.reasoning_chars = STALL_REASONING_BUDGET_TOKENS * REASONING_CHARS_PER_TOKEN;
+        d.first_chunk_at = Some(
+            std::time::Instant::now()
+                - STALL_FIRST_CONTENT_TIMEOUT
+                - std::time::Duration::from_secs(1),
+        );
+        d.check_stall(std::time::Instant::now());
+        assert!(
+            d.trip_reason().is_none(),
+            "stall must be disabled once tool args are seen"
+        );
+    }
+
+    #[test]
+    fn detector_stall_trips_on_time_budget() {
+        // 预算兜底层时间信号（设计 §3.3）：自首 chunk 起 600s 无
+        // content/tool_calls 且 reasoning 在流动 → reasoning_stall。
+        let mut d = DegenerationDetector::default();
+        d.feed_reasoning("some varied reasoning text");
+        d.first_chunk_at = Some(
+            std::time::Instant::now()
+                - STALL_FIRST_CONTENT_TIMEOUT
+                - std::time::Duration::from_secs(1),
+        );
+        d.check_stall(std::time::Instant::now());
+        let reason = d.trip_reason().expect("600s time budget must trip");
+        assert!(
+            reason.starts_with(REASONING_STALL_DETAIL_PREFIX),
+            "{reason}"
+        );
+        assert!(reason.contains("no content/tool_calls"), "{reason}");
+    }
+
+    #[test]
+    fn detector_stall_trips_on_token_budget() {
+        // 预算兜底层 token 信号（设计 §3.3）：reasoning 估算累计 ≥64K 仍无
+        // content/tool_calls → reasoning_stall（OR 语义的另一支）。
+        let mut d = DegenerationDetector::default();
+        d.feed_reasoning("distinct reasoning token sequence here");
+        d.reasoning_chars = STALL_REASONING_BUDGET_TOKENS * REASONING_CHARS_PER_TOKEN;
+        d.check_stall(std::time::Instant::now());
+        let reason = d.trip_reason().expect("64K token budget must trip");
+        assert!(
+            reason.starts_with(REASONING_STALL_DETAIL_PREFIX),
+            "{reason}"
+        );
+        assert!(reason.contains("estimated reasoning tokens"), "{reason}");
+    }
+
+    #[test]
+    fn detector_stall_does_not_trip_without_first_chunk() {
+        // 完全无 chunk 时 stall 不适用——静默由 idle 死线（30s）处理，
+        // stall 与 idle 互补不重叠（设计 §3.4）。
+        let mut d = DegenerationDetector::default();
+        d.check_stall(std::time::Instant::now());
+        assert!(
+            d.trip_reason().is_none(),
+            "no first chunk → idle handles silence"
+        );
+    }
+
+    #[test]
+    fn detector_reasoning_estimate_uses_chars_per_token() {
+        // 估算校准（设计 §3.3）：字符 ÷ REASONING_CHARS_PER_TOKEN（=2，
+        // 桥 8K 实测校准值；S4 用 usage 真实值复核）。
+        let mut d = DegenerationDetector::default();
+        d.feed_reasoning("abc");
+        assert_eq!(d.reasoning_est_tokens(), 1);
+        d.feed_reasoning("abcde");
+        assert_eq!(d.reasoning_est_tokens(), 4); // 8 chars / 2
+        assert_eq!(REASONING_CHARS_PER_TOKEN, 2);
+    }
+
+    #[test]
+    fn stall_budget_decoupled_from_max_tokens() {
+        // 设计 §3.3：空转预算与 max_tokens 解耦——256K 输出预算恢复不放大
+        // 空转兜底；常量钉死（S4 校准 32–128K）。
+        assert_eq!(STALL_REASONING_BUDGET_TOKENS, 64_000);
+        assert_eq!(crate::agent_loop::REQUEST_MAX_TOKENS, 256_000);
+        assert!(STALL_REASONING_BUDGET_TOKENS < crate::agent_loop::REQUEST_MAX_TOKENS as usize);
+    }
+
+    #[test]
+    fn empty_response_retry_parameters_match_design() {
+        // 设计 §3.2/§3.5：快速有界重试 ≤2 次、官方退避形状 500ms→10s +
+        // 10% jitter。
+        assert_eq!(EMPTY_RESPONSE_MAX_RETRIES, 2);
+        let b = empty_response_backoff();
+        assert_eq!(b.initial_interval, EMPTY_RESPONSE_BACKOFF_INITIAL);
+        assert_eq!(b.max_interval, EMPTY_RESPONSE_BACKOFF_MAX);
+        assert_eq!(b.randomization_factor, EMPTY_RESPONSE_BACKOFF_JITTER);
+    }
+
+    #[tokio::test]
+    async fn generate_stream_empty_content_retries_twice_then_degrades() {
+        // 设计 §3.2：完成型空响应 → 快速有界重试 ≤2 次（同参 max）→
+        // thinking 禁用降级；降级轮产出答案。
+        let empty = empty_completed_sse_body();
+        let ok = ok_sse_body("降级答案");
+        let attempts = std::sync::Arc::new(std::sync::atomic::AtomicU32::new(0));
+        let attempts_handle = attempts.clone();
+        let base = spawn_mock(move |_line, body| {
+            let n = attempts_handle.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            if n < 3 {
+                assert!(
+                    body.contains("\"type\":\"enabled\"") && body.contains("\"max\""),
+                    "attempts 1-3 use the max config: {body}"
+                );
+                MockResponse::sse(vec![&empty], std::time::Duration::ZERO)
+            } else {
+                assert!(
+                    body.contains("\"type\":\"disabled\"") && !body.contains("reasoning_effort"),
+                    "degraded attempt drops reasoning: {body}"
+                );
+                MockResponse::sse(vec![&ok], std::time::Duration::ZERO)
+            }
+        })
+        .await;
+        let t =
+            mock_transport_with_retry_thinking(&base, Default::default(), ThinkingMode::EnabledMax);
+        let mut chunks = Vec::new();
+        let r = t
+            .generate_stream(request(), None, None, &mut |c| chunks.push(c.to_string()))
+            .await
+            .unwrap();
+        assert_eq!(r.text.as_deref(), Some("降级答案"));
+        assert_eq!(chunks, vec!["降级答案".to_string()]);
+        assert_eq!(
+            attempts.load(std::sync::atomic::Ordering::SeqCst),
+            4,
+            "1 normal + 2 empty retries + 1 degraded"
+        );
+    }
+
+    #[tokio::test]
+    async fn generate_stream_empty_content_chain_end_errors_explicitly() {
+        // 设计 §3.2：链尾（快速重试 2 次 + 降级全空）→ 显式失败，绝不静默
+        // 空答案。
+        let empty = empty_completed_sse_body();
+        let base = spawn_mock(move |_line, _body| {
+            MockResponse::sse(vec![&empty], std::time::Duration::ZERO)
+        })
+        .await;
+        let t =
+            mock_transport_with_retry_thinking(&base, Default::default(), ThinkingMode::EnabledMax);
+        let err = t
+            .generate_stream(request(), None, None, &mut |_| {})
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(&err, GatewayError::Model(m) if m.contains("zero output")),
+            "chain end must error explicitly: {err:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn generate_stream_reasoning_repetition_jumps_to_degrade() {
+        // 设计 §3.2/§3.3：max 阶段触发 reasoning 复读哨兵 → 不原样快速
+        // 重试（长烧型原样重试大概率复现且贵）、直接跳降级。
+        let rep = reasoning_repetition_sse_body("think", 5);
+        let ok = ok_sse_body("降级答案");
+        let attempts = std::sync::Arc::new(std::sync::atomic::AtomicU32::new(0));
+        let attempts_handle = attempts.clone();
+        let base = spawn_mock(move |_line, body| {
+            let n = attempts_handle.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            if n == 0 {
+                assert!(
+                    body.contains("\"type\":\"enabled\""),
+                    "first attempt uses the max config: {body}"
+                );
+                MockResponse::sse(vec![&rep], std::time::Duration::ZERO)
+            } else {
+                assert!(
+                    body.contains("\"type\":\"disabled\"") && !body.contains("reasoning_effort"),
+                    "degraded attempt drops reasoning: {body}"
+                );
+                MockResponse::sse(vec![&ok], std::time::Duration::ZERO)
+            }
+        })
+        .await;
+        let t =
+            mock_transport_with_retry_thinking(&base, Default::default(), ThinkingMode::EnabledMax);
+        let r = t
+            .generate_stream(request(), None, None, &mut |_| {})
+            .await
+            .unwrap();
+        assert_eq!(r.text.as_deref(), Some("降级答案"));
+        assert_eq!(
+            attempts.load(std::sync::atomic::Ordering::SeqCst),
+            2,
+            "reasoning guard must skip identical retries and degrade directly"
+        );
+    }
+
+    #[tokio::test]
+    async fn generate_stream_reasoning_stall_jumps_to_degrade() {
+        // 设计 §3.3 预算兜底：reasoning 估算 ≥64K 仍无 content/tool_calls
+        // → reasoning_stall → 跳过原样重试、直接降级。
+        let stall = reasoning_stall_sse_body();
+        let ok = ok_sse_body("降级答案");
+        let attempts = std::sync::Arc::new(std::sync::atomic::AtomicU32::new(0));
+        let attempts_handle = attempts.clone();
+        let base = spawn_mock(move |_line, body| {
+            let n = attempts_handle.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            if n == 0 {
+                MockResponse::sse(vec![&stall], std::time::Duration::ZERO)
+            } else {
+                assert!(
+                    body.contains("\"type\":\"disabled\"") && !body.contains("reasoning_effort"),
+                    "degraded attempt drops reasoning: {body}"
+                );
+                MockResponse::sse(vec![&ok], std::time::Duration::ZERO)
+            }
+        })
+        .await;
+        let t =
+            mock_transport_with_retry_thinking(&base, Default::default(), ThinkingMode::EnabledMax);
+        let r = t
+            .generate_stream(request(), None, None, &mut |_| {})
+            .await
+            .unwrap();
+        assert_eq!(r.text.as_deref(), Some("降级答案"));
+        assert_eq!(
+            attempts.load(std::sync::atomic::Ordering::SeqCst),
+            2,
+            "stall must skip identical retries and degrade directly"
+        );
+    }
+
+    #[tokio::test]
+    async fn generate_stream_reasoning_guard_during_empty_retry_jumps_to_degrade() {
+        // 设计 §3.2：阶段 1 完成型空响应进入快速重试；阶段 2（重试中）触发
+        // reasoning 族哨兵 → 跳过剩余原样重试、直接降级（总 3 次而非 4 次）。
+        let empty = empty_completed_sse_body();
+        let rep = reasoning_repetition_sse_body("think", 5);
+        let ok = ok_sse_body("降级答案");
+        let attempts = std::sync::Arc::new(std::sync::atomic::AtomicU32::new(0));
+        let attempts_handle = attempts.clone();
+        let base = spawn_mock(move |_line, body| {
+            let n = attempts_handle.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            match n {
+                0 => MockResponse::sse(vec![&empty], std::time::Duration::ZERO),
+                1 => MockResponse::sse(vec![&rep], std::time::Duration::ZERO),
+                _ => {
+                    assert!(
+                        body.contains("\"type\":\"disabled\"")
+                            && !body.contains("reasoning_effort"),
+                        "degraded attempt drops reasoning: {body}"
+                    );
+                    MockResponse::sse(vec![&ok], std::time::Duration::ZERO)
+                }
+            }
+        })
+        .await;
+        let t =
+            mock_transport_with_retry_thinking(&base, Default::default(), ThinkingMode::EnabledMax);
+        let r = t
+            .generate_stream(request(), None, None, &mut |_| {})
+            .await
+            .unwrap();
+        assert_eq!(r.text.as_deref(), Some("降级答案"));
+        assert_eq!(
+            attempts.load(std::sync::atomic::Ordering::SeqCst),
+            3,
+            "empty → reasoning guard on retry → degrade (no 3rd identical retry)"
         );
     }
 
