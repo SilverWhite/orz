@@ -14,7 +14,7 @@
 > 性质：P0-0d 后续（输出健康哨兵跨请求语义修订）+ 0e 观察延伸（sweep
 > r1-g1 12 次哨兵归因）。关联：
 > [DEEPSEEK_OUTPUT_BUDGET_AND_STALL_GUARD_DESIGN_2026-08-20.md](DEEPSEEK_OUTPUT_BUDGET_AND_STALL_GUARD_DESIGN_2026-08-20.md)
-> （哨兵/阶梯现状）、[ADR-0010 §14.35/§14.36](adr/ADR-0010-fusion-runtime-and-agent-architecture.md)、
+> （哨兵/阶梯现状）、[ADR-0010 §14.35/§14.36](../adr/ADR-0010-fusion-runtime-and-agent-architecture.md)、
 > deepseek-harness 源码对照（tmp_dsh_review：agent-loop step 边界重试、
 > llm-retry 默认 2 次、无降级/无生成期哨兵）。
 > 实施路由：S0 证据门 → S1 代码 → S2 测试 → S3 重建 → S4 复验。

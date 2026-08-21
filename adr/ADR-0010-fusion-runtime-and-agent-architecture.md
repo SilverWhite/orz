@@ -2119,7 +2119,7 @@ ADR §3.6 正文修订随实施登记。
    "差异是什么"（补救=重读）。性质：FUS-LARGE-FILE-READ-CONTRACT（§14.22）
    信封扩展 + 写订单契约；实施路由 S1 代码 → S2 测试 → S3 重建 → S4 复验，
    待用户放行实施；设计轮不动计数（27）。登记于
-   [设计](docs/READ_ANCHOR_WRITE_GUARD_DESIGN_2026-08-21.md) /
+   [设计](../docs/READ_ANCHOR_WRITE_GUARD_DESIGN_2026-08-21.md) /
    BACKLOG 0f / TODO P0-0f / CLI_PROJECT_INDEX。
 
 2. **S1 代码实施登记（2026-08-21 用户指示开始 S1 实施；orz 工作树未提交）**：
@@ -2144,7 +2144,7 @@ ADR §3.6 正文修订随实施登记。
    build_read_anchor collapsible_if）；orz-tools 全量 44 个 grep/glob 失败
    为本机 rg 环境性既有失败（stash 基线复现一致）。计数：实施入账 27 → 28
    （S2-S4 待续）。登记于
-   [设计 §8](docs/READ_ANCHOR_WRITE_GUARD_DESIGN_2026-08-21.md) /
+   [设计 §8](../docs/READ_ANCHOR_WRITE_GUARD_DESIGN_2026-08-21.md) /
    BACKLOG 0f / TODO P0-0f / CLI_PROJECT_INDEX。
 
 3. **S2 测试闭合登记（2026-08-21 用户指示开始 S2；orz 工作树未提交）**：
@@ -2165,7 +2165,7 @@ ADR §3.6 正文修订随实施登记。
    orz-loop 全量 550 通过（0 失败）、fmt 干净、clippy 无新增告警（30 条
    既有位置核对）、cargo check --workspace 通过。计数：仍 28（S3-S4
    待续）。登记于
-   [设计 §9](docs/READ_ANCHOR_WRITE_GUARD_DESIGN_2026-08-21.md) /
+   [设计 §9](../docs/READ_ANCHOR_WRITE_GUARD_DESIGN_2026-08-21.md) /
    BACKLOG 0f / TODO P0-0f / CLI_PROJECT_INDEX。
 
 ### 14.37 v1.37 补写裁决索引（2026-08-21）
@@ -2191,7 +2191,7 @@ ADR §3.6 正文修订随实施登记。
    （轮次/近 3 事件/是否紧邻 blackboard 重读或折叠压缩后首请求），与
    机械结构块无稳定相关且跨任务分布不均才放行 S1。设计轮不动计数（27）。
    登记于
-   [设计](docs/STALL_DEGENERATION_FAILFAST_DESIGN_2026-08-21.md) /
+   [设计](../docs/STALL_DEGENERATION_FAILFAST_DESIGN_2026-08-21.md) /
    BACKLOG 0d / TODO P0-0d 后续。
 
 2. **流式中段解码错误有界重试设计定稿（2026-08-21 用户裁决：按「无完整
@@ -2207,7 +2207,7 @@ ADR §3.6 正文修订随实施登记。
    tool_calls / Model / Parse / Cancelled 维持不重试；重试计数入事件面
    （P1 既有登记项一并实施）。与 fail-fast 设计正交（解码重试不增减退化
    计数）。设计轮不动计数（27）。登记于
-   [设计](docs/MIDSTREAM_DECODE_RETRY_DESIGN_2026-08-21.md) /
+   [设计](../docs/MIDSTREAM_DECODE_RETRY_DESIGN_2026-08-21.md) /
    ADR-0007 修订注记 / BACKLOG 0d / TODO P0-0d 后续。
 
 3. **S0 证据门通过 + S1/S2 实施闭合登记（2026-08-21；用户放行实施 +
@@ -2258,7 +2258,7 @@ ADR §3.6 正文修订随实施登记。
    变化，既有纪律）。实施路由 S1 代码（model.rs 默认值 + 测试断言）+
    S2 测试已闭合；S3 重建 → S4 复验（与终端解码重试兜底设计批次合并
    时一次到位，待用户确认解码兜底边界）待续。登记于
-   [STREAM_RETRY_RHYTHM_DESIGN](docs/STREAM_RETRY_RHYTHM_DESIGN_2026-08-20.md)
+   [STREAM_RETRY_RHYTHM_DESIGN](../docs/STREAM_RETRY_RHYTHM_DESIGN_2026-08-20.md)
    修订（§3.1 现值列）/ BACKLOG 变更记录 / TODO P0-0d 后续。
 
 ### 14.35 v1.35 补写裁决索引（2026-08-20）
@@ -2582,6 +2582,51 @@ ADR §3.6 正文修订随实施登记。
     （transport.rs 仅 2 条既有 doc 告警）、`cargo check --workspace`
     通过。计数不变（仍 29），S3/S4 闭环后 29 → 28。登记于设计 §4.10 /
     BACKLOG 0d / TODO P0-0d 后续 6 / CLI_PROJECT_INDEX。
+16. **停滞守卫退役 + 缺口 A 审计留痕实施登记（2026-08-22 用户裁决：
+    生成期检测覆盖实际退化面，跨轮停滞守卫一并全部退役）**：
+    **退役**（S4 复验实证：跨轮停滞守卫对全会话 3–8-gram 统计、阈值
+    10，几乎所有长会话误杀 restart_requested——dna-assembly 等
+    12–341 次重复触发；0d 记录其「未拦截」make-doom 真实退化；复读
+    主要显现在思维链，生成期 reasoning 灵敏层已接管）——主/子代理
+    链路 `evaluate_stagnation` 终止判定、失败轮次审计、`stagnation.rs`
+    模块、`RuntimeStagnationGuard` 事件（v0.2 面）、TUI 投影、Python
+    reference/verifier/schema/doctor 清单全部退役；v0.1 冻结面保留
+    （历史 replay）。**缺口 A**（退化触发内容留痕）：transport 触发
+    时 WARN 输出重复 span + 两匹配偏移 + 窗口尾部；DNA 重跑
+    （RUN-CLI-6a88905f，26m26s、136 请求、命中率 98.64%、
+    `run_finished completed`）实证 reasoning 层 2 次触发（consecutive
+    1→2）均为正常思考对任务内容的重复引用（DNA 序列等式 + 技术短语
+    的 48 字符 span），**误杀坐实非病态复读**；停滞守卫退役后 run
+    不再 `run_invalidated restart_requested`。orz-loop 557 通过、
+    verifier 230 通过、assurance 1588 通过、doctor 仅剩 orz 未提交
+    dirty。登记于设计 §3.3/§4.11 / BACKLOG 0d / TODO P0-0d 后续 6 /
+    CLI_PROJECT_INDEX。
+17. **复读判定再校准设计定稿（2026-08-22 用户裁决：L=200 + 流内累计
+    3 次命中才中断+降级；content/reasoning 统一；先落设计；S1/S2 已
+    实施 2026-08-22）**：
+    缺口 A 实证 reasoning 灵敏层 48 字符任意偏移对正常任务内容重复
+    引用误杀（DNA 序列等式/技术短语 span）。**定案**：
+    `REPETITION_MIN_RUN_CHARS` 48→**200**、`REPETITION_WINDOW_CHARS`
+    96→**400**（=2L、缓冲 144→600）；触发门槛改**流内累计命中 ≥3 次
+    才中断+降级**（命中计数不因中间未命中内容重置；1–2 次命中仅审计
+    留痕；计数随流结束丢弃，会话级 consecutive 与 `DEGENERATION_LIMIT`
+    不变）；content/reasoning 统一；3-gram 兜底与 stall 兜底/fail-fast
+    纪律不变。判定语义=流内出现 ≥3 次完全相同的 200 字符 span（任意
+    偏移、起点距离 ≥200）才触发。漏判边界=短周期小量循环（<200 字符
+    仅 2–3 次）不再触发（危害可控）。**S1/S2 实施闭环（2026-08-22）**：
+    transport.rs 常量与命中门槛落地（`REPETITION_HIT_LIMIT=3`、窗口
+    命中后继续喂入、1–2 次命中仅审计留痕 WARN、3-gram/stall 兜底不
+    变）；orz-loop 560 通过 / 0 失败 / 3 ignored、fmt 干净、clippy 无
+    新增、workspace check 通过。同日 S1 全面审查处理（审查发现 4 项
+    全部处理）：设计 §3.3 信号表与头部同步再校准参数；`feed_chars_capped`
+    命中上限喂入（达门槛停止消费超大退化帧，子门槛全量消费语义不变）；
+    审计 WARN 与触发判定同 chunk 聚合（触发时不再单独输出「audit
+    only, not tripping」误导文案）；3-gram/stall 触发清空
+    `trigger_context`（防残留旧 span 误标为本次触发）。验证仍 560 通过、
+    fmt 干净、clippy transport.rs 仅 2 条既有 doc 告警。设计细节见
+    设计 §3.3 修订 / §4.11；
+    实施不改变计数（仍 29，S3/S4 验证闭环后 29 → 28）。登记于 BACKLOG
+    0d / TODO P0-0d 后续 6 / CLI_PROJECT_INDEX。
 
 ### 14.31 v1.31 补写裁决索引（2026-08-19）
 

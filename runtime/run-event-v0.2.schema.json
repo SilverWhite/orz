@@ -45,7 +45,6 @@
         "orientation_checkpoint",
         "diagnostic_coverage_checkpoint",
         "checkpoint_response",
-        "runtime_stagnation_guard",
         "tool_availability_check",
         "tool_belief_stagnation",
         "instruction_provenance_gate",

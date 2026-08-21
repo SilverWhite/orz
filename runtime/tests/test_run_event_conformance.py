@@ -196,7 +196,9 @@ PAYLOAD_NEGATIVE_CONTRACTS_V02: dict[Path, Path] = {
 # v0.2 envelope fixture filenames: the five v0.2-payload slugs plus the v0.1
 # slugs of the events kept on the v0.2 enum (retired events and the
 # orientation_checkpoint slot excluded — its v0.2 slug takes over).
-_V02_RETIRED_EVENT_TYPES = frozenset({"neutral_inquiry", "retrieval_completion_check"})
+_V02_RETIRED_EVENT_TYPES = frozenset(
+    {"neutral_inquiry", "retrieval_completion_check", "runtime_stagnation_guard"}
+)
 _V02_PAYLOAD_SLUGS = {slug for slug, _ in _PAYLOAD_SCHEMAS_V02.values()}
 V02_ENUM_SLUGS = [
     *sorted(_V02_PAYLOAD_SLUGS),
@@ -284,7 +286,10 @@ class RunEventV02ContractTests(unittest.TestCase):
         ADR-0010 §14.28 审查修复).
         MIDSTREAM-DECODE-RETRY (2026-08-21): 53 → 54
         (+transport_retry, ADR-0010 §14.37 第 2 项 / 设计 §2.3 事件面
-        重试计数——v0.2 专用新事件)."""
+        重试计数——v0.2 专用新事件).
+        停滞守卫退役 (2026-08-22): 54 → 53
+        (-runtime_stagnation_guard, ADR-0010 §14.39 — v0.2 生产者不再
+        写入该事件，v0.1 冻结面保留历史类型)."""
         schema = load_json(RUN_EVENT_SCHEMA_V02)
         enum_events = set(schema["properties"]["event_type"]["enum"])
         fixture_events = {
@@ -293,7 +298,7 @@ class RunEventV02ContractTests(unittest.TestCase):
             if path.name != "chained-run-finished.valid.json"
         }
         self.assertEqual(fixture_events, enum_events)
-        self.assertEqual(len(enum_events), 54)
+        self.assertEqual(len(enum_events), 53)
         self.assertNotIn("neutral_inquiry", enum_events)
         self.assertNotIn("retrieval_completion_check", enum_events)
 

@@ -8,7 +8,6 @@ import unittest
 from assurance import (
     AssuranceError,
     extract_public_outputs_from_runner_stream,
-    run_orientation_stagnation_integration_fixture,
     run_runner_public_output_extraction_fixture,
     verify_runner_public_output_extraction_fixture,
 )
@@ -120,52 +119,6 @@ class RunnerPublicOutputTests(unittest.TestCase):
             output_root=self.output_root,
         )
         self.assertEqual(verification, receipt)
-
-    def test_extracted_outputs_can_feed_integration_fixture(self) -> None:
-        stream = _stream()
-        stream["records"] = [
-            {
-                "record_id": f"REC-PUBLIC-{index:03d}",
-                "sequence": index,
-                "source": "assistant",
-                "channel": "assistant_delta",
-                "visibility": "public",
-                "text": "same visible output",
-            }
-            for index in range(11)
-        ]
-        self._write_stream(stream)
-        extraction = run_runner_public_output_extraction_fixture(
-            stream_path=self.stream_path,
-            output_root=self.output_root,
-        )
-        integration_path = self.root / "integration-input.json"
-        integration_root = self.root / "integration-output"
-        atomic_write_json(
-            integration_path,
-            {
-                "schema_version": "0.1.0-draft",
-                "fixture_kind": "orientation_stagnation_integration_fixture",
-                "task_id": TASK_ID,
-                "task_contract_sha256": TASK_CONTRACT_SHA256,
-                "step_index": 22,
-                "public_outputs": extraction["public_outputs"],
-                "retry_count": 0,
-                "retry_budget": 1,
-                "thresholds": {
-                    "repeated_content_threshold": 10,
-                    "ngram_repeat_threshold": 10,
-                },
-                "progress_markers": ["public-output-extracted"],
-            },
-        )
-
-        integration = run_orientation_stagnation_integration_fixture(
-            fixture_path=integration_path,
-            output_root=integration_root,
-        )
-
-        self.assertEqual(integration["decisions"]["stagnation_decision"], "restart_requested")
 
     def test_private_record_cannot_store_text(self) -> None:
         stream = _stream()

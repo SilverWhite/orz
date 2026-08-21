@@ -8,7 +8,6 @@ from assurance import (
     build_tool_availability_gate_receipt,
     build_tool_availability_infused_orientation_block,
     build_tool_availability_infused_orientation_checkpoint,
-    evaluate_runtime_stagnation_guard,
     evaluate_tool_belief_mismatch,
     evaluate_tool_belief_stagnation,
     probe_tool_availability,
@@ -397,26 +396,6 @@ class ToolInfusedOrientationCheckpointTests(unittest.TestCase):
 
 
 class IntegrationWithExistingGuardTests(unittest.TestCase):
-    def test_stagnation_guard_still_detects_repetition(self) -> None:
-        receipt = evaluate_runtime_stagnation_guard(
-            public_outputs=["same visible output"] * 11,
-            retry_count=0,
-            retry_budget=1,
-        )
-        self.assertEqual(receipt["decision"], "restart_requested")
-
-    def test_stagnation_guard_still_passes_varied_output(self) -> None:
-        receipt = evaluate_runtime_stagnation_guard(
-            public_outputs=[
-                "Read the current design document.",
-                "Added a neutral checkpoint schema.",
-            ],
-            retry_count=0,
-            retry_budget=1,
-            progress_markers=["doc-read", "schema-added"],
-        )
-        self.assertEqual(receipt["decision"], "continue")
-
     def test_orientation_checkpoint_still_neutral_without_tool_specs(self) -> None:
         checkpoint = build_orientation_checkpoint(
             task_id=TASK_ID,

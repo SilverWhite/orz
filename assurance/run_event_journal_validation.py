@@ -40,7 +40,9 @@ ASSURANCE = ROOT / "assurance"
 RUN_EVENT_SCHEMA = RUNTIME / "run-event-v0.1.schema.json"
 RUN_EVENT_SCHEMA_V02 = RUNTIME / "run-event-v0.2.schema.json"
 
-# 34-event registry: event_type -> (slug, payload schema file). The three
+# 34-event registry (v0.1 historical freeze; the retired
+# `runtime_stagnation_guard` stays registered for v0.1 replay — the v0.2
+# producer no longer writes it). The three
 # dual-track slugs resolve to the runtime/ Rust-track files (slice #17
 # adjudication — contract §6); `tool_belief_stagnation` stays assurance-only
 # (Rust never constructs it).
@@ -259,14 +261,6 @@ PRODUCER_SCHEMAS: dict[str, Path | None] = {
     / "tool-availability-check-event-payload-v0.1.schema.json",
     "tool-belief-stagnation-event-payload-v0.1.schema.json": ASSURANCE
     / "tool-belief-stagnation-event-payload-v0.1.schema.json",
-    # orientation-stagnation track — de-suffixed track identifiers, schema
-    # files added slice #17.
-    "orientation-stagnation-preflight-v0.1": ASSURANCE
-    / "orientation-stagnation-preflight-v0.1.schema.json",
-    "orientation-stagnation-run-started-v0.1": ASSURANCE
-    / "orientation-stagnation-run-started-v0.1.schema.json",
-    "orientation-stagnation-terminal-v0.1": ASSURANCE
-    / "orientation-stagnation-terminal-v0.1.schema.json",
     # canonical-cli track — de-suffixed identifiers.
     "canonical-cli-preflight-v0.1": ASSURANCE / "canonical-cli-preflight-v0.1.schema.json",
     "canonical-cli-run-started-v0.1": ASSURANCE / "canonical-cli-run-started-v0.1.schema.json",

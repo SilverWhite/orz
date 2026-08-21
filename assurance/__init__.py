@@ -93,14 +93,6 @@ from .endpoint_canonicalizer import (
     validate_endpoint_list,
     validate_filesystem_targets,
 )
-from .deepseek_api_observation import (
-    run_deepseek_api_observation_pipeline,
-    verify_deepseek_api_observation_pipeline,
-)
-from .deepseek_stream_observation import (
-    run_deepseek_stream_observation_fixture,
-    verify_deepseek_stream_observation_fixture,
-)
 from .grok_event_normalizer import (
     normalize_grok_runtime_receipt,
     project_grok_events_for_tui,
@@ -209,17 +201,8 @@ from .orientation_runtime_guard import (
     build_orientation_checkpoint,
     build_tool_availability_infused_orientation_block,
     build_tool_availability_infused_orientation_checkpoint,
-    evaluate_runtime_stagnation_guard,
     evaluate_tool_belief_stagnation,
     verify_orientation_response,
-)
-from .orientation_runtime_integration import (
-    run_orientation_stagnation_integration_fixture,
-    verify_orientation_stagnation_integration_fixture,
-)
-from .orientation_runtime_journal import (
-    verify_orientation_stagnation_runtime_journal,
-    write_orientation_stagnation_runtime_journal,
 )
 from .diagnostic_coverage import (
     DiagnosticCoverageState,
@@ -564,7 +547,6 @@ __all__ = [
     "enforce_adapter_call",
     "evaluate_instruction_provenance_gate",
     "evaluate_instruction_provenance_gate_with_canonicalizer",
-    "evaluate_runtime_stagnation_guard",
     "evaluate_source_visibility_gate",
     "evaluate_source_visibility_ledger_file",
     "evaluate_tool_belief_mismatch",
@@ -697,12 +679,9 @@ __all__ = [
     "GuardState",
     "RetrievalRecord",
     "call_deepseek_api",
-    "run_deepseek_api_observation_pipeline",
-    "run_deepseek_stream_observation_fixture",
     "run_docker_sandbox_probe",
     "run_gsa_no_model_runner_skeleton",
     "run_instruction_provenance_gate_fixture",
-    "run_orientation_stagnation_integration_fixture",
     "run_retrieval_subagent_fixture",
     "run_runner_public_output_extraction_fixture",
     "run_synthetic_user_task_evaluation",
@@ -730,16 +709,12 @@ __all__ = [
     "verify_capability_delegation",
     "verify_instruction_provenance",
     "verify_orientation_response",
-    "verify_orientation_stagnation_integration_fixture",
-    "verify_orientation_stagnation_runtime_journal",
     "verify_retrieval_result_sources",
     "verify_retrieval_subagent_fixture",
     "verify_runner_public_output_extraction_fixture",
     "verify_complex_task_readonly_projection",
     "verify_disposable_reproduction_receipt",
     "verify_canonical_guarded_cli_run",
-    "verify_deepseek_api_observation_pipeline",
-    "verify_deepseek_stream_observation_fixture",
     "verify_disposable_reproduction_execution_lock",
     "verify_disposable_reproduction_run_proof",
     "verify_gsa_runtime_preflight_projection",
@@ -754,7 +729,6 @@ __all__ = [
     "verify_sensitive_action_permit",
     "write_gsa_runtime_preflight_journal",
     "write_grok_prompt_tool_promotion_gate_receipt",
-    "write_orientation_stagnation_runtime_journal",
     "validate_profile_registry_semantics",
     "verify_profile_registry_completeness",
     "validate_artifact_registry_semantics",

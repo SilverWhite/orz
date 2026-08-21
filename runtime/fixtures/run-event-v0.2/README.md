@@ -149,5 +149,4 @@ GAP-RETRIEVAL-TOOLS audit doc §5). Re-captured 2026-08-10 after the review
 | `local-browser-read.jsonl` | bootstrap transition to `local_browser` with capability `available` — external lane runs the host `browser_read` tool (fake lane), committed result carries real full-text `web_page` evidence (ADR §3.7.3/§3.7.5); P0-B step 4: browser_read 计入候选计数域，`tool_completed` 携带 `candidate_count`/`candidate_cap` |
 | `real-doc-retrieval.jsonl` | internal lane: `project_doc_index` include_content → mechanical ledger/visibility/`retrieval_result_committed`/assessment (ADR §3.7.4/§3.7.5) |
 | `cross-prompt-restore.jsonl` | activation sidecar restore → restore event → cross-run disposition close (verifier restore-declaration chain) |
-| `pre-handoff-checkpoint.jsonl` | stagnation restart_requested → `orientation_checkpoint{trigger: "pre_handoff", injection_position: "pre_terminal"}` with empty message_block (audit-only, §11.1) |
 | `citation-validation-block.jsonl` | P0-B step 5: final answer `[来源: SRC-999]` (unknown source) → `citation_validation{decision: block}` + mechanical degradation block, run finishes normally (ADR §3.7.9) |

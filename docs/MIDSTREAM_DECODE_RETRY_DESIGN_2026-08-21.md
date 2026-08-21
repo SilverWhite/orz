@@ -10,7 +10,7 @@
 > 记录，run-event enum 54 项、schema/fixtures/conformance 同步；TUI
 > 事件协议同步）。）
 > 性质：P0-0d 后续（transport 重试分类修订，ADR-0007 §4 边界 ④ 扩展）。
-> 关联：[ADR-0007](adr/ADR-0007-transport-retry-policy.md) §2.1/§4、
+> 关联：[ADR-0007](../adr/ADR-0007-transport-retry-policy.md) §2.1/§4、
 > [STALL_DEGENERATION_FAILFAST_DESIGN_2026-08-21.md](STALL_DEGENERATION_FAILFAST_DESIGN_2026-08-21.md)
 > （正交：解码重试管无副作用传输失败、fail-fast 管退化哨兵语义）、
 > ADR-0010 §14.36（窗口 50s→180s，已实施 S1/S2）。

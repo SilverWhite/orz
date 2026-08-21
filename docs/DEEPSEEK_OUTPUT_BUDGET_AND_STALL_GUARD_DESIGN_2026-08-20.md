@@ -13,6 +13,15 @@
 > 5 相同 delta）；3-gram 路径②保留兜底；stall 兜底与 fail-fast 纪律
 > 不变。S1 实施放行入账 28 → 29；S2 不改变计数。
 > 实施登记见 §4.1–§4.3/§4.5/§4.9/§4.10。
+> **2026-08-22 修订（用户裁决：灵敏层复读判定再校准——L=200 + 流内
+> 累计 3 次命中才中断+降级；content/reasoning 统一；S1/S2 已实施
+> （§3.3 修订 / §4.11）、S3-S4 待续）**：缺口 A 实证 48 字符粒度对
+> 正常任务内容引用误杀（DNA 序列等式/技术短语 span），再校准
+> `REPETITION_MIN_RUN_CHARS` 48→**200**、`REPETITION_WINDOW_CHARS`
+> 96→**400**（缓冲 144→600）、新增 `REPETITION_HIT_LIMIT=3`——滚动
+> 窗口命中后继续喂入、1–2 次命中仅审计留痕 WARN、计数随流结束丢弃；
+> 3-gram/stall 兜底与 fail-fast 纪律不变。S1/S2 实施登记见 §4.11；
+> 实施不改变计数（仍 29，S3/S4 闭环后 28）。
 > 性质：P0-0d 后续（输出预算恢复，32K → 256K 评估）+ D-6 空流链改造（官方
 > EMPTY_RESPONSE 节奏适配）+ 退化检测器大升级（OUTPUT-DEGENERATION-GUARD
 > 从「content 复读检测」升级为「输出健康哨兵」）。
@@ -223,12 +232,15 @@ STREAM-RETRY-RHYTHM 未实施的 50s 定值）。
 
 | 信号 | 触发条件 | 触发后行为 |
 |------|----------|-----------|
-| content_repetition（现有） | 滑动窗口滚动哈希任意偏移：96 字符缓冲内出现两个相同 48 字符 L-gram（起点偏移 ≥48；哈希命中后字符级比对）* / 1K token 窗口 3-gram 重复率 >60%（保留兜底） | 中断、不重试（已见输出）、会话计数+1 |
-| reasoning_repetition（新增，**灵敏层**） | 同一算法作用于 reasoning delta（仅 content/tool_calls 全空时启用）；滚动哈希任意偏移（同 content 规则）+ 1K token 窗口 3-gram 重复率 >60%——空转若为思考循环可在数 K 内识别，不依赖大预算阈值 | 中断、直接降级（无可见输出、重试安全但不原样）、会话计数+1 |
+| content_repetition（现有） | 滑动窗口滚动哈希任意偏移：400 字符窗口内出现与记录区相同 200 字符 L-gram（起点距离 ∈ [200,400]；哈希命中后字符级比对），**流内累计命中 ≥3 次才触发（1–2 次仅审计留痕）** * / 1K token 窗口 3-gram 重复率 >60%（保留兜底，不经命中门槛） | 中断、不重试（已见输出）、会话计数+1 |
+| reasoning_repetition（新增，**灵敏层**） | 同一算法作用于 reasoning delta（仅 content/tool_calls 全空时启用）；滚动哈希任意偏移（同 content 规则：L=200/W=400、流内累计 ≥3 次命中）+ 1K token 窗口 3-gram 重复率 >60%——空转若为思考循环可在数 K 内识别，不依赖大预算阈值 | 中断、直接降级（无可见输出、重试安全但不原样）、会话计数+1 |
 | reasoning_stall（新增，**预算兜底层**） | 自首 chunk 起 600s（初值，S4 校准 300–900s）无 content/tool_calls 且 reasoning 在流动；或 reasoning 估算累计 ≥64K tokens（初值，S4 校准 32–128K）仍无 content/tool_calls——OR 触发 | 中断、直接降级、会话计数+1 |
 
 > *2026-08-21 修订：路径①（连续相同 delta N=5）由滚动哈希任意偏移检测
 > 取代，详下。
+> **2026-08-22 修订（再校准，用户裁决）：L 48→**200**、比较区 96→**400**
+> （缓冲 144→600）、触发门槛改**流内累计命中 ≥3 次**（间隔不重置；
+> 1–2 次仅审计留痕），content/reasoning 统一，详下。**
 
 **重试分类**（ADR-0007 对齐）：content 族→不重试；reasoning 族（stall/复读）
 →不原样、直接降级；完成型空响应→快速有界重试（§3.2）。
@@ -325,6 +337,51 @@ S1 代码已实施（§4.9）、S2 测试待续）**
 thinking 用「连续相似行 + 滑动窗口重复密度」两级升级（warn→abort）
 避免误杀合法重复，与我们的 fail-fast 降级/终止阶梯等价，不引入新机制。
 
+**2026-08-22 修订：灵敏层复读判定再校准（用户裁决：L=200 + 流内累计
+3 次命中才中断+降级；content/reasoning 统一；先落设计；S1/S2 已实施
+2026-08-22，见 §4.11）**
+
+**缺口 A 实证（DNA 重跑，RUN-CLI-6a88905f，26m26s；审计留痕见 §4.10
+缺口 A）**：reasoning 层 2 次触发（consecutive 1→2，降级梯
+EnabledMax→EnabledLow→Disabled），触发内容确认均为**正常思考对任务
+内容的重复引用**——① 重复 48 字符 span = DNA 序列等式
+`"tgaggatcccgggaattctcgagtaag..." = "...gggttaa"`（偏移 47/97）；
+② 重复 48 字符 span = 技术短语 "bases to the 3' side of the
+recognition sequence"（偏移 16/97）。模型降级后仍完成全部工作
+（177 工具轮、136 请求、`run_finished completed`）——**误杀坐实，
+非病态复读**。
+
+**定案（用户裁决）**：
+
+- **L=48 → 200**（`REPETITION_MIN_RUN_CHARS`）；**W=96 → 400**（=2L）；
+  缓冲 L+W=144 → **600**。窗口内任意周期 p ≤ 400 可命中；同字符连串
+  在 3 次命中门槛下需 ≥2L+2=**402** 才触发（400 字符=1 次、401=2 次、
+  402=3 次命中；旧表述「≥400 即触发」为单次命中语义下的等价条件）；
+  DNA 低熵正常序列仍免疫（随机 DNA 200 字符重复 ≈ 4⁻²⁰⁰ 量级）。
+- **触发门槛：流内累计命中 ≥3 次才中断 + 降级**——检测器在同一流内
+  持续喂入，命中计数**不因中间未命中内容重置**（「间隔不重置」）；
+  1–2 次命中仅审计留痕（WARN 输出触发 span + 窗口片段，缺口 A），不
+  中断、不降级；第 3 次命中中断流并按族处置（reasoning → 降级一档 /
+  content → 不重试透传）。命中计数随流结束丢弃（不跨请求累积）；
+  会话级 consecutive 与 `DEGENERATION_LIMIT=3` 语义不变。**命中口径**：
+  每次尾部 L-gram 与记录区匹配计 1 次命中（周期内容每字符位置可各计
+  1 次——真循环在首命中后 2 字符内即达 3 次，快速触发）。
+- content/reasoning 两族统一（同一 L、同一命中门槛）。
+- 3-gram 路径②（≥1K token >60%）保留兜底；stall 兜底（600s/64K）
+  与 fail-fast 纪律（会话级档位/计数单调/disabled 即终止/显式
+  detail）不变。
+- **判定语义更新**：流内出现 ≥3 次完全相同的 200 字符 span（任意
+  偏移、起点距离 ≥200、间隔不重置）才触发。
+
+**漏判边界（如实登记）**：短周期且总量小的循环（反复输出 <200 字符
+内容仅 2–3 次）不再触发——该类循环输出量小、危害可控；真循环一旦
+持续（累积出 200 字符相同块）仍触发。
+
+**成熟产品佐证（追加）**：openclaw 阈值「≥40 字符模式重复 ≥5 次」与
+本定案「≥200 字符 × 3 次命中」处于「更长 span、更少次数」象限，
+量级一致；200 字符完全重复在正常思考中不可达，3 次命中进一步过滤
+稀疏引用——组合即「仅循环特征」的简单形态，不引入周期/密度精细判定。
+
 ### 3.4 D. idle 死线收紧（stream_idle_timeout 50s → 30s）
 
 - 依据：实测 DeepSeek 流式数据流约 47 包/秒持续流动（60–80s 大请求全程有
@@ -350,6 +407,7 @@ thinking 用「连续相似行 + 滑动窗口重复密度」两级升级（warn�
 | 退化信号族 | content 复读 2 条 | + reasoning 复读 + reasoning-stall 2 条 | transport.rs |
 | `REPETITION_MIN_RUN_CHARS` | 无（路径①=连续 5 相同 delta） | **48**（可调；滚动哈希 L-gram 长度） | transport.rs |
 | `REPETITION_WINDOW_CHARS` | 无 | **96**（=2L，可调） | transport.rs |
+| 2026-08-22 修订 | — | `REPETITION_MIN_RUN_CHARS` **48→200**、`REPETITION_WINDOW_CHARS` **96→400**（缓冲 144→600）、新增**流内累计命中门槛 3**（`REPETITION_HIT_LIMIT`；1–2 次命中仅留痕） | transport.rs |
 | `DEGENERATION_CONSECUTIVE_DELTAS` | 5 | **路径①语义被取代**（滚动哈希任意偏移 48 字符；3-gram 路径②保留兜底） | transport.rs |
 | `stream_idle_timeout` | 50s（STREAM-RETRY-RHYTHM 定值，未实施） | **30s**（校准 20–30s） | model.rs RetryPolicy |
 
@@ -729,6 +787,114 @@ orz 1651f59 已推送；S3/S4 验证闭环 29 → 28）
 - 计数：S2 不改变计数（仍 29），S3/S4 验证闭环后 29 → 28。
 - 待续：S3 重建（Linux musl；与 fail-fast/解码兜底/180s 窗口批次合并）
   → S4 复验（dna-assembly 低熵误杀消除 + 真复读仍触发）。
+
+### 4.11 S3 重建 + S4 复验 + 停滞守卫退役 + 缺口 A + 灵敏层再校准设计
+登记（2026-08-22）
+
+**S3 重建**：Linux musl（ORZ-BUILD-MOUNT-001 契约，`build_orz_aliyun.sh`，
+两轮：cc77efe 基线轮 + 缺口 A 留痕轮，三件套时间戳更新）。
+
+**S4 复验（dna-assembly 单题，job `dna-assembly-s4`，RUN-CLI-6a887a1a，
+15m6s、118 请求、reward 0.0 无异常）**：命中率 98.2%（hit 4,379,264 /
+miss 80,340）≥90%；真实 HTTP 400 为 0（journal 中 10 处 "400" 均为
+订单号/UUID 子串）；content 层滚动哈希零触发（旧「5 identical deltas」
+误杀源消除）。**发现缺口 A**（reasoning 层滚动哈希触发 2 次，run 早期
+36s/96s，consecutive 1→2、降级梯 EnabledMax→EnabledLow→Disabled，但
+触发内容无日志留痕，无法判定真循环还是误杀）；**发现缺口 B**（会话级
+停滞守卫 `STAGNATION-NGRAM-REPEAT` 在 run 结束时以 max_ngram_repeat=40
+判 `restart_requested`——跨历史 run 核对几乎所有长会话均触发
+（12–341，全部 run_invalidated restart_requested），为普遍误杀）。
+
+**停滞守卫退役（用户裁决：一并全部退役，含失败轮次审计）**：生成期
+检测（滚动哈希 + stall 兜底 + fail-fast）覆盖实际退化面；复读主要显
+现在思维链，reasoning 灵敏层已接管；0d 记录停滞守卫「未拦截」make-doom
+真实退化；S4 实证其所有触发均为正常长会话误杀。退役范围=主/子代理
+链路 `evaluate_stagnation` 终止判定、失败轮次审计（agent_loop.rs）、
+`stagnation.rs` 模块、`RuntimeStagnationGuard` 事件（v0.2 面）、TUI
+投影、Python reference/verifier/schema/doctor 清单；v0.1 冻结面保留
+（历史 replay）；`tokenize` 迁移至 transport（3-gram 兜底依赖）。
+验证：orz-loop 557 通过 / 0 失败 / 3 ignored、fmt 干净、clippy 无新增、
+verifier 230 通过、assurance 1588 通过、doctor 仅剩 orz 未提交 dirty。
+
+**缺口 A（审计留痕）实施 + 现场定性**：transport 退化触发时 WARN 输出
+触发上下文（重复 48 字符 span + 两匹配偏移 + 窗口尾部）——新增
+`RollingRepetitionWindow::last_match`/`match_context` 与
+`DegenerationDetector::trigger_context`，单测
+`degeneration_trigger_context_records_repeated_span`（orz-loop
+556→557）。**DNA 重跑（job `dna-assembly-s4b`，RUN-CLI-6a88905f，
+26m26s、136 请求、reward 0.0 无异常）**：命中率 98.64%（hit
+6,954,240 / miss 96,065）；reasoning 层 2 次触发均留痕——① 重复
+48 字符 span = DNA 序列等式
+`"tgaggatcccgggaattctcgagtaag..." = "...gggttaa"`（偏移 47/97）；
+② 重复 48 字符 span = 技术短语 "bases to the 3' side of the
+recognition sequence"（偏移 16/97）——**均为正常思考对任务内容的
+重复引用，误杀坐实非病态复读**；降级后模型继续完成全部工作（177
+工具轮、`run_finished completed`——停滞守卫退役后不再
+`run_invalidated restart_requested`）。
+
+**灵敏层再校准设计定稿（用户裁决：L=200 + 流内累计 3 次命中才中断+
+降级；content/reasoning 统一；先落设计；S1/S2 已实施 2026-08-22）**：
+详 §3.3 修订——
+`REPETITION_MIN_RUN_CHARS` 48→200、`REPETITION_WINDOW_CHARS` 96→400
+（缓冲 144→600）；触发门槛改流内累计命中 ≥3 次（间隔不重置；1–2 次
+仅留痕；计数随流结束丢弃；会话级 consecutive 与 `DEGENERATION_LIMIT`
+不变）；判定语义=流内 ≥3 次完全相同的 200 字符 span（任意偏移、起点
+距离 ≥200）。漏判边界=短周期小量循环（<200 字符仅 2–3 次）不再触发。
+
+**2026-08-22 S1 代码实施 + S2 测试实施登记（用户指示进行 S1 与 S2；
+orz 工作树未提交；计数不变仍 29）**：
+
+- **S1（transport.rs）**：`REPETITION_MIN_RUN_CHARS` 48→**200**、
+  `REPETITION_WINDOW_CHARS` 96→**400**（缓冲 144→600）；新增
+  `REPETITION_HIT_LIMIT=3`（流内累计命中门槛，间隔不重置）。滚动窗口
+  **命中后继续喂入**（不早停）——`feed_chars` 返回 delta 内新命中数；
+  记录区结构性保证起点距离 ∈ [200, 400]。`DegenerationDetector` 新增
+  每族流内命中计数（content/reasoning 独立）+ 非触发命中审计留痕
+  `audit_hits`（1–2 次命中逐条登记触发上下文）；`feed_repetition`
+  单族状态聚合为 `RepetitionFamilyState`（滚动窗口 + 3-gram 窗口 +
+  命中计数），自由函数保持 7 参数（clippy 阈值内）。触发门槛：累计
+  ≥3 次命中才置 trip（detail 带 `{hits}/{REPETITION_HIT_LIMIT}`）；
+  1–2 次命中仅留痕不中断——流循环 `take_audit_hits` 逐条 WARN
+  （`output-health guard repetition hit (audit only, not tripping)`）。
+  3-gram 路径②（≥1K token >60%）与 stall 兜底（600s/64K）不变。
+- **S2（测试）**：poly-A 阈值 399 不触发 / 400=1 次命中（audit only）/
+  401=2 次命中（audit only）/ 402=3 次命中触发；周期 10 短语循环
+  `repeat(41)`=410 字符 3 次命中触发（对齐缺陷回归）；近重复（单字符
+  差异）不计数、精确复读 1 次命中仅审计、第 3 次触发；新增
+  `degeneration_detector_trips_after_three_stream_hits`（1–2 次仅审计、
+  第 3 次触发）与 `degeneration_detector_hit_counter_survives_gaps`
+  （间隔不重置：命中 1 与命中 2/3 之间插入 50 个互异字符仍累计）；
+  缺口 A 单测更新为 200 字符 span；3-gram 兜底用例重构（每 feed 追加
+  唯一 4 位标记，杜绝 200 字符 span 复现——滚动路径保持静默，仅测
+  3-gram 路径）；e2e 五处（content 中断不重试、reasoning 复读直跳
+  降级、三级梯 high→low / low→disabled、空响应重试中哨兵）改 402 同
+  字符；新增 e2e `generate_stream_reasoning_subthreshold_hits_do_not_
+  interrupt`（401 同字符=2 次命中，流正常完成、单连接、不降级）。
+- 验证：orz-loop lib **560 通过 / 0 失败 / 3 ignored**；`cargo fmt
+  --check` 干净；clippy 无新增告警（transport.rs 仅 2 条既有 doc 告警）；
+  `cargo check --workspace` 通过（下游无破坏）。
+- **2026-08-22 S1 全面审查处理（审查发现 4 项全部处理；实施不改变
+  计数，仍 29）**：① 文档——§3.3 信号表旧参数（48/96）同步为再校准值
+  （L=200/W=400/命中门槛 3）并补脚注，头部状态块补 2026-08-22 修订
+  条目；② 实现——新增 `feed_chars_capped`（以「剩余门槛=门槛-已累计」
+  封顶单次喂入：同一 delta 内累计命中达 `REPETITION_HIT_LIMIT` 后该流
+  必触发，停止消费超大退化帧的滚动哈希/字符比对；子门槛 delta 全量
+  消费、窗口状态与旧语义一致；`feed_chars` 保留为测试便捷方法，lib
+  目标下豁免 dead_code）；③ 实现——审计 WARN 与触发判定同 chunk 聚合
+  （先取走审计条目、再做 stall/触发判定；触发时审计条目并入 trip WARN
+  的 trigger_context，不再单独输出「audit only, not tripping」误导
+  文案）；④ 实现——3-gram/stall 触发时清空 `trigger_context`（两路径
+  均无「重复 span」语义，防止残留旧命中上下文误标为本次触发）。验证：
+  orz-loop **560 通过 / 0 失败 / 3 ignored**、`cargo fmt --check` 干净、
+  clippy transport.rs 仍仅 2 条既有 doc 告警（与基线一致）。
+- 计数：S1/S2 不改变未闭合计数（仍 29）；S3 重建 + S4 复验（DNA
+  reasoning 正常引用不误杀、真循环仍触发）验证闭环后 29 → 28。
+- 待续：S3 重建（Linux musl，ORZ-BUILD-MOUNT-001）→ S4 复验。
+
+- 计数：S3/S4 复验 + 停滞守卫退役实施 + 缺口 A 实施不改变未闭合计数
+  （仍 29；0d 计数 29 的 S3/S4 闭环因缺口 A 推迟——缺口 A 定性完成、
+  灵敏层再校准 S1/S2 已实施，闭环待 S3/S4 复验后登记）。
+- 待续：S3 重建 → S4 复验（reasoning 正常引用不误杀、真循环仍触发）。
 
 ## 5. 验收标准（DoD）
 

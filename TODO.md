@@ -799,7 +799,74 @@
   通过）
 - [ ] S3 重建（Linux musl；与 fail-fast/解码兜底/180s 窗口批次合并）
 - [ ] S4 复验（dna-assembly 低熵误杀消除、真复读仍触发、零 400、
-  命中率 ≥90%）
+  命中率 ≥90%）——**2026-08-22 已执行、发现缺口未闭环**：job
+  `dna-assembly-s4`（RUN-CLI-6a887a1a，15m6s、118 请求、reward 0.0
+  无异常）——命中率 98.2%（hit 4,379,264 / miss 80,340）≥90% 达成；
+  真实 HTTP 400 为 0（journal 中 10 处 "400" 均为订单号/UUID 子串）；
+  content 层滚动哈希零触发（旧「5 identical deltas」误杀源消除）。
+  **发现缺口 A**：reasoning 层滚动哈希触发 2 次（run 早期 36s/96s，
+  consecutive 1→2、降级梯 EnabledMax→EnabledLow→Disabled），但触发
+  内容无日志留痕，无法判定真循环还是误杀（模型降级后仍正常完成全部
+  工作 147 工具轮 + 完整交付，倾向于误杀）；**发现缺口 B**：会话级
+  停滞守卫 `STAGNATION-NGRAM-REPEAT`（controller `evaluate_stagnation`
+  对全会话 user+assistant 消息做 3-8-gram 统计、阈值 10）在 run 结束
+  时以 max_ngram_repeat=40 判 `restart_requested`——重复内容为常见
+  代码惯用式/过渡短语（`for line in open(...).read().splitlines():`
+  ×25、"I need to" ×29），非病态复读；跨历史 run 核对几乎所有长会话
+  均触发（12-341，全部 run_invalidated restart_requested），为普遍
+  误杀，非 DNA 特有问题。**缺口处理待裁决（见下）**。
+- [x] S4 缺口处理·审计补充（P0-0d 后续 6 派生；2026-08-22 实施闭合 +
+  现场定性）：transport 退化检测器触发时落盘窗口文本（重复 48 字符
+  span + 两匹配偏移 + 窗口尾部）至 WARN（缺口 A）；新增
+  `RollingRepetitionWindow::last_match`/`match_context` 与
+  `DegenerationDetector::trigger_context`，单测
+  `degeneration_trigger_context_records_repeated_span`；orz-loop 557
+  通过。**现场验证（DNA 重跑 RUN-CLI-6a88905f，26m26s）**：reasoning
+  层 2 次触发（consecutive 1→2，降级梯 EnabledMax→EnabledLow→
+  Disabled）均留痕——第 1 次重复 DNA 序列等式
+  `"tgaggatcccgggaattctcgagtaag..." = "...gggttaa"`（偏移 47/97），
+  第 2 次重复技术短语 "bases to the 3' side of the recognition
+  sequence"（偏移 16/97）——均为正常思考对任务内容的重复引用，
+  **误杀坐实**（非病态复读）；降级后模型继续完成全部工作（177 工具
+  轮、136 请求、run_finished completed）。**停滞守卫退役对照**：本次
+  run 不再 `run_invalidated restart_requested`（上次 s4 15m 被会话级
+  守卫误杀中断），命中率 98.64%（hit 6,954,240 / miss 96,065）。
+  **后续待裁决**：reasoning 灵敏层对任务内容重复引用的误杀处理
+  （区分病态循环 vs 正常引用）。入口：设计
+  [§3.3](docs/DEEPSEEK_OUTPUT_BUDGET_AND_STALL_GUARD_DESIGN_2026-08-20.md)
+  / [transport.rs](orz/crates/orz-loop/src/gateway/transport.rs)。
+- [x] 灵敏层再校准设计（**2026-08-22 设计定稿**）——用户裁决：
+  L=48→**200**（`REPETITION_MIN_RUN_CHARS`）、W=96→**400**（=2L、缓冲
+  144→600）；触发门槛改**流内累计命中 ≥3 次才中断+降级**（间隔不
+  重置；1–2 次仅审计留痕；计数随流结束丢弃；会话级 consecutive 与
+  `DEGENERATION_LIMIT` 不变）；content/reasoning 统一；3-gram 兜底与
+  stall 兜底/fail-fast 纪律不变；判定语义=流内 ≥3 次完全相同的 200
+  字符 span（任意偏移、起点距离 ≥200）。设计轮不动计数（29）。入口：
+  设计 [§3.3/§4.11](docs/DEEPSEEK_OUTPUT_BUDGET_AND_STALL_GUARD_DESIGN_2026-08-20.md)
+  / ADR-0010 §14.35 第 16-17 项。
+- [x] 灵敏层再校准 S1 代码（**2026-08-22 实施闭合**：transport.rs
+  `REPETITION_MIN_RUN_CHARS` 48→200、`REPETITION_WINDOW_CHARS` 96→400
+  （缓冲 600）、新增 `REPETITION_HIT_LIMIT=3`；滚动窗口命中后继续喂入
+  （不早停）、流内累计命中 ≥3 次才 trip、1–2 次仅审计留痕
+  （`audit_hits` → 流循环逐条 WARN）；content/reasoning 统一、3-gram/
+  stall 兜底不变；单族状态聚合 `RepetitionFamilyState`；trigger detail
+  带 `{hits}/{REPETITION_HIT_LIMIT}`；**同日 S1 全面审查处理闭合
+  （4 项全部处理）**：`feed_chars_capped` 命中上限喂入（达门槛停止
+  消费超大退化帧，子门槛全量消费语义不变）、审计 WARN 与触发判定同
+  chunk 聚合（触发时不再输出「audit only」误导文案）、3-gram/stall
+  触发清空 `trigger_context`、设计信号表/头部同步再校准参数）
+- [x] 灵敏层再校准 S2 测试（**2026-08-22 实施闭合**：poly-A 399/400/401
+  不触发（0/1/2 次命中仅审计）、402 触发；周期 10 `repeat(41)`=410 字符
+  3 次命中触发；近重复（单字符差异）不计数、精确复读 1 次命中仅审计、
+  第 3 次触发；新增命中门槛测试与间隔不重置测试（命中 1 与 2/3 之间插
+  入 50 个互异字符仍累计）；缺口 A 单测改 200 字符 span；3-gram 兜底
+  用例加唯一标记杜绝 200 字符 span 复现（滚动路径保持静默）；e2e 五处
+  改 402 同字符 + 新增子阈值不中断 e2e；orz-loop **560 通过 / 0 失败 /
+  3 ignored**、fmt 干净、clippy 无新增（transport.rs 仅 2 条既有 doc
+  告警）、`cargo check --workspace` 通过；计数不变仍 29）
+- [ ] 灵敏层再校准 S3 重建（Linux musl，ORZ-BUILD-MOUNT-001 契约）
+- [ ] 灵敏层再校准 S4 复验（reasoning 正常引用不误杀、真循环仍触发、
+  零 400、命中率 ≥90%；DNA 重跑对照）
 
 ### P0-0e CONTEXT-SCAFFOLDING-PULL-REDESIGN（P0；2026-08-21 设计定稿，
 S1-S4 全部闭合 2026-08-21，计数 28 → 27）

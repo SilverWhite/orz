@@ -169,12 +169,11 @@ ALL_JOURNALS_V02 = (
     "restore-run.jsonl",
     "orientation-fire-run.jsonl",
     # GAP-RETRIEVAL-TOOLS (2026-08-10): retrieval mode / structured result /
-    # activation restore / pre-handoff scenarios.
+    # activation restore scenarios.
     "mode-off-refusal.jsonl",
     "local-browser-capability.jsonl",
     "real-doc-retrieval.jsonl",
     "cross-prompt-restore.jsonl",
-    "pre-handoff-checkpoint.jsonl",
     # FUS-RETRIEVAL-MECH P0-B step 5 (2026-08-14): the final-answer citation
     # verifier blocks an unknown-source marker with a mechanical degradation.
     "citation-validation-block.jsonl",
@@ -184,20 +183,20 @@ EXPECTED_SEQUENCES_V02: dict[str, tuple[str, ...]] = {
     "plain-run.jsonl": (
         "run_preflight", "tool_availability_check", "run_started",
         "prompt_submitted", "model_output", "counterexample_gate",
-        "model_output", "runtime_stagnation_guard", "run_finished",
+        "model_output", "run_finished",
     ),
     "tool-snapshot-run.jsonl": (
         "run_preflight", "tool_availability_check", "run_started",
         "prompt_submitted", "model_output", "permission_requested",
         "permission_decision", "snapshot_created", "tool_started",
         "tool_completed", "model_output", "counterexample_gate",
-        "model_output", "runtime_stagnation_guard", "run_finished",
+        "model_output", "run_finished",
     ),
     "plan-run.jsonl": (
         "run_preflight", "counterexample_gate", "plan_proposed",
         "plan_approved", "tool_availability_check", "run_started",
         "prompt_submitted", "model_output", "counterexample_gate",
-        "model_output", "runtime_stagnation_guard", "run_finished",
+        "model_output", "run_finished",
     ),
     "cancelled-run.jsonl": (
         "run_preflight", "tool_availability_check", "run_started",
@@ -211,7 +210,7 @@ EXPECTED_SEQUENCES_V02: dict[str, tuple[str, ...]] = {
         "run_preflight", "snapshot_restored", "run_finished",
     ),
     # GAP-SUBAGENT-RUNTIME (2026-08-10, M3/M4): each retrieval dispatch runs
-    # the SHARED loop — the subagent's model round and its own stagnation
+    # the SHARED loop — the subagent's model round lands in the same chain
     # guard land in the same chain between the parent's tool_started/
     # tool_completed wrapper; each assessment is followed by the parent's
     # retrieval_disposition round (the control call's disposition event —
@@ -229,7 +228,7 @@ EXPECTED_SEQUENCES_V02: dict[str, tuple[str, ...]] = {
         "run_preflight", "tool_availability_check", "run_started",
         "prompt_submitted",
         "model_output", "tool_started", "model_output",
-        "runtime_stagnation_guard", "tool_completed",
+        "tool_completed",
         "retrieval_result_committed",
         "information_sufficiency_assessment",
         "tool_availability_check",
@@ -237,7 +236,7 @@ EXPECTED_SEQUENCES_V02: dict[str, tuple[str, ...]] = {
         "tool_completed",
         "tool_availability_check",
         "model_output", "tool_started", "model_output",
-        "runtime_stagnation_guard", "tool_completed",
+        "tool_completed",
         "retrieval_result_committed",
         "information_sufficiency_assessment",
         "tool_availability_check",
@@ -245,7 +244,7 @@ EXPECTED_SEQUENCES_V02: dict[str, tuple[str, ...]] = {
         "tool_completed",
         "tool_availability_check",
         "model_output", "tool_started", "model_output",
-        "runtime_stagnation_guard", "tool_completed",
+        "tool_completed",
         "retrieval_result_committed",
         "information_sufficiency_assessment",
         "tool_availability_check",
@@ -253,7 +252,7 @@ EXPECTED_SEQUENCES_V02: dict[str, tuple[str, ...]] = {
         "tool_completed",
         "tool_availability_check",
         "model_output", "tool_started", "model_output",
-        "runtime_stagnation_guard", "tool_completed",
+        "tool_completed",
         "retrieval_result_committed",
         "information_sufficiency_assessment", "orientation_checkpoint",
         "tool_availability_check",
@@ -261,7 +260,7 @@ EXPECTED_SEQUENCES_V02: dict[str, tuple[str, ...]] = {
         "tool_completed",
         "tool_availability_check",
         "model_output", "tool_started", "model_output",
-        "runtime_stagnation_guard", "tool_completed",
+        "tool_completed",
         "retrieval_result_committed",
         "information_sufficiency_assessment",
         "tool_availability_check",
@@ -269,7 +268,7 @@ EXPECTED_SEQUENCES_V02: dict[str, tuple[str, ...]] = {
         "retrieval_close_record", "tool_completed",
         "tool_availability_check",
         "model_output", "counterexample_gate", "model_output",
-        "runtime_stagnation_guard", "run_finished",
+        "run_finished",
     ),
     # GAP-RETRIEVAL-TOOLS (2026-08-10): mode=off refuses the scripted
     # retrieval dispatch — the refusal is the terminal ToolCompleted(error)
@@ -279,7 +278,7 @@ EXPECTED_SEQUENCES_V02: dict[str, tuple[str, ...]] = {
         "run_preflight", "tool_availability_check", "run_started",
         "prompt_submitted", "model_output", "tool_completed",
         "model_output", "counterexample_gate", "model_output",
-        "runtime_stagnation_guard", "run_finished",
+        "run_finished",
     ),
     # local_browser with an unsupported capability: the bootstrap transition
     # journals before the availability gate; the refusal follows the
@@ -288,7 +287,7 @@ EXPECTED_SEQUENCES_V02: dict[str, tuple[str, ...]] = {
         "run_preflight", "retrieval_mode_transition",
         "tool_availability_check", "run_started", "prompt_submitted",
         "model_output", "tool_started", "tool_completed", "model_output",
-        "counterexample_gate", "model_output", "runtime_stagnation_guard",
+        "counterexample_gate", "model_output",
         "run_finished",
     ),
     # Real project-doc retrieval: the subagent's index call runs through
@@ -299,11 +298,11 @@ EXPECTED_SEQUENCES_V02: dict[str, tuple[str, ...]] = {
         "prompt_submitted", "model_output", "tool_started",
         "model_output", "permission_requested", "permission_decision",
         "tool_started", "tool_completed", "model_output",
-        "runtime_stagnation_guard", "tool_completed",
+        "tool_completed",
         "retrieval_result_committed", "information_sufficiency_assessment",
         "tool_availability_check",
         "model_output", "counterexample_gate", "model_output",
-        "runtime_stagnation_guard", "run_finished",
+        "run_finished",
     ),
     # local_browser (2026-08-10): mode=local_browser with an AVAILABLE
     # capability — the external subagent runs the host browser_read tool
@@ -315,12 +314,12 @@ EXPECTED_SEQUENCES_V02: dict[str, tuple[str, ...]] = {
         "tool_availability_check", "run_started", "prompt_submitted",
         "model_output", "tool_started", "model_output",
         "permission_requested", "permission_decision", "tool_started",
-        "tool_completed", "model_output", "runtime_stagnation_guard",
+        "tool_completed", "model_output",
         "tool_completed", "retrieval_result_committed",
         "information_sufficiency_assessment",
         "tool_availability_check",
         "model_output",
-        "counterexample_gate", "model_output", "runtime_stagnation_guard",
+        "counterexample_gate", "model_output",
         "run_finished",
     ),
     # Cross-run activation restore: the seeded AwaitingDisposition
@@ -333,18 +332,12 @@ EXPECTED_SEQUENCES_V02: dict[str, tuple[str, ...]] = {
         "retrieval_close_record", "tool_completed",
         "tool_availability_check",
         "model_output",
-        "counterexample_gate", "model_output", "runtime_stagnation_guard",
+        "counterexample_gate", "model_output",
         "run_finished",
     ),
     # Pre-handoff checkpoint: the stagnation restart decision journals the
     # orientation checkpoint (independent lifecycle trigger) before the
     # run_invalidated terminal.
-    "pre-handoff-checkpoint.jsonl": (
-        "run_preflight", "tool_availability_check", "run_started",
-        "prompt_submitted", "model_output", "counterexample_gate",
-        "model_output", "runtime_stagnation_guard",
-        "orientation_checkpoint", "run_invalidated",
-    ),
     # FUS-RETRIEVAL-MECH P0-B step 5 (2026-08-14): the post-gate final answer
     # carries `[来源: SRC-999]` (not in this run's evidence) — the citation
     # verifier blocks it; the journal records the mechanical event and the
@@ -352,7 +345,7 @@ EXPECTED_SEQUENCES_V02: dict[str, tuple[str, ...]] = {
     "citation-validation-block.jsonl": (
         "run_preflight", "tool_availability_check", "run_started",
         "prompt_submitted", "model_output", "counterexample_gate",
-        "model_output", "citation_validation", "runtime_stagnation_guard",
+        "model_output", "citation_validation",
         "run_finished",
     ),
 }
@@ -2144,7 +2137,6 @@ class TrackResolutionTests(unittest.TestCase):
         dual_track = {
             "orientation_checkpoint",
             "tool_availability_check",
-            "runtime_stagnation_guard",
         }
         for event_type, (slug, path) in PAYLOAD_SCHEMA_BY_EVENT_TYPE.items():
             with self.subTest(event_type=event_type):

@@ -4,7 +4,6 @@ import unittest
 
 from assurance import (
     build_orientation_checkpoint,
-    evaluate_runtime_stagnation_guard,
     verify_orientation_response,
 )
 from assurance.errors import AssuranceError
@@ -77,64 +76,3 @@ class OrientationCheckpointTests(unittest.TestCase):
         with self.assertRaisesRegex(AssuranceError, "non-negative"):
             build_orientation_checkpoint(task_id=TASK_ID, trigger_step=-1)
 
-
-class RuntimeStagnationGuardTests(unittest.TestCase):
-    def test_high_consecutive_repetition_requests_restart(self) -> None:
-        receipt = evaluate_runtime_stagnation_guard(
-            public_outputs=["same visible output"] * 11,
-            retry_count=0,
-            retry_budget=1,
-        )
-
-        self.assertEqual(receipt["decision"], "restart_requested")
-        self.assertEqual(receipt["action"], "stop_and_restart")
-        self.assertIn("STAGNATION-CONSECUTIVE-REPEAT", receipt["reason_codes"])
-        self.assertFalse(receipt["restart_packet"]["runaway_suffix_retained"])
-        self.assertFalse(receipt["checks"]["hidden_chain_of_thought_saved"])
-        self.assertFalse(receipt["checks"]["asks_model_if_stuck"])
-
-    def test_retry_budget_exhaustion_requires_handoff(self) -> None:
-        receipt = evaluate_runtime_stagnation_guard(
-            public_outputs=["loop loop loop"] * 11,
-            retry_count=1,
-            retry_budget=1,
-        )
-
-        self.assertEqual(receipt["decision"], "handoff_required")
-        self.assertEqual(receipt["action"], "stop_and_handoff")
-        self.assertIsNone(receipt["restart_packet"])
-
-    def test_normal_varied_output_continues(self) -> None:
-        receipt = evaluate_runtime_stagnation_guard(
-            public_outputs=[
-                "Read the current design document.",
-                "Added a neutral checkpoint schema.",
-                "Ran the fixture verifier.",
-            ],
-            retry_count=0,
-            retry_budget=1,
-            progress_markers=["doc-read", "schema-added", "tests-ran"],
-        )
-
-        self.assertEqual(receipt["decision"], "continue")
-        self.assertEqual(receipt["action"], "none")
-        self.assertEqual(receipt["reason_codes"], [])
-        self.assertIsNone(receipt["restart_packet"])
-
-    def test_repeated_ngram_requests_restart(self) -> None:
-        receipt = evaluate_runtime_stagnation_guard(
-            public_outputs=["alpha beta gamma " * 11],
-            retry_count=0,
-            retry_budget=1,
-        )
-
-        self.assertEqual(receipt["decision"], "restart_requested")
-        self.assertIn("STAGNATION-NGRAM-REPEAT", receipt["reason_codes"])
-
-    def test_invalid_retry_budget_is_rejected(self) -> None:
-        with self.assertRaisesRegex(AssuranceError, "non-negative"):
-            evaluate_runtime_stagnation_guard(
-                public_outputs=["same visible output"] * 11,
-                retry_count=-1,
-                retry_budget=1,
-            )

@@ -799,6 +799,56 @@
 >   [设计 §4.10](DEEPSEEK_OUTPUT_BUDGET_AND_STALL_GUARD_DESIGN_2026-08-20.md)
 >   / TODO P0-0d 后续 6 / CLI_PROJECT_INDEX。
 
+> - **2026-08-22 S3 重建 + S4 复验 + 停滞守卫退役 + 缺口 A + 灵敏层
+>   再校准设计（用户裁决：生成期检测覆盖实际退化面，停滞守卫一并全部
+>   退役）**：S3 Linux musl 重建（ORZ-BUILD-MOUNT-001，两轮含缺口 A
+>   留痕轮）。S4 dna-assembly 复验（job `dna-assembly-s4`，15m6s、
+>   118 请求）——命中率 98.2%、零真实 400、content 层零触发；发现
+>   缺口 A（reasoning 层触发 2 次无留痕无法定性）与缺口 B（会话级
+>   停滞守卫 `STAGNATION-NGRAM-REPEAT` 普遍误杀：跨历史 run 12–341
+>   全部 restart_requested）。**停滞守卫退役**（主/子代理终止判定、
+>   失败轮次审计、`stagnation.rs`、`RuntimeStagnationGuard` 事件 v0.2
+>   面、TUI、Python reference/verifier/schema/doctor 清单；v0.1 冻结
+>   面保留；tokenize 迁移 transport）——orz-loop 557 通过、verifier
+>   230 通过、assurance 1588 通过、doctor 仅剩 orz dirty。**缺口 A
+>   （审计留痕）**：触发时 WARN 输出重复 span+偏移+窗口尾部；DNA 重跑
+>   （job `dna-assembly-s4b`，26m26s、136 请求、命中率 98.64%、
+>   `run_finished completed`）实证 reasoning 2 次触发均为正常任务内容
+>   重复引用（DNA 序列等式/技术短语 48 字符 span）——**误杀坐实**；
+>   停滞守卫退役后 run 不再被误杀中断。**灵敏层再校准设计定稿（用户
+>   裁决：L=200 + 流内累计 3 次命中才中断+降级；content/reasoning
+>   统一；先落设计、未实施）**——`REPETITION_MIN_RUN_CHARS` 48→200、
+>   `REPETITION_WINDOW_CHARS` 96→400（缓冲 144→600）、命中门槛 3
+>   （间隔不重置、1–2 次仅留痕、计数随流结束丢弃；会话级 consecutive
+>   与 `DEGENERATION_LIMIT` 不变）；3-gram/stall 兜底与 fail-fast 纪律
+>   不变；判定语义=流内 ≥3 次完全相同的 200 字符 span。设计轮不动
+>   计数（仍 29；S3/S4 闭环因缺口 A 推迟，缺口 A 定性完成、待灵敏层
+>   再校准实施后闭环）。登记于 ADR-0010 §14.35 第 16-17 项 /
+>   [设计 §3.3/§4.11](DEEPSEEK_OUTPUT_BUDGET_AND_STALL_GUARD_DESIGN_2026-08-20.md)
+>   / TODO P0-0d 后续 6 / CLI_PROJECT_INDEX。
+
+> - **2026-08-22 灵敏层再校准 S1 代码 + S2 测试实施登记（用户指示进行
+>   S1 与 S2；orz 工作树未提交；计数不变仍 29）**：`REPETITION_MIN_RUN_
+>   CHARS` 48→200、`REPETITION_WINDOW_CHARS` 96→400（缓冲 600）、新增
+>   `REPETITION_HIT_LIMIT=3`——滚动窗口命中后继续喂入（不早停）、
+>   流内累计命中 ≥3 次才中断+降级（间隔不重置）；1–2 次命中仅审计留痕
+>   （`audit_hits` → 流循环逐条 WARN，缺口 A 语义）；content/reasoning
+>   统一、3-gram/stall 兜底不变；单族状态聚合 `RepetitionFamilyState`
+>   保持自由函数参数在 clippy 阈值内。S2 测试：poly-A 399/400/401 不
+>   触发（0/1/2 次命中仅审计）、402 触发；周期 10 `repeat(41)` 3 次命中
+>   触发；近重复不计数、精确复读第 3 次触发；新增命中门槛与间隔不重置
+>   测试；3-gram 兜底用例加唯一标记杜绝 200 字符 span 复现；e2e 五处
+>   改 402 同字符 + 新增子阈值不中断 e2e。orz-loop **560 通过 / 0 失败
+>   / 3 ignored**、fmt 干净、clippy 无新增（transport.rs 仅 2 条既有
+>   doc 告警）、workspace check 通过。同日 S1 全面审查处理（4 项全部
+>   处理）：信号表/头部同步再校准参数；`feed_chars_capped` 命中上限
+>   喂入；审计 WARN 与触发判定同 chunk 聚合（消除「audit only」误导
+>   文案）；3-gram/stall 触发清空 `trigger_context`。登记于
+>   ADR-0010 §14.35 第 17 项 /
+>   [设计 §3.3/§4.11](DEEPSEEK_OUTPUT_BUDGET_AND_STALL_GUARD_DESIGN_2026-08-20.md)
+>   / TODO P0-0d 后续 6 / CLI_PROJECT_INDEX。待续：S3 重建 + S4 复验
+>   （DNA reasoning 正常引用不误杀、真循环仍触发）闭环后 29 → 28。
+
 ### 0e. CONTEXT-SCAFFOLDING-PULL-REDESIGN（P0；2026-08-21 设计定稿，
 **S1-S4 全部闭合 2026-08-21，计数 28 → 27**）
 

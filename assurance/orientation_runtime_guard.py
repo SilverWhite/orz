@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from collections import Counter
 import re
 from typing import Any, Sequence
 
@@ -11,7 +10,6 @@ from .utils import canonical_bytes, sha256_bytes
 
 ORIENTATION_CHECKPOINT_SCHEMA = "orientation-checkpoint-v0.1.schema.json"
 ORIENTATION_VERIFICATION_SCHEMA = "orientation-checkpoint-verification-v0.1.schema.json"
-STAGNATION_RECEIPT_SCHEMA = "runtime-stagnation-guard-receipt-v0.1.schema.json"
 
 ORIENTATION_BLOCK = """[ORIENTATION_CHECKPOINT v0.1]
 当前正在做什么？
@@ -188,128 +186,6 @@ def verify_orientation_response(
         receipt,
         ORIENTATION_VERIFICATION_SCHEMA,
         label="orientation checkpoint verification",
-    )
-    return receipt
-
-
-def _normalize_text(value: str) -> str:
-    return " ".join(re.findall(r"[\w\u4e00-\u9fff]+", value.casefold()))
-
-
-def _tokenize(value: str) -> list[str]:
-    return re.findall(r"[\w\u4e00-\u9fff]+", value.casefold())
-
-
-def _max_consecutive_repeated(values: Sequence[str]) -> int:
-    best = 0
-    previous: str | None = None
-    current = 0
-    for value in values:
-        if not value:
-            continue
-        if value == previous:
-            current += 1
-        else:
-            previous = value
-            current = 1
-        best = max(best, current)
-    return best
-
-
-def _max_ngram_repeat(tokens: Sequence[str], *, min_n: int = 3, max_n: int = 8) -> int:
-    best = 0
-    for ngram_size in range(min_n, max_n + 1):
-        if len(tokens) < ngram_size:
-            continue
-        counts = Counter(
-            tuple(tokens[index : index + ngram_size])
-            for index in range(0, len(tokens) - ngram_size + 1)
-        )
-        if counts:
-            best = max(best, max(counts.values()))
-    return best
-
-
-def evaluate_runtime_stagnation_guard(
-    *,
-    public_outputs: Sequence[str],
-    retry_count: int = 0,
-    retry_budget: int = 1,
-    repeated_content_threshold: int = 10,
-    ngram_repeat_threshold: int = 10,
-    progress_markers: Sequence[str] | None = None,
-) -> dict[str, Any]:
-    if retry_count < 0 or retry_budget < 0:
-        raise AssuranceError("retry count and budget must be non-negative")
-    if repeated_content_threshold < 1 or ngram_repeat_threshold < 1:
-        raise AssuranceError("stagnation thresholds must be positive")
-
-    normalized_outputs = [_normalize_text(output) for output in public_outputs]
-    tokens = _tokenize("\n".join(public_outputs))
-    max_consecutive = _max_consecutive_repeated(normalized_outputs)
-    max_ngram = _max_ngram_repeat(tokens)
-    marker_count = len(set(progress_markers or []))
-    reason_codes: list[str] = []
-    if max_consecutive > repeated_content_threshold:
-        reason_codes.append("STAGNATION-CONSECUTIVE-REPEAT")
-    if max_ngram > ngram_repeat_threshold:
-        reason_codes.append("STAGNATION-NGRAM-REPEAT")
-
-    triggered = bool(reason_codes)
-    if not triggered:
-        decision = "continue"
-        action = "none"
-        restart_packet = None
-    elif retry_count < retry_budget:
-        decision = "restart_requested"
-        action = "stop_and_restart"
-        restart_packet = {
-            "packet_kind": "terminal_safe_restart_packet",
-            "included_state": [
-                "task_contract",
-                "verified_artifact_ledger",
-                "unresolved_questions",
-                "last_valid_checkpoint_digest",
-            ],
-            "runaway_suffix_retained": False,
-        }
-    else:
-        decision = "handoff_required"
-        action = "stop_and_handoff"
-        restart_packet = None
-
-    receipt = {
-        "schema_version": "0.1.0-draft",
-        "receipt_kind": "runtime_stagnation_guard_receipt",
-        "valid": True,
-        "decision": decision,
-        "action": action,
-        "reason_codes": reason_codes,
-        "metrics": {
-            "public_output_count": len(public_outputs),
-            "token_count": len(tokens),
-            "max_consecutive_repeated_content": max_consecutive,
-            "max_ngram_repeat": max_ngram,
-            "progress_marker_count": marker_count,
-        },
-        "thresholds": {
-            "repeated_content_threshold": repeated_content_threshold,
-            "ngram_repeat_threshold": ngram_repeat_threshold,
-            "retry_count": retry_count,
-            "retry_budget": retry_budget,
-        },
-        "restart_packet": restart_packet,
-        "checks": {
-            "metadata_only": True,
-            "hidden_chain_of_thought_saved": False,
-            "asks_model_if_stuck": False,
-            "retry_budget_bounded": retry_count <= retry_budget,
-        },
-    }
-    validate_contract(
-        receipt,
-        STAGNATION_RECEIPT_SCHEMA,
-        label="runtime stagnation guard receipt",
     )
     return receipt
 
