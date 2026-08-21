@@ -319,6 +319,18 @@ pub fn run_event_to_tui(event: &RunEvent) -> TuiEvent {
                 .unwrap_or(0),
             agent_role: get_str(p, "agent_role"),
         },
+        // MIDSTREAM-DECODE-RETRY (2026-08-21, ADR-0010 §14.37 / 设计
+        // §2.3): transport 重试计数事件面——outcome/kind/retries 摘要。
+        EventType::TransportRetry => TuiEvent::TransportRetry {
+            agent_role: get_str(p, "agent_role"),
+            outcome: get_str(p, "outcome"),
+            kind: get_opt_str(p, "kind"),
+            retries: p
+                .pointer("/retries")
+                .and_then(serde_json::Value::as_u64)
+                .unwrap_or(0),
+            reason: get_opt_str(p, "reason"),
+        },
         EventType::InformationSufficiencyAssessment => TuiEvent::InformationSufficiencyAssessment {
             assessment_id: get_str(p, "assessment_id"),
             status: get_str(p, "status"),

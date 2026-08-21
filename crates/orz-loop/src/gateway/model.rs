@@ -190,6 +190,31 @@ pub struct ModelRequest {
     pub thinking: Option<ThinkingMode>,
 }
 
+/// MIDSTREAM-DECODE-RETRY (2026-08-21, ADR-0010 §14.37 / 设计 §2.3)：一次
+/// 逻辑模型请求内 transport 重试的中断类别——`ZeroChunk`（零 chunk，180s
+/// 窗口 / 10 次上限）与 `Midstream`（已见 chunk 但无完整 tool_calls，有界
+/// 1 次）。事件面 `transport_retry` 事件据此归因。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TransportRetryKind {
+    ZeroChunk,
+    Midstream,
+}
+
+/// 一次逻辑模型请求内 transport 重试的可观测摘要（事件面计数，设计 §2.3）。
+/// transport 在 `stream_once_with_retry` 内累计；成功路径随
+/// `ModelResponse` 返回，失败路径随 `GatewayError::StreamInterrupted`
+/// （`attempts` / `saw_chunk` / `detail`）返回。`Default` = 无重试。
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct TransportRetryInfo {
+    /// 本次逻辑请求内实际发生的重发次数（成功前或耗尽前）。
+    pub retries: u32,
+    /// 最后一次重发的中断类别（`None` = 无重试）。
+    pub kind: Option<TransportRetryKind>,
+    /// 最后一次重发的原因 detail（wire 级摘要，不含密钥/正文）。
+    pub reason: Option<String>,
+}
+
 /// Structured model response.
 #[derive(Debug, Clone)]
 pub struct ModelResponse {
@@ -219,6 +244,10 @@ pub struct ModelResponse {
     /// when both are reported, but the total is the direct measure and
     /// works even when the cache breakdown is absent.
     pub prompt_tokens: Option<u64>,
+    /// MIDSTREAM-DECODE-RETRY (2026-08-21, ADR-0010 §14.37 / 设计 §2.3)：
+    /// 本次请求成功前消耗的 transport 重试摘要（默认无重试）——run 层
+    /// 据此记录事件面 `transport_retry{outcome: recovered}`。
+    pub transport_retry: TransportRetryInfo,
 }
 
 impl ModelResponse {
@@ -233,6 +262,7 @@ impl ModelResponse {
             cache_hit_tokens: None,
             cache_miss_tokens: None,
             prompt_tokens: None,
+            transport_retry: TransportRetryInfo::default(),
         }
     }
 
@@ -247,6 +277,7 @@ impl ModelResponse {
             cache_hit_tokens: None,
             cache_miss_tokens: None,
             prompt_tokens: None,
+            transport_retry: TransportRetryInfo::default(),
         }
     }
 }
@@ -270,20 +301,29 @@ pub enum GatewayError {
     /// (the loop surfaces it as a model error), never a user cancel.
     #[error("generation timed out: {0}")]
     Timeout(String),
-    /// GAP-STREAM-RETRY (2026-08-12): a streaming attempt failed BEFORE any
-    /// chunk was produced — no model output existed, so re-sending the
-    /// identical request body is side-effect-free (idempotent; ADR-0007 §3
-    /// known-boundary premise). The transport retries these with bounded
-    /// backoff; `attempts` records how many re-sends happened before the
-    /// final failure, so the journal shows the retry history. The display
-    /// word is "re-sends" — `attempts` counts RETRIES, so the journal text
-    /// never reads as total attempts (off-by-one; 2026-08-12 review D2-1).
-    #[error("stream interrupted before any chunk (after {attempts} re-sends): {detail}")]
+    /// GAP-STREAM-RETRY (2026-08-12) + MIDSTREAM-DECODE-RETRY
+    /// (2026-08-21, ADR-0010 §14.37): a streaming attempt failed before any
+    /// COMPLETE tool call was decoded — no executable model output existed,
+    /// so re-sending the identical request body is side-effect-free
+    /// (idempotent; ADR-0007 §3 known-boundary premise). The transport
+    /// retries with bounded backoff; `attempts` records how many re-sends
+    /// happened before the final failure, so the journal shows the retry
+    /// history. The display word is "re-sends" — `attempts` counts RETRIES,
+    /// so the journal text never reads as total attempts (off-by-one;
+    /// 2026-08-12 review D2-1). `saw_chunk` distinguishes the two retry
+    /// budgets: false = zero-chunk interruption (180s window / 10 max,
+    /// ADR-0010 §14.36), true = midstream interruption after at least one
+    /// decoded chunk but no complete tool call (bounded single retry,
+    /// MIDSTREAM-DECODE-RETRY 设计 §2.2).
+    #[error("stream interrupted after {attempts} re-sends: {detail}")]
     StreamInterrupted {
         /// Retries already consumed when this error escaped. `0` = the
         /// transport surfaced it without a retry (or surfaced the very
         /// first attempt's failure).
         attempts: u32,
+        /// Whether at least one SSE chunk decoded before the interruption
+        /// (true = midstream; drives the bounded single-retry budget).
+        saw_chunk: bool,
         detail: String,
     },
 }
@@ -358,6 +398,15 @@ impl Default for ActivityClock {
 pub trait ModelGateway: Send + Sync {
     async fn generate(&self, request: ModelRequest) -> Result<ModelResponse, GatewayError>;
 
+    /// STALL-DEGENERATION-FAILFAST (2026-08-21, ADR-0010 §14.37 / 设计
+    /// §2.2)：返回一个 **per-run 隔离** 的 gateway 实例——退化计数与
+    /// 会话 thinking 档位等 run 级模型健康状态全新。长驻进程（ACP
+    /// server / codex-app）跨 run 共享同一个 transport，run 边界必须
+    /// 显式换新而非依赖实例重建（「仅 run 边界重置=新 transport」的
+    /// 正式路径实现）；无 per-run 状态的实现返回共享底层的新壳/自
+    /// 身。控制器在每次 `run_turn_inner` 开头调用。
+    fn for_new_run(&self) -> Arc<dyn ModelGateway>;
+
     /// ORZ-CACHE-CONTEXT-COST (2026-08-15, ADR-0010 §3.5 条6): a stable
     /// digest of the transport-level request configuration (provider,
     /// model, endpoint, max_tokens, thinking, retry policy). Part of the
@@ -406,6 +455,10 @@ mod tests {
 
     #[async_trait]
     impl ModelGateway for TestProvider {
+        fn for_new_run(&self) -> Arc<dyn ModelGateway> {
+            Arc::new(TestProvider)
+        }
+
         async fn generate(&self, _request: ModelRequest) -> Result<ModelResponse, GatewayError> {
             Ok(ModelResponse::text_response("buffered"))
         }

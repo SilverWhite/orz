@@ -225,6 +225,16 @@ pub enum TuiEvent {
         view_estimate_tokens: u64,
         agent_role: String,
     },
+    // MIDSTREAM-DECODE-RETRY (2026-08-21, ADR-0010 §14.37 / 设计 §2.3):
+    // transport 重试计数事件面——一次逻辑请求内零 chunk/中段截断重试的
+    // recovered/exhausted 摘要（TUI 展示次数与类别）。
+    TransportRetry {
+        agent_role: String,
+        outcome: String,
+        kind: Option<String>,
+        retries: u64,
+        reason: Option<String>,
+    },
     InformationSufficiencyAssessment {
         assessment_id: String,
         status: String,
@@ -399,6 +409,7 @@ impl TuiEvent {
             TuiEvent::ConsoleOrderRejected { .. } => "console_order_rejected",
             TuiEvent::LedgerFoldAdvance { .. } => "ledger_fold_advance",
             TuiEvent::LedgerFoldWriteFailed { .. } => "ledger_fold_write_failed",
+            TuiEvent::TransportRetry { .. } => "transport_retry",
             TuiEvent::InformationSufficiencyAssessment { .. } => {
                 "information_sufficiency_assessment"
             }

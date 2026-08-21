@@ -173,6 +173,13 @@ pub enum EventType {
     // session on retries. Payload: ledger_path / attempt / disabled /
     // rows / view_estimate_tokens / agent_role.
     LedgerFoldWriteFailed,
+    // MIDSTREAM-DECODE-RETRY (2026-08-21, ADR-0010 §14.37 / 设计 §2.3):
+    // transport 重试计数事件面——一次逻辑模型请求内零 chunk/中段截断
+    // 重试的可观测摘要：`outcome` recovered（重试后成功）/
+    // exhausted（重试耗尽显式失败）、`kind` zero_chunk/midstream、
+    // `retries` 重发次数、`reason` wire 级原因。事件面计数使重试频率
+    // 与耗尽可审计（S4 复验的输入面）。
+    TransportRetry,
 }
 
 impl EventType {

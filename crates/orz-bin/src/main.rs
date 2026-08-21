@@ -1523,6 +1523,10 @@ mod tests {
         struct SilentGateway;
         #[async_trait::async_trait]
         impl ModelGateway for SilentGateway {
+            fn for_new_run(&self) -> Arc<dyn ModelGateway> {
+                Arc::new(SilentGateway)
+            }
+
             async fn generate(
                 &self,
                 _request: ModelRequest,

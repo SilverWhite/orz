@@ -466,6 +466,27 @@ pub fn apply_event(app: &mut TuiApp, event: TuiEvent) -> Vec<String> {
             );
             vec![format!("折叠台账写失败: {ledger_path}")]
         }
+        // MIDSTREAM-DECODE-RETRY (2026-08-21, ADR-0010 §14.37 / 设计
+        // §2.3): transport 重试计数事件面——恢复/耗尽摘要进入系统消息。
+        TuiEvent::TransportRetry {
+            outcome,
+            kind,
+            retries,
+            ..
+        } => {
+            let kind_label = kind.as_deref().unwrap_or("unknown");
+            let message = match outcome.as_str() {
+                "recovered" => {
+                    format!("[模型重试] {kind_label} 重试 {retries} 次后恢复")
+                }
+                "exhausted" => {
+                    format!("[模型重试] {kind_label} 重试 {retries} 次后耗尽")
+                }
+                _ => format!("[模型重试] {kind_label} × {retries}"),
+            };
+            app.content.add_system_message(&message, false);
+            vec![message]
+        }
         TuiEvent::InformationSufficiencyAssessment {
             assessment_id,
             status,

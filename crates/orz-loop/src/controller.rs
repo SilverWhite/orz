@@ -404,8 +404,6 @@ pub struct AgentLoopController {
     /// GAP-SUBAGENT-RUNTIME (2026-08-10): `pub(crate)` — the shared
     /// `run_agent_loop` (agent_loop.rs) drives the model round through it.
     pub(crate) main_agent: MainAgent,
-    internal_retrieval: RetrievalSubagent,
-    external_retrieval: RetrievalSubagent,
     blackboard: Arc<SharedBlackboard>,
     max_tool_rounds: u32,
     /// FUS-RETRIEVAL-MECH P0-B step 2/4 (2026-08-14): per-activation
@@ -2144,14 +2142,6 @@ impl AgentLoopController {
     pub fn with_gateway(gateway: Arc<dyn ModelGateway>) -> Self {
         Self {
             main_agent: MainAgent::new(gateway.clone()),
-            internal_retrieval: RetrievalSubagent::new(
-                SubagentRole::InternalRetrieval,
-                gateway.clone(),
-            ),
-            external_retrieval: RetrievalSubagent::new(
-                SubagentRole::ExternalRetrieval,
-                gateway.clone(),
-            ),
             blackboard: Arc::new(SharedBlackboard::new()),
             max_tool_rounds: max_tool_rounds_override().unwrap_or(MAX_TOOL_ROUNDS),
             candidate_cap: web_fetch_candidate_cap_override()
@@ -3959,15 +3949,13 @@ impl AgentLoopController {
     }
 
     /// Component injection for tests (independent scripted providers).
-    pub fn with_components(
-        main_agent: MainAgent,
-        internal_retrieval: RetrievalSubagent,
-        external_retrieval: RetrievalSubagent,
-    ) -> Self {
+    /// STALL-DEGENERATION-FAILFAST (2026-08-21, ADR-0010 §14.37)：检索
+    /// 子代理不再作为 controller 常驻字段——每 run 由 `run_turn_inner`
+    /// 的 per-run gateway 在 `run_retrieval_subagent` 内局部构造，本
+    /// 签名不再接收 retrieval 组件。
+    pub fn with_components(main_agent: MainAgent) -> Self {
         Self {
             main_agent,
-            internal_retrieval,
-            external_retrieval,
             blackboard: Arc::new(SharedBlackboard::new()),
             max_tool_rounds: MAX_TOOL_ROUNDS,
             candidate_cap: DEFAULT_WEB_FETCH_CANDIDATE_CAP,
@@ -4449,12 +4437,16 @@ impl AgentLoopController {
                     AgentLoopError::Cancelled => {
                         serde_json::json!({"reason": "user_cancelled"})
                     }
-                    AgentLoopError::Degeneration(_) => {
+                    AgentLoopError::Degeneration(detail) => {
                         // OUTPUT-DEGENERATION-GUARD (2026-08-19, ADR-0010
-                        // §14.33): run_invalidated{status: degeneration}——
-                        // schema 枚举 2026-08-19 先行扩展（计数同 stagnation
-                        // 同类终止态）。
-                        serde_json::json!({"status": "degeneration"})
+                        // §14.33) + STALL-DEGENERATION-FAILFAST (2026-08-21,
+                        // ADR-0010 §14.37 / 设计 §2.2.4): run_invalidated{
+                        // status: degeneration}——detail 携带终止原因（族 +
+                        // consecutive + round），显式标明、不吞错误。
+                        serde_json::json!({
+                            "status": "degeneration",
+                            "detail": detail,
+                        })
                     }
                     _ => serde_json::json!({"error": e.to_string()}),
                 };
@@ -4593,6 +4585,15 @@ impl AgentLoopController {
         // ACAF Slice 1 (ADR-0011 §4.2): the run's task goal is the ticket
         // goal binding (check 4) — pinned before any control event can fire.
         self.set_goal_digest(prompt);
+        // STALL-DEGENERATION-FAILFAST (2026-08-21, ADR-0010 §14.37 / 设计
+        // §2.2)：per-run 模型健康状态隔离——长驻进程（ACP server）跨
+        // run 共享同一 transport，退化计数与会话 thinking 档位若挂在
+        // transport 上会跨任务泄漏（新任务继承上个任务的档位/计数）。
+        // 本 run 用 `for_new_run` 换新实例（设计原话「仅 run 边界重置=
+        // 新 transport」的正式路径实现）；主 agent 与两个检索子代理共享
+        // 同一 run 实例（同一 run 内计数/档位一致）。
+        let run_gateway = self.main_agent.gateway.for_new_run();
+        let run_main_agent = MainAgent::new(run_gateway.clone());
 
         // 1. tool_availability_check — the v0.2 single probe face snapshot
         // BEFORE run_started (Python conformance: the probe must precede
@@ -5219,7 +5220,7 @@ impl AgentLoopController {
             self,
             writer,
             host,
-            &self.main_agent,
+            &run_main_agent,
             &profile,
             prompt,
             &tool_defs,
@@ -5227,6 +5228,7 @@ impl AgentLoopController {
             orientation,
             cancel,
             heartbeat,
+            &run_gateway,
         )
         .await?;
         let LoopOutcome {
@@ -5586,6 +5588,11 @@ impl AgentLoopController {
         &self,
         host: &dyn LoopHost,
         writer: &mut EventWriter<'_>,
+        // STALL-DEGENERATION-FAILFAST (2026-08-21, ADR-0010 §14.37 /
+        // 设计 §2.2)：本 run 的 per-run 隔离 gateway——检索子代理与
+        // 主 agent 共享同一 run 实例，退化计数/档位 run 内一致、跨
+        // run 不泄漏。
+        run_gateway: &Arc<dyn ModelGateway>,
         target: DispatchTarget,
         tc: &ToolCall,
         messages: &mut Vec<Message>,
@@ -5856,10 +5863,10 @@ impl AgentLoopController {
         // tools the main lane no longer advertises (2026-08-14 ruling:
         // browser_read is restored from the host registry here).
         let sub_tool_defs = Self::subagent_tool_projection(tool_defs, host.tools_registry());
-        let subagent = match role {
-            SubagentRole::InternalRetrieval => &self.internal_retrieval,
-            SubagentRole::ExternalRetrieval => &self.external_retrieval,
-        };
+        // per-run 隔离：子代理用本 run 的 gateway 实例（不再引用
+        // controller 上跨 run 共享的 `internal_retrieval` /
+        // `external_retrieval`）。
+        let subagent = RetrievalSubagent::new(role, run_gateway.clone());
 
         // GAP-SUBAGENT-RUNTIME (2026-08-10): the subagent runs the SAME
         // shared loop as the main agent — its own budget accounting
@@ -5910,7 +5917,7 @@ impl AgentLoopController {
             self,
             writer,
             host,
-            subagent,
+            &subagent,
             &profile,
             &goal, // IPG evaluates the task contract (a query may carry injected content)
             &sub_tool_defs,
@@ -5920,6 +5927,7 @@ impl AgentLoopController {
             orientation,
             cancel,
             heartbeat,
+            run_gateway,
         ))
         .await;
 
@@ -22977,6 +22985,16 @@ mod tests {
     }
     #[async_trait]
     impl ModelGateway for FlipRunnerAfterFirstRound {
+        fn for_new_run(&self) -> std::sync::Arc<dyn ModelGateway> {
+            // per-run 隔离语义：新 run 从「未翻转」开始（共享底层
+            // fake/runner/flipped ——测试断言语义不变）。
+            std::sync::Arc::new(Self {
+                inner: self.inner.clone(),
+                runner: self.runner.clone(),
+                flipped: std::sync::Arc::new(AtomicBool::new(false)),
+            })
+        }
+
         async fn generate(&self, request: ModelRequest) -> Result<ModelResponse, GatewayError> {
             if self
                 .flipped
@@ -24027,6 +24045,10 @@ mod tests {
         struct PartialThenAbort;
         #[async_trait]
         impl ModelGateway for PartialThenAbort {
+            fn for_new_run(&self) -> std::sync::Arc<dyn ModelGateway> {
+                std::sync::Arc::new(PartialThenAbort)
+            }
+
             async fn generate(&self, _req: ModelRequest) -> Result<ModelResponse, GatewayError> {
                 Err(GatewayError::Transport("stream aborted mid-way".into()))
             }
@@ -24079,6 +24101,174 @@ mod tests {
             orz_assurance::replay_journal(&dir.join("events.jsonl"), Some("RUN-PART"), None, true);
         assert!(replay.valid, "journal errors: {:?}", replay.errors);
         assert_eq!(replay.terminal_event.as_deref(), Some("run_failed"));
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// MIDSTREAM-DECODE-RETRY (2026-08-21, ADR-0010 §14.37 / 设计 §2.3)：
+    /// 成功路径 transport 重试计数入事件面——重试后恢复
+    /// （`transport_retry{outcome: recovered}`），journal 可见重试次数
+    /// 与类别。
+    #[tokio::test]
+    async fn transport_retry_recovered_event_is_journaled() {
+        struct RetryRecoveredGateway {
+            inner: Arc<FakeProvider>,
+            fired: std::sync::Arc<std::sync::atomic::AtomicU32>,
+        }
+        #[async_trait]
+        impl ModelGateway for RetryRecoveredGateway {
+            fn for_new_run(&self) -> std::sync::Arc<dyn ModelGateway> {
+                std::sync::Arc::new(Self {
+                    inner: self.inner.clone(),
+                    fired: self.fired.clone(),
+                })
+            }
+
+            async fn generate(&self, request: ModelRequest) -> Result<ModelResponse, GatewayError> {
+                self.inner.generate(request).await
+            }
+
+            async fn generate_stream(
+                &self,
+                request: ModelRequest,
+                cancel: Option<&tokio_util::sync::CancellationToken>,
+                heartbeat: Option<&crate::gateway::model::ActivityClock>,
+                on_chunk: &mut (dyn for<'a> FnMut(&'a str) + Send),
+            ) -> Result<ModelResponse, GatewayError> {
+                let mut response = self
+                    .inner
+                    .generate_stream(request, cancel, heartbeat, on_chunk)
+                    .await?;
+                // 仅第一次模型请求携带重试摘要（counterexample gate 轮
+                // 保持无重试，断言事件恰好一条）。
+                if self.fired.fetch_add(1, std::sync::atomic::Ordering::SeqCst) == 0 {
+                    response.transport_retry = crate::gateway::model::TransportRetryInfo {
+                        retries: 2,
+                        kind: Some(crate::gateway::model::TransportRetryKind::ZeroChunk),
+                        reason: Some("error sending request: connection reset".to_string()),
+                    };
+                }
+                Ok(response)
+            }
+        }
+
+        let dir = test_dir();
+        let journal = JournalRecorder::new(dir.clone());
+        let host = TestHost {
+            journal,
+            tool_result: None,
+        };
+        // 主模型轮 + 最终答案 counterexample gate 轮（§4.6）各一次。
+        let fake = Arc::new(FakeProvider::from_texts(vec!["完成", "完成"]));
+        let gateway: Arc<dyn ModelGateway> = Arc::new(RetryRecoveredGateway {
+            inner: fake,
+            fired: std::sync::Arc::new(std::sync::atomic::AtomicU32::new(0)),
+        });
+        let controller = AgentLoopController::with_gateway(gateway);
+        controller
+            .run_turn(&host, "hi", "RUN-RETRY-REC", MANIFEST, 0, None, None, None)
+            .await
+            .unwrap();
+
+        let events = std::fs::read_to_string(dir.join("events.jsonl")).unwrap();
+        let lines: Vec<serde_json::Value> = events
+            .lines()
+            .filter_map(|l| serde_json::from_str(l).ok())
+            .collect();
+        let retries: Vec<_> = lines
+            .iter()
+            .filter(|l| l["event_type"] == "transport_retry")
+            .collect();
+        assert_eq!(retries.len(), 1, "one transport_retry event in: {events}");
+        assert_eq!(retries[0]["payload"]["outcome"], "recovered");
+        assert_eq!(retries[0]["payload"]["retries"], 2);
+        assert_eq!(retries[0]["payload"]["kind"], "zero_chunk");
+        assert_eq!(
+            retries[0]["payload"]["reason"],
+            "error sending request: connection reset"
+        );
+        // 事件位于 model_output 之后、terminal 之前（链序）。
+        let retry_idx = lines
+            .iter()
+            .position(|l| l["event_type"] == "transport_retry")
+            .unwrap();
+        assert_eq!(lines.last().unwrap()["event_type"], "run_finished");
+        assert!(retry_idx < lines.len() - 1);
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// MIDSTREAM-DECODE-RETRY (2026-08-21, ADR-0010 §14.37 / 设计 §2.3)：
+    /// 失败路径 transport 重试耗尽事件（`transport_retry{outcome:
+    /// exhausted}`）——记录在 run_failed 之前，journal 链序完整。
+    #[tokio::test]
+    async fn transport_retry_exhausted_event_is_journaled() {
+        struct RetryExhaustedGateway;
+        #[async_trait]
+        impl ModelGateway for RetryExhaustedGateway {
+            fn for_new_run(&self) -> std::sync::Arc<dyn ModelGateway> {
+                std::sync::Arc::new(RetryExhaustedGateway)
+            }
+
+            async fn generate(&self, _req: ModelRequest) -> Result<ModelResponse, GatewayError> {
+                Err(GatewayError::StreamInterrupted {
+                    attempts: 3,
+                    saw_chunk: false,
+                    detail: "stream zero-chunk interruption: retry cap reached".to_string(),
+                })
+            }
+
+            async fn generate_stream(
+                &self,
+                _req: ModelRequest,
+                _cancel: Option<&tokio_util::sync::CancellationToken>,
+                _heartbeat: Option<&crate::gateway::model::ActivityClock>,
+                _on_chunk: &mut (dyn for<'a> FnMut(&'a str) + Send),
+            ) -> Result<ModelResponse, GatewayError> {
+                Err(GatewayError::StreamInterrupted {
+                    attempts: 3,
+                    saw_chunk: false,
+                    detail: "stream zero-chunk interruption: retry cap reached".to_string(),
+                })
+            }
+        }
+
+        let dir = test_dir();
+        let journal = JournalRecorder::new(dir.clone());
+        let host = TestHost {
+            journal,
+            tool_result: None,
+        };
+        let gateway: Arc<dyn ModelGateway> = Arc::new(RetryExhaustedGateway);
+        let controller = AgentLoopController::with_gateway(gateway);
+        let result = controller
+            .run_turn(&host, "hi", "RUN-RETRY-EXH", MANIFEST, 0, None, None, None)
+            .await;
+        assert!(result.is_err(), "expected model error, got {result:?}");
+
+        let events = std::fs::read_to_string(dir.join("events.jsonl")).unwrap();
+        let lines: Vec<serde_json::Value> = events
+            .lines()
+            .filter_map(|l| serde_json::from_str(l).ok())
+            .collect();
+        let retries: Vec<_> = lines
+            .iter()
+            .filter(|l| l["event_type"] == "transport_retry")
+            .collect();
+        assert_eq!(retries.len(), 1, "one transport_retry event in: {events}");
+        assert_eq!(retries[0]["payload"]["outcome"], "exhausted");
+        assert_eq!(retries[0]["payload"]["retries"], 3);
+        assert_eq!(retries[0]["payload"]["kind"], "zero_chunk");
+        // 耗尽事件必须位于 terminal run_failed 之前。
+        let retry_idx = lines
+            .iter()
+            .position(|l| l["event_type"] == "transport_retry")
+            .unwrap();
+        let failed_idx = lines
+            .iter()
+            .position(|l| l["event_type"] == "run_failed")
+            .unwrap();
+        assert!(retry_idx < failed_idx);
 
         let _ = std::fs::remove_dir_all(&dir);
     }

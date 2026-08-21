@@ -32,7 +32,8 @@ use crate::controller::{
 };
 use crate::diagnostic_coverage::{DebugEpisodeState, maybe_consume_dc_signal, maybe_fire_dc};
 use crate::gateway::model::{
-    ActivityClock, FinishReason, GatewayError, Message, ModelResponse, Role, ToolCall,
+    ActivityClock, FinishReason, GatewayError, Message, ModelGateway, ModelResponse, Role,
+    ToolCall, TransportRetryKind,
 };
 use crate::host::{LoopHost, RiskClass, ToolDef, ToolResult};
 use crate::orientation::{AgentRole, OrientationSessionState};
@@ -750,6 +751,11 @@ pub(crate) async fn run_agent_loop(
     mut orientation: Option<&mut OrientationSessionState>,
     cancel: Option<&tokio_util::sync::CancellationToken>,
     heartbeat: Option<&ActivityClock>,
+    // STALL-DEGENERATION-FAILFAST (2026-08-21, ADR-0010 §14.37 / 设计
+    // §2.2)：本 run 的 per-run 隔离 gateway——主 agent 与检索子代理
+    // 共享同一 run 实例（run 内退化计数/档位一致）；子代理派发时传给
+    // `run_retrieval_subagent`。
+    run_gateway: &Arc<dyn ModelGateway>,
 ) -> Result<LoopOutcome, AgentLoopError> {
     let workspace_trust = host.workspace_trust();
     // The session's budget counter (user adjudication 2026-08-10, review
@@ -1396,7 +1402,34 @@ pub(crate) async fn run_agent_loop(
             )
             .await
         {
-            Ok(r) => r,
+            Ok(r) => {
+                // MIDSTREAM-DECODE-RETRY (2026-08-21, ADR-0010 §14.37 /
+                // 设计 §2.3)：成功路径 transport 重试计数入事件面——
+                // 重试后恢复（recovered），journal 可观测重试频率。
+                if r.transport_retry.retries > 0 {
+                    writer
+                        .record(
+                            EventType::TransportRetry,
+                            serde_json::json!({
+                                "agent_role": profile.role.as_str(),
+                                "outcome": "recovered",
+                                "kind": match r.transport_retry.kind {
+                                    Some(TransportRetryKind::ZeroChunk) => {
+                                        serde_json::Value::String("zero_chunk".into())
+                                    }
+                                    Some(TransportRetryKind::Midstream) => {
+                                        serde_json::Value::String("midstream".into())
+                                    }
+                                    None => serde_json::Value::Null,
+                                },
+                                "retries": r.transport_retry.retries,
+                                "reason": r.transport_retry.reason,
+                            }),
+                        )
+                        .await?;
+                }
+                r
+            }
             // Phase 3 slice #11 (P3-7): a cancellation observed mid-stream
             // is a cancel, not a model failure — it must end the run with
             // `run_cancelled`, not a spurious `run_failed`.
@@ -1409,6 +1442,32 @@ pub(crate) async fn run_agent_loop(
                         "model request failed ({other}); view roles: {}",
                         roles.join(" ")
                     );
+                }
+                // MIDSTREAM-DECODE-RETRY (2026-08-21, ADR-0010 §14.37 /
+                // 设计 §2.3)：失败路径 transport 重试耗尽事件——耗尽后
+                // 显式失败（exhausted），带类别与原因；哨兵中断
+                // （attempts=0）不在此列。记录在 run_failed/terminal
+                // 之前，journal 链序完整。
+                if let GatewayError::StreamInterrupted {
+                    attempts,
+                    saw_chunk,
+                    detail,
+                    ..
+                } = &other
+                    && *attempts > 0
+                {
+                    writer
+                        .record(
+                            EventType::TransportRetry,
+                            serde_json::json!({
+                                "agent_role": profile.role.as_str(),
+                                "outcome": "exhausted",
+                                "kind": if *saw_chunk { "midstream" } else { "zero_chunk" },
+                                "retries": attempts,
+                                "reason": detail,
+                            }),
+                        )
+                        .await?;
                 }
                 // F-06 (D-7 "保留输出 + incomplete 标记 + 明确终止原因"): a
                 // stream that aborted after producing partial content
@@ -1475,7 +1534,14 @@ pub(crate) async fn run_agent_loop(
                         "output-health guard interrupted the model round (audit-only)"
                     );
                     if detail.starts_with(crate::gateway::transport::DEGENERATION_LIMIT_PREFIX) {
-                        return Err(AgentLoopError::Degeneration(detail.clone()));
+                        // STALL-DEGENERATION-FAILFAST (2026-08-21, ADR-0010
+                        // §14.37 / 设计 §2.2.4)：显式终止原因带触发轮次
+                        // （当前正在进行的模型请求轮，1 基；tool_rounds 在
+                        // 工具发放后才 +1）——journal/TUI 可追溯。
+                        return Err(AgentLoopError::Degeneration(format!(
+                            "{detail} round={}",
+                            tool_rounds + 1
+                        )));
                     }
                     return Err(AgentLoopError::Model(format!(
                         "stream degeneration guard: {detail}"
@@ -2069,6 +2135,7 @@ pub(crate) async fn run_agent_loop(
                             .run_retrieval_subagent(
                                 host,
                                 writer,
+                                run_gateway,
                                 target.clone(),
                                 tc,
                                 messages,

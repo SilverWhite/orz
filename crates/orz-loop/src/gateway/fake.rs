@@ -68,8 +68,12 @@ impl ScriptedResponse {
 
 /// Deterministic scripted gateway.
 pub struct FakeProvider {
-    script: Mutex<VecDeque<ScriptedResponse>>,
-    received: Mutex<Vec<ModelRequest>>,
+    /// STALL-DEGENERATION-FAILFAST (2026-08-21, ADR-0010 §14.37)：
+    /// `for_new_run` 返回共享底层的同壳实例（FakeProvider 无 per-run
+    /// 健康状态）——脚本队列与 received 观测跨 run 共享，控制器测试的
+    /// 断言语义保持不变。
+    script: std::sync::Arc<Mutex<VecDeque<ScriptedResponse>>>,
+    received: std::sync::Arc<Mutex<Vec<ModelRequest>>>,
     /// Char-count split for `generate_stream` (char boundaries — CJK-safe;
     /// never byte slicing). Default 4.
     chunk_size: usize,
@@ -80,8 +84,8 @@ pub struct FakeProvider {
 impl FakeProvider {
     pub fn new(script: Vec<ScriptedResponse>) -> Self {
         Self {
-            script: Mutex::new(script.into()),
-            received: Mutex::new(Vec::new()),
+            script: std::sync::Arc::new(Mutex::new(script.into())),
+            received: std::sync::Arc::new(Mutex::new(Vec::new())),
             chunk_size: 4,
             chunk_delay: None,
         }
@@ -119,6 +123,15 @@ impl FakeProvider {
 
 #[async_trait]
 impl ModelGateway for FakeProvider {
+    fn for_new_run(&self) -> std::sync::Arc<dyn ModelGateway> {
+        std::sync::Arc::new(Self {
+            script: self.script.clone(),
+            received: self.received.clone(),
+            chunk_size: self.chunk_size,
+            chunk_delay: self.chunk_delay,
+        })
+    }
+
     async fn generate(&self, request: ModelRequest) -> Result<ModelResponse, GatewayError> {
         self.received.lock().unwrap().push(request);
         let next = self
@@ -137,6 +150,7 @@ impl ModelGateway for FakeProvider {
             cache_hit_tokens: None,
             cache_miss_tokens: None,
             prompt_tokens: next.prompt_tokens,
+            transport_retry: Default::default(),
         })
     }
 
@@ -164,6 +178,7 @@ impl ModelGateway for FakeProvider {
             cache_hit_tokens: None,
             cache_miss_tokens: None,
             prompt_tokens: next.prompt_tokens,
+            transport_retry: Default::default(),
         };
         // Split on char boundaries (CJK-safe) — concatenating the chunks must
         // reproduce the full text exactly (Python text_delta invariant).

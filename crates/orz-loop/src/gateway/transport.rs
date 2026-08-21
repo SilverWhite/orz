@@ -54,7 +54,7 @@ use tokio_util::sync::CancellationToken;
 
 use super::model::{
     FinishReason as OurFinishReason, GatewayError, ModelConfig, ModelGateway, ModelRequest,
-    ModelResponse, ThinkingMode, ToolCall,
+    ModelResponse, ThinkingMode, ToolCall, TransportRetryInfo, TransportRetryKind,
 };
 
 /// Default DeepSeek API base (OpenAI-compatible).
@@ -96,6 +96,12 @@ pub const DEGENERATION_DETAIL_PREFIX: &str = "degeneration_detected:";
 
 /// 退化中断达上限 detail 前缀（run 层映射为 `run_invalidated`）。
 pub const DEGENERATION_LIMIT_PREFIX: &str = "degeneration_limit_reached:";
+
+/// MIDSTREAM-DECODE-RETRY (2026-08-21, ADR-0010 §14.37 / 设计 §2.2)：已见
+/// chunk 但未解码出完整 tool_calls 的中段截断重试上限。编译期常量（设计
+/// §3：不新增运行期旋钮）——有界 1 次，防「已烧数十 K 再原样重试烧一轮」
+/// 病态放大；耗尽后显式失败。
+pub const CHUNKED_MIDSTREAM_MAX_RETRIES: u32 = 1;
 
 // ───────────────────────────────────────────────────────────────────────────
 // OUTPUT-BUDGET-RESTORE-AND-STALL-GUARD (2026-08-20, ADR-0010 §14.35 /
@@ -381,11 +387,19 @@ pub fn real_gateway_from_credentials()
 pub struct DeepSeekTransport {
     pub config: ModelConfig,
     /// OUTPUT-DEGENERATION-GUARD (2026-08-19, ADR-0010 §14.33)：会话级连续
-    /// 退化中断计数（Arc 共享——Clone 不复制计数；任何成功请求重置）。
-    /// 达到 `DEGENERATION_LIMIT` 后下一次退化中断带
-    /// `degeneration_limit_reached` 标记，run 层据此记 run_invalidated
-    /// （防会话级循环；设计 §3.3）。
+    /// 退化中断计数（Arc 共享——Clone 不复制计数）。STALL-DEGENERATION-
+    /// FAILFAST (2026-08-21, ADR-0010 §14.37 / 设计 §2.2)：**run 内单调
+    /// 递增、成功请求不再清零**（仅 run 边界重置=新 transport）。达到
+    /// `DEGENERATION_LIMIT` 后下一次退化中断带 `degeneration_limit_reached`
+    /// 标记，run 层据此记 run_invalidated（防会话级循环；设计 §3.3）。
     degeneration_consecutive: Arc<AtomicU32>,
+    /// STALL-DEGENERATION-FAILFAST (2026-08-21, ADR-0010 §14.37 / 设计
+    /// §2.2.1)：会话级 thinking 起始档——reasoning 族哨兵触发降级后，本
+    /// run 后续请求从当前降级档起（high 触发 → 后续 low；low 再触发 →
+    /// 后续 disabled），**不再回 config 默认档**。档位随 run 单调下降，
+    /// 仅 run 边界重置（新 transport）。`None` = 尚未降级，按 config /
+    /// 请求覆盖档起始。
+    session_thinking: Arc<std::sync::Mutex<Option<ThinkingMode>>>,
 }
 
 impl DeepSeekTransport {
@@ -393,6 +407,7 @@ impl DeepSeekTransport {
         Self {
             config,
             degeneration_consecutive: Arc::new(AtomicU32::new(0)),
+            session_thinking: Arc::new(std::sync::Mutex::new(None)),
         }
     }
 
@@ -712,6 +727,9 @@ impl DeepSeekTransport {
             // A6 (2026-08-08): the measured prompt-token total — the trigger
             // for explicit context compaction.
             prompt_tokens: body.usage.as_ref().map(|u| u.prompt_tokens as u64),
+            // 非流式 `generate` 无 transport 重试摘要（重试仅存在于流式
+            // 路径）。
+            transport_retry: TransportRetryInfo::default(),
         })
     }
 
@@ -727,25 +745,35 @@ impl DeepSeekTransport {
         }
     }
 
-    /// GAP-STREAM-RETRY (2026-08-12): mark a streaming failure retryable.
-    /// A zero-chunk failure — NO SSE chunk decoded (reasoning deltas
-    /// included) — means the provider produced no output for this request,
-    /// so re-sending the identical body is side-effect-free (idempotent;
-    /// ADR-0007 §3 known-boundary premise). Once any chunk landed, output
-    /// existed: re-sending could duplicate tool calls, so those failures
-    /// stay plain errors (§2.1 已见输出不重试). Only wire-level failures
-    /// (transport / timeout) are wrapped: model rejections (permanent, e.g.
-    /// 400 — the fork's ApiError carries no HTTP status, so 429/5xx cannot
-    /// be classified reliably on this path) and parse errors are never
-    /// retried, and a user cancel must never be re-sent.
-    fn wrap_zero_chunk(&self, saw_chunk: bool, e: GatewayError) -> GatewayError {
-        if saw_chunk {
+    /// GAP-STREAM-RETRY (2026-08-12) + MIDSTREAM-DECODE-RETRY (2026-08-21,
+    /// ADR-0010 §14.37 / 设计 §2.1)：mark a streaming failure retryable.
+    /// The retry criterion is "no complete tool call decoded" — NOT "no
+    /// chunk": once a tool call has a full identity + valid JSON arguments,
+    /// output existed and re-sending could duplicate it (ADR-0007 §3
+    /// known-boundary premise; double-insurance even though the error path
+    /// never executes tool calls). Failures without a complete tool call
+    /// are idempotent to re-send — zero-chunk AND midstream (already-seen
+    /// content/reasoning chunks) are both wrapped, with `saw_chunk`
+    /// distinguishing the retry budget (zero-chunk 180s/10 vs midstream 1).
+    /// Only wire-level failures (transport / timeout) are wrapped: model
+    /// rejections (permanent, e.g. 400 — the fork's ApiError carries no
+    /// HTTP status, so 429/5xx cannot be classified reliably on this path)
+    /// and parse errors are never retried, and a user cancel must never be
+    /// re-sent.
+    fn wrap_no_tool_side_effects(
+        &self,
+        saw_chunk: bool,
+        saw_complete_tool_calls: bool,
+        e: GatewayError,
+    ) -> GatewayError {
+        if saw_complete_tool_calls {
             return e;
         }
         match e {
             GatewayError::Transport(detail) | GatewayError::Timeout(detail) => {
                 GatewayError::StreamInterrupted {
                     attempts: 0,
+                    saw_chunk,
                     detail,
                 }
             }
@@ -753,13 +781,41 @@ impl DeepSeekTransport {
         }
     }
 
-    /// GAP-STREAM-RETRY (2026-08-12): one logical stream attempt with
-    /// zero-chunk interruption retry. `stream_once` is the raw single
-    /// connection; this wrapper re-sends the IDENTICAL request body when the
-    /// attempt failed before any chunk existed (no model output — idempotent).
-    /// Retry discipline mirrors the fork's non-streaming `execute_raw`
-    /// (D-7): bounded by BOTH `request_max_retries` AND the backoff's
-    /// elapsed-time window (`request_retry_window`) — whichever ends first.
+    /// Whether the accumulated stream state holds at least one COMPLETE
+    /// tool call — identity (call_id + name) established AND arguments
+    /// parse as valid JSON. Used only on ERROR paths to decide retryability
+    /// (MIDSTREAM-DECODE-RETRY 设计 §2.1 双保险边界).
+    ///
+    /// 边界取「成功路径可分发的最小保守上界」：成功路径对非 JSON
+    /// arguments 容错为 `Value::Null` 后仍会分发工具（参数在工具校验处
+    /// 失败、无副作用）；本判定把非 JSON arguments 视为「未完整」→
+    /// 可重试。方向安全（Null 参数分发无副作用），且比成功路径更保守。
+    fn has_complete_tool_call(tool_calls: &[(u32, StreamToolCall)]) -> bool {
+        tool_calls.iter().any(|(_, t)| {
+            !t.call_id.is_empty()
+                && !t.name.is_empty()
+                && serde_json::from_str::<Value>(&t.arguments).is_ok()
+        })
+    }
+
+    /// GAP-STREAM-RETRY (2026-08-12) + MIDSTREAM-DECODE-RETRY (2026-08-21,
+    /// ADR-0010 §14.37): one logical stream attempt with bounded
+    /// interruption retry. `stream_once` is the raw single connection; this
+    /// wrapper re-sends the IDENTICAL request body when the attempt failed
+    /// before any complete tool call existed (no executable model output —
+    /// idempotent). Two budgets by interruption class:
+    ///   - zero-chunk (no decoded chunk): `request_max_retries` (10) AND
+    ///     the backoff window (`request_retry_window`, 180s) — either bound
+    ///     ends the chain first (ADR-0010 §14.36).
+    ///   - midstream (chunks decoded, no complete tool call): at most
+    ///     `CHUNKED_MIDSTREAM_MAX_RETRIES` (1) extra re-send — bounded to
+    ///     avoid re-burning a partially-consumed budget (设计 §2.2).
+    ///   - mixed sequences: a midstream retry whose retried attempt then
+    ///     fails ZERO-chunk enters the zero-chunk budget (fresh class —
+    ///     the retried request produced no output at all, so re-sending
+    ///     stays side-effect-free; the shared 180s backoff window still
+    ///     bounds the whole chain). 设计 §2.2 的「中段至多 1 次」按中断
+    ///     类别计，混合序列的总重发可超 1，属于有界延伸。
     /// Cancel during a backoff aborts the chain immediately (/stop must not
     /// be held hostage by a retry wait); a user cancel is never re-sent.
     async fn stream_once_with_retry(
@@ -779,44 +835,91 @@ impl DeepSeekTransport {
             ..Default::default()
         };
         let mut attempts: u32 = 0;
+        let mut chunked_retries: u32 = 0;
+        // MIDSTREAM-DECODE-RETRY (2026-08-21, ADR-0010 §14.37 / 设计
+        // §2.3)：本次逻辑请求的重试可观测摘要——成功路径随 response
+        // 返回，run 层记录 `transport_retry{outcome: recovered}`。
+        let mut retry_info = TransportRetryInfo::default();
         loop {
             match self
                 .stream_once(request, thinking, cancel, heartbeat, on_chunk)
                 .await
             {
-                Ok(response) => return Ok(response),
+                Ok(mut response) => {
+                    response.transport_retry = retry_info;
+                    return Ok(response);
+                }
                 // OUTPUT-DEGENERATION-GUARD (2026-08-19) + OUTPUT-BUDGET-
                 // RESTORE-AND-STALL-GUARD (2026-08-20, ADR-0010 §14.35):
                 // 输出健康哨兵中断绝不 zero-chunk 重试——content 族已见
                 // 输出（重发会重复工具调用，ADR-0007 纪律）；reasoning 族
                 // 无可见输出但长烧型原样重试大概率复现且贵（由 D-6 链直接
                 // 降级，§3.2）。直接透传，attempts 保持 0。
-                Err(GatewayError::StreamInterrupted { attempts, detail })
-                    if is_degeneration_detail(&detail) || is_reasoning_guard_detail(&detail) =>
-                {
+                Err(GatewayError::StreamInterrupted {
+                    attempts, detail, ..
+                }) if is_degeneration_detail(&detail) || is_reasoning_guard_detail(&detail) => {
                     tracing::warn!(
                         "stream interrupted by the output-health guard — not zero-chunk \
                          retried: {detail}"
                     );
-                    return Err(GatewayError::StreamInterrupted { attempts, detail });
+                    return Err(GatewayError::StreamInterrupted {
+                        attempts,
+                        saw_chunk: false,
+                        detail,
+                    });
                 }
-                Err(GatewayError::StreamInterrupted { detail, .. }) => {
-                    if attempts >= policy.request_max_retries {
+                Err(GatewayError::StreamInterrupted {
+                    detail, saw_chunk, ..
+                }) => {
+                    if saw_chunk {
+                        if chunked_retries >= CHUNKED_MIDSTREAM_MAX_RETRIES {
+                            tracing::warn!(
+                                "stream midstream interruption: chunked retry cap reached \
+                                 ({chunked_retries} retries), giving up: {detail}"
+                            );
+                            return Err(GatewayError::StreamInterrupted {
+                                attempts,
+                                saw_chunk,
+                                detail,
+                            });
+                        }
+                        chunked_retries += 1;
+                    } else if attempts >= policy.request_max_retries {
                         tracing::warn!(
                             "stream zero-chunk interruption: retry cap reached ({attempts} retries), giving up: {detail}"
                         );
-                        return Err(GatewayError::StreamInterrupted { attempts, detail });
+                        return Err(GatewayError::StreamInterrupted {
+                            attempts,
+                            saw_chunk,
+                            detail,
+                        });
                     }
                     let Some(delay) = backoff.next_backoff() else {
                         tracing::warn!(
-                            "stream zero-chunk interruption: retry window exhausted, giving up: {detail}"
+                            "stream {} interruption: retry window exhausted, giving up: {detail}",
+                            if saw_chunk { "midstream" } else { "zero-chunk" }
                         );
-                        return Err(GatewayError::StreamInterrupted { attempts, detail });
+                        return Err(GatewayError::StreamInterrupted {
+                            attempts,
+                            saw_chunk,
+                            detail,
+                        });
+                    };
+                    retry_info.retries += 1;
+                    retry_info.kind = Some(if saw_chunk {
+                        TransportRetryKind::Midstream
+                    } else {
+                        TransportRetryKind::ZeroChunk
+                    });
+                    retry_info.reason = Some(detail.clone());
+                    let (budget_label, budget_total) = if saw_chunk {
+                        ("midstream (chunked budget)", CHUNKED_MIDSTREAM_MAX_RETRIES)
+                    } else {
+                        ("zero-chunk", policy.request_max_retries)
                     };
                     tracing::warn!(
-                        "stream zero-chunk interruption (attempt {} of {}): retrying in {delay:?}: {detail}",
-                        attempts + 1,
-                        policy.request_max_retries
+                        "stream {budget_label} interruption (retry {} of {budget_total}): retrying in {delay:?}: {detail}",
+                        retry_info.retries,
                     );
                     match cancel {
                         Some(c) => tokio::select! {
@@ -868,7 +971,8 @@ impl DeepSeekTransport {
         )
         .await
         .map_err(|_| {
-            self.wrap_zero_chunk(
+            self.wrap_no_tool_side_effects(
+                false,
                 false,
                 GatewayError::Timeout(
                     "stream handshake hung — no response headers within the idle timeout"
@@ -876,13 +980,17 @@ impl DeepSeekTransport {
                 ),
             )
         })?
-        .map_err(|e| self.wrap_zero_chunk(false, self.map_error(e)))?;
+        .map_err(|e| self.wrap_no_tool_side_effects(false, false, self.map_error(e)))?;
 
         // GAP-STREAM-RETRY (2026-08-12): a stream attempt that produced NO
-        // decoded chunk before failing is retryable (see `wrap_zero_chunk`).
-        // Any successfully decoded SSE item counts — reasoning-only deltas
-        // included — because the provider then owns output for this request.
+        // complete tool call before failing is retryable (see
+        // `wrap_no_tool_side_effects`). `saw_chunk` (any successfully
+        // decoded SSE item — reasoning-only deltas included) distinguishes
+        // the zero-chunk vs midstream retry budget; a COMPLETE tool call is
+        // the double-insurance non-retry boundary (MIDSTREAM-DECODE-RETRY
+        // 设计 §2.1).
         let mut saw_chunk = false;
+        let mut saw_complete_tool_calls = false;
         let mut text_parts: Vec<String> = Vec::new();
         // OUTPUT-DEGENERATION-GUARD (2026-08-19, ADR-0010 §14.33): 生成期
         // 实时检测——on_chunk content delta 逐块喂入，任一阈值命中即中断
@@ -942,16 +1050,18 @@ impl DeepSeekTransport {
                     biased;
                     _ = c.cancelled() => return Err(GatewayError::Cancelled),
                     _ = tokio::time::sleep_until(last_activity + idle_timeout) => {
-                        return Err(self.wrap_zero_chunk(
+                        return Err(self.wrap_no_tool_side_effects(
                             saw_chunk,
+                            saw_complete_tool_calls,
                             GatewayError::Timeout(format!(
                                 "stream idle: no data for {idle_timeout:?}"
                             )),
                         ));
                     }
                     _ = tokio::time::sleep_until(total_deadline) => {
-                        return Err(self.wrap_zero_chunk(
+                        return Err(self.wrap_no_tool_side_effects(
                             saw_chunk,
+                            saw_complete_tool_calls,
                             GatewayError::Timeout(format!(
                                 "stream total budget {:?} exceeded",
                                 self.config.retry.stream_total_timeout
@@ -970,16 +1080,18 @@ impl DeepSeekTransport {
                 None => tokio::select! {
                     biased;
                     _ = tokio::time::sleep_until(last_activity + idle_timeout) => {
-                        return Err(self.wrap_zero_chunk(
+                        return Err(self.wrap_no_tool_side_effects(
                             saw_chunk,
+                            saw_complete_tool_calls,
                             GatewayError::Timeout(format!(
                                 "stream idle: no data for {idle_timeout:?}"
                             )),
                         ));
                     }
                     _ = tokio::time::sleep_until(total_deadline) => {
-                        return Err(self.wrap_zero_chunk(
+                        return Err(self.wrap_no_tool_side_effects(
                             saw_chunk,
+                            saw_complete_tool_calls,
                             GatewayError::Timeout(format!(
                                 "stream total budget {:?} exceeded",
                                 self.config.retry.stream_total_timeout
@@ -1008,8 +1120,13 @@ impl DeepSeekTransport {
             if let Some(h) = heartbeat {
                 h.stamp();
             }
-            let chunk: CreateChatCompletionStreamResponse =
-                item.map_err(|e| self.wrap_zero_chunk(saw_chunk, self.map_error(e)))?;
+            let chunk: CreateChatCompletionStreamResponse = item.map_err(|e| {
+                self.wrap_no_tool_side_effects(
+                    saw_chunk,
+                    saw_complete_tool_calls,
+                    self.map_error(e),
+                )
+            })?;
             saw_chunk = true;
             // D-6: the final chunk carries the aggregate usage (choices
             // empty, usage populated) when include_usage is honored.
@@ -1030,6 +1147,14 @@ impl DeepSeekTransport {
                     finish_reason = map_finish_reason(Some(fr));
                 }
             }
+            // MIDSTREAM-DECODE-RETRY (2026-08-21, ADR-0010 §14.37)：累积
+            // 状态一旦出现完整 tool call（call_id + name + 合法 JSON
+            // arguments ——成功路径可分发的最小保守上界，见
+            // `has_complete_tool_call`），后续任何失败都不得重发
+            // （双保险边界，设计 §2.1）。
+            if Self::has_complete_tool_call(&tool_calls) {
+                saw_complete_tool_calls = true;
+            }
             // OUTPUT-DEGENERATION-GUARD (2026-08-19) + OUTPUT-BUDGET-
             // RESTORE-AND-STALL-GUARD (2026-08-20, ADR-0010 §14.35): 预算
             // 兜底层逐 chunk 检查（stall 时间/预算 OR 触发）后，命中任一
@@ -1039,8 +1164,13 @@ impl DeepSeekTransport {
             degeneration.check_stall(std::time::Instant::now());
             if let Some(detail) = degeneration.trip_reason() {
                 let detail = self.degeneration_interrupt_detail(detail);
+                // 哨兵中断的 `saw_chunk` 恒为 false：哨兵错误一律不重试
+                // （`stream_once_with_retry` 的 guard 透传分支），该字段
+                // 只用于选择零 chunk/中段预算，哨兵路径不消费——语义
+                // 上「已见 chunk 但被哨兵截停」不进入任何重试预算。
                 return Err(GatewayError::StreamInterrupted {
                     attempts: 0,
+                    saw_chunk: false,
                     detail,
                 });
             }
@@ -1050,8 +1180,9 @@ impl DeepSeekTransport {
         // surfacing it as an error keeps the journal honest (no half-answer
         // recorded as a completed `stop`).
         if !saw_finish_reason {
-            return Err(self.wrap_zero_chunk(
+            return Err(self.wrap_no_tool_side_effects(
                 saw_chunk,
+                saw_complete_tool_calls,
                 GatewayError::Transport("stream ended without finish_reason".to_string()),
             ));
         }
@@ -1105,10 +1236,6 @@ impl DeepSeekTransport {
             None
         };
 
-        // OUTPUT-DEGENERATION-GUARD (2026-08-19, ADR-0010 §14.33): 一次成功
-        // 完成的请求重置会话级连续退化计数（「连续」= 无成功请求插入）。
-        self.degeneration_consecutive.store(0, Ordering::SeqCst);
-
         Ok(ModelResponse {
             text,
             tool_calls,
@@ -1130,14 +1257,19 @@ impl DeepSeekTransport {
             // A6 (2026-08-08): measured prompt-token total from the final
             // usage chunk — the compaction trigger.
             prompt_tokens: stream_usage.as_ref().map(|u| u.prompt_tokens as u64),
+            // transport 重试摘要由 `stream_once_with_retry` 在成功返回前
+            // 填装；`stream_once` 本身恒为无重试（默认）。
+            transport_retry: TransportRetryInfo::default(),
         })
     }
 
-    /// OUTPUT-DEGENERATION-GUARD (2026-08-19, ADR-0010 §14.33)：退化中断
-    /// 的防循环计数与 detail 标记——会话级连续计数递增；达到
+    /// OUTPUT-DEGENERATION-GUARD (2026-08-19, ADR-0010 §14.33) +
+    /// STALL-DEGENERATION-FAILFAST (2026-08-21, ADR-0010 §14.37)：退化
+    /// 中断的防循环计数与 detail 标记——run 内单调递增（成功请求不再
+    /// 清零，设计 §2.2.2；仅 run 边界重置=新 transport）。达到
     /// `DEGENERATION_LIMIT` 后以 `degeneration_limit_reached` 前缀标记
     /// （run 层映射 `run_invalidated`），否则 `degeneration_detected`
-    /// （run_failed 同路径）。任何成功请求经 `stream_once` 重置计数。
+    /// （run_failed 同路径）。
     fn degeneration_interrupt_detail(&self, detail: String) -> String {
         let consecutive = self.degeneration_consecutive.fetch_add(1, Ordering::SeqCst) + 1;
         if consecutive >= DEGENERATION_LIMIT {
@@ -1145,6 +1277,31 @@ impl DeepSeekTransport {
         } else {
             format!("{detail} consecutive={consecutive}")
         }
+    }
+
+    /// STALL-DEGENERATION-FAILFAST (2026-08-21, ADR-0010 §14.37 / 设计
+    /// §2.2.1)：本 run 的 thinking 起始档——reasoning 族哨兵已降级时
+    /// 从会话档位起（不再回 config 默认档）；否则按请求覆盖档 / config
+    /// 默认档。显式请求覆盖档（当前仅测试/预检面使用）在未降级时优先，
+    /// 降级后会话档位优先（防重新烧 high）。
+    fn session_thinking_start(&self, request: &ModelRequest) -> ThinkingMode {
+        let guard = self
+            .session_thinking
+            .lock()
+            .unwrap_or_else(|p| p.into_inner());
+        if let Some(tier) = *guard {
+            return tier;
+        }
+        self.effective_thinking(request)
+    }
+
+    /// STALL-DEGENERATION-FAILFAST：持久化降级档——reasoning 族哨兵在
+    /// 请求内逐级下降后，本 run 后续请求从该档起（单调下降）。
+    fn set_session_thinking(&self, tier: ThinkingMode) {
+        *self
+            .session_thinking
+            .lock()
+            .unwrap_or_else(|p| p.into_inner()) = Some(tier);
     }
 }
 
@@ -1293,6 +1450,14 @@ impl ModelGateway for DeepSeekTransport {
         self.config_fingerprint_impl()
     }
 
+    /// STALL-DEGENERATION-FAILFAST (2026-08-21, ADR-0010 §14.37 / 设计
+    /// §2.2)：per-run 隔离——退化计数与会话 thinking 档位全新（配置
+    /// 复制、健康状态归零）。长驻进程（ACP server）跨 run 共享原
+    /// transport，run 边界由控制器 `for_new_run` 显式换新。
+    fn for_new_run(&self) -> Arc<dyn ModelGateway> {
+        Arc::new(DeepSeekTransport::new(self.config.clone()))
+    }
+
     async fn generate(&self, request: ModelRequest) -> Result<ModelResponse, GatewayError> {
         // D-6 empty-content retry chain: an enabled thinking tier can
         // legitimately burn the whole budget on reasoning_content and leave
@@ -1358,74 +1523,114 @@ impl ModelGateway for DeepSeekTransport {
         // transport interruptions are handled inside
         // `stream_once_with_retry` and are orthogonal to this chain.
         //
-        let mut thinking = self.effective_thinking(&request);
+        // STALL-DEGENERATION-FAILFAST (2026-08-21, ADR-0010 §14.37 / 设计
+        // §2.2.1)：reasoning 族哨兵曾降级时，本 run 后续请求从会话档位
+        // 起（不再回 config 默认档）；首请求按 config/请求覆盖档。
+        let mut thinking = self.session_thinking_start(&request);
         let mut empty_retries: u32 = 0;
         let mut backoff = empty_response_backoff();
+        // MIDSTREAM-DECODE-RETRY (2026-08-21, ADR-0010 §14.37 / 设计
+        // §2.3)：D-6 空响应链多次调用 `stream_once_with_retry`——transport
+        // 重试摘要跨调用累积，最终成功响应携带全量计数。
+        let mut total_retry_info = TransportRetryInfo::default();
         loop {
             match self
                 .stream_once_with_retry(&request, thinking, cancel, heartbeat, on_chunk)
                 .await
             {
-                Ok(response) if !Self::empty_content_abnormal(&response) => {
+                Ok(response) => {
+                    let is_empty = Self::empty_content_abnormal(&response);
+                    // 累加本次调用的 transport 重试摘要（跨 D-6 迭代）；
+                    // kind/reason 取最后一次实际重试的类别/原因。
+                    total_retry_info.retries += response.transport_retry.retries;
+                    if let Some(kind) = response.transport_retry.kind {
+                        total_retry_info.kind = Some(kind);
+                        total_retry_info.reason = response.transport_retry.reason.clone();
+                    }
+                    if is_empty {
+                        // 完成型空响应 → 落入下方 D-6 链（快速有界重试/
+                        // 降级），本次重试摘要已并入 total_retry_info。
+                        // 完成型空响应。降级阶段（thinking 禁用）仍空 → 显式失败。
+                        if thinking == ThinkingMode::Disabled {
+                            return Err(GatewayError::Model(
+                                "budget exhausted with zero output — D-6 chain \
+                                 (per-tier fast bounded empty retries + high→low→ \
+                                 disabled degrade) all produced empty content"
+                                    .to_string(),
+                            ));
+                        }
+                        // 当前档位快速重试耗尽 → 逐级下降（high → low → disabled）；
+                        // 换档时重试计数与退避重置（每档独立「快速 ≤2 次」节奏，
+                        // 设计 §3.2/§3.6）。
+                        if empty_retries >= EMPTY_RESPONSE_MAX_RETRIES {
+                            let Some(next) = next_degraded_thinking(thinking) else {
+                                unreachable!("enabled tier always has a next tier");
+                            };
+                            tracing::warn!(
+                                "completed empty response after {empty_retries} retries — \
+                                 degrading to {next:?}"
+                            );
+                            thinking = next;
+                            empty_retries = 0;
+                            backoff = empty_response_backoff();
+                            continue;
+                        }
+                        let Some(delay) = backoff.next_backoff() else {
+                            let Some(next) = next_degraded_thinking(thinking) else {
+                                unreachable!("enabled tier always has a next tier");
+                            };
+                            tracing::warn!(
+                                "completed empty response: backoff exhausted — degrading to {next:?}"
+                            );
+                            thinking = next;
+                            empty_retries = 0;
+                            backoff = empty_response_backoff();
+                            continue;
+                        };
+                        tracing::warn!(
+                            "completed empty response (retry {} of {}) — retrying in {delay:?}",
+                            empty_retries + 1,
+                            EMPTY_RESPONSE_MAX_RETRIES
+                        );
+                        match cancel {
+                            Some(c) => tokio::select! {
+                                biased;
+                                _ = c.cancelled() => return Err(GatewayError::Cancelled),
+                                _ = tokio::time::sleep(delay) => {}
+                            },
+                            None => tokio::time::sleep(delay).await,
+                        }
+                        // P1-1 (2026-08-08 stall guards): 退避是静默时间，停滞
+                        // 看门狗不得在此期间误判。
+                        if let Some(h) = heartbeat {
+                            h.stamp();
+                        }
+                        empty_retries += 1;
+                        continue;
+                    }
+                    let mut response = response;
+                    response.transport_retry = total_retry_info.clone();
                     return Ok(response);
                 }
-                Ok(_empty) => {
-                    // 完成型空响应。降级阶段（thinking 禁用）仍空 → 显式失败。
-                    if thinking == ThinkingMode::Disabled {
-                        return Err(GatewayError::Model(
-                            "budget exhausted with zero output — D-6 chain \
-                             (per-tier fast bounded empty retries + high→low→ \
-                             disabled degrade) all produced empty content"
-                                .to_string(),
-                        ));
-                    }
-                    // 当前档位快速重试耗尽 → 逐级下降（high → low → disabled）；
-                    // 换档时重试计数与退避重置（每档独立「快速 ≤2 次」节奏，
-                    // 设计 §3.2/§3.6）。
-                    if empty_retries >= EMPTY_RESPONSE_MAX_RETRIES {
-                        let Some(next) = next_degraded_thinking(thinking) else {
-                            unreachable!("enabled tier always has a next tier");
-                        };
-                        tracing::warn!(
-                            "completed empty response after {empty_retries} retries — \
-                             degrading to {next:?}"
-                        );
-                        thinking = next;
-                        empty_retries = 0;
-                        backoff = empty_response_backoff();
-                        continue;
-                    }
-                    let Some(delay) = backoff.next_backoff() else {
-                        let Some(next) = next_degraded_thinking(thinking) else {
-                            unreachable!("enabled tier always has a next tier");
-                        };
-                        tracing::warn!(
-                            "completed empty response: backoff exhausted — degrading to {next:?}"
-                        );
-                        thinking = next;
-                        empty_retries = 0;
-                        backoff = empty_response_backoff();
-                        continue;
-                    };
+                Err(GatewayError::StreamInterrupted { detail, .. })
+                    if detail.starts_with(DEGENERATION_LIMIT_PREFIX) =>
+                {
+                    // STALL-DEGENERATION-FAILFAST (2026-08-21, ADR-0010
+                    // §14.37 / 设计 §2.2.2)：退化计数已达
+                    // `DEGENERATION_LIMIT` —— **不论当前 thinking 档位**
+                    // 立即显式终止（detail 已带
+                    // `degeneration_limit_reached` 前缀，run 层映射
+                    // run_invalidated）。独立分支把「达限即终止」从
+                    // 档位判定与分支顺序中解耦，避免未来梯级改动时
+                    // 静默破坏。
                     tracing::warn!(
-                        "completed empty response (retry {} of {}) — retrying in {delay:?}",
-                        empty_retries + 1,
-                        EMPTY_RESPONSE_MAX_RETRIES
+                        "degeneration limit reached — terminating the run explicitly: {detail}"
                     );
-                    match cancel {
-                        Some(c) => tokio::select! {
-                            biased;
-                            _ = c.cancelled() => return Err(GatewayError::Cancelled),
-                            _ = tokio::time::sleep(delay) => {}
-                        },
-                        None => tokio::time::sleep(delay).await,
-                    }
-                    // P1-1 (2026-08-08 stall guards): 退避是静默时间，停滞
-                    // 看门狗不得在此期间误判。
-                    if let Some(h) = heartbeat {
-                        h.stamp();
-                    }
-                    empty_retries += 1;
+                    return Err(GatewayError::StreamInterrupted {
+                        attempts: 0,
+                        saw_chunk: false,
+                        detail,
+                    });
                 }
                 Err(GatewayError::StreamInterrupted { detail, .. })
                     if is_reasoning_guard_detail(&detail)
@@ -1446,8 +1651,35 @@ impl ModelGateway for DeepSeekTransport {
                          identical retries, degrading to {next:?}: {detail}"
                     );
                     thinking = next;
+                    // 会话级持久化——后续请求从降级档起，防止每请求回 high
+                    // 反复烧 64K（设计 §2.2.1）。
+                    self.set_session_thinking(next);
                     empty_retries = 0;
                     backoff = empty_response_backoff();
+                }
+                Err(GatewayError::StreamInterrupted { detail, .. })
+                    if is_reasoning_guard_detail(&detail) && thinking == ThinkingMode::Disabled =>
+                {
+                    // STALL-DEGENERATION-FAILFAST (2026-08-21, ADR-0010
+                    // §14.37 / 设计 §2.2.3)：disabled 档已无更低档可降——
+                    // 哨兵再触发即立即显式终止（run_invalidated），不再
+                    // 重试。计数未达 3 时补 `degeneration_limit_reached`
+                    // 前缀强制 run 层走显式终止；已达 3 时 detail 自带
+                    // 前缀，透传即可。
+                    let detail = if detail.starts_with(DEGENERATION_LIMIT_PREFIX) {
+                        detail
+                    } else {
+                        format!("{DEGENERATION_LIMIT_PREFIX} disabled-tier guard ({detail})")
+                    };
+                    tracing::warn!(
+                        "reasoning-family guard at the disabled tier — terminating the run \
+                         explicitly: {detail}"
+                    );
+                    return Err(GatewayError::StreamInterrupted {
+                        attempts: 0,
+                        saw_chunk: false,
+                        detail,
+                    });
                 }
                 Err(e) => return Err(e),
             }
@@ -1610,6 +1842,7 @@ mod tests {
                 ..DeepSeekTransport::deepseek_v4("sk-test", "deepseek-v4-flash").config
             },
             degeneration_consecutive: Arc::new(AtomicU32::new(0)),
+            session_thinking: Arc::new(std::sync::Mutex::new(None)),
         };
         let max_json =
             serde_json::to_value(transport_for(ThinkingMode::EnabledMax).build_request(&request()))
@@ -1639,6 +1872,7 @@ mod tests {
                 ..DeepSeekTransport::deepseek_v4("sk-test", "deepseek-v4-flash").config
             },
             degeneration_consecutive: Arc::new(AtomicU32::new(0)),
+            session_thinking: Arc::new(std::sync::Mutex::new(None)),
         };
         let req = t.build_request(&request());
         let json = serde_json::to_value(&req).unwrap();
@@ -1690,7 +1924,11 @@ mod tests {
     }
 
     #[test]
-    fn degeneration_consecutive_counter_reaches_limit_then_resets() {
+    fn degeneration_consecutive_counter_reaches_limit_and_never_resets() {
+        // STALL-DEGENERATION-FAILFAST (2026-08-21, ADR-0010 §14.37 / 设计
+        // §2.2.2)：哨兵计数 run 内单调递增——成功请求不再清零（仅 run
+        // 边界重置=新 transport），封死「stall→成功→stall」跨请求反复烧
+        // 预算模式。
         let t = DeepSeekTransport::deepseek_v4("sk-test", "deepseek-v4-flash");
         for i in 1..=2 {
             let detail = t.degeneration_interrupt_detail("degeneration_detected: x".into());
@@ -1699,12 +1937,11 @@ mod tests {
         }
         let detail = t.degeneration_interrupt_detail("degeneration_detected: x".into());
         assert!(detail.starts_with(DEGENERATION_LIMIT_PREFIX), "{detail}");
-        // A successful request resets the consecutive counter (design §3.3:
-        // 「连续」= 无成功请求插入).
-        t.degeneration_consecutive.store(0, Ordering::SeqCst);
+        // 「成功」不再重置计数——第 4 次触发继续带 limit 标记且 consecutive
+        // 单调递增（旧语义为重置回 1）。
         let detail = t.degeneration_interrupt_detail("degeneration_detected: x".into());
-        assert!(detail.starts_with(DEGENERATION_DETAIL_PREFIX), "{detail}");
-        assert!(detail.contains("consecutive=1"), "{detail}");
+        assert!(detail.starts_with(DEGENERATION_LIMIT_PREFIX), "{detail}");
+        assert!(detail.contains("consecutive=4"), "{detail}");
     }
 
     /// SSE body with `n` identical content-delta frames (degeneration probe).
@@ -1740,7 +1977,7 @@ mod tests {
             .await
             .unwrap_err();
         assert!(
-            matches!(&err, GatewayError::StreamInterrupted { attempts: 0, detail } if detail.starts_with(DEGENERATION_DETAIL_PREFIX)),
+            matches!(&err, GatewayError::StreamInterrupted { attempts: 0, detail, .. } if detail.starts_with(DEGENERATION_DETAIL_PREFIX)),
             "degeneration must surface StreamInterrupted(attempts=0) with the marker, got {err:?}"
         );
         assert_eq!(
@@ -2101,6 +2338,226 @@ mod tests {
             attempts.load(std::sync::atomic::Ordering::SeqCst),
             2,
             "stall must skip identical retries and degrade directly"
+        );
+    }
+
+    // ── STALL-DEGENERATION-FAILFAST (2026-08-21, ADR-0010 §14.37 / 设计
+    // §2.2)：会话级档位 + 单调计数 + disabled 档即终止 ──────────────────
+
+    #[tokio::test]
+    async fn generate_stream_session_thinking_tier_persists_across_requests() {
+        // 设计 §2.2.1：reasoning 族哨兵降级后，本 run 后续请求从降级档
+        // 起——不再回 config 默认档 high（封死「stall→成功→回 high 再
+        // 烧 64K」跨请求模式）。
+        let stall = reasoning_stall_sse_body();
+        let ok = ok_sse_body("ok");
+        let attempts = std::sync::Arc::new(std::sync::atomic::AtomicU32::new(0));
+        let attempts_handle = attempts.clone();
+        let base = spawn_mock(move |_line, body| {
+            let n = attempts_handle.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            match n {
+                0 => {
+                    assert!(
+                        body.contains("\"high\""),
+                        "first request starts at the config high tier: {body}"
+                    );
+                    MockResponse::sse(vec![&stall], std::time::Duration::ZERO)
+                }
+                1 => {
+                    assert!(
+                        body.contains("\"low\""),
+                        "same-request degrade must retry at low: {body}"
+                    );
+                    MockResponse::sse(vec![&ok], std::time::Duration::ZERO)
+                }
+                _ => {
+                    assert!(
+                        body.contains("\"low\""),
+                        "subsequent request must START at the session tier (low): {body}"
+                    );
+                    MockResponse::sse(vec![&ok], std::time::Duration::ZERO)
+                }
+            }
+        })
+        .await;
+        let t = mock_transport_with_retry_thinking(
+            &base,
+            Default::default(),
+            ThinkingMode::EnabledHigh,
+        );
+        // 第一次请求：high stall → 降 low → low 成功（同一请求内 2 次连接）。
+        let r = t
+            .generate_stream(request(), None, None, &mut |_| {})
+            .await
+            .unwrap();
+        assert_eq!(r.text.as_deref(), Some("ok"));
+        // 第二次请求：会话档位 low 直接起始（1 次连接），成功后再一次仍
+        // 是 low（档位不因成功回弹）。
+        let r2 = t
+            .generate_stream(request(), None, None, &mut |_| {})
+            .await
+            .unwrap();
+        assert_eq!(r2.text.as_deref(), Some("ok"));
+        let r3 = t
+            .generate_stream(request(), None, None, &mut |_| {})
+            .await
+            .unwrap();
+        assert_eq!(r3.text.as_deref(), Some("ok"));
+        let n = attempts.load(std::sync::atomic::Ordering::SeqCst);
+        assert_eq!(
+            n, 4,
+            "high+low (first request) + low×2 (subsequent requests): {n} connections"
+        );
+    }
+
+    #[tokio::test]
+    async fn generate_stream_reasoning_guard_chain_terminates_at_limit() {
+        // 设计 §2.2.2：哨兵计数 run 内单调——high stall → low stall →
+        // disabled stall，第 3 次触发带 `degeneration_limit_reached`
+        // 标记（run_invalidated 语义），链尾显式终止不再重试。
+        let stall = reasoning_stall_sse_body();
+        let attempts = std::sync::Arc::new(std::sync::atomic::AtomicU32::new(0));
+        let attempts_handle = attempts.clone();
+        let base = spawn_mock(move |_line, body| {
+            let n = attempts_handle.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            match n {
+                0 => {
+                    assert!(body.contains("\"high\""), "attempt 1 uses high: {body}");
+                    MockResponse::sse(vec![&stall], std::time::Duration::ZERO)
+                }
+                1 => {
+                    assert!(body.contains("\"low\""), "attempt 2 uses low: {body}");
+                    MockResponse::sse(vec![&stall], std::time::Duration::ZERO)
+                }
+                _ => {
+                    assert!(
+                        body.contains("\"type\":\"disabled\"")
+                            && !body.contains("reasoning_effort"),
+                        "attempt 3 uses disabled: {body}"
+                    );
+                    MockResponse::sse(vec![&stall], std::time::Duration::ZERO)
+                }
+            }
+        })
+        .await;
+        let t = mock_transport_with_retry_thinking(
+            &base,
+            Default::default(),
+            ThinkingMode::EnabledHigh,
+        );
+        let err = t
+            .generate_stream(request(), None, None, &mut |_| {})
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(&err, GatewayError::StreamInterrupted { detail, .. } if detail.starts_with(DEGENERATION_LIMIT_PREFIX)),
+            "3rd guard must carry the run_invalidated marker: {err:?}"
+        );
+        let n = attempts.load(std::sync::atomic::Ordering::SeqCst);
+        assert_eq!(
+            n, 3,
+            "high → low → disabled → explicit termination: {n} connections"
+        );
+    }
+
+    #[tokio::test]
+    async fn generate_stream_disabled_tier_guard_terminates_explicitly() {
+        // 设计 §2.2.3：EnabledMax 首哨兵直跳 disabled；disabled 档再触发
+        // 哨兵（无更低档）→ 立即显式终止（补 `degeneration_limit_reached`
+        // 标记，run_invalidated），不再重试——即使计数未达 3。
+        let stall = reasoning_stall_sse_body();
+        let attempts = std::sync::Arc::new(std::sync::atomic::AtomicU32::new(0));
+        let attempts_handle = attempts.clone();
+        let base = spawn_mock(move |_line, body| {
+            let n = attempts_handle.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            match n {
+                0 => {
+                    assert!(body.contains("\"max\""), "attempt 1 uses max: {body}");
+                    MockResponse::sse(vec![&stall], std::time::Duration::ZERO)
+                }
+                _ => {
+                    assert!(
+                        body.contains("\"type\":\"disabled\"")
+                            && !body.contains("reasoning_effort"),
+                        "attempt 2 uses disabled: {body}"
+                    );
+                    MockResponse::sse(vec![&stall], std::time::Duration::ZERO)
+                }
+            }
+        })
+        .await;
+        let t =
+            mock_transport_with_retry_thinking(&base, Default::default(), ThinkingMode::EnabledMax);
+        let err = t
+            .generate_stream(request(), None, None, &mut |_| {})
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(&err, GatewayError::StreamInterrupted { detail, .. } if detail.starts_with(DEGENERATION_LIMIT_PREFIX) && detail.contains("disabled-tier guard")),
+            "disabled-tier guard must terminate explicitly: {err:?}"
+        );
+        let n = attempts.load(std::sync::atomic::Ordering::SeqCst);
+        assert_eq!(
+            n, 2,
+            "max stall → disabled stall → explicit termination: {n} connections"
+        );
+    }
+
+    #[tokio::test]
+    async fn for_new_run_resets_session_tier_across_logical_runs() {
+        // STALL-DEGENERATION-FAILFAST (2026-08-21, ADR-0010 §14.37 /
+        // 设计 §2.2 + 审查修复)：per-run 隔离——run 1 触发降级后
+        // `for_new_run` 换新实例，run 2 从 config 默认档（high）重新
+        // 开始，不再继承 run 1 的降级档（正式路径=ACP server 跨 run
+        // 共享 transport 的边界语义）。
+        let stall = reasoning_stall_sse_body();
+        let ok = ok_sse_body("ok");
+        let attempts = std::sync::Arc::new(std::sync::atomic::AtomicU32::new(0));
+        let attempts_handle = attempts.clone();
+        let base = spawn_mock(move |_line, body| {
+            let n = attempts_handle.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            match n {
+                0 => {
+                    assert!(body.contains("\"high\""), "run 1 first request: high: {body}");
+                    MockResponse::sse(vec![&stall], std::time::Duration::ZERO)
+                }
+                1 => {
+                    assert!(body.contains("\"low\""), "run 1 degrade to low: {body}");
+                    MockResponse::sse(vec![&ok], std::time::Duration::ZERO)
+                }
+                _ => {
+                    assert!(
+                        body.contains("\"high\""),
+                        "run 2 must start at the config tier (high), not inherit run 1's low: {body}"
+                    );
+                    MockResponse::sse(vec![&ok], std::time::Duration::ZERO)
+                }
+            }
+        })
+        .await;
+        let t = mock_transport_with_retry_thinking(
+            &base,
+            Default::default(),
+            ThinkingMode::EnabledHigh,
+        );
+        // run 1：high stall → 降 low → low 成功（会话档位持久化为 low）。
+        let r = t
+            .generate_stream(request(), None, None, &mut |_| {})
+            .await
+            .unwrap();
+        assert_eq!(r.text.as_deref(), Some("ok"));
+        // run 边界：换新实例（等价于 controller.run_turn_inner 的
+        // `for_new_run`）。
+        let fresh = t.for_new_run();
+        let r2 = fresh
+            .generate_stream(request(), None, None, &mut |_| {})
+            .await
+            .unwrap();
+        assert_eq!(r2.text.as_deref(), Some("ok"));
+        let n = attempts.load(std::sync::atomic::Ordering::SeqCst);
+        assert_eq!(
+            n, 3,
+            "run 1 (high+low) + run 2 fresh (high): {n} connections"
         );
     }
 
@@ -2807,6 +3264,7 @@ mod tests {
                 thinking,
             },
             degeneration_consecutive: Arc::new(AtomicU32::new(0)),
+            session_thinking: Arc::new(std::sync::Mutex::new(None)),
         }
     }
 
@@ -3096,10 +3554,12 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn generate_stream_truncated_stream_is_an_error() {
+    async fn generate_stream_truncated_stream_retries_then_errors_explicitly() {
         // A stream that ends without a finish_reason block is truncated
         // (proxy drop / deploy switch / overload) — it must surface as an
-        // error, never as a completed `stop` answer (D1-1).
+        // error, never as a completed `stop` answer (D1-1). MIDSTREAM-
+        // DECODE-RETRY (2026-08-21, ADR-0010 §14.37): chunks decoded with
+        // no complete tool call → bounded single retry → explicit failure.
         let frame = |delta: &str| {
             format!(
                 "data: {{\"id\":\"x\",\"object\":\"chat.completion.chunk\",\"created\":0,\"model\":\"m\",\"choices\":[{{\"index\":0,\"delta\":{delta},\"finish_reason\":null}}]}}\n\n",
@@ -3121,12 +3581,12 @@ mod tests {
             .await
             .unwrap_err();
         assert!(
-            matches!(&err, GatewayError::Transport(m) if m.contains("finish_reason")),
-            "truncated stream must error, got {err:?}"
+            matches!(&err, GatewayError::StreamInterrupted { attempts: 1, saw_chunk: true, detail } if detail.contains("finish_reason")),
+            "truncated stream must retry once then error explicitly, got {err:?}"
         );
-        // Chunks delivered so far are still honest deltas — but the response
-        // must never be treated as complete.
-        assert_eq!(chunks, vec!["half", "-done"]);
+        // Chunks delivered from BOTH attempts are still honest deltas — but
+        // the response must never be treated as complete.
+        assert_eq!(chunks, vec!["half", "-done", "half", "-done"]);
     }
 
     #[tokio::test]
@@ -3435,7 +3895,7 @@ mod tests {
             .await
             .unwrap_err();
         assert!(
-            matches!(&err, GatewayError::StreamInterrupted { attempts, detail } if *attempts == 1 && detail.contains("idle")),
+            matches!(&err, GatewayError::StreamInterrupted { attempts, detail, .. } if *attempts == 1 && detail.contains("idle")),
             "silent stream must retry once then fail via StreamInterrupted, got {err:?}"
         );
         assert!(chunks.is_empty());
@@ -3537,22 +3997,64 @@ mod tests {
         assert_eq!(n, 2, "zero-chunk EOF must retry exactly once: {n}");
     }
 
-    #[tokio::test]
-    async fn generate_stream_after_chunk_interruption_is_not_retried() {
-        // The retry boundary (user ruling 2026-08-12): once ANY chunk
-        // landed, output existed — re-sending would duplicate tool calls.
-        // A mid-stream drop after a chunk must fail immediately (exactly
-        // one connection).
+    /// SSE body: content chunks followed by `[DONE]` with NO finish_reason
+    /// — a midstream truncation (chunks decoded, no complete tool call).
+    fn midstream_truncation_sse_body() -> String {
         let frame = |delta: &str| {
             format!(
                 "data: {{\"id\":\"x\",\"object\":\"chat.completion.chunk\",\"created\":0,\"model\":\"m\",\"choices\":[{{\"index\":0,\"delta\":{delta},\"finish_reason\":null}}]}}\n\n",
             )
         };
-        let body = format!(
+        format!(
             "{}{}data: [DONE]\n\n",
             frame(r#"{"role":"assistant","content":"half"}"#),
             frame(r#"{"content":"-done"}"#),
+        )
+    }
+
+    #[tokio::test]
+    async fn generate_stream_midstream_truncation_retries_then_succeeds() {
+        // MIDSTREAM-DECODE-RETRY (2026-08-21, ADR-0010 §14.37 / 设计
+        // §2.1)：已见 chunk 但无完整 tool_calls 的截断（dna-assembly 的
+        // `error decoding response body` 类签名）→ 有界重试 1 次（幂等——
+        // 错误路径工具从未执行）。旧纪律「已见输出不重试」废止。
+        let body = midstream_truncation_sse_body();
+        let ok = ok_sse_body("ok-after-retry");
+        let attempts = std::sync::Arc::new(std::sync::atomic::AtomicU32::new(0));
+        let attempts_handle = attempts.clone();
+        let base = spawn_mock(move |_line, _body| {
+            let n = attempts_handle.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            if n == 0 {
+                MockResponse::sse(vec![&body], std::time::Duration::ZERO)
+            } else {
+                MockResponse::sse(vec![&ok], std::time::Duration::ZERO)
+            }
+        })
+        .await;
+        let t = mock_transport_with_retry(&base, short_retry_policy());
+        let mut chunks = Vec::new();
+        let r = t
+            .generate_stream(request(), None, None, &mut |c| chunks.push(c.to_string()))
+            .await
+            .unwrap();
+        assert_eq!(r.text.as_deref(), Some("ok-after-retry"));
+        assert_eq!(
+            chunks,
+            vec!["half", "-done", "ok-after-retry"],
+            "partial chunks from the failed attempt are delivered, then the retry's output"
         );
+        let n = attempts.load(std::sync::atomic::Ordering::SeqCst);
+        assert_eq!(
+            n, 2,
+            "midstream truncation must retry exactly once: {n} connections"
+        );
+    }
+
+    #[tokio::test]
+    async fn generate_stream_midstream_truncation_retry_exhausts_explicitly() {
+        // 设计 §2.2：chunked 有界 1 次——持续中段截断在第 2 次连接后显式
+        // 失败（attempts=1、saw_chunk=true），不再无限烧预算。
+        let body = midstream_truncation_sse_body();
         let attempts = std::sync::Arc::new(std::sync::atomic::AtomicU32::new(0));
         let attempts_handle = attempts.clone();
         let base = spawn_mock(move |_line, _body| {
@@ -3567,14 +4069,53 @@ mod tests {
             .await
             .unwrap_err();
         assert!(
-            matches!(&err, GatewayError::Transport(m) if m.contains("finish_reason")),
-            "after-chunk truncation must stay a plain transport error: {err:?}"
+            matches!(&err, GatewayError::StreamInterrupted { attempts: 1, saw_chunk: true, detail } if detail.contains("finish_reason")),
+            "midstream retry exhaustion must surface StreamInterrupted(attempts=1, saw_chunk=true): {err:?}"
         );
-        assert_eq!(chunks, vec!["half", "-done"]);
+        assert_eq!(chunks, vec!["half", "-done", "half", "-done"]);
+        let n = attempts.load(std::sync::atomic::Ordering::SeqCst);
+        assert_eq!(
+            n, 2,
+            "chunked retry budget must cap at one extra re-send: {n} connections"
+        );
+    }
+
+    #[tokio::test]
+    async fn generate_stream_complete_tool_call_truncation_is_not_retried() {
+        // 设计 §2.1 双保险边界：失败流已解码出完整 tool_calls（id + name +
+        // 合法 JSON arguments）→ 不重试，保持普通 Transport 错误（即便
+        // 执行路径不会运行它）。
+        let frame = |delta: &str| {
+            format!(
+                "data: {{\"id\":\"x\",\"object\":\"chat.completion.chunk\",\"created\":0,\"model\":\"m\",\"choices\":[{{\"index\":0,\"delta\":{delta},\"finish_reason\":null}}]}}\n\n",
+            )
+        };
+        let body = format!(
+            "{}data: [DONE]\n\n",
+            frame(
+                r#"{"role":"assistant","tool_calls":[{"index":0,"id":"call-1","type":"function","function":{"name":"read_file","arguments":"{\"target_file\":\"a.txt\"}"}}]}"#
+            ),
+        );
+        let attempts = std::sync::Arc::new(std::sync::atomic::AtomicU32::new(0));
+        let attempts_handle = attempts.clone();
+        let base = spawn_mock(move |_line, _body| {
+            attempts_handle.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            MockResponse::sse(vec![&body], std::time::Duration::ZERO)
+        })
+        .await;
+        let t = mock_transport_with_retry(&base, short_retry_policy());
+        let err = t
+            .generate_stream(request(), None, None, &mut |_| {})
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(&err, GatewayError::Transport(m) if m.contains("finish_reason")),
+            "complete tool call must keep the plain transport error (no retry): {err:?}"
+        );
         let n = attempts.load(std::sync::atomic::Ordering::SeqCst);
         assert_eq!(
             n, 1,
-            "after-chunk interruption must NOT retry: {n} connections"
+            "complete tool calls must never be re-sent: {n} connections"
         );
     }
 
@@ -3601,7 +4142,7 @@ mod tests {
             .await
             .unwrap_err();
         assert!(
-            matches!(&err, GatewayError::StreamInterrupted { attempts, detail } if *attempts == 3 && detail.contains("finish_reason")),
+            matches!(&err, GatewayError::StreamInterrupted { attempts, detail, .. } if *attempts == 3 && detail.contains("finish_reason")),
             "persistent interruption must surface StreamInterrupted with the retry count: {err:?}"
         );
         assert!(chunks.is_empty());
@@ -3730,7 +4271,10 @@ mod tests {
     async fn generate_stream_total_budget_backstop() {
         // D-7: the total budget is an auxiliary backstop over the whole
         // stream — even with periodic data, a stream that never terminates
-        // within the budget errors instead of running forever.
+        // within the budget errors instead of running forever. MIDSTREAM-
+        // DECODE-RETRY (2026-08-21): the budget timeout after decoded
+        // chunks (no complete tool call) is retried once, then fails
+        // explicitly.
         let frame = |delta: &str| {
             format!(
                 "data: {{\"id\":\"x\",\"object\":\"chat.completion.chunk\",\"created\":0,\"model\":\"m\",\"choices\":[{{\"index\":0,\"delta\":{delta},\"finish_reason\":null}}]}}\n\n",
@@ -3757,8 +4301,8 @@ mod tests {
             .await
             .unwrap_err();
         assert!(
-            matches!(&err, GatewayError::Timeout(m) if m.contains("total")),
-            "non-terminating stream must hit the total budget, got {err:?}"
+            matches!(&err, GatewayError::StreamInterrupted { attempts: 1, saw_chunk: true, detail } if detail.contains("total")),
+            "non-terminating stream must hit the total budget then fail explicitly, got {err:?}"
         );
         // Data did flow before the backstop fired.
         assert!(!chunks.is_empty());
