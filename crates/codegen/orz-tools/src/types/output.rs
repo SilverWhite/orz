@@ -257,6 +257,13 @@ pub struct FileContent {
     /// offset-past-end vs genuinely-empty files.
     #[serde(default)]
     pub total_lines: usize,
+    /// ORZ content anchor (FUS-READ-ANCHOR-WRITE-GUARD, ADR-0010 §14.38):
+    /// `{size, mtime, sha256}` captured from the same read snapshot. `None`
+    /// for PDF/PPTX/image/binary paths without a text decode chain. The main
+    /// agent copies this into a later write order's `expected_anchor` so the
+    /// mechanical write gate verifies the file is unchanged before editing.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub read_anchor: Option<ReadAnchor>,
     /// Decoding stage that produced this file's text (GAP-ENCODING-GATE,
     /// OPS-PROTOCOL §8): `utf-8` / `utf-8-sig` / `gb18030` / `utf-8-lossy`.
     /// Recorded on the journal's `tool_completed.output_encoding`; `None`
@@ -319,6 +326,22 @@ pub struct LineRange {
     /// 1-based last line.
     pub end_line: usize,
 }
+/// Content anchor returned by `read_file` for the text path
+/// (FUS-READ-ANCHOR-WRITE-GUARD, ADR-0010 §14.38). Mechanically computable
+/// and mechanically comparable — the assistant layer never interprets it.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct ReadAnchor {
+    /// File size in bytes (of the same read snapshot as `sha256`).
+    pub size: usize,
+    /// Last-modified unix seconds (best-effort; filesystems may round or
+    /// preserve timestamps — used only as a fast pre-check, never the
+    /// authority). `None` when the filesystem exposes no modification time.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mtime: Option<u64>,
+    /// SHA-256 hex digest of the raw file bytes (authoritative content
+    /// identity).
+    pub sha256: String,
+}
 /// ORZ-LARGE-FILE-READ-CONTRACT (ADR-0010 §14.22, 2026-08-17): bounded
 /// read-handle envelope returned by `read_file` when the target text file
 /// exceeds the coarse gate (default 16 KiB, configurable 8–32 KiB via
@@ -331,6 +354,11 @@ pub struct ReadHandleEnvelope {
     pub path: PathBuf,
     /// File size in bytes.
     pub size: usize,
+    /// Last-modified unix seconds (best-effort; filesystems may round or
+    /// preserve timestamps — fast pre-check only, `content_sha256` is the
+    /// authority). `None` when the filesystem exposes no modification time.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mtime: Option<u64>,
     /// Decode stage observed (GAP-ENCODING-GATE, OPS-PROTOCOL §8):
     /// `utf-8` / `utf-8-sig` / `gb18030` / `utf-8-lossy`.
     pub encoding: String,
@@ -831,26 +859,52 @@ impl ToolOutput {
     }
     /// Render tool output for inclusion in the model prompt with specified format.
     pub fn to_prompt_format(&self) -> String {
+        /// FUS-READ-ANCHOR-WRITE-GUARD (ADR-0010 §14.38): one-line model-facing
+        /// anchor footer so the main agent can copy it into a write order's
+        /// `expected_anchor`. Empty when no anchor is available.
+        fn anchor_footer(read_anchor: Option<&ReadAnchor>) -> String {
+            match read_anchor {
+                Some(anchor) => match anchor.mtime {
+                    Some(mtime) => format!(
+                        "\n[read anchor] sha256={} size={} mtime={mtime}",
+                        anchor.sha256, anchor.size
+                    ),
+                    None => format!(
+                        "\n[read anchor] sha256={} size={}",
+                        anchor.sha256, anchor.size
+                    ),
+                },
+                None => String::new(),
+            }
+        }
         match self {
             ToolOutput::ReadFile(read_file_output) => match read_file_output {
                 ReadFileOutput::FileContent(file_content) if file_content.content.is_empty() => {
+                    let footer = anchor_footer(file_content.read_anchor.as_ref());
                     if file_content.total_lines == 0 {
-                        "File is empty.".to_string()
+                        format!("File is empty.{footer}")
                     } else if file_content
                         .offset
                         .is_some_and(|offset| offset > file_content.total_lines)
                     {
                         format!(
                             "(no lines returned: the requested window is past the end of the \
-                             file; the file has {} lines)",
-                            file_content.total_lines
+                             file; the file has {} lines){footer}",
+                            file_content.total_lines,
                         )
                     } else {
-                        "(no lines returned)".to_string()
+                        format!("(no lines returned){footer}")
                     }
                 }
-                ReadFileOutput::FileContent(file_content) => file_content.content.clone(),
+                ReadFileOutput::FileContent(file_content) => {
+                    let footer = anchor_footer(file_content.read_anchor.as_ref());
+                    format!("{}{footer}", file_content.content)
+                }
                 ReadFileOutput::ReadHandle(handle) => {
+                    let mtime = handle
+                        .mtime
+                        .map(|m| format!(" mtime={m}"))
+                        .unwrap_or_default();
                     let preview_range = if handle.preview_range.end_line == 0 {
                         if handle.preview_range.start_line > handle.available_range.end_line {
                             format!(
@@ -872,7 +926,7 @@ impl ToolOutput {
                         None => "end of file".to_string(),
                     };
                     format!(
-                        "[read handle] path={} size={} encoding={} sha256={} lines=1..={} \
+                        "[read handle] path={} size={} encoding={} sha256={}{mtime} lines=1..={} \
                          preview_lines={preview_range} truncated={} continue={continuation}\n{}",
                         handle.path.display(),
                         handle.size,
@@ -1480,6 +1534,7 @@ mod tests {
             total_lines,
             output_encoding: None,
             extracted_images: vec![],
+            read_anchor: None,
         }
     }
     /// An empty file must render an explicit notice, not a blank result.
@@ -1718,6 +1773,7 @@ mod tests {
             size: 65_536,
             encoding: "utf-8".to_string(),
             content_sha256: "a".repeat(64),
+            mtime: Some(1_720_000_000),
             available_range: LineRange {
                 start_line: 1,
                 end_line: 4096,
@@ -1747,6 +1803,7 @@ mod tests {
         assert_eq!(round_trip, handle);
         let prompt = ToolOutput::ReadFile(ReadFileOutput::ReadHandle(handle)).to_prompt_format();
         assert!(prompt.contains("[read handle]"));
+        assert!(prompt.contains("mtime=1720000000"));
         assert!(prompt.contains("continue=read_file(offset=26)"));
         assert!(prompt.contains("1→line one"));
     }
@@ -1760,6 +1817,7 @@ mod tests {
             size: 65_536,
             encoding: "utf-8".to_string(),
             content_sha256: "a".repeat(64),
+            mtime: Some(1_720_000_000),
             available_range: LineRange {
                 start_line: 1,
                 end_line: 50,
@@ -1788,6 +1846,7 @@ mod tests {
             size: 65_536,
             encoding: "utf-8".to_string(),
             content_sha256: "a".repeat(64),
+            mtime: Some(1_720_000_000),
             available_range: LineRange {
                 start_line: 1,
                 end_line: 50,

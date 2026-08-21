@@ -10,7 +10,9 @@ use crate::implementations::read_file::{
     handle_pdf, is_pdf_file, raw_text_to_file_content, run_document_extraction,
 };
 use crate::types::context::TruncationConfig;
-use crate::types::output::{FileContent, LineRange, ReadFileOutput, ReadHandleEnvelope};
+use crate::types::output::{
+    FileContent, LineRange, ReadAnchor, ReadFileOutput, ReadHandleEnvelope,
+};
 use crate::types::requirements::{Expr, ToolRequirement};
 use crate::types::resources::Params;
 #[allow(unused_imports)]
@@ -257,6 +259,7 @@ Usage:
 - By default, it reads up to {max_lines_read} lines starting from the beginning of the file
 - Line numbers (1-based) appear as anchors in the format LINE_NUMBER→LINE_CONTENT on the first returned line and on every 10th line of the file; the lines in between show content only. Count from the nearest anchor when referring to a specific line
 - Text files larger than the coarse gate (default 16 KiB, configurable 8–32 KiB via ORZ_READ_FILE_COARSE_GATE_BYTES) return a read-handle envelope — path / size / encoding / content_sha256 / available range / bounded preview (≤4 KiB) / truncated / offset — instead of full content. Continue with offset=… (1-based line) or switch to grep/structure-first.
+- Every text read returns a content anchor — sha256 / size / mtime (mtime may be absent) — in the envelope header or as a trailing [read anchor] line. Before editing a file, copy that anchor into the edit call's expected_anchor so the write gate verifies the file is unchanged; a mismatch rejects the edit and requires re-reading first.
 - This tool can read PDF files (.pdf), PowerPoint files (.pptx), Jupyter notebooks (.ipynb files), and image files (e.g. PNG, JPG, etc).
 - When reading an image file the contents are presented visually as this tool uses multimodal LLMs."#;
 /// Schema-only advertised default (runtime still treats omit as line 1 via unwrap_or).
@@ -475,6 +478,35 @@ pub fn extract_file_content_lines(
         extracted_images,
     }
 }
+/// FUS-READ-ANCHOR-WRITE-GUARD (ADR-0010 §14.38): build the content anchor
+/// from the read snapshot. Metadata is captured AFTER reading and re-statted
+/// once when its size disagrees with the read bytes, so the anchor pins the
+/// same snapshot the caller received; any residual mid-read race is caught by
+/// the write gate's own re-stat/re-hash at order time (safe: worst case is an
+/// extra re-read, never a stale write).
+fn build_read_anchor(path: &std::path::Path, file_bytes: &[u8]) -> Option<ReadAnchor> {
+    let sha256 = crate::implementations::pdf_evidence::hex_string(&Sha256::digest(file_bytes));
+    let mtime_of = |metadata: &std::fs::Metadata| {
+        metadata
+            .modified()
+            .ok()
+            .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+            .map(|d| d.as_secs())
+    };
+    let metadata = std::fs::metadata(path).ok()?;
+    let mut mtime = mtime_of(&metadata);
+    if metadata.len() != file_bytes.len() as u64
+        && let Ok(re) = std::fs::metadata(path)
+    {
+        mtime = mtime_of(&re);
+    }
+    Some(ReadAnchor {
+        size: file_bytes.len(),
+        mtime,
+        sha256,
+    })
+}
+
 /// Core read-file logic shared by `ReadFileTool` and `ReadFileConciseTool`.
 ///
 /// Always uses the padded `content` field. Concise post-processing
@@ -628,6 +660,10 @@ pub(crate) async fn run_read_file(
     // journal as `tool_completed.output_encoding` (model sees plain text).
     let (file_content, output_encoding) = crate::util::encoding::decode_text(&file_bytes);
     let output_encoding = Some(output_encoding.to_string());
+    // FUS-READ-ANCHOR-WRITE-GUARD (ADR-0010 §14.38): text path carries the
+    // content anchor in both the envelope and the small-file output; PDF/PPTX/
+    // image/binary paths returned earlier keep `None`.
+    let read_anchor = build_read_anchor(&path, &file_bytes);
     if file_content.is_empty() {
         let stored_offset = stored_read_offset(input.offset);
         return Ok(ReadFileOutput::FileContent(FileContent {
@@ -640,6 +676,7 @@ pub(crate) async fn run_read_file(
             total_lines: 0,
             output_encoding,
             extracted_images: Vec::new(),
+            read_anchor,
         }));
     }
     let total_lines = file_content.matches('\n').count() + 1;
@@ -680,8 +717,12 @@ pub(crate) async fn run_read_file(
         } else {
             Some(preview_end + 1)
         };
-        let content_sha256 =
-            crate::implementations::pdf_evidence::hex_string(&Sha256::digest(&file_bytes));
+        let content_sha256 = read_anchor
+            .as_ref()
+            .map(|a| a.sha256.clone())
+            .unwrap_or_else(|| {
+                crate::implementations::pdf_evidence::hex_string(&Sha256::digest(&file_bytes))
+            });
         return Ok(ReadFileOutput::ReadHandle(ReadHandleEnvelope {
             path,
             size: file_bytes.len(),
@@ -689,6 +730,7 @@ pub(crate) async fn run_read_file(
                 .clone()
                 .unwrap_or_else(|| "utf-8".to_string()),
             content_sha256,
+            mtime: read_anchor.as_ref().and_then(|a| a.mtime),
             available_range: LineRange {
                 start_line: 1,
                 end_line: total_lines,
@@ -795,6 +837,7 @@ pub(crate) async fn run_read_file(
         total_lines,
         output_encoding,
         extracted_images,
+        read_anchor,
     }))
 }
 /// New-architecture `ReadFile` tool.

@@ -270,6 +270,7 @@ impl xai_tool_runtime::Tool for CodexReadFileTool {
             total_lines,
             output_encoding: Some(output_encoding.to_string()),
             extracted_images: Vec::new(),
+            read_anchor: None,
         }))
     }
 }

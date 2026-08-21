@@ -49,10 +49,10 @@ use crate::blackboard::{
     ActionOrder, ActionRegistration, ActionResult, EditRecord, SharedBlackboard, ToolActionRecord,
 };
 use crate::console::{
-    ActionExecutor, ActionKind, CODE_BUDGET_INSUFFICIENT, CODE_ORDER_STALE, ConsoleError,
-    MAX_SCRIPT_STEPS_PER_ORDER, STEP_CONTRACT, STEP_POLICY, STEP_PROTOCOL, STEP_REGISTRY,
-    STEP_TARGET, ServiceRegistry, TraceStore, failure_envelope, issue_action_inner,
-    static_validate_script,
+    ActionExecutor, ActionKind, CODE_BUDGET_INSUFFICIENT, CODE_CONTENT_ANCHOR_MISMATCH,
+    CODE_ORDER_STALE, ConsoleError, MAX_SCRIPT_STEPS_PER_ORDER, STEP_CONTRACT, STEP_POLICY,
+    STEP_PROTOCOL, STEP_REGISTRY, STEP_TARGET, ServiceRegistry, TraceStore, failure_envelope,
+    issue_action_inner, static_validate_script,
 };
 use crate::gateway::fake::FakeProvider;
 use crate::gateway::model::{Message, ModelGateway, Role, ToolCall};
@@ -398,6 +398,14 @@ pub struct GrillTurn<'a> {
     pub history: &'a mut Vec<Message>,
     pub user_input: &'a str,
     pub template: Option<&'a str>,
+}
+
+/// 当前文件的实际内容锚点（FUS-READ-ANCHOR-WRITE-GUARD 拒单信封 upstream
+/// 用；快筛路径 `sha256` 为 `None`，哈希路径计算后填充）。
+struct ActualAnchor {
+    size: Option<u64>,
+    mtime: Option<u64>,
+    sha256: Option<String>,
 }
 
 pub struct AgentLoopController {
@@ -7337,6 +7345,36 @@ impl AgentLoopController {
             self.consume_console_order(order, err);
             return Ok(0);
         }
+        // FUS-READ-ANCHOR-WRITE-GUARD (2026-08-21, ADR-0010 §14.38): 写订单
+        // 携带 `expected_anchor`（read_file 返回的 {size, mtime, sha256}）时，
+        // 发放前机械核证目标文件内容锚点——stat 快筛 size/mtime + sha256 权威。
+        // 不匹配拒单（复用 order_stale 信封形态：phase=pre_issue /
+        // step=protocol / code=content_anchor_mismatch），不执行任何编辑；
+        // 主 agent 重读后用新锚点重下。目标文件不存在（新建）时跳过。
+        if self
+            .console_registry
+            .get(&order.action)
+            .and_then(|s| s.target_tool.as_deref())
+            == Some("search_replace")
+            && let Some(anchor) = order.arguments.get("expected_anchor")
+            && let Some(err) = self.verify_content_anchor(host, &order, anchor).await
+        {
+            writer
+                .record(
+                    EventType::ConsoleOrderRejected,
+                    Self::console_order_rejected_payload(
+                        &order,
+                        STEP_PROTOCOL,
+                        "pre_issue",
+                        CODE_CONTENT_ANCHOR_MISMATCH,
+                        &err.message,
+                    ),
+                )
+                .await?;
+            self.blackboard.write().actions.take_order();
+            self.consume_console_order(order, err);
+            return Ok(0);
+        }
         let Some(order) = self.blackboard.write().actions.take_order() else {
             return Ok(0);
         };
@@ -7525,6 +7563,161 @@ impl AgentLoopController {
             envelope.error.trace_id.clone(),
         );
         self.commit_console_trace(&trace);
+    }
+
+    /// FUS-READ-ANCHOR-WRITE-GUARD (ADR-0010 §14.38): 机械核证目标文件内容
+    /// 锚点——stat 快筛 size/mtime + sha256 权威。返回 `Some(ConsoleError)`
+    /// 表示不匹配或核证失败（发放前拒绝，复用 order_stale 信封形态）；
+    /// `None` 表示核证通过或无需核证（目标文件不存在=新建路径）。核证期
+    /// 间的 stat/read I/O 错误（NotFound 除外）fail-closed 拒单——宁可
+    /// 重读重下，绝不带着未核证的内容放行编辑。
+    async fn verify_content_anchor(
+        &self,
+        host: &dyn LoopHost,
+        order: &ActionOrder,
+        anchor: &serde_json::Value,
+    ) -> Option<ConsoleError> {
+        let expected_size = anchor.get("size").and_then(serde_json::Value::as_u64)?;
+        let expected_sha256 = anchor.get("sha256").and_then(serde_json::Value::as_str)?;
+        let expected_mtime = anchor.get("mtime").and_then(serde_json::Value::as_u64);
+        let file_path = order
+            .arguments
+            .get("file_path")
+            .and_then(serde_json::Value::as_str)?;
+        let resolved = host.session_cwd().join(file_path);
+        // 与 read_file 的解析近似：此处不做 canonicalize（clippy 禁用——
+        // Windows verbatim 路径），stat/read 由 OS 解析相对成分；任何解析
+        // 差异只会造成额外拒单重读，绝不会造成陈旧写入。
+        let metadata = match tokio::fs::metadata(&resolved).await {
+            Ok(metadata) => metadata,
+            // 目标不存在=新建路径（与 search_replace 空 old_string 建文件
+            // 的既有语义一致），跳过核证。
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => return None,
+            // 其余 stat 错误（权限/瞬时 FS 等）fail-closed：无法核证即拒单。
+            Err(err) => {
+                return Some(Self::anchor_verify_error(
+                    order,
+                    file_path,
+                    expected_size,
+                    expected_mtime,
+                    expected_sha256,
+                    None,
+                    &format!("failed to stat target: {err}"),
+                ));
+            }
+        };
+        let actual_size = metadata.len();
+        let actual_mtime = metadata
+            .modified()
+            .ok()
+            .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+            .map(|d| d.as_secs());
+        // 快筛：size/mtime 任一不匹配即拒（避免对大文件无谓哈希）；mtime
+        // 仅作预检（可被保留/取整），权威仍是 sha256。
+        if actual_size != expected_size
+            || (expected_mtime.is_some()
+                && actual_mtime.is_some()
+                && expected_mtime != actual_mtime)
+        {
+            return Some(Self::anchor_verify_error(
+                order,
+                file_path,
+                expected_size,
+                expected_mtime,
+                expected_sha256,
+                Some(ActualAnchor {
+                    size: Some(actual_size),
+                    mtime: actual_mtime,
+                    sha256: None,
+                }),
+                "size/mtime pre-check mismatch",
+            ));
+        }
+        let bytes = match tokio::fs::read(&resolved).await {
+            Ok(bytes) => bytes,
+            // stat 已成功而 read 失败（权限变更/路径变为目录等）：无法
+            // 重算权威哈希即 fail-closed 拒单，绝不带未核证内容放行。
+            Err(err) => {
+                return Some(Self::anchor_verify_error(
+                    order,
+                    file_path,
+                    expected_size,
+                    expected_mtime,
+                    expected_sha256,
+                    None,
+                    &format!("failed to read target: {err}"),
+                ));
+            }
+        };
+        let actual_sha256 = sha256_hex(&bytes);
+        if actual_sha256 != expected_sha256 {
+            return Some(Self::anchor_verify_error(
+                order,
+                file_path,
+                expected_size,
+                expected_mtime,
+                expected_sha256,
+                Some(ActualAnchor {
+                    size: Some(actual_size),
+                    mtime: actual_mtime,
+                    sha256: Some(actual_sha256),
+                }),
+                "sha256 mismatch",
+            ));
+        }
+        None
+    }
+
+    /// 构建核证失败/不匹配的拒单信封（复用 order_stale 形态：
+    /// phase=pre_issue / step=protocol / code=content_anchor_mismatch）。
+    /// `actual=None` 表示核证期 I/O 失败（未能取得当前内容锚点）；
+    /// `Some(actual)` 表示已取得并比较、与期望不符。
+    fn anchor_verify_error(
+        order: &ActionOrder,
+        file_path: &str,
+        expected_size: u64,
+        expected_mtime: Option<u64>,
+        expected_sha256: &str,
+        actual: Option<ActualAnchor>,
+        reason: &str,
+    ) -> ConsoleError {
+        let actual = actual.unwrap_or(ActualAnchor {
+            size: None,
+            mtime: None,
+            sha256: None,
+        });
+        let actual_sha256 = actual.sha256.as_deref().unwrap_or("<unverifiable>");
+        ConsoleError {
+            step: STEP_PROTOCOL,
+            code: CODE_CONTENT_ANCHOR_MISMATCH,
+            message: format!(
+                "order {}: content anchor verification failed for {} ({reason}) — expected \
+                 sha256={} size={} mtime={:?} but got sha256={} size={:?} mtime={:?}; re-read \
+                 the file and rewrite the order with the new anchor",
+                order.order_id,
+                file_path,
+                expected_sha256,
+                expected_size,
+                expected_mtime,
+                actual_sha256,
+                actual.size,
+                actual.mtime,
+            ),
+            upstream: Some(serde_json::json!({
+                "order_id": order.order_id,
+                "file_path": file_path,
+                "expected": {
+                    "size": expected_size,
+                    "mtime": expected_mtime,
+                    "sha256": expected_sha256,
+                },
+                "actual": {
+                    "size": actual.size,
+                    "mtime": actual.mtime,
+                    "sha256": actual.sha256,
+                },
+            })),
+        }
     }
 
     fn push_console_result(
@@ -18306,6 +18499,208 @@ mod tests {
         assert_eq!(rejected[0].payload["phase"], "pre_issue");
         assert_eq!(rejected[0].payload["code"], "order_stale");
         assert_eq!(rejected[0].payload["run_id"], "RUN-PREVIOUS");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// FUS-READ-ANCHOR-WRITE-GUARD (ADR-0010 §14.38, 2026-08-21 审查收口):
+    /// search_replace 订单携带 `expected_anchor` 且目标文件内容与锚点不符
+    /// 时，发放前以 `content_anchor_mismatch` 拒单——清槽、写失败 receipt、
+    /// 入 console_order_rejected 事件面、零编辑。
+    #[tokio::test]
+    async fn console_anchor_mismatch_rejects_before_issue_with_zero_edits() {
+        let dir = test_dir();
+        let journal = JournalRecorder::new(dir.clone());
+        let host = TestHost {
+            journal: journal.clone(),
+            tool_result: Some(ToolResult {
+                output: "never".to_string(),
+                exit_code: Some(0),
+                output_encoding: None,
+                structured: None,
+                ..Default::default()
+            }),
+        };
+        // 目标文件：实际内容为 "actual"（size=6）；期望锚点指向 "expected"
+        // （size=8）——先触发 size 快筛，再以 sha256 权威拒单。
+        let target = host.session_cwd().join("guard_target.txt");
+        std::fs::write(&target, "actual").unwrap();
+        let expected_sha256 = sha256_hex(b"expected");
+        let controller = AgentLoopController::with_gateway(Arc::new(FakeProvider::new(Vec::new())));
+        {
+            let mut w = controller.blackboard().write();
+            w.actions
+                .write_order(ActionOrder {
+                    order_id: "ORD-GUARD-001".to_string(),
+                    action: "workspace.search_replace".to_string(),
+                    arguments: serde_json::json!({
+                        "file_path": "guard_target.txt",
+                        "old_string": "old",
+                        "new_string": "new",
+                        "expected_anchor": {
+                            "size": 8,
+                            "mtime": 0,
+                            "sha256": expected_sha256,
+                        },
+                    }),
+                    step_id: None,
+                    round: 1,
+                    plan_epoch: 0,
+                    run_id: "RUN-GUARD".to_string(),
+                })
+                .unwrap();
+        }
+        let mut writer = EventWriter::new(
+            Some(&journal),
+            EventTrack::V02,
+            "RUN-GUARD",
+            "",
+            0,
+            None,
+            None,
+        );
+        controller
+            .issue_pending_console_order(
+                &host,
+                &mut writer,
+                "guard",
+                orz_assurance::gates::ipg::WorkspaceTrust::NotObserved,
+                1,
+                None,
+            )
+            .await
+            .unwrap();
+
+        let r = controller.blackboard().read();
+        assert!(r.actions.order.is_none(), "{:?}", r.actions.order);
+        assert_eq!(r.actions.results.len(), 1, "{:?}", r.actions.results);
+        let receipt = &r.actions.results[0];
+        assert!(!receipt.ok);
+        let error = receipt.error.as_ref().unwrap();
+        assert_eq!(error["step"], "protocol");
+        assert_eq!(error["code"], "content_anchor_mismatch");
+        assert_eq!(error["upstream"]["expected"]["size"], 8);
+        // 零编辑：未执行任何 search_replace 目标工具。
+        assert!(
+            r.tool_actions.iter().all(|t| t.tool != "search_replace"),
+            "{:?}",
+            r.tool_actions
+        );
+        // 目标文件未被改写。
+        assert_eq!(std::fs::read_to_string(&target).unwrap(), "actual");
+        let rejected = events(&dir)
+            .into_iter()
+            .filter(|e| e.event_type == EventType::ConsoleOrderRejected)
+            .collect::<Vec<_>>();
+        assert_eq!(rejected.len(), 1, "{rejected:?}");
+        assert_eq!(rejected[0].payload["order_id"], "ORD-GUARD-001");
+        assert_eq!(rejected[0].payload["phase"], "pre_issue");
+        assert_eq!(rejected[0].payload["step"], "protocol");
+        assert_eq!(rejected[0].payload["code"], "content_anchor_mismatch");
+        assert_eq!(rejected[0].payload["run_id"], "RUN-GUARD");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// FUS-READ-ANCHOR-WRITE-GUARD (ADR-0010 §14.38, 2026-08-21 审查收口):
+    /// 核证期 I/O 错误 fail-closed——stat 成功但 read 失败（目标路径为目录）
+    /// 时同样以 `content_anchor_mismatch` 拒单，绝不带未核证内容放行编辑。
+    #[tokio::test]
+    async fn console_anchor_io_error_rejects_fail_closed() {
+        let dir = test_dir();
+        let journal = JournalRecorder::new(dir.clone());
+        let host = TestHost {
+            journal: journal.clone(),
+            tool_result: Some(ToolResult {
+                output: "never".to_string(),
+                exit_code: Some(0),
+                output_encoding: None,
+                structured: None,
+                ..Default::default()
+            }),
+        };
+        // 目标路径是一个目录：metadata 成功（size/mtime 与期望一致——
+        // mtime 取目录实际值以通过快筛）但 read 失败——必须拒单而不是放行。
+        let target_dir = host.session_cwd().join("guard_dir_target");
+        std::fs::create_dir_all(&target_dir).unwrap();
+        let dir_mtime = std::fs::metadata(&target_dir)
+            .unwrap()
+            .modified()
+            .unwrap()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+        let controller = AgentLoopController::with_gateway(Arc::new(FakeProvider::new(Vec::new())));
+        {
+            let mut w = controller.blackboard().write();
+            w.actions
+                .write_order(ActionOrder {
+                    order_id: "ORD-GUARD-002".to_string(),
+                    action: "workspace.search_replace".to_string(),
+                    arguments: serde_json::json!({
+                        "file_path": "guard_dir_target",
+                        "old_string": "",
+                        "new_string": "x",
+                        "expected_anchor": {
+                            "size": 0,
+                            "mtime": dir_mtime,
+                            "sha256": "a".repeat(64),
+                        },
+                    }),
+                    step_id: None,
+                    round: 1,
+                    plan_epoch: 0,
+                    run_id: "RUN-GUARD2".to_string(),
+                })
+                .unwrap();
+        }
+        let mut writer = EventWriter::new(
+            Some(&journal),
+            EventTrack::V02,
+            "RUN-GUARD2",
+            "",
+            0,
+            None,
+            None,
+        );
+        controller
+            .issue_pending_console_order(
+                &host,
+                &mut writer,
+                "guard",
+                orz_assurance::gates::ipg::WorkspaceTrust::NotObserved,
+                1,
+                None,
+            )
+            .await
+            .unwrap();
+
+        let r = controller.blackboard().read();
+        assert!(r.actions.order.is_none(), "{:?}", r.actions.order);
+        assert_eq!(r.actions.results.len(), 1, "{:?}", r.actions.results);
+        let receipt = &r.actions.results[0];
+        assert!(!receipt.ok);
+        let error = receipt.error.as_ref().unwrap();
+        assert_eq!(error["step"], "protocol");
+        assert_eq!(error["code"], "content_anchor_mismatch");
+        assert!(
+            error["message"]
+                .as_str()
+                .unwrap()
+                .contains("failed to read target"),
+            "{error:?}"
+        );
+        assert!(
+            r.tool_actions.iter().all(|t| t.tool != "search_replace"),
+            "{:?}",
+            r.tool_actions
+        );
+        let rejected = events(&dir)
+            .into_iter()
+            .filter(|e| e.event_type == EventType::ConsoleOrderRejected)
+            .collect::<Vec<_>>();
+        assert_eq!(rejected.len(), 1, "{rejected:?}");
+        assert_eq!(rejected[0].payload["code"], "content_anchor_mismatch");
 
         let _ = std::fs::remove_dir_all(&dir);
     }

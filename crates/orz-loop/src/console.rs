@@ -70,6 +70,10 @@ pub const STEP_CONTRACT: &str = "contract";
 pub const STEP_TARGET: &str = "target";
 pub const STEP_EXECUTE: &str = "execute";
 pub const STEP_VERIFY: &str = "verify";
+/// FUS-READ-ANCHOR-WRITE-GUARD (ADR-0010 §14.38): 写订单携带的
+/// `expected_anchor` 与目标文件当前内容锚点不匹配——发放前机械拒绝
+/// （复用 `order_stale` 信封形态：phase=pre_issue / step=protocol）。
+pub const CODE_CONTENT_ANCHOR_MISMATCH: &str = "content_anchor_mismatch";
 pub const STEP_POLICY: &str = "policy";
 
 /// 机器可读错误码（HA 同构，固定小写）。
@@ -219,7 +223,9 @@ pub fn default_service_registry() -> ServiceRegistry {
         ActionSpec {
             name: "workspace.search_replace".to_string(),
             description:
-                "编辑执行器：唯一精确替换（old_string 必须唯一匹配，空 old_string 建新文件）。"
+                "编辑执行器：唯一精确替换（old_string 必须唯一匹配，空 old_string 建新文件）。\
+                 可选 expected_anchor（read_file 内容锚点 sha256/size/mtime）触发写前机械核证，\
+                 不匹配拒单并要求重读后重下。"
                     .to_string(),
             target_tool: Some("search_replace".to_string()),
             kind: ActionKind::Host,
@@ -238,6 +244,34 @@ pub fn default_service_registry() -> ServiceRegistry {
                     "new_string": {
                         "type": "string",
                         "description": "替换后的新文本。",
+                    },
+                    "expected_anchor": {
+                        "type": "object",
+                        "description": "read_file 返回的内容锚点（sha256/size/mtime）——\
+                            写前机械核证期望值；不匹配时订单被拒并要求重读后重下。",
+                        "properties": {
+                            "size": {
+                                "type": "integer",
+                                "minimum": 0,
+                            },
+                            "mtime": {
+                                "anyOf": [
+                                    {
+                                        "type": "integer",
+                                        "minimum": 0,
+                                    },
+                                    {
+                                        "type": "null",
+                                    },
+                                ],
+                            },
+                            "sha256": {
+                                "type": "string",
+                                "pattern": "^[0-9a-f]{64}$",
+                            },
+                        },
+                        "required": ["size", "sha256"],
+                        "additionalProperties": false,
                     },
                 },
                 "required": ["file_path", "old_string", "new_string"],

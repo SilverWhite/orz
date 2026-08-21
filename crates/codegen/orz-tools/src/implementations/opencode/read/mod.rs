@@ -362,6 +362,7 @@ impl xai_tool_runtime::Tool for ReadTool {
             total_lines,
             output_encoding: Some(output_encoding.to_string()),
             extracted_images: Vec::new(),
+            read_anchor: None,
         }))
     }
 }
@@ -453,6 +454,7 @@ async fn read_directory(
         total_lines: total,
         output_encoding: None,
         extracted_images: Vec::new(),
+        read_anchor: None,
     })
 }
 
