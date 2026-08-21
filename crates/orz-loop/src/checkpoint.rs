@@ -48,8 +48,8 @@ pub(crate) const ITEM_MAX_CHARS: usize = 200;
 pub(crate) const MAX_ATTEMPTS: u32 = 2;
 
 /// Prefix of the injected re-fill feedback block — registered with
-/// `is_injected_block_text` (mechanical injected text, never stagnation
-/// input and never persisted back into the conversation).
+/// `is_injected_block_text` (mechanical injected text, never persisted back
+/// into the conversation).
 pub(crate) const CHECKPOINT_REFILL_PREFIX: &str = "[CHECKPOINT_REFILL";
 
 /// A pending checkpoint — the fire event was journaled and the block

@@ -19,7 +19,6 @@ use std::path::Path;
 use std::sync::{Arc, Mutex};
 
 use orz_assurance::journal::chain::{payload_hash, sha256_hex};
-use orz_assurance::orientation::stagnation::{StagnationInput, evaluate_runtime_stagnation_guard};
 use orz_assurance::{EventType, GateDecision};
 
 use crate::agents::SubagentRole;
@@ -736,7 +735,7 @@ pub(crate) async fn run_template_compact(
 /// `tool_availability_check` event inside a lane). The call-time permission
 /// gate remains the final backstop. `messages` is in/out: the conversation
 /// continues across rounds; the caller owns the seed and the post-loop use
-/// (stagnation / grill history writeback).
+/// (grill history writeback).
 #[allow(clippy::too_many_arguments)] // the shared loop's full contract
 pub(crate) async fn run_agent_loop(
     svc: &SharedLoopServices<'_>,
@@ -777,7 +776,7 @@ pub(crate) async fn run_agent_loop(
     // per run. The old mixed inquiry counters are gone (GAP-INQUIRY-SPLIT
     // 2026-08-09) — orientation counts live in the session-level
     // `OrientationSessionState` threaded through the turn chain; output
-    // repetition belongs to the runtime stagnation guard only.
+    // repetition is handled by the generation-time output-health guard.
     let mut counterexample_fired = false;
     // ORZ-ORIENTATION-FORCED-TEMPLATE (2026-08-15, ADR-0010 §14.16): a
     // checkpoint fire whose block was injected but whose forced-template
@@ -1496,32 +1495,12 @@ pub(crate) async fn run_agent_loop(
                         )
                         .await?;
                 }
-                // OUTPUT-DEGENERATION-GUARD (2026-08-19, ADR-0010 §14.33 /
-                // 设计 §3.3): 失败轮次（run_failed 路径）补充评估一次已输出
-                // 文本的重复信号——审计留痕（tracing），不改变终止语义
-                // （停滞守卫仍是跨轮事后评估；实时检测管生成期止损）。
-                if !partial_text.is_empty() {
-                    let partial = partial_text.concat();
-                    if let Ok((_, metrics)) = evaluate_runtime_stagnation_guard(&StagnationInput {
-                        public_outputs: vec![partial.clone()],
-                        ..Default::default()
-                    }) && !metrics.reason_codes.is_empty()
-                    {
-                        tracing::warn!(
-                            text_chars = partial.chars().count(),
-                            max_consecutive = metrics.max_consecutive_repeated_content,
-                            max_ngram_repeat = metrics.max_ngram_repeat,
-                            reason_codes = ?metrics.reason_codes,
-                            "failed model round shows repetition signals (audit-only)"
-                        );
-                    }
-                }
                 // OUTPUT-DEGENERATION-GUARD (2026-08-19) + OUTPUT-BUDGET-
                 // RESTORE-AND-STALL-GUARD (2026-08-20, ADR-0010 §14.35):
                 // 输出健康哨兵中断分流——达到 DEGENERATION_LIMIT（会话级
                 // 连续，三族共享）→ `AgentLoopError::Degeneration`（run 层
-                // 记 run_invalidated，计入 stagnation 同类终止态）；未达
-                // 上限 → run_failed 同路径。审计留痕（tracing）携带触发族
+                // 记 run_invalidated）；未达上限 → run_failed 同路径。审计
+                // 留痕（tracing）携带触发族
                 // 与 detail（reasoning 估算 token / 首 content 延迟在 stall
                 // detail 内），不改终止语义（设计 §3.3 journal/审计）。
                 if let GatewayError::StreamInterrupted { detail, .. } = &other
@@ -1605,9 +1584,7 @@ pub(crate) async fn run_agent_loop(
         // §4.2: completed logical model rounds; this point is the only
         // completion point that every round passes — tool rounds, deny
         // rounds and gate-answer rounds alike — while transport retries
-        // never reach it, so they never count). Output repetition is
-        // consumed ONLY by the runtime stagnation guard at end of turn —
-        // the old per-round double-consumption is deleted.
+        // never reach it, so they never count).
         if let (Some(o), Some(role)) = (orientation.as_deref_mut(), profile.orientation_role) {
             o.feed_round(role);
         }
@@ -1903,8 +1880,8 @@ pub(crate) async fn run_agent_loop(
                 }
             }
             // Include the final assistant message in the conversation so
-            // stagnation sees the model's actual output and the rebuilt
-            // dialogue matches what a real transport would have received
+            // the rebuilt dialogue matches what a real transport would have
+            // received
             // (2026-08-04 review P2-2).
             if let Some(text) = response.text.clone().filter(|t| !t.is_empty()) {
                 messages.push(Message {
@@ -2315,10 +2292,10 @@ pub(crate) async fn run_agent_loop(
             // GAP-INQUIRY-SPLIT (2026-08-09): the old per-tool-call
             // counter feeds are deleted — `tool_calls` / `tool_variety`
             // are not orientation 判定点 (§4.2) and subagent output
-            // repetition belongs to the stagnation guard only. The main
-            // lane's orientation round count happens at the model-round
-            // completion point (one completed logical model round counts
-            // 1 regardless of tool-call count).
+            // repetition is handled by the generation-time output-health
+            // guard. The main lane's orientation round count happens at
+            // the model-round completion point (one completed logical
+            // model round counts 1 regardless of tool-call count).
         }
         // PLAN-FIRST 阶段 A (2026-08-16, ADR-0010 §14.17): 一轮工具轮未写
         // plan_write（仅 blackboard_read 等）→ 无提交计数；达到上限机械

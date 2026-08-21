@@ -1865,12 +1865,12 @@ mod tests {
                 );
                 // Full Phase 2 gate chain + §4.6: preflight + started +
                 // prompt_submitted + tool_availability + model_output +
-                // counterexample_gate + model_output + stagnation + finished.
+                // counterexample_gate + model_output + finished.
                 // GAP-INQUIRY-SPLIT: no per-turn orientation event (fires
                 // only on the session-level 7-round trigger).
                 // PLAN-FIRST 阶段 A (2026-08-16): the plan gate adds a plan
                 // round (+4 events) to the production session.
-                assert_eq!(replay.event_count, 17);
+                assert_eq!(replay.event_count, 16);
                 assert_eq!(replay.terminal_event.as_deref(), Some("run_finished"));
 
                 let _ = std::fs::remove_dir_all(&base);
@@ -1949,8 +1949,9 @@ mod tests {
                         orz_assurance::replay_journal(&dir.join("events.jsonl"), None, None, true);
                     assert!(replay.valid, "run journal invalid: {:?}", replay.errors);
                     // GAP-INQUIRY-SPLIT: the first run carries the plan gate
-                    // (17 events); the second skips it (plan_gate_done).
-                    let expected = if i == 0 { 17 } else { 10 };
+                    // (16 events); the second skips it (plan_gate_done, 9
+                    // events).
+                    let expected = if i == 0 { 16 } else { 9 };
                     assert_eq!(replay.event_count, expected, "preflight + turn events");
                     assert_eq!(replay.terminal_event.as_deref(), Some("run_finished"));
                 }

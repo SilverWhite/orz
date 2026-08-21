@@ -235,11 +235,6 @@ pub fn apply_event(app: &mut TuiApp, event: TuiEvent) -> Vec<String> {
                 .add_system_message(&format!("[检查点] step {step_index}"), false);
             vec![format!("方向检查点: step {step_index}")]
         }
-        TuiEvent::RuntimeStagnationGuard { decision, .. } => {
-            app.content
-                .add_system_message(&format!("[停滞] {decision}"), true);
-            vec![format!("停滞守卫: {decision}")]
-        }
         TuiEvent::ToolAvailabilityCheck {
             complete,
             incomplete,
@@ -1174,7 +1169,7 @@ mod tests {
                 ),
                 (
                     TuiEvent::RunInvalidated {
-                        status: "stagnation".into(),
+                        status: "degeneration".into(),
                     },
                     |a| !a.running && a.status.items[5].label == "无效",
                 ),
@@ -1225,18 +1220,6 @@ mod tests {
                         a.content.items.iter().any(|i| {
                     matches!(i, ContentItem::Message(m) if m.content.contains("step 3"))
                 })
-                    },
-                ),
-                (
-                    TuiEvent::RuntimeStagnationGuard {
-                        decision: "restart_requested".into(),
-                        reason_codes: vec!["REPEATED_CONTENT".into()],
-                    },
-                    |a| {
-                        a.content.items.iter().any(|i| {
-                            matches!(i, ContentItem::Message(m)
-                        if m.warning && m.content.contains("停滞"))
-                        })
                     },
                 ),
                 (

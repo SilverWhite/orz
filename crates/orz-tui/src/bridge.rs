@@ -162,10 +162,6 @@ pub fn run_event_to_tui(event: &RunEvent) -> TuiEvent {
             trigger: get_str(p, "trigger"),
             step_index: get_i64(p, "step_index"),
         },
-        EventType::RuntimeStagnationGuard => TuiEvent::RuntimeStagnationGuard {
-            decision: get_str(p, "decision"),
-            reason_codes: get_str_list(p, "reason_codes"),
-        },
         EventType::ToolAvailabilityCheck => TuiEvent::ToolAvailabilityCheck {
             complete: get_str_list(p, "complete").len() as u64,
             // `incomplete` is an OBJECT array ({tool, reason}) — count the
@@ -552,10 +548,6 @@ mod tests {
             (
                 EventType::OrientationCheckpoint,
                 json!({"checkpoint_id": "ORIENT-1", "trigger": "pre_handoff", "step_index": 0}),
-            ),
-            (
-                EventType::RuntimeStagnationGuard,
-                json!({"decision": "continue", "reason_codes": ["REPEATED_CONTENT"]}),
             ),
             (
                 EventType::ToolAvailabilityCheck,

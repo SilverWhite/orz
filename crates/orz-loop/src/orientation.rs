@@ -166,16 +166,6 @@ impl OrientationSessionState {
     }
 
     /// Commit a fire AFTER the event was journaled and the block injected:
-    /// reset the lane's completed count and advance the fire sequence
-    /// (§4.2 — only an actual fire resets the count).
-    /// GAP-RETRIEVAL-TOOLS (2026-08-10): the lane's completed rounds — read
-    /// by the pre-handoff checkpoint audit (ADR-0010 §11.1: pre-handoff is
-    /// an independent lifecycle trigger that never participates in the
-    /// 7-round count).
-    pub(crate) fn completed_rounds(&self, role: AgentRole) -> u32 {
-        self.state(role).completed_rounds
-    }
-
     pub fn commit_fire(&mut self, role: AgentRole, record: &OrientationFireRecord) {
         self.state_mut(role).completed_rounds = 0;
         self.sequence += 1;

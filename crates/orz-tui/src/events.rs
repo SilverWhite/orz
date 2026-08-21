@@ -113,10 +113,6 @@ pub enum TuiEvent {
         trigger: String,
         step_index: i64,
     },
-    RuntimeStagnationGuard {
-        decision: String,
-        reason_codes: Vec<String>,
-    },
     ToolAvailabilityCheck {
         complete: u64,
         incomplete: u64,
@@ -393,7 +389,6 @@ impl TuiEvent {
             TuiEvent::ToolStarted { .. } => "tool_started",
             TuiEvent::ToolCompleted { .. } => "tool_completed",
             TuiEvent::OrientationCheckpoint { .. } => "orientation_checkpoint",
-            TuiEvent::RuntimeStagnationGuard { .. } => "runtime_stagnation_guard",
             TuiEvent::ToolAvailabilityCheck { .. } => "tool_availability_check",
             TuiEvent::ToolBeliefStagnation { .. } => "tool_belief_stagnation",
             TuiEvent::InstructionProvenanceGate { .. } => "instruction_provenance_gate",

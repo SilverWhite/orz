@@ -45,10 +45,11 @@ use async_openai::{
 use async_trait::async_trait;
 use backoff::backoff::Backoff;
 use futures::StreamExt;
+use regex::Regex;
 use serde_json::Value;
 use std::collections::{HashMap, VecDeque};
-use std::sync::Arc;
 use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 use tokio_util::sync::CancellationToken;
 
@@ -79,16 +80,26 @@ pub fn main_agent_model() -> String {
 /// 复读判定滚动哈希 L-gram 长度（2026-08-21 设计 §3.3 修订：路径①「连续
 /// 相同 delta N=5」由滑动窗口滚动哈希任意偏移检测取代——dna-assembly 复跑
 /// 误杀实证：DeepSeek 小 chunk 粒度 + 低熵文本下 5 个相邻相同 delta 天然
-/// 命中，与真实复读无关）。流中出现两个起点距离 ≥L 的相同 48 字符 L-gram
-/// 即判复读。
-pub const REPETITION_MIN_RUN_CHARS: usize = 48;
+/// 命中，与真实复读无关；2026-08-22 再校准：L 48→**200**——DNA 重跑实证
+/// 48 字符粒度下 reasoning 正常任务内容重复引用被误杀（缺口 A））。流内
+/// 出现相同 200 字符 L-gram 的匹配即计一次「命中」。
+pub const REPETITION_MIN_RUN_CHARS: usize = 200;
 
-/// 复读判定比较窗口（=2L，设计 §3.3 修订）：新尾部 L-gram 与最近 96 字符
-/// 内已出现的 L-gram 做任意偏移比对（起点偏移 ∈ [48, 96]）。窗口内任意
-/// 周期可命中（p ≤ 96，修复固定偏移相位对齐缺陷：周期 10 短语循环在固定
-/// 偏移下相邻窗口永不相同）；同字符连串需 ≥2L=96 才触发；DNA 低熵正常
-/// 序列免疫。
-pub const REPETITION_WINDOW_CHARS: usize = 96;
+/// 复读判定比较窗口（=2L，设计 §3.3 修订 + 2026-08-22 再校准 96→**400**）：
+/// 新尾部 L-gram 与最近 400 字符内已出现的 L-gram 做任意偏移比对（起点
+/// 偏移 ∈ [200, 400]）。窗口内任意周期可命中（p ≤ 400，修复固定偏移相位
+/// 对齐缺陷：周期 10 短语循环在固定偏移下相邻窗口永不相同）；同字符连串
+/// 在 3 次命中门槛下需 ≥2L+2=402 才触发（400 字符=1 次、401=2 次、402=3
+/// 次命中）；DNA 低熵正常序列免疫。
+pub const REPETITION_WINDOW_CHARS: usize = 400;
+
+/// 流内累计命中门槛（2026-08-22 再校准，用户裁决）：同一流内累计命中
+/// ≥3 次才中断 + 降级——检测器持续喂入，命中计数**不因中间未命中内容
+/// 重置**（间隔不重置）；1–2 次命中仅审计留痕（WARN 输出触发 span + 窗口
+/// 片段），不中断、不降级。命中计数随流结束丢弃（不跨请求累积——检测器
+/// 按 generate_stream 每次新建）；content/reasoning 两族统一；会话级
+/// consecutive 与 `DEGENERATION_LIMIT` 语义不变。
+pub const REPETITION_HIT_LIMIT: usize = 3;
 
 /// 滚动哈希基数（多项式哈希；取奇数避免与 2^64 非互质的退化）。
 const REPETITION_HASH_BASE: u64 = 1_000_003;
@@ -116,9 +127,24 @@ pub const DEGENERATION_MIN_TOKENS: usize = 1_000;
 /// 最近窗口内 3-gram 重复率阈值（>60% 触发；设计 §3.3）。
 pub const DEGENERATION_NGRAM_REPEAT_RATIO: f64 = 0.60;
 
+/// Token pattern mirroring Python `[\w一-鿿]+` (Unicode word + CJK) — the
+/// 3-gram fallback's tokenizer, migrated from the retired runtime stagnation
+/// guard (2026-08-22).
+fn token_regex() -> &'static Regex {
+    static RE: OnceLock<Regex> = OnceLock::new();
+    RE.get_or_init(|| Regex::new(r"[\w\u{4E00}-\u{9FFF}]+").expect("static token regex"))
+}
+
+/// Python `_tokenize`: casefolded token list.
+fn tokenize(value: &str) -> Vec<String> {
+    token_regex()
+        .find_iter(&value.to_lowercase())
+        .map(|m| m.as_str().to_string())
+        .collect()
+}
+
 /// 同一会话连续退化中断上限（默认 3；设计 §3.3 防循环——第 3 次起以
-/// `degeneration_limit_reached` 标记，run 层据此记 `run_invalidated`，
-/// 计入 stagnation 同类终止态）。
+/// `degeneration_limit_reached` 标记，run 层据此记 `run_invalidated`）。
 pub const DEGENERATION_LIMIT: u32 = 3;
 
 /// 退化中断 detail 前缀（命中但未达上限——run 走 run_failed 同路径）。
@@ -174,12 +200,15 @@ pub const REASONING_REPETITION_DETAIL_PREFIX: &str = "degeneration_detected:reas
 /// reasoning-stall 族 detail 前缀（预算兜底层——无可见输出 → 直接降级）。
 pub const REASONING_STALL_DETAIL_PREFIX: &str = "degeneration_detected:reasoning_stall:";
 
-/// 滑动窗口滚动哈希任意偏移复读检测（2026-08-21 设计 §3.3 修订）：维护
-/// 最近 L+W=144 字符缓冲，记录区内（起点偏移 ∈ [48, 96]）全部 48 字符
-/// L-gram 的滚动哈希；新尾部 L-gram 的哈希若在记录区已出现即触发（哈希
-/// 命中后字符级比对防碰撞）。窗口内任意周期可命中（p ≤ 96；修复固定偏移
-/// 相位对齐缺陷）；同字符连串 ≥2L=96 触发；DNA 低熵正常序列免疫；
-/// O(1)/字符（摊销）。
+/// 滑动窗口滚动哈希任意偏移复读检测（2026-08-21 设计 §3.3 修订 +
+/// 2026-08-22 再校准）：维护最近 L+W=600 字符缓冲，记录区内（起点偏移
+/// ∈ [200, 400]）全部 200 字符 L-gram 的滚动哈希；新尾部 L-gram 的哈希
+/// 若在记录区已出现即计一次命中（哈希命中后字符级比对防碰撞）。窗口内
+/// 任意周期可命中（p ≤ 400；修复固定偏移相位对齐缺陷）；DNA 低熵正常
+/// 序列免疫；O(1)/字符（摊销）。命中后窗口**继续喂入**（不早停）——
+/// 流内命中累计、间隔不重置，由检测器按 `REPETITION_HIT_LIMIT` 判定
+/// 触发；调用方以「剩余门槛」封顶单次喂入（达门槛即不再消费，见
+/// `feed_chars_capped`，2026-08-22 审查处理 P3）。
 #[derive(Debug, Default)]
 struct RollingRepetitionWindow {
     /// 最近 ≤L+W 字符（`base` 为 `chars[0]` 的全局序号）。
@@ -195,20 +224,44 @@ struct RollingRepetitionWindow {
     trailing_hash: u64,
     /// 即将进入记录区的 L-gram 滚动哈希（长度达标前未使用）。
     enter_hash: u64,
+    /// 最近一次命中时的两个匹配 span 全局起点（旧起点 + 新起点）——审计
+    /// 留痕用（缺口 A，2026-08-22：退化触发需落盘触发内容供事后判定真
+    /// 复读 vs 误杀；命中后窗口继续喂入，每次命中覆盖为最新一对）。
+    last_match: Option<(usize, usize)>,
     /// 下一个待喂入字符的全局序号。
     next: usize,
 }
 
 impl RollingRepetitionWindow {
-    /// 喂入一个 delta（逐字符）；任一字符使 48 字符 L-gram 与记录区重复
-    /// 即返回 true（触发后调用方终止流，不再继续喂入）。
-    fn feed_chars(&mut self, delta: &str) -> bool {
+    /// 喂入一个 delta（逐字符）；返回本 delta 内新产生的命中次数
+    /// （2026-08-22 再校准：命中后窗口继续喂入——命中计数流内累计、间隔
+    /// 不重置，调用方在累计 ≥`REPETITION_HIT_LIMIT` 时判定触发；旧语义
+    /// 「命中即终止」退役）。等价于不设上限的 `feed_chars_capped`
+    /// （`usize::MAX`），供测试与独立窗口使用（2026-08-22 审查处理：
+    /// 生产路径已改走 `feed_chars_capped`，lib 目标下该便捷方法仅测试
+    /// 引用，豁免 dead_code 保持 clippy 与基线一致）。
+    #[cfg_attr(not(test), allow(dead_code))]
+    fn feed_chars(&mut self, delta: &str) -> usize {
+        self.feed_chars_capped(delta, usize::MAX)
+    }
+
+    /// 带命中上限的喂入：本 delta 内新命中数达 `hit_cap` 即停止消费
+    /// （后续字符不再喂入）。2026-08-22 审查处理（P3）：调用方以「剩余
+    /// 门槛=门槛-已累计」封顶——同一 delta 内累计命中达到
+    /// `REPETITION_HIT_LIMIT` 后该流必触发，继续喂入超大退化帧只会白做
+    /// 滚动哈希与字符级比对；子门槛 delta 全量消费，窗口状态与旧语义
+    /// 完全一致。
+    fn feed_chars_capped(&mut self, delta: &str, hit_cap: usize) -> usize {
+        let mut hits = 0;
         for c in delta.chars() {
+            if hits >= hit_cap {
+                break;
+            }
             if self.feed(c) {
-                return true;
+                hits += 1;
             }
         }
-        false
+        hits
     }
 
     fn feed(&mut self, c: char) -> bool {
@@ -227,8 +280,8 @@ impl RollingRepetitionWindow {
             self.trailing_hash = slide_repetition_hash(self.trailing_hash, drop, c);
         }
 
-        // 进入记录区的 L-gram 滚动哈希：起点 p = idx-95（span [p, p+48)），
-        // 从 idx=95（p=0）起每步右移 1。
+        // 进入记录区的 L-gram 滚动哈希：起点 p = idx-399（span [p, p+200)），
+        // 从 idx=399（p=0）起每步右移 1。
         if idx == REPETITION_WINDOW_CHARS - 1 {
             self.enter_hash = self.hash_span(idx - (REPETITION_WINDOW_CHARS - 1));
         } else if idx > REPETITION_WINDOW_CHARS - 1 {
@@ -237,7 +290,8 @@ impl RollingRepetitionWindow {
             self.enter_hash = slide_repetition_hash(self.enter_hash, drop, add);
         }
 
-        // 记录区增删（新尾部 L-gram 的任意偏移比较集：起点 ∈ [idx-143, idx-95]）。
+        // 记录区增删（新尾部 L-gram 的任意偏移比较集：起点 ∈ [idx-599, idx-399]；
+        // 与尾部起点 idx-199 的距离恒 ∈ [200, 400]，结构性保证「起点距离 ≥L」）。
         if idx >= REPETITION_WINDOW_CHARS - 1 {
             let p = idx - (REPETITION_WINDOW_CHARS - 1);
             self.recorded.push_back((self.enter_hash, p));
@@ -254,19 +308,23 @@ impl RollingRepetitionWindow {
             }
         }
 
-        // 任意偏移触发：尾部 L-gram 完整（idx ≥ L-1）且与记录区已出现
-        // （起点偏移 ≥48）字符级一致（防哈希碰撞误报）。记录区到
-        // idx ≥ W-1 才非空，此前实际不可能触发。
+        // 任意偏移命中：尾部 L-gram 完整（idx ≥ L-1）且与记录区已出现
+        // （起点偏移 ≥200）字符级一致（防哈希碰撞误报）。记录区到
+        // idx ≥ W-1 才非空，此前实际不可能命中。命中后**不早退**——窗口
+        // 继续滑动，供流内命中计数累计（2026-08-22 再校准）。
+        let mut hit = false;
         if idx >= REPETITION_MIN_RUN_CHARS - 1
             && self.counts.get(&self.trailing_hash).is_some_and(|n| *n > 0)
         {
             let s = idx - (REPETITION_MIN_RUN_CHARS - 1);
-            if self
+            if let Some(p) = self
                 .recorded
                 .iter()
-                .any(|&(h, p)| h == self.trailing_hash && self.spans_equal(p, s))
+                .find(|&&(h, p)| h == self.trailing_hash && self.spans_equal(p, s))
+                .map(|&(_, p)| p)
             {
-                return true;
+                self.last_match = Some((p, s));
+                hit = true;
             }
         }
 
@@ -275,7 +333,7 @@ impl RollingRepetitionWindow {
             self.chars.pop_front();
             self.base += 1;
         }
-        false
+        hit
     }
 
     /// 缓冲内全局序号 `g` 的字符。
@@ -283,7 +341,7 @@ impl RollingRepetitionWindow {
         self.chars[g - self.base]
     }
 
-    /// 缓冲内起点 `start` 的 48 字符 span 的滚动哈希（多项式、首字符最高位）。
+    /// 缓冲内起点 `start` 的 L 字符 span 的滚动哈希（多项式、首字符最高位）。
     fn hash_span(&self, start: usize) -> u64 {
         let mut h = 0u64;
         let pos = start - self.base;
@@ -295,11 +353,34 @@ impl RollingRepetitionWindow {
         h
     }
 
-    /// 字符级比对两个 48 字符 span（全局起点 a/b，均在缓冲内）。
+    /// 字符级比对两个 L 字符 span（全局起点 a/b，均在缓冲内）。
     fn spans_equal(&self, a: usize, b: usize) -> bool {
         let pa = a - self.base;
         let pb = b - self.base;
         (0..REPETITION_MIN_RUN_CHARS).all(|k| self.chars[pa + k] == self.chars[pb + k])
+    }
+
+    /// 触发审计上下文（缺口 A）：重复 span 文本 + 两个匹配起点在最近
+    /// 窗口内的偏移 + 窗口尾部片段。仅在 `last_match` 置位后调用。
+    fn match_context(&self) -> Option<String> {
+        let (old, new) = self.last_match?;
+        let span: String = self
+            .chars
+            .iter()
+            .skip(new - self.base)
+            .take(REPETITION_MIN_RUN_CHARS)
+            .collect();
+        let tail_len = self.chars.len().min(REPETITION_WINDOW_CHARS);
+        let tail_start = self.chars.len() - tail_len;
+        let tail: String = self.chars.iter().skip(tail_start).collect();
+        Some(format!(
+            "repeated {L}-char span {span:?} (matched offsets {old_off} and {new_off} \
+             in the recent {W}-char window); window tail: {tail:?}",
+            L = REPETITION_MIN_RUN_CHARS,
+            old_off = old.saturating_sub(self.base),
+            new_off = new.saturating_sub(self.base),
+            W = REPETITION_WINDOW_CHARS,
+        ))
     }
 }
 
@@ -310,26 +391,35 @@ fn slide_repetition_hash(h: u64, drop_c: char, add_c: char) -> u64 {
         .wrapping_add(add_c as u64)
 }
 
+/// 复读检测单族状态（content / reasoning 各一份）：滚动哈希窗口 + 3-gram
+/// 窗口 + 流内命中计数。集中为单参数传入 `feed_repetition`，保持自由函数
+/// 参数在 clippy 阈值内（2026-08-22：命中计数随流结束丢弃——检测器按
+/// generate_stream 每次新建，天然不跨请求累积）。
+#[derive(Debug, Default)]
+struct RepetitionFamilyState {
+    /// 滑动窗口滚动哈希复读检测。
+    rolling: RollingRepetitionWindow,
+    /// 累计 token 数（3-gram 重复率检测的启用门槛）。
+    total_tokens: usize,
+    /// 最近 1K token 的滑动窗口。
+    window_tokens: Vec<String>,
+    /// 流内累计命中（≥`REPETITION_HIT_LIMIT` 触发；1–2 次仅审计留痕、
+    /// 间隔不重置）。
+    hits: usize,
+}
+
 /// 生成期输出健康哨兵（设计 §3.3，第一层治本）：喂入 content delta +
 /// reasoning delta + tool_call arguments delta，三族信号（content_repetition
 /// / reasoning_repetition / reasoning_stall）命中后持续返回触发原因。纯
-/// 机械、零模型调用；token 口径复用 `orz_assurance::orientation::stagnation`
-/// （Unicode 词 + CJK 正则）；复读判定=滑动窗口滚动哈希任意偏移（设计
-/// §3.3 修订）+ 1K token 窗口 3-gram 重复率兜底。
+/// 机械、零模型调用；token 口径=Unicode 词 + CJK 正则（迁移自退役的停滞
+/// 守卫）；复读判定=滑动窗口滚动哈希任意偏移（设计 §3.3 修订）+ 1K token
+/// 窗口 3-gram 重复率兜底。
 #[derive(Debug, Default)]
 struct DegenerationDetector {
-    /// content 族：滑动窗口滚动哈希复读检测（设计 §3.3 修订）。
-    content_rolling: RollingRepetitionWindow,
-    /// content 族：累计 token 数（重复率检测的启用门槛）。
-    content_total_tokens: usize,
-    /// content 族：最近 1K token 的滑动窗口。
-    content_window_tokens: Vec<String>,
-    /// reasoning 族：滑动窗口滚动哈希复读检测（设计 §3.3 修订）。
-    reasoning_rolling: RollingRepetitionWindow,
-    /// reasoning 族：累计 token 数（重复率检测的启用门槛）。
-    reasoning_total_tokens: usize,
-    /// reasoning 族：最近 1K token 的滑动窗口。
-    reasoning_window_tokens: Vec<String>,
+    /// content 族复读检测状态（滚动哈希 + 3-gram + 流内命中计数）。
+    content_repetition: RepetitionFamilyState,
+    /// reasoning 族复读检测状态（同上）。
+    reasoning_repetition: RepetitionFamilyState,
     /// reasoning 累计字符 → 估算 token（字符 ÷ `REASONING_CHARS_PER_TOKEN`；
     /// 空转预算信号，与 max_tokens 解耦；S4 用 usage 真实值复核）。
     reasoning_chars: usize,
@@ -341,6 +431,13 @@ struct DegenerationDetector {
     first_chunk_at: Option<std::time::Instant>,
     /// 触发原因（触发后恒定，避免同流重复报错）。
     trip: Option<String>,
+    /// 触发审计上下文（缺口 A，2026-08-22）：触发 span + 窗口片段，供
+    /// 事后判定真复读 vs 误杀（WARN 留痕，不改终止语义）。
+    trigger_context: Option<String>,
+    /// 流内非触发命中审计留痕（缺口 A 扩展）：1–2 次命中逐条登记触发
+    /// 上下文（重复 span + 偏移 + 窗口尾部），调用方逐条 WARN——不中断、
+    /// 不降级；达到门槛后由 `trigger_context` 走 trip 分支。
+    audit_hits: Vec<String>,
 }
 
 impl DegenerationDetector {
@@ -354,12 +451,12 @@ impl DegenerationDetector {
         self.saw_visible_output = true;
         feed_repetition(
             &mut self.trip,
+            &mut self.trigger_context,
+            &mut self.audit_hits,
             "content",
             CONTENT_REPETITION_DETAIL_PREFIX,
             delta,
-            &mut self.content_rolling,
-            &mut self.content_total_tokens,
-            &mut self.content_window_tokens,
+            &mut self.content_repetition,
         );
     }
 
@@ -376,12 +473,12 @@ impl DegenerationDetector {
         }
         feed_repetition(
             &mut self.trip,
+            &mut self.trigger_context,
+            &mut self.audit_hits,
             "reasoning",
             REASONING_REPETITION_DETAIL_PREFIX,
             delta,
-            &mut self.reasoning_rolling,
-            &mut self.reasoning_total_tokens,
-            &mut self.reasoning_window_tokens,
+            &mut self.reasoning_repetition,
         );
     }
 
@@ -425,6 +522,10 @@ impl DegenerationDetector {
         let est_tokens = self.reasoning_est_tokens();
         let elapsed = now.saturating_duration_since(first);
         if elapsed >= STALL_FIRST_CONTENT_TIMEOUT || est_tokens >= STALL_REASONING_BUDGET_TOKENS {
+            // 2026-08-22 审查处理（P3）：stall 触发无「重复 span」语义——
+            // 清掉此前滚动命中的残留上下文，避免 trip WARN 把旧命中 span
+            // 误标为本触发的审计上下文。
+            self.trigger_context = None;
             self.trip = Some(format!(
                 "{REASONING_STALL_DETAIL_PREFIX} no content/tool_calls for {:.0}s with \
                  ~{est_tokens} estimated reasoning tokens (budget {}s / {} tokens)",
@@ -438,61 +539,105 @@ impl DegenerationDetector {
     fn trip_reason(&self) -> Option<String> {
         self.trip.clone()
     }
+
+    fn trigger_context(&self) -> Option<String> {
+        self.trigger_context.clone()
+    }
+
+    /// 取走流内非触发命中的审计留痕（2026-08-22 再校准：1–2 次命中仅
+    /// 审计留痕、不中断不降级）——调用方逐条 WARN 输出触发 span + 窗口
+    /// 片段（缺口 A）。
+    fn take_audit_hits(&mut self) -> Vec<String> {
+        std::mem::take(&mut self.audit_hits)
+    }
 }
 
 /// 复读检测共用核心（content 与 reasoning 同一算法，设计 §3.3）：
-/// ① 滑动窗口滚动哈希任意偏移——流中出现两个起点距离 ≥L 的相同 48 字符
-/// L-gram → 触发（2026-08-21 修订，取代旧「连续相同 delta N=5」——后者
-/// 在 DeepSeek 小 chunk 粒度 + 低熵文本下误杀合法输出，见设计 §3.3 修订）；
+/// ① 滑动窗口滚动哈希任意偏移——流内出现相同 L 字符 span 的匹配即计一次
+/// 命中；**流内累计命中 ≥3 次（间隔不重置）才触发**（2026-08-22 再校准，
+/// 取代旧「单次命中即触发」——DNA 重跑实证 48 字符粒度下正常任务内容
+/// 重复引用被误杀，见设计 §3.3 修订）；1–2 次命中仅审计留痕
+/// （`audit_hits`），不中断、不降级；
 /// ② 累计 ≥1K token 且最近 1K token 内 3-gram 重复率 >60% → 触发
-/// （保留兜底）。自由函数（非方法）——调用方以不相交的字段借用传入，
-/// 避免方法整体借用与字段借用冲突。
+/// （保留兜底，不经命中门槛——重复率判定自带 1K token 滑动窗口粒度）。
+/// 自由函数（非方法）——调用方以不相交的字段借用传入，避免方法整体
+/// 借用与字段借用冲突。
 fn feed_repetition(
     trip: &mut Option<String>,
+    trigger_context: &mut Option<String>,
+    audit_hits: &mut Vec<String>,
     family: &str,
     detail_prefix: &str,
     delta: &str,
-    rolling: &mut RollingRepetitionWindow,
-    total_tokens: &mut usize,
-    window_tokens: &mut Vec<String>,
+    state: &mut RepetitionFamilyState,
 ) {
     if trip.is_some() || delta.is_empty() {
         return;
     }
-    // ① 滚动哈希任意偏移（设计 §3.3 修订）：与 delta 切块粒度无关的字符
-    //    流级判定——任何起点距离 ≥48 的相同 48 字符 span 都触发（真实复读；
-    //    低熵短特征/小 chunk 相同不再误杀）。
-    if rolling.feed_chars(delta) {
-        *trip = Some(format!(
-            "{detail_prefix} {REPETITION_MIN_RUN_CHARS}-char repeated span in the \
-             recent {REPETITION_WINDOW_CHARS}-char window (rolling hash, arbitrary offset)"
-        ));
-        return;
+    // ① 滚动哈希任意偏移（设计 §3.3 修订 + 2026-08-22 再校准）：与 delta
+    //    切块粒度无关的字符流级判定——每次命中（相同 L 字符 span 与记录区
+    //    匹配）累计计数；同一流内 ≥3 次（间隔不重置）才触发。
+    // 2026-08-22 审查处理（P3）：以剩余门槛封顶单次喂入——同一 delta
+    // 内新命中达「门槛-已累计」即停止消费（该流必触发，避免超大退化帧
+    // 在命中门槛后仍全量喂入的浪费）；子门槛 delta 全量消费，窗口状态
+    // 与旧语义一致。
+    let remaining = REPETITION_HIT_LIMIT.saturating_sub(state.hits);
+    let new_hits = state.rolling.feed_chars_capped(delta, remaining);
+    if new_hits > 0 {
+        let ctx = state.rolling.match_context();
+        *trigger_context = ctx.clone();
+        state.hits = state.hits.saturating_add(new_hits);
+        if state.hits >= REPETITION_HIT_LIMIT {
+            *trip = Some(format!(
+                "{detail_prefix} {REPETITION_MIN_RUN_CHARS}-char repeated span in the \
+                 recent {REPETITION_WINDOW_CHARS}-char window, {}/{} stream hits (rolling \
+                 hash, arbitrary offset)",
+                state.hits, REPETITION_HIT_LIMIT
+            ));
+            return;
+        }
+        // 1–2 次命中：仅审计留痕（不中断、不降级）。同一 delta 内多次命中
+        // 逐条登记（上下文取该 delta 最后一次命中——同一重复 span 语义）。
+        if let Some(ctx) = ctx {
+            for _ in 0..new_hits {
+                audit_hits.push(ctx.clone());
+            }
+        }
     }
     // ② 重复率：累计 ≥ 1K token 且最近 1K token 内 3-gram 重复率 > 60%
-    //    → 触发（复用 stagnation 的 n-gram 思路，轻量实现）。
-    let tokens = orz_assurance::orientation::stagnation::tokenize(delta);
-    *total_tokens += tokens.len();
-    window_tokens.extend(tokens);
-    let overflow = window_tokens.len().saturating_sub(DEGENERATION_MIN_TOKENS);
+    //    → 触发（n-gram 兜底；tokenizer 迁移自退役的停滞守卫）。
+    let tokens = tokenize(delta);
+    state.total_tokens += tokens.len();
+    state.window_tokens.extend(tokens);
+    let overflow = state
+        .window_tokens
+        .len()
+        .saturating_sub(DEGENERATION_MIN_TOKENS);
     if overflow > 0 {
-        window_tokens.drain(..overflow);
+        state.window_tokens.drain(..overflow);
     }
-    if *total_tokens >= DEGENERATION_MIN_TOKENS {
-        let total_ngrams = window_tokens.len().saturating_sub(2);
+    if state.total_tokens >= DEGENERATION_MIN_TOKENS {
+        let total_ngrams = state.window_tokens.len().saturating_sub(2);
         if total_ngrams >= 1 {
             let mut counts: HashMap<&[String], u32> = HashMap::new();
             for index in 0..total_ngrams {
-                *counts.entry(&window_tokens[index..index + 3]).or_insert(0) += 1;
+                *counts
+                    .entry(&state.window_tokens[index..index + 3])
+                    .or_insert(0) += 1;
             }
             let distinct = counts.len();
             let duplicated = total_ngrams.saturating_sub(distinct);
             let ratio = duplicated as f64 / total_ngrams as f64;
             if ratio > DEGENERATION_NGRAM_REPEAT_RATIO {
+                // 2026-08-22 审查处理（P3）：3-gram 触发无「重复 span」语义
+                // ——清掉本 delta 内滚动路径可能留下的子门槛命中上下文，
+                // 避免 trip WARN 把子门槛 span 误标为该触发的审计上下文
+                // （3-gram 的审计口径是重复率本身，见 detail）。
+                *trigger_context = None;
                 *trip = Some(format!(
                     "{detail_prefix} 3-gram repetition ratio {ratio:.2} \
                      in the recent {} {family} tokens",
-                    window_tokens.len()
+                    state.window_tokens.len()
                 ));
             }
         }
@@ -1325,10 +1470,30 @@ impl DeepSeekTransport {
             // 兜底层逐 chunk 检查（stall 时间/预算 OR 触发）后，命中任一
             // 检测阈值 → 主动中断。防循环计数：会话级连续退化次数达到
             // `DEGENERATION_LIMIT` 后带 `degeneration_limit_reached` 标记
-            // （run 层映射 run_invalidated，计入 stagnation 同类终止态）。
+            // （run 层映射 run_invalidated）。
+            // 2026-08-22 审查处理（P3）：先取走非触发命中审计条目、再做
+            // 触发判定——若本 chunk 触发（滚动路径达门槛、或 3-gram/stall
+            // 路径随后触发），审计条目并入下方 trip WARN 的
+            // trigger_context，不再单独输出「audit only, not tripping」
+            // （避免同 chunk 先标不触发、随即又触发的误导文案）；未触发
+            // 时逐条 WARN 留痕（缺口 A，2026-08-22 再校准：1–2 次命中
+            // 仅审计、不中断不降级）。
+            let audit_hits = degeneration.take_audit_hits();
             degeneration.check_stall(std::time::Instant::now());
             if let Some(detail) = degeneration.trip_reason() {
                 let detail = self.degeneration_interrupt_detail(detail);
+                // 缺口 A (2026-08-22)：退化触发内容留痕——WARN 输出触发
+                // span + 窗口片段（content/reasoning 两族共用），供事后
+                // 判定真复读 vs 误杀；不改终止语义（detail 仍为稳定前缀）。
+                if let Some(ctx) = degeneration.trigger_context() {
+                    tracing::warn!(
+                        detail = %detail,
+                        trigger_context = %ctx,
+                        "output-health guard trip (audit context)"
+                    );
+                } else {
+                    tracing::warn!(detail = %detail, "output-health guard trip");
+                }
                 // 哨兵中断的 `saw_chunk` 恒为 false：哨兵错误一律不重试
                 // （`stream_once_with_retry` 的 guard 透传分支），该字段
                 // 只用于选择零 chunk/中段预算，哨兵路径不消费——语义
@@ -1338,6 +1503,16 @@ impl DeepSeekTransport {
                     saw_chunk: false,
                     detail,
                 });
+            }
+            // 未触发：流内 1–2 次命中仅审计留痕——逐条 WARN 输出触发
+            // span + 窗口片段（缺口 A），不中断、不降级；第 3 次命中才
+            // 走上方 trip 分支（2026-08-22 再校准，L=200 + 命中门槛 3）。
+            for ctx in audit_hits {
+                tracing::warn!(
+                    hit_limit = REPETITION_HIT_LIMIT,
+                    trigger_context = %ctx,
+                    "output-health guard repetition hit (audit only, not tripping)"
+                );
             }
         }
 
@@ -2049,10 +2224,11 @@ mod tests {
     // ── OUTPUT-DEGENERATION-GUARD (2026-08-19, ADR-0010 §14.33) ────────────
 
     #[test]
-    fn degeneration_detector_trips_on_repeated_48_char_span() {
+    fn degeneration_detector_trips_on_repeated_200_char_span() {
         // 2026-08-21 设计 §3.3 修订：路径①（连续相同 delta N=5）由滚动
-        // 哈希任意偏移取代——5×"same"（20 字符）不再触发；两个起点距离
-        // ≥48 的相同 48 字符 span（24×"same" = 96 字符）才触发。
+        // 哈希任意偏移取代；2026-08-22 再校准：L=200 + 流内累计 3 次命中
+        // ——5×"same"（20 字符）与 24×"same"（96 字符 < L）均不再触发；
+        // 200 字符 span 出现 3 次命中（402 同字符）才触发。
         let mut d = DegenerationDetector::default();
         for i in 0..23 {
             d.feed_content("same");
@@ -2061,8 +2237,15 @@ mod tests {
                 "short identical deltas must NOT trip (low-entropy false-positive fix), feed {i}"
             );
         }
-        d.feed_content("same");
-        let reason = d.trip_reason().expect("96-char repeated span must trip");
+        d.feed_content("same"); // 96 字符 < L=200，无命中
+        assert!(
+            d.trip_reason().is_none(),
+            "96 chars below L=200 must NOT trip"
+        );
+        d.feed_content(&"x".repeat(402));
+        let reason = d
+            .trip_reason()
+            .expect("200-char repeated span (3 stream hits) must trip");
         assert!(
             reason.starts_with(CONTENT_REPETITION_DETAIL_PREFIX),
             "{reason}"
@@ -2150,49 +2333,101 @@ mod tests {
 
     #[test]
     fn degeneration_detector_poly_a_threshold() {
-        // S2（设计 §3.3）：poly-A 精确阈值——95 个同字符不触发（无距离
-        // ≥48 的同相块）、96 个触发（两个相邻 48 字符块完全相同）。
+        // S2（设计 §3.3）+ 2026-08-22 再校准：poly-A 精确阈值——399 同
+        // 字符不触发（无命中）；400 = 1 次命中（仅审计）；401 = 2 次命中
+        // （仅审计）；402 = 3 次命中 → 触发。
         let mut d = DegenerationDetector::default();
-        d.feed_content(&"a".repeat(95));
+        d.feed_content(&"a".repeat(399));
         assert!(
             d.trip_reason().is_none(),
-            "95 identical chars must NOT trip"
+            "399 identical chars must NOT trip"
         );
+        assert!(d.take_audit_hits().is_empty(), "399 chars produce no hit");
         let mut d = DegenerationDetector::default();
-        d.feed_content(&"a".repeat(96));
-        let reason = d.trip_reason().expect("96 identical chars must trip");
+        d.feed_content(&"a".repeat(400));
+        assert!(
+            d.trip_reason().is_none(),
+            "400 identical chars = 1 hit, must NOT trip"
+        );
+        assert_eq!(d.take_audit_hits().len(), 1, "400 chars = 1 audit hit");
+        let mut d = DegenerationDetector::default();
+        d.feed_content(&"a".repeat(401));
+        assert!(
+            d.trip_reason().is_none(),
+            "401 identical chars = 2 hits, must NOT trip"
+        );
+        assert_eq!(d.take_audit_hits().len(), 2, "401 chars = 2 audit hits");
+        let mut d = DegenerationDetector::default();
+        d.feed_content(&"a".repeat(402));
+        let reason = d.trip_reason().expect("402 identical chars must trip");
         assert!(reason.contains("repeated span"), "{reason}");
     }
 
     #[test]
-    fn degeneration_detector_periodic_phrase_trips_any_phase() {
-        // S2（设计 §3.3，对齐缺陷回归）：周期 10 短语循环——固定偏移
-        // （16/48）下相邻窗口永不相同、系统性漏检；滚动哈希任意偏移经
-        // 距离 50（同相）触发。
+    fn degeneration_trigger_context_records_repeated_span() {
+        // 缺口 A（2026-08-22）+ 再校准：退化触发时落盘触发上下文——重复
+        // 200 字符 span 文本、两个匹配偏移与窗口尾部（第 3 次命中时），
+        // 供事后判定真复读 vs 误杀。
         let mut d = DegenerationDetector::default();
-        d.feed_content(&"abcdefghij".repeat(20));
+        d.feed_content(&"abcdefghij".repeat(41)); // 410 字符：idx 399/400/401 三连命中
+        let ctx = d
+            .trigger_context()
+            .expect("trigger context must be recorded on trip");
+        // 重复 span 是周期 10 循环中的一个 200 字符段（"abcdefghij" 20
+        // 个周期；从窗口内某偏移截取），窗口尾部是循环内容本身。
+        assert!(ctx.contains("repeated 200-char span"), "{ctx}");
+        assert!(ctx.contains("window tail"), "{ctx}");
+        // 两个匹配偏移都落在记录区 [200, 400] 内（语义即起点距离 ≥200）。
+        assert!(ctx.contains("matched offsets"), "{ctx}");
+        // content 族触发详情仍稳定（detail 前缀不变，审计上下文不污染）。
+        let reason = d.trip_reason().expect("must trip");
+        assert!(
+            reason.starts_with("degeneration_detected:content_repetition:"),
+            "{reason}"
+        );
+    }
+
+    #[test]
+    fn degeneration_detector_periodic_phrase_trips_any_phase() {
+        // S2（设计 §3.3，对齐缺陷回归）+ 2026-08-22 再校准：周期 10 短语
+        // 循环——固定偏移下相邻窗口永不相同、系统性漏检；滚动哈希任意
+        // 偏移在 idx 399/400/401 三连命中（repeat(41)=410 字符）触发。
+        let mut d = DegenerationDetector::default();
+        d.feed_content(&"abcdefghij".repeat(40)); // 400 字符 = 1 次命中（仅审计）
+        assert!(d.trip_reason().is_none(), "1 hit must NOT trip");
+        assert_eq!(
+            d.take_audit_hits().len(),
+            1,
+            "400 chars of period-10 = 1 audit hit"
+        );
+        let mut d = DegenerationDetector::default();
+        d.feed_content(&"abcdefghij".repeat(41)); // 410 字符 = 3 次命中
         let reason = d.trip_reason().expect("period-10 cycle must trip");
         assert!(reason.contains("repeated span"), "{reason}");
     }
 
     #[test]
     fn degeneration_detector_single_large_distinct_chunk_does_not_trip() {
-        // S2（设计 §4.8）：单一大 chunk 不触发——一次喂入 2000 字符互异
-        // 内容（确定性伪随机，无 48 字符重复 span）。
+        // S2（设计 §4.8）+ 2026-08-22 L=200：单一大 chunk 不触发——一次
+        // 喂入 2000 字符互异内容（确定性伪随机，无 200 字符重复 span）。
         let mut d = DegenerationDetector::default();
         d.feed_content(&distinct_random_text(2000, 12345));
         assert!(
             d.trip_reason().is_none(),
             "single large distinct chunk must NOT trip"
         );
+        assert!(
+            d.take_audit_hits().is_empty(),
+            "distinct content must not produce any hit"
+        );
     }
 
     #[test]
     fn degeneration_detector_dna_low_entropy_output_does_not_trip() {
-        // S2（设计 §3.3/§4.8）：dna-assembly 误杀回归——6439 字符低熵
-        // DNA 分析文本（含 ttttt/aaaaa/ggggg/N N N N N/GGTCTC 短特征）
-        // 不触发；96 字符窗口内出现两个完全相同 48 字符子串的概率
-        // ≈ 4⁻⁴⁸ 量级。
+        // S2（设计 §3.3/§4.8）+ 2026-08-22 L=200：dna-assembly 误杀回归
+        // ——6439 字符低熵 DNA 分析文本（含 ttttt/aaaaa/ggggg/N N N N N/
+        // GGTCTC 短特征）不触发；400 字符窗口内出现两个完全相同 200 字符
+        // 子串的概率 ≈ 4⁻²⁰⁰ 量级。
         let text = dna_like_text(6439, 20_260_821);
         assert_eq!(text.len(), 6439, "sample must match the evidence size");
         let mut d = DegenerationDetector::default();
@@ -2201,68 +2436,123 @@ mod tests {
             d.trip_reason().is_none(),
             "low-entropy DNA-like analysis must NOT trip"
         );
+        assert!(
+            d.take_audit_hits().is_empty(),
+            "DNA low-entropy text must not repeat 200-char spans"
+        );
     }
 
     #[test]
     fn rolling_window_spans_equal_char_level_verification() {
-        // S2（设计 §4.8 哈希碰撞比对）：哈希命中后的字符级比对路径直接
-        // 验证——相同 span 判等、单字符差异判不等。真实 u64 多项式哈希
-        // 碰撞构造不可行（B=1_000_003 奇数、48 位置、字符字母表，2-adic
-        // 差异上界远小于 2^64），登记为已接受边界；`spans_equal` 即本
-        // 路径的可测部分。
-        let span = "0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKL";
+        // S2（设计 §4.8 哈希碰撞比对）+ 2026-08-22 L=200：哈希命中后的
+        // 字符级比对路径直接验证——相同 span 判等、单字符差异判不等。
+        // 真实 u64 多项式哈希碰撞构造不可行（B=1_000_003 奇数、200 位置、
+        // 字符字母表，2-adic 差异上界远小于 2^64），登记为已接受边界；
+        // `spans_equal` 即本路径的可测部分。
+        let span = distinct_random_text(REPETITION_MIN_RUN_CHARS, 42);
         assert_eq!(span.chars().count(), REPETITION_MIN_RUN_CHARS);
         let mut w = RollingRepetitionWindow::default();
-        w.feed_chars(span);
-        w.feed_chars(span);
+        w.feed_chars(&span);
+        w.feed_chars(&span);
         assert!(
-            w.spans_equal(0, 48),
-            "identical 48-char spans must compare equal"
+            w.spans_equal(0, REPETITION_MIN_RUN_CHARS),
+            "identical L-char spans must compare equal"
         );
-        let mut mutated = String::from(span);
-        mutated.replace_range(47..48, "x");
+        let mut mutated = span.clone();
+        mutated.replace_range(REPETITION_MIN_RUN_CHARS - 1..REPETITION_MIN_RUN_CHARS, "X");
         let mut w = RollingRepetitionWindow::default();
-        w.feed_chars(span);
+        w.feed_chars(&span);
         w.feed_chars(&mutated);
         assert!(
-            !w.spans_equal(0, 48),
+            !w.spans_equal(0, REPETITION_MIN_RUN_CHARS),
             "single-char difference must compare unequal"
         );
     }
 
     #[test]
     fn degeneration_detector_near_repeat_does_not_trip_then_exact_repeat_trips() {
-        // S2 补充：48 字符 span 与 48 字符前内容仅差一个字符（近重复，
-        // 非精确复读）不触发；随后同一 span 再次出现（精确复读）触发。
-        let span_a = "0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKL";
-        let span_b = "0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKM";
+        // S2 补充 + 2026-08-22 L=200：200 字符 span 与邻近内容仅差一个
+        // 字符（近重复，非精确复读）不触发；精确复读按流内累计命中计——
+        // 1 次命中仅审计留痕，第 3 次命中才触发。
+        let span = distinct_random_text(REPETITION_MIN_RUN_CHARS, 7);
+        let mut near = span.clone();
+        near.replace_range(REPETITION_MIN_RUN_CHARS - 1..REPETITION_MIN_RUN_CHARS, "X");
         let mut d = DegenerationDetector::default();
-        d.feed_content(span_a);
-        d.feed_content(span_b);
+        d.feed_content(&span); // 首次出现
+        d.feed_content(&near); // 近重复：无精确 L 字符 span 复现
         assert!(
             d.trip_reason().is_none(),
             "near-repeat (1-char diff) must NOT trip"
         );
-        d.feed_content(span_b);
-        let reason = d.trip_reason().expect("exact repeat of span_b must trip");
+        assert!(
+            d.take_audit_hits().is_empty(),
+            "near-repeat must not count as a hit"
+        );
+        d.feed_content(&span); // 精确复读：idx 599 → 命中 1（仅审计）
+        assert!(d.trip_reason().is_none(), "1 stream hit must NOT trip");
+        assert_eq!(
+            d.take_audit_hits().len(),
+            1,
+            "first exact repeat must be audit-only"
+        );
+        d.feed_content(&span); // 命中 2（idx 600）、命中 3（idx 601）→ 触发
+        let reason = d
+            .trip_reason()
+            .expect("3rd exact span occurrence must trip");
         assert!(reason.contains("repeated span"), "{reason}");
     }
 
     #[test]
     fn degeneration_detector_trips_on_high_repetition_ratio() {
         // >1K tokens with a heavily duplicated 3-gram profile; 2026-08-21
-        // 修订：共享核心压到 48 字符以下（39 字符）+ 互异长尾部——任何
-        // 48 字符窗口必然包含变体特有尾部，滚动哈希任意偏移路径保持静默
-        // （仅 3-gram 重复率路径是本次被测对象）。
+        // 修订：共享核心压到 L 以下 + 互异尾部——任何 L 字符窗口必然包含
+        // 变体特有标记，滚动哈希任意偏移路径保持静默（仅 3-gram 重复率
+        // 路径是本次被测对象）；2026-08-22 L=200 后再校准：每 feed 追加
+        // 唯一 4 位标记，杜绝 200 字符 span 精确复现。
         let core = "the quick brown fox jumps over lazy dog";
-        let a = format!("{core} while snow falls gently");
-        let b = format!("{core} under bright full moon");
         let mut d = DegenerationDetector::default();
         for i in 0..200 {
-            d.feed_content(if i % 2 == 0 { &a } else { &b });
+            d.feed_content(&format!("{core} marker {i:04}"));
         }
         let reason = d.trip_reason().expect("high repetition must trip");
         assert!(reason.contains("3-gram repetition ratio"), "{reason}");
+        assert!(
+            d.take_audit_hits().is_empty(),
+            "rolling path must stay silent (no 200-char span repeats)"
+        );
+    }
+
+    #[test]
+    fn degeneration_detector_trips_after_three_stream_hits() {
+        // 2026-08-22 再校准（用户裁决：流内累计命中 ≥3 次才中断+降级）：
+        // 1–2 次命中仅审计留痕（take_audit_hits），不中断不降级；第 3 次
+        // 命中才触发。
+        let mut d = DegenerationDetector::default();
+        d.feed_content(&"a".repeat(401)); // idx 399/400 → 命中 1、2
+        assert!(d.trip_reason().is_none(), "2 stream hits must NOT trip");
+        assert_eq!(
+            d.take_audit_hits().len(),
+            2,
+            "both sub-threshold hits must be audited"
+        );
+        d.feed_content("a"); // idx 401 → 命中 3
+        let reason = d.trip_reason().expect("3rd stream hit must trip");
+        assert!(reason.contains("repeated span"), "{reason}");
+        assert!(reason.contains("3/3"), "{reason}");
+    }
+
+    #[test]
+    fn degeneration_detector_hit_counter_survives_gaps() {
+        // 2026-08-22 再校准（用户裁决：间隔不重置）——命中 1 与命中 2/3
+        // 之间插入 50 个互异字符（不产生命中），流内计数不清零：命中 3
+        // 仍触发（若间隔重置则只停在 2 次、永不触发）。
+        let mut d = DegenerationDetector::default();
+        d.feed_content(&"a".repeat(400)); // idx 399 → 命中 1
+        assert!(d.trip_reason().is_none(), "1 hit must NOT trip");
+        d.feed_content(&"b".repeat(50)); // 无命中（'b' 与 'a' 不同）
+        d.feed_content(&"a".repeat(201)); // idx 649 → 命中 2；idx 650 → 命中 3
+        let reason = d.trip_reason().expect("3rd hit after a gap must trip");
+        assert!(reason.contains("repeated span"), "{reason}");
     }
 
     #[test]
@@ -2304,9 +2594,10 @@ mod tests {
         // Design §3.3: the detector trips mid-generation → the stream is
         // interrupted with `degeneration_detected`; the interruption is NOT
         // retried (output already seen — ADR-0007 discipline).
-        // 2026-08-21 修订：滚动哈希粒度下 5×"hi" 不再触发——单个 96 字符
-        // 重复 span（两个相邻 48 字符块）触发。
-        let repeated = "x".repeat(96);
+        // 2026-08-21 修订：滚动哈希粒度下 5×"hi" 不再触发；2026-08-22
+        // 再校准：L=200 + 3 次命中——402 同字符（idx 399/400/401 三连
+        // 命中）触发。
+        let repeated = "x".repeat(402);
         let body = degenerate_sse_body(&repeated, 1);
         let attempts = std::sync::Arc::new(std::sync::atomic::AtomicU32::new(0));
         let attempts_handle = attempts.clone();
@@ -2360,6 +2651,21 @@ mod tests {
         body
     }
 
+    /// SSE body with one reasoning-only delta + one content delta + a finish
+    /// block (sub-threshold hit probe — the stream must complete normally
+    /// when hits < limit; content keeps the D-6 empty-response chain out).
+    fn reasoning_completed_sse_body(reasoning: &str, content: &str) -> String {
+        let reasoning_frame = format!(
+            r#"{{"id":"x","object":"chat.completion.chunk","created":0,"model":"m","choices":[{{"index":0,"delta":{{"role":"assistant","reasoning_content":"{reasoning}"}},"finish_reason":null}}]}}"#
+        );
+        let content_frame = format!(
+            r#"{{"id":"x","object":"chat.completion.chunk","created":0,"model":"m","choices":[{{"index":0,"delta":{{"role":"assistant","content":"{content}"}},"finish_reason":null}}]}}"#
+        );
+        format!(
+            "data: {reasoning_frame}\n\ndata: {content_frame}\n\ndata: {{\"id\":\"x\",\"object\":\"chat.completion.chunk\",\"created\":0,\"model\":\"m\",\"choices\":[{{\"index\":0,\"delta\":{{}},\"finish_reason\":\"stop\"}}]}}\n\ndata: [DONE]\n\n"
+        )
+    }
+
     /// SSE body with one large low-repetition reasoning delta (~≥64K
     /// estimated tokens — the reasoning-stall token-budget probe; distinct
     /// tokens keep the 3-gram repetition detector silent so the stall
@@ -2376,10 +2682,11 @@ mod tests {
     }
 
     #[test]
-    fn detector_reasoning_repetition_trips_on_repeated_48_char_span() {
-        // 灵敏层（设计 §3.3 修订）：同一滚动哈希算法作用于 reasoning
-        // delta——5×"same"（20 字符）不再触发；24×"same"（96 字符重复
-        // span）→ reasoning_repetition；循环型空转可在数 K 内识别，不
+    fn detector_reasoning_repetition_trips_on_repeated_200_char_span() {
+        // 灵敏层（设计 §3.3 修订 + 2026-08-22 再校准）：同一滚动哈希算法
+        // 作用于 reasoning delta——5×"same"（20 字符）与 24×"same"（96
+        // 字符 < L=200）均不再触发；200 字符 span 出现 3 次命中（402 同
+        // 字符）→ reasoning_repetition；循环型空转可在数 K 内识别，不
         // 依赖大预算兜底。
         let mut d = DegenerationDetector::default();
         for i in 0..23 {
@@ -2389,10 +2696,15 @@ mod tests {
                 "short identical reasoning deltas must NOT trip, feed {i}"
             );
         }
-        d.feed_reasoning("same");
+        d.feed_reasoning("same"); // 96 字符 < L=200，无命中
+        assert!(
+            d.trip_reason().is_none(),
+            "96 chars below L=200 must NOT trip"
+        );
+        d.feed_reasoning(&"x".repeat(402));
         let reason = d
             .trip_reason()
-            .expect("96-char repeated reasoning span must trip");
+            .expect("200-char repeated reasoning span must trip");
         assert!(
             reason.starts_with(REASONING_REPETITION_DETAIL_PREFIX),
             "{reason}"
@@ -2402,10 +2714,11 @@ mod tests {
 
     #[test]
     fn detector_reasoning_repetition_periodic_cycle_trips() {
-        // S2（设计 §3.3）：同一滚动哈希算法作用于 reasoning——周期 10
-        // 循环（循环型空转特征）在灵敏层同样触发（对齐缺陷回归）。
+        // S2（设计 §3.3）+ 2026-08-22 再校准：同一滚动哈希算法作用于
+        // reasoning——周期 10 循环（循环型空转特征）在灵敏层同样触发
+        // （对齐缺陷回归；repeat(41)=410 字符 → 3 次命中）。
         let mut d = DegenerationDetector::default();
-        d.feed_reasoning(&"abcdefghij".repeat(20));
+        d.feed_reasoning(&"abcdefghij".repeat(41));
         let reason = d.trip_reason().expect("periodic reasoning cycle must trip");
         assert!(
             reason.starts_with(REASONING_REPETITION_DETAIL_PREFIX),
@@ -2417,13 +2730,12 @@ mod tests {
     #[test]
     fn detector_reasoning_repetition_trips_on_high_ratio() {
         // 与 content 复读同一 1K 窗口 3-gram 重复率算法（>60% 触发）；
-        // 2026-08-21 修订内容（滚动哈希任意偏移保持静默，同 content 用例）。
+        // 2026-08-21 修订 + 2026-08-22 L=200：滚动哈希任意偏移保持静默
+        // （每 feed 追加唯一 4 位标记，同 content 用例）。
         let core = "the quick brown fox jumps over lazy dog";
-        let a = format!("{core} while snow falls gently");
-        let b = format!("{core} under bright full moon");
         let mut d = DegenerationDetector::default();
         for i in 0..200 {
-            d.feed_reasoning(if i % 2 == 0 { &a } else { &b });
+            d.feed_reasoning(&format!("{core} marker {i:04}"));
         }
         let reason = d
             .trip_reason()
@@ -2433,6 +2745,10 @@ mod tests {
             "{reason}"
         );
         assert!(reason.contains("3-gram repetition ratio"), "{reason}");
+        assert!(
+            d.take_audit_hits().is_empty(),
+            "rolling path must stay silent (no 200-char span repeats)"
+        );
     }
 
     #[test]
@@ -2635,9 +2951,9 @@ mod tests {
         // 设计 §3.2/§3.3：max 阶段触发 reasoning 复读哨兵 → 不原样快速
         // 重试（长烧型原样重试大概率复现且贵）、直接跳降级（max 显式档
         // 保留 S4 基线直跳 disabled）。
-        // 2026-08-21 修订：5×"think" 不再触发——单个 96 字符重复 reasoning
-        // span（两个相邻 48 字符块）触发。
-        let rep = reasoning_repetition_sse_body(&"t".repeat(96), 1);
+        // 2026-08-21 修订：5×"think" 不再触发；2026-08-22 再校准：单个
+        // 402 字符 reasoning span（3 次命中）触发。
+        let rep = reasoning_repetition_sse_body(&"t".repeat(402), 1);
         let ok = ok_sse_body("降级答案");
         let attempts = std::sync::Arc::new(std::sync::atomic::AtomicU32::new(0));
         let attempts_handle = attempts.clone();
@@ -2669,6 +2985,42 @@ mod tests {
             attempts.load(std::sync::atomic::Ordering::SeqCst),
             2,
             "reasoning guard must skip identical retries and degrade directly"
+        );
+    }
+
+    #[tokio::test]
+    async fn generate_stream_reasoning_subthreshold_hits_do_not_interrupt() {
+        // 2026-08-22 再校准（用户裁决：流内累计 ≥3 次命中才中断+降级）：
+        // 1–2 次命中仅审计留痕——401 个同字符 reasoning（2 次命中）流
+        // 正常完成（无 StreamInterrupted、无降级重试、单连接）。
+        let body = reasoning_completed_sse_body(&"t".repeat(401), "ok");
+        let attempts = std::sync::Arc::new(std::sync::atomic::AtomicU32::new(0));
+        let attempts_handle = attempts.clone();
+        let base = spawn_mock(move |_line, _body| {
+            attempts_handle.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            MockResponse::sse(vec![&body], std::time::Duration::ZERO)
+        })
+        .await;
+        let t = mock_transport_with_retry_thinking(
+            &base,
+            Default::default(),
+            ThinkingMode::EnabledHigh,
+        );
+        let r = t
+            .generate_stream(request(), None, None, &mut |_| {})
+            .await
+            .unwrap();
+        let expected_reasoning = "t".repeat(401);
+        assert_eq!(
+            r.reasoning_content.as_deref(),
+            Some(expected_reasoning.as_str()),
+            "reasoning deltas must be joined verbatim",
+        );
+        assert_eq!(r.text.as_deref(), Some("ok"), "content must be delivered");
+        let n = attempts.load(std::sync::atomic::Ordering::SeqCst);
+        assert_eq!(
+            n, 1,
+            "sub-threshold hits must not trigger retries or degrade: {n} connections"
         );
     }
 
@@ -2933,9 +3285,9 @@ mod tests {
         // 设计 §3.2：阶段 1 完成型空响应进入快速重试；阶段 2（重试中）触发
         // reasoning 族哨兵 → 跳过剩余原样重试、直接降级（总 3 次而非 4 次）。
         let empty = empty_completed_sse_body();
-        // 2026-08-21 修订：滚动哈希粒度下 5×"think" 不再触发——单个 96
-        // 字符重复 reasoning span 触发。
-        let rep = reasoning_repetition_sse_body(&"t".repeat(96), 1);
+        // 2026-08-21 修订：滚动哈希粒度下 5×"think" 不再触发；2026-08-22
+        // 再校准：402 同字符（3 次命中）触发。
+        let rep = reasoning_repetition_sse_body(&"t".repeat(402), 1);
         let ok = ok_sse_body("降级答案");
         let attempts = std::sync::Arc::new(std::sync::atomic::AtomicU32::new(0));
         let attempts_handle = attempts.clone();
@@ -3031,9 +3383,9 @@ mod tests {
     async fn generate_stream_reasoning_guard_ladder_high_to_low() {
         // 设计 §3.6：high 档 reasoning 复读哨兵 → 不原样重试、下降一档到
         // low（保留浅思考链）；low 档产出答案。
-        // 2026-08-21 修订：滚动哈希粒度下 5×"think" 不再触发——单个 96
-        // 字符重复 reasoning span 触发。
-        let rep = reasoning_repetition_sse_body(&"t".repeat(96), 1);
+        // 2026-08-21 修订：滚动哈希粒度下 5×"think" 不再触发；2026-08-22
+        // 再校准：402 同字符（3 次命中）触发。
+        let rep = reasoning_repetition_sse_body(&"t".repeat(402), 1);
         let ok = ok_sse_body("low 答案");
         let attempts = std::sync::Arc::new(std::sync::atomic::AtomicU32::new(0));
         let attempts_handle = attempts.clone();
@@ -3075,9 +3427,9 @@ mod tests {
     async fn generate_stream_reasoning_guard_ladder_low_to_disabled() {
         // 设计 §3.6：low 档 reasoning 复读哨兵 → 下降一档到 disabled；
         // disabled 档产出答案（全部输出走 content，无 reasoning 旋钮）。
-        // 2026-08-21 修订：滚动哈希粒度下 5×"think" 不再触发——单个 96
-        // 字符重复 reasoning span 触发。
-        let rep = reasoning_repetition_sse_body(&"t".repeat(96), 1);
+        // 2026-08-21 修订：滚动哈希粒度下 5×"think" 不再触发；2026-08-22
+        // 再校准：402 同字符（3 次命中）触发。
+        let rep = reasoning_repetition_sse_body(&"t".repeat(402), 1);
         let ok = ok_sse_body("降级答案");
         let attempts = std::sync::Arc::new(std::sync::atomic::AtomicU32::new(0));
         let attempts_handle = attempts.clone();

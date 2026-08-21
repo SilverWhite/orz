@@ -50,7 +50,6 @@ pub enum EventType {
 
     // Assurance
     OrientationCheckpoint,
-    RuntimeStagnationGuard,
     ToolAvailabilityCheck,
     ToolBeliefStagnation,
     InstructionProvenanceGate,

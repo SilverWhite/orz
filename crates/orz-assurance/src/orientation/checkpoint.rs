@@ -35,7 +35,7 @@ pub const TEMPLATE_ANSWER_INSTRUCTIONS: &str = template_answer_instructions!();
 /// GAP-INQUIRY-SPLIT (2026-08-09): re-tagged `[ORIENTATION v0.2]` — the v0.2
 /// producer actually injects the block (the old monitor wrote the event but
 /// never injected it), so the marker must match the `ORIENTATION_INJECTED_PREFIX`
-/// registration in the stagnation filter. v0.3 (2026-08-15) carries the
+/// registration in the injected-block filter. v0.3 (2026-08-15) carries the
 /// forced-template JSON answer contract.
 pub const ORIENTATION_BLOCK: &str = concat!(
     "[ORIENTATION v0.3]\n",

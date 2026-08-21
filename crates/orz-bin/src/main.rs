@@ -966,9 +966,8 @@ fn chrono_utc_now() -> String {
 /// on the real GrokBuild toolset; `bash` (SandboxEscape) has no interactive
 /// client headless → denied before execution. `rust-toolchain.toml` is the
 /// demo target when run from the orz workspace — small and non-repetitive,
-/// so the run ends with a clean `run_finished` (a large file like
-/// `Cargo.toml` trips the stagnation ngram guard honestly, and the run
-/// correctly ends `run_invalidated`).
+/// so the run ends with a clean `run_finished` (the output-health guard
+/// trips on genuinely repeated spans; a clean run stays `completed`).
 ///
 /// §4.6 (Phase 3): the final-answer counterexample gate adds one model round
 /// per turn — the script carries headroom. `--plan` consumes one extra entry
@@ -1618,9 +1617,9 @@ mod tests {
         // respectively. The 2.5s window clears both while staying well
         // below the total run time.)
         // The two rounds MUST be textually distinct — identical content
-        // would legitimately trip the runtime content-stagnation guard
-        // (ngram repetition) and end the run with run_invalidated, which
-        // would make this test assert the wrong terminal.
+        // would trip the generation-time output-health guard and end the
+        // run with run_invalidated, which would make this test assert the
+        // wrong terminal.
         let gateway: Arc<dyn ModelGateway> = Arc::new(
             FakeProvider::from_texts(vec![
                 "alpha bravo charlie delta echo foxtrot golf hotel india juliet kilo lima mike november oscar papa quebec romeo sierra tango uniform victor whiskey xray yankee zulu",
@@ -1836,7 +1835,6 @@ mod conformance_capture {
                         "model_output",
                         "counterexample_gate",
                         "model_output",
-                        "runtime_stagnation_guard",
                         "run_finished",
                     ],
                     "run_finished",
@@ -1931,7 +1929,6 @@ mod conformance_capture {
                         "model_output",
                         "counterexample_gate",
                         "model_output",
-                        "runtime_stagnation_guard",
                         "run_finished",
                     ],
                     "run_finished",
@@ -2005,7 +2002,6 @@ mod conformance_capture {
                         "model_output",
                         "counterexample_gate",
                         "model_output",
-                        "runtime_stagnation_guard",
                         "run_finished",
                     ],
                     "run_finished",
@@ -2288,10 +2284,10 @@ mod conformance_capture {
                     "prompt_submitted",
                 ];
                 // Per retrieval iteration: the shared-loop dispatch (subagent
-                // model round + its stagnation guard inside the parent's
-                // wrapper) + the assessment + the parent's disposition round
-                // (control tool — journaled with its own ToolStarted/
-                // ToolCompleted). The orientation crosses the 7-round
+                // model round inside the parent's wrapper) + the assessment +
+                // the parent's disposition round (control tool — journaled
+                // with its own ToolStarted/ToolCompleted). The orientation
+                // crosses the 7-round
                 // threshold on the 4th retrieve's post-tool-batch gap (the
                 // 7th completed main round) — it fires between that
                 // iteration's assessment and its disposition round. The last
@@ -2301,7 +2297,6 @@ mod conformance_capture {
                         "model_output",
                         "tool_started",
                         "model_output",
-                        "runtime_stagnation_guard",
                         "tool_completed",
                         // GAP-RETRIEVAL-TOOLS (2026-08-10): the committed
                         // structured result precedes the assessment.
@@ -2335,7 +2330,6 @@ mod conformance_capture {
                     "model_output",
                     "counterexample_gate",
                     "model_output",
-                    "runtime_stagnation_guard",
                     "run_finished",
                 ]);
                 verify(
@@ -2445,7 +2439,6 @@ mod conformance_capture {
                         "model_output",
                         "counterexample_gate",
                         "model_output",
-                        "runtime_stagnation_guard",
                         "run_finished",
                     ],
                     "run_finished",
@@ -2531,7 +2524,6 @@ mod conformance_capture {
                         "model_output",
                         "counterexample_gate",
                         "model_output",
-                        "runtime_stagnation_guard",
                         "run_finished",
                     ],
                     "run_finished",
@@ -2634,7 +2626,6 @@ mod conformance_capture {
                         "tool_completed",
                         // The subagent's answer round (result formation).
                         "model_output",
-                        "runtime_stagnation_guard",
                         "tool_completed",
                         "retrieval_result_committed",
                         "information_sufficiency_assessment",
@@ -2646,7 +2637,6 @@ mod conformance_capture {
                         "model_output",
                         "counterexample_gate",
                         "model_output",
-                        "runtime_stagnation_guard",
                         "run_finished",
                     ],
                     "run_finished",
@@ -2758,7 +2748,6 @@ mod conformance_capture {
                         "tool_completed",
                         // The subagent's answer round (result formation).
                         "model_output",
-                        "runtime_stagnation_guard",
                         "tool_completed",
                         "retrieval_result_committed",
                         "information_sufficiency_assessment",
@@ -2768,7 +2757,6 @@ mod conformance_capture {
                         "model_output",
                         "counterexample_gate",
                         "model_output",
-                        "runtime_stagnation_guard",
                         "run_finished",
                     ],
                     "run_finished",
@@ -2878,78 +2866,11 @@ mod conformance_capture {
                         "model_output",
                         "counterexample_gate",
                         "model_output",
-                        "runtime_stagnation_guard",
                         "run_finished",
                     ],
                     "run_finished",
                 );
                 copy_journal(&handle.journal_dir, "cross-prompt-restore");
-            })
-            .await
-    }
-
-    /// 12. pre-handoff checkpoint — GAP-RETRIEVAL-TOOLS: a stagnation
-    /// restart decision journals the pre-handoff orientation checkpoint
-    /// (ADR-0010 §11.1 — independent lifecycle trigger) before the
-    /// run_invalidated terminal.
-    #[tokio::test]
-    #[ignore = "conformance capture — run with: cargo test -p orz-bin -- --ignored conformance_capture"]
-    async fn capture_pre_handoff_checkpoint() {
-        tokio::task::LocalSet::new()
-            .run_until(async {
-                let base = worktree("pre-handoff-checkpoint");
-                let run_id = "RUN-PREHAND-CONF";
-                let handle = bootstrap_session(run_id, Some(base.clone()), TrustPolicy::Skip)
-                    .await
-                    .unwrap();
-                let host = build_cli_host(&handle, run_id, &base).unwrap();
-                let pattern = "重复 的 片段 ";
-                let repeated = pattern.repeat(11);
-                let controller = orz_loop::AgentLoopController::with_gateway(Arc::new(
-                    FakeProvider::from_texts(vec![repeated.as_str(), repeated.as_str()]),
-                ))
-                .with_snapshot_store(Some(handle.snapshot_store.clone()));
-                controller
-                    .run_turn(
-                        &host,
-                        "输出结果",
-                        run_id,
-                        &handle.run_manifest_sha256,
-                        handle.next_sequence,
-                        handle.last_event_sha256.clone(),
-                        None,
-                        None,
-                    )
-                    .await
-                    .unwrap();
-                handle.journal.shutdown_async().await.unwrap();
-                verify(
-                    &handle.journal_dir.join("events.jsonl"),
-                    "pre-handoff-checkpoint",
-                    &[
-                        "run_preflight",
-                        "tool_availability_check",
-                        "run_started",
-                        "prompt_submitted",
-                        "model_output",
-                        "counterexample_gate",
-                        "model_output",
-                        "runtime_stagnation_guard",
-                        "orientation_checkpoint",
-                        "run_invalidated",
-                    ],
-                    "run_invalidated",
-                );
-                let content =
-                    std::fs::read_to_string(handle.journal_dir.join("events.jsonl")).unwrap();
-                let checkpoint: serde_json::Value = content
-                    .lines()
-                    .find(|l| l.contains("\"pre_handoff\""))
-                    .map(|l| serde_json::from_str(l).unwrap())
-                    .unwrap();
-                assert_eq!(checkpoint["payload"]["trigger"], "pre_handoff");
-                assert_eq!(checkpoint["payload"]["injection_position"], "pre_terminal");
-                copy_journal(&handle.journal_dir, "pre-handoff-checkpoint");
             })
             .await
     }
@@ -3006,7 +2927,6 @@ mod conformance_capture {
                         "counterexample_gate",
                         "model_output",
                         "citation_validation",
-                        "runtime_stagnation_guard",
                         "run_finished",
                     ],
                     "run_finished",

@@ -8,7 +8,7 @@
 //! model, not system context); the constants live here per design §4.6.6.
 //! The orientation block text lives in `orz-assurance` (checkpoint.rs) so the
 //! journal `message_block` payload and the injected text stay one source;
-//! `ORIENTATION_INJECTED_PREFIX` registers it with the stagnation filter.
+//! `ORIENTATION_INJECTED_PREFIX` registers it with the injected-block filter.
 
 /// Base system prompt — runtime-neutral orientation.
 ///
@@ -84,7 +84,7 @@ pub const COUNTEREXAMPLE_GATE_PLAN_BLOCK: &str = "[COUNTEREXAMPLE_GATE v0.1]\n\
 /// degradation block the final-answer citation verifier returns when a
 /// `[来源: ...]` marker fails binding/claim validation (ADR-0010 §3.7.9).
 /// Registered with `is_injected_block_text` — mechanical injected text,
-/// never stagnation input.
+/// never persisted back into the conversation.
 pub const CITATION_VALIDATION_FAILED_PREFIX: &str = "[CITATION_VALIDATION_FAILED";
 
 /// Build the explicit degradation block — the delivered final answer when
@@ -101,13 +101,13 @@ pub fn citation_validation_failed_block(reason_codes: &[String]) -> String {
 
 /// GAP-INQUIRY-SPLIT (2026-08-09): prefix of the injected orientation block
 /// (ADR-0010 §4.2 — session-level 7-round neutral inquiry). Registered with
-/// `is_injected_block_text` so the injected block never enters stagnation
-/// inputs. The full block text lives in `orz-assurance` (checkpoint.rs) — the
+/// `is_injected_block_text` so the injected block never enters the persisted
+/// conversation. The full block text lives in `orz-assurance` (checkpoint.rs) — the
 /// journal `message_block` payload and the injected message share it.
 pub const ORIENTATION_INJECTED_PREFIX: &str = "[ORIENTATION";
 
 /// Whether `content` is one of the runtime-injected assurance blocks.
-/// The controller filters these out of stagnation inputs (D7) — fixed injected
+/// The controller filters these out of the persisted conversation (D7) — fixed injected
 /// text is not model output and repeated blocks would pollute ngram stats.
 ///
 /// GAP-INQUIRY-SPLIT (2026-08-09): the old INFO_SUFFICIENCY and
@@ -120,59 +120,59 @@ pub fn is_injected_block_text(content: &str) -> bool {
     content == COUNTEREXAMPLE_GATE_BLOCK
         || content == COUNTEREXAMPLE_GATE_PLAN_BLOCK
         // GAP-INQUIRY-SPLIT: the injected orientation block must never be
-        // stagnation input — a repeated `[ORIENTATION …]` block would
-        // otherwise pollute the guard's ngram stats (R-8 regression point).
+        // persisted — a repeated `[ORIENTATION …]` block would
+        // otherwise pollute the persisted conversation (R-8 regression point).
         || content.starts_with(ORIENTATION_INJECTED_PREFIX)
         || content.starts_with(TOOL_POLICY_BREAKER_PREFIX)
         || content.starts_with(TOOL_ROUND_BUDGET_PREFIX)
         // 2026-08-08 blackboard partition (review closure, P2-1/D2-1): the
         // incremental-push summary `[本轮编辑] …` is mechanical injected
         // text — same rule as the blocks above. Without registration it
-        // entered the stagnation guard's public_outputs, and iterating the
+        // entered the persisted conversation, and iterating the
         // same file for ≥11 rounds (a normal edit pattern) tripped
-        // STAGNATION-NGRAM-REPEAT on the message's repeated 3-gram.
+        // the injected-block filter on the message's repeated 3-gram.
         || content.starts_with(EDIT_ROUND_PUSH_PREFIX)
         // A6 (2026-08-08): the context-compaction marker is mechanical
         // injected text (see `context_compressed_marker`) — never
-        // stagnation input.
+        // persisted back into the conversation.
         || content.starts_with(CONTEXT_COMPRESSED_PREFIX)
         // A6 §8 C.2 (2026-08-08): the resident compaction-whitelist
         // message repeats every round — mechanical injected text, never
-        // stagnation input (model-written, but a resident framework-
+        // persisted back (model-written, but a resident framework-
         // managed block, not per-round model output).
         || content.starts_with(WHITELIST_PREFIX)
         // GAP-SUBAGENT-RUNTIME M5 (2026-08-10): the Diagnostic Coverage
         // checkpoint block (ADR-0010 §4.6.4) is mechanical injected text —
-        // never stagnation input.
+        // never persisted back into the conversation.
         || content.starts_with(crate::diagnostic_coverage::DIAGNOSTIC_COVERAGE_PREFIX)
         // FUS-RETRIEVAL-MECH P0-B step 5 (2026-08-14): the citation
         // validation degradation block is mechanical injected text — never
-        // stagnation input.
+        // persisted back into the conversation.
         || content.starts_with(CITATION_VALIDATION_FAILED_PREFIX)
         // P0-D S2 (2026-08-14): the model-visible action-ledger block
         // (`[动作台账 v0.1] …`) is mechanical injected text — it exists only
         // in per-request collapsed views, never in the persisted
-        // conversation; registered so it can never pollute stagnation or
+        // conversation; registered so it can never pollute the injected-block/restore filters or
         // restore filters.
         || content.starts_with(crate::action_ledger::ACTION_LEDGER_PREFIX)
         // ORZ-ORIENTATION-FORCED-TEMPLATE (2026-08-15, ADR-0010 §14.16):
         // the one-shot checkpoint re-fill feedback block is mechanical
-        // injected text — never stagnation input and never persisted back
-        // into the conversation (same rule as the other User-role blocks).
+        // injected text — never persisted back into the conversation
+        // (same rule as the other User-role blocks).
         || content.starts_with(crate::checkpoint::CHECKPOINT_REFILL_PREFIX)
 }
 
 /// 2026-08-08 blackboard partition (A2): prefix of the incremental-push
 /// message the controller injects after a tool round that made file edits
 /// (`[本轮编辑] 1.py 2→3行变动；…`). Mechanical injected text — never
-/// stagnation input (registered in `is_injected_block_text`).
+/// persisted back (registered in `is_injected_block_text`).
 pub const EDIT_ROUND_PUSH_PREFIX: &str = "[本轮编辑";
 
 /// A6 (2026-08-08): prefix of the compaction marker message (`[前文上下文
 /// 已压缩 …]`) the controller inserts at the compaction cut point.
 /// Mechanical injected text — registered in `is_injected_block_text` (the
 /// marker is injected once per compaction and would otherwise pollute the
-/// stagnation guard's ngram stats on repeated compactions).
+/// persisted conversation on repeated compactions).
 pub const CONTEXT_COMPRESSED_PREFIX: &str = "[前文上下文已压缩";
 
 /// A6 §8 C.2 (2026-08-08): prefix of the resident compaction-whitelist
@@ -182,7 +182,7 @@ pub const CONTEXT_COMPRESSED_PREFIX: &str = "[前文上下文已压缩";
 /// first tool declaration), so the compaction mechanism skips it as part
 /// of the always-kept preamble — never re-injected, never strengthened.
 /// Registered in `is_injected_block_text` (it repeats every round and must
-/// not pollute the stagnation guard's ngram stats).
+/// not pollute the persisted conversation).
 pub const WHITELIST_PREFIX: &str = "[压缩白名单";
 
 /// A6 §8 C.2: build the resident whitelist message content from the
@@ -316,7 +316,7 @@ pub fn build_status_line(goal: Option<&str>, steps: &[crate::blackboard::PlanSte
 /// (2026-08-21): the per-round remaining declaration is retired — the live
 /// count is read on demand via `blackboard_read section=session` (a tool
 /// result, not an injected block). Counted as injected text — never
-/// stagnation input.
+/// persisted back.
 ///
 /// Deliberately matches the versioned marker form (`[TOOL_ROUND_BUDGET v0.1]`)
 /// as well as the bare form — the previous constant ended in `]` and never
@@ -331,7 +331,7 @@ pub const TOOL_ROUND_BUDGET_PREFIX: &str = "[TOOL_ROUND_BUDGET";
 /// through (polyglot probe P3: `web_search`×4 burned a third of the round
 /// budget). It tells the model to switch strategy, names that tool, and is
 /// counted as injected text
-/// (never stagnation input). The old total-denial ceiling (10/run) is
+/// (never persisted back). The old total-denial ceiling (10/run) is
 /// deleted: anti-runaway is the round budget, not a second denial counter.
 pub const TOOL_POLICY_BREAKER_PREFIX: &str = "[TOOL_POLICY_BREAKER]";
 
@@ -676,7 +676,7 @@ mod tests {
             120
         )));
         // A6 (2026-08-08): the context-compaction marker is mechanical
-        // injected text — never stagnation input.
+        // injected text — never persisted back into the conversation.
         assert!(is_injected_block_text(&context_compressed_marker(
             4, 152_000, None
         )));
@@ -689,7 +689,7 @@ mod tests {
         let with_summary = context_compressed_marker(4, 152_000, Some("编辑 3 处；读 5"));
         assert!(with_summary.contains("累计: 编辑 3 处；读 5"));
         // A6 §8 C.2 (2026-08-08): the resident whitelist block is
-        // mechanical injected text and never stagnation input.
+        // mechanical injected text and never persisted back into the conversation.
         let whitelist = build_whitelist_block(&[
             "任务背景：修复 orz 的缓存回归".to_string(),
             "约束：不改动 schema".to_string(),
@@ -712,7 +712,7 @@ mod tests {
         // The prefix match is deliberately conservative: the legacy v0.1
         // text `[ORIENTATION_CHECKPOINT …]` also hits — harmless (that text
         // was never injected into a conversation; over-matching only makes
-        // the stagnation filter stricter).
+        // the injected-block filter stricter).
         assert!(is_injected_block_text("[ORIENTATION_CHECKPOINT v0.1] 手抄"));
         // A closing tag alone must never match (starts with `[/`).
         assert!(!is_injected_block_text("[/TOOL_ROUND_BUDGET]"));

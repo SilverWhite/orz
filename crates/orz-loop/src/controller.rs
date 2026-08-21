@@ -15,8 +15,7 @@
 //!      - retrieval-shaped calls route to subagents (internal/external)
 //!      - host calls pass ToolDispatcher gates: IPG (IP3a) → permission →
 //!        tool execution
-//!   5. runtime_stagnation_guard (mechanical repetition detection)
-//!   6. run_finished (terminal)
+//!   5. run_finished (terminal)
 //!
 //! Phase 2 (2026-08-04): single main agent + two retrieval subagents.
 //! Pro/Flash dual-model dispatch was archived (see
@@ -30,9 +29,6 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
 use orz_assurance::acaf::TicketKind;
-use orz_assurance::orientation::stagnation::{
-    StagnationDecision, StagnationInput, evaluate_runtime_stagnation_guard,
-};
 use orz_assurance::source_weighting::SourceWeightConfig;
 use orz_assurance::{
     EventTrack, EventType, JournalRecorder, JournalRecorderError, Redaction, RunEvent,
@@ -322,7 +318,7 @@ pub enum AgentLoopError {
     Cancelled,
     /// OUTPUT-DEGENERATION-GUARD (2026-08-19, ADR-0010 §14.33): 会话级连续
     /// 退化中断达到 `DEGENERATION_LIMIT`——run 层记 `run_invalidated`
-    /// （reason=degeneration，计入 stagnation 同类终止态）而非 run_failed。
+    /// （reason=degeneration）而非 run_failed。
     #[error("degeneration limit reached: {0}")]
     Degeneration(String),
 }
@@ -5203,13 +5199,6 @@ impl AgentLoopController {
         } else {
             LoopProfile::main(self.max_tool_rounds)
         };
-        // GAP-RETRIEVAL-TOOLS (2026-08-10): pre-loop orientation snapshot
-        // for the pre-handoff checkpoint (the orientation reference is
-        // consumed by the loop below).
-        let pre_handoff_completed = orientation
-            .as_ref()
-            .map(|o| o.completed_rounds(crate::orientation::AgentRole::Main))
-            .unwrap_or(0);
         let outcome = run_agent_loop(
             &SharedLoopServices {
                 blackboard: &self.blackboard,
@@ -5247,46 +5236,13 @@ impl AgentLoopController {
             ..
         } = outcome;
 
-        // 5. runtime_stagnation_guard — mechanical, per-turn
-        let stagnation_decision = self.evaluate_stagnation(writer, &messages).await?;
-
-        // 6. terminal — decision-aware: a non-continue stagnation decision
-        // invalidates the run (Python: run_finished iff decision == continue,
-        // else run_invalidated).
-        let (terminal_event, status) = match &stagnation_decision {
-            StagnationDecision::Continue => (EventType::RunFinished, "completed"),
-            StagnationDecision::RestartRequested { .. } => {
-                (EventType::RunInvalidated, "restart_requested")
-            }
-            StagnationDecision::HandoffRequired => (EventType::RunInvalidated, "handoff_required"),
-        };
-        // GAP-RETRIEVAL-TOOLS (2026-08-10): pre-handoff orientation
-        // checkpoint — ADR-0010 §11.1: pre-handoff is an independent
-        // lifecycle trigger, never part of the 7-round count; audit-only
-        // (no block injection, no fire reset). Journaled before the
-        // run-invalidated terminal. `completed` is the pre-loop snapshot
-        // (the orientation reference is consumed by the loop) — the audit
-        // intent is "how far the session was before the handoff".
-        if !matches!(stagnation_decision, StagnationDecision::Continue) {
-            let completed = pre_handoff_completed;
-            writer
-                .record(
-                    EventType::OrientationCheckpoint,
-                    serde_json::json!({
-                        "checkpoint_id": format!("ORIENT-{}-{:04}", writer.run_id(), writer.seq()),
-                        "inquiry_family": "neutral",
-                        "inquiry_kind": "orientation_checkpoint",
-                        "agent_role": "main",
-                        "session_id": self.session_id.clone().unwrap_or_else(|| writer.run_id().to_string()),
-                        "trigger": "pre_handoff",
-                        "completed_turns_since_orientation": completed,
-                        "step_index": 0,
-                        "message_block": "",
-                        "injection_position": "pre_terminal",
-                    }),
-                )
-                .await?;
-        }
+        // 5. terminal — the runtime stagnation guard is RETIRED (2026-08-22,
+        // user adjudication): generation-time output-health detection
+        // (rolling-hash repetition + stall budget + fail-fast) covers the
+        // actual degeneration surface; a completed loop turn finishes
+        // "completed" unless a hard error path (degeneration / wallclock)
+        // invalidated it earlier.
+        let (terminal_event, status) = (EventType::RunFinished, "completed");
         // P0-D review fix (2026-08-14, ADR-0010 v1.14): end-of-session
         // compaction — 治本 for restore. A successful run compacts its
         // conversation BEFORE the terminal event and the sidecar write-back,
@@ -5295,7 +5251,7 @@ impl AgentLoopController {
         // fallback for older sidecars that never ran this path. Grill turns
         // are excluded (they keep their own one-shot history). The summary
         // call is forced (terminal housekeeping, not a mid-task cost gate).
-        if matches!(stagnation_decision, StagnationDecision::Continue) && conversation.is_some() {
+        if conversation.is_some() {
             let estimate = estimate_messages_tokens(&messages);
             if estimate > self.context_compact.session_end_trigger_tokens {
                 let svc = SharedLoopServices {
@@ -5365,30 +5321,28 @@ impl AgentLoopController {
             // replayed conversation would 400 forever). Index 0 (the seed's
             // first dialogue message) is never dropped.
             //
-            // Review D2-4 (three-agent 2026-08-10): write-back is gated on
-            // `StagnationDecision::Continue` — a run_invalidated run's
-            // messages must NOT enter the conversation (the triggering
-            // content would ride the sidecar, the restored next prompt would
-            // re-trigger on the same content, and the restart/retry escape
-            // path would fail — a permanent run_invalidated loop).
-            if matches!(stagnation_decision, StagnationDecision::Continue) {
-                *conv = messages
-                    .into_iter()
-                    .enumerate()
-                    .filter(|(i, m)| {
-                        // D3-1 (2026-08-14, ADR-0010 v1.10): the compaction
-                        // marker and the whitelist block are restore-retained
-                        // (a restored prompt must see the compression notice
-                        // and the task facts); every other mechanical
-                        // injected block stays filtered.
-                        *i == 0
-                            || !(m.role == Role::User
-                                && is_injected_block_text(&m.content)
-                                && !is_restore_retained_block(&m.content))
-                    })
-                    .map(|(_, m)| m)
-                    .collect();
-            }
+            // Review D2-4 (three-agent 2026-08-10): only a COMPLETED loop
+            // reaches this write-back — hard error paths (degeneration /
+            // wallclock) invalidate the run before the sidecar write, so a
+            // failed run's messages never enter the conversation. The
+            // stagnation guard that previously gated this is retired
+            // (2026-08-22).
+            *conv = messages
+                .into_iter()
+                .enumerate()
+                .filter(|(i, m)| {
+                    // D3-1 (2026-08-14, ADR-0010 v1.10): the compaction
+                    // marker and the whitelist block are restore-retained
+                    // (a restored prompt must see the compression notice
+                    // and the task facts); every other mechanical
+                    // injected block stays filtered.
+                    *i == 0
+                        || !(m.role == Role::User
+                            && is_injected_block_text(&m.content)
+                            && !is_restore_retained_block(&m.content))
+                })
+                .map(|(_, m)| m)
+                .collect();
         }
 
         Ok(last_text.unwrap_or_default())
@@ -5431,62 +5385,6 @@ impl AgentLoopController {
             }
         }
         ids
-    }
-
-    /// Runtime stagnation guard — mechanical, per-turn (§4.5 FUS-STAGNATION;
-    /// shared by the main loop and the retrieval subagent loops — ADR-0010
-    /// §3.1: the same guard defaults apply to every agent). Runtime-injected
-    /// inquiry blocks are excluded (D7): fixed injected text is not model
-    /// output, and repeated blocks would pollute the consecutive/ngram
-    /// statistics.
-    pub(crate) async fn evaluate_stagnation(
-        &self,
-        writer: &mut EventWriter<'_>,
-        messages: &[Message],
-    ) -> Result<StagnationDecision, AgentLoopError> {
-        let public_outputs: Vec<String> = messages
-            .iter()
-            .filter(|m| {
-                matches!(m.role, Role::User | Role::Assistant)
-                    && !m.content.is_empty()
-                    && !is_injected_block_text(&m.content)
-            })
-            .map(|m| m.content.clone())
-            .collect();
-        let (stagnation_decision, stagnation_metrics) =
-            evaluate_runtime_stagnation_guard(&StagnationInput {
-                public_outputs,
-                ..Default::default()
-            })
-            .map_err(|e| AgentLoopError::Assurance(e.to_string()))?;
-        writer
-            .record(
-                EventType::RuntimeStagnationGuard,
-                serde_json::json!({
-                    "decision": match &stagnation_decision {
-                        StagnationDecision::Continue => "continue",
-                        StagnationDecision::RestartRequested { .. } => "restart_requested",
-                        StagnationDecision::HandoffRequired => "handoff_required",
-                    },
-                    "reason_codes": stagnation_metrics.reason_codes,
-                    "max_consecutive_repeated_content":
-                        stagnation_metrics.max_consecutive_repeated_content,
-                    "max_ngram_repeat": stagnation_metrics.max_ngram_repeat,
-                }),
-            )
-            .await?;
-        {
-            let mut w = self.blackboard.write();
-            w.gate_log.gate_decisions.push(format!(
-                "stagnation: {}",
-                match &stagnation_decision {
-                    StagnationDecision::Continue => "continue",
-                    StagnationDecision::RestartRequested { .. } => "restart_requested",
-                    StagnationDecision::HandoffRequired => "handoff_required",
-                }
-            ));
-        }
-        Ok(stagnation_decision)
     }
 
     /// Default max tokens for the main agent (configurable later).
@@ -5944,69 +5842,57 @@ impl AgentLoopController {
         // from the loop outcome BEFORE `result` consumes it below. An Err
         // path leaves the count untouched: the activation closes with
         // subagent_failed/subagent_cancelled anyway (a new activation
-        // starts a fresh budget). Read back even on a stagnation failure —
-        // the close still records the consumed rounds.
+        // starts a fresh budget). Read back on every path — the close still
+        // records the consumed rounds.
         if let Ok(outcome) = &loop_outcome {
             act.tool_rounds_used = outcome.tool_rounds;
         }
 
-        // The subagent's own stagnation guard — evaluated over the subagent
-        // conversation (shared with the main path). A non-continue decision
-        // fails the retrieval: a subagent has no handoff target (registered
-        // decision 2026-08-10; the terminal close record arrives in M4).
+        // The subagent's end-of-session compaction (P0-D review fix
+        // 2026-08-14): a restored activation resumes from a pinned summary
+        // marker instead of a raw restore-time truncation. The subagent's
+        // stagnation guard is retired (2026-08-22) — generation-time
+        // output-health detection covers the degeneration surface.
         let result: Result<LoopOutcome, AgentLoopError> = match &loop_outcome {
             Ok(outcome_ref) => {
-                let decision = self.evaluate_stagnation(writer, &act.conversation).await?;
-                if matches!(decision, StagnationDecision::Continue) {
-                    // P0-D review fix (2026-08-14, ADR-0010 v1.14): the
-                    // retrieval sidecar gets the same end-of-session
-                    // compaction as the main lane — a restored activation
-                    // resumes from a pinned summary marker instead of a raw
-                    // restore-time truncation.
-                    let estimate = estimate_messages_tokens(&act.conversation);
-                    if estimate > self.context_compact.session_end_trigger_tokens {
-                        let svc = SharedLoopServices {
-                            blackboard: &self.blackboard,
-                            denial_state: &self.denial_state,
-                            pacing_rounds: &self.pacing_rounds,
-                            context_compact: &self.context_compact,
-                            dc_state: &self.dc_state,
-                            evidence: Some(&self.evidence),
-                            policy_revision: &self.policy_revision,
-                            max_inject_tokens_per_round: self.max_inject_tokens_per_round,
-                            blackboard_archive_dir: self.blackboard_archive_dir(),
-                        };
-                        // FUS-LEDGER-FOLD-STATE (2026-08-18, ADR-0010
-                        // §14.26): the session-end compaction uses the
-                        // loop's final fold state — the summary input is
-                        // the same stateful view the main requests saw and
-                        // the drain cut is `fold_cut` (never a recomputed
-                        // stateless tail).
-                        let mut fold_state = outcome_ref.fold_state.clone();
-                        let _ = run_template_compact(
-                            &svc,
-                            writer,
-                            host,
-                            &mut act.conversation,
-                            estimate,
-                            "session_end",
-                            true,
-                            false,
-                            outcome_ref.rounds_since_compact,
-                            self.context_compact.recent_tail_rounds,
-                            // 检索车道不折叠：marker 不携带外挂台账提示。
-                            None,
-                            &mut fold_state,
-                        )
-                        .await?;
-                    }
-                    loop_outcome
-                } else {
-                    Err(AgentLoopError::Assurance(
-                        "retrieval subagent stagnation — no handoff target in a retrieval lane"
-                            .to_string(),
-                    ))
+                let estimate = estimate_messages_tokens(&act.conversation);
+                if estimate > self.context_compact.session_end_trigger_tokens {
+                    let svc = SharedLoopServices {
+                        blackboard: &self.blackboard,
+                        denial_state: &self.denial_state,
+                        pacing_rounds: &self.pacing_rounds,
+                        context_compact: &self.context_compact,
+                        dc_state: &self.dc_state,
+                        evidence: Some(&self.evidence),
+                        policy_revision: &self.policy_revision,
+                        max_inject_tokens_per_round: self.max_inject_tokens_per_round,
+                        blackboard_archive_dir: self.blackboard_archive_dir(),
+                    };
+                    // FUS-LEDGER-FOLD-STATE (2026-08-18, ADR-0010
+                    // §14.26): the session-end compaction uses the
+                    // loop's final fold state — the summary input is
+                    // the same stateful view the main requests saw and
+                    // the drain cut is `fold_cut` (never a recomputed
+                    // stateless tail).
+                    let mut fold_state = outcome_ref.fold_state.clone();
+                    let _ = run_template_compact(
+                        &svc,
+                        writer,
+                        host,
+                        &mut act.conversation,
+                        estimate,
+                        "session_end",
+                        true,
+                        false,
+                        outcome_ref.rounds_since_compact,
+                        self.context_compact.recent_tail_rounds,
+                        // 检索车道不折叠：marker 不携带外挂台账提示。
+                        None,
+                        &mut fold_state,
+                    )
+                    .await?;
                 }
+                loop_outcome
             }
             Err(_) => loop_outcome,
         };
@@ -12193,7 +12079,6 @@ mod tests {
                 EventType::ModelOutput,
                 EventType::CounterexampleGate,
                 EventType::ModelOutput,
-                EventType::RuntimeStagnationGuard,
                 EventType::RunFinished,
             ],
             "{types:?}"
@@ -12283,7 +12168,6 @@ mod tests {
                 EventType::ModelOutput,
                 EventType::CounterexampleGate,
                 EventType::ModelOutput,
-                EventType::RuntimeStagnationGuard,
                 EventType::RunFinished,
             ],
             "{types:?}"
@@ -20364,8 +20248,8 @@ mod tests {
 
     /// A retrieval dispatch whose subagent runs MULTIPLE rounds, including a
     /// host-tool round — the shared loop's journal events (subagent
-    /// model_output ×2, the host ToolCompleted, the subagent stagnation
-    /// guard) land in the same chain inside the parent's wrapper.
+    /// model_output ×2, the host ToolCompleted) land in the same chain
+    /// inside the parent's wrapper.
     #[tokio::test]
     async fn subagent_loop_runs_multi_round_with_host_tool() {
         let dir = test_dir();
@@ -20407,8 +20291,8 @@ mod tests {
             .unwrap();
 
         let types = event_types(&dir);
-        // Subagent: 2 model rounds + 1 host tool round + its own stagnation
-        // guard — all inside the parent's tool_started/tool_completed pair.
+        // Subagent: 2 model rounds + 1 host tool round — all inside the
+        // parent's tool_started/tool_completed pair.
         let sub_outputs = types
             .iter()
             .filter(|t| **t == EventType::ModelOutput)
@@ -20420,14 +20304,6 @@ mod tests {
                 .filter(|t| **t == EventType::ToolCompleted)
                 .count(),
             2, // read_file + the retrieval wrapper
-            "{types:?}"
-        );
-        assert!(
-            types
-                .iter()
-                .filter(|t| **t == EventType::RuntimeStagnationGuard)
-                .count()
-                >= 2, // subagent + main
             "{types:?}"
         );
         // The read_file host tool executed inside the lane.
@@ -25115,105 +24991,6 @@ mod tests {
             .unwrap();
         assert!(retry_idx < failed_idx);
 
-        let _ = std::fs::remove_dir_all(&dir);
-    }
-
-    #[tokio::test]
-    async fn stagnation_invalidates_run() {
-        let dir = test_dir();
-        let journal = JournalRecorder::new(dir.clone());
-        let host = TestHost {
-            journal,
-            tool_result: None,
-        };
-
-        // A single output repeating an 11× 3-token pattern trips the n-gram
-        // threshold (10) → restart_requested → the run must be invalidated,
-        // not finished as "completed" (2026-08-04 review P1-2). Two scripted
-        // copies: the first is gate-intercepted, the second is the post-gate
-        // final answer — either one trips the n-gram within itself.
-        let pattern = "重复 的 片段 ";
-        let repeated = pattern.repeat(11);
-        let gateway: Arc<dyn ModelGateway> = Arc::new(FakeProvider::from_texts(vec![
-            repeated.as_str(),
-            repeated.as_str(),
-        ]));
-        let controller = AgentLoopController::with_gateway(gateway);
-        controller
-            .run_turn(&host, "输出结果", "RUN-STAG", MANIFEST, 0, None, None, None)
-            .await
-            .unwrap();
-
-        let replay =
-            orz_assurance::replay_journal(&dir.join("events.jsonl"), Some("RUN-STAG"), None, true);
-        assert!(replay.valid, "journal errors: {:?}", replay.errors);
-        assert_eq!(replay.terminal_event.as_deref(), Some("run_invalidated"));
-
-        let terminal = events(&dir).last().unwrap().clone();
-        assert_eq!(
-            terminal.payload.get("status").and_then(|s| s.as_str()),
-            Some("restart_requested")
-        );
-
-        let _ = std::fs::remove_dir_all(&dir);
-    }
-
-    /// GAP-RETRIEVAL-TOOLS (2026-08-10): a non-continue stagnation decision
-    /// journals the pre-handoff orientation checkpoint (ADR-0010 §11.1 —
-    /// independent lifecycle trigger, audit-only, never part of the 7-round
-    /// count) before the run-invalidated terminal.
-    #[tokio::test]
-    async fn stagnation_pre_handoff_checkpoint_journaled_before_terminal() {
-        let dir = test_dir();
-        let journal = JournalRecorder::new(dir.clone());
-        let host = TestHost {
-            journal,
-            tool_result: None,
-        };
-        let pattern = "重复 的 片段 ";
-        let repeated = pattern.repeat(11);
-        let gateway: Arc<dyn ModelGateway> = Arc::new(FakeProvider::from_texts(vec![
-            repeated.as_str(),
-            repeated.as_str(),
-        ]));
-        let mut orientation = crate::orientation::OrientationSessionState::new("sess-abcdef123456");
-        let controller = AgentLoopController::with_gateway(gateway);
-        controller
-            .run_turn(
-                &host,
-                "输出结果",
-                "RUN-PREH",
-                MANIFEST,
-                0,
-                None,
-                Some(&mut orientation),
-                None,
-            )
-            .await
-            .unwrap();
-
-        let events = events(&dir);
-        let types = event_types(&dir);
-        // The pre-handoff checkpoint precedes the run-invalidated terminal.
-        let checkpoint = events
-            .iter()
-            .find(|e| {
-                e.event_type == EventType::OrientationCheckpoint
-                    && e.payload.get("trigger").and_then(|t| t.as_str()) == Some("pre_handoff")
-            })
-            .expect("pre-handoff checkpoint journaled");
-        assert_eq!(checkpoint.payload["agent_role"], "main");
-        assert_eq!(checkpoint.payload["injection_position"], "pre_terminal");
-        assert_eq!(checkpoint.payload["completed_turns_since_orientation"], 0);
-        let c_index = events
-            .iter()
-            .position(|e| e.event_id == checkpoint.event_id)
-            .unwrap();
-        let t_index = events
-            .iter()
-            .position(|e| e.event_type == EventType::RunInvalidated)
-            .unwrap();
-        assert!(c_index < t_index, "{types:?}");
         let _ = std::fs::remove_dir_all(&dir);
     }
 

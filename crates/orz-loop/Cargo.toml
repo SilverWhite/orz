@@ -26,6 +26,9 @@ async-trait = { workspace = true }
 jsonschema = { workspace = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }
+# Unicode-word + CJK tokenization for the output-health guard's 3-gram
+# fallback (migrated from the retired runtime stagnation guard).
+regex = { workspace = true }
 
 [target.'cfg(windows)'.dependencies]
 # Credential Manager API-key read (credentials.rs, ADR-0006)

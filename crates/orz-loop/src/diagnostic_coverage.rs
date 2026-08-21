@@ -18,7 +18,7 @@ use crate::gateway::model::{Message, Role, ToolCall};
 use crate::host::ToolResult;
 
 /// Mechanical injected-text prefix of the DC checkpoint block (registered
-/// with the stagnation/restore filters — never model output).
+/// with the injected-block/restore filters — never model output).
 pub const DIAGNOSTIC_COVERAGE_PREFIX: &str = "[DIAGNOSTIC_COVERAGE";
 
 /// One pending hard signal, bound to its evidence identity (§4.6.2).

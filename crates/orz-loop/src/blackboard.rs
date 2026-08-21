@@ -704,7 +704,7 @@ mod tests {
             w.gate_log.gate_decisions.push("IPG: pass".into());
             w.gate_log
                 .orientation_checks
-                .push("checkpoint: no stagnation".into());
+                .push("checkpoint: no fire".into());
         }
         let r = bb.read();
         assert_eq!(r.gate_log.gate_decisions.len(), 1);
