@@ -757,6 +757,48 @@
 >   implemented / ADR-0007 修订注记 / CLI_PROJECT_INDEX / TODO P0-0d
 >   后续 4/5。
 
+> - **2026-08-21 复读检测粒度修订设计定稿（用户裁决：同意滚动哈希任意
+>   偏移重复检测；先登记、不直接动作）**：dna-assembly 复跑
+>   （RUN-CLI-6a885faa）误杀实证——seq 95 完整输出 6439 字符连贯正常
+>   DNA 分析（无 ≥20 字符连续重复、含 ttttt/aaaaa/ggggg/N N N N N/
+>   GGTCTC 低熵特征），现有路径①「连续 5 个相同 content delta」在
+>   小 chunk 粒度 + 低熵文本下天然命中。**定案**：路径①替换为滑动
+>   窗口滚动哈希任意偏移检测——L+W=144 字符缓冲（比较区 96 字符）+
+>   48 字符 L-gram 哈希集，新 L-gram 哈希在比较区内已见（偏移 ≥48）即
+>   触发（字符级比对防碰撞）；窗口内任意周期可命中（p ≤ 96，修复固定
+>   偏移相位对齐缺陷）、同字符连串 ≥96 触发、
+>   DNA 正常序列免疫、O(1)/字符；3-gram 路径②（≥1K token >60%）保留
+>   兜底；content/reasoning 两族共用；stall 兜底（600s/64K）与
+>   fail-fast 纪律（会话级档位/计数单调/disabled 即终止）不变。设计轮
+>   不动计数（28）。登记于 ADR-0010 §14.35 第 13 项 /
+>   [设计 §3.3/§4.8](DEEPSEEK_OUTPUT_BUDGET_AND_STALL_GUARD_DESIGN_2026-08-20.md)
+>   / TODO P0-0d 后续 6 / CLI_PROJECT_INDEX。
+
+> - **2026-08-21 复读检测粒度滚动哈希 S1 代码实施登记（用户放行实施；
+>   orz 工作树未提交）**：`DegenerationDetector` 路径①（连续相同 delta
+>   N=5）替换为滑动窗口滚动哈希任意偏移（`RollingRepetitionWindow`：
+>   144 字符缓冲 + 48 字符 L-gram 哈希集 + 字符级比对防碰撞；
+>   `REPETITION_MIN_RUN_CHARS=48` / `REPETITION_WINDOW_CHARS=96`）；
+>   `feed_repetition` 路径②（≥1K token 3-gram >60%）保留兜底；
+>   content/reasoning 两族共用、detail 前缀不变。既有断言同步（5×delta
+>   不再触发 → 96 字符重复 span；3-gram 测试内容重构）。orz-loop
+>   **550 通过 / 0 失败 / 3 ignored**、fmt 干净、clippy 无新增告警、
+>   `cargo check --workspace` 通过。计数：实施放行入账 **28 → 29**。
+>   登记于 ADR-0010 §14.35 第 14 项 /
+>   [设计 §4.9](DEEPSEEK_OUTPUT_BUDGET_AND_STALL_GUARD_DESIGN_2026-08-20.md)
+>   / TODO P0-0d 后续 6 / CLI_PROJECT_INDEX。
+
+> - **2026-08-21 复读检测粒度滚动哈希 S2 测试实施登记（用户指示进行
+>   S2）**：新增 8 项测试（orz-loop **558 通过 / 0 失败 / 3 ignored**）
+>   ——短低熵块不触发、DNA 低熵样本 6439 字符不触发、poly-A 95/96 精确
+>   阈值、周期 10 短语循环触发（content + reasoning 对齐缺陷回归）、
+>   单一大 chunk 不触发、`spans_equal` 字符级比对直接验证（哈希碰撞
+>   构造不可行登记为已接受边界）、近重复不触发 + 精确复读触发。回归：
+>   fmt 干净、clippy 无新增告警、`cargo check --workspace` 通过。计数
+>   不变（仍 29）。登记于 ADR-0010 §14.35 第 15 项 /
+>   [设计 §4.10](DEEPSEEK_OUTPUT_BUDGET_AND_STALL_GUARD_DESIGN_2026-08-20.md)
+>   / TODO P0-0d 后续 6 / CLI_PROJECT_INDEX。
+
 ### 0e. CONTEXT-SCAFFOLDING-PULL-REDESIGN（P0；2026-08-21 设计定稿，
 **S1-S4 全部闭合 2026-08-21，计数 28 → 27**）
 

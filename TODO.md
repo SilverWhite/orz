@@ -769,6 +769,38 @@
 - [ ] S3 重建（Linux musl；与窗口 180s + fail-fast 批次合并一次到位）
 - [ ] S4 复验（dna 类场景不再因解码错误杀 run、零 400、命中率 ≥90%）
 
+### P0-0d 后续 6：REPETITION-DETECTOR-ROLLING-HASH（P0 派生；2026-08-21
+设计定稿；S1-S4 待续）
+
+> 入口：[设计 §3.3/§4.8](docs/DEEPSEEK_OUTPUT_BUDGET_AND_STALL_GUARD_DESIGN_2026-08-20.md)；
+> ADR-0010 §14.35 第 13 项；BACKLOG 0d。
+> 来源：dna-assembly 复跑（RUN-CLI-6a885faa）误杀实证——seq 95 完整
+> 输出 6439 字符连贯正常 DNA 分析被路径①「连续 5 个相同 content delta」
+> 误判复读（低熵特征 ttttt/aaaaa/ggggg/N N N N N/GGTCTC + 小 chunk 粒度）。
+> 用户裁决：误杀必须处理、判定粒度提高；定案=滑动窗口滚动哈希任意
+> 偏移检测。
+> 定案：路径①替换为滚动哈希任意偏移——144 字符缓冲（比较区 96 字符）+
+> 48 字符 L-gram 哈希集，新 L-gram 哈希在比较区内已见（偏移 ≥48）即触发
+> （字符级比对防碰撞）；窗口内任意周期可命中（p ≤ 96）、同字符连串 ≥96
+> 触发、DNA 正常序列免疫、
+> O(1)/字符；3-gram 路径②（≥1K token >60%）保留兜底；content/
+> reasoning 两族共用；stall 兜底（600s/64K）与 fail-fast 纪律不变。
+
+- [x] S1 代码（transport.rs `feed_repetition` 路径①改滚动哈希；新常量
+  REPETITION_MIN_RUN_CHARS=48 / REPETITION_WINDOW_CHARS=96；3-gram 保留；
+  **2026-08-21 实施闭合**：RollingRepetitionWindow + 既有断言同步，
+  orz-loop 550 通过 / 0 失败 / 3 ignored、fmt 干净、clippy 无新增、
+  `cargo check --workspace` 通过；计数 28 → 29）
+- [x] S2 测试（**2026-08-21 实施闭合**：既有断言已在 S1 同步；新增 8 项
+  ——短低熵不触发/周期 10 循环触发（content+reasoning）/poly-A 95 不触发
+  ·96 触发/单一大 chunk 不触发/`spans_equal` 字符级比对（碰撞构造不可行
+  登记为已接受边界）/近重复不触发+精确复读触发；orz-loop **558 通过 /
+  0 失败 / 3 ignored**、fmt 干净、clippy 无新增、`cargo check --workspace`
+  通过）
+- [ ] S3 重建（Linux musl；与 fail-fast/解码兜底/180s 窗口批次合并）
+- [ ] S4 复验（dna-assembly 低熵误杀消除、真复读仍触发、零 400、
+  命中率 ≥90%）
+
 ### P0-0e CONTEXT-SCAFFOLDING-PULL-REDESIGN（P0；2026-08-21 设计定稿，
 S1-S4 全部闭合 2026-08-21，计数 28 → 27）
 

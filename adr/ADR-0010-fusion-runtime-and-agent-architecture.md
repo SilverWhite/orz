@@ -2524,6 +2524,65 @@ ADR §3.6 正文修订随实施登记。
     登记于设计 §6 / BACKLOG 0e / TODO P0-0e / CLI_PROJECT_INDEX；
     计数不变（27）。
 
+13. **复读检测粒度改滚动哈希任意偏移设计定稿（2026-08-21 用户裁决：同意
+    实现；先登记、不直接动作）**：dna-assembly 复跑（RUN-CLI-6a885faa，
+    11m57s、reward 0）误杀实证——触发点 seq 95 完整输出 6439 字符为
+    连贯正常 DNA 组装分析（finish_reason=length、无 tool_calls、无 ≥20
+    字符连续重复，但含低熵特征 ttttt/aaaaa/ggggg/N N N N N/GGTCTC），
+    现有路径①「连续 5 个相同 content delta」在 DeepSeek 小 chunk 粒度 +
+    低熵文本下天然命中（detail="5 identical content deltas in a row"）。
+    **定案**：路径①替换为**滑动窗口 + 滚动哈希任意偏移重复检测**——维护
+    最近 L+W=144 字符缓冲（尾部 48 字符 L-gram + 最近 96 字符比较区）、
+    记录比较区内（起点偏移 ∈ [48, 96]）全部 48 字符 L-gram 哈希；新
+    L-gram 哈希在比较区内已出现（起点偏移 ≥48）即触发，哈希命中后字符级
+    比对防碰撞；语义=流中存在 ≥48 字符内容与邻近之前的 48 字符完全相同，
+    **窗口内任意周期可命中（p ≤ 96）**（修复固定偏移相位对齐缺陷：周期
+    10 短语循环在 16/48 固定偏移下相邻窗口永不相同）；同字符连串 ≥96
+    触发、DNA 正常序列免疫、O(1)/字符摊销。**否决链**：拉长 N（治标）、
+    内容熵过滤（真复读同低熵被放过）、
+    「重复字符后切块」（语义不自洽）、固定 16 切块 ×3（相位对齐缺陷）。
+    3-gram 路径②（≥1K token 窗口 >60%）保留兜底（另行裁决）；content/
+    reasoning 两族共用算法（灵敏层语义不变）；stall 兜底（600s/64K）与
+    fail-fast 纪律（会话级档位/计数单调/disabled 即终止/detail 前缀）
+    不变。成熟产品佐证=openclaw text-repetition-guard suffix cycle
+    （任意偏移重复，建议阈值 ≥40 字符模式重复 ≥5 次，量级一致）。设计轮
+    不动计数（28）。设计细节见
+    `DEEPSEEK_OUTPUT_BUDGET_AND_STALL_GUARD_DESIGN_2026-08-20.md`
+    §3.3/§4.8；实施路由 S1 代码（transport.rs）→ S2 测试 → S3 重建 →
+    S4 复验（dna-assembly 低熵误杀消除 + 真复读仍触发）。登记于
+    BACKLOG 0d / TODO P0-0d 后续 6 / CLI_PROJECT_INDEX。
+
+14. **复读检测粒度滚动哈希 S1 代码实施登记（2026-08-21 用户放行实施；
+    orz 工作树未提交）**：`DegenerationDetector` 复读判定路径①（连续相同
+    delta N=5）替换为滑动窗口滚动哈希任意偏移——退役
+    `DEGENERATION_CONSECUTIVE_DELTAS` 与两个 `recent_*_deltas` 字段，
+    新增 `RollingRepetitionWindow`（最近 L+W=144 字符缓冲 + 记录区 48
+    字符 L-gram 哈希集，新尾部 L-gram 哈希命中后字符级比对防碰撞；
+    常量 `REPETITION_MIN_RUN_CHARS=48` / `REPETITION_WINDOW_CHARS=96`）；
+    `feed_repetition` 路径①改字符流级判定（两个起点距离 ≥48 的相同 48
+    字符 span 触发，与 delta 切块粒度无关）、路径②（≥1K token 3-gram
+    >60%）保留兜底；content/reasoning 两族共用、detail 前缀不变、触发
+    描述更新。既有断言同步：5×"same"/"think"/"hi" 不再触发，改为 96
+    字符重复 span；3-gram 测试内容重构（共享核心 <L + 互异长尾部）。
+    验证：orz-loop 550 通过 / 0 失败 / 3 ignored、fmt 干净、clippy 无
+    新增告警（transport.rs 新代码零告警）、`cargo check --workspace`
+    通过。计数：实施放行入账 **28 → 29**（S2 不变，S3/S4 闭环后回 28）。
+    登记于设计 §4.9 / BACKLOG 0d / TODO P0-0d 后续 6 / CLI_PROJECT_INDEX。
+
+15. **复读检测粒度滚动哈希 S2 测试实施登记（2026-08-21 用户指示进行
+    S2）**：新增 8 项测试（orz-loop lib 550 → **558 通过 / 0 失败 /
+    3 ignored**）——短低熵块不触发（5×"a"/5×"same"）、DNA 低熵样本
+    6439 字符不触发（ACGT + 散点短特征，确定性伪随机）、poly-A 精确
+    阈值（95 不触发/96 触发）、周期 10 短语循环触发（对齐缺陷回归，
+    content 与 reasoning 灵敏层各一）、单一大 chunk（2000 字符互异）
+    不触发、`spans_equal` 字符级比对直接验证（相同判等/单字符差异判
+    不等）；真实 u64 多项式哈希碰撞构造不可行（B=1_000_003 奇数、48
+    位置），**碰撞用例登记为已接受边界**；近重复（单字符差异）不触发
+    + 精确复读触发补充用例。回归：fmt 干净、clippy 无新增告警
+    （transport.rs 仅 2 条既有 doc 告警）、`cargo check --workspace`
+    通过。计数不变（仍 29），S3/S4 闭环后 29 → 28。登记于设计 §4.10 /
+    BACKLOG 0d / TODO P0-0d 后续 6 / CLI_PROJECT_INDEX。
+
 ### 14.31 v1.31 补写裁决索引（2026-08-19）
 
 本节记录冻结后的显式补写；规范正文以所指章节为准，补写明确取代以下既往条款。
