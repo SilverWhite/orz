@@ -9,7 +9,7 @@
 
 | 优先级 | 含义 | 未闭合项 |
 |---|---|---|
-| P0 | 当前工作集：设计已冻结，裁决后立即实施 | 评测冒烟暴露问题（P0-E 主项 7 项 + FUS-TOOL-SCOPE-CONTRACT 后续 2 项全部闭合 2026-08-18：ACAF 容器供应、console 工具名、计划视图步骤 ID、订单发放前拒绝入事件面、grep 搜索范围契约、plan_write 校验消息形状、actions 形状探针、list_dir 范围计数、grep files_searched 全结局探针，见 0a）；CLASSICAL-EXEC-ASSISTANT（生产组件，2026-08-16 用户裁决转正式，S1-S4 全部闭合）；PLAN-FIRST-BLACKBOARD（阶段 A/B/C 全部闭合 2026-08-16）；**FUS-BENCHMARK-FULL-EXEC（P0，实施完成待验证——2026-08-18 用户指示实施、暂不测试；验证闭环后闭合，见 0b）**；**LEDGER-FOLD-EXTERNAL-FILE（P0，S1-S4 验证闭环 2026-08-19——命中率问题优先于 P0-F 验证；provider 口径 95.33% ≥90% 达标，见 0c）**；**OUTPUT-DEGENERATION-GUARD（P0，S1-S4 全部闭合 2026-08-20——make-doom 退化复读失败防护；8K 全统一 + 补读闭环 + 实时检测 + 32K，见 0d）**；**CONTEXT-SCAFFOLDING-PULL-REDESIGN（P0，S1-S4 全部闭合 2026-08-21——预算块 PUSH→PULL + 工具输出汇总消息退役；命中率 94.45%、零哨兵触发、输入增长放缓；方案 C 维持 256K 暂不收紧（用户裁决），见 0e）** |
+| P0 | 当前工作集：设计已冻结，裁决后立即实施 | 评测冒烟暴露问题（P0-E 主项 7 项 + FUS-TOOL-SCOPE-CONTRACT 后续 2 项全部闭合 2026-08-18：ACAF 容器供应、console 工具名、计划视图步骤 ID、订单发放前拒绝入事件面、grep 搜索范围契约、plan_write 校验消息形状、actions 形状探针、list_dir 范围计数、grep files_searched 全结局探针，见 0a）；CLASSICAL-EXEC-ASSISTANT（生产组件，2026-08-16 用户裁决转正式，S1-S4 全部闭合）；PLAN-FIRST-BLACKBOARD（阶段 A/B/C 全部闭合 2026-08-16）；**FUS-BENCHMARK-FULL-EXEC（P0，实施完成待验证——2026-08-18 用户指示实施、暂不测试；验证闭环后闭合，见 0b）**；**LEDGER-FOLD-EXTERNAL-FILE（P0，S1-S4 验证闭环 2026-08-19——命中率问题优先于 P0-F 验证；provider 口径 95.33% ≥90% 达标，见 0c）**；**OUTPUT-DEGENERATION-GUARD（P0，S1-S4 全部闭合 2026-08-20——make-doom 退化复读失败防护；8K 全统一 + 补读闭环 + 实时检测 + 32K，见 0d）**；**CONTEXT-SCAFFOLDING-PULL-REDESIGN（P0，S1-S4 全部闭合 2026-08-21——预算块 PUSH→PULL + 工具输出汇总消息退役；命中率 94.45%、零哨兵触发、输入增长放缓；方案 C 维持 256K 暂不收紧（用户裁决），见 0e）**；**FUS-READ-ANCHOR-WRITE-GUARD（P0，S1 代码实施中——2026-08-21 设计定稿、用户指示实施 S1；read_file 内容锚点下传 + 写前机械核证，S2-S4 待续，见 0f）** |
 | P1 | 无需裁决，可与 P0 并行 | FUS-COMPONENT-REGISTER、GAP-WINDOWS-EVIDENCE、IMPL-DEEPSEEK-TRANSPORT / SEC-CREDENTIALS、ORZ-SESSION-CONTEXT-MONITOR |
 | P2 | 生产化决策门：需用户裁决 | IMPL-CONTROL-FABRIC（fail-closed 启用、Slice 3/4）、OPS-PROTOCOL |
 | P3 | 收尾 / 清理 | EVIDENCE-LOCAL-BROWSER、GATE-CHAIN、DC 剩余信号、V11-IMPL-003/007、工作区收尾 |
@@ -819,6 +819,45 @@
   （冒烟扫描 → 89 题 5 批）中观察哨兵触发率与输出预算，若回升/失控再
   评估 64K（方案 C 重新启用）。登记于设计 §6 / ADR-0010 §14.35 第 12 项 /
   TODO P0-0e / CLI_PROJECT_INDEX；计数不变（27）。
+
+### 0f. FUS-READ-ANCHOR-WRITE-GUARD（P0；2026-08-21 设计定稿，
+纯文档登记、未实施；设计轮不动计数 27；**S1 代码已实施 2026-08-21，
+实施入账 27 → 28，S2-S4 待续**；2026-08-21 审查收口：I/O 错误
+fail-closed + clippy 修复）
+
+- 入口：[设计](READ_ANCHOR_WRITE_GUARD_DESIGN_2026-08-21.md)；索引：
+  [CLI_PROJECT_INDEX.md](../CLI_PROJECT_INDEX.md)；ADR-0010 §14.38（v1.38）。
+- 来源：2026-08-21 用户设计讨论——主 agent 经 read_file 读取快照后向助理层
+  下发写订单，窗口内文件被别处改动时可能基于旧快照修改更新文档；助理层为
+  纯机械无提示词执行层，只需要"是否同一份"的等值判定。
+- **2026-08-21 设计定稿（用户裁决：锚=哈希值；read_file 机械返回、助理层
+  零理解、简单机械核证；仅针对 orz；先设计、不动作）**：read_file 文本路径
+  统一返回内容锚点 {size, mtime, sha256}（大文件信封已有 content_sha256，
+  补 size/mtime；小文件同样返回锚点）；写订单携带期望锚点（可选字段）；
+  orz 写门禁写前机械核证——mtime/size stat 快速预检 + sha256 权威比较，
+  不匹配拒单（复用 order_stale 错误信封形态、入 console_order_rejected
+  事件面）不执行任何编辑，强制重读重下。时间戳可被保留/取整（git checkout /
+  cp -p / touch -r）故不作权威。边界：校验-写入 TOCTOU 极小窗口接受（可选
+  后续=临时文件 + 原子替换）；expected 必填加严为可选后续；哈希只答"是否
+  同一份"、补救=重读。实施路由 S1 代码 → S2 测试 → S3 重建 → S4 复验；
+  设计轮不动计数（27），实施放行入账 27 → 28，验证闭环 28 → 27。
+  核证期 I/O 错误语义（审查收口）：目标不存在（新建）跳过；其余 stat/read
+  错误 fail-closed 拒单（同 code、消息注明原因），不放行未核证编辑。
+- **2026-08-21 S1 代码实施闭合（用户指示开始 S1；orz 工作树未提交）**：
+  read_file 文本路径统一返回内容锚点（`ReadAnchor {size, mtime, sha256}`；
+  小文件 `FileContent.read_anchor` + prompt `[read anchor]` 尾行；大文件信封
+  补 `mtime`）；`workspace.search_replace` 契约 schema 增可选
+  `expected_anchor`（size/sha256 必填、mtime 可空）；`issue_pending_
+  console_order` 发放前 pre_issue 门——stat 快筛 size/mtime + sha256 权威，
+  不匹配拒单（phase=pre_issue / step=protocol / code=content_anchor_mismatch）
+  入 console_order_rejected 事件面、清槽零编辑，指引重读重下；目标不存在
+  （新建）跳过；其余 stat/read I/O 错误 fail-closed 拒单（同 code、消息
+  注明失败原因）。验证：orz-tools read_file 202 / types::output 84 / orz-loop
+  console 69 / orz-loop 全量 544 + console_anchor 2 通过、fmt 干净、clippy
+  无新增告警（审查修复 build_read_anchor collapsible_if）；orz-tools 全量
+  44 个 grep/glob 失败为本机 rg 环境性既有失败（stash 基线复现一致）。
+  计数：实施入账 27 → 28（S2-S4 待续）。登记于 ADR-0010 §14.38 第 2 项 /
+  设计 §8 / TODO P0-0f / CLI_PROJECT_INDEX。
 
 ### 0. 前置收尾（提交前需用户确认）
 

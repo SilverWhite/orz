@@ -82,12 +82,14 @@
 > 本快照只做计数与分组召回，明细以下方各分组勾选清单为唯一入口，不新增独立条目；
 > 后续扫描更新时同步替换本快照日期与计数。
 
-- 未闭合总数：**27 项**（2026-08-19 0c 验证闭环 29 → 28；2026-08-20
+- 未闭合总数：**28 项**（2026-08-19 0c 验证闭环 29 → 28；2026-08-20
   0d 验证闭环 29 → 28；2026-08-20 OUTPUT-BUDGET-RESTORE-AND-STALL-GUARD
   S1 实施放行入账 28 → 29，**S3/S4 验证闭环 29 → 28**；2026-08-20
   THINKING-DEFAULT-HIGH-LADDER S1 实施放行入账 28 → 29，**S3/S4 换题
   复验（make-doom-for-mips）验证闭环 29 → 28**；2026-08-21
-  CONTEXT-SCAFFOLDING-PULL-REDESIGN（0e）S1-S4 验证闭环 28 → 27）
+  CONTEXT-SCAFFOLDING-PULL-REDESIGN（0e）S1-S4 验证闭环 28 → 27；
+  2026-08-21 FUS-READ-ANCHOR-WRITE-GUARD（0f）S1 代码实施入账 27 → 28
+  （S2-S4 待续））
   - P0-C：0 项（PLAN-FIRST 阶段 A/B/C 全部闭合，2026-08-16）
   - P0 评测冒烟暴露：0 项（P0-E 主项 7 项 + FUS-TOOL-SCOPE-CONTRACT 后续 2 项全部闭合 2026-08-18，见 P0-E grep 项后续①/②）
   - P0 Benchmark 完全体：1 项（FUS-BENCHMARK-FULL-EXEC 实施完成待验证，见 P0-F；验证闭环后回 26）
@@ -820,6 +822,49 @@ S1-S4 全部闭合 2026-08-21，计数 28 → 27）
 - [x] S2 测试（无 REMAINING 尾随、session 面渲染/越权、拒绝文本含剩余、既有断言更新）
 - [x] S3 重建（Linux musl，ORZ-BUILD-MOUNT-001 契约；两轮：7529a71 初建 + cf0be20 修复版）
 - [x] S4 复验（make-doom-for-mips：命中率 94.45% ≥90%、零 400、零哨兵触发、输入增长放缓；计数 28→27）
+
+### P0-0f FUS-READ-ANCHOR-WRITE-GUARD（P0；2026-08-21 设计定稿，
+纯文档登记、未实施；设计轮不动计数 27；**S1 代码已实施 2026-08-21，
+实施入账 27 → 28，S2-S4 待续**）
+
+> 入口：[设计](docs/READ_ANCHOR_WRITE_GUARD_DESIGN_2026-08-21.md)；
+> ADR-0010 §14.38；BACKLOG 0f。
+> 来源：主 agent 经 read_file 读取快照后向助理层下发写订单，窗口内文件被
+> 别处改动时可能基于旧快照修改更新文档；助理层纯机械无提示词，只需"是否
+> 同一份"的等值判定。
+> 用户裁决（2026-08-21）：锚=哈希值——内容摘要太重、read_file 须机械返回、
+> 助理层零理解、简单机械核证；仅针对 orz。
+> 定案：read_file 文本路径统一返回内容锚点 {size, mtime, sha256}（大文件
+> 信封已有 content_sha256、补 size/mtime；小文件同样返回）；写订单携带期望
+> 锚点（可选字段）；orz 写门禁写前机械核证——mtime/size stat 快速预检 +
+> sha256 权威比较，不匹配拒单（复用 order_stale 错误信封形态、入
+> console_order_rejected 事件面）不执行任何编辑，强制重读重下。时间戳可被
+> 保留/取整不作权威；校验-写入 TOCTOU 窗口接受（可选后续=临时文件+原子
+> 替换）；expected 必填加严为可选后续。实施放行后入账 27 → 28，验证闭环
+> 28 → 27。
+> **2026-08-21 S1 代码实施闭合（用户指示开始 S1；orz 工作树未提交）**：
+> read_file 锚点（ReadAnchor；小文件 FileContent.read_anchor + prompt
+> `[read anchor]` 尾行；信封补 mtime；同一读取快照）；search_replace 契约
+> schema 增可选 expected_anchor（size/sha256 必填、mtime 可空）；发放前
+> pre_issue 门（stat 快筛 size/mtime + sha256 权威；不匹配拒单
+> content_anchor_mismatch 入 console_order_rejected 事件面、清槽零编辑；
+> 新建路径跳过；其余 stat/read I/O 错误 fail-closed 拒单——同 code、消息
+> 注明失败原因，不放行未核证编辑（2026-08-21 审查收口，补 console_anchor
+> 2 条用例）。验证：read_file 202 / types::output 84 / console 69 /
+> orz-loop 全量 544 + console_anchor 2 通过、fmt 干净、clippy 无新增告警
+> （审查修复 build_read_anchor collapsible_if）；orz-tools 全量 44 个
+> grep/glob 失败为本机 rg 环境性既有失败（stash 基线复现一致）。计数：
+> 实施入账 27 → 28。登记于 ADR-0010 §14.38 第 2 项 / 设计 §8 / BACKLOG 0f。
+
+- [x] S1 代码（read_file 锚点字段：大文件信封补 size/mtime、小文件返回锚点；
+  写订单 expected_anchor 参数；写门禁核证 + 拒单错误码 + console_order_rejected
+  事件面接线；工具定义/schema 同步）
+- [ ] S2 测试（审查收口已覆盖：锚点不匹配拒单零编辑、I/O 失败 fail-closed
+  两条 console_anchor 用例；待补：锚点返回正确性、同 mtime 异内容 sha256
+  兜底 fixture、错误信封与事件面完整断言、回归全绿）
+- [ ] S3 重建（Linux musl，ORZ-BUILD-MOUNT-001 契约）
+- [ ] S4 复验（陈旧写入场景断言：修改后拒绝 → 重读重下成功；命中率 ≥90%、
+  零 400）
 
 ### P0-B FUS-RETRIEVAL-MECH（`implemented`；批次 1-6 已全部闭合，2026-08-14，保留供核对）
 
