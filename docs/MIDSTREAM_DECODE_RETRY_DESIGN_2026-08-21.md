@@ -1,7 +1,14 @@
 # 流式中段解码错误有界重试设计（2026-08-21 设计定稿；纯文档登记、未实施）
 
-> 状态：`designed`（2026-08-21 用户裁决：按「无完整 tool_calls 即重试
-> （有界）」实施，无异议）。
+> 状态：`implemented`（S1 代码 + S2 测试已闭合 2026-08-21；S3 重建 →
+> S4 复验待续。2026-08-21 用户裁决：按「无完整 tool_calls 即重试
+> （有界）」实施，无异议。**全面审查处理（2026-08-21）**：事件面重试
+> 计数已随本设计一并实施——新增 v0.2 事件 `transport_retry`
+> （`outcome=recovered|exhausted`、`kind=zero_chunk|midstream`、
+> `retries`、`reason`；成功路径随 `ModelResponse.transport_retry` 上报、
+> 失败路径随 `GatewayError::StreamInterrupted` 上报，run 层 agent_loop
+> 记录，run-event enum 54 项、schema/fixtures/conformance 同步；TUI
+> 事件协议同步）。）
 > 性质：P0-0d 后续（transport 重试分类修订，ADR-0007 §4 边界 ④ 扩展）。
 > 关联：[ADR-0007](adr/ADR-0007-transport-retry-policy.md) §2.1/§4、
 > [STALL_DEGENERATION_FAILFAST_DESIGN_2026-08-21.md](STALL_DEGENERATION_FAILFAST_DESIGN_2026-08-21.md)
@@ -89,10 +96,13 @@ content/reasoning/tool_calls 全部丢弃，**从未执行**。因此"已见输�
 ## 4. 实施路由与验证
 
 1. S1 代码：重试判定改「无完整 tool_calls」、chunked 有界 1 次重试、
-   事件面尝试计数；
+   事件面尝试计数；**已实施**——`wrap_no_tool_side_effects` +
+   `has_complete_tool_call`、`CHUNKED_MIDSTREAM_MAX_RETRIES=1`、
+   v0.2 `transport_retry` 事件（schema/fixtures/TUI 同步）；
 2. S2 测试：中段截断重试成功、中段截断重试耗尽显式失败、已见完整
    tool_calls 不重试、Parse 不重试、与降级梯交互、既有零 chunk 纪律
-   回归全绿；
+   回归全绿；**已闭合**（新增 recovered/exhausted 事件集成测试 +
+   既有回归，orz-loop 544 通过 / Python conformance 230 通过）；
 3. S3 重建（Linux musl，ORZ-BUILD-MOUNT-001 契约；与窗口 180s +
    fail-fast 批次合并一次到位）；
 4. S4 复验：dna-assembly 类场景不再因解码错误杀 run（有界重试后

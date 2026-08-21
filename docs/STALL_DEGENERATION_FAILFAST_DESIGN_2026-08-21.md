@@ -1,16 +1,26 @@
 # 哨兵退化 fail-fast 化设计（2026-08-21 设计定稿；纯文档登记、未实施）
 
-> 状态：`designed`（2026-08-21 用户裁决：harness fail-fast 方向有道理——
-> 失败本身意味着当前模式不适合当前任务；**前置证据门**=确认空转/重复与
-> 架构本身无关；确认后实施，显式标明终止原因）。
+> 状态：`implemented`（S0 证据门通过 + S1 代码 + S2 测试已闭合 2026-08-21；
+> S3 重建 → S4 复验待续。2026-08-21 用户裁决：harness fail-fast 方向有道理
+> ——失败本身意味着当前模式不适合当前任务；前置证据门=确认空转/重复与架构
+> 本身无关；确认后实施，显式标明终止原因。**全面审查处理（2026-08-21）**：
+> ①per-run 隔离正式路径实现——长驻进程（ACP server）跨 run 共享 transport，
+> 原「仅 run 边界重置=新 transport」假设仅在一键 CLI 成立；现 `ModelGateway::
+> for_new_run()` 每 run 换新实例（controller `run_turn_inner` 开头调用，
+> 主 agent 与检索子代理共享同一 run 实例），计数/档位零跨 run 泄漏；
+> ②S4 验收口径修正——单 run 哨兵预算上限为「≤3 次触发 × 单次预算」
+> （设计 §2.2 效果段的「首档 64K 一次」为 schemelike 类场景期望，
+> 非硬上限）。）
 > 性质：P0-0d 后续（输出健康哨兵跨请求语义修订）+ 0e 观察延伸（sweep
 > r1-g1 12 次哨兵归因）。关联：
 > [DEEPSEEK_OUTPUT_BUDGET_AND_STALL_GUARD_DESIGN_2026-08-20.md](DEEPSEEK_OUTPUT_BUDGET_AND_STALL_GUARD_DESIGN_2026-08-20.md)
 > （哨兵/阶梯现状）、[ADR-0010 §14.35/§14.36](adr/ADR-0010-fusion-runtime-and-agent-architecture.md)、
 > deepseek-harness 源码对照（tmp_dsh_review：agent-loop step 边界重试、
 > llm-retry 默认 2 次、无降级/无生成期哨兵）。
-> 实施路由：S0 证据门 → S1 代码 → S2 测试 → S3 重建 → S4 复验。设计轮
-> 不动计数（27）。
+> 实施路由：S0 证据门 → S1 代码 → S2 测试 → S3 重建 → S4 复验。
+> **S0（2026-08-21）：通过（放行 S1）**——见 §2.1 中间判定。**S1/S2
+> 已闭合**（orz 子模块 a96faab 之上未提交批次；orz-loop 544 通过 /
+> 0 失败 / 3 ignored、Python conformance 230 通过）。设计轮不动计数（27）。
 
 ## 1. 背景与证据
 
@@ -129,6 +139,15 @@ stall 占大头（8×64K）；rep 均为「连续 5 个相同 delta」秒级触�
 
 ### 2.2 主案：跨请求 fail-fast 化（哨兵预算有界 + 显式终止）
 
+> **实施注记（2026-08-21 全面审查处理）**：主案 ①-④ 已实施，其中「仅
+> run 边界重置（新 transport）」按正式路径修正为 `ModelGateway::
+> for_new_run()` per-run 换新实例（见头部状态注记），并发会话之间零
+> 干扰；「达 `DEGENERATION_LIMIT` 即终止」在 `generate_stream` 内为
+> 独立分支（detail 带 `degeneration_limit_reached` 前缀，不依赖档位
+> 判定与分支顺序）。disabled 档哨兵即终止（consecutive<3 时补前缀）
+> 与达限终止（consecutive≥3 时前缀自带）两条路径均映射
+> `run_invalidated{status: degeneration, detail}`。
+
 在保留「请求内阶梯模式适配」的前提下，封死跨请求反复烧预算：
 
 1. **会话级 thinking 档位**：reasoning 族哨兵触发后，本 run 后续请求的
@@ -143,7 +162,7 @@ stall 占大头（8×64K）；rep 均为「连续 5 个相同 delta」秒级触�
    档可降）→ 立即显式终止（同上 run_invalidated），不再重试。
 4. **显式标记纪律**：终止原因进入 journal 事件与 TUI（既有
    `degeneration_limit_reached` 前缀 + run_invalidated 映射复用）；
-   不做静默空答案，不吞错误。
+  不做静默空答案，不吞错误。
 
 效果：单 run 的哨兵预算从「无界（每轮可烧 64K）」变为「有界（首档
 64K 一次 + 低档快速 rep 拦截 + 达限终止）」。schemelike 类场景变为
@@ -172,14 +191,21 @@ reasoning 族哨兵触发即 step 失败（不做降级续跑），run 以显式
 ## 4. 实施路由与验证
 
 1. S0 证据门：下一批扫描（r1-g2 起）采集哨兵上下文，按 §2.1 判定；
+   **已通过（2026-08-21，§2.1 中间判定）**；
 2. S1 代码：会话级 thinking 状态（transport/loop 共享）、计数单调化、
-   disabled 档哨兵即终止、detail 显式化；
+   disabled 档哨兵即终止、detail 显式化；**已实施**——`session_thinking`
+   会话档位 + 计数单调（成功不清零）+ disabled 档终止 + detail 显式化
+   （族 + consecutive + round）+ `for_new_run` per-run 隔离；
 3. S2 测试：跨请求档位保持、计数不重置、达限 run_invalidated、
-   disabled 档终止、回归全绿；
+   disabled 档终止、回归全绿；**已闭合**（新增 3 项 + 既有回归，
+   orz-loop 544 通过）；
 4. S3 重建（Linux musl，ORZ-BUILD-MOUNT-001 契约；与窗口 180s +
    解码兜底批次合并一次到位）；
-5. S4 复验：单 run 哨兵预算有界（≤ 首档 64K + 低档快速拦截）、
-   显式终止可观测、命中率不因误杀显著下降（≥90% 不变量）、零 400。
+5. S4 复验：单 run 哨兵预算有界（**≤3 次触发 × 单次预算**，即最坏
+   3×64K/3×600s——2026-08-21 全面审查修正口径，原「≤ 首档 64K + 低档
+   快速拦截」为 schemelike 类场景期望非硬上限）、显式终止可观测
+   （`run_invalidated{status: degeneration, detail}` + TUI 消息）、
+   命中率不因误杀显著下降（≥90% 不变量）、零 400。
 
 ## 5. 关联登记
 

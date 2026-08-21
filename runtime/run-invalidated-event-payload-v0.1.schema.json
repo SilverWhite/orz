@@ -11,6 +11,10 @@
     "status": {
       "enum": ["restart_requested", "handoff_required", "wallclock", "stall", "degeneration"]
     },
+    "detail": {
+      "type": "string",
+      "description": "STALL-DEGENERATION-FAILFAST (2026-08-21): explicit termination reason for status=degeneration — guard family + consecutive count + trigger round (design §2.2.4)."
+    },
     "turn_count": { "type": "integer", "minimum": 0 },
     "tool_rounds": { "type": "integer", "minimum": 0 }
   }

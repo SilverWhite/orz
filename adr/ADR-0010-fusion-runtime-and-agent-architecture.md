@@ -2137,6 +2137,31 @@ ADR §3.6 正文修订随实施登记。
    [设计](docs/MIDSTREAM_DECODE_RETRY_DESIGN_2026-08-21.md) /
    ADR-0007 修订注记 / BACKLOG 0d / TODO P0-0d 后续。
 
+3. **S0 证据门通过 + S1/S2 实施闭合登记（2026-08-21；用户放行实施 +
+   全面审查处理）**：S0 证据门（r1-g1 + r1-g2 两批、10 题、7 次触发对）
+   判定通过——机械结构相关性 0 例强相关（g2 feal-differential 首请求
+   stall 直接构成机械块无关反例；g1 schemelike 紧邻占比与基率一致）、
+   跨任务分布不均（集中于复杂实现类），结合既有探针结论判定为模型/任务
+   侧原因。**实施**（主案 ①-④ + 解码兜底，合并一次落地）：会话级
+   thinking 档位 `session_thinking` + 哨兵计数 run 内单调（成功不再
+   清零）+ disabled 档哨兵即终止 + detail 显式化（族 + consecutive +
+   round，schema 增可选 `detail`）；解码兜底重试判定改「无完整
+   tool_calls」（`wrap_no_tool_side_effects` + `has_complete_tool_call`
+   双保险边界）+ 中段有界 1 次（`CHUNKED_MIDSTREAM_MAX_RETRIES`）；
+   **事件面重试计数一并实施**——v0.2 新增 `transport_retry` 事件
+   （recovered/exhausted，schema/fixtures/conformance/TUI 同步，
+   run-event enum 54 项）。**正式路径 per-run 隔离修正**：长驻进程
+   （ACP server）跨 run 共享 transport，原「仅 run 边界重置=新
+   transport」假设仅一键 CLI 成立；现 `ModelGateway::for_new_run()`
+   每 run 换新实例（controller `run_turn_inner` 开头调用，主 agent 与
+   检索子代理共享同一 run 实例；`run_retrieval_subagent` 不再引用
+   controller 常驻 subagent 字段），计数/档位零跨 run 泄漏、并发会话
+   零干扰。**S4 验收口径**（fail-fast 设计 §4 修正）：单 run 哨兵预算
+   有界=≤3 次触发 × 单次预算（原「≤ 首档 64K + 低档快速拦截」为
+   schemelike 类场景期望非硬上限）。测试：orz-loop 544 / 0 失败 /
+   3 ignored、orz-tui 178、Python conformance 230 通过、workspace
+   check 通过；S3 重建 → S4 复验待续（与窗口 180s 批次合并一次到位）。
+
 ### 14.36 v1.36 补写裁决索引（2026-08-21）
 
 本节记录冻结后的显式补写；规范正文以所指章节为准，补写明确

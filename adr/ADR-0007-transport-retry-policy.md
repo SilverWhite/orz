@@ -9,7 +9,13 @@
   完整 tool_calls 均可重试（错误路径工具从未执行、重发幂等）；零 chunk
   维持 180s 窗口/10 次上限（ADR-0010 §14.36），已见 chunk 至多 1 次额外
   重试；已见完整 tool_calls / Model / Parse / Cancelled 维持不重试。
-  纯文档登记、未实施（设计轮）。
+  **已实施（2026-08-21，S1/S2 闭合）**：`wrap_no_tool_side_effects` +
+  `has_complete_tool_call`（完整 tool_calls 双保险边界）+ 中段有界 1 次
+  （`CHUNKED_MIDSTREAM_MAX_RETRIES` 编译期常量）+ 零 chunk 180s/10 双
+  上限；`StreamInterrupted` 增 `saw_chunk` 字段（区分两预算）；重试计数
+  入事件面（v0.2 `transport_retry`，recovered/exhausted）。混合序列
+  （中段截断→重试→零 chunk 失败）按中断类别各自计预算、共享 180s 退避
+  窗口，属有界延伸（设计 §2.2 注记）。
 - 关联：`存档/docs/implementation-history/FIX_PLAN_2026-08-06.md` D-7（跑分 P1/LOOP-16、P8）、`architecture/DEEPSEEK_ADAPTER_CONTRACT_v0.1.md` §2.5/§4（首事件 timeout、bounded retry、首事件 vs 中断分开记录）、`integration/grok/README.md`（08-02「零重试边界」记录）、`orz-loop/src/gateway/transport.rs`、`orz-loop/src/gateway/model.rs`（`RetryPolicy`）、fork `third_party/async-openai/async-openai/src/client.rs`
 
 ## 1. 背景

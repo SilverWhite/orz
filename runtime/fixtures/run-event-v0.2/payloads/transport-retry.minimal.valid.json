@@ -1,0 +1,7 @@
+{
+  "agent_role": "main",
+  "outcome": "exhausted",
+  "kind": "zero_chunk",
+  "retries": 3,
+  "reason": "error sending request: connection reset"
+}

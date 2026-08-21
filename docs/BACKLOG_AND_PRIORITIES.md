@@ -740,6 +740,23 @@
 >   / [解码重试设计](MIDSTREAM_DECODE_RETRY_DESIGN_2026-08-21.md) /
 >   CLI_PROJECT_INDEX / TODO P0-0d 后续。
 
+> - **2026-08-21 S0 证据门通过 + S1/S2 实施闭合 + 全面审查处理登记
+>   （用户放行实施、处理审查全部问题）**：S0 通过（r1-g1+g2 两批 10 题
+>   7 次触发对、0 例机械块强相关、分布不均）→ 放行 S1。实施=会话级
+>   thinking 档位 + 计数单调（成功不清零）+ disabled 档即终止 + detail
+>   显式化（族 + consecutive + round）；解码兜底=判定改「无完整
+>   tool_calls」+ 中段有界 1 次 + `saw_chunk` 预算区分；**事件面重试
+>   计数一并实施**=v0.2 `transport_retry`（recovered/exhausted，
+>   schema/fixtures/conformance/TUI 同步，run-event 54 项）。**正式路径
+>   per-run 隔离**= `ModelGateway::for_new_run()` 每 run 换新实例
+>   （长驻进程 ACP server 跨 run 零泄漏、并发零干扰；run_turn_inner
+>   开头调用，主/子代理共享 run 实例）。S4 口径修正=单 run 哨兵预算
+>   有界 ≤3 次触发 × 单次预算。orz-loop 544 / orz-tui 178 / Python
+>   conformance 230 通过；S3 重建 → S4 复验待续（与窗口 180s 批次合并
+>   一次到位）。登记于 ADR-0010 §14.37 第 3 项 / 两份设计文档状态
+>   implemented / ADR-0007 修订注记 / CLI_PROJECT_INDEX / TODO P0-0d
+>   后续 4/5。
+
 ### 0e. CONTEXT-SCAFFOLDING-PULL-REDESIGN（P0；2026-08-21 设计定稿，
 **S1-S4 全部闭合 2026-08-21，计数 28 → 27**）
 

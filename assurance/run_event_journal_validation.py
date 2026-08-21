@@ -232,6 +232,15 @@ PAYLOAD_SCHEMA_BY_EVENT_TYPE_V02: dict[str, tuple[str, Path]] = {
           "ledger-fold-write-failed",
           RUNTIME / "ledger-fold-write-failed-event-payload-v0.2.schema.json",
       ),
+      # MIDSTREAM-DECODE-RETRY (2026-08-21, ADR-0010 §14.37 / 设计 §2.3):
+      # transport 重试计数事件面——一次逻辑模型请求内零 chunk/中段截断
+      # 重试的 recovered/exhausted 摘要（成功随 ModelResponse 上报、
+      # 耗尽随 StreamInterrupted 上报）。v0.2 专用新事件（v0.1 为历史
+      # 冻结面，不扩展）。
+      "transport_retry": (
+          "transport-retry",
+          RUNTIME / "transport-retry-event-payload-v0.2.schema.json",
+      ),
   }
 
 # Track-resolution table (contract §5 enforcement): every registered

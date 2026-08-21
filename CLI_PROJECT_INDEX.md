@@ -890,6 +890,22 @@
 > [fail-fast 设计](docs/STALL_DEGENERATION_FAILFAST_DESIGN_2026-08-21.md) /
 > [解码重试设计](docs/MIDSTREAM_DECODE_RETRY_DESIGN_2026-08-21.md) /
 > BACKLOG 0d / TODO P0-0d 后续 4/5；设计轮不动计数（27）。
+> 2026-08-21 S0 证据门通过 + S1/S2 实施闭合 + 全面审查处理登记（用户放行
+> 实施、处理审查全部问题）——S0 通过（r1-g1+g2 两批 10 题 7 次触发对、
+> 0 例机械块强相关、分布不均）→ 放行 S1。实施=会话级档位 + 计数单调 +
+> disabled 档即终止 + detail 显式化（族 + consecutive + round）+ 解码
+> 兜底（「无完整 tool_calls」判定 + 中段有界 1 次）；**事件面重试计数一并
+> 实施**=v0.2 `transport_retry`（recovered/exhausted，schema/fixtures/
+> conformance/TUI 同步，run-event 53→54）。**正式路径 per-run 隔离**=
+> `ModelGateway::for_new_run()` 每 run 换新实例（长驻进程 ACP server 跨
+> run 零泄漏、并发零干扰；run_turn_inner 开头调用，主/子代理共享 run
+> 实例；run_retrieval_subagent 不再引用常驻 subagent 字段）；达限终止
+> 独立分支、日志分流、注释修正。S4 口径修正=单 run 哨兵预算有界 ≤3 次
+> 触发 × 单次预算。orz-loop 544 / 0 失败 / 3 ignored、orz-tui 178、
+> Python conformance 230 通过、workspace check 通过；S3 重建 → S4 复验
+> 待续（与窗口 180s 批次合并一次到位）。登记于 ADR-0010 §14.37 第 3 项 /
+> 两份设计文档状态 implemented / ADR-0007 修订注记 / BACKLOG 0d /
+> TODO P0-0d 后续 4/5。
 >
 > 当前唯一自然语言设计权威是 [`ADR-0010`](adr/ADR-0010-fusion-runtime-and-agent-architecture.md)。本文件只负责召回和路由，不替代 ADR、Schema、审计结论、测试证据或源代码。
 >

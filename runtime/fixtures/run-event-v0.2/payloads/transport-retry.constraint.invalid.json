@@ -1,0 +1,7 @@
+{
+  "agent_role": "main",
+  "outcome": "exhausted",
+  "kind": "zero_chunk",
+  "retries": 0,
+  "reason": "retries must be >= 1"
+}

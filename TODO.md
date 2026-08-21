@@ -702,7 +702,7 @@
 - [ ] S4 复验（无 400、命中率 ≥90%、断连窗口内可骑过节点抖动）
 
 ### P0-0d 后续 4：STALL-DEGENERATION-FAILFAST（P0 派生；2026-08-21
-设计定稿，纯文档登记、未实施）
+设计定稿；S0 证据门通过 + S1/S2 已闭合 2026-08-21、S3/S4 待续）
 
 > 入口：[设计](docs/STALL_DEGENERATION_FAILFAST_DESIGN_2026-08-21.md)；
 > ADR-0010 §14.37 第 1 项；BACKLOG 0d。
@@ -714,15 +714,33 @@
 > 主案：会话级 thinking 档位（哨兵后不再回 high）+ 哨兵计数单调
 > （成功不清零、达 3 → run_invalidated 显式终止）+ disabled 档哨兵
 > 即终止；严格案（哨兵即 step 失败）留对照。
+> **2026-08-21 S0 通过 + S1/S2 实施 + 全面审查处理闭合（用户放行实施、
+> 审查全部问题处理）**：S0 证据门通过（r1-g1+g2 两批 10 题 7 次触发对、
+> 0 例机械块强相关、分布不均，判定模型/任务侧）。S1 代码=会话级档位
+> `session_thinking` + 计数 run 内单调（成功不清零）+ disabled 档即终止
+> + detail 显式化（族 + consecutive + round，schema 增可选 detail）；
+> **正式路径 per-run 隔离**=`ModelGateway::for_new_run()` 每 run 换新
+> 实例（controller run_turn_inner 开头，主/子代理共享 run 实例；
+> run_retrieval_subagent 不再引用常驻 subagent 字段）——长驻进程
+> （ACP server）跨 run 零泄漏、并发会话零干扰；`generate_stream` 达限
+> 独立分支（不依赖档位/分支顺序）；日志分流（零 chunk/中段）、注释修正
+> （has_complete_tool_call 保守上界、saw_chunk 哨兵语义、混合序列）。
+> S2=新增 3 项（for_new_run 跨逻辑 run 档位重置、recovered/exhausted
+> 事件）orz-loop 544 / 0 失败 / 3 ignored、orz-tui 178、Python
+> conformance 230 通过。
 
-- [ ] S0 证据门（下一批扫描采集哨兵触发上下文，按设计 §2.1 判定）
-- [ ] S1 代码（会话级档位 + 计数单调 + disabled 档终止 + detail 显式化）
-- [ ] S2 测试（跨请求档位保持、计数不重置、达限/disabled 终止、回归全绿）
+- [x] S0 证据门（下一批扫描采集哨兵触发上下文，按设计 §2.1 判定；
+  r1-g1+g2 两批通过）
+- [x] S1 代码（会话级档位 + 计数单调 + disabled 档终止 + detail 显式化
+  + for_new_run per-run 隔离）
+- [x] S2 测试（跨请求档位保持、计数不重置、达限/disabled 终止、
+  for_new_run 隔离、回归全绿）
 - [ ] S3 重建（Linux musl；与窗口 180s + 解码兜底批次合并一次到位）
-- [ ] S4 复验（单 run 哨兵预算有界、显式终止可观测、命中率 ≥90%、零 400）
+- [ ] S4 复验（单 run 哨兵预算有界 ≤3 次触发 × 单次预算、显式终止可观测、
+  命中率 ≥90%、零 400）
 
 ### P0-0d 后续 5：MIDSTREAM-DECODE-RETRY（P0 派生；2026-08-21
-设计定稿，纯文档登记、未实施）
+设计定稿；S1/S2 已闭合 2026-08-21、S3/S4 待续）
 
 > 入口：[设计](docs/MIDSTREAM_DECODE_RETRY_DESIGN_2026-08-21.md)；
 > ADR-0010 §14.37 第 2 项 / ADR-0007 修订注记；BACKLOG 0d。
@@ -733,10 +751,19 @@
 > 定案：重试判定从「零 chunk」改「无完整 tool_calls」——已见 chunk 的
 > Transport/解码截断有界重试 1 次后显式失败；已见完整 tool_calls /
 > Model / Parse / Cancelled 不重试；重试计数入事件面。
+> **2026-08-21 S1/S2 实施闭合（用户放行 + 全面审查处理）**：判定改
+> 「无完整 tool_calls」（`wrap_no_tool_side_effects` +
+> `has_complete_tool_call` 双保险）+ 中段有界 1 次
+> （`CHUNKED_MIDSTREAM_MAX_RETRIES` 编译期常量）+ `StreamInterrupted`
+> 增 `saw_chunk`；**事件面计数一并实施**——v0.2 新增 `transport_retry`
+> （recovered/exhausted、zero_chunk/midstream、retries、reason；
+> run-event enum 53→54、schema/fixtures/conformance/TUI 同步）；
+> 日志/注释类审查项同步处理。orz-loop 544 / Python conformance 230
+> 通过。
 
-- [ ] S1 代码（判定改「无完整 tool_calls」+ chunked 有界 1 次 + 事件面计数）
-- [ ] S2 测试（中段截断重试成功/耗尽、完整 tool_calls 不重试、Parse 不重试、
-  与降级梯交互、零 chunk 纪律回归全绿）
+- [x] S1 代码（判定改「无完整 tool_calls」+ chunked 有界 1 次 + 事件面计数）
+- [x] S2 测试（中段截断重试成功/耗尽、完整 tool_calls 不重试、Parse 不重试、
+  与降级梯交互、零 chunk 纪律回归全绿、recovered/exhausted 事件）
 - [ ] S3 重建（Linux musl；与窗口 180s + fail-fast 批次合并一次到位）
 - [ ] S4 复验（dna 类场景不再因解码错误杀 run、零 400、命中率 ≥90%）
 

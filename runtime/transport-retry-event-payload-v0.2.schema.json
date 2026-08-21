@@ -1,0 +1,25 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://local.scientific-assurance.invalid/schema/transport-retry-event-payload-v0.2.schema.json",
+  "title": "transport_retry runtime event payload",
+  "description": "MIDSTREAM-DECODE-RETRY (2026-08-21, ADR-0010 §14.37 / 设计 §2.3): transport 重试计数事件面——一次逻辑模型请求内零 chunk/中段截断重试的可观测摘要。outcome=recovered 表示重试后成功恢复（随 ModelResponse.transport_retry 上报）；outcome=exhausted 表示重试预算耗尽后显式失败（随 GatewayError::StreamInterrupted 上报）。kind 取最后一次重发的中断类别；retries 为该请求内实际重发次数；reason 为 wire 级原因摘要。哨兵中断（不重试、attempts=0）不产生本事件。",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["agent_role", "outcome", "kind", "retries"],
+  "properties": {
+    "agent_role": {
+      "type": "string",
+      "enum": ["main", "internal_retrieval", "external_retrieval"]
+    },
+    "outcome": {
+      "type": "string",
+      "enum": ["recovered", "exhausted"]
+    },
+    "kind": {
+      "type": ["string", "null"],
+      "enum": ["zero_chunk", "midstream", null]
+    },
+    "retries": { "type": "integer", "minimum": 1 },
+    "reason": { "type": ["string", "null"] }
+  }
+}
