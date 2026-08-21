@@ -2147,6 +2147,27 @@ ADR §3.6 正文修订随实施登记。
    [设计 §8](docs/READ_ANCHOR_WRITE_GUARD_DESIGN_2026-08-21.md) /
    BACKLOG 0f / TODO P0-0f / CLI_PROJECT_INDEX。
 
+3. **S2 测试闭合登记（2026-08-21 用户指示开始 S2；orz 工作树未提交）**：
+   新增 10 条用例。①read_file 锚点返回正确性——小文件（sha256/size 与读取
+   快照逐字节一致、mtime 与 metadata 一致、prompt 附 `[read anchor]` 尾行）、
+   空文件（size=0、空串 sha256、`File is empty.` 后附尾行）、大文件信封
+   （mtime + content_sha256）；②PDF 路径无文本解码链（`raw_text_to_file_
+   content` read_anchor 恒 None）；③prompt 尾行渲染与 `ReadAnchor` serde
+   round-trip（mtime=None 省略字段、旧 reader 兼容）；④写门禁四场景——
+   锚点匹配放行（mtime=null 跳过快筛、sha256 权威）、同 size 同 mtime 异
+   内容 sha256 兜底 fixture（`FileTimes::set_times` 保留 mtime，快筛通过但
+   哈希权威拒单）、陈旧拒绝→重读重下成功（S4 场景单元级预演）、
+   expected_anchor 缺失保持既有行为；⑤错误信封/事件面完整断言——receipt
+   error（step/code/message 含 expected/actual sha256 与 re-read 指引）、
+   upstream expected/actual、trace 末事件 protocol/content_anchor_mismatch、
+   事件面机械盖章（phase=pre_issue / step=protocol / round / plan_epoch /
+   run_id）、零编辑。验证：orz-tools read_file 207 / types::output 86 /
+   orz-loop 全量 550 通过（0 失败）、fmt 干净、clippy 无新增告警（30 条
+   既有位置核对）、cargo check --workspace 通过。计数：仍 28（S3-S4
+   待续）。登记于
+   [设计 §9](docs/READ_ANCHOR_WRITE_GUARD_DESIGN_2026-08-21.md) /
+   BACKLOG 0f / TODO P0-0f / CLI_PROJECT_INDEX。
+
 ### 14.37 v1.37 补写裁决索引（2026-08-21）
 
 本节记录冻结后的显式补写；规范正文以所指章节为准，补写明确

@@ -9,7 +9,7 @@
 
 | 优先级 | 含义 | 未闭合项 |
 |---|---|---|
-| P0 | 当前工作集：设计已冻结，裁决后立即实施 | 评测冒烟暴露问题（P0-E 主项 7 项 + FUS-TOOL-SCOPE-CONTRACT 后续 2 项全部闭合 2026-08-18：ACAF 容器供应、console 工具名、计划视图步骤 ID、订单发放前拒绝入事件面、grep 搜索范围契约、plan_write 校验消息形状、actions 形状探针、list_dir 范围计数、grep files_searched 全结局探针，见 0a）；CLASSICAL-EXEC-ASSISTANT（生产组件，2026-08-16 用户裁决转正式，S1-S4 全部闭合）；PLAN-FIRST-BLACKBOARD（阶段 A/B/C 全部闭合 2026-08-16）；**FUS-BENCHMARK-FULL-EXEC（P0，实施完成待验证——2026-08-18 用户指示实施、暂不测试；验证闭环后闭合，见 0b）**；**LEDGER-FOLD-EXTERNAL-FILE（P0，S1-S4 验证闭环 2026-08-19——命中率问题优先于 P0-F 验证；provider 口径 95.33% ≥90% 达标，见 0c）**；**OUTPUT-DEGENERATION-GUARD（P0，S1-S4 全部闭合 2026-08-20——make-doom 退化复读失败防护；8K 全统一 + 补读闭环 + 实时检测 + 32K，见 0d）**；**CONTEXT-SCAFFOLDING-PULL-REDESIGN（P0，S1-S4 全部闭合 2026-08-21——预算块 PUSH→PULL + 工具输出汇总消息退役；命中率 94.45%、零哨兵触发、输入增长放缓；方案 C 维持 256K 暂不收紧（用户裁决），见 0e）**；**FUS-READ-ANCHOR-WRITE-GUARD（P0，S1 代码实施中——2026-08-21 设计定稿、用户指示实施 S1；read_file 内容锚点下传 + 写前机械核证，S2-S4 待续，见 0f）** |
+| P0 | 当前工作集：设计已冻结，裁决后立即实施 | 评测冒烟暴露问题（P0-E 主项 7 项 + FUS-TOOL-SCOPE-CONTRACT 后续 2 项全部闭合 2026-08-18：ACAF 容器供应、console 工具名、计划视图步骤 ID、订单发放前拒绝入事件面、grep 搜索范围契约、plan_write 校验消息形状、actions 形状探针、list_dir 范围计数、grep files_searched 全结局探针，见 0a）；CLASSICAL-EXEC-ASSISTANT（生产组件，2026-08-16 用户裁决转正式，S1-S4 全部闭合）；PLAN-FIRST-BLACKBOARD（阶段 A/B/C 全部闭合 2026-08-16）；**FUS-BENCHMARK-FULL-EXEC（P0，实施完成待验证——2026-08-18 用户指示实施、暂不测试；验证闭环后闭合，见 0b）**；**LEDGER-FOLD-EXTERNAL-FILE（P0，S1-S4 验证闭环 2026-08-19——命中率问题优先于 P0-F 验证；provider 口径 95.33% ≥90% 达标，见 0c）**；**OUTPUT-DEGENERATION-GUARD（P0，S1-S4 全部闭合 2026-08-20——make-doom 退化复读失败防护；8K 全统一 + 补读闭环 + 实时检测 + 32K，见 0d）**；**CONTEXT-SCAFFOLDING-PULL-REDESIGN（P0，S1-S4 全部闭合 2026-08-21——预算块 PUSH→PULL + 工具输出汇总消息退役；命中率 94.45%、零哨兵触发、输入增长放缓；方案 C 维持 256K 暂不收紧（用户裁决），见 0e）**；**FUS-READ-ANCHOR-WRITE-GUARD（P0，S1/S2 已闭合——2026-08-21 设计定稿、S1 代码 + S2 测试完成；read_file 内容锚点下传 + 写前机械核证，S3-S4 待续，见 0f）** |
 | P1 | 无需裁决，可与 P0 并行 | FUS-COMPONENT-REGISTER、GAP-WINDOWS-EVIDENCE、IMPL-DEEPSEEK-TRANSPORT / SEC-CREDENTIALS、ORZ-SESSION-CONTEXT-MONITOR |
 | P2 | 生产化决策门：需用户裁决 | IMPL-CONTROL-FABRIC（fail-closed 启用、Slice 3/4）、OPS-PROTOCOL |
 | P3 | 收尾 / 清理 | EVIDENCE-LOCAL-BROWSER、GATE-CHAIN、DC 剩余信号、V11-IMPL-003/007、工作区收尾 |
@@ -822,7 +822,8 @@
 
 ### 0f. FUS-READ-ANCHOR-WRITE-GUARD（P0；2026-08-21 设计定稿，
 纯文档登记、未实施；设计轮不动计数 27；**S1 代码已实施 2026-08-21，
-实施入账 27 → 28，S2-S4 待续**；2026-08-21 审查收口：I/O 错误
+实施入账 27 → 28；S2 测试已闭合 2026-08-21，S3-S4 待续**；
+2026-08-21 审查收口：I/O 错误
 fail-closed + clippy 修复）
 
 - 入口：[设计](READ_ANCHOR_WRITE_GUARD_DESIGN_2026-08-21.md)；索引：
@@ -858,6 +859,18 @@ fail-closed + clippy 修复）
   44 个 grep/glob 失败为本机 rg 环境性既有失败（stash 基线复现一致）。
   计数：实施入账 27 → 28（S2-S4 待续）。登记于 ADR-0010 §14.38 第 2 项 /
   设计 §8 / TODO P0-0f / CLI_PROJECT_INDEX。
+- **2026-08-21 S2 测试闭合（用户指示开始 S2；orz 工作树未提交）**：新增 10
+  条用例——锚点返回正确性 3（小文件 sha256/size/mtime + prompt 尾行、空文件
+  size=0/空串哈希、大文件信封 mtime/content_sha256）；PDF 路径无锚点 1；
+  prompt 尾行渲染与 ReadAnchor serde round-trip 2；写门禁四场景（锚点匹配
+  放行（mtime null 跳快筛）、同 size 同 mtime 异内容 sha256 兜底 fixture
+  （FileTimes 保留 mtime）、陈旧拒绝→重读重下成功、缺失锚点保持既有行为）；
+  错误信封完整断言（upstream expected/actual、消息含 re-read 指引、trace
+  末事件 protocol/content_anchor_mismatch、事件面机械盖章、零编辑）。
+  验证：orz-tools read_file 207 / types::output 86 / orz-loop 全量 550
+  通过（0 失败）、fmt 干净、clippy 无新增告警（30 条既有位置核对）、
+  cargo check --workspace 通过。计数：仍 28（S3-S4 待续）。登记于
+  ADR-0010 §14.38 第 3 项 / 设计 §9 / TODO P0-0f / CLI_PROJECT_INDEX。
 
 ### 0. 前置收尾（提交前需用户确认）
 

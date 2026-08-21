@@ -1,15 +1,16 @@
 # read_file 内容锚点下传与写前机械核证设计（2026-08-21 设计定稿；S1 代码已实施，S2-S4 待续）
 
-> 状态：`pending`（设计已定稿；**S1 代码已实施 2026-08-21**、S2-S4 待续）。
+> 状态：`pending`（设计已定稿；**S1/S2 已闭合 2026-08-21**、S3-S4 待续）。
 > 2026-08-21 用户裁决：锚=哈希值（内容摘要太重；read_file 须机械返回、助理层
 > 零理解、简单机械核证）；仅针对 orz；先设计、不动作。
-> **2026-08-21 用户指示开始 S1 实施**（见 §8）。
+> **2026-08-21 用户指示开始 S1 实施**（见 §8）；**同日指示开始 S2 测试**（见 §9）。
 > 性质：FUS-LARGE-FILE-READ-CONTRACT（ADR-0010 §14.22）读取信封扩展 +
 > 写订单契约（CLASSICAL-EXEC-ASSISTANT 写面）。关联：
 > [ADR-0010 §14.38](../adr/ADR-0010-fusion-runtime-and-agent-architecture.md)、
 > [BACKLOG 0f](BACKLOG_AND_PRIORITIES.md)、[TODO P0-0f](../TODO.md)。
-> 实施路由：S1 代码（已实施 2026-08-21）→ S2 测试 → S3 重建 → S4 复验。
-> 实施入账 27 → 28（S1）；验证闭环 28 → 27。
+> 实施路由：S1 代码（已实施 2026-08-21）→ S2 测试（已闭合 2026-08-21）→
+> S3 重建 → S4 复验。
+> 实施入账 27 → 28（S1）；S2 测试闭合（计数不变 28）；验证闭环 28 → 27。
 
 ## 1. 背景与问题
 
@@ -142,4 +143,33 @@
   544 通过（0 失败）+ 新增 console_anchor 2 条通过；fmt 干净；clippy 无新增
   告警（审查修复 build_read_anchor collapsible_if）；orz-tools 全量 44 个
   grep/glob 失败为本机 rg 环境性既有失败（stash 基线复现一致，与本改动无关）。
-- **计数**：实施入账 27 → 28；S2 测试 → S3 重建 → S4 复验后 28 → 27。
+- **计数**：实施入账 27 → 28；S2 测试闭合（2026-08-21，见 §9，计数不变）；
+  S3 重建 → S4 复验后 28 → 27。
+
+## 9. S2 测试登记（2026-08-21）
+
+2026-08-21 用户指示开始 S2；本窗口测试闭合（orz 工作树、未提交）：
+
+- **新增 10 条用例**：
+  - read_file 锚点返回正确性 3：小文件（sha256/size 与读取快照逐字节一致、
+    mtime 与 metadata 一致、prompt 附 `[read anchor]` 尾行）、空文件
+    （size=0、空串 sha256、`File is empty.` 后附尾行）、大文件信封
+    （mtime + content_sha256、prompt 含 `mtime=`）；
+  - PDF 路径无文本解码链：`raw_text_to_file_content` read_anchor 恒 None；
+  - prompt 尾行渲染（有锚点时附尾行）与 `ReadAnchor` serde round-trip
+    （mtime=None 省略字段，旧 reader 兼容）；
+  - 写门禁四场景：锚点匹配放行（mtime=null 跳过快筛、sha256 权威）；
+    同 size 同 mtime 异内容 sha256 兜底 fixture（`FileTimes::set_times`
+    保留 mtime，快筛通过但哈希权威拒单）；陈旧拒绝→重读重下成功
+    （S4 场景单元级预演）；expected_anchor 缺失保持既有行为；
+  - 错误信封/事件面完整断言：receipt error step/code/message（含
+    expected/actual sha256 与 re-read 指引）、upstream expected/actual、
+    trace 末事件 protocol/content_anchor_mismatch、事件面机械盖章
+    （phase=pre_issue / step=protocol / code / round / plan_epoch /
+    run_id）、零编辑。
+- **验证**：orz-tools read_file 207 / types::output 86 / orz-loop 全量
+  550 通过（0 失败，3 ignored 为既有 live probe）；fmt 干净；clippy 无
+  新增告警（orz-tools 0 告警；orz-loop 30 条全部位于既有代码位置，逐条
+  核对无新增）；`cargo check --workspace` 通过（orz-host 1 条既有告警）。
+- **计数**：仍 28（实施入账 27 → 28；S2 为测试闭合不动计数）；S3 重建 →
+  S4 复验后 28 → 27。
