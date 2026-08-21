@@ -18705,6 +18705,456 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    /// FUS-READ-ANCHOR-WRITE-GUARD (ADR-0010 §14.38, S2): expected_anchor
+    /// 与目标当前内容一致时核证通过——订单正常发放执行（receipt ok、
+    /// tool_action 留痕、无 console_order_rejected 事件）。mtime 为 null
+    /// 时跳过快筛，sha256 仍是权威。
+    #[tokio::test]
+    async fn console_anchor_match_allows_issue_with_mtime_null() {
+        let dir = test_dir();
+        let journal = JournalRecorder::new(dir.clone());
+        let host = TestHost {
+            journal: journal.clone(),
+            tool_result: Some(ToolResult {
+                output: "edited ok".to_string(),
+                exit_code: Some(0),
+                output_encoding: None,
+                structured: None,
+                ..Default::default()
+            }),
+        };
+        let target = host.session_cwd().join("match_target.txt");
+        std::fs::write(&target, b"actual").unwrap();
+        let expected_sha256 = sha256_hex(b"actual");
+        let controller = AgentLoopController::with_gateway(Arc::new(FakeProvider::new(Vec::new())));
+        {
+            let mut w = controller.blackboard().write();
+            w.actions
+                .write_order(ActionOrder {
+                    order_id: "ORD-GUARD-MATCH".to_string(),
+                    action: "workspace.search_replace".to_string(),
+                    arguments: serde_json::json!({
+                        "file_path": "match_target.txt",
+                        "old_string": "actual",
+                        "new_string": "updated",
+                        "expected_anchor": {
+                            "size": 6,
+                            "mtime": null,
+                            "sha256": expected_sha256,
+                        },
+                    }),
+                    step_id: None,
+                    round: 1,
+                    plan_epoch: 0,
+                    run_id: "RUN-GUARDM".to_string(),
+                })
+                .unwrap();
+        }
+        let mut writer = EventWriter::new(
+            Some(&journal),
+            EventTrack::V02,
+            "RUN-GUARDM",
+            "",
+            0,
+            None,
+            None,
+        );
+        controller
+            .issue_pending_console_order(
+                &host,
+                &mut writer,
+                "guard",
+                orz_assurance::gates::ipg::WorkspaceTrust::NotObserved,
+                1,
+                None,
+            )
+            .await
+            .unwrap();
+
+        let r = controller.blackboard().read();
+        assert!(r.actions.order.is_none(), "{:?}", r.actions.order);
+        assert_eq!(r.actions.results.len(), 1, "{:?}", r.actions.results);
+        let receipt = &r.actions.results[0];
+        assert!(receipt.ok, "{receipt:?}");
+        assert!(
+            r.tool_actions.iter().any(|t| t.tool == "search_replace"),
+            "{:?}",
+            r.tool_actions
+        );
+        let rejected = events(&dir)
+            .into_iter()
+            .filter(|e| e.event_type == EventType::ConsoleOrderRejected)
+            .collect::<Vec<_>>();
+        assert!(rejected.is_empty(), "{rejected:?}");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// FUS-READ-ANCHOR-WRITE-GUARD (ADR-0010 §14.38, S2 fixture): 同 size
+    /// 同 mtime、内容不同（git checkout / cp -p / touch -r 可保留时间戳）
+    /// ——快筛通过但 sha256 权威兜底拒单；错误信封 / trace / 事件面完整
+    /// 断言（expected vs actual、机械盖章、re-read 指引、零编辑）。
+    #[tokio::test]
+    async fn console_anchor_same_mtime_different_content_sha256_catches() {
+        let dir = test_dir();
+        let journal = JournalRecorder::new(dir.clone());
+        let host = TestHost {
+            journal: journal.clone(),
+            tool_result: Some(ToolResult {
+                output: "never".to_string(),
+                exit_code: Some(0),
+                output_encoding: None,
+                structured: None,
+                ..Default::default()
+            }),
+        };
+        let target = host.session_cwd().join("same_mtime_target.txt");
+        // fixture：内容从 "aaaaaa" 改为 "bbbbbb"（size 相同），mtime 被保留。
+        std::fs::write(&target, b"aaaaaa").unwrap();
+        let original_mtime = std::fs::metadata(&target).unwrap().modified().unwrap();
+        let original_mtime_secs = original_mtime
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+        std::fs::write(&target, b"bbbbbb").unwrap();
+        {
+            let f = std::fs::File::options().write(true).open(&target).unwrap();
+            f.set_times(std::fs::FileTimes::new().set_modified(original_mtime))
+                .unwrap();
+        }
+        let meta = std::fs::metadata(&target).unwrap();
+        assert_eq!(meta.len(), 6);
+        assert_eq!(
+            meta.modified()
+                .unwrap()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_secs(),
+            original_mtime_secs,
+            "fixture must preserve mtime"
+        );
+        let expected_sha256 = sha256_hex(b"aaaaaa");
+        let actual_sha256 = sha256_hex(b"bbbbbb");
+        assert_ne!(expected_sha256, actual_sha256);
+        let controller = AgentLoopController::with_gateway(Arc::new(FakeProvider::new(Vec::new())));
+        {
+            let mut w = controller.blackboard().write();
+            w.actions
+                .write_order(ActionOrder {
+                    order_id: "ORD-GUARD-003".to_string(),
+                    action: "workspace.search_replace".to_string(),
+                    arguments: serde_json::json!({
+                        "file_path": "same_mtime_target.txt",
+                        "old_string": "old",
+                        "new_string": "new",
+                        "expected_anchor": {
+                            "size": 6,
+                            "mtime": original_mtime_secs,
+                            "sha256": expected_sha256,
+                        },
+                    }),
+                    step_id: None,
+                    round: 1,
+                    plan_epoch: 0,
+                    run_id: "RUN-GUARD3".to_string(),
+                })
+                .unwrap();
+        }
+        let mut writer = EventWriter::new(
+            Some(&journal),
+            EventTrack::V02,
+            "RUN-GUARD3",
+            "",
+            0,
+            None,
+            None,
+        );
+        controller
+            .issue_pending_console_order(
+                &host,
+                &mut writer,
+                "guard",
+                orz_assurance::gates::ipg::WorkspaceTrust::NotObserved,
+                1,
+                None,
+            )
+            .await
+            .unwrap();
+
+        let r = controller.blackboard().read();
+        assert!(r.actions.order.is_none(), "{:?}", r.actions.order);
+        assert_eq!(r.actions.results.len(), 1, "{:?}", r.actions.results);
+        let receipt = &r.actions.results[0];
+        assert!(!receipt.ok);
+        let error = receipt.error.as_ref().unwrap();
+        assert_eq!(error["step"], "protocol");
+        assert_eq!(error["code"], "content_anchor_mismatch");
+        let message = error["message"].as_str().unwrap();
+        assert!(message.contains("sha256 mismatch"), "{message}");
+        assert!(message.contains(&expected_sha256), "{message}");
+        assert!(message.contains(&actual_sha256), "{message}");
+        assert!(message.contains("re-read the file"), "{message}");
+        assert_eq!(error["upstream"]["order_id"], "ORD-GUARD-003");
+        assert_eq!(error["upstream"]["file_path"], "same_mtime_target.txt");
+        assert_eq!(error["upstream"]["expected"]["size"], 6);
+        assert_eq!(error["upstream"]["expected"]["mtime"], original_mtime_secs);
+        assert_eq!(error["upstream"]["expected"]["sha256"], expected_sha256);
+        assert_eq!(error["upstream"]["actual"]["size"], 6);
+        assert_eq!(error["upstream"]["actual"]["mtime"], original_mtime_secs);
+        assert_eq!(error["upstream"]["actual"]["sha256"], actual_sha256);
+        // 零编辑：文件保持 bbbbbb，未执行任何 search_replace 目标工具。
+        assert_eq!(std::fs::read_to_string(&target).unwrap(), "bbbbbb");
+        assert!(
+            r.tool_actions.iter().all(|t| t.tool != "search_replace"),
+            "{:?}",
+            r.tool_actions
+        );
+        // trace：失败 trace 已 commit，末事件 protocol/content_anchor_mismatch。
+        let traces = controller.console_traces.lock().unwrap();
+        let trace = traces
+            .get(&receipt.trace_id)
+            .expect("anchor rejection trace committed");
+        assert_eq!(trace.events.last().unwrap().step, "protocol");
+        assert_eq!(
+            trace.events.last().unwrap().code.as_deref(),
+            Some(crate::console::CODE_CONTENT_ANCHOR_MISMATCH)
+        );
+        drop(traces);
+        // 事件面：pre_issue / protocol / content_anchor_mismatch + 机械盖章。
+        let rejected = events(&dir)
+            .into_iter()
+            .filter(|e| e.event_type == EventType::ConsoleOrderRejected)
+            .collect::<Vec<_>>();
+        assert_eq!(rejected.len(), 1, "{rejected:?}");
+        assert_eq!(rejected[0].payload["order_id"], "ORD-GUARD-003");
+        assert_eq!(rejected[0].payload["phase"], "pre_issue");
+        assert_eq!(rejected[0].payload["step"], "protocol");
+        assert_eq!(rejected[0].payload["code"], "content_anchor_mismatch");
+        assert_eq!(rejected[0].payload["round"], 1);
+        assert_eq!(rejected[0].payload["plan_epoch"], 0);
+        assert_eq!(rejected[0].payload["run_id"], "RUN-GUARD3");
+        assert!(
+            rejected[0].payload["reason"]
+                .as_str()
+                .unwrap()
+                .contains("sha256 mismatch"),
+            "{rejected:?}"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// FUS-READ-ANCHOR-WRITE-GUARD (ADR-0010 §14.38, S2): 陈旧写入场景——
+    /// 读取 v1 后文件被别处改为 v2，v1 锚点下单被拒；主 agent 重读后以 v2
+    /// 锚点重下成功。发放前拒绝零编辑，重下走正常执行链（S4 场景的单元级
+    /// 预演）。
+    #[tokio::test]
+    async fn console_anchor_reject_then_reread_reissue_succeeds() {
+        let dir = test_dir();
+        let journal = JournalRecorder::new(dir.clone());
+        let host = TestHost {
+            journal: journal.clone(),
+            tool_result: Some(ToolResult {
+                output: "edited ok".to_string(),
+                exit_code: Some(0),
+                output_encoding: None,
+                structured: None,
+                ..Default::default()
+            }),
+        };
+        let target = host.session_cwd().join("remedy.txt");
+        // 读取快照 v1……
+        std::fs::write(&target, b"v1").unwrap();
+        let v1_sha = sha256_hex(b"v1");
+        // ……窗口内文件被别处改为 v2（旧锚点不再匹配）。
+        std::fs::write(&target, b"v2").unwrap();
+        let v2_sha = sha256_hex(b"v2");
+        let controller = AgentLoopController::with_gateway(Arc::new(FakeProvider::new(Vec::new())));
+        async fn issue_guard_order(
+            controller: &AgentLoopController,
+            host: &TestHost,
+            journal: &JournalRecorder,
+            run_id: &str,
+        ) {
+            let mut writer =
+                EventWriter::new(Some(journal), EventTrack::V02, run_id, "", 0, None, None);
+            controller
+                .issue_pending_console_order(
+                    host,
+                    &mut writer,
+                    "guard",
+                    orz_assurance::gates::ipg::WorkspaceTrust::NotObserved,
+                    1,
+                    None,
+                )
+                .await
+                .unwrap();
+        }
+        // 第一次：旧锚点 → 发放前拒绝。
+        {
+            let mut w = controller.blackboard().write();
+            w.actions
+                .write_order(ActionOrder {
+                    order_id: "ORD-GUARD-RE1".to_string(),
+                    action: "workspace.search_replace".to_string(),
+                    arguments: serde_json::json!({
+                        "file_path": "remedy.txt",
+                        "old_string": "old",
+                        "new_string": "new",
+                        "expected_anchor": {
+                            "size": 2,
+                            "mtime": null,
+                            "sha256": v1_sha,
+                        },
+                    }),
+                    step_id: None,
+                    round: 1,
+                    plan_epoch: 0,
+                    run_id: "RUN-REMEDY1".to_string(),
+                })
+                .unwrap();
+        }
+        issue_guard_order(&controller, &host, &journal, "RUN-REMEDY1").await;
+        {
+            let r = controller.blackboard().read();
+            assert!(r.actions.order.is_none(), "{:?}", r.actions.order);
+            assert_eq!(r.actions.results.len(), 1, "{:?}", r.actions.results);
+            let receipt = &r.actions.results[0];
+            assert!(!receipt.ok);
+            assert_eq!(
+                receipt.error.as_ref().unwrap()["code"],
+                "content_anchor_mismatch"
+            );
+            assert!(
+                r.tool_actions.iter().all(|t| t.tool != "search_replace"),
+                "{:?}",
+                r.tool_actions
+            );
+        }
+        assert_eq!(std::fs::read_to_string(&target).unwrap(), "v2");
+        // 第二次：重读后以新锚点重下 → 正常发放执行。
+        {
+            let mut w = controller.blackboard().write();
+            w.actions
+                .write_order(ActionOrder {
+                    order_id: "ORD-GUARD-RE2".to_string(),
+                    action: "workspace.search_replace".to_string(),
+                    arguments: serde_json::json!({
+                        "file_path": "remedy.txt",
+                        "old_string": "old",
+                        "new_string": "new",
+                        "expected_anchor": {
+                            "size": 2,
+                            "mtime": null,
+                            "sha256": v2_sha,
+                        },
+                    }),
+                    step_id: None,
+                    round: 1,
+                    plan_epoch: 0,
+                    run_id: "RUN-REMEDY2".to_string(),
+                })
+                .unwrap();
+        }
+        issue_guard_order(&controller, &host, &journal, "RUN-REMEDY2").await;
+        {
+            let r = controller.blackboard().read();
+            assert_eq!(r.actions.results.len(), 2, "{:?}", r.actions.results);
+            assert!(r.actions.results[1].ok, "{:?}", r.actions.results[1]);
+            assert!(
+                r.tool_actions.iter().any(|t| t.tool == "search_replace"),
+                "{:?}",
+                r.tool_actions
+            );
+        }
+        // 全程恰好一次发放前拒绝（第一次），第二次无拒绝事件。
+        let rejected = events(&dir)
+            .into_iter()
+            .filter(|e| e.event_type == EventType::ConsoleOrderRejected)
+            .collect::<Vec<_>>();
+        assert_eq!(rejected.len(), 1, "{rejected:?}");
+        assert_eq!(rejected[0].payload["order_id"], "ORD-GUARD-RE1");
+        assert_eq!(rejected[0].payload["run_id"], "RUN-REMEDY1");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// FUS-READ-ANCHOR-WRITE-GUARD (ADR-0010 §14.38, S2): expected_anchor
+    /// 缺失时保持既有行为——不触发核证、正常发放执行、无拒绝事件（设计
+    /// §3.2「缺失保持既有行为；必填加严为可选后续」）。
+    #[tokio::test]
+    async fn console_search_replace_without_anchor_skips_verification() {
+        let dir = test_dir();
+        let journal = JournalRecorder::new(dir.clone());
+        let host = TestHost {
+            journal: journal.clone(),
+            tool_result: Some(ToolResult {
+                output: "edited ok".to_string(),
+                exit_code: Some(0),
+                output_encoding: None,
+                structured: None,
+                ..Default::default()
+            }),
+        };
+        std::fs::write(host.session_cwd().join("legacy_target.txt"), b"actual").unwrap();
+        let controller = AgentLoopController::with_gateway(Arc::new(FakeProvider::new(Vec::new())));
+        {
+            let mut w = controller.blackboard().write();
+            w.actions
+                .write_order(ActionOrder {
+                    order_id: "ORD-GUARD-NOANCHOR".to_string(),
+                    action: "workspace.search_replace".to_string(),
+                    arguments: serde_json::json!({
+                        "file_path": "legacy_target.txt",
+                        "old_string": "actual",
+                        "new_string": "updated",
+                    }),
+                    step_id: None,
+                    round: 1,
+                    plan_epoch: 0,
+                    run_id: "RUN-GUARDN".to_string(),
+                })
+                .unwrap();
+        }
+        let mut writer = EventWriter::new(
+            Some(&journal),
+            EventTrack::V02,
+            "RUN-GUARDN",
+            "",
+            0,
+            None,
+            None,
+        );
+        controller
+            .issue_pending_console_order(
+                &host,
+                &mut writer,
+                "guard",
+                orz_assurance::gates::ipg::WorkspaceTrust::NotObserved,
+                1,
+                None,
+            )
+            .await
+            .unwrap();
+
+        let r = controller.blackboard().read();
+        assert!(r.actions.order.is_none(), "{:?}", r.actions.order);
+        assert_eq!(r.actions.results.len(), 1, "{:?}", r.actions.results);
+        assert!(r.actions.results[0].ok, "{:?}", r.actions.results[0]);
+        assert!(
+            r.tool_actions.iter().any(|t| t.tool == "search_replace"),
+            "{:?}",
+            r.tool_actions
+        );
+        let rejected = events(&dir)
+            .into_iter()
+            .filter(|e| e.event_type == EventType::ConsoleOrderRejected)
+            .collect::<Vec<_>>();
+        assert!(rejected.is_empty(), "{rejected:?}");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     /// P0-C S2 (2026-08-15): 策略拒绝归一化——权限门拒绝经适配层映射为
     /// `step=policy` + `code=policy_denied`，receipt 不带 execute trace 尾部。
     #[tokio::test]

@@ -1584,6 +1584,53 @@ mod tests {
         let output = ToolOutput::ReadFile(ReadFileOutput::FileContent(fc));
         assert_eq!(output.to_prompt_format(), "1→a\nb\nc");
     }
+    /// FUS-READ-ANCHOR-WRITE-GUARD (ADR-0010 §14.38, S2): 小文件 prompt
+    /// 附 `[read anchor]` 尾行——sha256/size/mtime 机械可复制进写订单
+    /// `expected_anchor`。
+    #[test]
+    fn read_file_prompt_appends_anchor_footer_when_present() {
+        let mut fc = empty_file_content(None, 3);
+        fc.content = "1→a\nb\nc".to_string();
+        fc.read_anchor = Some(ReadAnchor {
+            size: 11,
+            mtime: Some(1_720_000_000),
+            sha256: "a".repeat(64),
+        });
+        let prompt = ToolOutput::ReadFile(ReadFileOutput::FileContent(fc)).to_prompt_format();
+        assert_eq!(
+            prompt,
+            format!(
+                "1→a\nb\nc\n[read anchor] sha256={} size=11 mtime=1720000000",
+                "a".repeat(64)
+            )
+        );
+    }
+    /// FUS-READ-ANCHOR-WRITE-GUARD (ADR-0010 §14.38, S2): ReadAnchor 序列化
+    /// round-trip；mtime=None 时省略字段（旧 reader 兼容），Some 时保留。
+    #[test]
+    fn read_anchor_serde_round_trip_and_omits_mtime_when_none() {
+        let anchor = ReadAnchor {
+            size: 4,
+            mtime: None,
+            sha256: "b".repeat(64),
+        };
+        let json = serde_json::to_value(&anchor).unwrap();
+        let obj = json.as_object().expect("object");
+        assert_eq!(obj.len(), 2, "{json:?}");
+        assert!(obj.contains_key("size"));
+        assert!(obj.contains_key("sha256"));
+        assert!(!obj.contains_key("mtime"));
+        let round_trip: ReadAnchor = serde_json::from_value(json).unwrap();
+        assert_eq!(round_trip, anchor);
+        let with_mtime = ReadAnchor {
+            mtime: Some(9),
+            ..anchor
+        };
+        let json2 = serde_json::to_value(&with_mtime).unwrap();
+        assert_eq!(json2["mtime"], 9);
+        let round_trip2: ReadAnchor = serde_json::from_value(json2).unwrap();
+        assert_eq!(round_trip2, with_mtime);
+    }
     /// GAP-ENCODING-GATE (review P3-5 closure): rg stdout renders through
     /// the fixed decode chain — GB18030 output reaches the model as proper
     /// text, not replacement chars.

@@ -483,6 +483,24 @@ mod tests {
         }
     }
 
+    /// FUS-READ-ANCHOR-WRITE-GUARD (ADR-0010 §14.38, S2): PDF 文本路径没有
+    /// 文本解码链，read_anchor 恒为 None——内容锚点只服务于文本路径的写前
+    /// 核证，PDF 提取输出不参与该契约。
+    #[test]
+    fn raw_text_to_file_content_carries_no_read_anchor() {
+        let out = raw_text_to_file_content("page one\npage two\n".to_string());
+        match out {
+            ReadFileOutput::FileContent(fc) => {
+                assert!(
+                    fc.read_anchor.is_none(),
+                    "PDF extraction must not carry a text-path anchor"
+                );
+                assert!(fc.content.contains("page one"));
+            }
+            other => panic!("Expected FileContent, got {other:?}"),
+        }
+    }
+
     #[test]
     fn extract_pdf_text_with_page_spec() {
         let pdf_bytes = make_test_pdf(&["First", "Second", "Third"]);

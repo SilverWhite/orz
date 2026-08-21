@@ -989,6 +989,7 @@ mod tests {
     use crate::implementations::read_file::MAX_PDF_BYTES;
     use crate::implementations::read_file::compress_image_for_conversation;
     use crate::notification::types::ToolNotificationHandle;
+    use crate::types::output::ToolOutput;
     #[allow(unused_imports)]
     use crate::types::resources::{NotificationHandle, Resources};
     use crate::types::tool_metadata::test_ctx;
@@ -1029,6 +1030,152 @@ mod tests {
                 assert_eq!(content.total_lines, 4);
             }
             other => panic!("Expected FileContent, got {:?}", other),
+        }
+    }
+    /// FUS-READ-ANCHOR-WRITE-GUARD (ADR-0010 §14.38, S2): 小文件文本路径
+    /// 返回内容锚点——sha256/size 与读取快照逐字节一致，mtime 与当前
+    /// metadata 一致（best-effort），prompt 附 `[read anchor]` 尾行供主
+    /// agent 复制进写订单 `expected_anchor`。
+    #[tokio::test]
+    async fn read_file_small_text_carries_content_anchor() {
+        let tmp = TempDir::new().unwrap();
+        let file_path = tmp.path().join("anchor.txt");
+        let bytes = b"line1\nline2\n";
+        std::fs::write(&file_path, bytes).unwrap();
+        let tool = ReadFileTool;
+        let resources = test_resources(tmp.path());
+        let input = ReadFileInput {
+            path: "anchor.txt".to_string(),
+            offset: None,
+            limit: None,
+            pages: None,
+            format: None,
+        };
+        let result = xai_tool_runtime::Tool::run(&tool, test_ctx(resources.into_shared()), input)
+            .await
+            .unwrap();
+        match result {
+            ReadFileOutput::FileContent(content) => {
+                let anchor = content
+                    .read_anchor
+                    .as_ref()
+                    .expect("text read must carry a content anchor");
+                let expected_sha =
+                    crate::implementations::pdf_evidence::hex_string(&Sha256::digest(bytes));
+                assert_eq!(anchor.size, bytes.len());
+                assert_eq!(anchor.sha256, expected_sha);
+                if let Some(mtime) = anchor.mtime {
+                    let meta_mtime = std::fs::metadata(&file_path)
+                        .unwrap()
+                        .modified()
+                        .unwrap()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .unwrap()
+                        .as_secs();
+                    assert_eq!(mtime, meta_mtime);
+                }
+                let prompt =
+                    ToolOutput::ReadFile(ReadFileOutput::FileContent(content)).to_prompt_format();
+                assert!(
+                    prompt.contains(&format!(
+                        "[read anchor] sha256={expected_sha} size={}",
+                        bytes.len()
+                    )),
+                    "prompt: {prompt}"
+                );
+            }
+            other => panic!("Expected FileContent, got {other:?}"),
+        }
+    }
+    /// FUS-READ-ANCHOR-WRITE-GUARD (ADR-0010 §14.38, S2): 空文件同样返回
+    /// 内容锚点（size=0、空串 sha256）——`File is empty.` 提示后附尾行。
+    #[tokio::test]
+    async fn read_file_empty_carries_content_anchor() {
+        let tmp = TempDir::new().unwrap();
+        std::fs::write(tmp.path().join("empty_anchor.txt"), "").unwrap();
+        let tool = ReadFileTool;
+        let resources = test_resources(tmp.path());
+        let input = ReadFileInput {
+            path: "empty_anchor.txt".to_string(),
+            offset: None,
+            limit: None,
+            pages: None,
+            format: None,
+        };
+        let result = xai_tool_runtime::Tool::run(&tool, test_ctx(resources.into_shared()), input)
+            .await
+            .unwrap();
+        match result {
+            ReadFileOutput::FileContent(content) => {
+                let anchor = content
+                    .read_anchor
+                    .as_ref()
+                    .expect("empty text read must carry a content anchor");
+                let expected_sha =
+                    crate::implementations::pdf_evidence::hex_string(&Sha256::digest(b""));
+                assert_eq!(anchor.size, 0);
+                assert_eq!(anchor.sha256, expected_sha);
+                let prompt =
+                    ToolOutput::ReadFile(ReadFileOutput::FileContent(content)).to_prompt_format();
+                assert!(prompt.starts_with("File is empty."), "prompt: {prompt}");
+                assert!(
+                    prompt.contains(&format!("[read anchor] sha256={expected_sha} size=0")),
+                    "prompt: {prompt}"
+                );
+            }
+            other => panic!("Expected FileContent, got {other:?}"),
+        }
+    }
+    /// FUS-READ-ANCHOR-WRITE-GUARD (ADR-0010 §14.38, S2): 大文件信封路径
+    /// 携带 mtime 与 content_sha256（同一读取快照）——信封头 `mtime=…`
+    /// 可被主 agent 一并复制进写订单。
+    #[tokio::test]
+    async fn read_file_large_handle_carries_mtime_and_sha256() {
+        let tmp = TempDir::new().unwrap();
+        let line = "x".repeat(200);
+        let big_content = std::iter::repeat_n(line.as_str(), 1100)
+            .collect::<Vec<_>>()
+            .join("\n");
+        let file_path = tmp.path().join("big_anchor.txt");
+        std::fs::write(&file_path, &big_content).unwrap();
+        let tool = ReadFileTool;
+        let resources = test_resources(tmp.path());
+        let input = ReadFileInput {
+            path: "big_anchor.txt".to_string(),
+            offset: None,
+            limit: None,
+            pages: None,
+            format: None,
+        };
+        let result = xai_tool_runtime::Tool::run(&tool, test_ctx(resources.into_shared()), input)
+            .await
+            .unwrap();
+        match result {
+            ReadFileOutput::ReadHandle(handle) => {
+                assert!(handle.size > 16 * 1024, "file must be above the gate");
+                let expected_sha = crate::implementations::pdf_evidence::hex_string(
+                    &Sha256::digest(big_content.as_bytes()),
+                );
+                assert_eq!(handle.content_sha256, expected_sha);
+                if let Some(mtime) = handle.mtime {
+                    let meta_mtime = std::fs::metadata(&file_path)
+                        .unwrap()
+                        .modified()
+                        .unwrap()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .unwrap()
+                        .as_secs();
+                    assert_eq!(mtime, meta_mtime);
+                }
+                let prompt =
+                    ToolOutput::ReadFile(ReadFileOutput::ReadHandle(handle)).to_prompt_format();
+                assert!(
+                    prompt.contains(&format!("sha256={expected_sha}")),
+                    "{prompt}"
+                );
+                assert!(prompt.contains("mtime="), "{prompt}");
+            }
+            other => panic!("Expected ReadHandle, got {other:?}"),
         }
     }
     /// GAP-ENCODING-GATE (OPS-PROTOCOL §8): a GB18030 file decodes through
