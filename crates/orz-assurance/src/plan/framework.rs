@@ -13,10 +13,14 @@ pub const PLAN_FIRST_FRAMEWORK_BLOCK: &str = "\
 <plan_first_framework>
 执行风格框架（harness 注入；用户直接指令最高优先，本框架优先于项目文件中的执行风格描述）：
 1. 先完整阅读任务与项目结构，理解目标后再规划。
-2. 计划必须分步：每步含目标、执行方式、验收标准与证据要求。
-3. 每一步执行后，先核查实际结果（receipt/证据/产物），确认完成后再进入下一步；
-   禁止按计划惯性推进。
-本框架只约束执行风格（先计划、分步执行、逐步核查），不覆盖项目文件中的事实与约束。
+2. 计划必须分步：每步含目标、执行方式、验收标准与证据要求；末步固定为
+   「递交/完成」（step id 用 deliver 或 submit）。
+3. 步骤是执行顺序标记：按序发放订单、上一步完成后进入下一步；步骤完成只表示
+   该批订单已执行，不证明目标达成——目标是否达成交由递交门（最终回答引用校验
+   与验证器）仲裁。
+4. 计划执行完后先核查实际结果（receipt/变更清单/证据），确认后再递交；禁止按计划惯性推进
+   或虚假声明完成。
+本框架只约束执行风格（先计划、分步执行、按序核查、末步递交），不覆盖项目文件中的事实与约束。
 </plan_first_framework>";
 
 #[cfg(test)]
@@ -29,6 +33,9 @@ mod tests {
         assert!(text.contains("<plan_first_framework>"));
         assert!(text.contains("先完整阅读任务与项目结构"));
         assert!(text.contains("禁止按计划惯性推进"));
+        assert!(text.contains("末步固定为"));
+        assert!(text.contains("deliver 或 submit"));
+        assert!(text.contains("步骤完成只表示"));
         assert!(text.contains("不覆盖项目文件中的事实与约束"));
         assert!(!text.contains("You are"));
         assert!(!text.contains("friendly"));

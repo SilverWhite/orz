@@ -1141,10 +1141,23 @@ pub(crate) async fn issue_action_inner<E: ActionExecutor + ?Sized>(
             }
             trace.add(STEP_EXECUTE, Some(&order.action), true, None, None, None);
 
-            let response = match result.structured {
+            let mut response = match result.structured {
                 Some(value) => value,
                 None => json!({ "output": result.output }),
             };
+            // AGENT-DELIVERY-FLOW (2026-08-23, 设计 §2.3): 订单反馈增强——
+            // 编辑类订单回显 diff（有界截断）；终端/运行类订单 receipt 挂
+            // workspace_delta（文件清单 + 增删改 + 大小 + 截断标记，过滤
+            // .gsa/缓存目录）。常驻 actions 板只加短计数，完整内容走点读。
+            if target_tool == "search_replace" && result.exit_code == Some(0) {
+                if let Some(diff) = edit_diff_response(&order.arguments) {
+                    response["diff"] = json!(diff);
+                }
+            } else if matches!(target_tool, "run_terminal_cmd" | "run_tests") {
+                response["workspace_delta"] =
+                    serde_json::to_value(&result.workspace_delta).unwrap_or_default();
+                response["workspace_delta_truncated"] = json!(result.workspace_delta_truncated);
+            }
             // 响应契约强制（2026-08-15 用户裁决）：任何输出必须过机械验证，
             // 不仅是规整性与安全，也是审计的一部分。
             validate_with(response_validator, &response).map_err(|msg| ConsoleError {
@@ -1241,6 +1254,28 @@ pub(crate) async fn issue_action_inner<E: ActionExecutor + ?Sized>(
             Ok(response)
         }
     }
+}
+
+/// AGENT-DELIVERY-FLOW (2026-08-23, 设计 §2.3): 编辑类订单（search_replace）
+/// 响应的 diff 回显——old/new 区域（新文件创建显示新增内容），有界截断 +
+/// 截断标记（复用 8K 点读预算纪律；receipt 点读本身再截断到 8K）。
+pub(crate) fn edit_diff_response(arguments: &Value) -> Option<String> {
+    let old_string = arguments.get("old_string")?.as_str()?;
+    let new_string = arguments.get("new_string")?.as_str()?;
+    // 单侧预览上限：old/new 各最多 4000 字符（总计 ≤ 8K，与点读上限一致）。
+    const DIFF_PREVIEW_MAX_CHARS: usize = 4000;
+    let mut diff = String::new();
+    if old_string.is_empty() {
+        diff.push_str("(新文件)\n");
+        diff.push_str(&truncate(new_string, DIFF_PREVIEW_MAX_CHARS));
+    } else {
+        diff.push('-');
+        diff.push_str(&truncate(old_string, DIFF_PREVIEW_MAX_CHARS));
+        diff.push('\n');
+        diff.push('+');
+        diff.push_str(&truncate(new_string, DIFF_PREVIEW_MAX_CHARS));
+    }
+    Some(diff)
 }
 
 /// 脚本步骤的静态元数据（POC `script_runner.py::_static_validate` 同构）。

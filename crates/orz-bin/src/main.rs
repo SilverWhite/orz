@@ -2895,6 +2895,9 @@ mod conformance_capture {
                     orz_loop::AgentLoopController::with_gateway(Arc::new(FakeProvider::new(vec![
                         ScriptedResponse::text("X"),
                         ScriptedResponse::text("最终结论 [来源: SRC-999]"),
+                        // AGENT-DELIVERY-FLOW (2026-08-23, 设计 §2.4): 第一次
+                        // 失败是修正机会；同一失败再次出现恢复硬阻断。
+                        ScriptedResponse::text("最终结论修正 [来源: SRC-999]"),
                     ])))
                     .with_snapshot_store(Some(handle.snapshot_store.clone()));
                 let (response, _, _) = controller
@@ -2925,6 +2928,8 @@ mod conformance_capture {
                         "prompt_submitted",
                         "model_output",
                         "counterexample_gate",
+                        "model_output",
+                        "citation_validation",
                         "model_output",
                         "citation_validation",
                         "run_finished",

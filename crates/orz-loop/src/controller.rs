@@ -604,6 +604,18 @@ pub struct AgentLoopController {
     /// `[任务状态]` 文本——状态行只在变化时作为尾随用户消息追加
     /// （前缀缓存纪律，system 提示词保持完全静态）；无计划为 None。
     status_line_appended: Mutex<Option<String>>,
+    /// AGENT-DELIVERY-FLOW (2026-08-23, 设计 §2.2): the worktree metadata
+    /// baseline captured at plan approval — the mechanical delivery status
+    /// diffs the live snapshot against it at `submit`. `None` = the host
+    /// provides no baseline (mock hosts / unsupported) → the status reports
+    /// the change list as unavailable rather than fabricating one.
+    delivery_baseline: Mutex<Option<std::collections::HashMap<String, (u64, u64, u32)>>>,
+    /// AGENT-DELIVERY-FLOW (2026-08-23, 设计 §2.2): two-phase `submit` —
+    /// (plan_epoch, pending). Call 1 renders the delivery status into the
+    /// plan view and sets pending=true; call 2 (same epoch) confirms and
+    /// marks the terminal step done. Keyed by plan epoch so a plan rotation
+    /// invalidates any stale pending confirmation.
+    delivery_pending: Mutex<(u64, bool)>,
 }
 
 /// GAP-RETRIEVAL-TOOLS (2026-08-10): one retrieval-lane tool-call evidence
@@ -2200,6 +2212,8 @@ impl AgentLoopController {
                 crate::console_mode::DEFAULT_DIRECT_FALLBACK_THRESHOLD,
             )),
             status_line_appended: Mutex::new(None),
+            delivery_baseline: Mutex::new(None),
+            delivery_pending: Mutex::new((0, false)),
             plan_first_enabled: false,
             plan_first_session_done: false,
         }
@@ -2382,6 +2396,7 @@ impl AgentLoopController {
     /// console 默认面的模型可见工具集——写面 = plan_write + action_write；
     /// 读面 = blackboard_read + 只读核查（read/list/grep 类）+ direct
     /// 控制工具（step_done / return_to_console，调用时另有模式守卫）；
+    /// 递交 = submit（AGENT-DELIVERY-FLOW 2026-08-23，末步显式递交路径）；
     /// 执行/变更/shell/子代理/检索全部隐藏（经订单下发）。
     pub(crate) fn is_console_surface_tool(name: &str) -> bool {
         matches!(
@@ -2391,6 +2406,7 @@ impl AgentLoopController {
                 | "blackboard_action_write"
                 | "console_step_done"
                 | "console_return_to_console"
+                | "submit"
                 | "read_file"
                 | "list_dir"
                 | "grep"
@@ -4004,6 +4020,8 @@ impl AgentLoopController {
                 crate::console_mode::DEFAULT_DIRECT_FALLBACK_THRESHOLD,
             )),
             status_line_appended: Mutex::new(None),
+            delivery_baseline: Mutex::new(None),
+            delivery_pending: Mutex::new((0, false)),
             plan_first_enabled: false,
             plan_first_session_done: false,
         }
@@ -4781,10 +4799,17 @@ impl AgentLoopController {
                      `plan` is an object with plan_id, goal and an ordered steps \
                      array; every step carries id, goal, actions (each \
                      {step_id, do, with}), acceptance and evidence. The plan \
-                     lands in the blackboard plan section (plan epoch). On the \
-                     FIRST round of a run this is the only write tool available; \
-                     an invalid plan is rejected with mechanical validation \
-                     errors (one refill opportunity, then degrade)."
+                     lands in the blackboard plan section (plan epoch). Steps \
+                     are EXECUTION ORDER markers: they only constrain issuing \
+                     orders in order — a step marked done means its orders \
+                     executed, not that its goal is achieved (the delivery \
+                     gate arbitrates the goal). The LAST step must be the fixed \
+                     terminal step (递交/完成) with id `deliver` or `submit`; \
+                     it never auto-advances on ordinary orders and is advanced \
+                     only via the `submit` delivery action. On the FIRST round \
+                     of a run this is the only write tool available; an invalid \
+                     plan is rejected with mechanical validation errors (one \
+                     refill opportunity, then degrade)."
                     .to_string(),
                 parameters: serde_json::json!({
                     "type": "object",
@@ -4911,6 +4936,31 @@ impl AgentLoopController {
                         },
                     },
                     "required": ["step_id", "transition_id", "trace_id"],
+                }),
+            });
+        }
+        // AGENT-DELIVERY-FLOW (2026-08-23, ADR-0010 §14.35 第 19 项 / 设计
+        // §2.2): `submit` —— 末步「递交/完成」的显式递交路径（无参，console
+        // 默认态主车道）。第一次调用机械计算交付状态（工作区变更清单，过滤
+        // .gsa/缓存目录，上限 20 + 计数行）渲染进黑板 plan 末步状态行；
+        // 模型核查后同动作再触发一次确认，末步才置 done 并进入最终回答
+        // 流程（引用校验 + 反例门）。普通订单绑定末步不产生 done。
+        if self.console_default_enabled && !tool_defs.iter().any(|t| t.name == "submit") {
+            tool_defs.push(ToolDef {
+                name: "submit".to_string(),
+                description: "Request/confirm delivery (AGENT-DELIVERY-FLOW). \
+                     The final plan step is the fixed 递交/完成 step; ordinary \
+                     orders bound to it never mark it done. Call `submit` (no \
+                     arguments) once to have the harness mechanically compute \
+                     and render the delivery status (workspace changes, \
+                     filtered, ≤20 entries) into the blackboard plan view, \
+                     review it, then call `submit` again to confirm and advance \
+                     the final step into the final-answer flow. Refused while \
+                     earlier steps are not done or the plan has no terminal step."
+                    .to_string(),
+                parameters: serde_json::json!({
+                    "type": "object",
+                    "properties": {},
                 }),
             });
         }
@@ -7008,6 +7058,7 @@ impl AgentLoopController {
                     reason: detail.clone(),
                 }),
                 timed_out: false,
+                ..Default::default()
             },
             None,
         ))
@@ -7656,12 +7707,63 @@ impl AgentLoopController {
             let mut w = self.blackboard.write();
             if let Some(idx) = w.plan.steps.iter().position(|s| s.id == step_id) {
                 if ok {
-                    crate::planning::mark_step_done(&mut w.plan.steps, idx, &order.order_id, None);
+                    // AGENT-DELIVERY-FLOW (2026-08-23, 设计 §2.2): the final
+                    // (terminal) step never auto-advances on an ordinary
+                    // order receipt — only the explicit `submit` delivery
+                    // path marks it done (杜绝 echo done 式虚假递交).
+                    let is_terminal_step = idx + 1 == w.plan.steps.len();
+                    if !is_terminal_step {
+                        crate::planning::mark_step_done(
+                            &mut w.plan.steps,
+                            idx,
+                            &order.order_id,
+                            None,
+                        );
+                    }
                 } else {
                     crate::planning::mark_step_failed(&mut w.plan.steps, idx, &order.order_id);
                 }
             }
         }
+    }
+
+    /// AGENT-DELIVERY-FLOW (2026-08-23, 设计 §2.2): the mechanical delivery
+    /// status — diff the live worktree snapshot against the plan-approval
+    /// baseline (`.gsa`/缓存目录已由 walk 排除), capped at 20 entries +
+    /// count line + truncation marker. Tool output — rendered into the
+    /// blackboard plan view by `submit`, never a model-authored statement.
+    /// `None` baseline (host without snapshot support) reports the change
+    /// list as unavailable rather than fabricating one.
+    fn compute_delivery_status(&self, host: &dyn LoopHost) -> String {
+        let baseline = self.delivery_baseline.lock().unwrap().clone();
+        let Some(before) = baseline else {
+            return "[delivery] 状态: 变更清单不可用（host 未提供工作区快照基线）".to_string();
+        };
+        let Some(after) = host.workspace_snapshot() else {
+            return "[delivery] 状态: 变更清单不可用（host 未提供工作区快照）".to_string();
+        };
+        let (all, _) = crate::host::workspace_delta_diff(&before, &after, usize::MAX);
+        let total = all.len();
+        let cap = crate::host::DELIVERY_DELTA_MAX_ENTRIES;
+        let truncated = total > cap;
+        let shown = &all[..total.min(cap)];
+        let kinds = shown
+            .iter()
+            .map(|e| {
+                let kind = match e.kind {
+                    crate::host::WorkspaceDeltaKind::Added => "A",
+                    crate::host::WorkspaceDeltaKind::Modified => "M",
+                    crate::host::WorkspaceDeltaKind::Deleted => "D",
+                };
+                format!("{} {}", e.path, kind)
+            })
+            .collect::<Vec<_>>()
+            .join(", ");
+        let mut line = format!("[delivery] 状态: {total} 个变更 ({kinds})");
+        if truncated {
+            line.push_str(&format!(" — 仅显示前 {cap} 条（截断）"));
+        }
+        line
     }
 
     /// PLAN-FIRST 阶段 C (2026-08-16, ADR-0010 §14.17⑱ / 设计 §7.4):
@@ -8151,6 +8253,7 @@ impl AgentLoopController {
                     structured: None,
                     policy_denial: Some(policy_denial),
                     timed_out: false,
+                    ..Default::default()
                 },
                 None,
             ));
@@ -8207,6 +8310,7 @@ impl AgentLoopController {
                     structured: None,
                     policy_denial: Some(policy_denial),
                     timed_out: false,
+                    ..Default::default()
                 },
                 None,
             ));
@@ -8260,6 +8364,7 @@ impl AgentLoopController {
                     structured: None,
                     policy_denial: Some(policy_denial),
                     timed_out: false,
+                    ..Default::default()
                 },
                 None,
             ));
@@ -8381,6 +8486,7 @@ impl AgentLoopController {
                     reason: output,
                 }),
                 timed_out: false,
+                ..Default::default()
             };
             // Replay the denial as a tool message — the provider protocol
             // requires a tool message answering each declared call, even a
@@ -8603,6 +8709,12 @@ impl AgentLoopController {
                 exit_code: result.exit_code,
                 output_encoding: None,
                 structured: None,
+                // AGENT-DELIVERY-FLOW (2026-08-23, 设计 §2.3): the run_tests
+                // receipt carries the host-measured workspace delta (the
+                // event payload already carried it; now the console receipt
+                // can attach it too).
+                workspace_delta: result.workspace_delta.clone(),
+                workspace_delta_truncated: result.workspace_delta_truncated,
                 ..Default::default()
             };
             messages.push(Message {
@@ -9354,6 +9466,12 @@ impl AgentLoopController {
             let mut final_degrade = degrade_reason;
             if matches!(outcome, crate::planning::PlanWriteOutcome::Accepted) {
                 let current_id = self.blackboard.read().plan.plan_id.clone();
+                // AGENT-DELIVERY-FLOW (2026-08-23, 设计 §2.2): the delivery
+                // baseline is captured when a NEW plan epoch is approved —
+                // the `submit` status diffs the live worktree against it.
+                // Same-plan revisions keep the original baseline (the work
+                // of the current delivery did not restart).
+                let is_new_epoch = current_id.as_deref() != Some(plan_id.as_str());
                 let epoch = if current_id.as_deref() == Some(plan_id.as_str()) {
                     plan_epoch
                 } else {
@@ -9368,7 +9486,13 @@ impl AgentLoopController {
                     goal.clone(),
                     verdict.steps.clone(),
                 ) {
-                    Ok(()) => plan_epoch = epoch,
+                    Ok(()) => {
+                        plan_epoch = epoch;
+                        if is_new_epoch {
+                            *self.delivery_baseline.lock().unwrap() = host.workspace_snapshot();
+                            *self.delivery_pending.lock().unwrap() = (epoch, false);
+                        }
+                    }
                     Err(_) => {
                         // 落板失败（epoch 身份/归档异常）——机械降级，不挂死。
                         final_outcome = "degraded";
@@ -9449,6 +9573,157 @@ impl AgentLoopController {
         // tool that journals nothing between ToolStarted/ToolCompleted must
         // not trip the stall watchdog (the tool itself is bounded by the
         // P0-1 per-call timeout).
+        // AGENT-DELIVERY-FLOW (2026-08-23, 设计 §2.2): `submit` —— 末步
+        // 「递交/完成」的显式递交路径（无参、两阶段）。第一次调用机械计算
+        // 交付状态渲染进黑板 plan 末步状态行（pending 确认）；第二次调用
+        // 确认并置末步 done（进入最终回答流程）。普通订单绑定末步不产生
+        // done；console_step_done 对末步同样拒绝（见下），杜绝绕过递交门。
+        if tc.name == "submit" {
+            if !self.console_default_enabled {
+                return Ok((
+                    self.refuse_console_tool(
+                        writer,
+                        messages,
+                        &tc.name,
+                        &tc.call_id,
+                        "submit_disabled",
+                        "submit refused — the console dual-mode is disabled",
+                    )
+                    .await?,
+                    None,
+                ));
+            }
+            if activation_id.is_some() {
+                return Ok((
+                    self.refuse_console_tool(
+                        writer,
+                        messages,
+                        &tc.name,
+                        &tc.call_id,
+                        "submit_lane_denied",
+                        "submit refused — main-lane only",
+                    )
+                    .await?,
+                    None,
+                ));
+            }
+            let (terminal_idx, terminal_id) = {
+                let w = self.blackboard.read();
+                if w.plan.steps.is_empty() {
+                    (None, None)
+                } else {
+                    let idx = w.plan.steps.len() - 1;
+                    (Some(idx), Some(w.plan.steps[idx].id.clone()))
+                }
+            };
+            let Some((terminal_idx, terminal_id)) = terminal_idx.zip(terminal_id) else {
+                return Ok((
+                    self.refuse_console_tool(
+                        writer,
+                        messages,
+                        &tc.name,
+                        &tc.call_id,
+                        "submit_no_plan",
+                        "submit refused — no plan in force; write a plan whose \
+                         final step is the fixed 递交/完成 step first",
+                    )
+                    .await?,
+                    None,
+                ));
+            };
+            let gate = {
+                let w = self.blackboard.read();
+                crate::planning::order_step_gate(&w.plan.steps, Some(&terminal_id))
+            };
+            if !matches!(gate, Ok(idx) if idx == terminal_idx) {
+                return Ok((
+                    self.refuse_console_tool(
+                        writer,
+                        messages,
+                        &tc.name,
+                        &tc.call_id,
+                        "submit_not_current",
+                        &format!(
+                            "submit refused — the terminal step {terminal_id} is not \
+                             the current step; earlier steps must be done first"
+                        ),
+                    )
+                    .await?,
+                    None,
+                ));
+            }
+            let epoch = self.blackboard.read().plan.plan_epoch;
+            let pending = {
+                let p = self.delivery_pending.lock().unwrap();
+                p.0 == epoch && p.1
+            };
+            let status = self.compute_delivery_status(host);
+            let (msg, structured, phase) = if !pending {
+                {
+                    let mut w = self.blackboard.write();
+                    w.plan.delivery_status = Some(status.clone());
+                }
+                *self.delivery_pending.lock().unwrap() = (epoch, true);
+                (
+                    format!(
+                        "submit: 交付状态已渲染进黑板 plan 视图；核查后同动作再触发一次确认递交。\n{status}"
+                    ),
+                    serde_json::json!({ "phase": "requested", "status": status }),
+                    "requested",
+                )
+            } else {
+                {
+                    let mut w = self.blackboard.write();
+                    w.plan.delivery_status = Some(status.clone());
+                    crate::planning::mark_step_done(
+                        &mut w.plan.steps,
+                        terminal_idx,
+                        &tc.call_id,
+                        None,
+                    );
+                }
+                *self.delivery_pending.lock().unwrap() = (epoch, false);
+                (
+                    format!(
+                        "submit: 递交已确认，末步 {terminal_id} 完成，进入最终回答流程。\n{status}"
+                    ),
+                    serde_json::json!({
+                        "phase": "confirmed",
+                        "status": status,
+                        "step_id": terminal_id,
+                    }),
+                    "confirmed",
+                )
+            };
+            writer
+                .record(
+                    EventType::ToolCompleted,
+                    serde_json::json!({
+                        "tool": tc.name,
+                        "call_id": tc.call_id,
+                        "exit_code": 0,
+                        "delivery_phase": phase,
+                    }),
+                )
+                .await?;
+            messages.push(Message {
+                role: Role::Tool,
+                content: msg.clone(),
+                tool_call_id: Some(tc.call_id.clone()),
+                tool_calls: Vec::new(),
+                reasoning_content: None,
+            });
+            return Ok((
+                ToolResult {
+                    output: msg,
+                    exit_code: Some(0),
+                    output_encoding: None,
+                    structured: Some(structured),
+                    ..Default::default()
+                },
+                None,
+            ));
+        }
         // PLAN-FIRST 阶段 C (2026-08-16, ADR-0010 §14.17⑱ / 设计 §7.5):
         // `console_step_done` —— direct 模式的有记录例外收口：模型提交
         // {step_id, transition_id, trace_id}，机械层校验（步骤为当前
@@ -9518,6 +9793,38 @@ impl AgentLoopController {
                     None,
                 ));
             };
+            // AGENT-DELIVERY-FLOW (2026-08-23, 设计 §2.2): the final step is
+            // the fixed 递交/完成 step — it advances ONLY via the `submit`
+            // delivery path, never via the direct-mode evidence exception
+            // (否则模型可绕过机械交付状态直接"完成"末步).
+            let step_is_terminal = {
+                let w = self.blackboard.read();
+                w.plan
+                    .steps
+                    .iter()
+                    .position(|s| s.id == step_id)
+                    .map(|idx| idx + 1 == w.plan.steps.len())
+                    .unwrap_or(false)
+            };
+            if step_is_terminal {
+                return Ok((
+                    self.refuse_console_tool(
+                        writer,
+                        messages,
+                        &tc.name,
+                        &tc.call_id,
+                        "console_step_done_terminal_step",
+                        &format!(
+                            "console_step_done refused — step {step_id} is the fixed \
+                             递交/完成 step; advance it only via the submit delivery \
+                             action (call `submit` to render the mechanical delivery \
+                             status, then call it again to confirm)"
+                        ),
+                    )
+                    .await?,
+                    None,
+                ));
+            }
             let (mode_ok, current_transition, trace_ok) = {
                 let state = self.console_mode_state.lock().unwrap();
                 (
@@ -9869,6 +10176,11 @@ impl AgentLoopController {
                         structured: None,
                         policy_denial: res.policy_denial.clone(),
                         timed_out: res.timed_out,
+                        // AGENT-DELIVERY-FLOW (2026-08-23, 设计 §2.3): 透传
+                        // host 计算的工作区 delta——终端/运行类订单 receipt
+                        // 据此挂变更清单（run_tests 特殊路径已在上面透传）。
+                        workspace_delta: res.workspace_delta.clone(),
+                        workspace_delta_truncated: res.workspace_delta_truncated,
                     },
                     true,
                 )
@@ -10385,6 +10697,49 @@ mod tests {
         }
     }
 
+    /// AGENT-DELIVERY-FLOW (2026-08-23, 设计 §2.2/§2.3): a test host with a
+    /// stateful workspace-snapshot queue — the first `workspace_snapshot`
+    /// call serves as the plan-approval baseline, later calls serve as the
+    /// live snapshots at `submit`; plus a fixed tool result for order
+    /// execution.
+    struct DeliveryHost {
+        journal: JournalRecorder,
+        tool_result: ToolResult,
+        snapshots: std::sync::Mutex<VecDeque<std::collections::HashMap<String, (u64, u64, u32)>>>,
+    }
+
+    #[async_trait]
+    impl LoopHost for DeliveryHost {
+        fn journal(&self) -> &JournalRecorder {
+            &self.journal
+        }
+        fn tools_registry(&self) -> &dyn ToolRegistry {
+            &EmptyRegistry
+        }
+        fn session_cwd(&self) -> std::path::PathBuf {
+            self.journal.journal_dir().to_path_buf()
+        }
+        fn workspace_snapshot(&self) -> Option<std::collections::HashMap<String, (u64, u64, u32)>> {
+            self.snapshots.lock().unwrap().pop_front()
+        }
+        async fn request_permission(
+            &self,
+            _risk: RiskClass,
+            _tool: &str,
+            _args: &serde_json::Value,
+        ) -> Result<PermitDecision, PermitError> {
+            Ok(PermitDecision::AllowOnce)
+        }
+        async fn call_tool(
+            &self,
+            _name: &str,
+            _args: serde_json::Value,
+            _call_id: &str,
+        ) -> Result<ToolResult, ToolError> {
+            Ok(self.tool_result.clone())
+        }
+    }
+
     /// P0-C S2 (2026-08-15): a host that denies every permission — used to
     /// verify the console adapter maps permission denials to
     /// `step=policy` / `code=policy_denied`.
@@ -10544,10 +10899,10 @@ mod tests {
                     "evidence": ["src/cache.rs"]
                 },
                 {
-                    "id": "s2",
+                    "id": "deliver",
                     "goal": "实施修复",
                     "actions": [
-                        {"step_id": "s2", "do": "workspace.search_replace", "with": {"path": "src/cache.rs"}}
+                        {"step_id": "deliver", "do": "workspace.search_replace", "with": {"path": "src/cache.rs"}}
                     ],
                     "acceptance": "修复已落地",
                     "evidence": ["src/cache.rs"]
@@ -19145,6 +19500,7 @@ mod tests {
                         code: code.to_string(),
                         reason: "policy reason".to_string(),
                     }),
+                    ..Default::default()
                 }),
             };
             let mut writer = EventWriter::new(
@@ -19255,6 +19611,7 @@ mod tests {
                     structured: None,
                     timed_out: false,
                     policy_denial: None,
+                    ..Default::default()
                 }),
             };
             let mut writer = EventWriter::new(
@@ -24332,6 +24689,7 @@ mod tests {
             workspace_delta: vec![crate::host::WorkspaceDeltaEntry {
                 path: "cache/artifact.json".to_string(),
                 kind: crate::host::WorkspaceDeltaKind::Added,
+                size: 128,
             }],
             workspace_delta_truncated: false,
         };
@@ -25152,12 +25510,15 @@ mod tests {
             journal,
             tool_result: None,
         };
-        // First text-only round is the final-answer candidate (gate fires),
+        // First text-only round is the final-answer candidate (gate fires);
         // the post-gate answer cites a source that does not exist in this
-        // run's evidence.
+        // run's evidence (AGENT-DELIVERY-FLOW 2026-08-23: first failure is
+        // a bounded correction opportunity, the SAME failure again restores
+        // the hard block).
         let gateway: Arc<dyn ModelGateway> = Arc::new(FakeProvider::new(vec![
             ScriptedResponse::text("草稿"),
             ScriptedResponse::text("终答 [来源: SRC-999]"),
+            ScriptedResponse::text("终答再试 [来源: SRC-999]"),
         ]));
         let controller = AgentLoopController::with_gateway(gateway);
         let (response, _, _) = controller
@@ -25174,9 +25535,15 @@ mod tests {
         let events = events(&dir);
         let citation = events
             .iter()
-            .find(|e| e.event_type == EventType::CitationValidation)
-            .expect("citation_validation event must be journaled");
+            .filter(|e| e.event_type == EventType::CitationValidation)
+            .last()
+            .expect("citation_validation hard-block event must be journaled");
         assert_eq!(citation.payload["decision"], serde_json::json!("block"));
+        assert_eq!(citation.payload["attempt"], serde_json::json!(2));
+        assert_eq!(
+            citation.payload["correction_allowed"],
+            serde_json::json!(false)
+        );
         assert_eq!(citation.payload["degraded"], serde_json::json!(true));
         assert_eq!(citation.payload["marker_count"], serde_json::json!(1));
         let reasons = citation.payload["reason_codes"].as_array().unwrap();
@@ -25187,6 +25554,69 @@ mod tests {
         let markers = citation.payload["markers"].as_array().unwrap();
         assert_eq!(markers[0]["binding"], serde_json::json!("ledger_source_id"));
         assert_eq!(markers[0]["status"], serde_json::json!("failed"));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// AGENT-DELIVERY-FLOW (2026-08-23, 设计 §2.4): 引用校验有界修正——
+    /// 第一次失败 journal `retry`（attempt=1 / correction_allowed=true）
+    /// 并把失败报告作为用户消息注入，模型重写后的最终回答重新走完整校验；
+    /// 通过后交付修正文本，不触发硬阻断。
+    #[tokio::test]
+    async fn citation_validation_allows_one_correction_then_passes() {
+        let dir = test_dir();
+        let journal = JournalRecorder::new(dir.clone());
+        let host = TestHost {
+            journal,
+            tool_result: None,
+        };
+        let fake = Arc::new(FakeProvider::new(vec![
+            ScriptedResponse::text("草稿"),
+            ScriptedResponse::text("终答 [来源: SRC-999]"),
+            // 修正轮：去掉未绑定引用标记 → 校验通过。
+            ScriptedResponse::text("终答修正（无引用标记）"),
+        ]));
+        let gateway: Arc<dyn ModelGateway> = fake.clone();
+        let controller = AgentLoopController::with_gateway(gateway);
+        let (response, _, _) = controller
+            .run_turn(
+                &host,
+                "hello",
+                "RUN-CITE-RETRY",
+                MANIFEST,
+                0,
+                None,
+                None,
+                None,
+            )
+            .await
+            .unwrap();
+        assert_eq!(response, "终答修正（无引用标记）");
+        let events = events(&dir);
+        let citation = events
+            .iter()
+            .find(|e| e.event_type == EventType::CitationValidation)
+            .expect("citation_validation retry event must be journaled");
+        assert_eq!(citation.payload["decision"], serde_json::json!("retry"));
+        assert_eq!(citation.payload["attempt"], serde_json::json!(1));
+        assert_eq!(
+            citation.payload["correction_allowed"],
+            serde_json::json!(true)
+        );
+        assert_eq!(citation.payload["degraded"], serde_json::json!(true));
+        let reasons = citation.payload["reason_codes"].as_array().unwrap();
+        assert!(
+            reasons.iter().any(|r| r == "unknown_source_id"),
+            "{reasons:?}"
+        );
+        // 修正机会的用户消息已注入（机械块，不持久化）。
+        assert!(
+            fake.received_requests()
+                .iter()
+                .flat_map(|r| r.messages.iter())
+                .any(|m| m.role == Role::User
+                    && m.content.starts_with("[CITATION_VALIDATION_FAILED")),
+            "the failure report must be injected as a user message"
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -26916,6 +27346,7 @@ mod tests {
             "blackboard_action_write",
             "console_step_done",
             "console_return_to_console",
+            "submit",
         ];
         assert!(
             console_tools.iter().all(|t| allowed.contains(&t.as_str())),
@@ -26969,7 +27400,7 @@ mod tests {
             ScriptedResponse::tool_calls(vec![action_write_call(
                 "call-w-s2b",
                 "workspace.read_file",
-                Some("s2"),
+                Some("deliver"),
                 serde_json::json!({"target_file": "b.txt"}),
             )]),
             ScriptedResponse::text("完成"),
@@ -27000,8 +27431,12 @@ mod tests {
                 r.plan.steps[0].status
             );
             assert!(
-                r.plan.steps[1].status.is_done(),
-                "s2 must be done: {:?}",
+                matches!(
+                    r.plan.steps[1].status,
+                    crate::blackboard::StepStatus::InProgress
+                ),
+                "the terminal step must NOT auto-advance on an ordinary order \
+                 receipt (submit-only): {:?}",
                 r.plan.steps[1].status
             );
             let refused = r
@@ -27361,6 +27796,9 @@ mod tests {
             let mut w = controller.blackboard().write();
             w.plan.plan_id = Some("plan-1".to_string());
             w.plan.plan_epoch = 1;
+            // AGENT-DELIVERY-FLOW (2026-08-23): the plan ends with a fixed
+            // terminal step — `console_step_done` targets the NON-terminal
+            // in-progress step s1 (the terminal step is submit-only).
             w.plan.steps.push(crate::blackboard::PlanStep {
                 id: "s1".to_string(),
                 goal: "g".to_string(),
@@ -27368,6 +27806,14 @@ mod tests {
                 acceptance: "a".to_string(),
                 evidence: Vec::new(),
                 status: crate::blackboard::StepStatus::InProgress,
+            });
+            w.plan.steps.push(crate::blackboard::PlanStep {
+                id: "deliver".to_string(),
+                goal: "递交".to_string(),
+                actions: Vec::new(),
+                acceptance: "a".to_string(),
+                evidence: Vec::new(),
+                status: crate::blackboard::StepStatus::Pending,
             });
         }
         let mut writer = discard_event_writer("RUN-SDP");
@@ -27418,6 +27864,400 @@ mod tests {
             "step must be done after valid evidence: {:?}",
             r.plan.steps[0].status
         );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    // ── AGENT-DELIVERY-FLOW (2026-08-23, ADR-0010 §14.35 第 19 项) ─────
+
+    /// 设计 §2.2：`submit` 两阶段——第一次调用机械计算交付状态渲染进黑板
+    /// plan 视图（末步不置 done）；第二次调用确认置末步 done（进入最终回答
+    /// 流程）。普通订单绑定末步不产生 done（末步仅显式递交推进）。
+    #[tokio::test]
+    async fn submit_two_phase_renders_status_then_confirms() {
+        let dir = test_dir();
+        let baseline =
+            std::collections::HashMap::from([("src/cache.rs".to_string(), (10u64, 1u64, 0u32))]);
+        let after = std::collections::HashMap::from([
+            ("src/cache.rs".to_string(), (10u64, 1u64, 0u32)),
+            ("output.txt".to_string(), (5u64, 2u64, 0u32)),
+        ]);
+        let host = DeliveryHost {
+            journal: JournalRecorder::new(dir.clone()),
+            tool_result: ok_result(),
+            snapshots: std::sync::Mutex::new(VecDeque::from([
+                baseline.clone(),
+                after.clone(),
+                after.clone(),
+            ])),
+        };
+        let fake = Arc::new(FakeProvider::new(vec![
+            ScriptedResponse::tool_calls(vec![plan_write_call("call-plan-1", valid_plan_json())]),
+            ScriptedResponse::tool_calls(vec![action_write_call(
+                "call-w-s1",
+                "workspace.read_file",
+                Some("s1"),
+                serde_json::json!({"target_file": "a.txt"}),
+            )]),
+            ScriptedResponse::tool_calls(vec![action_write_call(
+                "call-w-deliver",
+                "workspace.read_file",
+                Some("deliver"),
+                serde_json::json!({"target_file": "b.txt"}),
+            )]),
+            ScriptedResponse::tool_calls(vec![ToolCall {
+                name: "submit".to_string(),
+                arguments: serde_json::json!({}),
+                call_id: "call-sub-1".to_string(),
+            }]),
+            ScriptedResponse::tool_calls(vec![ToolCall {
+                name: "submit".to_string(),
+                arguments: serde_json::json!({}),
+                call_id: "call-sub-2".to_string(),
+            }]),
+            ScriptedResponse::text("完成"),
+            ScriptedResponse::text("完成"),
+        ]));
+        let gateway: Arc<dyn ModelGateway> = fake.clone();
+        let controller = stage_c_controller(gateway);
+        controller
+            .run_turn(
+                &host,
+                "修复缓存回归",
+                "RUN-SUB",
+                MANIFEST,
+                0,
+                None,
+                None,
+                None,
+            )
+            .await
+            .unwrap();
+
+        let submits: Vec<_> = events(&dir)
+            .into_iter()
+            .filter(|e| {
+                e.event_type == EventType::ToolCompleted
+                    && e.payload.get("tool").and_then(serde_json::Value::as_str) == Some("submit")
+            })
+            .collect();
+        assert_eq!(submits.len(), 2, "two submit calls (request + confirm)");
+        assert_eq!(
+            submits[0].payload["delivery_phase"],
+            serde_json::json!("requested")
+        );
+        assert_eq!(
+            submits[1].payload["delivery_phase"],
+            serde_json::json!("confirmed")
+        );
+        {
+            let r = controller.blackboard().read();
+            let status = r
+                .plan
+                .delivery_status
+                .clone()
+                .expect("delivery status rendered into the plan section");
+            assert!(
+                status.contains("[delivery] 状态: 1 个变更 (output.txt A)"),
+                "{status}"
+            );
+            assert!(
+                r.plan.steps[1].status.is_done(),
+                "terminal step done after the confirm call: {:?}",
+                r.plan.steps[1].status
+            );
+            let plan_text = crate::epoch::render_section(
+                &r.plan,
+                &r.edits,
+                &r.tool_actions,
+                &r.exec,
+                &r.actions,
+                "plan",
+                None,
+                None,
+            );
+            assert!(plan_text.contains("[delivery] 状态:"), "{plan_text}");
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// 设计 §2.2：`submit` 在上一步未 done 时拒绝（submit_not_current）——
+    /// 末步只有成为当前可执行步骤后才能递交。
+    #[tokio::test]
+    async fn submit_refused_until_terminal_step_is_current() {
+        let dir = test_dir();
+        let host = DeliveryHost {
+            journal: JournalRecorder::new(dir.clone()),
+            tool_result: ok_result(),
+            snapshots: std::sync::Mutex::new(VecDeque::from([std::collections::HashMap::new()])),
+        };
+        let fake = Arc::new(FakeProvider::new(vec![
+            ScriptedResponse::tool_calls(vec![plan_write_call("call-plan-1", valid_plan_json())]),
+            ScriptedResponse::tool_calls(vec![ToolCall {
+                name: "submit".to_string(),
+                arguments: serde_json::json!({}),
+                call_id: "call-sub-early".to_string(),
+            }]),
+            ScriptedResponse::text("完成"),
+            ScriptedResponse::text("完成"),
+        ]));
+        let gateway: Arc<dyn ModelGateway> = fake.clone();
+        let controller = stage_c_controller(gateway);
+        controller
+            .run_turn(
+                &host,
+                "修复缓存回归",
+                "RUN-SUB-EARLY",
+                MANIFEST,
+                0,
+                None,
+                None,
+                None,
+            )
+            .await
+            .unwrap();
+        let denied = events(&dir)
+            .into_iter()
+            .find(|e| {
+                e.event_type == EventType::ToolCompleted
+                    && e.payload.get("tool").and_then(serde_json::Value::as_str) == Some("submit")
+            })
+            .expect("submit ToolCompleted journaled");
+        assert_eq!(denied.payload["exit_code"].as_u64(), Some(1));
+        assert_eq!(denied.payload["error"].as_str(), Some("submit_not_current"));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// 设计 §2.2：`console_step_done` 对末步拒绝（console_step_done_
+    /// terminal_step）——末步仅允许显式递交路径推进，直接证据门不可绕过。
+    #[tokio::test]
+    async fn console_step_done_refused_for_terminal_step() {
+        let dir = test_dir();
+        let controller = stage_c_controller(Arc::new(FakeProvider::new(Vec::new())));
+        {
+            let mut w = controller.blackboard().write();
+            w.plan.plan_id = Some("plan-1".to_string());
+            w.plan.plan_epoch = 1;
+            w.plan.steps.push(crate::blackboard::PlanStep {
+                id: "s1".to_string(),
+                goal: "g".to_string(),
+                actions: Vec::new(),
+                acceptance: "a".to_string(),
+                evidence: Vec::new(),
+                status: crate::blackboard::StepStatus::Done(crate::blackboard::DoneEvidence {
+                    receipt_id: "ORD-1".to_string(),
+                    direct: None,
+                }),
+            });
+            w.plan.steps.push(crate::blackboard::PlanStep {
+                id: "deliver".to_string(),
+                goal: "递交".to_string(),
+                actions: Vec::new(),
+                acceptance: "a".to_string(),
+                evidence: Vec::new(),
+                status: crate::blackboard::StepStatus::InProgress,
+            });
+        }
+        let host = TestHost {
+            journal: JournalRecorder::new(dir.clone()),
+            tool_result: None,
+        };
+        let tc = ToolCall {
+            name: "console_step_done".to_string(),
+            arguments: serde_json::json!({
+                "step_id": "deliver",
+                "transition_id": "TRANS-ANY",
+                "trace_id": "TRACE-ANY",
+            }),
+            call_id: "sd-term".to_string(),
+        };
+        let mut messages = Vec::new();
+        let mut writer = discard_event_writer("RUN-SD-TERM");
+        let (result, _) = controller
+            .run_host_tool_with_plan_gate(
+                &host,
+                &mut writer,
+                &tc,
+                "prompt",
+                orz_assurance::gates::ipg::WorkspaceTrust::NotObserved,
+                &mut messages,
+                1,
+                None,
+                None,
+                None,
+                true,
+                true,
+                None,
+                None,
+            )
+            .await
+            .unwrap();
+        assert_eq!(result.exit_code, Some(1));
+        assert!(
+            result
+                .output
+                .contains("advance it only via the submit delivery action"),
+            "{:?}",
+            result.output
+        );
+        let r = controller.blackboard().read();
+        assert!(
+            !r.plan.steps[1].status.is_done(),
+            "terminal step must stay in_progress: {:?}",
+            r.plan.steps[1].status
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// 设计 §2.3：编辑类订单（search_replace）的 receipt 回显 diff（有界
+    /// 截断）；常驻 actions 板只加 `changed: N files` 短计数。
+    #[tokio::test]
+    async fn search_replace_receipt_carries_diff_and_changed_count() {
+        let dir = test_dir();
+        let host = TestHost {
+            journal: JournalRecorder::new(dir.clone()),
+            tool_result: Some(ok_result()),
+        };
+        let fake = Arc::new(FakeProvider::new(vec![
+            ScriptedResponse::tool_calls(vec![plan_write_call("call-plan-1", valid_plan_json())]),
+            ScriptedResponse::tool_calls(vec![action_write_call(
+                "call-w-edit",
+                "workspace.search_replace",
+                Some("s1"),
+                serde_json::json!({
+                    "file_path": "src/cache.rs",
+                    "old_string": "旧文本",
+                    "new_string": "新文本",
+                }),
+            )]),
+            ScriptedResponse::text("完成"),
+            ScriptedResponse::text("完成"),
+        ]));
+        let gateway: Arc<dyn ModelGateway> = fake.clone();
+        let controller = stage_c_controller(gateway);
+        controller
+            .run_turn(
+                &host,
+                "修复缓存回归",
+                "RUN-EDIT-DIFF",
+                MANIFEST,
+                0,
+                None,
+                None,
+                None,
+            )
+            .await
+            .unwrap();
+        let r = controller.blackboard().read();
+        let result = r
+            .actions
+            .results
+            .iter()
+            .find(|res| res.ok && res.action.as_deref() == Some("workspace.search_replace"))
+            .expect("search_replace receipt");
+        let diff = result
+            .response
+            .as_ref()
+            .and_then(|v| v.get("diff"))
+            .and_then(serde_json::Value::as_str)
+            .expect("receipt carries the diff");
+        assert!(diff.contains("-旧文本"), "{diff}");
+        assert!(diff.contains("+新文本"), "{diff}");
+        let actions_text = crate::epoch::render_section(
+            &r.plan,
+            &r.edits,
+            &r.tool_actions,
+            &r.exec,
+            &r.actions,
+            "actions",
+            None,
+            None,
+        );
+        assert!(actions_text.contains("changed: 1 files"), "{actions_text}");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// 设计 §2.3：终端/运行类订单的 receipt 挂 workspace_delta（文件清单 +
+    /// 增删改 + 大小 + 截断标记）；actions 板短计数。
+    #[tokio::test]
+    async fn terminal_order_receipt_carries_workspace_delta() {
+        let dir = test_dir();
+        let host = TestHost {
+            journal: JournalRecorder::new(dir.clone()),
+            tool_result: Some(ToolResult {
+                output: "done".to_string(),
+                exit_code: Some(0),
+                output_encoding: None,
+                structured: None,
+                workspace_delta: vec![crate::host::WorkspaceDeltaEntry {
+                    path: "gen.txt".to_string(),
+                    kind: crate::host::WorkspaceDeltaKind::Added,
+                    size: 3,
+                }],
+                workspace_delta_truncated: false,
+                ..Default::default()
+            }),
+        };
+        let fake = Arc::new(FakeProvider::new(vec![
+            ScriptedResponse::tool_calls(vec![plan_write_call("call-plan-1", valid_plan_json())]),
+            ScriptedResponse::tool_calls(vec![action_write_call(
+                "call-w-term",
+                "workspace.run_terminal",
+                Some("s1"),
+                serde_json::json!({"command": "touch gen.txt", "description": "生成产物"}),
+            )]),
+            ScriptedResponse::text("完成"),
+            ScriptedResponse::text("完成"),
+        ]));
+        let gateway: Arc<dyn ModelGateway> = fake.clone();
+        let controller = stage_c_controller(gateway);
+        controller
+            .run_turn(
+                &host,
+                "修复缓存回归",
+                "RUN-TERM-DELTA",
+                MANIFEST,
+                0,
+                None,
+                None,
+                None,
+            )
+            .await
+            .unwrap();
+        let r = controller.blackboard().read();
+        let result = r
+            .actions
+            .results
+            .iter()
+            .find(|res| res.ok && res.action.as_deref() == Some("workspace.run_terminal"))
+            .expect("run_terminal receipt");
+        let delta = result
+            .response
+            .as_ref()
+            .and_then(|v| v.get("workspace_delta"))
+            .and_then(serde_json::Value::as_array)
+            .expect("receipt carries workspace_delta");
+        assert_eq!(delta.len(), 1);
+        assert_eq!(delta[0]["path"], serde_json::json!("gen.txt"));
+        assert_eq!(delta[0]["kind"], serde_json::json!("added"));
+        assert_eq!(delta[0]["size"], serde_json::json!(3));
+        assert_eq!(
+            result
+                .response
+                .as_ref()
+                .and_then(|v| v.get("workspace_delta_truncated")),
+            Some(&serde_json::json!(false))
+        );
+        let actions_text = crate::epoch::render_section(
+            &r.plan,
+            &r.edits,
+            &r.tool_actions,
+            &r.exec,
+            &r.actions,
+            "actions",
+            None,
+            None,
+        );
+        assert!(actions_text.contains("changed: 1 files"), "{actions_text}");
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

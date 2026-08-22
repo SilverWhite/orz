@@ -39,6 +39,10 @@ pub(crate) const MAX_EVIDENCE_ITEMS_PER_STEP: usize = 16;
 /// mechanical ceiling, not a quality target).
 pub(crate) const MAX_PLAN_TOTAL_CHARS: usize = 32768;
 pub(crate) const ACTION_NAME_MAX_CHARS: usize = 128;
+/// AGENT-DELIVERY-FLOW (2026-08-23, 设计 §2.2): the final plan step must be
+/// a fixed terminal step (递交/完成) — it never auto-advances on ordinary
+/// order receipts; only the explicit `submit` delivery path marks it done.
+pub(crate) const TERMINAL_STEP_IDS: &[&str] = &["deliver", "submit"];
 
 /// Per-run plan-gate state (local to `run_agent_loop`, main lane only).
 #[derive(Debug, Clone)]
@@ -161,6 +165,21 @@ pub(crate) fn parse_and_validate_plan(arguments: &Value) -> PlanVerdict {
         }
         Some(_) => errors.push("steps must be an array".to_string()),
         None => errors.push("missing required field: steps".to_string()),
+    }
+    // AGENT-DELIVERY-FLOW (2026-08-23, 设计 §2.2): the plan's LAST step must
+    // be a fixed terminal step — the model writes the plan in the template
+    // shape (…, deliver/submit) and the delivery gate owns the final step.
+    // An empty-id last step already carries its own validation error; skip
+    // the extra noise.
+    if let Some(last) = steps.last()
+        && !last.id.is_empty()
+        && !TERMINAL_STEP_IDS.contains(&last.id.as_str())
+    {
+        errors.push(format!(
+            "the final step id must be a terminal step ({}); the last step is \
+             the fixed 递交/完成 step and advances only via the submit delivery action",
+            TERMINAL_STEP_IDS.join(" / ")
+        ));
     }
 
     // Total plan size ceiling (P3-2, 2026-08-16): even with per-field caps,
@@ -592,10 +611,10 @@ mod tests {
                         "status": "pending"
                     },
                     {
-                        "id": "s2",
+                        "id": "deliver",
                         "goal": "实施修复",
                         "actions": [
-                            {"step_id": "s2", "do": "workspace.search_replace", "with": {"path": "src/cache.rs"}}
+                            {"step_id": "deliver", "do": "workspace.search_replace", "with": {"path": "src/cache.rs"}}
                         ],
                         "acceptance": "修复已落地",
                         "evidence": ["src/cache.rs"]
@@ -734,15 +753,56 @@ mod tests {
                 "goal": "g",
                 "steps": [
                     {
-                        "id": "s1",
+                        "id": "deliver",
                         "goal": "g",
                         "actions": [
-                            {"step_id": "s1", "do": "workspace.read_file", "with": {}}
+                            {"step_id": "deliver", "do": "workspace.read_file", "with": {}}
                         ],
                         "acceptance": "a",
                         "evidence": [],
                     }
                 ],
+            }
+        }));
+        assert!(v.errors.is_empty(), "{:?}", v.errors);
+    }
+
+    /// AGENT-DELIVERY-FLOW (2026-08-23, 设计 §2.2): the plan's final step
+    /// must be a fixed terminal step (递交/完成) — mechanically rejected
+    /// otherwise (plan_write validation).
+    #[test]
+    fn final_step_must_be_terminal() {
+        let v = parse_and_validate_plan(&serde_json::json!({
+            "plan": {
+                "plan_id": "p",
+                "goal": "g",
+                "steps": [
+                    {"id": "s1", "goal": "a", "actions": [{"step_id": "s1", "do": "x", "with": {}}], "acceptance": "a", "evidence": []},
+                    {"id": "s2", "goal": "b", "actions": [{"step_id": "s2", "do": "y", "with": {}}], "acceptance": "b", "evidence": []}
+                ]
+            }
+        }));
+        assert!(
+            v.errors
+                .iter()
+                .any(|e| e.contains("final step id must be a terminal step")),
+            "{:?}",
+            v.errors
+        );
+    }
+
+    /// AGENT-DELIVERY-FLOW (2026-08-23, 设计 §2.2): both allowlisted
+    /// terminal ids (`deliver` / `submit`) pass the final-step rule.
+    #[test]
+    fn final_step_submit_is_accepted() {
+        let v = parse_and_validate_plan(&serde_json::json!({
+            "plan": {
+                "plan_id": "p",
+                "goal": "g",
+                "steps": [
+                    {"id": "s1", "goal": "a", "actions": [{"step_id": "s1", "do": "x", "with": {}}], "acceptance": "a", "evidence": []},
+                    {"id": "submit", "goal": "递交", "actions": [{"step_id": "submit", "do": "x", "with": {}}], "acceptance": "a", "evidence": []}
+                ]
             }
         }));
         assert!(v.errors.is_empty(), "{:?}", v.errors);

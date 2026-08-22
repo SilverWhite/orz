@@ -778,6 +778,12 @@ pub(crate) async fn run_agent_loop(
     // `OrientationSessionState` threaded through the turn chain; output
     // repetition is handled by the generation-time output-health guard.
     let mut counterexample_fired = false;
+    // AGENT-DELIVERY-FLOW (2026-08-23, 设计 §2.4): citation-validation
+    // failure count for the bounded correction opportunity — 0 failures
+    // yet = one rewrite allowed; the second failure (initial + 1
+    // correction) restores the hard block. Never reset mid-run (the
+    // correction is bounded per run, not per round).
+    let mut citation_failures: u32 = 0;
     // ORZ-ORIENTATION-FORCED-TEMPLATE (2026-08-15, ADR-0010 §14.16): a
     // checkpoint fire whose block was injected but whose forced-template
     // round has not completed yet (main lane only — retrieval lanes commit
@@ -1843,15 +1849,27 @@ pub(crate) async fn run_agent_loop(
                 let report = controller
                     .validate_final_answer_citations(response.text.as_deref().unwrap_or_default());
                 if !report.passed {
-                    let block =
-                        crate::prompt::citation_validation_failed_block(&report.reason_codes);
+                    // AGENT-DELIVERY-FLOW (2026-08-23, 设计 §2.4): 引用校验
+                    // 有界修正机会——第一次失败把结构化失败报告（reason_codes
+                    // + markers）作为用户消息注入（注册为 injected block，
+                    // 不持久化），模型可见失败原因并重写最终回答；同一失败
+                    // 第二次（初始 + 1 次修正）恢复硬阻断。重试不重置计划/
+                    // 步骤/run 状态；修正后重新走完整最终回答门。
+                    citation_failures = citation_failures.saturating_add(1);
+                    let correction_allowed = citation_failures == 1;
+                    let block = crate::prompt::citation_validation_failed_block(
+                        &report.reason_codes,
+                        correction_allowed,
+                    );
                     writer
                         .record(
                             EventType::CitationValidation,
                             serde_json::json!({
                                 "schema_version": "0.2.0-draft",
                                 "position": "final_answer",
-                                "decision": "block",
+                                "decision": if correction_allowed { "retry" } else { "block" },
+                                "attempt": citation_failures,
+                                "correction_allowed": correction_allowed,
                                 "marker_count": report.markers.len(),
                                 "reason_codes": report.reason_codes,
                                 "degraded": true,
@@ -1875,6 +1893,18 @@ pub(crate) async fn run_agent_loop(
                             }),
                         )
                         .await?;
+                    if correction_allowed {
+                        // 有界修正：失败报告作为用户消息注入（机械块，不
+                        // 持久化），模型下一轮重写最终回答；不置 last_text。
+                        messages.push(Message {
+                            role: Role::User,
+                            content: block,
+                            tool_call_id: None,
+                            tool_calls: Vec::new(),
+                            reasoning_content: None,
+                        });
+                        continue;
+                    }
                     last_text = Some(block);
                     break;
                 }

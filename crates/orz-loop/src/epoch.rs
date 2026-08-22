@@ -298,6 +298,12 @@ pub fn render_section(
                     step.evidence.len(),
                 ));
             }
+            // AGENT-DELIVERY-FLOW (2026-08-23, 设计 §2.2): the mechanical
+            // delivery status line (harness-computed workspace change list;
+            // tool output — rendered by `submit`, cleared on rotation).
+            if let Some(status) = &plan.delivery_status {
+                lines.push(status.clone());
+            }
             lines.join("\n")
         }
         "edits" => {
@@ -448,9 +454,31 @@ pub fn render_section(
                     // TraceStore；模型按需经 blackboard_read receipt_id
                     // 点读回查（方案 B，ADR-0010 §14.31 / 设计 §4.5）。
                     let (step, code) = failure_envelope_fields(&result.error);
+                    // AGENT-DELIVERY-FLOW (2026-08-23, 设计 §2.3): the
+                    // resident board adds only a short `changed: N files`
+                    // count (cache-hit-rate discipline); the full diff/delta
+                    // stays in the receipt point-read.
+                    let changed = result
+                        .response
+                        .as_ref()
+                        .and_then(|r| {
+                            r.get("workspace_delta")
+                                .and_then(|d| d.as_array())
+                                .map(|a| a.len())
+                        })
+                        .or_else(|| {
+                            result
+                                .response
+                                .as_ref()
+                                .and_then(|r| r.get("diff"))
+                                .map(|_| 1)
+                        });
+                    let changed_str = changed
+                        .map(|n| format!(" changed: {n} files"))
+                        .unwrap_or_default();
                     let line = format!(
-                        "{} ok={} step={} code={} trace_id={}",
-                        result.order_id, result.ok, step, code, result.trace_id,
+                        "{} ok={} step={} code={} trace_id={}{}",
+                        result.order_id, result.ok, step, code, result.trace_id, changed_str,
                     );
                     lines.push(line);
                 }

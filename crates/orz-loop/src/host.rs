@@ -5,7 +5,8 @@
 //!
 //! See: INTEGRATED_AGENT_LOOP_AND_FORK_DESIGN_v0.2 §3.4
 
-use std::path::PathBuf;
+use std::collections::HashMap;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use async_trait::async_trait;
@@ -93,6 +94,14 @@ pub struct PolicyDenial {
 pub struct ToolResult {
     pub output: String,
     pub exit_code: Option<i32>,
+    /// AGENT-DELIVERY-FLOW (2026-08-23, 设计 §2.3): workspace changes a
+    /// mutation-capable host tool call caused (capped list; same semantics
+    /// as the run_tests delta). Populated by orz-host for mutation tools;
+    /// read-only tools and mock hosts leave it empty.
+    pub workspace_delta: Vec<WorkspaceDeltaEntry>,
+    /// AGENT-DELIVERY-FLOW: true when the per-call delta list was truncated
+    /// at the host cap.
+    pub workspace_delta_truncated: bool,
     /// P0-C S4 (2026-08-16): true when the host hit a per-call wall-clock
     /// bound and killed the tool's process tree before completion. The
     /// console adapter maps this structured signal to `tool_timeout` /
@@ -275,6 +284,11 @@ pub struct WorkspaceDeltaEntry {
     /// Worktree-relative path (forward-slash normalized on Windows).
     pub path: String,
     pub kind: WorkspaceDeltaKind,
+    /// Byte length of the file at the observed edge — after for
+    /// added/modified, before for deleted (AGENT-DELIVERY-FLOW
+    /// 2026-08-23: the console receipt delta carries the size so the
+    /// model can gauge change magnitude without a separate stat).
+    pub size: u64,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
@@ -283,6 +297,150 @@ pub enum WorkspaceDeltaKind {
     Added,
     Modified,
     Deleted,
+}
+
+/// RT-003 (2026-08-11): worktree metadata walk exclusions — VCS metadata,
+/// the host's own `.gsa` tree, and the heavyweight dependency/cache
+/// directories a tool would never legitimately write (recording
+/// node_modules churn would drown the trace). `__pycache__` /
+/// `.pytest_cache` / `.mypy_cache` / `.ruff_cache` / `.tox` are the Python
+/// test-runner's own cache surface — every run rewrites them, so without
+/// the exclusion the entry cap is consumed by cache noise and the real side
+/// effects get truncated away. Single-sourced here; orz-host imports the
+/// walk/diff helpers (AGENT-DELIVERY-FLOW 2026-08-23).
+pub const DELTA_EXCLUDED_DIRS: &[&str] = &[
+    ".git",
+    ".gsa",
+    "node_modules",
+    ".venv",
+    "venv",
+    "target",
+    "__pycache__",
+    ".pytest_cache",
+    ".mypy_cache",
+    ".ruff_cache",
+    ".tox",
+];
+
+/// RT-003: cap on the workspace-delta entries recorded per run_tests call.
+pub const RUN_TESTS_DELTA_MAX_ENTRIES: usize = 200;
+
+/// AGENT-DELIVERY-FLOW (2026-08-23, 设计 §2.2): the mechanical delivery
+/// status caps its rendered change list at 20 entries + a count line.
+pub const DELIVERY_DELTA_MAX_ENTRIES: usize = 20;
+
+/// AGENT-DELIVERY-FLOW (2026-08-23, 设计 §2.3): per-call receipt delta cap
+/// for host tools that can mutate the worktree (run_terminal_cmd etc.).
+pub const TOOL_DELTA_MAX_ENTRIES: usize = 200;
+
+/// RT-003: worktree metadata walk (zero content reads) — the workspace-delta
+/// baseline. Symlinks are not followed (a target outside the worktree is not
+/// a delta; a dangling link is not a file change). Windows junctions are
+/// directory reparse points — `file_type().is_symlink()` is false for them,
+/// so without an explicit reparse-point skip a junction pointing at an
+/// ancestor (or at a huge tree) would be walked unboundedly. Skip every
+/// reparse point, symlink or junction — both are linkage, not file content,
+/// in the delta semantics.
+pub fn workspace_delta_walk(cwd: &Path) -> HashMap<String, (u64, u64, u32)> {
+    let mut map = HashMap::new();
+    let mut stack = vec![cwd.to_path_buf()];
+    while let Some(dir) = stack.pop() {
+        let Ok(rd) = std::fs::read_dir(&dir) else {
+            continue;
+        };
+        for entry in rd.flatten() {
+            let path = entry.path();
+            let name = entry.file_name().to_string_lossy().to_string();
+            let Ok(ft) = entry.file_type() else {
+                continue;
+            };
+            if is_reparse_or_symlink(&path) {
+                continue;
+            }
+            if ft.is_dir() {
+                if !DELTA_EXCLUDED_DIRS.contains(&name.as_str()) {
+                    stack.push(path);
+                }
+            } else if ft.is_file()
+                && let Ok(md) = std::fs::metadata(&path)
+            {
+                let (mtime_secs, mtime_nanos) = match md.modified() {
+                    Ok(t) => {
+                        let d = t.duration_since(std::time::UNIX_EPOCH).unwrap_or_default();
+                        (d.as_secs(), d.subsec_nanos())
+                    }
+                    // No mtime support: (0,0) — every file diffs as
+                    // "modified" after a run (conservative; same
+                    // registered trade-off as the doc-index walk).
+                    Err(_) => (0, 0),
+                };
+                let rel = path
+                    .strip_prefix(cwd)
+                    .unwrap_or(&path)
+                    .to_string_lossy()
+                    .replace('\\', "/");
+                map.insert(rel, (md.len(), mtime_secs, mtime_nanos));
+            }
+        }
+    }
+    map
+}
+
+fn is_reparse_or_symlink(path: &Path) -> bool {
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::MetadataExt;
+        std::fs::symlink_metadata(path)
+            .map(|md| {
+                const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x0400;
+                md.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0
+            })
+            .unwrap_or(false)
+    }
+    #[cfg(not(windows))]
+    {
+        std::fs::symlink_metadata(path)
+            .map(|md| md.file_type().is_symlink())
+            .unwrap_or(false)
+    }
+}
+
+/// RT-003: diff two delta walks into the capped change list. Deterministic
+/// order (same discipline as the doc-index sorted entries).
+pub fn workspace_delta_diff(
+    before: &HashMap<String, (u64, u64, u32)>,
+    after: &HashMap<String, (u64, u64, u32)>,
+    cap: usize,
+) -> (Vec<WorkspaceDeltaEntry>, bool) {
+    let mut entries: Vec<WorkspaceDeltaEntry> = Vec::new();
+    for (path, after_stat) in after {
+        match before.get(path) {
+            None => entries.push(WorkspaceDeltaEntry {
+                path: path.clone(),
+                kind: WorkspaceDeltaKind::Added,
+                size: after_stat.0,
+            }),
+            Some(before_stat) if before_stat != after_stat => entries.push(WorkspaceDeltaEntry {
+                path: path.clone(),
+                kind: WorkspaceDeltaKind::Modified,
+                size: after_stat.0,
+            }),
+            _ => {}
+        }
+    }
+    for (path, before_stat) in before {
+        if !after.contains_key(path) {
+            entries.push(WorkspaceDeltaEntry {
+                path: path.clone(),
+                kind: WorkspaceDeltaKind::Deleted,
+                size: before_stat.0,
+            });
+        }
+    }
+    entries.sort_by(|a, b| a.path.cmp(&b.path));
+    let truncated = entries.len() > cap;
+    entries.truncate(cap);
+    (entries, truncated)
 }
 
 /// Result of running the fixed test command.
@@ -355,6 +513,15 @@ pub trait LoopHost: Send + Sync {
     /// may differ).
     fn session_cwd(&self) -> PathBuf {
         std::env::current_dir().unwrap_or_default()
+    }
+
+    /// AGENT-DELIVERY-FLOW (2026-08-23, 设计 §2.2): worktree metadata
+    /// snapshot used as the delivery-status baseline. `None` (default) =
+    /// the host does not provide a baseline — the mechanical delivery
+    /// status reports the change list as unavailable rather than
+    /// fabricating one. orz-host overrides with the real walk.
+    fn workspace_snapshot(&self) -> Option<HashMap<String, (u64, u64, u32)>> {
+        None
     }
 
     /// Whether the session is attached to an interactive user who can

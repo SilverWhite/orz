@@ -468,125 +468,11 @@ const TEST_ENV_ALLOWLIST: &[&str] = &[
 ];
 
 /// RT-003 (2026-08-11): directories excluded from the run_tests delta walk —
-/// VCS metadata, the host's own `.gsa` tree, and the heavyweight
-/// dependency/cache directories a test run would never legitimately write
-/// (recording node_modules churn would drown the trace). `__pycache__` /
-/// `.pytest_cache` / `.mypy_cache` / `.ruff_cache` / `.tox` are the Python
-/// test-runner's own cache surface (the primary harness deployment) —
-/// every run rewrites them, so without the exclusion the 200-entry cap is
-/// consumed by cache noise and the real side effects get truncated away
-/// (review D2-1/P1, 2026-08-11).
-const DELTA_EXCLUDED_DIRS: &[&str] = &[
-    ".git",
-    ".gsa",
-    "node_modules",
-    ".venv",
-    "venv",
-    "target",
-    "__pycache__",
-    ".pytest_cache",
-    ".mypy_cache",
-    ".ruff_cache",
-    ".tox",
-];
-
-/// RT-003: cap on the workspace-delta entries recorded per run_tests call.
-const RUN_TESTS_DELTA_MAX_ENTRIES: usize = 200;
-
-/// RT-003: worktree metadata walk (zero content reads) — the run_tests
-/// delta baseline. Symlinks are not followed (a target outside the worktree
-/// is not a delta; a dangling link is not a file change).
-fn workspace_delta_walk(cwd: &Path) -> std::collections::HashMap<String, (u64, u64, u32)> {
-    let mut map = std::collections::HashMap::new();
-    let mut stack = vec![cwd.to_path_buf()];
-    while let Some(dir) = stack.pop() {
-        let Ok(rd) = std::fs::read_dir(&dir) else {
-            continue;
-        };
-        for entry in rd.flatten() {
-            let path = entry.path();
-            let name = entry.file_name().to_string_lossy().to_string();
-            let Ok(ft) = entry.file_type() else {
-                continue;
-            };
-            // Review D2-2 (2026-08-11): Windows junctions are DIRECTORY
-            // reparse points — `file_type().is_symlink()` is false for them,
-            // so without this check a junction pointing at an ancestor (or
-            // at a huge tree like C:\Users) would be walked unboundedly
-            // (this walk runs OUTSIDE the test-run timeout). Skip every
-            // reparse point, symlink or junction — both are linkage, not
-            // file content, in the delta semantics. Single-sourced with the
-            // ACAF ticket side (2026-08-12): orz-paths
-            // `is_reparse_or_symlink` (symlink_metadata — NOT `metadata`,
-            // which would follow the junction and hide the 0x400 bit;
-            // the old local copy reused the read_dir entry type to skip the
-            // extra syscall on Unix — semantically equivalent, registered).
-            if orz_paths::resolve::is_reparse_or_symlink(&path) {
-                continue;
-            }
-            if ft.is_dir() {
-                if !DELTA_EXCLUDED_DIRS.contains(&name.as_str()) {
-                    stack.push(path);
-                }
-            } else if ft.is_file()
-                && let Ok(md) = std::fs::metadata(&path)
-            {
-                let (mtime_secs, mtime_nanos) = match md.modified() {
-                    Ok(t) => {
-                        let d = t.duration_since(std::time::UNIX_EPOCH).unwrap_or_default();
-                        (d.as_secs(), d.subsec_nanos())
-                    }
-                    // No mtime support: (0,0) — every file diffs as
-                    // "modified" after a run (conservative; same
-                    // registered trade-off as the doc-index walk).
-                    Err(_) => (0, 0),
-                };
-                let rel = path
-                    .strip_prefix(cwd)
-                    .unwrap_or(&path)
-                    .to_string_lossy()
-                    .replace('\\', "/");
-                map.insert(rel, (md.len(), mtime_secs, mtime_nanos));
-            }
-        }
-    }
-    map
-}
-
-/// RT-003: diff two delta walks into the capped change list.
-fn workspace_delta_diff(
-    before: &std::collections::HashMap<String, (u64, u64, u32)>,
-    after: &std::collections::HashMap<String, (u64, u64, u32)>,
-) -> (Vec<orz_loop::host::WorkspaceDeltaEntry>, bool) {
-    use orz_loop::host::{WorkspaceDeltaEntry, WorkspaceDeltaKind};
-    let mut entries: Vec<WorkspaceDeltaEntry> = Vec::new();
-    for (path, after_stat) in after {
-        match before.get(path) {
-            None => entries.push(WorkspaceDeltaEntry {
-                path: path.clone(),
-                kind: WorkspaceDeltaKind::Added,
-            }),
-            Some(before_stat) if before_stat != after_stat => entries.push(WorkspaceDeltaEntry {
-                path: path.clone(),
-                kind: WorkspaceDeltaKind::Modified,
-            }),
-            _ => {}
-        }
-    }
-    for path in before.keys() {
-        if !after.contains_key(path) {
-            entries.push(WorkspaceDeltaEntry {
-                path: path.clone(),
-                kind: WorkspaceDeltaKind::Deleted,
-            });
-        }
-    }
-    // Deterministic order (same discipline as the doc-index sorted entries).
-    entries.sort_by(|a, b| a.path.cmp(&b.path));
-    let truncated = entries.len() > RUN_TESTS_DELTA_MAX_ENTRIES;
-    entries.truncate(RUN_TESTS_DELTA_MAX_ENTRIES);
-    (entries, truncated)
-}
+// RT-003 / AGENT-DELIVERY-FLOW (2026-08-23): the workspace-delta walk and
+// diff are single-sourced in orz-loop (`host.rs`); orz-host imports them.
+use orz_loop::host::{
+    RUN_TESTS_DELTA_MAX_ENTRIES, TOOL_DELTA_MAX_ENTRIES, workspace_delta_diff, workspace_delta_walk,
+};
 
 impl OrzHost {
     /// P0-C S4 (2026-08-16): shared tool-execution core with an optional
@@ -600,6 +486,19 @@ impl OrzHost {
         call_id: &str,
         timeout_override: Option<std::time::Duration>,
     ) -> Result<ToolResult, ToolError> {
+        // AGENT-DELIVERY-FLOW (2026-08-23, 设计 §2.3): host tools that can
+        // mutate the worktree in ways the model cannot see from the output
+        // (terminal commands) carry a per-call workspace delta on the
+        // result — the console receipt attaches it. Read-only tools skip
+        // the full-tree walk (cost); run_tests has its own dedicated delta
+        // path (TestRunResult), and search_replace is covered by its edit
+        // diff + EditRecord.
+        let delta_tracked = matches!(name, "run_terminal_cmd");
+        let delta_before = if delta_tracked {
+            Some(workspace_delta_walk(&self.cwd))
+        } else {
+            None
+        };
         // P0-1 (2026-08-08 stall guards): bounded tool execution. Every
         // tool call runs under a wall-clock cap (default 5 min,
         // configurable via `with_tool_timeout`) — a tool whose
@@ -762,7 +661,7 @@ impl OrzHost {
                 )));
             }
         };
-        Ok(ToolResult {
+        let mut tool_result = ToolResult {
             output: result.prompt_text,
             // 2026-08-08 blackboard-partition review closure (conformance
             // agent D1-1): the controller's edit-action gate keys on
@@ -784,7 +683,17 @@ impl OrzHost {
             // the mechanical prefilter); every other tool is `None`.
             structured: crate::tools::structured_from_output(&result.output),
             ..Default::default()
-        })
+        };
+        if let Some(before) = delta_before {
+            let (workspace_delta, workspace_delta_truncated) = workspace_delta_diff(
+                &before,
+                &workspace_delta_walk(&self.cwd),
+                TOOL_DELTA_MAX_ENTRIES,
+            );
+            tool_result.workspace_delta = workspace_delta;
+            tool_result.workspace_delta_truncated = workspace_delta_truncated;
+        }
+        Ok(tool_result)
     }
 }
 
@@ -831,6 +740,13 @@ impl LoopHost for OrzHost {
 
     fn session_cwd(&self) -> std::path::PathBuf {
         self.cwd.clone()
+    }
+
+    /// AGENT-DELIVERY-FLOW (2026-08-23, 设计 §2.2): the mechanical delivery
+    /// status baseline — the worktree metadata snapshot. `Some` = the real
+    /// walk; the controller diffs it against a fresh snapshot at `submit`.
+    fn workspace_snapshot(&self) -> Option<std::collections::HashMap<String, (u64, u64, u32)>> {
+        Some(workspace_delta_walk(&self.cwd))
     }
 
     /// The ACP outbound gateway is the only live interactive-user channel
@@ -976,8 +892,11 @@ impl LoopHost for OrzHost {
                 kill_process_tree(&mut child).await;
                 // RT-003: the timed-out run may still have written files —
                 // record what it changed before returning.
-                let (workspace_delta, workspace_delta_truncated) =
-                    workspace_delta_diff(&before, &workspace_delta_walk(&self.cwd));
+                let (workspace_delta, workspace_delta_truncated) = workspace_delta_diff(
+                    &before,
+                    &workspace_delta_walk(&self.cwd),
+                    RUN_TESTS_DELTA_MAX_ENTRIES,
+                );
                 let (partial_output, output_encoding) =
                     orz_tools::util::encoding::decode_text(&out_buf);
                 return Ok(orz_loop::host::TestRunResult {
@@ -1028,8 +947,11 @@ impl LoopHost for OrzHost {
         // RT-003: workspace delta — diff the post-run walk against the
         // pre-run baseline (`.gsa` is excluded, so the output file written
         // above does not pollute the trace).
-        let (workspace_delta, workspace_delta_truncated) =
-            workspace_delta_diff(&before, &workspace_delta_walk(&self.cwd));
+        let (workspace_delta, workspace_delta_truncated) = workspace_delta_diff(
+            &before,
+            &workspace_delta_walk(&self.cwd),
+            RUN_TESTS_DELTA_MAX_ENTRIES,
+        );
         Ok(orz_loop::host::TestRunResult {
             output: text,
             exit_code: status.code(),
@@ -2242,7 +2164,8 @@ mod tests {
         for i in 0..(RUN_TESTS_DELTA_MAX_ENTRIES + 50) {
             after.insert(format!("gen/{i}.txt"), (1, 2, 0));
         }
-        let (entries, truncated) = workspace_delta_diff(&before, &after);
+        let (entries, truncated) =
+            workspace_delta_diff(&before, &after, RUN_TESTS_DELTA_MAX_ENTRIES);
         assert!(truncated, "over-cap diff must be flagged truncated");
         assert_eq!(entries.len(), RUN_TESTS_DELTA_MAX_ENTRIES);
         // Deterministic order.
@@ -2255,7 +2178,8 @@ mod tests {
         before2.insert("gone.txt".to_string(), (1, 1, 0));
         before2.insert("stable.txt".to_string(), (1, 1, 0));
         let after2 = std::collections::HashMap::from([("stable.txt".to_string(), (1, 1, 0))]);
-        let (entries, truncated) = workspace_delta_diff(&before2, &after2);
+        let (entries, truncated) =
+            workspace_delta_diff(&before2, &after2, RUN_TESTS_DELTA_MAX_ENTRIES);
         assert!(!truncated);
         assert!(
             entries

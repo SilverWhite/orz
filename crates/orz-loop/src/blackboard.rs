@@ -185,6 +185,13 @@ pub struct PlanSection {
     pub plan_epoch: u64,
     pub goal: Option<String>,
     pub steps: Vec<PlanStep>,
+    /// AGENT-DELIVERY-FLOW (2026-08-23, 设计 §2.2): the mechanical delivery
+    /// status line rendered by the `submit` request — harness-computed
+    /// workspace change list (tool output, never model-authored; no
+    /// repetition-detector exposure). Rendered as an extra plan-view line
+    /// when present; cleared by plan rotation (the section is replaced).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub delivery_status: Option<String>,
     pub analysis: Vec<String>,
     pub decisions: Vec<String>,
     pub auth_grants: Vec<String>,
@@ -540,6 +547,7 @@ impl Blackboard {
             plan_epoch,
             goal: Some(goal),
             steps: Vec::new(),
+            delivery_status: None,
             analysis: Vec::new(),
             decisions: Vec::new(),
             auth_grants: Vec::new(),

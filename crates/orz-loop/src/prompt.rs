@@ -89,14 +89,33 @@ pub const CITATION_VALIDATION_FAILED_PREFIX: &str = "[CITATION_VALIDATION_FAILED
 
 /// Build the explicit degradation block — the delivered final answer when
 /// citation validation fails (never a silent downgrade).
-pub fn citation_validation_failed_block(reason_codes: &[String]) -> String {
-    format!(
+///
+/// AGENT-DELIVERY-FLOW (2026-08-23, 设计 §2.4): `correction_allowed=true`
+/// (first failure) appends the bounded-correction note — the model rewrites
+/// the final answer once; `false` (second failure) states the opportunity is
+/// exhausted and the answer is hard-blocked. The block keeps the
+/// `[CITATION_VALIDATION_FAILED` prefix so the injected-block filter never
+/// persists it into the conversation.
+pub fn citation_validation_failed_block(
+    reason_codes: &[String],
+    correction_allowed: bool,
+) -> String {
+    let mut block = format!(
         "{CITATION_VALIDATION_FAILED_PREFIX} v0.1]\n\
          最终回答的引用标记未通过机械校验，已阻止交付。\n\
          reason_codes: {}\n\
          [/CITATION_VALIDATION_FAILED]",
         reason_codes.join(", ")
-    )
+    );
+    if correction_allowed {
+        block.push_str(
+            "\n[修正机会 1/1] 请基于以上 reason_codes 与标记明细重写最终回答 \
+             （引用标记需绑定本 run 已观测证据）；修正后的回答会重新走完整校验。",
+        );
+    } else {
+        block.push_str("\n[修正机会已用尽] 本次运行不再接受新的最终回答。");
+    }
+    block
 }
 
 /// GAP-INQUIRY-SPLIT (2026-08-09): prefix of the injected orientation block
