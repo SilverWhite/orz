@@ -3049,6 +3049,8 @@ mod tests {
         // 多次原样引用（引用-再确认循环形态，间隔互异填充防跨引用窗口
         // 误成 400 字符周期）→ 第一级 L=400 即不命中：无候选、无审计、
         // 无触发（G4 误杀根因消除的离线验证形态）。
+        // （2026-08-23 S2 正式轮起，字节级真实回放见
+        // `repetition_second_stage_g4_real_span_replay_stays_silent`。）
         let snippet = "def _merge_collinear(segments):\n    out = []\n    for s in sorted(segments):\n        if out and out[-1][1] == s[0]:\n            out[-1] = (out[-1][0], s[1])\n        else:\n            out.append(s)\n    return out\n";
         let cite203: String = snippet.chars().take(203).collect();
         assert_eq!(cite203.chars().count(), 203);
@@ -3066,6 +3068,52 @@ mod tests {
             d.take_audit_hits().is_empty(),
             "short citations must not reach first-stage candidates"
         );
+    }
+
+    #[test]
+    fn repetition_second_stage_g4_real_span_replay_stays_silent() {
+        // 2026-08-23 S2 正式轮：G4 官方轮真实字节离线回放。源证据=
+        // D:\tb-eval\jobs-sweep\sweep-r1-g4-official\sam-cell-seg__CT5JrD3
+        // \agent\orz.txt WARN 记录（2026-08-21T21:35:29 / 21:36:00）——
+        // 旧 L=200 检测器在同一 reasoning 流内 3/3 命中并两次触发
+        // （consecutive=1/2，降级梯 EnabledMax→EnabledLow→Disabled）。
+        // 日志捕获的匹配 span 各 200 字符（检测器打印口径；设计早前
+        // 203/204 为完整重复引用区域口径）——均 < L=400，第一级滚动
+        // 窗口即不命中。回放形态=引用-再确认循环：真实 span 原样引用
+        // 3 遍，中间插入与观察一致的互异再确认文本。
+        let span_a = "\n```\n478→            return None\n479→        pts = _merge_collinear(pts)\n480→        if len(pts) < 4:\n481→            return None\n482→        glob = [(px + x0 - pad, py + y0 - pad) for px, py in pts]\n";
+        let span_b = "   # 3) absolute last resort: the region's own pixels, duplicated if needed\n666-    base = sorted(own)\n667-    loop = (base * 4)[:4] if base else [(ax, ay)] * 4\n668-    loop = _dedupe_consecutive(loop";
+        assert_eq!(
+            span_a.chars().count(),
+            200,
+            "G4 span A must be the log-captured 200 chars"
+        );
+        assert_eq!(
+            span_b.chars().count(),
+            200,
+            "G4 span B must be the log-captured 200 chars"
+        );
+        assert!(span_a.chars().count() < REPETITION_MIN_RUN_CHARS);
+        assert!(span_b.chars().count() < REPETITION_MIN_RUN_CHARS);
+
+        let interleave_a = "```\nActually the output showed lines: `478→            return None` — hmm no, let me look again at what was returned:\n\nFrom the offset=438 read:\n";
+        let interleave_b = "Hmm wait the grep earlier showed lines 663-668 — let me re-read the file to confirm.\n";
+        for span in [span_a, span_b] {
+            let mut d = DegenerationDetector::default();
+            d.feed_reasoning(span);
+            d.feed_reasoning(interleave_a);
+            d.feed_reasoning(span);
+            d.feed_reasoning(interleave_b);
+            d.feed_reasoning(span);
+            assert!(
+                d.trip_reason().is_none(),
+                "real G4 reasoning span replay must NOT trip at L=400"
+            );
+            assert!(
+                d.take_audit_hits().is_empty(),
+                "real G4 spans (< L) must not reach first-stage candidates"
+            );
+        }
     }
 
     /// 二级覆盖占比边界样本：`abc` 块重复 `repeat_n` 遍 + `distinct_n`
