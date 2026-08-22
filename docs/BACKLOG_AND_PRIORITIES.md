@@ -892,6 +892,62 @@
 >   566 通过 / 0 失败 / 3 ignored、fmt 干净、clippy 无新增。详设计 §4.11；
 >   登记于 ADR-0010 §14.35 第 18 项 / TODO P0-0d 后续 6 /
 >   CLI_PROJECT_INDEX。
+> - **2026-08-23 S3 重建登记（用户放行；Linux musl，ORZ-BUILD-MOUNT-001
+>   契约，`build_orz_aliyun.sh`；计数不变仍 29）**：`rust:1.97-slim`
+>   容器增量构建（挂载 `D:\CLI:/orz`、工作目录 `/orz/orz`、-j 1）
+>   **BUILD_EXIT=0**；三件套时间戳 2026-08-23 02:01（orz 104,521,992 B /
+>   orz-signer 1,388,592 B / orz-acaf-provision 1,206,568 B，SHA256 见
+>   设计 §4.11）；最小可执行冒烟通过（orz 无 TTY 报 TUI io error 属预期、
+>   provision 打印 usage、signer 报 manifest 缺失——headless 真机面由
+>   S4 任务容器验证）；对应源码=orz 6178050 + 父仓库 dfe39a1。详设计
+>   §4.11；登记于 ADR-0010 §14.35 第 18 项 / TODO P0-0d 后续 6 /
+>   CLI_PROJECT_INDEX。
+> - **2026-08-23 S4 冒烟复验登记（用户放行；G4/G5 对照，sweep-s4-g4 /
+>   sweep-s4-g5，k=1、官方方式、n-concurrent=1；**S3/S4 验证闭环 29 →
+>   28**）**：G4 4/5 reward 1.0——sam-cell-seg **零复读触发**（对照旧
+>   L=200 二进制同题 2 次触发+2 次降级，误杀消除且 reward 仍 1.0）、
+>   portfolio-optimization 零触发（旧轮 3-gram 0.60 边界 1 次，本轮无）；
+>   G5 2/5 reward 1.0（path-tracing-reverse AgentTimeoutError=官方超时，
+>   机制无异常）；全 10 试次零真实 400；有 journal 9 试次命中率
+>   96.30%–98.34% 全 ≥90%；构造真循环触发由 S2 测试套件覆盖（566 全绿）；
+>   观察项=video-processing 3-gram 兜底触发 1 次（0.60 边界、降级一次、
+>   任务继续，与旧轮 portfolio-optimization 同界，登记不改范围）。详设计
+>   §4.11；登记于 ADR-0010 §14.35 第 18 项 / TODO P0-0d 后续 6 /
+>   CLI_PROJECT_INDEX。
+> - **2026-08-23 AGENT DELIVERY FLOW 设计定稿（用户三轮讨论裁决；先落
+>   设计、未实施；**最优先——2026-08-23 用户指示，本轮提案 1+2**）**：来源=S4 失败归因暴露——计划步自动推进（订单成功即
+>   step done，mteb「计划完成但计算未跑」）、引用校验硬阻断无修正、订单
+>   反馈缺 diff/delta。定案：步骤重定义=执行顺序标记（目标交交付门仲裁；
+>   动作幻觉由「交付门拒绝→有界修正→失败」收敛）；模板末步固定「递交/
+>   完成」且不随普通订单自动推进；递交状态=黑板 plan 机械渲染
+>   （workspace_delta 过滤 .gsa/临时文件、上限 20+计数、无模型声明、无
+>   复读风险）；订单反馈增强（编辑类回显 diff、终端类挂 delta、actions
+>   板只加 changed: N files）；引用失败→有界修正机会一次（reason_codes+
+>   markers、同失败 2 次恢复硬阻断、journal 记 attempt）；终端内容登记
+>   引用暂缓。路由 S1-S4；设计轮不动计数（28）。登记于 ADR-0010 §14.35
+>   第 19 项 / [设计](AGENT_DELIVERY_FLOW_DESIGN_2026-08-23.md) / TODO
+>   P0-0d 后续 7 / CLI_PROJECT_INDEX。
+> - **2026-08-23 AGENT DELIVERY FLOW S1 实施 + S2 测试闭合（用户放行；
+>   实施入账 28 → 29；S3-S4 待续）**：计划步语义重定义（框架块 + plan_write
+>   校验强制末步 id ∈ {deliver, submit}）；末步不随普通订单自动推进 +
+>   console_step_done 末步拒绝；新增无参 `submit` 工具两阶段（首次渲染
+>   [delivery] 机械交付状态进黑板 plan、再次确认置 done）；订单反馈增强
+>   （workspace delta 单源化 + size、search_replace diff、终端挂 delta、
+>   actions 板 changed: N files）；引用校验有界修正一次（retry/attempt/
+>   correction_allowed + 二次硬阻断）。Schema/verifier 同步；S2 测试闭合
+>   （orz-loop 574 通过 / 0 失败 / 3 ignored、fmt 干净、clippy 无新增）。
+>   登记于 ADR-0010 §14.35 第 21 项 / [设计 §6](AGENT_DELIVERY_FLOW_DESIGN_2026-08-23.md)
+>   / TODO P0-0d 后续 7 / CLI_PROJECT_INDEX。
+> - **2026-08-23 N-GRAM GUARD CALIBRATION 设计定稿（用户裁决；先落设计、
+>   未实施；**最优先——2026-08-23 用户指示，本轮提案 3**）**：来源=两次真实任务 3-gram 路径②边界误触发（旧轮
+>   portfolio-optimization + 本轮 video-processing，均显示 0.60、实际
+>   0.600–0.609、正常推理自引用、单发 trip、非致命）。定案：阈值
+>   0.60→0.70（`>` 保留）；流内累计命中（≥3 才 trip、1–2 仅审计（ratio+
+>   窗口+族）、间隔不重置、流结束丢弃）；统一口径（WARN 精度、信号表）。
+>   边界：0.60–0.70 近重复循环漏判由 stall 兜底；无原始字节、验证靠单测
+>   +e2e+实机。路由 S1-S4；设计轮不动计数（28）。登记于 ADR-0010 §14.35
+>   第 20 项 / [设计](NGRAM_GUARD_CALIBRATION_DESIGN_2026-08-23.md) /
+>   TODO P0-0d 后续 8 / CLI_PROJECT_INDEX。
 
 ### 0e. CONTEXT-SCAFFOLDING-PULL-REDESIGN（P0；2026-08-21 设计定稿，
 **S1-S4 全部闭合 2026-08-21，计数 28 → 27**）

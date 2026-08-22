@@ -17,6 +17,10 @@
       "type": ["string", "null"],
       "description": "Decode stage that produced the tool output (GAP-ENCODING-GATE, OPS-PROTOCOL §8): utf-8 / utf-8-sig / gb18030 / utf-8-lossy, comma-joined for multi-chunk streams."
     },
+    "delivery_phase": {
+      "enum": ["requested", "confirmed"],
+      "description": "AGENT-DELIVERY-FLOW (2026-08-23, 设计 §2.2): the `submit` two-phase marker — requested = the mechanical delivery status was rendered into the blackboard plan view (pending confirmation); confirmed = the terminal step was marked done and the run entered the final-answer flow."
+    },
     "status": { "const": "error" },
     "error": { "type": "string" },
     "candidate_count": {
@@ -77,7 +81,8 @@
         "required": ["path", "kind"],
         "properties": {
           "path": { "type": "string" },
-          "kind": { "enum": ["added", "modified", "deleted"] }
+          "kind": { "enum": ["added", "modified", "deleted"] },
+          "size": { "type": "integer", "minimum": 0 }
         }
       }
     },

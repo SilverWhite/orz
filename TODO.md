@@ -89,7 +89,9 @@
   复验（make-doom-for-mips）验证闭环 29 → 28**；2026-08-21
   CONTEXT-SCAFFOLDING-PULL-REDESIGN（0e）S1-S4 验证闭环 28 → 27；
   2026-08-21 FUS-READ-ANCHOR-WRITE-GUARD（0f）S1 代码实施入账 27 → 28
-  （S1/S2 已闭合，S3-S4 待续））
+  （S1/S2 已闭合，S3-S4 待续）；2026-08-23 REPETITION-DETECTOR-ROLLING-HASH
+  （P0-0d 后续 6）滚动哈希再校准 **S3/S4 验证闭环（设计口径 29 → 28；
+  S1 实施放行入账 28 → 29 已登记于设计 §4.9，快照补记）**）
   - P0-C：0 项（PLAN-FIRST 阶段 A/B/C 全部闭合，2026-08-16）
   - P0 评测冒烟暴露：0 项（P0-E 主项 7 项 + FUS-TOOL-SCOPE-CONTRACT 后续 2 项全部闭合 2026-08-18，见 P0-E grep 项后续①/②）
   - P0 Benchmark 完全体：1 项（FUS-BENCHMARK-FULL-EXEC 实施完成待验证，见 P0-F；验证闭环后回 26）
@@ -770,7 +772,7 @@
 - [ ] S4 复验（dna 类场景不再因解码错误杀 run、零 400、命中率 ≥90%）
 
 ### P0-0d 后续 6：REPETITION-DETECTOR-ROLLING-HASH（P0 派生；2026-08-21
-设计定稿；S1/S2 已实施，S3/S4 待续）
+设计定稿；**S1-S4 全部闭合 2026-08-23，计数 29 → 28**）
 
 > 入口：[设计 §3.3/§4.8](docs/DEEPSEEK_OUTPUT_BUDGET_AND_STALL_GUARD_DESIGN_2026-08-20.md)；
 > ADR-0010 §14.35 第 13 项；BACKLOG 0d。
@@ -896,9 +898,77 @@
   lib **566 通过 / 0 失败 / 3 ignored**（565→566）、fmt 干净、clippy 无
   新增；计数不变仍 29。登记于设计 §4.11 / ADR-0010 §14.35 第 18 项 /
   BACKLOG 0d / CLI_PROJECT_INDEX）
-- [ ] 复读判定二级再校准 S3 重建（Linux musl，ORZ-BUILD-MOUNT-001）
-- [ ] 复读判定二级再校准 S4 冒烟复验（G4/G5 对照：代码引用零触发、
-  真循环仍触发、零 400、命中率 ≥90%）
+- [x] 复读判定二级再校准 S3 重建（**2026-08-23 实施闭合（用户放行）**：
+  Linux musl（ORZ-BUILD-MOUNT-001 契约，`build_orz_aliyun.sh`；
+  `rust:1.97-slim` 增量构建，挂载 `D:\CLI:/orz`、工作目录 `/orz/orz`，
+  -j 1）**BUILD_EXIT=0**；三件套时间戳 2026-08-23 02:01（orz
+  104,521,992 B / orz-signer 1,388,592 B / orz-acaf-provision 1,206,568
+  B，SHA256 见设计 §4.11）；最小可执行冒烟通过（orz 无 TTY 报 TUI io
+  error 属预期、provision 打印 usage、signer 报 manifest 缺失）；对应
+  源码=orz 6178050 + 父仓库 dfe39a1；计数不变仍 29。登记于设计 §4.11 /
+  ADR-0010 §14.35 第 18 项 / BACKLOG 0d / CLI_PROJECT_INDEX）
+- [x] 复读判定二级再校准 S4 冒烟复验（**2026-08-23 实施闭合（用户放行）；
+  S3/S4 验证闭环 29 → 28**）：G4/G5 对照（sweep-s4-g4 / sweep-s4-g5，
+  k=1、官方方式、n-concurrent=1）——G4 4/5（sam-cell-seg **零复读触发**
+  对照旧 L=200 同题 2 次触发+2 次降级、误杀消除且 reward 仍 1.0；
+  portfolio-optimization 零触发）、G5 2/5（1 题 AgentTimeoutError=官方
+  超时）；全 10 试次**零真实 400**；有 journal 9 试次命中率
+  96.30%–98.34% 全 ≥90%；构造真循环触发由 S2 测试套件覆盖（566 全绿）；
+  观察项=video-processing 3-gram 兜底触发 1 次（0.60 边界、降级一次、
+  任务继续，与旧轮 portfolio-optimization 同界，登记不改范围）。登记于
+  设计 §4.11 / ADR-0010 §14.35 第 18 项 / BACKLOG 0d / CLI_PROJECT_INDEX）
+
+### P0-0d 后续 7：AGENT-DELIVERY-FLOW（P0 派生；2026-08-23 设计定稿，
+S1 代码 + S2 测试闭合 2026-08-23，实施入账 28 → 29；S3-S4 待续；
+**最优先——2026-08-23 用户指示，覆盖本轮提案 1+2**）
+
+> 入口：[设计](docs/AGENT_DELIVERY_FLOW_DESIGN_2026-08-23.md)；
+> ADR-0010 §14.35 第 19 项；BACKLOG 0d 后续 7。
+> 来源：S4 冒烟失败归因暴露——计划步自动推进语义（订单成功即 step done，
+> mteb「计划完成但计算未跑」）、引用校验硬阻断无修正、订单反馈缺
+> diff/delta（核实压力）。
+> 定案（用户三轮讨论裁决）：步骤重定义=执行顺序标记（目标交交付门仲裁）；
+> 模板末步固定「递交/完成」且不随普通订单自动推进；递交状态=黑板 plan
+> 机械渲染（workspace_delta 过滤 .gsa/临时文件、上限 20+计数、无模型
+> 声明、无复读风险）；订单反馈增强（编辑类回显 diff、终端类挂 delta、
+> actions 板只加 changed: N files）；引用失败→有界修正机会一次
+> （reason_codes+markers、同失败 2 次恢复硬阻断、journal 记 attempt）；
+> 终端内容登记引用暂缓。实施路由 S1 代码 → S2 测试 → S3 重建 → S4 复验
+> （计划无空转、末步递交走机械状态、引用失败可修正一次、订单反馈含
+> diff/delta、零 400、命中率 ≥90%）。设计轮不动计数（28）。
+
+- [x] 设计定稿（2026-08-23；先落设计、未实施）
+- [x] S1 代码（**2026-08-23 实施闭合（用户放行）**：计划语义 + 末步模板/
+  校验 + submit 递交路径 + 交付状态渲染 + 订单反馈 + 引用修正机会；详见
+  设计 §6 / ADR-0010 §14.35 第 21 项）
+- [x] S2 测试（**2026-08-23 闭合**：末步校验、submit 两阶段、submit_
+  not_current、console_step_done 末步拒绝、diff/delta receipt、changed
+  短计数、引用修正一次/二次硬阻断；orz-loop 574 通过 / 0 失败 / 3 ignored、
+  fmt 干净、clippy 无新增告警）
+- [ ] S3 重建（Linux musl，ORZ-BUILD-MOUNT-001）
+- [ ] S4 复验（计划无空转、末步递交、引用修正、订单反馈、零 400、命中率 ≥90%）
+
+### P0-0d 后续 8：NGRAM-GUARD-CALIBRATION（P0 派生；2026-08-23 设计定稿，
+待实施；**最优先——2026-08-23 用户指示，本轮提案 3**）
+
+> 入口：[设计](docs/NGRAM_GUARD_CALIBRATION_DESIGN_2026-08-23.md)；
+> ADR-0010 §14.35 第 20 项；BACKLOG 0d 后续 8。
+> 来源：两次真实任务 3-gram 路径②边界误触发（旧轮 portfolio-optimization
+> + 本轮 video-processing，均显示 0.60、实际 0.600–0.609、正常推理自引用、
+> 单发 trip、非致命）。
+> 定案（用户裁决）：阈值 `DEGENERATION_NGRAM_REPEAT_RATIO` 0.60→0.70
+> （`>` 保留）；流内累计命中（≥3 才 trip、1–2 仅审计（ratio+窗口+族）、
+> 间隔不重置、流结束丢弃）；统一口径（WARN 精度、信号表）。边界：0.60–0.70
+> 近重复循环漏判由 stall 兜底（600s/64K）；无原始字节、验证靠单测+e2e+
+> 实机观察。实施路由 S1 代码 → S2 测试 → S3 重建 → S4 复验（正常任务零
+> 3-gram trip、0.6x 仅审计、≥0.70 三连才 trip、零 400、命中率 ≥90%）。
+> 设计轮不动计数（28）。
+
+- [x] 设计定稿（2026-08-23；先落设计、未实施）
+- [ ] S1 代码（常量 0.70 + 累计命中 + 审计 + 口径）
+- [ ] S2 测试（0.69/0.70 边界、3 次累计、间隔不重置、既有用例适配）
+- [ ] S3 重建（Linux musl，ORZ-BUILD-MOUNT-001）
+- [ ] S4 复验（零 3-gram trip、构造流行为、零 400、命中率 ≥90%）
 
 ### P0-0e CONTEXT-SCAFFOLDING-PULL-REDESIGN（P0；2026-08-21 设计定稿，
 S1-S4 全部闭合 2026-08-21，计数 28 → 27）

@@ -2042,15 +2042,22 @@ def _verify_v02_citation_validation(events: list[dict[str, Any]]) -> list[str]:
     citation verifier events on the v0.2 track (RETRIEVAL_MECHANICAL_CONTROLS
     _DESIGN §3.2):
 
-    - a block decision must degrade the answer (degraded=true), carry at least
-      one reason code, the mechanical degradation message block and at least
-      one failed marker;
+    - a block/retry decision must degrade the answer (degraded=true), carry at
+      least one reason code, the mechanical degradation message block and at
+      least one failed marker (AGENT-DELIVERY-FLOW 2026-08-23: `retry` = first
+      failure with one bounded correction opportunity; `block` = second
+      failure / hard block);
     - a pass decision must not degrade and must carry no reason codes (the v0.2
       producer currently writes only block events — a passing final answer
       journals nothing);
     - marker_count must equal the markers array length;
     - every failed marker must carry at least one reason code and every passed
       marker none.
+
+    AGENT-DELIVERY-FLOW (2026-08-23): retry/block events carry attempt (1 =
+    initial failure, 2 = correction exhausted) and correction_allowed —
+    attempt 1 must be retry with correction_allowed=true, attempt 2 must be
+    block with correction_allowed=false.
     """
     errors: list[str] = []
     for index, event in enumerate(events):
@@ -2062,26 +2069,43 @@ def _verify_v02_citation_validation(events: list[dict[str, Any]]) -> list[str]:
         reason_codes = payload["reason_codes"]
         marker_count = payload["marker_count"]
         markers = payload.get("markers", [])
-        if decision == "block":
+        if decision in ("block", "retry"):
             if not degraded:
                 errors.append(
-                    f"event {index}: citation_validation block must degrade the answer"
+                    f"event {index}: citation_validation {decision} must degrade "
+                    "the answer"
                 )
             if not reason_codes:
                 errors.append(
-                    f"event {index}: citation_validation block needs reason codes"
+                    f"event {index}: citation_validation {decision} needs reason codes"
                 )
             if not markers:
                 errors.append(
-                    f"event {index}: citation_validation block needs marker details"
+                    f"event {index}: citation_validation {decision} needs marker details"
                 )
             if not payload.get("message_block", "").startswith(
                 "[CITATION_VALIDATION_FAILED"
             ):
                 errors.append(
-                    f"event {index}: citation_validation block carries a "
+                    f"event {index}: citation_validation {decision} carries a "
                     "non-mechanical message block"
                 )
+            attempt = payload.get("attempt")
+            correction_allowed = payload.get("correction_allowed")
+            if decision == "retry":
+                if attempt != 1 or correction_allowed is not True:
+                    errors.append(
+                        f"event {index}: citation_validation retry must carry "
+                        "attempt=1 and correction_allowed=true"
+                    )
+            elif decision == "block":
+                if attempt not in (None, 2) or (
+                    correction_allowed is not None and correction_allowed is not False
+                ):
+                    errors.append(
+                        f"event {index}: citation_validation block must carry "
+                        "attempt=2 (or legacy absent) and correction_allowed=false"
+                    )
         elif decision == "pass":
             if degraded:
                 errors.append(

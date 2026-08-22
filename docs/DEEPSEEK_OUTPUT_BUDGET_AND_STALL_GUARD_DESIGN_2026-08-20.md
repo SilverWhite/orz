@@ -1028,10 +1028,47 @@ G4 短引用形态回放）。验证：orz-loop lib **566 通过 / 0 失败 / 3 
 （565 → 566，新增 1 项）、`cargo fmt --check` 干净、clippy 无新增
 （transport.rs 仍仅 2 条既有 doc 告警）。
 
-- 计数：S3/S4 复验 + 停滞守卫退役实施 + 缺口 A 实施不改变未闭合计数
-  （仍 29；0d 计数 29 的 S3/S4 闭环因缺口 A 推迟——缺口 A 定性完成、
-  灵敏层再校准 S1/S2 已实施，闭环待 S3/S4 复验后登记）。
-- 待续：S3 重建 → S4 复验（reasoning 正常引用不误杀、真循环仍触发）。
+**2026-08-23 S3 重建登记（用户放行；Linux musl，ORZ-BUILD-MOUNT-001
+契约，`build_orz_aliyun.sh`；计数不变仍 29）**：容器增量构建
+（`rust:1.97-slim`；挂载 `D:\CLI:/orz`、工作目录 `/orz/orz`；apt 阿里云
+镜像 + 官方 static.rust-lang.org + 静态 rg 15.0.0 源码安装；`-j 1`）
+**BUILD_EXIT=0**；三件套产物时间戳 **2026-08-23 02:01**（orz 104,521,992
+B / orz-signer 1,388,592 B / orz-acaf-provision 1,206,568 B；SHA256=orz
+E327B840A867B5AFEA69EA141841072006D13B604B37743CBB7DFF95C1F6CE27 /
+signer 229AFF0D88BAC89C6F873BB1A015AB0702D45FBDB15910BD01C5721F0DE16D95 /
+provision 7D102976444891EBB20A7B4D547455C5BE7DD8E46EF62EEA687D0495A8CB80EB）；
+最小可执行冒烟=三件均正常加载执行（orz 无 TTY 报 TUI io error 属预期——
+headless 真机面由 S4 任务容器验证；provision 打印 usage；signer 报 manifest
+缺失）。对应源码=orz 6178050（S2 回放测试入库）+ 父仓库 dfe39a1。待续：
+S4 冒烟复验（G4/G5 对照：sam-cell-seg 类代码引用零触发、构造真循环仍
+触发、零真实 400、命中率 ≥90%）。
+
+**2026-08-23 S4 冒烟复验登记（用户放行；G4/G5 对照，sweep-s4-g4 /
+sweep-s4-g5，k=1、官方方式（无 max_wallclock）、n-concurrent=1；**S3/S4
+验证闭环 29 → 28**）**：新二进制（orz 6178050 构建轮）实机运行——
+
+- **G4（git-multibranch / sam-cell-seg / portfolio-optimization /
+  video-processing / mcmc-sampling-stan，1h48m，4/5 reward 1.0）**：
+  **sam-cell-seg 零复读触发**（对照旧 L=200 二进制 G4 官方轮同题 2 次
+  reasoning_repetition 触发 + 2 次降级——误杀消除，reward 仍 1.0）；
+  portfolio-optimization 零触发（旧轮 1 次 3-gram 0.60 边界触发，本轮
+  无）；**零真实 400**；命中率 96.30%–98.34% 全 ≥90%。
+- **G5（path-tracing-reverse / mteb-retrieve / code-from-image /
+  break-filter-js-from-html / sanitize-git-repo，1h02m，2/5 reward 1.0）**：
+  零触发、零 400；命中率 96.54%–97.07%（有 journal 4/5；
+  path-tracing-reverse AgentTimeoutError=官方超时，机制无异常、无 journal
+  拷出）。
+- **构造真循环仍触发（判定层）**：S2 测试套件覆盖——`aaa, ` 周期 ×3
+  触发、802 同字符无切分点直接判真、周期 10 短语循环触发、e2e 退化流
+  中断+降级，566 项全绿；3-gram 兜底实机在线（见观察项）。
+- **观察项（登记，不改本次范围）**：video-processing 3-gram 路径②触发
+  1 次（ratio 0.60 边界、consecutive=1 → 降级 EnabledLow 一次，任务继续
+  至 135 请求、reward 0）——与旧轮 portfolio-optimization 同界（0.60）；
+  3-gram 兜底不经过二级确认、设计保留为含标点整段循环兜底，本轮按设计
+  接受，登记为后续可能的 3-gram 边界校准观察项。
+
+- 计数：**S3/S4 验证闭环 29 → 28**（0d 计数 29 的 S3/S4 闭环此前因缺口 A
+  推迟，缺口 A 定性 + 灵敏层再校准 + 二级再校准全部闭环后登记）。
 
 ## 5. 验收标准（DoD）
 

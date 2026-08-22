@@ -16,7 +16,9 @@
   "properties": {
     "schema_version": { "const": "0.2.0-draft" },
     "position": { "const": "final_answer" },
-    "decision": { "enum": ["pass", "block"] },
+    "decision": { "enum": ["pass", "block", "retry"] },
+    "attempt": { "type": "integer", "minimum": 1 },
+    "correction_allowed": { "type": "boolean" },
     "marker_count": { "type": "integer", "minimum": 0 },
     "reason_codes": {
       "type": "array",
