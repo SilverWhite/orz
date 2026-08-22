@@ -880,6 +880,18 @@
 >   3 ignored、fmt 干净、clippy 无新增。详设计 §3.3 修订 / §4.11；
 >   登记于 ADR-0010 §14.35 第 18 项 / TODO P0-0d 后续 6 /
 >   CLI_PROJECT_INDEX。
+> - **2026-08-23 S2 测试实施登记（用户放行 S2；正式 S2 轮=离线回放记录 +
+>   结果归档；实施不改变计数，仍 29）**：新增字节级真实回放测试
+>   `repetition_second_stage_g4_real_span_replay_stays_silent`——源证据=
+>   `sweep-r1-g4-official\sam-cell-seg__CT5JrD3\agent\orz.txt` WARN 记录
+>   （2026-08-21T21:35:29 / 21:36:00）：旧 L=200 检测器两次触发的真实
+>   匹配 span 各 200 字符（检测器打印口径；设计早前 203/204 为完整重复
+>   引用区域口径），以 reasoning 族按「引用-再确认循环」形态原样引用 3
+>   遍（间隔互异再确认文本）回放——首级 L=400 均不命中（无候选、无审计、
+>   无触发）；构造样本正/负对照由 S1 审查处理已覆盖。验证：orz-loop lib
+>   566 通过 / 0 失败 / 3 ignored、fmt 干净、clippy 无新增。详设计 §4.11；
+>   登记于 ADR-0010 §14.35 第 18 项 / TODO P0-0d 后续 6 /
+>   CLI_PROJECT_INDEX。
 
 ### 0e. CONTEXT-SCAFFOLDING-PULL-REDESIGN（P0；2026-08-21 设计定稿，
 **S1-S4 全部闭合 2026-08-21，计数 28 → 27**）
