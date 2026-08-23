@@ -2183,6 +2183,36 @@ ADR §3.6 正文修订随实施登记。
    [设计 §10](../docs/READ_ANCHOR_WRITE_GUARD_DESIGN_2026-08-21.md) /
    BACKLOG 0f / TODO P0-0f / CLI_PROJECT_INDEX。
 
+5. **FUS-READ-ANCHOR-WRITE-GUARD S4 复验闭环（2026-08-23 用户指示补登记；
+   复用 NGRAM-GUARD-CALIBRATION S4 同一批实机数据，sweep-s4n-g4 /
+   sweep-s4n-g5（code-from-image 经充值后单题重跑 sweep-s4n-g5-cfi），
+   k=1、官方方式、n-concurrent=1；**S4 验证闭环，计数 28 → 27**）**：
+   新二进制（orz 05231f7 构建轮，104,664,664 B）10 试次实机复验——
+   ① read_file 锚点返回：小文件文本路径实机可见（mteb-retrieve 终答
+   引用「读取锚点 sha256=1dec6f9c…d24bb，size=…」；break-filter 137 次
+   read_file 调用）；锚点形状（小文件 sha256/size/mtime + prompt 尾行、
+   空文件、大文件信封 mtime/content_sha256、PDF 路径无锚点、serde
+   round-trip）由 S2 单测锁定；② 写门禁陈旧拒单→重读重下：S2 单元级
+   预演（陈旧拒绝→重读重下成功）覆盖修改后拒绝→重读重下全链，实机
+   10 试次无陈旧写入自然发生；③ 零误拒：10/10 试次零
+   content_anchor_mismatch 拒单，全部 search_replace/写入订单正常执行
+   （tool_completed exit 0）；合计 22 次 console_order_rejected 全为
+   模型输入错误（step_not_done 8 / invalid_arguments 12 / policy_denied
+   2，无设计/机制误拒）；④ 事件面留痕：console_order_rejected 事件面
+   实机留痕 22 条（phase/step/code/order_id 机械盖章）；read-anchor 拒单
+   事件面形态（phase=pre_issue / step=protocol / code=
+   content_anchor_mismatch、upstream expected/actual、re-read 指引、
+   零编辑）由 S2 错误信封完整断言锁定；⑤ 命中率 ≥90%、零 400：10/10
+   有 journal、94.11%–98.55% 全 ≥90%（含 video-processing 300 请求
+   98.55%）；10/10 零 HTTP 400（仅余额 invalid_request_error 与网络
+   zero_chunk transport_retry exhausted 两次异常，均非 400、非设计
+   问题）。边界：expected_anchor 为模型可选下发字段，实机未出现携带
+   场景（核证链路由 S2 四场景单测覆盖：锚点匹配放行（mtime null 跳
+   快筛）、同 size 同 mtime 异内容 sha256 权威兜底拒单、陈旧拒绝→
+   重读重下、缺失锚点保持既有行为）。登记于
+   [设计 §11](../docs/READ_ANCHOR_WRITE_GUARD_DESIGN_2026-08-21.md) /
+   BACKLOG 0f / TODO P0-0f / CLI_PROJECT_INDEX。
+
 ### 14.37 v1.37 补写裁决索引（2026-08-21）
 
 本节记录冻结后的显式补写；规范正文以所指章节为准，补写明确
@@ -2869,6 +2899,37 @@ ADR §3.6 正文修订随实施登记。
     设计 §3）。对应源码=orz `05231f7` + 父仓库 `35788a0`。S4 复验待续
     （计划无空转、末步递交、引用修正、订单反馈、零 400、命中率 ≥90%）。
     登记于设计 §6.5 / BACKLOG 0d 后续 7 / TODO P0-0d 后续 7 /
+    CLI_PROJECT_INDEX。
+
+29. **AGENT DELIVERY FLOW S4 复验闭环（2026-08-23 用户指示补登记；复用
+    NGRAM-GUARD-CALIBRATION S4 同一批实机数据，sweep-s4n-g4 /
+    sweep-s4n-g5（code-from-image 经充值后单题重跑 sweep-s4n-g5-cfi），
+    k=1、官方方式、n-concurrent=1；**S4 验证闭环，计数 29 → 28**）**：
+    新二进制（orz 05231f7 构建轮，104,664,664 B）10 试次实机复验——
+    ① 计划无空转：8 个完成试次全部按计划步执行至末步、最终回答绑定
+    receipts/交付状态，无「计划完成但计算未执行」空转形态（历史 mteb
+    形态未再现——本轮 mteb 实际执行计算并写出 /app/result.txt 后递交）；
+    ② 末步递交走机械交付状态：8/8 完成试次调用无参 submit 双阶段
+    （首次机械渲染 [delivery] 状态行进黑板 plan → 模型 blackboard_read
+    section=plan 复核 → 再确认置 done 后终答；git-multibranch 终答
+    引用「交付状态显示 0 个工作区文件变更——属预期（基础设施任务）」；
+    sam-cell-seg 出现末步当前订单被 step_not_done 拒绝（"current step
+    is deliver, not observe"）——末步不随普通订单推进语义实机生效）；
+    ③ 引用修正一次/二次硬阻断：portfolio-optimization / break-filter /
+    mteb-retrieve 均出现 citation_validation retry（attempt=1、
+    correction_allowed=true）→ 注入失败报告重写 → 二次同失败 block
+    （attempt=2、correction_allowed=false）；git-multibranch /
+    sam-cell-seg retry 一次后通过；④ 订单反馈：search_replace /
+    run_terminal 订单全部成功执行并走 receipt 点读链（每订单后
+    blackboard_read receipt_id=ORD-…），diff/delta 与 changed 短计数
+    机械形态由 S2 单测锁定、交付状态行实机可见；⑤ 零真实 400：10/10
+    试次零 HTTP 400（仅余额 invalid_request_error 与网络 zero_chunk
+    transport_retry exhausted 两次异常，均非 400、非设计问题）；
+    ⑥ 命中率 10/10 有 journal：94.11%–98.55% 全 ≥90%（含
+    video-processing 300 请求 98.55%）。边界：O1 递交为信息展示非最终
+    回答硬门——本轮 8 个完成试次均走 submit 路径、无跳过递交样本；
+    O4 恢复/run_plan 路径 fail-closed「变更清单不可用」本轮无样本。
+    登记于设计 §6.6 / BACKLOG 0d 后续 7 / TODO P0-0d 后续 7 /
     CLI_PROJECT_INDEX。
 
 ### 14.31 v1.31 补写裁决索引（2026-08-19）

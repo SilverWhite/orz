@@ -232,3 +232,40 @@ usage、signer manifest 缺失）。对应源码=orz `05231f7`（含本主题提
 末步递交、引用修正、订单反馈、零 400、命中率 ≥90%）；计数不变仍 29
 （S4 闭环后 29 → 28）。登记于 ADR-0010 §14.35 第 28 项 / BACKLOG 0d
 后续 7 / TODO P0-0d 后续 7 / CLI_PROJECT_INDEX。
+
+### 6.6 S4 复验登记（2026-08-23，用户指示补登记；复用 NGRAM-GUARD-CALIBRATION S4 实机数据）
+
+新二进制（orz `05231f7` 构建轮，104,664,664 B）10 试次实机复验
+（sweep-s4n-g4 / sweep-s4n-g5（code-from-image 经充值后单题重跑
+sweep-s4n-g5-cfi），k=1、官方方式、n-concurrent=1）：
+
+- **计划无空转**：8 个完成试次全部按计划步执行至末步、最终回答绑定
+  receipts/交付状态，无「计划完成但计算未执行」空转形态（历史 mteb
+  形态未再现——本轮 mteb 实际执行计算并写出 `/app/result.txt` 后递交）。
+- **末步递交走机械交付状态**：8/8 完成试次调用无参 `submit` 双阶段
+  （首次机械渲染 `[delivery] 状态: N 个变更` 行进黑板 plan → 模型
+  `blackboard_read section=plan` 复核 → 再确认置 done 后终答）；
+  git-multibranch 终答引用「交付状态显示 0 个工作区文件变更——属预期
+  （基础设施任务）」；sam-cell-seg 出现末步当前订单被 step_not_done
+  拒绝（"current step is deliver, not observe"）——末步不随普通订单
+  推进语义实机生效。
+- **引用修正一次/二次硬阻断**：portfolio-optimization / break-filter /
+  mteb-retrieve 均出现 `citation_validation` retry（attempt=1、
+  correction_allowed=true）→ 注入失败报告重写 → 二次同失败 block
+  （attempt=2、correction_allowed=false）；git-multibranch /
+  sam-cell-seg retry 一次后通过。
+- **订单反馈**：search_replace / run_terminal 订单全部成功执行并走
+  receipt 点读链（每订单后 `blackboard_read receipt_id=ORD-…`），
+  diff/delta 与 changed 短计数机械形态由 S2 单测锁定、交付状态行实机
+  可见。
+- **零真实 400**：10/10 试次零 HTTP 400（仅余额 invalid_request_error
+  与网络 zero_chunk transport_retry exhausted 两次异常，均非 400、非
+  设计问题）。
+- **命中率**：10/10 有 journal，94.11%–98.55% 全 ≥90%（含
+  video-processing 300 请求 98.55%）。
+
+边界：O1 递交为信息展示非最终回答硬门——本轮 8 个完成试次均走 submit
+路径、无跳过递交样本；O4 恢复/run_plan 路径 fail-closed「变更清单不可用」
+本轮无样本。计数：**S4 验证闭环 29 → 28（S1-S4 全部闭合）**。登记于
+ADR-0010 §14.35 第 29 项 / BACKLOG 0d 后续 7 / TODO P0-0d 后续 7 /
+CLI_PROJECT_INDEX。

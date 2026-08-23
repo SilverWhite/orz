@@ -9,7 +9,7 @@
 
 | 优先级 | 含义 | 未闭合项 |
 |---|---|---|
-| P0 | 当前工作集：设计已冻结，裁决后立即实施 | 评测冒烟暴露问题（P0-E 主项 7 项 + FUS-TOOL-SCOPE-CONTRACT 后续 2 项全部闭合 2026-08-18：ACAF 容器供应、console 工具名、计划视图步骤 ID、订单发放前拒绝入事件面、grep 搜索范围契约、plan_write 校验消息形状、actions 形状探针、list_dir 范围计数、grep files_searched 全结局探针，见 0a）；CLASSICAL-EXEC-ASSISTANT（生产组件，2026-08-16 用户裁决转正式，S1-S4 全部闭合）；PLAN-FIRST-BLACKBOARD（阶段 A/B/C 全部闭合 2026-08-16）；**FUS-BENCHMARK-FULL-EXEC（P0，实施完成待验证——2026-08-18 用户指示实施、暂不测试；验证闭环后闭合，见 0b）**；**LEDGER-FOLD-EXTERNAL-FILE（P0，S1-S4 验证闭环 2026-08-19——命中率问题优先于 P0-F 验证；provider 口径 95.33% ≥90% 达标，见 0c）**；**OUTPUT-DEGENERATION-GUARD（P0，S1-S4 全部闭合 2026-08-20——make-doom 退化复读失败防护；8K 全统一 + 补读闭环 + 实时检测 + 32K，见 0d）**；**CONTEXT-SCAFFOLDING-PULL-REDESIGN（P0，S1-S4 全部闭合 2026-08-21——预算块 PUSH→PULL + 工具输出汇总消息退役；命中率 94.45%、零哨兵触发、输入增长放缓；方案 C 维持 256K 暂不收紧（用户裁决），见 0e）**；**FUS-READ-ANCHOR-WRITE-GUARD（P0，S1/S2 已闭合——2026-08-21 设计定稿、S1 代码 + S2 测试完成；read_file 内容锚点下传 + 写前机械核证，S3-S4 待续，见 0f）** |
+| P0 | 当前工作集：设计已冻结，裁决后立即实施 | 评测冒烟暴露问题（P0-E 主项 7 项 + FUS-TOOL-SCOPE-CONTRACT 后续 2 项全部闭合 2026-08-18：ACAF 容器供应、console 工具名、计划视图步骤 ID、订单发放前拒绝入事件面、grep 搜索范围契约、plan_write 校验消息形状、actions 形状探针、list_dir 范围计数、grep files_searched 全结局探针，见 0a）；CLASSICAL-EXEC-ASSISTANT（生产组件，2026-08-16 用户裁决转正式，S1-S4 全部闭合）；PLAN-FIRST-BLACKBOARD（阶段 A/B/C 全部闭合 2026-08-16）；**FUS-BENCHMARK-FULL-EXEC（P0，实施完成待验证——2026-08-18 用户指示实施、暂不测试；验证闭环后闭合，见 0b）**；**LEDGER-FOLD-EXTERNAL-FILE（P0，S1-S4 验证闭环 2026-08-19——命中率问题优先于 P0-F 验证；provider 口径 95.33% ≥90% 达标，见 0c）**；**OUTPUT-DEGENERATION-GUARD（P0，S1-S4 全部闭合 2026-08-20——make-doom 退化复读失败防护；8K 全统一 + 补读闭环 + 实时检测 + 32K，见 0d）**；**CONTEXT-SCAFFOLDING-PULL-REDESIGN（P0，S1-S4 全部闭合 2026-08-21——预算块 PUSH→PULL + 工具输出汇总消息退役；命中率 94.45%、零哨兵触发、输入增长放缓；方案 C 维持 256K 暂不收紧（用户裁决），见 0e）**；**FUS-READ-ANCHOR-WRITE-GUARD（P0，S1-S4 全部闭合 2026-08-23——read_file 内容锚点下传 + 写前机械核证；S4 复用 NGRAM S4 实机复验：10 试次零误拒、锚点实机可见、命中率 94.11%–98.55% 全 ≥90%、零 400，计数 28 → 27，见 0f）**；**AGENT-DELIVERY-FLOW（P0 派生 0d 后续 7，S1-S4 全部闭合 2026-08-23——计划无空转、末步机械递交、引用修正一次/二次阻断、订单反馈；S4 复用 NGRAM S4 实机复验：8/8 完成试次走 submit 双阶段、零 400、命中率全 ≥90%，计数 29 → 28，见 0d 后续 7）** |
 | P1 | 无需裁决，可与 P0 并行 | FUS-COMPONENT-REGISTER、GAP-WINDOWS-EVIDENCE、IMPL-DEEPSEEK-TRANSPORT / SEC-CREDENTIALS、ORZ-SESSION-CONTEXT-MONITOR |
 | P2 | 生产化决策门：需用户裁决 | IMPL-CONTROL-FABRIC（fail-closed 启用、Slice 3/4）、OPS-PROTOCOL |
 | P3 | 收尾 / 清理 | EVIDENCE-LOCAL-BROWSER、GATE-CHAIN、DC 剩余信号、V11-IMPL-003/007、工作区收尾 |
@@ -962,6 +962,20 @@
 >   修正、订单反馈、零 400、命中率 ≥90%）。登记于 ADR-0010 §14.35
 >   第 28 项 / [设计 §6.5](AGENT_DELIVERY_FLOW_DESIGN_2026-08-23.md) /
 >   TODO P0-0d 后续 7 / CLI_PROJECT_INDEX。
+> - **2026-08-23 AGENT DELIVERY FLOW S4 复验闭环（用户指示补登记；复用
+>   NGRAM-GUARD-CALIBRATION S4 同一批实机数据，sweep-s4n-g4 / g5 /
+>   g5-cfi，k=1、官方方式；计数 29 → 28，S1-S4 全部闭合）**：新二进制
+>   （orz 05231f7）10 试次复验——计划无空转（8 完成试次按步执行至末步、
+>   终答绑定 receipts，历史 mteb 空转形态未再现）；末步递交走机械交付
+>   状态（8/8 完成试次 submit 双阶段：[delivery] 状态行渲染进黑板 plan →
+>   复核 → 确认置 done；git-multibranch 终答引用交付状态行；sam-cell-seg
+>   末步订单被 step_not_done 拒绝）；引用修正一次/二次硬阻断（portfolio/
+>   break-filter/mteb retry attempt=1 → block attempt=2；git-multibranch/
+>   sam-cell-seg retry 后通过）；订单反馈 receipt 点读链全走通（diff/delta
+>   机械形态由 S2 锁定）；零真实 400（10/10）；命中率 10/10 有 journal
+>   94.11%–98.55% 全 ≥90%。登记于 ADR-0010 §14.35 第 29 项 / [设计
+>   §6.6](AGENT_DELIVERY_FLOW_DESIGN_2026-08-23.md) / TODO P0-0d 后续 7 /
+>   CLI_PROJECT_INDEX。
 > - **2026-08-23 N-GRAM GUARD CALIBRATION 设计定稿（用户裁决；先落设计、
 >   未实施；**最优先——2026-08-23 用户指示，本轮提案 3**）**：来源=两次真实任务 3-gram 路径②边界误触发（旧轮
 >   portfolio-optimization + 本轮 video-processing，均显示 0.60、实际
@@ -1088,8 +1102,9 @@
 
 ### 0f. FUS-READ-ANCHOR-WRITE-GUARD（P0；2026-08-21 设计定稿，
 纯文档登记、未实施；设计轮不动计数 27；**S1 代码已实施 2026-08-21，
-实施入账 27 → 28；S2 测试已闭合 2026-08-21，S3-S4 待续**；
-2026-08-21 审查收口：I/O 错误
+实施入账 27 → 28；S2 测试已闭合 2026-08-21；S3 重建登记 2026-08-23
+（随 orz 05231f7 构建轮，计数不变仍 28）；**S4 复验闭环 2026-08-23，
+计数 28 → 27（S1-S4 全部闭合）**；2026-08-21 审查收口：I/O 错误
 fail-closed + clippy 修复）
 
 - 入口：[设计](READ_ANCHOR_WRITE_GUARD_DESIGN_2026-08-21.md)；索引：
@@ -1147,6 +1162,19 @@ fail-closed + clippy 修复）
   锚点返回、写门禁陈旧拒单→重读重下、零误拒、事件面留痕；命中率 ≥90%、
   零 400）。登记于 ADR-0010 §14.38 第 4 项 / [设计 §10](READ_ANCHOR_WRITE_GUARD_DESIGN_2026-08-21.md)
   / TODO P0-0f / CLI_PROJECT_INDEX。
+- **2026-08-23 S4 复验闭环（用户指示补登记；复用 NGRAM-GUARD-CALIBRATION
+  S4 同一批实机数据，sweep-s4n-g4 / g5 / g5-cfi，k=1、官方方式；计数
+  28 → 27，S1-S4 全部闭合）**：新二进制（orz 05231f7）10 试次复验——
+  read_file 锚点返回实机可见（mteb-retrieve 终答引用「读取锚点
+  sha256=1dec6f9c…d24bb，size=…」；break-filter 137 次 read_file）；
+  写门禁陈旧拒单→重读重下由 S2 单元级预演覆盖、实机无陈旧写入发生；
+  零误拒（10/10 零 content_anchor_mismatch，全部写入订单正常执行；
+  22 次 console_order_rejected 全为模型输入错误：step_not_done 8 /
+  invalid_arguments 12 / policy_denied 2）；事件面留痕（22 条机械盖章，
+  read-anchor 专属形态由 S2 断言锁定）；命中率 10/10 有 journal
+  94.11%–98.55% 全 ≥90%、10/10 零 HTTP 400。登记于 ADR-0010 §14.38
+  第 5 项 / [设计 §11](READ_ANCHOR_WRITE_GUARD_DESIGN_2026-08-21.md) /
+  TODO P0-0f / CLI_PROJECT_INDEX。
 
 ### 0. 前置收尾（提交前需用户确认）
 

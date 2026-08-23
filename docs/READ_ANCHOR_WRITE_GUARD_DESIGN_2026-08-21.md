@@ -188,3 +188,36 @@ NGRAM-GUARD-CALIBRATION 设计 §3）。对应源码=orz `05231f7`（含本主�
 锚点返回、写门禁陈旧拒单→重读重下、零误拒、事件面留痕；命中率 ≥90%、
 零 400）；计数不变仍 28（验证闭环后 28 → 27）。登记于 ADR-0010
 §14.38 第 4 项 / BACKLOG 0f / TODO P0-0f / CLI_PROJECT_INDEX。
+
+## 11. S4 复验登记（2026-08-23，用户指示补登记；复用 NGRAM-GUARD-CALIBRATION S4 实机数据）
+
+新二进制（orz `05231f7` 构建轮，104,664,664 B）10 试次实机复验
+（sweep-s4n-g4 / sweep-s4n-g5（code-from-image 经充值后单题重跑
+sweep-s4n-g5-cfi），k=1、官方方式、n-concurrent=1）：
+
+- **read_file 锚点返回**：小文件文本路径实机可见——mteb-retrieve 终答
+  引用「读取锚点 sha256=`1dec6f9c…d24bb`，size=…」；break-filter 137 次
+  read_file 调用；锚点形状（小文件 sha256/size/mtime + prompt 尾行、
+  空文件、大文件信封 mtime/content_sha256、PDF 路径无锚点、serde
+  round-trip）由 S2 单测锁定。
+- **写门禁陈旧拒单→重读重下**：S2 单元级预演（陈旧拒绝→重读重下成功）
+  覆盖修改后拒绝→重读重下全链；实机 10 试次无陈旧写入自然发生。
+- **零误拒**：10/10 试次零 `content_anchor_mismatch` 拒单，全部
+  search_replace/写入订单正常执行（tool_completed exit 0）；合计 22 次
+  `console_order_rejected` 全为模型输入错误（step_not_done 8 /
+  invalid_arguments 12 / policy_denied 2，无设计/机制误拒）。
+- **事件面留痕**：`console_order_rejected` 事件面实机留痕 22 条
+  （phase/step/code/order_id 机械盖章）；read-anchor 拒单事件面形态
+  （phase=pre_issue / step=protocol / code=content_anchor_mismatch、
+  upstream expected/actual、re-read 指引、零编辑）由 S2 错误信封完整
+  断言锁定。
+- **命中率 ≥90%、零 400**：10/10 有 journal、94.11%–98.55% 全 ≥90%
+  （含 video-processing 300 请求 98.55%）；10/10 零 HTTP 400（仅余额
+  invalid_request_error 与网络 zero_chunk transport_retry exhausted
+  两次异常，均非 400、非设计问题）。
+
+边界：expected_anchor 为模型可选下发字段，实机未出现携带场景（核证链
+路由 S2 四场景单测覆盖：锚点匹配放行（mtime null 跳快筛）、同 size 同
+mtime 异内容 sha256 权威兜底拒单、陈旧拒绝→重读重下、缺失锚点保持既有
+行为）。计数：**S4 验证闭环 28 → 27（S1-S4 全部闭合）**。登记于
+ADR-0010 §14.38 第 5 项 / BACKLOG 0f / TODO P0-0f / CLI_PROJECT_INDEX。
