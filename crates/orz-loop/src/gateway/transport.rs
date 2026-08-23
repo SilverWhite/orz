@@ -2895,6 +2895,166 @@ mod tests {
     }
 
     #[test]
+    fn degeneration_detector_ngram_boundary_below_070_never_hits() {
+        // S2（NGRAM-GUARD-CALIBRATION，设计 §2.3）：0.69x 边界样本——
+        // 单份 8 词 core 的 3-gram 重复率约 0.694（< 0.70，`>` 严格大于）
+        // ——任意 feed 均不计数、永不触发（旧 0.60 阈值下同 profile 会
+        // 单发即 trip；0.70 阈值下被边界吸收）。
+        let core = "the quick brown fox jumps over lazy dog";
+        let mut d = DegenerationDetector::default();
+        for i in 0..200 {
+            d.feed_content(&format!("{core} marker {i:04}"));
+        }
+        assert!(d.trip_reason().is_none(), "0.694 < 0.70 must never trip");
+        assert!(
+            d.take_audit_hits().is_empty(),
+            "0.694 < 0.70 must never count a hit"
+        );
+    }
+
+    #[test]
+    fn degeneration_detector_ngram_boundary_above_070_trips_after_three_hits() {
+        // S2（设计 §2.3）：0.70x 边界样本——9 词 core 的 3-gram 重复率约
+        // 0.720（> 0.70）——窗口填满后每次超阈值 feed 计 1 次命中：前 2
+        // 次仅审计（1/3、2/3），第 3 次才 trip（3/3）；`>` 严格大于语义
+        // 由 0.694（不计数）/ 0.720（计数）两侧明确断言。
+        let core = "the quick brown fox jumps over lazy dog alpha";
+        let mut d = DegenerationDetector::default();
+        for i in 0..200 {
+            d.feed_content(&format!("{core} marker {i:04}"));
+        }
+        let audits = d.take_audit_hits();
+        assert_eq!(
+            audits.len(),
+            2,
+            "two sub-threshold 3-gram hits must be audited, got {audits:?}"
+        );
+        assert!(audits[0].contains("stream hit 1/3"), "{}", audits[0]);
+        assert!(audits[1].contains("stream hit 2/3"), "{}", audits[1]);
+        let reason = d
+            .trip_reason()
+            .expect("0.720 > 0.70 must trip after 3 hits");
+        assert!(reason.contains("3-gram repetition ratio"), "{reason}");
+        assert!(reason.contains("3/3"), "{reason}");
+    }
+
+    #[test]
+    fn degeneration_detector_ngram_single_feed_counts_one_hit() {
+        // S2（设计 §2.2）：命中按 feed 粒度计 1 次——单个超大高重复 feed
+        // （约 1200 token、ratio≈0.825）也只计 1 次（审计）、不 trip；
+        // 第 2、3 个同类 feed 依次计 2、3 次，第 3 个才触发。滚动路径
+        // 保持静默（同字符 span 间隔 6120 字符 > 800 窗口缓冲，无精确
+        // 复现）。
+        let chunk = {
+            let core = "the quick brown fox jumps over lazy dog the quick \
+                        brown fox jumps over lazy dog";
+            let mut s = String::new();
+            for i in 0..60 {
+                s.push_str(&format!("{core} marker {i:04} "));
+            }
+            s
+        };
+        let mut d = DegenerationDetector::default();
+        d.feed_content(&chunk);
+        assert!(
+            d.trip_reason().is_none(),
+            "one huge feed = 1 hit, must not trip"
+        );
+        let audits = d.take_audit_hits();
+        assert_eq!(audits.len(), 1, "one hit audited, got {audits:?}");
+        assert!(audits[0].contains("stream hit 1/3"), "{}", audits[0]);
+        d.feed_content(&chunk);
+        assert!(
+            d.trip_reason().is_none(),
+            "two feeds = 2 hits, must not trip"
+        );
+        let audits = d.take_audit_hits();
+        assert_eq!(audits.len(), 1, "second feed = hit 2, got {audits:?}");
+        assert!(audits[0].contains("stream hit 2/3"), "{}", audits[0]);
+        d.feed_content(&chunk);
+        let reason = d.trip_reason().expect("3rd feed = hit 3, must trip");
+        assert!(reason.contains("3-gram repetition ratio"), "{reason}");
+        assert!(reason.contains("3/3"), "{reason}");
+    }
+
+    #[test]
+    fn degeneration_detector_ngram_hit_counter_survives_gaps() {
+        // S2（设计 §2.2：间隔不重置）：命中 1-2（feed 90/91）后插入大
+        // 间隔（单 feed 300 互异 token，窗口重复率压到 0.70 以下、间隔
+        // 自身不计命中）——计数不清零（ngram_hits 仍 2）；重新灌入高
+        // 重复内容恢复超阈值后，下一次命中即第 3 次并 trip（3/3）——
+        // 若间隔重置，需再累计 3 次才触发且中间先出两条新审计。
+        let core = "the quick brown fox jumps over lazy dog alpha";
+        let mut d = DegenerationDetector::default();
+        for i in 0..92 {
+            d.feed_content(&format!("{core} marker {i:04}"));
+        }
+        assert_eq!(
+            d.content_repetition.ngram_hits, 2,
+            "fill phase must land exactly 2 hits (feeds 90/91)"
+        );
+        let audits = d.take_audit_hits();
+        assert_eq!(
+            audits.len(),
+            2,
+            "two sub-threshold hits audited, got {audits:?}"
+        );
+        assert!(d.trip_reason().is_none(), "2 hits must not trip");
+        let gap = (0..100)
+            .map(|j| format!("g{j:03} w{j:03} t{j:03}"))
+            .collect::<Vec<_>>()
+            .join(" ");
+        d.feed_content(&gap);
+        assert_eq!(
+            d.content_repetition.ngram_hits, 2,
+            "gap feed below threshold must neither hit nor reset the counter"
+        );
+        assert!(d.trip_reason().is_none(), "gap must not trip");
+        assert!(
+            d.take_audit_hits().is_empty(),
+            "gap feed below threshold must not audit"
+        );
+        for i in 0..200 {
+            d.feed_content(&format!("{core} marker R{i:04}"));
+            if d.trip_reason().is_some() {
+                break;
+            }
+        }
+        let reason = d.trip_reason().expect("3rd hit after gap must trip");
+        assert!(reason.contains("3-gram repetition ratio"), "{reason}");
+        assert!(reason.contains("3/3"), "{reason}");
+    }
+
+    #[test]
+    fn degeneration_detector_ngram_hits_discarded_at_stream_end() {
+        // S2（设计 §2.2：流结束丢弃）：命中计数不跨请求累积——新流首
+        // feed 即使与旧流累计第 3 次同源，也只计 1 次（审计）、不 trip。
+        let core = "the quick brown fox jumps over lazy dog alpha";
+        let mut first = DegenerationDetector::default();
+        for i in 0..92 {
+            first.feed_content(&format!("{core} marker {i:04}"));
+        }
+        assert_eq!(first.content_repetition.ngram_hits, 2);
+        assert!(first.trip_reason().is_none(), "2 hits in first stream");
+        assert_eq!(first.take_audit_hits().len(), 2);
+        let mut second = DegenerationDetector::default();
+        for i in 0..91 {
+            second.feed_content(&format!("{core} marker {i:04}"));
+        }
+        assert_eq!(
+            second.content_repetition.ngram_hits, 1,
+            "fresh stream starts with zero hits"
+        );
+        assert!(
+            second.trip_reason().is_none(),
+            "fresh stream must not trip on its first hit"
+        );
+        let audits = second.take_audit_hits();
+        assert_eq!(audits.len(), 1);
+        assert!(audits[0].contains("stream hit 1/3"), "{}", audits[0]);
+    }
+
+    #[test]
     fn degeneration_detector_trips_after_three_stream_hits() {
         // 2026-08-22 再校准（用户裁决：流内累计命中 ≥3 次才中断+降级）+
         // 2026-08-23 L=400：1–2 次命中仅审计留痕（take_audit_hits），不
@@ -3394,6 +3554,22 @@ mod tests {
         assert!(
             d.take_audit_hits().is_empty(),
             "rolling path must stay silent (no 400-char span repeats)"
+        );
+    }
+
+    #[test]
+    fn detector_reasoning_ngram_boundary_below_070_never_hits() {
+        // S2（设计 §2.3）：reasoning 族与 content 同 profile 同语义——
+        // 0.69x 边界样本（ratio≈0.694 < 0.70）永不计数、永不触发。
+        let core = "the quick brown fox jumps over lazy dog";
+        let mut d = DegenerationDetector::default();
+        for i in 0..200 {
+            d.feed_reasoning(&format!("{core} marker {i:04}"));
+        }
+        assert!(d.trip_reason().is_none(), "0.694 < 0.70 must never trip");
+        assert!(
+            d.take_audit_hits().is_empty(),
+            "0.694 < 0.70 must never count a hit"
         );
     }
 
