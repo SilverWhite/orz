@@ -951,6 +951,17 @@
 >   0 失败 / 3 ignored、fmt 干净、clippy 无新增。登记于 ADR-0010 §14.35
 >   第 22 项 / [设计 §6.4](AGENT_DELIVERY_FLOW_DESIGN_2026-08-23.md) /
 >   TODO P0-0d 后续 7 / CLI_PROJECT_INDEX。
+> - **2026-08-23 AGENT DELIVERY FLOW S3 重建登记（用户指示登记 S3；
+>   Linux musl，ORZ-BUILD-MOUNT-001；计数不变仍 29，S4 闭环后 29 →
+>   28）**：本主题 S1/S2/审查处理代码（orz 663be55 + ed8e902）已随
+>   orz HEAD 05231f7 进入 NGRAM-GUARD-CALIBRATION S3 构建轮（同一
+>   Linux musl 三件套，无需重复构建）——BUILD_EXIT=0，三件套时间戳
+>   2026-08-23 08:50 HKT（orz 104,664,664 B / signer 1,388,592 B /
+>   provision 1,206,568 B），最小可执行冒烟=三件正常加载执行；对应源码
+>   orz 05231f7 + 父 35788a0。S4 复验待续（计划无空转、末步递交、引用
+>   修正、订单反馈、零 400、命中率 ≥90%）。登记于 ADR-0010 §14.35
+>   第 28 项 / [设计 §6.5](AGENT_DELIVERY_FLOW_DESIGN_2026-08-23.md) /
+>   TODO P0-0d 后续 7 / CLI_PROJECT_INDEX。
 > - **2026-08-23 N-GRAM GUARD CALIBRATION 设计定稿（用户裁决；先落设计、
 >   未实施；**最优先——2026-08-23 用户指示，本轮提案 3**）**：来源=两次真实任务 3-gram 路径②边界误触发（旧轮
 >   portfolio-optimization + 本轮 video-processing，均显示 0.60、实际
@@ -1126,6 +1137,16 @@ fail-closed + clippy 修复）
   通过（0 失败）、fmt 干净、clippy 无新增告警（30 条既有位置核对）、
   cargo check --workspace 通过。计数：仍 28（S3-S4 待续）。登记于
   ADR-0010 §14.38 第 3 项 / 设计 §9 / TODO P0-0f / CLI_PROJECT_INDEX。
+- **2026-08-23 S3 重建登记（用户指示登记 S3；Linux musl，ORZ-BUILD-
+  MOUNT-001；计数不变仍 28，验证闭环后 28 → 27）**：本主题 S1/S2 代码
+  （orz 3ad09e4 + 554c131）已随 orz HEAD 05231f7 进入 NGRAM-GUARD-
+  CALIBRATION S3 构建轮（同一 Linux musl 三件套，无需重复构建）——
+  BUILD_EXIT=0，三件套时间戳 2026-08-23 08:50 HKT（orz 104,664,664 B /
+  signer 1,388,592 B / provision 1,206,568 B），最小可执行冒烟=三件
+  正常加载执行；对应源码 orz 05231f7 + 父 35788a0。S4 复验待续（read_file
+  锚点返回、写门禁陈旧拒单→重读重下、零误拒、事件面留痕；命中率 ≥90%、
+  零 400）。登记于 ADR-0010 §14.38 第 4 项 / [设计 §10](READ_ANCHOR_WRITE_GUARD_DESIGN_2026-08-21.md)
+  / TODO P0-0f / CLI_PROJECT_INDEX。
 
 ### 0. 前置收尾（提交前需用户确认）
 

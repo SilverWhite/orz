@@ -216,3 +216,19 @@ S1 代码 → S2 测试 → S3 重建（Linux musl，ORZ-BUILD-MOUNT-001）→ S
   `changed: N+ files`（不再把 cap 值误读为真实总数）。
 - **O7 末步强制豁免评估结论登记**：实施评估=不设豁免白名单，全量强制
   （`plan_write` 校验兜底）；非常规计划需按模板形状书写末步 id。
+
+### 6.5 S3 重建登记（2026-08-23，用户指示登记 S3；Linux musl，ORZ-BUILD-MOUNT-001）
+
+本主题 S1/S2/审查处理代码（orz `663be55` + `ed8e902`）已随 orz HEAD
+`05231f7` 进入 NGRAM-GUARD-CALIBRATION S3 构建轮（同一 Linux musl
+三件套，无需重复构建）：容器增量构建（`rust:1.97-slim`；挂载
+`D:\CLI:/orz`、工作目录 `/orz/orz`；apt 阿里云镜像 + 官方
+static.rust-lang.org + 静态 rg 15.0.0 源码安装；`-j 1`）**BUILD_EXIT=0**；
+三件套时间戳 **2026-08-23 08:50 HKT**（orz 104,664,664 B / orz-signer
+1,388,592 B / orz-acaf-provision 1,206,568 B；SHA256 与冒烟结果同
+NGRAM-GUARD-CALIBRATION 设计 §3——orz 无 TTY io error 属预期、provision
+usage、signer manifest 缺失）。对应源码=orz `05231f7`（含本主题提交
+`663be55` + `ed8e902`）+ 父仓库 `35788a0`。S4 复验待续（计划无空转、
+末步递交、引用修正、订单反馈、零 400、命中率 ≥90%）；计数不变仍 29
+（S4 闭环后 29 → 28）。登记于 ADR-0010 §14.35 第 28 项 / BACKLOG 0d
+后续 7 / TODO P0-0d 后续 7 / CLI_PROJECT_INDEX。

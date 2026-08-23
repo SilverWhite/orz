@@ -173,3 +173,18 @@
   核对无新增）；`cargo check --workspace` 通过（orz-host 1 条既有告警）。
 - **计数**：仍 28（实施入账 27 → 28；S2 为测试闭合不动计数）；S3 重建 →
   S4 复验后 28 → 27。
+
+## 10. S3 重建登记（2026-08-23，用户指示登记 S3；Linux musl，ORZ-BUILD-MOUNT-001）
+
+本主题 S1/S2 代码（orz `3ad09e4` + `554c131`）已随 orz HEAD `05231f7`
+进入 NGRAM-GUARD-CALIBRATION S3 构建轮（同一 Linux musl 三件套，无需
+重复构建）：容器增量构建（`rust:1.97-slim`；挂载 `D:\CLI:/orz`、工作
+目录 `/orz/orz`；apt 阿里云镜像 + 官方 static.rust-lang.org + 静态
+rg 15.0.0 源码安装；`-j 1`）**BUILD_EXIT=0**；三件套时间戳
+**2026-08-23 08:50 HKT**（orz 104,664,664 B / orz-signer 1,388,592 B /
+orz-acaf-provision 1,206,568 B；SHA256 与最小可执行冒烟同
+NGRAM-GUARD-CALIBRATION 设计 §3）。对应源码=orz `05231f7`（含本主题
+提交 `3ad09e4` + `554c131`）+ 父仓库 `35788a0`。S4 复验待续（read_file
+锚点返回、写门禁陈旧拒单→重读重下、零误拒、事件面留痕；命中率 ≥90%、
+零 400）；计数不变仍 28（验证闭环后 28 → 27）。登记于 ADR-0010
+§14.38 第 4 项 / BACKLOG 0f / TODO P0-0f / CLI_PROJECT_INDEX。
