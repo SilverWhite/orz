@@ -297,8 +297,14 @@ const REPETITION_HASH_POW: u64 = repetition_hash_pow();
 /// 窗口（设计 §3.3；复读诱因=超长输出，窗口足够小前不误报）。
 pub const DEGENERATION_MIN_TOKENS: usize = 1_000;
 
-/// 最近窗口内 3-gram 重复率阈值（>60% 触发；设计 §3.3）。
-pub const DEGENERATION_NGRAM_REPEAT_RATIO: f64 = 0.60;
+/// 最近窗口内 3-gram 重复率阈值（>70% 触发；设计 §3.3，2026-08-23
+/// NGRAM-GUARD-CALIBRATION：0.60→**0.70**，`>` 严格大于保留）。
+pub const DEGENERATION_NGRAM_REPEAT_RATIO: f64 = 0.70;
+
+/// 3-gram 路径②流内累计命中门槛（≥3 才 trip；1–2 次命中仅审计留痕、
+/// 间隔不重置、流结束丢弃——与路径①纪律对齐，设计 §2.2/§3.3，
+/// 2026-08-23 NGRAM-GUARD-CALIBRATION）。
+pub const NGRAM_HIT_LIMIT: usize = 3;
 
 /// Token pattern mirroring Python `[\w一-鿿]+` (Unicode word + CJK) — the
 /// 3-gram fallback's tokenizer, migrated from the retired runtime stagnation
@@ -635,9 +641,13 @@ struct RepetitionFamilyState {
     total_tokens: usize,
     /// 最近 1K token 的滑动窗口。
     window_tokens: Vec<String>,
-    /// 流内累计命中（≥`REPETITION_HIT_LIMIT` 触发；1–2 次仅审计留痕、
-    /// 间隔不重置）。
+    /// 路径①滚动哈希流内累计确认命中（≥`REPETITION_HIT_LIMIT` 触发；
+    /// 1–2 次仅审计留痕、间隔不重置）。
     hits: usize,
+    /// 路径②3-gram 流内累计命中（每次 feed 超阈值计 1 次；≥`NGRAM_HIT_LIMIT`
+    /// 才 trip；1–2 次仅审计留痕、间隔不重置、流结束丢弃——2026-08-23
+    /// NGRAM-GUARD-CALIBRATION）。
+    ngram_hits: usize,
 }
 
 /// 生成期输出健康哨兵（设计 §3.3，第一层治本）：喂入 content delta +
@@ -793,8 +803,11 @@ impl DegenerationDetector {
 /// 设计 §3.3 修订）；1–2 次命中仅审计留痕（`audit_hits`），不中断、不
 /// 降级；二级不过的命中候选也留痕（span + 标点块统计，按 delta 聚合为
 /// 一条摘要 + 计数）、不计数；
-/// ② 累计 ≥1K token 且最近 1K token 内 3-gram 重复率 >60% → 触发
-/// （保留兜底，不经命中门槛——重复率判定自带 1K token 滑动窗口粒度）。
+/// ② 累计 ≥1K token 且最近 1K token 内 3-gram 重复率 >70% → 每次 feed
+/// 计 1 次流内命中，累计 ≥`NGRAM_HIT_LIMIT` 才触发（保留兜底，不经二级
+/// ——重复率判定自带 1K token 滑动窗口粒度；2026-08-23 校准取代旧「单发
+/// 即 trip」：正常推理自引用稳定压在 0.60 上沿，阈值提升 + 累计命中足够
+/// 覆盖，1–2 次命中仅审计留痕）。
 /// 自由函数（非方法）——调用方以不相交的字段借用传入，避免方法整体
 /// 借用与字段借用冲突。
 fn feed_repetition(
@@ -871,8 +884,11 @@ fn feed_repetition(
             }
         }
     }
-    // ② 重复率：累计 ≥ 1K token 且最近 1K token 内 3-gram 重复率 > 60%
-    //    → 触发（n-gram 兜底；tokenizer 迁移自退役的停滞守卫）。
+    // ② 重复率：累计 ≥ 1K token 且最近 1K token 内 3-gram 重复率 > 70%
+    //    → 每次 feed 计 1 次流内命中，累计 ≥ `NGRAM_HIT_LIMIT` 才触发
+    //    （n-gram 兜底；tokenizer 迁移自退役的停滞守卫；2026-08-23
+    //    NGRAM-GUARD-CALIBRATION：阈值 0.60→0.70 + 流内累计命中——与
+    //    路径①同纪律，1–2 次仅审计、间隔不重置、流结束丢弃）。
     let tokens = tokenize(delta);
     state.total_tokens += tokens.len();
     state.window_tokens.extend(tokens);
@@ -896,16 +912,34 @@ fn feed_repetition(
             let duplicated = total_ngrams.saturating_sub(distinct);
             let ratio = duplicated as f64 / total_ngrams as f64;
             if ratio > DEGENERATION_NGRAM_REPEAT_RATIO {
-                // 2026-08-22 审查处理（P3）：3-gram 触发无「重复 span」语义
-                // ——清掉本 delta 内滚动路径可能留下的子门槛命中上下文，
-                // 避免 trip WARN 把子门槛 span 误标为该触发的审计上下文
-                // （3-gram 的审计口径是重复率本身，见 detail）。
-                *trigger_context = None;
-                *trip = Some(format!(
-                    "{detail_prefix} 3-gram repetition ratio {ratio:.2} \
-                     in the recent {} {family} tokens",
-                    state.window_tokens.len()
-                ));
+                state.ngram_hits = state.ngram_hits.saturating_add(1);
+                if state.ngram_hits >= NGRAM_HIT_LIMIT {
+                    // 2026-08-22 审查处理（P3）+ 2026-08-23 校准：3-gram
+                    // 触发无「重复 span」语义——清掉本 delta 内滚动路径
+                    // 可能留下的子门槛命中上下文，避免 trip WARN 把子
+                    // 门槛 span 误标为该触发的审计上下文（3-gram 的审计
+                    // 口径是重复率本身，见 detail）。
+                    *trigger_context = None;
+                    *trip = Some(format!(
+                        "{detail_prefix} 3-gram repetition ratio {ratio:.3} \
+                         in the recent {} {family} tokens, {}/{} stream hits",
+                        state.window_tokens.len(),
+                        state.ngram_hits,
+                        NGRAM_HIT_LIMIT
+                    ));
+                } else {
+                    // 1–2 次命中：仅审计留痕——审计内容 = ratio + 窗口
+                    // token 数 + 族（3-gram 无「重复 span」语义，不复用
+                    // span 上下文；设计 §2.2）。
+                    audit_hits.push(format!(
+                        "3-gram repetition ratio {ratio:.3} in the recent {} \
+                         {family} tokens (stream hit {}/{}; audit only, not \
+                         tripping)",
+                        state.window_tokens.len(),
+                        state.ngram_hits,
+                        NGRAM_HIT_LIMIT
+                    ));
+                }
             }
         }
     }
@@ -2826,14 +2860,34 @@ mod tests {
         // 修订：共享核心压到 L 以下 + 互异尾部——任何 L 字符窗口必然包含
         // 变体特有标记，滚动哈希任意偏移路径保持静默（仅 3-gram 重复率
         // 路径是本次被测对象）；2026-08-22 L=200、2026-08-23 L=400 后再
-        // 校准：每 feed 追加唯一 4 位标记，杜绝 400 字符 span 精确复现。
-        let core = "the quick brown fox jumps over lazy dog";
+        // 校准：每 feed 追加唯一 4 位标记，杜绝 400 字符 span 精确复现；
+        // 2026-08-23 NGRAM-GUARD-CALIBRATION：单份 core 的 3-gram 重复率
+        // 约 0.694（恰为 0.69x 边界样本，S2 保留为「不触发」用例）——
+        // 本用例改双份 core（ratio ≈ 0.825 > 0.70）+ 流内累计命中 ≥3
+        // （窗口填满后前 2 次超阈值 feed 仅审计留痕，第 3 次才触发）。
+        let core = "the quick brown fox jumps over lazy dog the quick brown \
+                    fox jumps over lazy dog";
         let mut d = DegenerationDetector::default();
         for i in 0..200 {
             d.feed_content(&format!("{core} marker {i:04}"));
         }
+        let audits = d.take_audit_hits();
+        assert_eq!(
+            audits.len(),
+            2,
+            "two sub-threshold 3-gram hits must be audited, got {audits:?}"
+        );
+        assert!(
+            audits.iter().all(|a| {
+                a.contains("3-gram repetition ratio")
+                    && a.contains("content tokens")
+                    && a.contains("audit only")
+            }),
+            "audit entries must carry ratio + window + family, got {audits:?}"
+        );
         let reason = d.trip_reason().expect("high repetition must trip");
         assert!(reason.contains("3-gram repetition ratio"), "{reason}");
+        assert!(reason.contains("3/3"), "{reason}");
         assert!(
             d.take_audit_hits().is_empty(),
             "rolling path must stay silent (no 400-char span repeats)"
@@ -3306,14 +3360,28 @@ mod tests {
 
     #[test]
     fn detector_reasoning_repetition_trips_on_high_ratio() {
-        // 与 content 复读同一 1K 窗口 3-gram 重复率算法（>60% 触发）；
-        // 2026-08-21 修订 + 2026-08-22/23 L=400：滚动哈希任意偏移保持静默
-        // （每 feed 追加唯一 4 位标记，同 content 用例）。
-        let core = "the quick brown fox jumps over lazy dog";
+        // 与 content 复读同一 1K 窗口 3-gram 重复率算法（>70% 触发 +
+        // 流内累计命中 ≥3，2026-08-23 NGRAM-GUARD-CALIBRATION）；2026-08-21
+        // 修订 + 2026-08-22/23 L=400：滚动哈希任意偏移保持静默（每 feed
+        // 追加唯一 4 位标记，同 content 用例；双份 core 使 ratio ≈ 0.825）。
+        let core = "the quick brown fox jumps over lazy dog the quick brown \
+                    fox jumps over lazy dog";
         let mut d = DegenerationDetector::default();
         for i in 0..200 {
             d.feed_reasoning(&format!("{core} marker {i:04}"));
         }
+        let audits = d.take_audit_hits();
+        assert_eq!(
+            audits.len(),
+            2,
+            "two sub-threshold 3-gram hits must be audited, got {audits:?}"
+        );
+        assert!(
+            audits
+                .iter()
+                .all(|a| a.contains("3-gram repetition ratio") && a.contains("reasoning tokens")),
+            "{audits:?}"
+        );
         let reason = d
             .trip_reason()
             .expect("high reasoning repetition must trip");
@@ -3322,6 +3390,7 @@ mod tests {
             "{reason}"
         );
         assert!(reason.contains("3-gram repetition ratio"), "{reason}");
+        assert!(reason.contains("3/3"), "{reason}");
         assert!(
             d.take_audit_hits().is_empty(),
             "rolling path must stay silent (no 400-char span repeats)"
