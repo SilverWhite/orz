@@ -2819,6 +2819,28 @@ ADR §3.6 正文修订随实施登记。
     命中率 ≥90%；content 族 0.60–0.70 区间实机观察）。登记于设计
     `NGRAM_GUARD_CALIBRATION_DESIGN_2026-08-23.md` §3 / BACKLOG 0d
     后续 8 / TODO P0-0d 后续 8 / CLI_PROJECT_INDEX。
+27. **N-GRAM GUARD CALIBRATION S4 复验闭环（2026-08-23 用户放行；
+    G4/G5 对照，sweep-s4n-g4 / sweep-s4n-g5（code-from-image 经充值
+    后单题重跑 sweep-s4n-g5-cfi），k=1、官方方式（无 max_wallclock）、
+    n-concurrent=1；**S3/S4 验证闭环，计数 30 → 29**）**：新二进制
+    （orz 05231f7 构建轮，104,664,664 B）实机运行——G4（git-multibranch
+    / sam-cell-seg / portfolio-optimization / video-processing /
+    mcmc-sampling-stan，2h05m，3/5 reward 1.0）**全 5 题零 3-gram trip、
+    零哨兵触发、零 400**（含历史误触发对照：portfolio-optimization 与
+    video-processing 旧轮各 1 次 3-gram 0.60 边界触发，本轮均零触发；
+    video-processing 本轮 AgentTimeoutError=官方超时、机制无异常、
+    journal 完整 300 请求；sam-cell-seg 零复读触发）；G5（5 题，主轮
+    4/5 后 harbor 遇 httpx ConnectError 网络抖动退出，resume 补跑
+    code-from-image 时 API 余额不足 NonZeroAgentExitCodeError，充值后
+    单题重跑 reward 1.0）**全 5 题零 3-gram trip、零触发、零 400**；
+    两次异常均非哨兵、非 400、非设计问题。命中率 10/10 有 journal：
+    94.11%–98.55% 全 ≥90%。构造流行为（判定层实测）：0.694 不计数不
+    触发、0.720 三连才 trip、e2e 退化流中断+降级全绿（全量 orz-loop
+    585/0/3）。观察项：10 试次均无 3-gram 审计条目（历史 0.60–0.61
+    边界带未再现；content 族 0.60–0.70 实机样本仍空，保持 §2.4 已接受
+    漏判登记）。**计数：S3/S4 验证闭环 30 → 29（AGENT-DELIVERY-FLOW
+    S3/S4 待续，闭环后 29 → 28）。**登记于设计 §3 / BACKLOG 0d 后续
+    8 / TODO P0-0d 后续 8 / CLI_PROJECT_INDEX。
 
 ### 14.31 v1.31 补写裁决索引（2026-08-19）
 

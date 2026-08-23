@@ -995,6 +995,22 @@
 >   provision usage、signer manifest 缺失）；对应源码 orz 05231f7 +
 >   父 35788a0。登记于 ADR-0010 §14.35 第 26 项 / 设计 §3 / TODO
 >   P0-0d 后续 8 / CLI_PROJECT_INDEX。
+> - **2026-08-23 S4 复验闭环（用户放行；G4/G5 对照，sweep-s4n-g4 /
+>   sweep-s4n-g5（code-from-image 经充值后单题重跑 sweep-s4n-g5-cfi），
+>   k=1、官方方式、n-concurrent=1；**计数 30 → 29，NGRAM-GUARD-
+>   CALIBRATION 全部闭合**）**：新二进制（orz 05231f7 构建轮）实机运行
+>   ——G4 全 5 题零 3-gram trip、零哨兵触发、零 400（历史误触发对照
+>   portfolio-optimization / video-processing 均零触发；video-
+>   processing AgentTimeoutError=官方超时、机制无异常）；G5 全 5 题零
+>   3-gram trip、零触发、零 400（主轮 4/5 后 harbor 遇 httpx
+>   ConnectError 网络抖动退出；resume 补跑 code-from-image 遇 API 余额
+>   不足 NonZeroAgentExitCodeError，充值后单题重跑 reward 1.0——两次
+>   异常均非哨兵、非 400、非设计问题）；命中率 10/10 有 journal、
+>   94.11%–98.55% 全 ≥90%；构造流行为（0.694 不触发、0.720 三连才
+>   trip、e2e 中断+降级）实测全绿。观察项：10 试次均无 3-gram 审计
+>   条目（历史 0.60–0.61 边界带未再现；content 族 0.60–0.70 实机样本
+>   仍空，保持已接受漏判登记）。登记于 ADR-0010 §14.35 第 27 项 /
+>   设计 §3 / TODO P0-0d 后续 8 / CLI_PROJECT_INDEX。
 
 ### 0e. CONTEXT-SCAFFOLDING-PULL-REDESIGN（P0；2026-08-21 设计定稿，
 **S1-S4 全部闭合 2026-08-21，计数 28 → 27**）

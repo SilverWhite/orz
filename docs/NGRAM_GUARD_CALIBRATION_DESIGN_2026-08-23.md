@@ -1,12 +1,10 @@
 # N-GRAM GUARD CALIBRATION 设计（2026-08-23：阈值 0.7 + 流内累计命中 + 口径统一）
 
-> 状态：`current-design`（2026-08-23 设计定稿，用户裁决；先落设计、
-> 未实施；**S1 代码实施 + S2 测试闭合 2026-08-23（用户放行；orz
-> 2563121 → 1c87681），实施入账 29 → 30，S3-S4 待续；**S1 全面审查
-> 处理 2026-08-23（用户指示处理审查全部问题；D1 边界登记修正 + I1
-> 审计日志修正，计数不变仍 30）**；**S3 重建完成 2026-08-23（Linux
-> musl，ORZ-BUILD-MOUNT-001 契约，BUILD_EXIT=0，三件套 08:50 HKT），
-> S4 复验待续，计数不变仍 30（S4 闭环后回落 30 → 29）**）。
+> 状态：`implemented`（2026-08-23 设计定稿 + S1-S4 全部闭合；S1 代码
+> 实施 + S2 测试闭合（orz 2563121 → 1c87681）+ S1 全面审查处理
+> （D1 边界登记修正 + I1 审计日志修正）+ S3 重建（Linux musl，
+> ORZ-BUILD-MOUNT-001，BUILD_EXIT=0，三件套 08:50 HKT）+ S4 复验闭环
+> （G4/G5 对照零 3-gram trip、零 400、命中率全 ≥90%）——**计数 30 → 29**）。
 > 入口：ADR-0010 §14.35 第 20 项 / BACKLOG 0d 后续 8 / TODO P0-0d 后续 8 /
 > CLI_PROJECT_INDEX。关联：输出健康哨兵 3-gram 路径②（
 > DEEPSEEK_OUTPUT_BUDGET_AND_STALL_GUARD_DESIGN §3.3/§3.5）。
@@ -126,6 +124,41 @@ manifest 缺失）。对应源码=orz 05231f7（S1 实施 + 审查处理）+ 父
 ≥0.70 三连才 trip、零真实 400、命中率 ≥90%；content 族 0.60–0.70 区间
 实机观察）。登记于 ADR-0010 §14.35 第 26 项 / BACKLOG 0d 后续 8 /
 TODO P0-0d 后续 8 / CLI_PROJECT_INDEX。
+
+**2026-08-23 S4 复验闭环（用户放行；G4/G5 对照，sweep-s4n-g4 /
+sweep-s4n-g5（code-from-image 经充值后单题重跑 sweep-s4n-g5-cfi），
+k=1、官方方式（无 max_wallclock）、n-concurrent=1；**S3/S4 验证闭环，
+计数 30 → 29**）**：新二进制（orz 05231f7 构建轮，104,664,664 B）
+实机运行——
+
+- **G4（git-multibranch / sam-cell-seg / portfolio-optimization /
+  video-processing / mcmc-sampling-stan，2h05m，3/5 reward 1.0）**：
+  **全 5 题零 3-gram trip、零输出健康哨兵触发、零退化、零 400**——
+  含历史误触发对照：portfolio-optimization（旧 G4 官方轮 1 次 3-gram
+  0.60 边界触发，本轮零触发且 reward 1.0）、video-processing（旧
+  sweep-s4-g4 1 次 3-gram 0.60 边界触发，本轮零触发；本轮
+  AgentTimeoutError=官方任务超时、机制无异常、journal 完整 300 请求）；
+  sam-cell-seg 零复读触发（对照旧 L=200 轮 2 次）；命中率 96.92%–
+  98.55% 全 ≥90%（5/5 有 journal）。
+- **G5（path-tracing-reverse / mteb-retrieve / code-from-image /
+  break-filter-js-from-html / sanitize-git-repo，主轮 4/5 后 harbor 遇
+  httpx ConnectError 网络抖动退出；resume 补跑 code-from-image 时 API
+  账户余额不足（Insufficient Balance）→ NonZeroAgentExitCodeError；
+  用户充值后单题重跑（sweep-s4n-g5-cfi）reward 1.0 完成）**：全 5 题
+  零 3-gram trip、零触发、零 400；命中率 94.11%–98.32% 全 ≥90%
+  （5/5 有 journal）；两次异常均非哨兵、非 400、非设计问题。
+- **构造流行为（判定层，本次实测）**：0.694（content+reasoning）<
+  0.70 永不计数不触发、0.720 > 0.70 窗口填满后每次超阈值 feed 计 1 次、
+  第 3 次才 trip（审计 1/3→2/3→3/3）；e2e 退化流中断+降级全绿——
+  boundary 3 项 + e2e 2 项实测通过，全量 orz-loop 585/0/3。
+- **观察项（登记）**：本轮 10 试次均无 3-gram 审计条目（无窗口 ratio
+  > 0.70 出现）——历史 0.60–0.61 边界带本轮未再现；content 族
+  0.60–0.70 区间实机样本仍为空，保持 §2.4 已接受漏判登记，后续实机
+  继续观察。
+
+**计数：S3/S4 验证闭环 30 → 29（AGENT-DELIVERY-FLOW S3/S4 待续，
+闭环后 29 → 28）。**登记于 ADR-0010 §14.35 第 27 项 / BACKLOG 0d
+后续 8 / TODO P0-0d 后续 8 / CLI_PROJECT_INDEX。
 
 ## 4. 验收标准（DoD）
 
