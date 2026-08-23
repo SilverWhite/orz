@@ -249,7 +249,10 @@ STREAM-RETRY-RHYTHM 未实施的 50s 定值）。
 > 阈值 0.60→**0.70**（`>` 严格大于保留）+ 流内累计命中 ≥`NGRAM_HIT_LIMIT=3`
 > 才 trip（1–2 次仅审计留痕=ratio+窗口 token 数+族、间隔不重置、流结束
 > 丢弃）+ WARN 口径 `{:.2}`→`{:.3}`，详下；设计权威=
-> `NGRAM_GUARD_CALIBRATION_DESIGN_2026-08-23.md`。**
+> `NGRAM_GUARD_CALIBRATION_DESIGN_2026-08-23.md`。**边界登记（2026-08-23
+> 审查处理）：0.60–0.70 近重复循环漏判的 stall 兜底仅覆盖 reasoning 族；
+> content 族为已接受漏判（精确循环由路径①兜住、带变体循环成本受
+> max_tokens 约束、S4 观察）。**
 
 **重试分类**（ADR-0007 对齐）：content 族→不重试；reasoning 族（stall/复读）
 →不原样、直接降级；完成型空响应→快速有界重试（§3.2）。

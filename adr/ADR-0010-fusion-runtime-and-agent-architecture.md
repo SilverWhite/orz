@@ -2790,6 +2790,20 @@ ADR §3.6 正文修订随实施登记。
     不变仍 30（S2 属同一实施里程碑，S1 已入账）；S3 重建 / S4 复验待续。
     登记于设计 `NGRAM_GUARD_CALIBRATION_DESIGN_2026-08-23.md` / BACKLOG
     0d 后续 8 / TODO P0-0d 后续 8 / CLI_PROJECT_INDEX。
+25. **N-GRAM GUARD CALIBRATION S1 全面审查处理（2026-08-23 用户指示处理
+    审查全部问题）**：审查结论=S1 设计与实现整体一致、无功能缺陷；处理
+    2 项——① D1 边界登记修正（校准设计 §2.4）：0.60–0.70 近重复循环
+    漏判的「stall 兜底」仅对 reasoning 族成立（stall 触发条件=无
+    content/tool_calls 且 reasoning 在流动）；content 族为已接受漏判——
+    精确循环仍由路径① 400 字符精确匹配兜住、带变体循环输出至
+    REQUEST_MAX_TOKENS（256K）截断（成本受上限约束）、S4 复验观察实机
+    表现，若出现真实 content 族退化再评估保留低阈值或独立兜底；基础
+    设计 §3.3 注记同步；② I1 审计日志字段（调用方审计 WARN 按路径标注
+    命中门槛 `rolling_hit_limit` / `ngram_hit_limit`，消除 NGRAM_HIT_LIMIT
+    日后独立调整时 3-gram 条目被误标的风险）。orz-loop **585 通过 / 0
+    失败 / 3 ignored**、fmt 干净、clippy 无新增告警。计数不变仍 30
+    （审查处理属 S1 内收尾）；S3 重建 / S4 复验待续。登记于设计 §2.4 /
+    BACKLOG 0d 后续 8 / TODO P0-0d 后续 8 / CLI_PROJECT_INDEX。
 
 ### 14.31 v1.31 补写裁决索引（2026-08-19）
 

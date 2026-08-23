@@ -979,6 +979,14 @@
 >   命中只审计不 trip）；既有 3-gram 用例适配已于 S1 完成。orz-loop
 >   585 通过 / 0 失败 / 3 ignored、fmt 干净、clippy 无新增。登记于
 >   ADR-0010 §14.35 第 24 项 / TODO P0-0d 后续 8 / CLI_PROJECT_INDEX。
+> - **2026-08-23 S1 全面审查处理（用户指示处理审查全部问题；计数不变仍
+>   30）**：D1 边界登记修正——0.60–0.70 近重复循环漏判的「stall 兜底」
+>   仅覆盖 reasoning 族（stall 要求无 content/tool_calls）；content 族
+>   为已接受漏判（精确循环由路径①兜住、带变体循环成本受
+>   REQUEST_MAX_TOKENS 约束、S4 观察）；I1 审计日志按路径标注命中门槛
+>   （`rolling_hit_limit` / `ngram_hit_limit`）。orz-loop 585 通过 /
+>   0 失败 / 3 ignored、fmt 干净、clippy 无新增。登记于 ADR-0010
+>   §14.35 第 25 项 / 设计 §2.4 / TODO P0-0d 后续 8 / CLI_PROJECT_INDEX。
 
 ### 0e. CONTEXT-SCAFFOLDING-PULL-REDESIGN（P0；2026-08-21 设计定稿，
 **S1-S4 全部闭合 2026-08-21，计数 28 → 27**）
