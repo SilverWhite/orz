@@ -1,6 +1,8 @@
 # N-GRAM GUARD CALIBRATION 设计（2026-08-23：阈值 0.7 + 流内累计命中 + 口径统一）
 
-> 状态：`current-design`（2026-08-23 设计定稿，用户裁决；先落设计、未实施）。
+> 状态：`current-design`（2026-08-23 设计定稿，用户裁决；先落设计、
+> 未实施；**S1 代码实施 2026-08-23 闭合（用户放行；orz 2563121），
+> 实施入账 29 → 30，S2-S4 待续**）。
 > 入口：ADR-0010 §14.35 第 20 项 / BACKLOG 0d 后续 8 / TODO P0-0d 后续 8 /
 > CLI_PROJECT_INDEX。关联：输出健康哨兵 3-gram 路径②（
 > DEEPSEEK_OUTPUT_BUDGET_AND_STALL_GUARD_DESIGN §3.3/§3.5）。
@@ -59,6 +61,19 @@ S1 代码（常量 + 累计逻辑 + 审计 + 口径）→ S2 测试（0.69/0.70 
 ORZ-BUILD-MOUNT-001）→ S4 复验（正常任务零 3-gram trip、构造 0.6–0.7 流
 仅审计、≥0.7 三连才 trip、零 400、命中率 ≥90%）。
 计数：设计轮不动（28）；实施放行入账 28 → 29；S3/S4 验证闭环 29 → 28。
+
+**2026-08-23 S1 实施闭合（用户放行；orz 2563121）**：
+`DEGENERATION_NGRAM_REPEAT_RATIO` 0.60→0.70（`>` 保留）+ 新增
+`NGRAM_HIT_LIMIT=3`（流内累计命中：每次 feed 超阈值计 1 次、≥3 才 trip、
+1–2 次仅审计=ratio+窗口 token 数+族、间隔不重置、流结束丢弃）+ WARN
+口径 `{:.2}`→`{:.3}`；基础设计信号表/参数表同步
+（DEEPSEEK_OUTPUT_BUDGET... §3.3/§3.5）；既有 3-gram ratio 用例适配（单份
+core 0.694 恰为 0.69x 边界样本留给 S2、双份 core 0.825 过 0.70 + 2 次审计
++ 3/3 trip 断言）；orz-loop 579 通过 / 0 失败 / 3 ignored、fmt 干净、
+clippy 无新增。计数注：设计轮不动（28）；实际执行时 AGENT-DELIVERY-FLOW
+已先入账 28 → 29，本 S1 实施入账 **29 → 30**（S3/S4 验证闭环时逐项回落
+29 → 28）。登记于 ADR-0010 §14.35 第 23 项 / BACKLOG 0d 后续 8 /
+TODO P0-0d 后续 8 / CLI_PROJECT_INDEX。
 
 ## 4. 验收标准（DoD）
 
