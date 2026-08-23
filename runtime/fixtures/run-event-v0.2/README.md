@@ -130,10 +130,12 @@ staged under `target/conformance-journals/` and dev-copied here — see the
 GAP-RETRIEVAL-TOOLS audit doc §5). Re-captured 2026-08-10 after the review
   fixes (H1 off projection now hides `project_doc_index` too); the 13th
   (`local-browser-read`) is the local_browser slice (2026-08-10) available-
-  capability scenario; the 14th (`citation-validation-block`, 2026-08-14) is
-  the P0-B step 5 output-level citation verifier block scenario. Re-captured
-  again 2026-08-14 (P0-B step 4: browser_read joins the candidate count
-  domain — `tool_completed` carries `candidate_count`/`candidate_cap`):
+  capability scenario. Re-captured again 2026-08-14 (P0-B step 4:
+  browser_read joins the candidate count domain — `tool_completed` carries
+  `candidate_count`/`candidate_cap`). MECHANICAL-AUDIT-LAYER (2026-08-24,
+  ADR-0010 §14.39): 引用校验器整体删除——`citation-validation-block` 场景
+  退役；`mechanical_audit_update` 为事件面轻量留痕（对象键覆盖写），
+  报告随最终答案前中立问询轮注入且不进归档：
 
 | journal | scenario |
 |---|---|
@@ -149,4 +151,3 @@ GAP-RETRIEVAL-TOOLS audit doc §5). Re-captured 2026-08-10 after the review
 | `local-browser-read.jsonl` | bootstrap transition to `local_browser` with capability `available` — external lane runs the host `browser_read` tool (fake lane), committed result carries real full-text `web_page` evidence (ADR §3.7.3/§3.7.5); P0-B step 4: browser_read 计入候选计数域，`tool_completed` 携带 `candidate_count`/`candidate_cap` |
 | `real-doc-retrieval.jsonl` | internal lane: `project_doc_index` include_content → mechanical ledger/visibility/`retrieval_result_committed`/assessment (ADR §3.7.4/§3.7.5) |
 | `cross-prompt-restore.jsonl` | activation sidecar restore → restore event → cross-run disposition close (verifier restore-declaration chain) |
-| `citation-validation-block.jsonl` | P0-B step 5: final answer `[来源: SRC-999]` (unknown source) → `citation_validation{decision: block}` + mechanical degradation block, run finishes normally (ADR §3.7.9) |

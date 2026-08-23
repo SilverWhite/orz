@@ -174,9 +174,6 @@ ALL_JOURNALS_V02 = (
     "local-browser-capability.jsonl",
     "real-doc-retrieval.jsonl",
     "cross-prompt-restore.jsonl",
-    # FUS-RETRIEVAL-MECH P0-B step 5 (2026-08-14): the final-answer citation
-    # verifier blocks an unknown-source marker with a mechanical degradation.
-    "citation-validation-block.jsonl",
 )
 
 EXPECTED_SEQUENCES_V02: dict[str, tuple[str, ...]] = {
@@ -338,16 +335,6 @@ EXPECTED_SEQUENCES_V02: dict[str, tuple[str, ...]] = {
     # Pre-handoff checkpoint: the stagnation restart decision journals the
     # orientation checkpoint (independent lifecycle trigger) before the
     # run_invalidated terminal.
-    # FUS-RETRIEVAL-MECH P0-B step 5 (2026-08-14): the post-gate final answer
-    # carries `[来源: SRC-999]` (not in this run's evidence) — the citation
-    # verifier blocks it; the journal records the mechanical event and the
-    # run finishes normally.
-    "citation-validation-block.jsonl": (
-        "run_preflight", "tool_availability_check", "run_started",
-        "prompt_submitted", "model_output", "counterexample_gate",
-        "model_output", "citation_validation",
-        "run_finished",
-    ),
 }
 
 
@@ -2777,64 +2764,47 @@ def _pool_entry(
     }
 
 
-class CitationValidationTests(unittest.TestCase):
-    """FUS-RETRIEVAL-MECH P0-B step 5 (2026-08-14): ADR-0010 §3.7.9 output-level
-    citation verifier events — block must degrade with mechanical reason codes
-    and marker details; pass must not degrade; counts and marker statuses stay
-    consistent."""
+class MechanicalAuditUpdateTests(unittest.TestCase):
+    """MECHANICAL-AUDIT-LAYER (2026-08-24, ADR-0010 §14.39 / 设计 §2.4):
+    `mechanical_audit_update` 轻量事件留痕——kind ∈ {tool_result, plan_gate,
+    budget}；payload 必须携带 key/round/summary/anomaly；机械事实、无建议；
+    报告块不进归档（与 counterexample 注入同语义）。"""
 
-    def _citation_block_payload(
+    def _audit_payload(
         self,
         *,
-        decision: str = "block",
-        degraded: bool = True,
-        reason_codes: list[str] | None = None,
-        markers: list[dict] | None = None,
-        marker_count: int | None = None,
+        kind: str = "tool_result",
+        key: str = "cmd:call-9",
+        round_: int = 3,
+        summary: str = "exit 1，超时",
+        anomaly: str | None = "exit 1（120s 超时）",
     ) -> dict:
-        reasons = reason_codes if reason_codes is not None else ["unknown_source_id"]
-        marker_list = markers if markers is not None else [
-            {
-                "index": 0,
-                "raw": "[来源: SRC-999]",
-                "target": "SRC-999",
-                "binding": "ledger_source_id",
-                "status": "failed",
-                "reason_codes": reasons,
-            }
-        ]
         return {
-            "schema_version": "0.2.0-draft",
-            "position": "final_answer",
-            "decision": decision,
-            "marker_count": len(marker_list) if marker_count is None else marker_count,
-            "reason_codes": reasons,
-            "degraded": degraded,
-            "message_block": (
-                "[CITATION_VALIDATION_FAILED v0.1]\n"
-                "最终回答的引用标记未通过机械校验，已阻止交付。\n"
-                f"reason_codes: {', '.join(reasons)}\n"
-                "[/CITATION_VALIDATION_FAILED]"
-            ),
-            "markers": marker_list,
+            "kind": kind,
+            "payload": {
+                "key": key,
+                "round": round_,
+                "summary": summary,
+                "anomaly": anomaly,
+            },
         }
 
-    def test_valid_citation_block_journal(self) -> None:
+    def test_valid_mechanical_audit_journal(self) -> None:
         journal = _v02_journal(
             [
                 _mk_v02_event(
-                    "citation_validation", self._citation_block_payload(), 0, None
+                    "mechanical_audit_update", self._audit_payload(), 0, None
                 )
             ]
         )
         self.assertEqual(validate_journal_text(journal), [])
 
-    def test_citation_block_must_degrade(self) -> None:
+    def test_audit_kind_must_be_registered(self) -> None:
         journal = _v02_journal(
             [
                 _mk_v02_event(
-                    "citation_validation",
-                    self._citation_block_payload(degraded=False),
+                    "mechanical_audit_update",
+                    self._audit_payload(kind="advice"),
                     0,
                     None,
                 )
@@ -2846,12 +2816,15 @@ class CitationValidationTests(unittest.TestCase):
             f"expected a schema violation, got {errors}",
         )
 
-    def test_citation_block_needs_reason_codes(self) -> None:
+    def test_audit_entry_fields_are_required(self) -> None:
         journal = _v02_journal(
             [
                 _mk_v02_event(
-                    "citation_validation",
-                    self._citation_block_payload(reason_codes=[]),
+                    "mechanical_audit_update",
+                    {
+                        "kind": "budget",
+                        "payload": {"key": "", "round": -1, "summary": "", "anomaly": 7},
+                    },
                     0,
                     None,
                 )
@@ -2862,53 +2835,6 @@ class CitationValidationTests(unittest.TestCase):
             any("payload schema violation" in e for e in errors),
             f"expected a schema violation, got {errors}",
         )
-
-    def test_citation_block_message_must_be_mechanical(self) -> None:
-        payload = self._citation_block_payload()
-        payload["message_block"] = "随便一段文本"
-        journal = _v02_journal(
-            [_mk_v02_event("citation_validation", payload, 0, None)]
-        )
-        errors = validate_journal_text(journal)
-        self.assertIn("non-mechanical message block", " | ".join(errors))
-
-    def test_citation_marker_count_mismatch_rejected(self) -> None:
-        journal = _v02_journal(
-            [
-                _mk_v02_event(
-                    "citation_validation",
-                    self._citation_block_payload(marker_count=2),
-                    0,
-                    None,
-                )
-            ]
-        )
-        errors = validate_journal_text(journal)
-        self.assertIn("marker_count 2 != 1", " | ".join(errors))
-
-    def test_citation_passed_marker_with_reason_codes_rejected(self) -> None:
-        markers = [
-            {
-                "index": 0,
-                "raw": "[来源: SRC-001]",
-                "target": "SRC-001",
-                "binding": "ledger_source_id",
-                "status": "passed",
-                "reason_codes": ["unknown_source_id"],
-            }
-        ]
-        journal = _v02_journal(
-            [
-                _mk_v02_event(
-                    "citation_validation",
-                    self._citation_block_payload(markers=markers),
-                    0,
-                    None,
-                )
-            ]
-        )
-        errors = validate_journal_text(journal)
-        self.assertIn("passed citation marker", " | ".join(errors))
 
 
 class RetrievalResultConsistencyTests(unittest.TestCase):

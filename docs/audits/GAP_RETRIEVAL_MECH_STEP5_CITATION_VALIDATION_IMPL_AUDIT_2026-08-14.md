@@ -1,5 +1,12 @@
 # GAP-RETRIEVAL-MECH 步骤 5 实施审计：输出级引用校验器与交付边界接线（2026-08-14）
 
+> **取代标记（2026-08-24，MECHANICAL-AUDIT-LAYER / ADR-0010 §14.39）**：
+> 本审计覆盖的输出级引用校验器已被整体删除（引用校验器退役，设计 §2.8）——
+> agent_loop 引用门、prompt CITATION_VALIDATION_FAILED 块/前缀、
+> `citation_validation.rs` 模块、schema/fixtures/Python verifier 对应事件全部
+> 移除；BASE_SYSTEM_PROMPT 引用纪律段改写为轻量纪律（引用需绑定本 run 证据、
+> 无机械拦截）。本审计作为历史证据保留。
+
 ## 1. 范围
 
 本审计覆盖 P0-B FUS-RETRIEVAL-MECH 步骤 5 的完整实施与验证：

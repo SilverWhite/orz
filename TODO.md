@@ -1152,6 +1152,66 @@ S1-S4 全部闭合 2026-08-21，计数 28 → 27）
   条机械盖章）；命中率 10/10 有 journal 94.11%–98.55% 全 ≥90%、10/10 零
   HTTP 400；计数 28 → 27；详见设计 §11 / ADR-0010 §14.38 第 5 项）
 
+### P0-0g MECHANICAL-AUDIT-LAYER（P0；2026-08-24 设计定稿；S1/S2 已实施
+闭合 + 全面审查处理已完成 2026-08-24；设计轮不动计数；S3-S4 待实施）
+
+> 入口：[设计](docs/MECHANICAL_AUDIT_LAYER_DESIGN_2026-08-24.md)；
+> ADR-0010 §14.39（v1.39）；BACKLOG 0g。
+> 来源：2026-08-24 用户多轮裁决——同模型 lean harness 对照（Codex
+> pass@1 78.65% / Maka 73.03% / 官方 DeepSeek V4-Flash-0731 TB2.1=82.7）
+> vs 本机 10 题 50%、每真实动作 2.3–2.9 模型往返、检索 10 试次零调用、
+> 引用校验 5/8 触发 3/8 硬 block 吞终答、P1 读范围门可绕过且拦合法读取。
+> 定案（用户裁决）：首轮 plan-first 硬门形态不变（钉死极简模式）；
+> 第 2 轮起 direct 执行面（模型直接调工具）；助理层拆机械审查层＋半助理层
+> （静默记录、每对象键仅最后一轮结果覆盖写、不给建议、报告随最终答案前
+> 中立问询轮注入——报告收敛为执行事实摘要=动作/文件 delta/预算/异常事实，
+> step/契约类只事件留痕不上报告；半助理层承接命令运行/写执行/检索派发）；ACAF/权限轴/
+> 预算/候选计数/run_tests host-owned/read-anchor 写前核证维持前置硬门；
+> round 2+ 不要求 step_id；引用校验器整体删除；读范围放开（保留 .gsa
+> 不可见、16KB 信封、head_limit）；主面恢复检索（web_search/web_fetch/
+> browser_read/retrieve_project_*）。实施路由 S1 代码 → S2 测试 → S3
+> 重建 → S4 复验（同一 10 题 k=1 + 构造题：检索调用出现、审计报告覆盖写、
+> 零 400、命中率 ≥90%、轮次/耗时下降、reward 对比）。设计轮不动计数。
+
+- [x] 设计定稿（2026-08-24；先落设计、未实施；登记于 ADR-0010 §14.39 /
+  BACKLOG 0g / CLI_PROJECT_INDEX v2.19）
+
+- [x] S1 代码（2026-08-24；合并实施包：读放开 + 引用删除 + 检索恢复 +
+  direct 面 + 审计层 + submit 非硬门；orz-loop 563 通过 / 0 失败 /
+  3 ignored、fmt 干净、clippy 无新增；ADR-0010 §14.39 第 2 项）
+
+- [x] S2 测试（2026-08-24；删/改既有 gate 测试——orz-host/tui 脚本化
+  计划统一补固定末步 deliver（AGENT-DELIVERY-FLOW 末步校验适配）、
+  acp_server 事件计数 16→18（S1 审计事件留痕）；新增 6 项专项测试：
+  审计报告随终答前反例自查轮注入（执行事实/预算/异常事实三类、无建议、
+  journal 留痕 plan_gate/budget/tool_result）、direct 面 journal 零
+  退役工具调用、终答未绑定引用原样交付（行为侧零残留）、主面检索族声明、
+  主车道 web_search 派发子代理（构造题检索可达）、检索候选计数/超限分类；
+  orz-loop 569 通过 / 0 失败 / 3 ignored、orz-tui 178 / 0、orz-host
+  串行 221 / 0（并行仅 1 项预存时序 flake：call_tool_timeout_kills_
+  process_tree）、orz-assurance 144 / 0、orz-bin 11 / 0、fmt 干净、
+  clippy 无新增；ADR-0010 §14.39 第 3 项）
+
+- [x] 全面审查处理（2026-08-24；ADR-0010 §14.39 第 4 项）：P1-1——
+  read-anchor 写前核证补 direct 面落点（verify_content_anchor 解耦为
+  (file_path, label) 签名，run_host_tool_with_timeout 执行前核证门，
+  search_replace 声明补 expected_anchor 参数；错误锚点拒绝/正确锚点放行/
+  无锚点放行/新建跳过四类 direct 测试）；P1-2——三个退役 console 工具
+  （blackboard_action_write/console_step_done/console_return_to_console）
+  调用面窄门拒绝（retired_tool_denied、零 ToolStarted、零订单事件、零副作用）；
+  P2-1——cmd: 审计摘要格式修复（括号配对 + stdout 截断机械标记替代文件
+  delta 顶替）；P2-2——候选拒绝结构化错误码透传（candidate_cap_exceeded /
+  candidate_count_unbound 精确异常分类）；测试迁移——21 项已退役订单链
+  e2e 删除、acp_server/codex_app/tui 8 处订单脚本迁移为 direct 工具调用、
+  订单层 FUS-READ-ANCHOR 四场景保留为休眠路径验证。验证：orz-loop 551
+  通过 / 0 失败 / 3 ignored、orz-tui 178 / 0、orz-host 串行 220 / 0（并行仅
+  预存 flake call_tool_timeout_kills_process_tree，单跑通过）、fmt 干净）
+
+- [ ] S3 重建（Linux musl，ORZ-BUILD-MOUNT-001）——待实施
+
+- [ ] S4 复验（同一 10 题 k=1 + 构造题：检索调用出现、审计报告覆盖写、
+  零 400、命中率 ≥90%、轮次/耗时下降、reward 对比）——待实施
+
 ### P0-B FUS-RETRIEVAL-MECH（`implemented`；批次 1-6 已全部闭合，2026-08-14，保留供核对）
 
 依赖顺序：1（B-1，已闭合）→ 2/3/5（已闭合）→ 4（已闭合）→ 6。

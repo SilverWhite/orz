@@ -289,7 +289,10 @@ class RunEventV02ContractTests(unittest.TestCase):
         重试计数——v0.2 专用新事件).
         停滞守卫退役 (2026-08-22): 54 → 53
         (-runtime_stagnation_guard, ADR-0010 §14.39 — v0.2 生产者不再
-        写入该事件，v0.1 冻结面保留历史类型)."""
+        写入该事件，v0.1 冻结面保留历史类型).
+        MECHANICAL-AUDIT-LAYER (2026-08-24, ADR-0010 §14.39): 引用校验器
+        整体删除（-citation_validation，零残留），+mechanical_audit_update
+        （对象键覆盖写轻量留痕）——计数 53 → 53 不变。"""
         schema = load_json(RUN_EVENT_SCHEMA_V02)
         enum_events = set(schema["properties"]["event_type"]["enum"])
         fixture_events = {

@@ -47,13 +47,7 @@ ZERO_HASH = "0" * 64
 DUMMY_HASH = "1" * 64
 TIMESTAMP = "2026-08-06T00:00:00Z"
 
-# P0-B step 5 manual revision write-back (2026-08-14, P0-D S6): the
-# `citation-validation` envelope in the committed tree carries its own
-# timestamp (the hand-edited file was never re-generated). Keep the
-# override so a regeneration is byte-identical to the committed tree.
-V02_ENVELOPE_TIMESTAMP_OVERRIDES = {
-    "citation_validation": "2026-08-14T00:00:00Z",
-}
+V02_ENVELOPE_TIMESTAMP_OVERRIDES: dict[str, str] = {}
 
 # PLAN-FIRST 阶段 C / P0-E / FUS-LEDGER-FOLD-STATE (2026-08-16/17/18): the
 # console-family and plan_write envelope fixtures in the committed tree
@@ -158,7 +152,7 @@ V02_EVENT_TYPES = [
     "retrieval_mode_transition",
     "retrieval_result_committed",
     "retrieval_activation_restored",
-    "citation_validation",
+    "mechanical_audit_update",
     "control_ticket_issued",
     "control_ticket_consumed",
       "control_ticket_rejected",
@@ -207,7 +201,7 @@ SLUGS_V02 = {
     "retrieval_mode_transition": "retrieval-mode-transition",
     "retrieval_result_committed": "retrieval-result",
     "retrieval_activation_restored": "retrieval-activation-restored",
-    "citation_validation": "citation-validation",
+    "mechanical_audit_update": "mechanical-audit-update",
     "request_header_change": "request-header-change",
     "control_ticket_issued": "control-ticket-issued",
     "control_ticket_consumed": "control-ticket-consumed",
@@ -237,9 +231,9 @@ V02_PAYLOAD_EVENTS = [
     "retrieval_mode_transition",
     "retrieval_result_committed",
     "retrieval_activation_restored",
-    # FUS-RETRIEVAL-MECH P0-B step 5 (2026-08-14): output-level citation
-    # verifier block event.
-    "citation_validation",
+    # MECHANICAL-AUDIT-LAYER (2026-08-24, ADR-0010 §14.39): 机械审查层
+    # 轻量事件留痕（对象键覆盖写/键/轮/摘要/异常）。
+    "mechanical_audit_update",
     # ACAF Slice 1 (设计文档 §4.2/§4.6) — control-ticket lifecycle events.
     "control_ticket_issued",
     "control_ticket_consumed",
@@ -845,26 +839,16 @@ PAYLOAD_GOOD_V02: dict[str, dict] = {
         "sidecar_ref": ".gsa/activations/sess-abc.json",
         "tool_rounds_used": 3,
     },
-    # FUS-RETRIEVAL-MECH P0-B step 5 (2026-08-14): output-level citation
-    # verifier block (ADR-0010 §3.7.9).
-    "citation_validation": {
-        "schema_version": "0.2.0-draft",
-        "position": "final_answer",
-        "decision": "block",
-        "marker_count": 1,
-        "reason_codes": ["unknown_source_id"],
-        "degraded": True,
-        "message_block": "[CITATION_VALIDATION_FAILED v0.1]\n最终回答的引用标记未通过机械校验，已阻止交付。\nreason_codes: unknown_source_id\n[/CITATION_VALIDATION_FAILED]",
-        "markers": [
-            {
-                "index": 0,
-                "raw": "[来源: SRC-999]",
-                "target": "SRC-999",
-                "binding": "ledger_source_id",
-                "status": "failed",
-                "reason_codes": ["unknown_source_id"],
-            }
-        ],
+    # MECHANICAL-AUDIT-LAYER (2026-08-24, ADR-0010 §14.39 / 设计 §2.4):
+    # 机械审查层轻量事件留痕——对象键覆盖写（键/轮/摘要/异常）。
+    "mechanical_audit_update": {
+        "kind": "tool_result",
+        "payload": {
+            "key": "cmd:call-9",
+            "round": 3,
+            "summary": "exit 1，超时",
+            "anomaly": "exit 1（120s 超时）",
+        },
     },
     # ACAF Slice 1 (设计文档 §4.2/§4.6) — control-ticket lifecycle events.
     "control_ticket_issued": {
@@ -1265,25 +1249,16 @@ PAYLOAD_BAD_V02: dict[str, dict] = {
         "sidecar_ref": ".gsa/activations/sess-abc.json",
         "tool_rounds_used": 3,
     },
-    # FUS-RETRIEVAL-MECH P0-B step 5 (2026-08-14): a block decision that
-    # does not degrade violates the conditional contract.
-    "citation_validation": {
-        "schema_version": "0.2.0-draft",
-        "position": "final_answer",
-        "decision": "block",
-        "marker_count": 1,
-        "reason_codes": [],
-        "degraded": False,
-        "markers": [
-            {
-                "index": 0,
-                "raw": "[来源: SRC-999]",
-                "target": "SRC-999",
-                "binding": "ledger_source_id",
-                "status": "failed",
-                "reason_codes": ["unknown_source_id"],
-            }
-        ],
+    # MECHANICAL-AUDIT-LAYER (2026-08-24, ADR-0010 §14.39 / 设计 §2.4):
+    # 约束违反——kind 未注册 / key 空 / round 负 / anomaly 非字符串。
+    "mechanical_audit_update": {
+        "kind": "budget",
+        "payload": {
+            "key": "",
+            "round": -1,
+            "summary": "",
+            "anomaly": 7,
+        },
     },
     # ACAF Slice 1 (设计文档 §4.2) — constraint violations: capability_scope
     # disagrees with ticket_kind (conditional allOf; the activation binding
@@ -1964,10 +1939,12 @@ staged under `target/conformance-journals/` and dev-copied here — see the
 GAP-RETRIEVAL-TOOLS audit doc §5). Re-captured 2026-08-10 after the review
   fixes (H1 off projection now hides `project_doc_index` too); the 13th
   (`local-browser-read`) is the local_browser slice (2026-08-10) available-
-  capability scenario; the 14th (`citation-validation-block`, 2026-08-14) is
-  the P0-B step 5 output-level citation verifier block scenario. Re-captured
-  again 2026-08-14 (P0-B step 4: browser_read joins the candidate count
-  domain — `tool_completed` carries `candidate_count`/`candidate_cap`):
+  capability scenario. Re-captured again 2026-08-14 (P0-B step 4:
+  browser_read joins the candidate count domain — `tool_completed` carries
+  `candidate_count`/`candidate_cap`). MECHANICAL-AUDIT-LAYER (2026-08-24,
+  ADR-0010 §14.39): 引用校验器整体删除——`citation-validation-block` 场景
+  退役；`mechanical_audit_update` 为事件面轻量留痕（对象键覆盖写），
+  报告随最终答案前中立问询轮注入且不进归档：
 
 | journal | scenario |
 |---|---|
@@ -1984,7 +1961,6 @@ GAP-RETRIEVAL-TOOLS audit doc §5). Re-captured 2026-08-10 after the review
 | `real-doc-retrieval.jsonl` | internal lane: `project_doc_index` include_content → mechanical ledger/visibility/`retrieval_result_committed`/assessment (ADR §3.7.4/§3.7.5) |
 | `cross-prompt-restore.jsonl` | activation sidecar restore → restore event → cross-run disposition close (verifier restore-declaration chain) |
 | `pre-handoff-checkpoint.jsonl` | stagnation restart_requested → `orientation_checkpoint{trigger: "pre_handoff", injection_position: "pre_terminal"}` with empty message_block (audit-only, §11.1) |
-| `citation-validation-block.jsonl` | P0-B step 5: final answer `[来源: SRC-999]` (unknown source) → `citation_validation{decision: block}` + mechanical degradation block, run finishes normally (ADR §3.7.9) |
 """
 
 
@@ -1993,32 +1969,6 @@ def write_json(path: Path, data: dict) -> None:
         json.dumps(data, indent=2, ensure_ascii=False) + "\n",
         encoding="utf-8",
         newline="\n",
-    )
-
-
-def _compact_citation_reason_codes(text: str) -> str:
-    """P0-B step 5 manual revision write-back (2026-08-14, P0-D S6): the
-    committed citation-validation fixtures carry `reason_codes` as compact
-    single-line arrays (hand-edited, never re-generated). Re-apply the exact
-    formatting for the three indentation levels so a regeneration is
-    byte-identical to the committed tree."""
-    return (
-        text.replace(
-            '  "reason_codes": [\n    "unknown_source_id"\n  ],\n',
-            '  "reason_codes": ["unknown_source_id"],\n',
-        )
-        .replace(
-            '    "reason_codes": [\n      "unknown_source_id"\n    ],\n',
-            '    "reason_codes": ["unknown_source_id"],\n',
-        )
-        .replace(
-            '      "reason_codes": [\n        "unknown_source_id"\n      ]\n',
-            '      "reason_codes": ["unknown_source_id"]\n',
-        )
-        .replace(
-            '        "reason_codes": [\n          "unknown_source_id"\n        ]\n',
-            '        "reason_codes": ["unknown_source_id"]\n',
-        )
     )
 
 
@@ -2091,20 +2041,6 @@ def main() -> None:
     )
     for name, payload in V02_ENVELOPE_BAD.items():
         write_json(v02_envelope_dir / f"{name}.invalid.json", payload)
-
-    # P0-B step 5 manual revision write-back (2026-08-14, P0-D S6): keep the
-    # committed citation-validation files byte-identical on regeneration.
-    for rel in (
-        "payloads/citation-validation.minimal.valid.json",
-        "payloads/citation-validation.constraint.invalid.json",
-        "envelope/citation-validation.valid.json",
-    ):
-        path = v02_root / rel
-        path.write_text(
-            _compact_citation_reason_codes(path.read_text(encoding="utf-8")),
-            encoding="utf-8",
-            newline="\n",
-        )
 
     v02_root.joinpath("README.md").write_text(
         FIXTURES_README_V02, encoding="utf-8", newline="\n"

@@ -2297,9 +2297,6 @@ def check_repository() -> dict[str, Any]:
         "local-browser-read.jsonl",
         "real-doc-retrieval.jsonl",
         "cross-prompt-restore.jsonl",
-        # FUS-RETRIEVAL-MECH P0-B step 5 (2026-08-14): final-answer citation
-        # verifier block scenario.
-        "citation-validation-block.jsonl",
     }
     run_event_journal_v02_names = {
         path.name for path in run_event_journal_v02_root.glob("*.jsonl")

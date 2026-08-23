@@ -1,0 +1,9 @@
+{
+  "kind": "tool_result",
+  "payload": {
+    "key": "cmd:call-9",
+    "round": 3,
+    "summary": "exit 1，超时",
+    "anomaly": "exit 1（120s 超时）"
+  }
+}

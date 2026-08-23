@@ -133,13 +133,12 @@ PAYLOAD_SCHEMA_BY_EVENT_TYPE_V02: dict[str, tuple[str, Path]] = {
         "retrieval-activation-restored",
         RUNTIME / "retrieval-activation-restored-event-payload-v0.2.schema.json",
     ),
-    # FUS-RETRIEVAL-MECH P0-B step 5 (2026-08-14): the output-level citation
-    # verifier event — written ONLY on a block/degradation (passing final
-    # answers journal nothing), ADR-0010 §3.7.9 / RETRIEVAL_MECHANICAL_CONTROLS
-    # _DESIGN §3.2.
-    "citation_validation": (
-        "citation-validation",
-        RUNTIME / "citation-validation-event-payload-v0.2.schema.json",
+    # MECHANICAL-AUDIT-LAYER (2026-08-24, ADR-0010 §14.39 / 设计 §2.4):
+    # 机械审查层轻量事件留痕——对象键覆盖写（含 step/契约类）以一条记录
+    # 留痕；报告块随最终答案前中立问询轮注入且不进归档。主车道专属。
+    "mechanical_audit_update": (
+        "mechanical-audit-update",
+        RUNTIME / "mechanical-audit-update-event-payload-v0.2.schema.json",
     ),
     # ACAF Slice 1 (设计文档 §4.2/§4.6): control-ticket lifecycle events —
     # issued → consumed|rejected pairing enforced by _verify_v02_control_tickets.
@@ -2037,101 +2036,54 @@ def _verify_v02_candidate_count(events: list[dict[str, Any]]) -> list[str]:
     return errors
 
 
-def _verify_v02_citation_validation(events: list[dict[str, Any]]) -> list[str]:
-    """FUS-RETRIEVAL-MECH P0-B step 5 (2026-08-14): ADR-0010 §3.7.9 output-level
-    citation verifier events on the v0.2 track (RETRIEVAL_MECHANICAL_CONTROLS
-    _DESIGN §3.2):
+def _verify_v02_mechanical_audit(events: list[dict[str, Any]]) -> list[str]:
+    """MECHANICAL-AUDIT-LAYER (2026-08-24, ADR-0010 §14.39 / 设计 §2.4):
+    `mechanical_audit_update` 轻量事件留痕——每次对象键覆盖写（含
+    step/契约类检查）以一条记录留痕，供回放与验证；报告块本身不进归档
+    （与 counterexample 注入同语义）。规则：
 
-    - a block/retry decision must degrade the answer (degraded=true), carry at
-      least one reason code, the mechanical degradation message block and at
-      least one failed marker (AGENT-DELIVERY-FLOW 2026-08-23: `retry` = first
-      failure with one bounded correction opportunity; `block` = second
-      failure / hard block);
-    - a pass decision must not degrade and must carry no reason codes (the v0.2
-      producer currently writes only block events — a passing final answer
-      journals nothing);
-    - marker_count must equal the markers array length;
-    - every failed marker must carry at least one reason code and every passed
-      marker none.
-
-    AGENT-DELIVERY-FLOW (2026-08-23): retry/block events carry attempt (1 =
-    initial failure, 2 = correction exhausted) and correction_allowed —
-    attempt 1 must be retry with correction_allowed=true, attempt 2 must be
-    block with correction_allowed=false.
+    - kind ∈ {tool_result, plan_gate, budget}；
+    - payload 必须携带 key（对象键，非空）/ round（非负整数）/ summary
+      （非空机械事实摘要）/ anomaly（字符串或 null）；
+    - 键形为 file:<path> / cmd:<call_id> / plan / budget / retrieval:<n>。
     """
     errors: list[str] = []
     for index, event in enumerate(events):
-        if not _is_v02(event) or event.get("event_type") != "citation_validation":
+        if not _is_v02(event) or event.get("event_type") != "mechanical_audit_update":
             continue
         payload = event["payload"]
-        decision = payload["decision"]
-        degraded = payload["degraded"]
-        reason_codes = payload["reason_codes"]
-        marker_count = payload["marker_count"]
-        markers = payload.get("markers", [])
-        if decision in ("block", "retry"):
-            if not degraded:
-                errors.append(
-                    f"event {index}: citation_validation {decision} must degrade "
-                    "the answer"
-                )
-            if not reason_codes:
-                errors.append(
-                    f"event {index}: citation_validation {decision} needs reason codes"
-                )
-            if not markers:
-                errors.append(
-                    f"event {index}: citation_validation {decision} needs marker details"
-                )
-            if not payload.get("message_block", "").startswith(
-                "[CITATION_VALIDATION_FAILED"
-            ):
-                errors.append(
-                    f"event {index}: citation_validation {decision} carries a "
-                    "non-mechanical message block"
-                )
-            attempt = payload.get("attempt")
-            correction_allowed = payload.get("correction_allowed")
-            if decision == "retry":
-                if attempt != 1 or correction_allowed is not True:
-                    errors.append(
-                        f"event {index}: citation_validation retry must carry "
-                        "attempt=1 and correction_allowed=true"
-                    )
-            elif decision == "block":
-                if attempt not in (None, 2) or (
-                    correction_allowed is not None and correction_allowed is not False
-                ):
-                    errors.append(
-                        f"event {index}: citation_validation block must carry "
-                        "attempt=2 (or legacy absent) and correction_allowed=false"
-                    )
-        elif decision == "pass":
-            if degraded:
-                errors.append(
-                    f"event {index}: citation_validation pass must not degrade"
-                )
-            if reason_codes:
-                errors.append(
-                    f"event {index}: citation_validation pass must carry no reason codes"
-                )
-        if marker_count != len(markers):
+        kind = payload.get("kind")
+        entry = payload.get("payload")
+        if kind not in ("tool_result", "plan_gate", "budget"):
             errors.append(
-                f"event {index}: citation_validation marker_count {marker_count} "
-                f"!= {len(markers)} marker details"
+                f"event {index}: mechanical_audit_update kind {kind!r} must be "
+                "tool_result / plan_gate / budget"
             )
-        for marker in markers:
-            marker_reasons = marker.get("reason_codes", [])
-            if marker.get("status") == "failed" and not marker_reasons:
-                errors.append(
-                    f"event {index}: failed citation marker {marker.get('raw')!r} "
-                    "lacks reason codes"
-                )
-            if marker.get("status") == "passed" and marker_reasons:
-                errors.append(
-                    f"event {index}: passed citation marker {marker.get('raw')!r} "
-                    "carries reason codes"
-                )
+        if not isinstance(entry, dict):
+            errors.append(
+                f"event {index}: mechanical_audit_update needs a payload object"
+            )
+            continue
+        key = entry.get("key")
+        round_ = entry.get("round")
+        summary = entry.get("summary")
+        anomaly = entry.get("anomaly")
+        if not isinstance(key, str) or not key:
+            errors.append(
+                f"event {index}: mechanical_audit_update key must be a non-empty string"
+            )
+        if not isinstance(round_, int) or round_ < 0:
+            errors.append(
+                f"event {index}: mechanical_audit_update round must be a non-negative integer"
+            )
+        if not isinstance(summary, str) or not summary:
+            errors.append(
+                f"event {index}: mechanical_audit_update summary must be a non-empty string"
+            )
+        if anomaly is not None and not isinstance(anomaly, str):
+            errors.append(
+                f"event {index}: mechanical_audit_update anomaly must be a string or null"
+            )
     return errors
 
 
@@ -3228,7 +3180,7 @@ def validate_journal_text(text: str) -> list[str]:
         errors.extend(_verify_v02_candidate_count(events))
         errors.extend(_verify_v02_inject_budget(events))
         errors.extend(_verify_v02_policy_denial(events))
-        errors.extend(_verify_v02_citation_validation(events))
+        errors.extend(_verify_v02_mechanical_audit(events))
         errors.extend(_verify_v02_recovery_truncation(events))
         errors.extend(_verify_v02_context_compressed(events))
         errors.extend(_verify_v02_activation_restore(events))

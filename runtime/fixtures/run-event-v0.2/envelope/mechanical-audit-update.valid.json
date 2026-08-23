@@ -1,0 +1,23 @@
+{
+  "schema_version": "0.2.0-draft",
+  "run_id": "RUN-CONF-MECH-AUDIT",
+  "event_id": "EVT-CONF-000",
+  "sequence": 0,
+  "timestamp": "2026-08-24T00:00:00Z",
+  "event_type": "mechanical_audit_update",
+  "run_manifest_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+  "previous_event_sha256": null,
+  "payload_schema": "run-event-v0.2.schema.json",
+  "payload": {
+    "kind": "tool_result",
+    "payload": {
+      "key": "file:app/result.txt",
+      "round": 5,
+      "summary": "search_replace 成功（+1 文件）",
+      "anomaly": null
+    }
+  },
+  "payload_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+  "redaction": "none",
+  "event_sha256": "0000000000000000000000000000000000000000000000000000000000000000"
+}

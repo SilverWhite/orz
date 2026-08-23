@@ -1,7 +1,7 @@
 # ADR-0010：ORZ 融合运行时、同构 Agent 与设计权威重整
 
 - 状态：**accepted / frozen**（2026-08-09；本文件是 ORZ 当前自然语言设计的唯一权威基线）
-- 冻结版本：1.1（2026-08-10 追加 v1.2 补写，见 §14.2；2026-08-11 追加 v1.3 补写，见 §14.3；2026-08-11 追加 v1.4 补写，见 §14.4；2026-08-12 追加 v1.5 补写，见 §14.5；2026-08-12 追加 v1.6 补写，见 §14.6；2026-08-13 追加 v1.7 补写，见 §14.7；2026-08-13 追加 v1.8 补写，见 §14.8；2026-08-14 追加 v1.9 补写，见 §14.9；2026-08-14 追加 v1.10 补写，见 §14.10；2026-08-14 追加 v1.11 补写，见 §14.11；2026-08-14 追加 v1.12 补写，见 §14.12；2026-08-14 追加 v1.13-v1.15 补写，见 §14.13-§14.15；2026-08-15 v1.15⑧/⑨ 补强，见 §14.15 ⑧/⑨；2026-08-15 追加 v1.16 补写，见 §14.16；2026-08-15 追加 v1.17 补写，见 §14.17；2026-08-16 v1.17⑩ 审查收口登记，见 §14.17⑩；2026-08-16 v1.17⑪ S4 实施登记，见 §14.17⑪；2026-08-16 v1.17⑫ 审查收口登记，见 §14.17⑫；2026-08-16 v1.17⑬ 超时语义复核登记，见 §14.17⑬；2026-08-16 v1.17⑭/⑮ 决策门与阶段 A 登记，见 §14.17⑭/⑮；2026-08-16 v1.17⑯ 阶段 A 审查收口登记，见 §14.17⑯；2026-08-16 v1.17⑰ 阶段 B 实施登记，见 §14.17⑰；2026-08-16 v1.17⑱ 阶段 C 实施登记，见 §14.17⑱；2026-08-16 追加 v1.18 补写，见 §14.18；2026-08-17 追加 v1.19 补写，见 §14.19；2026-08-17 追加 v1.20 补写，见 §14.20；2026-08-17 追加 v1.21 补写，见 §14.21；2026-08-17 追加 v1.22 补写，见 §14.22；2026-08-17 追加 v1.23 补写，见 §14.23；2026-08-18 追加 v1.24 补写，见 §14.24；2026-08-18 追加 v1.25 补写，见 §14.25；2026-08-18 追加 v1.26 补写，见 §14.26；2026-08-18 追加 v1.27 补写，见 §14.27；2026-08-18 追加 v1.28 补写，见 §14.28；2026-08-18 追加 v1.29 补写，见 §14.29；2026-08-19 追加 v1.30-v1.33 补写，见 §14.30-§14.33；2026-08-20 追加 v1.34 补写，见 §14.34；2026-08-20 追加 v1.35 补写，见 §14.35；2026-08-21 追加 v1.36 补写，见 §14.36；2026-08-21 追加 v1.37 补写，见 §14.37；2026-08-21 追加 v1.38 补写，见 §14.38）
+- 冻结版本：1.1（2026-08-10 追加 v1.2 补写，见 §14.2；2026-08-11 追加 v1.3 补写，见 §14.3；2026-08-11 追加 v1.4 补写，见 §14.4；2026-08-12 追加 v1.5 补写，见 §14.5；2026-08-12 追加 v1.6 补写，见 §14.6；2026-08-13 追加 v1.7 补写，见 §14.7；2026-08-13 追加 v1.8 补写，见 §14.8；2026-08-14 追加 v1.9 补写，见 §14.9；2026-08-14 追加 v1.10 补写，见 §14.10；2026-08-14 追加 v1.11 补写，见 §14.11；2026-08-14 追加 v1.12 补写，见 §14.12；2026-08-14 追加 v1.13-v1.15 补写，见 §14.13-§14.15；2026-08-15 v1.15⑧/⑨ 补强，见 §14.15 ⑧/⑨；2026-08-15 追加 v1.16 补写，见 §14.16；2026-08-15 追加 v1.17 补写，见 §14.17；2026-08-16 v1.17⑩ 审查收口登记，见 §14.17⑩；2026-08-16 v1.17⑪ S4 实施登记，见 §14.17⑪；2026-08-16 v1.17⑫ 审查收口登记，见 §14.17⑫；2026-08-16 v1.17⑬ 超时语义复核登记，见 §14.17⑬；2026-08-16 v1.17⑭/⑮ 决策门与阶段 A 登记，见 §14.17⑭/⑮；2026-08-16 v1.17⑯ 阶段 A 审查收口登记，见 §14.17⑯；2026-08-16 v1.17⑰ 阶段 B 实施登记，见 §14.17⑰；2026-08-16 v1.17⑱ 阶段 C 实施登记，见 §14.17⑱；2026-08-16 追加 v1.18 补写，见 §14.18；2026-08-17 追加 v1.19 补写，见 §14.19；2026-08-17 追加 v1.20 补写，见 §14.20；2026-08-17 追加 v1.21 补写，见 §14.21；2026-08-17 追加 v1.22 补写，见 §14.22；2026-08-17 追加 v1.23 补写，见 §14.23；2026-08-18 追加 v1.24 补写，见 §14.24；2026-08-18 追加 v1.25 补写，见 §14.25；2026-08-18 追加 v1.26 补写，见 §14.26；2026-08-18 追加 v1.27 补写，见 §14.27；2026-08-18 追加 v1.28 补写，见 §14.28；2026-08-18 追加 v1.29 补写，见 §14.29；2026-08-19 追加 v1.30-v1.33 补写，见 §14.30-§14.33；2026-08-20 追加 v1.34 补写，见 §14.34；2026-08-20 追加 v1.35 补写，见 §14.35；2026-08-21 追加 v1.36 补写，见 §14.36；2026-08-21 追加 v1.37 补写，见 §14.37；2026-08-21 追加 v1.38 补写，见 §14.38；2026-08-24 追加 v1.39 补写，见 §14.39）
 - 日期：2026-08-09（v1.1 补充裁决同日冻结）
 - 决策范围：产品 runtime 所有权、成熟组件复用、自研准入、主/子 Agent 架构、模型与 transport、工具与权限、检索证据、context/compaction、问询与活性守卫、journal/snapshot、隐私、UI、Windows 兼容性、Schema 演进与设计文档治理
 - 取代/修订：
@@ -3396,3 +3396,116 @@ ADR §3.6 正文修订随实施登记。
    plan_write 轮配对 + safe_fold_cut idx==0 兜底（取证存档
    `D:\tb-eval\jobs\2026-08-18__08-44-56\ROOTCAUSE_FORENSICS_20260818.md`；
    orz 3bd09fc/5bc3add 取证 WIP），修复待下一窗口。
+
+### 14.39 v1.39 补写裁决索引（2026-08-24）
+
+本节记录冻结后的显式补写；规范正文以所指章节为准，补写明确
+取代以下既往条款。
+
+1. **机械审查层＋半助理层重设计定稿（2026-08-24 用户多轮裁决；
+   设计轮不动计数）**：问题=同模型 lean harness 对照（Codex harness
+   pass@1 70/89=78.65%、Maka 73.03%、官方 DeepSeek V4-Flash-0731
+   TB2.1=82.7）vs 本机 10 题 50%、每真实动作 2.3–2.9 模型往返、检索
+   10 试次零调用、引用校验 5/8 触发 3/8 硬 block 吞终答、P1 读范围门
+   在 allow_shell 下可绕过且拦合法读取。**定案**：①第 1 轮 plan-first
+   硬门形态不变（钉死「极简模式」，处理 deepseek 不同思维链的起点收敛）；
+   ②第 2 轮起 direct 执行面（模型直接调工具，一次调用一个往返）；
+   ③助理层拆机械审查层＋半助理层——机械审查静默记录、每对象键仅保留
+   最后一轮结果覆盖写、不给建议、报告随最终答案前中立问询轮注入
+   （2026-08-24 用户裁决收敛：报告仅执行事实摘要=动作/文件 delta/
+   预算/异常事实，step/契约类只事件留痕、不上报告）；半助理层承接
+   命令运行/写执行/检索派发（host 拥有 cwd/env/超时）；
+   ④ACAF、权限轴、预算/墙钟、候选计数、run_tests host-owned、
+   read-anchor 写前核证维持前置硬门；⑤round 2+ 不要求 step_id 绑定，
+   step/契约/receipt 仪式退役（转审计或删除）；⑥输出级引用校验器整体
+   删除（含 BASE_SYSTEM_PROMPT「机械校验/阻止交付」表述改写）；
+   ⑦读范围放开（保留 `.gsa` 证据面不可见、16KB 信封、head_limit）；
+   ⑧主面恢复检索（web_search/web_fetch/browser_read/retrieve_project_*，
+   relay 路由仍派发子代理，候选/并发/模式门不变）。登记于
+   [设计](../docs/MECHANICAL_AUDIT_LAYER_DESIGN_2026-08-24.md) /
+   BACKLOG 0g / TODO P0-0g / CLI_PROJECT_INDEX v2.19。
+
+2. **机械审查层＋半助理层 S1 实施（2026-08-24，合并实施包；计数不动，
+   S2-S4 待实施）**：①读范围放开——`access_in_scope` 删除 read/grep 的
+   cwd 包含性要求，仅保留 `.gsa` 证据面不可见（白名单仅
+   `run_tests_output.txt` 与 `session/terminal/*.log`）、16KB 信封、
+   head_limit；②输出级引用校验器整体删除——agent_loop 引用门、
+   `citation_validation.rs` 模块、prompt CITATION_VALIDATION_FAILED
+   块/前缀、controller validate、EventType::CitationValidation（含 TUI
+   投影）与父仓库 schema/fixtures/Python verifier 对应事件全部移除；
+   BASE_SYSTEM_PROMPT 引用纪律段改写为轻量纪律（引用需绑定本 run 已观测
+   证据、无机械校验、无"阻止交付"表述）；③主面恢复检索——主车道投影
+   （round 2+）恢复 web_search/web_fetch/browser_read/retrieve_project_*，
+   relay 路由仍派发检索子代理，候选计数/并发=1/模式门/ACAF 前置不变；
+   ④direct 执行面——第 2 轮起模型直接调用工作工具（一次调用一个往返），
+   console 订单面退役：blackboard_action_write / console_step_done /
+   console_return_to_console 不再声明（handler 保留为休眠路径）；
+   console 调用面 belt-and-braces 门移除；submit 转为信息展示、非硬门
+   （前序步骤未 done 不再拒绝；step 绑定/顺序转事件留痕，终答前反例自查
+   轮 + 审计报告承接计划完成声明核对）；⑤机械审查层——
+   `mechanical_audit.rs` 运行内审查表（对象键 file:<path>/cmd:<call_id>/
+   plan/budget/retrieval:<n>，每键仅最后一轮结果覆盖写、容量上限 128 超限
+   丢最旧、不给建议）；轻量 `mechanical_audit_update` 事件留痕（kind ∈
+   {tool_result, plan_gate, budget}，主车道专属）；报告收敛为执行事实摘要
+   （动作/文件 delta/预算/异常事实），随最终答案前 [COUNTEREXAMPLE_GATE]
+   同轮以 [MECHANICAL_AUDIT v0.1] 独立块注入（注册进 injected-block
+   filter，不进归档）；step/契约类只事件留痕、不上报告；⑥半助理层——
+   run_terminal_cmd/search_replace/run_tests/检索派发仍经 host 侧机械链
+   前置执行（host 拥有 cwd/env/超时），ACAF/权限轴/预算/墙钟/候选计数/
+   read-anchor 写前核证维持前置硬门。实施验证：orz-loop 563 通过 /
+   0 失败 / 3 ignored、fmt 干净、clippy 无新增告警；orz-host/tui 失败集
+   与 HEAD 基线一致（23/5 项为 AGENT-DELIVERY-FLOW 末步校验引入的既有
+   脚本化用例失配，非本 S1 引入）。登记于 [设计](../docs/MECHANICAL_
+   AUDIT_LAYER_DESIGN_2026-08-24.md) §4/§5 / BACKLOG 0g / TODO P0-0g。
+
+3. **机械审查层＋半助理层 S2 测试（2026-08-24；设计 §4 路由；计数不动，
+   S3-S4 待实施）**：①删/改既有 gate 测试——orz-host/tui 脚本化计划
+   统一补固定末步 deliver（AGENT-DELIVERY-FLOW 末步校验引入的既有失配
+   23+5 项全部适配，`acp_server::AcpServer::new` 与 13 处
+   `plan_write_response` 经 `ensure_terminal_step` 归一、codex_app 助手
+   valid/two_step plan 补 deliver、orz-tui 两处内联计划补 deliver）；
+   acp_server 事件计数断言 16→18（S1 引入 plan_gate/budget 两条
+   `mechanical_audit_update` 留痕）；②新增 6 项专项测试——审计报告随终答前
+   反例自查轮同轮注入（[MECHANICAL_AUDIT v0.1] 独立块、执行事实/预算/
+   异常事实三类收敛、无建议、journal 留痕 kind ∈ {plan_gate, budget,
+   tool_result}）、direct 面 journal 零退役工具调用（blackboard_action_
+   write/console_step_done/console_return_to_console 零残留）、终答携带
+   未绑定 `[来源: SRC-999]` 引用原样交付（行为侧零残留）、主面检索族声明
+   （web_search/web_fetch/browser_read/retrieve_project_*）、主车道
+   web_search 派发检索子代理（ToolStarted target=external_retrieval，
+   构造题检索可达）、检索候选计数/超限分类；③验证——orz-loop 569 通过 /
+   0 失败 / 3 ignored、orz-tui 178 / 0、orz-host 串行 221 / 0（并行仅
+   `call_tool_timeout_kills_process_tree` 预存时序 flake，HEAD 基线同样
+   失败、单跑通过）、orz-assurance 144 / 0、orz-bin 11 / 0、fmt 干净、
+   clippy 无新增告警。登记于 [设计](../docs/MECHANICAL_AUDIT_LAYER_DESIGN_
+   2026-08-24.md) §4/§5 / BACKLOG 0g / TODO P0-0g。
+
+4. **机械审查层＋半助理层全面审查处理（2026-08-24；设计 §2.3/§2.5/
+   §2.8 符合性收口；计数不动，S3-S4 待实施）**：①**P1-1 read-anchor
+   写前核证补 direct 面落点**——审查发现 host 级 `search_replace` 无
+   `expected_anchor` 参数/校验（核证仅存于休眠订单链），direct 面该硬门
+   实际缺失；修复=`verify_content_anchor` 解耦为 (file_path, label) 签名，
+   `run_host_tool_with_timeout` 执行前加核证门（NotFound=新建跳过、其余
+   I/O 错误 fail-closed、不匹配返回结构化 `content_anchor_mismatch` 拒绝、
+   无 ToolStarted），`search_replace` 工具声明补可选 `expected_anchor`
+   参数；审计层锚点拒单异常事实真实化。②**P1-2 退役工具调用面窄门**——
+   审查发现 `blackboard_action_write`/`console_step_done`/
+   `console_return_to_console` 的休眠 handler 在 round 2+ 仍可达（调用面
+   belt-and-braces 已删、轮末发放入口存活），幻觉调用可真实执行订单；
+   修复=三个退役名在 `run_host_tool_with_timeout` 调用面机械拒绝
+   （`retired_tool_denied`、无 ToolStarted、零 console_order_written/
+   rejected 事件、零副作用、计入连败熔断），handler 与轮末发放保留为
+   真正休眠路径（与第 2 项"handler 保留为休眠路径"字面一致）。③**P2-1**
+   `cmd:` 审计摘要格式修复（原实现括号不配对、以文件 delta 顶替 stdout
+   截断；改为 `[truncated:` 机械标记单列"输出截断"）。④**P2-2** 候选拒绝
+   结构化错误码透传（`candidate_cap_exceeded`/`candidate_count_unbound`
+   精确异常分类，替代剩余池近似）。⑤**测试迁移**——21 项已退役订单链
+   e2e 删除（console_s2/s3/s4 流、预算预检、slot busy、step_done、双模式
+   问询、结果栏 receipt、状态行/步骤失败订单驱动版本）；acp_server/
+   codex_app/orz-tui 8 处订单脚本迁移为 direct 工具调用；订单层
+   FUS-READ-ANCHOR 四场景保留为休眠路径验证（upstream `order_id` →
+   `label`）；新增 direct 锚点门四场景与退役工具窄门测试。验证：orz-loop
+   551 通过 / 0 失败 / 3 ignored、orz-tui 178 / 0、orz-host 串行 220 / 0
+   （并行仅预存 flake `call_tool_timeout_kills_process_tree`，单跑通过）、
+   fmt 干净。登记于 [设计](../docs/MECHANICAL_AUDIT_LAYER_DESIGN_2026-08-24.md)
+   §2.3/§2.5/§2.8 / BACKLOG 0g / TODO P0-0g。

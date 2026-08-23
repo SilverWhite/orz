@@ -1,5 +1,12 @@
 # 检索侧机械控制设计（2026-08-13，v0.1 定稿）
 
+> **取代标记（2026-08-24，MECHANICAL-AUDIT-LAYER / ADR-0010 §14.39）**：
+> 本设计的 §3.2/§3.3（输出级引用校验器：`[来源]` 标记机械校验、失败降级）
+> 已被整体删除——输出级引用校验器退役（设计 §2.8），引用纪律降为提示词级
+> 轻量纪律；相应实现审计见
+> [`GAP_RETRIEVAL_MECH_STEP5_CITATION_VALIDATION_IMPL_AUDIT`](audits/GAP_RETRIEVAL_MECH_STEP5_CITATION_VALIDATION_IMPL_AUDIT_2026-08-14.md)
+> （同标记被取代）。候选计数/预筛/并发/模式门等其余机械控制保持。
+
 > 状态：`approved`（设计已冻结；用户已裁决放行实施；步骤 1-6 已全部闭合，
 > 批次完成于 2026-08-14）。
 > 范围：设计定稿；B-1 已实施闭合，批次剩余步骤按 BACKLOG P0-B 执行。

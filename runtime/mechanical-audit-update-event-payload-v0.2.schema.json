@@ -1,0 +1,26 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://local.scientific-assurance.invalid/schema/mechanical-audit-update-event-payload-v0.2.schema.json",
+  "title": "mechanical_audit_update event payload v0.2 (MECHANICAL-AUDIT-LAYER)",
+  "description": "ADR-0010 §14.39 / MECHANICAL_AUDIT_LAYER_DESIGN_2026-08-24 §2.4: 机械审查层轻量事件留痕——每次对象键覆盖写（含 step/契约类检查）以一条记录留痕，供回放与验证；报告块本身不进归档（与 counterexample 注入同语义）。kind 为写入来源（tool_result=工具结果分类、plan_gate=首轮计划门结果、budget=轮末预算覆盖写）；payload 为审查表条目 {key, round, summary, anomaly}——key 为对象键（file:<path> / cmd:<call_id> / plan / budget / retrieval:<n>）、round 为写入时的轮计数、summary 为机械事实摘要（无建议、无引导）、anomaly 为异常事实（exit code/超时/锚点拒单/候选超限）或 null。主车道专属：检索子代理车道不产生本事件。",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["kind", "payload"],
+  "properties": {
+    "kind": {
+      "type": "string",
+      "enum": ["tool_result", "plan_gate", "budget"]
+    },
+    "payload": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["key", "round", "summary", "anomaly"],
+      "properties": {
+        "key": { "type": "string", "minLength": 1 },
+        "round": { "type": "integer", "minimum": 0 },
+        "summary": { "type": "string", "minLength": 1 },
+        "anomaly": { "type": ["string", "null"] }
+      }
+    }
+  }
+}
