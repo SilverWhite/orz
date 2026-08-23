@@ -970,6 +970,15 @@
 >   S2、双份 core 0.825 过 0.70 + 2 次审计 + 3/3 trip 断言）；orz-loop
 >   579 通过 / 0 失败 / 3 ignored、fmt 干净、clippy 无新增。登记于
 >   ADR-0010 §14.35 第 23 项 / TODO P0-0d 后续 8 / CLI_PROJECT_INDEX。
+> - **2026-08-23 S2 测试闭合（用户放行；orz 1c87681；实施入账不变仍
+>   30，S3-S4 待续）**：新增 6 项——0.69x 边界不计数不触发（content
+>   ratio≈0.694 + reasoning 镜像）、0.70x 边界三连触发（9 词 core
+>   ratio≈0.720：审计 1/3→2/3→trip 3/3）、单超大 feed 计 1 次命中
+>   （feed 粒度）、间隔不重置（单 feed 300 互异 token 压窗口至 0.70 以下、
+>   计数保持 2，重灌恢复后第 3 次命中 trip 3/3）、流结束丢弃（新流首
+>   命中只审计不 trip）；既有 3-gram 用例适配已于 S1 完成。orz-loop
+>   585 通过 / 0 失败 / 3 ignored、fmt 干净、clippy 无新增。登记于
+>   ADR-0010 §14.35 第 24 项 / TODO P0-0d 后续 8 / CLI_PROJECT_INDEX。
 
 ### 0e. CONTEXT-SCAFFOLDING-PULL-REDESIGN（P0；2026-08-21 设计定稿，
 **S1-S4 全部闭合 2026-08-21，计数 28 → 27**）

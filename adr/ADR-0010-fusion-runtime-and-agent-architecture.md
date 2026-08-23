@@ -2774,6 +2774,22 @@ ADR §3.6 正文修订随实施登记。
     仅 2 条既有 doc 告警、位于改动区外）。登记于设计
     `NGRAM_GUARD_CALIBRATION_DESIGN_2026-08-23.md` / BACKLOG 0d 后续 8 /
     TODO P0-0d 后续 8 / CLI_PROJECT_INDEX。
+24. **N-GRAM GUARD CALIBRATION S2 测试实施（2026-08-23 用户放行）**：
+    新增 6 项单测——① 0.69x 边界：content 单份 8 词 core（ratio≈0.694
+    < 0.70）永不计数、永不触发（+ reasoning 镜像，两族统一）；② 0.70x
+    边界：9 词 core（ratio≈0.720 > 0.70）窗口填满后每次超阈值 feed 计
+    1 次命中，审计 1/3→2/3、第 3 次 trip 3/3（`>` 严格大于两侧明确
+    断言）；③ 命中按 feed 粒度：单个约 1200 token 高重复 feed 仅计 1 次
+    （1 审计、不 trip），第 2/3 个同类 feed 才累计至 trip；④ 间隔不重置：
+    命中 2 后插入单 feed 300 互异 token（窗口重复率压到 0.70 以下、间隔
+    自身不计命中），`ngram_hits` 保持 2，重灌恢复超阈值后第 3 次命中即
+    trip（3/3）；⑤ 流结束丢弃：新流（新 `DegenerationDetector`）首命中
+    仅审计不 trip——计数不跨请求累积；⑥ 既有 3-gram 用例适配已于 S1
+    完成（0.694 边界样本转为 ①）。orz-loop **585 通过 / 0 失败 / 3
+    ignored**（579 + 6 新增），fmt 干净，clippy 无新增告警。实施入账
+    不变仍 30（S2 属同一实施里程碑，S1 已入账）；S3 重建 / S4 复验待续。
+    登记于设计 `NGRAM_GUARD_CALIBRATION_DESIGN_2026-08-23.md` / BACKLOG
+    0d 后续 8 / TODO P0-0d 后续 8 / CLI_PROJECT_INDEX。
 
 ### 14.31 v1.31 补写裁决索引（2026-08-19）
 
