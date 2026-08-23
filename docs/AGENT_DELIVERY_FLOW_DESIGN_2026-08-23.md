@@ -180,6 +180,39 @@ S1 代码 → S2 测试 → S3 重建（Linux musl，ORZ-BUILD-MOUNT-001）→ S
 ### 6.3 边界登记
 
 - 交付状态过滤复用 `DELTA_EXCLUDED_DIRS`（.gsa/.git/缓存目录等），未另设
-  临时文件后缀规则（"临时文件"= walk 排除面语义）；过滤规则由单测锁定。
+  临时文件后缀规则（"临时文件"= walk 排除面语义）；过滤规则由单测锁定
+  （2026-08-23 审查处理 F1：补 `workspace_delta_walk` 排除面单测——排除
+  目录内的文件不得进入基线，覆盖 .gsa/.git/缓存族）。
 - `submit` 双阶段确认时重新计算交付状态（确认内容为最新快照）。
 - 引用修正机会按 run 计数（不跨 run）；修正轮仍走完整最终回答门。
+
+### 6.4 S1 全面审查处理（2026-08-23，用户指示处理审查全部问题）
+
+- **F1 过滤规则单测锁定**（已修复）：新增 `workspace_delta_walk` 排除面
+  单测（排除目录文件不得进 walk 结果）与元数据快照 diff 单测；orz-loop
+  579 通过 / 0 失败 / 3 ignored，fmt 干净，clippy 无新增。
+- **F2 引用修正口径登记**：修正机会=本 run 内至多 1 次修正总数（attempt
+  按失败次数计，不按失败类型分——第二次失败无论是否同一 reason_codes 均
+  硬阻断）。设计 §2.4「同一失败」在此口径下=同一次最终回答尝试的失败；
+  与 verifier 语义（attempt 1 → retry、attempt 2 → block）一致。
+- **O1 递交为信息展示、非最终回答硬门**（已登记边界）：`submit` 交付状态
+  仅作信息展示（设计 §2.2 边界"仅作信息展示、不作硬门"）；模型跳过 submit
+  直接写终答仍可结束 run，由最终回答引用校验 + 外部验证器仲裁。S4 复验
+  「计划无空转」形态时一并观察是否出现跳过递交。
+- **O2 terminal 判定按末步 id（已修复）**：terminal = 最后一步且 id ∈
+  {`deliver`, `submit`}（`planning::is_terminal_step`）；旧/恢复计划末步
+  为普通工作 id 时保持 S1 前语义（普通订单自动 done、console_step_done
+  不拒绝），不隐式困在递交门。新增 `terminal_step_predicate_is_id_keyed`
+  与 `legacy_plan_last_step_keeps_auto_advance_on_order_receipt` 单测。
+- **O3 修正轮门重跑口径登记**：修正轮重新走引用校验；counterexample 门按
+  其 once-only 语义不重跑（设计 §2.4「重新走完整最终回答门（引用校验 +
+  反例门）」在此口径下=引用校验必重跑、反例门仅首候选触发一次）。
+- **O4 交付基线获取时机登记**：基线仅在 `plan_write` 新 plan epoch 批准
+  时捕获；恢复会话 / 两段式 run_plan 路径无基线时 `submit` 报告「变更清单
+  不可用」（fail-closed、不伪造）。S4 前确认恢复路径行为符合预期。
+- **O5 walk 成本登记**：计划批准 + `submit` 请求 + 确认各做一次全工作树
+  元数据 walk（排除面外）；orz 目标规模可接受，大仓库成本为已知。
+- **O6 actions 板截断计数标记（已修复）**：host delta 截断时短计数渲染
+  `changed: N+ files`（不再把 cap 值误读为真实总数）。
+- **O7 末步强制豁免评估结论登记**：实施评估=不设豁免白名单，全量强制
+  （`plan_write` 校验兜底）；非常规计划需按模板形状书写末步 id。

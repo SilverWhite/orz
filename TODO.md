@@ -945,6 +945,13 @@ S1 代码 + S2 测试闭合 2026-08-23，实施入账 28 → 29；S3-S4 待续�
   not_current、console_step_done 末步拒绝、diff/delta receipt、changed
   短计数、引用修正一次/二次硬阻断；orz-loop 574 通过 / 0 失败 / 3 ignored、
   fmt 干净、clippy 无新增告警）
+- [x] S1 全面审查处理（**2026-08-23 闭合（用户指示处理审查全部问题）**：
+  修复——F1 `workspace_delta_walk` 排除面单测、O2 terminal 判定按末步 id
+  （旧/恢复计划保持 S1 前语义）、O6 截断 delta `changed: N+ files`；口径
+  登记——F2 修正机会=至多 1 次总数、O1 递交为信息展示非硬门、O3 反例门
+  once-only、O4 基线捕获时机、O5 walk 成本、O7 不设豁免；orz-loop 579
+  通过 / 0 失败 / 3 ignored、fmt 干净、clippy 无新增；详见设计 §6.4 /
+  ADR-0010 §14.35 第 22 项）
 - [ ] S3 重建（Linux musl，ORZ-BUILD-MOUNT-001）
 - [ ] S4 复验（计划无空转、末步递交、引用修正、订单反馈、零 400、命中率 ≥90%）
 

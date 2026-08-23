@@ -2740,6 +2740,24 @@ ADR §3.6 正文修订随实施登记。
     clippy 无新增告警（与基线一致）。实施入账 28 → 29；S3 重建 / S4 复验
     待续。登记于设计 §6 / BACKLOG 0d 后续 7 / TODO P0-0d 后续 7 /
     CLI_PROJECT_INDEX。
+22. **AGENT DELIVERY FLOW S1 全面审查处理（2026-08-23 用户指示处理审查
+    全部问题）**：审查结论=S1 设计与实现整体一致（机制完整、事件面/工具面
+    收敛、schema/verifier 三同步），无功能缺陷；处理如下——① 修复项：
+    F1 过滤规则单测锁定（新增 `workspace_delta_walk` 排除面单测 + 元数据
+    diff 单测）、O2 terminal 判定改按末步 id ∈ {`deliver`,`submit`}
+    （`planning::is_terminal_step`，旧/恢复计划末步为普通 id 时保持 S1 前
+    自动推进与 console_step_done 语义，新增 predicate 与 legacy 行为单测）、
+    O6 actions 板截断 delta 短计数渲染 `changed: N+ files`；② 口径/边界
+    登记：F2 引用修正=本 run 至多 1 次修正总数（attempt 不按失败类型分，
+    第二次失败无论 reason 均 block）、O1 递交状态为信息展示非最终回答硬门
+    （跳过 submit 直接终答由引用校验+验证器仲裁，S4 观察）、O3 修正轮重走
+    引用校验而 counterexample 门 once-only 不重跑、O4 交付基线仅 plan_write
+    新 epoch 捕获（恢复/run_plan 路径 fail-closed「变更清单不可用」）、O5
+    submit 每次全工作树 walk 成本登记、O7 末步强制不设豁免（全量强制）。
+    orz-loop 579 通过 / 0 失败 / 3 ignored，fmt 干净，clippy 无新增告警。
+    计数不变（仍 29，审查处理属 S1 内收尾）；S3 重建 / S4 复验待续。登记
+    于设计 §6.4 / BACKLOG 0d 后续 7 / TODO P0-0d 后续 7 /
+    CLI_PROJECT_INDEX。
 
 ### 14.31 v1.31 补写裁决索引（2026-08-19）
 

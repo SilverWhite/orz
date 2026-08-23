@@ -938,6 +938,19 @@
 >   （orz-loop 574 通过 / 0 失败 / 3 ignored、fmt 干净、clippy 无新增）。
 >   登记于 ADR-0010 §14.35 第 21 项 / [设计 §6](AGENT_DELIVERY_FLOW_DESIGN_2026-08-23.md)
 >   / TODO P0-0d 后续 7 / CLI_PROJECT_INDEX。
+> - **2026-08-23 AGENT DELIVERY FLOW S1 全面审查处理（用户指示处理审查
+>   全部问题；计数不变仍 29，属 S1 内收尾）**：修复——F1 补
+>   `workspace_delta_walk` 排除面单测（.gsa/.git/缓存族不得进 walk）、O2
+>   terminal 判定按末步 id（`planning::is_terminal_step`，旧/恢复计划保持
+>   S1 前自动推进语义，新增 predicate + legacy 行为单测）、O6 截断 delta
+>   短计数渲染 `changed: N+ files`；登记口径/边界——F2 引用修正=至多 1 次
+>   修正总数（attempt 不按失败类型分）、O1 递交状态为信息展示非最终回答
+>   硬门（S4 观察跳过递交形态）、O3 修正轮重走引用校验而 counterexample
+>   门 once-only、O4 基线仅 plan_write 新 epoch 捕获（恢复/run_plan
+>   fail-closed）、O5 walk 成本、O7 末步强制不设豁免。orz-loop 579 通过 /
+>   0 失败 / 3 ignored、fmt 干净、clippy 无新增。登记于 ADR-0010 §14.35
+>   第 22 项 / [设计 §6.4](AGENT_DELIVERY_FLOW_DESIGN_2026-08-23.md) /
+>   TODO P0-0d 后续 7 / CLI_PROJECT_INDEX。
 > - **2026-08-23 N-GRAM GUARD CALIBRATION 设计定稿（用户裁决；先落设计、
 >   未实施；**最优先——2026-08-23 用户指示，本轮提案 3**）**：来源=两次真实任务 3-gram 路径②边界误触发（旧轮
 >   portfolio-optimization + 本轮 video-processing，均显示 0.60、实际
