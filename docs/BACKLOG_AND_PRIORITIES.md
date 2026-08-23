@@ -987,6 +987,14 @@
 >   （`rolling_hit_limit` / `ngram_hit_limit`）。orz-loop 585 通过 /
 >   0 失败 / 3 ignored、fmt 干净、clippy 无新增。登记于 ADR-0010
 >   §14.35 第 25 项 / 设计 §2.4 / TODO P0-0d 后续 8 / CLI_PROJECT_INDEX。
+> - **2026-08-23 S3 重建登记（用户指示进行重建；Linux musl，
+>   ORZ-BUILD-MOUNT-001 契约；计数不变仍 30，S4 复验闭环后 30 → 29）**：
+>   容器增量构建 BUILD_EXIT=0，三件套时间戳 2026-08-23 08:50 HKT
+>   （orz 104,664,664 B / signer 1,388,592 B / provision 1,206,568 B）；
+>   最小可执行冒烟=三件正常加载执行（orz 无 TTY io error 属预期、
+>   provision usage、signer manifest 缺失）；对应源码 orz 05231f7 +
+>   父 35788a0。登记于 ADR-0010 §14.35 第 26 项 / 设计 §3 / TODO
+>   P0-0d 后续 8 / CLI_PROJECT_INDEX。
 
 ### 0e. CONTEXT-SCAFFOLDING-PULL-REDESIGN（P0；2026-08-21 设计定稿，
 **S1-S4 全部闭合 2026-08-21，计数 28 → 27**）

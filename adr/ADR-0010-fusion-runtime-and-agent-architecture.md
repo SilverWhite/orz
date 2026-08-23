@@ -2804,6 +2804,21 @@ ADR §3.6 正文修订随实施登记。
     失败 / 3 ignored**、fmt 干净、clippy 无新增告警。计数不变仍 30
     （审查处理属 S1 内收尾）；S3 重建 / S4 复验待续。登记于设计 §2.4 /
     BACKLOG 0d 后续 8 / TODO P0-0d 后续 8 / CLI_PROJECT_INDEX。
+26. **N-GRAM GUARD CALIBRATION S3 重建登记（2026-08-23 用户指示进行
+    重建；Linux musl，ORZ-BUILD-MOUNT-001 契约，`build_orz_aliyun.sh`；
+    计数不变仍 30，S4 复验闭环后回落 30 → 29）**：容器增量构建
+    （`rust:1.97-slim`；挂载 `D:\CLI:/orz`、工作目录 `/orz/orz`；apt
+    阿里云镜像 + 官方 static.rust-lang.org + 静态 rg 15.0.0 源码安装；
+    `-j 1`）**BUILD_EXIT=0**；三件套产物时间戳 **2026-08-23 08:50
+    HKT**（orz 104,664,664 B / orz-signer 1,388,592 B / orz-acaf-
+    provision 1,206,568 B；SHA256 见设计 §3）。最小可执行冒烟=三件均
+    正常加载执行（orz 无 TTY 报 TUI io error 属预期——headless 真机面
+    由 S4 任务容器验证；provision 打印 usage；signer 报 manifest 缺失）。
+    对应源码=orz 05231f7 + 父仓库 35788a0。待续：S4 复验（正常任务零
+    3-gram trip、0.60–0.70 流仅审计、≥0.70 三连才 trip、零真实 400、
+    命中率 ≥90%；content 族 0.60–0.70 区间实机观察）。登记于设计
+    `NGRAM_GUARD_CALIBRATION_DESIGN_2026-08-23.md` §3 / BACKLOG 0d
+    后续 8 / TODO P0-0d 后续 8 / CLI_PROJECT_INDEX。
 
 ### 14.31 v1.31 补写裁决索引（2026-08-19）
 

@@ -998,7 +998,12 @@ S1 代码 + S2 测试闭合 2026-08-23，实施入账 29 → 30；S3-S4 待续�
   REQUEST_MAX_TOKENS 约束、S4 观察）；I1 审计日志按路径标注命中门槛
   （rolling/ngram 两字段）；orz-loop 585 通过 / 0 失败 / 3 ignored、
   fmt 干净、clippy 无新增；详见设计 §2.4 / ADR-0010 §14.35 第 25 项）
-- [ ] S3 重建（Linux musl，ORZ-BUILD-MOUNT-001）
+- [x] S3 重建（**2026-08-23 闭合（用户指示进行重建）**：Linux musl，
+  ORZ-BUILD-MOUNT-001 契约，BUILD_EXIT=0，三件套 2026-08-23 08:50 HKT
+  （orz 104,664,664 B / signer 1,388,592 B / provision 1,206,568 B），
+  最小可执行冒烟=三件正常加载执行；对应源码 orz 05231f7 + 父 35788a0；
+  计数不变仍 30（S4 复验闭环后 30 → 29）；详见设计 §3 / ADR-0010
+  §14.35 第 26 项）
 - [ ] S4 复验（零 3-gram trip、构造流行为、零 400、命中率 ≥90%）
 
 ### P0-0e CONTEXT-SCAFFOLDING-PULL-REDESIGN（P0；2026-08-21 设计定稿，

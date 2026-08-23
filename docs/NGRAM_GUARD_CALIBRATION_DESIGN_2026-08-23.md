@@ -4,7 +4,9 @@
 > 未实施；**S1 代码实施 + S2 测试闭合 2026-08-23（用户放行；orz
 > 2563121 → 1c87681），实施入账 29 → 30，S3-S4 待续；**S1 全面审查
 > 处理 2026-08-23（用户指示处理审查全部问题；D1 边界登记修正 + I1
-> 审计日志修正，计数不变仍 30）**）。
+> 审计日志修正，计数不变仍 30）**；**S3 重建完成 2026-08-23（Linux
+> musl，ORZ-BUILD-MOUNT-001 契约，BUILD_EXIT=0，三件套 08:50 HKT），
+> S4 复验待续，计数不变仍 30（S4 闭环后回落 30 → 29）**）。
 > 入口：ADR-0010 §14.35 第 20 项 / BACKLOG 0d 后续 8 / TODO P0-0d 后续 8 /
 > CLI_PROJECT_INDEX。关联：输出健康哨兵 3-gram 路径②（
 > DEEPSEEK_OUTPUT_BUDGET_AND_STALL_GUARD_DESIGN §3.3/§3.5）。
@@ -106,6 +108,24 @@ WARN 按路径标注命中门槛 `rolling_hit_limit` / `ngram_hit_limit`，消�
 NGRAM_HIT_LIMIT 日后单独调整时的误标风险）。orz-loop 585 通过 / 0 失败 /
 3 ignored、fmt 干净、clippy 无新增。登记于 ADR-0010 §14.35 第 25 项 /
 BACKLOG 0d 后续 8 / TODO P0-0d 后续 8 / CLI_PROJECT_INDEX。
+
+**2026-08-23 S3 重建登记（用户指示进行重建；Linux musl，ORZ-BUILD-
+MOUNT-001 契约，`build_orz_aliyun.sh`；计数不变仍 30，S4 复验闭环后
+回落 30 → 29）**：容器增量构建（`rust:1.97-slim`；挂载 `D:\CLI:/orz`、
+工作目录 `/orz/orz`；apt 阿里云镜像 + 官方 static.rust-lang.org + 静态
+rg 15.0.0 源码安装；`-j 1`）**BUILD_EXIT=0**；三件套产物时间戳
+**2026-08-23 08:50 HKT**（orz 104,664,664 B / orz-signer 1,388,592 B /
+orz-acaf-provision 1,206,568 B；SHA256=orz
+8E43E96861982BF2709A1501D540BCB5153CE6873C4AE7A40C03556B43210414 /
+signer 8288EAAF9784C1406C707FC01F1FDE2C2A9EBBD24FFD04242D1F369CD25A2403 /
+provision 54D2AFDAA9592A55C565409FB8E612C641BE563A827F3E0635B9174F7164466A）；
+最小可执行冒烟=三件均正常加载执行（orz 无 TTY 报 TUI io error 属预期——
+headless 真机面由 S4 任务容器验证；provision 打印 usage；signer 报
+manifest 缺失）。对应源码=orz 05231f7（S1 实施 + 审查处理）+ 父仓库
+35788a0。待续：S4 复验（正常任务零 3-gram trip、0.60–0.70 流仅审计、
+≥0.70 三连才 trip、零真实 400、命中率 ≥90%；content 族 0.60–0.70 区间
+实机观察）。登记于 ADR-0010 §14.35 第 26 项 / BACKLOG 0d 后续 8 /
+TODO P0-0d 后续 8 / CLI_PROJECT_INDEX。
 
 ## 4. 验收标准（DoD）
 
