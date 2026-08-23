@@ -3509,3 +3509,17 @@ ADR §3.6 正文修订随实施登记。
    （并行仅预存 flake `call_tool_timeout_kills_process_tree`，单跑通过）、
    fmt 干净。登记于 [设计](../docs/MECHANICAL_AUDIT_LAYER_DESIGN_2026-08-24.md)
    §2.3/§2.5/§2.8 / BACKLOG 0g / TODO P0-0g。
+
+5. **机械审查层＋半助理层 S3 重建（2026-08-24；设计 §4 路由；计数不动，
+   S4 待实施）**：Linux musl 重建（ORZ-BUILD-MOUNT-001 契约，
+   build_orz_aliyun.sh，rust:1.97-slim 增量构建 -j 1，父仓库挂载
+   /orz、工作目录 /orz/orz，输出三件套至 D:/tb-eval/orz-linux）
+   BUILD_EXIT=0；三件套时间戳 2026-08-24 06:15 HKT（orz 104,718,240 B /
+   orz-signer 1,388,592 B / orz-acaf-provision 1,206,576 B），编译
+   6m47s；最小可执行冒烟=三件正常加载执行（orz 无 TTY io error 属预期、
+   provision usage、signer manifest 缺失）；守卫符号
+   retired_tool_denied / content_anchor_mismatch 二进制各 8 命中；
+   ELF 无 ld-linux / GLIBC_2 动态解释器字符串（musl 静态确认）；对应
+   源码 orz 033fd26 + 父 54560b4（S1/S2+审查处理提交，均已推送）。
+   登记于 [设计](../docs/MECHANICAL_AUDIT_LAYER_DESIGN_2026-08-24.md)
+   §4 / BACKLOG 0g / TODO P0-0g。

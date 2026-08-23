@@ -1153,7 +1153,8 @@ S1-S4 全部闭合 2026-08-21，计数 28 → 27）
   HTTP 400；计数 28 → 27；详见设计 §11 / ADR-0010 §14.38 第 5 项）
 
 ### P0-0g MECHANICAL-AUDIT-LAYER（P0；2026-08-24 设计定稿；S1/S2 已实施
-闭合 + 全面审查处理已完成 2026-08-24；设计轮不动计数；S3-S4 待实施）
+闭合 + 全面审查处理已完成 + S3 重建完成 2026-08-24；设计轮不动计数；
+S4 待实施）
 
 > 入口：[设计](docs/MECHANICAL_AUDIT_LAYER_DESIGN_2026-08-24.md)；
 > ADR-0010 §14.39（v1.39）；BACKLOG 0g。
@@ -1207,7 +1208,14 @@ S1-S4 全部闭合 2026-08-21，计数 28 → 27）
   通过 / 0 失败 / 3 ignored、orz-tui 178 / 0、orz-host 串行 220 / 0（并行仅
   预存 flake call_tool_timeout_kills_process_tree，单跑通过）、fmt 干净）
 
-- [ ] S3 重建（Linux musl，ORZ-BUILD-MOUNT-001）——待实施
+- [x] S3 重建（2026-08-24；Linux musl，ORZ-BUILD-MOUNT-001 契约，
+  build_orz_aliyun.sh，rust:1.97-slim 增量构建 -j 1）：BUILD_EXIT=0；
+  三件套 2026-08-24 06:15 HKT（orz 104,718,240 B / signer 1,388,592 B /
+  provision 1,206,576 B），编译 6m47s；最小可执行冒烟=三件正常加载执行
+  （orz 无 TTY io error 属预期、provision usage、signer manifest 缺失）；
+  守卫符号 retired_tool_denied/content_anchor_mismatch 各 8 命中；
+  musl 静态确认；对应源码 orz 033fd26 + 父 54560b4（均已推送）；
+  ADR-0010 §14.39 第 5 项）
 
 - [ ] S4 复验（同一 10 题 k=1 + 构造题：检索调用出现、审计报告覆盖写、
   零 400、命中率 ≥90%、轮次/耗时下降、reward 对比）——待实施

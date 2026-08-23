@@ -2,7 +2,8 @@
 
 > 状态：`current-design`（2026-08-24 设计定稿；S1 实施 + S2 测试 + 全面
 > 审查处理已闭合——read-anchor 补 direct 面核证门、退役工具调用面窄门、
-> cmd 摘要格式修复、候选错误码透传、订单链测试迁移；S3-S4 待实施）。
+> cmd 摘要格式修复、候选错误码透传、订单链测试迁移；S3 重建完成
+> 2026-08-24（Linux musl 三件套）；S4 待实施）。
 > 性质：取代 PLAN-FIRST-BLACKBOARD（2026-08-15）的 console 订单执行面与
 > FUS-CONSOLE-DUAL-MODE 的默认路径；保留首轮 plan 门、ACAF、权限轴、
 > 预算/候选计数、read-anchor 写前核证；删除输出级引用校验器；恢复主面检索。
@@ -215,6 +216,15 @@
   → S3 重建（Linux musl，ORZ-BUILD-MOUNT-001）→ S4 复验（同一 10 题
   k=1 + 构造题：检索调用出现、审计报告覆盖写、零 400、命中率 ≥90%、
   轮次/耗时下降、reward 对比）。
+- S3 重建（2026-08-24 完成）：Linux musl（ORZ-BUILD-MOUNT-001 契约，
+  build_orz_aliyun.sh，rust:1.97-slim 增量构建 -j 1）BUILD_EXIT=0；
+  三件套时间戳 2026-08-24 06:15 HKT（orz 104,718,240 B / orz-signer
+  1,388,592 B / orz-acaf-provision 1,206,576 B），编译 6m47s；最小
+  可执行冒烟=三件正常加载执行（orz 无 TTY io error 属预期、provision
+  usage、signer manifest 缺失）；守卫符号 retired_tool_denied /
+  content_anchor_mismatch 各 8 命中；无 glibc 动态解释器字符串（musl
+  静态确认）；对应源码 orz 033fd26 + 父 54560b4（均已推送）。登记于
+  ADR-0010 §14.39 第 5 项 / BACKLOG 0g / TODO P0-0g。
 - 计数：设计轮不动计数；实施放行入账 +1；S4 闭环 -1（以 TODO 未闭合
   扫描快照为准）。
 
@@ -239,6 +249,6 @@
 ## 6. 关联登记
 
 - ADR-0010 §14.39（v1.39）/ BACKLOG 0g / TODO P0-0g /
-  CLI_PROJECT_INDEX v2.19。
+  CLI_PROJECT_INDEX v2.20。
 - 取代：PLAN_FIRST_BLACKBOARD_DESIGN（console 订单执行面）、
   RETRIEVAL_MECHANICAL_CONTROLS_DESIGN step 5（输出级引用校验器）。

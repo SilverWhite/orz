@@ -1177,8 +1177,8 @@ fail-closed + clippy 修复）
   TODO P0-0f / CLI_PROJECT_INDEX。
 
 ### 0g. MECHANICAL-AUDIT-LAYER（P0；2026-08-24 设计定稿；**S1 已实施
-2026-08-24（合并实施包）+ S2 测试已实施 2026-08-24**；设计轮不动计数；
-S3-S4 待实施）
+2026-08-24（合并实施包）+ S2 测试已实施 2026-08-24 + S3 重建完成
+2026-08-24**；设计轮不动计数；S4 待实施）
 
 - 入口：[设计](MECHANICAL_AUDIT_LAYER_DESIGN_2026-08-24.md)；索引：
   [CLI_PROJECT_INDEX.md](../CLI_PROJECT_INDEX.md)；ADR-0010 §14.39（v1.39）。
@@ -1240,6 +1240,15 @@ S3-S4 待实施）
   验证：orz-loop 551 通过 / 0 失败 / 3 ignored、orz-tui 178 / 0、orz-host
   串行 220 / 0（并行仅预存 flake call_tool_timeout_kills_process_tree，
   单跑通过）、fmt 干净。登记于 ADR-0010 §14.39 第 4 项 / TODO P0-0g。
+- **S3 重建（2026-08-24）**：Linux musl（ORZ-BUILD-MOUNT-001 契约，
+  build_orz_aliyun.sh，rust:1.97-slim 增量构建 -j 1）BUILD_EXIT=0；
+  三件套时间戳 2026-08-24 06:15 HKT（orz 104,718,240 B / orz-signer
+  1,388,592 B / orz-acaf-provision 1,206,576 B），编译 6m47s；最小
+  可执行冒烟=三件正常加载执行（orz 无 TTY io error 属预期、provision
+  usage、signer manifest 缺失）；守卫符号 retired_tool_denied /
+  content_anchor_mismatch 各 8 命中；无 glibc 动态解释器字符串（musl
+  静态确认）；对应源码 orz 033fd26 + 父 54560b4（提交并推送）。登记于
+  ADR-0010 §14.39 第 5 项 / TODO P0-0g。
 
 ### 0. 前置收尾（提交前需用户确认）
 
