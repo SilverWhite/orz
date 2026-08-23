@@ -44,6 +44,19 @@ pub(crate) const ACTION_NAME_MAX_CHARS: usize = 128;
 /// order receipts; only the explicit `submit` delivery path marks it done.
 pub(crate) const TERMINAL_STEP_IDS: &[&str] = &["deliver", "submit"];
 
+/// AGENT-DELIVERY-FLOW (2026-08-23, 设计 §2.2): terminal-step predicate —
+/// the LAST plan step whose id ∈ {deliver, submit}. Keyed on the terminal
+/// ID (not position alone) so legacy/restored plans whose final step has a
+/// plain work id keep the pre-S1 step semantics (auto-advance on ordinary
+/// orders, `console_step_done` allowed); only plans that follow the fixed
+/// 递交/完成 template shape get the submit-only terminal semantics.
+pub(crate) fn is_terminal_step(steps: &[crate::blackboard::PlanStep], idx: usize) -> bool {
+    steps
+        .get(idx)
+        .map(|s| idx + 1 == steps.len() && TERMINAL_STEP_IDS.contains(&s.id.as_str()))
+        .unwrap_or(false)
+}
+
 /// Per-run plan-gate state (local to `run_agent_loop`, main lane only).
 #[derive(Debug, Clone)]
 pub(crate) struct PlanGateState {
@@ -806,6 +819,38 @@ mod tests {
             }
         }));
         assert!(v.errors.is_empty(), "{:?}", v.errors);
+    }
+
+    /// AGENT-DELIVERY-FLOW (2026-08-23, 设计 §2.2 + 审查处理 O2): the
+    /// terminal predicate is ID-keyed — the LAST step whose id is
+    /// `deliver`/`submit` is terminal; a legacy/restored plan whose final
+    /// step has a plain work id keeps the pre-S1 step semantics.
+    #[test]
+    fn terminal_step_predicate_is_id_keyed() {
+        let step = |id: &str| crate::blackboard::PlanStep {
+            id: id.to_string(),
+            goal: String::new(),
+            actions: Vec::new(),
+            acceptance: String::new(),
+            evidence: Vec::new(),
+            status: crate::blackboard::StepStatus::Pending,
+        };
+        // New-shape plan: last step deliver → terminal; earlier step not.
+        let steps = vec![step("s1"), step("deliver")];
+        assert!(super::is_terminal_step(&steps, 1));
+        assert!(!super::is_terminal_step(&steps, 0));
+        // New-shape plan: last step submit → terminal.
+        let steps = vec![step("s1"), step("submit")];
+        assert!(super::is_terminal_step(&steps, 1));
+        // Legacy-shape plan: last step is a plain work id → NOT terminal.
+        let steps = vec![step("s1"), step("s2")];
+        assert!(!super::is_terminal_step(&steps, 1));
+        assert!(!super::is_terminal_step(&steps, 0));
+        // Terminal id on a NON-last position is not the fixed terminal step.
+        let steps = vec![step("deliver"), step("s2")];
+        assert!(!super::is_terminal_step(&steps, 0));
+        // Out-of-range index.
+        assert!(!super::is_terminal_step(&steps, 2));
     }
 
     #[test]

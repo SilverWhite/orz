@@ -4956,7 +4956,7 @@ impl AgentLoopController {
                      filtered, ≤20 entries) into the blackboard plan view, \
                      review it, then call `submit` again to confirm and advance \
                      the final step into the final-answer flow. Refused while \
-                     earlier steps are not done or the plan has no terminal step."
+                     earlier steps are not done, or when no plan is in force."
                     .to_string(),
                 parameters: serde_json::json!({
                     "type": "object",
@@ -7710,8 +7710,11 @@ impl AgentLoopController {
                     // AGENT-DELIVERY-FLOW (2026-08-23, 设计 §2.2): the final
                     // (terminal) step never auto-advances on an ordinary
                     // order receipt — only the explicit `submit` delivery
-                    // path marks it done (杜绝 echo done 式虚假递交).
-                    let is_terminal_step = idx + 1 == w.plan.steps.len();
+                    // path marks it done (杜绝 echo done 式虚假递交). The
+                    // predicate is ID-keyed (last step id ∈ {deliver,
+                    // submit}) — legacy/restored plans with a plain final
+                    // step id keep the pre-S1 auto-advance semantics.
+                    let is_terminal_step = crate::planning::is_terminal_step(&w.plan.steps, idx);
                     if !is_terminal_step {
                         crate::planning::mark_step_done(
                             &mut w.plan.steps,
@@ -9796,14 +9799,16 @@ impl AgentLoopController {
             // AGENT-DELIVERY-FLOW (2026-08-23, 设计 §2.2): the final step is
             // the fixed 递交/完成 step — it advances ONLY via the `submit`
             // delivery path, never via the direct-mode evidence exception
-            // (否则模型可绕过机械交付状态直接"完成"末步).
+            // (否则模型可绕过机械交付状态直接"完成"末步). ID-keyed —
+            // legacy/restored plans with a plain final step id are not the
+            // fixed 递交/完成 step and keep the direct evidence path.
             let step_is_terminal = {
                 let w = self.blackboard.read();
                 w.plan
                     .steps
                     .iter()
                     .position(|s| s.id == step_id)
-                    .map(|idx| idx + 1 == w.plan.steps.len())
+                    .map(|idx| crate::planning::is_terminal_step(&w.plan.steps, idx))
                     .unwrap_or(false)
             };
             if step_is_terminal {
@@ -28106,6 +28111,54 @@ mod tests {
             r.plan.steps[1].status
         );
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// 设计 §2.2 + 审查处理 O2：terminal 判定按末步 id（{deliver, submit}）
+    /// ——旧/恢复计划（末步为普通工作 id）保持 S1 前语义：普通订单 receipt
+    /// 仍自动置末步 done，不被隐式困在递交门。
+    #[test]
+    fn legacy_plan_last_step_keeps_auto_advance_on_order_receipt() {
+        let controller = stage_c_controller(Arc::new(FakeProvider::new(Vec::new())));
+        {
+            let mut w = controller.blackboard().write();
+            w.plan.plan_id = Some("plan-legacy".to_string());
+            w.plan.plan_epoch = 1;
+            w.plan.steps.push(crate::blackboard::PlanStep {
+                id: "s1".to_string(),
+                goal: "g".to_string(),
+                actions: Vec::new(),
+                acceptance: "a".to_string(),
+                evidence: Vec::new(),
+                status: crate::blackboard::StepStatus::Done(crate::blackboard::DoneEvidence {
+                    receipt_id: "ORD-1".to_string(),
+                    direct: None,
+                }),
+            });
+            w.plan.steps.push(crate::blackboard::PlanStep {
+                id: "s2".to_string(),
+                goal: "g2".to_string(),
+                actions: Vec::new(),
+                acceptance: "a".to_string(),
+                evidence: Vec::new(),
+                status: crate::blackboard::StepStatus::InProgress,
+            });
+        }
+        let order = crate::blackboard::ActionOrder {
+            order_id: "ORD-LEGACY".to_string(),
+            action: "workspace.read_file".to_string(),
+            arguments: serde_json::json!({"target_file": "a.txt"}),
+            step_id: Some("s2".to_string()),
+            round: 0,
+            plan_epoch: 1,
+            run_id: "RUN-LEGACY".to_string(),
+        };
+        controller.record_console_receipt(&order, true, "s2", None, true);
+        let r = controller.blackboard().read();
+        assert!(
+            r.plan.steps[1].status.is_done(),
+            "legacy last step must auto-advance on an ordinary receipt: {:?}",
+            r.plan.steps[1].status
+        );
     }
 
     /// 设计 §2.3：编辑类订单（search_replace）的 receipt 回显 diff（有界

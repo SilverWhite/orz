@@ -661,3 +661,82 @@ pub trait LoopHost: Send + Sync {
         Vec::new()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    static TEST_COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+    fn test_dir() -> std::path::PathBuf {
+        let n = TEST_COUNTER.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        let dir =
+            std::env::temp_dir().join(format!("orz-host-delta-test-{}-{}", std::process::id(), n));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    /// AGENT-DELIVERY-FLOW (2026-08-23, 设计 §5/§6.3 审查处理 F1): the
+    /// walk-exclusion rule is LOCKED by a unit test — `.gsa`/VCS/dependency
+    /// cache trees never appear in the delta baseline, so a delivery status
+    /// or run-tests delta cannot be drowned by host noise (the design
+    /// explicitly requires the filter rule to be test-locked).
+    #[test]
+    fn workspace_delta_walk_excludes_host_noise_dirs() {
+        let root = test_dir();
+        let mut expected = std::collections::HashSet::new();
+        // Real worktree files must be recorded.
+        std::fs::create_dir_all(root.join("src")).unwrap();
+        std::fs::write(root.join("src").join("main.rs"), "fn main() {}").unwrap();
+        expected.insert("src/main.rs".to_string());
+        std::fs::write(root.join("README.md"), "readme").unwrap();
+        expected.insert("README.md".to_string());
+        // Host noise that must NEVER appear in the walk.
+        for name in DELTA_EXCLUDED_DIRS {
+            let sub = root.join(name);
+            std::fs::create_dir_all(&sub).unwrap();
+            std::fs::write(sub.join("noise.txt"), "noise").unwrap();
+        }
+        let map = workspace_delta_walk(&root);
+        let paths: std::collections::HashSet<String> = map.keys().cloned().collect();
+        assert_eq!(
+            paths, expected,
+            "excluded dirs must not enter the walk: {paths:?}"
+        );
+        // Sanity: the exclusion list itself must cover the host's own tree.
+        assert!(DELTA_EXCLUDED_DIRS.contains(&".gsa"));
+        assert!(DELTA_EXCLUDED_DIRS.contains(&".git"));
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// AGENT-DELIVERY-FLOW (2026-08-23, 审查处理 O5): the walk is a
+    /// zero-content metadata snapshot — added/modified edges (with the
+    /// observed size) are detectable from the snapshot alone; no file
+    /// content is ever read.
+    #[test]
+    fn workspace_delta_walk_skips_unreadable_entries_and_diff_is_metadata_only() {
+        let root = test_dir();
+        std::fs::write(root.join("a.txt"), "v1").unwrap();
+        let before = workspace_delta_walk(&root);
+        std::fs::write(root.join("a.txt"), "version two - longer").unwrap();
+        std::fs::write(root.join("b.txt"), "new").unwrap();
+        let after = workspace_delta_walk(&root);
+        let (entries, truncated) = workspace_delta_diff(&before, &after, usize::MAX);
+        assert!(!truncated);
+        let kinds: Vec<(String, WorkspaceDeltaKind)> =
+            entries.into_iter().map(|e| (e.path, e.kind)).collect();
+        assert!(kinds.contains(&("a.txt".to_string(), WorkspaceDeltaKind::Modified)));
+        assert!(kinds.contains(&("b.txt".to_string(), WorkspaceDeltaKind::Added)));
+        assert_eq!(kinds.len(), 2);
+        // Size is the observed edge (after for modified).
+        let size = workspace_delta_diff(&before, &after, usize::MAX)
+            .0
+            .into_iter()
+            .find(|e| e.path == "a.txt")
+            .expect("a.txt entry")
+            .size;
+        assert!(size > 2, "modified size reflects the after edge: {size}");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+}

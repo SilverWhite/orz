@@ -473,8 +473,25 @@ pub fn render_section(
                                 .and_then(|r| r.get("diff"))
                                 .map(|_| 1)
                         });
+                    // AGENT-DELIVERY-FLOW (2026-08-23, 审查处理 O6): when
+                    // the host truncated the per-call delta, the resident
+                    // count shows the capped entries with a `+` marker so
+                    // the short count never reads as the true total (the
+                    // receipt point-read carries the truncation flag).
+                    let delta_truncated = result
+                        .response
+                        .as_ref()
+                        .and_then(|r| r.get("workspace_delta_truncated"))
+                        .and_then(|v| v.as_bool())
+                        .unwrap_or(false);
                     let changed_str = changed
-                        .map(|n| format!(" changed: {n} files"))
+                        .map(|n| {
+                            format!(
+                                " changed: {}{} files",
+                                n,
+                                if delta_truncated { "+" } else { "" }
+                            )
+                        })
                         .unwrap_or_default();
                     let line = format!(
                         "{} ok={} step={} code={} trace_id={}{}",
@@ -808,6 +825,61 @@ mod tests {
         assert!(!text.contains("ORD-000 ok="), "{text}");
         // 瘦身后 response 载荷一律不出现。
         assert!(!text.contains("payload-"), "{text}");
+    }
+
+    /// AGENT-DELIVERY-FLOW (2026-08-23, 设计 §2.3 + 审查处理 O6): the
+    /// resident changed-count is a short marker — a truncated host delta
+    /// renders `changed: N+ files` so the count never reads as the true
+    /// total; an untruncated delta keeps the plain count.
+    #[test]
+    fn render_actions_changed_count_marks_truncated_delta() {
+        let mut board = ActionBoard::default();
+        board.push_result(ActionResult {
+            order_id: "ORD-DELTA-TRUNC".into(),
+            action: Some("workspace.run_terminal".into()),
+            ok: true,
+            response: Some(serde_json::json!({
+                "output": "ok",
+                "workspace_delta": [{"path": "a.txt", "kind": "added", "size": 3}],
+                "workspace_delta_truncated": true,
+            })),
+            error: None,
+            trace_id: "t-trunc".into(),
+            timestamp: "2026-08-23T00:00:00Z".into(),
+        });
+        board.push_result(ActionResult {
+            order_id: "ORD-DELTA-FULL".into(),
+            action: Some("workspace.run_terminal".into()),
+            ok: true,
+            response: Some(serde_json::json!({
+                "output": "ok",
+                "workspace_delta": [{"path": "b.txt", "kind": "added", "size": 3}],
+                "workspace_delta_truncated": false,
+            })),
+            error: None,
+            trace_id: "t-full".into(),
+            timestamp: "2026-08-23T00:00:01Z".into(),
+        });
+        let text = render_section(
+            &PlanSection::default(),
+            &[],
+            &[],
+            &ExecSection::default(),
+            &board,
+            "actions",
+            None,
+            None,
+        );
+        assert!(
+            text.contains(
+                "ORD-DELTA-TRUNC ok=true step=? code=? trace_id=t-trunc changed: 1+ files"
+            ),
+            "{text}"
+        );
+        assert!(
+            text.contains("ORD-DELTA-FULL ok=true step=? code=? trace_id=t-full changed: 1 files"),
+            "{text}"
+        );
     }
 
     /// 2026-08-19 黑板缓存成本设计（ADR-0010 §14.31 / §4.2）：exec 每条
