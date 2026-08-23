@@ -888,7 +888,8 @@ mod tests {
         }
     }
 
-    /// 与 orz-loop 测试同构的有效计划对象（单步、动作=workspace.run_terminal）。
+    /// 与 orz-loop 测试同构的有效计划对象（工作步 s1 + 固定末步 deliver；
+    /// AGENT-DELIVERY-FLOW 要求末步 id ∈ {deliver, submit}）。
     fn valid_plan_json() -> serde_json::Value {
         serde_json::json!({
             "plan_id": "plan-1",
@@ -906,13 +907,26 @@ mod tests {
                     ],
                     "acceptance": "命令已执行",
                     "evidence": ["stdout"],
+                },
+                {
+                    "id": "deliver",
+                    "goal": "递交",
+                    "actions": [
+                        {
+                            "step_id": "deliver",
+                            "do": "workspace.run_terminal",
+                            "with": { "command": "dir", "description": "列出目录" },
+                        }
+                    ],
+                    "acceptance": "已递交",
+                    "evidence": [],
                 }
             ]
         })
     }
 
-    /// 双步计划：两步动作均为同一条 `workspace.run_terminal` 命令（persist
-    /// 用例——第二步绑定 s2，避免步骤门对 done 步骤的 step_not_done）。
+    /// 双步计划 + 固定末步 deliver（persist 用例——第二步绑定 s2，避免
+    /// 步骤门对 done 步骤的 step_not_done；末步满足 terminal 校验）。
     fn two_step_plan_json() -> serde_json::Value {
         serde_json::json!({
             "plan_id": "plan-2",
@@ -943,43 +957,44 @@ mod tests {
                     ],
                     "acceptance": "命令 2 已执行",
                     "evidence": ["stdout"],
+                },
+                {
+                    "id": "deliver",
+                    "goal": "递交",
+                    "actions": [
+                        {
+                            "step_id": "deliver",
+                            "do": "workspace.run_terminal",
+                            "with": { "command": "dir", "description": "列出目录" },
+                        }
+                    ],
+                    "acceptance": "已递交",
+                    "evidence": [],
                 }
             ]
         })
     }
 
-    /// console 默认面下单：`blackboard_action_write`（订单在轮末机械发放，
-    /// 发放期经注册表/契约/权限/ACAF/模式门——Interactive 下触发审批）。
-    fn action_write_call(
-        action: &str,
-        step_id: &str,
-        arguments: serde_json::Value,
-        call_id: &str,
-    ) -> ToolCall {
+    /// MECHANICAL-AUDIT-LAYER 审查处理 (2026-08-24): direct 执行面——
+    /// `run_terminal_cmd` 直连调用（第 2 轮起模型直接调工作工具；
+    /// Interactive 下权限审批在直连调用时触发）。
+    fn terminal_call(command: &str, call_id: &str) -> ToolCall {
         ToolCall {
-            name: "blackboard_action_write".to_string(),
+            name: "run_terminal_cmd".to_string(),
             arguments: serde_json::json!({
-                "action": action,
-                "step_id": step_id,
-                "arguments": arguments,
+                "command": command,
+                "description": "测试命令",
             }),
             call_id: call_id.to_string(),
         }
     }
 
-    /// 一个完整的 console 执行回合脚本（plan-first + console 默认面）：
-    /// 计划轮 → 下单轮（轮末发放触发审批/执行）→ 草稿 → 终答。目标工具
-    /// 为 `run_terminal_cmd`（GrokBuild bash 名；`bash` 别名只存在于
-    /// 分类器，不在最终工具集）。
+    /// 一个完整的 direct 执行回合脚本（plan-first + direct 执行面）：
+    /// 计划轮 → 直连终端调用（权限审批/执行即时触发）→ 草稿 → 终答。
     fn console_exec_script(command: &str) -> Vec<ScriptedResponse> {
         vec![
             ScriptedResponse::tool_calls(vec![plan_write_call("call-plan-1")]),
-            ScriptedResponse::tool_calls(vec![action_write_call(
-                "workspace.run_terminal",
-                "s1",
-                serde_json::json!({ "command": command, "description": "测试命令" }),
-                "call-act-1",
-            )]),
+            ScriptedResponse::tool_calls(vec![terminal_call(command, "call-act-1")]),
             ScriptedResponse::text("草稿（等待执行结果）。"),
             ScriptedResponse::text("终答（命令已执行）。"),
         ]
@@ -1720,7 +1735,7 @@ mod tests {
                 let events = journal_events(&base, "thr_deny", 0);
                 assert!(
                     !events.contains(
-                        "\"tool\":\"run_terminal_cmd\",\"call_id\":\"ord-000001\",\"exit_code\""
+                        "\"tool\":\"run_terminal_cmd\",\"call_id\":\"call-act-1\",\"exit_code\""
                     ),
                     "denied tool must never start: {events}"
                 );
@@ -1746,12 +1761,7 @@ mod tests {
                             arguments: serde_json::json!({ "target_file": "a.txt" }),
                             call_id: "call-1".to_string(),
                         },
-                        action_write_call(
-                            "workspace.run_terminal",
-                            "s1",
-                            serde_json::json!({ "command": "dir", "description": "测试命令" }),
-                            "call-act-1",
-                        ),
+                        terminal_call("dir", "call-act-1"),
                     ]),
                     ScriptedResponse::text("完成（只读沙箱）。"),
                     ScriptedResponse::text("完成（只读沙箱）。"),
@@ -1796,7 +1806,7 @@ mod tests {
                 let events = journal_events(&base, "thr_ro", 0);
                 assert!(
                     !events.contains(
-                        "\"tool\":\"run_terminal_cmd\",\"call_id\":\"ord-000001\",\"exit_code\""
+                        "\"tool\":\"run_terminal_cmd\",\"call_id\":\"call-act-1\",\"exit_code\""
                     ),
                     "the mutation order must never start the tool: {events}"
                 );
@@ -1837,18 +1847,8 @@ mod tests {
                 let script = vec![
                     ScriptedResponse::tool_calls(vec![plan_write_call("call-plan-ro")]),
                     ScriptedResponse::tool_calls(vec![plan_write_call("call-plan-ww")]),
-                    ScriptedResponse::tool_calls(vec![action_write_call(
-                        "workspace.run_terminal",
-                        "s1",
-                        serde_json::json!({ "command": "echo ro", "description": "ro" }),
-                        "call-act-ro",
-                    )]),
-                    ScriptedResponse::tool_calls(vec![action_write_call(
-                        "workspace.run_terminal",
-                        "s1",
-                        serde_json::json!({ "command": "echo ww", "description": "ww" }),
-                        "call-act-ww",
-                    )]),
+                    ScriptedResponse::tool_calls(vec![terminal_call("echo ro", "call-act-ro")]),
+                    ScriptedResponse::tool_calls(vec![terminal_call("echo ww", "call-act-ww")]),
                     ScriptedResponse::text("草稿 A"),
                     ScriptedResponse::text("草稿 B"),
                     ScriptedResponse::text("终答 A"),
@@ -1910,7 +1910,7 @@ mod tests {
                 let ro_events = journal_events(&base, "thr_ro", 0);
                 assert!(
                     !ro_events.contains(
-                        "\"tool\":\"run_terminal_cmd\",\"call_id\":\"ord-000001\",\"exit_code\""
+                        "\"tool\":\"run_terminal_cmd\",\"call_id\":\"call-act-1\",\"exit_code\""
                     ),
                     "read-only thread never writes: {ro_events}"
                 );
@@ -1945,18 +1945,8 @@ mod tests {
                     )]),
                     // 两次完全相同的工作区订单（命令参数一致）——发放期
                     // 权限桥按相同 access 命中持久授权。
-                    ScriptedResponse::tool_calls(vec![action_write_call(
-                        "workspace.run_terminal",
-                        "s1",
-                        serde_json::json!({ "command": "dir", "description": "测试命令" }),
-                        "call-act-1",
-                    )]),
-                    ScriptedResponse::tool_calls(vec![action_write_call(
-                        "workspace.run_terminal",
-                        "s2",
-                        serde_json::json!({ "command": "dir", "description": "测试命令" }),
-                        "call-act-2",
-                    )]),
+                    ScriptedResponse::tool_calls(vec![terminal_call("dir", "call-act-1")]),
+                    ScriptedResponse::tool_calls(vec![terminal_call("dir", "call-act-2")]),
                     ScriptedResponse::text("两轮工具执行完成。"),
                     ScriptedResponse::text("两轮工具执行完成。"),
                 ];
@@ -2000,17 +1990,17 @@ mod tests {
                     "the second identical order must auto-allow via the persisted grant"
                 );
                 let events = journal_events(&base, "thr_always", 0);
-                // 两笔订单都真实执行（tool_completed 带 exit_code=0）。
+                // 两笔直连终端调用都真实执行（tool_completed 带 exit_code=0）。
                 assert_eq!(
                     events
-                        .matches("\"tool\":\"run_terminal_cmd\",\"call_id\":\"ord-000001\",\"exit_code\":0")
+                        .matches("\"tool\":\"run_terminal_cmd\",\"call_id\":\"call-act-1\",\"exit_code\":0")
                         .count(),
                     1,
                     "{events}"
                 );
                 assert_eq!(
                     events
-                        .matches("\"tool\":\"run_terminal_cmd\",\"call_id\":\"ord-000002\",\"exit_code\":0")
+                        .matches("\"tool\":\"run_terminal_cmd\",\"call_id\":\"call-act-2\",\"exit_code\":0")
                         .count(),
                     1,
                     "{events}"
@@ -2039,7 +2029,7 @@ mod tests {
                 let events = journal_events(&base, "thr_to", 0);
                 assert!(
                     !events.contains(
-                        "\"tool\":\"run_terminal_cmd\",\"call_id\":\"ord-000001\",\"exit_code\""
+                        "\"tool\":\"run_terminal_cmd\",\"call_id\":\"call-act-1\",\"exit_code\""
                     ),
                     "{events}"
                 );

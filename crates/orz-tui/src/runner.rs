@@ -1341,24 +1341,39 @@ mod tests {
                                         ],
                                         "acceptance": "文件已修改",
                                         "evidence": ["a.txt"],
+                                    },
+                                    {
+                                        "id": "deliver",
+                                        "goal": "递交",
+                                        "actions": [
+                                            {
+                                                "step_id": "deliver",
+                                                "do": "search_replace",
+                                                "with": {
+                                                    "file_path": "a.txt",
+                                                    "old_string": "v1",
+                                                    "new_string": "v2",
+                                                },
+                                            }
+                                        ],
+                                        "acceptance": "已递交",
+                                        "evidence": [],
                                     }
                                 ],
                             }
                         }),
                         call_id: "call-plan".to_string(),
                     }]),
+                    // MECHANICAL-AUDIT-LAYER 审查处理 (2026-08-24): direct
+                    // 执行面——模型直接调 search_replace。
                     ScriptedResponse::tool_calls(vec![ToolCall {
-                        name: "blackboard_action_write".to_string(),
+                        name: "search_replace".to_string(),
                         arguments: serde_json::json!({
-                            "action": "workspace.search_replace",
-                            "step_id": "s1",
-                            "arguments": {
-                                "file_path": "a.txt",
-                                "old_string": "v1",
-                                "new_string": "v2",
-                            },
+                            "file_path": "a.txt",
+                            "old_string": "v1",
+                            "new_string": "v2",
                         }),
-                        call_id: "call-order-1".to_string(),
+                        call_id: "call-edit-1".to_string(),
                     }]),
                     // The counterexample gate consumes two identical texts
                     // per round (acp_client.rs quirk).

@@ -295,12 +295,14 @@ impl PermissionBridge {
     /// P1 scope check for read-class accesses.
     ///
     /// The permission manager auto-allows `Read`/`Grep` unconditionally
-    /// (SAFE_COMMAND) and GrokBuild's `read_file` preserves absolute paths —
-    /// so without this, a headless agent could auto-read any absolute path on
-    /// the machine. Rule: the resolved target must live under the session
-    /// cwd and outside the runtime's own `.gsa` tree (journals/session state
-    /// are agent-invisible — keeps the evidence chain out of the model's
-    /// feedback loop). Non-read accesses pass through untouched.
+    /// (SAFE_COMMAND) and GrokBuild's `read_file` preserves absolute paths.
+    ///
+    /// MECHANICAL-AUDIT-LAYER (2026-08-24, ADR-0010 §14.39 / BACKLOG 0g):
+    /// 读范围放开——cwd 包含性要求删除（通用方向；越权读由权限策略轴与
+    /// ACAF 承担）；唯一保留的硬边界是运行时自己的 `.gsa` 证据面不可见
+    /// （白名单仅 `run_tests_output.txt` 与 `session/terminal/*.log`，
+    /// 见下）——journal/台账/会话状态是 agent-invisible，保持证据链不进入
+    /// 模型的反馈回路。非读访问照常直通。
     ///
     /// OUTPUT-DEGENERATION-GUARD (2026-08-19, ADR-0010 §14.33 / 设计 §3.2):
     /// terminal truncation receipts point the model at
@@ -365,8 +367,10 @@ impl PermissionBridge {
             // additionally stay under the session cwd.
             path_under(self.cwd.as_path(), &resolved)
         } else {
-            path_under(self.cwd.as_path(), &canonical)
-                && !path_under(gsa_root.as_path(), &canonical)
+            // MECHANICAL-AUDIT-LAYER: cwd 包含性已删除——cwd 外路径可读；
+            // `.gsa` 树（含 symlink 挂载的会话卷）仍不可见。`gsa_canon`
+            // 对照覆盖 `.gsa` 本身是 symlink 的 eval 容器形态。
+            !path_under(gsa_root.as_path(), &canonical) && !path_under(&gsa_canon, &canonical)
         }
     }
 }
@@ -742,15 +746,17 @@ mod tests {
             read_req(&bridge, &abs_in.to_string_lossy()).await,
             PermitDecision::AllowOnce
         );
-        // `..` escaping cwd → denied.
+        // MECHANICAL-AUDIT-LAYER (2026-08-24): `..` escaping cwd → allowed
+        // (cwd 包含性已删除；仅 `.gsa` 证据面仍不可见)。
         assert_eq!(
             read_req(&bridge, "../outside-escape.txt").await,
-            PermitDecision::Deny
+            PermitDecision::AllowOnce
         );
-        // Absolute path outside cwd → denied (the P1 hole).
+        // Absolute path outside cwd → allowed (the P1 hole is closed in the
+        // opposite direction — 越权读由权限策略轴与 ACAF 承担).
         assert_eq!(
             read_req(&bridge, &outside.join("secret.txt").to_string_lossy()).await,
-            PermitDecision::Deny
+            PermitDecision::AllowOnce
         );
         // The runtime's own `.gsa` tree → denied.
         assert_eq!(
@@ -1007,7 +1013,8 @@ mod tests {
             .unwrap();
         assert_eq!(decision, PermitDecision::AllowOnce);
 
-        // Read outside the cwd → still denied by the P1 scope check.
+        // MECHANICAL-AUDIT-LAYER (2026-08-24): read outside the cwd is now
+        // auto-allowed (cwd 包含性删除；.gsa 证据面仍由 scope check 拒绝).
         let decision = bridge
             .request(
                 RiskClass::ReadOnly,
@@ -1016,7 +1023,7 @@ mod tests {
             )
             .await
             .unwrap();
-        assert_eq!(decision, PermitDecision::Deny);
+        assert_eq!(decision, PermitDecision::AllowOnce);
 
         let _ = std::fs::remove_dir_all(&dir);
         let _ = std::fs::remove_dir_all(&outside);

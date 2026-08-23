@@ -362,12 +362,22 @@ pub fn run_event_to_tui(event: &RunEvent) -> TuiEvent {
             activation_id: get_str(p, "activation_id"),
             status: get_str(p, "status"),
         },
-        // FUS-RETRIEVAL-MECH P0-B step 5 (2026-08-14): output-level citation
-        // verifier (ADR-0010 §3.7.9) — decision + reason codes only; the
-        // marker-level details live in the journal payload.
-        EventType::CitationValidation => TuiEvent::CitationValidation {
-            decision: get_str(p, "decision"),
-            reason_codes: get_str_list(p, "reason_codes"),
+        // MECHANICAL-AUDIT-LAYER (2026-08-24, ADR-0010 §14.39): 轻量事件
+        // 留痕——键/轮/异常；摘要细节留在 journal payload。
+        EventType::MechanicalAuditUpdate => TuiEvent::MechanicalAuditUpdate {
+            key: p
+                .pointer("/payload/key")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or_default()
+                .to_string(),
+            round: p
+                .pointer("/payload/round")
+                .and_then(serde_json::Value::as_u64)
+                .unwrap_or(0),
+            anomaly: p
+                .pointer("/payload/anomaly")
+                .and_then(serde_json::Value::as_str)
+                .map(str::to_string),
         },
         // ACAF Slice 1 (ADR-0011 §4.6): control-ticket lifecycle projections
         // (mechanism events — the HMAC never reaches the TUI; binding fields
@@ -611,10 +621,15 @@ mod tests {
                 }),
             ),
             (
-                EventType::CitationValidation,
+                EventType::MechanicalAuditUpdate,
                 json!({
-                    "decision": "block",
-                    "reason_codes": ["unknown_source_id"],
+                    "kind": "tool_result",
+                    "payload": {
+                        "key": "cmd:call-1",
+                        "round": 3,
+                        "summary": "exit 1",
+                        "anomaly": "exit 1",
+                    },
                 }),
             ),
             (

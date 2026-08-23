@@ -276,11 +276,6 @@ pub(crate) struct LoopProfile {
     /// (a retrieval result is not a run's formal answer). Grill turns fold
     /// this to `false` too (a grill question is not a run-semantic).
     pub counterexample_gate: bool,
-    /// FUS-RETRIEVAL-MECH P0-B step 5 (2026-08-14): the final-answer
-    /// output-level citation verifier (ADR-0010 §3.7.9) — main runs only,
-    /// same delivery boundary as the counterexample gate. Grill answers and
-    /// retrieval subagent texts are not run final answers and skip it.
-    pub citation_validation: bool,
     /// The orientation lane this loop's completed model rounds count
     /// toward (ADR-0010 §4.2; `None` counts nothing — grill / M3).
     pub orientation_role: Option<AgentRole>,
@@ -327,7 +322,6 @@ impl LoopProfile {
         Self {
             role: AgentRole::Main,
             counterexample_gate: true,
-            citation_validation: true,
             orientation_role: Some(AgentRole::Main),
             system_kind: SystemPromptKind::Main,
             tool_filter: ToolFilter::None,
@@ -347,7 +341,6 @@ impl LoopProfile {
         Self {
             role: AgentRole::Main,
             counterexample_gate: false,
-            citation_validation: false,
             orientation_role: Some(AgentRole::Main),
             system_kind: SystemPromptKind::Main,
             tool_filter: ToolFilter::None,
@@ -383,7 +376,6 @@ impl LoopProfile {
         Self {
             role: agent_role,
             counterexample_gate: false,
-            citation_validation: false,
             orientation_role: Some(agent_role),
             system_kind: SystemPromptKind::Retrieval {
                 role,
@@ -763,6 +755,10 @@ pub(crate) async fn run_agent_loop(
     // with a NEW activation (Closed → next creation starts at 0). The main
     // agent keeps the inherited per-run semantic (`initial_tool_rounds` 0).
     let mut tool_rounds = profile.initial_tool_rounds;
+    // MECHANICAL-AUDIT-LAYER (2026-08-24, ADR-0010 §14.39): run 级墙钟
+    // 起点——审计报告的预算（轮数/墙钟用量）与运行内审查表（run 结束即弃）。
+    let run_started_at = std::time::Instant::now();
+    let mut mechanical_audit = crate::mechanical_audit::MechanicalAuditState::new();
     // The `None` seed is required by Rust's initialization rules (the
     // value is overwritten on every break path before the read at the
     // end — clippy's unused_assignments is a false positive here).
@@ -778,12 +774,6 @@ pub(crate) async fn run_agent_loop(
     // `OrientationSessionState` threaded through the turn chain; output
     // repetition is handled by the generation-time output-health guard.
     let mut counterexample_fired = false;
-    // AGENT-DELIVERY-FLOW (2026-08-23, 设计 §2.4): citation-validation
-    // failure count for the bounded correction opportunity — 0 failures
-    // yet = one rewrite allowed; the second failure (initial + 1
-    // correction) restores the hard block. Never reset mid-run (the
-    // correction is bounded per run, not per round).
-    let mut citation_failures: u32 = 0;
     // ORZ-ORIENTATION-FORCED-TEMPLATE (2026-08-15, ADR-0010 §14.16): a
     // checkpoint fire whose block was injected but whose forced-template
     // round has not completed yet (main lane only — retrieval lanes commit
@@ -1207,18 +1197,12 @@ pub(crate) async fn run_agent_loop(
                 .collect()
         } else if let Some(snapshot) = probe_snapshot.as_ref() {
             let projected = AgentLoopController::project_main_agent_tool_defs(tool_defs, snapshot);
-            // PLAN-FIRST 阶段 C (2026-08-16, ADR-0010 §14.17⑱ / 设计 §4):
-            // console 默认面收敛——主车道无执行工具（读面=黑板+只读核查，
-            // 写面=plan_write+action_write；执行/变更/shell/子代理/检索
-            // 全部隐藏，经订单下发）。direct 模式恢复探针过滤后的工作
-            // 工具投影（§7 双模式）。
-            if controller.console_default_enabled()
-                && controller.console_mode() == crate::console_mode::ConsoleMode::Console
-            {
-                AgentLoopController::project_console_default_tool_defs(&projected, snapshot)
-            } else {
-                projected
-            }
+            // MECHANICAL-AUDIT-LAYER (2026-08-24, ADR-0010 §14.39 / 设计
+            // §2.1)：第 2 轮起 direct 执行面——模型直接调用工作工具（一次
+            // 调用一个往返）；console 订单面退役，不再收敛到只读+写单面。
+            // 半助理层背板（run_terminal_cmd/search_replace/run_tests/检索
+            // 派发）与 ACAF/权限/预算/候选计数硬门由调用面照常执行。
+            projected
         } else {
             tool_defs.to_vec()
         };
@@ -1827,6 +1811,19 @@ pub(crate) async fn run_agent_loop(
                         }),
                     )
                     .await?;
+                // MECHANICAL-AUDIT-LAYER (2026-08-24, ADR-0010 §14.39 /
+                // 设计 §2.4)：审计报告随最终答案前中立问询轮注入——与
+                // [COUNTEREXAMPLE_GATE] 同轮独立块；收敛为执行事实摘要
+                // （动作/文件 delta/预算/异常事实），无建议、无引导；
+                // 报告块不进归档（注册进 injected-block filter）。
+                let audit_report = mechanical_audit.report(Some(run_started_at.elapsed()));
+                messages.push(Message {
+                    role: Role::User,
+                    content: audit_report,
+                    tool_call_id: None,
+                    tool_calls: Vec::new(),
+                    reasoning_content: None,
+                });
                 messages.push(Message {
                     role: Role::User,
                     content: COUNTEREXAMPLE_GATE_BLOCK.to_string(),
@@ -1836,78 +1833,6 @@ pub(crate) async fn run_agent_loop(
                 });
                 counterexample_fired = true;
                 continue;
-            }
-            // FUS-RETRIEVAL-MECH P0-B step 5 (2026-08-14): output-level
-            // citation verifier (ADR-0010 §3.7.9 / RETRIEVAL_MECHANICAL
-            // _CONTROLS_DESIGN §3.2) — the final answer is formed; validate
-            // it at the same delivery boundary as the counterexample gate,
-            // BEFORE it is committed to the conversation. A failure replaces
-            // the delivered text with a mechanical degradation block (with
-            // reason codes), journals `citation_validation`, and never
-            // commits the model text as the final answer.
-            if profile.citation_validation {
-                let report = controller
-                    .validate_final_answer_citations(response.text.as_deref().unwrap_or_default());
-                if !report.passed {
-                    // AGENT-DELIVERY-FLOW (2026-08-23, 设计 §2.4): 引用校验
-                    // 有界修正机会——第一次失败把结构化失败报告（reason_codes
-                    // + markers）作为用户消息注入（注册为 injected block，
-                    // 不持久化），模型可见失败原因并重写最终回答；同一失败
-                    // 第二次（初始 + 1 次修正）恢复硬阻断。重试不重置计划/
-                    // 步骤/run 状态；修正后重新走完整最终回答门。
-                    citation_failures = citation_failures.saturating_add(1);
-                    let correction_allowed = citation_failures == 1;
-                    let block = crate::prompt::citation_validation_failed_block(
-                        &report.reason_codes,
-                        correction_allowed,
-                    );
-                    writer
-                        .record(
-                            EventType::CitationValidation,
-                            serde_json::json!({
-                                "schema_version": "0.2.0-draft",
-                                "position": "final_answer",
-                                "decision": if correction_allowed { "retry" } else { "block" },
-                                "attempt": citation_failures,
-                                "correction_allowed": correction_allowed,
-                                "marker_count": report.markers.len(),
-                                "reason_codes": report.reason_codes,
-                                "degraded": true,
-                                "message_block": block,
-                                "markers": report.markers.iter().map(|m| {
-                                    serde_json::json!({
-                                        "index": m.index,
-                                        "raw": m.raw,
-                                        "target": m.target,
-                                        "binding": m.binding.as_str(),
-                                        "status": if m.status
-                                            == crate::citation_validation::MarkerStatus::Passed
-                                        {
-                                            "passed"
-                                        } else {
-                                            "failed"
-                                        },
-                                        "reason_codes": m.reason_codes,
-                                    })
-                                }).collect::<Vec<_>>(),
-                            }),
-                        )
-                        .await?;
-                    if correction_allowed {
-                        // 有界修正：失败报告作为用户消息注入（机械块，不
-                        // 持久化），模型下一轮重写最终回答；不置 last_text。
-                        messages.push(Message {
-                            role: Role::User,
-                            content: block,
-                            tool_call_id: None,
-                            tool_calls: Vec::new(),
-                            reasoning_content: None,
-                        });
-                        continue;
-                    }
-                    last_text = Some(block);
-                    break;
-                }
             }
             // Include the final assistant message in the conversation so
             // the rebuilt dialogue matches what a real transport would have
@@ -2065,30 +1990,6 @@ pub(crate) async fn run_agent_loop(
                     messages,
                     tc,
                     "plan_round_tool_denied",
-                    svc.policy_revision
-                        .load(std::sync::atomic::Ordering::SeqCst),
-                )
-                .await?;
-                match f {
-                    PolicyFeedback::Denied(key) => round_denials.push(key),
-                    PolicyFeedback::Succeeded => round_had_success = true,
-                }
-                continue;
-            }
-            // PLAN-FIRST 阶段 C (2026-08-16, ADR-0010 §14.17⑱ / 设计 §4):
-            // console 默认态调用面门禁——声明面已收敛（投影无执行工具），
-            // 调用面 belt-and-braces 拒绝隐藏工具（防幻觉直接调用执行/
-            // 变更/shell/子代理/检索面）。direct 模式不适用（恢复工作工具）。
-            if controller.console_default_enabled()
-                && controller.console_mode() == crate::console_mode::ConsoleMode::Console
-                && profile.role == AgentRole::Main
-                && !AgentLoopController::is_console_surface_tool(&tc.name)
-            {
-                let (_, f) = plan_round_denied(
-                    writer,
-                    messages,
-                    tc,
-                    "console_mode_tool_denied",
                     svc.policy_revision
                         .load(std::sync::atomic::Ordering::SeqCst),
                 )
@@ -2300,6 +2201,47 @@ pub(crate) async fn run_agent_loop(
                     }
                 }
             }
+            // MECHANICAL-AUDIT-LAYER (2026-08-24, ADR-0010 §14.39): 静默
+            // 审查记录——只记机械事实、不给建议；每对象键仅最后一轮结果
+            // 覆盖写；覆盖写动作以轻量 `mechanical_audit_update` 事件留痕。
+            // 检索派发带激活候选计数（候选/上限）。
+            // 主车道专属：检索子代理车道不记（事件面留痕仅主面，检索面
+            // 事件序列保持既有形态）。
+            if profile.role == AgentRole::Main {
+                crate::mechanical_audit::record_tool_result(
+                    &mut mechanical_audit,
+                    writer,
+                    tc,
+                    &result,
+                    tool_rounds,
+                    controller.retrieval_candidate_count(),
+                )
+                .await?;
+            }
+            // plan 对象键：首轮计划门结果（accepted/degraded、步骤数）。
+            if tc.name == crate::planning::PLAN_WRITE_TOOL
+                && let Some(outcome) = result
+                    .structured
+                    .as_ref()
+                    .and_then(|s| s.get("outcome"))
+                    .and_then(serde_json::Value::as_str)
+                && matches!(outcome, "accepted" | "degraded")
+            {
+                let step_count = svc.blackboard.read().plan.steps.len();
+                let epoch = svc.blackboard.read().plan.plan_epoch;
+                let payload = mechanical_audit.record(
+                    "plan",
+                    tool_rounds,
+                    format!("plan {outcome}（{step_count} 步，epoch {epoch}）"),
+                    None,
+                );
+                writer
+                    .record(
+                        EventType::MechanicalAuditUpdate,
+                        serde_json::json!({ "kind": "plan_gate", "payload": payload }),
+                    )
+                    .await?;
+            }
             match round_feedback {
                 Some(PolicyFeedback::Denied(key)) => round_denials.push(key),
                 // A successful call resets the breaker; None
@@ -2495,6 +2437,18 @@ pub(crate) async fn run_agent_loop(
         tool_rounds = tool_rounds.saturating_add(console_consumed);
         if !plan_round_active {
             tool_rounds += 1;
+        }
+        // MECHANICAL-AUDIT-LAYER (2026-08-24, ADR-0010 §14.39)：预算键
+        // 每轮末覆盖写（轮数；墙钟在报告时取 elapsed）。
+        if profile.role == AgentRole::Main {
+            let budget_payload =
+                mechanical_audit.record_budget(tool_rounds, tool_rounds, profile.max_tool_rounds);
+            writer
+                .record(
+                    EventType::MechanicalAuditUpdate,
+                    serde_json::json!({ "kind": "budget", "payload": budget_payload }),
+                )
+                .await?;
         }
         if tool_rounds >= profile.max_tool_rounds {
             // Anti-runaway backstop — mark the truncation so the journal

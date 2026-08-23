@@ -727,6 +727,14 @@ impl AcpServer {
                                 ],
                                 "acceptance": "完成",
                                 "evidence": []
+                            }, {
+                                "id": "deliver",
+                                "goal": "递交",
+                                "actions": [
+                                    {"step_id": "deliver", "do": "workspace.read_file", "with": {"target_file": "sample.txt"}}
+                                ],
+                                "acceptance": "已递交",
+                                "evidence": []
                             }]
                         }
                     }),
@@ -1699,30 +1707,42 @@ mod tests {
     fn plan_write_response(plan: serde_json::Value) -> ScriptedResponse {
         ScriptedResponse::tool_calls(vec![ToolCall {
             name: "plan_write".to_string(),
-            arguments: serde_json::json!({ "plan": plan }),
+            arguments: serde_json::json!({ "plan": ensure_terminal_step(plan) }),
             call_id: "call-plan".to_string(),
         }])
     }
 
-    /// PLAN-FIRST 阶段 C (2026-08-16): a console order write (main-lane
-    /// action bar) with an optional step binding.
-    fn action_write_call(
-        call_id: &str,
-        action: &str,
-        step_id: Option<&str>,
-        arguments: serde_json::Value,
-    ) -> ToolCall {
-        let mut args = serde_json::Map::new();
-        args.insert("action".to_string(), serde_json::json!(action));
-        if let Some(step_id) = step_id {
-            args.insert("step_id".to_string(), serde_json::json!(step_id));
+    /// MECHANICAL-AUDIT-LAYER S2 (2026-08-24): AGENT-DELIVERY-FLOW 要求
+    /// 计划末步 id ∈ {deliver, submit}——测试脚本计划若末步不是 terminal
+    /// 步，统一补一条固定末步（动作占位不执行，仅满足机械校验）。
+    fn ensure_terminal_step(plan: serde_json::Value) -> serde_json::Value {
+        let terminal = plan
+            .get("steps")
+            .and_then(|s| s.as_array())
+            .and_then(|steps| steps.last())
+            .and_then(|s| s.get("id"))
+            .and_then(serde_json::Value::as_str)
+            .is_some_and(|id| id == "deliver" || id == "submit");
+        if terminal {
+            return plan;
         }
-        args.insert("arguments".to_string(), arguments);
-        ToolCall {
-            name: "blackboard_action_write".to_string(),
-            arguments: serde_json::Value::Object(args),
-            call_id: call_id.to_string(),
+        let mut plan = plan;
+        if let Some(obj) = plan.as_object_mut()
+            && let Some(steps) = obj
+                .get_mut("steps")
+                .and_then(serde_json::Value::as_array_mut)
+        {
+            steps.push(serde_json::json!({
+                "id": "deliver",
+                "goal": "递交",
+                "actions": [
+                    {"step_id": "deliver", "do": "workspace.read_file", "with": {"target_file": "sample.txt"}}
+                ],
+                "acceptance": "已递交",
+                "evidence": []
+            }));
         }
+        plan
     }
 
     /// local_browser (2026-08-10): the probe reuses an already-ready lane
@@ -1870,7 +1890,10 @@ mod tests {
                 // only on the session-level 7-round trigger).
                 // PLAN-FIRST 阶段 A (2026-08-16): the plan gate adds a plan
                 // round (+4 events) to the production session.
-                assert_eq!(replay.event_count, 16);
+                // MECHANICAL-AUDIT-LAYER (2026-08-24, S1): the plan-gate
+                // round additionally journals two `mechanical_audit_update`
+                // events (plan_gate + budget) → 16 → 18.
+                assert_eq!(replay.event_count, 18);
                 assert_eq!(replay.terminal_event.as_deref(), Some("run_finished"));
 
                 let _ = std::fs::remove_dir_all(&base);
@@ -1949,9 +1972,10 @@ mod tests {
                         orz_assurance::replay_journal(&dir.join("events.jsonl"), None, None, true);
                     assert!(replay.valid, "run journal invalid: {:?}", replay.errors);
                     // GAP-INQUIRY-SPLIT: the first run carries the plan gate
-                    // (16 events); the second skips it (plan_gate_done, 9
-                    // events).
-                    let expected = if i == 0 { 16 } else { 9 };
+                    // (16 events; MECHANICAL-AUDIT-LAYER S1 adds two
+                    // `mechanical_audit_update` events → 18); the second
+                    // skips it (plan_gate_done, 9 events).
+                    let expected = if i == 0 { 18 } else { 9 };
                     assert_eq!(replay.event_count, expected, "preflight + turn events");
                     assert_eq!(replay.terminal_event.as_deref(), Some("run_finished"));
                 }
@@ -2061,14 +2085,12 @@ mod tests {
                             "evidence": []
                         }]
                     })),
+                    // MECHANICAL-AUDIT-LAYER 审查处理 (2026-08-24): direct
+                    // 面——模型直接调 read_file，不再经订单层。
                     ScriptedResponse::tool_calls(vec![ToolCall {
-                        name: "blackboard_action_write".to_string(),
-                        arguments: serde_json::json!({
-                            "action": "workspace.read_file",
-                            "step_id": "s1",
-                            "arguments": {"target_file": target},
-                        }),
-                        call_id: "call-order-1".to_string(),
+                        name: "read_file".to_string(),
+                        arguments: serde_json::json!({ "target_file": target }),
+                        call_id: "call-read-1".to_string(),
                     }]),
                     ScriptedResponse::text("完成（读取成功）。"),
                     ScriptedResponse::text("完成（读取成功）。"),
@@ -2139,14 +2161,17 @@ mod tests {
                             "evidence": []
                         }]
                     })),
+                    // MECHANICAL-AUDIT-LAYER 审查处理 (2026-08-24): direct
+                    // 面——模型直接调 search_replace（写权限在直连调用时
+                    // 到达 permission bridge，dead gateway → 拒绝）。
                     ScriptedResponse::tool_calls(vec![ToolCall {
-                        name: "blackboard_action_write".to_string(),
+                        name: "search_replace".to_string(),
                         arguments: serde_json::json!({
-                            "action": "workspace.search_replace",
-                            "step_id": "s1",
-                            "arguments": {"file_path": "a.txt", "old_string": "v1", "new_string": "v2"},
+                            "file_path": "a.txt",
+                            "old_string": "v1",
+                            "new_string": "v2",
                         }),
-                        call_id: "call-order-1".to_string(),
+                        call_id: "call-edit-1".to_string(),
                     }]),
                     ScriptedResponse::text("完成（bash 被拒）。"),
                     ScriptedResponse::text("完成（bash 被拒）。"),
@@ -2250,14 +2275,16 @@ mod tests {
                             "evidence": []
                         }]
                     })),
+                    // MECHANICAL-AUDIT-LAYER 审查处理 (2026-08-24): direct
+                    // 面——模型直接调 search_replace。
                     ScriptedResponse::tool_calls(vec![ToolCall {
-                        name: "blackboard_action_write".to_string(),
+                        name: "search_replace".to_string(),
                         arguments: serde_json::json!({
-                            "action": "workspace.search_replace",
-                            "step_id": "s1",
-                            "arguments": {"file_path": "a.txt", "old_string": "v1", "new_string": "v2"},
+                            "file_path": "a.txt",
+                            "old_string": "v1",
+                            "new_string": "v2",
                         }),
-                        call_id: "call-order-ro".to_string(),
+                        call_id: "call-edit-ro".to_string(),
                     }]),
                     ScriptedResponse::text("完成。"),
                     ScriptedResponse::text("完成。"),
@@ -2279,13 +2306,13 @@ mod tests {
                         }]
                     })),
                     ScriptedResponse::tool_calls(vec![ToolCall {
-                        name: "blackboard_action_write".to_string(),
+                        name: "search_replace".to_string(),
                         arguments: serde_json::json!({
-                            "action": "workspace.search_replace",
-                            "step_id": "s1",
-                            "arguments": {"file_path": "a.txt", "old_string": "v1", "new_string": "v2"},
+                            "file_path": "a.txt",
+                            "old_string": "v1",
+                            "new_string": "v2",
                         }),
-                        call_id: "call-order-ww".to_string(),
+                        call_id: "call-edit-ww".to_string(),
                     }]),
                     ScriptedResponse::text("完成。"),
                     ScriptedResponse::text("完成。"),
@@ -2374,14 +2401,17 @@ mod tests {
                             "evidence": []
                         }]
                     })),
+                    // MECHANICAL-AUDIT-LAYER 审查处理 (2026-08-24): direct
+                    // 面——模型直接调 search_replace（dead gateway 下写权限
+                    // 拒绝 → 无快照记录）。
                     ScriptedResponse::tool_calls(vec![ToolCall {
-                        name: "blackboard_action_write".to_string(),
+                        name: "search_replace".to_string(),
                         arguments: serde_json::json!({
-                            "action": "workspace.search_replace",
-                            "step_id": "s1",
-                            "arguments": {"file_path": "lib.rs", "old_string": "fn main", "new_string": "fn renamed"},
+                            "file_path": "lib.rs",
+                            "old_string": "fn main",
+                            "new_string": "fn renamed",
                         }),
-                        call_id: "call-order-snap".to_string(),
+                        call_id: "call-edit-snap".to_string(),
                     }]),
                     ScriptedResponse::text("完成（被拒）。"),
                     ScriptedResponse::text("完成（被拒）。"),

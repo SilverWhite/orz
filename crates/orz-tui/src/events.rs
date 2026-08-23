@@ -262,12 +262,13 @@ pub enum TuiEvent {
         activation_id: String,
         status: String,
     },
-    // FUS-RETRIEVAL-MECH P0-B step 5 (2026-08-14): output-level citation
-    // verifier block (ADR-0010 §3.7.9) — the TUI shows decision + reason
-    // codes only; the full marker details stay in the journal payload.
-    CitationValidation {
-        decision: String,
-        reason_codes: Vec<String>,
+    // MECHANICAL-AUDIT-LAYER (2026-08-24, ADR-0010 §14.39): 机械审查层
+    // 轻量事件留痕（键/轮/摘要/异常）——TUI 只展示键与异常，摘要细节留在
+    // journal payload。
+    MechanicalAuditUpdate {
+        key: String,
+        round: u64,
+        anomaly: Option<String>,
     },
     // ACAF Slice 1 (ADR-0011 §4.6): control-ticket lifecycle projections.
     ControlTicketIssued {
@@ -413,7 +414,7 @@ impl TuiEvent {
             TuiEvent::RetrievalModeTransition { .. } => "retrieval_mode_transition",
             TuiEvent::RetrievalResultCommitted { .. } => "retrieval_result_committed",
             TuiEvent::RetrievalActivationRestored { .. } => "retrieval_activation_restored",
-            TuiEvent::CitationValidation { .. } => "citation_validation",
+            TuiEvent::MechanicalAuditUpdate { .. } => "mechanical_audit_update",
             TuiEvent::ControlTicketIssued { .. } => "control_ticket_issued",
             TuiEvent::ControlTicketConsumed { .. } => "control_ticket_consumed",
             TuiEvent::ControlTicketRejected { .. } => "control_ticket_rejected",

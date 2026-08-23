@@ -25,18 +25,16 @@
 /// verification claim — a verifier must check source identity / visibility
 /// / claim limits, not grep the text.
 ///
-/// FUS-RETRIEVAL-MECH P0-B step 6 (2026-08-14): shortened per
-/// `RETRIEVAL_MECHANICAL_CONTROLS_DESIGN` §3.3 — the output-level verifier
-/// is mechanical now, so the prompt carries only the marker formats + a
-/// verifier notice (identity / visibility / claim limits), not the full
-/// discipline essay.
+/// MECHANICAL-AUDIT-LAYER (2026-08-24, ADR-0010 §14.39 / BACKLOG 0g):
+/// 引用校验器整体删除——提示词只保留轻量纪律（引用需绑定本 run 已观测
+/// 证据；无机械拦截）。
 pub const BASE_SYSTEM_PROMPT: &str = "你是 orz——保证优先的 CLI agent workbench。\
 遵循注入的 assurance 上下文块执行任务；工具列表由运行时按轮声明，不得自行推断。\
 \n引用纪律：基于外部依据、参考实现或内部文档的引用，必须附带内联标记 \
 `[来源: source_id]`（ledger 记录）或 `[来源: 路径:行号]`（本地代码 observation-time 定位）；\
 外部来源引用 URL/document identity + observed scope（如 `[来源: <url> metadata_only]`）；\
-内部文档引用用 文档ID §节/锚点；无法定位来源的内容不得引用——不得凭记忆声称『参考自某处』。\
-标记格式、来源身份、可见性等级与 claim 上限由 verifier 在交付前机械校验，不通过即阻止交付。\
+内部文档引用用 文档ID §节/锚点；引用必须绑定本 run 已观测证据，无法定位来源的内容不得引用——\
+不得凭记忆声称『参考自某处』。\
 \n读取纪律（缓存成本，v1.9；大文件读取契约 v1.22）：优先用 grep/结构提取定位相关片段，再按需读取；\
 超过粗门（默认 16KB、可配 8–32KB）的文件返回读取句柄信封（path/size/encoding/content_sha256/可用范围/\
 有界预览 ≤4KB/truncated/offset）而非全文——拿到信封后用 read_file(offset) 按 offset 续读或\
@@ -53,12 +51,16 @@ exec/actions）或经操作台动作反馈——运行时会在受控面呈现�
 compaction_whitelist_add 写入压缩白名单——该内容不被上下文压缩、全程保留；\
 写入仅限首轮，存档于 .gsa 记录树（保留 7 天）。白名单只写客观事实，\
 不写计划/步骤/推测/临时状态（计划由 plan mode 承载）。\
-\n操作台（P0-C v0.5）：需要执行动作时不要直接调用执行/发送类工具——先读注册板块 \
-（blackboard_read section=actions，常驻按需读；内容=动作名+最小参数提示），\
-再写动作栏订单（blackboard_action_write：action + arguments）；写订单无副作用，\
-订单在轮末由机械层单一出口发放（注册表/契约/目标/ACAF/策略门），\
-结果写回结果栏 receipt（含 trace_id；失败含 step/code/upstream）。\
-单轮一单：本轮订单未发放完不进入下一轮写单，先看结果栏反馈再调整。";
+\n执行面（MECHANICAL-AUDIT-LAYER 2026-08-24）：首轮先写结构化计划（plan_write），\
+通过后直接调用工作工具——只读（read_file/list_dir/grep/search_tool）、精确替换 \
+（search_replace）、终端（run_terminal_cmd）、固定测试命令（run_tests）、检索 \
+（web_search/web_fetch/browser_read/retrieve_project_*）——一次调用一个往返、\
+结果即时返回，不再有下单/读回执仪式。命令运行/写执行/检索派发由运行时背板执行 \
+（cwd/env/超时归 host），ACAF/权限/预算/候选计数门保持。写文件前先用 read_file \
+获取内容锚点（sha256/size），search_replace 携带 expected_anchor 供写前核证。\
+递交用 submit（无参两阶段：先渲染交付状态供核查，再确认）。最终回答前会有一次 \
+[COUNTEREXAMPLE_GATE] 反例自查轮，[MECHANICAL_AUDIT] 执行事实报告随该轮注入，\
+供你核对计划完成声明。";
 
 /// Counterexample gate block — 正式答案输出前, fires once per run and the
 /// block explicitly tells the model it appears only once (§4.6.5 verbatim).
@@ -79,44 +81,6 @@ pub const COUNTEREXAMPLE_GATE_PLAN_BLOCK: &str = "[COUNTEREXAMPLE_GATE v0.1]\n\
 2. 是否存在可推翻结论的已知证据？\n\
 3. 结论强度是否超出证据支持？\n\
 [/COUNTEREXAMPLE_GATE]";
-
-/// FUS-RETRIEVAL-MECH P0-B step 5 (2026-08-14): prefix of the mechanical
-/// degradation block the final-answer citation verifier returns when a
-/// `[来源: ...]` marker fails binding/claim validation (ADR-0010 §3.7.9).
-/// Registered with `is_injected_block_text` — mechanical injected text,
-/// never persisted back into the conversation.
-pub const CITATION_VALIDATION_FAILED_PREFIX: &str = "[CITATION_VALIDATION_FAILED";
-
-/// Build the explicit degradation block — the delivered final answer when
-/// citation validation fails (never a silent downgrade).
-///
-/// AGENT-DELIVERY-FLOW (2026-08-23, 设计 §2.4): `correction_allowed=true`
-/// (first failure) appends the bounded-correction note — the model rewrites
-/// the final answer once; `false` (second failure) states the opportunity is
-/// exhausted and the answer is hard-blocked. The block keeps the
-/// `[CITATION_VALIDATION_FAILED` prefix so the injected-block filter never
-/// persists it into the conversation.
-pub fn citation_validation_failed_block(
-    reason_codes: &[String],
-    correction_allowed: bool,
-) -> String {
-    let mut block = format!(
-        "{CITATION_VALIDATION_FAILED_PREFIX} v0.1]\n\
-         最终回答的引用标记未通过机械校验，已阻止交付。\n\
-         reason_codes: {}\n\
-         [/CITATION_VALIDATION_FAILED]",
-        reason_codes.join(", ")
-    );
-    if correction_allowed {
-        block.push_str(
-            "\n[修正机会 1/1] 请基于以上 reason_codes 与标记明细重写最终回答 \
-             （引用标记需绑定本 run 已观测证据）；修正后的回答会重新走完整校验。",
-        );
-    } else {
-        block.push_str("\n[修正机会已用尽] 本次运行不再接受新的最终回答。");
-    }
-    block
-}
 
 /// GAP-INQUIRY-SPLIT (2026-08-09): prefix of the injected orientation block
 /// (ADR-0010 §4.2 — session-level 7-round neutral inquiry). Registered with
@@ -164,10 +128,10 @@ pub fn is_injected_block_text(content: &str) -> bool {
         // checkpoint block (ADR-0010 §4.6.4) is mechanical injected text —
         // never persisted back into the conversation.
         || content.starts_with(crate::diagnostic_coverage::DIAGNOSTIC_COVERAGE_PREFIX)
-        // FUS-RETRIEVAL-MECH P0-B step 5 (2026-08-14): the citation
-        // validation degradation block is mechanical injected text — never
-        // persisted back into the conversation.
-        || content.starts_with(CITATION_VALIDATION_FAILED_PREFIX)
+        // MECHANICAL-AUDIT-LAYER (2026-08-24, ADR-0010 §14.39): the
+        // `[MECHANICAL_AUDIT v0.1]` execution-fact report is mechanical
+        // injected text — never persisted back into the conversation.
+        || content.starts_with(crate::mechanical_audit::MECHANICAL_AUDIT_PREFIX)
         // P0-D S2 (2026-08-14): the model-visible action-ledger block
         // (`[动作台账 v0.1] …`) is mechanical injected text — it exists only
         // in per-request collapsed views, never in the persisted
@@ -560,12 +524,9 @@ mod tests {
 
     #[test]
     fn base_system_prompt_carries_d1_citation_rule() {
-        // D-1 (FIX_PLAN 2026-08-06) + ADR-0010 §3.7.9 (V11-IMPL-004): the
-        // citation rule lives in the main-agent prompt (the binary's carrier)
-        // — inline marker `[来源: source_id]` (ledger-backed) or
-        // `[来源: 路径:行号]` (local observation-time); no bare line numbers
-        // for internal docs (they drift); the marker is a writer-side
-        // binding, not a verification claim.
+        // D-1 (FIX_PLAN 2026-08-06) + MECHANICAL-AUDIT-LAYER (2026-08-24,
+        // ADR-0010 §14.39 / 设计 §2.8)：引用纪律降为提示词级轻量纪律——
+        // 引用需绑定本 run 已观测证据；无机械校验、无交付拦截表述。
         assert!(
             BASE_SYSTEM_PROMPT.contains("[来源: source_id]"),
             "ledger-backed citation marker in the main-agent prompt"
@@ -575,12 +536,16 @@ mod tests {
             "observation-time path:line fallback still present"
         );
         assert!(
-            BASE_SYSTEM_PROMPT.contains("由 verifier 在交付前机械校验"),
-            "verifier notice present"
+            BASE_SYSTEM_PROMPT.contains("绑定本 run 已观测证据"),
+            "light discipline: citations bind to this run's observed evidence"
         );
         assert!(
-            BASE_SYSTEM_PROMPT.contains("不通过即阻止交付"),
-            "verifier blocks delivery on failure"
+            !BASE_SYSTEM_PROMPT.contains("机械校验"),
+            "no mechanical verification wording remains"
+        );
+        assert!(
+            !BASE_SYSTEM_PROMPT.contains("阻止交付"),
+            "no delivery-blocking wording remains"
         );
         assert!(
             BASE_SYSTEM_PROMPT.contains("不得凭记忆声称"),

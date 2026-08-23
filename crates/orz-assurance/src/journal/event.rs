@@ -84,12 +84,11 @@ pub enum EventType {
     RetrievalModeTransition,
     RetrievalResultCommitted,
     RetrievalActivationRestored,
-    // FUS-RETRIEVAL-MECH P0-B step 5 (2026-08-14): the output-level citation
-    // verifier (ADR-0010 §3.7.9 / RETRIEVAL_MECHANICAL_CONTROLS_DESIGN §3.2) —
-    // written by the main lane ONLY when the final answer's `[来源: ...]`
-    // markers fail mechanical binding/claim validation and the answer is
-    // degraded/blocked with an explicit reason code.
-    CitationValidation,
+    // MECHANICAL-AUDIT-LAYER (2026-08-24, ADR-0010 §14.39 / BACKLOG 0g):
+    // 机械审查层轻量事件留痕——每次对象键覆盖写（含 step/契约类检查）以
+    // `{kind, payload:{key, round, summary, anomaly}}` 记一条，供回放与
+    // 验证；报告块本身不进归档（与 counterexample 注入同语义）。
+    MechanicalAuditUpdate,
 
     // ACAF Slice 1 (ADR-0011 §4.2/§4.6): control-ticket lifecycle — issued /
     // consumed / rejected. All three are non-terminal v0.2 mechanism events

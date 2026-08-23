@@ -2384,50 +2384,7 @@ impl AgentLoopController {
             !crate::tool_probe::is_main_agent_work_tool(&t.name)
                 || snapshot.complete.iter().any(|c| c == &t.name)
         });
-        // FUS-RETRIEVAL-MECH P0-B 步骤 4 前置裁决（2026-08-14 用户裁决）：
-        // 主 Agent 不执行检索任务，local_browser 的 `browser_read` 从主车道
-        // 模型可见投影移除；检索子代理投影在 `subagent_tool_projection` 中
-        // 从 host registry 恢复（见 run_retrieval_subagent）。
-        tool_defs.retain(|t| t.name != "browser_read");
         tool_defs
-    }
-
-    /// PLAN-FIRST 阶段 C (2026-08-16, ADR-0010 §14.17⑱ / 设计 §4):
-    /// console 默认面的模型可见工具集——写面 = plan_write + action_write；
-    /// 读面 = blackboard_read + 只读核查（read/list/grep 类）+ direct
-    /// 控制工具（step_done / return_to_console，调用时另有模式守卫）；
-    /// 递交 = submit（AGENT-DELIVERY-FLOW 2026-08-23，末步显式递交路径）；
-    /// 执行/变更/shell/子代理/检索全部隐藏（经订单下发）。
-    pub(crate) fn is_console_surface_tool(name: &str) -> bool {
-        matches!(
-            name,
-            "blackboard_read"
-                | "plan_write"
-                | "blackboard_action_write"
-                | "console_step_done"
-                | "console_return_to_console"
-                | "submit"
-                | "read_file"
-                | "list_dir"
-                | "grep"
-                | "search_tool"
-        )
-    }
-
-    /// console 默认面投影：console 表面工具 + 探针完整集过滤（只读工作
-    /// 工具仍按探针面收敛；console 控制工具恒在）。
-    pub(crate) fn project_console_default_tool_defs(
-        base: &[ToolDef],
-        snapshot: &crate::tool_probe::ToolProbeSnapshot,
-    ) -> Vec<ToolDef> {
-        base.iter()
-            .filter(|t| {
-                Self::is_console_surface_tool(&t.name)
-                    && (!crate::tool_probe::is_main_agent_work_tool(&t.name)
-                        || snapshot.complete.iter().any(|c| c == &t.name))
-            })
-            .cloned()
-            .collect()
     }
 
     /// FUS-RETRIEVAL-MECH P0-B 步骤 4 前置裁决（2026-08-14 用户裁决）：
@@ -4115,6 +4072,21 @@ impl AgentLoopController {
         self.console_mode_state.lock().unwrap().mode
     }
 
+    /// MECHANICAL-AUDIT-LAYER (2026-08-24, ADR-0010 §14.39): the total
+    /// deduplicated retrieval candidate count across live activations plus
+    /// the shared candidate cap — the audit report's `retrieval:<n>`
+    /// 候选/上限 fact. `None` when no activation carries a candidate
+    /// count yet (pure read, never blocks an await).
+    pub(crate) fn retrieval_candidate_count(&self) -> Option<(usize, u32)> {
+        let reg = self.activations.lock().unwrap();
+        let total: usize = reg.states.values().map(|a| a.candidate_urls.len()).sum();
+        if total == 0 {
+            None
+        } else {
+            Some((total, self.candidate_cap))
+        }
+    }
+
     /// run 起始复位（与 `reset_console_probe_source` 同一点调用）：
     /// 模式回 console、连败清零、询问标记清空、direct 证据面清空。
     pub(crate) fn reset_console_mode(&self) {
@@ -4634,6 +4606,36 @@ impl AgentLoopController {
         // not yet probe-filtered. The call-time permission gate remains
         // the final backstop (design invariant 2).
         let mut tool_defs: Vec<ToolDef> = host.tools_registry().list().into_iter().collect();
+        // MECHANICAL-AUDIT-LAYER 审查处理 (2026-08-24, ADR-0010 §14.39 /
+        // FUS-READ-ANCHOR-WRITE-GUARD)：direct 面 read-anchor 写前核证——
+        // `search_replace` 声明补可选 `expected_anchor`（read_file 返回的
+        // {size, mtime, sha256}），运行时执行前机械核证（见
+        // `run_host_tool_with_timeout`）；目标不存在（新建）时无需携带。
+        if let Some(def) = tool_defs.iter_mut().find(|t| t.name == "search_replace")
+            && let Some(props) = def
+                .parameters
+                .as_object_mut()
+                .and_then(|p| p.get_mut("properties"))
+                .and_then(serde_json::Value::as_object_mut)
+        {
+            props.insert(
+                "expected_anchor".to_string(),
+                serde_json::json!({
+                    "type": "object",
+                    "description": "read_file 返回的内容锚点（sha256/size/mtime）——写前机械核证期望值；不匹配时拒绝并要求重读后重试。新建文件（目标不存在）时无需携带。",
+                    "properties": {
+                        "size": { "type": "integer", "minimum": 0 },
+                        "mtime": {
+                            "anyOf": [
+                                { "type": "integer", "minimum": 0 },
+                                { "type": "null" },
+                            ]
+                        },
+                        "sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+                    },
+                }),
+            );
+        }
         // P0-A steps 3-5 / P0-A-2: `run_tests` is a work tool whose declaration is
         // decided by the per-round probe snapshot (runner existence), not
         // by a direct host call here; the per-round list projection runs
@@ -4736,53 +4738,6 @@ impl AgentLoopController {
                         },
                     },
                     "required": ["section"],
-                }),
-            });
-        }
-        // P0-C orz 内嵌集成 S2 (2026-08-15): `blackboard_action_write` —
-        // 模型面唯一的写单按钮（写无副作用；副作用只在轮末单一发放出口）。
-        // 主车道专属（子代理投影剥除 + ToolFilter 车道门 + run_host_tool
-        // activation 守卫）；ReadOnly 类（仅写内存黑板单槽，auto-allowed
-        // 于所有策略）。round/plan_epoch 由机械层盖章，模型只给
-        // `action` + `arguments`。
-        if !tool_defs
-            .iter()
-            .any(|t| t.name == "blackboard_action_write")
-        {
-            tool_defs.push(ToolDef {
-                name: "blackboard_action_write".to_string(),
-                description: "Write ONE action-bar order for the console \
-                     (P0-C classical execution assistant). `action` is a \
-                     registered action name from the registration board \
-                     (blackboard_read section=actions); `arguments` is the \
-                     JSON object of that action's parameters. The order \
-                     carries no side effects and is issued mechanically at \
-                     the END of this model round (single issuance exit — \
-                     registry/contract/target/ACAF/policy gates then run). \
-                     Only one pending order per round: if the action bar \
-                     already holds an order, this call is refused — wait \
-                     for the result receipt and write the next order after. \
-                     Do NOT call execution/sending tools directly; use the \
-                     console button instead."
-                    .to_string(),
-                parameters: serde_json::json!({
-                    "type": "object",
-                    "properties": {
-                        "action": {
-                            "type": "string",
-                            "description": "Registered action name (see blackboard_read section=actions).",
-                        },
-                        "step_id": {
-                            "type": "string",
-                            "minLength": 1,
-                            "description": "PLAN-FIRST 阶段 C (2026-08-16): optional plan step binding — the order is issued only when the step gate passes (pending → in_progress → done/failed; a non-current step is refused with step_not_done). Required in console default mode when a structured plan is in force. Take the exact id from the plan view (blackboard_read section=plan — each step line starts with `- [状态] <step_id>: ...`); do not guess.",
-                        },
-                        "arguments": {
-                            "type": "object",
-                            "description": "Action parameters per the registration board's minimal hints.",
-                        },
-                    },
-                    "required": ["action", "arguments"],
                 }),
             });
         }
@@ -4900,45 +4855,6 @@ impl AgentLoopController {
                 }),
             });
         }
-        // PLAN-FIRST 阶段 C (2026-08-16, ADR-0010 §14.17⑱ / 设计 §7.5):
-        // `console_step_done` —— direct 模式的有记录例外收口：提交
-        // {step_id, transition_id, trace_id} 证据置步骤 done；机械层校验
-        // （transition_id 属本 run direct 切换、trace_id 对应已发生的
-        // ToolCompleted），证据不匹配拒绝（不自我认证）。声明面随
-        // console_default_enabled 收敛；调用面另有模式守卫。
-        if self.console_default_enabled && !tool_defs.iter().any(|t| t.name == "console_step_done")
-        {
-            tool_defs.push(ToolDef {
-                name: "console_step_done".to_string(),
-                description: "Mark the current plan step done with direct-mode \
-                     evidence (audited exception). `step_id` is the current \
-                     in-progress step; `transition_id` is the direct \
-                     transition id (from console_mode_transition); `trace_id` \
-                     must correspond to an already-occurred direct-mode \
-                     ToolCompleted. The mechanical layer cross-checks all \
-                     three — evidence cannot self-certify. Direct mode only."
-                    .to_string(),
-                parameters: serde_json::json!({
-                    "type": "object",
-                    "properties": {
-                        "step_id": {
-                            "type": "string",
-                            "minLength": 1,
-                            "maxLength": 64,
-                        },
-                        "transition_id": {
-                            "type": "string",
-                            "minLength": 1,
-                        },
-                        "trace_id": {
-                            "type": "string",
-                            "minLength": 1,
-                        },
-                    },
-                    "required": ["step_id", "transition_id", "trace_id"],
-                }),
-            });
-        }
         // AGENT-DELIVERY-FLOW (2026-08-23, ADR-0010 §14.35 第 19 项 / 设计
         // §2.2): `submit` —— 末步「递交/完成」的显式递交路径（无参，console
         // 默认态主车道）。第一次调用机械计算交付状态（工作区变更清单，过滤
@@ -4950,34 +4866,16 @@ impl AgentLoopController {
                 name: "submit".to_string(),
                 description: "Request/confirm delivery (AGENT-DELIVERY-FLOW). \
                      The final plan step is the fixed 递交/完成 step; ordinary \
-                     orders bound to it never mark it done. Call `submit` (no \
+                     execution never marks it done. Call `submit` (no \
                      arguments) once to have the harness mechanically compute \
                      and render the delivery status (workspace changes, \
                      filtered, ≤20 entries) into the blackboard plan view, \
                      review it, then call `submit` again to confirm and advance \
-                     the final step into the final-answer flow. Refused while \
-                     earlier steps are not done, or when no plan is in force."
-                    .to_string(),
-                parameters: serde_json::json!({
-                    "type": "object",
-                    "properties": {},
-                }),
-            });
-        }
-        // PLAN-FIRST 阶段 C (2026-08-16, ADR-0010 §14.17⑱ / 设计 §7.1):
-        // `console_return_to_console` —— direct → console 单向返回工具。
-        if self.console_default_enabled
-            && !tool_defs
-                .iter()
-                .any(|t| t.name == "console_return_to_console")
-        {
-            tool_defs.push(ToolDef {
-                name: "console_return_to_console".to_string(),
-                description: "Return from direct (audited fallback) to console \
-                     mode — one-way; records a console_mode_transition event \
-                     and gate_log entry. After the return the step gate \
-                     re-engages for console orders and this run is not asked \
-                     about the fallback again."
+                     the final step into the final-answer flow. Informational, \
+                     not a hard gate — no plan in force is refused; earlier \
+                     steps' status does not block submission (the final-answer \
+                     counterexample round + mechanical audit report arbitrate \
+                     the plan-complete claim)."
                     .to_string(),
                 parameters: serde_json::json!({
                     "type": "object",
@@ -5396,22 +5294,6 @@ impl AgentLoopController {
         }
 
         Ok(last_text.unwrap_or_default())
-    }
-
-    /// FUS-RETRIEVAL-MECH P0-B step 5 (2026-08-14): validate the main
-    /// agent's final answer against THIS run's mechanical evidence —
-    /// committed retrieval ledgers (`source_id` / URL / document identity)
-    /// plus the main lane's own read evidence (`path:line`) — ADR-0010
-    /// §3.7.9 output-level citation verifier (RETRIEVAL_MECHANICAL_CONTROLS
-    /// _DESIGN §3.2). Pure verdict; the loop journals the block event and
-    /// degrades the delivered answer on failure.
-    pub(crate) fn validate_final_answer_citations(
-        &self,
-        text: &str,
-    ) -> crate::citation_validation::CitationValidationReport {
-        let ledgers = self.run_source_ledgers.lock().unwrap();
-        let evidence = self.main_evidence.lock().unwrap();
-        crate::citation_validation::validate_final_answer(text, &ledgers, &evidence)
     }
 
     /// ORZ-ORIENTATION-FORCED-TEMPLATE (2026-08-15, ADR-0010 §14.16): the
@@ -7294,7 +7176,13 @@ impl AgentLoopController {
             .and_then(|s| s.target_tool.as_deref())
             == Some("search_replace")
             && let Some(anchor) = order.arguments.get("expected_anchor")
-            && let Some(err) = self.verify_content_anchor(host, &order, anchor).await
+            && let Some(file_path) = order
+                .arguments
+                .get("file_path")
+                .and_then(serde_json::Value::as_str)
+            && let Some(err) = self
+                .verify_content_anchor(host, file_path, anchor, &order.order_id)
+                .await
         {
             writer
                 .record(
@@ -7511,16 +7399,13 @@ impl AgentLoopController {
     async fn verify_content_anchor(
         &self,
         host: &dyn LoopHost,
-        order: &ActionOrder,
+        file_path: &str,
         anchor: &serde_json::Value,
+        label: &str,
     ) -> Option<ConsoleError> {
         let expected_size = anchor.get("size").and_then(serde_json::Value::as_u64)?;
         let expected_sha256 = anchor.get("sha256").and_then(serde_json::Value::as_str)?;
         let expected_mtime = anchor.get("mtime").and_then(serde_json::Value::as_u64);
-        let file_path = order
-            .arguments
-            .get("file_path")
-            .and_then(serde_json::Value::as_str)?;
         let resolved = host.session_cwd().join(file_path);
         // 与 read_file 的解析近似：此处不做 canonicalize（clippy 禁用——
         // Windows verbatim 路径），stat/read 由 OS 解析相对成分；任何解析
@@ -7533,7 +7418,7 @@ impl AgentLoopController {
             // 其余 stat 错误（权限/瞬时 FS 等）fail-closed：无法核证即拒单。
             Err(err) => {
                 return Some(Self::anchor_verify_error(
-                    order,
+                    label,
                     file_path,
                     expected_size,
                     expected_mtime,
@@ -7557,7 +7442,7 @@ impl AgentLoopController {
                 && expected_mtime != actual_mtime)
         {
             return Some(Self::anchor_verify_error(
-                order,
+                label,
                 file_path,
                 expected_size,
                 expected_mtime,
@@ -7576,7 +7461,7 @@ impl AgentLoopController {
             // 重算权威哈希即 fail-closed 拒单，绝不带未核证内容放行。
             Err(err) => {
                 return Some(Self::anchor_verify_error(
-                    order,
+                    label,
                     file_path,
                     expected_size,
                     expected_mtime,
@@ -7589,7 +7474,7 @@ impl AgentLoopController {
         let actual_sha256 = sha256_hex(&bytes);
         if actual_sha256 != expected_sha256 {
             return Some(Self::anchor_verify_error(
-                order,
+                label,
                 file_path,
                 expected_size,
                 expected_mtime,
@@ -7610,7 +7495,7 @@ impl AgentLoopController {
     /// `actual=None` 表示核证期 I/O 失败（未能取得当前内容锚点）；
     /// `Some(actual)` 表示已取得并比较、与期望不符。
     fn anchor_verify_error(
-        order: &ActionOrder,
+        label: &str,
         file_path: &str,
         expected_size: u64,
         expected_mtime: Option<u64>,
@@ -7628,10 +7513,9 @@ impl AgentLoopController {
             step: STEP_PROTOCOL,
             code: CODE_CONTENT_ANCHOR_MISMATCH,
             message: format!(
-                "order {}: content anchor verification failed for {} ({reason}) — expected \
+                "{label}: content anchor verification failed for {} ({reason}) — expected \
                  sha256={} size={} mtime={:?} but got sha256={} size={:?} mtime={:?}; re-read \
                  the file and rewrite the order with the new anchor",
-                order.order_id,
                 file_path,
                 expected_sha256,
                 expected_size,
@@ -7641,7 +7525,7 @@ impl AgentLoopController {
                 actual.mtime,
             ),
             upstream: Some(serde_json::json!({
-                "order_id": order.order_id,
+                "label": label,
                 "file_path": file_path,
                 "expected": {
                     "size": expected_size,
@@ -8190,6 +8074,109 @@ impl AgentLoopController {
                 direct.apply(payload);
             }
         };
+        // MECHANICAL-AUDIT-LAYER 审查处理 (2026-08-24, ADR-0010 §14.39 /
+        // 设计 §2.5)：console 订单面退役工具的调用面窄门——
+        // `blackboard_action_write` / `console_step_done` /
+        // `console_return_to_console` 不再声明且不再可调用（休眠 handler
+        // 不可达），模型幻觉调用一律机械拒绝（无 ToolStarted、零副作用、
+        // 零 console_order_written/rejected 事件）；拒绝计入连败熔断
+        // （与旧 console belt-and-braces 门同反馈形态）。
+        if matches!(
+            tc.name.as_str(),
+            "blackboard_action_write" | "console_step_done" | "console_return_to_console"
+        ) {
+            let msg = format!(
+                "tool '{}' — 已退役，不再可用（console 订单面已由 direct 执行面取代；\
+                 直接调用工作工具即可）",
+                tc.name,
+            );
+            let mut completed = serde_json::json!({
+                "tool": tc.name,
+                "call_id": tc.call_id,
+                "exit_code": 1,
+                "status": "error",
+                "error": "retired_tool_denied",
+            });
+            stamp_direct(&mut completed);
+            writer.record(EventType::ToolCompleted, completed).await?;
+            messages.push(Message {
+                role: Role::Tool,
+                content: msg.clone(),
+                tool_call_id: Some(tc.call_id.clone()),
+                tool_calls: Vec::new(),
+                reasoning_content: None,
+            });
+            return Ok((
+                ToolResult {
+                    output: msg,
+                    exit_code: Some(1),
+                    output_encoding: None,
+                    structured: Some(serde_json::json!({
+                        "error": "retired_tool_denied",
+                    })),
+                    ..Default::default()
+                },
+                Some(PolicyFeedback::Denied(DenialKey {
+                    tool_name: tc.name.clone(),
+                    reason_code: "retired_tool_denied".to_string(),
+                    policy_revision: self
+                        .policy_revision
+                        .load(std::sync::atomic::Ordering::SeqCst),
+                })),
+            ));
+        }
+        // MECHANICAL-AUDIT-LAYER 审查处理 (2026-08-24, ADR-0010 §14.39 /
+        // FUS-READ-ANCHOR-WRITE-GUARD)：read-anchor 写前核证的 direct 面
+        // 落点——`search_replace` 直接调用携带 `expected_anchor`（read_file
+        // 返回的 {size, mtime, sha256}）时，执行前机械核证目标文件内容锚点
+        // （复用订单链 `verify_content_anchor`：stat 快筛 size/mtime +
+        // sha256 权威；目标不存在=新建路径跳过；其余 I/O 错误 fail-closed）。
+        // 不匹配返回结构化 `content_anchor_mismatch` 拒绝、不执行、无
+        // ToolStarted（与既有发放前拒绝同形）；审计层按该结构化字段记录
+        // 锚点拒单异常事实。
+        if tc.name == "search_replace"
+            && let Some(anchor) = tc.arguments.get("expected_anchor")
+            && let Some(file_path) = tc
+                .arguments
+                .get("file_path")
+                .and_then(serde_json::Value::as_str)
+            && let Some(err) = self
+                .verify_content_anchor(host, file_path, anchor, &tc.call_id)
+                .await
+        {
+            let msg = err.message.clone();
+            let mut completed = serde_json::json!({
+                "tool": tc.name,
+                "call_id": tc.call_id,
+                "exit_code": 1,
+                "status": "error",
+                "error": CODE_CONTENT_ANCHOR_MISMATCH,
+                "file_path": file_path,
+                "reason": err.upstream,
+            });
+            stamp_direct(&mut completed);
+            writer.record(EventType::ToolCompleted, completed).await?;
+            messages.push(Message {
+                role: Role::Tool,
+                content: msg.clone(),
+                tool_call_id: Some(tc.call_id.clone()),
+                tool_calls: Vec::new(),
+                reasoning_content: None,
+            });
+            return Ok((
+                ToolResult {
+                    output: msg,
+                    exit_code: Some(1),
+                    output_encoding: None,
+                    structured: Some(serde_json::json!({
+                        "error": CODE_CONTENT_ANCHOR_MISMATCH,
+                        "file_path": file_path,
+                    })),
+                    ..Default::default()
+                },
+                None,
+            ));
+        }
         // The second tuple element is a pending policy feedback (a denial
         // key) that the caller aggregates at the END of the whole tool round
         // — the breaker user message must be injected after the tool batch
@@ -9634,27 +9621,11 @@ impl AgentLoopController {
                     None,
                 ));
             };
-            let gate = {
-                let w = self.blackboard.read();
-                crate::planning::order_step_gate(&w.plan.steps, Some(&terminal_id))
-            };
-            if !matches!(gate, Ok(idx) if idx == terminal_idx) {
-                return Ok((
-                    self.refuse_console_tool(
-                        writer,
-                        messages,
-                        &tc.name,
-                        &tc.call_id,
-                        "submit_not_current",
-                        &format!(
-                            "submit refused — the terminal step {terminal_id} is not \
-                             the current step; earlier steps must be done first"
-                        ),
-                    )
-                    .await?,
-                    None,
-                ));
-            }
+            // MECHANICAL-AUDIT-LAYER (2026-08-24, ADR-0010 §14.39 / 设计
+            // §2.1/§3)：submit 为信息展示、非硬门——订单层退役后无机械
+            // 步骤推进机制（step 绑定/顺序转事件留痕），终答前的反例自查
+            // 轮 + 审计报告承接「计划完成声明」核对；不再要求前序步骤
+            // done（step 状态退化为方向与状态展示）。
             let epoch = self.blackboard.read().plan.plan_epoch;
             let pending = {
                 let p = self.delivery_pending.lock().unwrap();
@@ -10262,6 +10233,19 @@ impl AgentLoopController {
         if let Some(note) = &count_note {
             result.output.push_str(note);
         }
+        // MECHANICAL-AUDIT-LAYER 审查处理 (2026-08-24, ADR-0010 §14.39)：
+        // 候选计数/上限以结构化字段透传到 ToolResult——机械审查层
+        // `retrieval:<n>` 分类据此读取真实 per-call 计数（而非仅靠激活
+        // 池求和回退）；成功与失败（已消耗候选）都携带。
+        if let Some((count, cap)) = candidate_counts {
+            let mut structured = result
+                .structured
+                .take()
+                .unwrap_or_else(|| serde_json::json!({}));
+            structured["candidate_count"] = serde_json::json!(count);
+            structured["candidate_cap"] = serde_json::json!(cap);
+            result.structured = Some(structured);
+        }
 
         // Replay the tool result into the conversation — the provider
         // protocol requires a tool message answering each declared call
@@ -10415,7 +10399,17 @@ impl AgentLoopController {
                 output: msg.to_string(),
                 exit_code: Some(1),
                 output_encoding: None,
-                structured: None,
+                // MECHANICAL-AUDIT-LAYER 审查处理 (2026-08-24)：拒绝信封带
+                // 结构化错误码与计数——机械审查层据此精确识别候选超限/
+                // 计数域未绑定异常，而非靠剩余池近似。
+                structured: {
+                    let mut s = serde_json::json!({ "error": code });
+                    if let Some((count, cap)) = counts {
+                        s["candidate_count"] = serde_json::json!(count);
+                        s["candidate_cap"] = serde_json::json!(cap);
+                    }
+                    Some(s)
+                },
                 ..Default::default()
             },
             Some(PolicyFeedback::Denied(DenialKey {
@@ -14309,72 +14303,9 @@ mod tests {
     /// 2026-08-18 (ADR-0010 §14.25 项 1): 状态行作为尾随用户消息、
     /// 仅在步骤状态变化时追加——订单 receipt ok → 步骤 done → 当前步
     /// 前进后追加新状态行，system 提示词保持字节稳定。
-    #[tokio::test]
-    async fn status_line_trailing_appends_only_on_step_change() {
-        let dir = test_dir();
-        let journal = JournalRecorder::new(dir.clone());
-        let host = TestHost {
-            journal,
-            tool_result: Some(ok_result()),
-        };
-        let fake = Arc::new(FakeProvider::new(vec![
-            ScriptedResponse::tool_calls(vec![ToolCall {
-                name: "blackboard_action_write".to_string(),
-                arguments: serde_json::json!({
-                    "action": "workspace.read_file",
-                    "arguments": {"target_file": "a.txt"},
-                    "step_id": "step-1",
-                }),
-                call_id: "call-w1".to_string(),
-            }]),
-            ScriptedResponse::text("第一轮"),
-            ScriptedResponse::text("完成"),
-        ]));
-        let gateway: Arc<dyn ModelGateway> = fake.clone();
-        let controller = AgentLoopController::with_gateway(gateway).with_plan(
-            "PLAN-STEP".to_string(),
-            1,
-            "两步骤".to_string(),
-            vec!["第一步".to_string(), "第二步".to_string()],
-        );
-        controller
-            .run_turn(&host, "推进步骤", "RUN-STEP", MANIFEST, 0, None, None, None)
-            .await
-            .unwrap();
-
-        let received = fake.received_requests();
-        assert!(received.len() >= 2, "{received:?}");
-        assert_eq!(
-            received[0].system, received[1].system,
-            "system prompt must stay byte-identical across step transitions"
-        );
-        assert!(!received[0].system.contains("[任务状态"));
-        // 消息跨请求累积——按内容去重后应恰好两条：初始状态行 + 步骤推进
-        // 后的新状态行。
-        let mut status_texts: Vec<String> = Vec::new();
-        for r in &received {
-            for m in r.messages.iter() {
-                if m.content.contains("[任务状态 v0.1]") && !status_texts.contains(&m.content) {
-                    status_texts.push(m.content.clone());
-                }
-            }
-        }
-        assert_eq!(status_texts.len(), 2, "{status_texts:?}");
-        assert!(
-            status_texts[0].contains("当前第 1 步 [step-1]「第一步」"),
-            "{status_texts:?}"
-        );
-        assert!(status_texts[1].contains("已完成 1"), "{status_texts:?}");
-        assert!(
-            status_texts[1].contains("当前第 2 步 [step-2]「第二步」"),
-            "{status_texts:?}"
-        );
-
-        let _ = std::fs::remove_dir_all(&dir);
-    }
-
-    /// 2026-08-18 (ADR-0010 §14.25 项 2): 发放期 policy 拒绝不把绑定步骤
-    /// 标 failed——步骤保持发放时置的 in_progress（订单可重试）。
+    /// 2026-08-18 (ADR-0010 §14.25 项 2) + MECHANICAL-AUDIT-LAYER 审查处理
+    /// (2026-08-24): 调用面拒绝（现为退役工具窄门 retired_tool_denied）
+    /// 不把绑定步骤标 failed——步骤保持 in_progress（可重试语义保留）。
     #[tokio::test]
     async fn policy_denied_order_does_not_fail_bound_step() {
         let dir = test_dir();
@@ -14417,66 +14348,6 @@ mod tests {
                 crate::blackboard::StepStatus::InProgress
             ),
             "policy-denied order must not fail the bound step: {:?}",
-            r.plan.steps[0].status
-        );
-
-        let _ = std::fs::remove_dir_all(&dir);
-    }
-
-    /// 2026-08-18 (ADR-0010 §14.25 项 2): 真实执行失败（execute 步）仍把
-    /// 绑定步骤标 failed（可重试语义保留）。
-    #[tokio::test]
-    async fn execution_failure_marks_bound_step_failed() {
-        let dir = test_dir();
-        let journal = JournalRecorder::new(dir.clone());
-        let host = QueueHost {
-            journal,
-            results: Mutex::new(VecDeque::from([Err(ToolError::ExecutionFailed(
-                "boom".to_string(),
-            ))])),
-        };
-        let fake = Arc::new(FakeProvider::new(vec![
-            ScriptedResponse::tool_calls(vec![ToolCall {
-                name: "blackboard_action_write".to_string(),
-                arguments: serde_json::json!({
-                    "action": "workspace.read_file",
-                    "arguments": {"target_file": "a.txt"},
-                    "step_id": "step-1",
-                }),
-                call_id: "call-w1".to_string(),
-            }]),
-            ScriptedResponse::text("完成"),
-            ScriptedResponse::text("完成"),
-        ]));
-        let gateway: Arc<dyn ModelGateway> = fake.clone();
-        let controller = AgentLoopController::with_gateway(gateway).with_plan(
-            "PLAN-EXECFAIL".to_string(),
-            1,
-            "读文件".to_string(),
-            vec!["第一步".to_string()],
-        );
-        controller
-            .run_turn(
-                &host,
-                "执行失败",
-                "RUN-EXECFAIL",
-                MANIFEST,
-                0,
-                None,
-                None,
-                None,
-            )
-            .await
-            .unwrap();
-
-        let r = controller.blackboard().read();
-        assert_eq!(r.plan.steps.len(), 1);
-        assert!(
-            matches!(
-                r.plan.steps[0].status,
-                crate::blackboard::StepStatus::Failed(_)
-            ),
-            "execution failure must fail the bound step: {:?}",
             r.plan.steps[0].status
         );
 
@@ -17286,886 +17157,6 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
-    /// P0-C S2 (2026-08-15): the console write→issue→receipt flow — the
-    /// model writes ONE order via `blackboard_action_write` (round/epoch
-    /// stamped mechanically), the post-tool-batch gap issues it through
-    /// `run_host_tool`, and the receipt (ok + trace_id) lands in the
-    /// action-board results. The registration board is refreshed per round.
-    #[tokio::test]
-    async fn console_s2_write_issue_and_receipt_flow() {
-        let dir = test_dir();
-        let journal = JournalRecorder::new(dir.clone());
-        let host = TestHost {
-            journal,
-            tool_result: Some(ToolResult {
-                output: "hello".to_string(),
-                exit_code: Some(0),
-                output_encoding: None,
-                structured: None,
-                ..Default::default()
-            }),
-        };
-        let fake = Arc::new(FakeProvider::new(vec![
-            ScriptedResponse::tool_calls(vec![ToolCall {
-                name: "blackboard_action_write".to_string(),
-                arguments: serde_json::json!({
-                    "action": "workspace.read_file",
-                    "arguments": {"target_file": "a.txt"},
-                }),
-                call_id: "call-w1".to_string(),
-            }]),
-            ScriptedResponse::tool_calls(vec![ToolCall {
-                name: "blackboard_read".to_string(),
-                arguments: serde_json::json!({"section": "actions"}),
-                call_id: "call-a1".to_string(),
-            }]),
-            ScriptedResponse::text("完成"),
-            ScriptedResponse::text("完成"),
-        ]));
-        let gateway: Arc<dyn ModelGateway> = fake.clone();
-        let controller = AgentLoopController::with_gateway(gateway);
-        controller
-            .run_turn(&host, "读文件", "RUN-S2H", MANIFEST, 0, None, None, None)
-            .await
-            .unwrap();
-
-        let board = controller.blackboard();
-        {
-            let r = board.read();
-            // 注册板块每轮机械刷新（P0-C S3）：Profile/Bundle ∩ 探针完整集。
-            // TestHost 无测试运行器 → workspace.run_tests 被探针移除；
-            // 内部服务（assistant.trace/workspace.run_script）恒加载；
-            // workspace.index 目标为非工作工具（project_doc_index）不探
-            // 不标 → 7 项。
-            assert_eq!(
-                r.actions.registration.len(),
-                7,
-                "{:?}",
-                r.actions.registration
-            );
-            assert!(
-                !r.actions
-                    .registration
-                    .iter()
-                    .any(|reg| reg.name == "workspace.run_tests"),
-                "{:?}",
-                r.actions.registration
-            );
-            assert!(
-                r.actions
-                    .registration
-                    .iter()
-                    .any(|reg| reg.name == "assistant.trace"),
-                "{:?}",
-                r.actions.registration
-            );
-            assert!(
-                r.actions
-                    .registration
-                    .iter()
-                    .any(|reg| reg.name == "workspace.run_script"),
-                "{:?}",
-                r.actions.registration
-            );
-            assert!(
-                r.actions
-                    .registration
-                    .iter()
-                    .any(|reg| reg.name == "workspace.read_file"),
-                "{:?}",
-                r.actions.registration
-            );
-            // 单槽已消费、结果栏有成功 receipt。
-            assert!(r.actions.order.is_none(), "{:?}", r.actions.order);
-            assert_eq!(r.actions.results.len(), 1, "{:?}", r.actions.results);
-            let receipt = &r.actions.results[0];
-            assert!(receipt.ok);
-            assert_eq!(
-                receipt.response,
-                Some(serde_json::json!({"output": "hello"}))
-            );
-            assert!(receipt.trace_id.starts_with('t'));
-            // 执行记录进入工具动作区（发放经 run_host_tool 全链路）。
-            assert!(
-                r.tool_actions
-                    .iter()
-                    .any(|t| t.category == "read" && t.tool == "read_file"),
-                "{:?}",
-                r.tool_actions
-            );
-        }
-
-        // trace 收口后对 `assistant.trace`（TraceStore）可见。
-        let receipt_id = board.read().actions.results[0].trace_id.clone();
-        let traces = controller.console_traces.lock().unwrap();
-        let trace = traces.get(&receipt_id).expect("committed trace visible");
-        assert_eq!(trace.request_id.as_deref(), Some("ORD-000001"));
-        let steps: Vec<&str> = trace.events.iter().map(|e| e.step.as_str()).collect();
-        assert_eq!(
-            steps,
-            vec!["registry", "contract", "target", "execute", "verify"]
-        );
-
-        // 发放的执行事件带合成 call_id（审计可关联订单）。
-        let completed: Vec<serde_json::Value> = events(&dir)
-            .into_iter()
-            .filter(|e| e.event_type == EventType::ToolCompleted)
-            .filter(|e| e.payload.get("tool").and_then(|t| t.as_str()) == Some("read_file"))
-            .map(|e| e.payload)
-            .collect();
-        assert_eq!(completed.len(), 1, "{completed:?}");
-        assert_eq!(completed[0]["call_id"], "ord-000001");
-        assert_eq!(completed[0]["exit_code"], 0);
-
-        // 模型读 actions 分区的回复包含 receipt。
-        let received = fake.received_requests();
-        let actions_reply = received
-            .iter()
-            .find_map(|r| {
-                r.messages
-                    .iter()
-                    .find(|m| m.tool_call_id.as_deref() == Some("call-a1"))
-            })
-            .expect("actions reply");
-        assert!(actions_reply.content.contains("== registration =="));
-        assert!(actions_reply.content.contains("workspace.read_file"));
-        assert!(actions_reply.content.contains("ORD-000001 ok=true"));
-
-        let _ = std::fs::remove_dir_all(&dir);
-    }
-
-    /// P0-C S3 (2026-08-15): `workspace.run_script` 生产发放——模型写一条
-    /// PTC 脚本订单，轮末机械发放逐行执行（内层经 run_host_tool 全链路），
-    /// 外层内部动作以 ToolStarted/ToolCompleted 留痕，receipt 返回
-    /// steps + result。
-    #[tokio::test]
-    async fn console_s3_run_script_issuance_flow() {
-        let dir = test_dir();
-        let journal = JournalRecorder::new(dir.clone());
-        let host = TestHost {
-            journal,
-            tool_result: Some(ToolResult {
-                output: "ok".to_string(),
-                exit_code: Some(0),
-                output_encoding: None,
-                structured: None,
-                ..Default::default()
-            }),
-        };
-        let fake = Arc::new(FakeProvider::new(vec![
-            ScriptedResponse::tool_calls(vec![ToolCall {
-                name: "blackboard_action_write".to_string(),
-                arguments: serde_json::json!({
-                    "action": "workspace.run_script",
-                    "arguments": {
-                        "script": [
-                            {
-                                "do": "workspace.read_file",
-                                "with": {"target_file": "a.txt"},
-                                "as": "a",
-                            },
-                            {
-                                "do": "workspace.read_file",
-                                "with": {"target_file": "b.txt"},
-                                "as": "b",
-                            },
-                        ]
-                    },
-                }),
-                call_id: "call-w1".to_string(),
-            }]),
-            ScriptedResponse::text("完成"),
-            ScriptedResponse::text("完成"),
-        ]));
-        let controller = AgentLoopController::with_gateway(fake);
-        controller
-            .run_turn(&host, "跑脚本", "RUN-S3A", MANIFEST, 0, None, None, None)
-            .await
-            .unwrap();
-
-        let board = controller.blackboard();
-        {
-            let r = board.read();
-            assert!(r.actions.order.is_none(), "{:?}", r.actions.order);
-            assert_eq!(r.actions.results.len(), 1, "{:?}", r.actions.results);
-            let receipt = &r.actions.results[0];
-            assert!(receipt.ok, "{:?}", receipt.error);
-            let response = receipt.response.as_ref().unwrap();
-            assert_eq!(response["steps"].as_array().unwrap().len(), 2);
-            assert_eq!(response["result"]["output"], "ok");
-            // 内层 host 调用经 run_host_tool（工具动作区留痕 2 条 read_file）。
-            let reads: Vec<_> = r
-                .tool_actions
-                .iter()
-                .filter(|t| t.tool == "read_file")
-                .collect();
-            assert_eq!(reads.len(), 2, "{:?}", r.tool_actions);
-        }
-        // 外层内部动作 ToolStarted/ToolCompleted 留痕（合成 call_id）。
-        let started: Vec<serde_json::Value> = events(&dir)
-            .into_iter()
-            .filter(|e| {
-                e.event_type == EventType::ToolStarted
-                    && e.payload.get("tool").and_then(|t| t.as_str())
-                        == Some("workspace.run_script")
-            })
-            .map(|e| e.payload)
-            .collect();
-        assert_eq!(started.len(), 1, "{started:?}");
-        let completed: Vec<serde_json::Value> = events(&dir)
-            .into_iter()
-            .filter(|e| {
-                e.event_type == EventType::ToolCompleted
-                    && e.payload.get("tool").and_then(|t| t.as_str())
-                        == Some("workspace.run_script")
-            })
-            .map(|e| e.payload)
-            .collect();
-        assert_eq!(completed.len(), 1, "{completed:?}");
-        assert_eq!(completed[0]["call_id"], "ord-000001");
-        assert_eq!(completed[0]["exit_code"], 0);
-        // 内层 read_file 事件带 .s1/.s2 合成 call_id（可关联订单与步骤）。
-        let inner: Vec<serde_json::Value> = events(&dir)
-            .into_iter()
-            .filter(|e| {
-                e.event_type == EventType::ToolCompleted
-                    && e.payload.get("tool").and_then(|t| t.as_str()) == Some("read_file")
-            })
-            .map(|e| e.payload)
-            .collect();
-        assert_eq!(inner.len(), 2, "{inner:?}");
-        assert_eq!(inner[0]["call_id"], "ord-000001.s1");
-        assert_eq!(inner[1]["call_id"], "ord-000001.s2");
-
-        let _ = std::fs::remove_dir_all(&dir);
-    }
-
-    /// P0-C S3 (2026-08-15): `assistant.trace` 生产发放——模型写读 trace
-    /// 订单，内部只读服务取回已 commit 的 trace，结果栏 receipt 携带事件。
-    #[tokio::test]
-    async fn console_s3_trace_read_issuance_flow() {
-        let dir = test_dir();
-        let journal = JournalRecorder::new(dir.clone());
-        let host = TestHost {
-            journal,
-            tool_result: Some(ToolResult {
-                output: "never".to_string(),
-                exit_code: Some(0),
-                output_encoding: None,
-                structured: None,
-                ..Default::default()
-            }),
-        };
-        // 预置一个已 commit 的目标 trace（发放读 trace 订单时取回）。
-        let mut seed_store = crate::console::TraceStore::new();
-        let target_trace_id = {
-            let mut target = seed_store.new_trace(Some("ORD-000000".to_string()));
-            target.add(
-                "execute",
-                Some("workspace.read_file"),
-                true,
-                None,
-                None,
-                None,
-            );
-            seed_store.commit(&target);
-            target.trace_id
-        };
-        let fake = Arc::new(FakeProvider::new(vec![
-            ScriptedResponse::tool_calls(vec![ToolCall {
-                name: "blackboard_action_write".to_string(),
-                arguments: serde_json::json!({
-                    "action": "assistant.trace",
-                    "arguments": {
-                        "trace_id": target_trace_id,
-                        "tail": 5,
-                    },
-                }),
-                call_id: "call-w1".to_string(),
-            }]),
-            ScriptedResponse::text("完成"),
-            ScriptedResponse::text("完成"),
-        ]));
-        let controller = AgentLoopController::with_gateway(fake);
-        *controller.console_traces.lock().unwrap() = seed_store;
-        controller
-            .run_turn(&host, "读 trace", "RUN-S3T", MANIFEST, 0, None, None, None)
-            .await
-            .unwrap();
-
-        let r = controller.blackboard().read();
-        assert!(r.actions.order.is_none());
-        assert_eq!(r.actions.results.len(), 1, "{:?}", r.actions.results);
-        let receipt = &r.actions.results[0];
-        assert!(receipt.ok, "{:?}", receipt.error);
-        let response = receipt.response.as_ref().unwrap();
-        assert_eq!(response["trace_id"], target_trace_id);
-        assert_eq!(response["request_id"], "ORD-000000");
-        assert_eq!(response["events"].as_array().unwrap().len(), 1);
-        assert!(!response["truncated"].as_bool().unwrap());
-        drop(r);
-        // 读操作本身入事件面。
-        let completed: Vec<serde_json::Value> = events(&dir)
-            .into_iter()
-            .filter(|e| {
-                e.event_type == EventType::ToolCompleted
-                    && e.payload.get("tool").and_then(|t| t.as_str()) == Some("assistant.trace")
-            })
-            .map(|e| e.payload)
-            .collect();
-        assert_eq!(completed.len(), 1, "{completed:?}");
-        assert_eq!(completed[0]["exit_code"], 0);
-
-        let _ = std::fs::remove_dir_all(&dir);
-    }
-
-    /// P0-C S4 (2026-08-16)：完整任务会话 e2e——写 run_script 订单 →
-    /// 发放 → 结果栏 receipt → 读 trace → 结果栏反馈 → 下一订单。
-    /// trace_id 机械确定（TraceStore seq=1 → `t000001`），脚本模型可
-    /// 直接引用前单 receipt 的 trace。
-    #[tokio::test]
-    async fn console_s4_full_session_script_trace_feedback_next_order() {
-        let dir = test_dir();
-        let journal = JournalRecorder::new(dir.clone());
-        let host = TestHost {
-            journal,
-            tool_result: Some(ToolResult {
-                output: "ok".to_string(),
-                exit_code: Some(0),
-                output_encoding: None,
-                structured: None,
-                ..Default::default()
-            }),
-        };
-        let fake = Arc::new(FakeProvider::new(vec![
-            ScriptedResponse::tool_calls(vec![ToolCall {
-                name: "blackboard_action_write".to_string(),
-                arguments: serde_json::json!({
-                    "action": "workspace.run_script",
-                    "arguments": {
-                        "script": [
-                            {
-                                "do": "workspace.read_file",
-                                "with": {"target_file": "a.txt"},
-                                "as": "a",
-                            },
-                            {
-                                "do": "workspace.read_file",
-                                "with": {"target_file": "b.txt"},
-                                "as": "b",
-                            },
-                        ]
-                    },
-                }),
-                call_id: "call-w1".to_string(),
-            }]),
-            ScriptedResponse::tool_calls(vec![ToolCall {
-                name: "blackboard_action_write".to_string(),
-                arguments: serde_json::json!({
-                    "action": "assistant.trace",
-                    "arguments": {
-                        "trace_id": "t000001",
-                        "tail": 20,
-                    },
-                }),
-                call_id: "call-w2".to_string(),
-            }]),
-            ScriptedResponse::tool_calls(vec![ToolCall {
-                name: "blackboard_read".to_string(),
-                arguments: serde_json::json!({"section": "actions"}),
-                call_id: "call-a1".to_string(),
-            }]),
-            ScriptedResponse::tool_calls(vec![ToolCall {
-                name: "blackboard_action_write".to_string(),
-                arguments: serde_json::json!({
-                    "action": "workspace.read_file",
-                    "arguments": {"target_file": "c.txt"},
-                }),
-                call_id: "call-w3".to_string(),
-            }]),
-            ScriptedResponse::text("完成"),
-            ScriptedResponse::text("完成"),
-        ]));
-        let controller = AgentLoopController::with_gateway(fake.clone());
-        controller
-            .run_turn(&host, "完整会话", "RUN-S4E", MANIFEST, 0, None, None, None)
-            .await
-            .unwrap();
-
-        let r = controller.blackboard().read();
-        assert!(r.actions.order.is_none(), "{:?}", r.actions.order);
-        assert_eq!(r.actions.results.len(), 3, "{:?}", r.actions.results);
-        // ① run_script receipt：2 步执行 + result。
-        let script_receipt = &r.actions.results[0];
-        assert!(script_receipt.ok, "{:?}", script_receipt.error);
-        let script_response = script_receipt.response.as_ref().unwrap();
-        assert_eq!(script_response["steps"].as_array().unwrap().len(), 2);
-        assert_eq!(script_response["result"]["output"], "ok");
-        // ② trace 读取 receipt：返回前单 trace 的事件序列（含脚本步）。
-        let trace_receipt = &r.actions.results[1];
-        assert!(trace_receipt.ok, "{:?}", trace_receipt.error);
-        let trace_response = trace_receipt.response.as_ref().unwrap();
-        assert_eq!(trace_response["trace_id"], "t000001");
-        assert_eq!(trace_response["request_id"], "ORD-000001");
-        let events: Vec<&str> = trace_response["events"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .filter_map(|e| e.get("step").and_then(|s| s.as_str()))
-            .collect();
-        assert!(
-            events.contains(&"script"),
-            "script steps visible in trace: {events:?}"
-        );
-        assert!(events.contains(&"execute"), "{events:?}");
-        // ③ 反馈后下一订单 receipt：直接 host 动作。
-        let next_receipt = &r.actions.results[2];
-        assert!(next_receipt.ok, "{:?}", next_receipt.error);
-        assert_eq!(next_receipt.response.as_ref().unwrap()["output"], "ok");
-        // 3 次 read_file 实际执行（脚本 2 步 + 直接 1 单）。
-        let reads: Vec<_> = r
-            .tool_actions
-            .iter()
-            .filter(|t| t.tool == "read_file")
-            .collect();
-        assert_eq!(reads.len(), 3, "{:?}", r.tool_actions);
-        drop(r);
-
-        // 模型在 actions 板块读到结果栏反馈（receipt 行）。
-        let received = fake.received_requests();
-        let actions_reply = received
-            .iter()
-            .find_map(|req| {
-                req.messages
-                    .iter()
-                    .find(|m| m.tool_call_id.as_deref() == Some("call-a1"))
-            })
-            .expect("actions reply");
-        assert!(actions_reply.content.contains("ORD-000001 ok=true"));
-        assert!(actions_reply.content.contains("ORD-000002 ok=true"));
-
-        let _ = std::fs::remove_dir_all(&dir);
-    }
-
-    /// P0-C S4 (2026-08-16)：tool-round 预算发放前预检——脚本长度超出剩余
-    /// 预算（含当前模型轮 1 单位）时零执行拒绝，显式
-    /// `budget_insufficient`，不消耗预算；拒绝文本仍含剩余预算
-    /// （PUSH→PULL 2026-08-21：每轮 REMAINING 尾随块退役，剩余预算经
-    /// 拒绝文本与 `blackboard_read section=session` 按需读取）。
-    #[tokio::test]
-    async fn console_s4_budget_precheck_rejects_over_budget_script() {
-        let dir = test_dir();
-        let journal = JournalRecorder::new(dir.clone());
-        let host = TestHost {
-            journal,
-            tool_result: Some(ToolResult {
-                output: "never".to_string(),
-                exit_code: Some(0),
-                output_encoding: None,
-                structured: None,
-                ..Default::default()
-            }),
-        };
-        let fake = Arc::new(FakeProvider::new(vec![
-            ScriptedResponse::tool_calls(vec![ToolCall {
-                name: "blackboard_action_write".to_string(),
-                arguments: serde_json::json!({
-                    "action": "workspace.run_script",
-                    "arguments": {
-                        "script": [
-                            {"do": "workspace.read_file", "with": {"target_file": "a.txt"}},
-                            {"do": "workspace.read_file", "with": {"target_file": "b.txt"}},
-                        ]
-                    },
-                }),
-                call_id: "call-w1".to_string(),
-            }]),
-            ScriptedResponse::text("完成"),
-            ScriptedResponse::text("完成"),
-        ]));
-        let mut controller = AgentLoopController::with_gateway(fake.clone());
-        controller.max_tool_rounds = 2;
-        controller
-            .run_turn(
-                &host,
-                "超预算脚本",
-                "RUN-S4B",
-                MANIFEST,
-                0,
-                None,
-                None,
-                None,
-            )
-            .await
-            .unwrap();
-
-        let r = controller.blackboard().read();
-        assert_eq!(r.actions.results.len(), 1, "{:?}", r.actions.results);
-        let receipt = &r.actions.results[0];
-        assert!(!receipt.ok);
-        let error = receipt.error.as_ref().unwrap();
-        assert_eq!(error["step"], "protocol");
-        assert_eq!(error["code"], "budget_insufficient");
-        assert_eq!(error["upstream"]["required"], 2);
-        assert_eq!(error["upstream"]["remaining"], 1);
-        assert_eq!(error["upstream"]["max_tool_rounds"], 2);
-        // 零执行：没有任何 host 工具动作。
-        assert!(
-            r.tool_actions.iter().all(|t| t.tool != "read_file"),
-            "{:?}",
-            r.tool_actions
-        );
-        drop(r);
-        // PUSH→PULL：下一轮不再注入 REMAINING 尾随块；拒绝文本中的
-        // remaining（上方 receipt 断言）与 session 面承载剩余预算。
-        let received = fake.received_requests();
-        let round2 = &received[1];
-        assert!(
-            round2
-                .messages
-                .iter()
-                .all(|m| !m.content.contains("REMAINING")),
-            "round 2 must carry no per-round REMAINING block: {:?}",
-            round2.messages
-        );
-        // P0-E 第 4 项 (2026-08-17): 发放前拒绝入事件面。
-        let rejected = events(&dir)
-            .into_iter()
-            .filter(|e| e.event_type == EventType::ConsoleOrderRejected)
-            .collect::<Vec<_>>();
-        assert_eq!(rejected.len(), 1, "{rejected:?}");
-        assert_eq!(rejected[0].payload["phase"], "pre_issue");
-        assert_eq!(rejected[0].payload["step"], "protocol");
-        assert_eq!(rejected[0].payload["code"], "budget_insufficient");
-        assert_eq!(rejected[0].payload["round"], 0);
-
-        let _ = std::fs::remove_dir_all(&dir);
-    }
-
-    /// P0-C S4 审查收口（2026-08-16）：预算预检不掩盖内层错误——脚本含
-    /// 未知动作且预算不足时，先报注册表 `unknown_service`（而非
-    /// `budget_insufficient`），模型获得真实失败原因。
-    #[tokio::test]
-    async fn console_s4_budget_precheck_does_not_mask_unknown_service() {
-        let dir = test_dir();
-        let journal = JournalRecorder::new(dir.clone());
-        let host = TestHost {
-            journal,
-            tool_result: Some(ToolResult {
-                output: "never".to_string(),
-                exit_code: Some(0),
-                output_encoding: None,
-                structured: None,
-                ..Default::default()
-            }),
-        };
-        let fake = Arc::new(FakeProvider::new(vec![
-            ScriptedResponse::tool_calls(vec![ToolCall {
-                name: "blackboard_action_write".to_string(),
-                arguments: serde_json::json!({
-                    "action": "workspace.run_script",
-                    "arguments": {
-                        "script": [
-                            {"do": "workspace.no_such", "with": {}},
-                            {"do": "workspace.read_file", "with": {"target_file": "a.txt"}},
-                        ]
-                    }
-                }),
-                call_id: "call-w1".to_string(),
-            }]),
-            ScriptedResponse::text("完成"),
-            ScriptedResponse::text("完成"),
-        ]));
-        let mut controller = AgentLoopController::with_gateway(fake.clone());
-        controller.max_tool_rounds = 2;
-        controller
-            .run_turn(
-                &host,
-                "未知动作脚本",
-                "RUN-S4U",
-                MANIFEST,
-                0,
-                None,
-                None,
-                None,
-            )
-            .await
-            .unwrap();
-
-        let r = controller.blackboard().read();
-        assert_eq!(r.actions.results.len(), 1, "{:?}", r.actions.results);
-        let receipt = &r.actions.results[0];
-        assert!(!receipt.ok);
-        let error = receipt.error.as_ref().unwrap();
-        assert_eq!(error["step"], "registry");
-        assert_eq!(error["code"], "unknown_service");
-        assert!(
-            r.tool_actions.iter().all(|t| t.tool != "read_file"),
-            "{:?}",
-            r.tool_actions
-        );
-        drop(r);
-        // P0-E 第 4 项: 预算预检不掩盖内层错误时，发放期 registry 门拒绝
-        // 仍入事件面（phase=issue）。
-        let rejected = events(&dir)
-            .into_iter()
-            .filter(|e| e.event_type == EventType::ConsoleOrderRejected)
-            .collect::<Vec<_>>();
-        assert_eq!(rejected.len(), 1, "{rejected:?}");
-        assert_eq!(rejected[0].payload["phase"], "issue");
-        assert_eq!(rejected[0].payload["step"], "registry");
-        assert_eq!(rejected[0].payload["code"], "unknown_service");
-
-        let _ = std::fs::remove_dir_all(&dir);
-    }
-
-    /// P0-C S4 审查收口（2026-08-16）：预算预检不掩盖超上限脚本——9 步
-    /// 脚本（> 8 步硬上限）在预算不足时先报契约错误（schema `maxItems`
-    /// → `invalid_arguments`），而非 `budget_insufficient`。
-    #[tokio::test]
-    async fn console_s4_budget_precheck_does_not_mask_over_cap_script() {
-        let dir = test_dir();
-        let journal = JournalRecorder::new(dir.clone());
-        let host = TestHost {
-            journal,
-            tool_result: Some(ToolResult {
-                output: "never".to_string(),
-                exit_code: Some(0),
-                output_encoding: None,
-                structured: None,
-                ..Default::default()
-            }),
-        };
-        let script: Vec<serde_json::Value> = (1..=9)
-            .map(|i| {
-                serde_json::json!({
-                    "do": "workspace.read_file",
-                    "with": {"target_file": format!("a{i}.txt")},
-                })
-            })
-            .collect();
-        let fake = Arc::new(FakeProvider::new(vec![
-            ScriptedResponse::tool_calls(vec![ToolCall {
-                name: "blackboard_action_write".to_string(),
-                arguments: serde_json::json!({
-                    "action": "workspace.run_script",
-                    "arguments": {"script": script},
-                }),
-                call_id: "call-w1".to_string(),
-            }]),
-            ScriptedResponse::text("完成"),
-            ScriptedResponse::text("完成"),
-        ]));
-        let mut controller = AgentLoopController::with_gateway(fake.clone());
-        controller.max_tool_rounds = 2;
-        controller
-            .run_turn(
-                &host,
-                "超上限脚本",
-                "RUN-S4O",
-                MANIFEST,
-                0,
-                None,
-                None,
-                None,
-            )
-            .await
-            .unwrap();
-
-        let r = controller.blackboard().read();
-        assert_eq!(r.actions.results.len(), 1, "{:?}", r.actions.results);
-        let receipt = &r.actions.results[0];
-        assert!(!receipt.ok);
-        let error = receipt.error.as_ref().unwrap();
-        assert_eq!(error["step"], "contract");
-        assert_eq!(error["code"], "invalid_arguments");
-        assert!(
-            r.tool_actions.iter().all(|t| t.tool != "read_file"),
-            "{:?}",
-            r.tool_actions
-        );
-        drop(r);
-        // P0-E 第 4 项: 发放期 contract 门拒绝入事件面（phase=issue）。
-        let rejected = events(&dir)
-            .into_iter()
-            .filter(|e| e.event_type == EventType::ConsoleOrderRejected)
-            .collect::<Vec<_>>();
-        assert_eq!(rejected.len(), 1, "{rejected:?}");
-        assert_eq!(rejected[0].payload["phase"], "issue");
-        assert_eq!(rejected[0].payload["step"], "contract");
-        assert_eq!(rejected[0].payload["code"], "invalid_arguments");
-
-        let _ = std::fs::remove_dir_all(&dir);
-    }
-
-    /// P0-C S4 审查收口（2026-08-16）：max=1 时当前模型轮已占满预算——
-    /// 直接订单预检 `remaining=0` 零执行拒绝（审计 §5 边界显式锁定）。
-    #[tokio::test]
-    async fn console_s4_max_one_round_rejects_order_with_zero_remaining() {
-        let dir = test_dir();
-        let journal = JournalRecorder::new(dir.clone());
-        let host = TestHost {
-            journal,
-            tool_result: Some(ToolResult {
-                output: "never".to_string(),
-                exit_code: Some(0),
-                output_encoding: None,
-                structured: None,
-                ..Default::default()
-            }),
-        };
-        let fake = Arc::new(FakeProvider::new(vec![
-            ScriptedResponse::tool_calls(vec![ToolCall {
-                name: "blackboard_action_write".to_string(),
-                arguments: serde_json::json!({
-                    "action": "workspace.read_file",
-                    "arguments": {"target_file": "a.txt"},
-                }),
-                call_id: "call-w1".to_string(),
-            }]),
-            ScriptedResponse::text("完成"),
-            ScriptedResponse::text("完成"),
-        ]));
-        let mut controller = AgentLoopController::with_gateway(fake.clone());
-        controller.max_tool_rounds = 1;
-        controller
-            .run_turn(
-                &host,
-                "零预算订单",
-                "RUN-S4Z",
-                MANIFEST,
-                0,
-                None,
-                None,
-                None,
-            )
-            .await
-            .unwrap();
-
-        let r = controller.blackboard().read();
-        assert_eq!(r.actions.results.len(), 1, "{:?}", r.actions.results);
-        let receipt = &r.actions.results[0];
-        assert!(!receipt.ok);
-        let error = receipt.error.as_ref().unwrap();
-        assert_eq!(error["step"], "protocol");
-        assert_eq!(error["code"], "budget_insufficient");
-        assert_eq!(error["upstream"]["required"], 1);
-        assert_eq!(error["upstream"]["remaining"], 0);
-        assert_eq!(error["upstream"]["max_tool_rounds"], 1);
-        assert!(
-            r.tool_actions.iter().all(|t| t.tool != "read_file"),
-            "{:?}",
-            r.tool_actions
-        );
-        drop(r);
-        // 预算耗尽：拒绝文本 remaining=0（上方 receipt 断言）；下一轮
-        // 不再注入 REMAINING 尾随块（PUSH→PULL 2026-08-21）。
-        let received = fake.received_requests();
-        let round2 = &received[1];
-        assert!(
-            round2
-                .messages
-                .iter()
-                .all(|m| !m.content.contains("REMAINING")),
-            "round 2 must carry no per-round REMAINING block: {:?}",
-            round2.messages
-        );
-
-        let _ = std::fs::remove_dir_all(&dir);
-    }
-
-    /// P0-C S4 (2026-08-16) + PUSH→PULL (2026-08-21)：脚本按实际执行步数
-    /// 消耗 tool-round 预算——2 步脚本消耗 2 单位（叠加当前模型轮 1 单位，
-    /// max=4），下一轮 `blackboard_read section=session` 按需读取返回
-    /// USED: 3 / REMAINING: 1（每轮 REMAINING 尾随块不再注入）。
-    #[tokio::test]
-    async fn console_s4_script_consumes_budget_and_next_block_reflects() {
-        let dir = test_dir();
-        let journal = JournalRecorder::new(dir.clone());
-        let host = TestHost {
-            journal,
-            tool_result: Some(ToolResult {
-                output: "ok".to_string(),
-                exit_code: Some(0),
-                output_encoding: None,
-                structured: None,
-                ..Default::default()
-            }),
-        };
-        let fake = Arc::new(FakeProvider::new(vec![
-            ScriptedResponse::tool_calls(vec![ToolCall {
-                name: "blackboard_action_write".to_string(),
-                arguments: serde_json::json!({
-                    "action": "workspace.run_script",
-                    "arguments": {
-                        "script": [
-                            {"do": "workspace.read_file", "with": {"target_file": "a.txt"}},
-                            {"do": "workspace.read_file", "with": {"target_file": "b.txt"}},
-                        ]
-                    },
-                }),
-                call_id: "call-w1".to_string(),
-            }]),
-            ScriptedResponse::tool_calls(vec![ToolCall {
-                name: "blackboard_read".to_string(),
-                arguments: serde_json::json!({"section": "session"}),
-                call_id: "call-s1".to_string(),
-            }]),
-            ScriptedResponse::text("完成"),
-        ]));
-        let mut controller = AgentLoopController::with_gateway(fake.clone());
-        controller.max_tool_rounds = 4;
-        controller
-            .run_turn(&host, "预算脚本", "RUN-S4C", MANIFEST, 0, None, None, None)
-            .await
-            .unwrap();
-
-        let r = controller.blackboard().read();
-        assert_eq!(r.actions.results.len(), 1, "{:?}", r.actions.results);
-        let receipt = &r.actions.results[0];
-        assert!(receipt.ok, "{:?}", receipt.error);
-        assert_eq!(
-            receipt.response.as_ref().unwrap()["steps"]
-                .as_array()
-                .unwrap()
-                .len(),
-            2
-        );
-        assert_eq!(
-            r.tool_actions
-                .iter()
-                .filter(|t| t.tool == "read_file")
-                .count(),
-            2
-        );
-        drop(r);
-        // 2 步执行 + 当前模型轮 = 3 单位；max=4 → session 面
-        // USED: 3 / REMAINING: 1（按需读取，PUSH→PULL）。
-        let received = fake.received_requests();
-        assert!(received.len() >= 3, "three rounds: {received:?}");
-        let round2 = &received[1];
-        let round3 = &received[2];
-        assert!(
-            round2
-                .messages
-                .iter()
-                .all(|m| !m.content.contains("REMAINING")),
-            "round 2 must carry no per-round REMAINING block: {:?}",
-            round2.messages
-        );
-        assert!(
-            round3.messages.iter().any(|m| {
-                m.role == Role::Tool
-                    && m.content.contains("TOOL_ROUNDS_USED: 3")
-                    && m.content.contains("TOOL_ROUNDS_REMAINING: 1")
-            }),
-            "session face must reflect consumed script steps: {:?}",
-            round3.messages
-        );
-
-        let _ = std::fs::remove_dir_all(&dir);
-    }
-
     /// P0-C S4 (2026-08-16)：checkpoint 轮跳过注册板块刷新（F3 收口的
     /// e2e 断言）——取消落在 checkpoint 轮结束后、下一轮刷新前；板块保留
     /// 上一轮探针过滤后的内容（本 host 会话 cwd 缺失 → 读/写探针不完整，
@@ -18498,80 +17489,6 @@ mod tests {
         let board = controller.blackboard().read();
         assert_eq!(board.actions.registration.len(), 1);
         assert_eq!(board.actions.registration[0].name, "assistant.trace");
-    }
-
-    /// P0-C S2 (2026-08-15): 单轮一单——同批第二次 `blackboard_action_write`
-    /// 被机械拒绝（order_slot_busy），首单仍正常发放。
-    #[tokio::test]
-    async fn console_s2_action_write_slot_busy_refuses_second_order() {
-        let dir = test_dir();
-        let journal = JournalRecorder::new(dir.clone());
-        let host = TestHost {
-            journal,
-            tool_result: Some(ToolResult {
-                output: "ok".to_string(),
-                exit_code: Some(0),
-                output_encoding: None,
-                structured: None,
-                ..Default::default()
-            }),
-        };
-        let fake = Arc::new(FakeProvider::new(vec![
-            ScriptedResponse::tool_calls(vec![
-                ToolCall {
-                    name: "blackboard_action_write".to_string(),
-                    arguments: serde_json::json!({
-                        "action": "workspace.list_dir",
-                        "arguments": {"target_directory": "."},
-                    }),
-                    call_id: "call-w1".to_string(),
-                },
-                ToolCall {
-                    name: "blackboard_action_write".to_string(),
-                    arguments: serde_json::json!({
-                        "action": "workspace.read_file",
-                        "arguments": {"target_file": "b.txt"},
-                    }),
-                    call_id: "call-w2".to_string(),
-                },
-            ]),
-            ScriptedResponse::text("完成"),
-            ScriptedResponse::text("完成"),
-        ]));
-        let gateway: Arc<dyn ModelGateway> = fake.clone();
-        let controller = AgentLoopController::with_gateway(gateway);
-        controller
-            .run_turn(&host, "两个订单", "RUN-S2B", MANIFEST, 0, None, None, None)
-            .await
-            .unwrap();
-
-        {
-            let r = controller.blackboard().read();
-            assert!(r.actions.order.is_none(), "{:?}", r.actions.order);
-            assert_eq!(r.actions.results.len(), 1, "{:?}", r.actions.results);
-            assert!(r.actions.results[0].ok);
-            // 首单被发放（list_dir 经 host 执行）。
-            assert!(
-                r.tool_actions.iter().any(|t| t.tool == "list_dir"),
-                "{:?}",
-                r.tool_actions
-            );
-        }
-        // 第二单被显式拒绝。
-        let busy: Vec<serde_json::Value> = events(&dir)
-            .into_iter()
-            .filter(|e| e.event_type == EventType::ToolCompleted)
-            .filter(|e| {
-                e.payload.get("tool").and_then(|t| t.as_str()) == Some("blackboard_action_write")
-            })
-            .filter(|e| e.payload.get("call_id").and_then(|c| c.as_str()) == Some("call-w2"))
-            .map(|e| e.payload)
-            .collect();
-        assert_eq!(busy.len(), 1, "{busy:?}");
-        assert_eq!(busy[0]["exit_code"], 1);
-        assert_eq!(busy[0]["error"], "order_slot_busy");
-
-        let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// P0-C S2 (2026-08-15): round/plan_epoch 防重放与过期——写单轮与发放轮
@@ -19138,7 +18055,7 @@ mod tests {
         assert!(message.contains(&expected_sha256), "{message}");
         assert!(message.contains(&actual_sha256), "{message}");
         assert!(message.contains("re-read the file"), "{message}");
-        assert_eq!(error["upstream"]["order_id"], "ORD-GUARD-003");
+        assert_eq!(error["upstream"]["label"], "ORD-GUARD-003");
         assert_eq!(error["upstream"]["file_path"], "same_mtime_target.txt");
         assert_eq!(error["upstream"]["expected"]["size"], 6);
         assert_eq!(error["upstream"]["expected"]["mtime"], original_mtime_secs);
@@ -19395,80 +18312,6 @@ mod tests {
             .filter(|e| e.event_type == EventType::ConsoleOrderRejected)
             .collect::<Vec<_>>();
         assert!(rejected.is_empty(), "{rejected:?}");
-
-        let _ = std::fs::remove_dir_all(&dir);
-    }
-
-    /// P0-C S2 (2026-08-15): 策略拒绝归一化——权限门拒绝经适配层映射为
-    /// `step=policy` + `code=policy_denied`，receipt 不带 execute trace 尾部。
-    #[tokio::test]
-    async fn console_s2_permission_denial_maps_to_policy_receipt() {
-        let dir = test_dir();
-        let journal = JournalRecorder::new(dir.clone());
-        let host = DenyHost { journal };
-        let fake = Arc::new(FakeProvider::new(vec![
-            ScriptedResponse::tool_calls(vec![ToolCall {
-                name: "blackboard_action_write".to_string(),
-                arguments: serde_json::json!({
-                    "action": "workspace.search_replace",
-                    "arguments": {
-                        "file_path": "a.txt",
-                        "old_string": "x",
-                        "new_string": "y",
-                    },
-                }),
-                call_id: "call-w1".to_string(),
-            }]),
-            ScriptedResponse::text("完成"),
-            ScriptedResponse::text("完成"),
-        ]));
-        let gateway: Arc<dyn ModelGateway> = fake.clone();
-        let controller = AgentLoopController::with_gateway(gateway);
-        controller
-            .run_turn(&host, "被拒动作", "RUN-S2P", MANIFEST, 0, None, None, None)
-            .await
-            .unwrap();
-
-        let r = controller.blackboard().read();
-        assert_eq!(r.actions.results.len(), 1, "{:?}", r.actions.results);
-        let receipt = &r.actions.results[0];
-        assert!(!receipt.ok);
-        let error = receipt.error.as_ref().expect("error payload");
-        assert_eq!(error["step"], "policy");
-        assert_eq!(error["code"], "policy_denied");
-        assert!(
-            error.get("trace").is_none(),
-            "policy denial must not carry the execute trace tail: {error}"
-        );
-        assert_eq!(error["upstream"]["action"], "workspace.search_replace");
-        assert_eq!(error["upstream"]["target_tool"], "search_replace");
-        // P0-C S3 前置 (2026-08-15, P1-2 定案): the receipt detail carries
-        // the structured source/code/reason — never a string-prefix guess.
-        assert_eq!(
-            error["upstream"]["detail"]["source"],
-            serde_json::json!("permission")
-        );
-        assert_eq!(
-            error["upstream"]["detail"]["code"],
-            serde_json::json!("permission_deny")
-        );
-        assert!(
-            error["upstream"]["detail"]["reason"]
-                .as_str()
-                .is_some_and(|r| r.contains("未获权限门禁放行")),
-            "reason is the neutral denial text: {error}"
-        );
-        // P0-E 第 4 项 (2026-08-17): 发放期 policy 门（权限/ACAF/模式
-        // 归一化）拒绝统一入事件面（phase=issue）。
-        let rejected = events(&dir)
-            .into_iter()
-            .filter(|e| e.event_type == EventType::ConsoleOrderRejected)
-            .collect::<Vec<_>>();
-        assert_eq!(rejected.len(), 1, "{rejected:?}");
-        assert_eq!(rejected[0].payload["order_id"], "ORD-000001");
-        assert_eq!(rejected[0].payload["phase"], "issue");
-        assert_eq!(rejected[0].payload["step"], "policy");
-        assert_eq!(rejected[0].payload["code"], "policy_denied");
 
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -19842,7 +18685,6 @@ mod tests {
             declared,
             vec![
                 "bash",
-                "blackboard_action_write",
                 "blackboard_read",
                 "compaction_whitelist_add",
                 "grep",
@@ -19893,7 +18735,6 @@ mod tests {
             declared,
             vec![
                 "bash",
-                "blackboard_action_write",
                 "blackboard_read",
                 "compaction_whitelist_add",
                 "grep",
@@ -23757,7 +22598,6 @@ mod tests {
             declared,
             vec![
                 "bash",                     // non-work tool — untouched
-                "blackboard_action_write",  // console button — always declared
                 "blackboard_read",          // storage chain complete
                 "compaction_whitelist_add", // storage chain complete
                 "read_file",                // read chain complete
@@ -23768,11 +22608,11 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
-    /// FUS-RETRIEVAL-MECH P0-B 步骤 4 前置裁决（2026-08-14 用户裁决）：
-    /// 主 Agent 不执行检索任务——`browser_read` 即使由 host registry 声明
-    /// 也从主车道模型可见投影移除（非工作工具同样移除），其余投影语义不变。
+    /// MECHANICAL-AUDIT-LAYER (2026-08-24, ADR-0010 §14.39 / 设计 §2.7)：
+    /// 主面恢复检索——`browser_read` 回到主车道模型可见投影（relay 路由
+    /// 仍派发检索子代理；候选计数/并发/模式门/ACAF 前置不变）。
     #[test]
-    fn main_lane_projection_removes_browser_read() {
+    fn main_lane_projection_restores_browser_read() {
         let base = ["read_file", "browser_read", "bash"]
             .iter()
             .map(|n| ToolDef {
@@ -23790,8 +22630,8 @@ mod tests {
         names.sort();
         assert_eq!(
             names,
-            vec!["bash", "read_file"],
-            "browser_read removed from the main-lane projection: {names:?}"
+            vec!["bash", "browser_read", "read_file"],
+            "browser_read restored to the main-lane projection: {names:?}"
         );
     }
 
@@ -23993,7 +22833,7 @@ mod tests {
         declared.sort();
         assert_eq!(
             declared,
-            vec!["bash", "blackboard_action_write"],
+            vec!["bash"],
             "unreadable workspace removes every work tool: {declared:?}"
         );
         let all_events = events(&dir);
@@ -25505,88 +24345,43 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
-    // ── FUS-RETRIEVAL-MECH P0-B step 5: final-answer citation verifier ────
+    // ── MECHANICAL-AUDIT-LAYER S2 (2026-08-24, ADR-0010 §14.39 / 设计 §5) ──
 
+    /// 设计 §2.4/§5 验收 4：终答前反例自查轮同轮注入 [MECHANICAL_AUDIT
+    /// v0.1] 独立块——报告收敛为执行事实摘要（动作/文件 delta/预算/异常
+    /// 事实），无建议；journal 以 `mechanical_audit_update` 轻量事件留痕
+    /// （plan_gate + budget + tool_result）。
     #[tokio::test]
-    async fn citation_validation_blocks_unknown_source_id_final_answer() {
+    async fn mechanical_audit_report_injected_with_final_answer_gate() {
         let dir = test_dir();
         let journal = JournalRecorder::new(dir.clone());
         let host = TestHost {
             journal,
-            tool_result: None,
-        };
-        // First text-only round is the final-answer candidate (gate fires);
-        // the post-gate answer cites a source that does not exist in this
-        // run's evidence (AGENT-DELIVERY-FLOW 2026-08-23: first failure is
-        // a bounded correction opportunity, the SAME failure again restores
-        // the hard block).
-        let gateway: Arc<dyn ModelGateway> = Arc::new(FakeProvider::new(vec![
-            ScriptedResponse::text("草稿"),
-            ScriptedResponse::text("终答 [来源: SRC-999]"),
-            ScriptedResponse::text("终答再试 [来源: SRC-999]"),
-        ]));
-        let controller = AgentLoopController::with_gateway(gateway);
-        let (response, _, _) = controller
-            .run_turn(&host, "hello", "RUN-CITE", MANIFEST, 0, None, None, None)
-            .await
-            .unwrap();
-
-        // The delivered answer is the mechanical degradation block — the
-        // model text is never committed as the final answer.
-        assert!(
-            response.starts_with("[CITATION_VALIDATION_FAILED"),
-            "expected the degradation block, got: {response}"
-        );
-        let events = events(&dir);
-        let citation = events
-            .iter()
-            .filter(|e| e.event_type == EventType::CitationValidation)
-            .last()
-            .expect("citation_validation hard-block event must be journaled");
-        assert_eq!(citation.payload["decision"], serde_json::json!("block"));
-        assert_eq!(citation.payload["attempt"], serde_json::json!(2));
-        assert_eq!(
-            citation.payload["correction_allowed"],
-            serde_json::json!(false)
-        );
-        assert_eq!(citation.payload["degraded"], serde_json::json!(true));
-        assert_eq!(citation.payload["marker_count"], serde_json::json!(1));
-        let reasons = citation.payload["reason_codes"].as_array().unwrap();
-        assert!(
-            reasons.iter().any(|r| r == "unknown_source_id"),
-            "{reasons:?}"
-        );
-        let markers = citation.payload["markers"].as_array().unwrap();
-        assert_eq!(markers[0]["binding"], serde_json::json!("ledger_source_id"));
-        assert_eq!(markers[0]["status"], serde_json::json!("failed"));
-        let _ = std::fs::remove_dir_all(&dir);
-    }
-
-    /// AGENT-DELIVERY-FLOW (2026-08-23, 设计 §2.4): 引用校验有界修正——
-    /// 第一次失败 journal `retry`（attempt=1 / correction_allowed=true）
-    /// 并把失败报告作为用户消息注入，模型重写后的最终回答重新走完整校验；
-    /// 通过后交付修正文本，不触发硬阻断。
-    #[tokio::test]
-    async fn citation_validation_allows_one_correction_then_passes() {
-        let dir = test_dir();
-        let journal = JournalRecorder::new(dir.clone());
-        let host = TestHost {
-            journal,
-            tool_result: None,
+            tool_result: Some(ToolResult {
+                output: "exit 1".to_string(),
+                exit_code: Some(1),
+                output_encoding: None,
+                structured: None,
+                ..Default::default()
+            }),
         };
         let fake = Arc::new(FakeProvider::new(vec![
+            ScriptedResponse::tool_calls(vec![plan_write_call("call-plan-1", valid_plan_json())]),
+            ScriptedResponse::tool_calls(vec![ToolCall {
+                name: "run_terminal_cmd".to_string(),
+                arguments: serde_json::json!({ "command": "dir" }),
+                call_id: "call-term-1".to_string(),
+            }]),
             ScriptedResponse::text("草稿"),
-            ScriptedResponse::text("终答 [来源: SRC-999]"),
-            // 修正轮：去掉未绑定引用标记 → 校验通过。
-            ScriptedResponse::text("终答修正（无引用标记）"),
+            ScriptedResponse::text("终答"),
         ]));
         let gateway: Arc<dyn ModelGateway> = fake.clone();
-        let controller = AgentLoopController::with_gateway(gateway);
+        let controller = stage_c_controller(gateway);
         let (response, _, _) = controller
             .run_turn(
                 &host,
-                "hello",
-                "RUN-CITE-RETRY",
+                "运行命令",
+                "RUN-AUDIT",
                 MANIFEST,
                 0,
                 None,
@@ -25595,66 +24390,250 @@ mod tests {
             )
             .await
             .unwrap();
-        assert_eq!(response, "终答修正（无引用标记）");
-        let events = events(&dir);
-        let citation = events
+        assert_eq!(response, "终答");
+
+        // 终答前中立问询轮同时携带 [MECHANICAL_AUDIT v0.1] 与
+        // [COUNTEREXAMPLE_GATE]（同轮独立块）。
+        let requests = fake.received_requests();
+        let gate_round = requests
             .iter()
-            .find(|e| e.event_type == EventType::CitationValidation)
-            .expect("citation_validation retry event must be journaled");
-        assert_eq!(citation.payload["decision"], serde_json::json!("retry"));
-        assert_eq!(citation.payload["attempt"], serde_json::json!(1));
-        assert_eq!(
-            citation.payload["correction_allowed"],
-            serde_json::json!(true)
-        );
-        assert_eq!(citation.payload["degraded"], serde_json::json!(true));
-        let reasons = citation.payload["reason_codes"].as_array().unwrap();
+            .find(|r| {
+                r.messages
+                    .iter()
+                    .any(|m| m.content.contains("[COUNTEREXAMPLE_GATE v0.1]"))
+            })
+            .expect("counterexample gate round");
+        let audit_msg = gate_round
+            .messages
+            .iter()
+            .find(|m| m.content.contains("[MECHANICAL_AUDIT v0.1]"))
+            .expect("audit report injected in the same round");
+        assert!(audit_msg.content.contains("执行事实"), "{audit_msg:?}");
+        assert!(audit_msg.content.contains("预算"), "{audit_msg:?}");
+        assert!(audit_msg.content.contains("异常事实"), "{audit_msg:?}");
         assert!(
-            reasons.iter().any(|r| r == "unknown_source_id"),
-            "{reasons:?}"
+            audit_msg.content.contains("cmd:call-term-1"),
+            "the cmd object key carries the latest result: {audit_msg:?}"
         );
-        // 修正机会的用户消息已注入（机械块，不持久化）。
         assert!(
-            fake.received_requests()
+            !audit_msg.content.contains("建议"),
+            "audit report must never carry advice: {audit_msg:?}"
+        );
+
+        // journal 留痕：plan_gate / budget / tool_result 三类机械审查事件。
+        let events = events(&dir);
+        let audit_events: Vec<&RunEvent> = events
+            .iter()
+            .filter(|e| e.event_type == EventType::MechanicalAuditUpdate)
+            .collect();
+        assert!(
+            audit_events
                 .iter()
-                .flat_map(|r| r.messages.iter())
-                .any(|m| m.role == Role::User
-                    && m.content.starts_with("[CITATION_VALIDATION_FAILED")),
-            "the failure report must be injected as a user message"
+                .any(|e| e.payload["kind"] == "plan_gate"),
+            "plan gate entry journaled: {audit_events:?}"
         );
+        assert!(
+            audit_events.iter().any(|e| e.payload["kind"] == "budget"),
+            "budget entry journaled: {audit_events:?}"
+        );
+        assert!(
+            audit_events.iter().any(|e| {
+                e.payload["kind"] == "tool_result"
+                    && e.payload["payload"]["key"] == "cmd:call-term-1"
+            }),
+            "tool_result entry journaled: {audit_events:?}"
+        );
+
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    /// 设计 §5 验收 2：第 2 轮起 direct 执行面——脚本化运行只调工作工具；
+    /// journal 中不得出现 blackboard_action_write / console_step_done /
+    /// console_return_to_console（退役工具零调用残留）。
     #[tokio::test]
-    async fn citation_validation_passes_path_line_from_main_read_evidence() {
+    async fn direct_surface_journal_never_contains_console_order_tools() {
         let dir = test_dir();
         let journal = JournalRecorder::new(dir.clone());
         let host = TestHost {
             journal,
             tool_result: Some(ToolResult {
-                output: "first line\n".to_string(),
+                output: "edited".to_string(),
                 exit_code: Some(0),
                 output_encoding: None,
                 structured: None,
                 ..Default::default()
             }),
         };
-        let read = ToolCall {
-            name: "read_file".to_string(),
-            arguments: serde_json::json!({ "path": "src/lib.rs" }),
-            call_id: "call-1".to_string(),
-        };
-        let gateway: Arc<dyn ModelGateway> = Arc::new(FakeProvider::new(vec![
-            ScriptedResponse::tool_calls(vec![read]),
+        let fake = Arc::new(FakeProvider::new(vec![
+            ScriptedResponse::tool_calls(vec![plan_write_call("call-plan-1", valid_plan_json())]),
+            ScriptedResponse::tool_calls(vec![ToolCall {
+                name: "search_replace".to_string(),
+                arguments: serde_json::json!({ "file_path": "a.txt", "old_string": "x", "new_string": "y" }),
+                call_id: "call-edit-1".to_string(),
+            }]),
             ScriptedResponse::text("草稿"),
-            ScriptedResponse::text("结论 [来源: src/lib.rs:1]"),
+            ScriptedResponse::text("终答"),
+        ]));
+        let controller = stage_c_controller(fake);
+        controller
+            .run_turn(&host, "改文件", "RUN-DIRECT", MANIFEST, 0, None, None, None)
+            .await
+            .unwrap();
+
+        let events = events(&dir);
+        let started_tools: Vec<&str> = events
+            .iter()
+            .filter(|e| e.event_type == EventType::ToolStarted)
+            .filter_map(|e| e.payload.get("tool").and_then(serde_json::Value::as_str))
+            .collect();
+        for retired in [
+            "blackboard_action_write",
+            "console_step_done",
+            "console_return_to_console",
+        ] {
+            assert!(
+                !started_tools.contains(&retired),
+                "retired console order tool {retired} must never appear in the journal: {started_tools:?}"
+            );
+        }
+        assert!(
+            started_tools.contains(&"search_replace"),
+            "the direct work tool executes: {started_tools:?}"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// 设计 §2.8/§5 验收 5（行为侧零残留）：终答携带未绑定本 run 证据的
+    /// `[来源: SRC-999]` 标记也不再机械拦截——原样交付（旧引用校验器会
+    /// block 并替换为降级块）。
+    #[tokio::test]
+    async fn final_answer_with_unbound_citation_delivered_as_is() {
+        let dir = test_dir();
+        let journal = JournalRecorder::new(dir.clone());
+        let host = TestHost {
+            journal,
+            tool_result: None,
+        };
+        let gateway: Arc<dyn ModelGateway> = Arc::new(FakeProvider::from_texts(vec![
+            "草稿",
+            "结论 [来源: SRC-999]",
         ]));
         let controller = AgentLoopController::with_gateway(gateway);
         let (response, _, _) = controller
             .run_turn(
                 &host,
-                "读文件",
-                "RUN-CITE-OK",
+                "hello",
+                "RUN-CITE-GONE",
+                MANIFEST,
+                0,
+                None,
+                None,
+                None,
+            )
+            .await
+            .unwrap();
+        assert_eq!(response, "结论 [来源: SRC-999]");
+        // 运行正常终止（无引用校验事件类型——编译期已删除该变体）。
+        let types = event_types(&dir);
+        assert_eq!(
+            types
+                .iter()
+                .filter(|t| **t == EventType::RunFinished)
+                .count(),
+            1,
+            "{types:?}"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// 设计 §2.7/§5 验收 3（声明面）：主车道投影恢复完整检索族——web_search
+    /// / web_fetch / browser_read / retrieve_project_* 全部声明（非工作工具
+    /// 不参与探针过滤）。
+    #[test]
+    fn main_lane_projection_declares_retrieval_family() {
+        let base = [
+            "read_file",
+            "web_search",
+            "web_fetch",
+            "browser_read",
+            "retrieve_project_docs",
+            "bash",
+        ]
+        .iter()
+        .map(|n| ToolDef {
+            name: n.to_string(),
+            description: format!("tool {n}"),
+            parameters: serde_json::json!({}),
+        })
+        .collect::<Vec<_>>();
+        let snapshot = crate::tool_probe::ToolProbeSnapshot {
+            complete: vec!["read_file".to_string()],
+            incomplete: vec![],
+        };
+        let projected = AgentLoopController::project_main_agent_tool_defs(&base, &snapshot);
+        let names: Vec<&str> = projected.iter().map(|t| t.name.as_str()).collect();
+        for tool in [
+            "web_search",
+            "web_fetch",
+            "browser_read",
+            "retrieve_project_docs",
+        ] {
+            assert!(
+                names.contains(&tool),
+                "retrieval tool {tool} must be declared on the direct surface: {names:?}"
+            );
+        }
+    }
+
+    // ── MECHANICAL-AUDIT-LAYER 审查处理 (2026-08-24, ADR-0010 §14.39):
+    //    direct 面 read-anchor 写前核证 + 退役工具调用面窄门 ────────────
+
+    /// P1-1 (审查处理): direct 面 `search_replace` 携带错误 `expected_anchor`
+    /// → 执行前机械拒绝（content_anchor_mismatch、无 ToolStarted、零编辑），
+    /// 审计层记录锚点拒单异常事实。
+    #[tokio::test]
+    async fn direct_search_replace_wrong_anchor_refuses_without_execution() {
+        let dir = test_dir();
+        let journal = JournalRecorder::new(dir.clone());
+        let host = TestHost {
+            journal: journal.clone(),
+            tool_result: Some(ok_result()),
+        };
+        let target = host.session_cwd().join("anchor_target.txt");
+        std::fs::write(&target, "current").unwrap();
+        let meta = std::fs::metadata(&target).unwrap();
+        let wrong_sha = "0".repeat(64);
+        let fake = Arc::new(FakeProvider::new(vec![
+            ScriptedResponse::tool_calls(vec![plan_write_call("call-plan-1", valid_plan_json())]),
+            ScriptedResponse::tool_calls(vec![ToolCall {
+                name: "search_replace".to_string(),
+                arguments: serde_json::json!({
+                    "file_path": "anchor_target.txt",
+                    "old_string": "current",
+                    "new_string": "edited",
+                    "expected_anchor": {
+                        "size": meta.len(),
+                        "mtime": meta
+                            .modified()
+                            .ok()
+                            .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                            .map(|d| d.as_secs()),
+                        "sha256": wrong_sha,
+                    },
+                }),
+                call_id: "call-edit-1".to_string(),
+            }]),
+            ScriptedResponse::text("草稿"),
+            ScriptedResponse::text("终答"),
+        ]));
+        let controller = stage_c_controller(fake);
+        controller
+            .run_turn(
+                &host,
+                "改文件",
+                "RUN-ANCHOR-DIRECT",
                 MANIFEST,
                 0,
                 None,
@@ -25664,16 +24643,327 @@ mod tests {
             .await
             .unwrap();
 
-        // The path:line marker binds to the main lane's own read evidence —
-        // the final answer passes and no citation event is journaled.
-        assert_eq!(response, "结论 [来源: src/lib.rs:1]");
+        // 零编辑：文件保持原内容，host 工具未被调用。
+        assert_eq!(std::fs::read_to_string(&target).unwrap(), "current");
+        let r = controller.blackboard().read();
+        assert!(
+            r.tool_actions.iter().all(|t| t.tool != "search_replace"),
+            "{:?}",
+            r.tool_actions
+        );
+        // 事件面：ToolCompleted 拒绝（content_anchor_mismatch），无 ToolStarted。
         let events = events(&dir);
+        let refused: Vec<&RunEvent> = events
+            .iter()
+            .filter(|e| e.event_type == EventType::ToolCompleted)
+            .filter(|e| e.payload.get("tool").and_then(|t| t.as_str()) == Some("search_replace"))
+            .collect();
+        assert_eq!(refused.len(), 1, "{refused:?}");
+        assert_eq!(refused[0].payload["exit_code"].as_u64(), Some(1));
+        assert_eq!(
+            refused[0].payload["error"].as_str(),
+            Some("content_anchor_mismatch")
+        );
+        assert!(
+            !events.iter().any(|e| e.event_type == EventType::ToolStarted
+                && e.payload.get("tool").and_then(|t| t.as_str()) == Some("search_replace")),
+            "no ToolStarted for the refused edit"
+        );
+        // 审计层：锚点拒单异常事实（结构化 error 透传）。
+        let audit: Vec<&RunEvent> = events
+            .iter()
+            .filter(|e| e.event_type == EventType::MechanicalAuditUpdate)
+            .filter(|e| e.payload["kind"] == "tool_result")
+            .filter(|e| {
+                e.payload["payload"]["key"]
+                    .as_str()
+                    .unwrap_or_default()
+                    .starts_with("file:anchor_target.txt")
+            })
+            .collect();
+        assert!(
+            !audit.is_empty(),
+            "anchor refusal must be audited: {events:?}"
+        );
+        assert_eq!(
+            audit[0].payload["payload"]["anomaly"].as_str(),
+            Some("content_anchor_mismatch")
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// P1-1 (审查处理): direct 面 `search_replace` 携带正确锚点 / 不带锚点
+    /// → 照常执行（核证通过或无核证要求）；目标不存在（新建路径）携带锚点
+    /// → 跳过核证照常执行。
+    #[tokio::test]
+    async fn direct_search_replace_anchor_match_or_missing_target_executes() {
+        let dir = test_dir();
+        let journal = JournalRecorder::new(dir.clone());
+        let host = TestHost {
+            journal: journal.clone(),
+            tool_result: Some(ok_result()),
+        };
+        let target = host.session_cwd().join("anchor_match.txt");
+        std::fs::write(&target, "current").unwrap();
+        let bytes = std::fs::read(&target).unwrap();
+        let meta = std::fs::metadata(&target).unwrap();
+        let sha = sha256_hex(&bytes);
+        let fake = Arc::new(FakeProvider::new(vec![
+            ScriptedResponse::tool_calls(vec![plan_write_call("call-plan-1", valid_plan_json())]),
+            // 同批三次调用：正确锚点 / 无锚点 / 目标不存在（新建路径）。
+            ScriptedResponse::tool_calls(vec![
+                ToolCall {
+                    name: "search_replace".to_string(),
+                    arguments: serde_json::json!({
+                        "file_path": "anchor_match.txt",
+                        "old_string": "current",
+                        "new_string": "edited",
+                        "expected_anchor": {
+                            "size": meta.len(),
+                            "mtime": meta
+                                .modified()
+                                .ok()
+                                .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                                .map(|d| d.as_secs()),
+                            "sha256": sha,
+                        },
+                    }),
+                    call_id: "call-edit-match".to_string(),
+                },
+                ToolCall {
+                    name: "search_replace".to_string(),
+                    arguments: serde_json::json!({
+                        "file_path": "anchor_match.txt",
+                        "old_string": "current",
+                        "new_string": "edited",
+                    }),
+                    call_id: "call-edit-noanchor".to_string(),
+                },
+                ToolCall {
+                    name: "search_replace".to_string(),
+                    arguments: serde_json::json!({
+                        "file_path": "brand_new.txt",
+                        "old_string": "",
+                        "new_string": "content",
+                        "expected_anchor": {
+                            "size": 0,
+                            "sha256": "0".repeat(64),
+                        },
+                    }),
+                    call_id: "call-edit-new".to_string(),
+                },
+            ]),
+            ScriptedResponse::text("草稿"),
+            ScriptedResponse::text("终答"),
+        ]));
+        let controller = stage_c_controller(fake);
+        controller
+            .run_turn(
+                &host,
+                "改文件",
+                "RUN-ANCHOR-OK",
+                MANIFEST,
+                0,
+                None,
+                None,
+                None,
+            )
+            .await
+            .unwrap();
+
+        let events = events(&dir);
+        let completed: Vec<&RunEvent> = events
+            .iter()
+            .filter(|e| e.event_type == EventType::ToolCompleted)
+            .filter(|e| e.payload.get("tool").and_then(|t| t.as_str()) == Some("search_replace"))
+            .collect();
+        assert_eq!(completed.len(), 3, "{completed:?}");
+        assert!(
+            completed
+                .iter()
+                .all(|e| e.payload["exit_code"].as_u64() == Some(0)),
+            "{completed:?}"
+        );
+        assert!(
+            !events.iter().any(|e| {
+                e.event_type == EventType::ToolCompleted
+                    && e.payload.get("error").and_then(|v| v.as_str())
+                        == Some("content_anchor_mismatch")
+            }),
+            "no anchor refusal on the matching path"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// P1-2 (审查处理): 三个退役 console 订单工具（blackboard_action_write /
+    /// console_step_done / console_return_to_console）在调用面被机械拒绝——
+    /// 零 ToolStarted、零 console_order_written 事件、动作栏无订单残留、
+    /// run 正常完成。
+    #[tokio::test]
+    async fn retired_console_tools_refused_with_zero_side_effects() {
+        let dir = test_dir();
+        let journal = JournalRecorder::new(dir.clone());
+        let host = TestHost {
+            journal,
+            tool_result: Some(ok_result()),
+        };
+        let fake = Arc::new(FakeProvider::new(vec![
+            ScriptedResponse::tool_calls(vec![plan_write_call("call-plan-1", valid_plan_json())]),
+            ScriptedResponse::tool_calls(vec![
+                ToolCall {
+                    name: "blackboard_action_write".to_string(),
+                    arguments: serde_json::json!({
+                        "action": "workspace.search_replace",
+                        "step_id": "s1",
+                        "arguments": {"file_path": "a.txt", "old_string": "v1", "new_string": "v2"},
+                    }),
+                    call_id: "call-retired-1".to_string(),
+                },
+                ToolCall {
+                    name: "console_step_done".to_string(),
+                    arguments: serde_json::json!({
+                        "step_id": "s1",
+                        "transition_id": "t1",
+                        "trace_id": "tr1",
+                    }),
+                    call_id: "call-retired-2".to_string(),
+                },
+                ToolCall {
+                    name: "console_return_to_console".to_string(),
+                    arguments: serde_json::json!({}),
+                    call_id: "call-retired-3".to_string(),
+                },
+            ]),
+            ScriptedResponse::text("草稿"),
+            ScriptedResponse::text("终答"),
+        ]));
+        let controller = stage_c_controller(fake);
+        controller
+            .run_turn(
+                &host,
+                "幻觉调用退役工具",
+                "RUN-RETIRED",
+                MANIFEST,
+                0,
+                None,
+                None,
+                None,
+            )
+            .await
+            .unwrap();
+
+        let events = events(&dir);
+        for name in [
+            "blackboard_action_write",
+            "console_step_done",
+            "console_return_to_console",
+        ] {
+            let completed: Vec<&RunEvent> = events
+                .iter()
+                .filter(|e| e.event_type == EventType::ToolCompleted)
+                .filter(|e| e.payload.get("tool").and_then(|t| t.as_str()) == Some(name))
+                .collect();
+            assert_eq!(completed.len(), 1, "{name}: {completed:?}");
+            assert_eq!(completed[0].payload["exit_code"].as_u64(), Some(1));
+            assert_eq!(
+                completed[0].payload["error"].as_str(),
+                Some("retired_tool_denied"),
+                "{name}"
+            );
+            assert!(
+                !events.iter().any(|e| e.event_type == EventType::ToolStarted
+                    && e.payload.get("tool").and_then(|t| t.as_str()) == Some(name)),
+                "{name} must never reach ToolStarted"
+            );
+        }
+        // 零订单残留：没有 console_order_written 事件，动作栏无 pending 订单。
         assert!(
             !events
                 .iter()
-                .any(|e| e.event_type == EventType::CitationValidation),
-            "a passing final answer must journal nothing"
+                .any(|e| e.event_type == EventType::ConsoleOrderWritten),
+            "retired tools must not produce console orders"
         );
+        let r = controller.blackboard().read();
+        assert!(r.actions.order.is_none(), "{:?}", r.actions.order);
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// 设计 §2.3/§2.7/§5 验收 3（派发面）：主车道调用 web_search → relay
+    /// 派发检索子代理（ToolStarted target=external_retrieval），子代理车道
+    /// 自行执行检索工具（TestHost NotFound 证明到达 host 工具集）。
+    #[tokio::test]
+    async fn main_lane_web_search_dispatches_to_retrieval_subagent() {
+        let dir = test_dir();
+        let journal = JournalRecorder::new(dir.clone());
+        let host = TestHost {
+            journal,
+            tool_result: None,
+        };
+        let gateway: Arc<dyn ModelGateway> = Arc::new(FakeProvider::new(vec![
+            // 主车道第 1 轮：直接调 web_search。
+            ScriptedResponse::tool_calls(vec![tool_call("web_search", "call-w1")]),
+            // 子代理车道第 1 轮：自行执行 web_search（lane self-execution）。
+            ScriptedResponse::tool_calls(vec![tool_call("web_search", "call-w2")]),
+            // 子代理车道第 2 轮：形成检索结果并关闭。
+            ScriptedResponse::text("检索完成"),
+            // 主车道：终答前反例自查轮 + 终答。
+            ScriptedResponse::text("草稿"),
+            ScriptedResponse::text("终答"),
+        ]));
+        let controller = with_retrieval_enabled(AgentLoopController::with_gateway(gateway));
+        let (response, _, _) = controller
+            .run_turn(
+                &host,
+                "查一下",
+                "RUN-RETRIEVAL-MAIN",
+                MANIFEST,
+                0,
+                None,
+                None,
+                None,
+            )
+            .await
+            .unwrap();
+        assert_eq!(response, "终答");
+
+        let events = events(&dir);
+        // 主车道 web_search 派发到 external_retrieval（relay 路由）。
+        let dispatch = events
+            .iter()
+            .find(|e| {
+                e.event_type == EventType::ToolStarted
+                    && e.payload.get("tool").and_then(serde_json::Value::as_str)
+                        == Some("web_search")
+                    && e.payload.get("target").and_then(serde_json::Value::as_str)
+                        == Some("external_retrieval")
+            })
+            .expect("web_search dispatched to the external retrieval subagent");
+        assert_eq!(dispatch.payload["call_id"], serde_json::json!("call-w1"));
+        // 子代理车道实际执行了 web_search（TestHost NotFound 证明到达
+        // host 工具集；车道自执行事件不带 target 字段）。
+        let subagent_call = events
+            .iter()
+            .find(|e| {
+                e.event_type == EventType::ToolCompleted
+                    && e.payload.get("tool").and_then(serde_json::Value::as_str)
+                        == Some("web_search")
+                    && e.payload.get("call_id").and_then(serde_json::Value::as_str)
+                        == Some("call-w2")
+            })
+            .expect("subagent lane self-executes web_search through the host");
+        let err = subagent_call
+            .payload
+            .get("error")
+            .and_then(serde_json::Value::as_str)
+            .expect("host failure");
+        assert!(
+            err.contains("test host has no tool result"),
+            "web_search reached the host toolset: {err}"
+        );
+
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -27281,30 +26571,13 @@ mod tests {
             .with_console_default_enabled(true)
     }
 
-    /// 订单写单调用（可选 step_id 绑定计划步骤）。
-    fn action_write_call(
-        call_id: &str,
-        action: &str,
-        step_id: Option<&str>,
-        arguments: serde_json::Value,
-    ) -> ToolCall {
-        let mut args = serde_json::Map::new();
-        args.insert("action".to_string(), serde_json::json!(action));
-        if let Some(step_id) = step_id {
-            args.insert("step_id".to_string(), serde_json::json!(step_id));
-        }
-        args.insert("arguments".to_string(), arguments);
-        ToolCall {
-            name: "blackboard_action_write".to_string(),
-            arguments: serde_json::Value::Object(args),
-            call_id: call_id.to_string(),
-        }
-    }
-
-    /// 验收点 6：console 默认面——主车道模型面无执行工具（探针 + 投影
-    /// 断言）；写面=plan_write+action_write，读面=黑板+只读核查。
+    /// MECHANICAL-AUDIT-LAYER (2026-08-24, ADR-0010 §14.39 / 设计 §2.1)：
+    /// 第 2 轮起 direct 执行面——首轮仍只暴露 blackboard_read+plan_write；
+    /// 第 2 轮起退役 console 订单控制工具（blackboard_action_write /
+    /// console_step_done / console_return_to_console 不再声明），工作工具
+    /// 按探针面直接暴露（本 TestHost 探针仅完整链工具可见，见投影单测）。
     #[tokio::test]
-    async fn console_default_surface_hides_execution_tools() {
+    async fn direct_surface_retires_console_order_tools() {
         let dir = test_dir();
         let host = TestHost {
             journal: JournalRecorder::new(dir.clone()),
@@ -27344,531 +26617,21 @@ mod tests {
             vec!["blackboard_read", "plan_write"],
             "first round must expose only the plan-round surface"
         );
-        let console_tools: Vec<String> = received[1].tools.iter().map(|t| t.name.clone()).collect();
-        let allowed: Vec<&str> = vec![
-            "blackboard_read",
-            "plan_write",
+        let direct_tools: Vec<String> = received[1].tools.iter().map(|t| t.name.clone()).collect();
+        assert!(
+            direct_tools.iter().any(|t| t == "submit"),
+            "submit retained on the direct surface: {direct_tools:?}"
+        );
+        for tool in [
             "blackboard_action_write",
             "console_step_done",
             "console_return_to_console",
-            "submit",
-        ];
-        assert!(
-            console_tools.iter().all(|t| allowed.contains(&t.as_str())),
-            "console surface must not leak execution tools: {console_tools:?}"
-        );
-        for tool in [
-            "run_terminal_cmd",
-            "search_replace",
-            "run_tests",
-            "todo_write",
-            "use_tool",
         ] {
             assert!(
-                !console_tools.iter().any(|t| t == tool),
-                "execution tool {tool} must be hidden in console mode: {console_tools:?}"
+                !direct_tools.iter().any(|t| t == tool),
+                "retired console order tool {tool} must not be declared: {direct_tools:?}"
             );
         }
-        let _ = std::fs::remove_dir_all(&dir);
-    }
-
-    /// 验收点 3/11：步骤门——上一步未 done 时下一步订单机械拒绝
-    /// （step_not_done）；绑定当前步骤的订单发放、成功置 done 后放行
-    /// 下一步。
-    #[tokio::test]
-    async fn console_step_gate_refuses_wrong_step_then_progresses() {
-        let dir = test_dir();
-        let host = TestHost {
-            journal: JournalRecorder::new(dir.clone()),
-            tool_result: Some(ToolResult {
-                output: "ok".to_string(),
-                exit_code: Some(0),
-                output_encoding: None,
-                structured: None,
-                ..Default::default()
-            }),
-        };
-        let fake = Arc::new(FakeProvider::new(vec![
-            ScriptedResponse::tool_calls(vec![plan_write_call("call-plan-1", valid_plan_json())]),
-            ScriptedResponse::tool_calls(vec![action_write_call(
-                "call-w-s2",
-                "workspace.read_file",
-                Some("s2"),
-                serde_json::json!({"target_file": "a.txt"}),
-            )]),
-            ScriptedResponse::tool_calls(vec![action_write_call(
-                "call-w-s1",
-                "workspace.read_file",
-                Some("s1"),
-                serde_json::json!({"target_file": "a.txt"}),
-            )]),
-            ScriptedResponse::tool_calls(vec![action_write_call(
-                "call-w-s2b",
-                "workspace.read_file",
-                Some("deliver"),
-                serde_json::json!({"target_file": "b.txt"}),
-            )]),
-            ScriptedResponse::text("完成"),
-            ScriptedResponse::text("完成"),
-        ]));
-        let gateway: Arc<dyn ModelGateway> = fake.clone();
-        let controller = stage_c_controller(gateway);
-        controller
-            .run_turn(
-                &host,
-                "修复缓存回归",
-                "RUN-SG",
-                MANIFEST,
-                0,
-                None,
-                None,
-                None,
-            )
-            .await
-            .unwrap();
-
-        {
-            let r = controller.blackboard().read();
-            assert_eq!(r.plan.steps.len(), 2);
-            assert!(
-                r.plan.steps[0].status.is_done(),
-                "s1 must be done: {:?}",
-                r.plan.steps[0].status
-            );
-            assert!(
-                matches!(
-                    r.plan.steps[1].status,
-                    crate::blackboard::StepStatus::InProgress
-                ),
-                "the terminal step must NOT auto-advance on an ordinary order \
-                 receipt (submit-only): {:?}",
-                r.plan.steps[1].status
-            );
-            let refused = r
-                .actions
-                .results
-                .iter()
-                .filter(|res| !res.ok)
-                .filter(|res| {
-                    res.error
-                        .as_ref()
-                        .and_then(|e| e.get("code"))
-                        .and_then(serde_json::Value::as_str)
-                        == Some("step_not_done")
-                })
-                .count();
-            assert_eq!(refused, 1, "the out-of-order order must be refused once");
-        }
-        let order_written = events(&dir)
-            .into_iter()
-            .filter(|e| e.event_type == EventType::ConsoleOrderWritten)
-            .collect::<Vec<_>>();
-        assert_eq!(order_written.len(), 3, "three orders written");
-        assert_eq!(
-            order_written[0].payload["step_id"].as_str(),
-            Some("s2"),
-            "order identity + step binding ride the console_order_written event"
-        );
-        // P0-E 第 4 项 (2026-08-17): 步骤门拒绝统一入事件面——发放前
-        // step_not_done 拒绝带结构化拒绝码（此前只进结果栏 receipt）。
-        let rejected = events(&dir)
-            .into_iter()
-            .filter(|e| e.event_type == EventType::ConsoleOrderRejected)
-            .collect::<Vec<_>>();
-        assert_eq!(rejected.len(), 1, "{rejected:?}");
-        assert_eq!(rejected[0].payload["phase"], "pre_issue");
-        assert_eq!(rejected[0].payload["step"], "protocol");
-        assert_eq!(rejected[0].payload["code"], "step_not_done");
-        let _ = std::fs::remove_dir_all(&dir);
-    }
-
-    /// 验收点 8/9：3 连败助理层故障面 → 显式询问轮（无工具）→ switch →
-    /// console_mode_transition + gate_log；direct 直接动作事件携带
-    /// transition_id，权限/ACAF/模式门照常生效。
-    #[tokio::test]
-    async fn console_fault_streak_inquiry_switch_and_direct_stamp() {
-        let dir = test_dir();
-        // exit_code=None → 机械故障（无业务结果）→ 故障面递增。
-        let host = TestHost {
-            journal: JournalRecorder::new(dir.clone()),
-            tool_result: Some(ToolResult {
-                output: "host failed".to_string(),
-                exit_code: None,
-                output_encoding: None,
-                structured: None,
-                ..Default::default()
-            }),
-        };
-        let fake = Arc::new(FakeProvider::new(vec![
-            ScriptedResponse::tool_calls(vec![plan_write_call("call-plan-1", valid_plan_json())]),
-            ScriptedResponse::tool_calls(vec![action_write_call(
-                "call-f1",
-                "workspace.read_file",
-                Some("s1"),
-                serde_json::json!({"target_file": "a.txt"}),
-            )]),
-            ScriptedResponse::tool_calls(vec![action_write_call(
-                "call-f2",
-                "workspace.read_file",
-                Some("s1"),
-                serde_json::json!({"target_file": "a.txt"}),
-            )]),
-            ScriptedResponse::tool_calls(vec![action_write_call(
-                "call-f3",
-                "workspace.read_file",
-                Some("s1"),
-                serde_json::json!({"target_file": "a.txt"}),
-            )]),
-            ScriptedResponse::text(r#"{"decision":"switch","reason":"assistant broken"}"#),
-            ScriptedResponse::tool_calls(vec![ToolCall {
-                name: "read_file".to_string(),
-                arguments: serde_json::json!({"path": "a.txt"}),
-                call_id: "call-direct-1".to_string(),
-            }]),
-            ScriptedResponse::text("完成"),
-            ScriptedResponse::text("完成"),
-        ]));
-        let gateway: Arc<dyn ModelGateway> = fake.clone();
-        let controller = stage_c_controller(gateway);
-        controller
-            .run_turn(
-                &host,
-                "修复缓存回归",
-                "RUN-CSTR",
-                MANIFEST,
-                0,
-                None,
-                None,
-                None,
-            )
-            .await
-            .unwrap();
-
-        let transitions: Vec<RunEvent> = events(&dir)
-            .into_iter()
-            .filter(|e| e.event_type == EventType::ConsoleModeTransition)
-            .collect();
-        assert_eq!(transitions.len(), 1, "one switch transition");
-        let payload = &transitions[0].payload;
-        assert_eq!(payload["from"].as_str(), Some("console"));
-        assert_eq!(payload["to"].as_str(), Some("direct"));
-        assert_eq!(payload["model_decision"].as_str(), Some("switch"));
-        assert_eq!(payload["streak"].as_u64(), Some(3));
-        assert_eq!(payload["order_ids"].as_array().map(|a| a.len()), Some(3));
-        let transition_id = payload["transition_id"].as_str().unwrap().to_string();
-        {
-            let r = controller.blackboard().read();
-            assert!(
-                r.gate_log
-                    .gate_decisions
-                    .iter()
-                    .any(|g| g.contains("console_mode: console → direct")),
-                "gate_log must carry the transition: {:?}",
-                r.gate_log.gate_decisions
-            );
-        }
-        assert_eq!(
-            controller.console_mode(),
-            crate::console_mode::ConsoleMode::Direct,
-            "run-level mode must be direct after the switch"
-        );
-        let direct_completed = events(&dir)
-            .into_iter()
-            .filter(|e| e.event_type == EventType::ToolCompleted)
-            .find(|e| {
-                e.payload.get("tool").and_then(serde_json::Value::as_str) == Some("read_file")
-                    && e.payload.get("call_id").and_then(serde_json::Value::as_str)
-                        == Some("call-direct-1")
-            })
-            .expect("direct read_file completion");
-        assert_eq!(
-            direct_completed.payload["console_mode"].as_str(),
-            Some("direct")
-        );
-        assert_eq!(
-            direct_completed.payload["transition_id"].as_str(),
-            Some(transition_id.as_str())
-        );
-        assert!(
-            direct_completed.payload["trace_id"].is_string(),
-            "direct ToolCompleted must carry the console trace id"
-        );
-        let _ = std::fs::remove_dir_all(&dir);
-    }
-
-    /// 验收点 10：stay 后模式复位留痕，本 run 不再自动询问；后续失败
-    /// 不重复触发询问轮。
-    #[tokio::test]
-    async fn console_stay_resets_and_never_reasks() {
-        let dir = test_dir();
-        let host = TestHost {
-            journal: JournalRecorder::new(dir.clone()),
-            tool_result: Some(ToolResult {
-                output: "host failed".to_string(),
-                exit_code: None,
-                output_encoding: None,
-                structured: None,
-                ..Default::default()
-            }),
-        };
-        let fake = Arc::new(FakeProvider::new(vec![
-            ScriptedResponse::tool_calls(vec![plan_write_call("call-plan-1", valid_plan_json())]),
-            ScriptedResponse::tool_calls(vec![action_write_call(
-                "call-f1",
-                "workspace.read_file",
-                Some("s1"),
-                serde_json::json!({"target_file": "a.txt"}),
-            )]),
-            ScriptedResponse::tool_calls(vec![action_write_call(
-                "call-f2",
-                "workspace.read_file",
-                Some("s1"),
-                serde_json::json!({"target_file": "a.txt"}),
-            )]),
-            ScriptedResponse::tool_calls(vec![action_write_call(
-                "call-f3",
-                "workspace.read_file",
-                Some("s1"),
-                serde_json::json!({"target_file": "a.txt"}),
-            )]),
-            ScriptedResponse::text(r#"{"decision":"stay","reason":"keep console"}"#),
-            ScriptedResponse::tool_calls(vec![action_write_call(
-                "call-f4",
-                "workspace.read_file",
-                Some("s1"),
-                serde_json::json!({"target_file": "a.txt"}),
-            )]),
-            ScriptedResponse::text("完成"),
-            ScriptedResponse::text("完成"),
-        ]));
-        let gateway: Arc<dyn ModelGateway> = fake.clone();
-        let controller = stage_c_controller(gateway);
-        controller
-            .run_turn(
-                &host,
-                "修复缓存回归",
-                "RUN-CSTAY",
-                MANIFEST,
-                0,
-                None,
-                None,
-                None,
-            )
-            .await
-            .unwrap();
-
-        let transitions: Vec<RunEvent> = events(&dir)
-            .into_iter()
-            .filter(|e| e.event_type == EventType::ConsoleModeTransition)
-            .collect();
-        assert_eq!(transitions.len(), 1, "only the stay decision");
-        assert_eq!(transitions[0].payload["to"].as_str(), Some("console"));
-        assert_eq!(
-            transitions[0].payload["model_decision"].as_str(),
-            Some("stay")
-        );
-        assert_eq!(
-            controller.console_mode(),
-            crate::console_mode::ConsoleMode::Console,
-            "stay keeps console mode"
-        );
-        let _ = std::fs::remove_dir_all(&dir);
-    }
-
-    /// 验收点 10/11：console_step_done 证据门——坏证据拒绝；direct →
-    /// console_return_to_console 单向返回（事件 + gate_log）。
-    #[tokio::test]
-    async fn console_step_done_evidence_gate_and_return() {
-        let dir = test_dir();
-        // 三个订单失败（exit_code=None → 故障面），direct read_file 成功。
-        let host = QueueHost {
-            journal: JournalRecorder::new(dir.clone()),
-            results: Mutex::new(
-                vec![
-                    // exit_code=None（Ok）→ 机械故障面（无业务结果）。
-                    Ok(fail_result()),
-                    Ok(fail_result()),
-                    Ok(fail_result()),
-                    Ok(ok_result()),
-                ]
-                .into(),
-            ),
-        };
-        let fake = Arc::new(FakeProvider::new(vec![
-            ScriptedResponse::tool_calls(vec![plan_write_call("call-plan-1", valid_plan_json())]),
-            ScriptedResponse::tool_calls(vec![action_write_call(
-                "call-f1",
-                "workspace.read_file",
-                Some("s1"),
-                serde_json::json!({"target_file": "a.txt"}),
-            )]),
-            ScriptedResponse::tool_calls(vec![action_write_call(
-                "call-f2",
-                "workspace.read_file",
-                Some("s1"),
-                serde_json::json!({"target_file": "a.txt"}),
-            )]),
-            ScriptedResponse::tool_calls(vec![action_write_call(
-                "call-f3",
-                "workspace.read_file",
-                Some("s1"),
-                serde_json::json!({"target_file": "a.txt"}),
-            )]),
-            ScriptedResponse::text(r#"{"decision":"switch","reason":"broken"}"#),
-            ScriptedResponse::tool_calls(vec![ToolCall {
-                name: "read_file".to_string(),
-                arguments: serde_json::json!({"path": "a.txt"}),
-                call_id: "call-direct-1".to_string(),
-            }]),
-            ScriptedResponse::tool_calls(vec![ToolCall {
-                name: "console_step_done".to_string(),
-                arguments: serde_json::json!({
-                    "step_id": "s1",
-                    "transition_id": "WRONG",
-                    "trace_id": "t999999",
-                }),
-                call_id: "call-sd-bad".to_string(),
-            }]),
-            ScriptedResponse::tool_calls(vec![ToolCall {
-                name: "console_return_to_console".to_string(),
-                arguments: serde_json::json!({}),
-                call_id: "call-return-1".to_string(),
-            }]),
-            ScriptedResponse::text("完成"),
-            ScriptedResponse::text("完成"),
-        ]));
-        let gateway: Arc<dyn ModelGateway> = fake.clone();
-        let controller = stage_c_controller(gateway);
-        controller
-            .run_turn(
-                &host,
-                "修复缓存回归",
-                "RUN-CSDG",
-                MANIFEST,
-                0,
-                None,
-                None,
-                None,
-            )
-            .await
-            .unwrap();
-
-        let transitions: Vec<RunEvent> = events(&dir)
-            .into_iter()
-            .filter(|e| e.event_type == EventType::ConsoleModeTransition)
-            .collect();
-        assert_eq!(transitions.len(), 2, "switch + return");
-        assert_eq!(transitions[1].payload["from"].as_str(), Some("direct"));
-        assert_eq!(transitions[1].payload["to"].as_str(), Some("console"));
-        assert_eq!(
-            transitions[1].payload["model_decision"].as_str(),
-            Some("return_to_console")
-        );
-        assert_eq!(
-            controller.console_mode(),
-            crate::console_mode::ConsoleMode::Console,
-            "return resets the mode"
-        );
-        let step_done_completed = events(&dir)
-            .into_iter()
-            .filter(|e| e.event_type == EventType::ToolCompleted)
-            .filter(|e| {
-                e.payload.get("tool").and_then(serde_json::Value::as_str)
-                    == Some("console_step_done")
-            })
-            .collect::<Vec<_>>();
-        assert_eq!(step_done_completed.len(), 1);
-        assert_eq!(
-            step_done_completed[0].payload["exit_code"].as_u64(),
-            Some(1),
-            "bad evidence must be refused"
-        );
-        assert_eq!(
-            step_done_completed[0].payload["error"].as_str(),
-            Some("console_step_done_bad_transition")
-        );
-        let _ = std::fs::remove_dir_all(&dir);
-    }
-
-    /// 验收点 11（正向）：console_step_done 证据全部匹配（transition_id 属
-    /// 本 run direct 切换、trace_id 对应已发生的 direct ToolCompleted）→
-    /// 步骤置 done(direct evidence)。
-    #[tokio::test]
-    async fn console_step_done_positive_evidence_marks_done() {
-        let dir = test_dir();
-        let controller = stage_c_controller(Arc::new(FakeProvider::new(Vec::new())));
-        {
-            let mut w = controller.blackboard().write();
-            w.plan.plan_id = Some("plan-1".to_string());
-            w.plan.plan_epoch = 1;
-            // AGENT-DELIVERY-FLOW (2026-08-23): the plan ends with a fixed
-            // terminal step — `console_step_done` targets the NON-terminal
-            // in-progress step s1 (the terminal step is submit-only).
-            w.plan.steps.push(crate::blackboard::PlanStep {
-                id: "s1".to_string(),
-                goal: "g".to_string(),
-                actions: Vec::new(),
-                acceptance: "a".to_string(),
-                evidence: Vec::new(),
-                status: crate::blackboard::StepStatus::InProgress,
-            });
-            w.plan.steps.push(crate::blackboard::PlanStep {
-                id: "deliver".to_string(),
-                goal: "递交".to_string(),
-                actions: Vec::new(),
-                acceptance: "a".to_string(),
-                evidence: Vec::new(),
-                status: crate::blackboard::StepStatus::Pending,
-            });
-        }
-        let mut writer = discard_event_writer("RUN-SDP");
-        let transition_id = controller
-            .switch_console_to_direct(&mut writer, 0, None)
-            .await
-            .unwrap();
-        let (stamp, trace) = controller.console_direct_begin("call-d1").unwrap();
-        controller.console_direct_end(&stamp, trace, "read_file", true, None);
-        let host = TestHost {
-            journal: JournalRecorder::new(dir.clone()),
-            tool_result: None,
-        };
-        let tc = ToolCall {
-            name: "console_step_done".to_string(),
-            arguments: serde_json::json!({
-                "step_id": "s1",
-                "transition_id": transition_id,
-                "trace_id": stamp.trace_id,
-            }),
-            call_id: "sd-ok".to_string(),
-        };
-        let mut messages = Vec::new();
-        let mut writer2 = discard_event_writer("RUN-SDP2");
-        let (result, _) = controller
-            .run_host_tool_with_plan_gate(
-                &host,
-                &mut writer2,
-                &tc,
-                "prompt",
-                orz_assurance::gates::ipg::WorkspaceTrust::NotObserved,
-                &mut messages,
-                1,
-                None,
-                None,
-                None,
-                true,
-                true,
-                None,
-                None,
-            )
-            .await
-            .unwrap();
-        assert_eq!(result.exit_code, Some(0));
-        let r = controller.blackboard().read();
-        assert!(
-            r.plan.steps[0].status.is_done(),
-            "step must be done after valid evidence: {:?}",
-            r.plan.steps[0].status
-        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -27897,18 +26660,18 @@ mod tests {
         };
         let fake = Arc::new(FakeProvider::new(vec![
             ScriptedResponse::tool_calls(vec![plan_write_call("call-plan-1", valid_plan_json())]),
-            ScriptedResponse::tool_calls(vec![action_write_call(
-                "call-w-s1",
-                "workspace.read_file",
-                Some("s1"),
-                serde_json::json!({"target_file": "a.txt"}),
-            )]),
-            ScriptedResponse::tool_calls(vec![action_write_call(
-                "call-w-deliver",
-                "workspace.read_file",
-                Some("deliver"),
-                serde_json::json!({"target_file": "b.txt"}),
-            )]),
+            // MECHANICAL-AUDIT-LAYER 审查处理 (2026-08-24): direct 面——
+            // 工作模拟用直接只读调用（订单层已退役）。
+            ScriptedResponse::tool_calls(vec![ToolCall {
+                name: "read_file".to_string(),
+                arguments: serde_json::json!({ "target_file": "a.txt" }),
+                call_id: "call-w-s1".to_string(),
+            }]),
+            ScriptedResponse::tool_calls(vec![ToolCall {
+                name: "read_file".to_string(),
+                arguments: serde_json::json!({ "target_file": "b.txt" }),
+                call_id: "call-w-deliver".to_string(),
+            }]),
             ScriptedResponse::tool_calls(vec![ToolCall {
                 name: "submit".to_string(),
                 arguments: serde_json::json!({}),
@@ -27985,10 +26748,12 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
-    /// 设计 §2.2：`submit` 在上一步未 done 时拒绝（submit_not_current）——
-    /// 末步只有成为当前可执行步骤后才能递交。
+    /// MECHANICAL-AUDIT-LAYER (2026-08-24, 设计 §2.1/§3)：submit 为信息
+    /// 展示、非硬门——前序步骤未 done 不再拒绝（订单层退役后无机械步骤
+    /// 推进机制；step 绑定/顺序转事件留痕，终答前反例自查轮 + 审计报告
+    /// 承接「计划完成声明」核对）。首次调用渲染交付状态（phase=requested）。
     #[tokio::test]
-    async fn submit_refused_until_terminal_step_is_current() {
+    async fn submit_renders_delivery_status_even_when_earlier_steps_pending() {
         let dir = test_dir();
         let host = DeliveryHost {
             journal: JournalRecorder::new(dir.clone()),
@@ -28020,95 +26785,22 @@ mod tests {
             )
             .await
             .unwrap();
-        let denied = events(&dir)
+        let submits = events(&dir)
             .into_iter()
-            .find(|e| {
+            .filter(|e| {
                 e.event_type == EventType::ToolCompleted
                     && e.payload.get("tool").and_then(serde_json::Value::as_str) == Some("submit")
             })
-            .expect("submit ToolCompleted journaled");
-        assert_eq!(denied.payload["exit_code"].as_u64(), Some(1));
-        assert_eq!(denied.payload["error"].as_str(), Some("submit_not_current"));
-        let _ = std::fs::remove_dir_all(&dir);
-    }
-
-    /// 设计 §2.2：`console_step_done` 对末步拒绝（console_step_done_
-    /// terminal_step）——末步仅允许显式递交路径推进，直接证据门不可绕过。
-    #[tokio::test]
-    async fn console_step_done_refused_for_terminal_step() {
-        let dir = test_dir();
-        let controller = stage_c_controller(Arc::new(FakeProvider::new(Vec::new())));
-        {
-            let mut w = controller.blackboard().write();
-            w.plan.plan_id = Some("plan-1".to_string());
-            w.plan.plan_epoch = 1;
-            w.plan.steps.push(crate::blackboard::PlanStep {
-                id: "s1".to_string(),
-                goal: "g".to_string(),
-                actions: Vec::new(),
-                acceptance: "a".to_string(),
-                evidence: Vec::new(),
-                status: crate::blackboard::StepStatus::Done(crate::blackboard::DoneEvidence {
-                    receipt_id: "ORD-1".to_string(),
-                    direct: None,
-                }),
-            });
-            w.plan.steps.push(crate::blackboard::PlanStep {
-                id: "deliver".to_string(),
-                goal: "递交".to_string(),
-                actions: Vec::new(),
-                acceptance: "a".to_string(),
-                evidence: Vec::new(),
-                status: crate::blackboard::StepStatus::InProgress,
-            });
-        }
-        let host = TestHost {
-            journal: JournalRecorder::new(dir.clone()),
-            tool_result: None,
-        };
-        let tc = ToolCall {
-            name: "console_step_done".to_string(),
-            arguments: serde_json::json!({
-                "step_id": "deliver",
-                "transition_id": "TRANS-ANY",
-                "trace_id": "TRACE-ANY",
-            }),
-            call_id: "sd-term".to_string(),
-        };
-        let mut messages = Vec::new();
-        let mut writer = discard_event_writer("RUN-SD-TERM");
-        let (result, _) = controller
-            .run_host_tool_with_plan_gate(
-                &host,
-                &mut writer,
-                &tc,
-                "prompt",
-                orz_assurance::gates::ipg::WorkspaceTrust::NotObserved,
-                &mut messages,
-                1,
-                None,
-                None,
-                None,
-                true,
-                true,
-                None,
-                None,
-            )
-            .await
-            .unwrap();
-        assert_eq!(result.exit_code, Some(1));
-        assert!(
-            result
-                .output
-                .contains("advance it only via the submit delivery action"),
-            "{:?}",
-            result.output
+            .collect::<Vec<_>>();
+        assert_eq!(
+            submits.len(),
+            1,
+            "submit called once (early, pre-completion)"
         );
-        let r = controller.blackboard().read();
-        assert!(
-            !r.plan.steps[1].status.is_done(),
-            "terminal step must stay in_progress: {:?}",
-            r.plan.steps[1].status
+        assert_eq!(submits[0].payload["exit_code"].as_u64(), Some(0));
+        assert_eq!(
+            submits[0].payload["delivery_phase"].as_str(),
+            Some("requested")
         );
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -28159,158 +26851,5 @@ mod tests {
             "legacy last step must auto-advance on an ordinary receipt: {:?}",
             r.plan.steps[1].status
         );
-    }
-
-    /// 设计 §2.3：编辑类订单（search_replace）的 receipt 回显 diff（有界
-    /// 截断）；常驻 actions 板只加 `changed: N files` 短计数。
-    #[tokio::test]
-    async fn search_replace_receipt_carries_diff_and_changed_count() {
-        let dir = test_dir();
-        let host = TestHost {
-            journal: JournalRecorder::new(dir.clone()),
-            tool_result: Some(ok_result()),
-        };
-        let fake = Arc::new(FakeProvider::new(vec![
-            ScriptedResponse::tool_calls(vec![plan_write_call("call-plan-1", valid_plan_json())]),
-            ScriptedResponse::tool_calls(vec![action_write_call(
-                "call-w-edit",
-                "workspace.search_replace",
-                Some("s1"),
-                serde_json::json!({
-                    "file_path": "src/cache.rs",
-                    "old_string": "旧文本",
-                    "new_string": "新文本",
-                }),
-            )]),
-            ScriptedResponse::text("完成"),
-            ScriptedResponse::text("完成"),
-        ]));
-        let gateway: Arc<dyn ModelGateway> = fake.clone();
-        let controller = stage_c_controller(gateway);
-        controller
-            .run_turn(
-                &host,
-                "修复缓存回归",
-                "RUN-EDIT-DIFF",
-                MANIFEST,
-                0,
-                None,
-                None,
-                None,
-            )
-            .await
-            .unwrap();
-        let r = controller.blackboard().read();
-        let result = r
-            .actions
-            .results
-            .iter()
-            .find(|res| res.ok && res.action.as_deref() == Some("workspace.search_replace"))
-            .expect("search_replace receipt");
-        let diff = result
-            .response
-            .as_ref()
-            .and_then(|v| v.get("diff"))
-            .and_then(serde_json::Value::as_str)
-            .expect("receipt carries the diff");
-        assert!(diff.contains("-旧文本"), "{diff}");
-        assert!(diff.contains("+新文本"), "{diff}");
-        let actions_text = crate::epoch::render_section(
-            &r.plan,
-            &r.edits,
-            &r.tool_actions,
-            &r.exec,
-            &r.actions,
-            "actions",
-            None,
-            None,
-        );
-        assert!(actions_text.contains("changed: 1 files"), "{actions_text}");
-        let _ = std::fs::remove_dir_all(&dir);
-    }
-
-    /// 设计 §2.3：终端/运行类订单的 receipt 挂 workspace_delta（文件清单 +
-    /// 增删改 + 大小 + 截断标记）；actions 板短计数。
-    #[tokio::test]
-    async fn terminal_order_receipt_carries_workspace_delta() {
-        let dir = test_dir();
-        let host = TestHost {
-            journal: JournalRecorder::new(dir.clone()),
-            tool_result: Some(ToolResult {
-                output: "done".to_string(),
-                exit_code: Some(0),
-                output_encoding: None,
-                structured: None,
-                workspace_delta: vec![crate::host::WorkspaceDeltaEntry {
-                    path: "gen.txt".to_string(),
-                    kind: crate::host::WorkspaceDeltaKind::Added,
-                    size: 3,
-                }],
-                workspace_delta_truncated: false,
-                ..Default::default()
-            }),
-        };
-        let fake = Arc::new(FakeProvider::new(vec![
-            ScriptedResponse::tool_calls(vec![plan_write_call("call-plan-1", valid_plan_json())]),
-            ScriptedResponse::tool_calls(vec![action_write_call(
-                "call-w-term",
-                "workspace.run_terminal",
-                Some("s1"),
-                serde_json::json!({"command": "touch gen.txt", "description": "生成产物"}),
-            )]),
-            ScriptedResponse::text("完成"),
-            ScriptedResponse::text("完成"),
-        ]));
-        let gateway: Arc<dyn ModelGateway> = fake.clone();
-        let controller = stage_c_controller(gateway);
-        controller
-            .run_turn(
-                &host,
-                "修复缓存回归",
-                "RUN-TERM-DELTA",
-                MANIFEST,
-                0,
-                None,
-                None,
-                None,
-            )
-            .await
-            .unwrap();
-        let r = controller.blackboard().read();
-        let result = r
-            .actions
-            .results
-            .iter()
-            .find(|res| res.ok && res.action.as_deref() == Some("workspace.run_terminal"))
-            .expect("run_terminal receipt");
-        let delta = result
-            .response
-            .as_ref()
-            .and_then(|v| v.get("workspace_delta"))
-            .and_then(serde_json::Value::as_array)
-            .expect("receipt carries workspace_delta");
-        assert_eq!(delta.len(), 1);
-        assert_eq!(delta[0]["path"], serde_json::json!("gen.txt"));
-        assert_eq!(delta[0]["kind"], serde_json::json!("added"));
-        assert_eq!(delta[0]["size"], serde_json::json!(3));
-        assert_eq!(
-            result
-                .response
-                .as_ref()
-                .and_then(|v| v.get("workspace_delta_truncated")),
-            Some(&serde_json::json!(false))
-        );
-        let actions_text = crate::epoch::render_section(
-            &r.plan,
-            &r.edits,
-            &r.tool_actions,
-            &r.exec,
-            &r.actions,
-            "actions",
-            None,
-            None,
-        );
-        assert!(actions_text.contains("changed: 1 files"), "{actions_text}");
-        let _ = std::fs::remove_dir_all(&dir);
     }
 }
