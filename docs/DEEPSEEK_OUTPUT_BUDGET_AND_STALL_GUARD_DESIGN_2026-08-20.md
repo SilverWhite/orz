@@ -232,8 +232,8 @@ STREAM-RETRY-RHYTHM 未实施的 50s 定值）。
 
 | 信号 | 触发条件 | 触发后行为 |
 |------|----------|-----------|
-| content_repetition（现有） | 滑动窗口滚动哈希任意偏移：800 字符窗口内出现与记录区相同 400 字符 L-gram（起点距离 ∈ [400,800]；哈希命中后字符级比对），命中候选须过二级「标点块内部重复确认」（按标点+空白切块、内部重复块覆盖占比 ≥0.50 或无可切分点）才计命中，**流内累计确认命中 ≥3 次才触发（1–2 次仅审计留痕）** * / 1K token 窗口 3-gram 重复率 >60%（保留兜底，不经命中门槛、不经二级） | 中断、不重试（已见输出）、会话计数+1 |
-| reasoning_repetition（新增，**灵敏层**） | 同一算法作用于 reasoning delta（仅 content/tool_calls 全空时启用）；滚动哈希任意偏移（同 content 规则：L=400/W=800、二级确认、流内累计 ≥3 次确认命中）+ 1K token 窗口 3-gram 重复率 >60%——空转若为思考循环可在数 K 内识别，不依赖大预算阈值 | 中断、直接降级（无可见输出、重试安全但不原样）、会话计数+1 |
+| content_repetition（现有） | 滑动窗口滚动哈希任意偏移：800 字符窗口内出现与记录区相同 400 字符 L-gram（起点距离 ∈ [400,800]；哈希命中后字符级比对），命中候选须过二级「标点块内部重复确认」（按标点+空白切块、内部重复块覆盖占比 ≥0.50 或无可切分点）才计命中，**流内累计确认命中 ≥3 次才触发（1–2 次仅审计留痕）** * / 1K token 窗口 3-gram 重复率 >70%（保留兜底，**每次 feed 超阈值计 1 次流内命中、累计 ≥3 才触发、1–2 次仅审计留痕**、不经二级） | 中断、不重试（已见输出）、会话计数+1 |
+| reasoning_repetition（新增，**灵敏层**） | 同一算法作用于 reasoning delta（仅 content/tool_calls 全空时启用）；滚动哈希任意偏移（同 content 规则：L=400/W=800、二级确认、流内累计 ≥3 次确认命中）+ 1K token 窗口 3-gram 重复率 >70%（同 content：流内累计命中 ≥3 才触发、1–2 次仅审计留痕）——空转若为思考循环可在数 K 内识别，不依赖大预算阈值 | 中断、直接降级（无可见输出、重试安全但不原样）、会话计数+1 |
 | reasoning_stall（新增，**预算兜底层**） | 自首 chunk 起 600s（初值，S4 校准 300–900s）无 content/tool_calls 且 reasoning 在流动；或 reasoning 估算累计 ≥64K tokens（初值，S4 校准 32–128K）仍无 content/tool_calls——OR 触发 | 中断、直接降级、会话计数+1 |
 
 > *2026-08-21 修订：路径①（连续相同 delta N=5）由滚动哈希任意偏移检测
@@ -245,6 +245,11 @@ STREAM-RETRY-RHYTHM 未实施的 50s 定值）。
 > 400→**800**（缓冲 600→1200）、新增二级「标点块内部重复确认」（标点+
 > 空白切块、重复块覆盖占比 ≥0.50 初值才计命中、每对都过、无切分点直接
 > 判真），详下。**
+> **2026-08-23 修订（NGRAM-GUARD-CALIBRATION，用户裁决）：3-gram 路径②
+> 阈值 0.60→**0.70**（`>` 严格大于保留）+ 流内累计命中 ≥`NGRAM_HIT_LIMIT=3`
+> 才 trip（1–2 次仅审计留痕=ratio+窗口 token 数+族、间隔不重置、流结束
+> 丢弃）+ WARN 口径 `{:.2}`→`{:.3}`，详下；设计权威=
+> `NGRAM_GUARD_CALIBRATION_DESIGN_2026-08-23.md`。**
 
 **重试分类**（ADR-0007 对齐）：content 族→不重试；reasoning 族（stall/复读）
 →不原样、直接降级；完成型空响应→快速有界重试（§3.2）。
@@ -493,6 +498,7 @@ L=200/3 命中无法豁免「同流内完整重复引用 ≥200 字符内容 ≥
 | `REPETITION_WINDOW_CHARS` | 无 | **96**（=2L，可调） | transport.rs |
 | 2026-08-22 修订 | — | `REPETITION_MIN_RUN_CHARS` **48→200**、`REPETITION_WINDOW_CHARS` **96→400**（缓冲 144→600）、新增**流内累计命中门槛 3**（`REPETITION_HIT_LIMIT`；1–2 次命中仅留痕） | transport.rs |
 | 2026-08-23 修订 | — | `REPETITION_MIN_RUN_CHARS` **200→400**、`REPETITION_WINDOW_CHARS` **400→800**（缓冲 600→1200）；新增二级「标点块内部重复确认」（`REPETITION_PUNCT_BLOCK_MIN_RATIO=0.50` 初值；切分符=ASCII+中文标点+空白、`_` 除外；无切分点直接判真；每对命中须过二级才计数；3-gram/stall 兜底不变） | transport.rs |
+| 2026-08-23 NGRAM 校准修订 | — | `DEGENERATION_NGRAM_REPEAT_RATIO` **0.60→0.70**（`>` 严格大于保留）；新增 `NGRAM_HIT_LIMIT=3`（3-gram 路径②流内累计命中——每次 feed 超阈值计 1 次、1–2 次仅审计留痕、间隔不重置、流结束丢弃）；WARN 精度 `{:.2}`→`{:.3}` | transport.rs |
 | `REPETITION_PUNCT_BLOCK_MIN_RATIO` | 无 | **0.50**（初值，S2 用真实样本校准；二级标点块重复覆盖占比下限——分母=span 总字符含切分符；无可切分点直接判真） | transport.rs |
 | `DEGENERATION_CONSECUTIVE_DELTAS` | 5 | **路径①语义被取代**（滚动哈希任意偏移 48 字符；3-gram 路径②保留兜底） | transport.rs |
 | `stream_idle_timeout` | 50s（STREAM-RETRY-RHYTHM 定值，未实施） | **30s**（校准 20–30s） | model.rs RetryPolicy |

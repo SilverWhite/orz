@@ -2758,6 +2758,22 @@ ADR §3.6 正文修订随实施登记。
     计数不变（仍 29，审查处理属 S1 内收尾）；S3 重建 / S4 复验待续。登记
     于设计 §6.4 / BACKLOG 0d 后续 7 / TODO P0-0d 后续 7 /
     CLI_PROJECT_INDEX。
+23. **N-GRAM GUARD CALIBRATION S1 实施（2026-08-23 用户放行；实施入账
+    29 → 30，S2-S4 待续）**：`DEGENERATION_NGRAM_REPEAT_RATIO` 0.60→**0.70**
+    （`>` 严格大于保留）；新增 `NGRAM_HIT_LIMIT=3`——3-gram 路径②由
+    「单发即 trip」改为**流内累计命中**（每次 feed 时 1K token 窗口
+    ratio > 0.70 计 1 次命中、累计 ≥3 才 trip；1–2 次仅审计留痕=ratio+
+    窗口 token 数+族、间隔不重置、流结束丢弃——与路径①纪律对齐）；
+    WARN 口径 `{:.2}`→**`{:.3}`**（trip detail 与审计条目同步）；信号表/
+    参数表同步（DEEPSEEK_OUTPUT_BUDGET... 设计 §3.3/§3.5）。既有 3-gram
+    ratio 用例适配：单份 core 的 ratio≈0.694 恰为 0.69x 边界样本（留给
+    S2 作「不触发」断言）、用例改双份 core（ratio≈0.825 > 0.70）+ 断言
+    2 次子门槛审计条目（3-gram 口径）与 trip detail 的 `3/3`；滚动哈希
+    路径①/stall 兜底/会话级 DEGENERATION_LIMIT 语义不变。orz-loop 579
+    通过 / 0 失败 / 3 ignored，fmt 干净，clippy 无新增告警（transport.rs
+    仅 2 条既有 doc 告警、位于改动区外）。登记于设计
+    `NGRAM_GUARD_CALIBRATION_DESIGN_2026-08-23.md` / BACKLOG 0d 后续 8 /
+    TODO P0-0d 后续 8 / CLI_PROJECT_INDEX。
 
 ### 14.31 v1.31 补写裁决索引（2026-08-19）
 

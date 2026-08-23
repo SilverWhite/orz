@@ -961,6 +961,15 @@
 >   +e2e+实机。路由 S1-S4；设计轮不动计数（28）。登记于 ADR-0010 §14.35
 >   第 20 项 / [设计](NGRAM_GUARD_CALIBRATION_DESIGN_2026-08-23.md) /
 >   TODO P0-0d 后续 8 / CLI_PROJECT_INDEX。
+> - **2026-08-23 S1 代码实施闭合（用户放行；实施入账 29 → 30，S2-S4
+>   待续）**：`DEGENERATION_NGRAM_REPEAT_RATIO` 0.60→0.70（`>` 保留）；
+>   新增 `NGRAM_HIT_LIMIT=3`——3-gram 路径②流内累计命中（每次 feed
+>   超阈值计 1 次、≥3 才 trip、1–2 次仅审计留痕=ratio+窗口 token 数+
+>   族、间隔不重置、流结束丢弃）；WARN 口径 `{:.2}`→`{:.3}`；基础设计
+>   信号表/参数表同步；既有 3-gram ratio 用例适配（0.694 边界样本留给
+>   S2、双份 core 0.825 过 0.70 + 2 次审计 + 3/3 trip 断言）；orz-loop
+>   579 通过 / 0 失败 / 3 ignored、fmt 干净、clippy 无新增。登记于
+>   ADR-0010 §14.35 第 23 项 / TODO P0-0d 后续 8 / CLI_PROJECT_INDEX。
 
 ### 0e. CONTEXT-SCAFFOLDING-PULL-REDESIGN（P0；2026-08-21 设计定稿，
 **S1-S4 全部闭合 2026-08-21，计数 28 → 27**）
