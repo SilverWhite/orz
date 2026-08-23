@@ -1804,7 +1804,8 @@ impl DeepSeekTransport {
                 // 「not tripping」，避免同 chunk 先标不触发再触发的误导。
                 for ctx in audit_hits {
                     tracing::warn!(
-                        hit_limit = REPETITION_HIT_LIMIT,
+                        rolling_hit_limit = REPETITION_HIT_LIMIT,
+                        ngram_hit_limit = NGRAM_HIT_LIMIT,
                         trigger_context = %ctx,
                         "output-health guard repetition audit (same chunk as trip)"
                     );
@@ -1823,9 +1824,13 @@ impl DeepSeekTransport {
             // span + 窗口片段（缺口 A），不中断、不降级；第 3 次命中才
             // 走上方 trip 分支（2026-08-22 再校准 + 2026-08-23 二级确认，
             // L=400 + 命中门槛 3；二级不过的候选同样在此留痕）。
+            // 2026-08-23 审查处理（I1）：审计条目可能来自路径①滚动哈希或
+            // 3-gram 路径②——hit 门槛字段按路径分别标注（rolling/ngram），
+            // 避免 NGRAM_HIT_LIMIT 日后独立调整时 3-gram 条目被误标。
             for ctx in audit_hits {
                 tracing::warn!(
-                    hit_limit = REPETITION_HIT_LIMIT,
+                    rolling_hit_limit = REPETITION_HIT_LIMIT,
+                    ngram_hit_limit = NGRAM_HIT_LIMIT,
                     trigger_context = %ctx,
                     "output-health guard repetition hit (audit only, not tripping)"
                 );
