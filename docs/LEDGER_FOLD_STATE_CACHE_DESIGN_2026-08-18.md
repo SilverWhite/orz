@@ -79,10 +79,10 @@
 
 ### 1.3 根因：动作台账折叠滑动窗口
 
-`action_ledger::build_collapsed_request`（[action_ledger.rs](D:/CLI/orz/crates/orz-loop/src/action_ledger.rs:214)）
+`action_ledger::build_collapsed_request`（[action_ledger.rs](../orz/crates/orz-loop/src/action_ledger.rs#L214)）
 在**每次模型请求前对整个消息历史无状态重算**折叠边界：保留最近 `tail`（默认
 2）轮原文，更早的完整轮次压成 `[动作台账 v0.1]` 行
-（[agent_loop.rs](D:/CLI/orz/crates/orz-loop/src/agent_loop.rs:1197)）。
+（[agent_loop.rs](../orz/crates/orz-loop/src/agent_loop.rs#L1197)）。
 每轮请求时历史多出一个完整轮次 → 折叠窗口滑动 → **请求前缀被重写**。
 
 复刻 `action_ledger` 逻辑的模拟（tail=2，每轮 = 声明 + 结果 + 回复）：
