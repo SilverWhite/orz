@@ -1319,7 +1319,11 @@ impl DeepSeekTransport {
             // DeepSeek returns reasoning_content on every completion (even
             // without a thinking option — live probe 2026-08-06); it is
             // preserved so the controller can replay it on the next request.
-            reasoning_content: message.reasoning_content.clone(),
+            // 2026-08-25 (initial-package trial): v4-flash sometimes omits
+            // the field entirely on text-only completions — normalize to
+            // Some("") so the assistant replay never drops the field
+            // (D-6: omission 400s on the next request).
+            reasoning_content: Some(message.reasoning_content.clone().unwrap_or_default()),
             // D-6 usage observation: reasoning_tokens + completion_tokens
             // feed budget/latency calibration (the single-round budget
             // decision rolls back on the data; S4 用真实值复核
@@ -1894,7 +1898,11 @@ impl DeepSeekTransport {
         } else if !tool_calls.is_empty() {
             Some(String::new())
         } else {
-            None
+            // 2026-08-25 (initial-package trial): v4-flash text-only
+            // completions can omit reasoning_content deltas entirely; keep
+            // the replay wire shape stable with Some("") (D-6: omission
+            // 400s on the next request).
+            Some(String::new())
         };
 
         Ok(ModelResponse {
@@ -4473,8 +4481,10 @@ mod tests {
             serde_json::json!({"path": "a.txt"})
         );
         assert_eq!(r.finish_reason, OurFinishReason::ToolCalls);
-        // reasoning_content absent → None (absent-optional, not empty string).
-        assert_eq!(r.reasoning_content, None);
+        // reasoning_content absent → Some("") (2026-08-25: normalized empty
+        // string — the assistant replay wire shape must keep the field;
+        // D-6 omission 400s on the next request).
+        assert_eq!(r.reasoning_content, Some(String::new()));
     }
 
     #[test]
@@ -5103,6 +5113,43 @@ mod tests {
         assert_eq!(r.tool_calls[0].call_id, "call-1");
         assert_eq!(r.reasoning_content, Some(String::new()));
         assert_eq!(r.finish_reason, OurFinishReason::ToolCalls);
+    }
+
+    #[tokio::test]
+    async fn generate_stream_text_round_preserves_empty_reasoning() {
+        // 2026-08-25 (initial-package trial, 3/6 flake): v4-flash text-only
+        // completions can omit `reasoning_content` deltas entirely. The
+        // replay must still carry `Some("")` — folding to None drops the
+        // field and DeepSeek 400s on the next request ("reasoning_content
+        // in the thinking mode must be passed back to the API").
+        let frame = |delta: &str, finish: Option<&str>| {
+            let finish = finish
+                .map(|f| format!("\"{f}\""))
+                .unwrap_or_else(|| "null".to_string());
+            format!(
+                "data: {{\"id\":\"x\",\"object\":\"chat.completion.chunk\",\"created\":0,\"model\":\"m\",\"choices\":[{{\"index\":0,\"delta\":{delta},\"finish_reason\":{finish}}}]}}\n\n",
+            )
+        };
+        let body = format!(
+            "{}{}data: [DONE]\n\n",
+            frame(r#"{"role":"assistant","content":"done"}"#, None),
+            frame(r#"{"content":"-now"}"#, Some("stop")),
+        );
+        let base = spawn_mock(move |_line, _body| {
+            MockResponse::sse(vec![&body], std::time::Duration::ZERO)
+        })
+        .await;
+        let t = mock_transport(&base);
+        let mut chunks = Vec::new();
+        let r = t
+            .generate_stream(request(), None, None, &mut |c| chunks.push(c.to_string()))
+            .await
+            .unwrap();
+        assert_eq!(chunks, vec!["done", "-now"]);
+        assert_eq!(r.text.as_deref(), Some("done-now"));
+        assert!(r.tool_calls.is_empty());
+        assert_eq!(r.reasoning_content, Some(String::new()));
+        assert_eq!(r.finish_reason, OurFinishReason::Stop);
     }
 
     #[tokio::test]
