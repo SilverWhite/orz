@@ -1,4 +1,4 @@
-# ORZ 待办项记录（TODO）
+﻿# ORZ 待办项记录（TODO）
 
 > 状态：living（实施勾选清单）；建立：2026-08-14。
 > 定位：面向后续实施与改动的操作型清单，派生自 [`docs/BACKLOG_AND_PRIORITIES.md`](docs/BACKLOG_AND_PRIORITIES.md) 的未闭合项；优先级、决策门与状态权威仍是 BACKLOG，设计权威是 ADR-0010 / ADR-0011，召回路由是 [`CLI_PROJECT_INDEX.md`](CLI_PROJECT_INDEX.md)。本文件只登记指针与勾选状态，不新增设计裁决，不重复维护设计细节。
@@ -1221,6 +1221,46 @@ S4 待实施）
 
 - [ ] S4 复验（同一 10 题 k=1 + 构造题：检索调用出现、审计报告覆盖写、
   零 400、命中率 ≥90%、轮次/耗时下降、reward 对比）——待实施
+
+### P0-0h RETRIEVAL-SUBAGENT-WIRING（P0；2026-08-25 设计定稿；设计轮
+不动计数；S1 待实施）
+
+> 入口：[设计](docs/RETRIEVAL_SUBAGENT_WIRING_DESIGN_2026-08-25.md)；
+> ADR-0010 §14.40（v1.40）；BACKLOG 0h。
+> 来源：MECHANICAL-AUDIT-LAYER S4 复验（2026-08-24）主模型工具面 13
+> 工具、检索族零可见——harness 不传 `--retrieval-mode`、会话停默认 off
+> （mode=off 投影剔除检索族）；内部子代理触发工具 `retrieve_project_docs`/
+> `retrieve_project_source_ledger` 从未注册（仅 relay 路由与测试引用）。
+> 定案（2026-08-25 用户裁决）：外部子代理=模式 A 自动定档——local_browser
+> probe 失败（browser_launch_failed）机械降级 framework_fallback 并记
+> `retrieval_mode_transition`（取代 §3.7.1 禁止自动切换）；页面级失败
+> （§3.7.2 显式状态）不降级；工具面定档=浏览器可用只有 browser_read、
+> 不可用只有 web 族；TB harness PUBLIC 时传 `--retrieval-mode
+> local_browser`。内部子代理重新定位=结构化检索外包（主代理点读保留；
+> 多文件/跨目录调研打包派发，`[DOC]` 结构化结果+ledger 回传）；controller
+> 声明面注册 `retrieve_project_docs` ToolDef，内部 lane 工具面仅读族。
+> prompt 以框架使用提示（tips，≤1 句）告知使用方式，模型自主决定。
+> 实施路由 S1 代码 → S2 测试 → S3 重建 → S4 复验（构造题：检索调用出现、
+> 降级 transition、零 400、命中率 ≥90%、reward 不降）。设计轮不动计数。
+
+- [x] 设计定稿（2026-08-25；登记于 ADR-0010 §14.40 / BACKLOG 0h /
+  CLI_PROJECT_INDEX v2.21）
+
+- [x] S1 代码（2026-08-25；A 档降级 + 内部工具注册 + prompt tips +
+  harness 传参——apply_mode_a_auto_degrade + transition 元数据、
+  retrieve_project_docs 声明、subagent_tool_projection role 过滤、
+  prompt ≤1 句 tips、orz.py --retrieval-mode local_browser；
+  orz-loop 556 / orz-host 222 / orz-tui 178 / orz-assurance 144 /
+  orz-bin 11 全绿、fmt 干净、clippy 无新增）
+
+- [x] S2 测试（2026-08-25；新增 5 项专项测试：模式 A 降级规则、
+  降级 transition 元数据、主面 retrieve_project_docs 声明、
+  主车道内部派发、内部 lane 投影仅读族；全量全绿）
+
+- [ ] S3 重建（Linux musl，ORZ-BUILD-MOUNT-001）——待实施
+
+- [ ] S4 复验（构造题：检索调用出现、零 400、命中率 ≥90%、reward 不降）
+  ——待实施
 
 ### P0-B FUS-RETRIEVAL-MECH（`implemented`；批次 1-6 已全部闭合，2026-08-14，保留供核对）
 

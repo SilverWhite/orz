@@ -1,4 +1,4 @@
-# ORZ 统一待办与优先级（BACKLOG）
+﻿# ORZ 统一待办与优先级（BACKLOG）
 
 > 状态：living（单一待办路由）；建立：2026-08-13。
 > 定位：本文件只做未闭合项召回、优先级和决策门登记；不替代 ADR、Schema、审计、索引或源码。设计裁决以 ADR-0010 / ADR-0011 和 [`CLI_PROJECT_INDEX.md`](../CLI_PROJECT_INDEX.md) 的 canonical entry 为准。
@@ -1252,6 +1252,53 @@ fail-closed + clippy 修复）
   08:19 HKT）：reasoning_content 修复 orz 4ca60c2 + 父 c1ce4c1（均已
   推送），三件套 orz 104,726,432 B / signer 1,388,592 B / provision
   1,206,576 B，编译 5m04s，冒烟同前。
+
+### 0h. RETRIEVAL-SUBAGENT-WIRING（P0；2026-08-25 设计定稿；S1 已实施
+2026-08-25 + S2 测试已实施 2026-08-25；设计轮不动计数；S3 待实施）
+
+- 入口：[设计](RETRIEVAL_SUBAGENT_WIRING_DESIGN_2026-08-25.md)；索引：
+  [CLI_PROJECT_INDEX.md](../CLI_PROJECT_INDEX.md)；ADR-0010 §14.40
+  （v1.40）。
+- 来源：MECHANICAL-AUDIT-LAYER S4 复验（2026-08-24）主模型工具面 13
+  工具、检索族零可见——harness 不传 `--retrieval-mode`、会话停默认 off
+  （mode=off 投影剔除检索族）；内部子代理触发工具 `retrieve_project_docs`/
+  `retrieve_project_source_ledger` 从未注册（仅 relay 路由与测试引用）。
+- **2026-08-25 设计定稿（用户裁决）**：①外部子代理=模式 A 自动定档——
+  local_browser probe 失败（browser_launch_failed）机械降级
+  framework_fallback 并记 `retrieval_mode_transition`（old/new 实值、
+  authority=mechanical_probe、reason=browser_launch_failed），取代
+  §3.7.1「禁止因浏览器不可用自动切换」；页面级失败（LOGIN_REQUIRED/
+  CAPTCHA/PAGE_BLOCKED 等 §3.7.2 显式状态）不降级；工具面定档=浏览器
+  可用只有 browser_read、不可用只有 web 族；TB harness（tb_agents/
+  orz.py）PUBLIC 时传 `--retrieval-mode local_browser`（容器无浏览器→
+  自动降级 web 族）。②内部子代理重新定位=结构化检索外包（主代理点读保留；
+  多文件/跨目录调研打包派发，`[DOC]` 结构化结果+ledger 回传，隔离上下文、
+  降低主对话污染，§3.7 条 8 语义）；controller 声明面注册
+  `retrieve_project_docs` ToolDef（relay 路由已存在，声明即触发），内部
+  lane 工具面仅读族（read_file/list_dir/grep/search_tool/
+  project_doc_index），web 族与 browser_read 不进入。③prompt 以框架
+  使用提示（tips，≤1 句）告知使用方式（多文件调研用检索外包、点读用
+  read_file/grep），模型自主决定、不做硬门不加仪式。候选计数/并发=1/
+  ACAF 前置/子代理状态机/写域 deny-only 不变。
+- 实施路由：S1 代码（A 档降级 + 内部工具注册 + prompt tips + harness
+  传参）→ S2 测试 → S3 重建（Linux musl，ORZ-BUILD-MOUNT-001）→ S4
+  复验（构造题：检索调用出现、降级 transition、零 400、命中率 ≥90%、
+  reward 不降）。计数：设计轮不动；实施放行入账 +1；S4 闭环 -1。
+- **S1 实施（2026-08-25）**：A 档降级——`apply_mode_a_auto_degrade`
+  （acp_server：local_browser probe 失败 → framework_fallback +
+  transition pending）+ controller `with_retrieval_mode` 可选 transition
+  元数据（mechanical_probe/browser_launch_failed）；主面声明
+  `retrieve_project_docs`（controller 声明面、relay 路由已存在、mode=off
+  剔除）；`subagent_tool_projection` 加 role 参数（内部 lane 仅读族、
+  外部 lane 维持 web 族 + browser_read）；prompt ≤1 句内部检索 tips；
+  TB harness PUBLIC 时传 `--retrieval-mode local_browser`。验证：
+  orz-loop 556 / orz-host 222 / orz-tui 178 / orz-assurance 144 /
+  orz-bin 11（+ 集成目标全过）、fmt 干净、clippy 无新增。登记于
+  ADR-0010 §14.40 第 2 项 / TODO P0-0h。
+- **S2 测试（2026-08-25）**：新增 5 项专项测试（模式 A 降级规则、
+  降级 transition 元数据、主面 retrieve_project_docs 声明、主车道内部
+  派发、内部 lane 投影仅读族）；全量全绿。登记于 ADR-0010 §14.40 第 3 项
+  / TODO P0-0h。
 
 ### 0. 前置收尾（提交前需用户确认）
 

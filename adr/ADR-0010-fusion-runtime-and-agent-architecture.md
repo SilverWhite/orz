@@ -1,7 +1,7 @@
-# ADR-0010：ORZ 融合运行时、同构 Agent 与设计权威重整
+﻿# ADR-0010：ORZ 融合运行时、同构 Agent 与设计权威重整
 
 - 状态：**accepted / frozen**（2026-08-09；本文件是 ORZ 当前自然语言设计的唯一权威基线）
-- 冻结版本：1.1（2026-08-10 追加 v1.2 补写，见 §14.2；2026-08-11 追加 v1.3 补写，见 §14.3；2026-08-11 追加 v1.4 补写，见 §14.4；2026-08-12 追加 v1.5 补写，见 §14.5；2026-08-12 追加 v1.6 补写，见 §14.6；2026-08-13 追加 v1.7 补写，见 §14.7；2026-08-13 追加 v1.8 补写，见 §14.8；2026-08-14 追加 v1.9 补写，见 §14.9；2026-08-14 追加 v1.10 补写，见 §14.10；2026-08-14 追加 v1.11 补写，见 §14.11；2026-08-14 追加 v1.12 补写，见 §14.12；2026-08-14 追加 v1.13-v1.15 补写，见 §14.13-§14.15；2026-08-15 v1.15⑧/⑨ 补强，见 §14.15 ⑧/⑨；2026-08-15 追加 v1.16 补写，见 §14.16；2026-08-15 追加 v1.17 补写，见 §14.17；2026-08-16 v1.17⑩ 审查收口登记，见 §14.17⑩；2026-08-16 v1.17⑪ S4 实施登记，见 §14.17⑪；2026-08-16 v1.17⑫ 审查收口登记，见 §14.17⑫；2026-08-16 v1.17⑬ 超时语义复核登记，见 §14.17⑬；2026-08-16 v1.17⑭/⑮ 决策门与阶段 A 登记，见 §14.17⑭/⑮；2026-08-16 v1.17⑯ 阶段 A 审查收口登记，见 §14.17⑯；2026-08-16 v1.17⑰ 阶段 B 实施登记，见 §14.17⑰；2026-08-16 v1.17⑱ 阶段 C 实施登记，见 §14.17⑱；2026-08-16 追加 v1.18 补写，见 §14.18；2026-08-17 追加 v1.19 补写，见 §14.19；2026-08-17 追加 v1.20 补写，见 §14.20；2026-08-17 追加 v1.21 补写，见 §14.21；2026-08-17 追加 v1.22 补写，见 §14.22；2026-08-17 追加 v1.23 补写，见 §14.23；2026-08-18 追加 v1.24 补写，见 §14.24；2026-08-18 追加 v1.25 补写，见 §14.25；2026-08-18 追加 v1.26 补写，见 §14.26；2026-08-18 追加 v1.27 补写，见 §14.27；2026-08-18 追加 v1.28 补写，见 §14.28；2026-08-18 追加 v1.29 补写，见 §14.29；2026-08-19 追加 v1.30-v1.33 补写，见 §14.30-§14.33；2026-08-20 追加 v1.34 补写，见 §14.34；2026-08-20 追加 v1.35 补写，见 §14.35；2026-08-21 追加 v1.36 补写，见 §14.36；2026-08-21 追加 v1.37 补写，见 §14.37；2026-08-21 追加 v1.38 补写，见 §14.38；2026-08-24 追加 v1.39 补写，见 §14.39）
+- 冻结版本：1.1（2026-08-10 追加 v1.2 补写，见 §14.2；2026-08-11 追加 v1.3 补写，见 §14.3；2026-08-11 追加 v1.4 补写，见 §14.4；2026-08-12 追加 v1.5 补写，见 §14.5；2026-08-12 追加 v1.6 补写，见 §14.6；2026-08-13 追加 v1.7 补写，见 §14.7；2026-08-13 追加 v1.8 补写，见 §14.8；2026-08-14 追加 v1.9 补写，见 §14.9；2026-08-14 追加 v1.10 补写，见 §14.10；2026-08-14 追加 v1.11 补写，见 §14.11；2026-08-14 追加 v1.12 补写，见 §14.12；2026-08-14 追加 v1.13-v1.15 补写，见 §14.13-§14.15；2026-08-15 v1.15⑧/⑨ 补强，见 §14.15 ⑧/⑨；2026-08-15 追加 v1.16 补写，见 §14.16；2026-08-15 追加 v1.17 补写，见 §14.17；2026-08-16 v1.17⑩ 审查收口登记，见 §14.17⑩；2026-08-16 v1.17⑪ S4 实施登记，见 §14.17⑪；2026-08-16 v1.17⑫ 审查收口登记，见 §14.17⑫；2026-08-16 v1.17⑬ 超时语义复核登记，见 §14.17⑬；2026-08-16 v1.17⑭/⑮ 决策门与阶段 A 登记，见 §14.17⑭/⑮；2026-08-16 v1.17⑯ 阶段 A 审查收口登记，见 §14.17⑯；2026-08-16 v1.17⑰ 阶段 B 实施登记，见 §14.17⑰；2026-08-16 v1.17⑱ 阶段 C 实施登记，见 §14.17⑱；2026-08-16 追加 v1.18 补写，见 §14.18；2026-08-17 追加 v1.19 补写，见 §14.19；2026-08-17 追加 v1.20 补写，见 §14.20；2026-08-17 追加 v1.21 补写，见 §14.21；2026-08-17 追加 v1.22 补写，见 §14.22；2026-08-17 追加 v1.23 补写，见 §14.23；2026-08-18 追加 v1.24 补写，见 §14.24；2026-08-18 追加 v1.25 补写，见 §14.25；2026-08-18 追加 v1.26 补写，见 §14.26；2026-08-18 追加 v1.27 补写，见 §14.27；2026-08-18 追加 v1.28 补写，见 §14.28；2026-08-18 追加 v1.29 补写，见 §14.29；2026-08-19 追加 v1.30-v1.33 补写，见 §14.30-§14.33；2026-08-20 追加 v1.34 补写，见 §14.34；2026-08-20 追加 v1.35 补写，见 §14.35；2026-08-21 追加 v1.36 补写，见 §14.36；2026-08-21 追加 v1.37 补写，见 §14.37；2026-08-21 追加 v1.38 补写，见 §14.38；2026-08-24 追加 v1.39 补写，见 §14.39；2026-08-25 追加 v1.40 补写，见 §14.40）
 - 日期：2026-08-09（v1.1 补充裁决同日冻结）
 - 决策范围：产品 runtime 所有权、成熟组件复用、自研准入、主/子 Agent 架构、模型与 transport、工具与权限、检索证据、context/compaction、问询与活性守卫、journal/snapshot、隐私、UI、Windows 兼容性、Schema 演进与设计文档治理
 - 取代/修订：
@@ -3527,3 +3527,75 @@ ADR §3.6 正文修订随实施登记。
    5m04s，冒烟同前（三件正常加载执行、守卫符号各 8 命中、musl 静态）。
    登记于 [设计](../docs/MECHANICAL_AUDIT_LAYER_DESIGN_2026-08-24.md)
    §4 / BACKLOG 0g / TODO P0-0g。
+
+### 14.40 v1.40 补写裁决索引（2026-08-25）
+
+本节记录冻结后的显式补写；规范正文以所指章节为准，补写明确
+取代以下既往条款。
+
+1. **检索子代理接线重设计定稿（2026-08-25 用户裁决；设计轮不动计数）**：
+   问题=MECHANICAL-AUDIT-LAYER S4 复验（2026-08-24，5 题 reward 全 1.00）
+   主模型工具面 13 工具、检索族零可见——根因①harness 不传
+   `--retrieval-mode`、会话停默认 off（mode=off 投影剔除检索族 + 调用面
+   拒绝 `retrieval_mode_off`）；根因②内部子代理触发工具
+   `retrieve_project_docs` / `retrieve_project_source_ledger` 从未注册
+   （仅 relay 路由与测试引用，投影「未声明不发明」→ 内部子代理触发面断）。
+   **定案**：①外部子代理=模式 A 自动定档——local_browser probe 失败
+   （browser_launch_failed）机械降级 framework_fallback 并记
+   `retrieval_mode_transition`（old/new 实值、authority=mechanical_probe、
+   reason=browser_launch_failed），取代 §3.7.1「禁止因浏览器不可用自动
+   切换」；页面级失败（LOGIN_REQUIRED/CAPTCHA/PAGE_BLOCKED 等 §3.7.2
+   显式状态）不降级；工具面定档=浏览器可用只有 browser_read、不可用只有
+   web 族；TB harness（`tb_agents/orz.py`）PUBLIC 时传
+   `--retrieval-mode local_browser`（容器无浏览器→自动降级 web 族）。
+   ②内部子代理重新定位=结构化检索外包（主代理点读保留；多文件/跨目录
+   调研打包派发，`[DOC]` 结构化结果+ledger 回传，隔离上下文、降低主对话
+   污染，§3.7 条 8 语义）；controller 声明面注册 `retrieve_project_docs`
+   ToolDef（relay 路由已存在，声明即触发），内部 lane 工具面仅读族
+   （read_file/list_dir/grep/search_tool/project_doc_index），web 族与
+   browser_read 不进入。③prompt 以框架使用提示（tips，≤1 句）告知使用
+   方式（多文件调研用检索外包、点读用 read_file/grep），模型自主决定、
+   不做硬门不加仪式。候选计数/并发=1/ACAF 前置/子代理状态机/写域
+   deny-only 不变。登记于
+   [设计](../docs/RETRIEVAL_SUBAGENT_WIRING_DESIGN_2026-08-25.md) /
+   BACKLOG 0h / TODO P0-0h / CLI_PROJECT_INDEX v2.21。
+
+2. **检索子代理接线 S1 实施（2026-08-25；计数不动，S2-S4 待实施）**：
+   ①A 档降级——`apply_mode_a_auto_degrade`（acp_server）：local_browser
+   probe 失败（browser_launch_failed）→ 快照降级 framework_fallback +
+   bootstrap_transition_pending；controller `with_retrieval_mode` 增可选
+   transition 元数据（authority/reason_code，降级时
+   mechanical_probe/browser_launch_failed，缺省保持 session_bootstrap/
+   session_default）；降级后 capability 以 framework_fallback 重探
+   （transition capability_status 不残留浏览器失败原因）。②主面声明
+   `retrieve_project_docs` ToolDef（controller 声明面，参数 query 必填 +
+   可选 scope/max_results；relay 路由已存在；mode=off 被检索族投影剔除）。
+   ③`subagent_tool_projection` 加 role 参数——内部 lane 剔除 web 族
+   （web_search/web_fetch 及变体）/browser_read/retrieve_project_*（仅
+   读族），外部 lane 维持 web 族 + browser_read（registry 声明时）。
+   ④prompt 执行面段补 ≤1 句内部检索 tips（多文件/跨目录调研用
+   retrieve_project_docs、点读用 read_file/grep，无硬门无仪式）。
+   ⑤TB harness（tb_agents/orz.py）PUBLIC 时追加 `--retrieval-mode
+   local_browser`（容器无浏览器 → probe 失败自动降级 web 族）。
+   验证：orz-loop 556 / 0 / 3、orz-host 222 / 0 / 4（串行）、orz-tui
+   178 / 0、orz-assurance 144 / 0、orz-bin 11 / 0 + acaf_e2e 23 +
+   signer 14 + provision 2 + stdio_e2e 1 + real_flag 2、fmt 干净、
+   clippy 无新增告警。登记于 [设计](../docs/RETRIEVAL_SUBAGENT_WIRING_
+   DESIGN_2026-08-25.md) §4 / BACKLOG 0h / TODO P0-0h。
+
+3. **检索子代理接线 S2 测试（2026-08-25；设计 §4 路由；计数不动，
+   S3-S4 待实施）**：新增 5 项专项测试——①模式 A 降级规则
+   （browser_launch_failed 前缀降级 framework_fallback + transition
+   pending；浏览器可用不降级；非启动原因 Degraded 不降级；
+   framework_fallback 不降级）；②降级 transition 元数据透传（old=
+   local_browser/new=framework_fallback/authority=mechanical_probe/
+   reason_code=browser_launch_failed/capability_status 正确）；③主面
+   `retrieve_project_docs` 声明（mode≠off 可见、mode=off 隐藏）；④主车道
+   `retrieve_project_docs` 派发内部子代理（ToolStarted target=
+   internal_retrieval、内部 lane 执行读族工具、事件面零 web/browser
+   调用）；⑤内部 lane 投影仅读族（web/browser/retrieve 全剔除、外部 lane
+   维持 web 族 + browser_read）。验证：orz-loop 556 通过 / 0 失败 /
+   3 ignored、orz-host 222 / 0、orz-tui 178 / 0、orz-assurance 144 / 0、
+   orz-bin 11 / 0（+ 集成目标全过）、fmt 干净、clippy 无新增。登记于
+   [设计](../docs/RETRIEVAL_SUBAGENT_WIRING_DESIGN_2026-08-25.md) §4 /
+   BACKLOG 0h / TODO P0-0h。
