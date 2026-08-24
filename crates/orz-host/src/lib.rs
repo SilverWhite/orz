@@ -19,6 +19,7 @@ pub mod pdf_evidence;
 pub mod permission;
 pub mod project_doc_index;
 pub mod retention;
+pub mod retrieval_mode;
 pub mod session;
 pub mod stdio;
 pub mod tools;

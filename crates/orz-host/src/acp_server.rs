@@ -16,7 +16,7 @@ use std::sync::{Arc, Mutex};
 use orz_assurance::{EventTrack, EventType, JournalRecorderError, Redaction, RunEvent, seal_event};
 use orz_loop::AgentLoopController;
 use orz_loop::acaf::AcafClient;
-use orz_loop::controller::{RetrievalCapability, RetrievalMode};
+use orz_loop::controller::RetrievalMode;
 use orz_loop::gateway::model::{Message, Role};
 use orz_loop::orientation::OrientationSessionState;
 use orz_workspace::permission::PermissionHookTransport;
@@ -263,6 +263,12 @@ struct StoredActivationSnapshot {
     /// Cleared once the controller journaled the transition.
     #[serde(default)]
     previous_retrieval_mode: Option<RetrievalMode>,
+    /// RETRIEVAL-SUBAGENT-WIRING 审查处理 (2026-08-25)：模式 A 机械降级
+    /// 的 pending transition 元数据（authority, reason_code）——降级改写
+    /// 快照时落盘，controller journal 成功后清除；防止「降级后本次 run 在
+    /// journal 前失败、下轮重试退化为 session_bootstrap」丢失机械元数据。
+    #[serde(default)]
+    pending_transition_authority: Option<(String, String)>,
     /// S4: per-role activation sequence counters (`activation_id` suffixes).
     #[serde(default)]
     next_seq: HashMap<String, u32>,
@@ -279,42 +285,34 @@ impl StoredActivationSnapshot {
             retrieval_mode: RetrievalMode::Off,
             bootstrap_transition_pending: false,
             previous_retrieval_mode: None,
+            pending_transition_authority: None,
             next_seq: HashMap::new(),
             activations: Vec::new(),
         }
     }
 }
 
-/// RETRIEVAL-SUBAGENT-WIRING (2026-08-25, ADR-0010 §14.40)：外部子代理
-/// 模式 A 自动定档——local_browser probe 失败（browser_launch_failed）
-/// 机械降级 framework_fallback：改写快照模式 + 置 bootstrap transition
-/// pending（transition 由 controller 在下次 run 启动时落盘，old/new/
-/// authority/reason 由既有 bootstrap 机制填写）。页面级失败
-/// （LOGIN_REQUIRED/CAPTCHA/PAGE_BLOCKED 等 §3.7.2 显式状态）不在此
-/// 降级——probe 只判浏览器启动可用性。返回是否发生降级（调用方随后重探
-/// framework_fallback 的真实 capability）。
-fn apply_mode_a_auto_degrade(
+/// RETRIEVAL-SUBAGENT-WIRING 审查处理：把共享 probe 结果应用到会话快照
+/// ——模式 A 降级时改写模式 + 置 bootstrap transition pending + 落盘机械
+/// 元数据（authority/reason_code，防「run 在 journal 前失败、下轮重试退化
+/// 为 session_bootstrap」丢失元数据）。
+fn apply_mode_a_outcome_to_snapshot(
     snapshot: &mut StoredActivationSnapshot,
-    capability: &RetrievalCapability,
-) -> bool {
-    if snapshot.retrieval_mode == RetrievalMode::LocalBrowser
-        && matches!(
-            capability,
-            RetrievalCapability::Degraded(reason)
-                if reason.starts_with("browser_launch_failed")
-        )
-    {
-        snapshot.previous_retrieval_mode = Some(snapshot.retrieval_mode);
-        snapshot.retrieval_mode = RetrievalMode::FrameworkFallback;
+    outcome: &crate::retrieval_mode::ModeAProbeOutcome,
+) {
+    if outcome.degraded {
+        snapshot.retrieval_mode = outcome.effective_mode;
+        snapshot.previous_retrieval_mode = outcome.previous_mode;
         snapshot.bootstrap_transition_pending = true;
+        snapshot.pending_transition_authority = Some((
+            "mechanical_probe".to_string(),
+            "browser_launch_failed".to_string(),
+        ));
         tracing::warn!(
             "retrieval mode A auto-degrade: local_browser unavailable \
              (browser_launch_failed) -> framework_fallback; transition \
              journaled at next run start"
         );
-        true
-    } else {
-        false
     }
 }
 
@@ -375,55 +373,6 @@ fn persist_activation_sidecar(base_dir: &Path, session_id: &str, state: &StoredA
             }
         }
         Err(e) => tracing::warn!("activation sidecar serialize failed: {e}"),
-    }
-}
-
-/// GAP-RETRIEVAL-TOOLS (2026-08-10): mechanical capability probe for the
-/// session's mode (ADR-0010 §3.7.1 — never a silent fallback). Under
-/// framework_fallback web_fetch is always available (no key dependency)
-/// and web_search rides the configured API key — missing key = Degraded
-/// with an explicit reason, never an implicit switch.
-///
-/// local_browser (2026-08-10): REAL probe — reuse an already-launched
-/// session handle (kept on `StoredSession` so the browser survives across
-/// runs on the same profile, no profile-lock conflicts), else discover +
-/// launch a headless browser and inject it into the host. Launch failure is
-/// `Degraded("browser_launch_failed: <cause>")` — explicit, never a silent
-/// fallback to web tools (ADR-0010 §3.7.1/§3.7.2). A re-probe on a later
-/// prompt retries the launch (self-healing: the browser or profile may
-/// have become available meanwhile).
-async fn probe_retrieval_capability(
-    mode: RetrievalMode,
-    web_search_configured: bool,
-    host: &mut crate::OrzHost,
-    workspace: &std::path::Path,
-    session_id: &str,
-) -> RetrievalCapability {
-    match mode {
-        RetrievalMode::Off => {
-            RetrievalCapability::Unsupported("retrieval_mode_not_selected".to_string())
-        }
-        RetrievalMode::LocalBrowser => {
-            if host.browser_ready() {
-                return RetrievalCapability::Available;
-            }
-            match crate::local_browser::probe_launch(workspace, session_id).await {
-                Ok(manager) => {
-                    host.set_browser_session(std::sync::Arc::new(manager));
-                    RetrievalCapability::Available
-                }
-                Err(cause) => {
-                    RetrievalCapability::Degraded(format!("browser_launch_failed: {cause}"))
-                }
-            }
-        }
-        RetrievalMode::FrameworkFallback => {
-            if web_search_configured {
-                RetrievalCapability::Available
-            } else {
-                RetrievalCapability::Degraded("web_search_not_configured".to_string())
-            }
-        }
     }
 }
 
@@ -1112,7 +1061,14 @@ impl AcpServer {
         {
             host.set_browser_session(browser);
         }
-        let mut capability = probe_retrieval_capability(
+        // RETRIEVAL-SUBAGENT-WIRING (2026-08-25, ADR-0010 §14.40)：外部
+        // 子代理=模式 A 自动定档（共享入口 retrieval_mode::probe_retrieval_
+        // with_mode_a）——local_browser probe 失败（浏览器启动失败）机械
+        // 降级 framework_fallback：改写快照模式 + 置 bootstrap transition
+        // pending + 落盘机械元数据（authority/reason，防跨 run 重试丢失）。
+        // 降级后 capability 已由共享入口以 framework_fallback 的真实能力
+        // 重探（transition 的 capability_status 不残留浏览器失败原因）。
+        let mode_a_outcome = crate::retrieval_mode::probe_retrieval_with_mode_a(
             activation_snapshot.retrieval_mode,
             host.web_search_configured(),
             &mut host,
@@ -1120,24 +1076,7 @@ impl AcpServer {
             session_id,
         )
         .await;
-        // RETRIEVAL-SUBAGENT-WIRING (2026-08-25, ADR-0010 §14.40)：外部
-        // 子代理=模式 A 自动定档——local_browser probe 失败（浏览器启动
-        // 失败）机械降级 framework_fallback（快照改写 + transition pending
-        // 见 apply_mode_a_auto_degrade）。
-        let mode_a_degraded = apply_mode_a_auto_degrade(&mut activation_snapshot, &capability);
-        if mode_a_degraded {
-            // 降级后 capability 以 framework_fallback 的真实能力重探
-            // （web_search_configured 决定 Available / Degraded）——transition
-            // 的 capability_status 反映降级后模式，不残留浏览器失败原因。
-            capability = probe_retrieval_capability(
-                RetrievalMode::FrameworkFallback,
-                host.web_search_configured(),
-                &mut host,
-                &base_dir,
-                session_id,
-            )
-            .await;
-        }
+        apply_mode_a_outcome_to_snapshot(&mut activation_snapshot, &mode_a_outcome);
         // GAP-RETRIEVAL-TOOLS (S4): seed the activation registry from the
         // sidecar — a cross-run AwaitingDisposition activation is restored
         // and journaled (the parent may dispose it in this run). 序列化在
@@ -1176,11 +1115,11 @@ impl AcpServer {
             .with_acaf_fail_closed(self.acaf_fail_closed)
             .with_retrieval_mode(
                 activation_snapshot.retrieval_mode,
-                capability,
+                mode_a_outcome.capability,
                 activation_snapshot.bootstrap_transition_pending,
                 Some(session_id.to_string()),
-                activation_snapshot.previous_retrieval_mode,
-                mode_a_degraded.then_some(("mechanical_probe", "browser_launch_failed")),
+                activation_snapshot.previous_retrieval_mode.clone(),
+                activation_snapshot.pending_transition_authority.clone(),
             )
             .with_activation_snapshot(Some(&activation_snapshot_json));
 
@@ -1221,6 +1160,9 @@ impl AcpServer {
             // M4: the transition's old_mode is consumed — the next change
             // records its own previous value.
             activation_snapshot.previous_retrieval_mode = None;
+            // RETRIEVAL-SUBAGENT-WIRING 审查处理：pending 机械元数据随
+            // transition 消费清除（已落盘的 authority/reason 不再保留）。
+            activation_snapshot.pending_transition_authority = None;
         }
         // S4: fold the controller's live registry back into the snapshot
         // (next_seq + non-Closed activations; Closed excluded).
@@ -1709,12 +1651,14 @@ mod tests {
     use super::*;
     use crate::local_browser::ORZ_BROWSER_PATH_ENV;
     use crate::permission::dead_gateway;
+    use crate::retrieval_mode::probe_retrieval_capability;
     use crate::stdio::StdioAgentHandler;
     use agent_client_protocol as acp;
     use agent_client_protocol::MessageHandler;
     use orz_assurance::EventType;
     use orz_assurance::gates::ipg::WorkspaceTrust;
     use orz_loop::controller::AgentLoopError;
+    use orz_loop::controller::RetrievalCapability;
     use orz_loop::gateway::fake::ScriptedResponse;
     use orz_loop::gateway::model::ToolCall;
     use std::path::{Path, PathBuf};
@@ -1799,54 +1743,53 @@ mod tests {
         plan
     }
 
-    /// RETRIEVAL-SUBAGENT-WIRING (2026-08-25, ADR-0010 §14.40)：外部
-    /// 子代理模式 A 自动定档——local_browser probe 失败
-    /// （browser_launch_failed）降级 framework_fallback + transition
-    /// pending；浏览器可用 / 其他模式 / 页面级失败不降级。
+    /// RETRIEVAL-SUBAGENT-WIRING 审查处理 (2026-08-25)：模式 A 降级结果
+    /// 应用到会话快照——改写模式 + transition pending + 机械元数据落盘；
+    /// 未降级时快照不动。降级决策规则本体在
+    /// `retrieval_mode::mode_a_degrade_rules`（共享入口，ACP/CLI 共用）。
     #[test]
-    fn mode_a_auto_degrade_rules() {
+    fn mode_a_outcome_applies_to_snapshot() {
+        // 降级 → 快照改写 + pending + 机械元数据。
         let mut snap = StoredActivationSnapshot::for_session("sess-a");
         snap.retrieval_mode = RetrievalMode::LocalBrowser;
-        assert!(apply_mode_a_auto_degrade(
+        apply_mode_a_outcome_to_snapshot(
             &mut snap,
-            &RetrievalCapability::Degraded("browser_launch_failed: browser_not_found: x".into())
-        ));
+            &crate::retrieval_mode::ModeAProbeOutcome {
+                effective_mode: RetrievalMode::FrameworkFallback,
+                capability: RetrievalCapability::Available,
+                previous_mode: Some(RetrievalMode::LocalBrowser),
+                degraded: true,
+            },
+        );
         assert_eq!(snap.retrieval_mode, RetrievalMode::FrameworkFallback);
         assert_eq!(
             snap.previous_retrieval_mode,
             Some(RetrievalMode::LocalBrowser)
         );
         assert!(snap.bootstrap_transition_pending);
+        assert_eq!(
+            snap.pending_transition_authority,
+            Some((
+                "mechanical_probe".to_string(),
+                "browser_launch_failed".to_string()
+            ))
+        );
 
-        // 浏览器可用 → 不降级。
+        // 未降级 → 快照不动（显式选择路径语义不变）。
         let mut snap = StoredActivationSnapshot::for_session("sess-b");
         snap.retrieval_mode = RetrievalMode::LocalBrowser;
-        assert!(!apply_mode_a_auto_degrade(
+        apply_mode_a_outcome_to_snapshot(
             &mut snap,
-            &RetrievalCapability::Available
-        ));
+            &crate::retrieval_mode::ModeAProbeOutcome {
+                effective_mode: RetrievalMode::LocalBrowser,
+                capability: RetrievalCapability::Available,
+                previous_mode: None,
+                degraded: false,
+            },
+        );
         assert_eq!(snap.retrieval_mode, RetrievalMode::LocalBrowser);
         assert!(!snap.bootstrap_transition_pending);
-
-        // 非 browser_launch_failed 的 Degraded 原因不触发降级
-        // （probe 只判浏览器启动；页面级失败是 §3.7.2 调用期显式状态）。
-        let mut snap = StoredActivationSnapshot::for_session("sess-c");
-        snap.retrieval_mode = RetrievalMode::LocalBrowser;
-        assert!(!apply_mode_a_auto_degrade(
-            &mut snap,
-            &RetrievalCapability::Degraded("web_search_not_configured".into())
-        ));
-        assert_eq!(snap.retrieval_mode, RetrievalMode::LocalBrowser);
-        assert!(!snap.bootstrap_transition_pending);
-
-        // framework_fallback 不降级。
-        let mut snap = StoredActivationSnapshot::for_session("sess-d");
-        snap.retrieval_mode = RetrievalMode::FrameworkFallback;
-        assert!(!apply_mode_a_auto_degrade(
-            &mut snap,
-            &RetrievalCapability::Available
-        ));
-        assert_eq!(snap.retrieval_mode, RetrievalMode::FrameworkFallback);
+        assert_eq!(snap.pending_transition_authority, None);
     }
 
     /// local_browser (2026-08-10): the probe reuses an already-ready lane

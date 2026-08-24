@@ -503,8 +503,10 @@ pub struct AgentLoopController {
     /// 自动降级 transition 的机械元数据（authority, reason_code）——
     /// local_browser probe 失败降级 framework_fallback 时
     /// (mechanical_probe, browser_launch_failed)；显式选择路径为 None
-    /// （沿用 session_bootstrap/session_default）。
-    pub(crate) transition_authority: Option<(&'static str, &'static str)>,
+    /// （沿用 session_bootstrap/session_default）。自有字符串以支持从
+    /// ACP 侧车跨 run 恢复（审查处理：降级后 run 在 journal 前失败时
+    /// 下轮重试不丢失机械元数据）。
+    pub(crate) transition_authority: Option<(String, String)>,
     /// The owning session id (for the transition payload; `None` in bare
     /// test controllers).
     pub(crate) session_id: Option<String>,
@@ -2394,6 +2396,54 @@ impl AgentLoopController {
         tool_defs
     }
 
+    /// RETRIEVAL-SUBAGENT-WIRING 审查处理 (2026-08-25, ADR-0010 §14.40)：
+    /// 检索工具面跟随模式 A 定档——local_browser 下隐藏 web 族（检索通道
+    /// 仅 browser_read），framework_fallback 下隐藏 browser_read（检索
+    /// 通道仅 web 族）。主面 base 投影与子代理父面共用（子代理从父面继承，
+    /// 外部 lane 的 browser_read 恢复另行按模式门控），避免「声明面同时
+    /// 出现两个通道、调用期 mode 门拒绝其一」的假 available 形态
+    /// （ADR v1.5：声明层与执行层不一致对模型不可预测）。off 模式由既有
+    /// 检索族投影剔除（mode=off 无检索工具），本函数不重复处理。
+    pub(crate) fn apply_retrieval_surface_projection(
+        tool_defs: &mut Vec<ToolDef>,
+        mode: RetrievalMode,
+    ) {
+        match mode {
+            RetrievalMode::LocalBrowser => {
+                tool_defs.retain(|t| !crate::relay::is_web_retrieval_tool(&t.name));
+            }
+            RetrievalMode::FrameworkFallback => {
+                tool_defs.retain(|t| t.name != "browser_read");
+            }
+            RetrievalMode::Off => {}
+        }
+    }
+
+    /// RETRIEVAL-SUBAGENT-WIRING 审查处理 (2026-08-25)：检索任务契约构建
+    /// ——`query` 必填（缺省回退 prompt），可选 `scope`/`max_results` 机械
+    /// 并入 goal 文本。子代理只收到 goal（`SystemPromptKind::Retrieval`），
+    /// 声明面承诺的参数若不入契约会被静默丢弃——并入后语义与 ToolDef
+    /// 描述一致（scope 收窄检索范围、max_results 上限结果数）。
+    pub(crate) fn build_retrieval_task_goal(arguments: &serde_json::Value, prompt: &str) -> String {
+        let mut goal = arguments
+            .get("query")
+            .and_then(|q| q.as_str())
+            .unwrap_or(prompt)
+            .to_string();
+        if let Some(scope) = arguments
+            .get("scope")
+            .and_then(|s| s.as_str())
+            .filter(|s| !s.trim().is_empty())
+        {
+            goal.push_str("\nscope: ");
+            goal.push_str(scope.trim());
+        }
+        if let Some(max) = arguments.get("max_results").and_then(|m| m.as_u64()) {
+            goal.push_str(&format!("\nmax_results: {max}"));
+        }
+        goal
+    }
+
     /// FUS-RETRIEVAL-MECH P0-B 步骤 4 前置裁决（2026-08-14 用户裁决）：
     /// 子代理工具投影 = 父侧 registry 投影去掉主车道专属控制工具
     /// （`compaction_whitelist_add` / `retrieval_disposition`），并恢复主车道
@@ -2403,11 +2453,15 @@ impl AgentLoopController {
     /// lane（InternalRetrieval）工具面仅读族——web 族（web_search/web_fetch
     /// 及变体）与 browser_read 不进入内部 lane（内部检索对象=工作区/项目
     /// 文档，不是外部网络）；外部 lane（ExternalRetrieval）维持 web 族 +
-    /// browser_read（可用时）。
+    /// browser_read（可用时）。审查处理 (2026-08-25)：恢复动作按模式 A
+    /// 定档门控——仅 local_browser 模式恢复 browser_read（framework_fallback
+    /// 下外部 lane 只走 web 族，与 DoD「工具面跟随模式」一致；web 族在
+    /// local_browser 下由 `apply_retrieval_surface_projection` 从父面剔除）。
     pub(crate) fn subagent_tool_projection(
         parent_tools: &[ToolDef],
         registry: &dyn ToolRegistry,
         role: SubagentRole,
+        retrieval_mode: RetrievalMode,
     ) -> Vec<ToolDef> {
         let mut defs: Vec<ToolDef> = parent_tools
             .iter()
@@ -2440,9 +2494,11 @@ impl AgentLoopController {
             .cloned()
             .collect();
         // 外部 lane 恢复主车道已不广告的 host 路由检索工具
-        // （browser_read——local_browser 模式由外部子代理执行）；
-        // 内部 lane 不恢复（工具面仅读族）。
-        if role == SubagentRole::ExternalRetrieval {
+        // （browser_read——local_browser 模式由外部子代理执行）；仅
+        // local_browser 模式恢复（framework_fallback 下外部 lane 只走
+        // web 族）；内部 lane 不恢复（工具面仅读族）。
+        if role == SubagentRole::ExternalRetrieval && retrieval_mode == RetrievalMode::LocalBrowser
+        {
             for name in ["browser_read"] {
                 if !defs.iter().any(|t| t.name == name) {
                     if let Some(def) = registry.get(name) {
@@ -3418,7 +3474,7 @@ impl AgentLoopController {
         bootstrap_transition_pending: bool,
         session_id: Option<String>,
         previous_mode: Option<RetrievalMode>,
-        transition_authority: Option<(&'static str, &'static str)>,
+        transition_authority: Option<(String, String)>,
     ) -> Self {
         self.retrieval_mode = mode;
         self.retrieval_capability = capability;
@@ -5017,6 +5073,11 @@ impl AgentLoopController {
                     && !crate::relay::is_retrieval_mode_gated_host_tool(&t.name)
             });
         }
+        // RETRIEVAL-SUBAGENT-WIRING 审查处理 (2026-08-25)：工具面跟随
+        // 模式 A 定档——local_browser 隐藏 web 族、framework_fallback
+        // 隐藏 browser_read（主面 base 投影；子代理父面继承同一规则，
+        // 外部 lane 的 browser_read 恢复另行按模式门控）。
+        Self::apply_retrieval_surface_projection(&mut tool_defs, self.retrieval_mode);
         // GAP-RETRIEVAL-TOOLS (2026-08-10): journal the session bootstrap
         // mode transition (ADR-0010 §3.7.1 — every transition carries
         // old/new/authority/reason; never implicit). Written BEFORE
@@ -5053,10 +5114,12 @@ impl AgentLoopController {
                         "new_mode": self.retrieval_mode.as_str(),
                         "authority": self
                             .transition_authority
-                            .map_or("session_bootstrap", |(a, _)| a),
+                            .as_ref()
+                            .map_or("session_bootstrap", |(a, _)| a.as_str()),
                         "reason_code": self
                             .transition_authority
-                            .map_or("session_default", |(_, r)| r),
+                            .as_ref()
+                            .map_or("session_default", |(_, r)| r.as_str()),
                         "capability_status": capability_status,
                     }),
                 )
@@ -5642,12 +5705,10 @@ impl AgentLoopController {
             )
             .await?;
 
-        let goal = tc
-            .arguments
-            .get("query")
-            .and_then(|q| q.as_str())
-            .unwrap_or(prompt)
-            .to_string();
+        // RETRIEVAL-SUBAGENT-WIRING 审查处理：任务契约 = query（必填，
+        // 缺省回退 prompt）+ 可选 scope/max_results 机械并入（ToolDef
+        // 声明面承诺的参数必须进契约，否则被静默丢弃）。
+        let goal = Self::build_retrieval_task_goal(&tc.arguments, prompt);
 
         // Activation resolution (ADR-0010 §3.3): the state is REMOVED from
         // the registry so the std::Mutex guard never crosses an await; it is
@@ -5783,7 +5844,12 @@ impl AgentLoopController {
         // parent-disposition control tool), plus the host-routed retrieval
         // tools the main lane no longer advertises (2026-08-14 ruling:
         // browser_read is restored from the host registry here).
-        let sub_tool_defs = Self::subagent_tool_projection(tool_defs, host.tools_registry(), role);
+        let sub_tool_defs = Self::subagent_tool_projection(
+            tool_defs,
+            host.tools_registry(),
+            role,
+            self.retrieval_mode,
+        );
         // per-run 隔离：子代理用本 run 的 gateway 实例（不再引用
         // controller 上跨 run 共享的 `internal_retrieval` /
         // `external_retrieval`）。
@@ -11311,7 +11377,10 @@ mod tests {
                 true,
                 Some("sess-mode-a".to_string()),
                 Some(RetrievalMode::LocalBrowser),
-                Some(("mechanical_probe", "browser_launch_failed")),
+                Some((
+                    "mechanical_probe".to_string(),
+                    "browser_launch_failed".to_string(),
+                )),
             );
         controller
             .run_turn(&host, "查", "RUN-MODEA", MANIFEST, 0, None, None, None)
@@ -22881,19 +22950,22 @@ mod tests {
             &parent,
             &BrowserDeclaringRegistry,
             SubagentRole::ExternalRetrieval,
+            RetrievalMode::LocalBrowser,
         );
         let mut names: Vec<&str> = projected.iter().map(|t| t.name.as_str()).collect();
         names.sort();
         assert_eq!(
             names,
             vec!["browser_read", "read_file", "web_search"],
-            "subagent projection restores browser_read and strips console/main-only tools: {names:?}"
+            "subagent projection restores browser_read under local_browser and \
+             strips console/main-only tools: {names:?}"
         );
 
         let absent = AgentLoopController::subagent_tool_projection(
             &parent,
             &EmptyRegistry,
             SubagentRole::ExternalRetrieval,
+            RetrievalMode::LocalBrowser,
         );
         let mut absent_names: Vec<&str> = absent.iter().map(|t| t.name.as_str()).collect();
         absent_names.sort();
@@ -22901,6 +22973,22 @@ mod tests {
             absent_names,
             vec!["read_file", "web_search"],
             "no invention when the host registry lacks browser_read: {absent_names:?}"
+        );
+
+        // RETRIEVAL-SUBAGENT-WIRING 审查处理：framework_fallback 下外部
+        // lane 不恢复 browser_read（工具面跟随模式 A 定档——仅 web 族）。
+        let fallback = AgentLoopController::subagent_tool_projection(
+            &parent,
+            &BrowserDeclaringRegistry,
+            SubagentRole::ExternalRetrieval,
+            RetrievalMode::FrameworkFallback,
+        );
+        let mut fallback_names: Vec<&str> = fallback.iter().map(|t| t.name.as_str()).collect();
+        fallback_names.sort();
+        assert_eq!(
+            fallback_names,
+            vec!["read_file", "web_search"],
+            "no browser_read restore under framework_fallback: {fallback_names:?}"
         );
     }
 
@@ -22930,6 +23018,7 @@ mod tests {
             &parent,
             &BrowserDeclaringRegistry,
             SubagentRole::InternalRetrieval,
+            RetrievalMode::FrameworkFallback,
         );
         let mut names: Vec<&str> = projected.iter().map(|t| t.name.as_str()).collect();
         names.sort();
@@ -22962,6 +23051,7 @@ mod tests {
             &parent,
             &BrowserDeclaringRegistry,
             SubagentRole::ExternalRetrieval,
+            RetrievalMode::LocalBrowser,
         );
         assert_eq!(
             projected
@@ -22971,6 +23061,109 @@ mod tests {
             1,
             "browser_read must appear exactly once: {projected:?}"
         );
+    }
+
+    /// RETRIEVAL-SUBAGENT-WIRING 审查处理 (2026-08-25)：检索工具面跟随
+    /// 模式 A 定档——local_browser 隐藏 web 族（仅 browser_read 通道）、
+    /// framework_fallback 隐藏 browser_read（仅 web 族通道）；off 由既有
+    /// 检索族投影剔除，本函数不动（保持单一职责）。
+    #[test]
+    fn retrieval_surface_projection_follows_mode() {
+        let defs = |names: &[&str]| -> Vec<ToolDef> {
+            names
+                .iter()
+                .map(|n| ToolDef {
+                    name: n.to_string(),
+                    description: format!("tool {n}"),
+                    parameters: serde_json::json!({}),
+                })
+                .collect()
+        };
+        let names = |v: &[ToolDef]| -> Vec<String> {
+            let mut n: Vec<String> = v.iter().map(|t| t.name.clone()).collect();
+            n.sort();
+            n
+        };
+
+        // local_browser：web 族隐藏，browser_read 保留。
+        let mut lb = defs(&[
+            "web_search",
+            "web_fetch",
+            "web_search_x",
+            "browser_read",
+            "retrieve_project_docs",
+            "read_file",
+        ]);
+        AgentLoopController::apply_retrieval_surface_projection(
+            &mut lb,
+            RetrievalMode::LocalBrowser,
+        );
+        assert_eq!(
+            names(&lb),
+            vec!["browser_read", "read_file", "retrieve_project_docs"],
+            "local_browser hides the web family only: {lb:?}"
+        );
+
+        // framework_fallback：browser_read 隐藏，web 族保留。
+        let mut ff = defs(&[
+            "web_search",
+            "web_fetch",
+            "browser_read",
+            "retrieve_project_docs",
+            "read_file",
+        ]);
+        AgentLoopController::apply_retrieval_surface_projection(
+            &mut ff,
+            RetrievalMode::FrameworkFallback,
+        );
+        assert_eq!(
+            names(&ff),
+            vec![
+                "read_file",
+                "retrieve_project_docs",
+                "web_fetch",
+                "web_search"
+            ],
+            "framework_fallback hides browser_read only: {ff:?}"
+        );
+
+        // off：本函数不动（既有检索族投影剔除是 off 的唯一职责面）。
+        let mut off = defs(&["web_search", "browser_read"]);
+        AgentLoopController::apply_retrieval_surface_projection(&mut off, RetrievalMode::Off);
+        assert_eq!(
+            names(&off),
+            vec!["browser_read", "web_search"],
+            "off is untouched by the mode-surface helper: {off:?}"
+        );
+    }
+
+    /// RETRIEVAL-SUBAGENT-WIRING 审查处理 (2026-08-25)：检索任务契约
+    /// 构建——query 必填（缺省回退 prompt）；scope/max_results 机械并入
+    /// goal（子代理只收到 goal 文本，声明面承诺的参数必须进契约）。
+    #[test]
+    fn retrieval_task_goal_folds_scope_and_max_results() {
+        let args = serde_json::json!({
+            "query": "调研缓存层",
+            "scope": "src/cache",
+            "max_results": 5,
+        });
+        let goal = AgentLoopController::build_retrieval_task_goal(&args, "fallback prompt");
+        assert_eq!(goal, "调研缓存层\nscope: src/cache\nmax_results: 5");
+
+        // 仅 query（常见形态）→ 原样。
+        let args = serde_json::json!({ "query": "调研缓存层" });
+        let goal = AgentLoopController::build_retrieval_task_goal(&args, "fallback prompt");
+        assert_eq!(goal, "调研缓存层");
+
+        // query 缺失 → 回退 prompt；空 scope 不入契约。
+        let args = serde_json::json!({ "scope": "   " });
+        let goal = AgentLoopController::build_retrieval_task_goal(&args, "fallback prompt");
+        assert_eq!(goal, "fallback prompt");
+
+        // 非法 max_results（字符串）→ 忽略，不 panic。
+        let args = serde_json::json!({ "query": "q", "max_results": "10" });
+        let goal = AgentLoopController::build_retrieval_task_goal(&args, "fallback prompt");
+        assert_eq!(goal, "q");
     }
 
     /// A host registry that declares `browser_read` (local_browser capable).
@@ -25251,9 +25444,18 @@ mod tests {
             journal,
             tool_result: None,
         };
-        let gateway: Arc<dyn ModelGateway> = Arc::new(FakeProvider::new(vec![
+        let fake = Arc::new(FakeProvider::new(vec![
             // 主车道第 1 轮：直接调 retrieve_project_docs。
-            ScriptedResponse::tool_calls(vec![tool_call("retrieve_project_docs", "call-rpd-1")]),
+            // 审查处理：query 必填 + 可选 scope/max_results 一并进入契约。
+            ScriptedResponse::tool_calls(vec![ToolCall {
+                name: "retrieve_project_docs".to_string(),
+                arguments: serde_json::json!({
+                    "query": "调研缓存层",
+                    "scope": "src/cache",
+                    "max_results": 3,
+                }),
+                call_id: "call-rpd-1".to_string(),
+            }]),
             // 子代理车道第 1 轮：调用读族工具（read_file）做检索。
             ScriptedResponse::tool_calls(vec![tool_call("read_file", "call-rpd-2")]),
             // 子代理车道第 2 轮：形成结构化结果并关闭。
@@ -25262,6 +25464,7 @@ mod tests {
             ScriptedResponse::text("草稿"),
             ScriptedResponse::text("终答"),
         ]));
+        let gateway: Arc<dyn ModelGateway> = fake.clone();
         let controller = with_retrieval_enabled(AgentLoopController::with_gateway(gateway));
         let (response, _, _) = controller
             .run_turn(
@@ -25277,6 +25480,22 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(response, "终答");
+
+        // 审查处理：scope/max_results 机械并入子代理任务契约（子代理只收
+        // goal 文本，声明面承诺的参数必须进契约）。
+        let received = fake.received_requests();
+        let subagent_req = received
+            .iter()
+            .find(|r| r.system.contains("调研缓存层"))
+            .expect("internal subagent receives the folded retrieval task goal");
+        assert!(
+            subagent_req.system.contains("scope: src/cache"),
+            "scope folded into the subagent contract: {subagent_req:?}"
+        );
+        assert!(
+            subagent_req.system.contains("max_results: 3"),
+            "max_results folded into the subagent contract: {subagent_req:?}"
+        );
 
         let events = events(&dir);
         // 主车道 retrieve_project_docs 派发到 internal_retrieval（relay 路由）。

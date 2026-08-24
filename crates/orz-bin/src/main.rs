@@ -341,6 +341,27 @@ fn retrieval_mode_from_env() -> Option<orz_loop::controller::RetrievalMode> {
         .and_then(|v| orz_loop::controller::RetrievalMode::from_wire(Some(&v)))
 }
 
+/// RETRIEVAL-SUBAGENT-WIRING 审查处理 (2026-08-25, ADR-0010 §14.40)：
+/// CLI 一次性运行（`orz -p ...`）的检索模式接线决策——由 probe 结果决定
+/// controller 的 `bootstrap_transition_pending` 与 transition 元数据：
+/// - off（缺省）：不 journal（无检索选择）；
+/// - 显式非 off：journal `off → mode`（session_bootstrap/session_default）；
+/// - 模式 A 降级：journal `local_browser → framework_fallback`
+///   （mechanical_probe/browser_launch_failed）。
+fn cli_retrieval_wiring(
+    outcome: &orz_host::retrieval_mode::ModeAProbeOutcome,
+) -> (bool, Option<(String, String)>) {
+    let pending =
+        outcome.degraded || outcome.effective_mode != orz_loop::controller::RetrievalMode::Off;
+    let authority = outcome.degraded.then(|| {
+        (
+            "mechanical_probe".to_string(),
+            "browser_launch_failed".to_string(),
+        )
+    });
+    (pending, authority)
+}
+
 /// ACAF Slice 1 (ADR-0011 §4.4): spawn the signer-process client when the
 /// launch chain configures it (`ORZ_ACAF_MANIFEST` + `ORZ_ACAF_KEYSTORE`
 /// both set). Unconfigured → `None` (unticketed control events, zero
@@ -1102,8 +1123,22 @@ async fn run(
         // Phase 3 wiring: real OrzHost (GrokBuild toolset + trust) behind
         // the IP6 permission bridge. Headless (`None` gateway): Read
         // auto-allows, Bash Ask → Deny.
-        let host = build_cli_host(&handle, &run_id, &cwd)?;
+        let mut host = build_cli_host(&handle, &run_id, &cwd)?;
 
+        // RETRIEVAL-SUBAGENT-WIRING 审查处理 (2026-08-25, ADR-0010 §14.40)：
+        // CLI 一次性运行接通检索模式——`--retrieval-mode` / `ORZ_RETRIEVAL_MODE`
+        // 走与 ACP 会话路径共享的 probe + 模式 A 机械定档（local_browser
+        // probe 失败 → framework_fallback + transition 元数据）。此前
+        // ORZ_RETRIEVAL_MODE 仅被 stdio 入口消费，`orz -p` 会话恒停 off。
+        let retrieval_outcome = orz_host::retrieval_mode::probe_retrieval_with_mode_a(
+            retrieval_mode_from_env().unwrap_or(orz_loop::controller::RetrievalMode::Off),
+            host.web_search_configured(),
+            &mut host,
+            &cwd,
+            &run_id,
+        )
+        .await;
+        let (retrieval_pending, transition_authority) = cli_retrieval_wiring(&retrieval_outcome);
         let controller = orz_loop::AgentLoopController::with_gateway(build_gateway())
             // PLAN-FIRST 阶段 A (2026-08-16, ADR-0010 §14.17): production
             // CLI runs start with the first-round plan gate.
@@ -1112,6 +1147,14 @@ async fn run(
             // default + direct 受控降级（双模式）随生产路径启用。
             .with_console_default_enabled(true)
             .with_snapshot_store(Some(handle.snapshot_store.clone()))
+            .with_retrieval_mode(
+                retrieval_outcome.effective_mode,
+                retrieval_outcome.capability,
+                retrieval_pending,
+                None,
+                retrieval_outcome.previous_mode,
+                transition_authority,
+            )
             // ACAF Slice 1 (ADR-0011 §4.4): optional signer-process client
             // (env-gated; unconfigured → unticketed control events, zero
             // behaviour change). Shadow mode by default; Slice 2
@@ -2884,9 +2927,56 @@ mod conformance_capture {
 #[cfg(test)]
 mod benchmark_flags_tests {
     use super::parse_benchmark_flags;
+    use orz_host::retrieval_mode::ModeAProbeOutcome;
+    use orz_loop::controller::{RetrievalCapability, RetrievalMode};
 
     fn args(list: &[&str]) -> Vec<String> {
         list.iter().map(|s| s.to_string()).collect()
+    }
+
+    /// RETRIEVAL-SUBAGENT-WIRING 审查处理 (2026-08-25)：CLI 一次性运行
+    /// 的检索模式接线决策——off 不 journal；显式非 off journal
+    /// session_bootstrap；模式 A 降级 journal
+    /// mechanical_probe/browser_launch_failed。
+    #[test]
+    fn cli_retrieval_wiring_decisions() {
+        // off（缺省）：不 journal。
+        let (pending, authority) = super::cli_retrieval_wiring(&ModeAProbeOutcome {
+            effective_mode: RetrievalMode::Off,
+            capability: RetrievalCapability::Unsupported("retrieval_mode_not_selected".into()),
+            previous_mode: None,
+            degraded: false,
+        });
+        assert!(!pending);
+        assert_eq!(authority, None);
+
+        // 显式 local_browser 可用：journal off → local_browser
+        // （session_bootstrap/session_default 由 controller 缺省填写）。
+        let (pending, authority) = super::cli_retrieval_wiring(&ModeAProbeOutcome {
+            effective_mode: RetrievalMode::LocalBrowser,
+            capability: RetrievalCapability::Available,
+            previous_mode: None,
+            degraded: false,
+        });
+        assert!(pending);
+        assert_eq!(authority, None);
+
+        // 模式 A 降级：journal local_browser → framework_fallback
+        // （mechanical_probe/browser_launch_failed）。
+        let (pending, authority) = super::cli_retrieval_wiring(&ModeAProbeOutcome {
+            effective_mode: RetrievalMode::FrameworkFallback,
+            capability: RetrievalCapability::Available,
+            previous_mode: Some(RetrievalMode::LocalBrowser),
+            degraded: true,
+        });
+        assert!(pending);
+        assert_eq!(
+            authority,
+            Some((
+                "mechanical_probe".to_string(),
+                "browser_launch_failed".to_string()
+            ))
+        );
     }
 
     #[test]
