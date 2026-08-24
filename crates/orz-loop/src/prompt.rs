@@ -58,6 +58,8 @@ compaction_whitelist_add 写入压缩白名单——该内容不被上下文压�
 结果即时返回，不再有下单/读回执仪式。命令运行/写执行/检索派发由运行时背板执行 \
 （cwd/env/超时归 host），ACAF/权限/预算/候选计数门保持。写文件前先用 read_file \
 获取内容锚点（sha256/size），search_replace 携带 expected_anchor 供写前核证。\
+多文件/跨目录调研用 retrieve_project_docs 打包派发内部检索子代理（返回结构化结果，\
+不膨胀主对话）；单文件点读用 read_file/grep/search_tool。\
 递交用 submit（无参两阶段：先渲染交付状态供核查，再确认）。最终回答前会有一次 \
 [COUNTEREXAMPLE_GATE] 反例自查轮，[MECHANICAL_AUDIT] 执行事实报告随该轮注入，\
 供你核对计划完成声明。";

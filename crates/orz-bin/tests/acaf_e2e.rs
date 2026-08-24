@@ -320,6 +320,7 @@ async fn controller_control_events_carry_tickets() {
             false,
             None,
             None,
+            None,
         )
         .with_acaf(Some(client));
     controller
@@ -451,6 +452,7 @@ async fn signer_unreachable_shadow_records_rejection_and_proceeds() {
             RetrievalMode::FrameworkFallback,
             RetrievalCapability::Available,
             false,
+            None,
             None,
             None,
         )
@@ -933,6 +935,7 @@ async fn goal_revision_continue_flow_re_derives_session_key() {
             false,
             None,
             None,
+            None,
         )
         .with_acaf(Some(client));
     controller
@@ -1112,6 +1115,7 @@ async fn network_ticket_full_chain() {
             RetrievalMode::LocalBrowser,
             RetrievalCapability::Available,
             false,
+            None,
             None,
             None,
         )
@@ -1497,6 +1501,7 @@ async fn invalid_network_url_shadow_records_rejection_and_proceeds() {
             false,
             None,
             None,
+            None,
         )
         .with_snapshot_store(Some(store))
         .with_acaf(Some(client));
@@ -1677,6 +1682,7 @@ async fn missing_browser_read_url_refuses_before_acaf_with_count_gate() {
             false,
             None,
             None,
+            None,
         )
         .with_snapshot_store(Some(store))
         .with_acaf(Some(client));
@@ -1824,6 +1830,7 @@ async fn fail_closed_web_search_executes_unticketed_with_zero_ticket_events() {
             false,
             None,
             None,
+            None,
         )
         .with_snapshot_store(Some(store))
         .with_acaf(Some(client))
@@ -1939,6 +1946,7 @@ async fn fail_closed_verify_rpc_failure_journals_once_and_blocks() {
             RetrievalMode::LocalBrowser,
             RetrievalCapability::Available,
             false,
+            None,
             None,
             None,
         )
@@ -2095,6 +2103,7 @@ async fn fail_closed_goal_revision_rejected_does_not_migrate() {
             false,
             None,
             None,
+            None,
         )
         .with_snapshot_store(Some(store))
         .with_acaf(Some(client))
@@ -2212,6 +2221,7 @@ async fn fail_closed_missing_url_blocks_network_tool() {
             RetrievalMode::LocalBrowser,
             RetrievalCapability::Available,
             false,
+            None,
             None,
             None,
         )
@@ -2490,6 +2500,7 @@ async fn fail_closed_retrieval_lane_web_fetch_binds_activation_d13() {
             false,
             None,
             None,
+            None,
         )
         .with_snapshot_store(Some(store))
         .with_acaf(Some(client))
@@ -2602,6 +2613,7 @@ async fn fail_closed_continue_consumes_goal_revision_ticket() {
             RetrievalMode::FrameworkFallback,
             RetrievalCapability::Available,
             false,
+            None,
             None,
             None,
         )

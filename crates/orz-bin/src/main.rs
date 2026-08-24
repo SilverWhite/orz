@@ -2257,6 +2257,7 @@ mod conformance_capture {
                     false,
                     None,
                     None,
+                    None,
                 );
                 // This scenario is the 7-round-crossing proof — the session
                 // orientation state MUST be threaded in (a one-shot CLI run
@@ -2492,6 +2493,7 @@ mod conformance_capture {
                         true,
                         None,
                         None,
+                        None,
                     );
                 controller
                     .run_turn(
@@ -2589,6 +2591,7 @@ mod conformance_capture {
                     true,
                     None,
                     None,
+                None,
                 );
                 controller
                     .run_turn(
@@ -2713,6 +2716,7 @@ mod conformance_capture {
                     false,
                     None,
                     None,
+                None,
                 );
                 controller
                     .run_turn(
@@ -2827,6 +2831,7 @@ mod conformance_capture {
                         orz_loop::controller::RetrievalMode::FrameworkFallback,
                         orz_loop::controller::RetrievalCapability::Available,
                         false,
+                        None,
                         None,
                         None,
                     )
