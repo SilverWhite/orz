@@ -3618,9 +3618,23 @@ ADR §3.6 正文修订随实施登记。
    session_bootstrap）。验证：orz-loop 558 / 0 / 3、orz-host 223 / 0 /
    4（串行）、orz-tui 178 / 0、orz-assurance 144 / 0、orz-bin 11 / 0 +
    acaf_e2e 23 + real_flag 2 + stdio_e2e 1、fmt 干净、clippy 无新增。
-   新增专项测试 4 项：模式 A 降级决策与快照应用（含前缀收紧）、CLI 接线
-   决策（off 不 journal / 显式 session_bootstrap / 降级
-   mechanical_probe）、检索工具面跟随模式、检索任务契约并入
-   scope/max_results（含子代理 system goal 断言）。登记于
+  新增专项测试 4 项：模式 A 降级决策与快照应用（含前缀收紧）、CLI 接线
+  决策（off 不 journal / 显式 session_bootstrap / 降级
+  mechanical_probe）、检索工具面跟随模式、检索任务契约并入
+  scope/max_results（含子代理 system goal 断言）。登记于
+  [设计](../docs/RETRIEVAL_SUBAGENT_WIRING_DESIGN_2026-08-25.md) §4 /
+  BACKLOG 0h / TODO P0-0h。
+
+5. **检索子代理接线 S3 重建（2026-08-25；S4 待实施）**：Linux musl
+   三件套（ORZ-BUILD-MOUNT-001 契约，build_orz_aliyun.sh，
+   rust:1.97-slim 增量构建 -j 1）BUILD_EXIT=0；三件套时间戳
+   2026-08-25 02:46 HKT（orz 104,796,704 B / orz-signer 1,388,496 B
+   / orz-acaf-provision 1,206,480 B），编译 6m10s；最小可执行冒烟=
+   三件正常加载执行（orz 无 TTY io error 属预期、provision usage、
+   signer manifest 缺失）；守卫符号 retired_tool_denied /
+   content_anchor_mismatch 各 8 命中；新检索接线符号（retrieval-mode
+   / browser_launch_failed / retrieve_project_docs）在二进制内；无
+   glibc 动态解释器（musl 静态确认）；对应源码 orz f4f1b81 + 父
+   48cb030（均已推送）。登记于
    [设计](../docs/RETRIEVAL_SUBAGENT_WIRING_DESIGN_2026-08-25.md) §4 /
    BACKLOG 0h / TODO P0-0h。

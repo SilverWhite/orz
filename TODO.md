@@ -1223,7 +1223,7 @@ S4 待实施）
   零 400、命中率 ≥90%、轮次/耗时下降、reward 对比）——待实施
 
 ### P0-0h RETRIEVAL-SUBAGENT-WIRING（P0；2026-08-25 设计定稿；设计轮
-不动计数；S1 实施 + S2 测试 + 全面审查处理已完成；S3 待实施）
+不动计数；S1 实施 + S2 测试 + 全面审查处理 + S3 重建已完成；S4 待实施）
 
 > 入口：[设计](docs/RETRIEVAL_SUBAGENT_WIRING_DESIGN_2026-08-25.md)；
 > ADR-0010 §14.40（v1.40）；BACKLOG 0h。
@@ -1267,7 +1267,12 @@ S4 待实施）
   orz-assurance 144 / orz-bin 11 + 集成全绿、fmt 干净、clippy 无新增；
   登记于 ADR-0010 §14.40 第 4 项）
 
-- [ ] S3 重建（Linux musl，ORZ-BUILD-MOUNT-001）——待实施
+- [x] S3 重建（2026-08-25；Linux musl 三件套，ORZ-BUILD-MOUNT-001
+  契约，build_orz_aliyun.sh -j 1，BUILD_EXIT=0；三件套 02:46 HKT
+  （orz 104,796,704 B / orz-signer 1,388,496 B / orz-acaf-provision
+  1,206,480 B），编译 6m10s；冒烟=三件正常加载执行、守卫符号
+  retired_tool_denied / content_anchor_mismatch 各 8 命中、新检索
+  接线符号在二进制内、musl 静态；对应源码 orz f4f1b81 + 父 48cb030）
 
 - [ ] S4 复验（构造题：检索调用出现、零 400、命中率 ≥90%、reward 不降）
   ——待实施

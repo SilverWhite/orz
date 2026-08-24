@@ -1256,7 +1256,8 @@ fail-closed + clippy 修复）
 ### 0h. RETRIEVAL-SUBAGENT-WIRING（P0；2026-08-25 设计定稿；S1 已实施
 2026-08-25 + S2 测试已实施 2026-08-25 + 全面审查处理已完成 2026-08-25
 （CLI 运行路径接通检索模式、scope/max_results 入契约、工具面跟随模式、
-前缀收紧、降级元数据持久化）；设计轮不动计数；S3 待实施）
+前缀收紧、降级元数据持久化）+ S3 重建已完成 2026-08-25；设计轮不动
+计数；S4 待实施）
 
 - 入口：[设计](RETRIEVAL_SUBAGENT_WIRING_DESIGN_2026-08-25.md)；索引：
   [CLI_PROJECT_INDEX.md](../CLI_PROJECT_INDEX.md)；ADR-0010 §14.40
@@ -1301,6 +1302,16 @@ fail-closed + clippy 修复）
   降级 transition 元数据、主面 retrieve_project_docs 声明、主车道内部
   派发、内部 lane 投影仅读族）；全量全绿。登记于 ADR-0010 §14.40 第 3 项
   / TODO P0-0h。
+- **S3 重建（2026-08-25）**：Linux musl 三件套（ORZ-BUILD-MOUNT-001
+  契约，build_orz_aliyun.sh，rust:1.97-slim 增量构建 -j 1）
+  BUILD_EXIT=0；三件套 2026-08-25 02:46 HKT（orz 104,796,704 B /
+  orz-signer 1,388,496 B / orz-acaf-provision 1,206,480 B），编译
+  6m10s；冒烟=三件正常加载执行（orz 无 TTY io error 属预期、provision
+  usage、signer manifest 缺失）、守卫符号 retired_tool_denied /
+  content_anchor_mismatch 各 8 命中、新检索接线符号（retrieval-mode /
+  browser_launch_failed / retrieve_project_docs）在二进制内、musl 静态
+  （无 PT_INTERP）；对应源码 orz f4f1b81 + 父 48cb030（均已推送）。
+  登记于 ADR-0010 §14.40 第 5 项 / TODO P0-0h。
 
 ### 0. 前置收尾（提交前需用户确认）
 
