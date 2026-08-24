@@ -82,7 +82,7 @@
 > 本快照只做计数与分组召回，明细以下方各分组勾选清单为唯一入口，不新增独立条目；
 > 后续扫描更新时同步替换本快照日期与计数。
 
-- 未闭合总数：**30 项**（2026-08-19 0c 验证闭环 29 → 28；2026-08-20
+- 未闭合总数：**29 项**（2026-08-19 0c 验证闭环 29 → 28；2026-08-20
   0d 验证闭环 29 → 28；2026-08-20 OUTPUT-BUDGET-RESTORE-AND-STALL-GUARD
   S1 实施放行入账 28 → 29，**S3/S4 验证闭环 29 → 28**；2026-08-20
   THINKING-DEFAULT-HIGH-LADDER S1 实施放行入账 28 → 29，**S3/S4 换题
@@ -96,7 +96,12 @@
   2026-08-23 AGENT-DELIVERY-FLOW（P0-0d 后续 7）S1 代码 + S2 测试闭合
   实施入账 28 → 29，**S4 复验闭环 2026-08-23，计数 29 → 28（见下）**；
   2026-08-23 NGRAM-GUARD-CALIBRATION
-  （P0-0d 后续 8）S1 代码实施入账 29 → 30（S2-S4 待续，见下））
+  （P0-0d 后续 8）S1 代码实施入账 29 → 30（S2-S4 待续，见下）；
+  2026-08-23 NGRAM S4 复验闭环 30 → 29（补记）；2026-08-24
+  MECHANICAL-AUDIT-LAYER（0g）S1 实施放行入账 29 → 30（补记）；
+  2026-08-25 RETRIEVAL-SUBAGENT-WIRING（0h）S1 实施放行入账 30 → 31
+  （补记）；2026-08-25 0g S4 复验闭环 31 → 30；2026-08-25 0h S4
+  复验闭环 30 → 29）
   - P0-C：0 项（PLAN-FIRST 阶段 A/B/C 全部闭合，2026-08-16）
   - P0 评测冒烟暴露：0 项（P0-E 主项 7 项 + FUS-TOOL-SCOPE-CONTRACT 后续 2 项全部闭合 2026-08-18，见 P0-E grep 项后续①/②）
   - P0 Benchmark 完全体：1 项（FUS-BENCHMARK-FULL-EXEC 实施完成待验证，见 P0-F；验证闭环后回 26）
@@ -1154,7 +1159,7 @@ S1-S4 全部闭合 2026-08-21，计数 28 → 27）
 
 ### P0-0g MECHANICAL-AUDIT-LAYER（P0；2026-08-24 设计定稿；S1/S2 已实施
 闭合 + 全面审查处理已完成 + S3 重建完成 2026-08-24；设计轮不动计数；
-S4 待实施）
+S4 复验闭环 2026-08-25（补登记）；S1-S4 全部闭合）
 
 > 入口：[设计](docs/MECHANICAL_AUDIT_LAYER_DESIGN_2026-08-24.md)；
 > ADR-0010 §14.39（v1.39）；BACKLOG 0g。
@@ -1219,11 +1224,16 @@ S4 待实施）
   reasoning_content 修复 orz 4ca60c2 + 父 c1ce4c1，三件套 orz
   104,726,432 B，编译 5m04s，冒烟同前））
 
-- [ ] S4 复验（同一 10 题 k=1 + 构造题：检索调用出现、审计报告覆盖写、
-  零 400、命中率 ≥90%、轮次/耗时下降、reward 对比）——待实施
+- [x] S4 复验闭环（2026-08-25 补登记；2026-08-24 sweep-mal-s4 实机 5
+  题 k=1 全过 reward 1.00、零异常、48m06s；5/5 journal 事件链完整性
+  100%、零 fail 事件、[MECHANICAL_AUDIT] 报告注入齐全（22–106 处）；
+  检索可达项该轮暴露缺口——由 0h S4 单题实测补足（2026-08-25
+  mteb-leaderboard：web_search×19 / web_fetch×10、降级 transition
+  落盘、reward 1.00）；计数 31 → 30；ADR-0010 §14.39 第 6 项）
 
 ### P0-0h RETRIEVAL-SUBAGENT-WIRING（P0；2026-08-25 设计定稿；设计轮
-不动计数；S1 实施 + S2 测试 + 全面审查处理 + S3 重建已完成；S4 待实施）
+不动计数；S1 实施 + S2 测试 + 全面审查处理 + S3 重建已完成；S4 复验闭环
+2026-08-25；S1-S4 全部闭合）
 
 > 入口：[设计](docs/RETRIEVAL_SUBAGENT_WIRING_DESIGN_2026-08-25.md)；
 > ADR-0010 §14.40（v1.40）；BACKLOG 0h。
@@ -1274,8 +1284,14 @@ S4 待实施）
   retired_tool_denied / content_anchor_mismatch 各 8 命中、新检索
   接线符号在二进制内、musl 静态；对应源码 orz f4f1b81 + 父 48cb030）
 
-- [ ] S4 复验（构造题：检索调用出现、零 400、命中率 ≥90%、reward 不降）
-  ——待实施
+- [x] S4 复验闭环（2026-08-25；单道检索题实机 mteb-leaderboard k=1：
+  reward 1.00、零异常、33m23s；检索调用出现（web_search×19 /
+  web_fetch×10 + 外部子代理结果侧车 2 份）；降级 transition 落盘
+  （local_browser→framework_fallback、mechanical_probe /
+  browser_launch_failed）；零 400 / 零 tool_failed / 零
+  run_invalidated；journal 事件链完整性 100%（619/619，命中率 ≥90%）；
+  终答 GritLM/GritLM-7B 通过 verifier；DoD 1-7 全部满足；计数 30 → 29；
+  ADR-0010 §14.40 第 6 项）
 
 ### P0-B FUS-RETRIEVAL-MECH（`implemented`；批次 1-6 已全部闭合，2026-08-14，保留供核对）
 

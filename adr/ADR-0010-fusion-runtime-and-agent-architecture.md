@@ -3528,6 +3528,20 @@ ADR §3.6 正文修订随实施登记。
    登记于 [设计](../docs/MECHANICAL_AUDIT_LAYER_DESIGN_2026-08-24.md)
    §4 / BACKLOG 0g / TODO P0-0g。
 
+6. **机械审查层＋半助理层 S4 复验闭环（2026-08-25 补登记；计数 31 → 30，
+   `implemented`）**：S4 实机=2026-08-24 sweep-mal-s4（5 题 k=1：
+   git-multibranch / break-filter-js-from-html / code-from-image /
+   mteb-retrieve / sam-cell-seg，deepseek-v4-flash）5/5 reward 1.00、
+   零异常、48m06s；5/5 journal 事件链完整性 100%、零 fail 事件、
+   [MECHANICAL_AUDIT] 报告注入齐全（22–106 处引用）；审计报告覆盖写
+   由 S2 专项测试预演覆盖；检索可达项在该轮暴露缺口（检索族零可见，
+   即 0h 主题根因）——由 RETRIEVAL-SUBAGENT-WIRING（0h）S4 单题实测
+   补足（2026-08-25 mteb-leaderboard：web_search×19 / web_fetch×10、
+   降级 transition 落盘、reward 1.00）。计数 31 → 30（0g S1 放行入账
+   29 → 30 补记于 TODO 快照）。登记于
+   [设计](../docs/MECHANICAL_AUDIT_LAYER_DESIGN_2026-08-24.md) §4 /
+   BACKLOG 0g / TODO P0-0g。
+
 ### 14.40 v1.40 补写裁决索引（2026-08-25）
 
 本节记录冻结后的显式补写；规范正文以所指章节为准，补写明确
@@ -3636,5 +3650,22 @@ ADR §3.6 正文修订随实施登记。
    / browser_launch_failed / retrieve_project_docs）在二进制内；无
    glibc 动态解释器（musl 静态确认）；对应源码 orz f4f1b81 + 父
    48cb030（均已推送）。登记于
+   [设计](../docs/RETRIEVAL_SUBAGENT_WIRING_DESIGN_2026-08-25.md) §4 /
+   BACKLOG 0h / TODO P0-0h。
+
+6. **检索子代理接线 S4 复验闭环（2026-08-25；计数 30 → 29，
+   `implemented`）**：单道检索题实机（terminal-bench 2.1
+   mteb-leaderboard，k=1，deepseek-v4-flash，sweep-0h-s4-lb，
+   33m23s）reward 1.00、零异常——模型经 GitHub API 锁定 2025-08-29
+   结果仓库快照（71f6b62）后用 mteb 1.38.41 计算 Scandinavian 全任务
+   Mean (Task) 并按全任务过滤，终答 GritLM/GritLM-7B（17 字节，
+   read_file 锚点核证）；检索调用出现（主面 web_search×19 /
+   web_fetch×10，外部子代理检索结果侧车 2 份落盘）；降级 transition
+   落盘（old=local_browser → new=framework_fallback，
+   authority=mechanical_probe、reason_code=browser_launch_failed、
+   capability_status=available）；零真实 400 / 零 tool_failed / 零
+   run_invalidated；journal 事件链完整性 100%（619/619，命中率 ≥90%
+   达标）；DoD 1-7 全部满足。计数 30 → 29（0h S1 放行入账 30 → 31
+   补记于 TODO 快照）。登记于
    [设计](../docs/RETRIEVAL_SUBAGENT_WIRING_DESIGN_2026-08-25.md) §4 /
    BACKLOG 0h / TODO P0-0h。

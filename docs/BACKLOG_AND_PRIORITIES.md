@@ -1178,7 +1178,8 @@ fail-closed + clippy 修复）
 
 ### 0g. MECHANICAL-AUDIT-LAYER（P0；2026-08-24 设计定稿；**S1 已实施
 2026-08-24（合并实施包）+ S2 测试已实施 2026-08-24 + S3 重建完成
-2026-08-24**；设计轮不动计数；S4 待实施）
+2026-08-24 + S4 复验闭环 2026-08-25（补登记）**；设计轮不动计数；
+S1-S4 全部闭合）
 
 - 入口：[设计](MECHANICAL_AUDIT_LAYER_DESIGN_2026-08-24.md)；索引：
   [CLI_PROJECT_INDEX.md](../CLI_PROJECT_INDEX.md)；ADR-0010 §14.39（v1.39）。
@@ -1252,12 +1253,23 @@ fail-closed + clippy 修复）
   08:19 HKT）：reasoning_content 修复 orz 4ca60c2 + 父 c1ce4c1（均已
   推送），三件套 orz 104,726,432 B / signer 1,388,592 B / provision
   1,206,576 B，编译 5m04s，冒烟同前。
+- **S4 复验闭环（2026-08-25 补登记）**：2026-08-24 sweep-mal-s4 实机
+  （5 题 k=1：git-multibranch / break-filter-js-from-html /
+  code-from-image / mteb-retrieve / sam-cell-seg，deepseek-v4-flash）
+  5/5 reward 1.00、零异常、48m06s；5/5 journal 事件链完整性 100%、零
+  fail 事件、[MECHANICAL_AUDIT] 报告注入齐全（22–106 处引用）；审计
+  报告覆盖写由 S2 专项测试预演覆盖；检索可达项在该轮暴露缺口（检索族
+  零可见，即 0h 主题根因）——由 RETRIEVAL-SUBAGENT-WIRING（0h）S4
+  单题实测补足（2026-08-25 mteb-leaderboard：web_search×19 /
+  web_fetch×10、降级 transition 落盘、reward 1.00）。计数 31 → 30
+  （0g S1 放行入账 29 → 30 补记于 TODO 快照）。登记于 ADR-0010 §14.39
+  第 6 项 / TODO P0-0g。
 
 ### 0h. RETRIEVAL-SUBAGENT-WIRING（P0；2026-08-25 设计定稿；S1 已实施
 2026-08-25 + S2 测试已实施 2026-08-25 + 全面审查处理已完成 2026-08-25
 （CLI 运行路径接通检索模式、scope/max_results 入契约、工具面跟随模式、
 前缀收紧、降级元数据持久化）+ S3 重建已完成 2026-08-25；设计轮不动
-计数；S4 待实施）
+计数；S4 复验闭环 2026-08-25；S1-S4 全部闭合）
 
 - 入口：[设计](RETRIEVAL_SUBAGENT_WIRING_DESIGN_2026-08-25.md)；索引：
   [CLI_PROJECT_INDEX.md](../CLI_PROJECT_INDEX.md)；ADR-0010 §14.40
@@ -1312,6 +1324,19 @@ fail-closed + clippy 修复）
   browser_launch_failed / retrieve_project_docs）在二进制内、musl 静态
   （无 PT_INTERP）；对应源码 orz f4f1b81 + 父 48cb030（均已推送）。
   登记于 ADR-0010 §14.40 第 5 项 / TODO P0-0h。
+- **S4 复验闭环（2026-08-25）**：单道检索题实机（terminal-bench 2.1
+  mteb-leaderboard，k=1，deepseek-v4-flash，sweep-0h-s4-lb，
+  33m23s）reward 1.00、零异常——模型经 GitHub API 锁定 2025-08-29
+  结果仓库快照（71f6b62）后用 mteb 1.38.41 计算 Scandinavian 全任务
+  Mean (Task) 并按全任务过滤，终答 GritLM/GritLM-7B（17 字节，
+  read_file 锚点核证）；检索调用出现（主面 web_search×19 /
+  web_fetch×10，外部子代理检索结果侧车 2 份落盘）；降级 transition
+  落盘（old=local_browser → new=framework_fallback，
+  authority=mechanical_probe、reason_code=browser_launch_failed、
+  capability_status=available）；零真实 400 / 零 tool_failed / 零
+  run_invalidated；journal 事件链完整性 100%（619/619，命中率 ≥90%
+  达标）；DoD 1-7 全部满足。计数 30 → 29（0h S1 放行入账 30 → 31
+  补记于 TODO 快照）。登记于 ADR-0010 §14.40 第 6 项 / TODO P0-0h。
 
 ### 0. 前置收尾（提交前需用户确认）
 

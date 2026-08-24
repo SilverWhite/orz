@@ -3,7 +3,8 @@
 > 状态：`current-design`（2026-08-24 设计定稿；S1 实施 + S2 测试 + 全面
 > 审查处理已闭合——read-anchor 补 direct 面核证门、退役工具调用面窄门、
 > cmd 摘要格式修复、候选错误码透传、订单链测试迁移；S3 重建完成
-> 2026-08-24（Linux musl 三件套）；S4 待实施）。
+> 2026-08-24（Linux musl 三件套）；S4 复验闭环 2026-08-25 补登记
+> （sweep-mal-s4 5/5 reward 1.00；检索可达项由 0h S4 实测补足））。
 > 性质：取代 PLAN-FIRST-BLACKBOARD（2026-08-15）的 console 订单执行面与
 > FUS-CONSOLE-DUAL-MODE 的默认路径；保留首轮 plan 门、ACAF、权限轴、
 > 预算/候选计数、read-anchor 写前核证；删除输出级引用校验器；恢复主面检索。
