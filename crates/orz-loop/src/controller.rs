@@ -22114,6 +22114,84 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    /// DeepSeek thinking-mode replay regression (2026-08-24 real-run
+    /// `invalid_request_error`: "reasoning_content in the thinking mode
+    /// must be passed back to the API"): checkpoint answers are replayed
+    /// with their `reasoning_content` on the refill and every follow-up
+    /// request (the checkpoint branch must not drop it).
+    #[tokio::test]
+    async fn checkpoint_answers_replay_reasoning_content_on_refill_and_followup() {
+        let dir = test_dir();
+        let journal = JournalRecorder::new(dir.clone());
+        let host = TestHost {
+            journal,
+            tool_result: Some(ToolResult {
+                output: "ok".to_string(),
+                exit_code: Some(0),
+                output_encoding: None,
+                structured: None,
+                ..Default::default()
+            }),
+        };
+        let mut script = Vec::new();
+        for i in 0..7 {
+            script.push(ScriptedResponse::tool_calls(vec![tool_call(
+                "read_file",
+                &format!("call-{i}"),
+            )]));
+        }
+        // Checkpoint attempt 1: invalid template answer WITH reasoning.
+        script.push(ScriptedResponse::text("根据任务继续").with_reasoning("推理-尝试1"));
+        // Checkpoint attempt 2: valid template answer WITH reasoning.
+        script.push(template_answer("continue").with_reasoning("推理-尝试2"));
+        script.push(ScriptedResponse::text("完成"));
+        script.push(ScriptedResponse::text("完成"));
+        let fake = Arc::new(FakeProvider::new(script));
+        let controller = AgentLoopController::with_gateway(fake.clone());
+        let mut orientation = crate::orientation::OrientationSessionState::new("sess-r4-reasoning");
+        controller
+            .run_turn(
+                &host,
+                "任务",
+                "RUN-R4-REASONING",
+                MANIFEST,
+                0,
+                None,
+                Some(&mut orientation),
+                None,
+            )
+            .await
+            .unwrap();
+
+        let received = fake.received_requests();
+        assert!(received.len() >= 4, "{received:?}");
+        let mut saw_attempt1 = false;
+        let mut saw_attempt2 = false;
+        for request in &received {
+            for m in &request.messages {
+                if m.role == Role::Assistant && m.content == "根据任务继续" {
+                    assert_eq!(
+                        m.reasoning_content.as_deref(),
+                        Some("推理-尝试1"),
+                        "attempt-1 replay must keep reasoning: {request:?}"
+                    );
+                    saw_attempt1 = true;
+                }
+                if m.role == Role::Assistant && m.content.contains("\"next_action\":\"continue\"") {
+                    assert_eq!(
+                        m.reasoning_content.as_deref(),
+                        Some("推理-尝试2"),
+                        "attempt-2 replay must keep reasoning: {request:?}"
+                    );
+                    saw_attempt2 = true;
+                }
+            }
+        }
+        assert!(saw_attempt1, "attempt-1 answer was never replayed");
+        assert!(saw_attempt2, "attempt-2 answer was never replayed");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     /// Two invalid answers → mechanical degrade with an explicit reason;
     /// the fire still commits (a degrade is a completed template round,
     /// §2.4) and the run continues without hanging.

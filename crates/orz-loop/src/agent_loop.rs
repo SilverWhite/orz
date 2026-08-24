@@ -1642,7 +1642,7 @@ pub(crate) async fn run_agent_loop(
                         content: text,
                         tool_call_id: None,
                         tool_calls: Vec::new(),
-                        reasoning_content: None,
+                        reasoning_content: response.reasoning_content.clone(),
                     });
                 }
                 continue;
@@ -1706,7 +1706,7 @@ pub(crate) async fn run_agent_loop(
                     content: text,
                     tool_call_id: None,
                     tool_calls: Vec::new(),
-                    reasoning_content: None,
+                    reasoning_content: response.reasoning_content.clone(),
                 });
             }
             match outcome {
@@ -1762,7 +1762,7 @@ pub(crate) async fn run_agent_loop(
                         content: text,
                         tool_call_id: None,
                         tool_calls: Vec::new(),
-                        reasoning_content: None,
+                        reasoning_content: response.reasoning_content.clone(),
                     });
                 }
                 continue;
@@ -1781,7 +1781,7 @@ pub(crate) async fn run_agent_loop(
                     content: text,
                     tool_call_id: None,
                     tool_calls: Vec::new(),
-                    reasoning_content: None,
+                    reasoning_content: response.reasoning_content.clone(),
                 });
             }
             last_text = response.text;
@@ -1844,7 +1844,7 @@ pub(crate) async fn run_agent_loop(
                     content: text,
                     tool_call_id: None,
                     tool_calls: Vec::new(),
-                    reasoning_content: None,
+                    reasoning_content: response.reasoning_content.clone(),
                 });
             }
             last_text = response.text;
