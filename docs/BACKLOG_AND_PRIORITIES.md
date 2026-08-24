@@ -1254,7 +1254,9 @@ fail-closed + clippy 修复）
   1,206,576 B，编译 5m04s，冒烟同前。
 
 ### 0h. RETRIEVAL-SUBAGENT-WIRING（P0；2026-08-25 设计定稿；S1 已实施
-2026-08-25 + S2 测试已实施 2026-08-25；设计轮不动计数；S3 待实施）
+2026-08-25 + S2 测试已实施 2026-08-25 + 全面审查处理已完成 2026-08-25
+（CLI 运行路径接通检索模式、scope/max_results 入契约、工具面跟随模式、
+前缀收紧、降级元数据持久化）；设计轮不动计数；S3 待实施）
 
 - 入口：[设计](RETRIEVAL_SUBAGENT_WIRING_DESIGN_2026-08-25.md)；索引：
   [CLI_PROJECT_INDEX.md](../CLI_PROJECT_INDEX.md)；ADR-0010 §14.40

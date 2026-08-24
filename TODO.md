@@ -1223,7 +1223,7 @@ S4 待实施）
   零 400、命中率 ≥90%、轮次/耗时下降、reward 对比）——待实施
 
 ### P0-0h RETRIEVAL-SUBAGENT-WIRING（P0；2026-08-25 设计定稿；设计轮
-不动计数；S1 待实施）
+不动计数；S1 实施 + S2 测试 + 全面审查处理已完成；S3 待实施）
 
 > 入口：[设计](docs/RETRIEVAL_SUBAGENT_WIRING_DESIGN_2026-08-25.md)；
 > ADR-0010 §14.40（v1.40）；BACKLOG 0h。
@@ -1256,6 +1256,16 @@ S4 待实施）
 - [x] S2 测试（2026-08-25；新增 5 项专项测试：模式 A 降级规则、
   降级 transition 元数据、主面 retrieve_project_docs 声明、
   主车道内部派发、内部 lane 投影仅读族；全量全绿）
+
+- [x] 全面审查处理（2026-08-25；P0：CLI 运行路径接通检索模式——共享
+  probe 入口 `probe_retrieval_with_mode_a`（ACP/CLI 共用）+ `run()` 接线
+  + transition 落盘；P1：`scope`/`max_results` 机械并入检索任务契约；
+  P1：工具面跟随模式 A 定档（local_browser 隐藏 web 族、
+  framework_fallback 隐藏 browser_read、外部 lane browser_read 恢复按
+  模式门控）；收紧 `browser_launch_failed` 前缀；降级元数据跨 run 持久化；
+  新增 4 项专项测试；orz-loop 558 / orz-host 223 / orz-tui 178 /
+  orz-assurance 144 / orz-bin 11 + 集成全绿、fmt 干净、clippy 无新增；
+  登记于 ADR-0010 §14.40 第 4 项）
 
 - [ ] S3 重建（Linux musl，ORZ-BUILD-MOUNT-001）——待实施
 

@@ -1,6 +1,7 @@
 # 检索子代理接线重设计（2026-08-25：外部 A 档自动定档 + 内部子代理工具注册）
 
-> 状态：`current-design`（2026-08-25 设计定稿；S1 待实施）。
+> 状态：`current-design`（2026-08-25 设计定稿；S1 实施 + S2 测试 +
+> 全面审查处理已完成，S3 重建待实施）。
 > 性质：MECHANICAL-AUDIT-LAYER（2026-08-24）检索恢复的接线补强——修复
 > 「S4 实机检索零调用」根因（harness 未传检索模式 + 内部子代理触发工具
 > 未注册），并落实 2026-08-25 用户裁决。
@@ -116,6 +117,21 @@
   内部子代理（ToolStarted target=internal_retrieval、内部 lane 零
   web/browser 调用）、内部 lane 投影仅读族（web/browser/retrieve 全剔除）。
   登记于 ADR-0010 §14.40 / BACKLOG 0h / TODO P0-0h。
+- 全面审查处理（2026-08-25，ADR-0010 §14.40 第 4 项）：①P0 修复——CLI
+  一次性运行（`orz -p ...`）接通检索模式：`run()` 经共享入口
+  `retrieval_mode::probe_retrieval_with_mode_a`（ACP/CLI 共用；原
+  `apply_mode_a_auto_degrade` 并入共享决策）执行 probe + 模式 A 降级 +
+  transition 落盘，harness 传参从此生效；②`scope`/`max_results` 机械
+  并入检索任务契约（`build_retrieval_task_goal`，不再静默丢弃，子代理
+  system goal 断言）；③工具面跟随模式 A 定档（DoD 第 2 条收敛）——
+  `apply_retrieval_surface_projection`：local_browser 隐藏 web 族、
+  framework_fallback 隐藏 browser_read；外部 lane 的 browser_read 恢复
+  按模式门控；④`browser_launch_failed` 前缀判定收紧（带冒号分隔符）；
+  ⑤降级 transition 元数据跨 run 持久化（`StoredActivationSnapshot.
+  pending_transition_authority`，journal 成功后清除）。验证：orz-loop
+  558 / 0 / 3、orz-host 223 / 0 / 4（串行）、orz-tui 178 / 0、
+  orz-assurance 144 / 0、orz-bin 11 / 0 + acaf_e2e 23 + real_flag 2 +
+  stdio_e2e 1、fmt 干净、clippy 无新增。
 
 ## 5. 验收标准（DoD）
 

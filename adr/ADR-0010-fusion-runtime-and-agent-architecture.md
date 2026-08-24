@@ -3599,3 +3599,28 @@ ADR §3.6 正文修订随实施登记。
    orz-bin 11 / 0（+ 集成目标全过）、fmt 干净、clippy 无新增。登记于
    [设计](../docs/RETRIEVAL_SUBAGENT_WIRING_DESIGN_2026-08-25.md) §4 /
    BACKLOG 0h / TODO P0-0h。
+
+4. **检索子代理接线 S1/S2 全面审查处理（2026-08-25；S3 重建待实施）**：
+   审查发现并处理 5 项——①P0：CLI 一次性运行（`orz -p ...`）此前不消费
+   `ORZ_RETRIEVAL_MODE`（仅 stdio 入口读取），harness 传
+   `--retrieval-mode local_browser` 对 TB 会话无效、恒停 off——
+   `run()` 现经共享入口 `retrieval_mode::probe_retrieval_with_mode_a`
+   （ACP/CLI 共用，`apply_mode_a_auto_degrade` 并入共享决策）接线 probe
+   + 模式 A 降级 + transition 落盘；②P1：`scope`/`max_results` 此前
+   声明但派发只读 `query`、参数被静默丢弃——`build_retrieval_task_goal`
+   机械并入子代理任务契约；③P1：工具面跟随模式 A 定档（DoD 第 2 条
+   收敛）——`apply_retrieval_surface_projection`：local_browser 隐藏
+   web 族、framework_fallback 隐藏 browser_read，外部 lane 的
+   browser_read 恢复按模式门控；④收紧 `browser_launch_failed` 前缀判定
+   （带冒号分隔符，拒绝 `browser_launch_failedX` 宽松前缀）；⑤P3：降级
+   transition 元数据跨 run 持久化（`StoredActivationSnapshot.
+   pending_transition_authority`，journal 成功后清除，防失败重试退化为
+   session_bootstrap）。验证：orz-loop 558 / 0 / 3、orz-host 223 / 0 /
+   4（串行）、orz-tui 178 / 0、orz-assurance 144 / 0、orz-bin 11 / 0 +
+   acaf_e2e 23 + real_flag 2 + stdio_e2e 1、fmt 干净、clippy 无新增。
+   新增专项测试 4 项：模式 A 降级决策与快照应用（含前缀收紧）、CLI 接线
+   决策（off 不 journal / 显式 session_bootstrap / 降级
+   mechanical_probe）、检索工具面跟随模式、检索任务契约并入
+   scope/max_results（含子代理 system goal 断言）。登记于
+   [设计](../docs/RETRIEVAL_SUBAGENT_WIRING_DESIGN_2026-08-25.md) §4 /
+   BACKLOG 0h / TODO P0-0h。
