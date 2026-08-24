@@ -1215,7 +1215,9 @@ S4 待实施）
   （orz 无 TTY io error 属预期、provision usage、signer manifest 缺失）；
   守卫符号 retired_tool_denied/content_anchor_mismatch 各 8 命中；
   musl 静态确认；对应源码 orz 033fd26 + 父 54560b4（均已推送）；
-  ADR-0010 §14.39 第 5 项）
+  ADR-0010 §14.39 第 5 项；二次构建轮 s3b（2026-08-24 08:19 HKT，
+  reasoning_content 修复 orz 4ca60c2 + 父 c1ce4c1，三件套 orz
+  104,726,432 B，编译 5m04s，冒烟同前））
 
 - [ ] S4 复验（同一 10 题 k=1 + 构造题：检索调用出现、审计报告覆盖写、
   零 400、命中率 ≥90%、轮次/耗时下降、reward 对比）——待实施

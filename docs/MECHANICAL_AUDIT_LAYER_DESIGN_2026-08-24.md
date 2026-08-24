@@ -224,7 +224,10 @@
   usage、signer manifest 缺失）；守卫符号 retired_tool_denied /
   content_anchor_mismatch 各 8 命中；无 glibc 动态解释器字符串（musl
   静态确认）；对应源码 orz 033fd26 + 父 54560b4（均已推送）。登记于
-  ADR-0010 §14.39 第 5 项 / BACKLOG 0g / TODO P0-0g。
+  ADR-0010 §14.39 第 5 项 / BACKLOG 0g / TODO P0-0g。二次构建轮
+  s3b（2026-08-24 08:19 HKT）：reasoning_content 修复 orz 4ca60c2 +
+  父 c1ce4c1（均已推送），三件套 orz 104,726,432 B / signer
+  1,388,592 B / provision 1,206,576 B，编译 5m04s，冒烟同前。
 - 计数：设计轮不动计数；实施放行入账 +1；S4 闭环 -1（以 TODO 未闭合
   扫描快照为准）。
 

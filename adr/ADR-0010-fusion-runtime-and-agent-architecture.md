@@ -3521,5 +3521,9 @@ ADR §3.6 正文修订随实施登记。
    retired_tool_denied / content_anchor_mismatch 二进制各 8 命中；
    ELF 无 ld-linux / GLIBC_2 动态解释器字符串（musl 静态确认）；对应
    源码 orz 033fd26 + 父 54560b4（S1/S2+审查处理提交，均已推送）。
+   **二次构建轮 s3b（2026-08-24 08:19 HKT，reasoning_content 修复
+   orz 4ca60c2 + 父 c1ce4c1，均已推送）**：三件套 orz 104,726,432 B /
+   orz-signer 1,388,592 B / orz-acaf-provision 1,206,576 B，编译
+   5m04s，冒烟同前（三件正常加载执行、守卫符号各 8 命中、musl 静态）。
    登记于 [设计](../docs/MECHANICAL_AUDIT_LAYER_DESIGN_2026-08-24.md)
    §4 / BACKLOG 0g / TODO P0-0g。
