@@ -3669,3 +3669,16 @@ ADR §3.6 正文修订随实施登记。
    补记于 TODO 快照）。登记于
    [设计](../docs/RETRIEVAL_SUBAGENT_WIRING_DESIGN_2026-08-25.md) §4 /
    BACKLOG 0h / TODO P0-0h。
+
+7. **初版发布前修复——transport reasoning_content 规范化（2026-08-25；
+   计数不动）**：初版打包（orz 0.1.0 linux-x86_64）端到端实测发现
+   v4-flash 纯文本完成响应偶尔完全不带 reasoning 增量，流式组装返回
+   `None`，回推助手消息时字段被省略，下一请求触发 DeepSeek
+   `invalid_request_error`（"reasoning_content in the thinking mode must
+   be passed back"；最小题实测 3/6 失败）。修复：流式与非流式解析统一将
+   无 reasoning 的完成响应规范化为 `Some("")`（D-6 既有契约：空串正常、
+   省略 400），新增流式文本轮回归测试
+   `generate_stream_text_round_preserves_empty_reasoning`；orz-loop
+   559 / 0 / 3、fmt 干净、clippy 无新增；修复后最小题 6/6 通过。
+   对应源码 orz 8bcf18c（已推送 cli/feat/fusion-architecture）。登记于
+   [初版发布包](../releases/orz-0.1.0-linux-x86_64/README.md)。
