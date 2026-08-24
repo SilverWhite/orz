@@ -3682,3 +3682,15 @@ ADR §3.6 正文修订随实施登记。
    559 / 0 / 3、fmt 干净、clippy 无新增；修复后最小题 6/6 通过。
    对应源码 orz 8bcf18c（已推送 cli/feat/fusion-architecture）。登记于
    [初版发布包](../releases/orz-0.1.0-linux-x86_64/README.md)。
+
+8. **初版发布 0.1.0（2026-08-25；计数不动）**：双平台发布——Windows
+   x86_64 release 构建（orz.exe 48,580,608 B / orz-signer.exe
+   6,742,016 B / orz-acaf-provision.exe 6,642,176 B，编译 24m54s，
+   守卫符号 retired_tool_denied / content_anchor_mismatch 各 8 命中、
+   检索接线符号在二进制内）+ Linux musl 三件套（第 7 项）；Windows
+   端到端冒烟通过（凭据管理器 `orz-deepseek/agent` 注入 + DPAPI ACAF
+   初始化 + 真实最小跑 EXIT=0）；GitHub Release v0.1.0
+   （SilverWhite/CLI，[releases/tag/v0.1.0](https://github.com/SilverWhite/CLI/releases/tag/v0.1.0)），
+   资产=orz-0.1.0-linux-x86_64.tar.gz（33.5 MB）+ orz-0.1.0-windows-
+   x86_64.zip（25.6 MB）；API Key 不入包，注入=Windows 凭据管理器 /
+   Linux `ORZ_DEEPSEEK_API_KEY` env（ADR-0006 §2.2/§2.3）。
