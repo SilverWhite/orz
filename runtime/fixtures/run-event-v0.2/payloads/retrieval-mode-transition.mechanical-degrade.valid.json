@@ -1,0 +1,9 @@
+{
+  "transition_id": "MODETRANS-CONF-DEGRADE",
+  "session_id": "sess-main-1",
+  "old_mode": "local_browser",
+  "new_mode": "framework_fallback",
+  "authority": "mechanical_probe",
+  "reason_code": "browser_launch_failed",
+  "capability_status": "available"
+}

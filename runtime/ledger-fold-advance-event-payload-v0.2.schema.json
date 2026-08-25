@@ -2,16 +2,9 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://local.scientific-assurance.invalid/schema/ledger-fold-advance-event-payload-v0.2.schema.json",
   "title": "ledger_fold_advance event payload v0.2 (FUS-LEDGER-FOLD-STATE)",
-  "description": "ADR-0010 §14.26 / LEDGER_FOLD_STATE_CACHE_DESIGN §3.3: a mechanical action-ledger fold advance at the loop-top gap (zero model calls) — the loop folded the next complete old rounds into the frozen ledger block when the ESTIMATED request view reached fold_trigger_tokens (default 128K). The request-view prefix is rewritten once per fold window (the accepted per-window prefix-cache miss), so the event carries the new fold point, the folded-round count and the triggering view estimate for cache-miss attribution. Emitted ONLY on a real advance (never on anti-spin no-ops). fold_start is the preamble end (first tool declaration, set at the first advance and constant within a window); fold_cut is the new verbatim-retention start — within a fold window fold_cut is strictly increasing and fold_start constant; a context_compressed event resets the fold state (indices re-accumulate from the marker). rounds_folded = complete rounds covered by the ledger after this advance. agent_role is the lane (main/internal_retrieval/external_retrieval — same enum as request_header_change).",
+  "description": "ADR-0010 §14.26 / LEDGER_FOLD_STATE_CACHE_DESIGN §3.3: a mechanical action-ledger fold advance at the loop-top gap (zero model calls) — the loop folded the next complete old rounds into the frozen ledger block when the ESTIMATED request view reached fold_trigger_tokens (default 128K). The request-view prefix is rewritten once per fold window (the accepted per-window prefix-cache miss), so the event carries the new fold point, the folded-round count and the triggering view estimate for cache-miss attribution. Emitted ONLY on a real advance (never on anti-spin no-ops). fold_start is the preamble end (first tool declaration, set at the first advance and constant within a window); fold_cut is the new verbatim-retention start — within a fold window fold_cut is strictly increasing and fold_start constant; a context_compressed event resets the fold state (indices re-accumulate from the marker). rounds_folded = complete rounds covered by the ledger after this advance. agent_role is the lane (main/internal_retrieval/external_retrieval — same enum as request_header_change). GAP-EVENT-SCHEMA-DRIFT (2026-08-26): view_estimate_after 是推进后的请求视图估算（chars/2）——真实推进后视图估算必须回落到触发阈值之下，故 view_estimate_after < view_estimate_tokens 为事件面可核证不变量（推进前估算 ≥ 阈值、推进后 < 阈值）。",
   "type": "object",
   "additionalProperties": false,
-  "required": [
-    "fold_start",
-    "fold_cut",
-    "rounds_folded",
-    "view_estimate_tokens",
-    "agent_role"
-  ],
   "properties": {
     "fold_start": {
       "type": "integer",
@@ -33,9 +26,22 @@
       "minimum": 0,
       "description": "The chars/2 estimate of the request view that triggered the advance (≈ the size of the one-time prefix rewrite)."
     },
+    "view_estimate_after": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "The chars/2 estimate of the request view AFTER the fold rewrite — a real advance must reset it below the fold trigger (view_estimate_after < view_estimate_tokens)."
+    },
     "agent_role": {
       "enum": ["main", "internal_retrieval", "external_retrieval"],
       "description": "The agent lane whose loop advanced the fold."
     }
-  }
+  },
+  "required": [
+    "fold_start",
+    "fold_cut",
+    "rounds_folded",
+    "view_estimate_tokens",
+    "view_estimate_after",
+    "agent_role"
+  ]
 }

@@ -3,5 +3,6 @@
   "fold_cut": 5,
   "rounds_folded": 2,
   "view_estimate_tokens": 128000,
+  "view_estimate_after": 64000,
   "agent_role": "main"
 }

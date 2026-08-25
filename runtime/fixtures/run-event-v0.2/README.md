@@ -29,6 +29,15 @@ Scope:
   `missing_target_argument` / `missing_snapshot_store` / `missing_goal_context`
   (each carries `ticket_id: null` — no ticket exists when the refusal
   happens, D-14/D-15).
+- GAP-EVENT-SCHEMA-DRIFT (2026-08-26, BACKLOG 0i): 事件面三类 Schema 漂移
+  修复的 fixture 锁——① `retrieval-mode-transition.mechanical-degrade.valid`
+  （模式 A 自动降级：authority=mechanical_probe +
+  reason_code=browser_launch_failed，RETRIEVAL-SUBAGENT-WIRING §14.40）；
+  ② `ledger-fold-advance` 最小正例/约束反例补 `view_estimate_after`
+  （推进后视图估算，schema 必填 + verifier 交叉检查 < view_estimate_tokens）；
+  ③ `control-ticket-issued.network-lane-bound.valid`（D-13 检索 lane 绑定
+  语义——动作票 activation_id 可选绑定，检索 lane network 票携带真实
+  activation_id，主 lane 保持 null）。
 - GAP-SOURCE-WEIGHTING-IMPL (2026-08-13): `retrieval-result` gains one extra
   negative payload fixture for the fixed tier/weight table (authoritative
   MUST pair with 1.1; the good fixture carries the full weighting fields).

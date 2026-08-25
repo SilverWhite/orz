@@ -1064,6 +1064,12 @@ def _verify_v02_ledger_fold_advance(events: list[dict[str, Any]]) -> list[str]:
       design invariant), rounds_folded ≥ 1, view_estimate_tokens ≥ 0 and
       agent_role in the lane enum (main / internal_retrieval /
       external_retrieval);
+    - GAP-EVENT-SCHEMA-DRIFT (2026-08-26): view_estimate_after must be a
+      non-negative integer and strictly below view_estimate_tokens — a real
+      advance resets the post-fold estimate below the fold trigger, so the
+      triggering estimate (≥ threshold) strictly dominates the after value
+      (the schema makes the field required; this is the semantic
+      cross-check);
     - within a fold window (bounded by context_compressed events of the
       same run) fold_start is CONSTANT (set at the first advance) and
       fold_cut is STRICTLY increasing (each advance moves the retention
@@ -1093,6 +1099,7 @@ def _verify_v02_ledger_fold_advance(events: list[dict[str, Any]]) -> list[str]:
         fold_cut = payload.get("fold_cut")
         rounds_folded = payload.get("rounds_folded")
         estimate = payload.get("view_estimate_tokens")
+        estimate_after = payload.get("view_estimate_after")
         agent_role = payload.get("agent_role")
         if not isinstance(fold_start, int) or fold_start < 0:
             errors.append(
@@ -1120,6 +1127,17 @@ def _verify_v02_ledger_fold_advance(events: list[dict[str, Any]]) -> list[str]:
             errors.append(
                 f"event {index}: ledger_fold_advance view_estimate_tokens "
                 f"must be a non-negative integer, got {estimate!r}"
+            )
+        if not isinstance(estimate_after, int) or estimate_after < 0:
+            errors.append(
+                f"event {index}: ledger_fold_advance view_estimate_after "
+                f"must be a non-negative integer, got {estimate_after!r}"
+            )
+        elif isinstance(estimate, int) and estimate_after >= estimate:
+            errors.append(
+                f"event {index}: ledger_fold_advance view_estimate_after "
+                f"{estimate_after} must be below the triggering estimate "
+                f"{estimate} (a real advance resets below the fold trigger)"
             )
         if agent_role not in ("main", "internal_retrieval", "external_retrieval"):
             errors.append(

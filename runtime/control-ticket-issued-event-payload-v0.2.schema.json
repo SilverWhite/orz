@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://local.fep-agent.invalid/schema/control-ticket-issued-event-payload-v0.2.schema.json",
   "title": "Control ticket issued runtime event payload v0.2",
-  "description": "ACAF Slice 1 (设计文档 §4.2（ADR-0011 §2）): a one-time HMAC-SHA256 ControlTicket was issued by the independent signer for a control event (orientation / disposition / close / goal revision). ACAF Slice 2 (2026-08-12): action tickets file_write / credential_read / command_exec / network join the same issued/consumed/rejected lifecycle — action kinds carry resolved_target_sha256 (the digest of the parsed real target object, §4.2 check 5 TOCTOU), control kinds leave it null or absent (historical journals stay valid). The journal records the issue fact and the binding fields — never the HMAC tag, which stays inside the issuing process. Binding fields are re-derived by the verifier; template_sha256 is non-null only for orientation (signer-held template, §4.2 check 2).",
+  "description": "ACAF Slice 1 (设计文档 §4.2（ADR-0011 §2）): a one-time HMAC-SHA256 ControlTicket was issued by the independent signer for a control event (orientation / disposition / close / goal revision). ACAF Slice 2 (2026-08-12): action tickets file_write / credential_read / command_exec / network join the same issued/consumed/rejected lifecycle — action kinds carry resolved_target_sha256 (the digest of the parsed real target object, §4.2 check 5 TOCTOU), control kinds leave it null or absent (historical journals stay valid). The journal records the issue fact and the binding fields — never the HMAC tag, which stays inside the issuing process. Binding fields are re-derived by the verifier; template_sha256 is non-null only for orientation (signer-held template, §4.2 check 2). GAP-EVENT-SCHEMA-DRIFT (2026-08-26, D-13 检索 lane 绑定语义入 schema): 动作票 activation_id 由「强制 null」放开为「可选绑定」——子代理检索 lane 内的动作票（web_fetch/browser_read 等 network_v1）携带真实 activation_id（D-13 必须绑定），主 lane 动作票保持 null；签发器侧 `forbids_activation()` 仅 Orientation 唯一禁止（2026-08-13 已实施，本 schema 与之一致）。",
   "type": "object",
   "additionalProperties": false,
   "required": [
@@ -156,7 +156,15 @@
         "required": ["ticket_kind"]
       },
       "then": {
-        "properties": { "activation_id": { "type": "null" } }
+        "properties": {
+          "activation_id": {
+            "oneOf": [
+              { "type": "string", "minLength": 1 },
+              { "type": "null" }
+            ],
+            "description": "D-13 lane binding: null = main-lane action; string = action bound to a sub-agent retrieval lane activation (external/internal retrieval must bind, main lane keeps null)."
+          }
+        }
       }
     },
     {

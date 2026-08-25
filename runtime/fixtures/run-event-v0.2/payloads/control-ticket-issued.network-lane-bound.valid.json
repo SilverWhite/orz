@@ -1,0 +1,19 @@
+{
+  "ticket_id": "TKT-CONF-LANE-0001",
+  "ticket_kind": "network_v1",
+  "session_id": "sess-main-1",
+  "agent_id": "main",
+  "activation_id": "retrieval-external_retrieval-RUN-CONF-00",
+  "goal_version": 0,
+  "goal_digest": "0000000000000000000000000000000000000000000000000000000000000000",
+  "policy_revision": 0,
+  "sequence": 7,
+  "capability_scope": "network",
+  "template_sha256": null,
+  "canonical_arguments_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+  "resolved_target_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+  "issued_at": "2026-08-06T00:00:00Z",
+  "expires_at": "2026-08-06T00:00:00Z",
+  "signer_revision": 1,
+  "signer_measurement": "0000000000000000000000000000000000000000000000000000000000000000"
+}

@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://local.scientific-assurance.invalid/schema/retrieval-mode-transition-event-payload-v0.2.schema.json",
   "title": "Retrieval mode transition runtime event payload v0.2",
-  "description": "ADR-0010 §3.7.1/§5.2: mechanical record of an explicit retrieval-mode transition on the session/task-contract level. Every transition must carry old value, new value, authority and reason code; mode changes are never implicit (no silent fallback on timeout/login/CAPTCHA). local_browser is accepted as a mode even where browser automation is not yet implemented — the capability probe then records capability_status=unsupported instead of degrading silently.",
+  "description": "ADR-0010 §3.7.1/§5.2: mechanical record of an explicit retrieval-mode transition on the session/task-contract level. Every transition must carry old value, new value, authority and reason code; mode changes are never implicit (no silent fallback on timeout/login/CAPTCHA). local_browser is accepted as a mode even where browser automation is not yet implemented — the capability probe then records capability_status=unsupported instead of degrading silently. RETRIEVAL-SUBAGENT-WIRING (2026-08-25, ADR-0010 §14.40) 模式 A 自动降级：local_browser probe 失败 → framework_fallback 以 authority=mechanical_probe + reason_code=browser_launch_failed 落盘（机械判定、非用户/契约显式选择）；缺省显式选择保持 session_bootstrap / session_default。",
   "type": "object",
   "additionalProperties": false,
   "required": [
@@ -26,11 +26,11 @@
     },
     "authority": {
       "type": "string",
-      "enum": ["user", "parent_task_contract", "session_bootstrap"]
+      "enum": ["user", "parent_task_contract", "session_bootstrap", "mechanical_probe"]
     },
     "reason_code": {
       "type": "string",
-      "enum": ["explicit_selection", "session_default", "capability_probe"]
+      "enum": ["explicit_selection", "session_default", "capability_probe", "browser_launch_failed"]
     },
     "capability_status": {
       "oneOf": [

@@ -1034,6 +1034,7 @@ PAYLOAD_GOOD_V02: dict[str, dict] = {
           "fold_cut": 5,
           "rounds_folded": 2,
           "view_estimate_tokens": 128000,
+          "view_estimate_after": 64000,
           "agent_role": "main",
       },
       # FUS-LEDGER-FOLD-STATE (2026-08-18, ADR-0010 §14.28 审查修复):
@@ -1436,6 +1437,7 @@ PAYLOAD_BAD_V02: dict[str, dict] = {
           "fold_cut": 5,
           "rounds_folded": 2,
           "view_estimate_tokens": 128000,
+          "view_estimate_after": 64000,
           "agent_role": "orchestrator",
       },
       # FUS-LEDGER-FOLD-STATE (2026-08-18, ADR-0010 §14.28 审查修复): one
@@ -1476,6 +1478,41 @@ EXTRA_V02_PAYLOAD_POSITIVES: dict[str, dict] = {
         "rejected_at": TIMESTAMP,
         "reject_code": "missing_goal_context",
         "detail": "goal digest not pinned",
+    },
+    # GAP-EVENT-SCHEMA-DRIFT (2026-08-26): retrieval_mode_transition 模式 A
+    # 自动降级 shape——local_browser probe 失败 → framework_fallback 以
+    # authority=mechanical_probe + reason_code=browser_launch_failed 落盘
+    # （RETRIEVAL-SUBAGENT-WIRING 2026-08-25, ADR-0010 §14.40）。
+    "retrieval-mode-transition.mechanical-degrade.valid": {
+        "transition_id": "MODETRANS-CONF-DEGRADE",
+        "session_id": "sess-main-1",
+        "old_mode": "local_browser",
+        "new_mode": "framework_fallback",
+        "authority": "mechanical_probe",
+        "reason_code": "browser_launch_failed",
+        "capability_status": "available",
+    },
+    # GAP-EVENT-SCHEMA-DRIFT (2026-08-26): D-13 检索 lane 绑定语义入 schema
+    # ——动作票 activation_id 放开为可选绑定：检索 lane 内 network_v1 票携带
+    # 真实 activation_id（主 lane 保持 null）。
+    "control-ticket-issued.network-lane-bound.valid": {
+        "ticket_id": "TKT-CONF-LANE-0001",
+        "ticket_kind": "network_v1",
+        "session_id": "sess-main-1",
+        "agent_id": "main",
+        "activation_id": "retrieval-external_retrieval-RUN-CONF-00",
+        "goal_version": 0,
+        "goal_digest": ZERO_HASH,
+        "policy_revision": 0,
+        "sequence": 7,
+        "capability_scope": "network",
+        "template_sha256": None,
+        "canonical_arguments_sha256": ZERO_HASH,
+        "resolved_target_sha256": ZERO_HASH,
+        "issued_at": TIMESTAMP,
+        "expires_at": TIMESTAMP,
+        "signer_revision": 1,
+        "signer_measurement": ZERO_HASH,
     },
 }
 
@@ -1838,6 +1875,15 @@ Scope:
   `missing_target_argument` / `missing_snapshot_store` / `missing_goal_context`
   (each carries `ticket_id: null` — no ticket exists when the refusal
   happens, D-14/D-15).
+- GAP-EVENT-SCHEMA-DRIFT (2026-08-26, BACKLOG 0i): 事件面三类 Schema 漂移
+  修复的 fixture 锁——① `retrieval-mode-transition.mechanical-degrade.valid`
+  （模式 A 自动降级：authority=mechanical_probe +
+  reason_code=browser_launch_failed，RETRIEVAL-SUBAGENT-WIRING §14.40）；
+  ② `ledger-fold-advance` 最小正例/约束反例补 `view_estimate_after`
+  （推进后视图估算，schema 必填 + verifier 交叉检查 < view_estimate_tokens）；
+  ③ `control-ticket-issued.network-lane-bound.valid`（D-13 检索 lane 绑定
+  语义——动作票 activation_id 可选绑定，检索 lane network 票携带真实
+  activation_id，主 lane 保持 null）。
 - GAP-SOURCE-WEIGHTING-IMPL (2026-08-13): `retrieval-result` gains one extra
   negative payload fixture for the fixed tier/weight table (authoritative
   MUST pair with 1.1; the good fixture carries the full weighting fields).

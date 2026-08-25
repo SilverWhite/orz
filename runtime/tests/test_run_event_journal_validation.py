@@ -1012,6 +1012,7 @@ class ConsoleModeTransitionRuleTests(unittest.TestCase):
             rounds_folded: int = 2,
             estimate: int = 128000,
             agent_role: str = "main",
+            estimate_after: int | None = None,
         ) -> dict:
             return {
                 "payload_schema": "run-event-v0.2.schema.json",
@@ -1022,6 +1023,9 @@ class ConsoleModeTransitionRuleTests(unittest.TestCase):
                     "fold_cut": fold_cut,
                     "rounds_folded": rounds_folded,
                     "view_estimate_tokens": estimate,
+                    "view_estimate_after": (
+                        estimate // 2 if estimate_after is None else estimate_after
+                    ),
                     "agent_role": agent_role,
                 },
             }
@@ -1098,6 +1102,22 @@ class ConsoleModeTransitionRuleTests(unittest.TestCase):
         errors = _verify_v02_ledger_fold_advance([bad_role])
         self.assertTrue(any("agent_role must be" in e for e in errors), errors)
 
+        # GAP-EVENT-SCHEMA-DRIFT (2026-08-26): view_estimate_after must be a
+        # non-negative integer and strictly below the triggering estimate
+        # (a real advance resets the post-fold view below the trigger).
+        bad_after = advance("RUN-T", 1, 5, estimate=128000, estimate_after=128000)
+        errors = _verify_v02_ledger_fold_advance([bad_after])
+        self.assertTrue(
+            any("view_estimate_after" in e and "below" in e for e in errors), errors
+        )
+
+        bad_after_negative = advance("RUN-T", 1, 5, estimate_after=-1)
+        errors = _verify_v02_ledger_fold_advance([bad_after_negative])
+        self.assertTrue(
+            any("view_estimate_after" in e and "non-negative" in e for e in errors),
+            errors,
+        )
+
     def test_ledger_fold_write_failed_burst_invariants(self) -> None:
         """ADR-0010 §14.28 审查修复: every ledger_fold_write_failed carries
         the full audit shape (non-empty ledger_path, attempt ≥ 1, disabled
@@ -1139,6 +1159,7 @@ class ConsoleModeTransitionRuleTests(unittest.TestCase):
                     "fold_cut": 5,
                     "rounds_folded": 2,
                     "view_estimate_tokens": 128000,
+                    "view_estimate_after": 64000,
                     "agent_role": "main",
                 },
             }
@@ -2033,8 +2054,10 @@ class ActionTicketSchemaTests(unittest.TestCase):
     """ACAF Slice 2 (2026-08-12) — the file_write / credential_read /
     command_exec / network ticket kinds on the issued payload schema:
     resolved_target_sha256 binding (action kinds required non-null, control
-    kinds null-or-absent), activation must be null for action kinds (main
-    lane has no activation)."""
+    kinds null-or-absent). GAP-EVENT-SCHEMA-DRIFT (2026-08-26, D-13 检索
+    lane 绑定语义入 schema): 动作票 activation_id 放开为可选绑定——检索
+    lane 内动作票携带真实 activation_id（必须绑定），主 lane 动作票保持
+    null。"""
 
     def _journal_errors(self, issued: dict) -> list[str]:
         return validate_journal_text(
@@ -2079,14 +2102,39 @@ class ActionTicketSchemaTests(unittest.TestCase):
         errors = self._journal_errors(_issued_ticket("TKT-0001", "file_write_v1", 1, None))
         self.assertTrue(any("'resolved_target_sha256' is a required property" in e for e in errors))
 
-    def test_file_write_with_activation_rejected(self) -> None:
-        """Action kinds are main-lane only — activation must be null (D2)."""
+    def test_file_write_with_activation_valid_for_lane_binding(self) -> None:
+        """D-13 (2026-08-12 用户裁决): 检索 lane 内动作票可绑定真实
+        activation_id——file_write_v1 携带 activation 属 schema 合法
+        （主 lane 保持 null，见 test_file_write_valid_with_target）。"""
         errors = self._journal_errors(
             _issued_ticket(
                 "TKT-0001", "file_write_v1", 1, "ACT-1", resolved_target=_ZERO
             )
         )
-        self.assertTrue(any("is not of type 'null'" in e for e in errors))
+        self.assertEqual(errors, [])
+
+    def test_network_lane_bound_with_activation_valid(self) -> None:
+        """D-13: 检索 lane network 票（web_fetch/browser_read）携带真实
+        activation_id 为 schema 合法形态（与冒烟 run 实测
+        retrieval-external_retrieval-…-00 一致）。"""
+        errors = self._journal_errors(
+            _issued_ticket(
+                "TKT-0001",
+                "network_v1",
+                1,
+                "retrieval-external_retrieval-RUN-CLI-00",
+                resolved_target=_ZERO,
+            )
+        )
+        self.assertEqual(errors, [])
+
+    def test_orientation_with_activation_rejected(self) -> None:
+        """Orientation 是唯一禁止 activation 的票型（forbids_activation）——
+        orientation_v1 携带非空 activation 仍为 schema 违反。"""
+        errors = self._journal_errors(
+            _issued_ticket("TKT-0001", "orientation_v1", 1, "ACT-1", template=_ZERO)
+        )
+        self.assertTrue(any("is not of type 'null'" in e for e in errors), errors)
 
     def test_close_with_target_rejected(self) -> None:
         """Control kinds bind no target — a present non-null resolved target

@@ -2105,6 +2105,25 @@ def check_repository() -> dict[str, Any]:
         run_event_v02_payload_positive_contracts[run_event_v02_payload_root / name] = (
             rejected_schema
         )
+    # GAP-EVENT-SCHEMA-DRIFT (2026-08-26, BACKLOG 0i): 新增 schema 正例锁——
+    # ① 模式 A 自动降级 transition（authority=mechanical_probe +
+    # reason_code=browser_launch_failed）；② D-13 检索 lane 绑定语义
+    # （动作票 activation_id 可选绑定，检索 lane network 票携带真实
+    # activation_id）。
+    retrieval_mode_transition_schema = (
+        ROOT / "runtime/retrieval-mode-transition-event-payload-v0.2.schema.json"
+    )
+    run_event_v02_payload_positive_contracts[
+        run_event_v02_payload_root
+        / "retrieval-mode-transition.mechanical-degrade.valid.json"
+    ] = retrieval_mode_transition_schema
+    control_ticket_issued_schema = (
+        ROOT / "runtime/control-ticket-issued-event-payload-v0.2.schema.json"
+    )
+    run_event_v02_payload_positive_contracts[
+        run_event_v02_payload_root
+        / "control-ticket-issued.network-lane-bound.valid.json"
+    ] = control_ticket_issued_schema
     run_event_v02_payload_negative_contracts = {
         run_event_v02_payload_root / f"{slug}.constraint.invalid.json": schema
         for slug, schema in run_event_v02_payload_schema_by_slug.items()

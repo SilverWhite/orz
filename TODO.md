@@ -82,7 +82,7 @@
 > 本快照只做计数与分组召回，明细以下方各分组勾选清单为唯一入口，不新增独立条目；
 > 后续扫描更新时同步替换本快照日期与计数。
 
-- 未闭合总数：**31 项**（2026-08-19 0c 验证闭环 29 → 28；2026-08-20
+- 未闭合总数：**30 项**（2026-08-19 0c 验证闭环 29 → 28；2026-08-20
   0d 验证闭环 29 → 28；2026-08-20 OUTPUT-BUDGET-RESTORE-AND-STALL-GUARD
   S1 实施放行入账 28 → 29，**S3/S4 验证闭环 29 → 28**；2026-08-20
   THINKING-DEFAULT-HIGH-LADDER S1 实施放行入账 28 → 29，**S3/S4 换题
@@ -103,11 +103,12 @@
   （补记）；2026-08-25 0g S4 复验闭环 31 → 30；2026-08-25 0h S4
   复验闭环 30 → 29；2026-08-25 冒烟对拍登记入账 29 → 31
   （GAP-EVENT-SCHEMA-DRIFT + GAP-REPETITION-DETECTOR-DNA-
-  FALSE-POSITIVE，见 P0-0i））
+  FALSE-POSITIVE，见 P0-0i）；2026-08-26 GAP-EVENT-SCHEMA-DRIFT
+  事件面三类 Schema 漂移修复完成并复验，未闭合 31 → 30）
   - P0-C：0 项（PLAN-FIRST 阶段 A/B/C 全部闭合，2026-08-16）
-  - P0 冒烟对拍暴露：2 项（GAP-EVENT-SCHEMA-DRIFT 事件面三类 Schema
-    漂移、GAP-REPETITION-DETECTOR-DNA-FALSE-POSITIVE 复读检测 DNA
-    误杀；2026-08-25 登记，正式 89 题提交前处理，见 P0-0i）
+  - P0 冒烟对拍暴露：1 项（GAP-REPETITION-DETECTOR-DNA-FALSE-POSITIVE
+    复读检测 DNA 误杀；GAP-EVENT-SCHEMA-DRIFT 事件面三类 Schema 漂移
+    已闭合 2026-08-26；2026-08-25 登记，正式 89 题提交前处理，见 P0-0i）
   - P0 评测冒烟暴露：0 项（P0-E 主项 7 项 + FUS-TOOL-SCOPE-CONTRACT 后续 2 项全部闭合 2026-08-18，见 P0-E grep 项后续①/②）
   - P0 Benchmark 完全体：1 项（FUS-BENCHMARK-FULL-EXEC 实施完成待验证，见 P0-F；验证闭环后回 26）
   - P0 折叠历史外挂：0 项（LEDGER-FOLD-EXTERNAL-FILE，S3/S4 验证闭环 2026-08-19，见 P0-0c）
@@ -1336,14 +1337,21 @@ S4 复验闭环 2026-08-25（补登记）；S1-S4 全部闭合）
 
 - [x] 登记（2026-08-25）：BACKLOG 0i / TODO P0-0i / CLI_PROJECT_INDEX
   两个 GAP canonical entry；未闭合 29 → 31。
-- [ ] 事件面 Schema 漂移修复（GAP-EVENT-SCHEMA-DRIFT）：
-  - [ ] retrieval_mode_transition 枚举补 mechanical_probe /
-    browser_launch_failed（runtime schema v0.2 + 校验器 + fixtures）
-  - [ ] ledger_fold_advance 补 view_estimate_after（或生产者移除，
-    按设计定案）
-  - [ ] control_ticket_issued 动作票 activation_id 放开检索 lane
-    绑定（D-13 语义入 schema）
-  - [ ] 事件链复验：5 个冒烟 run 严格校验 0 错误 + 全量测试全绿
+- [x] 事件面 Schema 漂移修复（GAP-EVENT-SCHEMA-DRIFT；**2026-08-26 完成**）：
+    - [x] retrieval_mode_transition 枚举补 mechanical_probe /
+      browser_launch_failed（runtime schema v0.2 authority/reason_code
+      enum + description 登记 + 模式 A 降级正例 fixture 锁）
+    - [x] ledger_fold_advance 补 view_estimate_after（按设计定案=生产者
+      保留、schema 补必填字段 + verifier 交叉检查
+      view_estimate_after < view_estimate_tokens + 正/反例 fixture 更新）
+    - [x] control_ticket_issued 动作票 activation_id 放开检索 lane
+      绑定（D-13 语义入 schema：动作票可选绑定，检索 lane network 票
+      携带真实 activation_id、主 lane 保持 null；正例 fixture + 测试
+      语义更新）
+    - [x] 事件链复验：5 个冒烟 run 严格校验 0 错误（三类漂移全部清零；
+      3 个墙钟超时 run 缺终止事件为 harness 杀进程边界、按
+      require_terminal=false 回放语义豁免）+ 全量测试全绿（runtime/
+      assurance pytest 1898 passed、check_repository valid）
 - [ ] 复读检测 DNA 误杀处理（GAP-REPETITION-DETECTOR-DNA-FALSE-POSITIVE）：
   - [x] 设计定案（2026-08-25 用户裁决：L=400 维持 + 序列内容门——无
     切分点路径 sequence_like 判定（ACGTNU 占比 ≥0.90）+ 序列族命中门槛
