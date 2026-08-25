@@ -2825,6 +2825,12 @@ mod tests {
         out
     }
 
+    /// final-smoke-2026-08-25 dna-assembly 误杀实证捕获的真实 EGFP 编码
+    /// 区 400 字符 span（orz.txt WARN trigger_context，匹配偏移 18/801；
+    /// 全小写 ACGT、序列占比 1.0 ≥0.90——序列内容门目标样本）。源证据=
+    /// `D:\tb-eval\jobs-official\final-smoke-2026-08-25\dna-assembly__sHQCjg3\agent\orz.txt`。
+    const EGFP_SPAN_400: &str = "tgagcaagggcgaggagctgttcaccggggtggtgcccatcctggtcgagctggacggcgacgtaaacggccacaagttcagcgtgtccggcgagggtgagggcgatgccacctacggcaagctgaccctgaagttcatctgcaccacgggcaagctgcccgtgccctggcccaccctcgtgaccaccctgacctacggcgtgcagtgcttcagccgctaccccgaccacatgaagcagcacgacttcttcaagtccgccatgcccgaaggctacgtccaggagcgcaccatcttcttcaaggacgacggcaactacaagacccgcgccgaggtgaagttcgagggcgacaccctggtgaaccgcatcgagctgaagggcatcgacttcaaggaggacgg";
+
     #[test]
     fn degeneration_detector_short_low_entropy_deltas_do_not_trip() {
         // S2（设计 §4.8）：短低熵块不触发——5×"a"（5 字符）与 5×"same"
@@ -3003,6 +3009,141 @@ mod tests {
             !sequence_like(&Vec::<char>::new()),
             "empty span must NOT be sequence-like"
         );
+    }
+
+    #[test]
+    fn degeneration_detector_egfp_real_span_three_hits_audit_only() {
+        // 2026-08-25 SEQUENCE CONTENT GATE §3 矩阵项 1/8：final-smoke
+        // dna-assembly EGFP 400 字符真实 span 原样回放——引用 4 段、中间
+        // 插入互异推理文本（离线模拟验证命中 idx 999/1599/2199 = 3 次，
+        // 间隔不重置累计）→ 序列族门槛 5 下 0 trip；3 条审计均带
+        // `sequence_gated` 标注 + ratio + hits/limit。
+        assert_eq!(
+            EGFP_SPAN_400.chars().count(),
+            REPETITION_MIN_RUN_CHARS,
+            "EGFP span must be exactly L=400 chars"
+        );
+        let span = EGFP_SPAN_400;
+        let gap1 = distinct_random_text(200, 101);
+        let gap2 = distinct_random_text(200, 102);
+        let gap3 = distinct_random_text(200, 103);
+        let mut d = DegenerationDetector::default();
+        d.feed_reasoning(span);
+        d.feed_reasoning(&gap1);
+        d.feed_reasoning(span);
+        d.feed_reasoning(&gap2);
+        d.feed_reasoning(span);
+        d.feed_reasoning(&gap3);
+        d.feed_reasoning(span);
+        assert!(
+            d.trip_reason().is_none(),
+            "3 EGFP sequence-gated hits must NOT trip (sequence limit 5)"
+        );
+        let audits = d.take_audit_hits();
+        assert_eq!(audits.len(), 3, "three EGFP replays must be audited");
+        for a in &audits {
+            assert!(a.contains("sequence_gated"), "{a}");
+            assert!(a.contains("ratio=1.00"), "{a}");
+        }
+        // 审计条目按各自命中时刻的流内累计计数标注（1/5、2/5、3/5）。
+        assert!(
+            audits.iter().any(|a| a.contains("1/5")),
+            "first hit must be audited at 1/5: {audits:?}"
+        );
+        assert!(
+            audits.iter().any(|a| a.contains("2/5")),
+            "second hit must be audited at 2/5: {audits:?}"
+        );
+        assert!(
+            audits.iter().any(|a| a.contains("3/5")),
+            "third hit must be audited at 3/5: {audits:?}"
+        );
+    }
+
+    #[test]
+    fn degeneration_detector_egfp_real_span_five_hits_trips() {
+        // 2026-08-25 SEQUENCE CONTENT GATE §3 矩阵项 2/8：同一 EGFP span
+        // 真循环 6 段（5 次命中、间隔不重置）→ 序列族触发；detail 带
+        // `sequence_gated` 标注与 5/5。
+        let span = EGFP_SPAN_400;
+        let gaps: Vec<String> = (101..=105).map(|s| distinct_random_text(200, s)).collect();
+        let mut d = DegenerationDetector::default();
+        for i in 0..6 {
+            d.feed_reasoning(span);
+            if let Some(g) = gaps.get(i) {
+                d.feed_reasoning(g);
+            }
+        }
+        let reason = d
+            .trip_reason()
+            .expect("5 EGFP sequence-gated hits must trip (sequence limit 5)");
+        assert!(reason.contains("sequence_gated"), "{reason}");
+        assert!(reason.contains("5/5"), "{reason}");
+    }
+
+    #[test]
+    fn degeneration_detector_poly_a_below_run_chars_silent() {
+        // 2026-08-25 SEQUENCE CONTENT GATE §3 矩阵项 3：poly-A / 低熵
+        // 399/400/401 形态维持不触发——第一级滚动窗口即不命中（记录区
+        // 在 idx ≥ W-1 才非空），0 审计、0 trip。
+        for n in [399usize, 400, 401] {
+            let mut d = DegenerationDetector::default();
+            d.feed_reasoning(&"a".repeat(n));
+            assert!(
+                d.trip_reason().is_none(),
+                "{n} identical chars must NOT trip"
+            );
+            assert!(
+                d.take_audit_hits().is_empty(),
+                "{n} identical chars must produce no hit"
+            );
+        }
+    }
+
+    #[test]
+    fn degeneration_detector_sequence_hits_discarded_at_stream_end() {
+        // 2026-08-25 SEQUENCE CONTENT GATE §3 矩阵项 8（流结束丢弃）：
+        // 检测器按 generate_stream 每次新建——第一个流 3 次序列命中仅
+        // 审计后结束；新建流重新从 0 计数（非 6 次累计），同一流内第 5
+        // 次命中才触发。
+        let span = EGFP_SPAN_400;
+        let gaps: Vec<String> = (101..=104).map(|s| distinct_random_text(200, s)).collect();
+        let mut first = DegenerationDetector::default();
+        for i in 0..4 {
+            first.feed_reasoning(span);
+            if let Some(g) = gaps.get(i) {
+                first.feed_reasoning(g);
+            }
+        }
+        assert!(
+            first.trip_reason().is_none(),
+            "3 hits in stream 1 must NOT trip"
+        );
+        assert_eq!(first.take_audit_hits().len(), 3);
+        // 流结束：丢弃 first；新建流计数从 0 开始。
+        let mut second = DegenerationDetector::default();
+        for i in 0..4 {
+            second.feed_reasoning(span);
+            if let Some(g) = gaps.get(i) {
+                second.feed_reasoning(g);
+            }
+        }
+        assert!(
+            second.trip_reason().is_none(),
+            "fresh stream must restart the counter (3/5, not 6 cumulative)"
+        );
+        assert_eq!(second.take_audit_hits().len(), 3);
+        // 同一流内继续到第 5 次命中 → 触发。
+        for i in 0..2 {
+            second.feed_reasoning(span);
+            if let Some(g) = gaps.get(i) {
+                second.feed_reasoning(g);
+            }
+        }
+        let reason = second
+            .trip_reason()
+            .expect("5th hit in the same stream must trip");
+        assert!(reason.contains("sequence_gated"), "{reason}");
     }
 
     #[test]
