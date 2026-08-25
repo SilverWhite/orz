@@ -103,7 +103,7 @@ pub const REPETITION_WINDOW_CHARS: usize = 800;
 /// 片段），不中断、不降级。命中计数随流结束丢弃（不跨请求累积——检测器
 /// 按 generate_stream 每次新建）；content/reasoning 两族统一；会话级
 /// consecutive 与 `DEGENERATION_LIMIT` 语义不变。2026-08-25 SEQUENCE
-/// CONTENT GATE：本门槛为**非序列样**门槛——无切分点 + `sequence_like`
+/// CONTENT GATE：本门槛为**非序列样**门槛——无切分点 + `sequence_kind`
 /// 判真的序列样走 `REPETITION_SEQUENCE_HIT_LIMIT`（=5）。
 pub const REPETITION_HIT_LIMIT: usize = 3;
 
@@ -113,8 +113,25 @@ pub const REPETITION_HIT_LIMIT: usize = 3;
 /// 分支的门槛分派——有切分点 span 走标点块覆盖 0.50 路径，不适用序列门。
 pub const REPETITION_SEQUENCE_LIKE_RATIO: f64 = 0.90;
 
+/// 蛋白族序列样门槛（2026-08-26 全面审查处理：蛋白/氨基酸序列覆盖扩展）。
+/// 严格 20 标准氨基酸字母占比 ≥ 0.95 判为蛋白样（初值；S4 校准范围
+/// 0.93–0.97）。与 DNA/RNA 族 0.90 分开定档——覆盖面实证（2026-08-26）：
+/// 英文无间隔长串（Gettysburg 全文 400 字符字母切片）的 20 氨基酸字母
+/// 占比 = 0.8975，若共用 0.90 裕量仅 ~0.25%（覆盖面过广，否决）；0.95 下
+/// 英文裕量 ≥5%，真实蛋白序列（UniProt P35579 myosin-9 400 字符切片）
+/// 占比 = 1.00。
+pub const REPETITION_PROTEIN_LIKE_RATIO: f64 = 0.95;
+
+/// 序列样占比的整数百分比（派生自 `REPETITION_SEQUENCE_LIKE_RATIO`；
+/// 判定用整数比较避免浮点边界误差；S4 校准 ratio 时同步修改）。
+const REPETITION_SEQUENCE_LIKE_PCT: usize =
+    (REPETITION_SEQUENCE_LIKE_RATIO * 100.0).round() as usize;
+
+/// 蛋白样占比的整数百分比（派生自 `REPETITION_PROTEIN_LIKE_RATIO`）。
+const REPETITION_PROTEIN_LIKE_PCT: usize = (REPETITION_PROTEIN_LIKE_RATIO * 100.0).round() as usize;
+
 /// 序列样流内累计命中门槛（2026-08-25 SEQUENCE CONTENT GATE 设计 §2.3）：
-/// 无切分点 + `sequence_like` 判真后，流内累计 ≥5 次才 trip（1–4 次仅
+/// 无切分点 + `sequence_kind` 判真后，流内累计 ≥5 次才 trip（1–4 次仅
 /// 审计，WARN 带 `sequence_gated` 标注 + ratio + hits/limit）；非序列样
 /// 维持 `REPETITION_HIT_LIMIT`=3。初值，S4 校准范围 4–6；间隔不重置、
 /// 流结束丢弃、consecutive 与 `DEGENERATION_LIMIT` 语义不变。
@@ -293,34 +310,110 @@ fn repetition_block_stats(span: &[char]) -> RepetitionBlockStats {
     }
 }
 
-/// 序列字母表成员判定（2026-08-25 SEQUENCE CONTENT GATE 设计 §2.2）：
+/// 序列样类别（2026-08-26 全面审查处理：蛋白/氨基酸序列覆盖扩展）。
+/// DNA/RNA 族 = {A,C,G,T,N,U}（阈值 0.90）；蛋白族 = 严格 20 标准氨基酸
+/// 字母（阈值 0.95）。两族任一判真即序列样；同判真时 DNA/RNA 优先。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SequenceKind {
+    DnaRna,
+    Protein,
+}
+
+impl SequenceKind {
+    /// 审计/触发 detail 的稳定类别标签。
+    fn label(&self) -> &'static str {
+        match self {
+            SequenceKind::DnaRna => "dna_rna",
+            SequenceKind::Protein => "protein",
+        }
+    }
+}
+
+/// DNA/RNA 字母表成员判定（2026-08-25 SEQUENCE CONTENT GATE 设计 §2.2）：
 /// {A,C,G,T,N,U}（大小写均可，DNA/RNA 通用）。
-fn is_sequence_base_char(c: char) -> bool {
+fn is_dna_rna_base_char(c: char) -> bool {
     matches!(
         c,
         'A' | 'C' | 'G' | 'T' | 'N' | 'U' | 'a' | 'c' | 'g' | 't' | 'n' | 'u'
     )
 }
 
-/// 序列字母在 span 中的占比（审计标注 ratio 用；空 span 为 0.0）。
-fn sequence_ratio(span: &[char]) -> f64 {
-    if span.is_empty() {
-        return 0.0;
-    }
-    let seq = span.iter().filter(|c| is_sequence_base_char(**c)).count();
-    seq as f64 / span.len() as f64
+/// 蛋白族字母表成员判定（2026-08-26 全面审查处理）：严格 20 标准氨基酸
+/// 字母 {A,C,D,E,F,G,H,I,K,L,M,N,P,Q,R,S,T,V,W,Y}（大小写均可）。刻意
+/// 不含 B/X/Z（Asx/Glx/未知残基）与 U（Sec）——英文常见字母 O/B/U 若
+/// 计入会使英文无间隔长串占比逼近/超过阈值（覆盖面过广，否决）；实测
+/// 英文 20 氨基酸字母占比 0.8975，0.95 阈值下裕量 ≥5%。
+fn is_protein_base_char(c: char) -> bool {
+    matches!(
+        c,
+        'A' | 'C'
+            | 'D'
+            | 'E'
+            | 'F'
+            | 'G'
+            | 'H'
+            | 'I'
+            | 'K'
+            | 'L'
+            | 'M'
+            | 'N'
+            | 'P'
+            | 'Q'
+            | 'R'
+            | 'S'
+            | 'T'
+            | 'V'
+            | 'W'
+            | 'Y'
+            | 'a'
+            | 'c'
+            | 'd'
+            | 'e'
+            | 'f'
+            | 'g'
+            | 'h'
+            | 'i'
+            | 'k'
+            | 'l'
+            | 'm'
+            | 'n'
+            | 'p'
+            | 'q'
+            | 'r'
+            | 's'
+            | 't'
+            | 'v'
+            | 'w'
+            | 'y'
+    )
 }
 
-/// 序列样判定（设计 §2.2）：span 非空且序列字母占比 ≥
-/// `REPETITION_SEQUENCE_LIKE_RATIO`。整数比较（seq×100 ≥ 阈值×100×len）
-/// 避免浮点边界误差（0.89 / 0.90 / 0.91 边界稳定）。
-fn sequence_like(span: &[char]) -> bool {
+/// 序列样判定（设计 §2.2 + 2026-08-26 蛋白扩展）：span 非空，单次扫描
+/// 统计两类字母；DNA/RNA 占比 ≥ 0.90 → DnaRna，否则蛋白占比 ≥ 0.95 →
+/// Protein，均不满足 → None。整数比较避免浮点边界误差（0.89/0.90/0.91、
+/// 0.94/0.95/0.96 边界稳定）；返回命中类别的占比供审计标注（避免二次
+/// 扫描）。
+fn sequence_kind(span: &[char]) -> Option<(SequenceKind, f64)> {
     if span.is_empty() {
-        return false;
+        return None;
     }
-    let seq = span.iter().filter(|c| is_sequence_base_char(**c)).count();
-    let threshold_pct = (REPETITION_SEQUENCE_LIKE_RATIO * 100.0).round() as usize;
-    seq * 100 >= threshold_pct.saturating_mul(span.len())
+    let (mut dna, mut protein) = (0usize, 0usize);
+    for &c in span {
+        if is_dna_rna_base_char(c) {
+            dna += 1;
+        }
+        if is_protein_base_char(c) {
+            protein += 1;
+        }
+    }
+    let len = span.len();
+    if dna * 100 >= REPETITION_SEQUENCE_LIKE_PCT.saturating_mul(len) {
+        Some((SequenceKind::DnaRna, dna as f64 / len as f64))
+    } else if protein * 100 >= REPETITION_PROTEIN_LIKE_PCT.saturating_mul(len) {
+        Some((SequenceKind::Protein, protein as f64 / len as f64))
+    } else {
+        None
+    }
 }
 
 /// 滚动哈希基数（多项式哈希；取奇数避免与 2^64 非互质的退化）。
@@ -430,7 +523,7 @@ pub const REASONING_STALL_DETAIL_PREFIX: &str = "degeneration_detected:reasoning
 
 /// 二级确认结果三态（2026-08-25 SEQUENCE CONTENT GATE 设计 §2.3）：
 /// 有切分点 span 走「标点块内部重复确认」0.50 覆盖路径（Confirmed /
-/// Rejected）；无可切分点 span 经 `sequence_like` 判定分派——序列样计
+/// Rejected）；无可切分点 span 经 `sequence_kind` 判定分派——序列样计
 /// 序列族命中（SequenceGated，门槛 5）、非序列样直接判真（Confirmed，
 /// 门槛 3）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -438,7 +531,7 @@ enum RepetitionConfirmation {
     /// 通过二级「标点块内部重复确认」（覆盖 ≥0.50）或无可切分点且非
     /// 序列样（直接判真）——计非序列命中（门槛 `REPETITION_HIT_LIMIT`）。
     Confirmed,
-    /// 无可切分点 + `sequence_like` 判真——计序列族命中（门槛
+    /// 无可切分点 + `sequence_kind` 判真——计序列族命中（门槛
     /// `REPETITION_SEQUENCE_HIT_LIMIT`）。
     SequenceGated,
     /// 二级不过（字符级匹配但有切分点且覆盖 <0.50）——不计数、仅留痕
@@ -453,7 +546,9 @@ enum RepetitionConfirmation {
 struct RepetitionCandidateAudit {
     /// 二级确认结果（见 `RepetitionConfirmation`）。
     confirmation: RepetitionConfirmation,
-    /// 序列样占比（`SequenceGated` 时为 Some；审计标注 ratio 用）。
+    /// 序列样类别（`SequenceGated` 时为 Some；审计标注 kind 用）。
+    sequence_kind: Option<SequenceKind>,
+    /// 命中类别的序列样占比（`SequenceGated` 时为 Some；审计标注 ratio 用）。
     sequence_ratio: Option<f64>,
     /// 审计上下文：重复 span 文本 + 两个匹配偏移 + 窗口尾部（仅确认命中
     /// 构造——二级不过的候选不构建 ~1.3KB 完整上下文，由 `span` +
@@ -624,7 +719,7 @@ impl RollingRepetitionWindow {
                 // 2026-08-25 SEQUENCE CONTENT GATE（设计 §2.2/§2.3）二级
                 // 分支分派：有切分点（block_count > 1）走「标点块内部重复
                 // 确认」0.50 覆盖路径（不适用序列门）；无可切分点
-                // （block_count <= 1）经 `sequence_like` 判定分派门槛——
+                // （block_count <= 1）经 `sequence_kind` 判定分派门槛——
                 // 序列样计序列族（SequenceGated）、非序列样直接判真
                 // （Confirmed）。
                 let span_chars: Vec<char> = self
@@ -636,18 +731,25 @@ impl RollingRepetitionWindow {
                     .collect();
                 let span: String = span_chars.iter().collect();
                 let stats = repetition_block_stats(&span_chars);
+                let seq_kind = sequence_kind(&span_chars);
                 confirmation = if stats.block_count > 1 {
                     if stats.repeated_coverage >= REPETITION_PUNCT_BLOCK_MIN_RATIO {
                         RepetitionConfirmation::Confirmed
                     } else {
                         RepetitionConfirmation::Rejected
                     }
-                } else if sequence_like(&span_chars) {
+                } else if seq_kind.is_some() {
                     RepetitionConfirmation::SequenceGated
                 } else {
                     RepetitionConfirmation::Confirmed
                 };
                 let hit = confirmation != RepetitionConfirmation::Rejected;
+                // 序列样类别与占比（仅 `SequenceGated` 时存在；seq_kind 为
+                // Copy，此处按值取出后原值仍可用）。
+                let seq_audit: Option<(SequenceKind, f64)> = (confirmation
+                    == RepetitionConfirmation::SequenceGated)
+                    .then_some(seq_kind)
+                    .flatten();
                 // 完整 ctx（偏移 + 窗口尾部）仅确认命中需要（触发/审计上下
                 // 文）；二级不过的候选按 span 聚合，不构造大文本。
                 let ctx = hit.then(|| {
@@ -656,8 +758,8 @@ impl RollingRepetitionWindow {
                 });
                 self.candidates.push(RepetitionCandidateAudit {
                     confirmation,
-                    sequence_ratio: (confirmation == RepetitionConfirmation::SequenceGated)
-                        .then(|| sequence_ratio(&span_chars)),
+                    sequence_kind: seq_audit.map(|(k, _)| k),
+                    sequence_ratio: seq_audit.map(|(_, r)| r),
                     ctx,
                     span,
                     block_stats: (confirmation == RepetitionConfirmation::Rejected)
@@ -743,7 +845,7 @@ struct RepetitionFamilyState {
     window_tokens: Vec<String>,
     /// 路径①滚动哈希流内累计**非序列**确认命中（≥`REPETITION_HIT_LIMIT`
     /// 触发；1–2 次仅审计留痕、间隔不重置）。2026-08-25 SEQUENCE CONTENT
-    /// GATE：无切分点 + `sequence_like` 判真的序列样不计入本计数。
+    /// GATE：无切分点 + `sequence_kind` 判真的序列样不计入本计数。
     hits: usize,
     /// 路径①滚动哈希流内累计**序列样**确认命中（2026-08-25 SEQUENCE
     /// CONTENT GATE 设计 §2.3：≥`REPETITION_SEQUENCE_HIT_LIMIT` 触发；
@@ -931,7 +1033,7 @@ fn feed_repetition(
     // ① 滚动哈希任意偏移（设计 §3.3 修订 + 2026-08-22/23 再校准 +
     //    2026-08-25 SEQUENCE CONTENT GATE）：与 delta 切块粒度无关的字符
     //    流级判定——每次命中候选（相同 L 字符 span 与记录区匹配）先过
-    //    二级「标点块内部重复确认」；无可切分点分支再经 `sequence_like`
+    //    二级「标点块内部重复确认」；无可切分点分支再经 `sequence_kind`
     //    判定分派：序列样计序列族（门槛 5）、非序列样直接判真（门槛 3）。
     //    两族分别累计、分别触发（间隔不重置）。
     // 2026-08-22 审查处理（P3）：以剩余门槛封顶单次喂入——同一 delta
@@ -995,12 +1097,21 @@ fn feed_repetition(
             return;
         }
         if state.sequence_hits >= REPETITION_SEQUENCE_HIT_LIMIT {
-            // 序列样门槛（2026-08-25 SEQUENCE CONTENT GATE §2.3）：detail
-            // 带 `sequence_gated` 标注，供事后区分序列门触发与非序列触发。
+            // 序列样门槛（2026-08-25 SEQUENCE CONTENT GATE §2.3 +
+            // 2026-08-26 蛋白扩展）：detail 带 `sequence_gated` 标注与
+            // `kind=`（dna_rna / protein），供事后区分序列门触发类别与
+            // 非序列触发。
+            let kind = candidates
+                .iter()
+                .rev()
+                .find(|c| c.confirmation == RepetitionConfirmation::SequenceGated)
+                .and_then(|c| c.sequence_kind)
+                .unwrap_or(SequenceKind::DnaRna)
+                .label();
             *trip = Some(format!(
                 "{detail_prefix} {REPETITION_MIN_RUN_CHARS}-char repeated span in the \
                  recent {REPETITION_WINDOW_CHARS}-char window, {}/{} stream hits (rolling \
-                 hash, arbitrary offset, sequence_gated)",
+                 hash, arbitrary offset, sequence_gated kind={kind})",
                 state.sequence_hits, REPETITION_SEQUENCE_HIT_LIMIT
             ));
             return;
@@ -1022,13 +1133,19 @@ fn feed_repetition(
             }
         }
         // 序列样 1–4 次命中：仅审计留痕——WARN 带 `sequence_gated` 标注 +
-        // ratio + hits/limit（2026-08-25 SEQUENCE CONTENT GATE §2.3）。
+        // kind + ratio + hits/limit（2026-08-25 SEQUENCE CONTENT GATE §2.3；
+        // 2026-08-26 全面审查处理：同一 delta 内多次命中按各自累计时刻
+        // 标注（旧行为统一标最终累计值），kind 区分 DNA/RNA 与蛋白族）。
         if new_sequence_hits > 0 {
             let seq_cand = candidates
                 .iter()
                 .rev()
                 .find(|c| c.confirmation == RepetitionConfirmation::SequenceGated);
             if let Some(seq_cand) = seq_cand {
+                let kind = seq_cand
+                    .sequence_kind
+                    .unwrap_or(SequenceKind::DnaRna)
+                    .label();
                 let ratio = seq_cand
                     .sequence_ratio
                     .unwrap_or(REPETITION_SEQUENCE_LIKE_RATIO);
@@ -1039,11 +1156,13 @@ fn feed_repetition(
                     .unwrap_or_else(|| {
                         format!("repeated {L}-char span", L = REPETITION_MIN_RUN_CHARS)
                     });
-                for _ in 0..new_sequence_hits {
+                let start = state.sequence_hits - new_sequence_hits;
+                for i in 0..new_sequence_hits {
                     audit_hits.push(format!(
-                        "{base} [sequence_gated ratio={ratio:.2}, {}/{} stream hits; \
-                         audit only, not tripping]",
-                        state.sequence_hits, REPETITION_SEQUENCE_HIT_LIMIT
+                        "{base} [sequence_gated kind={kind} ratio={ratio:.2}, \
+                         {}/{} stream hits; audit only, not tripping]",
+                        start + i + 1,
+                        REPETITION_SEQUENCE_HIT_LIMIT
                     ));
                 }
             }
@@ -2831,6 +2950,17 @@ mod tests {
     /// `D:\tb-eval\jobs-official\final-smoke-2026-08-25\dna-assembly__sHQCjg3\agent\orz.txt`。
     const EGFP_SPAN_400: &str = "tgagcaagggcgaggagctgttcaccggggtggtgcccatcctggtcgagctggacggcgacgtaaacggccacaagttcagcgtgtccggcgagggtgagggcgatgccacctacggcaagctgaccctgaagttcatctgcaccacgggcaagctgcccgtgccctggcccaccctcgtgaccaccctgacctacggcgtgcagtgcttcagccgctaccccgaccacatgaagcagcacgacttcttcaagtccgccatgcccgaaggctacgtccaggagcgcaccatcttcttcaaggacgacggcaactacaagacccgcgccgaggtgaagttcgagggcgacaccctggtgaaccgcatcgagctgaagggcatcgacttcaaggaggacgg";
 
+    /// 真实蛋白序列 400 字符 span（2026-08-26 全面审查处理：蛋白/氨基酸
+    /// 序列覆盖扩展目标样本）。源证据=UniProt P35579（人类 myosin-9，
+    /// 1960 aa）第 1–400 位，全为标准 20 氨基酸字母、占比 1.00 ≥0.95。
+    const PROTEIN_SPAN_400: &str = "MAQQAADKYLYVDKNFINNPLAQADWAAKKLVWVPSDKSGFEPASLKEEVGEEAIVELVENGKKVKVNKDDIQKMNPPKFSKVEDMAELTCLNEASVLHNLKERYYSGLIYTYSGLFCVVINPYKNLPIYSEEIVEMYKGKKRHEMPPHIYAITDTAYRSMMQDREDQSILCTGESGAGKTENTKKVIQYLAYVASSHKSKKDQGELERQLLQANPILEAFGNAKTVKNDNSSRFGKFIRINFDVNGYIVGANIETYLLEKSRAIRQAKEERTFHIFYYLLSGAGEHLKTDLLLEPYNKYRFLSNGHVTIPGQQDKDMFQETMEAMRIMGIPEEEQMGLLRVISGVLQLGNIVFKKERNTDQASMPDNTAAQKVSHLLGINVTDFTRGILTPRIKVGRDY";
+
+    /// 英文无间隔长串 400 字符守卫样本（2026-08-26 全面审查处理：蛋白
+    /// 覆盖不应过广的回归守卫）。源证据=Gettysburg Address 全文去除标点/
+    /// 空白后的前 400 个英文字母；20 氨基酸字母占比实测 0.8975 < 0.95，
+    /// 必须判为非序列样。
+    const ENGLISH_LETTER_RUN_400: &str = "FourscoreandsevenyearsagoourfathersbroughtforthonthiscontinentanewnationconceivedinLibertyanddedicatedtothepropositionthatallmenarecreatedequalNowweareengagedinagreatcivilwartestingwhetherthatnationoranynationsoconceivedandsodedicatedcanlongendureWearemetonagreatbattlefieldofthatwarWehavecometodedicateaportionofthatfieldasafinalrestingplaceforthosewhoheregavetheirlivesthatthatnationmightliveItisal";
+
     #[test]
     fn degeneration_detector_short_low_entropy_deltas_do_not_trip() {
         // S2（设计 §4.8）：短低熵块不触发——5×"a"（5 字符）与 5×"same"
@@ -2853,8 +2983,9 @@ mod tests {
     fn degeneration_detector_poly_a_threshold() {
         // S2（设计 §3.3）+ 2026-08-22/23 再校准：poly-A 精确阈值——799 同
         // 字符不触发（无命中）；800 = 1 次命中（仅审计）；801 = 2 次命中
-        // （仅审计）。2026-08-25 SEQUENCE CONTENT GATE：'a' ∈ 序列字母表
-        // （A）——无切分点直接判真分支经 `sequence_like` 判真 → 序列族
+        // （仅审计）。2026-08-25 SEQUENCE CONTENT GATE：'a' ∈ DNA/RNA
+        // 字母表（A）——无切分点直接判真分支经序列样判定（DNA/RNA 族）
+        // 判真 → 序列族
         // 门槛 3→5：802 = 3 次序列命中仅审计、不触发；804 = 5 次才触发
         // （detail 带 `sequence_gated` 标注）。
         let mut d = DegenerationDetector::default();
@@ -2899,7 +3030,8 @@ mod tests {
         // 2026-08-25 SEQUENCE CONTENT GATE §3 矩阵（核心项）：全 ACGT
         // 序列 span 合法回显 3 次（EGFP 误杀同构：802 字符 = 3 次命中）→
         // 序列族门槛 5 下 0 trip；审计条目带 `sequence_gated` 标注 +
-        // ratio + hits/limit。
+        // kind + ratio + hits/limit；同一 delta 内多次命中按各自累计时刻
+        // 标注（1/5、2/5、3/5——2026-08-26 全面审查处理）。
         let mut d = DegenerationDetector::default();
         d.feed_content(&"A".repeat(802));
         assert!(
@@ -2910,9 +3042,21 @@ mod tests {
         assert_eq!(audits.len(), 3, "3 sequence-gated hits must be audited");
         for a in &audits {
             assert!(a.contains("sequence_gated"), "{a}");
+            assert!(a.contains("kind=dna_rna"), "{a}");
             assert!(a.contains("ratio=1.00"), "{a}");
-            assert!(a.contains("3/5"), "{a}");
         }
+        assert!(
+            audits.iter().any(|a| a.contains("1/5")),
+            "first hit must be audited at 1/5: {audits:?}"
+        );
+        assert!(
+            audits.iter().any(|a| a.contains("2/5")),
+            "second hit must be audited at 2/5: {audits:?}"
+        );
+        assert!(
+            audits.iter().any(|a| a.contains("3/5")),
+            "third hit must be audited at 3/5: {audits:?}"
+        );
     }
 
     #[test]
@@ -2924,6 +3068,7 @@ mod tests {
         d.feed_content(&"A".repeat(804));
         let reason = d.trip_reason().expect("5 sequence-gated hits must trip");
         assert!(reason.contains("sequence_gated"), "{reason}");
+        assert!(reason.contains("kind=dna_rna"), "{reason}");
         assert!(reason.contains("5/5"), "{reason}");
         let mut d = DegenerationDetector::default();
         d.feed_content(&"A".repeat(806));
@@ -2977,37 +3122,107 @@ mod tests {
     }
 
     #[test]
-    fn sequence_like_ratio_boundary() {
+    fn sequence_kind_classification_boundaries() {
         // 2026-08-25 SEQUENCE CONTENT GATE §2.2 边界（S1 基础验证；S2 完整
-        // 矩阵含 U 与大小写混合、EGFP 真实样本回放）：0.89 / 0.90 / 0.91
-        // 分派正确；空 span 与大小写混合。
+        // 矩阵含 U 与大小写混合、EGFP 真实样本回放）+ 2026-08-26 蛋白扩展：
+        // DNA/RNA 0.89/0.90/0.91 与蛋白 0.94/0.95/0.96 分派正确；两族同判
+        // 真时 DNA/RNA 优先；空 span None；大小写混合；英文无间隔长串不判
+        // 序列样（覆盖面守卫）。
         let below: Vec<char> = "A"
             .repeat(89)
             .chars()
             .chain("X".repeat(11).chars())
             .collect();
-        assert!(!sequence_like(&below), "0.89 must NOT be sequence-like");
+        assert_eq!(
+            sequence_kind(&below),
+            None,
+            "DNA 0.89 must NOT be sequence-like"
+        );
         let at: Vec<char> = "A"
             .repeat(90)
             .chars()
             .chain("X".repeat(10).chars())
             .collect();
-        assert!(sequence_like(&at), "0.90 must be sequence-like");
+        assert!(
+            matches!(sequence_kind(&at), Some((SequenceKind::DnaRna, _))),
+            "DNA 0.90 must be DnaRna"
+        );
         let above: Vec<char> = "A"
             .repeat(91)
             .chars()
             .chain("X".repeat(9).chars())
             .collect();
-        assert!(sequence_like(&above), "0.91 must be sequence-like");
+        assert!(
+            matches!(sequence_kind(&above), Some((SequenceKind::DnaRna, _))),
+            "DNA 0.91 must be DnaRna"
+        );
         let mixed: Vec<char> = "aCtGuN".repeat(17).chars().collect();
         assert_eq!(mixed.len(), 102);
         assert!(
-            sequence_like(&mixed),
-            "mixed-case ACGTNU must be sequence-like"
+            matches!(sequence_kind(&mixed), Some((SequenceKind::DnaRna, _))),
+            "mixed-case ACGTNU must be DnaRna"
+        );
+        // 蛋白边界：'M'（Met）∈ 蛋白字母表且 ∉ DNA/RNA；'O' 两族均不计。
+        let protein_below: Vec<char> = "M"
+            .repeat(376)
+            .chars()
+            .chain("O".repeat(24).chars())
+            .collect();
+        assert_eq!(
+            sequence_kind(&protein_below),
+            None,
+            "protein 0.94 must NOT be sequence-like"
+        );
+        let protein_at: Vec<char> = "M"
+            .repeat(380)
+            .chars()
+            .chain("O".repeat(20).chars())
+            .collect();
+        assert!(
+            matches!(sequence_kind(&protein_at), Some((SequenceKind::Protein, _))),
+            "protein 0.95 must be Protein"
+        );
+        let protein_above: Vec<char> = "M"
+            .repeat(384)
+            .chars()
+            .chain("O".repeat(16).chars())
+            .collect();
+        assert!(
+            matches!(
+                sequence_kind(&protein_above),
+                Some((SequenceKind::Protein, _))
+            ),
+            "protein 0.96 must be Protein"
+        );
+        let protein_mixed: Vec<char> = "mKvLwYfPsRtDEnAcGhI".repeat(6).chars().collect();
+        assert!(
+            matches!(
+                sequence_kind(&protein_mixed),
+                Some((SequenceKind::Protein, _))
+            ),
+            "mixed-case protein letters must be Protein"
+        );
+        // 两族同判真（全 A/C/G/T）→ DNA/RNA 优先。
+        let both: Vec<char> = "A".repeat(400).chars().collect();
+        assert!(
+            matches!(sequence_kind(&both), Some((SequenceKind::DnaRna, _))),
+            "both-satisfying span must be DnaRna (precedence)"
         );
         assert!(
-            !sequence_like(&Vec::<char>::new()),
+            sequence_kind(&Vec::<char>::new()).is_none(),
             "empty span must NOT be sequence-like"
+        );
+        // 覆盖面守卫：英文无间隔长串不得判为蛋白样（0.8975 < 0.95）。
+        let english: Vec<char> = ENGLISH_LETTER_RUN_400.chars().collect();
+        assert_eq!(
+            english.len(),
+            REPETITION_MIN_RUN_CHARS,
+            "English guard sample must be exactly L=400 chars"
+        );
+        assert_eq!(
+            sequence_kind(&english),
+            None,
+            "English letter run must NOT be sequence-like (coverage guard)"
         );
     }
 
@@ -3078,6 +3293,64 @@ mod tests {
             .trip_reason()
             .expect("5 EGFP sequence-gated hits must trip (sequence limit 5)");
         assert!(reason.contains("sequence_gated"), "{reason}");
+        assert!(reason.contains("5/5"), "{reason}");
+    }
+
+    #[test]
+    fn degeneration_detector_protein_span_three_hits_audit_only() {
+        // 2026-08-26 全面审查处理（蛋白/氨基酸序列覆盖扩展）：真实蛋白
+        // span（UniProt P35579）合法回显 4 段（3 次命中、间隔不重置）→
+        // 蛋白族门槛 5 下 0 trip；3 条审计均带 `sequence_gated` +
+        // `kind=protein` + ratio + hits/limit。
+        assert_eq!(
+            PROTEIN_SPAN_400.chars().count(),
+            REPETITION_MIN_RUN_CHARS,
+            "protein span must be exactly L=400 chars"
+        );
+        let span = PROTEIN_SPAN_400;
+        let gap1 = distinct_random_text(200, 201);
+        let gap2 = distinct_random_text(200, 202);
+        let gap3 = distinct_random_text(200, 203);
+        let mut d = DegenerationDetector::default();
+        d.feed_reasoning(span);
+        d.feed_reasoning(&gap1);
+        d.feed_reasoning(span);
+        d.feed_reasoning(&gap2);
+        d.feed_reasoning(span);
+        d.feed_reasoning(&gap3);
+        d.feed_reasoning(span);
+        assert!(
+            d.trip_reason().is_none(),
+            "3 protein sequence-gated hits must NOT trip (sequence limit 5)"
+        );
+        let audits = d.take_audit_hits();
+        assert_eq!(audits.len(), 3, "three protein replays must be audited");
+        for a in &audits {
+            assert!(a.contains("sequence_gated"), "{a}");
+            assert!(a.contains("kind=protein"), "{a}");
+            assert!(a.contains("ratio=1.00"), "{a}");
+        }
+    }
+
+    #[test]
+    fn degeneration_detector_protein_span_five_hits_trips() {
+        // 2026-08-26 全面审查处理（蛋白/氨基酸序列覆盖扩展）：同一蛋白
+        // span 真循环 6 段（5 次命中、间隔不重置）→ 蛋白族触发；detail
+        // 带 `sequence_gated` + `kind=protein` 与 5/5。
+        let span = PROTEIN_SPAN_400;
+        let gaps: Vec<String> = (201..=205).map(|s| distinct_random_text(200, s)).collect();
+        let mut d = DegenerationDetector::default();
+        for i in 0..6 {
+            d.feed_reasoning(span);
+            if let Some(g) = gaps.get(i) {
+                d.feed_reasoning(g);
+            }
+        }
+        let reason = d
+            .trip_reason()
+            .expect("5 protein sequence-gated hits must trip (sequence limit 5)");
+        assert!(reason.contains("sequence_gated"), "{reason}");
+        assert!(reason.contains("kind=protein"), "{reason}");
         assert!(reason.contains("5/5"), "{reason}");
     }
 
