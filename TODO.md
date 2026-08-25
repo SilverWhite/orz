@@ -82,7 +82,7 @@
 > 本快照只做计数与分组召回，明细以下方各分组勾选清单为唯一入口，不新增独立条目；
 > 后续扫描更新时同步替换本快照日期与计数。
 
-- 未闭合总数：**30 项**（2026-08-19 0c 验证闭环 29 → 28；2026-08-20
+- 未闭合总数：**29 项**（2026-08-19 0c 验证闭环 29 → 28；2026-08-20
   0d 验证闭环 29 → 28；2026-08-20 OUTPUT-BUDGET-RESTORE-AND-STALL-GUARD
   S1 实施放行入账 28 → 29，**S3/S4 验证闭环 29 → 28**；2026-08-20
   THINKING-DEFAULT-HIGH-LADDER S1 实施放行入账 28 → 29，**S3/S4 换题
@@ -104,11 +104,13 @@
   复验闭环 30 → 29；2026-08-25 冒烟对拍登记入账 29 → 31
   （GAP-EVENT-SCHEMA-DRIFT + GAP-REPETITION-DETECTOR-DNA-
   FALSE-POSITIVE，见 P0-0i）；2026-08-26 GAP-EVENT-SCHEMA-DRIFT
-  事件面三类 Schema 漂移修复完成并复验，未闭合 31 → 30）
+  事件面三类 Schema 漂移修复完成并复验，未闭合 31 → 30；
+  2026-08-26 SEQUENCE CONTENT GATE（P0-0i）S4 复验闭环，未闭合 30 → 29）
   - P0-C：0 项（PLAN-FIRST 阶段 A/B/C 全部闭合，2026-08-16）
-  - P0 冒烟对拍暴露：1 项（GAP-REPETITION-DETECTOR-DNA-FALSE-POSITIVE
-    复读检测 DNA 误杀；GAP-EVENT-SCHEMA-DRIFT 事件面三类 Schema 漂移
-    已闭合 2026-08-26；2026-08-25 登记，正式 89 题提交前处理，见 P0-0i）
+  - P0 冒烟对拍暴露：0 项（GAP-REPETITION-DETECTOR-DNA-FALSE-POSITIVE
+    复读检测 DNA 误杀已闭合 2026-08-26；GAP-EVENT-SCHEMA-DRIFT 事件面
+    三类 Schema 漂移已闭合 2026-08-26；2026-08-25 登记，正式 89 题提交
+    前处理，见 P0-0i）
   - P0 评测冒烟暴露：0 项（P0-E 主项 7 项 + FUS-TOOL-SCOPE-CONTRACT 后续 2 项全部闭合 2026-08-18，见 P0-E grep 项后续①/②）
   - P0 Benchmark 完全体：1 项（FUS-BENCHMARK-FULL-EXEC 实施完成待验证，见 P0-F；验证闭环后回 26）
   - P0 折叠历史外挂：0 项（LEDGER-FOLD-EXTERNAL-FILE，S3/S4 验证闭环 2026-08-19，见 P0-0c）
@@ -1389,10 +1391,22 @@ S4 复验闭环 2026-08-25（补登记）；S1-S4 全部闭合）
       静态）；容器冒烟=provision usage / signer manifest 缺失 / orz TTY
       io error 均符合预期；对应源码 orz 6b208fb（工作树干净、已推 cli
       远端）。
-  - [ ] S4 复验（dna-assembly 重跑不降级、真复读仍触发、零 400、
-    命中率 ≥90%）
-- [ ] 观察项登记（dna/feal 命中率 <90% 与 web 检索相关；feal
-  reasoning_stall 64K 预算设计内触发）——并入对拍审计记录。
+  - [x] S4 复验（dna-assembly 重跑零误杀降级、真复读仍触发、零 400、
+    命中率 ≥90%）——**2026-08-26 闭环（未闭合 30 → 29）**：新二进制
+    orz 6b208fb（104,796,752 B）k=1 官方标准重跑（s4-dna-2026-08-26 /
+    dna-assembly__3EyUPDL，1800s 墙钟超时 reward 0.0，与旧 run 结局类别
+    一致）——EGFP 式合法引用零误杀降级（1–4/5 次命中全部仅审计
+    sequence_gated kind=dna_rna，旧 3/3 即直降 Disabled）；真复读仍触发
+    （同一 DNA span 5/5 次命中 trip，但只降 EnabledLow、非旧实现的直降
+    Disabled，降级后继续工作）；零真实 400（事件链 8 处“400”均为哈希
+    串）；事件链严格校验除「缺终止事件」1 项豁免（墙钟超时 harness 杀
+    进程边界，require_terminal=false 回放语义；与旧 run 同构）外 0 错误；
+    journal 口径命中率 82.36%（22 请求，762,496/925,805）vs 旧 82.33%——
+    持平，web 检索注入相关，观察项不阻塞；请求 36→22、reasoning tokens
+    46,626→136,956、request_header_change 6→3、无 reasoning_stall 触发。
+- [x] 观察项登记（dna 82.36%（S4 重跑实测）/ feal 88.21% 命中率 <90%
+  与 web 检索注入相关，成本观察不阻塞；feal 一次 reasoning_stall 64K
+  预算设计内触发；S4 dna 重跑无 stall 触发）——并入对拍审计记录。
 
 ### P0-B FUS-RETRIEVAL-MECH（`implemented`；批次 1-6 已全部闭合，2026-08-14，保留供核对）
 

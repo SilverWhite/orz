@@ -1403,13 +1403,29 @@ S1-S4 全部闭合）
       retired_tool_denied / content_anchor_mismatch 各 8 命中、序列门
       审计字段（sequence_gated/dna_rna/protein）与检索接线符号在二进制
       内、无 PT_INTERP（musl 静态）；容器冒烟三件正常加载执行；对应源码
-      orz 6b208fb 已推 cli 远端）**；S4 复验待实施。
-  3. 观察项：dna 82.33% / feal 88.21% 命中率 <90%（web 检索注入
-     相关，成本观察不阻塞）；feal 一次 reasoning_stall 64K 预算设计内
-     触发（记录）。
+      orz 6b208fb 已推 cli 远端）**；**S4 复验闭环（2026-08-26，未闭合
+      30 → 29）**：新二进制（orz 6b208fb，104,796,752 B）k=1 官方标准
+      重跑（s4-dna-2026-08-26 / dna-assembly__3EyUPDL，1800s 墙钟超时
+      reward 0.0，与旧 run 结局类别一致）——EGFP 式合法引用零误杀降级
+      （1–4/5 次命中全部仅审计 sequence_gated kind=dna_rna、5/5 次命中
+      才 trip；旧 3/3 即直降 Disabled）；真复读仍触发（trip 只降
+      EnabledLow、非直降 Disabled，降级后继续工作）；零真实 400（事件链
+      8 处“400”均为哈希串）；事件链严格校验除「缺终止事件」1 项豁免
+      （墙钟超时 harness 杀进程边界，require_terminal=false 回放语义；
+      与旧 run 同构）外 0 错误；journal 口径命中率 82.36%（22 请求，
+      762,496/925,805）vs 旧 82.33% 持平（web 检索注入，观察项不阻塞）；
+      请求 36→22、reasoning 46,626→136,956、request_header_change 6→3、
+      无 reasoning_stall 触发。登记于 ADR-0010 §14.41 第 3 项 / TODO
+      P0-0i / CLI_PROJECT_INDEX（GAP `partial` → `implemented`）。
+  3. 观察项（**2026-08-26 S4 重跑实测更新**）：dna 82.36%（S4 重跑）/
+     feal 88.21% 命中率 <90%（web 检索注入相关，成本观察不阻塞）；feal
+     一次 reasoning_stall 64K 预算设计内触发（记录）；S4 dna 重跑无
+     reasoning_stall 触发。
   - 下一步：**schema 三类漂移修复 ✓ + 事件链复验 ✓（2026-08-26，5 run
-    非终止错误 0）**；下一项=复读检测 DNA 域处理（S3 重建 + S4 复验）→
-    DNA 重跑复验。
+    非终止错误 0）+ DNA 域 S1/S2/S3/S4 全部闭合 ✓（2026-08-26，S4 重跑
+    零误杀降级、真复读仍触发、零 400；命中率观察项登记）**；下一项=
+    P0-F make-doom 加预算重跑 → 89 题官方跑分（k=5、`--upload --public`，
+    先 `harbor auth login`）。
 
 ### 0. 前置收尾（提交前需用户确认）
 

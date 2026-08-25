@@ -3754,3 +3754,26 @@ ADR §3.6 正文修订随实施登记。
    常量、同 delta 多次命中审计按各自累计时刻标注、设计文档 §5 数字非
    切分符勘误；orz-loop 569/0/3、fmt 干净、clippy 无新增。登记于设计
    文档 / BACKLOG 0i / TODO P0-0i / CLI_PROJECT_INDEX。
+
+3. **序列内容门 S3 重建 + S4 复验闭环（2026-08-26；未闭合 30 → 29，
+   S1-S4 全部闭合）**：S3 Linux musl 重建完成（ORZ-BUILD-MOUNT-001
+   契约，rust:1.97-slim 容器增量构建 6m19s，三件套 orz 104,796,752 B /
+   orz-signer 1,388,496 B / orz-acaf-provision 1,206,480 B；守卫符号
+   retired_tool_denied / content_anchor_mismatch 各 8 命中、序列门审计
+   字段（sequence_gated/dna_rna/protein）与检索接线符号在二进制内、无
+   PT_INTERP（musl 静态）；容器冒烟三件正常；对应源码 orz 6b208fb 已推
+   cli 远端）。**S4 复验（2026-08-26 闭环）**：dna-assembly 新二进制 k=1
+   官方标准重跑（s4-dna-2026-08-26 / dna-assembly__3EyUPDL，1800s 墙钟
+   超时 reward 0.0，与旧 run 结局类别一致）——① EGFP 式合法引用零误杀
+   降级：1–4/5 次命中全部仅审计（sequence_gated kind=dna_rna，旧 3/3
+   即直降 Disabled）；② 真复读仍触发：同一 DNA span 5/5 次命中 trip，
+   只降 EnabledLow（非旧直降 Disabled），降级后继续工作；③ 零真实 400
+   （事件链 8 处“400”均为哈希串）；④ 事件链严格校验除「缺终止事件」1
+   项豁免（墙钟超时 harness 杀进程边界，require_terminal=false 回放
+   语义；与旧 run 同构）外 0 错误；⑤ journal 口径命中率 82.36%（22
+   请求，762,496/925,805）vs 旧 82.33% 持平——web 检索注入相关，观察项
+   不阻塞；请求 36→22、reasoning 46,626→136,956、request_header_change
+   6→3、无 reasoning_stall 触发。计数：S3/S4 验证闭环，未闭合 30 → 29。
+   登记于设计文档 / BACKLOG 0i / TODO P0-0i / CLI_PROJECT_INDEX
+   （GAP-REPETITION-DETECTOR-DNA-FALSE-POSITIVE `partial` →
+   `implemented`）。
