@@ -102,8 +102,23 @@ pub const REPETITION_WINDOW_CHARS: usize = 800;
 /// 重置**（间隔不重置）；1–2 次命中仅审计留痕（WARN 输出触发 span + 窗口
 /// 片段），不中断、不降级。命中计数随流结束丢弃（不跨请求累积——检测器
 /// 按 generate_stream 每次新建）；content/reasoning 两族统一；会话级
-/// consecutive 与 `DEGENERATION_LIMIT` 语义不变。
+/// consecutive 与 `DEGENERATION_LIMIT` 语义不变。2026-08-25 SEQUENCE
+/// CONTENT GATE：本门槛为**非序列样**门槛——无切分点 + `sequence_like`
+/// 判真的序列样走 `REPETITION_SEQUENCE_HIT_LIMIT`（=5）。
 pub const REPETITION_HIT_LIMIT: usize = 3;
+
+/// 序列样内容门（2026-08-25 SEQUENCE CONTENT GATE 设计 §2.2）：无切分点
+/// span 内序列字母 {A,C,G,T,N,U}（大小写均可，DNA/RNA 通用）占比 ≥ 0.90
+/// 判为序列样（初值，S4 校准范围 0.85–0.95）。仅用于「无可切分点」二级
+/// 分支的门槛分派——有切分点 span 走标点块覆盖 0.50 路径，不适用序列门。
+pub const REPETITION_SEQUENCE_LIKE_RATIO: f64 = 0.90;
+
+/// 序列样流内累计命中门槛（2026-08-25 SEQUENCE CONTENT GATE 设计 §2.3）：
+/// 无切分点 + `sequence_like` 判真后，流内累计 ≥5 次才 trip（1–4 次仅
+/// 审计，WARN 带 `sequence_gated` 标注 + ratio + hits/limit）；非序列样
+/// 维持 `REPETITION_HIT_LIMIT`=3。初值，S4 校准范围 4–6；间隔不重置、
+/// 流结束丢弃、consecutive 与 `DEGENERATION_LIMIT` 语义不变。
+pub const REPETITION_SEQUENCE_HIT_LIMIT: usize = 5;
 
 /// 二级「标点块内部重复确认」阈值（2026-08-23 用户裁决）：滚动哈希命中
 /// 候选的 span 按标点+空白（`_` 除外）切块后，内部重复子块覆盖字符占比
@@ -195,7 +210,11 @@ struct RepetitionBlockStats {
 
 impl RepetitionBlockStats {
     /// 二级判定：无切分点（单块）或整段无可切分块 → 二级不起作用 → 直接
-    /// 判真；有子块则重复块覆盖占比 ≥ 阈值才通过。
+    /// 判真；有子块则重复块覆盖占比 ≥ 阈值才通过。2026-08-25 序列内容门
+    /// 后，`feed` 内的三态分派已内联等价逻辑（需区分 block_count > 1 与
+    /// 无切分点序列样），本便捷判定仅测试引用（S2 标点块矩阵），豁免
+    /// dead_code 保持 clippy 与基线一致。
+    #[cfg_attr(not(test), allow(dead_code))]
     fn confirmed(&self) -> bool {
         self.block_count <= 1 || self.repeated_coverage >= REPETITION_PUNCT_BLOCK_MIN_RATIO
     }
@@ -272,6 +291,36 @@ fn repetition_block_stats(span: &[char]) -> RepetitionBlockStats {
         repeated_coverage: covered as f64 / total_chars.max(1) as f64,
         repeated_blocks,
     }
+}
+
+/// 序列字母表成员判定（2026-08-25 SEQUENCE CONTENT GATE 设计 §2.2）：
+/// {A,C,G,T,N,U}（大小写均可，DNA/RNA 通用）。
+fn is_sequence_base_char(c: char) -> bool {
+    matches!(
+        c,
+        'A' | 'C' | 'G' | 'T' | 'N' | 'U' | 'a' | 'c' | 'g' | 't' | 'n' | 'u'
+    )
+}
+
+/// 序列字母在 span 中的占比（审计标注 ratio 用；空 span 为 0.0）。
+fn sequence_ratio(span: &[char]) -> f64 {
+    if span.is_empty() {
+        return 0.0;
+    }
+    let seq = span.iter().filter(|c| is_sequence_base_char(**c)).count();
+    seq as f64 / span.len() as f64
+}
+
+/// 序列样判定（设计 §2.2）：span 非空且序列字母占比 ≥
+/// `REPETITION_SEQUENCE_LIKE_RATIO`。整数比较（seq×100 ≥ 阈值×100×len）
+/// 避免浮点边界误差（0.89 / 0.90 / 0.91 边界稳定）。
+fn sequence_like(span: &[char]) -> bool {
+    if span.is_empty() {
+        return false;
+    }
+    let seq = span.iter().filter(|c| is_sequence_base_char(**c)).count();
+    let threshold_pct = (REPETITION_SEQUENCE_LIKE_RATIO * 100.0).round() as usize;
+    seq * 100 >= threshold_pct.saturating_mul(span.len())
 }
 
 /// 滚动哈希基数（多项式哈希；取奇数避免与 2^64 非互质的退化）。
@@ -379,12 +428,33 @@ pub const REASONING_REPETITION_DETAIL_PREFIX: &str = "degeneration_detected:reas
 /// reasoning-stall 族 detail 前缀（预算兜底层——无可见输出 → 直接降级）。
 pub const REASONING_STALL_DETAIL_PREFIX: &str = "degeneration_detected:reasoning_stall:";
 
+/// 二级确认结果三态（2026-08-25 SEQUENCE CONTENT GATE 设计 §2.3）：
+/// 有切分点 span 走「标点块内部重复确认」0.50 覆盖路径（Confirmed /
+/// Rejected）；无可切分点 span 经 `sequence_like` 判定分派——序列样计
+/// 序列族命中（SequenceGated，门槛 5）、非序列样直接判真（Confirmed，
+/// 门槛 3）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum RepetitionConfirmation {
+    /// 通过二级「标点块内部重复确认」（覆盖 ≥0.50）或无可切分点且非
+    /// 序列样（直接判真）——计非序列命中（门槛 `REPETITION_HIT_LIMIT`）。
+    Confirmed,
+    /// 无可切分点 + `sequence_like` 判真——计序列族命中（门槛
+    /// `REPETITION_SEQUENCE_HIT_LIMIT`）。
+    SequenceGated,
+    /// 二级不过（字符级匹配但有切分点且覆盖 <0.50）——不计数、仅留痕
+    /// （span + 标点块统计）。
+    Rejected,
+}
+
 /// 一次滚动哈希字符级命中候选（2026-08-23 二级确认后）：字符级匹配但
-/// 二级不过的候选仅审计留痕（span + 标点块统计），不计数。
+/// 二级不过的候选仅审计留痕（span + 标点块统计），不计数；2026-08-25
+/// 序列内容门扩展为三态确认（Confirmed / SequenceGated / Rejected）。
 #[derive(Debug)]
 struct RepetitionCandidateAudit {
-    /// 是否通过二级「标点块内部重复确认」。
-    confirmed: bool,
+    /// 二级确认结果（见 `RepetitionConfirmation`）。
+    confirmation: RepetitionConfirmation,
+    /// 序列样占比（`SequenceGated` 时为 Some；审计标注 ratio 用）。
+    sequence_ratio: Option<f64>,
     /// 审计上下文：重复 span 文本 + 两个匹配偏移 + 窗口尾部（仅确认命中
     /// 构造——二级不过的候选不构建 ~1.3KB 完整上下文，由 `span` +
     /// `block_stats` 聚合留痕）。
@@ -434,7 +504,7 @@ struct RollingRepetitionWindow {
 
 impl RollingRepetitionWindow {
     /// 喂入一个 delta（逐字符）；返回本 delta 内新产生的**通过二级确认的**
-    /// 命中次数
+    /// 命中次数二元组（非序列 Confirmed、序列样 SequenceGated）
     /// （2026-08-22 再校准：命中后窗口继续喂入——命中计数流内累计、间隔
     /// 不重置，调用方在累计 ≥`REPETITION_HIT_LIMIT` 时判定触发；旧语义
     /// 「命中即终止」退役）。等价于不设上限的 `feed_chars_capped`
@@ -442,8 +512,8 @@ impl RollingRepetitionWindow {
     /// 生产路径已改走 `feed_chars_capped`，lib 目标下该便捷方法仅测试
     /// 引用，豁免 dead_code 保持 clippy 与基线一致）。
     #[cfg_attr(not(test), allow(dead_code))]
-    fn feed_chars(&mut self, delta: &str) -> usize {
-        self.feed_chars_capped(delta, usize::MAX)
+    fn feed_chars(&mut self, delta: &str) -> (usize, usize) {
+        self.feed_chars_capped(delta, usize::MAX, usize::MAX)
     }
 
     /// 带命中上限的喂入：本 delta 内新**确认**命中数达 `hit_cap` 即停止
@@ -452,19 +522,30 @@ impl RollingRepetitionWindow {
     /// `REPETITION_HIT_LIMIT` 后该流必触发，继续喂入超大退化帧只会白做
     /// 滚动哈希与字符级比对；子门槛 delta 全量消费，窗口状态与旧语义
     /// 完全一致。2026-08-23：每次调用前清空 `candidates`（本 delta 命中
-    /// 候选留痕，供调用方逐条审计；二级不过的候选不计数）。
-    fn feed_chars_capped(&mut self, delta: &str, hit_cap: usize) -> usize {
+    /// 候选留痕，供调用方逐条审计；二级不过的候选不计数）。2026-08-25
+    /// SEQUENCE CONTENT GATE：双门槛封顶——`hit_cap` 非序列剩余门槛、
+    /// `sequence_hit_cap` 序列族剩余门槛；任一达到即停止（该流必触发，
+    /// 达门槛后继续消费只会白做）。返回 (非序列确认命中数, 序列样命中数)。
+    fn feed_chars_capped(
+        &mut self,
+        delta: &str,
+        hit_cap: usize,
+        sequence_hit_cap: usize,
+    ) -> (usize, usize) {
         self.candidates.clear();
         let mut hits = 0;
+        let mut sequence_hits = 0;
         for c in delta.chars() {
-            if hits >= hit_cap {
+            if hits >= hit_cap || sequence_hits >= sequence_hit_cap {
                 break;
             }
-            if self.feed(c) {
-                hits += 1;
+            match self.feed(c) {
+                RepetitionConfirmation::Confirmed => hits += 1,
+                RepetitionConfirmation::SequenceGated => sequence_hits += 1,
+                RepetitionConfirmation::Rejected => {}
             }
         }
-        hits
+        (hits, sequence_hits)
     }
 
     /// 取走本 delta 的命中候选审计记录（调用方逐条审计；二级不过的候选
@@ -473,7 +554,7 @@ impl RollingRepetitionWindow {
         std::mem::take(&mut self.candidates)
     }
 
-    fn feed(&mut self, c: char) -> bool {
+    fn feed(&mut self, c: char) -> RepetitionConfirmation {
         let idx = self.next;
         self.next += 1;
         self.chars.push_back(c);
@@ -524,7 +605,7 @@ impl RollingRepetitionWindow {
         // 继续滑动，供流内命中计数累计（2026-08-22 再校准）；2026-08-23
         // 起字符级匹配仅产生「候选」，经二级「标点块内部重复确认」才计
         // 命中（不过者留痕、不计数；`feed_repetition` 按 delta 聚合）。
-        let mut hit = false;
+        let mut confirmation = RepetitionConfirmation::Rejected;
         if idx >= REPETITION_MIN_RUN_CHARS - 1
             && self.counts.get(&self.trailing_hash).is_some_and(|n| *n > 0)
         {
@@ -540,6 +621,12 @@ impl RollingRepetitionWindow {
                 // 由重复的标点块构成」（或无可切分点）才计该次命中——字符
                 // 级匹配但二级不过的候选仅审计留痕、不计数。`spans_equal`
                 // 已保证两 span 字符级相等，检查新 span 内部结构即代表该对。
+                // 2026-08-25 SEQUENCE CONTENT GATE（设计 §2.2/§2.3）二级
+                // 分支分派：有切分点（block_count > 1）走「标点块内部重复
+                // 确认」0.50 覆盖路径（不适用序列门）；无可切分点
+                // （block_count <= 1）经 `sequence_like` 判定分派门槛——
+                // 序列样计序列族（SequenceGated）、非序列样直接判真
+                // （Confirmed）。
                 let span_chars: Vec<char> = self
                     .chars
                     .iter()
@@ -549,19 +636,32 @@ impl RollingRepetitionWindow {
                     .collect();
                 let span: String = span_chars.iter().collect();
                 let stats = repetition_block_stats(&span_chars);
-                let confirmed = stats.confirmed();
-                hit = confirmed;
+                confirmation = if stats.block_count > 1 {
+                    if stats.repeated_coverage >= REPETITION_PUNCT_BLOCK_MIN_RATIO {
+                        RepetitionConfirmation::Confirmed
+                    } else {
+                        RepetitionConfirmation::Rejected
+                    }
+                } else if sequence_like(&span_chars) {
+                    RepetitionConfirmation::SequenceGated
+                } else {
+                    RepetitionConfirmation::Confirmed
+                };
+                let hit = confirmation != RepetitionConfirmation::Rejected;
                 // 完整 ctx（偏移 + 窗口尾部）仅确认命中需要（触发/审计上下
                 // 文）；二级不过的候选按 span 聚合，不构造大文本。
-                let ctx = confirmed.then(|| {
+                let ctx = hit.then(|| {
                     self.match_context()
                         .unwrap_or_else(|| format!("repeated span at global offset {s}"))
                 });
                 self.candidates.push(RepetitionCandidateAudit {
-                    confirmed,
+                    confirmation,
+                    sequence_ratio: (confirmation == RepetitionConfirmation::SequenceGated)
+                        .then(|| sequence_ratio(&span_chars)),
                     ctx,
                     span,
-                    block_stats: (!confirmed).then(|| stats.summary()),
+                    block_stats: (confirmation == RepetitionConfirmation::Rejected)
+                        .then(|| stats.summary()),
                 });
             }
         }
@@ -571,7 +671,7 @@ impl RollingRepetitionWindow {
             self.chars.pop_front();
             self.base += 1;
         }
-        hit
+        confirmation
     }
 
     /// 缓冲内全局序号 `g` 的字符。
@@ -641,9 +741,15 @@ struct RepetitionFamilyState {
     total_tokens: usize,
     /// 最近 1K token 的滑动窗口。
     window_tokens: Vec<String>,
-    /// 路径①滚动哈希流内累计确认命中（≥`REPETITION_HIT_LIMIT` 触发；
-    /// 1–2 次仅审计留痕、间隔不重置）。
+    /// 路径①滚动哈希流内累计**非序列**确认命中（≥`REPETITION_HIT_LIMIT`
+    /// 触发；1–2 次仅审计留痕、间隔不重置）。2026-08-25 SEQUENCE CONTENT
+    /// GATE：无切分点 + `sequence_like` 判真的序列样不计入本计数。
     hits: usize,
+    /// 路径①滚动哈希流内累计**序列样**确认命中（2026-08-25 SEQUENCE
+    /// CONTENT GATE 设计 §2.3：≥`REPETITION_SEQUENCE_HIT_LIMIT` 触发；
+    /// 1–4 次仅审计留痕（带 `sequence_gated` 标注 + ratio + hits/limit）、
+    /// 间隔不重置、流结束丢弃）。与非序列 `hits` 分别计数、分别门槛。
+    sequence_hits: usize,
     /// 路径②3-gram 流内累计命中（每次 feed 超阈值计 1 次；≥`NGRAM_HIT_LIMIT`
     /// 才 trip；1–2 次仅审计留痕、间隔不重置、流结束丢弃——2026-08-23
     /// NGRAM-GUARD-CALIBRATION）。
@@ -822,16 +928,23 @@ fn feed_repetition(
     if trip.is_some() || delta.is_empty() {
         return;
     }
-    // ① 滚动哈希任意偏移（设计 §3.3 修订 + 2026-08-22/23 再校准）：与
-    //    delta 切块粒度无关的字符流级判定——每次命中候选（相同 L 字符
-    //    span 与记录区匹配）先过二级「标点块内部重复确认」；通过的累计
-    //    计数，同一流内 ≥3 次（间隔不重置）才触发。
+    // ① 滚动哈希任意偏移（设计 §3.3 修订 + 2026-08-22/23 再校准 +
+    //    2026-08-25 SEQUENCE CONTENT GATE）：与 delta 切块粒度无关的字符
+    //    流级判定——每次命中候选（相同 L 字符 span 与记录区匹配）先过
+    //    二级「标点块内部重复确认」；无可切分点分支再经 `sequence_like`
+    //    判定分派：序列样计序列族（门槛 5）、非序列样直接判真（门槛 3）。
+    //    两族分别累计、分别触发（间隔不重置）。
     // 2026-08-22 审查处理（P3）：以剩余门槛封顶单次喂入——同一 delta
     // 内新**确认**命中达「门槛-已累计」即停止消费（该流必触发，避免超
     // 大退化帧在命中门槛后仍全量喂入的浪费）；子门槛 delta 全量消费，
-    // 窗口状态与旧语义一致。
+    // 窗口状态与旧语义一致。2026-08-25：双门槛封顶（非序列剩余 +
+    // 序列族剩余，任一达到即停止）。
     let remaining = REPETITION_HIT_LIMIT.saturating_sub(state.hits);
-    let new_hits = state.rolling.feed_chars_capped(delta, remaining);
+    let sequence_remaining = REPETITION_SEQUENCE_HIT_LIMIT.saturating_sub(state.sequence_hits);
+    let (new_hits, new_sequence_hits) =
+        state
+            .rolling
+            .feed_chars_capped(delta, remaining, sequence_remaining);
     let candidates = state.rolling.take_candidates();
     // 二级不过的命中候选：按 delta 聚合（2026-08-23 审查处理 P2-2，用户
     // 裁决：一条摘要 + 命中计数）——滑动窗口「每对」语义下同一底层重复
@@ -841,12 +954,15 @@ fn feed_repetition(
     // 标点块统计 + 本 delta 候选对数），不计数、不影响命中门槛。边界：
     // 同一 delta 内多个不同重复内容合并为一条（代表取最后一条候选；SSE
     // delta 通常数百字符，多重复内容同 delta 罕见），登记为已接受。
-    let rejected_count = candidates.iter().filter(|c| !c.confirmed).count();
+    let rejected_count = candidates
+        .iter()
+        .filter(|c| c.confirmation == RepetitionConfirmation::Rejected)
+        .count();
     if rejected_count > 0 {
         let rep = candidates
             .iter()
             .rev()
-            .find(|c| !c.confirmed)
+            .find(|c| c.confirmation == RepetitionConfirmation::Rejected)
             .expect("rejected_count > 0 implies a rejected candidate");
         audit_hits.push(format!(
             "repeated {L}-char span {span:?} [second-stage rejected: {stats}] \
@@ -856,17 +972,19 @@ fn feed_repetition(
             stats = rep.block_stats.as_deref().unwrap_or("no block stats"),
         ));
     }
-    if new_hits > 0 {
+    if new_hits > 0 || new_sequence_hits > 0 {
         // 触发/审计上下文取本 delta 最后一条确认命中（同一重复 span 语义；
-        // 2026-08-23：候选已带各自 ctx，不依赖命中后 match_context）。
+        // 2026-08-23：候选已带各自 ctx，不依赖命中后 match_context；
+        // 2026-08-25：Confirmed / SequenceGated 均为确认命中）。
         let ctx = candidates
             .iter()
             .rev()
-            .find(|c| c.confirmed)
+            .find(|c| c.confirmation != RepetitionConfirmation::Rejected)
             .and_then(|c| c.ctx.clone())
             .or_else(|| state.rolling.match_context());
         *trigger_context = ctx.clone();
         state.hits = state.hits.saturating_add(new_hits);
+        state.sequence_hits = state.sequence_hits.saturating_add(new_sequence_hits);
         if state.hits >= REPETITION_HIT_LIMIT {
             *trip = Some(format!(
                 "{detail_prefix} {REPETITION_MIN_RUN_CHARS}-char repeated span in the \
@@ -876,11 +994,58 @@ fn feed_repetition(
             ));
             return;
         }
-        // 1–2 次命中：仅审计留痕（不中断、不降级）。同一 delta 内多次命中
-        // 逐条登记（上下文取该 delta 最后一次命中——同一重复 span 语义）。
-        if let Some(ctx) = ctx {
-            for _ in 0..new_hits {
-                audit_hits.push(ctx.clone());
+        if state.sequence_hits >= REPETITION_SEQUENCE_HIT_LIMIT {
+            // 序列样门槛（2026-08-25 SEQUENCE CONTENT GATE §2.3）：detail
+            // 带 `sequence_gated` 标注，供事后区分序列门触发与非序列触发。
+            *trip = Some(format!(
+                "{detail_prefix} {REPETITION_MIN_RUN_CHARS}-char repeated span in the \
+                 recent {REPETITION_WINDOW_CHARS}-char window, {}/{} stream hits (rolling \
+                 hash, arbitrary offset, sequence_gated)",
+                state.sequence_hits, REPETITION_SEQUENCE_HIT_LIMIT
+            ));
+            return;
+        }
+        // 非序列 1–2 次命中：仅审计留痕（不中断、不降级）。同一 delta 内
+        // 多次命中逐条登记（上下文取该 delta 最后一次非序列确认命中——
+        // 同一重复 span 语义）。
+        if new_hits > 0 {
+            let plain_ctx = candidates
+                .iter()
+                .rev()
+                .find(|c| c.confirmation == RepetitionConfirmation::Confirmed)
+                .and_then(|c| c.ctx.clone())
+                .or_else(|| ctx.clone());
+            if let Some(ctx) = plain_ctx {
+                for _ in 0..new_hits {
+                    audit_hits.push(ctx.clone());
+                }
+            }
+        }
+        // 序列样 1–4 次命中：仅审计留痕——WARN 带 `sequence_gated` 标注 +
+        // ratio + hits/limit（2026-08-25 SEQUENCE CONTENT GATE §2.3）。
+        if new_sequence_hits > 0 {
+            let seq_cand = candidates
+                .iter()
+                .rev()
+                .find(|c| c.confirmation == RepetitionConfirmation::SequenceGated);
+            if let Some(seq_cand) = seq_cand {
+                let ratio = seq_cand
+                    .sequence_ratio
+                    .unwrap_or(REPETITION_SEQUENCE_LIKE_RATIO);
+                let base = seq_cand
+                    .ctx
+                    .clone()
+                    .or_else(|| ctx.clone())
+                    .unwrap_or_else(|| {
+                        format!("repeated {L}-char span", L = REPETITION_MIN_RUN_CHARS)
+                    });
+                for _ in 0..new_sequence_hits {
+                    audit_hits.push(format!(
+                        "{base} [sequence_gated ratio={ratio:.2}, {}/{} stream hits; \
+                         audit only, not tripping]",
+                        state.sequence_hits, REPETITION_SEQUENCE_HIT_LIMIT
+                    ));
+                }
             }
         }
     }
@@ -1809,6 +1974,7 @@ impl DeepSeekTransport {
                 for ctx in audit_hits {
                     tracing::warn!(
                         rolling_hit_limit = REPETITION_HIT_LIMIT,
+                        sequence_hit_limit = REPETITION_SEQUENCE_HIT_LIMIT,
                         ngram_hit_limit = NGRAM_HIT_LIMIT,
                         trigger_context = %ctx,
                         "output-health guard repetition audit (same chunk as trip)"
@@ -1834,6 +2000,7 @@ impl DeepSeekTransport {
             for ctx in audit_hits {
                 tracing::warn!(
                     rolling_hit_limit = REPETITION_HIT_LIMIT,
+                    sequence_hit_limit = REPETITION_SEQUENCE_HIT_LIMIT,
                     ngram_hit_limit = NGRAM_HIT_LIMIT,
                     trigger_context = %ctx,
                     "output-health guard repetition hit (audit only, not tripping)"
@@ -2680,8 +2847,10 @@ mod tests {
     fn degeneration_detector_poly_a_threshold() {
         // S2（设计 §3.3）+ 2026-08-22/23 再校准：poly-A 精确阈值——799 同
         // 字符不触发（无命中）；800 = 1 次命中（仅审计）；801 = 2 次命中
-        // （仅审计）；802 = 3 次命中 → 触发。同字符无切分点 → 二级直接
-        // 判真。
+        // （仅审计）。2026-08-25 SEQUENCE CONTENT GATE：'a' ∈ 序列字母表
+        // （A）——无切分点直接判真分支经 `sequence_like` 判真 → 序列族
+        // 门槛 3→5：802 = 3 次序列命中仅审计、不触发；804 = 5 次才触发
+        // （detail 带 `sequence_gated` 标注）。
         let mut d = DegenerationDetector::default();
         d.feed_content(&"a".repeat(799));
         assert!(
@@ -2705,8 +2874,135 @@ mod tests {
         assert_eq!(d.take_audit_hits().len(), 2, "801 chars = 2 audit hits");
         let mut d = DegenerationDetector::default();
         d.feed_content(&"a".repeat(802));
-        let reason = d.trip_reason().expect("802 identical chars must trip");
+        assert!(
+            d.trip_reason().is_none(),
+            "802 identical chars = 3 sequence-gated hits, must NOT trip (sequence limit 5)"
+        );
+        assert_eq!(d.take_audit_hits().len(), 3, "802 chars = 3 audit hits");
+        let mut d = DegenerationDetector::default();
+        d.feed_content(&"a".repeat(804));
+        let reason = d
+            .trip_reason()
+            .expect("804 identical chars = 5 sequence-gated hits must trip");
         assert!(reason.contains("repeated span"), "{reason}");
+        assert!(reason.contains("sequence_gated"), "{reason}");
+    }
+
+    #[test]
+    fn degeneration_detector_dna_sequence_gate_audit_three_hits() {
+        // 2026-08-25 SEQUENCE CONTENT GATE §3 矩阵（核心项）：全 ACGT
+        // 序列 span 合法回显 3 次（EGFP 误杀同构：802 字符 = 3 次命中）→
+        // 序列族门槛 5 下 0 trip；审计条目带 `sequence_gated` 标注 +
+        // ratio + hits/limit。
+        let mut d = DegenerationDetector::default();
+        d.feed_content(&"A".repeat(802));
+        assert!(
+            d.trip_reason().is_none(),
+            "3 sequence-gated hits must NOT trip (sequence limit 5)"
+        );
+        let audits = d.take_audit_hits();
+        assert_eq!(audits.len(), 3, "3 sequence-gated hits must be audited");
+        for a in &audits {
+            assert!(a.contains("sequence_gated"), "{a}");
+            assert!(a.contains("ratio=1.00"), "{a}");
+            assert!(a.contains("3/5"), "{a}");
+        }
+    }
+
+    #[test]
+    fn degeneration_detector_dna_sequence_gate_trips_at_five_hits() {
+        // 2026-08-25 SEQUENCE CONTENT GATE §3 矩阵（核心项）：同一 DNA
+        // span 真循环 5 次命中（804 字符全 A）→ 序列族门槛触发，detail
+        // 带 `sequence_gated` 标注；6 次（806 字符）同样触发。
+        let mut d = DegenerationDetector::default();
+        d.feed_content(&"A".repeat(804));
+        let reason = d.trip_reason().expect("5 sequence-gated hits must trip");
+        assert!(reason.contains("sequence_gated"), "{reason}");
+        assert!(reason.contains("5/5"), "{reason}");
+        let mut d = DegenerationDetector::default();
+        d.feed_content(&"A".repeat(806));
+        let reason = d.trip_reason().expect("6 sequence-gated hits must trip");
+        assert!(reason.contains("sequence_gated"), "{reason}");
+    }
+
+    #[test]
+    fn degeneration_detector_sequence_and_plain_hits_count_separately() {
+        // 2026-08-25 SEQUENCE CONTENT GATE §2.3/§3 矩阵（混合内容）：序列
+        // 样与非序列样命中**分别计数、分别门槛**——'x'（非序列）2 次 +
+        // 'A'（序列）3 次，两计数互不串扰；序列 3/5 仅审计、不触发。
+        let mut trip = None;
+        let mut trigger_context = None;
+        let mut audit_hits = Vec::new();
+        let mut state = RepetitionFamilyState::default();
+        feed_repetition(
+            &mut trip,
+            &mut trigger_context,
+            &mut audit_hits,
+            "content",
+            CONTENT_REPETITION_DETAIL_PREFIX,
+            &"x".repeat(801),
+            &mut state,
+        );
+        assert_eq!(state.hits, 2, "plain hits must count independently");
+        assert_eq!(state.sequence_hits, 0);
+        feed_repetition(
+            &mut trip,
+            &mut trigger_context,
+            &mut audit_hits,
+            "content",
+            CONTENT_REPETITION_DETAIL_PREFIX,
+            &"A".repeat(802),
+            &mut state,
+        );
+        assert_eq!(
+            state.hits, 2,
+            "sequence hits must NOT count toward plain hits"
+        );
+        assert_eq!(state.sequence_hits, 3);
+        assert!(trip.is_none(), "3 sequence + 2 plain hits must NOT trip");
+        assert_eq!(
+            audit_hits
+                .iter()
+                .filter(|a| a.contains("sequence_gated"))
+                .count(),
+            3,
+            "sequence-gated audits must be separate entries"
+        );
+    }
+
+    #[test]
+    fn sequence_like_ratio_boundary() {
+        // 2026-08-25 SEQUENCE CONTENT GATE §2.2 边界（S1 基础验证；S2 完整
+        // 矩阵含 U 与大小写混合、EGFP 真实样本回放）：0.89 / 0.90 / 0.91
+        // 分派正确；空 span 与大小写混合。
+        let below: Vec<char> = "A"
+            .repeat(89)
+            .chars()
+            .chain("X".repeat(11).chars())
+            .collect();
+        assert!(!sequence_like(&below), "0.89 must NOT be sequence-like");
+        let at: Vec<char> = "A"
+            .repeat(90)
+            .chars()
+            .chain("X".repeat(10).chars())
+            .collect();
+        assert!(sequence_like(&at), "0.90 must be sequence-like");
+        let above: Vec<char> = "A"
+            .repeat(91)
+            .chars()
+            .chain("X".repeat(9).chars())
+            .collect();
+        assert!(sequence_like(&above), "0.91 must be sequence-like");
+        let mixed: Vec<char> = "aCtGuN".repeat(17).chars().collect();
+        assert_eq!(mixed.len(), 102);
+        assert!(
+            sequence_like(&mixed),
+            "mixed-case ACGTNU must be sequence-like"
+        );
+        assert!(
+            !sequence_like(&Vec::<char>::new()),
+            "empty span must NOT be sequence-like"
+        );
     }
 
     #[test]
@@ -3070,17 +3366,18 @@ mod tests {
     #[test]
     fn degeneration_detector_trips_after_three_stream_hits() {
         // 2026-08-22 再校准（用户裁决：流内累计命中 ≥3 次才中断+降级）+
-        // 2026-08-23 L=400：1–2 次命中仅审计留痕（take_audit_hits），不
-        // 中断不降级；第 3 次命中才触发。
+        // 2026-08-23 L=400 + 2026-08-25 序列门：'x' ∉ 序列字母表 → 非
+        // 序列样，门槛维持 3——1–2 次命中仅审计留痕（take_audit_hits），
+        // 不中断不降级；第 3 次命中才触发。
         let mut d = DegenerationDetector::default();
-        d.feed_content(&"a".repeat(801)); // idx 799/800 → 命中 1、2
+        d.feed_content(&"x".repeat(801)); // idx 799/800 → 命中 1、2
         assert!(d.trip_reason().is_none(), "2 stream hits must NOT trip");
         assert_eq!(
             d.take_audit_hits().len(),
             2,
             "both sub-threshold hits must be audited"
         );
-        d.feed_content("a"); // idx 801 → 命中 3
+        d.feed_content("x"); // idx 801 → 命中 3
         let reason = d.trip_reason().expect("3rd stream hit must trip");
         assert!(reason.contains("repeated span"), "{reason}");
         assert!(reason.contains("3/3"), "{reason}");
@@ -3091,11 +3388,12 @@ mod tests {
         // 2026-08-22 再校准（用户裁决：间隔不重置）+ 2026-08-23 L=400——
         // 命中 1 与命中 2/3 之间插入 50 个互异字符（不产生命中），流内
         // 计数不清零：命中 3 仍触发（若间隔重置则只停在 2 次、永不触发）。
+        // 2026-08-25 序列门：'x'/'y' ∉ 序列字母表 → 非序列门槛 3 不变。
         let mut d = DegenerationDetector::default();
-        d.feed_content(&"a".repeat(800)); // idx 799 → 命中 1
+        d.feed_content(&"x".repeat(800)); // idx 799 → 命中 1
         assert!(d.trip_reason().is_none(), "1 hit must NOT trip");
-        d.feed_content(&"b".repeat(50)); // 无命中（'b' 与 'a' 不同）
-        d.feed_content(&"a".repeat(402)); // idx 1249 → 命中 2；idx 1250 → 命中 3
+        d.feed_content(&"y".repeat(50)); // 无命中（'y' 与 'x' 不同）
+        d.feed_content(&"x".repeat(402)); // idx 1249 → 命中 2；idx 1250 → 命中 3
         let reason = d.trip_reason().expect("3rd hit after a gap must trip");
         assert!(reason.contains("repeated span"), "{reason}");
     }
@@ -3788,7 +4086,9 @@ mod tests {
         // 保留 S4 基线直跳 disabled）。
         // 2026-08-21 修订：5×"think" 不再触发；2026-08-22/23 再校准：单个
         // 802 字符 reasoning span（L=400，3 次命中，无切分点直接判真）触发。
-        let rep = reasoning_repetition_sse_body(&"t".repeat(802), 1);
+        // 2026-08-25 序列门：'t' ∈ 序列字母表（T）→ 改用 'x' 保持非序列
+        // 门槛 3。
+        let rep = reasoning_repetition_sse_body(&"x".repeat(802), 1);
         let ok = ok_sse_body("降级答案");
         let attempts = std::sync::Arc::new(std::sync::atomic::AtomicU32::new(0));
         let attempts_handle = attempts.clone();
@@ -4122,7 +4422,9 @@ mod tests {
         let empty = empty_completed_sse_body();
         // 2026-08-21 修订：滚动哈希粒度下 5×"think" 不再触发；2026-08-22
         // 再校准：402 同字符；2026-08-23 再校准：802 同字符（L=400）。
-        let rep = reasoning_repetition_sse_body(&"t".repeat(802), 1);
+        // 2026-08-25 序列门：'t' ∈ 序列字母表（T）→ 改用 'x' 保持非序列
+        // 门槛 3。
+        let rep = reasoning_repetition_sse_body(&"x".repeat(802), 1);
         let ok = ok_sse_body("降级答案");
         let attempts = std::sync::Arc::new(std::sync::atomic::AtomicU32::new(0));
         let attempts_handle = attempts.clone();
@@ -4220,7 +4522,9 @@ mod tests {
         // low（保留浅思考链）；low 档产出答案。
         // 2026-08-21 修订：滚动哈希粒度下 5×"think" 不再触发；2026-08-22
         // 再校准：402 同字符；2026-08-23 再校准：802 同字符（L=400）。
-        let rep = reasoning_repetition_sse_body(&"t".repeat(802), 1);
+        // 2026-08-25 序列门：'t' ∈ 序列字母表（T）→ 改用 'x' 保持非序列
+        // 门槛 3。
+        let rep = reasoning_repetition_sse_body(&"x".repeat(802), 1);
         let ok = ok_sse_body("low 答案");
         let attempts = std::sync::Arc::new(std::sync::atomic::AtomicU32::new(0));
         let attempts_handle = attempts.clone();
@@ -4264,7 +4568,9 @@ mod tests {
         // disabled 档产出答案（全部输出走 content，无 reasoning 旋钮）。
         // 2026-08-21 修订：滚动哈希粒度下 5×"think" 不再触发；2026-08-22
         // 再校准：402 同字符；2026-08-23 再校准：802 同字符（L=400）。
-        let rep = reasoning_repetition_sse_body(&"t".repeat(802), 1);
+        // 2026-08-25 序列门：'t' ∈ 序列字母表（T）→ 改用 'x' 保持非序列
+        // 门槛 3。
+        let rep = reasoning_repetition_sse_body(&"x".repeat(802), 1);
         let ok = ok_sse_body("降级答案");
         let attempts = std::sync::Arc::new(std::sync::atomic::AtomicU32::new(0));
         let attempts_handle = attempts.clone();
