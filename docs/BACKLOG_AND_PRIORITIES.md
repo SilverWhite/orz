@@ -1377,8 +1377,11 @@ S1-S4 全部闭合）
      REPETITION_SEQUENCE_LIKE_RATIO=0.90 /
      REPETITION_SEQUENCE_HIT_LIMIT=5、sequence_like 判定、无切分点
      分支双门槛分派、sequence_gated 审计标注；orz-loop 563/0/3 全绿、
-     fmt/clippy 无新增；核心测试随 S1 自证）**；S2 测试待补全矩阵
-     （EGFP 真实回放、序列族间隔不重置/流结束丢弃、路径②/stall 回归）。
+     fmt/clippy 无新增；核心测试随 S1 自证）**；**S2 测试完成
+     （2026-08-26：EGFP 400 字符真实 span 回放 3 次命中 0 trip / 5 次
+     触发、poly-A 399/400/401 静默、序列族间隔不重置 + 流结束丢弃、
+     路径②/stall/标点块/混合分别计数回归全绿；orz-loop 567/0/3）**；
+     S3 重建待实施。
   3. 观察项：dna 82.33% / feal 88.21% 命中率 <90%（web 检索注入
      相关，成本观察不阻塞）；feal 一次 reasoning_stall 64K 预算设计内
      触发（记录）。

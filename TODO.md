@@ -1357,10 +1357,12 @@ S4 复验闭环 2026-08-25（补登记）；S1-S4 全部闭合）
     sequence_hit_limit 字段、双门槛 feed 封顶；transport.rs，
     orz-loop 563/0/3 全绿、fmt 干净、clippy 无新增；既有 'a'/'t'
     重复字符测试按序列门语义更新（'x' 保持非序列 3 门槛回归））
-  - [ ] S2 测试（核心项已随 S1 自证：DNA 序列 3 次命中仅审计
-    （sequence_gated）、5/6 次真循环触发、混合内容分别计数、占比
-    0.89/0.90/0.91 边界、非序列 3 门槛回归；待补 EGFP 真实样本回放、
-    序列族间隔不重置/流结束丢弃、路径②/stall 回归矩阵）
+  - [x] S2 测试（2026-08-26 完成：final-smoke dna EGFP 400 字符真实
+    span 原样回放——4 段引用=3 次命中 0 trip、6 段=5 次命中触发，
+    审计带 sequence_gated/ratio/hits-limit 且按命中时刻累计标注；poly-A
+    399/400/401 静默；序列族间隔不重置 + 流结束丢弃（新建流重新计数、
+    同流 5 次触发）；路径②/stall/标点块（sam G4 真实 span）/混合分别
+    计数/占比边界回归全绿；orz-loop 567/0/3、fmt 干净、clippy 无新增）
   - [ ] S3 重建（Linux musl，ORZ-BUILD-MOUNT-001 契约）
   - [ ] S4 复验（dna-assembly 重跑不降级、真复读仍触发、零 400、
     命中率 ≥90%）
