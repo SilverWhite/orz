@@ -1379,7 +1379,16 @@ S4 复验闭环 2026-08-25（补登记）；S1-S4 全部闭合）
     提为编译期常量、同 delta 多次命中按累计时刻标注、设计 §5 数字非
     切分符勘误；新增蛋白真实 span 3 次仅审计/5 次触发 + 英文守卫 +
     0.94/0.95/0.96 边界测试；orz-loop 569/0/3、fmt 干净、clippy 无新增）
-  - [ ] S3 重建（Linux musl，ORZ-BUILD-MOUNT-001 契约）
+    - [x] S3 重建（Linux musl，ORZ-BUILD-MOUNT-001 契约）——**2026-08-26
+      完成**：Docker Desktop 恢复后 rust:1.97-slim 容器构建 6m19s，三件套
+      orz 104,796,752 B / orz-signer 1,388,496 B / orz-acaf-provision
+      1,206,480 B（2026-08-26 01:47）；守卫符号 retired_tool_denied /
+      content_anchor_mismatch 各 8 命中、检索接线符号（browser_launch_
+      failed/retrieval-mode/retrieve_project_docs）与序列门审计字段
+      （sequence_gated/dna_rna/protein）在二进制内、无 PT_INTERP（musl
+      静态）；容器冒烟=provision usage / signer manifest 缺失 / orz TTY
+      io error 均符合预期；对应源码 orz 6b208fb（工作树干净、已推 cli
+      远端）。
   - [ ] S4 复验（dna-assembly 重跑不降级、真复读仍触发、零 400、
     命中率 ≥90%）
 - [ ] 观察项登记（dna/feal 命中率 <90% 与 web 检索相关；feal
