@@ -9,7 +9,7 @@
 
 | 优先级 | 含义 | 未闭合项 |
 |---|---|---|
-| P0 | 当前工作集：设计已冻结，裁决后立即实施 | 评测冒烟暴露问题（P0-E 主项 7 项 + FUS-TOOL-SCOPE-CONTRACT 后续 2 项全部闭合 2026-08-18：ACAF 容器供应、console 工具名、计划视图步骤 ID、订单发放前拒绝入事件面、grep 搜索范围契约、plan_write 校验消息形状、actions 形状探针、list_dir 范围计数、grep files_searched 全结局探针，见 0a）；CLASSICAL-EXEC-ASSISTANT（生产组件，2026-08-16 用户裁决转正式，S1-S4 全部闭合）；PLAN-FIRST-BLACKBOARD（阶段 A/B/C 全部闭合 2026-08-16）；**FUS-BENCHMARK-FULL-EXEC（P0，实施完成待验证——2026-08-18 用户指示实施、暂不测试；验证闭环后闭合，见 0b）**；**LEDGER-FOLD-EXTERNAL-FILE（P0，S1-S4 验证闭环 2026-08-19——命中率问题优先于 P0-F 验证；provider 口径 95.33% ≥90% 达标，见 0c）**；**OUTPUT-DEGENERATION-GUARD（P0，S1-S4 全部闭合 2026-08-20——make-doom 退化复读失败防护；8K 全统一 + 补读闭环 + 实时检测 + 32K，见 0d）**；**CONTEXT-SCAFFOLDING-PULL-REDESIGN（P0，S1-S4 全部闭合 2026-08-21——预算块 PUSH→PULL + 工具输出汇总消息退役；命中率 94.45%、零哨兵触发、输入增长放缓；方案 C 维持 256K 暂不收紧（用户裁决），见 0e）**；**FUS-READ-ANCHOR-WRITE-GUARD（P0，S1-S4 全部闭合 2026-08-23——read_file 内容锚点下传 + 写前机械核证；S4 复用 NGRAM S4 实机复验：10 试次零误拒、锚点实机可见、命中率 94.11%–98.55% 全 ≥90%、零 400，计数 28 → 27，见 0f）**；**AGENT-DELIVERY-FLOW（P0 派生 0d 后续 7，S1-S4 全部闭合 2026-08-23——计划无空转、末步机械递交、引用修正一次/二次阻断、订单反馈；S4 复用 NGRAM S4 实机复验：8/8 完成试次走 submit 双阶段、零 400、命中率全 ≥90%，计数 29 → 28，见 0d 后续 7）** |
+| P0 | 当前工作集：设计已冻结，裁决后立即实施 | 评测冒烟暴露问题（P0-E 主项 7 项 + FUS-TOOL-SCOPE-CONTRACT 后续 2 项全部闭合 2026-08-18：ACAF 容器供应、console 工具名、计划视图步骤 ID、订单发放前拒绝入事件面、grep 搜索范围契约、plan_write 校验消息形状、actions 形状探针、list_dir 范围计数、grep files_searched 全结局探针，见 0a）；CLASSICAL-EXEC-ASSISTANT（生产组件，2026-08-16 用户裁决转正式，S1-S4 全部闭合）；PLAN-FIRST-BLACKBOARD（阶段 A/B/C 全部闭合 2026-08-16）；**FUS-BENCHMARK-FULL-EXEC（P0，实施完成待验证——2026-08-18 用户指示实施、暂不测试；验证闭环后闭合，见 0b）**；**LEDGER-FOLD-EXTERNAL-FILE（P0，S1-S4 验证闭环 2026-08-19——命中率问题优先于 P0-F 验证；provider 口径 95.33% ≥90% 达标，见 0c）**；**OUTPUT-DEGENERATION-GUARD（P0，S1-S4 全部闭合 2026-08-20——make-doom 退化复读失败防护；8K 全统一 + 补读闭环 + 实时检测 + 32K，见 0d）**；**CONTEXT-SCAFFOLDING-PULL-REDESIGN（P0，S1-S4 全部闭合 2026-08-21——预算块 PUSH→PULL + 工具输出汇总消息退役；命中率 94.45%、零哨兵触发、输入增长放缓；方案 C 维持 256K 暂不收紧（用户裁决），见 0e）**；**FUS-READ-ANCHOR-WRITE-GUARD（P0，S1-S4 全部闭合 2026-08-23——read_file 内容锚点下传 + 写前机械核证；S4 复用 NGRAM S4 实机复验：10 试次零误拒、锚点实机可见、命中率 94.11%–98.55% 全 ≥90%、零 400，计数 28 → 27，见 0f）**；**AGENT-DELIVERY-FLOW（P0 派生 0d 后续 7，S1-S4 全部闭合 2026-08-23——计划无空转、末步机械递交、引用修正一次/二次阻断、订单反馈；S4 复用 NGRAM S4 实机复验：8/8 完成试次走 submit 双阶段、零 400、命中率全 ≥90%，计数 29 → 28，见 0d 后续 7）**；**FINAL-SMOKE-2026-08-25 对拍暴露（P0，2026-08-25 登记：GAP-EVENT-SCHEMA-DRIFT 事件面三类 Schema 漂移 + GAP-REPETITION-DETECTOR-DNA-FALSE-POSITIVE 复读检测 DNA 误杀，正式 89 题提交前处理，见 0i）** |
 | P1 | 无需裁决，可与 P0 并行 | FUS-COMPONENT-REGISTER、GAP-WINDOWS-EVIDENCE、IMPL-DEEPSEEK-TRANSPORT / SEC-CREDENTIALS、ORZ-SESSION-CONTEXT-MONITOR |
 | P2 | 生产化决策门：需用户裁决 | IMPL-CONTROL-FABRIC（fail-closed 启用、Slice 3/4）、OPS-PROTOCOL |
 | P3 | 收尾 / 清理 | EVIDENCE-LOCAL-BROWSER、GATE-CHAIN、DC 剩余信号、V11-IMPL-003/007、工作区收尾 |
@@ -757,6 +757,16 @@
 >   implemented / ADR-0007 修订注记 / CLI_PROJECT_INDEX / TODO P0-0d
 >   后续 4/5。
 
+> - **2026-08-25 后续 3/4/5 合并 S3 重建核证闭合（TODO 同步更新；计数
+>   不变仍 29，S4 复验待续）**：180s 重试窗口（orz a96faab）与
+>   fail-fast + 中段解码重试（orz a0d85f8）已随 0g S3（2026-08-24，
+>   orz 033fd26/4ca60c2）、0h S3（2026-08-25 02:46，orz f4f1b81）与
+>   0.1.0 发布重建（2026-08-25，orz 8bcf18c）进入 Linux musl 三件套；
+>   merge-base 祖先核证通过（a96faab/a0d85f8 均在现役源码链），现役
+>   orz 104,796,704 B。S4 复验（无 400、命中率 ≥90%、断连窗口骑过
+>   节点抖动、哨兵预算有界、dna 类解码错误不再杀 run）待续。登记于
+>   TODO P0-0d 后续 3/4/5 / CLI_PROJECT_INDEX。
+
 > - **2026-08-21 复读检测粒度修订设计定稿（用户裁决：同意滚动哈希任意
 >   偏移重复检测；先登记、不直接动作）**：dna-assembly 复跑
 >   （RUN-CLI-6a885faa）误杀实证——seq 95 完整输出 6439 字符连贯正常
@@ -1337,6 +1347,43 @@ S1-S4 全部闭合）
   run_invalidated；journal 事件链完整性 100%（619/619，命中率 ≥90%
   达标）；DoD 1-7 全部满足。计数 30 → 29（0h S1 放行入账 30 → 31
   补记于 TODO 快照）。登记于 ADR-0010 §14.40 第 6 项 / TODO P0-0h。
+
+### 0i. FINAL-SMOKE-2026-08-25 对拍暴露问题（P0；2026-08-25 登记；
+正式 89 题提交前处理）
+
+- 入口：索引 GAP-EVENT-SCHEMA-DRIFT / GAP-REPETITION-DETECTOR-DNA-
+  FALSE-POSITIVE；TODO P0-0i。
+- 来源：最终冒烟（5 题 k=1 官方标准，final-smoke-2026-08-25；结果
+  llm-inference-batching-scheduler 1.00 + sam-cell-seg 1.00，
+  make-doom-for-mips 900s 墙钟超时、dna-assembly/feal 1800s 墙钟
+  超时）确定性对拍——机制面零 400、零 run_failed/run_invalidated、
+  ACAF 票据 50/50、交付流 submit 双阶段走通；严格校验暴露两类问题：
+  1. **GAP-EVENT-SCHEMA-DRIFT**：5/5 run 严格 payload 校验未过（哈希
+     链 0 错误、envelope 0 错误）——① retrieval_mode_transition 枚举
+     缺 mechanical_probe/browser_launch_failed（0h 模式 A 降级值未
+     同步 runtime schema）；② ledger_fold_advance 生产者多写
+     view_estimate_after（schema additionalProperties=false）；
+     ③ control_ticket_issued 外部检索 lane network 票带 activation_id
+     （D-13 检索 lane 绑定语义，schema 要求动作票 null）。修复=runtime
+     schema + run_event_journal_validation.py + fixtures/conformance
+     + 复验。
+  2. **GAP-REPETITION-DETECTOR-DNA-FALSE-POSITIVE**：dna-assembly 中
+     EGFP 400 字符序列合法重复引用触发 3/3 命中（无切分点直接判真）、
+     降级 high→low→disabled；缺口 A 延续。**2026-08-25 设计定案（用户
+     裁决）**：L=400 维持 + 序列内容门（无切分点路径 sequence_like
+     判定、序列族命中门槛 3→5）；否决 L=1000 提档与整体走路径②（检测
+     盲区）；见 REPETITION_DETECTOR_SEQUENCE_CONTENT_GATE_DESIGN /
+     ADR-0010 §14.41；**S1 已实施（2026-08-25 实施放行 31 → 32：
+     REPETITION_SEQUENCE_LIKE_RATIO=0.90 /
+     REPETITION_SEQUENCE_HIT_LIMIT=5、sequence_like 判定、无切分点
+     分支双门槛分派、sequence_gated 审计标注；orz-loop 563/0/3 全绿、
+     fmt/clippy 无新增；核心测试随 S1 自证）**；S2 测试待补全矩阵
+     （EGFP 真实回放、序列族间隔不重置/流结束丢弃、路径②/stall 回归）。
+  3. 观察项：dna 82.33% / feal 88.21% 命中率 <90%（web 检索注入
+     相关，成本观察不阻塞）；feal 一次 reasoning_stall 64K 预算设计内
+     触发（记录）。
+- 下一步：schema 三类漂移修复 → 事件链复验（5 run 0 错误）→ 复读检测
+  DNA 域处理（L 定案/S1-S4）→ DNA 重跑复验。
 
 ### 0. 前置收尾（提交前需用户确认）
 

@@ -3694,3 +3694,41 @@ ADR §3.6 正文修订随实施登记。
    资产=orz-0.1.0-linux-x86_64.tar.gz（33.5 MB）+ orz-0.1.0-windows-
    x86_64.zip（25.6 MB）；API Key 不入包，注入=Windows 凭据管理器 /
    Linux `ORZ_DEEPSEEK_API_KEY` env（ADR-0006 §2.2/§2.3）。
+
+### 14.41 v1.41 补写裁决索引（2026-08-25）
+
+本节记录冻结后的显式补写；规范正文以所指章节为准，补写明确
+取代以下既往条款。
+
+1. **复读检测序列内容门设计定稿（2026-08-25 用户裁决；设计轮不动
+   计数）**：问题=final-smoke-2026-08-25（5 题 k=1 官方标准）dna-assembly
+   试次中 EGFP 400 字符 DNA 序列合法重复引用（3 次、偏移 18/801）触发
+   路径①滚动哈希 3/3 流内命中（无切分点直接判真）、降级 high→low→
+   disabled——合法任务内容误杀，缺口 A 延续（GAP-REPETITION-DETECTOR-
+   DNA-FALSE-POSITIVE）。**定案**：`REPETITION_MIN_RUN_CHARS`（L）=400
+   维持，不采用提档到 1000（移动边界、削弱真退化灵敏度）；路径①保留给
+   所有内容；二级确认「无可切分点→直接判真」分支加内容判别门——span
+   字符 ∈ `{A,C,G,T,N,U}`（大小写）占比 ≥ 0.90
+   （`REPETITION_SEQUENCE_LIKE_RATIO` 初值）判为序列样，序列样 span 的
+   流内命中门槛 3 → **5**（`REPETITION_SEQUENCE_HIT_LIMIT` 初值；1–4 次
+   仅审计、≥5 才 trip）；非序列样维持 3；有切分点路径（标点块 0.50
+   确认）不变；content/reasoning 两族统一；间隔不重置、流结束丢弃、
+   consecutive / `DEGENERATION_LIMIT` 语义不变；路径②（3-gram 比例
+   0.70）与 stall 兜底（600s/64K）不变。否决方向登记：整体序列内容走
+   路径② + stall（检测盲区=同 span 变上下文循环路径②无感、stall 只抓
+   无输出、散文+序列混排需内容路由）。实施路由 S1 代码 → S2 测试 →
+   S3 重建（Linux musl，ORZ-BUILD-MOUNT-001）→ S4 复验（dna-assembly
+   重跑零误杀降级、真循环仍触发、零 400、命中率 ≥90%）。登记于
+   [设计](../docs/REPETITION_DETECTOR_SEQUENCE_CONTENT_GATE_DESIGN_2026-08-25.md)
+   / BACKLOG 0i / TODO P0-0i / CLI_PROJECT_INDEX。
+   **实施放行（2026-08-25，计数 31 → 32）**：S1 代码完成（transport.rs
+   新常量 `REPETITION_SEQUENCE_LIKE_RATIO`=0.90 /
+   `REPETITION_SEQUENCE_HIT_LIMIT`=5、`sequence_like` 整数比较判定、无
+   切分点分支三态确认分派（Confirmed/SequenceGated/Rejected）、序列族
+   流内命中分别计数与双门槛 feed 封顶、`sequence_gated` 审计标注
+   （ratio+hits/limit）与 WARN `sequence_hit_limit` 字段；既有 'a'/'t'
+   重复字符测试按序列门语义更新为 'x'）；orz-loop 563/0/3 全绿、fmt
+   干净、clippy 无新增；核心测试随 S1 自证（序列 3 次仅审计、5/6 次
+   触发、混合分别计数、占比边界 0.89/0.90/0.91、非序列 3 门槛回归）；
+   S2 补全矩阵（EGFP 真实回放、序列族间隔不重置/流结束丢弃、路径②/
+   stall 回归）待实施。

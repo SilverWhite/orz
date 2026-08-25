@@ -82,7 +82,7 @@
 > 本快照只做计数与分组召回，明细以下方各分组勾选清单为唯一入口，不新增独立条目；
 > 后续扫描更新时同步替换本快照日期与计数。
 
-- 未闭合总数：**29 项**（2026-08-19 0c 验证闭环 29 → 28；2026-08-20
+- 未闭合总数：**31 项**（2026-08-19 0c 验证闭环 29 → 28；2026-08-20
   0d 验证闭环 29 → 28；2026-08-20 OUTPUT-BUDGET-RESTORE-AND-STALL-GUARD
   S1 实施放行入账 28 → 29，**S3/S4 验证闭环 29 → 28**；2026-08-20
   THINKING-DEFAULT-HIGH-LADDER S1 实施放行入账 28 → 29，**S3/S4 换题
@@ -101,8 +101,13 @@
   MECHANICAL-AUDIT-LAYER（0g）S1 实施放行入账 29 → 30（补记）；
   2026-08-25 RETRIEVAL-SUBAGENT-WIRING（0h）S1 实施放行入账 30 → 31
   （补记）；2026-08-25 0g S4 复验闭环 31 → 30；2026-08-25 0h S4
-  复验闭环 30 → 29）
+  复验闭环 30 → 29；2026-08-25 冒烟对拍登记入账 29 → 31
+  （GAP-EVENT-SCHEMA-DRIFT + GAP-REPETITION-DETECTOR-DNA-
+  FALSE-POSITIVE，见 P0-0i））
   - P0-C：0 项（PLAN-FIRST 阶段 A/B/C 全部闭合，2026-08-16）
+  - P0 冒烟对拍暴露：2 项（GAP-EVENT-SCHEMA-DRIFT 事件面三类 Schema
+    漂移、GAP-REPETITION-DETECTOR-DNA-FALSE-POSITIVE 复读检测 DNA
+    误杀；2026-08-25 登记，正式 89 题提交前处理，见 P0-0i）
   - P0 评测冒烟暴露：0 项（P0-E 主项 7 项 + FUS-TOOL-SCOPE-CONTRACT 后续 2 项全部闭合 2026-08-18，见 P0-E grep 项后续①/②）
   - P0 Benchmark 完全体：1 项（FUS-BENCHMARK-FULL-EXEC 实施完成待验证，见 P0-F；验证闭环后回 26）
   - P0 折叠历史外挂：0 项（LEDGER-FOLD-EXTERNAL-FILE，S3/S4 验证闭环 2026-08-19，见 P0-0c）
@@ -457,9 +462,13 @@
 - [x] 2026-08-19 全面审查处理：登记口径更正（6 项 / 473）＋设计补充登记
   （O1 双视角有意冗余、O2 单条超长退化指针、O3 黑板无界可选后续，见压缩
   设计 §4.4.1/§4.4.3 与 ADR §14.30）；计数不变。
-- [ ] D1=(c) S3（待验证）：Linux musl 重建（ORZ-BUILD-MOUNT-001，输出
-  `D:/tb-eval/orz-linux`）+ 时间戳校验。
-- [ ] D1=(c) S4（待验证）：命中率复验（≥90% provider usage 口径、无 400）。
+- [x] D1=(c) S3（待验证）：Linux musl 重建（ORZ-BUILD-MOUNT-001，输出
+  `D:/tb-eval/orz-linux`）+ 时间戳校验。**2026-08-25 核证闭合**：5d55567
+  （2026-08-19 01:24）早于 0c 重建轮，随 0c S3 重建（2026-08-19）进入
+  三件套，并在现役链上（merge-base 核证）。
+- [x] D1=(c) S4（待验证）：命中率复验（≥90% provider usage 口径、无 400）。
+  **2026-08-25 核证闭合**：随 0c S4 复验闭环（2026-08-19，provider
+  95.33% ≥90%、零 400、115 请求）一并覆盖。
 - [x] 2026-08-19 命中率归因 + 黑板读取缓存成本设计定稿（S4 前置；用户裁决：
   大机制不再更改、只补回应命中而未命中的部分；ADR-0010 §14.31 /
   BLACKBOARD_READ_CACHE_COST_DESIGN）——path-tracing 复验（正式 1800s 预算、
@@ -469,7 +478,7 @@
   response JSON（order_id/ok/step/code/trace_id）、exec 行截断 200 字符 +
   段总长 4K、registration/order 板不变；（阶段 2 可选）since 扩展 actions +
   读取频率引导；零模型、契约/schema 不变、阈值不动；预期 86%→95%。
-- [ ] 黑板读取缓存成本处理（S1/S2 渲染瘦身已实施，orz 提交 8dbaa01 未推送；
+- [x] 黑板读取缓存成本处理（S1/S2 渲染瘦身已实施，orz 提交 8dbaa01 未推送；
   F1 处理=方案 B 已实施 S1 代码 + S2 测试，orz 提交 ad74714 + 全面审查处理
   未推送）：S1 渲染瘦身 + 单测与 S2 测试已完成
   （orz-loop 479 通过）；2026-08-19 全面审查发现 F1（console 面动作详情
@@ -487,7 +496,10 @@
   窗口 84.07%），仍低于 90%——归因=3 次折叠重付 47.8K/50.4K/56.4K
   （66.5% miss），折叠重付 ≈ 保留尾大小 + 新内容（保留尾实测 44–56K 真实
   token）。→ 折叠桥接设计定稿（见下条）。0c S4 前置，计数不变。
-- [ ] 折叠桥接截断（设计定稿 2026-08-19，ADR-0010 §14.32 /
+  **2026-08-25 核证闭合（取代归档）**：S3/S4 已执行（04:13，88.84% 未
+  达标）；后续由折叠桥接截断（52d698c/d39da27）接管并随 0c 验证闭环
+  （95.33% ≥90%）闭合；代码均在现役链（merge-base 核证）。
+- [x] 折叠桥接截断（设计定稿 2026-08-19，ADR-0010 §14.32 /
   LEDGER_FOLD_BRIDGE_TRUNCATION_DESIGN；**S1 代码 + S2 测试已实施
   2026-08-19，orz 提交 52d698c，S3/S4 待续**）：折叠后其余进外挂台账、
   视图只留最新桥（默认 8K 真实 token，`ORZ_FOLD_TAIL_TOKENS` 可配；
@@ -498,7 +510,9 @@
   全面审查处理完成（N1-N3 + O1-O3，见设计文档 §3.1–§3.4/§7 与 ADR
   §14.32 第 2 项；orz-loop 503 通过 / fmt 干净 / 无新增 clippy 告警）。
   路由：S1 代码 ✓ → S2 测试 ✓ → S3 重建 → S4 复验（≥90%、无 400、
-  每窗重付 ≤~15K、截断频率 ≤30% 校准）。
+  每窗重付 ≤~15K、截断频率 ≤30% 校准）。**2026-08-25 核证闭合**：S3
+  重建 + S4 复验已随下方「闭合」条目完成（2026-08-19：95.33% ≥90%、
+  零 400、重付 3,742/6,493、截断 0%）；52d698c + d39da27 在现役链。
 - [x] 闭合（2026-08-19）：S4 复验 + provider 对拍完成——journal 口径
   95.54% / **provider 口径 95.33%**（hit 4,896,384 / miss 239,752 /
   115 请求，≥90% 达标）、无 400、折叠后首请求重付 3,742 / 6,493
@@ -570,7 +584,8 @@
 > [x] S4 复验（无退化中断、无 400、命中率 ≥90%、补读路径可用）
 
 ### P0-0d 后续：STREAM-RETRY-RHYTHM（P0 派生；2026-08-20 设计定稿，
-待实施）
+**2026-08-25 取代归档**——原定案被后续 3（180s 窗口）+ OUTPUT-BUDGET
+（idle 30s）取代，原 S1-S4 不再单独实施）
 
 > 入口：[设计](docs/STREAM_RETRY_RHYTHM_DESIGN_2026-08-20.md)；
 > ADR-0010 §14.34（v1.34）；BACKLOG 0d。
@@ -585,10 +600,13 @@
 > 实施路由：S1 代码 → S2 测试 → S3 重建 → S4 复验（≥90%、无 400、
 > 无退化中断、首轮不再 10 分钟级长等）。设计轮不动计数（28）。
 
-- [ ] S1 代码（RetryPolicy 默认值三参数修订 + 注释同步）
-- [ ] S2 测试（默认值/指纹断言 + 既有策略测试核对）
-- [ ] S3 重建（Linux musl，ORZ-BUILD-MOUNT-001 契约）
-- [ ] S4 复验（≥90%、无 400、无退化中断、首轮不再 10 分钟级长等）
+- [x] S1 代码（RetryPolicy 默认值三参数修订 + 注释同步）
+- [x] S2 测试（默认值/指纹断言 + 既有策略测试核对）
+- [x] S3 重建（Linux musl，ORZ-BUILD-MOUNT-001 契约）
+- [x] S4 复验（≥90%、无 400、无退化中断、首轮不再 10 分钟级长等）
+  ——**2026-08-25 取代归档**：对应功能由后续 3 S1/S2（a96faab，
+  request_retry_window 50s→180s）与 OUTPUT-BUDGET S1（idle 30s）
+  实现，并随后续构建轮（0g/0h/0.1.0）合入现役链。
 
 ### P0-0d 后续：OUTPUT-BUDGET-RESTORE-AND-STALL-GUARD（P0 派生；2026-08-20
 设计定稿，待实施）
@@ -693,7 +711,8 @@
 - [x] S4 复验（换题 make-doom-for-mips；空流 0、零 400、命中率 92.18% ≥90%、无 stall 误杀；计数 29→28）
 
 ### P0-0d 后续 3：ZERO-CHUNK-RETRY-WINDOW-180S（P0 派生；2026-08-21
-用户裁决：简单拉长窗口，S1/S2 已闭合、S3/S4 待续）
+用户裁决：简单拉长窗口，S1/S2 已闭合 2026-08-21、S3 已闭合 2026-08-25
+（合并批次随 0g/0h/0.1.0 构建轮覆盖）、S4 待续）
 
 > 入口：[设计修订](docs/STREAM_RETRY_RHYTHM_DESIGN_2026-08-20.md)；
 > ADR-0010 §14.36（v1.36）；BACKLOG 0d（变更记录注记）。
@@ -711,12 +730,16 @@
 - [x] S1 代码（model.rs `request_retry_window` 默认值 50s→180s + 注释同步）
 - [x] S2 测试（`default_retry_policy_matches_stream_retry_rhythm` 断言
   50s→180s；orz-loop 测试全绿）
-- [ ] S3 重建（Linux musl，ORZ-BUILD-MOUNT-001 契约；与终端解码重试
-  兜底批次合并时一次到位）
+- [x] S3 重建（Linux musl，ORZ-BUILD-MOUNT-001 契约；与终端解码重试
+  兜底批次合并时一次到位）——**2026-08-25 核证闭合**：a96faab（180s）
+  与 a0d85f8（fail-fast/解码重试）已随 0g S3（033fd26/4ca60c2）、0h S3
+  （f4f1b81）与 0.1.0 发布重建（8bcf18c）合入 Linux musl 三件套，
+  merge-base 祖先核证通过；现役 orz 104,796,704 B（2026-08-25 03:56）。
 - [ ] S4 复验（无 400、命中率 ≥90%、断连窗口内可骑过节点抖动）
 
 ### P0-0d 后续 4：STALL-DEGENERATION-FAILFAST（P0 派生；2026-08-21
-设计定稿；S0 证据门通过 + S1/S2 已闭合 2026-08-21、S3/S4 待续）
+设计定稿；S0 证据门通过 + S1/S2 已闭合 2026-08-21、S3 已闭合 2026-08-25
+（合并批次）、S4 待续）
 
 > 入口：[设计](docs/STALL_DEGENERATION_FAILFAST_DESIGN_2026-08-21.md)；
 > ADR-0010 §14.37 第 1 项；BACKLOG 0d。
@@ -749,12 +772,14 @@
   + for_new_run per-run 隔离）
 - [x] S2 测试（跨请求档位保持、计数不重置、达限/disabled 终止、
   for_new_run 隔离、回归全绿）
-- [ ] S3 重建（Linux musl；与窗口 180s + 解码兜底批次合并一次到位）
+- [x] S3 重建（Linux musl；与窗口 180s + 解码兜底批次合并一次到位）
+  ——**2026-08-25 核证闭合**：同后续 3 S3 注（随 0g/0h/0.1.0 构建轮覆盖）。
 - [ ] S4 复验（单 run 哨兵预算有界 ≤3 次触发 × 单次预算、显式终止可观测、
   命中率 ≥90%、零 400）
 
 ### P0-0d 后续 5：MIDSTREAM-DECODE-RETRY（P0 派生；2026-08-21
-设计定稿；S1/S2 已闭合 2026-08-21、S3/S4 待续）
+设计定稿；S1/S2 已闭合 2026-08-21、S3 已闭合 2026-08-25
+（合并批次）、S4 待续）
 
 > 入口：[设计](docs/MIDSTREAM_DECODE_RETRY_DESIGN_2026-08-21.md)；
 > ADR-0010 §14.37 第 2 项 / ADR-0007 修订注记；BACKLOG 0d。
@@ -778,7 +803,8 @@
 - [x] S1 代码（判定改「无完整 tool_calls」+ chunked 有界 1 次 + 事件面计数）
 - [x] S2 测试（中段截断重试成功/耗尽、完整 tool_calls 不重试、Parse 不重试、
   与降级梯交互、零 chunk 纪律回归全绿、recovered/exhausted 事件）
-- [ ] S3 重建（Linux musl；与窗口 180s + fail-fast 批次合并一次到位）
+- [x] S3 重建（Linux musl；与窗口 180s + fail-fast 批次合并一次到位）
+  ——**2026-08-25 核证闭合**：同后续 3 S3 注（随 0g/0h/0.1.0 构建轮覆盖）。
 - [ ] S4 复验（dna 类场景不再因解码错误杀 run、零 400、命中率 ≥90%）
 
 ### P0-0d 后续 6：REPETITION-DETECTOR-ROLLING-HASH（P0 派生；2026-08-21
@@ -876,9 +902,13 @@
   改 402 同字符 + 新增子阈值不中断 e2e；orz-loop **560 通过 / 0 失败 /
   3 ignored**、fmt 干净、clippy 无新增（transport.rs 仅 2 条既有 doc
   告警）、`cargo check --workspace` 通过；计数不变仍 29）
-- [ ] 灵敏层再校准 S3 重建（Linux musl，ORZ-BUILD-MOUNT-001 契约）
-- [ ] 灵敏层再校准 S4 复验（reasoning 正常引用不误杀、真循环仍触发、
-  零 400、命中率 ≥90%；DNA 重跑对照）
+- [x] 灵敏层再校准 S3 重建（Linux musl，ORZ-BUILD-MOUNT-001 契约）
+  ——**2026-08-25 取代归档**：L=200 校准被下方二级再校准（L=400）取代，
+  其 S3 重建（2026-08-23 02:01，orz 6178050）已覆盖本批次。
+- [x] 灵敏层再校准 S4 复验（reasoning 正常引用不误杀、真循环仍触发、
+  零 400、命中率 ≥90%；DNA 重跑对照）——**2026-08-25 取代归档**：由
+  二级再校准 S4 冒烟复验（2026-08-23 sweep-s4-g4/g5：sam-cell-seg
+  零复读触发、零真实 400、命中率 96.30–98.34%）闭合。
 - [x] 复读判定二级再校准设计（**2026-08-23 设计定稿**）——G4 冒烟实证
   sam-cell-seg 代码引用误杀（203/204 字符 span、引用-再确认循环，非
   设计泄露）；用户裁决：L=200→**400**（W=800、缓冲 1200、命中门槛 3
@@ -1292,6 +1322,50 @@ S4 复验闭环 2026-08-25（补登记）；S1-S4 全部闭合）
   run_invalidated；journal 事件链完整性 100%（619/619，命中率 ≥90%）；
   终答 GritLM/GritLM-7B 通过 verifier；DoD 1-7 全部满足；计数 30 → 29；
   ADR-0010 §14.40 第 6 项）
+
+### P0-0i FINAL-SMOKE-2026-08-25 对拍暴露问题（P0；2026-08-25 登记；
+正式 89 题提交前处理）
+
+> 入口：索引 GAP-EVENT-SCHEMA-DRIFT / GAP-REPETITION-DETECTOR-DNA-
+> FALSE-POSITIVE；BACKLOG 0i。
+> 来源：5 题 k=1 官方标准冒烟（final-smoke-2026-08-25）确定性对拍——
+> 2/5 reward 1.00（llm-inference-batching-scheduler、sam-cell-seg），
+> 3/5 官方墙钟超时（make-doom 900s、dna/feal 1800s）；机制面零 400、
+> 零 run_failed/run_invalidated、ACAF 票据 50/50、submit 双阶段走通；
+> 严格校验 5/5 未过（哈希链完好），dna run 复读误杀降级 disabled。
+
+- [x] 登记（2026-08-25）：BACKLOG 0i / TODO P0-0i / CLI_PROJECT_INDEX
+  两个 GAP canonical entry；未闭合 29 → 31。
+- [ ] 事件面 Schema 漂移修复（GAP-EVENT-SCHEMA-DRIFT）：
+  - [ ] retrieval_mode_transition 枚举补 mechanical_probe /
+    browser_launch_failed（runtime schema v0.2 + 校验器 + fixtures）
+  - [ ] ledger_fold_advance 补 view_estimate_after（或生产者移除，
+    按设计定案）
+  - [ ] control_ticket_issued 动作票 activation_id 放开检索 lane
+    绑定（D-13 语义入 schema）
+  - [ ] 事件链复验：5 个冒烟 run 严格校验 0 错误 + 全量测试全绿
+- [ ] 复读检测 DNA 误杀处理（GAP-REPETITION-DETECTOR-DNA-FALSE-POSITIVE）：
+  - [x] 设计定案（2026-08-25 用户裁决：L=400 维持 + 序列内容门——无
+    切分点路径 sequence_like 判定（ACGTNU 占比 ≥0.90）+ 序列族命中门槛
+    3→5；否决 L=1000 提档与整体走路径②；ADR-0010 §14.41 /
+    REPETITION_DETECTOR_SEQUENCE_CONTENT_GATE_DESIGN）
+  - [x] S1 代码（2026-08-25 实施放行 31 → 32：新常量
+    REPETITION_SEQUENCE_LIKE_RATIO=0.90 / REPETITION_SEQUENCE_HIT_LIMIT=5、
+    sequence_like 判定（整数比较）、无切分点分支三态确认分派
+    （Confirmed/SequenceGated/Rejected）、序列族流内命中分别计数、
+    sequence_gated 审计标注（ratio+hits/limit）与 WARN
+    sequence_hit_limit 字段、双门槛 feed 封顶；transport.rs，
+    orz-loop 563/0/3 全绿、fmt 干净、clippy 无新增；既有 'a'/'t'
+    重复字符测试按序列门语义更新（'x' 保持非序列 3 门槛回归））
+  - [ ] S2 测试（核心项已随 S1 自证：DNA 序列 3 次命中仅审计
+    （sequence_gated）、5/6 次真循环触发、混合内容分别计数、占比
+    0.89/0.90/0.91 边界、非序列 3 门槛回归；待补 EGFP 真实样本回放、
+    序列族间隔不重置/流结束丢弃、路径②/stall 回归矩阵）
+  - [ ] S3 重建（Linux musl，ORZ-BUILD-MOUNT-001 契约）
+  - [ ] S4 复验（dna-assembly 重跑不降级、真复读仍触发、零 400、
+    命中率 ≥90%）
+- [ ] 观察项登记（dna/feal 命中率 <90% 与 web 检索相关；feal
+  reasoning_stall 64K 预算设计内触发）——并入对拍审计记录。
 
 ### P0-B FUS-RETRIEVAL-MECH（`implemented`；批次 1-6 已全部闭合，2026-08-14，保留供核对）
 
