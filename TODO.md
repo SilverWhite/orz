@@ -82,7 +82,7 @@
 > 本快照只做计数与分组召回，明细以下方各分组勾选清单为唯一入口，不新增独立条目；
 > 后续扫描更新时同步替换本快照日期与计数。
 
-- 未闭合总数：**30 项**（2026-08-19 0c 验证闭环 29 → 28；2026-08-20
+- 未闭合总数：**31 项**（2026-08-19 0c 验证闭环 29 → 28；2026-08-20
   0d 验证闭环 29 → 28；2026-08-20 OUTPUT-BUDGET-RESTORE-AND-STALL-GUARD
   S1 实施放行入账 28 → 29，**S3/S4 验证闭环 29 → 28**；2026-08-20
   THINKING-DEFAULT-HIGH-LADDER S1 实施放行入账 28 → 29，**S3/S4 换题
@@ -107,8 +107,8 @@
   事件面三类 Schema 漂移修复完成并复验，未闭合 31 → 30；
   2026-08-26 SEQUENCE CONTENT GATE（P0-0i）S4 复验闭环，未闭合 30 → 29）；
   2026-08-28 THIN-HARNESS-REDESIGN-V2（0j）设计定稿登记（设计轮不动计数，
-  仍 29）→ **R1 S1 代码 + S2 测试实施放行入账 29 → 30**（S3 重建 / S4
-  复验待续，见下）
+  仍 29）→ **R1 S1 代码 + S2 测试实施放行入账 29 → 30**、**R2 S1 代码 +
+  S2 测试实施放行入账 30 → 31**（S3 重建 / S4 复验待续，见下）
   - P0-C：0 项（PLAN-FIRST 阶段 A/B/C 全部闭合，2026-08-16）
   - P0 冒烟对拍暴露：0 项（GAP-REPETITION-DETECTOR-DNA-FALSE-POSITIVE
     复读检测 DNA 误杀已闭合 2026-08-26；GAP-EVENT-SCHEMA-DRIFT 事件面
@@ -1429,7 +1429,16 @@ S4 复验闭环 2026-08-25（补登记）；S1-S4 全部闭合）
   哈希串 fixture 零误报 + 真实 400 事件精确报出。**2026-08-28 完成**：
   transport.rs 91 项 + orz-loop lib 全量 567 项通过；事件链校验器新增
   `StructuredAuditFieldConsumptionTests`（216 项全绿）。
-- [ ] W1-R1 S3 重建（Linux musl 三件套，ORZ-BUILD-MOUNT-001 契约）
+- [x] W1-R1 S3 重建（Linux musl 三件套，ORZ-BUILD-MOUNT-001 契约）
+  **2026-08-28 完成**：rust:1.97-slim 容器构建 5m28s，Linux musl 三件套
+  orz 105,025,280 B / orz-signer 1,388,744 B / orz-acaf-provision
+  1,206,728 B（07:00 HKT，日志 D:\tb-eval\build-20260828-s3.log）；
+  R1/R2 关键符号（target_mismatch×2 / target_missing /
+  target_type_mismatch / tail_is_raw×3 / not_executable /
+  diagnose_failure / blackboard_read×30）在二进制内、ldd 静态链接（无
+  PT_INTERP）；容器冒烟=provision usage / signer manifest 缺失 / orz
+  TTY io error 均符合预期；对应源码 orz 6cc8586 + 父 a21fcd1；警告面
+  14 项与上次基线持平；S4 复验待实施。
 - [ ] W1-R1 S4 复验：EGFP / sam-cell-seg 真实 span 回放静默、构造真循环
   触发、零真实 400、命中率 ≥90%
 - [x] W2-R2 失败诊断：`diagnostics.diagnose` 服务 + 各工具域结构化签名词典

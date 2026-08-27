@@ -1459,6 +1459,15 @@ S1-S4 全部闭合）
    target↔data 二选一 + 双写一致性校验 + 域前缀校验）与 P2/P3 处理完成
    （明细见 TODO P0-0j W2-R2 全面审查处理）；orz-loop 608/0/3、pytest
    216、fmt/clippy 干净；S3 重建 / S4 复验仍待容器/实机放行。
+- **2026-08-28 S3 重建完成（R1/R2）**：Linux musl 三件套（orz
+  105,025,280 B / orz-signer 1,388,744 B / orz-acaf-provision
+  1,206,728 B，07:00 HKT，编译 5m28s，日志 D:\tb-eval\build-20260828-s3.log）；
+  R1/R2 关键符号（target_mismatch / target_missing / target_type_mismatch /
+  tail_is_raw / not_executable / diagnose_failure / blackboard_read）在
+  二进制内、musl 静态（无 PT_INTERP）、容器冒烟三件正常加载执行（provision
+  usage / signer manifest 缺失 / orz TTY io error 均符合预期）；对应源码
+  orz 6cc8586 + 父 a21fcd1；警告面 14 项与上次基线持平；S4 复验仍待实机
+  放行。
 
 ### 1. FUS-TOOL-PROBE（`implemented`；P0-A 批次 1-7 与 P0-A-2 已闭合）
 
