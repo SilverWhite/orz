@@ -1,4 +1,4 @@
-# 哨兵退化 fail-fast 化设计（2026-08-21 设计定稿；纯文档登记、未实施）
+# 哨兵退化 fail-fast 化设计（2026-08-21 设计定稿；纯文档登记、未实施；2026-08-28 修订：触发源=复读哨兵，stall 已物理删除）
 
 > 状态：`implemented`（S0 证据门通过 + S1 代码 + S2 测试已闭合 2026-08-21；
 > S3 重建 → S4 复验待续。2026-08-21 用户裁决：harness fail-fast 方向有道理
@@ -11,6 +11,11 @@
 > ②S4 验收口径修正——单 run 哨兵预算上限为「≤3 次触发 × 单次预算」
 > （设计 §2.2 效果段的「首档 64K 一次」为 schemelike 类场景期望，
 > 非硬上限）。）
+> **2026-08-28 修订（THIN-HARNESS-REDESIGN 用户裁决）**：fail-fast 机制本身
+> 保留（会话档位持久化、单调计数、disabled 档即终止），但 reasoning-stall
+> 触发源已物理删除（官方 max 只等待不杀，复读判定已足够，无保留价值），
+> 降级梯由 reasoning/content 复读哨兵触发。详见
+> `THIN_HARNESS_REDESIGN_DESIGN_2026-08-27.md` §4.6。
 > 性质：P0-0d 后续（输出健康哨兵跨请求语义修订）+ 0e 观察延伸（sweep
 > r1-g1 12 次哨兵归因）。关联：
 > [DEEPSEEK_OUTPUT_BUDGET_AND_STALL_GUARD_DESIGN_2026-08-20.md](DEEPSEEK_OUTPUT_BUDGET_AND_STALL_GUARD_DESIGN_2026-08-20.md)

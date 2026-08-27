@@ -4986,5 +4986,59 @@ class ProbeAccuracyCrossCheckTests(unittest.TestCase):
         )
 
 
+class StructuredAuditFieldConsumptionTests(unittest.TestCase):
+    """THIN-HARNESS-REDESIGN V2 R1 §6 (2026-08-28)：机械审计只消费结构化
+    字段，禁止对 payload / hash / 日志文本做子串判定。S4 误报案例——事件链
+    校验/冒烟统计出现 8 处"400"，全部为哈希串内子串、真实 HTTP 400 = 0；
+    若按子串扫描即误报（设计 §6 定案 P5）。"""
+
+    def test_hash_string_containing_400_produces_zero_errors(self) -> None:
+        # 合法 journal 的 payload 内嵌含 "400" 的哈希串/文本 → 校验器零
+        # 误报（校验只按 Schema/结构化字段判定，不做子串扫描）。
+        payload = {
+            # S4 误报形态：哈希串内子串 "400"（真实 HTTP 400 计数不得由
+            # 此类文本驱动）。
+            "artifact_path": "build/orz",
+            "artifact_sha256": "0" * 30 + "400" + "f" * 31,
+            "artifact_kind": "binary",
+        }
+        event = _mk_v02_event("artifact_registered", payload, 0, None)
+        errors = validate_journal_text(_v02_journal([event]))
+        self.assertEqual(
+            errors,
+            [],
+            f"hash-substring 400 must not be flagged: {errors}",
+        )
+
+    def test_structured_400_exit_code_reported_precisely(self) -> None:
+        # 真实结构化 400 条件（policy_denial 携带 exit_code=400，acaf
+        # 源作用在非票据工具上）→ 校验器按结构化字段精确报出规则违反
+        # （source=acaf on non-ticketed tool），不按文本扫描归类。
+        payload = {
+            "tool": "read_file",
+            "call_id": "call-2",
+            "exit_code": 400,
+            "status": "error",
+            "error": "ticket_denied",
+            "policy_denial": {
+                "source": "acaf",
+                "code": "ticket_denied",
+                "reason": "no ticket for this target",
+            },
+        }
+        event = _mk_v02_event("tool_completed", payload, 0, None)
+        errors = validate_journal_text(_v02_journal([event]))
+        joined = " | ".join(errors)
+        self.assertIn("source=acaf on non-ticketed tool", joined)
+        self.assertNotIn("non-zero exit_code", joined)
+        # 精确性：结构化 400 作为数字合法通过 exit_code 约束，仅报出
+        # 真正违反的字段规则。
+        self.assertEqual(
+            [e for e in errors if "exit_code" in e],
+            [],
+            f"exit_code=400 is a valid non-zero structured number: {errors}",
+        )
+
+
 if __name__ == "__main__":
     unittest.main()

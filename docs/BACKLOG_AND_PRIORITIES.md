@@ -1431,6 +1431,35 @@ S1-S4 全部闭合）
 
 - 已完成（995a384）：提交当前未提交登记——CLI_PROJECT_INDEX 索引更新、两份设计文档（含优先级标记）、本文件与各指针更新。
 
+### 0j. THIN-HARNESS-REDESIGN-V2（P0；2026-08-28 设计定稿，实施待放行）
+
+- 入口：[设计](THIN_HARNESS_REDESIGN_V2_DESIGN_2026-08-28.md) /
+  [HA 调研](HA_SERVICE_MODEL_RESEARCH_2026-08-28.md)；TODO P0-0j。
+- 来源：THIN-HARNESS-REDESIGN（2026-08-27 v0.4）减法延续——思维侧收尾 +
+  执行侧重设计；同模型官方极简 harness 82.7% vs 厚 harness 65.2%，模型能力
+  非瓶颈，回归"降低模型压力"原路。
+- 定案（2026-08-28 用户裁决）：复读守卫统一命中门槛 20 + 序列内容门全删 +
+  3-gram 门槛 15 + 802 线保留 + 空响应链 thinking 降档最多 low（不关闭）+
+  复读触发改显式拦截不降档 + 审计只消费结构化字段（杜绝"400 在哈希串"类误报）
+  + 半助理层加厚（失败自动诊断 ≤2KB 极简记录 / process-file-environment
+  三实体域 / 实体状态并入黑板 / 黑板定义进工具描述不进 prompt）+ HA 服务模型
+  （domain.service + target + data，target=实体级、无作用对象省略）。
+- 路由：W1（R1）复读后置化 + 空响应链 + 审计治理；W2（R2）半助理层失败诊断
+  + 实体登记 + 服务调用形态收敛 + 黑板接线；W3（R3）A/B 验证与清理 +
+  ADR-0010 修订 + CLI_PROJECT_INDEX 登记（含 THIN-HARNESS v0.4 遗留
+  R2b/R2c 观察与回收判定）。
+- 计数：设计轮不动（仍 29）；**2026-08-28 R1 S1 代码 + S2 测试实施放行
+  入账 29 → 30**（S3 重建 / S4 复验待续）；**2026-08-28 R2 S1 代码 +
+  S2 测试实施放行入账 30 → 31**（W2-R2 四块：失败诊断 `diagnostics.rs`
+  + 实体登记 `entities.rs` + 服务调用形态收敛（target 实体级）+
+  黑板 entities 分区接线；orz-loop 592 通过 / pytest 216 通过 /
+   fmt 干净 / clippy 无新增；S3 重建 / S4 复验待续）；验证闭环按既有纪律。
+   **2026-08-28 全面审查处理（R1+R2 S1/S2 三路审查）**：R1 无返工（仅
+   文档措辞勘误）；R2 两个 P1 修复（file 域签名消费 stat 探针 /
+   target↔data 二选一 + 双写一致性校验 + 域前缀校验）与 P2/P3 处理完成
+   （明细见 TODO P0-0j W2-R2 全面审查处理）；orz-loop 608/0/3、pytest
+   216、fmt/clippy 干净；S3 重建 / S4 复验仍待容器/实机放行。
+
 ### 1. FUS-TOOL-PROBE（`implemented`；P0-A 批次 1-7 与 P0-A-2 已闭合）
 
 - 入口：[设计](TOOL_AVAILABILITY_PROBE_DESIGN_2026-08-13.md)；索引：[CLI_PROJECT_INDEX.md](../CLI_PROJECT_INDEX.md)。

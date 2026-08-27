@@ -1,10 +1,17 @@
-# DeepSeek 输出预算恢复与空流止损设计（2026-08-20 设计定稿；S1-S4 已闭合，修订：默认 high + 三级降级梯已实施闭环）
+# DeepSeek 输出预算恢复与空流止损设计（2026-08-20 设计定稿；S1-S4 已闭合，修订：默认 high + 三级降级梯已实施闭环；2026-08-28：reasoning-stall 预算兜底已物理删除）
 
 > 状态：`S1-S4 全部闭合（max 基线）`；**2026-08-20 修订定稿（用户裁决：
 > 方案 B + 中间档）——默认 thinking 档 max → high（官方默认），降级梯
 > 插入 low 中间档（high → low → disabled → 失败），max 保留为可选档；
 > S1 代码 + S2 测试（§4.5）、S1 全面审查处理（§4.6）、S3 重建 + S4 复验
 > （§4.7，换题 make-doom-for-mips）已全部闭合；计数 29 → 28**。
+> **2026-08-28 修订（THIN-HARNESS-REDESIGN 用户裁决）**：reasoning-stall
+> 预算兜底层（600s / 64K reasoning token）**已物理删除**——官方 deepseek-harness
+> 对 max 只等待不杀（无生成期退化防护），复读判定已足够；`ORZ_REASONING_STALL_GUARD`
+> env 开关、`check_stall`/`reasoning_est_tokens` 及相关测试一并移除。本设计 §3.3 的
+> stall 信号正文保留为历史记录（已不生效）；复读哨兵保持活跃，空响应快速重试链
+> （§3.2）与降级梯（§3.6）语义不变。详见
+> `THIN_HARNESS_REDESIGN_DESIGN_2026-08-27.md` §4.6 修订注记。
 > **2026-08-21 修订（用户裁决：同意滚动哈希任意偏移复读检测；S1 代码
 > + S2 测试已实施（§4.9/§4.10）、S3-S4 待续）**：退化检测器复读判定
 > 路径①（连续相同

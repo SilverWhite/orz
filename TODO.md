@@ -82,7 +82,7 @@
 > 本快照只做计数与分组召回，明细以下方各分组勾选清单为唯一入口，不新增独立条目；
 > 后续扫描更新时同步替换本快照日期与计数。
 
-- 未闭合总数：**29 项**（2026-08-19 0c 验证闭环 29 → 28；2026-08-20
+- 未闭合总数：**30 项**（2026-08-19 0c 验证闭环 29 → 28；2026-08-20
   0d 验证闭环 29 → 28；2026-08-20 OUTPUT-BUDGET-RESTORE-AND-STALL-GUARD
   S1 实施放行入账 28 → 29，**S3/S4 验证闭环 29 → 28**；2026-08-20
   THINKING-DEFAULT-HIGH-LADDER S1 实施放行入账 28 → 29，**S3/S4 换题
@@ -105,7 +105,10 @@
   （GAP-EVENT-SCHEMA-DRIFT + GAP-REPETITION-DETECTOR-DNA-
   FALSE-POSITIVE，见 P0-0i）；2026-08-26 GAP-EVENT-SCHEMA-DRIFT
   事件面三类 Schema 漂移修复完成并复验，未闭合 31 → 30；
-  2026-08-26 SEQUENCE CONTENT GATE（P0-0i）S4 复验闭环，未闭合 30 → 29）
+  2026-08-26 SEQUENCE CONTENT GATE（P0-0i）S4 复验闭环，未闭合 30 → 29）；
+  2026-08-28 THIN-HARNESS-REDESIGN-V2（0j）设计定稿登记（设计轮不动计数，
+  仍 29）→ **R1 S1 代码 + S2 测试实施放行入账 29 → 30**（S3 重建 / S4
+  复验待续，见下）
   - P0-C：0 项（PLAN-FIRST 阶段 A/B/C 全部闭合，2026-08-16）
   - P0 冒烟对拍暴露：0 项（GAP-REPETITION-DETECTOR-DNA-FALSE-POSITIVE
     复读检测 DNA 误杀已闭合 2026-08-26；GAP-EVENT-SCHEMA-DRIFT 事件面
@@ -1407,6 +1410,73 @@ S4 复验闭环 2026-08-25（补登记）；S1-S4 全部闭合）
 - [x] 观察项登记（dna 82.36%（S4 重跑实测）/ feal 88.21% 命中率 <90%
   与 web 检索注入相关，成本观察不阻塞；feal 一次 reasoning_stall 64K
   预算设计内触发；S4 dna 重跑无 stall 触发）——并入对拍审计记录。
+
+### P0-0j THIN-HARNESS-REDESIGN-V2（P0；2026-08-28 设计定稿，实施待放行）
+
+> 入口：[设计](docs/THIN_HARNESS_REDESIGN_V2_DESIGN_2026-08-28.md) /
+> [HA 调研](docs/HA_SERVICE_MODEL_RESEARCH_2026-08-28.md)；BACKLOG 0j。
+> 定案摘要（用户裁决）：复读门槛统一 20 + 序列门全删 + 3-gram 15 + 802 保留
+> + 空响应链 low 封顶 + 触发显式拦截不降档 + 审计结构化字段判定 + 半助理层
+> 加厚（诊断/实体/黑板）+ HA 服务模型（target=实体级）。设计轮不动计数（29）。
+
+- [x] W1-R1 S1 代码：复读门槛 20 统一 + 序列内容门全删 + 3-gram 15 +
+  802 保留回归（改独立同字符触发线）+ 空响应链 low 封顶 + 触发改显式
+  拦截不降档（移除 `session_thinking` 降级分支）+ 审计只消费结构化字段。
+  **2026-08-28 完成**：transport.rs 常量/判定/触发全量落地，orz-loop
+  `cargo check`/`fmt` 通过、clippy 无新增告警。
+- [x] W1-R1 S2 测试：19/20 命中边界、3-gram 14/15、801/802、空响应链
+  low 封顶、run_invalidated 达限、trip 后 thinking 档位不变、含"400"
+  哈希串 fixture 零误报 + 真实 400 事件精确报出。**2026-08-28 完成**：
+  transport.rs 91 项 + orz-loop lib 全量 567 项通过；事件链校验器新增
+  `StructuredAuditFieldConsumptionTests`（216 项全绿）。
+- [ ] W1-R1 S3 重建（Linux musl 三件套，ORZ-BUILD-MOUNT-001 契约）
+- [ ] W1-R1 S4 复验：EGFP / sam-cell-seg 真实 span 回放静默、构造真循环
+  触发、零真实 400、命中率 ≥90%
+- [x] W2-R2 失败诊断：`diagnostics.diagnose` 服务 + 各工具域结构化签名词典
+  （file/process/environment）+ ≤2KB 极简记录 + 执行失败自动派发。
+  **2026-08-28 完成**：`diagnostics.rs` 签名词典（terminal/file/process/
+  environment 11 签名，P5 只消费结构化信号）+ `diagnose_failure`（≤2KB
+  序列化上限 / tail ≤12 行 / key_fields ≤8）+ 执行失败自动派发
+  （`run_console_target`：非零退出/超时/工具不可用/委托错误 → 极简记录
+  附着失败对象实体 + 错误信封 `upstream.detail.diagnostic`）。
+- [x] W2-R2 实体登记与状态：process / file / environment 三域（锚点 hash、
+  pid/exit_code、环境可用性），半助理层执行工具时登记/更新。
+  **2026-08-28 完成**：`entities.rs` 实体注册表（file 锚点 size/sha256/
+  mtime/encoding、process exit_code/timed_out/status、environment shell+
+  探针工具可用性；总容量 128 / 渲染上限 24）+ `host::ToolResult.
+  tool_error_kind` 结构化透传 + `output_encoding` 重建透传修复。
+- [x] W2-R2 服务调用形态收敛：`domain.service + target(实体级) + data`，
+  无作用对象省略 target；与现有操作台订单格式合并。
+  **2026-08-28 完成**：`ActionSpec.target_policy`（None/File/Process/
+  Environment/AnyEntity）+ `ActionOrder.target` 实体 id + 发放前机械校验
+  （target_required / target_not_allowed）+ PTC 脚本步骤 target 透传；
+  file 四服务声明 File 策略，diagnostics.diagnose 声明 AnyEntity。
+- [x] W2-R2 黑板接线：实体状态分区渲染（条目/总上限）+ `blackboard_read`
+  工具描述简定义（黑板=框架状态区…）+ 返回面纪律（摘要+指针+上限）。
+  **2026-08-28 完成**：Blackboard `entities` 分区（live-only，不进 epoch
+  快照）+ `blackboard_read section=entities` 有界文本渲染（摘要清单 +
+  总上限 + has_diagnostic）+ 工具描述补简定义与 entities 分区枚举。
+- [x] W2-R2 全面审查处理（2026-08-28，三路并行审查 + 主 Agent 复核）：
+  **P1-1** file 域签名匹配改消费 stat 探针信号（exists/kind + 参数键推断
+  期望类型）——`target_missing` 仅 exists=false 命中、`target_type_mismatch`/
+  `not_executable` 恢复可达、目标存在的失败落 raw 兜底；**P1-2** target↔data
+  二选一 + 双写一致性校验 + 域前缀校验（`step=target`/`code=target_mismatch`
+  拒单），契约校验移至 target 解析之后；grep 改 `FileOptional`（无 path
+  工作区搜索免 target）；timed_out 优先于 command_not_found；诊断信封补
+  `tail_is_raw`、process 域 `target_state`（command/status）；ErrorKind 与
+  `host::ToolErrorKind` 统一（删手写映射）；实体渲染补总字节上限、
+  `file_entity_id` 无状态归一（分隔符/`./` 前缀）、16MB 哈希不变式 registry
+  层强制（目录跳过 read）；run_tests 特例 `output_encoding` 透传；P3 注释/
+  设计文档措辞勘误（§3.3/§4.2/§4.5/§8）。测试补 16 项（file 域正反例、
+  126/type_mismatch 可达性、127+timed_out、PTC target 透传、渲染字节上限、
+  16MB 边界等）。**验证**：orz-loop 608/0/3、pytest 216、fmt/clippy 干净。
+- [ ] W3-R3 HA 目标架构落地余项：实体 id 形态、分区命名、注册表 Rust 形态
+  （含实体 id 相对/绝对/大小写归一——本轮仅落地无状态部分：分隔符与
+  `./` 前缀；process/environment 状态探针扩展入账 R3）
+- [ ] W3-R3 A/B 验证：小样本跑分（含 THIN-HARNESS v0.4 R2b 按需读取观察 /
+  R2c `parse_retrieval_result_json` 兜底回收判定）
+- [ ] W3-R3 清理与登记：旧序列门文档标记 withdrawn、ADR-0010 减法修订、
+  CLI_PROJECT_INDEX 登记（含 BACKLOG/TODO 计数入账）
 
 ### P0-B FUS-RETRIEVAL-MECH（`implemented`；批次 1-6 已全部闭合，2026-08-14，保留供核对）
 
