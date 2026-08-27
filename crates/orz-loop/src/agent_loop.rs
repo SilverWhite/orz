@@ -50,9 +50,9 @@ use crate::tool::ToolDispatcher;
 /// OUTPUT-BUDGET-RESTORE-AND-STALL-GUARD (2026-08-20, ADR-0010 §14.35):
 /// 输出预算恢复 32K → 256K（官方 maxTokens 默认值；回落档 128K，S4 实测
 /// 不可接受才回落，编译期常量）。止损由输出健康哨兵承担——content 复读
-/// 检测（P0-0d）+ reasoning 复读灵敏层 + reasoning-stall 600s/64K 预算
-/// 兜底（与 max_tokens 解耦），空流不原样重试（D-6 快速有界 ≤2 次 +
-/// 降级出口）。
+/// 检测（P0-0d）+ reasoning 复读灵敏层（THIN-HARNESS-REDESIGN 2026-08-28
+/// 用户裁决：官方 max 只等待不杀，reasoning-stall 预算兜底已物理删除，
+/// 复读判定已足够），空流不原样重试（D-6 快速有界 ≤2 次 + 降级出口）。
 pub const REQUEST_MAX_TOKENS: u32 = 256_000;
 
 /// One model generation round — the uniform round entry every agent
@@ -1107,10 +1107,12 @@ pub(crate) async fn run_agent_loop(
                     orientation.as_deref_mut(),
                     role,
                     "loop_top_gap",
-                    // Main lane: the checkpoint round is forced (no tools,
-                    // template answer); retrieval lanes keep the legacy
-                    // fire-and-continue behavior (§14.16 检索车道不变).
-                    profile.role == AgentRole::Main,
+                    // THIN-HARNESS-REDESIGN R1 (§4.3): orientation 强制
+                    // 模板轮变体退役——主车道与检索车道统一 fire-and-continue
+                    // 简短注入（只留 [ORIENTATION] 块；终答前方向核查由
+                    // COUNTEREXAMPLE_GATE 承担，去重）。DC 的强制模板轮
+                    // 机制保留（maybe_fire_dc 独立路径）。
+                    false,
                 )
                 .await?
         {
@@ -1218,36 +1220,26 @@ pub(crate) async fn run_agent_loop(
             controller.sync_console_registrations();
         }
 
-        // 2026-08-12 裁决（ADR-0010 §3.5 v1.x）：AVAILABLE 块不再注入——
-        // 模型可见工具列表 = API tools 参数中的 registry 能力目录（全量，
-        // 零可用性承诺）；可用性判定完全发生在调用时。prompt 不再承载
-        // 任何"可用性声明"（不固定在 prompt 中）。
-        // D-8 (FIX_PLAN 2026-08-06): the round budget is declared to the
-        // model up front — it does not guess or drift. PUSH→PULL
-        // (2026-08-21, CONTEXT_SCAFFOLDING_PULL_REDESIGN §4 方案 A): the
-        // per-round remaining re-declaration is retired — the live count
-        // is read on demand via `blackboard_read section=session`.
-        // Cache-prefix fix (2026-08-07): the session block is static
-        // (BUDGET only) so the rebuilt system prompt is byte-identical
-        // across rounds — the provider's prefix cache keeps hitting.
-        let budget_block = crate::prompt::tool_round_budget_session_block(profile.max_tool_rounds);
+        // THIN-HARNESS-REDESIGN R1 (2026-08-27, §4.3): SESSION 常驻轮次
+        // 预算块删除——预算保留为静默硬门（耗尽时仅提示一次）；主代理系统
+        // 提示 = 近零中间态文本（build_system_prompt(None)），检索子代理
+        // 提示也不再携带预算块。live 预算仍可经 blackboard_read
+        // section=session 按需读取（PUSH→PULL 2026-08-21 方案 A）。
         let system = match &profile.system_kind {
-            SystemPromptKind::Main => {
-                let system_blocks = budget_block.clone();
-                controller
-                    .main_agent
-                    .prompt_builder
-                    .build_system_prompt(Some(&system_blocks))
-            }
+            SystemPromptKind::Main => controller
+                .main_agent
+                .prompt_builder
+                .build_system_prompt(None),
             SystemPromptKind::Retrieval { role, goal, mode } => {
                 // ADR-0010 §3.2 task contract — the subagent's own system
                 // (citation rules + [DOC]/[SOURCE] delivery contract), with
-                // the shared budget declaration.
+                // the shared budget declaration (retired in R1 — mechanical
+                // hard gate only).
                 crate::prompt::build_retrieval_system_prompt(
                     role.section_name(),
                     goal,
                     mode.as_str(),
-                    &budget_block,
+                    "",
                 )
             }
         };
@@ -1488,11 +1480,10 @@ pub(crate) async fn run_agent_loop(
                 // OUTPUT-DEGENERATION-GUARD (2026-08-19) + OUTPUT-BUDGET-
                 // RESTORE-AND-STALL-GUARD (2026-08-20, ADR-0010 §14.35):
                 // 输出健康哨兵中断分流——达到 DEGENERATION_LIMIT（会话级
-                // 连续，三族共享）→ `AgentLoopError::Degeneration`（run 层
+                // 连续，两族共享）→ `AgentLoopError::Degeneration`（run 层
                 // 记 run_invalidated）；未达上限 → run_failed 同路径。审计
-                // 留痕（tracing）携带触发族
-                // 与 detail（reasoning 估算 token / 首 content 延迟在 stall
-                // detail 内），不改终止语义（设计 §3.3 journal/审计）。
+                // 留痕（tracing）携带触发族与 detail，不改终止语义
+                // （设计 §3.3 journal/审计）。
                 if let GatewayError::StreamInterrupted { detail, .. } = &other
                     && (crate::gateway::transport::is_degeneration_detail(detail)
                         || crate::gateway::transport::is_reasoning_guard_detail(detail))
@@ -1548,8 +1539,7 @@ pub(crate) async fn run_agent_loop(
                     // calibrate the single-round budget decision (data →
                     // whether the 256K cap needs calibration; 32K→256K per
                     // OUTPUT-BUDGET-RESTORE-AND-STALL-GUARD 2026-08-20,
-                    // ADR-0010 §14.35; S4 用 usage 复核
-                    // REASONING_CHARS_PER_TOKEN 估算系数).
+                    // ADR-0010 §14.35).
                     "reasoning_tokens": response.reasoning_tokens,
                     "completion_tokens": response.completion_tokens,
                     // Cache-hit observation (2026-08-07 fix): per-round
@@ -2368,7 +2358,9 @@ pub(crate) async fn run_agent_loop(
                     orientation.as_deref_mut(),
                     role,
                     "post_tool_batch_gap",
-                    profile.role == AgentRole::Main,
+                    // THIN-HARNESS-REDESIGN R1 (§4.3): 同 loop-top——
+                    // orientation 只作简短注入，不设强制模板轮。
+                    false,
                 )
                 .await?
         {

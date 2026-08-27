@@ -10,59 +10,27 @@
 //! journal `message_block` payload and the injected text stay one source;
 //! `ORIENTATION_INJECTED_PREFIX` registers it with the injected-block filter.
 
-/// Base system prompt — runtime-neutral orientation.
+/// Base system prompt — THIN-HARNESS-REDESIGN R1 (2026-08-27, §4.2)
+/// 中间态近零提示词。自然语言逻辑块，无版本号、无 XML 围栏；只保留工具
+/// 结果尚不能自解释的机械契约（读取信封 / 内容锚点 / submit 两阶段），
+/// 其余契约随工具结果与机械注入块承载（MECHANICAL_AUDIT /
+/// COUNTEREXAMPLE_GATE / ORIENTATION 等简短注入不变，见 §4.3）。
 ///
-/// D-1 (FIX_PLAN 2026-08-06): the citation rule lives here (the main-agent
-/// prompt is the carrier — NOT a project doc / CLAUDE.md / index; those are
-/// dev-directory documents unrelated to the binary). One rule + an inline
-/// marker, no structured template (the main agent works alone — no helper
-/// subagent, so the burden must be minimal). The rule blocks hallucinated
-/// attributions ("参考自某处" claims without a locatable source — P7's
-/// false "Python 移植" record is the direct precedent). ADR-0010 §3.7.9
-/// (V11-IMPL-004): the marker carries a stable `source_id` binding to the
-/// source ledger when one exists (observation-time `path:line` remains the
-/// local-code fallback); the marker is a WRITER-SIDE binding, NOT a
-/// verification claim — a verifier must check source identity / visibility
-/// / claim limits, not grep the text.
+/// 历史（已删除的提示词段落及其去向）：D-1 引用纪律（提示词级轻量纪律，
+/// 随引用校验器整体删除一并退役）、读取纪律（契约下沉到 read_file 信封
+/// 结果）、会话数据边界（.gsa 不可见为机械 fail-closed，不再提示词引导）、
+/// 压缩白名单（A6 —— 工具接口封存，见 §4.1 边界项）、执行面 plan-first
+/// 文本（plan 门摘除，见 §4.5）。工具结果自解释目标态见设计 §4.2。
 ///
-/// MECHANICAL-AUDIT-LAYER (2026-08-24, ADR-0010 §14.39 / BACKLOG 0g):
-/// 引用校验器整体删除——提示词只保留轻量纪律（引用需绑定本 run 已观测
-/// 证据；无机械拦截）。
-pub const BASE_SYSTEM_PROMPT: &str = "你是 orz——保证优先的 CLI agent workbench。\
-遵循注入的 assurance 上下文块执行任务；工具列表由运行时按轮声明，不得自行推断。\
-\n引用纪律：基于外部依据、参考实现或内部文档的引用，必须附带内联标记 \
-`[来源: source_id]`（ledger 记录）或 `[来源: 路径:行号]`（本地代码 observation-time 定位）；\
-外部来源引用 URL/document identity + observed scope（如 `[来源: <url> metadata_only]`）；\
-内部文档引用用 文档ID §节/锚点；引用必须绑定本 run 已观测证据，无法定位来源的内容不得引用——\
-不得凭记忆声称『参考自某处』。\
-\n读取纪律（缓存成本，v1.9；大文件读取契约 v1.22）：优先用 grep/结构提取定位相关片段，再按需读取；\
-超过粗门（默认 16KB、可配 8–32KB）的文件返回读取句柄信封（path/size/encoding/content_sha256/可用范围/\
-有界预览 ≤4KB/truncated/offset）而非全文——拿到信封后用 read_file(offset) 按 offset 续读或\
-grep/结构提取，小文件保持全文一次返回；只有证据关键的小文件才读全文，大文件一律经信封分段续读。\
-每轮工具结果注入预算默认 50K \
-估计 tokens（ORZ_MAX_INJECT_TOKENS_PER_ROUND 可调）；超限时本轮后续读取会被机械拒绝，\
-并显式提示用 offset 续读或改用 grep/结构优先。\
-\n会话数据边界（v1.36，模型舒适度原则）：`.gsa` 树（journal/台账/会话日志）是\
-运行时内部数据，不进入直接工具面，无需也不应直接 grep/read/list `.gsa` 路径；\
-需要查看台账或会话信息时，用 blackboard_read 分区读取（plan/edits/tool_actions/\
-exec/actions）或经操作台动作反馈——运行时会在受控面呈现你需要的信息，\
-直接访问只会得到拒绝，请直接走受控面。\
-\n压缩白名单（A6 §8 C.2）：任务背景、必须获取的信息等客观事实，可在首个工具批次通过 \
-compaction_whitelist_add 写入压缩白名单——该内容不被上下文压缩、全程保留；\
-写入仅限首轮，存档于 .gsa 记录树（保留 7 天）。白名单只写客观事实，\
-不写计划/步骤/推测/临时状态（计划由 plan mode 承载）。\
-\n执行面（MECHANICAL-AUDIT-LAYER 2026-08-24）：首轮先写结构化计划（plan_write），\
-通过后直接调用工作工具——只读（read_file/list_dir/grep/search_tool）、精确替换 \
-（search_replace）、终端（run_terminal_cmd）、固定测试命令（run_tests）、检索 \
-（web_search/web_fetch/browser_read/retrieve_project_*）——一次调用一个往返、\
-结果即时返回，不再有下单/读回执仪式。命令运行/写执行/检索派发由运行时背板执行 \
-（cwd/env/超时归 host），ACAF/权限/预算/候选计数门保持。写文件前先用 read_file \
-获取内容锚点（sha256/size），search_replace 携带 expected_anchor 供写前核证。\
-多文件/跨目录调研用 retrieve_project_docs 打包派发内部检索子代理（返回结构化结果，\
-不膨胀主对话）；单文件点读用 read_file/grep/search_tool。\
-递交用 submit（无参两阶段：先渲染交付状态供核查，再确认）。最终回答前会有一次 \
-[COUNTEREXAMPLE_GATE] 反例自查轮，[MECHANICAL_AUDIT] 执行事实报告随该轮注入，\
-供你核对计划完成声明。";
+/// R2a 说明（2026-08-27）：检索分区行已随黑板拉取一并加入——R2a 后
+/// `blackboard_read` 可读 internal_ret / external_ret 分区，检索派发默认
+/// 只回指针摘要（`ORZ_RETRIEVAL_RESULT_CHANNEL=inline` 可回退全文），
+/// 本行是模型决定「是否按需拉取」的机械契约（设计 §4.2 中间态第 4 行）。
+pub const BASE_SYSTEM_PROMPT: &str = "工具按需使用，一次一个；不需要的信息不读。\n\
+大文件读取返回截断信封，需要后续内容时按 offset 续读。\n\
+写入用 search_replace，携带当前内容锚点；不匹配按报错修正。\n\
+子代理检索结果写入 blackboard 分区（internal_ret / external_ret），需要时用 blackboard_read 读取。\n\
+完成后用 submit 提交：第一次返回交付清单，核查后再次调用确认。";
 
 /// Counterexample gate block — 正式答案输出前, fires once per run and the
 /// block explicitly tells the model it appears only once (§4.6.5 verbatim).
@@ -203,7 +171,8 @@ pub fn context_compressed_marker(
         "{CONTEXT_COMPRESSED_PREFIX} v0.1]\n\
         前文 {rounds_dropped} 轮已压缩（触发于 {trigger_k}K tokens）。\
         之前的工具结果全文不再在本对话中；如需回看历史，请调用 \
-         blackboard_read 工具（分区: plan / edits / tool_actions / exec / actions）。\
+         blackboard_read 工具（分区: plan / edits / tool_actions / exec / actions / \
+         internal_ret / external_ret）。\
          {summary}\n\
          [/前文上下文已压缩]",
         trigger_k = trigger_tokens / 1000,
@@ -234,7 +203,8 @@ pub fn recovery_truncation_marker(
         "{CONTEXT_COMPRESSED_PREFIX} v0.1-恢复]\n\
         恢复对话超过窗口，已机械截断 {rounds_dropped} 轮（估算 {before_k}K → {after_k}K \
          tokens）。完整历史保留于审计副本 {audit_path}；如需回看历史，请调用 \
-         blackboard_read 工具（分区: plan / edits / tool_actions / exec / actions）。\n\
+         blackboard_read 工具（分区: plan / edits / tool_actions / exec / actions / \
+         internal_ret / external_ret）。\n\
          [/前文上下文已压缩]",
         before_k = before_estimate / 1000,
         after_k = after_estimate / 1000,
@@ -327,26 +297,6 @@ pub fn tool_policy_breaker_block(tool_name: &str, consecutive: u32) -> String {
         请勿继续调用该工具；请切换策略，改用本轮声明列表中的其他工具，\
         或在当前策略下说明任务无法完成。\n\
         [/TOOL_POLICY_BREAKER]"
-    )
-}
-
-/// D-8 (FIX_PLAN 2026-08-06): session-level budget declaration — injected
-/// into the system prompt once per run. The remaining count is deliberately
-/// NOT part of the system prompt: the system is rebuilt each round, so any
-/// per-round state inside it breaks the provider's prefix cache on every
-/// round (2026-08-07 fix — hit rate was ~17%). PUSH→PULL (2026-08-21,
-/// CONTEXT_SCAFFOLDING_PULL_REDESIGN §4 方案 A): the per-round trailing
-/// remaining re-declaration is retired — the live count is read on demand
-/// via `blackboard_read section=session` (`session_face_block`).
-pub fn tool_round_budget_session_block(budget: u32) -> String {
-    format!(
-        "{TOOL_ROUND_BUDGET_PREFIX} v0.1]\n\
-         BUDGET: {budget} tool rounds per turn\n\
-         The controller enforces this budget mechanically and rejects \
-         calls that would exceed it. Read the live remaining count on \
-         demand via `blackboard_read section=session`; if the budget is \
-         exhausted the run ends with a partial result.\n\
-         [/TOOL_ROUND_BUDGET]"
     )
 }
 
@@ -495,77 +445,79 @@ mod tests {
 
     #[test]
     fn system_prompt_injects_block() {
-        // 2026-08-12 裁决：AVAILABLE 块已删除（prompt 不承载工具可用性
-        // 声明——工具列表 = API tools 目录，判定在调用时）；build_system_prompt
-        // 保留 None/Some 形态以兼容 budget/status 块。
+        // THIN-HARNESS-REDESIGN R1 (§4.2)：SESSION 常驻预算块删除后主代理
+        // 系统提示 = 近零中间态文本（build_system_prompt(None)）；
+        // 预算为静默硬门，耗尽时仅提示一次。
         let builder = PromptBuilder::new();
         let bare = builder.build_system_prompt(None);
         assert_eq!(bare, BASE_SYSTEM_PROMPT);
     }
 
     #[test]
-    fn base_system_prompt_carries_session_data_boundary_guidance() {
-        // 2026-08-20 模型舒适度原则（ADR-0010 §14.35 第 9 项）：`.gsa`
-        // 树是运行时内部数据，提示词先导引导直接走受控面（blackboard_read
-        // 分区 / 操作台反馈），避免模型反复尝试直接读 `.gsa` 被拒（本次
-        // make-doom 复验 14 次碰壁的提示词层改善）。只陈述边界与正向替代，
-        // 不引入新的机械限制。
+    fn base_system_prompt_is_near_zero_intermediate_text() {
+        // THIN-HARNESS-REDESIGN R1 (§4.2)：中间态只保留工具结果尚不能
+        // 自解释的机械契约（信封续读 / 内容锚点 / submit 两阶段），
+        // 不再有人格化、plan-first、检索派发仪式与 .gsa 引导段落。
         assert!(
-            BASE_SYSTEM_PROMPT.contains("会话数据边界"),
-            "session-data boundary guidance present in the main-agent prompt"
+            BASE_SYSTEM_PROMPT.contains("工具按需使用，一次一个"),
+            "tool-usage line present: {BASE_SYSTEM_PROMPT}"
         );
         assert!(
-            BASE_SYSTEM_PROMPT.contains("blackboard_read 分区读取"),
-            "positive alternative (blackboard_read) guidance present"
+            BASE_SYSTEM_PROMPT.contains("大文件读取返回截断信封"),
+            "envelope read contract present: {BASE_SYSTEM_PROMPT}"
         );
         assert!(
-            BASE_SYSTEM_PROMPT.contains("直接访问只会得到拒绝"),
-            "honest expectation-setting present"
-        );
-    }
-
-    #[test]
-    fn base_system_prompt_carries_d1_citation_rule() {
-        // D-1 (FIX_PLAN 2026-08-06) + MECHANICAL-AUDIT-LAYER (2026-08-24,
-        // ADR-0010 §14.39 / 设计 §2.8)：引用纪律降为提示词级轻量纪律——
-        // 引用需绑定本 run 已观测证据；无机械校验、无交付拦截表述。
-        assert!(
-            BASE_SYSTEM_PROMPT.contains("[来源: source_id]"),
-            "ledger-backed citation marker in the main-agent prompt"
+            BASE_SYSTEM_PROMPT.contains("offset 续读"),
+            "offset continuation contract present: {BASE_SYSTEM_PROMPT}"
         );
         assert!(
-            BASE_SYSTEM_PROMPT.contains("[来源: 路径:行号]"),
-            "observation-time path:line fallback still present"
+            BASE_SYSTEM_PROMPT.contains("search_replace"),
+            "write-anchor contract present: {BASE_SYSTEM_PROMPT}"
+        );
+        // THIN-HARNESS-REDESIGN R2a (§4.2 中间态第 4 行): 检索分区拉取
+        // 契约——子代理结果写入黑板分区，模型按需 blackboard_read。
+        assert!(
+            BASE_SYSTEM_PROMPT.contains("internal_ret / external_ret")
+                && BASE_SYSTEM_PROMPT.contains("blackboard_read 读取"),
+            "retrieval-partition pull contract present: {BASE_SYSTEM_PROMPT}"
         );
         assert!(
-            BASE_SYSTEM_PROMPT.contains("绑定本 run 已观测证据"),
-            "light discipline: citations bind to this run's observed evidence"
+            BASE_SYSTEM_PROMPT.contains("submit 提交"),
+            "two-stage submit contract present: {BASE_SYSTEM_PROMPT}"
+        );
+        // 已删除段落不得回潮。
+        for retired in [
+            "你是 orz",
+            "plan_write",
+            "retrieve_project_docs",
+            "compaction_whitelist_add",
+            "引用纪律",
+            "会话数据边界",
+            "首轮",
+            "工具列表由运行时按轮声明",
+        ] {
+            assert!(
+                !BASE_SYSTEM_PROMPT.contains(retired),
+                "retired prompt text '{retired}' must not return"
+            );
+        }
+        assert!(
+            !BASE_SYSTEM_PROMPT.contains("可用性"),
+            "system prompt avoids availability wording: {BASE_SYSTEM_PROMPT}"
         );
         assert!(
-            !BASE_SYSTEM_PROMPT.contains("机械校验"),
-            "no mechanical verification wording remains"
-        );
-        assert!(
-            !BASE_SYSTEM_PROMPT.contains("阻止交付"),
-            "no delivery-blocking wording remains"
-        );
-        assert!(
-            BASE_SYSTEM_PROMPT.contains("不得凭记忆声称"),
-            "no-memory-citation rule present"
-        );
-        assert!(
-            BASE_SYSTEM_PROMPT.contains("文档ID §节/锚点"),
-            "internal docs cite by section, not line number"
+            BASE_SYSTEM_PROMPT.lines().count() <= 5,
+            "near-zero prompt stays small: {}",
+            BASE_SYSTEM_PROMPT.lines().count()
         );
     }
 
     #[test]
     fn base_system_prompt_avoids_availability_wording() {
-        // P0-A 步骤 6：系统提示词只声明"工具列表由运行时按轮声明"，
-        // 不承载可用性判定词。
+        // P0-A 步骤 6 沿用：系统提示词不承载可用性判定词。
         assert!(
-            BASE_SYSTEM_PROMPT.contains("工具列表由运行时按轮声明"),
-            "system prompt declares the round-scoped tool list: {BASE_SYSTEM_PROMPT}"
+            !BASE_SYSTEM_PROMPT.contains("不可用"),
+            "system prompt avoids unavailable wording: {BASE_SYSTEM_PROMPT}"
         );
         assert!(
             !BASE_SYSTEM_PROMPT.contains("可用性"),
@@ -655,9 +607,6 @@ mod tests {
             "web_search",
             3
         )));
-        assert!(is_injected_block_text(&tool_round_budget_session_block(
-            120
-        )));
         assert!(is_injected_block_text(&tool_round_budget_exhaustion_block(
             120
         )));
@@ -688,9 +637,11 @@ mod tests {
             "  [压缩白名单 v0.1]\n条目\n[/压缩白名单]"
         ));
         assert!(!is_injected_block_text("[/压缩白名单]"));
-        // The base prompt carries the whitelist notice (static — cache-safe).
-        assert!(BASE_SYSTEM_PROMPT.contains("compaction_whitelist_add"));
-        assert!(BASE_SYSTEM_PROMPT.contains("压缩白名单"));
+        // THIN-HARNESS-REDESIGN R1 (§4.2): the base prompt is near-zero —
+        // the whitelist notice and every retired tool name are gone from it.
+        assert!(!BASE_SYSTEM_PROMPT.contains("compaction_whitelist_add"));
+        assert!(!BASE_SYSTEM_PROMPT.contains("压缩白名单"));
+        assert!(!BASE_SYSTEM_PROMPT.contains("plan_write"));
         // Leading/trailing whitespace tolerated.
         assert!(is_injected_block_text(&format!("  {orientation_block}\n")));
         // Ordinary model/user text must never match.

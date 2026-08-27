@@ -99,6 +99,29 @@ pub fn read_file_coarse_gate_from_config(config: &toml::Value) -> Option<usize> 
         .map(|v| (v.max(0) as usize).clamp(READ_COARSE_GATE_MIN, READ_COARSE_GATE_MAX))
 }
 
+/// THIN-HARNESS-REDESIGN §4.6 审查处理 (2026-08-27, 用户裁定)：终端命令
+/// 的分层超时——继承 bash 工具的 schema 默认 120s / 模型可传上限 300s
+/// （DEFAULT_MAX_TIMEOUT_MS），非后台化前台命令另有 300s
+/// MAX_FOREGROUND_BLOCK 钳制（clamp = timeout.min(max(300, config_timeout))），
+/// 外层 ORZ_TOOL_TIMEOUT_SECS 只是兜底、终端命令实际到不了外层值。
+/// 按实际使用放开：`timeout_secs`（缺省命令超时）与 `max_timeout_secs`
+/// （模型可传上限）均设 900s，`config_timeout` 同时把非后台化前台块上限
+/// 抬到 900s；900s 为全局上限（与 ORZ_TOOL_TIMEOUT_SECS=900 外层兜底
+/// 对齐）。后台化保持禁用（调度器族禁令，2026-08-09）。
+pub(crate) fn run_terminal_cmd_tool_params() -> Option<serde_json::Map<String, serde_json::Value>> {
+    Some(serde_json::Map::from_iter([
+        (
+            "enabled_background".to_string(),
+            serde_json::Value::Bool(false),
+        ),
+        ("timeout_secs".to_string(), serde_json::Value::from(900.0)),
+        (
+            "max_timeout_secs".to_string(),
+            serde_json::Value::from(900.0),
+        ),
+    ]))
+}
+
 /// Build a finalized toolset for a session working directory.
 ///
 /// SessionContext is constructed with minimal-but-functional defaults:
@@ -146,50 +169,29 @@ pub fn build_toolset(
     // pre-registers multiple tool packs (GrokBuild / Codex / OpenCode / …)
     // whose default client names collide — enable the GrokBuild namespace only.
     //
-    // Scheduler-family ban (2026-08-09, TB hard B 组复盘裁决): the system
-    // holds exactly TWO designed subagents (project-doc retrieval + external
-    // retrieval — CN §7.2 / design §4.5); GrokBuild's local multi-agent
-    // scheduler ecosystem is a third subagent class and is banned. The whole
-    // async ecosystem is removed, not just `task`: `monitor` runs on the same
-    // task system (bg_handle.task_id / terminal.get_task), so with
-    // `get_task_output` banned its results would be unrecoverable.
-    // TB failure 缺口 1 (results silently dropped at run end — gpt2-codegolf
-    // and train-fasttext) is eliminated at the tool-surface: the model is
-    // left with synchronous tools only (bash/read/edit/…).
-    // `kill_terminal_command` is the async kill switch for the same
-    // ecosystem; banning it with the rest leaves no dangling-command hazard.
-    // Complete scheduler-ecosystem surface (2026-08-09 census): task /
-    // task_output (get_task_output, wait_tasks, get_terminal_command_output) /
-    // kill_task / kill_terminal_command / monitor / scheduler (create, delete,
-    // list) / workflow. `todo_write` and `update_goal` are task-list/goal
-    // bookkeeping, NOT subagent scheduling — they stay.
-    //
-    // NOTE (residual, 2026-08-09): the inherited-crate implementations are
-    // NOT deleted (Slice #13 inherited-crate discipline + orz-agent tests
-    // lock TaskTool presence + terminal/session coupling). This filter is the
-    // only surface — KEEP this list in sync whenever the GrokBuild tool
-    // packs change. Future long-task needs go through the run_tests pattern
-    // (host-owned synchronous tools) or an explicit CN §5.1 review — never
-    // resurrect the async scheduler ecosystem.
-    const BANNED_GROK_BUILD_TOOLS: &[&str] = &[
-        "task",                        // subagent/task scheduler (third subagent class)
-        "get_task_output",             // polls task results (dead without task)
-        "wait_tasks",                  // waits on tasks (dead without task)
-        "get_terminal_command_output", // async terminal output collector
-        "kill_task",                   // kills tasks (dead without task)
-        "kill_terminal_command",       // kills monitor/terminal commands (async ecosystem)
-        "monitor",                     // async terminal watch (task-system based)
-        "scheduler_create",            // recurring task scheduler
-        "scheduler_delete",            // scheduler bookkeeping
-        "scheduler_list",              // scheduler bookkeeping
-        "workflow",                    // multi-agent workflow orchestrator
+    // THIN-HARNESS-REDESIGN R1 (2026-08-27, §4.1): the main-agent GrokBuild
+    // surface is converged to the hard-retained set. Everything else
+    // (list_dir / run_tests / search_tool / todo_write / update_goal /
+    // scheduler family / …) is either reachable through the retained tools
+    // (bash/read/grep) or sealed at the boundary (todo_write / update_goal
+    // — code retained, call interface rejected). The inherited-crate
+    // implementations are NOT deleted (Slice #13 inherited-crate
+    // discipline); this allowlist is the only surface. The scheduler-family
+    // ban (2026-08-09) is subsumed: no async-scheduler name is retained.
+    const RETAINED_GROK_BUILD_TOOLS: &[&str] = &[
+        "run_terminal_cmd",
+        "read_file",
+        "grep",
+        "search_replace",
+        "web_search",
+        "web_fetch",
     ];
     let tools: Vec<_> = builder
         .known_tool_ids()
         .into_iter()
         .filter(|id| {
             id.starts_with("GrokBuild:")
-                && !BANNED_GROK_BUILD_TOOLS
+                && RETAINED_GROK_BUILD_TOOLS
                     .iter()
                     .any(|t| id.ends_with(&format!(":{t}")))
         })
@@ -200,10 +202,7 @@ pub fn build_toolset(
             // scheduler-family ban above. Long-running commands rely on the
             // P0-1 tool timeout + P1-1 stall watchdogs instead.
             let params = if id.ends_with(":run_terminal_cmd") {
-                Some(serde_json::Map::from_iter([(
-                    "enabled_background".to_string(),
-                    serde_json::Value::Bool(false),
-                )]))
+                run_terminal_cmd_tool_params()
             } else if id == "GrokBuild:read_file"
                 && let Some(gate) = read_file_coarse_gate_bytes
             {
@@ -265,23 +264,11 @@ impl ToolsetRegistry {
 
 impl orz_loop::host::ToolRegistry for ToolsetRegistry {
     fn get(&self, name: &str) -> Option<orz_loop::host::ToolDef> {
-        // GAP-RETRIEVAL-TOOLS (2026-08-10): the host-owned project-doc
-        // index is declared alongside the GrokBuild registry (executed via
-        // the call_tool special case).
-        if name == "project_doc_index" {
-            return Some(crate::project_doc_index::ProjectDocIndex::tool_def());
-        }
         // local_browser (2026-08-10): `browser_read` is only declared when
         // the session's browser lane is actually ready — a model must never
         // see a tool that will fail on every call.
         if name == "browser_read" && self.browser_ready {
             return Some(crate::local_browser::browser_read_tool_def());
-        }
-        // PDF evidence (2026-08-11): `pdf_read` reads the local evidence
-        // store — no browser dependency, always declared (project_doc_index
-        // pattern). The mode gate lives in the relay.
-        if name == "pdf_read" {
-            return Some(crate::pdf_evidence::pdf_read_tool_def());
         }
         self.toolset
             .tool_definitions()
@@ -305,19 +292,9 @@ impl orz_loop::host::ToolRegistry for ToolsetRegistry {
                 parameters: d.function.parameters,
             })
             .collect();
-        // GAP-RETRIEVAL-TOOLS (2026-08-10): the host-owned project-doc
-        // index rides the registry list (declaration + availability).
-        if !defs.iter().any(|d| d.name == "project_doc_index") {
-            defs.push(crate::project_doc_index::ProjectDocIndex::tool_def());
-        }
         // local_browser (2026-08-10): declared only when the lane is ready.
         if self.browser_ready && !defs.iter().any(|d| d.name == "browser_read") {
             defs.push(crate::local_browser::browser_read_tool_def());
-        }
-        // PDF evidence (2026-08-11): always declared (local store, no
-        // browser dependency).
-        if !defs.iter().any(|d| d.name == "pdf_read") {
-            defs.push(crate::pdf_evidence::pdf_read_tool_def());
         }
         defs
     }
@@ -570,5 +547,32 @@ mod config_tests {
             None,
             "empty read_file table is ignored"
         );
+    }
+
+    /// THIN-HARNESS-REDESIGN §4.6 审查处理 (2026-08-27)：run_terminal_cmd
+    /// 的分层超时配置——`timeout_secs` / `max_timeout_secs` 均为 900s（缺省
+    /// 命令超时与模型可传上限），`enabled_background` 保持禁用；配置键名与
+    /// BashParams serde 字段一致（未知键静默 no-op，必须逐字匹配）。
+    #[test]
+    fn run_terminal_cmd_params_raise_layered_timeout_to_900s() {
+        let params = run_terminal_cmd_tool_params().expect("params present");
+        assert_eq!(
+            params.get("enabled_background"),
+            Some(&serde_json::Value::Bool(false))
+        );
+        assert_eq!(
+            params.get("timeout_secs"),
+            Some(&serde_json::Value::from(900.0)),
+            "omit-default command timeout raised to 900s"
+        );
+        assert_eq!(
+            params.get("max_timeout_secs"),
+            Some(&serde_json::Value::from(900.0)),
+            "model-passed timeout ceiling raised to 900s"
+        );
+        // 键名逐字匹配 BashParams 字段（未知键会被静默忽略，防拼写漂移）。
+        for key in ["enabled_background", "timeout_secs", "max_timeout_secs"] {
+            assert!(params.contains_key(key), "param key {key} present");
+        }
     }
 }

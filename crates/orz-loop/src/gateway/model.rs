@@ -9,10 +9,10 @@
 //! 2026-08-07 live probe (reasoning deltas flow ~0.5s after connect;
 //! content arrives ~30s later on hard tasks; `usage.reasoning_tokens` is
 //! reported per round). `EnabledMax` remains an explicit optional tier for
-//! hard tasks; the stream degradation ladder steps high → low → disabled
-//! (`EnabledLow` = DeepSeek `reasoning_effort: "low"`, the ladder's middle
-//! tier, 设计 §3.6). The empty-final-content retry chain lives in the
-//! transport.
+//! hard tasks. 2026-08-28 THIN-HARNESS-REDESIGN V2 R1：自动降级梯已收窄为
+//! **max/high → low → 明确失败**（空响应链，low 封顶，不自动进 disabled）；
+//! `EnabledLow` = DeepSeek `reasoning_effort: "low"`（设计 §3.3/§3.6）。
+//! The empty-final-content retry chain lives in the transport.
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -76,13 +76,16 @@ impl Default for RetryPolicy {
 }
 
 /// Thinking mode for the provider request (D-6, FIX_PLAN 2026-08-06).
+///
+/// THIN-HARNESS-REDESIGN R1 (2026-08-27, §4.6, 用户裁决)：默认档改为
+/// `EnabledMax`（官方 82.7% 基线即 max effort；复读退化由 OUTPUT-
+/// REPETITION 滚动哈希 + 序列内容门机械兜底，max 输出退化风险已被覆盖）。
+/// `ORZ_THINKING_MODE`（max|high|low|disabled）可在 transport 构造时
+/// 覆盖（A/B 与回退）。降级梯维持 max → disabled。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum ThinkingMode {
     /// DeepSeek `thinking: {type: "enabled"}` + `reasoning_effort: "high"`
-    /// (official harness default — 2026-08-20 修订, ADR-0010 §14.35 第 5
-    /// 项: 默认档 max → high; the degradation ladder steps high → low →
-    /// disabled). Default.
-    #[default]
+    /// (the ladder's upper tier — kept for A/B comparison).
     EnabledHigh,
     /// DeepSeek `thinking: {type: "enabled"}` + `reasoning_effort: "low"`
     /// (the ladder's middle tier — 方案 B + 中间档: degradation keeps a
@@ -90,9 +93,10 @@ pub enum ThinkingMode {
     /// fast-answer mode).
     EnabledLow,
     /// DeepSeek `thinking: {type: "enabled"}` + `reasoning_effort: "max"`
-    /// (explicit optional tier for hard tasks — S4-validated baseline,
-    /// still sentinel-protected; on guard hits / empty-chain exhaustion it
-    /// degrades straight to `Disabled`, keeping the validated max path).
+    /// (R1 default — the official 82.7% baseline workpoint; sentinel-
+    /// protected, on guard hits / empty-chain exhaustion it degrades
+    /// straight to `Disabled`).
+    #[default]
     EnabledMax,
     /// DeepSeek `thinking: {type: "disabled"}` — all output routed to
     /// `content` (the P2-era mitigation; final degradation tier, kept for
@@ -110,7 +114,8 @@ pub struct ModelConfig {
     pub max_tokens: u32,
     /// Retry/timeout policy (D-7). Defaults are the decided values.
     pub retry: RetryPolicy,
-    /// Thinking policy (D-6). Defaults to `EnabledHigh` (官方默认档).
+    /// Thinking policy (D-6). R1 default = `EnabledMax`（用户裁决），
+    /// `ORZ_THINKING_MODE` env 可覆盖。
     pub thinking: ThinkingMode,
 }
 

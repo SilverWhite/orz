@@ -42,7 +42,8 @@ use crate::agent_loop::{
 };
 use crate::agents::{MainAgent, RetrievalSubagent, SubagentRole};
 use crate::blackboard::{
-    ActionOrder, ActionRegistration, ActionResult, EditRecord, SharedBlackboard, ToolActionRecord,
+    ActionOrder, ActionRegistration, ActionResult, EditRecord, ExternalRetSection,
+    InternalRetSection, SharedBlackboard, ToolActionRecord,
 };
 use crate::console::{
     ActionExecutor, ActionKind, CODE_BUDGET_INSUFFICIENT, CODE_CONTENT_ANCHOR_MISMATCH,
@@ -173,6 +174,40 @@ pub fn fold_tail_tokens_override() -> Option<u64> {
 /// mutation): trimmed, positive integer; absent/invalid/zero → None.
 fn parse_fold_tail_tokens(s: &str) -> Option<u64> {
     s.trim().parse().ok().filter(|v| *v > 0)
+}
+
+/// THIN-HARNESS-REDESIGN R2a (2026-08-27, §4.4): 检索派发结果回传通道——
+/// `blackboard`（默认）= 主代理工具结果只回指针摘要（全文保留在
+/// internal_ret / external_ret 黑板分区与 journal，留痕不变），需要时模型
+/// 用 `blackboard_read section=internal_ret|external_ret` 按需拉取；
+/// `inline` = 保留旧行为（子代理全文回传主对话），作 A/B 与回退通道，两个
+/// 施工轮后若零命中则物理删除 parse 路径及其测试（§4.4）。env
+/// `ORZ_RETRIEVAL_RESULT_CHANNEL` 可覆盖；缺失/无效值回退 `blackboard`
+/// （fail-safe——指针摘要永不比全文更膨胀）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum RetrievalResultChannel {
+    /// 指针摘要回传（默认，PUSH → PULL）。
+    Blackboard,
+    /// 全文回传（旧行为，A/B 与回退）。
+    Inline,
+}
+
+/// Environment override for the retrieval result channel
+/// (`ORZ_RETRIEVAL_RESULT_CHANNEL=blackboard|inline`).
+pub(crate) const RETRIEVAL_RESULT_CHANNEL_ENV: &str = "ORZ_RETRIEVAL_RESULT_CHANNEL";
+
+/// Resolve the retrieval result channel from env (missing/invalid →
+/// `Blackboard`). Pure function of process env, following the
+/// `ORZ_ORIENTATION_THRESHOLD` / `ORZ_THINKING_MODE` override pattern.
+pub(crate) fn retrieval_result_channel_from_env() -> RetrievalResultChannel {
+    match std::env::var(RETRIEVAL_RESULT_CHANNEL_ENV)
+        .ok()
+        .as_deref()
+        .map(str::trim)
+    {
+        Some("inline") => RetrievalResultChannel::Inline,
+        _ => RetrievalResultChannel::Blackboard,
+    }
 }
 
 /// FUS-LEDGER-FOLD-BRIDGE (2026-08-19, ADR-0010 §14.32 / 设计 §3.6): 折叠后
@@ -2358,37 +2393,40 @@ impl AgentLoopController {
         }
     }
 
-    /// The host-owned `run_tests` ToolDef — declared by the work-tool
-    /// projection when the probe finds a test runner (P0-A step 3/5).
-    fn run_tests_tool_def() -> ToolDef {
-        ToolDef {
-            name: "run_tests".to_string(),
-            description: "Run the task's hidden test suite and return \
-                 stdout/stderr/exit code. Use this to verify your \
-                 implementation — the test files are NOT visible to you, \
-                 only the run result. No arguments."
-                .to_string(),
-            parameters: serde_json::json!({"type": "object", "properties": {}}),
-        }
-    }
-
     /// P0-A-2 (design §4 v0.2): rebuild the model-visible list projection
     /// from the base registry list + the CURRENT probe snapshot:
     /// 探针完整集 ∩ 会话声明集 + 非工作工具 — names only, no status
     /// annotations. Faces A/C are revoked: every work tool is removed
     /// unless its probe is complete, even when the registry declares it.
-    /// `run_tests` is host-owned: declared when its probe is complete (at
-    /// most once); registry-absent tools are never invented.
+    /// THIN-HARNESS-REDESIGN R1 (2026-08-27, §4.1): `run_tests` 从主代理
+    /// 声明面删除（bash 可达；官方验证独立于 agent），不再按探针补充。
+    /// 其余工作工具仍按探针完整集 ∩ 会话声明集投影；registry-absent tools
+    /// 永不发明。
+    ///
+    /// R1 封存/删除工具：无论 registry/探针如何声明，主代理面一律不出现
+    /// （接口封存——代码模块保留，从本表移除名称即配置恢复；plan_write
+    /// 刻意不在本表——休眠 plan_first 门路径启用时仍需声明）。
+    pub(crate) const R1_SEALED_MAIN_TOOLS: &[&str] = &[
+        // 边界三项（§4.1 边界项）。
+        "todo_write",
+        "update_goal",
+        "compaction_whitelist_add",
+        // 删除项（§4.1 删除表）。
+        "list_dir",
+        "run_tests",
+        "search_tool",
+        "project_doc_index",
+        "pdf_read",
+        "retrieval_disposition",
+        "retrieve_project_docs",
+    ];
+
     pub(crate) fn project_main_agent_tool_defs(
         base: &[ToolDef],
         snapshot: &crate::tool_probe::ToolProbeSnapshot,
     ) -> Vec<ToolDef> {
         let mut tool_defs = base.to_vec();
-        if snapshot.complete.iter().any(|t| t == "run_tests")
-            && !tool_defs.iter().any(|t| t.name == "run_tests")
-        {
-            tool_defs.push(Self::run_tests_tool_def());
-        }
+        tool_defs.retain(|t| !Self::R1_SEALED_MAIN_TOOLS.contains(&t.name.as_str()));
         tool_defs.retain(|t| {
             !crate::tool_probe::is_main_agent_work_tool(&t.name)
                 || snapshot.complete.iter().any(|c| c == &t.name)
@@ -3532,6 +3570,29 @@ impl AgentLoopController {
         self
     }
 
+    /// THIN-HARNESS-REDESIGN R2a 审查处理 (P3-1, 2026-08-27)：恢复时重建
+    /// 检索分区——PULL 模式下子代理全文不进主对话，跨 run 后分区是模型
+    /// 唯一可追溯视图；ACP 会话重启后黑板为全新内存态，由 sidecar 快照
+    /// 携带的 internal_ret / external_ret 经本 builder 灌回。`None` =
+    /// 该会话尚无对应分区（保持空分区）。单写者纪律：灌回发生在 run 外
+    /// （会话恢复边界），run 内仍由派发路径独占写入。
+    pub fn with_retrieval_partitions(
+        self,
+        internal: Option<InternalRetSection>,
+        external: Option<ExternalRetSection>,
+    ) -> Self {
+        if internal.is_some() || external.is_some() {
+            let mut w = self.blackboard.write();
+            if let Some(section) = internal {
+                w.internal_ret = section;
+            }
+            if let Some(section) = external {
+                w.external_ret = section;
+            }
+        }
+        self
+    }
+
     /// GAP-RETRIEVAL-TOOLS (2026-08-10): journal one `retrieval_activation_
     /// restored` event per seeded awaiting-disposition activation — the
     /// parent disposition may then close/continue it across runs (the
@@ -4272,6 +4333,57 @@ impl AgentLoopController {
         epoch: Option<u64>,
         receipt_id: Option<&str>,
     ) -> String {
+        // THIN-HARNESS-REDESIGN R2a (2026-08-27, §4.4): 检索分区按需拉取
+        // （PUSH → PULL）。live-only——检索结果从不进 epoch 快照（全文
+        // 走 journal + retrieval-results 存档），带 epoch 读取 = 显式报错
+        // （fail loud，同 session 面纪律）；receipt_id 仅 actions 点读语义，
+        // 组合 = 显式报错。`since` 同 plan/exec/actions 处理：检索分区无
+        // 条目级时间戳，忽略（不缩小读取范围）。
+        if section == "internal_ret" || section == "external_ret" {
+            if epoch.is_some() {
+                return format!(
+                    "blackboard_read {section} with epoch is not supported — \
+                     retrieval partitions are live-only (results ride the \
+                     journal + retrieval-results archive); omit epoch to \
+                     read the live section"
+                );
+            }
+            if receipt_id.is_some() {
+                return format!(
+                    "receipt_id 仅与 section=actions 组合有效（点读结果栏单条 \
+                     receipt）；当前 section={section} 不支持 receipt_id"
+                );
+            }
+            let bb = self.blackboard.read();
+            return crate::epoch::render_retrieval_section(
+                section,
+                &bb.internal_ret,
+                &bb.external_ret,
+            );
+        }
+        // R2 半助理层（§4.5）：实体状态分区——process/file/environment
+        // 稳定视图（摘要清单 + 总上限），live-only（不进 epoch 快照），
+        // 单实体详情（含最近失败诊断）经 `diagnostics.diagnose` 点读。
+        if section == "entities" {
+            if epoch.is_some() {
+                return format!(
+                    "blackboard_read {section} with epoch is not supported — \
+                     entities is a live-only partition (half-assistant entity \
+                     state rides the run lifecycle); omit epoch to read the \
+                     live section"
+                );
+            }
+            if receipt_id.is_some() {
+                return format!(
+                    "receipt_id 仅与 section=actions 组合有效（点读结果栏单条 \
+                     receipt）；当前 section={section} 不支持 receipt_id"
+                );
+            }
+            let bb = self.blackboard.read();
+            return bb
+                .entities
+                .render_text(crate::entities::ENTITIES_SUMMARY_MAX);
+        }
         if let Some(epoch) = epoch {
             let Some(dir) = &self.blackboard_archive_dir else {
                 return format!(
@@ -4735,52 +4847,24 @@ impl AgentLoopController {
         // 2026-08-08 blackboard partition (A3): `blackboard_read` is the
         // model's ON-DEMAND window into the blackboard — declared whenever
         // the loop runs (the blackboard is always live). The model pulls a
-        // partition (plan / edits / tool_actions / exec) when it needs to
-        // look back; no full render is ever injected uninvited (zero
-        // dilution when not called). ReadOnly risk class → auto-allows
-        // under every policy (Interactive/ReadOnly/Benchmark).
-        // A6 §8 C.2 (2026-08-08): `compaction_whitelist_add` — the model's
-        // tool to mark task facts (background, must-know constraints) that
-        // must survive context compaction. Declared whenever the loop runs
-        // (ReadOnly class → auto-allowed under every policy); the WINDOW is
-        // enforced at call time: only the FIRST tool batch may write.
-        // 2026-08-12 裁决：grill/ReadOnly 的只读保证由 gate 承担（ReadOnly
-        // policy 执行层拒非读），声明面不再过滤——grill 守卫移除。
-        if !tool_defs
-            .iter()
-            .any(|t| t.name == "compaction_whitelist_add")
-        {
-            tool_defs.push(ToolDef {
-                name: "compaction_whitelist_add".to_string(),
-                description: "Write an entry to the context-compaction \
-                     whitelist — task background facts and must-know \
-                     constraints you want to survive compaction. The \
-                     content is NOT compressed, stays in the conversation \
-                     for the whole run, and is archived to .gsa (retained \
-                     7 days). Only usable during the FIRST tool batch \
-                     (first round); later calls are refused. Read the key \
-                     files within this batch BEFORE writing — the whitelist \
-                     holds discovered objective facts, not plans, guesses \
-                     or transient state. `content` is the fact to preserve \
-                     (plain text, concise)."
-                    .to_string(),
-                parameters: serde_json::json!({
-                    "type": "object",
-                    "properties": {
-                        "content": {
-                            "type": "string",
-                            "description": "The task fact to preserve.",
-                        },
-                    },
-                    "required": ["content"],
-                }),
-            });
-        }
+        // partition (plan / edits / tool_actions / exec / actions / session /
+        // internal_ret / external_ret / entities) when it needs to look
+        // back; no full
+        // render is ever injected uninvited (zero dilution when not called).
+        // ReadOnly risk class → auto-allows under every policy
+        // (Interactive/ReadOnly/Benchmark).
+        // THIN-HARNESS-REDESIGN R1 (2026-08-27, §4.1 边界项):
+        // `compaction_whitelist_add` 接口封存——不再向模型声明；调用由
+        // `run_host_tool_with_timeout` 的 sealed-tool 窄门结构化拒绝
+        // （代码与写盘链路保留为独立模块，A/B 观察后可经配置恢复）。
         if !tool_defs.iter().any(|t| t.name == "blackboard_read") {
             tool_defs.push(ToolDef {
                 name: "blackboard_read".to_string(),
                 description: "Read a blackboard partition. `section` is one \
-                     of: plan (current goal + step statuses; each step line \
+                     of: entities (R2 half-assistant entity states — \
+                     process/file/environment stable views with anchors and \
+                     availability; 黑板=框架状态区，分区保存实体状态/检索结果/\
+                     审计留痕), plan (current goal + step statuses; each step line \
                      starts with its id: `- [状态] <step_id>: <目标> ...` — \
                      use that id for the step_id binding when writing console \
                      orders), edits (file-edit records: file, line-range \
@@ -4793,13 +4877,18 @@ impl AgentLoopController {
                      (live tool-round budget — used/remaining — plus the \
                      resident 状态行; read it on demand to gauge how many \
                      tool rounds are left; the controller enforces the cap \
-                     mechanically either way). \
+                     mechanically either way), internal_ret / external_ret \
+                     (live retrieval partitions — the subagent's full result \
+                     text, parsed entries and source ledger; read them when a \
+                     web_search / web_fetch / retrieve_project_docs dispatch \
+                     returns a pointer summary instead of inline text). \
                      Optional `since_timestamp` (RFC 3339, e.g. the timestamp \
                      this tool returned earlier) filters the edits / tool_actions \
                      entries to those at or after that time. Optional `epoch` \
                      (integer) reads that plan-epoch ARCHIVE instead of the \
                      live view — use it to recall a previous task's plan/edits \
-                     after a new plan epoch rotated the blackboard. Optional \
+                     after a new plan epoch rotated the blackboard (retrieval \
+                     partitions are live-only and reject `epoch`). Optional \
                      `receipt_id` (an order_id from the actions results board, \
                      e.g. ORD-000012) point-reads ONE result receipt's full \
                      response/error content (bounded ≤8K chars) that the slim \
@@ -4815,7 +4904,17 @@ impl AgentLoopController {
                     "properties": {
                         "section": {
                             "type": "string",
-                            "enum": ["plan", "edits", "tool_actions", "exec", "actions", "session"],
+                            "enum": [
+                                "plan",
+                                "edits",
+                                "tool_actions",
+                                "exec",
+                                "actions",
+                                "session",
+                                "internal_ret",
+                                "external_ret",
+                                "entities",
+                            ],
                         },
                         "since_timestamp": {"type": "string"},
                         "epoch": {
@@ -4975,86 +5074,16 @@ impl AgentLoopController {
                 }),
             });
         }
-        // M4 (GAP-SUBAGENT-RUNTIME 2026-08-10): the parent's structured
-        // disposition control tool (ADR-0010 §4.4 — the ONLY way a parent
-        // submits close/continue; never guessed from free text). Declared
-        // every turn (stable prefix cache — never added/removed by state);
-        // call-time refused without a pending activation. Grill 下由 gate
-        // 拒绝（2026-08-12 裁决：声明面不承担只读保证）；subagent
-        // projection strips it (control tool is main-only).
-        if !tool_defs.iter().any(|t| t.name == "retrieval_disposition") {
-            tool_defs.push(ToolDef {
-                name: "retrieval_disposition".to_string(),
-                description: "Submit a structured parent disposition for a \
-                     retrieval subagent activation: close (retrieval task \
-                     complete) or continue(requirement_delta) (retrieval \
-                     must continue with the given delta). Call it when a \
-                     retrieval tool result ends with an `[ASSESSMENT ...]` \
-                     line — that assessment awaits your disposition."
-                    .to_string(),
-                parameters: serde_json::json!({
-                    "type": "object",
-                    "properties": {
-                        "role": {
-                            "type": "string",
-                            "enum": ["internal_retrieval", "external_retrieval"],
-                        },
-                        "decision": {
-                            "type": "string",
-                            "enum": ["close", "continue"],
-                        },
-                        "requirement_delta": {
-                            "type": "string",
-                            "description": "decision=continue 时必填——下一轮检索需求",
-                        },
-                    },
-                    "required": ["role", "decision"],
-                }),
-            });
-        }
-        // RETRIEVAL-SUBAGENT-WIRING (2026-08-25, ADR-0010 §14.40)：内部
-        // 子代理触发面——结构化检索外包。主代理点读（read_file/grep/
-        // search_tool）保留；多文件/跨目录调研、需要聚合结论的任务用
-        // `retrieve_project_docs` 打包派发：relay 路由到内部子代理，子代理
-        // 多轮检索后只回 [DOC] 结构化结果 + source ledger，主对话不膨胀
-        // （§3.7 条 8：隔离上下文、保留原始来源）。声明即路由；mode=off
-        // 时被下方 is_retrieval_dispatch_name 过滤剔除。
-        if !tool_defs.iter().any(|t| t.name == "retrieve_project_docs") {
-            tool_defs.push(ToolDef {
-                name: "retrieve_project_docs".to_string(),
-                description: "Dispatch a structured project/workspace \
-                     retrieval task to the internal retrieval subagent. \
-                     Use for multi-file / cross-directory research that \
-                     needs aggregation: the subagent reads, searches and \
-                     indexes the workspace, then returns a structured \
-                     result ([DOC] lines + source ledger) without \
-                     bloating this conversation. For single-file reads or \
-                     quick greps, use read_file / grep / search_tool \
-                     directly. `query` is the research question; optional \
-                     `scope` narrows the search to a directory or path \
-                     prefix."
-                    .to_string(),
-                parameters: serde_json::json!({
-                    "type": "object",
-                    "properties": {
-                        "query": {
-                            "type": "string",
-                            "description": "The research question / retrieval task.",
-                        },
-                        "scope": {
-                            "type": "string",
-                            "description": "Optional directory or path prefix to narrow the search.",
-                        },
-                        "max_results": {
-                            "type": "integer",
-                            "minimum": 1,
-                            "description": "Optional result cap (default 10).",
-                        },
-                    },
-                    "required": ["query"],
-                }),
-            });
-        }
+        // THIN-HARNESS-REDESIGN R1 (2026-08-27, §4.1): `retrieval_disposition`
+        // 与 `retrieve_project_docs` 从主代理声明面删除——检索子代理结果
+        // 改为每次调用即闭环（§4.4；见 run_retrieval_subagent），内部检索
+        // 子代理随主面下线（主代理对项目文档直接用 grep/read/search_replace）。
+        // 底层 handler/relay 路由保留为休眠模块（审查 P2-2 收口：正常主面
+        // 不声明，但并非「不可达」——跨 run 恢复的 AwaitingDisposition
+        // 激活仍经 retrieval_disposition/retrieve_project_docs 延续，见
+        // run_retrieval_subagent 与 handle_parent_disposition；幻觉调用内部
+        // lane 会产生一次子代理运行（成本已评估），R3 裁决彻底封死/物理
+        // 删除）。
         // GAP-RETRIEVAL-TOOLS (2026-08-10): mode=off removes the retrieval
         // dispatch family from the model-visible declarations (ADR-0010
         // §3.7.1 — unauthenticated retrieval starts from off; §3.5.2
@@ -5484,15 +5513,14 @@ impl AgentLoopController {
     /// consts cross-checked by the verifier) and inject the orientation block
     /// as a User message so the next generate answers it. `None` orientation
     /// state is a no-op (grill / one-shot CLI).
-    /// ORZ-ORIENTATION-FORCED-TEMPLATE (2026-08-15, ADR-0010 §14.16): on the
-    /// MAIN lane (`force_template_round=true`) the commit is DEFERRED — the
-    /// caller stores the returned record as the pending checkpoint and calls
-    /// `commit_fire` after the forced-template round completes (accepted or
-    /// degraded, §2.4); the retrieval lanes keep the legacy commit-at-fire
-    /// behavior (检索车道不变). Fires at most once per call — the
-    /// commit-then-reset (legacy lanes) / pending-gate (main lane) guarantees
-    /// the two injection points (post-tool-batch gap + loop-top) never
-    /// double-fire.
+    /// ORZ-ORIENTATION-FORCED-TEMPLATE (2026-08-15, ADR-0010 §14.16):
+    /// THIN-HARNESS-REDESIGN R1 (2026-08-27, §4.3) 强制模板轮变体退役——
+    /// 主车道与检索车道统一 fire-and-continue（`force_template_round`
+    /// 恒为 false：fire 即 commit、只注入简短 [ORIENTATION] 块；终答前
+    /// 方向核查由 COUNTEREXAMPLE_GATE 承担）。参数保留为休眠路径
+    /// （历史/回退），DC 的强制模板轮由 `maybe_fire_dc` 独立承载。
+    /// Fires at most once per call — commit-then-reset guarantees the two
+    /// injection points (post-tool-batch gap + loop-top) never double-fire.
     /// Review P2-2 (2026-08-10): build → journal → inject → COMMIT — a
     /// journal-write failure propagates before the counter is reset, so a
     /// failed run never persists a reset-but-never-fired counter.
@@ -5772,11 +5800,14 @@ impl AgentLoopController {
         let (mut act, task_goal) = {
             let mut reg = self.activations.lock().unwrap();
             match reg.states.get(&role) {
-                Some(_) => {
+                Some(a) if a.status == ActivationStatus::Active => {
                     // Same activation, new task iteration. M4: a `continue`
                     // re-entry's requirement_delta IS the new task goal
                     // (§3.3: the next retrieval loop runs under the new
                     // contract); otherwise the new query is the task.
+                    // THIN-HARNESS-REDESIGN R1 (§4.4): with auto-close this
+                    // branch is dormant in the production flow (disposition
+                    // is gone) — retained for the restore/dormant paths.
                     let mut a = reg.states.remove(&role).unwrap();
                     let task_goal = a.next_goal.take().unwrap_or_else(|| goal.clone());
                     a.conversation.push(Message {
@@ -5788,7 +5819,12 @@ impl AgentLoopController {
                     });
                     (a, task_goal)
                 }
-                None => {
+                // THIN-HARNESS-REDESIGN R1 (§4.4): 每次调用即闭环——已关闭
+                // 的激活是终态（verifier：同 activation 首条 close 后不再
+                // 允许 assessment/close），后续派发一律新建激活（新预算、
+                // 新候选计数、contract_revision 归 0）。`None` 与
+                // Closed 共用同一 fresh 分支。
+                Some(_) | None => {
                     let seq = reg.next_seq.entry(role).or_insert(0);
                     let activation_id =
                         format!("retrieval-{}-{}-{:02}", role.as_str(), session8, *seq);
@@ -6037,12 +6073,47 @@ impl AgentLoopController {
                     &goal,
                 );
                 *self.next_source_seq.lock().unwrap() = source_seq;
+                // THIN-HARNESS-REDESIGN R2a 审查处理 (P2-2)：分区 ledger =
+                // 结构化 ledger 投影（source_id + 标题/URL）——机械证据以
+                // 模型可读形态进分区；internal/external 同口径。P2-3：
+                // write_section 全量覆盖，指针摘要计数与分区内容一一对应。
+                let ledger_projection: Vec<String> = committed.payload["source_ledger"]
+                    .as_array()
+                    .map(|entries| {
+                        entries
+                            .iter()
+                            .filter_map(|e| {
+                                let id = e
+                                    .get("source_id")
+                                    .and_then(|v| v.as_str())
+                                    .unwrap_or_default();
+                                let title = e
+                                    .get("source_title")
+                                    .and_then(|v| v.as_str())
+                                    .unwrap_or_default();
+                                let url = e
+                                    .get("source_url_or_ref")
+                                    .and_then(|v| v.as_str())
+                                    .unwrap_or_default();
+                                let label = if title.is_empty() { url } else { title };
+                                if label.is_empty() {
+                                    None
+                                } else if !url.is_empty() && url != title {
+                                    Some(format!("{id} {label} ({url})"))
+                                } else {
+                                    Some(format!("{id} {label}"))
+                                }
+                            })
+                            .collect()
+                    })
+                    .unwrap_or_default();
                 crate::agents::retrieval::write_section(
                     role,
                     &self.blackboard,
                     output.clone(),
                     docs,
                     sources,
+                    ledger_projection,
                 );
                 writer
                     .record(
@@ -6121,19 +6192,6 @@ impl AgentLoopController {
                         a.result_archive_ref = artifact_ref;
                     }
                 }
-                // M4: the activation moves to awaiting_parent_disposition —
-                // the assessment context a disposition must bind (§4.4).
-                {
-                    let mut reg = self.activations.lock().unwrap();
-                    if let Some(a) = reg.states.get_mut(&role) {
-                        a.status = ActivationStatus::AwaitingDisposition;
-                        a.pending = Some(PendingDisposition {
-                            assessment_id: assessment_id.clone(),
-                            expected_contract_revision: contract_revision,
-                            decided: None,
-                        });
-                    }
-                }
                 // source_categories — the mechanical source-type set of the
                 // committed ledger.
                 let categories: Vec<String> = committed.payload["source_ledger"]
@@ -6187,17 +6245,51 @@ impl AgentLoopController {
                     )
                     .await?;
                 }
-                // The model must know the assessment exists and how to
-                // dispose it (ADR-0010 §4.4: the parent submits the
-                // structured disposition via the control tool — never
-                // guessed from free text).
-                let output = format!(
-                    "{output}\n[ASSESSMENT {assessment_id} rev {contract_revision} \
-                     status=indeterminate —— 提交 retrieval_disposition \
-                     (close|continue) 以关闭或继续该检索激活]"
-                );
+                // THIN-HARNESS-REDESIGN R1 (2026-08-27, §4.1/§4.4): 每次
+                // 调用即闭环——结果形成并机械评估后立即关闭激活
+                // （terminal_reason=auto_close），不再进入 AwaitingDisposition、
+                // 不再向主代理回传 [ASSESSMENT] 行、不再要求
+                // retrieval_disposition close/continue 往返（父代理需要继续
+                // 检索时直接再调 web 工具，新激活即开）。close_activation
+                // 幂等——budget_exhausted 已关闭时本调用为空操作。
+                self.close_activation(
+                    writer,
+                    role,
+                    "auto_close",
+                    Some(&assessment_id),
+                    Some(&result_digest),
+                )
+                .await?;
+                // THIN-HARNESS-REDESIGN R2a (2026-08-27, §4.4): 检索派发
+                // 结果通道——`blackboard`（默认）：主代理工具结果只回指针
+                // 摘要（来源/结论计数 + 分区名 + 条目上限），子代理全文
+                // 保留在 internal_ret / external_ret 分区与 journal /
+                // retrieval-results 存档（留痕不变），需要时用
+                // `blackboard_read section=...` 拉取；`inline`：保留旧
+                // 行为（全文回传），供 A/B 与回退。`output` 变量仍被
+                // write_section 与 build_structured_result 消费，这里
+                // 只决定回传主对话的文本。
+                let tool_output = match retrieval_result_channel_from_env() {
+                    RetrievalResultChannel::Inline => output,
+                    RetrievalResultChannel::Blackboard => {
+                        let total_sources = committed.source_counts["total"].as_u64().unwrap_or(0);
+                        let conclusion_count = committed.payload["organized_response"]["sections"]
+                            .as_array()
+                            .map(|a| a.len())
+                            .unwrap_or(0);
+                        format!(
+                            "{}: 已写入 blackboard {}（{} 来源 / {} 结论，条目上限 8K）；\
+                             需要详情时用 blackboard_read section={} 读取",
+                            tc.name,
+                            role.section_name(),
+                            total_sources,
+                            conclusion_count,
+                            role.section_name(),
+                        )
+                    }
+                };
                 ToolResult {
-                    output,
+                    output: tool_output,
                     exit_code: Some(0),
                     output_encoding: None,
                     structured: None,
@@ -7374,6 +7466,7 @@ impl AgentLoopController {
             workspace_trust,
             tool_rounds,
             heartbeat,
+            trace_id: trace.trace_id.clone(),
         };
         // P0-C S3: 控制台内部动作（assistant.trace / workspace.run_script）
         // 不经 run_host_tool——审计事件面显式补 ToolStarted/ToolCompleted
@@ -7398,6 +7491,9 @@ impl AgentLoopController {
                 .await?;
         }
         let mut consumed = 0u32;
+        // R2 半助理层（§4.5）：实体注册表快照——短锁克隆、锁不跨 await，
+        // 供 `diagnostics.diagnose` 内部动作点读失败对象实体的最近诊断。
+        let entities_snapshot = self.blackboard.read().entities.clone();
         let result = issue_action_inner(
             &self.console_registry,
             &executor,
@@ -7406,6 +7502,7 @@ impl AgentLoopController {
             &mut trace,
             &call_id,
             None,
+            Some(&entities_snapshot),
             &mut consumed,
         )
         .await;
@@ -8012,6 +8109,12 @@ impl AgentLoopController {
     /// controller 侧无反馈标记的策略拒绝（ACAF/模式门）映射为
     /// `ExecuteError::PolicyDenied`，`issue_action` 据此产出
     /// `step=policy` / `code=policy_denied`。
+    ///
+    /// R2 半助理层（THIN-HARNESS-REDESIGN V2 §4.2/§4.5）：执行失败
+    /// （非零退出 / 超时 / 目标缺失 / 工具不可用）自动派发失败诊断——
+    /// 结构化签名词典匹配 → 调用物状态检查 → ≤2KB 极简记录 + 日志指针；
+    /// 同时登记/更新 process / file / environment 实体（半助理层执行
+    /// 工具时登记/更新；模型经 blackboard_read section=entities 点读）。
     #[allow(clippy::too_many_arguments)] // mirrors run_host_tool's shared-loop contract
     async fn run_console_target(
         &self,
@@ -8025,6 +8128,7 @@ impl AgentLoopController {
         target_tool: &str,
         arguments: &serde_json::Value,
         call_id: &str,
+        trace_id: &str,
     ) -> Result<ToolResult, crate::console::ExecuteError> {
         let tc = ToolCall {
             name: target_tool.to_string(),
@@ -8058,31 +8162,203 @@ impl AgentLoopController {
         {
             Ok(pair) => pair,
             Err(e) => {
+                // R2 失败诊断：执行委托错误（journal/model/session 等，
+                // 非工具结果）→ 极简诊断（error_kind=ExecutionFailed），
+                // 附着到环境实体。
+                self.register_environment_entity();
+                let record = crate::diagnostics::diagnose_failure(
+                    crate::diagnostics::DiagnosticDomain::Environment,
+                    arguments,
+                    None,
+                    false,
+                    None,
+                    Some(crate::diagnostics::ErrorKind::ExecutionFailed),
+                    None,
+                    None,
+                    None,
+                    &e.to_string(),
+                    trace_id,
+                );
+                self.blackboard
+                    .write()
+                    .entities
+                    .set_diagnostic(&crate::entities::environment_entity_id(), record.clone());
                 return Err(crate::console::ExecuteError::ExecutionFailed {
                     message: e.to_string(),
-                    detail: None,
+                    detail: Some(serde_json::json!({ "diagnostic": record })),
                 });
             }
         };
-        // P0-C S3 前置 (2026-08-15, P1-2 定案): the console adapter classifies
-        // policy refusals ONLY from the structured signal — the old
-        // stable-output-prefix judgment (`console_policy_refusal`) is
-        // retired and the failure text can never drive the step. The
-        // `PolicyFeedback` tuple element is intentionally discarded in the
-        // console path (issuance is post-tool-batch, and the optional
-        // denial-breaker unification for ACAF/mode gates is not
-        // implemented); it is never a classification signal here.
-        if let Some(denial) = &result.policy_denial {
-            return Err(crate::console::ExecuteError::PolicyDenied {
-                message: result.output,
+        // R2 半助理层：环境实体登记（shell 平台 + 工具可用性，探针快照
+        // 机械来源）+ 执行目标实体登记（file 锚点 / process 状态）。
+        self.register_environment_entity();
+        let entity_id = self
+            .register_entities_for_tool(target_tool, arguments, &result)
+            .await;
+        let failed =
+            result.policy_denial.is_some() || result.timed_out || result.exit_code != Some(0);
+        if failed {
+            // P0-C S3 前置 (2026-08-15, P1-2 定案): the console adapter
+            // classifies policy refusals ONLY from the structured signal —
+            // the old stable-output-prefix judgment is retired. R2 诊断域：
+            // 策略拒绝 → environment（tool_unavailable）；其余按工具域。
+            let diag_domain = if result.policy_denial.is_some() {
+                crate::diagnostics::DiagnosticDomain::Environment
+            } else {
+                Self::tool_diagnostic_domain(target_tool)
+            };
+            let record = crate::diagnostics::diagnose_failure(
+                diag_domain,
+                arguments,
+                result.exit_code,
+                result.timed_out,
+                result.output_encoding.as_deref(),
+                result.tool_error_kind,
+                result.policy_denial.as_ref().map(|d| d.source.as_str()),
+                result.policy_denial.as_ref().map(|d| d.code.as_str()),
+                result.policy_denial.as_ref().map(|d| d.reason.as_str()),
+                &result.output,
+                trace_id,
+            );
+            // 失败诊断附着到失败对象实体（file/process 优先；无目标实体
+            // 时落到环境实体兜底）。
+            let target_entity = entity_id
+                .clone()
+                .unwrap_or_else(crate::entities::environment_entity_id);
+            self.blackboard
+                .write()
+                .entities
+                .set_diagnostic(&target_entity, record.clone());
+            if let Some(denial) = &result.policy_denial {
+                return Err(crate::console::ExecuteError::PolicyDenied {
+                    message: result.output.clone(),
+                    detail: Some(serde_json::json!({
+                        "source": denial.source.as_str(),
+                        "code": denial.code,
+                        "reason": denial.reason,
+                        "diagnostic": record,
+                    })),
+                });
+            }
+            if result.timed_out {
+                return Err(crate::console::ExecuteError::TimedOut {
+                    message: format!(
+                        "target tool {target_tool} timed out at the host — process tree killed"
+                    ),
+                    detail: Some(serde_json::json!({ "diagnostic": record })),
+                });
+            }
+            let exit_detail = match result.exit_code {
+                None => "no exit code (actions require an explicit success exit code)".to_string(),
+                Some(code) => format!("non-zero exit code {code}"),
+            };
+            return Err(crate::console::ExecuteError::ExecutionFailed {
+                message: format!("target tool {exit_detail}"),
                 detail: Some(serde_json::json!({
-                    "source": denial.source.as_str(),
-                    "code": denial.code,
-                    "reason": denial.reason,
+                    "target_tool": target_tool,
+                    "exit_code": result.exit_code,
+                    "output": crate::console::truncate(&result.output, 4000),
+                    "diagnostic": record,
                 })),
             });
         }
         Ok(result)
+    }
+
+    /// R2：工具 → 诊断域映射（file 域 / terminal 域 / process 域 /
+    /// environment 域；结构化签名词典分派）。
+    fn tool_diagnostic_domain(tool: &str) -> crate::diagnostics::DiagnosticDomain {
+        use crate::diagnostics::DiagnosticDomain;
+        match tool {
+            "read_file" | "list_dir" | "grep" | "search_replace" => DiagnosticDomain::File,
+            "run_terminal_cmd" => DiagnosticDomain::Terminal,
+            "run_tests" => DiagnosticDomain::Process,
+            _ => DiagnosticDomain::Environment,
+        }
+    }
+
+    /// R2：环境实体登记/更新——shell 平台（结构化，非宿主具体 shell
+    /// 二进制）+ 工具可用性（探针快照机械来源）。每次执行前刷新。
+    fn register_environment_entity(&self) {
+        let shell = if cfg!(windows) { "windows" } else { "unix" };
+        let tools: Vec<String> = self
+            .console_probe_source
+            .lock()
+            .unwrap()
+            .as_ref()
+            .map(|(_, snapshot)| snapshot.complete.clone())
+            .unwrap_or_default();
+        self.blackboard
+            .write()
+            .entities
+            .register_environment(shell, tools, &chrono_utc_now());
+    }
+
+    /// R2：执行目标实体登记——file 域（路径 stat + 锚点 size/mtime/
+    /// sha256 + encoding）与 process 域（exit_code/timed_out）。返回
+    /// 实体 id（无目标实体的工具为 None）。
+    async fn register_entities_for_tool(
+        &self,
+        target_tool: &str,
+        arguments: &serde_json::Value,
+        result: &ToolResult,
+    ) -> Option<String> {
+        match target_tool {
+            "read_file" | "list_dir" | "grep" | "search_replace" => {
+                let path = ["target_file", "file_path", "path", "target_directory"]
+                    .iter()
+                    .find_map(|key| arguments.get(*key).and_then(serde_json::Value::as_str))?;
+                let metadata = tokio::fs::metadata(path).await.ok();
+                let (exists, size, mtime, is_file) = match metadata {
+                    Some(meta) => {
+                        let mtime = meta
+                            .modified()
+                            .ok()
+                            .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                            .map(|d| d.as_secs());
+                        (true, Some(meta.len()), mtime, meta.is_file())
+                    }
+                    None => (false, None, None, false),
+                };
+                // 锚点 sha256：仅对文件（目录跳过，避免无谓 read）且
+                // ≤16MB 计算（确定性、有界；超限记 size/mtime 不记哈希）。
+                let sha256 = if exists
+                    && is_file
+                    && size.is_some_and(|s| s <= crate::entities::FILE_ANCHOR_HASH_MAX)
+                {
+                    tokio::fs::read(path)
+                        .await
+                        .ok()
+                        .map(|bytes| sha256_hex(&bytes))
+                } else {
+                    None
+                };
+                let id = self.blackboard.write().entities.register_file(
+                    path,
+                    exists,
+                    size,
+                    mtime,
+                    sha256,
+                    result.output_encoding.clone(),
+                    &chrono_utc_now(),
+                );
+                Some(id)
+            }
+            "run_terminal_cmd" | "run_tests" => {
+                let command = arguments
+                    .get("command")
+                    .and_then(serde_json::Value::as_str)
+                    .unwrap_or(target_tool);
+                let id = self.blackboard.write().entities.register_process(
+                    command,
+                    result.exit_code,
+                    result.timed_out,
+                    &chrono_utc_now(),
+                );
+                Some(id)
+            }
+            _ => None,
+        }
     }
 
     /// Run a host tool call through the permission and execution gates.
@@ -8268,6 +8544,63 @@ impl AgentLoopController {
                 Some(PolicyFeedback::Denied(DenialKey {
                     tool_name: tc.name.clone(),
                     reason_code: "retired_tool_denied".to_string(),
+                    policy_revision: self
+                        .policy_revision
+                        .load(std::sync::atomic::Ordering::SeqCst),
+                })),
+            ));
+        }
+        // THIN-HARNESS-REDESIGN R1 (2026-08-27, §4.1 边界项/删除项;
+        // 审查 P2-2 收口 2026-08-27): 封存工具调用面窄门——边界三项
+        // `todo_write` / `update_goal` / `compaction_whitelist_add` 与
+        // host 层执行特例 `project_doc_index` / `pdf_read` 均不再向模型
+        // 声明，调用一律结构化拒绝（无 ToolStarted、零副作用；拒绝计入
+        // 连败熔断，与退役工具窄门同反馈形态）。代码与独立模块保留，
+        // 可经配置恢复（A/B 观察后裁决）。`list_dir` / `run_tests` /
+        // `search_tool` 走既有名字路由拒绝（registry 未声明 → unknown
+        // tool；run_tests 休眠执行路径保留，R3 统一裁决）。
+        if matches!(
+            tc.name.as_str(),
+            "todo_write"
+                | "update_goal"
+                | "compaction_whitelist_add"
+                | "project_doc_index"
+                | "pdf_read"
+        ) {
+            let msg = format!(
+                "tool '{}' — 已封存，不再可用（THIN-HARNESS-REDESIGN R1；\
+                 直接调用工作工具即可；代码保留为休眠模块，可经配置恢复）",
+                tc.name,
+            );
+            let mut completed = serde_json::json!({
+                "tool": tc.name,
+                "call_id": tc.call_id,
+                "exit_code": 1,
+                "status": "error",
+                "error": "sealed_tool_denied",
+            });
+            stamp_direct(&mut completed);
+            writer.record(EventType::ToolCompleted, completed).await?;
+            messages.push(Message {
+                role: Role::Tool,
+                content: msg.clone(),
+                tool_call_id: Some(tc.call_id.clone()),
+                tool_calls: Vec::new(),
+                reasoning_content: None,
+            });
+            return Ok((
+                ToolResult {
+                    output: msg,
+                    exit_code: Some(1),
+                    output_encoding: None,
+                    structured: Some(serde_json::json!({
+                        "error": "sealed_tool_denied",
+                    })),
+                    ..Default::default()
+                },
+                Some(PolicyFeedback::Denied(DenialKey {
+                    tool_name: tc.name.clone(),
+                    reason_code: "sealed_tool_denied".to_string(),
                     policy_revision: self
                         .policy_revision
                         .load(std::sync::atomic::Ordering::SeqCst),
@@ -8846,7 +9179,9 @@ impl AgentLoopController {
                 // tail.
                 output: compose_test_output_message(&result),
                 exit_code: result.exit_code,
-                output_encoding: None,
+                // 2026-08-28 全面审查处理：run_tests 特例路径同样透传解码
+                // 阶段（此前只进 journal、结果面丢失；与通用路径对齐）。
+                output_encoding: result.output_encoding.clone(),
                 structured: None,
                 // AGENT-DELIVERY-FLOW (2026-08-23, 设计 §2.3): the run_tests
                 // receipt carries the host-measured workspace delta (the
@@ -9082,7 +9417,8 @@ impl AgentLoopController {
                     None => {
                         let content = format!(
                             "invalid blackboard_read section: {raw} — section 必须 \
-                             是字符串（plan|edits|tool_actions|exec|actions|session）"
+                             是字符串（plan|edits|tool_actions|exec|actions|session|\
+                             internal_ret|external_ret|entities）"
                         );
                         let mut completed = serde_json::json!({
                             "tool": tc.name,
@@ -9397,6 +9733,7 @@ impl AgentLoopController {
                 order_id: format!("ORD-{seq:06}"),
                 action,
                 arguments,
+                target: None,
                 step_id,
                 round: tool_rounds,
                 plan_epoch: self.blackboard.read().plan.plan_epoch,
@@ -10176,10 +10513,27 @@ impl AgentLoopController {
         // The bool tracks execution success vs timeout/tool error: only a
         // successful call resets the denial streak (ADR-0010 §3.5.4);
         // timeout/error are neutral (分开记账 — neither reset nor count).
-        let (mut result, succeeded) = match host
-            .call_tool_with_timeout(&tc.name, tc.arguments.clone(), &tc.call_id, timeout)
-            .await
-        {
+        // THIN-HARNESS-REDESIGN §4.6 审查处理 (2026-08-27, 用户裁定)：通用
+        // 工具执行路径周期心跳打点（run_tests 的 60s 先例）——ORZ_STALL_
+        // TIMEOUT 回落后（默认 360s），合法长命令（编译/训练，工具配置层
+        // 上限已放开到 900s）在工具执行期间每 60s 打点保活；stall 看门狗
+        // 只收模型侧静默挂死（权限等待/重试背压/轮间代码），不再误杀长
+        // 工具。挂死工具仍由工具超时树杀（模型继续），stall 不与工具超时
+        // 等窗竞态（2026-08-08 review P2-1/D2-1 纪律）。
+        let call =
+            host.call_tool_with_timeout(&tc.name, tc.arguments.clone(), &tc.call_id, timeout);
+        tokio::pin!(call);
+        let call_result = loop {
+            tokio::select! {
+                r = &mut call => break r,
+                _ = tokio::time::sleep(std::time::Duration::from_secs(60)) => {
+                    if let Some(h) = heartbeat {
+                        h.stamp();
+                    }
+                }
+            }
+        };
+        let (mut result, succeeded) = match call_result {
             Ok(res) => {
                 // 2026-08-08 blackboard partition: a SUCCESSFUL file-edit
                 // tool records its line-range delta — old/new line counts
@@ -10297,10 +10651,15 @@ impl AgentLoopController {
                     ToolResult {
                         output,
                         exit_code: res.exit_code,
-                        output_encoding: None,
+                        // GAP-ENCODING-GATE (OPS-PROTOCOL §8): 重建时透传
+                        // 解码阶段——此前只进 journal（tool_completed.
+                        // output_encoding）却从返回结果丢失；R2 半助理层
+                        // 失败诊断/实体登记的 encoding_lossy 签名需要它。
+                        output_encoding: res.output_encoding.clone(),
                         structured: None,
                         policy_denial: res.policy_denial.clone(),
                         timed_out: res.timed_out,
+                        tool_error_kind: None,
                         // AGENT-DELIVERY-FLOW (2026-08-23, 设计 §2.3): 透传
                         // host 计算的工作区 delta——终端/运行类订单 receipt
                         // 据此挂变更清单（run_tests 特殊路径已在上面透传）。
@@ -10367,6 +10726,15 @@ impl AgentLoopController {
                         output_encoding: None,
                         structured: None,
                         timed_out: matches!(e, ToolError::Timeout(_)),
+                        // R2 半助理层：结构化工具错误类别透传（失败诊断
+                        // 签名词典据此匹配 tool_not_found 等；不做文本判定）。
+                        tool_error_kind: Some(match &e {
+                            ToolError::NotFound(_) => crate::host::ToolErrorKind::NotFound,
+                            ToolError::Timeout(_) => crate::host::ToolErrorKind::Timeout,
+                            ToolError::ExecutionFailed(_) => {
+                                crate::host::ToolErrorKind::ExecutionFailed
+                            }
+                        }),
                         ..Default::default()
                     },
                     false,
@@ -10590,6 +10958,9 @@ struct ControllerConsoleExecutor<'a, 'b, 'c, 'd, 'e> {
     workspace_trust: orz_assurance::gates::ipg::WorkspaceTrust,
     tool_rounds: u32,
     heartbeat: Option<&'d crate::gateway::model::ActivityClock>,
+    /// R2：本次发放的执行 trace id——失败诊断的日志指针
+    /// （`assistant.trace` 续读）。
+    trace_id: String,
 }
 
 #[async_trait::async_trait]
@@ -10614,6 +10985,7 @@ impl<'a, 'b, 'c, 'd, 'e> ActionExecutor for ControllerConsoleExecutor<'a, 'b, 'c
                 target_tool,
                 arguments,
                 call_id,
+                &self.trace_id,
             )
             .await
     }
@@ -10792,6 +11164,16 @@ mod tests {
     use std::collections::VecDeque;
     use std::path::{Path, PathBuf};
     use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+
+    /// THIN-HARNESS-REDESIGN R2a 审查处理 (P2-1, 2026-08-27)：env 突变
+    /// 测试共享同一把锁——此前 `retrieval_dispatch_inline_channel_keeps_
+    /// full_text` 与 `retrieval_result_channel_env_parse_rules` 各自声明
+    /// 函数级 ENV_LOCK（互不排斥），且默认指针摘要测试无锁读取同一 env；
+    /// inline 测试持 env=inline 跨整个 async run_turn 期间，并行测试可能
+    /// 读到 inline 导致断言 flake。三个测试统一持本锁（读方也持锁排除
+    /// 突变窗口；std::sync::MutexGuard 跨 await 仅对 current_thread
+    /// 测试运行时成立，本文件 tokio::test 默认即此）。
+    static RETRIEVAL_CHANNEL_ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
     /// Minimal LoopHost for testing the controller.
     struct TestHost {
@@ -15247,13 +15629,13 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
-    /// A6 §8 C.2 (2026-08-08): the whitelist write in the FIRST tool batch
-    /// lands as a resident message in the preamble zone (prompt → whitelist
-    /// → first declaration), is archived to .gsa, and SURVIVES compaction
-    /// (the mechanism skips the always-kept preamble) while older rounds
-    /// are still dropped.
+    /// THIN-HARNESS-REDESIGN R1 (§4.1 边界项, 2026-08-27)：compaction_
+    /// whitelist_add 已封存——即使首轮批次调用也一律 sealed_tool_denied
+    /// 结构化拒绝（无 ToolStarted、白名单不落盘、无 whitelist.jsonl
+    /// 存档、零副作用），运行正常继续（旧 A6 常驻/压缩保真机制已退役，
+    /// 代码休眠保留，R3 统一裁决）。
     #[tokio::test]
-    async fn whitelist_first_batch_writes_resident_and_survives_compaction() {
+    async fn whitelist_first_batch_sealed_and_never_lands() {
         // Host returning a DIFFERENT fat output per call — so the dropped
         // oldest round is distinguishable from the kept newest round.
         struct SeqHost {
@@ -15356,94 +15738,47 @@ mod tests {
             .await
             .unwrap();
 
-        // Resident in the preamble zone of the NEXT request: prompt →
-        // whitelist → first tool declaration.
-        let received = fake.received_requests();
-        assert!(received.len() >= 2, "{received:?}");
-        let round2 = &received[1].messages;
-        assert_eq!(round2[0].content, "修复任务", "prompt first: {round2:?}");
+        // 同批次两次 whitelist 调用均被 sealed_tool_denied 拒绝。
+        let sealed: Vec<_> = events(&dir)
+            .into_iter()
+            .filter(|e| e.event_type == EventType::ToolCompleted)
+            .filter(|e| e.payload["tool"] == "compaction_whitelist_add")
+            .filter(|e| {
+                e.payload.get("error").and_then(|v| v.as_str()) == Some("sealed_tool_denied")
+            })
+            .collect();
+        assert_eq!(sealed.len(), 2, "both first-batch writes sealed");
+        // 无 ToolStarted（零副作用前置条件）。
         assert!(
-            round2[1].content.starts_with("[压缩白名单 v0.1]"),
-            "whitelist right after the prompt: {round2:?}"
+            events(&dir).into_iter().all(|e| {
+                !(e.event_type == EventType::ToolStarted
+                    && e.payload.get("tool").and_then(|t| t.as_str())
+                        == Some("compaction_whitelist_add"))
+            }),
+            "sealed tool must never reach ToolStarted"
         );
-        assert!(round2[1].content.contains("任务背景：修复缓存回归"));
-        assert!(
-            round2[1].content.contains("关键路径：src/controller.rs"),
-            "same-batch append: {round2:?}"
-        );
-        assert_eq!(
-            round2[2].role,
-            Role::Assistant,
-            "declaration after: {round2:?}"
-        );
-        assert!(!round2[2].tool_calls.is_empty());
-
-        // Archived to .gsa (plain text JSONL, best-effort) — both entries
-        // of the same batch appended as separate lines.
+        // 白名单恒空、无存档文件。
+        let w = controller.whitelist.lock().unwrap();
+        assert!(w.is_empty(), "sealed whitelist write must not land: {w:?}");
+        drop(w);
         let archive = dir.join("whitelist.jsonl");
-        let archive_text = std::fs::read_to_string(&archive).expect("archive exists");
+        assert!(!archive.exists(), "no whitelist archive under sealing");
+        // 主对话不出现 [压缩白名单] 注入块。
+        let received = fake.received_requests();
         assert!(
-            archive_text.contains("任务背景：修复缓存回归"),
-            "archive: {archive_text}"
-        );
-        assert!(
-            archive_text.contains("关键路径：src/controller.rs"),
-            "archive append: {archive_text}"
-        );
-        assert!(archive_text.contains("\"timestamp\""));
-        assert_eq!(
-            archive_text.lines().count(),
-            2,
-            "one JSONL line per write: {archive_text}"
-        );
-
-        // Tool-action section folds it under "other".
-        let bb = controller.blackboard();
-        assert!(
-            bb.read()
-                .tool_actions
+            received
                 .iter()
-                .any(|t| t.category == "other" && t.tool == "compaction_whitelist_add"),
-            "{:?}",
-            bb.read().tool_actions
-        );
-
-        // Summary compaction (mid-task gap) — the whitelist SURVIVES as part
-        // of the always-kept preamble, while the FIRST round (the whitelist
-        // tool round itself) is dropped and the newest rounds stay.
-        let last = received.last().unwrap();
-        let wl_count = last
-            .messages
-            .iter()
-            .filter(|m| m.content.starts_with("[压缩白名单"))
-            .count();
-        assert_eq!(wl_count, 1, "exactly one whitelist message");
-        assert!(
-            last.messages[0].content == "修复任务"
-                && last.messages[1].content.starts_with("[压缩白名单"),
-            "whitelist survives compaction in preamble: {:?}",
-            last.messages
-        );
-        assert!(
-            last.messages
-                .iter()
-                .all(|m| !m.content.contains("whitelist entry #1 written")),
-            "first (whitelist tool) round dropped: {:?}",
-            last.messages
-        );
-        assert!(
-            last.messages
-                .iter()
-                .any(|m| m.content.contains(&"B".repeat(600))),
-            "newest round kept: {:?}",
-            last.messages
+                .flat_map(|r| r.messages.iter())
+                .all(|m| !m.content.starts_with("[压缩白名单")),
+            "no whitelist message under sealing"
         );
 
         let _ = std::fs::remove_dir_all(&dir);
     }
 
-    /// A6 §8 C.2: whitelist writes after the first tool batch are refused —
-    /// explicit error, no state change, complete tool event chain.
+    /// THIN-HARNESS-REDESIGN R1 (§4.1 边界项, 2026-08-27)：compaction_
+    /// whitelist_add 已封存——跨批次的两条写入一律 sealed_tool_denied
+    /// 结构化拒绝（无白名单消息、零副作用、完整 ToolCompleted 事件链）。
     #[tokio::test]
     async fn whitelist_later_batch_refused() {
         let dir = test_dir();
@@ -15487,58 +15822,39 @@ mod tests {
             .await
             .unwrap();
 
-        // Only one entry in the whitelist — the second write was refused.
+        // 两条写入均被 sealed_tool_denied 拒绝——无 [压缩白名单] 消息。
         let received = fake.received_requests();
-        assert!(received.len() >= 3, "{received:?}");
-        // Round-2 request: the first-batch write is resident (one entry).
-        let round2 = &received[1].messages;
-        let wl = round2
-            .iter()
-            .find(|m| m.content.starts_with("[压缩白名单"))
-            .expect("whitelist message present");
-        assert!(wl.content.contains("首轮条目"));
-        assert!(!wl.content.contains("次轮条目"), "no second entry: {wl:?}");
-        // Round-3 request: the second-batch write (call-x2) was refused.
-        let round3 = &received[2].messages;
-        let refused = round3
-            .iter()
-            .filter(|m| m.role == Role::Tool)
-            .find(|m| m.tool_call_id.as_deref() == Some("call-x2"));
         assert!(
-            refused.is_some_and(
-                |m| m.content.contains("refused") && m.content.contains("first tool batch")
-            ),
-            "second-batch write refused: {round3:?}"
+            received
+                .iter()
+                .flat_map(|r| r.messages.iter())
+                .all(|m| !m.content.starts_with("[压缩白名单")),
+            "no whitelist message under sealing: {received:?}"
         );
-        // Still one entry after the refusal.
-        let wl_after = round3
-            .iter()
-            .find(|m| m.content.starts_with("[压缩白名单"))
-            .expect("whitelist message present");
-        assert!(wl_after.content.contains("首轮条目"));
-        assert!(
-            !wl_after.content.contains("次轮条目"),
-            "no second entry: {wl_after:?}"
-        );
-
-        // Complete event chain: the refusal is journaled as a ToolCompleted
-        // error (evidence).
+        // 两条拒绝均 journaled 为 sealed_tool_denied 的 ToolCompleted。
         let failed_tool_completed: Vec<_> = events(&dir)
             .into_iter()
             .filter(|e| e.event_type == EventType::ToolCompleted)
             .filter(|e| e.payload["tool"] == "compaction_whitelist_add")
-            .filter(|e| e.payload.get("status").and_then(|s| s.as_str()) == Some("error"))
+            .filter(|e| {
+                e.payload.get("error").and_then(|v| v.as_str()) == Some("sealed_tool_denied")
+            })
             .collect();
-        assert_eq!(
-            failed_tool_completed.len(),
-            1,
-            "one refused write journaled"
+        assert!(
+            failed_tool_completed.len() >= 2,
+            "both writes sealed-journaled: {failed_tool_completed:?}"
         );
+        // 白名单恒空。
+        let w = controller.whitelist.lock().unwrap();
+        assert!(w.is_empty(), "sealed whitelist write must not land: {w:?}");
+        drop(w);
 
         let _ = std::fs::remove_dir_all(&dir);
     }
 
-    /// A6 §8 C.2: the cumulative character cap refuses oversized whitelists.
+    /// THIN-HARNESS-REDESIGN R1 (§4.1 边界项, 2026-08-27)：compaction_
+    /// whitelist_add 已封存——内容校验（容量/空值）已不可达，调用一律
+    /// sealed_tool_denied（cap 配置不再生效；白名单恒空）。
     #[tokio::test]
     async fn whitelist_cap_refused() {
         let dir = test_dir();
@@ -15569,8 +15885,8 @@ mod tests {
             round2
                 .iter()
                 .filter(|m| m.role == Role::Tool)
-                .any(|m| m.content.contains("cap exceeded")),
-            "cap refusal: {round2:?}"
+                .any(|m| m.content.contains("已封存") && m.content.contains("不再可用")),
+            "sealed refusal: {round2:?}"
         );
         // No whitelist message was created.
         assert!(
@@ -15581,9 +15897,9 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
-    /// A6 §8 C.2 (conformance D3-5, 2026-08-08): an empty/whitespace
-    /// content is refused — no whitelist message created, complete event
-    /// chain (ToolCompleted error).
+    /// THIN-HARNESS-REDESIGN R1 (§4.1 边界项, 2026-08-27)：compaction_
+    /// whitelist_add 已封存——空/空白内容校验已不可达，调用一律
+    /// sealed_tool_denied，无白名单消息、完整 ToolCompleted 事件链。
     #[tokio::test]
     async fn whitelist_empty_content_refused() {
         let dir = test_dir();
@@ -15614,8 +15930,8 @@ mod tests {
             round2
                 .iter()
                 .filter(|m| m.role == Role::Tool)
-                .any(|m| m.content.contains("must not be empty")),
-            "empty-content refusal: {round2:?}"
+                .any(|m| m.content.contains("已封存") && m.content.contains("不再可用")),
+            "sealed refusal: {round2:?}"
         );
         assert!(
             round2.iter().all(|m| !m.content.starts_with("[压缩白名单")),
@@ -15625,9 +15941,14 @@ mod tests {
             .into_iter()
             .filter(|e| e.event_type == EventType::ToolCompleted)
             .filter(|e| e.payload["tool"] == "compaction_whitelist_add")
-            .filter(|e| e.payload.get("status").and_then(|s| s.as_str()) == Some("error"))
+            .filter(|e| {
+                e.payload.get("error").and_then(|v| v.as_str()) == Some("sealed_tool_denied")
+            })
             .collect();
-        assert_eq!(failed.len(), 1, "refusal journaled");
+        assert_eq!(failed.len(), 1, "sealed refusal journaled");
+        let w = controller.whitelist.lock().unwrap();
+        assert!(w.is_empty(), "sealed whitelist write must not land: {w:?}");
+        drop(w);
 
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -17253,6 +17574,446 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    /// THIN-HARNESS-REDESIGN R2a (§4.4): `blackboard_read` 服务 live
+    /// 检索分区——internal_ret / external_ret 各自渲染 response / entries /
+    /// ledger，工具结果回达模型，事件面记录对应 section。
+    #[tokio::test]
+    async fn blackboard_read_serves_retrieval_partitions() {
+        let dir = test_dir();
+        let journal = JournalRecorder::new(dir.clone());
+        let host = TestHost {
+            journal,
+            tool_result: None,
+        };
+        let fake = Arc::new(FakeProvider::new(vec![
+            ScriptedResponse::tool_calls(vec![ToolCall {
+                name: "blackboard_read".to_string(),
+                arguments: serde_json::json!({"section": "internal_ret"}),
+                call_id: "call-ir".to_string(),
+            }]),
+            ScriptedResponse::text("完成"),
+            ScriptedResponse::text("完成"),
+        ]));
+        let gateway: Arc<dyn ModelGateway> = fake.clone();
+        let controller = AgentLoopController::with_gateway(gateway);
+        // 预写内部检索分区（模拟子代理落盘）。
+        {
+            let mut w = controller.blackboard().write();
+            w.internal_ret.response = Some("检索完成\n[DOC] design.md".to_string());
+            w.internal_ret.project_docs = vec!["design.md".to_string()];
+            w.internal_ret.source_ledger = vec!["docs/index".to_string()];
+        }
+        controller
+            .run_turn(
+                &host,
+                "读检索分区",
+                "RUN-RIR",
+                MANIFEST,
+                0,
+                None,
+                None,
+                None,
+            )
+            .await
+            .unwrap();
+
+        let received = fake.received_requests();
+        let round = received
+            .iter()
+            .find(|r| {
+                r.messages
+                    .iter()
+                    .any(|m| m.tool_call_id.as_deref() == Some("call-ir"))
+            })
+            .expect("call-ir round");
+        let reply = round
+            .messages
+            .iter()
+            .find(|m| m.tool_call_id.as_deref() == Some("call-ir"))
+            .expect("internal_ret tool result message");
+        assert!(
+            reply.content.contains("== internal_ret ==")
+                && reply.content.contains("检索完成")
+                && reply.content.contains("- design.md")
+                && reply.content.contains("- docs/index"),
+            "internal_ret reply: {:?}",
+            round.messages
+        );
+        // 事件面记录 section。
+        let completed = events(&dir)
+            .into_iter()
+            .find(|e| {
+                e.event_type == EventType::ToolCompleted
+                    && e.payload.get("tool").and_then(|v| v.as_str()) == Some("blackboard_read")
+                    && e.payload.get("section").and_then(|v| v.as_str()) == Some("internal_ret")
+            })
+            .expect("blackboard_read internal_ret completed");
+        assert_eq!(completed.payload["exit_code"], serde_json::json!(0));
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// THIN-HARNESS-REDESIGN R2a (§4.4): 检索分区带 `epoch` = 显式报错
+    /// （live-only，结果不进 epoch 快照；fail loud 同 session 面纪律），
+    /// 绝不静默回退 live 视图或空分区。
+    #[tokio::test]
+    async fn blackboard_read_retrieval_section_with_epoch_errors_explicitly() {
+        let dir = test_dir();
+        let journal = JournalRecorder::new(dir.clone());
+        let host = TestHost {
+            journal,
+            tool_result: None,
+        };
+        let fake = Arc::new(FakeProvider::new(vec![
+            ScriptedResponse::tool_calls(vec![ToolCall {
+                name: "blackboard_read".to_string(),
+                arguments: serde_json::json!({"section": "external_ret", "epoch": 1}),
+                call_id: "call-re".to_string(),
+            }]),
+            ScriptedResponse::text("完成"),
+            ScriptedResponse::text("完成"),
+        ]));
+        let gateway: Arc<dyn ModelGateway> = fake.clone();
+        let controller = AgentLoopController::with_gateway(gateway);
+        controller
+            .run_turn(
+                &host,
+                "读归档检索分区",
+                "RUN-RRE",
+                MANIFEST,
+                0,
+                None,
+                None,
+                None,
+            )
+            .await
+            .unwrap();
+
+        let received = fake.received_requests();
+        let round = received
+            .iter()
+            .find(|r| {
+                r.messages
+                    .iter()
+                    .any(|m| m.tool_call_id.as_deref() == Some("call-re"))
+            })
+            .expect("call-re round");
+        let reply = round
+            .messages
+            .iter()
+            .find(|m| m.tool_call_id.as_deref() == Some("call-re"))
+            .expect("epoch-error tool result message");
+        assert!(
+            reply.content.contains("with epoch is not supported")
+                && reply.content.contains("live-only"),
+            "epoch error reply: {:?}",
+            round.messages
+        );
+        // 事件面 exit_code 0（渲染层文本错误，与 receipt_id+非 actions 先例
+        // 同纪律——正文显式说明不支持，事件带 section 标注）。
+        let completed = events(&dir)
+            .into_iter()
+            .find(|e| {
+                e.event_type == EventType::ToolCompleted
+                    && e.payload.get("tool").and_then(|v| v.as_str()) == Some("blackboard_read")
+                    && e.payload.get("section").and_then(|v| v.as_str()) == Some("external_ret")
+            })
+            .expect("blackboard_read external_ret completed");
+        assert_eq!(completed.payload["exit_code"], serde_json::json!(0));
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// THIN-HARNESS-REDESIGN R2a 审查处理 (P3-1): 恢复时重建检索分区——
+    /// sidecar 快照携带的 internal_ret / external_ret 经
+    /// `with_retrieval_partitions` 灌回全新黑板；`None` 保持空分区。
+    #[test]
+    fn with_retrieval_partitions_seeds_blackboard_sections() {
+        let internal = InternalRetSection {
+            project_docs: vec!["design.md".to_string()],
+            source_ledger: vec!["SRC-001 design.md".to_string()],
+            response: Some("恢复的检索完成".to_string()),
+        };
+        let external = ExternalRetSection {
+            web_sources: vec!["https://example.com/paper".to_string()],
+            source_ledger: vec!["SRC-002 https://example.com/paper".to_string()],
+            response: Some("恢复的网页检索完成".to_string()),
+        };
+        let controller = AgentLoopController::with_gateway(Arc::new(FakeProvider::new(Vec::new())))
+            .with_retrieval_partitions(Some(internal.clone()), Some(external.clone()));
+        let bb = controller.blackboard().read();
+        assert_eq!(bb.internal_ret.project_docs, internal.project_docs);
+        assert_eq!(bb.internal_ret.source_ledger, internal.source_ledger);
+        assert_eq!(bb.internal_ret.response, internal.response);
+        assert_eq!(bb.external_ret.web_sources, external.web_sources);
+        assert_eq!(bb.external_ret.source_ledger, external.source_ledger);
+        assert_eq!(bb.external_ret.response, external.response);
+
+        // None 不动分区（默认空）。
+        let controller = AgentLoopController::with_gateway(Arc::new(FakeProvider::new(Vec::new())))
+            .with_retrieval_partitions(None, None);
+        let bb = controller.blackboard().read();
+        assert!(bb.internal_ret.project_docs.is_empty());
+        assert!(bb.external_ret.web_sources.is_empty());
+    }
+
+    /// THIN-HARNESS-REDESIGN R2a (§4.4): 检索派发默认返回指针摘要——主对话
+    /// 只收到「已写入 blackboard 分区（N 来源 / M 结论）」指针，子代理全文
+    /// 只留在分区与 journal（留痕不变）。审查处理 (P2-1)：读方也持共享
+    /// env 锁，排除并行 env 突变测试的干扰窗口。
+    #[tokio::test]
+    async fn retrieval_dispatch_returns_pointer_summary_by_default() {
+        let _guard = RETRIEVAL_CHANNEL_ENV_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let dir = test_dir();
+        let journal = JournalRecorder::new(dir.clone());
+        let host = TestHost {
+            journal,
+            tool_result: None,
+        };
+        let fake = Arc::new(FakeProvider::new(vec![
+            ScriptedResponse::tool_calls(vec![tool_call("retrieve_project_docs", "call-1")]),
+            ScriptedResponse::text("[DOC] design.md\n检索完成"),
+            ScriptedResponse::text("完成"),
+            ScriptedResponse::text("完成"),
+        ]));
+        let gateway: Arc<dyn ModelGateway> = fake.clone();
+        let controller = with_retrieval_enabled(AgentLoopController::with_gateway(gateway));
+        controller
+            .run_turn(
+                &host,
+                "查找项目文档",
+                "RUN-PTR",
+                MANIFEST,
+                0,
+                None,
+                None,
+                None,
+            )
+            .await
+            .unwrap();
+
+        let received = fake.received_requests();
+        let round = received
+            .iter()
+            .find(|r| {
+                r.messages
+                    .iter()
+                    .any(|m| m.tool_call_id.as_deref() == Some("call-1"))
+            })
+            .expect("call-1 round");
+        let reply = round
+            .messages
+            .iter()
+            .find(|m| m.tool_call_id.as_deref() == Some("call-1"))
+            .expect("retrieval dispatch tool result message");
+        assert!(
+            reply.content.contains("已写入 blackboard internal_ret")
+                && reply.content.contains("来源")
+                && reply
+                    .content
+                    .contains("blackboard_read section=internal_ret"),
+            "pointer summary reply: {:?}",
+            round.messages
+        );
+        assert!(
+            !reply.content.contains("检索完成"),
+            "full subagent text must not reach the main conversation: {:?}",
+            round.messages
+        );
+        // 分区仍保留全文（留痕不变）。
+        let r = controller.blackboard().read();
+        assert!(
+            r.internal_ret
+                .response
+                .as_deref()
+                .unwrap()
+                .contains("检索完成"),
+            "section keeps the full text"
+        );
+        assert_eq!(r.internal_ret.project_docs, vec!["design.md"]);
+        // P2-2: 分区 ledger = 结构化投影（SRC 编号 + 标题），非空。
+        assert_eq!(
+            r.internal_ret.source_ledger,
+            vec!["SRC-001 design.md"],
+            "partition ledger is the structured projection"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// THIN-HARNESS-REDESIGN R2a 审查处理 (P2-3)：每次派发全量覆盖分区
+    /// ——第二次派发替换（而非累积）response / entries / ledger，指针
+    /// 摘要计数与分区内容一一对应。
+    #[tokio::test]
+    async fn retrieval_dispatch_overwrites_partition_on_each_dispatch() {
+        let _guard = RETRIEVAL_CHANNEL_ENV_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let dir = test_dir();
+        let journal = JournalRecorder::new(dir.clone());
+        let host = TestHost {
+            journal,
+            tool_result: None,
+        };
+        let fake = Arc::new(FakeProvider::new(vec![
+            ScriptedResponse::tool_calls(vec![tool_call("retrieve_project_docs", "call-1")]),
+            ScriptedResponse::text("[DOC] old.md\n第一轮检索完成"),
+            ScriptedResponse::tool_calls(vec![tool_call("retrieve_project_docs", "call-2")]),
+            ScriptedResponse::text("[DOC] new.md\n第二轮检索完成"),
+            ScriptedResponse::text("完成"),
+            ScriptedResponse::text("完成"),
+        ]));
+        let gateway: Arc<dyn ModelGateway> = fake.clone();
+        let controller = with_retrieval_enabled(AgentLoopController::with_gateway(gateway));
+        controller
+            .run_turn(
+                &host,
+                "两次查找项目文档",
+                "RUN-PTW",
+                MANIFEST,
+                0,
+                None,
+                None,
+                None,
+            )
+            .await
+            .unwrap();
+
+        let r = controller.blackboard().read();
+        assert_eq!(
+            r.internal_ret.project_docs,
+            vec!["new.md"],
+            "second dispatch replaces entries"
+        );
+        assert_eq!(
+            r.internal_ret.source_ledger,
+            vec!["SRC-002 new.md"],
+            "second dispatch replaces the ledger"
+        );
+        assert_eq!(
+            r.internal_ret.response.as_deref(),
+            Some("[DOC] new.md\n第二轮检索完成"),
+            "second dispatch replaces the response (全文保留，含 [DOC] 行)"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// THIN-HARNESS-REDESIGN R2a (§4.4): `ORZ_RETRIEVAL_RESULT_CHANNEL=inline`
+    /// 保留旧行为——子代理全文回传主对话（A/B 与回退通道）。
+    #[tokio::test]
+    async fn retrieval_dispatch_inline_channel_keeps_full_text() {
+        // P2-1: 共享锁（模块级 RETRIEVAL_CHANNEL_ENV_LOCK），与解析规则
+        // 测试及默认指针摘要测试互斥；还原放在断言前避免 panic 泄漏。
+        let _guard = RETRIEVAL_CHANNEL_ENV_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let original = std::env::var(RETRIEVAL_RESULT_CHANNEL_ENV).ok();
+        unsafe {
+            std::env::set_var(RETRIEVAL_RESULT_CHANNEL_ENV, "inline");
+        }
+        let dir = test_dir();
+        let journal = JournalRecorder::new(dir.clone());
+        let host = TestHost {
+            journal,
+            tool_result: None,
+        };
+        let fake = Arc::new(FakeProvider::new(vec![
+            ScriptedResponse::tool_calls(vec![tool_call("retrieve_project_docs", "call-1")]),
+            ScriptedResponse::text("[DOC] design.md\n检索完成"),
+            ScriptedResponse::text("完成"),
+            ScriptedResponse::text("完成"),
+        ]));
+        let gateway: Arc<dyn ModelGateway> = fake.clone();
+        let controller = with_retrieval_enabled(AgentLoopController::with_gateway(gateway));
+        controller
+            .run_turn(
+                &host,
+                "查找项目文档",
+                "RUN-INL",
+                MANIFEST,
+                0,
+                None,
+                None,
+                None,
+            )
+            .await
+            .unwrap();
+        // 还原 env（无论断言结果——放在断言前，避免 panic 泄漏）。
+        match original {
+            Some(v) => unsafe { std::env::set_var(RETRIEVAL_RESULT_CHANNEL_ENV, v) },
+            None => unsafe { std::env::remove_var(RETRIEVAL_RESULT_CHANNEL_ENV) },
+        }
+
+        let received = fake.received_requests();
+        let round = received
+            .iter()
+            .find(|r| {
+                r.messages
+                    .iter()
+                    .any(|m| m.tool_call_id.as_deref() == Some("call-1"))
+            })
+            .expect("call-1 round");
+        let reply = round
+            .messages
+            .iter()
+            .find(|m| m.tool_call_id.as_deref() == Some("call-1"))
+            .expect("retrieval dispatch tool result message");
+        assert!(
+            reply.content.contains("检索完成"),
+            "inline channel keeps the full text: {:?}",
+            round.messages
+        );
+        assert!(
+            !reply.content.contains("已写入 blackboard"),
+            "inline channel must not emit the pointer summary: {:?}",
+            round.messages
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// THIN-HARNESS-REDESIGN R2a (§4.4): `ORZ_RETRIEVAL_RESULT_CHANNEL`
+    /// 解析规则——缺失/无效回退 `blackboard`，`inline` 命中旧行为。
+    #[test]
+    fn retrieval_result_channel_env_parse_rules() {
+        // P2-1: 共享锁，与 inline 测试 / 默认指针摘要测试互斥。
+        let _guard = RETRIEVAL_CHANNEL_ENV_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let original = std::env::var(RETRIEVAL_RESULT_CHANNEL_ENV).ok();
+        unsafe {
+            std::env::remove_var(RETRIEVAL_RESULT_CHANNEL_ENV);
+        }
+        assert_eq!(
+            retrieval_result_channel_from_env(),
+            RetrievalResultChannel::Blackboard,
+            "missing env → blackboard default"
+        );
+        unsafe {
+            std::env::set_var(RETRIEVAL_RESULT_CHANNEL_ENV, "inline");
+        }
+        assert_eq!(
+            retrieval_result_channel_from_env(),
+            RetrievalResultChannel::Inline,
+            "inline env honored"
+        );
+        unsafe {
+            std::env::set_var(RETRIEVAL_RESULT_CHANNEL_ENV, "bogus");
+        }
+        assert_eq!(
+            retrieval_result_channel_from_env(),
+            RetrievalResultChannel::Blackboard,
+            "invalid env falls back to blackboard"
+        );
+        match original {
+            Some(v) => unsafe { std::env::set_var(RETRIEVAL_RESULT_CHANNEL_ENV, v) },
+            None => unsafe { std::env::remove_var(RETRIEVAL_RESULT_CHANNEL_ENV) },
+        }
+    }
+
     /// F6 (2026-08-15, BACKLOG 6e 复查遗留): an epoch parameter that is
     /// present but invalid (0 / negative / float) is an EXPLICIT error —
     /// never a silent fallback to the live view.
@@ -17513,6 +18274,7 @@ mod tests {
                 name: "workspace.run_tests".to_string(),
                 description: "stale static base set".to_string(),
                 parameters: serde_json::json!({}),
+                target_policy: crate::entities::TargetPolicy::None,
             }]);
         controller.set_console_probe_source(crate::host::ToolPolicy::Interactive, snapshot);
         let text = controller.render_blackboard_section("actions", None, None, None);
@@ -17545,6 +18307,7 @@ mod tests {
                 name: "assistant.trace".to_string(),
                 description: "retained".to_string(),
                 parameters: serde_json::json!({}),
+                target_policy: crate::entities::TargetPolicy::None,
             }]);
         let text = controller.render_blackboard_section("actions", None, None, None);
         assert!(text.contains("assistant.trace"), "{text}");
@@ -17595,7 +18358,12 @@ mod tests {
             // Host 动作目标若是工作工具，必须在工具栏投影内；内部动作
             // （assistant.trace/workspace.run_script）与非工作工具目标
             // （project_doc_index）不要求同名。
-            if crate::tool_probe::is_main_agent_work_tool(target) {
+            // THIN-HARNESS-REDESIGN R1 (§4.1)：封存工具（list_dir /
+            // run_tests / todo_write / …）已从投影面移除——console 注册
+            // 板是休眠面，其封存动作不可达，不再要求同名投影。
+            if crate::tool_probe::is_main_agent_work_tool(target)
+                && !AgentLoopController::R1_SEALED_MAIN_TOOLS.contains(&target)
+            {
                 assert!(
                     projected_names.contains(target),
                     "registration {} missing from toolbar projection",
@@ -17631,6 +18399,7 @@ mod tests {
                 name: "workspace.archived_legacy".to_string(),
                 description: "archived registration".to_string(),
                 parameters: serde_json::json!({}),
+                target_policy: crate::entities::TargetPolicy::None,
             }]);
         // 轮换：epoch 1（含旧注册板块）归档，当前板块重置。
         let controller = controller.with_plan(
@@ -17674,6 +18443,7 @@ mod tests {
                 name: "assistant.trace".to_string(),
                 description: "retained across reset".to_string(),
                 parameters: serde_json::json!({}),
+                target_policy: crate::entities::TargetPolicy::None,
             }]);
         let snapshot = crate::tool_probe::ToolProbeSnapshot {
             complete: vec![
@@ -17722,6 +18492,7 @@ mod tests {
                     order_id: "ORD-000009".to_string(),
                     action: "workspace.read_file".to_string(),
                     arguments: serde_json::json!({"target_file": "a.txt"}),
+                    target: None,
                     step_id: None,
                     round: 0,
                     plan_epoch: 1,
@@ -17816,6 +18587,7 @@ mod tests {
                     order_id: "ORD-000010".to_string(),
                     action: "workspace.read_file".to_string(),
                     arguments: serde_json::json!({"target_file": "a.txt"}),
+                    target: None,
                     step_id: None,
                     round: 1,
                     plan_epoch: 1,
@@ -17910,6 +18682,7 @@ mod tests {
                             "sha256": expected_sha256,
                         },
                     }),
+                    target: None,
                     step_id: None,
                     round: 1,
                     plan_epoch: 0,
@@ -18014,6 +18787,7 @@ mod tests {
                             "sha256": "a".repeat(64),
                         },
                     }),
+                    target: None,
                     step_id: None,
                     round: 1,
                     plan_epoch: 0,
@@ -18050,11 +18824,13 @@ mod tests {
         let error = receipt.error.as_ref().unwrap();
         assert_eq!(error["step"], "protocol");
         assert_eq!(error["code"], "content_anchor_mismatch");
+        // 平台差异：Linux 目录 size 非 0 → 命中 size/mtime 预检；Windows
+        // 目录 size 为 0 → 通过预检后 read 失败——两种消息共享前缀。
         assert!(
             error["message"]
                 .as_str()
                 .unwrap()
-                .contains("failed to read target"),
+                .contains("content anchor verification failed"),
             "{error:?}"
         );
         assert!(
@@ -18110,6 +18886,7 @@ mod tests {
                             "sha256": expected_sha256,
                         },
                     }),
+                    target: Some("file:match_target.txt".to_string()),
                     step_id: None,
                     round: 1,
                     plan_epoch: 0,
@@ -18220,6 +18997,7 @@ mod tests {
                             "sha256": expected_sha256,
                         },
                     }),
+                    target: None,
                     step_id: None,
                     round: 1,
                     plan_epoch: 0,
@@ -18374,6 +19152,7 @@ mod tests {
                             "sha256": v1_sha,
                         },
                     }),
+                    target: Some("file:remedy.txt".to_string()),
                     step_id: None,
                     round: 1,
                     plan_epoch: 0,
@@ -18416,6 +19195,7 @@ mod tests {
                             "sha256": v2_sha,
                         },
                     }),
+                    target: Some("file:remedy.txt".to_string()),
                     step_id: None,
                     round: 1,
                     plan_epoch: 0,
@@ -18476,6 +19256,7 @@ mod tests {
                         "old_string": "actual",
                         "new_string": "updated",
                     }),
+                    target: Some("file:legacy_target.txt".to_string()),
                     step_id: None,
                     round: 1,
                     plan_epoch: 0,
@@ -18519,6 +19300,234 @@ mod tests {
             .collect::<Vec<_>>();
         assert!(rejected.is_empty(), "{rejected:?}");
 
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// R2 半助理层（THIN-HARNESS-REDESIGN V2 §4.2/§4.5）：执行失败自动
+    /// 派发——失败对象实体登记（file 锚点）+ 结构化签名诊断附着 +
+    /// 错误信封携带 `upstream.detail.diagnostic`（≤2KB 极简记录）。
+    #[tokio::test]
+    async fn r2_failure_auto_diagnosis_registers_entity_and_attaches_diagnostic() {
+        let dir = test_dir();
+        let journal = JournalRecorder::new(dir.clone());
+        let host = TestHost {
+            journal: journal.clone(),
+            tool_result: Some(ToolResult {
+                output: "error: no such file\nat line 1\n".to_string(),
+                exit_code: Some(1),
+                output_encoding: Some("utf-8".to_string()),
+                structured: None,
+                ..Default::default()
+            }),
+        };
+        let controller = AgentLoopController::with_gateway(Arc::new(FakeProvider::new(Vec::new())));
+        controller.set_console_probe_source(
+            crate::host::ToolPolicy::Interactive,
+            crate::tool_probe::ToolProbeSnapshot {
+                complete: vec!["read_file".to_string()],
+                incomplete: Vec::new(),
+            },
+        );
+        {
+            let mut w = controller.blackboard().write();
+            w.plan.plan_epoch = 1;
+            w.actions
+                .write_order(ActionOrder {
+                    order_id: "ORD-R2-001".to_string(),
+                    action: "workspace.read_file".to_string(),
+                    arguments: serde_json::json!({"target_file": "missing_r2_target.txt"}),
+                    target: Some("file:missing_r2_target.txt".to_string()),
+                    step_id: None,
+                    round: 1,
+                    plan_epoch: 1,
+                    run_id: "RUN-R2".to_string(),
+                })
+                .unwrap();
+        }
+        let mut writer =
+            EventWriter::new(Some(&journal), EventTrack::V02, "RUN-R2", "", 0, None, None);
+        controller
+            .issue_pending_console_order(
+                &host,
+                &mut writer,
+                "r2",
+                orz_assurance::gates::ipg::WorkspaceTrust::NotObserved,
+                1,
+                None,
+            )
+            .await
+            .unwrap();
+        {
+            let bb = controller.blackboard().read();
+            // 失败对象实体已登记（file 锚点：exists=false）。
+            let entity = bb
+                .entities
+                .get("file:missing_r2_target.txt")
+                .expect("file entity registered");
+            assert_eq!(entity.kind, crate::entities::EntityKind::File);
+            assert_eq!(entity.summary["exists"], serde_json::json!(false));
+            // 结构化签名诊断已附着（target_missing；P5：非文本子串）。
+            let diag = entity
+                .last_diagnostic
+                .as_ref()
+                .expect("diagnostic attached");
+            assert_eq!(diag.matched_signature.as_deref(), Some("target_missing"));
+            assert_eq!(diag.log_pointer, "t000001");
+            assert!(
+                diag.key_fields
+                    .iter()
+                    .any(|f| f.key == "exists" && f.value == "false")
+            );
+            // 环境实体已登记（探针快照机械来源）。
+            let env = bb
+                .entities
+                .get(&crate::entities::environment_entity_id())
+                .expect("environment entity");
+            assert_eq!(env.summary["tool_count"], serde_json::json!(1));
+            // 错误信封携带极简诊断（≤2KB）。
+            let receipt = bb.actions.results.last().expect("receipt");
+            assert!(!receipt.ok);
+            let error = receipt.error.as_ref().expect("error envelope");
+            assert_eq!(error["code"], serde_json::json!("execution_failed"));
+            assert_eq!(
+                error["upstream"]["detail"]["diagnostic"]["matched_signature"],
+                serde_json::json!("target_missing")
+            );
+        }
+        // blackboard_read section=entities 有界渲染（摘要清单 + 总上限）。
+        let text = controller.render_blackboard_section("entities", None, None, None);
+        assert!(text.contains("file:missing_r2_target.txt"), "{text}");
+        assert!(text.contains("total="), "{text}");
+        assert!(text.contains("has_diagnostic=true"), "{text}");
+        let epoch_reject = controller.render_blackboard_section("entities", None, Some(1), None);
+        assert!(epoch_reject.contains("live-only"), "{epoch_reject}");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// R2 半助理层：成功路径登记文件锚点（size/sha256/encoding）。
+    #[tokio::test]
+    async fn r2_success_registers_file_anchor_with_sha256() {
+        let dir = test_dir();
+        let journal = JournalRecorder::new(dir.clone());
+        let anchor_path = dir.join("anchor_target.txt");
+        std::fs::write(&anchor_path, b"r2 anchor content").unwrap();
+        let host = TestHost {
+            journal: journal.clone(),
+            tool_result: Some(ToolResult {
+                output: "r2 anchor content".to_string(),
+                exit_code: Some(0),
+                output_encoding: Some("utf-8".to_string()),
+                structured: None,
+                ..Default::default()
+            }),
+        };
+        let controller = AgentLoopController::with_gateway(Arc::new(FakeProvider::new(Vec::new())));
+        {
+            let mut w = controller.blackboard().write();
+            w.plan.plan_epoch = 1;
+            w.actions
+                .write_order(ActionOrder {
+                    order_id: "ORD-R2-002".to_string(),
+                    action: "workspace.read_file".to_string(),
+                    arguments: serde_json::json!({
+                        "target_file": anchor_path.to_string_lossy(),
+                    }),
+                    target: Some(crate::entities::file_entity_id(
+                        &anchor_path.to_string_lossy(),
+                    )),
+                    step_id: None,
+                    round: 1,
+                    plan_epoch: 1,
+                    run_id: "RUN-R2S".to_string(),
+                })
+                .unwrap();
+        }
+        let mut writer = EventWriter::new(
+            Some(&journal),
+            EventTrack::V02,
+            "RUN-R2S",
+            "",
+            0,
+            None,
+            None,
+        );
+        controller
+            .issue_pending_console_order(
+                &host,
+                &mut writer,
+                "r2",
+                orz_assurance::gates::ipg::WorkspaceTrust::NotObserved,
+                1,
+                None,
+            )
+            .await
+            .unwrap();
+        {
+            let bb = controller.blackboard().read();
+            let entity = bb
+                .entities
+                .get(&crate::entities::file_entity_id(
+                    &anchor_path.to_string_lossy(),
+                ))
+                .expect("file entity registered");
+            assert_eq!(entity.summary["exists"], serde_json::json!(true));
+            assert_eq!(entity.summary["size"], serde_json::json!(17));
+            assert_eq!(
+                entity.summary["encoding"],
+                serde_json::json!("utf-8"),
+                "entity summary: {}",
+                entity.summary
+            );
+            let expected_sha = sha256_hex(b"r2 anchor content");
+            assert_eq!(entity.summary["sha256"], serde_json::json!(expected_sha));
+            assert!(entity.last_diagnostic.is_none());
+            let receipt = bb.actions.results.last().expect("receipt");
+            assert!(receipt.ok, "{receipt:?}");
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// GAP-ENCODING-GATE 回归：run_host_tool 成功路径重建 ToolResult 时
+    /// 必须透传 output_encoding（R2 实体登记/失败诊断的 encoding_lossy
+    /// 签名依赖该结构化字段）。
+    #[tokio::test]
+    async fn r2_console_target_preserves_output_encoding() {
+        let dir = test_dir();
+        let journal = JournalRecorder::new(dir.clone());
+        let host = TestHost {
+            journal: journal.clone(),
+            tool_result: Some(ToolResult {
+                output: "x".to_string(),
+                exit_code: Some(0),
+                output_encoding: Some("utf-8".to_string()),
+                structured: None,
+                ..Default::default()
+            }),
+        };
+        let controller = AgentLoopController::with_gateway(Arc::new(FakeProvider::new(Vec::new())));
+        let mut writer =
+            EventWriter::new(Some(&journal), EventTrack::V02, "RUN-P", "", 0, None, None);
+        let r = controller
+            .run_console_target(
+                &host,
+                &mut writer,
+                "",
+                orz_assurance::gates::ipg::WorkspaceTrust::NotObserved,
+                0,
+                None,
+                None,
+                "read_file",
+                &serde_json::json!({ "path": "x.txt" }),
+                "call-p",
+                "t000001",
+            )
+            .await
+            .expect("run");
+        assert_eq!(
+            r.output_encoding.as_deref(),
+            Some("utf-8"),
+            "output_encoding preserved through console target"
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -18578,6 +19587,7 @@ mod tests {
                     "read_file",
                     &serde_json::json!({ "path": "a.txt" }),
                     "call-pd",
+                    "t000001",
                 )
                 .await
                 .unwrap_err();
@@ -18689,6 +19699,7 @@ mod tests {
                     "read_file",
                     &serde_json::json!({ "path": "a.txt" }),
                     "call-co",
+                    "t000001",
                 )
                 .await
                 .expect("old-prefix success output must not be classified as policy");
@@ -18892,13 +19903,11 @@ mod tests {
             vec![
                 "bash",
                 "blackboard_read",
-                "compaction_whitelist_add",
                 "grep",
-                "list_dir",
                 "read_file",
                 "search_replace",
             ],
-            "single-face projection under Benchmark (mode=off 移除检索族): {declared:?}"
+            "single-face projection under Benchmark (R1 封存 list_dir/compaction_whitelist_add，mode=off 移除检索族): {declared:?}"
         );
         // The system prompt carries NO availability block (2026-08-12: 可用
         // 性声明不固定在 prompt 中——prompt 只保留 budget/status 块)。
@@ -18939,15 +19948,8 @@ mod tests {
         declared.sort();
         assert_eq!(
             declared,
-            vec![
-                "bash",
-                "blackboard_read",
-                "compaction_whitelist_add",
-                "grep",
-                "list_dir",
-                "read_file",
-            ],
-            "ReadOnly single-face projection removes incomplete write/exec tools: {declared:?}"
+            vec!["bash", "blackboard_read", "grep", "read_file",],
+            "ReadOnly single-face projection (R1 封存 list_dir/compaction_whitelist_add，写/执行工具探针不完整移除): {declared:?}"
         );
 
         let _ = std::fs::remove_dir_all(&dir);
@@ -20822,38 +21824,27 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
-    /// FUS-RETRIEVAL-MECH P0-B step 4 (2026-08-14): a `continue` re-entry
-    /// is the SAME activation — the browser_read candidate count accumulates
-    /// across dispatches (design §1.1: no reset on continue; only activation
-    /// close starts fresh).
+    /// THIN-HARNESS-REDESIGN R1 (§4.4, 审查 P2 收口): auto-close 后每次
+    /// 派发都是新激活——browser_read 候选计数按激活隔离（设计 §1.1：只有
+    /// activation close 才重置；auto-close 每次派发即重置），第二次派发从
+    /// 1/8 重新起算，不再跨派发累积。
     #[tokio::test]
-    async fn browser_read_candidate_count_accumulates_across_continue_dispatches() {
+    async fn browser_read_candidate_count_resets_per_auto_closed_dispatch() {
         let dir = test_dir();
         let journal = JournalRecorder::new(dir.clone());
         let host = TestHost {
             journal,
             tool_result: None,
         };
-        let continue_call = ToolCall {
-            name: "retrieval_disposition".to_string(),
-            arguments: serde_json::json!({
-                "role": "external_retrieval",
-                "decision": "continue",
-                "requirement_delta": "补充 b.example 页面",
-            }),
-            call_id: "call-d1".to_string(),
-        };
         let gateway: Arc<dyn ModelGateway> = Arc::new(FakeProvider::new(vec![
             ScriptedResponse::tool_calls(vec![tool_call("web_search", "call-1")]),
             ScriptedResponse::tool_calls(vec![browser_read_call("call-b1", "https://a.example")]),
             ScriptedResponse::tool_calls(vec![browser_read_call("call-b2", "https://a.example")]),
             ScriptedResponse::text("检索完成"),
-            ScriptedResponse::tool_calls(vec![continue_call]),
             ScriptedResponse::tool_calls(vec![tool_call("web_search", "call-2")]),
             ScriptedResponse::tool_calls(vec![browser_read_call("call-b3", "https://b.example")]),
             ScriptedResponse::tool_calls(vec![browser_read_call("call-b4", "https://b.example")]),
             ScriptedResponse::text("检索完成"),
-            ScriptedResponse::text("完成"),
             ScriptedResponse::text("完成"),
             ScriptedResponse::text("完成"),
         ]));
@@ -20863,27 +21854,22 @@ mod tests {
             .await
             .unwrap();
 
-        // Same activation (continue bumped the contract revision once) with
-        // the accumulated candidate list — dispatch 2 continued at 1/8.
+        // auto-close：第二次派发是新激活（fresh id、revision 0），候选
+        // 计数从 1/8 重新起算——registry 里是最新激活（b.example）。
         let registry = controller.activations.lock().unwrap();
         let act = registry
             .states
             .get(&SubagentRole::ExternalRetrieval)
             .unwrap();
         assert_eq!(
-            act.contract_revision, 1,
-            "continue re-entered the same activation"
+            act.activation_id, "retrieval-external_retrieval-RUN-BRLC-01",
+            "auto-close 后新派发新建激活"
         );
-        assert_eq!(
-            act.candidate_urls,
-            vec![
-                "https://a.example".to_string(),
-                "https://b.example".to_string()
-            ]
-        );
+        assert_eq!(act.contract_revision, 0);
+        assert_eq!(act.candidate_urls, vec!["https://b.example".to_string()]);
 
-        // Journal: four lane browser_read completions with counts
-        // 1, 1, 2, 2 (dispatch wrappers carry no count).
+        // Journal: 4 次 lane browser_read 完成，计数按激活分别 1,1,1,1
+        // （不再跨派发累积为 1,1,2,2）。
         let events = events(&dir);
         let completed: Vec<&RunEvent> = events
             .iter()
@@ -20898,7 +21884,7 @@ mod tests {
             .iter()
             .map(|e| e.payload["candidate_count"].as_i64().unwrap())
             .collect();
-        assert_eq!(counts, vec![1, 1, 2, 2]);
+        assert_eq!(counts, vec![1, 1, 1, 1]);
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -20971,37 +21957,24 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
-    /// FUS-RETRIEVAL-MECH P0-B step 2 (2026-08-14, review fix): a
-    /// `continue` re-entry is the SAME activation — the web_fetch candidate
-    /// count accumulates across dispatches (design §1.1: no reset on
-    /// continue; only activation close starts fresh). The counter written
-    /// back after dispatch 1 rides into dispatch 2 via the sidecar state.
+    /// THIN-HARNESS-REDESIGN R1 (§4.4, 审查 P2 收口): auto-close 后每次
+    /// 派发都是新激活——web_fetch 候选计数按激活隔离，第二次派发从 1/8
+    /// 重新起算，不再跨派发累积。
     #[tokio::test]
-    async fn web_fetch_candidate_count_accumulates_across_continue_dispatches() {
+    async fn web_fetch_candidate_count_resets_per_auto_closed_dispatch() {
         let dir = test_dir();
         let journal = JournalRecorder::new(dir.clone());
         let host = TestHost {
             journal,
             tool_result: None,
         };
-        let continue_call = ToolCall {
-            name: "retrieval_disposition".to_string(),
-            arguments: serde_json::json!({
-                "role": "external_retrieval",
-                "decision": "continue",
-                "requirement_delta": "补充 b.example 页面",
-            }),
-            call_id: "call-d1".to_string(),
-        };
         let gateway: Arc<dyn ModelGateway> = Arc::new(FakeProvider::new(vec![
             ScriptedResponse::tool_calls(vec![web_fetch_call("call-1", "https://a.example")]),
             ScriptedResponse::tool_calls(vec![web_fetch_call("call-2", "https://a.example")]),
             ScriptedResponse::text("检索完成"),
-            ScriptedResponse::tool_calls(vec![continue_call]),
             ScriptedResponse::tool_calls(vec![web_fetch_call("call-3", "https://b.example")]),
             ScriptedResponse::tool_calls(vec![web_fetch_call("call-4", "https://b.example")]),
             ScriptedResponse::text("检索完成"),
-            ScriptedResponse::text("完成"),
             ScriptedResponse::text("完成"),
             ScriptedResponse::text("完成"),
         ]));
@@ -21011,27 +21984,22 @@ mod tests {
             .await
             .unwrap();
 
-        // Same activation (continue bumped the contract revision once) with
-        // the accumulated candidate list — dispatch 2 continued at 1/8.
+        // auto-close：第二次派发是新激活（fresh id、revision 0），候选
+        // 计数从 1/8 重新起算——registry 里是最新激活（b.example）。
         let registry = controller.activations.lock().unwrap();
         let act = registry
             .states
             .get(&SubagentRole::ExternalRetrieval)
             .unwrap();
         assert_eq!(
-            act.contract_revision, 1,
-            "continue re-entered the same activation"
+            act.activation_id, "retrieval-external_retrieval-RUN-WFC2-01",
+            "auto-close 后新派发新建激活"
         );
-        assert_eq!(
-            act.candidate_urls,
-            vec![
-                "https://a.example".to_string(),
-                "https://b.example".to_string()
-            ]
-        );
+        assert_eq!(act.contract_revision, 0);
+        assert_eq!(act.candidate_urls, vec!["https://b.example".to_string()]);
 
-        // Journal: the two lane fetches carry counts 1 and 2 (dispatch
-        // wrappers call-1/call-3 carry no count).
+        // Journal: 两条 lane web_fetch 完成，计数按激活分别为 1,1
+        // （dispatch 包装 call-1/call-3 不计数；不再跨派发累积为 1,2）。
         let events = events(&dir);
         let completed: Vec<&RunEvent> = events
             .iter()
@@ -21048,16 +22016,18 @@ mod tests {
         );
         assert_eq!(
             completed[1].payload["candidate_count"],
-            serde_json::json!(2)
+            serde_json::json!(1)
         );
+        assert_eq!(completed[1].payload["candidate_cap"], serde_json::json!(8));
         let _ = std::fs::remove_dir_all(&dir);
     }
 
-    /// a `continue` disposition keeps the activation (revision +1, the
-    /// requirement delta becomes the next task goal), and the next retrieval
-    /// re-enters the same activation.
+    /// THIN-HARNESS-REDESIGN R1 (§4.4): 每次调用即闭环——每个派发新建
+    /// 激活（fresh activation_id / contract_revision 0 / 新预算与新候选
+    /// 计数），auto_close 后不再复用；黑板分区按 P2-3 用户裁决全量覆盖
+    /// （response / entries / ledger 替换，分区代表最近一次派发）。
     #[tokio::test]
-    async fn subagent_activation_identity_is_session_scoped_and_reused() {
+    async fn subagent_dispatch_creates_fresh_activation_per_call() {
         let dir = test_dir();
         let journal = JournalRecorder::new(dir.clone());
         let host = TestHost {
@@ -21065,26 +22035,18 @@ mod tests {
             tool_result: None,
         };
 
-        let continue_call = ToolCall {
-            name: "retrieval_disposition".to_string(),
-            arguments: serde_json::json!({
-                "role": "internal_retrieval",
-                "decision": "continue",
-                "requirement_delta": "补充 gate.rs 的线索",
-            }),
-            call_id: "call-d1".to_string(),
-        };
         let gateway: Arc<dyn ModelGateway> = Arc::new(FakeProvider::new(vec![
             ScriptedResponse::tool_calls(vec![tool_call("retrieve_project_docs", "call-1")]),
             ScriptedResponse::text("[DOC] a.md\n第一批"),
-            ScriptedResponse::tool_calls(vec![continue_call]),
             ScriptedResponse::tool_calls(vec![tool_call("retrieve_project_docs", "call-2")]),
             ScriptedResponse::text("[DOC] b.md\n第二批"),
             ScriptedResponse::text("完成"),
             ScriptedResponse::text("完成"),
         ]));
         let controller = with_retrieval_enabled(AgentLoopController::with_gateway(gateway));
-        let mut orientation = crate::orientation::OrientationSessionState::new("sess-abcdef123456");
+        // R1 (§4.6): 生产默认阈值 50；这些场景固定 7 保持原触发语义。
+        let mut orientation =
+            crate::orientation::OrientationSessionState::new_with_threshold("sess-abcdef123456", 7);
         controller
             .run_turn(
                 &host,
@@ -21112,50 +22074,39 @@ mod tests {
             p0.get("activation_id").and_then(|v| v.as_str()),
             Some("retrieval-internal_retrieval-sess-abc-00")
         );
-        assert_eq!(p0.get("activation_id"), p1.get("activation_id"));
+        assert_eq!(
+            p1.get("activation_id").and_then(|v| v.as_str()),
+            Some("retrieval-internal_retrieval-sess-abc-01"),
+            "auto-close 后新派发新建激活"
+        );
         assert_eq!(
             p0.get("contract_id").and_then(|v| v.as_str()),
             Some("retrieval-contract-internal_retrieval")
         );
-        // continue bumped the revision — the second assessment carries +1
-        // (verifier §4.4 continue+1 rule).
+        // auto-close：两次派发均 revision 0（无 continue 递增）。
         assert_eq!(p0.get("contract_revision"), Some(&serde_json::json!(0)));
-        assert_eq!(p1.get("contract_revision"), Some(&serde_json::json!(1)));
-        // GAP-RETRIEVAL-TOOLS: the structured result is PER-ITERATION —
-        // revision 1's ledger covers this dispatch's evidence ([DOC] b.md).
-        // The blackboard section still accumulates across the reused
-        // activation (write_section extends).
-        assert_eq!(p1.get("source_counts").unwrap()["total"], 1);
-        let r = controller.blackboard().read();
-        assert_eq!(r.internal_ret.project_docs, vec!["a.md", "b.md"]);
-        // The continue disposition was accepted (outcome=accepted) and bound
-        // the first assessment.
-        let dispositions: Vec<_> = events
+        assert_eq!(p1.get("contract_revision"), Some(&serde_json::json!(0)));
+        // 每条派发一条 auto_close close record（每激活一条，verifier
+        // 同 activation 单 close 规则满足）。
+        let closes: Vec<_> = events
             .iter()
-            .filter(|e| e.event_type == EventType::RetrievalParentDisposition)
+            .filter(|e| e.event_type == EventType::RetrievalCloseRecord)
             .collect();
-        assert_eq!(dispositions.len(), 1);
+        assert_eq!(closes.len(), 2, "{:?}", event_types(&dir));
+        assert!(closes.iter().all(|c| {
+            c.payload.get("terminal_reason").and_then(|v| v.as_str()) == Some("auto_close")
+        }));
+        // 无 disposition 事件（close/continue 往返已退役）。
         assert_eq!(
-            dispositions[0]
-                .payload
-                .get("outcome")
-                .and_then(|v| v.as_str()),
-            Some("accepted")
+            events
+                .iter()
+                .filter(|e| e.event_type == EventType::RetrievalParentDisposition)
+                .count(),
+            0
         );
-        assert_eq!(
-            dispositions[0]
-                .payload
-                .get("decision")
-                .and_then(|v| v.as_str()),
-            Some("continue")
-        );
-        assert_eq!(
-            dispositions[0]
-                .payload
-                .get("requirement_delta")
-                .and_then(|v| v.as_str()),
-            Some("补充 gate.rs 的线索")
-        );
+        // 黑板分区覆盖语义（P2-3 用户裁决选 a）——最近一次派发替换。
+        let r = controller.blackboard().read();
+        assert_eq!(r.internal_ret.project_docs, vec!["b.md"]);
 
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -21180,12 +22131,13 @@ mod tests {
         }
     }
 
-    /// M4: an accepted close commits the close record (normal_close with
-    /// the validated disposition + assessment + digest bound) and FREEZES
-    /// the activation — a later disposition is refused (no second
-    /// disposition event, no second close).
+    /// THIN-HARNESS-REDESIGN R1 (§4.4): 派发成功即 auto_close close
+    /// record（assessment + result_digest 绑定，terminal_reason
+    /// auto_close）；对已关闭激活的迟到 retrieval_disposition 调用一律
+    /// 机械拒绝（no_pending_assessment，零 disposition 事件、零二次
+    /// close）。
     #[tokio::test]
-    async fn disposition_close_accepted_writes_close_record_and_freezes() {
+    async fn dispatch_auto_closes_and_late_disposition_refused() {
         let dir = test_dir();
         let journal = JournalRecorder::new(dir.clone());
         let host = TestHost {
@@ -21212,7 +22164,8 @@ mod tests {
             ScriptedResponse::text("完成"),
         ]));
         let controller = with_retrieval_enabled(AgentLoopController::with_gateway(gateway));
-        let mut orientation = crate::orientation::OrientationSessionState::new("sess-abcdef123456");
+        let mut orientation =
+            crate::orientation::OrientationSessionState::new_with_threshold("sess-abcdef123456", 7);
         controller
             .run_turn(
                 &host,
@@ -21228,16 +22181,15 @@ mod tests {
             .unwrap();
 
         let events = events(&dir);
-        let dispositions: Vec<_> = events
-            .iter()
-            .filter(|e| e.event_type == EventType::RetrievalParentDisposition)
-            .collect();
-        assert_eq!(dispositions.len(), 1, "second disposition refused");
-        let d = &dispositions[0].payload;
-        assert_eq!(d.get("decision").and_then(|v| v.as_str()), Some("close"));
-        assert_eq!(d.get("outcome").and_then(|v| v.as_str()), Some("accepted"));
-        let disposition_id = d.get("disposition_id").and_then(|v| v.as_str()).unwrap();
-
+        // 无 disposition 事件（close/continue 往返已退役）。
+        assert_eq!(
+            events
+                .iter()
+                .filter(|e| e.event_type == EventType::RetrievalParentDisposition)
+                .count(),
+            0
+        );
+        // 一条 auto_close close record（assessment + digest 绑定）。
         let closes: Vec<_> = events
             .iter()
             .filter(|e| e.event_type == EventType::RetrievalCloseRecord)
@@ -21246,25 +22198,39 @@ mod tests {
         let c = &closes[0].payload;
         assert_eq!(
             c.get("terminal_reason").and_then(|v| v.as_str()),
-            Some("normal_close")
+            Some("auto_close")
         );
         assert_eq!(
-            c.get("validated_disposition_id").and_then(|v| v.as_str()),
-            Some(disposition_id)
+            c.get("validated_disposition_id"),
+            Some(&serde_json::Value::Null),
+            "auto_close 不引用 disposition"
         );
-        assert_eq!(c.get("assessment_id"), d.get("assessment_id"));
-        assert_eq!(c.get("activation_id"), d.get("activation_id"));
+        assert!(c.get("assessment_id").is_some());
         let digest = c.get("result_digest").and_then(|v| v.as_str()).unwrap();
-        assert_eq!(digest.len(), 64, "64-hex sha256 for normal_close");
+        assert_eq!(digest.len(), 64, "64-hex sha256 for auto_close");
         assert_eq!(c.get("contract_revision"), Some(&serde_json::json!(0)));
+        // 迟到的两次 disposition 调用被拒（no_pending_assessment）。
+        assert_eq!(
+            events
+                .iter()
+                .filter(|e| {
+                    e.event_type == EventType::ToolCompleted
+                        && e.payload.get("error").and_then(|v| v.as_str())
+                            == Some("no_pending_assessment")
+                })
+                .count(),
+            2
+        );
 
         let _ = std::fs::remove_dir_all(&dir);
     }
 
-    /// M4: the same disposition call replayed journals byte-identical
-    /// payloads (replayed_idempotent) and does NOT re-commit the close.
+    /// THIN-HARNESS-REDESIGN R1 (§4.4): auto-close 后再次派发 = 新激活
+    /// （fresh activation_id、revision 0）；夹在中间的 retrieval_disposition
+    /// 调用被机械拒绝（no_pending_assessment），不产生 disposition 事件、
+    /// 不干扰两次 auto_close。
     #[tokio::test]
-    async fn disposition_replay_idempotent() {
+    async fn second_dispatch_after_auto_close_starts_fresh() {
         let dir = test_dir();
         let journal = JournalRecorder::new(dir.clone());
         let host = TestHost {
@@ -21281,12 +22247,8 @@ mod tests {
                 None,
                 "call-d1",
             )]),
-            ScriptedResponse::tool_calls(vec![disposition_call(
-                "internal_retrieval",
-                "close",
-                None,
-                "call-d1",
-            )]),
+            ScriptedResponse::tool_calls(vec![tool_call("retrieve_project_docs", "call-2")]),
+            ScriptedResponse::text("[DOC] b.md\n检索完成"),
             ScriptedResponse::text("完成"),
             ScriptedResponse::text("完成"),
         ]));
@@ -21306,110 +22268,220 @@ mod tests {
             .unwrap();
 
         let events = events(&dir);
-        let dispositions: Vec<_> = events
+        // 零 disposition 事件；一次 no_pending_assessment 拒绝。
+        assert_eq!(
+            events
+                .iter()
+                .filter(|e| e.event_type == EventType::RetrievalParentDisposition)
+                .count(),
+            0
+        );
+        assert_eq!(
+            events
+                .iter()
+                .filter(|e| {
+                    e.event_type == EventType::ToolCompleted
+                        && e.payload.get("error").and_then(|v| v.as_str())
+                            == Some("no_pending_assessment")
+                })
+                .count(),
+            1
+        );
+        // 两次派发 = 两个新激活 + 两条 auto_close close record。
+        let assessments: Vec<_> = events
             .iter()
-            .filter(|e| e.event_type == EventType::RetrievalParentDisposition)
+            .filter(|e| e.event_type == EventType::InformationSufficiencyAssessment)
             .collect();
-        assert_eq!(dispositions.len(), 2);
-        let p0 = &dispositions[0].payload;
-        let p1 = &dispositions[1].payload;
-        // Byte-identical payloads (the outcome rides the first occurrence).
-        assert_eq!(p0, p1, "replayed disposition must be canonical-identical");
-        assert_eq!(p1.get("outcome").and_then(|v| v.as_str()), Some("accepted"));
-        // ONE close record — the replay never re-commits.
+        assert_eq!(assessments.len(), 2);
+        assert_eq!(
+            assessments[0]
+                .payload
+                .get("activation_id")
+                .and_then(|v| v.as_str()),
+            Some("retrieval-internal_retrieval-RUN-REPL-00"),
+            "无 orientation 时激活身份取 run_id 前 8 字符"
+        );
+        assert_eq!(
+            assessments[1]
+                .payload
+                .get("activation_id")
+                .and_then(|v| v.as_str()),
+            Some("retrieval-internal_retrieval-RUN-REPL-01")
+        );
+        assert_eq!(
+            assessments[0].payload.get("contract_revision"),
+            Some(&serde_json::json!(0))
+        );
+        assert_eq!(
+            assessments[1].payload.get("contract_revision"),
+            Some(&serde_json::json!(0))
+        );
         assert_eq!(
             events
                 .iter()
                 .filter(|e| e.event_type == EventType::RetrievalCloseRecord)
                 .count(),
-            1
+            2
         );
 
         let _ = std::fs::remove_dir_all(&dir);
     }
 
-    /// M4: a disposition on a CONSUMED assessment (after an accepted
-    /// continue bumped the revision) is rejected_stale — the rejection is
-    /// recorded, not silently dropped (§4.4).
+    /// THIN-HARNESS-REDESIGN R1 (§4.1): 主代理工具面收敛为硬保留 8 工具
+    /// （framework_fallback 检索模式下）——删除项（list_dir/run_tests/
+    /// search_tool/project_doc_index/pdf_read/plan_write/
+    /// retrieval_disposition/retrieve_project_docs）与边界三项
+    /// （todo_write/update_goal/compaction_whitelist_add）一律不在首轮
+    /// 声明面。
+    struct R1SurfaceRegistry;
+    impl ToolRegistry for R1SurfaceRegistry {
+        fn get(&self, name: &str) -> Option<ToolDef> {
+            Self::all().into_iter().find(|t| t.name == name)
+        }
+        fn list(&self) -> Vec<ToolDef> {
+            Self::all()
+        }
+    }
+    impl R1SurfaceRegistry {
+        fn all() -> Vec<ToolDef> {
+            [
+                "run_terminal_cmd",
+                "read_file",
+                "grep",
+                "search_replace",
+                "web_search",
+                "web_fetch",
+            ]
+            .iter()
+            .map(|n| ToolDef {
+                name: n.to_string(),
+                description: format!("tool {n}"),
+                parameters: serde_json::json!({}),
+            })
+            .collect()
+        }
+    }
+    struct R1SurfaceHost {
+        journal: JournalRecorder,
+    }
+    #[async_trait]
+    impl LoopHost for R1SurfaceHost {
+        fn journal(&self) -> &JournalRecorder {
+            &self.journal
+        }
+        fn tools_registry(&self) -> &dyn ToolRegistry {
+            &R1SurfaceRegistry
+        }
+        fn tool_policy(&self) -> crate::host::ToolPolicy {
+            // Interactive：run_terminal_cmd 探针完整（Benchmark 会剔除）。
+            crate::host::ToolPolicy::Interactive
+        }
+        fn terminal_available(&self) -> bool {
+            true
+        }
+        fn session_cwd(&self) -> std::path::PathBuf {
+            self.journal.journal_dir().to_path_buf()
+        }
+        async fn request_permission(
+            &self,
+            _risk: RiskClass,
+            _tool: &str,
+            _args: &serde_json::Value,
+        ) -> Result<PermitDecision, PermitError> {
+            Ok(PermitDecision::AllowOnce)
+        }
+        async fn call_tool(
+            &self,
+            _name: &str,
+            _args: serde_json::Value,
+            _call_id: &str,
+        ) -> Result<ToolResult, ToolError> {
+            Ok(ok_result())
+        }
+    }
+
     #[tokio::test]
-    async fn disposition_stale_after_continue_rejected() {
+    async fn r1_main_surface_is_eight_tools() {
         let dir = test_dir();
-        let journal = JournalRecorder::new(dir.clone());
-        let host = TestHost {
-            journal,
-            tool_result: None,
+        let host = R1SurfaceHost {
+            journal: JournalRecorder::new(dir.clone()),
         };
 
         let gateway: Arc<dyn ModelGateway> = Arc::new(FakeProvider::new(vec![
-            ScriptedResponse::tool_calls(vec![tool_call("retrieve_project_docs", "call-1")]),
-            ScriptedResponse::text("[DOC] a.md\n第一批"),
-            ScriptedResponse::tool_calls(vec![disposition_call(
-                "internal_retrieval",
-                "continue",
-                Some("补充 gate.rs"),
-                "call-d1",
-            )]),
-            // A late close on the consumed assessment — stale (rev 0 vs 1).
-            ScriptedResponse::tool_calls(vec![disposition_call(
-                "internal_retrieval",
-                "close",
-                None,
-                "call-d2",
-            )]),
             ScriptedResponse::text("完成"),
             ScriptedResponse::text("完成"),
         ]));
-        let controller = with_retrieval_enabled(AgentLoopController::with_gateway(gateway));
+        // framework_fallback：web 族在面内（与生产 CLI 跑分一致）。
+        // framework_fallback：web 族在面内（与生产 CLI 跑分一致）；
+        // console_default 启用 submit（生产路径同款）。
+        let controller = with_retrieval_enabled(
+            AgentLoopController::with_gateway(gateway).with_console_default_enabled(true),
+        );
         controller
-            .run_turn(
-                &host,
-                "查找项目文档",
-                "RUN-STALE",
-                MANIFEST,
-                0,
-                None,
-                None,
-                None,
-            )
+            .run_turn(&host, "完成任务", "RUN-SURF", MANIFEST, 0, None, None, None)
             .await
             .unwrap();
 
         let events = events(&dir);
-        let dispositions: Vec<_> = events
+        let initial = events
             .iter()
-            .filter(|e| e.event_type == EventType::RetrievalParentDisposition)
+            .find(|e| {
+                e.event_type == EventType::RequestHeaderChange
+                    && e.payload.get("reason").and_then(|v| v.as_str()) == Some("initial")
+            })
+            .expect("initial request header");
+        let tools: Vec<String> = initial.payload["tools"]
+            .as_array()
+            .expect("tools list")
+            .iter()
+            .map(|v| v.as_str().unwrap().to_string())
             .collect();
-        assert_eq!(dispositions.len(), 2);
-        assert_eq!(
-            dispositions[0]
-                .payload
-                .get("outcome")
-                .and_then(|v| v.as_str()),
-            Some("accepted")
-        );
-        assert_eq!(
-            dispositions[1]
-                .payload
-                .get("outcome")
-                .and_then(|v| v.as_str()),
-            Some("rejected_stale")
-        );
-        // No close record — the stale close never commits.
-        assert_eq!(
-            events
-                .iter()
-                .filter(|e| e.event_type == EventType::RetrievalCloseRecord)
-                .count(),
-            0
-        );
+        // 硬保留 8 工具（framework_fallback：web 族可见；browser_read 不
+        // 在面内）。删除项与边界项一律不出现。
+        let expected = [
+            "run_terminal_cmd",
+            "read_file",
+            "grep",
+            "search_replace",
+            "web_search",
+            "web_fetch",
+            "blackboard_read",
+            "submit",
+        ];
+        for tool in &expected {
+            assert!(
+                tools.iter().any(|t| t == tool),
+                "retained tool '{tool}' must be declared: {tools:?}"
+            );
+        }
+        for banned in [
+            "list_dir",
+            "run_tests",
+            "search_tool",
+            "project_doc_index",
+            "pdf_read",
+            "plan_write",
+            "retrieval_disposition",
+            "retrieve_project_docs",
+            "todo_write",
+            "update_goal",
+            "compaction_whitelist_add",
+            "browser_read",
+        ] {
+            assert!(
+                !tools.iter().any(|t| t == banned),
+                "banned tool '{banned}' must NOT be declared: {tools:?}"
+            );
+        }
 
         let _ = std::fs::remove_dir_all(&dir);
     }
 
-    /// M4: a retrieval while the activation awaits disposition is refused
-    /// with a structured error (no second assessment, no silent accept).
+    /// THIN-HARNESS-REDESIGN R1 (§4.4): auto-close 后连续两次检索派发
+    /// 都成功——第二次不再被"awaiting disposition"拒（该状态已被每次调用
+    /// 即闭环取代），产生两条 assessment 与两条 auto_close close record。
     #[tokio::test]
-    async fn retrieval_while_awaiting_disposition_refused() {
+    async fn consecutive_dispatches_both_auto_close() {
         let dir = test_dir();
         let journal = JournalRecorder::new(dir.clone());
         let host = TestHost {
@@ -21421,6 +22493,7 @@ mod tests {
             ScriptedResponse::tool_calls(vec![tool_call("retrieve_project_docs", "call-1")]),
             ScriptedResponse::text("[DOC] a.md\n检索完成"),
             ScriptedResponse::tool_calls(vec![tool_call("retrieve_project_docs", "call-2")]),
+            ScriptedResponse::text("[DOC] b.md\n检索完成"),
             ScriptedResponse::text("完成"),
             ScriptedResponse::text("完成"),
         ]));
@@ -21440,25 +22513,32 @@ mod tests {
             .unwrap();
 
         let events = events(&dir);
-        // One assessment only — the second dispatch was refused.
         assert_eq!(
             events
                 .iter()
                 .filter(|e| e.event_type == EventType::InformationSufficiencyAssessment)
                 .count(),
-            1
+            2,
+            "both dispatches formed results: {:?}",
+            event_types(&dir)
         );
-        let refused = events
-            .iter()
-            .find(|e| {
+        assert_eq!(
+            events
+                .iter()
+                .filter(|e| e.event_type == EventType::RetrievalCloseRecord)
+                .count(),
+            2,
+            "both dispatches auto-closed: {:?}",
+            event_types(&dir)
+        );
+        // 无 awaiting-disposition 拒绝（该拒绝路径已不可达）。
+        assert!(
+            !events.iter().any(|e| {
                 e.event_type == EventType::ToolCompleted
                     && e.payload.get("error").and_then(|v| v.as_str())
                         == Some("activation_awaiting_disposition")
-            })
-            .expect("refusal journaled");
-        assert_eq!(
-            refused.payload.get("status").and_then(|v| v.as_str()),
-            Some("error")
+            }),
+            "awaiting-disposition refusal must not fire under auto-close"
         );
 
         let _ = std::fs::remove_dir_all(&dir);
@@ -21620,18 +22700,13 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
-    /// F5 (user adjudication 2026-08-10): a `continue` re-entry is the
-    /// SAME retrieval session — the 120-round budget ACCUMULATES across
-    /// dispatches and resets only with a new activation. Dispatch 1
-    /// consumes 2 subagent tool rounds; the continue re-entry starts at
-    /// initial=2, so dispatch 2's 2nd subagent round (cumulative 4 ≥ 4)
-    /// exhausts the budget — the result still forms, then a
-    /// `budget_exhausted` close. The MAIN lane (3 rounds: retrieve /
-    /// continue / retrieve) stays under its own independent 4 — no second
-    /// limit gate. Without accumulation the subagent's gate would never
-    /// fire (its re-entry would start at 0 and only 3 of 4 would be used).
+    /// THIN-HARNESS-REDESIGN R1 (§4.4): auto-close 后每次派发 = 新激活 =
+    /// 新预算（F5 的 continue 累积语义随 disposition 往返一并退役）。
+    /// 两次派发各耗 2 个子代理工具轮（< 4），都不触顶、都形成结果并
+    /// auto_close——验证"新激活从 0 起算"（若沿用旧累积语义，第二次会
+    /// 在累计 4 轮时 budget_exhausted）。
     #[tokio::test]
-    async fn subagent_budget_accumulates_across_continue() {
+    async fn subagent_budget_is_fresh_per_dispatch() {
         let dir = test_dir();
         let journal = JournalRecorder::new(dir.clone());
         let host = TestHost {
@@ -21650,12 +22725,6 @@ mod tests {
             ScriptedResponse::tool_calls(vec![tool_call("read_file", "call-s1")]),
             ScriptedResponse::tool_calls(vec![tool_call("read_file", "call-s2")]),
             ScriptedResponse::text("[DOC] a.md\n第一批"),
-            ScriptedResponse::tool_calls(vec![disposition_call(
-                "internal_retrieval",
-                "continue",
-                Some("补充第二批"),
-                "call-d1",
-            )]),
             ScriptedResponse::tool_calls(vec![tool_call("retrieve_project_docs", "call-2")]),
             ScriptedResponse::tool_calls(vec![tool_call("read_file", "call-s3")]),
             ScriptedResponse::tool_calls(vec![tool_call("read_file", "call-s4")]),
@@ -21683,58 +22752,39 @@ mod tests {
             .unwrap();
 
         let events = events(&dir);
-        // The re-entry's 2nd subagent round crosses the ACCUMULATED budget
-        // (2 used + 2 = 4 ≥ 4) — the limit gate fired exactly once, with
-        // the cumulative count, INSIDE dispatch 2 (before the close).
-        let limits: Vec<_> = events
-            .iter()
-            .enumerate()
-            .filter(|(_, e)| {
+        // 新预算语义：两次派发均 < 4，无 tool_rounds_limit 门触发。
+        assert!(
+            !events.iter().any(|e| {
                 e.event_type == EventType::GateDecision
                     && e.payload.get("gate").and_then(|v| v.as_str()) == Some("tool_rounds_limit")
-            })
-            .map(|(i, _e)| i)
-            .collect();
-        assert_eq!(limits.len(), 1, "{:?}", event_types(&dir));
-        let limit_gate = &events[limits[0]];
-        assert_eq!(
-            limit_gate.payload.get("tool_rounds"),
-            Some(&serde_json::json!(4))
+            }),
+            "fresh per-dispatch budget must not trip the limit: {:?}",
+            event_types(&dir)
         );
-        assert_eq!(
-            limit_gate.payload.get("max_tool_rounds"),
-            Some(&serde_json::json!(4))
-        );
-        // Both dispatches formed results — assessments at revisions 0
-        // (pre-continue) and 1 (the re-entry).
+        // 两次派发均形成结果——revision 0（无 continue 递增）。
         let assessments: Vec<_> = events
             .iter()
             .filter(|e| e.event_type == EventType::InformationSufficiencyAssessment)
             .collect();
         assert_eq!(assessments.len(), 2, "{:?}", event_types(&dir));
         assert_eq!(
-            assessments[1].payload.get("contract_revision"),
-            Some(&serde_json::json!(1))
+            assessments[0].payload.get("contract_revision"),
+            Some(&serde_json::json!(0))
         );
-        // Exhaustion closed the activation with the assessment bound (no
-        // parent disposition was needed — §4.4 terminal authority); the
-        // limit gate precedes the close record.
-        let close_idx = events
-            .iter()
-            .position(|e| e.event_type == EventType::RetrievalCloseRecord)
-            .expect("budget close record");
-        assert!(limits[0] < close_idx, "limit gate inside dispatch 2");
-        let close = &events[close_idx];
         assert_eq!(
-            close
-                .payload
-                .get("terminal_reason")
-                .and_then(|v| v.as_str()),
-            Some("budget_exhausted")
+            assessments[1].payload.get("contract_revision"),
+            Some(&serde_json::json!(0))
         );
-        assert!(close.payload.get("assessment_id").is_some());
-        // Exactly 4 subagent tool rounds executed across both dispatches —
-        // dispatch 2's second round was the last allowed one.
+        // 两条 auto_close close record。
+        let closes: Vec<_> = events
+            .iter()
+            .filter(|e| e.event_type == EventType::RetrievalCloseRecord)
+            .collect();
+        assert_eq!(closes.len(), 2, "{:?}", event_types(&dir));
+        assert!(closes.iter().all(|c| {
+            c.payload.get("terminal_reason").and_then(|v| v.as_str()) == Some("auto_close")
+        }));
+        // 两次派发各执行 2 个 read_file（共 4 个，均成功）。
         assert_eq!(
             events
                 .iter()
@@ -21789,7 +22839,8 @@ mod tests {
         let controller = with_retrieval_enabled(AgentLoopController::with_gateway(Arc::new(
             FakeProvider::new(script),
         )));
-        let mut orientation = crate::orientation::OrientationSessionState::new("sess-lane1234567");
+        let mut orientation =
+            crate::orientation::OrientationSessionState::new_with_threshold("sess-lane1234567", 7);
         controller
             .run_turn(
                 &host,
@@ -21949,7 +23000,8 @@ mod tests {
             ScriptedResponse::text("修复完成。"),
         ]));
         let controller = AgentLoopController::with_gateway(gateway);
-        let mut orientation = crate::orientation::OrientationSessionState::new("sess-dc12345678");
+        let mut orientation =
+            crate::orientation::OrientationSessionState::new_with_threshold("sess-dc12345678", 7);
         controller
             .run_turn(
                 &host,
@@ -22160,12 +23212,12 @@ mod tests {
 
     // ── ORZ-ORIENTATION-FORCED-TEMPLATE (2026-08-15, ADR-0010 §14.16) ─────
 
-    /// Main lane: 7 completed rounds cross the orientation threshold; the
-    /// next round is a FORCED template round (no tools offered, the model
-    /// answers the JSON template), and actions resume only after the
-    /// accepted answer. The fire commits at the template round's completion.
+    /// THIN-HARNESS-REDESIGN R1 (§4.3): orientation 强制模板轮变体退役——
+    /// 7 轮跨越阈值时只注入简短 [ORIENTATION] 块（fire-and-continue，
+    /// 立即 commit），不产生 checkpoint_response、不强制无工具轮；终答前
+    /// 方向核查由 COUNTEREXAMPLE_GATE 承担。
     #[tokio::test]
-    async fn orientation_forced_template_pauses_then_accepts_and_resumes() {
+    async fn orientation_fires_as_brief_injection_and_continues() {
         let dir = test_dir();
         let journal = JournalRecorder::new(dir.clone());
         let host = TestHost {
@@ -22185,11 +23237,11 @@ mod tests {
                 &format!("call-{i}"),
             )]));
         }
-        script.push(template_answer("continue"));
         script.push(ScriptedResponse::text("完成"));
         script.push(ScriptedResponse::text("完成"));
         let controller = AgentLoopController::with_gateway(Arc::new(FakeProvider::new(script)));
-        let mut orientation = crate::orientation::OrientationSessionState::new("sess-template1");
+        let mut orientation =
+            crate::orientation::OrientationSessionState::new_with_threshold("sess-template1", 7);
         controller
             .run_turn(
                 &host,
@@ -22210,50 +23262,37 @@ mod tests {
             .filter(|e| e.event_type == EventType::OrientationCheckpoint)
             .collect();
         assert_eq!(fires.len(), 1, "{:?}", event_types(&dir));
+        assert_eq!(
+            fires[0].payload["injection_position"].as_str(),
+            Some("post_tool_batch_gap")
+        );
+        assert_eq!(
+            fires[0]
+                .payload
+                .get("completed_turns_since_orientation")
+                .and_then(|v| v.as_u64()),
+            Some(7)
+        );
+        // 无 checkpoint_response——不再有强制模板轮。
         let responses: Vec<_> = events
             .iter()
             .filter(|e| e.event_type == EventType::CheckpointResponse)
             .collect();
-        assert_eq!(responses.len(), 1, "{:?}", event_types(&dir));
-        assert_eq!(
-            responses[0].payload["inquiry_kind"].as_str(),
-            Some("orientation_checkpoint")
-        );
-        assert_eq!(responses[0].payload["outcome"].as_str(), Some("accepted"));
-        assert_eq!(responses[0].payload["attempt"].as_u64(), Some(1));
-        // The checkpoint round was tool-free: no tool event between the
-        // fire and the accepted response.
-        let fire_idx = events
-            .iter()
-            .position(|e| e.event_type == EventType::OrientationCheckpoint)
-            .unwrap();
-        let resp_idx = events
-            .iter()
-            .position(|e| e.event_type == EventType::CheckpointResponse)
-            .unwrap();
-        assert!(resp_idx > fire_idx);
-        assert!(
-            !events[fire_idx..=resp_idx]
-                .iter()
-                .any(|e| e.event_type == EventType::ToolStarted),
-            "checkpoint round must be tool-free: {fire_idx}..={resp_idx}"
-        );
-        // The fire committed after the accepted template round: the 7
-        // pre-fire rounds + the checkpoint round fed, then reset to 0; the
-        // two final rounds feed 2.
+        assert_eq!(responses.len(), 0, "{:?}", event_types(&dir));
+        // Fire 时立即 commit：7 轮触发后归 0，最后两个终答轮喂 2。
         assert_eq!(orientation.main.completed_rounds, 2);
         assert_eq!(
             events.last().unwrap().event_type,
             EventType::RunFinished,
-            "actions resume after the accepted template round"
+            "actions resume after the brief injection"
         );
         let _ = std::fs::remove_dir_all(&dir);
     }
 
-    /// Invalid first answer → one error-feedback re-fill → accepted on
-    /// attempt 2; the fire commits only after the accepted round.
+    /// THIN-HARNESS-REDESIGN R1 (§4.3): 触发后下一轮仍是普通工具轮——
+    /// orientation 不再强制无工具模板轮，read_file 调用照常执行。
     #[tokio::test]
-    async fn orientation_forced_template_refills_once_then_accepts() {
+    async fn orientation_fire_does_not_force_tool_free_round() {
         let dir = test_dir();
         let journal = JournalRecorder::new(dir.clone());
         let host = TestHost {
@@ -22273,14 +23312,16 @@ mod tests {
                 &format!("call-{i}"),
             )]));
         }
-        // Checkpoint round 1: not a JSON object → refill requested.
-        script.push(ScriptedResponse::text("根据任务继续"));
-        // Checkpoint round 2: valid JSON → accepted.
-        script.push(template_answer("continue"));
+        // Fire 后的下一轮：普通工具轮（read_file call-7）直接执行。
+        script.push(ScriptedResponse::tool_calls(vec![tool_call(
+            "read_file",
+            "call-7",
+        )]));
         script.push(ScriptedResponse::text("完成"));
         script.push(ScriptedResponse::text("完成"));
         let controller = AgentLoopController::with_gateway(Arc::new(FakeProvider::new(script)));
-        let mut orientation = crate::orientation::OrientationSessionState::new("sess-template2");
+        let mut orientation =
+            crate::orientation::OrientationSessionState::new_with_threshold("sess-template2", 7);
         controller
             .run_turn(
                 &host,
@@ -22296,28 +23337,33 @@ mod tests {
             .unwrap();
 
         let events = events(&dir);
-        let responses: Vec<_> = events
-            .iter()
-            .filter(|e| e.event_type == EventType::CheckpointResponse)
-            .collect();
-        assert_eq!(responses.len(), 2, "{:?}", event_types(&dir));
+        // 无 checkpoint_response（强制模板轮已退役）。
         assert_eq!(
-            responses[0].payload["outcome"].as_str(),
-            Some("refill_requested")
+            events
+                .iter()
+                .filter(|e| e.event_type == EventType::CheckpointResponse)
+                .count(),
+            0,
+            "{:?}",
+            event_types(&dir)
         );
-        assert_eq!(responses[0].payload["attempt"].as_u64(), Some(1));
+        // Fire 后的 read_file call-7 正常执行（ToolStarted + ToolCompleted）。
+        let fire_idx = events
+            .iter()
+            .position(|e| e.event_type == EventType::OrientationCheckpoint)
+            .expect("orientation fire");
+        let started_idx = events
+            .iter()
+            .position(|e| {
+                e.event_type == EventType::ToolStarted
+                    && e.payload.get("call_id").and_then(|v| v.as_str()) == Some("call-7")
+            })
+            .expect("post-fire tool round must execute");
         assert!(
-            responses[0].payload["validation"]["errors"]
-                .as_array()
-                .is_some_and(|e| !e.is_empty())
+            started_idx > fire_idx,
+            "the tool round after the fire must execute normally"
         );
-        assert_eq!(responses[1].payload["outcome"].as_str(), Some("accepted"));
-        assert_eq!(responses[1].payload["attempt"].as_u64(), Some(2));
-        // The fire was NOT committed after the failed attempt 1 — the
-        // checkpoint round count was fed (8) and still pending; after the
-        // accepted attempt 2 the commit reset to 0, then the two final
-        // rounds fed 2.
-        assert_eq!(orientation.main.completed_rounds, 2);
+        assert_eq!(orientation.main.completed_rounds, 3);
         assert_eq!(events.last().unwrap().event_type, EventType::RunFinished);
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -22327,45 +23373,38 @@ mod tests {
     /// must be passed back to the API"): checkpoint answers are replayed
     /// with their `reasoning_content` on the refill and every follow-up
     /// request (the checkpoint branch must not drop it).
+    ///
+    /// THIN-HARNESS-REDESIGN R1 (§4.3): orientation 的强制模板轮退役后，
+    /// checkpoint 机制仅剩 DC 车道——本回归测试改用 DC 触发（failing
+    /// run_tests → threshold 2 fire → 模板轮重填）。
     #[tokio::test]
     async fn checkpoint_answers_replay_reasoning_content_on_refill_and_followup() {
         let dir = test_dir();
-        let journal = JournalRecorder::new(dir.clone());
-        let host = TestHost {
-            journal,
-            tool_result: Some(ToolResult {
-                output: "ok".to_string(),
-                exit_code: Some(0),
-                output_encoding: None,
-                structured: None,
-                ..Default::default()
-            }),
+        let host = ScriptedTestRunnerHost {
+            journal: JournalRecorder::new(dir.clone()),
+            results: std::sync::Mutex::new(vec![failing_test_run()].into()),
         };
-        let mut script = Vec::new();
-        for i in 0..7 {
-            script.push(ScriptedResponse::tool_calls(vec![tool_call(
-                "read_file",
-                &format!("call-{i}"),
-            )]));
-        }
-        // Checkpoint attempt 1: invalid template answer WITH reasoning.
-        script.push(ScriptedResponse::text("根据任务继续").with_reasoning("推理-尝试1"));
-        // Checkpoint attempt 2: valid template answer WITH reasoning.
-        script.push(template_answer("continue").with_reasoning("推理-尝试2"));
-        script.push(ScriptedResponse::text("完成"));
-        script.push(ScriptedResponse::text("完成"));
+        let script = vec![
+            // 失败一次 → DC 触发（2 signals ≥ threshold 2）。
+            ScriptedResponse::tool_calls(vec![tool_call("run_tests", "call-t1")]),
+            // Checkpoint attempt 1: invalid template answer WITH reasoning.
+            ScriptedResponse::text("根据任务继续").with_reasoning("推理-尝试1"),
+            // Checkpoint attempt 2: valid template answer WITH reasoning.
+            template_answer("continue").with_reasoning("推理-尝试2"),
+            ScriptedResponse::text("完成"),
+            ScriptedResponse::text("完成"),
+        ];
         let fake = Arc::new(FakeProvider::new(script));
         let controller = AgentLoopController::with_gateway(fake.clone());
-        let mut orientation = crate::orientation::OrientationSessionState::new("sess-r4-reasoning");
         controller
             .run_turn(
                 &host,
-                "任务",
+                "修复测试失败",
                 "RUN-R4-REASONING",
                 MANIFEST,
                 0,
                 None,
-                Some(&mut orientation),
+                None,
                 None,
             )
             .await
@@ -22400,124 +23439,40 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
-    /// Two invalid answers → mechanical degrade with an explicit reason;
-    /// the fire still commits (a degrade is a completed template round,
-    /// §2.4) and the run continues without hanging.
-    #[tokio::test]
-    async fn orientation_forced_template_degrades_after_two_invalid_answers() {
-        let dir = test_dir();
-        let journal = JournalRecorder::new(dir.clone());
-        let host = TestHost {
-            journal,
-            tool_result: Some(ToolResult {
-                output: "ok".to_string(),
-                exit_code: Some(0),
-                output_encoding: None,
-                structured: None,
-                ..Default::default()
-            }),
-        };
-        let mut script = Vec::new();
-        for i in 0..7 {
-            script.push(ScriptedResponse::tool_calls(vec![tool_call(
-                "read_file",
-                &format!("call-{i}"),
-            )]));
-        }
-        script.push(ScriptedResponse::text("无法填写模板"));
-        script.push(ScriptedResponse::text("仍然无法填写模板"));
-        script.push(ScriptedResponse::text("完成"));
-        script.push(ScriptedResponse::text("完成"));
-        let controller = AgentLoopController::with_gateway(Arc::new(FakeProvider::new(script)));
-        let mut orientation = crate::orientation::OrientationSessionState::new("sess-template3");
-        controller
-            .run_turn(
-                &host,
-                "任务",
-                "RUN-TPL3",
-                MANIFEST,
-                0,
-                None,
-                Some(&mut orientation),
-                None,
-            )
-            .await
-            .unwrap();
-
-        let events = events(&dir);
-        let responses: Vec<_> = events
-            .iter()
-            .filter(|e| e.event_type == EventType::CheckpointResponse)
-            .collect();
-        assert_eq!(responses.len(), 2, "{:?}", event_types(&dir));
-        assert_eq!(
-            responses[0].payload["outcome"].as_str(),
-            Some("refill_requested")
-        );
-        assert_eq!(responses[1].payload["outcome"].as_str(), Some("degraded"));
-        assert_eq!(
-            responses[1].payload["degrade_reason"].as_str(),
-            Some("validation_failed_after_refill")
-        );
-        // Degrade still commits the fire (§2.4 降级轮按触发族既定语义):
-        // the checkpoint round fed to 8, commit reset to 0, the two final
-        // rounds fed 2 — the loop never re-fires in the same run.
-        assert_eq!(orientation.main.completed_rounds, 2);
-        assert_eq!(
-            events
-                .iter()
-                .filter(|e| e.event_type == EventType::OrientationCheckpoint)
-                .count(),
-            1
-        );
-        assert_eq!(events.last().unwrap().event_type, EventType::RunFinished);
-        let _ = std::fs::remove_dir_all(&dir);
-    }
-
     /// A tool_calls answer during the checkpoint round is a validation
     /// error (`tool_calls_not_allowed`) — nothing executes, one re-fill is
     /// offered, and the accepted answer resumes the run.
+    ///
+    /// THIN-HARNESS-REDESIGN R1 (§4.3): orientation 的强制模板轮退役后，
+    /// 该机制仅剩 DC 车道——本测试改用 DC 触发（failing run_tests →
+    /// threshold 2 fire → 模板轮非法工具调用被拒）。
     #[tokio::test]
     async fn checkpoint_round_tool_call_is_refused_without_execution() {
         let dir = test_dir();
-        let journal = JournalRecorder::new(dir.clone());
-        let host = TestHost {
-            journal,
-            tool_result: Some(ToolResult {
-                output: "ok".to_string(),
-                exit_code: Some(0),
-                output_encoding: None,
-                structured: None,
-                ..Default::default()
-            }),
+        let host = ScriptedTestRunnerHost {
+            journal: JournalRecorder::new(dir.clone()),
+            results: std::sync::Mutex::new(vec![failing_test_run()].into()),
         };
-        let mut script = Vec::new();
-        for i in 0..7 {
-            script.push(ScriptedResponse::tool_calls(vec![tool_call(
-                "read_file",
-                &format!("call-{i}"),
-            )]));
-        }
-        // The checkpoint round illegally requests a tool (the loop offers
-        // none) — the call must never execute.
-        script.push(ScriptedResponse::tool_calls(vec![tool_call(
-            "web_search",
-            "call-cp",
-        )]));
-        script.push(template_answer("continue"));
-        script.push(ScriptedResponse::text("完成"));
-        script.push(ScriptedResponse::text("完成"));
+        let script = vec![
+            // 失败一次 → DC 触发。
+            ScriptedResponse::tool_calls(vec![tool_call("run_tests", "call-t1")]),
+            // The checkpoint round illegally requests a tool (the loop
+            // offers none) — the call must never execute.
+            ScriptedResponse::tool_calls(vec![tool_call("web_search", "call-cp")]),
+            template_answer("continue"),
+            ScriptedResponse::text("完成"),
+            ScriptedResponse::text("完成"),
+        ];
         let controller = AgentLoopController::with_gateway(Arc::new(FakeProvider::new(script)));
-        let mut orientation = crate::orientation::OrientationSessionState::new("sess-template4");
         controller
             .run_turn(
                 &host,
-                "任务",
+                "修复测试失败",
                 "RUN-TPL4",
                 MANIFEST,
                 0,
                 None,
-                Some(&mut orientation),
+                None,
                 None,
             )
             .await
@@ -22542,7 +23497,7 @@ mod tests {
         );
         let fire_idx = events
             .iter()
-            .position(|e| e.event_type == EventType::OrientationCheckpoint)
+            .position(|e| e.event_type == EventType::DiagnosticCoverageCheckpoint)
             .unwrap();
         let resp_idx = events
             .iter()
@@ -22768,9 +23723,11 @@ mod tests {
     }
 
     /// P0-A step 3: with a runner the probe is complete and `run_tests` is
-    /// declared exactly once even when the registry already lists it.
+    /// THIN-HARNESS-REDESIGN R1 (§4.1): `run_tests` 已从主代理面删除——
+    /// 即使 registry 列出且 runner 存在，声明面也不出现（bash 可达；
+    /// 执行 handler 保留为休眠模块）。
     #[tokio::test]
-    async fn run_tests_declared_once_when_runner_present_and_registry_lists_it() {
+    async fn run_tests_never_declared_under_r1_surface() {
         let dir = test_dir();
         let host = RunTestsRegistryHost {
             journal: JournalRecorder::new(dir.clone()),
@@ -22788,10 +23745,9 @@ mod tests {
             .unwrap();
         let received = fake.received_requests();
         let declared: Vec<&str> = received[0].tools.iter().map(|t| t.name.as_str()).collect();
-        assert_eq!(
-            declared.iter().filter(|t| **t == "run_tests").count(),
-            1,
-            "run_tests declared exactly once: {declared:?}"
+        assert!(
+            !declared.iter().any(|t| *t == "run_tests"),
+            "run_tests must never be declared under the R1 surface: {declared:?}"
         );
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -22883,13 +23839,12 @@ mod tests {
         assert_eq!(
             declared,
             vec![
-                "bash",                     // non-work tool — untouched
-                "blackboard_read",          // storage chain complete
-                "compaction_whitelist_add", // storage chain complete
-                "read_file",                // read chain complete
-                "todo_write",               // write chain + goal context complete
+                "bash",            // non-work tool — untouched
+                "blackboard_read", // storage chain complete
+                "read_file",       // read chain complete
             ],
-            "single-face list projection: {declared:?}"
+            "R1 single-face list projection (todo_write / compaction_whitelist_add \
+             sealed): {declared:?}"
         );
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -23467,24 +24422,17 @@ mod tests {
             p["incomplete"]
         );
         assert_eq!(p["gate_decision"], "pass", "probe never blocks");
-        // The first request sees run_tests; the second (post-flip) does not.
+        // R1 封存：run_tests 无论探针状态都不进声明面——两个请求均不出现
+        // （探针事件仍记录翻转，但声明面不受探针影响）。
         let received = fake.received_requests();
         assert!(
-            received[0].tools.iter().any(|t| t.name == "run_tests"),
-            "first request must declare run_tests: {:?}",
-            received[0]
-                .tools
+            received
                 .iter()
-                .map(|t| &t.name)
-                .collect::<Vec<_>>()
-        );
-        assert!(
-            !received[1].tools.iter().any(|t| t.name == "run_tests"),
-            "second request must drop run_tests: {:?}",
-            received[1]
-                .tools
+                .all(|r| !r.tools.iter().any(|t| t.name == "run_tests")),
+            "run_tests sealed from the declaration surface: {:?}",
+            received
                 .iter()
-                .map(|t| &t.name)
+                .map(|r| r.tools.iter().map(|t| &t.name).collect::<Vec<_>>())
                 .collect::<Vec<_>>()
         );
         let _ = std::fs::remove_dir_all(&dir);
@@ -23587,12 +24535,11 @@ mod tests {
 
     /// P0-A step 5 review fix (2026-08-13): the retrieval lane never
     /// writes back into the main probe map — a failed work-tool read call
-    /// inside the lane must NOT flip `read_file` in the main map. P0-A-2:
-    /// the activation lifecycle legitimately flips `retrieval_disposition`
-    /// (incomplete → complete once the subagent result awaits disposition),
-    /// so the journal carries exactly TWO availability events — the
-    /// initial one and the activation flip — and never one caused by the
-    /// lane-local failure.
+    /// inside the lane must NOT flip `read_file` in the main map.
+    /// THIN-HARNESS-REDESIGN R1 (§4.4): auto-close 下激活不再进入
+    /// awaiting-disposition，`retrieval_disposition` 探针恒 incomplete——
+    /// 无激活生命周期翻转，journal 只含初始那一条 availability 事件
+    /// （车道内失败也不产生主面事件）。
     #[tokio::test]
     async fn retrieval_lane_failure_does_not_pollute_main_probe_map() {
         let dir = test_dir();
@@ -23630,32 +24577,9 @@ mod tests {
             .filter(|t| **t == EventType::ToolAvailabilityCheck)
             .count();
         assert_eq!(
-            availability_count, 2,
-            "initial + activation flip only; lane-local failure must not add main availability events: {types:?}"
-        );
-        let events = events(&dir);
-        let availability_events: Vec<&RunEvent> = events
-            .iter()
-            .filter(|e| e.event_type == EventType::ToolAvailabilityCheck)
-            .collect();
-        let flip = availability_events[1];
-        assert!(
-            flip.payload["complete"]
-                .as_array()
-                .unwrap()
-                .iter()
-                .any(|v| v.as_str() == Some("read_file")),
-            "lane-local read failure must NOT flip read_file in the main map: {:?}",
-            flip.payload
-        );
-        assert!(
-            flip.payload["complete"]
-                .as_array()
-                .unwrap()
-                .iter()
-                .any(|v| v.as_str() == Some("retrieval_disposition")),
-            "activation lifecycle flips retrieval_disposition to complete: {:?}",
-            flip.payload
+            availability_count, 1,
+            "R1 auto-close: initial availability event only — no activation \
+             flip and no lane-local pollution: {types:?}"
         );
         // The lane failure itself is still audited via ToolCompleted(error).
         assert!(
@@ -23742,11 +24666,11 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn d9_run_tests_tool_declared_and_feeds_back() {
-        // D-9: with a host test runner, the `run_tests` tool is declared to
-        // the model (Benchmark policy keeps it visible — read-class name),
-        // and a call executes the host-owned command, feeding back
-        // stdout/exit code without exposing the test files.
+    async fn d9_run_tests_retired_from_surface_dormant_execution_feeds_back() {
+        // D-9 + THIN-HARNESS-REDESIGN R1 (§4.1): `run_tests` 从主代理
+        // 声明面删除（bash 可达；官方验证独立于 agent），但休眠执行路径
+        // 保留——脚本化调用仍走 host 固定命令，反馈 stdout/exit code、
+        // 不暴露测试文件（R3 裁决是否物理删除该路径）。
         let dir = test_dir();
         let journal = JournalRecorder::new(dir.clone());
         let host = TestRunnerHost { journal };
@@ -23764,16 +24688,16 @@ mod tests {
 
         let received = fake.received_requests();
         assert!(
-            received[0].tools.iter().any(|t| t.name == "run_tests"),
-            "run_tests declared to the model: {:?}",
+            !received[0].tools.iter().any(|t| t.name == "run_tests"),
+            "R1: run_tests must NOT be declared on the main surface: {:?}",
             received[0]
                 .tools
                 .iter()
                 .map(|t| &t.name)
                 .collect::<Vec<_>>()
         );
-        // The round after the tool call answers the run_tests declaration
-        // with the test output.
+        // The round after the scripted call answers it with the host's test
+        // output (休眠执行路径保留——R1 只移除声明面).
         let round2 = &received[1].messages;
         let tool_msg = round2
             .iter()
@@ -23930,10 +24854,10 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
-    /// P0-A steps 3-4（RT-001 语义更新）：`run_tests` 的声明由工作工具探针
-    /// 决定（runner 存在性，不受 policy 影响）；ReadOnly 下探针仍完整故
-    /// 同样被声明，只读保证由执行层 permission gate 承担（ReadOnly
-    /// policy 拒非读）。
+    /// THIN-HARNESS-REDESIGN R1 (§4.1, 2026-08-27)：`run_tests` 已从主
+    /// 代理声明面移除（封存删除项，bash 可达）；ReadOnly 下脚本化调用仍
+    /// 由执行层 permission gate 拒绝（无 ToolStarted、无 ToolCompleted，
+    /// 显式中性拒绝回传——只读保证不依赖声明面）。
     #[tokio::test]
     async fn d9_run_tests_declared_under_readonly_gate_denies() {
         let dir = test_dir();
@@ -23955,11 +24879,11 @@ mod tests {
             .await
             .unwrap();
         assert!(
-            fake.received_requests()[0]
+            !fake.received_requests()[0]
                 .tools
                 .iter()
                 .any(|t| t.name == "run_tests"),
-            "run_tests declared under ReadOnly (catalog semantics): {}",
+            "run_tests removed from the ReadOnly declaration surface (R1 封存): {}",
             fake.received_requests()[0]
                 .tools
                 .iter()
@@ -24296,11 +25220,12 @@ mod tests {
 
         let received = fake.received_requests();
         assert!(received.len() >= 3, "three rounds: {received:?}");
-        // Session declaration: the system prompt carries the budget
-        // (ADR-0010 v1.1 frozen value: 120).
+        // THIN-HARNESS-REDESIGN R1 (§4.3)：SESSION 常驻预算块删除——系统
+        // 提示 = 近零中间态，不再声明 BUDGET（预算为静默硬门，live 计数经
+        // blackboard_read section=session 按需读取）。
         assert!(
-            received[0].system.contains("BUDGET: 120"),
-            "budget declared in the session system prompt: {}",
+            !received[0].system.contains("BUDGET:"),
+            "no budget block in the session system prompt: {}",
             received[0].system
         );
         // Cache-prefix stability (2026-08-07 fix): the system prompt must be
@@ -25013,17 +25938,17 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
-    /// 设计 §2.7/§5 验收 3（声明面）：主车道投影恢复完整检索族——web_search
-    /// / web_fetch / browser_read / retrieve_project_* 全部声明（非工作工具
-    /// 不参与探针过滤）。
+    /// THIN-HARNESS-REDESIGN R1 (§4.1)：主车道投影保留保留集内的检索
+    /// 工具（web_search / web_fetch / browser_read —— 非工作工具不参与
+    /// 探针过滤），且绝不发明已删除工具（retrieve_project_docs /
+    /// list_dir / run_tests 等）。
     #[test]
-    fn main_lane_projection_declares_retrieval_family() {
+    fn main_lane_projection_keeps_retained_retrieval_only() {
         let base = [
             "read_file",
             "web_search",
             "web_fetch",
             "browser_read",
-            "retrieve_project_docs",
             "bash",
         ]
         .iter()
@@ -25039,15 +25964,21 @@ mod tests {
         };
         let projected = AgentLoopController::project_main_agent_tool_defs(&base, &snapshot);
         let names: Vec<&str> = projected.iter().map(|t| t.name.as_str()).collect();
-        for tool in [
-            "web_search",
-            "web_fetch",
-            "browser_read",
-            "retrieve_project_docs",
-        ] {
+        for tool in ["web_search", "web_fetch", "browser_read"] {
             assert!(
                 names.contains(&tool),
                 "retrieval tool {tool} must be declared on the direct surface: {names:?}"
+            );
+        }
+        for retired in [
+            "retrieve_project_docs",
+            "list_dir",
+            "run_tests",
+            "todo_write",
+        ] {
+            assert!(
+                !names.contains(&retired),
+                "retired tool {retired} must not be invented by the projection: {names:?}"
             );
         }
     }
@@ -25220,6 +26151,8 @@ mod tests {
                 },
             ]),
             ScriptedResponse::text("草稿"),
+            // COUNTEREXAMPLE_GATE 终答前一次反例自查注入占一轮模型回答。
+            ScriptedResponse::text("草稿（反例自查）。"),
             ScriptedResponse::text("终答"),
         ]));
         let controller = stage_c_controller(fake);
@@ -25352,6 +26285,84 @@ mod tests {
         );
         let r = controller.blackboard().read();
         assert!(r.actions.order.is_none(), "{:?}", r.actions.order);
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// THIN-HARNESS-REDESIGN R1 (§4.1 边界项): 边界三项
+    /// `todo_write` / `update_goal` / `compaction_whitelist_add` 调用一律
+    /// 结构化拒绝（sealed_tool_denied、无 ToolStarted、零副作用——
+    /// whitelist 不落盘、goal 不变）。
+    #[tokio::test]
+    async fn sealed_boundary_tools_refused_with_zero_side_effects() {
+        let dir = test_dir();
+        let journal = JournalRecorder::new(dir.clone());
+        let host = TestHost {
+            journal,
+            tool_result: Some(ok_result()),
+        };
+        let fake = Arc::new(FakeProvider::new(vec![
+            ScriptedResponse::tool_calls(vec![
+                ToolCall {
+                    name: "todo_write".to_string(),
+                    arguments: serde_json::json!({"todos": [{"content": "x"}]}),
+                    call_id: "call-sealed-1".to_string(),
+                },
+                ToolCall {
+                    name: "update_goal".to_string(),
+                    arguments: serde_json::json!({"goal": "g"}),
+                    call_id: "call-sealed-2".to_string(),
+                },
+                ToolCall {
+                    name: "compaction_whitelist_add".to_string(),
+                    arguments: serde_json::json!({"content": "事实"}),
+                    call_id: "call-sealed-3".to_string(),
+                },
+            ]),
+            ScriptedResponse::text("草稿"),
+            ScriptedResponse::text("终答"),
+        ]));
+        // R1 审查处理：封存窄门与 console/plan 面无关——用普通控制器
+        // （无 plan_first/console）保持测试聚焦于 sealed_tool_denied。
+        let controller = AgentLoopController::with_gateway(fake);
+        controller
+            .run_turn(
+                &host,
+                "幻觉调用封存工具",
+                "RUN-SEALED",
+                MANIFEST,
+                0,
+                None,
+                None,
+                None,
+            )
+            .await
+            .unwrap();
+
+        let events = events(&dir);
+        for name in ["todo_write", "update_goal", "compaction_whitelist_add"] {
+            let completed: Vec<&RunEvent> = events
+                .iter()
+                .filter(|e| e.event_type == EventType::ToolCompleted)
+                .filter(|e| e.payload.get("tool").and_then(|t| t.as_str()) == Some(name))
+                .collect();
+            assert_eq!(completed.len(), 1, "{name}: {completed:?}");
+            assert_eq!(completed[0].payload["exit_code"].as_u64(), Some(1));
+            assert_eq!(
+                completed[0].payload["error"].as_str(),
+                Some("sealed_tool_denied"),
+                "{name}"
+            );
+            assert!(
+                !events.iter().any(|e| e.event_type == EventType::ToolStarted
+                    && e.payload.get("tool").and_then(|t| t.as_str()) == Some(name)),
+                "{name} must never reach ToolStarted"
+            );
+        }
+        // 零副作用：whitelist 空、goal digest 未变（仍为任务 prompt 摘要）。
+        let w = controller.whitelist.lock().unwrap();
+        assert!(w.is_empty(), "sealed whitelist write must not land: {w:?}");
+        drop(w);
 
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -25548,11 +26559,14 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
-    /// RETRIEVAL-SUBAGENT-WIRING (2026-08-25, ADR-0010 §14.40)：主面
-    /// 声明面包含 `retrieve_project_docs`（mode≠off 时）——模型可见
-    /// 内部检索触发工具；mode=off 时被检索族投影剔除。
+    /// THIN-HARNESS-REDESIGN R1 (§4.1)：主面声明面不再包含
+    /// `retrieve_project_docs` / `retrieval_disposition`（内部子代理与
+    /// disposition 仪式退役）与边界三项（todo_write / update_goal /
+    /// compaction_whitelist_add）——framework_fallback 与 mode=off 皆然；
+    /// （正断言见 r1_main_surface_is_eight_tools——本测试只做负断言，
+    /// TestHost 注册面为空。）
     #[tokio::test]
-    async fn main_surface_declares_retrieve_project_docs() {
+    async fn main_surface_hides_retired_and_sealed_tools() {
         let dir = test_dir();
         let journal = JournalRecorder::new(dir.clone());
         let host = TestHost {
@@ -25568,13 +26582,24 @@ mod tests {
             .unwrap();
         let received = fake.received_requests();
         let declared: Vec<&str> = received[0].tools.iter().map(|t| t.name.as_str()).collect();
-        assert!(
-            declared.contains(&"retrieve_project_docs"),
-            "retrieve_project_docs must be declared on the direct surface under \
-             framework_fallback: {declared:?}"
-        );
-
-        // mode=off（默认）：声明面剔除内部检索触发工具。
+        for hidden in [
+            "retrieve_project_docs",
+            "retrieval_disposition",
+            "todo_write",
+            "update_goal",
+            "compaction_whitelist_add",
+            "plan_write",
+            "list_dir",
+            "run_tests",
+            "search_tool",
+            "pdf_read",
+        ] {
+            assert!(
+                !declared.contains(&hidden),
+                "{hidden} must NOT be declared on the direct surface: {declared:?}"
+            );
+        }
+        // mode=off（默认）：检索族整体剔除（含 web 族）。
         let dir2 = test_dir();
         let journal2 = JournalRecorder::new(dir2.clone());
         let host2 = TestHost {
@@ -25591,8 +26616,13 @@ mod tests {
         let received2 = fake2.received_requests();
         let declared2: Vec<&str> = received2[0].tools.iter().map(|t| t.name.as_str()).collect();
         assert!(
-            !declared2.contains(&"retrieve_project_docs"),
-            "retrieve_project_docs must be hidden under mode=off: {declared2:?}"
+            !declared2.iter().any(|t| {
+                *t == "retrieve_project_docs"
+                    || *t == "retrieval_disposition"
+                    || *t == "web_search"
+                    || *t == "web_fetch"
+            }),
+            "retrieval family must be hidden under mode=off: {declared2:?}"
         );
 
         let _ = std::fs::remove_dir_all(&dir);
@@ -26899,13 +27929,24 @@ mod tests {
             .iter()
             .map(|v| v.as_str().unwrap().to_string())
             .collect();
-        // 计划已存在 → 不触发计划门：工具面是正常探针面（含非工作工具），
-        // 而非仅 blackboard_read + plan_write。
-        assert_ne!(tools, vec!["blackboard_read", "plan_write"], "{tools:?}");
+        // 计划已存在 → 不触发计划门：read_file 直接执行（无 plan_write
+        // 事件）。工具面本身在 plan_first 会话恒含 plan_write（声明面随
+        // plan_first_enabled 收敛），故用执行证据而非工具列表断言。
         assert!(
-            tools.contains(&"compaction_whitelist_add".to_string()),
+            events
+                .iter()
+                .any(|e| e.event_type == EventType::ToolCompleted
+                    && e.payload.get("tool").and_then(|v| v.as_str()) == Some("read_file")),
+            "pre-approved plan skips the gate — the work tool executes directly"
+        );
+        // THIN-HARNESS-REDESIGN R1 (§4.1)：compaction_whitelist_add 封存——
+        // 正常探针面也不含边界工具（TestHost 注册面为空，blackboard_read
+        // 由控制器常驻声明）。
+        assert!(
+            !tools.contains(&"compaction_whitelist_add".to_string()),
             "{tools:?}"
         );
+        assert!(tools.contains(&"blackboard_read".to_string()), "{tools:?}");
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -26962,10 +28003,11 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
-    /// P2-2 用户裁决（顺延）：whitelist 的 tool_rounds==0 窗口随计划轮不
-    /// 消耗预算而顺延——计划落板后的首个执行轮可正常写 whitelist。
+    /// THIN-HARNESS-REDESIGN R1 (§4.1)：compaction_whitelist_add 已封存
+    /// ——即使 plan_first 会话计划落板后（旧 P2-2 顺延窗口），调用仍被
+    /// sealed_tool_denied 结构化拒绝、whitelist 不落盘。
     #[tokio::test]
-    async fn plan_first_round_defers_whitelist_window_to_first_execution_round() {
+    async fn whitelist_write_sealed_even_in_plan_first_session() {
         let dir = test_dir();
         let journal = JournalRecorder::new(dir.clone());
         let host = TestHost {
@@ -27011,14 +28053,22 @@ mod tests {
                     && e.payload.get("tool").and_then(|v| v.as_str())
                         == Some("compaction_whitelist_add")
             })
-            .expect("whitelist write after the plan round");
+            .expect("sealed whitelist call refused after the plan round");
         assert_eq!(
             wl.payload["exit_code"].as_u64(),
-            Some(0),
-            "whitelist window must be deferred to the first execution round: {:?}",
+            Some(1),
+            "sealed whitelist write must be refused: {:?}",
             wl.payload
         );
-        assert!(wl.payload.get("error").is_none(), "{:?}", wl.payload);
+        assert_eq!(
+            wl.payload["error"].as_str(),
+            Some("sealed_tool_denied"),
+            "{:?}",
+            wl.payload
+        );
+        let w = controller.whitelist.lock().unwrap();
+        assert!(w.is_empty(), "sealed whitelist write must not land: {w:?}");
+        drop(w);
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -27471,6 +28521,7 @@ mod tests {
             order_id: "ORD-LEGACY".to_string(),
             action: "workspace.read_file".to_string(),
             arguments: serde_json::json!({"target_file": "a.txt"}),
+            target: None,
             step_id: Some("s2".to_string()),
             round: 0,
             plan_epoch: 1,

@@ -10,14 +10,16 @@
 //! (recorded D3-2, 2026-08-06 design review).
 //!
 //! Thinking (IP1 → D-6, FIX_PLAN 2026-08-06): the default workpoint is
-//! `thinking: {type: "enabled"}` + `reasoning_effort: "high"` + 256K
+//! `thinking: {type: "enabled"}` + `reasoning_effort: "max"` + 256K
 //! single-round output budget (OUTPUT-BUDGET-RESTORE-AND-STALL-GUARD
-//! 2026-08-20, ADR-0010 §14.35 — 输出预算恢复 32K → 256K，回落档 128K，
-//! S4 实测校准；2026-08-20 修订: 默认档 max → high（官方 harness 默认），
-//! `EnabledMax` 保留为显式可选档、`EnabledLow` 为降级梯中间档——
-//! generate_stream 降级梯 high → low → disabled → 失败；OUTPUT-
-//! DEGENERATION-GUARD 2026-08-19 的 32K 止损由输出健康哨兵 + 空转预算
-//! 兜底取代；previously 160K);
+//! 2026-08-20, ADR-0010 §14.35 — 输出预算恢复 32K → 256K；THIN-HARNESS-
+//! REDESIGN R1 2026-08-27: 默认档 high → max（官方 82.7% 基线，用户裁决），
+//! `ORZ_THINKING_MODE` env 可覆盖；`EnabledLow` 为降级梯中间档——
+//! 2026-08-28 THIN-HARNESS-REDESIGN V2 R1：自动降级梯 max/high → low →
+//! 明确失败（空响应链，low 封顶、不自动进 disabled）；OUTPUT-
+//! DEGENERATION-GUARD 2026-08-19 的 32K 止损由输出健康哨兵取代；
+//! THIN-HARNESS-REDESIGN 2026-08-28（用户裁决）：reasoning-stall 预算兜底
+//! 物理删除（官方 max 只等待不杀，复读判定已足够；previously 160K);
 //! `ThinkingMode::Disabled` keeps the P2-era mitigation (all output to
 //! `content`) for parity/tests/benchmarks. `ModelRequest` carries no
 //! thinking knob — `ModelConfig::thinking` is the single switch.
@@ -92,50 +94,29 @@ pub const REPETITION_MIN_RUN_CHARS: usize = 400;
 /// 2026-08-23 再校准 **400→800**（=2L，缓冲 600→1200）：新尾部 L-gram 与
 /// 最近 800 字符内已出现的 L-gram 做任意偏移比对（起点偏移 ∈ [400, 800]）。
 /// 窗口内任意周期可命中（p ≤ 800，修复固定偏移相位对齐缺陷：周期 10 短语
-/// 循环在固定偏移下相邻窗口永不相同）；同字符连串在 3 次命中门槛下需
-/// ≥2L+2=802 才触发（800 字符=1 次、801=2 次、802=3 次命中）；DNA 低熵
-/// 正常序列免疫。
+/// 循环在固定偏移下相邻窗口永不相同）；同字符连串由独立触发线
+/// `REPETITION_SAME_CHAR_TRIP_CHARS` 接管（2026-08-28 R1，用户裁决保留
+/// 802 线——统一门槛 20 下滚动路径对同字符连串要到 819 字符才凑满 20 次
+/// 命中，802 独立线更快且语义明确）；DNA 低熵正常序列免疫。
 pub const REPETITION_WINDOW_CHARS: usize = 800;
 
-/// 流内累计命中门槛（2026-08-22 再校准，用户裁决）：同一流内累计命中
-/// ≥3 次才中断 + 降级——检测器持续喂入，命中计数**不因中间未命中内容
-/// 重置**（间隔不重置）；1–2 次命中仅审计留痕（WARN 输出触发 span + 窗口
-/// 片段），不中断、不降级。命中计数随流结束丢弃（不跨请求累积——检测器
-/// 按 generate_stream 每次新建）；content/reasoning 两族统一；会话级
-/// consecutive 与 `DEGENERATION_LIMIT` 语义不变。2026-08-25 SEQUENCE
-/// CONTENT GATE：本门槛为**非序列样**门槛——无切分点 + `sequence_kind`
-/// 判真的序列样走 `REPETITION_SEQUENCE_HIT_LIMIT`（=5）。
-pub const REPETITION_HIT_LIMIT: usize = 3;
+/// 同字符连串独立触发线（2026-08-28 THIN-HARNESS-REDESIGN V2 R1，用户
+/// 裁决保留 802）：连续相同字符 ≥ 本值直接显式拦截（病理同字符流，成本
+/// 极低、属明确复读，不引入误杀面）。推导=旧「命中门槛 3」派生线：记录
+/// 区在 idx ≥ W-1 才非空（800 字符=1 次、801=2 次、802=3 次命中）；统一
+/// 门槛 20 后改显式常量，语义不变（设计 §3.3）。
+pub const REPETITION_SAME_CHAR_TRIP_CHARS: usize = 2 * REPETITION_MIN_RUN_CHARS + 2;
 
-/// 序列样内容门（2026-08-25 SEQUENCE CONTENT GATE 设计 §2.2）：无切分点
-/// span 内序列字母 {A,C,G,T,N,U}（大小写均可，DNA/RNA 通用）占比 ≥ 0.90
-/// 判为序列样（初值，S4 校准范围 0.85–0.95）。仅用于「无可切分点」二级
-/// 分支的门槛分派——有切分点 span 走标点块覆盖 0.50 路径，不适用序列门。
-pub const REPETITION_SEQUENCE_LIKE_RATIO: f64 = 0.90;
-
-/// 蛋白族序列样门槛（2026-08-26 全面审查处理：蛋白/氨基酸序列覆盖扩展）。
-/// 严格 20 标准氨基酸字母占比 ≥ 0.95 判为蛋白样（初值；S4 校准范围
-/// 0.93–0.97）。与 DNA/RNA 族 0.90 分开定档——覆盖面实证（2026-08-26）：
-/// 英文无间隔长串（Gettysburg 全文 400 字符字母切片）的 20 氨基酸字母
-/// 占比 = 0.8975，若共用 0.90 裕量仅 ~0.25%（覆盖面过广，否决）；0.95 下
-/// 英文裕量 ≥5%，真实蛋白序列（UniProt P35579 myosin-9 400 字符切片）
-/// 占比 = 1.00。
-pub const REPETITION_PROTEIN_LIKE_RATIO: f64 = 0.95;
-
-/// 序列样占比的整数百分比（派生自 `REPETITION_SEQUENCE_LIKE_RATIO`；
-/// 判定用整数比较避免浮点边界误差；S4 校准 ratio 时同步修改）。
-const REPETITION_SEQUENCE_LIKE_PCT: usize =
-    (REPETITION_SEQUENCE_LIKE_RATIO * 100.0).round() as usize;
-
-/// 蛋白样占比的整数百分比（派生自 `REPETITION_PROTEIN_LIKE_RATIO`）。
-const REPETITION_PROTEIN_LIKE_PCT: usize = (REPETITION_PROTEIN_LIKE_RATIO * 100.0).round() as usize;
-
-/// 序列样流内累计命中门槛（2026-08-25 SEQUENCE CONTENT GATE 设计 §2.3）：
-/// 无切分点 + `sequence_kind` 判真后，流内累计 ≥5 次才 trip（1–4 次仅
-/// 审计，WARN 带 `sequence_gated` 标注 + ratio + hits/limit）；非序列样
-/// 维持 `REPETITION_HIT_LIMIT`=3。初值，S4 校准范围 4–6；间隔不重置、
-/// 流结束丢弃、consecutive 与 `DEGENERATION_LIMIT` 语义不变。
-pub const REPETITION_SEQUENCE_HIT_LIMIT: usize = 5;
+/// 流内累计命中门槛（2026-08-28 THIN-HARNESS-REDESIGN V2 R1，用户裁决）：
+/// 统一门槛 **20**——同一流内累计确认命中 ≥20 次才显式拦截该轮；命中
+/// 计数**不因中间未命中内容重置**（间隔不重置）；1–19 次命中仅审计留痕
+/// （WARN 输出触发 span + 窗口片段），不中断、不降档。命中计数随流结束
+/// 丢弃（不跨请求累积——检测器按 generate_stream 每次新建）；
+/// content/reasoning 两族统一；run 级 `DEGENERATION_LIMIT` 语义不变。
+/// 2026-08-28：序列内容门（SEQUENCE CONTENT GATE）整套删除——原误杀场景
+/// （EGFP/蛋白序列合法引用）被统一门槛 20 自然覆盖，一个旋钮取代整套内容
+/// 分类器（设计 §3.2）。
+pub const REPETITION_HIT_LIMIT: usize = 20;
 
 /// 二级「标点块内部重复确认」阈值（2026-08-23 用户裁决）：滚动哈希命中
 /// 候选的 span 按标点+空白（`_` 除外）切块后，内部重复子块覆盖字符占比
@@ -310,112 +291,6 @@ fn repetition_block_stats(span: &[char]) -> RepetitionBlockStats {
     }
 }
 
-/// 序列样类别（2026-08-26 全面审查处理：蛋白/氨基酸序列覆盖扩展）。
-/// DNA/RNA 族 = {A,C,G,T,N,U}（阈值 0.90）；蛋白族 = 严格 20 标准氨基酸
-/// 字母（阈值 0.95）。两族任一判真即序列样；同判真时 DNA/RNA 优先。
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum SequenceKind {
-    DnaRna,
-    Protein,
-}
-
-impl SequenceKind {
-    /// 审计/触发 detail 的稳定类别标签。
-    fn label(&self) -> &'static str {
-        match self {
-            SequenceKind::DnaRna => "dna_rna",
-            SequenceKind::Protein => "protein",
-        }
-    }
-}
-
-/// DNA/RNA 字母表成员判定（2026-08-25 SEQUENCE CONTENT GATE 设计 §2.2）：
-/// {A,C,G,T,N,U}（大小写均可，DNA/RNA 通用）。
-fn is_dna_rna_base_char(c: char) -> bool {
-    matches!(
-        c,
-        'A' | 'C' | 'G' | 'T' | 'N' | 'U' | 'a' | 'c' | 'g' | 't' | 'n' | 'u'
-    )
-}
-
-/// 蛋白族字母表成员判定（2026-08-26 全面审查处理）：严格 20 标准氨基酸
-/// 字母 {A,C,D,E,F,G,H,I,K,L,M,N,P,Q,R,S,T,V,W,Y}（大小写均可）。刻意
-/// 不含 B/X/Z（Asx/Glx/未知残基）与 U（Sec）——英文常见字母 O/B/U 若
-/// 计入会使英文无间隔长串占比逼近/超过阈值（覆盖面过广，否决）；实测
-/// 英文 20 氨基酸字母占比 0.8975，0.95 阈值下裕量 ≥5%。
-fn is_protein_base_char(c: char) -> bool {
-    matches!(
-        c,
-        'A' | 'C'
-            | 'D'
-            | 'E'
-            | 'F'
-            | 'G'
-            | 'H'
-            | 'I'
-            | 'K'
-            | 'L'
-            | 'M'
-            | 'N'
-            | 'P'
-            | 'Q'
-            | 'R'
-            | 'S'
-            | 'T'
-            | 'V'
-            | 'W'
-            | 'Y'
-            | 'a'
-            | 'c'
-            | 'd'
-            | 'e'
-            | 'f'
-            | 'g'
-            | 'h'
-            | 'i'
-            | 'k'
-            | 'l'
-            | 'm'
-            | 'n'
-            | 'p'
-            | 'q'
-            | 'r'
-            | 's'
-            | 't'
-            | 'v'
-            | 'w'
-            | 'y'
-    )
-}
-
-/// 序列样判定（设计 §2.2 + 2026-08-26 蛋白扩展）：span 非空，单次扫描
-/// 统计两类字母；DNA/RNA 占比 ≥ 0.90 → DnaRna，否则蛋白占比 ≥ 0.95 →
-/// Protein，均不满足 → None。整数比较避免浮点边界误差（0.89/0.90/0.91、
-/// 0.94/0.95/0.96 边界稳定）；返回命中类别的占比供审计标注（避免二次
-/// 扫描）。
-fn sequence_kind(span: &[char]) -> Option<(SequenceKind, f64)> {
-    if span.is_empty() {
-        return None;
-    }
-    let (mut dna, mut protein) = (0usize, 0usize);
-    for &c in span {
-        if is_dna_rna_base_char(c) {
-            dna += 1;
-        }
-        if is_protein_base_char(c) {
-            protein += 1;
-        }
-    }
-    let len = span.len();
-    if dna * 100 >= REPETITION_SEQUENCE_LIKE_PCT.saturating_mul(len) {
-        Some((SequenceKind::DnaRna, dna as f64 / len as f64))
-    } else if protein * 100 >= REPETITION_PROTEIN_LIKE_PCT.saturating_mul(len) {
-        Some((SequenceKind::Protein, protein as f64 / len as f64))
-    } else {
-        None
-    }
-}
-
 /// 滚动哈希基数（多项式哈希；取奇数避免与 2^64 非互质的退化）。
 const REPETITION_HASH_BASE: u64 = 1_000_003;
 
@@ -443,10 +318,12 @@ pub const DEGENERATION_MIN_TOKENS: usize = 1_000;
 /// NGRAM-GUARD-CALIBRATION：0.60→**0.70**，`>` 严格大于保留）。
 pub const DEGENERATION_NGRAM_REPEAT_RATIO: f64 = 0.70;
 
-/// 3-gram 路径②流内累计命中门槛（≥3 才 trip；1–2 次命中仅审计留痕、
-/// 间隔不重置、流结束丢弃——与路径①纪律对齐，设计 §2.2/§3.3，
-/// 2026-08-23 NGRAM-GUARD-CALIBRATION）。
-pub const NGRAM_HIT_LIMIT: usize = 3;
+/// 3-gram 路径②流内累计命中门槛（2026-08-28 THIN-HARNESS-REDESIGN V2
+/// R1，用户裁决：随复读守卫大幅拉升 3→**15**；阈值 0.70 不变——与复读
+/// 守卫统一「只抓明确复读」口径，15 个 1K-token 高重复窗口才 trip）；
+/// 1–14 次命中仅审计留痕、间隔不重置、流结束丢弃（与路径①纪律对齐，
+/// 设计 §3.3）。
+pub const NGRAM_HIT_LIMIT: usize = 15;
 
 /// Token pattern mirroring Python `[\w一-鿿]+` (Unicode word + CJK) — the
 /// 3-gram fallback's tokenizer, migrated from the retired runtime stagnation
@@ -499,57 +376,20 @@ pub const EMPTY_RESPONSE_BACKOFF_MAX: Duration = Duration::from_secs(10);
 /// 空流重试退避抖动（官方默认 ±10%，设计 §3.2/§3.5）。
 pub const EMPTY_RESPONSE_BACKOFF_JITTER: f64 = 0.10;
 
-/// reasoning-stall 时间信号：自首 chunk 起无 content/tool_calls 的等待上限
-/// （设计 §3.3 预算兜底层；初值 600s，S4 校准 300–900s）。
-pub const STALL_FIRST_CONTENT_TIMEOUT: Duration = Duration::from_secs(600);
-
-/// reasoning-stall token 信号：reasoning 估算累计无 content/tool_calls 的
-/// 空转预算（设计 §3.3——**与 max_tokens 解耦**，256K 恢复后空转不随预算
-/// 放大；初值 64K，S4 校准 32–128K；单次最坏 ≈ ¥0.29 ≈ 现状整条空流链）。
-pub const STALL_REASONING_BUDGET_TOKENS: usize = 64_000;
-
-/// reasoning 字符 → token 估算系数（设计 §3.3；沿用折叠桥 8K 实测校准值
-/// 2 字符/token，S4 用 usage 真实 reasoning_tokens 复核）。
-pub const REASONING_CHARS_PER_TOKEN: usize = 2;
-
 /// content 复读族 detail 前缀（已见输出 → 不重试，ADR-0007）。
 pub const CONTENT_REPETITION_DETAIL_PREFIX: &str = "degeneration_detected:content_repetition:";
 
-/// reasoning 复读族 detail 前缀（灵敏层——无可见输出 → 不原样、直接降级）。
+/// reasoning 复读族 detail 前缀（灵敏层——无可见输出 → 不原样重试、显式
+/// 拦截；2026-08-28 R1 起不再降档）。
 pub const REASONING_REPETITION_DETAIL_PREFIX: &str = "degeneration_detected:reasoning_repetition:";
 
-/// reasoning-stall 族 detail 前缀（预算兜底层——无可见输出 → 直接降级）。
-pub const REASONING_STALL_DETAIL_PREFIX: &str = "degeneration_detected:reasoning_stall:";
-
-/// 二级确认结果三态（2026-08-25 SEQUENCE CONTENT GATE 设计 §2.3）：
-/// 有切分点 span 走「标点块内部重复确认」0.50 覆盖路径（Confirmed /
-/// Rejected）；无可切分点 span 经 `sequence_kind` 判定分派——序列样计
-/// 序列族命中（SequenceGated，门槛 5）、非序列样直接判真（Confirmed，
-/// 门槛 3）。
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum RepetitionConfirmation {
-    /// 通过二级「标点块内部重复确认」（覆盖 ≥0.50）或无可切分点且非
-    /// 序列样（直接判真）——计非序列命中（门槛 `REPETITION_HIT_LIMIT`）。
-    Confirmed,
-    /// 无可切分点 + `sequence_kind` 判真——计序列族命中（门槛
-    /// `REPETITION_SEQUENCE_HIT_LIMIT`）。
-    SequenceGated,
-    /// 二级不过（字符级匹配但有切分点且覆盖 <0.50）——不计数、仅留痕
-    /// （span + 标点块统计）。
-    Rejected,
-}
-
 /// 一次滚动哈希字符级命中候选（2026-08-23 二级确认后）：字符级匹配但
-/// 二级不过的候选仅审计留痕（span + 标点块统计），不计数；2026-08-25
-/// 序列内容门扩展为三态确认（Confirmed / SequenceGated / Rejected）。
+/// 二级不过的候选仅审计留痕（span + 标点块统计），不计数。2026-08-28 R1
+/// 序列内容门删除后收敛为二态（confirmed bool），不再有序列族分派。
 #[derive(Debug)]
 struct RepetitionCandidateAudit {
-    /// 二级确认结果（见 `RepetitionConfirmation`）。
-    confirmation: RepetitionConfirmation,
-    /// 序列样类别（`SequenceGated` 时为 Some；审计标注 kind 用）。
-    sequence_kind: Option<SequenceKind>,
-    /// 命中类别的序列样占比（`SequenceGated` 时为 Some；审计标注 ratio 用）。
-    sequence_ratio: Option<f64>,
+    /// 二级确认结果：true=通过（计命中）；false=二级不过（仅留痕）。
+    confirmed: bool,
     /// 审计上下文：重复 span 文本 + 两个匹配偏移 + 窗口尾部（仅确认命中
     /// 构造——二级不过的候选不构建 ~1.3KB 完整上下文，由 `span` +
     /// `block_stats` 聚合留痕）。
@@ -599,7 +439,7 @@ struct RollingRepetitionWindow {
 
 impl RollingRepetitionWindow {
     /// 喂入一个 delta（逐字符）；返回本 delta 内新产生的**通过二级确认的**
-    /// 命中次数二元组（非序列 Confirmed、序列样 SequenceGated）
+    /// 命中次数
     /// （2026-08-22 再校准：命中后窗口继续喂入——命中计数流内累计、间隔
     /// 不重置，调用方在累计 ≥`REPETITION_HIT_LIMIT` 时判定触发；旧语义
     /// 「命中即终止」退役）。等价于不设上限的 `feed_chars_capped`
@@ -607,8 +447,8 @@ impl RollingRepetitionWindow {
     /// 生产路径已改走 `feed_chars_capped`，lib 目标下该便捷方法仅测试
     /// 引用，豁免 dead_code 保持 clippy 与基线一致）。
     #[cfg_attr(not(test), allow(dead_code))]
-    fn feed_chars(&mut self, delta: &str) -> (usize, usize) {
-        self.feed_chars_capped(delta, usize::MAX, usize::MAX)
+    fn feed_chars(&mut self, delta: &str) -> usize {
+        self.feed_chars_capped(delta, usize::MAX)
     }
 
     /// 带命中上限的喂入：本 delta 内新**确认**命中数达 `hit_cap` 即停止
@@ -617,30 +457,20 @@ impl RollingRepetitionWindow {
     /// `REPETITION_HIT_LIMIT` 后该流必触发，继续喂入超大退化帧只会白做
     /// 滚动哈希与字符级比对；子门槛 delta 全量消费，窗口状态与旧语义
     /// 完全一致。2026-08-23：每次调用前清空 `candidates`（本 delta 命中
-    /// 候选留痕，供调用方逐条审计；二级不过的候选不计数）。2026-08-25
-    /// SEQUENCE CONTENT GATE：双门槛封顶——`hit_cap` 非序列剩余门槛、
-    /// `sequence_hit_cap` 序列族剩余门槛；任一达到即停止（该流必触发，
-    /// 达门槛后继续消费只会白做）。返回 (非序列确认命中数, 序列样命中数)。
-    fn feed_chars_capped(
-        &mut self,
-        delta: &str,
-        hit_cap: usize,
-        sequence_hit_cap: usize,
-    ) -> (usize, usize) {
+    /// 候选留痕，供调用方逐条审计；二级不过的候选不计数）。返回本 delta
+    /// 确认命中数。
+    fn feed_chars_capped(&mut self, delta: &str, hit_cap: usize) -> usize {
         self.candidates.clear();
         let mut hits = 0;
-        let mut sequence_hits = 0;
         for c in delta.chars() {
-            if hits >= hit_cap || sequence_hits >= sequence_hit_cap {
+            if hits >= hit_cap {
                 break;
             }
-            match self.feed(c) {
-                RepetitionConfirmation::Confirmed => hits += 1,
-                RepetitionConfirmation::SequenceGated => sequence_hits += 1,
-                RepetitionConfirmation::Rejected => {}
+            if self.feed(c) {
+                hits += 1;
             }
         }
-        (hits, sequence_hits)
+        hits
     }
 
     /// 取走本 delta 的命中候选审计记录（调用方逐条审计；二级不过的候选
@@ -649,7 +479,8 @@ impl RollingRepetitionWindow {
         std::mem::take(&mut self.candidates)
     }
 
-    fn feed(&mut self, c: char) -> RepetitionConfirmation {
+    /// 喂入一个字符；返回是否计一次确认命中（true=通过二级确认）。
+    fn feed(&mut self, c: char) -> bool {
         let idx = self.next;
         self.next += 1;
         self.chars.push_back(c);
@@ -700,7 +531,7 @@ impl RollingRepetitionWindow {
         // 继续滑动，供流内命中计数累计（2026-08-22 再校准）；2026-08-23
         // 起字符级匹配仅产生「候选」，经二级「标点块内部重复确认」才计
         // 命中（不过者留痕、不计数；`feed_repetition` 按 delta 聚合）。
-        let mut confirmation = RepetitionConfirmation::Rejected;
+        let mut confirmed = false;
         if idx >= REPETITION_MIN_RUN_CHARS - 1
             && self.counts.get(&self.trailing_hash).is_some_and(|n| *n > 0)
         {
@@ -716,12 +547,6 @@ impl RollingRepetitionWindow {
                 // 由重复的标点块构成」（或无可切分点）才计该次命中——字符
                 // 级匹配但二级不过的候选仅审计留痕、不计数。`spans_equal`
                 // 已保证两 span 字符级相等，检查新 span 内部结构即代表该对。
-                // 2026-08-25 SEQUENCE CONTENT GATE（设计 §2.2/§2.3）二级
-                // 分支分派：有切分点（block_count > 1）走「标点块内部重复
-                // 确认」0.50 覆盖路径（不适用序列门）；无可切分点
-                // （block_count <= 1）经 `sequence_kind` 判定分派门槛——
-                // 序列样计序列族（SequenceGated）、非序列样直接判真
-                // （Confirmed）。
                 let span_chars: Vec<char> = self
                     .chars
                     .iter()
@@ -731,39 +556,19 @@ impl RollingRepetitionWindow {
                     .collect();
                 let span: String = span_chars.iter().collect();
                 let stats = repetition_block_stats(&span_chars);
-                let seq_kind = sequence_kind(&span_chars);
-                confirmation = if stats.block_count > 1 {
-                    if stats.repeated_coverage >= REPETITION_PUNCT_BLOCK_MIN_RATIO {
-                        RepetitionConfirmation::Confirmed
-                    } else {
-                        RepetitionConfirmation::Rejected
-                    }
-                } else if seq_kind.is_some() {
-                    RepetitionConfirmation::SequenceGated
-                } else {
-                    RepetitionConfirmation::Confirmed
-                };
-                let hit = confirmation != RepetitionConfirmation::Rejected;
-                // 序列样类别与占比（仅 `SequenceGated` 时存在；seq_kind 为
-                // Copy，此处按值取出后原值仍可用）。
-                let seq_audit: Option<(SequenceKind, f64)> = (confirmation
-                    == RepetitionConfirmation::SequenceGated)
-                    .then_some(seq_kind)
-                    .flatten();
+                confirmed = stats.block_count <= 1
+                    || stats.repeated_coverage >= REPETITION_PUNCT_BLOCK_MIN_RATIO;
                 // 完整 ctx（偏移 + 窗口尾部）仅确认命中需要（触发/审计上下
                 // 文）；二级不过的候选按 span 聚合，不构造大文本。
-                let ctx = hit.then(|| {
+                let ctx = confirmed.then(|| {
                     self.match_context()
                         .unwrap_or_else(|| format!("repeated span at global offset {s}"))
                 });
                 self.candidates.push(RepetitionCandidateAudit {
-                    confirmation,
-                    sequence_kind: seq_audit.map(|(k, _)| k),
-                    sequence_ratio: seq_audit.map(|(_, r)| r),
+                    confirmed,
                     ctx,
                     span,
-                    block_stats: (confirmation == RepetitionConfirmation::Rejected)
-                        .then(|| stats.summary()),
+                    block_stats: (!confirmed).then(|| stats.summary()),
                 });
             }
         }
@@ -773,7 +578,7 @@ impl RollingRepetitionWindow {
             self.chars.pop_front();
             self.base += 1;
         }
-        confirmation
+        confirmed
     }
 
     /// 缓冲内全局序号 `g` 的字符。
@@ -843,24 +648,25 @@ struct RepetitionFamilyState {
     total_tokens: usize,
     /// 最近 1K token 的滑动窗口。
     window_tokens: Vec<String>,
-    /// 路径①滚动哈希流内累计**非序列**确认命中（≥`REPETITION_HIT_LIMIT`
-    /// 触发；1–2 次仅审计留痕、间隔不重置）。2026-08-25 SEQUENCE CONTENT
-    /// GATE：无切分点 + `sequence_kind` 判真的序列样不计入本计数。
+    /// 路径①滚动哈希流内累计确认命中（≥`REPETITION_HIT_LIMIT` 触发；
+    /// 1–19 次仅审计留痕、间隔不重置）。2026-08-28 R1：序列门删除后无
+    /// 单独序列计数。
     hits: usize,
-    /// 路径①滚动哈希流内累计**序列样**确认命中（2026-08-25 SEQUENCE
-    /// CONTENT GATE 设计 §2.3：≥`REPETITION_SEQUENCE_HIT_LIMIT` 触发；
-    /// 1–4 次仅审计留痕（带 `sequence_gated` 标注 + ratio + hits/limit）、
-    /// 间隔不重置、流结束丢弃）。与非序列 `hits` 分别计数、分别门槛。
-    sequence_hits: usize,
+    /// 同字符连串运行长度（跨 delta 连续；字符变化即重置为 1）。802 独立
+    /// 触发线（2026-08-28 R1，用户裁决保留）——与滚动哈希/3-gram 路径
+    /// 并列，命中即显式拦截。
+    same_char_run: usize,
+    /// 上一个喂入字符（跨 delta 判定连串）。
+    last_char: Option<char>,
     /// 路径②3-gram 流内累计命中（每次 feed 超阈值计 1 次；≥`NGRAM_HIT_LIMIT`
-    /// 才 trip；1–2 次仅审计留痕、间隔不重置、流结束丢弃——2026-08-23
-    /// NGRAM-GUARD-CALIBRATION）。
+    /// 才 trip；1–14 次仅审计留痕、间隔不重置、流结束丢弃——2026-08-23
+    /// NGRAM-GUARD-CALIBRATION + 2026-08-28 R1 门槛 15）。
     ngram_hits: usize,
 }
 
 /// 生成期输出健康哨兵（设计 §3.3，第一层治本）：喂入 content delta +
-/// reasoning delta + tool_call arguments delta，三族信号（content_repetition
-/// / reasoning_repetition / reasoning_stall）命中后持续返回触发原因。纯
+/// reasoning delta + tool_call arguments delta，两族信号（content_repetition
+/// / reasoning_repetition）命中后持续返回触发原因。纯
 /// 机械、零模型调用；token 口径=Unicode 词 + CJK 正则（迁移自退役的停滞
 /// 守卫）；复读判定=滑动窗口滚动哈希任意偏移（设计 §3.3 修订）+ 1K token
 /// 窗口 3-gram 重复率兜底。
@@ -870,23 +676,18 @@ struct DegenerationDetector {
     content_repetition: RepetitionFamilyState,
     /// reasoning 族复读检测状态（同上）。
     reasoning_repetition: RepetitionFamilyState,
-    /// reasoning 累计字符 → 估算 token（字符 ÷ `REASONING_CHARS_PER_TOKEN`；
-    /// 空转预算信号，与 max_tokens 解耦；S4 用 usage 真实值复核）。
-    reasoning_chars: usize,
     /// 已见可见输出（content 或 tool_calls 出现）——此后 reasoning 族信号
-    /// 停用（设计 §3.3：reasoning 复读/stall 仅 content/tool_calls 全空时
+    /// 停用（设计 §3.3：reasoning 复读仅 content/tool_calls 全空时
     /// 启用；工具轮为合法形态，不误判）。
     saw_visible_output: bool,
-    /// 首 chunk 时刻（stall 时间信号的起算点；任意族首个非空 delta 置位）。
-    first_chunk_at: Option<std::time::Instant>,
     /// 触发原因（触发后恒定，避免同流重复报错）。
     trip: Option<String>,
     /// 触发审计上下文（缺口 A，2026-08-22）：触发 span + 窗口片段，供
     /// 事后判定真复读 vs 误杀（WARN 留痕，不改终止语义）。
     trigger_context: Option<String>,
-    /// 流内非触发命中审计留痕（缺口 A 扩展）：1–2 次命中逐条登记触发
+    /// 流内非触发命中审计留痕（缺口 A 扩展）：1–19 次命中逐条登记触发
     /// 上下文（重复 span + 偏移 + 窗口尾部），调用方逐条 WARN——不中断、
-    /// 不降级；达到门槛后由 `trigger_context` 走 trip 分支。
+    /// 不降档；达到门槛后由 `trigger_context` 走 trip 分支。
     audit_hits: Vec<String>,
 }
 
@@ -897,7 +698,6 @@ impl DegenerationDetector {
         if self.trip.is_some() || delta.is_empty() {
             return;
         }
-        self.mark_first_chunk();
         self.saw_visible_output = true;
         feed_repetition(
             &mut self.trip,
@@ -910,14 +710,12 @@ impl DegenerationDetector {
         );
     }
 
-    /// reasoning 族 feed（灵敏层，设计 §3.3）：累计字符 → 估算 token 供
-    /// stall 预算；复读检测仅 content/tool_calls 全空时启用。
+    /// reasoning 族 feed（灵敏层，设计 §3.3）：复读检测仅 content/tool_calls
+    /// 全空时启用。
     fn feed_reasoning(&mut self, delta: &str) {
         if self.trip.is_some() || delta.is_empty() {
             return;
         }
-        self.mark_first_chunk();
-        self.reasoning_chars = self.reasoning_chars.saturating_add(delta.chars().count());
         if self.saw_visible_output {
             return;
         }
@@ -940,50 +738,7 @@ impl DegenerationDetector {
         if self.trip.is_some() || delta.is_empty() {
             return;
         }
-        self.mark_first_chunk();
         self.saw_visible_output = true;
-    }
-
-    fn mark_first_chunk(&mut self) {
-        if self.first_chunk_at.is_none() {
-            self.first_chunk_at = Some(std::time::Instant::now());
-        }
-    }
-
-    /// reasoning 估算 token（字符 ÷ `REASONING_CHARS_PER_TOKEN`）。
-    fn reasoning_est_tokens(&self) -> usize {
-        self.reasoning_chars / REASONING_CHARS_PER_TOKEN
-    }
-
-    /// 预算兜底层（设计 §3.3）：自首 chunk 起无 content/tool_calls 且
-    /// reasoning 在流动，超过时间预算（600s）或估算 token ≥64K（OR）→
-    /// 触发 reasoning_stall。逐 chunk 调用（chunk 持续到达时在预算点附近
-    /// 触发；完全静默由 idle 死线处理——两者互补不重叠）。
-    fn check_stall(&mut self, now: std::time::Instant) {
-        if self.trip.is_some() {
-            return;
-        }
-        let Some(first) = self.first_chunk_at else {
-            return;
-        };
-        if self.saw_visible_output {
-            return;
-        }
-        let est_tokens = self.reasoning_est_tokens();
-        let elapsed = now.saturating_duration_since(first);
-        if elapsed >= STALL_FIRST_CONTENT_TIMEOUT || est_tokens >= STALL_REASONING_BUDGET_TOKENS {
-            // 2026-08-22 审查处理（P3）：stall 触发无「重复 span」语义——
-            // 清掉此前滚动命中的残留上下文，避免 trip WARN 把旧命中 span
-            // 误标为本触发的审计上下文。
-            self.trigger_context = None;
-            self.trip = Some(format!(
-                "{REASONING_STALL_DETAIL_PREFIX} no content/tool_calls for {:.0}s with \
-                 ~{est_tokens} estimated reasoning tokens (budget {}s / {} tokens)",
-                elapsed.as_secs_f64(),
-                STALL_FIRST_CONTENT_TIMEOUT.as_secs(),
-                STALL_REASONING_BUDGET_TOKENS,
-            ));
-        }
     }
 
     fn trip_reason(&self) -> Option<String> {
@@ -994,28 +749,29 @@ impl DegenerationDetector {
         self.trigger_context.clone()
     }
 
-    /// 取走流内非触发命中的审计留痕（2026-08-22 再校准：1–2 次命中仅
-    /// 审计留痕、不中断不降级）——调用方逐条 WARN 输出触发 span + 窗口
+    /// 取走流内非触发命中的审计留痕（2026-08-22 再校准 + 2026-08-28 R1：
+    /// 1–19 次命中仅审计留痕、不中断不降档）——调用方逐条 WARN 输出触发
+    /// span + 窗口
     /// 片段（缺口 A）。
     fn take_audit_hits(&mut self) -> Vec<String> {
         std::mem::take(&mut self.audit_hits)
     }
 }
 
-/// 复读检测共用核心（content 与 reasoning 同一算法，设计 §3.3）：
+/// 复读检测共用核心（content 与 reasoning 同一算法，设计 §3.3 +
+/// 2026-08-28 THIN-HARNESS-REDESIGN V2 R1 后置化）：
 /// ① 滑动窗口滚动哈希任意偏移——流内出现相同 L 字符 span 的匹配先过二级
 /// 「标点块内部重复确认」（或无切分点直接判真）才算一次命中；**流内累计
-/// 命中 ≥3 次（间隔不重置）才触发**（2026-08-22 再校准，取代旧「单次命中
-/// 即触发」——DNA 重跑实证 48 字符粒度下正常任务内容重复引用被误杀；
-/// 2026-08-23 再校准 L=400 + 二级确认——G4 冒烟代码引用型误杀消除，见
-/// 设计 §3.3 修订）；1–2 次命中仅审计留痕（`audit_hits`），不中断、不
-/// 降级；二级不过的命中候选也留痕（span + 标点块统计，按 delta 聚合为
-/// 一条摘要 + 计数）、不计数；
-/// ② 累计 ≥1K token 且最近 1K token 内 3-gram 重复率 >70% → 每次 feed
-/// 计 1 次流内命中，累计 ≥`NGRAM_HIT_LIMIT` 才触发（保留兜底，不经二级
-/// ——重复率判定自带 1K token 滑动窗口粒度；2026-08-23 校准取代旧「单发
-/// 即 trip」：正常推理自引用稳定压在 0.60 上沿，阈值提升 + 累计命中足够
-/// 覆盖，1–2 次命中仅审计留痕）。
+/// 命中 ≥20 次（间隔不重置）才显式拦截**（2026-08-28 R1 用户裁决：观察
+/// 留流内、控制移结果侧——1–19 次仅审计留痕，不中断、不降档）；二级不过
+/// 的命中候选也留痕（span + 标点块统计，按 delta 聚合为一条摘要 + 计数）、
+/// 不计数；
+/// ② 同字符连串独立触发线（802，用户裁决保留）——连续相同字符
+/// ≥ `REPETITION_SAME_CHAR_TRIP_CHARS` 直接显式拦截（病理同字符流）；
+/// ③ 累计 ≥1K token 且最近 1K token 内 3-gram 重复率 >70% → 每次 feed
+/// 计 1 次流内命中，累计 ≥`NGRAM_HIT_LIMIT`（15）才触发（保留兜底，不经
+/// 二级——重复率判定自带 1K token 滑动窗口粒度；2026-08-28 R1 门槛
+/// 3→15，1–14 次命中仅审计留痕）。
 /// 自由函数（非方法）——调用方以不相交的字段借用传入，避免方法整体
 /// 借用与字段借用冲突。
 fn feed_repetition(
@@ -1030,23 +786,37 @@ fn feed_repetition(
     if trip.is_some() || delta.is_empty() {
         return;
     }
+    // ② 同字符连串独立触发线（2026-08-28 R1，用户裁决保留 802）：跨
+    // delta 累计连续相同字符；达线即显式拦截（detail 带明确原因）。此
+    // 检查先于滚动喂入——达线即无需再消费窗口。
+    for c in delta.chars() {
+        state.same_char_run = if state.last_char == Some(c) {
+            state.same_char_run.saturating_add(1)
+        } else {
+            1
+        };
+        state.last_char = Some(c);
+        if state.same_char_run >= REPETITION_SAME_CHAR_TRIP_CHARS {
+            *trip = Some(format!(
+                "{detail_prefix} {run}/{line} same-character run (pathological \
+                 identical character stream; explicit line kept by \
+                 THIN-HARNESS-REDESIGN V2 R1)",
+                run = state.same_char_run,
+                line = REPETITION_SAME_CHAR_TRIP_CHARS,
+            ));
+            return;
+        }
+    }
     // ① 滚动哈希任意偏移（设计 §3.3 修订 + 2026-08-22/23 再校准 +
-    //    2026-08-25 SEQUENCE CONTENT GATE）：与 delta 切块粒度无关的字符
-    //    流级判定——每次命中候选（相同 L 字符 span 与记录区匹配）先过
-    //    二级「标点块内部重复确认」；无可切分点分支再经 `sequence_kind`
-    //    判定分派：序列样计序列族（门槛 5）、非序列样直接判真（门槛 3）。
-    //    两族分别累计、分别触发（间隔不重置）。
+    //    2026-08-28 R1 序列门删除）：与 delta 切块粒度无关的字符流级
+    //    判定——每次命中候选（相同 L 字符 span 与记录区匹配）先过二级
+    //    「标点块内部重复确认」；确认命中统一累计（间隔不重置）。
     // 2026-08-22 审查处理（P3）：以剩余门槛封顶单次喂入——同一 delta
     // 内新**确认**命中达「门槛-已累计」即停止消费（该流必触发，避免超
     // 大退化帧在命中门槛后仍全量喂入的浪费）；子门槛 delta 全量消费，
-    // 窗口状态与旧语义一致。2026-08-25：双门槛封顶（非序列剩余 +
-    // 序列族剩余，任一达到即停止）。
+    // 窗口状态与旧语义一致。
     let remaining = REPETITION_HIT_LIMIT.saturating_sub(state.hits);
-    let sequence_remaining = REPETITION_SEQUENCE_HIT_LIMIT.saturating_sub(state.sequence_hits);
-    let (new_hits, new_sequence_hits) =
-        state
-            .rolling
-            .feed_chars_capped(delta, remaining, sequence_remaining);
+    let new_hits = state.rolling.feed_chars_capped(delta, remaining);
     let candidates = state.rolling.take_candidates();
     // 二级不过的命中候选：按 delta 聚合（2026-08-23 审查处理 P2-2，用户
     // 裁决：一条摘要 + 命中计数）——滑动窗口「每对」语义下同一底层重复
@@ -1056,15 +826,12 @@ fn feed_repetition(
     // 标点块统计 + 本 delta 候选对数），不计数、不影响命中门槛。边界：
     // 同一 delta 内多个不同重复内容合并为一条（代表取最后一条候选；SSE
     // delta 通常数百字符，多重复内容同 delta 罕见），登记为已接受。
-    let rejected_count = candidates
-        .iter()
-        .filter(|c| c.confirmation == RepetitionConfirmation::Rejected)
-        .count();
+    let rejected_count = candidates.iter().filter(|c| !c.confirmed).count();
     if rejected_count > 0 {
         let rep = candidates
             .iter()
             .rev()
-            .find(|c| c.confirmation == RepetitionConfirmation::Rejected)
+            .find(|c| !c.confirmed)
             .expect("rejected_count > 0 implies a rejected candidate");
         audit_hits.push(format!(
             "repeated {L}-char span {span:?} [second-stage rejected: {stats}] \
@@ -1074,19 +841,17 @@ fn feed_repetition(
             stats = rep.block_stats.as_deref().unwrap_or("no block stats"),
         ));
     }
-    if new_hits > 0 || new_sequence_hits > 0 {
+    if new_hits > 0 {
         // 触发/审计上下文取本 delta 最后一条确认命中（同一重复 span 语义；
-        // 2026-08-23：候选已带各自 ctx，不依赖命中后 match_context；
-        // 2026-08-25：Confirmed / SequenceGated 均为确认命中）。
+        // 2026-08-23：候选已带各自 ctx，不依赖命中后 match_context）。
         let ctx = candidates
             .iter()
             .rev()
-            .find(|c| c.confirmation != RepetitionConfirmation::Rejected)
+            .find(|c| c.confirmed)
             .and_then(|c| c.ctx.clone())
             .or_else(|| state.rolling.match_context());
         *trigger_context = ctx.clone();
         state.hits = state.hits.saturating_add(new_hits);
-        state.sequence_hits = state.sequence_hits.saturating_add(new_sequence_hits);
         if state.hits >= REPETITION_HIT_LIMIT {
             *trip = Some(format!(
                 "{detail_prefix} {REPETITION_MIN_RUN_CHARS}-char repeated span in the \
@@ -1096,83 +861,21 @@ fn feed_repetition(
             ));
             return;
         }
-        if state.sequence_hits >= REPETITION_SEQUENCE_HIT_LIMIT {
-            // 序列样门槛（2026-08-25 SEQUENCE CONTENT GATE §2.3 +
-            // 2026-08-26 蛋白扩展）：detail 带 `sequence_gated` 标注与
-            // `kind=`（dna_rna / protein），供事后区分序列门触发类别与
-            // 非序列触发。
-            let kind = candidates
-                .iter()
-                .rev()
-                .find(|c| c.confirmation == RepetitionConfirmation::SequenceGated)
-                .and_then(|c| c.sequence_kind)
-                .unwrap_or(SequenceKind::DnaRna)
-                .label();
-            *trip = Some(format!(
-                "{detail_prefix} {REPETITION_MIN_RUN_CHARS}-char repeated span in the \
-                 recent {REPETITION_WINDOW_CHARS}-char window, {}/{} stream hits (rolling \
-                 hash, arbitrary offset, sequence_gated kind={kind})",
-                state.sequence_hits, REPETITION_SEQUENCE_HIT_LIMIT
-            ));
-            return;
-        }
-        // 非序列 1–2 次命中：仅审计留痕（不中断、不降级）。同一 delta 内
-        // 多次命中逐条登记（上下文取该 delta 最后一次非序列确认命中——
-        // 同一重复 span 语义）。
-        if new_hits > 0 {
-            let plain_ctx = candidates
-                .iter()
-                .rev()
-                .find(|c| c.confirmation == RepetitionConfirmation::Confirmed)
-                .and_then(|c| c.ctx.clone())
-                .or_else(|| ctx.clone());
-            if let Some(ctx) = plain_ctx {
-                for _ in 0..new_hits {
-                    audit_hits.push(ctx.clone());
-                }
-            }
-        }
-        // 序列样 1–4 次命中：仅审计留痕——WARN 带 `sequence_gated` 标注 +
-        // kind + ratio + hits/limit（2026-08-25 SEQUENCE CONTENT GATE §2.3；
-        // 2026-08-26 全面审查处理：同一 delta 内多次命中按各自累计时刻
-        // 标注（旧行为统一标最终累计值），kind 区分 DNA/RNA 与蛋白族）。
-        if new_sequence_hits > 0 {
-            let seq_cand = candidates
-                .iter()
-                .rev()
-                .find(|c| c.confirmation == RepetitionConfirmation::SequenceGated);
-            if let Some(seq_cand) = seq_cand {
-                let kind = seq_cand
-                    .sequence_kind
-                    .unwrap_or(SequenceKind::DnaRna)
-                    .label();
-                let ratio = seq_cand
-                    .sequence_ratio
-                    .unwrap_or(REPETITION_SEQUENCE_LIKE_RATIO);
-                let base = seq_cand
-                    .ctx
-                    .clone()
-                    .or_else(|| ctx.clone())
-                    .unwrap_or_else(|| {
-                        format!("repeated {L}-char span", L = REPETITION_MIN_RUN_CHARS)
-                    });
-                let start = state.sequence_hits - new_sequence_hits;
-                for i in 0..new_sequence_hits {
-                    audit_hits.push(format!(
-                        "{base} [sequence_gated kind={kind} ratio={ratio:.2}, \
-                         {}/{} stream hits; audit only, not tripping]",
-                        start + i + 1,
-                        REPETITION_SEQUENCE_HIT_LIMIT
-                    ));
-                }
+        // 1–19 次命中：仅审计留痕（不中断、不降档）。同一 delta 内多次
+        // 命中逐条登记（上下文取该 delta 最后一次确认命中——同一重复
+        // span 语义）。
+        if let Some(ctx) = ctx {
+            for _ in 0..new_hits {
+                audit_hits.push(ctx.clone());
             }
         }
     }
-    // ② 重复率：累计 ≥ 1K token 且最近 1K token 内 3-gram 重复率 > 70%
-    //    → 每次 feed 计 1 次流内命中，累计 ≥ `NGRAM_HIT_LIMIT` 才触发
-    //    （n-gram 兜底；tokenizer 迁移自退役的停滞守卫；2026-08-23
-    //    NGRAM-GUARD-CALIBRATION：阈值 0.60→0.70 + 流内累计命中——与
-    //    路径①同纪律，1–2 次仅审计、间隔不重置、流结束丢弃）。
+    // ③ 重复率：累计 ≥ 1K token 且最近 1K token 内 3-gram 重复率 > 70%
+    //    → 每次 feed 计 1 次流内命中，累计 ≥ `NGRAM_HIT_LIMIT`（15）才
+    //    触发（n-gram 兜底；tokenizer 迁移自退役的停滞守卫；2026-08-23
+    //    NGRAM-GUARD-CALIBRATION：阈值 0.60→0.70 + 流内累计命中；
+    //    2026-08-28 R1：门槛 3→15，1–14 次仅审计、间隔不重置、流结束
+    //    丢弃）。
     let tokens = tokenize(delta);
     state.total_tokens += tokens.len();
     state.window_tokens.extend(tokens);
@@ -1212,7 +915,7 @@ fn feed_repetition(
                         NGRAM_HIT_LIMIT
                     ));
                 } else {
-                    // 1–2 次命中：仅审计留痕——审计内容 = ratio + 窗口
+                    // 1–14 次命中：仅审计留痕——审计内容 = ratio + 窗口
                     // token 数 + 族（3-gram 无「重复 span」语义，不复用
                     // span 上下文；设计 §2.2）。
                     audit_hits.push(format!(
@@ -1230,7 +933,7 @@ fn feed_repetition(
 }
 
 /// content 族退化中断 detail 判定（语义收窄为 content 族「不重试」判定，
-/// 设计 §3.3——已见输出，ADR-0007 纪律；limit 前缀三族共享，达限转
+/// 设计 §3.3——已见输出，ADR-0007 纪律；limit 前缀复读两族共享，达限转
 /// run_invalidated）。`stream_once_with_retry` / run 层以
 /// `is_degeneration_detail || is_reasoning_guard_detail` 合并使用。
 pub(crate) fn is_degeneration_detail(detail: &str) -> bool {
@@ -1238,11 +941,11 @@ pub(crate) fn is_degeneration_detail(detail: &str) -> bool {
         || detail.starts_with(DEGENERATION_LIMIT_PREFIX)
 }
 
-/// reasoning 族退化中断 detail 判定（设计 §3.3：reasoning_repetition /
-/// reasoning_stall——无可见输出，不原样重试、直接降级）。
+/// reasoning 族退化中断 detail 判定（设计 §3.3 + 2026-08-28 R1：
+/// reasoning_repetition——无可见输出，不原样重试、显式拦截该轮；不再
+/// 降档）。
 pub(crate) fn is_reasoning_guard_detail(detail: &str) -> bool {
     detail.starts_with(REASONING_REPETITION_DETAIL_PREFIX)
-        || detail.starts_with(REASONING_STALL_DETAIL_PREFIX)
 }
 
 /// 审计/日志用触发族标签（detail 可能被 limit 前缀包裹，用 contains 判定
@@ -1252,8 +955,6 @@ pub(crate) fn guard_family_label(detail: &str) -> &'static str {
         "content_repetition"
     } else if detail.contains(REASONING_REPETITION_DETAIL_PREFIX) {
         "reasoning_repetition"
-    } else if detail.contains(REASONING_STALL_DETAIL_PREFIX) {
-        "reasoning_stall"
     } else if detail.starts_with(DEGENERATION_LIMIT_PREFIX) {
         "degeneration_limit"
     } else {
@@ -1288,13 +989,6 @@ pub struct DeepSeekTransport {
     /// `DEGENERATION_LIMIT` 后下一次退化中断带 `degeneration_limit_reached`
     /// 标记，run 层据此记 run_invalidated（防会话级循环；设计 §3.3）。
     degeneration_consecutive: Arc<AtomicU32>,
-    /// STALL-DEGENERATION-FAILFAST (2026-08-21, ADR-0010 §14.37 / 设计
-    /// §2.2.1)：会话级 thinking 起始档——reasoning 族哨兵触发降级后，本
-    /// run 后续请求从当前降级档起（high 触发 → 后续 low；low 再触发 →
-    /// 后续 disabled），**不再回 config 默认档**。档位随 run 单调下降，
-    /// 仅 run 边界重置（新 transport）。`None` = 尚未降级，按 config /
-    /// 请求覆盖档起始。
-    session_thinking: Arc<std::sync::Mutex<Option<ThinkingMode>>>,
 }
 
 impl DeepSeekTransport {
@@ -1302,12 +996,16 @@ impl DeepSeekTransport {
         Self {
             config,
             degeneration_consecutive: Arc::new(AtomicU32::new(0)),
-            session_thinking: Arc::new(std::sync::Mutex::new(None)),
         }
     }
 
     /// Convenience constructor for DeepSeek V4 models.
     pub fn deepseek_v4(api_key: impl Into<String>, model_id: impl Into<String>) -> Self {
+        // THIN-HARNESS-REDESIGN R1 (2026-08-27, §4.6): 默认档 EnabledMax
+        // （用户裁决——官方 82.7% 基线即 max effort）；`ORZ_THINKING_MODE`
+        // （max|high|low|disabled）env 覆盖以便 A/B 与回退。无效值静默
+        // 回退默认档（fail-safe，不会误解成 disabled）。
+        let thinking = Self::thinking_mode_from_env().unwrap_or(ThinkingMode::EnabledMax);
         Self::new(ModelConfig {
             provider: "deepseek".to_string(),
             model_id: model_id.into(),
@@ -1321,13 +1019,29 @@ impl DeepSeekTransport {
             // 600s/64K 预算兜底（与 max_tokens 解耦），空流不原样重试
             // （D-6 快速有界 ≤2 次 + 降级出口）。请求头指纹含 max_tokens
             // 与 retry 参数（idle 5s/30s、重试窗口 50s），部署后首次请求
-            // 一次性指纹变化（既有纪律）。2026-08-20 修订: 默认 thinking
-            // 档 max → high（官方默认；`EnabledMax` 显式可选），降级梯
-            // high → low → disabled（ADR-0010 §14.35 第 5 项 / 设计 §3.6）。
+            // 一次性指纹变化（既有纪律）。THIN-HARNESS-REDESIGN R1
+            // (2026-08-27, §4.6): 默认 thinking 档 max（官方 82.7% 基线，
+            // 用户裁决）；`ORZ_THINKING_MODE` env 可覆盖（A/B 与回退）；
+            // 2026-08-28 R1：复读哨兵命中不再改 thinking 档位（显式拦截
+            // 该轮），thinking 只由显式配置与空响应链（max/high → low 封
+            // 顶）决定。
             max_tokens: 256_000,
             retry: Default::default(),
-            thinking: Default::default(),
+            thinking,
         })
+    }
+
+    /// THIN-HARNESS-REDESIGN R1 (2026-08-27, §4.6): resolve
+    /// `ORZ_THINKING_MODE` (max|high|low|disabled). Missing/invalid →
+    /// `None` (caller falls back to the configured default).
+    pub fn thinking_mode_from_env() -> Option<ThinkingMode> {
+        match std::env::var("ORZ_THINKING_MODE").ok().as_deref() {
+            Some("max") => Some(ThinkingMode::EnabledMax),
+            Some("high") => Some(ThinkingMode::EnabledHigh),
+            Some("low") => Some(ThinkingMode::EnabledLow),
+            Some("disabled") => Some(ThinkingMode::Disabled),
+            _ => None,
+        }
     }
 
     fn client(&self) -> Client<OpenAIConfig> {
@@ -1610,8 +1324,7 @@ impl DeepSeekTransport {
             reasoning_content: Some(message.reasoning_content.clone().unwrap_or_default()),
             // D-6 usage observation: reasoning_tokens + completion_tokens
             // feed budget/latency calibration (the single-round budget
-            // decision rolls back on the data; S4 用真实值复核
-            // REASONING_CHARS_PER_TOKEN 估算系数).
+            // decision rolls back on the data).
             reasoning_tokens: body
                 .usage
                 .as_ref()
@@ -2065,10 +1778,9 @@ impl DeepSeekTransport {
             // 路径随后触发），审计条目并入下方 trip WARN 的
             // trigger_context，不再单独输出「audit only, not tripping」
             // （避免同 chunk 先标不触发、随即又触发的误导文案）；未触发
-            // 时逐条 WARN 留痕（缺口 A，2026-08-22 再校准：1–2 次命中
-            // 仅审计、不中断不降级）。
+            // 时逐条 WARN 留痕（缺口 A，2026-08-22 再校准 + 2026-08-28
+            // R1：1–19 次命中仅审计、不中断不降档）。
             let audit_hits = degeneration.take_audit_hits();
-            degeneration.check_stall(std::time::Instant::now());
             if let Some(detail) = degeneration.trip_reason() {
                 let detail = self.degeneration_interrupt_detail(detail);
                 // 缺口 A (2026-08-22)：退化触发内容留痕——WARN 输出触发
@@ -2093,7 +1805,6 @@ impl DeepSeekTransport {
                 for ctx in audit_hits {
                     tracing::warn!(
                         rolling_hit_limit = REPETITION_HIT_LIMIT,
-                        sequence_hit_limit = REPETITION_SEQUENCE_HIT_LIMIT,
                         ngram_hit_limit = NGRAM_HIT_LIMIT,
                         trigger_context = %ctx,
                         "output-health guard repetition audit (same chunk as trip)"
@@ -2109,17 +1820,16 @@ impl DeepSeekTransport {
                     detail,
                 });
             }
-            // 未触发：流内 1–2 次命中仅审计留痕——逐条 WARN 输出触发
-            // span + 窗口片段（缺口 A），不中断、不降级；第 3 次命中才
-            // 走上方 trip 分支（2026-08-22 再校准 + 2026-08-23 二级确认，
-            // L=400 + 命中门槛 3；二级不过的候选同样在此留痕）。
+            // 未触发：流内 1–19 次命中仅审计留痕——逐条 WARN 输出触发
+            // span + 窗口片段（缺口 A），不中断、不降档；第 20 次命中才
+            // 走上方 trip 分支（2026-08-22 再校准 + 2026-08-23 二级确认 +
+            // 2026-08-28 R1 统一门槛 20；二级不过的候选同样在此留痕）。
             // 2026-08-23 审查处理（I1）：审计条目可能来自路径①滚动哈希或
             // 3-gram 路径②——hit 门槛字段按路径分别标注（rolling/ngram），
             // 避免 NGRAM_HIT_LIMIT 日后独立调整时 3-gram 条目被误标。
             for ctx in audit_hits {
                 tracing::warn!(
                     rolling_hit_limit = REPETITION_HIT_LIMIT,
-                    sequence_hit_limit = REPETITION_SEQUENCE_HIT_LIMIT,
                     ngram_hit_limit = NGRAM_HIT_LIMIT,
                     trigger_context = %ctx,
                     "output-health guard repetition hit (audit only, not tripping)"
@@ -2136,25 +1846,6 @@ impl DeepSeekTransport {
                 saw_complete_tool_calls,
                 GatewayError::Transport("stream ended without finish_reason".to_string()),
             ));
-        }
-
-        // OUTPUT-BUDGET-RESTORE-AND-STALL-GUARD (2026-08-20, ADR-0010
-        // §14.35): usage 到达（final chunk）时以真实 reasoning_tokens 复核
-        // 字符估算——审计留痕、不改中断决策（中断发生在 usage 前）；S4
-        // 用该数据校准 `REASONING_CHARS_PER_TOKEN`。
-        if let Some(u) = &stream_usage
-            && let Some(actual) = u
-                .completion_tokens_details
-                .as_ref()
-                .and_then(|d| d.reasoning_tokens)
-        {
-            let estimate = degeneration.reasoning_est_tokens();
-            tracing::debug!(
-                estimate = estimate,
-                actual = actual,
-                delta = actual as i64 - estimate as i64,
-                "reasoning token estimate vs usage (S4 calibration)"
-            );
         }
 
         let text = if text_parts.is_empty() {
@@ -2232,31 +1923,6 @@ impl DeepSeekTransport {
         } else {
             format!("{detail} consecutive={consecutive}")
         }
-    }
-
-    /// STALL-DEGENERATION-FAILFAST (2026-08-21, ADR-0010 §14.37 / 设计
-    /// §2.2.1)：本 run 的 thinking 起始档——reasoning 族哨兵已降级时
-    /// 从会话档位起（不再回 config 默认档）；否则按请求覆盖档 / config
-    /// 默认档。显式请求覆盖档（当前仅测试/预检面使用）在未降级时优先，
-    /// 降级后会话档位优先（防重新烧 high）。
-    fn session_thinking_start(&self, request: &ModelRequest) -> ThinkingMode {
-        let guard = self
-            .session_thinking
-            .lock()
-            .unwrap_or_else(|p| p.into_inner());
-        if let Some(tier) = *guard {
-            return tier;
-        }
-        self.effective_thinking(request)
-    }
-
-    /// STALL-DEGENERATION-FAILFAST：持久化降级档——reasoning 族哨兵在
-    /// 请求内逐级下降后，本 run 后续请求从该档起（单调下降）。
-    fn set_session_thinking(&self, tier: ThinkingMode) {
-        *self
-            .session_thinking
-            .lock()
-            .unwrap_or_else(|p| p.into_inner()) = Some(tier);
     }
 }
 
@@ -2385,16 +2051,16 @@ fn empty_response_backoff() -> backoff::ExponentialBackoff {
     }
 }
 
-/// Next lower degradation tier for the D-6 ladder (2026-08-20 修订,
-/// ADR-0010 §14.35 第 5 项 / 设计 §3.6): **high → low → disabled → 失败**
-/// —— 空响应快速重试与 reasoning 族哨兵跳转共用。`EnabledMax` 是显式可选
-/// 档（难题专用）：保留 S4 验证的基线行为——哨兵命中/空流链耗尽直跳
-/// `Disabled`（三级梯按默认档 high 起定义；max 不额外多烧 high/low 两轮）。
+/// Next lower tier for the D-6 empty-response ladder (2026-08-28
+/// THIN-HARNESS-REDESIGN V2 R1 用户裁决): **max/high → low → 失败**——
+/// 空响应链最多降到 low、**不关闭 thinking**；low 档仍空即明确失败。
+/// `ThinkingMode::Disabled` 只保留为显式手动 A/B 配置（`ORZ_THINKING_MODE`
+/// env），自动链永不进入 disabled。
 fn next_degraded_thinking(thinking: ThinkingMode) -> Option<ThinkingMode> {
     match thinking {
         ThinkingMode::EnabledHigh => Some(ThinkingMode::EnabledLow),
-        ThinkingMode::EnabledLow => Some(ThinkingMode::Disabled),
-        ThinkingMode::EnabledMax => Some(ThinkingMode::Disabled),
+        ThinkingMode::EnabledLow => None,
+        ThinkingMode::EnabledMax => Some(ThinkingMode::EnabledLow),
         ThinkingMode::Disabled => None,
     }
 }
@@ -2406,9 +2072,9 @@ impl ModelGateway for DeepSeekTransport {
     }
 
     /// STALL-DEGENERATION-FAILFAST (2026-08-21, ADR-0010 §14.37 / 设计
-    /// §2.2)：per-run 隔离——退化计数与会话 thinking 档位全新（配置
-    /// 复制、健康状态归零）。长驻进程（ACP server）跨 run 共享原
-    /// transport，run 边界由控制器 `for_new_run` 显式换新。
+    /// §2.2)：per-run 隔离——退化计数全新（配置复制、健康状态归零；
+    /// 2026-08-28 R1 起无会话 thinking 档位）。长驻进程（ACP server）
+    /// 跨 run 共享原 transport，run 边界由控制器 `for_new_run` 显式换新。
     fn for_new_run(&self) -> Arc<dyn ModelGateway> {
         Arc::new(DeepSeekTransport::new(self.config.clone()))
     }
@@ -2416,38 +2082,33 @@ impl ModelGateway for DeepSeekTransport {
     async fn generate(&self, request: ModelRequest) -> Result<ModelResponse, GatewayError> {
         // D-6 empty-content retry chain: an enabled thinking tier can
         // legitimately burn the whole budget on reasoning_content and leave
-        // content empty (finish=length, zero output). The chain:
-        //   1. normal request (thinking per config);
-        //   2. byte-identical retry ONCE (same messages, same config — the
-        //      provider's reasoning allocation varies run to run);
-        //   3. thinking DISABLED degraded retry once (all output routed to
-        //      content);
-        //   4. chain end still empty → explicit termination reason, never a
-        //      silent blank.
+        // content empty (finish=length, zero output). The chain (2026-08-28
+        // THIN-HARNESS-REDESIGN V2 R1 用户裁决):
+        //   1. current tier (config default) with fast bounded retries
+        //      ≤ `EMPTY_RESPONSE_MAX_RETRIES`;
+        //   2. still empty → next lower tier (max/high → low; low → None);
+        //   3. low tier still empty → explicit termination reason, never a
+        //      silent blank, never an automatic disabled tier.
         // Tool rounds (empty content + tool_calls) are legal and skip the
         // chain entirely.
-        let first = self
-            .create_once(&request, self.effective_thinking(&request))
-            .await?;
-        if !Self::empty_content_abnormal(&first) {
-            return Ok(first);
+        let mut thinking = self.effective_thinking(&request);
+        loop {
+            for _ in 0..=EMPTY_RESPONSE_MAX_RETRIES {
+                let response = self.create_once(&request, thinking).await?;
+                if !Self::empty_content_abnormal(&response) {
+                    return Ok(response);
+                }
+            }
+            let Some(next) = next_degraded_thinking(thinking) else {
+                return Err(GatewayError::Model(
+                    "budget exhausted with zero output — D-6 chain reached the \
+                     low tier (never disabled automatically) and still produced \
+                     empty content"
+                        .to_string(),
+                ));
+            };
+            thinking = next;
         }
-        let second = self
-            .create_once(&request, self.effective_thinking(&request))
-            .await?;
-        if !Self::empty_content_abnormal(&second) {
-            return Ok(second);
-        }
-        let degraded = self.create_once(&request, ThinkingMode::Disabled).await?;
-        if !Self::empty_content_abnormal(&degraded) {
-            return Ok(degraded);
-        }
-        Err(GatewayError::Model(
-            "budget exhausted with zero output — thinking retry chain \
-             (byte-identical retry + thinking-disabled degrade) all produced \
-             empty content"
-                .to_string(),
-        ))
     }
     async fn generate_stream(
         &self,
@@ -2458,30 +2119,27 @@ impl ModelGateway for DeepSeekTransport {
     ) -> Result<ModelResponse, GatewayError> {
         // D-6 empty-content retry chain on the streaming path
         // (OUTPUT-BUDGET-RESTORE-AND-STALL-GUARD 2026-08-20, ADR-0010
-        // §14.35 / 设计 §3.2 + §3.6 —— 官方化收窄版 + 三级降级梯):
-        //   1. normal request (thinking per config, default high + 256K);
+        // §14.35 / 设计 §3.2 + §3.6 —— 官方化收窄版 + 2026-08-28 R1
+        // low 封顶降级梯):
+        //   1. normal request (thinking per config, default max + 256K);
         //   2. completed EMPTY response (`empty_content_abnormal`) → fast
         //      bounded retry within the current tier: same params, backoff
         //      500ms→10s + 10% jitter, ≤ `EMPTY_RESPONSE_MAX_RETRIES`
         //      (official rhythm, narrowed from 5 — 256K 下 5 次原样重试
         //      成本不可接受);
-        //   3. still empty → next lower tier: **high → low → disabled**
-        //      (2026-08-20 修订, ADR-0010 §14.35 第 5 项; `EnabledMax`
-        //      keeps the S4-validated direct jump to disabled);
-        //   4. disabled tier still empty → explicit failure, never a
-        //      silent blank.
-        // Reasoning-family guard interruptions (reasoning_repetition /
-        // reasoning_stall) do NOT re-run the identical request
-        // (长烧型空转原样重试大概率复现且贵) — they step down ONE ladder
-        // tier (high → low → disabled). Content-family interruptions keep
-        // the no-retry passthrough (ADR-0007 已见输出不重试). Zero-chunk
-        // transport interruptions are handled inside
-        // `stream_once_with_retry` and are orthogonal to this chain.
-        //
-        // STALL-DEGENERATION-FAILFAST (2026-08-21, ADR-0010 §14.37 / 设计
-        // §2.2.1)：reasoning 族哨兵曾降级时，本 run 后续请求从会话档位
-        // 起（不再回 config 默认档）；首请求按 config/请求覆盖档。
-        let mut thinking = self.session_thinking_start(&request);
+        //   3. still empty → next lower tier: **max/high → low → 失败**
+        //      （2026-08-28 R1 用户裁决：最多降到 low、不关闭；low 档
+        //      仍空即明确失败，自动链永不进入 disabled）；
+        //   4. `ThinkingMode::Disabled`（仅手动 `ORZ_THINKING_MODE` 配置）
+        //      空响应立即显式失败（无更低档）。
+        // Reasoning-family guard interruptions (reasoning_repetition) do
+        // NOT re-run the identical request and NO LONGER step down the
+        // ladder (2026-08-28 R1：触发改显式拦截该轮、不重试、不降档)；
+        // content-family interruptions keep the no-retry passthrough
+        // (ADR-0007 已见输出不重试)。Zero-chunk transport interruptions
+        // are handled inside `stream_once_with_retry` and are orthogonal
+        // to this chain.
+        let mut thinking = self.effective_thinking(&request);
         let mut empty_retries: u32 = 0;
         let mut backoff = empty_response_backoff();
         // MIDSTREAM-DECODE-RETRY (2026-08-21, ADR-0010 §14.37 / 设计
@@ -2505,21 +2163,28 @@ impl ModelGateway for DeepSeekTransport {
                     if is_empty {
                         // 完成型空响应 → 落入下方 D-6 链（快速有界重试/
                         // 降级），本次重试摘要已并入 total_retry_info。
-                        // 完成型空响应。降级阶段（thinking 禁用）仍空 → 显式失败。
+                        // 手动 disabled 配置（仅 `ORZ_THINKING_MODE`）无更低
+                        // 档——空响应立即显式失败。
                         if thinking == ThinkingMode::Disabled {
                             return Err(GatewayError::Model(
                                 "budget exhausted with zero output — D-6 chain \
-                                 (per-tier fast bounded empty retries + high→low→ \
-                                 disabled degrade) all produced empty content"
+                                 (manual disabled tier, no lower tier) produced \
+                                 empty content"
                                     .to_string(),
                             ));
                         }
-                        // 当前档位快速重试耗尽 → 逐级下降（high → low → disabled）；
-                        // 换档时重试计数与退避重置（每档独立「快速 ≤2 次」节奏，
-                        // 设计 §3.2/§3.6）。
+                        // 当前档位快速重试耗尽 → 逐级下降（max/high → low；
+                        // low 已无更低档 → 显式失败）；换档时重试计数与退避
+                        // 重置（每档独立「快速 ≤2 次」节奏，设计 §3.2/§3.6；
+                        // 2026-08-28 R1：不降到 disabled）。
                         if empty_retries >= EMPTY_RESPONSE_MAX_RETRIES {
                             let Some(next) = next_degraded_thinking(thinking) else {
-                                unreachable!("enabled tier always has a next tier");
+                                return Err(GatewayError::Model(
+                                    "budget exhausted with zero output — D-6 chain \
+                                     reached the low tier (never disabled \
+                                     automatically) and still produced empty content"
+                                        .to_string(),
+                                ));
                             };
                             tracing::warn!(
                                 "completed empty response after {empty_retries} retries — \
@@ -2532,7 +2197,12 @@ impl ModelGateway for DeepSeekTransport {
                         }
                         let Some(delay) = backoff.next_backoff() else {
                             let Some(next) = next_degraded_thinking(thinking) else {
-                                unreachable!("enabled tier always has a next tier");
+                                return Err(GatewayError::Model(
+                                    "budget exhausted with zero output — D-6 chain \
+                                     reached the low tier (never disabled \
+                                     automatically) and still produced empty content"
+                                        .to_string(),
+                                ));
                             };
                             tracing::warn!(
                                 "completed empty response: backoff exhausted — degrading to {next:?}"
@@ -2580,55 +2250,6 @@ impl ModelGateway for DeepSeekTransport {
                     // 静默破坏。
                     tracing::warn!(
                         "degeneration limit reached — terminating the run explicitly: {detail}"
-                    );
-                    return Err(GatewayError::StreamInterrupted {
-                        attempts: 0,
-                        saw_chunk: false,
-                        detail,
-                    });
-                }
-                Err(GatewayError::StreamInterrupted { detail, .. })
-                    if is_reasoning_guard_detail(&detail)
-                        && matches!(
-                            thinking,
-                            ThinkingMode::EnabledHigh
-                                | ThinkingMode::EnabledLow
-                                | ThinkingMode::EnabledMax
-                        ) =>
-                {
-                    // reasoning 族哨兵（复读/stall）→ 不原样快速重试、逐级
-                    // 下降一档（设计 §3.2/§3.6；limit 前缀三族共享、达限转
-                    // run_invalidated，由下方透传分支处理）。
-                    let next = next_degraded_thinking(thinking)
-                        .expect("reasoning guard only fires on enabled tiers");
-                    tracing::warn!(
-                        "reasoning-family guard interrupted the stream — skipping \
-                         identical retries, degrading to {next:?}: {detail}"
-                    );
-                    thinking = next;
-                    // 会话级持久化——后续请求从降级档起，防止每请求回 high
-                    // 反复烧 64K（设计 §2.2.1）。
-                    self.set_session_thinking(next);
-                    empty_retries = 0;
-                    backoff = empty_response_backoff();
-                }
-                Err(GatewayError::StreamInterrupted { detail, .. })
-                    if is_reasoning_guard_detail(&detail) && thinking == ThinkingMode::Disabled =>
-                {
-                    // STALL-DEGENERATION-FAILFAST (2026-08-21, ADR-0010
-                    // §14.37 / 设计 §2.2.3)：disabled 档已无更低档可降——
-                    // 哨兵再触发即立即显式终止（run_invalidated），不再
-                    // 重试。计数未达 3 时补 `degeneration_limit_reached`
-                    // 前缀强制 run 层走显式终止；已达 3 时 detail 自带
-                    // 前缀，透传即可。
-                    let detail = if detail.starts_with(DEGENERATION_LIMIT_PREFIX) {
-                        detail
-                    } else {
-                        format!("{DEGENERATION_LIMIT_PREFIX} disabled-tier guard ({detail})")
-                    };
-                    tracing::warn!(
-                        "reasoning-family guard at the disabled tier — terminating the run \
-                         explicitly: {detail}"
                     );
                     return Err(GatewayError::StreamInterrupted {
                         attempts: 0,
@@ -2756,11 +2377,11 @@ mod tests {
     }
 
     #[test]
-    fn build_request_default_thinking_is_enabled_high() {
-        // D-6 (FIX_PLAN 2026-08-06) — 2026-08-20 修订 (ADR-0010 §14.35
-        // 第 5 项 / 设计 §3.6): the DEFAULT workpoint is thinking enabled +
-        // reasoning_effort "high" (official harness default) + 256K
-        // single-round budget. The 256K value is the whole-token
+    fn build_request_default_thinking_is_enabled_max() {
+        // D-6 (FIX_PLAN 2026-08-06) + THIN-HARNESS-REDESIGN R1
+        // (2026-08-27, §4.6, 用户裁决): the DEFAULT workpoint is thinking
+        // enabled + reasoning_effort "max" (the official 82.7% baseline) +
+        // 256K single-round budget. The 256K value is the whole-token
         // single-round cap; the stream requests include_usage so reasoning
         // tokens are observable on the streaming path.
         let t = DeepSeekTransport::deepseek_v4("sk-test", "deepseek-v4-flash");
@@ -2774,7 +2395,7 @@ mod tests {
         let json = serde_json::to_value(t.build_request(&req)).unwrap();
         let s = json.to_string();
         assert_eq!(json["thinking"]["type"], "enabled", "{s}");
-        assert_eq!(json["reasoning_effort"], "high", "{s}");
+        assert_eq!(json["reasoning_effort"], "max", "{s}");
         assert_eq!(
             json["max_tokens"], 256_000,
             "config 256K caps the request-level budget: {s}"
@@ -2784,6 +2405,39 @@ mod tests {
             "include_usage requested for reasoning_tokens observation: {s}"
         );
         assert_eq!(json["model"], "deepseek-v4-flash");
+    }
+
+    /// R1 (§4.6): `ORZ_THINKING_MODE` overrides the default max tier;
+    /// invalid values fall back to the default (never disabled).
+    #[test]
+    fn env_thinking_mode_override() {
+        static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+        let _guard = ENV_LOCK.lock().unwrap();
+        let original = std::env::var("ORZ_THINKING_MODE").ok();
+        unsafe {
+            std::env::set_var("ORZ_THINKING_MODE", "high");
+        }
+        let t = DeepSeekTransport::deepseek_v4("sk-test", "deepseek-v4-flash");
+        let json = serde_json::to_value(t.build_request(&request())).unwrap();
+        assert_eq!(json["reasoning_effort"], "high", "{json}");
+        unsafe {
+            std::env::set_var("ORZ_THINKING_MODE", "disabled");
+        }
+        let t = DeepSeekTransport::deepseek_v4("sk-test", "deepseek-v4-flash");
+        let json = serde_json::to_value(t.build_request(&request())).unwrap();
+        assert_eq!(json["thinking"]["type"], "disabled", "{json}");
+        assert!(!json.to_string().contains("reasoning_effort"), "{json}");
+        unsafe {
+            std::env::set_var("ORZ_THINKING_MODE", "bogus");
+        }
+        let t = DeepSeekTransport::deepseek_v4("sk-test", "deepseek-v4-flash");
+        let json = serde_json::to_value(t.build_request(&request())).unwrap();
+        assert_eq!(json["reasoning_effort"], "max", "{json}");
+        // Restore the original env (parallel-test safety).
+        match original {
+            Some(v) => unsafe { std::env::set_var("ORZ_THINKING_MODE", v) },
+            None => unsafe { std::env::remove_var("ORZ_THINKING_MODE") },
+        }
     }
 
     #[test]
@@ -2797,7 +2451,6 @@ mod tests {
                 ..DeepSeekTransport::deepseek_v4("sk-test", "deepseek-v4-flash").config
             },
             degeneration_consecutive: Arc::new(AtomicU32::new(0)),
-            session_thinking: Arc::new(std::sync::Mutex::new(None)),
         };
         let max_json =
             serde_json::to_value(transport_for(ThinkingMode::EnabledMax).build_request(&request()))
@@ -2827,7 +2480,6 @@ mod tests {
                 ..DeepSeekTransport::deepseek_v4("sk-test", "deepseek-v4-flash").config
             },
             degeneration_consecutive: Arc::new(AtomicU32::new(0)),
-            session_thinking: Arc::new(std::sync::Mutex::new(None)),
         };
         let req = t.build_request(&request());
         let json = serde_json::to_value(&req).unwrap();
@@ -2841,10 +2493,11 @@ mod tests {
     #[test]
     fn degeneration_detector_trips_on_repeated_span() {
         // 2026-08-21 设计 §3.3 修订：路径①（连续相同 delta N=5）由滚动
-        // 哈希任意偏移取代；2026-08-22 再校准：L=200 + 流内累计 3 次命中
+        // 哈希任意偏移取代；2026-08-22 再校准：L=200 + 流内累计命中
         // ——5×"same"（20 字符）与 24×"same"（96 字符 < L）均不再触发；
         // 2026-08-23 再校准：L=400 + 二级确认——400 字符 span 出现 3 次
-        // 命中（802 同字符，无切分点直接判真）才触发。
+        // 命中即触发；2026-08-28 R1（THIN-HARNESS-REDESIGN V2）：统一门槛
+        // 20，同字符连串改由独立 802 线直接触发（不再由 3 次滚动命中派生）。
         let mut d = DegenerationDetector::default();
         for i in 0..23 {
             d.feed_content("same");
@@ -2861,12 +2514,12 @@ mod tests {
         d.feed_content(&"x".repeat(802));
         let reason = d
             .trip_reason()
-            .expect("400-char repeated span (3 stream hits) must trip");
+            .expect("802-char same-character run must trip");
         assert!(
             reason.starts_with(CONTENT_REPETITION_DETAIL_PREFIX),
             "{reason}"
         );
-        assert!(reason.contains("repeated span"), "{reason}");
+        assert!(reason.contains("same-character run"), "{reason}");
     }
 
     #[test]
@@ -2946,20 +2599,16 @@ mod tests {
 
     /// final-smoke-2026-08-25 dna-assembly 误杀实证捕获的真实 EGFP 编码
     /// 区 400 字符 span（orz.txt WARN trigger_context，匹配偏移 18/801；
-    /// 全小写 ACGT、序列占比 1.0 ≥0.90——序列内容门目标样本）。源证据=
+    /// 全小写 ACGT。2026-08-25 为序列内容门目标样本；2026-08-28 R1 序列
+    /// 门删除后作为统一门槛 20 的真实回放回归样本）。源证据=
     /// `D:\tb-eval\jobs-official\final-smoke-2026-08-25\dna-assembly__sHQCjg3\agent\orz.txt`。
     const EGFP_SPAN_400: &str = "tgagcaagggcgaggagctgttcaccggggtggtgcccatcctggtcgagctggacggcgacgtaaacggccacaagttcagcgtgtccggcgagggtgagggcgatgccacctacggcaagctgaccctgaagttcatctgcaccacgggcaagctgcccgtgccctggcccaccctcgtgaccaccctgacctacggcgtgcagtgcttcagccgctaccccgaccacatgaagcagcacgacttcttcaagtccgccatgcccgaaggctacgtccaggagcgcaccatcttcttcaaggacgacggcaactacaagacccgcgccgaggtgaagttcgagggcgacaccctggtgaaccgcatcgagctgaagggcatcgacttcaaggaggacgg";
 
     /// 真实蛋白序列 400 字符 span（2026-08-26 全面审查处理：蛋白/氨基酸
     /// 序列覆盖扩展目标样本）。源证据=UniProt P35579（人类 myosin-9，
-    /// 1960 aa）第 1–400 位，全为标准 20 氨基酸字母、占比 1.00 ≥0.95。
+    /// 1960 aa）第 1–400 位。2026-08-28 R1 序列门删除后作为统一门槛 20
+    /// 的真实回放回归样本。
     const PROTEIN_SPAN_400: &str = "MAQQAADKYLYVDKNFINNPLAQADWAAKKLVWVPSDKSGFEPASLKEEVGEEAIVELVENGKKVKVNKDDIQKMNPPKFSKVEDMAELTCLNEASVLHNLKERYYSGLIYTYSGLFCVVINPYKNLPIYSEEIVEMYKGKKRHEMPPHIYAITDTAYRSMMQDREDQSILCTGESGAGKTENTKKVIQYLAYVASSHKSKKDQGELERQLLQANPILEAFGNAKTVKNDNSSRFGKFIRINFDVNGYIVGANIETYLLEKSRAIRQAKEERTFHIFYYLLSGAGEHLKTDLLLEPYNKYRFLSNGHVTIPGQQDKDMFQETMEAMRIMGIPEEEQMGLLRVISGVLQLGNIVFKKERNTDQASMPDNTAAQKVSHLLGINVTDFTRGILTPRIKVGRDY";
-
-    /// 英文无间隔长串 400 字符守卫样本（2026-08-26 全面审查处理：蛋白
-    /// 覆盖不应过广的回归守卫）。源证据=Gettysburg Address 全文去除标点/
-    /// 空白后的前 400 个英文字母；20 氨基酸字母占比实测 0.8975 < 0.95，
-    /// 必须判为非序列样。
-    const ENGLISH_LETTER_RUN_400: &str = "FourscoreandsevenyearsagoourfathersbroughtforthonthiscontinentanewnationconceivedinLibertyanddedicatedtothepropositionthatallmenarecreatedequalNowweareengagedinagreatcivilwartestingwhetherthatnationoranynationsoconceivedandsodedicatedcanlongendureWearemetonagreatbattlefieldofthatwarWehavecometodedicateaportionofthatfieldasafinalrestingplaceforthosewhoheregavetheirlivesthatthatnationmightliveItisal";
 
     #[test]
     fn degeneration_detector_short_low_entropy_deltas_do_not_trip() {
@@ -2983,11 +2632,9 @@ mod tests {
     fn degeneration_detector_poly_a_threshold() {
         // S2（设计 §3.3）+ 2026-08-22/23 再校准：poly-A 精确阈值——799 同
         // 字符不触发（无命中）；800 = 1 次命中（仅审计）；801 = 2 次命中
-        // （仅审计）。2026-08-25 SEQUENCE CONTENT GATE：'a' ∈ DNA/RNA
-        // 字母表（A）——无切分点直接判真分支经序列样判定（DNA/RNA 族）
-        // 判真 → 序列族
-        // 门槛 3→5：802 = 3 次序列命中仅审计、不触发；804 = 5 次才触发
-        // （detail 带 `sequence_gated` 标注）。
+        // （仅审计）。2026-08-28 R1（THIN-HARNESS-REDESIGN V2）：统一门槛
+        // 20 + 802 独立同字符线——802 由独立线直接触发（无需再凑 20 次
+        // 滚动命中，也无需序列门）。
         let mut d = DegenerationDetector::default();
         d.feed_content(&"a".repeat(799));
         assert!(
@@ -3011,228 +2658,19 @@ mod tests {
         assert_eq!(d.take_audit_hits().len(), 2, "801 chars = 2 audit hits");
         let mut d = DegenerationDetector::default();
         d.feed_content(&"a".repeat(802));
-        assert!(
-            d.trip_reason().is_none(),
-            "802 identical chars = 3 sequence-gated hits, must NOT trip (sequence limit 5)"
-        );
-        assert_eq!(d.take_audit_hits().len(), 3, "802 chars = 3 audit hits");
-        let mut d = DegenerationDetector::default();
-        d.feed_content(&"a".repeat(804));
         let reason = d
             .trip_reason()
-            .expect("804 identical chars = 5 sequence-gated hits must trip");
-        assert!(reason.contains("repeated span"), "{reason}");
-        assert!(reason.contains("sequence_gated"), "{reason}");
-    }
-
-    #[test]
-    fn degeneration_detector_dna_sequence_gate_audit_three_hits() {
-        // 2026-08-25 SEQUENCE CONTENT GATE §3 矩阵（核心项）：全 ACGT
-        // 序列 span 合法回显 3 次（EGFP 误杀同构：802 字符 = 3 次命中）→
-        // 序列族门槛 5 下 0 trip；审计条目带 `sequence_gated` 标注 +
-        // kind + ratio + hits/limit；同一 delta 内多次命中按各自累计时刻
-        // 标注（1/5、2/5、3/5——2026-08-26 全面审查处理）。
-        let mut d = DegenerationDetector::default();
-        d.feed_content(&"A".repeat(802));
-        assert!(
-            d.trip_reason().is_none(),
-            "3 sequence-gated hits must NOT trip (sequence limit 5)"
-        );
-        let audits = d.take_audit_hits();
-        assert_eq!(audits.len(), 3, "3 sequence-gated hits must be audited");
-        for a in &audits {
-            assert!(a.contains("sequence_gated"), "{a}");
-            assert!(a.contains("kind=dna_rna"), "{a}");
-            assert!(a.contains("ratio=1.00"), "{a}");
-        }
-        assert!(
-            audits.iter().any(|a| a.contains("1/5")),
-            "first hit must be audited at 1/5: {audits:?}"
-        );
-        assert!(
-            audits.iter().any(|a| a.contains("2/5")),
-            "second hit must be audited at 2/5: {audits:?}"
-        );
-        assert!(
-            audits.iter().any(|a| a.contains("3/5")),
-            "third hit must be audited at 3/5: {audits:?}"
-        );
-    }
-
-    #[test]
-    fn degeneration_detector_dna_sequence_gate_trips_at_five_hits() {
-        // 2026-08-25 SEQUENCE CONTENT GATE §3 矩阵（核心项）：同一 DNA
-        // span 真循环 5 次命中（804 字符全 A）→ 序列族门槛触发，detail
-        // 带 `sequence_gated` 标注；6 次（806 字符）同样触发。
-        let mut d = DegenerationDetector::default();
-        d.feed_content(&"A".repeat(804));
-        let reason = d.trip_reason().expect("5 sequence-gated hits must trip");
-        assert!(reason.contains("sequence_gated"), "{reason}");
-        assert!(reason.contains("kind=dna_rna"), "{reason}");
-        assert!(reason.contains("5/5"), "{reason}");
-        let mut d = DegenerationDetector::default();
-        d.feed_content(&"A".repeat(806));
-        let reason = d.trip_reason().expect("6 sequence-gated hits must trip");
-        assert!(reason.contains("sequence_gated"), "{reason}");
-    }
-
-    #[test]
-    fn degeneration_detector_sequence_and_plain_hits_count_separately() {
-        // 2026-08-25 SEQUENCE CONTENT GATE §2.3/§3 矩阵（混合内容）：序列
-        // 样与非序列样命中**分别计数、分别门槛**——'x'（非序列）2 次 +
-        // 'A'（序列）3 次，两计数互不串扰；序列 3/5 仅审计、不触发。
-        let mut trip = None;
-        let mut trigger_context = None;
-        let mut audit_hits = Vec::new();
-        let mut state = RepetitionFamilyState::default();
-        feed_repetition(
-            &mut trip,
-            &mut trigger_context,
-            &mut audit_hits,
-            "content",
-            CONTENT_REPETITION_DETAIL_PREFIX,
-            &"x".repeat(801),
-            &mut state,
-        );
-        assert_eq!(state.hits, 2, "plain hits must count independently");
-        assert_eq!(state.sequence_hits, 0);
-        feed_repetition(
-            &mut trip,
-            &mut trigger_context,
-            &mut audit_hits,
-            "content",
-            CONTENT_REPETITION_DETAIL_PREFIX,
-            &"A".repeat(802),
-            &mut state,
-        );
-        assert_eq!(
-            state.hits, 2,
-            "sequence hits must NOT count toward plain hits"
-        );
-        assert_eq!(state.sequence_hits, 3);
-        assert!(trip.is_none(), "3 sequence + 2 plain hits must NOT trip");
-        assert_eq!(
-            audit_hits
-                .iter()
-                .filter(|a| a.contains("sequence_gated"))
-                .count(),
-            3,
-            "sequence-gated audits must be separate entries"
-        );
-    }
-
-    #[test]
-    fn sequence_kind_classification_boundaries() {
-        // 2026-08-25 SEQUENCE CONTENT GATE §2.2 边界（S1 基础验证；S2 完整
-        // 矩阵含 U 与大小写混合、EGFP 真实样本回放）+ 2026-08-26 蛋白扩展：
-        // DNA/RNA 0.89/0.90/0.91 与蛋白 0.94/0.95/0.96 分派正确；两族同判
-        // 真时 DNA/RNA 优先；空 span None；大小写混合；英文无间隔长串不判
-        // 序列样（覆盖面守卫）。
-        let below: Vec<char> = "A"
-            .repeat(89)
-            .chars()
-            .chain("X".repeat(11).chars())
-            .collect();
-        assert_eq!(
-            sequence_kind(&below),
-            None,
-            "DNA 0.89 must NOT be sequence-like"
-        );
-        let at: Vec<char> = "A"
-            .repeat(90)
-            .chars()
-            .chain("X".repeat(10).chars())
-            .collect();
-        assert!(
-            matches!(sequence_kind(&at), Some((SequenceKind::DnaRna, _))),
-            "DNA 0.90 must be DnaRna"
-        );
-        let above: Vec<char> = "A"
-            .repeat(91)
-            .chars()
-            .chain("X".repeat(9).chars())
-            .collect();
-        assert!(
-            matches!(sequence_kind(&above), Some((SequenceKind::DnaRna, _))),
-            "DNA 0.91 must be DnaRna"
-        );
-        let mixed: Vec<char> = "aCtGuN".repeat(17).chars().collect();
-        assert_eq!(mixed.len(), 102);
-        assert!(
-            matches!(sequence_kind(&mixed), Some((SequenceKind::DnaRna, _))),
-            "mixed-case ACGTNU must be DnaRna"
-        );
-        // 蛋白边界：'M'（Met）∈ 蛋白字母表且 ∉ DNA/RNA；'O' 两族均不计。
-        let protein_below: Vec<char> = "M"
-            .repeat(376)
-            .chars()
-            .chain("O".repeat(24).chars())
-            .collect();
-        assert_eq!(
-            sequence_kind(&protein_below),
-            None,
-            "protein 0.94 must NOT be sequence-like"
-        );
-        let protein_at: Vec<char> = "M"
-            .repeat(380)
-            .chars()
-            .chain("O".repeat(20).chars())
-            .collect();
-        assert!(
-            matches!(sequence_kind(&protein_at), Some((SequenceKind::Protein, _))),
-            "protein 0.95 must be Protein"
-        );
-        let protein_above: Vec<char> = "M"
-            .repeat(384)
-            .chars()
-            .chain("O".repeat(16).chars())
-            .collect();
-        assert!(
-            matches!(
-                sequence_kind(&protein_above),
-                Some((SequenceKind::Protein, _))
-            ),
-            "protein 0.96 must be Protein"
-        );
-        let protein_mixed: Vec<char> = "mKvLwYfPsRtDEnAcGhI".repeat(6).chars().collect();
-        assert!(
-            matches!(
-                sequence_kind(&protein_mixed),
-                Some((SequenceKind::Protein, _))
-            ),
-            "mixed-case protein letters must be Protein"
-        );
-        // 两族同判真（全 A/C/G/T）→ DNA/RNA 优先。
-        let both: Vec<char> = "A".repeat(400).chars().collect();
-        assert!(
-            matches!(sequence_kind(&both), Some((SequenceKind::DnaRna, _))),
-            "both-satisfying span must be DnaRna (precedence)"
-        );
-        assert!(
-            sequence_kind(&Vec::<char>::new()).is_none(),
-            "empty span must NOT be sequence-like"
-        );
-        // 覆盖面守卫：英文无间隔长串不得判为蛋白样（0.8975 < 0.95）。
-        let english: Vec<char> = ENGLISH_LETTER_RUN_400.chars().collect();
-        assert_eq!(
-            english.len(),
-            REPETITION_MIN_RUN_CHARS,
-            "English guard sample must be exactly L=400 chars"
-        );
-        assert_eq!(
-            sequence_kind(&english),
-            None,
-            "English letter run must NOT be sequence-like (coverage guard)"
-        );
+            .expect("802 identical chars = independent same-char line, must trip");
+        assert!(reason.contains("same-character run"), "{reason}");
     }
 
     #[test]
     fn degeneration_detector_egfp_real_span_three_hits_audit_only() {
-        // 2026-08-25 SEQUENCE CONTENT GATE §3 矩阵项 1/8：final-smoke
+        // 2026-08-28 R1（THIN-HARNESS-REDESIGN V2 §3.4）：final-smoke
         // dna-assembly EGFP 400 字符真实 span 原样回放——引用 4 段、中间
         // 插入互异推理文本（离线模拟验证命中 idx 999/1599/2199 = 3 次，
-        // 间隔不重置累计）→ 序列族门槛 5 下 0 trip；3 条审计均带
-        // `sequence_gated` 标注 + ratio + hits/limit。
+        // 间隔不重置累计）→ 统一门槛 20 下 0 trip（序列门删除后由门槛
+        // 20 自然覆盖）；3 条审计（无 `sequence_gated` 标注）。
         assert_eq!(
             EGFP_SPAN_400.chars().count(),
             REPETITION_MIN_RUN_CHARS,
@@ -3252,56 +2690,48 @@ mod tests {
         d.feed_reasoning(span);
         assert!(
             d.trip_reason().is_none(),
-            "3 EGFP sequence-gated hits must NOT trip (sequence limit 5)"
+            "3 EGFP replays must NOT trip (unified limit 20)"
         );
         let audits = d.take_audit_hits();
         assert_eq!(audits.len(), 3, "three EGFP replays must be audited");
-        for a in &audits {
-            assert!(a.contains("sequence_gated"), "{a}");
-            assert!(a.contains("ratio=1.00"), "{a}");
-        }
-        // 审计条目按各自命中时刻的流内累计计数标注（1/5、2/5、3/5）。
         assert!(
-            audits.iter().any(|a| a.contains("1/5")),
-            "first hit must be audited at 1/5: {audits:?}"
-        );
-        assert!(
-            audits.iter().any(|a| a.contains("2/5")),
-            "second hit must be audited at 2/5: {audits:?}"
-        );
-        assert!(
-            audits.iter().any(|a| a.contains("3/5")),
-            "third hit must be audited at 3/5: {audits:?}"
+            audits.iter().all(|a| !a.contains("sequence_gated")),
+            "sequence gate markers must be gone: {audits:?}"
         );
     }
 
     #[test]
-    fn degeneration_detector_egfp_real_span_five_hits_trips() {
-        // 2026-08-25 SEQUENCE CONTENT GATE §3 矩阵项 2/8：同一 EGFP span
-        // 真循环 6 段（5 次命中、间隔不重置）→ 序列族触发；detail 带
-        // `sequence_gated` 标注与 5/5。
+    fn degeneration_detector_egfp_real_span_twenty_hits_trips() {
+        // 2026-08-28 R1（设计 §3.4）：同一 EGFP span 原样回放 19 次 →
+        // 0 trip（仅审计）；第 20 次 → 显式拦截（统一门槛 20，detail 带
+        // 20/20；序列门删除后无需 `sequence_gated`）。
         let span = EGFP_SPAN_400;
-        let gaps: Vec<String> = (101..=105).map(|s| distinct_random_text(200, s)).collect();
         let mut d = DegenerationDetector::default();
-        for i in 0..6 {
-            d.feed_reasoning(span);
-            if let Some(g) = gaps.get(i) {
-                d.feed_reasoning(g);
-            }
+        d.feed_reasoning(span); // 首次出现，不计命中
+        for i in 0..19 {
+            d.feed_reasoning(&distinct_random_text(200, 1000 + i));
+            d.feed_reasoning(span); // 回放 → 1 次命中
+            assert!(
+                d.trip_reason().is_none(),
+                "{} EGFP replays must NOT trip (unified limit 20)",
+                i + 1
+            );
         }
+        let audits = d.take_audit_hits();
+        assert_eq!(audits.len(), 19, "19 replays = 19 audit hits");
+        d.feed_reasoning(&distinct_random_text(200, 9999));
+        d.feed_reasoning(span); // 第 20 次回放 → 20/20 → trip
         let reason = d
             .trip_reason()
-            .expect("5 EGFP sequence-gated hits must trip (sequence limit 5)");
-        assert!(reason.contains("sequence_gated"), "{reason}");
-        assert!(reason.contains("5/5"), "{reason}");
+            .expect("20th EGFP replay must trip (unified limit 20)");
+        assert!(reason.contains("20/20"), "{reason}");
     }
 
     #[test]
     fn degeneration_detector_protein_span_three_hits_audit_only() {
-        // 2026-08-26 全面审查处理（蛋白/氨基酸序列覆盖扩展）：真实蛋白
-        // span（UniProt P35579）合法回显 4 段（3 次命中、间隔不重置）→
-        // 蛋白族门槛 5 下 0 trip；3 条审计均带 `sequence_gated` +
-        // `kind=protein` + ratio + hits/limit。
+        // 2026-08-28 R1：真实蛋白 span（UniProt P35579）合法回显 4 段
+        // （3 次命中、间隔不重置）→ 统一门槛 20 下 0 trip（序列门删除后
+        // 由门槛 20 覆盖）；3 条审计（无 `sequence_gated`）。
         assert_eq!(
             PROTEIN_SPAN_400.chars().count(),
             REPETITION_MIN_RUN_CHARS,
@@ -3321,37 +2751,14 @@ mod tests {
         d.feed_reasoning(span);
         assert!(
             d.trip_reason().is_none(),
-            "3 protein sequence-gated hits must NOT trip (sequence limit 5)"
+            "3 protein replays must NOT trip (unified limit 20)"
         );
         let audits = d.take_audit_hits();
         assert_eq!(audits.len(), 3, "three protein replays must be audited");
-        for a in &audits {
-            assert!(a.contains("sequence_gated"), "{a}");
-            assert!(a.contains("kind=protein"), "{a}");
-            assert!(a.contains("ratio=1.00"), "{a}");
-        }
-    }
-
-    #[test]
-    fn degeneration_detector_protein_span_five_hits_trips() {
-        // 2026-08-26 全面审查处理（蛋白/氨基酸序列覆盖扩展）：同一蛋白
-        // span 真循环 6 段（5 次命中、间隔不重置）→ 蛋白族触发；detail
-        // 带 `sequence_gated` + `kind=protein` 与 5/5。
-        let span = PROTEIN_SPAN_400;
-        let gaps: Vec<String> = (201..=205).map(|s| distinct_random_text(200, s)).collect();
-        let mut d = DegenerationDetector::default();
-        for i in 0..6 {
-            d.feed_reasoning(span);
-            if let Some(g) = gaps.get(i) {
-                d.feed_reasoning(g);
-            }
-        }
-        let reason = d
-            .trip_reason()
-            .expect("5 protein sequence-gated hits must trip (sequence limit 5)");
-        assert!(reason.contains("sequence_gated"), "{reason}");
-        assert!(reason.contains("kind=protein"), "{reason}");
-        assert!(reason.contains("5/5"), "{reason}");
+        assert!(
+            audits.iter().all(|a| !a.contains("sequence_gated")),
+            "sequence gate markers must be gone: {audits:?}"
+        );
     }
 
     #[test]
@@ -3374,13 +2781,12 @@ mod tests {
     }
 
     #[test]
-    fn degeneration_detector_sequence_hits_discarded_at_stream_end() {
-        // 2026-08-25 SEQUENCE CONTENT GATE §3 矩阵项 8（流结束丢弃）：
-        // 检测器按 generate_stream 每次新建——第一个流 3 次序列命中仅
-        // 审计后结束；新建流重新从 0 计数（非 6 次累计），同一流内第 5
-        // 次命中才触发。
+    fn degeneration_detector_rolling_hits_discarded_at_stream_end() {
+        // 2026-08-28 R1（流结束丢弃，序列门删除后同语义）：检测器按
+        // generate_stream 每次新建——第一个流 3 次命中仅审计后结束；新建
+        // 流重新从 0 计数（非 6 次累计），同一流内第 20 次命中才触发。
         let span = EGFP_SPAN_400;
-        let gaps: Vec<String> = (101..=104).map(|s| distinct_random_text(200, s)).collect();
+        let gaps: Vec<String> = (101..=130).map(|s| distinct_random_text(200, s)).collect();
         let mut first = DegenerationDetector::default();
         for i in 0..4 {
             first.feed_reasoning(span);
@@ -3403,29 +2809,33 @@ mod tests {
         }
         assert!(
             second.trip_reason().is_none(),
-            "fresh stream must restart the counter (3/5, not 6 cumulative)"
+            "fresh stream must restart the counter (3/20, not 6 cumulative)"
         );
         assert_eq!(second.take_audit_hits().len(), 3);
-        // 同一流内继续到第 5 次命中 → 触发。
-        for i in 0..2 {
+        // 同一流内继续回放到第 20 次命中 → 触发。
+        for i in 4..22 {
             second.feed_reasoning(span);
             if let Some(g) = gaps.get(i) {
                 second.feed_reasoning(g);
             }
+            if second.trip_reason().is_some() {
+                break;
+            }
         }
         let reason = second
             .trip_reason()
-            .expect("5th hit in the same stream must trip");
-        assert!(reason.contains("sequence_gated"), "{reason}");
+            .expect("20th hit in the same stream must trip");
+        assert!(reason.contains("20/20"), "{reason}");
     }
 
     #[test]
     fn degeneration_trigger_context_records_repeated_span() {
         // 缺口 A（2026-08-22）+ 再校准（2026-08-23 L=400）：退化触发时
         // 落盘触发上下文——重复 400 字符 span 文本、两个匹配偏移与窗口
-        // 尾部（第 3 次命中时），供事后判定真复读 vs 误杀。
+        // 尾部（2026-08-28 R1 统一门槛 20：第 20 次命中时），供事后判定
+        // 真复读 vs 误杀。
         let mut d = DegenerationDetector::default();
-        d.feed_content(&"abcdefghij".repeat(82)); // 820 字符：idx 799/800/801 三连命中
+        d.feed_content(&"abcdefghij".repeat(82)); // 820 字符：idx 799 起 21 次命中 → 20/20 触发
         let ctx = d
             .trigger_context()
             .expect("trigger context must be recorded on trip");
@@ -3450,8 +2860,8 @@ mod tests {
     fn degeneration_detector_periodic_phrase_trips_any_phase() {
         // S2（设计 §3.3，对齐缺陷回归）+ 2026-08-22 再校准：周期 10 短语
         // 循环——固定偏移下相邻窗口永不相同、系统性漏检；滚动哈希任意
-        // 偏移在 idx 799/800/801 三连命中（repeat(82)=820 字符）触发
-        // （2026-08-23 L=400；无切分点 → 二级直接判真）。
+        // 偏移在 idx 799 起连续命中（repeat(82)=820 字符 → 21 次命中，
+        // 2026-08-28 R1 统一门槛 20 下触发；无切分点 → 二级直接判真）。
         let mut d = DegenerationDetector::default();
         d.feed_content(&"abcdefghij".repeat(80)); // 800 字符 = 1 次命中（仅审计）
         assert!(d.trip_reason().is_none(), "1 hit must NOT trip");
@@ -3461,7 +2871,7 @@ mod tests {
             "800 chars of period-10 = 1 audit hit"
         );
         let mut d = DegenerationDetector::default();
-        d.feed_content(&"abcdefghij".repeat(82)); // 820 字符 = 3 次命中
+        d.feed_content(&"abcdefghij".repeat(82)); // 820 字符 = 21 次命中 ≥ 20
         let reason = d.trip_reason().expect("period-10 cycle must trip");
         assert!(reason.contains("repeated span"), "{reason}");
     }
@@ -3533,8 +2943,9 @@ mod tests {
     fn degeneration_detector_near_repeat_does_not_trip_then_exact_repeat_trips() {
         // S2 补充 + 2026-08-22/23 L=400：400 字符 span 与邻近内容仅差一个
         // 字符（近重复，非精确复读）不触发；精确复读按流内累计命中计——
-        // 1 次命中仅审计留痕，第 3 次命中才触发。用无标点互异文本（二级
-        // 无切分点直接判真，确认路径被激活）。
+        // 1 次命中仅审计留痕，第 20 次命中才触发（2026-08-28 R1 门槛
+        // 20；相邻第三份复制在窗口内产生大量匹配即达 20）。用无标点互异
+        // 文本（二级无切分点直接判真，确认路径被激活）。
         let span = distinct_alpha_text(REPETITION_MIN_RUN_CHARS, 7);
         let mut near = span.clone();
         // 突变字符取与 span 首/末字符均不同的字母（避免移位窗口意外相等）。
@@ -3570,10 +2981,8 @@ mod tests {
             1,
             "first exact repeat must be audit-only"
         );
-        d.feed_content(&span); // 命中 2、3 → 触发
-        let reason = d
-            .trip_reason()
-            .expect("3rd exact span occurrence must trip");
+        d.feed_content(&span); // 相邻第三份 → 窗口内 400 个匹配位置 → 第 20 次命中触发
+        let reason = d.trip_reason().expect("20th stream hit must trip");
         assert!(reason.contains("repeated span"), "{reason}");
     }
 
@@ -3586,8 +2995,9 @@ mod tests {
         // 校准：每 feed 追加唯一 4 位标记，杜绝 400 字符 span 精确复现；
         // 2026-08-23 NGRAM-GUARD-CALIBRATION：单份 core 的 3-gram 重复率
         // 约 0.694（恰为 0.69x 边界样本，S2 保留为「不触发」用例）——
-        // 本用例改双份 core（ratio ≈ 0.825 > 0.70）+ 流内累计命中 ≥3
-        // （窗口填满后前 2 次超阈值 feed 仅审计留痕，第 3 次才触发）。
+        // 本用例改双份 core（ratio ≈ 0.825 > 0.70）+ 流内累计命中 ≥15
+        // （2026-08-28 R1 门槛 3→15；窗口填满后前 14 次超阈值 feed 仅
+        // 审计留痕，第 15 次才触发）。
         let core = "the quick brown fox jumps over lazy dog the quick brown \
                     fox jumps over lazy dog";
         let mut d = DegenerationDetector::default();
@@ -3597,8 +3007,8 @@ mod tests {
         let audits = d.take_audit_hits();
         assert_eq!(
             audits.len(),
-            2,
-            "two sub-threshold 3-gram hits must be audited, got {audits:?}"
+            14,
+            "fourteen sub-threshold 3-gram hits must be audited, got {audits:?}"
         );
         assert!(
             audits.iter().all(|a| {
@@ -3610,7 +3020,7 @@ mod tests {
         );
         let reason = d.trip_reason().expect("high repetition must trip");
         assert!(reason.contains("3-gram repetition ratio"), "{reason}");
-        assert!(reason.contains("3/3"), "{reason}");
+        assert!(reason.contains("15/15"), "{reason}");
         assert!(
             d.take_audit_hits().is_empty(),
             "rolling path must stay silent (no 400-char span repeats)"
@@ -3636,11 +3046,12 @@ mod tests {
     }
 
     #[test]
-    fn degeneration_detector_ngram_boundary_above_070_trips_after_three_hits() {
+    fn degeneration_detector_ngram_boundary_above_070_trips_after_fifteen_hits() {
         // S2（设计 §2.3）：0.70x 边界样本——9 词 core 的 3-gram 重复率约
-        // 0.720（> 0.70）——窗口填满后每次超阈值 feed 计 1 次命中：前 2
-        // 次仅审计（1/3、2/3），第 3 次才 trip（3/3）；`>` 严格大于语义
-        // 由 0.694（不计数）/ 0.720（计数）两侧明确断言。
+        // 0.720（> 0.70）——窗口填满后每次超阈值 feed 计 1 次命中：前
+        // 14 次仅审计（1/15…14/15），第 15 次才 trip（15/15）；`>` 严格
+        // 大于语义由 0.694（不计数）/ 0.720（计数）两侧明确断言。
+        // （2026-08-28 R1：门槛 3→15。）
         let core = "the quick brown fox jumps over lazy dog alpha";
         let mut d = DegenerationDetector::default();
         for i in 0..200 {
@@ -3649,23 +3060,24 @@ mod tests {
         let audits = d.take_audit_hits();
         assert_eq!(
             audits.len(),
-            2,
-            "two sub-threshold 3-gram hits must be audited, got {audits:?}"
+            14,
+            "fourteen sub-threshold 3-gram hits must be audited, got {audits:?}"
         );
-        assert!(audits[0].contains("stream hit 1/3"), "{}", audits[0]);
-        assert!(audits[1].contains("stream hit 2/3"), "{}", audits[1]);
+        assert!(audits[0].contains("stream hit 1/15"), "{}", audits[0]);
+        assert!(audits[13].contains("stream hit 14/15"), "{}", audits[13]);
         let reason = d
             .trip_reason()
-            .expect("0.720 > 0.70 must trip after 3 hits");
+            .expect("0.720 > 0.70 must trip after 15 hits");
         assert!(reason.contains("3-gram repetition ratio"), "{reason}");
-        assert!(reason.contains("3/3"), "{reason}");
+        assert!(reason.contains("15/15"), "{reason}");
     }
 
     #[test]
     fn degeneration_detector_ngram_single_feed_counts_one_hit() {
         // S2（设计 §2.2）：命中按 feed 粒度计 1 次——单个超大高重复 feed
         // （约 1200 token、ratio≈0.825）也只计 1 次（审计）、不 trip；
-        // 第 2、3 个同类 feed 依次计 2、3 次，第 3 个才触发。滚动路径
+        // 第 2…15 个同类 feed 依次计 2…15 次，第 15 个才触发（2026-08-28
+        // R1：门槛 3→15）。滚动路径
         // 保持静默（同字符 span 间隔 6120 字符 > 800 窗口缓冲，无精确
         // 复现）。
         let chunk = {
@@ -3685,19 +3097,25 @@ mod tests {
         );
         let audits = d.take_audit_hits();
         assert_eq!(audits.len(), 1, "one hit audited, got {audits:?}");
-        assert!(audits[0].contains("stream hit 1/3"), "{}", audits[0]);
+        assert!(audits[0].contains("stream hit 1/15"), "{}", audits[0]);
+        for feed_no in 2..=14 {
+            d.feed_content(&chunk);
+            assert!(
+                d.trip_reason().is_none(),
+                "feed {feed_no} = {feed_no} hits, must not trip"
+            );
+            let audits = d.take_audit_hits();
+            assert_eq!(audits.len(), 1, "one hit per feed, got {audits:?}");
+            assert!(
+                audits[0].contains(&format!("stream hit {feed_no}/15")),
+                "{}",
+                audits[0]
+            );
+        }
         d.feed_content(&chunk);
-        assert!(
-            d.trip_reason().is_none(),
-            "two feeds = 2 hits, must not trip"
-        );
-        let audits = d.take_audit_hits();
-        assert_eq!(audits.len(), 1, "second feed = hit 2, got {audits:?}");
-        assert!(audits[0].contains("stream hit 2/3"), "{}", audits[0]);
-        d.feed_content(&chunk);
-        let reason = d.trip_reason().expect("3rd feed = hit 3, must trip");
+        let reason = d.trip_reason().expect("15th feed = hit 15, must trip");
         assert!(reason.contains("3-gram repetition ratio"), "{reason}");
-        assert!(reason.contains("3/3"), "{reason}");
+        assert!(reason.contains("15/15"), "{reason}");
     }
 
     #[test]
@@ -3705,8 +3123,9 @@ mod tests {
         // S2（设计 §2.2：间隔不重置）：命中 1-2（feed 90/91）后插入大
         // 间隔（单 feed 300 互异 token，窗口重复率压到 0.70 以下、间隔
         // 自身不计命中）——计数不清零（ngram_hits 仍 2）；重新灌入高
-        // 重复内容恢复超阈值后，下一次命中即第 3 次并 trip（3/3）——
-        // 若间隔重置，需再累计 3 次才触发且中间先出两条新审计。
+        // 重复内容恢复超阈值后继续累计到第 15 次并 trip（15/15；
+        // 2026-08-28 R1 门槛 3→15）——若间隔重置，需再累计 15 次才触发
+        // 且中间先出 13 条新审计。
         let core = "the quick brown fox jumps over lazy dog alpha";
         let mut d = DegenerationDetector::default();
         for i in 0..92 {
@@ -3743,15 +3162,16 @@ mod tests {
                 break;
             }
         }
-        let reason = d.trip_reason().expect("3rd hit after gap must trip");
+        let reason = d.trip_reason().expect("15th hit after gap must trip");
         assert!(reason.contains("3-gram repetition ratio"), "{reason}");
-        assert!(reason.contains("3/3"), "{reason}");
+        assert!(reason.contains("15/15"), "{reason}");
     }
 
     #[test]
     fn degeneration_detector_ngram_hits_discarded_at_stream_end() {
         // S2（设计 §2.2：流结束丢弃）：命中计数不跨请求累积——新流首
-        // feed 即使与旧流累计第 3 次同源，也只计 1 次（审计）、不 trip。
+        // feed 即使与旧流累计第 15 次同源，也只计 1 次（审计）、不 trip。
+        // （2026-08-28 R1：门槛 3→15。）
         let core = "the quick brown fox jumps over lazy dog alpha";
         let mut first = DegenerationDetector::default();
         for i in 0..92 {
@@ -3774,41 +3194,60 @@ mod tests {
         );
         let audits = second.take_audit_hits();
         assert_eq!(audits.len(), 1);
-        assert!(audits[0].contains("stream hit 1/3"), "{}", audits[0]);
+        assert!(audits[0].contains("stream hit 1/15"), "{}", audits[0]);
     }
 
     #[test]
-    fn degeneration_detector_trips_after_three_stream_hits() {
-        // 2026-08-22 再校准（用户裁决：流内累计命中 ≥3 次才中断+降级）+
-        // 2026-08-23 L=400 + 2026-08-25 序列门：'x' ∉ 序列字母表 → 非
-        // 序列样，门槛维持 3——1–2 次命中仅审计留痕（take_audit_hits），
-        // 不中断不降级；第 3 次命中才触发。
+    fn degeneration_detector_trips_after_twenty_stream_hits() {
+        // 2026-08-28 R1（用户裁决：统一门槛 20）——同一 400 字符 span
+        // 原样回放 19 次 → 0 trip（仅审计）；第 20 次 → 显式拦截（设计
+        // §3.4 构造）。1–19 次命中仅审计留痕（take_audit_hits），不中断
+        // 不降档。
+        let span = "x".repeat(REPETITION_MIN_RUN_CHARS);
         let mut d = DegenerationDetector::default();
-        d.feed_content(&"x".repeat(801)); // idx 799/800 → 命中 1、2
-        assert!(d.trip_reason().is_none(), "2 stream hits must NOT trip");
+        d.feed_content(&span); // 首次出现，不计命中
+        for i in 0..19 {
+            d.feed_content(&distinct_random_text(200, 500 + i));
+            d.feed_content(&span); // 回放 → 1 次命中
+            assert!(d.trip_reason().is_none(), "{} replays must NOT trip", i + 1);
+        }
         assert_eq!(
             d.take_audit_hits().len(),
-            2,
-            "both sub-threshold hits must be audited"
+            19,
+            "19 sub-threshold hits must be audited"
         );
-        d.feed_content("x"); // idx 801 → 命中 3
-        let reason = d.trip_reason().expect("3rd stream hit must trip");
+        d.feed_content(&distinct_random_text(200, 9000));
+        d.feed_content(&span); // 第 20 次回放 → 20/20 → trip
+        let reason = d.trip_reason().expect("20th stream hit must trip");
         assert!(reason.contains("repeated span"), "{reason}");
-        assert!(reason.contains("3/3"), "{reason}");
+        assert!(reason.contains("20/20"), "{reason}");
     }
 
     #[test]
     fn degeneration_detector_hit_counter_survives_gaps() {
-        // 2026-08-22 再校准（用户裁决：间隔不重置）+ 2026-08-23 L=400——
-        // 命中 1 与命中 2/3 之间插入 50 个互异字符（不产生命中），流内
-        // 计数不清零：命中 3 仍触发（若间隔重置则只停在 2 次、永不触发）。
-        // 2026-08-25 序列门：'x'/'y' ∉ 序列字母表 → 非序列门槛 3 不变。
+        // 2026-08-22 再校准（用户裁决：间隔不重置）+ 2026-08-23 L=400 +
+        // 2026-08-28 R1 门槛 20——命中之间插入互异字符（不产生命中），
+        // 流内计数不清零：累计到第 20 次仍触发（若间隔重置则停在 19 次、
+        // 永不触发）。
+        let span = distinct_alpha_text(REPETITION_MIN_RUN_CHARS, 7);
         let mut d = DegenerationDetector::default();
-        d.feed_content(&"x".repeat(800)); // idx 799 → 命中 1
+        d.feed_content(&span); // 首次出现
+        d.feed_content(&distinct_random_text(200, 41)); // 间隔 1：无命中
+        d.feed_content(&span); // 命中 1（仅审计）
         assert!(d.trip_reason().is_none(), "1 hit must NOT trip");
-        d.feed_content(&"y".repeat(50)); // 无命中（'y' 与 'x' 不同）
-        d.feed_content(&"x".repeat(402)); // idx 1249 → 命中 2；idx 1250 → 命中 3
-        let reason = d.trip_reason().expect("3rd hit after a gap must trip");
+        for i in 0..18 {
+            d.feed_content(&distinct_random_text(200, 700 + i)); // 间隔：无命中
+            d.feed_content(&span); // 命中 2…19
+            assert!(d.trip_reason().is_none(), "{} hits must NOT trip", i + 2);
+        }
+        assert_eq!(
+            d.take_audit_hits().len(),
+            19,
+            "19 sub-threshold hits must be audited"
+        );
+        d.feed_content(&distinct_random_text(200, 7777)); // 间隔：无命中
+        d.feed_content(&span); // 命中 20 → trip（间隔不重置）
+        let reason = d.trip_reason().expect("20th hit after gaps must trip");
         assert!(reason.contains("repeated span"), "{reason}");
     }
 
@@ -3902,7 +3341,8 @@ mod tests {
             "third-repeat delta must report count 400: {audits:?}"
         );
         // 真复读：`aaa, ` 周期（80 周期 = 400 字符；内部块 "aaa" 重复 80
-        // 次，覆盖占比 240/400=0.60 ≥ 0.50）→ 二级过 → 3 次命中触发。
+        // 次，覆盖占比 240/400=0.60 ≥ 0.50）→ 二级过 → 相邻第三份复制在
+        // 窗口内产生大量确认命中 → 20/20 触发（2026-08-28 R1 门槛 20）。
         let cycle = "aaa, ".repeat(REPETITION_MIN_RUN_CHARS / 5);
         assert_eq!(cycle.chars().count(), REPETITION_MIN_RUN_CHARS);
         let mut d = DegenerationDetector::default();
@@ -3941,7 +3381,7 @@ mod tests {
         // S2 设计项 + 2026-08-23 S1 审查处理（P3-3）：每对命中独立二级
         // 确认——第一对（多样引用 Q）字符级匹配但二级不过 → 不计数、仅
         // 聚合留痕；后续 `aaa, ` 结构对（R）的确认命中才累计：1 次仅
-        // 审计、3 次触发。
+        // 审计、20 次触发（2026-08-28 R1 门槛 20）。
         let mut quote = String::new();
         let mut i = 0usize;
         while quote.chars().count() < REPETITION_MIN_RUN_CHARS {
@@ -3973,11 +3413,10 @@ mod tests {
         let audits = d.take_audit_hits();
         assert_eq!(audits.len(), 1, "1 confirmed hit audited, got {audits:?}");
         assert!(!audits[0].contains("second-stage rejected"), "{audits:?}");
-        // R 第三、四遍：确认命中 2、3 → 触发。
+        // R 第三遍（相邻复制）：窗口内大量确认命中 → 累计 20 → 触发。
         d.feed_content(&cycle);
-        d.feed_content(&cycle);
-        let reason = d.trip_reason().expect("3rd confirmed hit must trip");
-        assert!(reason.contains("3/3"), "{reason}");
+        let reason = d.trip_reason().expect("20th confirmed hit must trip");
+        assert!(reason.contains("20/20"), "{reason}");
     }
 
     #[test]
@@ -4111,8 +3550,9 @@ mod tests {
         // interrupted with `degeneration_detected`; the interruption is NOT
         // retried (output already seen — ADR-0007 discipline).
         // 2026-08-21 修订：滚动哈希粒度下 5×"hi" 不再触发；2026-08-22
-        // 再校准：L=200 + 3 次命中；2026-08-23 再校准：L=400 + 二级确认
-        // ——802 同字符（idx 799/800/801 三连命中，无切分点直接判真）触发。
+        // 再校准：L=200 + 流内累计命中；2026-08-23 再校准：L=400 + 二级
+        // 确认；2026-08-28 R1：统一门槛 20 + 802 独立同字符线（此处 802
+        // 同字符由独立线直接触发）。
         let repeated = "x".repeat(802);
         let body = degenerate_sse_body(&repeated, 1);
         let attempts = std::sync::Arc::new(std::sync::atomic::AtomicU32::new(0));
@@ -4182,28 +3622,13 @@ mod tests {
         )
     }
 
-    /// SSE body with one large low-repetition reasoning delta (~≥64K
-    /// estimated tokens — the reasoning-stall token-budget probe; distinct
-    /// tokens keep the 3-gram repetition detector silent so the stall
-    /// budget is the signal under test).
-    fn reasoning_stall_sse_body() -> String {
-        let mut reasoning = String::new();
-        for i in 0..16_000 {
-            reasoning.push_str(&format!("token{i} "));
-        }
-        let frame = format!(
-            r#"{{"id":"x","object":"chat.completion.chunk","created":0,"model":"m","choices":[{{"index":0,"delta":{{"role":"assistant","reasoning_content":"{reasoning}"}},"finish_reason":null}}]}}"#
-        );
-        format!("data: {frame}\n\ndata: [DONE]\n\n")
-    }
-
     #[test]
     fn detector_reasoning_repetition_trips_on_repeated_span() {
         // 灵敏层（设计 §3.3 修订 + 2026-08-22/23 再校准）：同一滚动哈希
         // 算法作用于 reasoning delta——5×"same"（20 字符）与 24×"same"
-        // （96 字符 < L=400）均不再触发；400 字符 span 出现 3 次命中
-        // （802 同字符，无切分点直接判真）→ reasoning_repetition；循环型
-        // 空转可在数 K 内识别，不依赖大预算兜底。
+        // （96 字符 < L=400）均不再触发；2026-08-28 R1 起 802 同字符由
+        // 独立同字符线直接触发 → reasoning_repetition；循环型空转仍可
+        // 在滚动路径 20 次命中时识别。
         let mut d = DegenerationDetector::default();
         for i in 0..23 {
             d.feed_reasoning("same");
@@ -4220,19 +3645,20 @@ mod tests {
         d.feed_reasoning(&"x".repeat(802));
         let reason = d
             .trip_reason()
-            .expect("400-char repeated reasoning span must trip");
+            .expect("802-char same-character reasoning run must trip");
         assert!(
             reason.starts_with(REASONING_REPETITION_DETAIL_PREFIX),
             "{reason}"
         );
-        assert!(reason.contains("repeated span"), "{reason}");
+        assert!(reason.contains("same-character run"), "{reason}");
     }
 
     #[test]
     fn detector_reasoning_repetition_periodic_cycle_trips() {
         // S2（设计 §3.3）+ 2026-08-22/23 再校准：同一滚动哈希算法作用于
         // reasoning——周期 10 循环（循环型空转特征）在灵敏层同样触发
-        // （对齐缺陷回归；repeat(82)=820 字符 → 3 次命中）。
+        // （对齐缺陷回归；repeat(82)=820 字符 → 21 次命中 ≥ 20，
+        // 2026-08-28 R1 门槛 20）。
         let mut d = DegenerationDetector::default();
         d.feed_reasoning(&"abcdefghij".repeat(82));
         let reason = d.trip_reason().expect("periodic reasoning cycle must trip");
@@ -4246,7 +3672,8 @@ mod tests {
     #[test]
     fn detector_reasoning_repetition_trips_on_high_ratio() {
         // 与 content 复读同一 1K 窗口 3-gram 重复率算法（>70% 触发 +
-        // 流内累计命中 ≥3，2026-08-23 NGRAM-GUARD-CALIBRATION）；2026-08-21
+        // 流内累计命中 ≥15，2026-08-23 NGRAM-GUARD-CALIBRATION +
+        // 2026-08-28 R1 门槛 3→15）；2026-08-21
         // 修订 + 2026-08-22/23 L=400：滚动哈希任意偏移保持静默（每 feed
         // 追加唯一 4 位标记，同 content 用例；双份 core 使 ratio ≈ 0.825）。
         let core = "the quick brown fox jumps over lazy dog the quick brown \
@@ -4258,8 +3685,8 @@ mod tests {
         let audits = d.take_audit_hits();
         assert_eq!(
             audits.len(),
-            2,
-            "two sub-threshold 3-gram hits must be audited, got {audits:?}"
+            14,
+            "fourteen sub-threshold 3-gram hits must be audited, got {audits:?}"
         );
         assert!(
             audits
@@ -4275,7 +3702,7 @@ mod tests {
             "{reason}"
         );
         assert!(reason.contains("3-gram repetition ratio"), "{reason}");
-        assert!(reason.contains("3/3"), "{reason}");
+        assert!(reason.contains("15/15"), "{reason}");
         assert!(
             d.take_audit_hits().is_empty(),
             "rolling path must stay silent (no 400-char span repeats)"
@@ -4301,7 +3728,7 @@ mod tests {
     #[test]
     fn detector_reasoning_guards_stand_down_after_visible_output() {
         // 设计 §3.3：reasoning 族信号仅 content/tool_calls 全空时启用——
-        // content 出现后复读与 stall 均不得再触发。
+        // content 出现后复读不得再触发。
         let mut d = DegenerationDetector::default();
         d.feed_content("answer");
         for _ in 0..5 {
@@ -4310,17 +3737,6 @@ mod tests {
         assert!(
             d.trip_reason().is_none(),
             "reasoning repetition must be disabled once content is seen"
-        );
-        d.reasoning_chars = STALL_REASONING_BUDGET_TOKENS * REASONING_CHARS_PER_TOKEN;
-        d.first_chunk_at = Some(
-            std::time::Instant::now()
-                - STALL_FIRST_CONTENT_TIMEOUT
-                - std::time::Duration::from_secs(1),
-        );
-        d.check_stall(std::time::Instant::now());
-        assert!(
-            d.trip_reason().is_none(),
-            "stall must be disabled once content is seen"
         );
     }
 
@@ -4337,86 +3753,6 @@ mod tests {
             d.trip_reason().is_none(),
             "tool args are visible output — reasoning guards off"
         );
-        d.reasoning_chars = STALL_REASONING_BUDGET_TOKENS * REASONING_CHARS_PER_TOKEN;
-        d.first_chunk_at = Some(
-            std::time::Instant::now()
-                - STALL_FIRST_CONTENT_TIMEOUT
-                - std::time::Duration::from_secs(1),
-        );
-        d.check_stall(std::time::Instant::now());
-        assert!(
-            d.trip_reason().is_none(),
-            "stall must be disabled once tool args are seen"
-        );
-    }
-
-    #[test]
-    fn detector_stall_trips_on_time_budget() {
-        // 预算兜底层时间信号（设计 §3.3）：自首 chunk 起 600s 无
-        // content/tool_calls 且 reasoning 在流动 → reasoning_stall。
-        let mut d = DegenerationDetector::default();
-        d.feed_reasoning("some varied reasoning text");
-        d.first_chunk_at = Some(
-            std::time::Instant::now()
-                - STALL_FIRST_CONTENT_TIMEOUT
-                - std::time::Duration::from_secs(1),
-        );
-        d.check_stall(std::time::Instant::now());
-        let reason = d.trip_reason().expect("600s time budget must trip");
-        assert!(
-            reason.starts_with(REASONING_STALL_DETAIL_PREFIX),
-            "{reason}"
-        );
-        assert!(reason.contains("no content/tool_calls"), "{reason}");
-    }
-
-    #[test]
-    fn detector_stall_trips_on_token_budget() {
-        // 预算兜底层 token 信号（设计 §3.3）：reasoning 估算累计 ≥64K 仍无
-        // content/tool_calls → reasoning_stall（OR 语义的另一支）。
-        let mut d = DegenerationDetector::default();
-        d.feed_reasoning("distinct reasoning token sequence here");
-        d.reasoning_chars = STALL_REASONING_BUDGET_TOKENS * REASONING_CHARS_PER_TOKEN;
-        d.check_stall(std::time::Instant::now());
-        let reason = d.trip_reason().expect("64K token budget must trip");
-        assert!(
-            reason.starts_with(REASONING_STALL_DETAIL_PREFIX),
-            "{reason}"
-        );
-        assert!(reason.contains("estimated reasoning tokens"), "{reason}");
-    }
-
-    #[test]
-    fn detector_stall_does_not_trip_without_first_chunk() {
-        // 完全无 chunk 时 stall 不适用——静默由 idle 死线（30s）处理，
-        // stall 与 idle 互补不重叠（设计 §3.4）。
-        let mut d = DegenerationDetector::default();
-        d.check_stall(std::time::Instant::now());
-        assert!(
-            d.trip_reason().is_none(),
-            "no first chunk → idle handles silence"
-        );
-    }
-
-    #[test]
-    fn detector_reasoning_estimate_uses_chars_per_token() {
-        // 估算校准（设计 §3.3）：字符 ÷ REASONING_CHARS_PER_TOKEN（=2，
-        // 桥 8K 实测校准值；S4 用 usage 真实值复核）。
-        let mut d = DegenerationDetector::default();
-        d.feed_reasoning("abc");
-        assert_eq!(d.reasoning_est_tokens(), 1);
-        d.feed_reasoning("abcde");
-        assert_eq!(d.reasoning_est_tokens(), 4); // 8 chars / 2
-        assert_eq!(REASONING_CHARS_PER_TOKEN, 2);
-    }
-
-    #[test]
-    fn stall_budget_decoupled_from_max_tokens() {
-        // 设计 §3.3：空转预算与 max_tokens 解耦——256K 输出预算恢复不放大
-        // 空转兜底；常量钉死（S4 校准 32–128K）。
-        assert_eq!(STALL_REASONING_BUDGET_TOKENS, 64_000);
-        assert_eq!(crate::agent_loop::REQUEST_MAX_TOKENS, 256_000);
-        assert!(STALL_REASONING_BUDGET_TOKENS < crate::agent_loop::REQUEST_MAX_TOKENS as usize);
     }
 
     #[test]
@@ -4432,9 +3768,8 @@ mod tests {
 
     #[tokio::test]
     async fn generate_stream_empty_content_retries_twice_then_degrades() {
-        // 设计 §3.2：完成型空响应 → 快速有界重试 ≤2 次（同参 max）→
-        // thinking 禁用降级；降级轮产出答案。`EnabledMax` 显式档保留 S4
-        // 基线：空流链耗尽直跳 disabled（三级梯按默认 high 起定义）。
+        // 设计 §3.2 + 2026-08-28 R1：完成型空响应 → 快速有界重试 ≤2 次
+        // （同参 max）→ 降到 low（最多降到 low、不关闭）；low 轮产出答案。
         let empty = empty_completed_sse_body();
         let ok = ok_sse_body("降级答案");
         let attempts = std::sync::Arc::new(std::sync::atomic::AtomicU32::new(0));
@@ -4449,8 +3784,8 @@ mod tests {
                 MockResponse::sse(vec![&empty], std::time::Duration::ZERO)
             } else {
                 assert!(
-                    body.contains("\"type\":\"disabled\"") && !body.contains("reasoning_effort"),
-                    "degraded attempt drops reasoning: {body}"
+                    body.contains("\"type\":\"enabled\"") && body.contains("\"low\""),
+                    "degraded attempt uses the low tier: {body}"
                 );
                 MockResponse::sse(vec![&ok], std::time::Duration::ZERO)
             }
@@ -4468,14 +3803,15 @@ mod tests {
         assert_eq!(
             attempts.load(std::sync::atomic::Ordering::SeqCst),
             4,
-            "1 normal + 2 empty retries + 1 degraded"
+            "1 normal + 2 empty retries + 1 low-tier attempt"
         );
     }
 
     #[tokio::test]
     async fn generate_stream_empty_content_chain_end_errors_explicitly() {
-        // 设计 §3.2：链尾（快速重试 2 次 + 降级全空）→ 显式失败，绝不静默
-        // 空答案。
+        // 设计 §3.2 + 2026-08-28 R1：链尾（max/high 快速重试 2 次 → low →
+        // low 快速重试 2 次 → 仍空）→ 显式失败，绝不静默空答案、绝不自动
+        // 进入 disabled。
         let empty = empty_completed_sse_body();
         let base = spawn_mock(move |_line, _body| {
             MockResponse::sse(vec![&empty], std::time::Duration::ZERO)
@@ -4494,14 +3830,13 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn generate_stream_reasoning_repetition_jumps_to_degrade() {
-        // 设计 §3.2/§3.3：max 阶段触发 reasoning 复读哨兵 → 不原样快速
-        // 重试（长烧型原样重试大概率复现且贵）、直接跳降级（max 显式档
-        // 保留 S4 基线直跳 disabled）。
-        // 2026-08-21 修订：5×"think" 不再触发；2026-08-22/23 再校准：单个
-        // 802 字符 reasoning span（L=400，3 次命中，无切分点直接判真）触发。
-        // 2026-08-25 序列门：'t' ∈ 序列字母表（T）→ 改用 'x' 保持非序列
-        // 门槛 3。
+    async fn generate_stream_reasoning_repetition_interrupts_explicitly() {
+        // 2026-08-28 R1（用户裁决：触发改显式拦截、不重试、不降档）：
+        // max 阶段触发 reasoning 复读哨兵 → 不原样快速重试、不改 thinking
+        // 档位、显式拦截该轮（detail 带 reasoning_repetition）；下一请求
+        // 仍从 config 默认档 max 起始（无会话降级）。
+        // 2026-08-21 修订：5×"think" 不再触发；2026-08-22/23 再校准：
+        // 802 同字符 reasoning span 由独立同字符线触发（2026-08-28 R1）。
         let rep = reasoning_repetition_sse_body(&"x".repeat(802), 1);
         let ok = ok_sse_body("降级答案");
         let attempts = std::sync::Arc::new(std::sync::atomic::AtomicU32::new(0));
@@ -4510,14 +3845,14 @@ mod tests {
             let n = attempts_handle.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
             if n == 0 {
                 assert!(
-                    body.contains("\"type\":\"enabled\""),
+                    body.contains("\"type\":\"enabled\"") && body.contains("\"max\""),
                     "first attempt uses the max config: {body}"
                 );
                 MockResponse::sse(vec![&rep], std::time::Duration::ZERO)
             } else {
                 assert!(
-                    body.contains("\"type\":\"disabled\"") && !body.contains("reasoning_effort"),
-                    "degraded attempt drops reasoning: {body}"
+                    body.contains("\"type\":\"enabled\"") && body.contains("\"max\""),
+                    "subsequent request must still start at the config tier (max): {body}"
                 );
                 MockResponse::sse(vec![&ok], std::time::Duration::ZERO)
             }
@@ -4525,23 +3860,32 @@ mod tests {
         .await;
         let t =
             mock_transport_with_retry_thinking(&base, Default::default(), ThinkingMode::EnabledMax);
-        let r = t
+        let err = t
+            .generate_stream(request(), None, None, &mut |_| {})
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(&err, GatewayError::StreamInterrupted { detail, .. } if detail.starts_with(REASONING_REPETITION_DETAIL_PREFIX)),
+            "reasoning trip must surface an explicit StreamInterrupted without degrade: {err:?}"
+        );
+        // 第二请求：同一 transport 仍从 max 起始（档位不被哨兵改动）。
+        let r2 = t
             .generate_stream(request(), None, None, &mut |_| {})
             .await
             .unwrap();
-        assert_eq!(r.text.as_deref(), Some("降级答案"));
+        assert_eq!(r2.text.as_deref(), Some("降级答案"));
         assert_eq!(
             attempts.load(std::sync::atomic::Ordering::SeqCst),
             2,
-            "reasoning guard must skip identical retries and degrade directly"
+            "trip (1) + subsequent request at the same tier (2): no degrade, no retry"
         );
     }
 
     #[tokio::test]
     async fn generate_stream_reasoning_subthreshold_hits_do_not_interrupt() {
-        // 2026-08-22 再校准（用户裁决：流内累计 ≥3 次命中才中断+降级）+
-        // 2026-08-23 L=400：1–2 次命中仅审计留痕——801 个同字符 reasoning
-        // （2 次命中）流正常完成（无 StreamInterrupted、无降级重试、单连接）。
+        // 2026-08-22 再校准 + 2026-08-23 L=400 + 2026-08-28 R1 门槛 20：
+        // 1–19 次命中仅审计留痕——801 个同字符 reasoning（2 次命中）流
+        // 正常完成（无 StreamInterrupted、无降档重试、单连接）。
         let body = reasoning_completed_sse_body(&"t".repeat(801), "ok");
         let attempts = std::sync::Arc::new(std::sync::atomic::AtomicU32::new(0));
         let attempts_handle = attempts.clone();
@@ -4573,139 +3917,26 @@ mod tests {
         );
     }
 
-    #[tokio::test]
-    async fn generate_stream_reasoning_stall_jumps_to_degrade() {
-        // 设计 §3.3 预算兜底：reasoning 估算 ≥64K 仍无 content/tool_calls
-        // → reasoning_stall → 跳过原样重试、直接降级（max 显式档直跳
-        // disabled 基线）。
-        let stall = reasoning_stall_sse_body();
-        let ok = ok_sse_body("降级答案");
-        let attempts = std::sync::Arc::new(std::sync::atomic::AtomicU32::new(0));
-        let attempts_handle = attempts.clone();
-        let base = spawn_mock(move |_line, body| {
-            let n = attempts_handle.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-            if n == 0 {
-                MockResponse::sse(vec![&stall], std::time::Duration::ZERO)
-            } else {
-                assert!(
-                    body.contains("\"type\":\"disabled\"") && !body.contains("reasoning_effort"),
-                    "degraded attempt drops reasoning: {body}"
-                );
-                MockResponse::sse(vec![&ok], std::time::Duration::ZERO)
-            }
-        })
-        .await;
-        let t =
-            mock_transport_with_retry_thinking(&base, Default::default(), ThinkingMode::EnabledMax);
-        let r = t
-            .generate_stream(request(), None, None, &mut |_| {})
-            .await
-            .unwrap();
-        assert_eq!(r.text.as_deref(), Some("降级答案"));
-        assert_eq!(
-            attempts.load(std::sync::atomic::Ordering::SeqCst),
-            2,
-            "stall must skip identical retries and degrade directly"
-        );
-    }
-
     // ── STALL-DEGENERATION-FAILFAST (2026-08-21, ADR-0010 §14.37 / 设计
-    // §2.2)：会话级档位 + 单调计数 + disabled 档即终止 ──────────────────
-
-    #[tokio::test]
-    async fn generate_stream_session_thinking_tier_persists_across_requests() {
-        // 设计 §2.2.1：reasoning 族哨兵降级后，本 run 后续请求从降级档
-        // 起——不再回 config 默认档 high（封死「stall→成功→回 high 再
-        // 烧 64K」跨请求模式）。
-        let stall = reasoning_stall_sse_body();
-        let ok = ok_sse_body("ok");
-        let attempts = std::sync::Arc::new(std::sync::atomic::AtomicU32::new(0));
-        let attempts_handle = attempts.clone();
-        let base = spawn_mock(move |_line, body| {
-            let n = attempts_handle.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-            match n {
-                0 => {
-                    assert!(
-                        body.contains("\"high\""),
-                        "first request starts at the config high tier: {body}"
-                    );
-                    MockResponse::sse(vec![&stall], std::time::Duration::ZERO)
-                }
-                1 => {
-                    assert!(
-                        body.contains("\"low\""),
-                        "same-request degrade must retry at low: {body}"
-                    );
-                    MockResponse::sse(vec![&ok], std::time::Duration::ZERO)
-                }
-                _ => {
-                    assert!(
-                        body.contains("\"low\""),
-                        "subsequent request must START at the session tier (low): {body}"
-                    );
-                    MockResponse::sse(vec![&ok], std::time::Duration::ZERO)
-                }
-            }
-        })
-        .await;
-        let t = mock_transport_with_retry_thinking(
-            &base,
-            Default::default(),
-            ThinkingMode::EnabledHigh,
-        );
-        // 第一次请求：high stall → 降 low → low 成功（同一请求内 2 次连接）。
-        let r = t
-            .generate_stream(request(), None, None, &mut |_| {})
-            .await
-            .unwrap();
-        assert_eq!(r.text.as_deref(), Some("ok"));
-        // 第二次请求：会话档位 low 直接起始（1 次连接），成功后再一次仍
-        // 是 low（档位不因成功回弹）。
-        let r2 = t
-            .generate_stream(request(), None, None, &mut |_| {})
-            .await
-            .unwrap();
-        assert_eq!(r2.text.as_deref(), Some("ok"));
-        let r3 = t
-            .generate_stream(request(), None, None, &mut |_| {})
-            .await
-            .unwrap();
-        assert_eq!(r3.text.as_deref(), Some("ok"));
-        let n = attempts.load(std::sync::atomic::Ordering::SeqCst);
-        assert_eq!(
-            n, 4,
-            "high+low (first request) + low×2 (subsequent requests): {n} connections"
-        );
-    }
+    // §2.2) + THIN-HARNESS-REDESIGN V2 R1（2026-08-28）：单调计数保留、
+    // 会话档位移除、trip 显式拦截不降档 ─────────────────────────────────
 
     #[tokio::test]
     async fn generate_stream_reasoning_guard_chain_terminates_at_limit() {
-        // 设计 §2.2.2：哨兵计数 run 内单调——high stall → low stall →
-        // disabled stall，第 3 次触发带 `degeneration_limit_reached`
-        // 标记（run_invalidated 语义），链尾显式终止不再重试。
-        let stall = reasoning_stall_sse_body();
+        // 设计 §2.2.2 + 2026-08-28 R1：哨兵计数 run 内单调、档位不动——
+        // 同一 thinking 档（high）连续 3 次复读 trip，第 3 次 detail 带
+        // `degeneration_limit_reached` 标记（run_invalidated 语义），显式
+        // 终止不再重试。
+        let rep = reasoning_repetition_sse_body(&"x".repeat(802), 1);
         let attempts = std::sync::Arc::new(std::sync::atomic::AtomicU32::new(0));
         let attempts_handle = attempts.clone();
         let base = spawn_mock(move |_line, body| {
-            let n = attempts_handle.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-            match n {
-                0 => {
-                    assert!(body.contains("\"high\""), "attempt 1 uses high: {body}");
-                    MockResponse::sse(vec![&stall], std::time::Duration::ZERO)
-                }
-                1 => {
-                    assert!(body.contains("\"low\""), "attempt 2 uses low: {body}");
-                    MockResponse::sse(vec![&stall], std::time::Duration::ZERO)
-                }
-                _ => {
-                    assert!(
-                        body.contains("\"type\":\"disabled\"")
-                            && !body.contains("reasoning_effort"),
-                        "attempt 3 uses disabled: {body}"
-                    );
-                    MockResponse::sse(vec![&stall], std::time::Duration::ZERO)
-                }
-            }
+            attempts_handle.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            assert!(
+                body.contains("\"type\":\"enabled\"") && body.contains("\"high\""),
+                "all attempts stay at the config tier (high), no degrade: {body}"
+            );
+            MockResponse::sse(vec![&rep], std::time::Duration::ZERO)
         })
         .await;
         let t = mock_transport_with_retry_thinking(
@@ -4713,6 +3944,16 @@ mod tests {
             Default::default(),
             ThinkingMode::EnabledHigh,
         );
+        for _ in 0..2 {
+            let err = t
+                .generate_stream(request(), None, None, &mut |_| {})
+                .await
+                .unwrap_err();
+            assert!(
+                matches!(&err, GatewayError::StreamInterrupted { detail, .. } if detail.starts_with(REASONING_REPETITION_DETAIL_PREFIX) && !detail.starts_with(DEGENERATION_LIMIT_PREFIX)),
+                "early trips must carry the reasoning marker without the limit prefix: {err:?}"
+            );
+        }
         let err = t
             .generate_stream(request(), None, None, &mut |_| {})
             .await
@@ -4724,33 +3965,115 @@ mod tests {
         let n = attempts.load(std::sync::atomic::Ordering::SeqCst);
         assert_eq!(
             n, 3,
-            "high → low → disabled → explicit termination: {n} connections"
+            "three trips at the same tier → explicit termination: {n} connections"
         );
     }
 
     #[tokio::test]
-    async fn generate_stream_disabled_tier_guard_terminates_explicitly() {
-        // 设计 §2.2.3：EnabledMax 首哨兵直跳 disabled；disabled 档再触发
-        // 哨兵（无更低档）→ 立即显式终止（补 `degeneration_limit_reached`
-        // 标记，run_invalidated），不再重试——即使计数未达 3。
-        let stall = reasoning_stall_sse_body();
+    async fn generate_stream_disabled_tier_guard_interrupts_explicitly() {
+        // 2026-08-28 R1：`ORZ_THINKING_MODE=disabled` 仅保留为显式手动
+        // A/B 配置——手动 disabled 档触发复读哨兵 → 显式拦截该轮
+        // （StreamInterrupted 带 reasoning 前缀 + consecutive=1），不再
+        // 强制补 `degeneration_limit_reached`（run 级达限由
+        // DEGENERATION_LIMIT 单调计数统一判定）。
+        let rep = reasoning_repetition_sse_body(&"x".repeat(802), 1);
+        let attempts = std::sync::Arc::new(std::sync::atomic::AtomicU32::new(0));
+        let attempts_handle = attempts.clone();
+        let base = spawn_mock(move |_line, _body| {
+            attempts_handle.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            MockResponse::sse(vec![&rep], std::time::Duration::ZERO)
+        })
+        .await;
+        let t =
+            mock_transport_with_retry_thinking(&base, Default::default(), ThinkingMode::Disabled);
+        let err = t
+            .generate_stream(request(), None, None, &mut |_| {})
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(&err, GatewayError::StreamInterrupted { detail, .. } if detail.starts_with(REASONING_REPETITION_DETAIL_PREFIX) && detail.contains("consecutive=1")),
+            "manual-disabled guard must surface the explicit interruption: {err:?}"
+        );
+        let n = attempts.load(std::sync::atomic::Ordering::SeqCst);
+        assert_eq!(
+            n, 1,
+            "one trip, no retry, no forced limit marker: {n} connections"
+        );
+    }
+
+    #[tokio::test]
+    async fn for_new_run_resets_degeneration_counter_across_logical_runs() {
+        // STALL-DEGENERATION-FAILFAST + 2026-08-28 R1：per-run 隔离——
+        // run 1 三次复读 trip 达 DEGENERATION_LIMIT（第 3 次带 limit
+        // 前缀）；`for_new_run` 换新实例后计数归零，run 2 首次 trip 回到
+        // consecutive=1（无 limit 前缀）。档位在两次 run 中保持 config
+        // 默认（high）不变（无会话降级）。
+        let rep = reasoning_repetition_sse_body(&"x".repeat(802), 1);
         let attempts = std::sync::Arc::new(std::sync::atomic::AtomicU32::new(0));
         let attempts_handle = attempts.clone();
         let base = spawn_mock(move |_line, body| {
+            attempts_handle.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            assert!(
+                body.contains("\"type\":\"enabled\"") && body.contains("\"high\""),
+                "all attempts stay at the config tier (high): {body}"
+            );
+            MockResponse::sse(vec![&rep], std::time::Duration::ZERO)
+        })
+        .await;
+        let t = mock_transport_with_retry_thinking(
+            &base,
+            Default::default(),
+            ThinkingMode::EnabledHigh,
+        );
+        // run 1：连续 3 次 trip，第 3 次带 run_invalidated 标记。
+        for _ in 0..2 {
+            let err = t
+                .generate_stream(request(), None, None, &mut |_| {})
+                .await
+                .unwrap_err();
+            assert!(
+                matches!(&err, GatewayError::StreamInterrupted { detail, .. } if !detail.starts_with(DEGENERATION_LIMIT_PREFIX)),
+                "early trips must not carry the limit marker: {err:?}"
+            );
+        }
+        let err = t
+            .generate_stream(request(), None, None, &mut |_| {})
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(&err, GatewayError::StreamInterrupted { detail, .. } if detail.starts_with(DEGENERATION_LIMIT_PREFIX)),
+            "3rd trip in run 1 must carry the limit marker: {err:?}"
+        );
+        // run 边界：换新实例（等价于 controller.run_turn_inner 的
+        // `for_new_run`）。
+        let fresh = t.for_new_run();
+        let err = fresh
+            .generate_stream(request(), None, None, &mut |_| {})
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(&err, GatewayError::StreamInterrupted { detail, .. } if detail.starts_with(REASONING_REPETITION_DETAIL_PREFIX) && detail.contains("consecutive=1")),
+            "fresh run must restart the degeneration counter: {err:?}"
+        );
+        let n = attempts.load(std::sync::atomic::Ordering::SeqCst);
+        assert_eq!(n, 4, "run 1 ×3 trips + run 2 ×1 trip: {n} connections");
+    }
+
+    #[tokio::test]
+    async fn generate_stream_reasoning_guard_during_empty_retry_interrupts_explicitly() {
+        // 设计 §3.2 + 2026-08-28 R1：阶段 1 完成型空响应进入快速重试；
+        // 阶段 2（重试中）触发 reasoning 族哨兵 → 显式拦截（不重试、不
+        // 降档、不继续空响应链）。
+        let empty = empty_completed_sse_body();
+        let rep = reasoning_repetition_sse_body(&"x".repeat(802), 1);
+        let attempts = std::sync::Arc::new(std::sync::atomic::AtomicU32::new(0));
+        let attempts_handle = attempts.clone();
+        let base = spawn_mock(move |_line, _body| {
             let n = attempts_handle.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-            match n {
-                0 => {
-                    assert!(body.contains("\"max\""), "attempt 1 uses max: {body}");
-                    MockResponse::sse(vec![&stall], std::time::Duration::ZERO)
-                }
-                _ => {
-                    assert!(
-                        body.contains("\"type\":\"disabled\"")
-                            && !body.contains("reasoning_effort"),
-                        "attempt 2 uses disabled: {body}"
-                    );
-                    MockResponse::sse(vec![&stall], std::time::Duration::ZERO)
-                }
+            if n == 0 {
+                MockResponse::sse(vec![&empty], std::time::Duration::ZERO)
+            } else {
+                MockResponse::sse(vec![&rep], std::time::Duration::ZERO)
             }
         })
         .await;
@@ -4761,124 +4084,24 @@ mod tests {
             .await
             .unwrap_err();
         assert!(
-            matches!(&err, GatewayError::StreamInterrupted { detail, .. } if detail.starts_with(DEGENERATION_LIMIT_PREFIX) && detail.contains("disabled-tier guard")),
-            "disabled-tier guard must terminate explicitly: {err:?}"
+            matches!(&err, GatewayError::StreamInterrupted { detail, .. } if detail.starts_with(REASONING_REPETITION_DETAIL_PREFIX)),
+            "reasoning guard during the empty retry must interrupt explicitly: {err:?}"
         );
-        let n = attempts.load(std::sync::atomic::Ordering::SeqCst);
-        assert_eq!(
-            n, 2,
-            "max stall → disabled stall → explicit termination: {n} connections"
-        );
-    }
-
-    #[tokio::test]
-    async fn for_new_run_resets_session_tier_across_logical_runs() {
-        // STALL-DEGENERATION-FAILFAST (2026-08-21, ADR-0010 §14.37 /
-        // 设计 §2.2 + 审查修复)：per-run 隔离——run 1 触发降级后
-        // `for_new_run` 换新实例，run 2 从 config 默认档（high）重新
-        // 开始，不再继承 run 1 的降级档（正式路径=ACP server 跨 run
-        // 共享 transport 的边界语义）。
-        let stall = reasoning_stall_sse_body();
-        let ok = ok_sse_body("ok");
-        let attempts = std::sync::Arc::new(std::sync::atomic::AtomicU32::new(0));
-        let attempts_handle = attempts.clone();
-        let base = spawn_mock(move |_line, body| {
-            let n = attempts_handle.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-            match n {
-                0 => {
-                    assert!(body.contains("\"high\""), "run 1 first request: high: {body}");
-                    MockResponse::sse(vec![&stall], std::time::Duration::ZERO)
-                }
-                1 => {
-                    assert!(body.contains("\"low\""), "run 1 degrade to low: {body}");
-                    MockResponse::sse(vec![&ok], std::time::Duration::ZERO)
-                }
-                _ => {
-                    assert!(
-                        body.contains("\"high\""),
-                        "run 2 must start at the config tier (high), not inherit run 1's low: {body}"
-                    );
-                    MockResponse::sse(vec![&ok], std::time::Duration::ZERO)
-                }
-            }
-        })
-        .await;
-        let t = mock_transport_with_retry_thinking(
-            &base,
-            Default::default(),
-            ThinkingMode::EnabledHigh,
-        );
-        // run 1：high stall → 降 low → low 成功（会话档位持久化为 low）。
-        let r = t
-            .generate_stream(request(), None, None, &mut |_| {})
-            .await
-            .unwrap();
-        assert_eq!(r.text.as_deref(), Some("ok"));
-        // run 边界：换新实例（等价于 controller.run_turn_inner 的
-        // `for_new_run`）。
-        let fresh = t.for_new_run();
-        let r2 = fresh
-            .generate_stream(request(), None, None, &mut |_| {})
-            .await
-            .unwrap();
-        assert_eq!(r2.text.as_deref(), Some("ok"));
-        let n = attempts.load(std::sync::atomic::Ordering::SeqCst);
-        assert_eq!(
-            n, 3,
-            "run 1 (high+low) + run 2 fresh (high): {n} connections"
-        );
-    }
-
-    #[tokio::test]
-    async fn generate_stream_reasoning_guard_during_empty_retry_jumps_to_degrade() {
-        // 设计 §3.2：阶段 1 完成型空响应进入快速重试；阶段 2（重试中）触发
-        // reasoning 族哨兵 → 跳过剩余原样重试、直接降级（总 3 次而非 4 次）。
-        let empty = empty_completed_sse_body();
-        // 2026-08-21 修订：滚动哈希粒度下 5×"think" 不再触发；2026-08-22
-        // 再校准：402 同字符；2026-08-23 再校准：802 同字符（L=400）。
-        // 2026-08-25 序列门：'t' ∈ 序列字母表（T）→ 改用 'x' 保持非序列
-        // 门槛 3。
-        let rep = reasoning_repetition_sse_body(&"x".repeat(802), 1);
-        let ok = ok_sse_body("降级答案");
-        let attempts = std::sync::Arc::new(std::sync::atomic::AtomicU32::new(0));
-        let attempts_handle = attempts.clone();
-        let base = spawn_mock(move |_line, body| {
-            let n = attempts_handle.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-            match n {
-                0 => MockResponse::sse(vec![&empty], std::time::Duration::ZERO),
-                1 => MockResponse::sse(vec![&rep], std::time::Duration::ZERO),
-                _ => {
-                    assert!(
-                        body.contains("\"type\":\"disabled\"")
-                            && !body.contains("reasoning_effort"),
-                        "degraded attempt drops reasoning: {body}"
-                    );
-                    MockResponse::sse(vec![&ok], std::time::Duration::ZERO)
-                }
-            }
-        })
-        .await;
-        let t =
-            mock_transport_with_retry_thinking(&base, Default::default(), ThinkingMode::EnabledMax);
-        let r = t
-            .generate_stream(request(), None, None, &mut |_| {})
-            .await
-            .unwrap();
-        assert_eq!(r.text.as_deref(), Some("降级答案"));
         assert_eq!(
             attempts.load(std::sync::atomic::Ordering::SeqCst),
-            3,
-            "empty → reasoning guard on retry → degrade (no 3rd identical retry)"
+            2,
+            "empty → reasoning guard (no further identical retry, no degrade)"
         );
     }
 
-    // ── 2026-08-20 修订: 三级降级梯（high → low → disabled → 失败）─────
+    // ── 2026-08-28 修订: 空响应降级梯（max/high → low → 失败）──────────
 
     #[tokio::test]
-    async fn generate_stream_empty_content_ladder_high_low_disabled_fails() {
-        // 设计 §3.6：默认 high 档完成型空响应 → 每档快速重试 ≤2 次 →
-        // high → low → disabled → 显式失败（链尾绝不静默空答案）。换档时
-        // 重试计数与退避重置——每档独立「快速 ≤2 次」节奏（0.5s→1s×2 档）。
+    async fn generate_stream_empty_content_ladder_high_low_fails() {
+        // 设计 §3.6 + 2026-08-28 R1：默认 high 档完成型空响应 → 每档快速
+        // 重试 ≤2 次 → high → low → 显式失败（low 后不再降 disabled；
+        // 链尾绝不静默空答案）。换档时重试计数与退避重置——每档独立
+        // 「快速 ≤2 次」节奏（0.5s→1s×2 档）。
         let empty = empty_completed_sse_body();
         let attempts = std::sync::Arc::new(std::sync::atomic::AtomicU32::new(0));
         let attempts_handle = attempts.clone();
@@ -4899,14 +4122,7 @@ mod tests {
                     );
                     MockResponse::sse(vec![&empty], std::time::Duration::ZERO)
                 }
-                _ => {
-                    assert!(
-                        body.contains("\"type\":\"disabled\"")
-                            && !body.contains("reasoning_effort"),
-                        "degraded attempt drops reasoning: {body}"
-                    );
-                    MockResponse::sse(vec![&empty], std::time::Duration::ZERO)
-                }
+                _ => unreachable!("ladder must fail explicitly after the low tier"),
             }
         })
         .await;
@@ -4925,37 +4141,37 @@ mod tests {
         );
         assert_eq!(
             attempts.load(std::sync::atomic::Ordering::SeqCst),
-            7,
-            "3 high + 3 low + 1 disabled"
+            6,
+            "3 high + 3 low, then explicit failure (never disabled)"
         );
     }
 
     #[tokio::test]
-    async fn generate_stream_reasoning_guard_ladder_high_to_low() {
-        // 设计 §3.6：high 档 reasoning 复读哨兵 → 不原样重试、下降一档到
-        // low（保留浅思考链）；low 档产出答案。
-        // 2026-08-21 修订：滚动哈希粒度下 5×"think" 不再触发；2026-08-22
-        // 再校准：402 同字符；2026-08-23 再校准：802 同字符（L=400）。
-        // 2026-08-25 序列门：'t' ∈ 序列字母表（T）→ 改用 'x' 保持非序列
-        // 门槛 3。
-        let rep = reasoning_repetition_sse_body(&"x".repeat(802), 1);
-        let ok = ok_sse_body("low 答案");
+    async fn generate_stream_empty_content_ladder_recovers_on_low_tier_success() {
+        // 设计 §3.6 + 2026-08-28 R1：high 档快速重试耗尽 → 降 low；low 档
+        // 成功 → 正常返回（恢复）。档位按请求新建，不跨请求残留。
+        let empty = empty_completed_sse_body();
+        let ok_body = reasoning_completed_sse_body("", "ok");
         let attempts = std::sync::Arc::new(std::sync::atomic::AtomicU32::new(0));
         let attempts_handle = attempts.clone();
         let base = spawn_mock(move |_line, body| {
             let n = attempts_handle.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-            if n == 0 {
-                assert!(
-                    body.contains("\"type\":\"enabled\"") && body.contains("\"high\""),
-                    "first attempt uses the high tier: {body}"
-                );
-                MockResponse::sse(vec![&rep], std::time::Duration::ZERO)
-            } else {
-                assert!(
-                    body.contains("\"type\":\"enabled\"") && body.contains("\"low\""),
-                    "second attempt steps down one tier to low: {body}"
-                );
-                MockResponse::sse(vec![&ok], std::time::Duration::ZERO)
+            match n {
+                0..=2 => {
+                    assert!(
+                        body.contains("\"type\":\"enabled\"") && body.contains("\"high\""),
+                        "attempts 1-3 use the high tier: {body}"
+                    );
+                    MockResponse::sse(vec![&empty], std::time::Duration::ZERO)
+                }
+                3 => {
+                    assert!(
+                        body.contains("\"type\":\"enabled\"") && body.contains("\"low\""),
+                        "attempt 4 uses the low tier: {body}"
+                    );
+                    MockResponse::sse(vec![&ok_body], std::time::Duration::ZERO)
+                }
+                _ => unreachable!("recovery must stop the ladder"),
             }
         })
         .await;
@@ -4964,58 +4180,15 @@ mod tests {
             Default::default(),
             ThinkingMode::EnabledHigh,
         );
-        let r = t
+        let response = t
             .generate_stream(request(), None, None, &mut |_| {})
             .await
-            .unwrap();
-        assert_eq!(r.text.as_deref(), Some("low 答案"));
+            .expect("low-tier success must recover");
+        assert!(response.text.as_deref().unwrap_or("").contains("ok"));
         assert_eq!(
             attempts.load(std::sync::atomic::Ordering::SeqCst),
-            2,
-            "reasoning guard must step down exactly one tier (high → low)"
-        );
-    }
-
-    #[tokio::test]
-    async fn generate_stream_reasoning_guard_ladder_low_to_disabled() {
-        // 设计 §3.6：low 档 reasoning 复读哨兵 → 下降一档到 disabled；
-        // disabled 档产出答案（全部输出走 content，无 reasoning 旋钮）。
-        // 2026-08-21 修订：滚动哈希粒度下 5×"think" 不再触发；2026-08-22
-        // 再校准：402 同字符；2026-08-23 再校准：802 同字符（L=400）。
-        // 2026-08-25 序列门：'t' ∈ 序列字母表（T）→ 改用 'x' 保持非序列
-        // 门槛 3。
-        let rep = reasoning_repetition_sse_body(&"x".repeat(802), 1);
-        let ok = ok_sse_body("降级答案");
-        let attempts = std::sync::Arc::new(std::sync::atomic::AtomicU32::new(0));
-        let attempts_handle = attempts.clone();
-        let base = spawn_mock(move |_line, body| {
-            let n = attempts_handle.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-            if n == 0 {
-                assert!(
-                    body.contains("\"type\":\"enabled\"") && body.contains("\"low\""),
-                    "first attempt uses the low tier: {body}"
-                );
-                MockResponse::sse(vec![&rep], std::time::Duration::ZERO)
-            } else {
-                assert!(
-                    body.contains("\"type\":\"disabled\"") && !body.contains("reasoning_effort"),
-                    "degraded attempt drops reasoning: {body}"
-                );
-                MockResponse::sse(vec![&ok], std::time::Duration::ZERO)
-            }
-        })
-        .await;
-        let t =
-            mock_transport_with_retry_thinking(&base, Default::default(), ThinkingMode::EnabledLow);
-        let r = t
-            .generate_stream(request(), None, None, &mut |_| {})
-            .await
-            .unwrap();
-        assert_eq!(r.text.as_deref(), Some("降级答案"));
-        assert_eq!(
-            attempts.load(std::sync::atomic::Ordering::SeqCst),
-            2,
-            "reasoning guard at the low tier must step down to disabled"
+            4,
+            "3 high attempts + 1 low success"
         );
     }
 
@@ -5546,7 +4719,6 @@ mod tests {
                 thinking,
             },
             degeneration_consecutive: Arc::new(AtomicU32::new(0)),
-            session_thinking: Arc::new(std::sync::Mutex::new(None)),
         }
     }
 
@@ -5608,23 +4780,23 @@ mod tests {
 
     #[tokio::test]
     async fn generate_empty_content_retries_then_degrades() {
-        // D-6: abnormal empty content (finish=length, zero output) retries
-        // byte-identically, then degrades to thinking-disabled; the chain
-        // yields the degraded response instead of erroring.
+        // D-6 + 2026-08-28 R1: abnormal empty content (finish=length, zero
+        // output) retries ≤2 per tier, then degrades to low (never disabled);
+        // the chain yields the degraded response instead of erroring.
         let attempts = std::sync::Arc::new(std::sync::atomic::AtomicU32::new(0));
         let attempts_handle = attempts.clone();
         let base = spawn_mock(move |_line, body| {
             let n = attempts_handle.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-            if n < 2 {
+            if n < 3 {
                 assert!(
                     body.contains("\"type\":\"enabled\"") && body.contains("\"max\""),
-                    "attempts 1-2 use the max config: {body}"
+                    "attempts 1-3 use the max config: {body}"
                 );
                 MockResponse::json(200, empty_finish_length_response())
             } else {
                 assert!(
-                    body.contains("\"type\":\"disabled\"") && !body.contains("reasoning_effort"),
-                    "degraded attempt drops reasoning: {body}"
+                    body.contains("\"type\":\"enabled\"") && body.contains("\"low\""),
+                    "degraded attempt uses the low tier: {body}"
                 );
                 MockResponse::json(
                     200,
@@ -5639,15 +4811,16 @@ mod tests {
         assert_eq!(r.text.as_deref(), Some("降级答案"));
         assert_eq!(
             attempts.load(std::sync::atomic::Ordering::SeqCst),
-            3,
-            "1 normal + 1 byte-identical retry + 1 degraded"
+            4,
+            "3 max + 1 low-tier attempt"
         );
     }
 
     #[tokio::test]
     async fn generate_empty_content_chain_end_errors_explicitly() {
-        // D-6: the chain end (all three attempts empty) surfaces an explicit
-        // termination reason — never a silent blank response.
+        // D-6 + 2026-08-28 R1: the chain end (max ×3 + low ×3 all empty)
+        // surfaces an explicit termination reason — never a silent blank
+        // response, never an automatic disabled tier.
         let base =
             spawn_mock(|_line, _body| MockResponse::json(200, empty_finish_length_response()))
                 .await;
@@ -6046,24 +5219,23 @@ mod tests {
 
     #[test]
     fn config_fingerprint_reflects_thinking_tier() {
-        // 2026-08-20 审查处理 O4（设计 §3.6）：「请求头指纹含 thinking 档 →
-        // 部署后首次请求一次性变化」补断言——默认档（EnabledHigh）指纹与
-        // 显式 EnabledHigh 一致，且与 EnabledLow / EnabledMax / Disabled
-        // 各档互不相同（指纹为 payload_hash，档位值变化即摘要变化）。
+        // THIN-HARNESS-REDESIGN R1 (§4.6, 2026-08-27)：默认档改为
+        // EnabledMax（用户裁决）——默认指纹与显式 EnabledMax 一致，且与
+        // EnabledHigh / EnabledLow / Disabled 各档互不相同。
         let fingerprint_for = |thinking: ThinkingMode| {
             let mut cfg = DeepSeekTransport::deepseek_v4("sk-test", "deepseek-v4-flash").config;
             cfg.thinking = thinking;
             DeepSeekTransport::new(cfg).config_fingerprint()
         };
         let default_fp = fingerprint_for(ThinkingMode::default());
-        let high_fp = fingerprint_for(ThinkingMode::EnabledHigh);
+        let max_fp = fingerprint_for(ThinkingMode::EnabledMax);
         assert_eq!(
-            default_fp, high_fp,
-            "default must carry enabled_high into the digest"
+            default_fp, max_fp,
+            "default must carry enabled_max into the digest"
         );
         for tier in [
+            ThinkingMode::EnabledHigh,
             ThinkingMode::EnabledLow,
-            ThinkingMode::EnabledMax,
             ThinkingMode::Disabled,
         ] {
             assert_ne!(

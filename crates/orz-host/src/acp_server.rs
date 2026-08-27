@@ -16,6 +16,7 @@ use std::sync::{Arc, Mutex};
 use orz_assurance::{EventTrack, EventType, JournalRecorderError, Redaction, RunEvent, seal_event};
 use orz_loop::AgentLoopController;
 use orz_loop::acaf::AcafClient;
+use orz_loop::blackboard::{ExternalRetSection, InternalRetSection};
 use orz_loop::controller::RetrievalMode;
 use orz_loop::gateway::model::{Message, Role};
 use orz_loop::orientation::OrientationSessionState;
@@ -239,11 +240,6 @@ struct StoredSession {
     /// copy is the authoritative write; the sidecar is best-effort). Taken
     /// out during a run, written back on success (orientation pattern).
     conversation: Option<Vec<Message>>,
-    /// PLAN-FIRST 阶段 A (2026-08-16, ADR-0010 §14.17): whether this
-    /// session has already completed its first-round plan gate. Restored
-    /// sessions (with a conversation sidecar) count as done; the flag is
-    /// set after the first successful run.
-    plan_gate_done: bool,
 }
 
 /// GAP-RETRIEVAL-TOOLS (2026-08-10): the persisted retrieval-mode +
@@ -275,6 +271,14 @@ struct StoredActivationSnapshot {
     /// S4: live (non-Closed) activation states.
     #[serde(default)]
     activations: Vec<serde_json::Value>,
+    /// THIN-HARNESS-REDESIGN R2a 审查处理 (P3-1, 2026-08-27)：检索分区
+    /// 随快照持久化——PULL 模式下子代理全文不进主对话，跨 run 后分区是
+    /// 模型唯一可追溯视图（journal/.gsa 对模型不可见）；下一 prompt /
+    /// 进程重启时由 controller 重建。`None` = 该会话尚未产生该分区。
+    #[serde(default)]
+    internal_ret: Option<InternalRetSection>,
+    #[serde(default)]
+    external_ret: Option<ExternalRetSection>,
 }
 
 impl StoredActivationSnapshot {
@@ -288,6 +292,8 @@ impl StoredActivationSnapshot {
             pending_transition_authority: None,
             next_seq: HashMap::new(),
             activations: Vec::new(),
+            internal_ret: None,
+            external_ret: None,
         }
     }
 }
@@ -689,40 +695,10 @@ impl Drop for RestoreInflightGuard {
 
 impl AcpServer {
     pub fn new() -> Self {
-        // PLAN-FIRST 阶段 A/C (2026-08-16): production sessions run the
-        // plan gate first — the canned provider answers it with a valid
-        // plan, then the counterexample gate (§4.6) adds one model round
-        // before the final answer.
+        // THIN-HARNESS-REDESIGN R2a 审查处理 (2026-08-27, 实际使用裁决)：
+        // plan 门已普适摘除——canned provider 不再应答 plan_write，首轮
+        // 直接产出正文；反例自查门（§4.6）仍在终答前加一轮。
         Self::with_gateway(Arc::new(FakeProvider::new(vec![
-            orz_loop::gateway::fake::ScriptedResponse::tool_calls(vec![
-                orz_loop::gateway::model::ToolCall {
-                    name: "plan_write".to_string(),
-                    arguments: serde_json::json!({
-                        "plan": {
-                            "plan_id": "plan-acp-default",
-                            "goal": "测试目标",
-                            "steps": [{
-                                "id": "s1",
-                                "goal": "执行",
-                                "actions": [
-                                    {"step_id": "s1", "do": "workspace.read_file", "with": {"target_file": "sample.txt"}}
-                                ],
-                                "acceptance": "完成",
-                                "evidence": []
-                            }, {
-                                "id": "deliver",
-                                "goal": "递交",
-                                "actions": [
-                                    {"step_id": "deliver", "do": "workspace.read_file", "with": {"target_file": "sample.txt"}}
-                                ],
-                                "acceptance": "已递交",
-                                "evidence": []
-                            }]
-                        }
-                    }),
-                    call_id: "call-plan".to_string(),
-                },
-            ]),
             orz_loop::gateway::fake::ScriptedResponse::text("(fake) 已收到请求。"),
             orz_loop::gateway::fake::ScriptedResponse::text("(fake) 已收到请求。"),
         ])))
@@ -901,9 +877,6 @@ impl AcpServer {
                 activation_snapshot: Some(activation_snapshot),
                 browser: None,
                 conversation: conversation.clone(),
-                // Restored history ⇒ this session already had its first
-                // round before; do not re-trigger the plan gate.
-                plan_gate_done: conversation.is_some(),
             },
         );
 
@@ -1093,20 +1066,12 @@ impl AcpServer {
             session.browser = Some(host.browser_session().clone());
         }
         let controller = AgentLoopController::with_gateway(self.model_gateway.clone())
-            // PLAN-FIRST 阶段 A (2026-08-16, ADR-0010 §14.17): production
-            // sessions start with the first-round plan gate.
-            .with_plan_first_enabled(true)
-            // PLAN-FIRST 阶段 C (2026-08-16, ADR-0010 §14.17⑱): console
-            // default + direct 受控降级（双模式）随生产路径启用。
+            // THIN-HARNESS-REDESIGN R2a 审查处理 (2026-08-27, 实际使用
+            // 裁决)：plan 门为普适删减——ACP 交互会话面与 CLI 一致不再
+            // 启用首轮计划仪式（安全职责在机械审计层与提交门，不靠计划
+            // 结构）；`plan_first` 仅作休眠开关保留（测试/回退），生产
+            // 不再启用。console 默认面随生产路径保留（与 CLI 一致）。
             .with_console_default_enabled(true)
-            .with_plan_first_session_done(
-                self.sessions
-                    .lock()
-                    .unwrap()
-                    .get(session_id)
-                    .map(|s| s.plan_gate_done)
-                    .unwrap_or(true),
-            )
             .with_snapshot_store(Some(handle.snapshot_store.clone()))
             // ACAF production flip (2026-08-16): the ACP session path shares
             // the signer-process client + fail-closed posture of the CLI run
@@ -1121,7 +1086,15 @@ impl AcpServer {
                 activation_snapshot.previous_retrieval_mode.clone(),
                 activation_snapshot.pending_transition_authority.clone(),
             )
-            .with_activation_snapshot(Some(&activation_snapshot_json));
+            .with_activation_snapshot(Some(&activation_snapshot_json))
+            // THIN-HARNESS-REDESIGN R2a 审查处理 (P3-1, 2026-08-27)：恢复
+            // 时重建检索分区——PULL 模式下全文不进主对话，重启后分区是
+            // 模型唯一可追溯视图；sidecar 快照携带的 internal_ret /
+            // external_ret 灌回全新黑板的对应分区（None = 无历史）。
+            .with_retrieval_partitions(
+                activation_snapshot.internal_ret.clone(),
+                activation_snapshot.external_ret.clone(),
+            );
 
         let run_result = controller
             .run_turn_with_cancel(
@@ -1175,6 +1148,17 @@ impl AcpServer {
             activation_snapshot.activations =
                 serde_json::from_value(activations).unwrap_or_default();
         }
+        // THIN-HARNESS-REDESIGN R2a 审查处理 (P3-1, 2026-08-27): fold the
+        // controller's retrieval partitions back into the snapshot. 全量
+        // 覆盖语义下，取回值 = 本次 run 最后完成的一次派发结果；派发级
+        // 失败（子代理 loop Err）不写分区，故保留灌回的历史值——不存在
+        // 半成品覆盖。下个 prompt / 进程重启经 with_retrieval_partitions
+        // 重建。
+        {
+            let bb = controller.blackboard().read();
+            activation_snapshot.internal_ret = Some(bb.internal_ret.clone());
+            activation_snapshot.external_ret = Some(bb.external_ret.clone());
+        }
         persist_activation_sidecar(&base_dir, session_id, &activation_snapshot);
         if let Some(session) = self.sessions.lock().unwrap().get_mut(session_id) {
             session.activation_snapshot = Some(activation_snapshot);
@@ -1197,7 +1181,6 @@ impl AcpServer {
             persist_conversation_sidecar(&base_dir, session_id, &conversation);
             if let Some(session) = self.sessions.lock().unwrap().get_mut(session_id) {
                 session.conversation = Some(conversation);
-                session.plan_gate_done = true;
             }
         }
 
@@ -1579,13 +1562,28 @@ impl AcpServer {
         base_dir: &std::path::Path,
         policy: PermissionPolicy,
     ) -> Result<crate::OrzHost, AcpError> {
+        // THIN-HARNESS-REDESIGN R2a 审查处理 (2026-08-27, 实际使用裁决)：
+        // ACP 交互路径工具超时逃生舱——此前仅 CLI/-p 读
+        // ORZ_TOOL_TIMEOUT_SECS，TUI/stdio 走 host 默认 300s，实际使用中
+        // 长命令（10 分钟级构建/测试）被机械超时误杀。按实际使用对齐：
+        // 缺失保持默认 300s；0 = 不限制；非法值显式报错（同 main.rs
+        // 纪律）。桌面进程未设置时行为与之前完全一致。
+        let tool_timeout = std::env::var("ORZ_TOOL_TIMEOUT_SECS")
+            .ok()
+            .map(|s| s.trim().parse::<u64>())
+            .transpose()
+            .map_err(|_| {
+                AcpError::Host("ORZ_TOOL_TIMEOUT_SECS must be a number of seconds".to_string())
+            })?
+            .filter(|&s| s > 0)
+            .map(std::time::Duration::from_secs);
         // The permission manager requires an absolute cwd (AbsPathBuf) —
         // canonicalize, falling back to the raw path on failure. dunce strips
         // the `\\?\` verbatim prefix on Windows (clippy.toml ban on std).
         let cwd = dunce::canonicalize(base_dir).unwrap_or_else(|_| base_dir.to_path_buf());
         // P1 permit keystore: the session's DPAPI-backed signer (or the
         // test-only memory store under TrustPolicy::Skip).
-        Ok(crate::OrzHost::with_bridge_and_hub_policy(
+        let mut host = crate::OrzHost::with_bridge_and_hub_policy(
             session_id,
             handle.journal.clone(),
             &cwd,
@@ -1595,7 +1593,11 @@ impl AcpServer {
             policy,
         )
         .map_err(AcpError::Host)?
-        .with_permit_signer(handle.permit_signer.clone()))
+        .with_permit_signer(handle.permit_signer.clone());
+        if let Some(timeout) = tool_timeout {
+            host = host.with_tool_timeout(timeout);
+        }
+        Ok(host)
     }
 }
 
@@ -1700,49 +1702,6 @@ mod tests {
         dir
     }
 
-    /// PLAN-FIRST 阶段 A (2026-08-16): a `plan_write` tool call carrying a
-    /// structured plan object (main-lane plan gate).
-    fn plan_write_response(plan: serde_json::Value) -> ScriptedResponse {
-        ScriptedResponse::tool_calls(vec![ToolCall {
-            name: "plan_write".to_string(),
-            arguments: serde_json::json!({ "plan": ensure_terminal_step(plan) }),
-            call_id: "call-plan".to_string(),
-        }])
-    }
-
-    /// MECHANICAL-AUDIT-LAYER S2 (2026-08-24): AGENT-DELIVERY-FLOW 要求
-    /// 计划末步 id ∈ {deliver, submit}——测试脚本计划若末步不是 terminal
-    /// 步，统一补一条固定末步（动作占位不执行，仅满足机械校验）。
-    fn ensure_terminal_step(plan: serde_json::Value) -> serde_json::Value {
-        let terminal = plan
-            .get("steps")
-            .and_then(|s| s.as_array())
-            .and_then(|steps| steps.last())
-            .and_then(|s| s.get("id"))
-            .and_then(serde_json::Value::as_str)
-            .is_some_and(|id| id == "deliver" || id == "submit");
-        if terminal {
-            return plan;
-        }
-        let mut plan = plan;
-        if let Some(obj) = plan.as_object_mut()
-            && let Some(steps) = obj
-                .get_mut("steps")
-                .and_then(serde_json::Value::as_array_mut)
-        {
-            steps.push(serde_json::json!({
-                "id": "deliver",
-                "goal": "递交",
-                "actions": [
-                    {"step_id": "deliver", "do": "workspace.read_file", "with": {"target_file": "sample.txt"}}
-                ],
-                "acceptance": "已递交",
-                "evidence": []
-            }));
-        }
-        plan
-    }
-
     /// RETRIEVAL-SUBAGENT-WIRING 审查处理 (2026-08-25)：模式 A 降级结果
     /// 应用到会话快照——改写模式 + transition pending + 机械元数据落盘；
     /// 未降级时快照不动。降级决策规则本体在
@@ -1790,6 +1749,44 @@ mod tests {
         assert_eq!(snap.retrieval_mode, RetrievalMode::LocalBrowser);
         assert!(!snap.bootstrap_transition_pending);
         assert_eq!(snap.pending_transition_authority, None);
+    }
+
+    /// THIN-HARNESS-REDESIGN R2a 审查处理 (P3-1)：检索分区随快照 serde
+    /// 往返（sidecar 持久化/恢复不丢全文与条目）；旧版快照（无该字段）
+    /// 反序列化为 None——恢复时保持空分区而非报错。
+    #[test]
+    fn activation_snapshot_roundtrips_retrieval_partitions() {
+        let internal = InternalRetSection {
+            project_docs: vec!["design.md".to_string()],
+            source_ledger: vec!["SRC-001 design.md".to_string()],
+            response: Some("跨 run 的检索完成".to_string()),
+        };
+        let external = ExternalRetSection {
+            web_sources: vec!["https://example.com/paper".to_string()],
+            source_ledger: vec!["SRC-002 https://example.com/paper".to_string()],
+            response: Some("跨 run 的网页检索完成".to_string()),
+        };
+        let mut snap = StoredActivationSnapshot::for_session("sess-p31");
+        snap.internal_ret = Some(internal.clone());
+        snap.external_ret = Some(external.clone());
+
+        let json = serde_json::to_value(&snap).unwrap();
+        let restored: StoredActivationSnapshot = serde_json::from_value(json).unwrap();
+        assert_eq!(restored.internal_ret, Some(internal));
+        assert_eq!(restored.external_ret, Some(external));
+
+        // 旧版 sidecar（无分区字段）→ None，向后兼容。
+        let legacy = serde_json::json!({
+            "schema_version": "0.1.0-draft",
+            "session_id": "sess-legacy",
+            "retrieval_mode": "off",
+            "bootstrap_transition_pending": false,
+            "next_seq": {},
+            "activations": [],
+        });
+        let legacy_snap: StoredActivationSnapshot = serde_json::from_value(legacy).unwrap();
+        assert_eq!(legacy_snap.internal_ret, None);
+        assert_eq!(legacy_snap.external_ret, None);
     }
 
     /// local_browser (2026-08-10): the probe reuses an already-ready lane
@@ -1930,17 +1927,14 @@ mod tests {
                     "ACP path journal invalid: {:?}",
                     replay.errors
                 );
-                // Full Phase 2 gate chain + §4.6: preflight + started +
+                // Full phase chain + §4.6: preflight + started +
                 // prompt_submitted + tool_availability + model_output +
                 // counterexample_gate + model_output + finished.
                 // GAP-INQUIRY-SPLIT: no per-turn orientation event (fires
                 // only on the session-level 7-round trigger).
-                // PLAN-FIRST 阶段 A (2026-08-16): the plan gate adds a plan
-                // round (+4 events) to the production session.
-                // MECHANICAL-AUDIT-LAYER (2026-08-24, S1): the plan-gate
-                // round additionally journals two `mechanical_audit_update`
-                // events (plan_gate + budget) → 16 → 18.
-                assert_eq!(replay.event_count, 18);
+                // THIN-HARNESS-REDESIGN R2a 审查处理 (2026-08-27): plan 门
+                // 普适摘除——不再有 plan 轮（原 18 → 9，与无门轮次一致）。
+                assert_eq!(replay.event_count, 9);
                 assert_eq!(replay.terminal_event.as_deref(), Some("run_finished"));
 
                 let _ = std::fs::remove_dir_all(&base);
@@ -1961,24 +1955,9 @@ mod tests {
             .run_until(async {
                 let base = test_dir();
 
-                // Four scripted responses — two per prompt turn (each turn's
-                // first round is gate-intercepted; the default gateway's two
-                // entries would exhaust on the second prompt).
+                // Four scripted responses — two per prompt turn (draft +
+                // final; the counterexample gate adds one round).
                 let server = AcpServer::with_gateway(Arc::new(FakeProvider::new(vec![
-                    // PLAN-FIRST 阶段 A (2026-08-16): 首个 prompt 先过计划门。
-                    plan_write_response(serde_json::json!({
-                        "plan_id": "plan-acp-two",
-                        "goal": "hello",
-                        "steps": [{
-                            "id": "s1",
-                            "goal": "执行",
-                            "actions": [
-                                {"step_id": "s1", "do": "workspace.read_file", "with": {"target_file": "sample.txt"}}
-                            ],
-                            "acceptance": "完成",
-                            "evidence": []
-                        }]
-                    })),
                     ScriptedResponse::text("(fake) 第一轮。"),
                     ScriptedResponse::text("(fake) 第一轮终答。"),
                     ScriptedResponse::text("(fake) 第二轮。"),
@@ -2014,16 +1993,13 @@ mod tests {
                     .collect();
                 assert_eq!(run_dirs.len(), 2, "one run journal per prompt");
 
-                for (i, dir) in run_dirs.iter().enumerate() {
+                for dir in run_dirs.iter() {
                     let replay =
                         orz_assurance::replay_journal(&dir.join("events.jsonl"), None, None, true);
                     assert!(replay.valid, "run journal invalid: {:?}", replay.errors);
-                    // GAP-INQUIRY-SPLIT: the first run carries the plan gate
-                    // (16 events; MECHANICAL-AUDIT-LAYER S1 adds two
-                    // `mechanical_audit_update` events → 18); the second
-                    // skips it (plan_gate_done, 9 events).
-                    let expected = if i == 0 { 18 } else { 9 };
-                    assert_eq!(replay.event_count, expected, "preflight + turn events");
+                    // THIN-HARNESS-REDESIGN R2a 审查处理 (2026-08-27): plan
+                    // 门普适摘除——两个 prompt 均为无门轮次（9 事件）。
+                    assert_eq!(replay.event_count, 9, "preflight + turn events");
                     assert_eq!(replay.terminal_event.as_deref(), Some("run_finished"));
                 }
 
@@ -2116,24 +2092,9 @@ mod tests {
                 std::fs::write(&target, "wired file content").unwrap();
 
                 let server = AcpServer::with_gateway(Arc::new(FakeProvider::new(vec![
-                    // PLAN-FIRST 阶段 A/C: plan gate first, then a console
-                    // order (read-only action) reaches the permission bridge
-                    // at issuance.
-                    plan_write_response(serde_json::json!({
-                        "plan_id": "plan-acp-read",
-                        "goal": "读取 sample.txt",
-                        "steps": [{
-                            "id": "s1",
-                            "goal": "读取",
-                            "actions": [
-                                {"step_id": "s1", "do": "workspace.read_file", "with": {"target_file": target.clone()}}
-                            ],
-                            "acceptance": "读取成功",
-                            "evidence": []
-                        }]
-                    })),
-                    // MECHANICAL-AUDIT-LAYER 审查处理 (2026-08-24): direct
-                    // 面——模型直接调 read_file，不再经订单层。
+                    // THIN-HARNESS-REDESIGN R2a 审查处理 (2026-08-27): 无
+                    // plan 门——首轮直接调 read_file（direct 面，不再经
+                    // 订单层，2026-08-24 起）。
                     ScriptedResponse::tool_calls(vec![ToolCall {
                         name: "read_file".to_string(),
                         arguments: serde_json::json!({ "target_file": target }),
@@ -2191,23 +2152,6 @@ mod tests {
                 let base = test_dir();
 
                 let server = AcpServer::with_gateway(Arc::new(FakeProvider::new(vec![
-                    plan_write_response(serde_json::json!({
-                        "plan_id": "plan-acp-bash",
-                        "goal": "执行命令",
-                        "steps": [{
-                            "id": "s1",
-                            "goal": "修改",
-                            "actions": [
-                                {
-                                    "step_id": "s1",
-                                    "do": "workspace.search_replace",
-                                    "with": {"file_path": "a.txt", "old_string": "v1", "new_string": "v2"},
-                                }
-                            ],
-                            "acceptance": "完成",
-                            "evidence": []
-                        }]
-                    })),
                     // MECHANICAL-AUDIT-LAYER 审查处理 (2026-08-24): direct
                     // 面——模型直接调 search_replace（写权限在直连调用时
                     // 到达 permission bridge，dead gateway → 拒绝）。
@@ -2253,8 +2197,7 @@ mod tests {
                     .iter()
                     .filter(|e| e.event_type == EventType::PermissionDecision)
                     .find(|e| {
-                        e.payload.get("tool").and_then(|t| t.as_str())
-                            == Some("search_replace")
+                        e.payload.get("tool").and_then(|t| t.as_str()) == Some("search_replace")
                     })
                     .expect("permission decision");
                 assert_eq!(
@@ -2303,25 +2246,8 @@ mod tests {
                 let base_ro = test_dir();
                 let base_ww = test_dir();
                 // Two sequential prompts share the one FakeProvider — each
-                // run pulls plan_write + order + gate text + final text.
+                // run pulls [直调工具, 草稿, 终答]。
                 let script = vec![
-                    plan_write_response(serde_json::json!({
-                        "plan_id": "plan-acp-ro",
-                        "goal": "执行命令",
-                        "steps": [{
-                            "id": "s1",
-                            "goal": "修改",
-                            "actions": [
-                                {
-                                    "step_id": "s1",
-                                    "do": "workspace.search_replace",
-                                    "with": {"file_path": "a.txt", "old_string": "v1", "new_string": "v2"},
-                                }
-                            ],
-                            "acceptance": "完成",
-                            "evidence": []
-                        }]
-                    })),
                     // MECHANICAL-AUDIT-LAYER 审查处理 (2026-08-24): direct
                     // 面——模型直接调 search_replace。
                     ScriptedResponse::tool_calls(vec![ToolCall {
@@ -2335,23 +2261,6 @@ mod tests {
                     }]),
                     ScriptedResponse::text("完成。"),
                     ScriptedResponse::text("完成。"),
-                    plan_write_response(serde_json::json!({
-                        "plan_id": "plan-acp-ww",
-                        "goal": "执行命令",
-                        "steps": [{
-                            "id": "s1",
-                            "goal": "修改",
-                            "actions": [
-                                {
-                                    "step_id": "s1",
-                                    "do": "workspace.search_replace",
-                                    "with": {"file_path": "a.txt", "old_string": "v1", "new_string": "v2"},
-                                }
-                            ],
-                            "acceptance": "完成",
-                            "evidence": []
-                        }]
-                    })),
                     ScriptedResponse::tool_calls(vec![ToolCall {
                         name: "search_replace".to_string(),
                         arguments: serde_json::json!({
@@ -2431,23 +2340,6 @@ mod tests {
                 std::fs::write(base.join("lib.rs"), "fn main() {}").unwrap();
 
                 let server = AcpServer::with_gateway(Arc::new(FakeProvider::new(vec![
-                    plan_write_response(serde_json::json!({
-                        "plan_id": "plan-acp-snap",
-                        "goal": "修改 lib.rs",
-                        "steps": [{
-                            "id": "s1",
-                            "goal": "修改",
-                            "actions": [
-                                {
-                                    "step_id": "s1",
-                                    "do": "workspace.search_replace",
-                                    "with": {"file_path": "lib.rs", "old_string": "fn main", "new_string": "fn renamed"},
-                                }
-                            ],
-                            "acceptance": "完成",
-                            "evidence": []
-                        }]
-                    })),
                     // MECHANICAL-AUDIT-LAYER 审查处理 (2026-08-24): direct
                     // 面——模型直接调 search_replace（dead gateway 下写权限
                     // 拒绝 → 无快照记录）。
@@ -2661,39 +2553,13 @@ mod tests {
         tokio::task::LocalSet::new()
             .run_until(async {
                 let base = test_dir();
-                // run #1 consumes 1–2 项（计划轮 + 可能第一段草稿，中断于
-                // 流式期间）；run #2 需要 [计划, 草稿, 终答]。两组
-                // [P, D, F] 覆盖 run #1 消费 0–2 项的一切情况。
+                // THIN-HARNESS-REDESIGN R2a 审查处理 (2026-08-27): 无 plan
+                // 门——run #1 中断于第一段草稿的流式期间（消费 0–1 项）；
+                // run #2 需要 [草稿, 终答]。四项文本覆盖消费 0–2 项。
                 let server = Arc::new(AcpServer::with_gateway(Arc::new(
                     FakeProvider::new(vec![
-                        plan_write_response(serde_json::json!({
-                            "plan_id": "plan-cancel-1",
-                            "goal": "执行任务",
-                            "steps": [{
-                                "id": "s1",
-                                "goal": "执行",
-                                "actions": [
-                                    {"step_id": "s1", "do": "workspace.read_file", "with": {"target_file": "sample.txt"}}
-                                ],
-                                "acceptance": "完成",
-                                "evidence": []
-                            }]
-                        })),
                         ScriptedResponse::text("第一轮回答。"),
                         ScriptedResponse::text("第一轮回答。"),
-                        plan_write_response(serde_json::json!({
-                            "plan_id": "plan-cancel-2",
-                            "goal": "执行任务",
-                            "steps": [{
-                                "id": "s1",
-                                "goal": "执行",
-                                "actions": [
-                                    {"step_id": "s1", "do": "workspace.read_file", "with": {"target_file": "sample.txt"}}
-                                ],
-                                "acceptance": "完成",
-                                "evidence": []
-                            }]
-                        })),
                         ScriptedResponse::text("第二轮回答。"),
                         ScriptedResponse::text("第二轮回答。"),
                     ])
@@ -3571,20 +3437,8 @@ mod tests {
             .run_until(async {
                 let base = test_dir();
                 let fake = Arc::new(FakeProvider::new(vec![
-                    // PLAN-FIRST 阶段 A (2026-08-16): 首个 prompt 先过计划门。
-                    plan_write_response(serde_json::json!({
-                        "plan_id": "plan-acp-conv",
-                        "goal": "第一问",
-                        "steps": [{
-                            "id": "s1",
-                            "goal": "执行",
-                            "actions": [
-                                {"step_id": "s1", "do": "workspace.read_file", "with": {"target_file": "sample.txt"}}
-                            ],
-                            "acceptance": "完成",
-                            "evidence": []
-                        }]
-                    })),
+                    // THIN-HARNESS-REDESIGN R2a 审查处理 (2026-08-27): 无
+                    // plan 门——每个 prompt 两轮（草稿 + 终答）。
                     ScriptedResponse::text("第一答"),
                     ScriptedResponse::text("第一答"),
                     ScriptedResponse::text("第二答"),
@@ -3612,11 +3466,12 @@ mod tests {
                 assert_eq!(r2["response"], "第二答");
 
                 // The second prompt's first model request opened with the
-                // first turn (plan gate + two model calls per prompt — the
-                // counterexample gate adds one round).
+                // first turn (two model calls per prompt — the
+                // counterexample gate adds one round; the plan gate is
+                // removed universally).
                 let reqs = fake.received_requests();
-                assert_eq!(reqs.len(), 5, "plan + two model calls per prompt");
-                let msgs = &reqs[3].messages;
+                assert_eq!(reqs.len(), 4, "two model calls per prompt");
+                let msgs = &reqs[2].messages;
                 assert!(
                     msgs.iter().any(|m| m.content == "第一问"),
                     "first prompt in history: {msgs:?}"
@@ -3657,19 +3512,6 @@ mod tests {
                 let base = test_dir();
                 // Process 1: one successful prompt lands the sidecar.
                 let fake1 = Arc::new(FakeProvider::new(vec![
-                    plan_write_response(serde_json::json!({
-                        "plan_id": "plan-acp-restart",
-                        "goal": "重启前的问题",
-                        "steps": [{
-                            "id": "s1",
-                            "goal": "执行",
-                            "actions": [
-                                {"step_id": "s1", "do": "workspace.read_file", "with": {"target_file": "sample.txt"}}
-                            ],
-                            "acceptance": "完成",
-                            "evidence": []
-                        }]
-                    })),
                     ScriptedResponse::text("第一答"),
                     ScriptedResponse::text("第一答"),
                 ]));
@@ -3709,7 +3551,7 @@ mod tests {
 
                 // The new process's first request carried the old history.
                 let reqs = fake2.received_requests();
-                assert_eq!(reqs.len(), 2, "restored session skips the plan gate");
+                assert_eq!(reqs.len(), 2, "two model calls per prompt");
                 let msgs = &reqs[0].messages;
                 assert!(
                     msgs.iter().any(|m| m.content == "重启前的问题"),
@@ -3736,19 +3578,6 @@ mod tests {
                 // One successful prompt consumes the scripted replies; the
                 // second prompt hits an empty script → model failure.
                 let server = AcpServer::with_gateway(Arc::new(FakeProvider::new(vec![
-                    plan_write_response(serde_json::json!({
-                        "plan_id": "plan-acp-fail",
-                        "goal": "第一问",
-                        "steps": [{
-                            "id": "s1",
-                            "goal": "执行",
-                            "actions": [
-                                {"step_id": "s1", "do": "workspace.read_file", "with": {"target_file": "sample.txt"}}
-                            ],
-                            "acceptance": "完成",
-                            "evidence": []
-                        }]
-                    })),
                     ScriptedResponse::text("第一答"),
                     ScriptedResponse::text("第一答"),
                 ])));
@@ -3828,19 +3657,6 @@ mod tests {
                 .unwrap();
 
                 let fake = Arc::new(FakeProvider::new(vec![
-                    plan_write_response(serde_json::json!({
-                        "plan_id": "plan-acp-act",
-                        "goal": "恢复激活",
-                        "steps": [{
-                            "id": "s1",
-                            "goal": "执行",
-                            "actions": [
-                                {"step_id": "s1", "do": "workspace.read_file", "with": {"target_file": "sample.txt"}}
-                            ],
-                            "acceptance": "完成",
-                            "evidence": []
-                        }]
-                    })),
                     ScriptedResponse::text("收到"),
                     ScriptedResponse::text("收到"),
                 ]));

@@ -145,14 +145,13 @@ fn session_new_and_prompt_over_real_frames() {
         "stdio path journal invalid: {:?}",
         replay.errors
     );
-    // preflight + started + prompt_submitted + tool_availability
+    // THIN-HARNESS-REDESIGN R2a 审查处理 (2026-08-27)：plan 门普适摘除
+    // ——preflight + started + prompt_submitted + tool_availability
     // + request_header_change (ORZ-CACHE-CONTEXT-COST 2026-08-15)
-    // + 3 plan-round model_output (no plan_write from the canned gateway —
-    //     PLAN-FIRST 阶段 A degrade cap) + plan_write (plan_not_submitted)
     // + model_output + counterexample_gate + model_output + finished
     // (GAP-INQUIRY-SPLIT: no per-turn orientation event — the
-    // orientation producer fires only on the session-level 7-round trigger)
-    assert_eq!(replay.event_count, 13);
+    // orientation producer fires only on the session-level trigger)
+    assert_eq!(replay.event_count, 9);
     assert_eq!(replay.terminal_event.as_deref(), Some("run_finished"));
 
     let _ = std::fs::remove_dir_all(&dir);

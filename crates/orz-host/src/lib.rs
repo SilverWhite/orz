@@ -2075,6 +2075,9 @@ mod tests {
             .map(|k| k.to_uppercase())
             .collect();
         allowed.insert("ORZ_TEST_RUNNER_INJECTED".to_string());
+        // CPython 3.13+ 初始化时把 UTF-8 模式的 LC_CTYPE 写入自身
+        // os.environ（即使进程环境无该变量）——不是宿主泄漏，显式放行。
+        allowed.insert("LC_CTYPE".to_string());
         for key in &keys {
             assert!(
                 allowed.contains(&key.to_uppercase()),

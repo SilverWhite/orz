@@ -18,6 +18,8 @@ pub mod console;
 pub(crate) mod console_mode;
 pub mod controller;
 mod diagnostic_coverage;
+pub mod diagnostics;
+pub mod entities;
 pub mod epoch;
 pub mod gateway;
 pub mod host;

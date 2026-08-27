@@ -695,6 +695,8 @@ mod tests {
         assert!(matches!(err, CredentialError::InvalidTarget));
     }
 
+    /// Windows 凭据存储语义（Linux 上不可用——明确按平台门控）。
+    #[cfg(windows)]
     #[test]
     fn windows_credential_read_fails_cleanly_for_missing_target() {
         // No real credential manager entry can be assumed in CI; the contract

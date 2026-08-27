@@ -267,6 +267,8 @@ mod tests {
         PathBuf::from(r"C:\Users\test")
     }
 
+    /// Windows 盘符路径语义（Linux 上 `C:\` 是相对路径，行为不同）。
+    #[cfg(windows)]
     #[test]
     fn resolve_relative_joins_worktree() {
         assert_eq!(
@@ -306,6 +308,8 @@ mod tests {
         );
     }
 
+    /// Windows 盘符路径语义（Linux 上 `C:\` 是相对路径，行为不同）。
+    #[cfg(windows)]
     #[test]
     fn resolve_dotted_and_escaped_inputs() {
         assert_eq!(
@@ -324,6 +328,8 @@ mod tests {
         );
     }
 
+    /// Windows 盘符路径语义（Linux 上 `C:\` 是相对路径，行为不同）。
+    #[cfg(windows)]
     #[test]
     fn parent_dir_escapes_collapse() {
         // `..` collapses lexically — the digest covers the real touched
@@ -353,6 +359,8 @@ mod tests {
         );
     }
 
+    /// Windows 盘符路径语义（Linux 上 `C:\` 是相对路径，行为不同）。
+    #[cfg(windows)]
     #[test]
     fn tilde_expansion() {
         assert_eq!(

@@ -873,108 +873,6 @@ mod tests {
         Arc::new(AcpServer::with_gateway(Arc::new(fake)))
     }
 
-    /// PLAN-FIRST 阶段 A (2026-08-16)：首轮计划轮的有效 `plan_write`
-    /// 工具调用（console 默认面先落板结构计划）。
-    fn plan_write_call(call_id: &str) -> ToolCall {
-        plan_write_call_with(call_id, valid_plan_json())
-    }
-
-    /// 带自定义计划对象的 `plan_write` 调用（persist 用例需要双步计划）。
-    fn plan_write_call_with(call_id: &str, plan: serde_json::Value) -> ToolCall {
-        ToolCall {
-            name: "plan_write".to_string(),
-            arguments: serde_json::json!({ "plan": plan }),
-            call_id: call_id.to_string(),
-        }
-    }
-
-    /// 与 orz-loop 测试同构的有效计划对象（工作步 s1 + 固定末步 deliver；
-    /// AGENT-DELIVERY-FLOW 要求末步 id ∈ {deliver, submit}）。
-    fn valid_plan_json() -> serde_json::Value {
-        serde_json::json!({
-            "plan_id": "plan-1",
-            "goal": "执行一条终端命令",
-            "steps": [
-                {
-                    "id": "s1",
-                    "goal": "运行命令",
-                    "actions": [
-                        {
-                            "step_id": "s1",
-                            "do": "workspace.run_terminal",
-                            "with": { "command": "dir", "description": "列出目录" },
-                        }
-                    ],
-                    "acceptance": "命令已执行",
-                    "evidence": ["stdout"],
-                },
-                {
-                    "id": "deliver",
-                    "goal": "递交",
-                    "actions": [
-                        {
-                            "step_id": "deliver",
-                            "do": "workspace.run_terminal",
-                            "with": { "command": "dir", "description": "列出目录" },
-                        }
-                    ],
-                    "acceptance": "已递交",
-                    "evidence": [],
-                }
-            ]
-        })
-    }
-
-    /// 双步计划 + 固定末步 deliver（persist 用例——第二步绑定 s2，避免
-    /// 步骤门对 done 步骤的 step_not_done；末步满足 terminal 校验）。
-    fn two_step_plan_json() -> serde_json::Value {
-        serde_json::json!({
-            "plan_id": "plan-2",
-            "goal": "执行两条相同的终端命令",
-            "steps": [
-                {
-                    "id": "s1",
-                    "goal": "运行命令 1",
-                    "actions": [
-                        {
-                            "step_id": "s1",
-                            "do": "workspace.run_terminal",
-                            "with": { "command": "dir", "description": "列出目录" },
-                        }
-                    ],
-                    "acceptance": "命令 1 已执行",
-                    "evidence": ["stdout"],
-                },
-                {
-                    "id": "s2",
-                    "goal": "运行命令 2",
-                    "actions": [
-                        {
-                            "step_id": "s2",
-                            "do": "workspace.run_terminal",
-                            "with": { "command": "dir", "description": "列出目录" },
-                        }
-                    ],
-                    "acceptance": "命令 2 已执行",
-                    "evidence": ["stdout"],
-                },
-                {
-                    "id": "deliver",
-                    "goal": "递交",
-                    "actions": [
-                        {
-                            "step_id": "deliver",
-                            "do": "workspace.run_terminal",
-                            "with": { "command": "dir", "description": "列出目录" },
-                        }
-                    ],
-                    "acceptance": "已递交",
-                    "evidence": [],
-                }
-            ]
-        })
-    }
-
     /// MECHANICAL-AUDIT-LAYER 审查处理 (2026-08-24): direct 执行面——
     /// `run_terminal_cmd` 直连调用（第 2 轮起模型直接调工作工具；
     /// Interactive 下权限审批在直连调用时触发）。
@@ -989,11 +887,11 @@ mod tests {
         }
     }
 
-    /// 一个完整的 direct 执行回合脚本（plan-first + direct 执行面）：
-    /// 计划轮 → 直连终端调用（权限审批/执行即时触发）→ 草稿 → 终答。
+    /// 一个完整的 direct 执行回合脚本（THIN-HARNESS-REDESIGN R2a 审查
+    /// 处理，2026-08-27：plan 门普适摘除）：
+    /// 直连终端调用（权限审批/执行即时触发）→ 草稿 → 终答。
     fn console_exec_script(command: &str) -> Vec<ScriptedResponse> {
         vec![
-            ScriptedResponse::tool_calls(vec![plan_write_call("call-plan-1")]),
             ScriptedResponse::tool_calls(vec![terminal_call(command, "call-act-1")]),
             ScriptedResponse::text("草稿（等待执行结果）。"),
             ScriptedResponse::text("终答（命令已执行）。"),
@@ -1337,9 +1235,8 @@ mod tests {
             .run_until(async {
                 let base = test_dir();
                 let script = vec![
-                    // PLAN-FIRST (2026-08-16)：首轮先落板计划，再进入
-                    // console 默认面的草稿/终答文本流。
-                    ScriptedResponse::tool_calls(vec![plan_write_call("call-plan-1")]),
+                    // THIN-HARNESS-REDESIGN R2a 审查处理 (2026-08-27)：无
+                    // plan 门——直接进入草稿/终答文本流。
                     ScriptedResponse::text("第一轮草稿。"),
                     ScriptedResponse::text("终局答案。"),
                 ];
@@ -1417,7 +1314,6 @@ mod tests {
             .run_until(async {
                 let base = test_dir();
                 let script = vec![
-                    ScriptedResponse::tool_calls(vec![plan_write_call("call-plan-1")]),
                     ScriptedResponse::text("草稿"),
                     ScriptedResponse::text("三字答案"),
                 ];
@@ -1463,13 +1359,10 @@ mod tests {
             .run_until(async {
                 let base = test_dir();
                 let script = vec![
-                    // 两回合各需 [计划, 草稿, 终答]；中断发生在首回合
-                    // 流式期间（约消费 1-3 项），剩余项须让第二回合仍能
-                    // 走完计划路径。
-                    ScriptedResponse::tool_calls(vec![plan_write_call("call-plan-1")]),
+                    // 两回合各需 [草稿, 终答]；中断发生在首回合流式期间
+                    // （约消费 1-2 项），剩余项须让第二回合仍能走完。
                     ScriptedResponse::text("慢速草稿。"),
                     ScriptedResponse::text("慢速终答。"),
-                    ScriptedResponse::tool_calls(vec![plan_write_call("call-plan-2")]),
                     ScriptedResponse::text("慢速草稿。"),
                     ScriptedResponse::text("慢速终答。"),
                 ];
@@ -1754,7 +1647,6 @@ mod tests {
                 let base = test_dir();
                 std::fs::write(base.join("a.txt"), "hello").unwrap();
                 let script = vec![
-                    ScriptedResponse::tool_calls(vec![plan_write_call("call-plan-1")]),
                     ScriptedResponse::tool_calls(vec![
                         ToolCall {
                             name: "read_file".to_string(),
@@ -1812,7 +1704,7 @@ mod tests {
                 );
                 assert!(events.contains("\"read_file\""), "read executed: {events}");
                 assert!(
-                    events.contains("\"workspace.run_terminal\""),
+                    events.contains("\"tool\":\"run_terminal_cmd\",\"risk\":\"LocalMutation\""),
                     "the mutation was requested: {events}"
                 );
                 assert!(events.contains("\"deny\""), "denial journaled: {events}");
@@ -1842,11 +1734,9 @@ mod tests {
             .run_until(async {
                 let base = test_dir();
                 // Interleave-safe for concurrent pulls from the shared
-                // gateway：两线程各需 [计划, 下单, 草稿, 终答]——A、B 交错
+                // gateway：两线程各需 [直调, 草稿, 终答]——A、B 交错
                 // 消费（沿用原 A calls → B calls → 文本轮 的实证模式）。
                 let script = vec![
-                    ScriptedResponse::tool_calls(vec![plan_write_call("call-plan-ro")]),
-                    ScriptedResponse::tool_calls(vec![plan_write_call("call-plan-ww")]),
                     ScriptedResponse::tool_calls(vec![terminal_call("echo ro", "call-act-ro")]),
                     ScriptedResponse::tool_calls(vec![terminal_call("echo ww", "call-act-ww")]),
                     ScriptedResponse::text("草稿 A"),
@@ -1936,13 +1826,8 @@ mod tests {
                 let base = test_dir();
                 // Two identical bash calls: the first prompts (always_allow),
                 // the second auto-allows via the persisted grant — the second
-                // identical bash must NOT prompt again. 两步计划（s1/s2）——
-                // 步骤门不允许把订单绑到已 done 步骤。
+                // identical bash must NOT prompt again.
                 let script = vec![
-                    ScriptedResponse::tool_calls(vec![plan_write_call_with(
-                        "call-plan-1",
-                        two_step_plan_json(),
-                    )]),
                     // 两次完全相同的工作区订单（命令参数一致）——发放期
                     // 权限桥按相同 access 命中持久授权。
                     ScriptedResponse::tool_calls(vec![terminal_call("dir", "call-act-1")]),
@@ -2046,7 +1931,6 @@ mod tests {
                 let parts = CodexAppServer::new_parts(
                     server_with(
                         fake(vec![
-                            ScriptedResponse::tool_calls(vec![plan_write_call("call-plan-1")]),
                             ScriptedResponse::text("慢草稿"),
                             ScriptedResponse::text("慢终答"),
                         ])
@@ -2092,7 +1976,6 @@ mod tests {
             .run_until(async {
                 let base = test_dir();
                 let script = vec![
-                    ScriptedResponse::tool_calls(vec![plan_write_call("call-plan-1")]),
                     ScriptedResponse::text("第一轮草稿。"),
                     ScriptedResponse::text("第一轮终答。"),
                 ];
@@ -2159,14 +2042,12 @@ mod tests {
             .run_until(async {
                 let base = test_dir();
                 // Both threads share ONE model gateway — the script must be
-                // interleave-safe：计划路径下每回合各需 [计划, 草稿, 终答]
-                // 三轮；[P, P, D, D, F, F] 与 A、B 交替消费匹配。终答内容
-                // 不断言——只断言完成与 journal 有效性。
+                // interleave-safe：每回合各需 [草稿, 终答] 两轮；
+                // [D, D, F, F] 与 A、B 交替消费匹配。终答内容不断言——
+                // 只断言完成与 journal 有效性。
                 let parts = CodexAppServer::new_parts(
                     server_with(
                         fake(vec![
-                            ScriptedResponse::tool_calls(vec![plan_write_call("call-plan-a")]),
-                            ScriptedResponse::tool_calls(vec![plan_write_call("call-plan-b")]),
                             ScriptedResponse::text("共享草稿"),
                             ScriptedResponse::text("共享草稿"),
                             ScriptedResponse::text("共享终答"),

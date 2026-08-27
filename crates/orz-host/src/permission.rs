@@ -663,6 +663,8 @@ mod tests {
 
     // ── P1 scope enforcement ─────────────────────────────────────────────
 
+    /// Windows 盘符路径语义（Linux 上 `D:\` 是相对路径，行为不同）。
+    #[cfg(windows)]
     #[test]
     fn path_under_component_wise_and_case_insensitive() {
         assert!(path_under(
@@ -1312,6 +1314,8 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    /// Windows 盘符路径语义（Linux 上 `D:\` 是相对路径，行为不同）。
+    #[cfg(windows)]
     #[test]
     fn normalize_lexical_resolves_escapes() {
         let base = Path::new("D:\\CLI\\orz");

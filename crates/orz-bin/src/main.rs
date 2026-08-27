@@ -1140,9 +1140,10 @@ async fn run(
         .await;
         let (retrieval_pending, transition_authority) = cli_retrieval_wiring(&retrieval_outcome);
         let controller = orz_loop::AgentLoopController::with_gateway(build_gateway())
-            // PLAN-FIRST 阶段 A (2026-08-16, ADR-0010 §14.17): production
-            // CLI runs start with the first-round plan gate.
-            .with_plan_first_enabled(true)
+            // THIN-HARNESS-REDESIGN R1 (2026-08-27, §4.5): plan 门摘除——
+            // 首轮直接进入工作工具（与第 2 轮 direct 面一致）；plan 分区
+            // 保留在黑板（历史/审计），模型可不读。plan_first 仅作休眠
+            // 开关保留（测试/回退），生产不再启用。
             // PLAN-FIRST 阶段 C (2026-08-16, ADR-0010 §14.17⑱): console
             // default + direct 受控降级（双模式）随生产路径启用。
             .with_console_default_enabled(true)
@@ -1163,6 +1164,12 @@ async fn run(
             // to start at all).
             .with_acaf(build_acaf_client().await?)
             .with_acaf_fail_closed(acaf_fail_closed_enabled());
+        // THIN-HARNESS-REDESIGN R1 (2026-08-27, §4.6): 无头 `-p` 路径按
+        // run 创建一次性 `OrientationSessionState`（内存态，无需 sidecar）
+        // ——此前传 None 导致跑分路径中立问询永不触发（接线缺口）。阈值
+        // 由 `ORZ_ORIENTATION_THRESHOLD` 解析（默认 50）。
+        let mut orientation =
+            orz_loop::orientation::OrientationSessionState::new(handle.run_id.clone());
         let (response, _, _) = controller
             .run_turn_with_guards(
                 &host,
@@ -1173,11 +1180,12 @@ async fn run(
                 handle.last_event_sha256.clone(),
                 None,
                 Some(&heartbeat),
-                // GAP-INQUIRY-SPLIT: one-shot CLI runs carry no session
-                // orientation state (the ACP server hosts sessions).
+                // THIN-HARNESS-REDESIGN R1: 无头路径已接通 orientation
+                // （run 内存态）；会话恢复仍不携带对话（GAP-CONVERSATION-
+                // RESTORE: one-shot CLI runs carry no session conversation）。
                 // GAP-CONVERSATION-RESTORE: one-shot CLI runs carry no
                 // session conversation either.
-                None,
+                Some(&mut orientation),
                 None,
             )
             .await?;
@@ -2243,16 +2251,15 @@ mod conformance_capture {
                     .await
                     .unwrap();
                 let host = build_cli_host(&handle, run_id, &base).unwrap();
-                // M4 (GAP-SUBAGENT-RUNTIME 2026-08-10): §4.4 — a retrieval
-                // while the activation awaits disposition is REFUSED, so the
-                // crossing scenario interleaves a disposition after every
-                // assessment (4 × continue + 1 × close): the main alternates
-                // retrieve → disposition rounds, the subagent consumes one
-                // text per retrieve. 10 tool rounds + 2 final rounds = 12
-                // completed model rounds — the 7-round threshold crosses
-                // exactly once (on the 4th retrieve's gap).
+                // THIN-HARNESS-REDESIGN R1 (§4.4/§4.6): 检索派发每次调用
+                // 即闭环（auto_close），不再有 disposition 往返——主车道每
+                // 个派发 = 1 个已完成逻辑模型轮。7 次派发 = 7 轮，阈值 7
+                // 在第 7 次派发的 post-tool-batch 安全间隙跨越（唯一一次
+                // 触发），随后是强制模板轮 → 终答反例门 → 终答。内部检索
+                // 车道同样喂满 7 轮，但其最后文本轮后子代理循环直接收束
+                // （无下一 loop-top），不产生内部触发。
                 let mut script = Vec::new();
-                for i in 0..5 {
+                for i in 0..7 {
                     script.push(ScriptedResponse::tool_calls(vec![ToolCall {
                         name: "retrieve_project_docs".to_string(),
                         arguments: serde_json::json!({"query": format!("查询 {i}")}),
@@ -2261,27 +2268,10 @@ mod conformance_capture {
                     script.push(ScriptedResponse::text(format!(
                         "[DOC] doc-{i}.md\n检索结果 {i}"
                     )));
-                    if i < 4 {
-                        script.push(ScriptedResponse::tool_calls(vec![ToolCall {
-                            name: "retrieval_disposition".to_string(),
-                            arguments: serde_json::json!({
-                                "role": "internal_retrieval",
-                                "decision": "continue",
-                                "requirement_delta": format!("补充 doc-{} 的线索", i + 1),
-                            }),
-                            call_id: format!("call-d{i}"),
-                        }]));
-                    } else {
-                        script.push(ScriptedResponse::tool_calls(vec![ToolCall {
-                            name: "retrieval_disposition".to_string(),
-                            arguments: serde_json::json!({
-                                "role": "internal_retrieval",
-                                "decision": "close",
-                            }),
-                            call_id: "call-d4".to_string(),
-                        }]));
-                    }
                 }
+                // THIN-HARNESS-REDESIGN R1 (§4.3): orientation 强制模板轮
+                // 退役——fire 只注入简短 [ORIENTATION] 块并继续；模型在
+                // 下一轮自然回答（此处即终答草稿，被反例门截获后正式终答）。
                 script.push(ScriptedResponse::text(
                     "当前任务定位：处理查询批次；下一步：汇总结果",
                 ));
@@ -2304,8 +2294,10 @@ mod conformance_capture {
                 );
                 // This scenario is the 7-round-crossing proof — the session
                 // orientation state MUST be threaded in (a one-shot CLI run
-                // would pass None and never fire).
-                let mut orientation = orz_loop::orientation::OrientationSessionState::new(run_id);
+                // would pass None and never fire). R1: 显式 7 保持原触发
+                // 语义（生产默认 50，env 可覆盖）。
+                let mut orientation =
+                    orz_loop::orientation::OrientationSessionState::new_with_threshold(run_id, 7);
                 controller
                     .run_turn(
                         &host,
@@ -2329,14 +2321,11 @@ mod conformance_capture {
                 ];
                 // Per retrieval iteration: the shared-loop dispatch (subagent
                 // model round inside the parent's wrapper) + the assessment +
-                // the parent's disposition round (control tool — journaled
-                // with its own ToolStarted/ToolCompleted). The orientation
-                // crosses the 7-round
-                // threshold on the 4th retrieve's post-tool-batch gap (the
-                // 7th completed main round) — it fires between that
-                // iteration's assessment and its disposition round. The last
-                // iteration closes (accepted close → close record).
-                for i in 0..5 {
+                // the auto_close close record (R1 §4.4 — no disposition
+                // round, no probe flips). The orientation crosses the
+                // 7-round threshold on the 7th retrieve's post-tool-batch
+                // gap (the 7th completed main round).
+                for i in 0..7 {
                     expected.extend([
                         "model_output",
                         "tool_started",
@@ -2346,29 +2335,12 @@ mod conformance_capture {
                         // structured result precedes the assessment.
                         "retrieval_result_committed",
                         "information_sufficiency_assessment",
+                        // R1 (§4.4): auto_close close record per dispatch.
+                        "retrieval_close_record",
                     ]);
-                    if i == 3 {
+                    if i == 6 {
                         expected.push("orientation_checkpoint");
                     }
-                    // FUS-TOOL-PROBE P0-A-2 审查复核（2026-08-13）：评估落地后
-                    // has_live_activation 置真（未决 pending assessment），
-                    // retrieval_disposition 探针翻转 → tool_availability_check。
-                    expected.push("tool_availability_check");
-                    // The disposition event (and the close record for an
-                    // accepted close) are the control call's products — they
-                    // land between the tool's start and completion.
-                    expected.extend([
-                        "model_output",
-                        "tool_started",
-                        "retrieval_parent_disposition",
-                    ]);
-                    if i == 4 {
-                        expected.push("retrieval_close_record");
-                    }
-                    expected.push("tool_completed");
-                    // FUS-TOOL-PROBE P0-A-2 审查复核（2026-08-13）：disposition
-                    // 消费后 pending assessment 清除，探针翻转 → 事件。
-                    expected.push("tool_availability_check");
                 }
                 expected.extend([
                     "model_output",
@@ -2414,8 +2386,8 @@ mod conformance_capture {
                     .lines()
                     .filter(|l| l.contains("\"information_sufficiency_assessment\""))
                     .collect();
-                assert_eq!(assessment_lines.len(), 5);
-                let last: serde_json::Value = serde_json::from_str(assessment_lines[4]).unwrap();
+                assert_eq!(assessment_lines.len(), 7);
+                let last: serde_json::Value = serde_json::from_str(assessment_lines[6]).unwrap();
                 assert_eq!(last["payload"]["status"], "indeterminate");
                 assert_eq!(last["payload"]["source_counts"]["total"], 1);
                 assert_eq!(last["payload"]["source_counts"]["metadata_only"], 1);
@@ -2675,11 +2647,10 @@ mod conformance_capture {
                         "tool_completed",
                         "retrieval_result_committed",
                         "information_sufficiency_assessment",
-                        // FUS-TOOL-PROBE P0-A-2 审查复核（2026-08-13）：
-                        // has_live_activation 收紧为"未决 pending assessment"——
-                        // 评估落地后 retrieval_disposition 探针翻转，触发
-                        // tool_availability_check。
-                        "tool_availability_check",
+                        // THIN-HARNESS-REDESIGN R1 (§4.4): auto_close close
+                        // record per dispatch——无 disposition 往返、无
+                        // retrieval_disposition 探针翻转。
+                        "retrieval_close_record",
                         "model_output",
                         "counterexample_gate",
                         "model_output",
@@ -2734,11 +2705,13 @@ mod conformance_capture {
                             arguments: serde_json::json!({"query": "readme"}),
                             call_id: "call-1".to_string(),
                         }]),
+                        // THIN-HARNESS-REDESIGN R1 (§4.1): project_doc_index
+                        // 从 host 声明面移除——内部检索子代理用保留工具
+                        // read_file 直接点读。
                         ScriptedResponse::tool_calls(vec![ToolCall {
-                            name: "project_doc_index".to_string(),
+                            name: "read_file".to_string(),
                             arguments: serde_json::json!({
-                                "query": "readme",
-                                "include_content": "true",
+                                "target_file": "README.md",
                             }),
                             call_id: "call-i1".to_string(),
                         }]),
@@ -2785,9 +2758,9 @@ mod conformance_capture {
                         "prompt_submitted",
                         "model_output",
                         "tool_started",
-                        // Subagent round → the real index tool (host): the
-                        // Interactive permission bridge records its
-                        // auto-allow, then the tool runs.
+                        // Subagent round → read_file (host): the Interactive
+                        // permission bridge records its auto-allow, then the
+                        // tool runs.
                         "model_output",
                         "permission_requested",
                         "permission_decision",
@@ -2798,9 +2771,9 @@ mod conformance_capture {
                         "tool_completed",
                         "retrieval_result_committed",
                         "information_sufficiency_assessment",
-                        // FUS-TOOL-PROBE P0-A-2 审查复核（2026-08-13）：
-                        // 评估落地后 retrieval_disposition 探针翻转事件。
-                        "tool_availability_check",
+                        // THIN-HARNESS-REDESIGN R1 (§4.4): auto_close close
+                        // record per dispatch——无探针翻转。
+                        "retrieval_close_record",
                         "model_output",
                         "counterexample_gate",
                         "model_output",

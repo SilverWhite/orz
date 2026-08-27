@@ -26,8 +26,26 @@ use serde::{Deserialize, Serialize};
 
 use orz_assurance::orientation::checkpoint::ORIENTATION_BLOCK;
 
-/// ADR-0010 §4.2: fires when `completed_turns_since_orientation >= 7`.
-pub const ORIENTATION_THRESHOLD: u32 = 7;
+/// THIN-HARNESS-REDESIGN R1 (2026-08-27, §4.6, 用户裁决)：中立问询触发
+/// 阈值默认 50（原硬编码 7）——当前注意力窗口衰减低，只需大任务轮方向
+/// 检查（第一轮实测模型轮分布：中位 26 / 平均 43 / p90 94；阈值 50 时约
+/// 78% 任务零触发、大任务约 1 次）。env `ORZ_ORIENTATION_THRESHOLD` 可
+/// 覆盖（A/B 与回退）。
+pub const ORIENTATION_THRESHOLD: u32 = 50;
+
+/// Environment override for the orientation fire threshold.
+pub const ORIENTATION_THRESHOLD_ENV: &str = "ORZ_ORIENTATION_THRESHOLD";
+
+/// Resolve the orientation threshold from `ORZ_ORIENTATION_THRESHOLD`
+/// (completed logical model rounds; invalid/missing → `ORIENTATION_THRESHOLD`).
+/// Clamped to a sane floor so an env typo cannot fire every round.
+pub fn orientation_threshold_from_env() -> u32 {
+    std::env::var(ORIENTATION_THRESHOLD_ENV)
+        .ok()
+        .and_then(|raw| raw.trim().parse::<u32>().ok())
+        .map(|v| v.max(1))
+        .unwrap_or(ORIENTATION_THRESHOLD)
+}
 
 /// Which agent's round counter — the v0.2 payload `agent_role` enum
 /// (`main` | `internal_retrieval` | `external_retrieval`).
@@ -104,12 +122,20 @@ pub struct OrientationSessionState {
 }
 
 impl OrientationSessionState {
+    /// Session state with the env-resolved threshold (production path —
+    /// one-shot CLI / ACP sessions both read `ORZ_ORIENTATION_THRESHOLD`).
     pub fn new(session_id: impl Into<String>) -> Self {
+        Self::new_with_threshold(session_id, orientation_threshold_from_env())
+    }
+
+    /// Explicit-threshold constructor — used by tests and by callers that
+    /// must pin the rule version independently of the process env.
+    pub fn new_with_threshold(session_id: impl Into<String>, threshold: u32) -> Self {
         Self {
             main: AgentOrientationState::default(),
             internal: AgentOrientationState::default(),
             external: AgentOrientationState::default(),
-            threshold: ORIENTATION_THRESHOLD,
+            threshold,
             session_id: session_id.into(),
             sequence: 0,
             last_fire: None,
@@ -200,7 +226,8 @@ mod tests {
 
     #[test]
     fn fires_at_threshold_and_resets() {
-        let mut s = OrientationSessionState::new("SESS-1");
+        // R1: 阈值默认 50；测试用显式 7 保持原触发语义。
+        let mut s = OrientationSessionState::new_with_threshold("SESS-1", 7);
         for _ in 0..6 {
             s.feed_round(AgentRole::Main);
         }
@@ -244,7 +271,7 @@ mod tests {
 
     #[test]
     fn build_without_commit_leaves_state_untouched() {
-        let mut s = OrientationSessionState::new("SESS-1");
+        let mut s = OrientationSessionState::new_with_threshold("SESS-1", 7);
         for _ in 0..7 {
             s.feed_round(AgentRole::Main);
         }
@@ -260,7 +287,7 @@ mod tests {
 
     #[test]
     fn lanes_are_independent() {
-        let mut s = OrientationSessionState::new("SESS-1");
+        let mut s = OrientationSessionState::new_with_threshold("SESS-1", 7);
         s.feed_round(AgentRole::InternalRetrieval);
         // Internal/external lanes are reserved (zero feeds this slice) — a
         // non-main feed must never trip the main lane.
@@ -271,7 +298,7 @@ mod tests {
 
     #[test]
     fn checkpoint_id_sequence_advances_and_matches_pattern() {
-        let mut s = OrientationSessionState::new("SESS-1");
+        let mut s = OrientationSessionState::new_with_threshold("SESS-1", 7);
         for _ in 0..7 {
             s.feed_round(AgentRole::Main);
         }
@@ -297,7 +324,7 @@ mod tests {
 
     #[test]
     fn serde_round_trip_preserves_state() {
-        let mut s = OrientationSessionState::new("SESS-1");
+        let mut s = OrientationSessionState::new_with_threshold("SESS-1", 7);
         for _ in 0..3 {
             s.feed_round(AgentRole::Main);
         }
@@ -312,9 +339,31 @@ mod tests {
     #[test]
     fn threshold_not_persisted_as_magic() {
         // The struct carries the threshold explicitly so persisted state
-        // records which rule version produced it.
-        let s = OrientationSessionState::new("SESS-1");
-        assert_eq!(s.threshold, ORIENTATION_THRESHOLD);
+        // records which rule version produced it. R1: default = 50.
+        let s = OrientationSessionState::new_with_threshold("SESS-1", ORIENTATION_THRESHOLD);
+        assert_eq!(s.threshold, 50);
+    }
+
+    /// R1 (§4.6): `ORZ_ORIENTATION_THRESHOLD` overrides the default 50;
+    /// invalid values fall back to the default.
+    #[test]
+    fn env_threshold_override() {
+        static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+        let _guard = ENV_LOCK.lock().unwrap();
+        unsafe {
+            std::env::set_var(ORIENTATION_THRESHOLD_ENV, "12");
+        }
+        assert_eq!(orientation_threshold_from_env(), 12);
+        let s = OrientationSessionState::new("SESS-ENV");
+        assert_eq!(s.threshold, 12);
+        unsafe {
+            std::env::set_var(ORIENTATION_THRESHOLD_ENV, "not-a-number");
+        }
+        assert_eq!(orientation_threshold_from_env(), ORIENTATION_THRESHOLD);
+        unsafe {
+            std::env::remove_var(ORIENTATION_THRESHOLD_ENV);
+        }
+        assert_eq!(orientation_threshold_from_env(), ORIENTATION_THRESHOLD);
     }
 
     /// Recovery resumes counting from the persisted value (§4.2).

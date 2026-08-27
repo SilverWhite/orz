@@ -262,9 +262,8 @@ mod tests {
 
     fn bash_script() -> Vec<ScriptedResponse> {
         vec![
-            // PLAN-FIRST 阶段 A (2026-08-16): ACP production sessions start
-            // with the first-round plan gate — the script answers it first.
-            plan_write_response(),
+            // THIN-HARNESS-REDESIGN R2a 审查处理 (2026-08-27): plan 门普适
+            // 摘除——首轮直接进 direct 执行面。
             // MECHANICAL-AUDIT-LAYER 审查处理 (2026-08-24): direct 执行面
             // ——模型直接调 search_replace；权限请求在直连调用时到达。
             ScriptedResponse::tool_calls(vec![ToolCall {
@@ -279,55 +278,6 @@ mod tests {
             ScriptedResponse::text("完成（订单已执行）。"),
             ScriptedResponse::text("完成（订单已执行）。"),
         ]
-    }
-
-    fn plan_write_response() -> ScriptedResponse {
-        ScriptedResponse::tool_calls(vec![ToolCall {
-            name: "plan_write".to_string(),
-            arguments: serde_json::json!({
-                "plan": {
-                    "plan_id": "plan-acp-test",
-                    "goal": "运行 dir",
-                    "steps": [
-                        {
-                            "id": "s1",
-                            "goal": "执行任务",
-                            "actions": [
-                                {
-                                    "step_id": "s1",
-                                    "do": "workspace.search_replace",
-                                    "with": {
-                                        "file_path": "a.txt",
-                                        "old_string": "v1",
-                                        "new_string": "v2",
-                                    },
-                                }
-                            ],
-                            "acceptance": "命令已执行",
-                            "evidence": []
-                        },
-                        {
-                            "id": "deliver",
-                            "goal": "递交",
-                            "actions": [
-                                {
-                                    "step_id": "deliver",
-                                    "do": "workspace.search_replace",
-                                    "with": {
-                                        "file_path": "a.txt",
-                                        "old_string": "v1",
-                                        "new_string": "v2",
-                                    },
-                                }
-                            ],
-                            "acceptance": "已递交",
-                            "evidence": []
-                        }
-                    ]
-                }
-            }),
-            call_id: "call-plan".to_string(),
-        }])
     }
 
     async fn run_prompt_until_permission(
@@ -475,11 +425,10 @@ mod tests {
         tokio::task::LocalSet::new()
             .run_until(async {
                 let base = test_dir();
-                // Two identical gate-round texts (the counterexample gate
-                // intercepts the first), chunked by 3 chars each.
+                // Two identical texts (draft + final — the counterexample
+                // gate adds one round), chunked by 3 chars each.
                 let server = Arc::new(AcpServer::with_gateway(Arc::new(
                     FakeProvider::new(vec![
-                        plan_write_response(),
                         ScriptedResponse::text("第一轮回答。"),
                         ScriptedResponse::text("第一轮回答。"),
                     ])
@@ -568,7 +517,6 @@ mod tests {
             .run_until(async {
                 let base = test_dir();
                 let server = scripted_server(vec![
-                    plan_write_response(),
                     ScriptedResponse::text("第一轮回答。"),
                     ScriptedResponse::text("第一轮回答。"),
                     ScriptedResponse::text("第二轮回答。"),

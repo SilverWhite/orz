@@ -37,7 +37,10 @@ pub const NOTES_FACTS_EMPTY: &str = "（无注意事项）";
 /// 「当前步/下一步/待办」——助理层不变量=不理解语义，机械建议可能与主
 /// 模型实际评估冲突；措辞显式声明「后续衔接由主模型自行判断」，仅保留
 /// 回查入口（blackboard_read 分区 + 摘要存档 + 外挂台账路径）。
-pub const MECHANICAL_CONTINUATION_PLACEHOLDER: &str = "（后续衔接由主模型自行判断：可回查 blackboard_read 分区 plan/edits/tool_actions/exec/actions（历史用 epoch 参数）、摘要存档与外挂台账）";
+/// THIN-HARNESS-REDESIGN R2a 审查处理 (P3-2, 2026-08-27)：分区清单与
+/// `build_summary_marker` 的回查行同步补 internal_ret / external_ret
+/// （检索分区 live-only，不进 epoch 归档）。
+pub const MECHANICAL_CONTINUATION_PLACEHOLDER: &str = "（后续衔接由主模型自行判断：可回查 blackboard_read 分区 plan/edits/tool_actions/exec/actions/internal_ret/external_ret（历史 plan epoch 用 epoch 参数；检索分区 live-only）、摘要存档与外挂台账）";
 
 /// Estimated tokens of one summary marker in the kept context. The marker
 /// carries the five slots (up to ~17K chars ≈ 8.5K tokens under the
@@ -424,7 +427,8 @@ pub fn build_summary_marker(
          变动文件路径: {}\n\
          注意事项: {}\n\
          后续衔接: {}\n\
-         回查: blackboard_read（分区 plan / edits / tool_actions / exec / actions；历史 plan epoch 用 epoch 参数）\n\
+         回查: blackboard_read（分区 plan / edits / tool_actions / exec / actions / \
+         internal_ret / external_ret；历史 plan epoch 用 epoch 参数）\n\
          [/前文上下文已压缩]",
         archive_path.display(),
         if plan_epoch > 0 {

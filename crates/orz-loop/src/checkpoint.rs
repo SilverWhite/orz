@@ -587,7 +587,8 @@ mod tests {
 
     #[test]
     fn pending_tracks_attempt_and_identity() {
-        let mut orientation = OrientationSessionState::new("sess-1");
+        // R1 (§4.6)：默认阈值 50——测试用显式 7 保持原触发语义。
+        let mut orientation = OrientationSessionState::new_with_threshold("sess-1", 7);
         for _ in 0..7 {
             orientation.feed_round(AgentRole::Main);
         }

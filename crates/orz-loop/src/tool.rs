@@ -340,6 +340,8 @@ mod tests {
         assert_eq!(targets, vec![PathBuf::from("src/main.rs")]);
     }
 
+    /// Windows 盘符绝对路径语义（Linux 上 `C:\` 是相对路径，行为不同）。
+    #[cfg(windows)]
     #[test]
     fn snapshot_targets_converts_absolute_inside_worktree() {
         let worktree = Path::new(r"C:\ws");
@@ -348,6 +350,8 @@ mod tests {
         assert_eq!(targets, vec![PathBuf::from("src/main.rs")]);
     }
 
+    /// Windows 盘符绝对路径语义（Linux 上 `C:\` 是相对路径，行为不同）。
+    #[cfg(windows)]
     #[test]
     fn snapshot_targets_drops_outside_escapes() {
         let worktree = Path::new(r"C:\ws");

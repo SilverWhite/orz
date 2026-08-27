@@ -140,25 +140,35 @@ pub fn parse_retrieval_text(text: &str) -> (Vec<String>, Vec<String>) {
 
 /// Write the parsed contract into the role's blackboard section
 /// (single-writer discipline; never hold the write guard across an await).
+///
+/// THIN-HARNESS-REDESIGN R2a 审查处理 (2026-08-27, P2-2/P2-3)：每次派发
+/// **全量覆盖**（不再 extend 累积）——分区永远只代表最近一次激活的结果，
+/// 与「每次调用即闭环」生命周期一致，指针摘要的 N 来源/M 结论计数与
+/// 分区内容一一对应；`ledger` 为结构化 ledger 投影（source_id + 标题/URL，
+/// 由派发路径从 committed payload 构建），internal 与 external 分区
+/// 均写（此前 external.source_ledger 从未被填充，R2a 渲染层会恒显
+/// (none)）。
 pub fn write_section(
     role: SubagentRole,
     blackboard: &Arc<SharedBlackboard>,
     response: String,
     docs: Vec<String>,
     sources: Vec<String>,
+    ledger: Vec<String>,
 ) {
     let mut w = blackboard.write();
     match role {
         SubagentRole::InternalRetrieval => {
             let section: &mut InternalRetSection = &mut w.internal_ret;
             section.response = Some(response);
-            section.project_docs.extend(docs);
-            section.source_ledger.extend(sources);
+            section.project_docs = docs;
+            section.source_ledger = ledger;
         }
         SubagentRole::ExternalRetrieval => {
             let section = &mut w.external_ret;
             section.response = Some(response);
-            section.web_sources.extend(sources);
+            section.web_sources = sources;
+            section.source_ledger = ledger;
         }
     }
 }
@@ -221,17 +231,22 @@ mod tests {
         let (docs, sources) =
             parse_retrieval_text("[DOC] design.md\n[DOC] gate.rs\n[SOURCE] docs/index\n检索完成");
         let _ = subagent;
+        let ledger = sources
+            .iter()
+            .map(|s| format!("SRC-001 {s}"))
+            .collect::<Vec<_>>();
         write_section(
             SubagentRole::InternalRetrieval,
             &bb,
             "[DOC] design.md\n[DOC] gate.rs\n[SOURCE] docs/index\n检索完成".to_string(),
             docs,
             sources,
+            ledger,
         );
 
         let r = bb.read();
         assert_eq!(r.internal_ret.project_docs, vec!["design.md", "gate.rs"]);
-        assert_eq!(r.internal_ret.source_ledger, vec!["docs/index"]);
+        assert_eq!(r.internal_ret.source_ledger, vec!["SRC-001 docs/index"]);
         assert!(
             r.internal_ret
                 .response
@@ -248,12 +263,14 @@ mod tests {
         let bb = Arc::new(SharedBlackboard::new());
         let (docs, sources) =
             parse_retrieval_text("[SOURCE] https://example.com/paper\n网页检索完成");
+        let ledger = vec!["SRC-001 https://example.com/paper".to_string()];
         write_section(
             SubagentRole::ExternalRetrieval,
             &bb,
             "[SOURCE] https://example.com/paper\n网页检索完成".to_string(),
             docs,
             sources,
+            ledger.clone(),
         );
 
         let r = bb.read();
@@ -261,8 +278,45 @@ mod tests {
             r.external_ret.web_sources,
             vec!["https://example.com/paper"]
         );
+        // P2-2: external ledger 由派发路径的结构化投影填充（不再恒空）。
+        assert_eq!(r.external_ret.source_ledger, ledger);
         // Internal section untouched.
         assert!(r.internal_ret.project_docs.is_empty());
+    }
+
+    /// THIN-HARNESS-REDESIGN R2a 审查处理 (P2-3)：每次派发全量覆盖——
+    /// 第二次写入替换（而非累积）上次的 response / entries / ledger。
+    #[tokio::test]
+    async fn write_section_overwrites_previous_dispatch() {
+        let bb = Arc::new(SharedBlackboard::new());
+        write_section(
+            SubagentRole::ExternalRetrieval,
+            &bb,
+            "第一轮检索完成".to_string(),
+            Vec::new(),
+            vec!["https://old.example/a".to_string()],
+            vec!["SRC-001 https://old.example/a".to_string()],
+        );
+        write_section(
+            SubagentRole::ExternalRetrieval,
+            &bb,
+            "第二轮检索完成".to_string(),
+            Vec::new(),
+            vec!["https://new.example/b".to_string()],
+            vec!["SRC-002 https://new.example/b".to_string()],
+        );
+        let r = bb.read();
+        assert_eq!(
+            r.external_ret.web_sources,
+            vec!["https://new.example/b"],
+            "entries must be replaced, not accumulated"
+        );
+        assert_eq!(
+            r.external_ret.source_ledger,
+            vec!["SRC-002 https://new.example/b"],
+            "ledger must be replaced, not accumulated"
+        );
+        assert_eq!(r.external_ret.response.as_deref(), Some("第二轮检索完成"));
     }
 
     #[test]

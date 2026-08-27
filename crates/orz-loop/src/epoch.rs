@@ -14,8 +14,8 @@
 use std::path::{Path, PathBuf};
 
 use crate::blackboard::{
-    ActionBoard, ActionResult, EditRecord, EpochSnapshot, ExecSection, PlanSection,
-    ToolActionRecord,
+    ActionBoard, ActionResult, EditRecord, EpochSnapshot, ExecSection, ExternalRetSection,
+    InternalRetSection, PlanSection, ToolActionRecord,
 };
 // 2026-08-19 黑板缓存成本设计（ADR-0010 §14.31）：actions 结果板固定形态行
 // 与 exec 行截断复用 summary.rs 同口径辅助（D1=(c) 已确立的机械语义）。
@@ -504,11 +504,143 @@ pub fn render_section(
         }
         other => {
             format!(
-                "unknown blackboard section: {other} (expected plan|edits|tool_actions|exec|actions|session; \
-                 session 面是 live 会话状态、由 controller 直接渲染，不进归档)"
+                "unknown blackboard section: {other} (expected \
+                 plan|edits|tool_actions|exec|actions|session|internal_ret|external_ret; \
+                 session 面是 live 会话状态、由 controller 直接渲染，不进归档；\
+                 internal_ret / external_ret 是 live 检索分区、不进 epoch 归档)"
             )
         }
     }
+}
+
+/// THIN-HARNESS-REDESIGN R2a (2026-08-27, §4.4): 检索分区条目上限（8K
+/// 字符，与方案 B receipt 点读同口径——用户定档「8K 够用，再多去原文档/
+/// 存档查找」）。指针摘要中「条目上限 8K」即指本上限。
+pub const RETRIEVAL_SECTION_ENTRY_MAX_CHARS: usize = 8_000;
+
+/// THIN-HARNESS-REDESIGN R2a 审查处理 (P3-3, 2026-08-27)：检索分区渲染
+/// **总**上限——8K 是逐条上限，条目数无界时单次 blackboard_read 可能
+/// 回传数百 K（注意力稀释从「注入」转移到「按需拉取」）；总字符上限
+/// 保证一次拉取有界，超限时显式标注省略条数与完整内容去向。
+pub const RETRIEVAL_SECTION_TOTAL_MAX_CHARS: usize = 32_000;
+
+/// Push one render line and account for it in the running total (incl. the
+/// trailing `\n` the final join adds).
+fn push_retrieval_line(lines: &mut Vec<String>, total_chars: &mut usize, line: String) {
+    *total_chars += line.chars().count() + 1;
+    lines.push(line);
+}
+
+/// THIN-HARNESS-REDESIGN R2a (2026-08-27, §4.4): render a live retrieval
+/// partition (`internal_ret` / `external_ret`) for `blackboard_read`.
+/// Live-only — retrieval partitions never enter epoch snapshots (results
+/// ride the journal + `retrieval-results` artifacts), so the controller
+/// rejects `epoch` on these sections before reaching here. Each entry
+/// (response / one source line) is bounded at `RETRIEVAL_SECTION_ENTRY_MAX_CHARS`
+/// with a truncation marker; the whole render is additionally bounded at
+/// `RETRIEVAL_SECTION_TOTAL_MAX_CHARS` with an omitted-count note; the
+/// full text stays in the journal archive.
+pub fn render_retrieval_section(
+    section: &str,
+    internal: &InternalRetSection,
+    external: &ExternalRetSection,
+) -> String {
+    let (label, response, entries, ledger) = match section {
+        "internal_ret" => (
+            "internal_ret",
+            internal.response.as_deref(),
+            internal.project_docs.as_slice(),
+            internal.source_ledger.as_slice(),
+        ),
+        "external_ret" => (
+            "external_ret",
+            external.response.as_deref(),
+            external.web_sources.as_slice(),
+            external.source_ledger.as_slice(),
+        ),
+        _ => {
+            return format!(
+                "unknown retrieval section: {section} (expected internal_ret|external_ret)"
+            );
+        }
+    };
+    let mut lines: Vec<String> = Vec::new();
+    let mut total_chars: usize = 0;
+    push_retrieval_line(&mut lines, &mut total_chars, format!("== {label} =="));
+    match response {
+        Some(text) if !text.trim().is_empty() => {
+            let bounded = truncate_chars(text, RETRIEVAL_SECTION_ENTRY_MAX_CHARS);
+            if bounded != text {
+                push_retrieval_line(
+                    &mut lines,
+                    &mut total_chars,
+                    format!(
+                        "[response: 超过 {RETRIEVAL_SECTION_ENTRY_MAX_CHARS} 字符上限，已截断；\
+                     完整内容见 journal retrieval-results 存档]"
+                    ),
+                );
+            }
+            push_retrieval_line(&mut lines, &mut total_chars, bounded);
+        }
+        _ => push_retrieval_line(&mut lines, &mut total_chars, "(no response)".to_string()),
+    }
+    push_retrieval_line(&mut lines, &mut total_chars, "== entries ==".to_string());
+    if entries.is_empty() {
+        push_retrieval_line(&mut lines, &mut total_chars, "(none)".to_string());
+    } else {
+        let mut omitted = 0usize;
+        for (i, entry) in entries.iter().enumerate() {
+            let line = format!(
+                "- {}",
+                truncate_chars(entry, RETRIEVAL_SECTION_ENTRY_MAX_CHARS)
+            );
+            if total_chars + line.chars().count() + 1 > RETRIEVAL_SECTION_TOTAL_MAX_CHARS {
+                omitted = entries.len() - i;
+                break;
+            }
+            push_retrieval_line(&mut lines, &mut total_chars, line);
+        }
+        if omitted > 0 {
+            push_retrieval_line(
+                &mut lines,
+                &mut total_chars,
+                format!(
+                    "…已省略 {omitted} 条（渲染达总上限 \
+                 {RETRIEVAL_SECTION_TOTAL_MAX_CHARS}；完整内容见 journal \
+                 retrieval-results 存档）"
+                ),
+            );
+        }
+    }
+    push_retrieval_line(&mut lines, &mut total_chars, "== ledger ==".to_string());
+    if ledger.is_empty() {
+        push_retrieval_line(&mut lines, &mut total_chars, "(none)".to_string());
+    } else {
+        let mut omitted = 0usize;
+        for (i, entry) in ledger.iter().enumerate() {
+            let line = format!(
+                "- {}",
+                truncate_chars(entry, RETRIEVAL_SECTION_ENTRY_MAX_CHARS)
+            );
+            if total_chars + line.chars().count() + 1 > RETRIEVAL_SECTION_TOTAL_MAX_CHARS {
+                omitted = ledger.len() - i;
+                break;
+            }
+            push_retrieval_line(&mut lines, &mut total_chars, line);
+        }
+        if omitted > 0 {
+            push_retrieval_line(
+                &mut lines,
+                &mut total_chars,
+                format!(
+                    "…已省略 {omitted} 条（渲染达总上限 \
+                 {RETRIEVAL_SECTION_TOTAL_MAX_CHARS}；完整内容见 journal \
+                 retrieval-results 存档）"
+                ),
+            );
+        }
+    }
+    lines.join("\n")
 }
 
 /// 方案 B 点读上限（2026-08-19 用户定档：8K 够用，再多去原文档/存档查找）；
@@ -616,6 +748,111 @@ mod tests {
     use super::*;
     use crate::blackboard::{ActionBoard, ActionResult, PlanStep, SharedBlackboard, StepStatus};
 
+    /// THIN-HARNESS-REDESIGN R2a (§4.4): 检索分区渲染——response /
+    /// entries / ledger 三块，内部与外部分区各归其位；未知分区显式报错。
+    #[test]
+    fn render_retrieval_section_serves_internal_and_external() {
+        let internal = InternalRetSection {
+            project_docs: vec!["design.md".to_string(), "gate.rs".to_string()],
+            source_ledger: vec!["docs/index".to_string()],
+            response: Some("检索完成\n[DOC] design.md".to_string()),
+        };
+        let external = ExternalRetSection {
+            web_sources: vec!["https://example.com/paper".to_string()],
+            source_ledger: vec!["SRC-001 https://example.com/paper".to_string()],
+            response: Some("网页检索完成".to_string()),
+        };
+
+        let internal_text = render_retrieval_section("internal_ret", &internal, &external);
+        assert!(
+            internal_text.contains("== internal_ret =="),
+            "{internal_text}"
+        );
+        assert!(internal_text.contains("检索完成"), "{internal_text}");
+        assert!(internal_text.contains("- design.md"), "{internal_text}");
+        assert!(internal_text.contains("- docs/index"), "{internal_text}");
+        assert!(!internal_text.contains("example.com"), "{internal_text}");
+
+        let external_text = render_retrieval_section("external_ret", &internal, &external);
+        assert!(
+            external_text.contains("== external_ret =="),
+            "{external_text}"
+        );
+        assert!(external_text.contains("网页检索完成"), "{external_text}");
+        assert!(
+            external_text.contains("https://example.com/paper"),
+            "{external_text}"
+        );
+        assert!(!external_text.contains("design.md"), "{external_text}");
+
+        let unknown = render_retrieval_section("bogus", &internal, &external);
+        assert!(
+            unknown.contains("unknown retrieval section: bogus"),
+            "{unknown}"
+        );
+    }
+
+    /// THIN-HARNESS-REDESIGN R2a (§4.4): response 超过 8K 条目上限时截断
+    /// 并显式标注（完整内容留在 journal / retrieval-results 存档）；空
+    /// 分区渲染 (no response) / (none)。
+    #[test]
+    fn render_retrieval_section_caps_response_at_8k() {
+        let long_response = "x".repeat(RETRIEVAL_SECTION_ENTRY_MAX_CHARS + 100);
+        let internal = InternalRetSection {
+            project_docs: Vec::new(),
+            source_ledger: Vec::new(),
+            response: Some(long_response.clone()),
+        };
+        let external = ExternalRetSection::default();
+        let text = render_retrieval_section("internal_ret", &internal, &external);
+        assert!(
+            text.contains("超过 8000 字符上限，已截断"),
+            "truncation marker: {text}"
+        );
+        assert!(
+            !text.contains(&long_response),
+            "full response must not render: {text}"
+        );
+        assert!(text.contains("(none)"), "{text}");
+
+        let empty_internal = InternalRetSection::default();
+        let empty = render_retrieval_section("internal_ret", &empty_internal, &external);
+        assert!(empty.contains("(no response)"), "{empty}");
+    }
+
+    /// THIN-HARNESS-REDESIGN R2a 审查处理 (P3-3)：渲染总上限——条目数
+    /// 无界时单次拉取不超 `RETRIEVAL_SECTION_TOTAL_MAX_CHARS`，超限显式
+    /// 标注省略条数（完整内容留在 journal 存档）。
+    #[test]
+    fn render_retrieval_section_caps_total_size() {
+        // 每条目 900 字符；总上限 32K → 大约 30 条后截断（加上 response/
+        // 头行预算），不会渲染全部 100 条。
+        let many_entries: Vec<String> = (0..100)
+            .map(|i| format!("https://example.com/source-{i:03}-{}", "x".repeat(860)))
+            .collect();
+        let internal = InternalRetSection {
+            project_docs: many_entries.clone(),
+            source_ledger: many_entries.clone(),
+            response: Some("检索完成".to_string()),
+        };
+        let external = ExternalRetSection::default();
+        let text = render_retrieval_section("internal_ret", &internal, &external);
+
+        assert!(
+            text.chars().count() <= RETRIEVAL_SECTION_TOTAL_MAX_CHARS + 200,
+            "total render must stay bounded ({} chars)",
+            text.chars().count()
+        );
+        assert!(
+            text.contains("已省略"),
+            "omitted-count note present: {text}"
+        );
+        assert!(
+            !text.contains("source-099"),
+            "late entries must not render: {text}"
+        );
+    }
+
     #[test]
     fn render_actions_section_shows_registration_order_and_results() {
         let mut board = ActionBoard::default();
@@ -623,12 +860,14 @@ mod tests {
             name: "workspace.read_file".into(),
             description: "read a file".into(),
             parameters: serde_json::json!({"required": ["target_file"]}),
+            target_policy: crate::entities::TargetPolicy::None,
         }]);
         board
             .write_order(crate::blackboard::ActionOrder {
                 order_id: "ORD-000001".into(),
                 action: "workspace.read_file".into(),
                 arguments: serde_json::json!({"target_file": "a.txt"}),
+                target: None,
                 step_id: None,
                 round: 0,
                 plan_epoch: 1,
@@ -1259,6 +1498,7 @@ mod tests {
             name: "workspace.read_file".into(),
             description: "read".into(),
             parameters: serde_json::json!({"required": ["target_file"]}),
+            target_policy: crate::entities::TargetPolicy::None,
         }]);
         board.push_result(ActionResult {
             order_id: "ORD-B1".into(),

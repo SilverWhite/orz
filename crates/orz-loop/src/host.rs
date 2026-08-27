@@ -89,6 +89,16 @@ pub struct PolicyDenial {
     pub reason: String,
 }
 
+/// R2 半助理层：结构化工具错误类别（映射自 `ToolError`，供失败诊断
+/// 签名词典消费——P5：结构化字段，不承载自由文本）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ToolErrorKind {
+    NotFound,
+    Timeout,
+    ExecutionFailed,
+}
+
 /// Result returned by a tool invocation.
 #[derive(Debug, Clone, Default)]
 pub struct ToolResult {
@@ -127,6 +137,10 @@ pub struct ToolResult {
     /// availability). The console adapter classifies policy refusals ONLY
     /// from this field — the old stable-output-prefix judgment is retired.
     pub policy_denial: Option<PolicyDenial>,
+    /// R2 半助理层：调用物/工具结构化错误类别（`run_host_tool` 捕获
+    /// `ToolError` 时填充；成功调用为 `None`）。失败诊断据此匹配
+    /// `tool_not_found` 等签名，不做文本子串判定。
+    pub tool_error_kind: Option<ToolErrorKind>,
 }
 
 /// Lightweight error from tool execution.

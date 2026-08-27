@@ -207,7 +207,7 @@ pub struct ExecSection {
 }
 
 /// Internal retrieval subagent writes: project docs, source ledger.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct InternalRetSection {
     pub project_docs: Vec<String>,
     pub source_ledger: Vec<String>,
@@ -215,7 +215,7 @@ pub struct InternalRetSection {
 }
 
 /// External retrieval subagent writes: web sources, source ledger.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ExternalRetSection {
     pub web_sources: Vec<String>,
     pub source_ledger: Vec<String>,
@@ -265,6 +265,10 @@ pub struct ActionRegistration {
     pub description: String,
     /// 输入契约的最小参数提示投影（由 `console::ServiceRegistry` 生成）。
     pub parameters: serde_json::Value,
+    /// R2 服务调用形态收敛：实体级 target 策略（None=全局动作省略 target；
+    /// File/Process/Environment/AnyEntity=订单必须携带对应实体 id）。
+    #[serde(default)]
+    pub target_policy: crate::entities::TargetPolicy,
 }
 
 /// 动作栏订单（v0.5 操作台模型）：模型写、写无副作用；发放后单槽清空。
@@ -273,6 +277,10 @@ pub struct ActionOrder {
     pub order_id: String,
     pub action: String,
     pub arguments: serde_json::Value,
+    /// R2 服务调用形态收敛：动作作用对象实体 id（实体级 target；无作用
+    /// 对象的全局动作省略）。由注册表 target_policy 机械校验。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub target: Option<String>,
     /// PLAN-FIRST 阶段 C (2026-08-16, ADR-0010 §14.17⑱): 订单绑定的计划
     /// 步骤 id（设计 §5：ActionOrder 增 step_id；Schema/事件/verifier 先行，
     /// 再接线 producer）。None = 无计划在案（直接订单不绑步骤）。
@@ -396,6 +404,12 @@ pub struct Blackboard {
     /// 操作台动作栏三板块（v0.5；P0-C orz 内嵌集成 S1）。
     #[serde(default)]
     pub actions: ActionBoard,
+    /// R2 半助理层实体状态分区（process/file/environment；半助理层执行
+    /// 工具时登记/更新，模型经 `blackboard_read section=entities` 按需
+    /// 点读——不新增只读工具）。live-only：不进 epoch 快照（同检索分区
+    /// 纪律，随 run 生命周期）。
+    #[serde(default)]
+    pub entities: crate::entities::EntityRegistry,
 }
 
 impl Blackboard {
@@ -726,6 +740,7 @@ mod tests {
             order_id: "ORD-1".into(),
             action: "workspace.read_file".into(),
             arguments: serde_json::json!({"path": "a.txt"}),
+            target: None,
             step_id: None,
             round: 1,
             plan_epoch: 1,
@@ -750,6 +765,7 @@ mod tests {
                         order_id: "ORD-2".into(),
                         action: "workspace.list_dir".into(),
                         arguments: serde_json::json!({"path": "."}),
+                        target: None,
                         step_id: None,
                         round: 2,
                         plan_epoch: 1,
@@ -767,6 +783,7 @@ mod tests {
             name: "workspace.read_file".into(),
             description: "read a file".into(),
             parameters: serde_json::json!({"required": ["path"]}),
+            target_policy: crate::entities::TargetPolicy::None,
         }]);
         for i in 0..(ActionBoard::RESULTS_MAX + 5) {
             board.push_result(ActionResult {
@@ -800,12 +817,14 @@ mod tests {
             name: "workspace.read_file".into(),
             description: "read a file".into(),
             parameters: serde_json::json!({}),
+            target_policy: crate::entities::TargetPolicy::None,
         }]);
         bb.actions
             .write_order(ActionOrder {
                 order_id: "ORD-1".into(),
                 action: "workspace.read_file".into(),
                 arguments: serde_json::json!({"path": "a.txt"}),
+                target: None,
                 step_id: None,
                 round: 1,
                 plan_epoch: 1,

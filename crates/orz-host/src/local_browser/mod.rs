@@ -1256,6 +1256,8 @@ pub(crate) mod tests {
         assert!(err.to_string().contains("browser unavailable"), "{err}");
     }
 
+    /// Windows 盘符路径语义（Linux 上 `C:\` 是相对路径，行为不同）。
+    #[cfg(windows)]
     #[test]
     fn profile_dir_layout_is_gsa_scoped() {
         let dir =

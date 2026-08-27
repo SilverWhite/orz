@@ -104,6 +104,13 @@ pub const CODE_NOT_FOUND: &str = "not_found";
 /// P0-C S4 (2026-08-16)：tool-round 预算不足——发放前零执行拒绝
 /// （脚本长度/直接动作 1 单位 > 剩余预算），显式失败码、不消耗预算。
 pub const CODE_BUDGET_INSUFFICIENT: &str = "budget_insufficient";
+/// R2 服务调用形态收敛：实体级 target 缺失/违规（§4.5）。
+pub const CODE_TARGET_REQUIRED: &str = "target_required";
+pub const CODE_TARGET_NOT_ALLOWED: &str = "target_not_allowed";
+/// R2 target↔data 一致性校验（2026-08-28 全面审查处理）：有作用对象动作
+/// 的 target 与参数路径必须一致（或二选一）；域前缀不符/双写不一致 →
+/// `step=target` / 本码 fail-closed 拒单。
+pub const CODE_TARGET_MISMATCH: &str = "target_mismatch";
 
 /// 基础动作集响应契约：生产 host 工具当前统一返回文本输出
 /// （`ToolResult.structured` 接缝仅 web_search 使用；console 收口为
@@ -130,6 +137,7 @@ pub fn default_service_registry() -> ServiceRegistry {
             target_tool: Some("read_file".to_string()),
             kind: ActionKind::Host,
             bundle: ActionBundle::ALL,
+            target_policy: crate::entities::TargetPolicy::File,
             input_schema: json!({
                 "type": "object",
                 "properties": {
@@ -159,6 +167,7 @@ pub fn default_service_registry() -> ServiceRegistry {
             target_tool: Some("list_dir".to_string()),
             kind: ActionKind::Host,
             bundle: ActionBundle::ALL,
+            target_policy: crate::entities::TargetPolicy::File,
             input_schema: json!({
                 "type": "object",
                 "properties": {
@@ -178,6 +187,10 @@ pub fn default_service_registry() -> ServiceRegistry {
             target_tool: Some("grep".to_string()),
             kind: ActionKind::Host,
             bundle: ActionBundle::ALL,
+            // 2026-08-28 全面审查处理：grep 的 path 可选（无 path=工作区级
+            // 搜索）→ FileOptional（有 target 时有作用对象；无 target 且
+            // 无 path 时省略，避免强制编造 target）。
+            target_policy: crate::entities::TargetPolicy::FileOptional,
             input_schema: json!({
                 "type": "object",
                 "properties": {
@@ -230,6 +243,7 @@ pub fn default_service_registry() -> ServiceRegistry {
             target_tool: Some("search_replace".to_string()),
             kind: ActionKind::Host,
             bundle: ActionBundle::READ_WRITE,
+            target_policy: crate::entities::TargetPolicy::File,
             input_schema: json!({
                 "type": "object",
                 "properties": {
@@ -285,6 +299,7 @@ pub fn default_service_registry() -> ServiceRegistry {
             target_tool: Some("run_tests".to_string()),
             kind: ActionKind::Host,
             bundle: ActionBundle::READ_WRITE,
+            target_policy: crate::entities::TargetPolicy::None,
             input_schema: json!({
                 "type": "object",
                 "properties": {},
@@ -309,6 +324,7 @@ pub fn default_service_registry() -> ServiceRegistry {
             target_tool: Some("run_terminal_cmd".to_string()),
             kind: ActionKind::Host,
             bundle: ActionBundle::READ_WRITE,
+            target_policy: crate::entities::TargetPolicy::None,
             input_schema: json!({
                 "type": "object",
                 "properties": {
@@ -352,6 +368,7 @@ pub fn default_service_registry() -> ServiceRegistry {
             target_tool: Some("project_doc_index".to_string()),
             kind: ActionKind::Host,
             bundle: ActionBundle::ALL,
+            target_policy: crate::entities::TargetPolicy::None,
             input_schema: json!({
                 "type": "object",
                 "properties": {
@@ -383,6 +400,7 @@ pub fn default_service_registry() -> ServiceRegistry {
             target_tool: None,
             kind: ActionKind::TraceRead,
             bundle: ActionBundle::ALL,
+            target_policy: crate::entities::TargetPolicy::None,
             input_schema: json!({
                 "type": "object",
                 "properties": {
@@ -415,6 +433,39 @@ pub fn default_service_registry() -> ServiceRegistry {
                 "additionalProperties": false,
             }),
         },
+        // R2 半助理层（THIN-HARNESS-REDESIGN V2 §4.2/§4.5）：失败诊断
+        // 服务——执行失败由半助理层自动派发写入失败对象实体
+        // （last_diagnostic）；本服务按 target=实体 id 点读最近诊断
+        // （极简记录 ≤2KB + 全量日志指针），无诊断返回 null。内部动作、
+        // 无 host 目标；target=任意实体（AnyEntity，不设默认）。
+        ActionSpec {
+            name: "diagnostics.diagnose".to_string(),
+            description: "只读诊断服务：按 target=实体 id 点读该实体的最近失败诊断\
+                 （半助理层在命令执行失败时自动派发写入；无诊断返回空）。\
+                 极简记录 ≤2KB：退出码 + 结构化签名要点 + 有界原始尾部 + 日志指针。"
+                .to_string(),
+            target_tool: None,
+            kind: ActionKind::Diagnose,
+            bundle: ActionBundle::ALL,
+            target_policy: crate::entities::TargetPolicy::AnyEntity,
+            input_schema: json!({
+                "type": "object",
+                "properties": {},
+                "additionalProperties": false,
+            }),
+            response_schema: json!({
+                "type": "object",
+                "properties": {
+                    "entity_id": {"type": "string"},
+                    "diagnostic": {
+                        "type": ["object", "null"],
+                        "description": "失败对象实体的最近诊断记录（≤2KB）。",
+                    },
+                },
+                "required": ["entity_id", "diagnostic"],
+                "additionalProperties": false,
+            }),
+        },
         // P0-C S3：PTC 线性脚本服务——步骤 = 注册动作实例 + `$ref` 数据引用；
         // 逐行契约校验 + trace；任一步 fail-closed（POC `script_runner.py`
         // 同构；上限 8 步 / 30s 墙钟 / 4 MiB 累计响应）。
@@ -426,6 +477,7 @@ pub fn default_service_registry() -> ServiceRegistry {
             target_tool: None,
             kind: ActionKind::RunScript,
             bundle: ActionBundle::ALL,
+            target_policy: crate::entities::TargetPolicy::None,
             input_schema: json!({
                 "type": "object",
                 "properties": {
@@ -613,6 +665,9 @@ pub enum ActionKind {
     /// （POC `workspace.run_script` 同构；`$ref` 数据引用、逐行契约 +
     /// trace、fail-closed）。
     RunScript,
+    /// R2 半助理层诊断服务：按 target=实体 id 点读该实体的最近失败诊断
+    /// （执行失败自动派发写入；无诊断返回空）。内部动作、无 host 目标。
+    Diagnose,
 }
 
 /// Profile/Bundle 分区（P0-C S3；DeepSeek Harness 借鉴，只借设计）：
@@ -674,6 +729,12 @@ pub struct ActionSpec {
     /// P0-C S3：Profile/Bundle 分区（按会话场景加载的按钮组）。
     #[serde(default)]
     pub bundle: ActionBundle,
+    /// R2 服务调用形态收敛：动作作用对象定级（实体级 target 策略）。
+    /// `None`（默认）= 全局动作，订单必须省略 target；`Some(kind)` /
+    /// `AnyEntity` = 必须携带对应实体 id（`diagnostics.diagnose` 用
+    /// `AnyEntity`——target=失败对象实体，域不定）。
+    #[serde(default)]
+    pub target_policy: crate::entities::TargetPolicy,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -745,6 +806,14 @@ impl ServiceRegistry {
                 spec.name, spec.kind, existing.name
             )));
         }
+        if spec.kind == ActionKind::Diagnose
+            && let Some(existing) = self.actions.values().find(|s| s.kind == spec.kind)
+        {
+            return Err(RegistryError::Duplicate(format!(
+                "{}: {:?} internal action already registered as {}",
+                spec.name, spec.kind, existing.name
+            )));
+        }
         if !(spec.bundle.standard || spec.bundle.read_only || spec.bundle.benchmark) {
             return Err(RegistryError::InvalidSchema {
                 name: spec.name.clone(),
@@ -789,6 +858,7 @@ impl ServiceRegistry {
                 name: spec.name.clone(),
                 description: spec.description.clone(),
                 parameters: minimal_parameter_hints(&spec.input_schema),
+                target_policy: spec.target_policy,
             })
             .collect()
     }
@@ -825,6 +895,7 @@ impl ServiceRegistry {
                 name: spec.name.clone(),
                 description: spec.description.clone(),
                 parameters: minimal_parameter_hints(&spec.input_schema),
+                target_policy: spec.target_policy,
             })
             .collect()
     }
@@ -873,6 +944,12 @@ pub enum ExecuteError {
         message: String,
         detail: Option<Value>,
     },
+    /// R2：宿主结构化超时信号——独立于 ExecutionFailed，保留
+    /// `tool_timeout` 错误码并携带失败诊断（半助理层自动派发）。
+    TimedOut {
+        message: String,
+        detail: Option<Value>,
+    },
 }
 
 impl std::fmt::Display for ExecuteError {
@@ -883,6 +960,9 @@ impl std::fmt::Display for ExecuteError {
             }
             ExecuteError::PolicyDenied { message, .. } => {
                 write!(f, "policy denied: {message}")
+            }
+            ExecuteError::TimedOut { message, .. } => {
+                write!(f, "timed out: {message}")
             }
         }
     }
@@ -1016,6 +1096,7 @@ pub async fn issue_action<E: ActionExecutor + ?Sized>(
         trace,
         call_id,
         None,
+        None,
         &mut consumed,
     )
     .await
@@ -1034,6 +1115,9 @@ pub(crate) async fn issue_action_inner<E: ActionExecutor + ?Sized>(
     trace: &mut Trace,
     call_id: &str,
     timeout: Option<Duration>,
+    // R2：实体注册表快照（`diagnostics.diagnose` 点读用；控制器发放前
+    // 短锁克隆，锁不跨 await）。None = 无实体面（测试/fake 执行器）。
+    entities: Option<&crate::entities::EntityRegistry>,
     consumed: &mut u32,
 ) -> Result<Value, ConsoleError> {
     let spec = registry.get(&order.action).ok_or_else(|| ConsoleError {
@@ -1048,16 +1132,6 @@ pub(crate) async fn issue_action_inner<E: ActionExecutor + ?Sized>(
         .validators
         .get(&order.action)
         .expect("registry invariant: every registered action has cached validators");
-    validate_with(input_validator, &order.arguments).map_err(|msg| ConsoleError {
-        step: STEP_CONTRACT,
-        code: CODE_INVALID_ARGUMENTS,
-        message: format!("{}: {msg}", spec.name),
-        upstream: Some(json!({
-            "action": spec.name,
-            "arguments": order.arguments,
-        })),
-    })?;
-    trace.add(STEP_CONTRACT, Some(&order.action), true, None, None, None);
 
     match spec.kind {
         ActionKind::Host => {
@@ -1067,17 +1141,41 @@ pub(crate) async fn issue_action_inner<E: ActionExecutor + ?Sized>(
                 message: format!("{}: host action without target tool", spec.name),
                 upstream: Some(json!({ "action": spec.name })),
             })?;
+            // R2 服务调用形态收敛：实体级 target 校验——有作用对象的
+            // 动作必须携带 target 或等价参数路径；全局动作必须省略
+            // target。2026-08-28 全面审查处理：先解析（target↔参数二选
+            // 一 + 双写一致性校验 + 域前缀校验），再用解析后的参数执行。
+            let (resolved_target, resolved_arguments) = resolve_file_target(spec, order)?;
+            validate_target_policy(spec, resolved_target.as_deref())?;
             trace.add(
                 STEP_TARGET,
                 Some(&order.action),
                 true,
                 None,
-                Some(format!("resolved target tool: {target_tool}")),
-                Some(json!({ "target_tool": target_tool })),
+                Some(format!(
+                    "resolved target tool: {target_tool} target={}",
+                    resolved_target.as_deref().unwrap_or("(none)")
+                )),
+                Some(json!({
+                    "target_tool": target_tool,
+                    "target": resolved_target,
+                    "path_key": file_path_key(&spec.name),
+                })),
             );
+            // 契约校验在 target 解析之后（注入/生成后的参数面才是执行面）。
+            validate_with(input_validator, &resolved_arguments).map_err(|msg| ConsoleError {
+                step: STEP_CONTRACT,
+                code: CODE_INVALID_ARGUMENTS,
+                message: format!("{}: {msg}", spec.name),
+                upstream: Some(json!({
+                    "action": spec.name,
+                    "arguments": resolved_arguments,
+                })),
+            })?;
+            trace.add(STEP_CONTRACT, Some(&order.action), true, None, None, None);
 
             let result = match executor
-                .execute(target_tool, &order.arguments, call_id, timeout)
+                .execute(target_tool, &resolved_arguments, call_id, timeout)
                 .await
             {
                 Ok(result) => {
@@ -1090,6 +1188,12 @@ pub(crate) async fn issue_action_inner<E: ActionExecutor + ?Sized>(
                         ExecuteError::ExecutionFailed { message, detail } => ConsoleError {
                             step: STEP_EXECUTE,
                             code: CODE_EXECUTION_FAILED,
+                            message,
+                            upstream: Some(execution_upstream(&spec.name, target_tool, detail)),
+                        },
+                        ExecuteError::TimedOut { message, detail } => ConsoleError {
+                            step: STEP_EXECUTE,
+                            code: CODE_TOOL_TIMEOUT,
                             message,
                             upstream: Some(execution_upstream(&spec.name, target_tool, detail)),
                         },
@@ -1173,7 +1277,64 @@ pub(crate) async fn issue_action_inner<E: ActionExecutor + ?Sized>(
 
             Ok(response)
         }
+        ActionKind::Diagnose => {
+            validate_with(input_validator, &order.arguments).map_err(|msg| ConsoleError {
+                step: STEP_CONTRACT,
+                code: CODE_INVALID_ARGUMENTS,
+                message: format!("{}: {msg}", spec.name),
+                upstream: Some(json!({
+                    "action": spec.name,
+                    "arguments": order.arguments,
+                })),
+            })?;
+            trace.add(STEP_CONTRACT, Some(&order.action), true, None, None, None);
+            validate_target_policy(spec, order.target.as_deref())?;
+            let entity_id = order.target.clone().unwrap_or_default();
+            let entities = entities.ok_or_else(|| ConsoleError {
+                step: STEP_EXECUTE,
+                code: CODE_INTERNAL_ERROR,
+                message: "diagnostics.diagnose: entity registry unavailable".to_string(),
+                upstream: Some(json!({ "action": spec.name })),
+            })?;
+            *consumed += 1;
+            let diagnostic = entities
+                .get(&entity_id)
+                .and_then(|e| e.last_diagnostic.clone());
+            trace.add(
+                STEP_EXECUTE,
+                Some(&order.action),
+                true,
+                None,
+                Some(format!("read diagnostic for entity {entity_id}")),
+                Some(json!({ "entity_id": entity_id, "has_diagnostic": diagnostic.is_some() })),
+            );
+            let response = json!({
+                "entity_id": entity_id,
+                "diagnostic": diagnostic,
+            });
+            validate_with(response_validator, &response).map_err(|msg| ConsoleError {
+                step: STEP_VERIFY,
+                code: CODE_INVALID_RESPONSE,
+                message: format!("{}: response failed verification: {msg}", spec.name),
+                upstream: Some(json!({
+                    "action": spec.name,
+                    "entity_id": entity_id,
+                })),
+            })?;
+            trace.add(STEP_VERIFY, Some(&order.action), true, None, None, None);
+            Ok(response)
+        }
         ActionKind::TraceRead => {
+            validate_with(input_validator, &order.arguments).map_err(|msg| ConsoleError {
+                step: STEP_CONTRACT,
+                code: CODE_INVALID_ARGUMENTS,
+                message: format!("{}: {msg}", spec.name),
+                upstream: Some(json!({
+                    "action": spec.name,
+                    "arguments": order.arguments,
+                })),
+            })?;
+            trace.add(STEP_CONTRACT, Some(&order.action), true, None, None, None);
             let store = traces.ok_or_else(|| ConsoleError {
                 step: STEP_REGISTRY,
                 code: CODE_TRACE_UNAVAILABLE,
@@ -1233,6 +1394,16 @@ pub(crate) async fn issue_action_inner<E: ActionExecutor + ?Sized>(
             Ok(response)
         }
         ActionKind::RunScript => {
+            validate_with(input_validator, &order.arguments).map_err(|msg| ConsoleError {
+                step: STEP_CONTRACT,
+                code: CODE_INVALID_ARGUMENTS,
+                message: format!("{}: {msg}", spec.name),
+                upstream: Some(json!({
+                    "action": spec.name,
+                    "arguments": order.arguments,
+                })),
+            })?;
+            trace.add(STEP_CONTRACT, Some(&order.action), true, None, None, None);
             let response = run_script(
                 registry,
                 executor,
@@ -1284,6 +1455,8 @@ pub(crate) struct ScriptStepMeta {
     action: String,
     arguments: Value,
     name: Option<String>,
+    /// R2 实体级 target（脚本步骤可选；发放时按注册表 target_policy 校验）。
+    target: Option<String>,
 }
 
 /// JSON Schema 的 `type` 关键字 → 类型名列表（string 或 array）。
@@ -1520,6 +1693,11 @@ pub(crate) fn static_validate_script(
             action,
             arguments,
             name,
+            target: step
+                .get("target")
+                .and_then(Value::as_str)
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty()),
         });
     }
     Ok(steps)
@@ -1653,6 +1831,7 @@ async fn run_script_with_limits<E: ActionExecutor + ?Sized>(
             order_id: step_call_id.clone(),
             action: meta.action.clone(),
             arguments,
+            target: meta.target.clone(),
             step_id: None,
             round: 0,
             plan_epoch: 0,
@@ -1667,6 +1846,7 @@ async fn run_script_with_limits<E: ActionExecutor + ?Sized>(
             &step_order,
             trace,
             &step_call_id,
+            None,
             None,
             consumed,
         ))
@@ -1803,11 +1983,146 @@ fn execution_upstream(action: &str, target_tool: &str, detail: Option<Value>) ->
     Value::Object(map)
 }
 
+/// R2 实体级 target 校验（§4.5 用户裁决 + 2026-08-28 全面审查处理定案）：
+/// 有作用对象的动作必须携带 target 或等价参数路径（`resolve_file_target`
+/// 已自动生成）；全局动作必须省略 target；FileOptional（grep 无 path）可
+/// 省略。`target` 为解析后的 target（可能由参数路径自动生成）。
+fn validate_target_policy(spec: &ActionSpec, target: Option<&str>) -> Result<(), ConsoleError> {
+    use crate::entities::TargetPolicy;
+    match (spec.target_policy, target) {
+        (TargetPolicy::None, Some(_)) => Err(ConsoleError {
+            step: STEP_TARGET,
+            code: CODE_TARGET_NOT_ALLOWED,
+            message: format!(
+                "{}: global action has no action object — omit `target`",
+                spec.name
+            ),
+            upstream: Some(json!({
+                "action": spec.name,
+                "target": target,
+            })),
+        }),
+        (TargetPolicy::None, None) => Ok(()),
+        (TargetPolicy::FileOptional, None) => Ok(()),
+        (policy, None) => Err(ConsoleError {
+            step: STEP_TARGET,
+            code: CODE_TARGET_REQUIRED,
+            message: format!(
+                "{}: action requires an entity-level target ({policy:?}) — supply `target` \
+                 (entity id, e.g. file:src/main.rs) or the path argument",
+                spec.name
+            ),
+            upstream: Some(json!({
+                "action": spec.name,
+                "target_policy": policy,
+            })),
+        }),
+        (_, Some(_)) => Ok(()),
+    }
+}
+
+/// File/FileOptional 动作的参数路径字段（显式映射；与注册表输入契约同步）。
+fn file_path_key(action: &str) -> Option<&'static str> {
+    match action {
+        "workspace.read_file" => Some("target_file"),
+        "workspace.search_replace" => Some("file_path"),
+        "workspace.grep" => Some("path"),
+        "workspace.list_dir" => Some("target_directory"),
+        _ => None,
+    }
+}
+
+/// R2 target 与 data 路径关系（2026-08-28 全面审查处理定案）：**二选一、
+/// 双写必须一致（fail-closed）**。仅 target → 从实体 id 解析路径注入参数
+/// （模型只需写 target）；仅参数路径 → 自动生成 target（PTC 脚本向后
+/// 兼容）；双写 → 归一化比较、不一致拒单（`target_mismatch`）；target 域
+/// 前缀与策略不符（如 File 动作带 `process:`）同样拒单。返回 `(解析后的
+/// target, 合并后的 arguments)`；全局动作原样透传。
+fn resolve_file_target(
+    spec: &ActionSpec,
+    order: &ActionOrder,
+) -> Result<(Option<String>, Value), ConsoleError> {
+    use crate::entities::TargetPolicy;
+    if !matches!(
+        spec.target_policy,
+        TargetPolicy::File | TargetPolicy::FileOptional
+    ) {
+        return Ok((order.target.clone(), order.arguments.clone()));
+    }
+    let Some(path_key) = file_path_key(&spec.name) else {
+        return Err(ConsoleError {
+            step: STEP_TARGET,
+            code: CODE_INTERNAL_ERROR,
+            message: format!(
+                "{}: file-domain action without a known path argument mapping",
+                spec.name
+            ),
+            upstream: Some(json!({ "action": spec.name })),
+        });
+    };
+    let target = order.target.clone();
+    let arg_path = order
+        .arguments
+        .get(path_key)
+        .and_then(Value::as_str)
+        .map(crate::entities::normalize_entity_path);
+    let target_for_err = order.target.clone();
+    let arg_path_for_err = arg_path.clone();
+    let mismatch = |reason: String| ConsoleError {
+        step: STEP_TARGET,
+        code: CODE_TARGET_MISMATCH,
+        message: format!("{}: {reason}", spec.name),
+        upstream: Some(json!({
+            "action": spec.name,
+            "target": target_for_err,
+            "path_key": path_key,
+            "argument_path": arg_path_for_err,
+        })),
+    };
+    match (target, arg_path) {
+        (Some(t), None) => {
+            let path = t
+                .strip_prefix("file:")
+                .map(crate::entities::normalize_entity_path)
+                .ok_or_else(|| {
+                    mismatch(format!(
+                        "target domain mismatch: expected `file:<path>`, got `{t}`"
+                    ))
+                })?;
+            let mut arguments = order.arguments.clone();
+            arguments[path_key] = json!(path);
+            Ok((Some(format!("file:{path}")), arguments))
+        }
+        (None, Some(path)) => {
+            let id = crate::entities::file_entity_id(&path);
+            Ok((Some(id), order.arguments.clone()))
+        }
+        (Some(t), Some(path)) => {
+            let expected = crate::entities::file_entity_id(&path);
+            let target_path = t
+                .strip_prefix("file:")
+                .map(crate::entities::normalize_entity_path)
+                .ok_or_else(|| {
+                    mismatch(format!(
+                        "target domain mismatch: expected `file:<path>`, got `{t}`"
+                    ))
+                })?;
+            if crate::entities::file_entity_id(&target_path) != expected {
+                return Err(mismatch(format!(
+                    "target/argument path mismatch: `{t}` vs argument `{path_key}`=`{path}`"
+                )));
+            }
+            Ok((Some(t), order.arguments.clone()))
+        }
+        (None, None) => Ok((None, order.arguments.clone())),
+    }
+}
+
 fn validate_with(validator: &jsonschema::Validator, instance: &Value) -> Result<(), String> {
     validator.validate(instance).map_err(|e| e.to_string())
 }
 
-fn truncate(s: &str, max_chars: usize) -> String {
+pub(crate) fn truncate(s: &str, max_chars: usize) -> String {
     if s.chars().count() <= max_chars {
         s.to_string()
     } else {
@@ -1828,6 +2143,7 @@ mod tests {
             target_tool: Some(target.to_string()),
             kind: ActionKind::Host,
             bundle: ActionBundle::ALL,
+            target_policy: crate::entities::TargetPolicy::None,
             input_schema: json!({
                 "type": "object",
                 "properties": {
@@ -1851,10 +2167,62 @@ mod tests {
             order_id: "ORD-1".to_string(),
             action: action.to_string(),
             arguments,
+            target: None,
             step_id: None,
             round: 1,
             plan_epoch: 1,
             run_id: "RUN-1".to_string(),
+        }
+    }
+
+    fn order_with_target(action: &str, arguments: Value, target: Option<&str>) -> ActionOrder {
+        ActionOrder {
+            order_id: "ORD-2".to_string(),
+            action: action.to_string(),
+            arguments,
+            target: target.map(str::to_string),
+            step_id: None,
+            round: 1,
+            plan_epoch: 1,
+            run_id: "RUN-1".to_string(),
+        }
+    }
+
+    fn spec_with_policy(
+        name: &str,
+        target: &str,
+        target_policy: crate::entities::TargetPolicy,
+    ) -> ActionSpec {
+        ActionSpec {
+            target_policy,
+            ..spec(name, target)
+        }
+    }
+
+    /// File 域动作测试规格：输入契约镜像真实 read_file 的 `target_file`
+    /// 键（与 `file_path_key` 映射一致；generic `spec()` 用 `path` 键，
+    /// 不适合 File 策略的注入/一致性测试）。
+    fn file_spec(
+        name: &str,
+        target: &str,
+        target_policy: crate::entities::TargetPolicy,
+    ) -> ActionSpec {
+        ActionSpec {
+            name: name.to_string(),
+            description: format!("{name} file test action"),
+            target_tool: Some(target.to_string()),
+            kind: ActionKind::Host,
+            bundle: ActionBundle::ALL,
+            target_policy,
+            input_schema: json!({
+                "type": "object",
+                "properties": {
+                    "target_file": {"type": "string"},
+                },
+                "required": ["target_file"],
+                "additionalProperties": false,
+            }),
+            response_schema: text_output_response_schema(),
         }
     }
 
@@ -1940,6 +2308,7 @@ mod tests {
             names,
             vec![
                 "assistant.trace",
+                "diagnostics.diagnose",
                 "workspace.grep",
                 "workspace.index",
                 "workspace.list_dir",
@@ -2024,7 +2393,9 @@ mod tests {
         let steps: Vec<&str> = trace.events.iter().map(|e| e.step.as_str()).collect();
         assert_eq!(
             steps,
-            vec!["registry", "contract", "target", "execute", "verify"]
+            // 2026-08-28 全面审查处理：target 解析（注入/生成）先于契约——
+            // 契约校验的是解析后的执行参数面。
+            vec!["registry", "target", "contract", "execute", "verify"]
         );
         assert!(trace.events.iter().all(|e| e.ok));
     }
@@ -2078,8 +2449,9 @@ mod tests {
         assert_eq!(err.step, STEP_CONTRACT);
         assert_eq!(err.code, CODE_INVALID_ARGUMENTS);
         assert!(seen.lock().unwrap().is_empty());
-        assert_eq!(trace.events.len(), 1);
+        assert_eq!(trace.events.len(), 2);
         assert_eq!(trace.events[0].step, STEP_REGISTRY);
+        assert_eq!(trace.events[1].step, STEP_TARGET);
     }
 
     /// FUS-BENCHMARK-FULL-EXEC 审查收口 (2026-08-18)：`workspace.run_terminal`
@@ -2311,6 +2683,7 @@ mod tests {
             target_tool: Some("read_file".to_string()),
             kind: ActionKind::Host,
             bundle: ActionBundle::ALL,
+            target_policy: crate::entities::TargetPolicy::None,
             input_schema: json!({"type": 42}),
             response_schema: json!({"type": "object"}),
         };
@@ -2324,6 +2697,7 @@ mod tests {
             target_tool: Some("read_file".to_string()),
             kind: ActionKind::Host,
             bundle: ActionBundle::ALL,
+            target_policy: crate::entities::TargetPolicy::None,
             input_schema: json!({"type": "object"}),
             response_schema: json!([]),
         };
@@ -2346,6 +2720,7 @@ mod tests {
                 target_tool: Some("read_file".to_string()),
                 kind: ActionKind::Host,
                 bundle: ActionBundle::ALL,
+                target_policy: crate::entities::TargetPolicy::None,
                 input_schema: json!({
                     "type": "object",
                     "required": ["path"],
@@ -2471,6 +2846,7 @@ mod tests {
             target_tool: None,
             kind: ActionKind::Host,
             bundle: ActionBundle::ALL,
+            target_policy: crate::entities::TargetPolicy::None,
             input_schema: json!({"type": "object"}),
             response_schema: json!({"type": "object"}),
         });
@@ -2627,6 +3003,7 @@ mod tests {
                 target_tool: Some("read_file".to_string()),
                 kind: ActionKind::Host,
                 bundle: ActionBundle::ALL,
+                target_policy: crate::entities::TargetPolicy::None,
                 input_schema: json!({
                     "type": "object",
                     "properties": {
@@ -2658,6 +3035,7 @@ mod tests {
                 target_tool: None,
                 kind: ActionKind::RunScript,
                 bundle: ActionBundle::ALL,
+                target_policy: crate::entities::TargetPolicy::None,
                 input_schema: json!({
                     "type": "object",
                     "properties": {
@@ -2733,6 +3111,7 @@ mod tests {
                 target_tool: Some("read_file".to_string()),
                 kind: ActionKind::Host,
                 bundle: ActionBundle::ALL,
+                target_policy: crate::entities::TargetPolicy::None,
                 input_schema: json!({
                     "type": "object",
                     "properties": {
@@ -2764,6 +3143,7 @@ mod tests {
                 target_tool: None,
                 kind: ActionKind::RunScript,
                 bundle: ActionBundle::ALL,
+                target_policy: crate::entities::TargetPolicy::None,
                 input_schema: json!({
                     "type": "object",
                     "properties": {
@@ -2909,6 +3289,7 @@ mod tests {
                 target_tool: Some("read_file".to_string()),
                 kind: ActionKind::Host,
                 bundle: ActionBundle::ALL,
+                target_policy: crate::entities::TargetPolicy::None,
                 input_schema: json!({"type": "object"}),
                 response_schema: json!({"type": "object"}),
             })
@@ -2920,6 +3301,7 @@ mod tests {
             target_tool: Some("read_file".to_string()),
             kind: ActionKind::TraceRead,
             bundle: ActionBundle::ALL,
+            target_policy: crate::entities::TargetPolicy::None,
             input_schema: json!({"type": "object"}),
             response_schema: json!({"type": "object"}),
         });
@@ -2935,6 +3317,7 @@ mod tests {
                 target_tool: None,
                 kind: ActionKind::RunScript,
                 bundle: ActionBundle::ALL,
+                target_policy: crate::entities::TargetPolicy::None,
                 input_schema: json!({"type": "object"}),
                 response_schema: json!({"type": "object"}),
             })
@@ -2945,6 +3328,7 @@ mod tests {
             target_tool: None,
             kind: ActionKind::RunScript,
             bundle: ActionBundle::ALL,
+            target_policy: crate::entities::TargetPolicy::None,
             input_schema: json!({"type": "object"}),
             response_schema: json!({"type": "object"}),
         });
@@ -2959,6 +3343,7 @@ mod tests {
             target_tool: Some("read_file".to_string()),
             kind: ActionKind::Host,
             bundle: ActionBundle::default(),
+            target_policy: crate::entities::TargetPolicy::None,
             input_schema: json!({"type": "object"}),
             response_schema: json!({"type": "object"}),
         });
@@ -3058,6 +3443,7 @@ mod tests {
                 target_tool: Some("read_file".to_string()),
                 kind: ActionKind::Host,
                 bundle: ActionBundle::ALL,
+                target_policy: crate::entities::TargetPolicy::None,
                 input_schema: json!({
                     "type": "object",
                     "properties": {"path": {"type": "string"}},
@@ -3082,6 +3468,7 @@ mod tests {
                 target_tool: None,
                 kind: ActionKind::RunScript,
                 bundle: ActionBundle::ALL,
+                target_policy: crate::entities::TargetPolicy::None,
                 input_schema: json!({
                     "type": "object",
                     "properties": {
@@ -3175,6 +3562,7 @@ mod tests {
                 target_tool: Some("read_file".to_string()),
                 kind: ActionKind::Host,
                 bundle: ActionBundle::ALL,
+                target_policy: crate::entities::TargetPolicy::None,
                 input_schema: json!({
                     "type": "object",
                     "properties": {"path": {"type": "string"}},
@@ -3252,6 +3640,7 @@ mod tests {
                 target_tool: Some("read_file".to_string()),
                 kind: ActionKind::Host,
                 bundle: ActionBundle::ALL,
+                target_policy: crate::entities::TargetPolicy::None,
                 input_schema: json!({
                     "type": "object",
                     "properties": {"path": {"type": "string"}},
@@ -3308,6 +3697,7 @@ mod tests {
                 target_tool: Some("read_file".to_string()),
                 kind: ActionKind::Host,
                 bundle: ActionBundle::ALL,
+                target_policy: crate::entities::TargetPolicy::None,
                 input_schema: json!({
                     "type": "object",
                     "properties": {"path": {"type": "string"}},
@@ -3382,6 +3772,7 @@ mod tests {
                 target_tool: Some("read_file".to_string()),
                 kind: ActionKind::Host,
                 bundle: ActionBundle::ALL,
+                target_policy: crate::entities::TargetPolicy::None,
                 input_schema: json!({
                     "type": "object",
                     "properties": {"path": {"type": "string"}},
@@ -3438,6 +3829,46 @@ mod tests {
         assert_eq!(executor.seen.lock().unwrap().len(), 2);
     }
 
+    /// R2 全面审查处理补测：PTC 脚本步骤的 `target` 与参数路径同样走
+    /// "二选一 + 注入 + 一致性校验"——步骤只写 target 时，发放前自动注入
+    /// 路径参数；双写一致放行。
+    #[tokio::test]
+    async fn script_step_target_injects_path_argument() {
+        let mut registry = ServiceRegistry::new();
+        registry
+            .register(file_spec(
+                "workspace.read_file",
+                "read_file",
+                crate::entities::TargetPolicy::File,
+            ))
+            .unwrap();
+        let (executor, seen) = FakeExecutor::ok();
+        let mut trace = Trace {
+            trace_id: "t000112".to_string(),
+            request_id: None,
+            events: Vec::new(),
+        };
+        let mut consumed = 0u32;
+        run_script(
+            &registry,
+            &executor,
+            None,
+            &json!({"script": [
+                {"do": "workspace.read_file", "target": "file:src/main.rs"},
+                {"do": "workspace.read_file", "with": {"target_file": "other.rs"}, "target": "file:other.rs"},
+            ]}),
+            &mut trace,
+            "call-ptc",
+            &mut consumed,
+        )
+        .await
+        .expect("script with entity-level targets");
+        let calls = seen.lock().unwrap();
+        assert_eq!(calls.len(), 2);
+        assert_eq!(calls[0].1, json!({"target_file": "src/main.rs"}));
+        assert_eq!(calls[1].1, json!({"target_file": "other.rs"}));
+    }
+
     /// P0-C S4 (2026-08-16)：执行前被策略拒绝的步骤不消耗预算单位。
     #[tokio::test]
     async fn script_policy_denied_step_consumes_nothing() {
@@ -3449,6 +3880,7 @@ mod tests {
                 target_tool: Some("read_file".to_string()),
                 kind: ActionKind::Host,
                 bundle: ActionBundle::ALL,
+                target_policy: crate::entities::TargetPolicy::None,
                 input_schema: json!({
                     "type": "object",
                     "properties": {"path": {"type": "string"}},
@@ -3518,6 +3950,7 @@ mod tests {
             order_id: "ORD-000110".to_string(),
             action: "workspace.read_file".to_string(),
             arguments: json!({"target_file": "a.txt"}),
+            target: Some("file:a.txt".to_string()),
             step_id: None,
             round: 0,
             plan_epoch: 0,
@@ -3536,6 +3969,7 @@ mod tests {
             &order,
             &mut trace,
             "call-1",
+            None,
             None,
             &mut consumed,
         )
@@ -3630,6 +4064,7 @@ mod tests {
                 target_tool: Some("read_file".to_string()),
                 kind: ActionKind::Host,
                 bundle: ActionBundle::ALL,
+                target_policy: crate::entities::TargetPolicy::None,
                 input_schema: json!({
                     "type": "object",
                     "properties": {"path": {"type": "string"}},
@@ -3660,6 +4095,7 @@ mod tests {
                 target_tool: None,
                 kind: ActionKind::RunScript,
                 bundle: ActionBundle::ALL,
+                target_policy: crate::entities::TargetPolicy::None,
                 input_schema: json!({
                     "type": "object",
                     "properties": {
@@ -3726,5 +4162,478 @@ mod tests {
         assert_eq!(calls.len(), 2);
         assert_eq!(calls[1].1, json!({"path": "alpha"}));
         assert_eq!(calls[1].2, "call-s.s2");
+    }
+
+    // ---- R2 半助理层（THIN-HARNESS-REDESIGN V2 §4.2/§4.5）----
+
+    #[test]
+    fn default_registry_declares_target_policy_per_service() {
+        use crate::entities::TargetPolicy;
+        let registry = default_service_registry();
+        assert_eq!(
+            registry.get("workspace.read_file").unwrap().target_policy,
+            TargetPolicy::File
+        );
+        assert_eq!(
+            registry.get("workspace.grep").unwrap().target_policy,
+            TargetPolicy::FileOptional
+        );
+        assert_eq!(
+            registry
+                .get("workspace.search_replace")
+                .unwrap()
+                .target_policy,
+            TargetPolicy::File
+        );
+        assert_eq!(
+            registry
+                .get("workspace.run_terminal")
+                .unwrap()
+                .target_policy,
+            TargetPolicy::None
+        );
+        assert_eq!(
+            registry.get("assistant.trace").unwrap().target_policy,
+            TargetPolicy::None
+        );
+        assert_eq!(
+            registry.get("diagnostics.diagnose").unwrap().target_policy,
+            TargetPolicy::AnyEntity
+        );
+    }
+
+    #[tokio::test]
+    async fn target_policy_validation_enforces_entity_level_target() {
+        use crate::entities::TargetPolicy;
+        let mut registry = ServiceRegistry::new();
+        registry
+            .register(file_spec(
+                "workspace.read_file",
+                "read_file",
+                TargetPolicy::File,
+            ))
+            .unwrap();
+        registry
+            .register(spec_with_policy(
+                "workspace.run_terminal",
+                "run_terminal_cmd",
+                TargetPolicy::None,
+            ))
+            .unwrap();
+        let (executor, _seen) = FakeExecutor::ok();
+        let mut trace = Trace {
+            trace_id: "t000090".to_string(),
+            request_id: None,
+            events: Vec::new(),
+        };
+        // 全局动作携带 target → 显式拒绝（不硬造全局实体）。
+        let err = issue_action(
+            &registry,
+            &executor,
+            None,
+            &order_with_target(
+                "workspace.run_terminal",
+                json!({"path": "a.txt"}),
+                Some("file:a.txt"),
+            ),
+            &mut trace,
+            "call-1",
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(err.step, STEP_TARGET);
+        assert_eq!(err.code, CODE_TARGET_NOT_ALLOWED);
+        // 有作用对象的动作缺 target → 显式拒绝（必填、不设默认）。
+        let err = issue_action(
+            &registry,
+            &executor,
+            None,
+            &order("workspace.read_file", json!({})),
+            &mut trace,
+            "call-2",
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(err.step, STEP_TARGET);
+        assert_eq!(err.code, CODE_TARGET_REQUIRED);
+        // 携带实体级 target → 通过。
+        let response = issue_action(
+            &registry,
+            &executor,
+            None,
+            &order_with_target(
+                "workspace.read_file",
+                json!({"target_file": "a.txt"}),
+                Some("file:a.txt"),
+            ),
+            &mut trace,
+            "call-3",
+        )
+        .await
+        .expect("file target accepted");
+        assert_eq!(response, json!({"output": "hello"}));
+    }
+
+    #[tokio::test]
+    async fn target_injected_from_entity_id_when_argument_missing() {
+        use crate::entities::TargetPolicy;
+        let mut registry = ServiceRegistry::new();
+        registry
+            .register(file_spec(
+                "workspace.read_file",
+                "read_file",
+                TargetPolicy::File,
+            ))
+            .unwrap();
+        let (executor, seen) = FakeExecutor::ok();
+        let mut trace = Trace {
+            trace_id: "t000093".to_string(),
+            request_id: None,
+            events: Vec::new(),
+        };
+        // 只写 target → 参数路径自动注入（模型无需双写路径）。
+        let response = issue_action(
+            &registry,
+            &executor,
+            None,
+            &order_with_target("workspace.read_file", json!({}), Some("file:src/main.rs")),
+            &mut trace,
+            "call-i1",
+        )
+        .await
+        .expect("target-only order must pass with injected path");
+        assert_eq!(response, json!({"output": "hello"}));
+        let calls = seen.lock().unwrap();
+        assert_eq!(calls[0].1, json!({"target_file": "src/main.rs"}));
+    }
+
+    #[tokio::test]
+    async fn target_generated_from_argument_path_when_target_missing() {
+        use crate::entities::TargetPolicy;
+        let mut registry = ServiceRegistry::new();
+        registry
+            .register(file_spec(
+                "workspace.read_file",
+                "read_file",
+                TargetPolicy::File,
+            ))
+            .unwrap();
+        let (executor, seen) = FakeExecutor::ok();
+        let mut trace = Trace {
+            trace_id: "t000094".to_string(),
+            request_id: None,
+            events: Vec::new(),
+        };
+        // 只写参数路径 → target 自动生成（PTC 脚本/旧订单向后兼容）。
+        issue_action(
+            &registry,
+            &executor,
+            None,
+            &order("workspace.read_file", json!({"target_file": "a.txt"})),
+            &mut trace,
+            "call-g1",
+        )
+        .await
+        .expect("path-only order must pass with auto-generated target");
+        let calls = seen.lock().unwrap();
+        assert_eq!(calls[0].1, json!({"target_file": "a.txt"}));
+        assert!(
+            trace
+                .events
+                .iter()
+                .any(|e| e.step == STEP_TARGET && e.upstream.is_some()),
+            "target step must record the resolved target"
+        );
+    }
+
+    #[tokio::test]
+    async fn target_argument_double_write_must_agree() {
+        use crate::entities::TargetPolicy;
+        let mut registry = ServiceRegistry::new();
+        registry
+            .register(file_spec(
+                "workspace.read_file",
+                "read_file",
+                TargetPolicy::File,
+            ))
+            .unwrap();
+        let (executor, _seen) = FakeExecutor::ok();
+        let mut trace = Trace {
+            trace_id: "t000095".to_string(),
+            request_id: None,
+            events: Vec::new(),
+        };
+        // 双写一致 → 放行。
+        issue_action(
+            &registry,
+            &executor,
+            None,
+            &order_with_target(
+                "workspace.read_file",
+                json!({"target_file": "src/main.rs"}),
+                Some("file:src/main.rs"),
+            ),
+            &mut trace,
+            "call-a1",
+        )
+        .await
+        .expect("consistent double-write must pass");
+        // 双写不一致 → fail-closed 拒单。
+        let err = issue_action(
+            &registry,
+            &executor,
+            None,
+            &order_with_target(
+                "workspace.read_file",
+                json!({"target_file": "other.rs"}),
+                Some("file:src/main.rs"),
+            ),
+            &mut trace,
+            "call-a2",
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(err.step, STEP_TARGET);
+        assert_eq!(err.code, CODE_TARGET_MISMATCH);
+    }
+
+    #[tokio::test]
+    async fn target_domain_prefix_must_match_file_policy() {
+        use crate::entities::TargetPolicy;
+        let mut registry = ServiceRegistry::new();
+        registry
+            .register(file_spec(
+                "workspace.read_file",
+                "read_file",
+                TargetPolicy::File,
+            ))
+            .unwrap();
+        let (executor, _seen) = FakeExecutor::ok();
+        let mut trace = Trace {
+            trace_id: "t000096".to_string(),
+            request_id: None,
+            events: Vec::new(),
+        };
+        let err = issue_action(
+            &registry,
+            &executor,
+            None,
+            &order_with_target(
+                "workspace.read_file",
+                json!({"target_file": "a.txt"}),
+                Some("process:shell"),
+            ),
+            &mut trace,
+            "call-d1",
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(err.step, STEP_TARGET);
+        assert_eq!(err.code, CODE_TARGET_MISMATCH);
+        assert!(err.message.contains("domain mismatch"));
+    }
+
+    #[tokio::test]
+    async fn grep_file_optional_target_omitted_for_workspace_wide_search() {
+        use crate::entities::TargetPolicy;
+        let mut registry = ServiceRegistry::new();
+        // grep：path 可选（工作区级搜索）→ FileOptional，schema 仅 pattern 必填。
+        registry
+            .register(ActionSpec {
+                name: "workspace.grep".to_string(),
+                description: "grep test action".to_string(),
+                target_tool: Some("grep".to_string()),
+                kind: ActionKind::Host,
+                bundle: ActionBundle::ALL,
+                target_policy: TargetPolicy::FileOptional,
+                input_schema: json!({
+                    "type": "object",
+                    "properties": {
+                        "pattern": {"type": "string"},
+                        "path": {"type": "string"},
+                    },
+                    "required": ["pattern"],
+                    "additionalProperties": false,
+                }),
+                response_schema: text_output_response_schema(),
+            })
+            .unwrap();
+        let (executor, seen) = FakeExecutor::ok();
+        let mut trace = Trace {
+            trace_id: "t000097".to_string(),
+            request_id: None,
+            events: Vec::new(),
+        };
+        // 无 target 无 path（工作区级）→ 通过，不强制编造 target。
+        issue_action(
+            &registry,
+            &executor,
+            None,
+            &order("workspace.grep", json!({"pattern": "foo"})),
+            &mut trace,
+            "call-g2",
+        )
+        .await
+        .expect("workspace-wide grep without target must pass");
+        assert_eq!(seen.lock().unwrap()[0].1, json!({"pattern": "foo"}));
+        // 带 target 无 path → 注入 path。
+        issue_action(
+            &registry,
+            &executor,
+            None,
+            &order_with_target(
+                "workspace.grep",
+                json!({"pattern": "foo"}),
+                Some("file:a.txt"),
+            ),
+            &mut trace,
+            "call-g3",
+        )
+        .await
+        .expect("grep with target must inject path");
+        assert_eq!(
+            seen.lock().unwrap()[1].1,
+            json!({"pattern": "foo", "path": "a.txt"})
+        );
+    }
+
+    #[tokio::test]
+    async fn diagnose_service_reads_entity_last_diagnostic() {
+        use crate::diagnostics::DiagnosticRecord;
+        let mut registry = ServiceRegistry::new();
+        registry
+            .register(ActionSpec {
+                name: "diagnostics.diagnose".to_string(),
+                description: "diagnose test service".to_string(),
+                target_tool: None,
+                kind: ActionKind::Diagnose,
+                bundle: ActionBundle::ALL,
+                target_policy: crate::entities::TargetPolicy::AnyEntity,
+                input_schema: json!({"type": "object", "additionalProperties": false}),
+                response_schema: json!({
+                    "type": "object",
+                    "properties": {
+                        "entity_id": {"type": "string"},
+                        "diagnostic": {"type": ["object", "null"]},
+                    },
+                    "required": ["entity_id", "diagnostic"],
+                    "additionalProperties": false,
+                }),
+            })
+            .unwrap();
+        // 注：注册时 AnyEntity 内部动作无 host 目标——手动构造（跳过
+        // Host 不变式），与 default_service_registry 的 Diagnose 一致。
+        let mut entities = crate::entities::EntityRegistry::new();
+        entities.register_process("cargo test", Some(1), false, "2026-08-28T00:00:00Z");
+        let record = DiagnosticRecord {
+            exit_code: Some(1),
+            matched_signature: Some("exit_nonzero".to_string()),
+            key_fields: vec![crate::diagnostics::KeyField {
+                key: "exit_code".to_string(),
+                value: "1".to_string(),
+            }],
+            target_state: Vec::new(),
+            tail: vec!["cargo: error".to_string()],
+            tail_is_raw: true,
+            log_pointer: "t000091".to_string(),
+            truncated: false,
+        };
+        entities.set_diagnostic(&crate::entities::process_entity_id(), record);
+        let (executor, _seen) = FakeExecutor::ok();
+        let mut trace = Trace {
+            trace_id: "t000091".to_string(),
+            request_id: None,
+            events: Vec::new(),
+        };
+        let mut consumed = 0u32;
+        let response = issue_action_inner(
+            &registry,
+            &executor,
+            None,
+            &order_with_target("diagnostics.diagnose", json!({}), Some("process:shell")),
+            &mut trace,
+            "call-d",
+            None,
+            Some(&entities),
+            &mut consumed,
+        )
+        .await
+        .expect("diagnose service");
+        assert_eq!(response["entity_id"], "process:shell");
+        assert_eq!(response["diagnostic"]["matched_signature"], "exit_nonzero");
+        assert_eq!(consumed, 1);
+        // 无诊断/未知实体 → 空（null），不报错（读操作）。
+        let response = issue_action_inner(
+            &registry,
+            &executor,
+            None,
+            &order_with_target("diagnostics.diagnose", json!({}), Some("file:missing.txt")),
+            &mut trace,
+            "call-d2",
+            None,
+            Some(&entities),
+            &mut consumed,
+        )
+        .await
+        .expect("diagnose service unknown entity");
+        assert_eq!(response["entity_id"], "file:missing.txt");
+        assert!(response["diagnostic"].is_null());
+    }
+
+    #[tokio::test]
+    async fn execution_failure_rides_structured_detail_with_diagnostic() {
+        use crate::diagnostics::DiagnosticRecord;
+        let mut registry = ServiceRegistry::new();
+        registry
+            .register(file_spec(
+                "workspace.read_file",
+                "read_file",
+                crate::entities::TargetPolicy::File,
+            ))
+            .unwrap();
+        // 半助理层执行器失败：detail 携带 structured diagnostic。
+        let diagnostic = DiagnosticRecord {
+            exit_code: Some(1),
+            matched_signature: Some("target_missing".to_string()),
+            key_fields: Vec::new(),
+            target_state: Vec::new(),
+            tail: Vec::new(),
+            tail_is_raw: false,
+            log_pointer: "t000092".to_string(),
+            truncated: false,
+        };
+        let executor = FakeExecutor {
+            result: Err(ExecuteError::TimedOut {
+                message: "killed".to_string(),
+                detail: Some(json!({ "diagnostic": diagnostic.clone() })),
+            }),
+            seen: std::sync::Arc::new(std::sync::Mutex::new(Vec::new())),
+        };
+        let mut trace = Trace {
+            trace_id: "t000092".to_string(),
+            request_id: None,
+            events: Vec::new(),
+        };
+        let err = issue_action(
+            &registry,
+            &executor,
+            None,
+            &order_with_target(
+                "workspace.read_file",
+                json!({"target_file": "a.txt"}),
+                Some("file:a.txt"),
+            ),
+            &mut trace,
+            "call-t",
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(err.step, STEP_EXECUTE);
+        assert_eq!(err.code, CODE_TOOL_TIMEOUT);
+        let upstream = err.upstream.expect("upstream");
+        assert_eq!(
+            upstream["detail"]["diagnostic"]["matched_signature"],
+            "target_missing"
+        );
     }
 }
