@@ -395,6 +395,10 @@ key_fields → target_state 顺序截断并置 `truncated: true`。
   更严重回归（5 题提前终答），且 make-doom 本轮仍死于硬门而非被其救回。
   S4 复验专门盯 path-tracing / make-doom 形态；若复发优先执行侧（工具
   效率/诊断），不叠硬门。
+- 延迟 commit 固有边界（2026-08-29 审查收口）：fire 与 pending 消费之间
+  硬中断（传输错误/取消/panic）时，计数不提交、journal 留一条已 fire 未
+  消费的孤儿事件；下次 run 在 loop-top 首轮重触发（到期方向检查不丢失，
+  符合 recovery-resumes-counting 语义）。接受现状并注释于代码，不补机制。
 
 ### 9.3 Submit 门修复（并入下一实施批次）
 
@@ -404,11 +408,13 @@ key_fields → target_state 顺序截断并置 `truncated: true`。
   递交/完成 step…"）。
 - 与 prompt 清空同批：base prompt 的 submit 引导行随清空消失。
 
-### 9.4 实施批次（待放行）
+### 9.4 实施批次（1-3 已于 2026-08-29 实施；4 待放行）
 
-1. prompt 全空 + near-zero 测试反转；
-2. orientation 软门（块文本 + 消费续跑路径；强制模板轮休眠不动）；
-3. submit 门与描述清理 + 回归测试；
-4. 后续 S3 重建 / S4 复验（错题重跑回归：提交不再被拒、长任务不再 50 轮
-   提前收束、命中率对比）；ADR-0010 修订与 CLI_PROJECT_INDEX 登记按 R3
-   纪律一并处理。
+1. [x] prompt 全空 + near-zero 测试反转（2026-08-29 完成，S2 全绿）；
+2. [x] orientation 软门（块文本 + 消费续跑路径；强制模板轮休眠不动；
+   2026-08-29 完成）；
+3. [x] submit 门与描述清理 + 回归测试（2026-08-29 完成，含审查处理：
+   无 plan 确认文案不虚构机械最终回答流程）；
+4. [ ] 后续 S3 重建 / S4 复验（错题重跑回归：提交不再被拒、长任务不再
+   50 轮提前收束、命中率对比）；ADR-0010 修订与 CLI_PROJECT_INDEX 登记
+   按 R3 纪律一并处理。

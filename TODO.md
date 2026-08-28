@@ -1491,17 +1491,32 @@ S4 复验闭环 2026-08-25（补登记）；S1-S4 全部闭合）
   R2c `parse_retrieval_result_json` 兜底回收判定）
 - [ ] W3-R3 清理与登记：旧序列门文档标记 withdrawn、ADR-0010 减法修订、
   CLI_PROJECT_INDEX 登记（含 BACKLOG/TODO 计数入账）
-- [ ] W4-R4 prompt 全空：BASE_SYSTEM_PROMPT 置空（含"工具按需使用"与
+- [x] W4-R4 prompt 全空：BASE_SYSTEM_PROMPT 置空（含"工具按需使用"与
   submit 引导行），near-zero 测试反转断言空；契约确认已由工具描述/信封/
   机械门承载（read_file offset / search_replace 锚点 / blackboard_read
-  分区 / submit 两阶段）。**2026-08-29 定案，待实施**。
-- [ ] W4-R4 orientation 软门：块文本改简短方向检查（去强制模板措辞）、
+  分区 / submit 两阶段）。**2026-08-29 完成**：prompt.rs 置空 +
+  `build_system_prompt` 简化为仅返回探针块 + 测试反转
+  （`base_system_prompt_is_empty`）。
+- [x] W4-R4 orientation 软门：块文本改简短方向检查（去强制模板措辞）、
   触发轮不禁工具、纯文本回答消费后续跑、终答只由模型自发；阈值 50 维持；
-  强制模板轮代码保留不启用。**2026-08-29 定案，待实施**。
-- [ ] W4-R4 submit 门修复：无 plan 会话放行/降级为状态展示 + submit 工具
-  描述清 plan 措辞 + 回归测试。**2026-08-29 定案，待实施**。
+  强制模板轮代码保留不启用。**2026-08-29 完成**：`ORIENTATION_BLOCK`
+  v0.4（三问方向检查，去"只输出 JSON 模板/不要调用任何工具"）；主车道
+  fire 延迟 commit + pending 轮软消费（纯文本消费续跑、工具调用照常执行、
+  无 checkpoint_response）；检索车道维持 fire-and-continue；
+  `force_template_round` 休眠参数保留；DC 强制模板轮机制不变。
+- [x] W4-R4 submit 门修复：无 plan 会话放行/降级为状态展示 + submit 工具
+  描述清 plan 措辞 + 回归测试。**2026-08-29 完成**：`submit_no_plan`
+  拒绝路径删除（无 plan 渲染交付状态、两阶段 requested→confirmed、不推进
+  计划步骤）；描述去 plan 措辞（"requires no plan and no step state"）；
+  新增 `submit_no_plan_renders_status_and_confirms` 回归测试。
 - [ ] W4-R4 S2 测试 + S3 重建 + S4 复验：错题重跑回归——提交不再被拒、
   长任务不再 50 轮提前收束、命中率对比 official-r1（58/89）。
+  **2026-08-29 S2 完成**：orz-loop 611/0/3（新增 1）、orz-assurance
+  144/0、orz-bin bins 14/0、pytest 216、fmt 干净、clippy 无新增；
+  **审查处理（2026-08-29）**：无 plan 确认文案不虚构机械最终回答流程
+  （抽 `submit_confirm_message` + 单测）、孤儿 fire 边界注释（代码 +
+  设计 §9.2）、`TEMPLATE_ANSWER_INSTRUCTIONS` 零引用注释、设计 §9.4
+  状态翻转；S3 重建 / S4 复验待放行。
 
 ### P0-B FUS-RETRIEVAL-MECH（`implemented`；批次 1-6 已全部闭合，2026-08-14，保留供核对）
 
