@@ -1516,7 +1516,16 @@ S4 复验闭环 2026-08-25（补登记）；S1-S4 全部闭合）
   **审查处理（2026-08-29）**：无 plan 确认文案不虚构机械最终回答流程
   （抽 `submit_confirm_message` + 单测）、孤儿 fire 边界注释（代码 +
   设计 §9.2）、`TEMPLATE_ANSWER_INSTRUCTIONS` 零引用注释、设计 §9.4
-  状态翻转；S3 重建 / S4 复验待放行。
+  状态翻转。
+  **S3 重建（2026-08-29 完成）**：rust:1.97-slim 容器构建 6m25s，
+  Linux musl 三件套 orz 105,020,808 B / orz-signer 1,388,744 B /
+  orz-acaf-provision 1,206,728 B（07:33 HKT，日志
+  D:\tb-eval\build-20260829-s3.log）；容器冒烟（bookworm）：provision
+  usage / signer manifest 缺失 / orz TTY io error 均符合预期、三件套
+  ldd 静态链接；W4-R4 关键标记（ORIENTATION v0.4 / 方向检查 /
+  无计划批准基线 / requires no plan and no step state）在二进制内；
+  警告面 14 项与上次基线持平；对应源码 orz 5b3fe27 + 父 10c99f0；
+  S4 复验待实施。
 
 ### P0-B FUS-RETRIEVAL-MECH（`implemented`；批次 1-6 已全部闭合，2026-08-14，保留供核对）
 
