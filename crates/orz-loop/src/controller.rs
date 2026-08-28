@@ -5047,26 +5047,23 @@ impl AgentLoopController {
             });
         }
         // AGENT-DELIVERY-FLOW (2026-08-23, ADR-0010 §14.35 第 19 项 / 设计
-        // §2.2): `submit` —— 末步「递交/完成」的显式递交路径（无参，console
-        // 默认态主车道）。第一次调用机械计算交付状态（工作区变更清单，过滤
-        // .gsa/缓存目录，上限 20 + 计数行）渲染进黑板 plan 末步状态行；
-        // 模型核查后同动作再触发一次确认，末步才置 done 并进入最终回答
-        // 流程（引用校验 + 反例门）。普通订单绑定末步不产生 done。
+        // §2.2) + THIN-HARNESS-REDESIGN-V2 §9.3 (2026-08-29): `submit` ——
+        // 显式递交/交付状态展示路径（无参，console 默认态主车道；无 plan
+        // 会话同样放行，降级为纯状态展示，非硬门）。第一次调用机械计算
+        // 交付状态（工作区变更清单，过滤 .gsa/缓存目录，上限 20 + 计数行）
+        // 渲染进黑板 plan 视图；模型核查后同动作再触发一次确认。终答仍
+        // 只由模型自发（反例门 + 机械审计报告在终答前承接核对）。
         if self.console_default_enabled && !tool_defs.iter().any(|t| t.name == "submit") {
             tool_defs.push(ToolDef {
                 name: "submit".to_string(),
                 description: "Request/confirm delivery (AGENT-DELIVERY-FLOW). \
-                     The final plan step is the fixed 递交/完成 step; ordinary \
-                     execution never marks it done. Call `submit` (no \
-                     arguments) once to have the harness mechanically compute \
-                     and render the delivery status (workspace changes, \
-                     filtered, ≤20 entries) into the blackboard plan view, \
-                     review it, then call `submit` again to confirm and advance \
-                     the final step into the final-answer flow. Informational, \
-                     not a hard gate — no plan in force is refused; earlier \
-                     steps' status does not block submission (the final-answer \
-                     counterexample round + mechanical audit report arbitrate \
-                     the plan-complete claim)."
+                     Call `submit` (no arguments) once to have the harness \
+                     mechanically compute and render the delivery status \
+                     (workspace changes, filtered, ≤20 entries) into the \
+                     blackboard plan view; review it, then call `submit` \
+                     again to confirm and advance into the final-answer \
+                     flow. Informational, not a hard gate — submission \
+                     requires no plan and no step state."
                     .to_string(),
                 parameters: serde_json::json!({
                     "type": "object",
@@ -5513,12 +5510,15 @@ impl AgentLoopController {
     /// consts cross-checked by the verifier) and inject the orientation block
     /// as a User message so the next generate answers it. `None` orientation
     /// state is a no-op (grill / one-shot CLI).
-    /// ORZ-ORIENTATION-FORCED-TEMPLATE (2026-08-15, ADR-0010 §14.16):
-    /// THIN-HARNESS-REDESIGN R1 (2026-08-27, §4.3) 强制模板轮变体退役——
-    /// 主车道与检索车道统一 fire-and-continue（`force_template_round`
-    /// 恒为 false：fire 即 commit、只注入简短 [ORIENTATION] 块；终答前
-    /// 方向核查由 COUNTEREXAMPLE_GATE 承担）。参数保留为休眠路径
-    /// （历史/回退），DC 的强制模板轮由 `maybe_fire_dc` 独立承载。
+    /// THIN-HARNESS-REDESIGN-V2 §9.2 (2026-08-29 用户裁决): orientation
+    /// 软门——主车道（main/grill）fire **延迟 commit**：pending 轮消费时
+    /// 提交（纯文本回答被消费、loop 明确续跑；工具调用照常执行，不设
+    /// 模板校验与工具禁令），终答仍只由模型自发。检索车道保持旧
+    /// fire-and-continue（fire 即 commit、无 pending 轮——检索结果文本
+    /// 不被消费截留）。`force_template_round` 为 2026-08-14 强制模板轮
+    /// 的休眠参数（恒 false、不启用；若未来恢复硬门，需同时在 pending
+    /// 消费路径恢复模板校验与工具禁令——2026-08-29 软门消费路径已将其
+    /// 移除）。DC 的强制模板轮由 `maybe_fire_dc` 独立承载。
     /// Fires at most once per call — commit-then-reset guarantees the two
     /// injection points (post-tool-batch gap + loop-top) never double-fire.
     /// Review P2-2 (2026-08-10): build → journal → inject → COMMIT — a
@@ -5573,12 +5573,18 @@ impl AgentLoopController {
                 }),
             )
             .await?;
-        // Main lane: defer the commit to the forced-template round's
-        // completion point (§2.4); retrieval lanes commit at fire time
-        // (legacy behavior, 检索车道不变). The reset must never survive a
-        // failed write (review P2-2) — in both modes the commit happens
-        // only after the journaled event above.
-        if !force_template_round {
+        // 软门/强制模板模式：延迟 commit，pending 轮消费时提交；检索车道
+        // 维持 fire-and-continue（fire 即 commit）。reset 不得在失败写入
+        // 后残留（review P2-2）——两种模式的 commit 都只发生在事件已
+        // journaled 之后。
+        // 固有边界（2026-08-29 审查收口）：延迟 commit 下，fire 与
+        // pending 消费之间若硬中断（传输错误/取消/panic），journal 留有
+        // 一条已 fire 未消费的 orientation_checkpoint 事件且计数不提交
+        // ——会话计数仍 ≥ 阈值，下次 run 在 loop-top 首轮重触发（到期
+        // 方向检查不丢失，符合 recovery-resumes-counting 语义）；孤儿
+        // 事件由运行终止事件在审计链中解释，接受现状、不补机制。
+        let deferred = force_template_round || matches!(role, AgentRole::Main);
+        if !deferred {
             state.commit_fire(role, &rec);
         }
         messages.push(Message {
@@ -5588,7 +5594,7 @@ impl AgentLoopController {
             tool_calls: Vec::new(),
             reasoning_content: None,
         });
-        Ok(force_template_round.then_some(rec))
+        Ok(deferred.then_some(rec))
     }
 
     /// Run a retrieval subagent for a retrieval-shaped tool call.
@@ -7860,6 +7866,19 @@ impl AgentLoopController {
         }
     }
 
+    /// THIN-HARNESS-REDESIGN-V2 §9.3 (2026-08-29 审查处理)：submit 确认
+    /// 消息——有 plan 时注明末步完成并入最终回答流程；无 plan（降级纯
+    /// 状态展示）不虚构机械"最终回答流程"（终答只由模型自发），明确仅
+    /// 状态展示、未推进计划步骤。
+    fn submit_confirm_message(terminal_id: Option<&str>, status: &str) -> String {
+        match terminal_id {
+            Some(id) => format!("submit: 递交已确认，末步 {id} 完成，进入最终回答流程。\n{status}"),
+            None => format!(
+                "submit: 递交已确认（无计划基线，仅状态展示，未推进计划步骤；终答请自行给出）。\n{status}"
+            ),
+        }
+    }
+
     /// AGENT-DELIVERY-FLOW (2026-08-23, 设计 §2.2): the mechanical delivery
     /// status — diff the live worktree snapshot against the plan-approval
     /// baseline (`.gsa`/缓存目录已由 walk 排除), capped at 20 entries +
@@ -7870,7 +7889,11 @@ impl AgentLoopController {
     fn compute_delivery_status(&self, host: &dyn LoopHost) -> String {
         let baseline = self.delivery_baseline.lock().unwrap().clone();
         let Some(before) = baseline else {
-            return "[delivery] 状态: 变更清单不可用（host 未提供工作区快照基线）".to_string();
+            // THIN-HARNESS-REDESIGN-V2 §9.3 (2026-08-29)：无计划批准基线
+            // ——无 plan 会话（submit 降级为纯状态展示）或计划尚未批准；
+            // 活快照存在时才会走到这里，故归因于基线缺失而非 host 能力。
+            return "[delivery] 状态: 变更清单不可用（无计划批准基线；submit 保持信息展示）"
+                .to_string();
         };
         let Some(after) = host.workspace_snapshot() else {
             return "[delivery] 状态: 变更清单不可用（host 未提供工作区快照）".to_string();
@@ -10050,7 +10073,10 @@ impl AgentLoopController {
         // not trip the stall watchdog (the tool itself is bounded by the
         // P0-1 per-call timeout).
         // AGENT-DELIVERY-FLOW (2026-08-23, 设计 §2.2): `submit` —— 末步
-        // 「递交/完成」的显式递交路径（无参、两阶段）。第一次调用机械计算
+        // 「递交/完成」的显式递交/状态展示路径（无参、两阶段）。
+        // THIN-HARNESS-REDESIGN-V2 §9.3 (2026-08-29)：无 plan 会话同样
+        // 放行——降级为纯状态展示（不再 `no plan in force` 拒绝），只渲染
+        // 交付状态、不推进任何计划步骤。有 plan 会话：第一次调用机械计算
         // 交付状态渲染进黑板 plan 末步状态行（pending 确认）；第二次调用
         // 确认并置末步 done（进入最终回答流程）。普通订单绑定末步不产生
         // done；console_step_done 对末步同样拒绝（见下），杜绝绕过递交门。
@@ -10092,26 +10118,12 @@ impl AgentLoopController {
                     (Some(idx), Some(w.plan.steps[idx].id.clone()))
                 }
             };
-            let Some((terminal_idx, terminal_id)) = terminal_idx.zip(terminal_id) else {
-                return Ok((
-                    self.refuse_console_tool(
-                        writer,
-                        messages,
-                        &tc.name,
-                        &tc.call_id,
-                        "submit_no_plan",
-                        "submit refused — no plan in force; write a plan whose \
-                         final step is the fixed 递交/完成 step first",
-                    )
-                    .await?,
-                    None,
-                ));
-            };
             // MECHANICAL-AUDIT-LAYER (2026-08-24, ADR-0010 §14.39 / 设计
             // §2.1/§3)：submit 为信息展示、非硬门——订单层退役后无机械
             // 步骤推进机制（step 绑定/顺序转事件留痕），终答前的反例自查
             // 轮 + 审计报告承接「计划完成声明」核对；不再要求前序步骤
-            // done（step 状态退化为方向与状态展示）。
+            // done（step 状态退化为方向与状态展示）；无 plan 会话更只是
+            // 纯状态展示（§9.3：放行、不拒绝）。
             let epoch = self.blackboard.read().plan.plan_epoch;
             let pending = {
                 let p = self.delivery_pending.lock().unwrap();
@@ -10135,18 +10147,18 @@ impl AgentLoopController {
                 {
                     let mut w = self.blackboard.write();
                     w.plan.delivery_status = Some(status.clone());
-                    crate::planning::mark_step_done(
-                        &mut w.plan.steps,
-                        terminal_idx,
-                        &tc.call_id,
-                        None,
-                    );
+                    if let Some(terminal_idx) = terminal_idx {
+                        crate::planning::mark_step_done(
+                            &mut w.plan.steps,
+                            terminal_idx,
+                            &tc.call_id,
+                            None,
+                        );
+                    }
                 }
                 *self.delivery_pending.lock().unwrap() = (epoch, false);
                 (
-                    format!(
-                        "submit: 递交已确认，末步 {terminal_id} 完成，进入最终回答流程。\n{status}"
-                    ),
+                    Self::submit_confirm_message(terminal_id.as_deref(), &status),
                     serde_json::json!({
                         "phase": "confirmed",
                         "status": status,
@@ -23212,12 +23224,12 @@ mod tests {
 
     // ── ORZ-ORIENTATION-FORCED-TEMPLATE (2026-08-15, ADR-0010 §14.16) ─────
 
-    /// THIN-HARNESS-REDESIGN R1 (§4.3): orientation 强制模板轮变体退役——
-    /// 7 轮跨越阈值时只注入简短 [ORIENTATION] 块（fire-and-continue，
-    /// 立即 commit），不产生 checkpoint_response、不强制无工具轮；终答前
-    /// 方向核查由 COUNTEREXAMPLE_GATE 承担。
+    /// THIN-HARNESS-REDESIGN-V2 §9.2 (2026-08-29 软门): 7 轮跨越阈值时
+    /// 注入简短 [ORIENTATION v0.4] 块并延迟 commit；触发后的纯文本回答被
+    /// 消费（loop 明确续跑，不再被当终答），不产生 checkpoint_response、
+    /// 不强制无工具轮；终答只由模型自发。
     #[tokio::test]
-    async fn orientation_fires_as_brief_injection_and_continues() {
+    async fn orientation_soft_gate_consumes_text_answer_and_continues() {
         let dir = test_dir();
         let journal = JournalRecorder::new(dir.clone());
         let host = TestHost {
@@ -23237,6 +23249,9 @@ mod tests {
                 &format!("call-{i}"),
             )]));
         }
+        // 触发后的第一轮：纯文本回答被软消费（续跑），不计为终答。
+        script.push(ScriptedResponse::text("完成"));
+        // 反例门轮 + 最终答案轮。
         script.push(ScriptedResponse::text("完成"));
         script.push(ScriptedResponse::text("完成"));
         let controller = AgentLoopController::with_gateway(Arc::new(FakeProvider::new(script)));
@@ -23279,18 +23294,19 @@ mod tests {
             .filter(|e| e.event_type == EventType::CheckpointResponse)
             .collect();
         assert_eq!(responses.len(), 0, "{:?}", event_types(&dir));
-        // Fire 时立即 commit：7 轮触发后归 0，最后两个终答轮喂 2。
+        // 软门延迟 commit：第 8 轮（纯文本回答）feed 后 commit 归 0；
+        // 反例门轮 + 最终答案轮再喂 2。
         assert_eq!(orientation.main.completed_rounds, 2);
         assert_eq!(
             events.last().unwrap().event_type,
             EventType::RunFinished,
-            "actions resume after the brief injection"
+            "the pure-text answer was consumed and the run continues"
         );
         let _ = std::fs::remove_dir_all(&dir);
     }
 
-    /// THIN-HARNESS-REDESIGN R1 (§4.3): 触发后下一轮仍是普通工具轮——
-    /// orientation 不再强制无工具模板轮，read_file 调用照常执行。
+    /// THIN-HARNESS-REDESIGN-V2 §9.2 (2026-08-29 软门): 触发后下一轮
+    /// 仍是普通工具轮——orientation 不禁工具，read_file 调用照常执行。
     #[tokio::test]
     async fn orientation_fire_does_not_force_tool_free_round() {
         let dir = test_dir();
@@ -23312,7 +23328,8 @@ mod tests {
                 &format!("call-{i}"),
             )]));
         }
-        // Fire 后的下一轮：普通工具轮（read_file call-7）直接执行。
+        // Fire 后的下一轮：普通工具轮（read_file call-7）直接执行
+        // （软门消费点 commit 后落入常规派发路径）。
         script.push(ScriptedResponse::tool_calls(vec![tool_call(
             "read_file",
             "call-7",
@@ -23337,7 +23354,7 @@ mod tests {
             .unwrap();
 
         let events = events(&dir);
-        // 无 checkpoint_response（强制模板轮已退役）。
+        // 无 checkpoint_response（软门不产生模板响应事件）。
         assert_eq!(
             events
                 .iter()
@@ -23363,7 +23380,9 @@ mod tests {
             started_idx > fire_idx,
             "the tool round after the fire must execute normally"
         );
-        assert_eq!(orientation.main.completed_rounds, 3);
+        // 延迟 commit：第 8 轮（call-7 工具轮）feed 后 commit 归 0；
+        // 反例门轮 + 最终答案轮再喂 2。
+        assert_eq!(orientation.main.completed_rounds, 2);
         assert_eq!(events.last().unwrap().event_type, EventType::RunFinished);
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -28428,6 +28447,129 @@ mod tests {
             assert!(plan_text.contains("[delivery] 状态:"), "{plan_text}");
         }
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// THIN-HARNESS-REDESIGN-V2 §9.3 (2026-08-29)：无 plan 会话 submit
+    /// 放行 / 降级为纯状态展示——不再 `no plan in force` 拒绝；两阶段仍
+    /// 工作（requested → confirmed），确认轮不推进任何计划步骤。
+    #[tokio::test]
+    async fn submit_no_plan_renders_status_and_confirms() {
+        let dir = test_dir();
+        let baseline =
+            std::collections::HashMap::from([("src/cache.rs".to_string(), (10u64, 1u64, 0u32))]);
+        let after = std::collections::HashMap::from([
+            ("src/cache.rs".to_string(), (10u64, 1u64, 0u32)),
+            ("output.txt".to_string(), (5u64, 2u64, 0u32)),
+        ]);
+        let host = DeliveryHost {
+            journal: JournalRecorder::new(dir.clone()),
+            tool_result: ok_result(),
+            snapshots: std::sync::Mutex::new(VecDeque::from([
+                baseline.clone(),
+                after.clone(),
+                after.clone(),
+            ])),
+        };
+        let fake = Arc::new(FakeProvider::new(vec![
+            ScriptedResponse::tool_calls(vec![ToolCall {
+                name: "submit".to_string(),
+                arguments: serde_json::json!({}),
+                call_id: "call-sub-np-1".to_string(),
+            }]),
+            ScriptedResponse::tool_calls(vec![ToolCall {
+                name: "submit".to_string(),
+                arguments: serde_json::json!({}),
+                call_id: "call-sub-np-2".to_string(),
+            }]),
+            ScriptedResponse::text("完成"),
+            ScriptedResponse::text("完成"),
+        ]));
+        let gateway: Arc<dyn ModelGateway> = fake.clone();
+        // 生产路径形态：plan_first 关闭（默认）+ console_default 启用——
+        // 会话无 plan 在册。
+        let controller =
+            AgentLoopController::with_gateway(gateway).with_console_default_enabled(true);
+        controller
+            .run_turn(
+                &host,
+                "完成任务",
+                "RUN-SUB-NP",
+                MANIFEST,
+                0,
+                None,
+                None,
+                None,
+            )
+            .await
+            .unwrap();
+
+        let submits: Vec<_> = events(&dir)
+            .into_iter()
+            .filter(|e| {
+                e.event_type == EventType::ToolCompleted
+                    && e.payload.get("tool").and_then(serde_json::Value::as_str) == Some("submit")
+            })
+            .collect();
+        assert_eq!(
+            submits.len(),
+            2,
+            "two submit calls (request + confirm), no refusal: {:?}",
+            event_types(&dir)
+        );
+        assert!(
+            submits
+                .iter()
+                .all(|e| e.payload["exit_code"] == serde_json::json!(0)),
+            "submit must not be refused on a no-plan session"
+        );
+        assert_eq!(
+            submits[0].payload["delivery_phase"],
+            serde_json::json!("requested")
+        );
+        assert_eq!(
+            submits[1].payload["delivery_phase"],
+            serde_json::json!("confirmed")
+        );
+        // 无 plan：不推进任何步骤（steps 保持空）；交付状态仍渲染——
+        // 无计划批准基线 → 状态降级为"变更清单不可用"（纯状态展示、
+        // 非拒绝）。
+        {
+            let r = controller.blackboard().read();
+            assert!(r.plan.steps.is_empty(), "no plan steps may be fabricated");
+            let status = r
+                .plan
+                .delivery_status
+                .clone()
+                .expect("delivery status rendered");
+            assert!(
+                status.contains("[delivery] 状态: 变更清单不可用"),
+                "{status}"
+            );
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// THIN-HARNESS-REDESIGN-V2 §9.3（2026-08-29 审查处理）：submit 确认
+    /// 消息——有 plan 时保留"末步完成 + 进入最终回答流程"；无 plan（降级
+    /// 纯状态展示）不虚构机械流程，明确仅状态展示、未推进计划步骤。
+    #[test]
+    fn submit_confirm_message_differentiates_plan_and_no_plan() {
+        let status = "[delivery] 状态: 变更清单可用";
+        let with_plan = AgentLoopController::submit_confirm_message(Some("step-7"), status);
+        assert!(with_plan.contains("末步 step-7 完成"), "{with_plan}");
+        assert!(with_plan.contains("进入最终回答流程"), "{with_plan}");
+        assert!(with_plan.ends_with(status), "{with_plan}");
+
+        let no_plan = AgentLoopController::submit_confirm_message(None, status);
+        assert!(no_plan.contains("无计划基线"), "{no_plan}");
+        assert!(no_plan.contains("仅状态展示"), "{no_plan}");
+        assert!(no_plan.contains("未推进计划步骤"), "{no_plan}");
+        assert!(
+            !no_plan.contains("进入最终回答流程"),
+            "no-plan confirm must not fabricate a mechanical final-answer flow: {no_plan}"
+        );
+        assert!(!no_plan.contains("末步"), "{no_plan}");
+        assert!(no_plan.ends_with(status), "{no_plan}");
     }
 
     /// MECHANICAL-AUDIT-LAYER (2026-08-24, 设计 §2.1/§3)：submit 为信息

@@ -1085,19 +1085,20 @@ pub(crate) async fn run_agent_loop(
 
         // GAP-INQUIRY-SPLIT (2026-08-09) — FALLBACK orientation injection
         // point (loop-top): a post-tool-batch gap exists only on tool
-        // rounds. When the 7th completed round is a FINAL round (no tool
+        // rounds. When the threshold round is a FINAL round (no tool
         // batch — the turn breaks right after), the crossing is carried
         // here on the next loop-top: pacing + compaction done, before
         // the system prompt is built. (A deny round DOES have a tool
         // batch — its crossing fires in the post-tool-batch gap like any
         // tool round; review D3-1.) This is also the recovery resume
         // point (a restored session's persisted count crosses here).
-        // Fires at most once per loop iteration (commit resets the
-        // lane), so the two injection points never double-fire.
-        // One pending checkpoint at a time — while a forced-template round
-        // is pending, neither family may fire again (the counts are not
-        // committed yet, so the gate is the only thing preventing a
-        // double-fire at the next loop-top).
+        // Fires at most once per loop iteration, so the two injection
+        // points never double-fire.
+        // One pending checkpoint at a time — while an orientation pending
+        // round is outstanding (THIN-HARNESS-REDESIGN-V2 §9.2 软门),
+        // neither family may fire again (the counts are not committed
+        // yet, so the gate is the only thing preventing a double-fire at
+        // the next loop-top).
         if pending_checkpoint.is_none()
             && let Some(role) = profile.orientation_role
             && let Some(record) = controller
@@ -1107,11 +1108,11 @@ pub(crate) async fn run_agent_loop(
                     orientation.as_deref_mut(),
                     role,
                     "loop_top_gap",
-                    // THIN-HARNESS-REDESIGN R1 (§4.3): orientation 强制
-                    // 模板轮变体退役——主车道与检索车道统一 fire-and-continue
-                    // 简短注入（只留 [ORIENTATION] 块；终答前方向核查由
-                    // COUNTEREXAMPLE_GATE 承担，去重）。DC 的强制模板轮
-                    // 机制保留（maybe_fire_dc 独立路径）。
+                    // THIN-HARNESS-REDESIGN-V2 §9.2 (2026-08-29 软门):
+                    // 主车道 fire 延迟 commit 并经 pending 轮软消费；
+                    // 检索车道维持 fire-and-continue（controller 内按
+                    // role 分派）。DC 的强制模板轮机制保留
+                    // （maybe_fire_dc 独立路径）。
                     false,
                 )
                 .await?
@@ -1569,15 +1570,18 @@ pub(crate) async fn run_agent_loop(
             o.feed_round(role);
         }
 
-        // ORZ-ORIENTATION-FORCED-TEMPLATE (2026-08-15, ADR-0010 §14.16):
-        // a pending checkpoint's model round is the FORCED TEMPLATE round —
-        // no tools were offered, so nothing may execute. Validate the JSON
-        // answer, journal the `checkpoint_response` event (parsed fields +
-        // mechanical validation + evidence-identity cross-check + degrade
-        // reason), and either ask once for a re-fill or commit the fire
-        // (accepted/degraded, §2.4). The checkpoint answer itself counts as
-        // one completed logical model round (feed above) and stays in the
-        // conversation; the loop always continues after the branch.
+        // THIN-HARNESS-REDESIGN-V2 §9.2 (2026-08-29 用户裁决): orientation
+        // 软门——pending 轮的模型回答不再校验 JSON 模板、不再禁止工具：
+        // 纯文本回答被"消费"（保留进会话）后 loop 明确续跑；工具调用照常
+        // 执行（commit 后落入下方常规派发路径）。fire 在消费点提交
+        // （延迟 commit）。软门不产生 `checkpoint_response` 事件（无模板
+        // 可验证；fire 事件 + 后续 model_output/tool 事件构成审计链）。
+        // DC 的强制模板轮机制保留（下方 else 分支：JSON 校验 + 一次重填
+        // + checkpoint_response 事件）。回答轮本身照常计入已完成逻辑模型
+        // 轮（上方 feed）并保留在会话中。
+        // 边界（2026-08-29 审查收口）：若 run 在 fire 与消费之间硬中断，
+        // 计数保持未提交、journal 留孤儿 fire 事件，下次 run 首轮重触发
+        // ——见 controller `maybe_fire_orientation` 延迟 commit 注释。
         if let Some(pending) = pending_checkpoint.take() {
             // PLAN-FIRST 阶段 C (2026-08-16, ADR-0010 §14.17⑱ / 设计 §7.3):
             // console 双模式询问轮——模板不同（decision/reason），无工具轮
@@ -1637,87 +1641,116 @@ pub(crate) async fn run_agent_loop(
                 }
                 continue;
             }
-            let attempt = pending.attempt();
-            let mut verdict =
-                checkpoint::parse_and_validate(response.text.as_deref().unwrap_or_default());
-            // A checkpoint round may never dispatch tools — a tool_calls
-            // response is a template violation (the calls are not executed).
-            if !response.tool_calls.is_empty() {
-                verdict.errors.push("tool_calls_not_allowed".to_string());
-            }
-            // §2.3 缓解必做: `progress_evidence` (and the gathered-evidence
-            // missing surface) cross-checked against journal evidence
-            // identities — the main lane's own evidence + committed
-            // retrieval ledger ids/refs + DC examined-surface ids.
-            let mut identities: std::collections::HashSet<String> = controller
-                .checkpoint_source_identities()
-                .into_iter()
-                .collect();
-            if let Some(evidence) = svc.evidence {
-                identities.extend(
-                    evidence
-                        .lock()
-                        .unwrap()
-                        .iter()
-                        .map(|record| record.identity.clone()),
-                );
-            }
-            {
-                let dc = svc.dc_state.lock().unwrap();
-                identities.extend(dc.evidence_ids.iter().cloned());
-            }
-            let cross = checkpoint::cross_check(verdict.response.as_ref(), &identities);
-            let outcome = checkpoint::decide_outcome(attempt, &verdict.errors);
-            let (outcome_str, degrade_reason) = match outcome {
-                checkpoint::CheckpointRoundOutcome::Accepted => ("accepted", None),
-                checkpoint::CheckpointRoundOutcome::RefillRequested => ("refill_requested", None),
-                checkpoint::CheckpointRoundOutcome::Degraded { reason } => {
-                    ("degraded", Some(reason))
+            // Orientation soft gate — 消费并续跑（详见分支上方注释）。
+            if let PendingCheckpoint::Orientation { .. } = &pending {
+                checkpoint::commit_pending(pending, orientation.as_deref_mut(), svc.dc_state);
+                if response.tool_calls.is_empty() {
+                    // 纯文本回答被消费：保留进会话，loop 明确续跑。
+                    if let Some(text) = response.text.clone().filter(|t| !t.is_empty()) {
+                        messages.push(Message {
+                            role: Role::Assistant,
+                            content: text,
+                            tool_call_id: None,
+                            tool_calls: Vec::new(),
+                            reasoning_content: response.reasoning_content.clone(),
+                        });
+                    }
+                    continue;
                 }
-            };
-            writer
-                .record(
-                    EventType::CheckpointResponse,
-                    checkpoint::checkpoint_response_payload(
-                        &pending,
-                        attempt,
-                        outcome_str,
-                        &verdict,
-                        &cross,
-                        degrade_reason,
-                    ),
-                )
-                .await?;
-            // The template answer is model output — keep it in the
-            // conversation (the re-fill feedback below is injected text).
-            if let Some(text) = response.text.clone().filter(|t| !t.is_empty()) {
-                messages.push(Message {
-                    role: Role::Assistant,
-                    content: text,
-                    tool_call_id: None,
-                    tool_calls: Vec::new(),
-                    reasoning_content: response.reasoning_content.clone(),
-                });
-            }
-            match outcome {
-                checkpoint::CheckpointRoundOutcome::Accepted
-                | checkpoint::CheckpointRoundOutcome::Degraded { .. } => {
-                    // §2.4: only a completed template round (accepted or
-                    // degraded) commits the fire / advances the DC stage.
-                    checkpoint::commit_pending(pending, orientation.as_deref_mut(), svc.dc_state);
+                // 工具轮：commit 已完成，落入下方常规工具派发路径（不
+                // continue——触发轮不禁工具）。
+            } else {
+                // Diagnostic Coverage forced-template round (unchanged):
+                // validate the JSON answer, journal the `checkpoint_response`
+                // event, ask once for a re-fill or commit (accepted/degraded).
+                let attempt = pending.attempt();
+                let mut verdict =
+                    checkpoint::parse_and_validate(response.text.as_deref().unwrap_or_default());
+                // A checkpoint round may never dispatch tools — a tool_calls
+                // response is a template violation (the calls are not executed).
+                if !response.tool_calls.is_empty() {
+                    verdict.errors.push("tool_calls_not_allowed".to_string());
                 }
-                checkpoint::CheckpointRoundOutcome::RefillRequested => {
+                // §2.3 缓解必做: `progress_evidence` (and the gathered-evidence
+                // missing surface) cross-checked against journal evidence
+                // identities — the main lane's own evidence + committed
+                // retrieval ledger ids/refs + DC examined-surface ids.
+                let mut identities: std::collections::HashSet<String> = controller
+                    .checkpoint_source_identities()
+                    .into_iter()
+                    .collect();
+                if let Some(evidence) = svc.evidence {
+                    identities.extend(
+                        evidence
+                            .lock()
+                            .unwrap()
+                            .iter()
+                            .map(|record| record.identity.clone()),
+                    );
+                }
+                {
+                    let dc = svc.dc_state.lock().unwrap();
+                    identities.extend(dc.evidence_ids.iter().cloned());
+                }
+                let cross = checkpoint::cross_check(verdict.response.as_ref(), &identities);
+                let outcome = checkpoint::decide_outcome(attempt, &verdict.errors);
+                let (outcome_str, degrade_reason) = match outcome {
+                    checkpoint::CheckpointRoundOutcome::Accepted => ("accepted", None),
+                    checkpoint::CheckpointRoundOutcome::RefillRequested => {
+                        ("refill_requested", None)
+                    }
+                    checkpoint::CheckpointRoundOutcome::Degraded { reason } => {
+                        ("degraded", Some(reason))
+                    }
+                };
+                writer
+                    .record(
+                        EventType::CheckpointResponse,
+                        checkpoint::checkpoint_response_payload(
+                            &pending,
+                            attempt,
+                            outcome_str,
+                            &verdict,
+                            &cross,
+                            degrade_reason,
+                        ),
+                    )
+                    .await?;
+                // The template answer is model output — keep it in the
+                // conversation (the re-fill feedback below is injected text).
+                if let Some(text) = response.text.clone().filter(|t| !t.is_empty()) {
                     messages.push(Message {
-                        role: Role::User,
-                        content: checkpoint::refill_feedback_block(&verdict.errors),
+                        role: Role::Assistant,
+                        content: text,
                         tool_call_id: None,
                         tool_calls: Vec::new(),
-                        reasoning_content: None,
+                        reasoning_content: response.reasoning_content.clone(),
                     });
-                    pending_checkpoint = Some(pending.with_attempt(attempt + 1));
                 }
+                match outcome {
+                    checkpoint::CheckpointRoundOutcome::Accepted
+                    | checkpoint::CheckpointRoundOutcome::Degraded { .. } => {
+                        // §2.4: only a completed template round (accepted or
+                        // degraded) commits the fire / advances the DC stage.
+                        checkpoint::commit_pending(
+                            pending,
+                            orientation.as_deref_mut(),
+                            svc.dc_state,
+                        );
+                    }
+                    checkpoint::CheckpointRoundOutcome::RefillRequested => {
+                        messages.push(Message {
+                            role: Role::User,
+                            content: checkpoint::refill_feedback_block(&verdict.errors),
+                            tool_call_id: None,
+                            tool_calls: Vec::new(),
+                            reasoning_content: None,
+                        });
+                        pending_checkpoint = Some(pending.with_attempt(attempt + 1));
+                    }
+                }
+                continue;
             }
-            continue;
         }
 
         // PLAN-FIRST 阶段 A (2026-08-16, ADR-0010 §14.17): 首轮计划轮——
@@ -2344,11 +2377,11 @@ pub(crate) async fn run_agent_loop(
         // GAP-INQUIRY-SPLIT (2026-08-09) — MAIN orientation injection
         // point: the post-tool-batch gap (a safe action gap: the tool
         // results are in, the next generate has not started). The fired
-        // block rides into the next generate — which, on the main lane, is
-        // now a FORCED TEMPLATE round (no tools; the model answers the JSON
-        // template before actions resume). When this is the budget-exhausting
-        // round, the checkpoint round runs first and the post-budget final
-        // round reports the partial result after it (§14.16).
+        // block rides into the next generate, which is a soft-gate round
+        // (THIN-HARNESS-REDESIGN-V2 §9.2): 纯文本回答被消费、loop 续跑；
+        // 工具调用照常执行。When this is the budget-exhausting round,
+        // the checkpoint round runs first and the post-budget final round
+        // reports the partial result after it (§14.16).
         if pending_checkpoint.is_none()
             && let Some(role) = profile.orientation_role
             && let Some(record) = controller
@@ -2358,8 +2391,8 @@ pub(crate) async fn run_agent_loop(
                     orientation.as_deref_mut(),
                     role,
                     "post_tool_batch_gap",
-                    // THIN-HARNESS-REDESIGN R1 (§4.3): 同 loop-top——
-                    // orientation 只作简短注入，不设强制模板轮。
+                    // THIN-HARNESS-REDESIGN-V2 §9.2: 同 loop-top——
+                    // 软门模式（fire 延迟 commit + pending 软消费）。
                     false,
                 )
                 .await?

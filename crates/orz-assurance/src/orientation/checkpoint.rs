@@ -6,9 +6,12 @@
 //! the Python side (conformance suite + schema authority).
 
 /// The forced-template JSON answer contract text (ADR-0010 §4.2/§14.16;
-/// design §2.2). Shared by the Orientation block and the Diagnostic
-/// Coverage block — the two inquiry families use the same template
-/// mechanism (模板按触发类型微调 only in the surrounding block text).
+/// design §2.2). **休眠**——THIN-HARNESS-REDESIGN-V2 §9.2 (2026-08-29)
+/// 起 orientation 改软门（`ORIENTATION_BLOCK` v0.4 不再引用本模板）；
+/// Diagnostic Coverage 的强制模板轮继续使用同一套校验/重填机制
+/// （`parse_and_validate` / `decide_outcome` / `refill_feedback_block`）。
+/// 保留供强制模板轮未来恢复。**当前零引用**（DC 块文本亦不内嵌本指令）
+/// ——勿按死代码删除，亦勿在软门路径复用。
 macro_rules! template_answer_instructions {
     () => {
         "请暂停动作，只输出下面的 JSON 问询模板答案；不要调用任何工具，不要输出其他文本。\n\
@@ -27,19 +30,23 @@ macro_rules! template_answer_instructions {
 /// Diagnostic Coverage block (orz-loop) and any future template carrier.
 pub const TEMPLATE_ANSWER_INSTRUCTIONS: &str = template_answer_instructions!();
 
-/// Forced-template orientation prompt (ADR-0010 §4.2 / §14.16;
-/// `ORIENTATION_FORCED_TEMPLATE_DESIGN_2026-08-14.md` §2.2 — the old
-/// three-question free-text block is replaced by the JSON template round:
-/// the model must answer the template fields and no tools are offered).
+/// Soft-gate orientation prompt (THIN-HARNESS-REDESIGN-V2 §9.2,
+/// 2026-08-29 用户裁决) — 简短方向检查，非强制模板、不打断动作：
+/// 模型可简要回答后继续，也可直接继续动作；纯文本回答由 loop 消费后
+/// 明确续跑，终答仍只由模型自发。
 ///
 /// GAP-INQUIRY-SPLIT (2026-08-09): re-tagged `[ORIENTATION v0.2]` — the v0.2
 /// producer actually injects the block (the old monitor wrote the event but
 /// never injected it), so the marker must match the `ORIENTATION_INJECTED_PREFIX`
-/// registration in the injected-block filter. v0.3 (2026-08-15) carries the
-/// forced-template JSON answer contract.
+/// registration in the injected-block filter. v0.3 (2026-08-15) carried the
+/// forced-template JSON answer contract; v0.4 (2026-08-29) 软门——移除
+/// "只输出 JSON 模板 / 不要调用任何工具"措辞，恢复简短方向检查三问。
 pub const ORIENTATION_BLOCK: &str = concat!(
-    "[ORIENTATION v0.3]\n",
-    template_answer_instructions!(),
+    "[ORIENTATION v0.4]\n",
+    "方向检查（非强制模板，不打断动作）：\n",
+    "1. 当前正在做什么？\n",
+    "2. 当前任务定位是什么？\n",
+    "3. 下一步输出应该服务哪个用户目标？\n",
     "\n[/ORIENTATION]"
 );
 
@@ -251,28 +258,39 @@ mod tests {
     }
 
     #[test]
-    fn message_block_carries_forced_template_contract() {
+    fn message_block_carries_soft_direction_check() {
         let c = cp("TASK", 0);
-        // ORZ-ORIENTATION-FORCED-TEMPLATE (2026-08-15, ADR-0010 §14.16):
-        // v0.3 marker + the JSON template fields the model must answer.
-        assert!(c.message_block.starts_with("[ORIENTATION v0.3]"));
+        // THIN-HARNESS-REDESIGN-V2 §9.2 (2026-08-29)：v0.4 软门——简短
+        // 方向检查三问，无强制模板措辞、无工具禁令。
+        assert!(c.message_block.starts_with("[ORIENTATION v0.4]"));
         assert!(c.message_block.ends_with("[/ORIENTATION]"));
         assert!(c.message_block.starts_with("[ORIENTATION"));
-        for field in [
-            "task_position",
-            "progress_evidence",
-            "blockers",
-            "next_action",
-            "changed_direction",
-            "missing_evidence",
+        for question in [
+            "当前正在做什么",
+            "当前任务定位是什么",
+            "下一步输出应该服务哪个用户目标",
         ] {
             assert!(
-                c.message_block.contains(field),
-                "template field missing from block: {field}"
+                c.message_block.contains(question),
+                "direction-check question missing from block: {question}"
             );
         }
-        assert!(c.message_block.contains("不要调用任何工具"));
-        assert!(c.message_block.contains("gather_evidence"));
+        // 已退役的强制模板措辞不得回潮。
+        for retired in [
+            "只输出",
+            "JSON 模板",
+            "不要调用任何工具",
+            "请暂停动作",
+            "task_position",
+            "progress_evidence",
+            "next_action",
+            "gather_evidence",
+        ] {
+            assert!(
+                !c.message_block.contains(retired),
+                "retired forced-template wording must not return: {retired}"
+            );
+        }
     }
 
     #[test]

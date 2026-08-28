@@ -10,27 +10,20 @@
 //! journal `message_block` payload and the injected text stay one source;
 //! `ORIENTATION_INJECTED_PREFIX` registers it with the injected-block filter.
 
-/// Base system prompt — THIN-HARNESS-REDESIGN R1 (2026-08-27, §4.2)
-/// 中间态近零提示词。自然语言逻辑块，无版本号、无 XML 围栏；只保留工具
-/// 结果尚不能自解释的机械契约（读取信封 / 内容锚点 / submit 两阶段），
-/// 其余契约随工具结果与机械注入块承载（MECHANICAL_AUDIT /
-/// COUNTEREXAMPLE_GATE / ORIENTATION 等简短注入不变，见 §4.3）。
+/// Base system prompt — THIN-HARNESS-REDESIGN-V2 §9.1 (2026-08-29 用户
+/// 裁决)：**全空**。模型可见面 = 任务指令（用户消息）+ 工具列表 + 注入
+/// 块；契约全部由工具描述 / 结果信封 / 机械门承载：
+/// read_file 信封与 offset 续读、search_replace 内容锚点、
+/// blackboard_read 分区简定义、submit 两阶段、写锚点校验与拒绝信封。
+/// 机械门（预算 / 反例门 / orientation / 审计报告）走消息层，与 system
+/// prompt 无关。P6：对模型极简 ≠ 对框架极简——减法只作用于模型可见面，
+/// 框架机械层（HA 助理层 / 审计 / 门禁）承重不变。
 ///
-/// 历史（已删除的提示词段落及其去向）：D-1 引用纪律（提示词级轻量纪律，
-/// 随引用校验器整体删除一并退役）、读取纪律（契约下沉到 read_file 信封
-/// 结果）、会话数据边界（.gsa 不可见为机械 fail-closed，不再提示词引导）、
-/// 压缩白名单（A6 —— 工具接口封存，见 §4.1 边界项）、执行面 plan-first
-/// 文本（plan 门摘除，见 §4.5）。工具结果自解释目标态见设计 §4.2。
-///
-/// R2a 说明（2026-08-27）：检索分区行已随黑板拉取一并加入——R2a 后
-/// `blackboard_read` 可读 internal_ret / external_ret 分区，检索派发默认
-/// 只回指针摘要（`ORZ_RETRIEVAL_RESULT_CHANNEL=inline` 可回退全文），
-/// 本行是模型决定「是否按需拉取」的机械契约（设计 §4.2 中间态第 4 行）。
-pub const BASE_SYSTEM_PROMPT: &str = "工具按需使用，一次一个；不需要的信息不读。\n\
-大文件读取返回截断信封，需要后续内容时按 offset 续读。\n\
-写入用 search_replace，携带当前内容锚点；不匹配按报错修正。\n\
-子代理检索结果写入 blackboard 分区（internal_ret / external_ret），需要时用 blackboard_read 读取。\n\
-完成后用 submit 提交：第一次返回交付清单，核查后再次调用确认。";
+/// 历史（已删除的提示词段落及其去向）："工具按需使用，一次一个"行为行与
+/// "完成后用 submit 提交"引导行随 2026-08-29 置空一并消失（submit 两阶段
+/// 契约下沉到 submit 工具描述）；更早的 D-1 引用纪律 / 读取纪律 / 会话
+/// 数据边界 / 压缩白名单 / plan-first 文本 / 检索分区拉取行见 R1 审计。
+pub const BASE_SYSTEM_PROMPT: &str = "";
 
 /// Counterexample gate block — 正式答案输出前, fires once per run and the
 /// block explicitly tells the model it appears only once (§4.6.5 verbatim).
@@ -429,13 +422,11 @@ impl PromptBuilder {
         PromptBuilder
     }
 
-    /// IP2a: assemble the system prompt with the tool availability block
-    /// injected (when present) above the base instructions.
+    /// IP2a: assemble the system prompt — the base is empty (2026-08-29
+    /// §9.1), so the result is exactly the optional tool availability /
+    /// probe block (if any) and nothing else.
     pub fn build_system_prompt(&self, tool_availability_block: Option<&str>) -> String {
-        match tool_availability_block {
-            Some(block) => format!("{block}\n\n{BASE_SYSTEM_PROMPT}"),
-            None => BASE_SYSTEM_PROMPT.to_string(),
-        }
+        tool_availability_block.unwrap_or_default().to_string()
     }
 }
 
@@ -445,71 +436,25 @@ mod tests {
 
     #[test]
     fn system_prompt_injects_block() {
-        // THIN-HARNESS-REDESIGN R1 (§4.2)：SESSION 常驻预算块删除后主代理
-        // 系统提示 = 近零中间态文本（build_system_prompt(None)）；
-        // 预算为静默硬门，耗尽时仅提示一次。
+        // THIN-HARNESS-REDESIGN-V2 §9.1 (2026-08-29)：base 全空——
+        // 无探针块时系统提示为空串；有块时返回块本身（无 base 拼接）。
         let builder = PromptBuilder::new();
         let bare = builder.build_system_prompt(None);
-        assert_eq!(bare, BASE_SYSTEM_PROMPT);
+        assert_eq!(bare, "");
+        let with_block = builder.build_system_prompt(Some("[PROBE] tools"));
+        assert_eq!(with_block, "[PROBE] tools");
     }
 
     #[test]
-    fn base_system_prompt_is_near_zero_intermediate_text() {
-        // THIN-HARNESS-REDESIGN R1 (§4.2)：中间态只保留工具结果尚不能
-        // 自解释的机械契约（信封续读 / 内容锚点 / submit 两阶段），
-        // 不再有人格化、plan-first、检索派发仪式与 .gsa 引导段落。
+    fn base_system_prompt_is_empty() {
+        // THIN-HARNESS-REDESIGN-V2 §9.1 (2026-08-29 用户裁决)：prompt
+        // 全空——模型不接收任何系统级行为/契约文本；契约全部由工具描述、
+        // 结果信封与机械门承载（P6：减法只作用于模型可见面）。
         assert!(
-            BASE_SYSTEM_PROMPT.contains("工具按需使用，一次一个"),
-            "tool-usage line present: {BASE_SYSTEM_PROMPT}"
+            BASE_SYSTEM_PROMPT.is_empty(),
+            "base system prompt must be empty, got: {BASE_SYSTEM_PROMPT:?}"
         );
-        assert!(
-            BASE_SYSTEM_PROMPT.contains("大文件读取返回截断信封"),
-            "envelope read contract present: {BASE_SYSTEM_PROMPT}"
-        );
-        assert!(
-            BASE_SYSTEM_PROMPT.contains("offset 续读"),
-            "offset continuation contract present: {BASE_SYSTEM_PROMPT}"
-        );
-        assert!(
-            BASE_SYSTEM_PROMPT.contains("search_replace"),
-            "write-anchor contract present: {BASE_SYSTEM_PROMPT}"
-        );
-        // THIN-HARNESS-REDESIGN R2a (§4.2 中间态第 4 行): 检索分区拉取
-        // 契约——子代理结果写入黑板分区，模型按需 blackboard_read。
-        assert!(
-            BASE_SYSTEM_PROMPT.contains("internal_ret / external_ret")
-                && BASE_SYSTEM_PROMPT.contains("blackboard_read 读取"),
-            "retrieval-partition pull contract present: {BASE_SYSTEM_PROMPT}"
-        );
-        assert!(
-            BASE_SYSTEM_PROMPT.contains("submit 提交"),
-            "two-stage submit contract present: {BASE_SYSTEM_PROMPT}"
-        );
-        // 已删除段落不得回潮。
-        for retired in [
-            "你是 orz",
-            "plan_write",
-            "retrieve_project_docs",
-            "compaction_whitelist_add",
-            "引用纪律",
-            "会话数据边界",
-            "首轮",
-            "工具列表由运行时按轮声明",
-        ] {
-            assert!(
-                !BASE_SYSTEM_PROMPT.contains(retired),
-                "retired prompt text '{retired}' must not return"
-            );
-        }
-        assert!(
-            !BASE_SYSTEM_PROMPT.contains("可用性"),
-            "system prompt avoids availability wording: {BASE_SYSTEM_PROMPT}"
-        );
-        assert!(
-            BASE_SYSTEM_PROMPT.lines().count() <= 5,
-            "near-zero prompt stays small: {}",
-            BASE_SYSTEM_PROMPT.lines().count()
-        );
+        assert_eq!(BASE_SYSTEM_PROMPT.lines().count(), 0);
     }
 
     #[test]
@@ -587,9 +532,7 @@ mod tests {
         // (its v0.2 text carries a version marker — equality would miss it).
         let orientation_block = orz_assurance::orientation::checkpoint::ORIENTATION_BLOCK;
         assert!(is_injected_block_text(orientation_block));
-        assert!(is_injected_block_text(
-            "[ORIENTATION v0.3] 当前任务、位置与下一目标"
-        ));
+        assert!(is_injected_block_text("[ORIENTATION v0.4] 当前正在做什么"));
         // §14.16: the checkpoint re-fill feedback is injected text.
         assert!(is_injected_block_text(
             &crate::checkpoint::refill_feedback_block(&["next_action 越界".to_string()])
