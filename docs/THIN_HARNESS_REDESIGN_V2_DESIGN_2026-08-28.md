@@ -22,6 +22,19 @@
 > P1 已按下述定案修复——①file 域签名匹配改消费 stat 探针信号（§4.2）；
 > ②target 与 data 路径关系定案为"二选一 + 双写一致性校验 + 域前缀校验"
 > （§4.5），grep 改 FileOptional。P2/P3 修复与余项入账见 §4.2/§4.5/§8。
+> **2026-08-29 定案收口（S4 失败归因后，用户裁决）**：前 20 道错题 k=1
+> 重跑实证 2/20 解出（model-extraction-relu-logits / protein-assembly，
+> 均文件型 verifier、submit 实际被拒）；失败归因五类——submit 门死锁 /
+> verifier 环境错误 / 真实交付质量 / 提前收束 / 超时（明细见 §9）。
+> **提前收束根因**=R1 将 orientation 接入无头路径 + 阈值 50 + 注入块文本
+> 残留旧"强制模板暂停"措辞（"只输出 JSON 模板、不要调用任何工具"），模型
+> 纯文本回答被 loop 当终答 → 长任务 50 轮被掐断（旧二进制零 orientation
+> 触发、无此现象）。定案：①BASE_SYSTEM_PROMPT **全空**（含"工具按需使用"
+> 与 submit 引导行；契约全部由工具描述/信封/机械门承载）；②orientation
+> 恢复**软门**（阈值 50、触发轮不禁工具、纯文本回答消费后续跑、终答只由
+> 模型自发；强制模板轮设计保留在代码不启用）；③submit 门**无 plan 放行/
+> 降级为状态展示** + submit 工具描述清 plan 措辞（与 prompt 清空同批
+> 实施）。设计原则新增 P6（对模型极简 ≠ 对框架极简）。详见 §9。
 
 ## 1. 背景与动机
 
@@ -50,6 +63,10 @@
 - **P4 执行侧投资集中在工具效率与自解释契约**，不叠仪式；半助理层与审计层
   同样受"新增机制一律视为债务"约束。
 - **P5 审计只消费结构化字段，不做子串扫描**（§6）。
+- **P6 对模型极简 ≠ 对框架极简**：模型可见面（system prompt / 注入块）
+  只减不加；执行侧（半助理层 / 审计 / 机械门）按需加厚，承重在框架不在
+  提示词。官方极简 harness 的 82.7% 只说明模型侧可以极简，不意味着框架
+  可以整体简化。
 
 ## 3. 复读守卫后置化（施工 R1）
 
@@ -335,3 +352,63 @@ key_fields → target_state 顺序截断并置 `truncated: true`。
 - 失败诊断记录格式与关键词来源定案：结构化签名词典 + 有界原始尾部兜底
   （§4.2），R2 施工轮只需补充各工具域签名词典明细。
 - HA 架构五个待深入问题（§4.4）为下一阶段共同调研项，不属于设计裁决。
+
+## 9. 2026-08-29 定案收口（S4 失败归因后）
+
+> 实证：前 20 道错题 k=1 重跑（新二进制 6cc8586，job
+> `official-r2-failures-c1/c2`）2/20 解出。失败归因五类：①submit 门死锁
+> （7 题尝试 submit 全被 `no plan in force` 拒绝——旧二进制同样存在，R1
+> 摘除 plan 门后由"可绕开"变"必死 + 烧轮调查"）；②verifier 环境错误
+> （pytorch-model-cli libGL.so.1 缺失，收集阶段报错）；③真实交付质量
+> （query-optimize 运行时长 0.986s>1.05×golden、extract-elf 0% 匹配参考、
+> dna-insert 引物 Tm 差 7.09>5、filter-js-from-html XSS 与"原样保留"双挂）；
+> ④提前收束 5 题（50 轮处 orientation 强制纯文本回答被当终答，交付物缺失
+> ——chess-best-move / make-doom-for-mips / make-mips-interpreter /
+> caffe-cifar-10 / gcode-to-text）；⑤超时 8 题（其中 5 题 web 研究过重：
+> torch-pipeline-parallelism 21 / count-dataset-tokens 24 / gpt2-codegolf
+> 14 / tune-mjcf 11 / raman-fitting 13 次 web 调用）。journal 全查零真实
+> 400、零复读触发。
+
+### 9.1 Prompt 全空（2026-08-29 用户裁决）
+
+- BASE_SYSTEM_PROMPT 置空（含"工具按需使用，一次一个"行为行与"完成后用
+  submit 提交"引导行）。
+- 契约归属：read_file 信封/offset、search_replace 锚点、blackboard_read
+  分区简定义均已落在对应工具描述；submit 两阶段在 submit 工具描述；机械门
+  （写锚点校验 / 拒绝信封）兜底。注入块（反例门 / orientation / [本轮编辑]
+  / 预算耗尽）走消息层，与 system prompt 无关。
+- 测试：`base_system_prompt_is_near_zero_intermediate_text` 反转断言为空。
+- 原则：P6（对模型极简 ≠ 对框架极简）——框架侧重机械层（HA 助理层 / 审计
+  / 门禁）不变，减法只作用于模型可见面。
+
+### 9.2 Orientation 软门（2026-08-29 用户裁决）
+
+- 形态：阈值 50（`ORZ_ORIENTATION_THRESHOLD` 可配）触发；注入块改为简短
+  方向检查文本（去除"只输出 JSON 模板 / 不要调用任何工具"）；触发轮不禁
+  工具——模型可回答后继续，也可直接继续动作；纯文本回答被"消费"后 loop
+  明确续跑（复用 pending-checkpoint 消费路径，去掉模板校验与工具禁令）；
+  终答仍只由模型自发（非问询轮的纯文本响应）。
+- 强制模板轮（2026-08-14 硬门）设计**保留在代码不启用**
+  （`force_template_round` 休眠参数维持），后续需要时再启用。
+- 风险与回退：软门重新开放 2026-08-14"拉回失败"窗口（path-tracing /
+  make-doom 类循环触发多次不矫正）。本轮实证硬门在 50 轮直接掐断 run 是
+  更严重回归（5 题提前终答），且 make-doom 本轮仍死于硬门而非被其救回。
+  S4 复验专门盯 path-tracing / make-doom 形态；若复发优先执行侧（工具
+  效率/诊断），不叠硬门。
+
+### 9.3 Submit 门修复（并入下一实施批次）
+
+- 无 plan 会话：submit 放行 / 降级为纯状态展示（设计本就定位"信息展示、
+  非硬门"），不再 `no plan in force` 拒绝。
+- submit 工具描述清掉 plan 措辞（"The final plan step is the fixed
+  递交/完成 step…"）。
+- 与 prompt 清空同批：base prompt 的 submit 引导行随清空消失。
+
+### 9.4 实施批次（待放行）
+
+1. prompt 全空 + near-zero 测试反转；
+2. orientation 软门（块文本 + 消费续跑路径；强制模板轮休眠不动）；
+3. submit 门与描述清理 + 回归测试；
+4. 后续 S3 重建 / S4 复验（错题重跑回归：提交不再被拒、长任务不再 50 轮
+   提前收束、命中率对比）；ADR-0010 修订与 CLI_PROJECT_INDEX 登记按 R3
+   纪律一并处理。

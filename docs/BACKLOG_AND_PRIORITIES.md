@@ -1468,6 +1468,21 @@ S1-S4 全部闭合）
   usage / signer manifest 缺失 / orz TTY io error 均符合预期）；对应源码
   orz 6cc8586 + 父 a21fcd1；警告面 14 项与上次基线持平；S4 复验仍待实机
   放行。
+- **2026-08-29 S4 失败归因 + 设计定案（用户裁决）**：前 20 道错题 k=1
+  重跑（official-r2-failures-c1/c2，新二进制 6cc8586）2/20 解出
+  （model-extraction-relu-logits / protein-assembly，均文件型 verifier、
+  submit 实际被拒）。归因五类：①submit 门死锁——7 题尝试 submit 全被
+  `no plan in force` 拒（旧二进制同样存在，R1 摘 plan 门后由"可绕开"变
+  "必死 + 烧轮调查"）；②verifier 环境错误——pytorch-model-cli libGL.so.1
+  缺失（收集阶段报错）；③真实交付质量——query-optimize 运行时长 /
+  extract-elf 0% 匹配 / dna-insert 引物 Tm / filter-js-from-html XSS 与
+  "原样保留"双挂；④提前收束 5 题——orientation 在 50 轮强制纯文本回答被
+  loop 当终答（R1 无头接线 + 注入块文本残留旧"强制模板暂停"措辞；旧二进制
+  零 orientation 触发、无此现象）；⑤超时 8 题（5 题 web 研究过重）。journal
+  全查零真实 400、零复读触发。**定案**：①BASE_SYSTEM_PROMPT 全空（契约全落
+  工具描述/信封/机械门）；②orientation 软门（阈值 50、回答消费续跑、强制
+  模板轮保留不启用）；③submit 门无 plan 放行/降级 + 描述清 plan 措辞（与
+  prompt 清空同批）。计数不变（设计轮）；W4-R4 实施待放行。详见设计 V2 §9。
 
 ### 1. FUS-TOOL-PROBE（`implemented`；P0-A 批次 1-7 与 P0-A-2 已闭合）
 
