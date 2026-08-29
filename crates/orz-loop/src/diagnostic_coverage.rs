@@ -222,7 +222,7 @@ pub(crate) async fn maybe_consume_dc_signal(
 /// examined surfaces for the key-surface signal.
 pub(crate) async fn maybe_consume_dc_retrieval_evidence(
     state: &Mutex<DebugEpisodeState>,
-    committed: &crate::controller::StructuredCommittedResult,
+    committed: &crate::retrieval::evidence::StructuredCommittedResult,
 ) -> Result<(), AgentLoopError> {
     let mut s = state.lock().unwrap();
     if let Some(ledger) = committed

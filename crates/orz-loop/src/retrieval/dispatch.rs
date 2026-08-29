@@ -15,7 +15,7 @@ use crate::agents::{RetrievalSubagent, SubagentRole};
 use crate::blackboard::ToolActionRecord;
 use crate::controller::{
     AgentLoopController, AgentLoopError, EventWriter, RetrievalCapability, RetrievalMode,
-    RetrievalResultChannel, build_structured_result, chrono_utc_now, estimate_messages_tokens,
+    RetrievalResultChannel, chrono_utc_now, estimate_messages_tokens,
     retrieval_result_channel_from_env,
 };
 use crate::gateway::model::{Message, ModelGateway, Role, ToolCall};
@@ -23,6 +23,7 @@ use crate::host::{LoopHost, ToolDef, ToolResult};
 use crate::orientation::OrientationSessionState;
 use crate::relay::DispatchTarget;
 use crate::retrieval::activation::{ActivationState, ActivationStatus};
+use crate::retrieval::evidence::build_structured_result;
 
 impl AgentLoopController {
     /// Run a retrieval subagent for a retrieval-shaped tool call.

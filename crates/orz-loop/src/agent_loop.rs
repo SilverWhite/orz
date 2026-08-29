@@ -407,7 +407,7 @@ pub(crate) struct SharedLoopServices<'a> {
     /// GAP-RETRIEVAL-TOOLS (2026-08-10): retrieval-lane tool-call evidence
     /// (ADR-0010 §3.7.4 — the mechanical source of the structured ledger).
     /// `Some` only on retrieval profiles; the main lane passes `None`.
-    pub evidence: Option<&'a Mutex<Vec<crate::controller::EvidenceRecord>>>,
+    pub evidence: Option<&'a Mutex<Vec<crate::retrieval::evidence::EvidenceRecord>>>,
     /// GAP-DENIAL-POLICY-REVISION (2026-08-12): the live policy revision —
     /// feeds the role-gate denial key (a bump is a key change → the breaker
     /// resets, ADR-0010 §3.5.4).
@@ -2198,8 +2198,9 @@ pub(crate) async fn run_agent_loop(
                         // mechanical source of the structured result's
                         // ledger (§3.7.4). Main lane: `None`.
                         if let Some(evidence) = svc.evidence
-                            && let Some(record) =
-                                crate::controller::build_evidence_record(&tc.name, tc, &result)
+                            && let Some(record) = crate::retrieval::evidence::build_evidence_record(
+                                &tc.name, tc, &result,
+                            )
                         {
                             evidence.lock().unwrap().push(record);
                         }

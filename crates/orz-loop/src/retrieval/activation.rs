@@ -11,11 +11,10 @@ use serde::{Deserialize, Serialize};
 use orz_assurance::{EventType, sha256_hex};
 
 use crate::agents::SubagentRole;
-use crate::controller::{
-    AgentLoopController, AgentLoopError, EventWriter, PendingDisposition, StructuredCommittedResult,
-};
+use crate::controller::{AgentLoopController, AgentLoopError, EventWriter, PendingDisposition};
 use crate::gateway::model::{Message, Role};
 use crate::prompt::{is_injected_block_text, is_restore_retained_block};
+use crate::retrieval::evidence::StructuredCommittedResult;
 
 impl AgentLoopController {
     /// GAP-RETRIEVAL-TOOLS (2026-08-10): best-effort structured-result
