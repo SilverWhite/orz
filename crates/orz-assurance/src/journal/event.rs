@@ -47,6 +47,12 @@ pub enum EventType {
     PermissionDecision,
     ToolStarted,
     ToolCompleted,
+    // THIN-HARNESS-REDESIGN-V2 §9.7 (2026-08-29 S5-2): a terminal command
+    // auto-backgrounded at the 300s report point — the mid-run status
+    // (运行时长/进程状态/输出活跃度/落盘指针) journaled between the call's
+    // ToolStarted and ToolCompleted (v0.2 track only; at most one per
+    // call_id).
+    ToolRunning,
 
     // Assurance
     OrientationCheckpoint,

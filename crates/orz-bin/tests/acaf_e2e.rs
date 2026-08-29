@@ -8,9 +8,13 @@
 //!
 //! Test 1: signer-process lifecycle — manifest self-hash check, session
 //! init, sign, verify, negative paths (replay / target mismatch).
-//! Test 2: controller full chain — a scripted retrieval run whose
-//! disposition/close/goal-revision control events each carry a ticket in
-//! the journal (issued → consumed), plus the orientation fire path.
+//! Test 2: controller full chain — THIN-HARNESS-REDESIGN R1 (2026-08-27,
+//! 设计 §4.4)「每次调用即闭环」：检索派发结果形成后立即 auto_close（CloseV1
+//! 票据 issued → consumed + close record，terminal_reason=auto_close）；
+//! disposition close/continue 往返退役——跨 run 恢复的 AwaitingDisposition
+//! 激活经休眠 handler（handle_parent_disposition）带 DispositionV1 /
+//! GoalRevisionV1 票据（见 goal_revision_continue_flow_re_derives_session_key
+//! 与 fail_closed_*_goal_revision_* 测试）。
 //! Test 3: signer unavailable → `control_ticket_rejected(signer_unreachable)`
 //! — shadow mode records the security event but does NOT block the control
 //! event (Slice 1 semantics; fail-closed flips with Slice 2).
@@ -101,6 +105,7 @@ impl LoopHost for TestHost {
         Ok(TestRunResult {
             output: "tests ok".to_string(),
             exit_code: Some(0),
+            timed_out: false,
             full_output_path: None,
             output_encoding: None,
             workspace_delta: Vec::new(),
@@ -193,6 +198,31 @@ fn disposition_call(decision: &str, delta: Option<&str>, call_id: &str) -> ToolC
         arguments: args,
         call_id: call_id.to_string(),
     }
+}
+
+/// THIN-HARNESS-REDESIGN R1 (2026-08-27, 设计 §4.4): disposition
+/// close/continue 往返已从生产流程退役，但跨 run 恢复的
+/// AwaitingDisposition 激活仍经休眠 handler（handle_parent_disposition）
+/// 延续——这是 DispositionV1 / GoalRevisionV1 票据路径的唯一可达入口。
+/// 本快照模拟上一 run 遗留的待决激活（sidecar 形态，与 controller
+/// `stored_activation_old_sidecar_no_conversation_field` 测试一致）。
+fn seeded_internal_activation_snapshot() -> serde_json::Value {
+    serde_json::json!({
+        "next_seq": {"internal_retrieval": 1},
+        "activations": [{
+            "activation_id": "retrieval-internal_retrieval-sess-abc-00",
+            "parent_session_id": "sess-abcdef123456",
+            "subagent_session_id": "SUB-internal_retrieval-sess-abc",
+            "contract_id": "retrieval-contract-internal_retrieval",
+            "contract_revision": 0,
+            "status": "awaiting_disposition",
+            "tool_rounds_used": 2,
+            "result_digest": "b".repeat(64),
+            "pending_assessment_id": "ASSESS-PREV-1",
+            "pending_expected_contract_revision": 0,
+            "origin_run_id": "RUN-PREV-0001",
+        }]
+    })
 }
 
 fn events(dir: &Path) -> Vec<RunEvent> {
@@ -340,8 +370,12 @@ async fn controller_control_events_carry_tickets() {
     let events = events(&dir);
     let types: Vec<String> = events.iter().map(|e| e.event_type.to_string()).collect();
 
-    // The accepted close disposition + the close record must each carry a
-    // ticket: issued → consumed for the same ticket_id, in order.
+    // R1 (2026-08-27, 设计 §4.4): 每次调用即闭环——检索结果形成后立即
+    // auto_close（CloseV1 票据 + close record）；disposition close/continue
+    // 往返退役，迟到的 retrieval_disposition 调用被机械拒绝
+    // （no_pending_assessment，零 disposition 事件、零二次 close）。本测试
+    // 锁定 auto_close 控制事件票据链：CloseV1 issued → consumed，无
+    // DispositionV1/GoalRevisionV1。
     let issued: Vec<_> = events
         .iter()
         .filter(|e| e.event_type.to_string() == "control_ticket_issued")
@@ -355,57 +389,79 @@ async fn controller_control_events_carry_tickets() {
         .filter(|e| e.event_type.to_string() == "control_ticket_rejected")
         .collect();
 
-    // disposition (accepted close) + goal revision is not fired (decision
-    // close, no continue) + close record = 2 tickets: disposition + close.
-    assert_eq!(
-        issued.len(),
-        2,
-        "expected disposition+close tickets: {types:?}"
-    );
-    assert_eq!(consumed.len(), 2, "both tickets consumed: {types:?}");
+    // auto_close = 一条 CloseV1 票据。
+    assert_eq!(issued.len(), 1, "one auto-close ticket: {types:?}");
+    assert_eq!(consumed.len(), 1, "auto-close ticket consumed: {types:?}");
     assert!(
         rejected.is_empty(),
         "no rejections in the happy path: {types:?}"
     );
-
-    // Order: issued(ticket A=disposition) → disposition → issued(ticket B=close)
-    // → close → consumed(A) → consumed(B) — the ticket lifecycle wraps its
-    // control event; the close record's ticket is issued before the close
-    // event itself (write_close_record starts with the ticket).
-    // Review P2-5 (2026-08-12): every consumed must pair with its issued
-    // ticket AND appear AFTER it (the one-shot consume wraps the control
-    // event in the journal).
-    let disp_issued = &issued[0].payload;
-    assert_eq!(disp_issued["ticket_kind"], "disposition_v1");
-    let close_issued = &issued[1].payload;
+    let close_issued = &issued[0].payload;
     assert_eq!(close_issued["ticket_kind"], "close_v1");
-    for (consumed_idx, consumed_event) in consumed.iter().enumerate() {
-        let consumed_payload = &consumed_event.payload;
-        let matching_issued = issued
-            .iter()
-            .find(|e| e.payload["ticket_id"] == consumed_payload["ticket_id"])
-            .unwrap_or_else(|| panic!("consumed[{}] references unknown ticket", consumed_idx));
-        assert!(
-            matching_issued.sequence < consumed_event.sequence,
-            "consumed[{}] must follow its issued event (issued seq {}, consumed seq {})",
-            consumed_idx,
-            matching_issued.sequence,
-            consumed_event.sequence
-        );
-    }
 
-    // Sequence monotonic across the run's tickets (per session).
-    let seq_a = issued[0].payload["sequence"].as_u64().unwrap();
-    let seq_b = issued[1].payload["sequence"].as_u64().unwrap();
+    // close record: auto_close 引用 assessment + result_digest，不引用
+    // disposition。
+    let closes: Vec<_> = events
+        .iter()
+        .filter(|e| e.event_type.to_string() == "retrieval_close_record")
+        .collect();
+    assert_eq!(closes.len(), 1, "one auto_close close record: {types:?}");
+    let close = &closes[0].payload;
+    assert_eq!(
+        close.get("terminal_reason").and_then(|v| v.as_str()),
+        Some("auto_close")
+    );
+    assert_eq!(
+        close.get("validated_disposition_id"),
+        Some(&serde_json::Value::Null),
+        "auto_close 不引用 disposition"
+    );
+    assert!(close.get("assessment_id").is_some());
+    let digest = close.get("result_digest").and_then(|v| v.as_str()).unwrap();
+    assert_eq!(digest.len(), 64, "64-hex sha256 for auto_close");
+
+    // 迟到的 disposition 调用（脚本 call-d1）被机械拒绝——零 disposition
+    // 事件、零二次 close。
+    assert_eq!(
+        events
+            .iter()
+            .filter(|e| e.event_type.to_string() == "retrieval_parent_disposition")
+            .count(),
+        0,
+        "disposition round-trip retired: {types:?}"
+    );
+    assert_eq!(
+        events
+            .iter()
+            .filter(|e| {
+                e.event_type.to_string() == "tool_completed"
+                    && e.payload.get("error").and_then(|v| v.as_str())
+                        == Some("no_pending_assessment")
+            })
+            .count(),
+        1,
+        "late disposition mechanically refused: {types:?}"
+    );
+
+    // Consumed must pair with its issued ticket AND appear after it
+    // (Review P2-5, 2026-08-12: the one-shot consume wraps the control
+    // event in the journal).
+    let consumed_payload = &consumed[0].payload;
+    assert_eq!(
+        consumed_payload["ticket_id"], close_issued["ticket_id"],
+        "consumed references the issued ticket: {types:?}"
+    );
     assert!(
-        seq_b > seq_a,
-        "sequence must be monotonic: {seq_a} < {seq_b}"
+        issued[0].sequence < consumed[0].sequence,
+        "consumed must follow its issued event (issued seq {}, consumed seq {})",
+        issued[0].sequence,
+        consumed[0].sequence
     );
 
     // Goal binding present (check 4 context).
-    assert_eq!(disp_issued["goal_version"], 0);
+    assert_eq!(close_issued["goal_version"], 0);
     assert_eq!(
-        disp_issued["goal_digest"].as_str().unwrap().len(),
+        close_issued["goal_digest"].as_str().unwrap().len(),
         64,
         "goal digest bound to the ticket"
     );
@@ -488,12 +544,40 @@ async fn signer_unreachable_shadow_records_rejection_and_proceeds() {
             rejection.payload
         );
     }
-    // The control events still happened (shadow mode).
-    let dispositions = events
+    // R1 (2026-08-27, 设计 §4.4): 每次调用即闭环——auto_close 的 CloseV1
+    // 票据在 signer 不可达时被拒（shadow 留痕），但控制事件仍继续：close
+    // record 照常落（shadow 模式 rejection 不阻断控制事件，Slice 1 语义）。
+    let rejected_kinds: Vec<&str> = rejected
         .iter()
-        .filter(|e| e.event_type.to_string() == "retrieval_parent_disposition")
-        .count();
-    assert_eq!(dispositions, 1, "control event must proceed: {types:?}");
+        .map(|e| e.payload["ticket_kind"].as_str().unwrap())
+        .collect();
+    assert!(
+        rejected_kinds.contains(&"close_v1"),
+        "auto-close CloseV1 rejection must be journaled: {rejected_kinds:?}"
+    );
+    let closes: Vec<_> = events
+        .iter()
+        .filter(|e| e.event_type.to_string() == "retrieval_close_record")
+        .collect();
+    assert_eq!(
+        closes.len(),
+        1,
+        "shadow mode: the auto-close control event proceeds: {types:?}"
+    );
+    assert_eq!(
+        closes[0].payload["terminal_reason"], "auto_close",
+        "{:?}",
+        closes[0].payload
+    );
+    // 零 disposition 事件（往返退役）；迟到的 disposition 调用被机械拒绝。
+    assert_eq!(
+        events
+            .iter()
+            .filter(|e| e.event_type.to_string() == "retrieval_parent_disposition")
+            .count(),
+        0,
+        "disposition round-trip retired: {types:?}"
+    );
 }
 
 // ── test 4: self-healing — a killed signer respawns transparently ──────────
@@ -912,23 +996,26 @@ async fn goal_revision_continue_flow_re_derives_session_key() {
     let new_goal_digest =
         sha256_hex(&canonical_json(&serde_json::json!({ "goal": delta })).unwrap());
 
+    // R1 (2026-08-27, 设计 §4.4): disposition 往返退役——GoalRevisionV1 仅
+    // 经跨 run 恢复的 AwaitingDisposition 激活（休眠 handler）可达。种子
+    // 一个上一 run 遗留的待决激活，脚本：continue（DispositionV1 +
+    // GoalRevisionV1，旧 goal 上下文）→ 父代理 wrap-up → 重新派发
+    // （continue 语义复用同一激活）→ 新结果 auto_close（CloseV1，新 goal
+    // 上下文，K_session 重派生后序列重启）。
     let gateway: Arc<dyn ModelGateway> = Arc::new(FakeProvider::new(vec![
-        ScriptedResponse::tool_calls(vec![tool_call("retrieve_project_docs", "call-1")]),
-        ScriptedResponse::tool_calls(vec![tool_call("read_file", "call-s1")]),
-        ScriptedResponse::text("[DOC] a.md\n第一批"),
         ScriptedResponse::tool_calls(vec![disposition_call("continue", Some(delta), "call-d1")]),
-        ScriptedResponse::text("继续"),
+        ScriptedResponse::text("继续"), // parent wrap-up after the accepted continue
         // Re-entry into the same activation (continue semantics).
         ScriptedResponse::tool_calls(vec![tool_call("retrieve_project_docs", "call-2")]),
         ScriptedResponse::tool_calls(vec![tool_call("read_file", "call-s2")]),
-        ScriptedResponse::text("[DOC] a.md\n第二批"),
-        ScriptedResponse::tool_calls(vec![disposition_call("close", None, "call-d2")]),
+        ScriptedResponse::text("[DOC] a.md\n第二批"), // subagent result → auto_close
         ScriptedResponse::text("完成"),
         // counterexample gate round
         ScriptedResponse::text("完成"),
     ]));
 
     let controller = AgentLoopController::with_gateway(gateway)
+        .with_activation_snapshot(Some(&seeded_internal_activation_snapshot()))
         .with_retrieval_mode(
             RetrievalMode::FrameworkFallback,
             RetrievalCapability::Available,
@@ -967,10 +1054,10 @@ async fn goal_revision_continue_flow_re_derives_session_key() {
         .filter(|e| e.event_type.to_string() == "control_ticket_rejected")
         .collect();
 
-    // 4 tickets: disposition-continue + goal_revision (OLD context) then
-    // disposition-close + close (NEW context, after the re-derivation).
-    assert_eq!(issued.len(), 4, "expected 4 tickets: {types:?}");
-    assert_eq!(consumed.len(), 4, "all tickets consumed: {types:?}");
+    // 3 tickets: disposition-continue + goal_revision (OLD context) then
+    // auto-close CloseV1 (NEW context, after the re-derivation).
+    assert_eq!(issued.len(), 3, "expected 3 tickets: {types:?}");
+    assert_eq!(consumed.len(), 3, "all tickets consumed: {types:?}");
     assert!(
         rejected.is_empty(),
         "no rejections on the happy path: {types:?}"
@@ -982,16 +1069,12 @@ async fn goal_revision_continue_flow_re_derives_session_key() {
         .collect();
     assert_eq!(
         kinds,
-        vec![
-            "disposition_v1",
-            "goal_revision_v1",
-            "disposition_v1",
-            "close_v1"
-        ],
+        vec!["disposition_v1", "goal_revision_v1", "close_v1"],
         "ticket order across the continue flow: {kinds:?}"
     );
 
-    // OLD-context tickets: goal_version 0, the run-start goal digest.
+    // OLD-context tickets (disposition + goal revision): goal_version 0,
+    // the run-start goal digest.
     for (i, ticket) in issued.iter().take(2).enumerate() {
         assert_eq!(
             ticket.payload["goal_version"], 0,
@@ -1013,30 +1096,29 @@ async fn goal_revision_continue_flow_re_derives_session_key() {
         issued[1].payload
     );
 
-    // NEW-context tickets (after K_session re-derivation): goal_version 1,
-    // the continue delta as the new goal binding.
-    for (i, ticket) in issued.iter().skip(2).enumerate() {
-        let i = i + 2;
-        assert_eq!(
-            ticket.payload["goal_version"], 1,
-            "ticket[{i}] binds the new goal"
-        );
-        assert_eq!(
-            ticket.payload["goal_digest"].as_str().unwrap(),
-            new_goal_digest,
-            "ticket[{i}] new goal digest"
-        );
-    }
+    // NEW-context ticket (auto-close CloseV1, after K_session
+    // re-derivation): goal_version 1, the continue delta as the new goal
+    // binding.
+    let new_ctx = &issued[2].payload;
+    assert_eq!(
+        new_ctx["goal_version"], 1,
+        "close_v1 binds the new goal: {types:?}"
+    );
+    assert_eq!(
+        new_ctx["goal_digest"].as_str().unwrap(),
+        new_goal_digest,
+        "close_v1 new goal digest"
+    );
 
     // Ledger epoch: the re-derivation restarts the signer sequence — the
-    // close-flow tickets re-start at 1 (per-K_session epoch, Slice 1 D2-1).
+    // close ticket re-starts at 1 (per-K_session epoch, Slice 1 D2-1).
     let seqs: Vec<u64> = issued
         .iter()
         .map(|e| e.payload["sequence"].as_u64().unwrap())
         .collect();
     assert_eq!(
         seqs,
-        vec![1, 2, 1, 2],
+        vec![1, 2, 1],
         "sequence restarts on the new epoch: {seqs:?}"
     );
 
@@ -1702,18 +1784,34 @@ async fn missing_browser_read_url_refuses_before_acaf_with_count_gate() {
 
     let events = events(&dir);
     let types: Vec<String> = events.iter().map(|e| e.event_type.to_string()).collect();
-    let ticket_events: Vec<_> = events
+    // R1 (2026-08-27, 设计 §4.4): 每次调用即闭环——检索 lane 结果形成后
+    // auto_close（CloseV1 票据 + close record）是唯一票据事件。browser_read
+    // 的 URL 门拒绝发生在此前：该调用无 ToolStarted、无 network_v1 票据
+    // （缺 count-identity 即硬拒绝，拒绝在 ACAF 层之前）——门拒绝不产生
+    // 任何票据。
+    let issued: Vec<_> = events
         .iter()
-        .filter(|e| {
-            matches!(
-                e.event_type.to_string().as_str(),
-                "control_ticket_issued" | "control_ticket_consumed" | "control_ticket_rejected"
-            )
-        })
+        .filter(|e| e.event_type.to_string() == "control_ticket_issued")
         .collect();
+    let consumed: Vec<_> = events
+        .iter()
+        .filter(|e| e.event_type.to_string() == "control_ticket_consumed")
+        .collect();
+    assert_eq!(
+        issued.len(),
+        1,
+        "only the lane auto-close ticket: {types:?}"
+    );
+    assert_eq!(consumed.len(), 1, "auto-close ticket consumed: {types:?}");
+    assert_eq!(
+        issued[0].payload["ticket_kind"], "close_v1",
+        "no network_v1 ticket for the refused browser_read: {types:?}"
+    );
     assert!(
-        ticket_events.is_empty(),
-        "missing URL must refuse before any ticket layer: {types:?}"
+        events
+            .iter()
+            .all(|e| e.event_type.to_string() != "control_ticket_rejected"),
+        "no rejections on the happy path: {types:?}"
     );
     // The ToolCompleted carries the stable gate code and the tool never
     // started.
@@ -1781,7 +1879,7 @@ async fn fail_closed_startup_refuses_unconfigured_fabric() {
 /// control-ticket events (regression lock: the exclusion is explicit, not
 /// accidental).
 #[tokio::test]
-async fn fail_closed_web_search_executes_unticketed_with_zero_ticket_events() {
+async fn fail_closed_web_search_tool_unticketed_lane_auto_close_ticketed() {
     let fixture = SignerFixture::new();
     let client = Arc::new(tokio::sync::Mutex::new(spawn_client(&fixture).await));
 
@@ -1850,14 +1948,43 @@ async fn fail_closed_web_search_executes_unticketed_with_zero_ticket_events() {
         .expect("run turn");
 
     let events = events(&dir);
-    let ticket_events: Vec<String> = events
+    // R1 (2026-08-27, 设计 §4.4): 每次调用即闭环——检索 lane 结果形成后
+    // auto_close（CloseV1 票据 + close record）是唯一票据事件。web_search
+    // 工具调用本身无票（ACAF 无 web_search 动作票，URL/命令族才有）；
+    // fail-closed 下 lane 的 close_v1 正常签发消费，工具调用面无票执行。
+    let issued: Vec<_> = events
         .iter()
-        .filter(|e| e.event_type.to_string().starts_with("control_ticket_"))
-        .map(|e| e.event_type.to_string())
+        .filter(|e| e.event_type.to_string() == "control_ticket_issued")
+        .collect();
+    let consumed: Vec<_> = events
+        .iter()
+        .filter(|e| e.event_type.to_string() == "control_ticket_consumed")
+        .collect();
+    assert_eq!(
+        issued.len(),
+        1,
+        "only the lane auto-close ticket: {:?}",
+        issued
+            .iter()
+            .map(|e| e.event_type.to_string())
+            .collect::<Vec<_>>()
+    );
+    assert_eq!(consumed.len(), 1, "auto-close ticket consumed");
+    assert_eq!(
+        issued[0].payload["ticket_kind"], "close_v1",
+        "web_search itself stays unticketed (no action ticket kind)"
+    );
+    let rejected: Vec<_> = events
+        .iter()
+        .filter(|e| e.event_type.to_string() == "control_ticket_rejected")
         .collect();
     assert!(
-        ticket_events.is_empty(),
-        "web_search must stay unticketed under fail-closed: {ticket_events:?}"
+        rejected.is_empty(),
+        "happy path — no rejections: {:?}",
+        rejected
+            .iter()
+            .map(|e| e.event_type.to_string())
+            .collect::<Vec<_>>()
     );
     assert!(
         events.iter().any(|e| {
@@ -2080,10 +2207,10 @@ async fn fail_closed_goal_revision_rejected_does_not_migrate() {
         test_runner: None,
     };
 
+    // R1 (2026-08-27, 设计 §4.4): disposition 往返退役——GoalRevisionV1
+    // 仅经跨 run 恢复的 AwaitingDisposition 激活（休眠 handler）可达。
+    // 种子一个上一 run 遗留的待决激活，脚本直接提交 continue。
     let gateway: Arc<dyn ModelGateway> = Arc::new(FakeProvider::new(vec![
-        ScriptedResponse::tool_calls(vec![tool_call("retrieve_project_docs", "call-1")]),
-        ScriptedResponse::tool_calls(vec![tool_call("read_file", "call-s1")]),
-        ScriptedResponse::text("[DOC] a.md\n第一批"),
         ScriptedResponse::tool_calls(vec![ToolCall {
             name: "retrieval_disposition".to_string(),
             arguments: serde_json::json!({
@@ -2097,6 +2224,7 @@ async fn fail_closed_goal_revision_rejected_does_not_migrate() {
         ScriptedResponse::text("完成"),
     ]));
     let controller = AgentLoopController::with_gateway(gateway)
+        .with_activation_snapshot(Some(&seeded_internal_activation_snapshot()))
         .with_retrieval_mode(
             RetrievalMode::FrameworkFallback,
             RetrievalCapability::Available,
@@ -2592,10 +2720,10 @@ async fn fail_closed_continue_consumes_goal_revision_ticket() {
         test_runner: None,
     };
 
+    // R1 (2026-08-27, 设计 §4.4): disposition 往返退役——GoalRevisionV1
+    // 仅经跨 run 恢复的 AwaitingDisposition 激活（休眠 handler）可达。
+    // 种子一个上一 run 遗留的待决激活，脚本直接提交 continue。
     let gateway: Arc<dyn ModelGateway> = Arc::new(FakeProvider::new(vec![
-        ScriptedResponse::tool_calls(vec![tool_call("retrieve_project_docs", "call-1")]),
-        ScriptedResponse::tool_calls(vec![tool_call("read_file", "call-s1")]),
-        ScriptedResponse::text("[DOC] a.md\n第一批"),
         ScriptedResponse::tool_calls(vec![ToolCall {
             name: "retrieval_disposition".to_string(),
             arguments: serde_json::json!({
@@ -2609,6 +2737,7 @@ async fn fail_closed_continue_consumes_goal_revision_ticket() {
         ScriptedResponse::text("完成"),
     ]));
     let controller = AgentLoopController::with_gateway(gateway)
+        .with_activation_snapshot(Some(&seeded_internal_activation_snapshot()))
         .with_retrieval_mode(
             RetrievalMode::FrameworkFallback,
             RetrievalCapability::Available,

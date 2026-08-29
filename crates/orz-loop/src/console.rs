@@ -309,14 +309,20 @@ pub fn default_service_registry() -> ServiceRegistry {
         },
         // FUS-BENCHMARK-FULL-EXEC (2026-08-18)：终端执行动作——shell 仍不
         // 开放为模型直接工具，执行全经助理层订单（与 run_tests 同构）。
-        // 输入镜像 BashToolInput：command/description 必填、timeout/
-        // is_background 可选；不暴露 env/cwd——环境与工作目录由 host 决定
-        // （ACAF command_exec 目标摘要基于 host 侧 cwd/env，模型不可注入）。
+        // 输入镜像 BashToolInput：command/description 必填、timeout 可选；
+        // 不暴露 env/cwd/is_background——环境与工作目录由 host 决定
+        // （ACAF command_exec 目标摘要基于 host 侧 cwd/env，模型不可注入），
+        // 显式后台化面封闭（§9.7.2 工具面封闭，审查处理 P1-3：host 工具面
+        // 与 console 订单面同口径）。
         // 动作栏由探针完整集收敛（BenchmarkFull + terminal_available →
         // 出现；旧 Benchmark/ReadOnly → 不出现）。
         // 2026-08-18 审查收口：timeout 接受 integer 或纯数字字符串
         // （BashToolInput 为兼容模型字符串数字做了 lenient 反序列化，契约
         // 层对齐该语义；非数字字符串在契约层显式拒绝，错误比 host 层友好）。
+        // THIN-HARNESS-REDESIGN-V2 §9.7 (2026-08-29 S5-2 审查处理 P1-3)：
+        // timeout 上限 300s → 900s（模型可传上限维持 max_timeout_secs），
+        // 默认 600s（与 host 工具 schema 静态缺省一致；逐类默认仍由宿主
+        // 按命令形态注入：普通 300s / 程序脚本 600s）。
         ActionSpec {
             name: TERMINAL_SERVICE_NAME.to_string(),
             description: "执行一条终端命令（模型只下单；命令与环境由助理层按会话决定，\
@@ -341,20 +347,18 @@ pub fn default_service_registry() -> ServiceRegistry {
                             {
                                 "type": "integer",
                                 "minimum": 1,
-                                "maximum": 300000,
+                                "maximum": 900000,
                             },
                             {
                                 "type": "string",
                                 "pattern": "^[0-9]+$",
                             },
                         ],
-                        "default": 120000,
-                        "description": "超时毫秒（integer 或数字字符串；默认 120000）。",
-                    },
-                    "is_background": {
-                        "type": "boolean",
-                        "default": false,
-                        "description": "后台运行（默认 false）。",
+                        "default": 600000,
+                        "description": "超时毫秒（integer 或数字字符串；默认 600000；\
+                            普通命令 300s / 程序脚本 600s 由宿主按命令形态注入，模型可传\
+                            覆盖、上限 900000；命令满 300s 且超时允许时返回一次中间状态，\
+                            默认继续运行）。",
                     },
                 },
                 "required": ["command", "description"],
@@ -1225,7 +1229,11 @@ pub(crate) async fn issue_action_inner<E: ActionExecutor + ?Sized>(
                     )),
                 });
             }
-            if result.exit_code != Some(0) {
+            // THIN-HARNESS-REDESIGN-V2 §9.7 (2026-08-29 S5-2 审查处理
+            // P1-1): 中间回报（命令仍在后台运行，exit_code=None）不是
+            // 失败——与 `run_console_target` 的 failed 判定同口径，走成功
+            // receipt / 结果栏，不触发失败诊断与故障连败计数。
+            if result.exit_code != Some(0) && result.mid_run.is_none() {
                 let exit_detail = match result.exit_code {
                     None => {
                         "no exit code (actions require an explicit success exit code)".to_string()
@@ -2261,6 +2269,42 @@ mod tests {
                 seen: std::sync::Arc::new(std::sync::Mutex::new(Vec::new())),
             }
         }
+
+        /// THIN-HARNESS-REDESIGN-V2 §9.7 (2026-08-29 S5-2 审查处理 P1-1):
+        /// 终端命令自动后台化的中间回报（命令仍在运行，exit_code=None）——
+        /// 订单执行边界必须把它当成功（运行中）而非执行失败。
+        fn mid_run() -> (
+            Self,
+            std::sync::Arc<std::sync::Mutex<Vec<(String, Value, String)>>>,
+        ) {
+            let seen = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+            (
+                Self {
+                    result: Ok(ToolResult {
+                        output: "[Command still running after 300s] PID: 1234 (process still running)\n\
+                                 Partial output (1.0 KiB of 2.0 KiB):\n\n```\npartial out\n```\n\n\
+                                 Full output is being written to: /tmp/terminal/call-t1.log\n\n\
+                                 The command keeps running by default; its final result \
+                                 (exit code or timeout) will be reported with a later tool \
+                                 result. To interrupt it now, terminate the process \
+                                 (e.g. `taskkill /PID 1234 /F` on Windows or `kill -9 1234` on Unix)."
+                        .to_string(),
+                        exit_code: None,
+                        output_encoding: None,
+                        structured: None,
+                        mid_run: Some(crate::host::ToolMidRunStatus {
+                            task_id: "call-mid-1".to_string(),
+                            pid: Some(1234),
+                            output_file: "/tmp/terminal/call-t1.log".to_string(),
+                            total_bytes: Some(2048),
+                        }),
+                        ..Default::default()
+                    }),
+                    seen: seen.clone(),
+                },
+                seen,
+            )
+        }
     }
 
     #[async_trait]
@@ -2400,6 +2444,55 @@ mod tests {
         assert!(trace.events.iter().all(|e| e.ok));
     }
 
+    /// THIN-HARNESS-REDESIGN-V2 §9.7 (2026-08-29 S5-2 审查处理 P1-1):
+    /// 终端命令满 300s 自动后台化的中间回报（exit_code=None + mid_run）
+    /// 经订单执行边界返回成功响应——不误判 ExecutionFailed、不标
+    /// 步骤失败、不产生失败信封。
+    #[tokio::test]
+    async fn issue_action_mid_run_is_running_not_execution_failure() {
+        let mut registry = ServiceRegistry::new();
+        registry
+            .register(spec("workspace.run_terminal", "run_terminal_cmd"))
+            .unwrap();
+        let (executor, seen) = FakeExecutor::mid_run();
+        let mut trace = Trace {
+            trace_id: "t000101".to_string(),
+            request_id: None,
+            events: Vec::new(),
+        };
+        let response = issue_action(
+            &registry,
+            &executor,
+            None,
+            &order("workspace.run_terminal", json!({"path": "long_task.py"})),
+            &mut trace,
+            "call-mid-1",
+        )
+        .await
+        .expect("mid-run order must be treated as running, not failure");
+        assert!(
+            response["output"]
+                .as_str()
+                .is_some_and(|s| s.contains("Command still running after 300s")),
+            "response must carry the mid-run report: {response}"
+        );
+        let calls = seen.lock().unwrap();
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].0, "run_terminal_cmd");
+        assert_eq!(calls[0].2, "call-mid-1");
+        drop(calls);
+        let steps: Vec<&str> = trace.events.iter().map(|e| e.step.as_str()).collect();
+        assert_eq!(
+            steps,
+            vec!["registry", "target", "contract", "execute", "verify"]
+        );
+        assert!(
+            trace.events.iter().all(|e| e.ok),
+            "mid-run order trace must be all-ok: {:?}",
+            trace.events
+        );
+    }
+
     #[tokio::test]
     async fn unknown_service_fails_at_registry() {
         let registry = ServiceRegistry::new();
@@ -2454,9 +2547,11 @@ mod tests {
         assert_eq!(trace.events[1].step, STEP_TARGET);
     }
 
-    /// FUS-BENCHMARK-FULL-EXEC 审查收口 (2026-08-18)：`workspace.run_terminal`
-    /// 契约对齐 BashToolInput 的 lenient 数字语义——integer 与纯数字字符串
-    /// 均通过，非数字字符串/缺必填/多余键（如 env）在契约层拒绝。
+    /// FUS-BENCHMARK-FULL-EXEC 审查收口 (2026-08-18) + THIN-HARNESS-REDESIGN-V2
+    /// §9.7 (2026-08-29 S5-2 审查处理 P1-3)：`workspace.run_terminal` 契约
+    /// 对齐 BashToolInput 的 lenient 数字语义——integer 与纯数字字符串均
+    /// 通过，非数字字符串/缺必填/多余键（如 env/is_background）在契约层
+    /// 拒绝；timeout 上限 900s（模型可传上限，与 §9.7.1 一致）。
     #[test]
     fn run_terminal_contract_accepts_numeric_string_timeout_and_rejects_invalid() {
         let registry = default_service_registry();
@@ -2468,7 +2563,7 @@ mod tests {
             json!({"command": "ls", "description": "list files"}),
             json!({"command": "ls", "description": "list files", "timeout": 120000}),
             json!({"command": "ls", "description": "list files", "timeout": "120000"}),
-            json!({"command": "ls", "description": "list files", "is_background": false}),
+            json!({"command": "ls", "description": "list files", "timeout": 900000}),
         ];
         for args in ok {
             assert!(
@@ -2481,7 +2576,9 @@ mod tests {
             json!({"command": "ls"}),
             json!({"command": "ls", "description": "x", "timeout": "abc"}),
             json!({"command": "ls", "description": "x", "timeout": "-1"}),
-            json!({"command": "ls", "description": "x", "timeout": 300001}),
+            json!({"command": "ls", "description": "x", "timeout": 900001}),
+            json!({"command": "ls", "description": "x", "is_background": false}),
+            json!({"command": "ls", "description": "x", "is_background": true}),
             json!({"command": "ls", "description": "x", "env": {"A": "1"}}),
         ];
         for args in invalid {

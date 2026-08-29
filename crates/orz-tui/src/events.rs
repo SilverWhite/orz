@@ -106,6 +106,14 @@ pub enum TuiEvent {
         error: Option<String>,
         target: Option<String>,
     },
+    // THIN-HARNESS-REDESIGN-V2 §9.7 (2026-08-29 S5-2): terminal command
+    // auto-backgrounded at the 300s report point — mid-run status.
+    ToolRunning {
+        tool: String,
+        call_id: String,
+        wall_ms: u64,
+        pid: Option<u32>,
+    },
 
     // ── assurance gates ──
     OrientationCheckpoint {
@@ -389,6 +397,7 @@ impl TuiEvent {
             TuiEvent::PermissionDecision { .. } => "permission_decision",
             TuiEvent::ToolStarted { .. } => "tool_started",
             TuiEvent::ToolCompleted { .. } => "tool_completed",
+            TuiEvent::ToolRunning { .. } => "tool_running",
             TuiEvent::OrientationCheckpoint { .. } => "orientation_checkpoint",
             TuiEvent::ToolAvailabilityCheck { .. } => "tool_availability_check",
             TuiEvent::ToolBeliefStagnation { .. } => "tool_belief_stagnation",

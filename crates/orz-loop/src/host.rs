@@ -141,6 +141,28 @@ pub struct ToolResult {
     /// `ToolError` 时填充；成功调用为 `None`）。失败诊断据此匹配
     /// `tool_not_found` 等签名，不做文本子串判定。
     pub tool_error_kind: Option<ToolErrorKind>,
+    /// THIN-HARNESS-REDESIGN-V2 §9.7 (2026-08-29 S5-2): mid-run status for
+    /// a terminal command auto-backgrounded at the 300s report point — the
+    /// command is still running; the model-facing report and the
+    /// `tool_running` journal event are built from these structured facts
+    /// (never text parsing). `None` for every other call.
+    pub mid_run: Option<ToolMidRunStatus>,
+}
+
+/// THIN-HARNESS-REDESIGN-V2 §9.7 (2026-08-29 S5-2): structured mid-run
+/// facts for a terminal command that is still running after the report
+/// point (auto-backgrounded). The controller journals `tool_running` from
+/// these fields; the model-visible report text is composed by the tool.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ToolMidRunStatus {
+    /// Background task id (the original tool call id for auto-background).
+    pub task_id: String,
+    /// Shell process pid, when the backend could surface it.
+    pub pid: Option<u32>,
+    /// Path of the output file the command keeps writing to.
+    pub output_file: String,
+    /// Total output bytes observed so far (before truncation).
+    pub total_bytes: Option<u64>,
 }
 
 /// Lightweight error from tool execution.
@@ -462,6 +484,13 @@ pub fn workspace_delta_diff(
 pub struct TestRunResult {
     pub output: String,
     pub exit_code: Option<i32>,
+    /// THIN-HARNESS-REDESIGN-V2 §9.6 (2026-08-29 S5-1 审查处理 P2-1):
+    /// true when the host hit the F-09 wall-clock bound and killed the
+    /// test process tree before completion — the run_tests counterpart of
+    /// `ToolResult::timed_out` (structured signal; the controller journals
+    /// `tool_completed.timed_out` and renders a definitive model message,
+    /// never text-prefix judgment).
+    pub timed_out: bool,
     /// Decoding stage(s) that produced `output` (GAP-ENCODING-GATE,
     /// OPS-PROTOCOL §8): `utf-8` / `utf-8-sig` / `gb18030` / `utf-8-lossy`,
     /// comma-joined when stdout/stderr used different stages.

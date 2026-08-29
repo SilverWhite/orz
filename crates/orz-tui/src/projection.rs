@@ -228,6 +228,24 @@ pub fn apply_event(app: &mut TuiApp, event: TuiEvent) -> Vec<String> {
             app.toolbar.set_enabled("停止", false);
             vec![format!("工具完成: {tool}")]
         }
+        // THIN-HARNESS-REDESIGN-V2 §9.7 (2026-08-29 S5-2): terminal command
+        // 中间回报——工具仍在运行，系统消息展示运行时长与 PID。
+        TuiEvent::ToolRunning {
+            tool,
+            call_id,
+            wall_ms,
+            pid,
+        } => {
+            let pid_note = pid.map(|p| format!("，PID {p}")).unwrap_or_default();
+            app.content.add_system_message(
+                &format!(
+                    "[工具运行中] {tool} {call_id} 已运行 {:.0}s{pid_note}——命令继续运行，终态随后续工具结果返回",
+                    wall_ms as f64 / 1000.0
+                ),
+                false,
+            );
+            vec![format!("工具运行中: {tool} {call_id}")]
+        }
 
         // ── assurance gates ──
         TuiEvent::OrientationCheckpoint { step_index, .. } => {

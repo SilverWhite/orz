@@ -2039,8 +2039,11 @@ mod tests {
         assert!(declared.iter().all(|d| replied.contains(&d.as_str())));
     }
 
+    // THIN-HARNESS-REDESIGN-V2 §9.6 (2026-08-29 S5-1 审查处理 P4):
+    // 测试名随桥语义收窄——S5-1 后仅声明消息（assistant + tool_calls）
+    // 的 reasoning 被剥除，纯文本 assistant 消息保留。
     #[test]
-    fn bridge_within_budget_is_verbatim_except_reasoning() {
+    fn bridge_within_budget_is_verbatim_except_declaration_reasoning() {
         let mut messages = vec![msg(Role::User, "任务")];
         messages.push(Message {
             role: Role::Assistant,

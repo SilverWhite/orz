@@ -636,6 +636,13 @@ pub struct BackgroundTaskStarted {
     /// underlying backend cannot report a PID (e.g. ACP/remote terminals).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pid: Option<u32>,
+    /// Total bytes of output observed so far (before truncation), when the
+    /// backend reports it. THIN-HARNESS-REDESIGN-V2 §9.7 (2026-08-29 S5-2):
+    /// the mid-run report's output-activity fact (`tool_running.total_bytes`)
+    /// and the auto-background status text ride this structured field — never
+    /// text parsing.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub total_bytes: Option<u64>,
 }
 #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct WebSearchOutput {
@@ -2866,6 +2873,7 @@ mod tests {
             retrieval_hint: String::new(),
             pre_formatted: None,
             pid: None,
+            total_bytes: None,
         }
     }
     #[test]

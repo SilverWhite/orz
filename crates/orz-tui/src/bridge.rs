@@ -157,6 +157,14 @@ pub fn run_event_to_tui(event: &RunEvent) -> TuiEvent {
             error: get_opt_str(p, "error"),
             target: get_opt_str(p, "target"),
         },
+        // THIN-HARNESS-REDESIGN-V2 §9.7 (2026-08-29 S5-2): terminal command
+        // mid-run report — the TUI surfaces the running state.
+        EventType::ToolRunning => TuiEvent::ToolRunning {
+            tool: get_str(p, "tool"),
+            call_id: get_str(p, "call_id"),
+            wall_ms: p.get("wall_ms").and_then(|v| v.as_u64()).unwrap_or(0),
+            pid: p.get("pid").and_then(|v| v.as_u64()).map(|v| v as u32),
+        },
         EventType::OrientationCheckpoint => TuiEvent::OrientationCheckpoint {
             checkpoint_id: get_str(p, "checkpoint_id"),
             trigger: get_str(p, "trigger"),
@@ -756,6 +764,31 @@ mod tests {
         };
         assert_eq!(status, "error");
         assert_eq!(error.as_deref(), Some("kaboom"));
+
+        // THIN-HARNESS-REDESIGN-V2 §9.7 (2026-08-29 S5-2): tool_running
+        // maps to the mid-run TUI event (wall_ms / pid structured).
+        let ev = make_event(
+            EventType::ToolRunning,
+            json!({
+                "tool": "run_terminal_cmd",
+                "call_id": "call-t1",
+                "wall_ms": 300012,
+                "pid": 42,
+            }),
+        );
+        let TuiEvent::ToolRunning {
+            tool,
+            call_id,
+            wall_ms,
+            pid,
+        } = run_event_to_tui(&ev)
+        else {
+            panic!("expected ToolRunning");
+        };
+        assert_eq!(tool, "run_terminal_cmd");
+        assert_eq!(call_id, "call-t1");
+        assert_eq!(wall_ms, 300_012);
+        assert_eq!(pid, Some(42));
     }
 
     #[test]

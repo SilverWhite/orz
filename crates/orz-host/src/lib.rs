@@ -586,6 +586,15 @@ impl OrzHost {
         // processes (reproduced: the parallel `call_tool_timeout_kills_
         // process_tree` test lost its python child to the semaphore test's
         // 100ms waiting timeout). Only an execution timeout kills.
+        // THIN-HARNESS-REDESIGN-V2 §9.7 (2026-08-29 S5-2): 分层默认超时——
+        // 模型未传 `timeout` 时，宿主按命令形态注入两档默认（普通 300s /
+        // 程序脚本 600s，毫秒）；显式传入以模型为准（工具层再按
+        // max_timeout_secs=900 封顶）。注入只发生在执行侧，模型面不变。
+        let args = if name == "run_terminal_cmd" {
+            crate::tools::inject_terminal_default_timeout(args)
+        } else {
+            args
+        };
         let started_exec = std::sync::atomic::AtomicBool::new(false);
         let fut = async {
             if crate::tools::is_web_search_tool(name) {
@@ -685,6 +694,14 @@ impl OrzHost {
             structured: crate::tools::structured_from_output(&result.output),
             ..Default::default()
         };
+        // THIN-HARNESS-REDESIGN-V2 §9.7 (2026-08-29 S5-2): 中间回报结构化
+        // 透传——run_terminal_cmd 自动后台化返回 `BackgroundTaskStarted`
+        // （命令仍在运行）：填 `mid_run` 供控制器记 `tool_running` 事件；
+        // exit_code 保持 None（命令未结束，避免读作已成功退出）。
+        if let Some(mid_run) = crate::tools::terminal_mid_run_from_output(name, &result.output) {
+            tool_result.mid_run = Some(mid_run);
+            tool_result.exit_code = None;
+        }
         if let Some(before) = delta_before {
             let (workspace_delta, workspace_delta_truncated) = workspace_delta_diff(
                 &before,
@@ -907,6 +924,11 @@ impl LoopHost for OrzHost {
                         partial_output,
                     ),
                     exit_code: None,
+                    // THIN-HARNESS-REDESIGN-V2 §9.6 (2026-08-29 S5-1 审查
+                    // 处理 P2-1): 结构化超时标记（F-09 墙钟掐杀）——控制器
+                    // 据此落 tool_completed.timed_out 与明确模型文案，不靠
+                    // 文本前缀判定。
+                    timed_out: true,
                     full_output_path: None,
                     output_encoding: Some(output_encoding.to_string()),
                     workspace_delta,
@@ -956,6 +978,7 @@ impl LoopHost for OrzHost {
         Ok(orz_loop::host::TestRunResult {
             output: text,
             exit_code: status.code(),
+            timed_out: false,
             full_output_path,
             output_encoding,
             workspace_delta,
@@ -2013,6 +2036,10 @@ mod tests {
             result.output
         );
         assert_eq!(result.exit_code, None);
+        assert!(
+            result.timed_out,
+            "F-09 wall-clock kill must carry the structured timed_out flag"
+        );
         // Give TaskKill a moment to reap the tree, then verify the
         // grandchild (the pipe holder) is gone.
         tokio::time::sleep(std::time::Duration::from_millis(1500)).await;

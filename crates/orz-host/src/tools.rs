@@ -99,27 +99,176 @@ pub fn read_file_coarse_gate_from_config(config: &toml::Value) -> Option<usize> 
         .map(|v| (v.max(0) as usize).clamp(READ_COARSE_GATE_MIN, READ_COARSE_GATE_MAX))
 }
 
-/// THIN-HARNESS-REDESIGN §4.6 审查处理 (2026-08-27, 用户裁定)：终端命令
-/// 的分层超时——继承 bash 工具的 schema 默认 120s / 模型可传上限 300s
-/// （DEFAULT_MAX_TIMEOUT_MS），非后台化前台命令另有 300s
-/// MAX_FOREGROUND_BLOCK 钳制（clamp = timeout.min(max(300, config_timeout))），
-/// 外层 ORZ_TOOL_TIMEOUT_SECS 只是兜底、终端命令实际到不了外层值。
-/// 按实际使用放开：`timeout_secs`（缺省命令超时）与 `max_timeout_secs`
-/// （模型可传上限）均设 900s，`config_timeout` 同时把非后台化前台块上限
-/// 抬到 900s；900s 为全局上限（与 ORZ_TOOL_TIMEOUT_SECS=900 外层兜底
-/// 对齐）。后台化保持禁用（调度器族禁令，2026-08-09）。
+/// THIN-HARNESS-REDESIGN §4.6 审查处理 (2026-08-27, 用户裁定) +
+/// THIN-HARNESS-REDESIGN-V2 §9.7 (2026-08-29 S5-2)：终端命令分层超时与
+/// 中间回报——
+/// - 分层默认超时：程序/脚本类 600s、普通命令 300s，由宿主逐调用按命令
+///   形态注入（见 [`terminal_tier_default_timeout_ms`]）；模型可传
+///   `timeout` 覆盖，上限 900s（`max_timeout_secs`）。
+/// - 中间回报：`auto_background_on_timeout` + `foreground_block_budget_ms`
+///   = 300_000——命令满 300s 且解析超时 >300s 时转入后台并返回一次
+///   「运行 + 工具自身情况」中间状态；后台截止=原解析超时。
+/// - 工具面封闭：`enabled_background=true` 仅为 actor 自动后台化所需；
+///   `allow_background_operator=false` + `hide_background_input=true`
+///   保持模型侧「一次调用 = 一个结果」，显式后台化不开放。
+/// 外层 ORZ_TOOL_TIMEOUT_SECS=900 维持全局兜底（终端命令实际到不了外层值）。
 pub(crate) fn run_terminal_cmd_tool_params() -> Option<serde_json::Map<String, serde_json::Value>> {
     Some(serde_json::Map::from_iter([
         (
             "enabled_background".to_string(),
+            serde_json::Value::Bool(true),
+        ),
+        (
+            "auto_background_on_timeout".to_string(),
+            serde_json::Value::Bool(true),
+        ),
+        (
+            "foreground_block_budget_ms".to_string(),
+            serde_json::Value::from(300_000u64),
+        ),
+        (
+            "allow_background_operator".to_string(),
             serde_json::Value::Bool(false),
         ),
-        ("timeout_secs".to_string(), serde_json::Value::from(900.0)),
+        (
+            "hide_background_input".to_string(),
+            serde_json::Value::Bool(true),
+        ),
+        ("timeout_secs".to_string(), serde_json::Value::from(600.0)),
         (
             "max_timeout_secs".to_string(),
             serde_json::Value::from(900.0),
         ),
     ]))
+}
+
+/// THIN-HARNESS-REDESIGN-V2 §9.7 (2026-08-29 S5-2)：终端命令两档默认超时的
+/// 机械分类——程序/脚本类 600_000ms，普通命令 300_000ms。规则（纯函数、
+/// 逐 token 归一化，先统一启发式）：
+///
+/// - 命令首 token（去引号/`./` 前缀、小写）命中解释器/包管理/构建工具
+///   集合（python/python3/py/node/npm/npx/yarn/pnpm/ruby/perl/php/go/
+///   cargo/rustc/make/cmake/ninja/gradle/mvn/java/javac/gcc/g++/clang/
+///   apt/apt-get/pip/pip3/docker/bash/sh/zsh/pwsh/powershell/cmd/pytest）；
+/// - 或任一 token 以脚本扩展名结尾（.py/.sh/.js/.ts/.rb/.pl/.php/.ps1/
+///   .bat/.cmd）；
+/// - 或首 token 以 `./` 开头（工作区脚本/可执行文件）。
+///
+/// 其余判为普通命令。误判由模型显式 `timeout` 覆盖（可低可高）。
+pub fn terminal_tier_default_timeout_ms(command: &str) -> u64 {
+    const ORDINARY_MS: u64 = 300_000;
+    const PROGRAM_MS: u64 = 600_000;
+
+    const PROGRAM_LEADING: &[&str] = &[
+        "python",
+        "python3",
+        "py",
+        "node",
+        "npm",
+        "npx",
+        "yarn",
+        "pnpm",
+        "ruby",
+        "perl",
+        "php",
+        "go",
+        "cargo",
+        "rustc",
+        "make",
+        "cmake",
+        "ninja",
+        "gradle",
+        "mvn",
+        "java",
+        "javac",
+        "gcc",
+        "g++",
+        "clang",
+        "apt",
+        "apt-get",
+        "pip",
+        "pip3",
+        "docker",
+        "bash",
+        "sh",
+        "zsh",
+        "pwsh",
+        "powershell",
+        "cmd",
+        "pytest",
+    ];
+    const SCRIPT_EXTS: &[&str] = &[
+        ".py", ".sh", ".js", ".ts", ".rb", ".pl", ".php", ".ps1", ".bat", ".cmd",
+    ];
+
+    let tokens: Vec<&str> = command.split_whitespace().collect();
+    let Some(first) = tokens.first() else {
+        return ORDINARY_MS;
+    };
+    let first_norm = first
+        .trim_matches(|c| c == '"' || c == '\'')
+        .trim_start_matches("./")
+        .to_ascii_lowercase();
+    if PROGRAM_LEADING.contains(&first_norm.as_str()) {
+        return PROGRAM_MS;
+    }
+    if first.starts_with("./") {
+        return PROGRAM_MS;
+    }
+    if tokens.iter().any(|t| {
+        let t = t.trim_matches(|c| c == '"' || c == '\'');
+        SCRIPT_EXTS
+            .iter()
+            .any(|ext| t.to_ascii_lowercase().ends_with(ext))
+    }) {
+        return PROGRAM_MS;
+    }
+    ORDINARY_MS
+}
+
+/// THIN-HARNESS-REDESIGN-V2 §9.7 (2026-08-29 S5-2)：把两档默认超时注入
+/// `run_terminal_cmd` 参数——仅当模型未显式传 `timeout` 时按命令形态
+/// 注入（毫秒）；显式传入的任意非 null 值（含 0）原样保留，由工具层再
+/// 按 max_timeout_secs 封顶；`null` 视为未传（审查处理 P3-1：语义与
+/// BashParams serde 的 `Option` 一致——0 是显式值、null 是缺省）。
+/// 纯函数，供 `call_tool_inner` 执行侧调用。
+pub fn inject_terminal_default_timeout(args: serde_json::Value) -> serde_json::Value {
+    let timeout_present = args.get("timeout").map(|v| !v.is_null()).unwrap_or(false);
+    if timeout_present {
+        return args;
+    }
+    let Some(cmd) = args
+        .get("command")
+        .and_then(|v| v.as_str())
+        .map(str::to_owned)
+    else {
+        return args;
+    };
+    let mut args = args;
+    args["timeout"] = serde_json::json!(terminal_tier_default_timeout_ms(&cmd));
+    args
+}
+
+/// THIN-HARNESS-REDESIGN-V2 §9.7 (2026-08-29 S5-2)：从工具结构化输出映射
+/// `mid_run` 事实——`run_terminal_cmd` 自动后台化返回
+/// `BackgroundTaskStarted`（命令仍在运行）时填充；其余工具/形态为 None。
+/// 纯函数，供 `call_tool_inner` 在构建 `ToolResult` 时调用。
+pub fn terminal_mid_run_from_output(
+    name: &str,
+    output: &orz_tools::types::output::ToolOutput,
+) -> Option<orz_loop::host::ToolMidRunStatus> {
+    if name != "run_terminal_cmd" {
+        return None;
+    }
+    let orz_tools::types::output::ToolOutput::BackgroundTaskStarted(bg) = output else {
+        return None;
+    };
+    Some(orz_loop::host::ToolMidRunStatus {
+        task_id: bg.task_id.clone(),
+        pid: bg.pid,
+        output_file: bg.output_file.clone(),
+        total_bytes: bg.total_bytes,
+    })
 }
 
 /// Build a finalized toolset for a session working directory.
@@ -587,21 +736,47 @@ mod config_tests {
         );
     }
 
-    /// THIN-HARNESS-REDESIGN §4.6 审查处理 (2026-08-27)：run_terminal_cmd
-    /// 的分层超时配置——`timeout_secs` / `max_timeout_secs` 均为 900s（缺省
-    /// 命令超时与模型可传上限），`enabled_background` 保持禁用；配置键名与
-    /// BashParams serde 字段一致（未知键静默 no-op，必须逐字匹配）。
+    /// THIN-HARNESS-REDESIGN §4.6 审查处理 (2026-08-27) +
+    /// THIN-HARNESS-REDESIGN-V2 §9.7 (2026-08-29 S5-2)：run_terminal_cmd
+    /// 的分层超时与中间回报配置——`enabled_background=true` 仅为 actor
+    /// 自动后台化所需，`auto_background_on_timeout=true` +
+    /// `foreground_block_budget_ms=300_000`（满 300s 后台化并返回一次
+    /// 中间状态），`allow_background_operator=false` +
+    /// `hide_background_input=true`（模型面封闭），`timeout_secs=600`
+    /// （程序/脚本缺省；普通命令 300s 由宿主逐调用注入）、
+    /// `max_timeout_secs=900`（模型可传上限）。配置键名与 BashParams
+    /// serde 字段一致（未知键静默 no-op，必须逐字匹配）。
     #[test]
-    fn run_terminal_cmd_params_raise_layered_timeout_to_900s() {
+    fn run_terminal_cmd_params_s5_2_layered_timeout_and_mid_run() {
         let params = run_terminal_cmd_tool_params().expect("params present");
         assert_eq!(
             params.get("enabled_background"),
-            Some(&serde_json::Value::Bool(false))
+            Some(&serde_json::Value::Bool(true)),
+            "actor auto-background requires enabled_background"
+        );
+        assert_eq!(
+            params.get("auto_background_on_timeout"),
+            Some(&serde_json::Value::Bool(true))
+        );
+        assert_eq!(
+            params.get("foreground_block_budget_ms"),
+            Some(&serde_json::Value::from(300_000u64)),
+            "300s mid-run report point"
+        );
+        assert_eq!(
+            params.get("allow_background_operator"),
+            Some(&serde_json::Value::Bool(false)),
+            "explicit `&` backgrounding stays closed"
+        );
+        assert_eq!(
+            params.get("hide_background_input"),
+            Some(&serde_json::Value::Bool(true)),
+            "is_background stays off the model surface"
         );
         assert_eq!(
             params.get("timeout_secs"),
-            Some(&serde_json::Value::from(900.0)),
-            "omit-default command timeout raised to 900s"
+            Some(&serde_json::Value::from(600.0)),
+            "program/script omit-default command timeout"
         );
         assert_eq!(
             params.get("max_timeout_secs"),
@@ -609,8 +784,132 @@ mod config_tests {
             "model-passed timeout ceiling raised to 900s"
         );
         // 键名逐字匹配 BashParams 字段（未知键会被静默忽略，防拼写漂移）。
-        for key in ["enabled_background", "timeout_secs", "max_timeout_secs"] {
+        for key in [
+            "enabled_background",
+            "auto_background_on_timeout",
+            "foreground_block_budget_ms",
+            "allow_background_operator",
+            "hide_background_input",
+            "timeout_secs",
+            "max_timeout_secs",
+        ] {
             assert!(params.contains_key(key), "param key {key} present");
         }
+    }
+
+    /// THIN-HARNESS-REDESIGN-V2 §9.7 (2026-08-29 S5-2)：两档默认超时的
+    /// 机械分类——程序/脚本 600s、普通 300s；模型显式 timeout 覆盖不受影响。
+    #[test]
+    fn terminal_tier_classifies_program_vs_ordinary() {
+        // 程序/脚本类 → 600s
+        for cmd in [
+            "python train.py --epochs 100",
+            "python3 -m pytest tests/",
+            "node server.js",
+            "npm run build",
+            "cargo build --release",
+            "make -j8",
+            "pip install -r requirements.txt",
+            "bash setup.sh",
+            "sh ./install.sh",
+            "powershell -File build.ps1",
+            "cmd /c build.bat",
+            "docker build -t app .",
+            "apt-get install -y r-base",
+            "./scripts/run_tests.sh",
+            "java -jar app.jar",
+            "go test ./...",
+            "pytest -q tests/test_x.py",
+        ] {
+            assert_eq!(
+                terminal_tier_default_timeout_ms(cmd),
+                600_000,
+                "program/script default for: {cmd}"
+            );
+        }
+        // 普通命令 → 300s
+        for cmd in [
+            "dir",
+            "echo hello",
+            "ls -la",
+            "git status",
+            "curl -s https://example.com",
+            "sleep 100",
+            "wget -O out.bin https://example.com/x",
+            "env",
+            "",
+            "   ",
+        ] {
+            assert_eq!(
+                terminal_tier_default_timeout_ms(cmd),
+                300_000,
+                "ordinary default for: {cmd:?}"
+            );
+        }
+    }
+
+    /// THIN-HARNESS-REDESIGN-V2 §9.7 (2026-08-29 S5-2)：默认超时注入——
+    /// 模型未传 timeout 时按命令形态注入两档；显式 timeout 原样保留。
+    #[test]
+    fn inject_terminal_default_timeout_respects_class_and_override() {
+        let ordinary = inject_terminal_default_timeout(serde_json::json!({
+            "command": "echo hello",
+            "description": "x",
+        }));
+        assert_eq!(ordinary["timeout"], serde_json::json!(300_000u64));
+
+        let program = inject_terminal_default_timeout(serde_json::json!({
+            "command": "python train.py",
+            "description": "x",
+        }));
+        assert_eq!(program["timeout"], serde_json::json!(600_000u64));
+
+        // 显式 timeout（含 0）不被覆盖。
+        let explicit = inject_terminal_default_timeout(serde_json::json!({
+            "command": "python train.py",
+            "timeout": 120_000,
+        }));
+        assert_eq!(explicit["timeout"], serde_json::json!(120_000u64));
+        let zero = inject_terminal_default_timeout(serde_json::json!({
+            "command": "python train.py",
+            "timeout": 0,
+        }));
+        assert_eq!(zero["timeout"], serde_json::json!(0u64));
+
+        // 无 command 时保持原样。
+        let no_cmd = inject_terminal_default_timeout(serde_json::json!({}));
+        assert!(no_cmd.get("timeout").is_none());
+    }
+
+    /// THIN-HARNESS-REDESIGN-V2 §9.7 (2026-08-29 S5-2)：mid_run 结构化映射
+    /// ——run_terminal_cmd 自动后台化结果携带 pid/output_file/total_bytes/
+    /// task_id；其余工具与形态为 None（无文本判定）。
+    #[test]
+    fn terminal_mid_run_from_output_maps_backgrounded_start() {
+        use orz_tools::types::output::{BackgroundTaskStarted, ToolOutput};
+        let bg = ToolOutput::BackgroundTaskStarted(BackgroundTaskStarted {
+            task_id: "call-t1".into(),
+            task_type: "bash".into(),
+            output_file: "/tmp/terminal/call-t1.log".into(),
+            status: "running".into(),
+            command: "python train.py".into(),
+            summary: "still running".into(),
+            retrieval_hint: String::new(),
+            pre_formatted: Some("report".into()),
+            pid: Some(42),
+            total_bytes: Some(8192),
+        });
+        let mid = terminal_mid_run_from_output("run_terminal_cmd", &bg).expect("mid_run");
+        assert_eq!(mid.task_id, "call-t1");
+        assert_eq!(mid.pid, Some(42));
+        assert_eq!(mid.output_file, "/tmp/terminal/call-t1.log");
+        assert_eq!(mid.total_bytes, Some(8192));
+
+        assert!(terminal_mid_run_from_output("read_file", &bg).is_none());
+        let text = ToolOutput::Text(orz_tools::types::output::TextOutput {
+            text: "ok".into(),
+            consumed_completion_task_id: None,
+        });
+        assert!(terminal_mid_run_from_output("run_terminal_cmd", &text).is_none());
     }
 }

@@ -206,6 +206,14 @@ pub struct BashParams {
     /// not match the reminder wording.
     #[serde(default = "default_true")]
     pub surface_bg_completion_reminders: bool,
+    /// Hide the explicit `is_background` input from the model-facing schema
+    /// and reject explicit backgrounding, while keeping the tool's internal
+    /// auto-background path available. THIN-HARNESS-REDESIGN-V2 §9.7
+    /// (2026-08-29 S5-2): ORZ keeps the model surface at "one call = one
+    /// result" — the 300s mid-run report is produced by the framework's
+    /// auto-background, never by a model-requested background.
+    #[serde(default)]
+    pub hide_background_input: bool,
 }
 
 impl Default for BashParams {
@@ -221,6 +229,7 @@ impl Default for BashParams {
             max_block_until_ms: None,
             allow_background_operator: true,
             surface_bg_completion_reminders: true,
+            hide_background_input: false,
         }
     }
 }
@@ -1463,7 +1472,7 @@ impl BashTool {
         let mut schema = input_schema.clone();
         if let Some(obj) = schema.as_object_mut() {
             if let Some(props) = obj.get_mut("properties").and_then(|p| p.as_object_mut()) {
-                if !background_enabled {
+                if !background_enabled || params.hide_background_input {
                     props.remove("is_background");
                 }
                 if let Some(timeout_prop) = props.get_mut("timeout").and_then(|t| t.as_object_mut())
@@ -1477,7 +1486,16 @@ impl BashTool {
                     // Keep main-style auto-bg wording (no FG-budget ms advertised).
                     // Follow-up: surface effective_auto_bg_wait_ms / FG budget here
                     // once we deliberately change model-facing copy.
-                    let desc = if !background_enabled {
+                    let desc = if params.hide_background_input && auto_bg {
+                        format!(
+                            "Optional {timeout_param_name} in milliseconds (max {max_ms}). \
+                             When omitted, the default timeout applies (300s for ordinary \
+                             commands, 600s for program/script commands). Commands still \
+                             running after 300s (with a timeout that allows it) return one \
+                             mid-run status and keep running; the final result arrives with \
+                             a later tool result."
+                        )
+                    } else if !background_enabled {
                         format!(
                             "Optional {timeout_param_name} in milliseconds (max {max_ms}). Default: {default_ms}."
                         )
@@ -1497,7 +1515,7 @@ impl BashTool {
                 }
             }
             if let Some(required) = obj.get_mut("required").and_then(|r| r.as_array_mut())
-                && !background_enabled
+                && (!background_enabled || params.hide_background_input)
             {
                 required.retain(|v| v.as_str() != Some("is_background"));
             }
@@ -1514,7 +1532,7 @@ impl BashTool {
         let auto_bg = Self::auto_background_on_timeout_enabled(params);
         let raw_desc = match description_override {
             Some(desc) => desc,
-            None => Self::default_description_template(background_enabled),
+            None => Self::default_description_template(background_enabled, params),
         };
         // Template only interpolates max/default timeout numbers + auto_bg flag.
         // Do not advertise FG block budget ms here yet (follow-up PR).
@@ -1531,12 +1549,34 @@ impl BashTool {
             })
     }
 
-    fn default_description_template(background_enabled: bool) -> &'static str {
-        if background_enabled {
+    fn default_description_template(background_enabled: bool, params: &BashParams) -> &'static str {
+        if background_enabled && params.hide_background_input {
+            // THIN-HARNESS-REDESIGN-V2 §9.7 (2026-08-29 S5-2): ORZ keeps the
+            // explicit background surface closed (`is_background` hidden) —
+            // the description must not advertise it; the 300s mid-run report
+            // is the framework's auto-background behavior.
+            Self::default_description_template_internal_auto_bg()
+        } else if background_enabled {
             Self::default_description_template_enabled()
         } else {
             Self::default_description_template_disabled()
         }
+    }
+
+    fn default_description_template_internal_auto_bg() -> &'static str {
+        r#"Run a ${%- if is_windows %} shell command${%- else %} bash command${%- endif %} and return its output.
+
+Usage notes:
+  - You can specify an optional ${{ params.execute.timeout }} in milliseconds (up to ${{ max_timeout_ms | default(300000) }}ms). When omitted, the default timeout applies: 300s for ordinary commands, 600s for program/script commands.
+  - Long-running commands: when a command is still running after 300s and its timeout allows it, the tool returns one mid-run status (elapsed time, PID, partial output, full-output file path) and the command keeps running; its final result (exit code or timeout) is reported with a later tool result. To interrupt it, terminate the reported PID (e.g. `taskkill /PID <pid> /F` on Windows or `kill -9 <pid>` on Unix).
+  - Timeout enforcement: when the timeout fires, the wrapper${%- if is_windows %} terminates the child's Job Object, killing every descendant process immediately (no graceful-termination grace period).${%- else %} kills the child process group (SIGTERM, escalated to SIGKILL after a ~1s grace period). Descendants that did not detach via `setsid` / `nohup` will also be killed.${%- endif %}
+  - If the output exceeds {max_output_bytes} characters, the middle is truncated (you keep the beginning and end) and the result includes the path to a log file with the full output, which you can read or search.
+${%- if shell_uses_semicolon %}
+  - '&&' is not supported in this shell; chain sequential commands with ';'.
+${%- endif %}
+${%- if not has_unix_utilities %}
+  - The Unix utilities `grep`, `head`, `tail`, `sed`, `awk`, and `find` are NOT available in this shell. Use the dedicated tools instead.
+${%- endif %}"#
     }
 
     fn default_description_template_enabled() -> &'static str {
@@ -1686,19 +1726,28 @@ impl crate::types::tool_metadata::ToolMetadata for BashTool {
     }
 
     fn requires_expr(&self) -> Expr<ToolRequirement> {
-        // If our param `enabled_background` is true (the default),
-        // we need both a BackgroundTaskAction tool (get_task_output) and
-        // a KillTaskAction tool (kill_task) so the agent can interact
-        // with backgrounded commands.
+        // THIN-HARNESS-REDESIGN-V2 §9.7 (2026-08-29 S5-2): 仅当显式后台
+        // 输入开放（enabled_background=true 且 NOT hide_background_input）
+        // 时才要求 get_task_output/kill_task 同台；`hide_background_input`
+        // = 内部自动后台化（ORZ 300s 中间回报）——可观察性/可取消性由
+        // 中间回报（PID）+ 完成提醒 + 终止命令承担，无后台工具族也可
+        // finalize。
+        let visible_background = Expr::<ToolParamsRequirement>::And(vec![
+            Expr::Value(ToolParamsRequirement::new("enabled_background", true)),
+            Expr::Not(Box::new(Expr::Value(ToolParamsRequirement::new(
+                "hide_background_input",
+                true,
+            )))),
+        ]);
         Expr::And(vec![
-            Expr::Value(ToolRequirement::if_params(
-                ToolParamsRequirement::new("enabled_background", true),
-                ToolRequirement::tool_kind(ToolKind::BackgroundTaskAction),
-            )),
-            Expr::Value(ToolRequirement::if_params(
-                ToolParamsRequirement::new("enabled_background", true),
-                ToolRequirement::tool_kind(ToolKind::KillTaskAction),
-            )),
+            Expr::Value(ToolRequirement::IfParams {
+                condition: visible_background.clone(),
+                requirement: Box::new(ToolRequirement::tool_kind(ToolKind::BackgroundTaskAction)),
+            }),
+            Expr::Value(ToolRequirement::IfParams {
+                condition: visible_background,
+                requirement: Box::new(ToolRequirement::tool_kind(ToolKind::KillTaskAction)),
+            }),
         ])
     }
 }
@@ -2031,7 +2080,10 @@ impl xai_tool_runtime::Tool for BashTool {
             return Err(xai_tool_runtime::ToolError::invalid_arguments(message));
         }
 
-        if input.is_background && !background_enabled {
+        // THIN-HARNESS-REDESIGN-V2 §9.7 (2026-08-29 S5-2): `hide_background_input`
+        // keeps the explicit background surface closed even when the toolset
+        // enables internal auto-background (ORZ mid-run report path).
+        if input.is_background && (!background_enabled || params.hide_background_input) {
             return Err(xai_tool_runtime::ToolError::invalid_arguments(
                 "Background execution is disabled.".to_string(),
             ));
@@ -2143,6 +2195,7 @@ impl xai_tool_runtime::Tool for BashTool {
                 retrieval_hint,
                 pre_formatted: None,
                 pid: bg_pid,
+                total_bytes: None,
             }))
         } else {
             // ─── Foreground execution ───
@@ -2161,6 +2214,20 @@ impl xai_tool_runtime::Tool for BashTool {
             } else {
                 clamp_foreground_block(timeout, config_timeout, max_foreground_block())
             };
+
+            // THIN-HARNESS-REDESIGN-V2 §9.7 (2026-08-29 S5-2): 中间回报的
+            // 逐调用判定——当配置了「有限」回报点（非参考兼容的
+            // `Duration::MAX`）时，只有解析超时严格大于回报点的命令才开启
+            // auto-background（满 300s 后台化并返回一次中间状态）；解析
+            // 超时 ≤ 回报点的命令保持 kill-on-timeout（普通 300s 默认在
+            // 300s 树杀，不产生无意义的「先回报后即杀」序列）。参考兼容的
+            // `Duration::MAX`（禁用短预算、仅 timeout 触发 auto-bg）与
+            // 未配置预算（后端默认）保持会话级原语义。
+            let auto_background_on_timeout = Self::auto_background_on_timeout_enabled(&params)
+                && match Self::effective_foreground_block_budget(&params) {
+                    Some(budget) if budget != Duration::MAX => timeout > budget,
+                    _ => true,
+                };
 
             let request = TerminalRunRequest {
                 command: command.clone(),
@@ -2185,13 +2252,18 @@ impl xai_tool_runtime::Tool for BashTool {
                 // `auto_background_on_timeout` defaults to `false`;
                 // existing grok_build callers that never opted in are
                 // unaffected.
-                auto_background_on_timeout: Self::auto_background_on_timeout_enabled(&params),
+                auto_background_on_timeout,
                 foreground_block_budget: Self::effective_foreground_block_budget(&params),
                 kind: crate::computer::types::TaskKind::Bash,
                 owner_session_id: owner_session_id.clone(),
                 description: Some(input.description.clone()).filter(|d| !d.trim().is_empty()),
             };
 
+            // THIN-HARNESS-REDESIGN-V2 §9.7 (2026-08-29 S5-2): wall-clock
+            // anchor for the mid-run report's elapsed-duration fact (the
+            // terminal actor backgrounding this command returns the partial
+            // output; the tool-side report states how long it already ran).
+            let run_started_at = std::time::Instant::now();
             let result = match backend.run(request).await {
                 Ok(r) => r,
                 Err(e) => {
@@ -2242,6 +2314,42 @@ impl xai_tool_runtime::Tool for BashTool {
                     )
                 };
 
+                // THIN-HARNESS-REDESIGN-V2 §9.7 (2026-08-29 S5-2): the
+                // auto-backgrounded case composes the one-shot mid-run
+                // report (运行时长 / 进程状态 / 输出活跃度 / 落盘指针 /
+                // 默认继续 + 可中断 + 终态送达说明) as `pre_formatted`.
+                // User-initiated backgrounding (Ctrl+G) keeps the generic
+                // structured rendering.
+                let pre_formatted = if auto_backgrounded {
+                    let elapsed = run_started_at.elapsed().as_secs_f64();
+                    let shown = format_bytes(result.combined_output.len());
+                    let total = format_bytes(result.total_bytes);
+                    let pid_line = result
+                        .pid
+                        .map(|p| format!("PID: {p} (process still running)\n"))
+                        .unwrap_or_default();
+                    Some(format!(
+                        "[Command still running after {elapsed:.0}s]\n\
+                         {pid_line}\
+                         Partial output ({shown} of {total}):\n\n\
+                         ```\n{}\n```\n\n\
+                         Full output is being written to: {}\n\n\
+                         The command keeps running by default; its final result \
+                         (exit code or timeout) will be reported with a later tool \
+                         result. To interrupt it now, terminate the process \
+                         (e.g. `taskkill /PID {pid_placeholder} /F` on Windows or \
+                         `kill -9 {pid_placeholder}` on Unix).",
+                        result.combined_output,
+                        output_file.to_string_lossy(),
+                        pid_placeholder = result
+                            .pid
+                            .map(|p| p.to_string())
+                            .unwrap_or_else(|| "?".into()),
+                    ))
+                } else {
+                    None
+                };
+
                 return Ok(BashToolOutput::Background(BackgroundTaskStarted {
                     task_id: tool_call_id.as_str().to_owned(),
                     task_type: "bash".to_string(),
@@ -2250,11 +2358,12 @@ impl xai_tool_runtime::Tool for BashTool {
                     command: input.command,
                     summary,
                     retrieval_hint,
-                    pre_formatted: None,
+                    pre_formatted,
                     // Real PID from the foreground spawn surfaced via
                     // `TerminalRunResult::pid`. Adapters rely on this
                     // being non-None for their auto-bg template.
                     pid: result.pid,
+                    total_bytes: Some(result.total_bytes as u64),
                 }));
             }
 
@@ -2576,6 +2685,30 @@ mod tests {
             let mut mock = Self::background_ok(task_id);
             mock.captured_bg_request = captured.clone();
             (mock, captured)
+        }
+
+        /// THIN-HARNESS-REDESIGN-V2 §9.7 (2026-08-29 S5-2): a foreground
+        /// command that the actor auto-backgrounded at the report point —
+        /// signal `auto_backgrounded`, real PID and total bytes so the
+        /// tool's mid-run report can be asserted.
+        fn auto_backgrounded(output: &str) -> Self {
+            Self {
+                foreground_result: Ok(TerminalRunResult {
+                    combined_output: output.to_string(),
+                    exit_code: None,
+                    truncated: false,
+                    signal: Some("auto_backgrounded".to_string()),
+                    timed_out: false,
+                    output_file: PathBuf::from("/tmp/test.log"),
+                    total_bytes: 4096,
+                    output_encoding: None,
+                    pid: Some(1234),
+                }),
+                bg_task_id: "task-1".to_string(),
+                bg_output_file: PathBuf::from("/tmp/bg.log"),
+                bg_error: None,
+                captured_bg_request: CapturedRequest::default(),
+            }
         }
     }
 
@@ -3242,6 +3375,75 @@ mod tests {
         }
     }
 
+    /// THIN-HARNESS-REDESIGN-V2 §9.7 (2026-08-29 S5-2)：自动后台化返回
+    /// 单次「运行 + 工具自身情况」中间状态——`pre_formatted` 携带运行时长/
+    /// PID/部分输出/落盘指针/可中断提示；结构化 `pid`/`total_bytes` 透传。
+    #[tokio::test]
+    async fn auto_background_produces_mid_run_report() {
+        let resources = make_resources_with_params(
+            MockTerminal::auto_backgrounded("partial out"),
+            BashParams {
+                enabled_background: true,
+                auto_background_on_timeout: true,
+                foreground_block_budget_ms: Some(300_000),
+                hide_background_input: true,
+                allow_background_operator: false,
+                ..BashParams::default()
+            },
+        );
+        let tool = BashTool;
+        let result = xai_tool_runtime::Tool::run(
+            &tool,
+            test_ctx(resources.into_shared()),
+            make_input("python train.py"),
+        )
+        .await
+        .expect("auto-background succeeds");
+
+        match result {
+            BashToolOutput::Background(bg) => {
+                let report = bg.pre_formatted.expect("mid-run report");
+                assert!(report.contains("still running after"), "{report}");
+                assert!(report.contains("PID: 1234"), "{report}");
+                assert!(report.contains("Partial output"), "{report}");
+                assert!(
+                    report.contains("Full output is being written to"),
+                    "{report}"
+                );
+                assert!(report.contains("kill -9 1234"), "{report}");
+                assert_eq!(bg.pid, Some(1234));
+                assert_eq!(bg.total_bytes, Some(4096));
+                assert_eq!(bg.status, "running");
+            }
+            _ => panic!("expected backgrounded output"),
+        }
+    }
+
+    /// THIN-HARNESS-REDESIGN-V2 §9.7 (2026-08-29 S5-2)：`hide_background_input`
+    /// 时显式 `is_background=true` 被拒绝——模型面保持「一次调用 = 一个结果」。
+    #[tokio::test]
+    async fn hide_background_input_rejects_explicit_background() {
+        let resources = make_resources_with_params(
+            MockTerminal::background_ok("t-hidden"),
+            BashParams {
+                enabled_background: true,
+                hide_background_input: true,
+                ..BashParams::default()
+            },
+        );
+        let tool = BashTool;
+        let result = xai_tool_runtime::Tool::run(
+            &tool,
+            test_ctx(resources.into_shared()),
+            make_bg_input("sleep 10"),
+        )
+        .await;
+        let err = result
+            .expect_err("explicit background must be rejected")
+            .to_string();
+        assert!(err.contains("Background execution is disabled"), "{err}");
+    }
+
     #[tokio::test]
     async fn foreground_command_error() {
         let resources = make_resources(MockTerminal::failing());
@@ -3612,6 +3814,7 @@ mod tests {
             retrieval_hint: String::new(),
             pre_formatted: None,
             pid: None,
+            total_bytes: None,
         });
         assert!(xai_tool_runtime::ToolOutput::chat_completion_output(&out).is_none());
     }
@@ -4409,6 +4612,35 @@ mod tests {
                 .to_string()
         }
 
+        /// THIN-HARNESS-REDESIGN-V2 §9.7 (2026-08-29 S5-2)：
+        /// `hide_background_input` 从模型可见 schema 移除 `is_background`，
+        /// timeout 描述说明两档默认与 300s 中间回报。
+        #[test]
+        fn schema_hides_is_background_when_hide_background_input() {
+            let params = BashParams {
+                enabled_background: true,
+                hide_background_input: true,
+                auto_background_on_timeout: true,
+                foreground_block_budget_ms: Some(300_000),
+                ..BashParams::default()
+            };
+            let schema = BashTool::exported_input_schema(&base_schema(), &params, "timeout");
+            assert!(
+                schema["properties"].get("is_background").is_none(),
+                "is_background must be hidden from the model surface"
+            );
+            assert!(
+                schema["properties"].get("timeout").is_some(),
+                "timeout must stay visible"
+            );
+            let desc = schema["properties"]["timeout"]["description"]
+                .as_str()
+                .expect("timeout description");
+            assert!(desc.contains("300s for ordinary"), "{desc}");
+            assert!(desc.contains("600s for program/script"), "{desc}");
+            assert!(desc.contains("mid-run"), "{desc}");
+        }
+
         fn tool_desc(params: &BashParams) -> String {
             let renderer = TemplateRenderer::new(
                 HashMap::from([
@@ -4432,6 +4664,26 @@ mod tests {
             assert!(!params.auto_background_on_timeout);
             assert!(BashTool::effective_foreground_block_budget(&params).is_none());
             assert!(BashTool::effective_auto_bg_wait_ms(&params).is_none());
+        }
+
+        /// THIN-HARNESS-REDESIGN-V2 §9.7 (2026-08-29 S5-2)：
+        /// `hide_background_input` 下工具描述不提及 `is_background`，并说明
+        /// 两档默认与 300s 中间回报（渲染不 panic）。
+        #[test]
+        fn internal_auto_bg_description_renders_without_background_surface() {
+            let params = BashParams {
+                enabled_background: true,
+                auto_background_on_timeout: true,
+                foreground_block_budget_ms: Some(300_000),
+                hide_background_input: true,
+                ..BashParams::default()
+            };
+            let desc = tool_desc(&params);
+            assert!(!desc.contains("is_background"), "{desc}");
+            assert!(desc.contains("300s for ordinary"), "{desc}");
+            assert!(desc.contains("600s for program/script"), "{desc}");
+            assert!(desc.contains("mid-run status"), "{desc}");
+            assert!(desc.contains("terminate the reported PID"), "{desc}");
         }
 
         #[test]

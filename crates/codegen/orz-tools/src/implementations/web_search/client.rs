@@ -111,26 +111,44 @@ impl WebSearchClient {
     }
     /// Perform a web search query using the Responses API.
     ///
-    /// THIN-HARNESS-REDESIGN-V2 §9.6 (2026-08-29 S5-1): map a reqwest
-    /// transport failure to a structured tool error — client-side total /
-    /// connect timeouts surface as `ToolErrorKind::Timeout` with the
-    /// elapsed time and a concrete next step (retry with a narrower query /
-    /// read a known URL via web_fetch), so the model treats a slow
-    /// server-side search as a bounded retry decision instead of an opaque
-    /// HTTP failure (S4: web_search single calls hung up to 1365s).
-    fn map_transport_error(e: reqwest::Error) -> xai_tool_runtime::ToolError {
+    /// THIN-HARNESS-REDESIGN-V2 §9.6 (2026-08-29 S5-1; 审查处理 P3-1/P4):
+    /// map a reqwest transport failure to a structured tool error —
+    /// client-side total / connect timeouts surface as
+    /// `ToolErrorKind::Timeout` with the elapsed time and a concrete next
+    /// step (retry with a narrower query / read a known URL via
+    /// web_fetch). `stage` names the failing transport phase ("sending
+    /// request" / "reading response body") so non-timeout failures keep
+    /// their phase context; connect timeouts get their own wording (the
+    /// server was not reached — connect budget 10s). `elapsed` is measured
+    /// from the request start (S4: web_search single calls hung up to
+    /// 1365s before the 120s budget).
+    fn map_transport_error(
+        e: reqwest::Error,
+        elapsed: std::time::Duration,
+        stage: &str,
+    ) -> xai_tool_runtime::ToolError {
         let tool_id = xai_tool_protocol::ToolId::new("web_search").expect("valid");
         if e.is_timeout() {
+            let budget_note = if e.is_connect() {
+                "connection timed out (connect budget 10s) — the server was not reached"
+            } else {
+                "the Responses API server-side search did not complete within \
+                 the client budget (120s)"
+            };
             xai_tool_runtime::ToolError::timeout(
                 tool_id,
                 format!(
-                    "web_search timed out — the Responses API server-side search \
-                     did not complete within the client budget (120s). Retry with \
-                     a narrower query, or read a known URL directly with web_fetch."
+                    "web_search timed out after {:.1}s — {budget_note} ({stage}). \
+                     Retry with a narrower query, or read a known URL directly \
+                     with web_fetch.",
+                    elapsed.as_secs_f64(),
                 ),
             )
         } else {
-            xai_tool_runtime::ToolError::execution(tool_id, format!("HTTP request failed: {e}"))
+            xai_tool_runtime::ToolError::execution(
+                tool_id,
+                format!("HTTP request failed while {stage}: {e}"),
+            )
         }
     }
 
@@ -171,7 +189,11 @@ impl WebSearchClient {
         if let Some(ref key) = sent_bearer {
             req = req.header(AUTHORIZATION, format!("Bearer {key}"));
         }
-        let response = req.send().await.map_err(Self::map_transport_error)?;
+        let started = std::time::Instant::now();
+        let response = req
+            .send()
+            .await
+            .map_err(|e| Self::map_transport_error(e, started.elapsed(), "sending request"))?;
         let status = response.status();
         if status == reqwest::StatusCode::UNAUTHORIZED {
             self.record_401_attribution(sent_bearer.as_deref());
@@ -197,7 +219,9 @@ impl WebSearchClient {
                 format!("Responses API returned {status}: {body}"),
             ));
         }
-        let bytes = response.bytes().await.map_err(Self::map_transport_error)?;
+        let bytes = response.bytes().await.map_err(|e| {
+            Self::map_transport_error(e, started.elapsed(), "reading response body")
+        })?;
         // 2026-08-11 (direction correction): parsed as raw JSON — the
         // typed `rs::Response` shape does not match the DeepSeek backend
         // (its `web_search_call` search action carries `queries`, while
@@ -260,7 +284,11 @@ impl WebSearchClient {
         if let Some(ref key) = sent_bearer {
             req = req.header(AUTHORIZATION, format!("Bearer {key}"));
         }
-        let response = req.send().await.map_err(Self::map_transport_error)?;
+        let started = std::time::Instant::now();
+        let response = req
+            .send()
+            .await
+            .map_err(|e| Self::map_transport_error(e, started.elapsed(), "sending request"))?;
         let status = response.status();
         if status == reqwest::StatusCode::UNAUTHORIZED {
             self.record_401_attribution(sent_bearer.as_deref());
@@ -286,7 +314,9 @@ impl WebSearchClient {
                 format!("Responses API returned {status}: {body}"),
             ));
         }
-        let bytes = response.bytes().await.map_err(Self::map_transport_error)?;
+        let bytes = response.bytes().await.map_err(|e| {
+            Self::map_transport_error(e, started.elapsed(), "reading response body")
+        })?;
         // Raw-JSON parse — same rationale as [`Self::search`].
         let value: serde_json::Value = serde_json::from_slice(&bytes).map_err(|e| {
             xai_tool_runtime::ToolError::execution(
@@ -479,6 +509,64 @@ mod tests {
         };
         let client = WebSearchClient::new(&config, None).expect("client should build");
         assert_eq!(client.model, "custom-enterprise-model");
+    }
+    /// THIN-HARNESS-REDESIGN-V2 §9.6 (2026-08-29 S5-1 审查处理 P3-1):
+    /// transport 超时经 `map_transport_error` 映射为结构化 Timeout 类别，
+    /// 携带已用时长与后续建议——本地 listener 只收不应答 + 50ms 客户端
+    /// 总超时确定性构造（不依赖不可路由地址；1ms 在慢速 CI/沙箱下会与
+    /// connect 阶段竞态，导致「非超时」传输错误）。
+    #[tokio::test]
+    async fn map_transport_error_marks_client_timeouts() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind");
+        let addr = listener.local_addr().expect("addr");
+        tokio::spawn(async move {
+            // Accept ONE connection and HOLD it open without responding —
+            // dropping the accepted socket would close the connection
+            // server-side and fail the request with a non-timeout
+            // `IncompleteMessage` instead of the client's total timeout.
+            // The task ends when the test runtime shuts down.
+            let _conn = listener.accept().await.ok();
+            std::future::pending::<()>().await;
+        });
+        let client = reqwest::Client::builder()
+            .timeout(Duration::from_millis(50))
+            .connect_timeout(Duration::from_millis(1000))
+            .build()
+            .expect("client");
+        let started = std::time::Instant::now();
+        let err = client
+            .get(format!("http://{addr}/"))
+            .send()
+            .await
+            .expect_err("request must time out");
+        assert!(err.is_timeout(), "expected a timeout error: {err}");
+        let mapped =
+            WebSearchClient::map_transport_error(err, started.elapsed(), "sending request");
+        assert_eq!(mapped.kind, xai_tool_runtime::ToolErrorKind::Timeout);
+        let text = mapped.to_string();
+        assert!(text.contains("timed out after"), "{text}");
+        assert!(text.contains("Retry with a narrower query"), "{text}");
+    }
+
+    /// 非超时 transport 失败保持 Execution 类别并携带阶段上下文
+    /// （构造性非法 URL 在请求构建/发送阶段即失败）。
+    #[tokio::test]
+    async fn map_transport_error_keeps_execution_kind_with_stage() {
+        let client = reqwest::Client::builder().build().expect("client");
+        let started = std::time::Instant::now();
+        let err = client
+            .get("http://[::1") // invalid URL — transport failure, not timeout
+            .send()
+            .await
+            .expect_err("request must fail");
+        assert!(!err.is_timeout(), "{err}");
+        let mapped =
+            WebSearchClient::map_transport_error(err, started.elapsed(), "sending request");
+        assert_eq!(mapped.kind, xai_tool_runtime::ToolErrorKind::Execution);
+        let text = mapped.to_string();
+        assert!(text.contains("while sending request"), "{text}");
     }
     /// Counts attribution callback invocations for the test below.
     #[derive(Default, Debug)]

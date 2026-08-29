@@ -1381,27 +1381,43 @@ impl LocalTerminalActor {
             }
         }
 
-        // 0b. Kill backgrounded tasks that exceeded BACKGROUND_MAX_RUNTIME
+        // 0b. Kill backgrounded tasks that exceeded their deadline — the
+        // original resolved timeout kept on transition (THIN-HARNESS-
+        // REDESIGN-V2 §9.7, 2026-08-29 S5-2: the two-tier default timeout
+        // stays effective after auto-backgrounding), capped by the absolute
+        // BACKGROUND_MAX_RUNTIME safety net.
         let bg_expired: Vec<String> = self
             .processes
             .iter()
             .filter(|(_, p)| {
                 p.bg_status.is_backgrounded()
                     && p.exit_status.is_none()
-                    && p.start_time.elapsed() > BACKGROUND_MAX_RUNTIME
+                    && p.start_time.elapsed() > p.timeout.min(BACKGROUND_MAX_RUNTIME)
             })
             .map(|(id, _)| id.clone())
             .collect();
 
         for task_id in &bg_expired {
             if let Some(process) = self.processes.get_mut(task_id) {
-                tracing::warn!(task_id, "Background task exceeded max runtime, killing");
+                // The tier timeout (a resolved command timeout < the 10h hard
+                // cap) reports `signal: timeout`; only the absolute backstop
+                // reports `max_runtime`.
+                let tier_timeout = process.timeout < BACKGROUND_MAX_RUNTIME;
+                tracing::warn!(
+                    task_id,
+                    tier_timeout,
+                    "Background task exceeded its deadline, killing"
+                );
                 // Fire-and-forget SIGTERM — poll loop escalates to SIGKILL
                 // on the next tick if the process doesn't exit.
                 send_sigterm_to_group(process);
                 process.exit_status = Some(ExitStatus {
                     exit_code: None,
-                    signal: Some("max_runtime".to_owned()),
+                    signal: Some(if tier_timeout {
+                        "timeout".to_owned()
+                    } else {
+                        "max_runtime".to_owned()
+                    }),
                 });
                 process.end_wall_time = Some(std::time::SystemTime::now());
                 process.flush_and_truncate_output_file().await;
@@ -1895,7 +1911,19 @@ impl LocalTerminalActor {
             return false;
         };
         process.bg_status = BackgroundStatus::Backgrounded { reason };
-        process.timeout = BACKGROUND_MAX_RUNTIME;
+        // THIN-HARNESS-REDESIGN-V2 §9.7 (2026-08-29 S5-2): 后台化截止语义
+        // 分型（审查处理 P2-2）——自动后台化（ForegroundTimeout，300s 中间
+        // 回报路径）保留**原解析超时**为截止，使两档默认超时/模型覆盖在
+        // 后台化后仍生效（`0b` 清扫按 `min(timeout, BACKGROUND_MAX_RUNTIME)`
+        // 收口）；用户主动后台化（Explicit / UserSignal，显式 is_background
+        // 或 Ctrl+G）维持 S5-2 之前的 10h 硬上限语义，不因本次改动顺带
+        // 缩水。
+        match reason {
+            BackgroundReason::ForegroundTimeout => {}
+            BackgroundReason::Explicit | BackgroundReason::UserSignal => {
+                process.timeout = BACKGROUND_MAX_RUNTIME;
+            }
+        }
         let result = Ok(process.to_result());
         process.notify_waiters(result);
         let tool_call_id = process.tool_call_id.clone();
@@ -3785,6 +3813,109 @@ mod tests {
             outcome,
             KillOutcome::Killed | KillOutcome::AlreadyExited
         ));
+        let _ = tokio::fs::remove_file(&output_file).await;
+    }
+
+    // THIN-HARNESS-REDESIGN-V2 §9.7 (2026-08-29 S5-2)：自动后台化后，任务
+    // 保持**原解析超时**为截止（`min(timeout, BACKGROUND_MAX_RUNTIME)`）——
+    // 300ms 后台化 + 800ms 解析超时的任务应在 ~800ms 处被树杀（signal
+    // timeout），而不是延长到 10h 硬上限。
+    #[tokio::test]
+    async fn test_backgrounded_task_keeps_original_timeout_deadline() {
+        let backend = LocalTerminalBackend::new_with_foreground_budget(Duration::from_millis(100));
+        let output_file = std::env::temp_dir().join(format!(
+            "terminal-test-bg-deadline-{}.out",
+            std::process::id()
+        ));
+        let tool_call_id = "test-bg-deadline";
+
+        let request = TerminalRunRequest {
+            command: "sleep 60".to_string(),
+            working_directory: PathBuf::from("/tmp"),
+            env: HashMap::new(),
+            timeout: Duration::from_millis(800),
+            output_byte_limit: 10000,
+            output_file: output_file.clone(),
+            notification_handle: ToolNotificationHandle::noop(),
+            tool_call_id: tool_call_id.to_string(),
+            display_command: None,
+            auto_background_on_timeout: true,
+            foreground_block_budget: Some(Duration::from_millis(300)),
+            kind: TaskKind::Bash,
+            owner_session_id: None,
+            description: None,
+        };
+
+        let result = backend.run(request).await.unwrap();
+        assert_eq!(result.signal.as_deref(), Some("auto_backgrounded"));
+
+        // 越过原解析超时（800ms）再查：任务应以 signal=timeout 结束。
+        tokio::time::sleep(Duration::from_millis(900)).await;
+        let snap = backend.get_task(tool_call_id).await.expect("task snapshot");
+        assert_eq!(
+            snap.signal.as_deref(),
+            Some("timeout"),
+            "backgrounded task must die at its original resolved timeout, not the 10h cap: {snap:?}"
+        );
+        let _ = tokio::fs::remove_file(&output_file).await;
+    }
+
+    // THIN-HARNESS-REDESIGN-V2 §9.7 (2026-08-29 S5-2 审查处理 P2-2)：用户
+    // 主动后台化（Ctrl+G / 显式 is_background）维持 S5-2 之前的 10h 硬上限
+    // 截止——800ms 前台原超时的任务在用户后台化后必须越过 800ms 继续运行，
+    // 不被原前台超时树杀。
+    #[tokio::test]
+    async fn test_user_backgrounded_task_keeps_max_runtime_deadline() {
+        let backend = LocalTerminalBackend::new_with_foreground_budget(Duration::from_millis(100));
+        let output_file =
+            std::env::temp_dir().join(format!("terminal-test-bg-user-{}.out", std::process::id()));
+        let tool_call_id = "test-bg-user";
+
+        let request = TerminalRunRequest {
+            command: "sleep 60".to_string(),
+            working_directory: PathBuf::from("/tmp"),
+            env: HashMap::new(),
+            // 800ms 前台原超时——用户后台化后不得在 800ms 处被树杀。
+            timeout: Duration::from_millis(800),
+            output_byte_limit: 10000,
+            output_file: output_file.clone(),
+            notification_handle: ToolNotificationHandle::noop(),
+            tool_call_id: tool_call_id.to_string(),
+            display_command: None,
+            auto_background_on_timeout: false,
+            foreground_block_budget: None,
+            kind: TaskKind::Bash,
+            owner_session_id: None,
+            description: None,
+        };
+        let b = backend.clone();
+        let run_handle = tokio::spawn(async move { b.run(request).await });
+        // 等进程起跑后发起用户后台化（带重试，避免 actor 尚未登记进程的
+        // 竞态窗口）。
+        let mut backgrounded = false;
+        for _ in 0..20 {
+            tokio::time::sleep(Duration::from_millis(50)).await;
+            if backend.background_foreground_command(tool_call_id).await {
+                backgrounded = true;
+                break;
+            }
+        }
+        assert!(backgrounded, "user background command must find the task");
+        let result = run_handle.await.expect("run task").expect("run returns ok");
+        assert_eq!(result.signal.as_deref(), Some("backgrounded"));
+
+        // 越过原解析超时（800ms）再查：任务仍在运行（截止=10h 硬上限）。
+        tokio::time::sleep(Duration::from_millis(900)).await;
+        let snap = backend.get_task(tool_call_id).await.expect("task snapshot");
+        assert!(
+            !snap.completed,
+            "user-backgrounded task must survive its original foreground timeout: {snap:?}"
+        );
+        let outcome = backend.kill_task(tool_call_id).await;
+        assert!(
+            matches!(outcome, KillOutcome::Killed | KillOutcome::AlreadyExited),
+            "kill after user-bg should succeed: {outcome:?}"
+        );
         let _ = tokio::fs::remove_file(&output_file).await;
     }
 

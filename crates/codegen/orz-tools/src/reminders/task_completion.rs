@@ -1226,6 +1226,7 @@ mod tests {
             retrieval_hint: String::new(),
             pre_formatted: None,
             pid: None,
+            total_bytes: None,
         }
     }
     fn shared_with(tasks: Vec<TaskSnapshot>) -> SharedResources {

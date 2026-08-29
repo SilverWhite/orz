@@ -255,10 +255,19 @@ fn classify(
             (Some(format!("file:{path}")), summary, anchor_anomaly)
         }
         "run_terminal_cmd" => {
-            let exit = result
-                .exit_code
-                .map(|c| format!("exit {c}"))
-                .unwrap_or_else(|| "exit n/a".to_string());
+            // THIN-HARNESS-REDESIGN-V2 §9.7 (2026-08-29 S5-2 审查处理
+            // P1-2): 中间回报（命令仍在后台运行，exit_code=None）不是
+            // 失败——摘要中性标注「运行中」，不记异常事实（杜绝机械审计
+            // 层把合法长命令误报为 `exit -1`）。
+            let mid_running = result.mid_run.is_some();
+            let exit = if mid_running {
+                "运行中".to_string()
+            } else {
+                result
+                    .exit_code
+                    .map(|c| format!("exit {c}"))
+                    .unwrap_or_else(|| "exit n/a".to_string())
+            };
             let timed = if result.timed_out { "，超时" } else { "" };
             // OUTPUT-DEGENERATION-GUARD (2026-08-19)：终端输出超限截断携带
             // `[truncated:` 机械标记（grok_build/bash 输出脚注）。设计 §2.4
@@ -272,7 +281,7 @@ fn classify(
             };
             let anomaly = if result.timed_out {
                 Some("超时".to_string())
-            } else if result.exit_code != Some(0) {
+            } else if result.exit_code != Some(0) && !mid_running {
                 Some(format!("exit {}", result.exit_code.unwrap_or(-1)))
             } else {
                 None
@@ -481,6 +490,30 @@ mod tests {
         let (_, summary2, anomaly2) = classify(&tc, &r2, None);
         assert!(summary2.contains("输出截断"), "{summary2}");
         assert_eq!(anomaly2, None);
+    }
+
+    /// THIN-HARNESS-REDESIGN-V2 §9.7 (2026-08-29 S5-2 审查处理 P1-2):
+    /// 中间回报（命令仍在后台运行，exit_code=None + mid_run）不得记为
+    /// 异常事实——摘要为中性「运行中」，anomaly=None。
+    #[test]
+    fn terminal_mid_run_is_not_anomaly() {
+        let tc = call("run_terminal_cmd", "call-mid", serde_json::json!({}));
+        let r = ToolResult {
+            output: "[Command still running after 300s] PID: 1234 ...".to_string(),
+            exit_code: None,
+            timed_out: false,
+            mid_run: Some(crate::host::ToolMidRunStatus {
+                task_id: "call-mid".to_string(),
+                pid: Some(1234),
+                output_file: "/tmp/terminal/call-mid.log".to_string(),
+                total_bytes: Some(8192),
+            }),
+            ..Default::default()
+        };
+        let (key, summary, anomaly) = classify(&tc, &r, None);
+        assert_eq!(key.as_deref(), Some("cmd:call-mid"));
+        assert!(summary.contains("运行中"), "{summary}");
+        assert_eq!(anomaly, None, "mid-run must not be an audit anomaly");
     }
 
     #[test]

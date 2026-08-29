@@ -979,6 +979,7 @@ mod tests {
             retrieval_hint: String::new(),
             pre_formatted: None,
             pid: None,
+            total_bytes: None,
         });
         let tool_output: ToolOutput = bg.into();
         assert!(matches!(tool_output, ToolOutput::BackgroundTaskStarted(_)));

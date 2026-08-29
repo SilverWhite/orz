@@ -54,8 +54,7 @@ use crate::console::{
 use crate::gateway::fake::FakeProvider;
 use crate::gateway::model::{Message, ModelGateway, Role, ToolCall};
 use crate::host::{
-    LoopHost, PermitDecision, PolicyDenial, PolicyDenialSource, ToolDef, ToolError, ToolRegistry,
-    ToolResult,
+    LoopHost, PermitDecision, PolicyDenial, PolicyDenialSource, ToolDef, ToolError, ToolResult,
 };
 use crate::orientation::{AgentRole, OrientationFireRecord, OrientationSessionState};
 use crate::prompt::{is_injected_block_text, is_restore_retained_block};
@@ -234,106 +233,7 @@ pub const TEXT_DELTA_PACING: std::time::Duration = std::time::Duration::from_mil
 /// 90K compacted target, small enough not to squeeze the kept rounds).
 pub const DEFAULT_WHITELIST_CAP: usize = 16 * 1024;
 
-/// P0-D (2026-08-14, ADR-0010 v1.10 / CONTEXT_COMPACTION_DESIGN §2-§6):
-/// context-compaction parameters for the redesigned mechanism — the A6
-/// parameter set (90K target / 20-round cooldown / 250K fallback) is
-/// revoked.
-///
-/// - Template summary (S3): fires at any loop-top gap when the previous
-///   round's MEASURED prompt tokens exceed `trigger_tokens` (192K —
-///   2026-08-18 adjudication, ADR-0010 §14.26) with a ≥`min_rounds`
-///   (2 model rounds — review fix 2026-08-14) cooldown, or exceed
-///   `safety_tokens` (256K fallback — 2026-08-18 adjudication, ADR-0010
-///   §14.26) regardless of cooldown.
-///   Reduction guards: removable content ≥ `min_compactable` (5K) and kept
-///   ≤ `max_reduction_ratio` (0.6) of before. A guard that cannot be
-///   satisfied retries across trigger rounds and forces one compaction
-///   after `GUARD_RETRY_LIMIT` failures (`guard_failed`). The summary
-///   output is a five-section template (≤17K chars), archived under
-///   `.gsa/compaction/` with a digest, and the rolling single marker
-///   carries the pointer.
-/// - Mechanical collapse (S2): every completed OLD tool round collapses
-///   into a deterministic action-ledger row in the MODEL-VISIBLE request
-///   (zero model calls, `recent_tail_rounds` kept verbatim); the
-///   persisted conversation keeps the full records. FUS-LEDGER-FOLD-STATE
-///   (2026-08-18, ADR-0010 §14.26): the collapse is stateful — the fold
-///   point advances only when the estimated request view reaches
-///   `fold_trigger_tokens` (128K), and between advances the request view
-///   prefix is byte-stable (pure append), restoring the v1.9 prefix-cache
-///   discipline that the old per-request stateless recomputation broke.
-/// - Recovery pre-check (D2-2): a restored conversation estimated over
-///   `recovery_trigger_tokens` (200K conservative) is mechanically
-///   truncated toward `recovery_target_tokens` (160K) before the first
-///   request, with the full sidecar copied into the run journal as the
-///   audit copy.
-///
-/// `target_tokens` (legacy A6 90K) is retained only for the pure
-/// `compact_messages` unit surface; the loop no longer uses it.
-#[derive(Debug, Clone, Copy)]
-pub struct ContextCompactConfig {
-    pub trigger_tokens: u64,
-    pub target_tokens: u64,
-    pub min_rounds: u32,
-    pub safety_tokens: u64,
-    /// FUS-LEDGER-FOLD-STATE (2026-08-18, ADR-0010 §14.26): mechanical
-    /// fold-advance threshold — when the ESTIMATED request view
-    /// (folded view, chars/2) is ≥ this, the loop folds the next complete
-    /// old rounds into the frozen ledger once (loop-top gap, checkpoint
-    /// rounds first). Default 128K = the MRCR quality plateau boundary
-    /// (V4-Flash-Max 0.870); env `ORZ_FOLD_TRIGGER_TOKENS` overrides.
-    pub fold_trigger_tokens: u64,
-    /// FUS-LEDGER-FOLD-BRIDGE (2026-08-19, ADR-0010 §14.32): the bridge
-    /// real-token budget of the FOLDED request view after the fixed pointer
-    /// message (default `DEFAULT_FOLD_TAIL_TOKENS` = 8K; env
-    /// `ORZ_FOLD_TAIL_TOKENS` overrides). `fold_tail_rounds` semantics
-    /// retired. Separate from `recent_tail_rounds` (the compaction drain
-    /// tail, unchanged).
-    pub fold_tail_tokens: u64,
-    /// D2-2 (2026-08-14, ADR-0010 v1.10 / CONTEXT_COMPACTION_DESIGN §6):
-    /// a restored conversation is pre-checked before the first request;
-    /// when the ESTIMATE exceeds this conservative threshold (min of the
-    /// 224K effective input budget and the 200K fallback = 200K), old
-    /// whole rounds are mechanically dropped toward `recovery_target_tokens`.
-    pub recovery_trigger_tokens: u64,
-    /// D2-2: recovery truncation target (160K — under the ordinary summary
-    /// trigger, so the first measured round may then drive a template
-    /// summary instead of another raw truncation).
-    pub recovery_target_tokens: u64,
-    /// P0-D review fix (2026-08-14, ADR-0010 v1.14): the end-of-session
-    /// compaction gate — a successful run whose FULL conversation estimate
-    /// exceeds this threshold compacts once before the sidecar write-back,
-    /// pinning the summary marker into the persisted conversation (the
-    /// restore pre-check remains the fallback for older sidecars).
-    pub session_end_trigger_tokens: u64,
-    /// P0-D S2/S3 (2026-08-14, ADR-0010 v1.10): bounded recent tail kept
-    /// verbatim in the model-visible collapsed view / after a summary.
-    pub recent_tail_rounds: usize,
-    /// P0-D S3: minimum droppable content (tokens) for a template summary
-    /// (reuse of orz-compaction `min_compactable` guard).
-    pub min_compactable: u64,
-    /// P0-D S3: maximum kept/before ratio — the summary must reduce by at
-    /// least 40% (`max_reduction_ratio` 0.6; reuse of orz-compaction).
-    pub max_reduction_ratio: f64,
-}
-
-impl Default for ContextCompactConfig {
-    fn default() -> Self {
-        Self {
-            trigger_tokens: 192_000,
-            target_tokens: 90_000,
-            min_rounds: 2,
-            safety_tokens: 256_000,
-            fold_trigger_tokens: DEFAULT_FOLD_TRIGGER_TOKENS,
-            fold_tail_tokens: DEFAULT_FOLD_TAIL_TOKENS,
-            recovery_trigger_tokens: 200_000,
-            recovery_target_tokens: 160_000,
-            session_end_trigger_tokens: 160_000,
-            recent_tail_rounds: 2,
-            min_compactable: 5_000,
-            max_reduction_ratio: 0.6,
-        }
-    }
-}
+pub use crate::compact::ContextCompactConfig;
 
 /// Error during agent loop execution.
 #[derive(Debug, thiserror::Error)]
@@ -492,18 +392,18 @@ pub struct AgentLoopController {
     /// `&self` and a turn may run on any thread; reset at turn start.
     denial_state: Mutex<DenialState>,
     /// A6 explicit context compaction parameters (settleable for tests).
-    context_compact: ContextCompactConfig,
+    pub(crate) context_compact: ContextCompactConfig,
     /// A6 §8 C.2 compaction whitelist (user decision 2026-08-08): the
     /// model-written list of task facts that survive compaction. Written
     /// only during the FIRST tool batch; resident in the conversation's
     /// preamble zone (the compaction mechanism skips it); archived
     /// best-effort to `{journal_dir}/whitelist.jsonl` (A5 retention
     /// covers it via the run dir).
-    whitelist: Mutex<Vec<String>>,
+    pub(crate) whitelist: Mutex<Vec<String>>,
     /// Cumulative character cap for the whitelist (16K default —
     /// user decision; the whitelist must stay a small part of the ~90K
     /// compacted context).
-    whitelist_cap: usize,
+    pub(crate) whitelist_cap: usize,
     /// GAP-SUBAGENT-RUNTIME (2026-08-10): per-role retrieval activation
     /// registry — the subagent lifecycle state (ADR-0010 §3.3). The
     /// controller is the single writer (disposition/close commits are
@@ -652,7 +552,7 @@ pub struct AgentLoopController {
     /// diffs the live snapshot against it at `submit`. `None` = the host
     /// provides no baseline (mock hosts / unsupported) → the status reports
     /// the change list as unavailable rather than fabricating one.
-    delivery_baseline: Mutex<Option<std::collections::HashMap<String, (u64, u64, u32)>>>,
+    pub(crate) delivery_baseline: Mutex<Option<std::collections::HashMap<String, (u64, u64, u32)>>>,
     /// AGENT-DELIVERY-FLOW (2026-08-23, 设计 §2.2): two-phase `submit` —
     /// (plan_epoch, pending). Call 1 renders the delivery status into the
     /// plan view and sets pending=true; call 2 (same epoch) confirms and
@@ -2154,9 +2054,17 @@ pub(crate) fn compact_messages(messages: &mut Vec<Message>, target_tokens: u64) 
 }
 
 fn compose_test_output_message(result: &crate::host::TestRunResult) -> String {
-    let reminder = match result.exit_code {
-        Some(code) => format!("[test-run complete] exit_code={code}"),
-        None => "[test-run complete] exit_code=none (no status — timed out?)".to_string(),
+    // THIN-HARNESS-REDESIGN-V2 §9.6 (2026-08-29 S5-1 审查处理 P2-1):
+    // F-09 超时走结构化 timed_out 事实（不再用 "timed out?" 启发式猜测）；
+    // 其余 exit_code 缺失维持中性表述。
+    let reminder = if result.timed_out {
+        "[test-run complete] TIMED OUT — the run did not complete within the wall-clock budget"
+            .to_string()
+    } else {
+        match result.exit_code {
+            Some(code) => format!("[test-run complete] exit_code={code}"),
+            None => "[test-run complete] exit_code=none (no status)".to_string(),
+        }
     };
     // RT-002 (2026-08-11): secret/host-path scrubbing at the CONTEXT
     // boundary (ADR-0010 §3.8.2: "secret、host path 和无关环境信息不得通过
@@ -2391,161 +2299,6 @@ impl AgentLoopController {
         if probe_writeback {
             self.note_probe_call_failure(tool);
         }
-    }
-
-    /// P0-A-2 (design §4 v0.2): rebuild the model-visible list projection
-    /// from the base registry list + the CURRENT probe snapshot:
-    /// 探针完整集 ∩ 会话声明集 + 非工作工具 — names only, no status
-    /// annotations. Faces A/C are revoked: every work tool is removed
-    /// unless its probe is complete, even when the registry declares it.
-    /// THIN-HARNESS-REDESIGN R1 (2026-08-27, §4.1): `run_tests` 从主代理
-    /// 声明面删除（bash 可达；官方验证独立于 agent），不再按探针补充。
-    /// 其余工作工具仍按探针完整集 ∩ 会话声明集投影；registry-absent tools
-    /// 永不发明。
-    ///
-    /// R1 封存/删除工具：无论 registry/探针如何声明，主代理面一律不出现
-    /// （接口封存——代码模块保留，从本表移除名称即配置恢复；plan_write
-    /// 刻意不在本表——休眠 plan_first 门路径启用时仍需声明）。
-    pub(crate) const R1_SEALED_MAIN_TOOLS: &[&str] = &[
-        // 边界三项（§4.1 边界项）。
-        "todo_write",
-        "update_goal",
-        "compaction_whitelist_add",
-        // 删除项（§4.1 删除表）。
-        "list_dir",
-        "run_tests",
-        "search_tool",
-        "project_doc_index",
-        "pdf_read",
-        "retrieval_disposition",
-        "retrieve_project_docs",
-    ];
-
-    pub(crate) fn project_main_agent_tool_defs(
-        base: &[ToolDef],
-        snapshot: &crate::tool_probe::ToolProbeSnapshot,
-    ) -> Vec<ToolDef> {
-        let mut tool_defs = base.to_vec();
-        tool_defs.retain(|t| !Self::R1_SEALED_MAIN_TOOLS.contains(&t.name.as_str()));
-        tool_defs.retain(|t| {
-            !crate::tool_probe::is_main_agent_work_tool(&t.name)
-                || snapshot.complete.iter().any(|c| c == &t.name)
-        });
-        tool_defs
-    }
-
-    /// RETRIEVAL-SUBAGENT-WIRING 审查处理 (2026-08-25, ADR-0010 §14.40)：
-    /// 检索工具面跟随模式 A 定档——local_browser 下隐藏 web 族（检索通道
-    /// 仅 browser_read），framework_fallback 下隐藏 browser_read（检索
-    /// 通道仅 web 族）。主面 base 投影与子代理父面共用（子代理从父面继承，
-    /// 外部 lane 的 browser_read 恢复另行按模式门控），避免「声明面同时
-    /// 出现两个通道、调用期 mode 门拒绝其一」的假 available 形态
-    /// （ADR v1.5：声明层与执行层不一致对模型不可预测）。off 模式由既有
-    /// 检索族投影剔除（mode=off 无检索工具），本函数不重复处理。
-    pub(crate) fn apply_retrieval_surface_projection(
-        tool_defs: &mut Vec<ToolDef>,
-        mode: RetrievalMode,
-    ) {
-        match mode {
-            RetrievalMode::LocalBrowser => {
-                tool_defs.retain(|t| !crate::relay::is_web_retrieval_tool(&t.name));
-            }
-            RetrievalMode::FrameworkFallback => {
-                tool_defs.retain(|t| t.name != "browser_read");
-            }
-            RetrievalMode::Off => {}
-        }
-    }
-
-    /// RETRIEVAL-SUBAGENT-WIRING 审查处理 (2026-08-25)：检索任务契约构建
-    /// ——`query` 必填（缺省回退 prompt），可选 `scope`/`max_results` 机械
-    /// 并入 goal 文本。子代理只收到 goal（`SystemPromptKind::Retrieval`），
-    /// 声明面承诺的参数若不入契约会被静默丢弃——并入后语义与 ToolDef
-    /// 描述一致（scope 收窄检索范围、max_results 上限结果数）。
-    pub(crate) fn build_retrieval_task_goal(arguments: &serde_json::Value, prompt: &str) -> String {
-        let mut goal = arguments
-            .get("query")
-            .and_then(|q| q.as_str())
-            .unwrap_or(prompt)
-            .to_string();
-        if let Some(scope) = arguments
-            .get("scope")
-            .and_then(|s| s.as_str())
-            .filter(|s| !s.trim().is_empty())
-        {
-            goal.push_str("\nscope: ");
-            goal.push_str(scope.trim());
-        }
-        if let Some(max) = arguments.get("max_results").and_then(|m| m.as_u64()) {
-            goal.push_str(&format!("\nmax_results: {max}"));
-        }
-        goal
-    }
-
-    /// FUS-RETRIEVAL-MECH P0-B 步骤 4 前置裁决（2026-08-14 用户裁决）：
-    /// 子代理工具投影 = 父侧 registry 投影去掉主车道专属控制工具
-    /// （`compaction_whitelist_add` / `retrieval_disposition`），并恢复主车道
-    /// 已不广告但检索车道仍须可用的 host 路由检索工具（`browser_read`——
-    /// local_browser 模式由外部子代理执行；host registry 未声明时不得发明）。
-    /// RETRIEVAL-SUBAGENT-WIRING (2026-08-25, ADR-0010 §14.40)：内部
-    /// lane（InternalRetrieval）工具面仅读族——web 族（web_search/web_fetch
-    /// 及变体）与 browser_read 不进入内部 lane（内部检索对象=工作区/项目
-    /// 文档，不是外部网络）；外部 lane（ExternalRetrieval）维持 web 族 +
-    /// browser_read（可用时）。审查处理 (2026-08-25)：恢复动作按模式 A
-    /// 定档门控——仅 local_browser 模式恢复 browser_read（framework_fallback
-    /// 下外部 lane 只走 web 族，与 DoD「工具面跟随模式」一致；web 族在
-    /// local_browser 下由 `apply_retrieval_surface_projection` 从父面剔除）。
-    pub(crate) fn subagent_tool_projection(
-        parent_tools: &[ToolDef],
-        registry: &dyn ToolRegistry,
-        role: SubagentRole,
-        retrieval_mode: RetrievalMode,
-    ) -> Vec<ToolDef> {
-        let mut defs: Vec<ToolDef> = parent_tools
-            .iter()
-            .filter(|t| {
-                t.name != "compaction_whitelist_add"
-                    && t.name != "retrieval_disposition"
-                    // P0-C S2 (2026-08-15): the console write button is
-                    // main-lane only — subagents never write action orders.
-                    && t.name != "blackboard_action_write"
-                    // PLAN-FIRST 阶段 A (2026-08-16, ADR-0010 §14.17): the
-                    // plan-gate write surface is main-lane only — subagents
-                    // never write plans (P2-1 审查收口).
-                    && t.name != "plan_write"
-                    // PLAN-FIRST 阶段 C (2026-08-16, ADR-0010 §14.17⑱):
-                    // console 双模式控制工具 main-lane only — subagents 无
-                    // 操作台、不参与 direct 证据门。
-                    && t.name != "console_step_done"
-                    && t.name != "console_return_to_console"
-                    // RETRIEVAL-SUBAGENT-WIRING：内部 lane 不暴露外部
-                    // 检索族（web_* 与 browser_read）；外部 lane 保留。
-                    && !(role == SubagentRole::InternalRetrieval
-                        && (crate::relay::is_web_retrieval_tool(&t.name)
-                            || t.name == "browser_read"))
-                    // 内部检索派发工具（retrieve_project_*）是主车道专属
-                    // 入口——子代理不派发内部检索（nested-dispatch gate
-                    // 兜底外，声明面也剔除，杜绝递归/自我派发）。web 族
-                    // 保留（外部 lane 自执行）。
-                    && !t.name.starts_with("retrieve_project_")
-            })
-            .cloned()
-            .collect();
-        // 外部 lane 恢复主车道已不广告的 host 路由检索工具
-        // （browser_read——local_browser 模式由外部子代理执行）；仅
-        // local_browser 模式恢复（framework_fallback 下外部 lane 只走
-        // web 族）；内部 lane 不恢复（工具面仅读族）。
-        if role == SubagentRole::ExternalRetrieval && retrieval_mode == RetrievalMode::LocalBrowser
-        {
-            for name in ["browser_read"] {
-                if !defs.iter().any(|t| t.name == name) {
-                    if let Some(def) = registry.get(name) {
-                        defs.push(def);
-                    }
-                }
-            }
-        }
-        defs
     }
 
     /// FUS-TOOL-PROBE P0-A-2: whether the run carries a goal context
@@ -3882,158 +3635,6 @@ impl AgentLoopController {
                 .await?;
         }
         Ok(())
-    }
-
-    /// A6 (2026-08-08): override the explicit context-compaction parameters
-    /// (tests use tiny values; production keeps the design §5 A6 defaults).
-    pub fn with_context_compact(
-        mut self,
-        trigger_tokens: u64,
-        target_tokens: u64,
-        min_rounds: u32,
-        safety_tokens: u64,
-    ) -> Self {
-        self.context_compact = ContextCompactConfig {
-            trigger_tokens,
-            target_tokens,
-            min_rounds,
-            safety_tokens,
-            // FUS-LEDGER-FOLD-BRIDGE (2026-08-19, ADR-0010 §14.32): 结构更新
-            // 不再重置 fold_tail_tokens ——`with_fold_tail_tokens` 与
-            // `with_context_compact` 的调用顺序从此无关（此前
-            // `..Default::default()` 会把 fold_tail_rounds 重置回 1）。
-            fold_tail_tokens: self.context_compact.fold_tail_tokens,
-            ..ContextCompactConfig::default()
-        };
-        self
-    }
-
-    /// D2-2 (2026-08-14): override the recovery pre-check threshold/target
-    /// (tests use tiny values; production keeps 200K/160K).
-    pub fn with_recovery_compact(mut self, trigger_tokens: u64, target_tokens: u64) -> Self {
-        self.context_compact.recovery_trigger_tokens = trigger_tokens;
-        self.context_compact.recovery_target_tokens = target_tokens;
-        self
-    }
-
-    /// P0-D review fix (2026-08-14): override the end-of-session compaction
-    /// gate (tests use tiny values; production keeps 160K).
-    pub fn with_session_end_trigger(mut self, tokens: u64) -> Self {
-        self.context_compact.session_end_trigger_tokens = tokens;
-        self
-    }
-
-    /// P0-D S2/S3: override the recent-tail length (tests use small values;
-    /// production keeps 2).
-    pub fn with_recent_tail(mut self, rounds: usize) -> Self {
-        self.context_compact.recent_tail_rounds = rounds;
-        self
-    }
-
-    /// FUS-LEDGER-FOLD-STATE (2026-08-18, ADR-0010 §14.26): pin the
-    /// fold-advance threshold (test seam; production reads
-    /// `ORZ_FOLD_TRIGGER_TOKENS` at construction, default 128K).
-    pub fn with_fold_trigger_tokens(mut self, tokens: u64) -> Self {
-        self.context_compact.fold_trigger_tokens = tokens.max(1);
-        self
-    }
-
-    /// FUS-LEDGER-FOLD-BRIDGE (2026-08-19, ADR-0010 §14.32): pin the bridge
-    /// real-token budget (test seam; production reads
-    /// `ORZ_FOLD_TAIL_TOKENS` at construction, default 8K).
-    pub fn with_fold_tail_tokens(mut self, tokens: u64) -> Self {
-        self.context_compact.fold_tail_tokens = tokens.max(1);
-        self
-    }
-
-    /// P0-D S3: override the summary reduction guards (tests relax them).
-    pub fn with_summary_guards(mut self, min_compactable: u64, max_reduction_ratio: f64) -> Self {
-        self.context_compact.min_compactable = min_compactable;
-        self.context_compact.max_reduction_ratio = max_reduction_ratio;
-        self
-    }
-
-    /// A6 §8 C.2 (2026-08-08): override the whitelist character cap
-    /// (tests use small values; production keeps DEFAULT_WHITELIST_CAP).
-    pub fn with_whitelist_cap(mut self, cap: usize) -> Self {
-        self.whitelist_cap = cap;
-        self
-    }
-
-    /// A6 §8 C.2: keep the resident whitelist message in the conversation's
-    /// preamble zone (after the original prompt, before the first tool
-    /// declaration) — the compaction mechanism's always-kept preamble then
-    /// skips it automatically (user decision: 常驻被压缩机制跳过, never
-    /// re-injected at compaction time). New entries update the existing
-    /// whitelist message in place.
-    fn upsert_whitelist_message(&self, messages: &mut Vec<Message>) {
-        let entries = self.whitelist.lock().unwrap();
-        if entries.is_empty() {
-            return;
-        }
-        let content = crate::prompt::build_whitelist_block(&entries);
-        if let Some(i) = messages
-            .iter()
-            .position(|m| m.content.starts_with(crate::prompt::WHITELIST_PREFIX))
-        {
-            messages[i].content = content;
-            return;
-        }
-        let pos = messages
-            .iter()
-            .position(|m| m.role == Role::Assistant && !m.tool_calls.is_empty())
-            .unwrap_or(messages.len());
-        messages.insert(
-            pos,
-            Message {
-                role: Role::User,
-                content,
-                tool_call_id: None,
-                tool_calls: Vec::new(),
-                reasoning_content: None,
-            },
-        );
-    }
-
-    /// A6 §8 C.2: mechanical best-effort archive of a whitelist write to
-    /// `{journal_dir}/whitelist.jsonl` (JSONL: timestamp + content, plain
-    /// text — user decision 明文存档). The run dir is covered by the A5
-    /// retention sweep (7 days), so A5 needs no changes. Runtime compaction
-    /// reads the in-memory list, never this file; an archive failure is
-    /// logged and never blocks the write.
-    ///
-    /// Review decision (2026-08-08): credential-shaped content is scanned
-    /// (`looks_like_api_key`, GAK-CRED-001's detector) before the archive
-    /// append — a hit logs a warning as the audit trail but does NOT block
-    /// the write (best-effort semantics unchanged; the whitelist is
-    /// model-chosen task content, and the scan is a surfaced warning, not
-    /// a gate).
-    fn archive_whitelist_entry(&self, host: &dyn LoopHost, content: &str) {
-        if orz_assurance::credential::looks_like_api_key(content) {
-            tracing::warn!(
-                "whitelist entry looks credential-shaped (archived anyway — \
-                 .gsa is gitignored, retained 7 days by A5)"
-            );
-        }
-        let line = serde_json::json!({
-            "timestamp": chrono_utc_now(),
-            "content": content,
-        });
-        let path = host.journal().journal_dir().join("whitelist.jsonl");
-        let mut line = line.to_string();
-        line.push('\n');
-        if let Err(e) = std::fs::OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(&path)
-            .and_then(|mut f| std::io::Write::write_all(&mut f, line.as_bytes()))
-        {
-            tracing::warn!(
-                error = %e,
-                path = %path.display(),
-                "whitelist archive append failed (best-effort)"
-            );
-        }
     }
 
     /// A6 review D2-2 (2026-08-08): one-line MECHANICAL digest of the
@@ -7866,101 +7467,6 @@ impl AgentLoopController {
         }
     }
 
-    /// THIN-HARNESS-REDESIGN-V2 §9.3 (2026-08-29 审查处理)：submit 确认
-    /// 消息——有 plan 时注明末步完成并入最终回答流程；无 plan（降级纯
-    /// 状态展示）不虚构机械"最终回答流程"（终答只由模型自发），明确仅
-    /// 状态展示、未推进计划步骤。
-    fn submit_confirm_message(terminal_id: Option<&str>, status: &str) -> String {
-        match terminal_id {
-            Some(id) => format!("submit: 递交已确认，末步 {id} 完成，进入最终回答流程。\n{status}"),
-            None => format!(
-                "submit: 递交已确认（无计划基线，仅状态展示，未推进计划步骤；终答请自行给出）。\n{status}"
-            ),
-        }
-    }
-
-    /// AGENT-DELIVERY-FLOW (2026-08-23, 设计 §2.2): the mechanical delivery
-    /// status — diff the live worktree snapshot against the plan-approval
-    /// baseline (`.gsa`/缓存目录已由 walk 排除), capped at 20 entries +
-    /// count line + truncation marker. Tool output — rendered into the
-    /// blackboard plan view by `submit`, never a model-authored statement.
-    /// `None` baseline (host without snapshot support) reports the change
-    /// list as unavailable rather than fabricating one.
-    fn compute_delivery_status(&self, host: &dyn LoopHost) -> String {
-        let baseline = self.delivery_baseline.lock().unwrap().clone();
-        let Some(before) = baseline else {
-            // THIN-HARNESS-REDESIGN-V2 §9.3 (2026-08-29)：无计划批准基线
-            // ——无 plan 会话（submit 降级为纯状态展示）或计划尚未批准；
-            // 活快照存在时才会走到这里，故归因于基线缺失而非 host 能力。
-            return "[delivery] 状态: 变更清单不可用（无计划批准基线；submit 保持信息展示）"
-                .to_string();
-        };
-        let Some(after) = host.workspace_snapshot() else {
-            return "[delivery] 状态: 变更清单不可用（host 未提供工作区快照）".to_string();
-        };
-        let (all, _) = crate::host::workspace_delta_diff(&before, &after, usize::MAX);
-        let total = all.len();
-        let cap = crate::host::DELIVERY_DELTA_MAX_ENTRIES;
-        let truncated = total > cap;
-        let shown = &all[..total.min(cap)];
-        let kinds = shown
-            .iter()
-            .map(|e| {
-                let kind = match e.kind {
-                    crate::host::WorkspaceDeltaKind::Added => "A",
-                    crate::host::WorkspaceDeltaKind::Modified => "M",
-                    crate::host::WorkspaceDeltaKind::Deleted => "D",
-                };
-                format!("{} {}", e.path, kind)
-            })
-            .collect::<Vec<_>>()
-            .join(", ");
-        let mut line = format!("[delivery] 状态: {total} 个变更 ({kinds})");
-        if truncated {
-            line.push_str(&format!(" — 仅显示前 {cap} 条（截断）"));
-        }
-        line
-    }
-
-    /// PLAN-FIRST 阶段 C (2026-08-16, ADR-0010 §14.17⑱ / 设计 §7.4):
-    /// `console_mode_transition` 事件 + 黑板 gate_log 同步（模型可读）。
-    async fn refuse_console_tool(
-        &self,
-        writer: &mut EventWriter<'_>,
-        messages: &mut Vec<Message>,
-        tool: &str,
-        call_id: &str,
-        code: &str,
-        msg: &str,
-    ) -> Result<ToolResult, AgentLoopError> {
-        writer
-            .record(
-                EventType::ToolCompleted,
-                serde_json::json!({
-                    "tool": tool,
-                    "call_id": call_id,
-                    "exit_code": 1,
-                    "status": "error",
-                    "error": code,
-                }),
-            )
-            .await?;
-        messages.push(Message {
-            role: Role::Tool,
-            content: msg.to_string(),
-            tool_call_id: Some(call_id.to_string()),
-            tool_calls: Vec::new(),
-            reasoning_content: None,
-        });
-        Ok(ToolResult {
-            output: msg.to_string(),
-            exit_code: Some(1),
-            output_encoding: None,
-            structured: None,
-            ..Default::default()
-        })
-    }
-
     #[allow(clippy::too_many_arguments)] // mirrors the v0.2 payload's closed field set
     async fn record_console_transition(
         &self,
@@ -8218,8 +7724,11 @@ impl AgentLoopController {
         let entity_id = self
             .register_entities_for_tool(target_tool, arguments, &result)
             .await;
-        let failed =
-            result.policy_denial.is_some() || result.timed_out || result.exit_code != Some(0);
+        // THIN-HARNESS-REDESIGN-V2 §9.7 (2026-08-29 S5-2): 中间回报（命令
+        // 仍在后台运行）不是失败——exit_code 为 None 时不得触发失败诊断。
+        let failed = result.policy_denial.is_some()
+            || result.timed_out
+            || (result.exit_code != Some(0) && result.mid_run.is_none());
         if failed {
             // P0-C S3 前置 (2026-08-15, P1-2 定案): the console adapter
             // classifies policy refusals ONLY from the structured signal —
@@ -9186,6 +8695,13 @@ impl AgentLoopController {
             // that produced the test output when the host observed one.
             if let Some(enc) = &result.output_encoding {
                 completed_payload["output_encoding"] = serde_json::json!(enc);
+            }
+            // THIN-HARNESS-REDESIGN-V2 §9.6 (2026-08-29 S5-1 审查处理
+            // P2-1): run_tests 的 F-09 墙钟掐杀经 TestRunResult.timed_out
+            // 结构化透传——与通用工具路径一致，事件面可按超时事实画像
+            // （schema 描述「host's per-call wall-clock kill」）。
+            if result.timed_out {
+                completed_payload["timed_out"] = serde_json::json!(true);
             }
             stamp_direct(&mut completed_payload);
             writer
@@ -10609,6 +10125,31 @@ impl AgentLoopController {
                 if res.timed_out {
                     completed_payload["timed_out"] = serde_json::json!(true);
                 }
+                // THIN-HARNESS-REDESIGN-V2 §9.7 (2026-08-29 S5-2): 中间回报
+                // ——run_terminal_cmd 满 300s 自动后台化时，先记一条
+                // `tool_running`（运行时长/进程状态/输出活跃度/落盘指针，
+                // 单次仅一次），该调用随后照常收 `tool_completed` 并带
+                // `running: true` 标记（命令仍在后台运行，exit_code=null）。
+                if let Some(mid) = &res.mid_run {
+                    let mut running_payload = serde_json::json!({
+                        "tool": tc.name,
+                        "call_id": tc.call_id,
+                        "wall_ms": wall_started.elapsed().as_millis() as u64,
+                        "task_id": mid.task_id,
+                        "output_file": mid.output_file,
+                    });
+                    if let Some(pid) = mid.pid {
+                        running_payload["pid"] = serde_json::json!(pid);
+                    }
+                    if let Some(total) = mid.total_bytes {
+                        running_payload["total_bytes"] = serde_json::json!(total);
+                    }
+                    stamp_direct(&mut running_payload);
+                    writer
+                        .record(EventType::ToolRunning, running_payload)
+                        .await?;
+                    completed_payload["running"] = serde_json::json!(true);
+                }
                 if !edits_payload.is_empty() {
                     completed_payload["edits"] = serde_json::Value::Array(edits_payload);
                 }
@@ -10691,6 +10232,10 @@ impl AgentLoopController {
                         // 据此挂变更清单（run_tests 特殊路径已在上面透传）。
                         workspace_delta: res.workspace_delta.clone(),
                         workspace_delta_truncated: res.workspace_delta_truncated,
+                        // THIN-HARNESS-REDESIGN-V2 §9.7 (2026-08-29 S5-2):
+                        // 中间回报结构化透传给 console 适配层（仍在运行 ≠
+                        // 失败，不触发失败诊断）。
+                        mid_run: res.mid_run.clone(),
                     },
                     true,
                 )
@@ -11178,7 +10723,7 @@ impl<'a> EventWriter<'a> {
 }
 
 /// Get current UTC timestamp in ISO 8601 format.
-fn chrono_utc_now() -> String {
+pub(crate) fn chrono_utc_now() -> String {
     chrono::Utc::now().to_rfc3339()
 }
 
@@ -13453,6 +12998,7 @@ mod tests {
         let result = crate::host::TestRunResult {
             output: "1 passed".to_string(),
             exit_code: Some(0),
+            timed_out: false,
             full_output_path: None,
             output_encoding: Some("utf-8".to_string()),
             workspace_delta: Vec::new(),
@@ -13485,6 +13031,75 @@ mod tests {
             payloads[0]["output_encoding"],
             serde_json::json!("utf-8"),
             "{payloads:?}"
+        );
+        // THIN-HARNESS-REDESIGN-V2 §9.6 (2026-08-29 S5-1 审查处理 P2-2):
+        // 事件面 wall_ms 落于执行完成（run_tests 成功路径）。
+        assert!(
+            payloads[0]["wall_ms"].as_u64().is_some(),
+            "run_tests completion must carry wall_ms: {payloads:?}"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// THIN-HARNESS-REDESIGN-V2 §9.6 (2026-08-29 S5-1 审查处理 P2-1):
+    /// run_tests 的 F-09 墙钟掐杀经 `TestRunResult.timed_out` 结构化透传
+    /// ——ToolCompleted 落 `timed_out: true`，模型可见消息为明确 TIMED OUT
+    /// （不再依赖 exit_code 缺失的 "timed out?" 启发式）。
+    #[tokio::test]
+    async fn run_tests_timeout_completion_journals_timed_out() {
+        let dir = test_dir();
+        let result = crate::host::TestRunResult {
+            output: "partial".to_string(),
+            exit_code: None,
+            timed_out: true,
+            full_output_path: None,
+            output_encoding: None,
+            workspace_delta: Vec::new(),
+            workspace_delta_truncated: false,
+        };
+        let host = PolicyTestRunnerHost {
+            journal: JournalRecorder::new(dir.clone()),
+            policy: crate::host::ToolPolicy::Benchmark,
+            decision: PermitDecision::AllowOnce,
+            result: Some(result),
+        };
+        let fake = Arc::new(FakeProvider::new(vec![
+            ScriptedResponse::tool_calls(vec![tool_call("run_tests", "call-to-tests")]),
+            ScriptedResponse::text("完成"),
+            ScriptedResponse::text("完成"),
+        ]));
+        let gateway: Arc<dyn ModelGateway> = fake.clone();
+        let controller = AgentLoopController::with_gateway(gateway);
+        controller
+            .run_turn(&host, "跑测试", "RUN-TO", MANIFEST, 0, None, None, None)
+            .await
+            .expect("run_tests turn");
+        let payloads: Vec<serde_json::Value> = events(&dir)
+            .into_iter()
+            .filter(|e| e.event_type == EventType::ToolCompleted)
+            .map(|e| e.payload)
+            .collect();
+        assert_eq!(payloads.len(), 1, "{payloads:?}");
+        assert_eq!(
+            payloads[0]["timed_out"],
+            serde_json::json!(true),
+            "{payloads:?}"
+        );
+        assert!(
+            payloads[0]["wall_ms"].as_u64().is_some(),
+            "timeout completion carries wall_ms: {payloads:?}"
+        );
+        let received = fake.received_requests();
+        assert!(received.len() >= 2, "{received:?}");
+        let round2 = &received[1].messages;
+        let reply = round2
+            .iter()
+            .find(|m| m.tool_call_id.as_deref() == Some("call-to-tests"))
+            .expect("tool reply present");
+        assert!(
+            reply.content.contains("TIMED OUT"),
+            "definitive timeout message: {}",
+            reply.content
         );
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -15369,7 +14984,7 @@ mod tests {
             }
             async fn call_tool(
                 &self,
-                _name: &str,
+                name: &str,
                 _arguments: serde_json::Value,
                 _call_id: &str,
             ) -> Result<ToolResult, ToolError> {
@@ -15628,6 +15243,20 @@ mod tests {
             "timeout reason in journal: {}",
             completed[0]
         );
+        // THIN-HARNESS-REDESIGN-V2 §9.6 (2026-08-29 S5-1 审查处理 P2-2):
+        // 事件面字段直接回归——timed_out 标记与 wall_ms 必须落在
+        // ToolCompleted（schema 为 optional，缺了验证器抓不到）。
+        assert_eq!(
+            completed[0]["timed_out"],
+            serde_json::json!(true),
+            "timed_out marker journaled: {}",
+            completed[0]
+        );
+        assert!(
+            completed[0]["wall_ms"].as_u64().is_some(),
+            "wall_ms present on timeout completion: {}",
+            completed[0]
+        );
 
         // The model sees an explicit "TIMED OUT" message answering the
         // call (round-2 request carries the tool reply). 2026-08-29 S5-1:
@@ -15653,6 +15282,154 @@ mod tests {
         let replay = orz_assurance::replay_journal(
             &dir.join("events.jsonl"),
             Some("RUN-TIMEOUT"),
+            None,
+            true,
+        );
+        assert!(replay.valid, "journal errors: {:?}", replay.errors);
+        assert_eq!(replay.terminal_event.as_deref(), Some("run_finished"));
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// THIN-HARNESS-REDESIGN-V2 §9.7 (2026-08-29 S5-2)：run_terminal_cmd
+    /// 自动后台化（mid_run）→ 控制器在 ToolStarted 与 ToolCompleted 之间
+    /// 记一条 `tool_running`（wall_ms/pid/total_bytes/output_file/task_id），
+    /// 随后 ToolCompleted 带 `running: true` 且 exit_code=null；模型下一轮
+    /// 收到中间状态文本。
+    #[tokio::test]
+    async fn mid_run_result_journals_tool_running_and_running_completed() {
+        let dir = test_dir();
+        let journal = JournalRecorder::new(dir.clone());
+        struct MidRunOnceHost {
+            journal: JournalRecorder,
+            calls: AtomicU64,
+        }
+        #[async_trait::async_trait]
+        impl LoopHost for MidRunOnceHost {
+            fn journal(&self) -> &JournalRecorder {
+                &self.journal
+            }
+            fn tools_registry(&self) -> &dyn ToolRegistry {
+                &EmptyRegistry
+            }
+            async fn call_tool(
+                &self,
+                _name: &str,
+                _arguments: serde_json::Value,
+                _call_id: &str,
+            ) -> Result<ToolResult, ToolError> {
+                let n = self.calls.fetch_add(1, Ordering::SeqCst);
+                if n == 0 {
+                    Ok(ToolResult {
+                        output: "[Command still running after 300s] PID: 1234 ...".to_string(),
+                        exit_code: None,
+                        output_encoding: None,
+                        structured: None,
+                        mid_run: Some(crate::host::ToolMidRunStatus {
+                            task_id: "call-t1".to_string(),
+                            pid: Some(1234),
+                            output_file: "/tmp/terminal/call-t1.log".to_string(),
+                            total_bytes: Some(8192),
+                        }),
+                        ..Default::default()
+                    })
+                } else {
+                    Ok(ToolResult {
+                        output: "retry ok".to_string(),
+                        exit_code: Some(0),
+                        output_encoding: None,
+                        structured: None,
+                        ..Default::default()
+                    })
+                }
+            }
+            async fn request_permission(
+                &self,
+                _risk: RiskClass,
+                _tool: &str,
+                _arguments: &serde_json::Value,
+            ) -> Result<PermitDecision, PermitError> {
+                Ok(PermitDecision::AllowOnce)
+            }
+        }
+        let host = MidRunOnceHost {
+            journal,
+            calls: AtomicU64::new(0),
+        };
+        let fake = Arc::new(FakeProvider::new(vec![
+            ScriptedResponse::tool_calls(vec![tool_call("run_terminal_cmd", "call-t1")]),
+            ScriptedResponse::text("结果：完成"),
+            ScriptedResponse::text("结果：完成"),
+        ]));
+        let gateway: Arc<dyn ModelGateway> = fake.clone();
+        let controller = AgentLoopController::with_gateway(gateway);
+        let result = controller
+            .run_turn(
+                &host,
+                "测试中间回报",
+                "RUN-MIDRUN",
+                MANIFEST,
+                0,
+                None,
+                None,
+                None,
+            )
+            .await;
+        assert!(result.is_ok(), "{result:?}");
+
+        let events = events(&dir);
+        let running: Vec<serde_json::Value> = events
+            .iter()
+            .filter(|e| e.event_type == EventType::ToolRunning)
+            .map(|e| e.payload.clone())
+            .collect();
+        assert_eq!(running.len(), 1, "exactly one tool_running");
+        assert_eq!(running[0]["tool"], "run_terminal_cmd");
+        assert_eq!(running[0]["call_id"], "call-t1");
+        assert_eq!(running[0]["task_id"], "call-t1");
+        assert_eq!(running[0]["pid"], serde_json::json!(1234));
+        assert_eq!(running[0]["total_bytes"], serde_json::json!(8192));
+        assert_eq!(running[0]["output_file"], "/tmp/terminal/call-t1.log");
+        assert!(
+            running[0]["wall_ms"].as_u64().is_some(),
+            "wall_ms present on tool_running: {}",
+            running[0]
+        );
+
+        let completed: Vec<serde_json::Value> = events
+            .iter()
+            .filter(|e| e.event_type == EventType::ToolCompleted)
+            .map(|e| e.payload.clone())
+            .collect();
+        assert_eq!(completed.len(), 1, "exactly one ToolCompleted");
+        assert_eq!(completed[0]["running"], serde_json::json!(true));
+        assert!(completed[0]["exit_code"].is_null());
+        assert!(
+            completed[0]["wall_ms"].as_u64().is_some(),
+            "wall_ms present: {}",
+            completed[0]
+        );
+
+        // 模型下一轮收到中间状态文本（Tool 消息内容）。
+        let received = fake.received_requests();
+        assert!(received.len() >= 2, "{received:?}");
+        let round2 = &received[1].messages;
+        let tool_msg = round2
+            .iter()
+            .find(|m| m.tool_call_id.as_deref() == Some("call-t1"));
+        assert!(tool_msg.is_some(), "tool reply present: {round2:?}");
+        assert!(
+            tool_msg
+                .unwrap()
+                .content
+                .contains("still running after 300s"),
+            "mid-run report text: {}",
+            tool_msg.unwrap().content
+        );
+
+        let replay = orz_assurance::replay_journal(
+            &dir.join("events.jsonl"),
+            Some("RUN-MIDRUN"),
             None,
             true,
         );
@@ -25054,6 +24831,7 @@ mod tests {
         let result = crate::host::TestRunResult {
             output: "1 passed".to_string(),
             exit_code: Some(0),
+            timed_out: false,
             full_output_path: None,
             output_encoding: None,
             workspace_delta: vec![crate::host::WorkspaceDeltaEntry {
@@ -25106,6 +24884,7 @@ mod tests {
         let truncated = crate::host::TestRunResult {
             output: "1 passed".to_string(),
             exit_code: Some(0),
+            timed_out: false,
             full_output_path: None,
             output_encoding: None,
             workspace_delta: Vec::new(),
@@ -25301,6 +25080,19 @@ mod tests {
         let msg = compose_test_output_message(&no_path);
         assert!(msg.starts_with("[test-run complete] exit_code=none"));
         assert!(msg.ends_with("partial"));
+
+        // THIN-HARNESS-REDESIGN-V2 §9.6 (2026-08-29 S5-1 审查处理 P2-1):
+        // F-09 超时经结构化 timed_out 渲染明确文案（不再启发式猜测）。
+        let timed_out = crate::host::TestRunResult {
+            output: "partial output".to_string(),
+            exit_code: None,
+            full_output_path: None,
+            timed_out: true,
+            ..Default::default()
+        };
+        let msg = compose_test_output_message(&timed_out);
+        assert!(msg.starts_with("[test-run complete] TIMED OUT"));
+        assert!(msg.ends_with("partial output"));
 
         // RT-002: scrubbing happens at the CONTEXT boundary — a secret shape
         // in the output is replaced before it enters the conversation, and
