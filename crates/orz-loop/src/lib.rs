@@ -21,6 +21,7 @@ mod console_exec;
 pub(crate) mod console_mode;
 pub mod controller;
 mod delivery;
+mod denial;
 mod diagnostic_coverage;
 pub mod diagnostics;
 pub mod entities;

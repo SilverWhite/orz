@@ -4,9 +4,7 @@
 //! Moved verbatim from `controller.rs`; mechanical extraction only —
 //! behavior, events and journal chain unchanged.
 
-use crate::controller::{
-    AgentLoopController, DEFAULT_FOLD_TAIL_TOKENS, DEFAULT_FOLD_TRIGGER_TOKENS, chrono_utc_now,
-};
+use crate::controller::{AgentLoopController, chrono_utc_now};
 use crate::gateway::model::{Message, Role};
 use crate::host::LoopHost;
 
@@ -262,5 +260,162 @@ impl AgentLoopController {
                 "whitelist archive append failed (best-effort)"
             );
         }
+    }
+}
+
+/// FUS-LEDGER-FOLD-STATE (2026-08-18, ADR-0010 §14.26): the mechanical
+/// fold-advance threshold — the estimated request view that triggers one
+/// stateful fold advance at the loop-top gap. Default 128K (2026-08-18
+/// user adjudication; MRCR-8-needle quality plateau boundary for
+/// V4-Flash-Max; allows reading the full key-document set — index 30.5K
+/// + ADR 43K + BACKLOG 27.8K ≈ 101K + preamble 8K — without a fold).
+pub const DEFAULT_FOLD_TRIGGER_TOKENS: u64 = 128_000;
+
+/// Env override for the fold-advance threshold
+/// (`ORZ_FOLD_TRIGGER_TOKENS`). Parsed at controller construction;
+/// absent/invalid/zero = the default.
+pub fn fold_trigger_tokens_override() -> Option<u64> {
+    std::env::var("ORZ_FOLD_TRIGGER_TOKENS")
+        .ok()
+        .and_then(|s| parse_fold_trigger_tokens(&s))
+}
+
+/// Pure parse rule for the fold-threshold env value (tested without env
+/// mutation): trimmed, positive integer; absent/invalid/zero → None.
+pub(crate) fn parse_fold_trigger_tokens(s: &str) -> Option<u64> {
+    s.trim().parse().ok().filter(|v| *v > 0)
+}
+
+/// FUS-LEDGER-FOLD-BRIDGE (2026-08-19, ADR-0010 §14.32): the folded request
+/// view keeps only the newest complete rounds within this real-token bridge
+/// budget (`[U0][固定指针消息][桥]`); older rounds are appended to the
+/// external ledger file as before. Default 8K (实测读/计划轮 1–3K、终端执行
+/// 轮 5–7K——多数折叠时刻能整轮装下，截断为例外；S4 以折叠后首请求实际重付
+/// 校准换算系数). `recent_tail_rounds` (compaction drain tail) is untouched.
+/// Env `ORZ_FOLD_TAIL_TOKENS` overrides (trimmed positive integer;
+/// absent/invalid/zero = default). 换算: 真实 token → 字符预算
+/// (`action_ledger::FOLD_TAIL_CHARS_PER_TOKEN` = 2，S4 实测校准) → 估计口径
+/// (`estimate_messages_tokens`, chars/2)。
+pub fn fold_tail_tokens_override() -> Option<u64> {
+    std::env::var("ORZ_FOLD_TAIL_TOKENS")
+        .ok()
+        .and_then(|s| parse_fold_tail_tokens(&s))
+}
+
+/// Pure parse rule for the bridge-budget env value (tested without env
+/// mutation): trimmed, positive integer; absent/invalid/zero → None.
+pub(crate) fn parse_fold_tail_tokens(s: &str) -> Option<u64> {
+    s.trim().parse().ok().filter(|v| *v > 0)
+}
+
+/// FUS-LEDGER-FOLD-BRIDGE (2026-08-19, ADR-0010 §14.32 / 设计 §3.6): 折叠后
+/// 视图桥的默认真实 token 预算。8K 依据=S4 实测读/计划轮 1–3K、终端执行轮
+/// 5–7K——多数折叠时刻能整轮装下（截断为例外；截断频率 >30% 视为桥偏小，
+/// S4 校准）；4K 命中率仅多约 0.5pp 但会频繁截断正常终端轮；10K+ 收益递减。
+/// `ORZ_FOLD_TAIL_TOKENS` 可配；实现按
+/// `action_ledger::FOLD_TAIL_CHARS_PER_TOKEN`（2 字符/真实 token，S4 实测
+/// 校准——path-tracing 07:08 运行桥 12,948 字符 → 重付 6,493）换算。
+pub const DEFAULT_FOLD_TAIL_TOKENS: u64 = 8_000;
+
+/// A6 §8 C.2 (2026-08-08): default cumulative character cap for the
+/// compaction whitelist (16K — user decision; ≈8K tokens ≈ ~9% of the
+/// 90K compacted target, small enough not to squeeze the kept rounds).
+pub const DEFAULT_WHITELIST_CAP: usize = 16 * 1024;
+
+/// Result of one explicit context compaction (A6).
+pub(crate) struct CompactionStats {
+    pub(crate) rounds_dropped: u32,
+    pub(crate) messages_dropped: usize,
+    pub(crate) messages_kept: usize,
+    pub(crate) estimated_tokens_after: u64,
+    /// Index at which the caller must insert the compaction marker — the
+    /// cut point: after the preamble, before the first kept round.
+    pub(crate) marker_index: usize,
+}
+
+/// A6: estimated tokens of one message — chars/2 (a conservative CJK-aware
+/// guess: CJK ≈ 2 chars/token, English would be ≈ 4 — over-estimating is
+/// the safe direction; the real next-round usage measurement is what the
+/// trigger uses).
+pub(crate) fn estimate_message_tokens(m: &Message) -> u64 {
+    let mut chars = m.content.chars().count() as u64;
+    if let Some(r) = &m.reasoning_content {
+        chars += r.chars().count() as u64;
+    }
+    for tc in &m.tool_calls {
+        chars += tc.name.chars().count() as u64;
+        chars += serde_json::to_string(&tc.arguments)
+            .map(|s| s.chars().count() as u64)
+            .unwrap_or(0);
+    }
+    chars / 2
+}
+
+pub(crate) fn estimate_messages_tokens(messages: &[Message]) -> u64 {
+    messages.iter().map(estimate_message_tokens).sum()
+}
+
+/// A6 (2026-08-08): explicit context compaction — drop complete OLDER tool
+/// rounds so the remaining conversation (preamble + newest rounds) is
+/// estimated under `target_tokens`.
+///
+/// Round = one assistant declaration message (with `tool_calls`) plus every
+/// message up to the next declaration — the provider protocol requires each
+/// surviving tool reply's `tool_call_id` to match a declaration in history
+/// (a round split across the cut would 400 on the next request, 2026-08-06
+/// design review D2-1), so compaction never splits a round. The preamble
+/// (original user prompt, gate blocks) and at least the NEWEST round are
+/// always kept verbatim (精确段保留 — design §5 A6: 最近 K 轮消息原文).
+///
+/// The caller inserts the marker (`context_compressed_marker`) at
+/// `marker_index` and journals the `context_compressed` event.
+pub(crate) fn compact_messages(messages: &mut Vec<Message>, target_tokens: u64) -> CompactionStats {
+    let round_starts: Vec<usize> = messages
+        .iter()
+        .enumerate()
+        .filter(|(_, m)| m.role == Role::Assistant && !m.tool_calls.is_empty())
+        .map(|(i, _)| i)
+        .collect();
+    let noop = || CompactionStats {
+        rounds_dropped: 0,
+        messages_dropped: 0,
+        messages_kept: messages.len(),
+        estimated_tokens_after: estimate_messages_tokens(messages),
+        marker_index: 0,
+    };
+    if round_starts.is_empty() {
+        return noop();
+    }
+    let preamble_end = round_starts[0];
+    let preamble_tokens = estimate_messages_tokens(&messages[..preamble_end]);
+    let mut round_estimates: Vec<u64> = Vec::with_capacity(round_starts.len());
+    for (k, &start) in round_starts.iter().enumerate() {
+        let end = round_starts.get(k + 1).copied().unwrap_or(messages.len());
+        round_estimates.push(estimate_messages_tokens(&messages[start..end]));
+    }
+    // Walk from the NEWEST round backward, keeping while the total fits the
+    // target; the newest round is always kept even when it alone exceeds it
+    // (recent context stays exact — the target is an estimate anyway).
+    let mut kept_total = preamble_tokens;
+    let mut kept_count = 0usize;
+    for estimate in round_estimates.iter().rev() {
+        if kept_count > 0 && kept_total + estimate > target_tokens {
+            break;
+        }
+        kept_count += 1;
+        kept_total += estimate;
+    }
+    let rounds_dropped = round_starts.len() - kept_count;
+    if rounds_dropped == 0 {
+        return noop();
+    }
+    let cut = round_starts[round_starts.len() - kept_count];
+    let messages_dropped = messages.drain(preamble_end..cut).count();
+    CompactionStats {
+        rounds_dropped: rounds_dropped as u32,
+        messages_dropped,
+        messages_kept: messages.len(),
+        estimated_tokens_after: kept_total,
+        marker_index: preamble_end,
     }
 }

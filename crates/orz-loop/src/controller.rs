@@ -24,8 +24,6 @@
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
-use serde::{Deserialize, Serialize};
-
 use orz_assurance::acaf::TicketKind;
 use orz_assurance::{
     EventTrack, EventType, JournalRecorder, JournalRecorderError, Redaction, RunEvent,
@@ -117,51 +115,6 @@ fn parse_max_inject_tokens_per_round(s: &str) -> Option<u64> {
     s.trim().parse().ok().filter(|v| *v > 0)
 }
 
-/// FUS-LEDGER-FOLD-STATE (2026-08-18, ADR-0010 §14.26): the mechanical
-/// fold-advance threshold — the estimated request view that triggers one
-/// stateful fold advance at the loop-top gap. Default 128K (2026-08-18
-/// user adjudication; MRCR-8-needle quality plateau boundary for
-/// V4-Flash-Max; allows reading the full key-document set — index 30.5K
-/// + ADR 43K + BACKLOG 27.8K ≈ 101K + preamble 8K — without a fold).
-pub const DEFAULT_FOLD_TRIGGER_TOKENS: u64 = 128_000;
-
-/// Env override for the fold-advance threshold
-/// (`ORZ_FOLD_TRIGGER_TOKENS`). Parsed at controller construction;
-/// absent/invalid/zero = the default.
-pub fn fold_trigger_tokens_override() -> Option<u64> {
-    std::env::var("ORZ_FOLD_TRIGGER_TOKENS")
-        .ok()
-        .and_then(|s| parse_fold_trigger_tokens(&s))
-}
-
-/// Pure parse rule for the fold-threshold env value (tested without env
-/// mutation): trimmed, positive integer; absent/invalid/zero → None.
-fn parse_fold_trigger_tokens(s: &str) -> Option<u64> {
-    s.trim().parse().ok().filter(|v| *v > 0)
-}
-
-/// FUS-LEDGER-FOLD-BRIDGE (2026-08-19, ADR-0010 §14.32): the folded request
-/// view keeps only the newest complete rounds within this real-token bridge
-/// budget (`[U0][固定指针消息][桥]`); older rounds are appended to the
-/// external ledger file as before. Default 8K (实测读/计划轮 1–3K、终端执行
-/// 轮 5–7K——多数折叠时刻能整轮装下，截断为例外；S4 以折叠后首请求实际重付
-/// 校准换算系数). `recent_tail_rounds` (compaction drain tail) is untouched.
-/// Env `ORZ_FOLD_TAIL_TOKENS` overrides (trimmed positive integer;
-/// absent/invalid/zero = default). 换算: 真实 token → 字符预算
-/// (`action_ledger::FOLD_TAIL_CHARS_PER_TOKEN` = 2，S4 实测校准) → 估计口径
-/// (`estimate_messages_tokens`, chars/2)。
-pub fn fold_tail_tokens_override() -> Option<u64> {
-    std::env::var("ORZ_FOLD_TAIL_TOKENS")
-        .ok()
-        .and_then(|s| parse_fold_tail_tokens(&s))
-}
-
-/// Pure parse rule for the bridge-budget env value (tested without env
-/// mutation): trimmed, positive integer; absent/invalid/zero → None.
-fn parse_fold_tail_tokens(s: &str) -> Option<u64> {
-    s.trim().parse().ok().filter(|v| *v > 0)
-}
-
 /// THIN-HARNESS-REDESIGN R2a (2026-08-27, §4.4): 检索派发结果回传通道——
 /// `blackboard`（默认）= 主代理工具结果只回指针摘要（全文保留在
 /// internal_ret / external_ret 黑板分区与 journal，留痕不变），需要时模型
@@ -196,15 +149,6 @@ pub(crate) fn retrieval_result_channel_from_env() -> RetrievalResultChannel {
     }
 }
 
-/// FUS-LEDGER-FOLD-BRIDGE (2026-08-19, ADR-0010 §14.32 / 设计 §3.6): 折叠后
-/// 视图桥的默认真实 token 预算。8K 依据=S4 实测读/计划轮 1–3K、终端执行轮
-/// 5–7K——多数折叠时刻能整轮装下（截断为例外；截断频率 >30% 视为桥偏小，
-/// S4 校准）；4K 命中率仅多约 0.5pp 但会频繁截断正常终端轮；10K+ 收益递减。
-/// `ORZ_FOLD_TAIL_TOKENS` 可配；实现按
-/// `action_ledger::FOLD_TAIL_CHARS_PER_TOKEN`（2 字符/真实 token，S4 实测
-/// 校准——path-tracing 07:08 运行桥 12,948 字符 → 重付 6,493）换算。
-pub const DEFAULT_FOLD_TAIL_TOKENS: u64 = 8_000;
-
 /// Streaming pacing (Phase 3 slice #6): a round's `model_output` (journaled,
 /// fsync-acked) must be projected by a live client before the next round's
 /// first text delta arrives (deltas travel in-memory at arrival rate). The
@@ -215,12 +159,21 @@ pub const DEFAULT_FOLD_TAIL_TOKENS: u64 = 8_000;
 /// theoretically race (recorded boundary, 2026-08-05 review).
 pub const TEXT_DELTA_PACING: std::time::Duration = std::time::Duration::from_millis(120);
 
-/// A6 §8 C.2 (2026-08-08): default cumulative character cap for the
-/// compaction whitelist (16K — user decision; ≈8K tokens ≈ ~9% of the
-/// 90K compacted target, small enough not to squeeze the kept rounds).
-pub const DEFAULT_WHITELIST_CAP: usize = 16 * 1024;
-
 pub use crate::compact::ContextCompactConfig;
+/// N4 (2026-08-30): 类型/纯函数归位——以下项已在目标模块定义，此处仅保留
+/// 兼容重导出（外部调用面 `orz_loop::controller::*` 与文件内测试不变）：
+/// 模式面 → `retrieval/mode.rs`；压缩/消息预算 → `compact.rs`；
+/// denial 状态机 → `denial.rs`。
+pub use crate::compact::{
+    DEFAULT_FOLD_TAIL_TOKENS, DEFAULT_FOLD_TRIGGER_TOKENS, DEFAULT_WHITELIST_CAP,
+    fold_tail_tokens_override, fold_trigger_tokens_override,
+};
+pub(crate) use crate::compact::{
+    compact_messages, estimate_message_tokens, estimate_messages_tokens,
+};
+pub use crate::denial::DENIAL_BREAKER_CONSECUTIVE;
+pub(crate) use crate::denial::{DenialKey, DenialState, PolicyFeedback};
+pub use crate::retrieval::mode::{RetrievalCapability, RetrievalMode};
 
 /// Error during agent loop execution.
 #[derive(Debug, thiserror::Error)]
@@ -570,65 +523,6 @@ impl EpochArchiveWriteKind {
     }
 }
 
-/// GAP-RETRIEVAL-TOOLS (2026-08-10) — ADR-0010 §3.7.1: the explicit
-/// session/task-contract retrieval mode. `off` is the unauthenticated
-/// default; `local_browser` is the preferred enabled mode; `framework_fallback`
-/// may only be entered by explicit user / parent-task-contract selection.
-/// Mode changes are NEVER implicit — a failure (timeout/login/CAPTCHA) must
-/// surface explicitly, not switch modes.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum RetrievalMode {
-    Off,
-    LocalBrowser,
-    FrameworkFallback,
-}
-
-impl RetrievalMode {
-    pub fn as_str(&self) -> &'static str {
-        match self {
-            RetrievalMode::Off => "off",
-            RetrievalMode::LocalBrowser => "local_browser",
-            RetrievalMode::FrameworkFallback => "framework_fallback",
-        }
-    }
-
-    /// Parse the session-level mode from its wire form (ACP session/new).
-    pub fn from_wire(value: Option<&str>) -> Option<RetrievalMode> {
-        match value {
-            Some("local_browser") => Some(RetrievalMode::LocalBrowser),
-            Some("framework_fallback") => Some(RetrievalMode::FrameworkFallback),
-            Some("off") => Some(RetrievalMode::Off),
-            _ => None,
-        }
-    }
-}
-
-/// GAP-RETRIEVAL-TOOLS: the capability probe result for the selected mode.
-/// Never a silent fallback — `Unsupported`/`Degraded` record WHY a mode
-/// cannot serve (e.g. local_browser automation not implemented in this slice;
-/// web client not configured). `Available` is constructed by the web client
-/// probe once a client is configured (S5).
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum RetrievalCapability {
-    #[allow(dead_code)] // constructed by the S5 web-client probe
-    Available,
-    Unsupported(String),
-    #[allow(dead_code)] // reserved for degraded transports (S5)
-    Degraded(String),
-}
-
-impl RetrievalCapability {
-    /// The `capability_status` value for the mode-transition payload.
-    pub(crate) fn status_str(&self) -> &'static str {
-        match self {
-            RetrievalCapability::Available => "available",
-            RetrievalCapability::Unsupported(_) => "unsupported",
-            RetrievalCapability::Degraded(_) => "degraded",
-        }
-    }
-}
-
 /// The assessment context a parent disposition must bind (ADR-0010 §4.4:
 /// disposition binds activation_id + expected_contract_revision +
 /// assessment_id).
@@ -644,34 +538,6 @@ pub(crate) struct PendingDisposition {
     pub decided: Option<String>,
 }
 
-/// IP2a denial counter state (D-3; ADR-0010 §3.5.4 / V11-IMPL-012): the
-/// circuit breaker counts CONSECUTIVE TOOL-CALL ROUNDS whose denials share
-/// one normalized key — not individual tool calls. A round with any
-/// successful tool, a denial key change, or a permission policy revision
-/// change resets the count. The total-denial ceiling (old 10) is deleted:
-/// anti-runaway is owned by the 120-round budget (FUS-BUDGET), the breaker
-/// only corrects tool-belief/availability.
-#[derive(Debug, Default)]
-pub(crate) struct DenialState {
-    pub(crate) consecutive_rounds: u32,
-    /// Normalized key of the last counted denial round; used to reset on
-    /// key change.
-    pub(crate) last_key: Option<DenialKey>,
-}
-
-/// Normalized denial key (ADR-0010 §3.5.4): same key across rounds is what
-/// accumulates; tool, reason code or policy revision changes reset it.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct DenialKey {
-    pub(crate) tool_name: String,
-    pub(crate) reason_code: String,
-    /// GAP-DENIAL-POLICY-REVISION (2026-08-12): the controller's live
-    /// `policy_revision` (u64, aligned with the ACAF binding) — a bump is a
-    /// key change, so the breaker resets. First production increment source
-    /// = Slice 3 ModeChangeTicket.
-    pub(crate) policy_revision: u64,
-}
-
 /// ACAF goal binding (Slice 1 + goal wiring 2026-08-12): the task-goal
 /// digest plus its revision counter, read/written as one lock-protected
 /// snapshot so the ticket paths always see a self-consistent pair. A
@@ -683,24 +549,6 @@ pub(crate) struct GoalContext {
     pub(crate) digest: Option<String>,
     pub(crate) version: u64,
 }
-
-/// Feedback from a host tool call for the round-level denial aggregator.
-/// `None` is neutral — timeout, tool error and whitelist-refused calls are
-/// neither successes nor denials: they must not reset the streak AND must
-/// not count as a deny round (ADR-0010 §3.5.4: "用户取消、timeout、tool
-/// error 与 permission deny 分开记账").
-#[derive(Debug)]
-pub(crate) enum PolicyFeedback {
-    /// The call was refused by the permission gate, with its normalized key.
-    Denied(DenialKey),
-    /// The call executed successfully — resets the consecutive streak.
-    Succeeded,
-}
-
-/// IP2a circuit-breaker threshold (D-3 — the 3-consecutive value shared by
-/// Claude Code's maxConsecutive; the 10-total ceiling is deleted per
-/// ADR-0010 §3.5.4).
-pub const DENIAL_BREAKER_CONSECUTIVE: u32 = 3;
 
 /// F-09 (2026-08-07 review): the mechanical gate over what enters the model
 /// context from a `run_tests` call — a fixed completion reminder plus the
@@ -718,104 +566,6 @@ pub(crate) fn format_edit_record(record: &EditRecord) -> String {
             "{} {}→{}行变动",
             record.file, record.old_lines, record.new_lines
         )
-    }
-}
-
-/// Result of one explicit context compaction (A6).
-pub(crate) struct CompactionStats {
-    pub(crate) rounds_dropped: u32,
-    pub(crate) messages_dropped: usize,
-    pub(crate) messages_kept: usize,
-    pub(crate) estimated_tokens_after: u64,
-    /// Index at which the caller must insert the compaction marker — the
-    /// cut point: after the preamble, before the first kept round.
-    pub(crate) marker_index: usize,
-}
-
-/// A6: estimated tokens of one message — chars/2 (a conservative CJK-aware
-/// guess: CJK ≈ 2 chars/token, English would be ≈ 4 — over-estimating is
-/// the safe direction; the real next-round usage measurement is what the
-/// trigger uses).
-pub(crate) fn estimate_message_tokens(m: &Message) -> u64 {
-    let mut chars = m.content.chars().count() as u64;
-    if let Some(r) = &m.reasoning_content {
-        chars += r.chars().count() as u64;
-    }
-    for tc in &m.tool_calls {
-        chars += tc.name.chars().count() as u64;
-        chars += serde_json::to_string(&tc.arguments)
-            .map(|s| s.chars().count() as u64)
-            .unwrap_or(0);
-    }
-    chars / 2
-}
-
-pub(crate) fn estimate_messages_tokens(messages: &[Message]) -> u64 {
-    messages.iter().map(estimate_message_tokens).sum()
-}
-
-/// A6 (2026-08-08): explicit context compaction — drop complete OLDER tool
-/// rounds so the remaining conversation (preamble + newest rounds) is
-/// estimated under `target_tokens`.
-///
-/// Round = one assistant declaration message (with `tool_calls`) plus every
-/// message up to the next declaration — the provider protocol requires each
-/// surviving tool reply's `tool_call_id` to match a declaration in history
-/// (a round split across the cut would 400 on the next request, 2026-08-06
-/// design review D2-1), so compaction never splits a round. The preamble
-/// (original user prompt, gate blocks) and at least the NEWEST round are
-/// always kept verbatim (精确段保留 — design §5 A6: 最近 K 轮消息原文).
-///
-/// The caller inserts the marker (`context_compressed_marker`) at
-/// `marker_index` and journals the `context_compressed` event.
-pub(crate) fn compact_messages(messages: &mut Vec<Message>, target_tokens: u64) -> CompactionStats {
-    let round_starts: Vec<usize> = messages
-        .iter()
-        .enumerate()
-        .filter(|(_, m)| m.role == Role::Assistant && !m.tool_calls.is_empty())
-        .map(|(i, _)| i)
-        .collect();
-    let noop = || CompactionStats {
-        rounds_dropped: 0,
-        messages_dropped: 0,
-        messages_kept: messages.len(),
-        estimated_tokens_after: estimate_messages_tokens(messages),
-        marker_index: 0,
-    };
-    if round_starts.is_empty() {
-        return noop();
-    }
-    let preamble_end = round_starts[0];
-    let preamble_tokens = estimate_messages_tokens(&messages[..preamble_end]);
-    let mut round_estimates: Vec<u64> = Vec::with_capacity(round_starts.len());
-    for (k, &start) in round_starts.iter().enumerate() {
-        let end = round_starts.get(k + 1).copied().unwrap_or(messages.len());
-        round_estimates.push(estimate_messages_tokens(&messages[start..end]));
-    }
-    // Walk from the NEWEST round backward, keeping while the total fits the
-    // target; the newest round is always kept even when it alone exceeds it
-    // (recent context stays exact — the target is an estimate anyway).
-    let mut kept_total = preamble_tokens;
-    let mut kept_count = 0usize;
-    for estimate in round_estimates.iter().rev() {
-        if kept_count > 0 && kept_total + estimate > target_tokens {
-            break;
-        }
-        kept_count += 1;
-        kept_total += estimate;
-    }
-    let rounds_dropped = round_starts.len() - kept_count;
-    if rounds_dropped == 0 {
-        return noop();
-    }
-    let cut = round_starts[round_starts.len() - kept_count];
-    let messages_dropped = messages.drain(preamble_end..cut).count();
-    CompactionStats {
-        rounds_dropped: rounds_dropped as u32,
-        messages_dropped,
-        messages_kept: messages.len(),
-        estimated_tokens_after: kept_total,
-        marker_index: preamble_end,
     }
 }
 
@@ -8084,13 +7834,16 @@ mod tests {
     /// zero = default.
     #[test]
     fn fold_tail_tokens_parse_rule() {
-        assert_eq!(parse_fold_tail_tokens("8000"), Some(8_000));
-        assert_eq!(parse_fold_tail_tokens(" 8000 "), Some(8_000));
-        assert_eq!(parse_fold_tail_tokens("1"), Some(1));
-        assert_eq!(parse_fold_tail_tokens("0"), None);
-        assert_eq!(parse_fold_tail_tokens("-1"), None);
-        assert_eq!(parse_fold_tail_tokens("abc"), None);
-        assert_eq!(parse_fold_tail_tokens(""), None);
+        assert_eq!(crate::compact::parse_fold_tail_tokens("8000"), Some(8_000));
+        assert_eq!(
+            crate::compact::parse_fold_tail_tokens(" 8000 "),
+            Some(8_000)
+        );
+        assert_eq!(crate::compact::parse_fold_tail_tokens("1"), Some(1));
+        assert_eq!(crate::compact::parse_fold_tail_tokens("0"), None);
+        assert_eq!(crate::compact::parse_fold_tail_tokens("-1"), None);
+        assert_eq!(crate::compact::parse_fold_tail_tokens("abc"), None);
+        assert_eq!(crate::compact::parse_fold_tail_tokens(""), None);
     }
 
     /// FUS-LEDGER-FOLD-STATE (2026-08-18, ADR-0010 §14.26): the fold point
