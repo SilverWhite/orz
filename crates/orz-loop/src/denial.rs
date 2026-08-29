@@ -49,3 +49,27 @@ pub(crate) enum PolicyFeedback {
 /// Claude Code's maxConsecutive; the 10-total ceiling is deleted per
 /// ADR-0010 §3.5.4).
 pub const DENIAL_BREAKER_CONSECUTIVE: u32 = 3;
+
+#[cfg(test)]
+mod tests {
+    /// P0-C S3 前置审查修复 (F4): `PolicyDenialSource::as_str` and the
+    /// serde snake_case wire names must never drift — both feed the same
+    /// journal/console contract (`permission|acaf|retrieval_mode|taint`).
+    #[test]
+    fn policy_denial_source_as_str_matches_serde_snake_case() {
+        use crate::host::PolicyDenialSource;
+        for source in [
+            PolicyDenialSource::Permission,
+            PolicyDenialSource::Acaf,
+            PolicyDenialSource::RetrievalMode,
+            PolicyDenialSource::Taint,
+        ] {
+            let serialized = serde_json::to_string(&source).expect("serde round-trip");
+            assert_eq!(
+                serialized,
+                format!("\"{}\"", source.as_str()),
+                "as_str must agree with the serde snake_case wire name"
+            );
+        }
+    }
+}

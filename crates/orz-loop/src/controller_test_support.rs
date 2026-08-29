@@ -13,10 +13,11 @@ use async_trait::async_trait;
 
 use crate::controller::{AgentLoopController, RetrievalCapability, RetrievalMode};
 use crate::gateway::fake::ScriptedResponse;
-use crate::gateway::model::{Message, Role, ToolCall};
+use crate::gateway::model::{Message, ModelGateway, Role, ToolCall};
 use crate::host::{
     LoopHost, PermitDecision, PermitError, RiskClass, ToolDef, ToolError, ToolRegistry, ToolResult,
 };
+use std::sync::Arc;
 
 /// Minimal LoopHost for testing the controller.
 pub(crate) struct TestHost {
@@ -375,6 +376,14 @@ pub(crate) fn tool_round(call_id: &str, result: &str) -> Vec<Message> {
             reasoning_content: None,
         },
     ]
+}
+
+/// PLAN-FIRST 阶段 C 双模式开关 + 计划门 + 订单步骤绑定辅助：生产形态
+/// 控制器（console/direct 与 submit 测试共用）。
+pub(crate) fn stage_c_controller(gateway: Arc<dyn ModelGateway>) -> AgentLoopController {
+    AgentLoopController::with_gateway(gateway)
+        .with_plan_first_enabled(true)
+        .with_console_default_enabled(true)
 }
 
 /// A host whose fixed test runner returns scripted results — the DC

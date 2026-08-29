@@ -1169,3 +1169,2232 @@ impl AgentLoopController {
         Ok(())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::controller_test_support::*;
+    use crate::gateway::fake::{FakeProvider, ScriptedResponse};
+    use crate::gateway::model::ModelGateway;
+    use crate::host::{PermitDecision, PermitError, RiskClass, ToolDef, ToolError, ToolRegistry};
+    use async_trait::async_trait;
+    use orz_assurance::{EventTrack, JournalRecorder, RunEvent};
+    use std::path::PathBuf;
+    use std::sync::Arc;
+
+    /// 2026-08-18 (ADR-0010 §14.25 项 1): 状态行作为尾随用户消息、
+    /// 仅在步骤状态变化时追加——订单 receipt ok → 步骤 done → 当前步
+    /// 前进后追加新状态行，system 提示词保持字节稳定。
+    /// 2026-08-18 (ADR-0010 §14.25 项 2) + MECHANICAL-AUDIT-LAYER 审查处理
+    /// (2026-08-24): 调用面拒绝（现为退役工具窄门 retired_tool_denied）
+    /// 不把绑定步骤标 failed——步骤保持 in_progress（可重试语义保留）。
+    #[tokio::test]
+    async fn policy_denied_order_does_not_fail_bound_step() {
+        let dir = test_dir();
+        let journal = JournalRecorder::new(dir.clone());
+        let host = DenyHost { journal };
+        let fake = Arc::new(FakeProvider::new(vec![
+            ScriptedResponse::tool_calls(vec![ToolCall {
+                name: "blackboard_action_write".to_string(),
+                arguments: serde_json::json!({
+                    "action": "workspace.search_replace",
+                    "arguments": {
+                        "file_path": "a.txt",
+                        "old_string": "x",
+                        "new_string": "y",
+                    },
+                    "step_id": "step-1",
+                }),
+                call_id: "call-w1".to_string(),
+            }]),
+            ScriptedResponse::text("完成"),
+            ScriptedResponse::text("完成"),
+        ]));
+        let gateway: Arc<dyn ModelGateway> = fake.clone();
+        let controller = AgentLoopController::with_gateway(gateway).with_plan(
+            "PLAN-DENY".to_string(),
+            1,
+            "改文件".to_string(),
+            vec!["第一步".to_string()],
+        );
+        controller
+            .run_turn(&host, "被拒订单", "RUN-DENY", MANIFEST, 0, None, None, None)
+            .await
+            .unwrap();
+
+        let r = controller.blackboard().read();
+        assert_eq!(r.plan.steps.len(), 1);
+        assert!(
+            matches!(
+                r.plan.steps[0].status,
+                crate::blackboard::StepStatus::InProgress
+            ),
+            "policy-denied order must not fail the bound step: {:?}",
+            r.plan.steps[0].status
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// P0-C S4 (2026-08-16)：checkpoint 轮跳过注册板块刷新（F3 收口的
+    /// e2e 断言）——取消落在 checkpoint 轮结束后、下一轮刷新前；板块保留
+    /// 上一轮探针过滤后的内容（本 host 会话 cwd 缺失 → 读/写探针不完整，
+    /// 若按 bundle-only 刷新会误显 read_file/search_replace）。
+    #[tokio::test]
+    async fn console_s4_checkpoint_round_retains_probe_filtered_registration() {
+        struct CheckpointProbeHost {
+            journal: JournalRecorder,
+            results: std::sync::Mutex<std::collections::VecDeque<crate::host::TestRunResult>>,
+        }
+        #[async_trait]
+        impl LoopHost for CheckpointProbeHost {
+            fn journal(&self) -> &JournalRecorder {
+                &self.journal
+            }
+            fn tools_registry(&self) -> &dyn ToolRegistry {
+                &FullRegistry
+            }
+            fn session_cwd(&self) -> PathBuf {
+                self.journal.journal_dir().join("missing-workspace")
+            }
+            fn test_runner(&self) -> Option<crate::host::TestRunner> {
+                Some(crate::host::TestRunner {
+                    command: vec!["pytest-stub".to_string()],
+                    timeout: None,
+                    env: Vec::new(),
+                })
+            }
+            async fn run_tests(&self) -> Result<crate::host::TestRunResult, ToolError> {
+                Ok(self
+                    .results
+                    .lock()
+                    .unwrap()
+                    .pop_front()
+                    .expect("scripted test results exhausted"))
+            }
+            async fn request_permission(
+                &self,
+                _risk: RiskClass,
+                _tool: &str,
+                _args: &serde_json::Value,
+            ) -> Result<PermitDecision, PermitError> {
+                Ok(PermitDecision::AllowOnce)
+            }
+        }
+
+        let dir = test_dir();
+        let journal = JournalRecorder::new(dir.clone());
+        let host = CheckpointProbeHost {
+            journal,
+            results: std::sync::Mutex::new(vec![failing_test_run()].into()),
+        };
+        let gateway: Arc<dyn ModelGateway> = Arc::new(
+            FakeProvider::new(vec![
+                ScriptedResponse::tool_calls(vec![tool_call("run_tests", "call-t1")]),
+                template_answer("continue"),
+                ScriptedResponse::text("完成"),
+                ScriptedResponse::text("完成"),
+            ])
+            .with_chunk_delay(std::time::Duration::from_millis(100)),
+        );
+        let controller = Arc::new(AgentLoopController::with_gateway(gateway));
+        let token = tokio_util::sync::CancellationToken::new();
+        let c = controller.clone();
+        let t = token.clone();
+        let run = tokio::task::spawn(async move {
+            c.run_turn_with_cancel(
+                &host,
+                "修复测试失败",
+                "RUN-S4CK",
+                MANIFEST,
+                0,
+                None,
+                Some(&t),
+                None,
+                None,
+            )
+            .await
+        });
+        tokio::time::sleep(std::time::Duration::from_millis(30)).await;
+        token.cancel();
+        let result = run.await.unwrap();
+        assert!(matches!(result, Err(AgentLoopError::Cancelled)));
+
+        // DC checkpoint 已触发且其轮是工具-free 的。
+        let all_events = events(&dir);
+        assert!(
+            all_events
+                .iter()
+                .any(|e| e.event_type == EventType::DiagnosticCoverageCheckpoint),
+            "{:?}",
+            all_events
+                .iter()
+                .map(|e| format!("{:?}", e.event_type))
+                .collect::<Vec<_>>()
+        );
+        // 取消落在 checkpoint 轮结束后、下一轮刷新前 → 板块保留上一轮
+        // 探针过滤内容（读/写工具因会话 cwd 缺失被探针移除）。
+        let r = controller.blackboard().read();
+        let names: Vec<&str> = r
+            .actions
+            .registration
+            .iter()
+            .map(|reg| reg.name.as_str())
+            .collect();
+        assert!(
+            names.contains(&"workspace.run_tests"),
+            "probe-complete tool retained: {names:?}"
+        );
+        assert!(
+            names.contains(&"workspace.index"),
+            "non-work tool retained: {names:?}"
+        );
+        for excluded in ["workspace.read_file", "workspace.search_replace"] {
+            assert!(
+                !names.contains(&excluded),
+                "checkpoint round must not refresh bundle-only (retention broken): {names:?}"
+            );
+        }
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// PLAN-FIRST 阶段 B (2026-08-16): 注册板块绑定黑板模型栏——读取
+    /// actions 分区时由最近探针源派生并持久化，替代 loop-top 静态刷新
+    /// 的陈旧内容（含 S2 静态基础集残留）。
+    #[test]
+    fn console_stage_b_actions_read_derives_registration_from_probe_source() {
+        let controller = AgentLoopController::with_gateway(Arc::new(FakeProvider::new(vec![])));
+        let snapshot = crate::tool_probe::ToolProbeSnapshot {
+            complete: vec![
+                "read_file".to_string(),
+                "grep".to_string(),
+                "list_dir".to_string(),
+                "search_replace".to_string(),
+            ],
+            incomplete: vec![crate::tool_probe::ProbeFailure {
+                tool: "run_tests".to_string(),
+                reason: crate::tool_probe::REASON_MISSING_TEST_RUNNER,
+            }],
+        };
+        // 陈旧板块：静态基础集残留——派生读取后不得再出现。
+        controller
+            .blackboard()
+            .write()
+            .actions
+            .set_registration(vec![crate::blackboard::ActionRegistration {
+                name: "workspace.run_tests".to_string(),
+                description: "stale static base set".to_string(),
+                parameters: serde_json::json!({}),
+                target_policy: crate::entities::TargetPolicy::None,
+            }]);
+        controller.set_console_probe_source(crate::host::ToolPolicy::Interactive, snapshot);
+        let text = controller.render_blackboard_section("actions", None, None, None);
+        assert!(text.contains("workspace.read_file"), "{text}");
+        assert!(text.contains("workspace.run_script"), "{text}");
+        assert!(text.contains("assistant.trace"), "{text}");
+        assert!(!text.contains("workspace.run_tests"), "{text}");
+        // 派生结果持久化回板块（checkpoint/归档沿用）。
+        let board = controller.blackboard().read();
+        let names: Vec<&str> = board
+            .actions
+            .registration
+            .iter()
+            .map(|r| r.name.as_str())
+            .collect();
+        assert!(names.contains(&"workspace.read_file"), "{names:?}");
+        assert!(!names.contains(&"workspace.run_tests"), "{names:?}");
+    }
+
+    /// PLAN-FIRST 阶段 B (2026-08-16): 无探针源时读取沿用既有板块内容
+    /// （checkpoint 轮/归档语义），不改写、不静默清空。
+    #[test]
+    fn console_stage_b_actions_read_retains_stored_registration_without_probe_source() {
+        let controller = AgentLoopController::with_gateway(Arc::new(FakeProvider::new(vec![])));
+        controller
+            .blackboard()
+            .write()
+            .actions
+            .set_registration(vec![crate::blackboard::ActionRegistration {
+                name: "assistant.trace".to_string(),
+                description: "retained".to_string(),
+                parameters: serde_json::json!({}),
+                target_policy: crate::entities::TargetPolicy::None,
+            }]);
+        let text = controller.render_blackboard_section("actions", None, None, None);
+        assert!(text.contains("assistant.trace"), "{text}");
+        assert!(text.contains("(no pending order)"), "{text}");
+        let board = controller.blackboard().read();
+        assert_eq!(
+            board.actions.registration.len(),
+            1,
+            "{:?}",
+            board.actions.registration
+        );
+        assert_eq!(board.actions.registration[0].name, "assistant.trace");
+    }
+
+    /// PLAN-FIRST 阶段 B (2026-08-16): 工具栏与注册板块同源一致性——同一
+    /// 探针源下，注册板块中工作工具目标（Host 动作）必须同时出现在模型
+    /// 可见工具投影中；探针移除的工作工具不得出现在注册板块。
+    #[test]
+    fn console_stage_b_registration_matches_tool_projection() {
+        let snapshot = crate::tool_probe::ToolProbeSnapshot {
+            complete: vec![
+                "read_file".to_string(),
+                "grep".to_string(),
+                "list_dir".to_string(),
+                "search_replace".to_string(),
+            ],
+            incomplete: vec![crate::tool_probe::ProbeFailure {
+                tool: "run_tests".to_string(),
+                reason: crate::tool_probe::REASON_MISSING_TEST_RUNNER,
+            }],
+        };
+        let registry = crate::console::default_service_registry();
+        let regs =
+            registry.registrations_for(crate::host::ToolPolicy::Interactive, Some(&snapshot));
+        let base = crate::tool_probe::WORK_TOOLS
+            .iter()
+            .map(|name| ToolDef {
+                name: (*name).to_string(),
+                description: format!("tool {name}"),
+                parameters: serde_json::json!({}),
+            })
+            .collect::<Vec<_>>();
+        let projected = AgentLoopController::project_main_agent_tool_defs(&base, &snapshot);
+        let projected_names: std::collections::HashSet<&str> =
+            projected.iter().map(|t| t.name.as_str()).collect();
+        for reg in &regs {
+            let target = reg.name.trim_start_matches("workspace.");
+            // Host 动作目标若是工作工具，必须在工具栏投影内；内部动作
+            // （assistant.trace/workspace.run_script）与非工作工具目标
+            // （project_doc_index）不要求同名。
+            // THIN-HARNESS-REDESIGN R1 (§4.1)：封存工具（list_dir /
+            // run_tests / todo_write / …）已从投影面移除——console 注册
+            // 板是休眠面，其封存动作不可达，不再要求同名投影。
+            if crate::tool_probe::is_main_agent_work_tool(target)
+                && !AgentLoopController::R1_SEALED_MAIN_TOOLS.contains(&target)
+            {
+                assert!(
+                    projected_names.contains(target),
+                    "registration {} missing from toolbar projection",
+                    reg.name
+                );
+            }
+        }
+        assert!(
+            regs.iter().all(|r| r.name != "workspace.run_tests"),
+            "probe-incomplete tool must not be registered: {regs:?}"
+        );
+    }
+
+    /// PLAN-FIRST 阶段 B 审查收口 (2026-08-16): 归档 epoch 读保持快照——
+    /// 即使存在探针源，`render_blackboard_section("actions", None, Some(n))`
+    /// 也不按探针源派生、不改写当前板块；live 读仍正常派生（对照）。
+    #[test]
+    fn console_stage_b_actions_read_archived_epoch_keeps_snapshot() {
+        let dir = test_dir().join("gsa").join("stage_b_archive");
+        let controller = AgentLoopController::with_gateway(Arc::new(FakeProvider::new(vec![])))
+            .with_blackboard_archive_dir(Some(dir.clone()))
+            .with_plan(
+                "PLAN-B-1".to_string(),
+                1,
+                "old".to_string(),
+                vec!["旧步骤".to_string()],
+            );
+        controller
+            .blackboard()
+            .write()
+            .actions
+            .set_registration(vec![crate::blackboard::ActionRegistration {
+                name: "workspace.archived_legacy".to_string(),
+                description: "archived registration".to_string(),
+                parameters: serde_json::json!({}),
+                target_policy: crate::entities::TargetPolicy::None,
+            }]);
+        // 轮换：epoch 1（含旧注册板块）归档，当前板块重置。
+        let controller = controller.with_plan(
+            "PLAN-B-2".to_string(),
+            2,
+            "new".to_string(),
+            vec!["新步骤".to_string()],
+        );
+        let snapshot = crate::tool_probe::ToolProbeSnapshot {
+            complete: vec![
+                "read_file".to_string(),
+                "grep".to_string(),
+                "list_dir".to_string(),
+                "search_replace".to_string(),
+            ],
+            incomplete: vec![crate::tool_probe::ProbeFailure {
+                tool: "run_tests".to_string(),
+                reason: crate::tool_probe::REASON_MISSING_TEST_RUNNER,
+            }],
+        };
+        controller.set_console_probe_source(crate::host::ToolPolicy::Interactive, snapshot);
+        let archived = controller.render_blackboard_section("actions", None, Some(1), None);
+        assert!(archived.contains("workspace.archived_legacy"), "{archived}");
+        assert!(!archived.contains("workspace.read_file"), "{archived}");
+        let live = controller.render_blackboard_section("actions", None, None, None);
+        assert!(live.contains("workspace.read_file"), "{live}");
+        assert!(!live.contains("workspace.archived_legacy"), "{live}");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// PLAN-FIRST 阶段 B 审查收口 (2026-08-16): 探针源随 run 复位——复位后
+    /// 无探针源，读取沿用既有板块内容、不按源派生（不跨 run 沿用）。
+    #[test]
+    fn console_stage_b_probe_source_resets_across_runs() {
+        let controller = AgentLoopController::with_gateway(Arc::new(FakeProvider::new(vec![])));
+        controller
+            .blackboard()
+            .write()
+            .actions
+            .set_registration(vec![crate::blackboard::ActionRegistration {
+                name: "assistant.trace".to_string(),
+                description: "retained across reset".to_string(),
+                parameters: serde_json::json!({}),
+                target_policy: crate::entities::TargetPolicy::None,
+            }]);
+        let snapshot = crate::tool_probe::ToolProbeSnapshot {
+            complete: vec![
+                "read_file".to_string(),
+                "grep".to_string(),
+                "list_dir".to_string(),
+                "search_replace".to_string(),
+            ],
+            incomplete: vec![crate::tool_probe::ProbeFailure {
+                tool: "run_tests".to_string(),
+                reason: crate::tool_probe::REASON_MISSING_TEST_RUNNER,
+            }],
+        };
+        controller.set_console_probe_source(crate::host::ToolPolicy::Interactive, snapshot);
+        controller.reset_console_probe_source();
+        let text = controller.render_blackboard_section("actions", None, None, None);
+        assert!(text.contains("assistant.trace"), "{text}");
+        assert!(!text.contains("workspace.read_file"), "{text}");
+        let board = controller.blackboard().read();
+        assert_eq!(board.actions.registration.len(), 1);
+        assert_eq!(board.actions.registration[0].name, "assistant.trace");
+    }
+
+    /// P0-C S2 (2026-08-15): round/plan_epoch 防重放与过期——写单轮与发放轮
+    /// 不一致的订单被消费（清槽）并写显式 `order_stale` receipt，不执行。
+    #[tokio::test]
+    async fn console_s2_stale_order_is_consumed_with_explicit_receipt() {
+        let dir = test_dir();
+        let journal = JournalRecorder::new(dir.clone());
+        let host = TestHost {
+            journal: journal.clone(),
+            tool_result: Some(ToolResult {
+                output: "never".to_string(),
+                exit_code: Some(0),
+                output_encoding: None,
+                structured: None,
+                ..Default::default()
+            }),
+        };
+        let controller = AgentLoopController::with_gateway(Arc::new(FakeProvider::new(Vec::new())));
+        {
+            let mut w = controller.blackboard().write();
+            w.plan.plan_epoch = 1;
+            w.actions
+                .write_order(ActionOrder {
+                    order_id: "ORD-000009".to_string(),
+                    action: "workspace.read_file".to_string(),
+                    arguments: serde_json::json!({"target_file": "a.txt"}),
+                    target: None,
+                    step_id: None,
+                    round: 0,
+                    plan_epoch: 1,
+                    run_id: "RUN-OLD".to_string(),
+                })
+                .unwrap();
+        }
+        let mut writer = EventWriter::new(
+            Some(&journal),
+            EventTrack::V02,
+            "RUN-S2S",
+            "",
+            0,
+            None,
+            None,
+        );
+        controller
+            .issue_pending_console_order(
+                &host,
+                &mut writer,
+                "stale",
+                orz_assurance::gates::ipg::WorkspaceTrust::NotObserved,
+                1,
+                None,
+            )
+            .await
+            .unwrap();
+
+        let r = controller.blackboard().read();
+        assert!(r.actions.order.is_none(), "{:?}", r.actions.order);
+        assert_eq!(r.actions.results.len(), 1, "{:?}", r.actions.results);
+        let receipt = &r.actions.results[0];
+        assert!(!receipt.ok);
+        assert_eq!(receipt.error.as_ref().unwrap()["step"], "protocol");
+        assert_eq!(receipt.error.as_ref().unwrap()["code"], "order_stale");
+        // 未执行任何目标工具。
+        assert!(
+            r.tool_actions.iter().all(|t| t.tool != "read_file"),
+            "{:?}",
+            r.tool_actions
+        );
+        // 过期订单的失败 trace 已 commit。
+        let traces = controller.console_traces.lock().unwrap();
+        let trace = traces
+            .get(&receipt.trace_id)
+            .expect("stale trace committed");
+        assert_eq!(trace.events.last().unwrap().step, "protocol");
+        assert_eq!(
+            trace.events.last().unwrap().code.as_deref(),
+            Some(crate::console::CODE_ORDER_STALE)
+        );
+        // P0-E 第 4 项 (2026-08-17): 发放前拒绝统一入事件面——stale 订单
+        // 的 journal 必须携带结构化拒绝码（此前只进结果栏 receipt）。
+        let rejected = events(&dir)
+            .into_iter()
+            .filter(|e| e.event_type == EventType::ConsoleOrderRejected)
+            .collect::<Vec<_>>();
+        assert_eq!(rejected.len(), 1, "{rejected:?}");
+        assert_eq!(rejected[0].payload["order_id"], "ORD-000009");
+        assert_eq!(rejected[0].payload["phase"], "pre_issue");
+        assert_eq!(rejected[0].payload["step"], "protocol");
+        assert_eq!(rejected[0].payload["code"], "order_stale");
+        assert_eq!(rejected[0].payload["round"], 0);
+        assert_eq!(rejected[0].payload["plan_epoch"], 1);
+        assert_eq!(rejected[0].payload["run_id"], "RUN-OLD");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// P0-C S2 (2026-08-15): 跨 run 防重放——run_id 不匹配的遗留订单即使
+    /// round/plan_epoch 重合也按 `order_stale` 显式拒绝（不误发）。
+    #[tokio::test]
+    async fn console_s2_cross_run_leftover_order_is_stale() {
+        let dir = test_dir();
+        let journal = JournalRecorder::new(dir.clone());
+        let host = TestHost {
+            journal: journal.clone(),
+            tool_result: Some(ToolResult {
+                output: "never".to_string(),
+                exit_code: Some(0),
+                output_encoding: None,
+                structured: None,
+                ..Default::default()
+            }),
+        };
+        let controller = AgentLoopController::with_gateway(Arc::new(FakeProvider::new(Vec::new())));
+        {
+            let mut w = controller.blackboard().write();
+            w.plan.plan_epoch = 1;
+            w.actions
+                .write_order(ActionOrder {
+                    order_id: "ORD-000010".to_string(),
+                    action: "workspace.read_file".to_string(),
+                    arguments: serde_json::json!({"target_file": "a.txt"}),
+                    target: None,
+                    step_id: None,
+                    round: 1,
+                    plan_epoch: 1,
+                    run_id: "RUN-PREVIOUS".to_string(),
+                })
+                .unwrap();
+        }
+        let mut writer = EventWriter::new(
+            Some(&journal),
+            EventTrack::V02,
+            "RUN-S2X",
+            "",
+            0,
+            None,
+            None,
+        );
+        controller
+            .issue_pending_console_order(
+                &host,
+                &mut writer,
+                "cross-run",
+                orz_assurance::gates::ipg::WorkspaceTrust::NotObserved,
+                1,
+                None,
+            )
+            .await
+            .unwrap();
+
+        let r = controller.blackboard().read();
+        assert!(r.actions.order.is_none());
+        let receipt = &r.actions.results[0];
+        assert!(!receipt.ok);
+        assert_eq!(receipt.error.as_ref().unwrap()["code"], "order_stale");
+        assert_eq!(
+            receipt.error.as_ref().unwrap()["upstream"]["order_run_id"],
+            "RUN-PREVIOUS"
+        );
+        assert_eq!(
+            receipt.error.as_ref().unwrap()["upstream"]["current_run_id"],
+            "RUN-S2X"
+        );
+        let rejected = events(&dir)
+            .into_iter()
+            .filter(|e| e.event_type == EventType::ConsoleOrderRejected)
+            .collect::<Vec<_>>();
+        assert_eq!(rejected.len(), 1, "{rejected:?}");
+        assert_eq!(rejected[0].payload["order_id"], "ORD-000010");
+        assert_eq!(rejected[0].payload["phase"], "pre_issue");
+        assert_eq!(rejected[0].payload["code"], "order_stale");
+        assert_eq!(rejected[0].payload["run_id"], "RUN-PREVIOUS");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// FUS-READ-ANCHOR-WRITE-GUARD (ADR-0010 §14.38, 2026-08-21 审查收口):
+    /// search_replace 订单携带 `expected_anchor` 且目标文件内容与锚点不符
+    /// 时，发放前以 `content_anchor_mismatch` 拒单——清槽、写失败 receipt、
+    /// 入 console_order_rejected 事件面、零编辑。
+    #[tokio::test]
+    async fn console_anchor_mismatch_rejects_before_issue_with_zero_edits() {
+        let dir = test_dir();
+        let journal = JournalRecorder::new(dir.clone());
+        let host = TestHost {
+            journal: journal.clone(),
+            tool_result: Some(ToolResult {
+                output: "never".to_string(),
+                exit_code: Some(0),
+                output_encoding: None,
+                structured: None,
+                ..Default::default()
+            }),
+        };
+        // 目标文件：实际内容为 "actual"（size=6）；期望锚点指向 "expected"
+        // （size=8）——先触发 size 快筛，再以 sha256 权威拒单。
+        let target = host.session_cwd().join("guard_target.txt");
+        std::fs::write(&target, "actual").unwrap();
+        let expected_sha256 = sha256_hex(b"expected");
+        let controller = AgentLoopController::with_gateway(Arc::new(FakeProvider::new(Vec::new())));
+        {
+            let mut w = controller.blackboard().write();
+            w.actions
+                .write_order(ActionOrder {
+                    order_id: "ORD-GUARD-001".to_string(),
+                    action: "workspace.search_replace".to_string(),
+                    arguments: serde_json::json!({
+                        "file_path": "guard_target.txt",
+                        "old_string": "old",
+                        "new_string": "new",
+                        "expected_anchor": {
+                            "size": 8,
+                            "mtime": 0,
+                            "sha256": expected_sha256,
+                        },
+                    }),
+                    target: None,
+                    step_id: None,
+                    round: 1,
+                    plan_epoch: 0,
+                    run_id: "RUN-GUARD".to_string(),
+                })
+                .unwrap();
+        }
+        let mut writer = EventWriter::new(
+            Some(&journal),
+            EventTrack::V02,
+            "RUN-GUARD",
+            "",
+            0,
+            None,
+            None,
+        );
+        controller
+            .issue_pending_console_order(
+                &host,
+                &mut writer,
+                "guard",
+                orz_assurance::gates::ipg::WorkspaceTrust::NotObserved,
+                1,
+                None,
+            )
+            .await
+            .unwrap();
+
+        let r = controller.blackboard().read();
+        assert!(r.actions.order.is_none(), "{:?}", r.actions.order);
+        assert_eq!(r.actions.results.len(), 1, "{:?}", r.actions.results);
+        let receipt = &r.actions.results[0];
+        assert!(!receipt.ok);
+        let error = receipt.error.as_ref().unwrap();
+        assert_eq!(error["step"], "protocol");
+        assert_eq!(error["code"], "content_anchor_mismatch");
+        assert_eq!(error["upstream"]["expected"]["size"], 8);
+        // 零编辑：未执行任何 search_replace 目标工具。
+        assert!(
+            r.tool_actions.iter().all(|t| t.tool != "search_replace"),
+            "{:?}",
+            r.tool_actions
+        );
+        // 目标文件未被改写。
+        assert_eq!(std::fs::read_to_string(&target).unwrap(), "actual");
+        let rejected = events(&dir)
+            .into_iter()
+            .filter(|e| e.event_type == EventType::ConsoleOrderRejected)
+            .collect::<Vec<_>>();
+        assert_eq!(rejected.len(), 1, "{rejected:?}");
+        assert_eq!(rejected[0].payload["order_id"], "ORD-GUARD-001");
+        assert_eq!(rejected[0].payload["phase"], "pre_issue");
+        assert_eq!(rejected[0].payload["step"], "protocol");
+        assert_eq!(rejected[0].payload["code"], "content_anchor_mismatch");
+        assert_eq!(rejected[0].payload["run_id"], "RUN-GUARD");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// FUS-READ-ANCHOR-WRITE-GUARD (ADR-0010 §14.38, 2026-08-21 审查收口):
+    /// 核证期 I/O 错误 fail-closed——stat 成功但 read 失败（目标路径为目录）
+    /// 时同样以 `content_anchor_mismatch` 拒单，绝不带未核证内容放行编辑。
+    #[tokio::test]
+    async fn console_anchor_io_error_rejects_fail_closed() {
+        let dir = test_dir();
+        let journal = JournalRecorder::new(dir.clone());
+        let host = TestHost {
+            journal: journal.clone(),
+            tool_result: Some(ToolResult {
+                output: "never".to_string(),
+                exit_code: Some(0),
+                output_encoding: None,
+                structured: None,
+                ..Default::default()
+            }),
+        };
+        // 目标路径是一个目录：metadata 成功（size/mtime 与期望一致——
+        // mtime 取目录实际值以通过快筛）但 read 失败——必须拒单而不是放行。
+        let target_dir = host.session_cwd().join("guard_dir_target");
+        std::fs::create_dir_all(&target_dir).unwrap();
+        let dir_mtime = std::fs::metadata(&target_dir)
+            .unwrap()
+            .modified()
+            .unwrap()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+        let controller = AgentLoopController::with_gateway(Arc::new(FakeProvider::new(Vec::new())));
+        {
+            let mut w = controller.blackboard().write();
+            w.actions
+                .write_order(ActionOrder {
+                    order_id: "ORD-GUARD-002".to_string(),
+                    action: "workspace.search_replace".to_string(),
+                    arguments: serde_json::json!({
+                        "file_path": "guard_dir_target",
+                        "old_string": "",
+                        "new_string": "x",
+                        "expected_anchor": {
+                            "size": 0,
+                            "mtime": dir_mtime,
+                            "sha256": "a".repeat(64),
+                        },
+                    }),
+                    target: None,
+                    step_id: None,
+                    round: 1,
+                    plan_epoch: 0,
+                    run_id: "RUN-GUARD2".to_string(),
+                })
+                .unwrap();
+        }
+        let mut writer = EventWriter::new(
+            Some(&journal),
+            EventTrack::V02,
+            "RUN-GUARD2",
+            "",
+            0,
+            None,
+            None,
+        );
+        controller
+            .issue_pending_console_order(
+                &host,
+                &mut writer,
+                "guard",
+                orz_assurance::gates::ipg::WorkspaceTrust::NotObserved,
+                1,
+                None,
+            )
+            .await
+            .unwrap();
+
+        let r = controller.blackboard().read();
+        assert!(r.actions.order.is_none(), "{:?}", r.actions.order);
+        assert_eq!(r.actions.results.len(), 1, "{:?}", r.actions.results);
+        let receipt = &r.actions.results[0];
+        assert!(!receipt.ok);
+        let error = receipt.error.as_ref().unwrap();
+        assert_eq!(error["step"], "protocol");
+        assert_eq!(error["code"], "content_anchor_mismatch");
+        // 平台差异：Linux 目录 size 非 0 → 命中 size/mtime 预检；Windows
+        // 目录 size 为 0 → 通过预检后 read 失败——两种消息共享前缀。
+        assert!(
+            error["message"]
+                .as_str()
+                .unwrap()
+                .contains("content anchor verification failed"),
+            "{error:?}"
+        );
+        assert!(
+            r.tool_actions.iter().all(|t| t.tool != "search_replace"),
+            "{:?}",
+            r.tool_actions
+        );
+        let rejected = events(&dir)
+            .into_iter()
+            .filter(|e| e.event_type == EventType::ConsoleOrderRejected)
+            .collect::<Vec<_>>();
+        assert_eq!(rejected.len(), 1, "{rejected:?}");
+        assert_eq!(rejected[0].payload["code"], "content_anchor_mismatch");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// FUS-READ-ANCHOR-WRITE-GUARD (ADR-0010 §14.38, S2): expected_anchor
+    /// 与目标当前内容一致时核证通过——订单正常发放执行（receipt ok、
+    /// tool_action 留痕、无 console_order_rejected 事件）。mtime 为 null
+    /// 时跳过快筛，sha256 仍是权威。
+    #[tokio::test]
+    async fn console_anchor_match_allows_issue_with_mtime_null() {
+        let dir = test_dir();
+        let journal = JournalRecorder::new(dir.clone());
+        let host = TestHost {
+            journal: journal.clone(),
+            tool_result: Some(ToolResult {
+                output: "edited ok".to_string(),
+                exit_code: Some(0),
+                output_encoding: None,
+                structured: None,
+                ..Default::default()
+            }),
+        };
+        let target = host.session_cwd().join("match_target.txt");
+        std::fs::write(&target, b"actual").unwrap();
+        let expected_sha256 = sha256_hex(b"actual");
+        let controller = AgentLoopController::with_gateway(Arc::new(FakeProvider::new(Vec::new())));
+        {
+            let mut w = controller.blackboard().write();
+            w.actions
+                .write_order(ActionOrder {
+                    order_id: "ORD-GUARD-MATCH".to_string(),
+                    action: "workspace.search_replace".to_string(),
+                    arguments: serde_json::json!({
+                        "file_path": "match_target.txt",
+                        "old_string": "actual",
+                        "new_string": "updated",
+                        "expected_anchor": {
+                            "size": 6,
+                            "mtime": null,
+                            "sha256": expected_sha256,
+                        },
+                    }),
+                    target: Some("file:match_target.txt".to_string()),
+                    step_id: None,
+                    round: 1,
+                    plan_epoch: 0,
+                    run_id: "RUN-GUARDM".to_string(),
+                })
+                .unwrap();
+        }
+        let mut writer = EventWriter::new(
+            Some(&journal),
+            EventTrack::V02,
+            "RUN-GUARDM",
+            "",
+            0,
+            None,
+            None,
+        );
+        controller
+            .issue_pending_console_order(
+                &host,
+                &mut writer,
+                "guard",
+                orz_assurance::gates::ipg::WorkspaceTrust::NotObserved,
+                1,
+                None,
+            )
+            .await
+            .unwrap();
+
+        let r = controller.blackboard().read();
+        assert!(r.actions.order.is_none(), "{:?}", r.actions.order);
+        assert_eq!(r.actions.results.len(), 1, "{:?}", r.actions.results);
+        let receipt = &r.actions.results[0];
+        assert!(receipt.ok, "{receipt:?}");
+        assert!(
+            r.tool_actions.iter().any(|t| t.tool == "search_replace"),
+            "{:?}",
+            r.tool_actions
+        );
+        let rejected = events(&dir)
+            .into_iter()
+            .filter(|e| e.event_type == EventType::ConsoleOrderRejected)
+            .collect::<Vec<_>>();
+        assert!(rejected.is_empty(), "{rejected:?}");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// FUS-READ-ANCHOR-WRITE-GUARD (ADR-0010 §14.38, S2 fixture): 同 size
+    /// 同 mtime、内容不同（git checkout / cp -p / touch -r 可保留时间戳）
+    /// ——快筛通过但 sha256 权威兜底拒单；错误信封 / trace / 事件面完整
+    /// 断言（expected vs actual、机械盖章、re-read 指引、零编辑）。
+    #[tokio::test]
+    async fn console_anchor_same_mtime_different_content_sha256_catches() {
+        let dir = test_dir();
+        let journal = JournalRecorder::new(dir.clone());
+        let host = TestHost {
+            journal: journal.clone(),
+            tool_result: Some(ToolResult {
+                output: "never".to_string(),
+                exit_code: Some(0),
+                output_encoding: None,
+                structured: None,
+                ..Default::default()
+            }),
+        };
+        let target = host.session_cwd().join("same_mtime_target.txt");
+        // fixture：内容从 "aaaaaa" 改为 "bbbbbb"（size 相同），mtime 被保留。
+        std::fs::write(&target, b"aaaaaa").unwrap();
+        let original_mtime = std::fs::metadata(&target).unwrap().modified().unwrap();
+        let original_mtime_secs = original_mtime
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+        std::fs::write(&target, b"bbbbbb").unwrap();
+        {
+            let f = std::fs::File::options().write(true).open(&target).unwrap();
+            f.set_times(std::fs::FileTimes::new().set_modified(original_mtime))
+                .unwrap();
+        }
+        let meta = std::fs::metadata(&target).unwrap();
+        assert_eq!(meta.len(), 6);
+        assert_eq!(
+            meta.modified()
+                .unwrap()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_secs(),
+            original_mtime_secs,
+            "fixture must preserve mtime"
+        );
+        let expected_sha256 = sha256_hex(b"aaaaaa");
+        let actual_sha256 = sha256_hex(b"bbbbbb");
+        assert_ne!(expected_sha256, actual_sha256);
+        let controller = AgentLoopController::with_gateway(Arc::new(FakeProvider::new(Vec::new())));
+        {
+            let mut w = controller.blackboard().write();
+            w.actions
+                .write_order(ActionOrder {
+                    order_id: "ORD-GUARD-003".to_string(),
+                    action: "workspace.search_replace".to_string(),
+                    arguments: serde_json::json!({
+                        "file_path": "same_mtime_target.txt",
+                        "old_string": "old",
+                        "new_string": "new",
+                        "expected_anchor": {
+                            "size": 6,
+                            "mtime": original_mtime_secs,
+                            "sha256": expected_sha256,
+                        },
+                    }),
+                    target: None,
+                    step_id: None,
+                    round: 1,
+                    plan_epoch: 0,
+                    run_id: "RUN-GUARD3".to_string(),
+                })
+                .unwrap();
+        }
+        let mut writer = EventWriter::new(
+            Some(&journal),
+            EventTrack::V02,
+            "RUN-GUARD3",
+            "",
+            0,
+            None,
+            None,
+        );
+        controller
+            .issue_pending_console_order(
+                &host,
+                &mut writer,
+                "guard",
+                orz_assurance::gates::ipg::WorkspaceTrust::NotObserved,
+                1,
+                None,
+            )
+            .await
+            .unwrap();
+
+        let r = controller.blackboard().read();
+        assert!(r.actions.order.is_none(), "{:?}", r.actions.order);
+        assert_eq!(r.actions.results.len(), 1, "{:?}", r.actions.results);
+        let receipt = &r.actions.results[0];
+        assert!(!receipt.ok);
+        let error = receipt.error.as_ref().unwrap();
+        assert_eq!(error["step"], "protocol");
+        assert_eq!(error["code"], "content_anchor_mismatch");
+        let message = error["message"].as_str().unwrap();
+        assert!(message.contains("sha256 mismatch"), "{message}");
+        assert!(message.contains(&expected_sha256), "{message}");
+        assert!(message.contains(&actual_sha256), "{message}");
+        assert!(message.contains("re-read the file"), "{message}");
+        assert_eq!(error["upstream"]["label"], "ORD-GUARD-003");
+        assert_eq!(error["upstream"]["file_path"], "same_mtime_target.txt");
+        assert_eq!(error["upstream"]["expected"]["size"], 6);
+        assert_eq!(error["upstream"]["expected"]["mtime"], original_mtime_secs);
+        assert_eq!(error["upstream"]["expected"]["sha256"], expected_sha256);
+        assert_eq!(error["upstream"]["actual"]["size"], 6);
+        assert_eq!(error["upstream"]["actual"]["mtime"], original_mtime_secs);
+        assert_eq!(error["upstream"]["actual"]["sha256"], actual_sha256);
+        // 零编辑：文件保持 bbbbbb，未执行任何 search_replace 目标工具。
+        assert_eq!(std::fs::read_to_string(&target).unwrap(), "bbbbbb");
+        assert!(
+            r.tool_actions.iter().all(|t| t.tool != "search_replace"),
+            "{:?}",
+            r.tool_actions
+        );
+        // trace：失败 trace 已 commit，末事件 protocol/content_anchor_mismatch。
+        let traces = controller.console_traces.lock().unwrap();
+        let trace = traces
+            .get(&receipt.trace_id)
+            .expect("anchor rejection trace committed");
+        assert_eq!(trace.events.last().unwrap().step, "protocol");
+        assert_eq!(
+            trace.events.last().unwrap().code.as_deref(),
+            Some(crate::console::CODE_CONTENT_ANCHOR_MISMATCH)
+        );
+        drop(traces);
+        // 事件面：pre_issue / protocol / content_anchor_mismatch + 机械盖章。
+        let rejected = events(&dir)
+            .into_iter()
+            .filter(|e| e.event_type == EventType::ConsoleOrderRejected)
+            .collect::<Vec<_>>();
+        assert_eq!(rejected.len(), 1, "{rejected:?}");
+        assert_eq!(rejected[0].payload["order_id"], "ORD-GUARD-003");
+        assert_eq!(rejected[0].payload["phase"], "pre_issue");
+        assert_eq!(rejected[0].payload["step"], "protocol");
+        assert_eq!(rejected[0].payload["code"], "content_anchor_mismatch");
+        assert_eq!(rejected[0].payload["round"], 1);
+        assert_eq!(rejected[0].payload["plan_epoch"], 0);
+        assert_eq!(rejected[0].payload["run_id"], "RUN-GUARD3");
+        assert!(
+            rejected[0].payload["reason"]
+                .as_str()
+                .unwrap()
+                .contains("sha256 mismatch"),
+            "{rejected:?}"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// FUS-READ-ANCHOR-WRITE-GUARD (ADR-0010 §14.38, S2): 陈旧写入场景——
+    /// 读取 v1 后文件被别处改为 v2，v1 锚点下单被拒；主 agent 重读后以 v2
+    /// 锚点重下成功。发放前拒绝零编辑，重下走正常执行链（S4 场景的单元级
+    /// 预演）。
+    #[tokio::test]
+    async fn console_anchor_reject_then_reread_reissue_succeeds() {
+        let dir = test_dir();
+        let journal = JournalRecorder::new(dir.clone());
+        let host = TestHost {
+            journal: journal.clone(),
+            tool_result: Some(ToolResult {
+                output: "edited ok".to_string(),
+                exit_code: Some(0),
+                output_encoding: None,
+                structured: None,
+                ..Default::default()
+            }),
+        };
+        let target = host.session_cwd().join("remedy.txt");
+        // 读取快照 v1……
+        std::fs::write(&target, b"v1").unwrap();
+        let v1_sha = sha256_hex(b"v1");
+        // ……窗口内文件被别处改为 v2（旧锚点不再匹配）。
+        std::fs::write(&target, b"v2").unwrap();
+        let v2_sha = sha256_hex(b"v2");
+        let controller = AgentLoopController::with_gateway(Arc::new(FakeProvider::new(Vec::new())));
+        async fn issue_guard_order(
+            controller: &AgentLoopController,
+            host: &TestHost,
+            journal: &JournalRecorder,
+            run_id: &str,
+        ) {
+            let mut writer =
+                EventWriter::new(Some(journal), EventTrack::V02, run_id, "", 0, None, None);
+            controller
+                .issue_pending_console_order(
+                    host,
+                    &mut writer,
+                    "guard",
+                    orz_assurance::gates::ipg::WorkspaceTrust::NotObserved,
+                    1,
+                    None,
+                )
+                .await
+                .unwrap();
+        }
+        // 第一次：旧锚点 → 发放前拒绝。
+        {
+            let mut w = controller.blackboard().write();
+            w.actions
+                .write_order(ActionOrder {
+                    order_id: "ORD-GUARD-RE1".to_string(),
+                    action: "workspace.search_replace".to_string(),
+                    arguments: serde_json::json!({
+                        "file_path": "remedy.txt",
+                        "old_string": "old",
+                        "new_string": "new",
+                        "expected_anchor": {
+                            "size": 2,
+                            "mtime": null,
+                            "sha256": v1_sha,
+                        },
+                    }),
+                    target: Some("file:remedy.txt".to_string()),
+                    step_id: None,
+                    round: 1,
+                    plan_epoch: 0,
+                    run_id: "RUN-REMEDY1".to_string(),
+                })
+                .unwrap();
+        }
+        issue_guard_order(&controller, &host, &journal, "RUN-REMEDY1").await;
+        {
+            let r = controller.blackboard().read();
+            assert!(r.actions.order.is_none(), "{:?}", r.actions.order);
+            assert_eq!(r.actions.results.len(), 1, "{:?}", r.actions.results);
+            let receipt = &r.actions.results[0];
+            assert!(!receipt.ok);
+            assert_eq!(
+                receipt.error.as_ref().unwrap()["code"],
+                "content_anchor_mismatch"
+            );
+            assert!(
+                r.tool_actions.iter().all(|t| t.tool != "search_replace"),
+                "{:?}",
+                r.tool_actions
+            );
+        }
+        assert_eq!(std::fs::read_to_string(&target).unwrap(), "v2");
+        // 第二次：重读后以新锚点重下 → 正常发放执行。
+        {
+            let mut w = controller.blackboard().write();
+            w.actions
+                .write_order(ActionOrder {
+                    order_id: "ORD-GUARD-RE2".to_string(),
+                    action: "workspace.search_replace".to_string(),
+                    arguments: serde_json::json!({
+                        "file_path": "remedy.txt",
+                        "old_string": "old",
+                        "new_string": "new",
+                        "expected_anchor": {
+                            "size": 2,
+                            "mtime": null,
+                            "sha256": v2_sha,
+                        },
+                    }),
+                    target: Some("file:remedy.txt".to_string()),
+                    step_id: None,
+                    round: 1,
+                    plan_epoch: 0,
+                    run_id: "RUN-REMEDY2".to_string(),
+                })
+                .unwrap();
+        }
+        issue_guard_order(&controller, &host, &journal, "RUN-REMEDY2").await;
+        {
+            let r = controller.blackboard().read();
+            assert_eq!(r.actions.results.len(), 2, "{:?}", r.actions.results);
+            assert!(r.actions.results[1].ok, "{:?}", r.actions.results[1]);
+            assert!(
+                r.tool_actions.iter().any(|t| t.tool == "search_replace"),
+                "{:?}",
+                r.tool_actions
+            );
+        }
+        // 全程恰好一次发放前拒绝（第一次），第二次无拒绝事件。
+        let rejected = events(&dir)
+            .into_iter()
+            .filter(|e| e.event_type == EventType::ConsoleOrderRejected)
+            .collect::<Vec<_>>();
+        assert_eq!(rejected.len(), 1, "{rejected:?}");
+        assert_eq!(rejected[0].payload["order_id"], "ORD-GUARD-RE1");
+        assert_eq!(rejected[0].payload["run_id"], "RUN-REMEDY1");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// FUS-READ-ANCHOR-WRITE-GUARD (ADR-0010 §14.38, S2): expected_anchor
+    /// 缺失时保持既有行为——不触发核证、正常发放执行、无拒绝事件（设计
+    /// §3.2「缺失保持既有行为；必填加严为可选后续」）。
+    #[tokio::test]
+    async fn console_search_replace_without_anchor_skips_verification() {
+        let dir = test_dir();
+        let journal = JournalRecorder::new(dir.clone());
+        let host = TestHost {
+            journal: journal.clone(),
+            tool_result: Some(ToolResult {
+                output: "edited ok".to_string(),
+                exit_code: Some(0),
+                output_encoding: None,
+                structured: None,
+                ..Default::default()
+            }),
+        };
+        std::fs::write(host.session_cwd().join("legacy_target.txt"), b"actual").unwrap();
+        let controller = AgentLoopController::with_gateway(Arc::new(FakeProvider::new(Vec::new())));
+        {
+            let mut w = controller.blackboard().write();
+            w.actions
+                .write_order(ActionOrder {
+                    order_id: "ORD-GUARD-NOANCHOR".to_string(),
+                    action: "workspace.search_replace".to_string(),
+                    arguments: serde_json::json!({
+                        "file_path": "legacy_target.txt",
+                        "old_string": "actual",
+                        "new_string": "updated",
+                    }),
+                    target: Some("file:legacy_target.txt".to_string()),
+                    step_id: None,
+                    round: 1,
+                    plan_epoch: 0,
+                    run_id: "RUN-GUARDN".to_string(),
+                })
+                .unwrap();
+        }
+        let mut writer = EventWriter::new(
+            Some(&journal),
+            EventTrack::V02,
+            "RUN-GUARDN",
+            "",
+            0,
+            None,
+            None,
+        );
+        controller
+            .issue_pending_console_order(
+                &host,
+                &mut writer,
+                "guard",
+                orz_assurance::gates::ipg::WorkspaceTrust::NotObserved,
+                1,
+                None,
+            )
+            .await
+            .unwrap();
+
+        let r = controller.blackboard().read();
+        assert!(r.actions.order.is_none(), "{:?}", r.actions.order);
+        assert_eq!(r.actions.results.len(), 1, "{:?}", r.actions.results);
+        assert!(r.actions.results[0].ok, "{:?}", r.actions.results[0]);
+        assert!(
+            r.tool_actions.iter().any(|t| t.tool == "search_replace"),
+            "{:?}",
+            r.tool_actions
+        );
+        let rejected = events(&dir)
+            .into_iter()
+            .filter(|e| e.event_type == EventType::ConsoleOrderRejected)
+            .collect::<Vec<_>>();
+        assert!(rejected.is_empty(), "{rejected:?}");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// R2 半助理层（THIN-HARNESS-REDESIGN V2 §4.2/§4.5）：执行失败自动
+    /// 派发——失败对象实体登记（file 锚点）+ 结构化签名诊断附着 +
+    /// 错误信封携带 `upstream.detail.diagnostic`（≤2KB 极简记录）。
+    #[tokio::test]
+    async fn r2_failure_auto_diagnosis_registers_entity_and_attaches_diagnostic() {
+        let dir = test_dir();
+        let journal = JournalRecorder::new(dir.clone());
+        let host = TestHost {
+            journal: journal.clone(),
+            tool_result: Some(ToolResult {
+                output: "error: no such file\nat line 1\n".to_string(),
+                exit_code: Some(1),
+                output_encoding: Some("utf-8".to_string()),
+                structured: None,
+                ..Default::default()
+            }),
+        };
+        let controller = AgentLoopController::with_gateway(Arc::new(FakeProvider::new(Vec::new())));
+        controller.set_console_probe_source(
+            crate::host::ToolPolicy::Interactive,
+            crate::tool_probe::ToolProbeSnapshot {
+                complete: vec!["read_file".to_string()],
+                incomplete: Vec::new(),
+            },
+        );
+        {
+            let mut w = controller.blackboard().write();
+            w.plan.plan_epoch = 1;
+            w.actions
+                .write_order(ActionOrder {
+                    order_id: "ORD-R2-001".to_string(),
+                    action: "workspace.read_file".to_string(),
+                    arguments: serde_json::json!({"target_file": "missing_r2_target.txt"}),
+                    target: Some("file:missing_r2_target.txt".to_string()),
+                    step_id: None,
+                    round: 1,
+                    plan_epoch: 1,
+                    run_id: "RUN-R2".to_string(),
+                })
+                .unwrap();
+        }
+        let mut writer =
+            EventWriter::new(Some(&journal), EventTrack::V02, "RUN-R2", "", 0, None, None);
+        controller
+            .issue_pending_console_order(
+                &host,
+                &mut writer,
+                "r2",
+                orz_assurance::gates::ipg::WorkspaceTrust::NotObserved,
+                1,
+                None,
+            )
+            .await
+            .unwrap();
+        {
+            let bb = controller.blackboard().read();
+            // 失败对象实体已登记（file 锚点：exists=false）。
+            let entity = bb
+                .entities
+                .get("file:missing_r2_target.txt")
+                .expect("file entity registered");
+            assert_eq!(entity.kind, crate::entities::EntityKind::File);
+            assert_eq!(entity.summary["exists"], serde_json::json!(false));
+            // 结构化签名诊断已附着（target_missing；P5：非文本子串）。
+            let diag = entity
+                .last_diagnostic
+                .as_ref()
+                .expect("diagnostic attached");
+            assert_eq!(diag.matched_signature.as_deref(), Some("target_missing"));
+            assert_eq!(diag.log_pointer, "t000001");
+            assert!(
+                diag.key_fields
+                    .iter()
+                    .any(|f| f.key == "exists" && f.value == "false")
+            );
+            // 环境实体已登记（探针快照机械来源）。
+            let env = bb
+                .entities
+                .get(&crate::entities::environment_entity_id())
+                .expect("environment entity");
+            assert_eq!(env.summary["tool_count"], serde_json::json!(1));
+            // 错误信封携带极简诊断（≤2KB）。
+            let receipt = bb.actions.results.last().expect("receipt");
+            assert!(!receipt.ok);
+            let error = receipt.error.as_ref().expect("error envelope");
+            assert_eq!(error["code"], serde_json::json!("execution_failed"));
+            assert_eq!(
+                error["upstream"]["detail"]["diagnostic"]["matched_signature"],
+                serde_json::json!("target_missing")
+            );
+        }
+        // blackboard_read section=entities 有界渲染（摘要清单 + 总上限）。
+        let text = controller.render_blackboard_section("entities", None, None, None);
+        assert!(text.contains("file:missing_r2_target.txt"), "{text}");
+        assert!(text.contains("total="), "{text}");
+        assert!(text.contains("has_diagnostic=true"), "{text}");
+        let epoch_reject = controller.render_blackboard_section("entities", None, Some(1), None);
+        assert!(epoch_reject.contains("live-only"), "{epoch_reject}");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// R2 半助理层：成功路径登记文件锚点（size/sha256/encoding）。
+    #[tokio::test]
+    async fn r2_success_registers_file_anchor_with_sha256() {
+        let dir = test_dir();
+        let journal = JournalRecorder::new(dir.clone());
+        let anchor_path = dir.join("anchor_target.txt");
+        std::fs::write(&anchor_path, b"r2 anchor content").unwrap();
+        let host = TestHost {
+            journal: journal.clone(),
+            tool_result: Some(ToolResult {
+                output: "r2 anchor content".to_string(),
+                exit_code: Some(0),
+                output_encoding: Some("utf-8".to_string()),
+                structured: None,
+                ..Default::default()
+            }),
+        };
+        let controller = AgentLoopController::with_gateway(Arc::new(FakeProvider::new(Vec::new())));
+        {
+            let mut w = controller.blackboard().write();
+            w.plan.plan_epoch = 1;
+            w.actions
+                .write_order(ActionOrder {
+                    order_id: "ORD-R2-002".to_string(),
+                    action: "workspace.read_file".to_string(),
+                    arguments: serde_json::json!({
+                        "target_file": anchor_path.to_string_lossy(),
+                    }),
+                    target: Some(crate::entities::file_entity_id(
+                        &anchor_path.to_string_lossy(),
+                    )),
+                    step_id: None,
+                    round: 1,
+                    plan_epoch: 1,
+                    run_id: "RUN-R2S".to_string(),
+                })
+                .unwrap();
+        }
+        let mut writer = EventWriter::new(
+            Some(&journal),
+            EventTrack::V02,
+            "RUN-R2S",
+            "",
+            0,
+            None,
+            None,
+        );
+        controller
+            .issue_pending_console_order(
+                &host,
+                &mut writer,
+                "r2",
+                orz_assurance::gates::ipg::WorkspaceTrust::NotObserved,
+                1,
+                None,
+            )
+            .await
+            .unwrap();
+        {
+            let bb = controller.blackboard().read();
+            let entity = bb
+                .entities
+                .get(&crate::entities::file_entity_id(
+                    &anchor_path.to_string_lossy(),
+                ))
+                .expect("file entity registered");
+            assert_eq!(entity.summary["exists"], serde_json::json!(true));
+            assert_eq!(entity.summary["size"], serde_json::json!(17));
+            assert_eq!(
+                entity.summary["encoding"],
+                serde_json::json!("utf-8"),
+                "entity summary: {}",
+                entity.summary
+            );
+            let expected_sha = sha256_hex(b"r2 anchor content");
+            assert_eq!(entity.summary["sha256"], serde_json::json!(expected_sha));
+            assert!(entity.last_diagnostic.is_none());
+            let receipt = bb.actions.results.last().expect("receipt");
+            assert!(receipt.ok, "{receipt:?}");
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// GAP-ENCODING-GATE 回归：run_host_tool 成功路径重建 ToolResult 时
+    /// 必须透传 output_encoding（R2 实体登记/失败诊断的 encoding_lossy
+    /// 签名依赖该结构化字段）。
+    #[tokio::test]
+    async fn r2_console_target_preserves_output_encoding() {
+        let dir = test_dir();
+        let journal = JournalRecorder::new(dir.clone());
+        let host = TestHost {
+            journal: journal.clone(),
+            tool_result: Some(ToolResult {
+                output: "x".to_string(),
+                exit_code: Some(0),
+                output_encoding: Some("utf-8".to_string()),
+                structured: None,
+                ..Default::default()
+            }),
+        };
+        let controller = AgentLoopController::with_gateway(Arc::new(FakeProvider::new(Vec::new())));
+        let mut writer =
+            EventWriter::new(Some(&journal), EventTrack::V02, "RUN-P", "", 0, None, None);
+        let r = controller
+            .run_console_target(
+                &host,
+                &mut writer,
+                "",
+                orz_assurance::gates::ipg::WorkspaceTrust::NotObserved,
+                0,
+                None,
+                None,
+                "read_file",
+                &serde_json::json!({ "path": "x.txt" }),
+                "call-p",
+                "t000001",
+            )
+            .await
+            .expect("run");
+        assert_eq!(
+            r.output_encoding.as_deref(),
+            Some("utf-8"),
+            "output_encoding preserved through console target"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// P0-C S3 前置 (2026-08-15, P1-2 定案): 适配层只按结构化信号映射——
+    /// permission / acaf / retrieval_mode / taint 全部落到
+    /// `ExecuteError::PolicyDenied`，detail 携带 source/code/reason。
+    #[tokio::test]
+    async fn console_s2_structured_denial_sources_map_to_policy_step() {
+        use crate::host::PolicyDenialSource;
+
+        let controller = AgentLoopController::new();
+        for (source, code) in [
+            (PolicyDenialSource::Permission, "permission_deny"),
+            (
+                PolicyDenialSource::Acaf,
+                "control_ticket_rejected:missing_goal_context",
+            ),
+            (PolicyDenialSource::RetrievalMode, "retrieval_mode_off"),
+            (PolicyDenialSource::Taint, "taint_denied"),
+        ] {
+            let dir = test_dir();
+            let journal = JournalRecorder::new(dir.clone());
+            let host = TestHost {
+                journal: journal.clone(),
+                tool_result: Some(ToolResult {
+                    output: format!("denied: {code}"),
+                    exit_code: Some(1),
+                    output_encoding: None,
+                    structured: None,
+                    timed_out: false,
+                    policy_denial: Some(crate::host::PolicyDenial {
+                        source,
+                        code: code.to_string(),
+                        reason: "policy reason".to_string(),
+                    }),
+                    ..Default::default()
+                }),
+            };
+            let mut writer = EventWriter::new(
+                Some(&journal),
+                EventTrack::V02,
+                "RUN-S3PD",
+                "",
+                0,
+                None,
+                None,
+            );
+            let err = controller
+                .run_console_target(
+                    &host,
+                    &mut writer,
+                    "",
+                    orz_assurance::gates::ipg::WorkspaceTrust::ObservedTrusted,
+                    0,
+                    None,
+                    None,
+                    "read_file",
+                    &serde_json::json!({ "path": "a.txt" }),
+                    "call-pd",
+                    "t000001",
+                )
+                .await
+                .unwrap_err();
+            match err {
+                crate::console::ExecuteError::PolicyDenied { message, detail } => {
+                    assert!(message.contains("denied:"), "{message}");
+                    let detail = detail.expect("structured detail");
+                    assert_eq!(detail["source"], serde_json::json!(source.as_str()));
+                    assert_eq!(detail["code"], serde_json::json!(code));
+                    assert_eq!(detail["reason"], serde_json::json!("policy reason"));
+                }
+                other => panic!("expected PolicyDenied for {code}, got {other:?}"),
+            }
+            // P0-C S3 前置审查修复 (F3): a host-level denial must ride the
+            // ToolCompleted as a self-describing refusal completion —
+            // exit_code=1 + status=error + error code + structured denial.
+            let all_events = events(&dir);
+            let completed: Vec<_> = all_events
+                .iter()
+                .filter(|e| e.event_type == EventType::ToolCompleted)
+                .collect();
+            assert_eq!(completed.len(), 1, "one refusal completion expected");
+            assert_eq!(completed[0].payload["exit_code"], serde_json::json!(1));
+            assert_eq!(completed[0].payload["status"], serde_json::json!("error"));
+            assert_eq!(completed[0].payload["error"], serde_json::json!(code));
+            assert_eq!(
+                completed[0].payload["policy_denial"]["source"],
+                serde_json::json!(source.as_str())
+            );
+            assert_eq!(
+                completed[0].payload["policy_denial"]["code"],
+                serde_json::json!(code)
+            );
+            assert_eq!(
+                completed[0].payload["policy_denial"]["reason"],
+                serde_json::json!("policy reason")
+            );
+            let _ = std::fs::remove_dir_all(&dir);
+        }
+    }
+
+    /// P0-C S3 前置 (2026-08-15, P1-2 定案): 内容碰撞回归——成功输出即使
+    /// 包含旧拒绝前缀文案也必须判成功（策略判定只认结构化信号，不认文案）。
+    #[tokio::test]
+    async fn console_s2_old_refusal_prefix_in_success_output_is_not_policy() {
+        let controller = AgentLoopController::new();
+        for output in [
+            "ACAF ticket refused for 'search_replace' — denied (missing_goal_context); \
+             the action was not executed.",
+            "retrieval 'project_doc_index' refused — retrieval mode is 'off' for this \
+             session; no retrieval tools are available.",
+            "retrieval 'browser_read' refused — retrieval mode is 'local_browser' for \
+             this session; web tools require framework_fallback mode; no silent fallback.",
+            "tool 'read_file' — 本次调用未获权限门禁放行",
+        ] {
+            let dir = test_dir();
+            let journal = JournalRecorder::new(dir.clone());
+            let host = TestHost {
+                journal: journal.clone(),
+                tool_result: Some(ToolResult {
+                    output: output.to_string(),
+                    exit_code: Some(0),
+                    output_encoding: None,
+                    structured: None,
+                    timed_out: false,
+                    policy_denial: None,
+                    ..Default::default()
+                }),
+            };
+            let mut writer = EventWriter::new(
+                Some(&journal),
+                EventTrack::V02,
+                "RUN-S3CO",
+                "",
+                0,
+                None,
+                None,
+            );
+            let result = controller
+                .run_console_target(
+                    &host,
+                    &mut writer,
+                    "",
+                    orz_assurance::gates::ipg::WorkspaceTrust::ObservedTrusted,
+                    0,
+                    None,
+                    None,
+                    "read_file",
+                    &serde_json::json!({ "path": "a.txt" }),
+                    "call-co",
+                    "t000001",
+                )
+                .await
+                .expect("old-prefix success output must not be classified as policy");
+            assert_eq!(result.exit_code, Some(0));
+            assert!(result.policy_denial.is_none());
+            let _ = std::fs::remove_dir_all(&dir);
+        }
+    }
+
+    /// 设计 §5 验收 2：第 2 轮起 direct 执行面——脚本化运行只调工作工具；
+    /// journal 中不得出现 blackboard_action_write / console_step_done /
+    /// console_return_to_console（退役工具零调用残留）。
+    #[tokio::test]
+    async fn direct_surface_journal_never_contains_console_order_tools() {
+        let dir = test_dir();
+        let journal = JournalRecorder::new(dir.clone());
+        let host = TestHost {
+            journal,
+            tool_result: Some(ToolResult {
+                output: "edited".to_string(),
+                exit_code: Some(0),
+                output_encoding: None,
+                structured: None,
+                ..Default::default()
+            }),
+        };
+        let fake = Arc::new(FakeProvider::new(vec![
+            ScriptedResponse::tool_calls(vec![plan_write_call("call-plan-1", valid_plan_json())]),
+            ScriptedResponse::tool_calls(vec![ToolCall {
+                name: "search_replace".to_string(),
+                arguments: serde_json::json!({ "file_path": "a.txt", "old_string": "x", "new_string": "y" }),
+                call_id: "call-edit-1".to_string(),
+            }]),
+            ScriptedResponse::text("草稿"),
+            ScriptedResponse::text("终答"),
+        ]));
+        let controller = stage_c_controller(fake);
+        controller
+            .run_turn(&host, "改文件", "RUN-DIRECT", MANIFEST, 0, None, None, None)
+            .await
+            .unwrap();
+
+        let events = events(&dir);
+        let started_tools: Vec<&str> = events
+            .iter()
+            .filter(|e| e.event_type == EventType::ToolStarted)
+            .filter_map(|e| e.payload.get("tool").and_then(serde_json::Value::as_str))
+            .collect();
+        for retired in [
+            "blackboard_action_write",
+            "console_step_done",
+            "console_return_to_console",
+        ] {
+            assert!(
+                !started_tools.contains(&retired),
+                "retired console order tool {retired} must never appear in the journal: {started_tools:?}"
+            );
+        }
+        assert!(
+            started_tools.contains(&"search_replace"),
+            "the direct work tool executes: {started_tools:?}"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// 设计 §2.8/§5 验收 5（行为侧零残留）：终答携带未绑定本 run 证据的
+    /// `[来源: SRC-999]` 标记也不再机械拦截——原样交付（旧引用校验器会
+    /// block 并替换为降级块）。
+    #[tokio::test]
+    async fn final_answer_with_unbound_citation_delivered_as_is() {
+        let dir = test_dir();
+        let journal = JournalRecorder::new(dir.clone());
+        let host = TestHost {
+            journal,
+            tool_result: None,
+        };
+        let gateway: Arc<dyn ModelGateway> = Arc::new(FakeProvider::from_texts(vec![
+            "草稿",
+            "结论 [来源: SRC-999]",
+        ]));
+        let controller = AgentLoopController::with_gateway(gateway);
+        let (response, _, _) = controller
+            .run_turn(
+                &host,
+                "hello",
+                "RUN-CITE-GONE",
+                MANIFEST,
+                0,
+                None,
+                None,
+                None,
+            )
+            .await
+            .unwrap();
+        assert_eq!(response, "结论 [来源: SRC-999]");
+        // 运行正常终止（无引用校验事件类型——编译期已删除该变体）。
+        let types = event_types(&dir);
+        assert_eq!(
+            types
+                .iter()
+                .filter(|t| **t == EventType::RunFinished)
+                .count(),
+            1,
+            "{types:?}"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    // ── MECHANICAL-AUDIT-LAYER 审查处理 (2026-08-24, ADR-0010 §14.39):
+    //    direct 面 read-anchor 写前核证 + 退役工具调用面窄门 ────────────
+
+    /// P1-1 (审查处理): direct 面 `search_replace` 携带错误 `expected_anchor`
+    /// → 执行前机械拒绝（content_anchor_mismatch、无 ToolStarted、零编辑），
+    /// 审计层记录锚点拒单异常事实。
+    #[tokio::test]
+    async fn direct_search_replace_wrong_anchor_refuses_without_execution() {
+        let dir = test_dir();
+        let journal = JournalRecorder::new(dir.clone());
+        let host = TestHost {
+            journal: journal.clone(),
+            tool_result: Some(ok_result()),
+        };
+        let target = host.session_cwd().join("anchor_target.txt");
+        std::fs::write(&target, "current").unwrap();
+        let meta = std::fs::metadata(&target).unwrap();
+        let wrong_sha = "0".repeat(64);
+        let fake = Arc::new(FakeProvider::new(vec![
+            ScriptedResponse::tool_calls(vec![plan_write_call("call-plan-1", valid_plan_json())]),
+            ScriptedResponse::tool_calls(vec![ToolCall {
+                name: "search_replace".to_string(),
+                arguments: serde_json::json!({
+                    "file_path": "anchor_target.txt",
+                    "old_string": "current",
+                    "new_string": "edited",
+                    "expected_anchor": {
+                        "size": meta.len(),
+                        "mtime": meta
+                            .modified()
+                            .ok()
+                            .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                            .map(|d| d.as_secs()),
+                        "sha256": wrong_sha,
+                    },
+                }),
+                call_id: "call-edit-1".to_string(),
+            }]),
+            ScriptedResponse::text("草稿"),
+            ScriptedResponse::text("终答"),
+        ]));
+        let controller = stage_c_controller(fake);
+        controller
+            .run_turn(
+                &host,
+                "改文件",
+                "RUN-ANCHOR-DIRECT",
+                MANIFEST,
+                0,
+                None,
+                None,
+                None,
+            )
+            .await
+            .unwrap();
+
+        // 零编辑：文件保持原内容，host 工具未被调用。
+        assert_eq!(std::fs::read_to_string(&target).unwrap(), "current");
+        let r = controller.blackboard().read();
+        assert!(
+            r.tool_actions.iter().all(|t| t.tool != "search_replace"),
+            "{:?}",
+            r.tool_actions
+        );
+        // 事件面：ToolCompleted 拒绝（content_anchor_mismatch），无 ToolStarted。
+        let events = events(&dir);
+        let refused: Vec<&RunEvent> = events
+            .iter()
+            .filter(|e| e.event_type == EventType::ToolCompleted)
+            .filter(|e| e.payload.get("tool").and_then(|t| t.as_str()) == Some("search_replace"))
+            .collect();
+        assert_eq!(refused.len(), 1, "{refused:?}");
+        assert_eq!(refused[0].payload["exit_code"].as_u64(), Some(1));
+        assert_eq!(
+            refused[0].payload["error"].as_str(),
+            Some("content_anchor_mismatch")
+        );
+        assert!(
+            !events.iter().any(|e| e.event_type == EventType::ToolStarted
+                && e.payload.get("tool").and_then(|t| t.as_str()) == Some("search_replace")),
+            "no ToolStarted for the refused edit"
+        );
+        // 审计层：锚点拒单异常事实（结构化 error 透传）。
+        let audit: Vec<&RunEvent> = events
+            .iter()
+            .filter(|e| e.event_type == EventType::MechanicalAuditUpdate)
+            .filter(|e| e.payload["kind"] == "tool_result")
+            .filter(|e| {
+                e.payload["payload"]["key"]
+                    .as_str()
+                    .unwrap_or_default()
+                    .starts_with("file:anchor_target.txt")
+            })
+            .collect();
+        assert!(
+            !audit.is_empty(),
+            "anchor refusal must be audited: {events:?}"
+        );
+        assert_eq!(
+            audit[0].payload["payload"]["anomaly"].as_str(),
+            Some("content_anchor_mismatch")
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// P1-1 (审查处理): direct 面 `search_replace` 携带正确锚点 / 不带锚点
+    /// → 照常执行（核证通过或无核证要求）；目标不存在（新建路径）携带锚点
+    /// → 跳过核证照常执行。
+    #[tokio::test]
+    async fn direct_search_replace_anchor_match_or_missing_target_executes() {
+        let dir = test_dir();
+        let journal = JournalRecorder::new(dir.clone());
+        let host = TestHost {
+            journal: journal.clone(),
+            tool_result: Some(ok_result()),
+        };
+        let target = host.session_cwd().join("anchor_match.txt");
+        std::fs::write(&target, "current").unwrap();
+        let bytes = std::fs::read(&target).unwrap();
+        let meta = std::fs::metadata(&target).unwrap();
+        let sha = sha256_hex(&bytes);
+        let fake = Arc::new(FakeProvider::new(vec![
+            ScriptedResponse::tool_calls(vec![plan_write_call("call-plan-1", valid_plan_json())]),
+            // 同批三次调用：正确锚点 / 无锚点 / 目标不存在（新建路径）。
+            ScriptedResponse::tool_calls(vec![
+                ToolCall {
+                    name: "search_replace".to_string(),
+                    arguments: serde_json::json!({
+                        "file_path": "anchor_match.txt",
+                        "old_string": "current",
+                        "new_string": "edited",
+                        "expected_anchor": {
+                            "size": meta.len(),
+                            "mtime": meta
+                                .modified()
+                                .ok()
+                                .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                                .map(|d| d.as_secs()),
+                            "sha256": sha,
+                        },
+                    }),
+                    call_id: "call-edit-match".to_string(),
+                },
+                ToolCall {
+                    name: "search_replace".to_string(),
+                    arguments: serde_json::json!({
+                        "file_path": "anchor_match.txt",
+                        "old_string": "current",
+                        "new_string": "edited",
+                    }),
+                    call_id: "call-edit-noanchor".to_string(),
+                },
+                ToolCall {
+                    name: "search_replace".to_string(),
+                    arguments: serde_json::json!({
+                        "file_path": "brand_new.txt",
+                        "old_string": "",
+                        "new_string": "content",
+                        "expected_anchor": {
+                            "size": 0,
+                            "sha256": "0".repeat(64),
+                        },
+                    }),
+                    call_id: "call-edit-new".to_string(),
+                },
+            ]),
+            ScriptedResponse::text("草稿"),
+            // COUNTEREXAMPLE_GATE 终答前一次反例自查注入占一轮模型回答。
+            ScriptedResponse::text("草稿（反例自查）。"),
+            ScriptedResponse::text("终答"),
+        ]));
+        let controller = stage_c_controller(fake);
+        controller
+            .run_turn(
+                &host,
+                "改文件",
+                "RUN-ANCHOR-OK",
+                MANIFEST,
+                0,
+                None,
+                None,
+                None,
+            )
+            .await
+            .unwrap();
+
+        let events = events(&dir);
+        let completed: Vec<&RunEvent> = events
+            .iter()
+            .filter(|e| e.event_type == EventType::ToolCompleted)
+            .filter(|e| e.payload.get("tool").and_then(|t| t.as_str()) == Some("search_replace"))
+            .collect();
+        assert_eq!(completed.len(), 3, "{completed:?}");
+        assert!(
+            completed
+                .iter()
+                .all(|e| e.payload["exit_code"].as_u64() == Some(0)),
+            "{completed:?}"
+        );
+        assert!(
+            !events.iter().any(|e| {
+                e.event_type == EventType::ToolCompleted
+                    && e.payload.get("error").and_then(|v| v.as_str())
+                        == Some("content_anchor_mismatch")
+            }),
+            "no anchor refusal on the matching path"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// P1-2 (审查处理): 三个退役 console 订单工具（blackboard_action_write /
+    /// console_step_done / console_return_to_console）在调用面被机械拒绝——
+    /// 零 ToolStarted、零 console_order_written 事件、动作栏无订单残留、
+    /// run 正常完成。
+    #[tokio::test]
+    async fn retired_console_tools_refused_with_zero_side_effects() {
+        let dir = test_dir();
+        let journal = JournalRecorder::new(dir.clone());
+        let host = TestHost {
+            journal,
+            tool_result: Some(ok_result()),
+        };
+        let fake = Arc::new(FakeProvider::new(vec![
+            ScriptedResponse::tool_calls(vec![plan_write_call("call-plan-1", valid_plan_json())]),
+            ScriptedResponse::tool_calls(vec![
+                ToolCall {
+                    name: "blackboard_action_write".to_string(),
+                    arguments: serde_json::json!({
+                        "action": "workspace.search_replace",
+                        "step_id": "s1",
+                        "arguments": {"file_path": "a.txt", "old_string": "v1", "new_string": "v2"},
+                    }),
+                    call_id: "call-retired-1".to_string(),
+                },
+                ToolCall {
+                    name: "console_step_done".to_string(),
+                    arguments: serde_json::json!({
+                        "step_id": "s1",
+                        "transition_id": "t1",
+                        "trace_id": "tr1",
+                    }),
+                    call_id: "call-retired-2".to_string(),
+                },
+                ToolCall {
+                    name: "console_return_to_console".to_string(),
+                    arguments: serde_json::json!({}),
+                    call_id: "call-retired-3".to_string(),
+                },
+            ]),
+            ScriptedResponse::text("草稿"),
+            ScriptedResponse::text("终答"),
+        ]));
+        let controller = stage_c_controller(fake);
+        controller
+            .run_turn(
+                &host,
+                "幻觉调用退役工具",
+                "RUN-RETIRED",
+                MANIFEST,
+                0,
+                None,
+                None,
+                None,
+            )
+            .await
+            .unwrap();
+
+        let events = events(&dir);
+        for name in [
+            "blackboard_action_write",
+            "console_step_done",
+            "console_return_to_console",
+        ] {
+            let completed: Vec<&RunEvent> = events
+                .iter()
+                .filter(|e| e.event_type == EventType::ToolCompleted)
+                .filter(|e| e.payload.get("tool").and_then(|t| t.as_str()) == Some(name))
+                .collect();
+            assert_eq!(completed.len(), 1, "{name}: {completed:?}");
+            assert_eq!(completed[0].payload["exit_code"].as_u64(), Some(1));
+            assert_eq!(
+                completed[0].payload["error"].as_str(),
+                Some("retired_tool_denied"),
+                "{name}"
+            );
+            assert!(
+                !events.iter().any(|e| e.event_type == EventType::ToolStarted
+                    && e.payload.get("tool").and_then(|t| t.as_str()) == Some(name)),
+                "{name} must never reach ToolStarted"
+            );
+        }
+        // 零订单残留：没有 console_order_written 事件，动作栏无 pending 订单。
+        assert!(
+            !events
+                .iter()
+                .any(|e| e.event_type == EventType::ConsoleOrderWritten),
+            "retired tools must not produce console orders"
+        );
+        let r = controller.blackboard().read();
+        assert!(r.actions.order.is_none(), "{:?}", r.actions.order);
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// THIN-HARNESS-REDESIGN R1 (§4.1 边界项): 边界三项
+    /// `todo_write` / `update_goal` / `compaction_whitelist_add` 调用一律
+    /// 结构化拒绝（sealed_tool_denied、无 ToolStarted、零副作用——
+    /// whitelist 不落盘、goal 不变）。
+    #[tokio::test]
+    async fn sealed_boundary_tools_refused_with_zero_side_effects() {
+        let dir = test_dir();
+        let journal = JournalRecorder::new(dir.clone());
+        let host = TestHost {
+            journal,
+            tool_result: Some(ok_result()),
+        };
+        let fake = Arc::new(FakeProvider::new(vec![
+            ScriptedResponse::tool_calls(vec![
+                ToolCall {
+                    name: "todo_write".to_string(),
+                    arguments: serde_json::json!({"todos": [{"content": "x"}]}),
+                    call_id: "call-sealed-1".to_string(),
+                },
+                ToolCall {
+                    name: "update_goal".to_string(),
+                    arguments: serde_json::json!({"goal": "g"}),
+                    call_id: "call-sealed-2".to_string(),
+                },
+                ToolCall {
+                    name: "compaction_whitelist_add".to_string(),
+                    arguments: serde_json::json!({"content": "事实"}),
+                    call_id: "call-sealed-3".to_string(),
+                },
+            ]),
+            ScriptedResponse::text("草稿"),
+            ScriptedResponse::text("终答"),
+        ]));
+        // R1 审查处理：封存窄门与 console/plan 面无关——用普通控制器
+        // （无 plan_first/console）保持测试聚焦于 sealed_tool_denied。
+        let controller = AgentLoopController::with_gateway(fake);
+        controller
+            .run_turn(
+                &host,
+                "幻觉调用封存工具",
+                "RUN-SEALED",
+                MANIFEST,
+                0,
+                None,
+                None,
+                None,
+            )
+            .await
+            .unwrap();
+
+        let events = events(&dir);
+        for name in ["todo_write", "update_goal", "compaction_whitelist_add"] {
+            let completed: Vec<&RunEvent> = events
+                .iter()
+                .filter(|e| e.event_type == EventType::ToolCompleted)
+                .filter(|e| e.payload.get("tool").and_then(|t| t.as_str()) == Some(name))
+                .collect();
+            assert_eq!(completed.len(), 1, "{name}: {completed:?}");
+            assert_eq!(completed[0].payload["exit_code"].as_u64(), Some(1));
+            assert_eq!(
+                completed[0].payload["error"].as_str(),
+                Some("sealed_tool_denied"),
+                "{name}"
+            );
+            assert!(
+                !events.iter().any(|e| e.event_type == EventType::ToolStarted
+                    && e.payload.get("tool").and_then(|t| t.as_str()) == Some(name)),
+                "{name} must never reach ToolStarted"
+            );
+        }
+        // 零副作用：whitelist 空、goal digest 未变（仍为任务 prompt 摘要）。
+        let w = controller.whitelist.lock().unwrap();
+        assert!(w.is_empty(), "sealed whitelist write must not land: {w:?}");
+        drop(w);
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// MECHANICAL-AUDIT-LAYER (2026-08-24, ADR-0010 §14.39 / 设计 §2.1)：
+    /// 第 2 轮起 direct 执行面——首轮仍只暴露 blackboard_read+plan_write；
+    /// 第 2 轮起退役 console 订单控制工具（blackboard_action_write /
+    /// console_step_done / console_return_to_console 不再声明），工作工具
+    /// 按探针面直接暴露（本 TestHost 探针仅完整链工具可见，见投影单测）。
+    #[tokio::test]
+    async fn direct_surface_retires_console_order_tools() {
+        let dir = test_dir();
+        let host = TestHost {
+            journal: JournalRecorder::new(dir.clone()),
+            tool_result: Some(ToolResult {
+                output: "ok".to_string(),
+                exit_code: Some(0),
+                output_encoding: None,
+                structured: None,
+                ..Default::default()
+            }),
+        };
+        let fake = Arc::new(FakeProvider::new(vec![
+            ScriptedResponse::tool_calls(vec![plan_write_call("call-plan-1", valid_plan_json())]),
+            ScriptedResponse::text("完成"),
+            ScriptedResponse::text("完成"),
+        ]));
+        let gateway: Arc<dyn ModelGateway> = fake.clone();
+        let controller = stage_c_controller(gateway);
+        controller
+            .run_turn(
+                &host,
+                "修复缓存回归",
+                "RUN-CSD",
+                MANIFEST,
+                0,
+                None,
+                None,
+                None,
+            )
+            .await
+            .unwrap();
+
+        let received = fake.received_requests();
+        let first_tools: Vec<String> = received[0].tools.iter().map(|t| t.name.clone()).collect();
+        assert_eq!(
+            first_tools,
+            vec!["blackboard_read", "plan_write"],
+            "first round must expose only the plan-round surface"
+        );
+        let direct_tools: Vec<String> = received[1].tools.iter().map(|t| t.name.clone()).collect();
+        assert!(
+            direct_tools.iter().any(|t| t == "submit"),
+            "submit retained on the direct surface: {direct_tools:?}"
+        );
+        for tool in [
+            "blackboard_action_write",
+            "console_step_done",
+            "console_return_to_console",
+        ] {
+            assert!(
+                !direct_tools.iter().any(|t| t == tool),
+                "retired console order tool {tool} must not be declared: {direct_tools:?}"
+            );
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// 设计 §2.2 + 审查处理 O2：terminal 判定按末步 id（{deliver, submit}）
+    /// ——旧/恢复计划（末步为普通工作 id）保持 S1 前语义：普通订单 receipt
+    /// 仍自动置末步 done，不被隐式困在递交门。
+    #[test]
+    fn legacy_plan_last_step_keeps_auto_advance_on_order_receipt() {
+        let controller = stage_c_controller(Arc::new(FakeProvider::new(Vec::new())));
+        {
+            let mut w = controller.blackboard().write();
+            w.plan.plan_id = Some("plan-legacy".to_string());
+            w.plan.plan_epoch = 1;
+            w.plan.steps.push(crate::blackboard::PlanStep {
+                id: "s1".to_string(),
+                goal: "g".to_string(),
+                actions: Vec::new(),
+                acceptance: "a".to_string(),
+                evidence: Vec::new(),
+                status: crate::blackboard::StepStatus::Done(crate::blackboard::DoneEvidence {
+                    receipt_id: "ORD-1".to_string(),
+                    direct: None,
+                }),
+            });
+            w.plan.steps.push(crate::blackboard::PlanStep {
+                id: "s2".to_string(),
+                goal: "g2".to_string(),
+                actions: Vec::new(),
+                acceptance: "a".to_string(),
+                evidence: Vec::new(),
+                status: crate::blackboard::StepStatus::InProgress,
+            });
+        }
+        let order = crate::blackboard::ActionOrder {
+            order_id: "ORD-LEGACY".to_string(),
+            action: "workspace.read_file".to_string(),
+            arguments: serde_json::json!({"target_file": "a.txt"}),
+            target: None,
+            step_id: Some("s2".to_string()),
+            round: 0,
+            plan_epoch: 1,
+            run_id: "RUN-LEGACY".to_string(),
+        };
+        controller.record_console_receipt(&order, true, "s2", None, true);
+        let r = controller.blackboard().read();
+        assert!(
+            r.plan.steps[1].status.is_done(),
+            "legacy last step must auto-advance on an ordinary receipt: {:?}",
+            r.plan.steps[1].status
+        );
+    }
+}
