@@ -9088,6 +9088,9 @@ impl AgentLoopController {
                     .await;
             }
             let fixed_command: Option<String> = Some(runner.command.join(" "));
+            // THIN-HARNESS-REDESIGN-V2 §9.6 (2026-08-29 S5-1): 事件面
+            // tool_completed 补 wall_ms（ToolStarted → ToolCompleted 墙钟）。
+            let wall_started = std::time::Instant::now();
             let mut started = serde_json::json!({
                 "tool": tc.name,
                 "call_id": tc.call_id,
@@ -9134,6 +9137,7 @@ impl AgentLoopController {
                             "call_id": tc.call_id,
                             "status": "error",
                             "error": msg,
+                            "wall_ms": wall_started.elapsed().as_millis() as u64,
                         });
                         stamp_direct(&mut payload);
                         writer.record(EventType::ToolCompleted, payload).await?;
@@ -9169,6 +9173,7 @@ impl AgentLoopController {
                 "tool": tc.name,
                 "call_id": tc.call_id,
                 "exit_code": result.exit_code,
+                "wall_ms": wall_started.elapsed().as_millis() as u64,
                 "full_output_path": result.full_output_path,
                 // RT-003 (2026-08-11): workspace changes the test
                 // run caused (capped list; schema extended in
@@ -9306,6 +9311,11 @@ impl AgentLoopController {
         }
 
         // Execute.
+        // THIN-HARNESS-REDESIGN-V2 §9.6 (2026-08-29 S5-1): 事件面
+        // tool_completed 补 wall_ms（ToolStarted → ToolCompleted 墙钟）
+        // 与 timed_out 标记——S4 失败画像据此直接读 per-call 时长/超时
+        // 事实（web_search 单次最高 1365s 的时间黑洞可审计）。
+        let wall_started = std::time::Instant::now();
         let mut started = serde_json::json!({
             "tool": tc.name,
             "call_id": tc.call_id,
@@ -10594,7 +10604,11 @@ impl AgentLoopController {
                     "tool": tc.name,
                     "call_id": tc.call_id,
                     "exit_code": res.exit_code,
+                    "wall_ms": wall_started.elapsed().as_millis() as u64,
                 });
+                if res.timed_out {
+                    completed_payload["timed_out"] = serde_json::json!(true);
+                }
                 if !edits_payload.is_empty() {
                     completed_payload["edits"] = serde_json::Value::Array(edits_payload);
                 }
@@ -10682,13 +10696,18 @@ impl AgentLoopController {
                 )
             }
             Err(e) => {
+                let timed_out = matches!(e, ToolError::Timeout(_));
                 let mut err_payload = {
                     let mut payload = serde_json::json!({
                         "tool": tc.name,
                         "call_id": tc.call_id,
                         "status": "error",
                         "error": e.to_string(),
+                        "wall_ms": wall_started.elapsed().as_millis() as u64,
                     });
+                    if timed_out {
+                        payload["timed_out"] = serde_json::json!(true);
+                    }
                     // FUS-RETRIEVAL-MECH P0-B step 2/4 (2026-08-14):
                     // a candidate-counted host error still consumed
                     // its candidate — carry the count/cap for audit.
@@ -10729,9 +10748,9 @@ impl AgentLoopController {
                 (
                     ToolResult {
                         output: match &e {
-                            ToolError::Timeout(reason) => format!(
-                                "tool TIMED OUT and was killed — it did not complete: {reason}"
-                            ),
+                            ToolError::Timeout(reason) => {
+                                format!("tool TIMED OUT — it did not complete: {reason}")
+                            }
                             _ => format!("tool error: {e}"),
                         },
                         exit_code: Some(1),
@@ -15610,8 +15629,10 @@ mod tests {
             completed[0]
         );
 
-        // The model sees an explicit "killed" message answering the call
-        // (round-2 request carries the tool reply).
+        // The model sees an explicit "TIMED OUT" message answering the
+        // call (round-2 request carries the tool reply). 2026-08-29 S5-1:
+        // 文案改为中立「TIMED OUT — it did not complete」（宿主杀进程与
+        // 工具侧客户端超时共用，后者无进程可杀）。
         let received = fake.received_requests();
         assert!(received.len() >= 2, "{received:?}");
         let round2 = &received[1].messages;
@@ -15623,8 +15644,8 @@ mod tests {
             timeout_msg
                 .unwrap()
                 .content
-                .contains("tool TIMED OUT and was killed"),
-            "explicit killed message: {}",
+                .contains("tool TIMED OUT — it did not complete"),
+            "explicit timeout message: {}",
             timeout_msg.unwrap().content
         );
 
@@ -23384,6 +23405,102 @@ mod tests {
         // 反例门轮 + 最终答案轮再喂 2。
         assert_eq!(orientation.main.completed_rounds, 2);
         assert_eq!(events.last().unwrap().event_type, EventType::RunFinished);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// THIN-HARNESS-REDESIGN-V2 §9.2 (2026-08-29 S5-1 修复 B 回归):
+    /// orientation 软门触发轮的模型可见工具栏保持常规投影——实机
+    /// make-doom / gcode-to-text / video-processing 触发轮工具面为空
+    /// （`pending_checkpoint.is_some() → Vec::new()`），模型只能把 XML
+    /// 工具调用写成纯文本，浪费一轮真实工作；修复后触发轮请求必须携带
+    /// 完整工具列表（含 read_file），模型可回答后继续、也可直接动作。
+    #[tokio::test]
+    async fn orientation_trigger_round_keeps_tool_face_projected() {
+        let dir = test_dir();
+        let journal = JournalRecorder::new(dir.clone());
+        let host = TestHost {
+            journal,
+            tool_result: Some(ToolResult {
+                output: "ok".to_string(),
+                exit_code: Some(0),
+                output_encoding: None,
+                structured: None,
+                ..Default::default()
+            }),
+        };
+        let mut script = Vec::new();
+        for i in 0..7 {
+            script.push(ScriptedResponse::tool_calls(vec![tool_call(
+                "read_file",
+                &format!("call-{i}"),
+            )]));
+        }
+        // 触发轮：工具调用照常执行（软门不禁工具）。
+        script.push(ScriptedResponse::tool_calls(vec![tool_call(
+            "read_file",
+            "call-7",
+        )]));
+        script.push(ScriptedResponse::text("完成"));
+        script.push(ScriptedResponse::text("完成"));
+        let fake = Arc::new(FakeProvider::new(script));
+        let controller = AgentLoopController::with_gateway(fake.clone());
+        let mut orientation =
+            crate::orientation::OrientationSessionState::new_with_threshold("sess-tplface", 7);
+        controller
+            .run_turn(
+                &host,
+                "任务",
+                "RUN-TPLF",
+                MANIFEST,
+                0,
+                None,
+                Some(&mut orientation),
+                None,
+            )
+            .await
+            .unwrap();
+
+        // 触发轮 = 消息含 [ORIENTATION 注入块的请求；其工具栏必须与
+        // 前一普通工具轮完全一致（常规投影），不得因 pending checkpoint
+        // 置空——实机工具面为空时模型只能把 XML 工具调用写成纯文本。
+        let requests = fake.received_requests();
+        let trigger_idx = requests
+            .iter()
+            .position(|req| {
+                req.messages
+                    .iter()
+                    .any(|m| m.role == Role::User && m.content.starts_with("[ORIENTATION"))
+            })
+            .unwrap_or_else(|| panic!("no trigger-round request found: {requests:?}"));
+        assert!(
+            trigger_idx > 0,
+            "a normal tool round must precede the trigger"
+        );
+        let trigger = &requests[trigger_idx];
+        let prior = &requests[trigger_idx - 1];
+        assert!(
+            !trigger.tools.is_empty(),
+            "orientation trigger round must keep the tool face projected: {:?}",
+            trigger.tools.iter().map(|t| &t.name).collect::<Vec<_>>()
+        );
+        assert!(
+            trigger.tools.len() == prior.tools.len()
+                && trigger.tools.iter().all(|t| {
+                    prior.tools.iter().any(|p| {
+                        p.name == t.name
+                            && p.description == t.description
+                            && p.parameters == t.parameters
+                    })
+                }),
+            "trigger-round tool face must equal the prior normal round's projection: \
+             prior={:?} trigger={:?}",
+            prior.tools.iter().map(|t| &t.name).collect::<Vec<_>>(),
+            trigger.tools.iter().map(|t| &t.name).collect::<Vec<_>>()
+        );
+        assert_eq!(
+            events(&dir).last().unwrap().event_type,
+            EventType::RunFinished
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 

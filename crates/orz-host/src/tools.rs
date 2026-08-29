@@ -302,8 +302,16 @@ impl orz_loop::host::ToolRegistry for ToolsetRegistry {
 
 /// Map a `xai_tool_runtime::ToolError` to the orz-loop contract error.
 pub fn map_tool_error(err: &xai_tool_runtime::ToolError) -> orz_loop::host::ToolError {
-    // The runtime error carries a name/message; surface it as execution failure.
-    orz_loop::host::ToolError::ExecutionFailed(err.to_string())
+    // THIN-HARNESS-REDESIGN-V2 §9.6 (2026-08-29 S5-1): 保留工具侧的
+    // Timeout 类别——web_search 客户端超时（120s）返回
+    // `ToolErrorKind::Timeout`，宿主不得降级为 ExecutionFailed（否则
+    // 控制器 timed_out 标记丢失、模型看不到「TIMED OUT」语义）。
+    match err.kind {
+        xai_tool_runtime::ToolErrorKind::Timeout => {
+            orz_loop::host::ToolError::Timeout(err.to_string())
+        }
+        _ => orz_loop::host::ToolError::ExecutionFailed(err.to_string()),
+    }
 }
 
 /// 2026-08-08 blackboard-partition review closure: derive the exit-code
@@ -359,6 +367,36 @@ mod tests {
         fn read(&self) -> Result<String, crate::credentials::CredentialError> {
             self.result.clone()
         }
+    }
+
+    /// THIN-HARNESS-REDESIGN-V2 §9.6 (2026-08-29 S5-1): 工具侧 Timeout
+    /// 类别经宿主映射后必须保持为 `ToolError::Timeout`（控制器据此落
+    /// timed_out 标记与「TIMED OUT」模型语义）；其余类别保持
+    /// ExecutionFailed。
+    #[test]
+    fn map_tool_error_preserves_timeout_kind() {
+        let timeout = xai_tool_runtime::ToolError::timeout(
+            xai_tool_runtime::ToolId::new("web_search").expect("valid"),
+            "web_search timed out after 120s",
+        );
+        assert!(
+            matches!(
+                map_tool_error(&timeout),
+                orz_loop::host::ToolError::Timeout(_)
+            ),
+            "tool-side Timeout must map to host Timeout"
+        );
+        let exec = xai_tool_runtime::ToolError::execution(
+            xai_tool_runtime::ToolId::new("web_search").expect("valid"),
+            "boom",
+        );
+        assert!(
+            matches!(
+                map_tool_error(&exec),
+                orz_loop::host::ToolError::ExecutionFailed(_)
+            ),
+            "execution errors keep the ExecutionFailed mapping"
+        );
     }
 
     /// 2026-08-11: the web_search config follows the credential reader —

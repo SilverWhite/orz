@@ -3,6 +3,7 @@ use crate::attribution::{SharedAttributionCallback, ToolConsumer};
 use crate::types::SharedApiKeyProvider;
 use async_openai::types::responses as rs;
 use reqwest::header::{AUTHORIZATION, CONTENT_TYPE, HeaderMap, HeaderName, HeaderValue};
+use std::time::Duration;
 /// A minimal, purpose-built HTTP client for calling the Responses API
 /// with web search capability.
 #[derive(Clone)]
@@ -65,6 +66,14 @@ impl WebSearchClient {
         }
         let _ = alpha_test_key;
         let http = reqwest::Client::builder()
+            // THIN-HARNESS-REDESIGN-V2 §9.6 (2026-08-29 S5-1): DeepSeek
+            // /responses 生成式搜索是服务端多轮（search → open →
+            // re-search），社区实测单次 15–70s 属正常、120s 为共识下限——
+            // 客户端总超时 120s + connect 10s；超时经
+            // `map_transport_error` 转为结构化 Timeout 错误，不再挂死
+            // （S4 实测单次最高 1365s 的时间黑洞）。
+            .timeout(Duration::from_secs(120))
+            .connect_timeout(Duration::from_secs(10))
             .default_headers(headers)
             .build()
             .map_err(|e| {
@@ -102,6 +111,29 @@ impl WebSearchClient {
     }
     /// Perform a web search query using the Responses API.
     ///
+    /// THIN-HARNESS-REDESIGN-V2 §9.6 (2026-08-29 S5-1): map a reqwest
+    /// transport failure to a structured tool error — client-side total /
+    /// connect timeouts surface as `ToolErrorKind::Timeout` with the
+    /// elapsed time and a concrete next step (retry with a narrower query /
+    /// read a known URL via web_fetch), so the model treats a slow
+    /// server-side search as a bounded retry decision instead of an opaque
+    /// HTTP failure (S4: web_search single calls hung up to 1365s).
+    fn map_transport_error(e: reqwest::Error) -> xai_tool_runtime::ToolError {
+        let tool_id = xai_tool_protocol::ToolId::new("web_search").expect("valid");
+        if e.is_timeout() {
+            xai_tool_runtime::ToolError::timeout(
+                tool_id,
+                format!(
+                    "web_search timed out — the Responses API server-side search \
+                     did not complete within the client budget (120s). Retry with \
+                     a narrower query, or read a known URL directly with web_fetch."
+                ),
+            )
+        } else {
+            xai_tool_runtime::ToolError::execution(tool_id, format!("HTTP request failed: {e}"))
+        }
+    }
+
     /// Returns `(content, citations)` where content is the assistant's text
     /// and citations are unique URLs found in the response annotations.
     pub async fn search(
@@ -139,12 +171,7 @@ impl WebSearchClient {
         if let Some(ref key) = sent_bearer {
             req = req.header(AUTHORIZATION, format!("Bearer {key}"));
         }
-        let response = req.send().await.map_err(|e| {
-            xai_tool_runtime::ToolError::execution(
-                xai_tool_protocol::ToolId::new("web_search").expect("valid"),
-                format!("HTTP request failed: {e}"),
-            )
-        })?;
+        let response = req.send().await.map_err(Self::map_transport_error)?;
         let status = response.status();
         if status == reqwest::StatusCode::UNAUTHORIZED {
             self.record_401_attribution(sent_bearer.as_deref());
@@ -170,12 +197,7 @@ impl WebSearchClient {
                 format!("Responses API returned {status}: {body}"),
             ));
         }
-        let bytes = response.bytes().await.map_err(|e| {
-            xai_tool_runtime::ToolError::execution(
-                xai_tool_protocol::ToolId::new("web_search").expect("valid"),
-                format!("Failed to read response body: {e}"),
-            )
-        })?;
+        let bytes = response.bytes().await.map_err(Self::map_transport_error)?;
         // 2026-08-11 (direction correction): parsed as raw JSON — the
         // typed `rs::Response` shape does not match the DeepSeek backend
         // (its `web_search_call` search action carries `queries`, while
@@ -238,12 +260,7 @@ impl WebSearchClient {
         if let Some(ref key) = sent_bearer {
             req = req.header(AUTHORIZATION, format!("Bearer {key}"));
         }
-        let response = req.send().await.map_err(|e| {
-            xai_tool_runtime::ToolError::execution(
-                xai_tool_protocol::ToolId::new("web_search").expect("valid"),
-                format!("HTTP request failed: {e}"),
-            )
-        })?;
+        let response = req.send().await.map_err(Self::map_transport_error)?;
         let status = response.status();
         if status == reqwest::StatusCode::UNAUTHORIZED {
             self.record_401_attribution(sent_bearer.as_deref());
@@ -269,12 +286,7 @@ impl WebSearchClient {
                 format!("Responses API returned {status}: {body}"),
             ));
         }
-        let bytes = response.bytes().await.map_err(|e| {
-            xai_tool_runtime::ToolError::execution(
-                xai_tool_protocol::ToolId::new("web_search").expect("valid"),
-                format!("Failed to read response body: {e}"),
-            )
-        })?;
+        let bytes = response.bytes().await.map_err(Self::map_transport_error)?;
         // Raw-JSON parse — same rationale as [`Self::search`].
         let value: serde_json::Value = serde_json::from_slice(&bytes).map_err(|e| {
             xai_tool_runtime::ToolError::execution(

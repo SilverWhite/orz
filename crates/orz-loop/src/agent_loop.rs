@@ -1147,10 +1147,16 @@ pub(crate) async fn run_agent_loop(
         // P0-C S3 (2026-08-15): 探针快照提升到循环顶部作用域——同一快照
         // 同时驱动模型可见工具投影与注册板块投影（Profile/Bundle ∩ 探针
         // 完整集），避免两处各探一次导致投影不一致。
+        // THIN-HARNESS-REDESIGN-V2 §9.2 (2026-08-29 S5-1 修复 B):
+        // orientation 软门触发轮不禁工具——探针与工具栏投影按常规轮处理；
+        // 仅 DC 强制模板轮 / console 询问轮保持无工具暂停（§14.16）。
+        let pending_keeps_tools = pending_checkpoint
+            .as_ref()
+            .is_some_and(|p| matches!(p, PendingCheckpoint::Orientation { .. }));
         let probe_snapshot: Option<crate::tool_probe::ToolProbeSnapshot> =
-            if pending_checkpoint.is_some() {
-                // §14.16: a checkpoint round is a tool-free pause — no
-                // registry projection and no probe.
+            if pending_checkpoint.is_some() && !pending_keeps_tools {
+                // §14.16: a DC / console-inquiry checkpoint round is a
+                // tool-free pause — no registry projection and no probe.
                 None
             } else if profile.probe_work_tools {
                 let probe_context = crate::tool_probe::ProbeContext {
@@ -1186,7 +1192,13 @@ pub(crate) async fn run_agent_loop(
             } else {
                 None
             };
-        let current_tool_defs: Vec<ToolDef> = if pending_checkpoint.is_some() {
+        let current_tool_defs: Vec<ToolDef> = if pending_checkpoint.is_some()
+            && !pending_keeps_tools
+        {
+            // §14.16: DC / console-inquiry checkpoint rounds expose no
+            // tools. The orientation soft gate (§9.2) keeps the normal
+            // projection — the model may answer and continue, or call
+            // tools directly on the trigger round.
             Vec::new()
         } else if plan_gate.is_some() {
             // 首轮计划轮面：只暴露黑板读取 + plan_write（设计 §2.3/§3）。
@@ -1217,7 +1229,8 @@ pub(crate) async fn run_agent_loop(
         // 注册板块」单一路径——与模型可见工具投影共用同一探针源（工具栏
         // 绑定黑板模型栏）；checkpoint 轮/无探针轮次不改写板块，保留上
         // 一轮探针过滤后的内容（替代 bundle-only 静态刷新中间态）。
-        if profile.role == AgentRole::Main && pending_checkpoint.is_none() {
+        if profile.role == AgentRole::Main && (pending_checkpoint.is_none() || pending_keeps_tools)
+        {
             controller.sync_console_registrations();
         }
 

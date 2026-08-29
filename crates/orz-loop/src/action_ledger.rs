@@ -542,12 +542,16 @@ pub fn build_collapsed_request(messages: &[Message], keep_recent_rounds: usize) 
 /// FUS-LEDGER-FOLD-BRIDGE (2026-08-19, ADR-0010 §14.32 / 设计 §3.1/§3.3):
 /// the bridge is the newest complete rounds within the `budget_estimate`
 /// (`estimate_messages_tokens` 口径) — `reasoning_content` is stripped from
-/// every bridge message (思维链不进桥; 审计仅保留计数); when the whole
-/// bridge still exceeds the budget, content is truncated oldest→newest
-/// (tool replies keep their TAIL + 「…（前略）」+ 指针行, assistant final
-/// reply text follows the existing `truncate_chars` head-199+… discipline,
-/// declarations keep visible content + tool_calls complete). Messages are
-/// never removed and rounds are never split, so the pairing invariant holds.
+/// bridge messages (思维链不进桥; 审计仅保留计数) except for **plain-text**
+/// assistant messages (no `tool_calls`), whose `reasoning_content` is kept
+/// (THIN-HARNESS-REDESIGN-V2 §9.6, 2026-08-29 S5-1 修复 A — DeepSeek
+/// /responses requires non-empty reasoning on assistant messages to be
+/// passed back verbatim); when the whole bridge still exceeds the budget,
+/// content is truncated oldest→newest (tool replies keep their TAIL +
+/// 「…（前略）」+ 指针行, assistant final reply text follows the existing
+/// `truncate_chars` head-199+… discipline, declarations keep visible
+/// content + tool_calls complete). Messages are never removed and rounds
+/// are never split, so the pairing invariant holds.
 ///
 /// The source `messages` slice is never modified — the journal/sidecar
 /// keeps the complete tool records (audit dual-track unchanged).
@@ -652,15 +656,21 @@ pub fn build_request_view(
 }
 
 /// FUS-LEDGER-FOLD-BRIDGE (2026-08-19, ADR-0010 §14.32 / 设计 §3.1/§3.5):
-/// 桥视图变换——剔除 `reasoning_content`（不修改 `messages` 本身）；整桥
-/// 估计超预算时从旧到新逐消息内容截断直至 ≤ 预算。不删消息、不拆轮：
-/// 任何声明的 call_id 都保留其工具回复在场（配对不变量）。
+/// 桥视图变换——剔除 `reasoning_content`（不修改 `messages` 本身），仅
+/// **纯文本** assistant 消息（无 `tool_calls`）保留其 `reasoning_content`
+/// （THIN-HARNESS-REDESIGN-V2 §9.6, 2026-08-29 S5-1 修复 A——DeepSeek
+/// /responses 对非空 reasoning 的 assistant 消息要求原样回传，orientation
+/// 纯文本回答被 fold 落入桥内末条剥除 → 400 的根因）；整桥估计超预算时
+/// 从旧到新逐消息内容截断直至 ≤ 预算。不删消息、不拆轮：任何声明的
+/// call_id 都保留其工具回复在场（配对不变量）。
 fn build_bridge(bridge: &[Message], budget_estimate: u64) -> Vec<Message> {
     let mut out: Vec<Message> = bridge
         .iter()
         .cloned()
         .map(|mut m| {
-            m.reasoning_content = None;
+            if !(m.role == Role::Assistant && m.tool_calls.is_empty()) {
+                m.reasoning_content = None;
+            }
             m
         })
         .collect();
@@ -2065,7 +2075,77 @@ mod tests {
                 m
             })
             .collect();
-        assert_eq!(&view[2..], &expected[..], "预算内桥 = 原文（仅剔除思维链）");
+        assert_eq!(
+            &view[2..],
+            &expected[..],
+            "预算内桥 = 原文（仅剔除声明消息思维链）"
+        );
+    }
+
+    /// THIN-HARNESS-REDESIGN-V2 §9.6 (2026-08-29 S5-1 修复 A 回归):
+    /// 桥内**纯文本** assistant 消息（无 tool_calls）保留
+    /// `reasoning_content`——DeepSeek /responses 要求非空 reasoning 原样
+    /// 回传，orientation 纯文本回答被 fold 落入桥内末条剥除 → 400；
+    /// 声明消息（带 tool_calls）仍剔除（思维链不进桥）。
+    #[test]
+    fn bridge_keeps_plain_text_assistant_reasoning_but_strips_declarations() {
+        let mut messages = vec![msg(Role::User, "任务")];
+        // orientation 纯文本回答形态：reasoning 必须保留。
+        messages.push(Message {
+            role: Role::Assistant,
+            content: "当前在编译 make-doom，继续".to_string(),
+            tool_call_id: None,
+            tool_calls: Vec::new(),
+            reasoning_content: Some("方向检查思考链".to_string()),
+        });
+        // 声明消息（带 tool_calls）：reasoning 仍剔除。
+        messages.push(Message {
+            role: Role::Assistant,
+            content: String::new(),
+            tool_call_id: None,
+            tool_calls: vec![ToolCall {
+                name: "read_file".into(),
+                arguments: serde_json::json!({"path": "a.py"}),
+                call_id: "c1".into(),
+            }],
+            reasoning_content: Some("声明思考链".to_string()),
+        });
+        messages.push(Message {
+            role: Role::Tool,
+            content: "结果A".to_string(),
+            tool_call_id: Some("c1".to_string()),
+            tool_calls: Vec::new(),
+            reasoning_content: None,
+        });
+        let fold = LedgerFoldState {
+            fold_start: Some(1),
+            fold_cut: Some(1),
+            folded_ledger: Some("ledger".to_string()),
+            bridge_end: Some(messages.len()),
+        };
+        let view = build_request_view(&messages, &fold, 1_000_000);
+        let plain = view
+            .iter()
+            .find(|m| m.role == Role::Assistant && m.tool_calls.is_empty())
+            .expect("plain-text assistant message survives");
+        assert_eq!(
+            plain.reasoning_content.as_deref(),
+            Some("方向检查思考链"),
+            "桥内纯文本 assistant 消息必须保留 reasoning_content: {plain:?}"
+        );
+        let decl = view
+            .iter()
+            .find(|m| m.role == Role::Assistant && !m.tool_calls.is_empty())
+            .expect("declaration survives");
+        assert!(
+            decl.reasoning_content.is_none(),
+            "声明消息思维链仍必须从桥剔除: {decl:?}"
+        );
+        assert_eq!(
+            messages[1].reasoning_content.as_deref(),
+            Some("方向检查思考链"),
+            "视图变换不得修改 messages 本身"
+        );
     }
 
     #[test]
