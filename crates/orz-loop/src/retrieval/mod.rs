@@ -3,5 +3,6 @@
 //! only — behavior, events and journal chain unchanged.
 
 pub(crate) mod activation;
+pub(crate) mod dispatch;
 pub(crate) mod disposition;
 pub(crate) mod projection;
