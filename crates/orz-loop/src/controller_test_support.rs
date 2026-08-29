@@ -480,3 +480,37 @@ impl FullRegistry {
         .collect()
     }
 }
+
+/// A registry mixing work tools (former faces A/B/C) and a non-work
+/// tool — exercises the v0.2 single probe face list projection
+/// (P0-A-2): 探针完整集 ∩ 会话声明集 + 非工作工具，仅名称。
+pub(crate) struct MixedProjectionRegistry;
+impl ToolRegistry for MixedProjectionRegistry {
+    fn get(&self, name: &str) -> Option<ToolDef> {
+        Self::all().into_iter().find(|t| t.name == name)
+    }
+    fn list(&self) -> Vec<ToolDef> {
+        Self::all()
+    }
+}
+impl MixedProjectionRegistry {
+    fn all() -> Vec<ToolDef> {
+        [
+            "read_file",
+            "ask_user_question",
+            "run_tests",
+            "run_terminal_cmd",
+            "image_gen",
+            "bash",
+            "todo_write",
+            "blackboard_read",
+        ]
+        .iter()
+        .map(|n| ToolDef {
+            name: n.to_string(),
+            description: format!("tool {n}"),
+            parameters: serde_json::json!({}),
+        })
+        .collect()
+    }
+}
