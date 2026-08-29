@@ -791,3 +791,2658 @@ impl AgentLoopController {
         Ok(tool_result)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::blackboard::{ExternalRetSection, InternalRetSection};
+    use crate::controller::{
+        CandidateGateDecision, RETRIEVAL_RESULT_CHANNEL_ENV, commit_candidate,
+        parse_max_inject_tokens_per_round, parse_web_fetch_candidate_cap,
+    };
+    use crate::controller_test_support::*;
+    use crate::denial::PolicyFeedback;
+    use crate::gateway::fake::{FakeProvider, ScriptedResponse};
+    use orz_assurance::{EventTrack, JournalRecorder, RunEvent};
+
+    /// THIN-HARNESS-REDESIGN R2a 审查处理 (P2-1, 2026-08-27)：env 突变
+    /// 测试共享同一把锁——此前 `retrieval_dispatch_inline_channel_keeps_
+    /// full_text` 与 `retrieval_result_channel_env_parse_rules` 各自声明
+    /// 函数级 ENV_LOCK（互不排斥），且默认指针摘要测试无锁读取同一 env；
+    /// inline 测试持 env=inline 跨整个 async run_turn 期间，并行测试可能
+    /// 读到 inline 导致断言 flake。三个测试统一持本锁（读方也持锁排除
+    /// 突变窗口；std::sync::MutexGuard 跨 await 仅对 current_thread
+    /// 测试运行时成立，本文件 tokio::test 默认即此）。
+    static RETRIEVAL_CHANNEL_ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    /// THIN-HARNESS-REDESIGN R2a 审查处理 (P3-1): 恢复时重建检索分区——
+    /// sidecar 快照携带的 internal_ret / external_ret 经
+    /// `with_retrieval_partitions` 灌回全新黑板；`None` 保持空分区。
+    #[test]
+    fn with_retrieval_partitions_seeds_blackboard_sections() {
+        let internal = InternalRetSection {
+            project_docs: vec!["design.md".to_string()],
+            source_ledger: vec!["SRC-001 design.md".to_string()],
+            response: Some("恢复的检索完成".to_string()),
+        };
+        let external = ExternalRetSection {
+            web_sources: vec!["https://example.com/paper".to_string()],
+            source_ledger: vec!["SRC-002 https://example.com/paper".to_string()],
+            response: Some("恢复的网页检索完成".to_string()),
+        };
+        let controller = AgentLoopController::with_gateway(Arc::new(FakeProvider::new(Vec::new())))
+            .with_retrieval_partitions(Some(internal.clone()), Some(external.clone()));
+        let bb = controller.blackboard().read();
+        assert_eq!(bb.internal_ret.project_docs, internal.project_docs);
+        assert_eq!(bb.internal_ret.source_ledger, internal.source_ledger);
+        assert_eq!(bb.internal_ret.response, internal.response);
+        assert_eq!(bb.external_ret.web_sources, external.web_sources);
+        assert_eq!(bb.external_ret.source_ledger, external.source_ledger);
+        assert_eq!(bb.external_ret.response, external.response);
+
+        // None 不动分区（默认空）。
+        let controller = AgentLoopController::with_gateway(Arc::new(FakeProvider::new(Vec::new())))
+            .with_retrieval_partitions(None, None);
+        let bb = controller.blackboard().read();
+        assert!(bb.internal_ret.project_docs.is_empty());
+        assert!(bb.external_ret.web_sources.is_empty());
+    }
+
+    /// THIN-HARNESS-REDESIGN R2a (§4.4): 检索派发默认返回指针摘要——主对话
+    /// 只收到「已写入 blackboard 分区（N 来源 / M 结论）」指针，子代理全文
+    /// 只留在分区与 journal（留痕不变）。审查处理 (P2-1)：读方也持共享
+    /// env 锁，排除并行 env 突变测试的干扰窗口。
+    #[tokio::test]
+    async fn retrieval_dispatch_returns_pointer_summary_by_default() {
+        let _guard = RETRIEVAL_CHANNEL_ENV_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let dir = test_dir();
+        let journal = JournalRecorder::new(dir.clone());
+        let host = TestHost {
+            journal,
+            tool_result: None,
+        };
+        let fake = Arc::new(FakeProvider::new(vec![
+            ScriptedResponse::tool_calls(vec![tool_call("retrieve_project_docs", "call-1")]),
+            ScriptedResponse::text("[DOC] design.md\n检索完成"),
+            ScriptedResponse::text("完成"),
+            ScriptedResponse::text("完成"),
+        ]));
+        let gateway: Arc<dyn ModelGateway> = fake.clone();
+        let controller = with_retrieval_enabled(AgentLoopController::with_gateway(gateway));
+        controller
+            .run_turn(
+                &host,
+                "查找项目文档",
+                "RUN-PTR",
+                MANIFEST,
+                0,
+                None,
+                None,
+                None,
+            )
+            .await
+            .unwrap();
+
+        let received = fake.received_requests();
+        let round = received
+            .iter()
+            .find(|r| {
+                r.messages
+                    .iter()
+                    .any(|m| m.tool_call_id.as_deref() == Some("call-1"))
+            })
+            .expect("call-1 round");
+        let reply = round
+            .messages
+            .iter()
+            .find(|m| m.tool_call_id.as_deref() == Some("call-1"))
+            .expect("retrieval dispatch tool result message");
+        assert!(
+            reply.content.contains("已写入 blackboard internal_ret")
+                && reply.content.contains("来源")
+                && reply
+                    .content
+                    .contains("blackboard_read section=internal_ret"),
+            "pointer summary reply: {:?}",
+            round.messages
+        );
+        assert!(
+            !reply.content.contains("检索完成"),
+            "full subagent text must not reach the main conversation: {:?}",
+            round.messages
+        );
+        // 分区仍保留全文（留痕不变）。
+        let r = controller.blackboard().read();
+        assert!(
+            r.internal_ret
+                .response
+                .as_deref()
+                .unwrap()
+                .contains("检索完成"),
+            "section keeps the full text"
+        );
+        assert_eq!(r.internal_ret.project_docs, vec!["design.md"]);
+        // P2-2: 分区 ledger = 结构化投影（SRC 编号 + 标题），非空。
+        assert_eq!(
+            r.internal_ret.source_ledger,
+            vec!["SRC-001 design.md"],
+            "partition ledger is the structured projection"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// THIN-HARNESS-REDESIGN R2a 审查处理 (P2-3)：每次派发全量覆盖分区
+    /// ——第二次派发替换（而非累积）response / entries / ledger，指针
+    /// 摘要计数与分区内容一一对应。
+    #[tokio::test]
+    async fn retrieval_dispatch_overwrites_partition_on_each_dispatch() {
+        let _guard = RETRIEVAL_CHANNEL_ENV_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let dir = test_dir();
+        let journal = JournalRecorder::new(dir.clone());
+        let host = TestHost {
+            journal,
+            tool_result: None,
+        };
+        let fake = Arc::new(FakeProvider::new(vec![
+            ScriptedResponse::tool_calls(vec![tool_call("retrieve_project_docs", "call-1")]),
+            ScriptedResponse::text("[DOC] old.md\n第一轮检索完成"),
+            ScriptedResponse::tool_calls(vec![tool_call("retrieve_project_docs", "call-2")]),
+            ScriptedResponse::text("[DOC] new.md\n第二轮检索完成"),
+            ScriptedResponse::text("完成"),
+            ScriptedResponse::text("完成"),
+        ]));
+        let gateway: Arc<dyn ModelGateway> = fake.clone();
+        let controller = with_retrieval_enabled(AgentLoopController::with_gateway(gateway));
+        controller
+            .run_turn(
+                &host,
+                "两次查找项目文档",
+                "RUN-PTW",
+                MANIFEST,
+                0,
+                None,
+                None,
+                None,
+            )
+            .await
+            .unwrap();
+
+        let r = controller.blackboard().read();
+        assert_eq!(
+            r.internal_ret.project_docs,
+            vec!["new.md"],
+            "second dispatch replaces entries"
+        );
+        assert_eq!(
+            r.internal_ret.source_ledger,
+            vec!["SRC-002 new.md"],
+            "second dispatch replaces the ledger"
+        );
+        assert_eq!(
+            r.internal_ret.response.as_deref(),
+            Some("[DOC] new.md\n第二轮检索完成"),
+            "second dispatch replaces the response (全文保留，含 [DOC] 行)"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// THIN-HARNESS-REDESIGN R2a (§4.4): `ORZ_RETRIEVAL_RESULT_CHANNEL=inline`
+    /// 保留旧行为——子代理全文回传主对话（A/B 与回退通道）。
+    #[tokio::test]
+    async fn retrieval_dispatch_inline_channel_keeps_full_text() {
+        // P2-1: 共享锁（模块级 RETRIEVAL_CHANNEL_ENV_LOCK），与解析规则
+        // 测试及默认指针摘要测试互斥；还原放在断言前避免 panic 泄漏。
+        let _guard = RETRIEVAL_CHANNEL_ENV_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let original = std::env::var(RETRIEVAL_RESULT_CHANNEL_ENV).ok();
+        unsafe {
+            std::env::set_var(RETRIEVAL_RESULT_CHANNEL_ENV, "inline");
+        }
+        let dir = test_dir();
+        let journal = JournalRecorder::new(dir.clone());
+        let host = TestHost {
+            journal,
+            tool_result: None,
+        };
+        let fake = Arc::new(FakeProvider::new(vec![
+            ScriptedResponse::tool_calls(vec![tool_call("retrieve_project_docs", "call-1")]),
+            ScriptedResponse::text("[DOC] design.md\n检索完成"),
+            ScriptedResponse::text("完成"),
+            ScriptedResponse::text("完成"),
+        ]));
+        let gateway: Arc<dyn ModelGateway> = fake.clone();
+        let controller = with_retrieval_enabled(AgentLoopController::with_gateway(gateway));
+        controller
+            .run_turn(
+                &host,
+                "查找项目文档",
+                "RUN-INL",
+                MANIFEST,
+                0,
+                None,
+                None,
+                None,
+            )
+            .await
+            .unwrap();
+        // 还原 env（无论断言结果——放在断言前，避免 panic 泄漏）。
+        match original {
+            Some(v) => unsafe { std::env::set_var(RETRIEVAL_RESULT_CHANNEL_ENV, v) },
+            None => unsafe { std::env::remove_var(RETRIEVAL_RESULT_CHANNEL_ENV) },
+        }
+
+        let received = fake.received_requests();
+        let round = received
+            .iter()
+            .find(|r| {
+                r.messages
+                    .iter()
+                    .any(|m| m.tool_call_id.as_deref() == Some("call-1"))
+            })
+            .expect("call-1 round");
+        let reply = round
+            .messages
+            .iter()
+            .find(|m| m.tool_call_id.as_deref() == Some("call-1"))
+            .expect("retrieval dispatch tool result message");
+        assert!(
+            reply.content.contains("检索完成"),
+            "inline channel keeps the full text: {:?}",
+            round.messages
+        );
+        assert!(
+            !reply.content.contains("已写入 blackboard"),
+            "inline channel must not emit the pointer summary: {:?}",
+            round.messages
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// THIN-HARNESS-REDESIGN R2a (§4.4): `ORZ_RETRIEVAL_RESULT_CHANNEL`
+    /// 解析规则——缺失/无效回退 `blackboard`，`inline` 命中旧行为。
+    #[test]
+    fn retrieval_result_channel_env_parse_rules() {
+        // P2-1: 共享锁，与 inline 测试 / 默认指针摘要测试互斥。
+        let _guard = RETRIEVAL_CHANNEL_ENV_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let original = std::env::var(RETRIEVAL_RESULT_CHANNEL_ENV).ok();
+        unsafe {
+            std::env::remove_var(RETRIEVAL_RESULT_CHANNEL_ENV);
+        }
+        assert_eq!(
+            retrieval_result_channel_from_env(),
+            RetrievalResultChannel::Blackboard,
+            "missing env → blackboard default"
+        );
+        unsafe {
+            std::env::set_var(RETRIEVAL_RESULT_CHANNEL_ENV, "inline");
+        }
+        assert_eq!(
+            retrieval_result_channel_from_env(),
+            RetrievalResultChannel::Inline,
+            "inline env honored"
+        );
+        unsafe {
+            std::env::set_var(RETRIEVAL_RESULT_CHANNEL_ENV, "bogus");
+        }
+        assert_eq!(
+            retrieval_result_channel_from_env(),
+            RetrievalResultChannel::Blackboard,
+            "invalid env falls back to blackboard"
+        );
+        match original {
+            Some(v) => unsafe { std::env::set_var(RETRIEVAL_RESULT_CHANNEL_ENV, v) },
+            None => unsafe { std::env::remove_var(RETRIEVAL_RESULT_CHANNEL_ENV) },
+        }
+    }
+
+    #[tokio::test]
+    async fn retrieval_call_dispatches_to_subagent() {
+        let dir = test_dir();
+        let journal = JournalRecorder::new(dir.clone());
+        let host = TestHost {
+            journal,
+            tool_result: None,
+        };
+
+        // Script: main agent requests internal retrieval → subagent returns
+        // doc-tagged text → main agent concludes (first text is gate-
+        // intercepted, the second is the post-gate final answer).
+        let gateway: Arc<dyn ModelGateway> = Arc::new(FakeProvider::new(vec![
+            ScriptedResponse::tool_calls(vec![tool_call("retrieve_project_docs", "call-1")]),
+            ScriptedResponse::text("[DOC] design.md\n检索完成"),
+            ScriptedResponse::text("完成"),
+            ScriptedResponse::text("完成"),
+        ]));
+        let controller = with_retrieval_enabled(AgentLoopController::with_gateway(gateway));
+        controller
+            .run_turn(
+                &host,
+                "查找项目文档",
+                "RUN-RET",
+                MANIFEST,
+                0,
+                None,
+                None,
+                None,
+            )
+            .await
+            .unwrap();
+
+        let types = event_types(&dir);
+        assert!(types.contains(&EventType::ToolStarted), "{types:?}");
+        // Subagent wrote its blackboard section.
+        let bb = controller.blackboard();
+        let r = bb.read();
+        assert_eq!(r.internal_ret.project_docs, vec!["design.md"]);
+        assert!(
+            r.internal_ret
+                .response
+                .as_deref()
+                .unwrap()
+                .contains("检索完成")
+        );
+        // External section untouched.
+        assert!(r.external_ret.web_sources.is_empty());
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    // ── GAP-SUBAGENT-RUNTIME (2026-08-10): shared-loop subagent semantics ──
+
+    /// A retrieval dispatch whose subagent runs MULTIPLE rounds, including a
+    /// host-tool round — the shared loop's journal events (subagent
+    /// model_output ×2, the host ToolCompleted) land in the same chain
+    /// inside the parent's wrapper.
+    #[tokio::test]
+    async fn subagent_loop_runs_multi_round_with_host_tool() {
+        let dir = test_dir();
+        let journal = JournalRecorder::new(dir.clone());
+        let host = TestHost {
+            journal,
+            tool_result: Some(ToolResult {
+                output: "file contents".to_string(),
+                exit_code: Some(0),
+                output_encoding: None,
+                structured: None,
+                ..Default::default()
+            }),
+        };
+
+        // main declares retrieval → subagent round 1 calls read_file (host
+        // tool, allowed in the lane) → subagent round 2 forms the result →
+        // main concludes (gate + final).
+        let gateway: Arc<dyn ModelGateway> = Arc::new(FakeProvider::new(vec![
+            ScriptedResponse::tool_calls(vec![tool_call("retrieve_project_docs", "call-1")]),
+            ScriptedResponse::tool_calls(vec![tool_call("read_file", "call-2")]),
+            ScriptedResponse::text("[DOC] design.md\n检索完成"),
+            ScriptedResponse::text("完成"),
+            ScriptedResponse::text("完成"),
+        ]));
+        let controller = with_retrieval_enabled(AgentLoopController::with_gateway(gateway));
+        controller
+            .run_turn(
+                &host,
+                "查找项目文档",
+                "RUN-MR",
+                MANIFEST,
+                0,
+                None,
+                None,
+                None,
+            )
+            .await
+            .unwrap();
+
+        let types = event_types(&dir);
+        // Subagent: 2 model rounds + 1 host tool round — all inside the
+        // parent's tool_started/tool_completed pair.
+        let sub_outputs = types
+            .iter()
+            .filter(|t| **t == EventType::ModelOutput)
+            .count();
+        assert_eq!(sub_outputs, 5, "{types:?}"); // main 3 (decl/gate-answer/final) + subagent 2
+        assert_eq!(
+            types
+                .iter()
+                .filter(|t| **t == EventType::ToolCompleted)
+                .count(),
+            2, // read_file + the retrieval wrapper
+            "{types:?}"
+        );
+        // The read_file host tool executed inside the lane.
+        let events = events(&dir);
+        let read_completed = events
+            .iter()
+            .find(|e| {
+                e.event_type == EventType::ToolCompleted
+                    && e.payload.get("tool").and_then(|v| v.as_str()) == Some("read_file")
+            })
+            .expect("read_file ToolCompleted");
+        assert_eq!(
+            read_completed.payload.get("exit_code"),
+            Some(&serde_json::json!(0))
+        );
+        // Result formed into the section.
+        let bb = controller.blackboard();
+        let r = bb.read();
+        assert_eq!(r.internal_ret.project_docs, vec!["design.md"]);
+        assert!(
+            r.internal_ret
+                .response
+                .as_deref()
+                .unwrap()
+                .contains("检索完成")
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The ADR-0010 §3.2 deny-only write domain: a mutation-class tool call
+    /// inside the retrieval lane is structurally refused (never reaching the
+    /// host permission bridge) and journaled as ToolCompleted(status=error).
+    #[tokio::test]
+    async fn subagent_denies_mutation_tools_with_structured_reason() {
+        let dir = test_dir();
+        let journal = JournalRecorder::new(dir.clone());
+        let host = TestHost {
+            journal,
+            tool_result: Some(ToolResult {
+                output: "edited".to_string(),
+                exit_code: Some(0),
+                output_encoding: None,
+                structured: None,
+                ..Default::default()
+            }),
+        };
+
+        let gateway: Arc<dyn ModelGateway> = Arc::new(FakeProvider::new(vec![
+            ScriptedResponse::tool_calls(vec![tool_call("retrieve_project_docs", "call-1")]),
+            ScriptedResponse::tool_calls(vec![tool_call("search_replace", "call-2")]),
+            ScriptedResponse::text("[DOC] design.md\n检索完成"),
+            ScriptedResponse::text("完成"),
+            ScriptedResponse::text("完成"),
+        ]));
+        let controller = with_retrieval_enabled(AgentLoopController::with_gateway(gateway));
+        controller
+            .run_turn(
+                &host,
+                "查找项目文档",
+                "RUN-WG",
+                MANIFEST,
+                0,
+                None,
+                None,
+                None,
+            )
+            .await
+            .unwrap();
+
+        let events = events(&dir);
+        let denied = events
+            .iter()
+            .find(|e| {
+                e.event_type == EventType::ToolCompleted
+                    && e.payload.get("status").and_then(|v| v.as_str()) == Some("error")
+            })
+            .expect("role-gate denial journaled");
+        assert_eq!(
+            denied.payload.get("error").and_then(|v| v.as_str()),
+            Some("retrieval_role_write_denied")
+        );
+        // The host tool never executed — no second success completion.
+        assert_eq!(
+            events
+                .iter()
+                .filter(|e| {
+                    e.event_type == EventType::ToolCompleted
+                        && e.payload.get("exit_code") == Some(&serde_json::json!(0))
+                })
+                .count(),
+            1, // only the retrieval wrapper succeeded
+        );
+        // The model saw the refusal in its tool reply.
+        let conversation_denial = events
+            .iter()
+            .find(|e| e.event_type == EventType::ToolCompleted && e.payload.get("error").is_some());
+        assert!(conversation_denial.is_some());
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// One seat per role: a retrieval lane never dispatches another
+    /// retrieval (ADR-0010 §11.3) — refused with a structured denial.
+    /// C2-1 (2026-08-11): the anti-recursion guard now covers ONLY the
+    /// retrieval-dispatch family (`retrieve_project_*`); the web family
+    /// self-executes (see `retrieval_lane_web_search_routes_to_host`).
+    #[tokio::test]
+    async fn subagent_refuses_nested_subagent_dispatch() {
+        let dir = test_dir();
+        let journal = JournalRecorder::new(dir.clone());
+        let host = TestHost {
+            journal,
+            tool_result: None,
+        };
+
+        let gateway: Arc<dyn ModelGateway> = Arc::new(FakeProvider::new(vec![
+            ScriptedResponse::tool_calls(vec![tool_call("retrieve_project_docs", "call-1")]),
+            // Inside the retrieval lane: dispatching ANOTHER retrieval is
+            // still refused (recursion guard intact).
+            ScriptedResponse::tool_calls(vec![tool_call("retrieve_project_docs", "call-2")]),
+            ScriptedResponse::text("检索完成"),
+            ScriptedResponse::text("完成"),
+            ScriptedResponse::text("完成"),
+        ]));
+        let controller = with_retrieval_enabled(AgentLoopController::with_gateway(gateway));
+        controller
+            .run_turn(
+                &host,
+                "查找项目文档",
+                "RUN-NS",
+                MANIFEST,
+                0,
+                None,
+                None,
+                None,
+            )
+            .await
+            .unwrap();
+
+        let events = events(&dir);
+        let denied = events
+            .iter()
+            .find(|e| {
+                e.event_type == EventType::ToolCompleted
+                    && e.payload.get("status").and_then(|v| v.as_str()) == Some("error")
+            })
+            .expect("nested-dispatch denial journaled");
+        assert_eq!(
+            denied.payload.get("error").and_then(|v| v.as_str()),
+            Some("nested_subagent_dispatch_refused")
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// C2-1 (2026-08-11, ADR-0006 web-search slice): inside a retrieval
+    /// lane, a web tool self-executes through the HOST instead of being
+    /// refused as a nested dispatch — the lane IS the web lane (ADR-0010
+    /// §3.7.8). With TestHost the call reaches `call_tool` (the NotFound
+    /// proves it) and no `nested_subagent_dispatch_refused` is journaled;
+    /// the lane also skips the permission bridge (no PermissionRequested
+    /// for the web call — the mode gate is the authorization chain).
+    #[tokio::test]
+    async fn retrieval_lane_web_search_routes_to_host() {
+        let dir = test_dir();
+        let journal = JournalRecorder::new(dir.clone());
+        let host = TestHost {
+            journal,
+            tool_result: None,
+        };
+
+        let gateway: Arc<dyn ModelGateway> = Arc::new(FakeProvider::new(vec![
+            ScriptedResponse::tool_calls(vec![tool_call("retrieve_project_docs", "call-1")]),
+            ScriptedResponse::tool_calls(vec![tool_call("web_search", "call-2")]),
+            ScriptedResponse::text("检索完成"),
+            ScriptedResponse::text("完成"),
+            ScriptedResponse::text("完成"),
+        ]));
+        let controller = with_retrieval_enabled(AgentLoopController::with_gateway(gateway));
+        controller
+            .run_turn(
+                &host,
+                "查找项目文档",
+                "RUN-R2H",
+                MANIFEST,
+                0,
+                None,
+                None,
+                None,
+            )
+            .await
+            .unwrap();
+
+        let events = events(&dir);
+        assert!(
+            !events.iter().any(|e| {
+                e.payload.get("error").and_then(|v| v.as_str())
+                    == Some("nested_subagent_dispatch_refused")
+            }),
+            "the web tool must not be refused as a nested dispatch"
+        );
+        // The web call reached the host toolset (TestHost has no tool
+        // result — NotFound proves the call arrived at call_tool).
+        let host_failure = events
+            .iter()
+            .find(|e| {
+                e.event_type == EventType::ToolCompleted
+                    && e.payload.get("tool").and_then(|v| v.as_str()) == Some("web_search")
+                    && e.payload.get("status").and_then(|v| v.as_str()) == Some("error")
+            })
+            .expect("web_search host failure journaled");
+        let err = host_failure
+            .payload
+            .get("error")
+            .and_then(|v| v.as_str())
+            .expect("error field");
+        assert!(
+            err.contains("test host has no tool result"),
+            "web_search must reach the host call_tool: {err}"
+        );
+        // Lane self-execution skips the permission bridge (no
+        // PermissionRequested for the web call).
+        assert!(
+            !events.iter().any(|e| {
+                e.event_type == EventType::PermissionRequested
+                    && e.payload.get("tool").and_then(|v| v.as_str()) == Some("web_search")
+            }),
+            "lane self-execution must not consult the permission bridge"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// C2-1 (2026-08-11): the mode=off gate covers the web family at the
+    /// host path too (belt and braces — "off means no retrieval tools",
+    /// ADR-0010 §3.7.1). Topologically the lane self-execution path can
+    /// only carry web tools under framework_fallback, so this exercises
+    /// run_host_tool directly (in-flight mode transitions are the edge it
+    /// defends).
+    #[tokio::test]
+    async fn mode_off_gate_covers_lane_web_search() {
+        let dir = test_dir();
+        let journal = JournalRecorder::new(dir.clone());
+        let host = TestHost {
+            journal,
+            tool_result: None,
+        };
+        // Default controller — mode=off.
+        let controller = AgentLoopController::with_gateway(Arc::new(FakeProvider::new(vec![
+            ScriptedResponse::text("x"),
+        ])));
+        let tc = ToolCall {
+            name: "web_search".to_string(),
+            arguments: serde_json::json!({"query": "t"}),
+            call_id: "call-woff".to_string(),
+        };
+        let mut messages: Vec<Message> = Vec::new();
+        let mut writer = EventWriter::new(None, EventTrack::V02, "RUN-WOFF", "", 0, None, None);
+        let (result, feedback) = controller
+            .run_host_tool(
+                &host,
+                &mut writer,
+                &tc,
+                "",
+                orz_assurance::gates::ipg::WorkspaceTrust::ObservedTrusted,
+                &mut messages,
+                0,
+                None,
+                None,
+                None, // main-lane direct call: no web_fetch count domain
+                true,
+                true, // main-lane semantics: probe write-back enabled
+            )
+            .await
+            .unwrap();
+        assert_eq!(result.exit_code, Some(1));
+        assert!(
+            result.output.contains("refused") && result.output.contains("off"),
+            "{}",
+            result.output
+        );
+        // P0-C S3 前置 (2026-08-15, P1-2 定案): the refusal carries the
+        // structured signal at the run_host_tool boundary.
+        let denial = result.policy_denial.as_ref().expect("structured denial");
+        assert_eq!(
+            denial.source,
+            crate::host::PolicyDenialSource::RetrievalMode
+        );
+        assert_eq!(denial.code, "retrieval_mode_off");
+        assert!(feedback.is_none());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// C2-1 (2026-08-11): the mirror lane gate — web tools are only
+    /// reachable under framework_fallback; under local_browser the
+    /// subagent's self-executed web call is refused with an explicit
+    /// `retrieval_mode_requires_framework_fallback` (no silent cross-lane
+    /// fallback, ADR-0010 §3.7.1). No ToolStarted for the refused call.
+    #[tokio::test]
+    async fn local_browser_lane_refuses_web_tools() {
+        let dir = test_dir();
+        let journal = JournalRecorder::new(dir.clone());
+        let host = TestHost {
+            journal,
+            tool_result: None,
+        };
+        let gateway: Arc<dyn ModelGateway> = Arc::new(FakeProvider::new(vec![
+            ScriptedResponse::tool_calls(vec![tool_call("web_search", "call-1")]),
+            ScriptedResponse::tool_calls(vec![tool_call("web_search", "call-2")]),
+            ScriptedResponse::text("检索完成"),
+            ScriptedResponse::text("完成"),
+            ScriptedResponse::text("完成"),
+        ]));
+        let controller = AgentLoopController::with_gateway(gateway).with_retrieval_mode(
+            RetrievalMode::LocalBrowser,
+            RetrievalCapability::Available,
+            false,
+            None,
+            None,
+            None,
+        );
+        controller
+            .run_turn(&host, "查网页", "RUN-LBW", MANIFEST, 0, None, None, None)
+            .await
+            .unwrap();
+
+        let events = events(&dir);
+        // The lane-internal web call is refused by the framework_fallback
+        // gate (the ONLY refusal — the dispatch-level off gate does not
+        // fire under local_browser).
+        let refused: Vec<&RunEvent> = events
+            .iter()
+            .filter(|e| {
+                e.event_type == EventType::ToolCompleted
+                    && e.payload.get("status").and_then(|v| v.as_str()) == Some("error")
+            })
+            .collect();
+        assert!(
+            refused.iter().any(|e| e.payload["error"]
+                == serde_json::json!("retrieval_mode_requires_framework_fallback")),
+            "{refused:?}"
+        );
+        assert!(
+            refused.iter().any(|e| {
+                e.payload["error"]
+                    == serde_json::json!("retrieval_mode_requires_framework_fallback")
+                    && e.payload["policy_denial"]["source"] == serde_json::json!("retrieval_mode")
+                    && e.payload["policy_denial"]["code"]
+                        == serde_json::json!("retrieval_mode_requires_framework_fallback")
+            }),
+            "framework_fallback refusal must carry the structured denial: {refused:?}"
+        );
+        // P0-C S3 前置审查修复 (F1): every refusal completion carries the
+        // non-zero exit_code required by the Python cross-check.
+        for event in &refused {
+            assert_eq!(
+                event.payload["exit_code"],
+                serde_json::json!(1),
+                "refusal completion must carry exit_code=1: {event:?}"
+            );
+            assert_eq!(event.payload["status"], serde_json::json!("error"));
+        }
+        // The refused lane-internal web call (call-2) has NO ToolStarted —
+        // same refusal shape as the other mode gates. (The main-lane
+        // dispatch wrapper for call-1 does start — that is the subagent
+        // dispatch, not the web execution.)
+        assert!(
+            !events.iter().any(|e| {
+                e.event_type == EventType::ToolStarted
+                    && e.payload.get("call_id").and_then(|v| v.as_str()) == Some("call-2")
+            }),
+            "refused web tool must not start"
+        );
+        assert!(
+            !events.iter().any(|e| {
+                e.payload.get("error").and_then(|v| v.as_str())
+                    == Some("nested_subagent_dispatch_refused")
+            }),
+            "the web tool must self-execute (and be mode-refused), not be nested-refused"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// FUS-RETRIEVAL-MECH P0-B step 2 (2026-08-14): the web_fetch
+    /// candidate count gate — per-activation accumulation, exact-string
+    /// URL dedup (a duplicate consumes no new candidate), mechanical
+    /// count feedback on every allowed fetch, and a no-ToolStarted cap
+    /// refusal that feeds the denial breaker (no retry space).
+    #[tokio::test]
+    async fn web_fetch_candidate_gate_counts_dedups_and_rejects_at_cap() {
+        let dir = test_dir();
+        let journal = JournalRecorder::new(dir.clone());
+        let host = TestHost {
+            journal: journal.clone(),
+            tool_result: Some(ToolResult {
+                output: "page content".to_string(),
+                exit_code: Some(0),
+                output_encoding: None,
+                structured: None,
+                ..Default::default()
+            }),
+        };
+        let controller = with_retrieval_enabled(AgentLoopController::with_gateway(Arc::new(
+            FakeProvider::new(vec![ScriptedResponse::text("x")]),
+        )));
+        let counter: Mutex<Vec<String>> = Mutex::new(Vec::new());
+        let mut messages: Vec<Message> = Vec::new();
+        let mut writer = EventWriter::new(
+            Some(&journal),
+            EventTrack::V02,
+            "RUN-WFC",
+            "",
+            0,
+            None,
+            None,
+        );
+        let call = |i: usize| ToolCall {
+            name: "web_fetch".to_string(),
+            arguments: serde_json::json!({ "url": format!("https://example.com/{i}") }),
+            call_id: format!("call-{i}"),
+        };
+        // 8 distinct URLs are allowed, each carrying the count feedback.
+        for i in 0..8 {
+            let (result, feedback) = controller
+                .run_host_tool(
+                    &host,
+                    &mut writer,
+                    &call(i),
+                    "",
+                    orz_assurance::gates::ipg::WorkspaceTrust::ObservedTrusted,
+                    &mut messages,
+                    0,
+                    None,
+                    Some("act-1"),
+                    Some(&counter),
+                    false,
+                    false,
+                )
+                .await
+                .unwrap();
+            assert_eq!(result.exit_code, Some(0), "call {i}");
+            assert!(
+                result
+                    .output
+                    .contains(&format!("候选 {}/8，剩余 {}", i + 1, 7 - i)),
+                "call {i}: {}",
+                result.output
+            );
+            assert!(matches!(feedback, Some(PolicyFeedback::Succeeded)));
+        }
+        // A duplicate URL consumes no new candidate (still allowed at 8/8).
+        let (result, _) = controller
+            .run_host_tool(
+                &host,
+                &mut writer,
+                &call(0),
+                "",
+                orz_assurance::gates::ipg::WorkspaceTrust::ObservedTrusted,
+                &mut messages,
+                0,
+                None,
+                Some("act-1"),
+                Some(&counter),
+                false,
+                false,
+            )
+            .await
+            .unwrap();
+        assert_eq!(result.exit_code, Some(0));
+        assert!(
+            result.output.contains("候选 8/8，剩余 0"),
+            "{}",
+            result.output
+        );
+        assert_eq!(counter.lock().unwrap().len(), 8);
+        // A NEW URL at the cap is refused — no ToolStarted, Denied key.
+        let (result, feedback) = controller
+            .run_host_tool(
+                &host,
+                &mut writer,
+                &call(8),
+                "",
+                orz_assurance::gates::ipg::WorkspaceTrust::ObservedTrusted,
+                &mut messages,
+                0,
+                None,
+                Some("act-1"),
+                Some(&counter),
+                false,
+                false,
+            )
+            .await
+            .unwrap();
+        assert_eq!(result.exit_code, Some(1));
+        assert!(
+            result.output.contains("候选核验数量已达上限 8"),
+            "{}",
+            result.output
+        );
+        assert!(
+            matches!(feedback, Some(PolicyFeedback::Denied(_))),
+            "cap refusal must feed the denial breaker"
+        );
+        assert_eq!(counter.lock().unwrap().len(), 8, "refused URL not counted");
+
+        // Journal facts: allowed completions carry count/cap; the refusal
+        // has no ToolStarted and the cap-exceeded error at the boundary.
+        let events = events(&dir);
+        let completed: Vec<&RunEvent> = events
+            .iter()
+            .filter(|e| {
+                e.event_type == EventType::ToolCompleted
+                    && e.payload.get("tool").and_then(|v| v.as_str()) == Some("web_fetch")
+            })
+            .collect();
+        assert_eq!(completed.len(), 10, "8 allowed + duplicate + refusal");
+        for (i, e) in completed.iter().enumerate().take(8) {
+            assert_eq!(e.payload["candidate_count"], serde_json::json!(i + 1));
+            assert_eq!(e.payload["candidate_cap"], serde_json::json!(8));
+        }
+        let refused_ev = completed
+            .iter()
+            .find(|e| e.payload["error"] == serde_json::json!("web_fetch_candidate_cap_exceeded"))
+            .expect("cap refusal journaled");
+        assert_eq!(refused_ev.payload["candidate_count"], serde_json::json!(8));
+        assert_eq!(refused_ev.payload["candidate_cap"], serde_json::json!(8));
+        assert!(
+            !events.iter().any(|e| {
+                e.event_type == EventType::ToolStarted
+                    && e.payload.get("call_id").and_then(|v| v.as_str()) == Some("call-8")
+            }),
+            "refused web_fetch must not start"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// FUS-RETRIEVAL-MECH P0-B step 2 (2026-08-14): fail-closed arms of
+    /// the web_fetch count gate — a missing `url` argument (no count
+    /// identity) and a missing count domain (no per-activation counter)
+    /// both refuse without ToolStarted.
+    #[tokio::test]
+    async fn web_fetch_candidate_gate_fails_closed_on_missing_url_and_domain() {
+        let dir = test_dir();
+        let journal = JournalRecorder::new(dir.clone());
+        let host = TestHost {
+            journal: journal.clone(),
+            tool_result: None,
+        };
+        let controller = with_retrieval_enabled(AgentLoopController::with_gateway(Arc::new(
+            FakeProvider::new(vec![ScriptedResponse::text("x")]),
+        )));
+        let counter: Mutex<Vec<String>> = Mutex::new(Vec::new());
+        let mut messages: Vec<Message> = Vec::new();
+        let mut writer = EventWriter::new(
+            Some(&journal),
+            EventTrack::V02,
+            "RUN-WFU",
+            "",
+            0,
+            None,
+            None,
+        );
+        let call = |url: Option<&str>, call_id: &str| ToolCall {
+            name: "web_fetch".to_string(),
+            arguments: match url {
+                Some(u) => serde_json::json!({ "url": u }),
+                None => serde_json::json!({ "query": "no url" }),
+            },
+            call_id: call_id.to_string(),
+        };
+        // Missing url argument.
+        let (result, feedback) = controller
+            .run_host_tool(
+                &host,
+                &mut writer,
+                &call(None, "call-u1"),
+                "",
+                orz_assurance::gates::ipg::WorkspaceTrust::ObservedTrusted,
+                &mut messages,
+                0,
+                None,
+                Some("act-1"),
+                Some(&counter),
+                false,
+                false,
+            )
+            .await
+            .unwrap();
+        assert_eq!(result.exit_code, Some(1));
+        assert!(result.output.contains("缺少 url 参数"), "{}", result.output);
+        assert!(matches!(feedback, Some(PolicyFeedback::Denied(_))));
+        // Missing count domain (main-lane style direct call).
+        let (result, feedback) = controller
+            .run_host_tool(
+                &host,
+                &mut writer,
+                &call(Some("https://example.com/0"), "call-u2"),
+                "",
+                orz_assurance::gates::ipg::WorkspaceTrust::ObservedTrusted,
+                &mut messages,
+                0,
+                None,
+                Some("act-1"),
+                None,
+                false,
+                false,
+            )
+            .await
+            .unwrap();
+        assert_eq!(result.exit_code, Some(1));
+        assert!(
+            result.output.contains("候选核验计数域不可用"),
+            "{}",
+            result.output
+        );
+        assert!(matches!(feedback, Some(PolicyFeedback::Denied(_))));
+        // Neither refusal started the tool.
+        let events = events(&dir);
+        for refused_id in ["call-u1", "call-u2"] {
+            assert!(
+                !events.iter().any(|e| {
+                    e.event_type == EventType::ToolStarted
+                        && e.payload.get("call_id").and_then(|v| v.as_str()) == Some(refused_id)
+                }),
+                "{refused_id} must not start"
+            );
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// FUS-RETRIEVAL-MECH P0-B step 2/4 (2026-08-14): the builder/override
+    /// seam — a shorter cap refuses earlier (production reads
+    /// ORZ_WEB_FETCH_CANDIDATE_CAP at construction).
+    #[tokio::test]
+    async fn web_fetch_candidate_cap_override_shortens_budget() {
+        let dir = test_dir();
+        let journal = JournalRecorder::new(dir.clone());
+        let host = TestHost {
+            journal: journal.clone(),
+            tool_result: Some(ToolResult {
+                output: "page".to_string(),
+                exit_code: Some(0),
+                output_encoding: None,
+                structured: None,
+                ..Default::default()
+            }),
+        };
+        let controller = with_retrieval_enabled(
+            AgentLoopController::with_gateway(Arc::new(FakeProvider::new(vec![
+                ScriptedResponse::text("x"),
+            ])))
+            .with_candidate_cap(2),
+        );
+        let counter: Mutex<Vec<String>> = Mutex::new(Vec::new());
+        let mut messages: Vec<Message> = Vec::new();
+        let mut writer = EventWriter::new(
+            Some(&journal),
+            EventTrack::V02,
+            "RUN-WFO",
+            "",
+            0,
+            None,
+            None,
+        );
+        let call = |i: usize| ToolCall {
+            name: "web_fetch".to_string(),
+            arguments: serde_json::json!({ "url": format!("https://example.com/{i}") }),
+            call_id: format!("call-o{i}"),
+        };
+        for i in 0..2 {
+            let (result, _) = controller
+                .run_host_tool(
+                    &host,
+                    &mut writer,
+                    &call(i),
+                    "",
+                    orz_assurance::gates::ipg::WorkspaceTrust::ObservedTrusted,
+                    &mut messages,
+                    0,
+                    None,
+                    Some("act-1"),
+                    Some(&counter),
+                    false,
+                    false,
+                )
+                .await
+                .unwrap();
+            assert_eq!(result.exit_code, Some(0));
+            assert!(
+                result
+                    .output
+                    .contains(&format!("候选 {}/2，剩余 {}", i + 1, 1 - i)),
+                "{}",
+                result.output
+            );
+        }
+        let (result, _) = controller
+            .run_host_tool(
+                &host,
+                &mut writer,
+                &call(2),
+                "",
+                orz_assurance::gates::ipg::WorkspaceTrust::ObservedTrusted,
+                &mut messages,
+                0,
+                None,
+                Some("act-1"),
+                Some(&counter),
+                false,
+                false,
+            )
+            .await
+            .unwrap();
+        assert_eq!(result.exit_code, Some(1));
+        assert!(result.output.contains("上限 2"), "{}", result.output);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// FUS-RETRIEVAL-MECH P0-B step 2 (2026-08-14): the env parse rule —
+    /// trimmed positive integer; zero/invalid/absent fall back to the
+    /// default (pure function, no env mutation in tests).
+    #[test]
+    fn web_fetch_candidate_cap_parse_rules() {
+        assert_eq!(parse_web_fetch_candidate_cap("8"), Some(8));
+        assert_eq!(parse_web_fetch_candidate_cap(" 4 "), Some(4));
+        assert_eq!(parse_web_fetch_candidate_cap("0"), None);
+        assert_eq!(parse_web_fetch_candidate_cap("-1"), None);
+        assert_eq!(parse_web_fetch_candidate_cap("abc"), None);
+        assert_eq!(parse_web_fetch_candidate_cap(""), None);
+    }
+
+    /// ORZ-CACHE-CONTEXT-COST (2026-08-15): `ORZ_MAX_INJECT_TOKENS_PER_ROUND`
+    /// parse rules — trimmed positive integer; invalid/zero → default.
+    #[test]
+    fn max_inject_tokens_per_round_parse_rules() {
+        assert_eq!(parse_max_inject_tokens_per_round("50000"), Some(50_000));
+        assert_eq!(parse_max_inject_tokens_per_round(" 1024 "), Some(1024));
+        assert_eq!(parse_max_inject_tokens_per_round("0"), None);
+        assert_eq!(parse_max_inject_tokens_per_round("-1"), None);
+        assert_eq!(parse_max_inject_tokens_per_round("abc"), None);
+        assert_eq!(parse_max_inject_tokens_per_round(""), None);
+    }
+
+    /// FUS-RETRIEVAL-MECH P0-B step 4 (2026-08-14): browser_read joins the
+    /// SAME candidate count domain — per-activation accumulation,
+    /// exact-string URL dedup (a duplicate consumes no new candidate),
+    /// mechanical count feedback on every allowed read, and a no-ToolStarted
+    /// cap refusal (`browser_read_candidate_cap_exceeded`) that feeds the
+    /// denial breaker.
+    #[tokio::test]
+    async fn browser_read_candidate_gate_counts_dedups_and_rejects_at_cap() {
+        let dir = test_dir();
+        let journal = JournalRecorder::new(dir.clone());
+        let host = TestHost {
+            journal: journal.clone(),
+            tool_result: Some(ToolResult {
+                output: "page content".to_string(),
+                exit_code: Some(0),
+                output_encoding: None,
+                structured: None,
+                ..Default::default()
+            }),
+        };
+        let controller = with_local_browser_enabled(AgentLoopController::with_gateway(Arc::new(
+            FakeProvider::new(vec![ScriptedResponse::text("x")]),
+        )));
+        let counter: Mutex<Vec<String>> = Mutex::new(Vec::new());
+        let mut messages: Vec<Message> = Vec::new();
+        let mut writer = EventWriter::new(
+            Some(&journal),
+            EventTrack::V02,
+            "RUN-BRC",
+            "",
+            0,
+            None,
+            None,
+        );
+        let call = |i: usize| ToolCall {
+            name: "browser_read".to_string(),
+            arguments: serde_json::json!({ "url": format!("https://example.com/{i}") }),
+            call_id: format!("call-{i}"),
+        };
+        // 8 distinct URLs are allowed, each carrying the count feedback.
+        for i in 0..8 {
+            let (result, feedback) = controller
+                .run_host_tool(
+                    &host,
+                    &mut writer,
+                    &call(i),
+                    "",
+                    orz_assurance::gates::ipg::WorkspaceTrust::ObservedTrusted,
+                    &mut messages,
+                    0,
+                    None,
+                    Some("act-1"),
+                    Some(&counter),
+                    false,
+                    false,
+                )
+                .await
+                .unwrap();
+            assert_eq!(result.exit_code, Some(0), "call {i}");
+            assert!(
+                result
+                    .output
+                    .contains(&format!("候选 {}/8，剩余 {}", i + 1, 7 - i)),
+                "call {i}: {}",
+                result.output
+            );
+            assert!(matches!(feedback, Some(PolicyFeedback::Succeeded)));
+        }
+        // A duplicate URL consumes no new candidate (still allowed at 8/8).
+        let (result, _) = controller
+            .run_host_tool(
+                &host,
+                &mut writer,
+                &call(0),
+                "",
+                orz_assurance::gates::ipg::WorkspaceTrust::ObservedTrusted,
+                &mut messages,
+                0,
+                None,
+                Some("act-1"),
+                Some(&counter),
+                false,
+                false,
+            )
+            .await
+            .unwrap();
+        assert_eq!(result.exit_code, Some(0));
+        assert!(
+            result.output.contains("候选 8/8，剩余 0"),
+            "{}",
+            result.output
+        );
+        assert_eq!(counter.lock().unwrap().len(), 8);
+        // A NEW URL at the cap is refused — no ToolStarted, Denied key.
+        let (result, feedback) = controller
+            .run_host_tool(
+                &host,
+                &mut writer,
+                &call(8),
+                "",
+                orz_assurance::gates::ipg::WorkspaceTrust::ObservedTrusted,
+                &mut messages,
+                0,
+                None,
+                Some("act-1"),
+                Some(&counter),
+                false,
+                false,
+            )
+            .await
+            .unwrap();
+        assert_eq!(result.exit_code, Some(1));
+        assert!(result.output.contains("上限 8"), "{}", result.output);
+        assert!(matches!(feedback, Some(PolicyFeedback::Denied(_))));
+        // Journal: the cap refusal carries count/cap; the refused call has
+        // no ToolStarted.
+        let events = events(&dir);
+        let refused = events
+            .iter()
+            .find(|e| {
+                e.payload["error"] == serde_json::json!("browser_read_candidate_cap_exceeded")
+            })
+            .expect("cap refusal journaled");
+        assert_eq!(refused.payload["candidate_count"], serde_json::json!(8));
+        assert_eq!(refused.payload["candidate_cap"], serde_json::json!(8));
+        assert!(
+            !events.iter().any(|e| {
+                e.event_type == EventType::ToolStarted
+                    && e.payload.get("call_id").and_then(|v| v.as_str()) == Some("call-8")
+            }),
+            "refused browser_read must not start"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// FUS-RETRIEVAL-MECH P0-B step 4 (2026-08-14): browser_read's count
+    /// gate fails closed on a missing `url` argument (no count identity)
+    /// and a missing count domain (no per-activation counter) — both
+    /// no-ToolStarted refusals with `browser_read_candidate_*` codes.
+    #[tokio::test]
+    async fn browser_read_candidate_gate_fails_closed_on_missing_url_and_domain() {
+        let dir = test_dir();
+        let journal = JournalRecorder::new(dir.clone());
+        let host = TestHost {
+            journal,
+            tool_result: None,
+        };
+        let controller = with_local_browser_enabled(AgentLoopController::with_gateway(Arc::new(
+            FakeProvider::new(vec![ScriptedResponse::text("x")]),
+        )));
+        let counter: Mutex<Vec<String>> = Mutex::new(Vec::new());
+        let mut messages: Vec<Message> = Vec::new();
+        let mut writer = EventWriter::new(
+            Some(&host.journal),
+            EventTrack::V02,
+            "RUN-BRCF",
+            "",
+            0,
+            None,
+            None,
+        );
+        let call = |args: serde_json::Value, call_id: &str| ToolCall {
+            name: "browser_read".to_string(),
+            arguments: args,
+            call_id: call_id.to_string(),
+        };
+        // Missing url argument.
+        let (result, feedback) = controller
+            .run_host_tool(
+                &host,
+                &mut writer,
+                &call(serde_json::json!({}), "call-u1"),
+                "",
+                orz_assurance::gates::ipg::WorkspaceTrust::ObservedTrusted,
+                &mut messages,
+                0,
+                None,
+                Some("act-1"),
+                Some(&counter),
+                false,
+                false,
+            )
+            .await
+            .unwrap();
+        assert_eq!(result.exit_code, Some(1));
+        assert!(result.output.contains("缺少 url 参数"), "{}", result.output);
+        assert!(matches!(feedback, Some(PolicyFeedback::Denied(_))));
+        // Missing count domain (main-lane style direct call).
+        let (result, feedback) = controller
+            .run_host_tool(
+                &host,
+                &mut writer,
+                &call(
+                    serde_json::json!({"url": "https://example.com/0"}),
+                    "call-u2",
+                ),
+                "",
+                orz_assurance::gates::ipg::WorkspaceTrust::ObservedTrusted,
+                &mut messages,
+                0,
+                None,
+                Some("act-1"),
+                None,
+                false,
+                false,
+            )
+            .await
+            .unwrap();
+        assert_eq!(result.exit_code, Some(1));
+        assert!(
+            result.output.contains("候选核验计数域不可用"),
+            "{}",
+            result.output
+        );
+        assert!(matches!(feedback, Some(PolicyFeedback::Denied(_))));
+        // Neither refusal started the tool; both carried stable codes.
+        let events = events(&dir);
+        for (call_id, code) in [
+            ("call-u1", "browser_read_candidate_url_missing"),
+            ("call-u2", "browser_read_candidate_count_unbound"),
+        ] {
+            assert!(
+                events.iter().any(|e| {
+                    e.event_type == EventType::ToolCompleted
+                        && e.payload.get("call_id").and_then(|v| v.as_str()) == Some(call_id)
+                        && e.payload["error"] == serde_json::json!(code)
+                }),
+                "{call_id} must journal {code}"
+            );
+            assert!(
+                !events.iter().any(|e| {
+                    e.event_type == EventType::ToolStarted
+                        && e.payload.get("call_id").and_then(|v| v.as_str()) == Some(call_id)
+                }),
+                "{call_id} must not start"
+            );
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Review fix (2026-08-14): the candidate gate only DECIDES — it must
+    /// not consume; consumption commits at the execution boundary with
+    /// exact-string dedup, so a permission/ticket-blocked call consumes no
+    /// budget.
+    #[tokio::test]
+    async fn candidate_gate_decides_without_consuming_and_commit_is_deduplicating() {
+        let dir = test_dir();
+        let journal = JournalRecorder::new(dir.clone());
+        let host = TestHost {
+            journal,
+            tool_result: None,
+        };
+        let controller = with_local_browser_enabled(AgentLoopController::with_gateway(Arc::new(
+            FakeProvider::new(vec![ScriptedResponse::text("x")]),
+        )));
+        let counter: Mutex<Vec<String>> = Mutex::new(Vec::new());
+        let mut messages: Vec<Message> = Vec::new();
+        let mut writer = EventWriter::new(
+            Some(&host.journal),
+            EventTrack::V02,
+            "RUN-BRGATE",
+            "",
+            0,
+            None,
+            None,
+        );
+        let call = |url: &str| ToolCall {
+            name: "browser_read".to_string(),
+            arguments: serde_json::json!({ "url": url }),
+            call_id: "call-g1".to_string(),
+        };
+        // Gate decision must not mutate the counter.
+        let decision = controller
+            .candidate_gate(
+                &mut writer,
+                &mut messages,
+                &call("https://a.example"),
+                Some(&counter),
+            )
+            .await
+            .unwrap();
+        assert!(
+            matches!(decision, CandidateGateDecision::Allowed { .. }),
+            "fresh URL under the cap must be allowed"
+        );
+        assert!(
+            counter.lock().unwrap().is_empty(),
+            "the gate must not consume — only the execution-boundary commit does"
+        );
+        // Commit consumes with exact-string dedup.
+        assert_eq!(commit_candidate(&counter, "https://a.example", 8), (1, 8));
+        assert_eq!(
+            commit_candidate(&counter, "https://a.example", 8),
+            (1, 8),
+            "duplicate URL consumes nothing"
+        );
+        assert_eq!(commit_candidate(&counter, "https://b.example", 8), (2, 8));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// FUS-RETRIEVAL-MECH P0-B step 4 (2026-08-14): the per-activation
+    /// count domain flows through the external retrieval lane for
+    /// browser_read — the counter writes back into the activation, and the
+    /// journal carries the count/cap on each lane completion.
+    #[tokio::test]
+    async fn browser_read_candidate_count_accumulates_in_external_lane() {
+        let dir = test_dir();
+        let journal = JournalRecorder::new(dir.clone());
+        let host = TestHost {
+            journal,
+            tool_result: None,
+        };
+        let gateway: Arc<dyn ModelGateway> = Arc::new(FakeProvider::new(vec![
+            ScriptedResponse::tool_calls(vec![tool_call("web_search", "call-1")]),
+            ScriptedResponse::tool_calls(vec![browser_read_call("call-b1", "https://a.example")]),
+            ScriptedResponse::tool_calls(vec![browser_read_call("call-b2", "https://a.example")]),
+            ScriptedResponse::tool_calls(vec![browser_read_call("call-b3", "https://b.example")]),
+            ScriptedResponse::text("检索完成"),
+            ScriptedResponse::text("完成"),
+            ScriptedResponse::text("完成"),
+        ]));
+        let controller = with_local_browser_enabled(AgentLoopController::with_gateway(gateway));
+        controller
+            .run_turn(&host, "查网页", "RUN-BRL", MANIFEST, 0, None, None, None)
+            .await
+            .unwrap();
+
+        // The external activation's counter holds the lane's read URLs
+        // (exact-string dedup, first-seen order) — written back after the
+        // loop; the main-lane dispatch (call-1) never counted.
+        let registry = controller.activations.lock().unwrap();
+        let act = registry
+            .states
+            .get(&SubagentRole::ExternalRetrieval)
+            .unwrap();
+        assert_eq!(
+            act.candidate_urls,
+            vec![
+                "https://a.example".to_string(),
+                "https://b.example".to_string()
+            ]
+        );
+
+        // Journal: three lane browser_read completions with counts 1, 1, 2
+        // (the duplicate consumed no new candidate).
+        let events = events(&dir);
+        let completed: Vec<&RunEvent> = events
+            .iter()
+            .filter(|e| {
+                e.event_type == EventType::ToolCompleted
+                    && e.payload.get("tool").and_then(|v| v.as_str()) == Some("browser_read")
+                    && e.payload.get("candidate_count").is_some()
+            })
+            .collect();
+        assert_eq!(completed.len(), 3, "{completed:?}");
+        let counts: Vec<i64> = completed
+            .iter()
+            .map(|e| e.payload["candidate_count"].as_i64().unwrap())
+            .collect();
+        assert_eq!(counts, vec![1, 1, 2]);
+        assert_eq!(completed[0].payload["candidate_cap"], serde_json::json!(8));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// THIN-HARNESS-REDESIGN R1 (§4.4, 审查 P2 收口): auto-close 后每次
+    /// 派发都是新激活——browser_read 候选计数按激活隔离（设计 §1.1：只有
+    /// activation close 才重置；auto-close 每次派发即重置），第二次派发从
+    /// 1/8 重新起算，不再跨派发累积。
+    #[tokio::test]
+    async fn browser_read_candidate_count_resets_per_auto_closed_dispatch() {
+        let dir = test_dir();
+        let journal = JournalRecorder::new(dir.clone());
+        let host = TestHost {
+            journal,
+            tool_result: None,
+        };
+        let gateway: Arc<dyn ModelGateway> = Arc::new(FakeProvider::new(vec![
+            ScriptedResponse::tool_calls(vec![tool_call("web_search", "call-1")]),
+            ScriptedResponse::tool_calls(vec![browser_read_call("call-b1", "https://a.example")]),
+            ScriptedResponse::tool_calls(vec![browser_read_call("call-b2", "https://a.example")]),
+            ScriptedResponse::text("检索完成"),
+            ScriptedResponse::tool_calls(vec![tool_call("web_search", "call-2")]),
+            ScriptedResponse::tool_calls(vec![browser_read_call("call-b3", "https://b.example")]),
+            ScriptedResponse::tool_calls(vec![browser_read_call("call-b4", "https://b.example")]),
+            ScriptedResponse::text("检索完成"),
+            ScriptedResponse::text("完成"),
+            ScriptedResponse::text("完成"),
+        ]));
+        let controller = with_local_browser_enabled(AgentLoopController::with_gateway(gateway));
+        controller
+            .run_turn(&host, "查网页", "RUN-BRLC", MANIFEST, 0, None, None, None)
+            .await
+            .unwrap();
+
+        // auto-close：第二次派发是新激活（fresh id、revision 0），候选
+        // 计数从 1/8 重新起算——registry 里是最新激活（b.example）。
+        let registry = controller.activations.lock().unwrap();
+        let act = registry
+            .states
+            .get(&SubagentRole::ExternalRetrieval)
+            .unwrap();
+        assert_eq!(
+            act.activation_id, "retrieval-external_retrieval-RUN-BRLC-01",
+            "auto-close 后新派发新建激活"
+        );
+        assert_eq!(act.contract_revision, 0);
+        assert_eq!(act.candidate_urls, vec!["https://b.example".to_string()]);
+
+        // Journal: 4 次 lane browser_read 完成，计数按激活分别 1,1,1,1
+        // （不再跨派发累积为 1,1,2,2）。
+        let events = events(&dir);
+        let completed: Vec<&RunEvent> = events
+            .iter()
+            .filter(|e| {
+                e.event_type == EventType::ToolCompleted
+                    && e.payload.get("tool").and_then(|v| v.as_str()) == Some("browser_read")
+                    && e.payload.get("candidate_count").is_some()
+            })
+            .collect();
+        assert_eq!(completed.len(), 4, "{completed:?}");
+        let counts: Vec<i64> = completed
+            .iter()
+            .map(|e| e.payload["candidate_count"].as_i64().unwrap())
+            .collect();
+        assert_eq!(counts, vec![1, 1, 1, 1]);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// FUS-RETRIEVAL-MECH P0-B step 2 (2026-08-14): the per-activation
+    /// count domain flows through the external retrieval lane — only the
+    /// lane's SELF-EXECUTED web_fetch calls count (the main-lane dispatch
+    /// wrapper is not a fetch), the counter writes back into the activation,
+    /// and the journal carries the count/cap on each completion.
+    #[tokio::test]
+    async fn web_fetch_candidate_count_accumulates_in_external_lane() {
+        let dir = test_dir();
+        let journal = JournalRecorder::new(dir.clone());
+        let host = TestHost {
+            journal,
+            tool_result: None,
+        };
+        let gateway: Arc<dyn ModelGateway> = Arc::new(FakeProvider::new(vec![
+            ScriptedResponse::tool_calls(vec![web_fetch_call("call-1", "https://a.example")]),
+            ScriptedResponse::tool_calls(vec![web_fetch_call("call-2", "https://a.example")]),
+            ScriptedResponse::tool_calls(vec![web_fetch_call("call-3", "https://b.example")]),
+            ScriptedResponse::text("检索完成"),
+            ScriptedResponse::text("完成"),
+            ScriptedResponse::text("完成"),
+        ]));
+        let controller = with_retrieval_enabled(AgentLoopController::with_gateway(gateway));
+        controller
+            .run_turn(&host, "查网页", "RUN-WF2", MANIFEST, 0, None, None, None)
+            .await
+            .unwrap();
+
+        // The external activation's counter holds the lane's fetched URLs
+        // (exact-string dedup, first-seen order) — written back after the
+        // loop; the main-lane dispatch (call-1) never counted.
+        let registry = controller.activations.lock().unwrap();
+        let act = registry
+            .states
+            .get(&SubagentRole::ExternalRetrieval)
+            .unwrap();
+        assert_eq!(
+            act.candidate_urls,
+            vec![
+                "https://a.example".to_string(),
+                "https://b.example".to_string()
+            ]
+        );
+
+        // Journal: two lane web_fetch completions with counts 1 and 2.
+        let events = events(&dir);
+        let completed: Vec<&RunEvent> = events
+            .iter()
+            .filter(|e| {
+                e.event_type == EventType::ToolCompleted
+                    && e.payload.get("tool").and_then(|v| v.as_str()) == Some("web_fetch")
+                    // The main-lane dispatch wrapper's completion (call-1)
+                    // carries no count — it is not a fetch; only the
+                    // lane's self-executed fetches annotate candidate_count.
+                    && e.payload.get("candidate_count").is_some()
+            })
+            .collect();
+        assert_eq!(completed.len(), 2, "{completed:?}");
+        assert_eq!(
+            completed[0].payload["candidate_count"],
+            serde_json::json!(1)
+        );
+        assert_eq!(
+            completed[1].payload["candidate_count"],
+            serde_json::json!(2)
+        );
+        assert_eq!(completed[1].payload["candidate_cap"], serde_json::json!(8));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// THIN-HARNESS-REDESIGN R1 (§4.4, 审查 P2 收口): auto-close 后每次
+    /// 派发都是新激活——web_fetch 候选计数按激活隔离，第二次派发从 1/8
+    /// 重新起算，不再跨派发累积。
+    #[tokio::test]
+    async fn web_fetch_candidate_count_resets_per_auto_closed_dispatch() {
+        let dir = test_dir();
+        let journal = JournalRecorder::new(dir.clone());
+        let host = TestHost {
+            journal,
+            tool_result: None,
+        };
+        let gateway: Arc<dyn ModelGateway> = Arc::new(FakeProvider::new(vec![
+            ScriptedResponse::tool_calls(vec![web_fetch_call("call-1", "https://a.example")]),
+            ScriptedResponse::tool_calls(vec![web_fetch_call("call-2", "https://a.example")]),
+            ScriptedResponse::text("检索完成"),
+            ScriptedResponse::tool_calls(vec![web_fetch_call("call-3", "https://b.example")]),
+            ScriptedResponse::tool_calls(vec![web_fetch_call("call-4", "https://b.example")]),
+            ScriptedResponse::text("检索完成"),
+            ScriptedResponse::text("完成"),
+            ScriptedResponse::text("完成"),
+        ]));
+        let controller = with_retrieval_enabled(AgentLoopController::with_gateway(gateway));
+        controller
+            .run_turn(&host, "查网页", "RUN-WFC2", MANIFEST, 0, None, None, None)
+            .await
+            .unwrap();
+
+        // auto-close：第二次派发是新激活（fresh id、revision 0），候选
+        // 计数从 1/8 重新起算——registry 里是最新激活（b.example）。
+        let registry = controller.activations.lock().unwrap();
+        let act = registry
+            .states
+            .get(&SubagentRole::ExternalRetrieval)
+            .unwrap();
+        assert_eq!(
+            act.activation_id, "retrieval-external_retrieval-RUN-WFC2-01",
+            "auto-close 后新派发新建激活"
+        );
+        assert_eq!(act.contract_revision, 0);
+        assert_eq!(act.candidate_urls, vec!["https://b.example".to_string()]);
+
+        // Journal: 两条 lane web_fetch 完成，计数按激活分别为 1,1
+        // （dispatch 包装 call-1/call-3 不计数；不再跨派发累积为 1,2）。
+        let events = events(&dir);
+        let completed: Vec<&RunEvent> = events
+            .iter()
+            .filter(|e| {
+                e.event_type == EventType::ToolCompleted
+                    && e.payload.get("tool").and_then(|v| v.as_str()) == Some("web_fetch")
+                    && e.payload.get("candidate_count").is_some()
+            })
+            .collect();
+        assert_eq!(completed.len(), 2, "{completed:?}");
+        assert_eq!(
+            completed[0].payload["candidate_count"],
+            serde_json::json!(1)
+        );
+        assert_eq!(
+            completed[1].payload["candidate_count"],
+            serde_json::json!(1)
+        );
+        assert_eq!(completed[1].payload["candidate_cap"], serde_json::json!(8));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// THIN-HARNESS-REDESIGN R1 (§4.4): 每次调用即闭环——每个派发新建
+    /// 激活（fresh activation_id / contract_revision 0 / 新预算与新候选
+    /// 计数），auto_close 后不再复用；黑板分区按 P2-3 用户裁决全量覆盖
+    /// （response / entries / ledger 替换，分区代表最近一次派发）。
+    #[tokio::test]
+    async fn subagent_dispatch_creates_fresh_activation_per_call() {
+        let dir = test_dir();
+        let journal = JournalRecorder::new(dir.clone());
+        let host = TestHost {
+            journal,
+            tool_result: None,
+        };
+
+        let gateway: Arc<dyn ModelGateway> = Arc::new(FakeProvider::new(vec![
+            ScriptedResponse::tool_calls(vec![tool_call("retrieve_project_docs", "call-1")]),
+            ScriptedResponse::text("[DOC] a.md\n第一批"),
+            ScriptedResponse::tool_calls(vec![tool_call("retrieve_project_docs", "call-2")]),
+            ScriptedResponse::text("[DOC] b.md\n第二批"),
+            ScriptedResponse::text("完成"),
+            ScriptedResponse::text("完成"),
+        ]));
+        let controller = with_retrieval_enabled(AgentLoopController::with_gateway(gateway));
+        // R1 (§4.6): 生产默认阈值 50；这些场景固定 7 保持原触发语义。
+        let mut orientation =
+            crate::orientation::OrientationSessionState::new_with_threshold("sess-abcdef123456", 7);
+        controller
+            .run_turn(
+                &host,
+                "查找项目文档",
+                "RUN-ID",
+                MANIFEST,
+                0,
+                None,
+                Some(&mut orientation),
+                None,
+            )
+            .await
+            .unwrap();
+
+        let events = events(&dir);
+        let assessments: Vec<_> = events
+            .iter()
+            .filter(|e| e.event_type == EventType::InformationSufficiencyAssessment)
+            .collect();
+        assert_eq!(assessments.len(), 2);
+        let p0 = &assessments[0].payload;
+        let p1 = &assessments[1].payload;
+        // session8 = "sess-abc" — the first 8 chars of the session id.
+        assert_eq!(
+            p0.get("activation_id").and_then(|v| v.as_str()),
+            Some("retrieval-internal_retrieval-sess-abc-00")
+        );
+        assert_eq!(
+            p1.get("activation_id").and_then(|v| v.as_str()),
+            Some("retrieval-internal_retrieval-sess-abc-01"),
+            "auto-close 后新派发新建激活"
+        );
+        assert_eq!(
+            p0.get("contract_id").and_then(|v| v.as_str()),
+            Some("retrieval-contract-internal_retrieval")
+        );
+        // auto-close：两次派发均 revision 0（无 continue 递增）。
+        assert_eq!(p0.get("contract_revision"), Some(&serde_json::json!(0)));
+        assert_eq!(p1.get("contract_revision"), Some(&serde_json::json!(0)));
+        // 每条派发一条 auto_close close record（每激活一条，verifier
+        // 同 activation 单 close 规则满足）。
+        let closes: Vec<_> = events
+            .iter()
+            .filter(|e| e.event_type == EventType::RetrievalCloseRecord)
+            .collect();
+        assert_eq!(closes.len(), 2, "{:?}", event_types(&dir));
+        assert!(closes.iter().all(|c| {
+            c.payload.get("terminal_reason").and_then(|v| v.as_str()) == Some("auto_close")
+        }));
+        // 无 disposition 事件（close/continue 往返已退役）。
+        assert_eq!(
+            events
+                .iter()
+                .filter(|e| e.event_type == EventType::RetrievalParentDisposition)
+                .count(),
+            0
+        );
+        // 黑板分区覆盖语义（P2-3 用户裁决选 a）——最近一次派发替换。
+        let r = controller.blackboard().read();
+        assert_eq!(r.internal_ret.project_docs, vec!["b.md"]);
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    fn disposition_call(
+        role: &str,
+        decision: &str,
+        delta: Option<&str>,
+        call_id: &str,
+    ) -> ToolCall {
+        let mut arguments = serde_json::json!({
+            "role": role,
+            "decision": decision,
+        });
+        if let Some(d) = delta {
+            arguments["requirement_delta"] = serde_json::Value::String(d.to_string());
+        }
+        ToolCall {
+            name: "retrieval_disposition".to_string(),
+            arguments,
+            call_id: call_id.to_string(),
+        }
+    }
+
+    /// THIN-HARNESS-REDESIGN R1 (§4.4): 派发成功即 auto_close close
+    /// record（assessment + result_digest 绑定，terminal_reason
+    /// auto_close）；对已关闭激活的迟到 retrieval_disposition 调用一律
+    /// 机械拒绝（no_pending_assessment，零 disposition 事件、零二次
+    /// close）。
+    #[tokio::test]
+    async fn dispatch_auto_closes_and_late_disposition_refused() {
+        let dir = test_dir();
+        let journal = JournalRecorder::new(dir.clone());
+        let host = TestHost {
+            journal,
+            tool_result: None,
+        };
+
+        let gateway: Arc<dyn ModelGateway> = Arc::new(FakeProvider::new(vec![
+            ScriptedResponse::tool_calls(vec![tool_call("retrieve_project_docs", "call-1")]),
+            ScriptedResponse::text("[DOC] a.md\n检索完成"),
+            ScriptedResponse::tool_calls(vec![disposition_call(
+                "internal_retrieval",
+                "close",
+                None,
+                "call-d1",
+            )]),
+            ScriptedResponse::tool_calls(vec![disposition_call(
+                "internal_retrieval",
+                "close",
+                None,
+                "call-d2",
+            )]),
+            ScriptedResponse::text("完成"),
+            ScriptedResponse::text("完成"),
+        ]));
+        let controller = with_retrieval_enabled(AgentLoopController::with_gateway(gateway));
+        let mut orientation =
+            crate::orientation::OrientationSessionState::new_with_threshold("sess-abcdef123456", 7);
+        controller
+            .run_turn(
+                &host,
+                "查找项目文档",
+                "RUN-CLOSE",
+                MANIFEST,
+                0,
+                None,
+                Some(&mut orientation),
+                None,
+            )
+            .await
+            .unwrap();
+
+        let events = events(&dir);
+        // 无 disposition 事件（close/continue 往返已退役）。
+        assert_eq!(
+            events
+                .iter()
+                .filter(|e| e.event_type == EventType::RetrievalParentDisposition)
+                .count(),
+            0
+        );
+        // 一条 auto_close close record（assessment + digest 绑定）。
+        let closes: Vec<_> = events
+            .iter()
+            .filter(|e| e.event_type == EventType::RetrievalCloseRecord)
+            .collect();
+        assert_eq!(closes.len(), 1);
+        let c = &closes[0].payload;
+        assert_eq!(
+            c.get("terminal_reason").and_then(|v| v.as_str()),
+            Some("auto_close")
+        );
+        assert_eq!(
+            c.get("validated_disposition_id"),
+            Some(&serde_json::Value::Null),
+            "auto_close 不引用 disposition"
+        );
+        assert!(c.get("assessment_id").is_some());
+        let digest = c.get("result_digest").and_then(|v| v.as_str()).unwrap();
+        assert_eq!(digest.len(), 64, "64-hex sha256 for auto_close");
+        assert_eq!(c.get("contract_revision"), Some(&serde_json::json!(0)));
+        // 迟到的两次 disposition 调用被拒（no_pending_assessment）。
+        assert_eq!(
+            events
+                .iter()
+                .filter(|e| {
+                    e.event_type == EventType::ToolCompleted
+                        && e.payload.get("error").and_then(|v| v.as_str())
+                            == Some("no_pending_assessment")
+                })
+                .count(),
+            2
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// THIN-HARNESS-REDESIGN R1 (§4.4): auto-close 后再次派发 = 新激活
+    /// （fresh activation_id、revision 0）；夹在中间的 retrieval_disposition
+    /// 调用被机械拒绝（no_pending_assessment），不产生 disposition 事件、
+    /// 不干扰两次 auto_close。
+    #[tokio::test]
+    async fn second_dispatch_after_auto_close_starts_fresh() {
+        let dir = test_dir();
+        let journal = JournalRecorder::new(dir.clone());
+        let host = TestHost {
+            journal,
+            tool_result: None,
+        };
+
+        let gateway: Arc<dyn ModelGateway> = Arc::new(FakeProvider::new(vec![
+            ScriptedResponse::tool_calls(vec![tool_call("retrieve_project_docs", "call-1")]),
+            ScriptedResponse::text("[DOC] a.md\n检索完成"),
+            ScriptedResponse::tool_calls(vec![disposition_call(
+                "internal_retrieval",
+                "close",
+                None,
+                "call-d1",
+            )]),
+            ScriptedResponse::tool_calls(vec![tool_call("retrieve_project_docs", "call-2")]),
+            ScriptedResponse::text("[DOC] b.md\n检索完成"),
+            ScriptedResponse::text("完成"),
+            ScriptedResponse::text("完成"),
+        ]));
+        let controller = with_retrieval_enabled(AgentLoopController::with_gateway(gateway));
+        controller
+            .run_turn(
+                &host,
+                "查找项目文档",
+                "RUN-REPLAY",
+                MANIFEST,
+                0,
+                None,
+                None,
+                None,
+            )
+            .await
+            .unwrap();
+
+        let events = events(&dir);
+        // 零 disposition 事件；一次 no_pending_assessment 拒绝。
+        assert_eq!(
+            events
+                .iter()
+                .filter(|e| e.event_type == EventType::RetrievalParentDisposition)
+                .count(),
+            0
+        );
+        assert_eq!(
+            events
+                .iter()
+                .filter(|e| {
+                    e.event_type == EventType::ToolCompleted
+                        && e.payload.get("error").and_then(|v| v.as_str())
+                            == Some("no_pending_assessment")
+                })
+                .count(),
+            1
+        );
+        // 两次派发 = 两个新激活 + 两条 auto_close close record。
+        let assessments: Vec<_> = events
+            .iter()
+            .filter(|e| e.event_type == EventType::InformationSufficiencyAssessment)
+            .collect();
+        assert_eq!(assessments.len(), 2);
+        assert_eq!(
+            assessments[0]
+                .payload
+                .get("activation_id")
+                .and_then(|v| v.as_str()),
+            Some("retrieval-internal_retrieval-RUN-REPL-00"),
+            "无 orientation 时激活身份取 run_id 前 8 字符"
+        );
+        assert_eq!(
+            assessments[1]
+                .payload
+                .get("activation_id")
+                .and_then(|v| v.as_str()),
+            Some("retrieval-internal_retrieval-RUN-REPL-01")
+        );
+        assert_eq!(
+            assessments[0].payload.get("contract_revision"),
+            Some(&serde_json::json!(0))
+        );
+        assert_eq!(
+            assessments[1].payload.get("contract_revision"),
+            Some(&serde_json::json!(0))
+        );
+        assert_eq!(
+            events
+                .iter()
+                .filter(|e| e.event_type == EventType::RetrievalCloseRecord)
+                .count(),
+            2
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// THIN-HARNESS-REDESIGN R1 (§4.4): auto-close 后连续两次检索派发
+    /// 都成功——第二次不再被"awaiting disposition"拒（该状态已被每次调用
+    /// 即闭环取代），产生两条 assessment 与两条 auto_close close record。
+    #[tokio::test]
+    async fn consecutive_dispatches_both_auto_close() {
+        let dir = test_dir();
+        let journal = JournalRecorder::new(dir.clone());
+        let host = TestHost {
+            journal,
+            tool_result: None,
+        };
+
+        let gateway: Arc<dyn ModelGateway> = Arc::new(FakeProvider::new(vec![
+            ScriptedResponse::tool_calls(vec![tool_call("retrieve_project_docs", "call-1")]),
+            ScriptedResponse::text("[DOC] a.md\n检索完成"),
+            ScriptedResponse::tool_calls(vec![tool_call("retrieve_project_docs", "call-2")]),
+            ScriptedResponse::text("[DOC] b.md\n检索完成"),
+            ScriptedResponse::text("完成"),
+            ScriptedResponse::text("完成"),
+        ]));
+        let controller = with_retrieval_enabled(AgentLoopController::with_gateway(gateway));
+        controller
+            .run_turn(
+                &host,
+                "查找项目文档",
+                "RUN-AWAIT",
+                MANIFEST,
+                0,
+                None,
+                None,
+                None,
+            )
+            .await
+            .unwrap();
+
+        let events = events(&dir);
+        assert_eq!(
+            events
+                .iter()
+                .filter(|e| e.event_type == EventType::InformationSufficiencyAssessment)
+                .count(),
+            2,
+            "both dispatches formed results: {:?}",
+            event_types(&dir)
+        );
+        assert_eq!(
+            events
+                .iter()
+                .filter(|e| e.event_type == EventType::RetrievalCloseRecord)
+                .count(),
+            2,
+            "both dispatches auto-closed: {:?}",
+            event_types(&dir)
+        );
+        // 无 awaiting-disposition 拒绝（该拒绝路径已不可达）。
+        assert!(
+            !events.iter().any(|e| {
+                e.event_type == EventType::ToolCompleted
+                    && e.payload.get("error").and_then(|v| v.as_str())
+                        == Some("activation_awaiting_disposition")
+            }),
+            "awaiting-disposition refusal must not fire under auto-close"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// M4: a user cancel closes every pending activation with a terminal
+    /// close record BEFORE the run_cancelled terminal event.
+    #[tokio::test]
+    async fn user_cancel_closes_pending_activations_before_run_cancelled() {
+        let dir = test_dir();
+        let journal = JournalRecorder::new(dir.clone());
+        let host = TestHost {
+            journal,
+            tool_result: None,
+        };
+
+        // Slow-chunked subagent response — the cancel lands inside the
+        // subagent stream (→ subagent_cancelled close), then propagates to
+        // the run level (→ run_cancelled). The subagent_cancelled close
+        // covers the activation; the user-cancel pass skips it (idempotent).
+        let gateway: Arc<dyn ModelGateway> = Arc::new(
+            FakeProvider::new(vec![
+                ScriptedResponse::tool_calls(vec![tool_call("retrieve_project_docs", "call-1")]),
+                ScriptedResponse::text("[DOC] a.md\n检索完成"),
+            ])
+            .with_chunk_delay(std::time::Duration::from_millis(60)),
+        );
+        let controller = Arc::new(with_retrieval_enabled(AgentLoopController::with_gateway(
+            gateway,
+        )));
+        let token = tokio_util::sync::CancellationToken::new();
+
+        let c = controller.clone();
+        let t = token.clone();
+        let run = tokio::task::spawn(async move {
+            c.run_turn_with_cancel(
+                &host,
+                "查找项目文档",
+                "RUN-UC",
+                MANIFEST,
+                0,
+                None,
+                Some(&t),
+                None,
+                None,
+            )
+            .await
+        });
+        tokio::time::sleep(std::time::Duration::from_millis(30)).await;
+        token.cancel();
+        let result = run.await.unwrap();
+        assert!(matches!(result, Err(AgentLoopError::Cancelled)));
+
+        let events = events(&dir);
+        let close_reasons: Vec<Option<String>> = events
+            .iter()
+            .filter(|e| e.event_type == EventType::RetrievalCloseRecord)
+            .map(|e| {
+                e.payload
+                    .get("terminal_reason")
+                    .and_then(|v| v.as_str())
+                    .map(str::to_string)
+            })
+            .collect();
+        // The cancel may land before or during the subagent round — either
+        // way exactly ONE close per activation, with a cancel-family reason.
+        assert_eq!(close_reasons.len(), 1, "{close_reasons:?}");
+        assert!(
+            close_reasons[0].as_deref() == Some("user_cancelled")
+                || close_reasons[0].as_deref() == Some("subagent_cancelled"),
+            "{close_reasons:?}"
+        );
+        // The close precedes the run terminal.
+        let close_idx = events
+            .iter()
+            .position(|e| e.event_type == EventType::RetrievalCloseRecord)
+            .unwrap();
+        let cancel_idx = events
+            .iter()
+            .position(|e| e.event_type == EventType::RunCancelled)
+            .unwrap();
+        assert!(close_idx < cancel_idx, "close before run_cancelled");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// M4: budget exhaustion on the subagent loop is a terminal authority —
+    /// a partial result is assessed, then the activation closes with
+    /// `budget_exhausted` (assessment + digest bound, no disposition).
+    #[tokio::test]
+    async fn subagent_budget_exhaustion_closes_activation() {
+        let dir = test_dir();
+        let journal = JournalRecorder::new(dir.clone());
+        let host = TestHost {
+            journal,
+            tool_result: Some(ToolResult {
+                output: "ok".to_string(),
+                exit_code: Some(0),
+                output_encoding: None,
+                structured: None,
+                ..Default::default()
+            }),
+        };
+
+        // Subagent budget 2: three subagent tool rounds exhaust it, then a
+        // final no-tool round reports the partial result.
+        let gateway: Arc<dyn ModelGateway> = Arc::new(FakeProvider::new(vec![
+            ScriptedResponse::tool_calls(vec![tool_call("retrieve_project_docs", "call-1")]),
+            ScriptedResponse::tool_calls(vec![tool_call("read_file", "call-2")]),
+            ScriptedResponse::tool_calls(vec![tool_call("read_file", "call-3")]),
+            ScriptedResponse::text("[DOC] a.md\n部分结果"),
+            ScriptedResponse::text("完成"),
+            ScriptedResponse::text("完成"),
+        ]));
+        let controller = with_retrieval_enabled(AgentLoopController::with_gateway(gateway))
+            .with_max_tool_rounds(2);
+        controller
+            .run_turn(
+                &host,
+                "查找项目文档",
+                "RUN-BUD",
+                MANIFEST,
+                0,
+                None,
+                None,
+                None,
+            )
+            .await
+            .unwrap();
+
+        let events = events(&dir);
+        // Assessment precedes the close (verifier ordering).
+        let assessment_idx = events
+            .iter()
+            .position(|e| e.event_type == EventType::InformationSufficiencyAssessment)
+            .unwrap();
+        let close = events
+            .iter()
+            .find(|e| e.event_type == EventType::RetrievalCloseRecord)
+            .expect("budget close record");
+        assert_eq!(
+            close
+                .payload
+                .get("terminal_reason")
+                .and_then(|v| v.as_str()),
+            Some("budget_exhausted")
+        );
+        assert!(close.payload.get("assessment_id").is_some());
+        assert_eq!(
+            close.payload.get("validated_disposition_id"),
+            Some(&serde_json::Value::Null)
+        );
+        let close_idx = events
+            .iter()
+            .position(|e| e.event_type == EventType::RetrievalCloseRecord)
+            .unwrap();
+        assert!(assessment_idx < close_idx, "assessment before close");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// THIN-HARNESS-REDESIGN R1 (§4.4): auto-close 后每次派发 = 新激活 =
+    /// 新预算（F5 的 continue 累积语义随 disposition 往返一并退役）。
+    /// 两次派发各耗 2 个子代理工具轮（< 4），都不触顶、都形成结果并
+    /// auto_close——验证"新激活从 0 起算"（若沿用旧累积语义，第二次会
+    /// 在累计 4 轮时 budget_exhausted）。
+    #[tokio::test]
+    async fn subagent_budget_is_fresh_per_dispatch() {
+        let dir = test_dir();
+        let journal = JournalRecorder::new(dir.clone());
+        let host = TestHost {
+            journal,
+            tool_result: Some(ToolResult {
+                output: "ok".to_string(),
+                exit_code: Some(0),
+                output_encoding: None,
+                structured: None,
+                ..Default::default()
+            }),
+        };
+
+        let gateway: Arc<dyn ModelGateway> = Arc::new(FakeProvider::new(vec![
+            ScriptedResponse::tool_calls(vec![tool_call("retrieve_project_docs", "call-1")]),
+            ScriptedResponse::tool_calls(vec![tool_call("read_file", "call-s1")]),
+            ScriptedResponse::tool_calls(vec![tool_call("read_file", "call-s2")]),
+            ScriptedResponse::text("[DOC] a.md\n第一批"),
+            ScriptedResponse::tool_calls(vec![tool_call("retrieve_project_docs", "call-2")]),
+            ScriptedResponse::tool_calls(vec![tool_call("read_file", "call-s3")]),
+            ScriptedResponse::tool_calls(vec![tool_call("read_file", "call-s4")]),
+            ScriptedResponse::text("[DOC] b.md\n第二批"),
+            ScriptedResponse::text("完成"),
+            // The main's final answer crosses the counterexample gate —
+            // one extra model round answers it (run-semantic; the
+            // subagent lanes never fire the gate).
+            ScriptedResponse::text("完成"),
+        ]));
+        let controller = with_retrieval_enabled(AgentLoopController::with_gateway(gateway))
+            .with_max_tool_rounds(4);
+        controller
+            .run_turn(
+                &host,
+                "查找项目文档",
+                "RUN-BUDACC",
+                MANIFEST,
+                0,
+                None,
+                None,
+                None,
+            )
+            .await
+            .unwrap();
+
+        let events = events(&dir);
+        // 新预算语义：两次派发均 < 4，无 tool_rounds_limit 门触发。
+        assert!(
+            !events.iter().any(|e| {
+                e.event_type == EventType::GateDecision
+                    && e.payload.get("gate").and_then(|v| v.as_str()) == Some("tool_rounds_limit")
+            }),
+            "fresh per-dispatch budget must not trip the limit: {:?}",
+            event_types(&dir)
+        );
+        // 两次派发均形成结果——revision 0（无 continue 递增）。
+        let assessments: Vec<_> = events
+            .iter()
+            .filter(|e| e.event_type == EventType::InformationSufficiencyAssessment)
+            .collect();
+        assert_eq!(assessments.len(), 2, "{:?}", event_types(&dir));
+        assert_eq!(
+            assessments[0].payload.get("contract_revision"),
+            Some(&serde_json::json!(0))
+        );
+        assert_eq!(
+            assessments[1].payload.get("contract_revision"),
+            Some(&serde_json::json!(0))
+        );
+        // 两条 auto_close close record。
+        let closes: Vec<_> = events
+            .iter()
+            .filter(|e| e.event_type == EventType::RetrievalCloseRecord)
+            .collect();
+        assert_eq!(closes.len(), 2, "{:?}", event_types(&dir));
+        assert!(closes.iter().all(|c| {
+            c.payload.get("terminal_reason").and_then(|v| v.as_str()) == Some("auto_close")
+        }));
+        // 两次派发各执行 2 个 read_file（共 4 个，均成功）。
+        assert_eq!(
+            events
+                .iter()
+                .filter(|e| {
+                    e.event_type == EventType::ToolCompleted
+                        && e.payload.get("tool").and_then(|v| v.as_str()) == Some("read_file")
+                        && e.payload.get("exit_code") == Some(&serde_json::json!(0))
+                })
+                .count(),
+            4
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    // ── M5 (2026-08-10): orientation lane feeding + Diagnostic Coverage ────
+
+    /// The subagent's completed model rounds feed the internal lane — 7
+    /// rounds cross the threshold and fire an `orientation_checkpoint` with
+    /// `agent_role=internal_retrieval`, injected into the SUBAGENT
+    /// conversation (ADR-0010 §4.2).
+    #[tokio::test]
+    async fn subagent_lane_feeds_and_fires_orientation() {
+        let dir = test_dir();
+        let journal = JournalRecorder::new(dir.clone());
+        let host = TestHost {
+            journal,
+            tool_result: Some(ToolResult {
+                output: "ok".to_string(),
+                exit_code: Some(0),
+                output_encoding: None,
+                structured: None,
+                ..Default::default()
+            }),
+        };
+
+        // The subagent runs 7 read_file tool rounds (7 feeds), then a text
+        // round forms the result; the main wraps it with 3 rounds total.
+        let mut script = vec![ScriptedResponse::tool_calls(vec![tool_call(
+            "retrieve_project_docs",
+            "call-1",
+        )])];
+        for i in 0..7 {
+            script.push(ScriptedResponse::tool_calls(vec![tool_call(
+                "read_file",
+                &format!("call-s{i}"),
+            )]));
+        }
+        script.push(ScriptedResponse::text("[DOC] doc.md\n检索完成"));
+        script.push(ScriptedResponse::text("完成"));
+        script.push(ScriptedResponse::text("完成"));
+        let controller = with_retrieval_enabled(AgentLoopController::with_gateway(Arc::new(
+            FakeProvider::new(script),
+        )));
+        let mut orientation =
+            crate::orientation::OrientationSessionState::new_with_threshold("sess-lane1234567", 7);
+        controller
+            .run_turn(
+                &host,
+                "查找项目文档",
+                "RUN-LANE",
+                MANIFEST,
+                0,
+                None,
+                Some(&mut orientation),
+                None,
+            )
+            .await
+            .unwrap();
+
+        let events = events(&dir);
+        let fires: Vec<_> = events
+            .iter()
+            .filter(|e| e.event_type == EventType::OrientationCheckpoint)
+            .collect();
+        assert_eq!(fires.len(), 1, "{:?}", event_types(&dir));
+        let p = &fires[0].payload;
+        assert_eq!(
+            p.get("agent_role").and_then(|v| v.as_str()),
+            Some("internal_retrieval")
+        );
+        assert_eq!(
+            p.get("trigger").and_then(|v| v.as_str()),
+            Some("completed_turns_interval")
+        );
+        assert_eq!(
+            p.get("completed_turns_since_orientation"),
+            Some(&serde_json::json!(7))
+        );
+        assert_eq!(
+            p.get("injection_position").and_then(|v| v.as_str()),
+            Some("post_tool_batch_gap")
+        );
+        assert!(
+            p.get("message_block")
+                .and_then(|v| v.as_str())
+                .unwrap()
+                .starts_with("[ORIENTATION")
+        );
+        // Lanes count independently: the main's 3 rounds never fed the
+        // subagent lane and vice versa. The fire COMMIT reset the internal
+        // lane (7 → 0); the 8th (result-forming) round re-fed it to 1.
+        assert_eq!(orientation.internal.completed_rounds, 1);
+        assert_eq!(orientation.main.completed_rounds, 3);
+        assert_eq!(orientation.external.completed_rounds, 0);
+        // §14.16 检索车道不变: the subagent lane keeps the legacy
+        // fire-and-continue behavior — no forced template round, no
+        // `checkpoint_response` event.
+        assert!(
+            events
+                .iter()
+                .all(|e| e.event_type != EventType::CheckpointResponse),
+            "retrieval lanes must not produce checkpoint_response events"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// 设计 §2.3/§2.7/§5 验收 3（派发面）：主车道调用 web_search → relay
+    /// 派发检索子代理（ToolStarted target=external_retrieval），子代理车道
+    /// 自行执行检索工具（TestHost NotFound 证明到达 host 工具集）。
+    #[tokio::test]
+    async fn main_lane_web_search_dispatches_to_retrieval_subagent() {
+        let dir = test_dir();
+        let journal = JournalRecorder::new(dir.clone());
+        let host = TestHost {
+            journal,
+            tool_result: None,
+        };
+        let gateway: Arc<dyn ModelGateway> = Arc::new(FakeProvider::new(vec![
+            // 主车道第 1 轮：直接调 web_search。
+            ScriptedResponse::tool_calls(vec![tool_call("web_search", "call-w1")]),
+            // 子代理车道第 1 轮：自行执行 web_search（lane self-execution）。
+            ScriptedResponse::tool_calls(vec![tool_call("web_search", "call-w2")]),
+            // 子代理车道第 2 轮：形成检索结果并关闭。
+            ScriptedResponse::text("检索完成"),
+            // 主车道：终答前反例自查轮 + 终答。
+            ScriptedResponse::text("草稿"),
+            ScriptedResponse::text("终答"),
+        ]));
+        let controller = with_retrieval_enabled(AgentLoopController::with_gateway(gateway));
+        let (response, _, _) = controller
+            .run_turn(
+                &host,
+                "查一下",
+                "RUN-RETRIEVAL-MAIN",
+                MANIFEST,
+                0,
+                None,
+                None,
+                None,
+            )
+            .await
+            .unwrap();
+        assert_eq!(response, "终答");
+
+        let events = events(&dir);
+        // 主车道 web_search 派发到 external_retrieval（relay 路由）。
+        let dispatch = events
+            .iter()
+            .find(|e| {
+                e.event_type == EventType::ToolStarted
+                    && e.payload.get("tool").and_then(serde_json::Value::as_str)
+                        == Some("web_search")
+                    && e.payload.get("target").and_then(serde_json::Value::as_str)
+                        == Some("external_retrieval")
+            })
+            .expect("web_search dispatched to the external retrieval subagent");
+        assert_eq!(dispatch.payload["call_id"], serde_json::json!("call-w1"));
+        // 子代理车道实际执行了 web_search（TestHost NotFound 证明到达
+        // host 工具集；车道自执行事件不带 target 字段）。
+        let subagent_call = events
+            .iter()
+            .find(|e| {
+                e.event_type == EventType::ToolCompleted
+                    && e.payload.get("tool").and_then(serde_json::Value::as_str)
+                        == Some("web_search")
+                    && e.payload.get("call_id").and_then(serde_json::Value::as_str)
+                        == Some("call-w2")
+            })
+            .expect("subagent lane self-executes web_search through the host");
+        let err = subagent_call
+            .payload
+            .get("error")
+            .and_then(serde_json::Value::as_str)
+            .expect("host failure");
+        assert!(
+            err.contains("test host has no tool result"),
+            "web_search reached the host toolset: {err}"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// RETRIEVAL-SUBAGENT-WIRING (2026-08-25, ADR-0010 §14.40)：主车道
+    /// 调 `retrieve_project_docs` → relay 路由到 internal_retrieval
+    /// 子代理（内部 lane 工具面仅读族）；子代理多轮检索后返回
+    /// `[DOC]` 结构化结果。
+    #[tokio::test]
+    async fn main_lane_retrieve_project_docs_dispatches_to_internal_subagent() {
+        let dir = test_dir();
+        let journal = JournalRecorder::new(dir.clone());
+        let host = TestHost {
+            journal,
+            tool_result: None,
+        };
+        let fake = Arc::new(FakeProvider::new(vec![
+            // 主车道第 1 轮：直接调 retrieve_project_docs。
+            // 审查处理：query 必填 + 可选 scope/max_results 一并进入契约。
+            ScriptedResponse::tool_calls(vec![ToolCall {
+                name: "retrieve_project_docs".to_string(),
+                arguments: serde_json::json!({
+                    "query": "调研缓存层",
+                    "scope": "src/cache",
+                    "max_results": 3,
+                }),
+                call_id: "call-rpd-1".to_string(),
+            }]),
+            // 子代理车道第 1 轮：调用读族工具（read_file）做检索。
+            ScriptedResponse::tool_calls(vec![tool_call("read_file", "call-rpd-2")]),
+            // 子代理车道第 2 轮：形成结构化结果并关闭。
+            ScriptedResponse::text("[DOC] src/cache.rs 缓存回归定位"),
+            // 主车道：终答前反例自查轮 + 终答。
+            ScriptedResponse::text("草稿"),
+            ScriptedResponse::text("终答"),
+        ]));
+        let gateway: Arc<dyn ModelGateway> = fake.clone();
+        let controller = with_retrieval_enabled(AgentLoopController::with_gateway(gateway));
+        let (response, _, _) = controller
+            .run_turn(
+                &host,
+                "调研项目文档",
+                "RUN-RETRIEVAL-INTERNAL",
+                MANIFEST,
+                0,
+                None,
+                None,
+                None,
+            )
+            .await
+            .unwrap();
+        assert_eq!(response, "终答");
+
+        // 审查处理：scope/max_results 机械并入子代理任务契约（子代理只收
+        // goal 文本，声明面承诺的参数必须进契约）。
+        let received = fake.received_requests();
+        let subagent_req = received
+            .iter()
+            .find(|r| r.system.contains("调研缓存层"))
+            .expect("internal subagent receives the folded retrieval task goal");
+        assert!(
+            subagent_req.system.contains("scope: src/cache"),
+            "scope folded into the subagent contract: {subagent_req:?}"
+        );
+        assert!(
+            subagent_req.system.contains("max_results: 3"),
+            "max_results folded into the subagent contract: {subagent_req:?}"
+        );
+
+        let events = events(&dir);
+        // 主车道 retrieve_project_docs 派发到 internal_retrieval（relay 路由）。
+        let dispatch = events
+            .iter()
+            .find(|e| {
+                e.event_type == EventType::ToolStarted
+                    && e.payload.get("tool").and_then(serde_json::Value::as_str)
+                        == Some("retrieve_project_docs")
+                    && e.payload.get("target").and_then(serde_json::Value::as_str)
+                        == Some("internal_retrieval")
+            })
+            .expect("retrieve_project_docs dispatched to the internal retrieval subagent");
+        assert_eq!(dispatch.payload["call_id"], serde_json::json!("call-rpd-1"));
+        // 子代理车道实际执行了读族工具（TestHost NotFound 证明到达 host
+        // 工具集；内部 lane 不含 web 族/browser_read）。
+        let subagent_call = events
+            .iter()
+            .find(|e| {
+                e.event_type == EventType::ToolCompleted
+                    && e.payload.get("tool").and_then(serde_json::Value::as_str)
+                        == Some("read_file")
+                    && e.payload.get("call_id").and_then(serde_json::Value::as_str)
+                        == Some("call-rpd-2")
+            })
+            .expect("internal lane executes read-family tool through the host");
+        let err = subagent_call
+            .payload
+            .get("error")
+            .and_then(serde_json::Value::as_str)
+            .expect("host failure");
+        assert!(
+            err.contains("test host has no tool result"),
+            "read_file reached the host toolset: {err}"
+        );
+        // 内部 lane 事件面：无 web_search / web_fetch / browser_read 调用。
+        assert!(
+            !events.iter().any(|e| {
+                (e.event_type == EventType::ToolStarted || e.event_type == EventType::ToolCompleted)
+                    && e.payload
+                        .get("tool")
+                        .and_then(serde_json::Value::as_str)
+                        .is_some_and(|t| {
+                            crate::relay::is_web_retrieval_tool(t) || t == "browser_read"
+                        })
+            }),
+            "internal lane must not touch web/browser tools: {events:?}"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+}

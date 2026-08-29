@@ -12,20 +12,11 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use async_trait::async_trait;
 
 use crate::controller::{AgentLoopController, RetrievalCapability, RetrievalMode};
+use crate::gateway::fake::ScriptedResponse;
 use crate::gateway::model::{Message, Role, ToolCall};
 use crate::host::{
     LoopHost, PermitDecision, PermitError, RiskClass, ToolDef, ToolError, ToolRegistry, ToolResult,
 };
-
-/// THIN-HARNESS-REDESIGN R2a 审查处理 (P2-1, 2026-08-27)：env 突变
-/// 测试共享同一把锁——此前 `retrieval_dispatch_inline_channel_keeps_
-/// full_text` 与 `retrieval_result_channel_env_parse_rules` 各自声明
-/// 函数级 ENV_LOCK（互不排斥），且默认指针摘要测试无锁读取同一 env；
-/// inline 测试持 env=inline 跨整个 async run_turn 期间，并行测试可能
-/// 读到 inline 导致断言 flake。三个测试统一持本锁（读方也持锁排除
-/// 突变窗口；std::sync::MutexGuard 跨 await 仅对 current_thread
-/// 测试运行时成立，本文件 tokio::test 默认即此）。
-pub(crate) static RETRIEVAL_CHANNEL_ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 /// Minimal LoopHost for testing the controller.
 pub(crate) struct TestHost {
@@ -384,4 +375,108 @@ pub(crate) fn tool_round(call_id: &str, result: &str) -> Vec<Message> {
             reasoning_content: None,
         },
     ]
+}
+
+/// A host whose fixed test runner returns scripted results — the DC
+/// hard-signal source (ADR-0010 §4.6.2).
+pub(crate) struct ScriptedTestRunnerHost {
+    pub(crate) journal: JournalRecorder,
+    pub(crate) results: std::sync::Mutex<std::collections::VecDeque<crate::host::TestRunResult>>,
+}
+#[async_trait]
+impl LoopHost for ScriptedTestRunnerHost {
+    fn journal(&self) -> &JournalRecorder {
+        &self.journal
+    }
+    fn tools_registry(&self) -> &dyn ToolRegistry {
+        &FullRegistry
+    }
+    fn tool_policy(&self) -> crate::host::ToolPolicy {
+        crate::host::ToolPolicy::Benchmark
+    }
+    fn test_runner(&self) -> Option<crate::host::TestRunner> {
+        Some(crate::host::TestRunner {
+            command: vec!["pytest-stub".to_string()],
+            timeout: None,
+            env: Vec::new(),
+        })
+    }
+    async fn run_tests(&self) -> Result<crate::host::TestRunResult, ToolError> {
+        let r = self
+            .results
+            .lock()
+            .unwrap()
+            .pop_front()
+            .expect("scripted test results exhausted");
+        Ok(r)
+    }
+    async fn request_permission(
+        &self,
+        _risk: RiskClass,
+        _tool: &str,
+        _args: &serde_json::Value,
+    ) -> Result<PermitDecision, PermitError> {
+        // RT-001 (2026-08-11): run_tests passes the permission gate —
+        // this host models the Benchmark (harness) policy, where the
+        // bridge auto-allows LocalMutation non-shell tools.
+        Ok(PermitDecision::AllowOnce)
+    }
+}
+
+pub(crate) fn failing_test_run() -> crate::host::TestRunResult {
+    crate::host::TestRunResult {
+        output: "FAILED tests/test_x.py::test_y".to_string(),
+        exit_code: Some(1),
+        full_output_path: Some("D:/test-output.txt".to_string()),
+        ..Default::default()
+    }
+}
+pub(crate) fn passing_test_run() -> crate::host::TestRunResult {
+    crate::host::TestRunResult {
+        output: "1 passed".to_string(),
+        exit_code: Some(0),
+        full_output_path: Some("D:/test-output.txt".to_string()),
+        ..Default::default()
+    }
+}
+
+/// ORZ-ORIENTATION-FORCED-TEMPLATE (2026-08-15, ADR-0010 §14.16): a
+/// valid JSON template answer for a forced checkpoint round.
+pub(crate) fn template_answer(next_action: &str) -> ScriptedResponse {
+    ScriptedResponse::text(format!(
+        r#"{{"task_position":"修复测试失败","progress_evidence":[],"blockers":[],"next_action":"{next_action}","changed_direction":false}}"#
+    ))
+}
+
+pub(crate) struct FullRegistry;
+impl ToolRegistry for FullRegistry {
+    fn get(&self, name: &str) -> Option<ToolDef> {
+        FullRegistry::list_all()
+            .into_iter()
+            .find(|t| t.name == name)
+    }
+    fn list(&self) -> Vec<ToolDef> {
+        FullRegistry::list_all()
+    }
+}
+impl FullRegistry {
+    fn list_all() -> Vec<ToolDef> {
+        [
+            "read_file",
+            "list_dir",
+            "grep",
+            "search_replace",
+            "run_terminal_cmd",
+            "web_search",
+            "web_fetch",
+            "bash",
+        ]
+        .iter()
+        .map(|n| ToolDef {
+            name: n.to_string(),
+            description: format!("tool {n}"),
+            parameters: serde_json::json!({}),
+        })
+        .collect()
+    }
 }
