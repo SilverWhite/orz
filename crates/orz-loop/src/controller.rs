@@ -466,7 +466,7 @@ pub struct AgentLoopController {
     /// THIS run's committed ledgers, and per-ledger renumbering would make
     /// `SRC-001` ambiguous across multiple committed results in one run.
     /// The counter is cleared at run start and consumed by
-    /// `build_structured_result` at each commit.
+    /// `retrieval::evidence::build_structured_result` at each commit.
     pub(crate) next_source_seq: Mutex<u32>,
     /// GAP-SOURCE-WEIGHTING-IMPL (2026-08-13): ADR-0010 §3.7 条 12 —
     /// mechanical source tier judge config (embedded seed lists by default;
@@ -897,7 +897,8 @@ impl AgentLoopController {
             denial_state: Mutex::new(DenialState::default()),
             // FUS-LEDGER-FOLD-STATE (2026-08-18, ADR-0010 §14.26):
             // production reads `ORZ_FOLD_TRIGGER_TOKENS` at construction;
-            // tests pin tiny thresholds via `with_fold_trigger_tokens`.
+            // tests pin tiny thresholds via
+            // `ContextCompactConfig::with_fold_trigger_tokens` (compact.rs).
             context_compact: ContextCompactConfig {
                 fold_trigger_tokens: fold_trigger_tokens_override()
                     .unwrap_or(DEFAULT_FOLD_TRIGGER_TOKENS),
@@ -2394,8 +2395,9 @@ impl AgentLoopController {
     /// Component injection for tests (independent scripted providers).
     /// STALL-DEGENERATION-FAILFAST (2026-08-21, ADR-0010 §14.37)：检索
     /// 子代理不再作为 controller 常驻字段——每 run 由 `run_turn_inner`
-    /// 的 per-run gateway 在 `run_retrieval_subagent` 内局部构造，本
-    /// 签名不再接收 retrieval 组件。
+    /// 的 per-run gateway 在 `retrieval/dispatch.rs` 的
+    /// `run_retrieval_subagent` 内局部构造，本签名不再接收 retrieval
+    /// 组件。
     pub fn with_components(main_agent: MainAgent) -> Self {
         Self {
             main_agent,
@@ -3372,14 +3374,16 @@ impl AgentLoopController {
         }
         // THIN-HARNESS-REDESIGN R1 (2026-08-27, §4.1): `retrieval_disposition`
         // 与 `retrieve_project_docs` 从主代理声明面删除——检索子代理结果
-        // 改为每次调用即闭环（§4.4；见 run_retrieval_subagent），内部检索
-        // 子代理随主面下线（主代理对项目文档直接用 grep/read/search_replace）。
+        // 改为每次调用即闭环（§4.4；见 retrieval/dispatch.rs 的
+        // run_retrieval_subagent），内部检索子代理随主面下线（主代理对
+        // 项目文档直接用 grep/read/search_replace）。
         // 底层 handler/relay 路由保留为休眠模块（审查 P2-2 收口：正常主面
         // 不声明，但并非「不可达」——跨 run 恢复的 AwaitingDisposition
         // 激活仍经 retrieval_disposition/retrieve_project_docs 延续，见
-        // run_retrieval_subagent 与 handle_parent_disposition；幻觉调用内部
-        // lane 会产生一次子代理运行（成本已评估），R3 裁决彻底封死/物理
-        // 删除）。
+        // retrieval/dispatch.rs 的 run_retrieval_subagent 与
+        // retrieval/disposition.rs 的 handle_parent_disposition；幻觉调用
+        // 内部 lane 会产生一次子代理运行（成本已评估），R3 裁决彻底封死/
+        // 物理删除）。
         // GAP-RETRIEVAL-TOOLS (2026-08-10): mode=off removes the retrieval
         // dispatch family from the model-visible declarations (ADR-0010
         // §3.7.1 — unauthenticated retrieval starts from off; §3.5.2
@@ -4015,7 +4019,6 @@ impl AgentLoopController {
     /// 且 pending checkpoint 优先（checkpoint 未完成时本入口不触发）。
     /// 过期订单被消费（清槽）并写显式错误 receipt（`step=protocol` /
     /// `code=order_stale`），模型下轮按结果栏反馈改写订单。
-    #[allow(clippy::too_many_arguments)] // mirrors run_host_tool's shared-loop contract
     pub(crate) async fn issue_pending_console_order<'a, 'b>(
         &self,
         host: &dyn LoopHost,
@@ -4758,7 +4761,7 @@ impl AgentLoopController {
     /// Run a host tool call through the permission and execution gates.
     /// (IP3a IPG evaluation is hoisted to the controller's tool phase — a
     /// block ends the whole phase without further model calls.)
-    #[allow(clippy::too_many_arguments)] // mirrors run_turn_with_cancel/run_retrieval_subagent
+    #[allow(clippy::too_many_arguments)] // mirrors run_turn_with_cancel + the retrieval dispatch lane contract
     pub(crate) async fn run_host_tool(
         &self,
         host: &dyn LoopHost,
@@ -4859,7 +4862,7 @@ impl AgentLoopController {
     /// P0-C S4 (2026-08-16): same gate chain as `run_host_tool` with a
     /// per-call host timeout override (script step deadlines). `None`
     /// behaves exactly like `run_host_tool`.
-    #[allow(clippy::too_many_arguments)] // mirrors run_turn_with_cancel/run_retrieval_subagent
+    #[allow(clippy::too_many_arguments)] // mirrors run_turn_with_cancel + the retrieval dispatch lane contract
     pub(crate) async fn run_host_tool_with_timeout(
         &self,
         host: &dyn LoopHost,
@@ -7552,12 +7555,8 @@ mod tests {
     };
     use crate::host::{LoopHost, PermitError, RiskClass, ToolDef, ToolError, ToolRegistry};
     use crate::retrieval::activation::{ActivationState, ActivationStatus};
-    use crate::retrieval::evidence::{
-        build_evidence_record, build_structured_result, structured_candidate_urls,
-    };
     use async_trait::async_trait;
     use orz_assurance::JournalRecorder;
-    use orz_assurance::source_weighting::SourceWeightConfig;
     use std::collections::VecDeque;
     use std::path::{Path, PathBuf};
     use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -9086,281 +9085,6 @@ mod tests {
             close.payload["archive_ref"]
         );
         let _ = std::fs::remove_dir_all(&dir);
-    }
-
-    /// Evidence visibility table (§3.7.5): read_file=full, web_fetch=full
-    /// (or partial when truncated), web_search=partial, project_doc_index by
-    /// include_content. Failed calls produce no evidence.
-    #[test]
-    fn evidence_visibility_table_is_mechanical() {
-        let call = |name: &str, args: serde_json::Value| ToolCall {
-            name: name.to_string(),
-            arguments: args,
-            call_id: "c1".to_string(),
-        };
-        let ok = |output: &str| ToolResult {
-            output: output.to_string(),
-            exit_code: Some(0),
-            output_encoding: None,
-            structured: None,
-            ..Default::default()
-        };
-        let fail = ToolResult {
-            output: "boom".to_string(),
-            exit_code: Some(1),
-            output_encoding: None,
-            structured: None,
-            ..Default::default()
-        };
-        // Failed call → no evidence.
-        assert!(
-            build_evidence_record(
-                "read_file",
-                &call("read_file", serde_json::json!({"path": "a.rs"})),
-                &fail
-            )
-            .is_none()
-        );
-        // read_file success → full text.
-        let e = build_evidence_record(
-            "read_file",
-            &call("read_file", serde_json::json!({"path": "src/a.rs"})),
-            &ok("x"),
-        )
-        .unwrap();
-        assert_eq!(e.visibility, "full_text_observed");
-        assert_eq!(e.source_type, "local_file");
-        assert_eq!(e.identity, "src/a.rs");
-        // web_fetch full vs truncated. The truncated sample uses the fetch
-        // pipeline's REAL footer ("[web_fetch content truncated: showing
-        // first N of M bytes...]", codegen overflow.rs) — the pre-review
-        // detector matched "[truncated", which that footer does not contain,
-        // and granted full-level attribution to truncated text (H2).
-        let w = build_evidence_record(
-            "web_fetch",
-            &call("web_fetch", serde_json::json!({"url": "https://x.com"})),
-            &ok("page"),
-        )
-        .unwrap();
-        assert_eq!(w.visibility, "full_text_observed");
-        let t = build_evidence_record(
-            "web_fetch",
-            &call("web_fetch", serde_json::json!({"url": "https://x.com"})),
-            &ok("first portion\n\n[web_fetch content truncated: showing first 1000 of 5000 bytes]"),
-        )
-        .unwrap();
-        assert_eq!(t.visibility, "partial_text_observed");
-        // The bounded-budget fallback marker and a long output also count.
-        let t2 = build_evidence_record(
-            "web_fetch",
-            &call("web_fetch", serde_json::json!({"url": "https://x.com"})),
-            &ok("x\n[truncated]"),
-        )
-        .unwrap();
-        assert_eq!(t2.visibility, "partial_text_observed");
-        // web_search → partial (snippet).
-        let s = build_evidence_record(
-            "web_search",
-            &call("web_search", serde_json::json!({"query": "q"})),
-            &ok("snippet"),
-        )
-        .unwrap();
-        assert_eq!(s.visibility, "partial_text_observed");
-        assert_eq!(s.source_type, "web_search_result");
-        // project_doc_index: metadata vs content mode.
-        let m = build_evidence_record(
-            "project_doc_index",
-            &call("project_doc_index", serde_json::json!({"query": "q"})),
-            &ok("meta"),
-        )
-        .unwrap();
-        assert_eq!(m.visibility, "metadata_only");
-        let f = build_evidence_record(
-            "project_doc_index",
-            &call(
-                "project_doc_index",
-                serde_json::json!({"query": "q", "include_content": "true"}),
-            ),
-            &ok("content"),
-        )
-        .unwrap();
-        assert_eq!(f.visibility, "full_text_observed");
-        // local_browser (2026-08-10): browser_read full vs truncated — the
-        // host's mechanical footer ("[browser_read content truncated: ...")
-        // and the length backstop map to partial (§3.7.5); source_type is
-        // web_page (the transport difference lives in evidence.tool).
-        let b = build_evidence_record(
-            "browser_read",
-            &call("browser_read", serde_json::json!({"url": "https://x.com"})),
-            &ok("page text"),
-        )
-        .unwrap();
-        assert_eq!(b.visibility, "full_text_observed");
-        assert_eq!(b.source_type, "web_page");
-        let bt = build_evidence_record(
-            "browser_read",
-            &call("browser_read", serde_json::json!({"url": "https://x.com"})),
-            &ok("first portion\n\n[browser_read content truncated: 100000 chars, page text only]"),
-        )
-        .unwrap();
-        assert_eq!(bt.visibility, "partial_text_observed");
-        let bl = build_evidence_record(
-            "browser_read",
-            &call("browser_read", serde_json::json!({"url": "https://x.com"})),
-            &ok(&"x".repeat(200_001)),
-        )
-        .unwrap();
-        assert_eq!(bl.visibility, "partial_text_observed");
-        // P0-B step 4 (2026-08-14): mode-aware evidence — preview of a
-        // short page (no footer) stays full; truncated preview maps to
-        // partial; keywords excerpts are partial by contract.
-        let bp_short = build_evidence_record(
-            "browser_read",
-            &call(
-                "browser_read",
-                serde_json::json!({"url": "https://x.com", "mode": "preview"}),
-            ),
-            &ok("page text"),
-        )
-        .unwrap();
-        assert_eq!(bp_short.visibility, "full_text_observed");
-        assert_eq!(bp_short.observed_scope, "full document");
-        let bp_trunc = build_evidence_record(
-            "browser_read",
-            &call(
-                "browser_read",
-                serde_json::json!({"url": "https://x.com", "mode": "preview"}),
-            ),
-            &ok("first portion\n\n[browser_read content truncated: preview, first 4000 chars, page text only]"),
-        )
-        .unwrap();
-        assert_eq!(bp_trunc.visibility, "partial_text_observed");
-        assert_eq!(bp_trunc.observed_scope, "first portion (preview)");
-        let bk = build_evidence_record(
-            "browser_read",
-            &call(
-                "browser_read",
-                serde_json::json!({
-                    "url": "https://x.com",
-                    "mode": "keywords",
-                    "keywords": ["term"],
-                }),
-            ),
-            &ok("excerpt…\n\n[browser_read content truncated: keyword excerpts (1 terms, 1 excerpts), page text only]"),
-        )
-        .unwrap();
-        assert_eq!(bk.visibility, "partial_text_observed");
-        assert_eq!(bk.observed_scope, "keyword excerpts");
-        // PDF evidence (2026-08-11): the inline marker
-        // "PDF evidence: N pages, document_id=sha256:..., text_layer=..."
-        // drives visibility; content_sha256 is the DOCUMENT digest parsed
-        // from the marker, not a hash of the preview text.
-        let marker = |text_layer: &str, body: &str| {
-            format!(
-                "PDF evidence: 2 pages, document_id=sha256:ab{}, text_layer={text_layer}\n\n{body}",
-                "c".repeat(62)
-            )
-        };
-        let p = build_evidence_record(
-            "web_fetch",
-            &call(
-                "web_fetch",
-                serde_json::json!({"url": "https://x.com/paper.pdf"}),
-            ),
-            &ok(&marker("yes", "page text")),
-        )
-        .unwrap();
-        assert_eq!(p.visibility, "full_text_observed");
-        assert_eq!(p.source_type, "pdf_document");
-        assert_eq!(
-            p.content_sha256.as_deref(),
-            Some("abcccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc")
-        );
-        let pt = build_evidence_record(
-            "web_fetch",
-            &call(
-                "web_fetch",
-                serde_json::json!({"url": "https://x.com/paper.pdf"}),
-            ),
-            &ok(&marker(
-                "yes",
-                "first\n\n[web_fetch pdf content truncated: 50000 chars]",
-            )),
-        )
-        .unwrap();
-        assert_eq!(pt.visibility, "partial_text_observed");
-        let pn = build_evidence_record(
-            "web_fetch",
-            &call(
-                "web_fetch",
-                serde_json::json!({"url": "https://x.com/scan.pdf"}),
-            ),
-            &ok(&marker("no", "")),
-        )
-        .unwrap();
-        assert_eq!(pn.visibility, "metadata_only");
-        assert_eq!(pn.source_type, "pdf_document");
-        // Legacy save-to-downloads hint (no evidence root): download
-        // metadata only — never full-text attribution (bug fix).
-        let legacy = build_evidence_record(
-            "web_fetch",
-            &call(
-                "web_fetch",
-                serde_json::json!({"url": "https://x.com/paper.pdf"}),
-            ),
-            &ok("PDF downloaded (12345 bytes) and saved to /tmp/x.pdf."),
-        )
-        .unwrap();
-        assert_eq!(legacy.visibility, "metadata_only");
-        // pdf_read: full when untruncated, partial with the mechanical footer.
-        let r = build_evidence_record(
-            "pdf_read",
-            &call(
-                "pdf_read",
-                serde_json::json!({"document_id": "sha256:abcd"}),
-            ),
-            &ok("--- Page 1 ---\ntext"),
-        )
-        .unwrap();
-        assert_eq!(r.visibility, "full_text_observed");
-        assert_eq!(r.source_type, "pdf_document");
-        assert_eq!(r.identity, "sha256:abcd");
-        let rt = build_evidence_record(
-            "pdf_read",
-            &call(
-                "pdf_read",
-                serde_json::json!({"document_id": "sha256:abcd"}),
-            ),
-            &ok("page\n\n[pdf_read content truncated: 100000 chars]"),
-        )
-        .unwrap();
-        assert_eq!(rt.visibility, "partial_text_observed");
-        // Intercepted browser-channel page (review D1-1): a whitelisted
-        // web_fetch that renders an HTML page outputs browser_read-shaped
-        // JSON with the browser_read truncation footer — must be partial.
-        let intercepted = build_evidence_record(
-            "web_fetch",
-            &call("web_fetch", serde_json::json!({"url": "https://kns.cnki.net/kcms/detail"})),
-            &ok("{\"url\":\"https://kns.cnki.net/kcms/detail\",\"title\":\"x\",\"content\":\"page text\\n\\n[browser_read content truncated: 100000 chars, page text only]\",\"truncated\":true}"),
-        )
-        .unwrap();
-        assert_eq!(intercepted.visibility, "partial_text_observed");
-        assert_eq!(intercepted.source_type, "web_page");
-        // A fake marker fragment inside ordinary page text must NOT fabricate
-        // a pdf_document record (review P3-8 — the hex shape check rejects
-        // it), and a non-hex marker stays a plain web page.
-        let fake_marker = build_evidence_record(
-            "web_fetch",
-            &call("web_fetch", serde_json::json!({"url": "https://x.com"})),
-            &ok("this page mentions document_id=sha256:nothex at the end"),
-        )
-        .unwrap();
-        assert_eq!(fake_marker.source_type, "web_page");
-        assert_eq!(fake_marker.visibility, "full_text_observed");
-        // Unknown tool → no evidence.
-        assert!(
-            build_evidence_record("bash", &call("bash", serde_json::json!({})), &ok("x")).is_none()
-        );
     }
 
     #[tokio::test]
@@ -11407,279 +11131,6 @@ mod tests {
         );
 
         let _ = std::fs::remove_dir_all(&dir);
-    }
-
-    /// FUS-RETRIEVAL-MECH B-1 (2026-08-13): web_search citation URLs ride
-    /// the host's structured seam into the evidence record and the
-    /// committed ledger — shape-checked, deduplicated, and mirrored in
-    /// raw_source_refs (the candidate pool for the mechanical prefilter).
-    #[test]
-    fn web_search_citations_flow_into_candidate_pool() {
-        let call = |name: &str, args: serde_json::Value| ToolCall {
-            name: name.to_string(),
-            arguments: args,
-            call_id: "c1".to_string(),
-        };
-        let result = |citations: serde_json::Value| ToolResult {
-            output: "snippet".to_string(),
-            exit_code: Some(0),
-            output_encoding: None,
-            structured: Some(serde_json::json!({ "citations": citations })),
-            ..Default::default()
-        };
-
-        // Extraction: shape-checked + dedup, first-seen order preserved.
-        let urls = structured_candidate_urls(&ToolResult {
-            output: "snippet".to_string(),
-            exit_code: Some(0),
-            output_encoding: None,
-            structured: Some(serde_json::json!({
-                "citations": ["https://a.example", "https://b.example", "https://a.example", "", 7]
-            })),
-            ..Default::default()
-        });
-        assert_eq!(
-            urls,
-            vec![
-                "https://a.example".to_string(),
-                "https://b.example".to_string()
-            ]
-        );
-        assert!(
-            structured_candidate_urls(&ToolResult {
-                output: "x".to_string(),
-                exit_code: Some(0),
-                output_encoding: None,
-                structured: None,
-                ..Default::default()
-            })
-            .is_empty()
-        );
-        assert!(
-            structured_candidate_urls(&ToolResult {
-                output: "x".to_string(),
-                exit_code: Some(0),
-                output_encoding: None,
-                structured: Some(serde_json::json!({"other": []})),
-                ..Default::default()
-            })
-            .is_empty()
-        );
-
-        // Evidence record: only web_search picks the pool up.
-        let ev = build_evidence_record(
-            "web_search",
-            &call("web_search", serde_json::json!({"query": "q"})),
-            &result(serde_json::json!([
-                "https://a.example",
-                "https://b.example"
-            ])),
-        )
-        .unwrap();
-        assert_eq!(ev.source_type, "web_search_result");
-        assert_eq!(ev.candidate_urls.len(), 2);
-        let non_search = build_evidence_record(
-            "web_fetch",
-            &call("web_fetch", serde_json::json!({"url": "https://x.com"})),
-            &result(serde_json::json!(["https://a.example"])),
-        )
-        .unwrap();
-        assert!(non_search.candidate_urls.is_empty());
-
-        // Committed ledger: candidate_urls on the search entry + mirror in
-        // raw_source_refs; source counts unchanged (candidates are not
-        // observed sources).
-        let mut source_seq = 0;
-        let committed = build_structured_result(
-            &[ev],
-            &SourceWeightConfig::default(),
-            &orz_assurance::candidate_prefilter::CandidatePrefilterConfig::default(),
-            &mut source_seq,
-            &[],
-            &[],
-            "web_page",
-            "[RESULT_JSON]{\"sections\":[],\"claims\":[]}[/RESULT_JSON]",
-            "sub-session",
-            "act-1",
-            "contract-1",
-            0,
-            "call-1",
-            "goal",
-        );
-        let ledger = committed.payload["source_ledger"].as_array().unwrap();
-        assert_eq!(ledger.len(), 1);
-        assert_eq!(
-            ledger[0]["candidate_urls"],
-            serde_json::json!(["https://a.example", "https://b.example"])
-        );
-        assert_eq!(
-            ledger[0]["candidate_pool"][0]["url"],
-            serde_json::json!("https://a.example")
-        );
-        assert_eq!(
-            ledger[0]["candidate_pool"][1]["url"],
-            serde_json::json!("https://b.example")
-        );
-        assert_eq!(committed.payload["prefilter_log"], serde_json::json!([]));
-        let refs = committed.payload["raw_source_refs"].as_array().unwrap();
-        assert_eq!(refs.len(), 1);
-        assert_eq!(
-            refs[0]["candidate_urls"],
-            serde_json::json!(["https://a.example", "https://b.example"])
-        );
-        assert_eq!(refs[0]["candidate_pool"], ledger[0]["candidate_pool"]);
-        assert_eq!(committed.payload["source_counts"]["total"], 1);
-    }
-
-    /// FUS-RETRIEVAL-MECH P0-B step 3 (2026-08-14): the mechanical
-    /// prefilter shapes the committed candidate pool — canonical/host
-    /// dedup, known failure forms removed with stable reasons, tier/weight
-    /// and relevance sorting, and the full metadata mirrored in
-    /// raw_source_refs (the schema/verifier contract).
-    #[test]
-    fn mechanical_prefilter_shapes_candidate_pool_and_log() {
-        let call = ToolCall {
-            name: "web_search".to_string(),
-            arguments: serde_json::json!({ "query": "rust policy" }),
-            call_id: "c-step3".to_string(),
-        };
-        let result = ToolResult {
-            output: "snippet".to_string(),
-            exit_code: Some(0),
-            output_encoding: None,
-            structured: Some(serde_json::json!({
-                "citations": [
-                    "https://www.gov.cn/policy/rust",
-                    "https://example.com/login?next=/x",
-                    "https://example.com/article?utm_source=x",
-                    "https://example.com/article?utm_medium=y",
-                    "https://www.example.com/",
-                    "https://example.com/?ref=z",
-                    "https://example.com/unrelated"
-                ]
-            })),
-            ..Default::default()
-        };
-        let ev = build_evidence_record("web_search", &call, &result).unwrap();
-        assert_eq!(ev.candidate_urls.len(), 7);
-        assert_eq!(ev.search_query.as_deref(), Some("rust policy"));
-
-        let mut source_seq = 0;
-        let committed = build_structured_result(
-            &[ev],
-            &SourceWeightConfig::default(),
-            &orz_assurance::candidate_prefilter::CandidatePrefilterConfig::default(),
-            &mut source_seq,
-            &[],
-            &[],
-            "web_page",
-            "[RESULT_JSON]{\"sections\":[],\"claims\":[]}[/RESULT_JSON]",
-            "sub-session",
-            "act-1",
-            "contract-1",
-            0,
-            "call-1",
-            "goal",
-        );
-        let ledger = committed.payload["source_ledger"].as_array().unwrap();
-        let entry = &ledger[0];
-        assert_eq!(entry["source_type"], serde_json::json!("web_search_result"));
-        assert_eq!(
-            entry["candidate_urls"],
-            serde_json::json!([
-                "https://www.gov.cn/policy/rust",
-                "https://example.com/article?utm_source=x",
-                "https://www.example.com/",
-                "https://example.com/unrelated"
-            ])
-        );
-        // Per-candidate metadata: tier/weight/relevance/canonical form.
-        let pool = entry["candidate_pool"].as_array().unwrap();
-        assert_eq!(pool.len(), 4);
-        assert_eq!(pool[0]["tier"], serde_json::json!("authoritative"));
-        assert_eq!(pool[0]["mechanical_weight"], serde_json::json!(1.1));
-        assert_eq!(pool[0]["relevance"], serde_json::json!("direct"));
-        assert_eq!(
-            pool[1]["canonical_url"],
-            serde_json::json!("https://example.com/article")
-        );
-        assert_eq!(pool[3]["relevance"], serde_json::json!("tangential"));
-        // Removal log: login wall, canonical duplicate, host duplicate.
-        let log = committed.payload["prefilter_log"].as_array().unwrap();
-        let reasons: Vec<&str> = log.iter().map(|e| e["reason"].as_str().unwrap()).collect();
-        assert_eq!(
-            reasons,
-            vec!["login_wall", "duplicate_canonical", "duplicate_host"]
-        );
-        assert!(
-            log.iter()
-                .all(|e| e["source_id"] == serde_json::json!("SRC-001"))
-        );
-        assert!(
-            log.iter()
-                .all(|e| e["action"] == serde_json::json!("removed"))
-        );
-        // raw_source_refs mirrors the prefiltered pool exactly.
-        let refs = committed.payload["raw_source_refs"].as_array().unwrap();
-        assert_eq!(refs[0]["candidate_urls"], entry["candidate_urls"]);
-        assert_eq!(refs[0]["candidate_pool"], entry["candidate_pool"]);
-        // Candidates are not observed sources — counts unchanged.
-        assert_eq!(committed.payload["source_counts"]["total"], 1);
-    }
-
-    /// FUS-RETRIEVAL-MECH P0-B step 3 review fix (2026-08-14): a fully
-    /// purified pool is legitimate — all candidates removed by the
-    /// prefilter yields an empty retained pool + empty candidate_pool with
-    /// every removal recorded in prefilter_log (the verifier must accept
-    /// this state; schema already allows empty arrays).
-    #[test]
-    fn mechanical_prefilter_can_purify_entire_pool() {
-        let call = ToolCall {
-            name: "web_search".to_string(),
-            arguments: serde_json::json!({ "query": "rust" }),
-            call_id: "c-step3-empty".to_string(),
-        };
-        let result = ToolResult {
-            output: "snippet".to_string(),
-            exit_code: Some(0),
-            output_encoding: None,
-            structured: Some(serde_json::json!({
-                "citations": [
-                    "javascript:alert(1)",
-                    "https://example.com/login",
-                    "https://example.com/?redirect_url=https://other.example"
-                ]
-            })),
-            ..Default::default()
-        };
-        let ev = build_evidence_record("web_search", &call, &result).unwrap();
-        let mut source_seq = 0;
-        let committed = build_structured_result(
-            &[ev],
-            &SourceWeightConfig::default(),
-            &orz_assurance::candidate_prefilter::CandidatePrefilterConfig::default(),
-            &mut source_seq,
-            &[],
-            &[],
-            "web_page",
-            "[RESULT_JSON]{\"sections\":[],\"claims\":[]}[/RESULT_JSON]",
-            "sub-session",
-            "act-1",
-            "contract-1",
-            0,
-            "call-1",
-            "goal",
-        );
-        let ledger = committed.payload["source_ledger"].as_array().unwrap();
-        assert_eq!(ledger[0]["candidate_urls"], serde_json::json!([]));
-        assert_eq!(ledger[0]["candidate_pool"], serde_json::json!([]));
-        let log = committed.payload["prefilter_log"].as_array().unwrap();
-        assert_eq!(log.len(), 3);
-        let reasons: Vec<&str> = log.iter().map(|e| e["reason"].as_str().unwrap()).collect();
-        assert_eq!(reasons, vec!["bad_url", "login_wall", "redirect_chain"]);
-        let refs = committed.payload["raw_source_refs"].as_array().unwrap();
-        assert_eq!(refs[0]["candidate_urls"], serde_json::json!([]));
-        assert_eq!(refs[0]["candidate_pool"], serde_json::json!([]));
     }
 
     /// A6 (2026-08-08): the pure compaction function — drops only the
