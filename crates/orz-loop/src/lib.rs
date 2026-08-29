@@ -16,6 +16,7 @@ pub mod blackboard;
 pub(crate) mod checkpoint;
 mod compact;
 pub mod console;
+mod console_exec;
 pub(crate) mod console_mode;
 pub mod controller;
 mod delivery;
