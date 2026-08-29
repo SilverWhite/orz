@@ -39,6 +39,9 @@ pub mod summary;
 pub mod tool;
 pub mod tool_probe;
 
+#[cfg(test)]
+pub(crate) mod controller_test_support;
+
 // Re-export core types
 pub use controller::AgentLoopController;
 pub use host::LoopHost;
