@@ -27,6 +27,7 @@ pub mod entities;
 pub mod epoch;
 pub mod gateway;
 pub mod host;
+mod host_exec;
 pub(crate) mod mechanical_audit;
 pub mod orientation;
 pub(crate) mod planning;
