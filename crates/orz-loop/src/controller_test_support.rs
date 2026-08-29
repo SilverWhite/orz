@@ -12,7 +12,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use async_trait::async_trait;
 
 use crate::controller::{AgentLoopController, RetrievalCapability, RetrievalMode};
-use crate::gateway::model::ToolCall;
+use crate::gateway::model::{Message, Role, ToolCall};
 use crate::host::{
     LoopHost, PermitDecision, PermitError, RiskClass, ToolDef, ToolError, ToolRegistry, ToolResult,
 };
@@ -346,4 +346,42 @@ pub(crate) fn events(dir: &Path) -> Vec<RunEvent> {
 
 pub(crate) fn event_types(dir: &Path) -> Vec<EventType> {
     events(dir).into_iter().map(|e| e.event_type).collect()
+}
+
+// ── GAP-CONVERSATION-RESTORE (2026-08-10): multi-prompt conversation ──
+
+pub(crate) fn conv_message(role: Role, content: &str) -> Message {
+    Message {
+        role,
+        content: content.to_string(),
+        tool_call_id: None,
+        tool_calls: Vec::new(),
+        reasoning_content: None,
+    }
+}
+
+/// One complete tool round: an assistant declaration (with a tool call)
+/// plus its tool result — protocol-valid seed material for recovery
+/// truncation tests.
+pub(crate) fn tool_round(call_id: &str, result: &str) -> Vec<Message> {
+    vec![
+        Message {
+            role: Role::Assistant,
+            content: String::new(),
+            tool_call_id: None,
+            tool_calls: vec![ToolCall {
+                name: "read_file".to_string(),
+                arguments: serde_json::json!({"path": result}),
+                call_id: call_id.to_string(),
+            }],
+            reasoning_content: None,
+        },
+        Message {
+            role: Role::Tool,
+            content: result.to_string(),
+            tool_call_id: Some(call_id.to_string()),
+            tool_calls: Vec::new(),
+            reasoning_content: None,
+        },
+    ]
 }

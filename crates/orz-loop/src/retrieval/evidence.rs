@@ -858,6 +858,12 @@ pub(crate) fn build_structured_result(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::controller::AgentLoopController;
+    use crate::controller_test_support::*;
+    use crate::gateway::fake::{FakeProvider, ScriptedResponse};
+    use crate::gateway::model::ModelGateway;
+    use orz_assurance::{EventType, JournalRecorder};
+    use std::sync::Arc;
 
     /// Evidence visibility table (§3.7.5): read_file=full, web_fetch=full
     /// (or partial when truncated), web_search=partial, project_doc_index by
@@ -1405,5 +1411,503 @@ mod tests {
         let refs = committed.payload["raw_source_refs"].as_array().unwrap();
         assert_eq!(refs[0]["candidate_urls"], serde_json::json!([]));
         assert_eq!(refs[0]["candidate_pool"], serde_json::json!([]));
+    }
+
+    // ── GAP-RETRIEVAL-TOOLS (2026-08-10): structured result (§3.3.3) ──
+
+    /// Evidence collection from the lane's host calls feeds the mechanical
+    /// ledger: a read_file round yields a full-text source, and the
+    /// committed result carries REAL visibility (full_text_observed > 0).
+    #[tokio::test]
+    async fn structured_result_uses_tool_evidence_with_real_visibility() {
+        let dir = test_dir();
+        let journal = JournalRecorder::new(dir.clone());
+        let host = TestHost {
+            journal,
+            tool_result: Some(ToolResult {
+                output: "fn main() {}  // file content".to_string(),
+                exit_code: Some(0),
+                output_encoding: None,
+                structured: None,
+                ..Default::default()
+            }),
+        };
+        let gateway: Arc<dyn ModelGateway> = Arc::new(FakeProvider::new(vec![
+            ScriptedResponse::tool_calls(vec![tool_call("retrieve_project_docs", "call-1")]),
+            ScriptedResponse::tool_calls(vec![tool_call("read_file", "call-r1")]),
+            ScriptedResponse::text("[DOC] design.md\n检索完成"),
+            ScriptedResponse::text("完成"),
+            ScriptedResponse::text("完成"),
+        ]));
+        let controller = with_retrieval_enabled(AgentLoopController::with_gateway(gateway));
+        controller
+            .run_turn(&host, "查文档", "RUN-RET", MANIFEST, 0, None, None, None)
+            .await
+            .unwrap();
+
+        let events = events(&dir);
+        let commits: Vec<_> = events
+            .iter()
+            .filter(|e| e.event_type == EventType::RetrievalResultCommitted)
+            .collect();
+        assert_eq!(commits.len(), 1, "{:?}", event_types(&dir));
+        let p = &commits[0].payload;
+        assert_eq!(p["result_kind"], "retrieval_subagent_result");
+        assert_eq!(p["schema_version"], "0.2.0-draft");
+        // read_file evidence = full-text source; the [DOC] line is a
+        // metadata-only declaration — the merged ledger counts both.
+        let ledger = p["source_ledger"].as_array().unwrap();
+        assert_eq!(ledger.len(), 2);
+        let full = ledger
+            .iter()
+            .find(|e| e["visibility"] == "full_text_observed")
+            .unwrap();
+        assert_eq!(full["source_type"], "local_file");
+        assert!(full["content_sha256"].as_str().unwrap().len() == 64);
+        assert_eq!(full["highest_allowed_claim"], "observed");
+        assert_eq!(p["source_counts"]["total"], 2);
+        assert_eq!(p["source_counts"]["full_text_observed"], 1);
+        assert_eq!(p["source_counts"]["metadata_only"], 1);
+        // No [RESULT_JSON] block in this script → the result degrades
+        // EXPLICITLY (organized_response empty, visibility_degraded=true) —
+        // the ledger itself stays mechanical.
+        assert_eq!(p["visibility_degraded"], true);
+        // The assessment consumed the same mechanical counts.
+        let assessments: Vec<_> = events
+            .iter()
+            .filter(|e| e.event_type == EventType::InformationSufficiencyAssessment)
+            .collect();
+        assert_eq!(assessments.len(), 1);
+        assert_eq!(
+            assessments[0].payload["source_counts"]["full_text_observed"],
+            1
+        );
+        assert_eq!(assessments[0].payload["result_digest"], p["result_digest"]);
+        // Artifact landed under the journal dir.
+        let artifact_dir = dir.join("retrieval-results");
+        assert!(artifact_dir.is_dir());
+        assert_eq!(std::fs::read_dir(&artifact_dir).unwrap().count(), 1);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A valid `[RESULT_JSON]` block carries the organized_response into the
+    /// committed result, with source_ids bound to the mechanical ledger.
+    #[tokio::test]
+    async fn structured_result_accepts_valid_model_block() {
+        let dir = test_dir();
+        let journal = JournalRecorder::new(dir.clone());
+        let host = TestHost {
+            journal,
+            tool_result: Some(ToolResult {
+                output: "fn main() {}".to_string(),
+                exit_code: Some(0),
+                output_encoding: None,
+                structured: None,
+                ..Default::default()
+            }),
+        };
+        let gateway: Arc<dyn ModelGateway> = Arc::new(FakeProvider::new(vec![
+            ScriptedResponse::tool_calls(vec![tool_call("retrieve_project_docs", "call-1")]),
+            ScriptedResponse::tool_calls(vec![tool_call("read_file", "call-r1")]),
+            ScriptedResponse::text(concat!(
+                "[DOC] design.md\n检索完成\n",
+                "[RESULT_JSON]",
+                r#"{"sections":[{"section_title":"API","content":"入口函数","source_ids":["SRC-001"],"claim_strength":"observed"}],"claims":[]}"#,
+                "[/RESULT_JSON]",
+            )),
+            ScriptedResponse::text("完成"),
+            ScriptedResponse::text("完成"),
+        ]));
+        let controller = with_retrieval_enabled(AgentLoopController::with_gateway(gateway));
+        controller
+            .run_turn(&host, "查文档", "RUN-RET", MANIFEST, 0, None, None, None)
+            .await
+            .unwrap();
+
+        let events = events(&dir);
+        let commit = events
+            .iter()
+            .find(|e| e.event_type == EventType::RetrievalResultCommitted)
+            .unwrap();
+        let sections = commit.payload["organized_response"]["sections"]
+            .as_array()
+            .unwrap();
+        assert_eq!(sections.len(), 1);
+        assert_eq!(sections[0]["source_ids"][0], "SRC-001");
+        assert_eq!(commit.payload["visibility_degraded"], false);
+        // The accepted block back-filled the source's used_in_sections.
+        let ledger = commit.payload["source_ledger"].as_array().unwrap();
+        let full = ledger
+            .iter()
+            .find(|e| e["visibility"] == "full_text_observed")
+            .unwrap();
+        assert_eq!(full["used_in_sections"][0], "API");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A malformed / out-of-ledger model block degrades EXPLICITLY:
+    /// organized_response is empty, visibility_degraded=true and the
+    /// assessment reason_codes carry structured_result_validation_failed.
+    #[tokio::test]
+    async fn structured_result_validation_failure_degrades_explicitly() {
+        let dir = test_dir();
+        let journal = JournalRecorder::new(dir.clone());
+        let host = TestHost {
+            journal,
+            tool_result: None,
+        };
+        let gateway: Arc<dyn ModelGateway> = Arc::new(FakeProvider::new(vec![
+            ScriptedResponse::tool_calls(vec![tool_call("retrieve_project_docs", "call-1")]),
+            ScriptedResponse::text(concat!(
+                "[DOC] design.md\n检索完成\n",
+                "[RESULT_JSON]",
+                r#"{"sections":[{"section_title":"API","content":"c","source_ids":["SRC-999"],"claim_strength":"observed"}],"claims":[]}"#,
+                "[/RESULT_JSON]",
+            )),
+            ScriptedResponse::text("完成"),
+            ScriptedResponse::text("完成"),
+        ]));
+        let controller = with_retrieval_enabled(AgentLoopController::with_gateway(gateway));
+        controller
+            .run_turn(&host, "查文档", "RUN-RET", MANIFEST, 0, None, None, None)
+            .await
+            .unwrap();
+
+        let events = events(&dir);
+        let commit = events
+            .iter()
+            .find(|e| e.event_type == EventType::RetrievalResultCommitted)
+            .unwrap();
+        assert_eq!(commit.payload["visibility_degraded"], true);
+        assert!(
+            commit.payload["organized_response"]["sections"]
+                .as_array()
+                .unwrap()
+                .is_empty()
+        );
+        let assessment = events
+            .iter()
+            .find(|e| e.event_type == EventType::InformationSufficiencyAssessment)
+            .unwrap();
+        assert!(
+            assessment.payload["reason_codes"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|r| r == "structured_result_validation_failed")
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    // ── GAP-SOURCE-WEIGHTING-IMPL (2026-08-13): ADR-0010 §3.7 条 12 ──
+
+    /// A fetched web page's evidence carries the MECHANICAL tier/weight in
+    /// the committed ledger (authoritative 1.1 / default 1.0 / low_quality
+    /// 0.7); external `[SOURCE]` declarations go through the same judge.
+    #[tokio::test]
+    async fn web_page_evidence_carries_mechanical_tier_and_weight() {
+        let dir = test_dir();
+        let journal = JournalRecorder::new(dir.clone());
+        let host = TestHost {
+            journal,
+            tool_result: Some(ToolResult {
+                output: "page content".to_string(),
+                exit_code: Some(0),
+                output_encoding: None,
+                structured: None,
+                ..Default::default()
+            }),
+        };
+        let gateway: Arc<dyn ModelGateway> = Arc::new(FakeProvider::new(vec![
+            // Main round: dispatch the external retrieval lane.
+            ScriptedResponse::tool_calls(vec![ToolCall {
+                name: "web_fetch".to_string(),
+                arguments: serde_json::json!({"url": "https://example.com/dispatch"}),
+                call_id: "call-d".to_string(),
+            }]),
+            // Subagent round: fetch a whitelist page and a low-quality page.
+            ScriptedResponse::tool_calls(vec![
+                ToolCall {
+                    name: "web_fetch".to_string(),
+                    arguments: serde_json::json!({"url": "https://www.gov.cn/policy/1"}),
+                    call_id: "call-f1".to_string(),
+                },
+                ToolCall {
+                    name: "web_fetch".to_string(),
+                    arguments: serde_json::json!({"url": "https://blog.csdn.net/foo"}),
+                    call_id: "call-f2".to_string(),
+                },
+            ]),
+            ScriptedResponse::text("[SOURCE] https://zhihu.com/p/1\n检索完成"),
+            ScriptedResponse::text("完成"),
+            ScriptedResponse::text("完成"),
+        ]));
+        let controller = with_retrieval_enabled(AgentLoopController::with_gateway(gateway));
+        controller
+            .run_turn(&host, "查政策", "RUN-WT", MANIFEST, 0, None, None, None)
+            .await
+            .unwrap();
+
+        let events = events(&dir);
+        let commit = events
+            .iter()
+            .find(|e| e.event_type == EventType::RetrievalResultCommitted)
+            .unwrap();
+        let ledger = commit.payload["source_ledger"].as_array().unwrap();
+        let gov = ledger
+            .iter()
+            .find(|e| e["source_url_or_ref"] == "https://www.gov.cn/policy/1")
+            .unwrap();
+        assert_eq!(gov["source_type"], "web_page");
+        assert_eq!(gov["tier"], "authoritative");
+        assert_eq!(gov["mechanical_weight"], 1.1);
+        assert_eq!(gov["weight_reason"], "whitelist_suffix:gov.cn");
+        let csdn = ledger
+            .iter()
+            .find(|e| e["source_url_or_ref"] == "https://blog.csdn.net/foo")
+            .unwrap();
+        assert_eq!(csdn["tier"], "low_quality");
+        assert_eq!(csdn["mechanical_weight"], 0.7);
+        assert_eq!(csdn["weight_reason"], "low_quality_platform:csdn.net");
+        let zhihu = ledger
+            .iter()
+            .find(|e| e["source_url_or_ref"] == "https://zhihu.com/p/1")
+            .unwrap();
+        assert_eq!(zhihu["source_type"], "web_page");
+        assert_eq!(zhihu["tier"], "low_quality");
+        assert_eq!(zhihu["mechanical_weight"], 0.7);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Valid model `source_annotations` merge into the ledger
+    /// (model_weight/reason/annotation_status); invalid entries (unknown
+    /// source_id) are dropped EXPLICITLY into the filtering_log with
+    /// reason `annotation_invalid` — never a silent ignore, never a block.
+    #[tokio::test]
+    async fn source_annotations_merge_and_invalid_entries_drop_to_filter_log() {
+        let dir = test_dir();
+        let journal = JournalRecorder::new(dir.clone());
+        let host = TestHost {
+            journal,
+            tool_result: Some(ToolResult {
+                output: "policy content".to_string(),
+                exit_code: Some(0),
+                output_encoding: None,
+                structured: None,
+                ..Default::default()
+            }),
+        };
+        let gateway: Arc<dyn ModelGateway> = Arc::new(FakeProvider::new(vec![
+            ScriptedResponse::tool_calls(vec![ToolCall {
+                name: "web_fetch".to_string(),
+                arguments: serde_json::json!({"url": "https://example.com/dispatch"}),
+                call_id: "call-d".to_string(),
+            }]),
+            ScriptedResponse::tool_calls(vec![ToolCall {
+                name: "web_fetch".to_string(),
+                arguments: serde_json::json!({"url": "https://www.gov.cn/policy/1"}),
+                call_id: "call-f1".to_string(),
+            }]),
+            ScriptedResponse::text(concat!(
+                "检索完成\n",
+                "[RESULT_JSON]",
+                r#"{"sections":[{"section_title":"官方","content":"政策内容","source_ids":["SRC-001"],"claim_strength":"observed"}],"claims":[],"source_annotations":[{"source_id":"SRC-001","weight":1.1,"reason":"官方站点","status":"adopted"},{"source_id":"SRC-999","weight":0.7,"reason":"不存在","status":"annotated"}]}"#,
+                "[/RESULT_JSON]",
+            )),
+            ScriptedResponse::text("完成"),
+            ScriptedResponse::text("完成"),
+        ]));
+        let controller = with_retrieval_enabled(AgentLoopController::with_gateway(gateway));
+        controller
+            .run_turn(&host, "查政策", "RUN-AN", MANIFEST, 0, None, None, None)
+            .await
+            .unwrap();
+
+        let events = events(&dir);
+        let commit = events
+            .iter()
+            .find(|e| e.event_type == EventType::RetrievalResultCommitted)
+            .unwrap();
+        assert_eq!(commit.payload["visibility_degraded"], false);
+        let ledger = commit.payload["source_ledger"].as_array().unwrap();
+        let gov = ledger.iter().find(|e| e["source_id"] == "SRC-001").unwrap();
+        assert_eq!(gov["tier"], "authoritative");
+        assert_eq!(gov["model_weight"], 1.1);
+        assert_eq!(gov["model_weight_reason"], "官方站点");
+        assert_eq!(gov["annotation_status"], "adopted");
+        // Merged annotations are echoed into organized_response so the
+        // committed journal satisfies the Python verifier's
+        // annotation <-> ledger matching rule.
+        let annotations = commit.payload["organized_response"]["source_annotations"]
+            .as_array()
+            .unwrap();
+        assert_eq!(annotations.len(), 1);
+        assert_eq!(annotations[0]["source_id"], "SRC-001");
+        assert_eq!(annotations[0]["weight"], 1.1);
+        assert_eq!(annotations[0]["reason"], "官方站点");
+        assert_eq!(annotations[0]["status"], "adopted");
+        let filtering = commit.payload["filtering_log"].as_array().unwrap();
+        assert_eq!(filtering.len(), 1);
+        assert_eq!(filtering[0]["source_id"], "SRC-999");
+        assert_eq!(filtering[0]["reason"], "annotation_invalid");
+        assert_eq!(filtering[0]["action"], "excluded");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The producer enforces the same status/weight/tier invariants as the
+    /// Python verifier (review fix 2026-08-13): annotated MUST be 0.7,
+    /// adopted MUST be >= 1.0, a mechanically low_quality source MUST NOT
+    /// be adopted, and duplicate annotations for one source are dropped —
+    /// invalid entries land in filtering_log, the first valid entry still
+    /// merges and is echoed into organized_response.source_annotations.
+    #[tokio::test]
+    async fn source_annotations_consistent_status_and_duplicates_enforced() {
+        let dir = test_dir();
+        let journal = JournalRecorder::new(dir.clone());
+        let host = TestHost {
+            journal,
+            tool_result: Some(ToolResult {
+                output: "platform blog content".to_string(),
+                exit_code: Some(0),
+                output_encoding: None,
+                structured: None,
+                ..Default::default()
+            }),
+        };
+        let gateway: Arc<dyn ModelGateway> = Arc::new(FakeProvider::new(vec![
+            ScriptedResponse::tool_calls(vec![ToolCall {
+                name: "web_fetch".to_string(),
+                arguments: serde_json::json!({"url": "https://example.com/dispatch"}),
+                call_id: "call-d".to_string(),
+            }]),
+            ScriptedResponse::tool_calls(vec![ToolCall {
+                name: "web_fetch".to_string(),
+                arguments: serde_json::json!({"url": "https://blog.csdn.net/foo"}),
+                call_id: "call-f1".to_string(),
+            }]),
+            ScriptedResponse::text(concat!(
+                "[RESULT_JSON]",
+                r#"{"sections":[{"section_title":"平台博文","content":"内容","source_ids":["SRC-001"],"claim_strength":"observed"}],"claims":[],"source_annotations":[{"source_id":"SRC-001","weight":1.0,"reason":"adopted on low quality","status":"adopted"},{"source_id":"SRC-001","weight":1.0,"reason":"annotated wrong weight","status":"annotated"},{"source_id":"SRC-001","weight":0.7,"reason":"platform blog","status":"annotated"},{"source_id":"SRC-001","weight":0.7,"reason":"duplicate","status":"annotated"}]}"#,
+                "[/RESULT_JSON]",
+            )),
+            ScriptedResponse::text("完成"),
+            ScriptedResponse::text("完成"),
+        ]));
+        let controller = with_retrieval_enabled(AgentLoopController::with_gateway(gateway));
+        controller
+            .run_turn(
+                &host,
+                "查平台内容",
+                "RUN-ANN",
+                MANIFEST,
+                0,
+                None,
+                None,
+                None,
+            )
+            .await
+            .unwrap();
+
+        let events = events(&dir);
+        let commit = events
+            .iter()
+            .find(|e| e.event_type == EventType::RetrievalResultCommitted)
+            .unwrap();
+        let ledger = commit.payload["source_ledger"].as_array().unwrap();
+        let entry = ledger.iter().find(|e| e["source_id"] == "SRC-001").unwrap();
+        assert_eq!(entry["tier"], "low_quality");
+        assert_eq!(entry["mechanical_weight"], 0.7);
+        assert_eq!(entry["model_weight"], 0.7);
+        assert_eq!(entry["model_weight_reason"], "platform blog");
+        assert_eq!(entry["annotation_status"], "annotated");
+        let annotations = commit.payload["organized_response"]["source_annotations"]
+            .as_array()
+            .unwrap();
+        assert_eq!(annotations.len(), 1);
+        assert_eq!(annotations[0]["source_id"], "SRC-001");
+        assert_eq!(annotations[0]["status"], "annotated");
+        let filtering = commit.payload["filtering_log"].as_array().unwrap();
+        assert_eq!(filtering.len(), 3);
+        for item in filtering {
+            assert_eq!(item["source_id"], "SRC-001");
+            assert_eq!(item["reason"], "annotation_invalid");
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A low_quality source used in the organized response WITHOUT an
+    /// "annotated" annotation degrades the whole block explicitly
+    /// (visibility_degraded=true, empty sections, no merged model fields) —
+    /// the committed journal stays valid for the Python verifier.
+    #[tokio::test]
+    async fn used_low_quality_without_annotation_degrades() {
+        let dir = test_dir();
+        let journal = JournalRecorder::new(dir.clone());
+        let host = TestHost {
+            journal,
+            tool_result: Some(ToolResult {
+                output: "platform blog content".to_string(),
+                exit_code: Some(0),
+                output_encoding: None,
+                structured: None,
+                ..Default::default()
+            }),
+        };
+        let gateway: Arc<dyn ModelGateway> = Arc::new(FakeProvider::new(vec![
+            ScriptedResponse::tool_calls(vec![ToolCall {
+                name: "web_fetch".to_string(),
+                arguments: serde_json::json!({"url": "https://example.com/dispatch"}),
+                call_id: "call-d".to_string(),
+            }]),
+            ScriptedResponse::tool_calls(vec![ToolCall {
+                name: "web_fetch".to_string(),
+                arguments: serde_json::json!({"url": "https://blog.csdn.net/foo"}),
+                call_id: "call-f1".to_string(),
+            }]),
+            ScriptedResponse::text(concat!(
+                "[RESULT_JSON]",
+                r#"{"sections":[{"section_title":"平台博文","content":"内容","source_ids":["SRC-001"],"claim_strength":"observed"}],"claims":[]}"#,
+                "[/RESULT_JSON]",
+            )),
+            ScriptedResponse::text("完成"),
+            ScriptedResponse::text("完成"),
+        ]));
+        let controller = with_retrieval_enabled(AgentLoopController::with_gateway(gateway));
+        controller
+            .run_turn(
+                &host,
+                "查平台内容",
+                "RUN-LQA",
+                MANIFEST,
+                0,
+                None,
+                None,
+                None,
+            )
+            .await
+            .unwrap();
+
+        let events = events(&dir);
+        let commit = events
+            .iter()
+            .find(|e| e.event_type == EventType::RetrievalResultCommitted)
+            .unwrap();
+        assert_eq!(commit.payload["visibility_degraded"], true);
+        let sections = commit.payload["organized_response"]["sections"]
+            .as_array()
+            .unwrap();
+        assert!(sections.is_empty());
+        assert!(
+            commit.payload["organized_response"]
+                .get("source_annotations")
+                .is_none()
+        );
+        let ledger = commit.payload["source_ledger"].as_array().unwrap();
+        let entry = ledger.iter().find(|e| e["source_id"] == "SRC-001").unwrap();
+        assert_eq!(entry["tier"], "low_quality");
+        assert!(entry.get("model_weight").is_none());
+        assert!(entry.get("annotation_status").is_none());
+        assert_eq!(entry["used_in_sections"].as_array().unwrap().len(), 0);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

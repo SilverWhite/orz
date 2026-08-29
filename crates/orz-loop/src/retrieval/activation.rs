@@ -434,3 +434,454 @@ impl AgentLoopController {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::agents::SubagentRole;
+    use crate::controller::AgentLoopController;
+    use crate::controller_test_support::*;
+    use crate::gateway::fake::{FakeProvider, ScriptedResponse};
+    use crate::gateway::model::{Message, ModelGateway, Role, ToolCall};
+    use orz_assurance::{EventType, JournalRecorder};
+    use std::sync::Arc;
+
+    // ── GAP-RETRIEVAL-TOOLS (2026-08-10): cross-run activation persistence ──
+
+    /// The registry snapshot round-trips: seed → snapshot → seed keeps the
+    /// state-machine fields (status/pending/digest/budget); Closed
+    /// activations are excluded from the snapshot.
+    #[test]
+    fn activation_snapshot_round_trips_state_machine_fields() {
+        let mut registry = ActivationRegistry::default();
+        registry.next_seq.insert(SubagentRole::InternalRetrieval, 3);
+        registry.states.insert(
+            SubagentRole::InternalRetrieval,
+            ActivationState {
+                activation_id: "retrieval-internal_retrieval-sess-abc-02".to_string(),
+                parent_session_id: "sess-p".to_string(),
+                subagent_session_id: "SUB-internal_retrieval-sess-abc".to_string(),
+                contract_id: "retrieval-contract-internal_retrieval".to_string(),
+                contract_revision: 1,
+                status: ActivationStatus::AwaitingDisposition,
+                conversation: vec![Message {
+                    role: Role::User,
+                    content: "会话内容不入侧车".to_string(),
+                    tool_call_id: None,
+                    tool_calls: Vec::new(),
+                    reasoning_content: None,
+                }],
+                pending: Some(PendingDisposition {
+                    assessment_id: "ASSESS-1".to_string(),
+                    expected_contract_revision: 1,
+                    decided: None,
+                }),
+                next_goal: None,
+                result_digest: Some("a".repeat(64)),
+                submitted: vec![("DISP-1".to_string(), vec![1, 2, 3])],
+                tool_rounds_used: 7,
+                candidate_urls: vec![
+                    "https://a.example".to_string(),
+                    "https://b.example".to_string(),
+                ],
+                result_archive_ref: Some(".gsa/runs/RUN-X/retrieval-results/a.json".to_string()),
+            },
+        );
+        // A Closed activation must NOT ride the snapshot.
+        registry.states.insert(
+            SubagentRole::ExternalRetrieval,
+            ActivationState {
+                activation_id: "retrieval-external_retrieval-sess-abc-00".to_string(),
+                parent_session_id: "sess-p".to_string(),
+                subagent_session_id: "SUB-external_retrieval-sess-abc".to_string(),
+                contract_id: "retrieval-contract-external_retrieval".to_string(),
+                contract_revision: 0,
+                status: ActivationStatus::Closed,
+                conversation: Vec::new(),
+                pending: None,
+                next_goal: None,
+                result_digest: None,
+                submitted: Vec::new(),
+                tool_rounds_used: 0,
+                candidate_urls: Vec::new(),
+                result_archive_ref: None,
+            },
+        );
+
+        let json = registry.snapshot_json("RUN-ORIGIN");
+        let mut seeded = ActivationRegistry::default();
+        let restored = seeded.seed_from_json(&json);
+        assert_eq!(restored.len(), 1);
+        assert_eq!(
+            seeded.next_seq.get(&SubagentRole::InternalRetrieval),
+            Some(&3)
+        );
+        let act = seeded.states.get(&SubagentRole::InternalRetrieval).unwrap();
+        assert_eq!(
+            act.activation_id,
+            "retrieval-internal_retrieval-sess-abc-02"
+        );
+        assert_eq!(act.contract_revision, 1);
+        assert_eq!(act.status, ActivationStatus::AwaitingDisposition);
+        assert_eq!(act.pending.as_ref().unwrap().assessment_id, "ASSESS-1");
+        assert_eq!(act.tool_rounds_used, 7);
+        assert_eq!(
+            act.result_archive_ref.as_deref(),
+            Some(".gsa/runs/RUN-X/retrieval-results/a.json")
+        );
+        // P0-B step 2 (2026-08-14): the web_fetch candidate count rides
+        // the sidecar — a restored activation resumes the same count
+        // (cross-run `continue` keeps the cap meaningful).
+        assert_eq!(
+            act.candidate_urls,
+            vec![
+                "https://a.example".to_string(),
+                "https://b.example".to_string()
+            ]
+        );
+        // GAP-CONVERSATION-RESTORE (2026-08-10): the conversation now rides
+        // the sidecar (D-6 update — it round-trips intact); the replay
+        // ledger (`submitted`) still does not ride the sidecar.
+        assert_eq!(act.conversation.len(), 1);
+        assert_eq!(act.conversation[0].content, "会话内容不入侧车");
+        assert!(act.submitted.is_empty());
+        // Closed excluded.
+        assert!(!seeded.states.contains_key(&SubagentRole::ExternalRetrieval));
+    }
+
+    #[test]
+    fn has_live_requires_undisposed_pending_assessment() {
+        // P0-A-2 审查复核 (2026-08-13): `retrieval_disposition` 探针只
+        // 在激活携带未决 pending assessment 时完整 — Active 无 pending、
+        // accepted continue 后 pending 已决、Closed 均无待处置内容。
+        let mut registry = ActivationRegistry::default();
+        let state =
+            |status: ActivationStatus, pending: Option<PendingDisposition>| ActivationState {
+                activation_id: "retrieval-internal_retrieval-sess-abc-00".to_string(),
+                parent_session_id: "sess-p".to_string(),
+                subagent_session_id: "SUB-internal_retrieval-sess-abc".to_string(),
+                contract_id: "retrieval-contract-internal_retrieval".to_string(),
+                contract_revision: 0,
+                status,
+                conversation: Vec::new(),
+                pending,
+                next_goal: None,
+                result_digest: None,
+                submitted: Vec::new(),
+                tool_rounds_used: 0,
+                candidate_urls: Vec::new(),
+                result_archive_ref: None,
+            };
+        let undisposed = Some(PendingDisposition {
+            assessment_id: "ASSESS-1".to_string(),
+            expected_contract_revision: 0,
+            decided: None,
+        });
+        let decided = Some(PendingDisposition {
+            assessment_id: "ASSESS-1".to_string(),
+            expected_contract_revision: 0,
+            decided: Some("continue".to_string()),
+        });
+
+        assert!(!registry.has_live(), "empty registry");
+        registry.states.insert(
+            SubagentRole::InternalRetrieval,
+            state(ActivationStatus::Active, None),
+        );
+        assert!(
+            !registry.has_live(),
+            "Active mid-task activation has nothing to dispose"
+        );
+        registry.states.insert(
+            SubagentRole::InternalRetrieval,
+            state(ActivationStatus::AwaitingDisposition, undisposed),
+        );
+        assert!(
+            registry.has_live(),
+            "AwaitingDisposition with an undisposed assessment is complete"
+        );
+        registry.states.insert(
+            SubagentRole::InternalRetrieval,
+            state(ActivationStatus::Active, decided),
+        );
+        assert!(
+            !registry.has_live(),
+            "accepted continue leaves no undisposed assessment"
+        );
+        registry.states.insert(
+            SubagentRole::InternalRetrieval,
+            state(ActivationStatus::Closed, None),
+        );
+        assert!(
+            !registry.has_live(),
+            "closed activation has nothing to dispose"
+        );
+    }
+
+    /// A seeded AwaitingDisposition activation is journaled at the run
+    /// startup (`retrieval_activation_restored`), and the parent's
+    /// disposition can then CLOSE it across runs — the verifier resolves
+    /// the assessment through the restore declaration.
+    #[tokio::test]
+    async fn restored_activation_journaled_and_disposable_across_runs() {
+        let dir = test_dir();
+        let journal = JournalRecorder::new(dir.clone());
+        let host = TestHost {
+            journal,
+            tool_result: None,
+        };
+        let snapshot = serde_json::json!({
+            "next_seq": {"internal_retrieval": 1},
+            "activations": [{
+                "activation_id": "retrieval-internal_retrieval-sess-abc-00",
+                "parent_session_id": "sess-abcdef123456",
+                "subagent_session_id": "SUB-internal_retrieval-sess-abc",
+                "contract_id": "retrieval-contract-internal_retrieval",
+                "contract_revision": 0,
+                "status": "awaiting_disposition",
+                "tool_rounds_used": 3,
+                "result_digest": "b".repeat(64),
+                "pending_assessment_id": "ASSESS-PREV-1",
+                "pending_expected_contract_revision": 0,
+                "origin_run_id": "RUN-PREV-0001",
+            }]
+        });
+        let disposition_call = ToolCall {
+            name: "retrieval_disposition".to_string(),
+            arguments: serde_json::json!({
+                "role": "internal_retrieval",
+                "decision": "close",
+            }),
+            call_id: "call-d1".to_string(),
+        };
+        let gateway: Arc<dyn ModelGateway> = Arc::new(FakeProvider::new(vec![
+            ScriptedResponse::tool_calls(vec![disposition_call]),
+            ScriptedResponse::text("完成"),
+            ScriptedResponse::text("完成"),
+        ]));
+        let controller = with_retrieval_enabled(AgentLoopController::with_gateway(gateway))
+            .with_activation_snapshot(Some(&snapshot));
+        controller
+            .run_turn(&host, "关闭检索", "RUN-RES", MANIFEST, 0, None, None, None)
+            .await
+            .unwrap();
+
+        let events = events(&dir);
+        let types = event_types(&dir);
+        // Restore event journaled at startup.
+        let restores: Vec<_> = events
+            .iter()
+            .filter(|e| e.event_type == EventType::RetrievalActivationRestored)
+            .collect();
+        assert_eq!(restores.len(), 1, "{types:?}");
+        let rp = &restores[0].payload;
+        assert_eq!(
+            rp["activation_id"],
+            "retrieval-internal_retrieval-sess-abc-00"
+        );
+        assert_eq!(rp["status"], "awaiting_disposition");
+        assert_eq!(rp["assessment_id"], "ASSESS-PREV-1");
+        assert_eq!(rp["origin_run_id"], "RUN-PREV-0001");
+        assert_eq!(rp["tool_rounds_used"], 3);
+        // The restore precedes the disposition.
+        let r_index = events
+            .iter()
+            .position(|e| e.event_type == EventType::RetrievalActivationRestored)
+            .unwrap();
+        let d_index = events
+            .iter()
+            .position(|e| e.event_type == EventType::RetrievalParentDisposition)
+            .unwrap();
+        assert!(r_index < d_index);
+        // Cross-run close: disposition outcome accepted + close record.
+        let disposition = events
+            .iter()
+            .find(|e| e.event_type == EventType::RetrievalParentDisposition)
+            .unwrap();
+        assert_eq!(disposition.payload["outcome"], "accepted");
+        assert_eq!(disposition.payload["assessment_id"], "ASSESS-PREV-1");
+        let close = events
+            .iter()
+            .find(|e| e.event_type == EventType::RetrievalCloseRecord)
+            .unwrap();
+        assert_eq!(close.payload["terminal_reason"], "normal_close");
+        // The restored activation closes with the real artifact ref.
+        assert!(
+            close.payload["archive_ref"]
+                .as_str()
+                .unwrap()
+                .starts_with("run-journal:"),
+            "{}",
+            close.payload["archive_ref"]
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// ActivationState → snapshot_json → seed_from_json round-trips the
+    /// conversation field-for-field.
+    #[tokio::test]
+    async fn stored_activation_roundtrip_with_conversation() {
+        let controller =
+            AgentLoopController::with_gateway(Arc::new(FakeProvider::from_texts(vec!["x"])));
+        let state = ActivationState {
+            activation_id: "retrieval-internal_retrieval-sess-abc-00".to_string(),
+            parent_session_id: "sess-abcdef123456".to_string(),
+            subagent_session_id: "SUB-internal_retrieval-sess-abc".to_string(),
+            contract_id: "retrieval-contract-internal_retrieval".to_string(),
+            contract_revision: 0,
+            status: ActivationStatus::AwaitingDisposition,
+            conversation: vec![conv_message(Role::User, "历史问")],
+            pending: None,
+            next_goal: None,
+            result_digest: None,
+            submitted: Vec::new(),
+            tool_rounds_used: 1,
+            candidate_urls: Vec::new(),
+            result_archive_ref: None,
+        };
+        controller
+            .activations
+            .lock()
+            .unwrap()
+            .states
+            .insert(SubagentRole::InternalRetrieval, state);
+        let json = controller
+            .activations
+            .lock()
+            .unwrap()
+            .snapshot_json("RUN-1");
+        let c2 = AgentLoopController::with_gateway(Arc::new(FakeProvider::from_texts(vec!["x"])));
+        let restored = c2.activations.lock().unwrap().seed_from_json(&json);
+        assert_eq!(restored.len(), 1);
+        assert_eq!(restored[0].conversation.len(), 1);
+        assert_eq!(restored[0].conversation[0].content, "历史问");
+        assert_eq!(
+            restored[0].activation_id,
+            "retrieval-internal_retrieval-sess-abc-00"
+        );
+    }
+
+    /// An OLD sidecar (no `conversation` key) still parses — `serde(default)`
+    /// fills an empty conversation (backward compatibility).
+    #[tokio::test]
+    async fn stored_activation_old_sidecar_no_conversation_field() {
+        let snapshot = serde_json::json!({
+            "next_seq": {"internal_retrieval": 1},
+            "activations": [{
+                "activation_id": "retrieval-internal_retrieval-sess-abc-00",
+                "parent_session_id": "sess-abcdef123456",
+                "subagent_session_id": "SUB-internal_retrieval-sess-abc",
+                "contract_id": "retrieval-contract-internal_retrieval",
+                "contract_revision": 0,
+                "status": "active",
+                "tool_rounds_used": 0,
+                "origin_run_id": "RUN-PREV-0001",
+            }]
+        });
+        let controller =
+            AgentLoopController::with_gateway(Arc::new(FakeProvider::from_texts(vec!["x"])));
+        let mut registry = controller.activations.lock().unwrap();
+        let restored = registry.seed_from_json(&snapshot);
+        assert_eq!(restored.len(), 1);
+        assert!(restored[0].conversation.is_empty(), "default empty");
+        assert!(
+            registry
+                .states
+                .get(&SubagentRole::InternalRetrieval)
+                .unwrap()
+                .conversation
+                .is_empty()
+        );
+        drop(registry);
+    }
+
+    /// A restored activation with history continues from that history — the
+    /// subagent's next request opens with the restored conversation and ends
+    /// with the new goal (the registered boundary closes: cross-run continue
+    /// no longer starts from scratch).
+    #[tokio::test]
+    async fn restored_activation_continue_seeds_history() {
+        let dir = test_dir();
+        let journal = JournalRecorder::new(dir.clone());
+        let host = TestHost {
+            journal,
+            tool_result: None,
+        };
+        let snapshot = serde_json::json!({
+            "next_seq": {"internal_retrieval": 1},
+            "activations": [{
+                "activation_id": "retrieval-internal_retrieval-sess-abc-00",
+                "parent_session_id": "sess-abcdef123456",
+                "subagent_session_id": "SUB-internal_retrieval-sess-abc",
+                "contract_id": "retrieval-contract-internal_retrieval",
+                "contract_revision": 0,
+                "status": "awaiting_disposition",
+                "tool_rounds_used": 2,
+                "result_digest": "b".repeat(64),
+                "pending_assessment_id": "ASSESS-PREV-1",
+                "pending_expected_contract_revision": 0,
+                "origin_run_id": "RUN-PREV-0001",
+                "conversation": [
+                    {"role": "user", "content": "历史检索目标", "tool_call_id": null,
+                     "tool_calls": [], "reasoning_content": null},
+                    {"role": "assistant", "content": "历史结论", "tool_call_id": null,
+                     "tool_calls": [], "reasoning_content": null},
+                ]
+            }]
+        });
+        let continue_call = ToolCall {
+            name: "retrieval_disposition".to_string(),
+            arguments: serde_json::json!({
+                "role": "internal_retrieval",
+                "decision": "continue",
+                "requirement_delta": "补充检索：新需求",
+            }),
+            call_id: "call-c1".to_string(),
+        };
+        let retrieve_call = ToolCall {
+            name: "retrieve_project_docs".to_string(),
+            arguments: serde_json::json!({"query": "继续检索"}),
+            call_id: "call-r1".to_string(),
+        };
+        let fake = Arc::new(FakeProvider::new(vec![
+            ScriptedResponse::tool_calls(vec![continue_call]),
+            // Parent wrap-up after the accepted disposition.
+            ScriptedResponse::text(""),
+            // The parent re-dispatches the subagent (continue) — the
+            // subagent's requests follow.
+            ScriptedResponse::tool_calls(vec![retrieve_call]),
+            ScriptedResponse::text("子代理继续完成"),
+            ScriptedResponse::text("子代理继续完成"),
+            // The parent's wrap-up round after the subagent returns.
+            ScriptedResponse::text("完成"),
+            ScriptedResponse::text("完成"),
+        ]));
+        let controller = with_retrieval_enabled(AgentLoopController::with_gateway(fake.clone()))
+            .with_activation_snapshot(Some(&snapshot));
+        controller
+            .run_turn(&host, "继续检索", "RUN-CONT", MANIFEST, 0, None, None, None)
+            .await
+            .unwrap();
+
+        // The subagent request opened with the restored history and ended
+        // with the new goal.
+        let reqs = fake.received_requests();
+        let subagent_req = reqs
+            .iter()
+            .find(|r| {
+                r.messages
+                    .iter()
+                    .any(|m| m.content.contains("历史检索目标"))
+            })
+            .expect("subagent request with restored history");
+        assert!(
+            subagent_req
+                .messages
+                .iter()
+                .any(|m| m.content.contains("补充检索")),
+            "new goal appended: {:?}",
+            subagent_req.messages
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+}
