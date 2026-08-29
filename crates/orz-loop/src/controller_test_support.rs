@@ -523,3 +523,24 @@ impl MixedProjectionRegistry {
         .collect()
     }
 }
+
+/// A registry declaring `run_tests` unconditionally — proves the
+/// work-tool probe, not the registry, is the declaration source
+/// (P0-A step 3).
+pub(crate) struct RunTestsDeclaringRegistry;
+impl ToolRegistry for RunTestsDeclaringRegistry {
+    fn get(&self, name: &str) -> Option<ToolDef> {
+        (name == "run_tests").then(registry_run_tests_def)
+    }
+    fn list(&self) -> Vec<ToolDef> {
+        vec![registry_run_tests_def()]
+    }
+}
+
+pub(crate) fn registry_run_tests_def() -> ToolDef {
+    ToolDef {
+        name: "run_tests".to_string(),
+        description: "registry run_tests".to_string(),
+        parameters: serde_json::json!({"type": "object", "properties": {}}),
+    }
+}
