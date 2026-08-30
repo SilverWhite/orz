@@ -82,7 +82,7 @@
 > 本快照只做计数与分组召回，明细以下方各分组勾选清单为唯一入口，不新增独立条目；
 > 后续扫描更新时同步替换本快照日期与计数。
 
-- 未闭合总数：**39 项**（2026-08-19 0c 验证闭环 29 → 28；2026-08-20
+- 未闭合总数：**32 项**（2026-08-19 0c 验证闭环 29 → 28；2026-08-20
   0d 验证闭环 29 → 28；2026-08-20 OUTPUT-BUDGET-RESTORE-AND-STALL-GUARD
   S1 实施放行入账 28 → 29，**S3/S4 验证闭环 29 → 28**；2026-08-20
   THINKING-DEFAULT-HIGH-LADDER S1 实施放行入账 28 → 29，**S3/S4 换题
@@ -127,8 +127,9 @@
   browser_read、零拒绝事件，见下））
   - 2026-08-30 MECHANICAL-LAYER-MATH-CALCULUS（BACKLOG P2-10）设计登记入账：
     阶段 0 开放项裁决 7 项（D1–D7）计入 P2 决策门，未闭合 32 → 39；阶段 1
-    设计定稿（F1–F5，设计轮不计计数）与阶段 2/3 实施验证切片（I1–I6 / V1–V3，
-    放行时入账）见 P2-10 勾选清单。
+    设计定稿（F1–F6，设计轮不计计数）与阶段 2/3 实施验证切片（I1–I6 / V1–V3，
+    放行时入账）见 P2-10 勾选清单；**2026-08-30 阶段 0 决策闭合，未闭合
+    39 → 32（D1–D7 全部确认，裁决见 P2-10 勾选清单）**。
   - P0-C：0 项（PLAN-FIRST 阶段 A/B/C 全部闭合，2026-08-16）
   - P0 冒烟对拍暴露：0 项（GAP-REPETITION-DETECTOR-DNA-FALSE-POSITIVE
     复读检测 DNA 误杀已闭合 2026-08-26；GAP-EVENT-SCHEMA-DRIFT 事件面
@@ -142,7 +143,7 @@
   - P0 默认 high + 三级降级梯：0 项（THINKING-DEFAULT-HIGH-LADDER，S3/S4 换题复验闭环 2026-08-20，见 P0-0d 后续 2）
   - P0 上下文结构块 PUSH→PULL：0 项（CONTEXT-SCAFFOLDING-PULL-REDESIGN，S1-S4 验证闭环 2026-08-21，见 P0-0e）
   - P1 可并行审计/证据：9 项（组件登记 1、Windows 证据 3、DeepSeek 1、会话上下文监测 4）
-  - P2 生产化决策门：12 项（Slice 3、Slice 4、ACAF 可选工程项、OPS 裁剪设计、OPS 生产接线裁决、MECHANICAL-LAYER-MATH-CALCULUS 决策门 7 项）
+  - P2 生产化决策门：5 项（Slice 3、Slice 4、ACAF 可选工程项、OPS 裁剪设计、OPS 生产接线裁决；MECHANICAL-LAYER-MATH-CALCULUS 决策门 7 项已闭合 2026-08-30，见 P2-10）
   - P3 收尾/清理：7 项（EVIDENCE-LOCAL-BROWSER、GATE-CHAIN、observed-scope 枚举、V11-IMPL-003、V11-IMPL-007、orz-host flaky、DC 硬信号 4/6）
   - 条件触发/审计登记边界：6 项（不占当前优先级）
   - 成熟复用调研（2026-08-16，只读）：明确可复用 8 项、部分可参考 15 项、无可复用 11 项；逐项注记见各分组条目后。
@@ -2323,7 +2324,7 @@ daemon 跨 run 常驻。~~模式内混合路由（需修订 ADR-0010 §3.7.12）
 
 ### MECHANICAL-LAYER-MATH-CALCULUS（`pending`；2026-08-30 设计登记，BACKLOG P2-10）
 
-> 排期：阶段 0 开放项裁决 → 阶段 1 正式设计定稿（含 ADR 转录）→ 阶段 2 实施
+> 排期：阶段 0 开放项裁决（**已闭合 2026-08-30**）→ 阶段 1 正式设计定稿（含 ADR 转录）→ 阶段 2 实施
 > 切片 → 阶段 3 验证闭环；裁决闭合后实施切片按 BACKLOG 升 P0 排期。入口：
 > [设计](docs/MECHANICAL_LAYER_MATH_CALCULUS_DISCUSSION_2026-08-30.md) /
 > [BACKLOG P2-10](docs/BACKLOG_AND_PRIORITIES.md) /
@@ -2338,17 +2339,29 @@ daemon 跨 run 常驻。~~模式内混合路由（需修订 ADR-0010 §3.7.12）
 
 **阶段 0 — 开放项裁决（§6；用户决策门）**
 
-- [ ] D1 调用契约裁决：顶层调用方式折中档（tool_calls + 一层 pipe）vs 激进档
-  （表达式求值）；表达式最小项集范围（§6.1/6.2）。
-- [ ] D2 错误语义确认：纯子项错误=值、效应错误=fail-closed 信封（§6.5）。
-- [ ] D3 依赖图作用域裁决：仅文件锚点链 vs 含命令/检索副作用（§6.8）。
-- [ ] D4 时间特征注入点 + potentials 渲染形态裁决：预算临近/长工具调用前/终答
-  审计；原始有界值 vs 量化档（§6.9/6.11）。
-- [ ] D5 fires 事件面边界裁决：`temporal_fire` 是否入 schema/verifier（§6.12）。
-- [ ] D6 预判/重试机制定位裁决：观测面（模型 PULL 自决，倾向）vs 机制面（框架
-  干预）（§6.13/§9.10）。
-- [ ] D7 域 spike 存档载体裁决：StoredConversation envelope 追加字段 vs 同目录
-  伴随文件；子代理是否随 activation 同构（§6.14/§9.9）。
+- [x] D1 调用契约裁决（2026-08-30 用户确认）：折中档——顶层保留 tool_calls、
+  工具契约函数化 + 一层 pipe；最小项集 = 应用 + 单层 pipe（无 let/条件/嵌套）；
+  归约边界 = 单轮 ≤4 步、效应数复用候选计数/预算硬门、不引入部分结果注入；
+  激进档（表达式求值）维持 §3 已登记未来路径，不实施（§6.1/6.2/6.3）。
+- [x] D2 错误语义确认（2026-08-30 用户确认）：纯子项错误（参数校验/正则编译
+  失败/no_match/ambiguous）= 类型化错误值（Result 信封 Fail，step=arg_validation）；
+  效应错误（未启动/超时杀/门拒绝）= fail-closed 信封不变；terminal exit_code≠0
+  为结构化值（§6.5）。
+- [x] D3 依赖图作用域裁决（2026-08-30 用户确认）：文件锚点链先行（read→write
+  锚点边 + 文件实体变更边）；命令/检索副作用不建图，失败目标身份（命令文本
+  hash / 锚点身份）仅以事件面字段记录（§6.8，依赖 F4/I2）。
+- [x] D4 时间特征注入点 + potentials 渲染形态裁决（2026-08-30 用户确认）：
+  本阶段零主动注入（维持 §9.7/§9.11 模型无感硬边界），temporal 仅 PULL 查询面；
+  渲染用量化档 + 语义标签（low/med/high + 语义名），原始有界值仅 Feature(name,k)
+  按需取（§6.9/6.11）。
+- [x] D5 fires 事件面边界裁决（2026-08-30 用户确认）：`temporal_fire` 不入
+  schema/verifier；fires 仅内部日志/审计留痕，V2 离线对照（§6.12）。
+- [x] D6 预判/重试机制定位裁决（2026-08-30 用户确认）：观测面——temporal 提供
+  域 + 驻留时长，模型 PULL 后自决；机制面干预待 §9.10 探针（P1–P3）离线验证后
+  另行裁决（§6.13/§9.10）。
+- [x] D7 域 spike 存档载体裁决（2026-08-30 用户确认）：StoredConversation
+  envelope 追加可选字段 `temporal_spikes?: Vec<DomainSpike>`（serde(default)、
+  旧侧车零迁移、随 7 天 retention 清理）；子代理不同构，不持久化（§6.14/§9.9）。
 
 **阶段 1 — 正式设计定稿（§9；设计轮不计计数）**
 
