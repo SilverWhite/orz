@@ -121,7 +121,10 @@
   容器内 chromium 注入完成 2026-08-30（0k-5 前置，tb_agents/orz.py
   eval_browser 开关，端到端实测 bookworm=apt chromium / ubuntu:24.04=
   官方快照，见下）；Google 门禁观察实验 + 实机验证完成 2026-08-30
-  （2/5 解出、5 题零检索调用、通道验证通过，见下））
+  （2/5 解出、5 题零检索调用、通道验证通过，见下）；P1 方向 A 修复
+  （browser_read 主面封存，orz 1973511）+ S3 重建（s3b 15:51 HKT）+
+  count-dataset-tokens 验证轮完成（1.0 解出 2.95min、主面 6 工具无
+  browser_read、零拒绝事件，见下））
   - P0-C：0 项（PLAN-FIRST 阶段 A/B/C 全部闭合，2026-08-16）
   - P0 冒烟对拍暴露：0 项（GAP-REPETITION-DETECTOR-DNA-FALSE-POSITIVE
     复读检测 DNA 误杀已闭合 2026-08-26；GAP-EVENT-SCHEMA-DRIFT 事件面
@@ -1818,7 +1821,17 @@ S4 复验闭环 2026-08-25（补登记）；S1-S4 全部闭合）
   断言迁移 + `main_surface_hides_retired_and_sealed_tools` 补隐藏项。
   验证：projection 12/12、orz-loop 全量 623/0/3、fmt 干净、clippy 无
   新增（orz-host 全量并行 2 flake=权限持久化+进程树超时，单跑全过，
-  与投影无关）。S3 重建待续。
+  与投影无关）。
+  **S3 重建（s3b，2026-08-30 完成）**：rust:1.97-slim 增量构建，三件套
+  15:51 HKT（orz 106,411,888 B / signer 1,388,496 B / provision
+  1,206,464 B），bookworm 冒烟符合预期（静态链接/usage/manifest 缺失/
+  TTY io error）；对应源码 orz 1973511 + 父 ed024d7（均已推送）。
+  **验证轮（2026-08-30，job gate-google-20260830-3）**：count-dataset-
+  tokens k=1 → **1.0 解出**（agent_exec 2.95min）；主面请求头工具列表
+  6 工具（grep/read_file/run_terminal_cmd/search_replace/blackboard_read/
+  submit）**browser_read 已消失**，journal 零 browser_read 痕迹、零拒绝
+  事件；模型直接终端访问 HF 完成（对比修复前：browser_read 被拒后转
+  终端 3.95min）。方向 A 闭环。
 
 **第二批（独立设计轮）**：
 - [ ] `project_doc_index` v2（git HEAD 基线 + 工作树增量层 + Blake3 内容哈希 +
