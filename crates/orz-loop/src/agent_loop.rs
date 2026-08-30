@@ -424,6 +424,47 @@ pub(crate) struct SharedLoopServices<'a> {
     pub blackboard_archive_dir: Option<&'a Path>,
 }
 
+/// RETRIEVAL-ORCHESTRATION-MECHANICAL 0k (2026-08-30, TODO P0-0k 第一批
+/// 第 1 项)：同轮可并行读类工具集——只读/检索类可并发执行（Futures 并发、
+/// 按声明序提交）；写类（search_replace 等）、命令类（run_terminal_cmd /
+/// run_tests）、控制类（todo_write / plan 族 / submit）、生成类（image_*
+/// / use_tool）与 web_search（生成式检索，信号量=1 + pacing 纪律）保持
+/// 串行。`blackboard_read` 并发读安全（分区单写者纪律在提交阶段保持）。
+pub(crate) const PARALLEL_READ_TOOLS: &[&str] = &[
+    "read_file",
+    "grep",
+    "list_dir",
+    "search_tool",
+    "web_fetch",
+    "browser_read",
+    "blackboard_read",
+    "memory_get",
+    "memory_search",
+    "lsp",
+];
+
+/// 0k：某调用是否可并入同轮读类并行批次——名称在集合内、实际执行目标是
+/// Host（主车道 web 族走子代理派发，受单席位纪律约束不入批次；检索车道
+/// lane 自执行经 Host 直跑可并入）、无写门拒绝、非计划轮。
+pub(crate) fn parallel_read_eligible(
+    tc: &ToolCall,
+    profile: &LoopProfile,
+    plan_round_active: bool,
+) -> bool {
+    if plan_round_active || !PARALLEL_READ_TOOLS.contains(&tc.name.as_str()) {
+        return false;
+    }
+    let target = route(&tc.name);
+    if target != DispatchTarget::Host {
+        let lane_self_execute = target == DispatchTarget::ExternalRetrieval
+            && profile.tool_filter.denies_nested_dispatch();
+        if !lane_self_execute {
+            return false;
+        }
+    }
+    profile.tool_filter.write_gate(&tc.name).is_none()
+}
+
 /// What the loop produced — the caller maps it to its own terminal
 /// semantics (main: run_finished/run_invalidated; subagent: result
 /// formation / budget_exhausted / subagent_failed).
@@ -1972,7 +2013,158 @@ pub(crate) async fn run_agent_loop(
         // length BEFORE this round's tools — the incremental push after
         // the batch reports exactly the records this round added.
         let round_edit_count = svc.blackboard.read().edits.len();
-        for tc in &response.tool_calls {
+        // RETRIEVAL-ORCHESTRATION-MECHANICAL 0k (2026-08-30, TODO P0-0k
+        // 第一批第 1 项)：同轮读类并行——批首 ≥2 个连续只读 Host 调用并发
+        // 执行、按声明序提交（事件/消息/审计/预算序与串行等价；预算超限的
+        // 后续调用在提交阶段按串行语义拒绝——不重放事件、注入拒绝消息，
+        // 只读副作用可接受）。写类/命令/派发类与计划轮保持串行。
+        let run_id = writer.run_id().to_string();
+        let mut parallel_skip_until = 0usize;
+        if !plan_round_active && round_inject_tokens == 0 {
+            let eligible: Vec<bool> = response
+                .tool_calls
+                .iter()
+                .map(|tc| parallel_read_eligible(tc, profile, plan_round_active))
+                .collect();
+            let mut run_len = 0;
+            while run_len < eligible.len() && eligible[run_len] {
+                run_len += 1;
+            }
+            if run_len >= 2 {
+                let batch: Vec<&ToolCall> = response.tool_calls[..run_len].iter().collect();
+                let mut futures = Vec::with_capacity(batch.len());
+                for tc in batch {
+                    let tc_owned = tc.clone();
+                    let mut w = EventWriter::buffered(&run_id);
+                    let mut local_msgs: Vec<Message> = Vec::new();
+                    let direct_ctx = if controller.console_default_enabled()
+                        && profile.role == AgentRole::Main
+                    {
+                        controller.console_direct_begin(&tc_owned.call_id)
+                    } else {
+                        None
+                    };
+                    let lane_self_execute = route(&tc_owned.name)
+                        == DispatchTarget::ExternalRetrieval
+                        && profile.tool_filter.denies_nested_dispatch();
+                    let permission_gated = !lane_self_execute;
+                    let fetch_candidates = profile.fetch_candidates.clone();
+                    let activation_id = profile.activation_id.clone();
+                    futures.push(async move {
+                        let direct_stamp = direct_ctx.as_ref().map(|(s, _)| s);
+                        let (result, feedback) = controller
+                            .run_host_tool_with_plan_gate(
+                                host,
+                                &mut w,
+                                &tc_owned,
+                                prompt,
+                                workspace_trust,
+                                &mut local_msgs,
+                                tool_rounds,
+                                heartbeat,
+                                activation_id.as_deref(),
+                                fetch_candidates.as_deref(),
+                                permission_gated,
+                                profile.probe_work_tools,
+                                None,
+                                direct_stamp,
+                            )
+                            .await?;
+                        Ok::<_, AgentLoopError>((
+                            tc_owned, result, feedback, w, local_msgs, direct_ctx,
+                        ))
+                    });
+                }
+                let outcomes = futures::future::join_all(futures).await;
+                for outcome in outcomes {
+                    let (tc, result, feedback, mut w, local_msgs, direct_ctx) = outcome?;
+                    // 预算超限：与串行同语义拒绝——不重放事件、注入拒绝消息。
+                    if round_inject_tokens >= svc.max_inject_tokens_per_round {
+                        let (_, f) = refuse_inject_budget(
+                            writer,
+                            messages,
+                            &tc,
+                            round_inject_tokens,
+                            svc.max_inject_tokens_per_round,
+                            svc.policy_revision
+                                .load(std::sync::atomic::Ordering::SeqCst),
+                        )
+                        .await?;
+                        match f {
+                            Some(PolicyFeedback::Denied(key)) => round_denials.push(key),
+                            Some(PolicyFeedback::Succeeded) => round_had_success = true,
+                            None => {}
+                        }
+                        continue;
+                    }
+                    // 事件按声明序重放（hash 链续接，与串行事件序一致）。
+                    for (event_type, payload) in w.drain() {
+                        writer.record(event_type, payload).await?;
+                    }
+                    messages.extend(local_msgs);
+                    // direct 动作 trace 收口（与串行 Host 分支同构）。
+                    if let Some((stamp, trace)) = direct_ctx {
+                        let detail = if result.exit_code == Some(0) {
+                            None
+                        } else {
+                            Some(result.output.as_str())
+                        };
+                        controller.console_direct_end(
+                            &stamp,
+                            trace,
+                            &tc.name,
+                            result.exit_code == Some(0),
+                            detail,
+                        );
+                    }
+                    // 检索车道证据收集（与串行 Host 分支同构）。
+                    if let Some(evidence) = svc.evidence
+                        && let Some(record) = crate::retrieval::evidence::build_evidence_record(
+                            &tc.name, &tc, &result,
+                        )
+                    {
+                        evidence.lock().unwrap().push(record);
+                    }
+                    // DC 硬信号（主车道）。
+                    if profile.dc_enabled {
+                        maybe_consume_dc_signal(svc.dc_state, writer, &tc, &result).await?;
+                    }
+                    // 静默机械审查（主车道专属，与串行同构）。
+                    if profile.role == AgentRole::Main {
+                        crate::mechanical_audit::record_tool_result(
+                            &mut mechanical_audit,
+                            writer,
+                            &tc,
+                            &result,
+                            tool_rounds,
+                            controller.retrieval_candidate_count(),
+                        )
+                        .await?;
+                    }
+                    match feedback {
+                        Some(PolicyFeedback::Denied(key)) => round_denials.push(key),
+                        Some(PolicyFeedback::Succeeded) => round_had_success = true,
+                        None => {}
+                    }
+                    round_inject_tokens =
+                        round_inject_tokens.saturating_add(estimate_message_tokens(&Message {
+                            role: Role::Tool,
+                            content: format!("[{}] {}", tc.name, result.output),
+                            tool_call_id: None,
+                            tool_calls: Vec::new(),
+                            reasoning_content: None,
+                        }));
+                }
+                parallel_skip_until = run_len;
+            }
+        }
+        let mut tool_idx = 0usize;
+        while tool_idx < response.tool_calls.len() {
+            let tc = &response.tool_calls[tool_idx];
+            if tool_idx < parallel_skip_until {
+                tool_idx += 1;
+                continue;
+            }
             if cancel.is_some_and(|c| c.is_cancelled()) {
                 return Err(AgentLoopError::Cancelled);
             }
@@ -1992,6 +2184,7 @@ pub(crate) async fn run_agent_loop(
                     Some(PolicyFeedback::Succeeded) => round_had_success = true,
                     None => {}
                 }
+                tool_idx += 1;
                 continue;
             }
             // PLAN-FIRST 阶段 A (2026-08-16, ADR-0010 §14.17): 计划轮只允许
@@ -2015,6 +2208,7 @@ pub(crate) async fn run_agent_loop(
                     PolicyFeedback::Denied(key) => round_denials.push(key),
                     PolicyFeedback::Succeeded => round_had_success = true,
                 }
+                tool_idx += 1;
                 continue;
             }
             if plan_gate.is_some()
@@ -2034,6 +2228,7 @@ pub(crate) async fn run_agent_loop(
                     PolicyFeedback::Denied(key) => round_denials.push(key),
                     PolicyFeedback::Succeeded => round_had_success = true,
                 }
+                tool_idx += 1;
                 continue;
             }
             let target = route(&tc.name);
@@ -2305,6 +2500,7 @@ pub(crate) async fn run_agent_loop(
             // guard. The main lane's orientation round count happens at
             // the model-round completion point (one completed logical
             // model round counts 1 regardless of tool-call count).
+            tool_idx += 1;
         }
         // PLAN-FIRST 阶段 A (2026-08-16, ADR-0010 §14.17): 一轮工具轮未写
         // plan_write（仅 blackboard_read 等）→ 无提交计数；达到上限机械
@@ -2761,6 +2957,10 @@ async fn refuse_inject_budget(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::controller_test_support::*;
+    use crate::gateway::fake::{FakeProvider, ScriptedResponse};
+    use crate::host::{PermitDecision, PermitError, ToolError};
+    use async_trait::async_trait;
 
     /// The retrieval-lane write-domain gate classifies the three refusal
     /// classes distinctly (ADR-0010 §3.2 deny-only domain; review F6,
@@ -3395,6 +3595,120 @@ mod tests {
             .join("compaction-test-run-0000.md");
         let archive_text = std::fs::read_to_string(archive).unwrap();
         assert!(archive_text.contains("被压轮次: 3"), "{archive_text}");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// 0k 并行批次专用 host——`call_tool` 带 60ms 固定延迟并记录并发峰值，
+    /// 证明同轮只读调用确实并发执行（串行路径峰值恒为 1）。
+    struct ConcurrentReadHost {
+        journal: JournalRecorder,
+        active: std::sync::Arc<std::sync::atomic::AtomicUsize>,
+        max_active: std::sync::Arc<std::sync::atomic::AtomicUsize>,
+    }
+
+    #[async_trait]
+    impl LoopHost for ConcurrentReadHost {
+        fn journal(&self) -> &JournalRecorder {
+            &self.journal
+        }
+        fn tools_registry(&self) -> &dyn ToolRegistry {
+            &EmptyRegistry
+        }
+        fn session_cwd(&self) -> std::path::PathBuf {
+            self.journal.journal_dir().to_path_buf()
+        }
+        async fn request_permission(
+            &self,
+            _risk: RiskClass,
+            _tool: &str,
+            _args: &serde_json::Value,
+        ) -> Result<PermitDecision, PermitError> {
+            Ok(PermitDecision::AllowOnce)
+        }
+        async fn call_tool(
+            &self,
+            _name: &str,
+            _args: serde_json::Value,
+            _call_id: &str,
+        ) -> Result<ToolResult, ToolError> {
+            let now = self
+                .active
+                .fetch_add(1, std::sync::atomic::Ordering::SeqCst)
+                + 1;
+            self.max_active
+                .fetch_max(now, std::sync::atomic::Ordering::SeqCst);
+            tokio::time::sleep(std::time::Duration::from_millis(60)).await;
+            self.active
+                .fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
+            Ok(ToolResult {
+                output: "ok".to_string(),
+                exit_code: Some(0),
+                output_encoding: None,
+                structured: None,
+                ..Default::default()
+            })
+        }
+    }
+
+    /// RETRIEVAL-ORCHESTRATION-MECHANICAL 0k (2026-08-30, TODO P0-0k 第一批
+    /// 第 1 项)：同轮 ≥2 个连续只读 Host 调用走并行批次——并发峰值 ≥2、
+    /// 事件与消息按声明序提交、journal 完整。
+    #[tokio::test]
+    async fn parallel_read_batch_runs_concurrently_and_commits_in_order() {
+        let dir = test_dir();
+        let active = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let max_active = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let host = ConcurrentReadHost {
+            journal: JournalRecorder::new(dir.clone()),
+            active,
+            max_active,
+        };
+        let gateway: Arc<dyn ModelGateway> = Arc::new(FakeProvider::new(vec![
+            ScriptedResponse::tool_calls(vec![
+                tool_call("read_file", "call-1"),
+                tool_call("grep", "call-2"),
+            ]),
+            ScriptedResponse::text("完成"),
+            ScriptedResponse::text("完成"),
+        ]));
+        AgentLoopController::with_gateway(gateway)
+            .run_turn(
+                &host,
+                "并行读测试",
+                "RUN-PAR",
+                MANIFEST,
+                0,
+                None,
+                None,
+                None,
+            )
+            .await
+            .unwrap();
+
+        assert!(
+            host.max_active.load(std::sync::atomic::Ordering::SeqCst) >= 2,
+            "parallel batch must overlap host calls"
+        );
+        let events = events(&dir);
+        let started: Vec<&str> = events
+            .iter()
+            .filter(|e| e.event_type == EventType::ToolStarted)
+            .filter_map(|e| e.payload.get("tool").and_then(|v| v.as_str()))
+            .collect();
+        assert_eq!(started, ["read_file", "grep"], "{:?}", event_types(&dir));
+        let completed: Vec<&str> = events
+            .iter()
+            .filter(|e| e.event_type == EventType::ToolCompleted)
+            .filter_map(|e| e.payload.get("tool").and_then(|v| v.as_str()))
+            .collect();
+        assert_eq!(completed, ["read_file", "grep"], "{:?}", event_types(&dir));
+        assert!(
+            events
+                .iter()
+                .any(|e| e.event_type == EventType::RunFinished),
+            "{:?}",
+            event_types(&dir)
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

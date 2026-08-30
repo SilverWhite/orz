@@ -138,6 +138,97 @@ pub fn parse_retrieval_text(text: &str) -> (Vec<String>, Vec<String>) {
     (docs, sources)
 }
 
+/// RETRIEVAL-ORCHESTRATION-MECHANICAL 0k (2026-08-30, TODO P0-0k 第一批
+/// 第 3 项)：[DOC]/[SOURCE] 回传预算——声明行机械有界化。
+/// - 行数上限 `RETRIEVAL_RESULT_LINE_CAP`（默认 16 条）+ 字节上限
+///   `RETRIEVAL_RESULT_BYTES_CAP`（默认 8K，逐条装填）；
+/// - 截断时返回文本追加结构化标注（总数/保留数/全文指针），标注行
+///   不带 `[DOC]`/`[SOURCE]` 前缀（不会被再解析为声明行）；
+/// - 证据以 tool-call evidence ledger 为准，声明行仅元数据级，截断
+///   不丢证据；全文由调用方保留（blackboard 分区 response /
+///   retrieval-results 存档）。
+pub const RETRIEVAL_RESULT_LINE_CAP: usize = 16;
+pub const RETRIEVAL_RESULT_BYTES_CAP: usize = 8 * 1024;
+
+#[derive(Debug, Clone)]
+pub struct BoundedRetrievalResult {
+    /// 有界输出文本：原 prose + 保留的声明行 +（截断时）结构化标注。
+    pub output: String,
+    pub docs: Vec<String>,
+    pub sources: Vec<String>,
+    pub truncated: bool,
+    pub total_declarations: usize,
+}
+
+pub fn bound_retrieval_result(
+    output: &str,
+    docs: &[String],
+    sources: &[String],
+    section_name: &str,
+) -> BoundedRetrievalResult {
+    let mut kept_docs: Vec<String> = Vec::new();
+    let mut kept_sources: Vec<String> = Vec::new();
+    let mut bytes = 0usize;
+    let mut total_declarations = 0usize;
+    let mut truncated = false;
+    // 保持原声明顺序的近似：先 [DOC] 后 [SOURCE]（parse 已分列，原交错
+    // 顺序在分列时即丢失——此处只保分组序）。
+    let mut push = |item: &str, is_doc: bool| {
+        total_declarations += 1;
+        if kept_docs.len() + kept_sources.len() >= RETRIEVAL_RESULT_LINE_CAP
+            || bytes + item.len() > RETRIEVAL_RESULT_BYTES_CAP
+        {
+            truncated = true;
+            return;
+        }
+        bytes += item.len();
+        if is_doc {
+            kept_docs.push(item.to_string());
+        } else {
+            kept_sources.push(item.to_string());
+        }
+    };
+    for item in docs {
+        push(item, true);
+    }
+    for item in sources {
+        push(item, false);
+    }
+    let kept = kept_docs.len() + kept_sources.len();
+    // 有界输出 = 原 prose（去声明行）+ 保留声明行 +（截断时）标注。
+    // 声明行统一收尾排列（原交错在 parse 分列时已丢失，此处只保
+    // prose 顺序与保留声明内容）。
+    let mut bounded_output: String = output
+        .lines()
+        .filter(|line| !line.starts_with("[DOC]") && !line.starts_with("[SOURCE]"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    if !bounded_output.is_empty() {
+        bounded_output.push('\n');
+    }
+    for doc in &kept_docs {
+        bounded_output.push_str(&format!("[DOC] {doc}\n"));
+    }
+    for src in &kept_sources {
+        bounded_output.push_str(&format!("[SOURCE] {src}\n"));
+    }
+    if truncated {
+        bounded_output.push_str(&format!(
+            "[retrieval-result bounded] 声明 {total_declarations} 条，\
+             保留 {kept} 条（行数 ≤{}/字节 ≤{}）；\
+             全文见 blackboard {} 分区与 retrieval-results 存档",
+            RETRIEVAL_RESULT_LINE_CAP, RETRIEVAL_RESULT_BYTES_CAP, section_name,
+        ));
+    }
+    BoundedRetrievalResult {
+        output: bounded_output,
+        docs: kept_docs,
+        sources: kept_sources,
+        truncated,
+        total_declarations,
+    }
+}
+
 /// Write the parsed contract into the role's blackboard section
 /// (single-writer discipline; never hold the write guard across an await).
 ///
@@ -222,6 +313,48 @@ mod tests {
         let (empty_docs, empty_sources) = parse_retrieval_text("");
         assert!(empty_docs.is_empty());
         assert!(empty_sources.is_empty());
+    }
+
+    /// RETRIEVAL-ORCHESTRATION-MECHANICAL 0k (2026-08-30)：声明行机械
+    /// 有界化——行数上限截断 + 字节上限截断 + 结构化标注 + 不截断时
+    /// 原样保留。
+    #[test]
+    fn bound_retrieval_result_truncates_declarations_with_marker() {
+        // 超过行数上限（16）→ 保留前 16 条，标注总数。
+        let docs: Vec<String> = (0..20).map(|i| format!("doc-{i}.md")).collect();
+        let bounded = bound_retrieval_result("检索完成", &docs, &[], "external_ret");
+        assert!(bounded.truncated);
+        assert_eq!(bounded.docs.len(), RETRIEVAL_RESULT_LINE_CAP);
+        assert_eq!(bounded.total_declarations, 20);
+        assert!(bounded.output.contains("检索完成"));
+        assert!(bounded.output.contains("[retrieval-result bounded]"));
+        assert!(bounded.output.contains("20 条"));
+        assert!(bounded.output.contains("external_ret"));
+        // 标注行不得带 [DOC]/[SOURCE] 前缀（不会污染再解析）。
+        let (redocs, resources) = parse_retrieval_text(&bounded.output);
+        assert_eq!(redocs.len(), RETRIEVAL_RESULT_LINE_CAP);
+        assert!(resources.is_empty());
+    }
+
+    #[test]
+    fn bound_retrieval_result_byte_cap_and_untouched_path() {
+        // 字节上限：单条超限即截断。
+        let huge = "x".repeat(RETRIEVAL_RESULT_BYTES_CAP + 1);
+        let bounded = bound_retrieval_result("p", &[huge], &[], "internal_ret");
+        assert!(bounded.truncated);
+        assert!(bounded.docs.is_empty());
+        // 未超限：原样保留、无标注。
+        let docs = vec!["a.md".to_string(), "b.md".to_string()];
+        let sources = vec!["https://example.com/x".to_string()];
+        let bounded = bound_retrieval_result("检索完成", &docs, &sources, "external_ret");
+        assert!(!bounded.truncated);
+        assert_eq!(bounded.docs, docs);
+        assert_eq!(bounded.sources, sources);
+        assert_eq!(
+            bounded.output,
+            "检索完成\n[DOC] a.md\n[DOC] b.md\n[SOURCE] https://example.com/x\n"
+        );
+        assert!(!bounded.output.contains("[retrieval-result bounded]"));
     }
 
     #[tokio::test]

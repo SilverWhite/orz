@@ -340,7 +340,10 @@ impl AgentLoopController {
             role,
             &goal,
             self.retrieval_mode,
-            self.max_tool_rounds,
+            // RETRIEVAL-ORCHESTRATION-MECHANICAL 0k (2026-08-30): 检索
+            // 子代理独立轮数上限（默认 60），与主车道全局轮数取 min——
+            // 测试用 with_max_tool_rounds 缩小时语义不变。
+            self.max_tool_rounds.min(self.retrieval_max_tool_rounds),
             act.tool_rounds_used,
             &act.activation_id,
             // Only the external lane executes candidate-counted tools
@@ -359,19 +362,25 @@ impl AgentLoopController {
         // dispatch — the loop fills it from the lane's host calls; result
         // formation consumes it below.
         self.evidence.lock().unwrap().clear();
-        let loop_outcome = Box::pin(run_agent_loop(
-            &SharedLoopServices {
-                blackboard: &self.blackboard,
-                denial_state: &self.denial_state,
-                pacing_rounds: &self.pacing_rounds,
-                context_compact: &self.context_compact,
-                dc_state: &self.dc_state,
-                // Retrieval lane: collect tool-call evidence (§3.7.4).
-                evidence: Some(&self.evidence),
-                policy_revision: &self.policy_revision,
-                max_inject_tokens_per_round: self.max_inject_tokens_per_round,
-                blackboard_archive_dir: self.blackboard_archive_dir(),
-            },
+        // RETRIEVAL-ORCHESTRATION-MECHANICAL 0k (2026-08-30): 单次检索派发
+        // 墙钟预算——包裹整个子代理 loop（轮数预算在其内）；超时即丢弃
+        // loop future，父 run 继续，激活以 subagent_timeout 收口（Err 分支）。
+        // 事件链：子代理事件已随同一 writer 入链，丢弃后父代理从同一
+        // seq/prev_hash 续写，ToolCompleted(error) 补全本次派发的审计形态。
+        let svc = SharedLoopServices {
+            blackboard: &self.blackboard,
+            denial_state: &self.denial_state,
+            pacing_rounds: &self.pacing_rounds,
+            context_compact: &self.context_compact,
+            dc_state: &self.dc_state,
+            // Retrieval lane: collect tool-call evidence (§3.7.4).
+            evidence: Some(&self.evidence),
+            policy_revision: &self.policy_revision,
+            max_inject_tokens_per_round: self.max_inject_tokens_per_round,
+            blackboard_archive_dir: self.blackboard_archive_dir(),
+        };
+        let loop_future = Box::pin(run_agent_loop(
+            &svc,
             self,
             writer,
             host,
@@ -386,8 +395,21 @@ impl AgentLoopController {
             cancel,
             heartbeat,
             run_gateway,
-        ))
-        .await;
+        ));
+        let loop_outcome = match self.retrieval_subagent_wallclock {
+            Some(budget) => match tokio::time::timeout(budget, loop_future).await {
+                Ok(outcome) => outcome,
+                Err(_) => {
+                    tracing::warn!(
+                        ?budget,
+                        target = %target_name,
+                        "retrieval subagent wallclock exceeded — closing activation"
+                    );
+                    Err(AgentLoopError::RetrievalSubagentTimeout)
+                }
+            },
+            None => loop_future.await,
+        };
 
         // F5 (user adjudication 2026-08-10): the session's consumed budget
         // carries into the next dispatch (a continue re-entry) — read back
@@ -479,6 +501,17 @@ impl AgentLoopController {
                 // (single-writer discipline; the stable interface real
                 // retrieval semantics plug into).
                 let (docs, sources) = crate::agents::retrieval::parse_retrieval_text(&output);
+                // RETRIEVAL-ORCHESTRATION-MECHANICAL 0k (2026-08-30, TODO
+                // P0-0k 第一批第 3 项)：[DOC]/[SOURCE] 声明行机械有界化——
+                // ledger/事件 payload 与 inline 回传用有界视图（行数+字节
+                // 上限 + 结构化标注 + 全文指针）；blackboard 分区保留全文
+                // （留痕不变，主代理可 blackboard_read 拉取）。
+                let bounded = crate::agents::retrieval::bound_retrieval_result(
+                    &output,
+                    &docs,
+                    &sources,
+                    role.section_name(),
+                );
                 // GAP-RETRIEVAL-TOOLS: the structured result consumes the
                 // parsed lines by reference (ledger merge); `write_section`
                 // takes them by value afterwards.
@@ -493,13 +526,13 @@ impl AgentLoopController {
                     &self.source_weighting,
                     &self.candidate_prefilter,
                     &mut source_seq,
-                    &docs,
-                    &sources,
+                    &bounded.docs,
+                    &bounded.sources,
                     match role {
                         SubagentRole::InternalRetrieval => "project_doc",
                         SubagentRole::ExternalRetrieval => "web_page",
                     },
-                    &output,
+                    &bounded.output,
                     &subagent_session_id,
                     &activation_id,
                     &contract_id,
@@ -705,7 +738,7 @@ impl AgentLoopController {
                 // write_section 与 build_structured_result 消费，这里
                 // 只决定回传主对话的文本。
                 let tool_output = match retrieval_result_channel_from_env() {
-                    RetrievalResultChannel::Inline => output,
+                    RetrievalResultChannel::Inline => bounded.output,
                     RetrievalResultChannel::Blackboard => {
                         let total_sources = committed.source_counts["total"].as_u64().unwrap_or(0);
                         let conclusion_count = committed.payload["organized_response"]["sections"]
@@ -749,6 +782,7 @@ impl AgentLoopController {
                 // carries no assessment/digest (resumable=true).
                 let reason = match &e {
                     AgentLoopError::Cancelled => "subagent_cancelled",
+                    AgentLoopError::RetrievalSubagentTimeout => "subagent_timeout",
                     _ => "subagent_failed",
                 };
                 self.close_activation(writer, role, reason, None, None)
@@ -798,11 +832,14 @@ mod tests {
     use crate::blackboard::{ExternalRetSection, InternalRetSection};
     use crate::controller::{
         CandidateGateDecision, RETRIEVAL_RESULT_CHANNEL_ENV, commit_candidate,
-        parse_max_inject_tokens_per_round, parse_web_fetch_candidate_cap,
+        parse_max_inject_tokens_per_round, parse_retrieval_subagent_max_tool_rounds,
+        parse_retrieval_subagent_wallclock, parse_web_fetch_candidate_cap,
     };
     use crate::controller_test_support::*;
     use crate::denial::PolicyFeedback;
     use crate::gateway::fake::{FakeProvider, ScriptedResponse};
+    use crate::gateway::model::{GatewayError, ModelRequest, ModelResponse};
+    use async_trait::async_trait;
     use orz_assurance::{EventTrack, JournalRecorder, RunEvent};
 
     /// THIN-HARNESS-REDESIGN R2a 审查处理 (P2-1, 2026-08-27)：env 突变
@@ -3146,6 +3183,137 @@ mod tests {
                 })
                 .count(),
             4
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// RETRIEVAL-ORCHESTRATION-MECHANICAL 0k (2026-08-30)：子代理墙钟
+    /// 解析规则——`ORZ_RETRIEVAL_SUBAGENT_TIMEOUT_SECS`（0 禁用）、
+    /// `ORZ_RETRIEVAL_MAX_TOOL_ROUNDS`（非法/0 忽略）。
+    #[test]
+    fn retrieval_subagent_budget_parse_rules() {
+        assert_eq!(
+            parse_retrieval_subagent_wallclock("600"),
+            Some(Some(std::time::Duration::from_secs(600)))
+        );
+        assert_eq!(
+            parse_retrieval_subagent_wallclock(" 30 "),
+            Some(Some(std::time::Duration::from_secs(30)))
+        );
+        assert_eq!(parse_retrieval_subagent_wallclock("0"), Some(None));
+        assert_eq!(parse_retrieval_subagent_wallclock("abc"), None);
+        assert_eq!(parse_retrieval_subagent_max_tool_rounds("60"), Some(60));
+        assert_eq!(parse_retrieval_subagent_max_tool_rounds("0"), None);
+        assert_eq!(parse_retrieval_subagent_max_tool_rounds("x"), None);
+    }
+
+    /// RETRIEVAL-ORCHESTRATION-MECHANICAL 0k (2026-08-30)：测试网关——
+    /// 脚本弹尽即挂起（`std::future::pending`），用于子代理墙钟超时收口。
+    struct ScriptThenHangGateway {
+        script: std::sync::Arc<Mutex<std::collections::VecDeque<ScriptedResponse>>>,
+    }
+
+    #[async_trait]
+    impl ModelGateway for ScriptThenHangGateway {
+        async fn generate(&self, request: ModelRequest) -> Result<ModelResponse, GatewayError> {
+            let next = {
+                let mut guard = self.script.lock().unwrap();
+                guard.pop_front()
+            };
+            match next {
+                Some(response) => FakeProvider::new(vec![response]).generate(request).await,
+                None => std::future::pending().await,
+            }
+        }
+
+        fn for_new_run(&self) -> Arc<dyn ModelGateway> {
+            Arc::new(ScriptThenHangGateway {
+                script: self.script.clone(),
+            })
+        }
+    }
+
+    /// RETRIEVAL-ORCHESTRATION-MECHANICAL 0k (2026-08-30)：单次检索派发
+    /// 墙钟预算耗尽 → 子代理 loop 被丢弃、激活以 `subagent_timeout` 收口、
+    /// 主 run 继续正常结束。
+    #[tokio::test]
+    async fn subagent_wallclock_timeout_closes_activation_and_main_continues() {
+        let dir = test_dir();
+        let journal = JournalRecorder::new(dir.clone());
+        let host = TestHost {
+            journal,
+            tool_result: Some(ToolResult {
+                output: "ok".to_string(),
+                exit_code: Some(0),
+                output_encoding: None,
+                structured: None,
+                ..Default::default()
+            }),
+        };
+        // 主 #1 派发；子代理 #2 一个 read_file 工具轮；子代理 #3 挂起
+        // （脚本弹尽）→ 墙钟（150ms）触发；主 #4/#5 完成（counterexample
+        // 门需一次额外模型轮）。
+        let script: std::collections::VecDeque<ScriptedResponse> = vec![
+            ScriptedResponse::tool_calls(vec![tool_call("retrieve_project_docs", "call-1")]),
+            ScriptedResponse::tool_calls(vec![tool_call("read_file", "call-s1")]),
+            ScriptedResponse::text("完成"),
+            ScriptedResponse::text("完成"),
+        ]
+        .into();
+        let gateway: Arc<dyn ModelGateway> = Arc::new(ScriptThenHangGateway {
+            script: std::sync::Arc::new(Mutex::new(script)),
+        });
+        let mut controller = with_retrieval_enabled(AgentLoopController::with_gateway(gateway));
+        controller.retrieval_subagent_wallclock = Some(std::time::Duration::from_millis(150));
+        controller
+            .run_turn(
+                &host,
+                "查找项目文档",
+                "RUN-RTO",
+                MANIFEST,
+                0,
+                None,
+                None,
+                None,
+            )
+            .await
+            .unwrap();
+
+        let events = events(&dir);
+        let close = events
+            .iter()
+            .find(|e| e.event_type == EventType::RetrievalCloseRecord)
+            .expect("timeout close record");
+        assert_eq!(
+            close
+                .payload
+                .get("terminal_reason")
+                .and_then(|v| v.as_str()),
+            Some("subagent_timeout"),
+            "{:?}",
+            event_types(&dir)
+        );
+        // 子代理侧 ToolCompleted(error) 显式失败（无结果形成）。
+        let failed = events
+            .iter()
+            .filter(|e| {
+                e.event_type == EventType::ToolCompleted
+                    && e.payload.get("status").and_then(|v| v.as_str()) == Some("error")
+                    && e.payload
+                        .get("error")
+                        .and_then(|v| v.as_str())
+                        .is_some_and(|s| s.contains("wallclock"))
+            })
+            .count();
+        assert_eq!(failed, 1, "{:?}", event_types(&dir));
+        // 主 run 正常终止（run_finished，非 run_failed）。
+        assert!(
+            events
+                .iter()
+                .any(|e| e.event_type == EventType::RunFinished),
+            "{:?}",
+            event_types(&dir)
         );
 
         let _ = std::fs::remove_dir_all(&dir);

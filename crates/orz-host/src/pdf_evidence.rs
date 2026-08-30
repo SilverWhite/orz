@@ -476,6 +476,7 @@ mod tests {
         async fn read_page(
             &self,
             _url: &str,
+            _mode: crate::local_browser::ReadMode,
         ) -> Result<crate::local_browser::PageReadOutcome, CdpError> {
             unreachable!("pdf tests never read pages")
         }

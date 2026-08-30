@@ -1744,6 +1744,7 @@ mod conformance_capture {
         async fn read_page(
             &self,
             url: &str,
+            _mode: orz_host::local_browser::ReadMode,
         ) -> Result<orz_host::local_browser::PageReadOutcome, orz_host::local_browser::CdpError>
         {
             Ok(orz_host::local_browser::PageReadOutcome {
@@ -1764,7 +1765,9 @@ mod conformance_capture {
         > {
             // Conformance stub: never a real download — read the page
             // instead (the stub's read_page is the deterministic path).
-            let page = self.read_page(url).await?;
+            let page = self
+                .read_page(url, orz_host::local_browser::ReadMode::Full)
+                .await?;
             Ok(orz_host::local_browser::BrowserDownloadOutcome::Page(page))
         }
 

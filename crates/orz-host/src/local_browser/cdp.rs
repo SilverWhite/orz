@@ -47,6 +47,12 @@ pub const ALLOWED_CDP_METHODS: &[&str] = &[
     "Page.enable",
     "Page.navigate",
     "Browser.setDownloadBehavior",
+    // RETRIEVAL-ORCHESTRATION-MECHANICAL 0k (2026-08-30, TODO P0-0k 第一批
+    // 第 4 项)：preview/keywords 模式资源拦截——只阻断图片/字体/媒体等
+    // 与文本读取无关的请求，不读写任何用户数据（网络域只发
+    // setBlockedURLs 列表，主机自有固定参数）。
+    "Network.enable",
+    "Network.setBlockedURLs",
     "Runtime.enable",
     "Runtime.evaluate",
 ];
@@ -56,6 +62,15 @@ pub const ALLOWED_CDP_METHODS: &[&str] = &[
 const EXPR_TITLE: &str = "document.title";
 const EXPR_TEXT: &str = "document.body ? document.body.innerText : ''";
 const EXPR_FINAL_URL: &str = "window.location.href";
+
+/// RETRIEVAL-ORCHESTRATION-MECHANICAL 0k (2026-08-30)：preview/keywords
+/// 模式拦截的资源后缀（Chrome URL pattern，`*` 通配）。样式表保留——
+/// 阻断 CSS 会破坏布局导致 innerText 缺内容；三方脚本不拦（JS 渲染是
+/// browser_read 相对静态直连的核心价值，全拦会伤可用性）。
+const BLOCKED_URL_PATTERNS: &[&str] = &[
+    "*.png", "*.jpg", "*.jpeg", "*.gif", "*.webp", "*.avif", "*.svg", "*.woff", "*.woff2", "*.ttf",
+    "*.otf", "*.eot", "*.mp4", "*.webm", "*.mp3", "*.ogg", "*.wav",
+];
 
 /// Default timeouts (2026-08-10; ADR-0010 §3.7.2 explicitly does not freeze
 /// old-document timeouts, these are implementation choices).
@@ -366,19 +381,28 @@ impl CdpBrowserSession {
     }
 
     /// One read of one URL: gate (shape + DNS) → create tab → navigate →
-    /// wait for load (re-checking the gate on every top-frame redirect) →
-    /// final-URL gate → extract rendered text → close tab. The whole read is
-    /// bounded by [`CdpConfig::total_budget`]; tab teardown runs on every
-    /// path (success, error and timeout) under a fixed 5s cap.
-    pub async fn read_page(&mut self, url: &str) -> Result<PageReadOutcome, CdpError> {
+    /// wait (full: loadEventFired 终态；preview/keywords：「可用文本就绪」+
+    /// 资源拦截) → final-URL gate → extract rendered text → close tab.
+    /// The whole read is bounded by [`CdpConfig::total_budget`]; tab
+    /// teardown runs on every path (success, error and timeout) under a
+    /// fixed 5s cap.
+    pub async fn read_page(
+        &mut self,
+        url: &str,
+        mode: super::ReadMode,
+    ) -> Result<PageReadOutcome, CdpError> {
         // Pre-navigation gate: URL shape + DNS resolution (fail-closed — a
         // hostname that resolves to a private/metadata address is rejected
         // before the browser ever navigates, ADR-0010 §3.7.3).
         check_navigation_url(url).await?;
-        self.read_page_inner(url).await
+        self.read_page_inner(url, mode).await
     }
 
-    async fn read_page_inner(&mut self, url: &str) -> Result<PageReadOutcome, CdpError> {
+    async fn read_page_inner(
+        &mut self,
+        url: &str,
+        mode: super::ReadMode,
+    ) -> Result<PageReadOutcome, CdpError> {
         let total_budget = self.config.total_budget;
         let deadline = tokio::time::Instant::now() + total_budget;
         let budget_err = CdpError::TotalTimeout {
@@ -413,7 +437,7 @@ impl CdpBrowserSession {
         let page_ws_url = format!("ws://127.0.0.1:{}/devtools/page/{target_id}", self.port);
         let outcome = tokio::time::timeout_at(deadline, async {
             let mut page = WsSession::connect(&page_ws_url, "page ws").await?;
-            read_in_page(&mut page, url, self.config.load_timeout).await
+            read_in_page(&mut page, url, self.config.load_timeout, mode).await
         })
         .await;
 
@@ -554,12 +578,29 @@ async fn read_in_page(
     page: &mut WsSession,
     url: &str,
     load_timeout: Duration,
+    mode: super::ReadMode,
 ) -> Result<PageReadOutcome, CdpError> {
     page.send_command("Page.enable", json!({})).await?;
     page.send_command("Runtime.enable", json!({})).await?;
+    if mode != super::ReadMode::Full {
+        // 资源拦截（图片/字体/媒体）——preview/keywords 只需文本，
+        // 阻断无关请求缩短加载窗（样式表与三方脚本保留，见
+        // BLOCKED_URL_PATTERNS 注释）。
+        page.send_command("Network.enable", json!({})).await?;
+        page.send_command(
+            "Network.setBlockedURLs",
+            json!({ "urls": BLOCKED_URL_PATTERNS }),
+        )
+        .await?;
+    }
     page.send_command("Page.navigate", json!({ "url": url }))
         .await?;
-    wait_for_load(page, load_timeout).await?;
+    match mode {
+        super::ReadMode::Full => wait_for_load(page, load_timeout).await?,
+        super::ReadMode::Preview | super::ReadMode::Keywords => {
+            wait_for_text_ready(page, load_timeout).await?
+        }
+    }
 
     extract_page(page, url).await
 }
@@ -606,6 +647,30 @@ impl Drop for CdpBrowserSession {
     }
 }
 
+/// Top-frame redirect gate (ADR-0010 §3.7.3: initial navigation AND every
+/// redirect) — shared by the full-load wait and the text-ready poll.
+async fn gate_top_frame_redirect(ev: &serde_json::Value) -> Result<(), CdpError> {
+    if ev["method"].as_str() == Some("Page.frameNavigated") {
+        let frame = &ev["params"]["frame"];
+        // Top-level frame only (subframes carry page assets, not the
+        // navigation target).
+        if frame["parentId"].is_null()
+            && let Some(new_url) = frame["url"].as_str()
+        {
+            // A fresh target emits an initial top-frame
+            // `frameNavigated` for `about:blank` before Page.navigate
+            // takes effect (some Chrome versions replay it after
+            // Page.enable). It is the target's pre-navigation
+            // identity, not a navigation outcome — exempt it; real
+            // navigations (and the final location.href) are gated.
+            if new_url != "about:blank" {
+                check_navigation_url(new_url).await?;
+            }
+        }
+    }
+    Ok(())
+}
+
 /// Wait for the top-level load to finish, re-checking the full URL gate
 /// (shape + DNS) on every top-frame redirect (ADR-0010 §3.7.3: initial
 /// navigation AND every redirect).
@@ -619,27 +684,40 @@ async fn wait_for_load(page: &mut WsSession, timeout: Duration) -> Result<(), Cd
                 timeout: timeout.as_secs(),
             })?
             .ok_or_else(|| CdpError::Io("CDP event channel closed".into()))?;
-        match ev["method"].as_str() {
-            Some("Page.frameNavigated") => {
-                let frame = &ev["params"]["frame"];
-                // Top-level frame only (subframes carry page assets, not the
-                // navigation target).
-                if frame["parentId"].is_null()
-                    && let Some(new_url) = frame["url"].as_str()
-                {
-                    // A fresh target emits an initial top-frame
-                    // `frameNavigated` for `about:blank` before Page.navigate
-                    // takes effect (some Chrome versions replay it after
-                    // Page.enable). It is the target's pre-navigation
-                    // identity, not a navigation outcome — exempt it; real
-                    // navigations (and the final location.href) are gated.
-                    if new_url != "about:blank" {
-                        check_navigation_url(new_url).await?;
-                    }
+        gate_top_frame_redirect(&ev).await?;
+        if ev["method"].as_str() == Some("Page.loadEventFired") {
+            return Ok(());
+        }
+    }
+}
+
+/// RETRIEVAL-ORCHESTRATION-MECHANICAL 0k (2026-08-30)：preview/keywords
+/// 等待「可用文本就绪」——轮询 innerText 非空即返回，不等到
+/// loadEventFired（慢三方资源不再拖长读取）；导航中的求值错误按
+/// 「未就绪」处理，由 deadline 兜底为 LoadTimeout。重定向门与 full
+/// 路径同源（ADR-0010 §3.7.3）。
+async fn wait_for_text_ready(page: &mut WsSession, timeout: Duration) -> Result<(), CdpError> {
+    let deadline = tokio::time::Instant::now() + timeout;
+    let poll = Duration::from_millis(150);
+    loop {
+        let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
+        if remaining.is_zero() {
+            return Err(CdpError::LoadTimeout {
+                timeout: timeout.as_secs(),
+            });
+        }
+        if let Ok(text) = page.evaluate_string(EXPR_TEXT).await
+            && !text.trim().is_empty()
+        {
+            return Ok(());
+        }
+        tokio::select! {
+            ev = page.events.recv() => {
+                if let Some(ev) = ev {
+                    gate_top_frame_redirect(&ev).await?;
                 }
             }
-            Some("Page.loadEventFired") => return Ok(()),
-            _ => {}
+            _ = tokio::time::sleep(poll.min(remaining)) => {}
         }
     }
 }
@@ -958,6 +1036,8 @@ mod tests {
             set,
             vec![
                 "Browser.setDownloadBehavior",
+                "Network.enable",
+                "Network.setBlockedURLs",
                 "Page.enable",
                 "Page.navigate",
                 "Runtime.enable",
@@ -966,18 +1046,25 @@ mod tests {
                 "Target.createTarget",
             ]
         );
-        // The set must never include mutation/network/input/storage domains.
+        // The set must never include mutation/input/storage domains.
         // `Browser.` is allowed EXACTLY as the download affordance — no
-        // other Browser-domain command may ever be sent.
+        // other Browser-domain command may ever be sent. `Network.` is
+        // allowed EXACTLY as the resource-blocking pair for preview/
+        // keywords reads (0k 2026-08-30) — blocking-only, no request
+        // interception or data access.
         for m in ALLOWED_CDP_METHODS {
             assert!(
-                !m.starts_with("Network.")
-                    && !m.starts_with("Input.")
-                    && !m.starts_with("Storage."),
+                !m.starts_with("Input.") && !m.starts_with("Storage."),
                 "{m}"
             );
             if m.starts_with("Browser.") {
                 assert_eq!(*m, "Browser.setDownloadBehavior", "{m}");
+            }
+            if m.starts_with("Network.") {
+                assert!(
+                    matches!(*m, "Network.enable" | "Network.setBlockedURLs"),
+                    "{m}"
+                );
             }
         }
     }
@@ -989,7 +1076,7 @@ mod tests {
         // gate fires without a real server round-trip).
         let (_, mut ws) = inprocess_ws_pair().await;
         for method in [
-            "Network.enable",
+            "Network.getAllCookies",
             "Storage.getCookies",
             "Browser.getVersion",
             "Browser.close",
@@ -1180,7 +1267,10 @@ mod tests {
             config: test_config(),
         };
         let err = session
-            .read_page("http://169.254.169.254/latest/meta-data/")
+            .read_page(
+                "http://169.254.169.254/latest/meta-data/",
+                crate::local_browser::ReadMode::Full,
+            )
             .await;
         assert!(matches!(
             err,
@@ -1247,7 +1337,13 @@ mod tests {
         let mut page = WsSession::connect(&format!("ws://{addr}/devtools/page/t1"), "page ws")
             .await
             .unwrap();
-        let err = read_in_page(&mut page, "https://example.com/", Duration::from_secs(2)).await;
+        let err = read_in_page(
+            &mut page,
+            "https://example.com/",
+            Duration::from_secs(2),
+            crate::local_browser::ReadMode::Full,
+        )
+        .await;
         assert!(
             matches!(err, Err(CdpError::UrlGate(UrlGateError::NotHttp { .. }))),
             "{err:?}"
@@ -1361,6 +1457,35 @@ mod tests {
             .await
             .unwrap();
         (server, ws)
+    }
+
+    /// RETRIEVAL-ORCHESTRATION-MECHANICAL 0k (2026-08-30)：preview/keywords
+    /// 等待「可用文本就绪」——innerText 非空即返回，即使服务端从不发
+    /// loadEventFired（慢三方资源不再拖长读取）。
+    #[tokio::test]
+    async fn text_ready_returns_without_load_event() {
+        let (server, mut page) = ws_pair_with_events(vec![], None, "usable text".to_string()).await;
+        let start = tokio::time::Instant::now();
+        wait_for_text_ready(&mut page, Duration::from_secs(2))
+            .await
+            .unwrap();
+        assert!(
+            start.elapsed() < Duration::from_secs(1),
+            "text-ready must not wait for the load event"
+        );
+        server.abort();
+    }
+
+    /// RETRIEVAL-ORCHESTRATION-MECHANICAL 0k (2026-08-30)：空文本轮询到
+    /// deadline → LoadTimeout（与 full 路径同型显式失败，非挂死）。
+    #[tokio::test]
+    async fn text_ready_times_out_when_no_text() {
+        let (server, mut page) = ws_pair_with_events(vec![], None, "".to_string()).await;
+        let start = tokio::time::Instant::now();
+        let err = wait_for_text_ready(&mut page, Duration::from_millis(300)).await;
+        assert!(matches!(err, Err(CdpError::LoadTimeout { .. })), "{err:?}");
+        assert!(start.elapsed() >= Duration::from_millis(250));
+        server.abort();
     }
 
     /// Unique temp dir per test label (no tempfile dev-dep — codebase

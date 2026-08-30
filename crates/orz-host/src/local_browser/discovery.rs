@@ -170,6 +170,19 @@ pub fn browser_launch_args(profile_dir: &Path, headless: bool) -> Vec<String> {
     args.push("--disable-background-networking".to_string());
     args.push("--disable-sync".to_string());
     args.push("--disable-translate".to_string());
+    // RETRIEVAL-ORCHESTRATION-MECHANICAL 0k (2026-08-30, TODO P0-0k 第一批
+    // 第 4 项)：容器必需三件套（docker 下无 sandbox/dev-shm 会启动失败
+    // 或崩溃）＋headless 文本读取资源优化。`--blink-settings=imagesEnabled
+    // =false` 对 full/preview/keywords 一律安全（browser_read 只回文本，
+    // 从不回图）。
+    args.push("--no-sandbox".to_string());
+    args.push("--disable-dev-shm-usage".to_string());
+    args.push("--disable-gpu".to_string());
+    args.push("--disable-software-rasterizer".to_string());
+    args.push("--mute-audio".to_string());
+    args.push("--hide-scrollbars".to_string());
+    args.push("--metrics-recording-only".to_string());
+    args.push("--blink-settings=imagesEnabled=false".to_string());
     args
 }
 
@@ -250,5 +263,20 @@ mod tests {
                 |a| a.starts_with("--user-data-dir=") && a.contains("chrome-profile-RUN123456")
             )
         );
+        // RETRIEVAL-ORCHESTRATION-MECHANICAL 0k (2026-08-30)：容器必需
+        // 参数 + 文本读取资源优化恒在（headed/headless 一致）。
+        for required in [
+            "--no-sandbox",
+            "--disable-dev-shm-usage",
+            "--disable-gpu",
+            "--disable-software-rasterizer",
+            "--mute-audio",
+            "--hide-scrollbars",
+            "--metrics-recording-only",
+            "--blink-settings=imagesEnabled=false",
+        ] {
+            assert!(headed.iter().any(|a| a == required), "missing {required}");
+            assert!(headless.iter().any(|a| a == required), "missing {required}");
+        }
     }
 }

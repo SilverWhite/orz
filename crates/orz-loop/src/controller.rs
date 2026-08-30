@@ -74,6 +74,45 @@ pub fn max_tool_rounds_override() -> Option<u32> {
         .and_then(|s| s.trim().parse().ok())
 }
 
+/// RETRIEVAL-ORCHESTRATION-MECHANICAL 0k (2026-08-30, BACKLOG 0k / TODO
+/// P0-0k 第一批第 2 项)：检索子代理 run 级预算——墙钟默认 600s（10 分钟），
+/// `ORZ_RETRIEVAL_SUBAGENT_TIMEOUT_SECS` 覆盖，0 禁用（unbounded）。
+/// 主车道 wallclock（ORZ_MAX_WALLCLOCK）仍由 orz-bin 层整体兜底；本预算
+/// 只约束单次检索派发，防止一个检索会话烧掉主 run 的墙钟。
+pub const RETRIEVAL_SUBAGENT_WALLCLOCK_DEFAULT_SECS: u64 = 600;
+
+/// 检索子代理独立工具轮上限（默认 60；主车道仍为 `MAX_TOOL_ROUNDS`=120）。
+/// 与 `max_tool_rounds` 取 min 生效（测试用 `with_max_tool_rounds` 缩小
+/// 时语义不变）。
+pub const RETRIEVAL_SUBAGENT_MAX_TOOL_ROUNDS: u32 = 60;
+
+/// Parse rule for the subagent wallclock env value (tested without env
+/// mutation): trimmed u64 seconds; `0` disables; non-numeric → None
+/// (invalid ignored, same convention as `max_tool_rounds_override`).
+pub(crate) fn parse_retrieval_subagent_wallclock(s: &str) -> Option<Option<std::time::Duration>> {
+    match s.trim().parse::<u64>() {
+        Ok(0) => Some(None),
+        Ok(secs) => Some(Some(std::time::Duration::from_secs(secs))),
+        Err(_) => None,
+    }
+}
+
+pub fn retrieval_subagent_wallclock_override() -> Option<Option<std::time::Duration>> {
+    std::env::var("ORZ_RETRIEVAL_SUBAGENT_TIMEOUT_SECS")
+        .ok()
+        .and_then(|s| parse_retrieval_subagent_wallclock(&s))
+}
+
+pub(crate) fn parse_retrieval_subagent_max_tool_rounds(s: &str) -> Option<u32> {
+    s.trim().parse().ok().filter(|v| *v > 0)
+}
+
+pub fn retrieval_subagent_max_tool_rounds_override() -> Option<u32> {
+    std::env::var("ORZ_RETRIEVAL_MAX_TOOL_ROUNDS")
+        .ok()
+        .and_then(|s| parse_retrieval_subagent_max_tool_rounds(&s))
+}
+
 /// FUS-RETRIEVAL-MECH P0-B step 2 (2026-08-14): per-activation web_fetch
 /// candidate cap — the mechanical hard gate replacing the prompt's soft
 /// "候选 ≤5" rule (design §1.1). User adjudication 2026-08-14: default 8.
@@ -196,6 +235,11 @@ pub enum AgentLoopError {
     /// （reason=degeneration）而非 run_failed。
     #[error("degeneration limit reached: {0}")]
     Degeneration(String),
+    /// RETRIEVAL-ORCHESTRATION-MECHANICAL 0k (2026-08-30): 检索子代理单次
+    /// 派发墙钟预算耗尽——父 run 继续执行，激活以 `subagent_timeout` 收口
+    /// （resumable，无 assessment/digest）。
+    #[error("retrieval subagent wallclock exceeded")]
+    RetrievalSubagentTimeout,
 }
 
 /// ACAF Slice 2 fail-closed (2026-08-13): the ticket lifecycle's decision
@@ -289,6 +333,11 @@ pub struct AgentLoopController {
     pub(crate) main_agent: MainAgent,
     pub(crate) blackboard: Arc<SharedBlackboard>,
     pub(crate) max_tool_rounds: u32,
+    /// RETRIEVAL-ORCHESTRATION-MECHANICAL 0k (2026-08-30)：检索子代理单次
+    /// 派发墙钟预算。`None` = 禁用（unbounded）。
+    pub(crate) retrieval_subagent_wallclock: Option<std::time::Duration>,
+    /// 检索子代理工具轮上限（与 `max_tool_rounds` 取 min 生效）。
+    pub(crate) retrieval_max_tool_rounds: u32,
     /// FUS-RETRIEVAL-MECH P0-B step 2/4 (2026-08-14): per-activation
     /// candidate cap (ORZ_WEB_FETCH_CANDIDATE_CAP, default 8 — user
     /// adjudication 2026-08-14). Shared by web_fetch and browser_read.
@@ -627,6 +676,11 @@ impl AgentLoopController {
             main_agent: MainAgent::new(gateway.clone()),
             blackboard: Arc::new(SharedBlackboard::new()),
             max_tool_rounds: max_tool_rounds_override().unwrap_or(MAX_TOOL_ROUNDS),
+            retrieval_subagent_wallclock: retrieval_subagent_wallclock_override().unwrap_or(Some(
+                std::time::Duration::from_secs(RETRIEVAL_SUBAGENT_WALLCLOCK_DEFAULT_SECS),
+            )),
+            retrieval_max_tool_rounds: retrieval_subagent_max_tool_rounds_override()
+                .unwrap_or(RETRIEVAL_SUBAGENT_MAX_TOOL_ROUNDS),
             candidate_cap: web_fetch_candidate_cap_override()
                 .unwrap_or(DEFAULT_WEB_FETCH_CANDIDATE_CAP),
             max_inject_tokens_per_round: max_inject_tokens_per_round_override()
@@ -1209,6 +1263,10 @@ impl AgentLoopController {
             main_agent,
             blackboard: Arc::new(SharedBlackboard::new()),
             max_tool_rounds: MAX_TOOL_ROUNDS,
+            retrieval_subagent_wallclock: Some(std::time::Duration::from_secs(
+                RETRIEVAL_SUBAGENT_WALLCLOCK_DEFAULT_SECS,
+            )),
+            retrieval_max_tool_rounds: RETRIEVAL_SUBAGENT_MAX_TOOL_ROUNDS,
             candidate_cap: DEFAULT_WEB_FETCH_CANDIDATE_CAP,
             max_inject_tokens_per_round: DEFAULT_MAX_INJECT_TOKENS_PER_ROUND,
             snapshot_store: None,
@@ -2791,6 +2849,10 @@ pub(crate) struct EventWriter<'a> {
     /// persisted by the host to `{cwd}/.gsa/grill/<session>.jsonl`, never
     /// into a run journal (run = single-run integrity unit).
     journal: Option<&'a JournalRecorder>,
+    /// RETRIEVAL-ORCHESTRATION-MECHANICAL 0k (2026-08-30)：buffered 模式——
+    /// `record` 追加到此（不写链、不打心跳），调用方按序 drain 后经真实
+    /// writer 重放（同轮读类并行批次的提交阶段）。
+    buffer: Option<Vec<(EventType, serde_json::Value)>>,
     /// GAP-INQUIRY-SPLIT (2026-08-09): the journal track — production writes
     /// `V02` (homogeneous chain, §11.6.2); `V01` is replay-only.
     track: EventTrack,
@@ -2849,6 +2911,7 @@ impl<'a> EventWriter<'a> {
     ) -> Self {
         Self {
             journal,
+            buffer: None,
             track,
             run_id: run_id.to_string(),
             manifest_sha256: manifest_sha256.to_string(),
@@ -2858,13 +2921,31 @@ impl<'a> EventWriter<'a> {
         }
     }
 
+    /// RETRIEVAL-ORCHESTRATION-MECHANICAL 0k (2026-08-30)：per-call 缓冲
+    /// writer——并行读批次内每个调用一个，事件先收集、提交阶段按声明序
+    /// 经真实 writer 重放（保持 hash 链与消息序）。
+    pub(crate) fn buffered(run_id: &str) -> Self {
+        let mut w = Self::new(None, EventTrack::V02, run_id, "", 0, None, None);
+        w.buffer = Some(Vec::new());
+        w
+    }
+
+    /// Take the buffered events (parallel read batch commit replay).
+    pub(crate) fn drain(&mut self) -> Vec<(EventType, serde_json::Value)> {
+        self.buffer.take().unwrap_or_default()
+    }
+
     pub(crate) async fn record(
         &mut self,
         event_type: EventType,
         payload: serde_json::Value,
     ) -> Result<(), AgentLoopError> {
         // Grill mode: nothing to record — no chain, no heartbeats.
+        // Buffered mode (0k parallel read batch): collect for ordered replay.
         let Some(journal) = self.journal else {
+            if let Some(buf) = &mut self.buffer {
+                buf.push((event_type, payload));
+            }
             return Ok(());
         };
         // GAP-INQUIRY-SPLIT: `neutral_inquiry` / `retrieval_completion_check`

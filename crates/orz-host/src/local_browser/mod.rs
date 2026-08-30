@@ -47,6 +47,27 @@ pub const MODE_FULL: &str = "full";
 pub const MODE_PREVIEW: &str = "preview";
 pub const MODE_KEYWORDS: &str = "keywords";
 
+/// RETRIEVAL-ORCHESTRATION-MECHANICAL 0k (2026-08-30)：browser_read 读取
+/// 模式——下传 CDP 层以决定资源拦截与等待语义（preview/keywords 用
+/// 「可用文本就绪」+ 图片/字体/媒体拦截；full 保持 loadEventFired 终态）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ReadMode {
+    Full,
+    Preview,
+    Keywords,
+}
+
+impl ReadMode {
+    pub fn from_mode_str(s: &str) -> Option<Self> {
+        match s {
+            MODE_FULL => Some(Self::Full),
+            MODE_PREVIEW => Some(Self::Preview),
+            MODE_KEYWORDS => Some(Self::Keywords),
+            _ => None,
+        }
+    }
+}
+
 /// Max characters of page text returned to the model in full mode (tool
 /// contract — §3.7.7 download-size limits; aligned with the Python LBR
 /// precedent of 100k chars). Truncation appends a mechanical footer so the
@@ -90,7 +111,9 @@ pub enum BrowserDownloadOutcome {
 pub trait BrowserSession: Send + Sync {
     /// Read one URL. Implementations must enforce the URL gate themselves
     /// (fail-closed) and return explicit errors — never a silent fallback.
-    async fn read_page(&self, url: &str) -> Result<PageReadOutcome, CdpError>;
+    /// `mode` selects the read scope: preview/keywords use resource blocking
+    /// + text-ready wait, full waits for the load event (0k 2026-08-30).
+    async fn read_page(&self, url: &str, mode: ReadMode) -> Result<PageReadOutcome, CdpError>;
 
     /// Download-or-read one URL into `download_dir` (PDF evidence pipeline,
     /// 2026-08-11). The URL gate applies on entry and on every redirect; a
@@ -141,12 +164,12 @@ impl LocalBrowserManager {
 
 #[async_trait]
 impl BrowserSession for LocalBrowserManager {
-    async fn read_page(&self, url: &str) -> Result<PageReadOutcome, CdpError> {
+    async fn read_page(&self, url: &str, mode: ReadMode) -> Result<PageReadOutcome, CdpError> {
         let mut guard = self.inner.lock().await;
         let session = guard
             .as_mut()
             .ok_or_else(|| CdpError::Io("browser session not launched".into()))?;
-        session.read_page(url).await
+        session.read_page(url, mode).await
     }
 
     async fn download_or_read(
@@ -196,7 +219,7 @@ impl UnavailableBrowserSession {
 
 #[async_trait]
 impl BrowserSession for UnavailableBrowserSession {
-    async fn read_page(&self, _url: &str) -> Result<PageReadOutcome, CdpError> {
+    async fn read_page(&self, _url: &str, _mode: ReadMode) -> Result<PageReadOutcome, CdpError> {
         Err(CdpError::Io(format!(
             "browser unavailable: {}",
             self.reason
@@ -405,7 +428,10 @@ pub async fn handle_browser_read(
         }
     };
 
-    match browser.read_page(url).await {
+    // RETRIEVAL-ORCHESTRATION-MECHANICAL 0k (2026-08-30)：模式下传——
+    // preview/keywords 由 CDP 层做资源拦截 + 文本就绪等待。
+    let read_mode = ReadMode::from_mode_str(mode).expect("mode validated above");
+    match browser.read_page(url, read_mode).await {
         Ok(outcome) => {
             let mut text = outcome.text;
             let mut truncated = false;
@@ -738,7 +764,7 @@ pub(crate) mod tests {
             "browser process must be alive after launch"
         );
         let outcome = session
-            .read_page("https://example.com/")
+            .read_page("https://example.com/", ReadMode::Full)
             .await
             .expect("example.com must be readable");
         assert!(outcome.text.contains("Example Domain"), "{}", outcome.text);
@@ -785,7 +811,10 @@ pub(crate) mod tests {
         // the navigation. (A literal-IP PrivateAddress case is covered
         // deterministically by the unit test `full_check_rejects_private_...`.)
         let err = session
-            .read_page("http://169.254.169.254.nip.io/latest/meta-data/")
+            .read_page(
+                "http://169.254.169.254.nip.io/latest/meta-data/",
+                ReadMode::Full,
+            )
             .await
             .unwrap_err();
         assert!(
@@ -867,7 +896,11 @@ pub(crate) mod tests {
 
     #[async_trait]
     impl BrowserSession for StubBrowser {
-        async fn read_page(&self, _url: &str) -> Result<PageReadOutcome, CdpError> {
+        async fn read_page(
+            &self,
+            _url: &str,
+            _mode: ReadMode,
+        ) -> Result<PageReadOutcome, CdpError> {
             self.outcome.clone()
         }
 
@@ -1252,7 +1285,10 @@ pub(crate) mod tests {
     async fn unavailable_session_fails_closed() {
         let browser = UnavailableBrowserSession::new("browser_launch_failed: test".into());
         assert!(!browser.ready());
-        let err = browser.read_page("https://example.com/").await.unwrap_err();
+        let err = browser
+            .read_page("https://example.com/", ReadMode::Full)
+            .await
+            .unwrap_err();
         assert!(err.to_string().contains("browser unavailable"), "{err}");
     }
 
