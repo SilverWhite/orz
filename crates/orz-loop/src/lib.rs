@@ -23,6 +23,7 @@ pub mod controller;
 mod delivery;
 mod denial;
 mod diagnostic_coverage;
+pub(crate) mod failure_target;
 pub mod diagnostics;
 pub mod entities;
 pub mod epoch;

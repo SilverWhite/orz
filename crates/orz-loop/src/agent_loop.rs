@@ -1627,6 +1627,17 @@ pub(crate) async fn run_agent_loop(
             )
             .await?;
 
+        // P2-10 F3 §4.5 (I3): a decision round = model_output with non-empty
+        // tool_calls. Feed the LIF engine (T̂ interval + channel decay +
+        // temporal record) — pure observation, zero injection (§3.4).
+        if !response.tool_calls.is_empty() {
+            controller
+                .lif
+                .lock()
+                .unwrap()
+                .on_decision_round(AgentLoopController::now_epoch_secs());
+        }
+
         // P0-D: track the round — measured prompt tokens feed the next
         // loop-top trigger check; the round counter is the summary
         // cooldown.

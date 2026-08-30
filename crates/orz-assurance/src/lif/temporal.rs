@@ -1,0 +1,495 @@
+//! Temporal partition state — per-decision-round feature records, semantic
+//! domain labels and domain spikes (P2-10 F2 §3; ADR-0010 §14.47).
+//!
+//! Positioning: a pure **observation record surface**. The domain is a
+//! semantic predicate over the continuous features (never learned, never a
+//! verdict). Only spikes are persisted (session sidecar, I4); the per-round
+//! rows are a runtime query surface with a bounded window.
+
+use std::collections::{HashMap, VecDeque};
+
+use serde::{Deserialize, Serialize};
+
+use super::channels::ToolOutcome;
+
+pub const RECENT_RECORDS_CAP: usize = 20;
+pub const MIGRATION_LOG_CAP: usize = 20;
+pub const TOOL_WINDOW: usize = 10;
+pub const FEATURE_SERIES_CAP: usize = 20;
+
+/// Semantic domain labels (§3.2). Start is the pre-first-success launch state
+/// and is never merged into the other domains.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Domain {
+    Start,
+    Normal,
+    Pressure,
+    LowProgress,
+    Stuck,
+}
+
+impl Domain {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Domain::Start => "start",
+            Domain::Normal => "normal",
+            Domain::Pressure => "pressure",
+            Domain::LowProgress => "low_progress",
+            Domain::Stuck => "stuck",
+        }
+    }
+}
+
+/// One per-decision-round query row (§3.1).
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+pub struct TemporalRecord {
+    pub t: f64,
+    pub domain: Domain,
+    pub entry_round: u64,
+    pub dwell_rounds: u64,
+    pub u_prog: f64,
+    pub u_err: f64,
+    pub u_stuck: f64,
+    pub t_hat: f64,
+    pub err10: f64,
+    pub succ10: f64,
+}
+
+/// Domain-switch point persisted with the session sidecar (§3.5): only the
+/// switch times + target domain; dwell rounds are derived from neighbouring
+/// spikes.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct DomainSpike {
+    pub t: f64,
+    pub domain: Domain,
+}
+
+/// A domain migration (History query). `recovery` marks a
+/// Stuck/LowProgress → Normal transition (§3.2 Recovery).
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+pub struct Migration {
+    pub from: Domain,
+    pub to: Domain,
+    pub at_t: f64,
+    pub at_round: u64,
+    pub dwell_rounds: u64,
+    pub recovery: bool,
+}
+
+/// Selector vocabulary for `blackboard.read partition="temporal"` (§3.3).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TemporalQuery {
+    Now,
+    Recent(u64),
+    History,
+    Feature(&'static str, u64),
+}
+
+/// Tool-outcome bucket used by the err10/succ10 window.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ToolOutcomeBucket {
+    Error,
+    Success,
+    Other,
+}
+
+impl From<ToolOutcome> for ToolOutcomeBucket {
+    fn from(v: ToolOutcome) -> Self {
+        match v {
+            ToolOutcome::Error => ToolOutcomeBucket::Error,
+            ToolOutcome::Success => ToolOutcomeBucket::Success,
+            ToolOutcome::Other => ToolOutcomeBucket::Other,
+        }
+    }
+}
+
+/// Bounded temporal state machine (§3.4: O(1)/decision, bounded query window).
+#[derive(Debug, Clone)]
+pub struct TemporalState {
+    round: u64,
+    has_success: bool,
+    current_domain: Domain,
+    entry_round: u64,
+    records: VecDeque<TemporalRecord>,
+    spikes: Vec<DomainSpike>,
+    migrations: VecDeque<Migration>,
+    tool_outcomes: VecDeque<ToolOutcomeBucket>,
+    features: HashMap<&'static str, VecDeque<f64>>,
+    total_tool_events: u64,
+    total_errors: u64,
+    total_successes: u64,
+}
+
+impl Default for TemporalState {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl TemporalState {
+    pub fn new() -> Self {
+        Self {
+            round: 0,
+            has_success: false,
+            current_domain: Domain::Start,
+            entry_round: 0,
+            records: VecDeque::with_capacity(RECENT_RECORDS_CAP),
+            spikes: Vec::new(),
+            migrations: VecDeque::with_capacity(MIGRATION_LOG_CAP),
+            tool_outcomes: VecDeque::with_capacity(TOOL_WINDOW),
+            features: HashMap::new(),
+            total_tool_events: 0,
+            total_errors: 0,
+            total_successes: 0,
+        }
+    }
+
+    /// Feed one completed tool outcome into the err10/succ10 window (last 10
+    /// tool events, §3.1).
+    pub fn observe_tool_outcome(&mut self, outcome: ToolOutcome) {
+        self.total_tool_events += 1;
+        match outcome {
+            ToolOutcome::Error => self.total_errors += 1,
+            ToolOutcome::Success => {
+                self.total_successes += 1;
+                self.has_success = true;
+            }
+            ToolOutcome::Other => {}
+        }
+        self.tool_outcomes.push_back(outcome.into());
+        if self.tool_outcomes.len() > TOOL_WINDOW {
+            self.tool_outcomes.pop_front();
+        }
+    }
+
+    pub fn total_tool_events(&self) -> u64 {
+        self.total_tool_events
+    }
+
+    pub fn total_errors(&self) -> u64 {
+        self.total_errors
+    }
+
+    pub fn total_successes(&self) -> u64 {
+        self.total_successes
+    }
+
+    fn err10(&self) -> f64 {
+        self.tool_outcomes
+            .iter()
+            .filter(|b| **b == ToolOutcomeBucket::Error)
+            .count() as f64
+            / TOOL_WINDOW as f64
+    }
+
+    fn succ10(&self) -> f64 {
+        self.tool_outcomes
+            .iter()
+            .filter(|b| **b == ToolOutcomeBucket::Success)
+            .count() as f64
+            / TOOL_WINDOW as f64
+    }
+
+    /// Semantic domain predicate (§3.2). `theta_stuck` = 1.5·T̂.
+    fn label(&self, u_prog: f64, u_err: f64, u_stuck: f64, theta_stuck: f64) -> Domain {
+        if !self.has_success {
+            return Domain::Start;
+        }
+        let low_progress = u_prog < 0.5;
+        let pressure = u_err >= 2.0 || u_stuck >= theta_stuck;
+        match (low_progress, pressure) {
+            (false, false) => Domain::Normal,
+            (false, true) => Domain::Pressure,
+            (true, false) => Domain::LowProgress,
+            (true, true) => Domain::Stuck,
+        }
+    }
+
+    /// Record one decision round row and advance the domain machine.
+    pub fn record_round(&mut self, t: f64, t_hat: f64, u_prog: f64, u_err: f64, u_stuck: f64) {
+        self.round += 1;
+        let theta_stuck = 1.5 * t_hat;
+        let domain = self.label(u_prog, u_err, u_stuck, theta_stuck);
+        if domain != self.current_domain {
+            let dwell = if self.entry_round == 0 {
+                0
+            } else {
+                self.round.saturating_sub(self.entry_round) + 1
+            };
+            if self.entry_round > 0 {
+                let from = self.current_domain;
+                let recovery = matches!((from, domain), (Domain::Stuck | Domain::LowProgress, Domain::Normal));
+                self.migrations.push_back(Migration {
+                    from,
+                    to: domain,
+                    at_t: t,
+                    at_round: self.round,
+                    dwell_rounds: dwell,
+                    recovery,
+                });
+                if self.migrations.len() > MIGRATION_LOG_CAP {
+                    self.migrations.pop_front();
+                }
+            }
+            self.spikes.push(DomainSpike { t, domain });
+            self.current_domain = domain;
+            self.entry_round = self.round;
+        }
+        let record = TemporalRecord {
+            t,
+            domain,
+            entry_round: self.entry_round,
+            dwell_rounds: self.round.saturating_sub(self.entry_round) + 1,
+            u_prog,
+            u_err,
+            u_stuck,
+            t_hat,
+            err10: self.err10(),
+            succ10: self.succ10(),
+        };
+        self.records.push_back(record);
+        if self.records.len() > RECENT_RECORDS_CAP {
+            self.records.pop_front();
+        }
+        for (name, value) in [
+            ("u_prog", u_prog),
+            ("u_err", u_err),
+            ("u_stuck", u_stuck),
+            ("t_hat", t_hat),
+            ("err10", record.err10),
+            ("succ10", record.succ10),
+        ] {
+            let series = self.features.entry(name).or_default();
+            series.push_back(value);
+            if series.len() > FEATURE_SERIES_CAP {
+                series.pop_front();
+            }
+        }
+    }
+
+    pub fn round(&self) -> u64 {
+        self.round
+    }
+
+    pub fn current_domain(&self) -> Domain {
+        self.current_domain
+    }
+
+    pub fn has_success(&self) -> bool {
+        self.has_success
+    }
+
+    /// Latest record (Now).
+    pub fn now(&self) -> Option<&TemporalRecord> {
+        self.records.back()
+    }
+
+    /// Recent(k) — latest k rows, oldest first.
+    pub fn recent(&self, k: u64) -> Vec<&TemporalRecord> {
+        let k = (k as usize).min(self.records.len());
+        self.records.iter().skip(self.records.len() - k).collect()
+    }
+
+    /// History — bounded migration log (≤ 20).
+    pub fn history(&self) -> Vec<Migration> {
+        self.migrations.iter().copied().collect()
+    }
+
+    /// Feature(name, k) — compact recent series (oldest first).
+    pub fn feature(&self, name: &str, k: u64) -> Vec<f64> {
+        let Some(series) = self.features.get(name) else {
+            return Vec::new();
+        };
+        let k = (k as usize).min(series.len());
+        series.iter().skip(series.len() - k).copied().collect()
+    }
+
+    pub fn known_feature_names() -> &'static [&'static str] {
+        &["u_prog", "u_err", "u_stuck", "t_hat", "err10", "succ10"]
+    }
+
+    /// All spikes observed so far (archive payload, I4).
+    pub fn spikes(&self) -> &[DomainSpike] {
+        &self.spikes
+    }
+
+    /// Restore spikes from a session sidecar (cross-prompt recovery, I4):
+    /// the domain machine is rebuilt from the spike timeline. Only `t` +
+    /// `domain` are persisted (§3.5), so `round` / `entry_round` / dwell
+    /// metadata stay approximations (0); `has_success` is inferred from the
+    /// timeline (any non-Start spike ⇒ at least one success occurred — Start
+    /// is only produced before the first success and never re-entered).
+    /// (审查处理 R6 / F3.)
+    pub fn restore_spikes(&mut self, spikes: Vec<DomainSpike>) {
+        self.spikes.clear();
+        self.migrations.clear();
+        self.current_domain = Domain::Start;
+        self.entry_round = 0;
+        self.has_success = spikes.iter().any(|s| s.domain != Domain::Start);
+        for spike in spikes {
+            self.spikes.push(spike);
+            if spike.domain != self.current_domain && self.entry_round > 0 {
+                let from = self.current_domain;
+                let recovery = matches!(
+                    (from, spike.domain),
+                    (Domain::Stuck | Domain::LowProgress, Domain::Normal)
+                );
+                self.migrations.push_back(Migration {
+                    from,
+                    to: spike.domain,
+                    at_t: spike.t,
+                    at_round: self.round, // round counter not persisted — 0
+                    dwell_rounds: 0,      // not derivable from t alone (§3.5)
+                    recovery,
+                });
+                if self.migrations.len() > MIGRATION_LOG_CAP {
+                    self.migrations.pop_front();
+                }
+            }
+            self.current_domain = spike.domain;
+            self.entry_round = self.round.max(1);
+        }
+    }
+
+    pub fn reset(&mut self) {
+        *self = Self::new();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn start_domain_until_first_success() {
+        let mut st = TemporalState::new();
+        st.record_round(1.0, 8.0, 0.0, 0.0, 0.0);
+        assert_eq!(st.now().unwrap().domain, Domain::Start);
+        st.observe_tool_outcome(ToolOutcome::Error);
+        st.record_round(10.0, 8.0, 0.1, 1.0, 0.5);
+        assert_eq!(st.now().unwrap().domain, Domain::Start);
+        st.observe_tool_outcome(ToolOutcome::Success);
+        st.record_round(20.0, 8.0, 1.0, 0.5, 0.3);
+        assert_eq!(st.now().unwrap().domain, Domain::Normal);
+    }
+
+    #[test]
+    fn semantic_domain_grid() {
+        let mut st = TemporalState::new();
+        st.observe_tool_outcome(ToolOutcome::Success);
+        // Normal
+        st.record_round(1.0, 8.0, 0.9, 0.5, 0.1);
+        assert_eq!(st.now().unwrap().domain, Domain::Normal);
+        // Pressure: u_err ≥ 2
+        st.record_round(2.0, 8.0, 0.9, 2.5, 0.1);
+        assert_eq!(st.now().unwrap().domain, Domain::Pressure);
+        // Stuck: low progress + pressure
+        st.record_round(3.0, 8.0, 0.2, 2.5, 5.0);
+        assert_eq!(st.now().unwrap().domain, Domain::Stuck);
+        // LowProgress: low progress, no pressure
+        st.record_round(4.0, 8.0, 0.2, 0.5, 0.1);
+        assert_eq!(st.now().unwrap().domain, Domain::LowProgress);
+        // Recovery: LowProgress → Normal
+        st.record_round(5.0, 8.0, 0.9, 0.5, 0.1);
+        assert_eq!(st.now().unwrap().domain, Domain::Normal);
+        let history = st.history();
+        assert!(history.iter().any(|m| m.recovery && m.from == Domain::LowProgress));
+    }
+
+    #[test]
+    fn pressure_uses_stuck_theta_bound() {
+        let mut st = TemporalState::new();
+        st.observe_tool_outcome(ToolOutcome::Success);
+        // u_stuck ≥ 1.5·T̂ = 12 with T̂=8 → pressure even with u_err < 2.
+        st.record_round(1.0, 8.0, 0.9, 0.5, 13.0);
+        assert_eq!(st.now().unwrap().domain, Domain::Pressure);
+        st.record_round(2.0, 8.0, 0.2, 0.5, 13.0);
+        assert_eq!(st.now().unwrap().domain, Domain::Stuck);
+    }
+
+    #[test]
+    fn err10_succ10_window_is_bounded() {
+        let mut st = TemporalState::new();
+        for _ in 0..6 {
+            st.observe_tool_outcome(ToolOutcome::Error);
+        }
+        for _ in 0..6 {
+            st.observe_tool_outcome(ToolOutcome::Success);
+        }
+        st.record_round(1.0, 8.0, 1.0, 0.0, 0.0);
+        let rec = st.now().unwrap();
+        assert!((rec.err10 - 0.4).abs() < 1e-12); // 4 errors in the last 10
+        assert!((rec.succ10 - 0.6).abs() < 1e-12); // 6 successes in the last 10
+    }
+
+    #[test]
+    fn spikes_and_migrations_are_recorded() {
+        let mut st = TemporalState::new();
+        st.observe_tool_outcome(ToolOutcome::Success);
+        st.record_round(1.0, 8.0, 0.9, 0.5, 0.1); // Normal
+        st.record_round(2.0, 8.0, 0.2, 2.5, 5.0); // Stuck
+        st.record_round(3.0, 8.0, 0.9, 0.5, 0.1); // Normal (recovery)
+        assert_eq!(st.spikes().len(), 3); // Normal, Stuck, Normal
+        assert_eq!(st.history().len(), 2);
+        assert_eq!(st.now().unwrap().dwell_rounds, 1);
+        assert_eq!(st.now().unwrap().entry_round, 3);
+    }
+
+    #[test]
+    fn recent_and_feature_queries_respect_bounds() {
+        let mut st = TemporalState::new();
+        st.observe_tool_outcome(ToolOutcome::Success);
+        for i in 0..30 {
+            st.record_round(i as f64, 8.0, 1.0, 0.0, 0.0);
+        }
+        assert_eq!(st.recent(5).len(), 5);
+        assert_eq!(st.recent(100).len(), RECENT_RECORDS_CAP);
+        let u = st.feature("u_prog", 5);
+        assert_eq!(u.len(), 5);
+        let all = st.feature("u_prog", 100);
+        assert_eq!(all.len(), FEATURE_SERIES_CAP);
+        assert!(st.feature("nope", 3).is_empty());
+    }
+
+    #[test]
+    fn restore_spikes_rebuilds_domain_machine() {
+        let mut st = TemporalState::new();
+        st.observe_tool_outcome(ToolOutcome::Success);
+        st.record_round(1.0, 8.0, 0.9, 0.5, 0.1); // Normal
+        st.record_round(2.0, 8.0, 0.2, 2.5, 5.0); // Stuck
+        let spikes = st.spikes().to_vec();
+        assert_eq!(spikes.len(), 2);
+
+        // No success pre-seeding: restore must infer has_success from the
+        // spike timeline itself (审查处理 R6 / F3 — the pre-fix test masked
+        // the defect by seeding a Success before restore).
+        let mut restored = TemporalState::new();
+        restored.restore_spikes(spikes);
+        assert_eq!(restored.current_domain(), Domain::Stuck);
+        assert!(restored.has_success(), "restore must rebuild has_success");
+        assert_eq!(restored.spikes().len(), 2);
+
+        // First round after restore with the same features must stay Stuck —
+        // no fake Start regression, migration or extra spike.
+        let hist_len = restored.history().len();
+        let spikes_len = restored.spikes().len();
+        restored.record_round(3.0, 8.0, 0.2, 2.5, 5.0);
+        assert_eq!(restored.current_domain(), Domain::Stuck);
+        assert_eq!(restored.history().len(), hist_len);
+        assert_eq!(restored.spikes().len(), spikes_len);
+
+        // Recovery flag must be recomputed (not hard-coded false): a
+        // Stuck → Normal timeline restores a recovery-marked migration.
+        let mut st2 = TemporalState::new();
+        st2.observe_tool_outcome(ToolOutcome::Success);
+        st2.record_round(1.0, 8.0, 0.2, 2.5, 5.0); // Stuck
+        st2.record_round(2.0, 8.0, 0.9, 0.5, 0.1); // Normal (recovery)
+        let mut restored2 = TemporalState::new();
+        restored2.restore_spikes(st2.spikes().to_vec());
+        assert!(
+            restored2.history().iter().any(|m| m.recovery),
+            "Stuck→Normal migration must be marked recovery after restore"
+        );
+    }
+}

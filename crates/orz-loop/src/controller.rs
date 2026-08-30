@@ -573,6 +573,12 @@ pub struct AgentLoopController {
     /// marks the terminal step done. Keyed by plan epoch so a plan rotation
     /// invalidates any stale pending confirmation.
     pub(crate) delivery_pending: Mutex<(u64, bool)>,
+    /// P2-10 MECHANICAL-LAYER-MATH-CALCULUS (I3, ADR-0010 §14.47): the LIF
+    /// time-observation engine (T̂ estimator + channels + temporal domain
+    /// state). Feeds on decision rounds (model_output with tool_calls) and
+    /// tool events; read-only surface via `blackboard_read
+    /// section=temporal` (PULL, zero injection — §3/§6.1).
+    pub(crate) lif: Mutex<orz_assurance::lif::LifEngine>,
 }
 
 /// F7 (2026-08-15, BACKLOG 6e 复查遗留): which epoch snapshot failed to
@@ -758,6 +764,7 @@ impl AgentLoopController {
             status_line_appended: Mutex::new(None),
             delivery_baseline: Mutex::new(None),
             delivery_pending: Mutex::new((0, false)),
+            lif: Mutex::new(orz_assurance::lif::LifEngine::new()),
             plan_first_enabled: false,
             plan_first_session_done: false,
         }
@@ -1333,6 +1340,7 @@ impl AgentLoopController {
             status_line_appended: Mutex::new(None),
             delivery_baseline: Mutex::new(None),
             delivery_pending: Mutex::new((0, false)),
+            lif: Mutex::new(orz_assurance::lif::LifEngine::new()),
             plan_first_enabled: false,
             plan_first_session_done: false,
         }
@@ -1652,6 +1660,158 @@ impl AgentLoopController {
             self.max_tool_rounds,
             self.render_status_line().as_deref(),
         ))
+    }
+
+    /// P2-10 F2 §3.3 (I3, ADR-0010 §14.47): render the temporal partition
+    /// query surface — `blackboard_read section=temporal` with optional
+    /// `selector` (now | recent | history | feature), `k` (≤ 20) and `name`
+    /// (u_prog|u_err|u_stuck|t_hat|err10|succ10). Board bounded ≤ 1 KiB;
+    /// fires are never rendered (§3.4 — the continuous feature domain is
+    /// the only information face).
+    pub(crate) fn render_temporal_section(
+        &self,
+        selector: Option<&str>,
+        k: Option<u64>,
+        name: Option<&str>,
+    ) -> Result<String, String> {
+        let lif = self.lif.lock().unwrap();
+        if lif.temporal().round() == 0 {
+            return Ok("temporal: 尚无决策轮（run 尚未产生决策输出）".to_string());
+        }
+        let temporal = lif.temporal();
+        let body = match selector.unwrap_or("now") {
+            "now" => {
+                let rec = temporal.now().expect("round>0 ⇒ record exists");
+                format!(
+                    "temporal.now → [{:.0}s | {} | 入域 {} 轮 | 驻留 {} 轮]\n  \
+                     u_prog={:.2} u_err={:.2} u_stuck={:.2} T̂={:.1}s err10={:.2} succ10={:.2}",
+                    rec.t,
+                    rec.domain.as_str(),
+                    rec.entry_round,
+                    rec.dwell_rounds,
+                    rec.u_prog,
+                    rec.u_err,
+                    rec.u_stuck,
+                    rec.t_hat,
+                    rec.err10,
+                    rec.succ10,
+                )
+            }
+            "recent" => {
+                let k = k.unwrap_or(20).clamp(1, 20);
+                let rows = temporal.recent(k);
+                let lines: Vec<String> = rows
+                    .iter()
+                    .rev()
+                    .map(|r| {
+                        format!(
+                            "[{:.0}s | {} | 入域 {} | 驻留 {}] \
+                             u_prog={:.2} u_err={:.2} u_stuck={:.2} T̂={:.1}s \
+                             err10={:.2} succ10={:.2}",
+                            r.t,
+                            r.domain.as_str(),
+                            r.entry_round,
+                            r.dwell_rounds,
+                            r.u_prog,
+                            r.u_err,
+                            r.u_stuck,
+                            r.t_hat,
+                            r.err10,
+                            r.succ10,
+                        )
+                    })
+                    .collect();
+                format!("temporal.recent({k}) →\n{}", lines.join("\n"))
+            }
+            "history" => {
+                let history = temporal.history();
+                if history.is_empty() {
+                    return Ok("temporal.history → (无迁移)".to_string());
+                }
+                let lines: Vec<String> = history
+                    .iter()
+                    .map(|m| {
+                        format!(
+                            "{} → {} @ {:.0}s (round {}, dwell {}){}",
+                            m.from.as_str(),
+                            m.to.as_str(),
+                            m.at_t,
+                            m.at_round,
+                            m.dwell_rounds,
+                            if m.recovery { " [recovery]" } else { "" },
+                        )
+                    })
+                    .collect();
+                format!("temporal.history →\n{}", lines.join("\n"))
+            }
+            "feature" => {
+                let Some(name) = name else {
+                    return Err(
+                        "invalid temporal feature query: feature 需要 name 参数 \
+                         （u_prog|u_err|u_stuck|t_hat|err10|succ10）"
+                            .to_string(),
+                    );
+                };
+                if !orz_assurance::lif::TemporalState::known_feature_names().contains(&name) {
+                    return Err(format!(
+                        "invalid temporal feature name: {name} — 合法值 \
+                         u_prog|u_err|u_stuck|t_hat|err10|succ10"
+                    ));
+                }
+                let k = k.unwrap_or(20).clamp(1, 20);
+                let values = temporal.feature(name, k);
+                let compact = values
+                    .iter()
+                    .map(|v| format!("{v:.3}"))
+                    .collect::<Vec<_>>()
+                    .join(",");
+                format!("temporal.feature({name}, {}) → {compact}", values.len())
+            }
+            other => {
+                return Err(format!(
+                    "invalid temporal selector: {other} — 合法值 now|recent|history|feature"
+                ));
+            }
+        };
+        // §3.3 Board ≤ 1 KiB bound — truncate on a UTF-8 boundary, append a
+        // marker (never a silent mid-codepoint cut). The marker length is
+        // pre-deducted from the cap so the final board (payload + marker)
+        // never exceeds 1 KiB (审查处理 R3 / F4).
+        const BOARD_CAP: usize = 1024;
+        const TRUNC_MARKER: &str = "\n(truncated)";
+        if body.len() > BOARD_CAP {
+            let mut cut = BOARD_CAP.saturating_sub(TRUNC_MARKER.len());
+            while cut > 0 && !body.is_char_boundary(cut) {
+                cut -= 1;
+            }
+            Ok(format!("{}{}", &body[..cut], TRUNC_MARKER))
+        } else {
+            Ok(body)
+        }
+    }
+
+    /// Wall-clock epoch seconds (f64) for the LIF time axis (run-relative
+    /// conversion happens inside the engine at the first observation).
+    pub(crate) fn now_epoch_secs() -> f64 {
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs_f64())
+            .unwrap_or(0.0)
+    }
+
+    /// P2-10 F2 §3.5 (I4): restore domain spikes from the session sidecar
+    /// (cross-prompt recovery rebuilds the domain machine).
+    pub fn restore_temporal_spikes(&self, spikes: Vec<orz_assurance::lif::DomainSpike>) {
+        self.lif
+            .lock()
+            .unwrap()
+            .temporal_mut()
+            .restore_spikes(spikes);
+    }
+
+    /// P2-10 F2 §3.5 (I4): the current domain spikes (sidecar persistence).
+    pub fn temporal_spikes(&self) -> Vec<orz_assurance::lif::DomainSpike> {
+        self.lif.lock().unwrap().temporal().spikes().to_vec()
     }
 
     /// Run a single turn of the agent loop for a given user prompt.
@@ -2100,7 +2260,25 @@ impl AgentLoopController {
                                 "internal_ret",
                                 "external_ret",
                                 "entities",
+                                "temporal",
                             ],
+                            "description": "P2-10 F2 §3.3 (2026-08-30): temporal 分区是 LIF 时间观测面——每决策轮域标签/特征行（Now/Recent(k≤20)/History/Feature(name,k≤20)，渲染 ≤1 KiB、fires 不渲染、零注入 PULL 面）。selector 默认 now；recent/feature 可带 k（≤20）；feature 另需 name（u_prog|u_err|u_stuck|t_hat|err10|succ10）。",
+                        },
+                        "selector": {
+                            "type": "string",
+                            "enum": ["now", "recent", "history", "feature"],
+                            "description": "P2-10 F2 §3.3 (2026-08-30): temporal 查询面选择器——now（当前决策轮行，默认）/ recent（最近 k 行）/ history（域迁移日志 ≤20）/ feature（name 特征序列，k≤20）。仅与 section=temporal 组合有效；其余分区忽略（审查处理 R4 / F7）。",
+                        },
+                        "k": {
+                            "type": "integer",
+                            "minimum": 1,
+                            "maximum": 20,
+                            "description": "P2-10 F2 §3.3 (2026-08-30): temporal 行/序列窗口大小（recent/feature，默认 20，≤20）。仅与 section=temporal 组合有效（审查处理 R4 / F7）。",
+                        },
+                        "name": {
+                            "type": "string",
+                            "enum": ["u_prog", "u_err", "u_stuck", "t_hat", "err10", "succ10"],
+                            "description": "P2-10 F2 §3.3 (2026-08-30): temporal Feature 查询的特征名（selector=feature 时必填）。仅与 section=temporal 组合有效（审查处理 R4 / F7）。",
                         },
                         "since_timestamp": {"type": "string"},
                         "epoch": {
@@ -4243,5 +4421,82 @@ mod tests {
         assert_eq!(state.conversation.len(), 3);
         assert!(state.submitted.is_empty(), "submitted stays in-process");
         drop(registry);
+    }
+
+    /// P2-10 审查处理 R3 (F4): a long temporal board is truncated to ≤ 1 KiB
+    /// INCLUDING the marker — the pre-fix path emitted 1024 B payload + 12 B
+    /// marker (1036 B > cap). The marker must never split a UTF-8 code point.
+    #[test]
+    fn temporal_board_truncation_never_exceeds_cap() {
+        let controller =
+            AgentLoopController::with_gateway(Arc::new(FakeProvider::from_texts(vec!["x"])));
+        {
+            let mut guard = controller.lif.lock().unwrap();
+            let temporal = guard.temporal_mut();
+            temporal.observe_tool_outcome(orz_assurance::lif::ToolOutcome::Success);
+            for i in 0..40u64 {
+                temporal.record_round(i as f64 * 7.0, 8.0, 0.9, 0.5, 0.1);
+            }
+        }
+        let body = controller
+            .render_temporal_section(Some("recent"), Some(20), None)
+            .expect("recent render");
+        assert!(
+            body.ends_with("\n(truncated)"),
+            "truncation path must fire (marker missing): {body:?}"
+        );
+        assert!(
+            body.len() <= 1024,
+            "payload + marker must fit the cap (got {} B)",
+            body.len()
+        );
+        assert!(
+            body.is_char_boundary(body.len()),
+            "truncated board must end on a char boundary"
+        );
+    }
+
+    /// P2-10 审查处理 R6 (F3): cross-prompt restore rebuilds the domain
+    /// machine INCLUDING has_success — a restored non-Start domain must not
+    /// produce a fake Normal/Stuck → Start migration on the first round.
+    #[test]
+    fn restored_temporal_spikes_do_not_regress_to_start() {
+        let controller =
+            AgentLoopController::with_gateway(Arc::new(FakeProvider::from_texts(vec!["x"])));
+        // Build a session with Normal → Stuck spikes (has_success=true).
+        {
+            let mut guard = controller.lif.lock().unwrap();
+            let temporal = guard.temporal_mut();
+            temporal.observe_tool_outcome(orz_assurance::lif::ToolOutcome::Success);
+            temporal.record_round(1.0, 8.0, 0.9, 0.5, 0.1); // Normal
+            temporal.record_round(2.0, 8.0, 0.2, 2.5, 5.0); // Stuck
+        }
+        let spikes = controller.temporal_spikes();
+        assert_eq!(spikes.len(), 2);
+
+        // Fresh engine = exactly what the production ACP restore path does
+        // (acp_server.rs calls restore on a brand-new controller).
+        let restored =
+            AgentLoopController::with_gateway(Arc::new(FakeProvider::from_texts(vec!["x"])));
+        restored.restore_temporal_spikes(spikes);
+        assert_eq!(
+            restored.lif.lock().unwrap().temporal().current_domain(),
+            orz_assurance::lif::Domain::Stuck
+        );
+        assert!(restored.lif.lock().unwrap().temporal().has_success());
+
+        // First decision round after restore must stay Stuck (same features),
+        // not regress to Start with a fake migration/spike.
+        let migrations_before = restored.lif.lock().unwrap().temporal().history().len();
+        let spikes_before = restored.lif.lock().unwrap().temporal().spikes().len();
+        {
+            let mut guard = restored.lif.lock().unwrap();
+            guard.temporal_mut().record_round(3.0, 8.0, 0.2, 2.5, 5.0); // still Stuck
+        }
+        let guard = restored.lif.lock().unwrap();
+        let temporal = guard.temporal();
+        assert_eq!(temporal.current_domain(), orz_assurance::lif::Domain::Stuck);
+        assert_eq!(temporal.history().len(), migrations_before);
+        assert_eq!(temporal.spikes().len(), spikes_before);
     }
 }

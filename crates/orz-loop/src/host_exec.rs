@@ -300,6 +300,10 @@ impl AgentLoopController {
                 "file_path": file_path,
                 "reason": err.upstream,
             });
+            // P2-10 F4 (I2): GetPut anchor failure identity.
+            if let Some(ft) = crate::failure_target::failure_target(&tc.name, &tc.arguments) {
+                completed["failure_target"] = ft;
+            }
             stamp_direct(&mut completed);
             writer.record(EventType::ToolCompleted, completed).await?;
             messages.push(Message {
@@ -1250,7 +1254,156 @@ impl AgentLoopController {
             // 2026-08-21 全面审查处理（O4）：session 组合错误（epoch /
             // receipt_id）走参数级显式报错——exit_code 1 + error 字段，
             // 绝不静默回退（同非法 epoch/receipt_id 纪律）。
-            let content = if section == "session" {
+            let content = if section == "temporal" {
+                // P2-10 F2 §3.3 (I3): temporal 分区查询面——selector
+                // now|recent|history|feature（+ k ≤ 20 / name）；fires 不
+                // 渲染；epoch/receipt_id 组合显式报错（同 session 面纪律）。
+                if epoch.is_some() {
+                    let error = "invalid blackboard_read temporal read: temporal 面是 \
+                        live 观测记录（不进 epoch 归档）；省略 epoch 参数读取实时状态"
+                        .to_string();
+                    let mut completed = serde_json::json!({
+                        "tool": tc.name,
+                        "call_id": tc.call_id,
+                        "exit_code": 1,
+                        "section": section,
+                        "error": error,
+                    });
+                    stamp_direct(&mut completed);
+                    writer.record(EventType::ToolCompleted, completed).await?;
+                    self.blackboard.write().tool_actions.push(ToolActionRecord {
+                        category: ToolDispatcher::action_category(&tc.name).to_string(),
+                        tool: tc.name.clone(),
+                        timestamp: chrono_utc_now(),
+                    });
+                    let result = ToolResult {
+                        output: error,
+                        exit_code: Some(1),
+                        output_encoding: None,
+                        structured: None,
+                        ..Default::default()
+                    };
+                    messages.push(Message {
+                        role: Role::Tool,
+                        content: result.output.clone(),
+                        tool_call_id: Some(tc.call_id.clone()),
+                        tool_calls: Vec::new(),
+                        reasoning_content: None,
+                    });
+                    return Ok((result, None));
+                }
+                if receipt_id.is_some() {
+                    let error = "receipt_id 仅与 section=actions 组合有效（点读结果栏 \
+                        单条 receipt）；当前 section=temporal 不支持 receipt_id"
+                        .to_string();
+                    let mut completed = serde_json::json!({
+                        "tool": tc.name,
+                        "call_id": tc.call_id,
+                        "exit_code": 1,
+                        "section": section,
+                        "error": error,
+                    });
+                    stamp_direct(&mut completed);
+                    writer.record(EventType::ToolCompleted, completed).await?;
+                    self.blackboard.write().tool_actions.push(ToolActionRecord {
+                        category: ToolDispatcher::action_category(&tc.name).to_string(),
+                        tool: tc.name.clone(),
+                        timestamp: chrono_utc_now(),
+                    });
+                    let result = ToolResult {
+                        output: error,
+                        exit_code: Some(1),
+                        output_encoding: None,
+                        structured: None,
+                        ..Default::default()
+                    };
+                    messages.push(Message {
+                        role: Role::Tool,
+                        content: result.output.clone(),
+                        tool_call_id: Some(tc.call_id.clone()),
+                        tool_calls: Vec::new(),
+                        reasoning_content: None,
+                    });
+                    return Ok((result, None));
+                }
+                // Parse the selector face (fail-loud on bad values).
+                let selector = tc.arguments.get("selector").and_then(|v| v.as_str());
+                let k = match tc.arguments.get("k") {
+                    Some(raw) => match raw.as_u64() {
+                        Some(n) if (1..=20).contains(&n) => Some(n),
+                        _ => {
+                            let error = format!(
+                                "invalid temporal k: {raw} — k 必须是 1..=20 的整数"
+                            );
+                            let mut completed = serde_json::json!({
+                                "tool": tc.name,
+                                "call_id": tc.call_id,
+                                "exit_code": 1,
+                                "section": section,
+                                "error": error,
+                            });
+                            stamp_direct(&mut completed);
+                            writer.record(EventType::ToolCompleted, completed).await?;
+                            self.blackboard.write().tool_actions.push(ToolActionRecord {
+                                category: ToolDispatcher::action_category(&tc.name).to_string(),
+                                tool: tc.name.clone(),
+                                timestamp: chrono_utc_now(),
+                            });
+                            let result = ToolResult {
+                                output: error,
+                                exit_code: Some(1),
+                                output_encoding: None,
+                                structured: None,
+                                ..Default::default()
+                            };
+                            messages.push(Message {
+                                role: Role::Tool,
+                                content: result.output.clone(),
+                                tool_call_id: Some(tc.call_id.clone()),
+                                tool_calls: Vec::new(),
+                                reasoning_content: None,
+                            });
+                            return Ok((result, None));
+                        }
+                    },
+                    None => None,
+                };
+                let name = tc.arguments.get("name").and_then(|v| v.as_str());
+                match self.render_temporal_section(selector, k, name) {
+                    Ok(text) => text,
+                    Err(error) => {
+                        let mut completed = serde_json::json!({
+                            "tool": tc.name,
+                            "call_id": tc.call_id,
+                            "exit_code": 1,
+                            "section": section,
+                            "error": error,
+                        });
+                        stamp_direct(&mut completed);
+                        writer.record(EventType::ToolCompleted, completed).await?;
+                        self.blackboard.write().tool_actions.push(ToolActionRecord {
+                            category: ToolDispatcher::action_category(&tc.name).to_string(),
+                            tool: tc.name.clone(),
+                            timestamp: chrono_utc_now(),
+                        });
+                        let result = ToolResult {
+                            output: error,
+                            exit_code: Some(1),
+                            output_encoding: None,
+                            structured: None,
+                            ..Default::default()
+                        };
+                        messages.push(Message {
+                            role: Role::Tool,
+                            content: result.output.clone(),
+                            tool_call_id: Some(tc.call_id.clone()),
+                            tool_calls: Vec::new(),
+                            reasoning_content: None,
+                        });
+                        return Ok((result, None));
+                    }
+                }
+            } else if section == "session" {
                 match self.render_session_section(epoch, receipt_id.as_deref(), tool_rounds) {
                     Ok(text) => text,
                     Err(error) => {
@@ -1307,11 +1460,44 @@ impl AgentLoopController {
                 tool: tc.name.clone(),
                 timestamp: chrono_utc_now(),
             });
+            // P2-10 F1 §2.2 ⑦ (I5): the Board envelope rides the structured
+            // slot — partition + bounded entries + total cap (§3.3 temporal
+            // board ≤ 1 KiB; other sections ≤ 8 KiB). The human-readable
+            // message is unchanged.
+            let board_cap = if section == "temporal" { 1024 } else { 8192 };
+            let structured = orz_assurance::tool_envelope::OkEnvelope::new(
+                format!("blackboard_read {section}"),
+                serde_json::json!({ "entries_bytes": board_cap }),
+                serde_json::json!({
+                    "partition": section,
+                    // 审查处理 R7 (F5): total_cap 声明必须真实——非 temporal
+                    // 分区在此实际截断到 ≤8 KiB（temporal 已 ≤1 KiB），
+                    // human-readable 消息保持完整不变。
+                    "entries": orz_assurance::tool_envelope::enforce_bound(
+                        content.clone(),
+                        board_cap,
+                    ),
+                    "total_cap": board_cap,
+                }),
+                Some(orz_assurance::tool_envelope::Pointer::BoardPtr {
+                    partition: section.clone(),
+                    selector: tc
+                        .arguments
+                        .get("selector")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("now")
+                        .to_string(),
+                }),
+            )
+            .to_value()
+            .map_err(|e| {
+                AgentLoopError::Assurance(format!("board envelope serialization failed: {e}"))
+            })?;
             let result = ToolResult {
                 output: content,
                 exit_code: Some(0),
                 output_encoding: None,
-                structured: None,
+                structured: Some(structured),
                 ..Default::default()
             };
             messages.push(Message {
@@ -2326,6 +2512,23 @@ impl AgentLoopController {
                         "reason": pd.reason,
                     });
                 }
+                // P2-10 F3 (I3): feed the LIF engine — timeout = error
+                // (fail-closed effect), exit_code 0 = success, non-zero
+                // exit_code is a VALUE (D2) and stays neutral here.
+                let outcome = if res.timed_out {
+                    orz_assurance::lif::ToolOutcome::Error
+                } else if res.exit_code == Some(0) {
+                    orz_assurance::lif::ToolOutcome::Success
+                } else {
+                    orz_assurance::lif::ToolOutcome::Other
+                };
+                self.lif.lock().unwrap().on_tool_event(
+                    AgentLoopController::now_epoch_secs(),
+                    orz_assurance::lif::ToolEvent {
+                        outcome,
+                        wall_ms: Some(wall_started.elapsed().as_millis() as u64),
+                    },
+                );
                 stamp_direct(&mut completed_payload);
                 writer
                     .record(EventType::ToolCompleted, completed_payload)
@@ -2395,6 +2598,11 @@ impl AgentLoopController {
                         "error": e.to_string(),
                         "wall_ms": wall_started.elapsed().as_millis() as u64,
                     });
+                    // P2-10 F4 (I2): failure-target identity on the
+                    // command/anchor/file/URL tool families.
+                    if let Some(ft) = crate::failure_target::failure_target(&tc.name, &tc.arguments) {
+                        payload["failure_target"] = ft;
+                    }
                     if timed_out {
                         payload["timed_out"] = serde_json::json!(true);
                     }
@@ -2407,6 +2615,14 @@ impl AgentLoopController {
                     }
                     payload
                 };
+                // P2-10 F3 (I3): host-level tool error → LIF err event.
+                self.lif.lock().unwrap().on_tool_event(
+                    AgentLoopController::now_epoch_secs(),
+                    orz_assurance::lif::ToolEvent {
+                        outcome: orz_assurance::lif::ToolOutcome::Error,
+                        wall_ms: Some(wall_started.elapsed().as_millis() as u64),
+                    },
+                );
                 stamp_direct(&mut err_payload);
                 writer.record(EventType::ToolCompleted, err_payload).await?;
                 // P0-A step 5 (design §5): 调用即探针 — a real work-tool call
@@ -2622,6 +2838,11 @@ impl AgentLoopController {
             "status": "error",
             "error": code,
         });
+        // P2-10 F4 (I2): candidate-cap refusal on the URL families keeps its
+        // target identity (web_fetch / browser_read).
+        if let Some(ft) = crate::failure_target::failure_target(&tc.name, &tc.arguments) {
+            payload["failure_target"] = ft;
+        }
         // Only lane refusals carry the dispatch target: `count_unbound`
         // fires in a lane with no count domain (main/grill belt-and-braces),
         // where no dispatch occurred (review fix 2026-08-14).
@@ -5447,6 +5668,83 @@ mod tests {
 
         // The tool must never start — a deferred decision is refused
         // fail-closed in the headless host (2026-08-04 review P2).
+        let types = event_types(&dir);
+        assert!(!types.contains(&EventType::ToolStarted), "{types:?}");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// P2-10 F1 §2.2 ③ (I5): the GetPut law is a typed failure — a
+    /// search_replace with a stale expected_anchor refuses with
+    /// `content_anchor_mismatch` (no execution, no ToolStarted) AND carries
+    /// the F4 anchor failure-target identity.
+    #[tokio::test]
+    async fn search_replace_anchor_mismatch_is_typed_getput_failure() {
+        let dir = test_dir();
+        std::fs::write(dir.join("target.py"), "old content\n").unwrap();
+        let journal = JournalRecorder::new(dir.clone());
+        let host = TestHost {
+            journal,
+            tool_result: Some(ToolResult {
+                output: "irrelevant".to_string(),
+                exit_code: Some(0),
+                output_encoding: None,
+                structured: None,
+                ..Default::default()
+            }),
+        };
+        let fake = Arc::new(FakeProvider::new(vec![
+            ScriptedResponse::tool_calls(vec![ToolCall {
+                name: "search_replace".to_string(),
+                arguments: serde_json::json!({
+                    "file_path": "target.py",
+                    "old_string": "old",
+                    "new_string": "new",
+                    "expected_anchor": {
+                        "size": 999,
+                        "mtime": 1,
+                        "sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+                    },
+                }),
+                call_id: "call-gp1".to_string(),
+            }]),
+            ScriptedResponse::text("完成"),
+            ScriptedResponse::text("完成"),
+        ]));
+        let gateway: Arc<dyn ModelGateway> = fake.clone();
+        let controller = AgentLoopController::with_gateway(gateway);
+        controller
+            .run_turn(&host, "改文件", "RUN-GP1", MANIFEST, 0, None, None, None)
+            .await
+            .unwrap();
+
+        let payloads: Vec<serde_json::Value> = events(&dir)
+            .into_iter()
+            .filter(|e| e.event_type == EventType::ToolCompleted)
+            .map(|e| e.payload)
+            .collect();
+        assert_eq!(payloads.len(), 1, "{payloads:?}");
+        assert_eq!(
+            payloads[0]["error"],
+            serde_json::json!("content_anchor_mismatch"),
+            "{payloads:?}"
+        );
+        assert_eq!(
+            payloads[0]["failure_target"]["kind"],
+            serde_json::json!("anchor_target"),
+            "{payloads:?}"
+        );
+        assert_eq!(
+            payloads[0]["failure_target"]["path"],
+            serde_json::json!("target.py"),
+            "{payloads:?}"
+        );
+        assert_eq!(
+            payloads[0]["failure_target"]["size"],
+            serde_json::json!(999),
+            "{payloads:?}"
+        );
+        // No ToolStarted — the write never began (zero side effects).
         let types = event_types(&dir);
         assert!(!types.contains(&EventType::ToolStarted), "{types:?}");
 

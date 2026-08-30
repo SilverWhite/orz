@@ -1094,6 +1094,152 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    /// P2-10 F2 §3.3 (I3, 2026-08-30): `blackboard_read section=temporal`
+    /// reaches the model through the real tool chain — the LIF engine is
+    /// fed on the decision round (model_output with tool_calls) and the
+    /// completed tool event, and the render returns the Now row without
+    /// any fires.
+    #[tokio::test]
+    async fn blackboard_read_serves_temporal_section() {
+        let dir = test_dir();
+        let journal = JournalRecorder::new(dir.clone());
+        let host = TestHost {
+            journal,
+            tool_result: Some(ToolResult {
+                output: "irrelevant".to_string(),
+                exit_code: Some(0),
+                output_encoding: None,
+                structured: None,
+                ..Default::default()
+            }),
+        };
+        let fake = Arc::new(FakeProvider::new(vec![
+            ScriptedResponse::tool_calls(vec![ToolCall {
+                name: "blackboard_read".to_string(),
+                arguments: serde_json::json!({"section": "temporal", "selector": "now"}),
+                call_id: "call-tp1".to_string(),
+            }]),
+            ScriptedResponse::text("完成"),
+            ScriptedResponse::text("完成"),
+        ]));
+        let gateway: Arc<dyn ModelGateway> = fake.clone();
+        let controller = AgentLoopController::with_gateway(gateway).with_max_tool_rounds(120);
+        controller
+            .run_turn(&host, "读时间面", "RUN-TP1", MANIFEST, 0, None, None, None)
+            .await
+            .unwrap();
+
+        let received = fake.received_requests();
+        let round = received
+            .iter()
+            .find(|r| {
+                r.messages
+                    .iter()
+                    .any(|m| m.tool_call_id.as_deref() == Some("call-tp1"))
+            })
+            .expect("round carrying blackboard_read temporal reply");
+        let reply = round
+            .messages
+            .iter()
+            .find(|m| m.tool_call_id.as_deref() == Some("call-tp1"))
+            .expect("temporal tool result message");
+        assert!(
+            reply.content.contains("temporal.now"),
+            "temporal reply: {:?}",
+            round.messages
+        );
+        // fires never render — no fire line in the board.
+        assert!(
+            !reply.content.contains("fire"),
+            "fires must not render: {:?}",
+            reply.content
+        );
+        // P2-10 F1 §2.2 ⑦ / F2 §3.3 (I5): the temporal board is bounded
+        // ≤ 1 KiB even for the widest query (Recent(k=20)).
+        let board = controller
+            .render_temporal_section(Some("recent"), Some(20), None)
+            .unwrap();
+        assert!(
+            board.len() <= 1024,
+            "temporal board must be ≤ 1 KiB (got {} bytes)",
+            board.len()
+        );
+        // 工具定义增量扩展：blackboard_read 的 section 枚举含 temporal。
+        let bb_def = round
+            .tools
+            .iter()
+            .find(|t| t.name == "blackboard_read")
+            .expect("blackboard_read declared in request tools");
+        let sections = bb_def
+            .parameters
+            .get("properties")
+            .and_then(|p| p.get("section"))
+            .and_then(|s| s.get("enum"))
+            .and_then(|e| e.as_array())
+            .expect("section enum declared");
+        assert!(
+            sections.iter().any(|v| v.as_str() == Some("temporal")),
+            "temporal must be declared in the section enum: {sections:?}"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// P2-10 F2 §3.3 (I3): an invalid temporal selector fails loud (exit
+    /// code 1 + explicit error), never a silent fallback.
+    #[tokio::test]
+    async fn blackboard_read_temporal_invalid_selector_fails_loud() {
+        let dir = test_dir();
+        let journal = JournalRecorder::new(dir.clone());
+        let host = TestHost {
+            journal,
+            tool_result: Some(ToolResult {
+                output: "irrelevant".to_string(),
+                exit_code: Some(0),
+                output_encoding: None,
+                structured: None,
+                ..Default::default()
+            }),
+        };
+        let fake = Arc::new(FakeProvider::new(vec![
+            ScriptedResponse::tool_calls(vec![ToolCall {
+                name: "blackboard_read".to_string(),
+                arguments: serde_json::json!({"section": "temporal", "selector": "bogus"}),
+                call_id: "call-tp2".to_string(),
+            }]),
+            ScriptedResponse::text("完成"),
+            ScriptedResponse::text("完成"),
+        ]));
+        let gateway: Arc<dyn ModelGateway> = fake.clone();
+        let controller = AgentLoopController::with_gateway(gateway).with_max_tool_rounds(120);
+        controller
+            .run_turn(&host, "读时间面", "RUN-TP2", MANIFEST, 0, None, None, None)
+            .await
+            .unwrap();
+
+        let received = fake.received_requests();
+        let round = received
+            .iter()
+            .find(|r| {
+                r.messages
+                    .iter()
+                    .any(|m| m.tool_call_id.as_deref() == Some("call-tp2"))
+            })
+            .expect("round carrying temporal reply");
+        let reply = round
+            .messages
+            .iter()
+            .find(|m| m.tool_call_id.as_deref() == Some("call-tp2"))
+            .expect("temporal tool result message");
+        assert!(
+            reply.content.contains("invalid temporal selector"),
+            "invalid selector must fail loud: {:?}",
+            reply.content
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     /// PUSH→PULL (2026-08-21) 全面审查处理（O4/O5）：session 面的越权组合
     /// （epoch / receipt_id）走参数级显式报错——事件 ToolCompleted exit_code
     /// 1 + error 字段、工具结果 exit_code 1、错误文本回达模型（与非法

@@ -10,12 +10,15 @@ pub mod candidate_prefilter;
 pub mod credential;
 pub mod gates;
 pub mod journal;
+pub mod lif;
 pub mod orientation;
 pub mod permit;
 pub mod plan;
+pub mod reducer;
 pub mod sandbox;
 pub mod session;
 pub mod source_weighting;
+pub mod tool_envelope;
 
 // Re-export commonly used types from journal
 pub use journal::{

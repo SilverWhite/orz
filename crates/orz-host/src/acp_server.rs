@@ -398,14 +398,26 @@ struct StoredConversation {
     schema_version: String,
     session_id: String,
     messages: Vec<Message>,
+    /// P2-10 F2 §3.5 (I4, ADR-0010 §14.47): domain-switch spikes archived
+    /// with the session sidecar — optional (`serde(default)` keeps old
+    /// sidecars parseable, zero migration), cleared with the 7-day
+    /// retention sweep, and rebuilt into the LIF engine's domain machine
+    /// on cross-prompt restore. Subagent lanes never persist this.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    temporal_spikes: Option<Vec<orz_assurance::lif::DomainSpike>>,
 }
 
 impl StoredConversation {
-    fn new(session_id: &str, messages: Vec<Message>) -> Self {
+    fn new(
+        session_id: &str,
+        messages: Vec<Message>,
+        temporal_spikes: Option<Vec<orz_assurance::lif::DomainSpike>>,
+    ) -> Self {
         StoredConversation {
             schema_version: "0.1.0-draft".to_string(),
             session_id: session_id.to_string(),
             messages,
+            temporal_spikes,
         }
     }
 }
@@ -530,7 +542,12 @@ fn load_conversation_sidecar(base_dir: &Path, session_id: &str) -> Option<Stored
 /// discipline as the orientation/activation sidecars. An EMPTY conversation
 /// is not persisted (a brand-new session has no file until its first
 /// successful prompt — `load`'s NotFound → `None` naturally covers it).
-fn persist_conversation_sidecar(base_dir: &Path, session_id: &str, messages: &[Message]) {
+fn persist_conversation_sidecar(
+    base_dir: &Path,
+    session_id: &str,
+    messages: &[Message],
+    temporal_spikes: &[orz_assurance::lif::DomainSpike],
+) {
     if messages.is_empty() {
         return;
     }
@@ -544,7 +561,8 @@ fn persist_conversation_sidecar(base_dir: &Path, session_id: &str, messages: &[M
         );
         return;
     }
-    match serde_json::to_string_pretty(&StoredConversation::new(session_id, messages.to_vec())) {
+    let spikes = (!temporal_spikes.is_empty()).then(|| temporal_spikes.to_vec());
+    match serde_json::to_string_pretty(&StoredConversation::new(session_id, messages.to_vec(), spikes)) {
         Ok(json) => {
             if let Err(e) = std::fs::write(&path, json) {
                 tracing::warn!(
@@ -1009,17 +1027,26 @@ impl AcpServer {
         // every fallible step above, so an early `?` never leaves the
         // session with a taken-out conversation (the next prompt would
         // silently restart from zero and the sidecar would be overwritten).
-        let mut conversation = {
+        let mut conversation;
+        let mut restored_temporal_spikes: Vec<orz_assurance::lif::DomainSpike> = Vec::new();
+        {
             let mut sessions = self.sessions.lock().unwrap();
             let session = sessions
                 .get_mut(session_id)
                 .ok_or_else(|| AcpError::SessionNotFound(session_id.to_string()))?;
-            session.conversation.take().unwrap_or_else(|| {
-                load_conversation_sidecar(&base_dir, session_id)
-                    .map(|s| s.messages)
-                    .unwrap_or_default()
-            })
-        };
+            match session.conversation.take() {
+                Some(conv) => conversation = conv,
+                None => {
+                    let stored = load_conversation_sidecar(&base_dir, session_id);
+                    conversation = stored
+                        .as_ref()
+                        .map(|s| s.messages.clone())
+                        .unwrap_or_default();
+                    restored_temporal_spikes =
+                        stored.and_then(|s| s.temporal_spikes).unwrap_or_default();
+                }
+            }
+        }
         // IP5: attach the session's pre-mutation snapshot store — mutation
         // tools with knowable targets get tracked before execution.
         // local_browser (2026-08-10): re-inject the session's browser lane
@@ -1095,6 +1122,12 @@ impl AcpServer {
                 activation_snapshot.internal_ret.clone(),
                 activation_snapshot.external_ret.clone(),
             );
+        // P2-10 F2 §3.5 (I4): rebuild the LIF domain machine from the
+        // sidecar's temporal_spikes (cross-prompt restore). Main session
+        // only — subagent lanes never persist spikes.
+        if !restored_temporal_spikes.is_empty() {
+            controller.restore_temporal_spikes(restored_temporal_spikes);
+        }
 
         let run_result = controller
             .run_turn_with_cancel(
@@ -1178,7 +1211,8 @@ impl AcpServer {
         // take-out falls back to the sidecar (the pre-run history) instead
         // of diverging from it.
         if run_result.is_ok() {
-            persist_conversation_sidecar(&base_dir, session_id, &conversation);
+            let spikes = controller.temporal_spikes();
+            persist_conversation_sidecar(&base_dir, session_id, &conversation, &spikes);
             if let Some(session) = self.sessions.lock().unwrap().get_mut(session_id) {
                 session.conversation = Some(conversation);
             }
@@ -3387,10 +3421,26 @@ mod tests {
                 reasoning_content: None,
             },
         ];
-        persist_conversation_sidecar(&base, "sess-roundtrip", &messages);
+        // P2-10 F2 §3.5 (I4): temporal spikes ride the same envelope —
+        // roundtrip through the sidecar.
+        let spikes = vec![
+            orz_assurance::lif::DomainSpike {
+                t: 12.5,
+                domain: orz_assurance::lif::Domain::Normal,
+            },
+            orz_assurance::lif::DomainSpike {
+                t: 340.0,
+                domain: orz_assurance::lif::Domain::Stuck,
+            },
+        ];
+        persist_conversation_sidecar(&base, "sess-roundtrip", &messages, &spikes);
         let stored = load_conversation_sidecar(&base, "sess-roundtrip").expect("sidecar loads");
         assert_eq!(stored.session_id, "sess-roundtrip");
         assert_eq!(stored.messages.len(), 3);
+        let restored = stored.temporal_spikes.expect("spikes roundtrip");
+        assert_eq!(restored.len(), 2);
+        assert_eq!(restored[1].t, 340.0);
+        assert_eq!(restored[1].domain, orz_assurance::lif::Domain::Stuck);
         assert_eq!(stored.messages[0].content, "中文问题");
         assert_eq!(
             stored.messages[1].reasoning_content.as_deref(),
@@ -3419,10 +3469,39 @@ mod tests {
         let _ = std::fs::remove_dir_all(&base);
     }
 
+    /// P2-10 F2 §3.5 (I4): a legacy sidecar without `temporal_spikes` still
+    /// parses (`serde(default)`) — zero migration, old sessions restore
+    /// their conversation and simply start with an empty spike timeline.
+    #[test]
+    fn conversation_sidecar_legacy_without_spikes_parses() {
+        let base = test_dir();
+        let path = conv_sidecar_path(&base, "sess-legacy");
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(
+            &path,
+            r#"{
+                "schema_version": "0.1.0-draft",
+                "session_id": "sess-legacy",
+                "messages": [{
+                    "role": "user",
+                    "content": "hi",
+                    "tool_call_id": null,
+                    "tool_calls": [],
+                    "reasoning_content": null
+                }]
+            }"#,
+        )
+        .unwrap();
+        let stored = load_conversation_sidecar(&base, "sess-legacy").expect("legacy parses");
+        assert_eq!(stored.messages.len(), 1);
+        assert!(stored.temporal_spikes.is_none());
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
     #[test]
     fn empty_conversation_not_persisted() {
         let base = test_dir();
-        persist_conversation_sidecar(&base, "sess-empty", &[]);
+        persist_conversation_sidecar(&base, "sess-empty", &[], &[]);
         assert!(!conv_sidecar_path(&base, "sess-empty").exists());
         let _ = std::fs::remove_dir_all(&base);
     }
