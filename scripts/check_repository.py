@@ -2124,6 +2124,20 @@ def check_repository() -> dict[str, Any]:
         run_event_v02_payload_root
         / "control-ticket-issued.network-lane-bound.valid.json"
     ] = control_ticket_issued_schema
+    # 0k 审查处理 (P1-1, 2026-08-30)：close-record schema 枚举补
+    # `subagent_timeout`（子代理 run 级墙钟超时，RETRIEVAL-ORCHESTRATION-
+    # MECHANICAL 0k）与 `auto_close`（THIN-HARNESS-REDESIGN R1 每次调用
+    # 即闭环）——新增 schema 正例锁，防 GAP-EVENT-SCHEMA-DRIFT 复发。
+    close_record_schema = (
+        ROOT / "runtime/retrieval-close-record-event-payload-v0.2.schema.json"
+    )
+    for name in (
+        "retrieval-close-record.subagent-timeout.valid.json",
+        "retrieval-close-record.auto-close.valid.json",
+    ):
+        run_event_v02_payload_positive_contracts[run_event_v02_payload_root / name] = (
+            close_record_schema
+        )
     run_event_v02_payload_negative_contracts = {
         run_event_v02_payload_root / f"{slug}.constraint.invalid.json": schema
         for slug, schema in run_event_v02_payload_schema_by_slug.items()

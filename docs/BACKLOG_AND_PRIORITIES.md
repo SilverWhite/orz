@@ -1513,6 +1513,17 @@ S1-S4 全部闭合）
   超时 / [DOC] 回传预算 / 浏览器容器参数 + 资源拦截 + 等待语义；orz-loop
   623/0/3、orz-host 231/0/4、orz-bin 全绿、fmt/clippy 无新增）；S3 重建 +
   实机验证待续；S4 闭环 -1。
+- **2026-08-30 第 1–4 项 S1 全面审查处理轮闭合**（子代理三路审查 + 逐条
+  核验；无 P0）：P1 close-record schema 枚举补 `subagent_timeout` +
+  `auto_close`（含 fixtures/映射/独立防回归测试，防 GAP-EVENT-SCHEMA-
+  DRIFT 复发）；P2 候选门决策+预留原子化（消除并行硬 cap 竞态，permission
+  /ACAF 拒绝回滚）、预算拒绝执行留痕（事件重放+后处理照常、消息面串行
+  拒绝语义）、text-ready 断连显式报错（evaluate remaining 兜底）、黑板
+  分区完成序登记接受；P3 组收口（cancel 批次预检、Err 延迟传播、孤儿
+  ToolStarted 合成收口、轮数 0=禁用、`*.png*` 通配、`--no-sandbox` 仅
+  headless、标注字节口径登记）。验证：orz-loop 623/0/3、orz-host 232/0/4、
+  runtime pytest 18+ 全绿、check_repository 除源码清单外零错误。详见
+  TODO P0-0k。
 - 登记：ADR-0010 §14.43；CLI_PROJECT_INDEX（FUS-RETRIEVAL-ENGINE-SERP）。
 
 ### 1. FUS-TOOL-PROBE（`implemented`；P0-A 批次 1-7 与 P0-A-2 已闭合）

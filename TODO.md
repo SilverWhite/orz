@@ -1708,6 +1708,42 @@ S4 复验闭环 2026-08-25（补登记）；S1-S4 全部闭合）
   CDP 层，preview/keywords 拦截图片/字体/媒体 + 文本就绪轮询（full 保持
   loadEventFired）；ALLOWED_CDP_METHODS 精确集合同步；text-ready 返回/超时
   测试。orz-host 231/0/4 全绿。
+- [x] 第 1–4 项 S1 全面审查处理轮（2026-08-30 完成；子代理三路审查 +
+  本人逐条核验，无 P0）：
+  - **P1（schema 漂移）**：`retrieval_close_record.terminal_reason` 枚举
+    补 `subagent_timeout`（本批子代理墙钟超时收口产生）+ `auto_close`
+    （R1 每次派发即闭环，既有漂移同批修复）——真实超时 run 的 journal
+    此前会经严格 jsonschema 校验失败（GAP-EVENT-SCHEMA-DRIFT 同类，
+    pytest 全绿因 fixtures 仅 normal_close + verifier 对非 normal_close
+    不交叉检查）；schema 补两值 + 两个正例 fixture（subagent-timeout /
+    auto-close）+ check_repository 映射 + 独立防回归测试
+    （`runtime/tests/test_retrieval_close_reason_enum.py`，不混入 S5-1
+    遗留测试文件）。
+  - **P2-1（黑板分区序）登记接受**：并行批次下 `tool_actions`/`exec`
+    分区为完成序、事件链为声明序——记录带真实 timestamp、审计权威以
+    事件链为准，分区展示序差异不补写（agent_loop 注释登记）。
+  - **P2-2（候选硬 cap 并发超限）**：`candidate_gate` 决策+预留原子化
+    （锁内检查 cap 并占位，消除并行批次「决策/提交分离」竞态）；permission
+    /ACAF 门拒绝时 `rollback_candidate` 回滚（保持「被拒调用不消耗候选」
+    语义）；测试改 `candidate_gate_reserves_atomically_and_rollback_releases`。
+  - **P2-3（预算拒绝审计语义）**：并行批次预算拒绝时事件按声明序重放
+    （已执行调用留痕 ToolStarted/ToolCompleted）、后处理（direct trace/
+    evidence/DC/机械审查）照常，消息面仍按串行语义注入拒绝消息、结果不
+    计入注入预算——审计面与事实一致。
+  - **P2-4（text-ready 断连忙循环）**：事件通道关闭（recv None）→ 显式
+    `CDP event channel closed`；evaluate 无内部超时（写半开挂起）→
+    `remaining` 包裹兜底为 LoadTimeout；测试
+    `text_ready_channel_close_is_bounded_not_hang`。
+  - **P3 组**：批次启动前 cancel 检查；批次内 Err 延迟传播（已执行调用
+    仍提交留痕）；子代理超时孤儿 ToolStarted 经 in-flight 槽补合成
+    ToolCompleted(error)（SharedLoopServices.in_flight_tools，仅串行路径
+    入槽）；轮数 env `0`=禁用独立上限（与墙钟 0=禁用对齐）；`*.png*`
+    通配带 query 命中；`--no-sandbox` 仅 headless（桌面保留沙箱）；标注
+    字节口径登记（8K 只约束声明行，prose/标注不计入）；`round_inject_tokens
+    ==0` 冗余条件清理；tool_rounds_used 超时路径注释登记。
+  - 验证：orz-loop 623/0/3、orz-host 232/0/4（新增 text-ready 断连测试）、
+    runtime pytest 18+（conformance 全绿）、check_repository 除 orz 源码
+    清单（提交后重生成）外零错误、fmt 干净、clippy 无新增告警。
 - [ ] Google 门禁观察实验（小批检索密集题 k=1 个人使用强度；pacing 校准 +
   Google/Bing 主序裁决；套用 DUAL 度量维度）——待 S3 重建 + docker 浏览器
   注入后实机运行（入口：DUAL §3.2 度量 / 调研 §8.4）。
