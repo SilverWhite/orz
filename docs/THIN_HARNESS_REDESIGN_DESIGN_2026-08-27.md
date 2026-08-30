@@ -22,6 +22,12 @@
 > R2b（观察主代理按需读取行为）/ R2c（两轮数据后判定
 > parse_retrieval_result_json 兜底通道回收）未动，inline 保留。编译未执行。
 >
+> **R2c 裁决落地（2026-08-30，GAP-RETRIEVAL-STRUCTURED-RESULT 方向 C 用户
+> 裁决）**：兜底通道不再"观察后判定"——`[RESULT_JSON]` 契约直接删除
+> （parse_retrieval_result_json 及其测试移除），检索结果回归 [DOC]/[SOURCE]
+> 声明行 + 机械 ledger 单轨，inline/blackboard 通道语义不变（见
+> ADR-0010 §14.45）。
+>
 > R2a 审查处理（2026-08-27，全面审查 P2/P3 六项全数落地）：P2-3 用户
 > 裁决选 a——write_section 每次派发**全量覆盖**分区（response / entries /
 > ledger 均替换，不再 extend 累积；分区永远代表最近一次激活，指针摘要
@@ -245,14 +251,14 @@
 
 现状（controller.rs 检索派发完成路径）：
 
-- 子代理返回全文 → `parse_retrieval_text` 解析 [DOC]/[SOURCE] → `build_structured_result`（机械 ledger + [RESULT_JSON] 校验）→ `write_section` 写自己分区 → 主对话收到子代理全文 + ASSESSMENT 行。
+- 子代理返回全文 → `parse_retrieval_text` 解析 [DOC]/[SOURCE] → `build_structured_result`（机械 ledger + [RESULT_JSON] 校验）→ `write_section` 写自己分区 → 主对话收到子代理全文 + ASSESSMENT 行。（2026-08-30 方向 C：[RESULT_JSON] 校验已删除、机械 ledger 单轨，见 ADR-0010 §14.45。）
 - 主对话膨胀来源 = 全文注入；黑板分区其实已写入（`write_section` 已存在），只是主代理仍收到全文。
 
 目标：
 
-- 主代理工具结果只回指针摘要，例如：`web_search: 已写入 blackboard external_ret（5 来源 / 2 结论），条目上限 8K；按需 blackboard_read section=external_ret 读取`。
+- 主代理工具结果只回指针摘要，例如：`web_search: 已写入 blackboard external_ret（5 来源 / 2 文本证据），条目上限 8K；按需 blackboard_read section=external_ret 读取`。（2026-08-30 方向 C：摘要口径已由结论计数改为文本证据计数。）
 - 子代理输出全文保留在分区与 journal（留痕不变），不再进主对话。
-- `parse_retrieval_result_json` / claim×visibility 校验：机械 ledger（工具调用证据）保留；[RESULT_JSON] 解析降级为兜底通道，用 `ORZ_RETRIEVAL_RESULT_CHANNEL=blackboard|inline` 切换（默认 blackboard）。inline 保留两个施工轮作 A/B 与回退；两轮后若零命中，物理删除 parse 路径及其测试。
+- `parse_retrieval_result_json` / claim×visibility 校验：机械 ledger（工具调用证据）保留；[RESULT_JSON] 解析降级为兜底通道，用 `ORZ_RETRIEVAL_RESULT_CHANNEL=blackboard|inline` 切换（默认 blackboard）。inline 保留两个施工轮作 A/B 与回退；两轮后若零命中，物理删除 parse 路径及其测试。**2026-08-30 方向 C 裁决：物理删除落地**——parse 路径与 [RESULT_JSON] 契约整体移除（R2c 由"观察后判定"改为直接删除，理由=组织块契约结构性不可满足，见 ADR-0010 §14.45）。
 - 删除主面 `retrieval_disposition` 激活生命周期仪式（子代理每次调用即闭环，不做 close/continue 往返）。
 
 > 分期与 ADR 偏差标注（审查 P2-3，2026-08-27）：本节「激活生命周期」部分

@@ -29,9 +29,6 @@
       "observed_scope": "full document",
       "missing_scope": "none",
       "relevance": "direct",
-      "used_in_sections": [
-        "Rust channels"
-      ],
       "content_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
       "highest_allowed_claim": "observed",
       "tier": "authoritative",
@@ -48,7 +45,6 @@
       "observed_scope": "first section",
       "missing_scope": "rest of page",
       "relevance": "partial",
-      "used_in_sections": [],
       "highest_allowed_claim": "derived",
       "tier": "default",
       "mechanical_weight": 1.0,
@@ -63,19 +59,6 @@
       "filtered_at": "2026-08-10T00:00:02Z"
     }
   ],
-  "organized_response": {
-    "sections": [
-      {
-        "section_title": "Rust channels",
-        "content": "std::sync::mpsc provides channels.",
-        "source_ids": [
-          "SRC-0001"
-        ],
-        "claim_strength": "observed"
-      }
-    ],
-    "claims": []
-  },
   "raw_source_refs": [
     {
       "source_id": "SRC-0001",

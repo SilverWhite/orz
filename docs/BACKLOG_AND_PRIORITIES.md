@@ -1550,7 +1550,7 @@ S1-S4 全部闭合）
   直读已知 URL，未走搜索引擎页），SERP 门禁数据挂起至第二批引擎 SERP
   工具；SRC-002 metadata_only 标题含 full text 的小瑕疵候选登记。对应
   源码 orz 4baf766 + 父 980b21b（均已推送）；报告 §10 追加。
-- **P1（2026-08-30 登记，修复方向 C 待用户裁决）**：
+- **P1（2026-08-30 登记；方向 C 已裁决并实施 S1/S2，S3/S4 待续）**：
   RETRIEVAL-RESULT-STRUCTURED-CONTRACT——`[RESULT_JSON]` 组织块
   source_ids 契约结构性不可满足（机械 ledger 的 `SRC-001` 等 id 后置
   分配、运行中不可见，模型只能自造 id；实证 0h S4 2 次 + mteb-retrieve
@@ -1562,6 +1562,36 @@ S1-S4 全部闭合）
   build_structured_result / dispatch 摘要 / schema / Python verifier /
   fixtures / 测试 / ADR §3.7 条 12 第三层处置。详见 TODO P0-0k /
   门禁报告 §10.3 / CLI_PROJECT_INDEX（GAP-RETRIEVAL-STRUCTURED-RESULT）。
+  **2026-08-30 用户裁决「按方向 C 进行」+ S1 代码 + S2 测试实施完成
+  （实施放行入账 32 → 33）**：子代理提示词去 [RESULT_JSON] 模板段与
+  annotation 要求；`parse_retrieval_result_json` 删除；
+  `build_structured_result` 删 block 解析/校验/annotation 合并、
+  committed payload 回归机械四段；`visibility_degraded` 重定义为「无
+  文本级证据」、reason code `no_fulltext_evidence`；`[SOURCE]` 声明行
+  URL 规范化（ACAF 网络目标规则）；dispatch 黑板摘要改文本证据口径；
+  runtime v0.2 schema 删 organized_response/模型标注字段；Python
+  verifier 同步并补 visibility_degraded 一致性规则；fixtures 与三个
+  受影响 journal（重链哈希）同步；ADR-0010 §3.3.3 条 3 / §3.7 条 12
+  v1.10 / §14.45。验证：orz-loop 620/0/3、orz-bin 12/0/12、runtime
+  pytest 319、assurance 76 全绿；S3 重建 + S4 复验待续（-1 待闭）。
+  **2026-08-30 全面审查轮修复完成（方向 C S1/S2 收口）**：三路审查
+  （设计/实现/符合性）发现并处理——① 三个 journal 的 result_digest/
+  result_id/ledger_digest 原为旧五段（含 organized_response）摘要，
+  已按 verifier 自身算法重算四段摘要并重链（含 disposition/close 的
+  assessment_id 重映射）；② orientation 5 处退役 reason code
+  structured_result_validation_failed → no_fulltext_evidence、
+  local-browser/real-doc model_output 去 [RESULT_JSON] 块；③ verifier
+  补两条自检（result_digest/ledger_digest/result_id 内容寻址 +
+  reason_codes 词汇表/退役词条/degraded⇒no_fulltext_evidence）；④ v0.2
+  契约退役 used_in_sections（schema/生产者/fixtures/journals/测试同步）；
+  ⑤ fixture 生成器 SLUGS 补 tool_running 键（修复 main() 崩溃）；⑥
+  split_source_declaration 补无空格「URL，标题」切分与 userinfo 原样
+  保留语义并固化测试；⑦ 文档残留注记补齐。说明：real-doc 的 SRC-001
+  保持 project_doc（project_doc_index include_content 当前仍产出
+  project_doc + full_text_observed，与 journal 工具事件一致；main.rs
+  capture 改 read_file 属场景切换，两路径均合法）；local-browser 的
+  SRC-002 为 [DOC] 声明行，整行入 ref 属 [DOC] 语义，不改。验证：
+  三个 journal 严格校验 0 错误；回归计数见 TODO P0-0k（复验后登记）。
 
 ### 1. FUS-TOOL-PROBE（`implemented`；P0-A 批次 1-7 与 P0-A-2 已闭合）
 
@@ -2102,7 +2132,10 @@ S1-S4 全部闭合）
   类型化项重写系统（8 工具类型签名 + Result 信封 + GetPut 律）+ LIF 时间性
   外挂（temporal 分区：语义特征域 + 域切换 spike 随会话侧车存档）；LIF 仅时间
   特征计算、无注入、不引回强制模板轮；域阈值初值已确认（u_err≥2、u_prog<0.5、
-  θ_stuck=1.5·T̂、err10/succ10 窗口 10）。
+  θ_stuck=1.5·T̂、err10/succ10 窗口 10）；2026-08-30 追加：LIF 重定位=时间性
+  参考系（低精度容忍、模型无感——计算全落机械层，模型仅消费 temporal 分区
+  渲染结果）、双尺度基线（长窗环境基线 + 短窗偏离 + 比值渲染）、每任务轮
+  校准、观测面扩充优先级、动作层耦合试验 P1–P3（§9.11）。
 - 开放内容：设计 §6 开放项 14 条待裁决（顶层调用方式折中/激进档、表达式最小
   项集、归约边界、trace→事件链同构、错误语义、模型熟悉度验证、时间特征面按
   决策点反推、时间特征注入点、依赖图作用域、LIF 通道清单、potentials 渲染、
@@ -2110,7 +2143,8 @@ S1-S4 全部闭合）
   未开始；实施未开始。
 - 边界：域记录仅 spike 点位、随对话侧车存档（非 journal 证据面、7 天 retention）；
   LIF 项目具体公式不外落（独立项目、不开源）；数据不可靠性=上游模型随版本变动，
-  设计不依赖模型版本标定。
+  设计不依赖模型版本标定；模型无感：全部计算落机械层，模型仅消费 temporal
+  分区渲染结果（PULL、零常驻、无注入）。
 - 入口：[设计](MECHANICAL_LAYER_MATH_CALCULUS_DISCUSSION_2026-08-30.md)；
   [索引 AUTH-MECHANICAL-LAYER-MATH-CALCULUS](../CLI_PROJECT_INDEX.md)。
 

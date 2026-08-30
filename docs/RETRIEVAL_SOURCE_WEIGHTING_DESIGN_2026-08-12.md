@@ -64,6 +64,13 @@ D 项目旧机制（SearxNG 元数据评分：engine/publishedDate/citations 三
 
 ### 第三层：子代理模型加权标注
 
+> **退役（2026-08-30，GAP-RETRIEVAL-STRUCTURED-RESULT 方向 C 用户裁决）**：
+> 第三层整体删除——其唯一载体 `[RESULT_JSON].source_annotations` 依赖运行中
+> 不可见的后置分配 source_ids，生产中从未生效（每次真实块 organized_response
+> 恒空 / structured_result_validation_failed 误触发）；`[RESULT_JSON]` 组织块
+> 契约随 ADR-0010 §14.45 删除，机械来源梯队（第一层）与选择性原文核验
+> （第二层）语义不变。以下原文保留作历史设计记录。
+
 - 账号类来源（个人新闻号、非认证号）的认证状态判断（URL 无法机械识别）；
 - 每条来源输出：weight + 理由 + 采纳/标注状态；
 - v0 语义：**标注 + 排序，不硬拦截**——结论优先采信高权重来源，低权重来源可用但必须
@@ -103,6 +110,10 @@ D 项目旧机制（SearxNG 元数据评分：engine/publishedDate/citations 三
    tier/mechanical_weight/weight_reason/model_weight/model_weight_reason/
    annotation_status，organized_response 新增 source_annotations，
    filter reason 新增 annotation_invalid（先 Schema/fixture/verifier 再 producer）。
+   **2026-08-30 已随方向 C 退役**：model_weight/model_weight_reason/
+   annotation_status、organized_response.source_annotations 与 filter
+   reason annotation_invalid 全部删除；全面审查轮进一步退役 used_in_sections
+   （恒空残留字段、v0.2 无消费者；v0.1 replay-only 通道不受影响）。
 
 ## 7. 实施状态（GAP-SOURCE-WEIGHTING-IMPL，`implemented`；2026-08-13 闭合）
 
@@ -123,12 +134,17 @@ D 项目旧机制（SearxNG 元数据评分：engine/publishedDate/citations 三
    `organized_response.source_annotations`；非法标注（未知 source_id、weight 越界、
    缺 reason、status 非法、annotated≠0.7、adopted<1.0、low_quality adopted、重复
    source_id）丢弃并记 filtering_log；被引用 low_quality 无合法标注时整块显式降级；
+   **2026-08-30 已随 GAP-RETRIEVAL-STRUCTURED-RESULT 方向 C 退役**——实现删除
+   （build_structured_result 去 annotation 合并、schema/verifier/fixtures/测试
+   同步、ADR-0010 §3.7 条 12 v1.10 / §14.45）；机械 tier/weight（第 1 项）不受
+   影响。
 4. **local_browser 直接分级加权**——共享同一判定器；`browser_read` 证据进入
    检索车道 ledger 时即加权（主车道无 ledger 的边界见审计 B-2）；
 5. **结构化结果 schema**——weight/tier 字段已加（见 §6.3）；
 6. **测试**——判定器单测 11 个（三档/名单/URL 形态）、web_page 加权 e2e、
    source_annotations 合并/丢弃/一致性/重复/降级 e2e、提示词二存一合同、
    Python verifier 9 条新规则测试、真实 journal 重捕；
+   （source_annotations 相关 e2e 已随第三层于 2026-08-30 方向 C 退役删除）
 7. **收尾**——三面审查 + 实施审计
    [`GAP_SOURCE_WEIGHTING_IMPL_AUDIT_2026-08-13.md`](audits/GAP_SOURCE_WEIGHTING_IMPL_AUDIT_2026-08-13.md)，
    索引状态 `pending` → `implemented`。

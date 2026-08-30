@@ -292,6 +292,10 @@ SLUGS = {
     "permission_decision": "permission-decision",
     "tool_started": "tool-started",
     "tool_completed": "tool-completed",
+    # THIN-HARNESS-REDESIGN-V2 §9.7 (2026-08-29 S5-2): tool_running was
+    # added to the v0.1 enum without a slug (7c85e34) — restored so the
+    # generator's v0.1 tree is executable again (2026-08-30 全面审查轮).
+    "tool_running": "tool-running",
     "orientation_checkpoint": "orientation-checkpoint",
     "runtime_stagnation_guard": "runtime-stagnation-guard",
     "tool_availability_check": "tool-availability-check",
@@ -773,15 +777,11 @@ PAYLOAD_GOOD_V02: dict[str, dict] = {
                 "observed_scope": "full document",
                 "missing_scope": "none",
                 "relevance": "direct",
-                "used_in_sections": ["Rust channels"],
                 "content_sha256": ZERO_HASH,
                 "highest_allowed_claim": "observed",
                 "tier": "default",
                 "mechanical_weight": 1.0,
                 "weight_reason": "default",
-                "model_weight": 1.0,
-                "model_weight_reason": "official docs",
-                "annotation_status": "adopted",
             },
             {
                 "source_id": "SRC-0002",
@@ -793,7 +793,6 @@ PAYLOAD_GOOD_V02: dict[str, dict] = {
                 "observed_scope": "first section",
                 "missing_scope": "rest of page",
                 "relevance": "partial",
-                "used_in_sections": [],
                 "highest_allowed_claim": "derived",
                 "tier": "default",
                 "mechanical_weight": 1.0,
@@ -808,25 +807,6 @@ PAYLOAD_GOOD_V02: dict[str, dict] = {
                 "filtered_at": "2026-08-10T00:00:02Z",
             }
         ],
-        "organized_response": {
-            "sections": [
-                {
-                    "section_title": "Rust channels",
-                    "content": "std::sync::mpsc provides channels.",
-                    "source_ids": ["SRC-0001"],
-                    "claim_strength": "observed",
-                }
-            ],
-            "claims": [],
-            "source_annotations": [
-                {
-                    "source_id": "SRC-0001",
-                    "weight": 1.0,
-                    "reason": "official docs",
-                    "status": "adopted",
-                }
-            ],
-        },
         "raw_source_refs": [
             {
                 "source_id": "SRC-0001",
@@ -1225,29 +1205,16 @@ PAYLOAD_BAD_V02: dict[str, dict] = {
                 "source_id": "SRC-0001",
                 "source_title": "Rust reference",
                 "source_url_or_ref": "https://doc.rust-lang.org/reference",
-                "source_type": "web_page",
                 "visibility": "full_text_observed",
                 "accessed_at": "2026-08-10T00:00:00Z",
                 "observed_scope": "full document",
                 "missing_scope": "none",
                 "relevance": "direct",
-                "used_in_sections": ["Rust channels"],
                 "content_sha256": ZERO_HASH,
                 "highest_allowed_claim": "derived",
             },
         ],
         "filtering_log": [],
-        "organized_response": {
-            "sections": [
-                {
-                    "section_title": "Rust channels",
-                    "content": "std::sync::mpsc provides channels.",
-                    "source_ids": ["SRC-0001"],
-                    "claim_strength": "legendary",
-                }
-            ],
-            "claims": [],
-        },
         "raw_source_refs": [
             {
                 "source_id": "SRC-0001",
@@ -1264,7 +1231,7 @@ PAYLOAD_BAD_V02: dict[str, dict] = {
             "metadata_only": 0,
             "unavailable": 0,
         },
-        "visibility_degraded": True,
+        "visibility_degraded": False,
     },
     "retrieval_activation_restored": {
         "restore_id": "RST-ACT-0001",
@@ -1546,21 +1513,14 @@ EXTRA_V02_PAYLOAD_POSITIVES: dict[str, dict] = {
 
 # GAP-SOURCE-WEIGHTING-IMPL (2026-08-13): extra negative payload fixture —
 # the fixed tier/weight pair is violated (authoritative MUST be 1.1; the
-# good fixture's SRC-0001 keeps mechanical_weight 1.0). The model annotation
-# fields are stripped so exactly ONE constraint is violated.
+# good fixture's SRC-0001 keeps mechanical_weight 1.0). The retired model
+# annotation fields are absent from the good fixture already.
 EXTRA_V02_PAYLOAD_BADS: dict[str, dict] = {}
 _weighting_bad = json.loads(json.dumps(PAYLOAD_GOOD_V02["retrieval_result_committed"]))
 _weighting_bad["source_ledger"] = json.loads(
     json.dumps(PAYLOAD_GOOD_V02["retrieval_result_committed"]["source_ledger"])
 )
 _weighting_bad["source_ledger"][0]["tier"] = "authoritative"
-_weighting_bad["source_ledger"][0].pop("model_weight", None)
-_weighting_bad["source_ledger"][0].pop("model_weight_reason", None)
-_weighting_bad["source_ledger"][0].pop("annotation_status", None)
-_weighting_bad["organized_response"] = json.loads(
-    json.dumps(PAYLOAD_GOOD_V02["retrieval_result_committed"]["organized_response"])
-)
-_weighting_bad["organized_response"].pop("source_annotations", None)
 EXTRA_V02_PAYLOAD_BADS[
     "retrieval-result.tier-weight-mismatch.constraint.invalid"
 ] = _weighting_bad

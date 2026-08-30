@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://local.scientific-assurance.invalid/schema/retrieval-result-event-payload-v0.2.schema.json",
   "title": "Structured retrieval result runtime event payload v0.2",
-  "description": "ADR-0010 §3.3.3/§3.7.4/§3.7 条 12/§5.2: the structured result the retrieval sub-agent forms and validates before the mechanical assessment — query_summary, source_ledger, filtering_log, organized_response and raw_source_refs. query_summary/source_ledger/filtering_log/raw_source_refs are built mechanically by the controller from tool-call evidence (provider-neutral); organized_response is the model-organized block bound to ledger source_ids. Source quality weighting (§3.7 条 12): web-typed ledger entries carry the mechanical tier/weight (authoritative 1.1 / default 1.0 / low_quality 0.7) and may carry the sub-agent model annotation (model_weight + reason + adopted|annotated; v0 annotate-and-rank, no interception). claim_strength is capped by the mechanical visibility matrix (§3.7.5): observed requires every bound source full_text_observed, derived requires >= partial_text_observed, synthesized requires >= metadata_only. FUS-RETRIEVAL-MECH B-1 (2026-08-13): web_search_result ledger entries may carry candidate_urls — the citation URL candidate pool forwarded mechanically from the host tool result (metadata-grade). FUS-RETRIEVAL-MECH step 3 (2026-08-14): candidate_urls is the POST-PREFILTER retained pool (canonical/host-level dedup, known failure forms removed, sorted by mechanical tier/weight + lexical relevance); candidate_pool mirrors it with per-candidate canonical_url/tier/mechanical_weight/weight_reason/relevance/form_reasons; prefilter_log records every removal with a stable reason (bad_url/login_wall/redirect_chain/duplicate_canonical/duplicate_host). raw_source_refs mirrors candidate_urls and candidate_pool for web_search_result entries. visibility_degraded=true records an explicit fallback (never a silent downgrade). The assurance/retrieval-result-v0.1.schema.json twin is migration input and stays replay-only.",
+  "description": "ADR-0010 §3.3.3/§3.7.4/§3.7 条 12/§5.2: the structured result the retrieval sub-agent forms before the mechanical assessment — query_summary, source_ledger, filtering_log and raw_source_refs, all built mechanically by the controller from tool-call evidence + [DOC]/[SOURCE] declaration lines (provider-neutral; the mechanical ledger is the single result track). GAP-RETRIEVAL-STRUCTURED-RESULT 方向 C (2026-08-30 用户裁决): the [RESULT_JSON] organized block and its organized_response are DELETED — the layer-3 sub-agent model weighting annotation (model_weight/reason/annotation_status, §3.7 条 12 ③) is retired with it. Source quality weighting: web-typed ledger entries carry the mechanical tier/weight (authoritative 1.1 / default 1.0 / low_quality 0.7); [SOURCE] declaration URLs are normalized (ACAF network-target rules). visibility_degraded=true iff the ledger carries NO text-level evidence (zero full_text_observed/partial_text_observed — metadata-only declarations or no tool calls), an explicit mechanical fallback signal (never a silent downgrade). FUS-RETRIEVAL-MECH B-1 (2026-08-13): web_search_result ledger entries may carry candidate_urls — the citation URL candidate pool forwarded mechanically from the host tool result (metadata-grade). FUS-RETRIEVAL-MECH step 3 (2026-08-14): candidate_urls is the POST-PREFILTER retained pool (canonical/host-level dedup, known failure forms removed, sorted by mechanical tier/weight + lexical relevance); candidate_pool mirrors it with per-candidate canonical_url/tier/mechanical_weight/weight_reason/relevance/form_reasons; prefilter_log records every removal with a stable reason (bad_url/login_wall/redirect_chain/duplicate_canonical/duplicate_host). raw_source_refs mirrors candidate_urls and candidate_pool for web_search_result entries. The assurance/retrieval-result-v0.1.schema.json twin is migration input and stays replay-only.",
   "type": "object",
   "additionalProperties": false,
   "required": [
@@ -18,7 +18,6 @@
     "query_summary",
     "source_ledger",
     "filtering_log",
-    "organized_response",
     "raw_source_refs",
     "source_counts",
     "visibility_degraded"
@@ -48,26 +47,6 @@
     "filtering_log": {
       "type": "array",
       "items": { "$ref": "#/$defs/filter_entry" }
-    },
-    "organized_response": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": ["sections", "claims"],
-      "properties": {
-        "sections": {
-          "type": "array",
-          "items": { "$ref": "#/$defs/section_entry" }
-        },
-        "claims": {
-          "type": "array",
-          "items": { "$ref": "#/$defs/claim_entry" }
-        },
-        "source_annotations": {
-          "type": "array",
-          "uniqueItems": true,
-          "items": { "$ref": "#/$defs/source_annotation" }
-        }
-      }
     },
     "raw_source_refs": {
       "type": "array",
@@ -126,7 +105,6 @@
         "observed_scope",
         "missing_scope",
         "relevance",
-        "used_in_sections",
         "highest_allowed_claim"
       ],
       "properties": {
@@ -139,19 +117,12 @@
         "observed_scope": { "$ref": "#/$defs/nonempty" },
         "missing_scope": { "$ref": "#/$defs/nonempty" },
         "relevance": { "enum": ["direct", "partial", "tangential", "excluded"] },
-        "used_in_sections": {
-          "type": "array",
-          "items": { "$ref": "#/$defs/nonempty" }
-        },
         "content_sha256": { "$ref": "#/$defs/sha256" },
         "highest_allowed_claim": { "enum": ["observed", "derived", "synthesized", "none"] },
         "limitation": { "$ref": "#/$defs/nonempty" },
         "tier": { "$ref": "#/$defs/tier" },
         "mechanical_weight": { "$ref": "#/$defs/source_weight" },
         "weight_reason": { "$ref": "#/$defs/nonempty" },
-        "model_weight": { "$ref": "#/$defs/source_weight" },
-        "model_weight_reason": { "$ref": "#/$defs/nonempty" },
-        "annotation_status": { "$ref": "#/$defs/annotation_status" },
         "candidate_urls": {
           "type": "array",
           "items": { "$ref": "#/$defs/nonempty" }
@@ -199,10 +170,6 @@
           "then": {
             "properties": { "mechanical_weight": { "const": 0.7 } }
           }
-        },
-        {
-          "if": { "required": ["model_weight"] },
-          "then": { "required": ["model_weight_reason", "annotation_status"] }
         }
       ]
     },
@@ -220,41 +187,11 @@
             "low_relevance",
             "source_type_forbidden",
             "budget_exceeded",
-            "policy_blocked",
-            "annotation_invalid"
+            "policy_blocked"
           ]
         },
         "action": { "enum": ["excluded", "deferred_for_main_agent_review"] },
         "filtered_at": { "type": "string", "format": "date-time" }
-      }
-    },
-    "section_entry": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": ["section_title", "content", "source_ids", "claim_strength"],
-      "properties": {
-        "section_title": { "$ref": "#/$defs/nonempty" },
-        "content": { "$ref": "#/$defs/nonempty" },
-        "source_ids": {
-          "type": "array",
-          "items": { "type": "string", "pattern": "^SRC-[A-Za-z0-9._-]+$" }
-        },
-        "claim_strength": { "enum": ["observed", "derived", "synthesized", "none"] }
-      }
-    },
-    "claim_entry": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": ["claim_id", "claim_text", "source_ids", "claim_strength"],
-      "properties": {
-        "claim_id": { "type": "string", "pattern": "^CLM-[A-Za-z0-9._-]+$" },
-        "claim_text": { "$ref": "#/$defs/nonempty" },
-        "source_ids": {
-          "type": "array",
-          "items": { "type": "string", "pattern": "^SRC-[A-Za-z0-9._-]+$" },
-          "minItems": 1
-        },
-        "claim_strength": { "enum": ["observed", "derived", "synthesized"] }
       }
     },
     "ref_entry": {
@@ -367,21 +304,6 @@
     "source_weight": {
       "type": "number",
       "enum": [0.7, 1.0, 1.1]
-    },
-    "annotation_status": {
-      "type": "string",
-      "enum": ["adopted", "annotated"]
-    },
-    "source_annotation": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": ["source_id", "weight", "reason", "status"],
-      "properties": {
-        "source_id": { "type": "string", "pattern": "^SRC-[A-Za-z0-9._-]+$" },
-        "weight": { "$ref": "#/$defs/source_weight" },
-        "reason": { "$ref": "#/$defs/nonempty" },
-        "status": { "$ref": "#/$defs/annotation_status" }
-      }
     }
   }
 }

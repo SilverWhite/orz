@@ -199,8 +199,9 @@ active -> failed/cancelled -> closing -> closed_resumable
 
 1. 主 Agent 通过显式任务合同创建/唤醒子代理；
 2. 一个检索任务内 session 持久存在，允许多轮模型/工具动作；
-3. 检索结果先形成并验证结构化 `query_summary`、`source_ledger`、`filtering_log`、
-   `organized_response` 与 `raw_source_refs`；
+3. 检索结果先形成并验证结构化 `query_summary`、`source_ledger`、`filtering_log`
+   与 `raw_source_refs`（机械四段；v1.45 修订，2026-08-30：`organized_response`
+   / `[RESULT_JSON]` 组织块删除——机械 ledger 单轨，见 §14.45）；
 4. 机械 assessment 发生在结果形成之后，不能与首次检索模型调用合并，也不新增子代理模型轮；主 Agent
    随后必须给出结构化 parent disposition：`close` 或 `continue(requirement_delta)`；
 5. 只有经过验证的 `close` disposition 才提交 close record 并清空 activation 的 live
@@ -406,6 +407,17 @@ offset 分段）落成工具契约；与 pdf_read 的 `document_id` + `page_rang
     族与 `web_search_*` 变体不进入 local_browser 主面（单入口语义，最小
     模型面变化）。来源：门禁观察四轮结构性零检索结论与用户裁决「先恢复
     外部」（2026-08-30），索引见 §14.44。
+    该条为冻结后补写（v1.10，2026-08-30，GAP-RETRIEVAL-STRUCTURED-RESULT
+    方向 C 用户裁决，索引见 §14.45）：③ 子代理模型加权标注**退役**——
+    其唯一载体 `[RESULT_JSON].source_annotations` 依赖运行中不可见的
+    后置分配 source_ids（机械 ledger 在子代理跑完后才签发），生产中从未
+    生效（每次真实块 organized_response 恒空、
+    structured_result_validation_failed 误触发）；`[RESULT_JSON]` 组织块
+    契约整体删除，检索结果回归 `[DOC]`/`[SOURCE]` 声明行 + 机械 ledger
+    单轨；`[SOURCE]` 声明行 URL 走 ACAF 网络目标规范化（SRC-002 表象
+    修复）；`visibility_degraded` 重定义为「机械 ledger 无文本级证据
+    （full_text_observed/partial_text_observed 均 0）」；机械来源梯队 ①
+    与选择性原文核验 ② 语义不变。
 
 ### 3.8 受控 `run_tests` / hidden-test 反馈环
 
@@ -3900,3 +3912,63 @@ ADR §3.6 正文修订随实施登记。
 2. **登记**：BACKLOG 0k / TODO P0-0k / 门禁观察报告
    `docs/GATE_GOOGLE_OBSERVATION_2026-08-30.md` §8–§10 /
    CLI_PROJECT_INDEX（FUS-RETRIEVAL-ENGINE-SERP）。
+
+### 14.45 v1.45 补写裁决索引（2026-08-30）
+
+本节记录冻结后的显式补写；规范正文以所指章节为准，补写明确
+取代以下既往条款。
+
+1. **检索结果形成契约修复（GAP-RETRIEVAL-STRUCTURED-RESULT，方向 C，
+   2026-08-30 用户裁决「按 P1 方向 C 进行」；修订 §3.3.3 条 3 / §3.7 条 12
+   第三层）**：
+   - **背景**：`[RESULT_JSON]` 组织块的 `source_ids` 契约结构性不可满足——
+     机械 ledger 的 `SRC-001` 等 id 在子代理跑完后才由
+     `build_structured_result` 后置分配、运行中不可见，模型只能自造 id；
+     实证 0h S4（2 次）/ mteb-retrieve（5 次）/ R5（1 次）全部
+     organized_response 空 / visibility_degraded=true /
+     structured_result_validation_failed，唯一通过路径是知情单测；
+     SRC-002（声明行 ref 污染：URL+标题整行入 source_url_or_ref）为其
+     表象。
+   - **修复**：删除 `[RESULT_JSON]` 契约——子代理提示词移除模板段、
+     `parse_retrieval_result_json` 删除、`build_structured_result` 删
+     block 解析/校验/annotation 合并、`organized_response` 从 committed
+     payload/schema 删除；回归 `[DOC]`/`[SOURCE]` 声明行 + 机械 ledger
+     单轨（§3.3.3 条 3 机械四段）；`[SOURCE]` 声明行 URL 走 ACAF 网络
+     目标规范化（scheme/host 小写、去默认端口、去 fragment、userinfo
+     拒绝、尾部标点剥离），标题独立入 source_title；
+     `visibility_degraded` 语义重定义为「机械 ledger 无文本级证据
+     （full_text_observed 与 partial_text_observed 均 0）」，reason code
+     为 `no_fulltext_evidence`；dispatch 摘要结论计数改口径为文本证据
+     计数；schema（retrieval-result-event-payload-v0.2）/ Python verifier
+     （organized_response 校验与 source_weighting annotation 校验删除、
+     补 visibility_degraded 一致性规则）/ fixtures / 测试同步；
+     §3.7 条 12 第三层（子代理模型加权标注，生产中也从未生效）退役——
+     机械来源梯队 ① 与选择性原文核验 ② 语义不变。
+   - **登记**：BACKLOG 0k / TODO P0-0k / 门禁观察报告
+     `docs/GATE_GOOGLE_OBSERVATION_2026-08-30.md` §10.3 /
+     CLI_PROJECT_INDEX（GAP-RETRIEVAL-STRUCTURED-RESULT）。
+
+2. **方向 C 全面审查轮修复（2026-08-30 三路审查：设计合理性 / 实现
+   合理性 / 设计与实现符合性；审查发现的处理）**：
+   - **内容寻址纪律**：`result_digest` = sha256(canonical(四段机械
+     payload：query_summary/source_ledger/filtering_log/
+     raw_source_refs))、`ledger_digest` = sha256(canonical(source_ledger))、
+     `result_id` 携带 result_digest 前 16 位——verifier 复核；修改 journal
+     后必须按 verifier 自身算法重算 digest 并重链事件哈希（含
+     disposition/close 的 assessment_id 与 result_digest 重映射）。
+   - **reason_codes 词汇表**：v0.2 检索评估仅允许
+     `no_mechanical_coverage_requirement` 与 `no_fulltext_evidence`
+     （degraded ⇒ 必须携带后者）；块时代词条
+     `structured_result_validation_failed` /
+     `low_quality_source_without_annotation` 退役并在 verifier 拒绝。
+   - **used_in_sections 退役**：v0.2 source_entry 删除该恒空残留字段
+     （无消费者；v0.1 replay-only 通道的 retrieval-result-v0.1.schema
+     不受影响）。
+   - **[SOURCE] 规范化边界固化**：无空格「URL，标题」形态在 scheme 后
+     首个标点处切分（ASCII ':' 不作为分隔符，保留 scheme/port）；
+     userinfo URL 被 ACAF 解析器拒绝时原样保留——「拒绝」语义为不规范化、
+     不丢弃声明行。
+   - **范围注明**：方向 C 退役范围 = Rust v0.2 生产轨道；Python
+     `assurance/retrieval_subagent.py` / `deepseek_runtime_adapter.py`
+     的 v0.1 replay-only 通道保留 organized_response，不在退役范围，
+     S4 复验不得误用该通道。

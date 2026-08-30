@@ -1333,6 +1333,24 @@ class SyntheticBadJournalTests(unittest.TestCase):
 _ZERO = "0" * 64
 
 
+def _refresh_result_digests(payload: dict) -> None:
+    """GAP-RETRIEVAL-STRUCTURED-RESULT 方向 C 全面审查轮 (2026-08-30):
+    committed-result payloads must carry the canonical four-segment digest
+    (query_summary/source_ledger/filtering_log/raw_source_refs) — synthetic
+    tests recompute at event construction so payload mutations never leave
+    a stale digest (verifier parity with `_verify_v02_result_consistency`)."""
+    if payload.get("result_kind") != "retrieval_subagent_result":
+        return
+    four_keys = ("query_summary", "source_ledger", "filtering_log", "raw_source_refs")
+    if not all(key in payload for key in four_keys):
+        return
+    four = {key: payload[key] for key in four_keys}
+    digest = _payload_sha256(four)
+    payload["result_digest"] = digest
+    payload["ledger_digest"] = _payload_sha256(payload["source_ledger"])
+    payload["result_id"] = f"RET-RES-{digest[:16]}-00000000"
+
+
 def _mk_v02_event(
     event_type: str,
     payload: dict,
@@ -1340,6 +1358,8 @@ def _mk_v02_event(
     previous: str,
     run_id: str = "RUN-V02-0001",
 ) -> dict:
+    if event_type == "retrieval_result_committed":
+        _refresh_result_digests(payload)
     event = {
         "schema_version": "0.2.0-draft",
         "run_id": run_id,
@@ -1379,9 +1399,36 @@ def _assessment(assessment_id: str, revision: int, activation: str = "ACT-1") ->
         "missing_categories": [],
         "filtering_reasons": [],
         "status": "sufficient",
-        "reason_codes": ["COVERAGE_OK"],
+        "reason_codes": ["no_mechanical_coverage_requirement"],
         "assessment_version": "0.2.0",
     }
+
+
+def _assessment_matching(committed: dict, assessment_id: str) -> dict:
+    """An assessment payload whose digest/counts mirror a committed result —
+    the verifier (全面审查轮 2026-08-30) cross-checks result_digest,
+    ledger_digest, source_counts and the assessment_id digest prefix. The
+    canonical digests are computed here so the helper does not depend on
+    whether the committed dict was already auto-refreshed."""
+    four = {
+        key: committed[key]
+        for key in ("query_summary", "source_ledger", "filtering_log", "raw_source_refs")
+    }
+    digest = _payload_sha256(four)
+    ledger_digest = _payload_sha256(committed["source_ledger"])
+    payload = _assessment(
+        assessment_id,
+        committed["contract_revision"],
+        committed["activation_id"],
+    )
+    payload["result_digest"] = digest
+    payload["ledger_digest"] = ledger_digest
+    payload["source_counts"] = committed["source_counts"]
+    payload["assessment_id"] = (
+        f"ASSESS-{digest[:16]}-"
+        f"{assessment_id.split('-', 1)[1]}"
+    )
+    return payload
 
 
 def _disposition(
@@ -2957,7 +3004,6 @@ def _committed_result() -> dict:
                 "observed_scope": "full document",
                 "missing_scope": "none",
                 "relevance": "direct",
-                "used_in_sections": ["Rust channels"],
                 "content_sha256": _ZERO,
                 "highest_allowed_claim": "observed",
                 "tier": "default",
@@ -2974,7 +3020,6 @@ def _committed_result() -> dict:
                 "observed_scope": "first section",
                 "missing_scope": "rest",
                 "relevance": "partial",
-                "used_in_sections": [],
                 "highest_allowed_claim": "derived",
                 "tier": "default",
                 "mechanical_weight": 1.0,
@@ -2982,17 +3027,6 @@ def _committed_result() -> dict:
             },
         ],
         "filtering_log": [],
-        "organized_response": {
-            "sections": [
-                {
-                    "section_title": "Rust channels",
-                    "content": "std::sync::mpsc provides channels.",
-                    "source_ids": ["SRC-1"],
-                    "claim_strength": "observed",
-                }
-            ],
-            "claims": [],
-        },
         "raw_source_refs": [
             {
                 "source_id": "SRC-1",
@@ -3112,8 +3146,9 @@ class RetrievalResultConsistencyTests(unittest.TestCase):
     never exceeds the bound sources' visibility; the following assessment on
     the same (activation, revision) carries identical digests and counts."""
 
-    def _journal(self, *extra: dict) -> str:
-        events = [_mk_v02_event("retrieval_result_committed", _committed_result(), 0, None)]
+    def _journal(self, *extra: dict, committed: dict | None = None) -> str:
+        committed = committed or _committed_result()
+        events = [_mk_v02_event("retrieval_result_committed", committed, 0, None)]
         seq = 1
         previous = events[-1]["event_sha256"]
         for event in extra:
@@ -3127,12 +3162,14 @@ class RetrievalResultConsistencyTests(unittest.TestCase):
         return _v02_journal(events)
 
     def test_consistent_commit_and_assessment_validates(self) -> None:
+        committed = _committed_result()
         journal = self._journal(
             _mk_v02_event(
                 "information_sufficiency_assessment",
-                _assessment("ASSESS-1", 0),
+                _assessment_matching(committed, "ASSESS-1"),
                 1, _ZERO,
-            )
+            ),
+            committed=committed,
         )
         self.assertEqual(validate_journal_text(journal), [])
 
@@ -3145,38 +3182,81 @@ class RetrievalResultConsistencyTests(unittest.TestCase):
         errors = validate_journal_text(journal)
         self.assertIn("source_counts", " | ".join(errors))
 
-    def test_observed_claim_requires_full_text_source(self) -> None:
+    def test_retired_organized_response_rejected(self) -> None:
+        """GAP-RETRIEVAL-STRUCTURED-RESULT 方向 C (2026-08-30): the
+        organized_response block is deleted — a committed payload carrying
+        it is rejected."""
         result = _committed_result()
-        result["organized_response"]["sections"][0]["source_ids"] = ["SRC-2"]
+        result["organized_response"] = {"sections": [], "claims": []}
         journal = _v02_journal(
             [_mk_v02_event("retrieval_result_committed", result, 0, None)]
         )
         errors = validate_journal_text(journal)
-        self.assertIn("exceeds source", " | ".join(errors))
+        # The schema rejects the retired field first (additionalProperties);
+        # the verifier's own "retired" rule is belt-and-braces for paths
+        # that bypass schema validation.
+        self.assertIn("organized_response", " | ".join(errors))
 
-    def test_claim_binding_unknown_source_rejected(self) -> None:
+    def test_visibility_degraded_matches_no_text_evidence(self) -> None:
+        """GAP-RETRIEVAL-STRUCTURED-RESULT 方向 C (2026-08-30):
+        visibility_degraded is redefined — true iff the ledger has no
+        text-level evidence (zero full/partial)."""
         result = _committed_result()
-        result["organized_response"]["sections"][0]["source_ids"] = ["SRC-999"]
+        result["visibility_degraded"] = True
         journal = _v02_journal(
             [_mk_v02_event("retrieval_result_committed", result, 0, None)]
         )
         errors = validate_journal_text(journal)
-        self.assertIn("unknown source", " | ".join(errors))
+        self.assertIn("visibility_degraded", " | ".join(errors))
+        result2 = _committed_result()
+        result2["source_ledger"] = [
+            {
+                "source_id": "SRC-1",
+                "source_title": "Rust reference",
+                "source_url_or_ref": "https://doc.rust-lang.org/reference",
+                "source_type": "web_page",
+                "visibility": "metadata_only",
+                "accessed_at": "2026-08-09T00:00:00Z",
+                "observed_scope": "declaration only",
+                "missing_scope": "content",
+                "relevance": "direct",
+                "highest_allowed_claim": "synthesized",
+                "tier": "default",
+                "mechanical_weight": 1.0,
+                "weight_reason": "default",
+            }
+        ]
+        result2["source_counts"] = {
+            "total": 1,
+            "full_text_observed": 0,
+            "partial_text_observed": 0,
+            "metadata_only": 1,
+            "unavailable": 0,
+        }
+        result2["visibility_degraded"] = True
+        journal = _v02_journal(
+            [_mk_v02_event("retrieval_result_committed", result2, 0, None)]
+        )
+        self.assertEqual(validate_journal_text(journal), [])
 
     def test_assessment_digest_must_match_committed_result(self) -> None:
-        assessment = _assessment("ASSESS-1", 0)
+        committed = _committed_result()
+        assessment = _assessment_matching(committed, "ASSESS-1")
         assessment["result_digest"] = "1" * 64
         journal = self._journal(
-            _mk_v02_event("information_sufficiency_assessment", assessment, 1, _ZERO)
+            _mk_v02_event("information_sufficiency_assessment", assessment, 1, _ZERO),
+            committed=committed,
         )
         errors = validate_journal_text(journal)
         self.assertIn("result_digest", " | ".join(errors))
 
     def test_assessment_source_counts_must_match_committed_result(self) -> None:
-        assessment = _assessment("ASSESS-1", 0)
+        committed = _committed_result()
+        assessment = _assessment_matching(committed, "ASSESS-1")
         assessment["source_counts"]["total"] = 7
         journal = self._journal(
-            _mk_v02_event("information_sufficiency_assessment", assessment, 1, _ZERO)
+            _mk_v02_event("information_sufficiency_assessment", assessment, 1, _ZERO),
+            committed=committed,
         )
         errors = validate_journal_text(journal)
         self.assertIn("source_counts", " | ".join(errors))
@@ -3196,6 +3276,94 @@ class RetrievalResultConsistencyTests(unittest.TestCase):
             ]
         )
         self.assertEqual(validate_journal_text(journal), [])
+
+    def test_result_digest_must_match_four_segments(self) -> None:
+        """GAP-RETRIEVAL-STRUCTURED-RESULT 方向 C 全面审查轮 (2026-08-30):
+        result_digest is the canonical SHA-256 of the four mechanical
+        segments — a stale digest (e.g. the retired five-segment form) is
+        rejected."""
+        from assurance.run_event_journal_validation import _verify_v02_result_consistency
+
+        result = _committed_result()
+        event = _mk_v02_event("retrieval_result_committed", result, 0, None)
+        event["payload"]["result_digest"] = _ZERO
+        errors = _verify_v02_result_consistency([event])
+        self.assertTrue(any("result_digest" in e for e in errors), errors)
+
+    def test_retired_reason_code_rejected(self) -> None:
+        """全面审查轮 (2026-08-30): block-era reason codes are retired —
+        fixtures/journals must never carry structured_result_validation_failed."""
+        assessment = _assessment("ASSESS-1", 0)
+        assessment["reason_codes"] = [
+            "no_mechanical_coverage_requirement",
+            "structured_result_validation_failed",
+        ]
+        journal = _v02_journal(
+            [_mk_v02_event("information_sufficiency_assessment", assessment, 0, None)]
+        )
+        errors = validate_journal_text(journal)
+        self.assertIn("structured_result_validation_failed", " | ".join(errors))
+
+    def test_unknown_reason_code_rejected(self) -> None:
+        assessment = _assessment("ASSESS-1", 0)
+        assessment["reason_codes"] = ["COVERAGE_OK"]
+        journal = _v02_journal(
+            [_mk_v02_event("information_sufficiency_assessment", assessment, 0, None)]
+        )
+        errors = validate_journal_text(journal)
+        self.assertIn("unknown retrieval assessment reason", " | ".join(errors))
+
+    def test_degraded_assessment_reason_code_consistency(self) -> None:
+        """全面审查轮 (2026-08-30): a degraded committed result must be
+        assessed with no_fulltext_evidence; a non-degraded one must not
+        claim it."""
+        committed = _committed_result()
+        committed["source_ledger"] = [
+            {
+                "source_id": "SRC-1",
+                "source_title": "Rust reference",
+                "source_url_or_ref": "https://doc.rust-lang.org/reference",
+                "source_type": "web_page",
+                "visibility": "metadata_only",
+                "accessed_at": "2026-08-09T00:00:00Z",
+                "observed_scope": "declaration only",
+                "missing_scope": "content",
+                "relevance": "direct",
+                "highest_allowed_claim": "synthesized",
+                "tier": "default",
+                "mechanical_weight": 1.0,
+                "weight_reason": "default",
+            }
+        ]
+        committed["source_counts"] = {
+            "total": 1,
+            "full_text_observed": 0,
+            "partial_text_observed": 0,
+            "metadata_only": 1,
+            "unavailable": 0,
+        }
+        committed["visibility_degraded"] = True
+        assessment = _assessment_matching(committed, "ASSESS-1")
+        assessment["reason_codes"] = ["no_mechanical_coverage_requirement"]
+        journal = self._journal(
+            _mk_v02_event("information_sufficiency_assessment", assessment, 1, _ZERO),
+            committed=committed,
+        )
+        errors = validate_journal_text(journal)
+        self.assertIn("no_fulltext_evidence", " | ".join(errors))
+
+        committed2 = _committed_result()
+        assessment2 = _assessment_matching(committed2, "ASSESS-1")
+        assessment2["reason_codes"] = [
+            "no_mechanical_coverage_requirement",
+            "no_fulltext_evidence",
+        ]
+        journal2 = self._journal(
+            _mk_v02_event("information_sufficiency_assessment", assessment2, 1, _ZERO),
+            committed=committed2,
+        )
+        errors2 = validate_journal_text(journal2)
+        self.assertIn("no_fulltext_evidence", " | ".join(errors2))
 
     def test_highest_allowed_claim_must_match_visibility(self) -> None:
         """D1 (review 2026-08-10): the declared highest_allowed_claim is a
@@ -3242,118 +3410,19 @@ class RetrievalResultConsistencyTests(unittest.TestCase):
             errors,
         )
 
-    def test_partial_model_annotation_fields_rejected(self) -> None:
+    def test_retired_model_annotation_fields_rejected(self) -> None:
+        """GAP-RETRIEVAL-STRUCTURED-RESULT 方向 C (2026-08-30): the layer-3
+        model annotation vocabulary is retired — any source carrying it is
+        rejected."""
         result = _committed_result()
-        result["source_ledger"][0]["model_weight"] = 1.0
-        journal = _v02_journal(
-            [_mk_v02_event("retrieval_result_committed", result, 0, None)]
-        )
-        errors = validate_journal_text(journal)
-        self.assertIn("model_weight_reason", " | ".join(errors))
-
-    def test_annotated_status_requires_low_weight(self) -> None:
-        result = _committed_result()
-        result["source_ledger"][0]["model_weight"] = 1.0
-        result["source_ledger"][0]["model_weight_reason"] = "forum"
+        result["source_ledger"][0]["model_weight"] = 0.7
+        result["source_ledger"][0]["model_weight_reason"] = "platform blog"
         result["source_ledger"][0]["annotation_status"] = "annotated"
         journal = _v02_journal(
             [_mk_v02_event("retrieval_result_committed", result, 0, None)]
         )
         errors = validate_journal_text(journal)
-        self.assertIn("annotated requires model_weight 0.7", " | ".join(errors))
-
-    def test_low_quality_used_without_annotation_rejected(self) -> None:
-        result = _committed_result()
-        result["source_ledger"][1]["tier"] = "low_quality"
-        result["source_ledger"][1]["mechanical_weight"] = 0.7
-        result["source_ledger"][1]["weight_reason"] = "low_quality_platform:csdn.net"
-        result["organized_response"]["sections"][0]["source_ids"] = ["SRC-2"]
-        result["organized_response"]["sections"][0]["claim_strength"] = "derived"
-        journal = _v02_journal(
-            [_mk_v02_event("retrieval_result_committed", result, 0, None)]
-        )
-        errors = validate_journal_text(journal)
-        self.assertIn("without annotated status", " | ".join(errors))
-
-    def test_low_quality_annotated_validates(self) -> None:
-        result = _committed_result()
-        result["source_ledger"][1]["tier"] = "low_quality"
-        result["source_ledger"][1]["mechanical_weight"] = 0.7
-        result["source_ledger"][1]["weight_reason"] = "low_quality_platform:csdn.net"
-        result["source_ledger"][1]["model_weight"] = 0.7
-        result["source_ledger"][1]["model_weight_reason"] = "platform blog"
-        result["source_ledger"][1]["annotation_status"] = "annotated"
-        result["organized_response"]["sections"][0]["source_ids"] = ["SRC-2"]
-        result["organized_response"]["sections"][0]["claim_strength"] = "derived"
-        result["organized_response"]["source_annotations"] = [
-            {
-                "source_id": "SRC-2",
-                "weight": 0.7,
-                "reason": "platform blog",
-                "status": "annotated",
-            }
-        ]
-        journal = _v02_journal(
-            [_mk_v02_event("retrieval_result_committed", result, 0, None)]
-        )
-        self.assertEqual(validate_journal_text(journal), [])
-
-    def test_annotation_must_match_merged_ledger(self) -> None:
-        result = _committed_result()
-        result["source_ledger"][0]["model_weight"] = 1.1
-        result["source_ledger"][0]["model_weight_reason"] = "official"
-        result["source_ledger"][0]["annotation_status"] = "adopted"
-        result["organized_response"]["source_annotations"] = [
-            {
-                "source_id": "SRC-1",
-                "weight": 1.0,
-                "reason": "official",
-                "status": "adopted",
-            }
-        ]
-        journal = _v02_journal(
-            [_mk_v02_event("retrieval_result_committed", result, 0, None)]
-        )
-        errors = validate_journal_text(journal)
-        self.assertIn("does not match merged ledger fields", " | ".join(errors))
-
-    def test_merged_model_fields_require_annotation(self) -> None:
-        result = _committed_result()
-        result["source_ledger"][0]["model_weight"] = 1.0
-        result["source_ledger"][0]["model_weight_reason"] = "official"
-        result["source_ledger"][0]["annotation_status"] = "adopted"
-        journal = _v02_journal(
-            [_mk_v02_event("retrieval_result_committed", result, 0, None)]
-        )
-        errors = validate_journal_text(journal)
-        self.assertIn("without a source_annotation", " | ".join(errors))
-
-    def test_duplicate_source_annotation_rejected(self) -> None:
-        result = _committed_result()
-        result["source_ledger"][0]["model_weight"] = 1.0
-        result["source_ledger"][0]["model_weight_reason"] = "official docs"
-        result["source_ledger"][0]["annotation_status"] = "adopted"
-        annotation = {
-            "source_id": "SRC-1",
-            "weight": 1.0,
-            "reason": "official docs",
-            "status": "adopted",
-        }
-        duplicate = {
-            "source_id": "SRC-1",
-            "weight": 0.7,
-            "reason": "second annotation for the same source",
-            "status": "annotated",
-        }
-        result["organized_response"]["source_annotations"] = [
-            dict(annotation),
-            duplicate,
-        ]
-        journal = _v02_journal(
-            [_mk_v02_event("retrieval_result_committed", result, 0, None)]
-        )
-        errors = validate_journal_text(journal)
-        self.assertIn("duplicate source_annotation", " | ".join(errors))
+        self.assertIn("model_weight", " | ".join(errors))
 
     # ── FUS-RETRIEVAL-MECH B-1 + step 3: web_search candidate pool ──
 
@@ -3371,7 +3440,6 @@ class RetrievalResultConsistencyTests(unittest.TestCase):
                 "observed_scope": "search snippet",
                 "missing_scope": "full page",
                 "relevance": "direct",
-                "used_in_sections": [],
                 "content_sha256": _ZERO,
                 "highest_allowed_claim": "derived",
                 "candidate_urls": candidates,
@@ -3416,7 +3484,6 @@ class RetrievalResultConsistencyTests(unittest.TestCase):
                 "observed_scope": "search snippet",
                 "missing_scope": "full page",
                 "relevance": "direct",
-                "used_in_sections": [],
                 "content_sha256": _ZERO,
                 "highest_allowed_claim": "derived",
                 "candidate_urls": candidates,
@@ -3456,7 +3523,6 @@ class RetrievalResultConsistencyTests(unittest.TestCase):
                 "observed_scope": "search snippet",
                 "missing_scope": "full page",
                 "relevance": "direct",
-                "used_in_sections": [],
                 "content_sha256": _ZERO,
                 "highest_allowed_claim": "derived",
                 "candidate_urls": candidates,
@@ -3505,7 +3571,6 @@ class RetrievalResultConsistencyTests(unittest.TestCase):
                 "observed_scope": "search snippet",
                 "missing_scope": "full page",
                 "relevance": "direct",
-                "used_in_sections": [],
                 "content_sha256": _ZERO,
                 "highest_allowed_claim": "derived",
             }
@@ -3561,7 +3626,6 @@ class RetrievalResultConsistencyTests(unittest.TestCase):
                 "observed_scope": "search snippet",
                 "missing_scope": "full page",
                 "relevance": "direct",
-                "used_in_sections": [],
                 "content_sha256": _ZERO,
                 "highest_allowed_claim": "derived",
                 "candidate_urls": ["https://a.example"],
@@ -3599,7 +3663,6 @@ class RetrievalResultConsistencyTests(unittest.TestCase):
                 "observed_scope": "search snippet",
                 "missing_scope": "full page",
                 "relevance": "direct",
-                "used_in_sections": [],
                 "content_sha256": _ZERO,
                 "highest_allowed_claim": "derived",
                 "candidate_pool": [_pool_entry("https://a.example")],
@@ -3627,7 +3690,6 @@ class RetrievalResultConsistencyTests(unittest.TestCase):
                 "observed_scope": "search snippet",
                 "missing_scope": "full page",
                 "relevance": "direct",
-                "used_in_sections": [],
                 "content_sha256": _ZERO,
                 "highest_allowed_claim": "derived",
                 "candidate_urls": ["https://a.example"],
@@ -3668,7 +3730,6 @@ class RetrievalResultConsistencyTests(unittest.TestCase):
                 "observed_scope": "search snippet",
                 "missing_scope": "full page",
                 "relevance": "direct",
-                "used_in_sections": [],
                 "content_sha256": _ZERO,
                 "highest_allowed_claim": "derived",
                 "candidate_urls": candidates,
@@ -3708,7 +3769,6 @@ class RetrievalResultConsistencyTests(unittest.TestCase):
                 "observed_scope": "search snippet",
                 "missing_scope": "full page",
                 "relevance": "direct",
-                "used_in_sections": [],
                 "content_sha256": _ZERO,
                 "highest_allowed_claim": "derived",
                 "candidate_urls": candidates,
@@ -3758,7 +3818,6 @@ class RetrievalResultConsistencyTests(unittest.TestCase):
                 "observed_scope": "search snippet",
                 "missing_scope": "full page",
                 "relevance": "direct",
-                "used_in_sections": [],
                 "content_sha256": _ZERO,
                 "highest_allowed_claim": "derived",
                 "candidate_urls": candidates,
@@ -3806,7 +3865,6 @@ class RetrievalResultConsistencyTests(unittest.TestCase):
                 "observed_scope": "search snippet",
                 "missing_scope": "full page",
                 "relevance": "direct",
-                "used_in_sections": [],
                 "content_sha256": _ZERO,
                 "highest_allowed_claim": "derived",
                 "candidate_urls": candidates,
@@ -3857,7 +3915,6 @@ class RetrievalResultConsistencyTests(unittest.TestCase):
                 "observed_scope": "search snippet",
                 "missing_scope": "full page",
                 "relevance": "direct",
-                "used_in_sections": [],
                 "content_sha256": _ZERO,
                 "highest_allowed_claim": "derived",
                 "candidate_urls": candidates,
@@ -3905,7 +3962,6 @@ class RetrievalResultConsistencyTests(unittest.TestCase):
                 "observed_scope": "search snippet",
                 "missing_scope": "full page",
                 "relevance": "direct",
-                "used_in_sections": [],
                 "content_sha256": _ZERO,
                 "highest_allowed_claim": "derived",
                 "candidate_urls": [],
@@ -3952,7 +4008,6 @@ class RetrievalResultConsistencyTests(unittest.TestCase):
                 "observed_scope": "search snippet",
                 "missing_scope": "full page",
                 "relevance": "direct",
-                "used_in_sections": [],
                 "content_sha256": _ZERO,
                 "highest_allowed_claim": "derived",
                 "candidate_urls": [],

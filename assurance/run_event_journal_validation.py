@@ -1399,28 +1399,15 @@ def _verify_v02_retrieval_mode(events: list[dict[str, Any]]) -> list[str]:
     return errors
 
 
-# §3.7.5 claim × visibility matrix: mechanical ranks, derived in the verifier
-# from the committed result's own source_ledger.
-_VISIBILITY_RANK = {
-    "full_text_observed": 3,
-    "partial_text_observed": 2,
-    "metadata_only": 1,
-    "unavailable": 0,
-}
-
 # GAP-SOURCE-WEIGHTING-IMPL (2026-08-13): ADR-0010 §3.7 条 12 fixed
-# tier/weight table — the mechanical judge and the model annotation share
-# the same three multipliers (relative ranking, not 0-1 confidence).
+# tier/weight table — the mechanical judge's three multipliers (relative
+# ranking, not 0-1 confidence). GAP-RETRIEVAL-STRUCTURED-RESULT 方向 C
+# (2026-08-30): the model annotation vocabulary is retired — only the
+# mechanical tier/weight facts remain.
 _WEIGHT_BY_TIER = {
     "authoritative": 1.1,
     "default": 1.0,
     "low_quality": 0.7,
-}
-_ALLOWED_WEIGHTS = frozenset((0.7, 1.0, 1.1))
-_CLAIM_MIN_VISIBILITY = {
-    "observed": 3,
-    "derived": 2,
-    "synthesized": 1,
 }
 
 
@@ -1429,9 +1416,9 @@ def _verify_v02_result_consistency(events: list[dict[str, Any]]) -> list[str]:
 
     - source_counts equal the visibility distribution mechanically counted
       from the commit's own source_ledger;
-    - every section/claim claim_strength is bounded by the visibility of all
-      its bound sources (§3.7.5: observed needs full text, derived needs >=
-      partial, synthesized needs >= metadata; "none" carries no obligation);
+    - visibility_degraded is exactly "no text-level evidence" (zero
+      full_text_observed and zero partial_text_observed — metadata-only
+      declarations or no tool calls; GAP-RETRIEVAL-STRUCTURED-RESULT 方向 C);
     - an assessment on the same (activation_id, contract_revision) after the
       commit must carry identical result_digest/ledger_digest/source_counts;
     - the commit precedes its assessment.
@@ -1450,12 +1437,6 @@ def _verify_v02_result_consistency(events: list[dict[str, Any]]) -> list[str]:
         assessments_by_key.setdefault((p["activation_id"], p["contract_revision"]), []).append(
             (index, event)
         )
-
-    def _strength_ok(strength: str, entry: dict[str, Any]) -> bool:
-        min_rank = _CLAIM_MIN_VISIBILITY.get(strength)
-        if min_rank is None:
-            return True
-        return _VISIBILITY_RANK.get(entry["visibility"], -1) >= min_rank
 
     for index, event in commits:
         p = event["payload"]
@@ -1482,7 +1463,6 @@ def _verify_v02_result_consistency(events: list[dict[str, Any]]) -> list[str]:
                 f"distribution {expected_counts} of source_ledger"
             )
 
-        ledger_by_id = {entry["source_id"]: entry for entry in ledger}
         # D1 (review 2026-08-10): highest_allowed_claim is a mechanical
         # projection of visibility (§3.7.5) — a declared value that does not
         # match the matrix means the ledger lies about its own cap.
@@ -1505,36 +1485,56 @@ def _verify_v02_result_consistency(events: list[dict[str, Any]]) -> list[str]:
                     f"highest_allowed_claim {declared!r} != mechanical cap "
                     f"{expected!r} for visibility {entry['visibility']!r}"
                 )
-        for section in p["organized_response"]["sections"]:
-            strength = section["claim_strength"]
-            for sid in section["source_ids"]:
-                entry = ledger_by_id.get(sid)
-                if entry is None:
-                    errors.append(
-                        f"event {index}: section {section['section_title']!r} "
-                        f"binds unknown source {sid}"
-                    )
-                elif not _strength_ok(strength, entry):
-                    errors.append(
-                        f"event {index}: section {section['section_title']!r} "
-                        f"claim_strength {strength} exceeds source {sid} "
-                        f"visibility {entry['visibility']}"
-                    )
-        for claim in p["organized_response"]["claims"]:
-            strength = claim["claim_strength"]
-            for sid in claim["source_ids"]:
-                entry = ledger_by_id.get(sid)
-                if entry is None:
-                    errors.append(
-                        f"event {index}: claim {claim['claim_id']} binds unknown "
-                        f"source {sid}"
-                    )
-                elif not _strength_ok(strength, entry):
-                    errors.append(
-                        f"event {index}: claim {claim['claim_id']} "
-                        f"claim_strength {strength} exceeds source {sid} "
-                        f"visibility {entry['visibility']}"
-                    )
+        # GAP-RETRIEVAL-STRUCTURED-RESULT 方向 C (2026-08-30): the committed
+        # payload must not carry the retired organized_response, and
+        # visibility_degraded must equal "no text-level evidence" — the
+        # mechanical definition that replaced the organized-block fallback.
+        if "organized_response" in p:
+            errors.append(
+                f"event {index}: organized_response is retired "
+                "(GAP-RETRIEVAL-STRUCTURED-RESULT 方向 C)"
+            )
+        no_text_evidence = (
+            p["source_counts"]["full_text_observed"] == 0
+            and p["source_counts"]["partial_text_observed"] == 0
+        )
+        if bool(p["visibility_degraded"]) != no_text_evidence:
+            errors.append(
+                f"event {index}: visibility_degraded {p['visibility_degraded']} "
+                "!= no-text-evidence flag "
+                f"{no_text_evidence} (full={p['source_counts']['full_text_observed']}, "
+                f"partial={p['source_counts']['partial_text_observed']})"
+            )
+        # GAP-RETRIEVAL-STRUCTURED-RESULT 方向 C 全面审查轮 (2026-08-30):
+        # result_digest must be the canonical SHA-256 of the four mechanical
+        # segments (query_summary/source_ledger/filtering_log/
+        # raw_source_refs) and ledger_digest of source_ledger — a stale
+        # digest (e.g. the retired five-segment form) means the payload lies
+        # about its own content; result_id must carry the digest prefix.
+        expected_digest = _payload_sha256(
+            {
+                "query_summary": p["query_summary"],
+                "source_ledger": p["source_ledger"],
+                "filtering_log": p["filtering_log"],
+                "raw_source_refs": p["raw_source_refs"],
+            }
+        )
+        if p["result_digest"] != expected_digest:
+            errors.append(
+                f"event {index}: result_digest does not match the canonical "
+                f"four-segment digest (expected {expected_digest[:16]}…)"
+            )
+        expected_ledger = _payload_sha256(p["source_ledger"])
+        if p["ledger_digest"] != expected_ledger:
+            errors.append(
+                f"event {index}: ledger_digest does not match the canonical "
+                f"source_ledger digest (expected {expected_ledger[:16]}…)"
+            )
+        if not p["result_id"].startswith(f"RET-RES-{p['result_digest'][:16]}-"):
+            errors.append(
+                f"event {index}: result_id {p['result_id']!r} does not carry "
+                f"the result_digest prefix {p['result_digest'][:16]}"
+            )
 
         for a_index, a_event in assessments_by_key.get(
             (p["activation_id"], p["contract_revision"]), []
@@ -1553,11 +1553,69 @@ def _verify_v02_result_consistency(events: list[dict[str, Any]]) -> list[str]:
                     f"event {a_index}: assessment {a_id} ledger_digest != "
                     f"committed result {p['result_id']} (event {index})"
                 )
+            if not a_id.startswith(f"ASSESS-{p['result_digest'][:16]}-"):
+                errors.append(
+                    f"event {a_index}: assessment {a_id} id does not carry "
+                    f"the committed result_digest prefix {p['result_digest'][:16]}"
+                )
+            a_codes = a_payload.get("reason_codes") or []
+            if p["visibility_degraded"] and "no_fulltext_evidence" not in a_codes:
+                errors.append(
+                    f"event {a_index}: assessment {a_id} for a degraded "
+                    "committed result must carry reason code "
+                    "'no_fulltext_evidence'"
+                )
+            if not p["visibility_degraded"] and "no_fulltext_evidence" in a_codes:
+                errors.append(
+                    f"event {a_index}: assessment {a_id} claims "
+                    "'no_fulltext_evidence' for a committed result with "
+                    "text-level evidence"
+                )
             if a_payload.get("source_counts") != p["source_counts"]:
                 errors.append(
                     f"event {a_index}: assessment {a_id} source_counts "
                     f"{a_payload.get('source_counts')} != committed result "
                     f"{p['result_id']} (event {index})"
+                )
+    return errors
+
+
+_RETRIEVAL_REASON_CODES_ALLOWED = frozenset(
+    {"no_mechanical_coverage_requirement", "no_fulltext_evidence"}
+)
+_RETRIEVAL_REASON_CODES_RETIRED = frozenset(
+    {
+        "structured_result_validation_failed",
+        "low_quality_source_without_annotation",
+    }
+)
+
+
+def _verify_v02_reason_codes(events: list[dict[str, Any]]) -> list[str]:
+    """GAP-RETRIEVAL-STRUCTURED-RESULT 方向 C 全面审查轮 (2026-08-30):
+    the v0.2 retrieval assessment reason_codes vocabulary is mechanical —
+    only the producer's codes are legal; the block-era codes
+    (structured_result_validation_failed / low_quality_source_without_
+    annotation) are retired and must never reappear in fixtures or
+    journals."""
+    errors: list[str] = []
+    for index, event in enumerate(events):
+        if not _is_v02(event) or event.get("event_type") != (
+            "information_sufficiency_assessment"
+        ):
+            continue
+        codes = event["payload"].get("reason_codes") or []
+        for code in codes:
+            if code in _RETRIEVAL_REASON_CODES_RETIRED:
+                errors.append(
+                    f"event {index}: reason code {code!r} is retired "
+                    "(GAP-RETRIEVAL-STRUCTURED-RESULT 方向 C)"
+                )
+            elif code not in _RETRIEVAL_REASON_CODES_ALLOWED:
+                errors.append(
+                    f"event {index}: unknown retrieval assessment reason "
+                    f"code {code!r} (allowed: "
+                    f"{sorted(_RETRIEVAL_REASON_CODES_ALLOWED)})"
                 )
     return errors
 
@@ -1569,13 +1627,9 @@ def _verify_v02_source_weighting(events: list[dict[str, Any]]) -> list[str]:
     - web_page ledger entries MUST carry tier + mechanical_weight +
       weight_reason; the tier/weight pair is fixed (authoritative 1.1 /
       default 1.0 / low_quality 0.7);
-    - model annotation fields are all-or-none and status/weight consistent
-      (annotated -> 0.7; adopted -> >= 1.0; a mechanically low-quality
-      source cannot be adopted);
-    - a low-quality source used in sections/claims MUST carry status
-      "annotated" (v0 annotate-and-rank, no hard interception);
-    - every organized_response.source_annotation matches the merged ledger
-      fields, and every merged ledger field has a matching annotation.
+    - GAP-RETRIEVAL-STRUCTURED-RESULT 方向 C (2026-08-30): the layer-3
+      model annotation vocabulary (model_weight / model_weight_reason /
+      annotation_status) is retired and must be absent.
     """
     errors: list[str] = []
     for index, event in enumerate(events):
@@ -1583,13 +1637,6 @@ def _verify_v02_source_weighting(events: list[dict[str, Any]]) -> list[str]:
             continue
         p = event["payload"]
         ledger = p["source_ledger"]
-        ledger_by_id = {entry["source_id"]: entry for entry in ledger}
-
-        used_ids: set[str] = set()
-        for section in p["organized_response"]["sections"]:
-            used_ids.update(section.get("source_ids", []))
-        for claim in p["organized_response"]["claims"]:
-            used_ids.update(claim.get("source_ids", []))
 
         for entry in ledger:
             sid = entry["source_id"]
@@ -1613,72 +1660,16 @@ def _verify_v02_source_weighting(events: list[dict[str, Any]]) -> list[str]:
                         f"event {index}: source {sid} tier {tier!r} weight "
                         f"{mechanical_weight} violates the fixed tier/weight table"
                     )
-
-            model_weight = entry.get("model_weight")
-            model_reason = entry.get("model_weight_reason")
-            annotation_status = entry.get("annotation_status")
-            model_fields = [model_weight, model_reason, annotation_status]
-            present = [field for field in model_fields if field is not None]
-            if present and len(present) != 3:
+            retired = [
+                field
+                for field in ("model_weight", "model_weight_reason", "annotation_status")
+                if field in entry
+            ]
+            if retired:
                 errors.append(
-                    f"event {index}: source {sid} has partial model annotation fields"
-                )
-            elif present:
-                if model_weight not in _ALLOWED_WEIGHTS:
-                    errors.append(
-                        f"event {index}: source {sid} model_weight {model_weight} "
-                        "outside {0.7, 1.0, 1.1}"
-                    )
-                if annotation_status == "annotated" and model_weight != 0.7:
-                    errors.append(
-                        f"event {index}: source {sid} annotated requires model_weight 0.7"
-                    )
-                if annotation_status == "adopted" and model_weight < 1.0:
-                    errors.append(
-                        f"event {index}: source {sid} adopted requires model_weight >= 1.0"
-                    )
-                if tier == "low_quality" and annotation_status == "adopted":
-                    errors.append(
-                        f"event {index}: source {sid} low_quality cannot be adopted"
-                    )
-
-            if tier == "low_quality" and (
-                sid in used_ids or entry.get("used_in_sections")
-            ) and annotation_status != "annotated":
-                errors.append(
-                    f"event {index}: source {sid} low_quality used without "
-                    "annotated status"
-                )
-
-        annotations = p["organized_response"].get("source_annotations", [])
-        annotation_by_id: dict[str, dict[str, Any]] = {}
-        seen_annotation_ids: set[str] = set()
-        for annotation in annotations:
-            sid = annotation["source_id"]
-            if sid in seen_annotation_ids:
-                errors.append(f"event {index}: duplicate source_annotation for {sid}")
-                continue
-            seen_annotation_ids.add(sid)
-            annotation_by_id[sid] = annotation
-            entry = ledger_by_id.get(sid)
-            if entry is None:
-                errors.append(
-                    f"event {index}: source_annotation references unknown source {sid}"
-                )
-            elif (
-                entry.get("model_weight") != annotation["weight"]
-                or entry.get("model_weight_reason") != annotation["reason"]
-                or entry.get("annotation_status") != annotation["status"]
-            ):
-                errors.append(
-                    f"event {index}: source_annotation for {sid} does not match "
-                    "merged ledger fields"
-                )
-        for entry in ledger:
-            if "model_weight" in entry and entry["source_id"] not in annotation_by_id:
-                errors.append(
-                    f"event {index}: source {entry['source_id']} has model fields "
-                    "without a source_annotation"
+                    f"event {index}: source {sid} carries retired model "
+                    f"annotation fields {retired} "
+                    "(GAP-RETRIEVAL-STRUCTURED-RESULT 方向 C)"
                 )
     return errors
 
@@ -3302,6 +3293,7 @@ def validate_journal_text(text: str) -> list[str]:
         errors.extend(_verify_v02_tool_running(events))
         errors.extend(_verify_v02_retrieval_mode(events))
         errors.extend(_verify_v02_result_consistency(events))
+        errors.extend(_verify_v02_reason_codes(events))
         errors.extend(_verify_v02_source_weighting(events))
         errors.extend(_verify_v02_search_candidate_pool(events))
         errors.extend(_verify_v02_candidate_prefilter(events))

@@ -522,7 +522,7 @@ P5.5 与 P0–P4.5 解耦——第一原型是静态 mock，不依赖 assurance 
 |--------|------|------|
 | 检索范围 | 仅项目内部文档 | 外部检索由其他子代理负责；本项目子代理专注 GSA 项目自身知识 |
 | 模型 API | 独立 DeepSeek v4 Pro | 与主 agent 模型调用链完全隔离；与其他搜索子代理一致 |
-| 返回格式 | 遵循现有 retrieval task contract | 复用 `retrieval_task_contract` → `source_ledger` → `filtering_log` → `organized_response` + `raw_source_refs` 链路；全部输出标记 `delegated_retrieval` / `derived_unverified` |
+| 返回格式 | 遵循现有 retrieval task contract | 复用 `retrieval_task_contract` → 机械 ledger 单轨（`query_summary`/`source_ledger`/`filtering_log`/`raw_source_refs`）；`organized_response` 已随 2026-08-30 方向 C 退役（ADR-0010 §14.45）；全部输出标记 `delegated_retrieval` / `derived_unverified` |
 | 生命周期 | 独立 ConversationNamespace | 子代理对话独立存储，由主 agent 派遣合同 → 关闭确认；复用 P1 namespace 设计 |
 
 ### 架构位置

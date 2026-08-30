@@ -1513,8 +1513,9 @@ S4 复验闭环 2026-08-25（补登记）；S1-S4 全部闭合）
 - [ ] W3-R3 HA 目标架构落地余项：实体 id 形态、分区命名、注册表 Rust 形态
   （含实体 id 相对/绝对/大小写归一——本轮仅落地无状态部分：分隔符与
   `./` 前缀；process/environment 状态探针扩展入账 R3）
-- [ ] W3-R3 A/B 验证：小样本跑分（含 THIN-HARNESS v0.4 R2b 按需读取观察 /
-  R2c `parse_retrieval_result_json` 兜底回收判定）
+- [ ] W3-R3 A/B 验证：小样本跑分（含 THIN-HARNESS v0.4 R2b 按需读取观察；
+  R2c `parse_retrieval_result_json` 兜底回收判定已随 2026-08-30 方向 C
+  裁决物理删除，不再观察——见 ADR-0010 §14.45）
 - [ ] W3-R3 清理与登记：旧序列门文档标记 withdrawn、ADR-0010 减法修订、
   CLI_PROJECT_INDEX 登记（含 BACKLOG/TODO 计数入账）
 - [x] W4-R4 prompt 全空：BASE_SYSTEM_PROMPT 置空（含"工具按需使用"与
@@ -1877,8 +1878,8 @@ submit）**browser_read 已消失**，journal 零 browser_read 痕迹、零拒�
   零检索系结构性缺入口）；Google SERP 仍无样本（子代理直读已知 URL，
   未走搜索引擎页），SERP 门禁数据挂起至第二批引擎 SERP 工具。报告
   §10 追加。
-- [ ] **P1：retrieval_result_committed 组织块契约结构性不可满足（2026-08-30
-  深挖登记；修复方向 C 待用户裁决）**——`[RESULT_JSON]` 组织块 source_ids
+- [x] **P1：retrieval_result_committed 组织块契约结构性不可满足（2026-08-30
+  深挖登记；方向 C 已裁决并实施 S1/S2，S3/S4 待续）**——`[RESULT_JSON]` 组织块 source_ids
   需命中机械 ledger 的 `SRC-001` 等 id，但 id 在子代理跑完后才分配、
   运行中不可见（提示词「reference an actual tool result」不可实现）；
   实证 0h S4（2 次派发）/ mteb-retrieve（5 次）/ R5（1 次）全部
@@ -1891,6 +1892,33 @@ submit）**browser_read 已消失**，journal 零 browser_read 痕迹、零拒�
   （organized_response 校验 + source_weighting annotation 校验）/ fixtures /
   测试 / ADR §3.7 条 12 第三层处置。详见门禁报告 §10.3 / BACKLOG 0k /
   CLI_PROJECT_INDEX（GAP-RETRIEVAL-STRUCTURED-RESULT）。
+  **2026-08-30 用户裁决「按方向 C 进行」+ S1 代码 + S2 测试完成（实施放行
+  入账 32 → 33）**：`agents/retrieval.rs` 删 `parse_retrieval_result_json`
+  及其测试；`prompt.rs` 检索系统提示词删 [RESULT_JSON] 模板段与
+  annotation 要求（测试断言退役词条消失）；`evidence.rs`
+  `build_structured_result` 删 block 解析/校验/annotation 合并，
+  committed payload 回归机械四段，`visibility_degraded`=无文本级证据
+  （reason code `no_fulltext_evidence`），新增 `split_source_declaration`
+  （[SOURCE] 声明行 URL 走 ACAF 网络目标规范化 + 标题独立）；dispatch
+  黑板摘要「结论」计数改「文本证据」；runtime
+  `retrieval-result-event-payload-v0.2.schema.json` 删 organized_response
+  与 model_weight/model_weight_reason/annotation_status（含 allOf/filter
+  enum/$defs）；Python verifier 删 organized_response 与 annotation 校验、
+  补 visibility_degraded 一致性规则；fixtures（minimal.valid /
+  constraint.invalid / tier-weight-mismatch / envelope）与生成脚本同步，
+  三个受影响 v0.2 journal（orientation-fire / real-doc-retrieval /
+  local-browser-read）删 organized_response 并按 verifier 哈希算法重链；
+  ADR-0010 §3.3.3 条 3 / §3.7 条 12 v1.10 / §14.45 登记。验证：orz-loop
+  620/0/3、orz-bin 12/0/12、runtime pytest 319、assurance 76 全绿；
+  S3 重建 + S4 复验待续。
+  **2026-08-30 全面审查轮修复完成**：三路审查（设计/实现/符合性）
+  处理——journal 四段 digest/result_id/ledger_digest 重算 + 事件链重链
+  （含 disposition/close 的 assessment_id 重映射）、orientation 退役
+  reason code 替换、model_output 去 [RESULT_JSON]、verifier 补 digest
+  内容寻址 + reason_codes 词汇表两条自检、v0.2 退役 used_in_sections、
+  生成器补 tool_running 键、split_source_declaration 无空格切分与
+  userinfo 语义固化、文档残留注记。详见 BACKLOG 0k / GATE §10.3 /
+  ADR §14.45。
 
 **第二批（独立设计轮）**：
 - [ ] `project_doc_index` v2（git HEAD 基线 + 工作树增量层 + Blake3 内容哈希 +
@@ -2281,6 +2309,13 @@ daemon 跨 run 常驻。~~模式内混合路由（需修订 ADR-0010 §3.7.12）
 > [BACKLOG P2-10](docs/BACKLOG_AND_PRIORITIES.md) /
 > [索引 AUTH-MECHANICAL-LAYER-MATH-CALCULUS](CLI_PROJECT_INDEX.md)。
 
+> 2026-08-30 追加裁决（设计 §9.11）：LIF 定位=时间性参考系（低精度容忍、
+> 模型无感——计算全落机械层，模型仅消费 temporal 分区渲染结果）；双尺度
+> 基线（长窗环境基线 + 短窗偏离 + 比值渲染）；每任务轮校准（语义固定、秒值
+> 随 T̂ 换算、err 墙钟锚防自指反馈）；观测面扩充优先级（失败目标身份 /
+> stated-vs-done / 环境进展接地 / 序结构 / 混杂控制）；动作层耦合试验
+> P1–P3（102 runs 离线可跑）。不新增决策门，归入 F3/F6 定稿。
+
 **阶段 0 — 开放项裁决（§6；用户决策门）**
 
 - [ ] D1 调用契约裁决：顶层调用方式折中档（tool_calls + 一层 pipe）vs 激进档
@@ -2308,6 +2343,8 @@ daemon 跨 run 常驻。~~模式内混合路由（需修订 ADR-0010 §3.7.12）
   trace→事件链同构核对 §6.4；转正式设计前置）。
 - [ ] F5 ADR-0010 转录（§14.x 新条目；转录后 pending → current-design，
   索引/BACKLOG 同步）。
+- [ ] F6 参考系重定位与观测面扩充定稿（双尺度基线结构、每轮校准分层、观测面
+  扩充优先级、动作层耦合试验 P1–P3、模型无感边界）（§9.11）（依赖 F3/F4）。
 
 **阶段 2 — 实施切片（依赖前序；放行时入账）**
 

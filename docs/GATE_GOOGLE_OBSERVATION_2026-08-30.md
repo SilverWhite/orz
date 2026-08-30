@@ -279,10 +279,47 @@ projection.rs（R1_SEALED + 注释 + 测试改写/迁移），orz-loop 623/0/3
    ledger 工作；但「结构化结果」功能实际失效，visibility_degraded 对
    每次真实块误触发、审计信号失真，organized_response 消费链（dispatch
    摘要结论计数 / schema / Python verifier / fixtures / 测试）同步空转。
-5. **修复方向（C，待用户裁决）**：删除 `[RESULT_JSON]` 契约——子代理
+5. **修复方向（C）**：删除 `[RESULT_JSON]` 契约——子代理
    提示词移除模板段、build_structured_result 删 block 解析/校验/
    annotation 合并、visibility_degraded 语义重定义、dispatch 摘要改口径、
    schema/verifier/fixtures/测试同步、ADR §3.7 条 12 第三层（模型加权
    标注，生产中也从未生效）处置；附带 `[SOURCE]` 声明行 URL 规范化。
    登记：BACKLOG 0k / TODO P0-0k / CLI_PROJECT_INDEX
    （GAP-RETRIEVAL-STRUCTURED-RESULT）。
+
+   **2026-08-30 用户裁决「按 P1 方向 C 进行」+ S1/S2 实施完成**：
+   子代理提示词删除 [RESULT_JSON] 模板段与 annotation 要求；
+   `parse_retrieval_result_json` 删除；`build_structured_result` 删
+   block 解析/校验/annotation 合并，committed payload 回归机械四段
+   （query_summary/source_ledger/filtering_log/raw_source_refs）；
+   `visibility_degraded` 重定义为「机械 ledger 无文本级证据（full/partial
+   均 0）」、reason code `no_fulltext_evidence`；`[SOURCE]` 声明行 URL 走
+   ACAF 网络目标规范化（标题独立入 source_title）；dispatch 黑板摘要口径
+   改为文本证据计数；runtime v0.2 payload schema 删 organized_response 与
+   model_weight/model_weight_reason/annotation_status；Python verifier 删
+   organized_response 与 annotation 校验、补 visibility_degraded 一致性
+   规则；fixtures 与三个受影响 v0.2 journal（重链事件哈希）同步；ADR-0010
+    §3.3.3 条 3 / §3.7 条 12 v1.10 / §14.45 登记。验证：orz-loop 620/0/3、
+    orz-bin 12/0/12、runtime pytest 319、assurance 76 全绿；S3 重建 +
+    S4 复验待续（计数 32 → 33，S4 闭环 -1 待闭）。
+
+6. **全面审查轮修复（2026-08-30 三路审查：设计合理性 / 实现合理性 /
+   设计与实现符合性）**：① 三个 journal 的 result_digest/result_id/
+   ledger_digest 原为旧五段（含 organized_response）摘要，已按 verifier
+   自身算法重算四段摘要并重链（含 disposition/close 的 assessment_id
+   重映射与 close result_digest 更新）；② journal 语义迁移——orientation
+   5 处退役 reason code `structured_result_validation_failed` →
+   `no_fulltext_evidence`，local-browser/real-doc 的 model_output 去除
+   [RESULT_JSON] 块；③ verifier 补两条自检——result_digest/ledger_digest/
+   result_id 内容寻址复核、reason_codes 词汇表（退役词条拒绝 +
+   degraded⇒no_fulltext_evidence 一致性）；④ v0.2 契约退役 used_in_sections
+   （schema/生产者/fixtures/journals/测试同步；v0.1 replay-only 通道
+   不受影响）；⑤ fixture 生成器 SLUGS 补 tool_running 键（修复 main()
+   崩溃，7c85e34 引入）；⑥ split_source_declaration 补无空格「URL，标题」
+   切分与 userinfo 原样保留语义并固化测试；⑦ 文档残留注记补齐。
+   说明：real-doc 的 SRC-001 保持 project_doc——project_doc_index
+   include_content 在当前生产者下仍产出 project_doc + full_text_observed，
+   与 journal 自身工具事件一致；main.rs conformance capture 改用 read_file
+   属捕获场景切换，两路径均为合法生产者路径。local-browser 的 SRC-002 为
+   [DOC] 声明行，整行入 ref 属 [DOC] 语义，不改。验证：三个 journal 严格
+   校验 0 错误；回归计数见 BACKLOG 0k（复验后登记）。

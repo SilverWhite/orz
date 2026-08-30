@@ -23,33 +23,16 @@
       "source_id": "SRC-0001",
       "source_title": "Rust reference",
       "source_url_or_ref": "https://doc.rust-lang.org/reference",
-      "source_type": "web_page",
       "visibility": "full_text_observed",
       "accessed_at": "2026-08-10T00:00:00Z",
       "observed_scope": "full document",
       "missing_scope": "none",
       "relevance": "direct",
-      "used_in_sections": [
-        "Rust channels"
-      ],
       "content_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
       "highest_allowed_claim": "derived"
     }
   ],
   "filtering_log": [],
-  "organized_response": {
-    "sections": [
-      {
-        "section_title": "Rust channels",
-        "content": "std::sync::mpsc provides channels.",
-        "source_ids": [
-          "SRC-0001"
-        ],
-        "claim_strength": "legendary"
-      }
-    ],
-    "claims": []
-  },
   "raw_source_refs": [
     {
       "source_id": "SRC-0001",
@@ -66,5 +49,5 @@
     "metadata_only": 0,
     "unavailable": 0
   },
-  "visibility_degraded": true
+  "visibility_degraded": false
 }
