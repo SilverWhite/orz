@@ -3010,6 +3010,8 @@ impl AgentLoopController {
         // — retrieval lanes never write the main probe map (review fix
         // 2026-08-13).
         self.maybe_note_probe_call_failure(probe_writeback, &tc.name);
+        // P2-10 R2 (2026-08-31): ACAF ticket refusal = deny event.
+        self.feed_lif_deny(None);
         messages.push(Message {
             role: Role::Tool,
             content: msg.clone(),

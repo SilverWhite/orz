@@ -25,6 +25,21 @@ use crate::host::{
 use crate::tool::ToolDispatcher;
 
 impl AgentLoopController {
+    /// P2-10 R2 (2026-08-31): feed a structured denial event into the LIF
+    /// deny channel — the shared entry point for every refusal path
+    /// (anchor mismatch / candidate gate / retired / sealed / permission /
+    /// ACAF / retrieval-mode / role / plan / budget). Mirrors
+    /// `orz_assurance::lif::classify_event_outcome` exactly: a denial is
+    /// its own outcome, not a host error (err) and not a D2 value exit
+    /// (Other). `wall_ms` is None for no-ToolStarted refusals (no execution
+    /// time was spent).
+    pub(crate) fn feed_lif_deny(&self, wall_ms: Option<u64>) {
+        self.lif.lock().unwrap().on_tool_event(
+            AgentLoopController::now_epoch_secs(),
+            orz_assurance::lif::ToolEvent::deny(wall_ms),
+        );
+    }
+
     /// Run a host tool call through the permission and execution gates.
     /// (IP3a IPG evaluation is hoisted to the controller's tool phase — a
     /// block ends the whole phase without further model calls.)
@@ -195,6 +210,8 @@ impl AgentLoopController {
                 tool_calls: Vec::new(),
                 reasoning_content: None,
             });
+            // P2-10 R2 (2026-08-31): retired-tool refusal = deny event.
+            self.feed_lif_deny(None);
             return Ok((
                 ToolResult {
                     output: msg,
@@ -252,6 +269,8 @@ impl AgentLoopController {
                 tool_calls: Vec::new(),
                 reasoning_content: None,
             });
+            // P2-10 R2 (2026-08-31): sealed-tool refusal = deny event.
+            self.feed_lif_deny(None);
             return Ok((
                 ToolResult {
                     output: msg,
@@ -313,6 +332,8 @@ impl AgentLoopController {
                 tool_calls: Vec::new(),
                 reasoning_content: None,
             });
+            // P2-10 R2 (2026-08-31): anchor mismatch refusal = deny event.
+            self.feed_lif_deny(None);
             return Ok((
                 ToolResult {
                     output: msg,
@@ -385,6 +406,8 @@ impl AgentLoopController {
                 tool_calls: Vec::new(),
                 reasoning_content: None,
             });
+            // P2-10 R2 (2026-08-31): retrieval-mode-off refusal = deny event.
+            self.feed_lif_deny(None);
             return Ok((
                 ToolResult {
                     output: msg,
@@ -442,6 +465,8 @@ impl AgentLoopController {
                 tool_calls: Vec::new(),
                 reasoning_content: None,
             });
+            // P2-10 R2 (2026-08-31): framework-fallback mode refusal = deny.
+            self.feed_lif_deny(None);
             return Ok((
                 ToolResult {
                     output: msg,
@@ -496,6 +521,8 @@ impl AgentLoopController {
                 tool_calls: Vec::new(),
                 reasoning_content: None,
             });
+            // P2-10 R2 (2026-08-31): local-browser mode refusal = deny.
+            self.feed_lif_deny(None);
             return Ok((
                 ToolResult {
                     output: msg,
@@ -652,6 +679,8 @@ impl AgentLoopController {
             {
                 rollback_candidate(counter, &url);
             }
+            // P2-10 R2 (2026-08-31): permission deny/defer = deny event.
+            self.feed_lif_deny(None);
             return Ok((
                 result,
                 Some(PolicyFeedback::Denied(DenialKey {
@@ -709,6 +738,8 @@ impl AgentLoopController {
                 // P0-A step 5 (design §5): 调用即探针 — the refused work-tool
                 // call writes back into the minimal previous-round map.
                 self.maybe_note_probe_call_failure(probe_writeback, &tc.name);
+                // P2-10 R2 (2026-08-31): missing test runner = deny event.
+                self.feed_lif_deny(None);
                 return Ok((
                     ToolResult {
                         output: msg,
@@ -1537,6 +1568,9 @@ impl AgentLoopController {
                     tool_calls: Vec::new(),
                     reasoning_content: None,
                 });
+                // P2-10 R2 (2026-08-31): console action-write lane refusal =
+                // deny event.
+                self.feed_lif_deny(None);
                 return Ok((
                     ToolResult {
                         output: msg.to_string(),
@@ -1709,6 +1743,8 @@ impl AgentLoopController {
                         tool_calls: Vec::new(),
                         reasoning_content: None,
                     });
+                    // P2-10 R2 (2026-08-31): order-slot busy refusal = deny.
+                    self.feed_lif_deny(None);
                     return Ok((
                         ToolResult {
                             output: content,
@@ -1752,6 +1788,8 @@ impl AgentLoopController {
                     tool_calls: Vec::new(),
                     reasoning_content: None,
                 });
+                // P2-10 R2 (2026-08-31): plan_write lane refusal = deny event.
+                self.feed_lif_deny(None);
                 return Ok((
                     ToolResult {
                         output: msg.to_string(),
@@ -2512,10 +2550,14 @@ impl AgentLoopController {
                         "reason": pd.reason,
                     });
                 }
-                // P2-10 F3 (I3): feed the LIF engine — timeout = error
-                // (fail-closed effect), exit_code 0 = success, non-zero
-                // exit_code is a VALUE (D2) and stays neutral here.
-                let outcome = if res.timed_out {
+                // P2-10 F3 (I3) + R2 (2026-08-31): feed the LIF engine — a
+                // structured denial (policy_denial marker) is a Deny event,
+                // timeout = error (fail-closed effect), exit_code 0 =
+                // success, non-zero exit_code is a VALUE (D2) and stays
+                // neutral here. Mirrors `classify_event_outcome` exactly.
+                let outcome = if res.policy_denial.is_some() {
+                    orz_assurance::lif::ToolOutcome::Deny
+                } else if res.timed_out {
                     orz_assurance::lif::ToolOutcome::Error
                 } else if res.exit_code == Some(0) {
                     orz_assurance::lif::ToolOutcome::Success
@@ -2853,6 +2895,8 @@ impl AgentLoopController {
             payload["candidate_count"] = serde_json::json!(count);
             payload["candidate_cap"] = serde_json::json!(cap);
         }
+        // P2-10 R2 (2026-08-31): candidate-gate refusal = deny event.
+        self.feed_lif_deny(None);
         writer.record(EventType::ToolCompleted, payload).await?;
         messages.push(Message {
             role: Role::Tool,
@@ -3937,6 +3981,181 @@ mod tests {
             tool_msg.content
         );
 
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// P2-10 R2 (2026-08-31): a permission-denied tool call feeds the LIF
+    /// deny channel (τ=120s, θ=4) — the refusal is a deny event, NOT an err
+    /// (host execution error) and NOT a D2 value exit (Other).
+    #[tokio::test]
+    async fn permission_deny_feeds_lif_deny_channel() {
+        struct DenyHost {
+            journal: JournalRecorder,
+        }
+        #[async_trait]
+        impl LoopHost for DenyHost {
+            fn journal(&self) -> &JournalRecorder {
+                &self.journal
+            }
+            fn tools_registry(&self) -> &dyn ToolRegistry {
+                &EmptyRegistry
+            }
+            async fn request_permission(
+                &self,
+                _risk: RiskClass,
+                _tool: &str,
+                _args: &serde_json::Value,
+            ) -> Result<PermitDecision, PermitError> {
+                Ok(PermitDecision::Deny)
+            }
+            async fn call_tool(
+                &self,
+                _name: &str,
+                _args: serde_json::Value,
+                _call_id: &str,
+            ) -> Result<ToolResult, ToolError> {
+                unreachable!("denied tools never execute");
+            }
+        }
+
+        let dir = test_dir();
+        let journal = JournalRecorder::new(dir.clone());
+        let host = DenyHost { journal };
+        let fake = Arc::new(FakeProvider::new(vec![
+            ScriptedResponse::tool_calls(vec![tool_call("search_replace", "call-r2-1")]),
+            ScriptedResponse::text("完成"),
+            ScriptedResponse::text("完成"),
+        ]));
+        let gateway: Arc<dyn ModelGateway> = fake.clone();
+        let controller = AgentLoopController::with_gateway(gateway);
+        controller
+            .run_turn(&host, "改文件", "RUN-R2-DENY", MANIFEST, 0, None, None, None)
+            .await
+            .unwrap();
+
+        let guard = controller.lif.lock().unwrap();
+        assert!(
+            guard.deny().u() > 0.0,
+            "deny channel must receive the permission denial (u={})",
+            guard.deny().u()
+        );
+        assert_eq!(
+            guard.temporal().total_tool_events(),
+            1,
+            "denial counts as one tool event"
+        );
+        assert_eq!(
+            guard.temporal().total_errors(),
+            0,
+            "a denial is not an execution error"
+        );
+        assert_eq!(guard.err().fire_count(), 0);
+        drop(guard);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// P2-10 R2 (2026-08-31): a sealed-tool refusal (host_exec no-ToolStarted
+    /// narrow gate) feeds the deny channel the same way as a permission
+    /// denial — the structured refusal code is a deny, not an err.
+    #[tokio::test]
+    async fn sealed_tool_denial_feeds_lif_deny_channel() {
+        let dir = test_dir();
+        let journal = JournalRecorder::new(dir.clone());
+        let host = TestHost {
+            journal: journal.clone(),
+            tool_result: Some(ToolResult {
+                output: "never".to_string(),
+                exit_code: Some(0),
+                output_encoding: None,
+                structured: None,
+                ..Default::default()
+            }),
+        };
+        let fake = Arc::new(FakeProvider::new(vec![
+            ScriptedResponse::tool_calls(vec![tool_call("compaction_whitelist_add", "call-r2-2")]),
+            ScriptedResponse::text("完成"),
+            ScriptedResponse::text("完成"),
+        ]));
+        let gateway: Arc<dyn ModelGateway> = fake.clone();
+        let controller = AgentLoopController::with_gateway(gateway);
+        controller
+            .run_turn(&host, "写白名单", "RUN-R2-SEALED", MANIFEST, 0, None, None, None)
+            .await
+            .unwrap();
+
+        let guard = controller.lif.lock().unwrap();
+        assert!(
+            guard.deny().u() > 0.0,
+            "deny channel must receive the sealed-tool denial (u={})",
+            guard.deny().u()
+        );
+        assert_eq!(guard.temporal().total_tool_events(), 1);
+        assert_eq!(guard.temporal().total_errors(), 0);
+        drop(guard);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// P2-10 R2 (2026-08-31): an anchor-mismatch refusal (search_replace
+    /// carrying a stale expected_anchor) feeds the deny channel — the
+    /// GetPut write guard is a structured rejection, not an execution
+    /// error (design §5.2 `anchor_target` family).
+    #[tokio::test]
+    async fn anchor_mismatch_feeds_lif_deny_channel() {
+        let dir = test_dir();
+        let journal = JournalRecorder::new(dir.clone());
+        let host = TestHost {
+            journal: journal.clone(),
+            tool_result: Some(ToolResult {
+                output: "never".to_string(),
+                exit_code: Some(0),
+                output_encoding: None,
+                structured: None,
+                ..Default::default()
+            }),
+        };
+        // Target file with actual content "actual" (size=6); the expected
+        // anchor points at "expected" (size=8) — the size fast-path alone
+        // must reject before any edit.
+        let target = host.session_cwd().join("guard_target.txt");
+        std::fs::write(&target, "actual").unwrap();
+        let expected_sha256 = orz_assurance::sha256_hex(b"expected");
+        let tc = ToolCall {
+            name: "search_replace".to_string(),
+            arguments: serde_json::json!({
+                "file_path": "guard_target.txt",
+                "old_string": "old",
+                "new_string": "new",
+                "expected_anchor": {
+                    "size": 8,
+                    "mtime": 0,
+                    "sha256": expected_sha256,
+                },
+            }),
+            call_id: "call-r2-3".to_string(),
+        };
+        let fake = Arc::new(FakeProvider::new(vec![
+            ScriptedResponse::tool_calls(vec![tc]),
+            ScriptedResponse::text("完成"),
+            ScriptedResponse::text("完成"),
+        ]));
+        let gateway: Arc<dyn ModelGateway> = fake.clone();
+        let controller = AgentLoopController::with_gateway(gateway);
+        controller
+            .run_turn(&host, "改文件", "RUN-R2-ANCHOR", MANIFEST, 0, None, None, None)
+            .await
+            .unwrap();
+
+        let guard = controller.lif.lock().unwrap();
+        assert!(
+            guard.deny().u() > 0.0,
+            "deny channel must receive the anchor mismatch (u={})",
+            guard.deny().u()
+        );
+        assert_eq!(guard.temporal().total_tool_events(), 1);
+        assert_eq!(guard.temporal().total_errors(), 0);
+        drop(guard);
+        // Zero edits: the target file is untouched.
+        assert_eq!(std::fs::read_to_string(&target).unwrap(), "actual");
         let _ = std::fs::remove_dir_all(&dir);
     }
 

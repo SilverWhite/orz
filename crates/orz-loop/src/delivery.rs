@@ -97,6 +97,9 @@ impl AgentLoopController {
             tool_calls: Vec::new(),
             reasoning_content: None,
         });
+        // P2-10 R2 (2026-08-31): console-tool refusal (submit / step_done /
+        // return) = deny event.
+        self.feed_lif_deny(None);
         Ok(ToolResult {
             output: msg.to_string(),
             exit_code: Some(1),

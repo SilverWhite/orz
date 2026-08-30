@@ -9,10 +9,12 @@
 //!   first-pass per-run predicate), stuck θ=1.5·T̂ 0/102 fires + peak θ
 //!   ratio, decision-point total (4157);
 //!
-//! The err predicate is the PRODUCTION predicate (R1 ruling, 2026-08-31):
-//! timeouts and host-level errors (status=error without an exit_code value)
-//! are Error; exit_code 0 is Success; a non-zero exit_code is a D2 VALUE
-//! and stays neutral (Other) — mirroring `host_exec.rs`'s LIF feed exactly.
+//! The outcome predicate is the PRODUCTION predicate (R1/R2 rulings,
+//! 2026-08-31): structured rejections (policy_denial marker or denial code)
+//! are Deny; timeouts and host-level errors (status=error without an
+//! exit_code value) are Error; exit_code 0 is Success; a non-zero exit_code
+//! is a D2 VALUE and stays neutral (Other) — mirroring `host_exec.rs`'s LIF
+//! feed exactly via the shared `classify_event_outcome`.
 //! - C1 time-shuffle (10 seeded permutations) on the err channel — fires
 //!   change on runs where time structure (not pure counting) is at work.
 //!
@@ -24,7 +26,7 @@ use std::path::{Path, PathBuf};
 
 use chrono::DateTime;
 use orz_assurance::lif::{
-    Domain, ErrTauMode, LifEngine, ToolEvent, ToolOutcome,
+    classify_event_outcome, Domain, ErrTauMode, LifEngine, ToolEvent,
 };
 use serde_json::Value;
 
@@ -72,25 +74,6 @@ fn parse_time(s: &str) -> Option<f64> {
         .map(|dt| dt.timestamp_nanos_opt().unwrap_or(0) as f64 / 1e9)
 }
 
-fn outcome_of(payload: &Value) -> ToolOutcome {
-    // Production predicate (R1, 2026-08-31): timeout and host-level error
-    // (status=error with no exit_code value) → Error; exit 0 → Success;
-    // exit≠0 is a D2 structured VALUE → Other (neutral).
-    if payload.get("timed_out").and_then(Value::as_bool) == Some(true) {
-        return ToolOutcome::Error;
-    }
-    if payload.get("status").and_then(Value::as_str) == Some("error")
-        && payload.get("exit_code").is_none()
-    {
-        return ToolOutcome::Error;
-    }
-    match payload.get("exit_code").and_then(Value::as_i64) {
-        Some(0) => ToolOutcome::Success,
-        Some(_) => ToolOutcome::Other,
-        None => ToolOutcome::Other,
-    }
-}
-
 fn wall_ms_of(payload: &Value) -> Option<u64> {
     payload.get("wall_ms").and_then(Value::as_u64)
 }
@@ -129,7 +112,7 @@ fn parse_run(path: &Path) -> (String, Vec<Step>) {
                 }
             }
             "tool_completed" => {
-                let outcome = outcome_of(&payload);
+                let outcome = classify_event_outcome(&payload);
                 let wall_ms = wall_ms_of(&payload);
                 steps.push(Step::Tool(ts, ToolEvent { outcome, wall_ms }));
             }

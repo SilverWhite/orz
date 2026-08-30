@@ -22,9 +22,9 @@ pub mod estimator;
 pub mod temporal;
 
 pub use channels::{
-    ChannelKind, FirstOrderChannel, StuckChannel, ToolEvent, ToolOutcome,
-    DENY_REFRACTORY_SECS, DENY_TAU_SECS, DENY_THETA, ERR_REFRACTORY_SECS, ERR_TAU_SECS,
-    ERR_THETA, PROG_TAU_ROUNDS, SLOW_REFRACTORY_SECS, SLOW_TAU_SECS, SLOW_THETA,
+    classify_event_outcome, is_denial_code, ChannelKind, FirstOrderChannel, StuckChannel,
+    ToolEvent, ToolOutcome, DENY_REFRACTORY_SECS, DENY_TAU_SECS, DENY_THETA, ERR_REFRACTORY_SECS,
+    ERR_TAU_SECS, ERR_THETA, PROG_TAU_ROUNDS, SLOW_REFRACTORY_SECS, SLOW_TAU_SECS, SLOW_THETA,
     SLOW_W_MAX, SLOW_WALL_MS_THRESHOLD, STALL_GAP_THRESHOLD_SECS, STALL_REFRACTORY_SECS,
     STALL_TAU_SECS, STALL_THETA, STUCK_REFRACTORY_ROUNDS, STUCK_TAU_ROUNDS, STUCK_THETA_ROUNDS,
 };
@@ -208,6 +208,9 @@ impl LifEngine {
             ToolOutcome::Error => {
                 self.err.spike(t, 1.0);
             }
+            ToolOutcome::Deny => {
+                self.deny.spike(t, 1.0);
+            }
             ToolOutcome::Success => {
                 self.prog.spike(t, 1.0);
             }
@@ -294,5 +297,28 @@ impl LifEngine {
 
     pub fn temporal_mut(&mut self) -> &mut TemporalState {
         &mut self.temporal
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn deny_events_feed_deny_channel_and_not_err() {
+        // R2 (2026-08-31): five 10 s-spaced deny events fire the deny
+        // channel (θ=4, τ=120s) while leaving the err channel untouched —
+        // a rejection is not an execution error.
+        let mut engine = LifEngine::new();
+        for i in 1..=4 {
+            engine.on_tool_event(i as f64 * 10.0, ToolEvent::deny(Some(0)));
+            assert_eq!(engine.deny().fire_count(), 0);
+            assert_eq!(engine.err().fire_count(), 0);
+        }
+        engine.on_tool_event(50.0, ToolEvent::deny(Some(0)));
+        assert_eq!(engine.deny().fire_count(), 1);
+        assert_eq!(engine.err().fire_count(), 0);
+        assert_eq!(engine.temporal().total_tool_events(), 5);
+        assert_eq!(engine.temporal().total_errors(), 0);
     }
 }

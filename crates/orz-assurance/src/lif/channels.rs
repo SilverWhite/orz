@@ -68,6 +68,12 @@ pub enum ChannelKind {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ToolOutcome {
     Error,
+    /// A structured rejection — a gate refused the call (anchor mismatch,
+    /// candidate cap, retired/sealed tool, permission/ACAF/mode refusal,
+    /// role/plan-gate denial). Distinct from a host-level execution error
+    /// (`Error`) and from a D2 value exit (`Other`); feeds the deny
+    /// channel (design §4.3, R2 wiring 2026-08-31).
+    Deny,
     Success,
     Other,
 }
@@ -86,6 +92,13 @@ impl ToolEvent {
         }
     }
 
+    pub fn deny(wall_ms: Option<u64>) -> Self {
+        Self {
+            outcome: ToolOutcome::Deny,
+            wall_ms,
+        }
+    }
+
     pub fn success(wall_ms: Option<u64>) -> Self {
         Self {
             outcome: ToolOutcome::Success,
@@ -98,6 +111,75 @@ impl ToolEvent {
             outcome: ToolOutcome::Other,
             wall_ms,
         }
+    }
+}
+
+/// Deny-channel input vocabulary (R2 wiring, 2026-08-31): the structured
+/// rejection codes that classify a `tool_completed(status=error)` event as a
+/// deny rather than a host-level execution error (`Error`) or a D2 value
+/// exit (`Other`). Mirrors the production refusal paths in `orz-loop`
+/// (`host_exec.rs` / `agent_loop.rs`): anchor mismatch, candidate gate,
+/// retired/sealed tool, permission/ACAF/mode, role gate, plan gate, budget.
+pub fn is_denial_code(code: &str) -> bool {
+    matches!(
+        code,
+        "content_anchor_mismatch"
+            | "sealed_tool_denied"
+            | "retired_tool_denied"
+            | "retrieval_mode_off"
+            | "retrieval_mode_requires_framework_fallback"
+            | "retrieval_mode_requires_local_browser"
+            | "permission_deny"
+            | "permission_defer"
+            | "missing_test_runner"
+            | "retrieval_role_write_denied"
+            | "retrieval_role_execution_denied"
+            | "retrieval_role_shell_denied"
+            | "nested_subagent_dispatch_refused"
+            | "control_tool_lane_denied"
+            | "plan_round_tool_denied"
+            | "plan_write_already_submitted"
+            | "plan_write_lane_denied"
+            | "plan_write_disabled"
+            | "round_inject_budget_exceeded"
+            | "submit_disabled"
+            | "submit_lane_denied"
+            | "console_return_lane_denied"
+            | "console_action_write_lane_denied"
+            | "order_slot_busy"
+    ) || code.starts_with("control_ticket_rejected:")
+        || code.starts_with("console_step_done_")
+        || code.ends_with("_candidate_count_unbound")
+        || code.ends_with("_candidate_url_missing")
+        || code.ends_with("_candidate_cap_exceeded")
+}
+
+/// Classify a `tool_completed` event payload into the LIF outcome using the
+/// SAME predicate as the production feed (R1/R2 ruling 2026-08-31): deny
+/// events win first (policy_denial marker or structured rejection code),
+/// then timeout / host-level error (status=error with no exit_code value),
+/// then D2 value semantics (exit 0 = Success, non-zero = Other).
+pub fn classify_event_outcome(payload: &serde_json::Value) -> ToolOutcome {
+    if payload.get("policy_denial").is_some() {
+        return ToolOutcome::Deny;
+    }
+    if let Some(code) = payload.get("error").and_then(serde_json::Value::as_str)
+        && is_denial_code(code)
+    {
+        return ToolOutcome::Deny;
+    }
+    if payload.get("timed_out").and_then(serde_json::Value::as_bool) == Some(true) {
+        return ToolOutcome::Error;
+    }
+    if payload.get("status").and_then(serde_json::Value::as_str) == Some("error")
+        && payload.get("exit_code").is_none()
+    {
+        return ToolOutcome::Error;
+    }
+    match payload.get("exit_code").and_then(serde_json::Value::as_i64) {
+        Some(0) => ToolOutcome::Success,
+        Some(_) => ToolOutcome::Other,
+        None => ToolOutcome::Other,
     }
 }
 
@@ -416,6 +498,112 @@ mod tests {
         assert!(ch.check_fire(50.0));
         assert_eq!(ch.fire_count(), 1);
         assert_eq!(ch.u(), 0.0);
+    }
+
+    #[test]
+    fn deny_fires_when_potential_reaches_theta_and_resets() {
+        // R2 (2026-08-31): the deny channel is a plain first-order channel
+        // with τ=120s, θ=4, refractory=60s — a fifth 10 s-spaced deny
+        // event pushes u ≥ θ (the first four reach ≈3.55).
+        let mut ch = FirstOrderChannel::deny();
+        for i in 1..=4 {
+            ch.spike(i as f64 * 10.0, 1.0);
+            ch.check_fire(i as f64 * 10.0);
+            assert_eq!(ch.fire_count(), 0);
+        }
+        ch.spike(50.0, 1.0);
+        assert!(ch.check_fire(50.0));
+        assert_eq!(ch.fire_count(), 1);
+        assert_eq!(ch.u(), 0.0);
+    }
+
+    #[test]
+    fn deny_code_vocabulary_classifies_production_refusals() {
+        // R2 (2026-08-31): every production refusal path code is a deny;
+        // D2 value exits (exit≠0 without a refusal code) and host errors
+        // stay outside the vocabulary.
+        for code in [
+            "content_anchor_mismatch",
+            "sealed_tool_denied",
+            "retired_tool_denied",
+            "retrieval_mode_off",
+            "retrieval_mode_requires_framework_fallback",
+            "retrieval_mode_requires_local_browser",
+            "permission_deny",
+            "permission_defer",
+            "missing_test_runner",
+            "retrieval_role_write_denied",
+            "retrieval_role_execution_denied",
+            "retrieval_role_shell_denied",
+            "nested_subagent_dispatch_refused",
+            "control_tool_lane_denied",
+            "plan_round_tool_denied",
+            "plan_write_already_submitted",
+            "plan_write_lane_denied",
+            "plan_write_disabled",
+            "round_inject_budget_exceeded",
+            "submit_disabled",
+            "submit_lane_denied",
+            "console_return_lane_denied",
+            "console_action_write_lane_denied",
+            "order_slot_busy",
+            "control_ticket_rejected:missing_target_argument",
+            "web_fetch_candidate_cap_exceeded",
+            "browser_read_candidate_url_missing",
+            "web_fetch_candidate_count_unbound",
+            "console_step_done_not_direct",
+        ] {
+            assert!(is_denial_code(code), "{code} must be a denial code");
+        }
+        for code in [
+            "tool execution failed: unsupported content type",
+            "command not found: python",
+            "response body exceeds maximum size",
+            "validation_failed",
+            "refill_requested",
+        ] {
+            assert!(!is_denial_code(code), "{code} must NOT be a denial code");
+        }
+    }
+
+    #[test]
+    fn classify_event_outcome_matches_production_predicate() {
+        // R2 (2026-08-31): deny wins first (policy_denial marker or refusal
+        // code), then timeout / host-level error, then D2 value semantics —
+        // the exact predicate host_exec feeds and lif_replay replays.
+        let deny = serde_json::json!({
+            "status": "error",
+            "exit_code": 1,
+            "error": "content_anchor_mismatch",
+        });
+        assert_eq!(classify_event_outcome(&deny), ToolOutcome::Deny);
+
+        let deny_marker = serde_json::json!({
+            "status": "error",
+            "exit_code": 1,
+            "error": "permission_deny",
+            "policy_denial": {"source": "permission"},
+        });
+        assert_eq!(classify_event_outcome(&deny_marker), ToolOutcome::Deny);
+
+        let timeout = serde_json::json!({
+            "status": "error",
+            "timed_out": true,
+        });
+        assert_eq!(classify_event_outcome(&timeout), ToolOutcome::Error);
+
+        let host_error = serde_json::json!({
+            "status": "error",
+            "error": "tool execution failed: boom",
+        });
+        assert_eq!(classify_event_outcome(&host_error), ToolOutcome::Error);
+
+        let success = serde_json::json!({ "exit_code": 0 });
+        assert_eq!(classify_event_outcome(&success), ToolOutcome::Success);
+
+        // D2 value exit — non-zero exit without a refusal code stays Other.
+        let value = serde_json::json!({ "exit_code": 1, "error": "command failed" });
+        assert_eq!(classify_event_outcome(&value), ToolOutcome::Other);
     }
 
     #[test]

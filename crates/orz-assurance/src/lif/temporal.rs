@@ -99,6 +99,7 @@ impl From<ToolOutcome> for ToolOutcomeBucket {
         match v {
             ToolOutcome::Error => ToolOutcomeBucket::Error,
             ToolOutcome::Success => ToolOutcomeBucket::Success,
+            ToolOutcome::Deny => ToolOutcomeBucket::Other,
             ToolOutcome::Other => ToolOutcomeBucket::Other,
         }
     }
@@ -155,6 +156,10 @@ impl TemporalState {
                 self.total_successes += 1;
                 self.has_success = true;
             }
+            // A denial is a completed tool call (counts as an event) but is
+            // neither an error nor a success for the err10/succ10 window —
+            // the deny channel owns its semantic (§4.3).
+            ToolOutcome::Deny => {}
             ToolOutcome::Other => {}
         }
         self.tool_outcomes.push_back(outcome.into());
@@ -372,6 +377,26 @@ mod tests {
         st.observe_tool_outcome(ToolOutcome::Success);
         st.record_round(20.0, 8.0, 1.0, 0.5, 0.3);
         assert_eq!(st.now().unwrap().domain, Domain::Normal);
+    }
+
+    #[test]
+    fn deny_is_neutral_for_err10_succ10_but_counts_as_tool_event() {
+        // R2 (2026-08-31): a denial is a completed tool call (total events
+        // increments) but is neither an error nor a success for the
+        // err10/succ10 window — the deny channel owns that semantic.
+        let mut st = TemporalState::new();
+        st.observe_tool_outcome(ToolOutcome::Success);
+        st.observe_tool_outcome(ToolOutcome::Deny);
+        st.observe_tool_outcome(ToolOutcome::Error);
+        st.observe_tool_outcome(ToolOutcome::Deny);
+        assert_eq!(st.total_tool_events(), 4);
+        assert_eq!(st.total_errors(), 1);
+        assert_eq!(st.total_successes(), 1);
+        assert!(st.has_success());
+        // err10/succ10: 2 events in the last-10 window are Error/Success;
+        // the two denies are neutral.
+        assert_eq!(st.err10(), 0.1);
+        assert_eq!(st.succ10(), 0.1);
     }
 
     #[test]

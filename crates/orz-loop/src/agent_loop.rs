@@ -2182,6 +2182,8 @@ pub(crate) async fn run_agent_loop(
                                 .load(std::sync::atomic::Ordering::SeqCst),
                         )
                         .await?;
+                        // P2-10 R2 (2026-08-31): inject-budget refusal = deny.
+                        controller.feed_lif_deny(None);
                         match f {
                             Some(PolicyFeedback::Denied(key)) => round_denials.push(key),
                             Some(PolicyFeedback::Succeeded) => round_had_success = true,
@@ -2272,6 +2274,8 @@ pub(crate) async fn run_agent_loop(
                         .load(std::sync::atomic::Ordering::SeqCst),
                 )
                 .await?;
+                // P2-10 R2 (2026-08-31): inject-budget refusal = deny.
+                controller.feed_lif_deny(None);
                 match feedback {
                     Some(PolicyFeedback::Denied(key)) => round_denials.push(key),
                     Some(PolicyFeedback::Succeeded) => round_had_success = true,
@@ -2297,6 +2301,8 @@ pub(crate) async fn run_agent_loop(
                         .load(std::sync::atomic::Ordering::SeqCst),
                 )
                 .await?;
+                // P2-10 R2 (2026-08-31): plan-round refusal = deny.
+                controller.feed_lif_deny(None);
                 match f {
                     PolicyFeedback::Denied(key) => round_denials.push(key),
                     PolicyFeedback::Succeeded => round_had_success = true,
@@ -2317,6 +2323,8 @@ pub(crate) async fn run_agent_loop(
                         .load(std::sync::atomic::Ordering::SeqCst),
                 )
                 .await?;
+                // P2-10 R2 (2026-08-31): plan-round refusal = deny.
+                controller.feed_lif_deny(None);
                 match f {
                     PolicyFeedback::Denied(key) => round_denials.push(key),
                     PolicyFeedback::Succeeded => round_had_success = true,
@@ -2360,6 +2368,8 @@ pub(crate) async fn run_agent_loop(
                                 .load(std::sync::atomic::Ordering::SeqCst),
                         )
                         .await?;
+                        // P2-10 R2 (2026-08-31): role-gate refusal = deny.
+                        controller.feed_lif_deny(None);
                         round_feedback = Some(f);
                         r
                     } else {
@@ -2395,6 +2405,8 @@ pub(crate) async fn run_agent_loop(
                                 .load(std::sync::atomic::Ordering::SeqCst),
                         )
                         .await?;
+                        // P2-10 R2 (2026-08-31): role-gate refusal = deny.
+                        controller.feed_lif_deny(None);
                         round_feedback = Some(f);
                         r
                     } else {
@@ -2419,6 +2431,8 @@ pub(crate) async fn run_agent_loop(
                                 .load(std::sync::atomic::Ordering::SeqCst),
                         )
                         .await?;
+                        // P2-10 R2 (2026-08-31): role-gate refusal = deny.
+                        controller.feed_lif_deny(None);
                         round_feedback = Some(f);
                         r
                     } else {
