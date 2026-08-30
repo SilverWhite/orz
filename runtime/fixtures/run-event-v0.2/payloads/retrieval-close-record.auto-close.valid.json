@@ -9,6 +9,7 @@
   "assessment_id": "ASSESS-0001",
   "validated_disposition_id": null,
   "terminal_reason": "auto_close",
+  "effort": "extended",
   "resumable": true,
   "live_state_reset": true,
   "archive_ref": "archive/ACT-EXT-0001"

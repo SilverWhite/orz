@@ -2142,6 +2142,11 @@ def check_repository() -> dict[str, Any]:
         run_event_v02_payload_root / f"{slug}.constraint.invalid.json": schema
         for slug, schema in run_event_v02_payload_schema_by_slug.items()
     }
+    # RETRIEVAL-ORCHESTRATION-MECHANICAL 0k 第二批 (2026-08-30)：
+    # close-record 可选 `effort` 档的未知值负例（schema enum 拒绝）。
+    run_event_v02_payload_negative_contracts[
+        run_event_v02_payload_root / "retrieval-close-record.bad-effort.invalid.json"
+    ] = close_record_schema
     # P0-D review fix (2026-08-14): extra context_compressed fixtures for
     # the v1.14 shapes — session_end reason, guard-retry force and the
     # explicit archive-write failure (schema-valid positives), plus the

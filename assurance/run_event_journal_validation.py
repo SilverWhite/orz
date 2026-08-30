@@ -2799,11 +2799,21 @@ def _verify_v02_lifecycle(events: list[dict[str, Any]]) -> list[str]:
     # itself a §4.4 violation (close is terminal for the activation).
     close_first: dict[str, int] = {}
     for index, event in closes:
+        payload = event["payload"]
         activation = event["payload"]["activation_id"]
+        # RETRIEVAL-ORCHESTRATION-MECHANICAL 0k 第二批 (2026-08-30)：
+        # close-record 可选 `effort` 档——显式白名单自检（jsonschema 已
+        # 锁枚举，verifier 再显式核一遍，防 schema 未接线时静默漂移）。
+        effort = payload.get("effort")
+        if effort is not None and effort not in ("standard", "extended", "deep"):
+            errors.append(
+                f"event {index}: close record effort {effort!r} is not a "
+                "known delegation tier (standard/extended/deep)"
+            )
         if activation in close_first:
             errors.append(
                 f"event {index}: second close record "
-                f"{event['payload']['close_record_id']} on activation "
+                f"{payload['close_record_id']} on activation "
                 f"{activation} (first at event {close_first[activation]})"
             )
         else:

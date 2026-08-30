@@ -9,6 +9,7 @@
   "assessment_id": "ASSESS-0001",
   "validated_disposition_id": "DISP-0001",
   "terminal_reason": "normal_close",
+  "effort": "standard",
   "resumable": true,
   "live_state_reset": true,
   "archive_ref": "archive/ACT-EXT-0001"

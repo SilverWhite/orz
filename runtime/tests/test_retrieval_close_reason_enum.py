@@ -44,7 +44,12 @@ ALL_REASONS = {
 POSITIVE_FIXTURES = (
     "retrieval-close-record.subagent-timeout.valid.json",
     "retrieval-close-record.auto-close.valid.json",
+    "retrieval-close-record.minimal.valid.json",
 )
+
+# RETRIEVAL-ORCHESTRATION-MECHANICAL 0k 第二批 (2026-08-30)：close-record
+# 可选 `effort` 档枚举——缺任一档都是 schema 漂移；未知档必须被严格拒绝。
+ALL_EFFORTS = {"standard", "extended", "deep"}
 
 
 def load_json(path: Path) -> object:
@@ -71,6 +76,22 @@ class RetrievalCloseReasonEnumTests(unittest.TestCase):
             f"{sorted(REQUIRED_REASONS - enum)}",
         )
         self.assertEqual(enum, ALL_REASONS)
+
+    def test_effort_enum_contains_all_tiers(self) -> None:
+        schema = load_json(CLOSE_RECORD_SCHEMA)
+        effort = set(schema["properties"]["effort"]["enum"])
+        self.assertEqual(
+            effort,
+            ALL_EFFORTS,
+            f"close-record effort enum drift: {sorted(ALL_EFFORTS - effort)}",
+        )
+
+    def test_bad_effort_fails_closed(self) -> None:
+        errors = errors_for(FIXTURE_DIR / "retrieval-close-record.bad-effort.invalid.json")
+        self.assertTrue(
+            errors,
+            "unknown effort tier must be rejected by the close-record schema",
+        )
 
     def test_new_reason_fixtures_validate(self) -> None:
         for name in POSITIVE_FIXTURES:

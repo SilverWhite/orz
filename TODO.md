@@ -1921,10 +1921,24 @@ submit）**browser_read 已消失**，journal 零 browser_read 痕迹、零拒�
   ADR §14.45。
 
 **第二批（独立设计轮）**：
-- [ ] `project_doc_index` v2（git HEAD 基线 + 工作树增量层 + Blake3 内容哈希 +
-  索引驻留）。
-- [ ] 会话级 tab 池 + 同轮多页并行读取。
-- [ ] 委托契约复杂度分档。
+- [x] **第二批设计轮定稿 + 用户裁决（2026-08-30）**：设计文档
+  `docs/RETRIEVAL_ORCHESTRATION_MECHANICAL_BATCH2_DESIGN_2026-08-30.md`
+  （三项全部机械层、模型面零改动；开放项 3 条按推荐默认落实）。
+- [x] `project_doc_index` v2（git HEAD 基线 + 工作树增量层 + Blake3 内容哈希 +
+  索引驻留 + 写后失效）——**2026-08-30 S1 代码 + S2 测试完成**：git 双基线
+  + 增量（`git status -z`）+ blake3 条目身份 + 驻留零 stat + mark_dirty
+  写钩子（host search_replace/run_terminal_cmd 完成即置位）；非 git 回退
+  v1；测试 20/0。S3 重建 + 实机验证待续。
+- [x] 会话级 tab 池 + 同轮多页并行读取——**2026-08-30 S1 代码 + S2 测试完成**：
+  有界 target 池（默认 4，env 可配，0=回退）+ 独占租约 + LRU + 创建串行化；
+  manager 去整读锁（Arc 短取，同轮 browser_read 真正并发）；下载不池化；
+  DNS 缓存（TTL 300s）；ADR §14.46 措辞补写；测试 55/0/3。S3 重建 + 实机
+  验证待续。
+- [x] 委托契约复杂度分档——**2026-08-30 S1 代码 + S2 测试完成**：
+  `classify_retrieval_effort` 纯函数三档 + 预算映射（墙钟/轮数/max_results/
+  browser_read 并行）+ env 覆盖；close record 可选 `effort`（schema +
+  verifier + fixtures + 防回归）；不扩 [DOC]/注入上限；测试 8 项 + dispatch
+  集成。S3 重建 + 实机验证待续。
 
 **暂缓/否决（不实施）**：`retrieve_project_docs` 维持封存
 （`R1_SEALED_MAIN_TOOLS` 不动）；向量语义检索；web_search 并发 >1；浏览器

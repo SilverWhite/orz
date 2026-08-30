@@ -9,7 +9,7 @@
   "assessment_id": null,
   "validated_disposition_id": null,
   "terminal_reason": "subagent_timeout",
-  "effort": "deep",
+  "effort": "turbo",
   "resumable": true,
   "live_state_reset": true,
   "archive_ref": "run-journal:RUN-0001"

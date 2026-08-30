@@ -59,6 +59,15 @@
         "subagent_timeout"
       ]
     },
+    "effort": {
+      "type": "string",
+      "enum": [
+        "standard",
+        "extended",
+        "deep"
+      ],
+      "description": "RETRIEVAL-ORCHESTRATION-MECHANICAL 0k 第二批 (2026-08-30): 委托契约复杂度档（机械分档；可选——旧 journal 与恢复激活不携带）。"
+    },
     "resumable": { "type": "boolean" },
     "live_state_reset": { "type": "boolean" },
     "archive_ref": { "type": "string", "minLength": 1 }

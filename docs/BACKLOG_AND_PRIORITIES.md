@@ -1593,6 +1593,38 @@ S1-S4 全部闭合）
   SRC-002 为 [DOC] 声明行，整行入 ref 属 [DOC] 语义，不改。验证：
   三个 journal 严格校验 0 错误；回归计数见 TODO P0-0k（复验后登记）。
 
+- **2026-08-30 第二批（独立设计轮定稿 + 用户裁决「按建议落实」；S1 代码
+  + S2 测试完成，实施放行入账 33 → 34；S3 重建 + 实机验证待续）**：三项
+  全部机械层、模型面零改动（`retrieve_project_docs` / `project_doc_index`
+  维持 R1 封存不动）。
+  - `project_doc_index` v2：git HEAD 基线 + 工作树增量层（`git status
+    --porcelain -z --no-renames --untracked-files=all`）+ Blake3 内容哈希
+    （条目内容身份，workspace 既有依赖零新增）+ 驻留索引（dirty 未置 +
+    节流窗口 30s 内 query 零全树 stat）+ 写后失效钩子（search_replace /
+    run_terminal_cmd 完成即 mark_dirty，模型刚写内容立即可搜）；非 git
+    工作区回退 v1（行为不变）；未跟踪删除经存在性核验补盲；同 size+mtime
+    且 git 双 clean 残余盲区登记（逃生阀保留）。测试 20/0（含 git 夹具
+    4 项：基线+增量、驻留快路径+写后失效、逃生阀、排除目录）。
+  - 会话级 tab 池 + 同轮多页并行读取：有界 N 个 CDP target 常驻（默认 4，
+    `ORZ_BROWSER_TAB_POOL_SIZE`，0=回退现状），租约独占 / 归还复用 / LRU
+    选空闲 / 创建串行化（池有界）；`LocalBrowserManager` 去整读锁（Arc
+    短取），同轮多个 browser_read 真正并发；下载路径不池化；DNS 预检会话
+    级缓存（host + TTL 300s，redirect 重检门保留）；ADR-0010 §3.7.6 条 6
+    措辞补写（§14.46）；ALLOWED_CDP_METHODS 集合不变。测试 55/0/3。
+  - 委托契约复杂度分档：纯函数 `classify_retrieval_effort`（query 长度 /
+    广度聚合词面 / scope 形态 / max_results / lane）→ standard / extended /
+    deep；档位只调执行预算（墙钟 240/600/900s、轮数 30/60/90 与主车道取
+    min、max_results 默认 5/8/12、同轮 browser_read 并行 2/4/不限），
+    **不扩大 [DOC]/[SOURCE] 16 行/8K 与注入预算上限**；显式 env（含
+    `ORZ_RETRIEVAL_EFFORT`）优先于档位默认；`retrieval_close_record` 登记
+    可选 `effort`（schema 先行：enum + verifier 白名单 + fixtures +
+    防回归测试）。测试：effort 纯函数 8 项 + dispatch 集成（close record
+    effort）+ projection goal 档位默认。
+  - 验证：orz-loop 629/0/3、orz-host 239/0/4（串行；并行仅既有
+    `call_tool_timeout_kills_process_tree` flake）、orz-bin 12/0/12、
+    runtime pytest 325、fmt/clippy 无新增告警。登记：ADR-0010 §14.46 /
+    设计文档 `docs/RETRIEVAL_ORCHESTRATION_MECHANICAL_BATCH2_DESIGN_2026-08-30.md`。
+
 ### 1. FUS-TOOL-PROBE（`implemented`；P0-A 批次 1-7 与 P0-A-2 已闭合）
 
 - 入口：[设计](TOOL_AVAILABILITY_PROBE_DESIGN_2026-08-13.md)；索引：[CLI_PROJECT_INDEX.md](../CLI_PROJECT_INDEX.md)。

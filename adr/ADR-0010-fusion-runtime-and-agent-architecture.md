@@ -3972,3 +3972,41 @@ ADR §3.6 正文修订随实施登记。
      `assurance/retrieval_subagent.py` / `deepseek_runtime_adapter.py`
      的 v0.1 replay-only 通道保留 organized_response，不在退役范围，
      S4 复验不得误用该通道。
+
+### 14.46 v1.46 补写裁决索引（2026-08-30）
+
+本节记录冻结后的显式补写；规范正文以所指章节为准，补写明确
+取代以下既往条款。
+
+1. **检索编排机械层第二批设计定稿（2026-08-30 独立设计轮；用户裁决
+   「按建议落实」；修订 §3.7.6 条 6 的 tab 生命周期措辞）**：
+   - **`project_doc_index` v2**：git HEAD 基线 + 工作树增量层
+     （`git status --porcelain -z --no-renames --untracked-files=all`）+
+     Blake3 内容哈希（条目内容身份）+ 驻留索引（dirty 未置 + 节流窗口内
+     query 零全树 stat）+ 写后失效钩子（search_replace / run_terminal_cmd
+     完成后 `mark_dirty`，模型刚写内容立即可搜）；非 git 工作区回退 v1
+     （每 query 全树 stat 语义不变）。同 size+mtime 且 git 双 clean 的
+     残余盲区登记收敛（逃生阀保留）。
+   - **会话级 tab 池 + 同轮多页并行读取**（§3.7.6 条 6 措辞修订）：
+     有界 N 个 CDP target 常驻（默认 4，`ORZ_BROWSER_TAB_POOL_SIZE`，
+     0=回退每调用 create/close），每次读取**独占租约**、归还复用、LRU
+     选空闲；「one tab lives exactly for this call」语义调整为「一次调用
+     独占一个 target 的控制权」——target 可机械池化复用，模型永不接触
+     tab 句柄、内容/控制权不跨调用共享（同一 session 单 profile 的
+     cookie/localStorage 共享是既有事实）；manager 不再整读持锁，同轮
+     多个 `browser_read` 真正并发（`PARALLEL_READ_TOOLS` 已含
+     browser_read）。下载路径（`download_or_read`）不池化。顺带 DNS
+     预检会话级缓存（host + TTL，默认 300s，redirect 重检门保留）。
+   - **委托契约复杂度分档**：纯函数 `classify_retrieval_effort`
+     （query 长度 / 广度聚合词面 / scope 形态 / max_results / lane）→
+     三档 `standard`/`extended`/`deep`；档位只调执行预算——墙钟
+     240/600/900s、轮数 30/60/90（与主车道取 min）、max_results 默认
+     5/8/12、同轮 browser_read 并行 2/4/不限；**不扩大 [DOC]/[SOURCE]
+     16 行/8K 与注入预算上限**；显式 env
+     （`ORZ_RETRIEVAL_SUBAGENT_TIMEOUT_SECS` /
+     `ORZ_RETRIEVAL_MAX_TOOL_ROUNDS` / `ORZ_RETRIEVAL_EFFORT`）优先于
+     档位默认；`retrieval_close_record` 登记可选 `effort`（schema 先行）。
+   - **登记**：BACKLOG 0k / TODO P0-0k / 设计文档
+     `docs/RETRIEVAL_ORCHESTRATION_MECHANICAL_BATCH2_DESIGN_2026-08-30.md` /
+     CLI_PROJECT_INDEX（FUS-RETRIEVAL-ENGINE-SERP /
+     GAP-PROJECT-DOC-INDEX-CACHE）。
