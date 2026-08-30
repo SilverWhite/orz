@@ -176,13 +176,15 @@ BACKLOG P2-10 仅保留指针。放行计数不变（未闭合仍 38）：R1–R
 ## 7. 处理状态（2026-08-31 更新）
 
 R1–R9 与 F10–F14 处理状态（R1/R2/R5 经 2026-08-31 用户裁决后执行；R2/R5
-裁决为独立待办下一轮实施）：
+裁决为独立待办并已实施）：
 
 | 项 | 状态 | 实测证据 |
 |---|---|---|
 | R1 | **已修** | 2026-08-31 用户裁定「维持生产口径」：err=超时+宿主级错误（status=error 无 exit_code 值），exit≠0=D2 值（Other）。lif_replay outcome_of 对齐生产谓词；102-run 重跑（`LIF_102RUNS_REPLAY_2026-08-31_R1.json`）：err 1 run/1 fire、stuck 峰值 θ 比 0.61（err 口径收窄后回落，贴近首轮 0.65）、决策点 4157 不变 |
+| R2 | **已实施** | 2026-08-31 完成：orz-assurance `ToolOutcome::Deny` + 统一词汇表 `is_denial_code`/`classify_event_outcome`（生产/复验同一谓词）；host_exec（退役/封存/锚点/检索模式/权限/候选门/计划门/console）与 agent_loop（角色门/计划轮/注入预算）全部拒绝路径喂 deny + 端到端测试；102-run 复验（`LIF_102RUNS_REPLAY_2026-08-31_R2.json`）：deny 3 run/4 fires（语料拒绝事件 85：content_anchor_mismatch 15、role_write 57、candidate_cap 7、plan_round 4 等）——V2 deny 对照非空；err 1→0 run/0 fire 为候选门拒绝从 err 移入 deny 的语义修正 |
 | R3 | **已修** | controller.rs 截断预扣 12 B marker（payload+marker ≤1024 B）；新增 `temporal_board_truncation_never_exceeds_cap` 测试 |
 | R4 | **已修** | blackboard_read 工具定义补 selector/k/name 参数声明（与 host_exec 参数解析一致） |
+| R5 | **已实施** | reducer pipe 兼容矩阵收口（read→grep / read→search_replace / grep→read 三条类型化透镜，其余在验证与归约两层均拒绝）；grep→read 按 `match_index`（缺省 0）确定性选 match，`span {start,end}` → read `offset`/`length` splice（显式参数优先），空 match/越界索引/坏 span 以 no_match / match_index_out_of_range / invalid_match_index / invalid_match_span 类型化关闭；不兼容 pipe 返回 arg_validation Fail（`pipe_incompatible`）且任一工具不执行（reducer 14 项测试全绿） |
 | R6 | **已修** | temporal.rs restore_spikes 推断 has_success + 重算 recovery；单测去掩盖 + controller 级恢复测试 `restored_temporal_spikes_do_not_regress_to_start`（全新引擎=生产 ACP 恢复路径形态） |
 | R7 | **已修（收口）** | Board cap 真实化（非 temporal 分区 entries 实际截断 ≤8 KiB）+ reducer `is_fail` 判别式（step 且无 summary，不再字段嗅探）+ F12 边界修复；纯子项错误 FailEnvelope 全量接线列入 V1 验收项 |
 | R8 | **已修** | verifier 按 UTF-8 字节校验 cmd_preview + 多字节正/负例；schema 说明注明字节契约由 verifier 兜底 |
@@ -193,15 +195,15 @@ R1–R9 与 F10–F14 处理状态（R1/R2/R5 经 2026-08-31 用户裁决后执�
 | F13 | **已修** | 设计 `Anchor` 类型对齐运行时 `{sha256, size}`（mtime 为工具 schema 可选附加字段） |
 | F14 | **已修** | §4.5 措辞统一为「最近 8–32 个决策间隔」（采样 ≥8 启用、缓冲 ≤32）；estimator 注释同步 |
 
-验证：orz-assurance lib 180 passed；orz-loop lib 643 passed / 0 failed /
+验证：orz-assurance lib 192 passed（reducer 14 项，含 R5 新增 7 项）；orz-loop lib 645 passed / 0 failed /
 3 ignored；Python journal 校验 236 passed；lif_replay 102-run 重跑（R1 新
-口径）；`git diff --check` 双仓库干净；变更文件 clippy 无新增告警
+口径 + R2 deny 接线复验）；`git diff --check` 双仓库干净；变更文件 clippy
+无新增告警
 （orz-assurance 1 条 `THatMode` derive 建议与 orz-loop 28 条均为实施既有
 基线，非本次处理新增）。
 
 独立待办（2026-08-31 用户裁决，下一轮实施，不阻塞阶段 3 排期）：
-- **R2（F2）**：deny 通道接线——`ToolOutcome::Deny` + 锚点拒单/候选门拒绝等
-  拒绝路径喂入 deny 通道 + 测试（语料 policy_denial=0，接线后 V2 deny 对照
-  非空）。
-- **R5（F6）**：grep→read 管线补实现——match 选择 + span→offset/length 映射
-  splice 进 read 参数；不兼容 pipe 返回类型化 arg_validation 错误。
+- **R2（F2）**：**已实施**（2026-08-31，见上表 R2 行；语料 policy_denial=0，
+  接线后 V2 deny 对照非空=3 run/4 fires）。
+- **R5（F6）**：**已实施**（2026-08-31，见上表 R5 行；reducer 14 项测试 +
+  orz-assurance lib 192 passed；兼容矩阵/类型化拒绝文档同步至设计 §2.3）。

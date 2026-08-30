@@ -2204,9 +2204,11 @@ S1-S4 全部闭合）
 - 审查处理（2026-08-31 登记，放行计数不变）：阶段 2 全面审查完成（设计合理性/
   实现合理性/符合性；三子代理分片 + 102-run 语料量化），R1–R9 + F10–F14——
   err 事件谓词三方统一（R1 **已修**：生产口径 + lif_replay 对齐 + 102-run
-  重跑 err 1 run/1 fire）、deny 接线（R2 **已裁决接线，独立待办下一轮**）、
+  重跑 err 1 run/1 fire）、deny 接线（R2 **已实施**：ToolOutcome::Deny +
+  全拒绝路径喂入 + 102-run deny 3 run/4 fires）、
   temporal ≤1 KiB 截断预扣（R3 **已修**）、blackboard_read 工具面补参数
-  （R4 **已修**）、grep→read 管线补实现（R5 **已裁决，独立待办下一轮**）、
+  （R4 **已修**）、grep→read 管线补实现（R5 **已实施**：pipe 兼容矩阵 +
+  match 选择 + span→offset/length + 不兼容 pipe 类型化拒绝）、
   恢复重建 has_success（R6 **已修**）、FailEnvelope/Board cap 收口（R7 **已修**：
   Board cap 实际截断 + is_fail 判别式 + F12 边界；纯子项接线入 V1）、
   cmd_preview 字节口径（R8 **已修**）、计数勘误（R9 **已修**）、F10 fixture
@@ -2214,8 +2216,7 @@ S1-S4 全部闭合）
   统一、F14 措辞统一——见
   [审查记录](audits/MECHANICAL_LAYER_MATH_CALCULUS_PHASE2_REVIEW_AUDIT_2026-08-31.md)
   / TODO P2-10。
-- 开放内容：阶段 2 审查处理独立待办（R2 deny 接线、R5 grep→read 管线——
-  2026-08-31 用户裁决下一轮实施）+ 阶段 3 验证（V1 FakeProvider 验证面，
+- 开放内容：阶段 3 验证（V1 FakeProvider 验证面，
   含 FailEnvelope 纯子项接线与 receipt↔事件链同构核对；V2 离线 102 runs
   四对照门 + 聚类对照，R1 新口径 err 1/1 为底座；V3 S4 冒烟 + 状态同步）；
   排期与勾选见 TODO P2-10。

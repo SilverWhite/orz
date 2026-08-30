@@ -199,6 +199,16 @@ Submit = { stage: 1 | 2, checklist: [Check], state: State }
   过滤→取窗管线。
 - 折中档（D1）允许一层组合（如 `pipe(file.read, file.grep)`）在同一往返归约，
   返回组合值或指针；顶层保留 tool_calls 形态，工具契约函数化。
+- pipe 兼容矩阵收口（审查处理 R5，2026-08-31 补实现）：仅 read→grep、
+  read→search_replace、grep→read 三条类型化透镜合法；其余组合在验证与归约
+  两层均以类型化 `arg_validation` Fail（code=`pipe_incompatible`）拒绝，
+  fail-closed，任一工具不执行。grep→read 的 match 选择缺省取首个匹配，
+  read 参数可携带 `match_index`（非负整数，被归约器消费、不传给 read）
+  显式选匹配；`Match.span {start, end}` 映射为 read 的 `offset`=start、
+  `length`=end−start（长度须 ≥1），显式 `file_path`/`offset`/`length`
+  优先于 splice 值；空匹配/越界索引/坏 span 分别以 `no_match` /
+  `match_index_out_of_range` / `invalid_match_index` / `invalid_match_span`
+  类型化关闭。
 - 依赖图边随归约维护：read→write 锚点边、工具→实体变更边。
 - 确定性：纯服务（file.read/grep/blackboard.read）同状态下结果确定；效应服务
   只返回结构化信封，不返回自由文本。
@@ -341,9 +351,12 @@ u(t) = u(t₀)·exp(−(t−t₀)/τ) + w        -- 事件到达时
 **err 输入定义（2026-08-31 审查处理 R1 裁定，生产口径）**：「工具错误事件」
 = 宿主级错误（工具未启动/宿主异常；事件面 status=error 且无 exit_code 值）
 ∪ 超时（timed_out=true）；terminal `exit_code ≠ 0` 是 D2 结构化**值**，归类
-Other（中性），不喂 err；锚点拒单、候选门拒绝等 status=error 拒绝事件走
-deny 通道（R2 接线后）或接线前暂不喂入。离线复验 lif_replay 与生产
-host_exec 喂入同一谓词（102-run 重跑：err 1 run/1 fire）。
+Other（中性），不喂 err；锚点拒单、候选门拒绝、退役/封存工具拒绝、
+权限/ACAF/检索模式/角色门/计划门/预算等 status=error 拒绝事件走 deny 通道
+（**R2 已接线 2026-08-31**：`ToolOutcome::Deny` + host_exec/agent_loop 全部
+拒绝路径喂入 + 统一词汇表 `is_denial_code`/`classify_event_outcome` 三方一致）。
+离线复验 lif_replay 与生产 host_exec 喂入同一谓词（102-run 重跑：err 0
+run/0 fire——候选门拒绝从 err 移入 deny 的语义修正；deny 3 run/4 fires）。
 
 语义分层规则（§9.6.1/§9.6.5 混合确认）：
 

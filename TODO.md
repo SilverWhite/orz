@@ -2437,9 +2437,13 @@ daemon 跨 run 常驻。~~模式内混合路由（需修订 ADR-0010 §3.7.12）
   §4.3 措辞 + host_exec 喂入确认；102-run 重跑新口径：err 1 run/1 fire、
   stuck 峰值 θ 比 0.61（err 口径收窄后回落），见
   `LIF_102RUNS_REPLAY_2026-08-31_R1.json`——V2 四对照门前置（F1）。
-- [ ] R2 deny 通道接线（ToolOutcome::Deny + 拒绝事件喂入）——**2026-08-31
-  用户裁决接线，独立待办下一轮实施**（见下方「阶段 2 审查处理独立待办」；
-  V2 前置，避免空对照，F2）。
+- [x] R2 deny 通道接线（ToolOutcome::Deny + 拒绝事件喂入）——**2026-08-31
+  实施完成**：orz-assurance `ToolOutcome::Deny` + 统一词汇表
+  `is_denial_code`/`classify_event_outcome`（生产/复验同一谓词）；host_exec
+  （退役/封存/锚点/检索模式/权限/候选门/计划门/console 拒绝）与 agent_loop
+  （角色门/计划轮/注入预算）全部拒绝路径喂 deny；102-run 复验 deny 3 run/
+  4 fires（语料拒绝事件 85 个：content_anchor_mismatch 15、role_write 57、
+  candidate_cap 7 等）——V2 deny 对照非空（F2）。
 - [x] R3 temporal ≤1 KiB 截断 marker 预扣修复 + 触截断路径测试（F4）——
   **2026-08-31 完成**：`controller.rs` 预扣 12 B marker（最终板 ≤1024 B）+
   新增触截断路径测试（orz-loop 643 passed / 0 failed / 3 ignored）。
@@ -2447,8 +2451,13 @@ daemon 跨 run 常驻。~~模式内混合路由（需修订 ADR-0010 §3.7.12）
   **2026-08-31 完成**：工具 schema 增 selector（now/recent/history/feature）、
   k（1..=20）、name（u_prog|u_err|u_stuck|t_hat|err10|succ10）声明，与
   host_exec 参数解析一致。
-- [ ] R5 reducer grep→read 管线补实现——**2026-08-31 用户裁决补实现（常用），
-  独立待办下一轮实施**（见下方「阶段 2 审查处理独立待办」；V1 前，F6）。
+- [x] R5 reducer grep→read 管线补实现——**2026-08-31 完成**：pipe 兼容矩阵
+  收口为 read→grep / read→search_replace / grep→read 三条类型化透镜；grep→read
+  按 `match_index`（缺省 0）确定性选 match，`span {start,end}` → read
+  `offset`/`length` splice；不兼容 pipe 在任一工具执行前返回类型化
+  arg_validation Fail（`pipe_incompatible`），空 match/越界索引/坏 span 分别
+  以 no_match / match_index_out_of_range / invalid_match_index /
+  invalid_match_span 关闭（reducer 14 项测试，orz-assurance lib 192 passed）。
 - [x] R6 restore_spikes has_success 恢复 + recovery 重算 + 跨 prompt 端到端
   恢复测试（F3）——**2026-08-31 完成**：`temporal.rs` 从 spike 时间线推断
   has_success + 重算 recovery；单测去掩盖 + controller 级恢复测试（全新引擎
@@ -2479,11 +2488,13 @@ daemon 跨 run 常驻。~~模式内混合路由（需修订 ADR-0010 §3.7.12）
 
 **阶段 2 审查处理独立待办（下一轮；2026-08-31 用户裁决立项）**
 
-- [ ] R2 deny 通道接线：`ToolOutcome::Deny` + 锚点拒单/候选门拒绝等拒绝路径
-  喂入 deny 通道 + 测试（当前语料 policy_denial=0，接线后 V2 deny 对照非空）。
-- [ ] R5 grep→read 管线补实现：定义 match 选择（首个/行号）+ span→
-  offset/length 映射，splice 进 read 参数；不兼容 pipe 返回类型化
-  arg_validation 错误（fail-closed）。
+- [x] R2 deny 通道接线：`ToolOutcome::Deny` + 锚点拒单/候选门拒绝等拒绝路径
+  喂入 deny 通道 + 测试（当前语料 policy_denial=0，接线后 V2 deny 对照
+  非空=3 run/4 fires；err 1→0 run/0 fire 为候选门拒绝移入 deny 的语义修正）。
+- [x] R5 grep→read 管线补实现：定义 match 选择（缺省首个，`match_index`
+  可选显式选择）+ span→offset/length 映射，splice 进 read 参数（显式
+  offset/length/file_path 优先）；不兼容 pipe 在验证与归约两层均以类型化
+  arg_validation 错误拒绝（fail-closed，任一工具不执行）。
 
 入口：[正式设计](docs/MECHANICAL_LAYER_MATH_CALCULUS_DESIGN_2026-08-30.md) /
 [讨论稿](docs/MECHANICAL_LAYER_MATH_CALCULUS_DISCUSSION_2026-08-30.md) /
