@@ -112,7 +112,11 @@
   2026-08-30 RETRIEVAL-ORCHESTRATION-MECHANICAL（0k）检索问题最终评判
   定稿登记（用户确认无异议；设计轮不动计数，仍 31，见下）→ **第一批
   S1 代码 + S2 测试实施放行入账 31 → 32**（第 1–4 项完成 2026-08-30；
-  S3 重建 / 实机验证待续，见下）
+  S3 重建完成 2026-08-30——三件套 12:06 HKT（orz 106,411,880 B / signer
+  1,388,496 B / provision 1,206,464 B）+ bookworm 冒烟符合预期（provision
+  usage / signer manifest 缺失 / orz TTY io error）+ ldd 静态链接 + 警告面
+  14 项与基线持平，对应源码 orz b604773 + 父 b0b903e 均已推送；实机验证
+  待续，见下）
   - P0-C：0 项（PLAN-FIRST 阶段 A/B/C 全部闭合，2026-08-16）
   - P0 冒烟对拍暴露：0 项（GAP-REPETITION-DETECTOR-DNA-FALSE-POSITIVE
     复读检测 DNA 误杀已闭合 2026-08-26；GAP-EVENT-SCHEMA-DRIFT 事件面
@@ -1747,8 +1751,16 @@ S4 复验闭环 2026-08-25（补登记）；S1-S4 全部闭合）
 - [ ] Google 门禁观察实验（小批检索密集题 k=1 个人使用强度；pacing 校准 +
   Google/Bing 主序裁决；套用 DUAL 度量维度）——待 S3 重建 + docker 浏览器
   注入后实机运行（入口：DUAL §3.2 度量 / 调研 §8.4）。
-- [ ] 汇总 S3 重建（Linux musl 三件套）+ 实机验证（检索题冒烟 + 超时/并行/
-  截断行为观察）。
+- [x] 汇总 S3 重建（Linux musl 三件套）——2026-08-30 完成：
+  `build_orz_aliyun_trixie.sh`（rust:1.97-slim 容器，ORZ-BUILD-MOUNT-001
+  契约；日志 `D:\tb-eval\build-20260830-s3.log`）：三件套 12:06 HKT
+  （orz 106,411,880 B / orz-signer 1,388,496 B / orz-acaf-provision
+  1,206,464 B）；bookworm 冒烟符合预期（provision usage / signer manifest
+  缺失 / orz TTY io error）、三件套 ldd 静态链接；警告面 14 项与上次基线
+  持平（含 orz-host local_browser 既有 2 项）；对应源码 orz b604773 + 父
+  b0b903e（均已推送）。
+- [ ] 实机验证（检索题冒烟 + 超时/并行/截断行为观察；前置=容器内 chromium
+  注入，见 DUAL §3.3 / CONTROLLER_SPLIT §4.3）。
 
 **第二批（独立设计轮）**：
 - [ ] `project_doc_index` v2（git HEAD 基线 + 工作树增量层 + Blake3 内容哈希 +
