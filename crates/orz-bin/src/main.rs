@@ -2580,8 +2580,8 @@ mod conformance_capture {
                 let host = build_cli_host(&handle, run_id, &base)
                     .unwrap()
                     .with_browser_session(Arc::new(StubBrowserSession));
-                let controller = orz_loop::AgentLoopController::with_gateway(Arc::new(
-                    FakeProvider::new(vec![
+                let controller =
+                    orz_loop::AgentLoopController::with_gateway(Arc::new(FakeProvider::new(vec![
                         ScriptedResponse::tool_calls(vec![ToolCall {
                             name: "web_search".to_string(),
                             arguments: serde_json::json!({"query": "example domain"}),
@@ -2592,25 +2592,19 @@ mod conformance_capture {
                             arguments: serde_json::json!({"url": "https://example.com/"}),
                             call_id: "call-b1".to_string(),
                         }]),
-                        ScriptedResponse::text(concat!(
-                            "[DOC] https://example.com/ 检索完成\n",
-                            "[RESULT_JSON]",
-                            r#"{"sections":[{"section_title":"Example","content":"Example Domain","source_ids":["SRC-001"],"claim_strength":"observed"}],"claims":[]}"#,
-                            "[/RESULT_JSON]",
-                        )),
+                        ScriptedResponse::text("[DOC] https://example.com/ 检索完成"),
                         ScriptedResponse::text("完成。"),
                         ScriptedResponse::text("完成。"),
-                    ]),
-                ))
-                .with_snapshot_store(Some(handle.snapshot_store.clone()))
-                .with_retrieval_mode(
-                    orz_loop::controller::RetrievalMode::LocalBrowser,
-                    orz_loop::controller::RetrievalCapability::Available,
-                    true,
-                    None,
-                    None,
-                None,
-                );
+                    ])))
+                    .with_snapshot_store(Some(handle.snapshot_store.clone()))
+                    .with_retrieval_mode(
+                        orz_loop::controller::RetrievalMode::LocalBrowser,
+                        orz_loop::controller::RetrievalCapability::Available,
+                        true,
+                        None,
+                        None,
+                        None,
+                    );
                 controller
                     .run_turn(
                         &host,
@@ -2701,8 +2695,8 @@ mod conformance_capture {
                     .await
                     .unwrap();
                 let host = build_cli_host(&handle, run_id, &base).unwrap();
-                let controller = orz_loop::AgentLoopController::with_gateway(Arc::new(
-                    FakeProvider::new(vec![
+                let controller =
+                    orz_loop::AgentLoopController::with_gateway(Arc::new(FakeProvider::new(vec![
                         ScriptedResponse::tool_calls(vec![ToolCall {
                             name: "retrieve_project_docs".to_string(),
                             arguments: serde_json::json!({"query": "readme"}),
@@ -2718,25 +2712,19 @@ mod conformance_capture {
                             }),
                             call_id: "call-i1".to_string(),
                         }]),
-                        ScriptedResponse::text(concat!(
-                            "[DOC] README.md\n检索完成\n",
-                            "[RESULT_JSON]",
-                            r#"{"sections":[{"section_title":"Readme","content":"项目文档","source_ids":["SRC-001"],"claim_strength":"observed"}],"claims":[]}"#,
-                            "[/RESULT_JSON]",
-                        )),
+                        ScriptedResponse::text("[DOC] README.md\n检索完成"),
                         ScriptedResponse::text("完成。"),
                         ScriptedResponse::text("完成。"),
-                    ]),
-                ))
-                .with_snapshot_store(Some(handle.snapshot_store.clone()))
-                .with_retrieval_mode(
-                    orz_loop::controller::RetrievalMode::FrameworkFallback,
-                    orz_loop::controller::RetrievalCapability::Available,
-                    false,
-                    None,
-                    None,
-                None,
-                );
+                    ])))
+                    .with_snapshot_store(Some(handle.snapshot_store.clone()))
+                    .with_retrieval_mode(
+                        orz_loop::controller::RetrievalMode::FrameworkFallback,
+                        orz_loop::controller::RetrievalCapability::Available,
+                        false,
+                        None,
+                        None,
+                        None,
+                    );
                 controller
                     .run_turn(
                         &host,
@@ -2794,7 +2782,11 @@ mod conformance_capture {
                 let p = &commit["payload"];
                 assert_eq!(p["source_counts"]["full_text_observed"], 1);
                 assert_eq!(p["visibility_degraded"], false);
-                assert_eq!(p["organized_response"]["sections"][0]["source_ids"][0], "SRC-001");
+                // GAP-RETRIEVAL-STRUCTURED-RESULT 方向 C (2026-08-30):
+                // organized_response 已删除——机械 ledger 单轨断言。
+                assert!(p.get("organized_response").is_none());
+                assert_eq!(p["source_ledger"][0]["source_type"], "local_file");
+                assert_eq!(p["source_ledger"][0]["visibility"], "full_text_observed");
                 copy_journal(&handle.journal_dir, "real-doc-retrieval");
             })
             .await

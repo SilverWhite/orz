@@ -355,11 +355,14 @@ pub fn build_retrieval_system_prompt(
     retrieval_mode: &str,
     blocks: &str,
 ) -> String {
-    // GAP-SOURCE-WEIGHTING-IMPL (2026-08-13): ADR-0010 §3.7 条 12 — the
-    // two-channel contract rides the subagent prompt. The mechanical tier
-    // judge already labels every web source in the ledger; this text tells
-    // the subagent HOW to use the labels (rank + annotate, never hard-block)
-    // and WHICH channel may verify what (二存一 — never mix lanes).
+    // GAP-SOURCE-WEIGHTING-IMPL (2026-08-13) / GAP-RETRIEVAL-STRUCTURED-
+    // RESULT 方向 C (2026-08-30): ADR-0010 §3.7 条 12 — the two-channel
+    // contract rides the subagent prompt. The mechanical tier judge labels
+    // every web source in the ledger; this text tells the subagent HOW to
+    // use the labels (prefer higher weight, never hard-block) and WHICH
+    // channel may verify what (二存一 — never mix lanes). The layer-3 model
+    // annotation contract is retired — the mechanical tier is the ONLY
+    // weighting signal (see §14.45).
     let weighting_contract = match retrieval_mode {
         "framework_fallback" => {
             "Retrieval channel: web_search is the entry; verify only \
@@ -380,9 +383,9 @@ pub fn build_retrieval_system_prompt(
          Source weighting (ADR-0010 §3.7 条 12): every web source carries a \
          mechanical tier in the ledger (authoritative 1.1 / default 1.0 / \
          low_quality 0.7). Prefer higher-weight sources for conclusions; a \
-         low-quality source MAY be used but MUST be explicitly annotated in \
-         `source_annotations` with status \"annotated\" (v0: annotate + rank, \
-         no hard interception).\n\
+         low-quality source MAY be used — the mechanical tier is the only \
+         weighting signal (model annotations retired, GAP-RETRIEVAL-\
+         STRUCTURED-RESULT 方向 C).\n\
          {weighting_contract}\n\
          Citation rule (ADR-0010 §3.7.9): every claim based on external \
          evidence, a reference implementation, or internal docs must carry \
@@ -396,19 +399,9 @@ pub fn build_retrieval_system_prompt(
          `[DOC]`-prefixed lines for project docs and `[SOURCE]`-prefixed \
          lines for sources (internal: source_ledger; external: \
          web_sources); lines without a prefix form the plain response \
-         prose. OPTIONALLY, after the prose, emit one \
-         `[RESULT_JSON]{{...}}[/RESULT_JSON]` block carrying your \
-         organized response: `{{\"sections\": [{{\"section_title\": ..., \
-         \"content\": ..., \"source_ids\": [\"SRC-...\"], \"claim_strength\": \
-         \"observed|derived|synthesized\"}}], \"claims\": [...], \
-         \"source_annotations\": [{{\"source_id\": \"SRC-...\", \"weight\": \
-         0.7|1.0|1.1, \"reason\": \"...\", \"status\": \"adopted|annotated\"}}]}}` \
-         — every \
-         source_id must reference an actual tool result you received; \
-         claim_strength must not exceed what the source's visibility \
-         supports (observed = you read the full text, derived = partial, \
-         synthesized = metadata-level). The mechanical ledger is built \
-         from your tool calls, not from this block.\n\n\
+         prose. The mechanical ledger is built from your tool calls and \
+         `[DOC]`/`[SOURCE]` declaration lines — there is no separate \
+         structured block to emit.\n\n\
          {blocks}"
     )
 }
@@ -693,13 +686,21 @@ mod tests {
 
     #[test]
     fn retrieval_prompt_carries_mode_specific_weighting_contract() {
-        // GAP-SOURCE-WEIGHTING-IMPL (2026-08-13): ADR-0010 §3.7 条 12 —
-        // the two-channel contract (二存一) and the layer-3 annotation
-        // shape ride the retrieval system prompt.
+        // GAP-SOURCE-WEIGHTING-IMPL (2026-08-13) / GAP-RETRIEVAL-STRUCTURED-
+        // RESULT 方向 C (2026-08-30): ADR-0010 §3.7 条 12 — the two-channel
+        // contract rides the retrieval system prompt; the layer-3 model
+        // annotation shape and the [RESULT_JSON] block are GONE.
         let framework =
             build_retrieval_system_prompt("external_ret", "goal", "framework_fallback", "");
         assert!(framework.contains("Source weighting"));
-        assert!(framework.contains("source_annotations"));
+        assert!(
+            !framework.contains("source_annotations"),
+            "layer-3 model annotation contract retired"
+        );
+        assert!(
+            !framework.contains("[RESULT_JSON]"),
+            "organized block contract removed"
+        );
         assert!(framework.contains("browser_read is FORBIDDEN in this mode"));
         assert!(
             framework.contains("候选 N/M，剩余 K"),
@@ -709,13 +710,18 @@ mod tests {
             !framework.contains("at most 5"),
             "obsolete soft candidate cap removed"
         );
-        assert!(framework.contains("\"annotated\""));
+        assert!(
+            !framework.contains("\"annotated\""),
+            "annotation status vocabulary retired"
+        );
 
         let local = build_retrieval_system_prompt("external_ret", "goal", "local_browser", "");
         assert!(local.contains("no web_fetch/web_search in this mode"));
         assert!(local.contains("browser_read"));
+        assert!(!local.contains("[RESULT_JSON]"));
 
         let off = build_retrieval_system_prompt("external_ret", "goal", "off", "");
         assert!(off.contains("no web retrieval tools"));
+        assert!(!off.contains("[RESULT_JSON]"));
     }
 }

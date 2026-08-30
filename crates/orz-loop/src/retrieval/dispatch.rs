@@ -567,7 +567,6 @@ impl AgentLoopController {
                         SubagentRole::InternalRetrieval => "project_doc",
                         SubagentRole::ExternalRetrieval => "web_page",
                     },
-                    &bounded.output,
                     &subagent_session_id,
                     &activation_id,
                     &contract_id,
@@ -634,18 +633,19 @@ impl AgentLoopController {
                 // 所需内容") is deleted — ADR-0010 §4.3 forbids model free-text
                 // verdicts.
                 //
-                // GAP-RETRIEVAL-TOOLS (2026-08-10): structured result
-                // formation — ADR-0010 §3.3.3 five sections. The ledger/
-                // query_summary/filtering_log/raw_source_refs are built
-                // MECHANICALLY from the lane's tool-call evidence (single
-                // writer: the controller); the model's `[RESULT_JSON]` block
-                // supplies the organized_response and is validated against
-                // the ledger (source_ids ⊆ ledger, claim × visibility
-                // matrix §3.7.5). Validation failure degrades explicitly —
-                // visibility_degraded + reason code, never a silent
-                // downgrade. The result is committed as an event, archived
-                // to `{journal_dir}/retrieval-results/` (best-effort), and
-                // the assessment consumes its mechanical facts.
+                // GAP-RETRIEVAL-TOOLS (2026-08-10) / GAP-RETRIEVAL-
+                // STRUCTURED-RESULT 方向 C (2026-08-30): structured result
+                // formation — ADR-0010 §3.3.3 mechanical four sections
+                // (query_summary/source_ledger/filtering_log/
+                // raw_source_refs), built MECHANICALLY from the lane's
+                // tool-call evidence + [DOC]/[SOURCE] declaration lines
+                // (single writer: the controller; the `[RESULT_JSON]`
+                // organized block is deleted). `visibility_degraded` =
+                // no text-level evidence (reason code `no_fulltext_evidence`),
+                // never a silent downgrade. The result is committed as an
+                // event, archived to `{journal_dir}/retrieval-results/`
+                // (best-effort), and the assessment consumes its mechanical
+                // facts.
                 let result_digest = committed.result_digest.clone();
                 let ledger_digest = committed.ledger_digest.clone();
                 let source_counts = committed.source_counts.clone();
@@ -776,17 +776,22 @@ impl AgentLoopController {
                     RetrievalResultChannel::Inline => bounded.output,
                     RetrievalResultChannel::Blackboard => {
                         let total_sources = committed.source_counts["total"].as_u64().unwrap_or(0);
-                        let conclusion_count = committed.payload["organized_response"]["sections"]
-                            .as_array()
-                            .map(|a| a.len())
-                            .unwrap_or(0);
+                        // GAP-RETRIEVAL-STRUCTURED-RESULT 方向 C
+                        // (2026-08-30)：organized_response 已删除——摘要
+                        // 口径改为机械文本级证据计数（full + partial）。
+                        let text_evidence = committed.payload["source_counts"]["full_text_observed"]
+                            .as_u64()
+                            .unwrap_or(0)
+                            + committed.payload["source_counts"]["partial_text_observed"]
+                                .as_u64()
+                                .unwrap_or(0);
                         format!(
-                            "{}: 已写入 blackboard {}（{} 来源 / {} 结论，条目上限 8K）；\
+                            "{}: 已写入 blackboard {}（{} 来源 / {} 文本证据，条目上限 8K）；\
                              需要详情时用 blackboard_read section={} 读取",
                             tc.name,
                             role.section_name(),
                             total_sources,
-                            conclusion_count,
+                            text_evidence,
                             role.section_name(),
                         )
                     }
