@@ -86,13 +86,31 @@ const HTTP_JSON_TIMEOUT: Duration = Duration::from_secs(5);
 pub struct CdpConfig {
     pub load_timeout: Duration,
     pub total_budget: Duration,
+    /// RETRIEVAL-ORCHESTRATION-MECHANICAL 0k 第二批 (2026-08-30)：会话级
+    /// tab 池大小（有界 CDP target 常驻，租约独占、归还复用、LRU 选空闲；
+    /// 0 = 关闭池，回退每调用 create/close 现状）。默认 4，
+    /// `ORZ_BROWSER_TAB_POOL_SIZE` 可配。
+    pub tab_pool_size: usize,
+    /// DNS 预检会话级缓存 TTL（按 host；redirect 重检门保留）。默认 300s，
+    /// `ORZ_BROWSER_DNS_TTL_SECS` 可配。
+    pub dns_ttl: Duration,
 }
 
 impl Default for CdpConfig {
     fn default() -> Self {
+        let tab_pool_size = std::env::var("ORZ_BROWSER_TAB_POOL_SIZE")
+            .ok()
+            .and_then(|s| s.trim().parse().ok())
+            .unwrap_or(4);
+        let dns_ttl_secs = std::env::var("ORZ_BROWSER_DNS_TTL_SECS")
+            .ok()
+            .and_then(|s| s.trim().parse().ok())
+            .unwrap_or(300);
         Self {
             load_timeout: DEFAULT_LOAD_TIMEOUT,
             total_budget: DEFAULT_TOTAL_BUDGET,
+            tab_pool_size,
+            dns_ttl: Duration::from_secs(dns_ttl_secs),
         }
     }
 }
@@ -312,15 +330,54 @@ async fn ws_reader_task(
 
 /// The local_browser lane's browser session: one headless Chrome process on
 /// an isolated profile, one lazily-opened browser ws, per-call page tabs.
+///
+/// v2 (RETRIEVAL-ORCHESTRATION-MECHANICAL 0k 第二批, 2026-08-30)：会话级
+/// tab 池——有界 `tab_pool_size` 个 CDP target 常驻（create 一次、navigate
+/// 复用、LRU 选空闲、租约独占、归还复用），替代「每调用 create+close」；
+/// 同轮多个 `browser_read` 真正并发（manager 不再整读持锁）。隔离语义：
+/// 每次租约仍是完整 navigate + 读 + 归还，模型永不接触 tab 句柄；同一
+/// session 单 profile 的 cookie/localStorage 跨调用共享是既有事实，池化
+/// 不引入新的状态泄漏维度。`tab_pool_size=0` 回退每调用 create/close。
 pub struct CdpBrowserSession {
     port: u16,
     /// Browser-level ws endpoint (from `/json/version`); page ws endpoints
     /// are built from the port + target id.
     browser_ws_url: String,
     profile_dir: PathBuf,
+    config: CdpConfig,
+    /// 可变 session 状态（browser ws + 子进程）——tokio Mutex：仅在
+    /// create_target/shutdown 短持有，绝不跨 std Mutex await。
+    inner: tokio::sync::Mutex<SessionInner>,
+    /// v2：tab 池——target 列表 + 忙碌标记。std Mutex 只做「检查/取用/
+    /// 归还」的短临界区（无 await 在其内）。
+    pool: Mutex<Vec<PooledTab>>,
+    /// v2：池上限信号量（permits = tab_pool_size；池满等待计入总预算）。
+    pool_sem: tokio::sync::Semaphore,
+    /// v2：创建串行化——保证池有界 ≤ pool_size（tokio Mutex，可跨 await）。
+    creation_lock: tokio::sync::Mutex<()>,
+    /// v2：DNS 预检结果缓存（按 host + TTL；只缓存成功结果）。
+    dns: Mutex<HashMap<String, DnsCacheEntry>>,
+}
+
+#[derive(Default)]
+struct SessionInner {
     browser_ws: Option<WsSession>,
     child: Option<tokio::process::Child>,
-    config: CdpConfig,
+}
+
+/// v2：池中的一个 CDP target。`busy=true` 期间被一次读取独占（租约）；
+/// 归还后 `page_ws` 保留复用（读取失败则丢弃，下次租约重连）。
+struct PooledTab {
+    target_id: String,
+    page_ws: Option<WsSession>,
+    busy: bool,
+    last_used: std::time::Instant,
+}
+
+/// v2：DNS 预检缓存条目（只缓存成功结果；失败不缓存、下次重试）。
+#[derive(Debug, Clone)]
+struct DnsCacheEntry {
+    at: std::time::Instant,
 }
 
 impl CdpBrowserSession {
@@ -359,13 +416,20 @@ impl CdpBrowserSession {
             .ok_or_else(|| CdpError::Discovery("no webSocketDebuggerUrl in /json/version".into()))?
             .to_string();
 
+        let pool_size = config.tab_pool_size;
         Ok(Self {
             port,
             browser_ws_url: ws_url,
             profile_dir,
-            browser_ws: None,
-            child: Some(child),
             config,
+            inner: tokio::sync::Mutex::new(SessionInner {
+                browser_ws: None,
+                child: Some(child),
+            }),
+            pool: Mutex::new(Vec::new()),
+            pool_sem: tokio::sync::Semaphore::new(pool_size.max(1)),
+            creation_lock: tokio::sync::Mutex::new(()),
+            dns: Mutex::new(HashMap::new()),
         })
     }
 
@@ -375,33 +439,45 @@ impl CdpBrowserSession {
     /// immediately — `ready()` relies on this for probe self-healing when
     /// the browser was killed out-of-band. tokio caches the reap status, so
     /// the later `wait()` in `shutdown`/`kill_process_tree` still returns it.
-    pub fn is_alive(&mut self) -> bool {
-        match self.child.as_mut() {
-            Some(child) => child.try_wait().map(|s| s.is_none()).unwrap_or(false),
-            None => false,
+    pub fn is_alive(&self) -> bool {
+        match self.inner.try_lock() {
+            Ok(mut inner) => match inner.child.as_mut() {
+                Some(child) => child.try_wait().map(|s| s.is_none()).unwrap_or(false),
+                None => false,
+            },
+            // 锁忙（create_target/shutdown 进行中）→ 保守视为存活。
+            Err(_) => true,
         }
     }
 
-    /// One read of one URL: gate (shape + DNS) → create tab → navigate →
-    /// wait (full: loadEventFired 终态；preview/keywords：「可用文本就绪」+
-    /// 资源拦截) → final-URL gate → extract rendered text → close tab.
-    /// The whole read is bounded by [`CdpConfig::total_budget`]; tab
-    /// teardown runs on every path (success, error and timeout) under a
-    /// fixed 5s cap.
+    /// One read of one URL: gate (shape + DNS, 会话级缓存) → 租约 tab →
+    /// navigate → wait (full: loadEventFired 终态；preview/keywords：
+    /// 「可用文本就绪」+ 资源拦截) → final-URL gate → extract rendered text
+    /// → 归还 tab。整体受 [`CdpConfig::total_budget`] 约束。
+    ///
+    /// v2：`tab_pool_size > 0` 走池化租约（并发读各自独占 tab、归还复用）；
+    /// `0` 回退每调用 create/close（legacy）。
     pub async fn read_page(
-        &mut self,
+        &self,
         url: &str,
         mode: super::ReadMode,
     ) -> Result<PageReadOutcome, CdpError> {
-        // Pre-navigation gate: URL shape + DNS resolution (fail-closed — a
-        // hostname that resolves to a private/metadata address is rejected
-        // before the browser ever navigates, ADR-0010 §3.7.3).
-        check_navigation_url(url).await?;
-        self.read_page_inner(url, mode).await
+        // Pre-navigation gate: URL shape + DNS resolution（fail-closed——
+        // 私有/metadata 地址在浏览器导航前拒绝，ADR-0010 §3.7.3；DNS 结果
+        // 会话级缓存，redirect 重检门保留）。
+        self.check_navigation_url_cached(url).await?;
+        if self.config.tab_pool_size == 0 {
+            self.read_page_legacy(url, mode).await
+        } else {
+            self.read_page_pooled(url, mode).await
+        }
     }
 
-    async fn read_page_inner(
-        &mut self,
+    /// v2：池化读取——信号量（池上限）→ 租约（独占 busy）→ 读取 → 归还
+    /// （busy=false + 保留/丢弃 page ws）。创建经 `creation_lock` 串行化，
+    /// 保证池有界 ≤ tab_pool_size。
+    async fn read_page_pooled(
+        &self,
         url: &str,
         mode: super::ReadMode,
     ) -> Result<PageReadOutcome, CdpError> {
@@ -410,51 +486,173 @@ impl CdpBrowserSession {
         let budget_err = CdpError::TotalTimeout {
             timeout: total_budget.as_secs(),
         };
-
-        // Browser ws + tab creation share the total budget (a wedged browser
-        // ws must not hang the call).
-        let target_id = tokio::time::timeout_at(deadline, async {
-            if self.browser_ws.is_none() {
-                self.browser_ws =
-                    Some(WsSession::connect(&self.browser_ws_url, "browser ws").await?);
+        // 池上限信号量：池满且全 busy 时等待（计入总预算，防饥饿）。
+        let _permit = tokio::time::timeout_at(deadline, self.pool_sem.acquire())
+            .await
+            .map_err(|_| budget_err.clone())?;
+        // 租约：独占一个 tab（busy=true）。
+        let target_id = self
+            .lease_tab(deadline)
+            .await
+            .map_err(|_| budget_err.clone())?;
+        let page_ws_url = format!("ws://127.0.0.1:{}/devtools/page/{target_id}", self.port);
+        // 取出（若有）既存 page ws（归还时可复用连接；读取失败则丢弃，
+        // 下次租约重连）。
+        let mut page = self.pool_take_ws(&target_id);
+        let read_result = tokio::time::timeout_at(deadline, async {
+            if page.is_none() {
+                page = Some(WsSession::connect(&page_ws_url, "page ws").await?);
             }
-            let browser = self.browser_ws.as_mut().unwrap();
-            let resp = browser
-                .send_command("Target.createTarget", json!({ "url": "about:blank" }))
-                .await?;
-            Ok::<String, CdpError>(
-                resp["targetId"]
-                    .as_str()
-                    .ok_or_else(|| {
-                        CdpError::Discovery("no targetId from Target.createTarget".into())
-                    })?
-                    .to_string(),
-            )
+            read_in_page(page.as_mut().unwrap(), url, self.config.load_timeout, mode).await
         })
-        .await
-        .map_err(|_| budget_err.clone())??;
+        .await;
+        // 归还：成功保留 page ws 复用；失败/超时丢弃（断开连接不进入池）。
+        let returned_ws = match &read_result {
+            Ok(_) => page,
+            Err(_) => None,
+        };
+        self.release_tab(&target_id, returned_ws);
+        read_result.map_err(|_| budget_err)?
+    }
 
-        // One tab lives exactly for this call (owned tab — §3.7.6). The read
-        // phase shares the same deadline.
+    /// v2：legacy 读取（`ORZ_BROWSER_TAB_POOL_SIZE=0`）——每调用
+    /// create/close（既有语义；teardown every path 固定 5s cap）。
+    async fn read_page_legacy(
+        &self,
+        url: &str,
+        mode: super::ReadMode,
+    ) -> Result<PageReadOutcome, CdpError> {
+        let total_budget = self.config.total_budget;
+        let deadline = tokio::time::Instant::now() + total_budget;
+        let budget_err = CdpError::TotalTimeout {
+            timeout: total_budget.as_secs(),
+        };
+        let target_id = tokio::time::timeout_at(deadline, self.create_target())
+            .await
+            .map_err(|_| budget_err.clone())??;
         let page_ws_url = format!("ws://127.0.0.1:{}/devtools/page/{target_id}", self.port);
         let outcome = tokio::time::timeout_at(deadline, async {
             let mut page = WsSession::connect(&page_ws_url, "page ws").await?;
             read_in_page(&mut page, url, self.config.load_timeout, mode).await
         })
         .await;
-
-        // Tab teardown on EVERY path — including timeouts and errors: the
-        // future above may be dropped at any await point, so the close is
-        // issued here, outside it. Best-effort under a fixed 5s cap (a
-        // wedged ws must not extend the call); a tab left behind dies with
-        // the browser session (shutdown).
-        let browser = self.browser_ws.as_mut().unwrap();
-        let _ = tokio::time::timeout(
-            Duration::from_secs(5),
-            browser.send_command("Target.closeTarget", json!({ "targetId": target_id })),
-        )
-        .await;
+        // Tab teardown on EVERY path（成功/错误/超时）——固定 5s cap。
+        let _ = tokio::time::timeout(Duration::from_secs(5), self.close_target(&target_id)).await;
         outcome.map_err(|_| budget_err)?
+    }
+
+    /// v2：DNS 预检——形状检查每次执行（无 IO）；DNS/SSRF 结果按 host
+    /// 会话级缓存（TTL 内成功结果直接复用；失败不缓存、下次重试；
+    /// redirect 重检走未缓存路径）。
+    async fn check_navigation_url_cached(&self, raw: &str) -> Result<(), CdpError> {
+        let url =
+            url::Url::parse(raw).map_err(|e| CdpError::UrlGate(UrlGateError::InvalidUrl(e)))?;
+        super::check_navigation_url_sync(&url).map_err(CdpError::UrlGate)?;
+        let host = url.host_str().unwrap_or_default().to_ascii_lowercase();
+        let now = std::time::Instant::now();
+        let cached = self.dns.lock().unwrap().get(&host).cloned();
+        if let Some(entry) = cached
+            && now.duration_since(entry.at) < self.config.dns_ttl
+        {
+            return Ok(());
+        }
+        super::check_navigation_url(raw)
+            .await
+            .map_err(CdpError::UrlGate)?;
+        self.dns.lock().unwrap().insert(
+            host,
+            DnsCacheEntry {
+                at: std::time::Instant::now(),
+            },
+        );
+        Ok(())
+    }
+
+    /// v2：创建 CDP target（browser ws 惰性连接；tokio Mutex 短持有，
+    /// 可跨 await）。
+    async fn create_target(&self) -> Result<String, CdpError> {
+        let mut inner = self.inner.lock().await;
+        if inner.browser_ws.is_none() {
+            inner.browser_ws = Some(WsSession::connect(&self.browser_ws_url, "browser ws").await?);
+        }
+        let browser = inner.browser_ws.as_mut().unwrap();
+        let resp = browser
+            .send_command("Target.createTarget", json!({ "url": "about:blank" }))
+            .await?;
+        Ok(resp["targetId"]
+            .as_str()
+            .ok_or_else(|| CdpError::Discovery("no targetId from Target.createTarget".into()))?
+            .to_string())
+    }
+
+    /// v2：关闭 CDP target（best-effort，用于 legacy 路径与池 evict）。
+    async fn close_target(&self, target_id: &str) -> Result<(), CdpError> {
+        let mut inner = self.inner.lock().await;
+        let Some(browser) = inner.browser_ws.as_mut() else {
+            return Ok(());
+        };
+        browser
+            .send_command("Target.closeTarget", json!({ "targetId": target_id }))
+            .await
+            .map(|_| ())
+    }
+
+    /// v2：租约——空闲 tab 直接取（LRU：最早 last_used）；全忙则经
+    /// creation_lock 串行创建（池有界 ≤ pool_size）。
+    async fn lease_tab(&self, deadline: tokio::time::Instant) -> Result<String, CdpError> {
+        let now = std::time::Instant::now();
+        let free_tab = || {
+            let mut pool = self.pool.lock().unwrap();
+            pool.iter()
+                .enumerate()
+                .filter(|(_, t)| !t.busy)
+                .min_by_key(|(_, t)| t.last_used)
+                .map(|(idx, _)| idx)
+                .map(|idx| {
+                    pool[idx].busy = true;
+                    pool[idx].last_used = now;
+                    pool[idx].target_id.clone()
+                })
+        };
+        if let Some(id) = free_tab() {
+            return Ok(id);
+        }
+        // 创建串行化（tokio Mutex，可跨 await；避免 std Mutex 跨 await
+        // 阻塞单线程 runtime）。
+        let _creation = self.creation_lock.lock().await;
+        if let Some(id) = free_tab() {
+            return Ok(id);
+        }
+        let target_id = tokio::time::timeout_at(deadline, self.create_target())
+            .await
+            .map_err(|_| CdpError::TotalTimeout {
+                timeout: self.config.total_budget.as_secs(),
+            })??;
+        self.pool.lock().unwrap().push(PooledTab {
+            target_id: target_id.clone(),
+            page_ws: None,
+            busy: true,
+            last_used: now,
+        });
+        Ok(target_id)
+    }
+
+    /// v2：取走池中 tab 的 page ws（短临界区，无 await）。
+    fn pool_take_ws(&self, target_id: &str) -> Option<WsSession> {
+        let mut pool = self.pool.lock().unwrap();
+        pool.iter_mut()
+            .find(|t| t.target_id == target_id)
+            .and_then(|t| t.page_ws.take())
+    }
+
+    /// v2：归还 tab（busy=false + page ws 回存；短临界区，无 await）。
+    fn release_tab(&self, target_id: &str, page_ws: Option<WsSession>) {
+        let mut pool = self.pool.lock().unwrap();
+        if let Some(t) = pool.iter_mut().find(|t| t.target_id == target_id) {
+            t.busy = false;
+            t.page_ws = page_ws;
+            t.last_used = std::time::Instant::now();
+        }
     }
 
     /// One download-or-read of one URL: gate → staging-dir reset → create
@@ -465,11 +663,11 @@ impl CdpBrowserSession {
     /// a download that neither completes nor navigates is an explicit
     /// timeout, never a silent fallback).
     pub async fn download_or_read(
-        &mut self,
+        &self,
         url: &str,
         download_dir: &Path,
     ) -> Result<BrowserDownloadOutcome, CdpError> {
-        check_navigation_url(url).await?;
+        self.check_navigation_url_cached(url).await?;
 
         // Fresh staging dir per call: the "newest file in dir" semantics of
         // `wait_for_new_file` must not pick up a leftover from an earlier
@@ -489,26 +687,9 @@ impl CdpBrowserSession {
             timeout: total_budget.as_secs(),
         };
 
-        let target_id = tokio::time::timeout_at(deadline, async {
-            if self.browser_ws.is_none() {
-                self.browser_ws =
-                    Some(WsSession::connect(&self.browser_ws_url, "browser ws").await?);
-            }
-            let browser = self.browser_ws.as_mut().unwrap();
-            let resp = browser
-                .send_command("Target.createTarget", json!({ "url": "about:blank" }))
-                .await?;
-            Ok::<String, CdpError>(
-                resp["targetId"]
-                    .as_str()
-                    .ok_or_else(|| {
-                        CdpError::Discovery("no targetId from Target.createTarget".into())
-                    })?
-                    .to_string(),
-            )
-        })
-        .await
-        .map_err(|_| budget_err.clone())??;
+        let target_id = tokio::time::timeout_at(deadline, self.create_target())
+            .await
+            .map_err(|_| budget_err.clone())??;
 
         let page_ws_url = format!("ws://127.0.0.1:{}/devtools/page/{target_id}", self.port);
         let outcome = tokio::time::timeout_at(deadline, async {
@@ -534,12 +715,8 @@ impl CdpBrowserSession {
         })
         .await;
 
-        let browser = self.browser_ws.as_mut().unwrap();
-        let _ = tokio::time::timeout(
-            Duration::from_secs(5),
-            browser.send_command("Target.closeTarget", json!({ "targetId": target_id })),
-        )
-        .await;
+        // Tab teardown on EVERY path（成功/错误/超时）——固定 5s cap。
+        let _ = tokio::time::timeout(Duration::from_secs(5), self.close_target(&target_id)).await;
         outcome.map_err(|_| budget_err)?
     }
 
@@ -549,15 +726,17 @@ impl CdpBrowserSession {
     /// the just-killed Chrome tree asynchronously (observed 2026-08-10 e2e —
     /// an immediate `remove_dir_all` right after taskkill failed). Still
     /// best-effort — a leftover dir is covered by the A5 retention sweep.
-    pub async fn shutdown(&mut self) {
+    pub async fn shutdown(&self) {
         // Serialize with any concurrent launch on the same profile (review
         // M4): this teardown must not delete files a new browser is writing.
         let profile = super::profile_lock(&self.profile_dir);
         let _profile_guard = profile.lock().await;
-        self.browser_ws = None;
-        if let Some(mut child) = self.child.take() {
+        let mut inner = self.inner.lock().await;
+        inner.browser_ws = None;
+        if let Some(mut child) = inner.child.take() {
             crate::kill_process_tree(&mut child).await;
         }
+        drop(inner);
         let profile = self.profile_dir.clone();
         let _ = tokio::task::spawn_blocking(move || {
             for _ in 0..10 {
@@ -643,7 +822,9 @@ impl Drop for CdpBrowserSession {
         // Sync fallback when shutdown() was never awaited (task cancel etc.):
         // the child may keep running until the session object is dropped —
         // the A5 retention sweep on `chrome-profile-*` covers the dir.
-        if let Some(child) = self.child.as_mut() {
+        if let Ok(mut inner) = self.inner.try_lock()
+            && let Some(child) = inner.child.as_mut()
+        {
             let _ = child.start_kill();
         }
     }
@@ -1040,6 +1221,27 @@ mod tests {
         CdpConfig {
             load_timeout: Duration::from_millis(500),
             total_budget: Duration::from_secs(5),
+            tab_pool_size: 4,
+            dns_ttl: Duration::from_secs(300),
+        }
+    }
+
+    /// 测试用会话构造（无需真实浏览器进程；gate/池语义可离线断言）。
+    fn test_session(config: CdpConfig) -> CdpBrowserSession {
+        let pool_size = config.tab_pool_size;
+        CdpBrowserSession {
+            port: 1,
+            browser_ws_url: "ws://127.0.0.1:1/devtools/browser/unused".to_string(),
+            profile_dir: PathBuf::from("unused"),
+            config,
+            inner: tokio::sync::Mutex::new(SessionInner {
+                browser_ws: None,
+                child: None,
+            }),
+            pool: Mutex::new(Vec::new()),
+            pool_sem: tokio::sync::Semaphore::new(pool_size.max(1)),
+            creation_lock: tokio::sync::Mutex::new(()),
+            dns: Mutex::new(HashMap::new()),
         }
     }
 
@@ -1273,14 +1475,7 @@ mod tests {
     async fn read_page_pre_gate_rejects_private_url_before_any_network() {
         // No server at all: the pre-navigation gate must fail before the
         // client ever opens a socket.
-        let mut session = CdpBrowserSession {
-            port: 1, // nothing listens here
-            browser_ws_url: "ws://127.0.0.1:1/devtools/browser/unused".to_string(),
-            profile_dir: PathBuf::from("unused"),
-            browser_ws: None,
-            child: None,
-            config: test_config(),
-        };
+        let session = test_session(test_config());
         let err = session
             .read_page(
                 "http://169.254.169.254/latest/meta-data/",
@@ -1291,6 +1486,108 @@ mod tests {
             err,
             Err(CdpError::UrlGate(UrlGateError::PrivateAddress { .. }))
         ));
+    }
+
+    /// v2：tab 池租约互斥——租约期间 busy=true（独占）、归还后空闲；
+    /// LRU 复用（最早 last_used 优先）。全程无网络（空闲分支直达）。
+    #[tokio::test]
+    async fn tab_pool_lease_is_exclusive_and_lru() {
+        let config = CdpConfig {
+            load_timeout: Duration::from_millis(500),
+            total_budget: Duration::from_secs(5),
+            tab_pool_size: 2,
+            dns_ttl: Duration::from_secs(300),
+        };
+        let session = test_session(config);
+        {
+            let mut pool = session.pool.lock().unwrap();
+            pool.push(PooledTab {
+                target_id: "t-old".to_string(),
+                page_ws: None,
+                busy: false,
+                last_used: std::time::Instant::now() - Duration::from_secs(10),
+            });
+            pool.push(PooledTab {
+                target_id: "t-new".to_string(),
+                page_ws: None,
+                busy: false,
+                last_used: std::time::Instant::now(),
+            });
+        }
+        // LRU：先取最早 last_used。
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+        let id = session.lease_tab(deadline).await.unwrap();
+        assert_eq!(id, "t-old");
+        {
+            let pool = session.pool.lock().unwrap();
+            let old = pool.iter().find(|t| t.target_id == "t-old").unwrap();
+            assert!(old.busy, "leased tab must be busy (exclusive)");
+            let new = pool.iter().find(|t| t.target_id == "t-new").unwrap();
+            assert!(!new.busy, "other tab stays free");
+        }
+        // 归还后空闲；再次租约按 LRU 取「最近最少使用」——t-old 刚被
+        // 租用（last_used 刷新为最新），t-new 空闲更久 → 先复用 t-new。
+        session.release_tab("t-old", None);
+        let id2 = session.lease_tab(deadline).await.unwrap();
+        assert_eq!(id2, "t-new");
+        session.release_tab("t-new", None);
+        let id3 = session.lease_tab(deadline).await.unwrap();
+        assert_eq!(id3, "t-old");
+        // 池上限信号量：permits = tab_pool_size。
+        assert_eq!(session.pool_sem.available_permits(), 2);
+        session.release_tab("t-old", None);
+    }
+
+    /// v2：tab 池有界——信号量 permits 恒等于池大小；池空（无空闲且未
+    /// 达上限）创建路径受 creation_lock 串行化（此处池已满、全忙 → 创建
+    /// 分支被信号量挡住，永不超池）。
+    #[tokio::test]
+    async fn tab_pool_semaphore_bounds_concurrency() {
+        let config = CdpConfig {
+            load_timeout: Duration::from_millis(500),
+            total_budget: Duration::from_secs(5),
+            tab_pool_size: 2,
+            dns_ttl: Duration::from_secs(300),
+        };
+        let session = test_session(config);
+        {
+            let mut pool = session.pool.lock().unwrap();
+            pool.push(PooledTab {
+                target_id: "t1".to_string(),
+                page_ws: None,
+                busy: true,
+                last_used: std::time::Instant::now(),
+            });
+            pool.push(PooledTab {
+                target_id: "t2".to_string(),
+                page_ws: None,
+                busy: true,
+                last_used: std::time::Instant::now(),
+            });
+        }
+        // 池满且全忙：semaphore 无 permit——第三个并发读必须等待
+        // （有界等待由调用方 total_budget 兜底），池不可能超 2。
+        let p1 = session.pool_sem.acquire();
+        let p2 = session.pool_sem.acquire();
+        let p1 = tokio::time::timeout(Duration::from_millis(500), p1)
+            .await
+            .unwrap()
+            .unwrap();
+        let p2 = tokio::time::timeout(Duration::from_millis(500), p2)
+            .await
+            .unwrap()
+            .unwrap();
+        // 第三个 acquire 超时（全部 permit 被占）——池有界。
+        let third = session.pool_sem.acquire();
+        assert!(
+            tokio::time::timeout(Duration::from_millis(200), third)
+                .await
+                .is_err(),
+            "third concurrent read must wait — pool is bounded"
+        );
+        drop(p1);
+        drop(p2);
+        assert_eq!(session.pool_sem.available_permits(), 2);
     }
 
     #[tokio::test]

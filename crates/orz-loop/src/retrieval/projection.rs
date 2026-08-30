@@ -114,7 +114,14 @@ impl AgentLoopController {
     /// 并入 goal 文本。子代理只收到 goal（`SystemPromptKind::Retrieval`），
     /// 声明面承诺的参数若不入契约会被静默丢弃——并入后语义与 ToolDef
     /// 描述一致（scope 收窄检索范围、max_results 上限结果数）。
-    pub(crate) fn build_retrieval_task_goal(arguments: &serde_json::Value, prompt: &str) -> String {
+    /// RETRIEVAL-ORCHESTRATION-MECHANICAL 0k 第二批 (2026-08-30)：
+    /// 委托契约复杂度分档——`effort` 提供 `max_results` 档位默认（模型未
+    /// 显式传参时机械并入 goal 文本；显式传参优先）。
+    pub(crate) fn build_retrieval_task_goal(
+        arguments: &serde_json::Value,
+        prompt: &str,
+        effort: Option<crate::retrieval::effort::EffortTier>,
+    ) -> String {
         let mut goal = arguments
             .get("query")
             .and_then(|q| q.as_str())
@@ -128,7 +135,8 @@ impl AgentLoopController {
             goal.push_str("\nscope: ");
             goal.push_str(scope.trim());
         }
-        if let Some(max) = arguments.get("max_results").and_then(|m| m.as_u64()) {
+        let explicit_max = arguments.get("max_results").and_then(|m| m.as_u64());
+        if let Some(max) = explicit_max.or_else(|| effort.map(|e| e.max_results_default())) {
             goal.push_str(&format!("\nmax_results: {max}"));
         }
         goal
@@ -778,23 +786,40 @@ mod tests {
             "scope": "src/cache",
             "max_results": 5,
         });
-        let goal = AgentLoopController::build_retrieval_task_goal(&args, "fallback prompt");
+        let goal = AgentLoopController::build_retrieval_task_goal(&args, "fallback prompt", None);
         assert_eq!(goal, "调研缓存层\nscope: src/cache\nmax_results: 5");
 
         // 仅 query（常见形态）→ 原样。
         let args = serde_json::json!({ "query": "调研缓存层" });
-        let goal = AgentLoopController::build_retrieval_task_goal(&args, "fallback prompt");
+        let goal = AgentLoopController::build_retrieval_task_goal(&args, "fallback prompt", None);
         assert_eq!(goal, "调研缓存层");
 
         // query 缺失 → 回退 prompt；空 scope 不入契约。
         let args = serde_json::json!({ "scope": "   " });
-        let goal = AgentLoopController::build_retrieval_task_goal(&args, "fallback prompt");
+        let goal = AgentLoopController::build_retrieval_task_goal(&args, "fallback prompt", None);
         assert_eq!(goal, "fallback prompt");
 
         // 非法 max_results（字符串）→ 忽略，不 panic。
         let args = serde_json::json!({ "query": "q", "max_results": "10" });
-        let goal = AgentLoopController::build_retrieval_task_goal(&args, "fallback prompt");
+        let goal = AgentLoopController::build_retrieval_task_goal(&args, "fallback prompt", None);
         assert_eq!(goal, "q");
+
+        // 第二批分档（2026-08-30）：模型未传 max_results → 档位默认并入；
+        // 显式传参优先于档位默认。
+        let args = serde_json::json!({ "query": "调研缓存层" });
+        let goal = AgentLoopController::build_retrieval_task_goal(
+            &args,
+            "fallback prompt",
+            Some(crate::retrieval::effort::EffortTier::Standard),
+        );
+        assert_eq!(goal, "调研缓存层\nmax_results: 5");
+        let args = serde_json::json!({ "query": "q", "max_results": 3 });
+        let goal = AgentLoopController::build_retrieval_task_goal(
+            &args,
+            "fallback prompt",
+            Some(crate::retrieval::effort::EffortTier::Deep),
+        );
+        assert_eq!(goal, "q\nmax_results: 3");
     }
 
     /// A host registry that declares `browser_read` (local_browser capable).

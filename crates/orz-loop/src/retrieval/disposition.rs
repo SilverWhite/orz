@@ -476,6 +476,7 @@ impl AgentLoopController {
                             Some(&disposition_id),
                             Some(&assessment_id),
                             result_digest.as_deref(),
+                            act.effort.map(|e| e.as_str()),
                         )
                         .await?;
                     if let TicketGate::Blocked { code, detail } = close_gate {
@@ -645,6 +646,9 @@ impl AgentLoopController {
     /// carry assessment/digest when a result was formed. `resumable=true`
     /// uniformly — the conversation/journal/ledger are preserved (§4.4;
     /// registered decision 2026-08-10).
+    /// RETRIEVAL-ORCHESTRATION-MECHANICAL 0k 第二批 (2026-08-30)：
+    /// `effort` = 本激活最近一次派发的委托契约复杂度档（可选——旧 journal
+    /// 与恢复激活不携带，schema optional）。
     #[allow(clippy::too_many_arguments)] // the full close-record identity
     async fn write_close_record(
         &self,
@@ -658,6 +662,7 @@ impl AgentLoopController {
         validated_disposition_id: Option<&str>,
         assessment_id: Option<&str>,
         result_digest: Option<&str>,
+        effort: Option<&str>,
     ) -> Result<TicketGate, AgentLoopError> {
         // ACAF Slice 1 (ADR-0011 §4.2): a close record is a control event —
         // ticket it before the record (shadow mode). Covers every terminal
@@ -704,25 +709,26 @@ impl AgentLoopController {
             (Some(_), Some(artifact)) => artifact,
             _ => format!("run-journal:{}", writer.run_id()),
         };
+        let mut close_payload = serde_json::json!({
+            "close_record_id": close_record_id,
+            "parent_session_id": parent_session_id,
+            "subagent_session_id": subagent_session_id,
+            "activation_id": activation_id,
+            "contract_id": contract_id,
+            "contract_revision": contract_revision,
+            "result_digest": result_digest,
+            "assessment_id": assessment_id,
+            "validated_disposition_id": validated_disposition_id,
+            "terminal_reason": terminal_reason,
+            "resumable": true,
+            "live_state_reset": true,
+            "archive_ref": archive_ref,
+        });
+        if let Some(effort) = effort {
+            close_payload["effort"] = serde_json::json!(effort);
+        }
         writer
-            .record(
-                EventType::RetrievalCloseRecord,
-                serde_json::json!({
-                    "close_record_id": close_record_id,
-                    "parent_session_id": parent_session_id,
-                    "subagent_session_id": subagent_session_id,
-                    "activation_id": activation_id,
-                    "contract_id": contract_id,
-                    "contract_revision": contract_revision,
-                    "result_digest": result_digest,
-                    "assessment_id": assessment_id,
-                    "validated_disposition_id": validated_disposition_id,
-                    "terminal_reason": terminal_reason,
-                    "resumable": true,
-                    "live_state_reset": true,
-                    "archive_ref": archive_ref,
-                }),
-            )
+            .record(EventType::RetrievalCloseRecord, close_payload)
             .await?;
         Ok(gate)
     }
@@ -763,6 +769,7 @@ impl AgentLoopController {
                     a.subagent_session_id.clone(),
                     a.contract_id.clone(),
                     a.contract_revision,
+                    a.effort,
                 )),
                 _ => None,
             }
@@ -773,6 +780,7 @@ impl AgentLoopController {
             subagent_session_id,
             contract_id,
             contract_revision,
+            act_effort,
         )) = snapshot
         else {
             return Ok(());
@@ -789,6 +797,7 @@ impl AgentLoopController {
                 None,
                 assessment_id,
                 result_digest,
+                act_effort.map(|e| e.as_str()),
             )
             .await?;
         if let TicketGate::Blocked { .. } = &gate {

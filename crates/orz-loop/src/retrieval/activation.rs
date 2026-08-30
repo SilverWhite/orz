@@ -14,6 +14,7 @@ use crate::agents::SubagentRole;
 use crate::controller::{AgentLoopController, AgentLoopError, EventWriter, PendingDisposition};
 use crate::gateway::model::{Message, Role};
 use crate::prompt::{is_injected_block_text, is_restore_retained_block};
+use crate::retrieval::effort::EffortTier;
 use crate::retrieval::evidence::StructuredCommittedResult;
 
 impl AgentLoopController {
@@ -213,6 +214,8 @@ impl ActivationRegistry {
                     tool_rounds_used: stored.tool_rounds_used,
                     candidate_urls: stored.candidate_urls.clone(),
                     result_archive_ref: stored.result_archive_ref.clone(),
+                    // 恢复激活不携带 effort（下一次派发重新计算并覆盖）。
+                    effort: None,
                 },
             );
             restored.push(stored);
@@ -252,6 +255,10 @@ pub(crate) struct ActivationState {
     pub next_goal: Option<String>,
     /// Most recent result digest (close record / §4.4 idempotency key).
     pub result_digest: Option<String>,
+    /// RETRIEVAL-ORCHESTRATION-MECHANICAL 0k 第二批 (2026-08-30)：本激活
+    /// 最近一次派发的委托契约 effort 档（机械分档；close record 登记可选
+    /// `effort` 字段）。`continue` 重入覆盖为最新档。
+    pub effort: Option<EffortTier>,
     /// Submitted disposition ids → canonical full payloads, ACROSS
     /// assessments (activation-lifetime). §4.4 replay idempotency: a
     /// replayed id must journal byte-identical payload — a late replay of
@@ -485,6 +492,7 @@ mod tests {
                     "https://b.example".to_string(),
                 ],
                 result_archive_ref: Some(".gsa/runs/RUN-X/retrieval-results/a.json".to_string()),
+                effort: None,
             },
         );
         // A Closed activation must NOT ride the snapshot.
@@ -505,6 +513,7 @@ mod tests {
                 tool_rounds_used: 0,
                 candidate_urls: Vec::new(),
                 result_archive_ref: None,
+                effort: None,
             },
         );
 
@@ -571,6 +580,7 @@ mod tests {
                 tool_rounds_used: 0,
                 candidate_urls: Vec::new(),
                 result_archive_ref: None,
+                effort: None,
             };
         let undisposed = Some(PendingDisposition {
             assessment_id: "ASSESS-1".to_string(),
@@ -738,6 +748,7 @@ mod tests {
             tool_rounds_used: 1,
             candidate_urls: Vec::new(),
             result_archive_ref: None,
+            effort: None,
         };
         controller
             .activations

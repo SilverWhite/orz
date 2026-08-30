@@ -315,6 +315,11 @@ pub(crate) struct LoopProfile {
     /// path). The main/grill lanes pass `None` — candidate-counted tools
     /// never execute there, and a `None` domain fails the gate closed.
     pub fetch_candidates: Option<Arc<Mutex<Vec<String>>>>,
+    /// RETRIEVAL-ORCHESTRATION-MECHANICAL 0k 第二批 (2026-08-30)：
+    /// 委托契约复杂度分档的同轮 `browser_read` 并发上限（standard 2 /
+    /// extended 4 / deep None=不限）。主/grill lane 传 `None`。host tab
+    /// 池是最终物理上限，本字段只约束 loop 批次内的并发启动。
+    pub browser_read_concurrency: Option<usize>,
 }
 
 impl LoopProfile {
@@ -331,6 +336,7 @@ impl LoopProfile {
             probe_work_tools: true,
             activation_id: None,
             fetch_candidates: None,
+            browser_read_concurrency: None,
         }
     }
 
@@ -350,6 +356,7 @@ impl LoopProfile {
             probe_work_tools: true,
             activation_id: None,
             fetch_candidates: None,
+            browser_read_concurrency: None,
         }
     }
 
@@ -360,6 +367,9 @@ impl LoopProfile {
     /// session's consumed budget across `continue` re-entries (user
     /// adjudication 2026-08-10, review F5 — the caller reads it back from
     /// the activation).
+    /// 0k 第二批 (2026-08-30)：末尾追加 `browser_read_concurrency` 档位
+    /// 参数——8 参数是已登记成本（同 write_close_record 先例）。
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn retrieval(
         role: SubagentRole,
         goal: &str,
@@ -368,6 +378,7 @@ impl LoopProfile {
         initial_tool_rounds: u32,
         activation_id: &str,
         fetch_candidates: Option<Arc<Mutex<Vec<String>>>>,
+        browser_read_concurrency: Option<usize>,
     ) -> Self {
         let agent_role = match role {
             SubagentRole::InternalRetrieval => AgentRole::InternalRetrieval,
@@ -389,6 +400,7 @@ impl LoopProfile {
             probe_work_tools: false,
             activation_id: Some(activation_id.to_string()),
             fetch_candidates,
+            browser_read_concurrency,
         }
     }
 }
@@ -2056,9 +2068,18 @@ pub(crate) async fn run_agent_loop(
             }
             if run_len >= 2 {
                 let batch: Vec<&ToolCall> = response.tool_calls[..run_len].iter().collect();
+                // RETRIEVAL-ORCHESTRATION-MECHANICAL 0k 第二批 (2026-08-30)：
+                // 委托契约复杂度分档——同轮 `browser_read` 并发上限（档位
+                // 机械映射；deep=不限）。host tab 池是最终物理上限，这里
+                // 只约束批次内的并发启动（simple 任务不把 tab 池打满）。
+                let browser_sem = profile
+                    .browser_read_concurrency
+                    .filter(|n| *n > 0)
+                    .map(|n| Arc::new(tokio::sync::Semaphore::new(n)));
                 let mut futures = Vec::with_capacity(batch.len());
                 for tc in batch {
                     let tc_owned = tc.clone();
+                    let browser_sem_fut = browser_sem.clone();
                     let mut w = EventWriter::buffered(&run_id);
                     let mut local_msgs: Vec<Message> = Vec::new();
                     let direct_ctx = if controller.console_default_enabled()
@@ -2075,6 +2096,23 @@ pub(crate) async fn run_agent_loop(
                     let fetch_candidates = profile.fetch_candidates.clone();
                     let activation_id = profile.activation_id.clone();
                     futures.push(async move {
+                        // 档位并发上限：browser_read 先取 permit 再执行
+                        // （permit 随 future drop 释放；信号量本批内不
+                        // close，acquire 失败实际不可达——fail-closed 兜底）。
+                        let _browser_permit = if tc_owned.name == "browser_read" {
+                            match browser_sem_fut.as_ref() {
+                                Some(sem) => {
+                                    Some(sem.clone().acquire_owned().await.map_err(|_| {
+                                        AgentLoopError::Assurance(
+                                            "browser_read concurrency semaphore closed".into(),
+                                        )
+                                    })?)
+                                }
+                                None => None,
+                            }
+                        } else {
+                            None
+                        };
                         let direct_stamp = direct_ctx.as_ref().map(|(s, _)| s);
                         let (result, feedback) = controller
                             .run_host_tool_with_plan_gate(

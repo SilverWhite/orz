@@ -48,6 +48,11 @@ tokio-tungstenite = { workspace = true }
 url = { workspace = true }
 futures = { workspace = true }
 
+# project_doc_index v2 (RETRIEVAL-ORCHESTRATION-MECHANICAL 0k 第二批,
+# 2026-08-30)：条目内容身份哈希——workspace 既有依赖（orz-config /
+# orz-memory 在用），零新增传递依赖。
+blake3 = { workspace = true }
+
 [target.'cfg(windows)'.dependencies]
 windows = { workspace = true }
 

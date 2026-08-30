@@ -16,13 +16,17 @@ use crate::blackboard::ToolActionRecord;
 use crate::controller::{
     AgentLoopController, AgentLoopError, EventWriter, RetrievalCapability, RetrievalMode,
     RetrievalResultChannel, chrono_utc_now, estimate_messages_tokens,
-    retrieval_result_channel_from_env,
+    retrieval_result_channel_from_env, retrieval_subagent_max_tool_rounds_override,
+    retrieval_subagent_wallclock_override,
 };
 use crate::gateway::model::{Message, ModelGateway, Role, ToolCall};
 use crate::host::{LoopHost, ToolDef, ToolResult};
 use crate::orientation::OrientationSessionState;
 use crate::relay::DispatchTarget;
 use crate::retrieval::activation::{ActivationState, ActivationStatus};
+use crate::retrieval::effort::{
+    classify_retrieval_effort, effort_inputs_from_args, retrieval_effort_override,
+};
 use crate::retrieval::evidence::build_structured_result;
 
 impl AgentLoopController {
@@ -171,7 +175,22 @@ impl AgentLoopController {
         // RETRIEVAL-SUBAGENT-WIRING 审查处理：任务契约 = query（必填，
         // 缺省回退 prompt）+ 可选 scope/max_results 机械并入（ToolDef
         // 声明面承诺的参数必须进契约，否则被静默丢弃）。
-        let goal = Self::build_retrieval_task_goal(&tc.arguments, prompt);
+        // RETRIEVAL-ORCHESTRATION-MECHANICAL 0k 第二批 (2026-08-30)：
+        // 委托契约复杂度分档——先机械分档（env 强制覆盖优先），档位默认
+        // max_results 并入 goal；档位只调执行预算，模型面零改动。
+        let (effort, goal) = {
+            let (query, scope, max_results) = effort_inputs_from_args(&tc.arguments);
+            let tier = retrieval_effort_override().unwrap_or_else(|| {
+                classify_retrieval_effort(
+                    &query,
+                    scope.as_deref(),
+                    max_results,
+                    role == SubagentRole::ExternalRetrieval,
+                )
+            });
+            let goal = Self::build_retrieval_task_goal(&tc.arguments, prompt, Some(tier));
+            (tier, goal)
+        };
 
         // Activation resolution (ADR-0010 §3.3): the state is REMOVED from
         // the registry so the std::Mutex guard never crosses an await; it is
@@ -245,6 +264,9 @@ impl AgentLoopController {
                     // is gone) — retained for the restore/dormant paths.
                     let mut a = reg.states.remove(&role).unwrap();
                     let task_goal = a.next_goal.take().unwrap_or_else(|| goal.clone());
+                    // 第二批分档：`continue` 重入覆盖为最新档（close record
+                    // 登记最后一次派发的 effort）。
+                    a.effort = Some(effort);
                     a.conversation.push(Message {
                         role: Role::User,
                         content: task_goal.clone(),
@@ -292,6 +314,7 @@ impl AgentLoopController {
                             tool_rounds_used: 0,
                             candidate_urls: Vec::new(),
                             result_archive_ref: None,
+                            effort: Some(effort),
                         },
                         goal.clone(),
                     )
@@ -336,6 +359,24 @@ impl AgentLoopController {
         // F5 (user adjudication 2026-08-10): the activation's consumed
         // rounds carry into this dispatch — a `continue` re-entry is the
         // same retrieval session, so the 120-round budget accumulates.
+        // RETRIEVAL-ORCHESTRATION-MECHANICAL 0k 第二批 (2026-08-30)：
+        // 委托契约复杂度分档——预算解析顺序：显式 env（含 0=禁用） >
+        // 测试/配置 seam（controller 字段） > 档位默认（240/600/900s、
+        // 30/60/90 轮）；与主车道仍取 min。
+        let retrieval_wallclock: Option<std::time::Duration> =
+            match retrieval_subagent_wallclock_override() {
+                Some(v) => v,
+                None => self
+                    .retrieval_subagent_wallclock
+                    .or_else(|| Some(effort.wallclock_default())),
+            };
+        let retrieval_max_rounds: Option<u32> = match retrieval_subagent_max_tool_rounds_override()
+        {
+            Some(v) => v,
+            None => self
+                .retrieval_max_tool_rounds
+                .or_else(|| Some(effort.max_tool_rounds_default())),
+        };
         let profile = LoopProfile::retrieval(
             role,
             &goal,
@@ -344,7 +385,7 @@ impl AgentLoopController {
             // 子代理独立轮数上限（默认 60），与主车道全局轮数取 min——
             // 测试用 with_max_tool_rounds 缩小时语义不变；None（env 0）
             // = 禁用独立上限，仅用主车道（P3-5 对齐墙钟 0=禁用语义）。
-            self.retrieval_max_tool_rounds
+            retrieval_max_rounds
                 .map(|r| self.max_tool_rounds.min(r))
                 .unwrap_or(self.max_tool_rounds),
             act.tool_rounds_used,
@@ -357,6 +398,9 @@ impl AgentLoopController {
                 SubagentRole::ExternalRetrieval => Some(fetch_candidates.clone()),
                 SubagentRole::InternalRetrieval => None,
             },
+            // 第二批分档：同轮 browser_read 并行上限（standard 2 /
+            // extended 4 / deep 不限——host tab 池为最终物理上限）。
+            effort.browser_read_concurrency(),
         );
         // Box::pin: the subagent loop is a recursive call through the
         // dispatch edge (main loop → subagent loop; depth is capped at one
@@ -405,7 +449,7 @@ impl AgentLoopController {
             heartbeat,
             run_gateway,
         ));
-        let loop_outcome = match self.retrieval_subagent_wallclock {
+        let loop_outcome = match retrieval_wallclock {
             Some(budget) => match tokio::time::timeout(budget, loop_future).await {
                 Ok(outcome) => outcome,
                 Err(_) => {
@@ -2698,6 +2742,62 @@ mod tests {
         let r = controller.blackboard().read();
         assert_eq!(r.internal_ret.project_docs, vec!["b.md"]);
 
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// RETRIEVAL-ORCHESTRATION-MECHANICAL 0k 第二批 (2026-08-30)：委托
+    /// 契约复杂度分档——close record 登记 effort（短内部查询 → standard；
+    /// 长聚合词查询 → deep）；预算解析在 controller 字段未显式设置时走
+    /// 档位默认。
+    #[tokio::test]
+    async fn close_record_carries_effort_tier() {
+        let dir = test_dir();
+        let journal = JournalRecorder::new(dir.clone());
+        let host = TestHost {
+            journal,
+            tool_result: None,
+        };
+        let long_query = format!("调研{}", "x".repeat(900));
+        let gateway: Arc<dyn ModelGateway> = Arc::new(FakeProvider::new(vec![
+            ScriptedResponse::tool_calls(vec![ToolCall {
+                name: "retrieve_project_docs".to_string(),
+                arguments: serde_json::json!({ "query": "查找项目文档" }),
+                call_id: "call-1".to_string(),
+            }]),
+            ScriptedResponse::text("[DOC] a.md\n检索完成"),
+            ScriptedResponse::tool_calls(vec![ToolCall {
+                name: "retrieve_project_docs".to_string(),
+                arguments: serde_json::json!({ "query": long_query }),
+                call_id: "call-2".to_string(),
+            }]),
+            ScriptedResponse::text("[DOC] b.md\n检索完成"),
+            ScriptedResponse::text("完成"),
+            ScriptedResponse::text("完成"),
+        ]));
+        let controller = with_retrieval_enabled(AgentLoopController::with_gateway(gateway));
+        controller
+            .run_turn(&host, "分档测试", "RUN-EFF", MANIFEST, 0, None, None, None)
+            .await
+            .unwrap();
+
+        let events = events(&dir);
+        let closes: Vec<_> = events
+            .iter()
+            .filter(|e| e.event_type == EventType::RetrievalCloseRecord)
+            .collect();
+        assert_eq!(closes.len(), 2, "{:?}", event_types(&dir));
+        assert_eq!(
+            closes[0].payload.get("effort").and_then(|v| v.as_str()),
+            Some("standard"),
+            "{:?}",
+            closes[0].payload
+        );
+        assert_eq!(
+            closes[1].payload.get("effort").and_then(|v| v.as_str()),
+            Some("deep"),
+            "{:?}",
+            closes[1].payload
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 

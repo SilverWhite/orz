@@ -138,17 +138,17 @@ pub trait BrowserSession: Send + Sync {
 /// lazily by the capability probe and reused across runs (same profile dir →
 /// no profile-lock conflicts).
 pub struct LocalBrowserManager {
-    /// tokio Mutex: `CdpBrowserSession::read_page` needs `&mut self` across
-    /// awaits, so the guard is held over the whole read (std Mutex guards
-    /// must not cross awaits — codebase rule).
-    inner: tokio::sync::Mutex<Option<CdpBrowserSession>>,
+    /// v2 (RETRIEVAL-ORCHESTRATION-MECHANICAL 0k 第二批, 2026-08-30)：
+    /// 会话以 Arc 共享；`read_page` 只短取 Arc（锁内 clone、锁外读取）——
+    /// 同轮多个 `browser_read` 真正并发（tab 池在会话内部约束并发）。
+    inner: tokio::sync::Mutex<Option<Arc<CdpBrowserSession>>>,
 }
 
 impl LocalBrowserManager {
     /// Wrap an already-launched session (the probe does the launching).
     pub fn new(session: CdpBrowserSession) -> Self {
         Self {
-            inner: tokio::sync::Mutex::new(Some(session)),
+            inner: tokio::sync::Mutex::new(Some(Arc::new(session))),
         }
     }
 
@@ -165,9 +165,11 @@ impl LocalBrowserManager {
 #[async_trait]
 impl BrowserSession for LocalBrowserManager {
     async fn read_page(&self, url: &str, mode: ReadMode) -> Result<PageReadOutcome, CdpError> {
-        let mut guard = self.inner.lock().await;
-        let session = guard
-            .as_mut()
+        let session = self
+            .inner
+            .lock()
+            .await
+            .clone()
             .ok_or_else(|| CdpError::Io("browser session not launched".into()))?;
         session.read_page(url, mode).await
     }
@@ -177,9 +179,11 @@ impl BrowserSession for LocalBrowserManager {
         url: &str,
         download_dir: &Path,
     ) -> Result<BrowserDownloadOutcome, CdpError> {
-        let mut guard = self.inner.lock().await;
-        let session = guard
-            .as_mut()
+        let session = self
+            .inner
+            .lock()
+            .await
+            .clone()
             .ok_or_else(|| CdpError::Io("browser session not launched".into()))?;
         session.download_or_read(url, download_dir).await
     }
@@ -192,13 +196,13 @@ impl BrowserSession for LocalBrowserManager {
         // launch failure).
         self.inner
             .try_lock()
-            .map(|mut g| g.as_mut().is_some_and(|s| s.is_alive()))
+            .map(|g| g.as_ref().is_some_and(|s| s.is_alive()))
             .unwrap_or(false)
     }
 
     async fn shutdown(&self) {
         let mut guard = self.inner.lock().await;
-        if let Some(mut session) = guard.take() {
+        if let Some(session) = guard.take() {
             session.shutdown().await;
         }
     }
@@ -747,7 +751,7 @@ pub(crate) mod tests {
         let _ = std::fs::remove_dir_all(&workspace);
         std::fs::create_dir_all(&workspace).unwrap();
 
-        let mut session = CdpBrowserSession::launch(
+        let session = CdpBrowserSession::launch(
             find_browser(None)
                 .expect("a Chrome/Edge binary must be discoverable")
                 .path,
@@ -755,6 +759,8 @@ pub(crate) mod tests {
             CdpConfig {
                 load_timeout: std::time::Duration::from_secs(30),
                 total_budget: std::time::Duration::from_secs(60),
+                tab_pool_size: 4,
+                dns_ttl: std::time::Duration::from_secs(300),
             },
         )
         .await
@@ -795,7 +801,7 @@ pub(crate) mod tests {
         let _ = std::fs::remove_dir_all(&workspace);
         std::fs::create_dir_all(&workspace).unwrap();
 
-        let mut session = CdpBrowserSession::launch(
+        let session = CdpBrowserSession::launch(
             find_browser(None)
                 .expect("a Chrome/Edge binary must be discoverable")
                 .path,
@@ -849,7 +855,7 @@ pub(crate) mod tests {
         let _ = std::fs::remove_dir_all(&workspace);
         std::fs::create_dir_all(&workspace).unwrap();
 
-        let mut session = CdpBrowserSession::launch(
+        let session = CdpBrowserSession::launch(
             find_browser(None)
                 .expect("a Chrome/Edge binary must be discoverable")
                 .path,

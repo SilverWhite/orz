@@ -697,11 +697,11 @@ impl AgentLoopController {
             main_agent: MainAgent::new(gateway.clone()),
             blackboard: Arc::new(SharedBlackboard::new()),
             max_tool_rounds: max_tool_rounds_override().unwrap_or(MAX_TOOL_ROUNDS),
-            retrieval_subagent_wallclock: retrieval_subagent_wallclock_override().unwrap_or(Some(
-                std::time::Duration::from_secs(RETRIEVAL_SUBAGENT_WALLCLOCK_DEFAULT_SECS),
-            )),
-            retrieval_max_tool_rounds: retrieval_subagent_max_tool_rounds_override()
-                .unwrap_or(Some(RETRIEVAL_SUBAGENT_MAX_TOOL_ROUNDS)),
+            // RETRIEVAL-ORCHESTRATION-MECHANICAL 0k 第二批 (2026-08-30)：
+            // 委托契约复杂度分档——构造时不再固化默认预算；dispatch 按
+            // 「显式 env > controller 字段（seam） > 档位默认」解析。
+            retrieval_subagent_wallclock: retrieval_subagent_wallclock_override().flatten(),
+            retrieval_max_tool_rounds: retrieval_subagent_max_tool_rounds_override().flatten(),
             candidate_cap: web_fetch_candidate_cap_override()
                 .unwrap_or(DEFAULT_WEB_FETCH_CANDIDATE_CAP),
             max_inject_tokens_per_round: max_inject_tokens_per_round_override()
@@ -1284,10 +1284,10 @@ impl AgentLoopController {
             main_agent,
             blackboard: Arc::new(SharedBlackboard::new()),
             max_tool_rounds: MAX_TOOL_ROUNDS,
-            retrieval_subagent_wallclock: Some(std::time::Duration::from_secs(
-                RETRIEVAL_SUBAGENT_WALLCLOCK_DEFAULT_SECS,
-            )),
-            retrieval_max_tool_rounds: Some(RETRIEVAL_SUBAGENT_MAX_TOOL_ROUNDS),
+            // 第二批分档：测试组件构造不固化预算默认，档位默认在 dispatch
+            // 生效；需要显式预算的测试直接写 controller 字段。
+            retrieval_subagent_wallclock: None,
+            retrieval_max_tool_rounds: None,
             candidate_cap: DEFAULT_WEB_FETCH_CANDIDATE_CAP,
             max_inject_tokens_per_round: DEFAULT_MAX_INJECT_TOKENS_PER_ROUND,
             snapshot_store: None,

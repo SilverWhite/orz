@@ -711,6 +711,14 @@ impl OrzHost {
             tool_result.workspace_delta = workspace_delta;
             tool_result.workspace_delta_truncated = workspace_delta_truncated;
         }
+        // RETRIEVAL-ORCHESTRATION-MECHANICAL 0k 第二批 (2026-08-30)：
+        // project_doc_index v2 写后失效——工作区写类工具完成即置 dirty，
+        // 下一次索引 query 增量刷新（模型刚写的内容立即可搜，v1 空转
+        // 场景闭环）。run_terminal_cmd 输出不可解析 → 整索引 dirty；
+        // 后台任务（mid_run）也置位（命令仍在写盘）。
+        if matches!(name, "search_replace" | "run_terminal_cmd") {
+            self.project_doc_index.mark_dirty();
+        }
         Ok(tool_result)
     }
 }
