@@ -16,7 +16,7 @@ use crate::console::CODE_CONTENT_ANCHOR_MISMATCH;
 use crate::controller::{
     AgentLoopController, AgentLoopError, CandidateGateDecision, DenialKey, EventWriter,
     PolicyFeedback, RetrievalMode, TicketGate, candidate_tool_prefix, chrono_utc_now,
-    commit_candidate, compose_test_output_message,
+    commit_candidate, compose_test_output_message, rollback_candidate,
 };
 use crate::gateway::model::{Message, Role, ToolCall};
 use crate::host::{
@@ -641,6 +641,13 @@ impl AgentLoopController {
             // round's denials and appends the breaker only after the WHOLE
             // tool batch (a user message between tool replies would violate
             // the provider protocol; 2026-08-07 wordy 400 + review P1).
+            // 0k 审查处理 (P2-2)：候选已原子预留，权限拒绝 → 回滚占位
+            // （被拒绝的调用不消耗候选）。
+            if let Some((url, _)) = candidate_commit.take()
+                && let Some(counter) = fetch_candidates
+            {
+                rollback_candidate(counter, &url);
+            }
             return Ok((
                 result,
                 Some(PolicyFeedback::Denied(DenialKey {
@@ -896,6 +903,12 @@ impl AgentLoopController {
                 )
                 .await?;
             if let TicketGate::Blocked { .. } = &gate {
+                // 0k 审查处理 (P2-2)：候选已原子预留，票据拒绝 → 回滚占位。
+                if let Some((url, _)) = candidate_commit.take()
+                    && let Some(counter) = fetch_candidates
+                {
+                    rollback_candidate(counter, &url);
+                }
                 return self
                     .refuse_ticketed_tool(writer, messages, tc, &gate, probe_writeback)
                     .await;
@@ -2552,16 +2565,24 @@ impl AgentLoopController {
                 .await;
         };
         let cap = self.candidate_cap as usize;
-        // Decision only — no mutation here; consumption commits at the
-        // execution boundary (review fix 2026-08-14). The std MutexGuard
-        // must not cross the async refusal below (Send).
+        // 0k 审查处理 (P2-2, 2026-08-30)：决策+预留原子化——锁内检查 cap
+        // 并立即占位，消除并行批次下「决策/提交分离」的竞态（两个调用
+        // 基于同一旧计数同时通过 → 硬 cap 超限最多 +批次大小）。后续
+        // permission/ACAF 门拒绝时由调用方 `rollback_candidate` 回滚，
+        // 保持「被权限/票据拒绝的调用不消耗候选」语义（review fix
+        // 2026-08-14 不变）；`commit_candidate` 对已预留 url 为去重幂等
+        // （返回计数）。The std MutexGuard must not cross the async
+        // refusal below (Send).
         let outcome = {
-            let seen = counter.lock().unwrap();
+            let mut seen = counter.lock().unwrap();
             let count = seen.len();
             let is_new = !seen.iter().any(|u| u == &url);
             if is_new && count >= cap {
                 Err((count, cap))
             } else {
+                if is_new {
+                    seen.push(url.clone());
+                }
                 Ok(())
             }
         };
@@ -2834,10 +2855,14 @@ mod tests {
 
     /// ORZ-CACHE-CONTEXT-COST (2026-08-15, ADR-0010 §3.6): the per-round
     /// tool-result injection budget — results accumulate (chars/2) and once
-    /// at/over the budget the REST of the batch is refused WITHOUT
-    /// ToolStarted, journaled with the used/budget fields and answered with
-    /// an explicit offset/grep-first hint (provider protocol: every declared
-    /// call is answered).
+    /// at/over the budget the REST of the batch is refused, journaled with
+    /// the used/budget fields and answered with an explicit offset/grep-
+    /// first hint (provider protocol: every declared call is answered).
+    /// 0k 审查处理 (P2-3, 2026-08-30)：两个 read_file 现走同轮读类并行
+    /// 批次——批次内调用已真实执行，预算拒绝发生在提交阶段：事件按声明
+    /// 序重放执行留痕（ToolStarted/ToolCompleted ×2）、消息面仍按串行
+    /// 拒绝语义注入 offset 提示（call-2 结果不计入上下文、不计入注入
+    /// 预算）。
     #[tokio::test]
     async fn inject_budget_refuses_later_calls_of_batch_with_offset_hint() {
         let dir = test_dir();
@@ -2869,17 +2894,26 @@ mod tests {
             .unwrap();
 
         let events = events(&dir);
-        // Only the FIRST call executes (one ToolStarted).
+        // 并行批次：两个调用均执行（执行留痕）。
         let started = events
             .iter()
             .filter(|e| e.event_type == EventType::ToolStarted)
             .count();
-        assert_eq!(started, 1, "second call of the batch must not execute");
+        assert_eq!(started, 2, "parallel batch executes every call");
         let completed: Vec<&RunEvent> = events
             .iter()
             .filter(|e| e.event_type == EventType::ToolCompleted)
             .collect();
-        assert_eq!(completed.len(), 2);
+        // call-1 成功 + call-2 执行留痕 + call-2 预算拒绝 = 3 条。
+        assert_eq!(completed.len(), 3, "{completed:?}");
+        // call-2 的实际执行留痕（P2-3：审计面与事实一致）。
+        assert!(
+            completed.iter().any(|e| {
+                e.payload.get("call_id").and_then(|v| v.as_str()) == Some("call-2")
+                    && e.payload.get("status").and_then(|v| v.as_str()) != Some("error")
+            }),
+            "executed call must leave its ToolCompleted trace: {completed:?}"
+        );
         let refused = completed
             .iter()
             .find(|e| e.payload["error"] == "round_inject_budget_exceeded")

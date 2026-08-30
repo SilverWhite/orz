@@ -147,6 +147,10 @@ pub fn parse_retrieval_text(text: &str) -> (Vec<String>, Vec<String>) {
 /// - 证据以 tool-call evidence ledger 为准，声明行仅元数据级，截断
 ///   不丢证据；全文由调用方保留（blackboard 分区 response /
 ///   retrieval-results 存档）。
+/// 0k 审查处理 (P3-6) 登记口径：8K 字节预算只约束声明行（逐条装填，
+/// 设计语义「声明行字节上限」）；prose 叙述与截断标注行不计入——二者
+/// 是子代理自由文本与机械说明，原样保留（blackboard 全文通道不受影响，
+/// inline 通道的有界化对象是结构化声明行）。
 pub const RETRIEVAL_RESULT_LINE_CAP: usize = 16;
 pub const RETRIEVAL_RESULT_BYTES_CAP: usize = 8 * 1024;
 

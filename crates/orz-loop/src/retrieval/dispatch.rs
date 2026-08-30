@@ -342,8 +342,11 @@ impl AgentLoopController {
             self.retrieval_mode,
             // RETRIEVAL-ORCHESTRATION-MECHANICAL 0k (2026-08-30): 检索
             // 子代理独立轮数上限（默认 60），与主车道全局轮数取 min——
-            // 测试用 with_max_tool_rounds 缩小时语义不变。
-            self.max_tool_rounds.min(self.retrieval_max_tool_rounds),
+            // 测试用 with_max_tool_rounds 缩小时语义不变；None（env 0）
+            // = 禁用独立上限，仅用主车道（P3-5 对齐墙钟 0=禁用语义）。
+            self.retrieval_max_tool_rounds
+                .map(|r| self.max_tool_rounds.min(r))
+                .unwrap_or(self.max_tool_rounds),
             act.tool_rounds_used,
             &act.activation_id,
             // Only the external lane executes candidate-counted tools
@@ -367,6 +370,11 @@ impl AgentLoopController {
         // loop future，父 run 继续，激活以 subagent_timeout 收口（Err 分支）。
         // 事件链：子代理事件已随同一 writer 入链，丢弃后父代理从同一
         // seq/prev_hash 续写，ToolCompleted(error) 补全本次派发的审计形态。
+        // 0k 审查处理 (P3-4)：in-flight 工具槽——run_agent_loop 串行工具
+        // 执行处入/出槽；墙钟超时 drop loop future 后，据此为链上孤儿
+        // ToolStarted 补 ToolCompleted(error)（审计形态完整）。
+        let in_flight_tools: std::sync::Mutex<Vec<(String, String)>> =
+            std::sync::Mutex::new(Vec::new());
         let svc = SharedLoopServices {
             blackboard: &self.blackboard,
             denial_state: &self.denial_state,
@@ -378,6 +386,7 @@ impl AgentLoopController {
             policy_revision: &self.policy_revision,
             max_inject_tokens_per_round: self.max_inject_tokens_per_round,
             blackboard_archive_dir: self.blackboard_archive_dir(),
+            in_flight_tools: Some(&in_flight_tools),
         };
         let loop_future = Box::pin(run_agent_loop(
             &svc,
@@ -405,6 +414,27 @@ impl AgentLoopController {
                         target = %target_name,
                         "retrieval subagent wallclock exceeded — closing activation"
                     );
+                    // 0k 审查处理 (P3-4)：为 in-flight 孤儿 ToolStarted 补
+                    // ToolCompleted(error)——子代理 loop 被 drop 时正在
+                    // 执行的串行工具已记录 ToolStarted、未记录
+                    // ToolCompleted；合成收口让审计形态完整（tool/call_id
+                    // 与孤儿 ToolStarted 配对，验证器 started→completed
+                    // 形态闭合）。
+                    let interrupted: Vec<(String, String)> =
+                        in_flight_tools.lock().unwrap().clone();
+                    for (tool, call_id) in interrupted {
+                        writer
+                            .record(
+                                EventType::ToolCompleted,
+                                serde_json::json!({
+                                    "tool": tool,
+                                    "call_id": call_id,
+                                    "status": "error",
+                                    "error": "subagent_wallclock_timeout_mid_tool",
+                                }),
+                            )
+                            .await?;
+                    }
                     Err(AgentLoopError::RetrievalSubagentTimeout)
                 }
             },
@@ -418,6 +448,10 @@ impl AgentLoopController {
         // subagent_failed/subagent_cancelled anyway (a new activation
         // starts a fresh budget). Read back on every path — the close still
         // records the consumed rounds.
+        // 0k 审查处理 (P3)：Err 路径（含 subagent_timeout）不更新
+        // `act.tool_rounds_used`——超时后激活以 subagent_timeout 关闭
+        // （closed），continue 重入不可能，陈旧轮数值不产生语义影响；
+        // close record 不携带轮数，审计以事件链为准。
         if let Ok(outcome) = &loop_outcome {
             act.tool_rounds_used = outcome.tool_rounds;
         }
@@ -441,6 +475,7 @@ impl AgentLoopController {
                         policy_revision: &self.policy_revision,
                         max_inject_tokens_per_round: self.max_inject_tokens_per_round,
                         blackboard_archive_dir: self.blackboard_archive_dir(),
+                        in_flight_tools: Some(&in_flight_tools),
                     };
                     // FUS-LEDGER-FOLD-STATE (2026-08-18, ADR-0010
                     // §14.26): the session-end compaction uses the
@@ -833,7 +868,7 @@ mod tests {
     use crate::controller::{
         CandidateGateDecision, RETRIEVAL_RESULT_CHANNEL_ENV, commit_candidate,
         parse_max_inject_tokens_per_round, parse_retrieval_subagent_max_tool_rounds,
-        parse_retrieval_subagent_wallclock, parse_web_fetch_candidate_cap,
+        parse_retrieval_subagent_wallclock, parse_web_fetch_candidate_cap, rollback_candidate,
     };
     use crate::controller_test_support::*;
     use crate::denial::PolicyFeedback;
@@ -2238,12 +2273,14 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
-    /// Review fix (2026-08-14): the candidate gate only DECIDES — it must
-    /// not consume; consumption commits at the execution boundary with
-    /// exact-string dedup, so a permission/ticket-blocked call consumes no
-    /// budget.
+    /// 0k 审查处理 (P2-2, 2026-08-30)：candidate_gate 决策+预留原子化——
+    /// 锁内检查 cap 并立即占位（消除并行批次下「决策/提交分离」的硬 cap
+    /// 竞态：两个调用基于同一旧计数同时通过 → 超限最多 +批次大小）；
+    /// `commit_candidate` 对已预留 url 去重幂等；后续 permission/ACAF 门
+    /// 拒绝由 `rollback_candidate` 释放占位，保持「被权限/票据拒绝的调用
+    /// 不消耗候选」语义（review fix 2026-08-14 不变）。
     #[tokio::test]
-    async fn candidate_gate_decides_without_consuming_and_commit_is_deduplicating() {
+    async fn candidate_gate_reserves_atomically_and_rollback_releases() {
         let dir = test_dir();
         let journal = JournalRecorder::new(dir.clone());
         let host = TestHost {
@@ -2269,7 +2306,7 @@ mod tests {
             arguments: serde_json::json!({ "url": url }),
             call_id: "call-g1".to_string(),
         };
-        // Gate decision must not mutate the counter.
+        // Gate 决策即原子预留。
         let decision = controller
             .candidate_gate(
                 &mut writer,
@@ -2283,9 +2320,10 @@ mod tests {
             matches!(decision, CandidateGateDecision::Allowed { .. }),
             "fresh URL under the cap must be allowed"
         );
-        assert!(
-            counter.lock().unwrap().is_empty(),
-            "the gate must not consume — only the execution-boundary commit does"
+        assert_eq!(
+            counter.lock().unwrap().len(),
+            1,
+            "the gate must reserve atomically (check + push under one lock)"
         );
         // Commit consumes with exact-string dedup.
         assert_eq!(commit_candidate(&counter, "https://a.example", 8), (1, 8));
@@ -2295,6 +2333,15 @@ mod tests {
             "duplicate URL consumes nothing"
         );
         assert_eq!(commit_candidate(&counter, "https://b.example", 8), (2, 8));
+        // 后续门拒绝 → 回滚释放占位（不消耗候选）。
+        rollback_candidate(&counter, "https://b.example");
+        assert_eq!(commit_candidate(&counter, "https://b.example", 8), (2, 8));
+        rollback_candidate(&counter, "https://b.example");
+        assert_eq!(
+            counter.lock().unwrap().len(),
+            1,
+            "rollback releases the slot"
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -3190,7 +3237,7 @@ mod tests {
 
     /// RETRIEVAL-ORCHESTRATION-MECHANICAL 0k (2026-08-30)：子代理墙钟
     /// 解析规则——`ORZ_RETRIEVAL_SUBAGENT_TIMEOUT_SECS`（0 禁用）、
-    /// `ORZ_RETRIEVAL_MAX_TOOL_ROUNDS`（非法/0 忽略）。
+    /// `ORZ_RETRIEVAL_MAX_TOOL_ROUNDS`（0 禁用独立上限、非法忽略）。
     #[test]
     fn retrieval_subagent_budget_parse_rules() {
         assert_eq!(
@@ -3203,8 +3250,11 @@ mod tests {
         );
         assert_eq!(parse_retrieval_subagent_wallclock("0"), Some(None));
         assert_eq!(parse_retrieval_subagent_wallclock("abc"), None);
-        assert_eq!(parse_retrieval_subagent_max_tool_rounds("60"), Some(60));
-        assert_eq!(parse_retrieval_subagent_max_tool_rounds("0"), None);
+        assert_eq!(
+            parse_retrieval_subagent_max_tool_rounds("60"),
+            Some(Some(60))
+        );
+        assert_eq!(parse_retrieval_subagent_max_tool_rounds("0"), Some(None));
         assert_eq!(parse_retrieval_subagent_max_tool_rounds("x"), None);
     }
 

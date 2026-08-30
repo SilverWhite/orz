@@ -422,6 +422,13 @@ pub(crate) struct SharedLoopServices<'a> {
     /// epoch archive directory — the single source for the path-slot
     /// overflow pointer (never re-derived from the session cwd).
     pub blackboard_archive_dir: Option<&'a Path>,
+    /// 0k 审查处理 (P3-4, 2026-08-30)：子代理墙钟超时收口用的 in-flight
+    /// 工具槽——串行路径工具执行前记录 `(tool, call_id)`、完成后移除；
+    /// 超时 drop loop future 后 dispatch 据此为链上孤儿 ToolStarted 补
+    /// ToolCompleted(error)（审计形态完整）。并行批次工具的事件在
+    /// buffered writer 中、超时 drop 时整体丢弃，链上不产生孤儿，无需
+    /// 入槽。主车道传 `None`（零开销）。
+    pub in_flight_tools: Option<&'a Mutex<Vec<(String, String)>>>,
 }
 
 /// RETRIEVAL-ORCHESTRATION-MECHANICAL 0k (2026-08-30, TODO P0-0k 第一批
@@ -2015,12 +2022,29 @@ pub(crate) async fn run_agent_loop(
         let round_edit_count = svc.blackboard.read().edits.len();
         // RETRIEVAL-ORCHESTRATION-MECHANICAL 0k (2026-08-30, TODO P0-0k
         // 第一批第 1 项)：同轮读类并行——批首 ≥2 个连续只读 Host 调用并发
-        // 执行、按声明序提交（事件/消息/审计/预算序与串行等价；预算超限的
-        // 后续调用在提交阶段按串行语义拒绝——不重放事件、注入拒绝消息，
-        // 只读副作用可接受）。写类/命令/派发类与计划轮保持串行。
+        // 执行、按声明序提交（事件链/消息/审计/预算序与串行等价）。写类/
+        // 命令/派发类与计划轮保持串行。
+        // 0k 审查处理 (2026-08-30) 登记边界：
+        // - P2-1：黑板 `tool_actions`/`exec` 分区在工具完成时写入
+        //   （host_exec 内 push），并行批次下该分区为完成序、事件链为
+        //   声明序——记录均带真实 timestamp，审计权威以事件链为准，本
+        //   分区展示序差异接受（行为不变，不补写）。
+        // - P2-3：预算超限的后续调用在提交阶段按串行语义拒绝（消息面
+        //   注入拒绝消息、结果不计入注入预算），但调用已真实执行——事件
+        //   仍按声明序重放留痕、后处理（direct trace/evidence/DC/机械
+        //   审查）照常，审计面与事实一致。
+        // - P3-3：批次内某调用出错（Err）时，其余已执行的调用仍按声明序
+        //   提交（执行无留痕是更大的审计缺口），首个错误在批次提交完毕
+        //   后传播（串行语义为遇错即停；并行批次无法中途停止已启动的
+        //   调用）。
         let run_id = writer.run_id().to_string();
         let mut parallel_skip_until = 0usize;
-        if !plan_round_active && round_inject_tokens == 0 {
+        if !plan_round_active {
+            // P3-1：批次启动前检查取消令牌（串行路径每工具前检查；并行
+            // 批次内调用已启动无法中断，取消在批次提交后由串行循环接续）。
+            if cancel.is_some_and(|c| c.is_cancelled()) {
+                return Err(AgentLoopError::Cancelled);
+            }
             let eligible: Vec<bool> = response
                 .tool_calls
                 .iter()
@@ -2076,10 +2100,29 @@ pub(crate) async fn run_agent_loop(
                     });
                 }
                 let outcomes = futures::future::join_all(futures).await;
+                // P3-3：错误路径延迟传播——先提交全部已执行调用的结果
+                // （事件/后处理留痕），首个错误在批次提交完毕后返回。
+                let mut first_err: Option<AgentLoopError> = None;
                 for outcome in outcomes {
-                    let (tc, result, feedback, mut w, local_msgs, direct_ctx) = outcome?;
-                    // 预算超限：与串行同语义拒绝——不重放事件、注入拒绝消息。
-                    if round_inject_tokens >= svc.max_inject_tokens_per_round {
+                    let (tc, result, feedback, mut w, local_msgs, direct_ctx) = match outcome {
+                        Ok(x) => x,
+                        Err(e) => {
+                            if first_err.is_none() {
+                                first_err = Some(e);
+                            }
+                            continue;
+                        }
+                    };
+                    // P2-3：预算超限按串行语义拒绝（消息面注入拒绝消息、
+                    // 结果不计入注入预算），但调用已真实执行——事件仍重放
+                    // 留痕、后处理照常，审计面与事实一致（并行批次无法像
+                    // 串行那样在执行前预检预算）。
+                    let budget_refused = round_inject_tokens >= svc.max_inject_tokens_per_round;
+                    // 事件按声明序重放（hash 链续接，与串行事件序一致）。
+                    for (event_type, payload) in w.drain() {
+                        writer.record(event_type, payload).await?;
+                    }
+                    if budget_refused {
                         let (_, f) = refuse_inject_budget(
                             writer,
                             messages,
@@ -2095,13 +2138,9 @@ pub(crate) async fn run_agent_loop(
                             Some(PolicyFeedback::Succeeded) => round_had_success = true,
                             None => {}
                         }
-                        continue;
+                    } else {
+                        messages.extend(local_msgs);
                     }
-                    // 事件按声明序重放（hash 链续接，与串行事件序一致）。
-                    for (event_type, payload) in w.drain() {
-                        writer.record(event_type, payload).await?;
-                    }
-                    messages.extend(local_msgs);
                     // direct 动作 trace 收口（与串行 Host 分支同构）。
                     if let Some((stamp, trace)) = direct_ctx {
                         let detail = if result.exit_code == Some(0) {
@@ -2146,14 +2185,19 @@ pub(crate) async fn run_agent_loop(
                         Some(PolicyFeedback::Succeeded) => round_had_success = true,
                         None => {}
                     }
-                    round_inject_tokens =
-                        round_inject_tokens.saturating_add(estimate_message_tokens(&Message {
-                            role: Role::Tool,
-                            content: format!("[{}] {}", tc.name, result.output),
-                            tool_call_id: None,
-                            tool_calls: Vec::new(),
-                            reasoning_content: None,
-                        }));
+                    if !budget_refused {
+                        round_inject_tokens =
+                            round_inject_tokens.saturating_add(estimate_message_tokens(&Message {
+                                role: Role::Tool,
+                                content: format!("[{}] {}", tc.name, result.output),
+                                tool_call_id: None,
+                                tool_calls: Vec::new(),
+                                reasoning_content: None,
+                            }));
+                    }
+                }
+                if let Some(e) = first_err {
+                    return Err(e);
                 }
                 parallel_skip_until = run_len;
             }
@@ -2339,6 +2383,17 @@ pub(crate) async fn run_agent_loop(
                         } else {
                             None
                         };
+                        // 0k 审查处理 (P3-4)：in-flight 工具入槽——子代理
+                        // 墙钟超时 drop loop future 时，dispatch 据此为链上
+                        // 孤儿 ToolStarted 补 ToolCompleted(error)。工具
+                        // 结果返回后立即移除；中途 Err 传播时残留（该调用
+                        // 确实处于 in-flight 中断态，超时收口补事件是正确
+                        // 语义；不超时时派发结束槽即丢弃）。
+                        if let Some(slot) = svc.in_flight_tools {
+                            slot.lock()
+                                .unwrap()
+                                .push((tc.name.clone(), tc.call_id.clone()));
+                        }
                         let (result, feedback) = controller
                             .run_host_tool_with_plan_gate(
                                 host,
@@ -2373,6 +2428,12 @@ pub(crate) async fn run_agent_loop(
                                 direct_ctx.as_ref().map(|(stamp, _)| stamp),
                             )
                             .await?;
+                        if let Some(slot) = svc.in_flight_tools {
+                            let mut guard = slot.lock().unwrap();
+                            if let Some(pos) = guard.iter().position(|(_, id)| id == &tc.call_id) {
+                                guard.remove(pos);
+                            }
+                        }
                         // direct 动作 trace 收口（commit + 证据面登记）。
                         if let Some((stamp, trace)) = direct_ctx {
                             let detail = if result.exit_code == Some(0) {
@@ -3227,6 +3288,7 @@ mod tests {
             policy_revision: policy,
             max_inject_tokens_per_round: 50_000,
             blackboard_archive_dir: None,
+            in_flight_tools: None,
         }
     }
 

@@ -83,7 +83,8 @@ pub const RETRIEVAL_SUBAGENT_WALLCLOCK_DEFAULT_SECS: u64 = 600;
 
 /// 检索子代理独立工具轮上限（默认 60；主车道仍为 `MAX_TOOL_ROUNDS`=120）。
 /// 与 `max_tool_rounds` 取 min 生效（测试用 `with_max_tool_rounds` 缩小
-/// 时语义不变）。
+/// 时语义不变）。0 禁用（unbounded，仅用主车道上限）——0k 审查处理
+/// (P3-5) 与墙钟 `0`=禁用语义对齐。
 pub const RETRIEVAL_SUBAGENT_MAX_TOOL_ROUNDS: u32 = 60;
 
 /// Parse rule for the subagent wallclock env value (tested without env
@@ -103,11 +104,19 @@ pub fn retrieval_subagent_wallclock_override() -> Option<Option<std::time::Durat
         .and_then(|s| parse_retrieval_subagent_wallclock(&s))
 }
 
-pub(crate) fn parse_retrieval_subagent_max_tool_rounds(s: &str) -> Option<u32> {
-    s.trim().parse().ok().filter(|v| *v > 0)
+/// Parse rule for the subagent max-tool-rounds env value (tested without
+/// env mutation): trimmed u32; `0` disables (unbounded — only the main
+/// lane cap applies); non-numeric → None (invalid ignored, same convention
+/// as the wallclock parse).
+pub(crate) fn parse_retrieval_subagent_max_tool_rounds(s: &str) -> Option<Option<u32>> {
+    match s.trim().parse::<u32>() {
+        Ok(0) => Some(None),
+        Ok(rounds) => Some(Some(rounds)),
+        Err(_) => None,
+    }
 }
 
-pub fn retrieval_subagent_max_tool_rounds_override() -> Option<u32> {
+pub fn retrieval_subagent_max_tool_rounds_override() -> Option<Option<u32>> {
     std::env::var("ORZ_RETRIEVAL_MAX_TOOL_ROUNDS")
         .ok()
         .and_then(|s| parse_retrieval_subagent_max_tool_rounds(&s))
@@ -303,6 +312,17 @@ pub(crate) fn commit_candidate(
     (seen.len(), cap)
 }
 
+/// 0k 审查处理 (P2-2, 2026-08-30)：候选占位回滚——candidate_gate 决策时
+/// 原子预留（锁内 push），后续 permission/ACAF 门拒绝时由调用方回滚，
+/// 保持「被权限/票据拒绝的调用不消耗候选」语义（review fix 2026-08-14
+/// 不变），同时消除并行批次下「决策/提交分离」的硬 cap 竞态。
+pub(crate) fn rollback_candidate(counter: &Mutex<Vec<String>>, url: &str) {
+    let mut seen = counter.lock().unwrap();
+    if let Some(pos) = seen.iter().position(|u| u == url) {
+        seen.remove(pos);
+    }
+}
+
 /// The main agent loop controller.
 ///
 /// Owns the prompt processing lifecycle. Stateless between turns —
@@ -337,7 +357,8 @@ pub struct AgentLoopController {
     /// 派发墙钟预算。`None` = 禁用（unbounded）。
     pub(crate) retrieval_subagent_wallclock: Option<std::time::Duration>,
     /// 检索子代理工具轮上限（与 `max_tool_rounds` 取 min 生效）。
-    pub(crate) retrieval_max_tool_rounds: u32,
+    /// `None` = 禁用（unbounded，仅用主车道上限；0k 审查处理 P3-5）。
+    pub(crate) retrieval_max_tool_rounds: Option<u32>,
     /// FUS-RETRIEVAL-MECH P0-B step 2/4 (2026-08-14): per-activation
     /// candidate cap (ORZ_WEB_FETCH_CANDIDATE_CAP, default 8 — user
     /// adjudication 2026-08-14). Shared by web_fetch and browser_read.
@@ -680,7 +701,7 @@ impl AgentLoopController {
                 std::time::Duration::from_secs(RETRIEVAL_SUBAGENT_WALLCLOCK_DEFAULT_SECS),
             )),
             retrieval_max_tool_rounds: retrieval_subagent_max_tool_rounds_override()
-                .unwrap_or(RETRIEVAL_SUBAGENT_MAX_TOOL_ROUNDS),
+                .unwrap_or(Some(RETRIEVAL_SUBAGENT_MAX_TOOL_ROUNDS)),
             candidate_cap: web_fetch_candidate_cap_override()
                 .unwrap_or(DEFAULT_WEB_FETCH_CANDIDATE_CAP),
             max_inject_tokens_per_round: max_inject_tokens_per_round_override()
@@ -1266,7 +1287,7 @@ impl AgentLoopController {
             retrieval_subagent_wallclock: Some(std::time::Duration::from_secs(
                 RETRIEVAL_SUBAGENT_WALLCLOCK_DEFAULT_SECS,
             )),
-            retrieval_max_tool_rounds: RETRIEVAL_SUBAGENT_MAX_TOOL_ROUNDS,
+            retrieval_max_tool_rounds: Some(RETRIEVAL_SUBAGENT_MAX_TOOL_ROUNDS),
             candidate_cap: DEFAULT_WEB_FETCH_CANDIDATE_CAP,
             max_inject_tokens_per_round: DEFAULT_MAX_INJECT_TOKENS_PER_ROUND,
             snapshot_store: None,
@@ -2500,6 +2521,8 @@ impl AgentLoopController {
                 policy_revision: &self.policy_revision,
                 max_inject_tokens_per_round: self.max_inject_tokens_per_round,
                 blackboard_archive_dir: self.blackboard_archive_dir(),
+                // 0k 审查处理 (P3-4)：主车道无子代理墙钟超时收口，槽不启用。
+                in_flight_tools: None,
             },
             self,
             writer,
@@ -2551,6 +2574,7 @@ impl AgentLoopController {
                     policy_revision: &self.policy_revision,
                     max_inject_tokens_per_round: self.max_inject_tokens_per_round,
                     blackboard_archive_dir: self.blackboard_archive_dir(),
+                    in_flight_tools: None,
                 };
                 let _ = run_template_compact(
                     &svc,

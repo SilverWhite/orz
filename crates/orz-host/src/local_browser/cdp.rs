@@ -64,12 +64,14 @@ const EXPR_TEXT: &str = "document.body ? document.body.innerText : ''";
 const EXPR_FINAL_URL: &str = "window.location.href";
 
 /// RETRIEVAL-ORCHESTRATION-MECHANICAL 0k (2026-08-30)：preview/keywords
-/// 模式拦截的资源后缀（Chrome URL pattern，`*` 通配）。样式表保留——
-/// 阻断 CSS 会破坏布局导致 innerText 缺内容；三方脚本不拦（JS 渲染是
-/// browser_read 相对静态直连的核心价值，全拦会伤可用性）。
+/// 模式拦截的资源后缀（Chrome URL pattern，`*` 通配、匹配完整 URL）。
+/// 样式表保留——阻断 CSS 会破坏布局导致 innerText 缺内容；三方脚本不拦
+/// （JS 渲染是 browser_read 相对静态直连的核心价值，全拦会伤可用性）。
+/// 0k 审查处理 (P3)：尾随 `*` 让带 query string 的资源（`a.png?v=3`）
+/// 也命中——纯后缀模式（`*.png`）要求 URL 以 `.png` 结尾，query 逃逸。
 const BLOCKED_URL_PATTERNS: &[&str] = &[
-    "*.png", "*.jpg", "*.jpeg", "*.gif", "*.webp", "*.avif", "*.svg", "*.woff", "*.woff2", "*.ttf",
-    "*.otf", "*.eot", "*.mp4", "*.webm", "*.mp3", "*.ogg", "*.wav",
+    "*.png*", "*.jpg*", "*.jpeg*", "*.gif*", "*.webp*", "*.avif*", "*.svg*", "*.woff*", "*.woff2*",
+    "*.ttf*", "*.otf*", "*.eot*", "*.mp4*", "*.webm*", "*.mp3*", "*.ogg*", "*.wav*",
 ];
 
 /// Default timeouts (2026-08-10; ADR-0010 §3.7.2 explicitly does not freeze
@@ -706,7 +708,13 @@ async fn wait_for_text_ready(page: &mut WsSession, timeout: Duration) -> Result<
                 timeout: timeout.as_secs(),
             });
         }
-        if let Ok(text) = page.evaluate_string(EXPR_TEXT).await
+        // 0k 审查处理 (P2-4)：`evaluate_string` 本身无内部超时——reader
+        // 任务退出而 write 半开时，send_command 的响应 oneshot 永不完成，
+        // 裸 await 会永久 pending（deadline 检查在其后永不执行）。用
+        // remaining 包裹：断连场景由 deadline 兜底为 LoadTimeout，或由
+        // 下方通道关闭分支显式报 Io。
+        let evaluate = tokio::time::timeout(remaining, page.evaluate_string(EXPR_TEXT)).await;
+        if let Ok(Ok(text)) = evaluate
             && !text.trim().is_empty()
         {
             return Ok(());
@@ -715,6 +723,13 @@ async fn wait_for_text_ready(page: &mut WsSession, timeout: Duration) -> Result<
             ev = page.events.recv() => {
                 if let Some(ev) = ev {
                     gate_top_frame_redirect(&ev).await?;
+                } else {
+                    // 0k 审查处理 (P2-4)：事件通道关闭（WS 断连、reader
+                    // 任务退出）→ 立即显式报错。此前此处空转导致忙循环到
+                    // deadline（最长 30s CPU 空转）；full 路径的
+                    // `wait_for_load` 对通道关闭是显式 `CDP event channel
+                    // closed`，两条路径保持一致。
+                    return Err(CdpError::Io("CDP event channel closed".into()));
                 }
             }
             _ = tokio::time::sleep(poll.min(remaining)) => {}
@@ -1486,6 +1501,30 @@ mod tests {
         assert!(matches!(err, Err(CdpError::LoadTimeout { .. })), "{err:?}");
         assert!(start.elapsed() >= Duration::from_millis(250));
         server.abort();
+    }
+
+    /// 0k 审查处理 (P2-4)：事件通道关闭（WS 断连、reader 任务退出）→
+    /// 有界失败、绝不永久挂/忙循环。断连有两种形态：① write 半开 →
+    /// evaluate 挂起，由 `remaining` 兜底为 LoadTimeout（旧实现裸 await
+    /// 永久 pending，deadline 检查永不执行）；② write 全断 → evaluate
+    /// 快速失败 → recv() 返回 None → 显式 `CDP event channel closed`
+    /// （旧实现 select 每次都选中 None 分支忙循环到 deadline）。两种形态
+    /// 都必须在 deadline 附近有界返回。
+    #[tokio::test]
+    async fn text_ready_channel_close_is_bounded_not_hang() {
+        let (server, mut page) = ws_pair_with_events(vec![], None, "".to_string()).await;
+        // 关闭服务端连接 → reader 任务退出 → 事件通道关闭。
+        server.abort();
+        let start = tokio::time::Instant::now();
+        let err = wait_for_text_ready(&mut page, Duration::from_millis(500)).await;
+        assert!(err.is_err(), "channel close must fail, not hang: {err:?}");
+        // 有界失败：不超过 deadline + 一个轮询余量。旧实现 evaluate 裸
+        // await 永久挂（测试会 hang）或 recv None 忙循环烧满 deadline。
+        assert!(
+            start.elapsed() < Duration::from_millis(1500),
+            "text-ready must be bounded on channel close (elapsed {:?})",
+            start.elapsed()
+        );
     }
 
     /// Unique temp dir per test label (no tempfile dev-dep — codebase

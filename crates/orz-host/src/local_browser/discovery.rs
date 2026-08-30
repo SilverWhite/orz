@@ -171,11 +171,17 @@ pub fn browser_launch_args(profile_dir: &Path, headless: bool) -> Vec<String> {
     args.push("--disable-sync".to_string());
     args.push("--disable-translate".to_string());
     // RETRIEVAL-ORCHESTRATION-MECHANICAL 0k (2026-08-30, TODO P0-0k 第一批
-    // 第 4 项)：容器必需三件套（docker 下无 sandbox/dev-shm 会启动失败
-    // 或崩溃）＋headless 文本读取资源优化。`--blink-settings=imagesEnabled
+    // 第 4 项)：容器必需参数（docker 下无 sandbox/dev-shm 会启动失败或
+    // 崩溃）＋headless 文本读取资源优化。`--blink-settings=imagesEnabled
     // =false` 对 full/preview/keywords 一律安全（browser_read 只回文本，
     // 从不回图）。
-    args.push("--no-sandbox".to_string());
+    // 0k 审查处理 (P3-9)：`--no-sandbox` 仅 headless——容器/CI 无沙箱
+    // 设施时必需；桌面 headed 开发环境保留 Chrome 沙箱（关闭它是安全
+    // 面降级）。`--disable-dev-shm-usage` / `--disable-gpu` 无害且容器
+    // 必需，保持恒在。
+    if headless {
+        args.push("--no-sandbox".to_string());
+    }
     args.push("--disable-dev-shm-usage".to_string());
     args.push("--disable-gpu".to_string());
     args.push("--disable-software-rasterizer".to_string());
@@ -264,9 +270,10 @@ mod tests {
             )
         );
         // RETRIEVAL-ORCHESTRATION-MECHANICAL 0k (2026-08-30)：容器必需
-        // 参数 + 文本读取资源优化恒在（headed/headless 一致）。
+        // 参数 + 文本读取资源优化。0k 审查处理 (P3-9)：`--no-sandbox`
+        // 仅 headless（桌面 headed 保留沙箱），其余恒在（headed/headless
+        // 一致）。
         for required in [
-            "--no-sandbox",
             "--disable-dev-shm-usage",
             "--disable-gpu",
             "--disable-software-rasterizer",
@@ -278,5 +285,13 @@ mod tests {
             assert!(headed.iter().any(|a| a == required), "missing {required}");
             assert!(headless.iter().any(|a| a == required), "missing {required}");
         }
+        assert!(
+            !headed.iter().any(|a| a == "--no-sandbox"),
+            "headed mode must keep the Chrome sandbox"
+        );
+        assert!(
+            headless.iter().any(|a| a == "--no-sandbox"),
+            "headless/container mode requires --no-sandbox"
+        );
     }
 }
