@@ -77,3 +77,67 @@ path-tracing-reverse 超时 0 分）；无 errored trial。
   后续小批复跑确认，不单独处置。
 - 无检索样本下 DUAL §3.1 的"引用准确性"维度不可度量；双检索模式的正/
   负面判定（local_browser vs framework_fallback）需检索触发样本。
+
+---
+
+## 7. 第二轮（2026-08-30 追加）：count-dataset-tokens + train-fasttext
+
+> job `gate-google-20260830-2`（D:\tb-eval\jobs-gate）。样本选择：错题集
+> 中检索依赖最明确的两道（huggingface README 依赖 / fasttext 文档依赖）。
+
+### 7.1 结果
+
+| 任务 | 镜像 | 超时 | reward | agent 执行 | 结局 |
+|---|---|---|---|---|---|
+| count-dataset-tokens | python:3.13-slim-bookworm | 900s | **1.0** | 3.95min | 完成；browser_read 被拒后转终端解出 |
+| train-fasttext | python:3.13-slim-bookworm | 3600s | 0.0 | 60min（超时 kill） | 超时；/app/model.bin 未产出，verifier 失败 |
+
+- count-dataset-tokens 4 分钟解出：终端内访问 HF（datasets 库/API）读
+  README 元数据 + 下载 Qwen2.5-1.5B-Instruct tokenizer，token 数 79586
+  写入 answer.txt，verifier 通过。
+- train-fasttext：模型 3600s 内未完成训练（工具面全部 run_terminal_cmd，
+  无检索调用），verifier 报 model.bin 缺失。
+
+### 7.2 关键发现（P1）：主 Agent 面 browser_read 声明/执行不一致
+
+count-dataset-tokens 的**首次模型响应就调用了 browser_read**
+（URL=https://huggingface.co/datasets/ryanmarten/OpenThoughts-1k-sample，
+mode=full），但立即被机械层以 `browser_read_candidate_count_unbound`
+（候选计数域未绑定）拒绝，无 ToolStarted。模型随后转终端完成并解出。
+
+**定位**：
+
+- 声明面：`controller.rs` 工具投影链的
+  `apply_retrieval_surface_projection` 在 local_browser 模式只剔除 web
+  族、**保留 browser_read**（RETRIEVAL-SUBAGENT-WIRING 2026-08-25）；
+  journal `request_header_change.tools` 实测主 Agent 工具列表含
+  browser_read（第一轮 5 run 亦全部如此，7 工具：read_file/grep/
+  search_replace/run_terminal_cmd/browser_read/blackboard_read/submit）。
+- 执行面：`relay::route("browser_read")` → **Host 直执行**（区别于
+  web_search/web_fetch → ExternalRetrieval 子代理派发）；主车道
+  `LoopProfile::main` 的 `fetch_candidates = None`，candidate_gate 对
+  None 域 fail-closed（`{family}_candidate_count_unbound`，
+  host_exec.rs 注释明示 "main/grill lane — retrieval tools never execute
+  there; belt-and-braces"，P0-B 2026-08-14 用户裁决"主 Agent 不执行
+  检索任务、主车道投影移除 browser_read"）。
+
+**性质**：声明层与执行层不一致——模型看到 browser_read、尝试调用、被
+机械拒绝（ADR v1.5 明令避免的"声明面与执行层不一致对模型不可预测"）。
+P0-B 步骤 4 的"主车道投影移除 browser_read"未在 local_browser 主面上
+生效；`R1_SEALED_MAIN_TOOLS` 亦未含 browser_read。子代理外部 lane 的
+browser_read 恢复（subagent_tool_projection，local_browser 模式从
+registry 恢复）不受影响。
+
+**建议修复（方向 A，待裁决）**：`R1_SEALED_MAIN_TOOLS` 加入
+`"browser_read"`——主面投影一律剔除，模型不再看到无法执行的工具；
+子代理外部 lane 恢复逻辑独立（registry.get），不受影响；web 族维持
+local_browser 下剔除、framework_fallback 下可用（外部子代理派发路径
+正常）。与"模型层零改动、机械层正确"方向一致。
+
+### 7.3 第二轮对门禁观察的意义
+
+- 出现首次真实检索尝试（browser_read），但被声明/执行缝隙拦截——Google
+  SERP 仍无样本（browser_read 未真正执行，无页面访问）。
+- 若方向 A 落地，模型将不再尝试 browser_read；外部检索依赖（如 HF
+  页面）需经 web 族/外部子代理或终端内访问完成——本轮 count-dataset-tokens
+  已证明终端内访问可解出，检索通道缺位不阻塞解出。
