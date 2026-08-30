@@ -490,11 +490,11 @@ impl CdpBrowserSession {
         let _permit = tokio::time::timeout_at(deadline, self.pool_sem.acquire())
             .await
             .map_err(|_| budget_err.clone())?;
-        // 租约：独占一个 tab（busy=true）。
-        let target_id = self
-            .lease_tab(deadline)
-            .await
-            .map_err(|_| budget_err.clone())?;
+        // 租约：独占一个 tab（busy=true）。审查处理（2026-08-30）：不再
+        // 把 lease 错误统一映射为 TotalTimeout——create_target/浏览器 ws
+        // 连接失败等真实错误原样传播（lease_tab 内部仅把创建超时映射为
+        // TotalTimeout），「浏览器不可达」与「预算超时」可区分。
+        let target_id = self.lease_tab(deadline).await?;
         let page_ws_url = format!("ws://127.0.0.1:{}/devtools/page/{target_id}", self.port);
         // 取出（若有）既存 page ws（归还时可复用连接；读取失败则丢弃，
         // 下次租约重连）。
@@ -543,7 +543,11 @@ impl CdpBrowserSession {
 
     /// v2：DNS 预检——形状检查每次执行（无 IO）；DNS/SSRF 结果按 host
     /// 会话级缓存（TTL 内成功结果直接复用；失败不缓存、下次重试；
-    /// redirect 重检走未缓存路径）。
+    /// redirect 重检走未缓存路径）。审查处理（2026-08-30）：登记 TTL 内
+    /// 重绑定取舍——同一 host 在 TTL 内从公开解析变为私有/metadata 地址
+    /// 时，初始导航预检门被跳过（浏览器仍会自行解析）；redirect 重检门
+    /// 不受影响（ADR-0010 §3.7.3 主门保留）。收敛方案（缓存解析 IP 集合
+    /// + 变化重检）不在本批，登记为已知边界。
     async fn check_navigation_url_cached(&self, raw: &str) -> Result<(), CdpError> {
         let url =
             url::Url::parse(raw).map_err(|e| CdpError::UrlGate(UrlGateError::InvalidUrl(e)))?;

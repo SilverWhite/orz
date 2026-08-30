@@ -414,9 +414,23 @@ impl ProjectDocIndex {
             && let Some(cached) = self.load_cache()
         {
             self.git_mode.store(cached.git_mode, Ordering::Relaxed);
-            *guard = Some(Arc::new(CachedSnapshot {
-                entries: cached.entries,
-            }));
+            // v2 审查处理（2026-08-30, D1-1 回归收口）：磁盘缓存从不信任
+            // path——加载时用 cwd+relative_path 重建（零 IO）。git 驻留
+            // 快路径与 include_content 读取、未跟踪存在性核验均不再引用
+            // 缓存原始 path（缓存篡改无法把读取引向工作区外任意路径）。
+            let entries: Vec<CachedEntry> = cached
+                .entries
+                .into_iter()
+                .map(|mut e| {
+                    e.path = self
+                        .cwd
+                        .join(&e.relative_path)
+                        .to_string_lossy()
+                        .to_string();
+                    e
+                })
+                .collect();
+            *guard = Some(Arc::new(CachedSnapshot { entries }));
             loaded = true;
         }
         if guard.is_none() {
@@ -465,6 +479,19 @@ impl ProjectDocIndex {
         if git_mode && !force && !dirty && interval != 0 && within_window {
             return guard.as_ref().cloned().unwrap_or_default();
         }
+        // 逃生阀（审查处理 2026-08-30）：force 必须全量重建——git 模式下
+        // 若只走 git_incremental，同 size+mtime 且 git 双 clean 的盲区
+        // 无法兜底（v2 初版 force 仅跳过快路径、仍走增量，承诺打折；
+        // 本分支使 git/v1 逃生阀语义一致，escape-hatch 测试不再依赖
+        // git racy-clean 时序）。
+        if force {
+            let rebuilt = self.rebuild_locked(&mut guard);
+            self.last_refresh
+                .lock()
+                .unwrap()
+                .replace(std::time::Instant::now());
+            return rebuilt;
+        }
         // 刷新：git 增量优先；git 命令失败 → 回退 v1 全树 stat（保守，
         // 结果正确、仅速度降级）。
         let mut snap = guard.as_ref().cloned().unwrap_or_default();
@@ -497,23 +524,15 @@ impl ProjectDocIndex {
     fn git_incremental(&self, snap: &mut CachedSnapshot) -> Option<bool> {
         let changes = git_status_changes(&self.cwd)?;
         let mut entries = std::mem::take(&mut snap.entries);
-        // 第一遍：删除集（deleted 状态 + 非文档变更 + 排除目录内路径）。
-        // 先收集再统一删除，避免 remove 后 HashMap 索引失效。
+        // 第一遍：删除集（deleted 状态）。先收集再统一删除，避免 remove
+        // 后索引失效。Present 非文档变更无需删除分支——git 增删重命名在
+        // --no-renames 下按 D+?? 逐文件报告，排除目录/非文档路径在第二遍
+        // 不重提取即可（审查处理 2026-08-30：原 Present 非 doc 删除分支
+        // 只可能命中同名替换这类不存在形态，属死代码，已简化）。
         let mut to_remove: std::collections::HashSet<String> = std::collections::HashSet::new();
         for (rel, change) in &changes {
-            let key = normalize_rel(rel);
-            let full_path = self
-                .cwd
-                .join(rel.replace('/', std::path::MAIN_SEPARATOR_STR));
-            match change {
-                GitChange::Deleted => {
-                    to_remove.insert(key);
-                }
-                GitChange::Present { .. } => {
-                    if path_in_excluded_dir(rel) || !is_doc_file(&full_path) {
-                        to_remove.insert(key);
-                    }
-                }
+            if matches!(change, GitChange::Deleted) {
+                to_remove.insert(normalize_rel(rel));
             }
         }
         let mut changed_any = !to_remove.is_empty();
@@ -551,6 +570,40 @@ impl ProjectDocIndex {
                 changed_any = true;
             }
         }
+        // v2 审查处理（2026-08-30, HEAD 移动盲区闭环）：git status 对
+        // clean 工作树的新提交文件不可见（HEAD 移动/分支切换/新 commit），
+        // 刷新时重取 tracked 集合并入缺失条目、校正既有条目 tracked 标记
+        // ——无需逃生阀/重启；`git ls-files` 只读 index、无工作树 stat，
+        // 成本远低于 git status 自身。失败则跳过合并（保守，逃生阀兜底）。
+        if let Some(tracked) = git_tracked_set(&self.cwd) {
+            for e in entries.iter_mut() {
+                if tracked.contains(&normalize_rel(&e.relative_path)) {
+                    e.tracked = true;
+                }
+            }
+            let existing: std::collections::HashSet<String> = entries
+                .iter()
+                .map(|e| normalize_rel(&e.relative_path))
+                .collect();
+            for rel in &tracked {
+                let key = normalize_rel(rel);
+                if existing.contains(&key) {
+                    continue;
+                }
+                let full_path = self
+                    .cwd
+                    .join(rel.replace('/', std::path::MAIN_SEPARATOR_STR));
+                if path_in_excluded_dir(rel) || !is_doc_file(&full_path) {
+                    continue;
+                }
+                if let Some(st) = file_stat(&self.cwd, &full_path) {
+                    let mut e = entry_from_stat(&self.cwd, &st, Some(&tracked));
+                    e.tracked = true;
+                    entries.push(e);
+                    changed_any = true;
+                }
+            }
+        }
         // 未跟踪条目的存在性核验（git status 不报告未跟踪文件的删除）。
         let mut i = 0;
         while i < entries.len() {
@@ -573,6 +626,14 @@ impl ProjectDocIndex {
             .state
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
+        self.rebuild_locked(&mut guard)
+    }
+
+    /// 全量重建核心（持有 state 锁调用）：stat_pass 全树 + 全部条目重提取
+    /// （title/headings + blake3）+ tracked 标记 + 持久化。供 discover 与
+    /// 逃生阀（refresh force 分支）共用——git 模式下逃生阀同样全量重建，
+    /// 保证同 size+mtime 且 git 双 clean 的盲区可被兜底（设计 §2.2.3）。
+    fn rebuild_locked(&self, guard: &mut Option<Arc<CachedSnapshot>>) -> Arc<CachedSnapshot> {
         let tracked = if self.git_mode.load(Ordering::Relaxed) {
             git_tracked_set(&self.cwd)
         } else {
@@ -889,34 +950,63 @@ fn extract_headings_and_hash(path: &Path) -> (Vec<String>, Option<String>) {
     (headings, Some(hasher.finalize().to_hex().to_string()))
 }
 
-/// v2：git 工作区探针——`git rev-parse --is-inside-work-tree` 成功且输出
-/// `true`。失败/无 git → false（回退 v1）。
-fn git_available(cwd: &Path) -> bool {
-    std::process::Command::new("git")
+/// v2 审查处理（2026-08-30）：git 命令统一带超时执行（设计 §2.2.5
+/// 「失败/超时 → 回退 v1」）——git 挂起（网络盘/损坏仓库/杀毒扫描）不得
+/// 无限阻塞 query；超时尽力 kill 子进程并返回 None（本进程内降级 v1，
+/// 结果正确、仅速度降级）。
+const GIT_CMD_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
+
+/// 带超时的 git 命令执行：成功 → `Some(stdout)`；spawn 失败/非零退出/
+/// 超时 → `None`。超时后尽力终止子进程（best-effort——git 自身子进程
+/// 不保证全树终止，残留由 OS 回收）。
+fn run_git_cmd(cwd: &Path, args: &[&str]) -> Option<Vec<u8>> {
+    let child = std::process::Command::new("git")
         .arg("-C")
         .arg(cwd)
-        .args(["rev-parse", "--is-inside-work-tree"])
-        .output()
-        .ok()
-        .is_some_and(|out| {
-            out.status.success() && String::from_utf8_lossy(&out.stdout).trim() == "true"
-        })
+        .args(args)
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .ok()?;
+    let child = std::sync::Arc::new(std::sync::Mutex::new(Some(child)));
+    let (tx, rx) = std::sync::mpsc::channel();
+    let runner = child.clone();
+    let _ = std::thread::spawn(move || {
+        // 把 Child 从共享槽位 take 出来再 wait（wait_with_output 内部
+        // 并发读取 stdout/stderr，不会因管道写满死锁）；超时分支可能
+        // 取不到（线程已持有）——该次 git 仍会被线程回收，query 不阻塞。
+        let taken = runner.lock().unwrap().take();
+        let out = taken.map(|c| c.wait_with_output());
+        let _ = tx.send(out);
+    });
+    match rx.recv_timeout(GIT_CMD_TIMEOUT) {
+        Ok(Some(Ok(out))) if out.status.success() => Some(out.stdout),
+        Ok(_) => None,
+        Err(_) => {
+            // 超时：尽力终止子进程（best-effort）。
+            if let Ok(mut child) = child.lock()
+                && let Some(mut c) = child.take()
+            {
+                let _ = c.kill();
+            }
+            None
+        }
+    }
+}
+
+/// v2：git 工作区探针——`git rev-parse --is-inside-work-tree` 成功且输出
+/// `true`。失败/无 git/超时 → false（回退 v1）。
+fn git_available(cwd: &Path) -> bool {
+    run_git_cmd(cwd, &["rev-parse", "--is-inside-work-tree"])
+        .is_some_and(|out| String::from_utf8_lossy(&out).trim() == "true")
 }
 
 /// v2：`git ls-files -z` 受版本控制文件集合（规范化相对路径，Windows
 /// 反斜杠统一为正斜杠）。失败 → None（调用方按无基线处理）。
 fn git_tracked_set(cwd: &Path) -> Option<HashSet<String>> {
-    let out = std::process::Command::new("git")
-        .arg("-C")
-        .arg(cwd)
-        .args(["ls-files", "-z"])
-        .output()
-        .ok()?;
-    if !out.status.success() {
-        return None;
-    }
+    let out = run_git_cmd(cwd, &["ls-files", "-z"])?;
     let mut set = HashSet::new();
-    for rec in out.stdout.split(|&b| b == 0) {
+    for rec in out.split(|&b| b == 0) {
         if rec.is_empty() {
             continue;
         }
@@ -929,16 +1019,8 @@ fn git_tracked_set(cwd: &Path) -> Option<HashSet<String>> {
 
 /// v2：`git rev-parse HEAD`（provenance；best-effort，失败 → None）。
 fn git_head_sha(cwd: &Path) -> Option<String> {
-    let out = std::process::Command::new("git")
-        .arg("-C")
-        .arg(cwd)
-        .args(["rev-parse", "HEAD"])
-        .output()
-        .ok()?;
-    if !out.status.success() {
-        return None;
-    }
-    Some(String::from_utf8_lossy(&out.stdout).trim().to_string())
+    run_git_cmd(cwd, &["rev-parse", "HEAD"])
+        .map(|out| String::from_utf8_lossy(&out).trim().to_string())
 }
 
 /// v2：git status 变更集——`--porcelain -z --no-renames
@@ -951,23 +1033,17 @@ enum GitChange {
 }
 
 fn git_status_changes(cwd: &Path) -> Option<Vec<(String, GitChange)>> {
-    let out = std::process::Command::new("git")
-        .arg("-C")
-        .arg(cwd)
-        .args([
+    let stdout = run_git_cmd(
+        cwd,
+        &[
             "status",
             "--porcelain",
             "-z",
             "--no-renames",
             "--untracked-files=all",
-        ])
-        .output()
-        .ok()?;
-    if !out.status.success() {
-        return None;
-    }
+        ],
+    )?;
     let mut changes = Vec::new();
-    let stdout = out.stdout;
     let mut i = 0usize;
     while i < stdout.len() {
         let nul = stdout[i..].iter().position(|&b| b == 0).map(|p| i + p)?;
@@ -1224,10 +1300,7 @@ mod tests {
             serde_json::from_str(&std::fs::read_to_string(&cache).unwrap()).unwrap();
         assert_eq!(parsed["schema_version"], "0.2.0-draft");
         assert_eq!(parsed["git_mode"], false);
-        assert_eq!(
-            parsed["entries"].as_array().unwrap()[0]["blake3"].is_string(),
-            true
-        );
+        assert!(parsed["entries"].as_array().unwrap()[0]["blake3"].is_string());
         assert_eq!(parsed["entries"].as_array().unwrap().len(), 1);
         let mtime = std::fs::metadata(&cache).unwrap().modified().unwrap();
         // Steady state: unchanged tree → no re-persist.
@@ -1552,14 +1625,14 @@ mod tests {
         let parsed: serde_json::Value =
             serde_json::from_str(&std::fs::read_to_string(&cache).unwrap()).unwrap();
         assert_eq!(parsed["git_mode"], true);
-        assert_eq!(parsed["git_head"].is_string(), true);
+        assert!(parsed["git_head"].is_string());
         let entries = parsed["entries"].as_array().unwrap();
         let tracked = entries
             .iter()
             .find(|e| e["relative_path"].as_str().unwrap().ends_with("tracked.md"))
             .unwrap();
         assert_eq!(tracked["tracked"], true);
-        assert_eq!(tracked["blake3"].is_string(), true);
+        assert!(tracked["blake3"].is_string());
         let new_entry = entries
             .iter()
             .find(|e| e["relative_path"].as_str().unwrap().ends_with("new.md"))
@@ -1645,5 +1718,48 @@ mod tests {
         assert!(!out.output.contains("junk.md"), "{}", out.output);
         assert!(!out.output.contains("x.md"), "{}", out.output);
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// v2 审查处理（2026-08-30, D1-1 回归）：git 模式下缓存篡改 `path`
+    /// （指向工作区外 secret）后，新实例加载缓存必须重建 path——查询
+    /// `include_content` 不得读取 secret（驻留快路径与增量未变条目均不
+    /// 信任缓存原始 path）。
+    #[test]
+    fn git_cache_tamper_path_is_rebuilt_on_load() {
+        let Some(dir) = git_dir() else { return };
+        // 注意：test_dir() 同一线程返回同一路径（内部 remove_dir_all），
+        // 不能用于第二个夹具——secret 放独立临时目录。
+        let secret_dir = std::env::temp_dir().join(format!(
+            "orz-doc-index-secret-{}-{:?}",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        let _ = std::fs::remove_dir_all(&secret_dir);
+        std::fs::create_dir_all(&secret_dir).unwrap();
+        let secret = secret_dir.join("secret.txt");
+        std::fs::write(&secret, "TOP-SECRET\n").unwrap();
+        std::fs::write(dir.join("a.md"), "# One\n").unwrap();
+        git_commit(&dir);
+        let index = ProjectDocIndex::new(dir.clone());
+        index.set_refresh_interval_ms(0);
+        let _ = index.query(&serde_json::json!({})).unwrap();
+        // 篡改缓存：`path` → 工作区外 secret 文件。
+        let cache = dir.join(".gsa/project-doc-index/cache.json");
+        let mut v: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&cache).unwrap()).unwrap();
+        for e in v["entries"].as_array_mut().unwrap() {
+            e["path"] = serde_json::json!(secret.to_string_lossy());
+        }
+        std::fs::write(&cache, serde_json::to_string_pretty(&v).unwrap()).unwrap();
+        // 新实例加载缓存 → D1-1 路径重建；include_content 读真实文件。
+        let index2 = ProjectDocIndex::new(dir.clone());
+        index2.set_refresh_interval_ms(0);
+        let out = index2
+            .query(&serde_json::json!({ "query": "one", "include_content": true }))
+            .unwrap();
+        assert!(!out.output.contains("TOP-SECRET"), "{}", out.output);
+        assert!(out.output.contains("One"), "{}", out.output);
+        let _ = std::fs::remove_dir_all(&dir);
+        let _ = std::fs::remove_dir_all(&secret_dir);
     }
 }

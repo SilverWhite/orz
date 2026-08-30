@@ -139,10 +139,19 @@ pub fn classify_retrieval_effort(
 /// `ORZ_RETRIEVAL_EFFORT=standard|extended|deep` 强制覆盖（评测/对拍用；
 /// 显式设置优先于机械映射）。
 pub fn retrieval_effort_override() -> Option<EffortTier> {
-    match std::env::var("ORZ_RETRIEVAL_EFFORT").ok().as_deref() {
-        Some("standard") => Some(EffortTier::Standard),
-        Some("extended") => Some(EffortTier::Extended),
-        Some("deep") => Some(EffortTier::Deep),
+    std::env::var("ORZ_RETRIEVAL_EFFORT")
+        .ok()
+        .and_then(|s| parse_retrieval_effort(&s))
+}
+
+/// 档位 env 值的纯解析（与 `parse_retrieval_subagent_wallclock` 同约定：
+/// 无效/缺失 → None，忽略不报错）。独立函数使单测不依赖进程环境
+/// （并行测试/评测环境设置了该变量也不互相污染）。
+pub fn parse_retrieval_effort(s: &str) -> Option<EffortTier> {
+    match s.trim() {
+        "standard" => Some(EffortTier::Standard),
+        "extended" => Some(EffortTier::Extended),
+        "deep" => Some(EffortTier::Deep),
         _ => None,
     }
 }
@@ -262,9 +271,20 @@ mod tests {
     }
 
     #[test]
-    fn effort_override_parses_env_shape_without_env() {
-        // 未设 env → None（不能污染并行测试进程环境，这里只断言未命中）。
-        assert_eq!(retrieval_effort_override(), None);
+    fn effort_override_parses_shapes_without_env() {
+        // 只测纯解析函数（不触碰进程环境——并行测试/评测环境设置了
+        // ORZ_RETRIEVAL_EFFORT 也不影响本测试）。
+        assert_eq!(
+            parse_retrieval_effort("standard"),
+            Some(EffortTier::Standard)
+        );
+        assert_eq!(
+            parse_retrieval_effort(" extended "),
+            Some(EffortTier::Extended)
+        );
+        assert_eq!(parse_retrieval_effort("deep"), Some(EffortTier::Deep));
+        assert_eq!(parse_retrieval_effort("turbo"), None);
+        assert_eq!(parse_retrieval_effort(""), None);
     }
 
     #[test]
