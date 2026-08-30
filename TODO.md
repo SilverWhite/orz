@@ -118,7 +118,10 @@
   14 项与基线持平，对应源码 orz b604773 + 父 b0b903e 均已推送；容器内
   chromium 注入完成 2026-08-30（0k-5 前置，tb_agents/orz.py eval_browser
   开关，端到端实测 bookworm=apt chromium / ubuntu:24.04=官方快照，见下）；
-  实机验证待续，见下）
+  容器内 chromium 注入完成 2026-08-30（0k-5 前置，tb_agents/orz.py
+  eval_browser 开关，端到端实测 bookworm=apt chromium / ubuntu:24.04=
+  官方快照，见下）；Google 门禁观察实验 + 实机验证完成 2026-08-30
+  （2/5 解出、5 题零检索调用、通道验证通过，见下））
   - P0-C：0 项（PLAN-FIRST 阶段 A/B/C 全部闭合，2026-08-16）
   - P0 冒烟对拍暴露：0 项（GAP-REPETITION-DETECTOR-DNA-FALSE-POSITIVE
     复读检测 DNA 误杀已闭合 2026-08-26；GAP-EVENT-SCHEMA-DRIFT 事件面
@@ -1750,9 +1753,20 @@ S4 复验闭环 2026-08-25（补登记）；S1-S4 全部闭合）
   - 验证：orz-loop 623/0/3、orz-host 232/0/4（新增 text-ready 断连测试）、
     runtime pytest 18+（conformance 全绿）、check_repository 除 orz 源码
     清单（提交后重生成）外零错误、fmt 干净、clippy 无新增告警。
-- [ ] Google 门禁观察实验（小批检索密集题 k=1 个人使用强度；pacing 校准 +
-  Google/Bing 主序裁决；套用 DUAL 度量维度）——待 S3 重建 + docker 浏览器
-  注入后实机运行（入口：DUAL §3.2 度量 / 调研 §8.4）。
+- [x] Google 门禁观察实验 + 实机验证（小批检索密集题 k=1；job
+  `gate-google-20260830-1`，D:\tb-eval\jobs-gate；报告
+  `docs/GATE_GOOGLE_OBSERVATION_2026-08-30.md`）——**2026-08-30 完成**：
+  5/5 容器 chromium 注入（2×apt Chromium 151 + 3×官方快照 Chromium 154，
+  agent_setup 1.7–4.6min），全部 run local_browser 定档 available、零
+  browser_launch_failed。通过率 2/5：mteb-leaderboard 1.0（3600s 超时前
+  提交正确答案、verifier 通过）首解、rstan-to-pystan 1.0 首解；
+  configure-git-webserver / mteb-retrieve 0 分（对比 r1/r2 基线为回归）、
+  path-tracing-reverse 超时 0 分。**核心发现：5 题 agent 执行全程检索
+  调用 0 次**（web_search/web_fetch/browser_read/外部子代理均 0）——
+  Google 门禁/pacing 无 SERP 样本可观察，主序裁决无数据；与官方 minimal
+  82.7% 无检索同向；解出全靠终端+已有知识（mteb-leaderboard 走终端内
+  curl 仓库 API）。后续需"强制/引导检索"样本才能度量门禁与 DUAL 引用
+  维度（机械引导检索属模型面改动，待用户裁决）。
 - [x] 汇总 S3 重建（Linux musl 三件套）——2026-08-30 完成：
   `build_orz_aliyun_trixie.sh`（rust:1.97-slim 容器，ORZ-BUILD-MOUNT-001
   契约；日志 `D:\tb-eval\build-20260830-s3.log`）：三件套 12:06 HKT
@@ -1781,7 +1795,8 @@ S4 复验闭环 2026-08-25（补登记）；S1-S4 全部闭合）
   - 端到端实测（真实容器 + 真实 install 命令 + 分支逻辑）：bookworm →
     /usr/bin/chromium；ubuntu:24.04 → /opt/chrome-linux/chrome；apt 异常
     时快照兜底路径亦验证（install 不失败）。
-- [ ] 实机验证（检索题冒烟 + 超时/并行/截断行为观察；前置已就绪）。
+- [x] 实机验证（检索题冒烟 + 超时/并行/截断行为观察）——2026-08-30
+  并入门禁观察实验完成（见上）。
 
 **第二批（独立设计轮）**：
 - [ ] `project_doc_index` v2（git HEAD 基线 + 工作树增量层 + Blake3 内容哈希 +
