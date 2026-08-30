@@ -206,8 +206,49 @@ projection.rs（R1_SEALED + 注释 + 测试改写/迁移），orz-loop 623/0/3
   「Google SERP 门禁」两个问题；内部检索（retrieve_project_docs）
   维持 R1 封存。实施见 TODO P0-0k 与本报告 §10。
 
-## 10. 第五轮待续（主面恢复 web_search 后）
+## 10. 第五轮（2026-08-30 追加）：主面恢复 web_search 后的首个观察轮
 
-> s3c 重建 + 恢复后的主面 web_search 观察轮（候选：sam-cell-seg
-> 同题复跑或新检索依赖题），验证模型是否调用检索子代理 + Google
-> SERP 门禁数据（CAPTCHA / 429 / 页面结构）。
+> job `gate-google-20260830-5`（D:\tb-eval\jobs-gate）。样本：
+> count-dataset-tokens（R2 首次响应即想访问 HF 页面的最强检索触发候选），
+> k=1 local_browser；二进制 = s3c 重建（orz 4baf766，106,412,016 B，
+> 主面恢复 web_search 单一派发入口）。
+
+### 10.1 结果
+
+| 任务 | 镜像 | 超时 | reward | agent 执行 | 结局 |
+|---|---|---|---|---|---|
+| count-dataset-tokens | python:3.13-slim-bookworm | 900s | **1.0** | 5.1min | 完成；step 1 即调 web_search，转终端解出 |
+
+- 主面请求头工具列表 7 工具（read_file/grep/search_replace/
+  run_terminal_cmd/**web_search**/blackboard_read/submit）——web_search
+  已恢复为唯一检索入口；web_fetch 隐藏、browser_read 保持 R1 封存。
+- **完整检索链路实证（11 轮以来首次）**：step 1 主面调用 web_search
+  （query=「ryanmarten/OpenThoughts-1k-sample dataset huggingface
+  README」）→ `tool_started` target=external_retrieval（外部子代理派发）
+  → 子代理 local_browser 面 browser_read
+  （https://huggingface.co/datasets/ryanmarten/OpenThoughts-1k-sample，
+  exit 0、wall 2.4s、candidate 1/8）→ `retrieval_result_committed`
+  （evidence ledger：SRC-001 full_text_observed + content_sha256 +
+  tier=default / mechanical_weight=1.0；SRC-002 metadata_only）→
+  `retrieval_close_record` 自动闭环 → web_search 完成回传主面
+  （exit 0）。全程零拒绝、零 CAPTCHA/429。
+- 模型后续 17 次 run_terminal_cmd 解出（datasets 读 README 元数据 +
+  Qwen tokenizer，answer=79586），verifier 通过。
+
+### 10.2 第五轮对门禁观察的意义
+
+1. **「模型在有入口时用不用检索」已实证：会用**——web_search 恢复后
+   首次响应即被调用（step 1 双工具并行：run_terminal_cmd + web_search），
+   查询构造良好；此前四轮 10 run 零检索确系结构性缺入口，非模型倾向。
+2. **派发-执行链路完整**：主面 web_search → 外部子代理 → 子代理
+   browser_read（local_browser 面二存一仅此一检索通道）→ evidence
+   ledger 回传 → 自动闭环，机械层无缝隙。
+3. **Google SERP 仍无样本**：子代理直接导航到已知 HF URL（未走
+   Google 搜索页）——SERP 门禁数据需「子代理不知道目标 URL」的查询或
+   第二批引擎 SERP 工具（`search_engine_search` + 键入模拟 + pacing）
+   落地后才能采集；本轮的结论是双模式链路可用，引擎 SERP 门禁观察
+   继续挂起至第二批。
+4. **观察项**：retrieval_result_committed 的 SRC-002 呈
+   metadata_only（missing_scope=content）但标题含「full page text,
+   observed」——子代理结果形成层的小瑕疵候选（同一 browser_read 的
+   二次声明），不阻塞解出，登记待第二批结果形成质量核查。

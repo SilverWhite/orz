@@ -1540,6 +1540,16 @@ S1-S4 全部闭合）
   `retrieve_project_docs` 维持封存。投影测试 13/13、orz-loop 624/0/3、
   fmt/clippy 干净。设计登记：ADR-0010 §3.7 条 12（v1.9）/ §14.44；
   调研 §9.4；TODO P0-0k；报告 §8–§10。S3 重建（s3c）+ 恢复后观察轮待续。
+- **2026-08-30 S3 重建（s3c）+ 第五轮门禁观察完成**：三件套 16:48 HKT
+  （orz 106,412,016 B，含 "External retrieval entry" 标注符号）、bookworm
+  冒烟 + musl 静态核对通过；count-dataset-tokens k=1 → 1.0（agent_exec
+  5.1min），主面请求头 7 工具含 web_search，**step 1 主面即调用 web_search
+  → 外部子代理 browser_read（HF 直读，exit 0、wall 2.4s、candidate 1/8）
+  → evidence ledger 回传 → 自动闭环**；「模型在有入口时用不用检索」实证
+  =用（此前 10 run 零检索系结构性缺入口）；Google SERP 仍无样本（子代理
+  直读已知 URL，未走搜索引擎页），SERP 门禁数据挂起至第二批引擎 SERP
+  工具；SRC-002 metadata_only 标题含 full text 的小瑕疵候选登记。对应
+  源码 orz 4baf766 + 父 980b21b（均已推送）；报告 §10 追加。
 
 ### 1. FUS-TOOL-PROBE（`implemented`；P0-A 批次 1-7 与 P0-A-2 已闭合）
 

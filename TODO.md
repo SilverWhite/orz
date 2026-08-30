@@ -1857,6 +1857,22 @@ submit）**browser_read 已消失**，journal 零 browser_read 痕迹、零拒�
   验证：projection 13/13、orz-loop 全量 624/0/3、fmt 干净、clippy 无
   新增。设计登记：ADR-0010 §3.7 条 12（v1.9）/ §14.44；调研 §9.4；
   BACKLOG 0k；本报告 §10。
+  **S3 重建（s3c，2026-08-30 完成）**：rust:1.97-slim 增量构建，三件套
+  16:48 HKT（orz 106,412,016 B / signer 1,388,496 B / provision
+  1,206,464 B），bookworm 冒烟符合预期（新标注符号
+  "External retrieval entry" / "dispatches the external retrieval
+  subagent" 各 1 命中、usage/manifest 缺失、musl 静态无 PT_INTERP）；
+  对应源码 orz 4baf766 + 父 980b21b（均已推送）。
+  **第五轮观察（2026-08-30，job gate-google-20260830-5）**：count-dataset-
+  tokens k=1 → **1.0 解出**（agent_exec 5.1min）；主面请求头 7 工具含
+  web_search（web_fetch 隐藏、browser_read 封存）；**step 1 主面即调用
+  web_search** → 外部子代理派发 → 子代理 browser_read（HF 页面直读，
+  exit 0、wall 2.4s、candidate 1/8）→ evidence ledger 回传（SRC-001
+  full_text_observed + content_sha256）→ 自动闭环 → 模型转终端解出
+  （answer=79586）。「模型在有入口时用不用检索」实证=用（此前 10 run
+  零检索系结构性缺入口）；Google SERP 仍无样本（子代理直读已知 URL，
+  未走搜索引擎页），SERP 门禁数据挂起至第二批引擎 SERP 工具。报告
+  §10 追加。
 
 **第二批（独立设计轮）**：
 - [ ] `project_doc_index` v2（git HEAD 基线 + 工作树增量层 + Blake3 内容哈希 +
