@@ -128,11 +128,13 @@ P0-B 步骤 4 的"主车道投影移除 browser_read"未在 local_browser 主面
 browser_read 恢复（subagent_tool_projection，local_browser 模式从
 registry 恢复）不受影响。
 
-**建议修复（方向 A，待裁决）**：`R1_SEALED_MAIN_TOOLS` 加入
+**修复（方向 A，2026-08-30 已实施）**：`R1_SEALED_MAIN_TOOLS` 加入
 `"browser_read"`——主面投影一律剔除，模型不再看到无法执行的工具；
 子代理外部 lane 恢复逻辑独立（registry.get），不受影响；web 族维持
 local_browser 下剔除、framework_fallback 下可用（外部子代理派发路径
-正常）。与"模型层零改动、机械层正确"方向一致。
+正常）。与"模型层零改动、机械层正确"方向一致。实现：orz-loop
+projection.rs（R1_SEALED + 注释 + 测试改写/迁移），orz-loop 623/0/3
+全绿、projection 12/12、fmt 干净、clippy 无新增；S3 重建待续。
 
 ### 7.3 第二轮对门禁观察的意义
 

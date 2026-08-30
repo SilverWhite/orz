@@ -1803,18 +1803,22 @@ S4 复验闭环 2026-08-25（补登记）；S1-S4 全部闭合）
   k=1 local_browser）：count-dataset-tokens **1.0 解出**（3.95min，
   终端内访问 HF README + Qwen tokenizer，answer=79586）；train-fasttext
   0.0（3600s 超时，model.bin 未产出）。报告 §7 追加。
-- [ ] **P1（待裁决）：主 Agent 面 browser_read 声明/执行不一致**——
-  count-dataset-tokens 首次响应即调 browser_read（HF 页面 URL 正确）但被
-  `browser_read_candidate_count_unbound` 机械拒绝（无 ToolStarted）。
-  定位：`apply_retrieval_surface_projection` local_browser 分支保留主面
-  browser_read（2026-08-25 RETRIEVAL-SUBAGENT-WIRING），而
+- [x] **P1：主 Agent 面 browser_read 声明/执行不一致——已按方向 A 修复**
+  （2026-08-30）：count-dataset-tokens 首次响应即调 browser_read（HF
+  页面 URL 正确）但被 `browser_read_candidate_count_unbound` 机械拒绝
+  （无 ToolStarted）。根因=`apply_retrieval_surface_projection`
+  local_browser 分支保留主面 browser_read（2026-08-25），而
   `relay::route("browser_read")` → Host 直执行 + 主车道 `fetch_candidates
-  = None`（P0-B 2026-08-14"主 Agent 不执行检索、主车道投影移除
-  browser_read"未在 local_browser 主面生效）→ 声明/执行不一致（ADR v1.5
-  禁止形态）。第一轮 5 run 工具列表亦全部含 browser_read（7 工具）。
-  建议方向 A：`R1_SEALED_MAIN_TOOLS` 加 "browser_read"（主面剔除；
-  子代理外部 lane 恢复独立于 registry 不受影响）；Google SERP 门禁仍无
-  样本（本轮 browser_read 未真正执行）。详见报告 §7.2。
+  = None`（P0-B 2026-08-14 主车道投影移除未在 local_browser 主面生效）→
+  声明/执行不一致（ADR v1.5 禁止形态；第一轮 5 run 工具列表亦全部含）。
+  **修复**：`R1_SEALED_MAIN_TOOLS` 加 "browser_read"（主面投影一律剔除；
+  子代理外部 lane 由 `subagent_tool_projection` 从 registry 独立恢复，
+  不受影响；`apply_retrieval_surface_projection` 语义注释同步）。测试：
+  `main_lane_projection_seals_browser_read`（原 restores 改写）+ 保留
+  断言迁移 + `main_surface_hides_retired_and_sealed_tools` 补隐藏项。
+  验证：projection 12/12、orz-loop 全量 623/0/3、fmt 干净、clippy 无
+  新增（orz-host 全量并行 2 flake=权限持久化+进程树超时，单跑全过，
+  与投影无关）。S3 重建待续。
 
 **第二批（独立设计轮）**：
 - [ ] `project_doc_index` v2（git HEAD 基线 + 工作树增量层 + Blake3 内容哈希 +
