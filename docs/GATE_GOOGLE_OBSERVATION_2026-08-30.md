@@ -251,4 +251,38 @@ projection.rs（R1_SEALED + 注释 + 测试改写/迁移），orz-loop 623/0/3
 4. **观察项**：retrieval_result_committed 的 SRC-002 呈
    metadata_only（missing_scope=content）但标题含「full page text,
    observed」——子代理结果形成层的小瑕疵候选（同一 browser_read 的
-   二次声明），不阻塞解出，登记待第二批结果形成质量核查。
+   二次声明），不阻塞解出。
+
+### 10.3 P1 登记（2026-08-30 深挖 retrieval_result_committed 形成链）
+
+对 SRC-002 的深挖升级为正式 P1（原「小瑕疵候选」表述作废）：
+
+1. **直接成因（SRC-002）**：子代理终答的 `[SOURCE]` 声明行
+   （URL + 标题写在同一行）被 `parse_retrieval_text` 整行收为 ref →
+   `source_url_or_ref` 是一整句话而非干净 URL；机械层按 §3.7.5 正确降为
+   metadata_only（声明≠观测，模型自称 full page text 不被采信），与
+   SRC-001（真实 browser_read 证据）重复。小毛病：声明行无 URL 形状
+   校验/规范化，ref 被标题污染。
+2. **结构性 P1（比 SRC-002 大）**：`[RESULT_JSON]` 组织块的 source_ids
+   必须命中机械 ledger 的 `SRC-001` 等 id，但这些 id 是子代理跑完后
+   才在 `build_structured_result` 分配、运行中不可见；提示词却要求
+   「source_ids must reference an actual tool result you received」——
+   契约不可实现。模型只能自造 id（R5=SRC-HF-OPENTHOUGHTS、
+   mteb-retrieve=SRC-1/2/3，格式均不匹配）。
+3. **实证**：0h S4（2 次派发）/ mteb-retrieve（5 次）/ R5（1 次）全部
+   organized_response 空、visibility_degraded=true、assessment
+   reason_codes 含 structured_result_validation_failed；唯一通过路径是
+   知情单测（structured_result_accepts_valid_model_block，测试作者预先
+   知道 SRC-001 会被分配）。生产环境该契约从未生效。
+4. **影响**：任务解出不受影响（主代理拿到 bounded prose 含块文本 +
+   [DOC]/[SOURCE] 行 + blackboard 全文）；机械层照常以 tool evidence
+   ledger 工作；但「结构化结果」功能实际失效，visibility_degraded 对
+   每次真实块误触发、审计信号失真，organized_response 消费链（dispatch
+   摘要结论计数 / schema / Python verifier / fixtures / 测试）同步空转。
+5. **修复方向（C，待用户裁决）**：删除 `[RESULT_JSON]` 契约——子代理
+   提示词移除模板段、build_structured_result 删 block 解析/校验/
+   annotation 合并、visibility_degraded 语义重定义、dispatch 摘要改口径、
+   schema/verifier/fixtures/测试同步、ADR §3.7 条 12 第三层（模型加权
+   标注，生产中也从未生效）处置；附带 `[SOURCE]` 声明行 URL 规范化。
+   登记：BACKLOG 0k / TODO P0-0k / CLI_PROJECT_INDEX
+   （GAP-RETRIEVAL-STRUCTURED-RESULT）。

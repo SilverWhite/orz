@@ -10,8 +10,8 @@
 | 优先级 | 含义 | 未闭合项 |
 |---|---|---|
 | P0 | 当前工作集：设计已冻结，裁决后立即实施 | 评测冒烟暴露问题（P0-E 主项 7 项 + FUS-TOOL-SCOPE-CONTRACT 后续 2 项全部闭合 2026-08-18：ACAF 容器供应、console 工具名、计划视图步骤 ID、订单发放前拒绝入事件面、grep 搜索范围契约、plan_write 校验消息形状、actions 形状探针、list_dir 范围计数、grep files_searched 全结局探针，见 0a）；CLASSICAL-EXEC-ASSISTANT（生产组件，2026-08-16 用户裁决转正式，S1-S4 全部闭合）；PLAN-FIRST-BLACKBOARD（阶段 A/B/C 全部闭合 2026-08-16）；**FUS-BENCHMARK-FULL-EXEC（P0，实施完成待验证——2026-08-18 用户指示实施、暂不测试；验证闭环后闭合，见 0b）**；**LEDGER-FOLD-EXTERNAL-FILE（P0，S1-S4 验证闭环 2026-08-19——命中率问题优先于 P0-F 验证；provider 口径 95.33% ≥90% 达标，见 0c）**；**OUTPUT-DEGENERATION-GUARD（P0，S1-S4 全部闭合 2026-08-20——make-doom 退化复读失败防护；8K 全统一 + 补读闭环 + 实时检测 + 32K，见 0d）**；**CONTEXT-SCAFFOLDING-PULL-REDESIGN（P0，S1-S4 全部闭合 2026-08-21——预算块 PUSH→PULL + 工具输出汇总消息退役；命中率 94.45%、零哨兵触发、输入增长放缓；方案 C 维持 256K 暂不收紧（用户裁决），见 0e）**；**FUS-READ-ANCHOR-WRITE-GUARD（P0，S1-S4 全部闭合 2026-08-23——read_file 内容锚点下传 + 写前机械核证；S4 复用 NGRAM S4 实机复验：10 试次零误拒、锚点实机可见、命中率 94.11%–98.55% 全 ≥90%、零 400，计数 28 → 27，见 0f）**；**AGENT-DELIVERY-FLOW（P0 派生 0d 后续 7，S1-S4 全部闭合 2026-08-23——计划无空转、末步机械递交、引用修正一次/二次阻断、订单反馈；S4 复用 NGRAM S4 实机复验：8/8 完成试次走 submit 双阶段、零 400、命中率全 ≥90%，计数 29 → 28，见 0d 后续 7）**；**FINAL-SMOKE-2026-08-25 对拍暴露（P0，2026-08-25 登记：GAP-EVENT-SCHEMA-DRIFT 事件面三类 Schema 漂移（2026-08-26 修复完成并复验，事件链非终止错误 0）+ GAP-REPETITION-DETECTOR-DNA-FALSE-POSITIVE 复读检测 DNA 误杀（S1/S2/S3 完成 2026-08-26、S4 复验待实施），正式 89 题提交前处理，见 0i）**；**RETRIEVAL-ORCHESTRATION-MECHANICAL（P0，2026-08-30 检索问题最终评判定稿、实施待放行——双模式定案 + 引擎 SERP Google 主序 + 原生兜底 + 检索编排机械层第一批五项 + Google 门禁观察实验，见 0k）** |
-| P1 | 无需裁决，可与 P0 并行 | FUS-COMPONENT-REGISTER、GAP-WINDOWS-EVIDENCE、IMPL-DEEPSEEK-TRANSPORT / SEC-CREDENTIALS、ORZ-SESSION-CONTEXT-MONITOR |
-| P2 | 生产化决策门：需用户裁决 | IMPL-CONTROL-FABRIC（fail-closed 启用、Slice 3/4）、OPS-PROTOCOL |
+| P1 | 无需裁决，可与 P0 并行 | FUS-COMPONENT-REGISTER、GAP-WINDOWS-EVIDENCE、IMPL-DEEPSEEK-TRANSPORT / SEC-CREDENTIALS、ORZ-SESSION-CONTEXT-MONITOR、**RETRIEVAL-RESULT-STRUCTURED-CONTRACT（2026-08-30 登记，见 0k；修复方向 C 待裁决）** |
+| P2 | 生产化决策门：需用户裁决 | IMPL-CONTROL-FABRIC（fail-closed 启用、Slice 3/4）、OPS-PROTOCOL、MECHANICAL-LAYER-MATH-CALCULUS（2026-08-30 登记 pending，开放项待裁决，见 10） |
 | P3 | 收尾 / 清理 | EVIDENCE-LOCAL-BROWSER、GATE-CHAIN、DC 剩余信号、V11-IMPL-003/007、工作区收尾 |
 
 - 复杂度治理判定（2026-08-13）：LIF 为高要求主项目、实验含相当程度自动运行；复杂度降低只砍冗余（OPS 平行执行层、双实现、文档仪式），保留服务 LIF 不变量的机制（journal/verifier、permission fail-closed、运行守卫、Windows 进程控制、来源证据、ACAF Slice 1/2）；ACAF Slice 3/4 暂缓，按实际自动化模式再定；不做机制×不变量清单，避免后续审查被带偏。
@@ -1550,6 +1550,18 @@ S1-S4 全部闭合）
   直读已知 URL，未走搜索引擎页），SERP 门禁数据挂起至第二批引擎 SERP
   工具；SRC-002 metadata_only 标题含 full text 的小瑕疵候选登记。对应
   源码 orz 4baf766 + 父 980b21b（均已推送）；报告 §10 追加。
+- **P1（2026-08-30 登记，修复方向 C 待用户裁决）**：
+  RETRIEVAL-RESULT-STRUCTURED-CONTRACT——`[RESULT_JSON]` 组织块
+  source_ids 契约结构性不可满足（机械 ledger 的 `SRC-001` 等 id 后置
+  分配、运行中不可见，模型只能自造 id；实证 0h S4 2 次 + mteb-retrieve
+  5 次 + R5 1 次全部 organized_response 空 / visibility_degraded=true /
+  structured_result_validation_failed；唯一通过路径=知情单测）；
+  SRC-002 声明行 ref 污染（整行入 source_url_or_ref）为其表象。修复
+  方向 C=删除 [RESULT_JSON] 契约、回归 [DOC]/[SOURCE] 行 + 机械 ledger
+  单轨 + `[SOURCE]` 声明行 URL 规范化；涉及子代理提示词 /
+  build_structured_result / dispatch 摘要 / schema / Python verifier /
+  fixtures / 测试 / ADR §3.7 条 12 第三层处置。详见 TODO P0-0k /
+  门禁报告 §10.3 / CLI_PROJECT_INDEX（GAP-RETRIEVAL-STRUCTURED-RESULT）。
 
 ### 1. FUS-TOOL-PROBE（`implemented`；P0-A 批次 1-7 与 P0-A-2 已闭合）
 
@@ -2083,6 +2095,24 @@ S1-S4 全部闭合）
 - 开放内容：v0.1 协议、Schema、Python/PowerShell 执行器已就位；生产接线待裁决（先验票，再由协议执行器执行）。
 - 审查判定（2026-08-13，用户无异议）：平行执行层过重，不按原样生产接线。收敛方向——保留“删除安全”（回收站 + 缓存机械分类 + 容量 fail-closed）为 host-owned 工具；跨环境桥接保留为内部执行能力，不向模型暴露 op 信封；双执行器收敛为单一参考实现，生产走 Rust 工具面。裁剪设计待产出后登记。
 - 入口：[协议](../protocol/structured-operation-protocol-v0.1.md)。
+
+### 10. MECHANICAL-LAYER-MATH-CALCULUS（`pending`）
+
+- 定位（2026-08-30 用户确认转正式并登记）：机械层数学计算体设计——机械层=
+  类型化项重写系统（8 工具类型签名 + Result 信封 + GetPut 律）+ LIF 时间性
+  外挂（temporal 分区：语义特征域 + 域切换 spike 随会话侧车存档）；LIF 仅时间
+  特征计算、无注入、不引回强制模板轮；域阈值初值已确认（u_err≥2、u_prog<0.5、
+  θ_stuck=1.5·T̂、err10/succ10 窗口 10）。
+- 开放内容：设计 §6 开放项 14 条待裁决（顶层调用方式折中/激进档、表达式最小
+  项集、归约边界、trace→事件链同构、错误语义、模型熟悉度验证、时间特征面按
+  决策点反推、时间特征注入点、依赖图作用域、LIF 通道清单、potentials 渲染、
+  fires 事件面、预判/重试观测面 vs 机制面、域 spike 存档载体）；ADR-0010 转录
+  未开始；实施未开始。
+- 边界：域记录仅 spike 点位、随对话侧车存档（非 journal 证据面、7 天 retention）；
+  LIF 项目具体公式不外落（独立项目、不开源）；数据不可靠性=上游模型随版本变动，
+  设计不依赖模型版本标定。
+- 入口：[设计](MECHANICAL_LAYER_MATH_CALCULUS_DISCUSSION_2026-08-30.md)；
+  [索引 AUTH-MECHANICAL-LAYER-MATH-CALCULUS](../CLI_PROJECT_INDEX.md)。
 
 ## P3 — 收尾 / 清理
 

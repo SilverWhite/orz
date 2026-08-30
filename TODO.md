@@ -82,7 +82,7 @@
 > 本快照只做计数与分组召回，明细以下方各分组勾选清单为唯一入口，不新增独立条目；
 > 后续扫描更新时同步替换本快照日期与计数。
 
-- 未闭合总数：**32 项**（2026-08-19 0c 验证闭环 29 → 28；2026-08-20
+- 未闭合总数：**39 项**（2026-08-19 0c 验证闭环 29 → 28；2026-08-20
   0d 验证闭环 29 → 28；2026-08-20 OUTPUT-BUDGET-RESTORE-AND-STALL-GUARD
   S1 实施放行入账 28 → 29，**S3/S4 验证闭环 29 → 28**；2026-08-20
   THINKING-DEFAULT-HIGH-LADDER S1 实施放行入账 28 → 29，**S3/S4 换题
@@ -125,6 +125,10 @@
   （browser_read 主面封存，orz 1973511）+ S3 重建（s3b 15:51 HKT）+
   count-dataset-tokens 验证轮完成（1.0 解出 2.95min、主面 6 工具无
   browser_read、零拒绝事件，见下））
+  - 2026-08-30 MECHANICAL-LAYER-MATH-CALCULUS（BACKLOG P2-10）设计登记入账：
+    阶段 0 开放项裁决 7 项（D1–D7）计入 P2 决策门，未闭合 32 → 39；阶段 1
+    设计定稿（F1–F5，设计轮不计计数）与阶段 2/3 实施验证切片（I1–I6 / V1–V3，
+    放行时入账）见 P2-10 勾选清单。
   - P0-C：0 项（PLAN-FIRST 阶段 A/B/C 全部闭合，2026-08-16）
   - P0 冒烟对拍暴露：0 项（GAP-REPETITION-DETECTOR-DNA-FALSE-POSITIVE
     复读检测 DNA 误杀已闭合 2026-08-26；GAP-EVENT-SCHEMA-DRIFT 事件面
@@ -138,7 +142,7 @@
   - P0 默认 high + 三级降级梯：0 项（THINKING-DEFAULT-HIGH-LADDER，S3/S4 换题复验闭环 2026-08-20，见 P0-0d 后续 2）
   - P0 上下文结构块 PUSH→PULL：0 项（CONTEXT-SCAFFOLDING-PULL-REDESIGN，S1-S4 验证闭环 2026-08-21，见 P0-0e）
   - P1 可并行审计/证据：9 项（组件登记 1、Windows 证据 3、DeepSeek 1、会话上下文监测 4）
-  - P2 生产化决策门：5 项（Slice 3、Slice 4、ACAF 可选工程项、OPS 裁剪设计、OPS 生产接线裁决）
+  - P2 生产化决策门：12 项（Slice 3、Slice 4、ACAF 可选工程项、OPS 裁剪设计、OPS 生产接线裁决、MECHANICAL-LAYER-MATH-CALCULUS 决策门 7 项）
   - P3 收尾/清理：7 项（EVIDENCE-LOCAL-BROWSER、GATE-CHAIN、observed-scope 枚举、V11-IMPL-003、V11-IMPL-007、orz-host flaky、DC 硬信号 4/6）
   - 条件触发/审计登记边界：6 项（不占当前优先级）
   - 成熟复用调研（2026-08-16，只读）：明确可复用 8 项、部分可参考 15 项、无可复用 11 项；逐项注记见各分组条目后。
@@ -1873,6 +1877,20 @@ submit）**browser_read 已消失**，journal 零 browser_read 痕迹、零拒�
   零检索系结构性缺入口）；Google SERP 仍无样本（子代理直读已知 URL，
   未走搜索引擎页），SERP 门禁数据挂起至第二批引擎 SERP 工具。报告
   §10 追加。
+- [ ] **P1：retrieval_result_committed 组织块契约结构性不可满足（2026-08-30
+  深挖登记；修复方向 C 待用户裁决）**——`[RESULT_JSON]` 组织块 source_ids
+  需命中机械 ledger 的 `SRC-001` 等 id，但 id 在子代理跑完后才分配、
+  运行中不可见（提示词「reference an actual tool result」不可实现）；
+  实证 0h S4（2 次派发）/ mteb-retrieve（5 次）/ R5（1 次）全部
+  organized_response 空 + visibility_degraded=true +
+  structured_result_validation_failed；SRC-002 声明行 ref 污染（整行入
+  source_url_or_ref）为其表象。修复方向 C=删除 [RESULT_JSON] 契约、回归
+  [DOC]/[SOURCE] 行 + 机械 ledger 单轨 + `[SOURCE]` 声明行 URL 规范化；
+  涉及子代理提示词 / build_structured_result / dispatch 摘要结论计数 /
+  schema（retrieval-result-v0.1 + run-event）/ Python verifier
+  （organized_response 校验 + source_weighting annotation 校验）/ fixtures /
+  测试 / ADR §3.7 条 12 第三层处置。详见门禁报告 §10.3 / BACKLOG 0k /
+  CLI_PROJECT_INDEX（GAP-RETRIEVAL-STRUCTURED-RESULT）。
 
 **第二批（独立设计轮）**：
 - [ ] `project_doc_index` v2（git HEAD 基线 + 工作树增量层 + Blake3 内容哈希 +
@@ -2254,6 +2272,68 @@ daemon 跨 run 常驻。~~模式内混合路由（需修订 ADR-0010 §3.7.12）
   - 成熟复用评估（2026-08-16，只读）：无——用户决策门。
 
 入口：[协议](protocol/structured-operation-protocol-v0.1.md) / [Schema](protocol/structured-operation-protocol-v0.1.schema.json)。
+
+### MECHANICAL-LAYER-MATH-CALCULUS（`pending`；2026-08-30 设计登记，BACKLOG P2-10）
+
+> 排期：阶段 0 开放项裁决 → 阶段 1 正式设计定稿（含 ADR 转录）→ 阶段 2 实施
+> 切片 → 阶段 3 验证闭环；裁决闭合后实施切片按 BACKLOG 升 P0 排期。入口：
+> [设计](docs/MECHANICAL_LAYER_MATH_CALCULUS_DISCUSSION_2026-08-30.md) /
+> [BACKLOG P2-10](docs/BACKLOG_AND_PRIORITIES.md) /
+> [索引 AUTH-MECHANICAL-LAYER-MATH-CALCULUS](CLI_PROJECT_INDEX.md)。
+
+**阶段 0 — 开放项裁决（§6；用户决策门）**
+
+- [ ] D1 调用契约裁决：顶层调用方式折中档（tool_calls + 一层 pipe）vs 激进档
+  （表达式求值）；表达式最小项集范围（§6.1/6.2）。
+- [ ] D2 错误语义确认：纯子项错误=值、效应错误=fail-closed 信封（§6.5）。
+- [ ] D3 依赖图作用域裁决：仅文件锚点链 vs 含命令/检索副作用（§6.8）。
+- [ ] D4 时间特征注入点 + potentials 渲染形态裁决：预算临近/长工具调用前/终答
+  审计；原始有界值 vs 量化档（§6.9/6.11）。
+- [ ] D5 fires 事件面边界裁决：`temporal_fire` 是否入 schema/verifier（§6.12）。
+- [ ] D6 预判/重试机制定位裁决：观测面（模型 PULL 自决，倾向）vs 机制面（框架
+  干预）（§6.13/§9.10）。
+- [ ] D7 域 spike 存档载体裁决：StoredConversation envelope 追加字段 vs 同目录
+  伴随文件；子代理是否随 activation 同构（§6.14/§9.9）。
+
+**阶段 1 — 正式设计定稿（§9；设计轮不计计数）**
+
+- [ ] F1 8 工具类型签名 → 正式契约草案（Result 信封 / GetPut 律 / file.read
+  View / terminal.run exit_code 值语义）（§9.1/9.2）。
+- [ ] F2 temporal 分区渲染规格正式化（TemporalRecord 运行时行 + DomainSpike 存档
+  + Now/Recent/History/Feature 查询面 + 渲染约束）（§9.9）。
+- [ ] F3 LIF 时间外挂计算规格（通道清单 §6.10 / 特征集按决策点反推 §6.7 / 一阶
+  积分泄漏 + 二阶 stuck 归一化乘积闭式解 + τ=T̂ 在线滑动窗中位数 + 四对照门）
+  （§9.3/9.5/9.6）。
+- [ ] F4 失败目标身份入事件面设计（目标身份=失败目标命令/锚点身份入事件面 +
+  trace→事件链同构核对 §6.4；转正式设计前置）。
+- [ ] F5 ADR-0010 转录（§14.x 新条目；转录后 pending → current-design，
+  索引/BACKLOG 同步）。
+
+**阶段 2 — 实施切片（依赖前序；放行时入账）**
+
+- [ ] I1 T̂ 估计器 + LIF 时间特征计算器（纯计算；`D:\tb-eval\jobs-official`
+  102 runs 离线复验）（依赖 F3）。
+- [ ] I2 失败目标身份入事件面（Schema + verifier + fixtures 先行）（依赖 F4）。
+- [ ] I3 temporal 分区运行时（每决策轮域标签 + 查询面接线
+  `blackboard.read partition="temporal"`）（依赖 F2/I1）。
+- [ ] I4 域 spike 存档随会话侧车（envelope 字段或伴随文件 + 7 天 retention +
+  跨 prompt 恢复重建）（依赖 F2/I3/D7）。
+- [ ] I5 工具类型化信封（8 工具落地：file.read View / search_replace GetPut 律 /
+  terminal.run 值语义 / blackboard temporal 截断）（依赖 F1/D1）。
+- [ ] I6 一层组合/pipe（折中档）或表达式求值器（激进档，最小项集 + 归约边界
+  §6.2/6.3）（依赖 I5/D1）。
+
+**阶段 3 — 验证闭环**
+
+- [ ] V1 FakeProvider 测试面验证（信封/组合/求值器语义 + §6.6 模型熟悉度近零
+  提示验证，无需实机）（依赖 I5/I6）。
+- [ ] V2 离线 102 runs 复验（T̂/域标签/spike 序列 vs §9.8 聚类对照、零误干预）
+  （依赖 I1/I3）。
+- [ ] V3 S4 冒烟复验 + BACKLOG/TODO/索引状态同步（pending → implemented 视切片
+  范围）。
+
+入口：[设计](docs/MECHANICAL_LAYER_MATH_CALCULUS_DISCUSSION_2026-08-30.md) /
+[BACKLOG P2-10](docs/BACKLOG_AND_PRIORITIES.md)。
 
 ## P3 — 收尾 / 清理
 
