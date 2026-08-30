@@ -22,6 +22,14 @@ impl AgentLoopController {
     /// （接口封存——代码模块保留，从本表移除名称即配置恢复；plan_write
     /// 刻意不在本表——休眠 plan_first 门路径启用时仍需声明）。
     pub(crate) const R1_SEALED_MAIN_TOOLS: &[&str] = &[
+        // P0-B 步骤 4（2026-08-14 用户裁决）+ 门禁观察 P1 修复（2026-08-30，
+        // 方向 A）：browser_read 主面封存——主车道不执行检索任务（candidate
+        // gate 对主车道 fetch_candidates=None fail-closed unbound），声明面
+        // 保留会让模型看到"看得见摸不着"的工具（ADR v1.5 声明/执行不一致）。
+        // 检索经 web 族外部子代理派发（framework_fallback）或终端内访问；
+        // 外部检索 lane 的 browser_read 由 subagent_tool_projection 从 host
+        // registry 独立恢复（本表不影响子代理面）。
+        "browser_read",
         // 边界三项（§4.1 边界项）。
         "todo_write",
         "update_goal",
@@ -50,13 +58,19 @@ impl AgentLoopController {
     }
 
     /// RETRIEVAL-SUBAGENT-WIRING 审查处理 (2026-08-25, ADR-0010 §14.40)：
-    /// 检索工具面跟随模式 A 定档——local_browser 下隐藏 web 族（检索通道
-    /// 仅 browser_read），framework_fallback 下隐藏 browser_read（检索
-    /// 通道仅 web 族）。主面 base 投影与子代理父面共用（子代理从父面继承，
-    /// 外部 lane 的 browser_read 恢复另行按模式门控），避免「声明面同时
-    /// 出现两个通道、调用期 mode 门拒绝其一」的假 available 形态
-    /// （ADR v1.5：声明层与执行层不一致对模型不可预测）。off 模式由既有
-    /// 检索族投影剔除（mode=off 无检索工具），本函数不重复处理。
+    /// 检索工具面跟随模式 A 定档——local_browser 下隐藏 web 族，
+    /// framework_fallback 下隐藏 browser_read（检索通道仅 web 族）。
+    /// 主面 base 投影与子代理父面共用（子代理从父面继承，外部 lane 的
+    /// browser_read 恢复另行按模式门控），避免「声明面同时出现两个通道、
+    /// 调用期 mode 门拒绝其一」的假 available 形态（ADR v1.5：声明层与
+    /// 执行层不一致对模型不可预测）。off 模式由既有检索族投影剔除
+    /// （mode=off 无检索工具），本函数不重复处理。
+    ///
+    /// 门禁观察 P1 修复（2026-08-30，方向 A）：local_browser 分支的
+    /// "保留 browser_read"不再构成主面检索通道——主面 browser_read 由
+    /// [`R1_SEALED_MAIN_TOOLS`] 前置剔除（主车道不执行候选计数工具），
+    /// 本函数仅保留"隐藏 web 族"的语义；子代理外部 lane 的 browser_read
+    /// 经 `subagent_tool_projection` 从 registry 恢复。
     pub(crate) fn apply_retrieval_surface_projection(
         tool_defs: &mut Vec<ToolDef>,
         mode: RetrievalMode,
@@ -388,11 +402,16 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
-    /// MECHANICAL-AUDIT-LAYER (2026-08-24, ADR-0010 §14.39 / 设计 §2.7)：
-    /// 主面恢复检索——`browser_read` 回到主车道模型可见投影（relay 路由
-    /// 仍派发检索子代理；候选计数/并发/模式门/ACAF 前置不变）。
+    /// 门禁观察 P1 修复（2026-08-30，方向 A）：主面封存 `browser_read`——
+    /// P0-B 步骤 4（2026-08-14）"主 Agent 不执行检索任务、主车道投影移除
+    /// browser_read"在 local_browser 主面上重新生效。relay::route 将
+    /// browser_read 路由 Host 直执行、主车道 fetch_candidates=None（candidate
+    /// gate fail-closed unbound），声明面保留会造成"看得见摸不着"的
+    /// 声明/执行不一致（ADR v1.5 禁止形态；门禁观察实测
+    /// browser_read_candidate_count_unbound 拒绝）。外部检索 lane 的
+    /// browser_read 由 subagent_tool_projection 从 registry 恢复，不受影响。
     #[test]
-    fn main_lane_projection_restores_browser_read() {
+    fn main_lane_projection_seals_browser_read() {
         let base = ["read_file", "browser_read", "bash"]
             .iter()
             .map(|n| ToolDef {
@@ -410,8 +429,8 @@ mod tests {
         names.sort();
         assert_eq!(
             names,
-            vec!["bash", "browser_read", "read_file"],
-            "browser_read restored to the main-lane projection: {names:?}"
+            vec!["bash", "read_file"],
+            "browser_read sealed from the main-lane projection: {names:?}"
         );
     }
 
@@ -785,17 +804,24 @@ mod tests {
         };
         let projected = AgentLoopController::project_main_agent_tool_defs(&base, &snapshot);
         let names: Vec<&str> = projected.iter().map(|t| t.name.as_str()).collect();
-        for tool in ["web_search", "web_fetch", "browser_read"] {
+        for tool in ["web_search", "web_fetch"] {
             assert!(
                 names.contains(&tool),
                 "retrieval tool {tool} must be declared on the direct surface: {names:?}"
             );
         }
+        // 门禁观察 P1 修复（2026-08-30，方向 A）：browser_read 主面封存
+        // （主车道不执行候选计数工具；外部 lane 从 registry 恢复）。
+        assert!(
+            !names.contains(&"browser_read"),
+            "browser_read must NOT be declared on the main-lane surface: {names:?}"
+        );
         for retired in [
             "retrieve_project_docs",
             "list_dir",
             "run_tests",
             "todo_write",
+            "browser_read",
         ] {
             assert!(
                 !names.contains(&retired),
@@ -838,6 +864,7 @@ mod tests {
             "run_tests",
             "search_tool",
             "pdf_read",
+            "browser_read",
         ] {
             assert!(
                 !declared.contains(&hidden),
