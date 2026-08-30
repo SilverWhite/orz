@@ -1423,6 +1423,12 @@ S4 复验闭环 2026-08-25（补登记）；S1-S4 全部闭合）
 > 提前收束 / 超时）；提前收束根因=orientation 硬门文本残留 + R1 无头接线
 > （50 轮纯文本回答被当终答）。定案：prompt 全空 + orientation 软门 +
 > submit 门无 plan 放行/降级（W4-R4 实施批次，见下）。
+> **2026-08-29 超时定案（§9.5 B1/B2 深挖后，用户裁决）**：终端命令分层
+> 默认超时（普通 300s / 程序脚本 600s）+ 满 300s 单次中间回报（默认继续、
+> 可中断，模型自行判断）+ web_search 客户端总超时 120s（connect 10s、
+> 结构化错误、不自动重试）。实施分两批（压力评估定案）：S5-1=A/B 修复 +
+> web_search 超时（轻量同批）；S5-2=终端超时 + 中间回报（新机制独立批，
+> 先补设计小节定案）。
 
 - [x] W1-R1 S1 代码：复读门槛 20 统一 + 序列内容门全删 + 3-gram 15 +
   802 保留回归（改独立同字符触发线）+ 空响应链 low 封顶 + 触发改显式
@@ -1526,6 +1532,135 @@ S4 复验闭环 2026-08-25（补登记）；S1-S4 全部闭合）
   无计划批准基线 / requires no plan and no step state）在二进制内；
   警告面 14 项与上次基线持平；对应源码 orz 5b3fe27 + 父 10c99f0；
   S4 复验待实施。
+- [ ] W4-R4 S4 复验（2026-08-29 完成，31 题全量 k=1，harbor 实机）：错题
+  重跑 8/31 解出（official-r1 此 31 题全 0）——query-optimize /
+  pytorch-model-cli / largest-eigenval / caffe-cifar-10 / circuit-fibsqrt /
+  mteb-retrieve / video-processing / build-pov-ray；c1/c2 同批对照旧
+  R2 二进制 2/20 → 4/20（旧解 model-extraction-relu-logits /
+  protein-assembly 单样本回落 0）；submit 门全链零 `no plan in force`
+  拒绝、真实 HTTP 400 零、5 个硬门题全部越过 50 轮（chess 74 / make-doom
+  103 / make-mips 75 / caffe 79 / gcode 52，caffe-cifar-10 因此解出）、
+  path-tracing 55 步无 orientation 循环（AgentTimeout 属 harness 按
+  官方 task.toml agent.timeout_sec 掐的墙钟超时，与 orz 检索超时无关）。
+  **S4 新暴露两问题（S5-1 已实施修复，2026-08-29）**：A=fold 桥剥
+  reasoning_content
+  （`action_ledger.rs build_bridge` `m.reasoning_content = None`）→
+  DeepSeek 400（make-doom 103 步 / gcode-to-text 52 步，均为 orientation
+  纯文本回答落入桥内末条被剥；同 run 纯工具轮 fold 与 video-processing
+  不触发，机制边界已实证）；B=orientation 触发轮工具面仍为空
+  （`agent_loop.rs` `pending_checkpoint.is_some() → Vec::new()`），与
+  设计 §9.2「触发轮不禁工具」不符（触发轮模型把 XML 工具调用写成纯
+  文本，浪费一轮真实工作）。记录于设计 §9.2/§9.4；修复与补跑见下。
+- [x] W4-R4 S5 修复（A/B；2026-08-29 S5-1 实施 + 全面审查处理完成，
+  orz ad5f9ee）：A=桥内保留纯文本 assistant 消息 reasoning_content
+  （声明仍剥，双形态回归测试 `bridge_keeps_plain_text_assistant_reasoning_but_strips_declarations`）；
+  B=orientation pending 放行工具、DC 强制模板轮保留禁工具（拆两条路径，
+  回归测试 `orientation_trigger_round_keeps_tool_face_projected`）。
+  原四题补跑批次（make-doom / gcode-to-text / chess-best-move /
+  make-mips-interpreter，official-r2-failures-s5-1）**作废重排**
+  （2026-08-29 用户指示：不再沿用旧批次，全部处理完成后重新安排补跑）；
+  R3 纪律项随收口执行（ADR-0010 §14.42 已补写，CLI_PROJECT_INDEX
+  登记含 S4 入账与计数）。
+- [x] W4-R4 S5-1 超时（web_search 120s，与 A/B 同批；2026-08-29 实施 +
+  全面审查处理完成）——`web_search/client.rs` reqwest builder 补总超时
+  120s + connect 10s；超时经 `map_transport_error` 返回结构化 Timeout
+  错误（已用时长 + 建议重试/换查询/直读页面；审查处理补阶段上下文/连接
+  超时措辞与两条单测），不新增自动重试；事件面 `tool_completed` 补
+  wall_ms 与超时标记（S5-1 已落：schema + 通用/run_tests 路径；审查
+  处理 P2-1 补 run_tests F-09 超时结构化 `TestRunResult.timed_out`
+  端到端透传）。设计登记：设计 §9.6 / 调研笔记 §5。
+- [ ] W4-R4 S5-2 终端分层超时 + 中间回报（2026-08-29 用户裁决，独立批）——
+  普通命令默认 300s / 程序脚本类 600s（两档；模型可传 timeout 覆盖、
+  上限维持 900s）；任何命令运行满 300s 未完成 → 机械插入一次「运行 +
+  工具自身情况」中间状态（单次仅一次，不累积/不周期），回报后默认继续
+  等待、模型可主动中断（kill），由模型自行判断；完成/超时后正常返回
+  终态。机制定案已落：设计 §9.7 / 调研笔记 §6——分类规则=宿主按命令
+  形态启发式注入默认 timeout（程序/脚本 600s、普通 300s）；后台路径=
+  复用终端 actor 自动后台化（满 300s 且解析超时 >300s 才后台化，
+  后台截止=原解析超时，终态经既有完成提醒送达，工具面封闭）；
+  事件面=`tool_running`（v0.2）+ ToolCompleted `running: true`。
+- [x] W4-R4 S5-2 S1 代码：宿主分类注入 + 自动后台化报告 + actor 后台
+  截止期 + `tool_running` 事件面（schema/verifier/fixtures）
+  **2026-08-29 完成**：`terminal_tier_default_timeout_ms`（程序 600s /
+  普通 300s 启发式）+ `inject_terminal_default_timeout`（模型未传才注入）、
+  `BashParams.hide_background_input`（schema 隐藏/调用拒绝 `is_background`，
+  描述与 timeout 文案同步）+ 自动后台化 `pre_formatted` 中间状态（时长/
+  PID/部分输出/落盘指针/可中断提示）、actor 后台截止=原解析超时
+  （`min(timeout, BACKGROUND_MAX_RUNTIME)`，`transition_to_background`
+  保留原 timeout）、逐调用 auto-bg 判定（解析超时 > 有限回报点才后台化）、
+  `ToolResult.mid_run` 结构化透传 + `tool_running` 事件（v0.2 schema/
+  verifier 链规则/fixtures）+ ToolCompleted `running: true`；工具面保持
+  「一次调用 = 一个结果」。
+- [x] W4-R4 S5-2 S2 测试：分类/注入/后台化边界/中间状态内容/事件链
+  **2026-08-29 完成**：orz-tools（auto-bg 报告、hide_background_input
+  拒绝/schema/描述、actor 原超时截止）+ orz-host（分类/注入/mid_run
+  映射 4 条）+ orz-loop（`tool_running` + `running:true` 事件链）+
+  TUI 投影 + Python `_verify_v02_tool_running` 正反例 5 条；事件侧
+  pytest 236、orz-loop 616、orz-host 229、orz-tools 2659（排除沙箱
+  rg 基线 grep/glob）、orz-tui 178、orz-assurance 144 全绿；fmt/clippy
+  无新增；manifest 1403；check_repository 仅剩 orz 子模块脏（未提交属
+  预期）。
+- [x] W4-R4 S5-2 全面审查处理（2026-08-29 完成）：**P1-1** console 订单
+  执行边界（issue_action_inner）把 mid_run 当 ExecutionFailed 误判 +
+  故障连败连锁——补 `mid_run.is_none()` 豁免 + 正反例测试；**P1-2** 机械
+  审计层 classify 把 mid_run 记为 `exit -1` 虚假异常——摘要改中性「运行
+  中」、anomaly=None + 测试；**P2-1** run 结束未决后台任务语义定案（保持
+  运行至截止、宿主生命周期收口，设计 §9.7.2 登记）；**P2-2** 用户主动
+  后台化（Ctrl+G/is_background）恢复 10h 硬上限截止、自动后台化保留原
+  超时（transition_to_background 分型 + 回归测试）；**P2-3** verifier
+  direct 关联规则扩展至 tool_running + 测试；**P2-4** verifier 补
+  `running:true ⟹ exit_code=null` 与单完成事件断言 + 反例；**P2-5/P3-5**
+  设计 §9.7 边界（compound 命令/Windows `.\` 启发式边界、终态送达依赖
+  后续工具调用）；**P3-1/P3-2/P3-3/P3-4** 注释勘误、测试真实性、schema
+  描述、跨 call_id/跨 run 反例。待跑受影响 crate 测试与事件侧 pytest 复
+  验后进 S3。
+- [x] W4-R4 S5-2 审查处理补充（2026-08-29）：**P1-3** console 订单面
+  `workspace.run_terminal` 动作 schema 仍暴露 `is_background` 且 timeout
+  上限 300s——与 §9.7 工具面封闭 / 模型可传上限 900s 不符（host 工具面
+  已改、订单面漏）；已移除 is_background、timeout 上限 300s→900s、默认
+  120s→600s、描述同步两档注入与 300s 中间回报 + 契约测试更新。
+- [ ] W4-R4 S5-2 验证期发现（2026-08-29 登记，S5-1 遗留回归，独立排查）：
+  orz-bin `acaf_e2e` 7 项失败（`controller_control_events_carry_tickets` /
+  `fail_closed_continue_consumes_goal_revision_ticket` /
+  `fail_closed_goal_revision_rejected_does_not_migrate` /
+  `fail_closed_web_search_executes_unticketed_with_zero_ticket_events` /
+  `goal_revision_continue_flow_re_derives_session_key` /
+  `missing_browser_read_url_refuses_before_acaf_with_count_gate` /
+  `signer_unreachable_shadow_records_rejection_and_proceeds`），16 通过。
+  归因链：上一提交 5b3fe27（W4-R4）记录 orz-bin 14/0 全绿 → 当前工作树
+  16/7；失败全部在 ACAF 控制事件/disposition/票据域（如 disposition_v1
+  票据未签发、signer-unreachable 路径 `retrieval_parent_disposition` 事件
+  未落），与 S5-2 审查处理改动路径（console mid_run 订单、机械审计
+  run_terminal 分类、终端 actor 后台化截止、事件校验器）不相交——S5-2
+  未提交 controller 生产改动仅 compact/run_tests/mid_run 三处，均不触
+  disposition/票据路径。判定为 S5-1 提交（ad5f9ee：fold 桥 reasoning
+  保留 / orientation 触发轮工具面 / web_search 超时）引入的遗留回归，
+  需独立轮次定位（建议先核对 disposition 处理链与 orientation 触发轮
+  交互）后再进 S3/S4。
+- [ ] CONTROLLER-SPLIT 二轮（2026-08-30 用户指示；设计 §3.5）——
+  controller.rs 24,861 行（生产 7,548 / 测试 17,313），目标全文件
+  ≤10,000 行。批次 N1 `acaf_flow.rs`（ACAF 票务 ~940 行，低风险）→
+  N2 `host_exec.rs`（host 工具家族 ~2,600 行）→ N3 控制台订单/模式
+  转换并入 `console_exec.rs`（~790 行）→ N4 类型/纯函数归位（~690 行）
+  → N5 测试区按主题归位各模块（17,300 行潜力）。每批独立提交 +
+  全量回归（orz-loop / orz-tui / orz-bin / orz-host / pytest 事件链），
+  行为不变纪律同 B1–B8；完成一批勾选一批并同步设计 §3.5 与索引。
+  - [x] N1（2026-08-30，`8f5e058`）：ACAF 票务/动作事件簇 → `acaf_flow.rs`（932 行），orz-loop 618/0/3 + pytest 1588/14 全绿。
+  - [x] N2（2026-08-30，`d5cbd60`）：host 工具执行家族 → `host_exec.rs`（2,647 行），orz-loop 618/0/3 + pytest 1589/14 全绿。
+  - [x] N3（2026-08-30，`f1cf0b0`）：控制台订单执行 + 模式转换并入 `console_exec.rs`（788 行），orz-loop 618/0/3 + pytest 1588/14 全绿。
+  - [x] N4（2026-08-30，`13908c0`）：类型/纯函数归位（模式面 → `retrieval/mode.rs`，压缩/消息预算 → `compact.rs`，denial 状态机 → `denial.rs`），orz-loop 618/0/3 + pytest 1589/14 全绿。
+  - [ ] N5 测试区按主题归位（17,300 行潜力，分批）。
+    - 分批设计（2026-08-30）：N5-0 脚手架独立 → N5-1 检索模式/证据/激活 → N5-2a 检索调度/子代理 → N5-2b 投影面 → N5-3 console → N5-4 host/denial → N5-5 compact → N5-6 plan/blackboard → N5-7 收尾；设计详见 §3.5。
+    - [x] N5-0（2026-08-30，`541c99b`）：共享脚手架独立为 `controller_test_support.rs`（349 行），controller.rs 20,264 → 19,935 行，orz-loop 618/0/3 + pytest 1589/14 全绿。
+    - [x] N5-1（2026-08-30，`74ef451`）：检索模式/证据/激活 22 项 → `retrieval/mode.rs` + `evidence.rs` + `activation.rs`，controller.rs 18,533 行，orz-loop 618/0/3 + pytest 1589/14 全绿。
+    - [x] N5-2a（2026-08-30，`fb8682c`）：检索调度/子代理/候选门 34 项 → `retrieval/dispatch.rs`，controller.rs 15,798 行，orz-loop 618/0/3 + pytest 1589/14 全绿。
+    - [x] N5-2b（2026-08-30，`0e4f4ff`）：投影面 12 项 → `retrieval/projection.rs`，controller.rs 15,065 行，orz-loop 618/0/3 + pytest 1589/14 全绿。
+    - [x] N5-3（2026-08-30，`693c260`）：控制台簇 24 项 → `console_exec.rs`（denial 单测 → `denial.rs`），controller.rs 12,820 行，orz-loop 618/0/3 + pytest 1589/14 全绿。
+    - [x] N5-4（2026-08-30，`00f298a`）：host 工具/权限/run_tests 37 项 → `host_exec.rs`，controller.rs 10,039 行，orz-loop 618/0/3 + pytest 1589/14 全绿。
+    - [x] N5-5（2026-08-30，`e828299`）：压缩/折叠/白名单 21 项 → `compact.rs` + `summary.rs`，controller.rs 8,033 行，orz-loop 618/0/3 + pytest 1589/14 全绿。
+    - [x] N5-6（2026-08-30，`52ce3f5`）：plan/epoch/plan_first 15 项 → `planning.rs` + 黑板上读 16 项 → `blackboard.rs`，controller.rs 5,632 行，orz-loop 618/0/3 + pytest 1589/14 全绿。
+    - [x] N5-7（2026-08-30，`d6f771b`）：收尾归位（delivery/dc/orientation/checkpoint/probe/mechanical_audit，含 final_answer 误入纠正），controller.rs 4,142 行，orz-loop 618/0/3 + pytest 1589/14 全绿。
+    - N5 全部闭合（2026-08-30）：controller.rs 29,091 → 4,142 行，测试区 202 项归位、留守 19 项主循环测试；验收 ≤10,000 行达成。
 
 ### P0-B FUS-RETRIEVAL-MECH（`implemented`；批次 1-6 已全部闭合，2026-08-14，保留供核对）
 
