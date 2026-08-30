@@ -115,8 +115,10 @@
   S3 重建完成 2026-08-30——三件套 12:06 HKT（orz 106,411,880 B / signer
   1,388,496 B / provision 1,206,464 B）+ bookworm 冒烟符合预期（provision
   usage / signer manifest 缺失 / orz TTY io error）+ ldd 静态链接 + 警告面
-  14 项与基线持平，对应源码 orz b604773 + 父 b0b903e 均已推送；实机验证
-  待续，见下）
+  14 项与基线持平，对应源码 orz b604773 + 父 b0b903e 均已推送；容器内
+  chromium 注入完成 2026-08-30（0k-5 前置，tb_agents/orz.py eval_browser
+  开关，端到端实测 bookworm=apt chromium / ubuntu:24.04=官方快照，见下）；
+  实机验证待续，见下）
   - P0-C：0 项（PLAN-FIRST 阶段 A/B/C 全部闭合，2026-08-16）
   - P0 冒烟对拍暴露：0 项（GAP-REPETITION-DETECTOR-DNA-FALSE-POSITIVE
     复读检测 DNA 误杀已闭合 2026-08-26；GAP-EVENT-SCHEMA-DRIFT 事件面
@@ -1759,8 +1761,27 @@ S4 复验闭环 2026-08-25（补登记）；S1-S4 全部闭合）
   缺失 / orz TTY io error）、三件套 ldd 静态链接；警告面 14 项与上次基线
   持平（含 orz-host local_browser 既有 2 项）；对应源码 orz b604773 + 父
   b0b903e（均已推送）。
-- [ ] 实机验证（检索题冒烟 + 超时/并行/截断行为观察；前置=容器内 chromium
-  注入，见 DUAL §3.3 / CONTROLLER_SPLIT §4.3）。
+- [x] 容器内 chromium 注入（0k-5 前置；CONTROLLER_SPLIT §4.3 / DUAL §3.3）
+  ——**2026-08-30 完成**：`tb_agents/orz.py`（host 侧文件，非 git 仓库；
+  SHA256 047830C892AE1DB9E26D20318141120605893CD4F64D35902D8110880A712605）
+  install() 新增 `eval_browser` 开关（`--ak eval_browser=true` /
+  `ORZ_EVAL_BROWSER=1`，缺省关闭）：
+  - apt 优先：`apt-get install -y --no-install-recommends chromium`（Debian
+    bookworm 等真实包，实测 Chromium 151，产物 /usr/bin/chromium）。
+  - 官方快照 fallback：apt 无真实包（ubuntu:24.04 仅 snap 过渡包）→
+    系统依赖 + `storage.googleapis.com/chromium-browser-snapshots/Linux_x64`
+    `LAST_CHANGE` 动态取 revision，解压到 /opt/chrome-linux（实测 Chromium
+    154，headless 渲染 OK）。
+  - run() 显式白名单注入 `ORZ_BROWSER_PATH` + `ORZ_BROWSER_HEADLESS=1`
+    （env_clear 不发继承）；apt 失败时快照兜底、非 apt 系跳过，
+    local_browser → framework_fallback 机械降级不变。
+  - 容错：harbor `_exec` 对非零退出码抛异常——snapshot 各失败路径
+    `|| true` 落到 SNAPSHOT_FAIL（零退出），version 校验带 `|| true`，
+    install 永不因浏览器失败 fail。
+  - 端到端实测（真实容器 + 真实 install 命令 + 分支逻辑）：bookworm →
+    /usr/bin/chromium；ubuntu:24.04 → /opt/chrome-linux/chrome；apt 异常
+    时快照兜底路径亦验证（install 不失败）。
+- [ ] 实机验证（检索题冒烟 + 超时/并行/截断行为观察；前置已就绪）。
 
 **第二批（独立设计轮）**：
 - [ ] `project_doc_index` v2（git HEAD 基线 + 工作树增量层 + Blake3 内容哈希 +

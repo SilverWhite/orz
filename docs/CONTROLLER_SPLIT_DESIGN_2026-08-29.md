@@ -332,6 +332,17 @@ orz.py install():
     ORZ_BROWSER_HEADLESS=1
 ```
 
+> **2026-08-30 已实施（0k-5）**：`tb_agents/orz.py` install() 新增
+> `eval_browser` 开关（`--ak eval_browser=true` / `ORZ_EVAL_BROWSER=1`，
+> 缺省关闭）。apt 真实包优先（Debian bookworm → /usr/bin/chromium，实测
+> Chromium 151）；apt 仅 snap 过渡的镜像（ubuntu:24.04）fallback 官方
+> Chromium 快照（storage.googleapis.com/chromium-browser-snapshots →
+> /opt/chrome-linux/chrome，实测 Chromium 154 headless 渲染 OK）；
+> run() 显式白名单注入 ORZ_BROWSER_PATH + ORZ_BROWSER_HEADLESS=1
+> （env_clear 不发继承）；所有失败路径零退出（harbor _exec 非零抛异常，
+> install 不因浏览器失败 fail），无 apt 系跳过、local_browser 机械降级
+> framework_fallback 不变。登记：TODO P0-0k。
+
 - 优点：89 个任务镜像零改动；浏览器只在需要 local_browser 的评测
   启用；与 ACAF provision 同为"agent 侧环境准备"。
 - 代价：chromium 包约 300–500MB（含依赖），每容器安装 30–60s；

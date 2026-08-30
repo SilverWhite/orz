@@ -95,12 +95,20 @@
 
 ### 3.3 前置条件（local_browser 评测可用）
 
-- 浏览器二进制注入：orz adapter install 层 apt 装 chromium +
+- 浏览器二进制注入：orz adapter install 层装 chromium +
   `ORZ_BROWSER_PATH` / `ORZ_BROWSER_HEADLESS=1`（见
   [`CONTROLLER_SPLIT_DESIGN_2026-08-29.md`](CONTROLLER_SPLIT_DESIGN_2026-08-29.md)
-  §4.3）。
+  §4.3）。**2026-08-30 已实施**（0k-5）：`tb_agents/orz.py` install() 新增
+  `eval_browser` 开关（`--ak eval_browser=true` / `ORZ_EVAL_BROWSER=1`，
+  缺省关闭）——apt 真实包优先（Debian bookworm → /usr/bin/chromium，
+  实测 Chromium 151）；apt 仅 snap 过渡的镜像（ubuntu:24.04）fallback
+  官方 Chromium 快照（storage.googleapis.com/chromium-browser-snapshots
+  → /opt/chrome-linux/chrome，实测 Chromium 154 headless 渲染 OK）；
+  run() 显式白名单注入路径 + headless；失败路径零退出（install 不因
+  浏览器失败 fail），无 apt 系跳过、local_browser 机械降级不变。
 - 启动参数补 `--no-sandbox` / `--disable-dev-shm-usage` / `--disable-gpu`
-  （docker 必需，当前 `browser_launch_args` 缺失）。
+  （docker 必需）。**已实施**（0k 第一批第 4 项 S1 + 审查处理：参数随
+  `--no-sandbox` 仅 headless 收紧）。
 - 注：**浏览器不是超时解药**——官方 82.7% minimal mode 无 web_search
   也无浏览器；本地检索的价值在「一手原文准确性」，验证聚焦准确性而非
   救超时。
