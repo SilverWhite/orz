@@ -382,8 +382,13 @@ use crate::controller::AgentLoopError;
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::controller_test_support::*;
+    use crate::gateway::fake::{FakeProvider, ScriptedResponse};
+    use crate::gateway::model::ModelGateway;
     use crate::gateway::model::ToolCall;
     use crate::host::ToolResult;
+    use orz_assurance::{EventType, JournalRecorder, RunEvent};
+    use std::sync::Arc;
 
     fn call(name: &str, id: &str, args: serde_json::Value) -> ToolCall {
         ToolCall {
@@ -586,5 +591,107 @@ mod tests {
             report.contains("retrieval:3 → 候选超限（候选 8/8）"),
             "{report}"
         );
+    }
+
+    // ── MECHANICAL-AUDIT-LAYER S2 (2026-08-24, ADR-0010 §14.39 / 设计 §5) ──
+
+    /// 设计 §2.4/§5 验收 4：终答前反例自查轮同轮注入 [MECHANICAL_AUDIT
+    /// v0.1] 独立块——报告收敛为执行事实摘要（动作/文件 delta/预算/异常
+    /// 事实），无建议；journal 以 `mechanical_audit_update` 轻量事件留痕
+    /// （plan_gate + budget + tool_result）。
+    #[tokio::test]
+    async fn mechanical_audit_report_injected_with_final_answer_gate() {
+        let dir = test_dir();
+        let journal = JournalRecorder::new(dir.clone());
+        let host = TestHost {
+            journal,
+            tool_result: Some(ToolResult {
+                output: "exit 1".to_string(),
+                exit_code: Some(1),
+                output_encoding: None,
+                structured: None,
+                ..Default::default()
+            }),
+        };
+        let fake = Arc::new(FakeProvider::new(vec![
+            ScriptedResponse::tool_calls(vec![plan_write_call("call-plan-1", valid_plan_json())]),
+            ScriptedResponse::tool_calls(vec![ToolCall {
+                name: "run_terminal_cmd".to_string(),
+                arguments: serde_json::json!({ "command": "dir" }),
+                call_id: "call-term-1".to_string(),
+            }]),
+            ScriptedResponse::text("草稿"),
+            ScriptedResponse::text("终答"),
+        ]));
+        let gateway: Arc<dyn ModelGateway> = fake.clone();
+        let controller = stage_c_controller(gateway);
+        let (response, _, _) = controller
+            .run_turn(
+                &host,
+                "运行命令",
+                "RUN-AUDIT",
+                MANIFEST,
+                0,
+                None,
+                None,
+                None,
+            )
+            .await
+            .unwrap();
+        assert_eq!(response, "终答");
+
+        // 终答前中立问询轮同时携带 [MECHANICAL_AUDIT v0.1] 与
+        // [COUNTEREXAMPLE_GATE]（同轮独立块）。
+        let requests = fake.received_requests();
+        let gate_round = requests
+            .iter()
+            .find(|r| {
+                r.messages
+                    .iter()
+                    .any(|m| m.content.contains("[COUNTEREXAMPLE_GATE v0.1]"))
+            })
+            .expect("counterexample gate round");
+        let audit_msg = gate_round
+            .messages
+            .iter()
+            .find(|m| m.content.contains("[MECHANICAL_AUDIT v0.1]"))
+            .expect("audit report injected in the same round");
+        assert!(audit_msg.content.contains("执行事实"), "{audit_msg:?}");
+        assert!(audit_msg.content.contains("预算"), "{audit_msg:?}");
+        assert!(audit_msg.content.contains("异常事实"), "{audit_msg:?}");
+        assert!(
+            audit_msg.content.contains("cmd:call-term-1"),
+            "the cmd object key carries the latest result: {audit_msg:?}"
+        );
+        assert!(
+            !audit_msg.content.contains("建议"),
+            "audit report must never carry advice: {audit_msg:?}"
+        );
+
+        // journal 留痕：plan_gate / budget / tool_result 三类机械审查事件。
+        let events = events(&dir);
+        let audit_events: Vec<&RunEvent> = events
+            .iter()
+            .filter(|e| e.event_type == EventType::MechanicalAuditUpdate)
+            .collect();
+        assert!(
+            audit_events
+                .iter()
+                .any(|e| e.payload["kind"] == "plan_gate"),
+            "plan gate entry journaled: {audit_events:?}"
+        );
+        assert!(
+            audit_events.iter().any(|e| e.payload["kind"] == "budget"),
+            "budget entry journaled: {audit_events:?}"
+        );
+        assert!(
+            audit_events.iter().any(|e| {
+                e.payload["kind"] == "tool_result"
+                    && e.payload["payload"]["key"] == "cmd:call-term-1"
+            }),
+            "tool_result entry journaled: {audit_events:?}"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

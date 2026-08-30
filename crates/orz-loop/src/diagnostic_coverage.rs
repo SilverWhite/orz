@@ -358,6 +358,13 @@ pub(crate) fn commit_dc_fire(state: &Mutex<DebugEpisodeState>, _payload: &serde_
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::controller::AgentLoopController;
+    use crate::controller_test_support::*;
+    use crate::gateway::fake::{FakeProvider, ScriptedResponse};
+    use crate::gateway::model::ModelGateway;
+    use crate::host::ToolResult;
+    use orz_assurance::{EventType, JournalRecorder};
+    use std::sync::Arc;
 
     fn result(output: &str, exit_code: Option<i32>) -> ToolResult {
         ToolResult {
@@ -612,5 +619,299 @@ mod tests {
             .expect("second fire");
         assert_eq!(p2["threshold_stage"], serde_json::json!(3));
         assert_eq!(p2["trigger_count"], serde_json::json!(1));
+    }
+
+    /// DC: the threshold progresses 2 → 3 (each fire clears the count), the
+    /// checkpoint carries the mechanical payload, and the run continues
+    /// past the forced-template checkpoint rounds. The checkpoint answer
+    /// rounds count toward the orientation seven-round counter like any
+    /// round; each fire is answered by an accepted template round.
+    #[tokio::test]
+    async fn dc_threshold_progresses_and_fires_mechanical_checkpoint() {
+        let dir = test_dir();
+        let journal = JournalRecorder::new(dir.clone());
+        let host = ScriptedTestRunnerHost {
+            journal,
+            results: std::sync::Mutex::new(
+                vec![failing_test_run(), failing_test_run(), failing_test_run()].into(),
+            ),
+        };
+        let gateway: Arc<dyn ModelGateway> = Arc::new(FakeProvider::new(vec![
+            ScriptedResponse::tool_calls(vec![tool_call("run_tests", "call-t1")]),
+            template_answer("continue"),
+            ScriptedResponse::tool_calls(vec![tool_call("run_tests", "call-t2")]),
+            template_answer("continue"),
+            ScriptedResponse::tool_calls(vec![tool_call("run_tests", "call-t3")]),
+            template_answer("continue"),
+            ScriptedResponse::text("根据失败继续修复"),
+            ScriptedResponse::text("修复完成。"),
+        ]));
+        let controller = AgentLoopController::with_gateway(gateway);
+        let mut orientation =
+            crate::orientation::OrientationSessionState::new_with_threshold("sess-dc12345678", 7);
+        controller
+            .run_turn(
+                &host,
+                "修复测试失败",
+                "RUN-DC",
+                MANIFEST,
+                0,
+                None,
+                Some(&mut orientation),
+                None,
+            )
+            .await
+            .unwrap();
+
+        let events = events(&dir);
+        let checkpoints: Vec<_> = events
+            .iter()
+            .filter(|e| e.event_type == EventType::DiagnosticCoverageCheckpoint)
+            .collect();
+        // Each failing call yields 2 signals (the failure fingerprint +
+        // the error class): call 1 (2 signals) ≥ threshold 2 → fire; calls
+        // 2+3 (4 signals) ≥ threshold 3 → fire. 5 tool rounds total.
+        assert_eq!(checkpoints.len(), 2, "{:?}", event_types(&dir));
+        let p0 = &checkpoints[0].payload;
+        let p1 = &checkpoints[1].payload;
+        assert_eq!(p0.get("threshold_stage"), Some(&serde_json::json!(2)));
+        assert_eq!(p1.get("threshold_stage"), Some(&serde_json::json!(3)));
+        assert_eq!(p0.get("trigger_count"), Some(&serde_json::json!(0)));
+        assert_eq!(p1.get("trigger_count"), Some(&serde_json::json!(1)));
+        assert_eq!(
+            p0.get("inquiry_family").and_then(|v| v.as_str()),
+            Some("neutral")
+        );
+        assert_eq!(
+            p0.get("inquiry_kind").and_then(|v| v.as_str()),
+            Some("diagnostic_coverage_checkpoint")
+        );
+        assert!(
+            p0.get("signals")
+                .and_then(|v| v.as_array())
+                .is_some_and(|a| !a.is_empty())
+        );
+        assert!(
+            p0.get("message_block")
+                .and_then(|v| v.as_str())
+                .unwrap()
+                .starts_with("[DIAGNOSTIC_COVERAGE")
+        );
+        // §14.16: every DC fire is answered by an accepted template round.
+        let responses: Vec<_> = events
+            .iter()
+            .filter(|e| e.event_type == EventType::CheckpointResponse)
+            .collect();
+        assert_eq!(responses.len(), 2, "{:?}", event_types(&dir));
+        for r in &responses {
+            assert_eq!(
+                r.payload.get("inquiry_kind").and_then(|v| v.as_str()),
+                Some("diagnostic_coverage_checkpoint")
+            );
+            assert_eq!(
+                r.payload.get("outcome").and_then(|v| v.as_str()),
+                Some("accepted")
+            );
+            assert_eq!(r.payload.get("attempt").and_then(|v| v.as_u64()), Some(1));
+        }
+        // The run CONTINUED past the checkpoint rounds and the checkpoint
+        // answer rounds counted toward the orientation counter: 7 completed
+        // main rounds, no orientation fire (the 7-round crossing lands on
+        // the final answer round and the loop breaks before the next
+        // loop-top — §4.2 count persists to the next run).
+        assert_eq!(
+            events.last().unwrap().event_type,
+            EventType::RunFinished,
+            "run continues past the checkpoint"
+        );
+        assert_eq!(orientation.main.completed_rounds, 7);
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// DC: each stage fires exactly once — after a fire, the count resets
+    /// and the NEXT fire needs the next threshold (2 → 3).
+    #[tokio::test]
+    async fn dc_fires_once_per_stage() {
+        let dir = test_dir();
+        let journal = JournalRecorder::new(dir.clone());
+        let host = ScriptedTestRunnerHost {
+            journal,
+            results: std::sync::Mutex::new(vec![failing_test_run(), failing_test_run()].into()),
+        };
+        let gateway: Arc<dyn ModelGateway> = Arc::new(FakeProvider::new(vec![
+            ScriptedResponse::tool_calls(vec![tool_call("run_tests", "call-t1")]),
+            template_answer("continue"),
+            ScriptedResponse::tool_calls(vec![tool_call("run_tests", "call-t2")]),
+            template_answer("continue"),
+            ScriptedResponse::text("完成"),
+            ScriptedResponse::text("完成"),
+        ]));
+        let controller = AgentLoopController::with_gateway(gateway);
+        controller
+            .run_turn(
+                &host,
+                "修复测试失败",
+                "RUN-DC2",
+                MANIFEST,
+                0,
+                None,
+                None,
+                None,
+            )
+            .await
+            .unwrap();
+
+        let checkpoints: Vec<_> = events(&dir)
+            .into_iter()
+            .filter(|e| e.event_type == EventType::DiagnosticCoverageCheckpoint)
+            .collect();
+        // GAP-RETRIEVAL-TOOLS (2026-08-10): each failing run now also
+        // produces `key_surface_unexamined` (the FAILED line references
+        // tests/test_x.py, never read by the model) — call 1's 3 signals
+        // fire at threshold 2, call 2's 3 signals reach threshold 3. Each
+        // fire is answered by an accepted forced-template round (§14.16).
+        assert_eq!(checkpoints.len(), 2, "{:?}", event_types(&dir));
+        assert_eq!(
+            checkpoints[0].payload.get("threshold_stage"),
+            Some(&serde_json::json!(2))
+        );
+        assert_eq!(
+            checkpoints[1].payload.get("threshold_stage"),
+            Some(&serde_json::json!(3))
+        );
+        let responses: Vec<_> = events(&dir)
+            .into_iter()
+            .filter(|e| e.event_type == EventType::CheckpointResponse)
+            .collect();
+        assert_eq!(responses.len(), 2);
+        assert!(
+            responses
+                .iter()
+                .all(|r| r.payload["outcome"] == serde_json::json!("accepted"))
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// DC: a passing test suite is mechanically-verifiable bug resolution —
+    /// the threshold resets to 2 and the next failures fire again at 2.
+    #[tokio::test]
+    async fn dc_resolves_on_tests_pass_reset_to_2() {
+        let dir = test_dir();
+        let journal = JournalRecorder::new(dir.clone());
+        let host = ScriptedTestRunnerHost {
+            journal,
+            results: std::sync::Mutex::new(
+                vec![
+                    failing_test_run(),
+                    failing_test_run(),
+                    passing_test_run(),
+                    failing_test_run(),
+                    failing_test_run(),
+                ]
+                .into(),
+            ),
+        };
+        let gateway: Arc<dyn ModelGateway> = Arc::new(FakeProvider::new(vec![
+            ScriptedResponse::tool_calls(vec![tool_call("run_tests", "call-t1")]),
+            template_answer("continue"),
+            ScriptedResponse::tool_calls(vec![tool_call("run_tests", "call-t2")]),
+            template_answer("continue"),
+            ScriptedResponse::tool_calls(vec![tool_call("run_tests", "call-t3")]),
+            ScriptedResponse::tool_calls(vec![tool_call("run_tests", "call-t4")]),
+            template_answer("continue"),
+            ScriptedResponse::tool_calls(vec![tool_call("run_tests", "call-t5")]),
+            template_answer("continue"),
+            ScriptedResponse::text("完成"),
+            ScriptedResponse::text("完成"),
+        ]));
+        let controller = AgentLoopController::with_gateway(gateway);
+        controller
+            .run_turn(
+                &host,
+                "修复测试失败",
+                "RUN-DC3",
+                MANIFEST,
+                0,
+                None,
+                None,
+                None,
+            )
+            .await
+            .unwrap();
+
+        let checkpoints: Vec<_> = events(&dir)
+            .into_iter()
+            .filter(|e| e.event_type == EventType::DiagnosticCoverageCheckpoint)
+            .collect();
+        // fail ×2 (3 signals each — incl. key_surface_unexamined) → fire at
+        // 2 and 3; pass → reset to 2; fail ×2 → fire at 2 and 3 again. Each
+        // fire is answered by an accepted forced-template round (§14.16).
+        let stages: Vec<u32> = checkpoints
+            .iter()
+            .map(|c| c.payload["threshold_stage"].as_u64().unwrap() as u32)
+            .collect();
+        assert_eq!(stages, vec![2, 3, 2, 3], "{stages:?}");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// DC: a degraded template round still commits the stage (threshold
+    /// 2→3) — the next fire needs the next threshold (once-per-stage
+    /// guarantee survives the forced-template mechanism).
+    #[tokio::test]
+    async fn dc_forced_template_degrade_commits_stage_and_fires_next() {
+        let dir = test_dir();
+        let journal = JournalRecorder::new(dir.clone());
+        let host = ScriptedTestRunnerHost {
+            journal,
+            results: std::sync::Mutex::new(vec![failing_test_run(), failing_test_run()].into()),
+        };
+        let gateway: Arc<dyn ModelGateway> = Arc::new(FakeProvider::new(vec![
+            ScriptedResponse::tool_calls(vec![tool_call("run_tests", "call-t1")]),
+            ScriptedResponse::text("无法填写模板"),
+            ScriptedResponse::text("仍然无法填写模板"),
+            ScriptedResponse::tool_calls(vec![tool_call("run_tests", "call-t2")]),
+            template_answer("continue"),
+            ScriptedResponse::text("完成"),
+            ScriptedResponse::text("完成"),
+        ]));
+        let controller = AgentLoopController::with_gateway(gateway);
+        controller
+            .run_turn(
+                &host,
+                "修复测试失败",
+                "RUN-DC4",
+                MANIFEST,
+                0,
+                None,
+                None,
+                None,
+            )
+            .await
+            .unwrap();
+
+        let events = events(&dir);
+        let checkpoints: Vec<_> = events
+            .iter()
+            .filter(|e| e.event_type == EventType::DiagnosticCoverageCheckpoint)
+            .collect();
+        assert_eq!(checkpoints.len(), 2, "{:?}", event_types(&dir));
+        assert_eq!(checkpoints[0].payload["threshold_stage"].as_u64(), Some(2));
+        assert_eq!(checkpoints[1].payload["threshold_stage"].as_u64(), Some(3));
+        let responses: Vec<_> = events
+            .iter()
+            .filter(|e| e.event_type == EventType::CheckpointResponse)
+            .collect();
+        assert_eq!(responses.len(), 3, "{:?}", event_types(&dir));
+        assert_eq!(
+            responses[0].payload["outcome"].as_str(),
+            Some("refill_requested")
+        );
+        assert_eq!(responses[1].payload["outcome"].as_str(), Some("degraded"));
+        assert_eq!(responses[2].payload["outcome"].as_str(), Some("accepted"));
+        assert_eq!(events.last().unwrap().event_type, EventType::RunFinished);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

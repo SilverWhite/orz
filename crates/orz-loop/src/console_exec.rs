@@ -2857,50 +2857,6 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
-    /// 设计 §2.8/§5 验收 5（行为侧零残留）：终答携带未绑定本 run 证据的
-    /// `[来源: SRC-999]` 标记也不再机械拦截——原样交付（旧引用校验器会
-    /// block 并替换为降级块）。
-    #[tokio::test]
-    async fn final_answer_with_unbound_citation_delivered_as_is() {
-        let dir = test_dir();
-        let journal = JournalRecorder::new(dir.clone());
-        let host = TestHost {
-            journal,
-            tool_result: None,
-        };
-        let gateway: Arc<dyn ModelGateway> = Arc::new(FakeProvider::from_texts(vec![
-            "草稿",
-            "结论 [来源: SRC-999]",
-        ]));
-        let controller = AgentLoopController::with_gateway(gateway);
-        let (response, _, _) = controller
-            .run_turn(
-                &host,
-                "hello",
-                "RUN-CITE-GONE",
-                MANIFEST,
-                0,
-                None,
-                None,
-                None,
-            )
-            .await
-            .unwrap();
-        assert_eq!(response, "结论 [来源: SRC-999]");
-        // 运行正常终止（无引用校验事件类型——编译期已删除该变体）。
-        let types = event_types(&dir);
-        assert_eq!(
-            types
-                .iter()
-                .filter(|t| **t == EventType::RunFinished)
-                .count(),
-            1,
-            "{types:?}"
-        );
-
-        let _ = std::fs::remove_dir_all(&dir);
-    }
-
     // ── MECHANICAL-AUDIT-LAYER 审查处理 (2026-08-24, ADR-0010 §14.39):
     //    direct 面 read-anchor 写前核证 + 退役工具调用面窄门 ────────────
 

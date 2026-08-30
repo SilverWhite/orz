@@ -415,6 +415,17 @@ pub fn probe_work_tools(ctx: &ProbeContext) -> ToolProbeSnapshot {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::controller::AgentLoopController;
+    use crate::controller_test_support::*;
+    use crate::gateway::fake::{FakeProvider, ScriptedResponse};
+    use crate::gateway::model::{GatewayError, ModelGateway, ModelRequest, ModelResponse};
+    use crate::host::{
+        LoopHost, PermitDecision, PermitError, RiskClass, ToolError, ToolRegistry, ToolResult,
+    };
+    use async_trait::async_trait;
+    use orz_assurance::{EventType, JournalRecorder, RunEvent};
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicBool, Ordering};
 
     /// Test-only temp directory with deterministic cleanup (no new
     /// third-party dependency).
@@ -886,5 +897,397 @@ mod tests {
         perms.set_readonly(true);
         std::fs::set_permissions(dir.path(), perms).expect("mark probe dir read-only");
         assert!(!workspace_writable(dir.path()));
+    }
+
+    // ── P0-A step 5: minimal previous-round map + flip-only events ──────
+
+    /// A host whose runner presence can flip mid-run — the per-round probe
+    /// must observe the change and emit a second `tool_availability_check`.
+    struct FlipRunnerHost {
+        journal: JournalRecorder,
+        runner: std::sync::Arc<AtomicBool>,
+    }
+    #[async_trait]
+    impl LoopHost for FlipRunnerHost {
+        fn journal(&self) -> &JournalRecorder {
+            &self.journal
+        }
+        fn tools_registry(&self) -> &dyn ToolRegistry {
+            &RunTestsDeclaringRegistry
+        }
+        fn tool_policy(&self) -> crate::host::ToolPolicy {
+            crate::host::ToolPolicy::Benchmark
+        }
+        fn test_runner(&self) -> Option<crate::host::TestRunner> {
+            self.runner
+                .load(Ordering::SeqCst)
+                .then(|| crate::host::TestRunner {
+                    command: vec!["pytest-stub".to_string()],
+                    timeout: None,
+                    env: Vec::new(),
+                })
+        }
+        async fn request_permission(
+            &self,
+            _risk: RiskClass,
+            _tool: &str,
+            _args: &serde_json::Value,
+        ) -> Result<PermitDecision, PermitError> {
+            Ok(PermitDecision::AllowOnce)
+        }
+        async fn call_tool(
+            &self,
+            _name: &str,
+            _args: serde_json::Value,
+            _call_id: &str,
+        ) -> Result<ToolResult, ToolError> {
+            unreachable!("text-only flip test never calls tools");
+        }
+    }
+
+    /// Flips the host runner flag during the FIRST model round — the next
+    /// loop-top probe sees the new state.
+    struct FlipRunnerAfterFirstRound {
+        inner: Arc<FakeProvider>,
+        runner: std::sync::Arc<AtomicBool>,
+        flipped: std::sync::Arc<AtomicBool>,
+    }
+    #[async_trait]
+    impl ModelGateway for FlipRunnerAfterFirstRound {
+        fn for_new_run(&self) -> std::sync::Arc<dyn ModelGateway> {
+            // per-run 隔离语义：新 run 从「未翻转」开始（共享底层
+            // fake/runner/flipped ——测试断言语义不变）。
+            std::sync::Arc::new(Self {
+                inner: self.inner.clone(),
+                runner: self.runner.clone(),
+                flipped: std::sync::Arc::new(AtomicBool::new(false)),
+            })
+        }
+
+        async fn generate(&self, request: ModelRequest) -> Result<ModelResponse, GatewayError> {
+            if self
+                .flipped
+                .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
+                .is_ok()
+            {
+                self.runner.store(false, Ordering::SeqCst);
+            }
+            self.inner.generate(request).await
+        }
+    }
+
+    /// P0-A step 5: a mid-run probe flip (run_tests complete → incomplete)
+    /// emits a SECOND `tool_availability_check` event and re-projects the
+    /// next model request — no event fires while the partition is stable.
+    #[tokio::test]
+    async fn probe_flip_emits_second_availability_event_and_reprojects() {
+        let dir = test_dir();
+        let runner = std::sync::Arc::new(AtomicBool::new(true));
+        let host = FlipRunnerHost {
+            journal: JournalRecorder::new(dir.clone()),
+            runner: runner.clone(),
+        };
+        let fake = Arc::new(FakeProvider::from_texts(vec!["完成", "完成"]));
+        let gateway: Arc<dyn ModelGateway> = Arc::new(FlipRunnerAfterFirstRound {
+            inner: fake.clone(),
+            runner,
+            flipped: std::sync::Arc::new(AtomicBool::new(false)),
+        });
+        let controller = AgentLoopController::with_gateway(gateway);
+        controller
+            .run_turn(&host, "hi", "RUN-FLIP", MANIFEST, 0, None, None, None)
+            .await
+            .unwrap();
+
+        let all = events(&dir);
+        let checks: Vec<&RunEvent> = all
+            .iter()
+            .filter(|e| e.event_type == EventType::ToolAvailabilityCheck)
+            .collect();
+        assert_eq!(checks.len(), 2, "one initial + one flip event");
+        let first_idx = all
+            .iter()
+            .position(|e| e.event_type == EventType::ToolAvailabilityCheck)
+            .unwrap();
+        let run_started_idx = all
+            .iter()
+            .position(|e| e.event_type == EventType::RunStarted)
+            .unwrap();
+        assert!(
+            first_idx < run_started_idx,
+            "initial event must precede run_started"
+        );
+        // Initial snapshot: runner present → run_tests complete.
+        assert!(
+            checks[0].payload["complete"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|v| v.as_str() == Some("run_tests")),
+            "initial payload: {:?}",
+            checks[0].payload
+        );
+        // Flip snapshot: run_tests incomplete with the neutral reason.
+        let p = &checks[1].payload;
+        assert!(
+            !p["complete"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|v| v.as_str() == Some("run_tests")),
+            "flip payload complete: {:?}",
+            p["complete"]
+        );
+        assert!(
+            p["incomplete"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|v| v["tool"] == "run_tests" && v["reason"] == "缺少测试运行器"),
+            "flip payload incomplete: {:?}",
+            p["incomplete"]
+        );
+        assert_eq!(p["gate_decision"], "pass", "probe never blocks");
+        // R1 封存：run_tests 无论探针状态都不进声明面——两个请求均不出现
+        // （探针事件仍记录翻转，但声明面不受探针影响）。
+        let received = fake.received_requests();
+        assert!(
+            received
+                .iter()
+                .all(|r| !r.tools.iter().any(|t| t.name == "run_tests")),
+            "run_tests sealed from the declaration surface: {:?}",
+            received
+                .iter()
+                .map(|r| r.tools.iter().map(|t| &t.name).collect::<Vec<_>>())
+                .collect::<Vec<_>>()
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A host whose `read_file` mechanically fails at call time while the
+    /// probe (readable workspace) still says complete — 调用即探针 must
+    /// correct the minimal map so the next probe reports a recovery flip.
+    struct FailingReadHost {
+        journal: JournalRecorder,
+    }
+    #[async_trait]
+    impl LoopHost for FailingReadHost {
+        fn journal(&self) -> &JournalRecorder {
+            &self.journal
+        }
+        fn tools_registry(&self) -> &dyn ToolRegistry {
+            &MixedProjectionRegistry
+        }
+        async fn request_permission(
+            &self,
+            _risk: RiskClass,
+            _tool: &str,
+            _args: &serde_json::Value,
+        ) -> Result<PermitDecision, PermitError> {
+            Ok(PermitDecision::AllowOnce)
+        }
+        async fn call_tool(
+            &self,
+            name: &str,
+            _args: serde_json::Value,
+            _call_id: &str,
+        ) -> Result<ToolResult, ToolError> {
+            if name == "read_file" {
+                return Err(ToolError::ExecutionFailed("stub read failure".into()));
+            }
+            unreachable!("only read_file is called");
+        }
+    }
+
+    /// P0-A step 5 (design §5): a real work-tool call failure writes back into
+    /// the minimal map (调用即探针) — the next per-round probe sees the
+    /// corrected state and emits a recovery-flip event.
+    #[tokio::test]
+    async fn probe_call_failure_writes_back_and_emits_recovery_flip() {
+        let dir = test_dir();
+        let host = FailingReadHost {
+            journal: JournalRecorder::new(dir.clone()),
+        };
+        let gateway: Arc<dyn ModelGateway> = Arc::new(FakeProvider::new(vec![
+            ScriptedResponse::tool_calls(vec![tool_call("read_file", "call-r")]),
+            ScriptedResponse::text("完成"),
+            ScriptedResponse::text("完成"),
+        ]));
+        let controller = AgentLoopController::with_gateway(gateway);
+        controller
+            .run_turn(&host, "读", "RUN-WB", MANIFEST, 0, None, None, None)
+            .await
+            .unwrap();
+
+        let all = events(&dir);
+        let checks: Vec<&RunEvent> = all
+            .iter()
+            .filter(|e| e.event_type == EventType::ToolAvailabilityCheck)
+            .collect();
+        assert_eq!(checks.len(), 2, "initial + recovery flip");
+        // The failure itself is audited as ToolCompleted(error).
+        let failed_idx = all
+            .iter()
+            .position(|e| {
+                e.event_type == EventType::ToolCompleted
+                    && e.payload.get("tool").and_then(|v| v.as_str()) == Some("read_file")
+                    && e.payload.get("status").and_then(|v| v.as_str()) == Some("error")
+            })
+            .expect("read_file ToolCompleted(error) must be journaled");
+        // The recovery flip event follows the failed call.
+        let flip_idx = all
+            .iter()
+            .enumerate()
+            .filter(|(_, e)| e.event_type == EventType::ToolAvailabilityCheck)
+            .map(|(i, _)| i)
+            .nth(1)
+            .expect("second availability event");
+        assert!(
+            flip_idx > failed_idx,
+            "recovery flip must follow the failed call"
+        );
+        // The flip snapshot reports the probe truth: read_file complete again.
+        assert!(
+            checks[1].payload["complete"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|v| v.as_str() == Some("read_file")),
+            "recovery flip payload: {:?}",
+            checks[1].payload
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// P0-A step 5 review fix (2026-08-13): the retrieval lane never
+    /// writes back into the main probe map — a failed work-tool read call
+    /// inside the lane must NOT flip `read_file` in the main map.
+    /// THIN-HARNESS-REDESIGN R1 (§4.4): auto-close 下激活不再进入
+    /// awaiting-disposition，`retrieval_disposition` 探针恒 incomplete——
+    /// 无激活生命周期翻转，journal 只含初始那一条 availability 事件
+    /// （车道内失败也不产生主面事件）。
+    #[tokio::test]
+    async fn retrieval_lane_failure_does_not_pollute_main_probe_map() {
+        let dir = test_dir();
+        let host = FailingReadHost {
+            journal: JournalRecorder::new(dir.clone()),
+        };
+        // Main declares retrieval → subagent round 1 calls read_file
+        // (work-tool host tool, allowed in the lane) and FAILS → subagent
+        // round 2 forms the result → main concludes (gate + final).
+        let gateway: Arc<dyn ModelGateway> = Arc::new(FakeProvider::new(vec![
+            ScriptedResponse::tool_calls(vec![tool_call("retrieve_project_docs", "call-1")]),
+            ScriptedResponse::tool_calls(vec![tool_call("read_file", "call-2")]),
+            ScriptedResponse::text("[DOC] design.md\n检索完成"),
+            ScriptedResponse::text("完成"),
+            ScriptedResponse::text("完成"),
+        ]));
+        let controller = with_retrieval_enabled(AgentLoopController::with_gateway(gateway));
+        controller
+            .run_turn(
+                &host,
+                "查找项目文档",
+                "RUN-LANE-WB",
+                MANIFEST,
+                0,
+                None,
+                None,
+                None,
+            )
+            .await
+            .unwrap();
+
+        let types = event_types(&dir);
+        let availability_count = types
+            .iter()
+            .filter(|t| **t == EventType::ToolAvailabilityCheck)
+            .count();
+        assert_eq!(
+            availability_count, 1,
+            "R1 auto-close: initial availability event only — no activation \
+             flip and no lane-local pollution: {types:?}"
+        );
+        // The lane failure itself is still audited via ToolCompleted(error).
+        assert!(
+            types.contains(&EventType::ToolCompleted),
+            "lane failure must stay in the audit chain: {types:?}"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// P0-A step 5: the minimal previous-round map is per-run — a second
+    /// run on the same controller starts fresh. Run 1 has a runner
+    /// (run_tests complete); run 2 loses it. If run 1's map leaked, run 2's
+    /// first loop-top probe would differ and emit a SECOND availability
+    /// event — asserting exactly one per run locks the reset.
+    #[tokio::test]
+    async fn probe_state_resets_across_runs() {
+        let dir1 = test_dir();
+        let dir2 = test_dir();
+        let runner = std::sync::Arc::new(AtomicBool::new(true));
+        let host1 = FlipRunnerHost {
+            journal: JournalRecorder::new(dir1.clone()),
+            runner: runner.clone(),
+        };
+        // Four texts: two per run (counterexample gate + final answer).
+        let fake = Arc::new(FakeProvider::from_texts(vec![
+            "完成", "完成", "完成", "完成",
+        ]));
+        let controller = AgentLoopController::with_gateway(fake);
+        controller
+            .run_turn(&host1, "hi", "RUN-R1", MANIFEST, 0, None, None, None)
+            .await
+            .unwrap();
+        let run1 = events(&dir1);
+        let r1_count = run1
+            .iter()
+            .filter(|e| e.event_type == EventType::ToolAvailabilityCheck)
+            .count();
+        assert_eq!(r1_count, 1, "run 1 must emit exactly one event");
+        assert!(
+            run1.iter()
+                .find(|e| e.event_type == EventType::ToolAvailabilityCheck)
+                .unwrap()
+                .payload["complete"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|v| v.as_str() == Some("run_tests")),
+            "run 1: run_tests complete"
+        );
+
+        runner.store(false, Ordering::SeqCst);
+        let host2 = FlipRunnerHost {
+            journal: JournalRecorder::new(dir2.clone()),
+            runner,
+        };
+        controller
+            .run_turn(&host2, "hi", "RUN-R2", MANIFEST, 0, None, None, None)
+            .await
+            .unwrap();
+        let run2 = events(&dir2);
+        let r2_count = run2
+            .iter()
+            .filter(|e| e.event_type == EventType::ToolAvailabilityCheck)
+            .count();
+        assert_eq!(
+            r2_count,
+            1,
+            "run 2 must not inherit run 1's map: {:?}",
+            event_types(&dir2)
+        );
+        assert!(
+            run2.iter()
+                .find(|e| e.event_type == EventType::ToolAvailabilityCheck)
+                .unwrap()
+                .payload["incomplete"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|v| v["tool"] == "run_tests" && v["reason"] == "缺少测试运行器"),
+            "run 2: run_tests incomplete"
+        );
+        let _ = std::fs::remove_dir_all(&dir1);
+        let _ = std::fs::remove_dir_all(&dir2);
     }
 }

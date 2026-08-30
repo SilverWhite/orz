@@ -223,6 +223,13 @@ impl OrientationSessionState {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::controller::AgentLoopController;
+    use crate::controller_test_support::*;
+    use crate::gateway::fake::{FakeProvider, ScriptedResponse};
+    use crate::gateway::model::Role;
+    use crate::host::ToolResult;
+    use orz_assurance::{EventType, JournalRecorder};
+    use std::sync::Arc;
 
     #[test]
     fn fires_at_threshold_and_resets() {
@@ -374,5 +381,266 @@ mod tests {
         }
         assert!(s2.should_fire(AgentRole::Main));
         assert_eq!(s2.main.completed_rounds, 7);
+    }
+
+    // ── ORZ-ORIENTATION-FORCED-TEMPLATE (2026-08-15, ADR-0010 §14.16) ─────
+
+    /// THIN-HARNESS-REDESIGN-V2 §9.2 (2026-08-29 软门): 7 轮跨越阈值时
+    /// 注入简短 [ORIENTATION v0.4] 块并延迟 commit；触发后的纯文本回答被
+    /// 消费（loop 明确续跑，不再被当终答），不产生 checkpoint_response、
+    /// 不强制无工具轮；终答只由模型自发。
+    #[tokio::test]
+    async fn orientation_soft_gate_consumes_text_answer_and_continues() {
+        let dir = test_dir();
+        let journal = JournalRecorder::new(dir.clone());
+        let host = TestHost {
+            journal,
+            tool_result: Some(ToolResult {
+                output: "ok".to_string(),
+                exit_code: Some(0),
+                output_encoding: None,
+                structured: None,
+                ..Default::default()
+            }),
+        };
+        let mut script = Vec::new();
+        for i in 0..7 {
+            script.push(ScriptedResponse::tool_calls(vec![tool_call(
+                "read_file",
+                &format!("call-{i}"),
+            )]));
+        }
+        // 触发后的第一轮：纯文本回答被软消费（续跑），不计为终答。
+        script.push(ScriptedResponse::text("完成"));
+        // 反例门轮 + 最终答案轮。
+        script.push(ScriptedResponse::text("完成"));
+        script.push(ScriptedResponse::text("完成"));
+        let controller = AgentLoopController::with_gateway(Arc::new(FakeProvider::new(script)));
+        let mut orientation =
+            crate::orientation::OrientationSessionState::new_with_threshold("sess-template1", 7);
+        controller
+            .run_turn(
+                &host,
+                "任务",
+                "RUN-TPL1",
+                MANIFEST,
+                0,
+                None,
+                Some(&mut orientation),
+                None,
+            )
+            .await
+            .unwrap();
+
+        let events = events(&dir);
+        let fires: Vec<_> = events
+            .iter()
+            .filter(|e| e.event_type == EventType::OrientationCheckpoint)
+            .collect();
+        assert_eq!(fires.len(), 1, "{:?}", event_types(&dir));
+        assert_eq!(
+            fires[0].payload["injection_position"].as_str(),
+            Some("post_tool_batch_gap")
+        );
+        assert_eq!(
+            fires[0]
+                .payload
+                .get("completed_turns_since_orientation")
+                .and_then(|v| v.as_u64()),
+            Some(7)
+        );
+        // 无 checkpoint_response——不再有强制模板轮。
+        let responses: Vec<_> = events
+            .iter()
+            .filter(|e| e.event_type == EventType::CheckpointResponse)
+            .collect();
+        assert_eq!(responses.len(), 0, "{:?}", event_types(&dir));
+        // 软门延迟 commit：第 8 轮（纯文本回答）feed 后 commit 归 0；
+        // 反例门轮 + 最终答案轮再喂 2。
+        assert_eq!(orientation.main.completed_rounds, 2);
+        assert_eq!(
+            events.last().unwrap().event_type,
+            EventType::RunFinished,
+            "the pure-text answer was consumed and the run continues"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// THIN-HARNESS-REDESIGN-V2 §9.2 (2026-08-29 软门): 触发后下一轮
+    /// 仍是普通工具轮——orientation 不禁工具，read_file 调用照常执行。
+    #[tokio::test]
+    async fn orientation_fire_does_not_force_tool_free_round() {
+        let dir = test_dir();
+        let journal = JournalRecorder::new(dir.clone());
+        let host = TestHost {
+            journal,
+            tool_result: Some(ToolResult {
+                output: "ok".to_string(),
+                exit_code: Some(0),
+                output_encoding: None,
+                structured: None,
+                ..Default::default()
+            }),
+        };
+        let mut script = Vec::new();
+        for i in 0..7 {
+            script.push(ScriptedResponse::tool_calls(vec![tool_call(
+                "read_file",
+                &format!("call-{i}"),
+            )]));
+        }
+        // Fire 后的下一轮：普通工具轮（read_file call-7）直接执行
+        // （软门消费点 commit 后落入常规派发路径）。
+        script.push(ScriptedResponse::tool_calls(vec![tool_call(
+            "read_file",
+            "call-7",
+        )]));
+        script.push(ScriptedResponse::text("完成"));
+        script.push(ScriptedResponse::text("完成"));
+        let controller = AgentLoopController::with_gateway(Arc::new(FakeProvider::new(script)));
+        let mut orientation =
+            crate::orientation::OrientationSessionState::new_with_threshold("sess-template2", 7);
+        controller
+            .run_turn(
+                &host,
+                "任务",
+                "RUN-TPL2",
+                MANIFEST,
+                0,
+                None,
+                Some(&mut orientation),
+                None,
+            )
+            .await
+            .unwrap();
+
+        let events = events(&dir);
+        // 无 checkpoint_response（软门不产生模板响应事件）。
+        assert_eq!(
+            events
+                .iter()
+                .filter(|e| e.event_type == EventType::CheckpointResponse)
+                .count(),
+            0,
+            "{:?}",
+            event_types(&dir)
+        );
+        // Fire 后的 read_file call-7 正常执行（ToolStarted + ToolCompleted）。
+        let fire_idx = events
+            .iter()
+            .position(|e| e.event_type == EventType::OrientationCheckpoint)
+            .expect("orientation fire");
+        let started_idx = events
+            .iter()
+            .position(|e| {
+                e.event_type == EventType::ToolStarted
+                    && e.payload.get("call_id").and_then(|v| v.as_str()) == Some("call-7")
+            })
+            .expect("post-fire tool round must execute");
+        assert!(
+            started_idx > fire_idx,
+            "the tool round after the fire must execute normally"
+        );
+        // 延迟 commit：第 8 轮（call-7 工具轮）feed 后 commit 归 0；
+        // 反例门轮 + 最终答案轮再喂 2。
+        assert_eq!(orientation.main.completed_rounds, 2);
+        assert_eq!(events.last().unwrap().event_type, EventType::RunFinished);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// THIN-HARNESS-REDESIGN-V2 §9.2 (2026-08-29 S5-1 修复 B 回归):
+    /// orientation 软门触发轮的模型可见工具栏保持常规投影——实机
+    /// make-doom / gcode-to-text / video-processing 触发轮工具面为空
+    /// （`pending_checkpoint.is_some() → Vec::new()`），模型只能把 XML
+    /// 工具调用写成纯文本，浪费一轮真实工作；修复后触发轮请求必须携带
+    /// 完整工具列表（含 read_file），模型可回答后继续、也可直接动作。
+    #[tokio::test]
+    async fn orientation_trigger_round_keeps_tool_face_projected() {
+        let dir = test_dir();
+        let journal = JournalRecorder::new(dir.clone());
+        let host = TestHost {
+            journal,
+            tool_result: Some(ToolResult {
+                output: "ok".to_string(),
+                exit_code: Some(0),
+                output_encoding: None,
+                structured: None,
+                ..Default::default()
+            }),
+        };
+        let mut script = Vec::new();
+        for i in 0..7 {
+            script.push(ScriptedResponse::tool_calls(vec![tool_call(
+                "read_file",
+                &format!("call-{i}"),
+            )]));
+        }
+        // 触发轮：工具调用照常执行（软门不禁工具）。
+        script.push(ScriptedResponse::tool_calls(vec![tool_call(
+            "read_file",
+            "call-7",
+        )]));
+        script.push(ScriptedResponse::text("完成"));
+        script.push(ScriptedResponse::text("完成"));
+        let fake = Arc::new(FakeProvider::new(script));
+        let controller = AgentLoopController::with_gateway(fake.clone());
+        let mut orientation =
+            crate::orientation::OrientationSessionState::new_with_threshold("sess-tplface", 7);
+        controller
+            .run_turn(
+                &host,
+                "任务",
+                "RUN-TPLF",
+                MANIFEST,
+                0,
+                None,
+                Some(&mut orientation),
+                None,
+            )
+            .await
+            .unwrap();
+
+        // 触发轮 = 消息含 [ORIENTATION 注入块的请求；其工具栏必须与
+        // 前一普通工具轮完全一致（常规投影），不得因 pending checkpoint
+        // 置空——实机工具面为空时模型只能把 XML 工具调用写成纯文本。
+        let requests = fake.received_requests();
+        let trigger_idx = requests
+            .iter()
+            .position(|req| {
+                req.messages
+                    .iter()
+                    .any(|m| m.role == Role::User && m.content.starts_with("[ORIENTATION"))
+            })
+            .unwrap_or_else(|| panic!("no trigger-round request found: {requests:?}"));
+        assert!(
+            trigger_idx > 0,
+            "a normal tool round must precede the trigger"
+        );
+        let trigger = &requests[trigger_idx];
+        let prior = &requests[trigger_idx - 1];
+        assert!(
+            !trigger.tools.is_empty(),
+            "orientation trigger round must keep the tool face projected: {:?}",
+            trigger.tools.iter().map(|t| &t.name).collect::<Vec<_>>()
+        );
+        assert!(
+            trigger.tools.len() == prior.tools.len()
+                && trigger.tools.iter().all(|t| {
+                    prior.tools.iter().any(|p| {
+                        p.name == t.name
+                            && p.description == t.description
+                            && p.parameters == t.parameters
+                    })
+                }),
+            "trigger-round tool face must equal the prior normal round's projection: \
+             prior={:?} trigger={:?}",
+            prior.tools.iter().map(|t| &t.name).collect::<Vec<_>>(),
+            trigger.tools.iter().map(|t| &t.name).collect::<Vec<_>>()
+        );
+        assert_eq!(
+            events(&dir).last().unwrap().event_type,
+            EventType::RunFinished
+        );
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

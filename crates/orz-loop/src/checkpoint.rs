@@ -436,6 +436,12 @@ pub(crate) fn commit_pending(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::controller::AgentLoopController;
+    use crate::controller_test_support::*;
+    use crate::gateway::fake::{FakeProvider, ScriptedResponse};
+    use crate::gateway::model::Role;
+    use orz_assurance::{EventType, JournalRecorder};
+    use std::sync::Arc;
 
     fn known() -> HashSet<String> {
         ["src/cache.rs", "SRC-001", "docs/evidence.md"]
@@ -610,5 +616,150 @@ mod tests {
         let block = refill_feedback_block(&["task_position missing".to_string()]);
         assert!(block.starts_with(CHECKPOINT_REFILL_PREFIX));
         assert!(block.contains("task_position missing"));
+    }
+
+    /// DeepSeek thinking-mode replay regression (2026-08-24 real-run
+    /// `invalid_request_error`: "reasoning_content in the thinking mode
+    /// must be passed back to the API"): checkpoint answers are replayed
+    /// with their `reasoning_content` on the refill and every follow-up
+    /// request (the checkpoint branch must not drop it).
+    ///
+    /// THIN-HARNESS-REDESIGN R1 (§4.3): orientation 的强制模板轮退役后，
+    /// checkpoint 机制仅剩 DC 车道——本回归测试改用 DC 触发（failing
+    /// run_tests → threshold 2 fire → 模板轮重填）。
+    #[tokio::test]
+    async fn checkpoint_answers_replay_reasoning_content_on_refill_and_followup() {
+        let dir = test_dir();
+        let host = ScriptedTestRunnerHost {
+            journal: JournalRecorder::new(dir.clone()),
+            results: std::sync::Mutex::new(vec![failing_test_run()].into()),
+        };
+        let script = vec![
+            // 失败一次 → DC 触发（2 signals ≥ threshold 2）。
+            ScriptedResponse::tool_calls(vec![tool_call("run_tests", "call-t1")]),
+            // Checkpoint attempt 1: invalid template answer WITH reasoning.
+            ScriptedResponse::text("根据任务继续").with_reasoning("推理-尝试1"),
+            // Checkpoint attempt 2: valid template answer WITH reasoning.
+            template_answer("continue").with_reasoning("推理-尝试2"),
+            ScriptedResponse::text("完成"),
+            ScriptedResponse::text("完成"),
+        ];
+        let fake = Arc::new(FakeProvider::new(script));
+        let controller = AgentLoopController::with_gateway(fake.clone());
+        controller
+            .run_turn(
+                &host,
+                "修复测试失败",
+                "RUN-R4-REASONING",
+                MANIFEST,
+                0,
+                None,
+                None,
+                None,
+            )
+            .await
+            .unwrap();
+
+        let received = fake.received_requests();
+        assert!(received.len() >= 4, "{received:?}");
+        let mut saw_attempt1 = false;
+        let mut saw_attempt2 = false;
+        for request in &received {
+            for m in &request.messages {
+                if m.role == Role::Assistant && m.content == "根据任务继续" {
+                    assert_eq!(
+                        m.reasoning_content.as_deref(),
+                        Some("推理-尝试1"),
+                        "attempt-1 replay must keep reasoning: {request:?}"
+                    );
+                    saw_attempt1 = true;
+                }
+                if m.role == Role::Assistant && m.content.contains("\"next_action\":\"continue\"") {
+                    assert_eq!(
+                        m.reasoning_content.as_deref(),
+                        Some("推理-尝试2"),
+                        "attempt-2 replay must keep reasoning: {request:?}"
+                    );
+                    saw_attempt2 = true;
+                }
+            }
+        }
+        assert!(saw_attempt1, "attempt-1 answer was never replayed");
+        assert!(saw_attempt2, "attempt-2 answer was never replayed");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A tool_calls answer during the checkpoint round is a validation
+    /// error (`tool_calls_not_allowed`) — nothing executes, one re-fill is
+    /// offered, and the accepted answer resumes the run.
+    ///
+    /// THIN-HARNESS-REDESIGN R1 (§4.3): orientation 的强制模板轮退役后，
+    /// 该机制仅剩 DC 车道——本测试改用 DC 触发（failing run_tests →
+    /// threshold 2 fire → 模板轮非法工具调用被拒）。
+    #[tokio::test]
+    async fn checkpoint_round_tool_call_is_refused_without_execution() {
+        let dir = test_dir();
+        let host = ScriptedTestRunnerHost {
+            journal: JournalRecorder::new(dir.clone()),
+            results: std::sync::Mutex::new(vec![failing_test_run()].into()),
+        };
+        let script = vec![
+            // 失败一次 → DC 触发。
+            ScriptedResponse::tool_calls(vec![tool_call("run_tests", "call-t1")]),
+            // The checkpoint round illegally requests a tool (the loop
+            // offers none) — the call must never execute.
+            ScriptedResponse::tool_calls(vec![tool_call("web_search", "call-cp")]),
+            template_answer("continue"),
+            ScriptedResponse::text("完成"),
+            ScriptedResponse::text("完成"),
+        ];
+        let controller = AgentLoopController::with_gateway(Arc::new(FakeProvider::new(script)));
+        controller
+            .run_turn(
+                &host,
+                "修复测试失败",
+                "RUN-TPL4",
+                MANIFEST,
+                0,
+                None,
+                None,
+                None,
+            )
+            .await
+            .unwrap();
+
+        let events = events(&dir);
+        let responses: Vec<_> = events
+            .iter()
+            .filter(|e| e.event_type == EventType::CheckpointResponse)
+            .collect();
+        assert_eq!(responses.len(), 2, "{:?}", event_types(&dir));
+        assert_eq!(
+            responses[0].payload["outcome"].as_str(),
+            Some("refill_requested")
+        );
+        assert!(
+            responses[0].payload["validation"]["errors"]
+                .as_array()
+                .is_some_and(|errors| errors
+                    .iter()
+                    .any(|e| e.as_str() == Some("tool_calls_not_allowed")))
+        );
+        let fire_idx = events
+            .iter()
+            .position(|e| e.event_type == EventType::DiagnosticCoverageCheckpoint)
+            .unwrap();
+        let resp_idx = events
+            .iter()
+            .position(|e| e.event_type == EventType::CheckpointResponse)
+            .unwrap();
+        assert!(
+            !events[fire_idx..=resp_idx]
+                .iter()
+                .any(|e| e.event_type == EventType::ToolStarted),
+            "illegal checkpoint tool call must not execute"
+        );
+        assert_eq!(events.last().unwrap().event_type, EventType::RunFinished);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }
