@@ -1,0 +1,58 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://local.scientific-assurance.invalid/schema/tool-running-event-payload-v0.2.schema.json",
+  "title": "tool_running runtime event payload",
+  "description": "THIN-HARNESS-REDESIGN-V2 §9.7 (2026-08-29 S5-2): a terminal command auto-backgrounded at the 300s report point — the mid-run status journaled between the call's tool_started and tool_completed. Carries 运行时长 (wall_ms), 进程状态 (pid), 输出活跃度 (total_bytes) and 落盘指针 (output_file) as structured facts; at most one per call_id (verifier-enforced).",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "tool",
+    "call_id",
+    "wall_ms",
+    "task_id",
+    "output_file"
+  ],
+  "properties": {
+    "tool": { "type": "string" },
+    "call_id": { "type": "string" },
+    "wall_ms": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Elapsed wall-clock since the call's tool_started when the mid-run report fired."
+    },
+    "task_id": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Background task id (the original tool call id for auto-background)."
+    },
+    "pid": {
+      "type": "integer",
+      "minimum": 1,
+      "description": "Shell process pid, when the backend could surface it (进程状态)."
+    },
+    "total_bytes": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Total output bytes observed so far, before truncation (输出活跃度)."
+    },
+    "output_file": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Path of the output file the command keeps writing to (落盘指针)."
+    },
+    "console_mode": {
+      "const": "direct",
+      "description": "PLAN-FIRST 阶段 C (2026-08-16, ADR-0010 §14.17⑱): present exactly when the mid-run belongs to a direct-mode model action (audited fallback)."
+    },
+    "transition_id": {
+      "type": "string",
+      "minLength": 1,
+      "description": "PLAN-FIRST 阶段 C (2026-08-16, ADR-0010 §14.17⑱): the console → direct transition this mid-run belongs to (present together with console_mode)."
+    },
+    "trace_id": {
+      "type": "string",
+      "minLength": 1,
+      "description": "PLAN-FIRST 阶段 C (2026-08-16, ADR-0010 §14.17⑱): the console trace id of the direct action (call_id)."
+    }
+  }
+}

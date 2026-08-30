@@ -1,0 +1,7 @@
+{
+  "tool": "run_terminal_cmd",
+  "call_id": "call-term-1",
+  "wall_ms": -1,
+  "task_id": "call-term-1",
+  "output_file": "/tmp/terminal/call-term-1.log"
+}

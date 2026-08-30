@@ -21,6 +21,19 @@
       "enum": ["requested", "confirmed"],
       "description": "AGENT-DELIVERY-FLOW (2026-08-23, 设计 §2.2): the `submit` two-phase marker — requested = the mechanical delivery status was rendered into the blackboard plan view (pending confirmation); confirmed = the terminal step was marked done and the run entered the final-answer flow."
     },
+    "wall_ms": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "THIN-HARNESS-REDESIGN-V2 §9.6 (2026-08-29 S5-1): the tool call's wall-clock duration from ToolStarted to ToolCompleted, in milliseconds. Present on executed tool completions (generic host path and run_tests); refusals (no ToolStarted) carry no wall_ms. For a mid-run completion (`running: true`, §9.7 S5-2) wall_ms is the elapsed time at the 300s report point where the command auto-backgrounded — the call is not yet finished."
+    },
+    "timed_out": {
+      "const": true,
+      "description": "THIN-HARNESS-REDESIGN-V2 §9.6 (2026-08-29 S5-1): present only when the tool call ended by timeout — the host's per-call wall-clock kill or a tool-side client timeout (e.g. web_search's 120s budget, surfaced via ToolError::Timeout)."
+    },
+    "running": {
+      "const": true,
+      "description": "THIN-HARNESS-REDESIGN-V2 §9.7 (2026-08-29 S5-2): present when the tool call completed with the command still running — run_terminal_cmd auto-backgrounded at the 300s report point (exit_code null, tool_running journaled just before this completion)."
+    },
     "status": { "const": "error" },
     "error": { "type": "string" },
     "candidate_count": {

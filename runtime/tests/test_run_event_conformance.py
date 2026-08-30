@@ -292,7 +292,9 @@ class RunEventV02ContractTests(unittest.TestCase):
         写入该事件，v0.1 冻结面保留历史类型).
         MECHANICAL-AUDIT-LAYER (2026-08-24, ADR-0010 §14.39): 引用校验器
         整体删除（-citation_validation，零残留），+mechanical_audit_update
-        （对象键覆盖写轻量留痕）——计数 53 → 53 不变。"""
+        （对象键覆盖写轻量留痕）——计数 53 → 53 不变。
+        THIN-HARNESS-REDESIGN-V2 §9.7 (2026-08-29 S5-2): 53 → 54
+        (+tool_running — 终端命令 300s 中间回报，v0.2 专用新事件)."""
         schema = load_json(RUN_EVENT_SCHEMA_V02)
         enum_events = set(schema["properties"]["event_type"]["enum"])
         fixture_events = {
@@ -301,7 +303,7 @@ class RunEventV02ContractTests(unittest.TestCase):
             if path.name != "chained-run-finished.valid.json"
         }
         self.assertEqual(fixture_events, enum_events)
-        self.assertEqual(len(enum_events), 53)
+        self.assertEqual(len(enum_events), 54)
         self.assertNotIn("neutral_inquiry", enum_events)
         self.assertNotIn("retrieval_completion_check", enum_events)
 

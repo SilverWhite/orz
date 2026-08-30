@@ -749,6 +749,45 @@ class ConsoleModeTransitionRuleTests(unittest.TestCase):
         errors = _verify_v02_console_mode_transition([base, bad])
         self.assertTrue(any("transition_id" in e for e in errors), errors)
 
+    def test_direct_mid_run_requires_matching_transition(self) -> None:
+        """THIN-HARNESS-REDESIGN-V2 §9.7 (2026-08-29 S5-2 审查处理 P2-3):
+        direct 模式下的 tool_running 与 tool_started/tool_completed 同口径
+        ——必须携带当前 direct transition_id。"""
+        from assurance.run_event_journal_validation import (
+            _verify_v02_console_mode_transition,
+        )
+
+        base = self._transition(
+            transition_id="T1",
+            from_mode="console",
+            to_mode="direct",
+            trigger="assistant_failure_streak",
+            streak=3,
+            order_ids=["ORD-1"],
+            decision="switch",
+            reason=None,
+        )
+        mid_run = {
+            "payload_schema": "run-event-v0.2.schema.json",
+            "event_type": "tool_running",
+            "run_id": "RUN-T",
+            "payload": {
+                "tool": "run_terminal_cmd",
+                "call_id": "call-1",
+                "wall_ms": 300012,
+                "task_id": "call-1",
+                "output_file": "/tmp/terminal/call-1.log",
+                "console_mode": "direct",
+                "transition_id": "T1",
+                "trace_id": "call-1",
+            },
+        }
+        self.assertEqual(_verify_v02_console_mode_transition([base, mid_run]), [])
+        bad = dict(mid_run)
+        bad["payload"] = {**mid_run["payload"], "transition_id": "T9"}
+        errors = _verify_v02_console_mode_transition([base, bad])
+        self.assertTrue(any("transition_id" in e for e in errors), errors)
+
     def test_order_written_requires_prior_action_write(self) -> None:
         from assurance.run_event_journal_validation import (
             _verify_v02_console_order_written,
@@ -1295,11 +1334,15 @@ _ZERO = "0" * 64
 
 
 def _mk_v02_event(
-    event_type: str, payload: dict, seq: int, previous: str
+    event_type: str,
+    payload: dict,
+    seq: int,
+    previous: str,
+    run_id: str = "RUN-V02-0001",
 ) -> dict:
     event = {
         "schema_version": "0.2.0-draft",
-        "run_id": "RUN-V02-0001",
+        "run_id": run_id,
         "event_id": f"EVT-V02-{seq:03d}",
         "sequence": seq,
         "timestamp": "2026-08-09T00:00:00Z",
@@ -1871,6 +1914,184 @@ def _rejected_ticket(ticket_id: str | None, kind: str, code: str) -> dict:
         "reject_code": code,
         "detail": "review fixture",
     }
+
+
+def _tool_running_payload(call_id: str = "call-term-1") -> dict:
+    return {
+        "tool": "run_terminal_cmd",
+        "call_id": call_id,
+        "wall_ms": 300012,
+        "task_id": call_id,
+        "pid": 42,
+        "total_bytes": 8192,
+        "output_file": "/tmp/terminal/call-term-1.log",
+    }
+
+
+def _tool_started_payload(call_id: str = "call-term-1") -> dict:
+    return {"tool": "run_terminal_cmd", "call_id": call_id}
+
+
+def _tool_completed_payload(call_id: str = "call-term-1", running: bool = True) -> dict:
+    payload: dict = {"tool": "run_terminal_cmd", "call_id": call_id}
+    if running:
+        payload["exit_code"] = None
+        payload["running"] = True
+    else:
+        payload["exit_code"] = 0
+    return payload
+
+
+class V02ToolRunningChainTests(unittest.TestCase):
+    """THIN-HARNESS-REDESIGN-V2 §9.7 (2026-08-29 S5-2): `tool_running`
+    chain facts on synthetic v0.2 journals — the mid-run report must sit
+    between the same call's tool_started and tool_completed, at most once
+    per call_id, and the completion must carry running:true."""
+
+    def test_mid_run_between_start_and_completed_validates(self) -> None:
+        journal = _v02_journal(
+            [
+                _mk_v02_event("tool_started", _tool_started_payload(), 0, None),
+                _mk_v02_event("tool_running", _tool_running_payload(), 1, _ZERO),
+                _mk_v02_event("tool_completed", _tool_completed_payload(), 2, _ZERO),
+            ]
+        )
+        self.assertEqual(validate_journal_text(journal), [])
+
+    def test_mid_run_without_preceding_start_rejected(self) -> None:
+        journal = _v02_journal(
+            [
+                _mk_v02_event("tool_running", _tool_running_payload(), 0, None),
+                _mk_v02_event("tool_completed", _tool_completed_payload(), 1, _ZERO),
+            ]
+        )
+        errors = validate_journal_text(journal)
+        self.assertTrue(any("no preceding tool_started" in e for e in errors))
+
+    def test_mid_run_without_following_completed_rejected(self) -> None:
+        journal = _v02_journal(
+            [
+                _mk_v02_event("tool_started", _tool_started_payload(), 0, None),
+                _mk_v02_event("tool_running", _tool_running_payload(), 1, _ZERO),
+            ]
+        )
+        errors = validate_journal_text(journal)
+        self.assertTrue(any("no following tool_completed" in e for e in errors))
+
+    def test_mid_run_after_completed_rejected(self) -> None:
+        """P2-4 审查处理：tool_running 必须位于 tool_completed 之前——
+        完成事件后再出现中间回报违反链序（命令已结束不可能还在运行）。"""
+        journal = _v02_journal(
+            [
+                _mk_v02_event("tool_started", _tool_started_payload(), 0, None),
+                _mk_v02_event("tool_completed", _tool_completed_payload(), 1, _ZERO),
+                _mk_v02_event("tool_running", _tool_running_payload(), 2, _ZERO),
+            ]
+        )
+        errors = validate_journal_text(journal)
+        self.assertTrue(any("no following tool_completed" in e for e in errors), errors)
+
+    def test_duplicate_mid_run_per_call_rejected(self) -> None:
+        journal = _v02_journal(
+            [
+                _mk_v02_event("tool_started", _tool_started_payload(), 0, None),
+                _mk_v02_event("tool_running", _tool_running_payload(), 1, _ZERO),
+                _mk_v02_event("tool_running", _tool_running_payload(), 2, _ZERO),
+                _mk_v02_event("tool_completed", _tool_completed_payload(), 3, _ZERO),
+            ]
+        )
+        errors = validate_journal_text(journal)
+        self.assertTrue(any("duplicate tool_running" in e for e in errors))
+
+    def test_completed_missing_running_marker_rejected(self) -> None:
+        journal = _v02_journal(
+            [
+                _mk_v02_event("tool_started", _tool_started_payload(), 0, None),
+                _mk_v02_event("tool_running", _tool_running_payload(), 1, _ZERO),
+                _mk_v02_event(
+                    "tool_completed", _tool_completed_payload(running=False), 2, _ZERO
+                ),
+            ]
+        )
+        errors = validate_journal_text(journal)
+        self.assertTrue(any("must carry running:true" in e for e in errors))
+
+    def test_completed_running_with_exit_code_rejected(self) -> None:
+        """P2-4 审查处理：running:true ⟹ exit_code=null——仍在后台运行的
+        命令没有退出状态，完成事件不得携带 exit_code。"""
+        completed = _tool_completed_payload()
+        completed["exit_code"] = 0
+        journal = _v02_journal(
+            [
+                _mk_v02_event("tool_started", _tool_started_payload(), 0, None),
+                _mk_v02_event("tool_running", _tool_running_payload(), 1, _ZERO),
+                _mk_v02_event("tool_completed", completed, 2, _ZERO),
+            ]
+        )
+        errors = validate_journal_text(journal)
+        self.assertTrue(
+            any("must stay exit_code=null" in e for e in errors), errors
+        )
+
+    def test_second_completed_after_mid_run_rejected(self) -> None:
+        """P2-4 审查处理：后台任务终态经完成提醒送达，不引入第二条
+        ToolCompleted——mid-run 调用恰好一条完成事件。"""
+        journal = _v02_journal(
+            [
+                _mk_v02_event("tool_started", _tool_started_payload(), 0, None),
+                _mk_v02_event("tool_running", _tool_running_payload(), 1, _ZERO),
+                _mk_v02_event("tool_completed", _tool_completed_payload(), 2, _ZERO),
+                _mk_v02_event(
+                    "tool_completed",
+                    {"tool": "run_terminal_cmd", "call_id": "call-term-1", "exit_code": 0},
+                    3,
+                    _ZERO,
+                ),
+            ]
+        )
+        errors = validate_journal_text(journal)
+        self.assertTrue(
+            any("exactly one completion per mid-run call" in e for e in errors),
+            errors,
+        )
+
+    def test_mid_run_cross_call_id_rejected(self) -> None:
+        """P3-4 审查处理：tool_running 的 tool/call_id 必须与其
+        tool_started/tool_completed 一致——跨 call_id 不得关联。"""
+        journal = _v02_journal(
+            [
+                _mk_v02_event("tool_started", _tool_started_payload(), 0, None),
+                _mk_v02_event(
+                    "tool_running", _tool_running_payload(call_id="call-other"), 1, _ZERO
+                ),
+                _mk_v02_event("tool_completed", _tool_completed_payload(), 2, _ZERO),
+            ]
+        )
+        errors = validate_journal_text(journal)
+        self.assertTrue(
+            any("no preceding tool_started" in e for e in errors), errors
+        )
+
+    def test_mid_run_cross_run_rejected(self) -> None:
+        """P3-4 审查处理：关联限定同 run 内——跨 run 复用的 call_id 不得
+        与另一 run 的 tool_started/tool_completed 交叉关联。"""
+        journal = _v02_journal(
+            [
+                _mk_v02_event("tool_started", _tool_started_payload(), 0, None),
+                _mk_v02_event(
+                    "tool_running",
+                    _tool_running_payload(),
+                    1,
+                    _ZERO,
+                    run_id="RUN-V02-0002",
+                ),
+                _mk_v02_event("tool_completed", _tool_completed_payload(), 2, _ZERO),
+            ]
+        )
+        errors = validate_journal_text(journal)
+        self.assertTrue(
+            any("no preceding tool_started" in e for e in errors), errors
+        )
 
 
 class ControlTicketPairingTests(unittest.TestCase):

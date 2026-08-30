@@ -399,6 +399,17 @@ key_fields → target_state 顺序截断并置 `truncated: true`。
   硬中断（传输错误/取消/panic）时，计数不提交、journal 留一条已 fire 未
   消费的孤儿事件；下次 run 在 loop-top 首轮重触发（到期方向检查不丢失，
   符合 recovery-resumes-counting 语义）。接受现状并注释于代码，不补机制。
+- **S4 实证偏差（2026-08-29 复验发现；S5-1 已实施修复）**：触发轮工具面实际仍为空
+  ——`agent_loop.rs` 的 `pending_checkpoint.is_some() → Vec::new()` 对
+  orientation 与 DC 统一禁工具，未落实本款「触发轮不禁工具」；实机触发
+  轮（make-doom / gcode-to-text / video-processing 均有）模型只能以纯
+  文本输出 XML 工具调用，浪费一轮真实工作。定案修复（用户裁决 2026-08-29）：
+  orientation pending 放行工具、DC 强制模板轮保留禁工具（拆两条路径）。
+  **S5-1 已实施（2026-08-29，orz ad5f9ee + 审查处理批）**：
+  `pending_keeps_tools` 拆两条路径——orientation pending 放行探针/工具栏/
+  console 注册/工具派发（回归测试 `orientation_trigger_round_keeps_tool_face_projected`），
+  DC 强制模板轮与 console 询问轮保持禁工具；pending 在工具轮亦提交消费，
+  无重复注入。
 
 ### 9.3 Submit 门修复（并入下一实施批次）
 
@@ -408,7 +419,7 @@ key_fields → target_state 顺序截断并置 `truncated: true`。
   递交/完成 step…"）。
 - 与 prompt 清空同批：base prompt 的 submit 引导行随清空消失。
 
-### 9.4 实施批次（1-3 已于 2026-08-29 实施；4 待放行）
+### 9.4 实施批次（1-3 已于 2026-08-29 实施；4 复验重排；5 S5-1 已实施）
 
 1. [x] prompt 全空 + near-zero 测试反转（2026-08-29 完成，S2 全绿）；
 2. [x] orientation 软门（块文本 + 消费续跑路径；强制模板轮休眠不动；
@@ -417,5 +428,208 @@ key_fields → target_state 顺序截断并置 `truncated: true`。
    无 plan 确认文案不虚构机械最终回答流程）；
 4. [ ] 后续 S4 复验（错题重跑回归：提交不再被拒、长任务不再 50 轮提前
    收束、命中率对比；S3 重建已于 2026-08-29 完成，musl 三件套对应源码
-   orz 5b3fe27）；ADR-0010 修订与 CLI_PROJECT_INDEX 登记按 R3 纪律
+   orz 5b3fe27）——原四题补跑批次（official-r2-failures-s5-1）**作废
+   重排**（2026-08-29 用户指示：不沿用旧批次，全部处理完成后重新安排）；
+   ADR-0010 修订（§14.42 已补写）与 CLI_PROJECT_INDEX 登记按 R3 纪律
    一并处理。
+5. [x] S5-1（问题 A/B + web_search 120s 超时 + 事件面 wall_ms/timed_out；
+   2026-08-29 实施 + 全面审查处理完成，orz ad5f9ee，S3 musl 三件套已
+   重建）；S4 复验批次作废重排，见 §9.6。
+
+**S4 复验结果（2026-08-29 完成，31 题全量 k=1，harbor 实机）**：
+
+- 错题重跑 8/31 解出（official-r1 此 31 题全 0）：query-optimize /
+  pytorch-model-cli / largest-eigenval / caffe-cifar-10 / circuit-fibsqrt /
+  mteb-retrieve / video-processing / build-pov-ray。c1/c2 同批对照旧 R2
+  二进制 2/20 → 4/20（旧解 model-extraction-relu-logits / protein-assembly
+  单样本回落 0，official-r1 亦为 0）。
+- 三项修复验证通过：submit 门全链零 `no plan in force` 拒绝（7 解出题
+  4 走两阶段 submit）；5 个硬门题全部越过 50 轮（chess 74 / make-doom
+  103 / make-mips 75 / caffe 79 / gcode 52），caffe-cifar-10 因此解出；
+  path-tracing 55 步无 orientation 循环、真实 HTTP 400 零。AgentTimeout
+  均为 harbor 按官方 `task.toml` 的 `[agent] timeout_sec` 掐的墙钟超时，
+  非 orz 检索超时。
+- **新暴露问题 A（用户裁决 2026-08-29；S5-1 已实施修复）**：fold 桥剥
+  `reasoning_content`——`build_bridge` 对桥内每条消息置
+  `m.reasoning_content = None`（2026-08-19「思维链不进桥」设计），
+  DeepSeek 对非空 reasoning 的 assistant 消息要求原样回传；make-doom
+  （103 步）与 gcode-to-text（52 步）均死在「orientation 纯文本回答 →
+  下一 loop-top 立即 fold → 回答落入桥内末条被剥 → 400」。同 run 第 50 轮
+  纯工具轮 fold 与 video-processing（回答后继续工具轮、回答被折进台账）
+  均不触发——机制边界已实证：桥内**纯文本** assistant 消息 + 非空
+  reasoning 为必要条件。定案修复方向：桥内保留纯文本 assistant 消息的
+  reasoning_content（或整体不剥），补「桥含纯文本+非空 reasoning」回归
+  测试。**S5-1 已实施（2026-08-29，orz ad5f9ee）**：按前者落地（桥内
+  纯文本 assistant 消息保留 reasoning_content、声明消息仍剥）+ 双形态
+  回归测试（`bridge_keeps_plain_text_assistant_reasoning_but_strips_declarations`）；
+  审查处理记录声明消息边界认知（声明 reasoning 恒空依赖实机证据）与
+  ADR-0010 §14.42 修订。
+- **新暴露问题 B（用户裁决 2026-08-29；S5-1 已实施修复）**：见 §9.2 偏差记录。
+  （S5-1 已实施，见 §9.2。）
+
+### 9.5 S4 失败画像（2026-08-29 深挖，23 个失败题分类）
+
+- **A 框架错误终止（2）**：make-doom-for-mips（103 步）、gcode-to-text
+  （52 步）——均为问题 A（fold 桥剥 reasoning_content）导致的
+  NonZeroAgentExitCodeError；A/B 修复后可再跑。
+- **B AgentTimeout 墙钟超时（18）**——占失败主体；官方 `task.toml`
+  `[agent] timeout_sec` 900–3600s，harbor `asyncio.wait_for` 掐断，
+  与 orz 检索超时无关。子类：
+  - **B1 web 检索时间黑洞（12/18）**：单题最慢调用为 web 类工具
+    （web_search 50–1365s / web_fetch 最高 677s）；`web_search`
+    reqwest 客户端**未配置超时**（client.rs builder 无 `.timeout()`），
+    DeepSeek `/responses` 生成式搜索单次可挂 22.7 分钟（mteb-leaderboard
+    1365s；path-tracing-reverse 828s；rstan-to-pystan 885s；path-tracing
+    653s；protein-assembly 648s；torch-pipeline 533s 等）。web_fetch
+    默认 60s 超时，慢调用多为重试/下载处理。
+  - **B2 run_terminal 慢命令（6/18）**：adaptive-rejection-sampler
+    `apt-get install r-base-core r-base-dev` 458s（任务环境缺 R，R2 旧
+    批次 pytorch-model-cli libGL 缺失同族）；train-fasttext 训练命令
+    1000s；extract-moves-from-video 视频帧提取 616s；extract-elf 末尾
+    `grep -rl ... /` 全盘搜索卡死 14.5 分钟（命令选择低效）；gpt2-codegolf
+    53s；chess-best-move 11s。
+- **C 自然结束交付失败（3）**——真实模型质量差距：model-extraction-
+  relu-logits（19 步，恢复 20×10 矩阵 vs verifier 期望 30×10，隐藏层
+  规模猜错）；dna-insert（23 步，primers.fasta 引物长度/插入序列校验
+  失败，Tm 差 7.09>5）；filter-js-from-html（37 步，XSS 漏拦 2 例 +
+  5/12 干净 HTML 被改写，双挂）。
+- **结论**：A/B 修复直接救 2 题；B1 指向机械层（半助理层工具效率）——
+  web_search 无超时是 12 个超时题的主要时间黑洞，属 R2「工具效率/自
+  解释契约」方向待补（2026-08-29 已定案，见 §9.6）；B2 含环境依赖与
+  命令选择问题（半助理层失败诊断可提示 apt/长命令形态）；C 为模型真实
+  能力边界，暂不属框架缺陷。
+
+### 9.6 超时机制定案（2026-08-29 用户裁决，登记先行、实施分批）
+
+> 输入：调研笔记
+> [`COMMAND_TIMEOUT_AND_WEB_SEARCH_TIMEOUT_RESEARCH_2026-08-29.md`](COMMAND_TIMEOUT_AND_WEB_SEARCH_TIMEOUT_RESEARCH_2026-08-29.md)；
+> 背景：§9.5 B1/B2 时间黑洞——web_search 客户端无超时单次最高 1365s，
+> run_terminal 慢命令 458s–14.5min。
+
+- **终端命令分层默认超时（两档，用户裁决）**：普通命令默认 300s；
+  程序/脚本类默认 600s。模型可传 `timeout` 覆盖，上限维持 900s（现
+  `max_timeout_secs`）。「程序/脚本 vs 普通」的机械判定规则待 S5-2
+  设计小节定案（命令形态启发式 + 模型显式标记，或先统一启发式）。
+- **5 分钟中间回报（用户裁决）**：命令运行满 300s 未完成 → 机械插入一条
+  「运行 + 工具自身情况」中间状态（运行时长/进程状态/输出活跃度/落盘
+  指针），单次仅一次（不累积、不周期）；回报后**默认继续等待**，模型可
+  主动中断（kill），由模型自行判断；命令完成/超时后正常返回终态。
+  - 机制要点：当前 `run_terminal_cmd` 前台阻塞执行、`enabled_background`
+    禁用；中间回报需要后台/部分结果注入路径（mid-run 模型可见消息 +
+    中断 + 终态送达），属新机制，S5-2 先落机制定案再实施。
+- **web_search 超时（用户裁决 120s）**：客户端总超时 120s + connect 10s
+  （`web_search/client.rs` reqwest builder 补 `.timeout()`）；超时返回
+  结构化错误（已用时长 + 建议重试/换查询/直读页面），不新增自动重试。
+- **事件面**：`tool_completed` 补 wall_ms 与超时标记——**S5-1 已落**
+  （2026-08-29：schema 增 wall_ms/timed_out；通用工具路径与 run_tests
+  完成均带 wall_ms，超时落 `timed_out: true`；审查处理 P2-1 补 run_tests
+  F-09 超时的结构化 `TestRunResult.timed_out` 端到端透传）；中间回报
+  对应事件（如 `tool_running`）随 S5-2 机制定案一并落 Schema/verifier/
+  fixtures。
+- **实施批次（压力评估定案，分两批）**：
+  - **S5-1（轻量防御性修复，同批）**：问题 A（fold 桥保留纯文本
+    assistant reasoning_content）+ 问题 B（orientation 触发轮放行
+    工具）+ web_search 120s 超时 + 事件面 wall_ms/timed_out（审查
+    处理纳入）；S1 代码 → S2 测试 → S3 重建已完成（2026-08-29，
+    orz ad5f9ee，musl 三件套）；**S4 复验批次作废重排**（2026-08-29
+    用户指示：不再沿用原四题补跑批次，全部处理完成后重新安排）。
+  - **S5-2（新机制，独立批）**：终端分层超时 + 中间回报；先补本小节
+    的机制定案（分类规则 / 后台或部分结果注入路径 / 事件面），再
+    S1–S4 走完整批次。
+
+### 9.7 S5-2 机制定案（2026-08-29 设计小节，S1 代码 + S2 测试实施）
+
+> 输入：§9.6 定案 + 调研笔记 §5；机制要点：复用既有终端 actor 的
+> 自动后台化（auto-background）路径做「部分结果注入」，不新增唤醒/
+> 续跑机制（新增机制一律视为债务）。模型工具面保持「一次调用 =
+> 一个结果」：显式后台化（`is_background` / `&`）仍不开放。
+> **实施状态（2026-08-29）**：S1 代码 + S2 测试已完成（宿主分类注入 /
+> auto-bg 中间状态 / actor 原超时截止 / `tool_running` 事件面），
+> S3 重建 / S4 复验待续。**全面审查处理（2026-08-29）**：console 订单
+> 执行边界与机械审计层「仍在运行 ≠ 失败」补齐（P1-1/P1-2）；用户主动
+> 后台化（Ctrl+G / 显式 is_background）恢复 10h 硬上限截止、自动后台化
+> 保留原超时（P2-2）；run 结束未决后台任务语义定案（P2-1，见 §9.7.2）；
+> 事件面校验器加固（direct 关联、running:true ⟹ exit_code=null、单完成
+> 事件、同 run 限定，P2-3/P2-4/P3-4）+ 文档边界（P2-5/P3-5）+ console
+> 订单面工具面封闭补齐（P1-3：`workspace.run_terminal` 移除 is_background、
+> timeout 上限 900s / 默认 600s 对齐 host 工具面）。
+
+#### 9.7.1 程序/脚本 vs 普通 分类规则（机械启发式，先统一启发式）
+
+- 两档默认超时由**宿主（半助理层）按命令形态逐调用判定**并注入
+  `timeout`（毫秒）：普通命令 300_000；程序/脚本类 600_000。
+  模型显式传入 `timeout` 时以模型为准（上限维持 900s，
+  `max_timeout_secs` 不变）。注入只发生在模型未传 timeout 时。
+- **程序/脚本判定（纯函数，逐 token 归一化）**：命令首 token
+  （去引号/去 `./` 前缀、小写）命中解释器/包管理/构建工具集合
+  （python/python3/py/node/npm/npx/yarn/pnpm/ruby/perl/php/go/
+  cargo/rustc/make/cmake/ninja/gradle/mvn/java/javac/gcc/g++/
+  clang/apt/apt-get/pip/pip3/docker/bash/sh/zsh/pwsh/powershell/
+  cmd/pytest），或任一 token 以脚本扩展名结尾（`.py/.sh/.js/.ts/
+  .rb/.pl/.php/.ps1/.bat/.cmd`），或首 token 以 `./` 开头（工作区
+  脚本/可执行），判为程序/脚本；否则判为普通命令。
+- 边界：误判由模型显式 `timeout` 覆盖（可低可高）；schema 静态默认
+  仍显示工具层缺省（600s），逐类默认以宿主注入为准，属已知文档边界。
+  另两条启发式边界（审查处理 P2-5，先统一启发式、接受误判由模型覆盖）：
+  ① compound 命令（`cd dir && make` / `cd dir && npm test`）首 token
+  非集合成员且无脚本扩展名 token → 判普通 300s（扩展名规则只能兜底带
+  脚本文件名的形态）；② Windows `.\script` 靠扩展名规则兜底，但
+  `.\build`（无扩展名可执行）漏判为普通命令。
+
+#### 9.7.2 后台路径（部分结果注入 + 默认继续 + 可中断 + 终态送达）
+
+- **触发点**：命令运行满 300s 且其解析超时 **> 300s**（即允许继续
+  运行：程序/脚本默认 600s 或模型覆盖 >300s）→ 终端 actor 将命令
+  **自动后台化**（`transition_to_background`），一次调用在此返回
+  一条「运行 + 工具自身情况」中间状态；普通命令（解析超时 ≤300s）
+  按旧语义在超时点树杀（`timed_out`），不产生中间回报——与「任何
+  命令满 300s 未完成才回报」口径一致（能满 300s 未完成必是允许跑
+  更久的命令）。
+- **中间状态内容（模型可见，工具侧 `pre_formatted` 生成）**：运行
+  时长 / 进程状态（PID、running）/ 输出活跃度（部分字节/总字节）/
+  落盘指针（完整输出文件路径）/ 默认继续 + 可中断提示（按 PID 终止）
+  / 终态送达说明（最终结果随下一次工具结果返回）。
+- **默认继续**：命令转入后台继续运行，actor 以其**原解析超时**为
+  截止（后台任务在 `min(原 timeout, BACKGROUND_MAX_RUNTIME)` 处
+  超时树杀，超时后完成提醒标注 `terminated by signal timeout`）——
+  两层默认超时在后台化后仍然生效。**审查处理（P2-2）**：截止分型——
+  仅自动后台化（ForegroundTimeout）保留原解析超时；用户主动后台化
+  （显式 `is_background` / Ctrl+G）维持 S5-2 之前的 10h 硬上限语义，
+  不因本次改动顺带缩水。
+- **run 结束语义（审查处理 P2-1 定案）**：run 结束（终答/失败）时未决
+  后台任务**保持运行至其截止**，由宿主生命周期收口——CLI 逐 run 进程
+  模型下进程退出即 OS/actor 收口（actor 关停 SIGKILL 全部），TUI 退出
+  走既有 `kill_all`；同一进程内多 run 复用宿主时，未决任务跨 run 存活
+  至截止属显式边界（不新增 run 结束 kill 机制，遵守「新增机制一律视为
+  债务」；如未来出现进程内多 run 长驻宿主，再按 owner 收口）。
+- **可中断**：中间状态携带 PID，模型用普通命令终止（taskkill /
+  kill）；actor 观察到进程退出后，完成提醒按实际退出状态返回终态。
+- **终态送达**：复用既有 `TaskCompletionReminder`——后台任务完成
+  后，下一次任意工具结果顶部 `<system-reminder>` 携带最终
+  退出码/信号/时长/输出指针（既有机制，不新增唤醒）。**边界（审查
+  处理 P3-5）**：若模型在中间回报后不再发起任何工具调用（直接终答/
+  run 结束），终态提醒随无后续工具结果而不会送达——模型已被告知
+  「最终结果随下一次工具结果返回」，且 run 结束语义见上（任务按截止
+  收口），属可接受边界。
+- **工具面封闭**：ORZ `run_terminal_cmd` 参数置
+  `enabled_background=true`（actor 自动后台化需要）但
+  `allow_background_operator=false` 且新增 `hide_background_input`
+  （schema 移除 `is_background`、调用显式拒绝）——模型侧看不到
+  后台工具面，只能看到一次调用返回的中间状态与后续终态。console 订单面
+  （`workspace.run_terminal` 动作 schema）同口径封闭：不暴露
+  `is_background`，timeout 上限 900s / 默认 600s 与 host 工具面一致
+  （审查处理 P1-3）。
+
+#### 9.7.3 事件面（`tool_running`，v0.2 track）
+
+- 中间回报发生时，控制器在 `ToolStarted` 与 `ToolCompleted` 之间
+  记一条 **`tool_running`**（v0.2 事件类型 + 独立 payload schema）：
+  `{tool, call_id, wall_ms（运行时长）, pid, total_bytes（输出活跃度）,
+  output_file（落盘指针）, task_id}`；随后该调用照常收 `ToolCompleted`
+  （exit_code=null + `running: true` 标记，表示命令仍在后台运行）。
+- 链规则（verifier 强制）：`tool_running` 必须位于同一 run 内
+  相同 `tool`/`call_id` 的 `tool_started` 之后、`tool_completed` 之前；
+  同一 `call_id` 至多一条（单次仅一次）。
+- 边界：后台任务的**最终状态**经完成提醒送达模型（模型可见），
+  其 journal 侧的终态落账留待后续批次（本批不引入第二条
+  ToolCompleted 破坏既有「一次调用一条完成事件」链规则）。

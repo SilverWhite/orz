@@ -89,6 +89,10 @@ EVENT_TYPES = [
     "permission_decision",
     "tool_started",
     "tool_completed",
+    # THIN-HARNESS-REDESIGN-V2 §9.7 (2026-08-29 S5-2): terminal command
+    # auto-backgrounded at the 300s report point — mid-run status between
+    # the call's tool_started and tool_completed.
+    "tool_running",
     "orientation_checkpoint",
     "runtime_stagnation_guard",
     "tool_availability_check",
@@ -203,6 +207,7 @@ SLUGS_V02 = {
     "retrieval_activation_restored": "retrieval-activation-restored",
     "mechanical_audit_update": "mechanical-audit-update",
     "request_header_change": "request-header-change",
+    "tool_running": "tool-running",
     "control_ticket_issued": "control-ticket-issued",
     "control_ticket_consumed": "control-ticket-consumed",
       "control_ticket_rejected": "control-ticket-rejected",
@@ -220,6 +225,9 @@ SLUGS_V02 = {
 # envelope reuses the v0.1 payload schema files). GAP-RETRIEVAL-TOOLS
 # (2026-08-10) adds the three retrieval events.
 V02_PAYLOAD_EVENTS = [
+    # THIN-HARNESS-REDESIGN-V2 §9.7 (2026-08-29 S5-2): terminal command
+    # mid-run status (auto-backgrounded at the 300s report point).
+    "tool_running",
     "orientation_checkpoint",
     "diagnostic_coverage_checkpoint",
     # ORZ-ORIENTATION-FORCED-TEMPLATE (2026-08-15, ADR-0010 §14.16): forced
@@ -601,6 +609,17 @@ PAYLOAD_BAD: dict[str, dict] = {
 # their own v0.2 payload schema live here; all other v0.2 events reuse the
 # v0.1 PAYLOAD_GOOD/PAYLOAD_BAD shapes.
 PAYLOAD_GOOD_V02: dict[str, dict] = {
+    # THIN-HARNESS-REDESIGN-V2 §9.7 (2026-08-29 S5-2): terminal command
+    # mid-run status (auto-backgrounded at the 300s report point).
+    "tool_running": {
+        "tool": "run_terminal_cmd",
+        "call_id": "call-term-1",
+        "wall_ms": 300_012,
+        "task_id": "call-term-1",
+        "pid": 42,
+        "total_bytes": 8_192,
+        "output_file": "/tmp/terminal/call-term-1.log",
+    },
     "orientation_checkpoint": {
         "checkpoint_id": "ORIENT-RUN-CONF-0001-0000",
         "inquiry_family": "neutral",
@@ -1054,6 +1073,15 @@ PAYLOAD_GOOD_V02: dict[str, dict] = {
 # a sharper constraint exists; conditional constraints preferred where the
 # schema expresses them).
 PAYLOAD_BAD_V02: dict[str, dict] = {
+    # THIN-HARNESS-REDESIGN-V2 §9.7 (2026-08-29 S5-2): negative wall_ms
+    # violates the one constraint of the mid-run payload.
+    "tool_running": {
+        "tool": "run_terminal_cmd",
+        "call_id": "call-term-1",
+        "wall_ms": -1,
+        "task_id": "call-term-1",
+        "output_file": "/tmp/terminal/call-term-1.log",
+    },
     "orientation_checkpoint": {
         "checkpoint_id": "ORIENT-RUN-CONF-0001-0000",
         "inquiry_family": "neutral",

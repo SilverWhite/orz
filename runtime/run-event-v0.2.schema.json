@@ -42,6 +42,7 @@
         "permission_decision",
         "tool_started",
         "tool_completed",
+        "tool_running",
         "orientation_checkpoint",
         "diagnostic_coverage_checkpoint",
         "checkpoint_response",

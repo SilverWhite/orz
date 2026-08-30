@@ -93,6 +93,13 @@ PAYLOAD_SCHEMA_BY_EVENT_TYPE: dict[str, tuple[str, Path]] = {
 # GAP-RETRIEVAL-TOOLS (2026-08-10): +retrieval_mode_transition,
 # +retrieval_result_committed, +retrieval_activation_restored (ADR §3.7.1/§3.3.3).
 PAYLOAD_SCHEMA_BY_EVENT_TYPE_V02: dict[str, tuple[str, Path]] = {
+    # THIN-HARNESS-REDESIGN-V2 §9.7 (2026-08-29 S5-2): terminal command
+    # auto-backgrounded at the 300s report point — mid-run status between
+    # the call's tool_started and tool_completed (at most one per call_id).
+    "tool_running": (
+        "tool-running",
+        RUNTIME / "tool-running-event-payload-v0.2.schema.json",
+    ),
     "orientation_checkpoint": (
         "orientation-checkpoint",
         RUNTIME / "orientation-checkpoint-event-payload-v0.2.schema.json",
@@ -860,7 +867,14 @@ def _verify_v02_console_mode_transition(
             elif payload["from"] == "direct" and payload["to"] == "console":
                 current_direct.pop(run_id, None)
             continue
-        if event.get("event_type") not in ("tool_started", "tool_completed"):
+        # THIN-HARNESS-REDESIGN-V2 §9.7 (2026-08-29 S5-2 审查处理 P2-3):
+        # tool_running 属 direct 模式工具事件——必须携带当前 direct
+        # transition_id，与 tool_started/tool_completed 同口径关联。
+        if event.get("event_type") not in (
+            "tool_started",
+            "tool_completed",
+            "tool_running",
+        ):
             continue
         payload = event.get("payload", {})
         if payload.get("console_mode") == "direct":
@@ -3055,6 +3069,101 @@ def _verify_v02_lifecycle(events: list[dict[str, Any]]) -> list[str]:
     return errors
 
 
+def _verify_v02_tool_running(events: list[dict[str, Any]]) -> list[str]:
+    """THIN-HARNESS-REDESIGN-V2 §9.7 (2026-08-29 S5-2): `tool_running`
+    mid-run facts on the v0.2 track:
+
+    - every tool_running must sit between the same run's tool_started and
+      tool_completed for the same tool/call_id in the same run (the mid-run
+      report belongs to exactly one in-flight call; run_id is part of the
+      correlation key so reused call_ids across runs never cross-link);
+    - at most one tool_running per call_id (单次仅一次 — no accumulation,
+      no periodic repeats);
+    - the call's tool_completed must carry `running: true` when a mid-run
+      was journaled (the command is still running), and that completion
+      must keep `exit_code: null` — a still-running command has no exit
+      status yet (P2-4 审查处理);
+    - exactly one tool_completed per mid-run call — the background task's
+      final state rides the completion reminder, never a second
+      ToolCompleted (P2-4 审查处理, §9.7.3 边界).
+    """
+    errors: list[str] = []
+    running: list[tuple[int, dict[str, Any]]] = []
+    started: dict[tuple[str, str, str], int] = {}
+    completed: dict[tuple[str, str, str], list[int]] = {}
+    for index, event in enumerate(events):
+        if not _is_v02(event):
+            continue
+        event_type = event.get("event_type")
+        payload = event.get("payload", {})
+        key = (
+            str(event.get("run_id", "")),
+            str(payload.get("tool", "")),
+            str(payload.get("call_id", "")),
+        )
+        if event_type == "tool_running":
+            running.append((index, event))
+        elif event_type == "tool_started":
+            started.setdefault(key, index)
+        elif event_type == "tool_completed":
+            completed.setdefault(key, []).append(index)
+
+    seen: set[tuple[str, str, str]] = set()
+    for index, event in running:
+        payload = event["payload"]
+        key = (
+            str(event.get("run_id", "")),
+            str(payload["tool"]),
+            str(payload["call_id"]),
+        )
+        if key in seen:
+            errors.append(
+                f"event {index}: duplicate tool_running for call_id "
+                f"{payload['call_id']!r} — at most one mid-run report per call"
+            )
+            continue
+        seen.add(key)
+        start_index = started.get(key)
+        if start_index is None or start_index > index:
+            errors.append(
+                f"event {index}: tool_running for call_id {payload['call_id']!r} "
+                "has no preceding tool_started of the same tool/call_id in its run"
+            )
+            continue
+        all_end = completed.get(key, [])
+        if len(all_end) > 1:
+            errors.append(
+                f"event {index}: call_id {payload['call_id']!r} has "
+                f"{len(all_end)} tool_completed events — exactly one completion "
+                "per mid-run call (the background terminal state rides the "
+                "completion reminder, not a second ToolCompleted)"
+            )
+        end_indices = [i for i in all_end if i > index]
+        if not end_indices:
+            errors.append(
+                f"event {index}: tool_running for call_id {payload['call_id']!r} "
+                "has no following tool_completed of the same tool/call_id in its run"
+            )
+            continue
+        end_index = end_indices[0]
+        completed_event = events[end_index]
+        cpayload = completed_event.get("payload", {})
+        if cpayload.get("running") is not True:
+            errors.append(
+                f"event {end_index}: tool_completed for call_id "
+                f"{payload['call_id']!r} must carry running:true after a "
+                "tool_running mid-run report"
+            )
+        elif cpayload.get("exit_code") is not None:
+            errors.append(
+                f"event {end_index}: tool_completed for call_id "
+                f"{payload['call_id']!r} carries running:true but exit_code "
+                f"{cpayload.get('exit_code')!r} — a still-running command must "
+                "stay exit_code=null"
+            )
+    return errors
+
+
 # ── chain verification (mirror of orz-assurance chain.rs) ────────────
 
 def _verify_chain(events: list[dict[str, Any]]) -> list[str]:
@@ -3190,6 +3299,7 @@ def validate_journal_text(text: str) -> list[str]:
         errors.extend(_verify_v02_ledger_fold_advance(events))
         errors.extend(_verify_v02_ledger_fold_write_failed(events))
         errors.extend(_verify_v02_lifecycle(events))
+        errors.extend(_verify_v02_tool_running(events))
         errors.extend(_verify_v02_retrieval_mode(events))
         errors.extend(_verify_v02_result_consistency(events))
         errors.extend(_verify_v02_source_weighting(events))

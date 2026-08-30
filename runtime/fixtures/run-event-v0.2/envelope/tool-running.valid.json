@@ -1,0 +1,23 @@
+{
+  "schema_version": "0.2.0-draft",
+  "run_id": "RUN-CONF-TOOL-RUNNING",
+  "event_id": "EVT-CONF-000",
+  "sequence": 0,
+  "timestamp": "2026-08-29T00:00:00Z",
+  "event_type": "tool_running",
+  "run_manifest_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+  "previous_event_sha256": null,
+  "payload_schema": "run-event-v0.2.schema.json",
+  "payload": {
+    "tool": "run_terminal_cmd",
+    "call_id": "call-term-1",
+    "wall_ms": 300012,
+    "task_id": "call-term-1",
+    "pid": 42,
+    "total_bytes": 8192,
+    "output_file": "/tmp/terminal/call-term-1.log"
+  },
+  "payload_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+  "redaction": "none",
+  "event_sha256": "0000000000000000000000000000000000000000000000000000000000000000"
+}
