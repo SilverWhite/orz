@@ -68,16 +68,39 @@ impl AgentLoopController {
     ///
     /// 门禁观察 P1 修复（2026-08-30，方向 A）：local_browser 分支的
     /// "保留 browser_read"不再构成主面检索通道——主面 browser_read 由
-    /// [`R1_SEALED_MAIN_TOOLS`] 前置剔除（主车道不执行候选计数工具），
-    /// 本函数仅保留"隐藏 web 族"的语义；子代理外部 lane 的 browser_read
-    /// 经 `subagent_tool_projection` 从 registry 恢复。
+    /// [`R1_SEALED_MAIN_TOOLS`] 前置剔除（主车道不执行候选计数工具）；
+    /// 子代理外部 lane 的 browser_read 经 `subagent_tool_projection`
+    /// 从 registry 恢复。
+    ///
+    /// 门禁观察第四轮收尾（2026-08-30，用户裁决"先恢复外部"）：主面
+    /// local_browser 保留 `web_search` **单一派发入口**——模型调用即
+    /// 派发外部检索子代理（`relay::route` → ExternalRetrieval），执行
+    /// 在子代理面完成；web_fetch 族与 web_search_* 变体不在主面出现
+    /// （单入口语义，最小模型面变化）。执行面"二存一"由
+    /// [`subagent_tool_projection`] 保证：外部 lane 在 local_browser
+    /// 下剔除继承的 web 族、仅恢复 browser_read（引擎 SERP 通道），
+    /// 原生 web_search 兜底是机械路径（`retrieval_mode_transition`，
+    /// authority=mechanical_probe），不是子代理模型的自由选择。
     pub(crate) fn apply_retrieval_surface_projection(
         tool_defs: &mut Vec<ToolDef>,
         mode: RetrievalMode,
     ) {
         match mode {
             RetrievalMode::LocalBrowser => {
-                tool_defs.retain(|t| !crate::relay::is_web_retrieval_tool(&t.name));
+                // 保留裸 `web_search`（外部检索派发入口），剔除其余
+                // web 族（web_fetch / web_fetch_* / web_search_*）。
+                tool_defs.retain(|t| {
+                    t.name == "web_search" || !crate::relay::is_web_retrieval_tool(&t.name)
+                });
+                // 入口标注（纯机械侧、仅主面）：web_search = 外部检索
+                // 子代理派发入口，检索在子代理 lane 内执行、完成后返回。
+                for t in tool_defs.iter_mut().filter(|t| t.name == "web_search") {
+                    t.description.push_str(
+                        " External retrieval entry: dispatches the external retrieval \
+                         subagent; the search executes in the subagent lane and results \
+                         return when it completes.",
+                    );
+                }
             }
             RetrievalMode::FrameworkFallback => {
                 tool_defs.retain(|t| t.name != "browser_read");
@@ -152,6 +175,16 @@ impl AgentLoopController {
                     && !(role == SubagentRole::InternalRetrieval
                         && (crate::relay::is_web_retrieval_tool(&t.name)
                             || t.name == "browser_read"))
+                    // 门禁观察第四轮收尾（2026-08-30，用户裁决"先恢复
+                    // 外部"）：外部 lane 执行面二存一——local_browser 下
+                    // 仅 browser_read（引擎 SERP）为检索通道；主面
+                    // web_search 是派发入口，不进入子代理执行面（原生
+                    // web_search 兜底是机械路径 retrieval_mode_transition，
+                    // 非子代理模型自由选择）。framework_fallback 下
+                    // 外部 lane 维持 web 族（既有语义）。
+                    && !(role == SubagentRole::ExternalRetrieval
+                        && retrieval_mode == RetrievalMode::LocalBrowser
+                        && crate::relay::is_web_retrieval_tool(&t.name))
                     // 内部检索派发工具（retrieve_project_*）是主车道专属
                     // 入口——子代理不派发内部检索（nested-dispatch gate
                     // 兜底外，声明面也剔除，杜绝递归/自我派发）。web 族
@@ -339,6 +372,69 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    /// 门禁观察第四轮收尾（2026-08-30，用户裁决"先恢复外部"）：local_browser
+    /// 主面恢复 `web_search` 单一派发入口——web_fetch 隐藏、browser_read
+    /// 保持 R1 封存；web_search 描述标注外部检索子代理派发语义（纯机械
+    /// 侧，模型面仅此一项变化）。
+    #[tokio::test]
+    async fn local_browser_main_surface_restores_web_search_entry() {
+        let dir = test_dir();
+        let host = R1SurfaceHost {
+            journal: JournalRecorder::new(dir.clone()),
+        };
+        let fake = Arc::new(FakeProvider::from_texts(vec!["完成", "完成"]));
+        let gateway: Arc<dyn ModelGateway> = fake.clone();
+        let controller = with_local_browser_enabled(
+            AgentLoopController::with_gateway(gateway).with_console_default_enabled(true),
+        );
+        controller
+            .run_turn(&host, "完成任务", "RUN-LBS", MANIFEST, 0, None, None, None)
+            .await
+            .unwrap();
+
+        let received = fake.received_requests();
+        let declared: Vec<&str> = received[0].tools.iter().map(|t| t.name.as_str()).collect();
+        for tool in [
+            "read_file",
+            "grep",
+            "search_replace",
+            "run_terminal_cmd",
+            "web_search",
+            "blackboard_read",
+            "submit",
+        ] {
+            assert!(
+                declared.contains(&tool),
+                "tool '{tool}' must be declared under local_browser: {declared:?}"
+            );
+        }
+        for banned in [
+            "web_fetch",
+            "browser_read",
+            "retrieve_project_docs",
+            "retrieval_disposition",
+            "list_dir",
+            "run_tests",
+        ] {
+            assert!(
+                !declared.contains(&banned),
+                "tool '{banned}' must NOT be declared under local_browser: {declared:?}"
+            );
+        }
+        let ws = received[0]
+            .tools
+            .iter()
+            .find(|t| t.name == "web_search")
+            .expect("web_search declared");
+        assert!(
+            ws.description.contains("External retrieval entry"),
+            "web_search must carry the external-subagent dispatch annotation: {}",
+            ws.description
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     /// A host over `MixedProjectionRegistry` with a configurable interactive
     /// signal and session cwd; no test runner (Benchmark policy).
     struct MixedProjectionHost {
@@ -469,9 +565,10 @@ mod tests {
         names.sort();
         assert_eq!(
             names,
-            vec!["browser_read", "read_file", "web_search"],
-            "subagent projection restores browser_read under local_browser and \
-             strips console/main-only tools: {names:?}"
+            vec!["browser_read", "read_file"],
+            "subagent projection restores browser_read under local_browser, \
+             strips inherited web_search (execution lane is browser_read-only \
+             SERP), and strips console/main-only tools: {names:?}"
         );
 
         let absent = AgentLoopController::subagent_tool_projection(
@@ -484,8 +581,9 @@ mod tests {
         absent_names.sort();
         assert_eq!(
             absent_names,
-            vec!["read_file", "web_search"],
-            "no invention when the host registry lacks browser_read: {absent_names:?}"
+            vec!["read_file"],
+            "no invention when the host registry lacks browser_read; inherited \
+             web_search still stripped under local_browser: {absent_names:?}"
         );
 
         // RETRIEVAL-SUBAGENT-WIRING 审查处理：framework_fallback 下外部
@@ -598,7 +696,9 @@ mod tests {
             n
         };
 
-        // local_browser：web 族隐藏，browser_read 保留。
+        // local_browser：web_fetch 族与 web_search 变体隐藏，裸 web_search
+        // 保留为外部检索派发入口，browser_read 保留（R1 封存前置剔除由
+        // project_main_agent_tool_defs 承担，本函数只管模式面）。
         let mut lb = defs(&[
             "web_search",
             "web_fetch",
@@ -613,8 +713,26 @@ mod tests {
         );
         assert_eq!(
             names(&lb),
-            vec!["browser_read", "read_file", "retrieve_project_docs"],
-            "local_browser hides the web family only: {lb:?}"
+            vec![
+                "browser_read",
+                "read_file",
+                "retrieve_project_docs",
+                "web_search"
+            ],
+            "local_browser keeps bare web_search as the dispatch entry and \
+             hides web_fetch / web_search variants: {lb:?}"
+        );
+        // 入口标注：主面 web_search 描述声明外部检索子代理派发语义。
+        let ws = lb
+            .iter()
+            .find(|t| t.name == "web_search")
+            .expect("web_search");
+        assert!(
+            ws.description.contains("External retrieval entry")
+                && ws.description.contains("external retrieval subagent"),
+            "main-surface web_search must carry the external-subagent dispatch \
+             annotation: {}",
+            ws.description
         );
 
         // framework_fallback：browser_read 隐藏，web 族保留。
