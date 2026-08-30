@@ -358,7 +358,11 @@ offset 分段）落成工具契约；与 pdf_read 的 `document_id` + `page_rang
    access time、visibility、observed scope、missing scope、最高允许 claim、limitation 和内容 digest（可得时）。
 5. `full_text_observed`、`partial_text_observed`、`metadata_only`、`unavailable` 是不同证据等级。未读全文
    不得生成全文级归因，不得用摘要、搜索片段、二手转述或模型记忆关闭反例缺口。
-6. 外部检索使用受约束的 browser/web 工具时，只控制自己创建或用户显式移交的 tab；cookies、
+6. 外部检索使用受约束的 browser/web 工具时，只控制自己创建或用户显式移交的 tab；**该条 tab
+   生命周期措辞为冻结后补写（v1.46，2026-08-30）：tab target 可机械池化复用（会话级有界池，
+   默认 4），一次调用独占一个 target 的控制权、归还即重置、模型永不接触 tab 句柄、内容/控制权
+   不跨调用共享；「one tab lives exactly for this call」语义从 target 生灭调整为一次调用独占
+   控制权（详见 §14.46）**；cookies、
    password field、auth header、local storage 和无关 tab 永不返回模型。论文、标准和 PDF-first 来源优先
    下载为内容寻址的本地证据，页文本、metadata 与 extraction record 可重建。
 7. 全局 `web_search = 1`、browser tab ownership、站点速率限制和下载大小限制属于检索工具合同；它们
@@ -4010,3 +4014,10 @@ ADR §3.6 正文修订随实施登记。
      `docs/RETRIEVAL_ORCHESTRATION_MECHANICAL_BATCH2_DESIGN_2026-08-30.md` /
      CLI_PROJECT_INDEX（FUS-RETRIEVAL-ENGINE-SERP /
      GAP-PROJECT-DOC-INDEX-CACHE）。
+   - **审查处理（2026-08-30 S1 全面审查轮）**：max_results 缺省语义裁决为
+     「档位默认 5/8/12 机械并入契约后执行面恒有界，故无界不加分（<5/缺省
+     → +0）」；档位阈值按连续边界 ≤1.0/≤3.0/>3.0 裁决（1.5/3.5 分别归
+     extended/deep）；project_doc_index v2 补 HEAD 移动闭环（刷新重取
+     `git ls-files` 合并 tracked 条目）与 D1-1 缓存 path 重建、git 命令
+     统一 10s 超时回退 v1；子模块内容盲区与 DNS TTL 内重绑定窗口登记为
+     已知边界（逃生阀兜底）；详见设计文档 §10。

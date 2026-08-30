@@ -1624,6 +1624,13 @@ S1-S4 全部闭合）
     `call_tool_timeout_kills_process_tree` flake）、orz-bin 12/0/12、
     runtime pytest 325、fmt/clippy 无新增告警。登记：ADR-0010 §14.46 /
     设计文档 `docs/RETRIEVAL_ORCHESTRATION_MECHANICAL_BATCH2_DESIGN_2026-08-30.md`。
+- **0k 第二批 S1 全面审查处理（2026-08-30 完成；实施放行保持 34）**：
+  max_results 缺省语义裁决（档位默认并入后执行面恒有界 → `<5/缺省 → +0`）、
+  档位阈值连续边界落回正文（≤1.0/≤3.0/>3.0）、D1-1 缓存 path 加载重建
+  （含 git 模式篡改测试）、HEAD 移动闭环（刷新重取 `git ls-files` 合并
+  tracked）、git 命令 10s 超时回退 v1、池化读取错误保真、effort env 解析
+  抽纯函数；登记子模块内容盲区与 DNS TTL 内重绑定窗口为已知边界（逃生阀
+  兜底）。详见设计文档 §10 / ADR §14.46 审查处理条。
 
 ### 1. FUS-TOOL-PROBE（`implemented`；P0-A 批次 1-7 与 P0-A-2 已闭合）
 

@@ -1939,6 +1939,12 @@ submit）**browser_read 已消失**，journal 零 browser_read 痕迹、零拒�
   browser_read 并行）+ env 覆盖；close record 可选 `effort`（schema +
   verifier + fixtures + 防回归）；不扩 [DOC]/注入上限；测试 8 项 + dispatch
   集成。S3 重建 + 实机验证待续。
+- [x] **第二批 S1 全面审查处理（2026-08-30）**：max_results 缺省语义裁决
+  （档位默认并入后即有界 → `<5/缺省 → +0`）、档位阈值连续边界落回正文、
+  D1-1 缓存 path 加载重建（git 模式篡改测试）、HEAD 移动闭环（ls-files
+  合并 tracked）、git 命令 10s 超时回退、池化读取错误保真、effort env
+  解析抽纯函数；子模块内容盲区 / DNS TTL 重绑定窗口登记；设计文档 §10 /
+  ADR §14.46 / 索引 v2.34 同步。
 
 **暂缓/否决（不实施）**：`retrieve_project_docs` 维持封存
 （`R1_SEALED_MAIN_TOOLS` 不动）；向量语义检索；web_search 并发 >1；浏览器

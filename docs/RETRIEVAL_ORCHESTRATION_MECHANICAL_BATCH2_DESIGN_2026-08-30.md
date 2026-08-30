@@ -80,10 +80,13 @@ for this call」措辞对齐（推荐 ADR 补写）；②close record 是否登�
 
 1. **双基线结构**：
    - 基线层（git HEAD）：`git ls-files -z` 取受版本控制文件清单 +
-     `git cat-file --batch` 取 blob 内容哈希（git 内容寻址天然，无需重读
-     未改文件）→ 基线条目 `(relative_path, blob_hash, size, title, headings)`；
-     构建时对每个基线 doc 文件提取 title/headings 一次（复用 v1 提取逻辑）。
-   - 增量层（工作树）：`git status --porcelain -z --untracked-files=all`
+     **Blake3 内容哈希**（基线/增量统一用同一内容身份键——调研点的
+     `git cat-file` blob-hash 方案在 §9 折叠为 blake3，未跟踪文件同样
+     覆盖、语义等价且更简）→ 基线条目
+     `(relative_path, blake3, tracked, size, title, headings)`；构建时对
+     每个基线 doc 文件提取 title/headings + blake3 一次。
+   - 增量层（工作树）：`git status --porcelain -z --no-renames
+     --untracked-files=all`（`--no-renames` 避免 rename 双路径解析歧义）
      取 modified/untracked/deleted → modified/untracked 重读并算 **Blake3
      内容哈希**（新增条目键 `(blake3, size, mtime)`）；deleted 从索引移除。
    - 跨 run 快照比对：mtime 只作 stat-clean 快速跳过，内容哈希提供稳定
@@ -94,13 +97,16 @@ for this call」措辞对齐（推荐 ADR 补写）；②close record 是否登�
    索引内部 diff 键。
 3. **索引驻留 + 写后失效**：
    - 首 query 构建；后续 query 不再全树 stat。
-   - 失效通道三路：①写类工具完成（search_replace / run_terminal_cmd 等）
-     → host 置 dirty（run_terminal_cmd 输出不可解析 → 整索引 dirty）；
+   - 失效通道三路：①写类工具完成（当前仅 search_replace /
+     run_terminal_cmd 两个写类工具）→ host 置 dirty（run_terminal_cmd
+     输出不可解析 → 整索引 dirty）；
      ②节流兜底（距上次刷新 ≥ `ORZ_PROJECT_DOC_INDEX_REFRESH_MS`，默认
      30000，query 前增量刷新一次，防外部编辑器改动）；③逃生阀
      `ORZ_PROJECT_DOC_INDEX_FORCE_RESCAN=1` 全量重建（保留）。
    - 「query 零 stat」目标：dirty 未置 + 节流窗口内 → 直接查内存（零 IO）；
-     dirty/窗口到 → git status 增量（远小于 v1 全树 stat）。
+     dirty/窗口到 → git status 增量（git status 内部仍会对全树做 stat，
+     真正的零 IO 收益在驻留窗口；增量层只重读变更文件的内容，不重读
+     未变文件——相对 v1 每次 query 必做全树 stat 的收益不变）。
 4. **同 size+mtime 修改残余盲区（诚实登记）**：git status 自身对 stat-clean
    文件不重 hash（racy-clean 之外）。v2 将该盲区从「全仓库常驻盲区」收敛为
    「git status 与 stat 双 clean 才信任」；**模型自己刚写的内容由写后失效钩子
@@ -119,7 +125,7 @@ for this call」措辞对齐（推荐 ADR 补写）；②close record 是否登�
 
 ### 2.4 测试计划（S2）
 
-- 基线构建：受版本控制文件入基线、blob_hash 正确；
+- 基线构建：受版本控制文件入基线、tracked 标记与 blake3 内容身份正确；
 - 增量层：untracked 可见、modified 重提取 + blake3 更新、deleted 消失；
 - 驻留零 stat：dirty 未置 + 窗口内 query 不触发 git status（探针计数）；
 - 写后失效：search_replace 后下一 query 立即可见（含同 size+mtime 构造）；
@@ -196,12 +202,17 @@ inside it）」。**推荐**：ADR-0010 补写 v1.46——tab **target 可机械
 2. **纯函数机械映射** `classify_retrieval_effort(query, scope, max_results,
    lane) -> EffortTier`（确定性、可解释、无模型参与、表驱动单测）：
    - query 长度（字符）：≤200 → +0；200–800 → +1；>800 → +2；
-   - 广度/聚合词面（调研/调查/比较/分析/总结/全部/所有/多个/各 命中）：
-     每命中 +0.5（上限 +1）；
+   - 广度/聚合词面（实现 `BREADTH_WORDS` 12 词：调研/调查/比较/对比/
+     分析/总结/综述/全部/所有/多个/各方面/各种 命中）：每命中 +0.5
+     （上限 +1；裸「各」太泛、易误命中「各自/各阶段」等，不采用）；
    - scope 形态：显式窄 scope → +0；无 scope 或含通配/多目录 → +1；
-   - max_results：>10 或无界 → +1；5–10 → +0.5；<5 → +0；
+   - max_results：>10 → +1；5–10 → +0.5；<5/缺省 → +0（审查处理
+     2026-08-30 裁决：模型未传 max_results 时档位默认 5/8/12 会机械并入
+     契约，执行面恒有界，故「无界 → +1」不适用——设计正文与实现统一）；
    - lane：外部 web 检索 → +1；内部文档 → +0；
-   - 阈值：0–1 → standard；2–3 → extended；≥4 → deep。
+   - 阈值（连续边界，0.5 粒度分数同按此裁决）：≤1.0 → standard；
+     ≤3.0 → extended；>3.0 → deep（1.5/3.5 分别归 extended/deep；
+     审查处理 2026-08-30 将 §9 登记落回正文，消除正文/§9 矛盾）。
    - env 强制覆盖：`ORZ_RETRIEVAL_EFFORT=standard|extended|deep`
      （评测/对拍用；显式设置优先于档位默认）。
 3. **档位 → 预算参数**（上限语义；既有 env 显式设置优先）：
@@ -234,14 +245,19 @@ inside it）」。**推荐**：ADR-0010 补写 v1.46——tab **target 可机械
   min）；`budget_exhausted` 终态不受档位影响；
 - 若采纳 close record `effort`：schema/verifier/fixture 一致 + 防回归。
 
-## 5. 开放项（待用户裁决）
+## 5. 开放项（2026-08-30 已裁决：用户「按建议落实」，见 ADR-0010 §14.46）
 
 1. **tab 池与 ADR 措辞**：是否按 §3.3 补写 ADR-0010 v1.46（推荐）；或维持
    ADR 原文、将池化登记为 §3.7.6 条 6 的机械实现注记（不叫补写）。
+   → **已按推荐落实**：ADR §14.46 记录补写，正文 §3.7.6 条 6 加内嵌
+   补写标记（审查处理 2026-08-30 收口）。
 2. **close record 登记 effort**：按 §4.2-5 推荐登记（schema 先行）；或最小
    改动不登记。
+   → **已按推荐落实**：schema 可选字段 + verifier 白名单 + fixtures +
+   防回归（bad-effort 负例入 check_repository 映射）。
 3. **默认参数表确认**：池大小 N=4、`ORZ_PROJECT_DOC_INDEX_REFRESH_MS=30000`、
    DNS TTL=300s、三档预算表（§3.2/§2.2/§4.2）与 env 命名。
+   → **已确认**：与实现/ADR §14.46 参数表一致。
 
 ## 6. 不实施清单复核
 
@@ -288,3 +304,50 @@ inside it）」。**推荐**：ADR-0010 补写 v1.46——tab **target 可机械
   `call_tool_timeout_kills_process_tree` flake，单跑通过）、orz-bin
   12/0/12、runtime pytest 325、fmt/clippy 无新增告警；S3 重建 + 实机
   验证待续。
+
+## 10. 审查处理注记（S1 全面审查 + 处理，2026-08-30）
+
+第二批 S1 全面审查（设计/实现/符合性三维）处理结论如下；设计文本已在
+§4.2/§2.2/§5 同步修正，代码修复已入 orz 后续提交。
+
+**P1（规格/安全）**
+
+- **max_results 缺省语义统一**：裁决「模型未传 max_results 时档位默认
+  5/8/12 机械并入契约、执行面恒有界」，故「无界 → +1」不适用，正文改为
+  `<5/缺省 → +0`（§4.2）；实现保持 None → +0 不变。
+- **档位阈值连续边界落回正文**：§4.2 原「0–1/2–3/≥4」与 §9「≤1.0/≤3.0/
+  >3.0」矛盾（1.5/3.5 未定义），正文已改为连续边界并注明归属。
+- **D1-1 路径信任回归收口**：git 驻留快路径与增量未变条目原先直接信任
+  磁盘缓存 `path`（include_content 可被缓存篡改引向工作区外任意路径）；
+  已改为缓存加载时用 `cwd + relative_path` 重建 path（零 IO），并新增
+  git 模式缓存篡改测试。
+
+**P2（边界登记/闭环）**
+
+- **HEAD 移动盲区闭环**：git status 对 clean 工作树的新提交文件不可见
+  （HEAD 移动/分支切换）；git_incremental 刷新时重取 `git ls-files` 合并
+  缺失 tracked 条目并校正 tracked 标记（index 只读、无工作树 stat）。
+- **git 命令超时**：设计 §2.2.5「失败/超时 → 回退 v1」的「超时」原先未
+  实现；统一 `run_git_cmd` 带 10s 超时（超时尽力 kill 子进程并回退 v1）。
+- **子模块内容盲区登记**：git 模式下 `git ls-files` 不列子模块内部文件、
+  git status 只报 gitlink 指针——子模块内文档变更不可察（存在性核验只对
+  untracked 条目且不重算 blake3）；登记为已知边界，逃生阀兜底（D:\CLI
+  自身含 orz 子模块，解封前留意）。
+- **DNS TTL 内重绑定取舍登记**：同一 host 在 TTL 内从公开解析变为私有/
+  metadata 地址时初始导航预检门被跳过（redirect 重检门保留）；收敛方案
+  （缓存解析 IP 集合 + 变化重检）不在本批，登记为已知边界。
+- **git_mode 进程内永久降级登记**：git 命令失败后本进程不再重探 git
+  模式（v1 回退直到进程重启），属保守取舍。
+
+**P3（小项）**
+
+- 池化读取错误保真：lease_tab 真实错误（create_target/浏览器 ws 连接失败）
+  不再统一映射为 TotalTimeout，仅创建超时映射之。
+- effort env 解析抽纯函数 `parse_retrieval_effort`，单测不再依赖进程环境。
+- 词面表与 `--no-renames` 命令形态、基线 blake3 描述已在 §2.2/§4.2 正文
+  统一；`to_remove` 的 Present 非 doc 死分支已简化。
+- 测试覆盖注记：loop 级「≥2 browser_read 真实 wall-clock 重叠」断言未补
+  （需真实浏览器夹具，成本高）；档位参数映射 + 池级租约/信号量单测已覆盖
+  机制，S3 实机验证计划含「同轮多页并行读取（并发峰值观察）」补足。
+- 验证：审查处理后 orz-loop / orz-host 全量回归 + runtime pytest 325
+  复跑全绿（详见提交信息与登记）。
