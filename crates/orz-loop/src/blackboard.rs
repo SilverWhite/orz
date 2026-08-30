@@ -677,6 +677,13 @@ impl Default for SharedBlackboard {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::controller::AgentLoopController;
+    use crate::controller_test_support::*;
+    use crate::gateway::fake::{FakeProvider, ScriptedResponse};
+    use crate::gateway::model::{ModelGateway, ToolCall};
+    use crate::host::ToolResult;
+    use orz_assurance::{EventType, JournalRecorder};
+    use std::sync::Arc;
 
     #[test]
     fn shared_blackboard_read_write() {
@@ -854,5 +861,1488 @@ mod tests {
         assert!(bb.actions.order.is_none());
         assert!(bb.actions.registration.is_empty());
         assert!(bb.actions.results.is_empty());
+    }
+
+    /// v1.15 (2026-08-14): `blackboard_read` with `epoch` reads the archived
+    /// snapshot; a missing epoch / unconfigured archive is explicit — never
+    /// a silent fallback to the live board.
+    #[tokio::test]
+    async fn blackboard_read_cross_epoch_and_restore() {
+        let dir = test_dir().join("gsa").join("blackboard");
+        let controller =
+            AgentLoopController::with_gateway(Arc::new(FakeProvider::from_texts(vec!["ok", "ok"])))
+                .with_blackboard_archive_dir(Some(dir.clone()))
+                .with_plan(
+                    "PLAN-RESTORE-A".to_string(),
+                    1,
+                    "旧任务".to_string(),
+                    vec!["旧步骤".to_string()],
+                );
+        {
+            let mut bb = controller.blackboard().write();
+            bb.edits.push(EditRecord {
+                file: "old.py".into(),
+                old_lines: 1,
+                new_lines: 2,
+                timestamp: "2026-08-14T00:00:00Z".into(),
+            });
+        }
+        // Rotate: epoch-1 archived with the old plan + edit record.
+        let controller = controller.with_plan(
+            "PLAN-RESTORE-B".to_string(),
+            2,
+            "新任务".to_string(),
+            vec!["新步骤".to_string()],
+        );
+        let live = controller.render_blackboard_section("plan", None, None, None);
+        assert!(live.contains("新任务"));
+        assert!(live.contains("plan_epoch: 2"));
+        // P0-E 计划视图补渲染步骤 ID (2026-08-17, ADR-0010 §14.21 项 2):
+        // both the live view and the archived epoch read carry each step's
+        // id as the leading token — the console step gate's exact `step_id`
+        // binding is visible without guessing.
+        assert!(
+            live.contains("- [in-progress] step-1: 新步骤 (actions: 0; evidence: 0)"),
+            "live plan view must render step id: {live}"
+        );
+        let archived = controller.render_blackboard_section("edits", None, Some(1), None);
+        assert!(archived.contains("old.py"), "cross-epoch read: {archived}");
+        let archived_plan = controller.render_blackboard_section("plan", None, Some(1), None);
+        assert!(
+            archived_plan.contains("- [in-progress] step-1: 旧步骤 (actions: 0; evidence: 0)"),
+            "archived plan view must render step id: {archived_plan}"
+        );
+        let missing = controller.render_blackboard_section("plan", None, Some(99), None);
+        assert!(missing.contains("epoch snapshot 99 not found"));
+
+        // A new controller with the same archive dir restores the latest
+        // epoch (the restore entry).
+        let restored = AgentLoopController::with_gateway(Arc::new(FakeProvider::new(Vec::new())))
+            .with_blackboard_archive_dir(Some(dir.clone()));
+        let r = restored.blackboard().read();
+        assert_eq!(r.plan.plan_id.as_deref(), Some("PLAN-RESTORE-B"));
+        assert_eq!(r.plan.plan_epoch, 2);
+        assert_eq!(r.plan.goal.as_deref(), Some("新任务"));
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// P0-E 计划视图补渲染步骤 ID (2026-08-17, ADR-0010 §14.21 项 2): the
+    /// actual `blackboard_read section=plan` tool reply reaches the model
+    /// with each step's id — the console step gate's exact `step_id`
+    /// binding is visible, no guessing.
+    #[tokio::test]
+    async fn blackboard_read_serves_plan_partition_with_step_ids() {
+        let dir = test_dir();
+        let journal = JournalRecorder::new(dir.clone());
+        let host = TestHost {
+            journal,
+            tool_result: Some(ToolResult {
+                output: "irrelevant".to_string(),
+                exit_code: Some(0),
+                output_encoding: None,
+                structured: None,
+                ..Default::default()
+            }),
+        };
+        let fake = Arc::new(FakeProvider::new(vec![
+            ScriptedResponse::tool_calls(vec![ToolCall {
+                name: "blackboard_read".to_string(),
+                arguments: serde_json::json!({"section": "plan"}),
+                call_id: "call-pv1".to_string(),
+            }]),
+            ScriptedResponse::text("完成"),
+            ScriptedResponse::text("完成"),
+        ]));
+        let gateway: Arc<dyn ModelGateway> = fake.clone();
+        let controller = AgentLoopController::with_gateway(gateway).with_plan(
+            "PLAN-VIEW-TEST".to_string(),
+            1,
+            "构建 ELF".to_string(),
+            vec!["侦查源码".to_string(), "构建并验证".to_string()],
+        );
+        controller
+            .run_turn(
+                &host,
+                "读计划视图",
+                "RUN-PV1",
+                MANIFEST,
+                0,
+                None,
+                None,
+                None,
+            )
+            .await
+            .unwrap();
+
+        let received = fake.received_requests();
+        let round = received
+            .iter()
+            .find(|r| {
+                r.messages
+                    .iter()
+                    .any(|m| m.tool_call_id.as_deref() == Some("call-pv1"))
+            })
+            .expect("round carrying blackboard_read plan reply");
+        assert!(
+            round
+                .messages
+                .iter()
+                .any(|m| m.tool_call_id.as_deref() == Some("call-pv1")
+                    && m.content
+                        .contains("- [in-progress] step-1: 侦查源码 (actions: 0; evidence: 0)")),
+            "plan reply must render the current step id: {:?}",
+            round.messages
+        );
+        assert!(
+            round
+                .messages
+                .iter()
+                .any(|m| m.tool_call_id.as_deref() == Some("call-pv1")
+                    && m.content
+                        .contains("- [pending] step-2: 构建并验证 (actions: 0; evidence: 0)")),
+            "plan reply must render every step id: {:?}",
+            round.messages
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// PUSH→PULL (2026-08-21, CONTEXT_SCAFFOLDING_PULL_REDESIGN §4 方案 A):
+    /// `blackboard_read section=session` 经真实工具链回达模型——live 预算面
+    /// （已用/剩余 + 状态行）；同时校验工具定义已声明 session 分区
+    /// （工具定义增量扩展）。
+    #[tokio::test]
+    async fn blackboard_read_serves_session_section() {
+        let dir = test_dir();
+        let journal = JournalRecorder::new(dir.clone());
+        let host = TestHost {
+            journal,
+            tool_result: Some(ToolResult {
+                output: "irrelevant".to_string(),
+                exit_code: Some(0),
+                output_encoding: None,
+                structured: None,
+                ..Default::default()
+            }),
+        };
+        let fake = Arc::new(FakeProvider::new(vec![
+            ScriptedResponse::tool_calls(vec![ToolCall {
+                name: "blackboard_read".to_string(),
+                arguments: serde_json::json!({"section": "session"}),
+                call_id: "call-se1".to_string(),
+            }]),
+            ScriptedResponse::text("完成"),
+            ScriptedResponse::text("完成"),
+        ]));
+        let gateway: Arc<dyn ModelGateway> = fake.clone();
+        let controller = AgentLoopController::with_gateway(gateway)
+            .with_max_tool_rounds(120)
+            .with_plan(
+                "PLAN-SES-T".to_string(),
+                1,
+                "构建".to_string(),
+                vec!["侦查".to_string()],
+            );
+        controller
+            .run_turn(&host, "读会话面", "RUN-SES1", MANIFEST, 0, None, None, None)
+            .await
+            .unwrap();
+
+        let received = fake.received_requests();
+        let round = received
+            .iter()
+            .find(|r| {
+                r.messages
+                    .iter()
+                    .any(|m| m.tool_call_id.as_deref() == Some("call-se1"))
+            })
+            .expect("round carrying blackboard_read session reply");
+        let reply = round
+            .messages
+            .iter()
+            .find(|m| m.tool_call_id.as_deref() == Some("call-se1"))
+            .expect("session tool result message");
+        assert!(
+            reply.content.contains("TOOL_ROUNDS_USED: 0")
+                && reply.content.contains("TOOL_ROUNDS_REMAINING: 120")
+                && reply
+                    .content
+                    .contains("TOOL_ROUND_BUDGET: 120 tool rounds per turn")
+                && reply.content.contains("[任务状态 v0.1]"),
+            "session reply: {:?}",
+            round.messages
+        );
+        // 工具定义增量扩展：blackboard_read 的 section 枚举含 session。
+        let bb_def = round
+            .tools
+            .iter()
+            .find(|t| t.name == "blackboard_read")
+            .expect("blackboard_read declared in request tools");
+        let sections = bb_def
+            .parameters
+            .get("properties")
+            .and_then(|p| p.get("section"))
+            .and_then(|s| s.get("enum"))
+            .and_then(|e| e.as_array())
+            .expect("section enum declared");
+        assert!(
+            sections.iter().any(|v| v.as_str() == Some("session")),
+            "session must be declared in the section enum: {sections:?}"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// PUSH→PULL (2026-08-21) 全面审查处理（O4/O5）：session 面的越权组合
+    /// （epoch / receipt_id）走参数级显式报错——事件 ToolCompleted exit_code
+    /// 1 + error 字段、工具结果 exit_code 1、错误文本回达模型（与非法
+    /// epoch/receipt_id 同纪律，绝不静默回退）。
+    #[tokio::test]
+    async fn blackboard_read_session_combination_errors_are_explicit() {
+        let dir = test_dir();
+        let journal = JournalRecorder::new(dir.clone());
+        let host = TestHost {
+            journal,
+            tool_result: None,
+        };
+        let fake = Arc::new(FakeProvider::new(vec![
+            ScriptedResponse::tool_calls(vec![ToolCall {
+                name: "blackboard_read".to_string(),
+                arguments: serde_json::json!({"section": "session", "epoch": 1}),
+                call_id: "call-se-e".to_string(),
+            }]),
+            ScriptedResponse::tool_calls(vec![ToolCall {
+                name: "blackboard_read".to_string(),
+                arguments: serde_json::json!({"section": "session", "receipt_id": "ORD-1"}),
+                call_id: "call-se-r".to_string(),
+            }]),
+            ScriptedResponse::text("完成"),
+            ScriptedResponse::text("完成"),
+        ]));
+        let gateway: Arc<dyn ModelGateway> = fake.clone();
+        let controller = AgentLoopController::with_gateway(gateway);
+        controller
+            .run_turn(
+                &host,
+                "越权组合",
+                "RUN-SESCOMBO",
+                MANIFEST,
+                0,
+                None,
+                None,
+                None,
+            )
+            .await
+            .unwrap();
+
+        // 事件面：两个 ToolCompleted 均 exit_code 1 且带 error 字段。
+        let payloads: Vec<serde_json::Value> = events(&dir)
+            .into_iter()
+            .filter(|e| e.event_type == EventType::ToolCompleted)
+            .map(|e| e.payload)
+            .collect();
+        assert_eq!(payloads.len(), 2, "{payloads:?}");
+        let epoch_payload = payloads
+            .iter()
+            .find(|p| p["call_id"] == "call-se-e")
+            .expect("epoch combo completed");
+        assert_eq!(epoch_payload["exit_code"], 1, "{epoch_payload:?}");
+        assert!(
+            epoch_payload["error"]
+                .as_str()
+                .unwrap()
+                .contains("session 面是 live 会话状态"),
+            "{epoch_payload:?}"
+        );
+        let receipt_payload = payloads
+            .iter()
+            .find(|p| p["call_id"] == "call-se-r")
+            .expect("receipt combo completed");
+        assert_eq!(receipt_payload["exit_code"], 1, "{receipt_payload:?}");
+        assert!(
+            receipt_payload["error"]
+                .as_str()
+                .unwrap()
+                .contains("receipt_id 仅与 section=actions"),
+            "{receipt_payload:?}"
+        );
+
+        // 模型面：错误文本回达模型。
+        let received = fake.received_requests();
+        let epoch_round = received
+            .iter()
+            .find(|r| {
+                r.messages
+                    .iter()
+                    .any(|m| m.tool_call_id.as_deref() == Some("call-se-e"))
+            })
+            .expect("epoch combo round");
+        assert!(
+            epoch_round.messages.iter().any(|m| {
+                m.tool_call_id.as_deref() == Some("call-se-e")
+                    && m.content.contains("session 面是 live 会话状态")
+            }),
+            "{:?}",
+            epoch_round.messages
+        );
+        let receipt_round = received
+            .iter()
+            .find(|r| {
+                r.messages
+                    .iter()
+                    .any(|m| m.tool_call_id.as_deref() == Some("call-se-r"))
+            })
+            .expect("receipt combo round");
+        assert!(
+            receipt_round.messages.iter().any(|m| {
+                m.tool_call_id.as_deref() == Some("call-se-r")
+                    && m.content.contains("receipt_id 仅与 section=actions")
+            }),
+            "{:?}",
+            receipt_round.messages
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// 2026-08-19 黑板缓存成本设计（ADR-0010 §14.31 / 设计 §4.1+§4.2，S2
+    /// 工具级断言）：`blackboard_read` 经真实工具链回达模型的 actions/exec
+    /// 分区载荷已瘦身——结果板不再携带 response JSON / 完整 error 对象
+    /// （固定形态行，缺失回退 `?`）；exec 行截断 200 字符、段总长受 4K
+    /// 字符上限约束（超限仅头行 + 计数行）。
+    #[tokio::test]
+    async fn blackboard_read_serves_slimmed_actions_and_exec_sections() {
+        let dir = test_dir();
+        let journal = JournalRecorder::new(dir.clone());
+        let host = TestHost {
+            journal,
+            tool_result: Some(ToolResult {
+                output: "irrelevant".to_string(),
+                exit_code: Some(0),
+                output_encoding: None,
+                structured: None,
+                ..Default::default()
+            }),
+        };
+        let fake = Arc::new(FakeProvider::new(vec![
+            ScriptedResponse::tool_calls(vec![ToolCall {
+                name: "blackboard_read".to_string(),
+                arguments: serde_json::json!({"section": "actions"}),
+                call_id: "call-slim-a".to_string(),
+            }]),
+            ScriptedResponse::tool_calls(vec![ToolCall {
+                name: "blackboard_read".to_string(),
+                arguments: serde_json::json!({"section": "exec"}),
+                call_id: "call-slim-e".to_string(),
+            }]),
+            ScriptedResponse::text("完成"),
+            ScriptedResponse::text("完成"),
+        ]));
+        let gateway: Arc<dyn ModelGateway> = fake.clone();
+        let controller = AgentLoopController::with_gateway(gateway);
+        {
+            let mut bb = controller.blackboard().write();
+            bb.actions.push_result(ActionResult {
+                order_id: "ORD-SLIM-1".into(),
+                action: Some("workspace.run_terminal".into()),
+                ok: true,
+                response: Some(serde_json::json!({"output": "x".repeat(5_000)})),
+                error: None,
+                trace_id: "t-slim-1".into(),
+                timestamp: "2026-08-19T00:00:00Z".into(),
+            });
+            bb.actions.push_result(ActionResult {
+                order_id: "ORD-SLIM-2".into(),
+                action: Some("workspace.run_tests".into()),
+                ok: false,
+                response: None,
+                error: Some(serde_json::json!({
+                    "step": "execute",
+                    "code": "boom",
+                    "message": "y".repeat(4_000),
+                })),
+                trace_id: "t-slim-2".into(),
+                timestamp: "2026-08-19T00:00:01Z".into(),
+            });
+            // 40 条超长 exec 行：逐行截断后段总长仍超 4K → 头行 + 计数行。
+            for _ in 0..40 {
+                bb.exec.results.push("z".repeat(500));
+            }
+        }
+        controller
+            .run_turn(&host, "看黑板", "RUN-SLIM", MANIFEST, 0, None, None, None)
+            .await
+            .unwrap();
+
+        let received = fake.received_requests();
+        let actions_round = received
+            .iter()
+            .find(|r| {
+                r.messages
+                    .iter()
+                    .any(|m| m.tool_call_id.as_deref() == Some("call-slim-a"))
+            })
+            .expect("round carrying blackboard_read actions reply");
+        let actions_reply = actions_round
+            .messages
+            .iter()
+            .find(|m| m.tool_call_id.as_deref() == Some("call-slim-a"))
+            .expect("actions tool result message");
+        assert!(
+            actions_reply
+                .content
+                .contains("ORD-SLIM-1 ok=true step=? code=? trace_id=t-slim-1"),
+            "{:?}",
+            actions_round.messages
+        );
+        assert!(
+            actions_reply
+                .content
+                .contains("ORD-SLIM-2 ok=false step=execute code=boom trace_id=t-slim-2"),
+            "{:?}",
+            actions_round.messages
+        );
+        assert!(
+            !actions_reply.content.contains("xxxx"),
+            "response JSON must not reach the model: {:?}",
+            actions_round.messages
+        );
+        assert!(
+            !actions_reply.content.contains("response="),
+            "{:?}",
+            actions_round.messages
+        );
+
+        let exec_round = received
+            .iter()
+            .find(|r| {
+                r.messages
+                    .iter()
+                    .any(|m| m.tool_call_id.as_deref() == Some("call-slim-e"))
+            })
+            .expect("round carrying blackboard_read exec reply");
+        let exec_reply = exec_round
+            .messages
+            .iter()
+            .find(|m| m.tool_call_id.as_deref() == Some("call-slim-e"))
+            .expect("exec tool result message");
+        assert!(
+            exec_reply
+                .content
+                .contains("[exec: 共 40 条，未省略；明细超 4K 字符上限]"),
+            "{:?}",
+            exec_round.messages
+        );
+        assert!(
+            exec_reply
+                .content
+                .contains("完整内容见 blackboard_read 分区 exec 与存档"),
+            "{:?}",
+            exec_round.messages
+        );
+        assert_eq!(
+            exec_reply.content.lines().count(),
+            2,
+            "{:?}",
+            exec_round.messages
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// 2026-08-19 黑板缓存成本设计（ADR-0010 §14.31 / §4.5，方案 B，S2
+    /// 工具级断言）：`blackboard_read` 携带 `receipt_id` 经真实工具链回达——
+    /// 单条 receipt 点读的完整 response 全文到达模型（瘦身整段不注入大载荷）。
+    #[tokio::test]
+    async fn blackboard_read_receipt_point_read_reaches_model() {
+        let dir = test_dir();
+        let journal = JournalRecorder::new(dir.clone());
+        let host = TestHost {
+            journal,
+            tool_result: Some(ToolResult {
+                output: "irrelevant".to_string(),
+                exit_code: Some(0),
+                output_encoding: None,
+                structured: None,
+                ..Default::default()
+            }),
+        };
+        let fake = Arc::new(FakeProvider::new(vec![
+            ScriptedResponse::tool_calls(vec![ToolCall {
+                name: "blackboard_read".to_string(),
+                arguments: serde_json::json!({
+                    "section": "actions",
+                    "receipt_id": "ORD-PR-1",
+                }),
+                call_id: "call-pr1".to_string(),
+            }]),
+            ScriptedResponse::text("完成"),
+            ScriptedResponse::text("完成"),
+        ]));
+        let gateway: Arc<dyn ModelGateway> = fake.clone();
+        let controller = AgentLoopController::with_gateway(gateway);
+        {
+            let mut bb = controller.blackboard().write();
+            bb.actions.push_result(ActionResult {
+                order_id: "ORD-PR-1".into(),
+                action: Some("workspace.read_file".into()),
+                ok: true,
+                response: Some(serde_json::json!({
+                    "output": "完整成功输出",
+                    "nested": {"key": "value"},
+                })),
+                error: None,
+                trace_id: "t-pr-1".into(),
+                timestamp: "2026-08-19T04:00:00Z".into(),
+            });
+        }
+        controller
+            .run_turn(
+                &host,
+                "点读 receipt",
+                "RUN-PR1",
+                MANIFEST,
+                0,
+                None,
+                None,
+                None,
+            )
+            .await
+            .unwrap();
+
+        let received = fake.received_requests();
+        let round = received
+            .iter()
+            .find(|r| {
+                r.messages
+                    .iter()
+                    .any(|m| m.tool_call_id.as_deref() == Some("call-pr1"))
+            })
+            .expect("round carrying blackboard_read point-read reply");
+        let reply = round
+            .messages
+            .iter()
+            .find(|m| m.tool_call_id.as_deref() == Some("call-pr1"))
+            .expect("point-read tool result message");
+        assert!(
+            reply
+                .content
+                .starts_with("ORD-PR-1 ok=true step=? code=? trace_id=t-pr-1\nresponse={"),
+            "{:?}",
+            round.messages
+        );
+        assert!(
+            reply.content.contains("\"output\":\"完整成功输出\""),
+            "{:?}",
+            round.messages
+        );
+        assert!(
+            reply.content.contains("\"nested\":{\"key\":\"value\"}"),
+            "{:?}",
+            round.messages
+        );
+        // 点读回达不携带整段注册/订单/结果板。
+        assert!(
+            !reply.content.contains("== registration =="),
+            "{:?}",
+            round.messages
+        );
+        // 工具定义增量扩展：blackboard_read 声明了可选 receipt_id 参数。
+        let bb_def = round
+            .tools
+            .iter()
+            .find(|t| t.name == "blackboard_read")
+            .expect("blackboard_read declared in request tools");
+        assert!(
+            bb_def
+                .parameters
+                .get("properties")
+                .and_then(|p| p.get("receipt_id"))
+                .is_some(),
+            "receipt_id must be declared: {bb_def:?}"
+        );
+        assert_eq!(
+            bb_def.parameters["properties"]["receipt_id"]["minLength"],
+            1
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// 2026-08-19 黑板缓存成本设计（ADR-0010 §14.31 / §4.5，方案 B，S2
+    /// 工具级断言）：非法 `receipt_id`（非字符串/空串）= 显式报错
+    /// （exit_code 1），绝不静默回退整段读取。
+    #[tokio::test]
+    async fn blackboard_read_invalid_receipt_id_is_explicit_error() {
+        let dir = test_dir();
+        let journal = JournalRecorder::new(dir.clone());
+        let host = TestHost {
+            journal,
+            tool_result: None,
+        };
+        let fake = Arc::new(FakeProvider::new(vec![
+            ScriptedResponse::tool_calls(vec![ToolCall {
+                name: "blackboard_read".to_string(),
+                arguments: serde_json::json!({
+                    "section": "actions",
+                    "receipt_id": 123,
+                }),
+                call_id: "call-inv".to_string(),
+            }]),
+            ScriptedResponse::text("完成"),
+            ScriptedResponse::text("完成"),
+        ]));
+        let gateway: Arc<dyn ModelGateway> = fake.clone();
+        let controller = AgentLoopController::with_gateway(gateway);
+        controller
+            .run_turn(
+                &host,
+                "非法点读",
+                "RUN-PRINV",
+                MANIFEST,
+                0,
+                None,
+                None,
+                None,
+            )
+            .await
+            .unwrap();
+
+        let received = fake.received_requests();
+        let round = received
+            .iter()
+            .find(|r| {
+                r.messages
+                    .iter()
+                    .any(|m| m.tool_call_id.as_deref() == Some("call-inv"))
+            })
+            .expect("round carrying invalid receipt_id error");
+        let reply = round
+            .messages
+            .iter()
+            .find(|m| m.tool_call_id.as_deref() == Some("call-inv"))
+            .expect("invalid receipt_id tool result message");
+        assert!(
+            reply.content.contains("invalid blackboard_read receipt_id"),
+            "{:?}",
+            round.messages
+        );
+        // 事件面不变：ToolCompleted 仍只带 section（receipt_id 不进事件面）。
+        let completed: Vec<serde_json::Value> = events(&dir)
+            .into_iter()
+            .filter(|e| e.event_type == EventType::ToolCompleted)
+            .map(|e| e.payload)
+            .collect();
+        let inv_payload = completed
+            .iter()
+            .find(|p| p["tool"] == "blackboard_read" && p["exit_code"] == 1)
+            .expect("invalid read completed");
+        assert_eq!(inv_payload["section"], "actions", "{inv_payload:?}");
+        assert!(inv_payload.get("receipt_id").is_none(), "{inv_payload:?}");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// 2026-08-19 方案B 全面审查处理（N3）：`section` 非字符串 = 显式报错
+    /// （绝不静默回退到 "plan" 默认值）——单独传非法 section 与 receipt_id
+    /// 组合两条路径均回达显式错误，且不落到误导性的「section=plan 不支持
+    /// receipt_id」守卫消息。
+    #[tokio::test]
+    async fn blackboard_read_non_string_section_is_explicit_error() {
+        let dir = test_dir();
+        let journal = JournalRecorder::new(dir.clone());
+        let host = TestHost {
+            journal,
+            tool_result: None,
+        };
+        let fake = Arc::new(FakeProvider::new(vec![
+            ScriptedResponse::tool_calls(vec![ToolCall {
+                name: "blackboard_read".to_string(),
+                arguments: serde_json::json!({
+                    "section": 123,
+                    "receipt_id": "ORD-1",
+                }),
+                call_id: "call-secnum".to_string(),
+            }]),
+            ScriptedResponse::text("完成"),
+            ScriptedResponse::text("完成"),
+        ]));
+        let gateway: Arc<dyn ModelGateway> = fake.clone();
+        let controller = AgentLoopController::with_gateway(gateway);
+        controller
+            .run_turn(
+                &host,
+                "非法分区类型",
+                "RUN-PRSECNUM",
+                MANIFEST,
+                0,
+                None,
+                None,
+                None,
+            )
+            .await
+            .unwrap();
+
+        let received = fake.received_requests();
+        let round = received
+            .iter()
+            .find(|r| {
+                r.messages
+                    .iter()
+                    .any(|m| m.tool_call_id.as_deref() == Some("call-secnum"))
+            })
+            .expect("round carrying invalid section error");
+        let reply = round
+            .messages
+            .iter()
+            .find(|m| m.tool_call_id.as_deref() == Some("call-secnum"))
+            .expect("invalid section tool result message");
+        assert!(
+            reply.content.contains("invalid blackboard_read section"),
+            "{:?}",
+            round.messages
+        );
+        assert!(reply.content.contains("123"), "{:?}", round.messages);
+        assert!(
+            !reply.content.contains("receipt_id 仅与 section=actions"),
+            "{:?}",
+            round.messages
+        );
+        // 事件面：section 以哨兵字符串呈现（保持事件字段类型稳定）。
+        let completed: Vec<serde_json::Value> = events(&dir)
+            .into_iter()
+            .filter(|e| e.event_type == EventType::ToolCompleted)
+            .map(|e| e.payload)
+            .collect();
+        let sec_payload = completed
+            .iter()
+            .find(|p| p["tool"] == "blackboard_read" && p["exit_code"] == 1)
+            .expect("invalid section completed");
+        assert_eq!(sec_payload["section"], "<invalid>", "{sec_payload:?}");
+        assert!(sec_payload.get("receipt_id").is_none(), "{sec_payload:?}");
+
+        // 单独传非字符串 section（无 receipt_id）同样显式报错，不回退 plan。
+        let dir2 = test_dir();
+        let journal2 = JournalRecorder::new(dir2.clone());
+        let host2 = TestHost {
+            journal: journal2,
+            tool_result: None,
+        };
+        let fake2 = Arc::new(FakeProvider::new(vec![
+            ScriptedResponse::tool_calls(vec![ToolCall {
+                name: "blackboard_read".to_string(),
+                arguments: serde_json::json!({"section": 456}),
+                call_id: "call-secnum2".to_string(),
+            }]),
+            ScriptedResponse::text("完成"),
+            ScriptedResponse::text("完成"),
+        ]));
+        let gateway2: Arc<dyn ModelGateway> = fake2.clone();
+        let controller2 = AgentLoopController::with_gateway(gateway2);
+        controller2
+            .run_turn(
+                &host2,
+                "非法分区类型（无点读）",
+                "RUN-PRSECNUM2",
+                MANIFEST,
+                0,
+                None,
+                None,
+                None,
+            )
+            .await
+            .unwrap();
+        let received2 = fake2.received_requests();
+        let round2 = received2
+            .iter()
+            .find(|r| {
+                r.messages
+                    .iter()
+                    .any(|m| m.tool_call_id.as_deref() == Some("call-secnum2"))
+            })
+            .expect("round carrying second invalid section error");
+        let reply2 = round2
+            .messages
+            .iter()
+            .find(|m| m.tool_call_id.as_deref() == Some("call-secnum2"))
+            .expect("second invalid section tool result message");
+        assert!(
+            reply2.content.contains("invalid blackboard_read section"),
+            "{:?}",
+            round2.messages
+        );
+        assert!(reply2.content.contains("456"), "{:?}", round2.messages);
+
+        let _ = std::fs::remove_dir_all(&dir);
+        let _ = std::fs::remove_dir_all(&dir2);
+    }
+
+    /// 2026-08-19 黑板缓存成本设计（ADR-0010 §14.31 / §4.5，方案 B，S2
+    /// 工具级断言）：非 actions 分区携带 `receipt_id` = 显式报错（fail
+    /// loud，同未知分区风格），工具结果回达模型。
+    #[tokio::test]
+    async fn blackboard_read_receipt_id_with_non_actions_section_errors() {
+        let dir = test_dir();
+        let journal = JournalRecorder::new(dir.clone());
+        let host = TestHost {
+            journal,
+            tool_result: None,
+        };
+        let fake = Arc::new(FakeProvider::new(vec![
+            ScriptedResponse::tool_calls(vec![ToolCall {
+                name: "blackboard_read".to_string(),
+                arguments: serde_json::json!({
+                    "section": "plan",
+                    "receipt_id": "ORD-1",
+                }),
+                call_id: "call-sec".to_string(),
+            }]),
+            ScriptedResponse::text("完成"),
+            ScriptedResponse::text("完成"),
+        ]));
+        let gateway: Arc<dyn ModelGateway> = fake.clone();
+        let controller = AgentLoopController::with_gateway(gateway);
+        controller
+            .run_turn(
+                &host,
+                "错误组合",
+                "RUN-PRSEC",
+                MANIFEST,
+                0,
+                None,
+                None,
+                None,
+            )
+            .await
+            .unwrap();
+
+        let received = fake.received_requests();
+        let round = received
+            .iter()
+            .find(|r| {
+                r.messages
+                    .iter()
+                    .any(|m| m.tool_call_id.as_deref() == Some("call-sec"))
+            })
+            .expect("round carrying receipt_id section error");
+        let reply = round
+            .messages
+            .iter()
+            .find(|m| m.tool_call_id.as_deref() == Some("call-sec"))
+            .expect("section error tool result message");
+        assert!(
+            reply
+                .content
+                .contains("receipt_id 仅与 section=actions 组合有效"),
+            "{:?}",
+            round.messages
+        );
+        assert!(
+            reply.content.contains("section=plan"),
+            "{:?}",
+            round.messages
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// 2026-08-19 黑板缓存成本设计（ADR-0010 §14.31 / §4.5，方案 B，S2
+    /// 跨 epoch 断言）：`receipt_id` 与 `epoch` 组合 = 归档快照点读——轮转
+    /// 后 live 板点读旧 receipt = 显式 not found（提示旧 epoch 归档），
+    /// epoch-1 快照点读 = 完整 response 回达；当前 epoch 点读正常。
+    #[test]
+    fn blackboard_read_receipt_point_read_live_and_archived() {
+        let dir = test_dir().join("gsa").join("blackboard");
+        let controller = AgentLoopController::with_gateway(Arc::new(FakeProvider::new(Vec::new())))
+            .with_blackboard_archive_dir(Some(dir.clone()))
+            .with_plan(
+                "PLAN-PR-A".to_string(),
+                1,
+                "旧任务".to_string(),
+                vec!["旧步骤".to_string()],
+            );
+        {
+            let mut bb = controller.blackboard().write();
+            bb.actions.push_result(ActionResult {
+                order_id: "ORD-OLD-1".into(),
+                action: Some("workspace.read_file".into()),
+                ok: true,
+                response: Some(serde_json::json!({"output": "archived payload"})),
+                error: None,
+                trace_id: "t-old-1".into(),
+                timestamp: "2026-08-19T03:00:00Z".into(),
+            });
+        }
+        // Rotate: epoch-1 archived WITH the receipt; the live board clears.
+        let controller = controller.with_plan(
+            "PLAN-PR-B".to_string(),
+            2,
+            "新任务".to_string(),
+            vec!["新步骤".to_string()],
+        );
+        // Live point-read of the rotated-away receipt = explicit not-found.
+        let live_missing =
+            controller.render_blackboard_section("actions", None, None, Some("ORD-OLD-1"));
+        assert!(
+            live_missing.contains("ORD-OLD-1 not found"),
+            "{live_missing}"
+        );
+        assert!(live_missing.contains("旧 epoch 归档"), "{live_missing}");
+        // Archived point-read = full response.
+        let archived =
+            controller.render_blackboard_section("actions", None, Some(1), Some("ORD-OLD-1"));
+        assert!(
+            archived.starts_with("ORD-OLD-1 ok=true step=? code=? trace_id=t-old-1\nresponse="),
+            "{archived}"
+        );
+        assert!(archived.contains("archived payload"), "{archived}");
+        // Current-epoch point-read works on the live board.
+        {
+            let mut bb = controller.blackboard().write();
+            bb.actions.push_result(ActionResult {
+                order_id: "ORD-NEW-1".into(),
+                action: Some("workspace.run_tests".into()),
+                ok: false,
+                response: None,
+                error: Some(serde_json::json!({
+                    "step": "execute",
+                    "code": "boom",
+                    "message": "m",
+                    "upstream": {"x": 1},
+                })),
+                trace_id: "t-new-1".into(),
+                timestamp: "2026-08-19T03:00:01Z".into(),
+            });
+        }
+        let live = controller.render_blackboard_section("actions", None, None, Some("ORD-NEW-1"));
+        assert!(
+            live.starts_with("ORD-NEW-1 ok=false step=execute code=boom trace_id=t-new-1\nerror="),
+            "{live}"
+        );
+        assert!(live.contains("\"upstream\":{\"x\":1}"), "{live}");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// 2026-08-08 blackboard partition (A3): `blackboard_read` serves the
+    /// requested partition from the controller's blackboard — an edits
+    /// section after a real edit round returns the record the model needs
+    /// for look-back.
+    #[tokio::test]
+    async fn blackboard_read_serves_edits_partition() {
+        let dir = test_dir();
+        let journal = JournalRecorder::new(dir.clone());
+        let host = TestHost {
+            journal,
+            tool_result: Some(ToolResult {
+                output: "edited ok".to_string(),
+                exit_code: Some(0),
+                output_encoding: None,
+                structured: None,
+                ..Default::default()
+            }),
+        };
+        let fake = Arc::new(FakeProvider::new(vec![
+            ScriptedResponse::tool_calls(vec![ToolCall {
+                name: "search_replace".to_string(),
+                arguments: serde_json::json!({
+                    "file_path": "1.py",
+                    "old_string": "old\nold2",
+                    "new_string": "new\nnew2\nnew3",
+                }),
+                call_id: "call-e3".to_string(),
+            }]),
+            ScriptedResponse::tool_calls(vec![ToolCall {
+                name: "blackboard_read".to_string(),
+                arguments: serde_json::json!({"section": "edits"}),
+                call_id: "call-b1".to_string(),
+            }]),
+            ScriptedResponse::text("完成"),
+            ScriptedResponse::text("完成"),
+        ]));
+        let gateway: Arc<dyn ModelGateway> = fake.clone();
+        let controller = AgentLoopController::with_gateway(gateway);
+        controller
+            .run_turn(
+                &host,
+                "改文件再看黑板",
+                "RUN-BB",
+                MANIFEST,
+                0,
+                None,
+                None,
+                None,
+            )
+            .await
+            .unwrap();
+
+        // ToolCompleted for blackboard_read carries the section it served.
+        let payloads: Vec<serde_json::Value> = events(&dir)
+            .into_iter()
+            .filter(|e| e.event_type == EventType::ToolCompleted)
+            .map(|e| e.payload)
+            .collect();
+        assert_eq!(payloads.len(), 2, "{payloads:?}");
+        let read_payload = payloads
+            .iter()
+            .find(|p| p["tool"] == "blackboard_read")
+            .expect("blackboard_read completed");
+        assert_eq!(read_payload["section"], "edits", "{read_payload:?}");
+        assert_eq!(read_payload["exit_code"], 0);
+
+        // The served content — the edit record line (timestamp + "1.py
+        // 2→3行变动") — reaches the model as the tool's reply.
+        let received = fake.received_requests();
+        let round3 = received
+            .iter()
+            .find(|r| {
+                r.messages
+                    .iter()
+                    .any(|m| m.tool_call_id.as_deref() == Some("call-b1"))
+            })
+            .expect("round carrying blackboard_read reply");
+        assert!(
+            round3
+                .messages
+                .iter()
+                .any(|m| m.tool_call_id.as_deref() == Some("call-b1")
+                    && m.content.contains("1.py 2→3行变动")),
+            "{:?}",
+            round3.messages
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// 2026-08-08 review closure (P2-2): `since_timestamp` filtering is
+    /// format-robust — a since in 'Z' or truncated precision must not
+    /// silently drop records (bare string compare would: 'Z' > '+' means
+    /// every "+00:00" record sorts BELOW a "…Z" since). Parsed RFC 3339
+    /// comparison: a since in the far future filters everything, a since in
+    /// the far past keeps everything.
+    #[tokio::test]
+    async fn blackboard_read_since_filters_with_any_rfc3339_form() {
+        let dir = test_dir();
+        let journal = JournalRecorder::new(dir.clone());
+        let host = TestHost {
+            journal,
+            tool_result: Some(ToolResult {
+                output: "edited ok".to_string(),
+                exit_code: Some(0),
+                output_encoding: None,
+                structured: None,
+                ..Default::default()
+            }),
+        };
+        let fake = Arc::new(FakeProvider::new(vec![
+            ScriptedResponse::tool_calls(vec![ToolCall {
+                name: "search_replace".to_string(),
+                arguments: serde_json::json!({
+                    "file_path": "1.py",
+                    "old_string": "old",
+                    "new_string": "new\nnew2",
+                }),
+                call_id: "call-e4".to_string(),
+            }]),
+            // since in Z form, far future — must filter everything out.
+            ScriptedResponse::tool_calls(vec![ToolCall {
+                name: "blackboard_read".to_string(),
+                arguments: serde_json::json!({
+                    "section": "edits",
+                    "since_timestamp": "2999-01-01T00:00:00Z",
+                }),
+                call_id: "call-b2".to_string(),
+            }]),
+            // since in Z form, far past — must keep everything.
+            ScriptedResponse::tool_calls(vec![ToolCall {
+                name: "blackboard_read".to_string(),
+                arguments: serde_json::json!({
+                    "section": "edits",
+                    "since_timestamp": "2000-01-01T00:00:00Z",
+                }),
+                call_id: "call-b3".to_string(),
+            }]),
+            ScriptedResponse::text("完成"),
+            ScriptedResponse::text("完成"),
+        ]));
+        let gateway: Arc<dyn ModelGateway> = fake.clone();
+        let controller = AgentLoopController::with_gateway(gateway);
+        controller
+            .run_turn(
+                &host,
+                "改文件并回看",
+                "RUN-BBS",
+                MANIFEST,
+                0,
+                None,
+                None,
+                None,
+            )
+            .await
+            .unwrap();
+
+        let received = fake.received_requests();
+        let far_future = received
+            .iter()
+            .find(|r| {
+                r.messages
+                    .iter()
+                    .any(|m| m.tool_call_id.as_deref() == Some("call-b2"))
+            })
+            .expect("call-b2 round");
+        assert!(
+            far_future
+                .messages
+                .iter()
+                .any(|m| m.tool_call_id.as_deref() == Some("call-b2")
+                    && m.content.contains("(no edit records)")),
+            "Z-form future since must filter everything: {:?}",
+            far_future.messages
+        );
+
+        let far_past = received
+            .iter()
+            .find(|r| {
+                r.messages
+                    .iter()
+                    .any(|m| m.tool_call_id.as_deref() == Some("call-b3"))
+            })
+            .expect("call-b3 round");
+        assert!(
+            far_past
+                .messages
+                .iter()
+                .any(|m| m.tool_call_id.as_deref() == Some("call-b3")
+                    && m.content.contains("1.py 1→2行变动")),
+            "Z-form past since must keep the record: {:?}",
+            far_past.messages
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// 2026-08-08: unknown sections are surfaced to the model — fail
+    /// loud, not silent (an invalid section must not read like an empty
+    /// partition).
+    #[tokio::test]
+    async fn blackboard_read_unknown_section_surfaces_error() {
+        let dir = test_dir();
+        let journal = JournalRecorder::new(dir.clone());
+        let host = TestHost {
+            journal,
+            tool_result: Some(ToolResult {
+                output: "irrelevant".to_string(),
+                exit_code: Some(0),
+                output_encoding: None,
+                structured: None,
+                ..Default::default()
+            }),
+        };
+        let fake = Arc::new(FakeProvider::new(vec![
+            ScriptedResponse::tool_calls(vec![ToolCall {
+                name: "blackboard_read".to_string(),
+                arguments: serde_json::json!({"section": "bogus"}),
+                call_id: "call-b4".to_string(),
+            }]),
+            ScriptedResponse::text("完成"),
+            ScriptedResponse::text("完成"),
+        ]));
+        let gateway: Arc<dyn ModelGateway> = fake.clone();
+        let controller = AgentLoopController::with_gateway(gateway);
+        controller
+            .run_turn(
+                &host,
+                "读错误分区",
+                "RUN-BBE",
+                MANIFEST,
+                0,
+                None,
+                None,
+                None,
+            )
+            .await
+            .unwrap();
+
+        let received = fake.received_requests();
+        let round = received
+            .iter()
+            .find(|r| {
+                r.messages
+                    .iter()
+                    .any(|m| m.tool_call_id.as_deref() == Some("call-b4"))
+            })
+            .expect("call-b4 round");
+        assert!(
+            round
+                .messages
+                .iter()
+                .any(|m| m.tool_call_id.as_deref() == Some("call-b4")
+                    && m.content.contains("unknown blackboard section")),
+            "{:?}",
+            round.messages
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// THIN-HARNESS-REDESIGN R2a (§4.4): `blackboard_read` 服务 live
+    /// 检索分区——internal_ret / external_ret 各自渲染 response / entries /
+    /// ledger，工具结果回达模型，事件面记录对应 section。
+    #[tokio::test]
+    async fn blackboard_read_serves_retrieval_partitions() {
+        let dir = test_dir();
+        let journal = JournalRecorder::new(dir.clone());
+        let host = TestHost {
+            journal,
+            tool_result: None,
+        };
+        let fake = Arc::new(FakeProvider::new(vec![
+            ScriptedResponse::tool_calls(vec![ToolCall {
+                name: "blackboard_read".to_string(),
+                arguments: serde_json::json!({"section": "internal_ret"}),
+                call_id: "call-ir".to_string(),
+            }]),
+            ScriptedResponse::text("完成"),
+            ScriptedResponse::text("完成"),
+        ]));
+        let gateway: Arc<dyn ModelGateway> = fake.clone();
+        let controller = AgentLoopController::with_gateway(gateway);
+        // 预写内部检索分区（模拟子代理落盘）。
+        {
+            let mut w = controller.blackboard().write();
+            w.internal_ret.response = Some("检索完成\n[DOC] design.md".to_string());
+            w.internal_ret.project_docs = vec!["design.md".to_string()];
+            w.internal_ret.source_ledger = vec!["docs/index".to_string()];
+        }
+        controller
+            .run_turn(
+                &host,
+                "读检索分区",
+                "RUN-RIR",
+                MANIFEST,
+                0,
+                None,
+                None,
+                None,
+            )
+            .await
+            .unwrap();
+
+        let received = fake.received_requests();
+        let round = received
+            .iter()
+            .find(|r| {
+                r.messages
+                    .iter()
+                    .any(|m| m.tool_call_id.as_deref() == Some("call-ir"))
+            })
+            .expect("call-ir round");
+        let reply = round
+            .messages
+            .iter()
+            .find(|m| m.tool_call_id.as_deref() == Some("call-ir"))
+            .expect("internal_ret tool result message");
+        assert!(
+            reply.content.contains("== internal_ret ==")
+                && reply.content.contains("检索完成")
+                && reply.content.contains("- design.md")
+                && reply.content.contains("- docs/index"),
+            "internal_ret reply: {:?}",
+            round.messages
+        );
+        // 事件面记录 section。
+        let completed = events(&dir)
+            .into_iter()
+            .find(|e| {
+                e.event_type == EventType::ToolCompleted
+                    && e.payload.get("tool").and_then(|v| v.as_str()) == Some("blackboard_read")
+                    && e.payload.get("section").and_then(|v| v.as_str()) == Some("internal_ret")
+            })
+            .expect("blackboard_read internal_ret completed");
+        assert_eq!(completed.payload["exit_code"], serde_json::json!(0));
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// THIN-HARNESS-REDESIGN R2a (§4.4): 检索分区带 `epoch` = 显式报错
+    /// （live-only，结果不进 epoch 快照；fail loud 同 session 面纪律），
+    /// 绝不静默回退 live 视图或空分区。
+    #[tokio::test]
+    async fn blackboard_read_retrieval_section_with_epoch_errors_explicitly() {
+        let dir = test_dir();
+        let journal = JournalRecorder::new(dir.clone());
+        let host = TestHost {
+            journal,
+            tool_result: None,
+        };
+        let fake = Arc::new(FakeProvider::new(vec![
+            ScriptedResponse::tool_calls(vec![ToolCall {
+                name: "blackboard_read".to_string(),
+                arguments: serde_json::json!({"section": "external_ret", "epoch": 1}),
+                call_id: "call-re".to_string(),
+            }]),
+            ScriptedResponse::text("完成"),
+            ScriptedResponse::text("完成"),
+        ]));
+        let gateway: Arc<dyn ModelGateway> = fake.clone();
+        let controller = AgentLoopController::with_gateway(gateway);
+        controller
+            .run_turn(
+                &host,
+                "读归档检索分区",
+                "RUN-RRE",
+                MANIFEST,
+                0,
+                None,
+                None,
+                None,
+            )
+            .await
+            .unwrap();
+
+        let received = fake.received_requests();
+        let round = received
+            .iter()
+            .find(|r| {
+                r.messages
+                    .iter()
+                    .any(|m| m.tool_call_id.as_deref() == Some("call-re"))
+            })
+            .expect("call-re round");
+        let reply = round
+            .messages
+            .iter()
+            .find(|m| m.tool_call_id.as_deref() == Some("call-re"))
+            .expect("epoch-error tool result message");
+        assert!(
+            reply.content.contains("with epoch is not supported")
+                && reply.content.contains("live-only"),
+            "epoch error reply: {:?}",
+            round.messages
+        );
+        // 事件面 exit_code 0（渲染层文本错误，与 receipt_id+非 actions 先例
+        // 同纪律——正文显式说明不支持，事件带 section 标注）。
+        let completed = events(&dir)
+            .into_iter()
+            .find(|e| {
+                e.event_type == EventType::ToolCompleted
+                    && e.payload.get("tool").and_then(|v| v.as_str()) == Some("blackboard_read")
+                    && e.payload.get("section").and_then(|v| v.as_str()) == Some("external_ret")
+            })
+            .expect("blackboard_read external_ret completed");
+        assert_eq!(completed.payload["exit_code"], serde_json::json!(0));
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// F6 (2026-08-15, BACKLOG 6e 复查遗留): an epoch parameter that is
+    /// present but invalid (0 / negative / float) is an EXPLICIT error —
+    /// never a silent fallback to the live view.
+    #[tokio::test]
+    async fn blackboard_read_invalid_epoch_is_explicit_error() {
+        let dir = test_dir();
+        let journal = JournalRecorder::new(dir.clone());
+        let host = TestHost {
+            journal,
+            tool_result: Some(ToolResult {
+                output: "irrelevant".to_string(),
+                exit_code: Some(0),
+                output_encoding: None,
+                structured: None,
+                ..Default::default()
+            }),
+        };
+        let fake = Arc::new(FakeProvider::new(vec![
+            ScriptedResponse::tool_calls(vec![
+                ToolCall {
+                    name: "blackboard_read".to_string(),
+                    arguments: serde_json::json!({"section": "plan", "epoch": 0}),
+                    call_id: "call-b5".to_string(),
+                },
+                ToolCall {
+                    name: "blackboard_read".to_string(),
+                    arguments: serde_json::json!({"section": "plan", "epoch": -1}),
+                    call_id: "call-b6".to_string(),
+                },
+                ToolCall {
+                    name: "blackboard_read".to_string(),
+                    arguments: serde_json::json!({"section": "plan", "epoch": 1.5}),
+                    call_id: "call-b7".to_string(),
+                },
+            ]),
+            ScriptedResponse::text("完成"),
+            ScriptedResponse::text("完成"),
+        ]));
+        let gateway: Arc<dyn ModelGateway> = fake.clone();
+        let controller = AgentLoopController::with_gateway(gateway);
+        controller
+            .run_turn(
+                &host,
+                "非法 epoch",
+                "RUN-BEI",
+                MANIFEST,
+                0,
+                None,
+                None,
+                None,
+            )
+            .await
+            .unwrap();
+
+        let payloads: Vec<serde_json::Value> = events(&dir)
+            .into_iter()
+            .filter(|e| e.event_type == EventType::ToolCompleted)
+            .filter(|e| e.payload.get("tool").and_then(|t| t.as_str()) == Some("blackboard_read"))
+            .map(|e| e.payload)
+            .collect();
+        let invalid: Vec<_> = payloads
+            .iter()
+            .filter(|p| {
+                p["call_id"] == "call-b5" || p["call_id"] == "call-b6" || p["call_id"] == "call-b7"
+            })
+            .collect();
+        assert_eq!(invalid.len(), 3, "{invalid:?}");
+        for payload in invalid {
+            assert_eq!(payload["exit_code"], 1, "{payload:?}");
+            assert!(
+                payload["error"]
+                    .as_str()
+                    .unwrap_or_default()
+                    .contains("invalid blackboard_read epoch"),
+                "{payload:?}"
+            );
+        }
+
+        // The explicit error must not leak the live plan (no silent
+        // fallback): every reply line mentions the invalid epoch value.
+        let received = fake.received_requests();
+        for call_id in ["call-b5", "call-b6", "call-b7"] {
+            let round = received
+                .iter()
+                .find(|r| {
+                    r.messages
+                        .iter()
+                        .any(|m| m.tool_call_id.as_deref() == Some(call_id))
+                })
+                .unwrap_or_else(|| panic!("{call_id} round"));
+            let reply = round
+                .messages
+                .iter()
+                .find(|m| m.tool_call_id.as_deref() == Some(call_id))
+                .expect("reply message");
+            assert!(
+                reply.content.contains("invalid blackboard_read epoch"),
+                "{call_id}: {}",
+                reply.content
+            );
+            assert!(
+                !reply.content.contains("goal:"),
+                "{call_id} silently fell back to the live view: {}",
+                reply.content
+            );
+        }
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }
