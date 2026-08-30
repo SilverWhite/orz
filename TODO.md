@@ -129,7 +129,15 @@
     阶段 0 开放项裁决 7 项（D1–D7）计入 P2 决策门，未闭合 32 → 39；阶段 1
     设计定稿（F1–F6，设计轮不计计数）与阶段 2/3 实施验证切片（I1–I6 / V1–V3，
     放行时入账）见 P2-10 勾选清单；**2026-08-30 阶段 0 决策闭合，未闭合
-    39 → 32（D1–D7 全部确认，裁决见 P2-10 勾选清单）**。
+    39 → 32（D1–D7 全部确认，裁决见 P2-10 勾选清单）**；**2026-08-30 阶段 1
+    设计定稿完成（F1–F6 全部定稿 + ADR-0010 §14.47 转录，`pending` →
+    `current-design`，索引/BACKLOG 同步；设计轮不计计数，仍 32；阶段 2 实施
+    切片 I1–I6 与阶段 3 验证 V1–V3 待续，见 P2-10 勾选清单）**；
+    **2026-08-30 阶段 2 实施切片 I1–I6 S1 代码 + S2 测试完成
+    （放行入账 32 → 38：I1 T̂/LIF 计算器 + 102 runs 离线复验、
+    I2 失败目标身份入事件面、I3 temporal 分区运行时、I4 域 spike 侧车存档、
+    I5 类型化信封、I6 一层 pipe 归约；V1–V3 阶段 3 验证待续，见 P2-10
+    勾选清单 / 实施记录）**。
   - P0-C：0 项（PLAN-FIRST 阶段 A/B/C 全部闭合，2026-08-16）
   - P0 冒烟对拍暴露：0 项（GAP-REPETITION-DETECTOR-DNA-FALSE-POSITIVE
     复读检测 DNA 误杀已闭合 2026-08-26；GAP-EVENT-SCHEMA-DRIFT 事件面
@@ -2322,11 +2330,15 @@ daemon 跨 run 常驻。~~模式内混合路由（需修订 ADR-0010 §3.7.12）
 
 入口：[协议](protocol/structured-operation-protocol-v0.1.md) / [Schema](protocol/structured-operation-protocol-v0.1.schema.json)。
 
-### MECHANICAL-LAYER-MATH-CALCULUS（`pending`；2026-08-30 设计登记，BACKLOG P2-10）
+### MECHANICAL-LAYER-MATH-CALCULUS（`current-design`；阶段 1 定稿 2026-08-30，BACKLOG P2-10）
 
-> 排期：阶段 0 开放项裁决（**已闭合 2026-08-30**）→ 阶段 1 正式设计定稿（含 ADR 转录）→ 阶段 2 实施
-> 切片 → 阶段 3 验证闭环；裁决闭合后实施切片按 BACKLOG 升 P0 排期。入口：
-> [设计](docs/MECHANICAL_LAYER_MATH_CALCULUS_DISCUSSION_2026-08-30.md) /
+> 排期：阶段 0 开放项裁决（**已闭合 2026-08-30**）→ 阶段 1 正式设计定稿
+> （**已闭合 2026-08-30**：F1–F6 + ADR-0010 §14.47 转录，`pending` →
+> `current-design`）→ 阶段 2 实施切片 → 阶段 3 验证闭环；实施切片按 BACKLOG
+> 纪律放行时升 P0 排期并入账。入口：
+> [正式设计](docs/MECHANICAL_LAYER_MATH_CALCULUS_DESIGN_2026-08-30.md) /
+> [讨论稿](docs/MECHANICAL_LAYER_MATH_CALCULUS_DISCUSSION_2026-08-30.md) /
+> [ADR-0010 §14.47](adr/ADR-0010-fusion-runtime-and-agent-architecture.md) /
 > [BACKLOG P2-10](docs/BACKLOG_AND_PRIORITIES.md) /
 > [索引 AUTH-MECHANICAL-LAYER-MATH-CALCULUS](CLI_PROJECT_INDEX.md)。
 
@@ -2365,33 +2377,47 @@ daemon 跨 run 常驻。~~模式内混合路由（需修订 ADR-0010 §3.7.12）
 
 **阶段 1 — 正式设计定稿（§9；设计轮不计计数）**
 
-- [ ] F1 8 工具类型签名 → 正式契约草案（Result 信封 / GetPut 律 / file.read
-  View / terminal.run exit_code 值语义）（§9.1/9.2）。
-- [ ] F2 temporal 分区渲染规格正式化（TemporalRecord 运行时行 + DomainSpike 存档
-  + Now/Recent/History/Feature 查询面 + 渲染约束）（§9.9）。
-- [ ] F3 LIF 时间外挂计算规格（通道清单 §6.10 / 特征集按决策点反推 §6.7 / 一阶
+- [x] F1 8 工具类型签名 → 正式契约草案（Result 信封 / GetPut 律 / file.read
+  View / terminal.run exit_code 值语义）——**2026-08-30 定稿**（正式设计 §2）。
+- [x] F2 temporal 分区渲染规格正式化（TemporalRecord 运行时行 + DomainSpike 存档
+  + Now/Recent/History/Feature 查询面 + 渲染约束）——**2026-08-30 定稿**
+  （正式设计 §3）。
+- [x] F3 LIF 时间外挂计算规格（通道清单 §6.10 / 特征集按决策点反推 §6.7 / 一阶
   积分泄漏 + 二阶 stuck 归一化乘积闭式解 + τ=T̂ 在线滑动窗中位数 + 四对照门）
-  （§9.3/9.5/9.6）。
-- [ ] F4 失败目标身份入事件面设计（目标身份=失败目标命令/锚点身份入事件面 +
-  trace→事件链同构核对 §6.4；转正式设计前置）。
-- [ ] F5 ADR-0010 转录（§14.x 新条目；转录后 pending → current-design，
-  索引/BACKLOG 同步）。
-- [ ] F6 参考系重定位与观测面扩充定稿（双尺度基线结构、每轮校准分层、观测面
-  扩充优先级、动作层耦合试验 P1–P3、模型无感边界）（§9.11）（依赖 F3/F4）。
+  ——**2026-08-30 定稿**（正式设计 §4）。
+- [x] F4 失败目标身份入事件面设计（目标身份=失败目标命令/锚点身份入事件面 +
+  trace→事件链同构核对 §6.4；转正式设计前置）——**2026-08-30 定稿**
+  （正式设计 §5）。
+- [x] F5 ADR-0010 转录（§14.47 新条目 + §3.6 temporal 分区行 + 头部版本清单；
+  转录后 pending → current-design，索引/BACKLOG 同步）——**2026-08-30 完成**。
+- [x] F6 参考系重定位与观测面扩充定稿（双尺度基线结构、每轮校准分层、观测面
+  扩充优先级、动作层耦合试验 P1–P3、模型无感边界）——**2026-08-30 定稿**
+  （正式设计 §6；依赖 F3/F4 已满足）。
 
 **阶段 2 — 实施切片（依赖前序；放行时入账）**
 
 - [ ] I1 T̂ 估计器 + LIF 时间特征计算器（纯计算；`D:\tb-eval\jobs-official`
-  102 runs 离线复验）（依赖 F3）。
+  102 runs 离线复验）（依赖 F3）。**2026-08-30 S1/S2 完成**：orz-assurance
+  lif/ 模块 + 23 测试 + lif_replay harness；102 runs 复验锚点（4157 决策点、
+  err 22 run/24 fires、stuck 0/102、slow 2/102、deny 0）见
+  [实施记录](docs/audits/MECHANICAL_LAYER_MATH_CALCULUS_I1_IMPL_AUDIT_2026-08-30.md)。
 - [ ] I2 失败目标身份入事件面（Schema + verifier + fixtures 先行）（依赖 F4）。
+  **2026-08-30 S1/S2 完成**：tool_completed failure_target（Schema/verifier/
+  fixtures + 生产者接线）见
+  [实施记录](docs/audits/MECHANICAL_LAYER_MATH_CALCULUS_PHASE2_IMPL_AUDIT_2026-08-30.md)。
 - [ ] I3 temporal 分区运行时（每决策轮域标签 + 查询面接线
-  `blackboard.read partition="temporal"`）（依赖 F2/I1）。
+  `blackboard.read partition="temporal"`）（依赖 F2/I1）。**2026-08-30
+  S1/S2 完成**：LifEngine 挂载 + 决策轮/工具事件喂入 + temporal 分区渲染
+  （≤1 KiB、fires 不渲染）。
 - [ ] I4 域 spike 存档随会话侧车（envelope 字段或伴随文件 + 7 天 retention +
-  跨 prompt 恢复重建）（依赖 F2/I3/D7）。
+  跨 prompt 恢复重建）（依赖 F2/I3/D7）。**2026-08-30 S1/S2 完成**：
+  StoredConversation.temporal_spikes（serde(default)）+ 恢复接线。
 - [ ] I5 工具类型化信封（8 工具落地：file.read View / search_replace GetPut 律 /
-  terminal.run 值语义 / blackboard temporal 截断）（依赖 F1/D1）。
+  terminal.run 值语义 / blackboard temporal 截断）（依赖 F1/D1）。**2026-08-30
+  S1/S2 完成**：tool_envelope 契约模块 + Board 信封接线 + GetPut 律锁定测试。
 - [ ] I6 一层组合/pipe（折中档）或表达式求值器（激进档，最小项集 + 归约边界
-  §6.2/6.3）（依赖 I5/D1）。
+  §6.2/6.3）（依赖 I5/D1）。**2026-08-30 S1/S2 完成**：reducer 模块（Apply +
+  单层 Pipe、≤4 步、类型化 splice、Fail 短路、effect_count）。
 
 **阶段 3 — 验证闭环**
 
@@ -2402,7 +2428,66 @@ daemon 跨 run 常驻。~~模式内混合路由（需修订 ADR-0010 §3.7.12）
 - [ ] V3 S4 冒烟复验 + BACKLOG/TODO/索引状态同步（pending → implemented 视切片
   范围）。
 
-入口：[设计](docs/MECHANICAL_LAYER_MATH_CALCULUS_DISCUSSION_2026-08-30.md) /
+**阶段 2 全面审查处理（2026-08-31；审查记录
+[MECHANICAL_LAYER_MATH_CALCULUS_PHASE2_REVIEW_AUDIT_2026-08-31.md](docs/audits/MECHANICAL_LAYER_MATH_CALCULUS_PHASE2_REVIEW_AUDIT_2026-08-31.md)）**
+
+- [x] R1 err 事件谓词三方统一——**2026-08-31 用户裁定「维持生产口径」**：err =
+  超时 + 宿主级错误（status=error 且无 exit_code 值）；exit≠0 = D2 值语义
+  （Other）；拒单随 R2 处置。已统一 lif_replay outcome_of（生产谓词）+ 设计
+  §4.3 措辞 + host_exec 喂入确认；102-run 重跑新口径：err 1 run/1 fire、
+  stuck 峰值 θ 比 0.61（err 口径收窄后回落），见
+  `LIF_102RUNS_REPLAY_2026-08-31_R1.json`——V2 四对照门前置（F1）。
+- [ ] R2 deny 通道接线（ToolOutcome::Deny + 拒绝事件喂入）——**2026-08-31
+  用户裁决接线，独立待办下一轮实施**（见下方「阶段 2 审查处理独立待办」；
+  V2 前置，避免空对照，F2）。
+- [x] R3 temporal ≤1 KiB 截断 marker 预扣修复 + 触截断路径测试（F4）——
+  **2026-08-31 完成**：`controller.rs` 预扣 12 B marker（最终板 ≤1024 B）+
+  新增触截断路径测试（orz-loop 643 passed / 0 failed / 3 ignored）。
+- [x] R4 blackboard_read 工具定义补 selector/k/name 参数声明（F7）——
+  **2026-08-31 完成**：工具 schema 增 selector（now/recent/history/feature）、
+  k（1..=20）、name（u_prog|u_err|u_stuck|t_hat|err10|succ10）声明，与
+  host_exec 参数解析一致。
+- [ ] R5 reducer grep→read 管线补实现——**2026-08-31 用户裁决补实现（常用），
+  独立待办下一轮实施**（见下方「阶段 2 审查处理独立待办」；V1 前，F6）。
+- [x] R6 restore_spikes has_success 恢复 + recovery 重算 + 跨 prompt 端到端
+  恢复测试（F3）——**2026-08-31 完成**：`temporal.rs` 从 spike 时间线推断
+  has_success + 重算 recovery；单测去掩盖 + controller 级恢复测试（全新引擎
+  = 生产 ACP 恢复路径形态，首轮不再虚假回归 Start）。
+- [x] R7 FailEnvelope 接线与 Board cap 真实性收口——**2026-08-31 收口**：非
+  temporal 分区 entries 实际截断 ≤8 KiB（total_cap 声明真实）+ reducer
+  is_fail 判别式（不再字段嗅探）+ F12 边界修复（enforce_bound 小 cap、
+  to_value fail-loud）；纯子项错误 FailEnvelope 全量接线列入 V1 验收项（F5）。
+- [x] R8 cmd_preview ≤80 字节口径（verifier 按 UTF-8 字节校验）（F8）——
+  **2026-08-31 完成**：verifier 改 UTF-8 字节判定 + 多字节正/负例测试 +
+  schema 说明（JSON Schema maxLength 计字符，字节契约由 verifier 兜底）。
+- [x] R9 审计计数勘误（lif 30→23、FailureTarget 12→11、orz-loop 641→644）+
+  channels 测试告警修复（F9）——**2026-08-31 完成**：三处审计计数更正
+  （lif 以 `cargo test --list` 复测为 23，审查记录原写 24 一并更正）+
+  移除 channels 测试未使用 `tau_stuck`。
+- [x] F10 正例 fixture 的 id↔cmd_preview 可复核——**2026-08-31 完成**：
+  cmd_preview 改 `"test"` 与 id=sha256("test") 对应（verifier 不重算原文，
+  fixture 自身可复核）。
+- [x] F11 receipt↔事件链逐段同构核对——**2026-08-31 登记为未闭合项**（设计
+  §5.4 标注 + 本清单），实施随 V1 FakeProvider 验证面排期。
+- [x] F12 `enforce_bound` max_bytes<marker 越界 + `to_value` 吞 Null——
+  **2026-08-31 完成**：小 cap 返回 marker UTF-8 安全前缀（恒 ≤max_bytes）；
+  Ok/Fail 信封 to_value 改 Result（fail-loud）+ 测试。
+- [x] F13 锚点形状漂移——**2026-08-31 统一**：设计 `Anchor` 类型对齐运行时
+  形状 `{sha256, size}`（mtime 为工具 schema 可选附加字段）。
+- [x] F14 §4.5「16–32」vs「≥8 采样」措辞歧义——**2026-08-31 统一为 8–32**
+  （设计 §4.5 + estimator 注释同步）。
+
+**阶段 2 审查处理独立待办（下一轮；2026-08-31 用户裁决立项）**
+
+- [ ] R2 deny 通道接线：`ToolOutcome::Deny` + 锚点拒单/候选门拒绝等拒绝路径
+  喂入 deny 通道 + 测试（当前语料 policy_denial=0，接线后 V2 deny 对照非空）。
+- [ ] R5 grep→read 管线补实现：定义 match 选择（首个/行号）+ span→
+  offset/length 映射，splice 进 read 参数；不兼容 pipe 返回类型化
+  arg_validation 错误（fail-closed）。
+
+入口：[正式设计](docs/MECHANICAL_LAYER_MATH_CALCULUS_DESIGN_2026-08-30.md) /
+[讨论稿](docs/MECHANICAL_LAYER_MATH_CALCULUS_DISCUSSION_2026-08-30.md) /
+[ADR-0010 §14.47](adr/ADR-0010-fusion-runtime-and-agent-architecture.md) /
 [BACKLOG P2-10](docs/BACKLOG_AND_PRIORITIES.md)。
 
 ## P3 — 收尾 / 清理

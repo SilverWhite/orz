@@ -36,6 +36,10 @@
     },
     "status": { "const": "error" },
     "error": { "type": "string" },
+    "file_path": {
+      "type": "string",
+      "description": "FUS-READ-ANCHOR-WRITE-GUARD (2026-08-21): the target file path carried by search_replace refusal completions (content_anchor_mismatch). Kept as the producer's existing top-level field; the failure-target identity (F4, 2026-08-30) duplicates it inside failure_target.path for anchor_target."
+    },
     "candidate_count": {
       "type": "integer",
       "minimum": 0,
@@ -69,6 +73,46 @@
         "reason": { "type": "string" }
       },
       "description": "P0-C S3 前置 (2026-08-15, P1-2 定案): structured policy denial carried by a refusal completion — controller-side no-ToolStarted refusals (ACAF ticket gate / retrieval mode gates) or a host-level structured denial on a ToolStarted+ToolCompleted (permission denials from the built-in bridge stay event-less by audit contract). Every policy_denial completion must be self-describing: status=error, non-zero exit_code and the tool must belong to the known refusal path for the source — enforced by the Python verifier (_verify_v02_policy_denial), keeping the schema shape minimal."
+    },
+    "failure_target": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "id"],
+      "properties": {
+        "kind": {
+          "enum": ["cmd_target", "anchor_target", "file_target", "url_target"],
+          "description": "MECHANICAL-LAYER-MATH-CALCULUS F4 §5.2 (2026-08-30): the failure-target identity family — terminal command / GetPut anchor / file path / canonical URL."
+        },
+        "id": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$",
+          "description": "Deterministic SHA-256 digest of the canonical target (command text / anchor triple / path / canonical URL), §5.2. The journal never carries full command text — only the digest plus the bounded preview."
+        },
+        "cmd_preview": {
+          "type": "string",
+          "maxLength": 80,
+          "description": "F4 §5.2: bounded (≤ 80 B) preview of the canonical command, present iff kind=cmd_target. JSON Schema maxLength counts characters; the 80-byte contract is enforced by the Python verifier (UTF-8 byte length, 审查处理 R8 / F8)."
+        },
+        "path": {
+          "type": "string",
+          "description": "F4 §5.2: file path identity, present iff kind=file_target or anchor_target."
+        },
+        "anchor_hash": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$",
+          "description": "F4 §5.2: GetPut anchor content hash (sha256), present iff kind=anchor_target."
+        },
+        "size": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "F4 §5.2: anchor file size, present iff kind=anchor_target."
+        },
+        "canonical_url": {
+          "type": "string",
+          "description": "F4 §5.2: canonical URL identity, present iff kind=url_target."
+        }
+      },
+      "description": "F4 §5.3: optional failure-target identity on failure completions (tool_completed status=error of the command/anchor/file/URL tool families). Kind/format/field-presence rules are cross-checked by the Python verifier (_verify_v02_failure_target)."
     },
     "console_mode": {
       "const": "direct",

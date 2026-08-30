@@ -1,0 +1,12 @@
+{
+  "tool": "read_file",
+  "call_id": "call-ft-file",
+  "exit_code": 1,
+  "status": "error",
+  "error": "file_not_found",
+  "failure_target": {
+    "kind": "file_target",
+    "id": "0000000000000000000000000000000000000000000000000000000000000000",
+    "path": "missing/target.rs"
+  }
+}

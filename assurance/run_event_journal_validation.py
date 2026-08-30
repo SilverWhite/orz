@@ -2677,6 +2677,133 @@ def _verify_v02_policy_denial(events: list[dict[str, Any]]) -> list[str]:
     return errors
 
 
+_FAILURE_TARGET_KINDS = frozenset({"cmd_target", "anchor_target", "file_target", "url_target"})
+# F4 §5.2 tool family → target kind mapping (mirrors the Rust producer
+# `failure_target` helper in orz-loop).
+_CMD_TARGET_TOOLS = frozenset({"run_terminal_cmd", "run_tests"})
+_ANCHOR_TARGET_TOOLS = frozenset({"search_replace"})
+_FILE_TARGET_TOOLS = frozenset({"search_replace", "read_file", "grep"})
+_URL_TARGET_TOOLS = frozenset({"web_fetch", "browser_read"})
+
+
+def _verify_v02_failure_target(events: list[dict[str, Any]]) -> list[str]:
+    """MECHANICAL-LAYER-MATH-CALCULUS F4 §5.3 (2026-08-30): optional
+    failure-target identity on tool_completed failure events.
+
+    - failure_target may only appear on a failure completion (status=error);
+    - kind ∈ {cmd_target, anchor_target, file_target, url_target};
+    - id is a 64-char lowercase SHA-256 hex digest (the journal never carries
+      full command text — only the digest + bounded preview);
+    - kind-specific carried fields: cmd_target → cmd_preview (≤ 80 UTF-8 bytes),
+      anchor_target → path + anchor_hash + size, file_target → path,
+      url_target → canonical_url;
+    - tool-family consistency: cmd_target on the terminal family,
+      anchor_target on search_replace, file_target on the file family,
+      url_target on the web family.
+    The producer computes the digest; the verifier only re-checks format and
+    the carried recheckable payload (it never re-hashes original text).
+    """
+    errors: list[str] = []
+    for index, event in enumerate(events):
+        if event.get("event_type") != "tool_completed":
+            continue
+        p = event["payload"]
+        ft = p.get("failure_target")
+        if ft is None:
+            continue
+        if p.get("status") != "error":
+            errors.append(
+                f"event {index}: failure_target requires status=error "
+                f"(failure completion); got {p.get('status')!r}"
+            )
+        if not isinstance(ft, dict):
+            errors.append(
+                f"event {index}: failure_target must be an object; got {type(ft).__name__}"
+            )
+            continue
+        kind = ft.get("kind")
+        if kind not in _FAILURE_TARGET_KINDS:
+            errors.append(
+                f"event {index}: failure_target.kind {kind!r} not in "
+                "cmd_target/anchor_target/file_target/url_target"
+            )
+            continue
+        ft_id = ft.get("id")
+        if not isinstance(ft_id, str) or len(ft_id) != 64 or any(
+            c not in "0123456789abcdef" for c in ft_id
+        ):
+            errors.append(
+                f"event {index}: failure_target.id must be 64-char lowercase "
+                f"sha256 hex; got {ft_id!r}"
+            )
+        tool = p.get("tool")
+        if kind == "cmd_target":
+            if tool not in _CMD_TARGET_TOOLS:
+                errors.append(
+                    f"event {index}: kind=cmd_target on non-terminal tool {tool!r} "
+                    "(terminal family: run_terminal_cmd/run_tests)"
+                )
+            preview = ft.get("cmd_preview")
+            if not isinstance(preview, str) or len(preview.encode("utf-8")) > 80:
+                errors.append(
+                    f"event {index}: kind=cmd_target requires cmd_preview "
+                    "(string ≤ 80 UTF-8 bytes)"
+                )
+        elif kind == "anchor_target":
+            if tool not in _ANCHOR_TARGET_TOOLS:
+                errors.append(
+                    f"event {index}: kind=anchor_target on non-anchor tool {tool!r} "
+                    "(search_replace only)"
+                )
+            path = ft.get("path")
+            anchor_hash = ft.get("anchor_hash")
+            size = ft.get("size")
+            if not isinstance(path, str) or not path:
+                errors.append(
+                    f"event {index}: kind=anchor_target requires non-empty path"
+                )
+            if (
+                not isinstance(anchor_hash, str)
+                or len(anchor_hash) != 64
+                or any(c not in "0123456789abcdef" for c in anchor_hash)
+            ):
+                errors.append(
+                    f"event {index}: kind=anchor_target requires anchor_hash "
+                    "(64-char sha256 hex)"
+                )
+            if (
+                not isinstance(size, int)
+                or isinstance(size, bool)
+                or size < 0
+            ):
+                errors.append(
+                    f"event {index}: kind=anchor_target requires size ≥ 0"
+                )
+        elif kind == "file_target":
+            if tool not in _FILE_TARGET_TOOLS:
+                errors.append(
+                    f"event {index}: kind=file_target on non-file tool {tool!r} "
+                    "(search_replace/read_file/grep)"
+                )
+            path = ft.get("path")
+            if not isinstance(path, str) or not path:
+                errors.append(
+                    f"event {index}: kind=file_target requires non-empty path"
+                )
+        elif kind == "url_target":
+            if tool not in _URL_TARGET_TOOLS:
+                errors.append(
+                    f"event {index}: kind=url_target on non-web tool {tool!r} "
+                    "(web_fetch/browser_read)"
+                )
+            url = ft.get("canonical_url")
+            if not isinstance(url, str) or not url:
+                errors.append(
+                    f"event {index}: kind=url_target requires non-empty canonical_url"
+                )
+    return errors
+
+
 def _verify_v02_probe_accuracy(events: list[dict[str, Any]]) -> list[str]:
     """ADR-0010 §3.5 条7 (ORZ-CACHE-CONTEXT-COST 2026-08-15): probe flips
     must be accompanied by a real request-header change — a
@@ -3310,6 +3437,7 @@ def validate_journal_text(text: str) -> list[str]:
         errors.extend(_verify_v02_candidate_count(events))
         errors.extend(_verify_v02_inject_budget(events))
         errors.extend(_verify_v02_policy_denial(events))
+        errors.extend(_verify_v02_failure_target(events))
         errors.extend(_verify_v02_mechanical_audit(events))
         errors.extend(_verify_v02_recovery_truncation(events))
         errors.extend(_verify_v02_context_compressed(events))

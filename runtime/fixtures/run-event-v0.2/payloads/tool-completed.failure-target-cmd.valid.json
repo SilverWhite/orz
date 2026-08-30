@@ -1,0 +1,14 @@
+{
+  "tool": "run_terminal_cmd",
+  "call_id": "call-ft-cmd",
+  "exit_code": 1,
+  "status": "error",
+  "error": "timed_out",
+  "timed_out": true,
+  "wall_ms": 120000,
+  "failure_target": {
+    "kind": "cmd_target",
+    "id": "9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08",
+    "cmd_preview": "test"
+  }
+}

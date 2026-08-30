@@ -2188,6 +2188,25 @@ def check_repository() -> dict[str, Any]:
         run_event_v02_payload_root
         / "tool-completed.policy-denial-bad-source.constraint.invalid.json"
     ] = tool_completed_schema
+    # MECHANICAL-LAYER-MATH-CALCULUS F4 (2026-08-30, BACKLOG P2-10 / TODO I2):
+    # failure-target identity fixtures — 4 valid (cmd/anchor/file/url) + 2
+    # schema negatives (bad id format / unknown kind).
+    for name in (
+        "tool-completed.failure-target-cmd.valid.json",
+        "tool-completed.failure-target-anchor.valid.json",
+        "tool-completed.failure-target-file.valid.json",
+        "tool-completed.failure-target-url.valid.json",
+    ):
+        run_event_v02_payload_positive_contracts[run_event_v02_payload_root / name] = (
+            tool_completed_schema
+        )
+    for name in (
+        "tool-completed.failure-target-bad-id.constraint.invalid.json",
+        "tool-completed.failure-target-bad-kind.constraint.invalid.json",
+    ):
+        run_event_v02_payload_negative_contracts[run_event_v02_payload_root / name] = (
+            tool_completed_schema
+        )
     # GAP-SOURCE-WEIGHTING-IMPL (2026-08-13): extra negative fixture for the
     # fixed tier/weight table (authoritative must pair with 1.1; the good
     # fixture carries the full weighting fields).

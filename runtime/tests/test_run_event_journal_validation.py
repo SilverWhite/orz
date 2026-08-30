@@ -26,6 +26,7 @@ from assurance.run_event_journal_validation import (
     _payload_sha256,
     _resolve_payload_schema,
     _verify_v02_checkpoint_responses,
+    _verify_v02_failure_target,
     _verify_v02_inject_budget,
     _verify_v02_policy_denial,
     _verify_v02_probe_accuracy,
@@ -5131,6 +5132,162 @@ class PolicyDenialCrossCheckTests(unittest.TestCase):
         event["payload"]["tool"] = "web_search"
         errors = _verify_v02_policy_denial([event])
         self.assertTrue(any("non-permission-gated tool" in e for e in errors), errors)
+
+
+class FailureTargetCrossCheckTests(unittest.TestCase):
+    """MECHANICAL-LAYER-MATH-CALCULUS F4 §5.3 (2026-08-30, TODO I2):
+    `_verify_v02_failure_target` — kind vocabulary, 64-hex digest id,
+    kind-specific carried fields and tool-family consistency on failure
+    completions."""
+
+    def _completed(self, **overrides: object) -> dict:
+        payload: dict[str, object] = {
+            "tool": "run_terminal_cmd",
+            "call_id": "call-1",
+            "exit_code": 1,
+            "status": "error",
+            "error": "timed_out",
+            "failure_target": {
+                "kind": "cmd_target",
+                "id": "9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08",
+                "cmd_preview": "make -j8",
+            },
+        }
+        payload.update(overrides)
+        return _v02_event("tool_completed", payload)
+
+    def test_clean_cmd_target_passes(self) -> None:
+        self.assertEqual(_verify_v02_failure_target([self._completed()]), [])
+
+    def test_no_failure_target_passes(self) -> None:
+        event = self._completed()
+        del event["payload"]["failure_target"]
+        self.assertEqual(_verify_v02_failure_target([event]), [])
+
+    def test_all_kinds_pass(self) -> None:
+        cases: list[dict[str, object]] = [
+            {
+                "tool": "search_replace",
+                "failure_target": {
+                    "kind": "anchor_target",
+                    "id": "8f434346648f6b96df89dda901c5176b10a6d83961dd3c1ac88b59b2dc327aa4",
+                    "path": "src/lib.rs",
+                    "anchor_hash": "8f434346648f6b96df89dda901c5176b10a6d83961dd3c1ac88b59b2dc327aa4",
+                    "size": 4096,
+                },
+            },
+            {
+                "tool": "read_file",
+                "failure_target": {
+                    "kind": "file_target",
+                    "id": "0000000000000000000000000000000000000000000000000000000000000000",
+                    "path": "missing.rs",
+                },
+            },
+            {
+                "tool": "web_fetch",
+                "failure_target": {
+                    "kind": "url_target",
+                    "id": "d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2",
+                    "canonical_url": "https://example.com/a",
+                },
+            },
+        ]
+        for case in cases:
+            event = self._completed()
+            event["payload"].update(case)
+            with self.subTest(kind=case["failure_target"]["kind"]):
+                self.assertEqual(_verify_v02_failure_target([event]), [])
+
+    def test_success_without_status_rejected(self) -> None:
+        event = self._completed()
+        del event["payload"]["status"]
+        errors = _verify_v02_failure_target([event])
+        self.assertTrue(any("status=error" in e for e in errors), errors)
+
+    def test_unknown_kind_rejected(self) -> None:
+        event = self._completed()
+        event["payload"]["failure_target"] = dict(
+            event["payload"]["failure_target"], kind="proc_target"
+        )
+        errors = _verify_v02_failure_target([event])
+        self.assertTrue(any("kind" in e for e in errors), errors)
+
+    def test_bad_id_rejected(self) -> None:
+        event = self._completed()
+        event["payload"]["failure_target"] = dict(
+            event["payload"]["failure_target"], id="not-a-digest"
+        )
+        errors = _verify_v02_failure_target([event])
+        self.assertTrue(any("sha256 hex" in e for e in errors), errors)
+
+    def test_cmd_preview_required_and_bounded(self) -> None:
+        event = self._completed()
+        del event["payload"]["failure_target"]["cmd_preview"]
+        errors = _verify_v02_failure_target([event])
+        self.assertTrue(any("cmd_preview" in e for e in errors), errors)
+        # 81 ASCII bytes > 80 → rejected (existing character bound).
+        event = self._completed()
+        event["payload"]["failure_target"] = dict(
+            event["payload"]["failure_target"], cmd_preview="x" * 81
+        )
+        errors = _verify_v02_failure_target([event])
+        self.assertTrue(any("cmd_preview" in e for e in errors), errors)
+        # 30 CJK chars = 90 UTF-8 bytes but only 30 characters → the byte
+        # contract (R8 / F8) must reject it even though maxLength passes.
+        event = self._completed()
+        event["payload"]["failure_target"] = dict(
+            event["payload"]["failure_target"], cmd_preview="测" * 30
+        )
+        errors = _verify_v02_failure_target([event])
+        self.assertTrue(any("cmd_preview" in e for e in errors), errors)
+        # 20 CJK chars = 60 UTF-8 bytes ≤ 80 → accepted.
+        event = self._completed()
+        event["payload"]["failure_target"] = dict(
+            event["payload"]["failure_target"], cmd_preview="测" * 20
+        )
+        errors = _verify_v02_failure_target([event])
+        self.assertFalse(any("cmd_preview" in e for e in errors), errors)
+
+    def test_tool_family_mismatch_rejected(self) -> None:
+        event = self._completed(tool="read_file")
+        errors = _verify_v02_failure_target([event])
+        self.assertTrue(any("cmd_target" in e for e in errors), errors)
+
+    def test_anchor_requires_full_triple(self) -> None:
+        event = self._completed(
+            tool="search_replace",
+            failure_target={
+                "kind": "anchor_target",
+                "id": "8f434346648f6b96df89dda901c5176b10a6d83961dd3c1ac88b59b2dc327aa4",
+                "path": "src/lib.rs",
+            },
+        )
+        errors = _verify_v02_failure_target([event])
+        self.assertTrue(any("anchor_hash" in e for e in errors), errors)
+        self.assertTrue(any("size" in e for e in errors), errors)
+
+    def test_file_requires_path(self) -> None:
+        event = self._completed(
+            tool="grep",
+            failure_target={
+                "kind": "file_target",
+                "id": "0000000000000000000000000000000000000000000000000000000000000000",
+            },
+        )
+        errors = _verify_v02_failure_target([event])
+        self.assertTrue(any("path" in e for e in errors), errors)
+
+    def test_url_requires_canonical_url(self) -> None:
+        event = self._completed(
+            tool="browser_read",
+            failure_target={
+                "kind": "url_target",
+                "id": "d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2",
+            },
+        )
+        errors = _verify_v02_failure_target([event])
+        self.assertTrue(any("canonical_url" in e for e in errors), errors)
 
 
 class PolicyDenialProducerParityTests(unittest.TestCase):

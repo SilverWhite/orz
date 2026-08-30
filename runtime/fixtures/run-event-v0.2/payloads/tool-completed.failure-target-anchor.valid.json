@@ -1,0 +1,15 @@
+{
+  "tool": "search_replace",
+  "call_id": "call-ft-anchor",
+  "exit_code": 1,
+  "status": "error",
+  "error": "content_anchor_mismatch",
+  "file_path": "src/lib.rs",
+  "failure_target": {
+    "kind": "anchor_target",
+    "id": "8f434346648f6b96df89dda901c5176b10a6d83961dd3c1ac88b59b2dc327aa4",
+    "path": "src/lib.rs",
+    "anchor_hash": "8f434346648f6b96df89dda901c5176b10a6d83961dd3c1ac88b59b2dc327aa4",
+    "size": 4096
+  }
+}

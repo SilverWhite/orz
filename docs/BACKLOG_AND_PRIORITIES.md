@@ -11,7 +11,7 @@
 |---|---|---|
 | P0 | 当前工作集：设计已冻结，裁决后立即实施 | 评测冒烟暴露问题（P0-E 主项 7 项 + FUS-TOOL-SCOPE-CONTRACT 后续 2 项全部闭合 2026-08-18：ACAF 容器供应、console 工具名、计划视图步骤 ID、订单发放前拒绝入事件面、grep 搜索范围契约、plan_write 校验消息形状、actions 形状探针、list_dir 范围计数、grep files_searched 全结局探针，见 0a）；CLASSICAL-EXEC-ASSISTANT（生产组件，2026-08-16 用户裁决转正式，S1-S4 全部闭合）；PLAN-FIRST-BLACKBOARD（阶段 A/B/C 全部闭合 2026-08-16）；**FUS-BENCHMARK-FULL-EXEC（P0，实施完成待验证——2026-08-18 用户指示实施、暂不测试；验证闭环后闭合，见 0b）**；**LEDGER-FOLD-EXTERNAL-FILE（P0，S1-S4 验证闭环 2026-08-19——命中率问题优先于 P0-F 验证；provider 口径 95.33% ≥90% 达标，见 0c）**；**OUTPUT-DEGENERATION-GUARD（P0，S1-S4 全部闭合 2026-08-20——make-doom 退化复读失败防护；8K 全统一 + 补读闭环 + 实时检测 + 32K，见 0d）**；**CONTEXT-SCAFFOLDING-PULL-REDESIGN（P0，S1-S4 全部闭合 2026-08-21——预算块 PUSH→PULL + 工具输出汇总消息退役；命中率 94.45%、零哨兵触发、输入增长放缓；方案 C 维持 256K 暂不收紧（用户裁决），见 0e）**；**FUS-READ-ANCHOR-WRITE-GUARD（P0，S1-S4 全部闭合 2026-08-23——read_file 内容锚点下传 + 写前机械核证；S4 复用 NGRAM S4 实机复验：10 试次零误拒、锚点实机可见、命中率 94.11%–98.55% 全 ≥90%、零 400，计数 28 → 27，见 0f）**；**AGENT-DELIVERY-FLOW（P0 派生 0d 后续 7，S1-S4 全部闭合 2026-08-23——计划无空转、末步机械递交、引用修正一次/二次阻断、订单反馈；S4 复用 NGRAM S4 实机复验：8/8 完成试次走 submit 双阶段、零 400、命中率全 ≥90%，计数 29 → 28，见 0d 后续 7）**；**FINAL-SMOKE-2026-08-25 对拍暴露（P0，2026-08-25 登记：GAP-EVENT-SCHEMA-DRIFT 事件面三类 Schema 漂移（2026-08-26 修复完成并复验，事件链非终止错误 0）+ GAP-REPETITION-DETECTOR-DNA-FALSE-POSITIVE 复读检测 DNA 误杀（S1/S2/S3 完成 2026-08-26、S4 复验待实施），正式 89 题提交前处理，见 0i）**；**RETRIEVAL-ORCHESTRATION-MECHANICAL（P0，2026-08-30 检索问题最终评判定稿、实施待放行——双模式定案 + 引擎 SERP Google 主序 + 原生兜底 + 检索编排机械层第一批五项 + Google 门禁观察实验，见 0k）** |
 | P1 | 无需裁决，可与 P0 并行 | FUS-COMPONENT-REGISTER、GAP-WINDOWS-EVIDENCE、IMPL-DEEPSEEK-TRANSPORT / SEC-CREDENTIALS、ORZ-SESSION-CONTEXT-MONITOR、**RETRIEVAL-RESULT-STRUCTURED-CONTRACT（2026-08-30 登记，见 0k；修复方向 C 待裁决）** |
-| P2 | 生产化决策门：需用户裁决 | IMPL-CONTROL-FABRIC（fail-closed 启用、Slice 3/4）、OPS-PROTOCOL、MECHANICAL-LAYER-MATH-CALCULUS（2026-08-30 登记 pending，开放项已裁决——阶段 0 闭合，阶段 1 设计定稿待续，见 10） |
+| P2 | 生产化决策门：需用户裁决 | IMPL-CONTROL-FABRIC（fail-closed 启用、Slice 3/4）、OPS-PROTOCOL、MECHANICAL-LAYER-MATH-CALCULUS（2026-08-30 登记 current-design——阶段 0 决策闭合 + 阶段 1 设计定稿完成（F1–F6、ADR-0010 §14.47），阶段 2 实施切片 / 阶段 3 验证待放行，见 10） |
 | P3 | 收尾 / 清理 | EVIDENCE-LOCAL-BROWSER、GATE-CHAIN、DC 剩余信号、V11-IMPL-003/007、工作区收尾 |
 
 - 复杂度治理判定（2026-08-13）：LIF 为高要求主项目、实验含相当程度自动运行；复杂度降低只砍冗余（OPS 平行执行层、双实现、文档仪式），保留服务 LIF 不变量的机制（journal/verifier、permission fail-closed、运行守卫、Windows 进程控制、来源证据、ACAF Slice 1/2）；ACAF Slice 3/4 暂缓，按实际自动化模式再定；不做机制×不变量清单，避免后续审查被带偏。
@@ -2165,7 +2165,7 @@ S1-S4 全部闭合）
 - 审查判定（2026-08-13，用户无异议）：平行执行层过重，不按原样生产接线。收敛方向——保留“删除安全”（回收站 + 缓存机械分类 + 容量 fail-closed）为 host-owned 工具；跨环境桥接保留为内部执行能力，不向模型暴露 op 信封；双执行器收敛为单一参考实现，生产走 Rust 工具面。裁剪设计待产出后登记。
 - 入口：[协议](../protocol/structured-operation-protocol-v0.1.md)。
 
-### 10. MECHANICAL-LAYER-MATH-CALCULUS（`pending`）
+### 10. MECHANICAL-LAYER-MATH-CALCULUS（`partial`；阶段 2 实施 2026-08-30）
 
 - 定位（2026-08-30 用户确认转正式并登记）：机械层数学计算体设计——机械层=
   类型化项重写系统（8 工具类型签名 + Result 信封 + GetPut 律）+ LIF 时间性
@@ -2185,13 +2185,49 @@ S1-S4 全部闭合）
   留痕）；D6 预判/重试=观测面（机制面待 §9.10 探针 P1–P3 离线验证后另裁）；
   D7 存档=StoredConversation envelope 追加可选字段（serde(default)、随 7 天
   retention 清理），子代理不同构。
-- 开放内容：ADR-0010 转录未开始（阶段 1 F5）；实施未开始（阶段 2 I1–I6）；
-  验证未开始（阶段 3 V1–V3）；排期与勾选见 TODO P2-10。
+- 阶段 1（2026-08-30 F1–F6 定稿 + ADR-0010 §14.47 转录；设计轮不动计数）：
+  F1 8 工具类型契约草案（Result 信封/GetPut 律/View/exit_code 值语义）；
+  F2 temporal 分区渲染规格（TemporalRecord + DomainSpike + Now/Recent/History/
+  Feature 查询面 + 渲染约束 + 侧车存档）；F3 LIF 计算规格（通道登记
+  err/stall/slow/deny/prog/stuck、二阶闭式解、T̂ 在线中位数估计器、四对照门）；
+  F4 失败目标身份入事件面（命令 digest/锚点/文件/URL + trace→事件链同构核对）；
+  F6 参考系重定位与观测面扩充（双尺度基线 + 每轮校准分层 + 观测面优先级 +
+  动作层耦合试验 P1–P3）；F5 ADR-0010 转录（§14.47，`pending` →
+  `current-design`，索引/BACKLOG 同步）。
+- 阶段 2（2026-08-30 用户指示实施 I1–I6；S1 代码 + S2 测试完成，放行入账
+  32 → 38）：I1 T̂/LIF 计算器 + 102 runs 离线复验（4157 决策点、err 22/24、
+  stuck 0/102 精确复现）；I2 失败目标身份入事件面（Schema/verifier/fixtures +
+  生产者）；I3 temporal 分区运行时（LifEngine 喂入 + blackboard_read
+  section=temporal）；I4 域 spike 侧车存档（StoredConversation 可选字段 +
+  恢复重建）；I5 类型化信封（tool_envelope + Board 接线 + GetPut 律锁定）；
+  I6 一层 pipe 归约（reducer，≤4 步）。
+- 审查处理（2026-08-31 登记，放行计数不变）：阶段 2 全面审查完成（设计合理性/
+  实现合理性/符合性；三子代理分片 + 102-run 语料量化），R1–R9 + F10–F14——
+  err 事件谓词三方统一（R1 **已修**：生产口径 + lif_replay 对齐 + 102-run
+  重跑 err 1 run/1 fire）、deny 接线（R2 **已裁决接线，独立待办下一轮**）、
+  temporal ≤1 KiB 截断预扣（R3 **已修**）、blackboard_read 工具面补参数
+  （R4 **已修**）、grep→read 管线补实现（R5 **已裁决，独立待办下一轮**）、
+  恢复重建 has_success（R6 **已修**）、FailEnvelope/Board cap 收口（R7 **已修**：
+  Board cap 实际截断 + is_fail 判别式 + F12 边界；纯子项接线入 V1）、
+  cmd_preview 字节口径（R8 **已修**）、计数勘误（R9 **已修**）、F10 fixture
+  可复核、F11 同构核对挂账（V1 实施）、F12 边界 fail-loud、F13 Anchor 类型
+  统一、F14 措辞统一——见
+  [审查记录](audits/MECHANICAL_LAYER_MATH_CALCULUS_PHASE2_REVIEW_AUDIT_2026-08-31.md)
+  / TODO P2-10。
+- 开放内容：阶段 2 审查处理独立待办（R2 deny 接线、R5 grep→read 管线——
+  2026-08-31 用户裁决下一轮实施）+ 阶段 3 验证（V1 FakeProvider 验证面，
+  含 FailEnvelope 纯子项接线与 receipt↔事件链同构核对；V2 离线 102 runs
+  四对照门 + 聚类对照，R1 新口径 err 1/1 为底座；V3 S4 冒烟 + 状态同步）；
+  排期与勾选见 TODO P2-10。
+- 实施记录：[I1](audits/MECHANICAL_LAYER_MATH_CALCULUS_I1_IMPL_AUDIT_2026-08-30.md)
+  / [I2–I6](audits/MECHANICAL_LAYER_MATH_CALCULUS_PHASE2_IMPL_AUDIT_2026-08-30.md)。
 - 边界：域记录仅 spike 点位、随对话侧车存档（非 journal 证据面、7 天 retention）；
   LIF 项目具体公式不外落（独立项目、不开源）；数据不可靠性=上游模型随版本变动，
   设计不依赖模型版本标定；模型无感：全部计算落机械层，模型仅消费 temporal
   分区渲染结果（PULL、零常驻、无注入）。
-- 入口：[设计](MECHANICAL_LAYER_MATH_CALCULUS_DISCUSSION_2026-08-30.md)；
+- 入口：[正式设计](MECHANICAL_LAYER_MATH_CALCULUS_DESIGN_2026-08-30.md) /
+  [讨论稿](MECHANICAL_LAYER_MATH_CALCULUS_DISCUSSION_2026-08-30.md) /
+  [ADR-0010 §14.47](../adr/ADR-0010-fusion-runtime-and-agent-architecture.md) /
   [索引 AUTH-MECHANICAL-LAYER-MATH-CALCULUS](../CLI_PROJECT_INDEX.md)。
 
 ## P3 — 收尾 / 清理

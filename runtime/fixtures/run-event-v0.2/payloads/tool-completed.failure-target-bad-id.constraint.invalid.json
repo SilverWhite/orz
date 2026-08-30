@@ -1,0 +1,12 @@
+{
+  "tool": "run_terminal_cmd",
+  "call_id": "call-ft-bad-id",
+  "exit_code": 1,
+  "status": "error",
+  "error": "timed_out",
+  "failure_target": {
+    "kind": "cmd_target",
+    "id": "not-a-sha256-digest",
+    "cmd_preview": "make -j8"
+  }
+}

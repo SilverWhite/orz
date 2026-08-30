@@ -1,0 +1,12 @@
+{
+  "tool": "web_fetch",
+  "call_id": "call-ft-url",
+  "exit_code": 1,
+  "status": "error",
+  "error": "fetch_failed",
+  "failure_target": {
+    "kind": "url_target",
+    "id": "d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2",
+    "canonical_url": "https://example.com/papers/mr-cr.html"
+  }
+}
