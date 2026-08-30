@@ -474,6 +474,13 @@ mod tests {
     use crate::blackboard::{
         ActionResult, EditRecord, FailedEvidence, PlanStep, SharedBlackboard, StepStatus,
     };
+    use crate::controller::AgentLoopController;
+    use crate::controller_test_support::*;
+    use crate::gateway::fake::{FakeProvider, ScriptedResponse};
+    use crate::gateway::model::{FinishReason, ModelGateway, ToolCall};
+    use crate::host::ToolResult;
+    use orz_assurance::{EventType, JournalRecorder};
+    use std::sync::Arc;
 
     fn slots() -> SummarySlots {
         SummarySlots {
@@ -916,5 +923,95 @@ mod tests {
         assert!(marker.contains("存档写入失败：摘要未落盘"));
         assert!(marker.contains("黑板 plan_epoch: （未设置）"));
         assert!(crate::prompt::is_restore_retained_block(&marker));
+    }
+
+    /// P0-D review fix (2026-08-14, ADR-0010 v1.14): a summary archive write
+    /// failure is retried and then EXPLICITLY reported in the event and the
+    /// marker — never swallowed.
+    #[tokio::test]
+    async fn summary_archive_write_failure_is_reported() {
+        let dir = test_dir();
+        let journal = JournalRecorder::new(dir.clone());
+        let blocked_cwd = test_dir();
+        // `.gsa` exists as a FILE — create_dir_all(.gsa/compaction) fails.
+        std::fs::write(blocked_cwd.join(".gsa"), "occupied").unwrap();
+        let host = BlockedArchiveHost {
+            inner: TestHost {
+                journal,
+                tool_result: Some(ToolResult {
+                    output: "x".repeat(600),
+                    exit_code: Some(0),
+                    output_encoding: None,
+                    structured: None,
+                    ..Default::default()
+                }),
+            },
+            blocked_cwd: blocked_cwd.clone(),
+        };
+        let tool_call = |id: &str| ScriptedResponse {
+            text: None,
+            tool_calls: vec![ToolCall {
+                name: "read_file".to_string(),
+                arguments: serde_json::json!({"target_file": "a.txt"}),
+                call_id: id.to_string(),
+            }],
+            finish_reason: FinishReason::ToolCalls,
+            reasoning_content: None,
+            prompt_tokens: Some(300_000),
+        };
+        let fake = Arc::new(FakeProvider::new(vec![
+            tool_call("call-a1"),
+            tool_call("call-a2"),
+            tool_call("call-a3"),
+            tool_call("call-a4"),
+            // Round a4 also reports 300K — the fallback re-fires on the next
+            // loop-top (机械模式：两次压缩均零模型调用，无摘要项).
+            ScriptedResponse::text("候选答案"),
+            ScriptedResponse::text("最终答案"),
+        ]));
+        let gateway: Arc<dyn ModelGateway> = fake.clone();
+        let controller = AgentLoopController::with_gateway(gateway)
+            .with_context_compact(150_000, 400, 20, 100_000)
+            .with_summary_guards(1, 1.0);
+        controller
+            .run_turn(
+                &host,
+                "压缩测试",
+                "RUN-COMPACT-ARCHIVE",
+                MANIFEST,
+                0,
+                None,
+                None,
+                None,
+            )
+            .await
+            .unwrap();
+
+        let compact_events: Vec<serde_json::Value> = events(&dir)
+            .into_iter()
+            .filter(|e| e.event_type == EventType::ContextCompressed)
+            .map(|e| e.payload)
+            .collect();
+        // The fallback re-fires while the measured tokens stay over the
+        // safety line — every summary attempt reports the write failure.
+        assert_eq!(compact_events.len(), 2, "{compact_events:?}");
+        for event in &compact_events {
+            assert_eq!(event["archive_write_failed"], true);
+            assert_eq!(event["summary_incomplete"], false);
+            assert!(event["summary_path"].as_str().is_some());
+        }
+        // The archive path/digest are still reported (the intended pointer),
+        // and the marker carries the explicit failure note.
+        let received = fake.received_requests();
+        assert!(
+            received.iter().any(|r| r
+                .messages
+                .iter()
+                .any(|m| { m.content.contains("存档写入失败：摘要未落盘") })),
+            "archive failure must reach the model: {received:?}"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+        let _ = std::fs::remove_dir_all(&blocked_cwd);
     }
 }

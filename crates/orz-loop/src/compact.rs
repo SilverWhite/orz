@@ -419,3 +419,1898 @@ pub(crate) fn compact_messages(messages: &mut Vec<Message>, target_tokens: u64) 
         marker_index: preamble_end,
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::blackboard::EditRecord;
+    use crate::controller_test_support::*;
+    use crate::gateway::fake::{FakeProvider, ScriptedResponse};
+    use crate::gateway::model::{FinishReason, ModelGateway, ModelRequest, ToolCall};
+    use crate::host::{
+        PermitDecision, PermitError, RiskClass, ToolError, ToolRegistry, ToolResult,
+    };
+    use async_trait::async_trait;
+    use orz_assurance::{EventType, JournalRecorder};
+    use std::path::PathBuf;
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    /// A6 (2026-08-08): the pure compaction function — drops only the
+    /// OLDEST rounds, keeps the preamble + newest round(s), and every
+    /// surviving tool reply's `tool_call_id` still matches a declaration
+    /// (rounds are never split — the provider 400s on unmatched ids).
+    #[test]
+    fn compact_messages_preserves_pairing_and_drops_oldest_rounds() {
+        let decl = |id: &str| Message {
+            role: Role::Assistant,
+            content: String::new(),
+            tool_call_id: None,
+            tool_calls: vec![ToolCall {
+                name: "read_file".to_string(),
+                arguments: serde_json::json!({}),
+                call_id: id.to_string(),
+            }],
+            reasoning_content: None,
+        };
+        let tool_reply = |id: &str| Message {
+            role: Role::Tool,
+            content: "tool output".to_string(),
+            tool_call_id: Some(id.to_string()),
+            tool_calls: Vec::new(),
+            reasoning_content: None,
+        };
+        let summary = |text: &str| Message {
+            role: Role::Assistant,
+            content: text.to_string(),
+            tool_call_id: None,
+            tool_calls: Vec::new(),
+            reasoning_content: None,
+        };
+        let mut messages = vec![
+            Message {
+                role: Role::User,
+                content: "原始提示词".to_string(),
+                tool_call_id: None,
+                tool_calls: Vec::new(),
+                reasoning_content: None,
+            },
+            decl("call-1"),
+            tool_reply("call-1"),
+            summary("第一轮总结"),
+            decl("call-2"),
+            tool_reply("call-2"),
+            summary("第二轮总结"),
+            decl("call-3"),
+            tool_reply("call-3"),
+            summary("第三轮总结"),
+        ];
+
+        // Target small enough that only the newest round fits.
+        let stats = compact_messages(&mut messages, 10);
+        assert_eq!(stats.rounds_dropped, 2);
+        assert_eq!(stats.messages_dropped, 6);
+        assert_eq!(stats.marker_index, 1); // after the preamble
+
+        // Preamble + marker slot + newest round (decl + reply + summary).
+        assert_eq!(messages.len(), 4, "{messages:?}");
+        assert_eq!(messages[0].content, "原始提示词");
+        assert_eq!(messages[1].role, Role::Assistant);
+        assert_eq!(messages[1].tool_calls[0].call_id, "call-3");
+        assert_eq!(messages[2].tool_call_id.as_deref(), Some("call-3"));
+        assert_eq!(messages[3].content, "第三轮总结");
+
+        // Pairing invariant: every tool message's call_id has a declaration.
+        let declared: Vec<&str> = messages
+            .iter()
+            .filter(|m| !m.tool_calls.is_empty())
+            .flat_map(|m| m.tool_calls.iter().map(|t| t.call_id.as_str()))
+            .collect();
+        for m in &messages {
+            if let Some(id) = &m.tool_call_id {
+                assert!(declared.contains(&id.as_str()), "unmatched {id}");
+            }
+        }
+    }
+
+    /// A6: no tool rounds → compaction is a no-op (nothing droppable).
+    #[test]
+    fn compact_messages_noop_without_rounds() {
+        let mut messages = vec![Message {
+            role: Role::User,
+            content: "hi".to_string(),
+            tool_call_id: None,
+            tool_calls: Vec::new(),
+            reasoning_content: None,
+        }];
+        let stats = compact_messages(&mut messages, 0);
+        assert_eq!(stats.rounds_dropped, 0);
+        assert_eq!(stats.messages_dropped, 0);
+        assert_eq!(messages.len(), 1);
+    }
+
+    /// P0-D (2026-08-14, ADR-0010 v1.10): the template summary fires at
+    /// the first eligible loop-top gap after the cooldown when measured
+    /// prompt tokens cross the trigger — INCLUDING mid-task tool gaps (the
+    /// old A6 "final-answer gap only" rhythm is revoked). The summary call
+    /// is a pure chat round; the marker carries the archive pointer, the
+    /// archive is written under `.gsa/compaction/`, and the
+    /// `context_compressed` event carries the v0.2 fields.
+    #[tokio::test]
+    async fn context_compact_summary_fires_at_mid_task_gap() {
+        // Host returning a DIFFERENT fat output per call — so the kept
+        // newest rounds are distinguishable from the dropped oldest round.
+        struct SeqHost {
+            journal: JournalRecorder,
+            outputs: Vec<String>,
+            calls: AtomicU64,
+            cwd: std::path::PathBuf,
+        }
+        #[async_trait::async_trait]
+        impl LoopHost for SeqHost {
+            fn journal(&self) -> &JournalRecorder {
+                &self.journal
+            }
+            fn tools_registry(&self) -> &dyn ToolRegistry {
+                &EmptyRegistry
+            }
+            fn session_cwd(&self) -> std::path::PathBuf {
+                self.cwd.clone()
+            }
+            async fn call_tool(
+                &self,
+                name: &str,
+                _arguments: serde_json::Value,
+                _call_id: &str,
+            ) -> Result<ToolResult, ToolError> {
+                let n = self.calls.fetch_add(1, Ordering::SeqCst) as usize;
+                Ok(ToolResult {
+                    output: self.outputs[n % self.outputs.len()].clone(),
+                    exit_code: Some(0),
+                    output_encoding: None,
+                    structured: None,
+                    ..Default::default()
+                })
+            }
+            async fn request_permission(
+                &self,
+                _risk: RiskClass,
+                _tool: &str,
+                _arguments: &serde_json::Value,
+            ) -> Result<PermitDecision, PermitError> {
+                Ok(PermitDecision::AllowOnce)
+            }
+        }
+        let dir = test_dir();
+        let journal = JournalRecorder::new(dir.clone());
+        // Fat per-round outputs (~600 chars each) — distinguishable A/B/C.
+        let host = SeqHost {
+            journal,
+            outputs: vec!["A".repeat(600), "B".repeat(600), "C".repeat(600)],
+            calls: AtomicU64::new(0),
+            cwd: dir.clone(),
+        };
+        let tool_call = |id: &str| ScriptedResponse {
+            text: None,
+            tool_calls: vec![ToolCall {
+                name: "read_file".to_string(),
+                arguments: serde_json::json!({"target_file": "a.txt"}),
+                call_id: id.to_string(),
+            }],
+            finish_reason: FinishReason::ToolCalls,
+            reasoning_content: None,
+            prompt_tokens: Some(50_000), // over the tiny test trigger
+        };
+        let fake = Arc::new(FakeProvider::new(vec![
+            tool_call("call-a1"),
+            tool_call("call-a2"),
+            tool_call("call-a3"),
+            // 机械模式（2026-08-18 B 定案）：压缩零模型调用——脚本不消费
+            // 任何摘要项，收到的请求数即为主循环请求数。
+            ScriptedResponse::text("候选答案").with_prompt_tokens(5_000),
+            ScriptedResponse::text("最终答案").with_prompt_tokens(5_000),
+        ]));
+        let gateway: Arc<dyn ModelGateway> = fake.clone();
+        let controller = AgentLoopController::with_gateway(gateway)
+            .with_context_compact(1_000, 400, 2, 100_000)
+            .with_summary_guards(1, 1.0);
+        controller
+            .run_turn(
+                &host,
+                "压缩测试",
+                "RUN-COMPACT",
+                MANIFEST,
+                0,
+                None,
+                None,
+                None,
+            )
+            .await
+            .unwrap();
+
+        // The compaction event is journaled with the v0.2 template-summary
+        // fields.
+        let compact_events: Vec<serde_json::Value> = events(&dir)
+            .into_iter()
+            .filter(|e| e.event_type == EventType::ContextCompressed)
+            .map(|e| e.payload)
+            .collect();
+        assert_eq!(compact_events.len(), 1, "exactly one summary");
+        assert_eq!(compact_events[0]["trigger_tokens"], 50_000);
+        // Three completed tool rounds before the summary.
+        assert_eq!(compact_events[0]["rounds_since_last_compaction"], 3);
+        assert_eq!(compact_events[0]["rounds_dropped"], 1);
+        assert_eq!(compact_events[0]["mode"], "mechanical");
+        assert_eq!(compact_events[0]["reason"], "rhythm");
+        assert_eq!(compact_events[0]["summary_incomplete"], false);
+        assert_eq!(compact_events[0]["retained_rounds"], 2);
+
+        // The summary archive was written under .gsa/compaction/.
+        let archive_dir = dir.join(".gsa").join("compaction");
+        let archives: Vec<_> = std::fs::read_dir(&archive_dir)
+            .expect("archive dir exists")
+            .flatten()
+            .collect();
+        assert_eq!(archives.len(), 1, "{archives:?}");
+        let archive_text = std::fs::read_to_string(archives[0].path()).unwrap();
+        assert!(
+            archive_text.contains("# ORZ 会话压缩摘要"),
+            "{archive_text}"
+        );
+        assert!(archive_text.contains("机械模式"));
+
+        // The MID-TASK gap (request 4, after tool round 3) carries the
+        // marker — the old "final-answer gap only" semantics are revoked.
+        let received = fake.received_requests();
+        assert_eq!(
+            received.len(),
+            5,
+            "机械压缩零模型调用：3 工具轮 + 候选答案 + 最终答案 = 5 请求，{received:?}"
+        );
+        let marker_idx = received
+            .iter()
+            .position(|r| {
+                r.messages
+                    .iter()
+                    .any(|m| m.content.starts_with("[前文上下文已压缩"))
+            })
+            .expect("marker request present");
+        assert!(
+            marker_idx >= 3,
+            "marker must appear only after the tool rounds (mid-task): \
+             request {marker_idx}"
+        );
+        assert!(
+            received[..marker_idx].iter().all(|r| r
+                .messages
+                .iter()
+                .all(|m| !m.content.starts_with("[前文上下文已压缩"))),
+            "no marker before the summary"
+        );
+        let round4 = &received[marker_idx].messages;
+        assert!(
+            round4
+                .iter()
+                .any(|m| m.content.starts_with("[前文上下文已压缩")),
+            "marker present at the mid-task gap: {round4:?}"
+        );
+        // Oldest round dropped; the newest two kept verbatim (pairing
+        // intact).
+        assert!(
+            round4.iter().all(|m| !m.content.contains(&"A".repeat(600))),
+            "oldest round's output gone: {round4:?}"
+        );
+        assert!(
+            round4.iter().any(|m| m.content.contains(&"B".repeat(600)))
+                && round4.iter().any(|m| m.content.contains(&"C".repeat(600))),
+            "newest rounds kept: {round4:?}"
+        );
+        let declared: Vec<&str> = round4
+            .iter()
+            .filter(|m| m.role == Role::Assistant)
+            .flat_map(|m| m.tool_calls.iter().map(|tc| tc.call_id.as_str()))
+            .collect();
+        for m in round4.iter().filter(|m| m.role == Role::Tool) {
+            assert!(
+                m.tool_call_id
+                    .as_deref()
+                    .is_some_and(|id| declared.contains(&id)),
+                "orphan tool result: {m:?}"
+            );
+        }
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// THIN-HARNESS-REDESIGN R1 (§4.1 边界项, 2026-08-27)：compaction_
+    /// whitelist_add 已封存——即使首轮批次调用也一律 sealed_tool_denied
+    /// 结构化拒绝（无 ToolStarted、白名单不落盘、无 whitelist.jsonl
+    /// 存档、零副作用），运行正常继续（旧 A6 常驻/压缩保真机制已退役，
+    /// 代码休眠保留，R3 统一裁决）。
+    #[tokio::test]
+    async fn whitelist_first_batch_sealed_and_never_lands() {
+        // Host returning a DIFFERENT fat output per call — so the dropped
+        // oldest round is distinguishable from the kept newest round.
+        struct SeqHost {
+            journal: JournalRecorder,
+            outputs: Vec<String>,
+            calls: AtomicU64,
+            cwd: std::path::PathBuf,
+        }
+        #[async_trait::async_trait]
+        impl LoopHost for SeqHost {
+            fn journal(&self) -> &JournalRecorder {
+                &self.journal
+            }
+            fn tools_registry(&self) -> &dyn ToolRegistry {
+                &EmptyRegistry
+            }
+            fn session_cwd(&self) -> std::path::PathBuf {
+                self.cwd.clone()
+            }
+            async fn call_tool(
+                &self,
+                _name: &str,
+                _arguments: serde_json::Value,
+                _call_id: &str,
+            ) -> Result<ToolResult, ToolError> {
+                let n = self.calls.fetch_add(1, Ordering::SeqCst) as usize;
+                Ok(ToolResult {
+                    output: self.outputs[n % self.outputs.len()].clone(),
+                    exit_code: Some(0),
+                    output_encoding: None,
+                    structured: None,
+                    ..Default::default()
+                })
+            }
+            async fn request_permission(
+                &self,
+                _risk: RiskClass,
+                _tool: &str,
+                _arguments: &serde_json::Value,
+            ) -> Result<PermitDecision, PermitError> {
+                Ok(PermitDecision::AllowOnce)
+            }
+        }
+        let dir = test_dir();
+        let journal = JournalRecorder::new(dir.clone());
+        let host = SeqHost {
+            journal,
+            outputs: vec!["A".repeat(600), "B".repeat(600)],
+            calls: AtomicU64::new(0),
+            cwd: dir.clone(),
+        };
+        // Two whitelist writes in the SAME first batch — append semantics
+        // in the resident message AND two archive lines (JSONL append).
+        let whitelist_calls = ScriptedResponse::tool_calls(vec![
+            ToolCall {
+                name: "compaction_whitelist_add".to_string(),
+                arguments: serde_json::json!({"content": "任务背景：修复缓存回归；约束：不改 schema"}),
+                call_id: "call-w1".to_string(),
+            },
+            ToolCall {
+                name: "compaction_whitelist_add".to_string(),
+                arguments: serde_json::json!({"content": "关键路径：src/controller.rs"}),
+                call_id: "call-w1b".to_string(),
+            },
+        ]);
+        let tool_call = |id: &str| ScriptedResponse {
+            text: None,
+            tool_calls: vec![ToolCall {
+                name: "read_file".to_string(),
+                arguments: serde_json::json!({"target_file": "a.txt"}),
+                call_id: id.to_string(),
+            }],
+            finish_reason: FinishReason::ToolCalls,
+            reasoning_content: None,
+            prompt_tokens: Some(50_000),
+        };
+        let fake = Arc::new(FakeProvider::new(vec![
+            whitelist_calls,
+            tool_call("call-w2"),
+            tool_call("call-w3"),
+            // 机械模式（2026-08-18 B 定案）：压缩零模型调用，无摘要项。
+            ScriptedResponse::text("候选答案").with_prompt_tokens(5_000),
+            ScriptedResponse::text("最终答案").with_prompt_tokens(5_000),
+        ]));
+        let gateway: Arc<dyn ModelGateway> = fake.clone();
+        let controller = AgentLoopController::with_gateway(gateway)
+            .with_context_compact(1_000, 400, 1, 100_000)
+            .with_summary_guards(1, 1.0);
+        controller
+            .run_turn(
+                &host,
+                "修复任务",
+                "RUN-WHITELIST",
+                MANIFEST,
+                0,
+                None,
+                None,
+                None,
+            )
+            .await
+            .unwrap();
+
+        // 同批次两次 whitelist 调用均被 sealed_tool_denied 拒绝。
+        let sealed: Vec<_> = events(&dir)
+            .into_iter()
+            .filter(|e| e.event_type == EventType::ToolCompleted)
+            .filter(|e| e.payload["tool"] == "compaction_whitelist_add")
+            .filter(|e| {
+                e.payload.get("error").and_then(|v| v.as_str()) == Some("sealed_tool_denied")
+            })
+            .collect();
+        assert_eq!(sealed.len(), 2, "both first-batch writes sealed");
+        // 无 ToolStarted（零副作用前置条件）。
+        assert!(
+            events(&dir).into_iter().all(|e| {
+                !(e.event_type == EventType::ToolStarted
+                    && e.payload.get("tool").and_then(|t| t.as_str())
+                        == Some("compaction_whitelist_add"))
+            }),
+            "sealed tool must never reach ToolStarted"
+        );
+        // 白名单恒空、无存档文件。
+        let w = controller.whitelist.lock().unwrap();
+        assert!(w.is_empty(), "sealed whitelist write must not land: {w:?}");
+        drop(w);
+        let archive = dir.join("whitelist.jsonl");
+        assert!(!archive.exists(), "no whitelist archive under sealing");
+        // 主对话不出现 [压缩白名单] 注入块。
+        let received = fake.received_requests();
+        assert!(
+            received
+                .iter()
+                .flat_map(|r| r.messages.iter())
+                .all(|m| !m.content.starts_with("[压缩白名单")),
+            "no whitelist message under sealing"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// THIN-HARNESS-REDESIGN R1 (§4.1 边界项, 2026-08-27)：compaction_
+    /// whitelist_add 已封存——跨批次的两条写入一律 sealed_tool_denied
+    /// 结构化拒绝（无白名单消息、零副作用、完整 ToolCompleted 事件链）。
+    #[tokio::test]
+    async fn whitelist_later_batch_refused() {
+        let dir = test_dir();
+        let journal = JournalRecorder::new(dir.clone());
+        let host = TestHost {
+            journal,
+            tool_result: Some(ToolResult {
+                output: "ok".to_string(),
+                exit_code: Some(0),
+                output_encoding: None,
+                structured: None,
+                ..Default::default()
+            }),
+        };
+        let whitelist_call = |id: &str, content: &str| {
+            ScriptedResponse::tool_calls(vec![ToolCall {
+                name: "compaction_whitelist_add".to_string(),
+                arguments: serde_json::json!({"content": content}),
+                call_id: id.to_string(),
+            }])
+        };
+        let fake = Arc::new(FakeProvider::new(vec![
+            whitelist_call("call-x1", "首轮条目"),
+            whitelist_call("call-x2", "次轮条目"),
+            ScriptedResponse::text("候选答案"),
+            ScriptedResponse::text("最终答案"),
+        ]));
+        let gateway: Arc<dyn ModelGateway> = fake.clone();
+        let controller = AgentLoopController::with_gateway(gateway);
+        controller
+            .run_turn(
+                &host,
+                "任务",
+                "RUN-WL-REFUSE",
+                MANIFEST,
+                0,
+                None,
+                None,
+                None,
+            )
+            .await
+            .unwrap();
+
+        // 两条写入均被 sealed_tool_denied 拒绝——无 [压缩白名单] 消息。
+        let received = fake.received_requests();
+        assert!(
+            received
+                .iter()
+                .flat_map(|r| r.messages.iter())
+                .all(|m| !m.content.starts_with("[压缩白名单")),
+            "no whitelist message under sealing: {received:?}"
+        );
+        // 两条拒绝均 journaled 为 sealed_tool_denied 的 ToolCompleted。
+        let failed_tool_completed: Vec<_> = events(&dir)
+            .into_iter()
+            .filter(|e| e.event_type == EventType::ToolCompleted)
+            .filter(|e| e.payload["tool"] == "compaction_whitelist_add")
+            .filter(|e| {
+                e.payload.get("error").and_then(|v| v.as_str()) == Some("sealed_tool_denied")
+            })
+            .collect();
+        assert!(
+            failed_tool_completed.len() >= 2,
+            "both writes sealed-journaled: {failed_tool_completed:?}"
+        );
+        // 白名单恒空。
+        let w = controller.whitelist.lock().unwrap();
+        assert!(w.is_empty(), "sealed whitelist write must not land: {w:?}");
+        drop(w);
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// THIN-HARNESS-REDESIGN R1 (§4.1 边界项, 2026-08-27)：compaction_
+    /// whitelist_add 已封存——内容校验（容量/空值）已不可达，调用一律
+    /// sealed_tool_denied（cap 配置不再生效；白名单恒空）。
+    #[tokio::test]
+    async fn whitelist_cap_refused() {
+        let dir = test_dir();
+        let journal = JournalRecorder::new(dir.clone());
+        let host = TestHost {
+            journal,
+            tool_result: None,
+        };
+        let fake = Arc::new(FakeProvider::new(vec![
+            ScriptedResponse::tool_calls(vec![ToolCall {
+                name: "compaction_whitelist_add".to_string(),
+                arguments: serde_json::json!({"content": "0123456789ABCDEFGHIJ"}), // 20 chars > cap 10
+                call_id: "call-y1".to_string(),
+            }]),
+            ScriptedResponse::text("候选答案"),
+            ScriptedResponse::text("最终答案"),
+        ]));
+        let gateway: Arc<dyn ModelGateway> = fake.clone();
+        let controller = AgentLoopController::with_gateway(gateway).with_whitelist_cap(10);
+        controller
+            .run_turn(&host, "任务", "RUN-WL-CAP", MANIFEST, 0, None, None, None)
+            .await
+            .unwrap();
+
+        let received = fake.received_requests();
+        let round2 = &received[1].messages;
+        assert!(
+            round2
+                .iter()
+                .filter(|m| m.role == Role::Tool)
+                .any(|m| m.content.contains("已封存") && m.content.contains("不再可用")),
+            "sealed refusal: {round2:?}"
+        );
+        // No whitelist message was created.
+        assert!(
+            round2.iter().all(|m| !m.content.starts_with("[压缩白名单")),
+            "no whitelist message on refusal: {round2:?}"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// THIN-HARNESS-REDESIGN R1 (§4.1 边界项, 2026-08-27)：compaction_
+    /// whitelist_add 已封存——空/空白内容校验已不可达，调用一律
+    /// sealed_tool_denied，无白名单消息、完整 ToolCompleted 事件链。
+    #[tokio::test]
+    async fn whitelist_empty_content_refused() {
+        let dir = test_dir();
+        let journal = JournalRecorder::new(dir.clone());
+        let host = TestHost {
+            journal,
+            tool_result: None,
+        };
+        let fake = Arc::new(FakeProvider::new(vec![
+            ScriptedResponse::tool_calls(vec![ToolCall {
+                name: "compaction_whitelist_add".to_string(),
+                arguments: serde_json::json!({"content": "   "}),
+                call_id: "call-z1".to_string(),
+            }]),
+            ScriptedResponse::text("候选答案"),
+            ScriptedResponse::text("最终答案"),
+        ]));
+        let gateway: Arc<dyn ModelGateway> = fake.clone();
+        let controller = AgentLoopController::with_gateway(gateway);
+        controller
+            .run_turn(&host, "任务", "RUN-WL-EMPTY", MANIFEST, 0, None, None, None)
+            .await
+            .unwrap();
+
+        let received = fake.received_requests();
+        let round2 = &received[1].messages;
+        assert!(
+            round2
+                .iter()
+                .filter(|m| m.role == Role::Tool)
+                .any(|m| m.content.contains("已封存") && m.content.contains("不再可用")),
+            "sealed refusal: {round2:?}"
+        );
+        assert!(
+            round2.iter().all(|m| !m.content.starts_with("[压缩白名单")),
+            "no whitelist message on empty refusal: {round2:?}"
+        );
+        let failed: Vec<_> = events(&dir)
+            .into_iter()
+            .filter(|e| e.event_type == EventType::ToolCompleted)
+            .filter(|e| e.payload["tool"] == "compaction_whitelist_add")
+            .filter(|e| {
+                e.payload.get("error").and_then(|v| v.as_str()) == Some("sealed_tool_denied")
+            })
+            .collect();
+        assert_eq!(failed.len(), 1, "sealed refusal journaled");
+        let w = controller.whitelist.lock().unwrap();
+        assert!(w.is_empty(), "sealed whitelist write must not land: {w:?}");
+        drop(w);
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// P0-D (2026-08-14): the summary requires a measured trigger — a run
+    /// whose rounds report usage BELOW the trigger never compacts, even at
+    /// the final-answer gap (the old A6 gap-only semantics are gone; the
+    /// measured threshold is the gate).
+    #[tokio::test]
+    async fn context_compact_requires_measured_trigger() {
+        let dir = test_dir();
+        let journal = JournalRecorder::new(dir.clone());
+        let host = TestHost {
+            journal,
+            tool_result: Some(ToolResult {
+                output: "x".repeat(600),
+                exit_code: Some(0),
+                output_encoding: None,
+                structured: None,
+                ..Default::default()
+            }),
+        };
+        let tool_call = |id: &str| ScriptedResponse {
+            text: None,
+            tool_calls: vec![ToolCall {
+                name: "read_file".to_string(),
+                arguments: serde_json::json!({"target_file": "a.txt"}),
+                call_id: id.to_string(),
+            }],
+            finish_reason: FinishReason::ToolCalls,
+            reasoning_content: None,
+            prompt_tokens: Some(100), // below the tiny test trigger
+        };
+        let fake = Arc::new(FakeProvider::new(vec![
+            tool_call("call-g1"),
+            tool_call("call-g2"),
+            tool_call("call-g3"),
+            ScriptedResponse::text("候选答案").with_prompt_tokens(100),
+            ScriptedResponse::text("最终答案").with_prompt_tokens(100),
+        ]));
+        let gateway: Arc<dyn ModelGateway> = fake.clone();
+        let controller = AgentLoopController::with_gateway(gateway)
+            .with_context_compact(1_000, 400, 1, 100_000)
+            .with_summary_guards(1, 1.0);
+        controller
+            .run_turn(
+                &host,
+                "压缩测试",
+                "RUN-COMPACT-NOTRIG",
+                MANIFEST,
+                0,
+                None,
+                None,
+                None,
+            )
+            .await
+            .unwrap();
+
+        let compact_events: Vec<serde_json::Value> = events(&dir)
+            .into_iter()
+            .filter(|e| e.event_type == EventType::ContextCompressed)
+            .map(|e| e.payload)
+            .collect();
+        assert!(compact_events.is_empty(), "{compact_events:?}");
+        for request in fake.received_requests() {
+            assert!(
+                request
+                    .messages
+                    .iter()
+                    .all(|m| !m.content.contains("[前文上下文已压缩")),
+                "no marker without trigger: {request:?}"
+            );
+        }
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A6: the min-round cooldown suppresses compaction — a trigger token
+    /// count alone is not enough.
+    #[tokio::test]
+    async fn context_compact_respects_min_rounds_cooldown() {
+        let dir = test_dir();
+        let journal = JournalRecorder::new(dir.clone());
+        let host = TestHost {
+            journal,
+            tool_result: Some(ToolResult {
+                output: "ok".to_string(),
+                exit_code: Some(0),
+                output_encoding: None,
+                structured: None,
+                ..Default::default()
+            }),
+        };
+        let tool_call = |id: &str| ScriptedResponse {
+            text: None,
+            tool_calls: vec![ToolCall {
+                name: "read_file".to_string(),
+                arguments: serde_json::json!({"target_file": "a.txt"}),
+                call_id: id.to_string(),
+            }],
+            finish_reason: FinishReason::ToolCalls,
+            reasoning_content: None,
+            prompt_tokens: Some(5_000),
+        };
+        let fake = Arc::new(FakeProvider::new(vec![
+            tool_call("call-b1"),
+            tool_call("call-b2"),
+            ScriptedResponse::text("第一轮完成").with_prompt_tokens(5_000),
+            ScriptedResponse::text("最终答案").with_prompt_tokens(5_000),
+        ]));
+        let gateway: Arc<dyn ModelGateway> = fake.clone();
+        let controller =
+            AgentLoopController::with_gateway(gateway).with_context_compact(1_000, 400, 5, 100_000); // cooldown longer than the run
+        controller
+            .run_turn(
+                &host,
+                "压缩测试",
+                "RUN-COMPACT-NO",
+                MANIFEST,
+                0,
+                None,
+                None,
+                None,
+            )
+            .await
+            .unwrap();
+
+        let compact_events: Vec<serde_json::Value> = events(&dir)
+            .into_iter()
+            .filter(|e| e.event_type == EventType::ContextCompressed)
+            .map(|e| e.payload)
+            .collect();
+        assert!(
+            compact_events.is_empty(),
+            "cooldown suppressed: {compact_events:?}"
+        );
+        // No marker in any request.
+        for request in fake.received_requests() {
+            assert!(
+                request
+                    .messages
+                    .iter()
+                    .all(|m| !m.content.contains("[前文上下文已压缩")),
+                "no marker without compaction: {request:?}"
+            );
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// P0-D window guard (ADR-0010 v1.10 §2): measured tokens above
+    /// `safety_tokens` (the 200K fallback) fire the template summary
+    /// IMMEDIATELY — the cooldown is bypassed so a high-start task never
+    /// approaches the provider window while waiting for the interval. The
+    /// guard re-fires on every over-safety round that still has droppable
+    /// content, journaling the honest (short) rounds_since_last_compaction.
+    #[tokio::test]
+    async fn context_compact_safety_trigger_bypasses_cooldown() {
+        let dir = test_dir();
+        let journal = JournalRecorder::new(dir.clone());
+        let host = TestHost {
+            journal,
+            tool_result: Some(ToolResult {
+                output: "x".repeat(600), // fat rounds — droppable content
+                exit_code: Some(0),
+                output_encoding: None,
+                structured: None,
+                ..Default::default()
+            }),
+        };
+        let tool_call = |id: &str| ScriptedResponse {
+            text: None,
+            tool_calls: vec![ToolCall {
+                name: "read_file".to_string(),
+                arguments: serde_json::json!({"target_file": "a.txt"}),
+                call_id: id.to_string(),
+            }],
+            finish_reason: FinishReason::ToolCalls,
+            reasoning_content: None,
+            prompt_tokens: Some(300_000), // over the safety gate
+        };
+        let fake = Arc::new(FakeProvider::new(vec![
+            tool_call("call-s1"),
+            tool_call("call-s2"),
+            tool_call("call-s3"),
+            tool_call("call-s4"),
+            // 机械模式（2026-08-18 B 定案）：两次 fallback 压缩均零模型
+            // 调用——round 3 后与 round 4 后各触发一次，脚本无摘要项。
+            ScriptedResponse::text("候选答案"),
+            ScriptedResponse::text("最终答案"),
+        ]));
+        let gateway: Arc<dyn ModelGateway> = fake.clone();
+        // Cooldown 20 — far longer than the run — but the fallback trigger
+        // (100_000) must fire regardless of the cooldown.
+        let controller = AgentLoopController::with_gateway(gateway)
+            .with_context_compact(150_000, 400, 20, 100_000)
+            .with_summary_guards(1, 1.0);
+        controller
+            .run_turn(
+                &host,
+                "压缩测试",
+                "RUN-COMPACT-SAFE",
+                MANIFEST,
+                0,
+                None,
+                None,
+                None,
+            )
+            .await
+            .unwrap();
+
+        let compact_events: Vec<serde_json::Value> = events(&dir)
+            .into_iter()
+            .filter(|e| e.event_type == EventType::ContextCompressed)
+            .map(|e| e.payload)
+            .collect();
+        assert_eq!(compact_events.len(), 2, "fallback fired twice");
+        // Every summary happened FAR before the 20-round cooldown — the
+        // payload honestly reports the bypassed interval.
+        for event in &compact_events {
+            assert_eq!(event["reason"], "fallback");
+            assert_eq!(event["trigger_tokens"], 300_000);
+            assert!(
+                event["rounds_since_last_compaction"].as_u64().unwrap() < 20,
+                "cooldown bypassed: {event:?}"
+            );
+        }
+
+        // The marker reached a request after the first fallback summary.
+        let received = fake.received_requests();
+        assert!(received.len() >= 3, "{received:?}");
+        assert!(
+            received.iter().any(|r| r
+                .messages
+                .iter()
+                .any(|m| m.content.starts_with("[前文上下文已压缩"))),
+            "marker present after fallback summary"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// 2026-08-18 B 定案（ADR-0010 §14.29）：压缩为纯机械——零模型调用、
+    /// 无 summary_incomplete 终止态；fallback 触发下存档恒写入、marker 恒
+    /// 携带真实 digest/路径，会话机械截断不滞留窗口之上。
+    #[tokio::test]
+    async fn context_compact_mechanical_mode_zero_model_calls() {
+        let dir = test_dir();
+        let journal = JournalRecorder::new(dir.clone());
+        let host = TestHost {
+            journal,
+            tool_result: Some(ToolResult {
+                output: "x".repeat(600),
+                exit_code: Some(0),
+                output_encoding: None,
+                structured: None,
+                ..Default::default()
+            }),
+        };
+        let tool_call = |id: &str| ScriptedResponse {
+            text: None,
+            tool_calls: vec![ToolCall {
+                name: "read_file".to_string(),
+                arguments: serde_json::json!({"target_file": "a.txt"}),
+                call_id: id.to_string(),
+            }],
+            finish_reason: FinishReason::ToolCalls,
+            reasoning_content: None,
+            prompt_tokens: Some(300_000), // over the fallback gate
+        };
+        let fake = Arc::new(FakeProvider::new(vec![
+            tool_call("call-f1"),
+            tool_call("call-f2"),
+            tool_call("call-f3"),
+            // 机械模式：脚本即主循环请求数——压缩不消费任何模型项。
+            ScriptedResponse::text("候选答案"),
+            ScriptedResponse::text("最终答案"),
+        ]));
+        let gateway: Arc<dyn ModelGateway> = fake.clone();
+        let controller = AgentLoopController::with_gateway(gateway)
+            .with_context_compact(150_000, 400, 20, 100_000)
+            .with_summary_guards(1, 1.0);
+        controller
+            .run_turn(
+                &host,
+                "压缩测试",
+                "RUN-COMPACT-FAIL",
+                MANIFEST,
+                0,
+                None,
+                None,
+                None,
+            )
+            .await
+            .unwrap();
+
+        let compact_events: Vec<serde_json::Value> = events(&dir)
+            .into_iter()
+            .filter(|e| e.event_type == EventType::ContextCompressed)
+            .map(|e| e.payload)
+            .collect();
+        assert_eq!(compact_events.len(), 1, "one mechanical compaction");
+        assert_eq!(compact_events[0]["mode"], "mechanical");
+        assert_eq!(compact_events[0]["summary_incomplete"], false);
+        assert_eq!(compact_events[0]["reason"], "fallback");
+        assert!(compact_events[0]["summary_id"].as_str().is_some());
+        assert!(compact_events[0]["summary_digest"].as_str().is_some());
+        assert!(compact_events[0]["summary_path"].as_str().is_some());
+
+        // 零模型调用：3 工具轮 + 候选答案 + 最终答案 = 5 请求。
+        let received = fake.received_requests();
+        assert_eq!(received.len(), 5, "{received:?}");
+        // The marker reaches the model and carries the placeholder slots —
+        // no `summary_incomplete` termination flag.
+        let last = received.last().unwrap();
+        assert!(
+            last.messages
+                .iter()
+                .any(|m| m.content.starts_with("[前文上下文已压缩")),
+            "marker present: {:?}",
+            last.messages
+        );
+        assert!(
+            !last
+                .messages
+                .iter()
+                .any(|m| m.content.contains("summary_incomplete")),
+            "机械模式 marker 不得携带 termination 标志: {:?}",
+            last.messages
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// P0-D review fix (2026-08-14, ADR-0010 v1.14) + FUS-LEDGER-FOLD-STATE
+    /// (2026-08-18, ADR-0010 §14.26): a reduction guard that cannot be
+    /// satisfied retries across trigger rounds WITHOUT interrupting
+    /// content or raw truncation; after GUARD_RETRY_LIMIT consecutive
+    /// failures one compaction is forced and reported `guard_failed`.
+    #[test]
+    fn context_compact_defaults_follow_v1_14_review() {
+        let cfg = ContextCompactConfig::default();
+        // Cooldown is 2 MODEL rounds (review fix — avoids long-action
+        // accumulation); the session-end gate defaults to the 160K rhythm
+        // threshold; the recovery pre-check stays 200K/160K.
+        assert_eq!(cfg.min_rounds, 2);
+        assert_eq!(cfg.session_end_trigger_tokens, 160_000);
+        assert_eq!(cfg.recovery_trigger_tokens, 200_000);
+        assert_eq!(cfg.recovery_target_tokens, 160_000);
+        assert_eq!(cfg.recent_tail_rounds, 2);
+        // FUS-LEDGER-FOLD-BRIDGE (2026-08-19, ADR-0010 §14.32): the folded
+        // view keeps the newest complete rounds within an 8K real-token
+        // bridge budget after the fixed pointer (`fold_tail_rounds`
+        // semantics retired; compaction drain tail stays 2).
+        assert_eq!(cfg.fold_tail_tokens, DEFAULT_FOLD_TAIL_TOKENS);
+        assert_eq!(DEFAULT_FOLD_TAIL_TOKENS, 8_000);
+        // 2026-08-18 adjudication (ADR-0010 §14.26): 192K rhythm / 256K
+        // fallback / 128K fold-advance trigger.
+        assert_eq!(cfg.trigger_tokens, 192_000);
+        assert_eq!(cfg.safety_tokens, 256_000);
+        assert_eq!(cfg.fold_trigger_tokens, DEFAULT_FOLD_TRIGGER_TOKENS);
+        assert_eq!(DEFAULT_FOLD_TRIGGER_TOKENS, 128_000);
+    }
+
+    /// FUS-LEDGER-FOLD-BRIDGE (2026-08-19, ADR-0010 §14.32): env parse rule
+    /// for `ORZ_FOLD_TAIL_TOKENS` — trimmed positive integer; absent/invalid/
+    /// zero = default.
+    #[test]
+    fn fold_tail_tokens_parse_rule() {
+        assert_eq!(crate::compact::parse_fold_tail_tokens("8000"), Some(8_000));
+        assert_eq!(
+            crate::compact::parse_fold_tail_tokens(" 8000 "),
+            Some(8_000)
+        );
+        assert_eq!(crate::compact::parse_fold_tail_tokens("1"), Some(1));
+        assert_eq!(crate::compact::parse_fold_tail_tokens("0"), None);
+        assert_eq!(crate::compact::parse_fold_tail_tokens("-1"), None);
+        assert_eq!(crate::compact::parse_fold_tail_tokens("abc"), None);
+        assert_eq!(crate::compact::parse_fold_tail_tokens(""), None);
+    }
+
+    /// FUS-LEDGER-FOLD-STATE (2026-08-18, ADR-0010 §14.26): the fold point
+    /// advances mechanically once the ESTIMATED request view reaches
+    /// `fold_trigger_tokens` (loop-top gap, zero model calls). Before the
+    /// advance every request view is `messages` verbatim (no per-request
+    /// stateless collapse — byte-stable from the first round); between
+    /// advances the request view is the anchored view + pure append
+    /// (byte-identical prefix), and only a mechanical advance (a new
+    /// frozen ledger version) rewrites the prefix — one accepted rewrite
+    /// per fold window.
+    #[tokio::test]
+    async fn fold_state_advances_once_and_prefix_stays_stable() {
+        struct SeqHost {
+            journal: JournalRecorder,
+            outputs: Vec<String>,
+            calls: AtomicU64,
+            cwd: PathBuf,
+        }
+        #[async_trait]
+        impl LoopHost for SeqHost {
+            fn journal(&self) -> &JournalRecorder {
+                &self.journal
+            }
+            fn tools_registry(&self) -> &dyn ToolRegistry {
+                &EmptyRegistry
+            }
+            fn session_cwd(&self) -> PathBuf {
+                self.cwd.clone()
+            }
+            async fn call_tool(
+                &self,
+                _name: &str,
+                _arguments: serde_json::Value,
+                _call_id: &str,
+            ) -> Result<ToolResult, ToolError> {
+                let n = self.calls.fetch_add(1, Ordering::SeqCst) as usize;
+                Ok(ToolResult {
+                    output: self.outputs[n % self.outputs.len()].clone(),
+                    exit_code: Some(0),
+                    output_encoding: None,
+                    structured: None,
+                    ..Default::default()
+                })
+            }
+            async fn request_permission(
+                &self,
+                _risk: RiskClass,
+                _tool: &str,
+                _arguments: &serde_json::Value,
+            ) -> Result<PermitDecision, PermitError> {
+                Ok(PermitDecision::AllowOnce)
+            }
+        }
+        let dir = test_dir();
+        let journal = JournalRecorder::new(dir.clone());
+        let host = SeqHost {
+            journal,
+            outputs: vec![
+                "AAAA".repeat(200),
+                "BBBB".repeat(200),
+                "CCCC".repeat(200),
+                "DDDD".repeat(200),
+            ],
+            calls: AtomicU64::new(0),
+            cwd: dir.clone(),
+        };
+        let tool_call = |id: &str| ScriptedResponse {
+            text: None,
+            tool_calls: vec![ToolCall {
+                name: "read_file".to_string(),
+                arguments: serde_json::json!({"target_file": "a.txt"}),
+                call_id: id.to_string(),
+            }],
+            finish_reason: FinishReason::ToolCalls,
+            reasoning_content: None,
+            prompt_tokens: Some(1_000),
+        };
+        let mut script = Vec::new();
+        for k in 0..9 {
+            script.push(tool_call(&format!("call-{k}")));
+        }
+        // The counterexample gate adds one text-only round before the
+        // final answer — keep the script ahead of the loop.
+        script.push(ScriptedResponse::text("反例自查通过").with_prompt_tokens(1_000));
+        script.push(ScriptedResponse::text("最终答案").with_prompt_tokens(1_000));
+        let fake = Arc::new(FakeProvider::new(script));
+        let gateway: Arc<dyn ModelGateway> = fake.clone();
+        // Compaction kept far away (huge triggers + long cooldown) — the
+        // test isolates the fold mechanism.
+        let controller = AgentLoopController::with_gateway(gateway)
+            .with_context_compact(100_000_000, 400, 20, 100_000_000)
+            // 阈值高于「preamble + 指针 + 桥（100 token → 100 估计）」的
+            // 固定基线，使触发复位断言（推进后估算 < 阈值）真实成立。
+            .with_fold_trigger_tokens(2_000)
+            // FUS-LEDGER-FOLD-BRIDGE (2026-08-19, ADR-0010 §14.32): 测试轮
+            // 输出 ~800 字符（估计 ~400），桥预算 100 token（估计 200）
+            // 使推进时只保留最新 1 轮——否则 9 轮全在 8K 桥内、永不推进。
+            .with_fold_tail_tokens(100);
+        controller
+            .run_turn(&host, "折叠测试", "RUN-FOLD", MANIFEST, 0, None, None, None)
+            .await
+            .unwrap();
+
+        let received = fake.received_requests();
+        assert!(received.len() >= 9, "{received:?}");
+        let ledger_idx = received
+            .iter()
+            .position(|r| {
+                r.messages.iter().any(|m| {
+                    m.content
+                        .starts_with(crate::action_ledger::LEDGER_FOLD_POINTER_PREFIX)
+                })
+            })
+            .expect("a mechanical fold advance happened");
+        assert!(ledger_idx > 0, "the first request must stay verbatim");
+        for r in &received[..ledger_idx] {
+            assert!(
+                r.messages.iter().all(|m| !m
+                    .content
+                    .starts_with(crate::action_ledger::LEDGER_FOLD_POINTER_PREFIX)),
+                "no ledger before the mechanical trigger: {r:?}"
+            );
+        }
+        // FUS-LEDGER-FOLD-STATE external-file design (2026-08-18, ADR-0010
+        // §14.28): after the first advance the [preamble + fixed pointer]
+        // prefix is BYTE-IDENTICAL in every later request — the folded
+        // rows live in the external file, so advances never rewrite the
+        // view prefix (the cache-critical invariant; measured 81.9% →
+        // ~91–93%).
+        let pointer_of = |r: &ModelRequest| {
+            r.messages
+                .iter()
+                .find(|m| {
+                    m.content
+                        .starts_with(crate::action_ledger::LEDGER_FOLD_POINTER_PREFIX)
+                })
+                .map(|m| m.content.clone())
+        };
+        let anchor_ptr = pointer_of(&received[ledger_idx]).unwrap();
+        let anchor_prefix: Vec<Message> = received[ledger_idx]
+            .messages
+            .iter()
+            .take_while(|m| {
+                !m.content
+                    .starts_with(crate::action_ledger::LEDGER_FOLD_POINTER_PREFIX)
+            })
+            .cloned()
+            .collect();
+        for (i, r) in received.iter().enumerate().skip(ledger_idx) {
+            assert_eq!(
+                pointer_of(r).as_deref(),
+                Some(anchor_ptr.as_str()),
+                "pointer message rewritten at request {i}"
+            );
+            assert!(
+                r.messages
+                    .iter()
+                    .take(anchor_prefix.len())
+                    .eq(anchor_prefix.iter()),
+                "preamble rewritten at request {i}"
+            );
+        }
+        // Every real fold advance journals `ledger_fold_advance` with the
+        // new fold point and the triggering estimate — the mechanical
+        // advances (and their miss cost) are attributable in the event
+        // chain. Trigger reset: advances must be strictly fewer than the
+        // post-fold requests (the view after an advance is pointer + 1
+        // round < threshold — no per-request fold storm).
+        let fold_events = events(&dir)
+            .into_iter()
+            .filter(|e| e.event_type == EventType::LedgerFoldAdvance)
+            .collect::<Vec<_>>();
+        assert!(!fold_events.is_empty(), "fold advance event missing");
+        assert!(
+            fold_events.len() < received.len() - ledger_idx,
+            "advances must be strictly fewer than post-fold requests: {} / {}",
+            fold_events.len(),
+            received.len() - ledger_idx
+        );
+        for ev in &fold_events {
+            let fold_start = ev.payload["fold_start"].as_u64().unwrap();
+            let fold_cut = ev.payload["fold_cut"].as_u64().unwrap();
+            let rounds_folded = ev.payload["rounds_folded"].as_u64().unwrap();
+            assert!(fold_start < fold_cut, "{ev:?}");
+            assert!(rounds_folded >= 1, "{ev:?}");
+            assert!(
+                ev.payload["view_estimate_tokens"].as_u64().unwrap() >= 2_000,
+                "{ev:?}"
+            );
+            // 触发复位（2026-08-18 审查修复补足 S2 测试 #3 的直接口径）：
+            // 推进后视图估算必须回落到阈值之下。
+            assert!(
+                ev.payload["view_estimate_after"].as_u64().unwrap() < 2_000,
+                "post-advance estimate must reset below the trigger: {ev:?}"
+            );
+            assert_eq!(ev.payload["agent_role"], "main", "{ev:?}");
+        }
+        // Within a fold window fold_cut is strictly increasing (each
+        // advance moves it forward); a reset only happens at compaction.
+        let cuts: Vec<u64> = fold_events
+            .iter()
+            .map(|e| e.payload["fold_cut"].as_u64().unwrap())
+            .collect();
+        assert!(cuts.windows(2).all(|w| w[0] < w[1]), "{cuts:?}");
+        // The folded rows land in the external append-only projection.
+        let ledger_file = dir.join(".gsa").join("ledger").join("current.md");
+        let text = std::fs::read_to_string(&ledger_file).expect("external ledger file written");
+        let lines: Vec<&str> = text.lines().collect();
+        assert!(!lines.is_empty(), "external ledger must hold folded rows");
+        assert!(
+            lines.iter().all(|l| l.starts_with('[')),
+            "every external row carries a global seq: {text}"
+        );
+        assert!(
+            lines
+                .iter()
+                .any(|l| l.contains("read_file") && l.contains("目标=")),
+            "rows carry tool/target/pointer/reply: {text}"
+        );
+    }
+
+    /// FUS-LEDGER-FOLD-STATE external-file design (2026-08-18, ADR-0010
+    /// §14.28 审查修复): a persistent external-ledger append failure must
+    /// NOT spin the loop — after FOLD_WRITE_FAILURE_LIMIT consecutive
+    /// failures folding is disabled for the loop, the session keeps making
+    /// model requests with the unfolded view, and every failure is
+    /// journaled (`ledger_fold_write_failed`; 此前 `continue` 会在持久写
+    /// 失败时形成无模型调用的空转).
+    #[tokio::test]
+    async fn fold_append_failure_disables_fold_and_keeps_session_going() {
+        struct SeqHost {
+            journal: JournalRecorder,
+            outputs: Vec<String>,
+            calls: AtomicU64,
+            cwd: PathBuf,
+        }
+        #[async_trait]
+        impl LoopHost for SeqHost {
+            fn journal(&self) -> &JournalRecorder {
+                &self.journal
+            }
+            fn tools_registry(&self) -> &dyn ToolRegistry {
+                &EmptyRegistry
+            }
+            fn session_cwd(&self) -> PathBuf {
+                self.cwd.clone()
+            }
+            async fn call_tool(
+                &self,
+                _name: &str,
+                _arguments: serde_json::Value,
+                _call_id: &str,
+            ) -> Result<ToolResult, ToolError> {
+                let n = self.calls.fetch_add(1, Ordering::SeqCst) as usize;
+                Ok(ToolResult {
+                    output: self.outputs[n % self.outputs.len()].clone(),
+                    exit_code: Some(0),
+                    output_encoding: None,
+                    structured: None,
+                    ..Default::default()
+                })
+            }
+            async fn request_permission(
+                &self,
+                _risk: RiskClass,
+                _tool: &str,
+                _arguments: &serde_json::Value,
+            ) -> Result<PermitDecision, PermitError> {
+                Ok(PermitDecision::AllowOnce)
+            }
+        }
+        let dir = test_dir();
+        // 用文件占住 `.gsa/ledger` 目录位：`create_dir_all` 必然失败，
+        // 复现持久写失败路径。
+        std::fs::create_dir_all(dir.join(".gsa")).unwrap();
+        std::fs::write(dir.join(".gsa").join("ledger"), "不是目录").unwrap();
+        let journal = JournalRecorder::new(dir.clone());
+        let host = SeqHost {
+            journal,
+            outputs: vec![
+                "AAAA".repeat(200),
+                "BBBB".repeat(200),
+                "CCCC".repeat(200),
+                "DDDD".repeat(200),
+            ],
+            calls: AtomicU64::new(0),
+            cwd: dir.clone(),
+        };
+        let tool_call = |id: &str| ScriptedResponse {
+            text: None,
+            tool_calls: vec![ToolCall {
+                name: "read_file".to_string(),
+                arguments: serde_json::json!({"target_file": "a.txt"}),
+                call_id: id.to_string(),
+            }],
+            finish_reason: FinishReason::ToolCalls,
+            reasoning_content: None,
+            prompt_tokens: Some(1_000),
+        };
+        let mut script = Vec::new();
+        for k in 0..9 {
+            script.push(tool_call(&format!("call-{k}")));
+        }
+        script.push(ScriptedResponse::text("反例自查通过").with_prompt_tokens(1_000));
+        script.push(ScriptedResponse::text("最终答案").with_prompt_tokens(1_000));
+        let expected_requests = script.len();
+        let fake = Arc::new(FakeProvider::new(script));
+        let gateway: Arc<dyn ModelGateway> = fake.clone();
+        let controller = AgentLoopController::with_gateway(gateway)
+            .with_context_compact(100_000_000, 400, 20, 100_000_000)
+            .with_fold_trigger_tokens(1_000)
+            // FUS-LEDGER-FOLD-BRIDGE (2026-08-19, ADR-0010 §14.32): 桥预算
+            // 100 token（估计 200）——否则 9 轮全在桥内、推进永不发生、
+            // 写失败路径无法复现。
+            .with_fold_tail_tokens(100);
+        controller
+            .run_turn(
+                &host,
+                "折叠写失败",
+                "RUN-FOLD-FAIL",
+                MANIFEST,
+                0,
+                None,
+                None,
+                None,
+            )
+            .await
+            .unwrap();
+
+        let received = fake.received_requests();
+        assert_eq!(
+            received.len(),
+            expected_requests,
+            "会话必须走完所有脚本请求（持久写失败不得空转）"
+        );
+        assert!(
+            received.iter().all(|r| !r.messages.iter().any(|m| {
+                m.content
+                    .starts_with(crate::action_ledger::LEDGER_FOLD_POINTER_PREFIX)
+            })),
+            "折叠从未成功：任何请求都不含指针消息"
+        );
+        let failed = events(&dir)
+            .into_iter()
+            .filter(|e| e.event_type == EventType::LedgerFoldWriteFailed)
+            .collect::<Vec<_>>();
+        assert!(
+            failed.len() >= crate::agent_loop::FOLD_WRITE_FAILURE_LIMIT as usize,
+            "每次失败都要 journal 留痕: {}",
+            failed.len()
+        );
+        assert!(
+            failed.iter().all(|e| e.payload["agent_role"] == "main"),
+            "{failed:?}"
+        );
+        assert!(
+            failed
+                .last()
+                .map(|e| e.payload["disabled"].as_bool().unwrap())
+                .unwrap_or(false),
+            "预算耗尽后折叠必须被禁用: {failed:?}"
+        );
+        // 失败序列的 attempt 严格递增。
+        let attempts: Vec<u64> = failed
+            .iter()
+            .map(|e| e.payload["attempt"].as_u64().unwrap())
+            .collect();
+        assert!(attempts.windows(2).all(|w| w[0] < w[1]), "{attempts:?}");
+    }
+
+    /// FUS-LEDGER-FOLD-STATE (2026-08-18, ADR-0010 §14.26) × compaction:
+    /// the fold advances BEFORE the summary fires; the summary call's
+    /// input is the SAME stateful folded view (摘要输入与主请求同源 — it
+    /// carries the frozen ledger block); mechanical compaction (2026-08-18
+    /// B 定案) then resets the fold state (marker request has no ledger)
+    /// and the fold re-accumulates from the marker (a later request shows
+    /// the ledger again). The compaction archive preserves the frozen
+    /// ledger the model saw (设计 §3.5 第 1 步 — the archive is the only
+    /// surviving ledger snapshot after the folded region is drained).
+    #[tokio::test]
+    async fn fold_state_resets_after_mechanical_compaction_and_archive_keeps_pointer() {
+        struct SeqHost {
+            journal: JournalRecorder,
+            outputs: Vec<String>,
+            calls: AtomicU64,
+            cwd: PathBuf,
+        }
+        #[async_trait]
+        impl LoopHost for SeqHost {
+            fn journal(&self) -> &JournalRecorder {
+                &self.journal
+            }
+            fn tools_registry(&self) -> &dyn ToolRegistry {
+                &EmptyRegistry
+            }
+            fn session_cwd(&self) -> PathBuf {
+                self.cwd.clone()
+            }
+            async fn call_tool(
+                &self,
+                _name: &str,
+                _arguments: serde_json::Value,
+                _call_id: &str,
+            ) -> Result<ToolResult, ToolError> {
+                let n = self.calls.fetch_add(1, Ordering::SeqCst) as usize;
+                Ok(ToolResult {
+                    output: self.outputs[n % self.outputs.len()].clone(),
+                    exit_code: Some(0),
+                    output_encoding: None,
+                    structured: None,
+                    ..Default::default()
+                })
+            }
+            async fn request_permission(
+                &self,
+                _risk: RiskClass,
+                _tool: &str,
+                _arguments: &serde_json::Value,
+            ) -> Result<PermitDecision, PermitError> {
+                Ok(PermitDecision::AllowOnce)
+            }
+        }
+        let dir = test_dir();
+        let journal = JournalRecorder::new(dir.clone());
+        let host = SeqHost {
+            journal,
+            outputs: vec![
+                "AAAA".repeat(300),
+                "BBBB".repeat(300),
+                "CCCC".repeat(300),
+                "DDDD".repeat(300),
+            ],
+            calls: AtomicU64::new(0),
+            cwd: dir.clone(),
+        };
+        let tool_call = |id: &str| ScriptedResponse {
+            text: None,
+            tool_calls: vec![ToolCall {
+                name: "read_file".to_string(),
+                arguments: serde_json::json!({"target_file": "a.txt"}),
+                call_id: id.to_string(),
+            }],
+            finish_reason: FinishReason::ToolCalls,
+            reasoning_content: None,
+            // 20K keeps the first rhythm trigger (cooldown 5, round 6's
+            // loop-top) on the intended mechanical compaction path.
+            prompt_tokens: Some(20_000),
+        };
+        // Rhythm (cooldown 5) fires at round 6's loop-top (the counter
+        // reaches 5 when round 5 completes): rounds 0..10 (11 tool rounds)
+        // cross two rhythm triggers, both compactions are mechanical (no
+        // model items consumed), and the two text rounds cover the
+        // counterexample gate + final answer.
+        let mut script = Vec::new();
+        for k in 0..5 {
+            script.push(tool_call(&format!("call-{k}")));
+        }
+        for k in 5..11 {
+            script.push(tool_call(&format!("call-{k}")));
+        }
+        script.push(ScriptedResponse::text("反例自查通过").with_prompt_tokens(20_000));
+        script.push(ScriptedResponse::text("最终答案").with_prompt_tokens(20_000));
+        let fake = Arc::new(FakeProvider::new(script));
+        let gateway: Arc<dyn ModelGateway> = fake.clone();
+        // Rhythm cooldown 5 → the fold (trigger 1K) advances several
+        // rounds BEFORE the summary (trigger 1K + cooldown 5) fires.
+        let controller = AgentLoopController::with_gateway(gateway)
+            .with_context_compact(1_000, 400, 5, 100_000_000)
+            .with_summary_guards(1, 1.0)
+            .with_fold_trigger_tokens(1_000)
+            // FUS-LEDGER-FOLD-BRIDGE (2026-08-19, ADR-0010 §14.32): 桥预算
+            // 100 token（估计 200）——否则 11 轮全在桥内、折叠不推进，
+            // 「折叠先于压缩」的联动断言无法成立。
+            .with_fold_tail_tokens(100);
+        controller
+            .run_turn(
+                &host,
+                "折叠压缩联动",
+                "RUN-FOLD-COMPACT",
+                MANIFEST,
+                0,
+                None,
+                None,
+                None,
+            )
+            .await
+            .unwrap();
+
+        let received = fake.received_requests();
+        let has_ledger = |r: &ModelRequest| {
+            r.messages.iter().any(|m| {
+                m.content
+                    .starts_with(crate::action_ledger::LEDGER_FOLD_POINTER_PREFIX)
+            })
+        };
+        let has_marker = |r: &ModelRequest| {
+            r.messages
+                .iter()
+                .any(|m| m.content.starts_with("[前文上下文已压缩"))
+        };
+        let ledger_idx = received.iter().position(has_ledger).expect("fold advance");
+        let marker_idx = received
+            .iter()
+            .position(has_marker)
+            .expect("compaction marker");
+        assert!(
+            ledger_idx < marker_idx,
+            "the fold must advance before the summary fires (fold {ledger_idx} / marker {marker_idx})"
+        );
+        // 机械模式（2026-08-18 B 定案）：压缩零模型调用——11 工具轮 +
+        // 反例自查 + 最终答案 = 13 请求，脚本即主循环请求数。
+        assert_eq!(received.len(), 13, "机械压缩零模型调用: {received:?}");
+        // The fold re-accumulates from the marker — after the first
+        // compaction only the tail rounds survive (no foldable round
+        // outside the tail at first), so the ledger reappears once the
+        // rounds grow again.
+        assert!(
+            received[marker_idx..].iter().any(has_ledger),
+            "fold re-accumulates after compaction: {received:?}"
+        );
+        // FUS-LEDGER-FOLD-STATE review fix (2026-08-18, 设计 §3.5 第 1 步):
+        // each compaction archive preserves the frozen ledger the model
+        // saw — the fixed pointer message (the folded rows survive in the
+        // append-only external ledger file, which compaction never drains;
+        // ADR-0010 §14.28 external-file design).
+        let archive_dir = dir.join(".gsa").join("compaction");
+        let archives: Vec<_> = std::fs::read_dir(&archive_dir)
+            .expect("archive dir exists")
+            .filter_map(|e| e.ok())
+            .map(|e| e.path())
+            .collect();
+        assert_eq!(archives.len(), 2, "{archives:?}");
+        let ledger_file = dir.join(".gsa").join("ledger").join("current.md");
+        let ledger_path_display = ledger_file.display().to_string();
+        let pointer = crate::action_ledger::build_pointer_message(&ledger_file);
+        for path in &archives {
+            let archive = std::fs::read_to_string(path).unwrap();
+            assert!(
+                archive.contains("## 折叠视图（冻结快照：外挂指针）"),
+                "frozen ledger section missing from archive: {archive}"
+            );
+            assert!(
+                archive.contains(&pointer),
+                "frozen ledger block missing from archive: {archive}"
+            );
+        }
+        // The marker points a restored conversation at the surviving
+        // append-only external ledger.
+        let marker_req = &received[marker_idx];
+        let marker = marker_req
+            .messages
+            .iter()
+            .find(|m| m.content.starts_with("[前文上下文已压缩"))
+            .map(|m| m.content.clone())
+            .unwrap();
+        assert!(
+            marker.contains(&format!("历史摘要累积于 {ledger_path_display}")),
+            "marker must carry the external ledger path: {marker}"
+        );
+        // The external ledger exists, holds rows, and its seqs continue
+        // after the compaction (fold reset does not reset the file).
+        let text = std::fs::read_to_string(&ledger_file).expect("external ledger file written");
+        let lines: Vec<&str> = text.lines().collect();
+        assert!(!lines.is_empty(), "external ledger must hold folded rows");
+        assert!(lines.iter().all(|l| l.starts_with('[')), "{text}");
+    }
+
+    #[tokio::test]
+    async fn context_compact_guard_failure_retries_then_forces() {
+        let dir = test_dir();
+        let journal = JournalRecorder::new(dir.clone());
+        let host = TestHost {
+            journal,
+            tool_result: Some(ToolResult {
+                output: "x".repeat(600),
+                exit_code: Some(0),
+                output_encoding: None,
+                structured: None,
+                ..Default::default()
+            }),
+        };
+        let tool_call = |id: &str| ScriptedResponse {
+            text: None,
+            tool_calls: vec![ToolCall {
+                name: "read_file".to_string(),
+                arguments: serde_json::json!({"target_file": "a.txt"}),
+                call_id: id.to_string(),
+            }],
+            finish_reason: FinishReason::ToolCalls,
+            reasoning_content: None,
+            prompt_tokens: Some(300_000),
+        };
+        let fake = Arc::new(FakeProvider::new(vec![
+            tool_call("call-f1"),
+            tool_call("call-f2"),
+            tool_call("call-f3"),
+            tool_call("call-f4"),
+            tool_call("call-f5"),
+            // Three guard-blocked rounds → the forced compaction fires on
+            // the next loop-top (round 6's gap) and reports guard_failed.
+            // 机械模式（2026-08-18 B 定案）：压缩零模型调用，无摘要项。
+            ScriptedResponse {
+                text: Some("第六轮".to_string()),
+                tool_calls: vec![ToolCall {
+                    name: "read_file".to_string(),
+                    arguments: serde_json::json!({"target_file": "b.txt"}),
+                    call_id: "call-f6".to_string(),
+                }],
+                finish_reason: FinishReason::ToolCalls,
+                reasoning_content: None,
+                prompt_tokens: Some(50_000),
+            },
+            ScriptedResponse::text("候选答案"),
+            ScriptedResponse::text("最终答案"),
+        ]));
+        let gateway: Arc<dyn ModelGateway> = fake.clone();
+        let controller = AgentLoopController::with_gateway(gateway)
+            .with_context_compact(150_000, 400, 20, 100_000)
+            // The guard can never be satisfied — min_compactable is huge.
+            .with_summary_guards(u64::MAX, 1.0);
+        controller
+            .run_turn(
+                &host,
+                "压缩测试",
+                "RUN-COMPACT-GUARD",
+                MANIFEST,
+                0,
+                None,
+                None,
+                None,
+            )
+            .await
+            .unwrap();
+
+        let compact_events: Vec<serde_json::Value> = events(&dir)
+            .into_iter()
+            .filter(|e| e.event_type == EventType::ContextCompressed)
+            .map(|e| e.payload)
+            .collect();
+        assert_eq!(compact_events.len(), 1, "{compact_events:?}");
+        assert_eq!(compact_events[0]["guard_failed"], true);
+        assert_eq!(compact_events[0]["reason"], "fallback");
+        assert_eq!(compact_events[0]["summary_incomplete"], false);
+        assert!(compact_events[0]["summary_digest"].as_str().is_some());
+
+        // The failure report reaches the model in the marker.
+        let received = fake.received_requests();
+        assert!(
+            received.iter().any(|r| r
+                .messages
+                .iter()
+                .any(|m| { m.content.contains("机制失败：缩减守卫连续不满足") })),
+            "guard failure must be explicitly reported: {received:?}"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// P0-D review fix (2026-08-14, ADR-0010 v1.14): a successful run whose
+    /// FULL conversation estimate crosses the session-end gate compacts once
+    /// BEFORE the terminal event and the sidecar write-back — the marker is
+    /// pinned into the persisted conversation (restore 治本) and the
+    /// blackboard edit window is rolled.
+    #[tokio::test]
+    async fn session_end_compact_pins_marker_into_sidecar_and_keeps_edits() {
+        let dir = test_dir();
+        let journal = JournalRecorder::new(dir.clone());
+        let host = TestHost {
+            journal,
+            tool_result: None,
+        };
+        let fake = Arc::new(FakeProvider::new(vec![
+            ScriptedResponse {
+                text: Some("候选答案".to_string()),
+                tool_calls: Vec::new(),
+                finish_reason: FinishReason::Stop,
+                reasoning_content: None,
+                prompt_tokens: Some(100),
+            },
+            ScriptedResponse {
+                text: Some("最终答案".to_string()),
+                tool_calls: Vec::new(),
+                finish_reason: FinishReason::Stop,
+                reasoning_content: None,
+                prompt_tokens: Some(100),
+            },
+        ]));
+        let controller = AgentLoopController::with_gateway(fake.clone())
+            .with_session_end_trigger(1)
+            .with_summary_guards(1, 1.0);
+        // Seed a fat conversation (three big tool rounds) and two edit
+        // records — the epoch-scoped window the end-of-session compaction
+        // must NOT touch (v1.15: compaction decoupled from the blackboard).
+        let mut conversation = vec![conv_message(Role::User, "第一问")];
+        conversation.extend(tool_round("call-r1", &"A".repeat(600)));
+        conversation.extend(tool_round("call-r2", &"B".repeat(600)));
+        conversation.extend(tool_round("call-r3", &"C".repeat(600)));
+        {
+            let mut bb = controller.blackboard().write();
+            bb.edits.push(EditRecord {
+                file: "a.py".into(),
+                old_lines: 1,
+                new_lines: 2,
+                timestamp: "2026-08-14T00:00:00Z".into(),
+            });
+            bb.edits.push(EditRecord {
+                file: "b.rs".into(),
+                old_lines: 3,
+                new_lines: 4,
+                timestamp: "2026-08-14T00:00:00Z".into(),
+            });
+        }
+        let _ = controller
+            .run_turn(
+                &host,
+                "继续",
+                "RUN-SE",
+                MANIFEST,
+                0,
+                None,
+                None,
+                Some(&mut conversation),
+            )
+            .await
+            .unwrap();
+
+        let compact_events: Vec<serde_json::Value> = events(&dir)
+            .into_iter()
+            .filter(|e| e.event_type == EventType::ContextCompressed)
+            .map(|e| e.payload)
+            .collect();
+        assert_eq!(compact_events.len(), 1, "{compact_events:?}");
+        assert_eq!(compact_events[0]["reason"], "session_end");
+        assert_eq!(compact_events[0]["summary_incomplete"], false);
+        assert_eq!(compact_events[0]["guard_failed"], false);
+        assert_eq!(compact_events[0]["archive_write_failed"], false);
+
+        // The marker is pinned into the persisted conversation; the old
+        // rounds are gone from it.
+        assert!(
+            conversation
+                .iter()
+                .any(|m| m.content.starts_with("[前文上下文已压缩")),
+            "marker must ride the sidecar: {conversation:?}"
+        );
+        assert!(
+            conversation
+                .iter()
+                .all(|m| !m.content.contains(&"A".repeat(600))),
+            "old rounds must be drained from the sidecar"
+        );
+        // The archive was written under .gsa/compaction.
+        let archives: Vec<_> = std::fs::read_dir(dir.join(".gsa").join("compaction"))
+            .expect("archive dir exists")
+            .flatten()
+            .collect();
+        assert_eq!(archives.len(), 1);
+        // v1.15 (2026-08-14): compaction never clears the blackboard — the
+        // edit records stay live for the current plan epoch.
+        assert_eq!(controller.blackboard().read().edits.len(), 2);
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// D3-1 (2026-08-14, ADR-0010 v1.10 / CONTEXT_COMPACTION_DESIGN §6): the
+    /// restore write-back filter keeps the compaction marker and the
+    /// whitelist block (a restored prompt must see the compression notice
+    /// and the task facts) while still filtering other mechanical injected
+    /// blocks.
+    #[tokio::test]
+    async fn conversation_writeback_retains_marker_and_whitelist() {
+        let dir = test_dir();
+        let journal = JournalRecorder::new(dir.clone());
+        let host = TestHost {
+            journal,
+            tool_result: None,
+        };
+        let fake = Arc::new(FakeProvider::new(vec![
+            ScriptedResponse::text("收到"),
+            ScriptedResponse::text("收到"),
+        ]));
+        let controller = AgentLoopController::with_gateway(fake.clone());
+        let mut conversation = vec![
+            conv_message(Role::User, "第一问"),
+            conv_message(
+                Role::User,
+                &crate::prompt::build_whitelist_block(&["任务背景：修复缓存回归".to_string()]),
+            ),
+            conv_message(
+                Role::User,
+                &crate::prompt::context_compressed_marker(3, 160_000, None),
+            ),
+            conv_message(Role::User, "[ORIENTATION v0.1] 当前任务是什么？"),
+        ];
+        let _ = controller
+            .run_turn(
+                &host,
+                "第二问",
+                "RUN-RETAIN",
+                MANIFEST,
+                0,
+                None,
+                None,
+                Some(&mut conversation),
+            )
+            .await
+            .unwrap();
+        let kept: Vec<&str> = conversation.iter().map(|m| m.content.as_str()).collect();
+        assert!(
+            kept.iter()
+                .any(|c| c.starts_with(crate::prompt::WHITELIST_PREFIX)),
+            "whitelist must survive restore write-back: {kept:?}"
+        );
+        assert!(
+            kept.iter()
+                .any(|c| c.starts_with(crate::prompt::CONTEXT_COMPRESSED_PREFIX)),
+            "marker must survive restore write-back: {kept:?}"
+        );
+        assert!(
+            kept.iter().all(|c| !c.starts_with("[ORIENTATION")),
+            "other injected blocks stay filtered: {kept:?}"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// THIN-HARNESS-REDESIGN R1 (§4.1)：compaction_whitelist_add 已封存
+    /// ——即使 plan_first 会话计划落板后（旧 P2-2 顺延窗口），调用仍被
+    /// sealed_tool_denied 结构化拒绝、whitelist 不落盘。
+    #[tokio::test]
+    async fn whitelist_write_sealed_even_in_plan_first_session() {
+        let dir = test_dir();
+        let journal = JournalRecorder::new(dir.clone());
+        let host = TestHost {
+            journal,
+            tool_result: Some(ToolResult {
+                output: "ok".to_string(),
+                exit_code: Some(0),
+                output_encoding: None,
+                structured: None,
+                ..Default::default()
+            }),
+        };
+        let gateway: Arc<dyn ModelGateway> = Arc::new(FakeProvider::new(vec![
+            ScriptedResponse::tool_calls(vec![plan_write_call("call-plan-1", valid_plan_json())]),
+            ScriptedResponse::tool_calls(vec![ToolCall {
+                name: "compaction_whitelist_add".to_string(),
+                arguments: serde_json::json!({"content": "task fact"}),
+                call_id: "call-wl-1".to_string(),
+            }]),
+            ScriptedResponse::text("完成"),
+            ScriptedResponse::text("完成"),
+        ]));
+        let controller = AgentLoopController::with_gateway(gateway).with_plan_first_enabled(true);
+        controller
+            .run_turn(
+                &host,
+                "修复缓存回归",
+                "RUN-PF-WL",
+                MANIFEST,
+                0,
+                None,
+                None,
+                None,
+            )
+            .await
+            .unwrap();
+
+        let events = events(&dir);
+        let wl = events
+            .iter()
+            .find(|e| {
+                e.event_type == EventType::ToolCompleted
+                    && e.payload.get("tool").and_then(|v| v.as_str())
+                        == Some("compaction_whitelist_add")
+            })
+            .expect("sealed whitelist call refused after the plan round");
+        assert_eq!(
+            wl.payload["exit_code"].as_u64(),
+            Some(1),
+            "sealed whitelist write must be refused: {:?}",
+            wl.payload
+        );
+        assert_eq!(
+            wl.payload["error"].as_str(),
+            Some("sealed_tool_denied"),
+            "{:?}",
+            wl.payload
+        );
+        let w = controller.whitelist.lock().unwrap();
+        assert!(w.is_empty(), "sealed whitelist write must not land: {w:?}");
+        drop(w);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+}

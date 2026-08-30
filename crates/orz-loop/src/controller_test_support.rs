@@ -544,3 +544,39 @@ pub(crate) fn registry_run_tests_def() -> ToolDef {
         parameters: serde_json::json!({"type": "object", "properties": {}}),
     }
 }
+
+/// A host whose session `.gsa` path is blocked by a FILE — the summary
+/// archive write must fail loudly instead of being swallowed.
+pub(crate) struct BlockedArchiveHost {
+    pub(crate) inner: TestHost,
+    pub(crate) blocked_cwd: PathBuf,
+}
+
+#[async_trait]
+impl LoopHost for BlockedArchiveHost {
+    fn journal(&self) -> &JournalRecorder {
+        self.inner.journal()
+    }
+    fn tools_registry(&self) -> &dyn ToolRegistry {
+        self.inner.tools_registry()
+    }
+    fn session_cwd(&self) -> std::path::PathBuf {
+        self.blocked_cwd.clone()
+    }
+    async fn request_permission(
+        &self,
+        risk: RiskClass,
+        tool: &str,
+        args: &serde_json::Value,
+    ) -> Result<PermitDecision, PermitError> {
+        self.inner.request_permission(risk, tool, args).await
+    }
+    async fn call_tool(
+        &self,
+        name: &str,
+        args: serde_json::Value,
+        call_id: &str,
+    ) -> Result<ToolResult, ToolError> {
+        self.inner.call_tool(name, args, call_id).await
+    }
+}
