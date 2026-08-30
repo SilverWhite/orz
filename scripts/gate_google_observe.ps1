@@ -4,13 +4,18 @@
 # injection enabled (eval_browser=true). Observes Google-first SERP gates
 # (CAPTCHA/429/page structure) + pass rate / wallclock / citation binding.
 #
-# Usage: powershell -File gate_google_observe.ps1 [-PrintConfig]
+# Usage:
+#   powershell -File gate_google_observe.ps1 [-JobName NAME] [-TaskList a,b,c] [-PrintConfig]
 # Preconditions:
 #   1. ORZ_DEEPSEEK_API_KEY present in D:/tb-eval/.env
 #   2. D:/tb-eval/orz-linux/orz = 2026-08-30 S3 rebuild (b604773)
 #   3. tb_agents/orz.py has eval_browser flag (SHA256 047830C8...)
 #   4. Docker Desktop engine running (apt chromium / snapshot injection)
-param([switch]$PrintConfig)
+param(
+  [switch]$PrintConfig,
+  [string]$JobName = 'gate-google-20260830-1',
+  [string]$TaskList = 'mteb-leaderboard,path-tracing-reverse,rstan-to-pystan,configure-git-webserver,mteb-retrieve'
+)
 $ErrorActionPreference = 'Stop'
 $env:PYTHONPATH = 'D:\tb-eval'
 
@@ -21,16 +26,12 @@ $JobsDir = 'D:\tb-eval\jobs-gate'
 $volRoot = 'D:\tb-eval\gsa-volumes'
 $configDir = 'D:\CLI\scripts\configs'
 
-# DUAL 3.2 task set: historical timeout / retrieval-dependent tasks, k=1.
-$Tasks = @(
-  'mteb-leaderboard',
-  'path-tracing-reverse',
-  'rstan-to-pystan',
-  'configure-git-webserver',
-  'mteb-retrieve'
-)
+# Task set: retrieval-dependent / external-data tasks, k=1. Default = the
+# DUAL 3.2 set (round 1). Round 2 sample (2026-08-30): count-dataset-tokens
+# (huggingface README dependency) + train-fasttext.
+$Tasks = @($TaskList -split ',' | ForEach-Object { $_.Trim() } | Where-Object { $_ })
 
-$jobName = 'gate-google-20260830-1'
+$jobName = $JobName
 $volDir = Join-Path $volRoot $jobName
 $resultPath = Join-Path $JobsDir "$jobName\result.json"
 if (Test-Path -LiteralPath $resultPath) {
