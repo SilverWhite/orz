@@ -3777,3 +3777,87 @@ ADR §3.6 正文修订随实施登记。
    登记于设计文档 / BACKLOG 0i / TODO P0-0i / CLI_PROJECT_INDEX
    （GAP-REPETITION-DETECTOR-DNA-FALSE-POSITIVE `partial` →
    `implemented`）。
+
+### 14.42 v1.42 补写裁决索引（2026-08-29）
+
+本节记录冻结后的显式补写；规范正文以所指章节为准，补写明确
+取代以下既往条款。
+
+1. **THIN-HARNESS-REDESIGN-V2 S5-1 实施 + 全面审查处理（2026-08-29；
+   取代 §14.32 第 1/2 项「桥视图剔除 reasoning_content（每条消息）」
+   的剥除语义、§14.16 checkpoint 轮无工具语义在 orientation 软门触发
+   轮的适用边界）**：S4 复验（31 题全量 k=1，2026-08-29）暴露两问题
+   并定案（设计 §9.2/§9.4/§9.6，用户裁决）：
+   - **A 折叠桥 reasoning 保留**：DeepSeek /responses 对非空 reasoning
+     的 assistant 消息要求原样回传；旧 `build_bridge` 对桥内每条消息置
+     `reasoning_content = None`，orientation 纯文本回答被 fold 落入桥内
+     末条剥除 → 400（make-doom 103 步 / gcode-to-text 52 步）。**修订**：
+     桥内**纯文本** assistant 消息（无 tool_calls）保留
+     `reasoning_content`，声明消息（带 tool_calls）仍剥除（实机边界：
+     纯工具轮 fold 不触发 400——声明 reasoning 恒空依赖后端行为，保留
+     边界注释；预算口径已含 reasoning，`estimate_message_tokens`）。
+   - **B orientation 软门触发轮放行工具**：§14.16 checkpoint 轮无工具
+     语义仅适用于 DC 强制模板轮 / console 询问轮；orientation 软门触发
+     轮（设计 §9.2）按常规轮投影探针/工具栏/console 注册并允许工具
+     派发，pending 在工具轮亦提交消费（无重复注入）。
+   - **C web_search 客户端超时**：reqwest builder 补总超时 120s +
+     connect 10s；超时经 `map_transport_error` 映射为
+     `ToolErrorKind::Timeout` 结构化错误（含已用时长、阶段上下文、连接
+     超时单独措辞、建议重试/换查询/直读页面），不新增自动重试；orz-host
+     `map_tool_error` 保留 Timeout 类别（不再降级 ExecutionFailed）。
+   - **D 事件面**：`tool_completed` schema 增 `wall_ms`（integer ≥ 0）
+     与 `timed_out`（const true）；通用工具路径与 run_tests 完成均落
+     wall_ms，超时落 timed_out；审查处理补 run_tests F-09 墙钟掐杀的
+     结构化透传（`TestRunResult.timed_out` 新字段端到端：宿主超时路径
+     置位 → 控制器事件标记 + 模型明确 TIMED OUT 文案，取代 exit_code
+     缺失的 "timed out?" 启发式）。
+   实施：orz ad5f9ee（S1 代码/S2 测试）+ 全面审查处理批（S1 修正 +
+   回归测试补强：桥双形态、触发轮工具面、超时事件字段断言、web_search
+   超时映射单测）；S3 重建完成（2026-08-29，Linux musl 三件套，orz
+   105,026,288 B / orz-signer 1,388,744 B / orz-acaf-provision
+   1,206,720 B）。S4 复验批次作废重排（2026-08-29 用户指示：不再沿用
+   原 official-r2-failures-s5-1 四题批次，全部处理完成后重新安排补跑）。
+   登记于设计 §9.2/§9.4/§9.6 / 调研笔记 §5 / TODO W4-R4；R3 纪律
+   （CLI_PROJECT_INDEX 登记 + 计数）随 S4 复验收口执行。
+
+### 14.43 v1.43 补写裁决索引（2026-08-30）
+
+本节记录冻结后的显式补写；规范正文以所指章节为准，补写明确
+取代以下既往条款。
+
+1. **检索双模式定案（2026-08-30 用户确认最终评判；修订 §3.7.1/§3.7.10
+   检索来源语义）**：
+   - **双模式保留**：`local_browser`（引擎 SERP，Google 主序、Bing 回退）
+     与 `framework_fallback`（DeepSeek 原生 web_search）双保留，原生
+     web_search 作为机械兜底。引擎 SERP 通道非「第二 API 供应商」（无
+     key/计费，不违反 §3.7 条 10 禁止引入独立检索 API 供应商），但检索
+     来源从 DeepSeek 服务端生成式搜索变更为引擎 SERP 有机结果，§3.7.10
+     来源语义按此登记修订。
+   - **SERP 页面级失败直接原生兜底**：SERP 页面级失败（CAPTCHA /
+     PAGE_BLOCKED / 429 / consent 等 §3.7.2 显式失败态）直接触发原生
+     web_search 兜底，显式记录——走 `retrieval_mode_transition`
+     （authority=mechanical_probe、reason 显式），沿用模式 A 语义、
+     不静默混用；candidate 页面读取（browser_read）仍按 §3.7.2 显式失败
+     不降级。
+   - **人化输入延迟（机械层）**：引擎 SERP 查询注入键入模拟（50–150ms
+     抖动）+ 提交前停顿（300–800ms）+ 查询间冷却（默认 2–5s，
+     `ORZ_ENGINE_QUERY_PACING_MS` 可配）+ 会话级频率上限（建议 20–30，
+     超限显式失败 → 原生兜底）；模型不可见、不进 prompt、不计模型轮次；
+     pacing 不影响原生 web_search 兜底路径。
+   - **Google 门禁观察实验先行**：小批检索密集题 k=1、个人使用强度，
+     观测 consent cookie 处理 / CAPTCHA 频率 / IP 节流 / 页面结构稳定性，
+     结果决定 Google/Bing 主序并校准 pacing 默认值。
+2. **检索编排机械层第一批（2026-08-30 定案；S1 实施 + S2 测试完成
+   2026-08-30，S3 重建/实机验证待续）**：
+   ①同轮读类/检索类工具并行（FuturesUnordered，写类保持串行，web_search
+   信号量维持 1）；②子代理 run 级预算/超时（轮数+墙钟双层，落点
+   `retrieval/dispatch.rs`）；③[DOC] 回传机械截断（结构化头部 + evidence
+   指针）；④浏览器容器参数补齐（`--no-sandbox` / `--disable-dev-shm-usage`
+   / `--disable-gpu`）+ 资源拦截 + 等待语义（「可用文本就绪」替代
+   loadEventFired，full 模式保持既有终态）。web_search 全局并发维持 1；
+   `retrieve_project_docs` 维持封存（`R1_SEALED_MAIN_TOOLS` 不动）。
+   第二批（独立设计轮）：`project_doc_index` v2（Blake3 增量 + 驻留）、
+   会话级 tab 池 + 同轮多页并行读取、委托契约复杂度分档。
+3. **登记**：BACKLOG 0k / TODO P0-0k / CLI_PROJECT_INDEX
+   （FUS-RETRIEVAL-ENGINE-SERP）；实施放行入账按既有纪律（+1），
+   S4 闭环 -1。

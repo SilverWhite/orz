@@ -82,7 +82,7 @@
 > 本快照只做计数与分组召回，明细以下方各分组勾选清单为唯一入口，不新增独立条目；
 > 后续扫描更新时同步替换本快照日期与计数。
 
-- 未闭合总数：**31 项**（2026-08-19 0c 验证闭环 29 → 28；2026-08-20
+- 未闭合总数：**32 项**（2026-08-19 0c 验证闭环 29 → 28；2026-08-20
   0d 验证闭环 29 → 28；2026-08-20 OUTPUT-BUDGET-RESTORE-AND-STALL-GUARD
   S1 实施放行入账 28 → 29，**S3/S4 验证闭环 29 → 28**；2026-08-20
   THINKING-DEFAULT-HIGH-LADDER S1 实施放行入账 28 → 29，**S3/S4 换题
@@ -109,6 +109,10 @@
   2026-08-28 THIN-HARNESS-REDESIGN-V2（0j）设计定稿登记（设计轮不动计数，
   仍 29）→ **R1 S1 代码 + S2 测试实施放行入账 29 → 30**、**R2 S1 代码 +
   S2 测试实施放行入账 30 → 31**（S3 重建 / S4 复验待续，见下）
+  2026-08-30 RETRIEVAL-ORCHESTRATION-MECHANICAL（0k）检索问题最终评判
+  定稿登记（用户确认无异议；设计轮不动计数，仍 31，见下）→ **第一批
+  S1 代码 + S2 测试实施放行入账 31 → 32**（第 1–4 项完成 2026-08-30；
+  S3 重建 / 实机验证待续，见下）
   - P0-C：0 项（PLAN-FIRST 阶段 A/B/C 全部闭合，2026-08-16）
   - P0 冒烟对拍暴露：0 项（GAP-REPETITION-DETECTOR-DNA-FALSE-POSITIVE
     复读检测 DNA 误杀已闭合 2026-08-26；GAP-EVENT-SCHEMA-DRIFT 事件面
@@ -1637,7 +1641,7 @@ S4 复验闭环 2026-08-25（补登记）；S1-S4 全部闭合）
   保留 / orientation 触发轮工具面 / web_search 超时）引入的遗留回归，
   需独立轮次定位（建议先核对 disposition 处理链与 orientation 触发轮
   交互）后再进 S3/S4。
-- [ ] CONTROLLER-SPLIT 二轮（2026-08-30 用户指示；设计 §3.5）——
+- [x] CONTROLLER-SPLIT 二轮（2026-08-30 用户指示；设计 §3.5）——
   controller.rs 24,861 行（生产 7,548 / 测试 17,313），目标全文件
   ≤10,000 行。批次 N1 `acaf_flow.rs`（ACAF 票务 ~940 行，低风险）→
   N2 `host_exec.rs`（host 工具家族 ~2,600 行）→ N3 控制台订单/模式
@@ -1660,7 +1664,65 @@ S4 复验闭环 2026-08-25（补登记）；S1-S4 全部闭合）
     - [x] N5-5（2026-08-30，`e828299`）：压缩/折叠/白名单 21 项 → `compact.rs` + `summary.rs`，controller.rs 8,033 行，orz-loop 618/0/3 + pytest 1589/14 全绿。
     - [x] N5-6（2026-08-30，`52ce3f5`）：plan/epoch/plan_first 15 项 → `planning.rs` + 黑板上读 16 项 → `blackboard.rs`，controller.rs 5,632 行，orz-loop 618/0/3 + pytest 1589/14 全绿。
     - [x] N5-7（2026-08-30，`d6f771b`）：收尾归位（delivery/dc/orientation/checkpoint/probe/mechanical_audit，含 final_answer 误入纠正），controller.rs 4,142 行，orz-loop 618/0/3 + pytest 1589/14 全绿。
-    - N5 全部闭合（2026-08-30）：controller.rs 29,091 → 4,142 行，测试区 202 项归位、留守 19 项主循环测试；验收 ≤10,000 行达成。
+  - N5 全部闭合（2026-08-30）：controller.rs 29,091 → 4,142 行，测试区 202 项归位、留守 19 项主循环测试；验收 ≤10,000 行达成。
+
+### P0-0k RETRIEVAL-ORCHESTRATION-MECHANICAL（P0；2026-08-30 检索问题最终评判定稿，实施待放行）
+
+> 入口：[调研 §8/§9](docs/RETRIEVAL_AND_SUBAGENT_COMMUNICATION_BORROW_RESEARCH_2026-08-30.md) /
+> [双检索验证](docs/DUAL_RETRIEVAL_MODE_VALIDATION_DESIGN_2026-08-29.md) /
+> [controller 拆分](docs/CONTROLLER_SPLIT_DESIGN_2026-08-29.md)；BACKLOG 0k。
+> 定案摘要（2026-08-30 最终评判，用户确认无异议）：双模式保留（引擎 SERP
+> Google 主序 + 原生 web_search 机械兜底）；SERP 页面级失败显式降级原生兜底；
+> 人化输入延迟机械层（模型不可见）；不做全量 A/B（Google 门禁观察实验先行）；
+> 同轮读类并行批准（写类串行）；web_search 并发维持 1；第一批五项 + 第二批
+> 三项 + 暂缓/否决清单；顺序纪律=先闭合 S5-2 S3/S4 + acaf_e2e 7 项回归再落
+> 检索批次。设计轮不动计数（仍 31）；实施放行入账 +1；S4 闭环 -1。
+
+**前置（顺序纪律；2026-08-30 用户裁决修订）**：S5-2 S3/S4 形式化重建/复验
+**暂停不做**（用户裁决：本项目是完全工程化项目、非 LIF 主项目，不要求逐步
+严格可比；当前问题属于"没修完"，修完即闭环，不跑仪式化 S3/S4）。acaf_e2e
+7 项回归经核验在当前 HEAD（d6f771b）已 23/23 全绿（拆分批次中 S5-2 审查
+处理代码随 B1 落盘后自然解除，2026-08-30 实测），"没修完"闭环。基线核验
+通过后直接落第一批。
+
+**第一批（收口排序；第 1–4 项 S1 代码 + S2 测试完成 2026-08-30；汇总 S3
+重建 + 实机验证待续）**：
+- [x] 同轮读类/检索类工具并行（`agent_loop.rs` 工具批次执行处；
+  FuturesUnordered，写类保持串行；web_search 信号量维持 1）。
+  **2026-08-30 完成**：批首 ≥2 连续只读 Host 调用并发执行、按声明序提交
+  （EventWriter buffered 模式 + 预算超限按串行语义拒绝）；并发峰值与事件/
+  消息序专项测试。orz-loop 623/0/3 全绿。
+- [x] 子代理 run 级预算/超时（`retrieval/dispatch.rs`；轮数 + 墙钟双层）。
+  **2026-08-30 完成**：默认墙钟 600s（`ORZ_RETRIEVAL_SUBAGENT_TIMEOUT_SECS`
+  可配，0 禁用）+ 独立轮数上限 60（`ORZ_RETRIEVAL_MAX_TOOL_ROUNDS`，与主
+  车道取 min）；超时经 `subagent_timeout` 收口、父 run 继续；解析规则 +
+  超时收口测试。orz-loop 623/0/3 全绿。
+- [x] [DOC] 回传机械截断（结构化头部 + evidence 指针）。
+  **2026-08-30 完成**：声明行行数上限 16 + 字节上限 8K（逐条装填），截断
+  附结构化标注；blackboard 分区保留全文（留痕不变），ledger/inline 通道用
+  有界视图；单测覆盖行数/字节/原样路径。orz-loop 623/0/3 全绿。
+- [x] 浏览器容器参数 + 资源拦截 + 等待语义（`--no-sandbox` /
+  `--disable-dev-shm-usage` / `--disable-gpu`；`Network.setBlockedURLs`；
+  等待「可用文本就绪」替代 loadEventFired，full 模式保持既有终态）。
+  **2026-08-30 完成**：容器三件套 + 文本读取资源优化参数；ReadMode 下传
+  CDP 层，preview/keywords 拦截图片/字体/媒体 + 文本就绪轮询（full 保持
+  loadEventFired）；ALLOWED_CDP_METHODS 精确集合同步；text-ready 返回/超时
+  测试。orz-host 231/0/4 全绿。
+- [ ] Google 门禁观察实验（小批检索密集题 k=1 个人使用强度；pacing 校准 +
+  Google/Bing 主序裁决；套用 DUAL 度量维度）——待 S3 重建 + docker 浏览器
+  注入后实机运行（入口：DUAL §3.2 度量 / 调研 §8.4）。
+- [ ] 汇总 S3 重建（Linux musl 三件套）+ 实机验证（检索题冒烟 + 超时/并行/
+  截断行为观察）。
+
+**第二批（独立设计轮）**：
+- [ ] `project_doc_index` v2（git HEAD 基线 + 工作树增量层 + Blake3 内容哈希 +
+  索引驻留）。
+- [ ] 会话级 tab 池 + 同轮多页并行读取。
+- [ ] 委托契约复杂度分档。
+
+**暂缓/否决（不实施）**：`retrieve_project_docs` 维持封存
+（`R1_SEALED_MAIN_TOOLS` 不动）；向量语义检索；web_search 并发 >1；浏览器
+daemon 跨 run 常驻；模式内混合路由（需修订 ADR-0010 §3.7.12）。
 
 ### P0-B FUS-RETRIEVAL-MECH（`implemented`；批次 1-6 已全部闭合，2026-08-14，保留供核对）
 

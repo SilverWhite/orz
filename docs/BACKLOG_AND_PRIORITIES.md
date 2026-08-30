@@ -9,7 +9,7 @@
 
 | 优先级 | 含义 | 未闭合项 |
 |---|---|---|
-| P0 | 当前工作集：设计已冻结，裁决后立即实施 | 评测冒烟暴露问题（P0-E 主项 7 项 + FUS-TOOL-SCOPE-CONTRACT 后续 2 项全部闭合 2026-08-18：ACAF 容器供应、console 工具名、计划视图步骤 ID、订单发放前拒绝入事件面、grep 搜索范围契约、plan_write 校验消息形状、actions 形状探针、list_dir 范围计数、grep files_searched 全结局探针，见 0a）；CLASSICAL-EXEC-ASSISTANT（生产组件，2026-08-16 用户裁决转正式，S1-S4 全部闭合）；PLAN-FIRST-BLACKBOARD（阶段 A/B/C 全部闭合 2026-08-16）；**FUS-BENCHMARK-FULL-EXEC（P0，实施完成待验证——2026-08-18 用户指示实施、暂不测试；验证闭环后闭合，见 0b）**；**LEDGER-FOLD-EXTERNAL-FILE（P0，S1-S4 验证闭环 2026-08-19——命中率问题优先于 P0-F 验证；provider 口径 95.33% ≥90% 达标，见 0c）**；**OUTPUT-DEGENERATION-GUARD（P0，S1-S4 全部闭合 2026-08-20——make-doom 退化复读失败防护；8K 全统一 + 补读闭环 + 实时检测 + 32K，见 0d）**；**CONTEXT-SCAFFOLDING-PULL-REDESIGN（P0，S1-S4 全部闭合 2026-08-21——预算块 PUSH→PULL + 工具输出汇总消息退役；命中率 94.45%、零哨兵触发、输入增长放缓；方案 C 维持 256K 暂不收紧（用户裁决），见 0e）**；**FUS-READ-ANCHOR-WRITE-GUARD（P0，S1-S4 全部闭合 2026-08-23——read_file 内容锚点下传 + 写前机械核证；S4 复用 NGRAM S4 实机复验：10 试次零误拒、锚点实机可见、命中率 94.11%–98.55% 全 ≥90%、零 400，计数 28 → 27，见 0f）**；**AGENT-DELIVERY-FLOW（P0 派生 0d 后续 7，S1-S4 全部闭合 2026-08-23——计划无空转、末步机械递交、引用修正一次/二次阻断、订单反馈；S4 复用 NGRAM S4 实机复验：8/8 完成试次走 submit 双阶段、零 400、命中率全 ≥90%，计数 29 → 28，见 0d 后续 7）**；**FINAL-SMOKE-2026-08-25 对拍暴露（P0，2026-08-25 登记：GAP-EVENT-SCHEMA-DRIFT 事件面三类 Schema 漂移（2026-08-26 修复完成并复验，事件链非终止错误 0）+ GAP-REPETITION-DETECTOR-DNA-FALSE-POSITIVE 复读检测 DNA 误杀（S1/S2/S3 完成 2026-08-26、S4 复验待实施），正式 89 题提交前处理，见 0i）** |
+| P0 | 当前工作集：设计已冻结，裁决后立即实施 | 评测冒烟暴露问题（P0-E 主项 7 项 + FUS-TOOL-SCOPE-CONTRACT 后续 2 项全部闭合 2026-08-18：ACAF 容器供应、console 工具名、计划视图步骤 ID、订单发放前拒绝入事件面、grep 搜索范围契约、plan_write 校验消息形状、actions 形状探针、list_dir 范围计数、grep files_searched 全结局探针，见 0a）；CLASSICAL-EXEC-ASSISTANT（生产组件，2026-08-16 用户裁决转正式，S1-S4 全部闭合）；PLAN-FIRST-BLACKBOARD（阶段 A/B/C 全部闭合 2026-08-16）；**FUS-BENCHMARK-FULL-EXEC（P0，实施完成待验证——2026-08-18 用户指示实施、暂不测试；验证闭环后闭合，见 0b）**；**LEDGER-FOLD-EXTERNAL-FILE（P0，S1-S4 验证闭环 2026-08-19——命中率问题优先于 P0-F 验证；provider 口径 95.33% ≥90% 达标，见 0c）**；**OUTPUT-DEGENERATION-GUARD（P0，S1-S4 全部闭合 2026-08-20——make-doom 退化复读失败防护；8K 全统一 + 补读闭环 + 实时检测 + 32K，见 0d）**；**CONTEXT-SCAFFOLDING-PULL-REDESIGN（P0，S1-S4 全部闭合 2026-08-21——预算块 PUSH→PULL + 工具输出汇总消息退役；命中率 94.45%、零哨兵触发、输入增长放缓；方案 C 维持 256K 暂不收紧（用户裁决），见 0e）**；**FUS-READ-ANCHOR-WRITE-GUARD（P0，S1-S4 全部闭合 2026-08-23——read_file 内容锚点下传 + 写前机械核证；S4 复用 NGRAM S4 实机复验：10 试次零误拒、锚点实机可见、命中率 94.11%–98.55% 全 ≥90%、零 400，计数 28 → 27，见 0f）**；**AGENT-DELIVERY-FLOW（P0 派生 0d 后续 7，S1-S4 全部闭合 2026-08-23——计划无空转、末步机械递交、引用修正一次/二次阻断、订单反馈；S4 复用 NGRAM S4 实机复验：8/8 完成试次走 submit 双阶段、零 400、命中率全 ≥90%，计数 29 → 28，见 0d 后续 7）**；**FINAL-SMOKE-2026-08-25 对拍暴露（P0，2026-08-25 登记：GAP-EVENT-SCHEMA-DRIFT 事件面三类 Schema 漂移（2026-08-26 修复完成并复验，事件链非终止错误 0）+ GAP-REPETITION-DETECTOR-DNA-FALSE-POSITIVE 复读检测 DNA 误杀（S1/S2/S3 完成 2026-08-26、S4 复验待实施），正式 89 题提交前处理，见 0i）**；**RETRIEVAL-ORCHESTRATION-MECHANICAL（P0，2026-08-30 检索问题最终评判定稿、实施待放行——双模式定案 + 引擎 SERP Google 主序 + 原生兜底 + 检索编排机械层第一批五项 + Google 门禁观察实验，见 0k）** |
 | P1 | 无需裁决，可与 P0 并行 | FUS-COMPONENT-REGISTER、GAP-WINDOWS-EVIDENCE、IMPL-DEEPSEEK-TRANSPORT / SEC-CREDENTIALS、ORZ-SESSION-CONTEXT-MONITOR |
 | P2 | 生产化决策门：需用户裁决 | IMPL-CONTROL-FABRIC（fail-closed 启用、Slice 3/4）、OPS-PROTOCOL |
 | P3 | 收尾 / 清理 | EVIDENCE-LOCAL-BROWSER、GATE-CHAIN、DC 剩余信号、V11-IMPL-003/007、工作区收尾 |
@@ -1482,7 +1482,38 @@ S1-S4 全部闭合）
   全查零真实 400、零复读触发。**定案**：①BASE_SYSTEM_PROMPT 全空（契约全落
   工具描述/信封/机械门）；②orientation 软门（阈值 50、回答消费续跑、强制
   模板轮保留不启用）；③submit 门无 plan 放行/降级 + 描述清 plan 措辞（与
-  prompt 清空同批）。计数不变（设计轮）；W4-R4 实施待放行。详见设计 V2 §9。
+   prompt 清空同批）。计数不变（设计轮）；W4-R4 实施待放行。详见设计 V2 §9。
+
+### 0k. RETRIEVAL-ORCHESTRATION-MECHANICAL（P0；2026-08-30 检索问题最终评判定稿，实施待放行）
+
+- 入口：[调研 §8/§9](RETRIEVAL_AND_SUBAGENT_COMMUNICATION_BORROW_RESEARCH_2026-08-30.md) /
+  [双检索验证](DUAL_RETRIEVAL_MODE_VALIDATION_DESIGN_2026-08-29.md) /
+  [controller 拆分](CONTROLLER_SPLIT_DESIGN_2026-08-29.md)；TODO P0-0k。
+- 来源：controller 拆分完成（B1–B8 + 二轮 N1–N5，controller.rs 4,142 行，
+  行为不变）+ 2026-08-30 检索与子代理沟通外部借鉴调研 + 双检索模式最终评判
+  （用户 2026-08-30 确认无异议）。
+- 定案（2026-08-30 最终评判）：双模式保留（引擎 SERP Google 主序 + 原生
+  web_search 机械兜底）；SERP 页面级失败直接显式降级原生兜底
+  （`retrieval_mode_transition`，authority=mechanical_probe、reason 显式）；
+  人化输入延迟机械层（键入模拟 + 查询间冷却 2–5s + 会话级频率上限 20–30，
+  模型不可见）；不做全量 A/B（Google 门禁观察实验先行，k=1 小批）；
+  同轮读类并行批准（写类串行）；web_search 并发维持 1；第一批五项（同轮
+  读类并行 / 子代理 run 级预算与超时 / [DOC] 回传预算 / 浏览器容器参数 +
+  资源拦截 + 等待语义 / Google 门禁观察实验）；第二批三项
+  （`project_doc_index` v2 / 会话级 tab 池 + 同轮多页并行 / 委托契约复杂度
+  分档）；暂缓/否决（`retrieve_project_docs` 维持封存、向量检索、
+  web_search 并发 >1、浏览器 daemon、模式内混合路由）。
+- 顺序纪律（2026-08-30 用户裁决修订）：S5-2 S3/S4 形式化重建/复验暂停不做
+  （工程化项目、非 LIF 主项目，不要求逐步严格可比；"没修完"修完即闭环）；
+  acaf_e2e 7 项回归核验已在 HEAD（d6f771b）全绿 23/23（S5-2 审查处理代码
+  随拆分 B1 落盘后自然解除）。直接落第一批检索编排机械层，最后跑 Google
+  pilot。
+- 计数：设计轮不动（仍 31）；**2026-08-30 第一批 S1 代码 + S2 测试实施
+  放行入账 31 → 32**（第 1–4 项完成：同轮读类并行 / 子代理 run 级预算与
+  超时 / [DOC] 回传预算 / 浏览器容器参数 + 资源拦截 + 等待语义；orz-loop
+  623/0/3、orz-host 231/0/4、orz-bin 全绿、fmt/clippy 无新增）；S3 重建 +
+  实机验证待续；S4 闭环 -1。
+- 登记：ADR-0010 §14.43；CLI_PROJECT_INDEX（FUS-RETRIEVAL-ENGINE-SERP）。
 
 ### 1. FUS-TOOL-PROBE（`implemented`；P0-A 批次 1-7 与 P0-A-2 已闭合）
 
