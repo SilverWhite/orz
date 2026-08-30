@@ -1826,12 +1826,37 @@ S4 复验闭环 2026-08-25（补登记）；S1-S4 全部闭合）
   15:51 HKT（orz 106,411,888 B / signer 1,388,496 B / provision
   1,206,464 B），bookworm 冒烟符合预期（静态链接/usage/manifest 缺失/
   TTY io error）；对应源码 orz 1973511 + 父 ed024d7（均已推送）。
-  **验证轮（2026-08-30，job gate-google-20260830-3）**：count-dataset-
-  tokens k=1 → **1.0 解出**（agent_exec 2.95min）；主面请求头工具列表
-  6 工具（grep/read_file/run_terminal_cmd/search_replace/blackboard_read/
-  submit）**browser_read 已消失**，journal 零 browser_read 痕迹、零拒绝
-  事件；模型直接终端访问 HF 完成（对比修复前：browser_read 被拒后转
-  终端 3.95min）。方向 A 闭环。
+**验证轮（2026-08-30，job gate-google-20260830-3）**：count-dataset-
+tokens k=1 → **1.0 解出**（agent_exec 2.95min）；主面请求头工具列表
+6 工具（grep/read_file/run_terminal_cmd/search_replace/blackboard_read/
+submit）**browser_read 已消失**，journal 零 browser_read 痕迹、零拒绝
+事件；模型直接终端访问 HF 完成（对比修复前：browser_read 被拒后转
+终端 3.95min）。方向 A 闭环。
+
+**第三/四轮门禁观察（2026-08-30，job gate-google-20260830-3/4）+ 主面
+恢复外部 web_search（用户裁决「先恢复外部」）**：
+- [x] 第三轮验证轮（R3）：count-dataset-tokens → **1.0**（见上）。
+- [x] 第四轮（R4）：build-pmars **1.0**（2.95min 终端构建解出）+
+  sam-cell-seg **1.0**（15.1min，run_terminal_cmd 32 / read_file 11 /
+  search_replace 6，自写 convert_masks.py 终端解出）；两题零检索调用。
+- [x] **结构结论**：四轮累计 10 个 gate run 检索调用全部为 0——主面
+  工具面缺失检索入口的必然结果（local_browser 下 web 族隐藏 +
+  browser_read 方向 A 封存），从未真正测到「模型看到 web_search 时会
+  不会用」；Google SERP 门禁无样本是结构性缺入口，非「模型倾向不用
+  检索」。报告 §8/§9 追加。
+- [x] **主面恢复外部 web_search 单一派发入口（2026-08-30 实施，S1 代码
+  + S2 测试完成）**：`apply_retrieval_surface_projection` local_browser
+  分支保留裸 `web_search`（剔除 web_fetch 族与 web_search_* 变体），
+  描述标注「External retrieval entry: dispatches the external retrieval
+  subagent」（纯机械侧）；`subagent_tool_projection` 外部 lane 在
+  local_browser 下剔除继承的 web 族（执行面二存一：仅 browser_read
+  引擎 SERP，原生 web_search 兜底为机械路径）；内部检索维持 R1 封存。
+  测试：`retrieval_surface_projection_follows_mode` / `subagent_
+  projection_restores_browser_read` 语义改写 + 新增
+  `local_browser_main_surface_restores_web_search_entry` 端到端断言。
+  验证：projection 13/13、orz-loop 全量 624/0/3、fmt 干净、clippy 无
+  新增。设计登记：ADR-0010 §3.7 条 12（v1.9）/ §14.44；调研 §9.4；
+  BACKLOG 0k；本报告 §10。
 
 **第二批（独立设计轮）**：
 - [ ] `project_doc_index` v2（git HEAD 基线 + 工作树增量层 + Blake3 内容哈希 +
@@ -1841,7 +1866,9 @@ S4 复验闭环 2026-08-25（补登记）；S1-S4 全部闭合）
 
 **暂缓/否决（不实施）**：`retrieve_project_docs` 维持封存
 （`R1_SEALED_MAIN_TOOLS` 不动）；向量语义检索；web_search 并发 >1；浏览器
-daemon 跨 run 常驻；模式内混合路由（需修订 ADR-0010 §3.7.12）。
+daemon 跨 run 常驻。~~模式内混合路由（需修订 ADR-0010 §3.7.12）~~——已按
+2026-08-30 用户裁决「先恢复外部」修订为「主面 web_search 派发入口」并实施
+（ADR-0010 §3.7 条 12 v1.9 / §14.44；见上），不再列入暂缓。
 
 ### P0-B FUS-RETRIEVAL-MECH（`implemented`；批次 1-6 已全部闭合，2026-08-14，保留供核对）
 

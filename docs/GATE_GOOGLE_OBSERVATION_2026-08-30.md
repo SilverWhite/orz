@@ -143,3 +143,71 @@ projection.rs（R1_SEALED + 注释 + 测试改写/迁移），orz-loop 623/0/3
 - 若方向 A 落地，模型将不再尝试 browser_read；外部检索依赖（如 HF
   页面）需经 web 族/外部子代理或终端内访问完成——本轮 count-dataset-tokens
   已证明终端内访问可解出，检索通道缺位不阻塞解出。
+
+---
+
+## 8. 第三轮（2026-08-30 追加）：方向 A 修复验证
+
+> job `gate-google-20260830-3`（D:\tb-eval\jobs-gate）。样本：方向 A
+> 修复后（`R1_SEALED_MAIN_TOOLS` 含 browser_read，orz 1973511 + s3b
+> 重建）重跑 count-dataset-tokens 单题验证。
+
+### 8.1 结果
+
+| 任务 | 镜像 | 超时 | reward | agent 执行 | 结局 |
+|---|---|---|---|---|---|
+| count-dataset-tokens | python:3.13-slim-bookworm | 900s | **1.0** | 2.95min | 完成；主面 6 工具无 browser_read，零拒绝事件 |
+
+- 主面请求头工具列表 6 工具（read_file/grep/search_replace/
+  run_terminal_cmd/blackboard_read/submit），browser_read 已消失；
+  journal 零 browser_read 痕迹、零 `*_candidate_count_unbound` 拒绝事件。
+- 解出路径同 R2（终端内访问 HF README + Qwen2.5-1.5B-Instruct
+  tokenizer，answer=79586），agent_exec 2.95min 较 R2 3.95min 略快
+  （无 browser_read 尝试烧轮）。
+- 方向 A 闭环：声明/执行缝隙消除，模型不再看到无法执行的检索工具。
+
+### 8.2 第三轮对门禁观察的意义
+
+- 修复后主面检索入口彻底归零（web 族在 local_browser 下隐藏 +
+  browser_read 封存）——模型全程终端路径解出，Google SERP 仍无样本。
+- 结构结论强化：12 个 gate run（R1 5 + R2 2 + R3 1 + R4 2）检索调用
+  全部为 0，是主面工具面缺失检索入口的必然结果，从未真正测到「模型
+  看到 web_search 时会不会用」。
+
+## 9. 第四轮（2026-08-30 追加）：build-pmars + sam-cell-seg
+
+> job `gate-google-20260830-4`（D:\tb-eval\jobs-gate）。样本：错题集
+> 其余两道检索依赖候选，k=1 local_browser（2h 档超时）。
+
+### 9.1 结果
+
+| 任务 | 镜像 | 超时 | reward | agent 执行 | 结局 |
+|---|---|---|---|---|---|
+| build-pmars | python:3.13-slim-bookworm | 3600s | **1.0** | 2.95min | 完成；终端构建解出 |
+| sam-cell-seg | python:3.13-slim-bookworm | 7200s | **1.0** | 15.1min | 完成；终端+读写解出 |
+
+- build-pmars：agent_exec 2.95min，全程零检索调用，终端构建
+  （pmars 编译）解出，verifier 通过。
+- sam-cell-seg：agent_exec 15.1min，工具面 run_terminal_cmd 32 /
+  read_file 11 / search_replace 6，**零检索调用**；模型自写
+  convert_masks.py（MobileSAM CPU 推理 + 重叠消解 + 轮廓提取），
+  终端内安装 mobile_sam（git clone + pip install -e），verifier
+  通过。
+
+### 9.2 第四轮对门禁观察的意义
+
+- 两题均 1.0 解出，再次印证：主面无检索入口时模型全部走终端/读写
+  路径，检索通道缺位不阻塞解出（同 §7.3 结论）。
+- 四轮累计 10 个 gate run 检索调用均为 0——Google 门禁/pacing 无
+  SERP 样本是**结构性缺检索入口**的结果，不是「模型倾向不用检索」。
+- 用户裁决（2026-08-30）：先恢复外部——主面恢复 `web_search` 单一
+  派发入口（调用即派发外部检索子代理，执行面 local_browser 下仍仅
+  browser_read 引擎 SERP），用于验证「模型在有入口时用不用检索」与
+  「Google SERP 门禁」两个问题；内部检索（retrieve_project_docs）
+  维持 R1 封存。实施见 TODO P0-0k 与本报告 §10。
+
+## 10. 第五轮待续（主面恢复 web_search 后）
+
+> s3c 重建 + 恢复后的主面 web_search 观察轮（候选：sam-cell-seg
+> 同题复跑或新检索依赖题），验证模型是否调用检索子代理 + Google
+> SERP 门禁数据（CAPTCHA / 429 / 页面结构）。

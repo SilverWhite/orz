@@ -363,7 +363,13 @@ C. 需裁决的方向性选项（可能与 ADR-0010 §3.7.12「二存一」冲�
   模型可见面变化，与「机械层加厚、模型层零改动」纪律冲突，且与 R1 薄化意图的
   关系未定）；
 - 向量语义检索、web_search 并发 >1、浏览器 daemon 跨 run 常驻、模式内混合路由
-  （需修订 ADR-0010 §3.7.12）——暂缓/不建议。
+  ——暂缓/不建议。
+- **模式内混合路由（2026-08-30 修订，用户裁决「先恢复外部」）**：由暂缓改为
+  「主面 web_search 派发入口」——local_browser 下主面保留 `web_search`
+  单一入口（描述标注派发外部检索子代理），模型调用即派发 ExternalRetrieval
+  子代理；执行面二存一不变（外部 lane 仅 browser_read 引擎 SERP，原生
+  web_search 兜底为机械路径 retrieval_mode_transition）。ADR-0010 §3.7
+  条 12 已按 v1.9 修订，索引 §14.44。内部检索维持封存。
 
 ### 9.5 顺序纪律
 
@@ -374,6 +380,7 @@ C. 需裁决的方向性选项（可能与 ADR-0010 §3.7.12「二存一」冲�
 ### 9.6 登记
 
 - ADR-0010 §14.43（引擎 SERP 通道语义、SERP 失败兜底、web_search 并发维持 1、
-  `retrieve_project_docs` 封存维持、机械层第一批）；
+  `retrieve_project_docs` 封存维持、机械层第一批）；ADR-0010 §14.44（主面
+  恢复外部 web_search 派发入口，2026-08-30 用户裁决）；
 - BACKLOG 0k / TODO P0-0k（实施批次与勾选）；
 - CLI_PROJECT_INDEX（FUS-RETRIEVAL-ENGINE-SERP）。

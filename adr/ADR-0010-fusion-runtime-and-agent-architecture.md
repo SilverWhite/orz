@@ -397,6 +397,15 @@ offset 分段）落成工具契约；与 pdf_read 的 `document_id` + `page_rang
     local_browser 均使用）。抓到的原文走同一套加权并进 evidence ledger/visibility；
     `output_text` 只作线索不作证据。该机制属结果质量层，不改变 ACAF 授权边界
     （ADR-0011 D-12/D-13）。来源：检索来源加权设计文档（2026-08-12），索引见 §14.6。
+    该条为冻结后补写（v1.9，2026-08-30）：主面在 `local_browser` 下可声明
+    `web_search` 单一**派发入口**——模型调用即派发外部检索子代理，执行在
+    子代理面完成；入口与执行解耦不构成模式混用。执行面仍二存一：外部 lane
+    在 `local_browser` 下仅 `browser_read`（引擎 SERP）为检索通道，原生
+    `web_search` 兜底是机械路径（`retrieval_mode_transition`，
+    authority=mechanical_probe），不是子代理模型的自由选择；`web_fetch`
+    族与 `web_search_*` 变体不进入 local_browser 主面（单入口语义，最小
+    模型面变化）。来源：门禁观察四轮结构性零检索结论与用户裁决「先恢复
+    外部」（2026-08-30），索引见 §14.44。
 
 ### 3.8 受控 `run_tests` / hidden-test 反馈环
 
@@ -3861,3 +3870,33 @@ ADR §3.6 正文修订随实施登记。
 3. **登记**：BACKLOG 0k / TODO P0-0k / CLI_PROJECT_INDEX
    （FUS-RETRIEVAL-ENGINE-SERP）；实施放行入账按既有纪律（+1），
    S4 闭环 -1。
+
+### 14.44 v1.44 补写裁决索引（2026-08-30）
+
+本节记录冻结后的显式补写；规范正文以所指章节为准，补写明确
+取代以下既往条款。
+
+1. **主面恢复外部 web_search 派发入口（2026-08-30 用户裁决「先恢复
+   外部」；修订 §3.7 条 12「二存一」）**：
+   - 背景：门禁观察四轮 10 个 gate run 检索调用全部为 0——结构性缺检索
+     入口（主面 web 族在 local_browser 下隐藏 + browser_read 方向 A
+     封存），从未真正测到「模型看到 web_search 时会不会用」；Google
+     SERP 门禁无样本是入口缺失的必然结果，非「模型倾向不用检索」。
+   - 恢复语义（最小模型面变化）：主面 local_browser 保留 `web_search`
+     单一入口，工具描述标注「External retrieval entry: dispatches the
+     external retrieval subagent」（纯机械侧标注）；`web_fetch` 族与
+     `web_search_*` 变体不进入主面。模型调用 web_search → `relay::route`
+     → ExternalRetrieval 子代理派发。
+   - 执行面二存一不变：外部 lane 在 local_browser 下剔除继承的 web 族
+     （`subagent_tool_projection`），仅 `browser_read`（引擎 SERP）为
+     检索通道；原生 web_search 兜底是机械路径
+     （`retrieval_mode_transition`，authority=mechanical_probe、reason
+     显式），不是子代理模型的自由选择。framework_fallback 下外部 lane
+     维持 web 族（既有语义）。
+   - 内部检索（`retrieve_project_docs`）维持 R1 封存不动（`R1_SEALED_
+     MAIN_TOOLS` 不含恢复项）。
+   - 目标：一次验证「模型在有入口时用不用检索」与「Google SERP 门禁
+     （CAPTCHA / 429 / 页面结构）」两个问题。
+2. **登记**：BACKLOG 0k / TODO P0-0k / 门禁观察报告
+   `docs/GATE_GOOGLE_OBSERVATION_2026-08-30.md` §8–§10 /
+   CLI_PROJECT_INDEX（FUS-RETRIEVAL-ENGINE-SERP）。

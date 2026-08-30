@@ -1502,7 +1502,9 @@ S1-S4 全部闭合）
   资源拦截 + 等待语义 / Google 门禁观察实验）；第二批三项
   （`project_doc_index` v2 / 会话级 tab 池 + 同轮多页并行 / 委托契约复杂度
   分档）；暂缓/否决（`retrieve_project_docs` 维持封存、向量检索、
-  web_search 并发 >1、浏览器 daemon、模式内混合路由）。
+  web_search 并发 >1、浏览器 daemon、模式内混合路由——后者已按
+  2026-08-30 用户裁决「先恢复外部」修订为「主面 web_search 派发入口」，
+  见下）。
 - 顺序纪律（2026-08-30 用户裁决修订）：S5-2 S3/S4 形式化重建/复验暂停不做
   （工程化项目、非 LIF 主项目，不要求逐步严格可比；"没修完"修完即闭环）；
   acaf_e2e 7 项回归核验已在 HEAD（d6f771b）全绿 23/23（S5-2 审查处理代码
@@ -1525,6 +1527,19 @@ S1-S4 全部闭合）
   runtime pytest 18+ 全绿、check_repository 除源码清单外零错误。详见
   TODO P0-0k。
 - 登记：ADR-0010 §14.43；CLI_PROJECT_INDEX（FUS-RETRIEVAL-ENGINE-SERP）。
+- **2026-08-30 门禁观察第三/四轮 + 主面恢复外部 web_search（用户裁决
+  「先恢复外部」）**：R3 验证轮 count-dataset-tokens 1.0（主面 6 工具无
+  browser_read、零拒绝事件，方向 A 闭环）；R4 build-pmars 1.0 +
+  sam-cell-seg 1.0（均零检索调用，终端解出）；四轮累计 10 个 gate run
+  检索调用全部为 0——结构性缺检索入口（local_browser 下 web 族隐藏 +
+  browser_read 方向 A 封存），非「模型倾向不用检索」。恢复实施（S1 代码
+  + S2 测试完成）：主面 local_browser 保留 `web_search` 单一派发入口
+  （描述标注外部检索子代理派发），web_fetch 族与 web_search_* 变体不入
+  主面；外部 lane 执行面二存一不变（local_browser 下仅 browser_read，
+  原生 web_search 兜底为机械路径 retrieval_mode_transition）；
+  `retrieve_project_docs` 维持封存。投影测试 13/13、orz-loop 624/0/3、
+  fmt/clippy 干净。设计登记：ADR-0010 §3.7 条 12（v1.9）/ §14.44；
+  调研 §9.4；TODO P0-0k；报告 §8–§10。S3 重建（s3c）+ 恢复后观察轮待续。
 
 ### 1. FUS-TOOL-PROBE（`implemented`；P0-A 批次 1-7 与 P0-A-2 已闭合）
 
