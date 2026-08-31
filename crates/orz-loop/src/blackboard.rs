@@ -1185,6 +1185,105 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    /// P2-10 阶段 3 V1 §6.6 (2026-08-31): 模型熟悉度近零提示——temporal 分区
+    /// 渲染必须自描述：字段标签/值/语义域字符串直接内联，模型无需外部词汇表
+    /// 即可单轮正确消费（P3 验收原话；无需实机）。四个查询面（now/recent/
+    /// history/feature）都验证标签存在且 fires 永不渲染（§9.7）。
+    #[tokio::test]
+    async fn temporal_render_is_self_describing_for_near_zero_prompt() {
+        let dir = test_dir();
+        let journal = JournalRecorder::new(dir.clone());
+        let host = TestHost {
+            journal,
+            tool_result: Some(ToolResult {
+                output: "ok".to_string(),
+                exit_code: Some(0),
+                output_encoding: None,
+                structured: None,
+                ..Default::default()
+            }),
+        };
+        let fake = Arc::new(FakeProvider::new(vec![
+            ScriptedResponse::tool_calls(vec![ToolCall {
+                name: "blackboard_read".to_string(),
+                arguments: serde_json::json!({"section": "temporal", "selector": "now"}),
+                call_id: "call-v1b-1".to_string(),
+            }]),
+            ScriptedResponse::tool_calls(vec![ToolCall {
+                name: "read_file".to_string(),
+                arguments: serde_json::json!({"target_file": "a.rs"}),
+                call_id: "call-v1b-2".to_string(),
+            }]),
+            ScriptedResponse::tool_calls(vec![ToolCall {
+                name: "grep".to_string(),
+                arguments: serde_json::json!({"pattern": "fn"}),
+                call_id: "call-v1b-3".to_string(),
+            }]),
+            ScriptedResponse::text("完成"),
+            ScriptedResponse::text("完成"),
+            ScriptedResponse::text("完成"),
+        ]));
+        let gateway: Arc<dyn ModelGateway> = fake.clone();
+        let controller = AgentLoopController::with_gateway(gateway).with_max_tool_rounds(120);
+        controller
+            .run_turn(&host, "读时间面", "RUN-V1B", MANIFEST, 0, None, None, None)
+            .await
+            .unwrap();
+
+        let now = controller
+            .render_temporal_section(Some("now"), None, None)
+            .unwrap();
+        for label in [
+            "temporal.now",
+            "u_prog=",
+            "u_err=",
+            "u_stuck=",
+            "err10=",
+            "succ10=",
+            "入域",
+            "驻留",
+        ] {
+            assert!(now.contains(label), "now render missing {label}: {now}");
+        }
+        assert!(
+            ["start", "normal", "pressure", "low_progress", "stuck"]
+                .iter()
+                .any(|d| now.contains(d)),
+            "now render must carry the semantic domain string: {now}"
+        );
+
+        let recent = controller
+            .render_temporal_section(Some("recent"), Some(20), None)
+            .unwrap();
+        assert!(recent.contains("temporal.recent"), "recent header: {recent}");
+        assert!(recent.contains("u_prog="), "recent rows carry labels: {recent}");
+
+        let history = controller
+            .render_temporal_section(Some("history"), None, None)
+            .unwrap();
+        assert!(
+            history.contains("temporal.history"),
+            "history header: {history}"
+        );
+
+        let feature = controller
+            .render_temporal_section(Some("feature"), Some(5), Some("u_prog"))
+            .unwrap();
+        assert!(
+            feature.contains("temporal.feature"),
+            "feature header: {feature}"
+        );
+
+        for board in [&now, &recent, &history, &feature] {
+            assert!(
+                !board.contains("fire"),
+                "fires must never render (§9.7): {board}"
+            );
+        }
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     /// P2-10 F2 §3.3 (I3): an invalid temporal selector fails loud (exit
     /// code 1 + explicit error), never a silent fallback.
     #[tokio::test]

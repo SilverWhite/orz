@@ -26,7 +26,11 @@ use std::path::{Path, PathBuf};
 
 use chrono::DateTime;
 use orz_assurance::lif::{
-    classify_event_outcome, Domain, ErrTauMode, LifEngine, ToolEvent,
+    classify_event_outcome, ErrTauMode, LifEngine, ToolEvent, ToolOutcome,
+    DENY_REFRACTORY_SECS, DENY_TAU_SECS, DENY_THETA, ERR_REFRACTORY_SECS, ERR_TAU_SECS,
+    ERR_THETA, SLOW_REFRACTORY_SECS, SLOW_TAU_SECS, SLOW_THETA, SLOW_W_MAX,
+    SLOW_WALL_MS_THRESHOLD, STALL_GAP_THRESHOLD_SECS, STALL_REFRACTORY_SECS,
+    STALL_TAU_SECS, STALL_THETA,
 };
 use serde_json::Value;
 
@@ -46,6 +50,231 @@ impl Xorshift64 {
     fn next_f64(&mut self) -> f64 {
         (self.next() >> 11) as f64 / (1u64 << 53) as f64
     }
+}
+
+/// 四对照门参考动力学（V2, 2026-08-31）——对同一事件流用同一更新律重放
+/// 三个变体：
+/// - `fires`：生产 LIF（复位 + 不应期），与引擎输出做确定性对拍；
+/// - `membrane`：C2≡C4 参考——无复位、无不应期的膜电位（单极点下 ≡ 一阶
+///   EMA），记录 u ≥ θ 的向上跨阈时刻；
+/// - `count_fires`：C3 参考——τ→∞（无泄漏）纯计数，保留复位 + 不应期，
+///   记录触发时刻。
+struct RefDynamics {
+    fires: Vec<f64>,
+    membrane: Vec<f64>,
+    count_fires: Vec<f64>,
+}
+
+/// 单通道四对照门结论。
+#[derive(serde::Serialize, Clone)]
+struct GateReference {
+    /// 参考 LIF 与引擎 fires 完全一致（确定性对拍）。
+    ref_matches_engine: bool,
+    /// C2/C4：膜电位跨阈次数（无复位/无不应期 = EMA）。
+    membrane_crossings: usize,
+    /// C3：τ→∞ 纯计数触发次数。
+    count_fires: usize,
+    /// C2/C4 通过：fires 时机与膜电位跨阈不同（阈值事件结构在起作用）。
+    c2c4_fires_differ_from_membrane: bool,
+    /// C3 通过：fires 与纯计数触发不同（泄漏/时间窗在起作用）。
+    c3_fires_differ_from_counting: bool,
+}
+
+/// 逐决策轮特征行（V2 聚类对照，§9.8）。
+#[derive(serde::Serialize, Clone)]
+struct FeatureRow {
+    t: f64,
+    domain: String,
+    u_prog: f64,
+    u_err: f64,
+    u_stuck: f64,
+    t_hat: f64,
+    err10: f64,
+    succ10: f64,
+}
+
+type WeightFn = dyn Fn(f64, Option<&ToolEvent>, Option<f64>) -> f64;
+type FiresFn = dyn Fn(&RunStats) -> usize;
+type PermsFn = dyn Fn(&RunStats) -> &[usize];
+type GatesFn = dyn Fn(&RunStats) -> &GateReference;
+
+fn err_weight(_t: f64, ev: Option<&ToolEvent>, _prev_tool_t: Option<f64>) -> f64 {
+    match ev {
+        Some(ev) if ev.outcome == ToolOutcome::Error => 1.0,
+        _ => 0.0,
+    }
+}
+
+fn deny_weight(_t: f64, ev: Option<&ToolEvent>, _prev_tool_t: Option<f64>) -> f64 {
+    match ev {
+        Some(ev) if ev.outcome == ToolOutcome::Deny => 1.0,
+        _ => 0.0,
+    }
+}
+
+fn stall_weight(t: f64, ev: Option<&ToolEvent>, prev_tool_t: Option<f64>) -> f64 {
+    // stall 仅在工具事件到达时探测间隔（§4.3）；决策轮只衰减不喂入。
+    if ev.is_none() {
+        return 0.0;
+    }
+    match prev_tool_t {
+        Some(prev) if (t - prev) > STALL_GAP_THRESHOLD_SECS => 1.0,
+        _ => 0.0,
+    }
+}
+
+fn slow_weight(_t: f64, ev: Option<&ToolEvent>, _prev_tool_t: Option<f64>) -> f64 {
+    match ev {
+        Some(ev) => match ev.wall_ms {
+            Some(ms) if ms > SLOW_WALL_MS_THRESHOLD => {
+                ((ms as f64) / 60_000.0).clamp(1.0, SLOW_W_MAX)
+            }
+            _ => 0.0,
+        },
+        None => 0.0,
+    }
+}
+
+/// 用同一更新律对事件流重放三个参考变体（见 `RefDynamics`）。
+fn reference_dynamics(
+    steps: &[Step],
+    weight: &WeightFn,
+    tau: f64,
+    theta: f64,
+    refractory: f64,
+) -> RefDynamics {
+    let mut u = 0.0;
+    let mut u_mem = 0.0;
+    let mut u_cnt = 0.0;
+    let mut last_t: Option<f64> = None;
+    let mut last_fire_until: Option<f64> = None;
+    let mut last_cnt_until: Option<f64> = None;
+    let mut prev_mem: f64 = 0.0;
+    let mut prev_tool_t: Option<f64> = None;
+    let mut fires = Vec::new();
+    let mut membrane = Vec::new();
+    let mut count_fires = Vec::new();
+    // 引擎内部时间以 run 起点归一（`LifEngine::rel`）——参考模拟用同一原点，
+    // 保证 fires/跨阈时刻与引擎同基可比（parity 对拍）。
+    let origin = steps
+        .first()
+        .map(|s| match *s {
+            Step::Decision(t) => t,
+            Step::Tool(t, _) => t,
+        })
+        .unwrap_or(0.0);
+    for step in steps {
+        let t = (match *step {
+            Step::Decision(t) => t,
+            Step::Tool(t, _) => t,
+        }) - origin;
+        if let Some(t0) = last_t {
+            let dt = (t - t0).max(0.0);
+            if tau.is_finite() && dt > 0.0 {
+                let k = (-dt / tau).exp();
+                u *= k;
+                u_mem *= k;
+            }
+        }
+        last_t = Some(t);
+        let w = match step {
+            Step::Decision(_) => weight(t, None, prev_tool_t),
+            Step::Tool(_, ev) => weight(t, Some(ev), prev_tool_t),
+        };
+        if let Step::Tool(_, _) = step {
+            prev_tool_t = Some(t);
+        }
+        if w > 0.0 {
+            u += w;
+            u_mem += w;
+            u_cnt += w;
+        }
+        let in_ref = matches!(last_fire_until, Some(until) if t < until);
+        if u >= theta && !in_ref {
+            fires.push(t);
+            u = 0.0;
+            last_fire_until = Some(t + refractory);
+        }
+        if u_mem >= theta && prev_mem < theta {
+            membrane.push(t);
+        }
+        prev_mem = u_mem;
+        let in_cnt_ref = matches!(last_cnt_until, Some(until) if t < until);
+        if u_cnt >= theta && !in_cnt_ref {
+            count_fires.push(t);
+            u_cnt = 0.0;
+            last_cnt_until = Some(t + refractory);
+        }
+    }
+    RefDynamics {
+        fires,
+        membrane,
+        count_fires,
+    }
+}
+
+/// 单通道四对照门 C2/C3（C2≡C4：单极点下无复位电位 = 一阶 EMA）。
+fn gate_reference(
+    steps: &[Step],
+    engine_fires: &[f64],
+    weight: &WeightFn,
+    tau: f64,
+    theta: f64,
+    refractory: f64,
+) -> GateReference {
+    let r = reference_dynamics(steps, weight, tau, theta, refractory);
+    GateReference {
+        ref_matches_engine: r.fires == engine_fires,
+        membrane_crossings: r.membrane.len(),
+        count_fires: r.count_fires.len(),
+        c2c4_fires_differ_from_membrane: r.fires != r.membrane,
+        c3_fires_differ_from_counting: r.fires != r.count_fires,
+    }
+}
+
+/// C1 时间打乱：保留事件类型/载荷序列，仅重排事件间隔（10 次种子置换）。
+/// 与原 err 通道 C1 种子公式一致，保证既有证据可复现。
+fn shuffled_interval_steps(steps: &[Step], perm_seed: u64) -> Vec<Step> {
+    let times: Vec<f64> = steps
+        .iter()
+        .map(|s| match *s {
+            Step::Decision(t) => t,
+            Step::Tool(t, _) => t,
+        })
+        .collect();
+    let intervals: Vec<f64> = times.windows(2).map(|w| (w[1] - w[0]).max(0.0)).collect();
+    let mut rng = Xorshift64(0x9E3779B97F4A7C15 ^ perm_seed.wrapping_mul(0x100000001B3));
+    let mut shuffled = intervals.clone();
+    for i in (1..shuffled.len()).rev() {
+        let j = (rng.next_f64() * (i + 1) as f64).floor() as usize;
+        shuffled.swap(i, j);
+    }
+    let mut t = times[0];
+    let mut out = Vec::with_capacity(steps.len());
+    let mut idx = 0;
+    for (i, step) in steps.iter().enumerate() {
+        if i > 0 {
+            t += shuffled[idx];
+            idx += 1;
+        }
+        match *step {
+            Step::Decision(_) => out.push(Step::Decision(t)),
+            Step::Tool(_, ev) => out.push(Step::Tool(t, ev)),
+        }
+    }
+    out
+}
+
+fn perm_counts(steps: &[Step], extract: &dyn Fn(&LifEngine) -> usize) -> Vec<usize> {
+    (0_u64..10)
+        .map(|perm| {
+            let p = replay(
+                &shuffled_interval_steps(steps, perm),
+                ErrTauMode::FixedSecs(180.0),
+            );
+            extract(&p)
+        })
+        .collect()
 }
 
 fn find_journals(root: &Path) -> Vec<PathBuf> {
@@ -155,6 +384,15 @@ struct RunStats {
     migrations: usize,
     err_fires_round: usize,
     err_fires_permutation: Vec<usize>,
+    deny_fires_permutation: Vec<usize>,
+    stall_fires_permutation: Vec<usize>,
+    slow_fires_permutation: Vec<usize>,
+    err_gates: GateReference,
+    deny_gates: GateReference,
+    stall_gates: GateReference,
+    slow_gates: GateReference,
+    stuck_membrane_crossed: bool,
+    features: Vec<FeatureRow>,
 }
 
 fn replay(steps: &[Step], err_mode: ErrTauMode) -> LifEngine {
@@ -173,13 +411,26 @@ fn run_stats(run_id: String, steps: &[Step], err_round_k: f64) -> RunStats {
     let mut engine = LifEngine::new();
     let mut t_hats: Vec<f64> = Vec::new();
     let mut domain_counts: BTreeMap<String, u64> = BTreeMap::new();
+    let mut features: Vec<FeatureRow> = Vec::new();
     for step in steps {
         match *step {
             Step::Decision(t) => {
                 engine.on_decision_round(t);
                 t_hats.push(engine.estimator().estimate());
-                let domain = engine.temporal().now().map(|r| r.domain).unwrap_or(Domain::Start);
-                *domain_counts.entry(domain.as_str().to_string()).or_insert(0) += 1;
+                let rec = engine.temporal().now().copied();
+                if let Some(rec) = rec {
+                    *domain_counts.entry(rec.domain.as_str().to_string()).or_insert(0) += 1;
+                    features.push(FeatureRow {
+                        t: rec.t,
+                        domain: rec.domain.as_str().to_string(),
+                        u_prog: rec.u_prog,
+                        u_err: rec.u_err,
+                        u_stuck: rec.u_stuck,
+                        t_hat: rec.t_hat,
+                        err10: rec.err10,
+                        succ10: rec.succ10,
+                    });
+                }
             }
             Step::Tool(t, ev) => engine.on_tool_event(t, ev),
         }
@@ -197,43 +448,62 @@ fn run_stats(run_id: String, steps: &[Step], err_round_k: f64) -> RunStats {
     // Round-semantics err counterfactual (design §9.6.5.6 anchor).
     let round_engine = replay(steps, ErrTauMode::Rounds(err_round_k));
 
-    // C1: 10 seeded permutations of event intervals on the err channel.
-    let mut perm_counts = Vec::new();
-    let base_err = engine.err().fire_count();
-    if base_err > 0 {
-        let times: Vec<f64> = steps
-            .iter()
-            .map(|s| match *s {
-                Step::Decision(t) => t,
-                Step::Tool(t, _) => t,
-            })
-            .collect();
-        let intervals: Vec<f64> = times.windows(2).map(|w| (w[1] - w[0]).max(0.0)).collect();
-        for perm in 0_u64..10 {
-            let mut rng = Xorshift64(0x9E3779B97F4A7C15 ^ perm.wrapping_mul(0x100000001B3));
-            let mut shuffled = intervals.clone();
-            // Fisher–Yates over the interval list.
-            for i in (1..shuffled.len()).rev() {
-                let j = (rng.next_f64() * (i + 1) as f64).floor() as usize;
-                shuffled.swap(i, j);
-            }
-            let mut t = times[0];
-            let mut perm_steps = Vec::with_capacity(steps.len());
-            let mut idx = 0;
-            for (i, step) in steps.iter().enumerate() {
-                if i > 0 {
-                    t += shuffled[idx];
-                    idx += 1;
-                }
-                match *step {
-                    Step::Decision(_) => perm_steps.push(Step::Decision(t)),
-                    Step::Tool(_, ev) => perm_steps.push(Step::Tool(t, ev)),
-                }
-            }
-            let p = replay(&perm_steps, ErrTauMode::FixedSecs(180.0));
-            perm_counts.push(p.err().fire_count());
-        }
-    }
+    // C1: 10 seeded permutations of event intervals, per channel with fires.
+    let err_perm = if engine.err().fire_count() > 0 {
+        perm_counts(steps, &|e| e.err().fire_count())
+    } else {
+        Vec::new()
+    };
+    let deny_perm = if engine.deny().fire_count() > 0 {
+        perm_counts(steps, &|e| e.deny().fire_count())
+    } else {
+        Vec::new()
+    };
+    let stall_perm = if engine.stall().fire_count() > 0 {
+        perm_counts(steps, &|e| e.stall().fire_count())
+    } else {
+        Vec::new()
+    };
+    let slow_perm = if engine.slow().fire_count() > 0 {
+        perm_counts(steps, &|e| e.slow().fire_count())
+    } else {
+        Vec::new()
+    };
+
+    // C2/C4（膜电位 ≡ EMA，无复位/无不应期）+ C3（τ→∞ 纯计数）参考重放。
+    let err_gates = gate_reference(
+        steps,
+        engine.err().fire_times(),
+        &err_weight,
+        ERR_TAU_SECS,
+        ERR_THETA,
+        ERR_REFRACTORY_SECS,
+    );
+    let deny_gates = gate_reference(
+        steps,
+        engine.deny().fire_times(),
+        &deny_weight,
+        DENY_TAU_SECS,
+        DENY_THETA,
+        DENY_REFRACTORY_SECS,
+    );
+    let stall_gates = gate_reference(
+        steps,
+        engine.stall().fire_times(),
+        &stall_weight,
+        STALL_TAU_SECS,
+        STALL_THETA,
+        STALL_REFRACTORY_SECS,
+    );
+    let slow_gates = gate_reference(
+        steps,
+        engine.slow().fire_times(),
+        &slow_weight,
+        SLOW_TAU_SECS,
+        SLOW_THETA,
+        SLOW_REFRACTORY_SECS,
+    );
+    let stuck_peak_ratio = engine.stuck().peak_theta_ratio();
 
     RunStats {
         run_id,
@@ -254,7 +524,16 @@ fn run_stats(run_id: String, steps: &[Step], err_round_k: f64) -> RunStats {
         spikes: engine.temporal().spikes().len(),
         migrations: engine.temporal().history().len(),
         err_fires_round: round_engine.err().fire_count(),
-        err_fires_permutation: perm_counts,
+        err_fires_permutation: err_perm,
+        deny_fires_permutation: deny_perm,
+        stall_fires_permutation: stall_perm,
+        slow_fires_permutation: slow_perm,
+        err_gates,
+        deny_gates,
+        stall_gates,
+        slow_gates,
+        stuck_membrane_crossed: stuck_peak_ratio >= 1.0,
+        features,
     }
 }
 
@@ -291,14 +570,57 @@ fn main() {
     let runs_with_stall = runs.iter().filter(|r| r.stall_fires > 0).count();
     let runs_with_deny = runs.iter().filter(|r| r.deny_fires > 0).count();
 
-    // C1 aggregate: of the runs with ≥1 fixed-time err fire, how many changed
-    // their fire count under ≥1 of the 10 permutations.
-    let c1_changed = runs
+    // 四对照门聚合：对每个有 fires 的一阶通道统计
+    // C1（10 置换下 fires 数/时机改变）、C2/C4（fires ≠ 膜电位跨阈）、
+    // C3（fires ≠ τ→∞ 纯计数触发）以及参考对拍（确定性 parity）。
+    let c1_stats = |fires: &FiresFn, perms: &PermsFn| -> (usize, usize, usize) {
+        let with = runs.iter().filter(|r| fires(r) > 0).count();
+        let changed = runs
+            .iter()
+            .filter(|r| fires(r) > 0)
+            .filter(|r| perms(r).iter().any(|c| *c != fires(r)))
+            .count();
+        (with, changed, with.saturating_sub(changed))
+    };
+    let gate_stats = |fires: &FiresFn, g: &GatesFn| -> (usize, usize, usize, usize) {
+        let with = runs.iter().filter(|r| fires(r) > 0).count();
+        let c2c4_diff = runs
+            .iter()
+            .filter(|r| fires(r) > 0)
+            .filter(|r| g(r).c2c4_fires_differ_from_membrane)
+            .count();
+        let c3_diff = runs
+            .iter()
+            .filter(|r| fires(r) > 0)
+            .filter(|r| g(r).c3_fires_differ_from_counting)
+            .count();
+        let parity_fail = runs.iter().filter(|r| !g(r).ref_matches_engine).count();
+        (with, c2c4_diff, c3_diff, parity_fail)
+    };
+    let (err_c1_with, err_c1_changed, err_c1_unchanged) =
+        c1_stats(&|r| r.err_fires, &|r| &r.err_fires_permutation);
+    let (deny_c1_with, deny_c1_changed, deny_c1_unchanged) =
+        c1_stats(&|r| r.deny_fires, &|r| &r.deny_fires_permutation);
+    let (stall_c1_with, stall_c1_changed, stall_c1_unchanged) =
+        c1_stats(&|r| r.stall_fires, &|r| &r.stall_fires_permutation);
+    let (slow_c1_with, slow_c1_changed, slow_c1_unchanged) =
+        c1_stats(&|r| r.slow_fires, &|r| &r.slow_fires_permutation);
+    let (_err_g_with, err_g_c2, err_g_c3, err_g_parity) =
+        gate_stats(&|r| r.err_fires, &|r| &r.err_gates);
+    let (_deny_g_with, deny_g_c2, deny_g_c3, deny_g_parity) =
+        gate_stats(&|r| r.deny_fires, &|r| &r.deny_gates);
+    let (_stall_g_with, stall_g_c2, stall_g_c3, stall_g_parity) =
+        gate_stats(&|r| r.stall_fires, &|r| &r.stall_gates);
+    let (_slow_g_with, slow_g_c2, slow_g_c3, slow_g_parity) =
+        gate_stats(&|r| r.slow_fires, &|r| &r.slow_gates);
+    let stuck_membrane_crossed_runs = runs
         .iter()
-        .filter(|r| r.err_fires > 0)
-        .filter(|r| r.err_fires_permutation.iter().any(|c| *c != r.err_fires))
+        .filter(|r| r.stuck_membrane_crossed)
         .count();
-    let c1_unchanged = runs_with_err.saturating_sub(c1_changed);
+    let stuck_parity = runs
+        .iter()
+        .filter(|r| !r.stuck_peak_ratio.is_finite())
+        .count();
 
     let report = serde_json::json!({
         "replay": {
@@ -320,8 +642,48 @@ fn main() {
             "slow_runs": runs_with_slow,
             "stall_runs": runs_with_stall,
             "deny_runs": runs_with_deny,
-            "c1_changed": c1_changed,
-            "c1_unchanged": c1_unchanged,
+            "c1_changed": err_c1_changed,
+            "c1_unchanged": err_c1_unchanged,
+        },
+        "controls": {
+            "err": {
+                "runs_with_fires": err_c1_with,
+                "c1_changed": err_c1_changed,
+                "c1_unchanged": err_c1_unchanged,
+                "c2c4_fires_differ_from_membrane": err_g_c2,
+                "c3_fires_differ_from_counting": err_g_c3,
+                "reference_parity_fail_runs": err_g_parity,
+            },
+            "deny": {
+                "runs_with_fires": deny_c1_with,
+                "c1_changed": deny_c1_changed,
+                "c1_unchanged": deny_c1_unchanged,
+                "c2c4_fires_differ_from_membrane": deny_g_c2,
+                "c3_fires_differ_from_counting": deny_g_c3,
+                "reference_parity_fail_runs": deny_g_parity,
+            },
+            "stall": {
+                "runs_with_fires": stall_c1_with,
+                "c1_changed": stall_c1_changed,
+                "c1_unchanged": stall_c1_unchanged,
+                "c2c4_fires_differ_from_membrane": stall_g_c2,
+                "c3_fires_differ_from_counting": stall_g_c3,
+                "reference_parity_fail_runs": stall_g_parity,
+            },
+            "slow": {
+                "runs_with_fires": slow_c1_with,
+                "c1_changed": slow_c1_changed,
+                "c1_unchanged": slow_c1_unchanged,
+                "c2c4_fires_differ_from_membrane": slow_g_c2,
+                "c3_fires_differ_from_counting": slow_g_c3,
+                "reference_parity_fail_runs": slow_g_parity,
+            },
+            "stuck": {
+                "runs_with_fires": runs_with_stuck,
+                "peak_theta_ratio": peak_ratio,
+                "membrane_crossed_runs": stuck_membrane_crossed_runs,
+                "nonfinite_ratio_runs": stuck_parity,
+            },
         },
         "runs": runs
             .iter()
@@ -346,6 +708,15 @@ fn main() {
                     "spikes": r.spikes,
                     "migrations": r.migrations,
                     "c1_permutations": r.err_fires_permutation,
+                    "deny_c1_permutations": r.deny_fires_permutation,
+                    "stall_c1_permutations": r.stall_fires_permutation,
+                    "slow_c1_permutations": r.slow_fires_permutation,
+                    "err_gates": r.err_gates,
+                    "deny_gates": r.deny_gates,
+                    "stall_gates": r.stall_gates,
+                    "slow_gates": r.slow_gates,
+                    "stuck_membrane_crossed": r.stuck_membrane_crossed,
+                    "features": r.features,
                 })
             })
             .collect::<Vec<_>>(),
