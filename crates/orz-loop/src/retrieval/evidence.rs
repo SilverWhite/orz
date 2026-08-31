@@ -637,7 +637,11 @@ fn split_source_declaration(line: &str) -> (String, String) {
         }
     }
     let Some(start) = url_start else {
-        return (line.to_string(), String::new());
+        // S4 实机复验（2026-08-31）：非 URL 声明行（internal ref /
+        // 纯描述行）原样保留为 ref；source_title 回退为整行原文——
+        // retrieval-result schema 要求 source_title 非空（nonempty
+        // minLength 1），空 title 会导致实机 journal 严格校验违例。
+        return (line.to_string(), line.trim().to_string());
     };
     let head = line[..start].trim();
     let tail = &line[start..];
@@ -1679,14 +1683,16 @@ mod tests {
         assert_eq!(url, "https://blog.csdn.net/foo");
         assert_eq!(title, "https://blog.csdn.net/foo");
 
-        // 非 URL 行（内部 ref）原样保留、标题空。
+        // 非 URL 行（内部 ref）原样保留；标题回退为整行原文（schema
+        // source_title 非空约束，S4 实机复验 2026-08-31 对齐）。
         let (ref_, title) = split_source_declaration("docs/design.md");
         assert_eq!(ref_, "docs/design.md");
-        assert_eq!(title, "");
+        assert_eq!(title, "docs/design.md");
 
-        // 解析失败（scheme 非 http(s)）原样保留。
+        // 解析失败（scheme 非 http(s)）原样保留；标题回退为整行原文
+        // （source_title 非空约束，S4 实机复验 2026-08-31 对齐）。
         let (url, title) = split_source_declaration("ftp://example.com/x");
         assert_eq!(url, "ftp://example.com/x");
-        assert_eq!(title, "");
+        assert_eq!(title, "ftp://example.com/x");
     }
 }
