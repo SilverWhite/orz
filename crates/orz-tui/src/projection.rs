@@ -323,40 +323,6 @@ pub fn apply_event(app: &mut TuiApp, event: TuiEvent) -> Vec<String> {
             vec![format!("检索完成确认: {role} = {decision}")]
         }
 
-        // ── v0.2 mechanism events (GAP-INQUIRY-SPLIT, 2026-08-09) ──
-        TuiEvent::DiagnosticCoverageCheckpoint {
-            checkpoint_id,
-            threshold_stage,
-        } => {
-            app.content.add_system_message(
-                &format!("[诊断覆盖检查点] {checkpoint_id} 阈值 {threshold_stage}"),
-                false,
-            );
-            vec![format!("诊断覆盖检查点: {checkpoint_id}")]
-        }
-        // ORZ-ORIENTATION-FORCED-TEMPLATE (2026-08-15, ADR-0010 §14.16):
-        // forced-template checkpoint round answer/validation verdict.
-        TuiEvent::CheckpointResponse {
-            checkpoint_id,
-            inquiry_kind,
-            attempt,
-            outcome,
-            validation_valid,
-            validation_error_count,
-        } => {
-            let state = if validation_valid {
-                "通过".to_string()
-            } else {
-                format!("失败({validation_error_count} 项)")
-            };
-            app.content.add_system_message(
-                &format!(
-                    "[模板检查点] {inquiry_kind} {checkpoint_id} 第 {attempt} 次: {outcome}（校验{state}）"
-                ),
-                false,
-            );
-            vec![format!("模板检查点: {checkpoint_id} → {outcome}")]
-        }
         // PLAN-FIRST 阶段 A (2026-08-16, ADR-0010 §14.17): first-round plan
         // gate result — outcome and validation summary only.
         TuiEvent::PlanWrite {

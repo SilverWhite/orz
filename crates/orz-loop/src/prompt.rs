@@ -35,16 +35,6 @@ pub const COUNTEREXAMPLE_GATE_BLOCK: &str = "[COUNTEREXAMPLE_GATE v0.1]\n\
 注意：本反例询问仅出现一次，请在最终回答前完成全部反例自查。\n\
 [/COUNTEREXAMPLE_GATE]";
 
-/// Counterexample gate block — plan 写入前 variant: same block minus the
-/// "仅出现一次" note line (plan-write is part of the plan approval gate chain
-/// and is NOT subject to once-only, §4.6.2 裁决 3).
-pub const COUNTEREXAMPLE_GATE_PLAN_BLOCK: &str = "[COUNTEREXAMPLE_GATE v0.1]\n\
-最终回答即将输出。请对即将输出的结论做最后一次反例自查：\n\
-1. 是否存在未验证的前提？\n\
-2. 是否存在可推翻结论的已知证据？\n\
-3. 结论强度是否超出证据支持？\n\
-[/COUNTEREXAMPLE_GATE]";
-
 /// GAP-INQUIRY-SPLIT (2026-08-09): prefix of the injected orientation block
 /// (ADR-0010 §4.2 — session-level 7-round neutral inquiry). Registered with
 /// `is_injected_block_text` so the injected block never enters the persisted
@@ -64,7 +54,6 @@ pub const ORIENTATION_INJECTED_PREFIX: &str = "[ORIENTATION";
 pub fn is_injected_block_text(content: &str) -> bool {
     let content = content.trim();
     content == COUNTEREXAMPLE_GATE_BLOCK
-        || content == COUNTEREXAMPLE_GATE_PLAN_BLOCK
         // GAP-INQUIRY-SPLIT: the injected orientation block must never be
         // persisted — a repeated `[ORIENTATION …]` block would
         // otherwise pollute the persisted conversation (R-8 regression point).
@@ -87,10 +76,6 @@ pub fn is_injected_block_text(content: &str) -> bool {
         // persisted back (model-written, but a resident framework-
         // managed block, not per-round model output).
         || content.starts_with(WHITELIST_PREFIX)
-        // GAP-SUBAGENT-RUNTIME M5 (2026-08-10): the Diagnostic Coverage
-        // checkpoint block (ADR-0010 §4.6.4) is mechanical injected text —
-        // never persisted back into the conversation.
-        || content.starts_with(crate::diagnostic_coverage::DIAGNOSTIC_COVERAGE_PREFIX)
         // MECHANICAL-AUDIT-LAYER (2026-08-24, ADR-0010 §14.39): the
         // `[MECHANICAL_AUDIT v0.1]` execution-fact report is mechanical
         // injected text — never persisted back into the conversation.
@@ -101,11 +86,6 @@ pub fn is_injected_block_text(content: &str) -> bool {
         // conversation; registered so it can never pollute the injected-block/restore filters or
         // restore filters.
         || content.starts_with(crate::action_ledger::ACTION_LEDGER_PREFIX)
-        // ORZ-ORIENTATION-FORCED-TEMPLATE (2026-08-15, ADR-0010 §14.16):
-        // the one-shot checkpoint re-fill feedback block is mechanical
-        // injected text — never persisted back into the conversation
-        // (same rule as the other User-role blocks).
-        || content.starts_with(crate::checkpoint::CHECKPOINT_REFILL_PREFIX)
 }
 
 /// 2026-08-08 blackboard partition (A2): prefix of the incremental-push
@@ -504,32 +484,17 @@ mod tests {
         assert!(COUNTEREXAMPLE_GATE_BLOCK.contains("3. 结论强度是否超出证据支持？"));
         assert!(COUNTEREXAMPLE_GATE_BLOCK.contains("本反例询问仅出现一次"));
         assert!(COUNTEREXAMPLE_GATE_BLOCK.ends_with("[/COUNTEREXAMPLE_GATE]"));
-
-        // Plan variant: identical to the final-answer variant except the
-        // once-only note line (plan-write is not subject to once-only).
-        assert_eq!(
-            COUNTEREXAMPLE_GATE_PLAN_BLOCK,
-            COUNTEREXAMPLE_GATE_BLOCK.replace(
-                "注意：本反例询问仅出现一次，请在最终回答前完成全部反例自查。\n",
-                ""
-            )
-        );
     }
 
     #[test]
     fn is_injected_block_text_detects_blocks() {
         assert!(is_injected_block_text(COUNTEREXAMPLE_GATE_BLOCK));
-        assert!(is_injected_block_text(COUNTEREXAMPLE_GATE_PLAN_BLOCK));
         // GAP-INQUIRY-SPLIT (2026-08-09): the old mixed-counter inquiry
         // blocks are deleted; the orientation block is registered by prefix
         // (its v0.2 text carries a version marker — equality would miss it).
         let orientation_block = orz_assurance::orientation::checkpoint::ORIENTATION_BLOCK;
         assert!(is_injected_block_text(orientation_block));
         assert!(is_injected_block_text("[ORIENTATION v0.4] 当前正在做什么"));
-        // §14.16: the checkpoint re-fill feedback is injected text.
-        assert!(is_injected_block_text(
-            &crate::checkpoint::refill_feedback_block(&["next_action 越界".to_string()])
-        ));
         // The closing tag must never match (starts with `[/`).
         assert!(!is_injected_block_text("[/ORIENTATION]"));
         // The retired blocks must NOT match — nothing injects them anymore.

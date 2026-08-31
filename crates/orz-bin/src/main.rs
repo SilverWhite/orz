@@ -13,7 +13,7 @@ use std::time::Duration;
 
 use orz_host::session::{SessionHandle, bootstrap_session};
 use orz_loop::gateway::fake::{FakeProvider, ScriptedResponse};
-use orz_loop::gateway::model::{Message, ModelGateway, Role, ToolCall};
+use orz_loop::gateway::model::{ModelGateway, ToolCall};
 
 /// FUS-BENCHMARK-FULL-EXEC (2026-08-18)：解析 headless benchmark 两轴旗标。
 /// 只接受无值精确形式 `--allow-shell` / `--allow-network`；`=value` 形式
@@ -530,8 +530,6 @@ fn run_plan(prompt: &str, wallclock: Option<Duration>, stall_timeout: Option<Dur
                 &mut prev_hash,
                 &run_id,
                 prompt,
-                &gateway,
-                &heartbeat,
                 plan_epoch,
             )
             .await
@@ -545,8 +543,7 @@ fn run_plan(prompt: &str, wallclock: Option<Duration>, stall_timeout: Option<Dur
             };
 
             // Execute under the approved plan — real host + IP6 bridge,
-            // sharing the gateway instance (its script continues after the
-            // gate round).
+            // sharing the gateway instance.
             let host = build_cli_host(&handle, &run_id, &cwd)?;
             // A4 (2026-08-08): the approved plan maps into the blackboard
             // plan section — goal = the task prompt, steps = the plan
@@ -649,8 +646,6 @@ async fn run_plan_phase(
     prev_hash: &mut Option<String>,
     run_id: &str,
     prompt: &str,
-    gateway: &Arc<dyn ModelGateway>,
-    heartbeat: &orz_loop::gateway::model::ActivityClock,
     plan_epoch: u64,
 ) -> Result<orz_assurance::plan::PlanArtifact, String> {
     let mut sm = orz_assurance::plan::PlanStateMachine::new();
@@ -660,71 +655,6 @@ async fn run_plan_phase(
     if !verification.valid {
         return Err(format!("plan artifact invalid: {:?}", verification.errors));
     }
-
-    // §4.6.1: counterexample gate BEFORE the plan write — one model round
-    // with the plan text in context. The artifact is mechanically derived
-    // (no model involvement today), so the gate fires as evidence only;
-    // it becomes a blocking link of the plan approval gate chain once
-    // plans are model-generated. The shared gateway's script order is
-    // gate round first, then the execution turn.
-    //
-    // P8 (FIX_PLAN 2026-08-06, D-7): this used the non-streaming `generate`,
-    // which carried no read timeout — a stalled wire could block `-p`
-    // indefinitely. All model rounds now go through `generate_stream` (the
-    // idle watchdog / total budget live there); the gate's text deltas go
-    // nowhere (deltas are never journaled).
-    let gate_response = gateway
-        .generate_stream(
-            orz_loop::gateway::model::ModelRequest {
-                system: orz_loop::prompt::BASE_SYSTEM_PROMPT.to_string(),
-                messages: vec![
-                    Message {
-                        role: Role::User,
-                        content: render_plan_for_gate(&artifact),
-                        tool_call_id: None,
-                        tool_calls: Vec::new(),
-                        reasoning_content: None,
-                    },
-                    Message {
-                        role: Role::User,
-                        content: orz_loop::prompt::COUNTEREXAMPLE_GATE_PLAN_BLOCK.to_string(),
-                        tool_call_id: None,
-                        tool_calls: Vec::new(),
-                        reasoning_content: None,
-                    },
-                ],
-                tools: Vec::new(),
-                // F-07 (2026-08-07 review): the gate is a FAST preflight round
-                // (max_tokens=1024) — under the default thinking-max config the
-                // reasoning would eat the whole budget and force the empty-
-                // content retry chain (up to 3 model calls per `-p`). Explicit
-                // override: thinking disabled, all output routed to content.
-                max_tokens: 1024,
-                thinking: Some(orz_loop::gateway::model::ThinkingMode::Disabled),
-            },
-            None,
-            // P1-1 (2026-08-08 stall guards): the gate's own wire frames
-            // keep the stall heartbeat alive.
-            Some(heartbeat),
-            &mut |_| {},
-        )
-        .await
-        .map_err(|e| format!("plan gate: {e}"))?;
-    let h0 = record_plan_event(
-        handle,
-        *seq,
-        prev_hash.clone(),
-        orz_assurance::EventType::CounterexampleGate,
-        serde_json::json!({
-            "position": "plan_write",
-            "message_block": orz_loop::prompt::COUNTEREXAMPLE_GATE_PLAN_BLOCK,
-            "once_only": false,
-            "model_response": gate_response.text.unwrap_or_default(),
-        }),
-    )
-    .await?;
-    *seq += 1;
-    *prev_hash = Some(h0);
 
     sm.submit_plan(artifact.clone())
         .map_err(|e| format!("plan: {e}"))?;
@@ -1063,14 +993,6 @@ fn build_gateway() -> Arc<dyn ModelGateway> {
 
 /// Render the plan artifact's four sections for the plan-write counterexample
 /// gate round (mechanical — no model-generated plan text yet).
-fn render_plan_for_gate(artifact: &orz_assurance::plan::PlanArtifact) -> String {
-    let mut out = String::new();
-    for section in &artifact.sections {
-        out.push_str(&format!("## {}\n{}\n\n", section.title, section.content_md));
-    }
-    out
-}
-
 /// Parse `-p <prompt>` or `--prompt <prompt>` from argv.
 fn parse_prompt(args: &[String]) -> Result<String, String> {
     for (i, arg) in args.iter().enumerate() {
@@ -1352,53 +1274,6 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         dir
-    }
-
-    /// P2-1 regression: a plan-phase error (the counterexample gate round
-    /// fails here) must not leave the journal without a terminal event — the
-    /// caller records RunFailed continuing the chain, and the journal replays
-    /// as valid with a run_failed terminal.
-    #[tokio::test]
-    async fn plan_phase_failure_writes_terminal_run_failed() {
-        let dir = test_dir();
-        let handle = orz_host::session::bootstrap_session(
-            "RUN-PLAN-FAIL",
-            Some(dir.clone()),
-            orz_host::session::TrustPolicy::Skip,
-        )
-        .await
-        .unwrap();
-
-        let mut seq = handle.next_sequence;
-        let mut prev_hash = handle.last_event_sha256.clone();
-        // Empty script — the gate round exhausts on the first call.
-        let gateway: Arc<dyn ModelGateway> = Arc::new(FakeProvider::new(Vec::new()));
-        let heartbeat = orz_loop::gateway::model::ActivityClock::new();
-        let err = run_plan_phase(
-            &handle,
-            &mut seq,
-            &mut prev_hash,
-            "RUN-PLAN-FAIL",
-            "hi",
-            &gateway,
-            &heartbeat,
-            1,
-        )
-        .await;
-        assert!(err.is_err(), "gate round must fail on an empty script");
-        record_plan_failure(&handle, seq, prev_hash.clone(), err.unwrap_err().as_str()).await;
-        handle.journal.shutdown_async().await.unwrap();
-
-        let replay = orz_assurance::replay_journal(
-            &handle.journal_dir.join("events.jsonl"),
-            Some("RUN-PLAN-FAIL"),
-            None,
-            true,
-        );
-        assert!(replay.valid, "journal errors: {:?}", replay.errors);
-        assert_eq!(replay.terminal_event.as_deref(), Some("run_failed"));
-
-        let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// P0-2 (2026-08-08 stall guards): the budget parser is fail-closed —
@@ -1992,8 +1867,9 @@ mod conformance_capture {
             .await
     }
 
-    /// 3. plan — plan-write gate round + plan_proposed/plan_approved, then
-    /// the execution turn under the approved plan.
+    /// 3. plan — plan_proposed/plan_approved, then the execution turn under
+    /// the approved plan (P2-11 DC 清理 2026-08-31: the plan-write
+    /// counterexample gate round is gone).
     #[tokio::test]
     #[ignore = "conformance capture — run with: cargo test -p orz-bin -- --ignored conformance_capture"]
     async fn capture_plan_run() {
@@ -2009,22 +1885,10 @@ mod conformance_capture {
                 let gateway: Arc<dyn ModelGateway> = Arc::new(FakeProvider::new(vec![
                     ScriptedResponse::text("X"),
                     ScriptedResponse::text("X"),
-                    ScriptedResponse::text("X"),
-                    ScriptedResponse::text("X"),
                 ]));
-                let heartbeat = orz_loop::gateway::model::ActivityClock::new();
-                run_plan_phase(
-                    &handle,
-                    &mut seq,
-                    &mut prev_hash,
-                    run_id,
-                    "hi",
-                    &gateway,
-                    &heartbeat,
-                    1,
-                )
-                .await
-                .unwrap();
+                run_plan_phase(&handle, &mut seq, &mut prev_hash, run_id, "hi", 1)
+                    .await
+                    .unwrap();
                 let host = build_cli_host(&handle, run_id, &base).unwrap();
                 let controller = orz_loop::AgentLoopController::with_gateway(gateway)
                     .with_snapshot_store(Some(handle.snapshot_store.clone()));
@@ -2047,12 +1911,12 @@ mod conformance_capture {
                     "plan-run",
                     &[
                         "run_preflight",
-                        "counterexample_gate",
                         "plan_proposed",
                         "plan_approved",
                         "tool_availability_check",
                         "run_started",
                         "prompt_submitted",
+                        "request_header_change",
                         "model_output",
                         "counterexample_gate",
                         "model_output",

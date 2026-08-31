@@ -562,7 +562,11 @@ fn persist_conversation_sidecar(
         return;
     }
     let spikes = (!temporal_spikes.is_empty()).then(|| temporal_spikes.to_vec());
-    match serde_json::to_string_pretty(&StoredConversation::new(session_id, messages.to_vec(), spikes)) {
+    match serde_json::to_string_pretty(&StoredConversation::new(
+        session_id,
+        messages.to_vec(),
+        spikes,
+    )) {
         Ok(json) => {
             if let Err(e) = std::fs::write(&path, json) {
                 tracing::warn!(

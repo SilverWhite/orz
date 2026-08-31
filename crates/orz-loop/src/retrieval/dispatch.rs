@@ -424,7 +424,6 @@ impl AgentLoopController {
             denial_state: &self.denial_state,
             pacing_rounds: &self.pacing_rounds,
             context_compact: &self.context_compact,
-            dc_state: &self.dc_state,
             // Retrieval lane: collect tool-call evidence (§3.7.4).
             evidence: Some(&self.evidence),
             policy_revision: &self.policy_revision,
@@ -514,7 +513,6 @@ impl AgentLoopController {
                         denial_state: &self.denial_state,
                         pacing_rounds: &self.pacing_rounds,
                         context_compact: &self.context_compact,
-                        dc_state: &self.dc_state,
                         evidence: Some(&self.evidence),
                         policy_revision: &self.policy_revision,
                         max_inject_tokens_per_round: self.max_inject_tokens_per_round,
@@ -706,15 +704,6 @@ impl AgentLoopController {
                 if let Some(ledger) = committed.payload.get("source_ledger") {
                     self.run_source_ledgers.lock().unwrap().push(ledger.clone());
                 }
-                // GAP-RETRIEVAL-TOOLS (2026-08-10): the committed result's
-                // source identities count as examined surfaces for the DC
-                // signals (key_surface_unexamined; main lane — the
-                // subagent dispatch runs under the main profile).
-                crate::diagnostic_coverage::maybe_consume_dc_retrieval_evidence(
-                    &self.dc_state,
-                    &committed,
-                )
-                .await?;
                 let artifact_ref = self.persist_result_artifact(
                     writer,
                     &committed,

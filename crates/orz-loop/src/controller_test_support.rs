@@ -12,7 +12,6 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use async_trait::async_trait;
 
 use crate::controller::{AgentLoopController, RetrievalCapability, RetrievalMode};
-use crate::gateway::fake::ScriptedResponse;
 use crate::gateway::model::{Message, ModelGateway, Role, ToolCall};
 use crate::host::{
     LoopHost, PermitDecision, PermitError, RiskClass, ToolDef, ToolError, ToolRegistry, ToolResult,
@@ -384,77 +383,6 @@ pub(crate) fn stage_c_controller(gateway: Arc<dyn ModelGateway>) -> AgentLoopCon
     AgentLoopController::with_gateway(gateway)
         .with_plan_first_enabled(true)
         .with_console_default_enabled(true)
-}
-
-/// A host whose fixed test runner returns scripted results — the DC
-/// hard-signal source (ADR-0010 §4.6.2).
-pub(crate) struct ScriptedTestRunnerHost {
-    pub(crate) journal: JournalRecorder,
-    pub(crate) results: std::sync::Mutex<std::collections::VecDeque<crate::host::TestRunResult>>,
-}
-#[async_trait]
-impl LoopHost for ScriptedTestRunnerHost {
-    fn journal(&self) -> &JournalRecorder {
-        &self.journal
-    }
-    fn tools_registry(&self) -> &dyn ToolRegistry {
-        &FullRegistry
-    }
-    fn tool_policy(&self) -> crate::host::ToolPolicy {
-        crate::host::ToolPolicy::Benchmark
-    }
-    fn test_runner(&self) -> Option<crate::host::TestRunner> {
-        Some(crate::host::TestRunner {
-            command: vec!["pytest-stub".to_string()],
-            timeout: None,
-            env: Vec::new(),
-        })
-    }
-    async fn run_tests(&self) -> Result<crate::host::TestRunResult, ToolError> {
-        let r = self
-            .results
-            .lock()
-            .unwrap()
-            .pop_front()
-            .expect("scripted test results exhausted");
-        Ok(r)
-    }
-    async fn request_permission(
-        &self,
-        _risk: RiskClass,
-        _tool: &str,
-        _args: &serde_json::Value,
-    ) -> Result<PermitDecision, PermitError> {
-        // RT-001 (2026-08-11): run_tests passes the permission gate —
-        // this host models the Benchmark (harness) policy, where the
-        // bridge auto-allows LocalMutation non-shell tools.
-        Ok(PermitDecision::AllowOnce)
-    }
-}
-
-pub(crate) fn failing_test_run() -> crate::host::TestRunResult {
-    crate::host::TestRunResult {
-        output: "FAILED tests/test_x.py::test_y".to_string(),
-        exit_code: Some(1),
-        full_output_path: Some("D:/test-output.txt".to_string()),
-        ..Default::default()
-    }
-}
-pub(crate) fn passing_test_run() -> crate::host::TestRunResult {
-    crate::host::TestRunResult {
-        output: "1 passed".to_string(),
-        exit_code: Some(0),
-        full_output_path: Some("D:/test-output.txt".to_string()),
-        ..Default::default()
-    }
-}
-
-/// ORZ-ORIENTATION-FORCED-TEMPLATE (2026-08-15, ADR-0010 §14.16): a
-/// valid JSON template answer for a forced checkpoint round.
-pub(crate) fn template_answer(next_action: &str) -> ScriptedResponse {
-    ScriptedResponse::text(format!(
-        r#"{{"task_position":"修复测试失败","progress_evidence":[],"blockers":[],"next_action":"{next_action}","changed_direction":false}}"#
-    ))
 }
 
 pub(crate) struct FullRegistry;

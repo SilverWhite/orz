@@ -426,10 +426,6 @@ pub struct AgentLoopController {
     /// next prompt (registered boundary — cross-turn persistence is a
     /// later slice).
     pub(crate) activations: Mutex<ActivationRegistry>,
-    /// M5 (2026-08-10): Diagnostic Coverage episode state (ADR-0010
-    /// §4.6) — main lane; one episode per run (registered boundary:
-    /// cross-prompt episodes are not persisted).
-    pub(crate) dc_state: Mutex<crate::diagnostic_coverage::DebugEpisodeState>,
     /// GAP-RETRIEVAL-TOOLS (2026-08-10): ADR-0010 §3.7.1 explicit retrieval
     /// mode — session/task-contract level. `off` is the default; a session
     /// bootstrap transition (session/new with an explicit mode) journals one
@@ -734,7 +730,6 @@ impl AgentLoopController {
             whitelist: Mutex::new(Vec::new()),
             whitelist_cap: DEFAULT_WHITELIST_CAP,
             activations: Mutex::new(ActivationRegistry::default()),
-            dc_state: Mutex::new(crate::diagnostic_coverage::DebugEpisodeState::default()),
             retrieval_mode: RetrievalMode::Off,
             previous_retrieval_mode: None,
             retrieval_capability: RetrievalCapability::Unsupported(
@@ -1313,7 +1308,6 @@ impl AgentLoopController {
             whitelist: Mutex::new(Vec::new()),
             whitelist_cap: DEFAULT_WHITELIST_CAP,
             activations: Mutex::new(ActivationRegistry::default()),
-            dc_state: Mutex::new(crate::diagnostic_coverage::DebugEpisodeState::default()),
             retrieval_mode: RetrievalMode::Off,
             previous_retrieval_mode: None,
             retrieval_capability: RetrievalCapability::Unsupported(
@@ -2856,7 +2850,6 @@ impl AgentLoopController {
                 denial_state: &self.denial_state,
                 pacing_rounds: &self.pacing_rounds,
                 context_compact: &self.context_compact,
-                dc_state: &self.dc_state,
                 // Main lane: collect the lane's own read evidence — the
                 // observation-time source for final-answer path:line
                 // citation binding (P0-B step 5, ADR-0010 §3.7.9).
@@ -2912,7 +2905,6 @@ impl AgentLoopController {
                     denial_state: &self.denial_state,
                     pacing_rounds: &self.pacing_rounds,
                     context_compact: &self.context_compact,
-                    dc_state: &self.dc_state,
                     evidence: Some(&self.main_evidence),
                     policy_revision: &self.policy_revision,
                     max_inject_tokens_per_round: self.max_inject_tokens_per_round,
@@ -3002,29 +2994,6 @@ impl AgentLoopController {
         Ok(last_text.unwrap_or_default())
     }
 
-    /// ORZ-ORIENTATION-FORCED-TEMPLATE (2026-08-15, ADR-0010 §14.16): the
-    /// journal evidence identities available to the forced-template
-    /// `progress_evidence` cross-check — committed retrieval ledger ids /
-    /// refs plus the main lane's own evidence identities. Non-blocking
-    /// mitigation (强制表达，不验证诚实): the checkpoint response event
-    /// records which identities matched and which did not.
-    pub(crate) fn checkpoint_source_identities(&self) -> Vec<String> {
-        let mut ids = Vec::new();
-        for ledger in self.run_source_ledgers.lock().unwrap().iter() {
-            let Some(entries) = ledger.as_array() else {
-                continue;
-            };
-            for entry in entries {
-                for key in ["source_id", "source_url_or_ref", "source_title"] {
-                    if let Some(value) = entry.get(key).and_then(serde_json::Value::as_str) {
-                        ids.push(value.to_string());
-                    }
-                }
-            }
-        }
-        ids
-    }
-
     /// Default max tokens for the main agent (configurable later).
     /// D-6 (FIX_PLAN 2026-08-06): single-round output budget
     /// (OUTPUT-BUDGET-RESTORE-AND-STALL-GUARD 2026-08-20, ADR-0010 §14.35:
@@ -3052,7 +3021,7 @@ impl AgentLoopController {
     /// 不被消费截留）。`force_template_round` 为 2026-08-14 强制模板轮
     /// 的休眠参数（恒 false、不启用；若未来恢复硬门，需同时在 pending
     /// 消费路径恢复模板校验与工具禁令——2026-08-29 软门消费路径已将其
-    /// 移除）。DC 的强制模板轮由 `maybe_fire_dc` 独立承载。
+    /// 移除）。P2-11 DC 清理（2026-08-31）后无其他强制模板轮。
     /// Fires at most once per call — commit-then-reset guarantees the two
     /// injection points (post-tool-batch gap + loop-top) never double-fire.
     /// Review P2-2 (2026-08-10): build → journal → inject → COMMIT — a

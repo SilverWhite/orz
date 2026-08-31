@@ -156,23 +156,6 @@ pub enum TuiEvent {
         decision: String,
     },
 
-    // ── v0.2 mechanism events (GAP-INQUIRY-SPLIT, 2026-08-09) ──
-    DiagnosticCoverageCheckpoint {
-        checkpoint_id: String,
-        threshold_stage: i64,
-    },
-    // ORZ-ORIENTATION-FORCED-TEMPLATE (2026-08-15, ADR-0010 §14.16): the
-    // forced-template checkpoint round's answer/validation verdict — the
-    // TUI shows the outcome and error summary; the full parsed template and
-    // cross-check stay in the journal payload.
-    CheckpointResponse {
-        checkpoint_id: String,
-        inquiry_kind: String,
-        attempt: i64,
-        outcome: String,
-        validation_valid: bool,
-        validation_error_count: i64,
-    },
     // PLAN-FIRST 阶段 A (2026-08-16, ADR-0010 §14.17): first-round plan gate
     // result — outcome and validation summary only; the full cleaned plan
     // stays in the journal payload.
@@ -406,8 +389,6 @@ impl TuiEvent {
             TuiEvent::NeutralInquiry { .. } => "neutral_inquiry",
             TuiEvent::CounterexampleGate { .. } => "counterexample_gate",
             TuiEvent::RetrievalCompletionCheck { .. } => "retrieval_completion_check",
-            TuiEvent::DiagnosticCoverageCheckpoint { .. } => "diagnostic_coverage_checkpoint",
-            TuiEvent::CheckpointResponse { .. } => "checkpoint_response",
             TuiEvent::PlanWrite { .. } => "plan_write",
             TuiEvent::ConsoleModeTransition { .. } => "console_mode_transition",
             TuiEvent::ConsoleOrderWritten { .. } => "console_order_written",

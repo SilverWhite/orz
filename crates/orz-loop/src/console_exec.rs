@@ -1183,10 +1183,8 @@ mod tests {
     use crate::controller_test_support::*;
     use crate::gateway::fake::{FakeProvider, ScriptedResponse};
     use crate::gateway::model::ModelGateway;
-    use crate::host::{PermitDecision, PermitError, RiskClass, ToolDef, ToolError, ToolRegistry};
-    use async_trait::async_trait;
+    use crate::host::ToolDef;
     use orz_assurance::{EventTrack, JournalRecorder, RunEvent};
-    use std::path::PathBuf;
     use std::sync::Arc;
 
     /// 2026-08-18 (ADR-0010 §14.25 项 1): 状态行作为尾随用户消息、
@@ -1239,129 +1237,6 @@ mod tests {
             "policy-denied order must not fail the bound step: {:?}",
             r.plan.steps[0].status
         );
-
-        let _ = std::fs::remove_dir_all(&dir);
-    }
-
-    /// P0-C S4 (2026-08-16)：checkpoint 轮跳过注册板块刷新（F3 收口的
-    /// e2e 断言）——取消落在 checkpoint 轮结束后、下一轮刷新前；板块保留
-    /// 上一轮探针过滤后的内容（本 host 会话 cwd 缺失 → 读/写探针不完整，
-    /// 若按 bundle-only 刷新会误显 read_file/search_replace）。
-    #[tokio::test]
-    async fn console_s4_checkpoint_round_retains_probe_filtered_registration() {
-        struct CheckpointProbeHost {
-            journal: JournalRecorder,
-            results: std::sync::Mutex<std::collections::VecDeque<crate::host::TestRunResult>>,
-        }
-        #[async_trait]
-        impl LoopHost for CheckpointProbeHost {
-            fn journal(&self) -> &JournalRecorder {
-                &self.journal
-            }
-            fn tools_registry(&self) -> &dyn ToolRegistry {
-                &FullRegistry
-            }
-            fn session_cwd(&self) -> PathBuf {
-                self.journal.journal_dir().join("missing-workspace")
-            }
-            fn test_runner(&self) -> Option<crate::host::TestRunner> {
-                Some(crate::host::TestRunner {
-                    command: vec!["pytest-stub".to_string()],
-                    timeout: None,
-                    env: Vec::new(),
-                })
-            }
-            async fn run_tests(&self) -> Result<crate::host::TestRunResult, ToolError> {
-                Ok(self
-                    .results
-                    .lock()
-                    .unwrap()
-                    .pop_front()
-                    .expect("scripted test results exhausted"))
-            }
-            async fn request_permission(
-                &self,
-                _risk: RiskClass,
-                _tool: &str,
-                _args: &serde_json::Value,
-            ) -> Result<PermitDecision, PermitError> {
-                Ok(PermitDecision::AllowOnce)
-            }
-        }
-
-        let dir = test_dir();
-        let journal = JournalRecorder::new(dir.clone());
-        let host = CheckpointProbeHost {
-            journal,
-            results: std::sync::Mutex::new(vec![failing_test_run()].into()),
-        };
-        let gateway: Arc<dyn ModelGateway> = Arc::new(
-            FakeProvider::new(vec![
-                ScriptedResponse::tool_calls(vec![tool_call("run_tests", "call-t1")]),
-                template_answer("continue"),
-                ScriptedResponse::text("完成"),
-                ScriptedResponse::text("完成"),
-            ])
-            .with_chunk_delay(std::time::Duration::from_millis(100)),
-        );
-        let controller = Arc::new(AgentLoopController::with_gateway(gateway));
-        let token = tokio_util::sync::CancellationToken::new();
-        let c = controller.clone();
-        let t = token.clone();
-        let run = tokio::task::spawn(async move {
-            c.run_turn_with_cancel(
-                &host,
-                "修复测试失败",
-                "RUN-S4CK",
-                MANIFEST,
-                0,
-                None,
-                Some(&t),
-                None,
-                None,
-            )
-            .await
-        });
-        tokio::time::sleep(std::time::Duration::from_millis(30)).await;
-        token.cancel();
-        let result = run.await.unwrap();
-        assert!(matches!(result, Err(AgentLoopError::Cancelled)));
-
-        // DC checkpoint 已触发且其轮是工具-free 的。
-        let all_events = events(&dir);
-        assert!(
-            all_events
-                .iter()
-                .any(|e| e.event_type == EventType::DiagnosticCoverageCheckpoint),
-            "{:?}",
-            all_events
-                .iter()
-                .map(|e| format!("{:?}", e.event_type))
-                .collect::<Vec<_>>()
-        );
-        // 取消落在 checkpoint 轮结束后、下一轮刷新前 → 板块保留上一轮
-        // 探针过滤内容（读/写工具因会话 cwd 缺失被探针移除）。
-        let r = controller.blackboard().read();
-        let names: Vec<&str> = r
-            .actions
-            .registration
-            .iter()
-            .map(|reg| reg.name.as_str())
-            .collect();
-        assert!(
-            names.contains(&"workspace.run_tests"),
-            "probe-complete tool retained: {names:?}"
-        );
-        assert!(
-            names.contains(&"workspace.index"),
-            "non-work tool retained: {names:?}"
-        );
-        for excluded in ["workspace.read_file", "workspace.search_replace"] {
-            assert!(
-                !names.contains(&excluded),
-                "checkpoint round must not refresh bundle-only (retention broken): {names:?}"
-            );
-        }
 
         let _ = std::fs::remove_dir_all(&dir);
     }

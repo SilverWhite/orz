@@ -29,7 +29,6 @@ use crate::controller::{
     DenialKey, DenialState, EventWriter, PolicyFeedback, TEXT_DELTA_PACING, compact_messages,
     estimate_message_tokens, estimate_messages_tokens, format_edit_record,
 };
-use crate::diagnostic_coverage::{DebugEpisodeState, maybe_consume_dc_signal, maybe_fire_dc};
 use crate::gateway::model::{
     ActivityClock, FinishReason, GatewayError, Message, ModelGateway, ModelResponse, Role,
     ToolCall, TransportRetryKind,
@@ -284,10 +283,6 @@ pub(crate) struct LoopProfile {
     /// Retrieval-lane tool projection (deny-only write domain + nested
     /// dispatch guard).
     pub tool_filter: ToolFilter,
-    /// M5 (2026-08-10): Diagnostic Coverage hard-signal consumption +
-    /// checkpoint injection (ADR-0010 §4.6) — main lane only (the
-    /// mechanism is debug/problem-solving-specific; §4.6 scope).
-    pub dc_enabled: bool,
     /// Independent per-session tool-round budget (§3.4.6 — 120 default).
     pub max_tool_rounds: u32,
     /// Rounds already consumed by this session BEFORE this loop starts
@@ -330,7 +325,6 @@ impl LoopProfile {
             orientation_role: Some(AgentRole::Main),
             system_kind: SystemPromptKind::Main,
             tool_filter: ToolFilter::None,
-            dc_enabled: true,
             max_tool_rounds,
             initial_tool_rounds: 0,
             probe_work_tools: true,
@@ -350,7 +344,6 @@ impl LoopProfile {
             orientation_role: Some(AgentRole::Main),
             system_kind: SystemPromptKind::Main,
             tool_filter: ToolFilter::None,
-            dc_enabled: false,
             max_tool_rounds,
             initial_tool_rounds: 0,
             probe_work_tools: true,
@@ -360,10 +353,9 @@ impl LoopProfile {
         }
     }
 
-    /// A retrieval subagent's loop (GAP-SUBAGENT-RUNTIME 2026-08-10; M5:
+    /// A retrieval subagent's loop (GAP-SUBAGENT-RUNTIME 2026-08-10):
     /// the internal/external lanes are fed — §4.2 counts every agent's
-    /// completed logical model rounds; DC stays off (debug-specific, §4.6
-    /// is a main-lane mechanism). `initial_tool_rounds` carries the
+    /// completed logical model rounds. `initial_tool_rounds` carries the
     /// session's consumed budget across `continue` re-entries (user
     /// adjudication 2026-08-10, review F5 — the caller reads it back from
     /// the activation).
@@ -394,7 +386,6 @@ impl LoopProfile {
                 mode,
             },
             tool_filter: ToolFilter::Retrieval,
-            dc_enabled: false,
             max_tool_rounds,
             initial_tool_rounds,
             probe_work_tools: false,
@@ -413,9 +404,6 @@ pub(crate) struct SharedLoopServices<'a> {
     pub denial_state: &'a Mutex<DenialState>,
     pub pacing_rounds: &'a std::sync::atomic::AtomicU32,
     pub context_compact: &'a ContextCompactConfig,
-    /// M5 (2026-08-10): the Diagnostic Coverage episode state (ADR-0010
-    /// §4.6) — consumed by the main lane only (`profile.dc_enabled`).
-    pub dc_state: &'a Mutex<DebugEpisodeState>,
     /// GAP-RETRIEVAL-TOOLS (2026-08-10): retrieval-lane tool-call evidence
     /// (ADR-0010 §3.7.4 — the mechanical source of the structured ledger).
     /// `Some` only on retrieval profiles; the main lane passes `None`.
@@ -1156,9 +1144,9 @@ pub(crate) async fn run_agent_loop(
         // points never double-fire.
         // One pending checkpoint at a time — while an orientation pending
         // round is outstanding (THIN-HARNESS-REDESIGN-V2 §9.2 软门),
-        // neither family may fire again (the counts are not committed
-        // yet, so the gate is the only thing preventing a double-fire at
-        // the next loop-top).
+        // no further fire may happen (the count is not committed yet, so
+        // the gate is the only thing preventing a double-fire at the next
+        // loop-top).
         if pending_checkpoint.is_none()
             && let Some(role) = profile.orientation_role
             && let Some(record) = controller
@@ -1171,27 +1159,12 @@ pub(crate) async fn run_agent_loop(
                     // THIN-HARNESS-REDESIGN-V2 §9.2 (2026-08-29 软门):
                     // 主车道 fire 延迟 commit 并经 pending 轮软消费；
                     // 检索车道维持 fire-and-continue（controller 内按
-                    // role 分派）。DC 的强制模板轮机制保留
-                    // （maybe_fire_dc 独立路径）。
+                    // role 分派）。
                     false,
                 )
                 .await?
         {
-            pending_checkpoint = Some(PendingCheckpoint::Orientation { record, attempt: 1 });
-        }
-        // M5 (2026-08-10): DC checkpoint fire at the same safe gap (the
-        // stage threshold was met by signals consumed in a prior tool
-        // round). §14.16: one checkpoint round at a time — when Orientation
-        // and DC are due in the same gap, Orientation wins and DC fires at
-        // the next safe gap after its template round completes.
-        if pending_checkpoint.is_none()
-            && profile.dc_enabled
-            && let Some(payload) = maybe_fire_dc(svc.dc_state, writer, messages).await?
-        {
-            pending_checkpoint = Some(PendingCheckpoint::DiagnosticCoverage {
-                payload,
-                attempt: 1,
-            });
+            pending_checkpoint = Some(PendingCheckpoint::Orientation { record });
         }
 
         // FUS-TOOL-PROBE P0-A-2 (design §4/§5 v0.2): per-round work-tool
@@ -1209,14 +1182,14 @@ pub(crate) async fn run_agent_loop(
         // 完整集），避免两处各探一次导致投影不一致。
         // THIN-HARNESS-REDESIGN-V2 §9.2 (2026-08-29 S5-1 修复 B):
         // orientation 软门触发轮不禁工具——探针与工具栏投影按常规轮处理；
-        // 仅 DC 强制模板轮 / console 询问轮保持无工具暂停（§14.16）。
+        // 仅 console 询问轮保持无工具暂停（§14.17⑱）。
         let pending_keeps_tools = pending_checkpoint
             .as_ref()
             .is_some_and(|p| matches!(p, PendingCheckpoint::Orientation { .. }));
         let probe_snapshot: Option<crate::tool_probe::ToolProbeSnapshot> =
             if pending_checkpoint.is_some() && !pending_keeps_tools {
-                // §14.16: a DC / console-inquiry checkpoint round is a
-                // tool-free pause — no registry projection and no probe.
+                // console-inquiry round is a tool-free pause — no registry
+                // projection and no probe.
                 None
             } else if profile.probe_work_tools {
                 let probe_context = crate::tool_probe::ProbeContext {
@@ -1660,9 +1633,9 @@ pub(crate) async fn run_agent_loop(
         // 执行（commit 后落入下方常规派发路径）。fire 在消费点提交
         // （延迟 commit）。软门不产生 `checkpoint_response` 事件（无模板
         // 可验证；fire 事件 + 后续 model_output/tool 事件构成审计链）。
-        // DC 的强制模板轮机制保留（下方 else 分支：JSON 校验 + 一次重填
-        // + checkpoint_response 事件）。回答轮本身照常计入已完成逻辑模型
-        // 轮（上方 feed）并保留在会话中。
+        // 回答轮本身照常计入已完成逻辑模型轮（上方 feed）并保留在会话中。
+        // P2-11 DC 清理（2026-08-31）：强制模板轮机制已整体删除——剩余
+        // pending 轮仅 orientation 软门与 console 询问轮。
         // 边界（2026-08-29 审查收口）：若 run 在 fire 与消费之间硬中断，
         // 计数保持未提交、journal 留孤儿 fire 事件，下次 run 首轮重触发
         // ——见 controller `maybe_fire_orientation` 延迟 commit 注释。
@@ -1726,82 +1699,10 @@ pub(crate) async fn run_agent_loop(
                 continue;
             }
             // Orientation soft gate — 消费并续跑（详见分支上方注释）。
-            if let PendingCheckpoint::Orientation { .. } = &pending {
-                checkpoint::commit_pending(pending, orientation.as_deref_mut(), svc.dc_state);
-                if response.tool_calls.is_empty() {
-                    // 纯文本回答被消费：保留进会话，loop 明确续跑。
-                    if let Some(text) = response.text.clone().filter(|t| !t.is_empty()) {
-                        messages.push(Message {
-                            role: Role::Assistant,
-                            content: text,
-                            tool_call_id: None,
-                            tool_calls: Vec::new(),
-                            reasoning_content: response.reasoning_content.clone(),
-                        });
-                    }
-                    continue;
-                }
-                // 工具轮：commit 已完成，落入下方常规工具派发路径（不
-                // continue——触发轮不禁工具）。
-            } else {
-                // Diagnostic Coverage forced-template round (unchanged):
-                // validate the JSON answer, journal the `checkpoint_response`
-                // event, ask once for a re-fill or commit (accepted/degraded).
-                let attempt = pending.attempt();
-                let mut verdict =
-                    checkpoint::parse_and_validate(response.text.as_deref().unwrap_or_default());
-                // A checkpoint round may never dispatch tools — a tool_calls
-                // response is a template violation (the calls are not executed).
-                if !response.tool_calls.is_empty() {
-                    verdict.errors.push("tool_calls_not_allowed".to_string());
-                }
-                // §2.3 缓解必做: `progress_evidence` (and the gathered-evidence
-                // missing surface) cross-checked against journal evidence
-                // identities — the main lane's own evidence + committed
-                // retrieval ledger ids/refs + DC examined-surface ids.
-                let mut identities: std::collections::HashSet<String> = controller
-                    .checkpoint_source_identities()
-                    .into_iter()
-                    .collect();
-                if let Some(evidence) = svc.evidence {
-                    identities.extend(
-                        evidence
-                            .lock()
-                            .unwrap()
-                            .iter()
-                            .map(|record| record.identity.clone()),
-                    );
-                }
-                {
-                    let dc = svc.dc_state.lock().unwrap();
-                    identities.extend(dc.evidence_ids.iter().cloned());
-                }
-                let cross = checkpoint::cross_check(verdict.response.as_ref(), &identities);
-                let outcome = checkpoint::decide_outcome(attempt, &verdict.errors);
-                let (outcome_str, degrade_reason) = match outcome {
-                    checkpoint::CheckpointRoundOutcome::Accepted => ("accepted", None),
-                    checkpoint::CheckpointRoundOutcome::RefillRequested => {
-                        ("refill_requested", None)
-                    }
-                    checkpoint::CheckpointRoundOutcome::Degraded { reason } => {
-                        ("degraded", Some(reason))
-                    }
-                };
-                writer
-                    .record(
-                        EventType::CheckpointResponse,
-                        checkpoint::checkpoint_response_payload(
-                            &pending,
-                            attempt,
-                            outcome_str,
-                            &verdict,
-                            &cross,
-                            degrade_reason,
-                        ),
-                    )
-                    .await?;
-                // The template answer is model output — keep it in the
-                // conversation (the re-fill feedback below is injected text).
+            debug_assert!(matches!(pending, PendingCheckpoint::Orientation { .. }));
+            checkpoint::commit_pending(pending, orientation.as_deref_mut());
+            if response.tool_calls.is_empty() {
+                // 纯文本回答被消费：保留进会话，loop 明确续跑。
                 if let Some(text) = response.text.clone().filter(|t| !t.is_empty()) {
                     messages.push(Message {
                         role: Role::Assistant,
@@ -1811,30 +1712,10 @@ pub(crate) async fn run_agent_loop(
                         reasoning_content: response.reasoning_content.clone(),
                     });
                 }
-                match outcome {
-                    checkpoint::CheckpointRoundOutcome::Accepted
-                    | checkpoint::CheckpointRoundOutcome::Degraded { .. } => {
-                        // §2.4: only a completed template round (accepted or
-                        // degraded) commits the fire / advances the DC stage.
-                        checkpoint::commit_pending(
-                            pending,
-                            orientation.as_deref_mut(),
-                            svc.dc_state,
-                        );
-                    }
-                    checkpoint::CheckpointRoundOutcome::RefillRequested => {
-                        messages.push(Message {
-                            role: Role::User,
-                            content: checkpoint::refill_feedback_block(&verdict.errors),
-                            tool_call_id: None,
-                            tool_calls: Vec::new(),
-                            reasoning_content: None,
-                        });
-                        pending_checkpoint = Some(pending.with_attempt(attempt + 1));
-                    }
-                }
                 continue;
             }
+            // 工具轮：commit 已完成，落入下方常规工具派发路径（不
+            // continue——触发轮不禁工具）。
         }
 
         // PLAN-FIRST 阶段 A (2026-08-16, ADR-0010 §14.17): 首轮计划轮——
@@ -2221,10 +2102,6 @@ pub(crate) async fn run_agent_loop(
                     {
                         evidence.lock().unwrap().push(record);
                     }
-                    // DC 硬信号（主车道）。
-                    if profile.dc_enabled {
-                        maybe_consume_dc_signal(svc.dc_state, writer, &tc, &result).await?;
-                    }
                     // 静默机械审查（主车道专属，与串行同构）。
                     if profile.role == AgentRole::Main {
                         crate::mechanical_audit::record_tool_result(
@@ -2532,12 +2409,6 @@ pub(crate) async fn run_agent_loop(
                         {
                             evidence.lock().unwrap().push(record);
                         }
-                        // M5 (2026-08-10): DC hard-signal consumption — the
-                        // ONLY production point (§4.6.2; a journal replay
-                        // never recounts). Main lane only.
-                        if profile.dc_enabled {
-                            maybe_consume_dc_signal(svc.dc_state, writer, tc, &result).await?;
-                        }
                         round_feedback = feedback;
                         result
                     }
@@ -2740,18 +2611,7 @@ pub(crate) async fn run_agent_loop(
                 )
                 .await?
         {
-            pending_checkpoint = Some(PendingCheckpoint::Orientation { record, attempt: 1 });
-        }
-        // M5: DC checkpoint fire (same gap semantics as orientation; one
-        // pending checkpoint at a time — orientation wins a same-gap tie).
-        if pending_checkpoint.is_none()
-            && profile.dc_enabled
-            && let Some(payload) = maybe_fire_dc(svc.dc_state, writer, messages).await?
-        {
-            pending_checkpoint = Some(PendingCheckpoint::DiagnosticCoverage {
-                payload,
-                attempt: 1,
-            });
+            pending_checkpoint = Some(PendingCheckpoint::Orientation { record });
         }
         // P0-C orz 内嵌集成 S2 (2026-08-15): 轮末机械发放——动作栏有未消费
         // 订单时在 post-tool-batch 安全间隙发放（副作用只发生在单一出口；
@@ -2775,7 +2635,7 @@ pub(crate) async fn run_agent_loop(
         // PLAN-FIRST 阶段 C (2026-08-16, ADR-0010 §14.17⑱ / 设计 §7.3):
         // 双模式显式询问轮触发——发放后若 console 态连续故障 ≥ 阈值且本
         // run 未问过，设置询问 checkpoint（无工具轮；优先级低于
-        // orientation/DC——上方 fire 先占位）。询问回答（switch/stay）在
+        // orientation——上方 fire 先占位）。询问回答（switch/stay）在
         // 下一轮 checkpoint 分支处理。
         if pending_checkpoint.is_none()
             && profile.role == AgentRole::Main
@@ -3350,7 +3210,6 @@ mod tests {
         blackboard: &'a Arc<SharedBlackboard>,
         denial_state: &'a Mutex<DenialState>,
         pacing: &'a AtomicU32,
-        dc: &'a Mutex<DebugEpisodeState>,
         policy: &'a AtomicU64,
     ) -> SharedLoopServices<'a> {
         SharedLoopServices {
@@ -3358,7 +3217,6 @@ mod tests {
             denial_state,
             pacing_rounds: pacing,
             context_compact: cfg,
-            dc_state: dc,
             evidence: None,
             policy_revision: policy,
             max_inject_tokens_per_round: 50_000,
@@ -3430,9 +3288,8 @@ mod tests {
         let blackboard = Arc::new(SharedBlackboard::new());
         let denial_state = Mutex::new(DenialState::default());
         let pacing = AtomicU32::new(0);
-        let dc = Mutex::new(DebugEpisodeState::default());
         let policy = AtomicU64::new(0);
-        let svc = compact_test_svc(&cfg, &blackboard, &denial_state, &pacing, &dc, &policy);
+        let svc = compact_test_svc(&cfg, &blackboard, &denial_state, &pacing, &policy);
         let mut writer = crate::controller::discard_event_writer("test-run");
         let mut messages = compact_test_messages();
         let mut fold = compact_folded_state();
@@ -3478,9 +3335,8 @@ mod tests {
         let blackboard = Arc::new(SharedBlackboard::new());
         let denial_state = Mutex::new(DenialState::default());
         let pacing = AtomicU32::new(0);
-        let dc = Mutex::new(DebugEpisodeState::default());
         let policy = AtomicU64::new(0);
-        let svc = compact_test_svc(&cfg, &blackboard, &denial_state, &pacing, &dc, &policy);
+        let svc = compact_test_svc(&cfg, &blackboard, &denial_state, &pacing, &policy);
         let mut writer = crate::controller::discard_event_writer("test-run");
         let mut messages = compact_test_messages();
         let mut fold = compact_folded_state();
@@ -3588,9 +3444,8 @@ mod tests {
         }
         let denial_state = Mutex::new(DenialState::default());
         let pacing = AtomicU32::new(0);
-        let dc = Mutex::new(DebugEpisodeState::default());
         let policy = AtomicU64::new(0);
-        let svc = compact_test_svc(&cfg, &blackboard, &denial_state, &pacing, &dc, &policy);
+        let svc = compact_test_svc(&cfg, &blackboard, &denial_state, &pacing, &policy);
         let mut writer = crate::controller::discard_event_writer("test-run");
         let mut messages = compact_test_messages();
         // 与既有执行路径测试同构：折叠冻结态 fold_cut=4 → 压掉 c1 轮。
@@ -3656,9 +3511,8 @@ mod tests {
         let blackboard = Arc::new(SharedBlackboard::new());
         let denial_state = Mutex::new(DenialState::default());
         let pacing = AtomicU32::new(0);
-        let dc = Mutex::new(DebugEpisodeState::default());
         let policy = AtomicU64::new(0);
-        let svc = compact_test_svc(&cfg, &blackboard, &denial_state, &pacing, &dc, &policy);
+        let svc = compact_test_svc(&cfg, &blackboard, &denial_state, &pacing, &policy);
         let mut writer = crate::controller::journal_event_writer(&host.journal, "test-run");
         // 4 轮 c1..c4，每轮工具结果 ~4K 字符（≈2K tokens 估算）——远超
         // recovery_target_tokens，保证第二段截断确实丢轮。
