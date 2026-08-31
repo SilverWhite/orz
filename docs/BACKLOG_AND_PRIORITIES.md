@@ -2216,9 +2216,12 @@ S1-S4 全部闭合）
   统一、F14 措辞统一——见
   [审查记录](audits/MECHANICAL_LAYER_MATH_CALCULUS_PHASE2_REVIEW_AUDIT_2026-08-31.md)
   / TODO P2-10。
-- 开放内容：阶段 3 验证（V1 FakeProvider 验证面，
-  含 FailEnvelope 纯子项接线与 receipt↔事件链同构核对；V2 离线 102 runs
-  四对照门 + 聚类对照，R1 新口径 err 1/1 为底座；V3 S4 冒烟 + 状态同步）；
+- 开放内容：阶段 3 验证（V1 FakeProvider 验证面——**已实施 2026-08-31**：
+  信封/组合/求值器语义 8 项 + §6.6 近零提示 + F11 receipt↔事件链同构核对；
+  V2 离线 102 runs 四对照门 + §9.8 聚类对照 + 零误干预——**已实施 2026-08-31**
+  （4157 决策点、参考对拍零失配、零误干预 pass）；V3 S4 冒烟复验——**阻塞**
+  于 S3 重建（Docker daemon 未运行），状态同步已先行登记，见
+  [阶段 3 验证记录](audits/MECHANICAL_LAYER_MATH_CALCULUS_PHASE3_VERIFICATION_AUDIT_2026-08-31.md)）；
   排期与勾选见 TODO P2-10。
 - 实施记录：[I1](audits/MECHANICAL_LAYER_MATH_CALCULUS_I1_IMPL_AUDIT_2026-08-30.md)
   / [I2–I6](audits/MECHANICAL_LAYER_MATH_CALCULUS_PHASE2_IMPL_AUDIT_2026-08-30.md)。

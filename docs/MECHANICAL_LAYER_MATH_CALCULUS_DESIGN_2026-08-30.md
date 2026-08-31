@@ -586,6 +586,14 @@ TRACED 几何搬到动作层——用命令/编辑目标语义相似度定义动
 | V2 | 离线 102 runs 复验（T̂/域标签/spike 序列 vs §9.8 聚类对照、四对照门、零误干预） | I1/I3 |
 | V3 | S4 冒烟复验 + BACKLOG/TODO/索引状态同步（pending → implemented 视切片范围） | — |
 
+状态（2026-08-31）：V1、V2 已完成——V1：FakeProvider 测试面 8 项 + §6.6
+渲染自描述 + F11 receipt↔事件链同构核对（verifier 245 passed）；V2：离线
+102 runs 四对照门（err/deny/stall/slow 参考对拍零失配；err/stuck 本批无
+触发未决、deny/stall C1+C3 通过、slow 2 run fires≡膜≡计数建议降级留档）+
+§9.8 聚类对照（4157 点，语义域均值与 C1/C0/C2 结构对应）+ 零误干预 pass。
+V3 S4 冒烟复验待 S3 重建（Docker daemon 未运行），状态同步已先行登记，见
+[阶段 3 验证记录](docs/audits/MECHANICAL_LAYER_MATH_CALCULUS_PHASE3_VERIFICATION_AUDIT_2026-08-31.md)。
+
 ## 8. 已知边界与未决项
 
 - **域是事实描述，不是结局信号**（§9.8 判别力：末域/域迁移数与 reward 无判别；

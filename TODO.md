@@ -2421,12 +2421,22 @@ daemon 跨 run 常驻。~~模式内混合路由（需修订 ADR-0010 §3.7.12）
 
 **阶段 3 — 验证闭环**
 
-- [ ] V1 FakeProvider 测试面验证（信封/组合/求值器语义 + §6.6 模型熟悉度近零
-  提示验证，无需实机）（依赖 I5/I6）。
-- [ ] V2 离线 102 runs 复验（T̂/域标签/spike 序列 vs §9.8 聚类对照、零误干预）
-  （依赖 I1/I3）。
+- [x] V1 FakeProvider 测试面验证——**2026-08-31 完成**：FakeProvider 工具面
+  8 项测试（信封三件套/三条类型化透镜/不兼容 pipe fail-closed/effect_count
+  硬门）+ §6.6 渲染自描述测试（orz-loop 647 passed）+ F11 receipt↔事件链
+  同构核对（verifier `_verify_v02_receipt_event_isomorphism`，245 passed，
+  语料零新增错误），详见
+  [阶段 3 验证记录](docs/audits/MECHANICAL_LAYER_MATH_CALCULUS_PHASE3_VERIFICATION_AUDIT_2026-08-31.md)。
+- [x] V2 离线 102 runs 复验——**2026-08-31 完成**：四对照门（C1 扩到
+  deny/stall/slow、C2≡C4 膜/EMA、C3 计数；参考对拍零失配）+ §9.8 聚类对照
+  （4157 点 k=3，语义域均值与 C1/C0/C2 结构对应）+ 零误干预 pass
+  （事件链/schema 无 fire），产出
+  `LIF_102RUNS_REPLAY_2026-08-31_V2.json` /
+  `LIF_102RUNS_CLUSTERING_2026-08-31_V2.json`。
 - [ ] V3 S4 冒烟复验 + BACKLOG/TODO/索引状态同步（pending → implemented 视切片
-  范围）。
+  范围）——**2026-08-31 状态同步已先行**；S4 冒烟复验阻塞于 S3 重建（Docker
+  daemon 未运行，`scripts/build_orz_aliyun_trixie.sh` 无法执行），待重建后
+  实机冒烟并闭合。
 
 **阶段 2 全面审查处理（2026-08-31；审查记录
 [MECHANICAL_LAYER_MATH_CALCULUS_PHASE2_REVIEW_AUDIT_2026-08-31.md](docs/audits/MECHANICAL_LAYER_MATH_CALCULUS_PHASE2_REVIEW_AUDIT_2026-08-31.md)）**

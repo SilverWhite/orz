@@ -2685,6 +2685,53 @@ _ANCHOR_TARGET_TOOLS = frozenset({"search_replace"})
 _FILE_TARGET_TOOLS = frozenset({"search_replace", "read_file", "grep"})
 _URL_TARGET_TOOLS = frozenset({"web_fetch", "browser_read"})
 
+# F11 §5.4 (2026-08-31): receipt-step vocabulary mirroring the Rust
+# production predicate (orz-assurance lif/channels.rs `is_denial_code`) —
+# a gate-segment refusal is identified by the policy_denial marker or one
+# of these structured rejection codes.
+_DENIAL_CODES = frozenset(
+    {
+        "content_anchor_mismatch",
+        "sealed_tool_denied",
+        "retired_tool_denied",
+        "retrieval_mode_off",
+        "retrieval_mode_requires_framework_fallback",
+        "retrieval_mode_requires_local_browser",
+        "permission_deny",
+        "permission_defer",
+        "missing_test_runner",
+        "retrieval_role_write_denied",
+        "retrieval_role_execution_denied",
+        "retrieval_role_shell_denied",
+        "nested_subagent_dispatch_refused",
+        "control_tool_lane_denied",
+        "plan_round_tool_denied",
+        "plan_write_already_submitted",
+        "plan_write_lane_denied",
+        "plan_write_disabled",
+        "round_inject_budget_exceeded",
+        "submit_disabled",
+        "submit_lane_denied",
+        "console_return_lane_denied",
+        "console_action_write_lane_denied",
+        "order_slot_busy",
+    }
+)
+_DENIAL_CODE_PREFIXES = ("control_ticket_rejected:", "console_step_done_")
+_DENIAL_CODE_SUFFIXES = (
+    "_candidate_count_unbound",
+    "_candidate_url_missing",
+    "_candidate_cap_exceeded",
+)
+
+
+def _is_denial_code_v02(code: str) -> bool:
+    return (
+        code in _DENIAL_CODES
+        or code.startswith(_DENIAL_CODE_PREFIXES)
+        or code.endswith(_DENIAL_CODE_SUFFIXES)
+    )
+
 
 def _verify_v02_failure_target(events: list[dict[str, Any]]) -> list[str]:
     """MECHANICAL-LAYER-MATH-CALCULUS F4 §5.3 (2026-08-30): optional
@@ -2801,6 +2848,115 @@ def _verify_v02_failure_target(events: list[dict[str, Any]]) -> list[str]:
                 errors.append(
                     f"event {index}: kind=url_target requires non-empty canonical_url"
                 )
+    return errors
+
+
+def _verify_v02_receipt_event_isomorphism(
+    events: list[dict[str, Any]],
+) -> list[str]:
+    """MECHANICAL-LAYER-MATH-CALCULUS §5.4 (F11, 2026-08-31): receipt ↔
+    event-chain segment isomorphism on the v0.2 track.
+
+    A tool-execution receipt has four segments (arg_validation / gate /
+    execution / delivery) and each must correspond to event-chain evidence:
+    - gate segment: a refusal completion (policy_denial marker or a
+      structured denial code, §5.4/R2 vocabulary) is the receipt's gate
+      segment. If a tool_started exists for the same (run, tool, call_id)
+      it must precede the completion (host-level refusal after start);
+      otherwise the refusal is controller-side (no ToolStarted — allowed);
+    - execution segment: a host-level error / timeout completion (no gate
+      evidence) maps 1:1 to a preceding tool_started of the same
+      (run, tool, call_id) — a completed execution without its start is a
+      broken receipt;
+    - arg_validation / delivery segments: pure-subterm and value-semantics
+      completions must ride a start that precedes them when one exists;
+    - run-level pairing: in a run that reached a terminal event other than
+      run_invalidated (wall-clock kill), every tool_started must have a
+      matching tool_completed. Open starts at a run_invalidated terminal are
+      the documented in-flight exemption (S4 墙钟超时豁免: the call is
+      abandoned mid-flight, no completion is journaled).
+    """
+    errors: list[str] = []
+    started: dict[tuple[str, str, str], int] = {}
+    completed: dict[tuple[str, str, str], list[tuple[int, dict[str, Any]]]] = {}
+    terminal_type: dict[str, str] = {}
+    for index, event in enumerate(events):
+        if not _is_v02(event):
+            continue
+        event_type = event.get("event_type")
+        payload = event.get("payload", {})
+        run = str(event.get("run_id", ""))
+        if event_type in _TERMINAL_TYPES:
+            terminal_type[run] = str(event_type)
+        elif event_type == "tool_started":
+            key = (
+                run,
+                str(payload.get("tool", "")),
+                str(payload.get("call_id", "")),
+            )
+            started.setdefault(key, index)
+        elif event_type == "tool_completed":
+            key = (
+                run,
+                str(payload.get("tool", "")),
+                str(payload.get("call_id", "")),
+            )
+            completed.setdefault(key, []).append((index, event))
+
+    def _is_gate(payload: dict[str, Any]) -> bool:
+        if payload.get("policy_denial") is not None:
+            return True
+        code = payload.get("error")
+        return isinstance(code, str) and _is_denial_code_v02(code)
+
+    for key, endings in completed.items():
+        if len(endings) > 1:
+            errors.append(
+                f"event {endings[0][0]}: duplicate tool_completed for "
+                f"{key[1]}/{key[2]} — a receipt segment is journaled at "
+                "most once per call"
+            )
+            continue
+        index, event = endings[0]
+        payload = event["payload"]
+        # §5.4 的 receipt 段（arg_validation/gate/execution/delivery）都是
+        # 失败段——配对检查只对失败完成生效；成功完成由运行时结构保证。
+        if payload.get("status") != "error":
+            continue
+        start_index = started.get(key)
+        if _is_gate(payload):
+            if start_index is not None and start_index > index:
+                errors.append(
+                    f"event {index}: gate refusal completion precedes its "
+                    f"tool_started (receipt order broken) for "
+                    f"{key[1]}/{key[2]}"
+                )
+            continue
+        if start_index is None:
+            errors.append(
+                f"event {index}: non-gate completion without a preceding "
+                f"tool_started (execution segment missing) for "
+                f"{key[1]}/{key[2]}"
+            )
+        elif start_index > index:
+            errors.append(
+                f"event {index}: tool_completed precedes its tool_started "
+                f"(receipt order broken) for {key[1]}/{key[2]}"
+            )
+
+    for key, start_index in started.items():
+        run, tool, call_id = key
+        term = terminal_type.get(run)
+        if term is None or term == "run_invalidated":
+            # 无终止事件（中断 run）或墙钟超时杀（in-flight 豁免，S4）——
+            # 不要求补终止完成事件。
+            continue
+        if key not in completed:
+            errors.append(
+                f"event {start_index}: tool_started {tool}/{call_id} has no "
+                f"matching tool_completed in run {run} that reached "
+                f"{term} (execution receipt incomplete)"
+            )
     return errors
 
 
@@ -3438,6 +3594,7 @@ def validate_journal_text(text: str) -> list[str]:
         errors.extend(_verify_v02_inject_budget(events))
         errors.extend(_verify_v02_policy_denial(events))
         errors.extend(_verify_v02_failure_target(events))
+        errors.extend(_verify_v02_receipt_event_isomorphism(events))
         errors.extend(_verify_v02_mechanical_audit(events))
         errors.extend(_verify_v02_recovery_truncation(events))
         errors.extend(_verify_v02_context_compressed(events))

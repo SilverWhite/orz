@@ -30,6 +30,7 @@ from assurance.run_event_journal_validation import (
     _verify_v02_inject_budget,
     _verify_v02_policy_denial,
     _verify_v02_probe_accuracy,
+    _verify_v02_receipt_event_isomorphism,
     _verify_v02_request_header,
     validate_journal_file,
     validate_journal_text,
@@ -5288,6 +5289,123 @@ class FailureTargetCrossCheckTests(unittest.TestCase):
         )
         errors = _verify_v02_failure_target([event])
         self.assertTrue(any("canonical_url" in e for e in errors), errors)
+
+
+class ReceiptEventIsomorphismCrossCheckTests(unittest.TestCase):
+    """MECHANICAL-LAYER-MATH-CALCULUS §5.4 (F11, 2026-08-31):
+    `_verify_v02_receipt_event_isomorphism` — receipt segments must map 1:1
+    to event-chain evidence: execution → tool_started↔tool_completed pair,
+    gate → policy_denial/denial-code completion (with optional start),
+    run-level pairing enforced on normal terminal runs and exempted for
+    wall-clock (run_invalidated) in-flight calls (S4 豁免)."""
+
+    def _started(self, tool: str = "read_file", call_id: str = "call-1") -> dict:
+        return _v02_event("tool_started", {"tool": tool, "call_id": call_id})
+
+    def _completed(
+        self,
+        tool: str = "read_file",
+        call_id: str = "call-1",
+        *,
+        exit_code: object = None,
+        error: str = "tool execution failed: boom",
+        policy_denial: object | None = None,
+    ) -> dict:
+        payload: dict[str, object] = {
+            "tool": tool,
+            "call_id": call_id,
+            "status": "error",
+        }
+        if exit_code is not None:
+            payload["exit_code"] = exit_code
+        if error is not None:
+            payload["error"] = error
+        if policy_denial is not None:
+            payload["policy_denial"] = policy_denial
+        return _v02_event("tool_completed", payload)
+
+    def _terminal(self, event_type: str) -> dict:
+        return _v02_event(event_type, {})
+
+    def test_execution_pair_passes(self) -> None:
+        events = [
+            self._started(),
+            self._completed(),
+        ]
+        self.assertEqual(_verify_v02_receipt_event_isomorphism(events), [])
+
+    def test_gate_refusal_without_start_passes(self) -> None:
+        events = [
+            self._completed(
+                tool="search_replace",
+                error="content_anchor_mismatch",
+                exit_code=1,
+            )
+        ]
+        self.assertEqual(_verify_v02_receipt_event_isomorphism(events), [])
+
+    def test_gate_refusal_with_policy_denial_and_start_passes(self) -> None:
+        events = [
+            self._started(),
+            self._completed(
+                policy_denial={
+                    "source": "retrieval_mode",
+                    "code": "retrieval_mode_off",
+                    "reason": "mode off",
+                },
+                error="retrieval_mode_off",
+                exit_code=1,
+            ),
+        ]
+        self.assertEqual(_verify_v02_receipt_event_isomorphism(events), [])
+
+    def test_execution_completion_without_start_rejected(self) -> None:
+        errors = _verify_v02_receipt_event_isomorphism([self._completed()])
+        self.assertTrue(
+            any("execution segment missing" in e for e in errors), errors
+        )
+
+    def test_completion_preceding_start_rejected(self) -> None:
+        events = [
+            self._completed(),
+            self._started(),
+        ]
+        errors = _verify_v02_receipt_event_isomorphism(events)
+        self.assertTrue(
+            any("precedes its tool_started" in e for e in errors), errors
+        )
+
+    def test_duplicate_completion_rejected(self) -> None:
+        events = [
+            self._started(),
+            self._completed(),
+            self._completed(exit_code=0, error=None),
+        ]
+        errors = _verify_v02_receipt_event_isomorphism(events)
+        self.assertTrue(any("duplicate tool_completed" in e for e in errors), errors)
+
+    def test_normal_terminal_run_requires_closed_execution_receipt(self) -> None:
+        events = [
+            self._started(),
+            self._terminal("run_finished"),
+        ]
+        errors = _verify_v02_receipt_event_isomorphism(events)
+        self.assertTrue(
+            any("execution receipt incomplete" in e for e in errors), errors
+        )
+
+    def test_wallclock_invalidated_open_start_is_exempt(self) -> None:
+        # S4 墙钟超时豁免：run_invalidated 时 in-flight 调用不要求补终止完成。
+        events = [
+            self._started(tool="web_search"),
+            self._terminal("run_invalidated"),
+        ]
+        self.assertEqual(_verify_v02_receipt_event_isomorphism(events), [])
+
+    def test_interrupted_run_open_start_is_exempt(self) -> None:
+        # 无终止事件的中断 run：不要求补终止完成。
+        events = [self._started(tool="web_search")]
+        self.assertEqual(_verify_v02_receipt_event_isomorphism(events), [])
 
 
 class PolicyDenialProducerParityTests(unittest.TestCase):
