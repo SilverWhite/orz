@@ -1150,17 +1150,15 @@ pub(crate) async fn run_agent_loop(
         if pending_checkpoint.is_none()
             && let Some(role) = profile.orientation_role
             && let Some(record) = controller
+                // THIN-HARNESS-REDESIGN-V2 §9.2 (2026-08-29 软门):
+                // 主车道 fire 延迟 commit 并经 pending 轮软消费；检索
+                // 车道维持 fire-and-continue（controller 内按 role 分派）。
                 .maybe_fire_orientation(
                     writer,
                     messages,
                     orientation.as_deref_mut(),
                     role,
                     "loop_top_gap",
-                    // THIN-HARNESS-REDESIGN-V2 §9.2 (2026-08-29 软门):
-                    // 主车道 fire 延迟 commit 并经 pending 轮软消费；
-                    // 检索车道维持 fire-and-continue（controller 内按
-                    // role 分派）。
-                    false,
                 )
                 .await?
         {
@@ -2599,15 +2597,14 @@ pub(crate) async fn run_agent_loop(
         if pending_checkpoint.is_none()
             && let Some(role) = profile.orientation_role
             && let Some(record) = controller
+                // THIN-HARNESS-REDESIGN-V2 §9.2: 同 loop-top——软门模式
+                // （fire 延迟 commit + pending 软消费）。
                 .maybe_fire_orientation(
                     writer,
                     messages,
                     orientation.as_deref_mut(),
                     role,
                     "post_tool_batch_gap",
-                    // THIN-HARNESS-REDESIGN-V2 §9.2: 同 loop-top——
-                    // 软门模式（fire 延迟 commit + pending 软消费）。
-                    false,
                 )
                 .await?
         {

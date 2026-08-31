@@ -5025,8 +5025,9 @@ mod tests {
             _tool: &str,
             _args: &serde_json::Value,
         ) -> Result<PermitDecision, PermitError> {
-            // RT-001 (2026-08-11): same as ScriptedTestRunnerHost — this
-            // host models the Benchmark (harness) auto-allow policy.
+            // RT-001 (2026-08-11): this host models the Benchmark (harness)
+            // auto-allow policy (P2-11 后 ScriptedTestRunnerHost 已删除，
+            // 类比注释同步收口).
             Ok(PermitDecision::AllowOnce)
         }
         async fn call_tool(

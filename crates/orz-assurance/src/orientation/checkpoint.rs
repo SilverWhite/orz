@@ -5,31 +5,6 @@
 //! / `verify_orientation_response`. Receipt/context jsonschema validation stays on
 //! the Python side (conformance suite + schema authority).
 
-/// The forced-template JSON answer contract text (ADR-0010 §4.2/§14.16;
-/// design §2.2). **休眠**——THIN-HARNESS-REDESIGN-V2 §9.2 (2026-08-29)
-/// 起 orientation 改软门（`ORIENTATION_BLOCK` v0.4 不再引用本模板）；
-/// Diagnostic Coverage 的强制模板轮继续使用同一套校验/重填机制
-/// （`parse_and_validate` / `decide_outcome` / `refill_feedback_block`）。
-/// 保留供强制模板轮未来恢复。**当前零引用**（DC 块文本亦不内嵌本指令）
-/// ——勿按死代码删除，亦勿在软门路径复用。
-macro_rules! template_answer_instructions {
-    () => {
-        "请暂停动作，只输出下面的 JSON 问询模板答案；不要调用任何工具，不要输出其他文本。\n\
-         {\n\
-         \"task_position\": \"当前任务位置/目标（必填，≤400 字）\",\n\
-         \"progress_evidence\": [\"已确认的证据/产物身份（可选；应为本会话真实存在的证据身份）\"],\n\
-         \"blockers\": [\"当前阻塞（可选）\"],\n\
-         \"next_action\": \"continue|adjust|gather_evidence|ask_user|handoff\",\n\
-         \"changed_direction\": true 或 false,\n\
-         \"missing_evidence\": [\"仅当 next_action=gather_evidence 时必填：缺失的证据面\"]\n\
-         }"
-    };
-}
-
-/// The JSON template answer instructions — canonical single source for the
-/// Diagnostic Coverage block (orz-loop) and any future template carrier.
-pub const TEMPLATE_ANSWER_INSTRUCTIONS: &str = template_answer_instructions!();
-
 /// Soft-gate orientation prompt (THIN-HARNESS-REDESIGN-V2 §9.2,
 /// 2026-08-29 用户裁决) — 简短方向检查，非强制模板、不打断动作：
 /// 模型可简要回答后继续，也可直接继续动作；纯文本回答由 loop 消费后

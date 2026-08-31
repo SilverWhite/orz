@@ -3018,10 +3018,8 @@ impl AgentLoopController {
     /// 提交（纯文本回答被消费、loop 明确续跑；工具调用照常执行，不设
     /// 模板校验与工具禁令），终答仍只由模型自发。检索车道保持旧
     /// fire-and-continue（fire 即 commit、无 pending 轮——检索结果文本
-    /// 不被消费截留）。`force_template_round` 为 2026-08-14 强制模板轮
-    /// 的休眠参数（恒 false、不启用；若未来恢复硬门，需同时在 pending
-    /// 消费路径恢复模板校验与工具禁令——2026-08-29 软门消费路径已将其
-    /// 移除）。P2-11 DC 清理（2026-08-31）后无其他强制模板轮。
+    /// 不被消费截留）。P2-11 DC 清理（2026-08-31）后无其他强制模板轮；
+    /// `force_template_round` 休眠参数随 2026-09-01 复审清理一并移除。
     /// Fires at most once per call — commit-then-reset guarantees the two
     /// injection points (post-tool-batch gap + loop-top) never double-fire.
     /// Review P2-2 (2026-08-10): build → journal → inject → COMMIT — a
@@ -3034,7 +3032,6 @@ impl AgentLoopController {
         orientation: Option<&mut OrientationSessionState>,
         role: AgentRole,
         injection_position: &str,
-        force_template_round: bool,
     ) -> Result<Option<OrientationFireRecord>, AgentLoopError> {
         let Some(state) = orientation else {
             return Ok(None);
@@ -3076,7 +3073,7 @@ impl AgentLoopController {
                 }),
             )
             .await?;
-        // 软门/强制模板模式：延迟 commit，pending 轮消费时提交；检索车道
+        // 软门模式：延迟 commit，pending 轮消费时提交；检索车道
         // 维持 fire-and-continue（fire 即 commit）。reset 不得在失败写入
         // 后残留（review P2-2）——两种模式的 commit 都只发生在事件已
         // journaled 之后。
@@ -3086,7 +3083,7 @@ impl AgentLoopController {
         // ——会话计数仍 ≥ 阈值，下次 run 在 loop-top 首轮重触发（到期
         // 方向检查不丢失，符合 recovery-resumes-counting 语义）；孤儿
         // 事件由运行终止事件在审计链中解释，接受现状、不补机制。
-        let deferred = force_template_round || matches!(role, AgentRole::Main);
+        let deferred = matches!(role, AgentRole::Main);
         if !deferred {
             state.commit_fire(role, &rec);
         }
