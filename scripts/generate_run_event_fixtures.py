@@ -137,9 +137,11 @@ V02_EVENT_TYPES = [
     "permission_requested",
     "permission_decision",
     "tool_started",
-      "tool_completed",
-      "orientation_checkpoint",
-      "runtime_stagnation_guard",
+    "tool_completed",
+    # THIN-HARNESS-REDESIGN-V2 §9.7 (2026-08-29 S5-2): terminal command
+    # mid-run status (auto-backgrounded at the 300s report point).
+    "tool_running",
+    "orientation_checkpoint",
     "tool_availability_check",
     "tool_belief_stagnation",
     "instruction_provenance_gate",
@@ -154,30 +156,33 @@ V02_EVENT_TYPES = [
     "mechanical_audit_update",
     "control_ticket_issued",
     "control_ticket_consumed",
-      "control_ticket_rejected",
-      "context_compressed",
-      "context_recovery_truncated",
-      # F7 (2026-08-15, BACKLOG 6e 复查遗留 / ADR-0010 §14.15): blackboard
-      # plan-epoch archive write failure audit trace.
-      "epoch_archive_write_failed",
-      # PLAN-FIRST 阶段 A (2026-08-16, ADR-0010 §14.17): first-round plan
-      # gate result — plan identity/goal/step count, mechanical validation,
-      # one-refill attempt progression and degrade reason.
-      "plan_write",
-      # PLAN-FIRST 阶段 C (2026-08-16, ADR-0010 §14.17⑱): console/direct
-      # dual-mode transition decision record; action-bar order record;
-      # P0-E 第 4 项 (2026-08-17): pre-issuance order rejection.
-      "console_mode_transition",
-      "console_order_written",
-      "console_order_rejected",
-      # FUS-LEDGER-FOLD-STATE (2026-08-18, ADR-0010 §14.26): mechanical
-      # action-ledger fold advance (cache-miss attribution).
-      "ledger_fold_advance",
-      # FUS-LEDGER-FOLD-STATE (2026-08-18, ADR-0010 §14.28 审查修复):
-      # external-ledger append failure — fold rollback + failure count +
-      # budget-exhaustion disable (audit trace of the degrade path).
-      "ledger_fold_write_failed",
-      "snapshot_created",
+    "control_ticket_rejected",
+    "context_compressed",
+    "context_recovery_truncated",
+    # F7 (2026-08-15, BACKLOG 6e 复查遗留 / ADR-0010 §14.15): blackboard
+    # plan-epoch archive write failure audit trace.
+    "epoch_archive_write_failed",
+    # PLAN-FIRST 阶段 A (2026-08-16, ADR-0010 §14.17): first-round plan
+    # gate result — plan identity/goal/step count, mechanical validation,
+    # one-refill attempt progression and degrade reason.
+    "plan_write",
+    # PLAN-FIRST 阶段 C (2026-08-16, ADR-0010 §14.17⑱): console/direct
+    # dual-mode transition decision record; action-bar order record;
+    # P0-E 第 4 项 (2026-08-17): pre-issuance order rejection.
+    "console_mode_transition",
+    "console_order_written",
+    "console_order_rejected",
+    # FUS-LEDGER-FOLD-STATE (2026-08-18, ADR-0010 §14.26): mechanical
+    # action-ledger fold advance (cache-miss attribution).
+    "ledger_fold_advance",
+    # FUS-LEDGER-FOLD-STATE (2026-08-18, ADR-0010 §14.28 审查修复):
+    # external-ledger append failure — fold rollback + failure count +
+    # budget-exhaustion disable (audit trace of the degrade path).
+    "ledger_fold_write_failed",
+    # MIDSTREAM-DECODE-RETRY (2026-08-21, ADR-0010 §14.37 第 2 项): transport
+    # 重试计数事件面——零 chunk/中段截断重试的 recovered/exhausted 摘要。
+    "transport_retry",
+    "snapshot_created",
     "snapshot_restored",
     "artifact_registered",
     "plan_proposed",
@@ -190,29 +195,57 @@ V02_EVENT_TYPES = [
     "run_invalidated",
 ]
 
-  SLUGS_V02 = {
-      "orientation_checkpoint": "orientation-checkpoint",
-      "information_sufficiency_assessment": "information-sufficiency-assessment",
+SLUGS_V02 = {
+    # THIN-HARNESS-REDESIGN-V2 §9.7 (2026-08-29 S5-2): terminal command
+    # auto-backgrounded at the 300s report point.
+    "tool_running": "tool-running",
+    "orientation_checkpoint": "orientation-checkpoint",
+    "information_sufficiency_assessment": "information-sufficiency-assessment",
     "retrieval_parent_disposition": "retrieval-parent-disposition",
     "retrieval_close_record": "retrieval-close-record",
     "retrieval_mode_transition": "retrieval-mode-transition",
     "retrieval_result_committed": "retrieval-result",
     "retrieval_activation_restored": "retrieval-activation-restored",
+    # MECHANICAL-AUDIT-LAYER (2026-08-24, ADR-0010 §14.39): 机械审查层
+    # 轻量事件留痕（对象键覆盖写/键/轮/摘要/异常）。
     "mechanical_audit_update": "mechanical-audit-update",
-    "request_header_change": "request-header-change",
-    "tool_running": "tool-running",
+    # ACAF Slice 1 (设计文档 §4.2/§4.6): control-ticket lifecycle events.
     "control_ticket_issued": "control-ticket-issued",
     "control_ticket_consumed": "control-ticket-consumed",
-      "control_ticket_rejected": "control-ticket-rejected",
-      "context_recovery_truncated": "context-recovery-truncated",
-      "epoch_archive_write_failed": "epoch-archive-write-failed",
-      "plan_write": "plan-write",
-      "console_mode_transition": "console-mode-transition",
-      "console_order_written": "console-order-written",
-      "console_order_rejected": "console-order-rejected",
-      "ledger_fold_advance": "ledger-fold-advance",
-      "ledger_fold_write_failed": "ledger-fold-write-failed",
-  }
+    "control_ticket_rejected": "control-ticket-rejected",
+    # FUS-TOOL-PROBE (2026-08-13; P0-A-2): two-state single probe face
+    # snapshot (work tools).
+    "tool_availability_check": "tool-availability-check",
+    # ORZ-CACHE-CONTEXT-COST (2026-08-15, ADR-0010 §3.5 条6): model-request
+    # header fingerprint event.
+    "request_header_change": "request-header-change",
+    # D2-2 (2026-08-14; ADR-0010 v1.10): recovery pre-check truncation.
+    "context_recovery_truncated": "context-recovery-truncated",
+    # P0-D S3 (2026-08-14; ADR-0010 v1.10): five-section template summary
+    # (the A6 whole-round drop payload stays v0.1 replay-only).
+    "context_compressed": "context-compressed",
+    # F7 (2026-08-15; ADR-0010 §14.15): blackboard plan-epoch archive
+    # write failure (rotated/current + attempts).
+    "epoch_archive_write_failed": "epoch-archive-write-failed",
+    # PLAN-FIRST 阶段 A (2026-08-16, ADR-0010 §14.17): first-round plan
+    # gate result.
+    "plan_write": "plan-write",
+    # PLAN-FIRST 阶段 C (2026-08-16, ADR-0010 §14.17⑱): console mode
+    # transition / action-bar order record; P0-E 第 4 项 (2026-08-17):
+    # pre-issuance order rejection.
+    "console_mode_transition": "console-mode-transition",
+    "console_order_written": "console-order-written",
+    "console_order_rejected": "console-order-rejected",
+    # FUS-LEDGER-FOLD-STATE (2026-08-18, ADR-0010 §14.26): mechanical
+    # action-ledger fold advance.
+    "ledger_fold_advance": "ledger-fold-advance",
+    # FUS-LEDGER-FOLD-STATE (2026-08-18, ADR-0010 §14.28 审查修复):
+    # external-ledger append failure audit trace.
+    "ledger_fold_write_failed": "ledger-fold-write-failed",
+    # MIDSTREAM-DECODE-RETRY (2026-08-21, ADR-0010 §14.37 / 设计 §2.3):
+    # transport 重试计数事件面（recovered/exhausted 摘要）。
+    "transport_retry": "transport-retry",
+}
 
 # The v0.2 events with their own v0.2 payload schema (the rest of the v0.2
 # envelope reuses the v0.1 payload schema files). GAP-RETRIEVAL-TOOLS
@@ -220,9 +253,9 @@ V02_EVENT_TYPES = [
 V02_PAYLOAD_EVENTS = [
     # THIN-HARNESS-REDESIGN-V2 §9.7 (2026-08-29 S5-2): terminal command
     # mid-run status (auto-backgrounded at the 300s report point).
-      "tool_running",
-      "orientation_checkpoint",
-      "information_sufficiency_assessment",
+    "tool_running",
+    "orientation_checkpoint",
+    "information_sufficiency_assessment",
     "retrieval_parent_disposition",
     "retrieval_close_record",
     "retrieval_mode_transition",
@@ -243,29 +276,32 @@ V02_PAYLOAD_EVENTS = [
     "request_header_change",
     # D2-2 (2026-08-14; ADR-0010 v1.10): recovery pre-check truncation.
     "context_recovery_truncated",
-      # P0-D S3 (2026-08-14; ADR-0010 v1.10): five-section template summary
-      # (the A6 whole-round drop payload stays v0.1 replay-only).
-      "context_compressed",
-      # F7 (2026-08-15; ADR-0010 §14.15): blackboard plan-epoch archive
-      # write failure (rotated/current + attempts).
-      "epoch_archive_write_failed",
-      # PLAN-FIRST 阶段 A (2026-08-16, ADR-0010 §14.17): first-round plan
-      # gate result — plan identity/goal/step count, mechanical validation,
-      # one-refill attempt progression and degrade reason.
-      "plan_write",
-      # PLAN-FIRST 阶段 C (2026-08-16, ADR-0010 §14.17⑱): console mode
-      # transition / action-bar order record; P0-E 第 4 项 (2026-08-17):
-      # pre-issuance order rejection.
-      "console_mode_transition",
-      "console_order_written",
-      "console_order_rejected",
-      # FUS-LEDGER-FOLD-STATE (2026-08-18, ADR-0010 §14.26): mechanical
-      # action-ledger fold advance.
-      "ledger_fold_advance",
-      # FUS-LEDGER-FOLD-STATE (2026-08-18, ADR-0010 §14.28 审查修复):
-      # external-ledger append failure audit trace.
-      "ledger_fold_write_failed",
-  ]
+    # P0-D S3 (2026-08-14; ADR-0010 v1.10): five-section template summary
+    # (the A6 whole-round drop payload stays v0.1 replay-only).
+    "context_compressed",
+    # F7 (2026-08-15; ADR-0010 §14.15): blackboard plan-epoch archive
+    # write failure (rotated/current + attempts).
+    "epoch_archive_write_failed",
+    # PLAN-FIRST 阶段 A (2026-08-16, ADR-0010 §14.17): first-round plan
+    # gate result — plan identity/goal/step count, mechanical validation,
+    # one-refill attempt progression and degrade reason.
+    "plan_write",
+    # PLAN-FIRST 阶段 C (2026-08-16, ADR-0010 §14.17⑱): console mode
+    # transition / action-bar order record; P0-E 第 4 项 (2026-08-17):
+    # pre-issuance order rejection.
+    "console_mode_transition",
+    "console_order_written",
+    "console_order_rejected",
+    # FUS-LEDGER-FOLD-STATE (2026-08-18, ADR-0010 §14.26): mechanical
+    # action-ledger fold advance.
+    "ledger_fold_advance",
+    # FUS-LEDGER-FOLD-STATE (2026-08-18, ADR-0010 §14.28 审查修复):
+    # external-ledger append failure audit trace.
+    "ledger_fold_write_failed",
+    # MIDSTREAM-DECODE-RETRY (2026-08-21, ADR-0010 §14.37 / 设计 §2.3):
+    # transport 重试计数事件面（recovered/exhausted 摘要）。
+    "transport_retry",
+]
 
 SLUGS = {
     "run_preflight": "run-preflight",
@@ -1785,8 +1821,10 @@ Scope:
   `tool-completed.policy-denial-bad-source.constraint.invalid` (unknown
   source enum).
 - `envelope/<slug>.valid.json` — a full 13-field v0.2 envelope for **every**
-  event in the v0.2 enum (53 events — 51 prior + ledger_fold_advance and
-  ledger_fold_write_failed from FUS-LEDGER-FOLD-STATE 2026-08-18). The
+  event in the v0.2 enum (**52 events** — 54 prior −
+  `diagnostic_coverage_checkpoint` − `checkpoint_response`（P2-11 DC 清理
+  2026-08-31，MODEL-RESIDUAL-PRESSURE-FOLLOWUP 裁决 2）；
+  `runtime_stagnation_guard` 已于 2026-08-22 退役，计入 54 前史). The
   v0.2-payload events carry
   their v0.2 payload; the other events reuse the v0.1 payload shape
   unchanged (their payload schema files did not change — adjudicated

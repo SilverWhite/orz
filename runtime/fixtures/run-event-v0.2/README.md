@@ -65,10 +65,11 @@ Scope:
   `tool-completed.policy-denial.valid` (retrieval-mode refusal shape) and
   `tool-completed.policy-denial-bad-source.constraint.invalid` (unknown
   source enum).
-  - `envelope/<slug>.valid.json` — a full 13-field v0.2 envelope for **every**
-    event in the v0.2 enum (50 events — 52 prior − runtime_stagnation_guard
-    (2026-08-22) − diagnostic_coverage_checkpoint − checkpoint_response
-    (P2-11 DC 清理 2026-08-31)). The
+- `envelope/<slug>.valid.json` — a full 13-field v0.2 envelope for **every**
+  event in the v0.2 enum (**52 events** — 54 prior −
+  `diagnostic_coverage_checkpoint` − `checkpoint_response`（P2-11 DC 清理
+  2026-08-31，MODEL-RESIDUAL-PRESSURE-FOLLOWUP 裁决 2）；
+  `runtime_stagnation_guard` 已于 2026-08-22 退役，计入 54 前史). The
   v0.2-payload events carry
   their v0.2 payload; the other events reuse the v0.1 payload shape
   unchanged (their payload schema files did not change — adjudicated

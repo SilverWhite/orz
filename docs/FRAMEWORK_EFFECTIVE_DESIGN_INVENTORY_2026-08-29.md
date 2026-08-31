@@ -60,24 +60,23 @@ plan_write 不在此表（休眠 plan_first 路径启用时才声明；生产不
 
 ### 1.3 注入块（运行期仍会出现，但均从持久会话过滤）
 
-`is_injected_block_text` 注册的 12 类前缀：
+`is_injected_block_text` 注册的 9 类前缀（P2-11 DC 清理 2026-09-01：
+plan 反例变体 / `[DIAGNOSTIC_COVERAGE …]` / `[CHECKPOINT_REFILL …]`
+随 DC 机制一并删除；`[任务状态]` 为 resident 状态行，不经由本过滤器，
+此处不列）：
 
 1. `[COUNTEREXAMPLE_GATE v0.1]` — 终答前一次反例自查
-2. `[COUNTEREXAMPLE_GATE v0.1]`（plan 变体）
-3. `[ORIENTATION v0.4]` — 软门三问（2026-08-29，阈值 50 轮）
-4. `[本轮编辑 …]` — 文件编辑轮推送
-5. `[前文上下文已压缩 …]` — 压缩标记
-6. `[压缩白名单 …]` — 白名单 resident 块
-7. `[任务状态 …]` — 状态行
-8. `[TOOL_ROUND_BUDGET …]` — 工具轮预算
-9. `[TOOL_POLICY_BREAKER]` — 策略违规提醒
-10. `[DIAGNOSTIC_COVERAGE …]` — DC 检查点（强制模板轮，禁工具）
-11. `[MECHANICAL_AUDIT v0.1]` — 执行事实报告（≤128 键）
-12. `[动作台账 v0.1]` — 折叠视图动作台账
-13. `[CHECKPOINT_REFILL …]` — checkpoint 回填反馈
+2. `[ORIENTATION v0.4]` — 软门三问（2026-08-29，阈值 50 轮）
+3. `[本轮编辑 …]` — 文件编辑轮推送
+4. `[前文上下文已压缩 …]` — 压缩标记
+5. `[压缩白名单 …]` — 白名单 resident 块
+6. `[TOOL_ROUND_BUDGET …]` — 工具轮预算
+7. `[TOOL_POLICY_BREAKER]` — 策略违规提醒
+8. `[MECHANICAL_AUDIT v0.1]` — 执行事实报告（≤128 键）
+9. `[动作台账 v0.1]` — 折叠视图动作台账
 
 模型面极简不等于零注入：**长任务里这些块仍会周期性出现**（反例门 1 次/
-run、orientation 阈值 50、DC 2→3→4→5 递进、审计报告终答前）。
+run、orientation 阈值 50、审计报告终答前）。
 
 ### 1.4 effort 与模型
 
@@ -209,8 +208,9 @@ Guard（2026-08-22）、序列内容门（DNA/RNA/蛋白，V2 R1 全删）。
 
 ### 7.3 设计文档中已定案但当前源码状态待核
 
-- 强制模板轮（ORIENTATION）：代码保留休眠（`force_template_round` 恒
-  false），设计定案「保留不启用」✓。
+- 强制模板轮（ORIENTATION / DC）：已随 P2-11 DC 清理（2026-09-01）整体
+  删除（`force_template_round` 休眠参数亦于 2026-09-01 复审收口）；
+  orientation 仅保留软门 ✓。
 - plan_first：main.rs 仅注释保留，`with_plan` 在 plan-gate 路径（已不
   是默认路径）；生产路径不启用 ✓。
 - 序列内容门：设计文档 V2 已删；源码常量已删 ✓（文档标记 withdrawn 待 W3-R3 清理登记）。

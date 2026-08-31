@@ -120,3 +120,26 @@ plan 反例变体注册（无点火路径）一并清理；P3「DC 硬信号 4/6
 - TODO P2-11：DC 清理勾选闭合；未闭合计数 30 → 29 → 28。
 - ADR-0010 §14.49：DC 强制模板轮清理补写裁决索引。
 - CLI_PROJECT_INDEX：MODEL-RESIDUAL-PRESSURE-INVENTORY 补实施闭合记录。
+
+## 7. 复审清理（2026-09-01，审查后残留处理）
+
+对已提交清理做一轮复审，发现并处理以下残留：
+
+- 代码：删除 `orz-assurance` 的 `TEMPLATE_ANSWER_INSTRUCTIONS` 常量与宏
+  （零引用死代码，注释仍称「保留供强制模板轮未来恢复」，与裁决冲突）；
+  移除 `maybe_fire_orientation` 的 `force_template_round` 休眠参数（两
+  调用点恒传 false，`deferred` 简化为 `role == Main`）；收口 host_exec.rs
+  对已删 `ScriptedTestRunnerHost` 的类比注释与 main.rs capture 注释中的
+  「强制模板轮」残留措辞。
+- 契约：v0.2 fixture README 与 `generate_run_event_fixtures.py`
+  `FIXTURES_README_V02` 的枚举计数统一为 **52**（54 − 两 DC 类型；
+  原 README 写 50、算式不自洽，脚本模板仍停在 53 的更旧文本）；
+  并修复本批提交在生成器中引入的 `SLUGS_V02` 缩进解析错误（整文件
+  无法解析），`V02_EVENT_TYPES` / `SLUGS_V02` / `V02_PAYLOAD_EVENTS`
+  与 schema / verifier 权威注册表对齐（枚举 52 项、payload slug 24 项；
+  补 `tool_running` / `transport_retry`，移除已退役的
+  `runtime_stagnation_guard`——既有脱节一并收口）。
+- 文档：FRAMEWORK_EFFECTIVE_DESIGN_INVENTORY §1.3/§7.3 收口（删除三个
+  注入块条目与「代码保留休眠」表述）；CLI_PROJECT_INDEX 三个机制条目
+  标注退役并移入 withdrawn 速查；BACKLOG P2 汇总行更新；ORIENTATION_
+  FORCED_TEMPLATE_DESIGN 状态行补退役标记。
