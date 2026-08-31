@@ -4132,3 +4132,36 @@ ADR §3.6 正文修订随实施登记。
    `docs/MECHANICAL_LAYER_MATH_CALCULUS_DISCUSSION_2026-08-30.md` /
    CLI_PROJECT_INDEX（AUTH-MECHANICAL-LAYER-MATH-CALCULUS）。阶段 2 实施
    切片（I1–I6）与阶段 3 验证（V1–V3）按 BACKLOG 纪律放行时入账。
+
+### 14.48 v1.48 补写裁决索引（2026-08-31）
+
+本节记录冻结后的显式补写；规范正文以所指章节为准，补写明确
+取代以下既往条款。
+
+1. **PULL 自描述（P2-11 第 1 项，2026-08-31 用户确认采用；转录后
+   AUTH-PULL-SELF-DESCRIPTION 登记为 `current-design`，实施为 `partial`——
+   S1 代码 / S2 测试完成，S3 重建 + S4 实机复验待放行，验证闭环后转
+   `implemented`）**：`blackboard_read` 响应自描述化——任何**成功的 live
+   读取**（`epoch` 省略）响应头部携带「自上次读取以来」增量行
+   `[黑板增量] <分区>+<n> … 域迁移+<n>: <from→to>@r<轮>`：各分区变化计数
+   （分区版本计数 = run 内单调、每次可见内容变化计 1，覆盖式变化如注册板块
+   替换/计划状态迁移/轮换清空亦计 1；`session` 派生自 tool_rounds、`temporal`
+   派生自 LIF round）只列 delta>0 者；temporal 域迁移摘要以 `migration_count`
+   （单调总计数，区别于有界迁移队列长度）对**独立迁移计数基线**（上次成功
+   读取 temporal 时的 migration_count，与 round 徽章游标分存，2026-08-31
+   审查处理 M1 双基线）的增量输出最近一次迁移。读取游标 = run 级每分区
+   「上次成功读取」位置，读某分区只推进该分区游标（未读徽章模型；temporal
+   双基线同时推进），失败路径与归档 epoch 读不推进、不挂头；渲染层失败形状
+   （未知分区 / receipt_id 组合误用 / 点读未找到，O4 先例保持 exit_code 0）
+   同样不挂头、不推进（审查处理 M2）；增量头自身
+   ≤256 B，无增量且无迁移时零噪音不加头。**temporal 单次查询按模型意图一次
+   返回**：now 追加近 5 轮趋势行与上一迁移行、recent(k) 首行压缩摘要
+   （域/入域/驻留 + 起止特征）、feature(name,k) 尾注当前值与域；整响应（增量
+   头 + 查询体）仍 ≤1 KiB。硬边界不变：零注入（增量头只出现在模型主动 PULL
+   的响应内）、模型无感边界不变（无新常驻 token、无主动注入、不新增/改名/
+   删除工具）、只给事实不给建议。已知边界：子代理与主代理共享游标（子代理
+   工具投影面不含该工具，运行中不触发）；并行同分区读取允许轻微竞态；游标随 run
+   复位（跨 prompt 续 run 首次读取计为未读）。入口：正式设计
+   `docs/PULL_SELF_DESCRIPTION_DESIGN_2026-08-31.md` / BACKLOG P2-11 /
+   TODO P2-11 / CLI_PROJECT_INDEX（AUTH-PULL-SELF-DESCRIPTION）/ 审查修复审计
+   `docs/audits/P2-11_PULL_SELF_DESCRIPTION_S1_REVIEW_AUDIT_2026-08-31.md`。

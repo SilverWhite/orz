@@ -11,7 +11,7 @@
 |---|---|---|
 | P0 | 当前工作集：设计已冻结，裁决后立即实施 | 评测冒烟暴露问题（P0-E 主项 7 项 + FUS-TOOL-SCOPE-CONTRACT 后续 2 项全部闭合 2026-08-18：ACAF 容器供应、console 工具名、计划视图步骤 ID、订单发放前拒绝入事件面、grep 搜索范围契约、plan_write 校验消息形状、actions 形状探针、list_dir 范围计数、grep files_searched 全结局探针，见 0a）；CLASSICAL-EXEC-ASSISTANT（生产组件，2026-08-16 用户裁决转正式，S1-S4 全部闭合）；PLAN-FIRST-BLACKBOARD（阶段 A/B/C 全部闭合 2026-08-16）；**FUS-BENCHMARK-FULL-EXEC（P0，实施完成待验证——2026-08-18 用户指示实施、暂不测试；验证闭环后闭合，见 0b）**；**LEDGER-FOLD-EXTERNAL-FILE（P0，S1-S4 验证闭环 2026-08-19——命中率问题优先于 P0-F 验证；provider 口径 95.33% ≥90% 达标，见 0c）**；**OUTPUT-DEGENERATION-GUARD（P0，S1-S4 全部闭合 2026-08-20——make-doom 退化复读失败防护；8K 全统一 + 补读闭环 + 实时检测 + 32K，见 0d）**；**CONTEXT-SCAFFOLDING-PULL-REDESIGN（P0，S1-S4 全部闭合 2026-08-21——预算块 PUSH→PULL + 工具输出汇总消息退役；命中率 94.45%、零哨兵触发、输入增长放缓；方案 C 维持 256K 暂不收紧（用户裁决），见 0e）**；**FUS-READ-ANCHOR-WRITE-GUARD（P0，S1-S4 全部闭合 2026-08-23——read_file 内容锚点下传 + 写前机械核证；S4 复用 NGRAM S4 实机复验：10 试次零误拒、锚点实机可见、命中率 94.11%–98.55% 全 ≥90%、零 400，计数 28 → 27，见 0f）**；**AGENT-DELIVERY-FLOW（P0 派生 0d 后续 7，S1-S4 全部闭合 2026-08-23——计划无空转、末步机械递交、引用修正一次/二次阻断、订单反馈；S4 复用 NGRAM S4 实机复验：8/8 完成试次走 submit 双阶段、零 400、命中率全 ≥90%，计数 29 → 28，见 0d 后续 7）**；**FINAL-SMOKE-2026-08-25 对拍暴露（P0，2026-08-25 登记：GAP-EVENT-SCHEMA-DRIFT 事件面三类 Schema 漂移（2026-08-26 修复完成并复验，事件链非终止错误 0）+ GAP-REPETITION-DETECTOR-DNA-FALSE-POSITIVE 复读检测 DNA 误杀（S1/S2/S3 完成 2026-08-26、S4 复验待实施），正式 89 题提交前处理，见 0i）**；**RETRIEVAL-ORCHESTRATION-MECHANICAL（P0，2026-08-30 检索问题最终评判定稿、实施待放行——双模式定案 + 引擎 SERP Google 主序 + 原生兜底 + 检索编排机械层第一批五项 + Google 门禁观察实验，见 0k）** |
 | P1 | 无需裁决，可与 P0 并行 | FUS-COMPONENT-REGISTER、GAP-WINDOWS-EVIDENCE、IMPL-DEEPSEEK-TRANSPORT / SEC-CREDENTIALS、ORZ-SESSION-CONTEXT-MONITOR、**RETRIEVAL-RESULT-STRUCTURED-CONTRACT（2026-08-30 登记，见 0k；修复方向 C 待裁决）** |
-| P2 | 生产化决策门：需用户裁决 | IMPL-CONTROL-FABRIC（fail-closed 启用、Slice 3/4）、OPS-PROTOCOL、MECHANICAL-LAYER-MATH-CALCULUS（2026-08-30 登记 current-design——阶段 0 决策闭合 + 阶段 1 设计定稿完成（F1–F6、ADR-0010 §14.47），阶段 2 实施切片 / 阶段 3 验证待放行，见 10） |
+| P2 | 生产化决策门：需用户裁决 | IMPL-CONTROL-FABRIC（fail-closed 启用、Slice 3/4）、OPS-PROTOCOL、MECHANICAL-LAYER-MATH-CALCULUS（2026-08-30 登记 current-design——阶段 0 决策闭合 + 阶段 1 设计定稿完成（F1–F6、ADR-0010 §14.47），阶段 2 实施切片 / 阶段 3 验证待放行，见 10）；**MODEL-RESIDUAL-PRESSURE-FOLLOWUP（2026-08-31 二次讨论裁决登记——PULL 自描述设计 / DC 强制模板轮清理 / retryable 分类位 / 依赖图主线，设计/实施待放行，见 11）** |
 | P3 | 收尾 / 清理 | EVIDENCE-LOCAL-BROWSER、GATE-CHAIN、DC 剩余信号、V11-IMPL-003/007、工作区收尾 |
 
 - 复杂度治理判定（2026-08-13）：LIF 为高要求主项目、实验含相当程度自动运行；复杂度降低只砍冗余（OPS 平行执行层、双实现、文档仪式），保留服务 LIF 不变量的机制（journal/verifier、permission fail-closed、运行守卫、Windows 进程控制、来源证据、ACAF Slice 1/2）；ACAF Slice 3/4 暂缓，按实际自动化模式再定；不做机制×不变量清单，避免后续审查被带偏。
@@ -1482,7 +1482,26 @@ S1-S4 全部闭合）
   全查零真实 400、零复读触发。**定案**：①BASE_SYSTEM_PROMPT 全空（契约全落
   工具描述/信封/机械门）；②orientation 软门（阈值 50、回答消费续跑、强制
   模板轮保留不启用）；③submit 门无 plan 放行/降级 + 描述清 plan 措辞（与
-   prompt 清空同批）。计数不变（设计轮）；W4-R4 实施待放行。详见设计 V2 §9。
+  prompt 清空同批）。计数不变（设计轮）；W4-R4 实施待放行。详见设计 V2 §9。
+- **2026-08-31 错题集 10 题小批复验（A2+B3+B2+C3，orz f4f96eb8，k=1）**：
+  rstan-to-pystan 解出 1.0（B1 web 黑洞 885s → 解出，1800s 名义超时但
+  交付完成）；make-doom/gcode 零真实 400（S5-1 fold 桥修复实机生效，
+  从 A 类 400 崩转 B 类墙钟超时）；S5-2 自动后台化/中间回报与 tool_running
+  事件一一对应（train-fasttext 6↔6、adaptive-rejection 1）；web_search
+  120s 超时生效（全批仅 5 次 web_search，browser_read 直读为主）；事件链
+  10/10 校验仅墙钟超时缺终止事件豁免；框架健康度全绿（票据 1:1、机械审计
+  零 anomaly、零 400、零策略拒绝风暴）。观察项：mteb 模型经终端 sed 读
+  `.gsa/ledger`（间接动作，无凭据泄露，登记不处理）；模型幻觉工具名
+  fail-loud 自行回正（登记不处理）。评估结论：①`.gsa` 写保护处理有副作用
+  （只读挂载破坏运行时写入、命令 hook 可绕过+回归风险），不处理、登记为
+  已知边界；②机械层环境探测前置收益中等偏弱（探索密集题可省 15–20 轮，
+  命令阻塞型无收益，6 超时题根因是总工作量>墙钟），建议先 mteb-leaderboard
+  单题 A/B 再定；③k=1 不加多次尝试（用户裁决）。详见
+   [10 题小批复验记录](docs/audits/OFFICIAL_R2_FAILURES_RECHECK_10T_2026-08-31.md)。
+  **2026-08-31 用户裁决**：剩余题不再补跑，W4-R4 S4 按最低口径判定闭合（31 题
+  已解 9，其中 10 题子批 1/10，未复验题不新增计数，全量成绩不再外推）；8 工具面
+  冻结不再删除——只做通用修正、按正常使用优化、不为跑分特化。模型残余压力清单
+  落为 [讨论稿](MODEL_RESIDUAL_PRESSURE_DISCUSSION_2026-08-31.md)，深度讨论待续。
 
 ### 0k. RETRIEVAL-ORCHESTRATION-MECHANICAL（P0；2026-08-30 检索问题最终评判定稿，实施待放行）
 
@@ -2250,6 +2269,37 @@ S1-S4 全部闭合）
   [ADR-0010 §14.47](../adr/ADR-0010-fusion-runtime-and-agent-architecture.md) /
   [索引 AUTH-MECHANICAL-LAYER-MATH-CALCULUS](../CLI_PROJECT_INDEX.md)。
 
+### 11. MODEL-RESIDUAL-PRESSURE-FOLLOWUP（P2；2026-08-31 二次讨论裁决登记，设计/实施待放行）
+
+- 入口：[讨论稿](MODEL_RESIDUAL_PRESSURE_DISCUSSION_2026-08-31.md)（§8 裁决收口）/
+  [残余压力清单](MODEL_RESIDUAL_PRESSURE_DISCUSSION_2026-08-31.md)；TODO P2-11。
+- 来源：2026-08-31 深度讨论收敛（用户逐项裁决，无异议项）。背景=模型残余压力
+  五类清单 + 10 题小批复验（temporal 零查询、pipe 零使用、锚点 0 拒单、复读
+  0 触发、工具名幻觉 15 次自回正、浏览器结构化错误 3 次、DC 0 触发）。
+- 裁决与待办：
+  1. **PULL 自描述（2026-08-31 设计定稿 + S1/S2 完成 + 审查修复完成，
+     `partial`；S3 重建 + S4 实机复验待放行）**：`blackboard_read` 响应携带
+     「自上次读取以来」增量（分区变化计数 + temporal 域迁移摘要，迁移段
+     独立基线）+ temporal 单次查询按意图一次返回（≤1 KiB、简单描述、减少
+     二次查询）；零注入、模型无感边界不变。审查修复见
+     `docs/audits/P2-11_PULL_SELF_DESCRIPTION_S1_REVIEW_AUDIT_2026-08-31.md`；
+     设计定稿 ADR-0010 §14.48 / `docs/PULL_SELF_DESCRIPTION_DESIGN_2026-08-31.md`。
+  2. **DC 强制模板轮清理（已裁决，实施待放行）**：删除 DC 机制（诊断覆盖检查点/
+     强制模板轮/信号消费 `diagnostic_coverage.rs`）+ plan 反例变体注册
+     （`COUNTEREXAMPLE_GATE_PLAN_BLOCK`）；连带 P3「DC 硬信号 4/6」退役；
+     schema/verifier/fixtures/测试收口；checkpoint 共用件拆分（模板校验仅 DC
+     消费则一并退役；orientation 软门与 console 询问轮保留）。
+  3. **retryable 机械分类位（设计+实施待放行）**：类型化错误信封 `Fail` 增
+     `retryable: bool`（确定性失败 false：scheme/锚点/sealed/cap；暂时性 true：
+     超时/网络），错误码事实推导、非建议；schema/verifier/fixtures 先行。
+  4. **依赖图实施（设计+实施待放行；下一轮主线）**：文件锚点链最小范围
+     （read→write 锚点边 + 工具→实体变更边；D3 命令/检索副作用不建图），
+     PULL 查询面、模型零改动；顺带闭合 F11 receipt↔事件链逐段同构核对。
+- 登记边界（不动作）：工具名幻觉（不改名/不别名，fail-loud 自回正，收益上限
+  ≈15 轮/10 题）；search_replace 锚点 / submit 两阶段维持现状（锚点 0 拒单、
+  submit 8 次全通，优化收益不足）；复读守卫不可让步。
+- 计数：设计轮不动计数；实施放行时按既有纪律入账。
+
 ## P3 — 收尾 / 清理
 
 ### 9. EVIDENCE-LOCAL-BROWSER（`partial`）
@@ -2264,7 +2314,9 @@ S1-S4 全部闭合）
 
 ### 11. 遗留小项
 
-- DC 硬信号 4/6：`same_module_no_evidence` / `key_surface_unexamined` 接线（建议并入 P0/检索机械控制批次）。
+- DC 硬信号 4/6（`same_module_no_evidence` / `key_surface_unexamined`）——
+  **2026-08-31 随 [P2 §11](#11-model-residual-pressure-followupp22026-08-31-二次讨论裁决登记设计实施待放行)
+  DC 强制模板轮清理一并退役**（信号与机制随删除，不再单独接线）。
 - prompt observed-scope 枚举补列（可选优化，P0-B 步骤 6 复核观察登记）：主提示词/检索提示词未列出合法 scope 枚举（`full_text_observed` / `partial_text_observed` / `metadata_only`），模型可能先踩一次 verifier 拒绝（`url_missing_observed_scope`）再修正；verifier 机械兜底已覆盖，暂不实施。
 - V11-IMPL-003：Global Review receipt 与真正审查结论严格分离——复核并登记闭合或转 gap。
 - V11-IMPL-007：Toolbar/run-history 数据源统一到 ORZ session ownership、旧路径残留检查——复核并登记闭合或转 gap。
@@ -2283,6 +2335,24 @@ S1-S4 全部闭合）
 
 ## 变更记录
 
+- 2026-08-31：P2-11 第 1 项 PULL 自描述设计定稿 + S1/S2 登记（本窗口；用户指示
+  开始实现）——`blackboard_read` 成功 live 读取响应携带 `[黑板增量]` 增量头
+  （各分区版本计数 + temporal 域迁移摘要；分区版本计数 = run 内单调、每次可见
+  内容变化计 1，覆盖式变化亦计 1；`session` 派生 tool_rounds、`temporal` 派生
+  LIF round；读取游标按分区推进、未读徽章模型）；temporal 单次查询按意图一次
+  返回（now + 近 5 轮趋势/上一迁移、recent 压缩摘要、feature 当前值/域尾注，
+  整响应 ≤1 KiB）；零注入、模型无感边界不变。orz 子模块未提交（工作树）；设计
+  定稿 `docs/PULL_SELF_DESCRIPTION_DESIGN_2026-08-31.md`、ADR-0010 §14.48
+  转录、测试全绿（orz-assurance 202 / orz-loop 655 通过、clippy 无新增告警）；
+  状态 `partial`，S3 重建 + S4 实机复验待放行。未闭合计数不变（实施按既有
+  纪律随放行入账）。
+- 2026-08-31：P2-11 第 1 项 S1 全面审查修复（本窗口；用户指示「对审查出的
+  全部问题进行修复」）——M1 temporal 迁移基线独立化（round 徽章游标与
+  migration_count 基线分存）、M2 渲染层失败形状不挂头不推进、M3 actions
+  内容变化才计数、L3 点读字节口径（8 KiB − 头预算）、N3 时序测试断言拆分；
+  设计/ADR 措辞同步；orz-loop 658 / orz-assurance 202 全绿，clippy 无新增。
+  状态仍 `partial`（S3/S4 待放行）。审查记录见
+  `docs/audits/P2-11_PULL_SELF_DESCRIPTION_S1_REVIEW_AUDIT_2026-08-31.md`。
 - 2026-08-18：FUS-TOOL-SCOPE-CONTRACT 后续两项闭合登记（P0-E 收尾；本窗口
   实施）——① list_dir 目录信封：`ListDirContent` 增 listed/ignored/truncated
   机械计数（ignored=未过滤走−可见走、同过滤语义、SCOPE_COUNT_CAP=200K 封顶；
