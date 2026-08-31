@@ -3169,8 +3169,17 @@ mod tests {
             .iter()
             .filter(|e| e.event_type == EventType::ToolCompleted)
             .collect();
-        // call-1 成功 + call-2 执行留痕 + call-2 预算拒绝 = 3 条。
-        assert_eq!(completed.len(), 3, "{completed:?}");
+        // call-1 成功 + call-2 执行留痕 = 2 条（S4 实机复验 2026-08-31：
+        // 并行批次预算拒绝只注入消息面 + deny，不再写第二条
+        // tool_completed——F11 receipt 同一 call_id 至多一条完成事件）。
+        assert_eq!(completed.len(), 2, "{completed:?}");
+        assert!(
+            completed.iter().all(|e| {
+                e.payload.get("error").and_then(|v| v.as_str())
+                    != Some("round_inject_budget_exceeded")
+            }),
+            "parallel-path budget refusal must not journal a duplicate completion: {completed:?}"
+        );
         // call-2 的实际执行留痕（P2-3：审计面与事实一致）。
         assert!(
             completed.iter().any(|e| {
@@ -3178,17 +3187,6 @@ mod tests {
                     && e.payload.get("status").and_then(|v| v.as_str()) != Some("error")
             }),
             "executed call must leave its ToolCompleted trace: {completed:?}"
-        );
-        let refused = completed
-            .iter()
-            .find(|e| e.payload["error"] == "round_inject_budget_exceeded")
-            .expect("budget refusal journaled");
-        assert_eq!(refused.payload["tool"], "read_file");
-        assert_eq!(refused.payload["call_id"], "call-2");
-        assert_eq!(refused.payload["inject_tokens_budget"], 1);
-        assert!(
-            refused.payload["inject_tokens_used"].as_u64().unwrap() >= 1,
-            "used tokens must reflect the first result"
         );
 
         // Round 2's protocol shape answers both declared calls (the refused

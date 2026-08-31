@@ -2180,6 +2180,12 @@ pub(crate) async fn run_agent_loop(
                             svc.max_inject_tokens_per_round,
                             svc.policy_revision
                                 .load(std::sync::atomic::Ordering::SeqCst),
+                            // 并行批次：调用已真实执行（或已被 gate 拒绝并
+                            // 留痕），buffered 事件已含完成事件——预算拒绝
+                            // 只注入消息面 + deny，不再写第二条
+                            // tool_completed（F11 receipt 同一 call_id 至多
+                            // 一条完成事件；S4 实机复验 2026-08-31 发现）。
+                            false,
                         )
                         .await?;
                         // P2-10 R2 (2026-08-31): inject-budget refusal = deny.
@@ -2272,6 +2278,9 @@ pub(crate) async fn run_agent_loop(
                     svc.max_inject_tokens_per_round,
                     svc.policy_revision
                         .load(std::sync::atomic::Ordering::SeqCst),
+                    // 串行预检：调用未执行、无 buffered 事件——写一条无
+                    // ToolStarted 的 gate 拒绝完成事件（F11 gate 段允许）。
+                    true,
                 )
                 .await?;
                 // P2-10 R2 (2026-08-31): inject-budget refusal = deny.
@@ -3034,6 +3043,7 @@ async fn refuse_inject_budget(
     used: u64,
     budget: u64,
     policy_revision: u64,
+    write_completed: bool,
 ) -> Result<(ToolResult, Option<PolicyFeedback>), AgentLoopError> {
     let code = "round_inject_budget_exceeded";
     let output = format!(
@@ -3041,20 +3051,22 @@ async fn refuse_inject_budget(
          请改用 grep/结构提取优先，或对 read_file 使用 offset 分段续读。",
         tc.name, used, budget,
     );
-    writer
-        .record(
-            EventType::ToolCompleted,
-            serde_json::json!({
-                "tool": tc.name,
-                "call_id": tc.call_id,
-                "exit_code": 1,
-                "status": "error",
-                "error": code,
-                "inject_tokens_used": used,
-                "inject_tokens_budget": budget,
-            }),
-        )
-        .await?;
+    if write_completed {
+        writer
+            .record(
+                EventType::ToolCompleted,
+                serde_json::json!({
+                    "tool": tc.name,
+                    "call_id": tc.call_id,
+                    "exit_code": 1,
+                    "status": "error",
+                    "error": code,
+                    "inject_tokens_used": used,
+                    "inject_tokens_budget": budget,
+                }),
+            )
+            .await?;
+    }
     messages.push(Message {
         role: Role::Tool,
         content: output.clone(),
@@ -3835,5 +3847,63 @@ mod tests {
             event_types(&dir)
         );
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// S4 实机复验（2026-08-31）：并行批次中同一 call 只允许一条
+    /// tool_completed（F11 receipt 段不重复）。并行批次提交阶段预算
+    /// 超限时调用已真实执行（或已被 gate 拒绝）并留痕——`refuse_inject_budget`
+    /// 只注入消息面拒绝 + deny，不再写第二条完成事件。
+    #[tokio::test]
+    async fn inject_budget_parallel_refusal_does_not_duplicate_completed_event() {
+        let dir = test_dir();
+        let host = ConcurrentReadHost {
+            journal: JournalRecorder::new(dir.clone()),
+            active: std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0)),
+            max_active: std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0)),
+        };
+        let mut writer = crate::controller::journal_event_writer(&host.journal, "RUN-BUDGET");
+        let tc = ToolCall {
+            name: "read_file".to_string(),
+            arguments: serde_json::json!({"path": "x"}),
+            call_id: "call-1".to_string(),
+        };
+        let mut messages: Vec<Message> = Vec::new();
+        // 并行路径语义：write_completed=false —— 事件已在 buffered writer
+        // 中留痕，此处只注入消息 + deny。
+        let (_, feedback) =
+            refuse_inject_budget(&mut writer, &mut messages, &tc, 60_000, 50_000, 0, false)
+                .await
+                .unwrap();
+        assert!(matches!(feedback, Some(PolicyFeedback::Denied(_))));
+        assert_eq!(messages.len(), 1);
+        let events_path = dir.join("events.jsonl");
+        if events_path.exists() {
+            let events = std::fs::read_to_string(&events_path).unwrap();
+            assert!(
+                !events.contains("\"event_type\":\"tool_completed\""),
+                "parallel-path budget refusal must not journal a duplicate completion: {events}"
+            );
+        }
+
+        // 串行预检路径：write_completed=true —— 无 ToolStarted 的 gate
+        // 拒绝完成事件是 F11 gate 段允许的形态。
+        let dir2 = test_dir();
+        let host2 = ConcurrentReadHost {
+            journal: JournalRecorder::new(dir2.clone()),
+            active: std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0)),
+            max_active: std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0)),
+        };
+        let mut writer2 = crate::controller::journal_event_writer(&host2.journal, "RUN-BUDGET2");
+        let mut messages2: Vec<Message> = Vec::new();
+        let _ = refuse_inject_budget(&mut writer2, &mut messages2, &tc, 60_000, 50_000, 0, true)
+            .await
+            .unwrap();
+        let events2 = std::fs::read_to_string(dir2.join("events.jsonl")).unwrap();
+        assert!(
+            events2.contains("\"event_type\":\"tool_completed\""),
+            "serial precheck refusal must journal one gate completion: {events2}"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+        let _ = std::fs::remove_dir_all(&dir2);
     }
 }

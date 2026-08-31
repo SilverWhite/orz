@@ -642,7 +642,79 @@ fn split_source_declaration(line: &str) -> (String, String) {
     let head = line[..start].trim();
     let tail = &line[start..];
     let (url_part, rest) = match tail.find(char::is_whitespace) {
-        Some(ws) => (&tail[..ws], tail[ws..].trim()),
+        Some(ws) => {
+            // S4 实机复验（2026-08-31）：子代理声明行常写
+            // 「URL（full 读取，数据集官方卡片）」——第一个空格在
+            // 「full」之后，若按空格切分 URL 会被截在「（full」尾巴上。
+            // 在空格候选内再按全角左括号提前截断（URL 不含「（」；
+            // 半角 '(' 保留——维基等合法 URL 可含半角括号）。
+            let candidate = &tail[..ws];
+            let rest0 = tail[ws..].trim();
+            let scheme_len = if candidate.starts_with("https://") {
+                8
+            } else {
+                7
+            };
+            match candidate[scheme_len..]
+                .char_indices()
+                .find(|(_, c)| *c == '（')
+            {
+                Some((i, _)) => {
+                    let split = scheme_len + i;
+                    let glued = &candidate[split..];
+                    let title_part = if rest0.is_empty() {
+                        glued
+                            .trim_start_matches(|c: char| {
+                                matches!(
+                                    c,
+                                    '。' | '，'
+                                        | '、'
+                                        | '；'
+                                        | '：'
+                                        | '！'
+                                        | '？'
+                                        | '（'
+                                        | ','
+                                        | ';'
+                                        | ')'
+                                        | ']'
+                                        | '）'
+                                        | '」'
+                                        | ' '
+                                )
+                            })
+                            .to_string()
+                    } else {
+                        format!(
+                            "{} {rest0}",
+                            glued
+                                .trim_start_matches(|c: char| {
+                                    matches!(
+                                        c,
+                                        '。' | '，'
+                                            | '、'
+                                            | '；'
+                                            | '：'
+                                            | '！'
+                                            | '？'
+                                            | '（'
+                                            | ','
+                                            | ';'
+                                            | ')'
+                                            | ']'
+                                            | '）'
+                                            | '」'
+                                            | ' '
+                                    )
+                                })
+                                .trim()
+                        )
+                    };
+                    (&candidate[..split], title_part.trim().to_string())
+                }
+                None => (candidate, rest0.to_string()),
+            }
+        }
         None => {
             // No whitespace — the title may still be glued with CJK/Latin
             // punctuation ("https://example.com/，标题"). Split at the first
@@ -658,6 +730,7 @@ fn split_source_declaration(line: &str) -> (String, String) {
                         | '：'
                         | '！'
                         | '？'
+                        | '（'
                         | ','
                         | ';'
                         | ')'
@@ -679,6 +752,7 @@ fn split_source_declaration(line: &str) -> (String, String) {
                                     | '：'
                                     | '！'
                                     | '？'
+                                    | '（'
                                     | ','
                                     | ';'
                                     | ')'
@@ -689,9 +763,9 @@ fn split_source_declaration(line: &str) -> (String, String) {
                             )
                         })
                         .trim();
-                    (&tail[..split], title_part)
+                    (&tail[..split], title_part.to_string())
                 }
-                None => (tail, ""),
+                None => (tail, String::new()),
             }
         }
     };
@@ -699,7 +773,19 @@ fn split_source_declaration(line: &str) -> (String, String) {
     while let Some(last) = url.chars().last() {
         if matches!(
             last,
-            '。' | '，' | '、' | '；' | '：' | '！' | '？' | ',' | ';' | ')' | ']' | '）' | '」'
+            '。' | '，'
+                | '、'
+                | '；'
+                | '：'
+                | '！'
+                | '？'
+                | '（'
+                | ','
+                | ';'
+                | ')'
+                | ']'
+                | '）'
+                | '」'
         ) {
             url = &url[..url.len() - last.len_utf8()];
         } else {
@@ -1571,6 +1657,17 @@ mod tests {
         let (url, title) = split_source_declaration("https://example.com/，标题");
         assert_eq!(url, "https://example.com/");
         assert_eq!(title, "标题");
+
+        // 无空格形态 + 全角括号（S4 实机复验 2026-08-31：子代理声明行
+        // 「URL（说明）」此前整串进 URL 被 percent-encode）→ 在「（」处拆分。
+        let (url, title) = split_source_declaration(
+            "https://huggingface.co/datasets/open-thoughts/OpenThoughts-114k（full 读取，数据集官方卡片）",
+        );
+        assert_eq!(
+            url,
+            "https://huggingface.co/datasets/open-thoughts/OpenThoughts-114k"
+        );
+        assert_eq!(title, "full 读取，数据集官方卡片）");
 
         // userinfo URL 被 ACAF 解析器拒绝 → 原样保留、不规范化。
         let (url, title) = split_source_declaration("https://user:pass@example.com/x");
