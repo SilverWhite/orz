@@ -13,7 +13,7 @@
 //!   机械层一侧（§5.4 / F11）；
 //! - 效应数复用候选计数/预算硬门（effect_count）。
 
-use orz_assurance::reducer::{pipe_compatible, reduce, validate_term, Term};
+use orz_assurance::reducer::{Term, pipe_compatible, reduce, validate_term};
 use orz_assurance::tool_envelope::{FailEnvelope, OkEnvelope, Pointer};
 use serde_json::{Value, json};
 
@@ -37,7 +37,11 @@ fn resolve(tool: &str, args: &Value) -> Value {
                     "size": 1024,
                     "window": { "offset": offset, "content": "fn main() {}", "truncated": false },
                 }),
-                Some(Pointer::FilePtr { path: path.into(), hash: "ab".repeat(32), offset: Some(offset) }),
+                Some(Pointer::FilePtr {
+                    path: path.into(),
+                    hash: "ab".repeat(32),
+                    offset: Some(offset),
+                }),
             )
             .to_value()
             .expect("serialize")
@@ -53,7 +57,10 @@ fn resolve(tool: &str, args: &Value) -> Value {
                 .to_value()
                 .expect("serialize");
             }
-            let path = args.get("file_path").and_then(Value::as_str).unwrap_or("a.rs");
+            let path = args
+                .get("file_path")
+                .and_then(Value::as_str)
+                .unwrap_or("a.rs");
             OkEnvelope::new(
                 "1 match",
                 json!({ "matches": 64, "bytes": 4096 }),
@@ -105,7 +112,10 @@ fn resolve(tool: &str, args: &Value) -> Value {
 }
 
 fn known(tool: &str) -> bool {
-    matches!(tool, "file.read" | "file.grep" | "file.search_replace" | "terminal.run")
+    matches!(
+        tool,
+        "file.read" | "file.grep" | "file.search_replace" | "terminal.run"
+    )
 }
 
 fn effectful(tool: &str) -> bool {
@@ -129,7 +139,12 @@ fn apply_preserves_typed_envelope_shape() {
 /// V1-2: read → grep 透镜（路径 splice）。
 #[test]
 fn pipe_read_grep_splices_path() {
-    let term = Term::pipe("file.read", json!({ "path": "a.rs" }), "file.grep", json!({ "pattern": "fn" }));
+    let term = Term::pipe(
+        "file.read",
+        json!({ "path": "a.rs" }),
+        "file.grep",
+        json!({ "pattern": "fn" }),
+    );
     let r = reduce(&term, &resolve, &effectful, "trace-v1").unwrap();
     assert_eq!(r.steps, 2);
     assert_eq!(r.effect_count, 0);
@@ -156,19 +171,44 @@ fn pipe_read_search_replace_carries_anchor_and_counts_effect() {
 /// V1-4: grep → read 过滤→取窗透镜（match 选择 + span→offset/length）。
 #[test]
 fn pipe_grep_read_selects_match_and_maps_span() {
-    let term = Term::pipe("file.grep", json!({ "pattern": "fn" }), "file.read", json!({}));
+    let term = Term::pipe(
+        "file.grep",
+        json!({ "pattern": "fn" }),
+        "file.read",
+        json!({}),
+    );
     let r = reduce(&term, &resolve, &effectful, "trace-v1").unwrap();
     assert_eq!(r.steps, 2);
-    assert_eq!(r.value["payload"]["window"]["offset"], 120, "span.start → offset");
-    assert_eq!(r.value["payload"]["window"]["content"], "fn main() {}", "length = end−start 窗");
+    assert_eq!(
+        r.value["payload"]["window"]["offset"], 120,
+        "span.start → offset"
+    );
+    assert_eq!(
+        r.value["payload"]["window"]["content"], "fn main() {}",
+        "length = end−start 窗"
+    );
 }
 
 /// V1-5: 不兼容 pipe 在任一工具执行前类型化关闭（R5/F6）。
 #[test]
 fn incompatible_pipe_fails_closed_before_execution() {
-    let term = Term::pipe("terminal.run", json!({ "cmd": "ls" }), "file.read", json!({}));
-    assert!(validate_term(&term, &known, &effectful).is_err(), "验证层即拒绝");
-    let err = reduce(&term, &|_, _| panic!("不兼容 pipe 不得执行任一工具"), &effectful, "trace-v1").unwrap_err();
+    let term = Term::pipe(
+        "terminal.run",
+        json!({ "cmd": "ls" }),
+        "file.read",
+        json!({}),
+    );
+    assert!(
+        validate_term(&term, &known, &effectful).is_err(),
+        "验证层即拒绝"
+    );
+    let err = reduce(
+        &term,
+        &|_, _| panic!("不兼容 pipe 不得执行任一工具"),
+        &effectful,
+        "trace-v1",
+    )
+    .unwrap_err();
     assert_eq!(err["step"], "arg_validation");
     assert_eq!(err["code"], "pipe_incompatible");
     assert_eq!(err["trace_id"], "trace-v1");
@@ -178,7 +218,12 @@ fn incompatible_pipe_fails_closed_before_execution() {
 /// 保留（receipt ↔ 事件链同构的机械层一侧；§5.4 / F11）。
 #[test]
 fn fail_short_circuit_preserves_trace_id() {
-    let term = Term::pipe("file.grep", json!({ "pattern": "" }), "file.read", json!({}));
+    let term = Term::pipe(
+        "file.grep",
+        json!({ "pattern": "" }),
+        "file.read",
+        json!({}),
+    );
     let err = reduce(&term, &resolve, &effectful, "trace-v1").unwrap_err();
     assert_eq!(err["step"], "arg_validation");
     assert_eq!(err["code"], "invalid_pattern");
@@ -200,14 +245,24 @@ fn pipe_matrix_is_the_documented_lenses() {
 #[test]
 fn effect_count_is_reported_to_the_hard_gate() {
     let read = Term::apply("file.read", json!({ "path": "a.rs" }));
-    assert_eq!(reduce(&read, &resolve, &effectful, "trace-v1").unwrap().effect_count, 0);
+    assert_eq!(
+        reduce(&read, &resolve, &effectful, "trace-v1")
+            .unwrap()
+            .effect_count,
+        0
+    );
     let write = Term::pipe(
         "file.read",
         json!({ "path": "a.rs" }),
         "file.search_replace",
         json!({ "old_string": "x", "new_string": "y" }),
     );
-    assert_eq!(reduce(&write, &resolve, &effectful, "trace-v1").unwrap().effect_count, 1);
+    assert_eq!(
+        reduce(&write, &resolve, &effectful, "trace-v1")
+            .unwrap()
+            .effect_count,
+        1
+    );
     let term = Term::pipe(
         "file.read",
         json!({ "path": "a.rs" }),
@@ -215,6 +270,12 @@ fn effect_count_is_reported_to_the_hard_gate() {
         json!({ "cmd": "echo hi" }),
     );
     // terminal.run → … 不在透镜矩阵内：拒绝发生在效应执行之前。
-    let err = reduce(&term, &|_, _| panic!("must not run"), &effectful, "trace-v1").unwrap_err();
+    let err = reduce(
+        &term,
+        &|_, _| panic!("must not run"),
+        &effectful,
+        "trace-v1",
+    )
+    .unwrap_err();
     assert_eq!(err["code"], "pipe_incompatible");
 }

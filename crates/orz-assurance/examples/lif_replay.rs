@@ -26,11 +26,10 @@ use std::path::{Path, PathBuf};
 
 use chrono::DateTime;
 use orz_assurance::lif::{
-    classify_event_outcome, ErrTauMode, LifEngine, ToolEvent, ToolOutcome,
-    DENY_REFRACTORY_SECS, DENY_TAU_SECS, DENY_THETA, ERR_REFRACTORY_SECS, ERR_TAU_SECS,
-    ERR_THETA, SLOW_REFRACTORY_SECS, SLOW_TAU_SECS, SLOW_THETA, SLOW_W_MAX,
-    SLOW_WALL_MS_THRESHOLD, STALL_GAP_THRESHOLD_SECS, STALL_REFRACTORY_SECS,
-    STALL_TAU_SECS, STALL_THETA,
+    DENY_REFRACTORY_SECS, DENY_TAU_SECS, DENY_THETA, ERR_REFRACTORY_SECS, ERR_TAU_SECS, ERR_THETA,
+    ErrTauMode, LifEngine, SLOW_REFRACTORY_SECS, SLOW_TAU_SECS, SLOW_THETA, SLOW_W_MAX,
+    SLOW_WALL_MS_THRESHOLD, STALL_GAP_THRESHOLD_SECS, STALL_REFRACTORY_SECS, STALL_TAU_SECS,
+    STALL_THETA, ToolEvent, ToolOutcome, classify_event_outcome,
 };
 use serde_json::Value;
 
@@ -288,7 +287,11 @@ fn find_journals(root: &Path) -> Vec<PathBuf> {
             let path = entry.path();
             if path.is_dir() {
                 stack.push(path);
-            } else if path.file_name().map(|n| n == "events.jsonl").unwrap_or(false) {
+            } else if path
+                .file_name()
+                .map(|n| n == "events.jsonl")
+                .unwrap_or(false)
+            {
                 out.push(path);
             }
         }
@@ -325,13 +328,20 @@ fn parse_run(path: &Path) -> (String, Vec<Step>) {
         let Ok(event) = serde_json::from_str::<Value>(line) else {
             continue;
         };
-        let Some(ts) = event.get("timestamp").and_then(Value::as_str).and_then(parse_time) else {
+        let Some(ts) = event
+            .get("timestamp")
+            .and_then(Value::as_str)
+            .and_then(parse_time)
+        else {
             continue;
         };
         if first_t.is_none() {
             first_t = Some(ts);
         }
-        let event_type = event.get("event_type").and_then(Value::as_str).unwrap_or("");
+        let event_type = event
+            .get("event_type")
+            .and_then(Value::as_str)
+            .unwrap_or("");
         let payload = event.get("payload").cloned().unwrap_or(Value::Null);
         match event_type {
             "model_output" => {
@@ -351,9 +361,11 @@ fn parse_run(path: &Path) -> (String, Vec<Step>) {
     let run_id = text
         .lines()
         .find_map(|l| {
-            serde_json::from_str::<Value>(l)
-                .ok()
-                .and_then(|v| v.get("run_id").and_then(Value::as_str).map(|s| s.to_string()))
+            serde_json::from_str::<Value>(l).ok().and_then(|v| {
+                v.get("run_id")
+                    .and_then(Value::as_str)
+                    .map(|s| s.to_string())
+            })
         })
         .unwrap_or_else(|| {
             path.parent()
@@ -419,7 +431,9 @@ fn run_stats(run_id: String, steps: &[Step], err_round_k: f64) -> RunStats {
                 t_hats.push(engine.estimator().estimate());
                 let rec = engine.temporal().now().copied();
                 if let Some(rec) = rec {
-                    *domain_counts.entry(rec.domain.as_str().to_string()).or_insert(0) += 1;
+                    *domain_counts
+                        .entry(rec.domain.as_str().to_string())
+                        .or_insert(0) += 1;
                     features.push(FeatureRow {
                         t: rec.t,
                         domain: rec.domain.as_str().to_string(),
@@ -613,10 +627,7 @@ fn main() {
         gate_stats(&|r| r.stall_fires, &|r| &r.stall_gates);
     let (_slow_g_with, slow_g_c2, slow_g_c3, slow_g_parity) =
         gate_stats(&|r| r.slow_fires, &|r| &r.slow_gates);
-    let stuck_membrane_crossed_runs = runs
-        .iter()
-        .filter(|r| r.stuck_membrane_crossed)
-        .count();
+    let stuck_membrane_crossed_runs = runs.iter().filter(|r| r.stuck_membrane_crossed).count();
     let stuck_parity = runs
         .iter()
         .filter(|r| !r.stuck_peak_ratio.is_finite())

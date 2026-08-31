@@ -168,7 +168,11 @@ pub fn classify_event_outcome(payload: &serde_json::Value) -> ToolOutcome {
     {
         return ToolOutcome::Deny;
     }
-    if payload.get("timed_out").and_then(serde_json::Value::as_bool) == Some(true) {
+    if payload
+        .get("timed_out")
+        .and_then(serde_json::Value::as_bool)
+        == Some(true)
+    {
         return ToolOutcome::Error;
     }
     if payload.get("status").and_then(serde_json::Value::as_str) == Some("error")
@@ -423,7 +427,15 @@ impl StuckChannel {
 
     /// Closed-form advance over [last_time, t]. `u_err` / `u_prog` must be the
     /// pre-decay values (state at `last_time`), matching the formula's t₀.
-    pub fn advance(&mut self, t: f64, u_err: f64, u_prog: f64, theta_err: f64, tau_err: f64, tau_prog: f64) {
+    pub fn advance(
+        &mut self,
+        t: f64,
+        u_err: f64,
+        u_prog: f64,
+        theta_err: f64,
+        tau_err: f64,
+        tau_prog: f64,
+    ) {
         let Some(t0) = self.last_time else {
             self.last_time = Some(t);
             return;
@@ -442,8 +454,8 @@ impl StuckChannel {
         // (1 − exp(−Δt·α))/α = Δt·(1 − exp(−y))/y = Δt·expm1_ratio(y).
         let k_alpha = dt * expm1_ratio(dt * alpha);
         let k_beta = dt * expm1_ratio(dt * beta);
-        self.u_stuck = self.u_stuck * decay
-            + (u_err / theta_err) * decay * (k_alpha - u_prog * k_beta);
+        self.u_stuck =
+            self.u_stuck * decay + (u_err / theta_err) * decay * (k_alpha - u_prog * k_beta);
         // Structural fact (no clamp): err full-resets keep u_err ≤ θ_err, so
         // u_err/θ_err ∈ [0,1] (§4.4).
         if !self.u_stuck.is_finite() {
@@ -722,8 +734,8 @@ mod tests {
 
         // Naive right-endpoint recurrence over the same interval.
         let dt = 300.0_f64;
-        let i_end = (u_err * (-dt / tau_err).exp()) / ERR_THETA
-            * (1.0 - u_prog * (-dt / tau_prog).exp());
+        let i_end =
+            (u_err * (-dt / tau_err).exp()) / ERR_THETA * (1.0 - u_prog * (-dt / tau_prog).exp());
         let re_u = i_end * dt;
         assert!(
             re_u > 2.0 * closed.u(),

@@ -235,12 +235,14 @@ pub fn write_section(
             section.response = Some(response);
             section.project_docs = docs;
             section.source_ledger = ledger;
+            w.bump_retrieval("internal_ret");
         }
         SubagentRole::ExternalRetrieval => {
             let section = &mut w.external_ret;
             section.response = Some(response);
             section.web_sources = sources;
             section.source_ledger = ledger;
+            w.bump_retrieval("external_ret");
         }
     }
 }

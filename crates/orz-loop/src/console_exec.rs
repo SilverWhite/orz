@@ -56,8 +56,10 @@ impl AgentLoopController {
         .await?;
         {
             let mut w = self.blackboard.write();
-            if let Some(idx) = crate::planning::current_step_index(&w.plan.steps) {
-                crate::planning::mark_step_in_progress(&mut w.plan.steps, idx);
+            if let Some(idx) = crate::planning::current_step_index(&w.plan.steps)
+                && crate::planning::mark_step_in_progress(&mut w.plan.steps, idx)
+            {
+                w.bump_plan();
             }
         }
         self.console_mode_state
@@ -640,8 +642,10 @@ impl AgentLoopController {
         // 发放时迁移 pending/failed → in_progress（订单绑定步骤）。
         if let Some(step_id) = order.step_id.as_deref() {
             let mut w = self.blackboard.write();
-            if let Some(idx) = w.plan.steps.iter().position(|s| s.id == step_id) {
-                crate::planning::mark_step_in_progress(&mut w.plan.steps, idx);
+            if let Some(idx) = w.plan.steps.iter().position(|s| s.id == step_id)
+                && crate::planning::mark_step_in_progress(&mut w.plan.steps, idx)
+            {
+                w.bump_plan();
             }
         }
         let mut trace = self
@@ -1037,16 +1041,19 @@ impl AgentLoopController {
                     // submit}) — legacy/restored plans with a plain final
                     // step id keep the pre-S1 auto-advance semantics.
                     let is_terminal_step = crate::planning::is_terminal_step(&w.plan.steps, idx);
-                    if !is_terminal_step {
-                        crate::planning::mark_step_done(
+                    if !is_terminal_step
+                        && crate::planning::mark_step_done(
                             &mut w.plan.steps,
                             idx,
                             &order.order_id,
                             None,
-                        );
+                        )
+                    {
+                        w.bump_plan();
                     }
-                } else {
-                    crate::planning::mark_step_failed(&mut w.plan.steps, idx, &order.order_id);
+                } else if crate::planning::mark_step_failed(&mut w.plan.steps, idx, &order.order_id)
+                {
+                    w.bump_plan();
                 }
             }
         }

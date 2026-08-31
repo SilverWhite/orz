@@ -47,10 +47,7 @@ pub struct ApplySpec {
 #[serde(tag = "term", rename_all = "snake_case")]
 pub enum Term {
     Apply(ApplySpec),
-    Pipe {
-        first: ApplySpec,
-        second: ApplySpec,
-    },
+    Pipe { first: ApplySpec, second: ApplySpec },
 }
 
 impl Term {
@@ -61,7 +58,12 @@ impl Term {
         })
     }
 
-    pub fn pipe(first_tool: impl Into<String>, first_args: Value, second_tool: impl Into<String>, second_args: Value) -> Self {
+    pub fn pipe(
+        first_tool: impl Into<String>,
+        first_args: Value,
+        second_tool: impl Into<String>,
+        second_args: Value,
+    ) -> Self {
         Term::Pipe {
             first: ApplySpec {
                 tool: first_tool.into(),
@@ -164,13 +166,10 @@ fn splice_grep_read_window(
     args: &mut Map<String, Value>,
     trace_id: &str,
 ) -> Result<(), Value> {
-    let matches = payload.get("matches").and_then(Value::as_array).ok_or_else(|| {
-        fail_value(
-            trace_id,
-            "no_match",
-            "grep result carries no matches array",
-        )
-    })?;
+    let matches = payload
+        .get("matches")
+        .and_then(Value::as_array)
+        .ok_or_else(|| fail_value(trace_id, "no_match", "grep result carries no matches array"))?;
     if matches.is_empty() {
         return Err(fail_value(
             trace_id,
@@ -186,18 +185,15 @@ fn splice_grep_read_window(
                 return Err(fail_value(
                     trace_id,
                     "match_index_out_of_range",
-                    &format!(
-                        "match_index {n} exceeds matches length {}",
-                        matches.len()
-                    ),
-                ))
+                    &format!("match_index {n} exceeds matches length {}", matches.len()),
+                ));
             }
             None => {
                 return Err(fail_value(
                     trace_id,
                     "invalid_match_index",
                     "match_index must be a non-negative integer",
-                ))
+                ));
             }
         },
         Some(_) => {
@@ -205,7 +201,7 @@ fn splice_grep_read_window(
                 trace_id,
                 "invalid_match_index",
                 "match_index must be a non-negative integer",
-            ))
+            ));
         }
     };
     let m = &matches[index];
@@ -213,30 +209,27 @@ fn splice_grep_read_window(
         .get("path")
         .and_then(Value::as_str)
         .ok_or_else(|| fail_value(trace_id, "invalid_match_span", "match carries no path"))?;
-    let span = m
-        .get("span")
-        .and_then(Value::as_object)
-        .ok_or_else(|| fail_value(trace_id, "invalid_match_span", "match carries no span object"))?;
-    let start = span
-        .get("start")
-        .and_then(Value::as_u64)
-        .ok_or_else(|| {
-            fail_value(
-                trace_id,
-                "invalid_match_span",
-                "span start must be a non-negative integer",
-            )
-        })?;
-    let end = span
-        .get("end")
-        .and_then(Value::as_u64)
-        .ok_or_else(|| {
-            fail_value(
-                trace_id,
-                "invalid_match_span",
-                "span end must be a non-negative integer",
-            )
-        })?;
+    let span = m.get("span").and_then(Value::as_object).ok_or_else(|| {
+        fail_value(
+            trace_id,
+            "invalid_match_span",
+            "match carries no span object",
+        )
+    })?;
+    let start = span.get("start").and_then(Value::as_u64).ok_or_else(|| {
+        fail_value(
+            trace_id,
+            "invalid_match_span",
+            "span start must be a non-negative integer",
+        )
+    })?;
+    let end = span.get("end").and_then(Value::as_u64).ok_or_else(|| {
+        fail_value(
+            trace_id,
+            "invalid_match_span",
+            "span end must be a non-negative integer",
+        )
+    })?;
     if end < start {
         return Err(fail_value(
             trace_id,
@@ -308,8 +301,7 @@ pub fn validate_term(
         if !spec.arguments.is_object() {
             return Err(format!(
                 "tool arguments must be an object (got {}) for {}",
-                spec.tool,
-                spec.arguments
+                spec.tool, spec.arguments
             ));
         }
     }
@@ -365,7 +357,8 @@ pub fn reduce(
             Ok(Reduction {
                 value: second_value,
                 steps: 2,
-                effect_count: u32::from(effectful(&first.tool)) + u32::from(effectful(&second.tool)),
+                effect_count: u32::from(effectful(&first.tool))
+                    + u32::from(effectful(&second.tool)),
             })
         }
     }
@@ -415,7 +408,12 @@ mod tests {
 
     #[test]
     fn pipe_splices_path_into_second_arguments() {
-        let term = Term::pipe("file.read", json!({ "path": "a.rs" }), "file.grep", json!({ "pattern": "fn" }));
+        let term = Term::pipe(
+            "file.read",
+            json!({ "path": "a.rs" }),
+            "file.grep",
+            json!({ "pattern": "fn" }),
+        );
         let r = reduce(
             &term,
             &|tool, args| match tool {
@@ -463,7 +461,12 @@ mod tests {
 
     #[test]
     fn fail_short_circuits_the_pipe() {
-        let term = Term::pipe("file.read", json!({ "path": "a.rs" }), "file.grep", json!({}));
+        let term = Term::pipe(
+            "file.read",
+            json!({ "path": "a.rs" }),
+            "file.grep",
+            json!({}),
+        );
         let err = reduce(
             &term,
             &|tool, _| {
@@ -616,7 +619,12 @@ mod tests {
     /// and the read tool must never run.
     #[test]
     fn grep_read_pipe_empty_matches_returns_typed_arg_validation() {
-        let term = Term::pipe("file.grep", json!({ "pattern": "x" }), "file.read", json!({}));
+        let term = Term::pipe(
+            "file.grep",
+            json!({ "pattern": "x" }),
+            "file.read",
+            json!({}),
+        );
         let err = reduce(
             &term,
             &|tool, _| match tool {
@@ -644,20 +652,32 @@ mod tests {
                 ] }
             })
         };
-        let out_of_range = Term::pipe("file.grep", json!({}), "file.read", json!({ "match_index": 5 }));
+        let out_of_range = Term::pipe(
+            "file.grep",
+            json!({}),
+            "file.read",
+            json!({ "match_index": 5 }),
+        );
         let err = reduce(&out_of_range, &one_match, &effectful, "t-1").unwrap_err();
         assert_eq!(err["code"], "match_index_out_of_range");
 
-        let bad_index = Term::pipe("file.grep", json!({}), "file.read", json!({ "match_index": "first" }));
+        let bad_index = Term::pipe(
+            "file.grep",
+            json!({}),
+            "file.read",
+            json!({ "match_index": "first" }),
+        );
         let err = reduce(&bad_index, &one_match, &effectful, "t-1").unwrap_err();
         assert_eq!(err["code"], "invalid_match_index");
 
         let reversed = Term::pipe("file.grep", json!({}), "file.read", json!({}));
         let err = reduce(
             &reversed,
-            &|_, _| json!({ "summary": "m", "payload": { "matches": [
+            &|_, _| {
+                json!({ "summary": "m", "payload": { "matches": [
                 { "path": "a.rs", "span": { "start": 9, "end": 3 }, "text": "x" }
-            ] } }),
+            ] } })
+            },
             &effectful,
             "t-1",
         )
@@ -667,9 +687,11 @@ mod tests {
         let zero = Term::pipe("file.grep", json!({}), "file.read", json!({}));
         let err = reduce(
             &zero,
-            &|_, _| json!({ "summary": "m", "payload": { "matches": [
+            &|_, _| {
+                json!({ "summary": "m", "payload": { "matches": [
                 { "path": "a.rs", "span": { "start": 3, "end": 3 }, "text": "" }
-            ] } }),
+            ] } })
+            },
             &effectful,
             "t-1",
         )
@@ -681,7 +703,12 @@ mod tests {
     /// rejected with a typed arg_validation Fail BEFORE either tool runs.
     #[test]
     fn incompatible_pipe_rejected_with_typed_fail_before_execution() {
-        let term = Term::pipe("terminal.run", json!({ "cmd": "ls" }), "file.read", json!({}));
+        let term = Term::pipe(
+            "terminal.run",
+            json!({ "cmd": "ls" }),
+            "file.read",
+            json!({}),
+        );
         let err = reduce(
             &term,
             &|_, _| panic!("incompatible pipe must be rejected before any tool runs"),
@@ -700,7 +727,8 @@ mod tests {
     fn validate_term_rejects_incompatible_pipe_and_accepts_lenses() {
         let bad = Term::pipe("terminal.run", json!({}), "file.read", json!({}));
         assert!(validate_term(&bad, &known, &effectful).is_err());
-        let bad_grep_read_write = Term::pipe("file.grep", json!({}), "file.search_replace", json!({}));
+        let bad_grep_read_write =
+            Term::pipe("file.grep", json!({}), "file.search_replace", json!({}));
         assert!(validate_term(&bad_grep_read_write, &known, &effectful).is_err());
         let good = Term::pipe("file.grep", json!({}), "file.read", json!({}));
         assert!(validate_term(&good, &known, &effectful).is_ok());

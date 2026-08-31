@@ -83,7 +83,12 @@ impl OkEnvelope {
     /// boundary, never a mid-codepoint cut; an over-limit summary is
     /// truncated and marked — the model must never see a silently
     /// un-bounded summary).
-    pub fn new(summary: impl Into<String>, cap: Value, payload: Value, pointer: Option<Pointer>) -> Self {
+    pub fn new(
+        summary: impl Into<String>,
+        cap: Value,
+        payload: Value,
+        pointer: Option<Pointer>,
+    ) -> Self {
         Self {
             summary: enforce_bound(summary.into(), SUMMARY_MAX_BYTES),
             cap,
@@ -123,19 +128,35 @@ impl FailEnvelope {
         }
     }
 
-    pub fn arg_validation(code: impl Into<String>, message: impl Into<String>, trace_id: impl Into<String>) -> Self {
+    pub fn arg_validation(
+        code: impl Into<String>,
+        message: impl Into<String>,
+        trace_id: impl Into<String>,
+    ) -> Self {
         Self::new(FailStep::ArgValidation, code, message, trace_id)
     }
 
-    pub fn gate(code: impl Into<String>, message: impl Into<String>, trace_id: impl Into<String>) -> Self {
+    pub fn gate(
+        code: impl Into<String>,
+        message: impl Into<String>,
+        trace_id: impl Into<String>,
+    ) -> Self {
         Self::new(FailStep::Gate, code, message, trace_id)
     }
 
-    pub fn execution(code: impl Into<String>, message: impl Into<String>, trace_id: impl Into<String>) -> Self {
+    pub fn execution(
+        code: impl Into<String>,
+        message: impl Into<String>,
+        trace_id: impl Into<String>,
+    ) -> Self {
         Self::new(FailStep::Execution, code, message, trace_id)
     }
 
-    pub fn delivery(code: impl Into<String>, message: impl Into<String>, trace_id: impl Into<String>) -> Self {
+    pub fn delivery(
+        code: impl Into<String>,
+        message: impl Into<String>,
+        trace_id: impl Into<String>,
+    ) -> Self {
         Self::new(FailStep::Delivery, code, message, trace_id)
     }
 
@@ -189,12 +210,7 @@ mod tests {
     #[test]
     fn fail_message_is_bounded_and_utf8_safe() {
         let long = "你".repeat(300); // 900 bytes
-        let env = FailEnvelope::new(
-            FailStep::ArgValidation,
-            "no_match",
-            long.clone(),
-            "trace-1",
-        );
+        let env = FailEnvelope::new(FailStep::ArgValidation, "no_match", long.clone(), "trace-1");
         assert!(env.message.len() <= MESSAGE_MAX_BYTES);
         assert!(env.message.is_char_boundary(env.message.len()));
         assert!(env.message.ends_with("(truncated)"));

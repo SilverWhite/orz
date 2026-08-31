@@ -331,15 +331,30 @@ pub struct ActionBoard {
     /// 发放后的 receipts（有界，保留最近 50 条）。
     #[serde(default)]
     pub results: Vec<ActionResult>,
+    /// PULL 自描述版本计数（2026-08-31；仅内存，不序列化）。
+    #[serde(skip)]
+    pub revision: u64,
 }
 
 impl ActionBoard {
     /// 结果栏保留上限（有界，防黑板无限膨胀）。
     pub const RESULTS_MAX: usize = 50;
 
+    fn bump(&mut self) {
+        self.revision = self.revision.saturating_add(1);
+    }
+
     /// 注册板块整块替换（助理层每轮机械刷新）。
     pub fn set_registration(&mut self, registration: Vec<ActionRegistration>) {
+        // 2026-08-31 审查处理 M3：内容相同不计数（compare-and-set）——读取
+        // actions 前的 `sync_console_registrations` 每读必刷，若无条件 bump
+        // 会让每次读 actions 都带自触发的 `actions+1` 徽章，违背「自上次
+        // 读取以来」语义（设计 §2：可见内容变化才计 1）。
+        if self.registration == registration {
+            return;
+        }
         self.registration = registration;
+        self.bump();
     }
 
     /// 模型写订单：单轮一单，已有 pending 订单时拒绝（fail-closed）。
@@ -348,12 +363,17 @@ impl ActionBoard {
             return Err(ActionBoardError::OrderSlotBusy);
         }
         self.order = Some(order);
+        self.bump();
         Ok(())
     }
 
     /// 机械发放出口：取走唯一 pending 订单并清空单槽（消费一次）。
     pub fn take_order(&mut self) -> Option<ActionOrder> {
-        self.order.take()
+        let taken = self.order.take();
+        if taken.is_some() {
+            self.bump();
+        }
+        taken
     }
 
     /// 结果栏追加 receipt（有界：保留最近 `RESULTS_MAX` 条）。
@@ -363,6 +383,7 @@ impl ActionBoard {
             let overflow = self.results.len() - Self::RESULTS_MAX;
             self.results.drain(..overflow);
         }
+        self.bump();
     }
 }
 
@@ -410,6 +431,24 @@ pub struct Blackboard {
     /// 纪律，随 run 生命周期）。
     #[serde(default)]
     pub entities: crate::entities::EntityRegistry,
+    /// PULL 自描述分区版本计数（2026-08-31，P2-11 第 1 项）——每个分区
+    /// 可见内容变化计 1 次，供 `blackboard_read` 增量头读取；仅内存、
+    /// 不进任何序列化面（`#[serde(skip)]`，epoch 快照/会话存档不携带）。
+    #[serde(skip)]
+    pub revisions: PartitionRevisions,
+}
+
+/// 分区版本计数（PULL 自描述 §2）。`actions` / `entities` 的自含计数
+/// 由各自结构体持有（`ActionBoard.revision` / `EntityRegistry.revision`），
+/// 不在本表重复；本表只记黑板直属分区。
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct PartitionRevisions {
+    pub plan: u64,
+    pub exec: u64,
+    pub edits: u64,
+    pub tool_actions: u64,
+    pub internal_ret: u64,
+    pub external_ret: u64,
 }
 
 impl Blackboard {
@@ -442,6 +481,69 @@ impl Blackboard {
         self.tool_actions = snapshot.tool_actions.clone();
         self.exec = snapshot.exec.clone();
         self.actions = snapshot.actions.clone();
+        // PULL 自描述：恢复 = 可见内容整体替换，各分区计 1 次变化。
+        self.revisions.plan = self.revisions.plan.saturating_add(1);
+        self.revisions.edits = self.revisions.edits.saturating_add(1);
+        self.revisions.tool_actions = self.revisions.tool_actions.saturating_add(1);
+        self.revisions.exec = self.revisions.exec.saturating_add(1);
+        self.actions.bump();
+    }
+
+    /// 编辑记录追加（单写者纪律 + 分区版本计数同一落点）。
+    pub fn push_edit(&mut self, record: EditRecord) {
+        self.edits.push(record);
+        self.revisions.edits = self.revisions.edits.saturating_add(1);
+    }
+
+    /// 工具动作记录追加（单写者纪律 + 分区版本计数同一落点）。
+    pub fn push_tool_action(&mut self, record: ToolActionRecord) {
+        self.tool_actions.push(record);
+        self.revisions.tool_actions = self.revisions.tool_actions.saturating_add(1);
+    }
+
+    /// exec 结果追加（单写者纪律 + 分区版本计数同一落点）。
+    pub fn push_exec_result(&mut self, text: String) {
+        self.exec.results.push(text);
+        self.revisions.exec = self.revisions.exec.saturating_add(1);
+    }
+
+    /// exec 错误追加（单写者纪律 + 分区版本计数同一落点）。
+    pub fn push_exec_error(&mut self, text: String) {
+        self.exec.errors.push(text);
+        self.revisions.exec = self.revisions.exec.saturating_add(1);
+    }
+
+    /// plan 分区零散写点（mark_step_* / delivery_status 等）的计数入口。
+    pub fn bump_plan(&mut self) {
+        self.revisions.plan = self.revisions.plan.saturating_add(1);
+    }
+
+    /// 检索分区覆盖写（`agents::retrieval::write_section`）的计数入口。
+    pub fn bump_retrieval(&mut self, section: &str) {
+        match section {
+            "internal_ret" => {
+                self.revisions.internal_ret = self.revisions.internal_ret.saturating_add(1);
+            }
+            "external_ret" => {
+                self.revisions.external_ret = self.revisions.external_ret.saturating_add(1);
+            }
+            _ => {}
+        }
+    }
+
+    /// PULL 自描述 §2：固定分区序的黑板直属版本快照（live-only）。
+    /// session / temporal 由控制器按 tool_rounds / LIF round 派生。
+    pub fn partition_revisions(&self) -> Vec<(&'static str, u64)> {
+        vec![
+            ("plan", self.revisions.plan),
+            ("exec", self.revisions.exec),
+            ("edits", self.revisions.edits),
+            ("tool_actions", self.revisions.tool_actions),
+            ("actions", self.actions.revision),
+            ("internal_ret", self.revisions.internal_ret),
+            ("external_ret", self.revisions.external_ret),
+            ("entities", self.entities.revision()),
+        ]
     }
 
     /// Plan-epoch rotation (ADR-0010 §14.15 / BLACKBOARD_PLAN_EPOCH_DESIGN).
@@ -542,6 +644,7 @@ impl Blackboard {
                 self.plan.goal = Some(goal);
                 self.plan.steps.clear();
                 self.plan.steps.extend(steps);
+                self.revisions.plan = self.revisions.plan.saturating_add(1);
                 return Ok(None);
             }
             if plan_epoch <= self.plan.plan_epoch {
@@ -571,6 +674,12 @@ impl Blackboard {
         self.tool_actions.clear();
         self.exec = ExecSection::default();
         self.actions = ActionBoard::default();
+        // PULL 自描述：轮换 = 计划替换 + 旧 epoch 工作分区清空，各计 1 次。
+        self.revisions.plan = self.revisions.plan.saturating_add(1);
+        self.revisions.edits = self.revisions.edits.saturating_add(1);
+        self.revisions.tool_actions = self.revisions.tool_actions.saturating_add(1);
+        self.revisions.exec = self.revisions.exec.saturating_add(1);
+        self.actions.bump();
         Ok(old)
     }
 }
@@ -1255,8 +1364,14 @@ mod tests {
         let recent = controller
             .render_temporal_section(Some("recent"), Some(20), None)
             .unwrap();
-        assert!(recent.contains("temporal.recent"), "recent header: {recent}");
-        assert!(recent.contains("u_prog="), "recent rows carry labels: {recent}");
+        assert!(
+            recent.contains("temporal.recent"),
+            "recent header: {recent}"
+        );
+        assert!(
+            recent.contains("u_prog="),
+            "recent rows carry labels: {recent}"
+        );
 
         let history = controller
             .render_temporal_section(Some("history"), None, None)
@@ -1586,9 +1701,21 @@ mod tests {
             "{:?}",
             exec_round.messages
         );
+        // PULL 自描述（2026-08-31）：成功 live 读取响应首行为「自上次读取
+        // 以来」增量头，正文仍为头行 + 计数行（共 3 行）。
+        assert!(
+            exec_reply
+                .content
+                .lines()
+                .next()
+                .unwrap()
+                .starts_with("[黑板增量]"),
+            "{:?}",
+            exec_round.messages
+        );
         assert_eq!(
             exec_reply.content.lines().count(),
-            2,
+            3,
             "{:?}",
             exec_round.messages
         );
@@ -1670,10 +1797,21 @@ mod tests {
             .iter()
             .find(|m| m.tool_call_id.as_deref() == Some("call-pr1"))
             .expect("point-read tool result message");
+        // PULL 自描述（2026-08-31）：响应首行为增量头，receipt 正文紧随其后。
         assert!(
             reply
                 .content
-                .starts_with("ORD-PR-1 ok=true step=? code=? trace_id=t-pr-1\nresponse={"),
+                .lines()
+                .next()
+                .unwrap()
+                .starts_with("[黑板增量]"),
+            "{:?}",
+            round.messages
+        );
+        assert!(
+            reply
+                .content
+                .contains("ORD-PR-1 ok=true step=? code=? trace_id=t-pr-1\nresponse={"),
             "{:?}",
             round.messages
         );
@@ -2327,6 +2465,17 @@ mod tests {
             "{:?}",
             round.messages
         );
+        // PULL 自描述（2026-08-31 审查处理 M2）：失败形状不挂增量头——
+        // 模型拿到的是错误文本，不算读过该分区（设计 §3）。
+        assert!(
+            round
+                .messages
+                .iter()
+                .filter(|m| m.tool_call_id.as_deref() == Some("call-b4"))
+                .all(|m| !m.content.starts_with("[黑板增量]")),
+            "error shape must not carry the delta header: {:?}",
+            round.messages
+        );
 
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -2589,5 +2738,137 @@ mod tests {
         }
 
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// PULL 自描述（2026-08-31，P2-11 第 1 项 / 设计 §2）：追加类分区计数
+    /// 在 push_* 方法内自增；计划轮换/同 epoch 修订/快照恢复计 1 次变化。
+    #[test]
+    fn partition_revisions_bump_on_push_rotate_and_restore() {
+        let bb = SharedBlackboard::new();
+        {
+            let mut w = bb.write();
+            w.push_edit(EditRecord {
+                file: "a.txt".into(),
+                old_lines: 1,
+                new_lines: 2,
+                timestamp: "t".into(),
+            });
+            w.push_tool_action(ToolActionRecord {
+                category: "read".into(),
+                tool: "read_file".into(),
+                timestamp: "t".into(),
+            });
+            w.push_exec_result("r".into());
+            w.push_exec_error("e".into());
+        }
+        let rev = bb.read().partition_revisions();
+        let get = |name: &str| rev.iter().find(|(n, _)| *n == name).unwrap().1;
+        assert_eq!(get("plan"), 0);
+        assert_eq!(get("exec"), 2);
+        assert_eq!(get("edits"), 1);
+        assert_eq!(get("tool_actions"), 1);
+        assert_eq!(get("actions"), 0);
+
+        // 新 epoch 轮换：plan 替换 + exec/edits/tool_actions/actions 清空。
+        {
+            let mut w = bb.write();
+            w.rotate_to_structured_plan(
+                "PLAN-A".into(),
+                1,
+                "goal".into(),
+                Vec::new(),
+                "2026-08-31T00:00:00Z",
+            )
+            .unwrap();
+        }
+        let rev = bb.read().partition_revisions();
+        let get = |name: &str| rev.iter().find(|(n, _)| *n == name).unwrap().1;
+        assert_eq!(get("plan"), 1);
+        assert_eq!(get("exec"), 3);
+        assert_eq!(get("edits"), 2);
+        assert_eq!(get("tool_actions"), 2);
+        assert_eq!(get("actions"), 1);
+
+        // 同 epoch 修订：只计 plan。
+        {
+            let mut w = bb.write();
+            w.rotate_to_structured_plan(
+                "PLAN-A".into(),
+                1,
+                "goal2".into(),
+                Vec::new(),
+                "2026-08-31T00:00:01Z",
+            )
+            .unwrap();
+        }
+        let rev = bb.read().partition_revisions();
+        let get = |name: &str| rev.iter().find(|(n, _)| *n == name).unwrap().1;
+        assert_eq!(get("plan"), 2);
+        assert_eq!(get("exec"), 3);
+        assert_eq!(get("tool_actions"), 2);
+
+        // 快照恢复：恢复的分区各计 1。
+        let snapshot = bb.read().epoch_snapshot("2026-08-31T00:00:02Z");
+        {
+            let mut w = bb.write();
+            w.restore_epoch_snapshot(&snapshot);
+        }
+        let rev = bb.read().partition_revisions();
+        let get = |name: &str| rev.iter().find(|(n, _)| *n == name).unwrap().1;
+        assert_eq!(get("plan"), 3);
+        assert_eq!(get("exec"), 4);
+        assert_eq!(get("edits"), 3);
+        assert_eq!(get("tool_actions"), 3);
+        assert_eq!(get("actions"), 2);
+    }
+
+    /// PULL 自描述 §2：ActionBoard 四类变化（注册替换 / 订单写入 / 消费 /
+    /// receipt 追加）各计 1 次。
+    #[test]
+    fn action_board_revision_bumps_on_mutations() {
+        let mut board = ActionBoard::default();
+        assert_eq!(board.revision, 0);
+        let reg = vec![ActionRegistration {
+            name: "workspace.read_file".into(),
+            description: "读文件".into(),
+            parameters: serde_json::json!({}),
+            target_policy: crate::entities::TargetPolicy::File,
+        }];
+        board.set_registration(reg.clone());
+        assert_eq!(board.revision, 1);
+        // 内容相同不计数（审查处理 M3：读 actions 的机械刷新不再自触发徽章）。
+        board.set_registration(reg.clone());
+        assert_eq!(board.revision, 1);
+        // 内容变化才计数。
+        board.set_registration(Vec::new());
+        assert_eq!(board.revision, 2);
+        board
+            .write_order(ActionOrder {
+                order_id: "ORD-1".into(),
+                action: "workspace.read_file".into(),
+                arguments: serde_json::json!({}),
+                target: None,
+                step_id: None,
+                round: 1,
+                plan_epoch: 1,
+                run_id: "RUN-1".into(),
+            })
+            .unwrap();
+        assert_eq!(board.revision, 3);
+        assert!(board.take_order().is_some());
+        assert_eq!(board.revision, 4);
+        board.push_result(ActionResult {
+            order_id: "ORD-1".into(),
+            action: Some("workspace.read_file".into()),
+            ok: true,
+            response: None,
+            error: None,
+            trace_id: "t".into(),
+            timestamp: "2026-08-31T00:00:00Z".into(),
+        });
+        assert_eq!(board.revision, 5);
+        // 空槽消费不计数。
+        assert!(board.take_order().is_none());
+        assert_eq!(board.revision, 5);
     }
 }

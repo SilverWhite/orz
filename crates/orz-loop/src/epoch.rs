@@ -643,16 +643,24 @@ pub fn render_retrieval_section(
     lines.join("\n")
 }
 
-/// 方案 B 点读上限（2026-08-19 用户定档：8K 够用，再多去原文档/存档查找）；
-/// 约 4K token，单次点读载荷有界。
-pub const RECEIPT_DETAIL_MAX_CHARS: usize = 8_000;
+/// PULL 自描述增量头上限（与 controller.rs `attach_pull_delta` 的
+/// `HEADER_CAP` 对齐；2026-08-31 审查处理 L3 预留——保证「增量头 + 点读体」
+/// 合并后仍 ≤ 8 KiB，机器可读面不与文本面截断漂移）。
+pub const PULL_HEADER_MAX_BYTES: usize = 256;
+
+/// 方案 B 点读上限（2026-08-19 用户定档 8K；2026-08-31 审查处理 L3 改字节
+/// 口径：8 KiB − 增量头预算 = 7 936 B。原 8_000 字符口径在 CJK 内容下可达
+/// 24 KiB 字节，超出 structured 面 8 KiB cap 且与增量头叠加必截尾；字节口径
+/// 保证 human 面与机器面（entries ≤ 8 KiB）加头后仍一致）。再多去原文档/
+/// 存档查找——约 4K token，单次点读载荷有界。
+pub const RECEIPT_DETAIL_MAX_BYTES: usize = 8_192 - PULL_HEADER_MAX_BYTES;
 
 /// 方案 B 按需点读（2026-08-19 黑板缓存成本设计 §4.5）：结果栏单条 receipt
 /// 的完整内容——固定形态行 + `response=<JSON 完整内容>`（成功）/ `error=<JSON
 /// 完整内容>`（失败，含 message/upstream，此前模型从未见过这两项）。内容为
 /// 存储结构化值的重序列化（键/值/嵌套完整，非字节级原文——键序/空白可能
 /// 规范化，2026-08-19 全面审查 O3 登记）。整体超
-/// `RECEIPT_DETAIL_MAX_CHARS` 按字符截断 detail + 「…」+ 指针行（完整内容
+/// `RECEIPT_DETAIL_MAX_BYTES` 按字节截断 detail + 「…」+ 指针行（完整内容
 /// 见存档 epoch-N.json / TraceStore trace_id=…）；合法但未找到 = 显式
 /// 「not found」+ 提示旧 epoch 归档（live 板仅保留最近 50 条）。
 fn render_receipt_point_read(actions: &ActionBoard, receipt_id: &str, plan_epoch: u64) -> String {
@@ -686,7 +694,7 @@ fn render_receipt_point_read(actions: &ActionBoard, receipt_id: &str, plan_epoch
         }
     };
     let body = format!("{head}\n{detail}");
-    if body.chars().count() <= RECEIPT_DETAIL_MAX_CHARS {
+    if body.len() <= RECEIPT_DETAIL_MAX_BYTES {
         return body;
     }
     // OUTPUT-DEGENERATION-GUARD (2026-08-19, ADR-0010 §14.33 / 设计 §3.2)：
@@ -713,14 +721,30 @@ fn render_receipt_point_read(actions: &ActionBoard, receipt_id: &str, plan_epoch
     // 尾部记账：detail 之后只追加 '\n' + 指针行（「…」已计入 truncate_chars
     // 输出的 detail_budget 内，不另行占位）——整体 ≤ 8_000（2026-08-19
     // 全面审查 N1 修正注释，数学口径不变）。
-    let head_chars = head.chars().count() + 1; // 头行 + '\n'
-    let tail_chars = 1 + pointer.chars().count(); // '\n' + 指针行
-    let detail_budget = RECEIPT_DETAIL_MAX_CHARS
-        .saturating_sub(head_chars)
-        .saturating_sub(tail_chars)
+    let head_bytes = head.len() + 1; // 头行 + '\n'
+    let tail_bytes = 1 + pointer.len(); // '\n' + 指针行
+    let detail_budget = RECEIPT_DETAIL_MAX_BYTES
+        .saturating_sub(head_bytes)
+        .saturating_sub(tail_bytes)
         .max(1);
-    let truncated = truncate_chars(&detail, detail_budget);
+    let truncated = truncate_bytes(&detail, detail_budget);
     format!("{head}\n{truncated}\n{pointer}")
+}
+
+/// 按字节截断并加「…」提示（不超过 `max_bytes`，UTF-8 安全；2026-08-31
+/// 审查处理 L3——receipt 点读从字符口径改字节口径，与机器面 cap 对齐，
+/// 语义镜像 summary.rs `truncate_chars`：超限时保留 1 个「…」标记位）。
+fn truncate_bytes(s: &str, max_bytes: usize) -> String {
+    if s.len() <= max_bytes {
+        return s.to_string();
+    }
+    let mut cut = max_bytes.saturating_sub("…".len());
+    while cut > 0 && !s.is_char_boundary(cut) {
+        cut -= 1;
+    }
+    let mut out = s[..cut].to_string();
+    out.push('…');
+    out
 }
 
 /// OUTPUT-DEGENERATION-GUARD (2026-08-19, ADR-0010 §14.33 / 设计 §3.2)：
@@ -1363,9 +1387,9 @@ mod tests {
             Some("ORD-PR-3"),
         );
         assert!(
-            text.chars().count() <= RECEIPT_DETAIL_MAX_CHARS,
-            "len {} > {RECEIPT_DETAIL_MAX_CHARS}: {text}",
-            text.chars().count()
+            text.len() <= RECEIPT_DETAIL_MAX_BYTES,
+            "len {} > {RECEIPT_DETAIL_MAX_BYTES}: {text}",
+            text.len()
         );
         assert!(
             text.starts_with("ORD-PR-3 ok=true step=? code=? trace_id=t-pr-3\nresponse="),

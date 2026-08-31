@@ -115,6 +115,11 @@ pub struct TemporalState {
     records: VecDeque<TemporalRecord>,
     spikes: Vec<DomainSpike>,
     migrations: VecDeque<Migration>,
+    /// PULL 自描述（2026-08-31，P2-11 第 1 项）：域迁移的**单调总计数**
+    /// （migrations 是有界队列、pop_front 后长度不可作增量基线）——供
+    /// `blackboard_read` 增量头的「域迁移 +n」段使用。restore_spikes 重建时
+    /// 同步重建。
+    migration_count: u64,
     tool_outcomes: VecDeque<ToolOutcomeBucket>,
     features: HashMap<&'static str, VecDeque<f64>>,
     total_tool_events: u64,
@@ -138,6 +143,7 @@ impl TemporalState {
             records: VecDeque::with_capacity(RECENT_RECORDS_CAP),
             spikes: Vec::new(),
             migrations: VecDeque::with_capacity(MIGRATION_LOG_CAP),
+            migration_count: 0,
             tool_outcomes: VecDeque::with_capacity(TOOL_WINDOW),
             features: HashMap::new(),
             total_tool_events: 0,
@@ -224,7 +230,10 @@ impl TemporalState {
             };
             if self.entry_round > 0 {
                 let from = self.current_domain;
-                let recovery = matches!((from, domain), (Domain::Stuck | Domain::LowProgress, Domain::Normal));
+                let recovery = matches!(
+                    (from, domain),
+                    (Domain::Stuck | Domain::LowProgress, Domain::Normal)
+                );
                 self.migrations.push_back(Migration {
                     from,
                     to: domain,
@@ -236,6 +245,7 @@ impl TemporalState {
                 if self.migrations.len() > MIGRATION_LOG_CAP {
                     self.migrations.pop_front();
                 }
+                self.migration_count = self.migration_count.saturating_add(1);
             }
             self.spikes.push(DomainSpike { t, domain });
             self.current_domain = domain;
@@ -301,6 +311,11 @@ impl TemporalState {
         self.migrations.iter().copied().collect()
     }
 
+    /// 域迁移单调总计数（PULL 自描述增量头基线）。
+    pub fn migration_count(&self) -> u64 {
+        self.migration_count
+    }
+
     /// Feature(name, k) — compact recent series (oldest first).
     pub fn feature(&self, name: &str, k: u64) -> Vec<f64> {
         let Some(series) = self.features.get(name) else {
@@ -351,6 +366,7 @@ impl TemporalState {
                 if self.migrations.len() > MIGRATION_LOG_CAP {
                     self.migrations.pop_front();
                 }
+                self.migration_count = self.migration_count.saturating_add(1);
             }
             self.current_domain = spike.domain;
             self.entry_round = self.round.max(1);
@@ -419,7 +435,11 @@ mod tests {
         st.record_round(5.0, 8.0, 0.9, 0.5, 0.1);
         assert_eq!(st.now().unwrap().domain, Domain::Normal);
         let history = st.history();
-        assert!(history.iter().any(|m| m.recovery && m.from == Domain::LowProgress));
+        assert!(
+            history
+                .iter()
+                .any(|m| m.recovery && m.from == Domain::LowProgress)
+        );
     }
 
     #[test]
@@ -516,5 +536,27 @@ mod tests {
             restored2.history().iter().any(|m| m.recovery),
             "Stuck→Normal migration must be marked recovery after restore"
         );
+    }
+
+    /// PULL 自描述（2026-08-31，P2-11 第 1 项）：migration_count 是单调
+    /// 总计数（有界队列 pop_front 后不可用长度作增量基线）；restore_spikes
+    /// 从 spike 时间线重建计数。
+    #[test]
+    fn migration_count_is_monotonic_across_bounded_log() {
+        let mut st = TemporalState::new();
+        st.observe_tool_outcome(ToolOutcome::Success);
+        st.record_round(1.0, 8.0, 0.9, 0.5, 0.1); // Normal
+        st.record_round(2.0, 8.0, 0.2, 2.5, 5.0); // Stuck → 迁移 1
+        st.record_round(3.0, 8.0, 0.2, 2.5, 5.0); // 仍 Stuck（无迁移）
+        st.record_round(4.0, 8.0, 0.9, 0.5, 0.1); // Normal（recovery）→ 迁移 2
+        assert_eq!(st.migration_count(), 2);
+        assert_eq!(st.history().len(), 2);
+        assert!(st.history()[1].recovery);
+
+        let spikes = st.spikes().to_vec();
+        let mut restored = TemporalState::new();
+        restored.restore_spikes(spikes);
+        assert_eq!(restored.migration_count(), 2);
+        assert_eq!(restored.history().len(), 2);
     }
 }

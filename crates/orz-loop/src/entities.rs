@@ -76,6 +76,10 @@ pub struct EntityState {
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct EntityRegistry {
     entities: BTreeMap<String, EntityState>,
+    /// PULL 自描述分区版本计数（2026-08-31，P2-11 第 1 项）——每次可见
+    /// 内容变化（登记/更新/诊断覆盖/淘汰）自增 1；仅内存、不序列化。
+    #[serde(skip)]
+    revision: u64,
 }
 
 /// 文件路径无状态归一（实体 id 与 target↔参数一致性校验共用）：反斜杠
@@ -121,6 +125,11 @@ impl EntityRegistry {
         self.entities.is_empty()
     }
 
+    /// PULL 自描述分区版本计数（live-only）。
+    pub fn revision(&self) -> u64 {
+        self.revision
+    }
+
     fn insert(&mut self, state: EntityState) {
         if !self.entities.contains_key(&state.entity_id)
             && self.entities.len() >= ENTITIES_TOTAL_CAP
@@ -136,6 +145,7 @@ impl EntityRegistry {
             }
         }
         self.entities.insert(state.entity_id.clone(), state);
+        self.revision = self.revision.saturating_add(1);
     }
 
     /// 登记/更新文件实体（锚点 size/mtime/sha256；sha256 由调用方决定
@@ -257,6 +267,7 @@ impl EntityRegistry {
     pub fn set_diagnostic(&mut self, entity_id: &str, diagnostic: DiagnosticRecord) {
         if let Some(state) = self.entities.get_mut(entity_id) {
             state.last_diagnostic = Some(diagnostic);
+            self.revision = self.revision.saturating_add(1);
         }
     }
 
@@ -408,6 +419,35 @@ mod tests {
         assert_eq!(state.summary["size"], 42);
         assert_eq!(state.summary["sha256"], "a".repeat(64));
         assert!(!registry.is_empty());
+    }
+
+    /// PULL 自描述（2026-08-31，P2-11 第 1 项 / 设计 §2）：实体登记/更新
+    /// 每次可见变化自增版本计数（live-only，不序列化）。
+    #[test]
+    fn revision_bumps_on_register_and_overwrite() {
+        let mut registry = EntityRegistry::new();
+        assert_eq!(registry.revision(), 0);
+        registry.register_file(
+            "a.txt",
+            true,
+            Some(1),
+            Some(2),
+            Some("a".repeat(64)),
+            None,
+            "2026-08-31T00:00:00Z",
+        );
+        assert_eq!(registry.revision(), 1);
+        // 同一实体覆盖写（锚点变化）仍计 1 次。
+        registry.register_file(
+            "a.txt",
+            true,
+            Some(2),
+            Some(3),
+            Some("b".repeat(64)),
+            None,
+            "2026-08-31T00:00:01Z",
+        );
+        assert_eq!(registry.revision(), 2);
     }
 
     #[test]

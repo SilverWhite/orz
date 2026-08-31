@@ -22,14 +22,15 @@ pub mod estimator;
 pub mod temporal;
 
 pub use channels::{
-    classify_event_outcome, is_denial_code, ChannelKind, FirstOrderChannel, StuckChannel,
-    ToolEvent, ToolOutcome, DENY_REFRACTORY_SECS, DENY_TAU_SECS, DENY_THETA, ERR_REFRACTORY_SECS,
-    ERR_TAU_SECS, ERR_THETA, PROG_TAU_ROUNDS, SLOW_REFRACTORY_SECS, SLOW_TAU_SECS, SLOW_THETA,
-    SLOW_W_MAX, SLOW_WALL_MS_THRESHOLD, STALL_GAP_THRESHOLD_SECS, STALL_REFRACTORY_SECS,
-    STALL_TAU_SECS, STALL_THETA, STUCK_REFRACTORY_ROUNDS, STUCK_TAU_ROUNDS, STUCK_THETA_ROUNDS,
+    ChannelKind, DENY_REFRACTORY_SECS, DENY_TAU_SECS, DENY_THETA, ERR_REFRACTORY_SECS,
+    ERR_TAU_SECS, ERR_THETA, FirstOrderChannel, PROG_TAU_ROUNDS, SLOW_REFRACTORY_SECS,
+    SLOW_TAU_SECS, SLOW_THETA, SLOW_W_MAX, SLOW_WALL_MS_THRESHOLD, STALL_GAP_THRESHOLD_SECS,
+    STALL_REFRACTORY_SECS, STALL_TAU_SECS, STALL_THETA, STUCK_REFRACTORY_ROUNDS, STUCK_TAU_ROUNDS,
+    STUCK_THETA_ROUNDS, StuckChannel, ToolEvent, ToolOutcome, classify_event_outcome,
+    is_denial_code,
 };
 pub use estimator::{
-    RoundIntervalEstimator, INTERVAL_BUF_CAP, INTERVAL_CAP_SECS, T_HAT_ENABLE_SAMPLES,
+    INTERVAL_BUF_CAP, INTERVAL_CAP_SECS, RoundIntervalEstimator, T_HAT_ENABLE_SAMPLES,
     T_HAT_INIT_SECS, T_HAT_MAX_SECS, T_HAT_MIN_SECS,
 };
 pub use temporal::{
@@ -246,7 +247,8 @@ impl LifEngine {
         let u_prog = self.prog.u();
         let tau_err = self.err.tau_secs();
         let tau_prog = self.prog.tau_secs();
-        self.stuck.advance(t, u_err, u_prog, ERR_THETA, tau_err, tau_prog);
+        self.stuck
+            .advance(t, u_err, u_prog, ERR_THETA, tau_err, tau_prog);
         self.err.decay_to(t);
         self.prog.decay_to(t);
         self.slow.decay_to(t);

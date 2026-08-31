@@ -888,7 +888,7 @@ impl AgentLoopController {
         // as one semantic action each).
         {
             let mut w = self.blackboard.write();
-            w.tool_actions.push(ToolActionRecord {
+            w.push_tool_action(ToolActionRecord {
                 category: "retrieval".to_string(),
                 tool: tc.name.clone(),
                 timestamp: chrono_utc_now(),
@@ -3449,19 +3449,31 @@ mod tests {
             "{:?}",
             event_types(&dir)
         );
-        // 子代理侧 ToolCompleted(error) 显式失败（无结果形成）。
-        let failed = events
+        // 主车道派发错误恰 1 次（error 精确匹配——旧断言 contains("wallclock")
+        // 会把主车道错误与合成收口混计，2026-08-31 审查处理 N3 修正）。
+        let main_failed = events
             .iter()
             .filter(|e| {
                 e.event_type == EventType::ToolCompleted
                     && e.payload.get("status").and_then(|v| v.as_str()) == Some("error")
-                    && e.payload
-                        .get("error")
-                        .and_then(|v| v.as_str())
-                        .is_some_and(|s| s.contains("wallclock"))
+                    && e.payload.get("error").and_then(|v| v.as_str())
+                        == Some("retrieval subagent wallclock exceeded")
             })
             .count();
-        assert_eq!(failed, 1, "{:?}", event_types(&dir));
+        assert_eq!(main_failed, 1, "{:?}", event_types(&dir));
+        // 子代理侧合成收口（在途工具中断）至多 1 次：是否命中取决于超时
+        // 瞬间子代理是否仍有在途工具，属时序相关合法形态，不作硬断言
+        // （0 或 1 均正确——read_file 在 150 ms 内完成则无在途工具）。
+        let mid_tool = events
+            .iter()
+            .filter(|e| {
+                e.event_type == EventType::ToolCompleted
+                    && e.payload.get("status").and_then(|v| v.as_str()) == Some("error")
+                    && e.payload.get("error").and_then(|v| v.as_str())
+                        == Some("subagent_wallclock_timeout_mid_tool")
+            })
+            .count();
+        assert!(mid_tool <= 1, "{:?}", event_types(&dir));
         // 主 run 正常终止（run_finished，非 run_failed）。
         assert!(
             events

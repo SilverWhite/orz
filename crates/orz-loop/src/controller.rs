@@ -579,6 +579,10 @@ pub struct AgentLoopController {
     /// tool events; read-only surface via `blackboard_read
     /// section=temporal` (PULL, zero injection — §3/§6.1).
     pub(crate) lif: Mutex<orz_assurance::lif::LifEngine>,
+    /// PULL 自描述（2026-08-31，P2-11 第 1 项 / 设计 §3）：每分区「上次
+    /// 成功读取」的版本游标——live-only、随 run 复位；`blackboard_read`
+    /// 成功 live 读取后推进对应分区游标（其余分区保持未读徽章）。
+    pub(crate) blackboard_read_cursors: Mutex<std::collections::HashMap<String, u64>>,
 }
 
 /// F7 (2026-08-15, BACKLOG 6e 复查遗留): which epoch snapshot failed to
@@ -765,6 +769,7 @@ impl AgentLoopController {
             delivery_baseline: Mutex::new(None),
             delivery_pending: Mutex::new((0, false)),
             lif: Mutex::new(orz_assurance::lif::LifEngine::new()),
+            blackboard_read_cursors: Mutex::new(std::collections::HashMap::new()),
             plan_first_enabled: false,
             plan_first_session_done: false,
         }
@@ -1002,9 +1007,11 @@ impl AgentLoopController {
             let mut w = self.blackboard.write();
             if let Some(section) = internal {
                 w.internal_ret = section;
+                w.bump_retrieval("internal_ret");
             }
             if let Some(section) = external {
                 w.external_ret = section;
+                w.bump_retrieval("external_ret");
             }
         }
         self
@@ -1341,6 +1348,7 @@ impl AgentLoopController {
             delivery_baseline: Mutex::new(None),
             delivery_pending: Mutex::new((0, false)),
             lif: Mutex::new(orz_assurance::lif::LifEngine::new()),
+            blackboard_read_cursors: Mutex::new(std::collections::HashMap::new()),
             plan_first_enabled: false,
             plan_first_session_done: false,
         }
@@ -1682,7 +1690,7 @@ impl AgentLoopController {
         let body = match selector.unwrap_or("now") {
             "now" => {
                 let rec = temporal.now().expect("round>0 ⇒ record exists");
-                format!(
+                let mut lines = vec![format!(
                     "temporal.now → [{:.0}s | {} | 入域 {} 轮 | 驻留 {} 轮]\n  \
                      u_prog={:.2} u_err={:.2} u_stuck={:.2} T̂={:.1}s err10={:.2} succ10={:.2}",
                     rec.t,
@@ -1695,32 +1703,74 @@ impl AgentLoopController {
                     rec.t_hat,
                     rec.err10,
                     rec.succ10,
-                )
+                )];
+                // PULL 自描述 §5（2026-08-31，P2-11 第 1 项）：近 5 轮趋势
+                // + 上一迁移——单次 now 查询自带方向感，不需模型为补齐
+                // 趋势/迁移信息二次查询（≤1 KiB 渲染约束不变）。
+                let recent5 = temporal.recent(5);
+                if recent5.len() >= 2 {
+                    let first = recent5[0];
+                    let last = recent5[recent5.len() - 1];
+                    lines.push(format!(
+                        "近 {} 轮: u_prog {:.2}→{:.2}, u_err {:.2}→{:.2}, \
+                         u_stuck {:.2}→{:.2}",
+                        recent5.len(),
+                        first.u_prog,
+                        last.u_prog,
+                        first.u_err,
+                        last.u_err,
+                        first.u_stuck,
+                        last.u_stuck,
+                    ));
+                }
+                if let Some(m) = temporal.history().last() {
+                    lines.push(format!(
+                        "上一迁移: {}→{}@r{}",
+                        m.from.as_str(),
+                        m.to.as_str(),
+                        m.at_round
+                    ));
+                }
+                lines.join("\n")
             }
             "recent" => {
                 let k = k.unwrap_or(20).clamp(1, 20);
                 let rows = temporal.recent(k);
-                let lines: Vec<String> = rows
-                    .iter()
-                    .rev()
-                    .map(|r| {
-                        format!(
-                            "[{:.0}s | {} | 入域 {} | 驻留 {}] \
-                             u_prog={:.2} u_err={:.2} u_stuck={:.2} T̂={:.1}s \
-                             err10={:.2} succ10={:.2}",
-                            r.t,
-                            r.domain.as_str(),
-                            r.entry_round,
-                            r.dwell_rounds,
-                            r.u_prog,
-                            r.u_err,
-                            r.u_stuck,
-                            r.t_hat,
-                            r.err10,
-                            r.succ10,
-                        )
-                    })
-                    .collect();
+                let mut lines: Vec<String> = Vec::new();
+                // PULL 自描述 §5：压缩摘要首行——1 KiB 截断时要点仍在。
+                if let (Some(first), Some(last)) = (rows.first(), rows.last()) {
+                    lines.push(format!(
+                        "近 {} 轮: 域={} 入域 r{} 驻留 {}; \
+                         u_prog {:.2}→{:.2}, u_err {:.2}→{:.2}, u_stuck {:.2}→{:.2}",
+                        rows.len(),
+                        last.domain.as_str(),
+                        last.entry_round,
+                        last.dwell_rounds,
+                        first.u_prog,
+                        last.u_prog,
+                        first.u_err,
+                        last.u_err,
+                        first.u_stuck,
+                        last.u_stuck,
+                    ));
+                }
+                lines.extend(rows.iter().rev().map(|r| {
+                    format!(
+                        "[{:.0}s | {} | 入域 {} | 驻留 {}] \
+                         u_prog={:.2} u_err={:.2} u_stuck={:.2} T̂={:.1}s \
+                         err10={:.2} succ10={:.2}",
+                        r.t,
+                        r.domain.as_str(),
+                        r.entry_round,
+                        r.dwell_rounds,
+                        r.u_prog,
+                        r.u_err,
+                        r.u_stuck,
+                        r.t_hat,
+                        r.err10,
+                        r.succ10,
+                    )
+                }));
                 format!("temporal.recent({k}) →\n{}", lines.join("\n"))
             }
             "history" => {
@@ -1746,11 +1796,9 @@ impl AgentLoopController {
             }
             "feature" => {
                 let Some(name) = name else {
-                    return Err(
-                        "invalid temporal feature query: feature 需要 name 参数 \
+                    return Err("invalid temporal feature query: feature 需要 name 参数 \
                          （u_prog|u_err|u_stuck|t_hat|err10|succ10）"
-                            .to_string(),
-                    );
+                        .to_string());
                 };
                 if !orz_assurance::lif::TemporalState::known_feature_names().contains(&name) {
                     return Err(format!(
@@ -1765,7 +1813,19 @@ impl AgentLoopController {
                     .map(|v| format!("{v:.3}"))
                     .collect::<Vec<_>>()
                     .join(",");
-                format!("temporal.feature({name}, {}) → {compact}", values.len())
+                let mut line = format!("temporal.feature({name}, {}) → {compact}", values.len());
+                // PULL 自描述 §5：尾部带当前值与域——数值序列 + 当前含义
+                // 一次返回。
+                if let (Some(latest), Some(rec)) = (values.last(), temporal.now()) {
+                    line.push_str(&format!(
+                        // latest 是 f64（feature 序列末值），`.3` 为有效
+                        // 精度（2026-08-31 审查 N2 复核：原判定「对 String
+                        // 空操作」系误读——values 为 Vec<f64>，保持原样）。
+                        "; 当前 {name}={latest:.3} (域={})",
+                        rec.domain.as_str()
+                    ));
+                }
+                line
             }
             other => {
                 return Err(format!(
@@ -1788,6 +1848,103 @@ impl AgentLoopController {
         } else {
             Ok(body)
         }
+    }
+
+    /// PULL 自描述（2026-08-31，P2-11 第 1 项 / 设计 §3-§4）：为一次成功的
+    /// live `blackboard_read` 响应附加「自上次读取以来」增量头，并推进本次
+    /// 读取分区的游标（其余分区保持未读徽章）。
+    ///
+    /// - 徽章：固定分区序（plan/exec/edits/tool_actions/actions/
+    ///   internal_ret/external_ret/entities/session/temporal），只列
+    ///   delta>0 者；session 派生自 `tool_rounds`，temporal 派生自 LIF round。
+    /// - 域迁移段：`temporal.migration_count` 超过**独立迁移基线**（上次
+    ///   成功读取 temporal 时的 migration_count，2026-08-31 审查处理 M1——
+    ///   不能复用 round 徽章游标：migration_count ≤ round 恒成立，复用会
+    ///   让读过 temporal 后新迁移段沉寂/少报）时输出
+    ///   `域迁移+n: from→to@r轮`（n = 自上次读取 temporal 以来的迁移总数，
+    ///   只带最近一次迁移，防膨胀）。
+    /// - 无增量且无迁移时不加头（零噪音）；头自身 ≤256 B（UTF-8 安全截断）。
+    /// - 归档 epoch 读不经过本方法（历史视图不推进游标、不挂增量头）；
+    ///   失败路径由调用方在成功分支才调用（失败不算读过）。
+    /// - 并行读竞态登记为已知边界（设计 §7）。
+    pub(crate) fn attach_pull_delta(
+        &self,
+        section: &str,
+        body: String,
+        tool_rounds: u32,
+    ) -> String {
+        const HEADER_CAP: usize = 256;
+        let mut items = self.blackboard.read().partition_revisions();
+        let (temporal_round, migration_count, last_migration) = {
+            let lif = self.lif.lock().unwrap();
+            let t = lif.temporal();
+            (t.round(), t.migration_count(), t.history().last().copied())
+        };
+        items.push(("session", tool_rounds as u64));
+        items.push(("temporal", temporal_round));
+
+        let mut cursors = self.blackboard_read_cursors.lock().unwrap();
+        // 双基线（审查处理 M1）：temporal 徽章用 round 游标；域迁移段用
+        // migration_count 基线——两者刻度不同，不可共用一把尺。
+        let migration_baseline = cursors
+            .get(Self::MIGRATION_CURSOR_KEY)
+            .copied()
+            .unwrap_or(0);
+        let mut header = String::from("[黑板增量]");
+        let mut badges: Vec<String> = Vec::new();
+        for (name, revision) in &items {
+            let last = cursors.get(*name).copied().unwrap_or(0);
+            let delta = revision.saturating_sub(last);
+            if delta > 0 {
+                badges.push(format!("{name}+{delta}"));
+            }
+        }
+        if !badges.is_empty() {
+            header.push(' ');
+            header.push_str(&badges.join(" "));
+        }
+        if migration_count > migration_baseline
+            && let Some(m) = last_migration
+        {
+            let delta = migration_count.saturating_sub(migration_baseline);
+            header.push_str(&format!(
+                " 域迁移+{delta}: {}→{}@r{}",
+                m.from.as_str(),
+                m.to.as_str(),
+                m.at_round
+            ));
+        }
+        if header == "[黑板增量]" {
+            // 无增量且无迁移——零噪音，不加头。
+            return body;
+        }
+        let header = orz_assurance::tool_envelope::enforce_bound(header, HEADER_CAP);
+        // 推进本次读取分区的游标（成功 live 读语义）。读 temporal 时同时
+        // 推进 round 徽章游标与迁移计数基线（未读徽章模型：迁移摘要跟随
+        // temporal 分区被读而清零）。
+        if let Some((_, revision)) = items.iter().find(|(n, _)| *n == section) {
+            cursors.insert(section.to_string(), *revision);
+            if section == "temporal" {
+                cursors.insert(Self::MIGRATION_CURSOR_KEY.to_string(), migration_count);
+            }
+        }
+        format!("{header}\n{body}")
+    }
+
+    /// 域迁移段的独立基线游标键（审查处理 M1，设计 §3/§4）——迁移计数
+    /// 与 temporal round 刻度不同，必须分存；随 run 复位（同其余游标）。
+    const MIGRATION_CURSOR_KEY: &'static str = "temporal_migration";
+
+    /// PULL 自描述（2026-08-31 审查处理 M2）：渲染层「失败形状」判定——
+    /// 参数组合错误 / 未知分区 / 点读未找到在渲染层以文本返回（O4 先例
+    /// 保持 exit_code 0，事件面不变），host 层据此**不挂增量头、不推进
+    /// 游标**（设计 §3：模型没拿到内容不算读过）。
+    pub(crate) fn is_blackboard_render_error(content: &str) -> bool {
+        content.starts_with("unknown blackboard section:")
+            || content.starts_with("receipt_id 仅与 section=actions")
+            || (content.starts_with("blackboard_read ")
+                && (content.contains("with epoch is not supported")
+                    || content.contains("not found")))
     }
 
     /// Wall-clock epoch seconds (f64) for the LIF time axis (run-relative
@@ -2126,6 +2283,10 @@ impl AgentLoopController {
         *self.main_evidence.lock().unwrap() = Vec::new();
         *self.run_source_ledgers.lock().unwrap() = Vec::new();
         *self.next_source_seq.lock().unwrap() = 0;
+        // PULL 自描述 (2026-08-31, P2-11 第 1 项 / 设计 §3): 读取游标随
+        // run 复位——「自上次读取以来」增量是 run 内语义（LIF 参考系同
+        // 纪律：每独立 run 从头确定）。
+        *self.blackboard_read_cursors.lock().unwrap() = std::collections::HashMap::new();
         // ACAF Slice 1 (ADR-0011 §4.2): the run's task goal is the ticket
         // goal binding (check 4) — pinned before any control event can fire.
         self.set_goal_digest(prompt);
@@ -2243,7 +2404,11 @@ impl AgentLoopController {
                      `since_timestamp` is ignored when `receipt_id` is \
                      present. Call this when you need to recall what changed \
                      or what you did earlier — it costs nothing when you do \
-                     not call it."
+                     not call it. Every live response starts with an optional \
+                     `[黑板增量]` line listing per-partition change counts \
+                     since their last read (and the latest temporal domain \
+                     migration) — read a partition to clear its unread badge; \
+                     omit `epoch` for the live view."
                     .to_string(),
                 parameters: serde_json::json!({
                     "type": "object",
@@ -4500,5 +4665,256 @@ mod tests {
         assert_eq!(temporal.current_domain(), orz_assurance::lif::Domain::Stuck);
         assert_eq!(temporal.history().len(), migrations_before);
         assert_eq!(temporal.spikes().len(), spikes_before);
+    }
+
+    /// PULL 自描述（2026-08-31，P2-11 第 1 项 / 设计 §3-§4）：增量头只列
+    /// delta>0 的分区；读取某分区只推进该分区游标（未读徽章保留到对应
+    /// 分区被读）；无增量时零噪音不加头。
+    #[test]
+    fn pull_delta_header_shows_badges_and_advances_cursor() {
+        let controller =
+            AgentLoopController::with_gateway(Arc::new(FakeProvider::from_texts(vec!["x"])));
+        {
+            let mut w = controller.blackboard().write();
+            w.push_tool_action(crate::blackboard::ToolActionRecord {
+                category: "read".into(),
+                tool: "read_file".into(),
+                timestamp: "2026-08-31T00:00:00Z".into(),
+            });
+            w.push_tool_action(crate::blackboard::ToolActionRecord {
+                category: "read".into(),
+                tool: "grep".into(),
+                timestamp: "2026-08-31T00:00:00Z".into(),
+            });
+            w.push_exec_result("ok".into());
+        }
+        // 首次读 plan：tool_actions+2 / exec+1 徽章，plan 自身无变化。
+        let first = controller.attach_pull_delta("plan", "== plan ==\nbody".to_string(), 0);
+        assert!(first.starts_with("[黑板增量]"), "{first}");
+        assert!(first.contains("tool_actions+2"), "{first}");
+        assert!(first.contains("exec+1"), "{first}");
+        assert!(!first.contains("plan+"), "{first}");
+        // 再读 plan：plan 徽章已清零，但 exec/tool_actions 未读徽章保留
+        // （读某分区只清该分区——未读徽章模型）。
+        let second = controller.attach_pull_delta("plan", "== plan ==\nbody".to_string(), 0);
+        assert!(second.starts_with("[黑板增量]"), "{second}");
+        assert!(second.contains("exec+1"), "{second}");
+        assert!(second.contains("tool_actions+2"), "{second}");
+        assert!(!second.contains("plan+"), "{second}");
+        // 读 tool_actions（session 推进到 5）：显示自身未读徽章后清空它，
+        // exec 徽章保留。
+        let third =
+            controller.attach_pull_delta("tool_actions", "== tool_actions ==\n".to_string(), 5);
+        assert!(third.contains("exec+1"), "{third}");
+        assert!(third.contains("session+5"), "{third}");
+        assert!(third.contains("tool_actions+2"), "{third}");
+        // 读 exec：tool_actions 徽章已清；显示自身 exec+1 未读徽章；
+        // session 保留。
+        let fourth = controller.attach_pull_delta("exec", "== exec ==\n".to_string(), 5);
+        assert!(fourth.contains("session+5"), "{fourth}");
+        assert!(fourth.contains("exec+1"), "{fourth}");
+        assert!(!fourth.contains("tool_actions+"), "{fourth}");
+        // 再读 exec：exec 徽章已清，仅剩 session。
+        let fifth = controller.attach_pull_delta("exec", "== exec ==\n".to_string(), 5);
+        assert!(fifth.contains("session+5"), "{fifth}");
+        assert!(!fifth.contains("exec+"), "{fifth}");
+        // 读 session：清 session 徽章 → 全部清零 → 无增量头。
+        let sixth = controller.attach_pull_delta("session", "== session ==\n".to_string(), 5);
+        assert!(sixth.contains("session+5"), "{sixth}");
+        let seventh = controller.attach_pull_delta("session", "== session ==\n".to_string(), 5);
+        assert_eq!(seventh, "== session ==\n", "{seventh}");
+    }
+
+    /// PULL 自描述 §4：temporal 域迁移摘要随任意分区读取携带，读 temporal
+    /// 后清基线（migration_count ≤ temporal 游标）。
+    #[test]
+    fn pull_delta_includes_temporal_migration_summary() {
+        let controller =
+            AgentLoopController::with_gateway(Arc::new(FakeProvider::from_texts(vec!["x"])));
+        {
+            let mut guard = controller.lif.lock().unwrap();
+            let temporal = guard.temporal_mut();
+            temporal.observe_tool_outcome(orz_assurance::lif::ToolOutcome::Success);
+            temporal.record_round(1.0, 8.0, 0.9, 0.5, 0.1); // Normal
+            temporal.record_round(2.0, 8.0, 0.2, 2.5, 5.0); // Stuck → 迁移 1
+        }
+        let out = controller.attach_pull_delta("plan", "body".to_string(), 0);
+        assert!(out.contains("temporal+2"), "{out}");
+        assert!(out.contains("域迁移+1: normal→stuck@r2"), "{out}");
+        // 读 temporal（仍显示未读徽章并推进 temporal 游标）→ 再读时清零。
+        let out2 = controller.attach_pull_delta("temporal", "body".to_string(), 0);
+        assert!(out2.contains("域迁移+1: normal→stuck@r2"), "{out2}");
+        let out3 = controller.attach_pull_delta("temporal", "body".to_string(), 0);
+        assert_eq!(out3, "body", "{out3}");
+    }
+
+    /// PULL 自描述 §5：temporal 单次查询按意图一次返回——now 带近 5 轮趋势
+    /// 与上一迁移，feature 带当前值/域，recent 带压缩摘要。
+    #[test]
+    fn temporal_one_shot_renders_trend_and_current_value() {
+        let controller =
+            AgentLoopController::with_gateway(Arc::new(FakeProvider::from_texts(vec!["x"])));
+        {
+            let mut guard = controller.lif.lock().unwrap();
+            let temporal = guard.temporal_mut();
+            temporal.observe_tool_outcome(orz_assurance::lif::ToolOutcome::Success);
+            temporal.record_round(1.0, 8.0, 0.9, 0.5, 0.1); // Normal
+            temporal.record_round(2.0, 8.0, 0.2, 2.5, 5.0); // Stuck
+        }
+        let now = controller
+            .render_temporal_section(Some("now"), None, None)
+            .unwrap();
+        assert!(now.contains("近 2 轮: u_prog 0.90→0.20"), "{now}");
+        assert!(now.contains("上一迁移: normal→stuck@r2"), "{now}");
+        let feature = controller
+            .render_temporal_section(Some("feature"), Some(5), Some("u_prog"))
+            .unwrap();
+        assert!(
+            feature.contains("; 当前 u_prog=0.200 (域=stuck)"),
+            "{feature}"
+        );
+        let recent = controller
+            .render_temporal_section(Some("recent"), Some(2), None)
+            .unwrap();
+        assert!(recent.contains("近 2 轮: 域=stuck"), "{recent}");
+    }
+
+    /// PULL 自描述 §4/§5：temporal 整响应（增量头 + 查询体）仍 ≤1 KiB——
+    /// host 层对合并结果做最终 UTF-8 安全截断。
+    #[test]
+    fn pull_delta_keeps_temporal_board_within_one_kib() {
+        let controller =
+            AgentLoopController::with_gateway(Arc::new(FakeProvider::from_texts(vec!["x"])));
+        {
+            let mut guard = controller.lif.lock().unwrap();
+            let temporal = guard.temporal_mut();
+            temporal.observe_tool_outcome(orz_assurance::lif::ToolOutcome::Success);
+            for i in 0..40u64 {
+                temporal.record_round(i as f64 * 7.0, 8.0, 0.9, 0.5, 0.1);
+            }
+        }
+        let body = controller
+            .render_temporal_section(Some("recent"), Some(20), None)
+            .unwrap();
+        let combined = controller.attach_pull_delta("temporal", body, 0);
+        let bounded = orz_assurance::tool_envelope::enforce_bound(combined, 1024);
+        assert!(
+            bounded.len() <= 1024,
+            "combined board exceeds 1 KiB: {}",
+            bounded.len()
+        );
+        assert!(bounded.is_char_boundary(bounded.len()));
+    }
+
+    /// PULL 自描述 §3/§4（2026-08-31 审查处理 M1 回归）：temporal 双基线——
+    /// round 徽章游标与迁移计数基线分开推进；读 temporal 后发生的新迁移
+    /// 仍以准确的「域迁移+n」出现在其它分区读取头上（不再被 round 刻度吞掉）。
+    #[test]
+    fn pull_delta_migration_baseline_tracks_new_migrations_after_temporal_read() {
+        let controller =
+            AgentLoopController::with_gateway(Arc::new(FakeProvider::from_texts(vec!["x"])));
+        // round=5、migration=3（r2/r3/r4 各迁移一次，r5 保持 Stuck）。
+        {
+            let mut guard = controller.lif.lock().unwrap();
+            let temporal = guard.temporal_mut();
+            temporal.observe_tool_outcome(orz_assurance::lif::ToolOutcome::Success);
+            temporal.record_round(1.0, 8.0, 0.9, 0.5, 0.1); // Normal
+            temporal.record_round(2.0, 8.0, 0.2, 2.5, 5.0); // Stuck → 迁移 1
+            temporal.record_round(3.0, 8.0, 0.9, 0.5, 0.1); // Normal → 迁移 2
+            temporal.record_round(4.0, 8.0, 0.2, 2.5, 5.0); // Stuck → 迁移 3
+            temporal.record_round(5.0, 8.0, 0.2, 2.5, 5.0); // 仍 Stuck（无迁移）
+        }
+        let first = controller.attach_pull_delta("temporal", "body".to_string(), 0);
+        assert!(first.contains("temporal+5"), "{first}");
+        assert!(first.contains("域迁移+3"), "{first}");
+        // 读 temporal 后双基线推进 → 无增量时零噪音。
+        let quiet = controller.attach_pull_delta("temporal", "body".to_string(), 0);
+        assert_eq!(quiet, "body", "{quiet}");
+        // 之后新发生 2 次迁移（round 5→7、migration 3→5）：读 plan 应显示
+        // temporal+2 与 域迁移+2（准确新迁移计数，而非 migration−round）。
+        {
+            let mut guard = controller.lif.lock().unwrap();
+            let temporal = guard.temporal_mut();
+            temporal.record_round(6.0, 8.0, 0.9, 0.5, 0.1); // Normal → 迁移 4
+            temporal.record_round(7.0, 8.0, 0.2, 2.5, 5.0); // Stuck → 迁移 5
+        }
+        let plan_read = controller.attach_pull_delta("plan", "== plan ==\n".to_string(), 0);
+        assert!(plan_read.contains("temporal+2"), "{plan_read}");
+        assert!(plan_read.contains("域迁移+2"), "{plan_read}");
+        // 再读 temporal：仍显示未读迁移并清双基线。
+        let temporal_read = controller.attach_pull_delta("temporal", "body".to_string(), 0);
+        assert!(temporal_read.contains("域迁移+2"), "{temporal_read}");
+        let quiet2 = controller.attach_pull_delta("temporal", "body".to_string(), 0);
+        assert_eq!(quiet2, "body", "{quiet2}");
+    }
+
+    /// PULL 自描述 §4（2026-08-31 审查处理 N1）：增量头自身 ≤256 B——全分区
+    /// 大徽章 + 迁移段触发截断路径，断言首行不超界且 UTF-8 安全、正文保留。
+    #[test]
+    fn pull_delta_header_truncates_at_256_bytes() {
+        let controller =
+            AgentLoopController::with_gateway(Arc::new(FakeProvider::from_texts(vec!["x"])));
+        {
+            let mut w = controller.blackboard().write();
+            w.revisions.plan = u64::MAX;
+            w.revisions.exec = u64::MAX;
+            w.revisions.edits = u64::MAX;
+            w.revisions.tool_actions = u64::MAX;
+            w.revisions.internal_ret = u64::MAX;
+            w.revisions.external_ret = u64::MAX;
+            w.actions.revision = u64::MAX;
+            w.entities.register_file(
+                "a.txt",
+                true,
+                Some(1),
+                Some(2),
+                Some("a".repeat(64)),
+                None,
+                "2026-08-31T00:00:00Z",
+            );
+        }
+        {
+            let mut guard = controller.lif.lock().unwrap();
+            let temporal = guard.temporal_mut();
+            temporal.observe_tool_outcome(orz_assurance::lif::ToolOutcome::Success);
+            temporal.record_round(1.0, 8.0, 0.9, 0.5, 0.1); // Normal
+            temporal.record_round(2.0, 8.0, 0.2, 2.5, 5.0); // Stuck → 迁移 1
+        }
+        let out = controller.attach_pull_delta("plan", "== plan ==\nbody".to_string(), u32::MAX);
+        let first_line = out.lines().next().expect("header line");
+        assert!(first_line.starts_with("[黑板增量]"), "{out}");
+        assert!(
+            first_line.len() <= 256,
+            "header exceeds 256 B: {} ({} B)",
+            first_line,
+            first_line.len()
+        );
+        assert!(first_line.is_char_boundary(first_line.len()));
+        assert!(out.contains("== plan ==\nbody"), "body lost: {out}");
+    }
+
+    /// PULL 自描述 §3（2026-08-31 审查处理 M2）：渲染层失败形状判定——未知
+    /// 分区 / receipt_id 组合误用 / 点读未找到 / live-only 带 epoch 均为失败；
+    /// 正常正文（含 JSON 里恰好出现 "not found" 的 receipt 点读体）不误判。
+    #[test]
+    fn is_blackboard_render_error_detects_fail_shapes_only() {
+        assert!(AgentLoopController::is_blackboard_render_error(
+            "unknown blackboard section: bogus — 支持的分区：plan、edits、actions …"
+        ));
+        assert!(AgentLoopController::is_blackboard_render_error(
+            "receipt_id 仅与 section=actions 组合有效（点读结果栏单条 receipt）"
+        ));
+        assert!(AgentLoopController::is_blackboard_render_error(
+            "blackboard_read receipt_id=ORD-1 not found — 结果栏仅保留最近 50 条 receipt"
+        ));
+        assert!(AgentLoopController::is_blackboard_render_error(
+            "blackboard_read external_ret with epoch is not supported — retrieval 分区 live-only"
+        ));
+        assert!(!AgentLoopController::is_blackboard_render_error(
+            "goal: 构建\nplan_id: PLAN-A"
+        ));
+        assert!(!AgentLoopController::is_blackboard_render_error(
+            "ORD-000012 ok=true step=? code=? trace_id=t-1\nresponse={\"output\":\"not found\"}"
+        ));
     }
 }

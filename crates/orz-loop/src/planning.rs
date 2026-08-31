@@ -573,10 +573,15 @@ pub(crate) fn order_step_gate(
 }
 
 /// 发放时迁移：pending/failed → in_progress（§6）。
-pub(crate) fn mark_step_in_progress(steps: &mut [PlanStep], idx: usize) {
+/// 返回是否发生了可见状态变更（PULL 自描述 2026-08-31：调用方据此推进
+/// plan 分区版本计数——幂等重标不计数）。
+pub(crate) fn mark_step_in_progress(steps: &mut [PlanStep], idx: usize) -> bool {
     if let Some(step) = steps.get_mut(idx) {
+        let changed = step.status != StepStatus::InProgress;
         step.status = StepStatus::InProgress;
+        return changed;
     }
+    false
 }
 
 /// receipt ok → done(receipt_id)；direct 证据门 → done(direct evidence)。
@@ -585,22 +590,28 @@ pub(crate) fn mark_step_done(
     idx: usize,
     receipt_id: &str,
     direct: Option<DirectStepEvidence>,
-) {
+) -> bool {
     if let Some(step) = steps.get_mut(idx) {
+        let changed = !matches!(&step.status, StepStatus::Done(DoneEvidence { .. }));
         step.status = StepStatus::Done(DoneEvidence {
             receipt_id: receipt_id.to_string(),
             direct,
         });
+        return changed;
     }
+    false
 }
 
 /// receipt fail → failed(receipt_id)。
-pub(crate) fn mark_step_failed(steps: &mut [PlanStep], idx: usize, receipt_id: &str) {
+pub(crate) fn mark_step_failed(steps: &mut [PlanStep], idx: usize, receipt_id: &str) -> bool {
     if let Some(step) = steps.get_mut(idx) {
+        let changed = !matches!(&step.status, StepStatus::Failed(FailedEvidence { .. }));
         step.status = StepStatus::Failed(FailedEvidence {
             receipt_id: receipt_id.to_string(),
         });
+        return changed;
     }
+    false
 }
 
 #[cfg(test)]

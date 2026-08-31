@@ -624,12 +624,12 @@ impl AgentLoopController {
         // Audit mirror — the control call is one semantic action.
         {
             let mut w = self.blackboard.write();
-            w.tool_actions.push(ToolActionRecord {
+            w.push_tool_action(ToolActionRecord {
                 category: "other".to_string(),
                 tool: tc.name.clone(),
                 timestamp: chrono_utc_now(),
             });
-            w.exec.results.push(format!("[{}] {}", tc.name, output));
+            w.push_exec_result(format!("[{}] {}", tc.name, output));
         }
         Ok(ToolResult {
             output,

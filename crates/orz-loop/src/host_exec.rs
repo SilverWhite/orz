@@ -883,7 +883,7 @@ impl AgentLoopController {
                 .await?;
             // 2026-08-08 blackboard partition: fold the executed call into
             // the tool-action section (terminal — a fixed command run).
-            self.blackboard.write().tool_actions.push(ToolActionRecord {
+            self.blackboard.write().push_tool_action(ToolActionRecord {
                 category: ToolDispatcher::action_category(&tc.name).to_string(),
                 tool: tc.name.clone(),
                 timestamp: chrono_utc_now(),
@@ -1104,7 +1104,7 @@ impl AgentLoopController {
             // F3 (2026-08-16 审查收口): direct 盖章对称。
             stamp_direct(&mut completed);
             writer.record(EventType::ToolCompleted, completed).await?;
-            self.blackboard.write().tool_actions.push(ToolActionRecord {
+            self.blackboard.write().push_tool_action(ToolActionRecord {
                 category: ToolDispatcher::action_category(&tc.name).to_string(),
                 tool: tc.name.clone(),
                 timestamp: chrono_utc_now(),
@@ -1159,7 +1159,7 @@ impl AgentLoopController {
                         // F3 (2026-08-16 审查收口): direct 盖章对称。
                         stamp_direct(&mut completed);
                         writer.record(EventType::ToolCompleted, completed).await?;
-                        self.blackboard.write().tool_actions.push(ToolActionRecord {
+                        self.blackboard.write().push_tool_action(ToolActionRecord {
                             category: ToolDispatcher::action_category(&tc.name).to_string(),
                             tool: tc.name.clone(),
                             timestamp: chrono_utc_now(),
@@ -1207,7 +1207,7 @@ impl AgentLoopController {
                         // F3 (2026-08-16 审查收口): direct 盖章对称。
                         stamp_direct(&mut completed);
                         writer.record(EventType::ToolCompleted, completed).await?;
-                        self.blackboard.write().tool_actions.push(ToolActionRecord {
+                        self.blackboard.write().push_tool_action(ToolActionRecord {
                             category: ToolDispatcher::action_category(&tc.name).to_string(),
                             tool: tc.name.clone(),
                             timestamp: chrono_utc_now(),
@@ -1255,7 +1255,7 @@ impl AgentLoopController {
                         // F3 (2026-08-16 审查收口): direct 盖章对称。
                         stamp_direct(&mut completed);
                         writer.record(EventType::ToolCompleted, completed).await?;
-                        self.blackboard.write().tool_actions.push(ToolActionRecord {
+                        self.blackboard.write().push_tool_action(ToolActionRecord {
                             category: ToolDispatcher::action_category(&tc.name).to_string(),
                             tool: tc.name.clone(),
                             timestamp: chrono_utc_now(),
@@ -1302,7 +1302,7 @@ impl AgentLoopController {
                     });
                     stamp_direct(&mut completed);
                     writer.record(EventType::ToolCompleted, completed).await?;
-                    self.blackboard.write().tool_actions.push(ToolActionRecord {
+                    self.blackboard.write().push_tool_action(ToolActionRecord {
                         category: ToolDispatcher::action_category(&tc.name).to_string(),
                         tool: tc.name.clone(),
                         timestamp: chrono_utc_now(),
@@ -1336,7 +1336,7 @@ impl AgentLoopController {
                     });
                     stamp_direct(&mut completed);
                     writer.record(EventType::ToolCompleted, completed).await?;
-                    self.blackboard.write().tool_actions.push(ToolActionRecord {
+                    self.blackboard.write().push_tool_action(ToolActionRecord {
                         category: ToolDispatcher::action_category(&tc.name).to_string(),
                         tool: tc.name.clone(),
                         timestamp: chrono_utc_now(),
@@ -1363,9 +1363,8 @@ impl AgentLoopController {
                     Some(raw) => match raw.as_u64() {
                         Some(n) if (1..=20).contains(&n) => Some(n),
                         _ => {
-                            let error = format!(
-                                "invalid temporal k: {raw} — k 必须是 1..=20 的整数"
-                            );
+                            let error =
+                                format!("invalid temporal k: {raw} — k 必须是 1..=20 的整数");
                             let mut completed = serde_json::json!({
                                 "tool": tc.name,
                                 "call_id": tc.call_id,
@@ -1375,7 +1374,7 @@ impl AgentLoopController {
                             });
                             stamp_direct(&mut completed);
                             writer.record(EventType::ToolCompleted, completed).await?;
-                            self.blackboard.write().tool_actions.push(ToolActionRecord {
+                            self.blackboard.write().push_tool_action(ToolActionRecord {
                                 category: ToolDispatcher::action_category(&tc.name).to_string(),
                                 tool: tc.name.clone(),
                                 timestamp: chrono_utc_now(),
@@ -1412,7 +1411,7 @@ impl AgentLoopController {
                         });
                         stamp_direct(&mut completed);
                         writer.record(EventType::ToolCompleted, completed).await?;
-                        self.blackboard.write().tool_actions.push(ToolActionRecord {
+                        self.blackboard.write().push_tool_action(ToolActionRecord {
                             category: ToolDispatcher::action_category(&tc.name).to_string(),
                             tool: tc.name.clone(),
                             timestamp: chrono_utc_now(),
@@ -1448,7 +1447,7 @@ impl AgentLoopController {
                         // F3 (2026-08-16 审查收口): direct 盖章对称。
                         stamp_direct(&mut completed);
                         writer.record(EventType::ToolCompleted, completed).await?;
-                        self.blackboard.write().tool_actions.push(ToolActionRecord {
+                        self.blackboard.write().push_tool_action(ToolActionRecord {
                             category: ToolDispatcher::action_category(&tc.name).to_string(),
                             tool: tc.name.clone(),
                             timestamp: chrono_utc_now(),
@@ -1473,6 +1472,25 @@ impl AgentLoopController {
             } else {
                 self.render_blackboard_section(&section, since, epoch, receipt_id.as_deref())
             };
+            // PULL 自描述 (2026-08-31, P2-11 第 1 项 / 设计 §3-§4): 成功的
+            // live 读取挂「自上次读取以来」增量头并推进本次分区游标；归档
+            // epoch 读是历史视图——不挂头、不推进游标；渲染层失败形状
+            // （未知分区 / receipt_id 组合误用 / 点读未找到，O4 先例保持
+            // exit_code 0）同样不挂头、不推进（2026-08-31 审查处理 M2：
+            // 模型拿到的是错误文本，不算读过该分区）。
+            let content = if epoch.is_none()
+                && !crate::controller::AgentLoopController::is_blackboard_render_error(&content)
+            {
+                self.attach_pull_delta(&section, content, tool_rounds)
+            } else {
+                content
+            };
+            // temporal 整响应（增量头 + 查询体）仍 ≤1 KiB（设计 §4/§5）。
+            let content = if section == "temporal" {
+                orz_assurance::tool_envelope::enforce_bound(content, 1024)
+            } else {
+                content
+            };
             let mut completed = serde_json::json!({
                 "tool": tc.name,
                 "call_id": tc.call_id,
@@ -1486,7 +1504,7 @@ impl AgentLoopController {
             // 上方盖章，ToolCompleted 必须一致，§7.4）。
             stamp_direct(&mut completed);
             writer.record(EventType::ToolCompleted, completed).await?;
-            self.blackboard.write().tool_actions.push(ToolActionRecord {
+            self.blackboard.write().push_tool_action(ToolActionRecord {
                 category: ToolDispatcher::action_category(&tc.name).to_string(),
                 tool: tc.name.clone(),
                 timestamp: chrono_utc_now(),
@@ -1692,7 +1710,7 @@ impl AgentLoopController {
                             }),
                         )
                         .await?;
-                    self.blackboard.write().tool_actions.push(ToolActionRecord {
+                    self.blackboard.write().push_tool_action(ToolActionRecord {
                         category: ToolDispatcher::action_category(&tc.name).to_string(),
                         tool: tc.name.clone(),
                         timestamp: chrono_utc_now(),
@@ -2029,6 +2047,7 @@ impl AgentLoopController {
                 {
                     let mut w = self.blackboard.write();
                     w.plan.delivery_status = Some(status.clone());
+                    w.bump_plan();
                 }
                 *self.delivery_pending.lock().unwrap() = (epoch, true);
                 (
@@ -2042,13 +2061,16 @@ impl AgentLoopController {
                 {
                     let mut w = self.blackboard.write();
                     w.plan.delivery_status = Some(status.clone());
-                    if let Some(terminal_idx) = terminal_idx {
-                        crate::planning::mark_step_done(
+                    w.bump_plan();
+                    if let Some(terminal_idx) = terminal_idx
+                        && crate::planning::mark_step_done(
                             &mut w.plan.steps,
                             terminal_idx,
                             &tc.call_id,
                             None,
-                        );
+                        )
+                    {
+                        w.bump_plan();
                     }
                 }
                 *self.delivery_pending.lock().unwrap() = (epoch, false);
@@ -2286,7 +2308,7 @@ impl AgentLoopController {
             {
                 let mut w = self.blackboard.write();
                 if let Some(idx) = w.plan.steps.iter().position(|s| s.id == step_id) {
-                    crate::planning::mark_step_done(
+                    if crate::planning::mark_step_done(
                         &mut w.plan.steps,
                         idx,
                         &transition_id,
@@ -2294,7 +2316,9 @@ impl AgentLoopController {
                             transition_id: transition_id.clone(),
                             trace_id,
                         }),
-                    );
+                    ) {
+                        w.bump_plan();
+                    }
                 }
             }
             let msg = format!("step {step_id} marked done (direct evidence)");
@@ -2472,7 +2496,7 @@ impl AgentLoopController {
                         .to_string();
                     if !file.is_empty() {
                         let timestamp = chrono_utc_now();
-                        self.blackboard.write().edits.push(EditRecord {
+                        self.blackboard.write().push_edit(EditRecord {
                             file: file.clone(),
                             old_lines,
                             new_lines,
@@ -2577,14 +2601,14 @@ impl AgentLoopController {
                     .await?;
                 // 2026-08-08 blackboard partition: fold the executed call
                 // into the tool-action section (category from the dispatcher).
-                self.blackboard.write().tool_actions.push(ToolActionRecord {
+                self.blackboard.write().push_tool_action(ToolActionRecord {
                     category: ToolDispatcher::action_category(&tc.name).to_string(),
                     tool: tc.name.clone(),
                     timestamp: chrono_utc_now(),
                 });
                 {
                     let mut w = self.blackboard.write();
-                    w.exec.results.push(format!(
+                    w.push_exec_result(format!(
                         "[{}] {}{}",
                         tc.name,
                         res.output,
@@ -2642,7 +2666,8 @@ impl AgentLoopController {
                     });
                     // P2-10 F4 (I2): failure-target identity on the
                     // command/anchor/file/URL tool families.
-                    if let Some(ft) = crate::failure_target::failure_target(&tc.name, &tc.arguments) {
+                    if let Some(ft) = crate::failure_target::failure_target(&tc.name, &tc.arguments)
+                    {
                         payload["failure_target"] = ft;
                     }
                     if timed_out {
@@ -2675,14 +2700,14 @@ impl AgentLoopController {
                 // HAPPENED — fold it into the tool-action section (the
                 // "实际变动" rule applies to edit records, not to the action
                 // ledger).
-                self.blackboard.write().tool_actions.push(ToolActionRecord {
+                self.blackboard.write().push_tool_action(ToolActionRecord {
                     category: ToolDispatcher::action_category(&tc.name).to_string(),
                     tool: tc.name.clone(),
                     timestamp: chrono_utc_now(),
                 });
                 {
                     let mut w = self.blackboard.write();
-                    w.exec.errors.push(format!(
+                    w.push_exec_error(format!(
                         "[{}] {e}{}",
                         tc.name,
                         count_note.as_deref().unwrap_or("")
@@ -4027,7 +4052,16 @@ mod tests {
         let gateway: Arc<dyn ModelGateway> = fake.clone();
         let controller = AgentLoopController::with_gateway(gateway);
         controller
-            .run_turn(&host, "改文件", "RUN-R2-DENY", MANIFEST, 0, None, None, None)
+            .run_turn(
+                &host,
+                "改文件",
+                "RUN-R2-DENY",
+                MANIFEST,
+                0,
+                None,
+                None,
+                None,
+            )
             .await
             .unwrap();
 
@@ -4077,7 +4111,16 @@ mod tests {
         let gateway: Arc<dyn ModelGateway> = fake.clone();
         let controller = AgentLoopController::with_gateway(gateway);
         controller
-            .run_turn(&host, "写白名单", "RUN-R2-SEALED", MANIFEST, 0, None, None, None)
+            .run_turn(
+                &host,
+                "写白名单",
+                "RUN-R2-SEALED",
+                MANIFEST,
+                0,
+                None,
+                None,
+                None,
+            )
             .await
             .unwrap();
 
@@ -4139,7 +4182,16 @@ mod tests {
         let gateway: Arc<dyn ModelGateway> = fake.clone();
         let controller = AgentLoopController::with_gateway(gateway);
         controller
-            .run_turn(&host, "改文件", "RUN-R2-ANCHOR", MANIFEST, 0, None, None, None)
+            .run_turn(
+                &host,
+                "改文件",
+                "RUN-R2-ANCHOR",
+                MANIFEST,
+                0,
+                None,
+                None,
+                None,
+            )
             .await
             .unwrap();
 
