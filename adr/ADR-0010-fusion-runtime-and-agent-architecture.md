@@ -4165,3 +4165,31 @@ ADR §3.6 正文修订随实施登记。
    `docs/PULL_SELF_DESCRIPTION_DESIGN_2026-08-31.md` / BACKLOG P2-11 /
    TODO P2-11 / CLI_PROJECT_INDEX（AUTH-PULL-SELF-DESCRIPTION）/ 审查修复审计
    `docs/audits/P2-11_PULL_SELF_DESCRIPTION_S1_REVIEW_AUDIT_2026-08-31.md`。
+
+### 14.49 v1.49 补写裁决索引（2026-09-01）
+
+本节记录冻结后的显式补写；规范正文以所指章节为准，补写明确
+取代以下既往条款。
+
+1. **DC 强制模板轮清理（P2-11 第 2 项，2026-08-31 用户确认删除，2026-09-01
+   实施闭合）**：诊断覆盖（DC）机制整体删除——`diagnostic_coverage.rs`
+   （ADR-0010 §4.6 的 2→3→4→5 递进硬信号、信号消费 `maybe_consume_dc_signal` /
+   `maybe_consume_dc_retrieval_evidence`、强制模板轮触发 `maybe_fire_dc` 与
+   提交 `commit_dc_fire`）随文件删除；`PendingCheckpoint::DiagnosticCoverage`
+   变体与模板校验共用件（`parse_and_validate` / `cross_check` /
+   `decide_outcome` / `checkpoint_response_payload` / `refill_feedback_block` /
+   `CHECKPOINT_REFILL_PREFIX`，仅 DC 消费）一并退役；checkpoint 共用件拆分后
+   保留 orientation 软门（§9.2）与 console 询问轮（§14.17⑱）。事件面：
+   `diagnostic_coverage_checkpoint` 与 `checkpoint_response` 从 v0.2 枚举退役
+   （v0.2 生产者不再写入；历史 v0.2 journal 不再对当前 schema 有效；v0.1
+   冻结面不含该两类型，不受影响）；对应载荷 schema 文件、envelope/payload
+   fixtures、verifier 注册与交叉校验（`_verify_v02_checkpoint_responses`）删除。
+   plan 反例变体 `COUNTEREXAMPLE_GATE_PLAN_BLOCK`（plan-write 前反例门轮，
+   §4.6.2 裁决 3）随 `run_plan_phase` 门轮一并移除——`--plan` 路径不再消耗
+   模型轮、不再写 position=plan_write 的 `counterexample_gate` 事件；终答
+   反例门（`COUNTEREXAMPLE_GATE_BLOCK`，once-only）保留。P3「DC 硬信号
+   4/6」（`same_module_no_evidence` / `key_surface_unexamined`）随机制退役。
+   依据：10 题小批 DC 0 触发、`run_tests` 封存后主信号源死亡、模型增强后收益
+   不足（MODEL-RESIDUAL-PRESSURE-FOLLOWUP 裁决 2）。入口：实施审计
+   `docs/audits/P2-11_DC_FORCED_TEMPLATE_CLEANUP_IMPL_AUDIT_2026-09-01.md` /
+   BACKLOG P2-11 / TODO P2-11。

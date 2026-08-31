@@ -14,11 +14,11 @@
 
 ## 未闭合扫描快照（2026-08-31 清理轮）
 
-- 未闭合总数：**30 项**（BACKLOG 计数口径，2026-08-31：阶段 3 验证闭环 38 → 32；0k S4 实机复验闭环 32 → 30；P2-11 设计轮登记不动计数）。TODO `[ ]` 明细含父/子项，计数以 BACKLOG 为准。
+- 未闭合总数：**28 项**（BACKLOG 计数口径，2026-08-31：阶段 3 验证闭环 38 → 32；0k S4 实机复验闭环 32 → 30；P2-11 设计轮登记不动计数；2026-09-01：P2-11 DC 强制模板轮清理闭合 30 → 29，P3「DC 硬信号 4/6」退役 29 → 28）。TODO `[ ]` 明细含父/子项，计数以 BACKLOG 为准。
 - P0：FUS-BENCHMARK-FULL-EXEC 验证②③④⑤ + 闭合（见 P0-F）；0d 后续 3/4/5 的 S4 复验（各 1，S3 已随合并批次核证闭合）；0j（W1-R1 S4 复验、W3-R3 余项×3、W4-R4 S5-2 总项 + 验证期发现）。
 - P1：FUS-COMPONENT-REGISTER 组件审计；GAP-WINDOWS-EVIDENCE 三项；IMPL-DEEPSEEK-TRANSPORT DeepSeek live 晋级证据；ORZ-SESSION-CONTEXT-MONITOR 四项。
 - P2：IMPL-CONTROL-FABRIC（Slice 3 / Slice 4 / 可选）；OPS-PROTOCOL（裁剪设计 + 生产接线裁决）；MODEL-RESIDUAL-PRESSURE-FOLLOWUP 四项（P2-11）。
-- P3：EVIDENCE-LOCAL-BROWSER、GATE-CHAIN、observed-scope 枚举、V11-IMPL-003、V11-IMPL-007、orz-host flaky、DC 硬信号（随 P2-11 退役）。
+- P3：EVIDENCE-LOCAL-BROWSER、GATE-CHAIN、observed-scope 枚举、V11-IMPL-003、V11-IMPL-007、orz-host flaky（DC 硬信号已随 P2-11 退役）。
 - 审计登记边界（条件触发，不占当前优先级）：orz-host 可选后端、headless 计划信号、23 工具分区 journals、B-1 后续、ORZ-RECOVERY-TOOL-OUTCOME、ORZ-STAGNATION-TOOL-SIGNAL。
 - 已闭合分组（单行核对见下）：P0-E、0c、0d 主项与后续 1/2/6/7/8、0e、0f、0g、0h、0i、0k、P0-B、P0-C、P0-C2、P0-D、P1 已闭合项、P2-10 全部闭合。
 
@@ -250,10 +250,12 @@
   S3 重建 + S4 实机复验待放行）：`blackboard_read` 增量头 + temporal 一次返回
   （零注入、8 工具面冻结）。入口：设计 `docs/PULL_SELF_DESCRIPTION_DESIGN_2026-08-31.md`
   / ADR §14.48 / [审查修复](docs/audits/P2-11_PULL_SELF_DESCRIPTION_S1_REVIEW_AUDIT_2026-08-31.md)。
-- [ ] DC 强制模板轮清理（已裁决）：删除 `diagnostic_coverage.rs`（检查点/强制
-  模板轮/信号消费）+ `COUNTEREXAMPLE_GATE_PLAN_BLOCK` plan 反例变体注册 +
-  P3「DC 硬信号 4/6」退役；schema/verifier/fixtures/测试收口；checkpoint
-  共用件拆分（orientation 软门与 console 询问轮保留）。
+- [x] DC 强制模板轮清理（2026-09-01 实施完成，闭合）：DC 机制全删
+  （`diagnostic_coverage.rs` / 强制模板轮 / 信号消费）+ plan 反例变体注册
+  （`COUNTEREXAMPLE_GATE_PLAN_BLOCK`）+ P3「DC 硬信号 4/6」退役；
+  schema/verifier/fixtures/测试收口；checkpoint 共用件拆分（orientation
+  软门与 console 询问轮保留）。入口：[实施审计](docs/audits/P2-11_DC_FORCED_TEMPLATE_CLEANUP_IMPL_AUDIT_2026-09-01.md)
+  / ADR-0010 §14.49 / BACKLOG P2-11。
 - [ ] retryable 机械分类位：`Fail` 信封增 `retryable: bool`（确定性失败 false：
   scheme/锚点/sealed/cap；暂时性 true：超时/网络），错误码事实推导、非建议；
   schema/verifier/fixtures 先行。
@@ -279,7 +281,7 @@
   - 成熟复用评估（2026-08-16，只读）：部分——orz 即 Grok Build fork，原 toolbar/session 代码在仓库内；Codex app-server 投影为成熟参考。
 - [ ] orz-host 既有 flaky（`approval_allow_persists_for_identical_bash`）——复核并登记闭合或转 gap。
   - 成熟复用评估（2026-08-16，只读）：无——测试修复。
-- [ ] DC 硬信号 4/6：`same_module_no_evidence` / `key_surface_unexamined` 接线（原建议并入 P0-B，批次已闭合，独立待办）——**2026-08-31 随 P2-11 DC 强制模板轮清理一并退役**（信号与机制随删除，不再单独接线）。
+- [x] DC 硬信号 4/6：`same_module_no_evidence` / `key_surface_unexamined` 接线（原建议并入 P0-B，批次已闭合，独立待办）——**2026-09-01 随 P2-11 DC 强制模板轮清理一并退役**（信号与机制随删除，不再单独接线；2026-08-31 裁决登记）。
 
 ## 审计登记边界（条件触发，不占当前优先级）
 

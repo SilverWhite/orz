@@ -2284,11 +2284,13 @@ S1-S4 全部闭合）
      二次查询）；零注入、模型无感边界不变。审查修复见
      `docs/audits/P2-11_PULL_SELF_DESCRIPTION_S1_REVIEW_AUDIT_2026-08-31.md`；
      设计定稿 ADR-0010 §14.48 / `docs/PULL_SELF_DESCRIPTION_DESIGN_2026-08-31.md`。
-  2. **DC 强制模板轮清理（已裁决，实施待放行）**：删除 DC 机制（诊断覆盖检查点/
-     强制模板轮/信号消费 `diagnostic_coverage.rs`）+ plan 反例变体注册
-     （`COUNTEREXAMPLE_GATE_PLAN_BLOCK`）；连带 P3「DC 硬信号 4/6」退役；
-     schema/verifier/fixtures/测试收口；checkpoint 共用件拆分（模板校验仅 DC
-     消费则一并退役；orientation 软门与 console 询问轮保留）。
+   2. **DC 强制模板轮清理（2026-09-01 实施完成，闭合）**：删除 DC 机制（诊断覆盖检查点/
+      强制模板轮/信号消费 `diagnostic_coverage.rs`）+ plan 反例变体注册
+      （`COUNTEREXAMPLE_GATE_PLAN_BLOCK`）；连带 P3「DC 硬信号 4/6」退役；
+      schema/verifier/fixtures/测试收口；checkpoint 共用件拆分（模板校验仅 DC
+      消费则一并退役；orientation 软门与 console 询问轮保留）。
+      实施记录见 `docs/audits/P2-11_DC_FORCED_TEMPLATE_CLEANUP_IMPL_AUDIT_2026-09-01.md`
+      / ADR-0010 §14.49。
   3. **retryable 机械分类位（设计+实施待放行）**：类型化错误信封 `Fail` 增
      `retryable: bool`（确定性失败 false：scheme/锚点/sealed/cap；暂时性 true：
      超时/网络），错误码事实推导、非建议；schema/verifier/fixtures 先行。
@@ -2335,6 +2337,19 @@ S1-S4 全部闭合）
 
 ## 变更记录
 
+- 2026-09-01：P2-11 第 2 项 DC 强制模板轮清理实施闭合（本窗口；用户指示「请开始
+  进行DC 强制模板轮清理」）——删除 `diagnostic_coverage.rs`（诊断覆盖检查点/强制
+  模板轮/信号消费）+ `COUNTEREXAMPLE_GATE_PLAN_BLOCK` plan 反例变体注册
+  （orz-bin `run_plan_phase` 的 plan-write 反例门轮一并移除）；P3「DC 硬信号
+  4/6」退役；v0.2 事件面退役 `diagnostic_coverage_checkpoint` /
+  `checkpoint_response`（枚举/载荷 schema/fixtures/verifier/测试收口，v0.1 冻结
+  面不变）；checkpoint 共用件拆分（模板校验随 DC 退役，orientation 软门与
+  console 询问轮保留）；v0.2 `plan-run.jsonl` 重抓（去除 plan-write 反例门事件）。
+  验证：orz-loop 635 / orz-tui 178 / orz-assurance 193+8 全绿，clippy 无新增，
+  Python 1920 通过（doctor 在 orz 提交 + manifest 重生成后复验）；未闭合
+  30 → 29（DC 清理闭合），29 → 28（P3 硬信号退役）。实施记录见
+  `docs/audits/P2-11_DC_FORCED_TEMPLATE_CLEANUP_IMPL_AUDIT_2026-09-01.md` /
+  ADR-0010 §14.49。
 - 2026-08-31：P2-11 第 1 项 PULL 自描述设计定稿 + S1/S2 登记（本窗口；用户指示
   开始实现）——`blackboard_read` 成功 live 读取响应携带 `[黑板增量]` 增量头
   （各分区版本计数 + temporal 域迁移摘要；分区版本计数 = run 内单调、每次可见

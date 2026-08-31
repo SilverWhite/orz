@@ -294,7 +294,10 @@ class RunEventV02ContractTests(unittest.TestCase):
         整体删除（-citation_validation，零残留），+mechanical_audit_update
         （对象键覆盖写轻量留痕）——计数 53 → 53 不变。
         THIN-HARNESS-REDESIGN-V2 §9.7 (2026-08-29 S5-2): 53 → 54
-        (+tool_running — 终端命令 300s 中间回报，v0.2 专用新事件)."""
+        (+tool_running — 终端命令 300s 中间回报，v0.2 专用新事件).
+        P2-11 DC 清理 (2026-08-31): 54 → 52
+        (-diagnostic_coverage_checkpoint, -checkpoint_response,
+        MODEL-RESIDUAL-PRESSURE-FOLLOWUP 裁决 2 — DC 强制模板轮删除)."""
         schema = load_json(RUN_EVENT_SCHEMA_V02)
         enum_events = set(schema["properties"]["event_type"]["enum"])
         fixture_events = {
@@ -303,9 +306,11 @@ class RunEventV02ContractTests(unittest.TestCase):
             if path.name != "chained-run-finished.valid.json"
         }
         self.assertEqual(fixture_events, enum_events)
-        self.assertEqual(len(enum_events), 54)
+        self.assertEqual(len(enum_events), 52)
         self.assertNotIn("neutral_inquiry", enum_events)
         self.assertNotIn("retrieval_completion_check", enum_events)
+        self.assertNotIn("diagnostic_coverage_checkpoint", enum_events)
+        self.assertNotIn("checkpoint_response", enum_events)
 
     def test_v02_payload_schema_file_convention(self) -> None:
         """Every v0.2-payload event maps to a v0.2 schema file in runtime/."""
@@ -315,9 +320,9 @@ class RunEventV02ContractTests(unittest.TestCase):
                 self.assertEqual(schema_path.name, f"{slug}-event-payload-v0.2.schema.json")
 
     def test_v02_neutral_inquiry_payloads_are_explicit(self) -> None:
-        """§5.1: the two neutral inquiry payloads pin inquiry_family=neutral
+        """§5.1: the neutral inquiry payload pins inquiry_family=neutral
         and inquiry_kind to the event type."""
-        for event_type in ("orientation_checkpoint", "diagnostic_coverage_checkpoint"):
+        for event_type in ("orientation_checkpoint",):
             with self.subTest(event_type=event_type):
                 payload_path = (
                     PAYLOAD_DIR_V02

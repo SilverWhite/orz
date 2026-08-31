@@ -137,14 +137,9 @@ V02_EVENT_TYPES = [
     "permission_requested",
     "permission_decision",
     "tool_started",
-    "tool_completed",
-    "orientation_checkpoint",
-    "diagnostic_coverage_checkpoint",
-    # ORZ-ORIENTATION-FORCED-TEMPLATE (2026-08-15, ADR-0010 §14.16): the
-    # forced-template checkpoint round's answer + validation + evidence
-    # cross-check (one mechanism event for both inquiry families).
-    "checkpoint_response",
-    "runtime_stagnation_guard",
+      "tool_completed",
+      "orientation_checkpoint",
+      "runtime_stagnation_guard",
     "tool_availability_check",
     "tool_belief_stagnation",
     "instruction_provenance_gate",
@@ -195,11 +190,9 @@ V02_EVENT_TYPES = [
     "run_invalidated",
 ]
 
-SLUGS_V02 = {
-    "orientation_checkpoint": "orientation-checkpoint",
-    "diagnostic_coverage_checkpoint": "diagnostic-coverage-checkpoint",
-    "checkpoint_response": "checkpoint-response",
-    "information_sufficiency_assessment": "information-sufficiency-assessment",
+  SLUGS_V02 = {
+      "orientation_checkpoint": "orientation-checkpoint",
+      "information_sufficiency_assessment": "information-sufficiency-assessment",
     "retrieval_parent_disposition": "retrieval-parent-disposition",
     "retrieval_close_record": "retrieval-close-record",
     "retrieval_mode_transition": "retrieval-mode-transition",
@@ -227,13 +220,9 @@ SLUGS_V02 = {
 V02_PAYLOAD_EVENTS = [
     # THIN-HARNESS-REDESIGN-V2 §9.7 (2026-08-29 S5-2): terminal command
     # mid-run status (auto-backgrounded at the 300s report point).
-    "tool_running",
-    "orientation_checkpoint",
-    "diagnostic_coverage_checkpoint",
-    # ORZ-ORIENTATION-FORCED-TEMPLATE (2026-08-15, ADR-0010 §14.16): forced
-    # template answer/validation/cross-check response event.
-    "checkpoint_response",
-    "information_sufficiency_assessment",
+      "tool_running",
+      "orientation_checkpoint",
+      "information_sufficiency_assessment",
     "retrieval_parent_disposition",
     "retrieval_close_record",
     "retrieval_mode_transition",
@@ -636,58 +625,6 @@ PAYLOAD_GOOD_V02: dict[str, dict] = {
         "message_block": "[ORIENTATION v0.2] 当前任务、位置与下一目标是什么？",
         "injection_position": "post_tool_batch_gap",
     },
-    "diagnostic_coverage_checkpoint": {
-        "checkpoint_id": "DIAG-COV-RUN-CONF-0001-0001",
-        "inquiry_family": "neutral",
-        "inquiry_kind": "diagnostic_coverage_checkpoint",
-        "agent_role": "main",
-        "debug_episode_id": "BUG-RUN-CONF-0001",
-        "threshold_stage": 3,
-        "hard_signal_count": 3,
-        "trigger_count": 2,
-        "signals": [
-            {
-                "signal_id": "SIG-0001",
-                "signal_type": "consecutive_same_failure",
-                "evidence_identity": "EVT-CONF-007",
-            },
-            {
-                "signal_id": "SIG-0002",
-                "signal_type": "same_module_no_evidence",
-                "evidence_identity": "EVT-CONF-011",
-            },
-        ],
-        "covered_surfaces": ["test_logs", "stack_trace"],
-        "missing_surfaces": ["edge_cases"],
-        "message_block": "[DIAG_COV v0.2] 已覆盖：测试日志、堆栈；缺失：边界条件；最小补诊断动作：运行最小复现",
-        "minimal_next_diagnostic_action": "运行最小复现并采集 trace",
-    },
-    "checkpoint_response": {
-        "checkpoint_id": "ORIENT-RUN-CONF-0001-0000",
-        "inquiry_family": "neutral",
-        "inquiry_kind": "orientation_checkpoint",
-        "agent_role": "main",
-        "attempt": 1,
-        "outcome": "accepted",
-        "response": {
-            "task_position": "修复 orz 缓存回归",
-            "progress_evidence": ["src/cache.rs"],
-            "blockers": [],
-            "next_action": "continue",
-            "changed_direction": False,
-        },
-        "validation": {
-            "valid": True,
-            "errors": [],
-            "ignored_fields": [],
-        },
-        "cross_check": {
-            "evidence_identity_found": ["src/cache.rs"],
-            "evidence_identity_missing": [],
-            "gather_evidence_missing_surface_provided": True,
-        },
-        "degrade_reason": None,
-    },
     "information_sufficiency_assessment": {
         "assessment_id": "ASSESS-0001",
         "activation_id": "ACT-EXT-0001",
@@ -1073,54 +1010,6 @@ PAYLOAD_BAD_V02: dict[str, dict] = {
         "step_index": 0,
         "message_block": "[ORIENTATION v0.2] 当前任务、位置与下一目标是什么？",
         "injection_position": "post_tool_batch_gap",
-    },
-    "diagnostic_coverage_checkpoint": {
-        "checkpoint_id": "DIAG-COV-RUN-CONF-0001-0001",
-        "inquiry_family": "neutral",
-        "inquiry_kind": "diagnostic_coverage_checkpoint",
-        "agent_role": "main",
-        "debug_episode_id": "BUG-RUN-CONF-0001",
-        "threshold_stage": 3,
-        "hard_signal_count": 3,
-        "trigger_count": 2,
-        "signals": [
-            {
-                "signal_id": "SIG-0001",
-                "signal_type": "hypothesis_only",
-                "evidence_identity": "EVT-CONF-007",
-            }
-        ],
-        "covered_surfaces": ["test_logs"],
-        "missing_surfaces": [],
-        "message_block": "[DIAG_COV v0.2] x",
-        "minimal_next_diagnostic_action": "运行最小复现",
-    },
-    "checkpoint_response": {
-        "checkpoint_id": "ORIENT-RUN-CONF-0001-0000",
-        "inquiry_family": "neutral",
-        "inquiry_kind": "orientation_checkpoint",
-        "agent_role": "main",
-        "attempt": 1,
-        # One constraint violation: outcome outside the closed enum.
-        "outcome": "rejected",
-        "response": {
-            "task_position": "修复 orz 缓存回归",
-            "progress_evidence": ["src/cache.rs"],
-            "blockers": [],
-            "next_action": "continue",
-            "changed_direction": False,
-        },
-        "validation": {
-            "valid": True,
-            "errors": [],
-            "ignored_fields": [],
-        },
-        "cross_check": {
-            "evidence_identity_found": ["src/cache.rs"],
-            "evidence_identity_missing": [],
-            "gather_evidence_missing_surface_provided": True,
-        },
-        "degrade_reason": None,
     },
     "information_sufficiency_assessment": {
         "assessment_id": "ASSESS-0001",
@@ -1841,24 +1730,19 @@ after any v0.2 payload schema change).
 Scope:
 
 - `payloads/<slug>.minimal.valid.json` / `<slug>.constraint.invalid.json` —
-  legal / one-constraint-violation payloads for the v0.2 mechanism events
-  with their own v0.2 payload schema: `orientation_checkpoint`
-  (v0.2 shape), `diagnostic_coverage_checkpoint`,
-  `information_sufficiency_assessment`, `retrieval_parent_disposition`,
-  `retrieval_close_record`, plus the GAP-RETRIEVAL-TOOLS trio
+    legal / one-constraint-violation payloads for the v0.2 mechanism events
+    with their own v0.2 payload schema: `orientation_checkpoint`
+    (v0.2 shape), `information_sufficiency_assessment`,
+    `retrieval_parent_disposition`,
+    `retrieval_close_record`, plus the GAP-RETRIEVAL-TOOLS trio
   `retrieval_mode_transition`, `retrieval_result_committed`,
   `retrieval_activation_restored`, plus the ACAF trio (Slice 1, 2026-08-12)
   `control_ticket_issued`, `control_ticket_consumed`,
   `control_ticket_rejected` (ticket lifecycle binding fields — never the
   HMAC tag, which stays inside the issuing process), plus
-  `tool_availability_check` (FUS-TOOL-PROBE 2026-08-13, P0-A-2: two-state
-  single probe face snapshot — complete/incomplete cover ALL work tools).
-- ORZ-ORIENTATION-FORCED-TEMPLATE (2026-08-15, ADR-0010 §14.16):
-  `checkpoint_response` — the forced-template checkpoint round's parsed
-  answer, mechanical validation, evidence-identity cross-check and degrade
-  reason (one mechanism event for both inquiry families; the fire event
-  stays at injection time and the response event answers it).
-- ACAF Slice 2 fail-closed (2026-08-13): `control-ticket-rejected` gains
+    `tool_availability_check` (FUS-TOOL-PROBE 2026-08-13, P0-A-2: two-state
+    single probe face snapshot — complete/incomplete cover ALL work tools).
+  - ACAF Slice 2 fail-closed (2026-08-13): `control-ticket-rejected` gains
   three extra positive payload fixtures for the new pre-signing reject codes
   `missing_target_argument` / `missing_snapshot_store` / `missing_goal_context`
   (each carries `ticket_id: null` — no ticket exists when the refusal

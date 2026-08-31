@@ -9,8 +9,8 @@ Scope:
 - `payloads/<slug>.minimal.valid.json` / `<slug>.constraint.invalid.json` —
   legal / one-constraint-violation payloads for the v0.2 mechanism events
   with their own v0.2 payload schema: `orientation_checkpoint`
-  (v0.2 shape), `diagnostic_coverage_checkpoint`,
-  `information_sufficiency_assessment`, `retrieval_parent_disposition`,
+  (v0.2 shape), `information_sufficiency_assessment`,
+  `retrieval_parent_disposition`,
   `retrieval_close_record`, plus the GAP-RETRIEVAL-TOOLS trio
   `retrieval_mode_transition`, `retrieval_result_committed`,
   `retrieval_activation_restored`, plus the ACAF trio (Slice 1, 2026-08-12)
@@ -19,11 +19,10 @@ Scope:
   HMAC tag, which stays inside the issuing process), plus
   `tool_availability_check` (FUS-TOOL-PROBE 2026-08-13, P0-A-2: two-state
   single probe face snapshot — complete/incomplete cover ALL work tools).
-- ORZ-ORIENTATION-FORCED-TEMPLATE (2026-08-15, ADR-0010 §14.16):
-  `checkpoint_response` — the forced-template checkpoint round's parsed
-  answer, mechanical validation, evidence-identity cross-check and degrade
-  reason (one mechanism event for both inquiry families; the fire event
-  stays at injection time and the response event answers it).
+- P2-11 DC 清理 (2026-08-31): `diagnostic_coverage_checkpoint` and
+  `checkpoint_response` are retired — the diagnostic-coverage forced-template
+  mechanism is deleted (MODEL-RESIDUAL-PRESSURE-FOLLOWUP 裁决 2); their
+  payload schemas and fixtures are removed from the v0.2 track.
 - ACAF Slice 2 fail-closed (2026-08-13): `control-ticket-rejected` gains
   three extra positive payload fixtures for the new pre-signing reject codes
   `missing_target_argument` / `missing_snapshot_store` / `missing_goal_context`
@@ -66,9 +65,10 @@ Scope:
   `tool-completed.policy-denial.valid` (retrieval-mode refusal shape) and
   `tool-completed.policy-denial-bad-source.constraint.invalid` (unknown
   source enum).
-- `envelope/<slug>.valid.json` — a full 13-field v0.2 envelope for **every**
-  event in the v0.2 enum (53 events — 51 prior + ledger_fold_advance and
-  ledger_fold_write_failed from FUS-LEDGER-FOLD-STATE 2026-08-18). The
+  - `envelope/<slug>.valid.json` — a full 13-field v0.2 envelope for **every**
+    event in the v0.2 enum (50 events — 52 prior − runtime_stagnation_guard
+    (2026-08-22) − diagnostic_coverage_checkpoint − checkpoint_response
+    (P2-11 DC 清理 2026-08-31)). The
   v0.2-payload events carry
   their v0.2 payload; the other events reuse the v0.1 payload shape
   unchanged (their payload schema files did not change — adjudicated
