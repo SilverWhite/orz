@@ -3721,6 +3721,26 @@ ADR §3.6 正文修订随实施登记。
    x86_64.zip（25.6 MB）；API Key 不入包，注入=Windows 凭据管理器 /
    Linux `ORZ_DEEPSEEK_API_KEY` env（ADR-0006 §2.2/§2.3）。
 
+9. **0.2.0 发布（2026-08-31；计数不动）**：双平台发布——版本号
+   orz-bin 0.1.0 → 0.2.0（orz a539a21b，已推送
+   cli/feat/fusion-architecture）；Windows x86_64 release 构建
+   （orz.exe 50,398,720 B / orz-signer.exe 6,737,920 B /
+   orz-acaf-provision.exe 6,642,176 B，续编 9m51s）+ Linux musl
+   三件套（orz 106,905,448 B / orz-signer 1,390,072 B /
+   orz-acaf-provision 1,207,928 B，编译 10m53s，musl 静态；bookworm
+   容器冒烟通过——marker 计数 / 三件套启动行为 / `orz --real` TTY
+   错误路径）；两平台二进制均内嵌版本串 0.2.0；0.2.0 主要变更=机械层
+   数学计算体 I1–I6 + V1–V3 验证闭环、R2 deny 通道、R5 grep→read
+   管线、0k 检索编排机械层（同轮并行 / 子代理预算 / [DOC] 截断 /
+   主面 web_search 恢复 / 方向 C 收口）、0k 第二批（project_doc_index
+   v2 / tab 池 / 委托分档）、序列内容门、controller 拆分（行为不变）；
+   GitHub Release v0.2.0（SilverWhite/CLI，
+   [releases/tag/v0.2.0](https://github.com/SilverWhite/CLI/releases/tag/v0.2.0)），
+   资产=orz-0.2.0-linux-x86_64.tar.gz（32.6 MB）+ orz-0.2.0-windows-
+   x86_64.zip（24.4 MB）；API Key 不入包，注入=Windows 凭据管理器 /
+   Linux `ORZ_DEEPSEEK_API_KEY` env（ADR-0006 §2.2/§2.3）。登记于
+   [0.2.0 发布包](../releases/orz-0.2.0-linux-x86_64/README.md)。
+
 ### 14.41 v1.41 补写裁决索引（2026-08-25）
 
 本节记录冻结后的显式补写；规范正文以所指章节为准，补写明确
