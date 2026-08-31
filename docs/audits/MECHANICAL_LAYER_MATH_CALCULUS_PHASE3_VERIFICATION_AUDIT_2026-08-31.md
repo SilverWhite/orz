@@ -1,8 +1,9 @@
 # P2-10 阶段 3 验证记录（V1 FakeProvider 面 / V2 离线 102 runs / V3 冒烟与状态）
 
 > 日期：2026-08-31；验证项：V1–V3（TODO P2-10 / BACKLOG 10 / 设计 §7）；依赖：
-> I1–I6 + R1–R9（阶段 2 已闭合）。状态：**V1、V2 完成**；V3 的 S4 冒烟复验
-> 受 S3 重建阻塞（Docker daemon 未运行），状态同步部分已先行登记。
+> I1–I6 + R1–R9（阶段 2 已闭合）。状态：**V1–V3 全部完成（2026-08-31）**：
+> V1/V2 先行闭合；V3 S3 重建 + bookworm 冒烟 + S4 实机冒烟（temporal 四查询面
+> 渲染 + 回归）于 2026-08-31 补齐。
 
 ## V1 — FakeProvider 测试面验证（信封/组合/求值器语义 + §6.6 近零提示 + F11）
 
@@ -94,11 +95,34 @@
 
 ## V3 — S4 冒烟复验与状态同步
 
-- **S4 冒烟复验阻塞**：S3 重建（Linux musl 三件套，`scripts/build_orz_aliyun_
-  trixie.sh`）依赖 Docker daemon，当前环境 `npipe:////./pipe/docker_engine`
-  不可达（daemon 未运行）。阶段 2 I1–I6 的 S3 重建未执行，S4 实机冒烟
-  （真实二进制跑冒烟任务观察 temporal 分区渲染 + 回归）无法在本轮完成。
-- 已先行登记：V1/V2 证据入本审计；TODO/BACKLOG/索引状态同步（见下）。
+- **S3 重建（2026-08-31 完成）**：`rust:1.97-slim` 容器增量构建，Linux musl
+  三件套 orz 106,905,224 B / orz-signer 1,390,072 B / orz-acaf-provision
+  1,207,936 B（00:27 HKT，编译 8m03s，日志
+  `D:\tb-eval\orz-linux\build-20260831.log`）；bookworm 容器冒烟符合预期
+  （marker 字符串在二进制内、provision usage / signer manifest 缺失 / orz
+  `--real` TTY 要求 API key 的启动错误路径、三件套 `ldd` 静态链接）。
+- **S4 实机冒烟（2026-08-31 完成）**：harbor + 真实二进制
+  （`tb_agents.orz:Orz`，debian:bookworm-slim 任务容器，deepseek-v4-flash），
+  本地探针任务 `temporal-partition-smoke`（job
+  `D:\tb-eval\jobs-official\final-smoke-2026-08-31`）：
+  - **1/1 reward 1.0、0 异常、总时长 64s**（回归：真实容器安装 ACAF 三件套 +
+    真实任务完成，answer.txt 逐字节写入）；
+  - **temporal 分区渲染端到端**：模型按提示精确发起 4 次
+    `blackboard_read section="temporal"`（selector=now / recent k=5 /
+    history k=5 / feature name=u_prog k=5），事件链 4 条
+    tool_completed（exit 0、section=temporal），trajectory 记录模型消费到的
+    渲染内容与设计 §3 一致：域标签 `start`、`入域 0 轮`/`驻留 2 轮`、
+    `u_prog=0.00 u_err=0.00 u_stuck=0.00 T̂=8.0s err10=0.00 succ10=0.00`、
+    history `(无迁移)`、feature 单值 `0.000`；
+  - **零误干预保持**：全链 0 个 `temporal_fire` 事件（fires 仅内部留痕）；
+  - **事件链机械门**：`run_event_journal_validation.py` 对本冒烟 journal
+    **0 错误**（含 F11 receipt↔事件链逐段同构、policy_denial/failure_target/
+    mechanical_audit/control_tickets 全量交叉检查）；
+  - journal 落盘：`D:\tb-eval\gsa-volumes\final-smoke-2026-08-31\
+    ea67733e-…\runs\RUN-CLI-6a94cc24\events.jsonl`。
+- 状态同步（2026-08-31 完成）：V1/V2 证据入本审计；V3 证据入本审计；
+  TODO（I1–I6 勾选 + V3 勾选 + 计数 38 → 32）/ BACKLOG / 设计 §7 /
+  索引 v2.36（AUTH `partial` → `implemented`）。
 
 ## 证据汇总
 
@@ -111,11 +135,13 @@
 | 102-run 复验 | 4157 决策点；err 0、deny 3 run/4 fires、stall 8、slow 2、stuck 0（峰值 θ 比 0.6087）；四通道参考对拍零失配 |
 | 聚类对照 | 4157 点 k=3；语义域均值与 §9.8 C1/C0/C2 结构对应 |
 | 零误干预 | pass（事件链/schema 无 fire） |
-| 静态门 | clippy 仅既有基线（orz-assurance 1 条）；`git diff --check` 待提交前复核 |
+| 静态门 | clippy 仅既有基线（orz-assurance 1 条）；`git diff --check` 干净（2026-08-31 复核） |
+| S3 重建 | 三件套 00:27 HKT（orz 106,905,224 B / signer 1,390,072 B / provision 1,207,936 B），8m03s 增量；bookworm 冒烟符合预期 + 三件套静态链接 |
+| S4 实机冒烟 | 1/1 reward 1.0、0 异常；temporal 四查询面渲染端到端一致；事件链 verifier 0 错误；0 temporal_fire |
 
 ## 未闭合（转 V3 或后续）
 
-- V3 S4 冒烟复验：待 S3 重建（Docker daemon 可用后执行
-  `scripts/build_orz_aliyun_trixie.sh` → 实机冒烟）。
+- ~~V3 S4 冒烟复验~~——**2026-08-31 已闭合**：S3 重建 + bookworm 冒烟 +
+  实机冒烟（temporal 四查询面渲染 + 回归）完成，见上。
 - slow 通道 fires 判定：本批 2 run 证据为 fires≡膜≡计数，建议后续以更大
   样本复核或按 §4.7 降级（连续电位保留）。

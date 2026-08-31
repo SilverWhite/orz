@@ -584,14 +584,16 @@ TRACED 几何搬到动作层——用命令/编辑目标语义相似度定义动
 |---|---|---|
 | V1 | FakeProvider 测试面验证（信封/组合语义 + §6.6 模型熟悉度近零提示验证，无需实机） | I5/I6 |
 | V2 | 离线 102 runs 复验（T̂/域标签/spike 序列 vs §9.8 聚类对照、四对照门、零误干预） | I1/I3 |
-| V3 | S4 冒烟复验 + BACKLOG/TODO/索引状态同步（pending → implemented 视切片范围） | — |
+| V3 | S4 冒烟复验 + BACKLOG/TODO/索引状态同步（pending → implemented 视切片范围）——**2026-08-31 闭合** | — |
 
 状态（2026-08-31）：V1、V2 已完成——V1：FakeProvider 测试面 8 项 + §6.6
 渲染自描述 + F11 receipt↔事件链同构核对（verifier 245 passed）；V2：离线
 102 runs 四对照门（err/deny/stall/slow 参考对拍零失配；err/stuck 本批无
 触发未决、deny/stall C1+C3 通过、slow 2 run fires≡膜≡计数建议降级留档）+
 §9.8 聚类对照（4157 点，语义域均值与 C1/C0/C2 结构对应）+ 零误干预 pass。
-V3 S4 冒烟复验待 S3 重建（Docker daemon 未运行），状态同步已先行登记，见
+V3 亦已闭合——S3 重建（Linux musl 三件套 00:27 HKT）+ bookworm 冒烟 +
+S4 实机冒烟（1/1 reward 1.0、temporal 四查询面渲染端到端一致、事件链
+verifier 0 错误、0 temporal_fire），见
 [阶段 3 验证记录](docs/audits/MECHANICAL_LAYER_MATH_CALCULUS_PHASE3_VERIFICATION_AUDIT_2026-08-31.md)。
 
 ## 8. 已知边界与未决项

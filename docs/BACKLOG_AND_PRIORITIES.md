@@ -2195,12 +2195,13 @@ S1-S4 全部闭合）
   动作层耦合试验 P1–P3）；F5 ADR-0010 转录（§14.47，`pending` →
   `current-design`，索引/BACKLOG 同步）。
 - 阶段 2（2026-08-30 用户指示实施 I1–I6；S1 代码 + S2 测试完成，放行入账
-  32 → 38）：I1 T̂/LIF 计算器 + 102 runs 离线复验（4157 决策点、err 22/24、
-  stuck 0/102 精确复现）；I2 失败目标身份入事件面（Schema/verifier/fixtures +
-  生产者）；I3 temporal 分区运行时（LifEngine 喂入 + blackboard_read
-  section=temporal）；I4 域 spike 侧车存档（StoredConversation 可选字段 +
-  恢复重建）；I5 类型化信封（tool_envelope + Board 接线 + GetPut 律锁定）；
-  I6 一层 pipe 归约（reducer，≤4 步）。
+  32 → 38；**阶段 3 验证闭环 2026-08-31，未闭合 38 → 32**）：I1 T̂/LIF 计算器
+  + 102 runs 离线复验（4157 决策点、err 22/24、stuck 0/102 精确复现）；I2
+  失败目标身份入事件面（Schema/verifier/fixtures + 生产者）；I3 temporal
+  分区运行时（LifEngine 喂入 + blackboard_read section=temporal）；I4 域 spike
+  侧车存档（StoredConversation 可选字段 + 恢复重建）；I5 类型化信封
+  （tool_envelope + Board 接线 + GetPut 律锁定）；I6 一层 pipe 归约
+  （reducer，≤4 步）。
 - 审查处理（2026-08-31 登记，放行计数不变）：阶段 2 全面审查完成（设计合理性/
   实现合理性/符合性；三子代理分片 + 102-run 语料量化），R1–R9 + F10–F14——
   err 事件谓词三方统一（R1 **已修**：生产口径 + lif_replay 对齐 + 102-run
@@ -2216,13 +2217,13 @@ S1-S4 全部闭合）
   统一、F14 措辞统一——见
   [审查记录](audits/MECHANICAL_LAYER_MATH_CALCULUS_PHASE2_REVIEW_AUDIT_2026-08-31.md)
   / TODO P2-10。
-- 开放内容：阶段 3 验证（V1 FakeProvider 验证面——**已实施 2026-08-31**：
-  信封/组合/求值器语义 8 项 + §6.6 近零提示 + F11 receipt↔事件链同构核对；
-  V2 离线 102 runs 四对照门 + §9.8 聚类对照 + 零误干预——**已实施 2026-08-31**
-  （4157 决策点、参考对拍零失配、零误干预 pass）；V3 S4 冒烟复验——**阻塞**
-  于 S3 重建（Docker daemon 未运行），状态同步已先行登记，见
-  [阶段 3 验证记录](audits/MECHANICAL_LAYER_MATH_CALCULUS_PHASE3_VERIFICATION_AUDIT_2026-08-31.md)）；
-  排期与勾选见 TODO P2-10。
+- 阶段 3 验证（**全部闭合 2026-08-31**）：V1 FakeProvider 验证面（信封/组合/
+  求值器语义 8 项 + §6.6 近零提示 + F11 receipt↔事件链同构核对，verifier
+  245 passed）；V2 离线 102 runs 四对照门 + §9.8 聚类对照 + 零误干预
+  （4157 决策点、参考对拍零失配、零误干预 pass）；V3 S3 重建 + bookworm
+  冒烟 + S4 实机冒烟（1/1 reward 1.0、temporal 四查询面渲染端到端一致、
+  事件链 verifier 0 错误、0 temporal_fire），详见
+  [阶段 3 验证记录](audits/MECHANICAL_LAYER_MATH_CALCULUS_PHASE3_VERIFICATION_AUDIT_2026-08-31.md)。
 - 实施记录：[I1](audits/MECHANICAL_LAYER_MATH_CALCULUS_I1_IMPL_AUDIT_2026-08-30.md)
   / [I2–I6](audits/MECHANICAL_LAYER_MATH_CALCULUS_PHASE2_IMPL_AUDIT_2026-08-30.md)。
 - 边界：域记录仅 spike 点位、随对话侧车存档（非 journal 证据面、7 天 retention）；

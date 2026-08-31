@@ -137,7 +137,12 @@
     （放行入账 32 → 38：I1 T̂/LIF 计算器 + 102 runs 离线复验、
     I2 失败目标身份入事件面、I3 temporal 分区运行时、I4 域 spike 侧车存档、
     I5 类型化信封、I6 一层 pipe 归约；V1–V3 阶段 3 验证待续，见 P2-10
-    勾选清单 / 实施记录）**。
+    勾选清单 / 实施记录）**；**2026-08-31 阶段 3 验证闭环
+    （V1 FakeProvider 面 + §6.6 + F11 同构核对；V2 离线 102 runs 四对照门 +
+    聚类对照 + 零误干预；V3 S3 重建（Linux musl 三件套 00:27 HKT）+
+    bookworm 冒烟 + S4 实机冒烟（1/1 reward 1.0、temporal 四查询面渲染
+    端到端一致、事件链 verifier 0 错误、0 temporal_fire）——I1–I6 六项
+    验证闭合，未闭合 38 → 32，见 P2-10 勾选清单 / 阶段 3 验证记录）**。
   - P0-C：0 项（PLAN-FIRST 阶段 A/B/C 全部闭合，2026-08-16）
   - P0 冒烟对拍暴露：0 项（GAP-REPETITION-DETECTOR-DNA-FALSE-POSITIVE
     复读检测 DNA 误杀已闭合 2026-08-26；GAP-EVENT-SCHEMA-DRIFT 事件面
@@ -2396,28 +2401,34 @@ daemon 跨 run 常驻。~~模式内混合路由（需修订 ADR-0010 §3.7.12）
 
 **阶段 2 — 实施切片（依赖前序；放行时入账）**
 
-- [ ] I1 T̂ 估计器 + LIF 时间特征计算器（纯计算；`D:\tb-eval\jobs-official`
+- [x] I1 T̂ 估计器 + LIF 时间特征计算器（纯计算；`D:\tb-eval\jobs-official`
   102 runs 离线复验）（依赖 F3）。**2026-08-30 S1/S2 完成**：orz-assurance
   lif/ 模块 + 23 测试 + lif_replay harness；102 runs 复验锚点（4157 决策点、
   err 22 run/24 fires、stuck 0/102、slow 2/102、deny 0）见
   [实施记录](docs/audits/MECHANICAL_LAYER_MATH_CALCULUS_I1_IMPL_AUDIT_2026-08-30.md)。
-- [ ] I2 失败目标身份入事件面（Schema + verifier + fixtures 先行）（依赖 F4）。
+  **2026-08-31 V3 验证闭环**（S3 重建 + S4 实机冒烟，见阶段 3 验证记录）。
+- [x] I2 失败目标身份入事件面（Schema + verifier + fixtures 先行）（依赖 F4）。
   **2026-08-30 S1/S2 完成**：tool_completed failure_target（Schema/verifier/
   fixtures + 生产者接线）见
   [实施记录](docs/audits/MECHANICAL_LAYER_MATH_CALCULUS_PHASE2_IMPL_AUDIT_2026-08-30.md)。
-- [ ] I3 temporal 分区运行时（每决策轮域标签 + 查询面接线
+  **2026-08-31 V3 验证闭环**（S3 重建 + S4 实机冒烟，见阶段 3 验证记录）。
+- [x] I3 temporal 分区运行时（每决策轮域标签 + 查询面接线
   `blackboard.read partition="temporal"`）（依赖 F2/I1）。**2026-08-30
   S1/S2 完成**：LifEngine 挂载 + 决策轮/工具事件喂入 + temporal 分区渲染
-  （≤1 KiB、fires 不渲染）。
-- [ ] I4 域 spike 存档随会话侧车（envelope 字段或伴随文件 + 7 天 retention +
+  （≤1 KiB、fires 不渲染）。**2026-08-31 V3 验证闭环**：S4 实机冒烟
+  `blackboard_read section=temporal` 四查询面渲染端到端一致。
+- [x] I4 域 spike 存档随会话侧车（envelope 字段或伴随文件 + 7 天 retention +
   跨 prompt 恢复重建）（依赖 F2/I3/D7）。**2026-08-30 S1/S2 完成**：
   StoredConversation.temporal_spikes（serde(default)）+ 恢复接线。
-- [ ] I5 工具类型化信封（8 工具落地：file.read View / search_replace GetPut 律 /
+  **2026-08-31 V3 验证闭环**（S3 重建 + S4 实机冒烟，见阶段 3 验证记录）。
+- [x] I5 工具类型化信封（8 工具落地：file.read View / search_replace GetPut 律 /
   terminal.run 值语义 / blackboard temporal 截断）（依赖 F1/D1）。**2026-08-30
   S1/S2 完成**：tool_envelope 契约模块 + Board 信封接线 + GetPut 律锁定测试。
-- [ ] I6 一层组合/pipe（折中档）或表达式求值器（激进档，最小项集 + 归约边界
+  **2026-08-31 V3 验证闭环**（V1 FakeProvider 面 + S4 实机冒烟）。
+- [x] I6 一层组合/pipe（折中档）或表达式求值器（激进档，最小项集 + 归约边界
   §6.2/6.3）（依赖 I5/D1）。**2026-08-30 S1/S2 完成**：reducer 模块（Apply +
-  单层 Pipe、≤4 步、类型化 splice、Fail 短路、effect_count）。
+  单层 Pipe、≤4 步、类型化 splice、Fail 短路、effect_count）。**2026-08-31
+  V3 验证闭环**（V1 FakeProvider 面 + S4 实机冒烟）。
 
 **阶段 3 — 验证闭环**
 
@@ -2433,10 +2444,16 @@ daemon 跨 run 常驻。~~模式内混合路由（需修订 ADR-0010 §3.7.12）
   （事件链/schema 无 fire），产出
   `LIF_102RUNS_REPLAY_2026-08-31_V2.json` /
   `LIF_102RUNS_CLUSTERING_2026-08-31_V2.json`。
-- [ ] V3 S4 冒烟复验 + BACKLOG/TODO/索引状态同步（pending → implemented 视切片
-  范围）——**2026-08-31 状态同步已先行**；S4 冒烟复验阻塞于 S3 重建（Docker
-  daemon 未运行，`scripts/build_orz_aliyun_trixie.sh` 无法执行），待重建后
-  实机冒烟并闭合。
+- [x] V3 S4 冒烟复验 + BACKLOG/TODO/索引状态同步（pending → implemented 视切片
+  范围）——**2026-08-31 完成**：S3 重建（Linux musl 三件套 00:27 HKT，orz
+  106,905,224 B / signer 1,390,072 B / provision 1,207,936 B，bookworm 冒烟
+  符合预期 + 静态链接）+ S4 实机冒烟（harbor + 真实二进制 + debian:bookworm-slim
+  容器，`temporal-partition-smoke` 探针：1/1 reward 1.0、0 异常；
+  `blackboard_read section=temporal` 四查询面（now/recent k=5/history k=5/
+  feature u_prog k=5）渲染端到端一致（域标签 start、入域/驻留、
+  u_prog/u_err/u_stuck/T̂/err10/succ10、history 无迁移、feature 0.000）；
+  事件链 verifier 0 错误（含 F11）；0 temporal_fire），详见
+  [阶段 3 验证记录](docs/audits/MECHANICAL_LAYER_MATH_CALCULUS_PHASE3_VERIFICATION_AUDIT_2026-08-31.md)。
 
 **阶段 2 全面审查处理（2026-08-31；审查记录
 [MECHANICAL_LAYER_MATH_CALCULUS_PHASE2_REVIEW_AUDIT_2026-08-31.md](docs/audits/MECHANICAL_LAYER_MATH_CALCULUS_PHASE2_REVIEW_AUDIT_2026-08-31.md)）**
