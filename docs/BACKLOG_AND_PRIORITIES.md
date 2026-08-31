@@ -1631,6 +1631,21 @@ S1-S4 全部闭合）
   tracked）、git 命令 10s 超时回退 v1、池化读取错误保真、effort env 解析
   抽纯函数；登记子模块内容盲区与 DNS TTL 内重绑定窗口为已知边界（逃生阀
   兜底）。详见设计文档 §10 / ADR §14.46 审查处理条。
+- **2026-08-31 S4 实机复验闭环（方向 C + 0k 第二批）**：检索密集题 k=1
+  实机三轮（s4-2026-08-31 / -31b / -31c）——首轮暴露 2 项复验发现并修复
+  （① 并行批次预算拒绝重复写 tool_completed 的 F11 违例 →
+  `refuse_inject_budget` 增 write_completed 参数，并行路径不再写第二条
+  完成事件；② [SOURCE] 声明行全角括号尾巴 → split_source_declaration
+  空格分支「（」提前截断 + 无空格分隔符集合补「（」），b 轮暴露 1 项既有
+  schema 漂移（tool_completed 回显 epoch 未声明 + 非 URL 行 source_title
+  空串 → schema 补 epoch / 生产端 title 回退整行）并修复；终轮（orz
+  f4f96eb8，Linux musl 三件套重建）**2/2 reward 1.0、0 异常、两 journal
+  事件链 verifier 0 错误**；方向 C payload 无 organized_response、
+  visibility_degraded=false、URL 尾巴 0、空 title 0；close record
+  effort=extended 实机落盘；count-dataset-tokens 12 次 browser_read 实机
+  并行。orz-loop 648 passed、Python verifier 260 passed。S4 闭环 -1 入账；
+  详见
+  [S4 复验记录](audits/GAP_RETRIEVAL_STRUCTURED_RESULT_AND_BATCH2_S4_VERIFICATION_AUDIT_2026-08-31.md)。
 
 ### 1. FUS-TOOL-PROBE（`implemented`；P0-A 批次 1-7 与 P0-A-2 已闭合）
 

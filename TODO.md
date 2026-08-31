@@ -142,7 +142,9 @@
     聚类对照 + 零误干预；V3 S3 重建（Linux musl 三件套 00:27 HKT）+
     bookworm 冒烟 + S4 实机冒烟（1/1 reward 1.0、temporal 四查询面渲染
     端到端一致、事件链 verifier 0 错误、0 temporal_fire）——I1–I6 六项
-    验证闭合，未闭合 38 → 32，见 P2-10 勾选清单 / 阶段 3 验证记录）**。
+    验证闭合，未闭合 38 → 32，见 P2-10 勾选清单 / 阶段 3 验证记录）**；
+    **2026-08-31 S4 实机复验闭环（0k 方向 C + 第二批；未闭合 32 → 30，
+    见 P0-0k / BACKLOG 0k / S4 复验记录）**。
   - P0-C：0 项（PLAN-FIRST 阶段 A/B/C 全部闭合，2026-08-16）
   - P0 冒烟对拍暴露：0 项（GAP-REPETITION-DETECTOR-DNA-FALSE-POSITIVE
     复读检测 DNA 误杀已闭合 2026-08-26；GAP-EVENT-SCHEMA-DRIFT 事件面
@@ -1924,7 +1926,13 @@ submit）**browser_read 已消失**，journal 零 browser_read 痕迹、零拒�
   local-browser-read）删 organized_response 并按 verifier 哈希算法重链；
   ADR-0010 §3.3.3 条 3 / §3.7 条 12 v1.10 / §14.45 登记。验证：orz-loop
   620/0/3、orz-bin 12/0/12、runtime pytest 319、assurance 76 全绿；
-  S3 重建 + S4 复验待续。
+  S3 重建 + S4 复验待续。**2026-08-31 S4 实机复验闭环**：检索密集题
+  k=1 实机三轮（s4-2026-08-31 / -31b / -31c），终轮 2/2 reward 1.0、
+  0 异常、两 journal 事件链 verifier 0 错误；payload 无
+  organized_response、visibility_degraded=false、URL 尾巴 0、空 title 0；
+  复验发现并修复 3 项（F11 并行批次重复 tool_completed、全角括号 URL
+  尾巴、tool_completed epoch / source_title 空串 schema 漂移），详见
+  [S4 复验记录](docs/audits/GAP_RETRIEVAL_STRUCTURED_RESULT_AND_BATCH2_S4_VERIFICATION_AUDIT_2026-08-31.md)。
   **2026-08-30 全面审查轮修复完成**：三路审查（设计/实现/符合性）
   处理——journal 四段 digest/result_id/ledger_digest 重算 + 事件链重链
   （含 disposition/close 的 assessment_id 重映射）、orientation 退役
@@ -1942,17 +1950,20 @@ submit）**browser_read 已消失**，journal 零 browser_read 痕迹、零拒�
   索引驻留 + 写后失效）——**2026-08-30 S1 代码 + S2 测试完成**：git 双基线
   + 增量（`git status -z`）+ blake3 条目身份 + 驻留零 stat + mark_dirty
   写钩子（host search_replace/run_terminal_cmd 完成即置位）；非 git 回退
-  v1；测试 20/0。S3 重建 + 实机验证待续。
+  v1；测试 20/0。S3 重建 + 实机验证待续。**2026-08-31 S4 实机复验闭环**
+  （R1 封存，实机验证二进制符号 + S2 git 夹具覆盖；见 S4 复验记录）。
 - [x] 会话级 tab 池 + 同轮多页并行读取——**2026-08-30 S1 代码 + S2 测试完成**：
   有界 target 池（默认 4，env 可配，0=回退）+ 独占租约 + LRU + 创建串行化；
   manager 去整读锁（Arc 短取，同轮 browser_read 真正并发）；下载不池化；
   DNS 缓存（TTL 300s）；ADR §14.46 措辞补写；测试 55/0/3。S3 重建 + 实机
-  验证待续。
+  验证待续。**2026-08-31 S4 实机复验闭环**（count-dataset-tokens 12 次
+  browser_read 实机并行、close record effort=extended 落盘；见 S4 复验记录）。
 - [x] 委托契约复杂度分档——**2026-08-30 S1 代码 + S2 测试完成**：
   `classify_retrieval_effort` 纯函数三档 + 预算映射（墙钟/轮数/max_results/
   browser_read 并行）+ env 覆盖；close record 可选 `effort`（schema +
   verifier + fixtures + 防回归）；不扩 [DOC]/注入上限；测试 8 项 + dispatch
-  集成。S3 重建 + 实机验证待续。
+  集成。S3 重建 + 实机验证待续。**2026-08-31 S4 实机复验闭环**（effort
+  extended 实机落盘；见 S4 复验记录）。
 - [x] **第二批 S1 全面审查处理（2026-08-30）**：max_results 缺省语义裁决
   （档位默认并入后即有界 → `<5/缺省 → +0`）、档位阈值连续边界落回正文、
   D1-1 缓存 path 加载重建（git 模式篡改测试）、HEAD 移动闭环（ls-files

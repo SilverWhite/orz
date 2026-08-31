@@ -129,6 +129,11 @@
       "description": "PLAN-FIRST 阶段 C (2026-08-16, ADR-0010 §14.17⑱): the console trace id of the direct action (call_id) — console_step_done evidence requires a trace_id corresponding to an already-occurred ToolCompleted."
     },
     "section": { "type": "string" },
+    "epoch": {
+      "type": "integer",
+      "minimum": 1,
+      "description": "FUS-BLACKBOARD-PLAN-EPOCH / P2-10 R4 (2026-08-31 S4 实机复验对齐): the plan-epoch archive the blackboard_read completion read from (cross-epoch look-back). Present on blackboard_read completions when the caller passed the epoch argument; the tool definition declares the same parameter."
+    },
     "full_output_path": { "type": "string" },
     "workspace_delta": {
       "type": "array",

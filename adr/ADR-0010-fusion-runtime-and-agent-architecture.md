@@ -3995,8 +3995,20 @@ ADR §3.6 正文修订随实施登记。
      不丢弃声明行。
    - **范围注明**：方向 C 退役范围 = Rust v0.2 生产轨道；Python
      `assurance/retrieval_subagent.py` / `deepseek_runtime_adapter.py`
-     的 v0.1 replay-only 通道保留 organized_response，不在退役范围，
+    的 v0.1 replay-only 通道保留 organized_response，不在退役范围，
      S4 复验不得误用该通道。
+   - **S4 实机复验闭环（2026-08-31）**：检索密集题 k=1 实机三轮
+     （s4-2026-08-31 / -31b / -31c），终轮 2/2 reward 1.0、0 异常、
+     两 journal 事件链 verifier 0 错误；payload 无 organized_response、
+     visibility_degraded=false、URL 尾巴 0、空 title 0；close record
+     effort=extended 落盘。复验发现并修复 3 项：① 并行批次预算拒绝
+     重复写 tool_completed 的 F11 违例（`refuse_inject_budget` 增
+     write_completed 参数，并行路径只注入消息面 + deny）；②
+     split_source_declaration 空格分支全角左括号提前截断 + 无空格
+     分隔符集合补「（」；③ tool_completed payload 补 `epoch` 声明 +
+     非 URL 声明行 source_title 回退整行（对齐 retrieval-result
+     schema nonempty）。详见
+     [`S4 复验记录`](../docs/audits/GAP_RETRIEVAL_STRUCTURED_RESULT_AND_BATCH2_S4_VERIFICATION_AUDIT_2026-08-31.md)。
 
 ### 14.46 v1.46 补写裁决索引（2026-08-30）
 
