@@ -290,3 +290,120 @@ def verify_sandbox_selection_receipt(
         ):
             errors.append("auto selection ignored an observed compliant backend")
     return {"valid": not errors, "errors": errors}
+
+
+def verify_windows_native_run_observation(
+    observation: dict[str, Any],
+    *,
+    profile: dict[str, Any],
+    profile_path: Path | None = None,
+    require_compliant: bool,
+) -> dict[str, Any]:
+    """Independent verifier for windows-native-sandbox-run observations.
+
+    Cross-checks the spawn-time facts against the profile and the per-arm
+    required checks.  Refuses overstated (compliant with failing checks) and
+    understated (all checks true but noncompliant) outcomes.
+    """
+    errors: list[str] = []
+    try:
+        validate_contract(
+            profile,
+            "windows-native-sandbox-profile-v0.1.schema.json",
+            label="Windows native sandbox profile",
+        )
+        validate_contract(
+            observation,
+            "windows-native-sandbox-run-v0.1.schema.json",
+            label="Windows native sandbox run observation",
+        )
+    except Exception as exc:
+        return {
+            "valid": False,
+            "controls_compliant": False,
+            "errors": [str(exc)],
+        }
+
+    expected_profile_sha = sha256_file(
+        profile_path
+        or ASSURANCE_ROOT / "windows-native-sandbox-profile-v0.1.json"
+    )
+    if observation["profile_sha256"] != expected_profile_sha:
+        errors.append("Windows native run profile digest mismatch")
+
+    arm = observation["arm"]
+    if arm not in ("control", "non-admin", "high-nist"):
+        errors.append(f"unknown arm {arm!r}")
+
+    from .windows_sandbox import run_observation_checks_for_arm
+
+    required_checks = set(run_observation_checks_for_arm(arm))
+    observed_keys = set(observation["checks"].keys())
+    if not observed_keys >= required_checks:
+        missing = sorted(required_checks - observed_keys)
+        errors.append(f"run observation missing required checks: {missing}")
+    all_required_true = observed_keys >= required_checks and all(
+        observation["checks"].get(name) is True for name in required_checks
+    )
+
+    if arm != "control":
+        token = observation["token"]
+        if require_compliant:
+            if not token["restricted"]:
+                errors.append("compliant run requires a restricted token spawn")
+            if token["virtualization_allowed"]:
+                errors.append("compliant run requires token virtualization disabled")
+            if not token["privileges_removed"]:
+                errors.append("compliant run requires restricted privileges")
+        if arm == "high-nist" and require_compliant:
+            if not token["low_integrity"]:
+                errors.append("compliant high-nist run requires LOW integrity")
+            if not token["appcontainer"]:
+                errors.append("compliant high-nist run requires AppContainer token")
+    elif require_compliant and observation["token"]["restricted"]:
+        errors.append("control arm must not spawn with a restricted token")
+
+    ac = observation["appcontainer"]
+    if arm == "high-nist":
+        if not ac["sid_derived"] and not ac["profile_created"]:
+            errors.append("high-nist run must derive or create AppContainer SID")
+        if ac["profile_created"] and not ac["profile_deleted"]:
+            errors.append("AppContainer profile was created but not deleted")
+    if ac["capabilities"]:
+        errors.append("AppContainer capabilities must be empty for network isolation")
+
+    jo = observation["job_object"]
+    if not jo["created"]:
+        errors.append("run environment requires Job Object creation")
+    if not jo["assigned"]:
+        errors.append("Job Object must be assigned to the spawned process")
+    if not jo["kill_on_close"]:
+        errors.append("Job Object must be kill-on-close")
+    if jo["memory_limit_bytes"] != profile["resources"]["memory_bytes"]:
+        errors.append("Job Object memory limit mismatch")
+    if jo["active_process_limit"] != profile["resources"]["pids_limit"]:
+        errors.append("Job Object active-process limit mismatch")
+
+    firewall = observation["firewall"]
+    if arm == "high-nist":
+        if not firewall["outbound_block_rule_created"]:
+            errors.append(
+                "high-nist run requires an egress wall "
+                "(block rule, or per-task allowlist rules that were "
+                "actually created)"
+            )
+
+    proc = observation["process"]
+    if proc["shell_used"]:
+        errors.append("run environment must not use shell")
+
+    if require_compliant and not all_required_true:
+        errors.append("run observation overstates compliance (checks not all true)")
+    if not require_compliant and all_required_true:
+        errors.append("run observation understates compliance (checks all true)")
+
+    return {
+        "valid": not errors,
+        "controls_compliant": all_required_true,
+        "errors": errors,
+    }

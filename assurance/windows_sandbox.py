@@ -7,6 +7,7 @@ import json
 import os
 from pathlib import Path
 import subprocess
+import threading
 from typing import Any
 import uuid
 
@@ -27,6 +28,7 @@ PROBE_FILE = ".p2-windows-write-probe"
 
 JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE = 0x00002000
 JOB_OBJECT_LIMIT_JOB_MEMORY_LIMIT = 0x00000200
+JOB_OBJECT_LIMIT_ACTIVE_PROCESS = 0x00000008
 JOB_OBJECT_EXTENDED_LIMIT_INFORMATION_CLASS = 9
 
 PROC_THREAD_ATTRIBUTE_SECURITY_CAPABILITIES = 0x00020009
@@ -604,7 +606,10 @@ def _load_probe_result_checks(
     return out
 
 
-def _create_kill_on_close_job(memory_limit_bytes: int) -> wintypes.HANDLE | None:
+def _create_kill_on_close_job(
+    memory_limit_bytes: int,
+    active_process_limit: int | None = None,
+) -> wintypes.HANDLE | None:
     if os.name != "nt":
         return None
     kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
@@ -625,6 +630,9 @@ def _create_kill_on_close_job(memory_limit_bytes: int) -> wintypes.HANDLE | None
         JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE | JOB_OBJECT_LIMIT_JOB_MEMORY_LIMIT
     )
     limits.JobMemoryLimit = memory_limit_bytes
+    if active_process_limit is not None:
+        limits.BasicLimitInformation.LimitFlags |= JOB_OBJECT_LIMIT_ACTIVE_PROCESS
+        limits.BasicLimitInformation.ActiveProcessLimit = int(active_process_limit)
     succeeded = kernel32.SetInformationJobObject(
         wintypes.HANDLE(handle),
         JOB_OBJECT_EXTENDED_LIMIT_INFORMATION_CLASS,
@@ -1293,3 +1301,1478 @@ def windows_native_candidate_from_observation(
             else ["windows_native_observation_noncompliant"]
         ),
     }
+
+
+# ---------------------------------------------------------------------------
+# P0-0l ② Windows 加固运行环境（restricted token / LOW IL / AppContainer /
+# Job Object 下 spawn 任意命令树）。探针（run_windows_native_sandbox_probe）
+# 保持原样；这里新增的是“运行环境”入口，供 enforcement-probe 与 orz 命令树
+# 在加固态下被拉起。所有 spawn 期断言（token/完整性/AppContainer/Job/临时
+# 目录重定向）进入 run observation；行为级墙断言（System32/Program Files/
+# HKLM/home/网络等）由 enforcement_probe.ps1 在墙内执行。
+# ---------------------------------------------------------------------------
+
+WINDOWS_RUN_ARMS = ("control", "non-admin", "high-nist")
+
+# Privilege·non-admin：受限 token 移除的特权（设计 §3）。
+WINDOWS_RUN_RESTRICTED_PRIVILEGES = (
+    "SeDebugPrivilege",
+    "SeBackupPrivilege",
+    "SeRestorePrivilege",
+    "SeTakeOwnershipPrivilege",
+    "SeLoadDriverPrivilege",
+    "SeCreateSymbolicLinkPrivilege",
+)
+
+# 受限 token：禁用/deny-only BUILTIN\Administrators（S-1-5-32-544）。
+WINDOWS_RUN_DISABLE_SIDS = ("S-1-5-32-544",)
+WINDOWS_RUN_DENY_ONLY_SIDS = ("S-1-5-32-544",)
+
+TOKEN_DUPLICATE = 0x0002
+TOKEN_ASSIGN_PRIMARY = 0x0001
+TOKEN_ADJUST_DEFAULT = 0x0080
+TOKEN_ALL_ACCESS = 0x000F01FF
+
+TokenVirtualizationAllowed = 24
+TokenIntegrityLevel = 25
+TokenGroups = 2
+TokenPrivileges = 3
+
+SE_GROUP_ENABLED = 0x00000004
+SE_GROUP_INTEGRITY = 0x00000020
+SecurityImpersonation = 2
+TokenPrimary = 1
+SECURITY_MANDATORY_LOW_RID = 0x1000  # 4096 = Low integrity
+
+STARTF_USESTDHANDLES = 0x00000100
+HANDLE_FLAG_INHERIT = 0x00000001
+
+# 每臂 run observation 的 checks 集合（spawn 期 + harness 侧事实）。
+# 行为级断言见 _windows_high_nist/policy/enforcement_probe.ps1。
+WINDOWS_RUN_OBSERVATION_CHECKS: dict[str, tuple[str, ...]] = {
+    "control": ("workspace_writable",),
+    "non-admin": (
+        "workspace_writable",
+        "non_admin",
+        "token_virtualization_disabled",
+        "privileges_removed",
+    ),
+    "high-nist": (
+        "workspace_writable",
+        "non_admin",
+        "token_virtualization_disabled",
+        "privileges_removed",
+        "low_integrity",
+        "appcontainer_token",
+        "temp_redirected",
+        "job_object_assigned",
+    ),
+}
+
+
+def build_restricted_token_spec(arm: str) -> dict[str, Any]:
+    """Return the restricted-token spec applied for the arm (pure, testable)."""
+    if arm == "control":
+        return {
+            "disable_sids": [],
+            "deny_only_sids": [],
+            "remove_privileges": [],
+            "low_integrity": False,
+            "appcontainer": False,
+            "virtualization_allowed": True,
+        }
+    if arm not in WINDOWS_RUN_ARMS:
+        raise AssuranceError(f"unknown arm {arm!r} (expected {WINDOWS_RUN_ARMS})")
+    spec: dict[str, Any] = {
+        "disable_sids": list(WINDOWS_RUN_DISABLE_SIDS),
+        "deny_only_sids": list(WINDOWS_RUN_DENY_ONLY_SIDS),
+        "remove_privileges": list(WINDOWS_RUN_RESTRICTED_PRIVILEGES),
+        "low_integrity": arm == "high-nist",
+        "appcontainer": arm == "high-nist",
+        "virtualization_allowed": False,
+    }
+    return spec
+
+
+def run_observation_checks_for_arm(arm: str) -> tuple[str, ...]:
+    if arm not in WINDOWS_RUN_ARMS:
+        raise AssuranceError(f"unknown arm {arm!r} (expected {WINDOWS_RUN_ARMS})")
+    return WINDOWS_RUN_OBSERVATION_CHECKS[arm]
+
+
+class _LUID(ctypes.Structure):
+    _fields_ = [
+        ("LowPart", wintypes.DWORD),
+        ("HighPart", wintypes.LONG),
+    ]
+
+
+class _LUID_AND_ATTRIBUTES(ctypes.Structure):
+    _fields_ = [
+        ("Luid", _LUID),
+        ("Attributes", wintypes.DWORD),
+    ]
+
+
+class _SID_AND_ATTRIBUTES(ctypes.Structure):
+    _fields_ = [
+        ("Sid", ctypes.c_void_p),
+        ("Attributes", wintypes.DWORD),
+    ]
+
+
+class _TOKEN_MANDATORY_LABEL(ctypes.Structure):
+    _fields_ = [("Label", _SID_AND_ATTRIBUTES)]
+
+
+def _make_token_groups(n: int):
+    class _TokenGroups(ctypes.Structure):
+        _fields_ = [
+            ("GroupCount", wintypes.DWORD),
+            ("Groups", _SID_AND_ATTRIBUTES * max(n, 1)),
+        ]
+
+    return _TokenGroups
+
+
+def _make_token_privileges(n: int):
+    class _TokenPrivileges(ctypes.Structure):
+        _fields_ = [
+            ("PrivilegeCount", wintypes.DWORD),
+            ("Privileges", _LUID_AND_ATTRIBUTES * max(n, 1)),
+        ]
+
+    return _TokenPrivileges
+
+
+def _string_sid_to_ptr(
+    sid_string: str, *, diagnostics: list[str] | None = None
+) -> ctypes.c_void_p | None:
+    if os.name != "nt":
+        return None
+    try:
+        advapi32 = ctypes.WinDLL("advapi32", use_last_error=True)
+        advapi32.StringSidToSidW.argtypes = [
+            wintypes.LPCWSTR,
+            ctypes.POINTER(ctypes.c_void_p),
+        ]
+        advapi32.StringSidToSidW.restype = wintypes.BOOL
+        sid_ptr = ctypes.c_void_p()
+        if not advapi32.StringSidToSidW(sid_string, ctypes.byref(sid_ptr)):
+            return None
+        return sid_ptr
+    except OSError as exc:
+        if diagnostics is not None:
+            diagnostics.append(f"StringSidToSidW({sid_string}) failed: {exc}")
+        return None
+
+
+def _lookup_privilege_luid(
+    name: str, *, diagnostics: list[str] | None = None
+) -> _LUID | None:
+    if os.name != "nt":
+        return None
+    try:
+        advapi32 = ctypes.WinDLL("advapi32", use_last_error=True)
+        advapi32.LookupPrivilegeValueW.argtypes = [
+            wintypes.LPCWSTR,
+            wintypes.LPCWSTR,
+            ctypes.POINTER(_LUID),
+        ]
+        advapi32.LookupPrivilegeValueW.restype = wintypes.BOOL
+        luid = _LUID()
+        if not advapi32.LookupPrivilegeValueW(None, name, ctypes.byref(luid)):
+            return None
+        return luid
+    except OSError as exc:
+        if diagnostics is not None:
+            diagnostics.append(f"LookupPrivilegeValueW({name}) failed: {exc}")
+        return None
+
+
+def _set_token_virtualization(
+    token: wintypes.HANDLE,
+    enabled: bool,
+    *,
+    diagnostics: list[str] | None = None,
+) -> bool:
+    if os.name != "nt" or not token:
+        return False
+    try:
+        advapi32 = ctypes.WinDLL("advapi32", use_last_error=True)
+        advapi32.SetTokenInformation.argtypes = [
+            wintypes.HANDLE,
+            ctypes.c_int,
+            ctypes.c_void_p,
+            wintypes.DWORD,
+        ]
+        advapi32.SetTokenInformation.restype = wintypes.BOOL
+        value = wintypes.BOOL(bool(enabled))
+        return bool(
+            advapi32.SetTokenInformation(
+                token,
+                TokenVirtualizationAllowed,
+                ctypes.byref(value),
+                ctypes.sizeof(value),
+            )
+        )
+    except OSError as exc:
+        if diagnostics is not None:
+            diagnostics.append(f"SetTokenInformation(virtualization) failed: {exc}")
+        return False
+
+
+def _set_token_integrity(
+    token: wintypes.HANDLE,
+    rid: int = SECURITY_MANDATORY_LOW_RID,
+    *,
+    diagnostics: list[str] | None = None,
+) -> bool:
+    if os.name != "nt" or not token:
+        return False
+    sid = ctypes.c_void_p()
+    try:
+        advapi32 = ctypes.WinDLL("advapi32", use_last_error=True)
+        authority = (ctypes.c_ubyte * 6)(0, 0, 0, 0, 0, 16)
+        advapi32.AllocateAndInitializeSid.argtypes = [
+            ctypes.POINTER(ctypes.c_ubyte * 6),
+        ] + [wintypes.DWORD] * 8 + [ctypes.POINTER(ctypes.c_void_p)]
+        advapi32.AllocateAndInitializeSid.restype = wintypes.BOOL
+        if not advapi32.AllocateAndInitializeSid(
+            authority,
+            1,
+            rid,
+            0, 0, 0, 0, 0, 0, 0,
+            ctypes.byref(sid),
+        ):
+            return False
+        label = _TOKEN_MANDATORY_LABEL()
+        label.Label.Sid = sid
+        label.Label.Attributes = SE_GROUP_INTEGRITY
+        advapi32.SetTokenInformation.argtypes = [
+            wintypes.HANDLE,
+            ctypes.c_int,
+            ctypes.c_void_p,
+            wintypes.DWORD,
+        ]
+        advapi32.SetTokenInformation.restype = wintypes.BOOL
+        return bool(
+            advapi32.SetTokenInformation(
+                token,
+                TokenIntegrityLevel,
+                ctypes.byref(label),
+                ctypes.sizeof(label),
+            )
+        )
+    except OSError as exc:
+        if diagnostics is not None:
+            diagnostics.append(f"SetTokenInformation(integrity) failed: {exc}")
+        return False
+    finally:
+        if sid:
+            _free_sid(sid, diagnostics=diagnostics)
+
+
+def _create_restricted_token(
+    spec: dict[str, Any], *, diagnostics: list[str] | None = None
+) -> wintypes.HANDLE | None:
+    """CreateRestrictedToken from the current process token per the arm spec."""
+    if os.name != "nt":
+        return None
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    advapi32 = ctypes.WinDLL("advapi32", use_last_error=True)
+    current = wintypes.HANDLE()
+    kernel32.OpenProcessToken.argtypes = [
+        wintypes.HANDLE,
+        wintypes.DWORD,
+        ctypes.POINTER(wintypes.HANDLE),
+    ]
+    kernel32.OpenProcessToken.restype = wintypes.BOOL
+    if not kernel32.OpenProcessToken(
+        kernel32.GetCurrentProcess(),
+        TOKEN_DUPLICATE | TOKEN_QUERY | TOKEN_ASSIGN_PRIMARY | TOKEN_ADJUST_DEFAULT,
+        ctypes.byref(current),
+    ):
+        if diagnostics is not None:
+            diagnostics.append(
+                f"OpenProcessToken failed: {ctypes.WinError(ctypes.get_last_error())}"
+            )
+        return None
+    allocated: list[ctypes.c_void_p] = []
+    try:
+        disable_sids: list[ctypes.c_void_p] = []
+        for sid_string in spec.get("disable_sids", []):
+            sid = _string_sid_to_ptr(sid_string, diagnostics=diagnostics)
+            if sid:
+                disable_sids.append(sid)
+        allocated.extend(disable_sids)
+
+        groups = None
+        if disable_sids:
+            GroupsCls = _make_token_groups(len(disable_sids))
+            groups = GroupsCls()
+            groups.GroupCount = len(disable_sids)
+            for index, sid in enumerate(disable_sids):
+                groups.Groups[index].Sid = sid
+                groups.Groups[index].Attributes = 0
+
+        privileges = None
+        if spec.get("remove_privileges"):
+            # Compact the LUID list: failed lookups must not leave gaps that
+            # CreateRestrictedToken would interpret as a different privilege.
+            resolved: list[tuple[str, _LUID]] = []
+            for name in spec["remove_privileges"]:
+                luid = _lookup_privilege_luid(name, diagnostics=diagnostics)
+                if luid is not None:
+                    resolved.append((name, luid))
+            PrivilegesCls = _make_token_privileges(len(resolved))
+            privileges = PrivilegesCls()
+            privileges.PrivilegeCount = len(resolved)
+            for index, (_, luid) in enumerate(resolved):
+                privileges.Privileges[index].Luid = luid
+                privileges.Privileges[index].Attributes = 0
+
+        new_token = wintypes.HANDLE()
+        advapi32.CreateRestrictedToken.argtypes = [
+            wintypes.HANDLE,
+            wintypes.DWORD,
+            wintypes.DWORD,
+            ctypes.c_void_p,
+            wintypes.DWORD,
+            ctypes.c_void_p,
+            wintypes.DWORD,
+            ctypes.c_void_p,
+            ctypes.POINTER(wintypes.HANDLE),
+        ]
+        advapi32.CreateRestrictedToken.restype = wintypes.BOOL
+        ok = advapi32.CreateRestrictedToken(
+            current,
+            0,
+            groups.GroupCount if groups else 0,
+            ctypes.addressof(groups) if groups else None,
+            privileges.PrivilegeCount if privileges else 0,
+            ctypes.addressof(privileges) if privileges else None,
+            0,
+            None,
+            ctypes.byref(new_token),
+        )
+        if not ok:
+            if diagnostics is not None:
+                diagnostics.append(
+                    "CreateRestrictedToken failed: "
+                    f"{ctypes.WinError(ctypes.get_last_error())}"
+                )
+            return None
+        if not spec.get("virtualization_allowed", True):
+            if not _set_token_virtualization(
+                new_token, False, diagnostics=diagnostics
+            ):
+                if diagnostics is not None:
+                    diagnostics.append(
+                        "TokenVirtualizationAllowed=0 could not be set on "
+                        "restricted token (fail-closed at check time)"
+                    )
+        return wintypes.HANDLE(new_token)
+    finally:
+        for sid in allocated:
+            _free_sid(sid, diagnostics=diagnostics)
+        kernel32.CloseHandle(current)
+
+
+def _duplicate_token_primary(
+    token: wintypes.HANDLE, *, diagnostics: list[str] | None = None
+) -> wintypes.HANDLE | None:
+    if os.name != "nt" or not token:
+        return None
+    try:
+        advapi32 = ctypes.WinDLL("advapi32", use_last_error=True)
+        advapi32.DuplicateTokenEx.argtypes = [
+            wintypes.HANDLE,
+            wintypes.DWORD,
+            ctypes.c_void_p,
+            ctypes.c_int,
+            ctypes.c_int,
+            ctypes.POINTER(wintypes.HANDLE),
+        ]
+        advapi32.DuplicateTokenEx.restype = wintypes.BOOL
+        primary = wintypes.HANDLE()
+        if not advapi32.DuplicateTokenEx(
+            token,
+            TOKEN_ALL_ACCESS,
+            None,
+            SecurityImpersonation,
+            TokenPrimary,
+            ctypes.byref(primary),
+        ):
+            if diagnostics is not None:
+                diagnostics.append(
+                    "DuplicateTokenEx(primary) failed: "
+                    f"{ctypes.WinError(ctypes.get_last_error())}"
+                )
+            return None
+        return wintypes.HANDLE(primary)
+    except OSError as exc:
+        if diagnostics is not None:
+            diagnostics.append(f"DuplicateTokenEx exception: {exc}")
+        return None
+
+
+def _get_token_information(
+    token: wintypes.HANDLE,
+    info_class: int,
+    size: int,
+    *,
+    diagnostics: list[str] | None = None,
+) -> bytes | None:
+    if os.name != "nt" or not token:
+        return None
+    try:
+        advapi32 = ctypes.WinDLL("advapi32", use_last_error=True)
+        advapi32.GetTokenInformation.argtypes = [
+            wintypes.HANDLE,
+            ctypes.c_int,
+            ctypes.c_void_p,
+            wintypes.DWORD,
+            ctypes.POINTER(wintypes.DWORD),
+        ]
+        advapi32.GetTokenInformation.restype = wintypes.BOOL
+        needed = wintypes.DWORD()
+        ok = advapi32.GetTokenInformation(
+            token, info_class, None, 0, ctypes.byref(needed)
+        )
+        if not ok and ctypes.get_last_error() != 122:  # ERROR_INSUFFICIENT_BUFFER
+            return None
+        buf = ctypes.create_string_buffer(max(needed.value, size))
+        ret_len = wintypes.DWORD()
+        if not advapi32.GetTokenInformation(
+            token,
+            info_class,
+            ctypes.cast(buf, ctypes.c_void_p),
+            len(buf),
+            ctypes.byref(ret_len),
+        ):
+            return None
+        return buf.raw[: ret_len.value]
+    except OSError as exc:
+        if diagnostics is not None:
+            diagnostics.append(
+                f"GetTokenInformation(class={info_class}) failed: {exc}"
+            )
+        return None
+
+
+def _token_bool(
+    token: wintypes.HANDLE,
+    info_class: int,
+    *,
+    diagnostics: list[str] | None = None,
+) -> bool | None:
+    raw = _get_token_information(token, info_class, 4, diagnostics=diagnostics)
+    if raw is None or len(raw) < 4:
+        return None
+    return bool(int.from_bytes(raw[:4], "little"))
+
+
+def _token_integrity_rid(
+    token: wintypes.HANDLE, *, diagnostics: list[str] | None = None
+) -> int | None:
+    raw = _get_token_information(
+        token, TokenIntegrityLevel, ctypes.sizeof(_TOKEN_MANDATORY_LABEL),
+        diagnostics=diagnostics,
+    )
+    if raw is None or len(raw) < ctypes.sizeof(_TOKEN_MANDATORY_LABEL):
+        return None
+    label = _TOKEN_MANDATORY_LABEL.from_buffer_copy(
+        raw[: ctypes.sizeof(_TOKEN_MANDATORY_LABEL)]
+    )
+    sid = label.Label.Sid
+    if not sid:
+        return None
+    try:
+        advapi32 = ctypes.WinDLL("advapi32", use_last_error=True)
+        advapi32.GetSidSubAuthorityCount.argtypes = [ctypes.c_void_p]
+        advapi32.GetSidSubAuthorityCount.restype = ctypes.POINTER(ctypes.c_ubyte)
+        advapi32.GetSidSubAuthority.argtypes = [ctypes.c_void_p, wintypes.DWORD]
+        advapi32.GetSidSubAuthority.restype = ctypes.POINTER(wintypes.DWORD)
+        count_ptr = advapi32.GetSidSubAuthorityCount(sid)
+        if not count_ptr:
+            return None
+        count = count_ptr.contents.value
+        if count < 1:
+            return None
+        sub = advapi32.GetSidSubAuthority(sid, count - 1)
+        if not sub:
+            return None
+        return int(sub.contents.value)
+    except OSError as exc:
+        if diagnostics is not None:
+            diagnostics.append(f"integrity RID query failed: {exc}")
+        return None
+
+
+def _token_has_enabled_group(
+    token: wintypes.HANDLE,
+    sid_string: str,
+    *,
+    diagnostics: list[str] | None = None,
+) -> bool | None:
+    raw = _get_token_information(token, TokenGroups, 0, diagnostics=diagnostics)
+    if raw is None or len(raw) < 4:
+        return None
+    count = int.from_bytes(raw[:4], "little")
+    pointer_size = ctypes.sizeof(ctypes.c_void_p)
+    groups_offset = 8 if pointer_size == 8 else 4
+    entry_size = ctypes.sizeof(_SID_AND_ATTRIBUTES)
+    for index in range(count):
+        start = groups_offset + index * entry_size
+        if start + entry_size > len(raw):
+            break
+        sid_ptr = int.from_bytes(raw[start : start + pointer_size], "little")
+        attributes = int.from_bytes(
+            raw[start + pointer_size : start + pointer_size + 4], "little"
+        )
+        if not sid_ptr:
+            continue
+        sid = ctypes.c_void_p(sid_ptr)
+        current = _appcontainer_sid_to_string(sid)
+        if current == sid_string and (attributes & SE_GROUP_ENABLED):
+            return True
+    return False
+
+
+def _token_enabled_privileges(
+    token: wintypes.HANDLE, *, diagnostics: list[str] | None = None
+) -> list[str]:
+    raw = _get_token_information(token, TokenPrivileges, 0, diagnostics=diagnostics)
+    if raw is None or len(raw) < 4:
+        return []
+    count = int.from_bytes(raw[:4], "little")
+    entry_size = ctypes.sizeof(_LUID_AND_ATTRIBUTES)
+    privileges_offset = 4
+    names: list[str] = []
+    for index in range(count):
+        start = privileges_offset + index * entry_size
+        if start + entry_size > len(raw):
+            break
+        luid = _LUID()
+        luid.LowPart = int.from_bytes(raw[start : start + 4], "little")
+        luid.HighPart = int.from_bytes(
+            raw[start + 4 : start + 8], "little", signed=True
+        )
+        attributes = int.from_bytes(raw[start + 8 : start + 12], "little")
+        if not (attributes & SE_GROUP_ENABLED):
+            continue
+        name = _privilege_name_from_luid(luid, diagnostics=diagnostics)
+        if name:
+            names.append(name)
+    return names
+
+
+def _privilege_name_from_luid(
+    luid: _LUID, *, diagnostics: list[str] | None = None
+) -> str | None:
+    if os.name != "nt":
+        return None
+    try:
+        advapi32 = ctypes.WinDLL("advapi32", use_last_error=True)
+        advapi32.LookupPrivilegeNameW.argtypes = [
+            wintypes.LPCWSTR,
+            ctypes.POINTER(_LUID),
+            wintypes.LPWSTR,
+            ctypes.POINTER(wintypes.DWORD),
+        ]
+        advapi32.LookupPrivilegeNameW.restype = wintypes.BOOL
+        size = wintypes.DWORD(0)
+        advapi32.LookupPrivilegeNameW(None, ctypes.byref(luid), None, ctypes.byref(size))
+        if size.value == 0:
+            return None
+        buf = ctypes.create_unicode_buffer(size.value)
+        if not advapi32.LookupPrivilegeNameW(
+            None, ctypes.byref(luid), buf, ctypes.byref(size)
+        ):
+            return None
+        return buf.value
+    except OSError as exc:
+        if diagnostics is not None:
+            diagnostics.append(f"LookupPrivilegeNameW failed: {exc}")
+        return None
+
+
+def _grant_workspace_access_current_user(
+    workspace: Path, *, diagnostics: list[str] | None = None
+) -> bool:
+    if os.name != "nt":
+        return False
+    username = os.environ.get("USERNAME", "")
+    userdomain = os.environ.get("USERDOMAIN", "")
+    if not username:
+        return False
+    account = f"{userdomain}\\{username}" if userdomain else username
+    try:
+        result = subprocess.run(
+            ["icacls", str(workspace), "/grant", f"{account}:(OI)(CI)(M)"],
+            capture_output=True,
+            shell=False,
+            timeout=15,
+        )
+        return result.returncode == 0
+    except Exception as exc:
+        if diagnostics is not None:
+            diagnostics.append(
+                f"icacls grant for {workspace} to {account} failed: {exc}"
+            )
+        return False
+
+
+def _build_sandbox_env(
+    workspace: Path, arm: str, extra: dict[str, str] | None
+) -> dict[str, str]:
+    env = dict(os.environ)
+    if arm == "high-nist":
+        tmp = workspace / ".tmp"
+        tmp.mkdir(parents=True, exist_ok=True)
+        env["TEMP"] = str(tmp)
+        env["TMP"] = str(tmp)
+    if extra:
+        env.update(extra)
+    return env
+
+
+def _build_environment_block(env: dict[str, str]) -> bytes:
+    items: list[str] = []
+    for key, value in env.items():
+        if not key or "=" in key or "\x00" in key:
+            continue
+        if "\x00" in str(value):
+            continue
+        items.append(f"{key}={value}")
+    return ("\x00".join(items) + "\x00\x00").encode("utf-16-le")
+
+
+def _command_line_from(command: list[str] | str) -> str:
+    if isinstance(command, str):
+        return command
+    return subprocess.list2cmdline([str(item) for item in command])
+
+
+def _create_anonymous_pipe() -> tuple[wintypes.HANDLE, wintypes.HANDLE] | None:
+    if os.name != "nt":
+        return None
+    try:
+        kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        kernel32.CreatePipe.argtypes = [
+            ctypes.POINTER(wintypes.HANDLE),
+            ctypes.POINTER(wintypes.HANDLE),
+            ctypes.c_void_p,
+            wintypes.DWORD,
+        ]
+        kernel32.CreatePipe.restype = wintypes.BOOL
+        read_h = wintypes.HANDLE()
+        write_h = wintypes.HANDLE()
+        if not kernel32.CreatePipe(ctypes.byref(read_h), ctypes.byref(write_h), None, 0):
+            return None
+        kernel32.SetHandleInformation.argtypes = [
+            wintypes.HANDLE, wintypes.DWORD, wintypes.DWORD,
+        ]
+        kernel32.SetHandleInformation.restype = wintypes.BOOL
+        kernel32.SetHandleInformation(write_h, HANDLE_FLAG_INHERIT, HANDLE_FLAG_INHERIT)
+        kernel32.SetHandleInformation(read_h, HANDLE_FLAG_INHERIT, 0)
+        return read_h, write_h
+    except OSError as exc:
+        return None
+
+
+def _open_nul_read() -> wintypes.HANDLE | None:
+    if os.name != "nt":
+        return None
+    try:
+        kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        kernel32.CreateFileW.argtypes = [
+            wintypes.LPCWSTR,
+            wintypes.DWORD,
+            wintypes.DWORD,
+            ctypes.c_void_p,
+            wintypes.DWORD,
+            wintypes.DWORD,
+            wintypes.HANDLE,
+        ]
+        kernel32.CreateFileW.restype = wintypes.HANDLE
+        handle = kernel32.CreateFileW(
+            "NUL", 0x80000000, 0x3, None, 3, 0, None
+        )
+        return wintypes.HANDLE(handle) if handle else None
+    except OSError:
+        return None
+
+
+def _drain_pipe_handle(
+    handle: wintypes.HANDLE, sink: list[bytes]
+) -> None:
+    if not handle:
+        return
+    try:
+        import msvcrt
+
+        fd = msvcrt.open_osfhandle(int(handle), os.O_RDONLY)
+        with os.fdopen(fd, "rb", 65536) as stream:
+            while True:
+                chunk = stream.read(65536)
+                if not chunk:
+                    break
+                sink.append(chunk)
+    except OSError:
+        pass
+
+
+def _create_egress_allow_rules(
+    allowlist_ips: list[str], *, diagnostics: list[str] | None = None
+) -> bool:
+    """Add per-IP outbound allow rules (host must use blockoutbound default).
+
+    Windows Firewall semantics: block rules win over allow rules, so a blanket
+    block-all rule would swallow the allowlist.  The hardening script therefore
+    sets the host default outbound policy to block, and the run environment only
+    adds allow rules for the per-task allowlist (design §3 Network row).
+    """
+    if os.name != "nt":
+        return False
+    if not _is_elevated():
+        if diagnostics is not None:
+            diagnostics.append(
+                "egress allowlist rules require administrator elevation"
+            )
+        return False
+    ok = True
+    for ip in allowlist_ips:
+        rule_name = f"{_FIREWALL_RULE_PREFIX}-Allow-{ip}"
+        try:
+            result = subprocess.run(
+                [
+                    "netsh", "advfirewall", "firewall", "add", "rule",
+                    f"name={rule_name}",
+                    "dir=out",
+                    "action=allow",
+                    f"remoteip={ip}",
+                    "profile=any",
+                    "enable=yes",
+                ],
+                capture_output=True,
+                shell=False,
+                timeout=15,
+            )
+            if result.returncode != 0:
+                ok = False
+                out = (result.stdout or b"").decode(
+                    "utf-8", errors="replace"
+                ).strip()
+                err = (result.stderr or b"").decode(
+                    "utf-8", errors="replace"
+                ).strip()
+                if diagnostics is not None:
+                    diagnostics.append(
+                        f"allow rule {ip} failed (rc={result.returncode}): "
+                        f"{out[:160]} {err[:160]}"
+                    )
+        except Exception as exc:
+            ok = False
+            if diagnostics is not None:
+                diagnostics.append(f"allow rule {ip} failed: {exc}")
+    return ok
+
+
+def _delete_egress_allow_rules(
+    allowlist_ips: list[str], *, diagnostics: list[str] | None = None
+) -> None:
+    if os.name != "nt":
+        return
+    for ip in allowlist_ips:
+        _delete_firewall_rule(
+            f"{_FIREWALL_RULE_PREFIX}-Allow-{ip}", diagnostics=diagnostics
+        )
+
+
+def run_windows_native_sandbox(
+    command: list[str] | str,
+    workspace: Path,
+    *,
+    arm: str = "high-nist",
+    profile_path: Path | None = None,
+    cwd: Path | None = None,
+    env: dict[str, str] | None = None,
+    timeout_seconds: int | None = None,
+    memory_limit_bytes: int | None = None,
+    allowlist_ips: list[str] | None = None,
+    capture_output: bool = True,
+) -> dict[str, Any]:
+    """Spawn a command tree in the Windows hardened run environment.
+
+    arms:
+      control    — current token, no policy wall (still Job-contained).
+      non-admin  — restricted token (Administrators disabled/deny-only,
+                   six privileges removed, TokenVirtualizationAllowed=0).
+      high-nist  — non-admin + LOW integrity + AppContainer (empty
+                   capabilities) + Job Object + %TEMP% redirect + egress wall.
+
+    Returns a run observation (see windows-native-sandbox-run-v0.1.schema.json).
+    """
+    if os.name != "nt":
+        raise AssuranceError(
+            "Windows native sandbox run environment requires Windows"
+        )
+    if arm not in WINDOWS_RUN_ARMS:
+        raise AssuranceError(
+            f"unknown arm {arm!r} (expected control|non-admin|high-nist)"
+        )
+
+    profile = _load_windows_native_profile(profile_path)
+    resolved_workspace = _validate_disposable_workspace(workspace)
+    wall_timeout = (
+        int(timeout_seconds)
+        if timeout_seconds is not None
+        else int(profile["resources"]["wall_time_seconds"])
+    )
+    if wall_timeout <= 0:
+        wall_timeout = 1
+    memory_limit = (
+        int(memory_limit_bytes)
+        if memory_limit_bytes is not None
+        else int(profile["resources"]["memory_bytes"])
+    )
+
+    observation_id = f"WNR-{uuid.uuid4().hex.upper()}"
+    probe_diags: list[str] = []
+    command_line = _command_line_from(command)
+    cmd_env = _build_sandbox_env(resolved_workspace, arm, env)
+    run_cwd = (cwd or resolved_workspace).resolve()
+    env_block: bytes | None = None
+    if arm == "high-nist":
+        env_block = _build_environment_block(cmd_env)
+
+    app_name = f"p2_native_run_{uuid.uuid4().hex[:16]}"
+    appcontainer_sid: ctypes.c_void_p | None = None
+    profile_created = False
+    profile_deleted = False
+    sid_derived = False
+    job: wintypes.HANDLE | None = None
+    job_created = False
+    job_assigned = False
+    creation_time_job_assigned = False
+    firewall_rule_name: str | None = None
+    firewall_rule_created = False
+    firewall_diagnostic = "not attempted"
+    restricted_token: wintypes.HANDLE | None = None
+    primary_token: wintypes.HANDLE | None = None
+    process_handle: wintypes.HANDLE | None = None
+    thread_handle: wintypes.HANDLE | None = None
+    process_pid = 0
+    exit_code: int | None = None
+    timed_out = False
+    cancellation_method: str | None = None
+    ctrl_break_sent = False
+    ctrl_break_effective = False
+    read_pipe: wintypes.HANDLE | None = None
+    write_pipe: wintypes.HANDLE | None = None
+    err_read_pipe: wintypes.HANDLE | None = None
+    err_write_pipe: wintypes.HANDLE | None = None
+    nul_handle: wintypes.HANDLE | None = None
+    stdout_chunks: list[bytes] = []
+    stderr_chunks: list[bytes] = []
+    readers: list[threading.Thread] = []
+    checks: dict[str, bool] = {}
+    created_with_restricted_token = False
+    allowed_ips = list(allowlist_ips or [])
+
+    def _diag(message: str) -> None:
+        probe_diags.append(message)
+
+    try:
+        # Harness-side workspace writable fact（grant 后由宿主写探针文件）。
+        ws_probe = resolved_workspace / f".run-ws-probe-{uuid.uuid4().hex[:8]}"
+        try:
+            ws_probe.write_text("ok", encoding="utf-8")
+            ws_probe.unlink()
+            checks["workspace_writable"] = True
+        except OSError as exc:
+            checks["workspace_writable"] = False
+            _diag(f"workspace probe write failed: {exc}")
+
+        if arm != "control":
+            if not _grant_workspace_access_current_user(
+                resolved_workspace, diagnostics=probe_diags
+            ):
+                _diag("workspace user ACL grant failed (run user may lack access)")
+
+        if arm == "high-nist":
+            appcontainer_sid = _derive_appcontainer_sid(
+                app_name, diagnostics=probe_diags
+            )
+            if appcontainer_sid:
+                sid_derived = True
+            created_sid = _create_appcontainer_profile(
+                app_name, diagnostics=probe_diags
+            )
+            if created_sid:
+                if appcontainer_sid:
+                    _free_sid(appcontainer_sid, diagnostics=probe_diags)
+                appcontainer_sid = created_sid
+                profile_created = True
+            if not sid_derived and not profile_created:
+                raise AssuranceError(
+                    "Windows native run environment cannot derive or create "
+                    "AppContainer SID (high-nist arm)"
+                )
+            grant_ok = _grant_appcontainer_workspace_access(
+                resolved_workspace, appcontainer_sid, diagnostics=probe_diags
+            )
+            if not grant_ok:
+                _diag("AppContainer workspace ACL grant failed (fail-closed)")
+
+        if arm != "control":
+            spec = build_restricted_token_spec(arm)
+            restricted_token = _create_restricted_token(spec, diagnostics=probe_diags)
+            if restricted_token:
+                primary_token = _duplicate_token_primary(
+                    restricted_token, diagnostics=probe_diags
+                )
+            if arm == "high-nist" and primary_token:
+                if not _set_token_integrity(
+                    primary_token, SECURITY_MANDATORY_LOW_RID, diagnostics=probe_diags
+                ):
+                    _diag("LOW integrity level could not be set (fail-closed)")
+            if not primary_token:
+                _diag(
+                    "restricted token unavailable — degrading to current-token "
+                    "spawn (run observation will be noncompliant)"
+                )
+
+        job = _create_kill_on_close_job(
+            memory_limit,
+            active_process_limit=profile["resources"]["pids_limit"],
+        )
+        if job:
+            job_created = True
+
+        if arm == "high-nist":
+            if allowed_ips:
+                firewall_rule_created = _create_egress_allow_rules(
+                    allowed_ips, diagnostics=probe_diags
+                )
+                firewall_diagnostic = (
+                    "allowlist-rule mode; host firewall policy must be "
+                    "blockoutbound (apply_hardening.ps1 sets it)"
+                )
+            else:
+                sid_string = _appcontainer_sid_to_string(appcontainer_sid)
+                if sid_string:
+                    firewall_rule_name, firewall_rule_created, firewall_diagnostic = (
+                        _create_firewall_outbound_block_rule(app_name, sid_string)
+                    )
+
+        if capture_output:
+            out_pair = _create_anonymous_pipe()
+            if out_pair:
+                read_pipe, write_pipe = out_pair
+            err_pair = _create_anonymous_pipe()
+            if err_pair:
+                err_read_pipe, err_write_pipe = err_pair
+            nul_handle = _open_nul_read()
+
+        kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+
+        attr_count = 1 + (1 if job else 0)
+        attr_size = ctypes.c_size_t()
+        kernel32.InitializeProcThreadAttributeList.argtypes = [
+            ctypes.c_void_p,
+            wintypes.DWORD,
+            wintypes.DWORD,
+            ctypes.POINTER(ctypes.c_size_t),
+        ]
+        kernel32.InitializeProcThreadAttributeList.restype = wintypes.BOOL
+        if not kernel32.InitializeProcThreadAttributeList(
+            None, wintypes.DWORD(attr_count), 0, ctypes.byref(attr_size)
+        ):
+            raise AssuranceError("cannot query ProcThreadAttributeList size")
+        attr_list = ctypes.create_string_buffer(attr_size.value)
+        if not kernel32.InitializeProcThreadAttributeList(
+            ctypes.cast(attr_list, ctypes.c_void_p),
+            wintypes.DWORD(attr_count),
+            0,
+            ctypes.byref(attr_size),
+        ):
+            raise AssuranceError("cannot initialize ProcThreadAttributeList")
+
+        kernel32.UpdateProcThreadAttribute.argtypes = [
+            ctypes.c_void_p,
+            wintypes.DWORD,
+            ctypes.c_size_t,
+            ctypes.c_void_p,
+            ctypes.c_size_t,
+            ctypes.c_void_p,
+            ctypes.c_void_p,
+        ]
+        kernel32.UpdateProcThreadAttribute.restype = wintypes.BOOL
+
+        if arm == "high-nist":
+            sec_cap = SECURITY_CAPABILITIES()
+            sec_cap.AppContainerSid = appcontainer_sid
+            sec_cap.Capabilities = None
+            sec_cap.CapabilityCount = 0
+            sec_cap.Reserved = 0
+            if not kernel32.UpdateProcThreadAttribute(
+                ctypes.cast(attr_list, ctypes.c_void_p),
+                0,
+                ctypes.c_size_t(PROC_THREAD_ATTRIBUTE_SECURITY_CAPABILITIES),
+                ctypes.byref(sec_cap),
+                ctypes.sizeof(sec_cap),
+                None,
+                None,
+            ):
+                raise AssuranceError(
+                    "cannot set PROC_THREAD_ATTRIBUTE_SECURITY_CAPABILITIES"
+                )
+
+        if job:
+            if not kernel32.UpdateProcThreadAttribute(
+                ctypes.cast(attr_list, ctypes.c_void_p),
+                0,
+                ctypes.c_size_t(PROC_THREAD_ATTRIBUTE_JOB_LIST),
+                ctypes.byref(job),
+                ctypes.sizeof(wintypes.HANDLE),
+                None,
+                None,
+            ):
+                _diag(
+                    "PROC_THREAD_ATTRIBUTE_JOB_LIST not supported; "
+                    "falling back to post-creation AssignProcessToJobObject"
+                )
+            else:
+                creation_time_job_assigned = True
+
+        si_ex = STARTUPINFOEX()
+        si_ex.StartupInfo.cb = ctypes.sizeof(STARTUPINFOEX)
+        si_ex.lpAttributeList = ctypes.cast(attr_list, ctypes.c_void_p)
+        if capture_output and write_pipe:
+            si_ex.StartupInfo.dwFlags |= STARTF_USESTDHANDLES
+            si_ex.StartupInfo.hStdOutput = write_pipe
+            si_ex.StartupInfo.hStdError = err_write_pipe or write_pipe
+            si_ex.StartupInfo.hStdInput = nul_handle or wintypes.HANDLE(0)
+
+        proc_info = PROCESS_INFORMATION()
+        cmd_buf = ctypes.create_unicode_buffer(command_line)
+        creation_flags = (
+            EXTENDED_STARTUPINFO_PRESENT_FLAG
+            | CREATE_SUSPENDED_FLAG
+            | CREATE_NO_WINDOW_FLAG
+            | CREATE_NEW_PROCESS_GROUP_FLAG
+        )
+
+        spawn_ok = False
+        env_ptr = None
+        if primary_token:
+            # CreateProcessAsUserW: primary token + extended startup info
+            # (AppContainer attr for high-nist, Job list for all arms).
+            advapi32 = ctypes.WinDLL("advapi32", use_last_error=True)
+            advapi32.CreateProcessAsUserW.argtypes = [
+                wintypes.HANDLE,
+                wintypes.LPCWSTR,
+                wintypes.LPWSTR,
+                ctypes.c_void_p,
+                ctypes.c_void_p,
+                wintypes.BOOL,
+                wintypes.DWORD,
+                ctypes.c_void_p,
+                wintypes.LPCWSTR,
+                ctypes.c_void_p,
+                ctypes.POINTER(PROCESS_INFORMATION),
+            ]
+            advapi32.CreateProcessAsUserW.restype = wintypes.BOOL
+            env_ptr = (
+                ctypes.cast(ctypes.create_string_buffer(env_block), ctypes.c_void_p)
+                if env_block is not None
+                else None
+            )
+            spawn_ok = advapi32.CreateProcessAsUserW(
+                primary_token,
+                None,
+                cmd_buf,
+                None,
+                None,
+                True,
+                creation_flags,
+                env_ptr,
+                str(run_cwd),
+                ctypes.cast(ctypes.byref(si_ex), ctypes.c_void_p),
+                ctypes.byref(proc_info),
+            )
+            if spawn_ok:
+                created_with_restricted_token = True
+            else:
+                _diag(
+                    "CreateProcessAsUserW failed: "
+                    f"{ctypes.WinError(ctypes.get_last_error())}"
+                )
+
+        if not spawn_ok:
+            # Degraded fallback: current token + AppContainer attribute.
+            # Fail-closed: spawn-time checks will be false for restricted
+            # token facts, so the run observation is noncompliant.
+            kernel32.CreateProcessW.argtypes = [
+                wintypes.LPCWSTR,
+                wintypes.LPWSTR,
+                ctypes.c_void_p,
+                ctypes.c_void_p,
+                wintypes.BOOL,
+                wintypes.DWORD,
+                ctypes.c_void_p,
+                wintypes.LPCWSTR,
+                ctypes.c_void_p,
+                ctypes.POINTER(PROCESS_INFORMATION),
+            ]
+            kernel32.CreateProcessW.restype = wintypes.BOOL
+            spawn_ok = kernel32.CreateProcessW(
+                None,
+                cmd_buf,
+                None,
+                None,
+                True,
+                creation_flags,
+                env_ptr if env_block is not None else None,
+                str(run_cwd),
+                ctypes.cast(ctypes.byref(si_ex), ctypes.c_void_p),
+                ctypes.byref(proc_info),
+            )
+            if not spawn_ok:
+                raise AssuranceError(
+                    "Windows native run environment process creation failed: "
+                    f"{ctypes.WinError(ctypes.get_last_error())}"
+                )
+
+        kernel32.DeleteProcThreadAttributeList.argtypes = [ctypes.c_void_p]
+        kernel32.DeleteProcThreadAttributeList.restype = None
+        kernel32.DeleteProcThreadAttributeList(ctypes.cast(attr_list, ctypes.c_void_p))
+
+        process_handle = proc_info.hProcess
+        thread_handle = proc_info.hThread
+        process_pid = proc_info.dwProcessId
+
+        # Parent must close its write copy so readers see EOF when child exits.
+        if write_pipe:
+            _close_handle(write_pipe)
+            write_pipe = None
+        if err_write_pipe:
+            _close_handle(err_write_pipe)
+            err_write_pipe = None
+
+        if capture_output:
+            if read_pipe:
+                t_out = threading.Thread(
+                    target=_drain_pipe_handle, args=(read_pipe, stdout_chunks)
+                )
+                t_out.daemon = True
+                t_out.start()
+                readers.append(t_out)
+            if err_read_pipe:
+                t_err = threading.Thread(
+                    target=_drain_pipe_handle, args=(err_read_pipe, stderr_chunks)
+                )
+                t_err.daemon = True
+                t_err.start()
+                readers.append(t_err)
+
+        # Spawn-time verification before ResumeThread（fail-closed）。
+        proc_token = wintypes.HANDLE()
+        kernel32.OpenProcessToken.argtypes = [
+            wintypes.HANDLE,
+            wintypes.DWORD,
+            ctypes.POINTER(wintypes.HANDLE),
+        ]
+        kernel32.OpenProcessToken.restype = wintypes.BOOL
+        if kernel32.OpenProcessToken(
+            process_handle, TOKEN_QUERY, ctypes.byref(proc_token)
+        ):
+            try:
+                if arm != "control":
+                    checks["non_admin"] = not bool(
+                        _token_has_enabled_group(
+                            proc_token, "S-1-5-32-544", diagnostics=probe_diags
+                        )
+                    )
+                    virt = _token_bool(
+                        proc_token, TokenVirtualizationAllowed, diagnostics=probe_diags
+                    )
+                    checks["token_virtualization_disabled"] = virt is False
+                    enabled = _token_enabled_privileges(
+                        proc_token, diagnostics=probe_diags
+                    )
+                    checks["privileges_removed"] = not any(
+                        name in WINDOWS_RUN_RESTRICTED_PRIVILEGES for name in enabled
+                    )
+                if arm == "high-nist":
+                    rid = _token_integrity_rid(proc_token, diagnostics=probe_diags)
+                    checks["low_integrity"] = (
+                        rid is not None and rid <= SECURITY_MANDATORY_LOW_RID
+                    )
+                    checks["appcontainer_token"] = _process_token_is_appcontainer(
+                        process_handle, diagnostics=probe_diags
+                    )
+                    tmp_path = cmd_env.get("TEMP", "")
+                    checks["temp_redirected"] = bool(
+                        tmp_path
+                        and str(resolved_workspace / ".tmp").lower()
+                        == str(Path(tmp_path)).lower()
+                        and (resolved_workspace / ".tmp").is_dir()
+                    )
+            finally:
+                kernel32.CloseHandle(proc_token)
+        else:
+            _diag("could not open child token for spawn-time checks (fail-closed)")
+
+        if arm == "high-nist":
+            checks["job_object_assigned"] = _is_process_in_job(
+                process_handle, diagnostics=probe_diags
+            )
+        elif arm != "control":
+            # Job containment is required for all arms (process-tree cleanup).
+            checks["job_object_assigned"] = _is_process_in_job(
+                process_handle, diagnostics=probe_diags
+            )
+
+        if job:
+            if creation_time_job_assigned:
+                already_in = _is_process_in_job(
+                    process_handle, diagnostics=probe_diags
+                )
+                if already_in:
+                    job_assigned = True
+                else:
+                    _diag(
+                        "creation-time Job assignment did not take effect; "
+                        "attempting post-creation assignment"
+                    )
+                    job_assigned = _assign_process_to_job(job, process_handle)
+            else:
+                job_assigned = _assign_process_to_job(job, process_handle)
+            if not job_assigned:
+                _terminate_suspended_process(process_handle, thread_handle)
+                process_handle = None
+                thread_handle = None
+                raise AssuranceError(
+                    "Windows native run environment failed to assign process "
+                    "to Job Object"
+                )
+
+        kernel32.ResumeThread.argtypes = [wintypes.HANDLE]
+        kernel32.ResumeThread.restype = wintypes.DWORD
+        if kernel32.ResumeThread(thread_handle) == 0xFFFFFFFF:
+            err = ctypes.WinError(ctypes.get_last_error())
+            _terminate_suspended_process(process_handle, thread_handle)
+            process_handle = None
+            thread_handle = None
+            raise AssuranceError(f"Windows native run environment ResumeThread failed: {err}")
+        kernel32.CloseHandle(thread_handle)
+        thread_handle = None
+
+        kernel32.WaitForSingleObject.argtypes = [wintypes.HANDLE, wintypes.DWORD]
+        kernel32.WaitForSingleObject.restype = wintypes.DWORD
+        wait_result = kernel32.WaitForSingleObject(
+            process_handle, wintypes.DWORD(wall_timeout * 1000)
+        )
+
+        if wait_result == 0x00000102:
+            timed_out = True
+            cancellation_method = "timeout"
+            kernel32.GenerateConsoleCtrlEvent.argtypes = [
+                wintypes.DWORD,
+                wintypes.DWORD,
+            ]
+            kernel32.GenerateConsoleCtrlEvent.restype = wintypes.BOOL
+            ctrl_break_sent = kernel32.GenerateConsoleCtrlEvent(
+                wintypes.DWORD(CTRL_BREAK_EVENT),
+                wintypes.DWORD(process_pid),
+            )
+            _diag(f"CTRL_BREAK_EVENT sent={ctrl_break_sent} to pid={process_pid}")
+            if ctrl_break_sent:
+                grace_result = kernel32.WaitForSingleObject(
+                    process_handle, wintypes.DWORD(CANCEL_GRACE_SECONDS * 1000)
+                )
+                ctrl_break_effective = grace_result == 0
+                if ctrl_break_effective:
+                    cancellation_method = "ctrl_break"
+            if not ctrl_break_effective:
+                if job and job_assigned:
+                    cancellation_method = "job_close"
+                    _close_handle(job)
+                    job = None
+                else:
+                    cancellation_method = "terminate_process"
+                    kernel32.TerminateProcess.argtypes = [
+                        wintypes.HANDLE,
+                        wintypes.UINT,
+                    ]
+                    kernel32.TerminateProcess.restype = wintypes.BOOL
+                    kernel32.TerminateProcess(process_handle, 1)
+            kernel32.WaitForSingleObject(process_handle, wintypes.DWORD(5000))
+
+        kernel32.GetExitCodeProcess.argtypes = [wintypes.HANDLE, ctypes.POINTER(wintypes.DWORD)]
+        kernel32.GetExitCodeProcess.restype = wintypes.BOOL
+        ec = wintypes.DWORD()
+        if kernel32.GetExitCodeProcess(process_handle, ctypes.byref(ec)):
+            exit_code = ec.value
+
+        _close_handle(process_handle)
+        process_handle = None
+
+        for reader in readers:
+            reader.join(timeout=5)
+        if read_pipe:
+            _close_handle(read_pipe)
+            read_pipe = None
+        if err_read_pipe:
+            _close_handle(err_read_pipe)
+            err_read_pipe = None
+
+    finally:
+        if firewall_rule_name:
+            _delete_firewall_rule(firewall_rule_name, diagnostics=probe_diags)
+        if allowed_ips:
+            _delete_egress_allow_rules(allowed_ips, diagnostics=probe_diags)
+        if job:
+            _close_handle(job)
+        if process_handle:
+            _close_handle(process_handle)
+        if thread_handle:
+            _close_handle(thread_handle)
+        if write_pipe:
+            _close_handle(write_pipe)
+        if read_pipe:
+            _close_handle(read_pipe)
+        if err_write_pipe:
+            _close_handle(err_write_pipe)
+        if err_read_pipe:
+            _close_handle(err_read_pipe)
+        if nul_handle:
+            _close_handle(nul_handle)
+        if restricted_token:
+            _close_handle(restricted_token)
+        if primary_token:
+            _close_handle(primary_token)
+        if appcontainer_sid and not profile_created:
+            _free_sid(appcontainer_sid, diagnostics=probe_diags)
+        if profile_created:
+            profile_deleted = _delete_appcontainer_profile(
+                app_name, diagnostics=probe_diags
+            )
+
+    stdout_bytes = b"".join(stdout_chunks)
+    stderr_bytes = b"".join(stderr_chunks)
+    required_checks = set(run_observation_checks_for_arm(arm))
+    observed_keys = set(checks.keys())
+    all_required_present = observed_keys >= required_checks
+    all_required_passed = all_required_present and all(
+        checks.get(name) is True for name in required_checks
+    )
+    outcome = "compliant" if all_required_passed else "noncompliant"
+
+    observation: dict[str, Any] = {
+        "schema_version": "0.1.0-draft",
+        "observation_kind": "windows_native_sandbox_run_observation",
+        "observation_id": observation_id,
+        "created_at": utc_now(),
+        "arm": arm,
+        "profile_sha256": sha256_file(
+            profile_path or ASSURANCE_ROOT / "windows-native-sandbox-profile-v0.1.json"
+        ),
+        "workspace_path_sha256": sha256_bytes(
+            str(resolved_workspace).encode("utf-8")
+        ),
+        "command_sha256": sha256_bytes(command_line.encode("utf-16-le")),
+        "command": command_line,
+        "cwd": str(run_cwd),
+        "env_overrides": dict(env or {}),
+        "temp_redirect": {
+            "workspace_tmp": str(resolved_workspace / ".tmp"),
+            "temp_env": cmd_env.get("TEMP", ""),
+            "tmp_env": cmd_env.get("TMP", ""),
+        },
+        "token": {
+            "restricted": created_with_restricted_token,
+            "virtualization_allowed": not bool(
+                checks.get("token_virtualization_disabled", False)
+            ),
+            "low_integrity": bool(checks.get("low_integrity", False)),
+            "appcontainer": bool(checks.get("appcontainer_token", False)),
+            "privileges_removed": bool(checks.get("privileges_removed", False)),
+        },
+        "appcontainer": {
+            "sid_derived": sid_derived,
+            "profile_created": profile_created,
+            "profile_deleted": profile_deleted,
+            "capabilities": [],
+        },
+        "job_object": {
+            "created": job_created,
+            "assigned": job_assigned,
+            "creation_time_assignment": creation_time_job_assigned,
+            "kill_on_close": job_created,
+            "memory_limit_bytes": memory_limit,
+            "active_process_limit": profile["resources"]["pids_limit"],
+        },
+        "firewall": {
+            "outbound_block_rule_created": firewall_rule_created,
+            "rule_name": firewall_rule_name or "",
+            "allowlist_ips": allowed_ips,
+            "diagnostic": firewall_diagnostic,
+        },
+        "process": {
+            "pid": process_pid,
+            "exit_code": exit_code if exit_code is not None else -1,
+            "timed_out": timed_out,
+            "cancellation_method": cancellation_method,
+            "shell_used": False,
+        },
+        "output": {
+            "stdout_bytes": len(stdout_bytes),
+            "stderr_bytes": len(stderr_bytes),
+            "stdout_sha256": sha256_bytes(stdout_bytes),
+            "stderr_sha256": sha256_bytes(stderr_bytes),
+        },
+        "checks": {
+            name: bool(checks.get(name, False)) for name in sorted(required_checks)
+        },
+        "outcome": outcome,
+        "evidence_status": "observed",
+        "diagnostics": probe_diags,
+        "limitations": [
+            "Run observation covers spawn-time facts only (token/IL/AppContainer/"
+            "Job/TEMP redirect).  Behavioral wall assertions (System32/Program "
+            "Files/HKLM/home/network) are performed by enforcement_probe.ps1 "
+            "inside this environment.",
+            "CreateProcessAsUserW requires administrator elevation for "
+            "restricted-token spawns; degraded current-token spawns are "
+            "fail-closed (outcome=noncompliant).",
+            "AppContainer alone does not block raw TCP outbound on some Windows "
+            "builds; network isolation relies on the host firewall wall "
+            "(hardening script blockoutbound default + per-task allowlist).",
+        ],
+    }
+
+    validate_contract(
+        observation,
+        "windows-native-sandbox-run-v0.1.schema.json",
+        label="Windows native sandbox run observation",
+    )
+
+    from .sandbox_verifier import verify_windows_native_run_observation
+
+    verification = verify_windows_native_run_observation(
+        observation,
+        profile=profile,
+        profile_path=profile_path,
+        require_compliant=(outcome == "compliant"),
+    )
+    if not verification["valid"]:
+        raise AssuranceError(
+            "Windows native run observation failed independent verification: "
+            + "; ".join(verification["errors"])
+        )
+    return observation

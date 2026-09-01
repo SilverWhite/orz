@@ -1,0 +1,278 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://local.fep-agent.invalid/schema/windows-native-sandbox-run-v0.1.schema.json",
+  "title": "Windows Native Hardened Run Observation v0.1",
+  "description": "Spawn-time record for the P0-0l-2 hardened run environment (restricted token / LOW IL / AppContainer / Job Object / TEMP redirect). Behavioral wall assertions live in enforcement_probe.ps1; this schema covers harness-side spawn facts only.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "observation_kind",
+    "observation_id",
+    "created_at",
+    "arm",
+    "profile_sha256",
+    "workspace_path_sha256",
+    "command_sha256",
+    "command",
+    "cwd",
+    "env_overrides",
+    "temp_redirect",
+    "token",
+    "appcontainer",
+    "job_object",
+    "firewall",
+    "process",
+    "output",
+    "checks",
+    "outcome",
+    "evidence_status",
+    "diagnostics",
+    "limitations"
+  ],
+  "properties": {
+    "schema_version": { "const": "0.1.0-draft" },
+    "observation_kind": { "const": "windows_native_sandbox_run_observation" },
+    "observation_id": { "type": "string", "pattern": "^WNR-[A-Z0-9._-]+$" },
+    "created_at": { "type": "string", "format": "date-time" },
+    "arm": { "enum": ["control", "non-admin", "high-nist"] },
+    "profile_sha256": { "$ref": "#/$defs/sha256" },
+    "workspace_path_sha256": { "$ref": "#/$defs/sha256" },
+    "command_sha256": { "$ref": "#/$defs/sha256" },
+    "command": { "type": "string", "minLength": 1 },
+    "cwd": { "type": "string", "minLength": 1 },
+    "env_overrides": {
+      "type": "object",
+      "additionalProperties": { "type": "string" }
+    },
+    "temp_redirect": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["workspace_tmp", "temp_env", "tmp_env"],
+      "properties": {
+        "workspace_tmp": { "type": "string" },
+        "temp_env": { "type": "string" },
+        "tmp_env": { "type": "string" }
+      }
+    },
+    "token": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "restricted",
+        "virtualization_allowed",
+        "low_integrity",
+        "appcontainer",
+        "privileges_removed"
+      ],
+      "properties": {
+        "restricted": { "type": "boolean" },
+        "virtualization_allowed": { "type": "boolean" },
+        "low_integrity": { "type": "boolean" },
+        "appcontainer": { "type": "boolean" },
+        "privileges_removed": { "type": "boolean" }
+      }
+    },
+    "appcontainer": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["sid_derived", "profile_created", "profile_deleted", "capabilities"],
+      "properties": {
+        "sid_derived": { "type": "boolean" },
+        "profile_created": { "type": "boolean" },
+        "profile_deleted": { "type": "boolean" },
+        "capabilities": {
+          "type": "array",
+          "maxItems": 0,
+          "items": { "type": "string" }
+        }
+      }
+    },
+    "job_object": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["created", "assigned", "creation_time_assignment", "kill_on_close", "memory_limit_bytes", "active_process_limit"],
+      "properties": {
+        "created": { "type": "boolean" },
+        "assigned": { "type": "boolean" },
+        "creation_time_assignment": { "type": "boolean" },
+        "kill_on_close": { "type": "boolean" },
+        "memory_limit_bytes": { "type": "integer", "minimum": 1 },
+        "active_process_limit": { "type": "integer", "minimum": 1 }
+      }
+    },
+    "firewall": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["outbound_block_rule_created", "rule_name", "allowlist_ips", "diagnostic"],
+      "properties": {
+        "outbound_block_rule_created": { "type": "boolean" },
+        "rule_name": { "type": "string" },
+        "allowlist_ips": {
+          "type": "array",
+          "items": { "type": "string", "minLength": 1 }
+        },
+        "diagnostic": { "type": "string" }
+      }
+    },
+    "process": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["pid", "exit_code", "timed_out", "cancellation_method", "shell_used"],
+      "properties": {
+        "pid": { "type": "integer", "minimum": 0 },
+        "exit_code": { "type": "integer" },
+        "timed_out": { "type": "boolean" },
+        "cancellation_method": {
+          "type": ["string", "null"],
+          "enum": ["timeout", "ctrl_break", "job_close", "terminate_process", null]
+        },
+        "shell_used": { "const": false }
+      }
+    },
+    "output": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["stdout_bytes", "stderr_bytes", "stdout_sha256", "stderr_sha256"],
+      "properties": {
+        "stdout_bytes": { "type": "integer", "minimum": 0 },
+        "stderr_bytes": { "type": "integer", "minimum": 0 },
+        "stdout_sha256": { "$ref": "#/$defs/sha256" },
+        "stderr_sha256": { "$ref": "#/$defs/sha256" }
+      }
+    },
+    "checks": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "workspace_writable": { "type": "boolean" },
+        "os_writable": { "type": "boolean" },
+        "non_admin": { "type": "boolean" },
+        "token_virtualization_disabled": { "type": "boolean" },
+        "privileges_removed": { "type": "boolean" },
+        "low_integrity": { "type": "boolean" },
+        "appcontainer_token": { "type": "boolean" },
+        "temp_redirected": { "type": "boolean" },
+        "job_object_assigned": { "type": "boolean" }
+      }
+    },
+    "outcome": { "enum": ["compliant", "noncompliant"] },
+    "evidence_status": { "const": "observed" },
+    "diagnostics": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "limitations": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "type": "string", "minLength": 1 }
+    }
+  },
+  "allOf": [
+    {
+      "if": { "properties": { "arm": { "const": "control" } }, "required": ["arm"] },
+      "then": {
+        "properties": {
+          "checks": { "required": ["workspace_writable"] }
+        }
+      }
+    },
+    {
+      "if": { "properties": { "arm": { "const": "non-admin" } }, "required": ["arm"] },
+      "then": {
+        "properties": {
+          "checks": {
+            "required": [
+              "workspace_writable",
+              "non_admin",
+              "token_virtualization_disabled",
+              "privileges_removed"
+            ]
+          }
+        }
+      }
+    },
+    {
+      "if": { "properties": { "arm": { "const": "high-nist" } }, "required": ["arm"] },
+      "then": {
+        "properties": {
+          "checks": {
+            "required": [
+              "workspace_writable",
+              "non_admin",
+              "token_virtualization_disabled",
+              "privileges_removed",
+              "low_integrity",
+              "appcontainer_token",
+              "temp_redirected",
+              "job_object_assigned"
+            ]
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "arm": { "const": "control" },
+          "outcome": { "const": "compliant" }
+        },
+        "required": ["arm", "outcome"]
+      },
+      "then": {
+        "properties": {
+          "checks": { "properties": { "workspace_writable": { "const": true } } }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "arm": { "const": "non-admin" },
+          "outcome": { "const": "compliant" }
+        },
+        "required": ["arm", "outcome"]
+      },
+      "then": {
+        "properties": {
+          "checks": {
+            "properties": {
+              "workspace_writable": { "const": true },
+              "non_admin": { "const": true },
+              "token_virtualization_disabled": { "const": true },
+              "privileges_removed": { "const": true }
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "arm": { "const": "high-nist" },
+          "outcome": { "const": "compliant" }
+        },
+        "required": ["arm", "outcome"]
+      },
+      "then": {
+        "properties": {
+          "checks": {
+            "properties": {
+              "workspace_writable": { "const": true },
+              "non_admin": { "const": true },
+              "token_virtualization_disabled": { "const": true },
+              "privileges_removed": { "const": true },
+              "low_integrity": { "const": true },
+              "appcontainer_token": { "const": true },
+              "temp_redirected": { "const": true },
+              "job_object_assigned": { "const": true }
+            }
+          }
+        }
+      }
+    }
+  ],
+  "$defs": {
+    "sha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" }
+  }
+}
