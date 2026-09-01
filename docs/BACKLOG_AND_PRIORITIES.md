@@ -9,7 +9,7 @@
 
 | 优先级 | 含义 | 未闭合项 |
 |---|---|---|
-| P0 | 当前工作集：设计已冻结，裁决后立即实施 | 评测冒烟暴露问题（P0-E 主项 7 项 + FUS-TOOL-SCOPE-CONTRACT 后续 2 项全部闭合 2026-08-18：ACAF 容器供应、console 工具名、计划视图步骤 ID、订单发放前拒绝入事件面、grep 搜索范围契约、plan_write 校验消息形状、actions 形状探针、list_dir 范围计数、grep files_searched 全结局探针，见 0a）；CLASSICAL-EXEC-ASSISTANT（生产组件，2026-08-16 用户裁决转正式，S1-S4 全部闭合）；PLAN-FIRST-BLACKBOARD（阶段 A/B/C 全部闭合 2026-08-16）；**FUS-BENCHMARK-FULL-EXEC（P0，实施完成待验证——2026-08-18 用户指示实施、暂不测试；验证闭环后闭合，见 0b）**；**LEDGER-FOLD-EXTERNAL-FILE（P0，S1-S4 验证闭环 2026-08-19——命中率问题优先于 P0-F 验证；provider 口径 95.33% ≥90% 达标，见 0c）**；**OUTPUT-DEGENERATION-GUARD（P0，S1-S4 全部闭合 2026-08-20——make-doom 退化复读失败防护；8K 全统一 + 补读闭环 + 实时检测 + 32K，见 0d）**；**CONTEXT-SCAFFOLDING-PULL-REDESIGN（P0，S1-S4 全部闭合 2026-08-21——预算块 PUSH→PULL + 工具输出汇总消息退役；命中率 94.45%、零哨兵触发、输入增长放缓；方案 C 维持 256K 暂不收紧（用户裁决），见 0e）**；**FUS-READ-ANCHOR-WRITE-GUARD（P0，S1-S4 全部闭合 2026-08-23——read_file 内容锚点下传 + 写前机械核证；S4 复用 NGRAM S4 实机复验：10 试次零误拒、锚点实机可见、命中率 94.11%–98.55% 全 ≥90%、零 400，计数 28 → 27，见 0f）**；**AGENT-DELIVERY-FLOW（P0 派生 0d 后续 7，S1-S4 全部闭合 2026-08-23——计划无空转、末步机械递交、引用修正一次/二次阻断、订单反馈；S4 复用 NGRAM S4 实机复验：8/8 完成试次走 submit 双阶段、零 400、命中率全 ≥90%，计数 29 → 28，见 0d 后续 7）**；**FINAL-SMOKE-2026-08-25 对拍暴露（P0，2026-08-25 登记：GAP-EVENT-SCHEMA-DRIFT 事件面三类 Schema 漂移（2026-08-26 修复完成并复验，事件链非终止错误 0）+ GAP-REPETITION-DETECTOR-DNA-FALSE-POSITIVE 复读检测 DNA 误杀（S1/S2/S3 完成 2026-08-26、S4 复验待实施），正式 89 题提交前处理，见 0i）**；**RETRIEVAL-ORCHESTRATION-MECHANICAL（P0，2026-08-30 检索问题最终评判定稿、实施待放行——双模式定案 + 引擎 SERP Google 主序 + 原生兜底 + 检索编排机械层第一批五项 + Google 门禁观察实验，见 0k）** |
+| P0 | 当前工作集：设计已冻结，裁决后立即实施 | 评测冒烟暴露问题（P0-E 主项 7 项 + FUS-TOOL-SCOPE-CONTRACT 后续 2 项全部闭合 2026-08-18：ACAF 容器供应、console 工具名、计划视图步骤 ID、订单发放前拒绝入事件面、grep 搜索范围契约、plan_write 校验消息形状、actions 形状探针、list_dir 范围计数、grep files_searched 全结局探针，见 0a）；CLASSICAL-EXEC-ASSISTANT（生产组件，2026-08-16 用户裁决转正式，S1-S4 全部闭合）；PLAN-FIRST-BLACKBOARD（阶段 A/B/C 全部闭合 2026-08-16）；**FUS-BENCHMARK-FULL-EXEC（P0，实施完成待验证——2026-08-18 用户指示实施、暂不测试；验证闭环后闭合，见 0b）**；**LEDGER-FOLD-EXTERNAL-FILE（P0，S1-S4 验证闭环 2026-08-19——命中率问题优先于 P0-F 验证；provider 口径 95.33% ≥90% 达标，见 0c）**；**OUTPUT-DEGENERATION-GUARD（P0，S1-S4 全部闭合 2026-08-20——make-doom 退化复读失败防护；8K 全统一 + 补读闭环 + 实时检测 + 32K，见 0d）**；**CONTEXT-SCAFFOLDING-PULL-REDESIGN（P0，S1-S4 全部闭合 2026-08-21——预算块 PUSH→PULL + 工具输出汇总消息退役；命中率 94.45%、零哨兵触发、输入增长放缓；方案 C 维持 256K 暂不收紧（用户裁决），见 0e）**；**FUS-READ-ANCHOR-WRITE-GUARD（P0，S1-S4 全部闭合 2026-08-23——read_file 内容锚点下传 + 写前机械核证；S4 复用 NGRAM S4 实机复验：10 试次零误拒、锚点实机可见、命中率 94.11%–98.55% 全 ≥90%、零 400，计数 28 → 27，见 0f）**；**AGENT-DELIVERY-FLOW（P0 派生 0d 后续 7，S1-S4 全部闭合 2026-08-23——计划无空转、末步机械递交、引用修正一次/二次阻断、订单反馈；S4 复用 NGRAM S4 实机复验：8/8 完成试次走 submit 双阶段、零 400、命中率全 ≥90%，计数 29 → 28，见 0d 后续 7）**；**FINAL-SMOKE-2026-08-25 对拍暴露（P0，2026-08-25 登记：GAP-EVENT-SCHEMA-DRIFT 事件面三类 Schema 漂移（2026-08-26 修复完成并复验，事件链非终止错误 0）+ GAP-REPETITION-DETECTOR-DNA-FALSE-POSITIVE 复读检测 DNA 误杀（S1/S2/S3 完成 2026-08-26、S4 复验待实施），正式 89 题提交前处理，见 0i）**；**RETRIEVAL-ORCHESTRATION-MECHANICAL（P0，2026-08-30 检索问题最终评判定稿、实施待放行——双模式定案 + 引擎 SERP Google 主序 + 原生兜底 + 检索编排机械层第一批五项 + Google 门禁观察实验，见 0k）**；**WINDOWS-HIGH-NIST-MAX-FRICTION（P0，2026-09-01 设计定稿、实施待放行——按 BoundaryBench N×F×P 模式设计 Windows 原生 HIGH-NIST 最大摩擦评测；Linux arm 作方法学干跑，见 0l）** |
 | P1 | 无需裁决，可与 P0 并行 | FUS-COMPONENT-REGISTER、GAP-WINDOWS-EVIDENCE、IMPL-DEEPSEEK-TRANSPORT / SEC-CREDENTIALS、ORZ-SESSION-CONTEXT-MONITOR、**RETRIEVAL-RESULT-STRUCTURED-CONTRACT（2026-08-30 登记，见 0k；修复方向 C 待裁决）** |
 | P2 | 生产化决策门：需用户裁决 | IMPL-CONTROL-FABRIC（fail-closed 启用、Slice 3/4）、OPS-PROTOCOL、MECHANICAL-LAYER-MATH-CALCULUS（2026-08-30 登记 current-design——阶段 0 决策闭合 + 阶段 1 设计定稿完成（F1–F6、ADR-0010 §14.47），阶段 2 实施切片 / 阶段 3 验证待放行，见 10）；**MODEL-RESIDUAL-PRESSURE-FOLLOWUP（2026-08-31 二次讨论裁决登记——PULL 自描述设计（已实施）与 DC 强制模板轮清理（2026-09-01 实施闭合）已完成；retryable 分类位 / 依赖图主线设计/实施待放行，见 11）** |
 | P3 | 收尾 / 清理 | EVIDENCE-LOCAL-BROWSER、GATE-CHAIN、DC 剩余信号、V11-IMPL-003/007、工作区收尾 |
@@ -1497,7 +1497,7 @@ S1-S4 全部闭合）
   已知边界；②机械层环境探测前置收益中等偏弱（探索密集题可省 15–20 轮，
   命令阻塞型无收益，6 超时题根因是总工作量>墙钟），建议先 mteb-leaderboard
   单题 A/B 再定；③k=1 不加多次尝试（用户裁决）。详见
-   [10 题小批复验记录](docs/audits/OFFICIAL_R2_FAILURES_RECHECK_10T_2026-08-31.md)。
+   [10 题小批复验记录](audits/OFFICIAL_R2_FAILURES_RECHECK_10T_2026-08-31.md)。
   **2026-08-31 用户裁决**：剩余题不再补跑，W4-R4 S4 按最低口径判定闭合（31 题
   已解 9，其中 10 题子批 1/10，未复验题不新增计数，全量成绩不再外推）；8 工具面
   冻结不再删除——只做通用修正、按正常使用优化、不为跑分特化。模型残余压力清单
@@ -1665,6 +1665,33 @@ S1-S4 全部闭合）
   并行。orz-loop 648 passed、Python verifier 260 passed。S4 闭环 -1 入账；
   详见
   [S4 复验记录](audits/GAP_RETRIEVAL_STRUCTURED_RESULT_AND_BATCH2_S4_VERIFICATION_AUDIT_2026-08-31.md)。
+
+### 0l. WINDOWS-HIGH-NIST-MAX-FRICTION（P0；2026-09-01 设计定稿，实施待放行）
+
+- 入口：[设计](WINDOWS_HIGH_NIST_MAX_FRICTION_DESIGN_2026-09-01.md)；索引：
+  CLI_PROJECT_INDEX（AUTH-WINDOWS-HIGH-NIST-MAX-FRICTION）；TODO P0-0l。
+- 来源（2026-08-31 official-r2-failures-recheck-10t 复验，10/10 完成）：7/10
+  墙钟超时、0 policy_denial、机械层全绿——低摩擦下 err/deny/stall/slow 通道
+  饱和在平凡值，"健康"与"失明"不可区分；2026-09-01 用户裁决路线 B：orz 为
+  Windows 原生框架，按 BoundaryBench N×F×P 模型设计 Windows 原生 HIGH-NIST
+  最大摩擦评测；Linux arm 作方法学干跑，不是主摩擦面。
+- 设计定稿（2026-09-01）：三轴格 → Win32 原语映射（Privilege=受限 token +
+  LOW IL + AppContainer；Filesystem=ACL 只读 OS + 冻结 profile + TEMP 重定向；
+  Network=Firewall 出站 allowlist + WFP DNS）；11 类 Windows 特有摩擦点
+  （PS exit code 分裂 / 虚拟化静默写 / 文件锁 / symlink 特权 / Defender 延迟 /
+  执行策略 / 路径语义 / 凭据 / 浏览器 sandbox / 网络栈差异 / Job Object 嵌套）；
+  承载=硬化 Windows VM 主载 + Linux arm 干跑；任务集=摩擦探针 + 真实任务子集
+  三臂（control/non-admin/high-nist）；6 项可证伪缺口判据；8 项预期缺口假设。
+  设计轮不动计数。
+- 待实施（放行后）：② Windows 加固脚本 + enforcement-probe
+  （`windows_sandbox.py` 探针→运行环境）③ 摩擦探针集 control 臂基线 ④
+  high-nist 小批 → §7 判据逐项核对 ⑤ 全量 + 缺口判定登记 BACKLOG。
+  ① Linux arm 干跑**已闭环（2026-09-01）**：三臂 12/12 reward=1.0、0 异常；
+  enforcement-probe 三臂先验墙全过；OS 通道记账 non-root epErm×1 /
+  high-nist eroFS×1；真实任务三臂同分；干跑期修复 6 项（Harbor docker_image
+  忽略 Dockerfile / 指令引用不存在文件 / non-root 缺 agent 用户 / OrzStrict
+  stdout None / cap_drop 下 apt 与 ACAF chown 桥接 / 分离 verifier
+  workdir=/tests）。详见 `_linux_arm_dryrun/PREP_RECORD_2026-09-01.md`。
 
 ### 1. FUS-TOOL-PROBE（`implemented`；P0-A 批次 1-7 与 P0-A-2 已闭合）
 
@@ -2291,12 +2318,35 @@ S1-S4 全部闭合）
       消费则一并退役；orientation 软门与 console 询问轮保留）。
       实施记录见 `docs/audits/P2-11_DC_FORCED_TEMPLATE_CLEANUP_IMPL_AUDIT_2026-09-01.md`
       / ADR-0010 §14.49。
-  3. **retryable 机械分类位（设计+实施待放行）**：类型化错误信封 `Fail` 增
+  3. **retryable 机械分类位（2026-09-01 设计转录 + S1 实施 + S2 测试完成；
+     S3 重建 + S4 实机复验待放行）**：类型化错误信封 `Fail` 增
      `retryable: bool`（确定性失败 false：scheme/锚点/sealed/cap；暂时性 true：
      超时/网络），错误码事实推导、非建议；schema/verifier/fixtures 先行。
-  4. **依赖图实施（设计+实施待放行；下一轮主线）**：文件锚点链最小范围
+     实施：`orz-assurance/src/tool_envelope.rs` `retryable_for_code` 构造期
+     推导（未知码 fail-closed false），错误码家族表与 LIF deny 词汇正交；
+     设计转录 ADR-0010 §14.50 / 机械层设计 §2.1；orz-assurance 195 lib +
+     9 fake-provider 测试全绿、orz-loop 编译通过、fmt/clippy 无新增；
+     2026-09-01 全面审查 O1–O4 收口：字段私有化 + 只读访问器（类型级不可
+     覆盖）、归约边界位归一化（缺位/错位按 code 修正）、transient 优先与
+     边界测试补强——199 lib + 9 fake-provider 全绿。
+  4. **依赖图实施（2026-09-01 设计定稿 + S1 实施 + S1 全面审查处理 +
+     S2 测试完成，`partial`；S3 重建 + S4 实机复验待放行）**：文件锚点链最小范围
      （read→write 锚点边 + 工具→实体变更边；D3 命令/检索副作用不建图），
      PULL 查询面、模型零改动；顺带闭合 F11 receipt↔事件链逐段同构核对。
+     实施：`orz-loop/src/dep_graph.rs`（ReadFact/WriteFact、锚点边匹配
+     sha256 权威/size+mtime 快筛、容量 64 淘汰、revision、确定性渲染）
+     + 黑板接入（live-only、不进 epoch 快照）+ `blackboard_read
+     section=deps`（live-only、≤8 KiB、增量头徽章）+ 通用执行路径成功分支
+     建图（read_file/search_replace 成功，事实随 ToolCompleted 写
+     `dep_graph` 可选事件字段）+ schema/verifier/fixtures 先行
+     （`_verify_v02_dep_graph_events` 交叉核对）；设计转录 ADR-0010
+     §14.51 / `docs/DEPENDENCY_GRAPH_MAINLINE_DESIGN_2026-09-01.md`；
+     orz-loop 642 lib（+7）/ orz-assurance 199+9 / Python 255 全绿、
+     fmt/clippy 无新增；F11 顺带闭合（设计 §5.4 + 阶段 2 审查 F11 行
+     更新）；S1 全面审查处理（2026-09-01）收口：渲染截断 footer 字节
+     预算、无效 section 文案、verifier 措辞/死字段、设计措辞统一、边界
+     测试补充、锚点成本与序列化面登记。实施记录见
+     `audits/P2-11_DEPENDENCY_GRAPH_IMPL_AUDIT_2026-09-01.md`。
 - 登记边界（不动作）：工具名幻觉（不改名/不别名，fail-loud 自回正，收益上限
   ≈15 轮/10 题）；search_replace 锚点 / submit 两阶段维持现状（锚点 0 拒单、
   submit 8 次全通，优化收益不足）；复读守卫不可让步。
@@ -2337,6 +2387,14 @@ S1-S4 全部闭合）
 
 ## 变更记录
 
+- 2026-09-01：P2-11 第 4 项依赖图 S1 全面审查处理收口（本窗口；用户指示
+  「请对审查出的全部问题进行处理」）——渲染截断 footer 字节预算修复 +
+  字节超限单测、无效 section 文案补齐 deps/temporal、verifier 措辞/
+  死字段修正、设计措辞统一（§2 降级/§4 排序与 truncated/§5 形状职责）、
+  边界测试补充（read 锚点 None、deps 组合错误形状、verifier size+mtime
+  回退）、锚点计算成本与序列化面登记；不改变设计语义，状态仍 `partial`
+  （S3/S4 待放行）。审查处理记录见
+  `docs/audits/P2-11_DEPENDENCY_GRAPH_S1_REVIEW_AUDIT_2026-09-01.md`。
 - 2026-09-01：P2-11 第 2 项 DC 强制模板轮清理实施闭合（本窗口；用户指示「请开始
   进行DC 强制模板轮清理」）——删除 `diagnostic_coverage.rs`（诊断覆盖检查点/强制
   模板轮/信号消费）+ `COUNTEREXAMPLE_GATE_PLAN_BLOCK` plan 反例变体注册

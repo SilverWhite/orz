@@ -1,0 +1,39 @@
+{
+    "job_name":  "gate-google-20260830-1",
+    "jobs_dir":  "D:\\tb-eval\\jobs-gate",
+    "environment":  {
+                        "type":  "docker",
+                        "mounts":  [
+                                       {
+                                           "type":  "bind",
+                                           "source":  "D:/tb-eval/gsa-volumes/gate-google-20260830-1",
+                                           "target":  "/orz-gsa"
+                                       }
+                                   ]
+                    },
+    "agents":  [
+                   {
+                       "name":  "tb_agents.orz:Orz",
+                       "model_name":  "deepseek-v4-flash",
+                       "kwargs":  {
+                                      "orz_binary":  "D:/tb-eval/orz-linux/orz",
+                                      "model_id":  "deepseek-v4-flash",
+                                      "gsa_volume":  "D:/tb-eval/gsa-volumes/gate-google-20260830-1",
+                                      "eval_browser":  "true"
+                                  }
+                   }
+               ],
+    "datasets":  [
+                     {
+                         "name":  "terminal-bench/terminal-bench-2-1",
+                         "ref":  "sha256:7d7bdc1cbedad549fc1140404bd4dc45e5fd0ea7c4186773687d177ad3a0699a",
+                         "task_names":  [
+                                            "terminal-bench/mteb-leaderboard",
+                                            "terminal-bench/path-tracing-reverse",
+                                            "terminal-bench/rstan-to-pystan",
+                                            "terminal-bench/configure-git-webserver",
+                                            "terminal-bench/mteb-retrieve"
+                                        ]
+                     }
+                 ]
+}

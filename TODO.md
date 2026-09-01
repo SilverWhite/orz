@@ -15,7 +15,7 @@
 ## 未闭合扫描快照（2026-08-31 清理轮）
 
 - 未闭合总数：**28 项**（BACKLOG 计数口径，2026-08-31：阶段 3 验证闭环 38 → 32；0k S4 实机复验闭环 32 → 30；P2-11 设计轮登记不动计数；2026-09-01：P2-11 DC 强制模板轮清理闭合 30 → 29，P3「DC 硬信号 4/6」退役 29 → 28）。TODO `[ ]` 明细含父/子项，计数以 BACKLOG 为准。
-- P0：FUS-BENCHMARK-FULL-EXEC 验证②③④⑤ + 闭合（见 P0-F）；0d 后续 3/4/5 的 S4 复验（各 1，S3 已随合并批次核证闭合）；0j（W1-R1 S4 复验、W3-R3 余项×3、W4-R4 S5-2 总项 + 验证期发现）。
+- P0：FUS-BENCHMARK-FULL-EXEC 验证②③④⑤ + 闭合（见 P0-F）；0d 后续 3/4/5 的 S4 复验（各 1，S3 已随合并批次核证闭合）；0j（W1-R1 S4 复验、W3-R3 余项×3、W4-R4 S5-2 总项 + 验证期发现）；0l（WINDOWS-HIGH-NIST-MAX-FRICTION 设计定稿、实施待放行，见 P0-0l）。
 - P1：FUS-COMPONENT-REGISTER 组件审计；GAP-WINDOWS-EVIDENCE 三项；IMPL-DEEPSEEK-TRANSPORT DeepSeek live 晋级证据；ORZ-SESSION-CONTEXT-MONITOR 四项。
 - P2：IMPL-CONTROL-FABRIC（Slice 3 / Slice 4 / 可选）；OPS-PROTOCOL（裁剪设计 + 生产接线裁决）；MODEL-RESIDUAL-PRESSURE-FOLLOWUP 四项（P2-11）。
 - P3：EVIDENCE-LOCAL-BROWSER、GATE-CHAIN、observed-scope 枚举、V11-IMPL-003、V11-IMPL-007、orz-host flaky（DC 硬信号已随 P2-11 退役）。
@@ -140,6 +140,26 @@
 
 - [x] 全部闭合（2026-08-31）：双模式定案（local_browser 可用仅 browser_read / 不可用仅 web 族）+ 引擎 SERP Google 主序 + 原生兜底 + 第一批五项（S1/S2 + S3 重建 + S4 实机复验）+ Google 门禁观察实验（多轮实机）+ 主面封存 browser_read + 第二批（project_doc_index v2 / 会话级 tab 池 + 同轮多页并行 + DNS 缓存 / 委托契约复杂度分档）S1/S2 + 方向 C（删除 [RESULT_JSON] 组织块契约）S4 实机复验闭环（未闭合 32 → 30）。入口：BACKLOG 0k / ADR-0010 §14.45/§14.46 / S4 复验记录。
 
+### P0-0l WINDOWS-HIGH-NIST-MAX-FRICTION（P0；2026-09-01 设计定稿，实施待放行）
+
+> 入口：[设计](docs/WINDOWS_HIGH_NIST_MAX_FRICTION_DESIGN_2026-09-01.md)；
+> BACKLOG 0l；索引 AUTH-WINDOWS-HIGH-NIST-MAX-FRICTION。
+
+- [x] 设计定稿落盘（2026-09-01）：N×F×P 三轴格 → Win32 原语映射 + 11 类
+  Windows 特有摩擦点 + 承载方案（硬化 Windows VM 主载 / Linux arm 干跑）+
+  摩擦探针与真实任务子集三臂 + 6 项可证伪缺口判据 + 8 项预期缺口假设。
+  设计轮登记不动计数。
+- [x] ① Linux arm 干跑（2026-09-01 闭环）：BoundaryBench 模式移植到现有
+  Harbor 管线方法学验证——三臂 control/non-root/high-nist 12/12 reward=1.0、
+  0 异常；enforcement-probe 三臂先验墙全过；OS 通道记账 non-root epErm×1 /
+  high-nist eroFS×1；真实任务三臂同分。干跑记录见
+  `_linux_arm_dryrun/PREP_RECORD_2026-09-01.md`。
+- [ ] ② Windows 加固脚本 + enforcement-probe：`windows_sandbox.py` 由探针扩展
+  为运行环境（AppContainer + Job Object + 受限 token 下 spawn orz 命令树）。
+- [ ] ③ 摩擦探针集 control 臂基线（k=1）。
+- [ ] ④ high-nist 小批 → 设计 §7 判据逐项核对。
+- [ ] ⑤ 全量 + 缺口判定登记 BACKLOG。
+
 ### P0-B FUS-RETRIEVAL-MECH（`implemented`；批次 1-6 全部闭合 2026-08-14，保留供核对）
 
 - [x] 全部闭合：B-1 citations 结构化透传 / 步骤 2 web_fetch 候选计数门禁（cap=8）/ 步骤 3 机械预筛（canonical 去重 + 失败形态剔除 + tier/weight）/ 步骤 4 browser_read 模式扩展 + 计数域复用 / 步骤 5 输出级引用校验器 / 步骤 6 提示词缩短。入口：[检索机械控制设计](docs/RETRIEVAL_MECHANICAL_CONTROLS_DESIGN_2026-08-13.md) / 各步骤实施审计 / BACKLOG 0B。
@@ -258,10 +278,28 @@
   / ADR-0010 §14.49 / BACKLOG P2-11。
 - [ ] retryable 机械分类位：`Fail` 信封增 `retryable: bool`（确定性失败 false：
   scheme/锚点/sealed/cap；暂时性 true：超时/网络），错误码事实推导、非建议；
-  schema/verifier/fixtures 先行。
+  schema/verifier/fixtures 先行。**S1 实施 + S2 测试完成（2026-09-01）**：
+  `orz-assurance/src/tool_envelope.rs` 增 `retryable_for_code` 构造期推导
+  （未知码 fail-closed false），reducer/fake-provider fixture 同步；设计转录
+  ADR-0010 §14.50 / 机械层设计 §2.1；orz-assurance 195 lib + 9 fake-provider
+  测试全绿、orz-loop 编译通过、fmt/clippy 无新增；2026-09-01 审查处理 O1–O4
+  收口（字段私有化/归约边界位归一化/优先级与边界测试，199 lib + 9 全绿）；
+  S3 重建 + S4 实机复验待放行。
 - [ ] 依赖图实施（下一轮主线）：文件锚点链最小范围（read→write 锚点边 + 工具→
   实体变更边；D3 命令/检索副作用不建图），PULL 查询面、模型零改动；顺带闭合
-  F11 receipt↔事件链逐段同构核对。
+  F11 receipt↔事件链逐段同构核对。**2026-09-01 设计定稿 + S1 实施 + S2 测试
+  完成（`partial`）**：`orz-loop/src/dep_graph.rs` 新模块（ReadFact/WriteFact/
+  锚点边匹配/容量/revision/渲染）+ 黑板接入 + `blackboard_read section=deps`
+  PULL 面 + 通用执行路径成功建图（事实随 ToolCompleted 写 `dep_graph`
+  可选事件字段）+ schema/verifier/fixtures 先行 + F11 顺带闭合；设计
+  `docs/DEPENDENCY_GRAPH_MAINLINE_DESIGN_2026-09-01.md` / ADR-0010 §14.51 /
+  [实施审计](docs/audits/P2-11_DEPENDENCY_GRAPH_IMPL_AUDIT_2026-09-01.md)；
+  orz-loop 642 lib（+7）/ orz-assurance 199+9 / Python 255 全绿；
+  S1 全面审查处理收口（2026-09-01：渲染截断 footer 预算 + 单测、无效
+  section 文案、verifier 措辞/死字段、设计措辞统一、边界测试补充、成本
+  与序列化面登记，见
+  [审查处理记录](docs/audits/P2-11_DEPENDENCY_GRAPH_S1_REVIEW_AUDIT_2026-09-01.md)）；
+  S3 重建 + S4 实机复验待放行。
 - [x] 工具名幻觉登记边界（不改名/不别名；fail-loud 自回正，收益上限 ≈15 轮/
   10 题）——2026-08-31 裁决。
 - [x] search_replace 锚点 / submit 两阶段维持现状（0 拒单 / 8 次全通，优化收益

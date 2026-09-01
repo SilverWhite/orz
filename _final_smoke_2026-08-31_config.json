@@ -1,0 +1,34 @@
+{
+  "job_name": "final-smoke-2026-08-31",
+  "jobs_dir": "D:\\tb-eval\\jobs-official",
+  "environment": {
+    "type": "docker",
+    "mounts": [
+      {
+        "type": "bind",
+        "source": "D:/tb-eval/gsa-volumes/final-smoke-2026-08-31",
+        "target": "/orz-gsa"
+      }
+    ]
+  },
+  "agents": [
+    {
+      "name": "tb_agents.orz:Orz",
+      "model_name": "deepseek-v4-flash",
+      "kwargs": {
+        "orz_binary": "D:/tb-eval/orz-linux/orz",
+        "model_id": "deepseek-v4-flash",
+        "gsa_volume": "D:/tb-eval/gsa-volumes/final-smoke-2026-08-31",
+        "max_wallclock": 540
+      }
+    }
+  ],
+  "datasets": [
+    {
+      "path": "D:/CLI/_s4_smoke_tasks",
+      "task_names": [
+        "temporal-partition-smoke"
+      ]
+    }
+  ]
+}

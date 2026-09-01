@@ -1,0 +1,43 @@
+{
+  "job_name": "official-r2-failures-s5-2-c3",
+  "jobs_dir": "D:\\tb-eval\\jobs-official",
+  "environment": {
+    "type": "docker",
+    "mounts": [
+      {
+        "type": "bind",
+        "source": "D:/tb-eval/gsa-volumes/official-r2-failures-s5-2-c3",
+        "target": "/orz-gsa"
+      }
+    ]
+  },
+  "agents": [
+    {
+      "name": "tb_agents.orz:Orz",
+      "model_name": "deepseek-v4-flash",
+      "kwargs": {
+        "orz_binary": "D:/tb-eval/orz-linux/orz",
+        "model_id": "deepseek-v4-flash",
+        "gsa_volume": "D:/tb-eval/gsa-volumes/official-r2-failures-s5-2-c3"
+      }
+    }
+  ],
+  "datasets": [
+    {
+      "name": "terminal-bench/terminal-bench-2-1",
+      "ref": "sha256:7d7bdc1cbedad549fc1140404bd4dc45e5fd0ea7c4186773687d177ad3a0699a",
+      "task_names": [
+        "terminal-bench/path-tracing",
+        "terminal-bench/rstan-to-pystan",
+        "terminal-bench/extract-moves-from-video",
+        "terminal-bench/path-tracing-reverse",
+        "terminal-bench/mteb-retrieve",
+        "terminal-bench/dna-assembly",
+        "terminal-bench/circuit-fibsqrt",
+        "terminal-bench/mteb-leaderboard",
+        "terminal-bench/video-processing",
+        "terminal-bench/train-fasttext"
+      ]
+    }
+  ]
+}

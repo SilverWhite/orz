@@ -80,7 +80,9 @@ type Pointer  = FilePtr {path, hash, offset?}
               | EvidencePtr {canonical_url, fetch_id}
               | CmdPtr {log_path, span}
 type Fail     = { step: arg_validation | gate | execution | delivery,
-                  code: Symbol, message: Text ≤ 200 B, trace_id: TraceId }
+                  code: Symbol, message: Text ≤ 200 B, trace_id: TraceId,
+                  retryable: Bool }      -- P2-11 裁决 3：机械分类位，构造期由
+                                         -- code 事实推导（2026-09-01 实施）
 type Result a = Ok { summary: Text ≤ 200 B, cap: Cap, payload: a, pointer: Pointer? }
               | Fail Fail
 ```
@@ -93,6 +95,12 @@ type Result a = Ok { summary: Text ≤ 200 B, cap: Cap, payload: a, pointer: Poi
   （Result 信封 Fail，`step=arg_validation`）；效应错误（未启动/超时杀/门拒绝）=
   fail-closed 信封不变；terminal `exit_code ≠ 0` 是结构化**值**，不是 Fail。
 - trace_id 与事件面同构：归约留痕 = receipt，可直接映射到事件链（§5.4）。
+- retryable 为机械分类位（P2-11 裁决 3）：确定性失败 false（scheme / 锚点
+  [anchor] / sealed / cap 族），暂时性 true（超时 / 网络族）；未知错误码
+  fail-closed 取 false；由 `code` 事实推导（`retryable_for_code`），构造期
+  计算、调用方不可覆盖——位值永远与错误码一致，不给模型"建议性"信号。
+  （2026-09-01 审查处理 O1–O4：信封字段私有化实现类型级不可覆盖；归约
+  边界对透传 Fail 按 code 归一化位值。）
 
 ### 2.2 8 工具类型签名
 
@@ -494,9 +502,13 @@ u_stuck(t) = u_stuck(t₀)·exp(−Δt/τ_stuck)
 - 失败目标身份字段在 receipt 与事件链中一致；verifier 交叉核对 receipt 段与
   事件链事件一一映射（现有事件链校验扩展）；
 - 该同构核对为 §9.10 错误预判/重试方向（观测面）的转正式设计前置。
-- **状态（2026-08-31 审查处理 F11 挂账）**：该同构核对当前**未实现、未排期**；
-  正式登记为未闭合项（TODO P2-10 阶段 2 全面审查处理），随 V1 FakeProvider
-  验证面一并排期实施，未闭合计数不变。
+- **状态（2026-09-01 已闭合）**：事件链侧核对 V1c 已于 2026-08-31 随 V1
+  FakeProvider 验证面实施（`_verify_v02_receipt_event_isomorphism`，verifier
+  245 passed，见阶段 3 验证记录）；P2-11 依赖图主线（2026-09-01）把依赖图
+  事实纳入同一核对面——read_file/search_replace 成功事实随 ToolCompleted
+  写 `dep_graph` 可选事件字段，`_verify_v02_dep_graph_events` 交叉核对
+  （形状/工具族/非成功完成/锚点边悬空与锚点一致性），F11 正式闭合
+  （阶段 2 审查审计 F11 行同步更新）。
 
 ### 5.5 依赖与边界
 

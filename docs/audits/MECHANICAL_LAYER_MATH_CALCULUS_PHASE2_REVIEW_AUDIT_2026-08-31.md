@@ -190,7 +190,7 @@ R1–R9 与 F10–F14 处理状态（R1/R2/R5 经 2026-08-31 用户裁决后执�
 | R8 | **已修** | verifier 按 UTF-8 字节校验 cmd_preview + 多字节正/负例；schema 说明注明字节契约由 verifier 兜底 |
 | R9 | **已修** | lif 测试计数更正为 **23**（`cargo test --list` 复测；本记录原写 24 一并更正）、FailureTarget 12→11、orz-loop 641→644；移除 channels 测试未使用 `tau_stuck` |
 | F10 | **已修** | 正例 fixture cmd_preview 改 `"test"`，与 id=sha256("test") 对应可复核 |
-| F11 | **已挂账** | receipt↔事件链同构核对登记为未闭合项（设计 §5.4 标注 + TODO），实施随 V1 FakeProvider 验证面排期 |
+| F11 | **已闭合（2026-09-01）** | 事件链侧核对 V1c 已随 V1 FakeProvider 验证面实施（2026-08-31，`_verify_v02_receipt_event_isomorphism`，verifier 245 passed）；P2-11 依赖图主线（2026-09-01）把依赖图事实纳入同一核对面（`dep_graph` 可选事件字段 + `_verify_v02_dep_graph_events`），设计 §5.4 状态行同步更新，正式闭合 |
 | F12 | **已修** | `enforce_bound` 小 cap（<marker）返回 UTF-8 安全前缀恒 ≤max_bytes；Ok/Fail 信封 `to_value` 改 Result（fail-loud），调用点显式 map_err |
 | F13 | **已修** | 设计 `Anchor` 类型对齐运行时 `{sha256, size}`（mtime 为工具 schema 可选附加字段） |
 | F14 | **已修** | §4.5 措辞统一为「最近 8–32 个决策间隔」（采样 ≥8 启用、缓冲 ≤32）；estimator 注释同步 |

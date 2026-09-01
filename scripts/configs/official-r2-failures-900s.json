@@ -1,0 +1,49 @@
+{
+  "job_name": "official-r2-failures-900s",
+  "jobs_dir": "D:\\tb-eval\\jobs-official",
+  "environment": {
+    "type": "docker",
+    "mounts": [
+      {
+        "type": "bind",
+        "source": "D:/tb-eval/gsa-volumes/official-r2-failures-900s",
+        "target": "/orz-gsa"
+      }
+    ]
+  },
+  "agents": [
+    {
+      "name": "tb_agents.orz:Orz",
+      "model_name": "deepseek-v4-flash",
+      "kwargs": {
+        "orz_binary": "D:/tb-eval/orz-linux/orz",
+        "model_id": "deepseek-v4-flash",
+        "gsa_volume": "D:/tb-eval/gsa-volumes/official-r2-failures-900s",
+        "max_wallclock": "840"
+      }
+    }
+  ],
+  "datasets": [
+    {
+      "name": "terminal-bench/terminal-bench-2-1",
+      "ref": "sha256:7d7bdc1cbedad549fc1140404bd4dc45e5fd0ea7c4186773687d177ad3a0699a",
+      "task_names": [
+        "terminal-bench/query-optimize",
+        "terminal-bench/chess-best-move",
+        "terminal-bench/make-doom-for-mips",
+        "terminal-bench/model-extraction-relu-logits",
+        "terminal-bench/pytorch-model-cli",
+        "terminal-bench/torch-pipeline-parallelism",
+        "terminal-bench/raman-fitting",
+        "terminal-bench/adaptive-rejection-sampler",
+        "terminal-bench/write-compressor",
+        "terminal-bench/largest-eigenval",
+        "terminal-bench/gpt2-codegolf",
+        "terminal-bench/tune-mjcf",
+        "terminal-bench/count-dataset-tokens",
+        "terminal-bench/gcode-to-text",
+        "terminal-bench/extract-elf"
+      ]
+    }
+  ]
+}
