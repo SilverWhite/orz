@@ -1,0 +1,9 @@
+{
+  "tool": "read_file",
+  "call_id": "call-dep-bad-kind",
+  "exit_code": 0,
+  "dep_graph": {
+    "kind": "scan",
+    "path": "src/a.rs"
+  }
+}

@@ -1,0 +1,11 @@
+{
+  "tool": "read_file",
+  "call_id": "call-dep-extra",
+  "exit_code": 0,
+  "dep_graph": {
+    "kind": "read",
+    "path": "src/a.rs",
+    "anchor": null,
+    "bogus": 1
+  }
+}

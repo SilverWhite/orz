@@ -25,6 +25,7 @@ from assurance.run_event_journal_validation import (
     _event_sha256,
     _payload_sha256,
     _resolve_payload_schema,
+    _verify_v02_dep_graph_events,
     _verify_v02_failure_target,
     _verify_v02_inject_budget,
     _verify_v02_policy_denial,
@@ -5059,6 +5060,168 @@ class ReceiptEventIsomorphismCrossCheckTests(unittest.TestCase):
         # 无终止事件的中断 run：不要求补终止完成。
         events = [self._started(tool="web_search")]
         self.assertEqual(_verify_v02_receipt_event_isomorphism(events), [])
+
+
+class DepGraphEventCrossCheckTests(unittest.TestCase):
+    """P2-11 第 4 项 / 依赖图主线设计 §5 (2026-09-01):
+    `_verify_v02_dep_graph_events` — dependency-graph facts journaled on
+    successful read_file/search_replace completions must be self-consistent
+    and consistent with the event chain (F11 closure): kind/path/tool shape,
+    non-success completions never carry facts, and read→write anchor edges
+    must reference an earlier matching read fact in the same run."""
+
+    SHA_A = "a" * 64
+    SHA_B = "b" * 64
+
+    def _read_event(
+        self,
+        call_id: str = "call-r1",
+        path: str = "src/a.rs",
+        sha: str | None = None,
+        size: int = 100,
+        mtime: int | None = None,
+    ) -> dict:
+        anchor: dict[str, object] = {"size": size}
+        if mtime is not None:
+            anchor["mtime"] = mtime
+        if sha is not None:
+            anchor["sha256"] = sha
+        return _v02_event(
+            "tool_completed",
+            {
+                "tool": "read_file",
+                "call_id": call_id,
+                "exit_code": 0,
+                "dep_graph": {"kind": "read", "path": path, "anchor": anchor},
+            },
+        )
+
+    def _write_event(
+        self,
+        call_id: str = "call-w1",
+        path: str = "src/a.rs",
+        *,
+        consumed_read: str | None = "call-r1",
+        sha: str | None = None,
+        size: int = 100,
+        mtime: int | None = None,
+        tool: str = "search_replace",
+    ) -> dict:
+        consumed_anchor: dict[str, object] = {"size": size}
+        if mtime is not None:
+            consumed_anchor["mtime"] = mtime
+        if sha is not None:
+            consumed_anchor["sha256"] = sha
+        fact: dict[str, object] = {
+            "kind": "write",
+            "path": path,
+            "consumed_read": consumed_read,
+            "consumed_anchor": consumed_anchor,
+            "new_anchor": {"sha256": self.SHA_B, "size": 110},
+        }
+        return _v02_event(
+            "tool_completed",
+            {
+                "tool": tool,
+                "call_id": call_id,
+                "exit_code": 0,
+                "dep_graph": fact,
+            },
+        )
+
+    def test_valid_read_write_chain_passes(self) -> None:
+        events = [
+            self._read_event(sha=self.SHA_A),
+            self._write_event(sha=self.SHA_A),
+        ]
+        self.assertEqual(_verify_v02_dep_graph_events(events), [])
+
+    def test_dangling_consumed_read_rejected(self) -> None:
+        events = [self._write_event(consumed_read="call-missing")]
+        errors = _verify_v02_dep_graph_events(events)
+        self.assertTrue(any("no earlier read fact" in e for e in errors), errors)
+
+    def test_consumed_read_path_mismatch_rejected(self) -> None:
+        events = [
+            self._read_event(call_id="call-r1", path="src/a.rs", sha=self.SHA_A),
+            self._write_event(path="src/b.rs", sha=self.SHA_A),
+        ]
+        errors = _verify_v02_dep_graph_events(events)
+        self.assertTrue(any("different path" in e for e in errors), errors)
+
+    def test_anchor_mismatch_rejected(self) -> None:
+        events = [
+            self._read_event(sha=self.SHA_A),
+            self._write_event(sha=self.SHA_B),
+        ]
+        errors = _verify_v02_dep_graph_events(events)
+        self.assertTrue(any("anchors do not match" in e for e in errors), errors)
+
+    def test_size_mtime_fallback_matching_accepted(self) -> None:
+        # 双方都缺 sha256 → size+mtime 快筛（mtime 同为 None 亦匹配）。
+        events = [
+            self._read_event(),
+            self._write_event(),
+        ]
+        self.assertEqual(_verify_v02_dep_graph_events(events), [])
+
+    def test_size_mtime_fallback_mismatch_rejected(self) -> None:
+        events = [
+            self._read_event(size=100),
+            self._write_event(size=200),
+        ]
+        errors = _verify_v02_dep_graph_events(events)
+        self.assertTrue(any("anchors do not match" in e for e in errors), errors)
+
+    def test_kind_tool_mismatch_rejected(self) -> None:
+        # kind=read on a non-read_file completion (D3 boundary).
+        event = _v02_event(
+            "tool_completed",
+            {
+                "tool": "run_terminal_cmd",
+                "call_id": "call-t1",
+                "exit_code": 0,
+                "dep_graph": {"kind": "read", "path": "x", "anchor": None},
+            },
+        )
+        errors = _verify_v02_dep_graph_events([event])
+        self.assertTrue(any("must be read_file" in e for e in errors), errors)
+
+    def test_non_success_completion_with_fact_rejected(self) -> None:
+        event = _v02_event(
+            "tool_completed",
+            {
+                "tool": "read_file",
+                "call_id": "call-f1",
+                "exit_code": 1,
+                "dep_graph": {"kind": "read", "path": "x", "anchor": None},
+            },
+        )
+        errors = _verify_v02_dep_graph_events([event])
+        self.assertTrue(any("non-success completion" in e for e in errors), errors)
+
+    def test_bad_kind_rejected(self) -> None:
+        event = _v02_event(
+            "tool_completed",
+            {
+                "tool": "read_file",
+                "call_id": "call-r1",
+                "exit_code": 0,
+                "dep_graph": {"kind": "scan", "path": "x"},
+            },
+        )
+        errors = _verify_v02_dep_graph_events([event])
+        self.assertTrue(any("must be read|write" in e for e in errors), errors)
+
+    def test_absent_fact_is_ignored(self) -> None:
+        # 无 dep_graph 的完成（旧语料/非 read/write 工具）不检查。
+        events = [
+            _v02_event(
+                "tool_completed",
+                {"tool": "read_file", "call_id": "call-r1", "exit_code": 0},
+            )
+        ]
+        self.assertEqual(_verify_v02_dep_graph_events(events), [])
 
 
 class PolicyDenialProducerParityTests(unittest.TestCase):

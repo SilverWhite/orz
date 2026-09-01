@@ -1,0 +1,14 @@
+{
+  "tool": "read_file",
+  "call_id": "call-dep-r1",
+  "exit_code": 0,
+  "dep_graph": {
+    "kind": "read",
+    "path": "src/a.rs",
+    "anchor": {
+      "sha256": "1111111111111111111111111111111111111111111111111111111111111111",
+      "size": 100,
+      "mtime": 1700000000
+    }
+  }
+}

@@ -1,0 +1,18 @@
+{
+  "tool": "search_replace",
+  "call_id": "call-dep-w1",
+  "exit_code": 0,
+  "dep_graph": {
+    "kind": "write",
+    "path": "src/a.rs",
+    "consumed_read": "call-dep-r1",
+    "consumed_anchor": {
+      "sha256": "1111111111111111111111111111111111111111111111111111111111111111",
+      "size": 100
+    },
+    "new_anchor": {
+      "sha256": "2222222222222222222222222222222222222222222222222222222222222222",
+      "size": 110
+    }
+  }
+}

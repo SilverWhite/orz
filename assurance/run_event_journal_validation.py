@@ -2780,6 +2780,125 @@ def _verify_v02_receipt_event_isomorphism(
     return errors
 
 
+def _verify_v02_dep_graph_events(events: list[dict[str, Any]]) -> list[str]:
+    """P2-11 第 4 项 / 依赖图主线设计 §5 (2026-09-01): dependency-graph
+    facts journaled on successful read_file/search_replace completions must
+    be self-consistent and consistent with the event chain (F11 closure):
+
+    - shape: `dep_graph.kind` ∈ {read, write}; `path` is a non-empty string;
+      anchor values are objects or null (field types / sha256 64-hex are
+      schema-enforced; this function checks object-vs-null and cross-event
+      consistency only);
+    - kind=read → tool must be `read_file` with exit_code 0;
+    - kind=write → tool must be `search_replace` with exit_code 0;
+      `consumed_read` (when non-null) must reference an earlier read fact of
+      the SAME run with the SAME normalized path and a matching anchor
+      (sha256 authoritative; fallback size+mtime) — the read→write anchor
+      edge must point at the read whose anchor was consumed;
+    - tool→entity mutation edges are implied by every write fact (no extra
+      check beyond the shape above).
+
+    Presence is optional (backward-compatible with pre-graph journals): only
+    journaled facts are checked. D3 boundary: a dep_graph fact on a
+    command/retrieval completion is a shape violation (tool not in the
+    read/write family)."""
+    errors: list[str] = []
+    reads: dict[tuple[str, str], dict[str, Any]] = {}
+
+    def _anchor_matches(a: Any, b: Any) -> bool:
+        if not isinstance(a, dict) or not isinstance(b, dict):
+            return False
+        a_sha = a.get("sha256")
+        b_sha = b.get("sha256")
+        if isinstance(a_sha, str) and isinstance(b_sha, str):
+            return a_sha == b_sha
+        return a.get("size") == b.get("size") and a.get("mtime") == b.get("mtime")
+
+    for index, event in enumerate(events):
+        if not _is_v02(event) or event.get("event_type") != "tool_completed":
+            continue
+        payload = event.get("payload", {})
+        fact = payload.get("dep_graph")
+        if fact is None:
+            continue
+        run = str(event.get("run_id", ""))
+        tool = str(payload.get("tool", ""))
+        call_id = str(payload.get("call_id", ""))
+        if not isinstance(fact, dict):
+            errors.append(f"event {index}: dep_graph must be an object")
+            continue
+        kind = fact.get("kind")
+        path = fact.get("path")
+        if kind not in ("read", "write"):
+            errors.append(
+                f"event {index}: dep_graph.kind must be read|write (got {kind!r})"
+            )
+            continue
+        if not isinstance(path, str) or not path:
+            errors.append(f"event {index}: dep_graph.path must be a non-empty string")
+        if payload.get("exit_code") != 0:
+            errors.append(
+                f"event {index}: dep_graph present on non-success completion "
+                f"({tool}/{call_id}, exit_code={payload.get('exit_code')!r})"
+            )
+        if kind == "read":
+            if tool != "read_file":
+                errors.append(
+                    f"event {index}: dep_graph.kind=read on tool {tool!r} "
+                    "(must be read_file)"
+                )
+            anchor = fact.get("anchor")
+            if anchor is not None and not isinstance(anchor, dict):
+                errors.append(
+                    f"event {index}: dep_graph.anchor must be an object or null"
+                )
+            reads[(run, call_id)] = fact
+        else:  # write
+            if tool != "search_replace":
+                errors.append(
+                    f"event {index}: dep_graph.kind=write on tool {tool!r} "
+                    "(must be search_replace)"
+                )
+            for key in ("consumed_anchor", "new_anchor"):
+                val = fact.get(key)
+                if val is not None and not isinstance(val, dict):
+                    errors.append(
+                        f"event {index}: dep_graph.{key} must be an object or null"
+                    )
+            consumed = fact.get("consumed_read")
+            if consumed is not None:
+                if not isinstance(consumed, str) or not consumed:
+                    errors.append(
+                        f"event {index}: dep_graph.consumed_read must be a "
+                        "non-empty string or null"
+                    )
+                else:
+                    read = reads.get((run, consumed))
+                    if read is None:
+                        errors.append(
+                            f"event {index}: dep_graph.consumed_read={consumed!r} "
+                            "has no earlier read fact in the same run "
+                            "(anchor edge dangling)"
+                        )
+                    else:
+                        read_fact = read
+                        if read_fact.get("path") != path:
+                            errors.append(
+                                f"event {index}: dep_graph anchor edge points at "
+                                f"read {consumed} on a different path "
+                                f"({read_fact.get('path')!r} != {path!r})"
+                            )
+                        elif not _anchor_matches(
+                            fact.get("consumed_anchor"), read_fact.get("anchor")
+                        ):
+                            errors.append(
+                                f"event {index}: dep_graph anchor edge {consumed} "
+                                "anchors do not match (sha256 authoritative; "
+                                "fallback size+mtime)"
+                            )
+    return errors
+
+
 def _verify_v02_probe_accuracy(events: list[dict[str, Any]]) -> list[str]:
     """ADR-0010 §3.5 条7 (ORZ-CACHE-CONTEXT-COST 2026-08-15): probe flips
     must be accompanied by a real request-header change — a
@@ -3414,6 +3533,7 @@ def validate_journal_text(text: str) -> list[str]:
         errors.extend(_verify_v02_policy_denial(events))
         errors.extend(_verify_v02_failure_target(events))
         errors.extend(_verify_v02_receipt_event_isomorphism(events))
+        errors.extend(_verify_v02_dep_graph_events(events))
         errors.extend(_verify_v02_mechanical_audit(events))
         errors.extend(_verify_v02_recovery_truncation(events))
         errors.extend(_verify_v02_context_compressed(events))

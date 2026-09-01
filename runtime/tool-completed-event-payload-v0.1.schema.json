@@ -161,6 +161,53 @@
           "new_lines": { "type": "integer", "minimum": 0 }
         }
       }
+    },
+    "dep_graph": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "path"],
+      "properties": {
+        "kind": {
+          "enum": ["read", "write"],
+          "description": "P2-11 第 4 项 / 依赖图主线设计 §5 (2026-09-01): read = read_file success (read→write anchor-chain source); write = search_replace success (tool→entity mutation edge). Present only on successful read_file/search_replace completions; D3 command/retrieval side effects never carry dep_graph."
+        },
+        "path": {
+          "type": "string",
+          "description": "Normalized target file path (same normalization as the entity registry)."
+        },
+        "anchor": {
+          "$ref": "#/$defs/dep_anchor",
+          "description": "read fact: content anchor at read time (sha256 authoritative ≤16MB; null when oversized/non-file)."
+        },
+        "consumed_read": {
+          "type": ["string", "null"],
+          "description": "write fact: the read fact call_id this write's expected_anchor was consumed from (read→write anchor edge); null when no matching in-run read fact."
+        },
+        "consumed_anchor": {
+          "$ref": "#/$defs/dep_anchor",
+          "description": "write fact: the expected_anchor carried by the write arguments (may carry only size/mtime)."
+        },
+        "new_anchor": {
+          "$ref": "#/$defs/dep_anchor",
+          "description": "write fact: content anchor after the write (same computation as read anchors)."
+        }
+      },
+      "description": "P2-11 第 4 项 (2026-09-01): dependency-graph fact journaled with successful read_file/search_replace completions — the file-anchor chain (read→write anchor edges + tool→entity mutation edges; D3 command/retrieval side effects are never graphed). Shape/cross-reference rules are enforced by the Python verifier (_verify_v02_dep_graph_events), keeping the schema shape minimal."
+    }
+  },
+  "$defs": {
+    "dep_anchor": {
+      "type": ["object", "null"],
+      "additionalProperties": false,
+      "properties": {
+        "sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$",
+          "description": "Content sha256 (authoritative when present)."
+        },
+        "size": { "type": "integer", "minimum": 0 },
+        "mtime": { "type": "integer", "minimum": 0 }
+      }
     }
   }
 }
