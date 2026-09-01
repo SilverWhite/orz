@@ -212,6 +212,8 @@ fn incompatible_pipe_fails_closed_before_execution() {
     assert_eq!(err["step"], "arg_validation");
     assert_eq!(err["code"], "pipe_incompatible");
     assert_eq!(err["trace_id"], "trace-v1");
+    // P2-11 裁决 3: 纯组合/参数错误是确定性失败 → 机械位 false。
+    assert_eq!(err["retryable"], serde_json::Value::Bool(false));
 }
 
 /// V1-6: Fail 短路——第一工具的类型化失败直接成为归约错误，trace_id 原样
@@ -228,6 +230,22 @@ fn fail_short_circuit_preserves_trace_id() {
     assert_eq!(err["step"], "arg_validation");
     assert_eq!(err["code"], "invalid_pattern");
     assert_eq!(err["trace_id"], "trace-v1");
+    // P2-11 裁决 3: 参数校验失败默认非重试（未知码 fail-closed false）。
+    assert_eq!(err["retryable"], serde_json::Value::Bool(false));
+}
+
+/// V1-9 (P2-11 裁决 3): gate-step Fail（GetPut 锚点族）携带机械重试位——
+/// anchor 是确定性失败族 → `retryable=false`，与拒绝事实正交、非建议。
+#[test]
+fn gate_fail_carries_non_retryable_anchor_bit() {
+    let term = Term::apply(
+        "file.search_replace",
+        json!({ "file_path": "a.rs", "old_string": "x", "new_string": "y" }),
+    );
+    let err = reduce(&term, &resolve, &effectful, "trace-v1").unwrap_err();
+    assert_eq!(err["step"], "gate");
+    assert_eq!(err["code"], "anchor_required");
+    assert_eq!(err["retryable"], serde_json::Value::Bool(false));
 }
 
 /// V1-7: 兼容矩阵只含三条类型化透镜（R5）。

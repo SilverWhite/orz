@@ -22,6 +22,7 @@ pub(crate) mod console_mode;
 pub mod controller;
 mod delivery;
 mod denial;
+pub mod dep_graph;
 pub mod diagnostics;
 pub mod entities;
 pub mod epoch;

@@ -31,7 +31,7 @@
 use serde::Serialize;
 use serde_json::{Map, Value, json};
 
-use crate::tool_envelope::FailEnvelope;
+use crate::tool_envelope::{FailEnvelope, enforce_retryable_bit};
 
 pub const MAX_STEPS_PER_ROUND: u32 = 4;
 
@@ -312,7 +312,9 @@ pub fn validate_term(
 /// application and returns its typed Result envelope value (Ok envelope or
 /// Fail envelope). A Fail short-circuits the pipe with the Fail value. An
 /// incompatible pipe pair is rejected with a typed `arg_validation` Fail
-/// BEFORE either tool runs (R5/F6).
+/// BEFORE either tool runs (R5/F6). Pass-through Fail values are normalized
+/// at this boundary: `retryable` is recomputed from `code` so the serialized
+/// bit always equals the code fact (P2-11 裁决 3, 2026-09-01 审查处理 O2).
 pub fn reduce(
     term: &Term,
     resolver: &dyn Fn(&str, &Value) -> Value,
@@ -321,8 +323,9 @@ pub fn reduce(
 ) -> Result<Reduction, Value> {
     match term {
         Term::Apply(spec) => {
-            let value = resolver(&spec.tool, &spec.arguments);
+            let mut value = resolver(&spec.tool, &spec.arguments);
             if is_fail(&value) {
+                enforce_retryable_bit(&mut value);
                 return Err(value);
             }
             Ok(Reduction {
@@ -339,8 +342,9 @@ pub fn reduce(
                     &format!("incompatible pipe: {} -> {}", first.tool, second.tool),
                 ));
             }
-            let first_value = resolver(&first.tool, &first.arguments);
+            let mut first_value = resolver(&first.tool, &first.arguments);
             if is_fail(&first_value) {
+                enforce_retryable_bit(&mut first_value);
                 return Err(first_value);
             }
             let spliced = splice_result(
@@ -350,8 +354,9 @@ pub fn reduce(
                 second.arguments.clone(),
                 trace_id,
             )?;
-            let second_value = resolver(&second.tool, &spliced);
+            let mut second_value = resolver(&second.tool, &spliced);
             if is_fail(&second_value) {
+                enforce_retryable_bit(&mut second_value);
                 return Err(second_value);
             }
             Ok(Reduction {
@@ -471,7 +476,7 @@ mod tests {
             &term,
             &|tool, _| {
                 if tool == "file.read" {
-                    json!({ "step": "arg_validation", "code": "no_match", "message": "no file", "trace_id": "t-1" })
+                    json!({ "step": "arg_validation", "code": "no_match", "message": "no file", "trace_id": "t-1", "retryable": false })
                 } else {
                     json!({})
                 }
@@ -481,6 +486,51 @@ mod tests {
         )
         .unwrap_err();
         assert_eq!(err["code"], "no_match");
+        // P2-11 裁决 3: 确定性失败（未知码 fail-closed）→ 机械位 false。
+        assert_eq!(err["retryable"], serde_json::Value::Bool(false));
+    }
+
+    /// P2-11 裁决 3 (审查处理 O2): a tool-surface Fail that lacks the
+    /// retryable bit — or carries an inconsistent one — is normalized at the
+    /// reduction boundary to the code-derived fact (fail-closed false when
+    /// no usable code).
+    #[test]
+    fn pass_through_fail_bit_is_normalized_from_code() {
+        let term = Term::apply("file.read", json!({ "path": "a.rs" }));
+
+        let missing = reduce(
+            &term,
+            &|_, _| {
+                json!({ "step": "execution", "code": "tool_timeout", "message": "x", "trace_id": "t-1" })
+            },
+            &effectful,
+            "t-1",
+        )
+        .unwrap_err();
+        assert_eq!(missing["retryable"], Value::Bool(true));
+
+        let inconsistent = reduce(
+            &term,
+            &|_, _| {
+                json!({
+                    "step": "gate", "code": "content_anchor_mismatch", "message": "x",
+                    "trace_id": "t-1", "retryable": true,
+                })
+            },
+            &effectful,
+            "t-1",
+        )
+        .unwrap_err();
+        assert_eq!(inconsistent["retryable"], Value::Bool(false));
+
+        let no_code = reduce(
+            &term,
+            &|_, _| json!({ "step": "execution", "message": "x", "trace_id": "t-1" }),
+            &effectful,
+            "t-1",
+        )
+        .unwrap_err();
+        assert_eq!(no_code["retryable"], Value::Bool(false));
     }
 
     /// 审查处理 R7 (F5): a success Ok envelope that happens to carry
@@ -499,6 +549,7 @@ mod tests {
             "code": "no_match",
             "message": "no match",
             "trace_id": "t-1",
+            "retryable": false,
         });
         assert!(is_fail(&fail), "Fail envelope must be detected");
         // A non-envelope value with a `step` marker and no `summary` is

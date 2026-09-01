@@ -431,6 +431,13 @@ pub struct Blackboard {
     /// 纪律，随 run 生命周期）。
     #[serde(default)]
     pub entities: crate::entities::EntityRegistry,
+    /// 依赖图最小范围（P2-11 第 4 项 / 依赖图主线设计 2026-09-01）：
+    /// 文件锚点链（read→write 锚点边 + 工具→实体变更边；D3 命令/检索
+    /// 副作用不建图）。live-only：不进 epoch 快照、不持久化（同
+    /// entities/temporal 纪律）；模型经 `blackboard_read section=deps`
+    /// 按需 PULL。
+    #[serde(default)]
+    pub dep_graph: crate::dep_graph::DepGraph,
     /// PULL 自描述分区版本计数（2026-08-31，P2-11 第 1 项）——每个分区
     /// 可见内容变化计 1 次，供 `blackboard_read` 增量头读取；仅内存、
     /// 不进任何序列化面（`#[serde(skip)]`，epoch 快照/会话存档不携带）。
@@ -543,6 +550,7 @@ impl Blackboard {
             ("internal_ret", self.revisions.internal_ret),
             ("external_ret", self.revisions.external_ret),
             ("entities", self.entities.revision()),
+            ("deps", self.dep_graph.revision()),
         ]
     }
 

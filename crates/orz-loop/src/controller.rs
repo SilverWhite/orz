@@ -1580,6 +1580,28 @@ impl AgentLoopController {
                 .entities
                 .render_text(crate::entities::ENTITIES_SUMMARY_MAX);
         }
+        // P2-11 第 4 项 / 依赖图主线设计 §4 (2026-09-01)：文件锚点链依赖
+        // 图分区——live-only（不进 epoch 快照、不持久化，同 entities/
+        // temporal 纪律）；`receipt_id` 点读仅 actions 语义，组合 = 显式
+        // 文本错误（形状被 `is_blackboard_render_error` 识别 → 不挂增量头、
+        // 不推进游标）。
+        if section == "deps" {
+            if epoch.is_some() {
+                return format!(
+                    "blackboard_read {section} with epoch is not supported — \
+                     deps is a live-only partition (the dependency graph rides \
+                     the run lifecycle); omit epoch to read the live section"
+                );
+            }
+            if receipt_id.is_some() {
+                return format!(
+                    "receipt_id 仅与 section=actions 组合有效（点读结果栏单条 \
+                     receipt）；当前 section={section} 不支持 receipt_id"
+                );
+            }
+            let bb = self.blackboard.read();
+            return bb.dep_graph.render_text();
+        }
         if let Some(epoch) = epoch {
             let Some(dir) = &self.blackboard_archive_dir else {
                 return format!(
@@ -1849,7 +1871,7 @@ impl AgentLoopController {
     /// 读取分区的游标（其余分区保持未读徽章）。
     ///
     /// - 徽章：固定分区序（plan/exec/edits/tool_actions/actions/
-    ///   internal_ret/external_ret/entities/session/temporal），只列
+    ///   internal_ret/external_ret/entities/deps/session/temporal），只列
     ///   delta>0 者；session 派生自 `tool_rounds`，temporal 派生自 LIF round。
     /// - 域迁移段：`temporal.migration_count` 超过**独立迁移基线**（上次
     ///   成功读取 temporal 时的 migration_count，2026-08-31 审查处理 M1——
@@ -2349,7 +2371,7 @@ impl AgentLoopController {
         // model's ON-DEMAND window into the blackboard — declared whenever
         // the loop runs (the blackboard is always live). The model pulls a
         // partition (plan / edits / tool_actions / exec / actions / session /
-        // internal_ret / external_ret / entities) when it needs to look
+        // internal_ret / external_ret / entities / deps) when it needs to look
         // back; no full
         // render is ever injected uninvited (zero dilution when not called).
         // ReadOnly risk class → auto-allows under every policy
@@ -2382,7 +2404,11 @@ impl AgentLoopController {
                      (live retrieval partitions — the subagent's full result \
                      text, parsed entries and source ledger; read them when a \
                      web_search / web_fetch / retrieve_project_docs dispatch \
-                     returns a pointer summary instead of inline text). \
+                     returns a pointer summary instead of inline text), deps \
+                     (P2-11 dependency graph — the file anchor chain: read→write \
+                     anchor edges and tool→entity mutation edges for \
+                     read_file/search_replace; D3 command/retrieval side effects \
+                     are NOT graphed; live-only). \
                      Optional `since_timestamp` (RFC 3339, e.g. the timestamp \
                      this tool returned earlier) filters the edits / tool_actions \
                      entries to those at or after that time. Optional `epoch` \
@@ -2419,6 +2445,7 @@ impl AgentLoopController {
                                 "internal_ret",
                                 "external_ret",
                                 "entities",
+                                "deps",
                                 "temporal",
                             ],
                             "description": "P2-10 F2 §3.3 (2026-08-30): temporal 分区是 LIF 时间观测面——每决策轮域标签/特征行（Now/Recent(k≤20)/History/Feature(name,k≤20)，渲染 ≤1 KiB、fires 不渲染、零注入 PULL 面）。selector 默认 now；recent/feature 可带 k（≤20）；feature 另需 name（u_prog|u_err|u_stuck|t_hat|err10|succ10）。",
@@ -4882,5 +4909,29 @@ mod tests {
         assert!(!AgentLoopController::is_blackboard_render_error(
             "ORD-000012 ok=true step=? code=? trace_id=t-1\nresponse={\"output\":\"not found\"}"
         ));
+    }
+
+    /// P2-11 第 4 项 S1 审查处理（2026-09-01）：deps 分区带 `epoch` /
+    /// `receipt_id` 必须返回显式文本错误，且形状被
+    /// `is_blackboard_render_error` 识别（host 层据此不挂增量头、不推进
+    /// 游标）——与 entities/internal_ret 等 live-only 分区同纪律。
+    #[test]
+    fn deps_section_rejects_epoch_and_receipt_id_with_error_shapes() {
+        let controller = AgentLoopController::with_gateway(Arc::new(FakeProvider::new(Vec::new())));
+        let epoch_err = controller.render_blackboard_section("deps", None, Some(1), None);
+        assert!(
+            AgentLoopController::is_blackboard_render_error(&epoch_err),
+            "epoch error must be render-error shaped: {epoch_err}"
+        );
+        assert!(
+            epoch_err.contains("with epoch is not supported"),
+            "{epoch_err}"
+        );
+        let receipt_err = controller.render_blackboard_section("deps", None, None, Some("ORD-1"));
+        assert!(
+            AgentLoopController::is_blackboard_render_error(&receipt_err),
+            "receipt error must be render-error shaped: {receipt_err}"
+        );
+        assert!(receipt_err.contains("receipt_id"), "{receipt_err}");
     }
 }
