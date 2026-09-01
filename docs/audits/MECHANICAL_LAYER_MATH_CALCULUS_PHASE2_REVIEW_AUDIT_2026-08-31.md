@@ -113,7 +113,7 @@ splice 找不到字段就原样调用——违背类型化组合 fail-closed 精
 | # | 严重度 | 切片 | 位置 | 内容 |
 |---|---|---|---|---|
 | F7 | 中 | I3×I5 | [controller.rs](../../orz/crates/orz-loop/src/controller.rs:2215) | blackboard_read 工具声明缺 `selector`/`k`/`name` 参数（仅 section 描述文字提及）；Recent/History/Feature 查询面按 JSON schema 不可发现 |
-| F8 | 中 | I2 | [schema](../../runtime/tool-completed-event-payload-v0.1.schema.json) / [verifier](../../assurance/run_event_journal_validation.py:2747) | `cmd_preview` 设计为 ≤80 字节，schema `maxLength` 与 verifier `len()` 按字符计；生产者按字节截断（更严），无实发违例但机械校验弱于契约 |
+| F8 | 中 | I2 | [schema](../../runtime/tool-completed-event-payload-v0.1.schema.json) / [verifier](../../assurance/run_event_journal_validation.py#L2747) | `cmd_preview` 设计为 ≤80 字节，schema `maxLength` 与 verifier `len()` 按字符计；生产者按字节截断（更严），无实发违例但机械校验弱于契约 |
 | F9 | 低 | I1/I2 审计记录 | 计数勘误 | lif 测试实为 23 项（`cargo test --list` 复测；审计写 30）；FailureTargetCrossCheckTests 实为 11 个函数（审计写 12 用例）；orz-loop lib 实测 644（审计写 641）；`cargo test` 编译测试面有 1 处 `unused variable: tau_stuck` 告警（`clippy --lib` 不覆盖测试 cfg） |
 | F10 | 低 | I2 | [cmd fixture](../../runtime/fixtures/run-event-v0.2/payloads/tool-completed.failure-target-cmd.valid.json) | 正例 fixture 的 id 是 `sha256("test")`，与 cmd_preview 无对应关系（verifier 不做原文重算故不违例，但可复核性弱） |
 | F11 | 低 | I2 | 设计 §5.4 | receipt↔事件链逐段同构核对未实现、未排期、未显式挂账——建议登记为未闭合项 |

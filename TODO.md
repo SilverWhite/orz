@@ -154,8 +154,12 @@
   0 异常；enforcement-probe 三臂先验墙全过；OS 通道记账 non-root epErm×1 /
   high-nist eroFS×1；真实任务三臂同分。干跑记录见
   `_linux_arm_dryrun/PREP_RECORD_2026-09-01.md`。
-- [ ] ② Windows 加固脚本 + enforcement-probe：`windows_sandbox.py` 由探针扩展
-  为运行环境（AppContainer + Job Object + 受限 token 下 spawn orz 命令树）。
+  - [x] ② Windows 加固脚本 + enforcement-probe（S1/S2 完成 2026-09-01；S3/S4
+    待放行）：`_windows_high_nist/` 加固脚本（三臂模板、-Revert、日志）+
+    enforcement-probe（每轴断言集）+ `windows_sandbox.py` 运行环境扩展
+    （受限 token / LOW IL / AppContainer / Job / TEMP 重定向下 spawn orz
+    命令树）+ run observation schema/verifier + CLI 入口；S2 全绿
+    （assurance 新增 30 测试，46 passed 含既有）。
 - [ ] ③ 摩擦探针集 control 臂基线（k=1）。
 - [ ] ④ high-nist 小批 → 设计 §7 判据逐项核对。
 - [ ] ⑤ 全量 + 缺口判定登记 BACKLOG。

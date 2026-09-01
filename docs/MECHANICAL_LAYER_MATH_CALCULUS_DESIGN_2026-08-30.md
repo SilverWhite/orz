@@ -606,7 +606,7 @@ TRACED 几何搬到动作层——用命令/编辑目标语义相似度定义动
 V3 亦已闭合——S3 重建（Linux musl 三件套 00:27 HKT）+ bookworm 冒烟 +
 S4 实机冒烟（1/1 reward 1.0、temporal 四查询面渲染端到端一致、事件链
 verifier 0 错误、0 temporal_fire），见
-[阶段 3 验证记录](docs/audits/MECHANICAL_LAYER_MATH_CALCULUS_PHASE3_VERIFICATION_AUDIT_2026-08-31.md)。
+[阶段 3 验证记录](audits/MECHANICAL_LAYER_MATH_CALCULUS_PHASE3_VERIFICATION_AUDIT_2026-08-31.md)。
 
 ## 8. 已知边界与未决项
 

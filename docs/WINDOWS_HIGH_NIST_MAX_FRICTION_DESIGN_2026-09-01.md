@@ -1,6 +1,7 @@
 # Windows 原生 HIGH-NIST 最大摩擦评测设计（BoundaryBench 模式，路线 B）
 
-- 状态：`pending`（2026-09-01 设计定稿；实施待放行）
+- 状态：`partial`（2026-09-01 设计定稿；② S1/S2 完成 + 全面审查处理完成，
+  S3/S4 实机复验待放行）
 - 关联：[`BoundaryBench`](https://github.com/boundary-bench/boundary-bench)（论文
   arXiv:2608.02670）；[`FUS-BENCHMARK-FULL-EXEC`](BENCHMARK_FULL_EXEC_DESIGN_2026-08-18.md)；
   [`GAK-SBX-001`](GAK_SBX_001_WINDOWS_NATIVE_SANDBOX_AUDIT_2026-07-27.md)；
@@ -171,6 +172,31 @@ ADR-0009），冻结 home 不会先杀浏览器；真实摩擦是"浏览器存�
    上逐项核对。
 2. **Windows 加固脚本 + enforcement-probe**：加固脚本（PS/Win32）落模板；
    `windows_sandbox.py` 扩展为运行环境；7 项检查扩展为每轴断言。
+   **S1/S2 完成（2026-09-01）**：加固脚本落 `_windows_high_nist/hardening/
+   apply_hardening.ps1`（control/non-admin/high-nist 三臂、幂等、-Revert
+   可撤销、日志）；enforcement-probe 落 `_windows_high_nist/policy/
+   enforcement_probe.ps1`（GAK-SBX-001 7 项检查扩展为每轴断言集，PASS/FAIL
+   行 + JSON，fail-closed）；`windows_sandbox.py` 新增
+   `run_windows_native_sandbox()` 运行环境（受限 token：Administrators 禁用/
+   deny-only + 6 特权移除 + TokenVirtualizationAllowed=0；high-nist 另加
+   LOW IL + AppContainer 空能力 + Job kill-on-close + `%TEMP%` 重定向到
+   `{workspace}\.tmp` + egress wall），输出
+   `windows-native-sandbox-run-v0.1.schema.json` + 独立 verifier +
+   `scripts/run_windows_native_sandbox_command.py` CLI；S2 全绿
+   （assurance 测试 46 passed 含既有）。S3/S4（硬化 VM 模板实机加固 + 三臂
+   enforcement-probe 实跑）待放行。**S1/S2 全面审查处理（2026-09-01）**：
+   egress allowlist 规则逐条校验 netsh 返回码 + verifier 收紧（allowlist
+   意图不再等于墙已建）；runner 对 run observation noncompliant 改硬失败
+   （fail-closed）；HKCU 冻结改为加载 RunUser NTUSER.DAT 设置 hive ACL
+   （原实现误加到管理员 hive）；profile 目录预建 + `AppData\Local\Packages`
+   显式豁免（AppContainer profile 运行期写面）；Job Object 补
+   active-process limit（兑现 profile pids_limit）；AppContainer profile
+   删除结果如实记录；deny-write ACL 补 AD（建子目录）；`-Revert` 按规则
+   清单清理防火墙并恢复 hosts；DeepSeek 恒放行改为显式 `-DeepSeekIp` 或
+   加固时有网解析，否则 FAIL（删除“任务启动时补钉”承诺）；探针特权枚举
+   改 P/Invoke（locale 无关）并自动避开 allowlist 探针 IP；受限 token
+   LUID 数组压缩。边界：control 臂基线须在未加固环境采集；RunUser 需至少
+   登录一次（NTUSER.DAT）方可 hive 级冻结 HKCU。
 3. **摩擦探针集 control 臂基线**：k=1，确认探针在无策略下可达、verifier 断言
    成立。
 4. **high-nist 小批**：按 §7 判据逐项核对，产出首批缺口清单；对照 §8 假设排序。
@@ -179,6 +205,6 @@ ADR-0009），冻结 home 不会先杀浏览器；真实摩擦是"浏览器存�
 
 ## 11. 登记
 
-- CLI_PROJECT_INDEX：AUTH-WINDOWS-HIGH-NIST-MAX-FRICTION（`pending`；
+- CLI_PROJECT_INDEX：AUTH-WINDOWS-HIGH-NIST-MAX-FRICTION（`partial`；
   2026-09-01）；BACKLOG 0l；TODO P0-0l。
 - 设计轮不动计数；实施放行后按既有 S1-S4 纪律推进。

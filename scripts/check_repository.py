@@ -2206,6 +2206,24 @@ def check_repository() -> dict[str, Any]:
         run_event_v02_payload_negative_contracts[run_event_v02_payload_root / name] = (
             tool_completed_schema
         )
+    # P2-11 依赖图主线 (2026-09-01, DEPENDENCY_GRAPH_MAINLINE_DESIGN): read_file/
+    # search_replace 成功事实随 ToolCompleted 写 `dep_graph` 可选事件字段——2 个
+    # schema 正例（read→write 锚点边 / 工具→实体变更边）+ 2 个约束负例
+    # （未知 kind / 额外字段）。登记到映射，防 GAP-EVENT-SCHEMA-DRIFT 复发。
+    for name in (
+        "tool-completed.dep-graph-read.valid.json",
+        "tool-completed.dep-graph-write.valid.json",
+    ):
+        run_event_v02_payload_positive_contracts[run_event_v02_payload_root / name] = (
+            tool_completed_schema
+        )
+    for name in (
+        "tool-completed.dep-graph-bad-kind.constraint.invalid.json",
+        "tool-completed.dep-graph-extra-field.constraint.invalid.json",
+    ):
+        run_event_v02_payload_negative_contracts[run_event_v02_payload_root / name] = (
+            tool_completed_schema
+        )
     # GAP-SOURCE-WEIGHTING-IMPL (2026-08-13): extra negative fixture for the
     # fixed tier/weight table (authoritative must pair with 1.1; the good
     # fixture carries the full weighting fields).

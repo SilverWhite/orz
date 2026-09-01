@@ -1683,9 +1683,15 @@ S1-S4 全部闭合）
   承载=硬化 Windows VM 主载 + Linux arm 干跑；任务集=摩擦探针 + 真实任务子集
   三臂（control/non-admin/high-nist）；6 项可证伪缺口判据；8 项预期缺口假设。
   设计轮不动计数。
-- 待实施（放行后）：② Windows 加固脚本 + enforcement-probe
-  （`windows_sandbox.py` 探针→运行环境）③ 摩擦探针集 control 臂基线 ④
-  high-nist 小批 → §7 判据逐项核对 ⑤ 全量 + 缺口判定登记 BACKLOG。
+  - 待实施（放行后）：② Windows 加固脚本 + enforcement-probe
+    （`windows_sandbox.py` 探针→运行环境）**S1/S2 完成（2026-09-01）**：
+    加固脚本 `_windows_high_nist/hardening/apply_hardening.ps1`（三臂模板、
+    幂等、-Revert）+ enforcement-probe 每轴断言集 + 运行环境
+    （受限 token/LOW IL/AppContainer/Job/TEMP 重定向 spawn 命令树）+
+    run observation schema/verifier/CLI；S2 全绿。S3/S4（硬化 VM 模板实机
+    加固 + 三臂 enforcement-probe 实跑）待放行。③ 摩擦探针集 control 臂
+    基线 ④ high-nist 小批 → §7 判据逐项核对 ⑤ 全量 + 缺口判定登记 BACKLOG
+    仍待实施。
   ① Linux arm 干跑**已闭环（2026-09-01）**：三臂 12/12 reward=1.0、0 异常；
   enforcement-probe 三臂先验墙全过；OS 通道记账 non-root epErm×1 /
   high-nist eroFS×1；真实任务三臂同分；干跑期修复 6 项（Harbor docker_image
