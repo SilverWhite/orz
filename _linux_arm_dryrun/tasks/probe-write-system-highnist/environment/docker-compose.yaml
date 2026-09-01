@@ -1,0 +1,21 @@
+# high-nist 臂：
+# - 探针目标 /usr/local/share/orz-probe 用匿名只读 volume 锁定（EROFS，
+#   root 也写不进）——符合「先安装后加固」：/usr/local/bin 与 /etc/orz-acaf
+#   保持可写，install() 阶段不受影响；agent 运行阶段探针目标已锁死。
+# - 能力剥离（cap_drop ALL + cap_add CHOWN）+ no-new-privileges。
+# - /app 用匿名卷而非 tmpfs：tmpfs 是 root 所有的空目录，agent(uid 1000)
+#   写不进；匿名卷首挂载复制镜像内 agent 属主的 /app。
+# - verifier 走 separate 模式（硬化边界外，未硬化容器），不受此覆盖影响。
+services:
+  main:
+    volumes:
+      - /app
+      - /usr/local/share/orz-probe:/usr/local/share/orz-probe:ro
+    tmpfs:
+      - /tmp
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    cap_add:
+      - CHOWN

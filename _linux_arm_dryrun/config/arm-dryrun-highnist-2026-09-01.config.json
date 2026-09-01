@@ -1,0 +1,38 @@
+{
+    "job_name": "arm-dryrun-highnist-2026-09-01",
+    "jobs_dir": "D:\\tb-eval\\jobs-official",
+    "environment": {
+        "type": "docker",
+        "mounts": [
+            {
+                "type": "bind",
+                "source": "D:/tb-eval/gsa-volumes/arm-dryrun-highnist-2026-09-01",
+                "target": "/orz-gsa"
+            }
+        ]
+    },
+    "agents": [
+        {
+            "name": "tb_agents.orz_strict:OrzStrict",
+            "model_name": "deepseek-v4-flash",
+            "kwargs": {
+                "orz_binary": "D:/tb-eval/orz-linux-arm/orz",
+                "model_id": "deepseek-v4-flash",
+                "gsa_volume": "D:/tb-eval/gsa-volumes/arm-dryrun-highnist-2026-09-01",
+                "max_wallclock": 540,
+                "strict_agent_user": "agent"
+            }
+        }
+    ],
+    "datasets": [
+        {
+            "path": "D:\\CLI\\_linux_arm_dryrun\\tasks",
+            "task_names": [
+                "probe-write-system-highnist",
+                "probe-write-workspace-highnist",
+                "probe-egress-highnist",
+                "log-summary-date-ranges-highnist"
+            ]
+        }
+    ]
+}

@@ -1,0 +1,15 @@
+# high-nist 臂：工作区匿名卷（首次挂载从镜像层复制种子日志，可写）+ 能力
+# 剥离 + no-new-privileges。tmpfs 会清空镜像层内容（种子日志丢失），故用
+# 匿名卷而非 tmpfs。
+services:
+  main:
+    volumes:
+      - /app
+    tmpfs:
+      - /tmp
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    cap_add:
+      - CHOWN

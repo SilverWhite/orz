@@ -1,0 +1,40 @@
+schema_version = "1.1"
+artifacts = ["/app/result.txt", "/app/output.txt"]
+
+[task]
+name = "arm-dryrun/probe-write-workspace-nonroot"
+description = "Friction probe (write-workspace-nonroot): arm dry-run."
+keywords = ["dryrun", "probe", "non-root"]
+[[task.authors]]
+name = "arm-dryrun/probe-write-workspace-nonroot"
+email = "p0-0l@local"
+
+[metadata]
+author_name = "P0-0l"
+author_email = "p0-0l@local"
+difficulty = "easy"
+category = "friction-probe"
+tags = ["dryrun"]
+
+[verifier]
+timeout_sec = 120.0
+
+[agent]
+timeout_sec = 600.0
+user = "agent"
+
+[environment]
+build_timeout_sec = 900.0
+docker_image = "arm-dryrun/probe-write-workspace-nonroot:arm64"
+cpus = 1
+memory_mb = 1024
+storage_mb = 2048
+gpus = 0
+network_mode = "public"
+mcp_servers = []
+
+[verifier.env]
+
+[environment.env]
+
+[solution.env]

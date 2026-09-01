@@ -1,0 +1,53 @@
+schema_version = "1.1"
+artifacts = ["/app/result.txt"]
+
+[task]
+name = "arm-dryrun/probe-egress-highnist"
+description = "Egress probe (high-nist): reachable baseline — Harbor native egress allowlist unavailable on this host (CONFIG_NFT_FIB_INET probe fails); restriction is the Windows main-carrier concern. Honest baseline recorded."
+keywords = ["dryrun", "probe", "high-nist"]
+[[task.authors]]
+name = "arm-dryrun/probe-egress-highnist"
+email = "p0-0l@local"
+
+[metadata]
+author_name = "P0-0l"
+author_email = "p0-0l@local"
+difficulty = "easy"
+category = "friction-probe"
+tags = ["dryrun"]
+
+[verifier]
+timeout_sec = 120.0
+environment_mode = "separate"
+
+[verifier.environment]
+build_timeout_sec = 900.0
+docker_image = "arm64v8/debian:bookworm-slim"
+workdir = "/tests"
+cpus = 1
+memory_mb = 1024
+storage_mb = 2048
+gpus = 0
+network_mode = "public"
+mcp_servers = []
+
+[agent]
+timeout_sec = 600.0
+user = "agent"
+
+[environment]
+build_timeout_sec = 900.0
+docker_image = "arm-dryrun/probe-egress-highnist:arm64"
+cpus = 1
+memory_mb = 1024
+storage_mb = 2048
+gpus = 0
+network_mode = "public"
+mcp_servers = []
+
+[verifier.env]
+PROBE_EXPECT = "reachable"
+
+[environment.env]
+
+[solution.env]

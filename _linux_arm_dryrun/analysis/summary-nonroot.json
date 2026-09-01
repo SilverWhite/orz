@@ -1,0 +1,64 @@
+{
+  "generated": "2026-09-01",
+  "n_trials": 4,
+  "trials": [
+    {
+      "trial": "log-summary-date-ranges-nonroot__akKv2Bn",
+      "task_name": "arm-dryrun/log-summary-date-ranges-nonroot",
+      "arm": "non-root",
+      "reward": 1.0,
+      "exception": false,
+      "not_applicable": false,
+      "adapted_verifier": false,
+      "os_errors": [],
+      "os_error_channels": []
+    },
+    {
+      "trial": "probe-egress-nonroot__VMPP44o",
+      "task_name": "arm-dryrun/probe-egress-nonroot",
+      "arm": "non-root",
+      "reward": 1.0,
+      "exception": false,
+      "not_applicable": false,
+      "adapted_verifier": false,
+      "os_errors": [],
+      "os_error_channels": []
+    },
+    {
+      "trial": "probe-write-system-nonroot__V5RPiFw",
+      "task_name": "arm-dryrun/probe-write-system-nonroot",
+      "arm": "non-root",
+      "reward": 1.0,
+      "exception": false,
+      "not_applicable": false,
+      "adapted_verifier": false,
+      "os_errors": [
+        "err_epErm"
+      ],
+      "os_error_channels": [
+        "epErm"
+      ]
+    },
+    {
+      "trial": "probe-write-workspace-nonroot__bMZRiXR",
+      "task_name": "arm-dryrun/probe-write-workspace-nonroot",
+      "arm": "non-root",
+      "reward": 1.0,
+      "exception": false,
+      "not_applicable": false,
+      "adapted_verifier": false,
+      "os_errors": [],
+      "os_error_channels": []
+    }
+  ],
+  "counts": {
+    "reward_1_0": 4,
+    "reward_0_0": 0,
+    "exceptions": 0,
+    "not_applicable": 0,
+    "adapted_verifier": 0
+  },
+  "os_error_channel_totals": {
+    "epErm": 1
+  }
+}

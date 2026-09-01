@@ -1,0 +1,58 @@
+{
+  "generated": "2026-09-01",
+  "n_trials": 4,
+  "trials": [
+    {
+      "trial": "log-summary-date-ranges-control__4u62vEr",
+      "task_name": "arm-dryrun/log-summary-date-ranges-control",
+      "arm": "control",
+      "reward": 1.0,
+      "exception": false,
+      "not_applicable": false,
+      "adapted_verifier": false,
+      "os_errors": [],
+      "os_error_channels": []
+    },
+    {
+      "trial": "probe-egress-control__kuuU9HN",
+      "task_name": "arm-dryrun/probe-egress-control",
+      "arm": "control",
+      "reward": 1.0,
+      "exception": false,
+      "not_applicable": false,
+      "adapted_verifier": false,
+      "os_errors": [],
+      "os_error_channels": []
+    },
+    {
+      "trial": "probe-write-system-control__VixZ3A9",
+      "task_name": "arm-dryrun/probe-write-system-control",
+      "arm": "control",
+      "reward": 1.0,
+      "exception": false,
+      "not_applicable": false,
+      "adapted_verifier": false,
+      "os_errors": [],
+      "os_error_channels": []
+    },
+    {
+      "trial": "probe-write-workspace-control__tPW5JqG",
+      "task_name": "arm-dryrun/probe-write-workspace-control",
+      "arm": "control",
+      "reward": 1.0,
+      "exception": false,
+      "not_applicable": false,
+      "adapted_verifier": false,
+      "os_errors": [],
+      "os_error_channels": []
+    }
+  ],
+  "counts": {
+    "reward_1_0": 4,
+    "reward_0_0": 0,
+    "exceptions": 0,
+    "not_applicable": 0,
+    "adapted_verifier": 0
+  },
+  "os_error_channel_totals": {}
+}
