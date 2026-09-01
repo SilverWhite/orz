@@ -47,9 +47,13 @@ def main() -> int:
     )
     parser.add_argument(
         "--command",
-        nargs="+",
+        nargs=argparse.REMAINDER,
         required=True,
-        help="Command to spawn (argv list; no shell)",
+        help=(
+            "Command to spawn (argv list; no shell).  Must be the LAST "
+            "option: every remaining argument is taken verbatim (allows "
+            "flags like -NoProfile in the child command)."
+        ),
     )
     parser.add_argument(
         "--cwd",

@@ -2013,7 +2013,7 @@ def _drain_pipe_handle(
     try:
         import msvcrt
 
-        fd = msvcrt.open_osfhandle(int(handle), os.O_RDONLY)
+        fd = msvcrt.open_osfhandle(handle.value, os.O_RDONLY)
         with os.fdopen(fd, "rb", 65536) as stream:
             while True:
                 chunk = stream.read(65536)
@@ -2288,9 +2288,10 @@ def run_windows_native_sandbox(
             ctypes.POINTER(ctypes.c_size_t),
         ]
         kernel32.InitializeProcThreadAttributeList.restype = wintypes.BOOL
-        if not kernel32.InitializeProcThreadAttributeList(
+        kernel32.InitializeProcThreadAttributeList(
             None, wintypes.DWORD(attr_count), 0, ctypes.byref(attr_size)
-        ):
+        )
+        if attr_size.value == 0:
             raise AssuranceError("cannot query ProcThreadAttributeList size")
         attr_list = ctypes.create_string_buffer(attr_size.value)
         if not kernel32.InitializeProcThreadAttributeList(

@@ -154,12 +154,18 @@
   0 异常；enforcement-probe 三臂先验墙全过；OS 通道记账 non-root epErm×1 /
   high-nist eroFS×1；真实任务三臂同分。干跑记录见
   `_linux_arm_dryrun/PREP_RECORD_2026-09-01.md`。
-  - [x] ② Windows 加固脚本 + enforcement-probe（S1/S2 完成 2026-09-01；S3/S4
-    待放行）：`_windows_high_nist/` 加固脚本（三臂模板、-Revert、日志）+
+  - [x] ② Windows 加固脚本 + enforcement-probe（S1/S2 + 全面审查处理完成
+    2026-09-01；**S3 重建 + S4 本机冒烟闭环 2026-09-01**；硬化 VM 正式
+    三臂实跑待放行）：`_windows_high_nist/` 加固脚本（三臂模板、-Revert、
+    日志）+
     enforcement-probe（每轴断言集）+ `windows_sandbox.py` 运行环境扩展
     （受限 token / LOW IL / AppContainer / Job / TEMP 重定向下 spawn orz
     命令树）+ run observation schema/verifier + CLI 入口；S2 全绿
-    （assurance 新增 30 测试，46 passed 含既有）。
+    （assurance 新增 30 测试，46 passed 含既有）；S3=Windows x86_64
+    三件套重建（orz f0eeb524，12m15s）+ 守卫符号核验；S4 本机冒烟=
+    sandbox control 臂端到端 compliant + 冒烟修复 3 项
+    （ProcThreadAttributeList 查询大小误判 / 管道 drain c_void_p 句柄 /
+    CLI --command REMAINDER）；35 passed + 全量 1624 passed。
 - [ ] ③ 摩擦探针集 control 臂基线（k=1）。
 - [ ] ④ high-nist 小批 → 设计 §7 判据逐项核对。
 - [ ] ⑤ 全量 + 缺口判定登记 BACKLOG。

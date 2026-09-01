@@ -73,11 +73,20 @@ try {
                 allow_container_write_probe = $true
             } | ConvertTo-Json | Set-Content -LiteralPath $marker -Encoding ascii
         }
+        $obsOutput = Join-Path $Workspace "windows-native-run-observation-$Arm.json"
         $args = @(
             (Join-Path $root 'scripts\run_windows_native_sandbox_command.py'),
             '--workspace', $Workspace,
             '--arm', $Arm,
-            '--timeout', $TimeoutSeconds,
+            '--timeout', $TimeoutSeconds
+        )
+        foreach ($ip in $AllowlistIp) {
+            $args += @('--allowlist-ip', $ip)
+        }
+        $args += @('--output', $obsOutput)
+        # --command must be last: every following argument (including
+        # child flags like -NoProfile) is passed verbatim to the child.
+        $args += @(
             '--command',
             'powershell.exe', '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass',
             '-File', $probeScript,
@@ -89,11 +98,6 @@ try {
         if ($reachIp) {
             $args += @('-AllowlistReachabilityIp', $reachIp)
         }
-        foreach ($ip in $AllowlistIp) {
-            $args += @('--allowlist-ip', $ip)
-        }
-        $obsOutput = Join-Path $Workspace "windows-native-run-observation-$Arm.json"
-        $args += @('--output', $obsOutput)
 
         $probeExit = 1
         python $args | Out-Host

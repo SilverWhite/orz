@@ -195,7 +195,19 @@ ADR-0009），冻结 home 不会先杀浏览器；真实摩擦是"浏览器存�
    清单清理防火墙并恢复 hosts；DeepSeek 恒放行改为显式 `-DeepSeekIp` 或
    加固时有网解析，否则 FAIL（删除“任务启动时补钉”承诺）；探针特权枚举
    改 P/Invoke（locale 无关）并自动避开 allowlist 探针 IP；受限 token
-   LUID 数组压缩。边界：control 臂基线须在未加固环境采集；RunUser 需至少
+   LUID 数组压缩。**S3 重建 + S4 本机冒烟闭环（2026-09-01）**：Windows
+   x86_64 三件套重建（orz f0eeb524，12m15s；orz.exe 50,291,712 B /
+   orz-signer.exe 6,739,456 B / orz-acaf-provision.exe 6,642,176 B）；
+   三件套启动行为与守卫符号（dep_graph / blackboard_read /
+   工具→实体变更: / deps total=reads:）核验通过；sandbox control 臂
+   端到端冒烟 compliant；**冒烟修复 3 项**——
+   `InitializeProcThreadAttributeList` 查询大小误判（Win32 查询期预期
+   返回 FALSE+122，原实现当致命错误，导致全部臂无法 spawn）、管道 drain
+   对 `c_void_p` 句柄误用 `int()`（句柄值被当 bytes 解析）、CLI
+   `--command` 用 `nargs='+'` 拒绝 `-` 前缀子命令参数（改 REMAINDER 且
+   须置于末位，runner 同步调整参数顺序）；S2 测试 35 passed（+2 回归）、
+   assurance 全量 1624 passed、check_repository valid。边界：control
+   臂基线须在未加固环境采集；RunUser 需至少
    登录一次（NTUSER.DAT）方可 hive 级冻结 HKCU。
 3. **摩擦探针集 control 臂基线**：k=1，确认探针在无策略下可达、verifier 断言
    成立。

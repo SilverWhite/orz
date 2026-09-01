@@ -4,8 +4,11 @@ import json
 import os
 from pathlib import Path
 import subprocess
+import sys
 import tempfile
 import unittest
+import ctypes
+from ctypes import wintypes
 
 from jsonschema import Draft202012Validator, FormatChecker
 
@@ -18,6 +21,7 @@ from assurance.windows_sandbox import (
     _build_environment_block,
     _build_sandbox_env,
     _command_line_from,
+    _drain_pipe_handle,
     build_restricted_token_spec,
     run_observation_checks_for_arm,
 )
@@ -192,6 +196,86 @@ class RunEnvironmentPureHelperTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             env = _build_sandbox_env(Path(tmp), "non-admin", None)
             self.assertNotIn("TEMP", set(env) - set(os.environ))
+
+
+@unittest.skipUnless(os.name == "nt", "pipe drain requires a Windows handle")
+class DrainPipeHandleTests(unittest.TestCase):
+    """S4 冒烟回归：_drain_pipe_handle 必须接受 c_void_p（wintypes.HANDLE）
+    而非 int(handle)（ctypes.c_void_p 无 __int__，int() 会误读 bytes）。
+    """
+
+    def test_drains_c_void_p_handle(self) -> None:
+        kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        kernel32.CreatePipe.argtypes = [
+            ctypes.POINTER(wintypes.HANDLE),
+            ctypes.POINTER(wintypes.HANDLE),
+            ctypes.c_void_p,
+            wintypes.DWORD,
+        ]
+        kernel32.CreatePipe.restype = wintypes.BOOL
+        kernel32.WriteFile.argtypes = [
+            wintypes.HANDLE,
+            ctypes.c_void_p,
+            wintypes.DWORD,
+            ctypes.POINTER(wintypes.DWORD),
+            ctypes.c_void_p,
+        ]
+        kernel32.WriteFile.restype = wintypes.BOOL
+        kernel32.CloseHandle.argtypes = [wintypes.HANDLE]
+        kernel32.CloseHandle.restype = wintypes.BOOL
+
+        read_h = wintypes.HANDLE()
+        write_h = wintypes.HANDLE()
+        self.assertTrue(
+            kernel32.CreatePipe(ctypes.byref(read_h), ctypes.byref(write_h), None, 0)
+        )
+        payload = b"smoke-pipe-ok"
+        written = wintypes.DWORD()
+        try:
+            buf = ctypes.create_string_buffer(payload)
+            self.assertTrue(
+                kernel32.WriteFile(
+                    write_h, buf, len(payload), ctypes.byref(written), None
+                )
+            )
+            kernel32.CloseHandle(write_h)
+            sink: list[bytes] = []
+            _drain_pipe_handle(read_h, sink)
+            self.assertEqual(b"".join(sink), payload)
+        finally:
+            kernel32.CloseHandle(read_h)
+
+
+@unittest.skipUnless(os.name == "nt", "native sandbox CLI requires Windows")
+class NativeSandboxCliSmokeTests(unittest.TestCase):
+    """S4 冒烟回归：--command 必须是 REMAINDER，子命令里的 '-' 前缀参数
+    （如 -c / -NoProfile）不得被 argparse 当作未知选项拒绝。
+    """
+
+    def test_dash_prefixed_child_args_are_accepted(self) -> None:
+        result = subprocess.run(
+            [
+                sys.executable,
+                str(ROOT / "scripts" / "run_windows_native_sandbox_command.py"),
+                "--arm",
+                "control",
+                "--command",
+                sys.executable,
+                "-c",
+                "print('smoke-ok')",
+            ],
+            capture_output=True,
+            shell=False,
+            timeout=120,
+        )
+        self.assertEqual(
+            result.returncode,
+            0,
+            result.stderr.decode("utf-8", errors="replace"),
+        )
+        out = result.stdout.decode("utf-8", errors="replace")
+        self.assertIn('"outcome": "compliant"', out)
+        self.assertIn('"stdout_bytes": 10', out)
 
     def test_environment_block(self) -> None:
         block = _build_environment_block({"A": "1", "B": "2"})
