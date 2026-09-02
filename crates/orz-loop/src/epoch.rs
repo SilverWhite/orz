@@ -364,7 +364,10 @@ pub fn render_section(
                 .results
                 .iter()
                 .chain(exec.errors.iter())
-                .map(|s| truncate_chars(s, EXEC_LINE_MAX_CHARS))
+                // B1（2026-09-03）：exec 行结构化为 ExecEntry——渲染只取
+                // 文本载荷；round/domain/ts 章供 B2 折叠/展开消费（本
+                // 阶段渲染口径逐字节不变）。
+                .map(|entry| truncate_chars(&entry.text, EXEC_LINE_MAX_CHARS))
                 .collect();
             if lines.len() > EXEC_RENDER_CAP {
                 let omitted = lines.len() - EXEC_RENDER_CAP;
@@ -780,11 +783,13 @@ mod tests {
             project_docs: vec!["design.md".to_string(), "gate.rs".to_string()],
             source_ledger: vec!["docs/index".to_string()],
             response: Some("检索完成\n[DOC] design.md".to_string()),
+            stamp: None,
         };
         let external = ExternalRetSection {
             web_sources: vec!["https://example.com/paper".to_string()],
             source_ledger: vec!["SRC-001 https://example.com/paper".to_string()],
             response: Some("网页检索完成".to_string()),
+            stamp: None,
         };
 
         let internal_text = render_retrieval_section("internal_ret", &internal, &external);
@@ -826,6 +831,7 @@ mod tests {
             project_docs: Vec::new(),
             source_ledger: Vec::new(),
             response: Some(long_response.clone()),
+            stamp: None,
         };
         let external = ExternalRetSection::default();
         let text = render_retrieval_section("internal_ret", &internal, &external);
@@ -858,6 +864,7 @@ mod tests {
             project_docs: many_entries.clone(),
             source_ledger: many_entries.clone(),
             response: Some("检索完成".to_string()),
+            stamp: None,
         };
         let external = ExternalRetSection::default();
         let text = render_retrieval_section("internal_ret", &internal, &external);
@@ -906,6 +913,8 @@ mod tests {
             error: None,
             trace_id: "t000001".into(),
             timestamp: "2026-08-15T00:00:00Z".into(),
+            round: 0,
+            domain: None,
         });
         board.push_result(ActionResult {
             order_id: "ORD-000002".into(),
@@ -920,6 +929,8 @@ mod tests {
             })),
             trace_id: "t000002".into(),
             timestamp: "2026-08-15T00:00:01Z".into(),
+            round: 0,
+            domain: None,
         });
 
         let plan = PlanSection::default();
@@ -987,6 +998,8 @@ mod tests {
             error: None,
             trace_id: "t-ok-1".into(),
             timestamp: "2026-08-19T00:00:00Z".into(),
+            round: 0,
+            domain: None,
         });
         board.push_result(ActionResult {
             order_id: "ORD-ERR-1".into(),
@@ -1000,6 +1013,8 @@ mod tests {
             })),
             trace_id: "t-err-1".into(),
             timestamp: "2026-08-19T00:00:01Z".into(),
+            round: 0,
+            domain: None,
         });
         // 信封字段整体缺失 → step/code 机械回退 `?`（不编造、不隐藏）。
         board.push_result(ActionResult {
@@ -1010,6 +1025,8 @@ mod tests {
             error: None,
             trace_id: "t-err-2".into(),
             timestamp: "2026-08-19T00:00:02Z".into(),
+            round: 0,
+            domain: None,
         });
 
         let text = render_section(
@@ -1059,6 +1076,8 @@ mod tests {
                 error: None,
                 trace_id: format!("t-{i:03}"),
                 timestamp: format!("2026-08-19T00:{i:02}:00Z"),
+                round: 0,
+                domain: None,
             });
         }
         let text = render_section(
@@ -1109,6 +1128,8 @@ mod tests {
             error: None,
             trace_id: "t-trunc".into(),
             timestamp: "2026-08-23T00:00:00Z".into(),
+            round: 0,
+            domain: None,
         });
         board.push_result(ActionResult {
             order_id: "ORD-DELTA-FULL".into(),
@@ -1122,6 +1143,8 @@ mod tests {
             error: None,
             trace_id: "t-full".into(),
             timestamp: "2026-08-23T00:00:01Z".into(),
+            round: 0,
+            domain: None,
         });
         let text = render_section(
             &PlanSection::default(),
@@ -1151,8 +1174,12 @@ mod tests {
     #[test]
     fn render_exec_truncates_lines_to_200_chars() {
         let mut exec_section = ExecSection::default();
-        exec_section.results.push(format!("ok {}", "x".repeat(500)));
-        exec_section.errors.push(format!("err {}", "y".repeat(500)));
+        exec_section
+            .results
+            .push(format!("ok {}", "x".repeat(500)).into());
+        exec_section
+            .errors
+            .push(format!("err {}", "y".repeat(500)).into());
         let text = render_section(
             &PlanSection::default(),
             &[],
@@ -1183,7 +1210,7 @@ mod tests {
     fn render_exec_caps_at_latest_50_with_head_line() {
         let mut exec_section = ExecSection::default();
         for i in 0..60 {
-            exec_section.results.push(format!("line-{i:02} run"));
+            exec_section.results.push(format!("line-{i:02} run").into());
         }
         exec_section.errors.push("short error".into());
         let text = render_section(
@@ -1218,7 +1245,7 @@ mod tests {
         // ① 50 条超长行：行数未超 EXEC_RENDER_CAP，但逐行截断后仍远超 4K。
         let mut exec_section = ExecSection::default();
         for _ in 0..50 {
-            exec_section.results.push("长".repeat(500));
+            exec_section.results.push("长".repeat(500).into());
         }
         let text = render_section(
             &PlanSection::default(),
@@ -1245,7 +1272,7 @@ mod tests {
         // 保留头行（含省略计数）+ 计数行。
         let mut exec_section = ExecSection::default();
         for _ in 0..60 {
-            exec_section.errors.push("错".repeat(500));
+            exec_section.errors.push("错".repeat(500).into());
         }
         let text = render_section(
             &PlanSection::default(),
@@ -1288,6 +1315,8 @@ mod tests {
             error: None,
             trace_id: "t-pr-1".into(),
             timestamp: "2026-08-19T01:00:00Z".into(),
+            round: 0,
+            domain: None,
         });
         board.push_result(ActionResult {
             order_id: "ORD-PR-2".into(),
@@ -1302,6 +1331,8 @@ mod tests {
             })),
             trace_id: "t-pr-2".into(),
             timestamp: "2026-08-19T01:00:01Z".into(),
+            round: 0,
+            domain: None,
         });
 
         // 成功 receipt 点读（since 与 receipt_id 同时给 → 忽略 since）。
@@ -1371,6 +1402,8 @@ mod tests {
             error: None,
             trace_id: "t-pr-3".into(),
             timestamp: "2026-08-19T01:00:02Z".into(),
+            round: 0,
+            domain: None,
         });
         let plan = PlanSection {
             plan_epoch: 7,
@@ -1424,6 +1457,8 @@ mod tests {
             error: None,
             trace_id: "t-pr-4".into(),
             timestamp: "2026-08-19T01:00:03Z".into(),
+            round: 0,
+            domain: None,
         });
         let plan = PlanSection {
             plan_epoch: 8,
@@ -1459,6 +1494,8 @@ mod tests {
             error: None,
             trace_id: "t-pr-9".into(),
             timestamp: "2026-08-19T01:00:09Z".into(),
+            round: 0,
+            domain: None,
         });
         let text = render_section(
             &PlanSection::default(),
@@ -1532,6 +1569,8 @@ mod tests {
             error: None,
             trace_id: "t-b1".into(),
             timestamp: "2026-08-19T02:00:00Z".into(),
+            round: 0,
+            domain: None,
         });
         board.push_result(ActionResult {
             order_id: "ORD-B2".into(),
@@ -1545,6 +1584,8 @@ mod tests {
             })),
             trace_id: "t-b2".into(),
             timestamp: "2026-08-19T02:00:01Z".into(),
+            round: 0,
+            domain: None,
         });
         let text = render_section(
             &PlanSection::default(),
@@ -1694,11 +1735,15 @@ mod tests {
             old_lines: 1,
             new_lines: 2,
             timestamp: "2026-08-14T00:00:00Z".into(),
+            round: 0,
+            domain: None,
         });
         bb.tool_actions.push(ToolActionRecord {
             category: "read".to_string(),
             tool: "read_file".into(),
             timestamp: "2026-08-14T00:00:00Z".into(),
+            round: 0,
+            domain: None,
         });
         bb.exec.results.push("ok".into());
         bb.gate_log.gate_decisions.push("keep".into());
@@ -1768,6 +1813,8 @@ mod tests {
                 old_lines: 1,
                 new_lines: 3,
                 timestamp: "2026-08-14T00:00:00Z".into(),
+                round: 0,
+                domain: None,
             });
         }
         let snapshot = bb.read().epoch_snapshot("2026-08-14T01:00:00Z");
@@ -1807,6 +1854,8 @@ mod tests {
             old_lines: 1,
             new_lines: 2,
             timestamp: "2026-08-14T00:00:00Z".into(),
+            round: 0,
+            domain: None,
         });
         let snapshot = bb.epoch_snapshot("2026-08-14T01:00:00Z");
         assert!(write_epoch_archive_retry(&dir, &snapshot));

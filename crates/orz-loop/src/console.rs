@@ -98,6 +98,10 @@ pub const CODE_SCRIPT_TIMEOUT: &str = "script_timeout";
 /// P0-C S4 (2026-08-16)：单步宿主调用在 host 层被截止并收口进程树——
 /// 直接订单失败信封使用本码；脚本步骤由 runner 归一化为 `script_timeout`。
 pub const CODE_TOOL_TIMEOUT: &str = "tool_timeout";
+/// host 层工具不可用（`ToolErrorKind::NotFound`；诊断签名词典
+/// `tool_not_found` 同名词）——与 `tool_timeout` / `execution_failed`
+/// 并列的 host 工具失败码（P2-12 失败目标聚合错误码集合同源使用）。
+pub const CODE_TOOL_NOT_FOUND: &str = "tool_not_found";
 pub const CODE_SCRIPT_RESPONSE_LIMIT: &str = "script_response_limit";
 pub const CODE_TRACE_UNAVAILABLE: &str = "trace_unavailable";
 pub const CODE_NOT_FOUND: &str = "not_found";

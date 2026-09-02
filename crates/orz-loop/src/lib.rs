@@ -26,6 +26,7 @@ pub mod dep_graph;
 pub mod diagnostics;
 pub mod entities;
 pub mod epoch;
+pub mod failure_agg;
 pub(crate) mod failure_target;
 pub mod gateway;
 pub mod host;

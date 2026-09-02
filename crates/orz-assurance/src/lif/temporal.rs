@@ -65,6 +65,33 @@ pub struct DomainSpike {
     pub domain: Domain,
 }
 
+/// B1 会话化基础（2026-09-03，P2-13 / BLACKBOARD_CONVERSATION_SCOPE_FOLD
+/// 设计 R5 conversation-relative 轴）：跨 prompt 续接 LIF 会话轴所需的
+/// 最小机器状态快照——决策轮计数（会话相对）、域机器状态（has_success /
+/// current_domain / entry_round）与域切换时间线（spikes，`t` 为会话相对
+/// 秒，同一次会话内跨 prompt 单调）。
+///
+/// 有界查询面（records / migrations / features）与 run 节奏估计器/通道
+/// 不持久化：每次 run 从当前机器状态与 spike 时间线重建（P2-10 阶段 3
+/// 已登记「round/entry_round 只能近似」的边界随本快照关闭——round 与
+/// 域驻留状态精确续接）。
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct TemporalSessionSnapshot {
+    /// 会话内已完成决策轮数（跨 prompt 单调；写入黑板各分区的 round 章
+    /// 与 temporal 行同刻度）。
+    pub round: u64,
+    /// 是否出现过成功（域判定前提；Start 仅在首次成功前出现）。
+    pub has_success: bool,
+    /// 当前驻留域（跨 prompt 续接，不回归 Start）。
+    pub current_domain: Domain,
+    /// 当前域段的入域轮（会话相对）。
+    pub entry_round: u64,
+    /// 域切换时间线（t = 会话相对墙钟秒；同 restore_spikes 语义重建
+    /// migrations / migration_count）。
+    #[serde(default)]
+    pub spikes: Vec<DomainSpike>,
+}
+
 /// A domain migration (History query). `recovery` marks a
 /// Stuck/LowProgress → Normal transition (§3.2 Recovery).
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
@@ -334,6 +361,64 @@ impl TemporalState {
         &self.spikes
     }
 
+    /// B1 会话化基础（2026-09-03）：导出跨 prompt 续接快照——决策轮计数
+    /// 与域机器状态精确携带（取代 I4 restore_spikes 的 round/entry_round
+    /// 近似口径）。
+    pub fn session_snapshot(&self) -> TemporalSessionSnapshot {
+        TemporalSessionSnapshot {
+            round: self.round,
+            has_success: self.has_success,
+            current_domain: self.current_domain,
+            entry_round: self.entry_round,
+            spikes: self.spikes.clone(),
+        }
+    }
+
+    /// B1 会话化基础（2026-09-03）：从会话侧车快照精确续接域机器——
+    /// `round` 直接恢复（下一决策轮 = round + 1，会话相对）；域切换
+    /// 时间线重建 migrations / migration_count（与 restore_spikes 的
+    /// 时间线推导同口径）。records / features / 工具窗口不恢复（新 run
+    /// 有界查询面从零开始，与既有 per-run 语义一致）。
+    pub fn restore_session_snapshot(&mut self, snapshot: &TemporalSessionSnapshot) {
+        self.round = snapshot.round;
+        self.has_success = snapshot.has_success;
+        self.current_domain = snapshot.current_domain;
+        self.entry_round = snapshot.entry_round;
+        self.spikes.clear();
+        self.migrations.clear();
+        self.migration_count = 0;
+        // 时间线重放（仅重建 history 查询面；at_round 取重建序号近似，不
+        // 参与黑板 round 章——历史查询面恢复的近似性沿用 I4 restore_spikes
+        // 已登记边界）。
+        let mut replay_domain = Domain::Start;
+        let mut replay_entry = 0u64;
+        for spike in &snapshot.spikes {
+            self.spikes.push(*spike);
+            if spike.domain != replay_domain && replay_entry > 0 {
+                let recovery = matches!(
+                    (replay_domain, spike.domain),
+                    (Domain::Stuck | Domain::LowProgress, Domain::Normal)
+                );
+                self.migrations.push_back(Migration {
+                    from: replay_domain,
+                    to: spike.domain,
+                    at_t: spike.t,
+                    at_round: replay_entry,
+                    dwell_rounds: 0,
+                    recovery,
+                });
+                if self.migrations.len() > MIGRATION_LOG_CAP {
+                    self.migrations.pop_front();
+                }
+                self.migration_count = self.migration_count.saturating_add(1);
+            }
+            replay_domain = spike.domain;
+            replay_entry = snapshot.round.max(1);
+        }
+        // 权威机器态已直接恢复（current_domain/entry_round/has_success），
+        // 不随时间线重放被覆盖。
+    }
+
     /// Restore spikes from a session sidecar (cross-prompt recovery, I4):
     /// the domain machine is rebuilt from the spike timeline. Only `t` +
     /// `domain` are persisted (§3.5), so `round` / `entry_round` / dwell
@@ -393,6 +478,47 @@ mod tests {
         st.observe_tool_outcome(ToolOutcome::Success);
         st.record_round(20.0, 8.0, 1.0, 0.5, 0.3);
         assert_eq!(st.now().unwrap().domain, Domain::Normal);
+    }
+
+    /// B1 会话化基础（2026-09-03，R5）：会话快照精确携带决策轮计数与
+    /// 域机器状态（round / current_domain / entry_round / has_success /
+    /// spikes）——恢复后下一决策轮从快照轮续接、域切换不回归 Start、
+    /// 时间线（spikes/migrations）一并重建。
+    #[test]
+    fn session_snapshot_restores_round_and_domain_machine() {
+        let mut st = TemporalState::new();
+        st.observe_tool_outcome(ToolOutcome::Success);
+        // r1: Start → Normal（首次成功后的正常域）。
+        st.record_round(1.0, 8.0, 0.9, 0.5, 0.1);
+        assert_eq!(st.now().unwrap().domain, Domain::Normal);
+        // r2: Normal → Stuck。
+        st.record_round(2.0, 8.0, 0.2, 2.5, 5.0);
+        assert_eq!(st.now().unwrap().domain, Domain::Stuck);
+
+        let snap = st.session_snapshot();
+        assert_eq!(snap.round, 2);
+        assert_eq!(snap.current_domain, Domain::Stuck);
+        assert_eq!(snap.entry_round, 2);
+        assert!(snap.has_success);
+        assert_eq!(snap.spikes.len(), 2, "Normal@r1 + Stuck@r2 两个切换点");
+
+        let mut restored = TemporalState::new();
+        restored.restore_session_snapshot(&snap);
+        assert_eq!(restored.round(), 2, "round 精确续接");
+        assert_eq!(restored.current_domain(), Domain::Stuck);
+        assert!(restored.has_success());
+        assert_eq!(restored.entry_round, 2);
+        assert_eq!(restored.spikes().len(), 2);
+
+        // 下一决策轮 = 3；Stuck → Normal 恢复迁移正确标注 recovery。
+        restored.record_round(3.0, 8.0, 0.9, 0.5, 0.1);
+        assert_eq!(restored.round(), 3);
+        assert_eq!(restored.now().unwrap().domain, Domain::Normal);
+        let history = restored.history();
+        let last = history.last().expect("migration rebuilt");
+        assert!(last.recovery);
+        assert_eq!(last.from, Domain::Stuck);
+        assert_eq!(last.to, Domain::Normal);
     }
 
     #[test]

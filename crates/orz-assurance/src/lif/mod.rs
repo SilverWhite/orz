@@ -34,7 +34,8 @@ pub use estimator::{
     T_HAT_INIT_SECS, T_HAT_MAX_SECS, T_HAT_MIN_SECS,
 };
 pub use temporal::{
-    Domain, DomainSpike, Migration, TemporalQuery, TemporalRecord, TemporalState, ToolOutcomeBucket,
+    Domain, DomainSpike, Migration, TemporalQuery, TemporalRecord, TemporalSessionSnapshot,
+    TemporalState, ToolOutcomeBucket,
 };
 
 /// err channel τ semantics (§4.3): fixed wall-clock seconds (spec) or
@@ -127,6 +128,36 @@ impl LifEngine {
         self.run_t0 = Some(t0);
         let t0r = 0.0;
         self.last_time = Some(t0r);
+    }
+
+    /// Anchor the run clock at `t0` only when the engine has not observed
+    /// anything yet (P2-12 write-time stamping must share ONE run-relative
+    /// axis with the temporal rows even if the first stamped failure event
+    /// would otherwise race the engine's own first observation).
+    pub fn ensure_run_origin(&mut self, t0: f64) {
+        if self.run_t0.is_none() {
+            self.set_run_origin(t0);
+        }
+    }
+
+    /// B1 会话化基础（2026-09-03，P2-13 / R5 conversation-relative 轴）：
+    /// 把时间轴原点预置为会话起始墙钟秒（仅在引擎尚未观测任何事件时
+    /// 生效），使 temporal 行与 failure_agg 的 `t` 跨 prompt 单调（会话
+    /// 相对）。与 [`Self::set_run_origin`] 不同：**不**把 `last_time`
+    /// 预置到 0——通道/估计器保持 run 级新鲜态，跨 prompt 间隙不产生
+    /// 衰减/驻留伪差（last_time 在首次观测时初始化）。
+    pub fn set_axis_origin(&mut self, wall_t0: f64) {
+        if self.run_t0.is_none() {
+            self.run_t0 = Some(wall_t0);
+        }
+    }
+
+    /// Run-relative seconds on the engine axis for a wall-clock epoch time
+    /// `t`. When the engine has no origin yet this mirrors [`Self::rel`]
+    /// (returns `t` untouched) — callers that need a guaranteed shared axis
+    /// should call [`Self::ensure_run_origin`] first.
+    pub fn run_relative_secs(&self, t: f64) -> f64 {
+        self.rel(t)
     }
 
     pub fn set_err_tau_mode(&mut self, mode: ErrTauMode) {
@@ -300,6 +331,27 @@ impl LifEngine {
     pub fn temporal_mut(&mut self) -> &mut TemporalState {
         &mut self.temporal
     }
+
+    /// B1 会话化基础（2026-09-03）：跨 prompt 续接快照（round / 域机器
+    /// / spike 时间线）。
+    pub fn temporal_session_snapshot(&self) -> TemporalSessionSnapshot {
+        self.temporal.session_snapshot()
+    }
+
+    /// B1 会话化基础（2026-09-03）：从会话侧车快照续接轮号与域机器；
+    /// `axis_origin_wall = Some(session_start)` 时同时把 `t` 轴预置为
+    /// 会话相对（跨 prompt 单调）。`None` = 无会话轴（legacy 侧车 /
+    /// 单 run），沿用 run 起点原点语义。
+    pub fn restore_temporal_session(
+        &mut self,
+        snapshot: &TemporalSessionSnapshot,
+        axis_origin_wall: Option<f64>,
+    ) {
+        self.temporal.restore_session_snapshot(snapshot);
+        if let Some(t0) = axis_origin_wall {
+            self.set_axis_origin(t0);
+        }
+    }
 }
 
 #[cfg(test)]
@@ -322,5 +374,38 @@ mod tests {
         assert_eq!(engine.err().fire_count(), 0);
         assert_eq!(engine.temporal().total_tool_events(), 5);
         assert_eq!(engine.temporal().total_errors(), 0);
+    }
+
+    /// B1 会话化基础（2026-09-03，R5 conversation-relative 轴）：轴原点
+    /// 预置为会话起始墙钟后，temporal `t` = wall − session_start（会话
+    /// 相对、跨 prompt 单调）；`restore_temporal_session` 精确续接轮号
+    /// 且保持同一轴。
+    #[test]
+    fn axis_preset_and_session_restore_keep_conversation_relative_t() {
+        let session_start = 1_700_000_000.0;
+        let mut engine = LifEngine::new();
+        engine.set_axis_origin(session_start);
+        engine.on_decision_round(session_start + 10.0);
+        assert_eq!(engine.temporal().round(), 1);
+        let row = engine.temporal().now().expect("decision row");
+        assert!(
+            (row.t - 10.0).abs() < 1e-6,
+            "t is session-relative (got {})",
+            row.t
+        );
+
+        // 跨 prompt：新引擎恢复快照 + 同轴原点 → 决策轮从 1 续到 2、
+        // t 从 60s 续接（不回归 0）。
+        let snap = engine.temporal_session_snapshot();
+        let mut engine2 = LifEngine::new();
+        engine2.restore_temporal_session(&snap, Some(session_start));
+        engine2.on_decision_round(session_start + 60.0);
+        assert_eq!(engine2.temporal().round(), 2, "round continues");
+        let row2 = engine2.temporal().now().expect("second row");
+        assert!(
+            (row2.t - 60.0).abs() < 1e-6,
+            "t continues on the same axis (got {})",
+            row2.t
+        );
     }
 }

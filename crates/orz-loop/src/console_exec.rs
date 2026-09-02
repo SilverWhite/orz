@@ -992,6 +992,10 @@ impl AgentLoopController {
         error: Option<serde_json::Value>,
         trace_id: String,
     ) {
+        // B1 会话化基础（2026-09-03）：receipt 写时盖 (round, domain) 章
+        // ——round/domain 与 exec/failure_agg 同源（LIF 会话相对决策轮 +
+        // 当前域），供 B2 按域段/轮数折叠与展开。
+        let (round, domain) = self.blackboard_stamp();
         self.blackboard.write().actions.push_result(ActionResult {
             order_id,
             action: Some(action),
@@ -1000,6 +1004,8 @@ impl AgentLoopController {
             error,
             trace_id,
             timestamp: chrono_utc_now(),
+            round,
+            domain: Some(domain),
         });
     }
 

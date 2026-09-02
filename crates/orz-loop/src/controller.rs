@@ -30,13 +30,17 @@ use orz_assurance::{
     canonical_json, seal_event, sha256_hex,
 };
 
+use orz_assurance::lif::{Domain, TemporalSessionSnapshot};
 use orz_assurance::session::snapshot::SnapshotStore;
 
 use crate::agent_loop::{
     LoopOutcome, LoopProfile, SharedLoopServices, run_agent_loop, run_template_compact,
 };
 use crate::agents::MainAgent;
-use crate::blackboard::{EditRecord, ExternalRetSection, InternalRetSection, SharedBlackboard};
+use crate::blackboard::{
+    Blackboard, EditRecord, ExternalRetSection, InternalRetSection, SharedBlackboard,
+    ToolActionRecord,
+};
 use crate::console::{ServiceRegistry, TraceStore};
 use crate::gateway::fake::FakeProvider;
 use crate::gateway::model::{Message, ModelGateway, Role, ToolCall};
@@ -1012,6 +1016,26 @@ impl AgentLoopController {
         self
     }
 
+    /// B1 会话化基础（2026-09-03，P2-13）：ACP 每 prompt 续载——把上个
+    /// prompt 结束时持久化的会话黑板 live 快照整体灌回（`None` = 全新
+    /// 会话，保持默认空板）。快照已含会话边界清理（动作栏注册/订单槽
+    /// 与依赖图已剥离；见 [`Blackboard::conversation_snapshot`]）。
+    /// 调用顺序：本方法应放在既有检索分区灌回之后（快照同时携带检索
+    /// 分区，内容与 activation 侧车同源；快照存在时以其为准）。
+    pub fn with_live_blackboard(self, snapshot: Option<Blackboard>) -> Self {
+        if let Some(snapshot) = snapshot {
+            let mut w = self.blackboard.write();
+            w.restore_conversation_snapshot(snapshot);
+        }
+        self
+    }
+
+    /// B1：run 成功后取回会话黑板快照（供 ACP 存回会话/侧车；同
+    /// [`Blackboard::conversation_snapshot`] 的边界清理语义）。
+    pub fn blackboard_conversation_snapshot(&self) -> Blackboard {
+        self.blackboard.read().conversation_snapshot()
+    }
+
     /// IP5: attach the session's pre-mutation snapshot store (see
     /// `orz-assurance::session::snapshot`). Mutation-class tools with
     /// knowable targets get tracked before execution.
@@ -1985,6 +2009,63 @@ impl AgentLoopController {
     /// P2-10 F2 §3.5 (I4): the current domain spikes (sidecar persistence).
     pub fn temporal_spikes(&self) -> Vec<orz_assurance::lif::DomainSpike> {
         self.lif.lock().unwrap().temporal().spikes().to_vec()
+    }
+
+    /// B1 会话化基础（2026-09-03，R5 conversation-relative 轴）：run 结束
+    /// 导出 LIF 会话轴快照（决策轮计数 + 域机器 + spike 时间线）供 ACP
+    /// 持久化；下一 prompt 恢复后轮号与域驻留精确续接（取代 I4
+    /// restore_spikes 的近似口径）。
+    pub fn lif_session_snapshot(&self) -> TemporalSessionSnapshot {
+        self.lif.lock().unwrap().temporal_session_snapshot()
+    }
+
+    /// B1：从会话侧车快照续接轮号与域机器；`axis_origin_wall` = 会话
+    /// 起始墙钟秒（Some 时 `t` 轴与会话相对，跨 prompt 单调；CLI 单
+    /// run 不调用本方法，行为不变）。
+    pub fn restore_lif_session(
+        &self,
+        snapshot: &TemporalSessionSnapshot,
+        axis_origin_wall: Option<f64>,
+    ) {
+        self.lif
+            .lock()
+            .unwrap()
+            .restore_temporal_session(snapshot, axis_origin_wall);
+    }
+
+    /// B1：仅预置会话时间轴原点（无快照可续的 legacy/全新会话也保证
+    /// temporal `t` 与会话相对）。引擎尚未观测任何事件时生效。
+    pub fn preset_lif_session_axis(&self, session_started_at: f64) {
+        self.lif.lock().unwrap().set_axis_origin(session_started_at);
+    }
+
+    /// B1 写时盖章：黑板各分区（exec / edits / tool_actions / actions
+    /// receipts / failure_agg / 检索分区）写入时取的 (round, domain) 对——
+    /// round = LIF 会话相对决策轮、domain = LIF 当前域（单一来源，与
+    /// temporal 行/failure_agg 段同刻度；P2-12 note_failure_agg 先例）。
+    /// ts 由各写入点独立取墙钟（chrono_utc_now）。
+    pub(crate) fn blackboard_stamp(&self) -> (u64, Domain) {
+        let lif = self.lif.lock().unwrap();
+        let temporal = lif.temporal();
+        (temporal.round(), temporal.current_domain())
+    }
+
+    /// B1 统一写时盖章工具动作推送：盖 LIF (round, domain) 章后入工具
+    /// 动作分区（单一落点，避免各调用点漏章/重复取章）。
+    pub(crate) fn push_tool_action_stamped(
+        &self,
+        category: String,
+        tool: String,
+        timestamp: String,
+    ) {
+        let (round, domain) = self.blackboard_stamp();
+        self.blackboard.write().push_tool_action(ToolActionRecord {
+            category,
+            tool,
+            timestamp,
+            round,
+            domain: Some(domain),
+        });
     }
 
     /// Run a single turn of the agent loop for a given user prompt.
@@ -4673,11 +4754,15 @@ mod tests {
                 category: "read".into(),
                 tool: "read_file".into(),
                 timestamp: "2026-08-31T00:00:00Z".into(),
+                round: 0,
+                domain: None,
             });
             w.push_tool_action(crate::blackboard::ToolActionRecord {
                 category: "read".into(),
                 tool: "grep".into(),
                 timestamp: "2026-08-31T00:00:00Z".into(),
+                round: 0,
+                domain: None,
             });
             w.push_exec_result("ok".into());
         }

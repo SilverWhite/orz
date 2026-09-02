@@ -45,6 +45,21 @@ pub fn bounded_preview(text: &str, max_bytes: usize) -> String {
     out
 }
 
+/// Human-facing display preview for an F4 identity object (≤ 80 B, never
+/// log-level detail) — the P2-12 failure-target aggregation's per-row label.
+/// cmd targets use the command preview, anchor/file targets the path, URL
+/// targets the canonical URL; unknown kinds yield `None`.
+pub fn target_preview(ft: &Value) -> Option<String> {
+    let kind = ft.get("kind").and_then(Value::as_str)?;
+    let raw = match kind {
+        "cmd_target" => ft.get("cmd_preview").and_then(Value::as_str)?,
+        "anchor_target" | "file_target" => ft.get("path").and_then(Value::as_str)?,
+        "url_target" => ft.get("canonical_url").and_then(Value::as_str)?,
+        _ => return None,
+    };
+    Some(bounded_preview(raw, 80))
+}
+
 /// Build the `failure_target` JSON object for a failing tool call, or `None`
 /// when the call carries no identifiable target (workspace-wide grep, missing
 /// arguments, unknown tool).

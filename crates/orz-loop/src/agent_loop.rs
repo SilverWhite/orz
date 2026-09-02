@@ -637,18 +637,27 @@ pub(crate) async fn run_template_compact(
             .map(|dir| dir.join(format!("epoch-{plan_epoch}.json")))
     });
     let epoch_archive = epoch_archive.flatten();
+    // P2-12 审查处理（2026-09-02）：注意事项槽 3K 溢出时，被挤出的失败
+    // 目标聚合行随压缩存档以补全段保存——failure_agg 不是 blackboard_read
+    // 查询分区，指针「其余 N 条见 … 摘要存档」靠存档补全段保持可回查。
+    let mut failure_annex: Option<Vec<String>> = None;
     let slots = {
         let bb = svc.blackboard.read();
         let (purpose, plan, paths) =
             crate::summary::mechanical_slots(&bb, &archive_path, epoch_archive.as_deref());
+        let notes = crate::summary::render_facts_notes(&bb);
+        if !notes.hidden_failure_rows.is_empty() {
+            failure_annex = Some(notes.hidden_failure_rows);
+        }
         crate::summary::SummarySlots {
             purpose,
             plan,
             paths,
-            // 2026-08-19 阶段 (c) 定稿（ADR-0010 §14.30 / 设计 §4.4.1）：
-            // 注意事项槽 = HA 结构化事实聚合（零模型、只机械聚合 controller
-            // 已写入的 plan 失败步骤 / exec 错误 / 动作失败 receipt）。
-            notes: crate::summary::render_facts_notes(&bb),
+            // 2026-08-19 阶段 (c) 定稿（ADR-0010 §14.30 / 设计 §4.4.1）
+            // + P2-12 方案 A（2026-09-02）：注意事项槽 = HA 结构化事实
+            // 聚合（零模型、只机械聚合 controller 已写入的 plan 失败步骤 /
+            // F4 失败目标聚合（取代 exec 错误原文窗口）/ 动作失败 receipt）。
+            notes: notes.text,
             // 阶段 (c) 定稿（设计 §4.4.2）：后续衔接槽不交助理层——固定
             // 中性占位 + 回查入口，由主模型自行判断，避免限制或机械性误导。
             continuation: crate::summary::MECHANICAL_CONTINUATION_PLACEHOLDER.to_string(),
@@ -687,6 +696,7 @@ pub(crate) async fn run_template_compact(
         &slots,
         dropped,
         guard_failed,
+        failure_annex.as_deref(),
         // FUS-LEDGER-FOLD-STATE (2026-08-18, ADR-0010 §14.26 + §14.28
         // external-file design): the archive preserves the folded view the
         // model saw — the byte-fixed pointer message. The folded ROWS
@@ -3393,9 +3403,10 @@ mod tests {
         );
     }
 
-    /// 阶段 (c) e2e（2026-08-19，ADR-0010 §14.30 / 设计 §4.4.1）：黑板上
-    /// 已有结构化失败事实时，压缩 marker 与存档的「注意事项」槽均为 HA
-    /// 结构化事实聚合（计划面失败/阻塞 → 执行错误 → 动作失败），零模型调用。
+    /// 阶段 (c) e2e（2026-08-19，ADR-0010 §14.30 / 设计 §4.4.1）+ P2-12
+    /// 方案 A（2026-09-02）：黑板上已有结构化失败事实时，压缩 marker 与
+    /// 存档的「注意事项」槽均为 HA 结构化事实聚合（计划面失败/阻塞 →
+    /// F4 失败目标聚合 → 动作失败；exec 原文窗口被聚合行替换），零模型调用。
     #[tokio::test]
     async fn compaction_marker_and_archive_carry_facts_notes() {
         let dir = std::env::temp_dir().join(format!("orz-compact-facts-{}", std::process::id()));
@@ -3424,12 +3435,31 @@ mod tests {
                 evidence: Vec::new(),
                 status: crate::blackboard::StepStatus::Blocked,
             });
-            w.exec.errors.push("[read_file] 目标不存在".into());
+            w.failure_agg.record(
+                "file_target",
+                "id-anchor1",
+                "src/main.c",
+                "tool_timeout",
+                10.0,
+                10,
+                orz_assurance::lif::Domain::Normal,
+            );
+            w.failure_agg.record(
+                "file_target",
+                "id-anchor1",
+                "src/main.c",
+                "execution_failed",
+                90.0,
+                13,
+                orz_assurance::lif::Domain::Pressure,
+            );
             w.actions.results.push(crate::blackboard::ActionResult {
                 order_id: "ORD-000002".into(),
                 action: Some("workspace.run_tests".into()),
                 ok: false,
                 response: None,
+                round: 0,
+                domain: None,
                 error: Some(serde_json::json!({
                     "step": "policy",
                     "code": "policy_denied",
@@ -3465,14 +3495,23 @@ mod tests {
         .expect("execution path returns a decision");
         assert_eq!(decision, CompactDecision::Executed);
         let marker = &messages[1].content;
-        // 排序=计划面 → 执行错误 → 动作失败；marker 与存档同源同序。
+        // 排序=计划面 → 失败目标聚合 → 动作失败；marker 与存档同源同序。
         let plan_pos = marker.find("[步骤 s1]").expect("failed step in marker");
         let block_pos = marker.find("[步骤 s2]").expect("blocked step in marker");
-        let exec_pos = marker.find("[执行错误]").expect("exec error in marker");
+        let fail_pos = marker
+            .find("[失败目标 file_target] src/main.c ×2")
+            .expect("failure-target aggregation row in marker");
         let action_pos = marker
             .find("[动作失败] ORD-000002 step=policy code=policy_denied trace_id=t000002")
             .expect("failed receipt in marker");
-        assert!(plan_pos < block_pos && block_pos < exec_pos && exec_pos < action_pos);
+        assert!(plan_pos < block_pos && block_pos < fail_pos && fail_pos < action_pos);
+        assert!(marker.contains("codes=[tool_timeout×1, execution_failed×1]"));
+        assert!(marker.contains("首末 10s–90s"));
+        assert!(marker.contains("域 normal(r10)→pressure(r13)"));
+        assert!(
+            !marker.contains("[执行错误]"),
+            "exec raw-text window no longer rides the notes slot: {marker}"
+        );
         assert!(marker.contains("receipt: ORD-000001"));
         assert!(marker.contains("（受阻）"));
 
@@ -3483,10 +3522,13 @@ mod tests {
         let archive_text = std::fs::read_to_string(&archive).unwrap();
         let a_plan = archive_text.find("[步骤 s1]").unwrap();
         let a_block = archive_text.find("[步骤 s2]").unwrap();
-        let a_exec = archive_text.find("[执行错误]").unwrap();
+        let a_fail = archive_text
+            .find("[失败目标 file_target] src/main.c ×2")
+            .unwrap();
         let a_action = archive_text.find("[动作失败] ORD-000002").unwrap();
-        assert!(a_plan < a_block && a_block < a_exec && a_exec < a_action);
+        assert!(a_plan < a_block && a_block < a_fail && a_fail < a_action);
         assert!(!archive_text.contains(crate::summary::NOTES_FACTS_EMPTY));
+        assert!(!archive_text.contains("[执行错误]"));
     }
 
     /// 审查修复（2026-08-19）：fallback 触发下常规 drain + 紧急截断双段

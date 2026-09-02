@@ -189,16 +189,27 @@ fn render_paths(
 /// 只机械聚合 controller 已写入的结构化记录——
 ///   1. `plan.steps` 中 `Failed(receipt_id)` / `Blocked` 的步骤
 ///      （step id + 目标 + receipt_id）；
-///   2. `exec.errors` 最近 5 条（每条截断约 200 字符）；
+///   2. `failure_agg` F4 失败目标聚合行（P2-12，2026-09-02 方案 A——
+///      替换原「exec.errors 最近 5 条截断」窗口语义：同一目标按 F4 身份
+///      (kind, id) 聚合为一行，含计数 + 错误码集合 + 首末发生时间 + 行内
+///      域序列标注；跨 marker 重复顺带消除，epoch 轮换重置；exec 分区
+///      原文不复制进压缩——压缩不携带日志级明细，黑板上仍可回查）；
 ///   3. `actions.results` 最近 3 条失败 receipt（order_id / step / code /
 ///      trace_id）。
 ///
-/// 排序=计划面失败/阻塞 → 执行错误 → 动作失败（计划面优先，影响最大）；
+/// 排序=计划面失败/阻塞 → 失败目标聚合 → 动作失败（计划面优先，影响最大）；
 /// 空时「（无注意事项）」；≤3K 超限截断并给「其余 N 条见 blackboard_read
 /// 分区/摘要存档」指针。压缩内部失败（guard/archive/外挂台账）继续走
 /// marker 既有独立标注，不进本槽。零模型调用。
-pub fn render_facts_notes(blackboard: &Blackboard) -> String {
+///
+/// 审查处理（2026-09-02）：`failure_agg` 不是 `blackboard_read` 查询分区
+/// （PULL 面零新增），槽位 3K 溢出时被挤掉的聚合行经普通回查入口取不到
+/// ——本函数把未进槽的失败目标行以完整行文本随 `NotesFacts` 带出，由
+/// 压缩存档以补全段保存（见 [`summary_archive_markdown`]），使「其余 N 条
+/// 见 … 摘要存档」指针保持可回查、不误导模型。
+pub fn render_facts_notes(blackboard: &Blackboard) -> NotesFacts {
     let mut lines: Vec<String> = Vec::new();
+    let mut failure_rows: Vec<String> = Vec::new();
 
     // 1) 计划面失败/阻塞步骤（按计划顺序，设计排序第一位）。
     for step in &blackboard.plan.steps {
@@ -217,19 +228,13 @@ pub fn render_facts_notes(blackboard: &Blackboard) -> String {
         lines.push(line);
     }
 
-    // 2) 执行错误（最近 5 条，保持原顺序；每条截断约 200 字符）。
-    for err in blackboard
-        .exec
-        .errors
-        .iter()
-        .rev()
-        .take(NOTES_FACTS_EXEC_ERRORS_MAX)
-        .rev()
-    {
-        lines.push(format!(
-            "[执行错误] {}",
-            truncate_chars(err, NOTES_FACTS_EXEC_ERROR_LINE_MAX_CHARS)
-        ));
+    // 2) F4 失败目标聚合行（P2-12 方案 A，2026-09-02）：按首次出现顺序，
+    //    每行 = 一个 (kind, id) 目标（计数 + 错误码集合 + 首末墙钟秒 +
+    //    行内域序列）。
+    for row in &blackboard.failure_agg.rows {
+        let line = render_failure_target_row(row);
+        failure_rows.push(line.clone());
+        lines.push(line);
     }
 
     // 3) 动作失败 receipt（最近 3 条失败，保持原顺序；
@@ -250,15 +255,81 @@ pub fn render_facts_notes(blackboard: &Blackboard) -> String {
         ));
     }
 
-    render_notes_capped(lines)
+    let (text, hidden) = render_notes_capped(lines);
+    // 槽内文本只在整行边界被挤出（render_notes_capped 的指针腾位按
+    // `\n` 截断，绝不留下半行），所以「未进槽的聚合行」可用完整行
+    // 判定：行文本未出现在槽位文本中即为补全段成员。
+    let hidden_failure_rows = if hidden > 0 {
+        failure_rows
+            .into_iter()
+            .filter(|row| !text.lines().any(|shown| shown == row.as_str()))
+            .collect()
+    } else {
+        Vec::new()
+    };
+    NotesFacts {
+        text,
+        hidden_failure_rows,
+    }
 }
 
-/// 执行错误条数上限（最近 5 条）——控制器写入侧无界，渲染侧取尾。
-const NOTES_FACTS_EXEC_ERRORS_MAX: usize = 5;
+/// 注意事项槽渲染结果（P2-12 审查处理，2026-09-02）：`text` 是 ≤3K 的
+/// 槽位文本（marker 与摘要存档的注意事项段共用）；`hidden_failure_rows`
+/// 是溢出且未出现在槽位文本中的失败目标聚合行（完整行文本）——存档侧
+/// 以补全段保存，保证「其余 N 条见 … 摘要存档」指针可回查。
+pub struct NotesFacts {
+    /// 注意事项槽位文本（≤3K，含溢出指针）。
+    pub text: String,
+    /// 溢出未进槽的失败目标聚合行；无溢出或未被挤出时为空。
+    pub hidden_failure_rows: Vec<String>,
+}
+
 /// 动作失败 receipt 上限（最近 3 条失败）。
 const NOTES_FACTS_ACTION_FAILURES_MAX: usize = 3;
-/// 单条执行错误截断上限（约 200 字符，CJK 单字符计数）。
-const NOTES_FACTS_EXEC_ERROR_LINE_MAX_CHARS: usize = 200;
+
+/// 单个失败目标聚合行渲染（P2-12，2026-09-02 方案 A）。域序列如
+/// `normal(r10–12)→pressure(r13)`；错误码行内集合全留/不留（全留=集合
+/// 成员不截断，超 3K 槽上限走既有「显式截断 + 指针」纪律）。
+fn render_failure_target_row(row: &crate::failure_agg::FailureTargetRow) -> String {
+    let mut parts = vec![format!(
+        "[失败目标 {}] {} ×{}",
+        row.kind, row.preview, row.count
+    )];
+    if !row.codes.is_empty() {
+        let inner = row
+            .codes
+            .iter()
+            .map(|c| format!("{}×{}", c.code, c.count))
+            .collect::<Vec<_>>()
+            .join(", ");
+        parts.push(format!("codes=[{inner}]"));
+    }
+    parts.push(format!("首末 {:.0}s–{:.0}s", row.first_t, row.last_t));
+    if !row.segments.is_empty() {
+        let seq = row
+            .segments
+            .iter()
+            .map(render_domain_segment)
+            .collect::<Vec<_>>()
+            .join("→");
+        parts.push(format!("域 {seq}"));
+    }
+    parts.join(" | ")
+}
+
+/// 域段书签渲染：`normal(r10–12)`（单轮段压缩为 `normal(r10)`）。
+fn render_domain_segment(seg: &crate::failure_agg::DomainSegment) -> String {
+    if seg.from_round == seg.to_round {
+        format!("{}(r{})", seg.domain.as_str(), seg.from_round)
+    } else {
+        format!(
+            "{}(r{}–{})",
+            seg.domain.as_str(),
+            seg.from_round,
+            seg.to_round
+        )
+    }
+}
 
 /// 按字符截断并加「…」提示（不超过 `max_chars`）。
 ///
@@ -293,10 +364,11 @@ pub(crate) fn failure_envelope_fields(error: &Option<serde_json::Value>) -> (Str
 
 /// 注意事项槽 ≤3K 上限渲染：按行顺序填放；放不下的行计入「其余 N 条」；
 /// 末尾给 blackboard_read 分区/摘要存档指针（指针必须可见——必要时弹出
-/// 已容纳行腾位，被弹出的行同样计入 N）。
-fn render_notes_capped(lines: Vec<String>) -> String {
+/// 已容纳行腾位，被弹出的行同样计入 N）。返回（槽位文本，被隐藏行数——
+/// 含为腾指针弹出的行；P2-12 审查处理 2026-09-02 供溢出补全段判定）。
+fn render_notes_capped(lines: Vec<String>) -> (String, usize) {
     if lines.is_empty() {
-        return NOTES_FACTS_EMPTY.to_string();
+        return (NOTES_FACTS_EMPTY.to_string(), 0);
     }
     let mut out = String::new();
     let mut hidden = 0usize;
@@ -337,7 +409,7 @@ fn render_notes_capped(lines: Vec<String>) -> String {
             }
         }
     }
-    out
+    (out, hidden)
 }
 
 /// The archive file (markdown) for one summary — the audit copy with digest.
@@ -346,11 +418,15 @@ fn render_notes_capped(lines: Vec<String>) -> String {
 /// its own section — the compaction drains the folded region from
 /// `messages`, so the archive is the ONLY place that preserves exactly what
 /// the model saw (工具名/目标/结果指针/最终回复). None when not folded.
+/// P2-12 审查处理（2026-09-02）：注意事项槽 3K 溢出时，被挤出槽的失败目标
+/// 聚合行以补全段追加（`failure_annex`）——`failure_agg` 不是 blackboard_read
+/// 查询分区，溢出指针「其余 N 条见 … 摘要存档」靠本段保持可回查。
 pub fn summary_archive_markdown(
     id: &str,
     slots: &SummarySlots,
     rounds_dropped: u32,
     guard_failed: bool,
+    failure_annex: Option<&[String]>,
     ledger: Option<&str>,
 ) -> String {
     let mut out = format!(
@@ -378,6 +454,15 @@ pub fn summary_archive_markdown(
             &slots.continuation
         },
     );
+    if let Some(rows) = failure_annex
+        && !rows.is_empty()
+    {
+        out.push_str("\n## 失败目标聚合（注意事项槽 3K 溢出补全）\n\n");
+        for row in rows {
+            out.push_str(row);
+            out.push('\n');
+        }
+    }
     if let Some(ledger) = ledger {
         // FUS-LEDGER-FOLD-STATE external-file design (2026-08-18,
         // ADR-0010 §14.28): the frozen "ledger" the model saw is now the
@@ -511,6 +596,8 @@ mod tests {
                 old_lines: 1,
                 new_lines: 2,
                 timestamp: "2026-08-14T00:00:00Z".into(),
+                round: 0,
+                domain: None,
             });
         }
         let (purpose, plan, paths) =
@@ -533,6 +620,8 @@ mod tests {
                     old_lines: 1,
                     new_lines: 2,
                     timestamp: "2026-08-14T00:00:00Z".into(),
+                    round: 0,
+                    domain: None,
                 });
             }
         }
@@ -588,6 +677,8 @@ mod tests {
             error,
             trace_id: trace.into(),
             timestamp: "2026-08-19T00:00:00Z".into(),
+            round: 0,
+            domain: None,
         }
     }
 
@@ -596,7 +687,12 @@ mod tests {
         // 阶段 (c) 定稿（ADR-0010 §14.30 / 设计 §4.4.1）：三数据源均无
         // 失败事实时显示「（无注意事项）」——不再用「机械模式无模型槽位」。
         let bb = SharedBlackboard::new();
-        assert_eq!(render_facts_notes(&bb.read()), NOTES_FACTS_EMPTY);
+        assert_eq!(render_facts_notes(&bb.read()).text, NOTES_FACTS_EMPTY);
+        assert!(
+            render_facts_notes(&bb.read())
+                .hidden_failure_rows
+                .is_empty()
+        );
         // 只有成功动作/已完成步骤不算注意事项。
         {
             let mut w = bb.write();
@@ -615,11 +711,14 @@ mod tests {
                 .results
                 .push(action_result("ORD-2", true, None, "t2"));
         }
-        assert_eq!(render_facts_notes(&bb.read()), NOTES_FACTS_EMPTY);
+        assert_eq!(render_facts_notes(&bb.read()).text, NOTES_FACTS_EMPTY);
     }
 
     #[test]
-    fn facts_notes_orders_plan_then_exec_then_actions() {
+    fn facts_notes_orders_plan_then_failure_targets_then_actions() {
+        // P2-12 方案 A（2026-09-02）：排序=计划面失败/阻塞 → 失败目标聚合
+        // → 动作失败；exec 分区原文不再复制进槽（原「最近 5 条截断错误」
+        // 窗口被 F4 聚合行替换——压缩不携带日志级明细）。
         let bb = SharedBlackboard::new();
         {
             let mut w = bb.write();
@@ -633,8 +732,26 @@ mod tests {
                 evidence: Vec::new(),
                 status: StepStatus::InProgress,
             });
+            w.failure_agg.record(
+                "cmd_target",
+                "id-c1",
+                "python train.py --epochs 50",
+                "tool_timeout",
+                10.0,
+                10,
+                orz_assurance::lif::Domain::Normal,
+            );
+            w.failure_agg.record(
+                "cmd_target",
+                "id-c1",
+                "python train.py --epochs 50",
+                "execution_failed",
+                90.0,
+                13,
+                orz_assurance::lif::Domain::Pressure,
+            );
+            // exec 分区原文仍在（模型可回查 exec 分区），但不再进注意事项槽。
             w.exec.errors.push("执行错误一".into());
-            w.exec.errors.push("执行错误二".into());
             w.actions.results.push(action_result(
                 "ORD-2",
                 false,
@@ -650,48 +767,119 @@ mod tests {
                 .push(action_result("ORD-3", true, None, "t3"));
         }
         let notes = render_facts_notes(&bb.read());
-        let lines: Vec<&str> = notes.lines().collect();
-        // 排序=计划面失败/阻塞 → 执行错误 → 动作失败；成功 receipt 不入列。
+        let lines: Vec<&str> = notes.text.lines().collect();
         assert_eq!(
             lines,
             vec![
                 "[步骤 s1] 失败步骤（失败，receipt: ORD-1）",
                 "[步骤 s2] 受阻步骤（受阻）",
-                "[执行错误] 执行错误一",
-                "[执行错误] 执行错误二",
+                "[失败目标 cmd_target] python train.py --epochs 50 ×2 | \
+                 codes=[tool_timeout×1, execution_failed×1] | 首末 10s–90s | \
+                 域 normal(r10)→pressure(r13)",
                 "[动作失败] ORD-2 step=policy code=policy_denied trace_id=t2",
+            ]
+        );
+        // 成功 receipt 不入列；exec 原文行不再出现在槽内。
+        assert!(lines.iter().all(|l| !l.starts_with("[执行错误]")));
+        assert!(notes.hidden_failure_rows.is_empty());
+    }
+
+    #[test]
+    fn facts_notes_failure_targets_merge_same_and_keep_distinct() {
+        // 同一目标多次失败聚为一行（计数 + 首末时间 + 行内域序列）；不同
+        // 目标保持各自行（首次出现顺序）。
+        let bb = SharedBlackboard::new();
+        {
+            let mut w = bb.write();
+            w.failure_agg.record(
+                "cmd_target",
+                "id-a",
+                "python train.py",
+                "tool_timeout",
+                5.0,
+                1,
+                orz_assurance::lif::Domain::Start,
+            );
+            w.failure_agg.record(
+                "cmd_target",
+                "id-b",
+                "python val.py",
+                "tool_timeout",
+                7.0,
+                2,
+                orz_assurance::lif::Domain::Start,
+            );
+            w.failure_agg.record(
+                "cmd_target",
+                "id-a",
+                "python train.py",
+                "tool_timeout",
+                20.0,
+                3,
+                orz_assurance::lif::Domain::Normal,
+            );
+        }
+        let notes = render_facts_notes(&bb.read());
+        let lines: Vec<&str> = notes.text.lines().collect();
+        assert_eq!(
+            lines,
+            vec![
+                "[失败目标 cmd_target] python train.py ×2 | codes=[tool_timeout×2] | \
+                 首末 5s–20s | 域 start(r1)→normal(r3)",
+                "[失败目标 cmd_target] python val.py ×1 | codes=[tool_timeout×1] | \
+                 首末 7s–7s | 域 start(r2)",
             ]
         );
     }
 
     #[test]
-    fn facts_notes_takes_last_5_exec_errors_and_truncates_lines() {
+    fn facts_notes_caps_many_failure_rows_with_pointer() {
+        // 大量失败目标行：槽位 ≤3K，溢出给「其余 N 条见 blackboard_read
+        // 分区/摘要存档」指针（既有 render_notes_capped 纪律）。
         let bb = SharedBlackboard::new();
         {
             let mut w = bb.write();
-            for i in 0..8 {
-                w.exec.errors.push(format!("错误{i}"));
+            for i in 0..200 {
+                w.failure_agg.record(
+                    "cmd_target",
+                    &format!("id-{i}"),
+                    &format!("cmd {i} {}", "x".repeat(60)),
+                    "tool_timeout",
+                    i as f64,
+                    i as u64 + 1,
+                    orz_assurance::lif::Domain::Start,
+                );
             }
-            // 超长单条截断约 200 字符（CJK 单字符计数，截断带「…」）。
-            w.exec.errors.push("长".repeat(500));
         }
         let notes = render_facts_notes(&bb.read());
-        let lines: Vec<&str> = notes.lines().collect();
-        // 最近 5 条（保持原顺序）：错误4..错误7 + 超长条。
-        assert_eq!(lines.len(), 5);
-        assert_eq!(lines[0], "[执行错误] 错误4");
-        assert_eq!(lines[3], "[执行错误] 错误7");
-        let last = lines[4];
-        assert!(last.starts_with("[执行错误] "));
-        // 载荷截断到约 200 字符（199 字符 + 「…」），不再携带尾部原文。
-        let payload = last.trim_start_matches("[执行错误] ");
-        assert_eq!(
-            payload.chars().count(),
-            NOTES_FACTS_EXEC_ERROR_LINE_MAX_CHARS
+        assert!(
+            notes.text.chars().count() <= SUMMARY_SLOT_LIMITS[3],
+            "notes slot must stay within 3K: {}",
+            notes.text.chars().count()
         );
-        assert!(payload.ends_with('…'));
-        assert!(payload.starts_with('长'));
-        assert!(payload.chars().filter(|c| *c == '长').count() <= 199);
+        assert!(notes.text.contains("其余"), "{}", notes.text);
+        assert!(
+            notes.text.contains("见 blackboard_read 分区/摘要存档"),
+            "{}",
+            notes.text
+        );
+        assert!(notes.text.lines().last().unwrap().starts_with("其余 "));
+        // P2-12 审查处理（2026-09-02）：溢出行随 NotesFacts 带出——存档
+        // 补全段据此保存被 3K 槽挤掉的聚合行（failure_agg 非查询分区，
+        // 指针「其余 N 条见 … 摘要存档」靠补全段保持可回查）。
+        assert!(!notes.hidden_failure_rows.is_empty());
+        assert!(
+            notes
+                .hidden_failure_rows
+                .iter()
+                .all(|row| row.starts_with("[失败目标 "))
+        );
+        assert!(
+            notes
+                .hidden_failure_rows
+                .iter()
+                .all(|row| !notes.text.lines().any(|shown| shown == row.as_str()))
+        );
     }
 
     #[test]
@@ -732,7 +920,7 @@ mod tests {
                 .push(action_result("r6", false, None, "t6"));
         }
         let notes = render_facts_notes(&bb.read());
-        let lines: Vec<&str> = notes.lines().collect();
+        let lines: Vec<&str> = notes.text.lines().collect();
         assert_eq!(
             lines,
             vec![
@@ -760,18 +948,21 @@ mod tests {
         }
         let notes = render_facts_notes(&bb.read());
         assert!(
-            notes.chars().count() <= SUMMARY_SLOT_LIMITS[3],
+            notes.text.chars().count() <= SUMMARY_SLOT_LIMITS[3],
             "notes slot must stay within 3K: {}",
-            notes.chars().count()
+            notes.text.chars().count()
         );
-        assert!(notes.contains("其余"), "{notes}");
+        assert!(notes.text.contains("其余"), "{}", notes.text);
         assert!(
-            notes.contains("见 blackboard_read 分区/摘要存档"),
-            "{notes}"
+            notes.text.contains("见 blackboard_read 分区/摘要存档"),
+            "{}",
+            notes.text
         );
-        assert!(notes.lines().last().unwrap().starts_with("其余 "));
+        assert!(notes.text.lines().last().unwrap().starts_with("其余 "));
         // 溢出指针是末尾一行，且被截掉的条目数机械可数（行数 < 40）。
-        assert!(notes.lines().count() < 40, "{notes}");
+        assert!(notes.text.lines().count() < 40, "{}", notes.text);
+        // 本次溢出全部来自计划面步骤（无失败目标行）——补全段应为空。
+        assert!(notes.hidden_failure_rows.is_empty());
     }
 
     #[test]
@@ -786,7 +977,66 @@ mod tests {
                 .push(failed_step("s1", &"长".repeat(4_000), "ORD-1"));
         }
         let notes = render_facts_notes(&bb.read());
-        assert_eq!(notes, "其余 1 条见 blackboard_read 分区/摘要存档");
+        assert_eq!(notes.text, "其余 1 条见 blackboard_read 分区/摘要存档");
+        assert!(notes.hidden_failure_rows.is_empty());
+    }
+
+    #[test]
+    fn archive_annex_carries_overflowed_failure_rows() {
+        // P2-12 审查处理（2026-09-02）：failure_agg 不是 blackboard_read
+        // 查询分区——注意事项槽 3K 溢出时被挤掉的聚合行必须随压缩存档以
+        // 补全段保存，指针「其余 N 条见 … 摘要存档」才可回查。
+        let bb = SharedBlackboard::new();
+        {
+            let mut w = bb.write();
+            for i in 0..200 {
+                w.failure_agg.record(
+                    "cmd_target",
+                    &format!("id-{i}"),
+                    &format!("cmd {i} {}", "x".repeat(60)),
+                    "tool_timeout",
+                    i as f64,
+                    i as u64 + 1,
+                    orz_assurance::lif::Domain::Start,
+                );
+            }
+        }
+        let notes = render_facts_notes(&bb.read());
+        assert!(notes.text.contains("其余"), "{}", notes.text);
+        assert!(!notes.hidden_failure_rows.is_empty());
+
+        // 补全段：只含「槽内看不到」的完整行，且存档 markdown 实际包含。
+        let slots = SummarySlots {
+            notes: notes.text.clone(),
+            ..slots()
+        };
+        let markdown = summary_archive_markdown(
+            "compaction-RUN-X-003",
+            &slots,
+            3,
+            false,
+            Some(&notes.hidden_failure_rows),
+            None,
+        );
+        assert!(
+            markdown.contains("## 失败目标聚合（注意事项槽 3K 溢出补全）"),
+            "{markdown}"
+        );
+        for row in &notes.hidden_failure_rows {
+            assert!(markdown.contains(row.as_str()), "annex missing: {row}");
+        }
+        assert!(
+            notes
+                .hidden_failure_rows
+                .iter()
+                .all(|row| !notes.text.contains(row.as_str())),
+            "hidden row must stay out of the capped slot text"
+        );
+
+        // 无溢出（None）时存档不含补全段——存量存档内容不变。
+        let markdown_plain =
+            summary_archive_markdown("compaction-RUN-X-004", &slots, 3, false, None, None);
+        assert!(!markdown_plain.contains("## 失败目标聚合"));
     }
 
     #[test]
@@ -816,7 +1066,8 @@ mod tests {
     #[test]
     fn marker_carries_content_pointer_and_digest() {
         let slots = slots();
-        let markdown = summary_archive_markdown("compaction-RUN-X-001", &slots, 3, false, None);
+        let markdown =
+            summary_archive_markdown("compaction-RUN-X-001", &slots, 3, false, None, None);
         let digest = archive_digest(&markdown);
         let marker = build_summary_marker(
             "compaction-RUN-X-001",
@@ -849,8 +1100,14 @@ mod tests {
         let slots = slots();
         let pointer =
             crate::action_ledger::build_pointer_message(Path::new(".gsa/ledger/current.md"));
-        let markdown =
-            summary_archive_markdown("compaction-RUN-X-001", &slots, 3, false, Some(&pointer));
+        let markdown = summary_archive_markdown(
+            "compaction-RUN-X-001",
+            &slots,
+            3,
+            false,
+            None,
+            Some(&pointer),
+        );
         assert!(
             markdown.contains("## 折叠视图（冻结快照：外挂指针）"),
             "{markdown}"
@@ -881,7 +1138,8 @@ mod tests {
             continuation: String::new(),
             ..slots()
         };
-        let markdown = summary_archive_markdown("compaction-RUN-X-002", &slots, 2, false, None);
+        let markdown =
+            summary_archive_markdown("compaction-RUN-X-002", &slots, 2, false, None, None);
         assert!(markdown.contains(NOTES_FACTS_EMPTY));
         assert!(markdown.contains(MECHANICAL_CONTINUATION_PLACEHOLDER));
         assert!(!markdown.contains("生成失败"));

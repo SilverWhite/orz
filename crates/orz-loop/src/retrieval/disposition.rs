@@ -622,14 +622,23 @@ impl AgentLoopController {
             reasoning_content: None,
         });
         // Audit mirror — the control call is one semantic action.
+        // B1：写时盖 (round, domain) 章。
+        let (round, domain) = self.blackboard_stamp();
         {
             let mut w = self.blackboard.write();
             w.push_tool_action(ToolActionRecord {
                 category: "other".to_string(),
                 tool: tc.name.clone(),
                 timestamp: chrono_utc_now(),
+                round,
+                domain: Some(domain),
             });
-            w.push_exec_result(format!("[{}] {}", tc.name, output));
+            w.push_exec_result(crate::blackboard::ExecEntry::stamped(
+                format!("[{}] {}", tc.name, output),
+                round,
+                domain,
+                chrono_utc_now(),
+            ));
         }
         Ok(ToolResult {
             output,

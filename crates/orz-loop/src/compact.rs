@@ -2124,12 +2124,16 @@ mod tests {
                 old_lines: 1,
                 new_lines: 2,
                 timestamp: "2026-08-14T00:00:00Z".into(),
+                round: 0,
+                domain: None,
             });
             bb.edits.push(EditRecord {
                 file: "b.rs".into(),
                 old_lines: 3,
                 new_lines: 4,
                 timestamp: "2026-08-14T00:00:00Z".into(),
+                round: 0,
+                domain: None,
             });
         }
         let _ = controller

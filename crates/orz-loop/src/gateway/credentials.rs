@@ -6,7 +6,10 @@
 //! needs today (live transport tests).
 //!
 //! Platform split (ADR-0006 §ext 2026-08-07, Linux container channel):
-//! - Windows: Credential Manager (CredReadW) — unchanged.
+//! - Windows: `ORZ_DEEPSEEK_API_KEY` env override when set (HIGH-NIST
+//!   AppContainer injection channel; an empty-capability AppContainer cannot
+//!   CredReadW the per-user store — WinError 5, friction #8), otherwise
+//!   Credential Manager (CredReadW).
 //! - Non-Windows: `ORZ_DEEPSEEK_API_KEY` environment variable. Containers
 //!   have no Credential Manager, and the Terminal-Bench eval harness injects
 //!   the key as env (harbor `--ae`); fail-closed when absent.
@@ -18,6 +21,10 @@ use std::fmt;
 
 /// Main-agent DeepSeek credential target (ADR-0006).
 pub const AGENT_CREDENTIAL_TARGET: &str = "orz-deepseek/agent";
+
+/// Environment channel shared by the Windows AppContainer injection path and
+/// the Linux container path.
+const API_KEY_ENV: &str = "ORZ_DEEPSEEK_API_KEY";
 
 /// Failure reading a credential — message-only error.
 #[derive(Debug)]
@@ -35,6 +42,15 @@ impl std::error::Error for CredentialError {}
 /// Returns a `CredentialError` on any failure (incl. non-Windows).
 #[cfg(windows)]
 pub fn read_agent_api_key() -> Result<String, CredentialError> {
+    if let Ok(key) = std::env::var(API_KEY_ENV) {
+        if !key.trim().is_empty() {
+            return Ok(key);
+        }
+        return Err(CredentialError(format!(
+            "{API_KEY_ENV} is set but empty (Windows credential env channel)"
+        )));
+    }
+
     use windows::Win32::Security::Credentials::{
         CRED_TYPE_GENERIC, CREDENTIALW, CredFree, CredReadW,
     };
@@ -100,10 +116,31 @@ pub fn read_agent_api_key() -> Result<String, CredentialError> {
 
 #[cfg(not(windows))]
 pub fn read_agent_api_key() -> Result<String, CredentialError> {
-    match std::env::var("ORZ_DEEPSEEK_API_KEY") {
+    match std::env::var(API_KEY_ENV) {
         Ok(key) if !key.trim().is_empty() => Ok(key),
         _ => Err(CredentialError(
             "ORZ_DEEPSEEK_API_KEY is not set (Linux container credential channel)".into(),
         )),
+    }
+}
+
+#[cfg(all(test, windows))]
+mod tests {
+    use super::*;
+
+    /// The AppContainer injection channel must win before CredReadW is
+    /// attempted, so sandboxed runs never trip on WinError 5.
+    #[test]
+    fn windows_env_channel_short_circuits_credreadw() {
+        static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+        let _guard = ENV_LOCK.lock().unwrap();
+        unsafe {
+            std::env::set_var(API_KEY_ENV, "sk-test-appcontainer-inject-2026");
+        }
+        let key = read_agent_api_key().unwrap_or_else(|e| panic!("env channel failed: {e}"));
+        assert_eq!(key, "sk-test-appcontainer-inject-2026");
+        unsafe {
+            std::env::remove_var(API_KEY_ENV);
+        }
     }
 }

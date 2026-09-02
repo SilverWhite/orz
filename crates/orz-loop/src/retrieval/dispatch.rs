@@ -12,7 +12,7 @@ use crate::agent_loop::{
     LoopOutcome, LoopProfile, SharedLoopServices, run_agent_loop, run_template_compact,
 };
 use crate::agents::{RetrievalSubagent, SubagentRole};
-use crate::blackboard::ToolActionRecord;
+use crate::blackboard::{DispatchStamp, ToolActionRecord};
 use crate::controller::{
     AgentLoopController, AgentLoopError, EventWriter, RetrievalCapability, RetrievalMode,
     RetrievalResultChannel, chrono_utc_now, estimate_messages_tokens,
@@ -651,6 +651,10 @@ impl AgentLoopController {
                             .collect()
                     })
                     .unwrap_or_default();
+                // B1 会话化基础（2026-09-03，R1）：派发完成时取写时章——
+                // round/domain 来自本派发所属主决策轮的 LIF 当前态（写时
+                // 单一来源，与 failure_agg/exec 同刻度）。锁不跨 write_section。
+                let (round, domain) = self.blackboard_stamp();
                 crate::agents::retrieval::write_section(
                     role,
                     &self.blackboard,
@@ -658,6 +662,11 @@ impl AgentLoopController {
                     docs,
                     sources,
                     ledger_projection,
+                    DispatchStamp {
+                        round,
+                        domain,
+                        timestamp: chrono_utc_now(),
+                    },
                 );
                 writer
                     .record(
@@ -875,16 +884,23 @@ impl AgentLoopController {
         // blackboard partition: fold the retrieval dispatch into the
         // tool-action section (category "retrieval" — subagent calls count
         // as one semantic action each).
+        // B1：写时盖 (round, domain) 章（与主决策轮同刻度）。
+        let (round, domain) = self.blackboard_stamp();
         {
             let mut w = self.blackboard.write();
             w.push_tool_action(ToolActionRecord {
                 category: "retrieval".to_string(),
                 tool: tc.name.clone(),
                 timestamp: chrono_utc_now(),
+                round,
+                domain: Some(domain),
             });
-            w.exec
-                .results
-                .push(format!("[{}] {}", tc.name, tool_result.output));
+            w.push_exec_result(crate::blackboard::ExecEntry::stamped(
+                format!("[{}] {}", tc.name, tool_result.output),
+                round,
+                domain,
+                chrono_utc_now(),
+            ));
         }
         messages.push(Message {
             role: Role::Tool,
@@ -934,11 +950,13 @@ mod tests {
             project_docs: vec!["design.md".to_string()],
             source_ledger: vec!["SRC-001 design.md".to_string()],
             response: Some("恢复的检索完成".to_string()),
+            stamp: None,
         };
         let external = ExternalRetSection {
             web_sources: vec!["https://example.com/paper".to_string()],
             source_ledger: vec!["SRC-002 https://example.com/paper".to_string()],
             response: Some("恢复的网页检索完成".to_string()),
+            stamp: None,
         };
         let controller = AgentLoopController::with_gateway(Arc::new(FakeProvider::new(Vec::new())))
             .with_retrieval_partitions(Some(internal.clone()), Some(external.clone()));

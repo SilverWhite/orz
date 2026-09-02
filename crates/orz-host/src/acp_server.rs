@@ -13,10 +13,11 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
 
+use orz_assurance::lif::{DomainSpike, TemporalSessionSnapshot};
 use orz_assurance::{EventTrack, EventType, JournalRecorderError, Redaction, RunEvent, seal_event};
 use orz_loop::AgentLoopController;
 use orz_loop::acaf::AcafClient;
-use orz_loop::blackboard::{ExternalRetSection, InternalRetSection};
+use orz_loop::blackboard::{Blackboard, ExternalRetSection, InternalRetSection};
 use orz_loop::controller::RetrievalMode;
 use orz_loop::gateway::model::{Message, Role};
 use orz_loop::orientation::OrientationSessionState;
@@ -46,6 +47,15 @@ pub enum AcpError {
 /// `SessionError::Journal` wraps the recorder error, mirroring `session.rs`).
 fn acp_journal_error(e: JournalRecorderError) -> AcpError {
     AcpError::Session(SessionError::Journal(e))
+}
+
+/// 会话轴原点墙钟（P2-13 B1）：conversation-relative `t` = wall −
+/// session_started_at（跨 prompt 单调）。
+fn now_epoch_secs() -> f64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs_f64())
+        .unwrap_or(0.0)
 }
 
 /// Grill protocol template: `{cwd}/.gsa/grill/SKILL.md` when present, else
@@ -234,12 +244,14 @@ struct StoredSession {
     /// (process tree kill + profile-dir best-effort delete) on
     /// `close_session`.
     browser: Option<crate::local_browser::SharedBrowser>,
-    /// GAP-CONVERSATION-RESTORE (2026-08-10): the session conversation —
-    /// persists across prompts AND process restarts via the
-    /// `{cwd}/.gsa/conversations/<session8>.json` sidecar (the in-session
-    /// copy is the authoritative write; the sidecar is best-effort). Taken
-    /// out during a run, written back on success (orientation pattern).
-    conversation: Option<Vec<Message>>,
+    /// GAP-CONVERSATION-RESTORE (2026-08-10) + P2-13 B1 会话化基础
+    /// (2026-09-03): the session continuation — conversation messages +
+    /// 黑板 live 视图 + LIF 会话轴（round/域机器/会话起始墙钟）。跨
+    /// prompt 与进程重启经 `{cwd}/.gsa/conversations/<session8>.json`
+    /// 侧车持久化（in-session copy = authoritative；sidecar best-effort）。
+    /// Taken out during a run, written back on success (orientation
+    /// pattern——失败 run 不写回，下一 prompt 回退侧车 pre-run 内容)。
+    continuation: Option<StoredConversation>,
 }
 
 /// GAP-RETRIEVAL-TOOLS (2026-08-10): the persisted retrieval-mode +
@@ -403,21 +415,62 @@ struct StoredConversation {
     /// sidecars parseable, zero migration), cleared with the 7-day
     /// retention sweep, and rebuilt into the LIF engine's domain machine
     /// on cross-prompt restore. Subagent lanes never persist this.
+    /// B1（2026-09-03）：新写入同时落 `lif`（精确机器快照）；本字段保留
+    /// 为旧读者/旧侧车兼容（内容 = lif.spikes 的冗余投影）。
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    temporal_spikes: Option<Vec<orz_assurance::lif::DomainSpike>>,
+    temporal_spikes: Option<Vec<DomainSpike>>,
+    /// B1（2026-09-03，R5 conversation-relative 轴）：会话起始墙钟秒
+    /// （epoch seconds）——LIF `t` 轴与会话相对的原点（t = wall −
+    /// session_started_at，跨 prompt 单调）。`None` = legacy 侧车无
+    /// 原点（沿用 run 起点近似）。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    session_started_at: Option<f64>,
+    /// B1：LIF 会话轴快照（决策轮计数 + 域机器 + spike 时间线），下个
+    /// prompt 精确续接轮号与域机器。`None` = 尚无决策轮/legacy。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    lif: Option<TemporalSessionSnapshot>,
+    /// B1（P2-13 / 设计 §6）：黑板 live 视图随会话延续（每个成功 prompt
+    /// 续载而非重建）。`None` = 尚无黑板内容（首 prompt 前/legacy）。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    blackboard: Option<Blackboard>,
 }
 
 impl StoredConversation {
-    fn new(
+    /// 全新会话（首 prompt 前）或 legacy 侧车缺字段时的补全构造：
+    /// 黑板/lif/时间线为空，会话轴原点在缺失时取调用方给的当前墙钟。
+    fn empty(session_id: &str, session_started_at: Option<f64>) -> Self {
+        StoredConversation {
+            schema_version: "0.2.0-draft".to_string(),
+            session_id: session_id.to_string(),
+            messages: Vec::new(),
+            temporal_spikes: None,
+            session_started_at,
+            lif: None,
+            blackboard: None,
+        }
+    }
+
+    /// run 成功后的完整续接包（对话 + LIF 快照 + 黑板 live 快照）。
+    fn full(
         session_id: &str,
         messages: Vec<Message>,
-        temporal_spikes: Option<Vec<orz_assurance::lif::DomainSpike>>,
+        temporal: &TemporalSessionSnapshot,
+        session_started_at: Option<f64>,
+        blackboard: &Blackboard,
     ) -> Self {
         StoredConversation {
-            schema_version: "0.1.0-draft".to_string(),
+            schema_version: "0.2.0-draft".to_string(),
             session_id: session_id.to_string(),
             messages,
-            temporal_spikes,
+            // legacy 冗余投影（lif.spikes 同源），供旧读者与既有测试。
+            temporal_spikes: if temporal.spikes.is_empty() {
+                None
+            } else {
+                Some(temporal.spikes.clone())
+            },
+            session_started_at,
+            lif: Some(temporal.clone()),
+            blackboard: Some(blackboard.clone()),
         }
     }
 }
@@ -537,21 +590,16 @@ fn load_conversation_sidecar(base_dir: &Path, session_id: &str) -> Option<Stored
     }
 }
 
-/// Persist the session conversation — best-effort (a read-only workspace must
-/// never fail the run; the in-session write is the authoritative path), same
-/// discipline as the orientation/activation sidecars. An EMPTY conversation
-/// is not persisted (a brand-new session has no file until its first
-/// successful prompt — `load`'s NotFound → `None` naturally covers it).
-fn persist_conversation_sidecar(
-    base_dir: &Path,
-    session_id: &str,
-    messages: &[Message],
-    temporal_spikes: &[orz_assurance::lif::DomainSpike],
-) {
-    if messages.is_empty() {
+/// Persist the session continuation envelope（对话 + 黑板 live 视图与 LIF
+/// 会话轴）——best-effort：只读工作区绝不因侧车写失败中断 run，in-session
+/// 副本为权威写入，侧车为回退（orientation/activation 同纪律）。空对话
+/// 不落盘（全新会话在首个成功 prompt 前没有文件，`load` 的 NotFound →
+/// `None` 自然覆盖）。
+fn persist_conversation_sidecar(base_dir: &Path, continuation: &StoredConversation) {
+    if continuation.messages.is_empty() {
         return;
     }
-    let path = conversation_sidecar_path(base_dir, session_id);
+    let path = conversation_sidecar_path(base_dir, &continuation.session_id);
     if let Some(parent) = path.parent()
         && let Err(e) = std::fs::create_dir_all(parent)
     {
@@ -561,12 +609,7 @@ fn persist_conversation_sidecar(
         );
         return;
     }
-    let spikes = (!temporal_spikes.is_empty()).then(|| temporal_spikes.to_vec());
-    match serde_json::to_string_pretty(&StoredConversation::new(
-        session_id,
-        messages.to_vec(),
-        spikes,
-    )) {
+    match serde_json::to_string_pretty(continuation) {
         Ok(json) => {
             if let Err(e) = std::fs::write(&path, json) {
                 tracing::warn!(
@@ -882,11 +925,17 @@ impl AcpServer {
             activation_snapshot.retrieval_mode = mode;
             activation_snapshot.bootstrap_transition_pending = true;
         }
-        // GAP-CONVERSATION-RESTORE: resume the conversation sidecar when a
-        // previous process left one (cross-process continuation); a brand-new
-        // session has no conversation (`None` — the first prompt seeds a
-        // single-message context).
-        let conversation = load_conversation_sidecar(&base, session_id).map(|s| s.messages);
+        // GAP-CONVERSATION-RESTORE + P2-13 B1: resume the full continuation
+        // envelope (conversation + 黑板 live 视图 + LIF 会话轴) when a
+        // previous process left one (cross-process continuation); a
+        // brand-new session starts an empty envelope with the会话轴原点 =
+        // 本会话创建时刻（首 prompt 前无消息，不落盘——第一个成功 prompt
+        // 才写侧车）。Legacy 侧车（无 session_started_at）补当前墙钟。
+        let mut continuation = load_conversation_sidecar(&base, session_id)
+            .unwrap_or_else(|| StoredConversation::empty(session_id, None));
+        if continuation.session_started_at.is_none() {
+            continuation.session_started_at = Some(now_epoch_secs());
+        }
         self.sessions.lock().unwrap().insert(
             session_id.to_string(),
             StoredSession {
@@ -898,7 +947,7 @@ impl AcpServer {
                 orientation: Some(orientation),
                 activation_snapshot: Some(activation_snapshot),
                 browser: None,
-                conversation: conversation.clone(),
+                continuation: Some(continuation),
             },
         );
 
@@ -1026,31 +1075,32 @@ impl AcpServer {
                     .unwrap_or_else(|| StoredActivationSnapshot::for_session(session_id))
             })
         };
-        // GAP-CONVERSATION-RESTORE: take out the session conversation with
+        // GAP-CONVERSATION-RESTORE + P2-13 B1: take out the full session
+        // continuation (conversation + 黑板 live 视图 + LIF 会话轴) with
         // the orientation/activation state — same discipline: only after
         // every fallible step above, so an early `?` never leaves the
-        // session with a taken-out conversation (the next prompt would
+        // session with a taken-out continuation (the next prompt would
         // silently restart from zero and the sidecar would be overwritten).
-        let mut conversation;
-        let mut restored_temporal_spikes: Vec<orz_assurance::lif::DomainSpike> = Vec::new();
-        {
+        let mut continuation = {
             let mut sessions = self.sessions.lock().unwrap();
             let session = sessions
                 .get_mut(session_id)
                 .ok_or_else(|| AcpError::SessionNotFound(session_id.to_string()))?;
-            match session.conversation.take() {
-                Some(conv) => conversation = conv,
-                None => {
-                    let stored = load_conversation_sidecar(&base_dir, session_id);
-                    conversation = stored
-                        .as_ref()
-                        .map(|s| s.messages.clone())
-                        .unwrap_or_default();
-                    restored_temporal_spikes =
-                        stored.and_then(|s| s.temporal_spikes).unwrap_or_default();
-                }
+            match session.continuation.take() {
+                Some(cont) => cont,
+                None => load_conversation_sidecar(&base_dir, session_id)
+                    .unwrap_or_else(|| StoredConversation::empty(session_id, None)),
             }
+        };
+        if continuation.session_started_at.is_none() {
+            continuation.session_started_at = Some(now_epoch_secs());
         }
+        let session_started_at = continuation.session_started_at;
+        let restored_lif = continuation.lif.clone();
+        let restored_blackboard = continuation.blackboard.take();
+        let mut conversation = std::mem::take(&mut continuation.messages);
+        let restored_legacy_spikes = continuation.temporal_spikes.clone().unwrap_or_default();
+        drop(continuation);
         // IP5: attach the session's pre-mutation snapshot store — mutation
         // tools with knowable targets get tracked before execution.
         // local_browser (2026-08-10): re-inject the session's browser lane
@@ -1125,12 +1175,28 @@ impl AcpServer {
             .with_retrieval_partitions(
                 activation_snapshot.internal_ret.clone(),
                 activation_snapshot.external_ret.clone(),
-            );
-        // P2-10 F2 §3.5 (I4): rebuild the LIF domain machine from the
-        // sidecar's temporal_spikes (cross-prompt restore). Main session
-        // only — subagent lanes never persist spikes.
-        if !restored_temporal_spikes.is_empty() {
-            controller.restore_temporal_spikes(restored_temporal_spikes);
+            )
+            // P2-13 B1 (2026-09-03)：会话级 live 黑板续载——上个成功
+            // prompt 的整板快照灌回（含 exec/edits/tool_actions/actions
+            // receipts/failure_agg/检索分区/entities；动作栏注册与订单槽、
+            // 依赖图在快照生成时已剥离）。排在检索分区灌回之后——快照
+            // 与 activation 侧车同源，快照存在时以其为准（含分区章）。
+            .with_live_blackboard(restored_blackboard);
+        // P2-10 F2 §3.5 (I4) + P2-13 B1 (R5 conversation-relative 轴)：
+        // 续接 LIF 会话轴——优先用精确快照（轮号 + 域机器 + spike 时间
+        // 线）；legacy 侧车只有 temporal_spikes 时退回既有近似恢复。
+        // 会话轴原点（session_started_at）对首个 prompt 亦预置，使
+        // temporal `t` 与失败聚合首末时间跨 prompt 以会话为原点单调。
+        match restored_lif {
+            Some(snapshot) => controller.restore_lif_session(&snapshot, session_started_at),
+            None => {
+                if !restored_legacy_spikes.is_empty() {
+                    controller.restore_temporal_spikes(restored_legacy_spikes);
+                }
+                if let Some(started_at) = session_started_at {
+                    controller.preset_lif_session_axis(started_at);
+                }
+            }
         }
 
         let run_result = controller
@@ -1200,25 +1266,34 @@ impl AcpServer {
         if let Some(session) = self.sessions.lock().unwrap().get_mut(session_id) {
             session.activation_snapshot = Some(activation_snapshot);
         }
-        // GAP-CONVERSATION-RESTORE: persist the conversation — back into the
+        // GAP-CONVERSATION-RESTORE + P2-13 B1: persist the full continuation
+        // (conversation + LIF 会话轴快照 + 黑板 live 视图) — back into the
         // session and (best-effort, a read-only workspace must never fail a
         // run) to the sidecar, so the next prompt / process restart resumes
-        // the history. SUCCESS-ONLY: a failed run keeps the pre-run history
-        // (the run's partial messages never enter the conversation — the
-        // journal is the failure evidence). The seed was a clone, so a failed
-        // run leaves the caller's copy byte-identical.
+        // the history, the round/domain machine and the blackboard.
+        // SUCCESS-ONLY: a failed run keeps the pre-run state (the run's
+        // partial messages / board mutations never enter the continuation —
+        // the journal is the failure evidence).
         //
         // Review P3-1 (three-agent 2026-08-10): the in-session write sits in
         // the SAME `is_ok` branch as the sidecar — a failure (incl. the
         // `journal.flush_async` error surfaced from `run_turn_with_guards`)
-        // leaves `session.conversation` at `None`, so the next prompt's
-        // take-out falls back to the sidecar (the pre-run history) instead
+        // leaves `session.continuation` at `None`, so the next prompt's
+        // take-out falls back to the sidecar (the pre-run state) instead
         // of diverging from it.
         if run_result.is_ok() {
-            let spikes = controller.temporal_spikes();
-            persist_conversation_sidecar(&base_dir, session_id, &conversation, &spikes);
+            let lif = controller.lif_session_snapshot();
+            let blackboard = controller.blackboard_conversation_snapshot();
+            let full = StoredConversation::full(
+                session_id,
+                conversation,
+                &lif,
+                session_started_at,
+                &blackboard,
+            );
+            persist_conversation_sidecar(&base_dir, &full);
             if let Some(session) = self.sessions.lock().unwrap().get_mut(session_id) {
-                session.conversation = Some(conversation);
+                session.continuation = Some(full);
             }
         }
 
@@ -1798,11 +1873,13 @@ mod tests {
             project_docs: vec!["design.md".to_string()],
             source_ledger: vec!["SRC-001 design.md".to_string()],
             response: Some("跨 run 的检索完成".to_string()),
+            stamp: None,
         };
         let external = ExternalRetSection {
             web_sources: vec!["https://example.com/paper".to_string()],
             source_ledger: vec!["SRC-002 https://example.com/paper".to_string()],
             response: Some("跨 run 的网页检索完成".to_string()),
+            stamp: None,
         };
         let mut snap = StoredActivationSnapshot::for_session("sess-p31");
         snap.internal_ret = Some(internal.clone());
@@ -3425,8 +3502,9 @@ mod tests {
                 reasoning_content: None,
             },
         ];
-        // P2-10 F2 §3.5 (I4): temporal spikes ride the same envelope —
-        // roundtrip through the sidecar.
+        // P2-10 F2 §3.5 (I4) + P2-13 B1: temporal spikes / LIF 会话轴快照
+        // 与黑板 live 视图同信封往返——round 与域机器精确续接（不再只有
+        // spike 时间线近似）。
         let spikes = vec![
             orz_assurance::lif::DomainSpike {
                 t: 12.5,
@@ -3437,7 +3515,22 @@ mod tests {
                 domain: orz_assurance::lif::Domain::Stuck,
             },
         ];
-        persist_conversation_sidecar(&base, "sess-roundtrip", &messages, &spikes);
+        let lif = orz_assurance::lif::TemporalSessionSnapshot {
+            round: 41,
+            has_success: true,
+            current_domain: orz_assurance::lif::Domain::Stuck,
+            entry_round: 33,
+            spikes: spikes.clone(),
+        };
+        let blackboard = Blackboard::default();
+        let full = StoredConversation::full(
+            "sess-roundtrip",
+            messages,
+            &lif,
+            Some(1_700_000_000.0),
+            &blackboard,
+        );
+        persist_conversation_sidecar(&base, &full);
         let stored = load_conversation_sidecar(&base, "sess-roundtrip").expect("sidecar loads");
         assert_eq!(stored.session_id, "sess-roundtrip");
         assert_eq!(stored.messages.len(), 3);
@@ -3445,6 +3538,15 @@ mod tests {
         assert_eq!(restored.len(), 2);
         assert_eq!(restored[1].t, 340.0);
         assert_eq!(restored[1].domain, orz_assurance::lif::Domain::Stuck);
+        assert_eq!(stored.session_started_at, Some(1_700_000_000.0));
+        let restored_lif = stored.lif.expect("lif snapshot roundtrip");
+        assert_eq!(restored_lif.round, 41);
+        assert_eq!(
+            restored_lif.current_domain,
+            orz_assurance::lif::Domain::Stuck
+        );
+        assert_eq!(restored_lif.entry_round, 33);
+        assert!(stored.blackboard.is_some(), "blackboard rides the envelope");
         assert_eq!(stored.messages[0].content, "中文问题");
         assert_eq!(
             stored.messages[1].reasoning_content.as_deref(),
@@ -3505,7 +3607,8 @@ mod tests {
     #[test]
     fn empty_conversation_not_persisted() {
         let base = test_dir();
-        persist_conversation_sidecar(&base, "sess-empty", &[], &[]);
+        let empty = StoredConversation::empty("sess-empty", Some(1_700_000_000.0));
+        persist_conversation_sidecar(&base, &empty);
         assert!(!conv_sidecar_path(&base, "sess-empty").exists());
         let _ = std::fs::remove_dir_all(&base);
     }
@@ -3579,6 +3682,90 @@ mod tests {
                     .filter(|n| n.starts_with("RUN-"))
                     .collect();
                 assert_eq!(run_dirs.len(), 2, "{run_dirs:?}");
+
+                let _ = std::fs::remove_dir_all(&base);
+            })
+            .await;
+    }
+
+    /// P2-13 B1 会话化基础 (2026-09-03)：会话级黑板与 LIF 会话轴跨
+    /// prompt 续接——两个 prompt 各执行一次 `read_file`（各 = 一个决策
+    /// 轮）。断言：第二 prompt 的黑板 exec 行 round 从 1 续到 2（不回归
+    /// 1）、行带 LIF 域章、LIF 快照 round=2；成功 run 把黑板 + 快照随
+    /// 对话一起写回侧车（依赖图 live-only 不落侧车）。
+    #[tokio::test]
+    async fn cross_prompt_blackboard_and_lif_axis_continue() {
+        tokio::task::LocalSet::new()
+            .run_until(async {
+                let base = test_dir();
+                let target = base.join("sample.txt");
+                std::fs::write(&target, "wired file content").unwrap();
+
+                let mut script = Vec::new();
+                for marker in ["p1", "p2"] {
+                    script.push(ScriptedResponse::tool_calls(vec![ToolCall {
+                        name: "read_file".to_string(),
+                        arguments: serde_json::json!({ "target_file": target }),
+                        call_id: format!("call-{marker}"),
+                    }]));
+                    script.push(ScriptedResponse::text(format!("{marker} 完成")));
+                    script.push(ScriptedResponse::text(format!("{marker} 完成")));
+                }
+                let fake = Arc::new(FakeProvider::new(script));
+                let server = AcpServer::with_gateway(fake.clone());
+                // Interactive shape — a dead receiver still lets the
+                // low-risk read auto-allow (same as the bridge test).
+                server.set_gateway(dead_gateway());
+                server
+                    .handle_session_new(
+                        "sess-bb",
+                        Some(base.clone()),
+                        crate::session::TrustPolicy::Skip,
+                    )
+                    .await
+                    .unwrap();
+                server
+                    .handle_session_prompt("sess-bb", "第一问")
+                    .await
+                    .unwrap();
+                server
+                    .handle_session_prompt("sess-bb", "第二问")
+                    .await
+                    .unwrap();
+
+                let stored = load_conversation_sidecar(&base, "sess-bb").expect("sidecar");
+                let bb = stored.blackboard.expect("blackboard rides the envelope");
+                assert_eq!(
+                    bb.exec.results.len(),
+                    2,
+                    "two stamped exec rows across prompts"
+                );
+                assert_eq!(bb.exec.results[0].round, 1, "prompt-1 decision round");
+                assert_eq!(bb.exec.results[1].round, 2, "round continues, not resets");
+                assert!(
+                    bb.exec.results[0].domain.is_some() && bb.exec.results[1].domain.is_some(),
+                    "exec rows carry the LIF domain stamp"
+                );
+                assert_eq!(
+                    bb.tool_actions.len(),
+                    2,
+                    "tool-action partition also persists across prompts"
+                );
+                assert!(
+                    bb.tool_actions
+                        .iter()
+                        .all(|ta| ta.round > 0 && ta.domain.is_some()),
+                    "tool-action rows stamped"
+                );
+
+                // LIF 会话轴快照：决策轮计数精确续接（不再只有 spike 近似）。
+                let lif = stored.lif.expect("lif session snapshot rides the envelope");
+                assert_eq!(lif.round, 2);
+                assert!(lif.has_success, "read_file success observed");
+
+                // 依赖图 live-only：侧车 JSON 不携带 dep_graph。
+                let raw = std::fs::read_to_string(conv_sidecar_path(&base, "sess-bb")).unwrap();
+                assert!(!raw.contains("\"dep_graph\""), "dep graph not persisted");
 
                 let _ = std::fs::remove_dir_all(&base);
             })

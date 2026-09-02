@@ -1162,11 +1162,15 @@ mod tests {
                 old_lines: 1,
                 new_lines: 2,
                 timestamp: "2026-08-14T00:00:00Z".into(),
+                round: 0,
+                domain: None,
             });
             bb.tool_actions.push(ToolActionRecord {
                 category: "read".to_string(),
                 tool: "read_file".into(),
                 timestamp: "2026-08-14T00:00:00Z".into(),
+                round: 0,
+                domain: None,
             });
         }
         // The current epoch snapshot is persisted at approval (the restore

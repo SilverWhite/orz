@@ -227,6 +227,10 @@ pub fn write_section(
     docs: Vec<String>,
     sources: Vec<String>,
     ledger: Vec<String>,
+    // B1 会话化基础（2026-09-03，设计 §9.4/R1）：本分区最后一次派发的
+    // (round, domain, ts) 章——单次派发全量覆盖，所有行共享同一章；
+    // 旧数据/恢复路径无章（B2 pre-stamp）。
+    stamp: crate::blackboard::DispatchStamp,
 ) {
     let mut w = blackboard.write();
     match role {
@@ -235,6 +239,7 @@ pub fn write_section(
             section.response = Some(response);
             section.project_docs = docs;
             section.source_ledger = ledger;
+            section.stamp = Some(stamp);
             w.bump_retrieval("internal_ret");
         }
         SubagentRole::ExternalRetrieval => {
@@ -242,6 +247,7 @@ pub fn write_section(
             section.response = Some(response);
             section.web_sources = sources;
             section.source_ledger = ledger;
+            section.stamp = Some(stamp);
             w.bump_retrieval("external_ret");
         }
     }
@@ -254,6 +260,15 @@ mod tests {
 
     fn gateway(text: &str) -> Arc<dyn ModelGateway> {
         Arc::new(FakeProvider::from_texts(vec![text]))
+    }
+
+    /// B1：测试用派发章（确定性固定值）。
+    fn test_stamp() -> crate::blackboard::DispatchStamp {
+        crate::blackboard::DispatchStamp {
+            round: 1,
+            domain: orz_assurance::lif::Domain::Normal,
+            timestamp: "2026-09-03T00:00:00Z".to_string(),
+        }
     }
 
     #[test]
@@ -334,6 +349,7 @@ mod tests {
             docs,
             sources,
             ledger,
+            test_stamp(),
         );
 
         let r = bb.read();
@@ -363,6 +379,7 @@ mod tests {
             docs,
             sources,
             ledger.clone(),
+            test_stamp(),
         );
 
         let r = bb.read();
@@ -388,6 +405,7 @@ mod tests {
             Vec::new(),
             vec!["https://old.example/a".to_string()],
             vec!["SRC-001 https://old.example/a".to_string()],
+            test_stamp(),
         );
         write_section(
             SubagentRole::ExternalRetrieval,
@@ -396,6 +414,7 @@ mod tests {
             Vec::new(),
             vec!["https://new.example/b".to_string()],
             vec!["SRC-002 https://new.example/b".to_string()],
+            test_stamp(),
         );
         let r = bb.read();
         assert_eq!(

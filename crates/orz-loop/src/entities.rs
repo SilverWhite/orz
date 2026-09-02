@@ -130,6 +130,13 @@ impl EntityRegistry {
         self.revision
     }
 
+    /// B1（2026-09-03）：恢复会话黑板快照时归零版本计数——分区版本只随
+    /// run 存活，跨 prompt 恢复的既有实体内容由恢复入口统一计「1 次
+    /// 变化」（Blackboard::restore_conversation_snapshot 负责 bump）。
+    pub(crate) fn reset_revision(&mut self) {
+        self.revision = 0;
+    }
+
     fn insert(&mut self, state: EntityState) {
         if !self.entities.contains_key(&state.entity_id)
             && self.entities.len() >= ENTITIES_TOTAL_CAP

@@ -12,7 +12,9 @@ use serde_json::Value;
 use std::sync::Mutex;
 
 use crate::blackboard::{ActionOrder, EditRecord, ToolActionRecord};
-use crate::console::CODE_CONTENT_ANCHOR_MISMATCH;
+use crate::console::{
+    CODE_CONTENT_ANCHOR_MISMATCH, CODE_EXECUTION_FAILED, CODE_TOOL_NOT_FOUND, CODE_TOOL_TIMEOUT,
+};
 use crate::controller::{
     AgentLoopController, AgentLoopError, CandidateGateDecision, DenialKey, EventWriter,
     PolicyFeedback, RetrievalMode, TicketGate, candidate_tool_prefix, chrono_utc_now,
@@ -38,6 +40,52 @@ impl AgentLoopController {
             AgentLoopController::now_epoch_secs(),
             orz_assurance::lif::ToolEvent::deny(wall_ms),
         );
+    }
+
+    /// P2-12 COMPRESSION-LINGUISTIC-FORMAL-LAYER 方案 A（2026-09-02）：
+    /// F4 失败目标聚合的「写时盖章」入口——每次携带 `failure_target` 身份
+    /// 的失败事件在写入时，取该事件所属决策轮的 LIF 域值与轮号盖章并记入
+    /// 黑板 `failure_agg` 分区（epoch 作用域、随轮换重置）。时间为
+    /// run-relative 墙钟秒（与 temporal `t` 同刻度）；`code` 必须是结构化
+    /// 错误码（refusal code / ToolErrorKind 码），永不解析日志文本。
+    fn note_failure_agg(&self, ft: &serde_json::Value, code: &str) {
+        let Some(kind) = ft.get("kind").and_then(serde_json::Value::as_str) else {
+            return;
+        };
+        let Some(id) = ft.get("id").and_then(serde_json::Value::as_str) else {
+            return;
+        };
+        let Some(preview) = crate::failure_target::target_preview(ft) else {
+            return;
+        };
+        let (round, domain, t_rel) = {
+            let mut lif = self.lif.lock().unwrap();
+            let now = AgentLoopController::now_epoch_secs();
+            lif.ensure_run_origin(now);
+            let round = lif.temporal().round();
+            let domain = lif.temporal().current_domain();
+            let t_rel = lif.run_relative_secs(now);
+            (round, domain, t_rel)
+        };
+        self.blackboard
+            .write()
+            .failure_agg
+            .record(kind, id, &preview, code, t_rel, round, domain);
+    }
+
+    /// 结构化 host 工具错误码（P2-10 R2 ToolErrorKind 三态 → 既有 console
+    /// 码族；P2-12 聚合错误码集合同源）。
+    ///
+    /// 可复核口径（2026-09-02 审查登记）：对应 `tool_completed` 事件的
+    /// `error` 字段是自由文本，本码只存在于聚合侧——§5 离线 verifier 须
+    /// 复刻同一映射核对（或经独立 schema-first 切片给事件补结构化 code），
+    /// 不得从 error 文本推导。
+    fn host_error_code(e: &ToolError) -> &'static str {
+        match e {
+            ToolError::NotFound(_) => CODE_TOOL_NOT_FOUND,
+            ToolError::Timeout(_) => CODE_TOOL_TIMEOUT,
+            ToolError::ExecutionFailed(_) => CODE_EXECUTION_FAILED,
+        }
     }
 
     /// P2-11 第 4 项 / 依赖图主线设计 §3 (2026-09-01)：依赖图事实记录——
@@ -366,7 +414,9 @@ impl AgentLoopController {
             });
             // P2-10 F4 (I2): GetPut anchor failure identity.
             if let Some(ft) = crate::failure_target::failure_target(&tc.name, &tc.arguments) {
-                completed["failure_target"] = ft;
+                completed["failure_target"] = ft.clone();
+                // P2-12（2026-09-02）：写时盖章——锚点拒单的失败目标聚合。
+                self.note_failure_agg(&ft, CODE_CONTENT_ANCHOR_MISMATCH);
             }
             stamp_direct(&mut completed);
             writer.record(EventType::ToolCompleted, completed).await?;
@@ -928,11 +978,12 @@ impl AgentLoopController {
                 .await?;
             // 2026-08-08 blackboard partition: fold the executed call into
             // the tool-action section (terminal — a fixed command run).
-            self.blackboard.write().push_tool_action(ToolActionRecord {
-                category: ToolDispatcher::action_category(&tc.name).to_string(),
-                tool: tc.name.clone(),
-                timestamp: chrono_utc_now(),
-            });
+            // B1：写时盖 (round, domain) 章（统一入口）。
+            self.push_tool_action_stamped(
+                ToolDispatcher::action_category(&tc.name).to_string(),
+                tc.name.clone(),
+                chrono_utc_now(),
+            );
             let tool_result = ToolResult {
                 // F-09 (2026-08-07 review): mechanical context gate — only
                 // the completion reminder + the final output (tail-capped
@@ -1149,11 +1200,11 @@ impl AgentLoopController {
             // F3 (2026-08-16 审查收口): direct 盖章对称。
             stamp_direct(&mut completed);
             writer.record(EventType::ToolCompleted, completed).await?;
-            self.blackboard.write().push_tool_action(ToolActionRecord {
-                category: ToolDispatcher::action_category(&tc.name).to_string(),
-                tool: tc.name.clone(),
-                timestamp: chrono_utc_now(),
-            });
+            self.push_tool_action_stamped(
+                ToolDispatcher::action_category(&tc.name).to_string(),
+                tc.name.clone(),
+                chrono_utc_now(),
+            );
             let output = format!(
                 "whitelist entry #{entry_index} written (cumulative {total_chars} chars) — \
                  it will NOT be compressed away and is archived to .gsa"
@@ -1204,11 +1255,11 @@ impl AgentLoopController {
                         // F3 (2026-08-16 审查收口): direct 盖章对称。
                         stamp_direct(&mut completed);
                         writer.record(EventType::ToolCompleted, completed).await?;
-                        self.blackboard.write().push_tool_action(ToolActionRecord {
-                            category: ToolDispatcher::action_category(&tc.name).to_string(),
-                            tool: tc.name.clone(),
-                            timestamp: chrono_utc_now(),
-                        });
+                        self.push_tool_action_stamped(
+                            ToolDispatcher::action_category(&tc.name).to_string(),
+                            tc.name.clone(),
+                            chrono_utc_now(),
+                        );
                         let result = ToolResult {
                             output: content,
                             exit_code: Some(1),
@@ -1252,11 +1303,11 @@ impl AgentLoopController {
                         // F3 (2026-08-16 审查收口): direct 盖章对称。
                         stamp_direct(&mut completed);
                         writer.record(EventType::ToolCompleted, completed).await?;
-                        self.blackboard.write().push_tool_action(ToolActionRecord {
-                            category: ToolDispatcher::action_category(&tc.name).to_string(),
-                            tool: tc.name.clone(),
-                            timestamp: chrono_utc_now(),
-                        });
+                        self.push_tool_action_stamped(
+                            ToolDispatcher::action_category(&tc.name).to_string(),
+                            tc.name.clone(),
+                            chrono_utc_now(),
+                        );
                         let result = ToolResult {
                             output: content,
                             exit_code: Some(1),
@@ -1300,11 +1351,11 @@ impl AgentLoopController {
                         // F3 (2026-08-16 审查收口): direct 盖章对称。
                         stamp_direct(&mut completed);
                         writer.record(EventType::ToolCompleted, completed).await?;
-                        self.blackboard.write().push_tool_action(ToolActionRecord {
-                            category: ToolDispatcher::action_category(&tc.name).to_string(),
-                            tool: tc.name.clone(),
-                            timestamp: chrono_utc_now(),
-                        });
+                        self.push_tool_action_stamped(
+                            ToolDispatcher::action_category(&tc.name).to_string(),
+                            tc.name.clone(),
+                            chrono_utc_now(),
+                        );
                         let result = ToolResult {
                             output: content,
                             exit_code: Some(1),
@@ -1347,11 +1398,11 @@ impl AgentLoopController {
                     });
                     stamp_direct(&mut completed);
                     writer.record(EventType::ToolCompleted, completed).await?;
-                    self.blackboard.write().push_tool_action(ToolActionRecord {
-                        category: ToolDispatcher::action_category(&tc.name).to_string(),
-                        tool: tc.name.clone(),
-                        timestamp: chrono_utc_now(),
-                    });
+                    self.push_tool_action_stamped(
+                        ToolDispatcher::action_category(&tc.name).to_string(),
+                        tc.name.clone(),
+                        chrono_utc_now(),
+                    );
                     let result = ToolResult {
                         output: error,
                         exit_code: Some(1),
@@ -1381,11 +1432,11 @@ impl AgentLoopController {
                     });
                     stamp_direct(&mut completed);
                     writer.record(EventType::ToolCompleted, completed).await?;
-                    self.blackboard.write().push_tool_action(ToolActionRecord {
-                        category: ToolDispatcher::action_category(&tc.name).to_string(),
-                        tool: tc.name.clone(),
-                        timestamp: chrono_utc_now(),
-                    });
+                    self.push_tool_action_stamped(
+                        ToolDispatcher::action_category(&tc.name).to_string(),
+                        tc.name.clone(),
+                        chrono_utc_now(),
+                    );
                     let result = ToolResult {
                         output: error,
                         exit_code: Some(1),
@@ -1419,11 +1470,11 @@ impl AgentLoopController {
                             });
                             stamp_direct(&mut completed);
                             writer.record(EventType::ToolCompleted, completed).await?;
-                            self.blackboard.write().push_tool_action(ToolActionRecord {
-                                category: ToolDispatcher::action_category(&tc.name).to_string(),
-                                tool: tc.name.clone(),
-                                timestamp: chrono_utc_now(),
-                            });
+                            self.push_tool_action_stamped(
+                                ToolDispatcher::action_category(&tc.name).to_string(),
+                                tc.name.clone(),
+                                chrono_utc_now(),
+                            );
                             let result = ToolResult {
                                 output: error,
                                 exit_code: Some(1),
@@ -1456,11 +1507,11 @@ impl AgentLoopController {
                         });
                         stamp_direct(&mut completed);
                         writer.record(EventType::ToolCompleted, completed).await?;
-                        self.blackboard.write().push_tool_action(ToolActionRecord {
-                            category: ToolDispatcher::action_category(&tc.name).to_string(),
-                            tool: tc.name.clone(),
-                            timestamp: chrono_utc_now(),
-                        });
+                        self.push_tool_action_stamped(
+                            ToolDispatcher::action_category(&tc.name).to_string(),
+                            tc.name.clone(),
+                            chrono_utc_now(),
+                        );
                         let result = ToolResult {
                             output: error,
                             exit_code: Some(1),
@@ -1492,11 +1543,11 @@ impl AgentLoopController {
                         // F3 (2026-08-16 审查收口): direct 盖章对称。
                         stamp_direct(&mut completed);
                         writer.record(EventType::ToolCompleted, completed).await?;
-                        self.blackboard.write().push_tool_action(ToolActionRecord {
-                            category: ToolDispatcher::action_category(&tc.name).to_string(),
-                            tool: tc.name.clone(),
-                            timestamp: chrono_utc_now(),
-                        });
+                        self.push_tool_action_stamped(
+                            ToolDispatcher::action_category(&tc.name).to_string(),
+                            tc.name.clone(),
+                            chrono_utc_now(),
+                        );
                         let result = ToolResult {
                             output: error,
                             exit_code: Some(1),
@@ -1549,11 +1600,11 @@ impl AgentLoopController {
             // 上方盖章，ToolCompleted 必须一致，§7.4）。
             stamp_direct(&mut completed);
             writer.record(EventType::ToolCompleted, completed).await?;
-            self.blackboard.write().push_tool_action(ToolActionRecord {
-                category: ToolDispatcher::action_category(&tc.name).to_string(),
-                tool: tc.name.clone(),
-                timestamp: chrono_utc_now(),
-            });
+            self.push_tool_action_stamped(
+                ToolDispatcher::action_category(&tc.name).to_string(),
+                tc.name.clone(),
+                chrono_utc_now(),
+            );
             // P2-10 F1 §2.2 ⑦ (I5): the Board envelope rides the structured
             // slot — partition + bounded entries + total cap (§3.3 temporal
             // board ≤ 1 KiB; other sections ≤ 8 KiB). The human-readable
@@ -1755,11 +1806,11 @@ impl AgentLoopController {
                             }),
                         )
                         .await?;
-                    self.blackboard.write().push_tool_action(ToolActionRecord {
-                        category: ToolDispatcher::action_category(&tc.name).to_string(),
-                        tool: tc.name.clone(),
-                        timestamp: chrono_utc_now(),
-                    });
+                    self.push_tool_action_stamped(
+                        ToolDispatcher::action_category(&tc.name).to_string(),
+                        tc.name.clone(),
+                        chrono_utc_now(),
+                    );
                     let output = format!(
                         "order {} written (action={}, round={}, plan_epoch={}) — 本轮轮末机械发放",
                         order.order_id, order.action, order.round, order.plan_epoch,
@@ -2541,11 +2592,14 @@ impl AgentLoopController {
                         .to_string();
                     if !file.is_empty() {
                         let timestamp = chrono_utc_now();
+                        let (round, domain) = self.blackboard_stamp();
                         self.blackboard.write().push_edit(EditRecord {
                             file: file.clone(),
                             old_lines,
                             new_lines,
                             timestamp,
+                            round,
+                            domain: Some(domain),
                         });
                         edits_payload.push(serde_json::json!({
                             "file": file,
@@ -2659,18 +2713,26 @@ impl AgentLoopController {
                     .await?;
                 // 2026-08-08 blackboard partition: fold the executed call
                 // into the tool-action section (category from the dispatcher).
+                let (round, domain) = self.blackboard_stamp();
                 self.blackboard.write().push_tool_action(ToolActionRecord {
                     category: ToolDispatcher::action_category(&tc.name).to_string(),
                     tool: tc.name.clone(),
                     timestamp: chrono_utc_now(),
+                    round,
+                    domain: Some(domain),
                 });
                 {
                     let mut w = self.blackboard.write();
-                    w.push_exec_result(format!(
-                        "[{}] {}{}",
-                        tc.name,
-                        res.output,
-                        count_note.as_deref().unwrap_or("")
+                    w.push_exec_result(crate::blackboard::ExecEntry::stamped(
+                        format!(
+                            "[{}] {}{}",
+                            tc.name,
+                            res.output,
+                            count_note.as_deref().unwrap_or("")
+                        ),
+                        round,
+                        domain,
+                        chrono_utc_now(),
                     ));
                 }
                 // IP2a (D-3): 失败必显式 — a tool result must NEVER be blank
@@ -2726,7 +2788,10 @@ impl AgentLoopController {
                     // command/anchor/file/URL tool families.
                     if let Some(ft) = crate::failure_target::failure_target(&tc.name, &tc.arguments)
                     {
-                        payload["failure_target"] = ft;
+                        payload["failure_target"] = ft.clone();
+                        // P2-12（2026-09-02）：写时盖章——host 工具错误的
+                        // 失败目标聚合（code = ToolErrorKind 结构化码）。
+                        self.note_failure_agg(&ft, Self::host_error_code(&e));
                     }
                     if timed_out {
                         payload["timed_out"] = serde_json::json!(true);
@@ -2758,17 +2823,21 @@ impl AgentLoopController {
                 // HAPPENED — fold it into the tool-action section (the
                 // "实际变动" rule applies to edit records, not to the action
                 // ledger).
+                let (round, domain) = self.blackboard_stamp();
                 self.blackboard.write().push_tool_action(ToolActionRecord {
                     category: ToolDispatcher::action_category(&tc.name).to_string(),
                     tool: tc.name.clone(),
                     timestamp: chrono_utc_now(),
+                    round,
+                    domain: Some(domain),
                 });
                 {
                     let mut w = self.blackboard.write();
-                    w.push_exec_error(format!(
-                        "[{}] {e}{}",
-                        tc.name,
-                        count_note.as_deref().unwrap_or("")
+                    w.push_exec_error(crate::blackboard::ExecEntry::stamped(
+                        format!("[{}] {e}{}", tc.name, count_note.as_deref().unwrap_or("")),
+                        round,
+                        domain,
+                        chrono_utc_now(),
                     ));
                 }
                 // P0-1 (2026-08-08 stall guards): a host-level timeout means
@@ -2966,7 +3035,9 @@ impl AgentLoopController {
         // P2-10 F4 (I2): candidate-cap refusal on the URL families keeps its
         // target identity (web_fetch / browser_read).
         if let Some(ft) = crate::failure_target::failure_target(&tc.name, &tc.arguments) {
-            payload["failure_target"] = ft;
+            payload["failure_target"] = ft.clone();
+            // P2-12（2026-09-02）：写时盖章——候选门拒单的失败目标聚合。
+            self.note_failure_agg(&ft, code);
         }
         // Only lane refusals carry the dispatch target: `count_unbound`
         // fires in a lane with no count domain (main/grill belt-and-braces),
@@ -3168,7 +3239,10 @@ mod tests {
         let bb = controller.blackboard();
         let r = bb.read();
         assert!(
-            r.exec.results.iter().any(|s| s.contains("file contents")),
+            r.exec
+                .results
+                .iter()
+                .any(|entry| entry.text.contains("file contents")),
             "{:?}",
             r.exec.results
         );
@@ -3729,6 +3803,141 @@ mod tests {
         );
         assert!(replay.valid, "journal errors: {:?}", replay.errors);
         assert_eq!(replay.terminal_event.as_deref(), Some("run_finished"));
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// P2-12（2026-09-02 方案 A）：F4 失败目标聚合的「写时盖章」e2e——
+    /// 同一目标（read_file → file_target）连续两次 host 级超时：黑板
+    /// `failure_agg` 分区只留一行（count=2、codes=[tool_timeout×2]、
+    /// 域序列按失败事件所属决策轮盖章），事件面每个失败仍携带
+    /// `failure_target`；exec 分区原文照旧，压缩「注意事项」槽才消费
+    /// 聚合行（零模型、确定性）。
+    #[tokio::test]
+    async fn failure_target_aggregation_stamps_on_write() {
+        let dir = test_dir();
+        let journal = JournalRecorder::new(dir.clone());
+        struct FailingTwiceHost {
+            journal: JournalRecorder,
+            calls: AtomicU64,
+        }
+        #[async_trait::async_trait]
+        impl LoopHost for FailingTwiceHost {
+            fn journal(&self) -> &JournalRecorder {
+                &self.journal
+            }
+            fn tools_registry(&self) -> &dyn ToolRegistry {
+                &EmptyRegistry
+            }
+            async fn call_tool(
+                &self,
+                _name: &str,
+                _arguments: serde_json::Value,
+                _call_id: &str,
+            ) -> Result<ToolResult, ToolError> {
+                let n = self.calls.fetch_add(1, Ordering::SeqCst);
+                if n < 2 {
+                    Err(ToolError::Timeout(
+                        "tool killed after 300s wall-clock budget".into(),
+                    ))
+                } else {
+                    Ok(crate::controller_test_support::ok_result())
+                }
+            }
+            async fn request_permission(
+                &self,
+                _risk: RiskClass,
+                _tool: &str,
+                _arguments: &serde_json::Value,
+            ) -> Result<PermitDecision, PermitError> {
+                Ok(PermitDecision::AllowOnce)
+            }
+        }
+        let host = FailingTwiceHost {
+            journal,
+            calls: AtomicU64::new(0),
+        };
+        let read = |id: &str| {
+            ScriptedResponse::tool_calls(vec![ToolCall {
+                name: "read_file".to_string(),
+                arguments: serde_json::json!({"file_path": "a.txt"}),
+                call_id: id.to_string(),
+            }])
+        };
+        let fake = Arc::new(FakeProvider::new(vec![
+            read("call-f1"),
+            read("call-f2"),
+            // 文本轮被 counterexample gate 拦截一轮，随后才是最终答案。
+            ScriptedResponse::text("完成"),
+            ScriptedResponse::text("完成"),
+        ]));
+        let gateway: Arc<dyn ModelGateway> = fake.clone();
+        let controller = AgentLoopController::with_gateway(gateway);
+        let result = controller
+            .run_turn(
+                &host,
+                "测试失败目标聚合",
+                "RUN-FAIL-AGG",
+                MANIFEST,
+                0,
+                None,
+                None,
+                None,
+            )
+            .await;
+        assert!(result.is_ok(), "{result:?}");
+
+        // 事件面：两次失败均带 failure_target（file_target + path）。
+        let completed: Vec<serde_json::Value> = events(&dir)
+            .into_iter()
+            .filter(|e| e.event_type == EventType::ToolCompleted)
+            .map(|e| e.payload)
+            .collect();
+        assert_eq!(completed.len(), 2, "{completed:?}");
+        for c in &completed {
+            assert_eq!(c["status"], "error");
+            assert_eq!(c["failure_target"]["kind"], "file_target");
+            assert_eq!(c["failure_target"]["path"], "a.txt");
+        }
+
+        // 黑板聚合分区：一行、count=2、结构化码集、域序列按轮盖章。
+        let bb = controller.blackboard().read();
+        let agg = &bb.failure_agg;
+        assert_eq!(agg.rows.len(), 1, "{agg:?}");
+        let row = &agg.rows[0];
+        assert_eq!(row.kind, "file_target");
+        assert_eq!(
+            row.id,
+            orz_assurance::journal::sha256_hex("a.txt".as_bytes())
+        );
+        assert_eq!(row.preview, "a.txt");
+        assert_eq!(row.count, 2);
+        assert_eq!(
+            row.codes,
+            vec![crate::failure_agg::CodeCount {
+                code: "tool_timeout".into(),
+                count: 2,
+            }]
+        );
+        assert_eq!(row.segments.len(), 1);
+        assert_eq!(row.segments[0].domain, orz_assurance::lif::Domain::Start);
+        assert_eq!(row.segments[0].from_round, 1);
+
+        // exec 分区原文照旧；压缩「注意事项」槽只呈现聚合行。
+        assert_eq!(bb.exec.errors.len(), 2);
+        let notes = crate::summary::render_facts_notes(&bb);
+        assert!(
+            notes.text.contains("[失败目标 file_target] a.txt ×2"),
+            "{}",
+            notes.text
+        );
+        assert!(
+            notes.text.contains("codes=[tool_timeout×2]"),
+            "{}",
+            notes.text
+        );
+        assert!(!notes.text.contains("[执行错误]"), "{}", notes.text);
+        assert!(notes.hidden_failure_rows.is_empty());
 
         let _ = std::fs::remove_dir_all(&dir);
     }

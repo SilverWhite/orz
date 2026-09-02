@@ -13,6 +13,8 @@ use std::sync::RwLock;
 
 use serde::{Deserialize, Serialize};
 
+use orz_assurance::lif::Domain;
+
 /// One action instance inside a plan step (design §5: `{"step_id", "do",
 /// "with"}` — the step-id binds the action to its owning step; `with` is the
 /// action's parameter object).
@@ -197,13 +199,140 @@ pub struct PlanSection {
     pub auth_grants: Vec<String>,
 }
 
+/// 一条 exec 结果/错误行（B1 会话化基础，2026-09-03，P2-13 / 设计 §9.4
+/// E8 结构化盖章）：写时盖 (round, domain) 章 + `ts` 墙钟——round 为
+/// 会话相对决策轮（与 temporal 行/failure_agg 段同刻度）、domain 为写时
+/// LIF 域机器当前域；旧无章行（round=0/domain=None，ts 空串）在 B2 渲染
+/// 折叠中归 `pre-stamp` 段。
+///
+/// 兼容：旧 epoch 归档/侧车里的 exec 行是纯字符串（无字段对象），经
+/// untagged 反序列化读回为无章行，不静默丢弃。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct ExecEntry {
+    pub text: String,
+    #[serde(default)]
+    pub round: u64,
+    #[serde(default)]
+    pub domain: Option<Domain>,
+    #[serde(default, alias = "timestamp")]
+    pub ts: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(untagged)]
+enum ExecEntryRepr {
+    /// 旧归档字符串行（无章）。
+    Legacy(String),
+    Structured(StructuredExecEntry),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+struct StructuredExecEntry {
+    pub text: String,
+    #[serde(default)]
+    pub round: u64,
+    #[serde(default)]
+    pub domain: Option<Domain>,
+    #[serde(default, alias = "timestamp")]
+    pub ts: String,
+}
+
+impl<'de> Deserialize<'de> for ExecEntry {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        match ExecEntryRepr::deserialize(deserializer)? {
+            ExecEntryRepr::Legacy(text) => Ok(ExecEntry {
+                text,
+                round: 0,
+                domain: None,
+                ts: String::new(),
+            }),
+            ExecEntryRepr::Structured(s) => Ok(ExecEntry {
+                text: s.text,
+                round: s.round,
+                domain: s.domain,
+                ts: s.ts,
+            }),
+        }
+    }
+}
+
+impl ExecEntry {
+    /// 写时盖章构造（round/domain 必填——生产写入点只走本入口；直接
+    /// 字段字面量仅测试/legacy 使用）。
+    pub fn stamped(text: String, round: u64, domain: Domain, ts: String) -> Self {
+        ExecEntry {
+            text,
+            round,
+            domain: Some(domain),
+            ts,
+        }
+    }
+
+    /// 是否无章旧行（round=0/domain=None/ts 空 → B2 `pre-stamp` 段）。
+    pub fn is_pre_stamp(&self) -> bool {
+        self.round == 0 && self.domain.is_none()
+    }
+}
+
+/// Legacy 便捷构造：`From<&str>/From<String>` 生成无章旧行（round=0 /
+/// domain=None / ts 空）——测试与旧形状 fixture 的入口；生产写入点一律
+/// 使用 [`ExecEntry::stamped`]（B1 纪律：不留无章行）。
+impl From<&str> for ExecEntry {
+    fn from(text: &str) -> Self {
+        ExecEntry {
+            text: text.to_string(),
+            round: 0,
+            domain: None,
+            ts: String::new(),
+        }
+    }
+}
+
+impl From<String> for ExecEntry {
+    fn from(text: String) -> Self {
+        ExecEntry {
+            text,
+            round: 0,
+            domain: None,
+            ts: String::new(),
+        }
+    }
+}
+
+/// 文本比较便捷（`assert_eq!(results, vec!["ok"])` 等既有断言形态）。
+impl PartialEq<&str> for ExecEntry {
+    fn eq(&self, other: &&str) -> bool {
+        self.text == *other
+    }
+}
+
+impl PartialEq<String> for ExecEntry {
+    fn eq(&self, other: &String) -> bool {
+        self.text == *other
+    }
+}
+
 /// Main agent writes: results, observations, errors, auth_requests.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct ExecSection {
-    pub results: Vec<String>,
+    pub results: Vec<ExecEntry>,
     pub observations: Vec<String>,
-    pub errors: Vec<String>,
+    pub errors: Vec<ExecEntry>,
     pub auth_requests: Vec<String>,
+}
+
+/// 检索派发章（B1 会话化基础，2026-09-03，设计 §9.4/R1）：检索分区为
+/// **派发级全量覆盖写**（每次派发替换整区），单次派发的所有行共享同一
+/// (round, domain, ts)——round = 派发所属主决策轮（会话相对）、domain =
+/// 写时 LIF 当前域。`None` = 旧数据/恢复路径尚无章（B2 pre-stamp）。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DispatchStamp {
+    pub round: u64,
+    pub domain: Domain,
+    pub timestamp: String,
 }
 
 /// Internal retrieval subagent writes: project docs, source ledger.
@@ -212,6 +341,9 @@ pub struct InternalRetSection {
     pub project_docs: Vec<String>,
     pub source_ledger: Vec<String>,
     pub response: Option<String>,
+    /// B1：本分区最后一次派发的 (round, domain) 章。
+    #[serde(default)]
+    pub stamp: Option<DispatchStamp>,
 }
 
 /// External retrieval subagent writes: web sources, source ledger.
@@ -220,6 +352,9 @@ pub struct ExternalRetSection {
     pub web_sources: Vec<String>,
     pub source_ledger: Vec<String>,
     pub response: Option<String>,
+    /// B1：本分区最后一次派发的 (round, domain) 章。
+    #[serde(default)]
+    pub stamp: Option<DispatchStamp>,
 }
 
 /// Assurance writes: gate decisions, orientation checks.
@@ -243,6 +378,13 @@ pub struct EditRecord {
     pub new_lines: usize,
     /// ISO 8601 timestamp (journal event timestamp of the tool_completed).
     pub timestamp: String,
+    /// B1 会话化基础（2026-09-03）：写时盖会话相对决策轮章（0 = 旧无章
+    /// 行，pre-stamp）。
+    #[serde(default)]
+    pub round: u64,
+    /// B1：写时 LIF 域章（None = 旧无章行，pre-stamp）。
+    #[serde(default)]
+    pub domain: Option<Domain>,
 }
 
 /// 工具动作区 (blackboard partition, 2026-08-08): one classified tool action
@@ -254,6 +396,13 @@ pub struct ToolActionRecord {
     pub category: String,
     pub tool: String,
     pub timestamp: String,
+    /// B1 会话化基础（2026-09-03）：写时盖会话相对决策轮章（0 = 旧无章
+    /// 行，pre-stamp）。
+    #[serde(default)]
+    pub round: u64,
+    /// B1：写时 LIF 域章（None = 旧无章行，pre-stamp）。
+    #[serde(default)]
+    pub domain: Option<Domain>,
 }
 
 /// 注册板块（v0.5 操作台模型，P0-C orz 内嵌集成）：助理层机械刷新、模型只读
@@ -315,6 +464,13 @@ pub struct ActionResult {
     pub error: Option<serde_json::Value>,
     pub trace_id: String,
     pub timestamp: String,
+    /// B1 会话化基础（2026-09-03）：写时盖会话相对决策轮章（0 = 旧无章
+    /// 行，pre-stamp）。
+    #[serde(default)]
+    pub round: u64,
+    /// B1：写时 LIF 域章（None = 旧无章行，pre-stamp）。
+    #[serde(default)]
+    pub domain: Option<Domain>,
 }
 
 /// 黑板动作栏三板块（v0.5 用户提案，2026-08-13 定为生产协作形态）：
@@ -342,6 +498,11 @@ impl ActionBoard {
 
     fn bump(&mut self) {
         self.revision = self.revision.saturating_add(1);
+    }
+
+    /// B1：恢复会话快照时归零版本计数（run 级徽章不跨 prompt 延续）。
+    pub(crate) fn reset_revision(&mut self) {
+        self.revision = 0;
     }
 
     /// 注册板块整块替换（助理层每轮机械刷新）。
@@ -411,7 +572,7 @@ impl std::error::Error for ActionBoardError {}
 ///
 /// Read rule: all sections are readable by all agents.
 /// Write rule: each section has a single writer (enforced by convention).
-#[derive(Debug, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct Blackboard {
     pub plan: PlanSection,
     pub exec: ExecSection,
@@ -436,8 +597,16 @@ pub struct Blackboard {
     /// 副作用不建图）。live-only：不进 epoch 快照、不持久化（同
     /// entities/temporal 纪律）；模型经 `blackboard_read section=deps`
     /// 按需 PULL。
-    #[serde(default)]
+    /// B1（2026-09-03）：会话级 live 侧车也不携带——恢复后为全新空图
+    /// （run 内派生态，跨 prompt 不延续）。
+    #[serde(default, skip_serializing)]
     pub dep_graph: crate::dep_graph::DepGraph,
+    /// F4 失败目标聚合分区（P2-12 COMPRESSION-LINGUISTIC-FORMAL-LAYER，
+    /// 2026-09-02 方案 A）：epoch 作用域、随黑板轮换重置、随 EpochSnapshot
+    /// 归档/恢复（同 exec/actions 纪律）；只被压缩「注意事项」槽渲染消费，
+    /// 不是 `blackboard_read` 的查询分区（PULL 面不变）。
+    #[serde(default)]
+    pub failure_agg: crate::failure_agg::FailureAgg,
     /// PULL 自描述分区版本计数（2026-08-31，P2-11 第 1 项）——每个分区
     /// 可见内容变化计 1 次，供 `blackboard_read` 增量头读取；仅内存、
     /// 不进任何序列化面（`#[serde(skip)]`，epoch 快照/会话存档不携带）。
@@ -476,6 +645,7 @@ impl Blackboard {
             tool_actions: self.tool_actions.clone(),
             exec: self.exec.clone(),
             actions: self.actions.clone(),
+            failure_agg: self.failure_agg.clone(),
             persisted_at: persisted_at.to_string(),
         }
     }
@@ -488,6 +658,7 @@ impl Blackboard {
         self.tool_actions = snapshot.tool_actions.clone();
         self.exec = snapshot.exec.clone();
         self.actions = snapshot.actions.clone();
+        self.failure_agg = snapshot.failure_agg.clone();
         // PULL 自描述：恢复 = 可见内容整体替换，各分区计 1 次变化。
         self.revisions.plan = self.revisions.plan.saturating_add(1);
         self.revisions.edits = self.revisions.edits.saturating_add(1);
@@ -508,16 +679,56 @@ impl Blackboard {
         self.revisions.tool_actions = self.revisions.tool_actions.saturating_add(1);
     }
 
-    /// exec 结果追加（单写者纪律 + 分区版本计数同一落点）。
-    pub fn push_exec_result(&mut self, text: String) {
-        self.exec.results.push(text);
+    /// exec 结果追加（单写者纪律 + 分区版本计数同一落点）。B1：调用方
+    /// 构造带 (round, domain, ts) 章的 [`ExecEntry`]——生产写入点不落
+    /// 无章行。
+    pub fn push_exec_result(&mut self, entry: ExecEntry) {
+        self.exec.results.push(entry);
         self.revisions.exec = self.revisions.exec.saturating_add(1);
     }
 
-    /// exec 错误追加（单写者纪律 + 分区版本计数同一落点）。
-    pub fn push_exec_error(&mut self, text: String) {
-        self.exec.errors.push(text);
+    /// exec 错误追加（单写者纪律 + 分区版本计数同一落点）。B1：同
+    /// [`Self::push_exec_result`] 的盖章纪律。
+    pub fn push_exec_error(&mut self, entry: ExecEntry) {
+        self.exec.errors.push(entry);
         self.revisions.exec = self.revisions.exec.saturating_add(1);
+    }
+
+    /// B1 会话化基础（2026-09-03）：跨 prompt 持久化/恢复用的黑板 live
+    /// 快照——整板克隆后做会话边界清理：动作栏注册板块与 pending 订单
+    /// 槽是 run 级机械面（恢复后由下一 run 的探针/写单重建，跨 prompt
+    /// 陈旧内容不延续）；依赖图 live-only 不随会话延续（置空，恢复后
+    /// 由下一 run 从零建图）。entities / 检索分区随会话延续（设计
+    /// §11.1 W 计量含 entities 当前内容；检索分区另有 activation 侧车
+    /// 同源副本）。
+    pub fn conversation_snapshot(&self) -> Blackboard {
+        let mut snap = self.clone();
+        snap.actions.registration.clear();
+        snap.actions.order = None;
+        snap.dep_graph = crate::dep_graph::DepGraph::default();
+        snap
+    }
+
+    /// B1：用会话快照整体替换 live 黑板（ACP 每 prompt 续载入口）。
+    /// 快照已含会话边界清理（None = 全新会话）。
+    pub fn restore_conversation_snapshot(&mut self, snapshot: Blackboard) {
+        *self = snapshot;
+        // PULL 自描述：分区版本计数只随 run 存活（跨 prompt 侧车不携带）。
+        // 恢复 = 可见内容整体替换——各分区统一归位为「1 次变化」，首次
+        // blackboard_read 恰好各挂 +1 徽章（与 restore_epoch_snapshot 的
+        // bump 语义对齐；不延续上 run 的累积计数，防跨 prompt 徽章噪声）。
+        // 依赖图已随会话快照置空（版本 0）。
+        self.revisions = PartitionRevisions {
+            plan: 1,
+            exec: 1,
+            edits: 1,
+            tool_actions: 1,
+            internal_ret: 1,
+            external_ret: 1,
+        };
+        self.actions.reset_revision();
+        self.actions.bump();
+        self.entities.reset_revision();
     }
 
     /// plan 分区零散写点（mark_step_* / delivery_status 等）的计数入口。
@@ -682,6 +893,7 @@ impl Blackboard {
         self.tool_actions.clear();
         self.exec = ExecSection::default();
         self.actions = ActionBoard::default();
+        self.failure_agg = crate::failure_agg::FailureAgg::default();
         // PULL 自描述：轮换 = 计划替换 + 旧 epoch 工作分区清空，各计 1 次。
         self.revisions.plan = self.revisions.plan.saturating_add(1);
         self.revisions.edits = self.revisions.edits.saturating_add(1);
@@ -751,6 +963,10 @@ pub struct EpochSnapshot {
     /// 操作台动作栏（v0.5；P0-C S1）——随 epoch 归档/恢复。
     #[serde(default)]
     pub actions: ActionBoard,
+    /// F4 失败目标聚合（P2-12，2026-09-02）——epoch 作用域、随归档/恢复；
+    /// 旧归档（无该字段）经 serde default 兼容读取（与 actions 同纪律）。
+    #[serde(default)]
+    pub failure_agg: crate::failure_agg::FailureAgg,
     /// When this snapshot was PERSISTED (approval/revision refresh or
     /// rotation). F9 (2026-08-15, BACKLOG 6e 复查遗留): the old name
     /// `rotated_at` misleadingly implied rotation-only — the current-epoch
@@ -918,6 +1134,8 @@ mod tests {
                 error: None,
                 trace_id: format!("t{i:06}"),
                 timestamp: "2026-08-15T00:00:00Z".into(),
+                round: 0,
+                domain: None,
             });
         }
         assert_eq!(board.results.len(), ActionBoard::RESULTS_MAX);
@@ -980,6 +1198,73 @@ mod tests {
         assert!(bb.actions.results.is_empty());
     }
 
+    /// P2-12（2026-09-02 方案 A）：F4 失败目标聚合分区与 exec/actions 同
+    /// 纪律——epoch 作用域：随 EpochSnapshot 归档/恢复、随黑板轮换清空；
+    /// 旧归档（无该字段）经 serde default 兼容读取。
+    #[test]
+    fn failure_agg_rotates_and_snapshots_with_epoch() {
+        let mut bb = Blackboard::new();
+        bb.rotate_to_plan(
+            "PLAN-1".into(),
+            1,
+            "first".into(),
+            vec!["step".into()],
+            "2026-08-15T00:00:00Z",
+        )
+        .unwrap();
+        bb.failure_agg.record(
+            "cmd_target",
+            "id-1",
+            "make -j8",
+            "tool_timeout",
+            5.0,
+            1,
+            orz_assurance::lif::Domain::Start,
+        );
+        bb.failure_agg.record(
+            "cmd_target",
+            "id-1",
+            "make -j8",
+            "execution_failed",
+            20.0,
+            3,
+            orz_assurance::lif::Domain::Normal,
+        );
+
+        let snap = bb.epoch_snapshot("2026-08-15T00:00:00Z");
+        assert_eq!(snap.failure_agg.rows.len(), 1);
+        assert_eq!(snap.failure_agg.rows[0].count, 2);
+
+        // New plan epoch rotates: old epoch archived (rows preserved),
+        // live board cleared.
+        let old = bb
+            .rotate_to_plan(
+                "PLAN-2".into(),
+                2,
+                "next".into(),
+                vec!["step".into()],
+                "2026-08-15T00:00:01Z",
+            )
+            .unwrap()
+            .expect("epoch 1 archived");
+        assert!(bb.failure_agg.is_empty());
+        assert_eq!(old.failure_agg.rows.len(), 1);
+
+        // Restore roundtrip brings the aggregate back.
+        let mut restored = Blackboard::new();
+        restored.restore_epoch_snapshot(&snap);
+        assert_eq!(restored.failure_agg.rows.len(), 1);
+        assert_eq!(restored.failure_agg.rows[0].count, 2);
+
+        // Old archive JSON (no failure_agg key) still parses via serde
+        // default — upgrades never poison cross-epoch restore.
+        let mut json: serde_json::Value =
+            serde_json::from_str(&serde_json::to_string(&snap).unwrap()).unwrap();
+        json.as_object_mut().unwrap().remove("failure_agg");
+        let parsed: EpochSnapshot = serde_json::from_value(json).expect("old archive parses");
+        assert!(parsed.failure_agg.is_empty());
+    }
+
     /// v1.15 (2026-08-14): `blackboard_read` with `epoch` reads the archived
     /// snapshot; a missing epoch / unconfigured archive is explicit — never
     /// a silent fallback to the live board.
@@ -1002,6 +1287,8 @@ mod tests {
                 old_lines: 1,
                 new_lines: 2,
                 timestamp: "2026-08-14T00:00:00Z".into(),
+                round: 0,
+                domain: None,
             });
         }
         // Rotate: epoch-1 archived with the old plan + edit record.
@@ -1619,6 +1906,8 @@ mod tests {
                 error: None,
                 trace_id: "t-slim-1".into(),
                 timestamp: "2026-08-19T00:00:00Z".into(),
+                round: 0,
+                domain: None,
             });
             bb.actions.push_result(ActionResult {
                 order_id: "ORD-SLIM-2".into(),
@@ -1632,10 +1921,12 @@ mod tests {
                 })),
                 trace_id: "t-slim-2".into(),
                 timestamp: "2026-08-19T00:00:01Z".into(),
+                round: 0,
+                domain: None,
             });
             // 40 条超长 exec 行：逐行截断后段总长仍超 4K → 头行 + 计数行。
             for _ in 0..40 {
-                bb.exec.results.push("z".repeat(500));
+                bb.exec.results.push("z".repeat(500).into());
             }
         }
         controller
@@ -1775,6 +2066,8 @@ mod tests {
                 error: None,
                 trace_id: "t-pr-1".into(),
                 timestamp: "2026-08-19T04:00:00Z".into(),
+                round: 0,
+                domain: None,
             });
         }
         controller
@@ -2163,6 +2456,8 @@ mod tests {
                 error: None,
                 trace_id: "t-old-1".into(),
                 timestamp: "2026-08-19T03:00:00Z".into(),
+                round: 0,
+                domain: None,
             });
         }
         // Rotate: epoch-1 archived WITH the receipt; the live board clears.
@@ -2204,6 +2499,8 @@ mod tests {
                 })),
                 trace_id: "t-new-1".into(),
                 timestamp: "2026-08-19T03:00:01Z".into(),
+                round: 0,
+                domain: None,
             });
         }
         let live = controller.render_blackboard_section("actions", None, None, Some("ORD-NEW-1"));
@@ -2760,11 +3057,15 @@ mod tests {
                 old_lines: 1,
                 new_lines: 2,
                 timestamp: "t".into(),
+                round: 0,
+                domain: None,
             });
             w.push_tool_action(ToolActionRecord {
                 category: "read".into(),
                 tool: "read_file".into(),
                 timestamp: "t".into(),
+                round: 0,
+                domain: None,
             });
             w.push_exec_result("r".into());
             w.push_exec_error("e".into());
@@ -2873,10 +3174,135 @@ mod tests {
             error: None,
             trace_id: "t".into(),
             timestamp: "2026-08-31T00:00:00Z".into(),
+            round: 0,
+            domain: None,
         });
         assert_eq!(board.revision, 5);
         // 空槽消费不计数。
         assert!(board.take_order().is_none());
         assert_eq!(board.revision, 5);
+    }
+
+    /// B1 会话化基础：exec 旧归档字符串（无章）可解析为 pre-stamp
+    /// `ExecEntry`（round=0/domain=None/ts 空）；新写章行带
+    /// (round, domain, ts) 且 JSON 往返不丢章。
+    #[test]
+    fn exec_legacy_strings_parse_as_pre_stamp_and_stamped_roundtrips() {
+        let json =
+            r#"{"results":["ok 一","ok 二"],"observations":[],"errors":["错"],"auth_requests":[]}"#;
+        let section: ExecSection = serde_json::from_str(json).unwrap();
+        assert_eq!(section.results.len(), 2);
+        assert!(section.results[0].is_pre_stamp());
+        assert_eq!(section.results[0].text, "ok 一");
+        assert_eq!(section.results[1].text, "ok 二");
+        assert!(section.errors[0].is_pre_stamp());
+
+        let stamped = ExecEntry::stamped(
+            "跑批完成".into(),
+            7,
+            Domain::Normal,
+            "2026-09-03T00:00:00Z".into(),
+        );
+        let mut section2 = ExecSection::default();
+        section2.results.push(stamped.clone());
+        let json2 = serde_json::to_string(&section2).unwrap();
+        let back: ExecSection = serde_json::from_str(&json2).unwrap();
+        assert_eq!(back.results.len(), 1);
+        assert_eq!(back.results[0].round, 7);
+        assert_eq!(back.results[0].domain, Some(Domain::Normal));
+        assert_eq!(back.results[0].ts, "2026-09-03T00:00:00Z");
+    }
+
+    /// B1 会话化基础：`conversation_snapshot` 剥离 run 级机械面（动作栏
+    /// 注册板块 / pending 订单槽 / 依赖图），保留分区内容与章；JSON 序列
+    /// 化不携带 dep_graph（live-only）；`restore_conversation_snapshot`
+    /// 后各分区版本计数归位为 1（恢复 = 一次整体变化，跨 prompt 徽章
+    /// 不延续上 run 累积计数）。
+    #[test]
+    fn conversation_snapshot_and_restore_keep_board_but_strip_run_faces() {
+        let mut bb = Blackboard::default();
+        bb.actions.set_registration(vec![ActionRegistration {
+            name: "workspace.read_file".into(),
+            description: "读文件".into(),
+            parameters: serde_json::json!({}),
+            target_policy: crate::entities::TargetPolicy::File,
+        }]);
+        bb.actions
+            .write_order(ActionOrder {
+                order_id: "ORD-1".into(),
+                action: "workspace.read_file".into(),
+                arguments: serde_json::json!({}),
+                target: None,
+                step_id: None,
+                round: 1,
+                plan_epoch: 1,
+                run_id: "RUN-1".into(),
+            })
+            .unwrap();
+        bb.push_edit(EditRecord {
+            file: "a.py".into(),
+            old_lines: 1,
+            new_lines: 2,
+            timestamp: "2026-09-03T00:00:00Z".into(),
+            round: 3,
+            domain: Some(Domain::Normal),
+        });
+        bb.push_tool_action(ToolActionRecord {
+            category: "read".into(),
+            tool: "read_file".into(),
+            timestamp: "2026-09-03T00:00:00Z".into(),
+            round: 3,
+            domain: Some(Domain::Normal),
+        });
+        bb.push_exec_result(ExecEntry::stamped(
+            "[read_file] 内容".into(),
+            3,
+            Domain::Normal,
+            "2026-09-03T00:00:00Z".into(),
+        ));
+        bb.actions.push_result(ActionResult {
+            order_id: "ORD-1".into(),
+            action: Some("workspace.read_file".into()),
+            ok: true,
+            response: None,
+            error: None,
+            trace_id: "t".into(),
+            timestamp: "2026-09-03T00:00:00Z".into(),
+            round: 3,
+            domain: Some(Domain::Normal),
+        });
+
+        // 侧车 JSON 不携带 dep_graph（live-only）。
+        let serialized = serde_json::to_string(&bb).unwrap();
+        assert!(
+            !serialized.contains("\"dep_graph\""),
+            "dep graph not persisted"
+        );
+
+        let snap = bb.conversation_snapshot();
+        assert!(
+            snap.actions.registration.is_empty(),
+            "registration is run-local"
+        );
+        assert!(snap.actions.order.is_none(), "pending order is run-local");
+        assert_eq!(snap.actions.results.len(), 1, "receipts persist");
+        assert_eq!(snap.edits.len(), 1);
+        assert_eq!(snap.tool_actions.len(), 1);
+        assert_eq!(snap.exec.results.len(), 1);
+
+        let mut restored = Blackboard::new();
+        restored.restore_conversation_snapshot(snap);
+        assert_eq!(restored.edits[0].round, 3);
+        assert_eq!(restored.tool_actions[0].round, 3);
+        assert_eq!(restored.exec.results[0].round, 3);
+        let rev = restored.partition_revisions();
+        for (name, value) in rev {
+            match name {
+                "plan" | "exec" | "edits" | "tool_actions" | "actions" | "internal_ret"
+                | "external_ret" => assert_eq!(value, 1, "{name} shows one restore change"),
+                "entities" | "deps" => assert_eq!(value, 0, "{name} stays silent until touched"),
+                other => panic!("unexpected partition {other}"),
+            }
+        }
     }
 }
