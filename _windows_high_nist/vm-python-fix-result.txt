@@ -1,0 +1,20 @@
+﻿MACHINE_PATH=C:\Program\Scripts\;C:\Program\;C:\WINDOWS\system32;C:\WINDOWS;C:\WINDOWS\System32\Wbem;C:\WINDOWS\System32\WindowsPowerShell\v1.0\;C:\WINDOWS\System32\OpenSSH\
+C:\Program exists=True
+C:\Program Files\Python312 exists=False
+--- C:\Program contents ---
+DLLs
+Doc
+include
+Lib
+libs
+Scripts
+tcl
+LICENSE.txt
+NEWS.txt
+python.exe
+python3.dll
+python312.dll
+pythonw.exe
+vcruntime140.dll
+vcruntime140_1.dll
+EXIT=0

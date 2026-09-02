@@ -1,0 +1,2 @@
+﻿HL_GRANT_NONE
+EXIT=0

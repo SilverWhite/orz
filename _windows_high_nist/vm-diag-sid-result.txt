@@ -1,0 +1,6 @@
+﻿PY: StringSidToSidW False
+PY: StringSidToSidA False
+PY: StringSidToSid False
+PY: ConvertStringSidToSidW True
+DLL_EXPORT_CHECK=n/a
+EXIT=0

@@ -1,0 +1,23 @@
+﻿
+
+Name           : win-s4
+State          : Off
+Generation     : 2
+ProcessorCount : 4
+MemoryStartup  : 6442450944
+VHD            : D:\VMs\win-s4\win-s4.vhdx
+
+
+
+
+Name           SwitchType
+----           ----------
+Default Switch   Internal
+
+
+
+
+Path : D:\VMs\iso\26200.6584.250915-1905.25h2_ge_release_svc_refresh_CLIENTENTERPRISEEVAL_OEMRET_x64FRE_zh-cn.iso
+
+
+

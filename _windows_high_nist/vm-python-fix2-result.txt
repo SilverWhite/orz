@@ -1,0 +1,7 @@
+﻿UNINSTALL_MACHINE exit=0
+PATH_CLEANED=C:\Program\Scripts\;C:\Program\;C:\WINDOWS\system32;C:\WINDOWS;C:\WINDOWS\System32\Wbem;C:\WINDOWS\System32\WindowsPowerShell\v1.0\;C:\WINDOWS\System32\OpenSSH\
+INSTALL attempt=1 exit=0
+FINAL_MACHINE_PATH=C:\Program Files\Python312\Scripts\;C:\Program Files\Python312\;C:\Program\Scripts\;C:\Program\;C:\WINDOWS\system32;C:\WINDOWS;C:\WINDOWS\System32\Wbem;C:\WINDOWS\System32\WindowsPowerShell\v1.0\;C:\WINDOWS\System32\OpenSSH\
+PY=C:\Program Files\Python312\python.exe 3.12.10 (tags/v3.12.10:0cc8128, Apr  8 2025, 12:21:36) [MSC v.1943 64 bit (AMD64)]
+PF_EXISTS=True
+EXIT=0

@@ -1,0 +1,22 @@
+At D:\CLI\scripts\s4_vm_pip.ps1:49 char:56
++ $bodyFile = 'D:\CLI\_windows_high_nist\job-pip-body.ps1'
++                                                        ~
+The string is missing the terminator: '.
+At D:\CLI\scripts\s4_vm_pip.ps1:49 char:14
++ $bodyFile = 'D:\CLI\_windows_high_nist\job-pip-body.ps1'
++              ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+Unexpected token 'D:\CLI\_windows_high_nist\job-pip-body.ps1'
+Set-Content -LiteralPath $bodyFile -Value $body -Encoding utf8
+try {
+    & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $runner `
+        -JobBodyFile $bodyFile -OutFile $OutFile -TimeoutSeconds 1200
+    if ($LASTEXITCODE -ne 0) { throw "pip job failed (exit $LASTEXITCODE)" }
+}
+catch {
+    $lines.Add("ERROR: $($_.Exception.Message)")
+    $lines | Set-Content -LiteralPath $OutFile -Encoding utf8
+}
+' in expression or statement.
+    + CategoryInfo          : ParserError: (:) [], ParentContainsErrorRecordException
+    + FullyQualifiedErrorId : TerminatorExpectedAtEndOfString
+ 

@@ -1,0 +1,41 @@
+﻿LOG: PY: APPC_SID S-1-15-2-3864573430-4215358901-1029214019-773336022-4164228762-1047588505-64916640
+LOG: PY: GRANT True
+LOG: PY: PYTHON_APPC CPAU 1 err 0
+LOG: PY: PYTHON_APPC EXIT 42
+LOG: PY: CMD_APPC CPAU 1 err 0
+LOG: PY: CMD_APPC EXIT 42
+LOG: PY: RESTORED
+LOG: PY: DONE
+PROC: 信息: 没有运行的任务匹配指定标准。
+PROC: "映像名称","PID","会话名      ","会话#   ","内存使用 "
+PROC: "cmd.exe","7652","Services","0","2,500 K"
+TASK: 
+TASK: 文件夹: \
+TASK: 主机名:                             DESKTOP-QMAPMFH
+TASK: 任务名:                             \s4elevv12
+TASK: 下次运行时间:                       2026/9/2 23:59:00
+TASK: 模式:                               就绪
+TASK: 登录状态:                           交互方式/后台方式
+TASK: 上次运行时间:                       2026/9/2 7:58:10
+TASK: 上次结果:                           0
+TASK: 创建者:                             DESKTOP-QMAPMFH\HL
+TASK: 要运行的任务:                       powershell.exe -NoProfile -ExecutionPolicy Bypass -File C:\s4\tools\v12-runner.ps1
+TASK: 起始于:                             N/A
+TASK: 注释:                               N/A
+TASK: 计划任务状态:                       已启用
+TASK: 空闲时间:                           已禁用
+TASK: 电源管理:                           在电池模式停止, 不用电池启动
+TASK: 作为用户运行:                       SYSTEM
+TASK: 删除没有计划的任务:                 已禁用
+TASK: 如果运行了 X 小时 X 分钟，停止任务: 72:00:00
+TASK: 计划:                               计划数据在此格式中不可用。
+TASK: 计划类型:                           一次性
+TASK: 开始时间:                           23:59:00
+TASK: 开始日期:                           2026/9/2
+TASK: 结束日期:                           N/A
+TASK: 天:                                 N/A
+TASK: 月:                                 N/A
+TASK: 重复: 每:                           已禁用
+TASK: 重复: 截止: 时间:                   已禁用
+TASK: 重复: 截止: 持续时间:               已禁用
+TASK: 重复: 如果还在运行，停止:           已禁用

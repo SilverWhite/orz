@@ -1,0 +1,36 @@
+﻿PY: SESSION 0
+PY: WINSTA Service-0x0-4359991$
+PY: DESKTOP Default
+PY: WINSTA_SDDL None
+PY: DESKTOP_SDDL None
+PY: AGENT_SID S-1-5-21-3636881053-4261193759-2698424706-1002
+PY: NEW_WINSTA None
+PY: NEW_DESKTOP None
+PY: CW_UNIBUF UNIBUF_SZ 830 BYTES b'P\x00A\x00T\x00H\x00=\x00C\x00:\x00\\\x00P\x00r\x00o\x00g\x00r\x00a\x00m\x00 \x00F\x00i\x00l\x00e\x00s\x00\\\x00P\x00y\x00'
+PY: CW_UNIBUF CW 1 err 0
+PY: CW_UNIBUF EXIT 42
+PY: CW_CP_ALIVE CW 1 err 0
+PY: CW_CP_ALIVE EXIT 42
+PY: CW_CP_CAST CW 1 err 0
+PY: CW_CP_CAST EXIT 42
+PY: CW_UNIBUF_NOFLAG UNIBUF_SZ 830 BYTES b'P\x00A\x00T\x00H\x00=\x00C\x00:\x00\\\x00P\x00r\x00o\x00g\x00r\x00a\x00m\x00 \x00F\x00i\x00l\x00e\x00s\x00\\\x00P\x00y\x00'
+PY: CW_UNIBUF_NOFLAG CW 0 err 87
+PY: CW_FULL_UNIBUF CW 1 err 0
+PY: CW_FULL_UNIBUF EXIT 42
+PY: Traceback (most recent call last):
+PY:   File "C:\s4\tools\repro-v3.py", line 204, in <module>
+PY:     r1 = subprocess.run(['cmd.exe', '/c', 'exit', '42'], env=min_env, capture_output=True)
+PY:          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+PY:   File "C:\Program Files\Python312\Lib\subprocess.py", line 548, in run
+PY:     with Popen(*popenargs, **kwargs) as process:
+PY:          ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+PY:   File "C:\Program Files\Python312\Lib\subprocess.py", line 1026, in __init__
+PY:     self._execute_child(args, executable, preexec_fn, close_fds,
+PY:   File "C:\Program Files\Python312\Lib\subprocess.py", line 1538, in _execute_child
+PY:     hp, ht, pid, tid = _winapi.CreateProcess(executable, args,
+PY:                        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+PY:   File "C:\s4\tools\repro-v3.py", line 199, in spy
+PY:     log('SP_ENV', type(env_arg).__name__, 'LEN', len(env_arg), 'PREFIX', repr(env_arg[:36]))
+PY:                                                                               ~~~~~~~^^^^^
+PY: KeyError: slice(None, 36, None)
+EXIT=0

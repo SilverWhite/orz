@@ -1,0 +1,202 @@
+﻿--- VM sandbox AC_TEMP code? ---
+HIT: 2708 # AC\Temp in the run user's profile and grant the package SID.
+HIT: 2710 pkg_root = (
+HIT: 2719 ac_temp = pkg_root / "AC" / "Temp"
+HIT: 2720 ac_temp.mkdir(parents=True, exist_ok=True)
+HIT: 2726 str(pkg_root),
+HIT: 2737 _diag(f"AppContainer package temp setup failed: {exc}")
+--- obs diagnostics ---
+NO_DIAGS
+--- Packages listing ---
+--- latest pkg AC Temp icacls ---
+--- whoami-groups.txt ---
+--- whoami-priv.txt ---
+--- probe-env.txt ---
+TEMP=C:\Users\AgentUser\AppData\Local\Packages\p2_native_run_56801cbd5eb94226\AC\Temp
+TMP=C:\Users\AgentUser\AppData\Local\Packages\p2_native_run_56801cbd5eb94226\AC\Temp
+USERPROFILE=C:\Users\AgentUser
+LOCALAPPDATA=C:\Users\AgentUser\AppData\Local\Packages\p2_native_run_56801cbd5eb94226\AC
+APPDATA=C:\Users\AgentUser\AppData\Roaming
+--- imports-ok.txt ---
+winreg,socket,argparse,uuid,traceback,json,random,os,sys
+--- imports-fail.txt ---
+ctypes:ImportError('DLL load failed while importing _ctypes: 动态链接库(DLL)初始化例程失败。')
+--- ICACLS workspace ---
+C:\workspace DESKTOP-QMAPMFH\AgentUser:(OI)(CI)(M)
+             NT AUTHORITY\Authenticated Users:(I)(M)
+             NT AUTHORITY\Authenticated Users:(I)(OI)(CI)(IO)(M)
+             NT AUTHORITY\SYSTEM:(I)(OI)(CI)(F)
+             BUILTIN\Administrators:(I)(OI)(CI)(F)
+             BUILTIN\Users:(I)(OI)(CI)(RX)
+
+已成功处理 1 个文件; 处理 0 个文件时失败
+--- ICACLS workspace\high-nist ---
+C:\workspace\high-nist S-1-15-2-900586242-4209563397-3993187833-3300616744-2841326130-3420778577-3817499346:(OI)(CI)(M)
+                       S-1-15-2-1547968773-1802464159-2012569023-210668457-2212885530-2594737433-613611370:(OI)(CI)(M)
+                       S-1-15-2-1926069008-3657005161-721047236-2829316761-1085391536-1659458790-3617816688:(OI)(CI)(M)
+                       S-1-15-2-4120180074-1900466754-3852461143-2088257873-3538956566-3431242307-1753205573:(OI)(CI)(M)
+                       S-1-15-2-2425976710-1529039813-3386864855-4132909336-2806866130-2158614685-1567066640:(OI)(CI)(M)
+                       S-1-15-2-3371321629-3110157414-2019307635-1090910766-3050073993-2620853195-1727785999:(OI)(CI)(M)
+                       S-1-15-2-1107516422-1273517440-1366743646-2427733565-347264632-2807712273-3822325970:(OI)(CI)(M)
+                       S-1-15-2-2373189536-1188700838-903901904-1068793112-3657437883-1078441396-2590233513:(OI)(CI)(M)
+                       S-1-15-2-3805610227-2695170435-3457026278-2110801901-333657158-209832491-1736729138:(OI)(CI)(M)
+                       S-1-15-2-1765371246-1403221559-3482082438-2340535728-2699687653-2968551727-878158059:(OI)(CI)(M)
+                       S-1-15-2-1623725565-3713958145-3251069692-151135082-2945908644-3997872710-3072750316:(OI)(CI)(M)
+                       S-1-15-2-3505964313-301510798-593659026-533813087-3975877341-3955420846-2931444962:(OI)(CI)(M)
+                       S-1-15-2-2591228628-967355130-1832273484-4011786651-3642345854-2084727792-4044598734:(OI)(CI)(M)
+                       S-1-15-2-1200368657-128613240-1750068305-1989576044-2948433868-509612131-378403353:(OI)(CI)(M)
+                       S-1-15-2-192482263-1106090181-1008860157-1874066832-38050470-2434413770-3981153504:(OI)(CI)(M)
+                       S-1-15-2-92431604-2006820718-2560669364-3978478087-3607901099-445849661-4156304357:(OI)(CI)(M)
+                       S-1-15-2-4015485652-1236242786-3944190403-254419910-803763603-909024302-1096192536:(OI)(CI)(M)
+                       DESKTOP-QMAPMFH\AgentUser:(OI)(CI)(M)
+                       DESKTOP-QMAPMFH\AgentUser:(I)(OI)(CI)(M)
+                       NT AUTHORITY\Authenticated Users:(I)(M)
+                       NT AUTHORITY\Authenticated Users:(I)(OI)(CI)(IO)(M)
+                       NT AUTHORITY\SYSTEM:(I)(OI)(CI)(F)
+                       BUILTIN\Administrators:(I)(OI)(CI)(F)
+                       BUILTIN\Users:(I)(OI)(CI)(RX)
+                       Mandatory Label\Low Mandatory Level:(NW)
+
+已成功处理 1 个文件; 处理 0 个文件时失败
+--- OBSERVATION DIAGNOSTICS ---
+.tmp|
+.assurance-p2-disposable.json|136
+.enforcement-probe-high-nist.debug.log|2481
+.probe-env.txt|337
+.probe-started|9
+.whoami-groups.txt|0
+.whoami-priv.txt|0
+.whoami-_groups.out|0
+.whoami-_priv.out|0
+enforcement-probe-high-nist.json|779
+enforcement_probe.py|14831
+imports-fail.txt|96
+imports-ok.txt|58
+windows-native-run-observation-high-nist.json|3203
+wtest.py|554
+wtest.txt|1
+PASS  workspace_writable
+PASS  non_admin
+PASS  token_virtualization_disabled
+PASS  program_files_write_blocked
+PASS  system32_write_blocked
+PASS  hklm_write_blocked
+PASS  privileges_removed
+PASS  runas_blocked
+FAIL  temp_write_succeeded
+FAIL  home_write_succeeded
+PASS  programdata_write_blocked
+PASS  drive_root_write_blocked
+PASS  hkcufrozen
+PASS  home_frozen
+PASS  appdata_frozen
+FAIL  temp_redirected
+FAIL  low_integrity
+FAIL  appcontainer_token
+PASS  network_blocked
+PASS  metadata_blocked
+PASS  probe_file_cleaned
+PASS  workspace_writable
+PASS  non_admin
+PASS  token_virtualization_disabled
+PASS  program_files_write_blocked
+PASS  system32_write_blocked
+PASS  hklm_write_blocked
+PASS  privileges_removed
+PASS  runas_blocked
+PASS  programdata_write_blocked
+PASS  drive_root_write_blocked
+PASS  hkcufrozen
+PASS  home_frozen
+PASS  appdata_frozen
+FAIL  temp_redirected
+FAIL  low_integrity
+FAIL  appcontainer_token
+PASS  network_blocked
+PASS  metadata_blocked
+PASS  probe_file_cleaned
+PASS  workspace_writable
+PASS  non_admin
+PASS  token_virtualization_disabled
+PASS  program_files_write_blocked
+PASS  system32_write_blocked
+PASS  hklm_write_blocked
+PASS  privileges_removed
+PASS  runas_blocked
+PASS  programdata_write_blocked
+PASS  drive_root_write_blocked
+PASS  hkcufrozen
+PASS  home_frozen
+PASS  appdata_frozen
+FAIL  temp_redirected
+FAIL  low_integrity
+FAIL  appcontainer_token
+PASS  network_blocked
+PASS  metadata_blocked
+PASS  probe_file_cleaned
+PASS  workspace_writable
+PASS  non_admin
+PASS  token_virtualization_disabled
+PASS  program_files_write_blocked
+PASS  system32_write_blocked
+PASS  hklm_write_blocked
+PASS  privileges_removed
+PASS  runas_blocked
+PASS  programdata_write_blocked
+PASS  drive_root_write_blocked
+PASS  hkcufrozen
+PASS  home_frozen
+PASS  appdata_frozen
+FAIL  temp_redirected
+FAIL  low_integrity
+FAIL  appcontainer_token
+PASS  network_blocked
+PASS  metadata_blocked
+PASS  probe_file_cleaned
+PASS  workspace_writable
+PASS  non_admin
+PASS  token_virtualization_disabled
+PASS  program_files_write_blocked
+PASS  system32_write_blocked
+PASS  hklm_write_blocked
+PASS  privileges_removed
+PASS  runas_blocked
+PASS  programdata_write_blocked
+PASS  drive_root_write_blocked
+PASS  hkcufrozen
+PASS  home_frozen
+PASS  appdata_frozen
+FAIL  temp_redirected
+PASS  low_integrity
+PASS  appcontainer_token
+PASS  network_blocked
+PASS  metadata_blocked
+PASS  probe_file_cleaned
+{
+  "arm": "high-nist",
+  "workspace": "C:\\workspace\\high-nist",
+  "checks": {
+    "workspace_writable": true,
+    "non_admin": true,
+    "token_virtualization_disabled": true,
+    "program_files_write_blocked": true,
+    "system32_write_blocked": true,
+    "hklm_write_blocked": true,
+    "privileges_removed": true,
+    "runas_blocked": true,
+    "programdata_write_blocked": true,
+    "drive_root_write_blocked": true,
+    "hkcufrozen": true,
+    "home_frozen": true,
+    "appdata_frozen": true,
+    "temp_redirected": false,
+    "low_integrity": true,
+    "appcontainer_token": true,
+    "network_blocked": true,
+    "metadata_blocked": true,
+    "probe_file_cleaned": true
+  },
+  "passed": 18,
+  "failed": 1,
+  "ran_at": "2026-09-02T00:25:55Z"
+}

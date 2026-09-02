@@ -1,0 +1,21 @@
+﻿PY: VARIANT empty exit 42 outcome noncompliant
+PY:   CHECK non_admin False
+PY:   CHECK privileges_removed True
+PY:   CHECK token_virtualization_disabled True
+PY:   CHECK workspace_writable True
+PY: VARIANT privs_only exit 42 outcome noncompliant
+PY:   CHECK non_admin False
+PY:   CHECK privileges_removed True
+PY:   CHECK token_virtualization_disabled True
+PY:   CHECK workspace_writable True
+PY: VARIANT disable_only exit 3221225794 outcome compliant
+PY:   CHECK non_admin True
+PY:   CHECK privileges_removed True
+PY:   CHECK token_virtualization_disabled True
+PY:   CHECK workspace_writable True
+PY: VARIANT all exit 3221225794 outcome compliant
+PY:   CHECK non_admin True
+PY:   CHECK privileges_removed True
+PY:   CHECK token_virtualization_disabled True
+PY:   CHECK workspace_writable True
+EXIT=0

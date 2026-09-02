@@ -1,0 +1,9 @@
+﻿--- AppLocker policy present? ---
+SRP_QUERY exit=0 :  HKEY_LOCAL_MACHINE\SOFTWARE\Policies\Microsoft\Windows\SrpV2\Exe
+PY: BEFORE_APPLOCKER_OFF exit 3221225794 outcome compliant
+PY: Traceback (most recent call last):
+PY:   File "C:\s4\tools\diag-applocker.py", line 23, in <module>
+PY:     print("REG_DELETE", r.returncode, (r.stdout + r.stderr).decode(errors="replace"))
+PY: UnicodeEncodeError: 'gbk' codec can't encode character '\ufffd' in position 0: illegal multibyte sequence
+PY: REG_DELETE 0 
+EXIT=0

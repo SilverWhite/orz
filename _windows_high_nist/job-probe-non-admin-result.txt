@@ -1,0 +1,30 @@
+﻿{
+  "arm": "non-admin",
+  "checks": {
+    "non_admin": true,
+    "privileges_removed": true,
+    "token_virtualization_disabled": true,
+    "workspace_writable": true
+  },
+  "exit_code": 3221225794,
+  "observation_path": "C:\\Users\\HL\\AppData\\Local\\Temp\\gsa-enforcement-0dba7df7d2b2460493a0e3ab9f2e7e7a\\windows-native-run-observation-non-admin.json",
+  "outcome": "compliant",
+  "stderr_bytes": 0,
+  "stdout_bytes": 0,
+  "timed_out": false
+}
+powershell.exe : C:\s4\_windows_high_nist\run\run_enforcement_probe.ps1 : 无法将值“3221225794”转换为类型“System.Int32”。错误:“值对
+所在位置 C:\s4\tools\elev-runner.ps1:4 字符: 5
++     & powershell.exe -NoProfile -ExecutionPolicy Bypass -File 'C:\s4\ ...
++     ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: (C:\s4\_windows_...m.Int32”。错误:“值对:String) [], RemoteException
+    + FullyQualifiedErrorId : NativeCommandError
+ 
+于 Int32 太大或太小。”
+所在位置 C:\s4\tools\elev-body.ps1:3 字符: 1
++ & C:\s4\_windows_high_nist\run\run_enforcement_probe.ps1 -Arm non-adm ...
++ ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : InvalidArgument: (:) [run_enforcement_probe.ps1]，RuntimeException
+    + FullyQualifiedErrorId : InvalidCastIConvertible,run_enforcement_probe.ps1
+ 
+EXIT=0

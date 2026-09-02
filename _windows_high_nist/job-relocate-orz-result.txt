@@ -1,0 +1,4 @@
+﻿MOVED orz.exe size=50291712
+MOVED orz-signer.exe size=6739456
+MOVED orz-acaf-provision.exe size=6642176
+EXIT=0

@@ -1,0 +1,14 @@
+﻿--- icacls control test on C:\s4\hardening ---
+CTL: 已处理的文件: C:\s4\hardening
+CTL: 已成功处理 1 个文件; 处理 0 个文件时失败
+CTL_EXIT=0
+--- C:\WINDOWS ACL state: protected + leftover HL ACE? ---
+PROTECTED=True
+HL_MODIFY_ACE_PRESENT=True
+--- .NET deny test on C:\ProgramData (add/verify/remove) ---
+PD_DENY_STUCK=True
+PD_DENY_REMOVED=True
+--- .NET deny test on C:\WINDOWS (add/verify/remove) ---
+WIN_DENY_STUCK=True
+WIN_DENY_REMOVED=True
+EXIT=0

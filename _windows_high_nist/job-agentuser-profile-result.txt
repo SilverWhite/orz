@@ -1,0 +1,9 @@
+﻿SCH: 警告: 因为 /ST 早于当前的时间，任务可能无法运行。
+SCH: 警告: 任务已注册，但无法启动。该任务主体需要启用批登录特权。
+SCH: System.Management.Automation.RemoteException
+CREATE_EXIT=0
+RUN: 成功: 尝试运行 "s4agentuser"。
+RUN_EXIT=0
+AGENTUSER_NTUSER_EXISTS=False
+PROFILE_DIR_EXISTS=True
+EXIT=0

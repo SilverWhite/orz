@@ -74,6 +74,15 @@ try {
             } | ConvertTo-Json | Set-Content -LiteralPath $marker -Encoding ascii
         }
         $obsOutput = Join-Path $Workspace "windows-native-run-observation-$Arm.json"
+        $pyProbeScript = Join-Path $PSScriptRoot '..\policy\enforcement_probe.py'
+        $pyProbeScript = (Resolve-Path $pyProbeScript).Path
+        # Copy the probe into the workspace: AppContainer children can only
+        # read paths granted to the package SID / ALL APPLICATION PACKAGES
+        # (C:\s4 is not), and the sandbox grants the workspace to the
+        # AppContainer SID at spawn time.
+        $wsProbe = Join-Path $Workspace 'enforcement_probe.py'
+        Copy-Item -LiteralPath $pyProbeScript -Destination $wsProbe -Force
+        $pyProbeScript = $wsProbe
         $args = @(
             (Join-Path $root 'scripts\run_windows_native_sandbox_command.py'),
             '--workspace', $Workspace,
@@ -88,8 +97,11 @@ try {
         # child flags like -NoProfile) is passed verbatim to the child.
         $args += @(
             '--command',
-            'powershell.exe', '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass',
-            '-File', $probeScript,
+            # Python probe: the sandboxed child must be AppContainer-capable.
+            # powershell.exe (Windows PowerShell 5.1 / .NET Framework CLR)
+            # fails DLL initialization as an AppContainer process on
+            # Windows 11 25H2 (STATUS_DLL_INIT_FAILED / 0xC0000142).
+            'python.exe', $pyProbeScript,
             '-Arm', $Arm,
             '-Workspace', $Workspace,
             '-TempDir', (Join-Path $Workspace '.tmp'),
@@ -110,7 +122,7 @@ try {
             exit 1
         }
         $obs = Get-Content -LiteralPath $obsOutput -Raw | ConvertFrom-Json
-        $probeExit = [int]$obs.process.exit_code
+        $probeExit = [int64]$obs.process.exit_code
         if ($obs.outcome -ne 'compliant') {
             Write-Error "run observation outcome=$($obs.outcome)（spawn 期墙未全过，见 diagnostics）— 该臂不作数（fail-closed）"
             exit 1

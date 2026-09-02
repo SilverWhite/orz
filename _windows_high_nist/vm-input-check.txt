@@ -1,0 +1,4 @@
+﻿EnhancedSessionModePolicy=
+EnhancedSessionModeTransportType=
+State=Running
+IntegrationServicesVersion=0.0

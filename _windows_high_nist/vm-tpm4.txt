@@ -1,0 +1,4 @@
+﻿TpmPresent=True
+TpmReady=True
+TpmEnabled=True
+Set-VMKeyProtector available: Set-VMKeyProtector

@@ -1,0 +1,20 @@
+﻿powershell.exe : Traceback (most recent call last):
+所在位置 C:\s4\tools\elev-runner.ps1:4 字符: 5
++     & powershell.exe -NoProfile -ExecutionPolicy Bypass -File 'C:\s4\ ...
++     ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: (Traceback (most recent call last)::String) [], RemoteException
+    + FullyQualifiedErrorId : NativeCommandError
+ 
+  File "C:\s4\scripts\run_windows_native_sandbox_command.py", line 28, in <module>
+    from assurance.windows_sandbox import (  # noqa: E402
+  File "C:\s4\assurance\windows_sandbox.py", line 14, in <module>
+    from .contracts import ASSURANCE_ROOT, validate_contract
+ModuleNotFoundError: No module named 'assurance.contracts'
+C:\s4\_windows_high_nist\run\run_enforcement_probe.ps1 : run_windows_native_sandbox_command.py 失败（exit=1）
+所在位置 C:\s4\tools\elev-body.ps1:3 字符: 1
++ & C:\s4\_windows_high_nist\run\run_enforcement_probe.ps1 -Arm control ...
++ ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: (:) [Write-Error], WriteErrorException
+    + FullyQualifiedErrorId : Microsoft.PowerShell.Commands.WriteErrorException,run_enforcement_probe.ps1
+ 
+EXIT=1

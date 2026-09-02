@@ -1,0 +1,67 @@
+﻿===== APPLY HIGH-NIST =====
+HNH: [2026-09-02 07:54:42] === apply_hardening.ps1 Arm=high-nist Revert=False RunUser=AgentUser ===
+HNH: [2026-09-02 07:54:42] OK   local user AgentUser exists
+HNH: [2026-09-02 07:54:42] OK   reg HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System\EnableLUA = 1
+HNH: [2026-09-02 07:54:42] OK   reg HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System\ConsentPromptBehaviorAdmin = 2
+HNH: [2026-09-02 07:54:42] OK   reg HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System\PromptOnSecureDesktop = 1
+HNH: [2026-09-02 07:54:42] OK   reg HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System\EnableInstallerDetection = 1
+HNH: [2026-09-02 07:54:42] OK   reg HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System\FilterAdministratorToken = 1
+HNH: [2026-09-02 07:54:42] OK   reg HKLM:\SOFTWARE\Policies\Microsoft\Windows\Installer\EnableUserControl = 0
+HNH: [2026-09-02 07:55:07] OK   acl deny C:\WINDOWS ((OI)(CI))
+HNH: [2026-09-02 07:55:10] OK   acl deny C:\Program Files ((OI)(CI))
+HNH: [2026-09-02 07:55:10] OK   acl deny C:\Program Files (x86) ((OI)(CI))
+HNH: [2026-09-02 07:55:10] OK   acl deny C:\ProgramData ((OI)(CI))
+HNH: [2026-09-02 07:55:10] OK   acl deny C:\WINDOWS\system32\config\AgentUser ((OI)(CI))
+HNH: [2026-09-02 07:55:10] OK   acl deny C:\WINDOWS\system32\config\AgentUser\AppData\Roaming ((OI)(CI))
+HNH: [2026-09-02 07:55:10] OK   acl deny C:\WINDOWS\system32\config\AgentUser\AppData\Local ((OI)(CI))
+HNH: [2026-09-02 07:55:12] OK   acl deny C:\ ()
+HNH: [2026-09-02 07:55:14] OK   registry deny HKLM:\SOFTWARE
+HNH: [2026-09-02 07:55:16] OK   registry deny Registry::HKEY_CLASSES_ROOT
+HNH: [2026-09-02 07:55:16] OK   registry deny Registry::HKEY_USERS\gsa_hkcu_7e847c5e5a1642c5a4468e251f8b2e55
+HNH: [2026-09-02 07:55:16] OK   acl grant C:\Users\AgentUser\AppData\Local\Packages (Modify)
+HNH: [2026-09-02 07:55:16] OK   acl grant C:\workspace (Modify)
+HNH: [2026-09-02 07:55:16] OK   workspace C:\workspace ready (RunUser=M)
+HNH: [2026-09-02 07:55:16] OK   firewall default outbound = block; metadata/link-local/RFC1918/multicast block rule
+HNH: [2026-09-02 07:55:17] OK   firewall allow DeepSeek 221.204.163.76 + hosts pin
+HNH: [2026-09-02 07:55:17] === done (StepFailures=0) ===
+HNH: [2026-09-02 07:55:17] apply_hardening.ps1 high-nist OK
+HNH_EXIT=0
+===== HIGH-NIST PROBE =====
+HN: {
+HN:   "arm": "high-nist",
+HN:   "checks": {
+HN:     "appcontainer_token": true,
+HN:     "job_object_assigned": true,
+HN:     "low_integrity": true,
+HN:     "non_admin": true,
+HN:     "privileges_removed": true,
+HN:     "temp_redirected": true,
+HN:     "token_virtualization_disabled": true,
+HN:     "workspace_writable": true
+HN:   },
+HN:   "exit_code": 3221225794,
+HN:   "observation_path": "C:\\workspace\\high-nist\\windows-native-run-observation-high-nist.json",
+HN:   "outcome": "compliant",
+HN:   "stderr_bytes": 0,
+HN:   "stdout_bytes": 0,
+HN:   "timed_out": false
+HN: }
+HN: C:\s4\_windows_high_nist\run\run_enforcement_probe.ps1 : enforcement-probe high-nist FAILED（exit=3221225794）— 该臂不
+HN: 作数（fail-closed）
+HN: 所在位置 C:\s4\_windows_high_nist\run\run_enforcement_probe.ps1:121 字符: 9
+HN: +         Write-Error "enforcement-probe $Arm FAILED（exit=$probeExit）—  ...
+HN: +         ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+HN:     + CategoryInfo          : NotSpecified: (:) [Write-Error], WriteErrorException
+HN:     + FullyQualifiedErrorId : Microsoft.PowerShell.Commands.WriteErrorException,run_enforcement_probe.ps1
+HN:  
+HN_PROBE_EXIT=1
+HN_OBS outcome=compliant exit=3221225794
+HN_CHECK appcontainer_token=True
+HN_CHECK job_object_assigned=True
+HN_CHECK low_integrity=True
+HN_CHECK non_admin=True
+HN_CHECK privileges_removed=True
+HN_CHECK temp_redirected=True
+HN_CHECK token_virtualization_disabled=True
+HN_CHECK workspace_writable=True
+EXIT=0

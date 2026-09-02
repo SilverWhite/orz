@@ -1,0 +1,14 @@
+﻿{
+  "arm": "control",
+  "checks": {
+    "workspace_writable": true
+  },
+  "exit_code": 0,
+  "observation_path": "C:\\Users\\HL\\AppData\\Local\\Temp\\gsa-enforcement-d7a061c5ee86495c9f1df1b681c4394c\\windows-native-run-observation-control.json",
+  "outcome": "compliant",
+  "stderr_bytes": 0,
+  "stdout_bytes": 76,
+  "timed_out": false
+}
+enforcement-probe control OK — result=C:\s4\results\enforcement-probe-control.json
+EXIT=0

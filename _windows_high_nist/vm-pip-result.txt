@@ -1,0 +1,25 @@
+﻿PIP mirror=https://mirrors.aliyun.com/pypi/simple/
+PIP: Looking in indexes: https://mirrors.aliyun.com/pypi/simple/
+PIP: Collecting jsonschema
+PIP:   Downloading https://mirrors.aliyun.com/pypi/packages/69/90/f63fb5873511e014207a475e2bb4e8b2e570d655b00ac19a9a0ca0a385ee/jsonschema-4.26.0-py3-none-any.whl (90 kB)
+PIP: Collecting rfc8785
+PIP:   Downloading https://mirrors.aliyun.com/pypi/packages/4d/78/119878110660b2ad709888c8a1614fce7e2fab39080ab960656dc8605bf6/rfc8785-0.1.4-py3-none-any.whl (9.2 kB)
+PIP: Collecting attrs>=22.2.0 (from jsonschema)
+PIP:   Downloading https://mirrors.aliyun.com/pypi/packages/64/b4/17d4b0b2a2dc85a6df63d1157e028ed19f90d4cd97c36717afef2bc2f395/attrs-26.1.0-py3-none-any.whl (67 kB)
+PIP: Collecting jsonschema-specifications>=2023.03.6 (from jsonschema)
+PIP:   Downloading https://mirrors.aliyun.com/pypi/packages/41/45/1a4ed80516f02155c51f51e8cedb3c1902296743db0bbc66608a0db2814f/jsonschema_specifications-2025.9.1-py3-none-any.whl (18 kB)
+PIP: Collecting referencing>=0.28.4 (from jsonschema)
+PIP:   Downloading https://mirrors.aliyun.com/pypi/packages/2c/58/ca301544e1fa93ed4f80d724bf5b194f6e4b945841c5bfd555878eea9fcb/referencing-0.37.0-py3-none-any.whl (26 kB)
+PIP: Collecting rpds-py>=0.25.0 (from jsonschema)
+PIP:   Downloading https://mirrors.aliyun.com/pypi/packages/04/3a/f0ee4d4dde9d3b69dedf1b5f74e7a40017046d55052d173e418c6a94f960/rpds_py-2026.6.3-cp312-cp312-win_amd64.whl (220 kB)
+PIP: Collecting typing-extensions>=4.4.0 (from referencing>=0.28.4->jsonschema)
+PIP:   Downloading https://mirrors.aliyun.com/pypi/packages/49/d3/b8441a820a491ddfc024b0b0cf0393375b75ea13866d9c66727e54c2fc80/typing_extensions-4.16.0-py3-none-any.whl (45 kB)
+PIP: Installing collected packages: typing-extensions, rpds-py, rfc8785, attrs, referencing, jsonschema-specifications, jsonschema
+PIP: Successfully installed attrs-26.1.0 jsonschema-4.26.0 jsonschema-specifications-2025.9.1 referencing-0.37.0 rfc8785-0.1.4 rpds-py-2026.6.3 typing-extensions-4.16.0
+PIP exit=0
+DEPS: <string>:1: DeprecationWarning: Accessing jsonschema.__version__ is deprecated and will be removed in a future release. Use importlib.metadata directly to query for jsonschema's version.
+DEPS: DEPS_OK 4.26.0
+IMPORT: C:\s4\assurance\__init__.py:3: SyntaxWarning: invalid escape sequence '\C'
+IMPORT:   The canonical package (D:\CLI\assurance) eagerly imports heavy modules that
+IMPORT: IMPORT_OK ('control', 'non-admin', 'high-nist')
+EXIT=0

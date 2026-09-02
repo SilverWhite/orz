@@ -1,0 +1,2 @@
+﻿KILLED pid=10044 start=09/01/2026 22:28:27
+INSTALLER removed

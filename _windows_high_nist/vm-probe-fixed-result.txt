@@ -1,0 +1,82 @@
+﻿===== NON-ADMIN PROBE =====
+powershell.exe : Traceback (most recent call last):
+所在位置 C:\s4\tools\elev-runner.ps1:4 字符: 5
++     & powershell.exe -NoProfile -ExecutionPolicy Bypass -File 'C:\s4\ ...
++     ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: (Traceback (most recent call last)::String) [], RemoteException
+    + FullyQualifiedErrorId : NativeCommandError
+ 
+  File "C:\s4\scripts\run_windows_native_sandbox_command.py", line 163, in <module>
+    sys.exit(main())
+             ^^^^^^
+  File "C:\s4\scripts\run_windows_native_sandbox_command.py", line 127, in main
+    observation = run_windows_native_sandbox(
+                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\s4\assurance\windows_sandbox.py", line 3301, in run_windows_native_sandbox
+    raise AssuranceError(
+assurance.errors.AssuranceError: Windows native run observation failed independent verification: compliant run requires
+ a restricted token spawn
+C:\s4\_windows_high_nist\run\run_enforcement_probe.ps1 : run_windows_native_sandbox_command.py 失败（exit=1）
+所在位置 C:\s4\_windows_high_nist\run\run_enforcement_probe.ps1:105 字符: 13
++             Write-Error "run_windows_native_sandbox_command.py 失败（exi ...
++             ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: (:) [Write-Error], WriteErrorException
+    + FullyQualifiedErrorId : Microsoft.PowerShell.Commands.WriteErrorException,run_enforcement_probe.ps1
+ 
+NONADMIN_EXIT=1
+NA_OBS outcome=noncompliant exit=1
+NA_DIAG: CreateProcessWithTokenW failed: [WinError 87] 参数错误。
+NA_CHECK non_admin=False
+NA_CHECK privileges_removed=True
+NA_CHECK token_virtualization_disabled=True
+NA_CHECK workspace_writable=True
+{
+    "passed":  8,
+    "checks":  {
+                   "non_admin":  true,
+                   "home_write_succeeded":  false,
+                   "hklm_write_blocked":  true,
+                   "workspace_writable":  true,
+                   "program_files_write_blocked":  true,
+                   "token_virtualization_disabled":  true,
+                   "privileges_removed":  true,
+                   "system32_write_blocked":  true,
+                   "runas_blocked":  true,
+                   "temp_write_succeeded":  false
+               },
+    "arm":  "non-admin",
+    "failed":  2,
+    "workspace":  "C:\\workspace\\non-admin",
+    "ran_at":  "2026-09-01T23:42:35Z"
+}
+===== HIGH-NIST PROBE =====
+Traceback (most recent call last):
+  File "C:\s4\scripts\run_windows_native_sandbox_command.py", line 163, in <module>
+    sys.exit(main())
+             ^^^^^^
+  File "C:\s4\scripts\run_windows_native_sandbox_command.py", line 127, in main
+    observation = run_windows_native_sandbox(
+                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\s4\assurance\windows_sandbox.py", line 3301, in run_windows_native_sandbox
+    raise AssuranceError(
+assurance.errors.AssuranceError: Windows native run observation failed independent verification: compliant run requires
+ a restricted token spawn
+C:\s4\_windows_high_nist\run\run_enforcement_probe.ps1 : run_windows_native_sandbox_command.py 失败（exit=1）
+所在位置 C:\s4\_windows_high_nist\run\run_enforcement_probe.ps1:105 字符: 13
++             Write-Error "run_windows_native_sandbox_command.py 失败（exi ...
++             ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: (:) [Write-Error], WriteErrorException
+    + FullyQualifiedErrorId : Microsoft.PowerShell.Commands.WriteErrorException,run_enforcement_probe.ps1
+ 
+HIGHNIST_EXIT=1
+HN_OBS outcome=noncompliant exit=3221225794
+HN_DIAG: CreateProcessWithTokenW failed: [WinError 87] 参数错误。
+HN_CHECK appcontainer_token=True
+HN_CHECK job_object_assigned=True
+HN_CHECK low_integrity=True
+HN_CHECK non_admin=False
+HN_CHECK privileges_removed=True
+HN_CHECK temp_redirected=True
+HN_CHECK token_virtualization_disabled=True
+HN_CHECK workspace_writable=True
+EXIT=0

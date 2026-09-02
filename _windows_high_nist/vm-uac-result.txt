@@ -1,0 +1,13 @@
+﻿EnableLUA=1
+ConsentPromptBehaviorAdmin=5
+PromptOnSecureDesktop=1
+LocalAccountTokenFilterPolicy=<absent>
+FilterAdministratorToken=<absent>
+--- TASK XML ---
+<Principals>
+<Principal id="Author">
+<UserId>S-1-5-21-3636881053-4261193759-2698424706-1001</UserId>
+<LogonType>Password</LogonType>
+<RunLevel>HighestAvailable</RunLevel>
+</Principal>
+</Principals>

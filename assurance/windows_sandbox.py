@@ -185,6 +185,7 @@ $result_path = Join-Path $ws "_p2_probe_result.json"
 CREATE_SUSPENDED_FLAG = 0x00000004
 CREATE_NO_WINDOW_FLAG = 0x08000000
 CREATE_NEW_PROCESS_GROUP_FLAG = 0x00000200
+CREATE_UNICODE_ENVIRONMENT_FLAG = 0x00000400
 TOKEN_QUERY = 0x0008
 TokenIsAppContainer = 29
 CTRL_BREAK_EVENT = 1
@@ -346,6 +347,7 @@ def _is_elevated(*, diagnostics: list[str] | None = None) -> bool:
         advapi32 = ctypes.WinDLL("advapi32", use_last_error=True)
         advapi32.AllocateAndInitializeSid.argtypes = [
             ctypes.POINTER(ctypes.c_ubyte * 6),
+            wintypes.DWORD,
         ] + [wintypes.DWORD] * 8 + [ctypes.POINTER(ctypes.c_void_p)]
         advapi32.AllocateAndInitializeSid.restype = wintypes.BOOL
         if not advapi32.AllocateAndInitializeSid(
@@ -389,6 +391,193 @@ def _appcontainer_sid_to_string(sid: ctypes.c_void_p) -> str | None:
     kernel32.LocalFree.restype = ctypes.c_void_p
     kernel32.LocalFree(sid_str_ptr)
     return result
+
+
+def _lookup_account_sid_string(account: str) -> str | None:
+    """Resolve a local account (user or domain\\user) to its SID string."""
+    if os.name != "nt":
+        return None
+    try:
+        advapi32 = ctypes.WinDLL("advapi32", use_last_error=True)
+        advapi32.LookupAccountNameW.argtypes = [
+            wintypes.LPCWSTR,
+            wintypes.LPCWSTR,
+            ctypes.c_void_p,
+            ctypes.POINTER(wintypes.DWORD),
+            wintypes.LPWSTR,
+            ctypes.POINTER(wintypes.DWORD),
+            ctypes.POINTER(wintypes.DWORD),
+        ]
+        advapi32.LookupAccountNameW.restype = wintypes.BOOL
+        size = wintypes.DWORD()
+        domain = ctypes.create_unicode_buffer(256)
+        domain_size = wintypes.DWORD(len(domain))
+        use = wintypes.DWORD()
+        advapi32.LookupAccountNameW(
+            None, account, None, ctypes.byref(size), domain,
+            ctypes.byref(domain_size), ctypes.byref(use),
+        )
+        sid_buf = ctypes.create_string_buffer(max(int(size.value), 8))
+        if not advapi32.LookupAccountNameW(
+            None, account, ctypes.cast(sid_buf, ctypes.c_void_p),
+            ctypes.byref(size), domain, ctypes.byref(domain_size),
+            ctypes.byref(use),
+        ):
+            return None
+        sid_str_ptr = wintypes.LPWSTR()
+        if not advapi32.ConvertSidToStringSidW(
+            ctypes.cast(sid_buf, ctypes.c_void_p), ctypes.byref(sid_str_ptr)
+        ):
+            return None
+        result = sid_str_ptr.value
+        kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        kernel32.LocalFree.argtypes = [ctypes.c_void_p]
+        kernel32.LocalFree.restype = ctypes.c_void_p
+        kernel32.LocalFree(sid_str_ptr)
+        return result
+    except OSError:
+        return None
+
+
+def _grant_session_desktop_access(
+    account: str,
+    *,
+    extra_sids: list[str] | None = None,
+    diagnostics: list[str] | None = None,
+) -> bool:
+    """Grant GENERIC_ALL on the current session window station and desktop
+    to a local account.
+
+    S4 finding: a process spawned with another user's token from a
+    scheduled-task session (session 0) fails DLL initialization
+    (STATUS_DLL_INIT_FAILED / 0xC0000142) because the service window
+    station/desktop ACL only grants the task owner + Administrators.  The
+    child inherits the caller's window station/desktop, so the run user
+    needs explicit access there.  The service window station is recreated
+    on every boot, so the grant must be (re)applied at spawn time.
+    Idempotent: skips SIDs already present in the DACL.
+    """
+    if os.name != "nt":
+        return False
+    sid_string = _lookup_account_sid_string(account)
+    if not sid_string:
+        if diagnostics is not None:
+            diagnostics.append(
+                f"desktop grant: cannot resolve SID for {account}"
+            )
+        return False
+    grant_sids = [sid_string] + list(extra_sids or [])
+    try:
+        user32 = ctypes.WinDLL("user32", use_last_error=True)
+        advapi32 = ctypes.WinDLL("advapi32", use_last_error=True)
+        kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+
+        user32.GetProcessWindowStation.argtypes = []
+        user32.GetProcessWindowStation.restype = wintypes.HANDLE
+        hwinsta = user32.GetProcessWindowStation()
+        kernel32.GetCurrentThreadId.argtypes = []
+        kernel32.GetCurrentThreadId.restype = wintypes.DWORD
+        user32.GetThreadDesktop.argtypes = [wintypes.DWORD]
+        user32.GetThreadDesktop.restype = wintypes.HANDLE
+        hdesk = user32.GetThreadDesktop(kernel32.GetCurrentThreadId())
+
+        all_si = wintypes.DWORD(0x7)  # OWNER | GROUP | DACL
+        user32.GetUserObjectSecurity.argtypes = [
+            wintypes.HANDLE,
+            ctypes.POINTER(wintypes.DWORD),
+            ctypes.c_void_p,
+            wintypes.DWORD,
+            ctypes.POINTER(wintypes.DWORD),
+        ]
+        user32.GetUserObjectSecurity.restype = wintypes.BOOL
+        user32.SetUserObjectSecurity.argtypes = [
+            wintypes.HANDLE,
+            ctypes.POINTER(wintypes.DWORD),
+            ctypes.c_void_p,
+        ]
+        user32.SetUserObjectSecurity.restype = wintypes.BOOL
+        advapi32.ConvertSecurityDescriptorToStringSecurityDescriptorW.argtypes = [
+            ctypes.c_void_p,
+            wintypes.DWORD,
+            wintypes.DWORD,
+            ctypes.POINTER(ctypes.c_wchar_p),
+        ]
+        advapi32.ConvertSecurityDescriptorToStringSecurityDescriptorW.restype = (
+            wintypes.BOOL
+        )
+        advapi32.ConvertStringSecurityDescriptorToSecurityDescriptorW.argtypes = [
+            wintypes.LPCWSTR,
+            wintypes.DWORD,
+            ctypes.POINTER(ctypes.c_void_p),
+            ctypes.POINTER(ctypes.c_ulong),
+        ]
+        advapi32.ConvertStringSecurityDescriptorToSecurityDescriptorW.restype = (
+            wintypes.BOOL
+        )
+        kernel32.LocalFree.argtypes = [ctypes.c_void_p]
+        kernel32.LocalFree.restype = ctypes.c_void_p
+
+        def _read_sddl(h: wintypes.HANDLE) -> str | None:
+            need = wintypes.DWORD()
+            small = ctypes.create_string_buffer(1)
+            user32.GetUserObjectSecurity(
+                h, ctypes.byref(all_si), ctypes.cast(small, ctypes.c_void_p),
+                0, ctypes.byref(need),
+            )
+            buf = ctypes.create_string_buffer(max(int(need.value), 1))
+            if not user32.GetUserObjectSecurity(
+                h, ctypes.byref(all_si), ctypes.cast(buf, ctypes.c_void_p),
+                ctypes.sizeof(buf), ctypes.byref(need),
+            ):
+                return None
+            sddl = ctypes.c_wchar_p()
+            if not advapi32.ConvertSecurityDescriptorToStringSecurityDescriptorW(
+                ctypes.cast(buf, ctypes.c_void_p), 1, 0x7, ctypes.byref(sddl)
+            ):
+                return None
+            result = sddl.value
+            kernel32.LocalFree(sddl)
+            return result
+
+        def _grant(h: wintypes.HANDLE, sddl: str | None) -> bool:
+            if sddl is None:
+                return sddl is not None
+            for sid in grant_sids:
+                if sid in sddl:
+                    continue
+                i = sddl.find("D:(")
+                if i < 0:
+                    return False
+                i += 2
+                new_sddl = sddl[:i] + f"(A;;GA;;;{sid})" + sddl[i:]
+                sd = ctypes.c_void_p()
+                sz = ctypes.c_ulong()
+                if not advapi32.ConvertStringSecurityDescriptorToSecurityDescriptorW(
+                    new_sddl, 1, ctypes.byref(sd), ctypes.byref(sz)
+                ):
+                    return False
+                ok = user32.SetUserObjectSecurity(
+                    h, ctypes.byref(all_si), sd.value
+                )
+                kernel32.LocalFree(sd)
+                if not ok:
+                    return False
+                sddl = new_sddl
+            return True
+
+        ok_ws = _grant(hwinsta, _read_sddl(hwinsta))
+        ok_ds = _grant(hdesk, _read_sddl(hdesk))
+        if not (ok_ws and ok_ds):
+            if diagnostics is not None:
+                diagnostics.append(
+                    "desktop grant: window station/desktop ACL update failed "
+                    f"(winsta={ok_ws}, desktop={ok_ds})"
+                )
+        return ok_ws and ok_ds
+    except OSError as exc:
+        if diagnostics is not None:
+            diagnostics.append(f"desktop grant exception: {exc}")
+        return False
 
 
 def _create_firewall_outbound_block_rule(
@@ -634,15 +823,15 @@ def _create_kill_on_close_job(
         limits.BasicLimitInformation.LimitFlags |= JOB_OBJECT_LIMIT_ACTIVE_PROCESS
         limits.BasicLimitInformation.ActiveProcessLimit = int(active_process_limit)
     succeeded = kernel32.SetInformationJobObject(
-        wintypes.HANDLE(handle),
+        _as_handle(handle),
         JOB_OBJECT_EXTENDED_LIMIT_INFORMATION_CLASS,
         ctypes.byref(limits),
         ctypes.sizeof(limits),
     )
     if not succeeded:
-        kernel32.CloseHandle(wintypes.HANDLE(handle))
+        kernel32.CloseHandle(_as_handle(handle))
         return None
-    return wintypes.HANDLE(handle)
+    return _as_handle(handle)
 
 
 def _assign_process_to_job(job: wintypes.HANDLE, process_handle: wintypes.HANDLE) -> bool:
@@ -1314,6 +1503,22 @@ def windows_native_candidate_from_observation(
 
 WINDOWS_RUN_ARMS = ("control", "non-admin", "high-nist")
 
+# Run-user logon mode: when ORZ_WINDOWS_RUN_USER is set, the non-admin and
+# high-nist arms spawn the child under a REAL standard-user logon token
+# (RunUser from apply_hardening.ps1) instead of a CreateRestrictedToken
+# restricted token.  Restricted tokens that disable BUILTIN\Administrators
+# cannot start any process on Windows 11 25H2 (STATUS_DLL_INIT_FAILED /
+# 0xC0000142 observed in S4), and the hardened ACLs are scoped to RunUser,
+# so the logon-token mode is both correct and necessary.
+WINDOWS_RUN_USER_ENV = "ORZ_WINDOWS_RUN_USER"
+WINDOWS_RUN_USER_PASSWORD_ENV = "ORZ_WINDOWS_RUN_USER_PASSWORD"
+WINDOWS_RUN_USER_DOMAIN_ENV = "ORZ_WINDOWS_RUN_USER_DOMAIN"
+LOGON32_LOGON_BATCH = 4
+LOGON32_PROVIDER_DEFAULT = 0
+SE_PRIVILEGE_ENABLED = 0x00000002
+TOKEN_ADJUST_PRIVILEGES = 0x0020
+TOKEN_QUERY = 0x0008
+
 # Privilege·non-admin：受限 token 移除的特权（设计 §3）。
 WINDOWS_RUN_RESTRICTED_PRIVILEGES = (
     "SeDebugPrivilege",
@@ -1339,6 +1544,7 @@ TokenGroups = 2
 TokenPrivileges = 3
 
 SE_GROUP_ENABLED = 0x00000004
+SE_GROUP_USE_FOR_DENY_ONLY = 0x00000010
 SE_GROUP_INTEGRITY = 0x00000020
 SecurityImpersonation = 2
 TokenPrimary = 1
@@ -1425,24 +1631,17 @@ class _TOKEN_MANDATORY_LABEL(ctypes.Structure):
     _fields_ = [("Label", _SID_AND_ATTRIBUTES)]
 
 
-def _make_token_groups(n: int):
-    class _TokenGroups(ctypes.Structure):
-        _fields_ = [
-            ("GroupCount", wintypes.DWORD),
-            ("Groups", _SID_AND_ATTRIBUTES * max(n, 1)),
-        ]
+def _as_handle(value) -> wintypes.HANDLE | None:
+    """Normalize an int / pointer / HANDLE to a wintypes.HANDLE.
 
-    return _TokenGroups
-
-
-def _make_token_privileges(n: int):
-    class _TokenPrivileges(ctypes.Structure):
-        _fields_ = [
-            ("PrivilegeCount", wintypes.DWORD),
-            ("Privileges", _LUID_AND_ATTRIBUTES * max(n, 1)),
-        ]
-
-    return _TokenPrivileges
+    ctypes rejects double-wrapping an existing c_void_p (e.g.
+    wintypes.HANDLE(existing_handle)), so return c_void_p instances as-is.
+    """
+    if value is None:
+        return None
+    if isinstance(value, ctypes.c_void_p):
+        return value
+    return wintypes.HANDLE(value)
 
 
 def _string_sid_to_ptr(
@@ -1452,18 +1651,18 @@ def _string_sid_to_ptr(
         return None
     try:
         advapi32 = ctypes.WinDLL("advapi32", use_last_error=True)
-        advapi32.StringSidToSidW.argtypes = [
+        advapi32.ConvertStringSidToSidW.argtypes = [
             wintypes.LPCWSTR,
             ctypes.POINTER(ctypes.c_void_p),
         ]
-        advapi32.StringSidToSidW.restype = wintypes.BOOL
+        advapi32.ConvertStringSidToSidW.restype = wintypes.BOOL
         sid_ptr = ctypes.c_void_p()
-        if not advapi32.StringSidToSidW(sid_string, ctypes.byref(sid_ptr)):
+        if not advapi32.ConvertStringSidToSidW(sid_string, ctypes.byref(sid_ptr)):
             return None
         return sid_ptr
     except OSError as exc:
         if diagnostics is not None:
-            diagnostics.append(f"StringSidToSidW({sid_string}) failed: {exc}")
+            diagnostics.append(f"ConvertStringSidToSidW({sid_string}) failed: {exc}")
         return None
 
 
@@ -1536,6 +1735,7 @@ def _set_token_integrity(
         authority = (ctypes.c_ubyte * 6)(0, 0, 0, 0, 0, 16)
         advapi32.AllocateAndInitializeSid.argtypes = [
             ctypes.POINTER(ctypes.c_ubyte * 6),
+            wintypes.DWORD,
         ] + [wintypes.DWORD] * 8 + [ctypes.POINTER(ctypes.c_void_p)]
         advapi32.AllocateAndInitializeSid.restype = wintypes.BOOL
         if not advapi32.AllocateAndInitializeSid(
@@ -1600,37 +1800,49 @@ def _create_restricted_token(
         return None
     allocated: list[ctypes.c_void_p] = []
     try:
-        disable_sids: list[ctypes.c_void_p] = []
-        for sid_string in spec.get("disable_sids", []):
+        # SidsToDisable entries: disable with Attributes=0, or deny-only with
+        # SE_GROUP_USE_FOR_DENY_ONLY (the classic deny-only mechanism; this
+        # does NOT create restricted SIDs, so workspace access is preserved).
+        handled_sids: set[str] = set()
+        disable_entries: list[_SID_AND_ATTRIBUTES] = []
+        for sid_string in list(spec.get("disable_sids", []) or []):
             sid = _string_sid_to_ptr(sid_string, diagnostics=diagnostics)
             if sid:
-                disable_sids.append(sid)
-        allocated.extend(disable_sids)
+                entry = _SID_AND_ATTRIBUTES()
+                entry.Sid = sid
+                # Disabled (Attributes=0), not deny-only: deny-only
+                # Administrators is documented to break DLL initialization in
+                # restricted tokens (STATUS_DLL_INIT_FAILED observed in S4).
+                entry.Attributes = 0
+                disable_entries.append(entry)
+                allocated.append(sid)
+                handled_sids.add(sid_string)
+        for sid_string in list(spec.get("deny_only_sids", []) or []):
+            if sid_string in handled_sids:
+                continue
+            sid = _string_sid_to_ptr(sid_string, diagnostics=diagnostics)
+            if sid:
+                entry = _SID_AND_ATTRIBUTES()
+                entry.Sid = sid
+                entry.Attributes = SE_GROUP_USE_FOR_DENY_ONLY
+                disable_entries.append(entry)
+                allocated.append(sid)
 
-        groups = None
-        if disable_sids:
-            GroupsCls = _make_token_groups(len(disable_sids))
-            groups = GroupsCls()
-            groups.GroupCount = len(disable_sids)
-            for index, sid in enumerate(disable_sids):
-                groups.Groups[index].Sid = sid
-                groups.Groups[index].Attributes = 0
+        # Compact the LUID list: failed lookups must not leave gaps that
+        # CreateRestrictedToken would interpret as a different privilege.
+        resolved: list[tuple[str, _LUID]] = []
+        for name in list(spec.get("remove_privileges", []) or []):
+            luid = _lookup_privilege_luid(name, diagnostics=diagnostics)
+            if luid is not None:
+                resolved.append((name, luid))
 
-        privileges = None
-        if spec.get("remove_privileges"):
-            # Compact the LUID list: failed lookups must not leave gaps that
-            # CreateRestrictedToken would interpret as a different privilege.
-            resolved: list[tuple[str, _LUID]] = []
-            for name in spec["remove_privileges"]:
-                luid = _lookup_privilege_luid(name, diagnostics=diagnostics)
-                if luid is not None:
-                    resolved.append((name, luid))
-            PrivilegesCls = _make_token_privileges(len(resolved))
-            privileges = PrivilegesCls()
-            privileges.PrivilegeCount = len(resolved)
-            for index, (_, luid) in enumerate(resolved):
-                privileges.Privileges[index].Luid = luid
-                privileges.Privileges[index].Attributes = 0
+        disable_array = (_SID_AND_ATTRIBUTES * max(len(disable_entries), 1))()
+        for index, entry in enumerate(disable_entries):
+            disable_array[index] = entry
+        priv_array = (_LUID_AND_ATTRIBUTES * max(len(resolved), 1))()
+        for index, (_, luid) in enumerate(resolved):
+            priv_array[index].Luid = luid
+            priv_array[index].Attributes = 0
 
         new_token = wintypes.HANDLE()
         advapi32.CreateRestrictedToken.argtypes = [
@@ -1648,10 +1860,10 @@ def _create_restricted_token(
         ok = advapi32.CreateRestrictedToken(
             current,
             0,
-            groups.GroupCount if groups else 0,
-            ctypes.addressof(groups) if groups else None,
-            privileges.PrivilegeCount if privileges else 0,
-            ctypes.addressof(privileges) if privileges else None,
+            len(disable_entries),
+            disable_array if disable_entries else None,
+            len(resolved),
+            priv_array if resolved else None,
             0,
             None,
             ctypes.byref(new_token),
@@ -1672,7 +1884,7 @@ def _create_restricted_token(
                         "TokenVirtualizationAllowed=0 could not be set on "
                         "restricted token (fail-closed at check time)"
                     )
-        return wintypes.HANDLE(new_token)
+        return _as_handle(new_token)
     finally:
         for sid in allocated:
             _free_sid(sid, diagnostics=diagnostics)
@@ -1710,7 +1922,7 @@ def _duplicate_token_primary(
                     f"{ctypes.WinError(ctypes.get_last_error())}"
                 )
             return None
-        return wintypes.HANDLE(primary)
+        return _as_handle(primary)
     except OSError as exc:
         if diagnostics is not None:
             diagnostics.append(f"DuplicateTokenEx exception: {exc}")
@@ -1924,6 +2136,232 @@ def _grant_workspace_access_current_user(
         return False
 
 
+def _grant_workspace_access_account(
+    workspace: Path,
+    domain: str,
+    user: str,
+    *,
+    diagnostics: list[str] | None = None,
+) -> bool:
+    if os.name != "nt":
+        return False
+    account = f"{domain}\\{user}" if domain else user
+    try:
+        result = subprocess.run(
+            ["icacls", str(workspace), "/grant", f"{account}:(OI)(CI)(M)"],
+            capture_output=True,
+            shell=False,
+            timeout=15,
+        )
+        return result.returncode == 0
+    except Exception as exc:
+        if diagnostics is not None:
+            diagnostics.append(
+                f"icacls grant for {workspace} to {account} failed: {exc}"
+            )
+        return False
+
+
+def _get_run_user_credentials() -> tuple[str, str, str] | None:
+    """Return (domain, user, password) for the non-admin run-user logon."""
+    user = os.environ.get(WINDOWS_RUN_USER_ENV, "")
+    if not user:
+        return None
+    password = os.environ.get(WINDOWS_RUN_USER_PASSWORD_ENV, "")
+    domain = os.environ.get(
+        WINDOWS_RUN_USER_DOMAIN_ENV, os.environ.get("COMPUTERNAME", "")
+    )
+    return (domain, user, password)
+
+
+def _logon_run_user(
+    credentials: tuple[str, str, str],
+    *,
+    diagnostics: list[str] | None = None,
+) -> wintypes.HANDLE | None:
+    if os.name != "nt":
+        return None
+    domain, user, password = credentials
+    try:
+        advapi32 = ctypes.WinDLL("advapi32", use_last_error=True)
+        advapi32.LogonUserW.argtypes = [
+            wintypes.LPCWSTR,
+            wintypes.LPCWSTR,
+            wintypes.LPCWSTR,
+            wintypes.DWORD,
+            wintypes.DWORD,
+            ctypes.POINTER(wintypes.HANDLE),
+        ]
+        advapi32.LogonUserW.restype = wintypes.BOOL
+        token = wintypes.HANDLE()
+        if not advapi32.LogonUserW(
+            user,
+            domain,
+            password,
+            LOGON32_LOGON_BATCH,
+            LOGON32_PROVIDER_DEFAULT,
+            ctypes.byref(token),
+        ):
+            if diagnostics is not None:
+                diagnostics.append(
+                    f"LogonUserW({domain}\\{user}) failed: "
+                    f"{ctypes.WinError(ctypes.get_last_error())}"
+                )
+            return None
+        return token
+    except OSError as exc:
+        if diagnostics is not None:
+            diagnostics.append(f"LogonUserW exception: {exc}")
+        return None
+
+
+def _load_run_user_profile(
+    token: wintypes.HANDLE,
+    user: str,
+    *,
+    diagnostics: list[str] | None = None,
+) -> bool:
+    """Load the run user's profile (NTUSER.DAT -> HKCU) for the logon token.
+
+    S4 finding: a child spawned from a batch logon without profile load sees
+    HKCU = the volatile .Default hive (writable), so the high-nist
+    'hkcufrozen' assertion fails.  Loading the profile maps the child's HKCU
+    to the run user's hive, which apply_hardening.ps1 freezes (deny-write
+    ACE stored inside NTUSER.DAT).  Best-effort: failures are logged, not
+    fatal (the file-level home freeze still applies).
+    """
+    if os.name != "nt" or not token:
+        return False
+    try:
+        userenv = ctypes.WinDLL("userenv", use_last_error=True)
+
+        class PROFILEINFO(ctypes.Structure):
+            _fields_ = [
+                ("dwSize", wintypes.DWORD),
+                ("dwFlags", wintypes.DWORD),
+                ("lpUserName", wintypes.LPWSTR),
+                ("lpProfilePath", wintypes.LPWSTR),
+                ("lpDefaultPath", wintypes.LPWSTR),
+                ("lpServerName", wintypes.LPWSTR),
+                ("lpPolicyPath", wintypes.LPWSTR),
+                ("hProfile", wintypes.HANDLE),
+            ]
+
+        userenv.LoadUserProfileW.argtypes = [
+            wintypes.HANDLE,
+            ctypes.POINTER(PROFILEINFO),
+        ]
+        userenv.LoadUserProfileW.restype = wintypes.BOOL
+        userenv.UnloadUserProfile.argtypes = [
+            wintypes.HANDLE,
+            wintypes.HANDLE,
+        ]
+        userenv.UnloadUserProfile.restype = wintypes.BOOL
+
+        info = PROFILEINFO()
+        info.dwSize = ctypes.sizeof(PROFILEINFO)
+        info.lpUserName = wintypes.LPWSTR(user)
+        if not userenv.LoadUserProfileW(token, ctypes.byref(info)):
+            if diagnostics is not None:
+                diagnostics.append(
+                    f"LoadUserProfileW({user}) failed: "
+                    f"{ctypes.WinError(ctypes.get_last_error())}"
+                )
+            return False
+        return True
+    except OSError as exc:
+        if diagnostics is not None:
+            diagnostics.append(f"LoadUserProfileW exception: {exc}")
+        return False
+
+
+def _enable_process_privilege(name: str) -> bool:
+    """Enable a privilege (e.g. SeIncreaseQuotaPrivilege) in the current
+    process token.  CreateProcessAsUserW with a different-user token requires
+    SeIncreaseQuotaPrivilege (and SeAssignPrimaryTokenPrivilege when present).
+    """
+    if os.name != "nt":
+        return False
+    try:
+        kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        advapi32 = ctypes.WinDLL("advapi32", use_last_error=True)
+        tok = wintypes.HANDLE()
+        kernel32.OpenProcessToken.argtypes = [
+            wintypes.HANDLE,
+            wintypes.DWORD,
+            ctypes.POINTER(wintypes.HANDLE),
+        ]
+        kernel32.OpenProcessToken.restype = wintypes.BOOL
+        if not kernel32.OpenProcessToken(
+            kernel32.GetCurrentProcess(),
+            TOKEN_ADJUST_PRIVILEGES | TOKEN_QUERY,
+            ctypes.byref(tok),
+        ):
+            return False
+        try:
+            luid = _LUID()
+            advapi32.LookupPrivilegeValueW.argtypes = [
+                wintypes.LPCWSTR,
+                wintypes.LPCWSTR,
+                ctypes.POINTER(_LUID),
+            ]
+            advapi32.LookupPrivilegeValueW.restype = wintypes.BOOL
+            if not advapi32.LookupPrivilegeValueW(None, name, ctypes.byref(luid)):
+                return False
+            tp = _LUID_AND_ATTRIBUTES()
+            tp.Luid = luid
+            tp.Attributes = SE_PRIVILEGE_ENABLED
+            advapi32.AdjustTokenPrivileges.argtypes = [
+                wintypes.HANDLE,
+                wintypes.BOOL,
+                ctypes.c_void_p,
+                wintypes.DWORD,
+                ctypes.c_void_p,
+                ctypes.c_void_p,
+            ]
+            advapi32.AdjustTokenPrivileges.restype = wintypes.BOOL
+            ok = advapi32.AdjustTokenPrivileges(
+                tok, False, ctypes.byref(tp), ctypes.sizeof(tp), None, None
+            )
+            # AdjustTokenPrivileges can return TRUE even if no privilege was
+            # adjusted; check the last error for ERROR_SUCCESS (0).
+            return bool(ok) and ctypes.get_last_error() == 0
+        finally:
+            kernel32.CloseHandle(tok)
+    except OSError:
+        return False
+
+
+def _build_run_user_env(
+    workspace: Path,
+    arm: str,
+    domain: str,
+    user: str,
+    extra: dict[str, str] | None,
+) -> dict[str, str]:
+    """Environment for a child spawned under the standard run user."""
+    env = dict(os.environ)
+    profile = rf"C:\Users\{user}"
+    env["USERNAME"] = user
+    env["USERDOMAIN"] = domain
+    env["USERPROFILE"] = profile
+    env["HOMEDRIVE"] = "C:"
+    env["HOMEPATH"] = rf"\Users\{user}"
+    env["APPDATA"] = rf"{profile}\AppData\Roaming"
+    env["LOCALAPPDATA"] = rf"{profile}\AppData\Local"
+    if arm == "high-nist":
+        tmp = workspace / ".tmp"
+        tmp.mkdir(parents=True, exist_ok=True)
+        env["TEMP"] = str(tmp)
+        env["TMP"] = str(tmp)
+    else:
+        env["TEMP"] = rf"{profile}\AppData\Local\Temp"
+        env["TMP"] = rf"{profile}\AppData\Local\Temp"
+    if extra:
+        env.update(extra)
+    return env
+
+
 def _build_sandbox_env(
     workspace: Path, arm: str, extra: dict[str, str] | None
 ) -> dict[str, str]:
@@ -2000,7 +2438,7 @@ def _open_nul_read() -> wintypes.HANDLE | None:
         handle = kernel32.CreateFileW(
             "NUL", 0x80000000, 0x3, None, 3, 0, None
         )
-        return wintypes.HANDLE(handle) if handle else None
+        return _as_handle(handle) if handle else None
     except OSError:
         return None
 
@@ -2142,10 +2580,15 @@ def run_windows_native_sandbox(
     observation_id = f"WNR-{uuid.uuid4().hex.upper()}"
     probe_diags: list[str] = []
     command_line = _command_line_from(command)
+    run_user = _get_run_user_credentials()
     cmd_env = _build_sandbox_env(resolved_workspace, arm, env)
+    if run_user and arm != "control":
+        cmd_env = _build_run_user_env(
+            resolved_workspace, arm, run_user[0], run_user[1], env
+        )
     run_cwd = (cwd or resolved_workspace).resolve()
     env_block: bytes | None = None
-    if arm == "high-nist":
+    if arm == "high-nist" or (run_user and arm != "control"):
         env_block = _build_environment_block(cmd_env)
 
     app_name = f"p2_native_run_{uuid.uuid4().hex[:16]}"
@@ -2162,6 +2605,7 @@ def run_windows_native_sandbox(
     firewall_diagnostic = "not attempted"
     restricted_token: wintypes.HANDLE | None = None
     primary_token: wintypes.HANDLE | None = None
+    run_user_logon_token: wintypes.HANDLE | None = None
     process_handle: wintypes.HANDLE | None = None
     thread_handle: wintypes.HANDLE | None = None
     process_pid = 0
@@ -2197,9 +2641,18 @@ def run_windows_native_sandbox(
             _diag(f"workspace probe write failed: {exc}")
 
         if arm != "control":
-            if not _grant_workspace_access_current_user(
-                resolved_workspace, diagnostics=probe_diags
-            ):
+            if run_user:
+                grant_ok = _grant_workspace_access_account(
+                    resolved_workspace,
+                    run_user[0],
+                    run_user[1],
+                    diagnostics=probe_diags,
+                )
+            else:
+                grant_ok = _grant_workspace_access_current_user(
+                    resolved_workspace, diagnostics=probe_diags
+                )
+            if not grant_ok:
                 _diag("workspace user ACL grant failed (run user may lack access)")
 
         if arm == "high-nist":
@@ -2226,22 +2679,139 @@ def run_windows_native_sandbox(
             )
             if not grant_ok:
                 _diag("AppContainer workspace ACL grant failed (fail-closed)")
+            # S4 finding: LOW-integrity children cannot write to default
+            # (Medium) labeled objects (mandatory-integrity no-write-up), so
+            # the AppContainer child could read but not write the workspace.
+            # Label the workspace tree Low so probe output lands there.
+            try:
+                subprocess.run(
+                    [
+                        "icacls",
+                        str(resolved_workspace),
+                        "/setintegritylevel",
+                        "Low",
+                        "/T",
+                        "/C",
+                    ],
+                    capture_output=True,
+                    shell=False,
+                    timeout=30,
+                )
+            except Exception as exc:
+                _diag(f"workspace low-integrity label failed: {exc}")
+            if run_user:
+                # S4 finding: CreateAppContainerProfile creates the package
+                # under the CALLING user's profile (SYSTEM here), but the
+                # OS rewrites TEMP/LOCALAPPDATA for the AppContainer child to
+                # <RunUser>\AppData\Local\Packages\<app>\AC — which does not
+                # exist and is under the frozen home.  Pre-create the package
+                # AC\Temp in the run user's profile and grant the package SID.
+                try:
+                    pkg_root = (
+                        Path(os.environ.get("SystemDrive", "C:") + "\\")
+                        / "Users"
+                        / run_user[1]
+                        / "AppData"
+                        / "Local"
+                        / "Packages"
+                        / app_name
+                    )
+                    ac_temp = pkg_root / "AC" / "Temp"
+                    ac_temp.mkdir(parents=True, exist_ok=True)
+                    appc_sid_str = _appcontainer_sid_to_string(appcontainer_sid)
+                    if appc_sid_str:
+                        subprocess.run(
+                            [
+                                "icacls",
+                                str(pkg_root),
+                                "/grant",
+                                f"*{appc_sid_str}:(OI)(CI)(M)",
+                                "/T",
+                                "/C",
+                            ],
+                            capture_output=True,
+                            shell=False,
+                            timeout=20,
+                        )
+                except Exception as exc:
+                    _diag(f"AppContainer package temp setup failed: {exc}")
 
         if arm != "control":
-            spec = build_restricted_token_spec(arm)
-            restricted_token = _create_restricted_token(spec, diagnostics=probe_diags)
-            if restricted_token:
-                primary_token = _duplicate_token_primary(
-                    restricted_token, diagnostics=probe_diags
+            if run_user:
+                run_user_logon_token = _logon_run_user(
+                    run_user, diagnostics=probe_diags
                 )
-            if arm == "high-nist" and primary_token:
-                if not _set_token_integrity(
-                    primary_token, SECURITY_MANDATORY_LOW_RID, diagnostics=probe_diags
+                if run_user_logon_token:
+                    # CreateProcessWithTokenW consumes the LogonUser token
+                    # directly (impersonation level) and only needs
+                    # SeImpersonatePrivilege, which admin tokens hold.
+                    if not _set_token_virtualization(
+                        run_user_logon_token, False, diagnostics=probe_diags
+                    ):
+                        _diag(
+                            "TokenVirtualizationAllowed=0 could not be set "
+                            "(fail-closed)"
+                        )
+                    if arm == "high-nist":
+                        if not _set_token_integrity(
+                            run_user_logon_token,
+                            SECURITY_MANDATORY_LOW_RID,
+                            diagnostics=probe_diags,
+                        ):
+                            _diag(
+                                "LOW integrity level could not be set (fail-closed)"
+                            )
+            if run_user_logon_token:
+                # Load the run user's profile so the child's HKCU maps to the
+                # frozen hive (hkcufrozen assertion) instead of the volatile
+                # .Default hive.  Best-effort (logged, not fatal).
+                _load_run_user_profile(
+                    run_user_logon_token, run_user[1], diagnostics=probe_diags
+                )
+                # Session-0 scheduled-task finding: the service window
+                # station/desktop ACL grants only the task owner +
+                # Administrators, so a child spawned with the run-user token
+                # fails DLL init (0xC0000142).  Grant the run user access to
+                # the current winsta/desktop before spawning (per-session).
+                account = (
+                    f"{run_user[0]}\\{run_user[1]}"
+                    if run_user[0]
+                    else run_user[1]
+                )
+                desktop_extra: list[str] = []
+                if arm == "high-nist" and appcontainer_sid:
+                    appc_sid_str = _appcontainer_sid_to_string(appcontainer_sid)
+                    if appc_sid_str:
+                        desktop_extra.append(appc_sid_str)
+                if not _grant_session_desktop_access(
+                    account,
+                    extra_sids=desktop_extra,
+                    diagnostics=probe_diags,
                 ):
-                    _diag("LOW integrity level could not be set (fail-closed)")
-            if not primary_token:
+                    _diag(
+                        "run-user window-station/desktop grant failed "
+                        "(spawn will likely fail with 0xC0000142)"
+                    )
+            if not primary_token and not run_user_logon_token:
+                spec = build_restricted_token_spec(arm)
+                restricted_token = _create_restricted_token(
+                    spec, diagnostics=probe_diags
+                )
+                if restricted_token:
+                    primary_token = _duplicate_token_primary(
+                        restricted_token, diagnostics=probe_diags
+                    )
+                if arm == "high-nist" and primary_token:
+                    if not _set_token_integrity(
+                        primary_token,
+                        SECURITY_MANDATORY_LOW_RID,
+                        diagnostics=probe_diags,
+                    ):
+                        _diag("LOW integrity level could not be set (fail-closed)")
+            if not primary_token and not run_user_logon_token:
                 _diag(
-                    "restricted token unavailable — degrading to current-token "
+                    "run-user/restricted token unavailable — degrading to "
+                    "current-token "
                     "spawn (run observation will be noncompliant)"
                 )
 
@@ -2268,7 +2838,16 @@ def run_windows_native_sandbox(
                         _create_firewall_outbound_block_rule(app_name, sid_string)
                     )
 
-        if capture_output:
+        # S4 finding: AppContainer children fail DLL initialization
+        # (STATUS_DLL_INIT_FAILED / 0xC0000142) when std handles are the
+        # inherited anonymous pipes, because the pipe DACL grants only the
+        # creating user (SYSTEM) and the AppContainer token cannot access
+        # the handles.  The probe writes its result to the workspace, so
+        # stdout/stderr capture is skipped for AppContainer spawns.
+        use_std_handles = capture_output and not (
+            arm == "high-nist" and run_user_logon_token
+        )
+        if use_std_handles:
             out_pair = _create_anonymous_pipe()
             if out_pair:
                 read_pipe, write_pipe = out_pair
@@ -2352,7 +2931,7 @@ def run_windows_native_sandbox(
         si_ex = STARTUPINFOEX()
         si_ex.StartupInfo.cb = ctypes.sizeof(STARTUPINFOEX)
         si_ex.lpAttributeList = ctypes.cast(attr_list, ctypes.c_void_p)
-        if capture_output and write_pipe:
+        if use_std_handles and write_pipe:
             si_ex.StartupInfo.dwFlags |= STARTF_USESTDHANDLES
             si_ex.StartupInfo.hStdOutput = write_pipe
             si_ex.StartupInfo.hStdError = err_write_pipe or write_pipe
@@ -2366,10 +2945,109 @@ def run_windows_native_sandbox(
             | CREATE_NO_WINDOW_FLAG
             | CREATE_NEW_PROCESS_GROUP_FLAG
         )
+        if env_block is not None:
+            # The environment block is UTF-16; without this flag Windows
+            # parses it as ANSI and rejects it (ERROR_INVALID_PARAMETER /
+            # ERROR_ENVVAR_NOT_FOUND observed in S4).
+            creation_flags |= CREATE_UNICODE_ENVIRONMENT_FLAG
 
         spawn_ok = False
         env_ptr = None
-        if primary_token:
+        if run_user_logon_token:
+            # Preferred: CreateProcessAsUserW with the LogonUser primary
+            # token.  Supports the extended startup info required for
+            # AppContainer and creation-time Job containment.  Requires the
+            # caller to hold SeAssignPrimaryTokenPrivilege (present in SYSTEM
+            # scheduled-task tokens, absent from admin-user task tokens) —
+            # S4 finding: run the sandbox job as SYSTEM.
+            advapi32 = ctypes.WinDLL("advapi32", use_last_error=True)
+            advapi32.CreateProcessAsUserW.argtypes = [
+                wintypes.HANDLE,
+                wintypes.LPCWSTR,
+                wintypes.LPWSTR,
+                ctypes.c_void_p,
+                ctypes.c_void_p,
+                wintypes.BOOL,
+                wintypes.DWORD,
+                ctypes.c_void_p,
+                wintypes.LPCWSTR,
+                ctypes.c_void_p,
+                ctypes.POINTER(PROCESS_INFORMATION),
+            ]
+            advapi32.CreateProcessAsUserW.restype = wintypes.BOOL
+            env_ptr = (
+                ctypes.cast(ctypes.c_char_p(env_block), ctypes.c_void_p)
+                if env_block is not None
+                else None
+            )
+            _enable_process_privilege("SeIncreaseQuotaPrivilege")
+            spawn_ok = advapi32.CreateProcessAsUserW(
+                run_user_logon_token,
+                None,
+                cmd_buf,
+                None,
+                None,
+                True,
+                creation_flags,
+                env_ptr,
+                str(run_cwd),
+                ctypes.cast(ctypes.byref(si_ex), ctypes.c_void_p),
+                ctypes.byref(proc_info),
+            )
+            if not spawn_ok:
+                _diag(
+                    "CreateProcessAsUserW failed: "
+                    f"{ctypes.WinError(ctypes.get_last_error())}; "
+                    "falling back to CreateProcessWithTokenW (plain startup "
+                    "info — extended attributes are rejected by that API)"
+                )
+                # CreateProcessWithTokenW rejects STARTUPINFOEX /
+                # EXTENDED_STARTUPINFO_PRESENT with ERROR_INVALID_PARAMETER
+                # on this build, so rebuild a plain STARTUPINFO (Job
+                # containment then relies on the post-creation
+                # AssignProcessToJobObject fallback below; AppContainer
+                # cannot be applied on this fallback path).
+                plain_flags = creation_flags & ~EXTENDED_STARTUPINFO_PRESENT_FLAG
+                si_plain = STARTUPINFOW()
+                si_plain.cb = ctypes.sizeof(STARTUPINFOW)
+                if use_std_handles and write_pipe:
+                    si_plain.dwFlags |= STARTF_USESTDHANDLES
+                    si_plain.hStdOutput = write_pipe
+                    si_plain.hStdError = err_write_pipe or write_pipe
+                    si_plain.hStdInput = nul_handle or wintypes.HANDLE(0)
+                advapi32.CreateProcessWithTokenW.argtypes = [
+                    wintypes.HANDLE,
+                    wintypes.DWORD,
+                    wintypes.LPCWSTR,
+                    wintypes.LPWSTR,
+                    wintypes.DWORD,
+                    ctypes.c_void_p,
+                    wintypes.LPCWSTR,
+                    ctypes.c_void_p,
+                    ctypes.POINTER(PROCESS_INFORMATION),
+                ]
+                advapi32.CreateProcessWithTokenW.restype = wintypes.BOOL
+                spawn_ok = advapi32.CreateProcessWithTokenW(
+                    run_user_logon_token,
+                    0,
+                    None,
+                    cmd_buf,
+                    plain_flags,
+                    env_ptr,
+                    str(run_cwd),
+                    ctypes.cast(ctypes.byref(si_plain), ctypes.c_void_p),
+                    ctypes.byref(proc_info),
+                )
+                if not spawn_ok:
+                    _diag(
+                        "CreateProcessWithTokenW fallback failed: "
+                        f"{ctypes.WinError(ctypes.get_last_error())}"
+                    )
+        if run_user_logon_token and spawn_ok:
+            # Run-user logon spawns satisfy the restricted-token contract
+            # (standard user, no admin group, virtualization off).
+            created_with_restricted_token = True
+        elif primary_token:
             # CreateProcessAsUserW: primary token + extended startup info
             # (AppContainer attr for high-nist, Job list for all arms).
             advapi32 = ctypes.WinDLL("advapi32", use_last_error=True)
@@ -2388,7 +3066,7 @@ def run_windows_native_sandbox(
             ]
             advapi32.CreateProcessAsUserW.restype = wintypes.BOOL
             env_ptr = (
-                ctypes.cast(ctypes.create_string_buffer(env_block), ctypes.c_void_p)
+                ctypes.cast(ctypes.c_char_p(env_block), ctypes.c_void_p)
                 if env_block is not None
                 else None
             )
@@ -2657,6 +3335,8 @@ def run_windows_native_sandbox(
             _close_handle(restricted_token)
         if primary_token:
             _close_handle(primary_token)
+        if run_user_logon_token:
+            _close_handle(run_user_logon_token)
         if appcontainer_sid and not profile_created:
             _free_sid(appcontainer_sid, diagnostics=probe_diags)
         if profile_created:

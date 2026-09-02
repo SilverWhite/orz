@@ -18,3 +18,6 @@ tmp*/
 .gsa_shadow_recovery/
 .gsa/
 evidence/
+
+# S4 Windows VM 模板本地产物（Python 安装包等，不入库）
+_windows_high_nist/tools/

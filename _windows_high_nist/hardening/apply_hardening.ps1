@@ -72,41 +72,144 @@ function Assert-Admin {
     }
 }
 
-function Invoke-IcaclsDeny {
+function Get-AclRuleIdentitySid {
+    param([string]$Identity)
+    try {
+        $acct = [System.Security.Principal.NTAccount]::new($Identity)
+        $sid = $acct.Translate([System.Security.Principal.SecurityIdentifier])
+        return $sid.Value
+    }
+    catch {
+        return $Identity
+    }
+}
+
+function Get-AclInheritance {
+    param([string]$Inheritance)
+    if ($Inheritance -eq '(OI)(CI)') {
+        return [System.Security.AccessControl.InheritanceFlags]::ContainerInherit -bor `
+            [System.Security.AccessControl.InheritanceFlags]::ObjectInherit
+    }
+    return [System.Security.AccessControl.InheritanceFlags]::None
+}
+
+function Invoke-AclDeny {
     param(
         [string]$Path,
         [string]$User,
         [string]$Inheritance = '(OI)(CI)'
     )
     if ($PSCmdlet.ShouldProcess($Path, 'deny-write ACL')) {
-        # W=写文件, AD=建子目录, DE=删文件, DC=删子目录——deny-write 语义
-        # 必须同时覆盖文件写与目录创建（仅 W 会漏掉 mkdir）。
-        $perms = "${Inheritance}(W,AD,DE,DC)"
-        & icacls $Path /deny "${User}:${perms}" 2>&1 | Out-Null
-        if ($LASTEXITCODE -ne 0) {
-            Write-Step "FAIL icacls deny $Path"
-            $script:StepFailures++
+        try {
+            $acl = Get-Acl -LiteralPath $Path -ErrorAction Stop
+            # W=写文件, AD=建子目录, DE=删文件, DC=删子目录——deny-write 语义
+            # 必须同时覆盖文件写与目录创建（仅 W 会漏掉 mkdir）。
+            $rights = [System.Security.AccessControl.FileSystemRights]::WriteData -bor `
+                [System.Security.AccessControl.FileSystemRights]::CreateDirectories -bor `
+                [System.Security.AccessControl.FileSystemRights]::Delete -bor `
+                [System.Security.AccessControl.FileSystemRights]::DeleteSubdirectoriesAndFiles
+            $rule = [System.Security.AccessControl.FileSystemAccessRule]::new(
+                $User,
+                $rights,
+                (Get-AclInheritance $Inheritance),
+                [System.Security.AccessControl.PropagationFlags]::None,
+                [System.Security.AccessControl.AccessControlType]::Deny
+            )
+            $acl.AddAccessRule($rule)
+            Set-Acl -LiteralPath $Path -AclObject $acl -ErrorAction Stop
+            Write-Step "OK   acl deny $Path ($Inheritance)"
         }
-        else {
-            Write-Step "OK   icacls deny $Path ($perms)"
+        catch {
+            Write-Step "FAIL acl deny $Path : $($_.Exception.Message)"
+            $script:StepFailures++
         }
     }
 }
 
-function Invoke-IcaclsDenyRemove {
+function Invoke-AclDenyRemove {
     param(
         [string]$Path,
         [string]$User,
         [string]$Inheritance = '(OI)(CI)'
     )
     if ($PSCmdlet.ShouldProcess($Path, 'remove deny-write ACE')) {
-        & icacls $Path /remove:d "${User}" 2>&1 | Out-Null
-        if ($LASTEXITCODE -ne 0) {
-            Write-Step "FAIL icacls remove deny $Path"
+        try {
+            $acl = Get-Acl -LiteralPath $Path -ErrorAction Stop
+            $targetSid = Get-AclRuleIdentitySid $User
+            $rules = @($acl.Access | Where-Object {
+                $_.AccessControlType -eq [System.Security.AccessControl.AccessControlType]::Deny -and
+                (Get-AclRuleIdentitySid $_.IdentityReference.Value) -eq $targetSid
+            })
+            foreach ($r in $rules) {
+                $null = $acl.RemoveAccessRule($r)
+            }
+            if ($rules.Count -gt 0) {
+                Set-Acl -LiteralPath $Path -AclObject $acl -ErrorAction Stop
+            }
+            Write-Step "OK   acl deny removed $Path"
+        }
+        catch {
+            Write-Step "FAIL acl deny remove $Path : $($_.Exception.Message)"
             $script:StepFailures++
         }
-        else {
-            Write-Step "OK   icacls remove deny $Path"
+    }
+}
+
+function Invoke-AclGrant {
+    param(
+        [string]$Path,
+        [string]$User,
+        [string]$Inheritance = '(OI)(CI)',
+        [string]$Rights = 'Modify'
+    )
+    if ($PSCmdlet.ShouldProcess($Path, 'grant ACL')) {
+        try {
+            $acl = Get-Acl -LiteralPath $Path -ErrorAction Stop
+            $rightsEnum = [System.Security.AccessControl.FileSystemRights]::$Rights
+            $rule = [System.Security.AccessControl.FileSystemAccessRule]::new(
+                $User,
+                $rightsEnum,
+                (Get-AclInheritance $Inheritance),
+                [System.Security.AccessControl.PropagationFlags]::None,
+                [System.Security.AccessControl.AccessControlType]::Allow
+            )
+            $acl.AddAccessRule($rule)
+            Set-Acl -LiteralPath $Path -AclObject $acl -ErrorAction Stop
+            Write-Step "OK   acl grant $Path ($Rights)"
+        }
+        catch {
+            Write-Step "FAIL acl grant $Path : $($_.Exception.Message)"
+            $script:StepFailures++
+        }
+    }
+}
+
+function Invoke-AclGrantRemove {
+    param(
+        [string]$Path,
+        [string]$User,
+        [string]$Inheritance = '(OI)(CI)',
+        [string]$Rights = 'Modify'
+    )
+    if ($PSCmdlet.ShouldProcess($Path, 'remove grant ACE')) {
+        try {
+            $acl = Get-Acl -LiteralPath $Path -ErrorAction Stop
+            $targetSid = Get-AclRuleIdentitySid $User
+            $rules = @($acl.Access | Where-Object {
+                $_.AccessControlType -eq [System.Security.AccessControl.AccessControlType]::Allow -and
+                (Get-AclRuleIdentitySid $_.IdentityReference.Value) -eq $targetSid
+            })
+            foreach ($r in $rules) {
+                $null = $acl.RemoveAccessRule($r)
+            }
+            if ($rules.Count -gt 0) {
+                Set-Acl -LiteralPath $Path -AclObject $acl -ErrorAction Stop
+            }
+            Write-Step "OK   acl grant removed $Path"
+        }
+        catch {
+            Write-Step "FAIL acl grant remove $Path : $($_.Exception.Message)"
+            $script:StepFailures++
         }
     }
 }
@@ -120,19 +223,20 @@ function Invoke-RegistryDeny {
         return
     }
     try {
-        $acl = Get-Acl -LiteralPath $KeyPath
+        $acl = Get-Acl -Path $KeyPath -ErrorAction Stop
         $rights = [System.Security.AccessControl.RegistryRights]::SetValue -bor `
             [System.Security.AccessControl.RegistryRights]::CreateSubKey -bor `
             [System.Security.AccessControl.RegistryRights]::Delete
         $rule = [System.Security.AccessControl.RegistryAccessRule]::new(
             $User,
             $rights,
-            'Deny',
-            'ContainerInherit,ObjectInherit',
-            'None'
+            [System.Security.AccessControl.InheritanceFlags]::ContainerInherit -bor `
+                [System.Security.AccessControl.InheritanceFlags]::ObjectInherit,
+            [System.Security.AccessControl.PropagationFlags]::None,
+            [System.Security.AccessControl.AccessControlType]::Deny
         )
         $acl.AddAccessRule($rule)
-        Set-Acl -LiteralPath $KeyPath -AclObject $acl
+        Set-Acl -Path $KeyPath -AclObject $acl -ErrorAction Stop
         Write-Step "OK   registry deny $KeyPath"
     }
     catch {
@@ -150,19 +254,20 @@ function Invoke-RegistryDenyRemove {
         return
     }
     try {
-        $acl = Get-Acl -LiteralPath $KeyPath
+        $acl = Get-Acl -Path $KeyPath -ErrorAction Stop
         $rights = [System.Security.AccessControl.RegistryRights]::SetValue -bor `
             [System.Security.AccessControl.RegistryRights]::CreateSubKey -bor `
             [System.Security.AccessControl.RegistryRights]::Delete
         $rule = [System.Security.AccessControl.RegistryAccessRule]::new(
             $User,
             $rights,
-            'Deny',
-            'ContainerInherit,ObjectInherit',
-            'None'
+            [System.Security.AccessControl.InheritanceFlags]::ContainerInherit -bor `
+                [System.Security.AccessControl.InheritanceFlags]::ObjectInherit,
+            [System.Security.AccessControl.PropagationFlags]::None,
+            [System.Security.AccessControl.AccessControlType]::Deny
         )
         $acl.RemoveAccessRule($rule) | Out-Null
-        Set-Acl -LiteralPath $KeyPath -AclObject $acl
+        Set-Acl -Path $KeyPath -AclObject $acl -ErrorAction Stop
         Write-Step "OK   registry deny removed $KeyPath"
     }
     catch {
@@ -207,12 +312,12 @@ function Ensure-RunUser {
             }
             $adminGroup = Get-LocalGroup -Name 'Administrators'
             if (Get-LocalGroupMember -Group $adminGroup -ErrorAction SilentlyContinue |
-                Where-Object Name -eq $RunUser) {
+                Where-Object { $_.Name -like "*$RunUser" }) {
                 Remove-LocalGroupMember -Group $adminGroup -Member $RunUser
                 Write-Step "OK   removed $RunUser from Administrators"
             }
             if (-not (Get-LocalGroupMember -Group 'Users' -ErrorAction SilentlyContinue |
-                Where-Object Name -eq $RunUser)) {
+                Where-Object { $_.Name -like "*$RunUser" })) {
                 Add-LocalGroupMember -Group 'Users' -Member $RunUser
                 Write-Step "OK   added $RunUser to Users"
             }
@@ -226,7 +331,10 @@ function Ensure-RunUser {
 
 function Get-RunUserProfileRoot {
     param([string]$Name)
-    return Join-Path (Split-Path $env:USERPROFILE -Parent) $Name
+    # 固定为 %SystemDrive%\Users\<RunUser>：脚本可能以 SYSTEM 运行
+    # （SYSTEM 的 USERPROFILE 是 C:\WINDOWS\system32\config\systemprofile，
+    # 用它推导会把 RunUser profile 建到错误位置——S4 实机发现）。
+    return Join-Path (Join-Path $env:SystemDrive 'Users') $Name
 }
 
 function Ensure-RunUserProfileDirectories {
@@ -403,7 +511,7 @@ function Set-AppLockerAllowlist {
 "@
         $policyXml = Join-Path $env:TEMP "gsa-applocker-$Arm-$([guid]::NewGuid().ToString('N')).xml"
         Set-Content -LiteralPath $policyXml -Value $xml -Encoding utf8
-        Set-AppLockerPolicy -XmlPolicy $policyXml -Force
+        Set-AppLockerPolicy -XmlPolicy $policyXml
         Write-Step "OK   AppLocker whitelist policy applied ($policyXml)"
     }
     catch {
@@ -415,7 +523,7 @@ function Set-AppLockerAllowlist {
 function Reset-AppLockerPolicy {
     if ($PSCmdlet.ShouldProcess('AppLocker', 'reset policy')) {
         try {
-            Set-AppLockerPolicy -Policy $null -Force
+            Set-AppLockerPolicy -Policy $null
             Write-Step "OK   AppLocker policy reset"
         }
         catch {
@@ -441,8 +549,13 @@ function Get-ProtectedPaths {
         )
     }
     # 盘符根：只拒绝根目录本身的写（不传播继承，避免误伤工作区）。
+    # 仅 NTFS 固定盘可做 ACL（排除 ISO/UDF 光驱与 FAT32/EFI 分区）。
     $driveRoots = Get-PSDrive -PSProvider FileSystem |
-        Where-Object { $_.Free -ne $null } | ForEach-Object { "$($_.Root)" }
+        Where-Object { $_.Free -ne $null } |
+        ForEach-Object {
+            $vol = Get-Volume -DriveLetter $_.Name -ErrorAction SilentlyContinue
+            if ($vol -and $vol.FileSystem -eq 'NTFS') { "$($_.Root)" }
+        }
     return @{ tree = $paths; roots = $driveRoots }
 }
 
@@ -492,10 +605,10 @@ else {
     $protected = Get-ProtectedPaths
     if ($Revert) {
         foreach ($path in $protected.tree) {
-            Invoke-IcaclsDenyRemove $path $RunUser
+            Invoke-AclDenyRemove $path $RunUser
         }
         foreach ($root in $protected.roots) {
-            Invoke-IcaclsDenyRemove $root $RunUser ''
+            Invoke-AclDenyRemove $root $RunUser ''
         }
         Invoke-RegistryDenyRemove 'HKLM:\SOFTWARE' $RunUser
         if ($Arm -eq 'high-nist') {
@@ -505,17 +618,16 @@ else {
             Clear-RunUserHiveFrozen $profileRootForUser $RunUser
             $packages = Join-Path $profileRootForUser 'AppData\Local\Packages'
             if (Test-Path -LiteralPath $packages) {
-                & icacls $packages /remove:g "${RunUser}" 2>&1 | Out-Null
-                Write-Step "OK   packages grant removed $packages"
+                Invoke-AclGrantRemove $packages $RunUser
             }
         }
     }
     else {
         foreach ($path in $protected.tree) {
-            Invoke-IcaclsDeny $path $RunUser
+            Invoke-AclDeny $path $RunUser
         }
         foreach ($root in $protected.roots) {
-            Invoke-IcaclsDeny $root $RunUser ''
+            Invoke-AclDeny $root $RunUser ''
         }
         Invoke-RegistryDeny 'HKLM:\SOFTWARE' $RunUser
         if ($Arm -eq 'high-nist') {
@@ -529,14 +641,7 @@ else {
             if (-not (Test-Path -LiteralPath $packages)) {
                 New-Item -ItemType Directory -Path $packages -Force | Out-Null
             }
-            & icacls $packages /grant "${RunUser}:(OI)(CI)(M)" 2>&1 | Out-Null
-            if ($LASTEXITCODE -ne 0) {
-                Write-Step "FAIL packages grant $packages"
-                $script:StepFailures++
-            }
-            else {
-                Write-Step "OK   packages grant $packages (AppContainer profile 运行期豁免)"
-            }
+            Invoke-AclGrant $packages $RunUser
         }
     }
 
@@ -546,10 +651,10 @@ else {
             New-Item -ItemType Directory -Path $WorkspaceRoot -Force | Out-Null
             New-Item -ItemType Directory -Path (Join-Path $WorkspaceRoot '.tmp') -Force | Out-Null
             if ($Revert) {
-                & icacls $WorkspaceRoot /remove:g "${RunUser}" 2>&1 | Out-Null
+                Invoke-AclGrantRemove $WorkspaceRoot $RunUser
             }
             else {
-                & icacls $WorkspaceRoot /grant "${RunUser}:(OI)(CI)(M)" 2>&1 | Out-Null
+                Invoke-AclGrant $WorkspaceRoot $RunUser
             }
             Write-Step "OK   workspace $WorkspaceRoot ready (RunUser=M)"
         }

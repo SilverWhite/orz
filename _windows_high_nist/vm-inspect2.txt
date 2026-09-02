@@ -1,0 +1,12 @@
+﻿STATE=Running
+UPTIME=00:07:53.9290000
+ADAPTER name=网络适配器 mac=00155D050500 connected=True ips=172.19.100.203,fe80::ee53:758b:ad09:12c2
+PSDIRECT_OK
+OS             : Microsoft Windows 11 企业评估版
+Version        : 10.0.26200
+Build          : 26200
+Computer       : DESKTOP-QMAPMFH
+User           : DESKTOP-QMAPMFH\HL
+IsAdmin        : True
+IP             : 172.19.100.203
+DeepSeekTcp443 : True

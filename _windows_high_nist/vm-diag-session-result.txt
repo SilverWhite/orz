@@ -1,0 +1,4 @@
+﻿TRY New-PSSession -VMName...
+SESSION_OK=1
+ERROR: 找不到属性“Policy”。
+STACK: 在 <ScriptBlock>、<无文件> 中: 第 2 行

@@ -1,0 +1,82 @@
+﻿{
+  "arm": "non-admin",
+  "checks": {
+    "non_admin": false,
+    "privileges_removed": true,
+    "token_virtualization_disabled": true,
+    "workspace_writable": true
+  },
+  "exit_code": 42,
+  "observation_path": "C:\\s4\\results\\diag-cmd-obs.json",
+  "outcome": "noncompliant",
+  "stderr_bytes": 0,
+  "stdout_bytes": 0,
+  "timed_out": false
+}
+CMD_RUNNER_EXIT=0
+CMD_OBS outcome=noncompliant exit=42
+CMD_DIAG: CreateProcessWithTokenW failed: [WinError 87] 参数错误。
+{
+  "arm": "non-admin",
+  "checks": {
+    "non_admin": false,
+    "privileges_removed": true,
+    "token_virtualization_disabled": true,
+    "workspace_writable": true
+  },
+  "exit_code": 42,
+  "observation_path": "C:\\s4\\results\\diag-ps-obs.json",
+  "outcome": "noncompliant",
+  "stderr_bytes": 0,
+  "stdout_bytes": 0,
+  "timed_out": false
+}
+PS_RUNNER_EXIT=0
+PS_OBS outcome=noncompliant exit=42
+PS_DIAG: CreateProcessWithTokenW failed: [WinError 87] 参数错误。
+{
+  "arm": "control",
+  "checks": {
+    "workspace_writable": true
+  },
+  "exit_code": 42,
+  "observation_path": "C:\\s4\\results\\diag-ctl-obs.json",
+  "outcome": "compliant",
+  "stderr_bytes": 0,
+  "stdout_bytes": 0,
+  "timed_out": false
+}
+CTL_RUNNER_EXIT=0
+CTL_OBS outcome=compliant exit=42
+===== FULL non-admin PROBE =====
+{
+  "arm": "non-admin",
+  "checks": {
+    "non_admin": false,
+    "privileges_removed": true,
+    "token_virtualization_disabled": true,
+    "workspace_writable": true
+  },
+  "exit_code": 1,
+  "observation_path": "C:\\s4\\results\\ws-non-admin\\windows-native-run-observation-non-admin.json",
+  "outcome": "noncompliant",
+  "stderr_bytes": 0,
+  "stdout_bytes": 333,
+  "timed_out": false
+}
+powershell.exe : C:\s4\_windows_high_nist\run\run_enforcement_probe.ps1 : run observation outcome=noncompliant（spawn 期墙
+未全过，见 dia
+所在位置 C:\s4\tools\elev-runner.ps1:4 字符: 5
++     & powershell.exe -NoProfile -ExecutionPolicy Bypass -File 'C:\s4\ ...
++     ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: (C:\s4\_windows_...awn 期墙未全过，见 dia:String) [], RemoteException
+    + FullyQualifiedErrorId : NativeCommandError
+ 
+gnostics）— 该臂不作数（fail-closed）
+所在位置 C:\s4\tools\elev-body.ps1:34 字符: 1
++ & C:\s4\_windows_high_nist\run\run_enforcement_probe.ps1 -Arm non-adm ...
++ ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: (:) [Write-Error], WriteErrorException
+    + FullyQualifiedErrorId : Microsoft.PowerShell.Commands.WriteErrorException,run_enforcement_probe.ps1
+ 
+EXIT=1

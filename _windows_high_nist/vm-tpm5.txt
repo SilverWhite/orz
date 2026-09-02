@@ -1,0 +1,3 @@
+﻿KeyProtector set (local)
+TPM enabled
+State=Running
