@@ -1,0 +1,52 @@
+﻿===== WRAPUP HIVE READY GATE (5023 cooldown) =====
+GATE: GATE_READY attempt 1 elapsed 0.0
+GATE_EXIT=0
+===== WRAPUP PROBE 1 (immediate after apply) =====
+PROBE1 exit=0 hive5023=True
+===== WRAPUP PROBE 2 (stability) =====
+PROBE2 exit=0 hive5023=True
+HIVE_5023_NOTE=present (compliant; registered gap)
+===== CRED SANDBOX arm=non-admin =====
+CREDSBX: {
+CREDSBX:   "arm": "non-admin",
+CREDSBX:   "checks": {
+CREDSBX:     "non_admin": true,
+CREDSBX:     "privileges_removed": true,
+CREDSBX:     "token_virtualization_disabled": true,
+CREDSBX:     "workspace_writable": true
+CREDSBX:   },
+CREDSBX:   "exit_code": 0,
+CREDSBX:   "observation_path": "C:\\workspace\\wrapup\\windows-native-run-observation-cred-nonadmin.json",
+CREDSBX:   "outcome": "compliant",
+CREDSBX:   "stderr_bytes": 0,
+CREDSBX:   "stdout_bytes": 124,
+CREDSBX:   "timed_out": false
+CREDSBX: }
+CRED_SBX_EXIT=0
+CRED_nonadmin_OK=True
+===== CRED SANDBOX arm=high-nist =====
+CREDSBX: {
+CREDSBX:   "arm": "high-nist",
+CREDSBX:   "checks": {
+CREDSBX:     "appcontainer_token": true,
+CREDSBX:     "job_object_assigned": true,
+CREDSBX:     "low_integrity": true,
+CREDSBX:     "non_admin": true,
+CREDSBX:     "privileges_removed": true,
+CREDSBX:     "temp_redirected": true,
+CREDSBX:     "token_virtualization_disabled": true,
+CREDSBX:     "workspace_writable": true
+CREDSBX:   },
+CREDSBX:   "exit_code": 0,
+CREDSBX:   "observation_path": "C:\\workspace\\wrapup\\windows-native-run-observation-cred-highnist.json",
+CREDSBX:   "outcome": "compliant",
+CREDSBX:   "stderr_bytes": 0,
+CREDSBX:   "stdout_bytes": 0,
+CREDSBX:   "timed_out": false
+CREDSBX: }
+CRED_SBX_EXIT=0
+CRED_highnist_OK=False
+CRED_HIGHNIST_DENIED_EXPECTED=1
+HIVE_POST mounted=False locked=False
+WRAPUP_MAIN_DONE
+EXIT=0

@@ -107,6 +107,18 @@ ADR-0009），冻结 home 不会先杀浏览器；真实摩擦是"浏览器存�
   log-summary-date-ranges 等纯文件/文本任务），或从内部任务池抽 Windows 原生题。
 - **三臂**：control / non-admin / high-nist，同 harness、同模型、k=1 起步，
   与 BoundaryBench 格同构，delta 可归因。
+  **执行口径（2026-09-02 用户裁决，工程化优先）**：任务执行取
+  control + high-nist 双臂；non-admin 臂仅承担 enforcement 墙校验（三臂
+  enforcement 已全过：10/10、19/19），不做任务消融——不设严格可比性目标；
+  high-nist 为 non-admin 之上的更严格臂（enforcement 断言集 10→19 超集，
+  同写轴原语一致）。
+  边界（2026-09-02 batch-2 实机登记）：AppContainer 墙内任务进程实际
+  `%TEMP%` 由 OS 改写为 `%LOCALAPPDATA%\Packages\<pkg>\AC\Temp`
+  （已授权、可写），与 spawn 期 cmd_env 的 `{workspace}\.tmp` 意图不一致；
+  行为断言以“%TEMP% 可写”为准（temp-write success）；如需钉死工作区
+  `.tmp`，须显式关闭 AppContainer TEMP 改写或在子进程环境重设。pip --user
+  与 PowerShell 孙进程在墙内 blocked（import 期 HKCU Shell Folders 缺失 /
+  0xC0000142 DLL init），登记为缺口候选并影响 ⑦ agent 侧任务选型。
 - **硬化验证**：每臂启动前跑 enforcement-probe（等效 GAK-SBX-001 的 7 项检查
   扩展），确认墙真实生效（root 写不进 HKLM/System32、外网连接被拒、setuid/
   提权失效），再放行 agent。
@@ -211,9 +223,18 @@ ADR-0009），冻结 home 不会先杀浏览器；真实摩擦是"浏览器存�
    登录一次（NTUSER.DAT）方可 hive 级冻结 HKCU。
 3. **摩擦探针集 control 臂基线**：k=1，确认探针在无策略下可达、verifier 断言
    成立。
+   **已闭环（2026-09-02）**：control 臂首批任务集 k=1 3/3 success
+   （S4_PROGRESS §11）。
 4. **high-nist 小批**：按 §7 判据逐项核对，产出首批缺口清单；对照 §8 假设排序。
+   **机器侧已闭环（2026-09-02）**：墙探针 19/19 + 首批任务集 3/3
+   （HKLM/Program Files 写探针 denied、真实任务 success），证据
+   `evidence-task-high-nist/`；§7 判据 1/6 探针层核对完成，事件面判据
+   待 ⑦ 网络/凭据后 agent k=1 执行（S4_PROGRESS §12）。
 5. **全量 + 缺口登记**：全任务跑完后按 BACKLOG 纪律登记缺口（GAP-* 或
    TODO 项），并回写本设计的判据口径。
+   **部分完成（2026-09-02）**：判据口径已回写（任务=双臂口径见 §6，
+   用户裁决不做 non-admin 消融）；缺口/范围登记见 BACKLOG 0l / TODO
+   P0-0l-⑥ / S4_PROGRESS §13；全量任务集移植、跑批与记账待续。
 
 ## 11. 登记
 

@@ -1,0 +1,13 @@
+{
+  "id": "probe-temp-write",
+  "schema_version": "0.1.0",
+  "kind": "temp-write",
+  "category": "friction-probe",
+  "title": "Friction probe: write to %TEMP% (redirected temp must stay writable)",
+  "arm_expectations": {
+    "control": "success",
+    "non-admin": "success",
+    "high-nist": "success"
+  },
+  "action": "probe.py"
+}

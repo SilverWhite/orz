@@ -6,8 +6,10 @@ from ctypes import wintypes
 import json
 import os
 from pathlib import Path
+import re
 import subprocess
 import threading
+import time
 from typing import Any
 import uuid
 
@@ -25,6 +27,25 @@ from .utils import (
 
 DISPOSABLE_MARKER = ".assurance-p2-disposable.json"
 PROBE_FILE = ".p2-windows-write-probe"
+
+# Secret-shaped environment keys are redacted from run observations so the
+# env-file credential-injection chain never lands key material in evidence.
+# Child environment is NOT affected (redaction applies to the record only).
+_SENSITIVE_ENV_RE = re.compile(
+    r"(?i)(api[_-]?key|secret|pass(word)?|authorization|bearer|deepseek)"
+)
+
+
+def _redact_sensitive_env(env: dict[str, str] | None) -> dict[str, str]:
+    if not env:
+        return {}
+    out: dict[str, str] = {}
+    for key, value in env.items():
+        if _SENSITIVE_ENV_RE.search(key):
+            out[key] = f"<redacted len={len(value)}>"
+        else:
+            out[key] = value
+    return out
 
 JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE = 0x00002000
 JOB_OBJECT_LIMIT_JOB_MEMORY_LIMIT = 0x00000200
@@ -2220,7 +2241,7 @@ def _load_run_user_profile(
     user: str,
     *,
     diagnostics: list[str] | None = None,
-) -> bool:
+) -> wintypes.HANDLE | None:
     """Load the run user's profile (NTUSER.DAT -> HKCU) for the logon token.
 
     S4 finding: a child spawned from a batch logon without profile load sees
@@ -2228,10 +2249,12 @@ def _load_run_user_profile(
     'hkcufrozen' assertion fails.  Loading the profile maps the child's HKCU
     to the run user's hive, which apply_hardening.ps1 freezes (deny-write
     ACE stored inside NTUSER.DAT).  Best-effort: failures are logged, not
-    fatal (the file-level home freeze still applies).
+    fatal (the file-level home freeze still applies).  Returns the loaded
+    profile handle (hProfile), which the caller must pair with a later
+    UnloadUserProfile after the child exits.
     """
     if os.name != "nt" or not token:
-        return False
+        return None
     try:
         userenv = ctypes.WinDLL("userenv", use_last_error=True)
 
@@ -2261,17 +2284,68 @@ def _load_run_user_profile(
         info = PROFILEINFO()
         info.dwSize = ctypes.sizeof(PROFILEINFO)
         info.lpUserName = wintypes.LPWSTR(user)
-        if not userenv.LoadUserProfileW(token, ctypes.byref(info)):
-            if diagnostics is not None:
-                diagnostics.append(
-                    f"LoadUserProfileW({user}) failed: "
-                    f"{ctypes.WinError(ctypes.get_last_error())}"
-                )
-            return False
-        return True
+        # S4 formal-sequence observation: when apply_hardening.ps1 has just
+        # run its HKCU-freeze reg load/unload cycle on NTUSER.DAT, an
+        # immediate LoadUserProfileW can fail transiently with WinError
+        # 5023 ("group or resource is not in the correct state") for longer
+        # than a single 1s retry.  Back off across several attempts (the
+        # apply-side Wait-RunUserHiveSettled poll is the primary fix; this
+        # longer retry is the sandbox-side safety net); best-effort either
+        # way.
+        last_error = 0
+        backoffs = (1.0, 2.0, 4.0, 8.0)
+        for attempt, pause in enumerate(backoffs, start=1):
+            if userenv.LoadUserProfileW(token, ctypes.byref(info)):
+                return info.hProfile
+            last_error = ctypes.get_last_error()
+            if attempt < len(backoffs):
+                time.sleep(pause)
+        if diagnostics is not None:
+            diagnostics.append(
+                f"LoadUserProfileW({user}) failed after {len(backoffs)} "
+                f"attempts: "
+                f"{ctypes.WinError(last_error)}"
+            )
+        return None
     except OSError as exc:
         if diagnostics is not None:
             diagnostics.append(f"LoadUserProfileW exception: {exc}")
+        return None
+
+
+def _unload_run_user_profile(
+    token: wintypes.HANDLE,
+    hprofile: wintypes.HANDLE,
+    *,
+    diagnostics: list[str] | None = None,
+) -> bool:
+    """Unload the run user's profile hive (NTUSER.DAT) after the child exits.
+
+    S4 formal-sequence finding: LoadUserProfileW without a matching
+    UnloadUserProfile leaves the run user's hive mounted and locks
+    NTUSER.DAT, so a later apply_hardening.ps1 HKCU-freeze 'reg load' fails
+    with "another process is using this file".  Best-effort.
+    """
+    if os.name != "nt" or not token or not hprofile:
+        return False
+    try:
+        userenv = ctypes.WinDLL("userenv", use_last_error=True)
+        userenv.UnloadUserProfile.argtypes = [
+            wintypes.HANDLE,
+            wintypes.HANDLE,
+        ]
+        userenv.UnloadUserProfile.restype = wintypes.BOOL
+        if userenv.UnloadUserProfile(token, hprofile):
+            return True
+        if diagnostics is not None:
+            diagnostics.append(
+                "UnloadUserProfile failed: "
+                f"{ctypes.WinError(ctypes.get_last_error())}"
+            )
+        return False
+    except OSError as exc:
+        if diagnostics is not None:
+            diagnostics.append(f"UnloadUserProfile exception: {exc}")
         return False
 
 
@@ -2541,6 +2615,7 @@ def run_windows_native_sandbox(
     memory_limit_bytes: int | None = None,
     allowlist_ips: list[str] | None = None,
     capture_output: bool = True,
+    appcontainer: bool = True,
 ) -> dict[str, Any]:
     """Spawn a command tree in the Windows hardened run environment.
 
@@ -2550,6 +2625,10 @@ def run_windows_native_sandbox(
                    six privileges removed, TokenVirtualizationAllowed=0).
       high-nist  — non-admin + LOW integrity + AppContainer (empty
                    capabilities) + Job Object + %TEMP% redirect + egress wall.
+                   Pass appcontainer=False to keep the same wall without the
+                   AppContainer layer (2026-09-03 ruling: orz.exe fails DLL
+                   init / 0xC0000142 as an AppContainer process on Windows 11
+                   25H2; enforcement python probes keep the default True).
 
     Returns a run observation (see windows-native-sandbox-run-v0.1.schema.json).
     """
@@ -2560,6 +2639,10 @@ def run_windows_native_sandbox(
     if arm not in WINDOWS_RUN_ARMS:
         raise AssuranceError(
             f"unknown arm {arm!r} (expected control|non-admin|high-nist)"
+        )
+    if not appcontainer and arm != "high-nist":
+        raise AssuranceError(
+            "appcontainer=False is only meaningful with arm=high-nist"
         )
 
     profile = _load_windows_native_profile(profile_path)
@@ -2576,6 +2659,8 @@ def run_windows_native_sandbox(
         if memory_limit_bytes is not None
         else int(profile["resources"]["memory_bytes"])
     )
+    use_appcontainer = bool(appcontainer) and arm == "high-nist"
+    appcontainer_mode = "enabled" if use_appcontainer else "disabled"
 
     observation_id = f"WNR-{uuid.uuid4().hex.upper()}"
     probe_diags: list[str] = []
@@ -2606,6 +2691,7 @@ def run_windows_native_sandbox(
     restricted_token: wintypes.HANDLE | None = None
     primary_token: wintypes.HANDLE | None = None
     run_user_logon_token: wintypes.HANDLE | None = None
+    run_user_profile_handle: wintypes.HANDLE | None = None
     process_handle: wintypes.HANDLE | None = None
     thread_handle: wintypes.HANDLE | None = None
     process_pid = 0
@@ -2655,7 +2741,7 @@ def run_windows_native_sandbox(
             if not grant_ok:
                 _diag("workspace user ACL grant failed (run user may lack access)")
 
-        if arm == "high-nist":
+        if use_appcontainer:
             appcontainer_sid = _derive_appcontainer_sid(
                 app_name, diagnostics=probe_diags
             )
@@ -2679,9 +2765,10 @@ def run_windows_native_sandbox(
             )
             if not grant_ok:
                 _diag("AppContainer workspace ACL grant failed (fail-closed)")
+        if arm == "high-nist":
             # S4 finding: LOW-integrity children cannot write to default
             # (Medium) labeled objects (mandatory-integrity no-write-up), so
-            # the AppContainer child could read but not write the workspace.
+            # the LOW-IL child could read but not write the workspace.
             # Label the workspace tree Low so probe output lands there.
             try:
                 subprocess.run(
@@ -2699,7 +2786,7 @@ def run_windows_native_sandbox(
                 )
             except Exception as exc:
                 _diag(f"workspace low-integrity label failed: {exc}")
-            if run_user:
+            if run_user and use_appcontainer:
                 # S4 finding: CreateAppContainerProfile creates the package
                 # under the CALLING user's profile (SYSTEM here), but the
                 # OS rewrites TEMP/LOCALAPPDATA for the AppContainer child to
@@ -2752,6 +2839,14 @@ def run_windows_native_sandbox(
                             "TokenVirtualizationAllowed=0 could not be set "
                             "(fail-closed)"
                         )
+                    # Load the run user's profile BEFORE lowering the token
+                    # integrity: LoadUserProfileW fails with WinError 5023 on
+                    # a LOW-IL token (2026-09-03 finding), which left orz's
+                    # DPAPI keystore unable to resolve the user profile
+                    # (CryptProtectData 0x80070002) under the high-nist arm.
+                    run_user_profile_handle = _load_run_user_profile(
+                        run_user_logon_token, run_user[1], diagnostics=probe_diags
+                    )
                     if arm == "high-nist":
                         if not _set_token_integrity(
                             run_user_logon_token,
@@ -2762,12 +2857,6 @@ def run_windows_native_sandbox(
                                 "LOW integrity level could not be set (fail-closed)"
                             )
             if run_user_logon_token:
-                # Load the run user's profile so the child's HKCU maps to the
-                # frozen hive (hkcufrozen assertion) instead of the volatile
-                # .Default hive.  Best-effort (logged, not fatal).
-                _load_run_user_profile(
-                    run_user_logon_token, run_user[1], diagnostics=probe_diags
-                )
                 # Session-0 scheduled-task finding: the service window
                 # station/desktop ACL grants only the task owner +
                 # Administrators, so a child spawned with the run-user token
@@ -2779,7 +2868,7 @@ def run_windows_native_sandbox(
                     else run_user[1]
                 )
                 desktop_extra: list[str] = []
-                if arm == "high-nist" and appcontainer_sid:
+                if use_appcontainer and appcontainer_sid:
                     appc_sid_str = _appcontainer_sid_to_string(appcontainer_sid)
                     if appc_sid_str:
                         desktop_extra.append(appc_sid_str)
@@ -2831,21 +2920,26 @@ def run_windows_native_sandbox(
                     "allowlist-rule mode; host firewall policy must be "
                     "blockoutbound (apply_hardening.ps1 sets it)"
                 )
-            else:
+            elif use_appcontainer:
                 sid_string = _appcontainer_sid_to_string(appcontainer_sid)
                 if sid_string:
                     firewall_rule_name, firewall_rule_created, firewall_diagnostic = (
                         _create_firewall_outbound_block_rule(app_name, sid_string)
                     )
+            else:
+                firewall_diagnostic = (
+                    "no AppContainer SID available for a SID-scoped block "
+                    "rule; relies on the machine blockoutbound policy"
+                )
 
         # S4 finding: AppContainer children fail DLL initialization
         # (STATUS_DLL_INIT_FAILED / 0xC0000142) when std handles are the
         # inherited anonymous pipes, because the pipe DACL grants only the
         # creating user (SYSTEM) and the AppContainer token cannot access
         # the handles.  The probe writes its result to the workspace, so
-        # stdout/stderr capture is skipped for AppContainer spawns.
+        # stdout/stderr capture is skipped for AppContainer spawns (only).
         use_std_handles = capture_output and not (
-            arm == "high-nist" and run_user_logon_token
+            use_appcontainer and run_user_logon_token
         )
         if use_std_handles:
             out_pair = _create_anonymous_pipe()
@@ -2892,7 +2986,7 @@ def run_windows_native_sandbox(
         ]
         kernel32.UpdateProcThreadAttribute.restype = wintypes.BOOL
 
-        if arm == "high-nist":
+        if use_appcontainer:
             sec_cap = SECURITY_CAPABILITIES()
             sec_cap.AppContainerSid = appcontainer_sid
             sec_cap.Capabilities = None
@@ -3191,9 +3285,12 @@ def run_windows_native_sandbox(
                     checks["low_integrity"] = (
                         rid is not None and rid <= SECURITY_MANDATORY_LOW_RID
                     )
-                    checks["appcontainer_token"] = _process_token_is_appcontainer(
-                        process_handle, diagnostics=probe_diags
-                    )
+                    if use_appcontainer:
+                        checks["appcontainer_token"] = (
+                            _process_token_is_appcontainer(
+                                process_handle, diagnostics=probe_diags
+                            )
+                        )
                     tmp_path = cmd_env.get("TEMP", "")
                     checks["temp_redirected"] = bool(
                         tmp_path
@@ -3335,6 +3432,12 @@ def run_windows_native_sandbox(
             _close_handle(restricted_token)
         if primary_token:
             _close_handle(primary_token)
+        if run_user_logon_token and run_user_profile_handle:
+            _unload_run_user_profile(
+                run_user_logon_token,
+                run_user_profile_handle,
+                diagnostics=probe_diags,
+            )
         if run_user_logon_token:
             _close_handle(run_user_logon_token)
         if appcontainer_sid and not profile_created:
@@ -3347,6 +3450,8 @@ def run_windows_native_sandbox(
     stdout_bytes = b"".join(stdout_chunks)
     stderr_bytes = b"".join(stderr_chunks)
     required_checks = set(run_observation_checks_for_arm(arm))
+    if arm == "high-nist" and not use_appcontainer:
+        required_checks.discard("appcontainer_token")
     observed_keys = set(checks.keys())
     all_required_present = observed_keys >= required_checks
     all_required_passed = all_required_present and all(
@@ -3360,6 +3465,7 @@ def run_windows_native_sandbox(
         "observation_id": observation_id,
         "created_at": utc_now(),
         "arm": arm,
+        "appcontainer_mode": appcontainer_mode,
         "profile_sha256": sha256_file(
             profile_path or ASSURANCE_ROOT / "windows-native-sandbox-profile-v0.1.json"
         ),
@@ -3369,7 +3475,7 @@ def run_windows_native_sandbox(
         "command_sha256": sha256_bytes(command_line.encode("utf-16-le")),
         "command": command_line,
         "cwd": str(run_cwd),
-        "env_overrides": dict(env or {}),
+        "env_overrides": _redact_sensitive_env(env),
         "temp_redirect": {
             "workspace_tmp": str(resolved_workspace / ".tmp"),
             "temp_env": cmd_env.get("TEMP", ""),

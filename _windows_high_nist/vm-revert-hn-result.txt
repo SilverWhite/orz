@@ -1,0 +1,26 @@
+﻿===== REVERT HIGH-NIST =====
+RVH: [2026-09-02 22:28:13] === apply_hardening.ps1 Arm=high-nist Revert=True RunUser=AgentUser ===
+RVH: [2026-09-02 22:28:13] OK   local user AgentUser exists
+RVH: [2026-09-02 22:28:13] UAC 策略保持系统默认（Revert 不动 EnableLUA）
+RVH: [2026-09-02 22:28:14] OK   acl deny removed C:\WINDOWS
+RVH: [2026-09-02 22:28:14] OK   acl deny removed C:\Program Files
+RVH: [2026-09-02 22:28:14] OK   acl deny removed C:\Program Files (x86)
+RVH: [2026-09-02 22:28:14] OK   acl deny removed C:\ProgramData
+RVH: [2026-09-02 22:28:14] OK   acl deny removed C:\Users\AgentUser
+RVH: [2026-09-02 22:28:14] OK   acl deny removed C:\Users\AgentUser\AppData\Roaming
+RVH: [2026-09-02 22:28:14] OK   acl deny removed C:\Users\AgentUser\AppData\Local
+RVH: [2026-09-02 22:28:14] OK   acl deny removed C:\
+RVH: [2026-09-02 22:28:16] OK   registry deny removed HKLM:\SOFTWARE
+RVH: [2026-09-02 22:28:19] OK   registry deny removed Registry::HKEY_CLASSES_ROOT
+RVH: [2026-09-02 22:28:19] OK   registry deny removed Registry::HKEY_CURRENT_USER
+RVH: [2026-09-02 22:28:19] OK   registry deny removed Registry::HKEY_USERS\gsa_hkcu_d65caf3e1033467c9291f4526f25c955
+RVH: [2026-09-02 22:28:19] OK   acl grant removed C:\Users\AgentUser\AppData\Local\Packages
+RVH: [2026-09-02 22:28:19] OK   acl grant removed C:\workspace
+RVH: [2026-09-02 22:28:19] OK   workspace C:\workspace ready (RunUser=M)
+RVH: [2026-09-02 22:28:19] OK   hosts restored
+RVH: [2026-09-02 22:28:19] OK   firewall egress policy restored
+RVH: [2026-09-02 22:28:19] OK   AppLocker policy reset (fallback: SrpV2 removed)
+RVH: [2026-09-02 22:28:19] === done (StepFailures=0) ===
+RVH: [2026-09-02 22:28:19] apply_hardening.ps1 high-nist OK
+REVERT_HN_EXIT=0
+EXIT=0

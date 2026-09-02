@@ -1,0 +1,3 @@
+﻿STAGE=restore
+ERROR: You do not have the required permission to complete this task. Contact the administrator of the authorization policy for the computer 'SWITCH'.
+STAGE_ABORTED=restore

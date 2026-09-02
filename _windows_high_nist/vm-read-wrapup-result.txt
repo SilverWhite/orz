@@ -1,0 +1,195 @@
+﻿--- wrapup files ---
+cred-highnist.json|124
+cred-nonadmin.json|111
+windows-native-run-observation-cred-highnist.json|3346
+windows-native-run-observation-cred-nonadmin.json|2843
+windows-native-run-observation-wrapup-1.json|3469
+windows-native-run-observation-wrapup-2.json|3469
+wrapup-apply.json|514
+wrapup-pre-clean.json|1415
+wrapup-summary.json|5909
+--- wrapup-pre-clean.json ---
+{
+    "ran_at":  "2026-09-02T15:32:21Z",
+    "tasks_removed":  [
+
+                      ],
+    "procs_killed":  [
+
+                     ],
+    "dirs_removed":  [
+                         "C:\\Users\\AgentUser\\AppData\\Local\\Packages\\p2_native_run_048d34622e0445ac",
+                         "C:\\Users\\AgentUser\\AppData\\Local\\Packages\\p2_native_run_04ec36560c77400e",
+                         "C:\\Users\\AgentUser\\AppData\\Local\\Packages\\p2_native_run_3b401afcdcb4487b",
+                         "C:\\Users\\AgentUser\\AppData\\Local\\Packages\\p2_native_run_54b6b15ff0dd4d1d",
+                         "C:\\Users\\AgentUser\\AppData\\Local\\Packages\\p2_native_run_6175afa31fd540da",
+                         "C:\\Users\\AgentUser\\AppData\\Local\\Packages\\p2_native_run_6e1f9550c7fc4d81",
+                         "C:\\Users\\AgentUser\\AppData\\Local\\Packages\\p2_native_run_774fba256f4d4630",
+                         "C:\\Users\\AgentUser\\AppData\\Local\\Packages\\p2_native_run_77851463615640d9",
+                         "C:\\Users\\AgentUser\\AppData\\Local\\Packages\\p2_native_run_d221a2e02b274fb9",
+                         "C:\\Users\\AgentUser\\AppData\\Local\\Packages\\p2_native_run_e06c79c175584890"
+                     ],
+    "workspace_reset":  true,
+    "hive_mounted_pre":  false,
+    "hive_locked_pre":  false,
+    "errors":  [
+
+               ]
+}
+
+--- wrapup-apply.json ---
+{
+    "ran_at":  "2026-09-02T15:32:31Z",
+    "apply_exit":  0,
+    "applocker_effective":  true,
+    "applocker_srpv2":  true,
+    "applocker_exe_rules":  4,
+    "probe1":  null,
+    "probe2":  null,
+    "hive_5023_1":  false,
+    "hive_5023_2":  false,
+    "hive_mounted_pre_apply":  false,
+    "cred_nonadmin":  null,
+    "cred_highnist":  null,
+    "hive_mounted_post":  false,
+    "hive_locked_post":  false,
+    "errors":  [
+
+               ],
+    "applocker_enforcement":  "Enabled"
+}
+
+--- wrapup-summary.json ---
+{
+    "ran_at":  "2026-09-02T15:34:51Z",
+    "probe1":  [
+                   "PROBE1: {",
+                   "PROBE1:   \"arm\": \"high-nist\",",
+                   "PROBE1:   \"checks\": {",
+                   "PROBE1:     \"appcontainer_token\": true,",
+                   "PROBE1:     \"job_object_assigned\": true,",
+                   "PROBE1:     \"low_integrity\": true,",
+                   "PROBE1:     \"non_admin\": true,",
+                   "PROBE1:     \"privileges_removed\": true,",
+                   "PROBE1:     \"temp_redirected\": true,",
+                   "PROBE1:     \"token_virtualization_disabled\": true,",
+                   "PROBE1:     \"workspace_writable\": true",
+                   "PROBE1:   },",
+                   "PROBE1:   \"exit_code\": 1,",
+                   "PROBE1:   \"observation_path\": \"C:\\\\workspace\\\\wrapup\\\\probe-ws-1\\\\windows-native-run-observation-high-nist.json\",",
+                   "PROBE1:   \"outcome\": \"compliant\",",
+                   "PROBE1:   \"stderr_bytes\": 0,",
+                   "PROBE1:   \"stdout_bytes\": 0,",
+                   "PROBE1:   \"timed_out\": false",
+                   "PROBE1: }",
+                   "PROBE1: C:\\s4\\_windows_high_nist\\run\\run_enforcement_probe.ps1 : enforcement-probe high-nist FAILED（exit=1）— 该臂不作数（fai",
+                   "PROBE1: l-closed）",
+                   "PROBE1: 所在位置 C:\\s4\\_windows_high_nist\\run\\run_enforcement_probe.ps1:133 字符: 9",
+                   "PROBE1: +         Write-Error \"enforcement-probe $Arm FAILED（exit=$probeExit）—  ...",
+                   "PROBE1: +         ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~",
+                   "PROBE1:     + CategoryInfo          : NotSpecified: (:) [Write-Error], WriteErrorException",
+                   "PROBE1:     + FullyQualifiedErrorId : Microsoft.PowerShell.Commands.WriteErrorException,run_enforcement_probe.ps1",
+                   "PROBE1:  ",
+                   "PROBE1_DIAG: LoadUserProfileW(AgentUser) failed after 4 attempts: [WinError 5023] 组或资源的状态不是执行请求操作的正确状态。",
+                   {
+                       "tag":  "1",
+                       "probe_exit":  1,
+                       "obs_copied":  true,
+                       "hive_5023":  true
+                   }
+               ],
+    "probe2":  [
+                   "PROBE2: {",
+                   "PROBE2:   \"arm\": \"high-nist\",",
+                   "PROBE2:   \"checks\": {",
+                   "PROBE2:     \"appcontainer_token\": true,",
+                   "PROBE2:     \"job_object_assigned\": true,",
+                   "PROBE2:     \"low_integrity\": true,",
+                   "PROBE2:     \"non_admin\": true,",
+                   "PROBE2:     \"privileges_removed\": true,",
+                   "PROBE2:     \"temp_redirected\": true,",
+                   "PROBE2:     \"token_virtualization_disabled\": true,",
+                   "PROBE2:     \"workspace_writable\": true",
+                   "PROBE2:   },",
+                   "PROBE2:   \"exit_code\": 1,",
+                   "PROBE2:   \"observation_path\": \"C:\\\\workspace\\\\wrapup\\\\probe-ws-2\\\\windows-native-run-observation-high-nist.json\",",
+                   "PROBE2:   \"outcome\": \"compliant\",",
+                   "PROBE2:   \"stderr_bytes\": 0,",
+                   "PROBE2:   \"stdout_bytes\": 0,",
+                   "PROBE2:   \"timed_out\": false",
+                   "PROBE2: }",
+                   "PROBE2: C:\\s4\\_windows_high_nist\\run\\run_enforcement_probe.ps1 : enforcement-probe high-nist FAILED（exit=1）— 该臂不作数（fai",
+                   "PROBE2: l-closed）",
+                   "PROBE2: 所在位置 C:\\s4\\_windows_high_nist\\run\\run_enforcement_probe.ps1:133 字符: 9",
+                   "PROBE2: +         Write-Error \"enforcement-probe $Arm FAILED（exit=$probeExit）—  ...",
+                   "PROBE2: +         ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~",
+                   "PROBE2:     + CategoryInfo          : NotSpecified: (:) [Write-Error], WriteErrorException",
+                   "PROBE2:     + FullyQualifiedErrorId : Microsoft.PowerShell.Commands.WriteErrorException,run_enforcement_probe.ps1",
+                   "PROBE2:  ",
+                   "PROBE2_DIAG: LoadUserProfileW(AgentUser) failed after 4 attempts: [WinError 5023] 组或资源的状态不是执行请求操作的正确状态。",
+                   {
+                       "tag":  "2",
+                       "probe_exit":  1,
+                       "obs_copied":  true,
+                       "hive_5023":  true
+                   }
+               ],
+    "hive_5023_1":  true,
+    "hive_5023_2":  true,
+    "cred_nonadmin":  {
+                          "target":  "orz-deepseek/agent",
+                          "ok":  true,
+                          "winerror":  0,
+                          "detail":  "",
+                          "blob_bytes":  70,
+                          "user_name":  "HL",
+                          "persist":  3
+                      },
+    "cred_highnist":  {
+                          "target":  "orz-deepseek/agent",
+                          "ok":  false,
+                          "winerror":  5,
+                          "detail":  "拒绝访问。",
+                          "blob_bytes":  0,
+                          "user_name":  "",
+                          "persist":  0
+                      },
+    "hive_mounted_post":  false,
+    "hive_locked_post":  false,
+    "errors":  [
+                   "enforcement probe failed after apply",
+                   "LoadUserProfileW 5023 regression present",
+                   "cred sandbox highnist read failed"
+               ]
+}
+
+--- cred-nonadmin.json ---
+{"target":"orz-deepseek/agent","ok":true,"winerror":0,"detail":"","blob_bytes":70,"user_name":"HL","persist":3}
+--- cred-highnist.json ---
+{"target":"orz-deepseek/agent","ok":false,"winerror":5,"detail":"鎷掔粷璁块棶銆?,"blob_bytes":0,"user_name":"","persist":0}
+--- windows-native-run-observation-wrapup-1.json ---
+outcome=compliant exit=1
+CHECK appcontainer_token=True
+CHECK job_object_assigned=True
+CHECK low_integrity=True
+CHECK non_admin=True
+CHECK privileges_removed=True
+CHECK temp_redirected=True
+CHECK token_virtualization_disabled=True
+CHECK workspace_writable=True
+DIAG: LoadUserProfileW(AgentUser) failed after 4 attempts: [WinError 5023] 组或资源的状态不是执行请求操作的正确状态。
+--- windows-native-run-observation-wrapup-2.json ---
+outcome=compliant exit=1
+CHECK appcontainer_token=True
+CHECK job_object_assigned=True
+CHECK low_integrity=True
+CHECK non_admin=True
+CHECK privileges_removed=True
+CHECK temp_redirected=True
+CHECK token_virtualization_disabled=True
+CHECK workspace_writable=True
+DIAG: LoadUserProfileW(AgentUser) failed after 4 attempts: [WinError 5023] 组或资源的状态不是执行请求操作的正确状态。
+--- enforcement-probe-wrapup-1.json ---
+MISSING
+--- enforcement-probe-wrapup-2.json ---
+MISSING

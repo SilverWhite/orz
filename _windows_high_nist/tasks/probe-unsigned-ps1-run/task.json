@@ -1,0 +1,14 @@
+{
+  "id": "probe-unsigned-ps1-run",
+  "schema_version": "0.1.0",
+  "kind": "unsigned-script-run",
+  "category": "friction-probe",
+  "title": "Friction probe: run an unsigned .ps1 via PowerShell (exit-code split axis)",
+  "arm_expectations": {
+    "control": "success",
+    "non-admin": "success",
+    "high-nist": "blocked"
+  },
+  "action": "probe.py",
+  "sandbox_timeout_seconds": 360
+}

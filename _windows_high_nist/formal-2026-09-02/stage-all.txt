@@ -1,0 +1,204 @@
+﻿STAGE=all
+SYNC C:\s4\assurance\windows_sandbox.py ok=True
+SYNC C:\s4\assurance\sandbox_verifier.py ok=True
+SYNC C:\s4\assurance\windows-native-sandbox-run-v0.1.schema.json ok=True
+SYNC C:\s4\assurance\windows-native-sandbox-observation-v0.1.schema.json ok=True
+SYNC C:\s4\assurance\windows-native-sandbox-profile-v0.1.json ok=True
+SYNC C:\s4\assurance\windows-native-sandbox-profile-v0.1.schema.json ok=True
+SYNC C:\s4\scripts\run_windows_native_sandbox_command.py ok=True
+SYNC C:\s4\_windows_high_nist\hardening\apply_hardening.ps1 ok=True
+SYNC C:\s4\_windows_high_nist\policy\enforcement_probe.ps1 ok=True
+SYNC C:\s4\_windows_high_nist\policy\enforcement_probe.py ok=True
+SYNC C:\s4\_windows_high_nist\run\run_enforcement_probe.ps1 ok=True
+SYNC_ALL_OK=True
+===== JOB formal-setup =====
+NET_PW: 命令成功完成。
+NET_PW: 
+NET_PW_EXIT=0
+ENV_USER=AgentUser
+ENV_DOMAIN=DESKTOP-QMAPMFH
+SE_EXPORT:                                                                            
+SE_EXPORT: 任务成功结束。
+SE_EXPORT: 有关详细信息，请参阅日志 %windir%\security\logs\scesrv.log。
+AGENTUSER_SID=S-1-5-21-3636881053-4261193759-2698424706-1002
+SE_CONF: 完成了百分之 6 (0/15) 	处理 Privilege Rights 区域        
+SE_CONF: 完成了百分之 13 (1/15) 	处理 Privilege Rights 区域        
+SE_CONF: 完成了百分之 20 (2/15) 	处理 Privilege Rights 区域        
+SE_CONF: 完成了百分之 26 (3/15) 	处理 Privilege Rights 区域        
+SE_CONF: 完成了百分之 33 (4/15) 	处理 Privilege Rights 区域        
+SE_CONF: 完成了百分之 40 (5/15) 	处理 Privilege Rights 区域        
+SE_CONF: 完成了百分之 46 (6/15) 	处理 Privilege Rights 区域        
+SE_CONF: 完成了百分之 53 (7/15) 	处理 Privilege Rights 区域        
+SE_CONF: 完成了百分之 60 (8/15) 	处理 Privilege Rights 区域        
+SE_CONF: 完成了百分之 66 (9/15) 	处理 Privilege Rights 区域        
+SE_CONF: 完成了百分之 73 (10/15) 	处理 Privilege Rights 区域        
+SE_CONF: 完成了百分之 80 (11/15) 	处理 Privilege Rights 区域        
+SE_CONF: 完成了百分之 86 (12/15) 	处理 Privilege Rights 区域        
+SE_CONF: 完成了百分之 93 (13/15) 	处理 Privilege Rights 区域        
+SE_CONF: 完成了百分之 100 (14/15) 	处理 Privilege Rights 区域        
+SE_CONF: 完成了百分之 100 (15/15) 	处理 Privilege Rights 区域        
+SE_CONF:                                                                            
+SE_CONF: 任务成功结束。
+SE_CONF: 有关详细信息，请参阅日志 %windir%\security\logs\scesrv.log。
+SECEDIT_EXIT=0
+PROF: PROF_LOGON 1 0
+PROF: PROF_LOAD 1 1008 hProfile 612
+PROF: NTUSER_EXISTS1 True
+PROF: NTUSER_EXISTS2 True
+PROF: PROF_DONE
+NTUSER_FINAL=True
+PIP: 操作成功完成。
+PIP: 
+PROF_ICACLS_EXIT=5
+WRONGPATH_CLEAN_EXIT=0
+SETUP_OK
+EXIT=0
+JOB_EXIT=0
+===== JOB formal-control =====
+===== CONTROL PROBE =====
+CTL: {
+CTL:   "arm": "control",
+CTL:   "checks": {
+CTL:     "workspace_writable": true
+CTL:   },
+CTL:   "exit_code": 0,
+CTL:   "observation_path": "C:\\workspace\\control\\windows-native-run-observation-control.json",
+CTL:   "outcome": "compliant",
+CTL:   "stderr_bytes": 0,
+CTL:   "stdout_bytes": 76,
+CTL:   "timed_out": false
+CTL: }
+CTL: enforcement-probe control OK — result=C:\workspace\control\enforcement-probe-control.json
+CTL_PROBE_EXIT=0
+CTL_OBS outcome=compliant exit=0
+CTL_CHECK workspace_writable=True
+{
+  "arm": "control",
+  "workspace": "C:\\workspace\\control",
+  "checks": {
+    "workspace_writable": true,
+    "os_writable": true
+  },
+  "passed": 2,
+  "failed": 0,
+  "ran_at": "2026-09-02T04:40:41Z"
+}
+EXIT=0
+JOB_EXIT=0
+EVIDENCE_COPIED=D:\CLI\_windows_high_nist\formal-2026-09-02\evidence-control\enforcement-probe-control.json
+EVIDENCE_COPIED=D:\CLI\_windows_high_nist\formal-2026-09-02\evidence-control\windows-native-run-observation-control.json
+===== JOB formal-nonadmin =====
+===== APPLY NON-ADMIN =====
+NAH: [2026-09-02 12:40:50] === apply_hardening.ps1 Arm=non-admin Revert=False RunUser=AgentUser ===
+NAH: [2026-09-02 12:40:51] OK   local user AgentUser exists
+NAH: [2026-09-02 12:40:51] OK   reg HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System\EnableLUA = 1
+NAH: [2026-09-02 12:40:51] OK   reg HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System\ConsentPromptBehaviorAdmin = 2
+NAH: [2026-09-02 12:40:51] OK   reg HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System\PromptOnSecureDesktop = 1
+NAH: [2026-09-02 12:40:51] OK   reg HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System\EnableInstallerDetection = 1
+NAH: [2026-09-02 12:40:51] OK   reg HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System\FilterAdministratorToken = 1
+NAH: [2026-09-02 12:40:51] OK   reg HKLM:\SOFTWARE\Policies\Microsoft\Windows\Installer\EnableUserControl = 0
+NAH: [2026-09-02 12:41:40] OK   acl deny C:\WINDOWS ((OI)(CI))
+NAH: [2026-09-02 12:41:47] OK   acl deny C:\Program Files ((OI)(CI))
+NAH: [2026-09-02 12:41:47] OK   acl deny C:\Program Files (x86) ((OI)(CI))
+NAH: [2026-09-02 12:41:47] OK   acl deny C:\ProgramData ((OI)(CI))
+NAH: [2026-09-02 12:41:49] OK   acl deny C:\ ()
+NAH: [2026-09-02 12:41:52] OK   registry deny HKLM:\SOFTWARE
+NAH: [2026-09-02 12:41:52] OK   acl grant C:\workspace (Modify)
+NAH: [2026-09-02 12:41:52] OK   workspace C:\workspace ready (RunUser=M)
+NAH: [2026-09-02 12:41:52] === done (StepFailures=0) ===
+NAH: [2026-09-02 12:41:52] apply_hardening.ps1 non-admin OK
+NAH_EXIT=0
+===== NON-ADMIN PROBE =====
+NA: {
+NA:   "arm": "non-admin",
+NA:   "checks": {
+NA:     "non_admin": true,
+NA:     "privileges_removed": true,
+NA:     "token_virtualization_disabled": true,
+NA:     "workspace_writable": true
+NA:   },
+NA:   "exit_code": 0,
+NA:   "observation_path": "C:\\workspace\\non-admin\\windows-native-run-observation-non-admin.json",
+NA:   "outcome": "compliant",
+NA:   "stderr_bytes": 0,
+NA:   "stdout_bytes": 307,
+NA:   "timed_out": false
+NA: }
+NA: enforcement-probe non-admin OK — result=C:\workspace\non-admin\enforcement-probe-non-admin.json
+NA_PROBE_EXIT=0
+NA_OBS outcome=compliant exit=0
+NA_CHECK non_admin=True
+NA_CHECK privileges_removed=True
+NA_CHECK token_virtualization_disabled=True
+NA_CHECK workspace_writable=True
+{
+  "arm": "non-admin",
+  "workspace": "C:\\workspace\\non-admin",
+  "checks": {
+    "workspace_writable": true,
+    "non_admin": true,
+    "token_virtualization_disabled": true,
+    "program_files_write_blocked": true,
+    "system32_write_blocked": true,
+    "hklm_write_blocked": true,
+    "privileges_removed": true,
+    "runas_blocked": true,
+    "temp_write_succeeded": true,
+    "home_write_succeeded": true
+  },
+  "passed": 10,
+  "failed": 0,
+  "ran_at": "2026-09-02T04:41:53Z"
+}
+EXIT=0
+JOB_EXIT=0
+EVIDENCE_COPIED=D:\CLI\_windows_high_nist\formal-2026-09-02\evidence-non-admin\enforcement-probe-non-admin.json
+EVIDENCE_COPIED=D:\CLI\_windows_high_nist\formal-2026-09-02\evidence-non-admin\windows-native-run-observation-non-admin.json
+===== JOB formal-highnist =====
+===== REVERT NON-ADMIN =====
+REVNA: [2026-09-02 12:42:03] === apply_hardening.ps1 Arm=non-admin Revert=True RunUser=AgentUser ===
+REVNA: [2026-09-02 12:42:03] OK   local user AgentUser exists
+REVNA: [2026-09-02 12:42:03] UAC 策略保持系统默认（Revert 不动 EnableLUA）
+REVNA: [2026-09-02 12:42:35] OK   acl deny removed C:\WINDOWS
+REVNA: [2026-09-02 12:42:42] OK   acl deny removed C:\Program Files
+REVNA: [2026-09-02 12:42:42] OK   acl deny removed C:\Program Files (x86)
+REVNA: [2026-09-02 12:42:43] OK   acl deny removed C:\ProgramData
+REVNA: [2026-09-02 12:42:44] OK   acl deny removed C:\
+REVNA: [2026-09-02 12:42:46] OK   registry deny removed HKLM:\SOFTWARE
+REVNA: [2026-09-02 12:42:46] OK   acl grant removed C:\workspace
+REVNA: [2026-09-02 12:42:46] OK   workspace C:\workspace ready (RunUser=M)
+REVNA: [2026-09-02 12:42:46] === done (StepFailures=0) ===
+REVNA: [2026-09-02 12:42:46] apply_hardening.ps1 non-admin OK
+REVNA_EXIT=0
+===== APPLY HIGH-NIST (DeepSeek pin + AppLocker restore) =====
+HNH: [2026-09-02 12:42:47] === apply_hardening.ps1 Arm=high-nist Revert=False RunUser=AgentUser ===
+HNH: [2026-09-02 12:42:47] OK   local user AgentUser exists
+HNH: [2026-09-02 12:42:47] OK   reg HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System\EnableLUA = 1
+HNH: [2026-09-02 12:42:47] OK   reg HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System\ConsentPromptBehaviorAdmin = 2
+HNH: [2026-09-02 12:42:47] OK   reg HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System\PromptOnSecureDesktop = 1
+HNH: [2026-09-02 12:42:47] OK   reg HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System\EnableInstallerDetection = 1
+HNH: [2026-09-02 12:42:47] OK   reg HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System\FilterAdministratorToken = 1
+HNH: [2026-09-02 12:42:47] OK   reg HKLM:\SOFTWARE\Policies\Microsoft\Windows\Installer\EnableUserControl = 0
+HNH: [2026-09-02 12:43:17] OK   acl deny C:\WINDOWS ((OI)(CI))
+HNH: [2026-09-02 12:43:21] OK   acl deny C:\Program Files ((OI)(CI))
+HNH: [2026-09-02 12:43:22] OK   acl deny C:\Program Files (x86) ((OI)(CI))
+HNH: [2026-09-02 12:43:22] OK   acl deny C:\ProgramData ((OI)(CI))
+HNH: [2026-09-02 12:43:22] FAIL acl deny C:\WINDOWS\system32\config\AgentUser : 找不到路径“C:\WINDOWS\system32\config\AgentUser”，因为该路径不存在。
+HNH: [2026-09-02 12:43:22] FAIL acl deny C:\WINDOWS\system32\config\AgentUser\AppData\Roaming : 找不到路径“C:\WINDOWS\system32\config\AgentUser\AppData\Roaming”，因为该路径不存在。
+HNH: [2026-09-02 12:43:22] FAIL acl deny C:\WINDOWS\system32\config\AgentUser\AppData\Local : 找不到路径“C:\WINDOWS\system32\config\AgentUser\AppData\Local”，因为该路径不存在。
+HNH: [2026-09-02 12:43:23] OK   acl deny C:\ ()
+HNH: [2026-09-02 12:43:25] OK   registry deny HKLM:\SOFTWARE
+HNH: [2026-09-02 12:43:27] OK   registry deny Registry::HKEY_CLASSES_ROOT
+HNH: reg.exe : 错误: 另一个程序正在使用此文件，进程无法访问。
+HNH: 所在位置 C:\s4\_windows_high_nist\hardening\apply_hardening.ps1:364 字符: 5
+HNH: +     & reg.exe load "HKU\$mount" $hiveFile 2>&1 | Out-Null
+HNH: +     ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+HNH:     + CategoryInfo          : NotSpecified: (错误: 另一个程序正在使用此文件，进程无法访问。:String) [], RemoteException
+HNH:     + FullyQualifiedErrorId : NativeCommandError
+HNH:  
+HNH_EXIT=1
+HIGHNIST_APPLY_FAILED
+EXIT=1
+JOB_EXIT=1
+ERROR: high-nist probe failed (exit 1) - arm not valid (fail-closed)
+STAGE_ABORTED=all

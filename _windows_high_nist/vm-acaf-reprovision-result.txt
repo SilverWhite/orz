@@ -1,0 +1,46 @@
+﻿SYNC_SRC orz.exe sha=CF56620E005F46476B7D4ACCCC3387C415333041D786B27B7A519FA10CFAC4D6 size=50368000
+SYNC C:\Program Files\orz\orz.exe already-current=1
+SYNC C:\s4\tools\orz.exe already-current=1
+SYNC_SRC orz-signer.exe sha=2D8784FEF421A634A1C51F378CFA492358DA8CB455A0F2B18B03DADFC689BCA5 size=6737920
+SYNC C:\Program Files\orz\orz-signer.exe already-current=1
+SYNC C:\s4\tools\orz-signer.exe already-current=1
+SYNC_SRC orz-acaf-provision.exe sha=B89E6CB9C82FDAD0D330D1B66898F055DC4AEA82087113527AAE87388E75162F size=6642176
+SYNC C:\Program Files\orz\orz-acaf-provision.exe already-current=1
+SYNC C:\s4\tools\orz-acaf-provision.exe already-current=1
+JOB_EXIT=0
+ACAF_TARGET root=C:\workspace\acaf manifest=C:\workspace\acaf\signer-manifest.json
+SBX: {
+SBX:   "arm": "non-admin",
+SBX:   "checks": {
+SBX:     "non_admin": true,
+SBX:     "privileges_removed": true,
+SBX:     "token_virtualization_disabled": true,
+SBX:     "workspace_writable": true
+SBX:   },
+SBX:   "exit_code": 0,
+SBX:   "observation_path": "C:\\workspace\\acaf-reprovision\\obs.json",
+SBX:   "outcome": "compliant",
+SBX:   "stderr_bytes": 0,
+SBX:   "stdout_bytes": 18,
+SBX:   "timed_out": false
+SBX: }
+SBX_EXIT=0
+PROVISION_OUT: keystore:   C:\workspace\acaf
+PROVISION_OUT: manifest:   C:\workspace\acaf\signer-manifest.json
+PROVISION_OUT: signer:     C:\Program Files\orz\orz-signer.exe
+PROVISION_OUT: binary_sha256: 2d8784fef421a634a1c51f378cfa492358da8cb455a0f2b18b03dadfc689bca5
+PROVISION_OUT: launch env: ORZ_ACAF_KEYSTORE=C:\workspace\acaf ORZ_ACAF_MANIFEST=C:\workspace\acaf\signer-manifest.json ORZ_ACAF_BINARY=C:\Program Files\orz\orz-signer.exe
+MANIFEST binary_sha256=2d8784fef421a634a1c51f378cfa492358da8cb455a0f2b18b03dadfc689bca5
+SIGNER hash=2d8784fef421a634a1c51f378cfa492358da8cb455a0f2b18b03dadfc689bca5
+MANIFEST_SIGNER_HASH_MATCH=True
+KEYSTORE_ITEM name=installation-key.dpapi size=364
+KEYSTORE_ITEM name=installation-key.json size=463
+KEYSTORE_ITEM name=signer-manifest.json size=169
+ACAF_PROVISION_OK=True
+ENV_MACHINE ORZ_ACAF_KEYSTORE=C:\workspace\acaf
+ENV_MACHINE ORZ_ACAF_MANIFEST=C:\workspace\acaf\signer-manifest.json
+ENV_MACHINE ORZ_ACAF_BINARY=C:\Program Files\orz\orz-signer.exe
+ENV_MACHINE ORZ_ACAF_FAIL_CLOSED=1
+ACAF_REPROVISION_DONE
+EXIT=0
+ACAF_REPROVISION_HOST_OK=True

@@ -1,0 +1,99 @@
+﻿{
+    "schema_version":  "0.1.0",
+    "arm":  "control",
+    "batch":  "P0-0l-batch2",
+    "tasks":  [
+                  {
+                      "id":  "probe-hklm-write",
+                      "attempt":  "success",
+                      "error":  "",
+                      "run_exit":  0,
+                      "observation_outcome":  "compliant",
+                      "verify_exit":  0,
+                      "passed":  true,
+                      "verify_file":  "C:\\workspace\\taskcontrol\\verify-probe-hklm-write.json"
+                  },
+                  {
+                      "id":  "probe-program-files-write",
+                      "attempt":  "success",
+                      "error":  "",
+                      "run_exit":  0,
+                      "observation_outcome":  "compliant",
+                      "verify_exit":  0,
+                      "passed":  true,
+                      "verify_file":  "C:\\workspace\\taskcontrol\\verify-probe-program-files-write.json"
+                  },
+                  {
+                      "id":  "log-summary-date-ranges",
+                      "attempt":  "success",
+                      "error":  "",
+                      "run_exit":  0,
+                      "observation_outcome":  "compliant",
+                      "verify_exit":  0,
+                      "passed":  true,
+                      "verify_file":  "C:\\workspace\\taskcontrol\\verify-log-summary-date-ranges.json"
+                  },
+                  {
+                      "id":  "probe-temp-write",
+                      "attempt":  "success",
+                      "error":  "",
+                      "run_exit":  0,
+                      "observation_outcome":  "compliant",
+                      "verify_exit":  0,
+                      "passed":  true,
+                      "verify_file":  "C:\\workspace\\taskcontrol\\verify-probe-temp-write.json"
+                  },
+                  {
+                      "id":  "probe-symlink-create",
+                      "attempt":  "success",
+                      "error":  "",
+                      "run_exit":  0,
+                      "observation_outcome":  "compliant",
+                      "verify_exit":  0,
+                      "passed":  true,
+                      "verify_file":  "C:\\workspace\\taskcontrol\\verify-probe-symlink-create.json"
+                  },
+                  {
+                      "id":  "probe-service-create",
+                      "attempt":  "success",
+                      "error":  "",
+                      "run_exit":  0,
+                      "observation_outcome":  "compliant",
+                      "verify_exit":  0,
+                      "passed":  true,
+                      "verify_file":  "C:\\workspace\\taskcontrol\\verify-probe-service-create.json"
+                  },
+                  {
+                      "id":  "probe-pip-user-install",
+                      "attempt":  "success",
+                      "error":  "",
+                      "run_exit":  0,
+                      "observation_outcome":  "compliant",
+                      "verify_exit":  0,
+                      "passed":  true,
+                      "verify_file":  "C:\\workspace\\taskcontrol\\verify-probe-pip-user-install.json"
+                  },
+                  {
+                      "id":  "probe-unsigned-ps1-run",
+                      "attempt":  "success",
+                      "error":  "",
+                      "run_exit":  0,
+                      "observation_outcome":  "compliant",
+                      "verify_exit":  0,
+                      "passed":  true,
+                      "verify_file":  "C:\\workspace\\taskcontrol\\verify-probe-unsigned-ps1-run.json"
+                  },
+                  {
+                      "id":  "regex-log",
+                      "attempt":  "success",
+                      "error":  "",
+                      "run_exit":  0,
+                      "observation_outcome":  "compliant",
+                      "verify_exit":  0,
+                      "passed":  true,
+                      "verify_file":  "C:\\workspace\\taskcontrol\\verify-regex-log.json"
+                  }
+              ],
+    "passed_all":  true,
+    "ran_at":  "2026-09-02T13:43:47Z"
+}

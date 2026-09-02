@@ -1,0 +1,13 @@
+{
+  "id": "probe-hklm-write",
+  "schema_version": "0.1.0",
+  "kind": "registry-write",
+  "category": "friction-probe",
+  "title": "Friction probe: write to HKLM (SOFTWARE\\OrzS4Probe)",
+  "arm_expectations": {
+    "control": "success",
+    "non-admin": "denied",
+    "high-nist": "denied"
+  },
+  "action": "probe.py"
+}

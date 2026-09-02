@@ -1,0 +1,13 @@
+{
+  "schema_version": "0.1.0",
+  "task": "probe-unsigned-ps1-run",
+  "arm": "high-nist",
+  "expected": "blocked",
+  "observed": "blocked",
+  "checks": {
+    "attempt_matches_expectation": true,
+    "error_reported": true
+  },
+  "passed": true,
+  "ran_at": "2026-09-02T14:01:47Z"
+}

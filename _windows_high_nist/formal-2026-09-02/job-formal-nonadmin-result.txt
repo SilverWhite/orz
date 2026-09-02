@@ -1,0 +1,63 @@
+﻿===== APPLY NON-ADMIN =====
+NAH: [2026-09-02 12:40:50] === apply_hardening.ps1 Arm=non-admin Revert=False RunUser=AgentUser ===
+NAH: [2026-09-02 12:40:51] OK   local user AgentUser exists
+NAH: [2026-09-02 12:40:51] OK   reg HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System\EnableLUA = 1
+NAH: [2026-09-02 12:40:51] OK   reg HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System\ConsentPromptBehaviorAdmin = 2
+NAH: [2026-09-02 12:40:51] OK   reg HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System\PromptOnSecureDesktop = 1
+NAH: [2026-09-02 12:40:51] OK   reg HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System\EnableInstallerDetection = 1
+NAH: [2026-09-02 12:40:51] OK   reg HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System\FilterAdministratorToken = 1
+NAH: [2026-09-02 12:40:51] OK   reg HKLM:\SOFTWARE\Policies\Microsoft\Windows\Installer\EnableUserControl = 0
+NAH: [2026-09-02 12:41:40] OK   acl deny C:\WINDOWS ((OI)(CI))
+NAH: [2026-09-02 12:41:47] OK   acl deny C:\Program Files ((OI)(CI))
+NAH: [2026-09-02 12:41:47] OK   acl deny C:\Program Files (x86) ((OI)(CI))
+NAH: [2026-09-02 12:41:47] OK   acl deny C:\ProgramData ((OI)(CI))
+NAH: [2026-09-02 12:41:49] OK   acl deny C:\ ()
+NAH: [2026-09-02 12:41:52] OK   registry deny HKLM:\SOFTWARE
+NAH: [2026-09-02 12:41:52] OK   acl grant C:\workspace (Modify)
+NAH: [2026-09-02 12:41:52] OK   workspace C:\workspace ready (RunUser=M)
+NAH: [2026-09-02 12:41:52] === done (StepFailures=0) ===
+NAH: [2026-09-02 12:41:52] apply_hardening.ps1 non-admin OK
+NAH_EXIT=0
+===== NON-ADMIN PROBE =====
+NA: {
+NA:   "arm": "non-admin",
+NA:   "checks": {
+NA:     "non_admin": true,
+NA:     "privileges_removed": true,
+NA:     "token_virtualization_disabled": true,
+NA:     "workspace_writable": true
+NA:   },
+NA:   "exit_code": 0,
+NA:   "observation_path": "C:\\workspace\\non-admin\\windows-native-run-observation-non-admin.json",
+NA:   "outcome": "compliant",
+NA:   "stderr_bytes": 0,
+NA:   "stdout_bytes": 307,
+NA:   "timed_out": false
+NA: }
+NA: enforcement-probe non-admin OK — result=C:\workspace\non-admin\enforcement-probe-non-admin.json
+NA_PROBE_EXIT=0
+NA_OBS outcome=compliant exit=0
+NA_CHECK non_admin=True
+NA_CHECK privileges_removed=True
+NA_CHECK token_virtualization_disabled=True
+NA_CHECK workspace_writable=True
+{
+  "arm": "non-admin",
+  "workspace": "C:\\workspace\\non-admin",
+  "checks": {
+    "workspace_writable": true,
+    "non_admin": true,
+    "token_virtualization_disabled": true,
+    "program_files_write_blocked": true,
+    "system32_write_blocked": true,
+    "hklm_write_blocked": true,
+    "privileges_removed": true,
+    "runas_blocked": true,
+    "temp_write_succeeded": true,
+    "home_write_succeeded": true
+  },
+  "passed": 10,
+  "failed": 0,
+  "ran_at": "2026-09-02T04:41:53Z"
+}
+EXIT=0

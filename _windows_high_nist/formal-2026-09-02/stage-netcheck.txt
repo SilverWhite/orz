@@ -1,0 +1,10 @@
+﻿STAGE=netcheck
+===== JOB formal-netcheck =====
+NETCHECK_JSON=C:\workspace\netcheck\netcheck.json
+NETCHECK_PROC_COUNT=2
+NETCHECK_PORTS=7897,7899,7898,7892,7890,7891
+NETCHECK_DONE
+EXIT=0
+JOB_EXIT=0
+EVIDENCE_COPIED=D:\CLI\_windows_high_nist\formal-2026-09-02\evidence-netcheck\netcheck.json
+STAGE_DONE=netcheck

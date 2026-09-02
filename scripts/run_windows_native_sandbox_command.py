@@ -69,6 +69,16 @@ def main() -> int:
         help="Extra environment overrides (repeatable)",
     )
     parser.add_argument(
+        "--env-file",
+        type=Path,
+        default=None,
+        metavar="PATH",
+        help=(
+            "JSON object of environment overrides to inject (keeps secrets "
+            "out of argv; file is deleted after a successful read)"
+        ),
+    )
+    parser.add_argument(
         "--allowlist-ip",
         action="append",
         default=[],
@@ -93,6 +103,15 @@ def main() -> int:
         help="Do not capture child stdout/stderr",
     )
     parser.add_argument(
+        "--no-appcontainer",
+        action="store_true",
+        help=(
+            "high-nist only: keep the strict wall (non-admin + LOW IL + Job + "
+            "TEMP redirect + egress allowlist) without the AppContainer layer "
+            "(2026-09-03 ruling for orz.exe loader compatibility)"
+        ),
+    )
+    parser.add_argument(
         "--output",
         type=Path,
         default=None,
@@ -100,7 +119,24 @@ def main() -> int:
     )
     args = parser.parse_args()
 
+    if args.no_appcontainer and args.arm != "high-nist":
+        parser.error("--no-appcontainer requires --arm high-nist")
+
     env_overrides: dict[str, str] = {}
+    if args.env_file is not None:
+        try:
+            payload = json.loads(args.env_file.read_text(encoding="utf-8"))
+        except (OSError, ValueError) as exc:
+            parser.error(f"--env-file {args.env_file} unreadable/invalid: {exc}")
+        if not isinstance(payload, dict) or not all(
+            isinstance(k, str) and isinstance(v, str) for k, v in payload.items()
+        ):
+            parser.error("--env-file must map string keys to string values")
+        env_overrides.update(payload)
+        try:
+            args.env_file.unlink(missing_ok=True)
+        except OSError:
+            pass
     for item in args.env:
         if "=" not in item:
             parser.error(f"--env requires KEY=VALUE, got {item!r}")
@@ -134,6 +170,7 @@ def main() -> int:
             memory_limit_bytes=args.memory,
             allowlist_ips=args.allowlist_ip,
             capture_output=not args.no_capture,
+            appcontainer=not args.no_appcontainer,
         )
         output = args.output or (
             workspace / "windows-native-run-observation.json"

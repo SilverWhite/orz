@@ -14,10 +14,10 @@
 
 ## 未闭合扫描快照（2026-08-31 清理轮）
 
-- 未闭合总数：**28 项**（BACKLOG 计数口径，2026-08-31：阶段 3 验证闭环 38 → 32；0k S4 实机复验闭环 32 → 30；P2-11 设计轮登记不动计数；2026-09-01：P2-11 DC 强制模板轮清理闭合 30 → 29，P3「DC 硬信号 4/6」退役 29 → 28）。TODO `[ ]` 明细含父/子项，计数以 BACKLOG 为准。
+- 未闭合总数：**28 项**（BACKLOG 计数口径，2026-08-31：阶段 3 验证闭环 38 → 32；0k S4 实机复验闭环 32 → 30；P2-11 设计轮登记不动计数；2026-09-01：P2-11 DC 强制模板轮清理闭合 30 → 29，P3「DC 硬信号 4/6」退役 29 → 28；2026-09-02：P2-12 讨论稿登记不动计数，28 不变）。TODO `[ ]` 明细含父/子项，计数以 BACKLOG 为准。
 - P0：FUS-BENCHMARK-FULL-EXEC 验证②③④⑤ + 闭合（见 P0-F）；0d 后续 3/4/5 的 S4 复验（各 1，S3 已随合并批次核证闭合）；0j（W1-R1 S4 复验、W3-R3 余项×3、W4-R4 S5-2 总项 + 验证期发现）；0l（WINDOWS-HIGH-NIST-MAX-FRICTION 设计定稿、实施待放行，见 P0-0l）。
 - P1：FUS-COMPONENT-REGISTER 组件审计；GAP-WINDOWS-EVIDENCE 三项；IMPL-DEEPSEEK-TRANSPORT DeepSeek live 晋级证据；ORZ-SESSION-CONTEXT-MONITOR 四项。
-- P2：IMPL-CONTROL-FABRIC（Slice 3 / Slice 4 / 可选）；OPS-PROTOCOL（裁剪设计 + 生产接线裁决）；MODEL-RESIDUAL-PRESSURE-FOLLOWUP 四项（P2-11）。
+- P2：IMPL-CONTROL-FABRIC（Slice 3 / Slice 4 / 可选）；OPS-PROTOCOL（裁剪设计 + 生产接线裁决）；MODEL-RESIDUAL-PRESSURE-FOLLOWUP 四项（P2-11）；COMPRESSION-LINGUISTIC-FORMAL-LAYER（P2-12，2026-09-02 登记：域标注 + 失败目标聚合 + 建构暂缓，设计/实施待放行）。
 - P3：EVIDENCE-LOCAL-BROWSER、GATE-CHAIN、observed-scope 枚举、V11-IMPL-003、V11-IMPL-007、orz-host flaky（DC 硬信号已随 P2-11 退役）。
 - 审计登记边界（条件触发，不占当前优先级）：orz-host 可选后端、headless 计划信号、23 工具分区 journals、B-1 后续、ORZ-RECOVERY-TOOL-OUTCOME、ORZ-STAGNATION-TOOL-SIGNAL。
 - 已闭合分组（单行核对见下）：P0-E、0c、0d 主项与后续 1/2/6/7/8、0e、0f、0g、0h、0i、0k、P0-B、P0-C、P0-C2、P0-D、P1 已闭合项、P2-10 全部闭合。
@@ -172,14 +172,72 @@
     回退 / session0 桌面 ACL / AppContainer TEMP+LOW+包目录 / run-user
     NTUSER.DAT 冻结 / 探针宿主 Python 化），案例库新增 6 篇 ORZ-WIN-*
     （进度见 `_windows_high_nist/S4_PROGRESS_2026-09-02.md`）。
-- [ ] ③ 三臂正式序列固化（control 基线快照 → non-admin → high-nist
-  模板切换重跑 enforcement-probe 先验墙；2026-09-02 已单轮全 PASS）。
-- [ ] ④ 任务集（首批 2 摩擦探针 + 1 真实任务 log-summary-date-ranges
-  + verifier）→ control 臂基线（k=1）。
-- [ ] ⑤ high-nist 小批 → 设计 §7 判据逐项核对。
-- [ ] ⑥ 全量 + 记账 + 缺口判定登记 BACKLOG。
+- [x] ③ 三臂正式序列固化（2026-09-02 闭环：control 基线快照 2/2 /
+  non-admin 10/10 / high-nist 19/19（AppLocker 恢复）全 PASS；修复驱动
+  输出流误判、apply_hardening Get-ProtectedPaths SYSTEM profile 根、
+  sandbox LoadUserProfileW 缺 UnloadUserProfileW；证据
+  `_windows_high_nist/formal-2026-09-02/`，详见
+  S4_PROGRESS_2026-09-02.md §10）。
+- [x] ④ 任务集（首批 2 摩擦探针 + 1 真实任务 log-summary-date-ranges
+  + verifier）→ control 臂基线（k=1）——2026-09-02 闭环：3/3
+  attempt=success、observation=compliant、verifier 全 PASS，证据
+  `_windows_high_nist/formal-2026-09-02/evidence-task-control/`；
+  模型侧 agent k=1 依赖 ⑦ 网络/凭据后与 ⑤ 合并。详见
+  S4_PROGRESS_2026-09-02.md §11。
+- [x] ⑤ high-nist 小批（2026-09-02 机器侧闭环：驱动新增 tasknonadmin /
+  taskhighnist 自包含 stage——基线恢复 + 模板加固 + 墙探针先验 + 任务批
+  按臂落盘；high-nist 臂 3/3：墙探针 19/19、两个写探针 attempt=denied
+  （WinError 5）、真实任务 success、verifier 全 PASS，证据
+  `evidence-task-high-nist/`）。§7 判据 1/6 探针层核对完成；事件面判据
+  （err 升压 / slow-stall / LIF / 降级链 / 假成功-事件面）依赖 agent
+  k=1，并入 ⑦ 网络/凭据后与模型侧合并执行。详见
+  S4_PROGRESS_2026-09-02.md §12。
+- [ ] ⑥ 全量 + 记账（2026-09-02 口径：任务执行=control + high-nist
+  双臂、不做 non-admin 任务消融——用户裁决，见 BACKLOG 0l / 设计
+  §6/§10；主体=§6 剩余摩擦探针/真实任务移植 + high-nist 主载跑批 k=1 +
+  记账；**⑥.1 机器侧 batch-2 已闭环（2026-09-02）**——control 9/9
+  success、high-nist 9/9（denied×4 / blocked×2 / success×3），证据与
+  缺口见 S4_PROGRESS §14；网络/Defender 长构建轴记账归 ⑦（Clash 网络 +
+  模型侧 slow/stall），agent 侧 §7 事件面判据随 ⑦ 执行；整体勾选待 ⑦
+  合并收口）。
+  - [x] ⑥.1 batch-2 任务集移植 + verifier/runner/驱动扩展 + 双臂机器侧
+    跑批（2026-09-02 闭环：6 新任务——probe-temp-write /
+    probe-symlink-create / probe-service-create /
+    probe-pip-user-install / probe-unsigned-ps1-run / regex-log，
+    manifest 累计 9、batch `P0-0l-batch2`；control + high-nist 全
+    PASS，见 S4_PROGRESS §14）。
 - [ ] ⑦ 收尾：AppLocker 恢复复验、DeepSeek 凭据 CredRead 验证、临时
-  任务/累积 ACE/旧目录清理、Clash 网络导入。
+  任务/累积 ACE/旧目录清理、Clash 网络导入；补模型侧 §7 事件面判据
+  （agent k=1，依赖网络/凭据重录）与 LoadUserProfileW 5023 候选修复
+  （apply 后 hive 释放窗口，归 ⑦）。
+  - [x] ⑦ 网络/凭据/收尾子项（2026-09-02 深夜闭环）：Clash 7897
+    本地端口与经代理出站连通验证通过（netcheck）；AgentUser 凭据
+    CredReadW non-admin 可读 / high-nist AppContainer WinError 5
+    （摩擦点 #8，登记为 agent 轮凭据注入前置缺口）；驱动
+    `-CheckpointName`（wrapup/网络轮默认 `S4-BASE-NET-2026-09-02`）；
+    AppLocker 复验 Enabled + 4 规则、enforcement-probe 19/19 ×2；
+    5023 候选修复（apply hive settle + sandbox 重试 + SYSTEM 就绪门 +
+    `UnloadUserProfileW`→`UnloadUserProfile` 符号修复）并登记残余
+    in-sandbox 5023 缺口；清理 10 个残留 AppContainer 包目录/工作区，
+    无残留任务与进程。证据 `evidence-netcheck/` + `evidence-wrapup/`
+    （S4_PROGRESS §15）。
+  - [ ] ⑦ 模型侧 §7 事件面判据（agent k=1；2026-09-03 前置收敛：
+    Clash 常驻/自启退役——用户裁决 VM 内不上网，DeepSeek 直连恒放行，
+    NET 快照仅作维护用；AppContainer 凭据注入已闭环——orz Windows env
+    通道 + 沙箱 `--env-file` + 实机链路证据
+    `evidence-cred-inject/`，S4_PROGRESS §16。**2026-09-03：Windows
+    orz.exe 已重建并同步（CF5662...CFAC4D6，旧二进制备份于
+    `_windows_high_nist/backup/`）；agent stage 接线完成——新客机
+    runner `_windows_high_nist/run/run_agent_arm.ps1` + 驱动
+    `agentcontrol`/`agenthighnist` stage，bootstrap 取凭据 +
+    `--env-file` 注入 + allowlist 221.204.163.76 已并入（未跑批，
+    S4_PROGRESS §16.7）；**2026-09-03 执行前必做项闭环**——桥 op
+    `vm-agent` live 执行路径（host `scripts/s4_vm_agent_run.ps1`）、
+    worker restart、sync 全绿、VM 内 DryRun chunk1 通过（3 题/逐题
+    timeout/env-file/allowlist 全对）；TB2.1 最新错题集 9 题资产树
+    `_windows_high_nist/agent-tasks-tb2.1/` + 3 题/批口径（chunk1-3，
+    S4_PROGRESS §16.8）；runner 修 1 项变量遮蔽（大小写不敏感参数覆盖）。
+    真跑待放行**。
 
 ### P0-B FUS-RETRIEVAL-MECH（`implemented`；批次 1-6 全部闭合 2026-08-14，保留供核对）
 
@@ -223,11 +281,11 @@
   - 成熟复用评估（2026-08-16，只读）：部分——DeepSeek 官方 API/文档为成熟参照；主要工作是证据收集而非实现复用。
 - 入口：[ADR-0007](adr/ADR-0007-transport-retry-policy.md) / [DEEPSEEK_ADAPTER_CONTRACT](architecture/DEEPSEEK_ADAPTER_CONTRACT_v0.1.md)。
 
-### ORZ-CACHE-CONTEXT-COST（`approved`；2026-08-15 三项全部闭合）
+### ORZ-CACHE-CONTEXT-COST（`implemented`；2026-08-15 三项全部闭合）
 
 - [x] 全部闭合：`request_header_change` 请求头留痕 + 探针准确性审计（翻转↔header 交叉核对）+ 单轮工具结果注入预算（默认 50K、超限拒批 + offset 续读）与策略化读取；orz-loop 337 / Python 1888+14 skipped / 仓库门禁 valid。入口：ADR-0010 §14.9 / [探针设计](docs/TOOL_AVAILABILITY_PROBE_DESIGN_2026-08-13.md) / [审计](docs/audits/GAP_CACHE_CONTEXT_COST_IMPL_AUDIT_2026-08-15.md)。
 
-### ORZ-ORIENTATION-FORCED-TEMPLATE（`implemented`；2026-08-15 闭合）
+### ORZ-ORIENTATION-FORCED-TEMPLATE（`implemented`；2026-08-15 闭合；2026-09-01 退役）
 
 - [x] 全部闭合：ADR-0010 §4.2 正文修订 + 强制模板轮实现（无工具 checkpoint 轮、模板校验、一次重填 + 降级兜底、pending 单槽、主车道）+ 缓解必做（progress_evidence 交叉校验 + 缺失面）+ v0.2 `checkpoint_response` 事件（Schema/verifier/fixtures）+ 二次审查修复；orz-loop 333 / Python runtime 264。入口：[设计](docs/ORIENTATION_FORCED_TEMPLATE_DESIGN_2026-08-14.md) / ADR-0010 §14.13 / [审计](docs/audits/GAP_ORIENTATION_FORCED_TEMPLATE_IMPL_AUDIT_2026-08-15.md) / BACKLOG 6c。
 
@@ -244,7 +302,7 @@
   - 成熟复用评估（2026-08-16，只读）：无——自有测试/审计工作。
 - 入口：[设计](docs/SESSION_CONTEXT_MONITOR_DESIGN_2026-08-14.md) / ADR-0010 §14.13/§14.18 / BACKLOG 6d。
 
-### ORZ-BLACKBOARD-PLAN-EPOCH（`implemented`；S1-S7 全部闭合，2026-08-14/15）
+### ORZ-BLACKBOARD-PLAN-EPOCH（`implemented`；S1-S7 全部闭合，2026-08-14/15；2026-09-03 退役标注：生产语义被会话作用域黑板取代，`--plan` 诊断保留）
 
 - [x] 全部闭合：plan epoch 身份与批准事件 / 原子轮换与归档（.gsa/blackboard）/ 压缩解耦 / 跨 epoch 回查 / 测试审计 + S6/S7 复查补强（epoch 时间戳单调、归档写盘原子化、epoch_archive_write_failed 事件）。入口：[设计](docs/BLACKBOARD_PLAN_EPOCH_DESIGN_2026-08-14.md) / ADR-0010 §14.15 / [审计](docs/audits/GAP_BLACKBOARD_PLAN_EPOCH_IMPL_AUDIT_2026-08-14.md) / BACKLOG 6e。
 
@@ -325,6 +383,93 @@
   10 题）——2026-08-31 裁决。
 - [x] search_replace 锚点 / submit 两阶段维持现状（0 拒单 / 8 次全通，优化收益
   不足）——2026-08-31 裁决。
+
+### COMPRESSION-LINGUISTIC-FORMAL-LAYER（P2；2026-09-02 讨论稿登记，BACKLOG P2-12）
+
+> 排期：讨论稿（reference 路由）→ 转正式设计（域标注 + F4 失败目标聚合，更新
+> CONTEXT_COMPACTION_DESIGN 注意事项槽渲染语义）→ 用户裁决 → 实施放行。入口：
+> [讨论稿](docs/COMPRESSION_LINGUISTIC_FORMAL_LAYER_DISCUSSION_2026-09-02.md)
+> （§3/§6 收口）/ [BACKLOG P2-12](docs/BACKLOG_AND_PRIORITIES.md) /
+> [S1/S2 实施记录](docs/audits/P2-12_COMPRESSION_LINGUISTIC_FORMAL_LAYER_S1S2_IMPL_2026-09-02.md)。
+
+- [ ] 域作为压缩参考（方案 A，2026-09-02 定案口径）：聚合行键 = F4 身份 (kind, id)
+  + epoch 内累计 + 跨 marker 去重顺带解决；域不参与行键、降级为行内序列标注（切换
+  中间部分天然吸收）；错误码行内集合（全留/不留）；相对 run 起点墙钟首末时间；不
+  携带日志级明细；聚合状态归黑板（epoch 作用域、随黑板轮换自然重置）；域标注 =
+  写时盖章（按事件所属决策轮）+ 域段书签归并。设计轮前置条件已闭合（2026-09-02）；
+  **S1/S2 已实施 + 全面审查处理（2026-09-02：`failure_agg` 黑板分区 +
+  快照/恢复/轮换重置 + 三处 F4 失败写时盖章 + 注意事项槽渲染替换 exec 错误
+  窗口；审查处理 = 溢出指针可回查修复（被 3K 槽挤出的聚合行随压缩摘要存档
+  补全段保存）、错误码可复核口径与跨 run 时间轴边界登记、文档修正；orz-loop
+  654 passed / 0 failed）**；S3 重建完成（2026-09-02：Linux musl 三件套 21:13
+  HKT，orz 106,926,480 B / orz-signer 1,390,376 B / orz-acaf-provision
+  1,208,232 B；musl 静态无 PT_INTERP、P2-12 接线符号命中（failure_agg ×43 /
+  failure_target ×17）、bookworm 冒烟三件加载执行通过；对应源码 orz f0eeb524
+  + 工作树 P2-12 未提交改动，日志 D:\tb-eval\orz-linux\build-20260902.log，
+  见 BACKLOG P2-12）；S4 实机复验与 ADR-0010 转录待续。
+  审查处理见
+  [审查处理记录](docs/audits/P2-12_COMPRESSION_LINGUISTIC_FORMAL_LAYER_REVIEW_HANDLING_2026-09-02.md)。
+- [ ] 失败目标聚合进注意事项槽：F4 聚合行渲染替换「最近 5 条截断错误」窗口语义；
+  实施时提为独立设计条目走排期（设计定稿 + 用户裁决后实施）。**S1/S2 渲染改造已
+  随上条一并实施（2026-09-02）**；设计投影更新见
+  `CONTEXT_COMPACTION_DESIGN_2026-08-14.md` §4.4.4，ADR-0010 转录待实施闭合时登记。
+- [ ] §5 离线验证切片（BACKLOG P2-12 第 5 项，随 P2-12 放行后单独排期，未排期）：
+  先验已实施部分（F4 失败目标聚合）——虚拟压缩点回放覆盖率 + 「概括」正确性
+  （digest 计数 / 首末时间 / 错误码集合对账；错误码对账首选验证器复刻
+  ToolErrorKind→code 映射、次选 schema-first 补事件结构化 code）；开放锚点覆盖率
+  待 Centering 方向实施后再并入。见 [BACKLOG P2-12](docs/BACKLOG_AND_PRIORITIES.md)。
+- [x] S1/S2 全面审查处理（2026-09-02）：溢出指针回查修复（存档补全段）+
+  host 错误码可复核口径登记 + 跨 run 时间轴边界登记 + §4.4.1/§4.4.4 措辞
+  修正——完成并测试全绿（654 passed / 0 failed / 3 ignored）。
+
+### BLACKBOARD-CONVERSATION-SCOPE-FOLD（P2；2026-09-03 设计定稿 + ADR-0010 §14.52 转录；实施待放行，BACKLOG P2-13）
+
+> 排期：初版设计稿 → 开放问题裁决 → 设计定稿（已完成）→ 实施放行。入口：
+> [设计稿（v0.8 定稿）](docs/BLACKBOARD_CONVERSATION_SCOPE_FOLD_DESIGN_2026-09-03.md)
+> / [BACKLOG P2-13](docs/BACKLOG_AND_PRIORITIES.md)。
+
+- [x] 开放问题裁决（2026-09-03 v0.5：R1–R6 全部收口，见设计稿 §12；
+  会话锚点是否新建维持开放（默认不建，不阻断）；体验项 E11 不阻断）。
+- [x] 方案 A/B 主线裁决（2026-09-03：B 定为主线，黑板彻底不做存储压缩，
+  A 冻结为对比档案）。
+- [x] 参数直觉定档（2026-09-03 v0.4：W=512K / T=64K / K=10 / 展开下限 20% /
+  疲劳档 50/70/90%，可 env 覆盖）。
+- [x] W 口径收口（2026-09-03 v0.6：只计域折叠记录分区；512K 字符 ≈
+  256K token，大于 192K token 压缩窗口；70% 建议加会话压缩 ≥2 门槛）。
+- [x] W 改存储字节口径（2026-09-03 v0.7：10 MiB 紧凑 JSON；疲劳 50/70/90%
+  ≈ 5/7/9 MiB；T=64K 字符渲染口径分列；env
+  ORZ_BLACKBOARD_LIVE_BUDGET_BYTES）。
+- [x] 评估复核（2026-09-03 v0.8：复杂度/压缩关系为未证实直觉，不作 W
+  论证依据；W 依存储成本 + 寿命软上限；E12 不做弱保软；遥测路径登记
+  于设计稿 §13.3）。
+- [x] 设计定稿 + ADR/索引登记（2026-09-03：ADR-0010 §14.52 转录；
+  CLI_PROJECT_INDEX 新增 AUTH/FUS-BLACKBOARD-CONVERSATION-FOLD；
+  plan-epoch 系列（AUTH/FUS-BLACKBOARD-PLAN-EPOCH、BACKLOG 6e、旧设计
+  文档）标注退役，`--plan` 诊断保留）。
+
+实施分四批（2026-09-03 用户确认：分开做、不细化）：
+
+- [x] **B1 会话化基础**：记录写时 (round, domain) 结构化盖章（ExecEntry
+  等）+ 会话级 live 黑板持久化 / conversation-relative 轴（ACP 每 prompt
+  续载、轮号与域机器续接、temporal/failure_agg 原点迁移；CLI 单 run 不变）。
+  **S1/S2 完成（2026-09-03）**：ExecSection 行结构化 `ExecEntry{text,
+  round, domain, ts}`（旧字符串 serde 兼容）；edits / tool_actions /
+  actions receipts / 检索分区写时盖 (round, domain) 章；会话侧车续接包
+  = 对话 + 黑板 live 视图 + LIF 会话轴快照（round/域机器/spike 时间线），
+  ACP 每 prompt 续载、失败 run 不写回；temporal `t` 以会话起始墙钟为轴
+  （跨 prompt 单调）；依赖图保持 live-only 不落侧车；CLI 单 run 行为
+  不变。S2 全串行绿：orz-loop 657 / orz-assurance 201+9 / orz-host 242
+  / orz-bin 53（orz-host 并行仅预存 flake
+  `call_tool_timeout_kills_process_tree`，串行通过）；fmt/clippy 无新增。
+  实施记录见
+  [B1 实施审计](docs/audits/P2-13_B1_CONVERSATION_BASE_IMPL_AUDIT_2026-09-03.md)。
+- [ ] **B2 渲染折叠**：blackboard_read 折叠态渲染（默认展开 = 当前域段 ∪
+  最近 K 轮 ∪ 最近 20% 行）、展开参数 domain + round_from/round_to、
+  分区渲染 cap（edits/tool_actions 补齐）、pre-stamp 段。
+- [ ] **B3 契约与收尾**：空槽「（无）」、用户侧疲劳提醒、存档单包 gzip +
+  `session_archive` 事件、plan-epoch 生产面退役清理（`--plan` 保留）。
+- [ ] **B4 验证**：S3 重建 + S4 复验（web 通道 A/B、折叠态读取与展开、
+  恢复、长会话遥测）。
 
 ## P3 — 收尾 / 清理
 

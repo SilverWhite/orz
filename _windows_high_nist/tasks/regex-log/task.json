@@ -1,0 +1,14 @@
+{
+  "id": "regex-log",
+  "schema_version": "0.1.0",
+  "kind": "real-task-regex",
+  "category": "real-task",
+  "title": "Real task: regex-log (Windows port)",
+  "arm_expectations": {
+    "control": "success",
+    "non-admin": "success",
+    "high-nist": "success"
+  },
+  "action": "probe.py",
+  "environment_seed": "generate_logs.py"
+}

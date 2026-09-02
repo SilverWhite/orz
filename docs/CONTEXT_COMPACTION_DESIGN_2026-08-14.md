@@ -133,11 +133,19 @@
 > `render_facts_notes` 聚合 + `run_template_compact` 接线，S2 summary
 > 单测 6 项 + 压缩 e2e 1 项 + 空态 e2e 断言；orz-loop 473 通过 / 0 失败、
 > clippy 与基线一致；S3 Linux musl 重建与 S4 命中复验待验证）。
+> P2-12（2026-09-02）：注意事项槽渲染语义升级——F4 失败目标聚合替换
+> 「exec 错误最近 5 条」窗口，见 §4.4.4（BACKLOG P2-12 / 讨论稿
+> `COMPRESSION_LINGUISTIC_FORMAL_LAYER_DISCUSSION_2026-09-02.md` §3）。
 > 范围遵守用户既有边界：助理层不做任何动作、不调用模型、不做语义理解；
 > 只把已经结构化登记的事实机械聚合进「注意事项」槽；「后续衔接」槽
 > **不交助理层**。
 
 #### 4.4.1 注意事项槽（助理层唯一新增输出）
+
+> ⚠ 本节第 2 数据源与排序已随 P2-12 方案 A 修订（2026-09-02）：exec
+> 错误「最近 5 条截断」窗口 → F4 失败目标聚合行，排序改为「计划面 →
+> 失败目标 → 动作失败」；§4.4.1/§4.4.3 正文保留为历史原文，现行语义见
+> §4.4.4。
 
 - 数据源（全部为 controller 已机械写入的结构化记录，单一写者、零模型参与）：
   - `plan.steps`：`Failed(receipt_id)` / `Blocked` 的步骤（step id + 目标 +
@@ -180,6 +188,44 @@
 - 实施路由：S1 代码（`summary.rs` 聚合函数 + `run_template_compact` 接线）
   ✅ 闭合（2026-08-19）→ S2 测试 ✅ 闭合（2026-08-19）→ S3 重建
   ⬜ 待验证 → S4 命中复验 ⬜ 待验证；登记于 BACKLOG 0c / TODO P0-0c。
+
+#### 4.4.4 P2-12 修订：失败目标聚合替换 exec 错误窗口（2026-09-02）
+
+> 登记：BACKLOG P2-12 / TODO P2-12 / 讨论稿
+> `COMPRESSION_LINGUISTIC_FORMAL_LAYER_DISCUSSION_2026-09-02.md` §3（方案 A）。
+> 实施：S1（聚合分区 + 写时盖章 + 渲染替换）+ S2 测试已闭合（2026-09-02，
+> orz-loop 654 passed / 0 failed，含审查处理补测）；S3 重建 / S4 实机复验
+> 待放行。审查处理（2026-09-02）见
+> `audits/P2-12_COMPRESSION_LINGUISTIC_FORMAL_LAYER_REVIEW_HANDLING_2026-09-02.md`。
+
+- 「注意事项」槽第 2 数据源由 `exec.errors`「最近 5 条、每条截断 ~200 字符」
+  改为 **F4 失败目标聚合行**（替换窗口语义）：行键 = F4 身份 (kind, id)；
+  同一目标按事件计数 N（同轮失败多次计 N 但只一行）；行内错误码集合
+  `[timeout×3, deny×2]`（结构化码全留/不留，无中间档；超 3K 槽上限走既有
+  截断 + 指针）；首末相对 run 起点墙钟秒（与 temporal `t` 同刻度）；行内
+  域序列标注（写时盖章 + 同域并入/异域开段，如
+  `normal(r10–12)→pressure(r13)`）。
+- 聚合状态归黑板 `failure_agg` 分区（P2-12 定案：聚合状态归黑板）：epoch
+  作用域——随 EpochSnapshot 归档/恢复、随 plan epoch 轮换重置（与
+  exec/actions 同纪律）；非 `blackboard_read` 查询分区，PULL 面与模型可见
+  面零新增；域序列本身不写 marker（纯 PULL 维持）。
+- 行键不含域（方案 A）：域切换中间部分的判定误差被行内段序天然吸收，
+  flicker 不再拆行（「跨域不合并」已撤销）。
+- exec 分区原文不再复制进槽（压缩不携带日志级明细）；回查入口 =
+  `blackboard_read` exec 分区（live / epoch 归档）+ journal（exec 原文
+  不进摘要存档——2026-09-02 审查修正措辞）。
+- 溢出补全（2026-09-02 审查处理）：`failure_agg` 不是 `blackboard_read`
+  查询分区，聚合行溢出 3K 槽被挤出时，普通回查入口取不到——被挤出行随
+  压缩摘要存档以「失败目标聚合（注意事项槽 3K 溢出补全）」段保存（marker
+  不变、仍 ≤3K）；「其余 N 条见 … 摘要存档」指针因此保持可回查、不误导。
+- 已知边界（2026-09-02 审查登记）：聚合行内 t/轮号为 run 作用域
+  （run-relative LIF 原点）；段轮区间 = 该目标在该域的失败事件首末轮
+  （非域整体驻留区间，隔空同域合并保留时间轴近似）。当前接线（CLI 新
+  plan_id 轮换清空 / ACP 每 prompt 重建黑板）不产生跨 run 混轴，登记为
+  边界不动作。
+- 本节取代 §4.4.1 第 2 数据源、「排序=计划面 → 执行错误 → 动作失败」的
+  执行错误段、§4.4.3 的 exec 单条截断与「同 epoch 多次压缩 exec 错误跨
+  marker 重复」边界（行键即去重键，跨 marker 重复顺带消除）。
 
 ## 5. 回查清单 marker（滚动单 marker）
 

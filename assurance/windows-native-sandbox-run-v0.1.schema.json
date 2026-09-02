@@ -36,6 +36,7 @@
     "observation_id": { "type": "string", "pattern": "^WNR-[A-Z0-9._-]+$" },
     "created_at": { "type": "string", "format": "date-time" },
     "arm": { "enum": ["control", "non-admin", "high-nist"] },
+    "appcontainer_mode": { "enum": ["enabled", "disabled"] },
     "profile_sha256": { "$ref": "#/$defs/sha256" },
     "workspace_path_sha256": { "$ref": "#/$defs/sha256" },
     "command_sha256": { "$ref": "#/$defs/sha256" },
@@ -193,7 +194,20 @@
       }
     },
     {
-      "if": { "properties": { "arm": { "const": "high-nist" } }, "required": ["arm"] },
+      "if": {
+        "allOf": [
+          {
+            "properties": { "arm": { "const": "high-nist" } },
+            "required": ["arm"]
+          },
+          {
+            "not": {
+              "required": ["appcontainer_mode"],
+              "properties": { "appcontainer_mode": { "const": "disabled" } }
+            }
+          }
+        ]
+      },
       "then": {
         "properties": {
           "checks": {
@@ -204,6 +218,30 @@
               "privileges_removed",
               "low_integrity",
               "appcontainer_token",
+              "temp_redirected",
+              "job_object_assigned"
+            ]
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "arm": { "const": "high-nist" },
+          "appcontainer_mode": { "const": "disabled" }
+        },
+        "required": ["arm", "appcontainer_mode"]
+      },
+      "then": {
+        "properties": {
+          "checks": {
+            "required": [
+              "workspace_writable",
+              "non_admin",
+              "token_virtualization_disabled",
+              "privileges_removed",
+              "low_integrity",
               "temp_redirected",
               "job_object_assigned"
             ]
@@ -248,11 +286,21 @@
     },
     {
       "if": {
-        "properties": {
-          "arm": { "const": "high-nist" },
-          "outcome": { "const": "compliant" }
-        },
-        "required": ["arm", "outcome"]
+        "allOf": [
+          {
+            "properties": {
+              "arm": { "const": "high-nist" },
+              "outcome": { "const": "compliant" }
+            },
+            "required": ["arm", "outcome"]
+          },
+          {
+            "not": {
+              "required": ["appcontainer_mode"],
+              "properties": { "appcontainer_mode": { "const": "disabled" } }
+            }
+          }
+        ]
       },
       "then": {
         "properties": {
@@ -264,6 +312,34 @@
               "privileges_removed": { "const": true },
               "low_integrity": { "const": true },
               "appcontainer_token": { "const": true },
+              "temp_redirected": { "const": true },
+              "job_object_assigned": { "const": true }
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "arm": { "const": "high-nist" },
+          "appcontainer_mode": { "const": "disabled" },
+          "outcome": { "const": "compliant" }
+        },
+        "required": ["arm", "appcontainer_mode", "outcome"]
+      },
+      "then": {
+        "properties": {
+          "token": {
+            "properties": { "appcontainer": { "const": false } }
+          },
+          "checks": {
+            "properties": {
+              "workspace_writable": { "const": true },
+              "non_admin": { "const": true },
+              "token_virtualization_disabled": { "const": true },
+              "privileges_removed": { "const": true },
+              "low_integrity": { "const": true },
               "temp_redirected": { "const": true },
               "job_object_assigned": { "const": true }
             }

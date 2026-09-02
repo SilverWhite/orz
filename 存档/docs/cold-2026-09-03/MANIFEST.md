@@ -1,0 +1,12 @@
+# 冷文件移档清单（2026-09-03 瘦身轮）
+
+以下文件在 2026-09-03 前位于 `docs/` 根目录，经仓库级引用扫描确认无任何当前文档/代码引用（仅 2026-08-09 全量索引快照有历史路由文本），且文件内部无相对 Markdown 链接。为保持 `docs/` 目录只承载可召回材料，本批移入本目录。
+
+| 原文件 | 内容 | 历史路由 |
+|---|---|---|
+| [`D3_22_FINDING_PERMISSION_SEPARATION_DECISION_2026-07-31.md`](D3_22_FINDING_PERMISSION_SEPARATION_DECISION_2026-07-31.md) | D3.22 权限分离判定（ADR-0010 前决策输入） | [`CLI_PROJECT_INDEX_FULL_2026-08-09.md`](../../index/CLI_PROJECT_INDEX_FULL_2026-08-09.md) |
+| [`GROK_0_2_112_UPGRADE_VALUE_BREAKDOWN_2026-07-30.md`](GROK_0_2_112_UPGRADE_VALUE_BREAKDOWN_2026-07-30.md) | Grok 0.2.112 升级价值拆解（候选评估材料） | [`CLI_PROJECT_INDEX_FULL_2026-08-09.md`](../../index/CLI_PROJECT_INDEX_FULL_2026-08-09.md) |
+| [`JOB_OBJECT_CONTAINMENT_SUFFICIENCY_JUDGMENT_2026-07-31.md`](JOB_OBJECT_CONTAINMENT_SUFFICIENCY_JUDGMENT_2026-07-31.md) | Job Object 容纳充分性判定（ADR-0010 前审计输入） | [`CLI_PROJECT_INDEX_FULL_2026-08-09.md`](../../index/CLI_PROJECT_INDEX_FULL_2026-08-09.md) |
+| [`RUNTIME_FIRST_FOLLOWUP_ALIGNMENT_2026-07-30.md`](RUNTIME_FIRST_FOLLOWUP_ALIGNMENT_2026-07-30.md) | runtime-first 后续对齐（ADR-0010 前决策输入） | [`CLI_PROJECT_INDEX_FULL_2026-08-09.md`](../../index/CLI_PROJECT_INDEX_FULL_2026-08-09.md) |
+
+本目录内容只作历史回溯，不独立产生当前需求；移档前版本可从 git 历史恢复。

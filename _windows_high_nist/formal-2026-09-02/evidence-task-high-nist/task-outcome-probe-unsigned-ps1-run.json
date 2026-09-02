@@ -1,0 +1,10 @@
+{
+  "schema_version": "0.1.0",
+  "task": "probe-unsigned-ps1-run",
+  "arm": "high-nist",
+  "attempt": "blocked",
+  "error": "ps rc=0xC0000142 (STATUS_DLL_INIT_FAILED)",
+  "artifact": "",
+  "extra": {},
+  "ran_at": "2026-09-02T14:01:46Z"
+}

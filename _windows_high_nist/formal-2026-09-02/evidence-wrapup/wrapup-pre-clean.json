@@ -1,0 +1,27 @@
+﻿{
+    "ran_at":  "2026-09-02T15:46:39Z",
+    "tasks_removed":  [
+
+                      ],
+    "procs_killed":  [
+
+                     ],
+    "dirs_removed":  [
+                         "C:\\Users\\AgentUser\\AppData\\Local\\Packages\\p2_native_run_048d34622e0445ac",
+                         "C:\\Users\\AgentUser\\AppData\\Local\\Packages\\p2_native_run_04ec36560c77400e",
+                         "C:\\Users\\AgentUser\\AppData\\Local\\Packages\\p2_native_run_3b401afcdcb4487b",
+                         "C:\\Users\\AgentUser\\AppData\\Local\\Packages\\p2_native_run_54b6b15ff0dd4d1d",
+                         "C:\\Users\\AgentUser\\AppData\\Local\\Packages\\p2_native_run_6175afa31fd540da",
+                         "C:\\Users\\AgentUser\\AppData\\Local\\Packages\\p2_native_run_6e1f9550c7fc4d81",
+                         "C:\\Users\\AgentUser\\AppData\\Local\\Packages\\p2_native_run_774fba256f4d4630",
+                         "C:\\Users\\AgentUser\\AppData\\Local\\Packages\\p2_native_run_77851463615640d9",
+                         "C:\\Users\\AgentUser\\AppData\\Local\\Packages\\p2_native_run_d221a2e02b274fb9",
+                         "C:\\Users\\AgentUser\\AppData\\Local\\Packages\\p2_native_run_e06c79c175584890"
+                     ],
+    "workspace_reset":  true,
+    "hive_mounted_pre":  false,
+    "hive_locked_pre":  false,
+    "errors":  [
+
+               ]
+}

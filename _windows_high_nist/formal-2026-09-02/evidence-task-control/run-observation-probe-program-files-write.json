@@ -1,0 +1,69 @@
+{
+  "appcontainer": {
+    "capabilities": [],
+    "profile_created": false,
+    "profile_deleted": false,
+    "sid_derived": false
+  },
+  "arm": "control",
+  "checks": {
+    "workspace_writable": true
+  },
+  "command": "python.exe C:\\workspace\\taskcontrol\\task-probe-program-files-write\\probe.py -Arm control -Workdir C:\\workspace\\taskcontrol\\task-probe-program-files-write -OutcomePath C:\\workspace\\taskcontrol\\task-probe-program-files-write\\outcome.json",
+  "command_sha256": "9eeb283f0e7a90ab837feae9e12fbb803e8a1fb1e7649c92c6c9b95032821148",
+  "created_at": "2026-09-02T13:43:36.474948Z",
+  "cwd": "C:\\workspace\\taskcontrol\\task-probe-program-files-write",
+  "diagnostics": [],
+  "env_overrides": {},
+  "evidence_status": "observed",
+  "firewall": {
+    "allowlist_ips": [],
+    "diagnostic": "not attempted",
+    "outbound_block_rule_created": false,
+    "rule_name": ""
+  },
+  "job_object": {
+    "active_process_limit": 64,
+    "assigned": true,
+    "created": true,
+    "creation_time_assignment": true,
+    "kill_on_close": true,
+    "memory_limit_bytes": 268435456
+  },
+  "limitations": [
+    "Run observation covers spawn-time facts only (token/IL/AppContainer/Job/TEMP redirect).  Behavioral wall assertions (System32/Program Files/HKLM/home/network) are performed by enforcement_probe.ps1 inside this environment.",
+    "CreateProcessAsUserW requires administrator elevation for restricted-token spawns; degraded current-token spawns are fail-closed (outcome=noncompliant).",
+    "AppContainer alone does not block raw TCP outbound on some Windows builds; network isolation relies on the host firewall wall (hardening script blockoutbound default + per-task allowlist)."
+  ],
+  "observation_id": "WNR-D5538D82ED3D49D0AD0C866D59B5EC0A",
+  "observation_kind": "windows_native_sandbox_run_observation",
+  "outcome": "compliant",
+  "output": {
+    "stderr_bytes": 0,
+    "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "stdout_bytes": 68,
+    "stdout_sha256": "6c910736cc9878bd2ceb309c576af14fd562f8ea62604a5dc9897033906d11fc"
+  },
+  "process": {
+    "cancellation_method": null,
+    "exit_code": 0,
+    "pid": 2816,
+    "shell_used": false,
+    "timed_out": false
+  },
+  "profile_sha256": "46d588d3e05fd65028a84d14857d3b2494652f4cc2098bae939a2de484f1f93f",
+  "schema_version": "0.1.0-draft",
+  "temp_redirect": {
+    "temp_env": "C:\\WINDOWS\\TEMP",
+    "tmp_env": "C:\\WINDOWS\\TEMP",
+    "workspace_tmp": "C:\\workspace\\taskcontrol\\task-probe-program-files-write\\.tmp"
+  },
+  "token": {
+    "appcontainer": false,
+    "low_integrity": false,
+    "privileges_removed": false,
+    "restricted": false,
+    "virtualization_allowed": true
+  },
+  "workspace_path_sha256": "720217748a1b5653915a0b19f0e5b49b759ede7d32c18bcb501f9f144e7ec396"
+}

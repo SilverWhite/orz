@@ -1,0 +1,58 @@
+﻿===== STEP 1: SYSTEM write + readback (LocalMachine persist) =====
+SYS: SYS_RESULT {"target": "s4-lm-visibility-test", "write_ok": true, "write_err": 0, "read_ok": true, "read_err": 0, "persist": 2, "blob_bytes": 14, "blob_match": true}
+===== STEP 2: non-admin AgentUser sandbox read =====
+===== CRED READ arm=non-admin label=nonadmin =====
+SBX[nonadmin]: {
+SBX[nonadmin]:   "arm": "non-admin",
+SBX[nonadmin]:   "checks": {
+SBX[nonadmin]:     "non_admin": true,
+SBX[nonadmin]:     "privileges_removed": true,
+SBX[nonadmin]:     "token_virtualization_disabled": true,
+SBX[nonadmin]:     "workspace_writable": true
+SBX[nonadmin]:   },
+SBX[nonadmin]:   "exit_code": 0,
+SBX[nonadmin]:   "observation_path": "C:\\workspace\\cred-lm\\read-nonadmin\\windows-native-run-observation.json",
+SBX[nonadmin]:   "outcome": "compliant",
+SBX[nonadmin]:   "stderr_bytes": 0,
+SBX[nonadmin]:   "stdout_bytes": 146,
+SBX[nonadmin]:   "timed_out": false
+SBX[nonadmin]: }
+SBX_EXIT[nonadmin]=0
+CRED[nonadmin] ok=False winerror=1168 persist=0 blob_bytes=0 target=s4-lm-visibility-test
+CRED_nonadmin_OK=False
+===== STEP 3: high-nist AppContainer sandbox read =====
+===== CRED READ arm=high-nist label=highnist =====
+SBX[highnist]: {
+SBX[highnist]:   "arm": "high-nist",
+SBX[highnist]:   "checks": {
+SBX[highnist]:     "appcontainer_token": true,
+SBX[highnist]:     "job_object_assigned": true,
+SBX[highnist]:     "low_integrity": true,
+SBX[highnist]:     "non_admin": true,
+SBX[highnist]:     "privileges_removed": true,
+SBX[highnist]:     "temp_redirected": true,
+SBX[highnist]:     "token_virtualization_disabled": true,
+SBX[highnist]:     "workspace_writable": true
+SBX[highnist]:   },
+SBX[highnist]:   "exit_code": 0,
+SBX[highnist]:   "observation_path": "C:\\workspace\\cred-lm\\read-highnist\\windows-native-run-observation.json",
+SBX[highnist]:   "outcome": "compliant",
+SBX[highnist]:   "stderr_bytes": 0,
+SBX[highnist]:   "stdout_bytes": 0,
+SBX[highnist]:   "timed_out": false
+SBX[highnist]: }
+SBX_EXIT[highnist]=0
+CRED[highnist] ok=False winerror=5 persist=0 blob_bytes=0 target=s4-lm-visibility-test
+CRED_highnist_OK=False
+===== STEP 4: cleanup dummy credential =====
+CLEAN: CLEANUP {"delete_ok": true, "delete_err": 0}
+CRED_LM_ERRORS=0
+CRED_LM_DONE
+EXIT=0
+EVIDENCE C:\workspace\cred-lm\cleanup-lm.json
+EVIDENCE C:\workspace\cred-lm\cred-highnist.json
+EVIDENCE C:\workspace\cred-lm\cred-nonadmin.json
+EVIDENCE C:\workspace\cred-lm\obs-highnist.json
+EVIDENCE C:\workspace\cred-lm\obs-nonadmin.json
+EVIDENCE C:\workspace\cred-lm\sys-lm.json
+CRED_LM_OK=True

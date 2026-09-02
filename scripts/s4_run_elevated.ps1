@@ -9,7 +9,8 @@ param(
     [Parameter(Mandatory = $true)]
     [string]$Target,
     [string]$LogDir = 'D:\CLI\_windows_high_nist',
-    [int]$TimeoutMinutes = 5
+    [int]$TimeoutMinutes = 5,
+    [string[]]$ScriptArgs = @()
 )
 
 $ErrorActionPreference = 'Stop'
@@ -22,7 +23,7 @@ $name = [System.IO.Path]::GetFileNameWithoutExtension($Target)
 $exitFile = Join-Path $LogDir ("{0}_exit_{1}.txt" -f $name, $stamp)
 
 $p = Start-Process -FilePath 'powershell.exe' -Verb RunAs `
-    -ArgumentList @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', ('"{0}"' -f $Target)) `
+    -ArgumentList (@('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', ('"{0}"' -f $Target)) + $ScriptArgs) `
     -PassThru
 
 $deadline = (Get-Date).AddMinutes($TimeoutMinutes)

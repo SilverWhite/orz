@@ -1,0 +1,72 @@
+{
+  "appcontainer": {
+    "capabilities": [],
+    "profile_created": false,
+    "profile_deleted": false,
+    "sid_derived": false
+  },
+  "arm": "non-admin",
+  "checks": {
+    "non_admin": true,
+    "privileges_removed": true,
+    "token_virtualization_disabled": true,
+    "workspace_writable": true
+  },
+  "command": "C:\\workspace\\wrapup\\cred-nonadmin\\cred_probe.exe C:\\workspace\\wrapup\\cred-nonadmin\\cred-result.json",
+  "command_sha256": "36dd5c13986586e67a066b3cc27be951faadf096c86c3078c708c33c718acbea",
+  "created_at": "2026-09-02T15:49:22.739387Z",
+  "cwd": "C:\\workspace\\wrapup\\cred-nonadmin",
+  "diagnostics": [],
+  "env_overrides": {},
+  "evidence_status": "observed",
+  "firewall": {
+    "allowlist_ips": [],
+    "diagnostic": "not attempted",
+    "outbound_block_rule_created": false,
+    "rule_name": ""
+  },
+  "job_object": {
+    "active_process_limit": 64,
+    "assigned": true,
+    "created": true,
+    "creation_time_assignment": true,
+    "kill_on_close": true,
+    "memory_limit_bytes": 268435456
+  },
+  "limitations": [
+    "Run observation covers spawn-time facts only (token/IL/AppContainer/Job/TEMP redirect).  Behavioral wall assertions (System32/Program Files/HKLM/home/network) are performed by enforcement_probe.ps1 inside this environment.",
+    "CreateProcessAsUserW requires administrator elevation for restricted-token spawns; degraded current-token spawns are fail-closed (outcome=noncompliant).",
+    "AppContainer alone does not block raw TCP outbound on some Windows builds; network isolation relies on the host firewall wall (hardening script blockoutbound default + per-task allowlist)."
+  ],
+  "observation_id": "WNR-EC192386ADCF4BA29B2EBA03E33D7CDC",
+  "observation_kind": "windows_native_sandbox_run_observation",
+  "outcome": "compliant",
+  "output": {
+    "stderr_bytes": 0,
+    "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "stdout_bytes": 124,
+    "stdout_sha256": "e68721821de9c34d3a7bedef80cb2f3bfb9097507a3a78b7a7a1019e4b31cbf2"
+  },
+  "process": {
+    "cancellation_method": null,
+    "exit_code": 0,
+    "pid": 11056,
+    "shell_used": false,
+    "timed_out": false
+  },
+  "profile_sha256": "46d588d3e05fd65028a84d14857d3b2494652f4cc2098bae939a2de484f1f93f",
+  "schema_version": "0.1.0-draft",
+  "temp_redirect": {
+    "temp_env": "C:\\Users\\AgentUser\\AppData\\Local\\Temp",
+    "tmp_env": "C:\\Users\\AgentUser\\AppData\\Local\\Temp",
+    "workspace_tmp": "C:\\workspace\\wrapup\\cred-nonadmin\\.tmp"
+  },
+  "token": {
+    "appcontainer": false,
+    "low_integrity": false,
+    "privileges_removed": true,
+    "restricted": true,
+    "virtualization_allowed": false
+  },
+  "workspace_path_sha256": "eb0dc3367631a01ef75868374b54e1aaf2568a7456a3785f68823ed6dae592bf"
+}

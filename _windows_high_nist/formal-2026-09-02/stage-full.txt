@@ -1,0 +1,69 @@
+﻿STAGE=full
+STATE_BEFORE=Off
+CHECKPOINT=S4-BASE-INSTALLED created=09/01/2026 23:06:22
+RESTORE_OK=1
+START_ISSUED=1
+VM_REACHABLE=yes
+SYNC C:\s4\assurance\windows_sandbox.py ok=True
+SYNC C:\s4\assurance\sandbox_verifier.py ok=True
+SYNC C:\s4\assurance\windows-native-sandbox-run-v0.1.schema.json ok=True
+SYNC C:\s4\assurance\windows-native-sandbox-observation-v0.1.schema.json ok=True
+SYNC C:\s4\assurance\windows-native-sandbox-profile-v0.1.json ok=True
+SYNC C:\s4\assurance\windows-native-sandbox-profile-v0.1.schema.json ok=True
+SYNC C:\s4\scripts\run_windows_native_sandbox_command.py ok=True
+SYNC C:\s4\_windows_high_nist\hardening\apply_hardening.ps1 ok=True
+SYNC C:\s4\_windows_high_nist\policy\enforcement_probe.ps1 ok=True
+SYNC C:\s4\_windows_high_nist\policy\enforcement_probe.py ok=True
+SYNC C:\s4\_windows_high_nist\run\run_enforcement_probe.ps1 ok=True
+SYNC_ALL_OK=True
+===== JOB formal-setup =====
+NET_CREATE: 命令成功完成。
+NET_CREATE: 
+NET_CREATE_EXIT=0
+NET_PW: 命令成功完成。
+NET_PW: 
+NET_PW_EXIT=0
+ENV_USER=AgentUser
+ENV_DOMAIN=DESKTOP-QMAPMFH
+SE_EXPORT:                                                                            
+SE_EXPORT: 任务成功结束。
+SE_EXPORT: 有关详细信息，请参阅日志 %windir%\security\logs\scesrv.log。
+AGENTUSER_SID=S-1-5-21-3636881053-4261193759-2698424706-1002
+SE_CONF: 完成了百分之 6 (0/15) 	处理 Privilege Rights 区域        
+SE_CONF: 完成了百分之 13 (1/15) 	处理 Privilege Rights 区域        
+SE_CONF: 完成了百分之 20 (2/15) 	处理 Privilege Rights 区域        
+SE_CONF: 完成了百分之 26 (3/15) 	处理 Privilege Rights 区域        
+SE_CONF: 完成了百分之 33 (4/15) 	处理 Privilege Rights 区域        
+SE_CONF: 完成了百分之 40 (5/15) 	处理 Privilege Rights 区域        
+SE_CONF: 完成了百分之 46 (6/15) 	处理 Privilege Rights 区域        
+SE_CONF: 完成了百分之 53 (7/15) 	处理 Privilege Rights 区域        
+SE_CONF: 完成了百分之 60 (8/15) 	处理 Privilege Rights 区域        
+SE_CONF: 完成了百分之 66 (9/15) 	处理 Privilege Rights 区域        
+SE_CONF: 完成了百分之 73 (10/15) 	处理 Privilege Rights 区域        
+SE_CONF: 完成了百分之 80 (11/15) 	处理 Privilege Rights 区域        
+SE_CONF: 完成了百分之 86 (12/15) 	处理 Privilege Rights 区域        
+SE_CONF: 完成了百分之 93 (13/15) 	处理 Privilege Rights 区域        
+SE_CONF: 完成了百分之 100 (14/15) 	处理 Privilege Rights 区域        
+SE_CONF: 完成了百分之 100 (15/15) 	处理 Privilege Rights 区域        
+SE_CONF:                                                                            
+SE_CONF: 帐户名与安全标识间无任何映射完成。
+SE_CONF: 
+SE_CONF: 
+SE_CONF: 任务已结束，但有错误。
+SE_CONF: 有关详细信息，请参阅日志 %windir%\security\logs\scesrv.log。
+SECEDIT_EXIT=1
+PROF: PROF_LOGON 1 0
+PROF: PROF_LOAD 1 1008 hProfile 536
+PROF: NTUSER_EXISTS1 True
+PROF: NTUSER_EXISTS2 True
+PROF: PROF_DONE
+NTUSER_FINAL=True
+PIP: 操作成功完成。
+PIP: 
+PROF_ICACLS_EXIT=5
+WRONGPATH_CLEAN_EXIT=0
+SETUP_OK
+EXIT=0
+JOB_EXIT=0
+ERROR: formal setup job failed (exit ===== JOB formal-setup ===== JOB_EXIT=0 0)
+STAGE_ABORTED=full

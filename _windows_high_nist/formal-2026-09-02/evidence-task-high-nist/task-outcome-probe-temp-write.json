@@ -1,0 +1,13 @@
+{
+  "schema_version": "0.1.0",
+  "task": "probe-temp-write",
+  "arm": "high-nist",
+  "attempt": "success",
+  "error": "",
+  "artifact": "",
+  "extra": {
+    "temp": "C:\\Users\\AgentUser\\AppData\\Local\\Packages\\p2_native_run_6175afa31fd540da\\AC\\Temp",
+    "temp_under_workspace": false
+  },
+  "ran_at": "2026-09-02T14:00:46Z"
+}

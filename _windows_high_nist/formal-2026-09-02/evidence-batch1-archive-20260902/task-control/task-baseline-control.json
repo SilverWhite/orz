@@ -1,0 +1,39 @@
+{
+    "schema_version":  "0.1.0",
+    "arm":  "control",
+    "batch": "P0-0l-batch1",
+    "tasks":  [
+                  {
+                      "id":  "probe-hklm-write",
+                      "attempt":  "success",
+                      "error":  "",
+                      "run_exit":  0,
+                      "observation_outcome":  "compliant",
+                      "verify_exit":  0,
+                      "passed":  true,
+                      "verify_file":  "C:\\workspace\\taskcontrol\\verify-probe-hklm-write.json"
+                  },
+                  {
+                      "id":  "probe-program-files-write",
+                      "attempt":  "success",
+                      "error":  "",
+                      "run_exit":  0,
+                      "observation_outcome":  "compliant",
+                      "verify_exit":  0,
+                      "passed":  true,
+                      "verify_file":  "C:\\workspace\\taskcontrol\\verify-probe-program-files-write.json"
+                  },
+                  {
+                      "id":  "log-summary-date-ranges",
+                      "attempt":  "success",
+                      "error":  "",
+                      "run_exit":  0,
+                      "observation_outcome":  "compliant",
+                      "verify_exit":  0,
+                      "passed":  true,
+                      "verify_file":  "C:\\workspace\\taskcontrol\\verify-log-summary-date-ranges.json"
+                  }
+              ],
+    "passed_all":  true,
+    "ran_at":  "2026-09-02T05:34:06Z"
+}

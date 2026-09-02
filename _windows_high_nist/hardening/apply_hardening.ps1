@@ -350,6 +350,41 @@ function Ensure-RunUserProfileDirectories {
     }
 }
 
+function Wait-RunUserHiveSettled {
+    param([string]$ProfileRoot)
+    # S4 5023 candidate fix: apply's HKCU-freeze reg load/unload cycle can
+    # leave the NTUSER.DAT hive in a transient state; a LoadUserProfileW
+    # started immediately afterwards fails with WinError 5023 ("group or
+    # resource is not in the correct state").  Poll by mounting the same
+    # file under a scratch HKU key until the load succeeds again (and is
+    # then unloaded), proving the hive is ready for the profile service.
+    $hiveFile = Join-Path $ProfileRoot 'NTUSER.DAT'
+    if (-not (Test-Path -LiteralPath $hiveFile)) {
+        return
+    }
+    $deadline = (Get-Date).AddSeconds(45)
+    $settled = $false
+    $prevEap = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
+    while ((Get-Date) -lt $deadline) {
+        $mount = "gsa_hive_ready_$([guid]::NewGuid().ToString('N'))"
+        & reg.exe load "HKU\$mount" $hiveFile 2>&1 | Out-Null
+        if ($LASTEXITCODE -eq 0) {
+            & reg.exe unload "HKU\$mount" 2>&1 | Out-Null
+            $settled = $true
+            break
+        }
+        Start-Sleep -Seconds 1
+    }
+    $ErrorActionPreference = $prevEap
+    if ($settled) {
+        Write-Step "OK   hive settled for $hiveFile"
+    }
+    else {
+        Write-Step "WARN hive not settled within 45s: $hiveFile"
+    }
+}
+
 function Set-RunUserHiveFrozen {
     param(
         [string]$ProfileRoot,
@@ -361,8 +396,27 @@ function Set-RunUserHiveFrozen {
         return
     }
     $mount = "gsa_hkcu_$([guid]::NewGuid().ToString('N'))"
-    & reg.exe load "HKU\$mount" $hiveFile 2>&1 | Out-Null
-    if ($LASTEXITCODE -ne 0) {
+    $prevEap = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
+    $loaded = $false
+    try {
+        # A LoadUserProfileW/UnloadUserProfileW (or reg load/unload) that
+        # finished moments earlier can leave NTUSER.DAT transiently locked;
+        # retry the freeze mount before failing the arm.
+        $deadline = (Get-Date).AddSeconds(45)
+        while ((Get-Date) -lt $deadline) {
+            & reg.exe load "HKU\$mount" $hiveFile 2>&1 | Out-Null
+            if ($LASTEXITCODE -eq 0) {
+                $loaded = $true
+                break
+            }
+            Start-Sleep -Seconds 2
+        }
+    }
+    finally {
+        $ErrorActionPreference = $prevEap
+    }
+    if (-not $loaded) {
         Write-Step "FAIL reg load NTUSER.DAT（HKCU 冻结未生效，需先确保 $User 未登录）"
         $script:StepFailures++
         return
@@ -373,11 +427,19 @@ function Set-RunUserHiveFrozen {
     finally {
         [GC]::Collect()
         [GC]::WaitForPendingFinalizers()
-        & reg.exe unload "HKU\$mount" 2>&1 | Out-Null
-        if ($LASTEXITCODE -ne 0) {
+        $prevEap = $ErrorActionPreference
+        $ErrorActionPreference = 'Continue'
+        try {
             & reg.exe unload "HKU\$mount" 2>&1 | Out-Null
-            Write-Step "WARN reg unload $mount 失败（重试一次）"
+            if ($LASTEXITCODE -ne 0) {
+                & reg.exe unload "HKU\$mount" 2>&1 | Out-Null
+                Write-Step "WARN reg unload $mount 失败（重试一次）"
+            }
         }
+        finally {
+            $ErrorActionPreference = $prevEap
+        }
+        Wait-RunUserHiveSettled $ProfileRoot
     }
 }
 
@@ -391,17 +453,26 @@ function Clear-RunUserHiveFrozen {
         return
     }
     $mount = "gsa_hkcu_$([guid]::NewGuid().ToString('N'))"
-    & reg.exe load "HKU\$mount" $hiveFile 2>&1 | Out-Null
-    if ($LASTEXITCODE -ne 0) {
-        return
-    }
+    $prevEap = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
     try {
-        Invoke-RegistryDenyRemove "Registry::HKEY_USERS\$mount" $User
+        & reg.exe load "HKU\$mount" $hiveFile 2>&1 | Out-Null
+        if ($LASTEXITCODE -ne 0) {
+            $ErrorActionPreference = $prevEap
+            return
+        }
+        try {
+            Invoke-RegistryDenyRemove "Registry::HKEY_USERS\$mount" $User
+        }
+        finally {
+            [GC]::Collect()
+            [GC]::WaitForPendingFinalizers()
+            & reg.exe unload "HKU\$mount" 2>&1 | Out-Null
+            Wait-RunUserHiveSettled $ProfileRoot
+        }
     }
     finally {
-        [GC]::Collect()
-        [GC]::WaitForPendingFinalizers()
-        & reg.exe unload "HKU\$mount" 2>&1 | Out-Null
+        $ErrorActionPreference = $prevEap
     }
 }
 
@@ -523,12 +594,24 @@ function Set-AppLockerAllowlist {
 function Reset-AppLockerPolicy {
     if ($PSCmdlet.ShouldProcess('AppLocker', 'reset policy')) {
         try {
-            Set-AppLockerPolicy -Policy $null
+            Set-AppLockerPolicy -Policy $null -ErrorAction Stop
             Write-Step "OK   AppLocker policy reset"
         }
         catch {
-            Write-Step "FAIL AppLocker reset : $($_.Exception.Message)"
-            $script:StepFailures++
+            # Some builds reject -Policy $null at parameter validation.
+            # Fallback: delete the local SrpV2 policy key (equivalent reset;
+            # verified path from the 2026-09-02 triage).
+            try {
+                $srp = 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\SrpV2'
+                if (Test-Path -LiteralPath $srp) {
+                    Remove-Item -LiteralPath $srp -Recurse -Force -ErrorAction Stop
+                }
+                Write-Step "OK   AppLocker policy reset (fallback: SrpV2 removed)"
+            }
+            catch {
+                Write-Step "FAIL AppLocker reset : $($_.Exception.Message)"
+                $script:StepFailures++
+            }
         }
     }
 }
@@ -541,7 +624,12 @@ function Get-ProtectedPaths {
         "$env:ProgramData"
     ) | Where-Object { $_ -and (Test-Path -LiteralPath $_) } | Select-Object -Unique
     if ($Arm -eq 'high-nist') {
-        $profileRoot = Join-Path (Split-Path $env:USERPROFILE -Parent) $RunUser
+        # S4 正式序列修复：脚本常以 SYSTEM 运行，$env:USERPROFILE 是
+        # C:\WINDOWS\system32\config\systemprofile，推导会把 RunUser profile
+        # 根错指到 C:\WINDOWS\system32\config\<RunUser>（干净基线上不存在，
+        # ACL deny 直接 FAIL）。统一走 Get-RunUserProfileRoot 的固定路径
+        # %SystemDrive%\Users\<RunUser>。
+        $profileRoot = Get-RunUserProfileRoot $RunUser
         $paths += @(
             $profileRoot,
             (Join-Path $profileRoot 'AppData\Roaming'),

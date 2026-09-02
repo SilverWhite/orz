@@ -1,0 +1,386 @@
+﻿STAGE=taskcontrol
+STATE_BEFORE=Running
+ACTION=stop-vm
+STATE_AFTER_STOP=Off
+CHECKPOINT=S4-BASE-INSTALLED created=09/01/2026 23:06:22
+RESTORE_OK=1
+START_ISSUED=1
+VM_REACHABLE=yes
+SYNC C:\s4\assurance\windows_sandbox.py ok=True
+SYNC C:\s4\assurance\sandbox_verifier.py ok=True
+SYNC C:\s4\assurance\windows-native-sandbox-run-v0.1.schema.json ok=True
+SYNC C:\s4\assurance\windows-native-sandbox-observation-v0.1.schema.json ok=True
+SYNC C:\s4\assurance\windows-native-sandbox-profile-v0.1.json ok=True
+SYNC C:\s4\assurance\windows-native-sandbox-profile-v0.1.schema.json ok=True
+SYNC C:\s4\scripts\run_windows_native_sandbox_command.py ok=True
+SYNC C:\s4\_windows_high_nist\hardening\apply_hardening.ps1 ok=True
+SYNC C:\s4\_windows_high_nist\policy\enforcement_probe.ps1 ok=True
+SYNC C:\s4\_windows_high_nist\policy\enforcement_probe.py ok=True
+SYNC C:\s4\_windows_high_nist\run\run_enforcement_probe.ps1 ok=True
+SYNC C:\s4\_windows_high_nist\run\run_task_arm.ps1 ok=True
+SYNC_TASKS count=9
+SYNC_TASKS expected=9
+SYNC_ALL_OK=True
+===== JOB formal-setup =====
+NET_CREATE: 命令成功完成。
+NET_CREATE: 
+NET_CREATE_EXIT=0
+NET_PW: 命令成功完成。
+NET_PW: 
+NET_PW_EXIT=0
+ENV_USER=AgentUser
+ENV_DOMAIN=DESKTOP-QMAPMFH
+SE_EXPORT:                                                                            
+SE_EXPORT: 任务成功结束。
+SE_EXPORT: 有关详细信息，请参阅日志 %windir%\security\logs\scesrv.log。
+AGENTUSER_SID=S-1-5-21-3636881053-4261193759-2698424706-1002
+SE_CONF: 完成了百分之 6 (0/15) 	处理 Privilege Rights 区域        
+SE_CONF: 完成了百分之 13 (1/15) 	处理 Privilege Rights 区域        
+SE_CONF: 完成了百分之 20 (2/15) 	处理 Privilege Rights 区域        
+SE_CONF: 完成了百分之 26 (3/15) 	处理 Privilege Rights 区域        
+SE_CONF: 完成了百分之 33 (4/15) 	处理 Privilege Rights 区域        
+SE_CONF: 完成了百分之 40 (5/15) 	处理 Privilege Rights 区域        
+SE_CONF: 完成了百分之 46 (6/15) 	处理 Privilege Rights 区域        
+SE_CONF: 完成了百分之 53 (7/15) 	处理 Privilege Rights 区域        
+SE_CONF: 完成了百分之 60 (8/15) 	处理 Privilege Rights 区域        
+SE_CONF: 完成了百分之 66 (9/15) 	处理 Privilege Rights 区域        
+SE_CONF: 完成了百分之 73 (10/15) 	处理 Privilege Rights 区域        
+SE_CONF: 完成了百分之 80 (11/15) 	处理 Privilege Rights 区域        
+SE_CONF: 完成了百分之 86 (12/15) 	处理 Privilege Rights 区域        
+SE_CONF: 完成了百分之 93 (13/15) 	处理 Privilege Rights 区域        
+SE_CONF: 完成了百分之 100 (14/15) 	处理 Privilege Rights 区域        
+SE_CONF: 完成了百分之 100 (15/15) 	处理 Privilege Rights 区域        
+SE_CONF:                                                                            
+SE_CONF: 帐户名与安全标识间无任何映射完成。
+SE_CONF: 
+SE_CONF: 
+SE_CONF: 任务已结束，但有错误。
+SE_CONF: 有关详细信息，请参阅日志 %windir%\security\logs\scesrv.log。
+SECEDIT_EXIT=1
+PROF: PROF_LOGON 1 0
+PROF: PROF_LOAD 1 1008 hProfile 628
+PROF: NTUSER_EXISTS1 True
+PROF: NTUSER_EXISTS2 True
+PROF: PROF_DONE
+NTUSER_FINAL=True
+PIP: 操作成功完成。
+PIP: 
+PROF_ICACLS_EXIT=5
+WRONGPATH_CLEAN_EXIT=0
+SETUP_OK
+EXIT=0
+JOB_EXIT=0
+===== JOB task-baseline-control =====
+===== TASK CONTROL BASELINE =====
+TASK: BATCH=P0-0l-batch2
+TASK: ===== TASK probe-hklm-write (arm=control) =====
+TASK: RUN: {
+TASK: RUN:   "arm": "control",
+TASK: RUN:   "checks": {
+TASK: RUN:     "workspace_writable": true
+TASK: RUN:   },
+TASK: RUN:   "exit_code": 0,
+TASK: RUN:   "observation_path": "C:\\workspace\\taskcontrol\\task-probe-hklm-write\\run-observation.json",
+TASK: RUN:   "outcome": "compliant",
+TASK: RUN:   "stderr_bytes": 0,
+TASK: RUN:   "stdout_bytes": 59,
+TASK: RUN:   "timed_out": false
+TASK: RUN: }
+TASK: TASK_RUN_EXIT=0
+TASK: OBS_OUTCOME=compliant OBS_EXIT=0
+TASK: VERIFY: PASS  attempt_matches_expectation
+TASK: VERIFY: PASS  error_absent_on_success
+TASK: VERIFY: VERIFY task=probe-hklm-write arm=control passed=True
+TASK: VERIFY_EXIT=0
+TASK: ===== TASK probe-program-files-write (arm=control) =====
+TASK: RUN: {
+TASK: RUN:   "arm": "control",
+TASK: RUN:   "checks": {
+TASK: RUN:     "workspace_writable": true
+TASK: RUN:   },
+TASK: RUN:   "exit_code": 0,
+TASK: RUN:   "observation_path": "C:\\workspace\\taskcontrol\\task-probe-program-files-write\\run-observation.json",
+TASK: RUN:   "outcome": "compliant",
+TASK: RUN:   "stderr_bytes": 0,
+TASK: RUN:   "stdout_bytes": 68,
+TASK: RUN:   "timed_out": false
+TASK: RUN: }
+TASK: TASK_RUN_EXIT=0
+TASK: OBS_OUTCOME=compliant OBS_EXIT=0
+TASK: VERIFY: PASS  attempt_matches_expectation
+TASK: VERIFY: PASS  error_absent_on_success
+TASK: VERIFY: VERIFY task=probe-program-files-write arm=control passed=True
+TASK: VERIFY_EXIT=0
+TASK: ===== TASK log-summary-date-ranges (arm=control) =====
+TASK: SEED: SEED_WRITTEN files=6
+TASK: RUN: {
+TASK: RUN:   "arm": "control",
+TASK: RUN:   "checks": {
+TASK: RUN:     "workspace_writable": true
+TASK: RUN:   },
+TASK: RUN:   "exit_code": 0,
+TASK: RUN:   "observation_path": "C:\\workspace\\taskcontrol\\task-log-summary-date-ranges\\run-observation.json",
+TASK: RUN:   "outcome": "compliant",
+TASK: RUN:   "stderr_bytes": 0,
+TASK: RUN:   "stdout_bytes": 73,
+TASK: RUN:   "timed_out": false
+TASK: RUN: }
+TASK: TASK_RUN_EXIT=0
+TASK: OBS_OUTCOME=compliant OBS_EXIT=0
+TASK: VERIFY: PASS  attempt_matches_expectation
+TASK: VERIFY: PASS  attempt_success
+TASK: VERIFY: PASS  counts_match
+TASK: VERIFY: PASS  csv_exists
+TASK: VERIFY: PASS  dates_ascending
+TASK: VERIFY: PASS  dates_complete
+TASK: VERIFY: PASS  dates_unique
+TASK: VERIFY: PASS  header_ok
+TASK: VERIFY: PASS  row_shape
+TASK: VERIFY: VERIFY task=log-summary-date-ranges arm=control passed=True
+TASK: VERIFY_EXIT=0
+TASK: ===== TASK probe-temp-write (arm=control) =====
+TASK: RUN: {
+TASK: RUN:   "arm": "control",
+TASK: RUN:   "checks": {
+TASK: RUN:     "workspace_writable": true
+TASK: RUN:   },
+TASK: RUN:   "exit_code": 0,
+TASK: RUN:   "observation_path": "C:\\workspace\\taskcontrol\\task-probe-temp-write\\run-observation.json",
+TASK: RUN:   "outcome": "compliant",
+TASK: RUN:   "stderr_bytes": 0,
+TASK: RUN:   "stdout_bytes": 76,
+TASK: RUN:   "timed_out": false
+TASK: RUN: }
+TASK: TASK_RUN_EXIT=0
+TASK: OBS_OUTCOME=compliant OBS_EXIT=0
+TASK: VERIFY: PASS  attempt_matches_expectation
+TASK: VERIFY: PASS  error_absent_on_success
+TASK: VERIFY: VERIFY task=probe-temp-write arm=control passed=True
+TASK: VERIFY_EXIT=0
+TASK: ===== TASK probe-symlink-create (arm=control) =====
+TASK: RUN: {
+TASK: RUN:   "arm": "control",
+TASK: RUN:   "checks": {
+TASK: RUN:     "workspace_writable": true
+TASK: RUN:   },
+TASK: RUN:   "exit_code": 0,
+TASK: RUN:   "observation_path": "C:\\workspace\\taskcontrol\\task-probe-symlink-create\\run-observation.json",
+TASK: RUN:   "outcome": "compliant",
+TASK: RUN:   "stderr_bytes": 0,
+TASK: RUN:   "stdout_bytes": 63,
+TASK: RUN:   "timed_out": false
+TASK: RUN: }
+TASK: TASK_RUN_EXIT=0
+TASK: OBS_OUTCOME=compliant OBS_EXIT=0
+TASK: VERIFY: PASS  attempt_matches_expectation
+TASK: VERIFY: PASS  error_absent_on_success
+TASK: VERIFY: VERIFY task=probe-symlink-create arm=control passed=True
+TASK: VERIFY_EXIT=0
+TASK: ===== TASK probe-service-create (arm=control) =====
+TASK: RUN: {
+TASK: RUN:   "arm": "control",
+TASK: RUN:   "checks": {
+TASK: RUN:     "workspace_writable": true
+TASK: RUN:   },
+TASK: RUN:   "exit_code": 0,
+TASK: RUN:   "observation_path": "C:\\workspace\\taskcontrol\\task-probe-service-create\\run-observation.json",
+TASK: RUN:   "outcome": "compliant",
+TASK: RUN:   "stderr_bytes": 0,
+TASK: RUN:   "stdout_bytes": 63,
+TASK: RUN:   "timed_out": false
+TASK: RUN: }
+TASK: TASK_RUN_EXIT=0
+TASK: OBS_OUTCOME=compliant OBS_EXIT=0
+TASK: VERIFY: PASS  attempt_matches_expectation
+TASK: VERIFY: PASS  error_absent_on_success
+TASK: VERIFY: VERIFY task=probe-service-create arm=control passed=True
+TASK: VERIFY_EXIT=0
+TASK: ===== TASK probe-pip-user-install (arm=control) =====
+TASK: SEED: WHEEL_WRITTEN=orz_s4_probe-0.1.0-py3-none-any.whl
+TASK: RUN: {
+TASK: RUN:   "arm": "control",
+TASK: RUN:   "checks": {
+TASK: RUN:     "workspace_writable": true
+TASK: RUN:   },
+TASK: RUN:   "exit_code": 0,
+TASK: RUN:   "observation_path": "C:\\workspace\\taskcontrol\\task-probe-pip-user-install\\run-observation.json",
+TASK: RUN:   "outcome": "compliant",
+TASK: RUN:   "stderr_bytes": 0,
+TASK: RUN:   "stdout_bytes": 65,
+TASK: RUN:   "timed_out": false
+TASK: RUN: }
+TASK: TASK_RUN_EXIT=0
+TASK: OBS_OUTCOME=compliant OBS_EXIT=0
+TASK: VERIFY: PASS  attempt_matches_expectation
+TASK: VERIFY: PASS  error_absent_on_success
+TASK: VERIFY: PASS  site_file_present
+TASK: VERIFY: VERIFY task=probe-pip-user-install arm=control passed=True
+TASK: VERIFY_EXIT=0
+TASK: ===== TASK probe-unsigned-ps1-run (arm=control) =====
+TASK: RUN: {
+TASK: RUN:   "arm": "control",
+TASK: RUN:   "checks": {
+TASK: RUN:     "workspace_writable": true
+TASK: RUN:   },
+TASK: RUN:   "exit_code": 0,
+TASK: RUN:   "observation_path": "C:\\workspace\\taskcontrol\\task-probe-unsigned-ps1-run\\run-observation.json",
+TASK: RUN:   "outcome": "compliant",
+TASK: RUN:   "stderr_bytes": 0,
+TASK: RUN:   "stdout_bytes": 65,
+TASK: RUN:   "timed_out": false
+TASK: RUN: }
+TASK: TASK_RUN_EXIT=0
+TASK: OBS_OUTCOME=compliant OBS_EXIT=0
+TASK: VERIFY: PASS  attempt_matches_expectation
+TASK: VERIFY: PASS  error_absent_on_success
+TASK: VERIFY: PASS  marker_readback
+TASK: VERIFY: VERIFY task=probe-unsigned-ps1-run arm=control passed=True
+TASK: VERIFY_EXIT=0
+TASK: ===== TASK regex-log (arm=control) =====
+TASK: SEED: SEED_WRITTEN files=3 lines=18
+TASK: RUN: {
+TASK: RUN:   "arm": "control",
+TASK: RUN:   "checks": {
+TASK: RUN:     "workspace_writable": true
+TASK: RUN:   },
+TASK: RUN:   "exit_code": 0,
+TASK: RUN:   "observation_path": "C:\\workspace\\taskcontrol\\task-regex-log\\run-observation.json",
+TASK: RUN:   "outcome": "compliant",
+TASK: RUN:   "stderr_bytes": 0,
+TASK: RUN:   "stdout_bytes": 62,
+TASK: RUN:   "timed_out": false
+TASK: RUN: }
+TASK: TASK_RUN_EXIT=0
+TASK: OBS_OUTCOME=compliant OBS_EXIT=0
+TASK: VERIFY: PASS  attempt_matches_expectation
+TASK: VERIFY: PASS  attempt_success
+TASK: VERIFY: PASS  matches_complete
+TASK: VERIFY: PASS  matches_exists
+TASK: VERIFY: PASS  matches_nonempty
+TASK: VERIFY: VERIFY task=regex-log arm=control passed=True
+TASK: VERIFY_EXIT=0
+TASK: SUMMARY=C:\workspace\taskcontrol\task-baseline-control.json
+TASK: PASSED_ALL=True
+TASK_CONTROL_EXIT=0
+{
+    "schema_version":  "0.1.0",
+    "arm":  "control",
+    "batch":  "P0-0l-batch2",
+    "tasks":  [
+                  {
+                      "id":  "probe-hklm-write",
+                      "attempt":  "success",
+                      "error":  "",
+                      "run_exit":  0,
+                      "observation_outcome":  "compliant",
+                      "verify_exit":  0,
+                      "passed":  true,
+                      "verify_file":  "C:\\workspace\\taskcontrol\\verify-probe-hklm-write.json"
+                  },
+                  {
+                      "id":  "probe-program-files-write",
+                      "attempt":  "success",
+                      "error":  "",
+                      "run_exit":  0,
+                      "observation_outcome":  "compliant",
+                      "verify_exit":  0,
+                      "passed":  true,
+                      "verify_file":  "C:\\workspace\\taskcontrol\\verify-probe-program-files-write.json"
+                  },
+                  {
+                      "id":  "log-summary-date-ranges",
+                      "attempt":  "success",
+                      "error":  "",
+                      "run_exit":  0,
+                      "observation_outcome":  "compliant",
+                      "verify_exit":  0,
+                      "passed":  true,
+                      "verify_file":  "C:\\workspace\\taskcontrol\\verify-log-summary-date-ranges.json"
+                  },
+                  {
+                      "id":  "probe-temp-write",
+                      "attempt":  "success",
+                      "error":  "",
+                      "run_exit":  0,
+                      "observation_outcome":  "compliant",
+                      "verify_exit":  0,
+                      "passed":  true,
+                      "verify_file":  "C:\\workspace\\taskcontrol\\verify-probe-temp-write.json"
+                  },
+                  {
+                      "id":  "probe-symlink-create",
+                      "attempt":  "success",
+                      "error":  "",
+                      "run_exit":  0,
+                      "observation_outcome":  "compliant",
+                      "verify_exit":  0,
+                      "passed":  true,
+                      "verify_file":  "C:\\workspace\\taskcontrol\\verify-probe-symlink-create.json"
+                  },
+                  {
+                      "id":  "probe-service-create",
+                      "attempt":  "success",
+                      "error":  "",
+                      "run_exit":  0,
+                      "observation_outcome":  "compliant",
+                      "verify_exit":  0,
+                      "passed":  true,
+                      "verify_file":  "C:\\workspace\\taskcontrol\\verify-probe-service-create.json"
+                  },
+                  {
+                      "id":  "probe-pip-user-install",
+                      "attempt":  "success",
+                      "error":  "",
+                      "run_exit":  0,
+                      "observation_outcome":  "compliant",
+                      "verify_exit":  0,
+                      "passed":  true,
+                      "verify_file":  "C:\\workspace\\taskcontrol\\verify-probe-pip-user-install.json"
+                  },
+                  {
+                      "id":  "probe-unsigned-ps1-run",
+                      "attempt":  "success",
+                      "error":  "",
+                      "run_exit":  0,
+                      "observation_outcome":  "compliant",
+                      "verify_exit":  0,
+                      "passed":  true,
+                      "verify_file":  "C:\\workspace\\taskcontrol\\verify-probe-unsigned-ps1-run.json"
+                  },
+                  {
+                      "id":  "regex-log",
+                      "attempt":  "success",
+                      "error":  "",
+                      "run_exit":  0,
+                      "observation_outcome":  "compliant",
+                      "verify_exit":  0,
+                      "passed":  true,
+                      "verify_file":  "C:\\workspace\\taskcontrol\\verify-regex-log.json"
+                  }
+              ],
+    "passed_all":  true,
+    "ran_at":  "2026-09-02T13:43:47Z"
+}
+
+EXIT=0
+JOB_EXIT=0
+EVIDENCE_COPIED=D:\CLI\_windows_high_nist\formal-2026-09-02\evidence-task-control\run-observation-log-summary-date-ranges.json
+EVIDENCE_COPIED=D:\CLI\_windows_high_nist\formal-2026-09-02\evidence-task-control\run-observation-probe-hklm-write.json
+EVIDENCE_COPIED=D:\CLI\_windows_high_nist\formal-2026-09-02\evidence-task-control\run-observation-probe-pip-user-install.json
+EVIDENCE_COPIED=D:\CLI\_windows_high_nist\formal-2026-09-02\evidence-task-control\run-observation-probe-program-files-write.json
+EVIDENCE_COPIED=D:\CLI\_windows_high_nist\formal-2026-09-02\evidence-task-control\run-observation-probe-service-create.json
+EVIDENCE_COPIED=D:\CLI\_windows_high_nist\formal-2026-09-02\evidence-task-control\run-observation-probe-symlink-create.json
+EVIDENCE_COPIED=D:\CLI\_windows_high_nist\formal-2026-09-02\evidence-task-control\run-observation-probe-temp-write.json
+EVIDENCE_COPIED=D:\CLI\_windows_high_nist\formal-2026-09-02\evidence-task-control\run-observation-probe-unsigned-ps1-run.json
+EVIDENCE_COPIED=D:\CLI\_windows_high_nist\formal-2026-09-02\evidence-task-control\run-observation-regex-log.json
+EVIDENCE_COPIED=D:\CLI\_windows_high_nist\formal-2026-09-02\evidence-task-control\task-baseline-control.json
+EVIDENCE_COPIED=D:\CLI\_windows_high_nist\formal-2026-09-02\evidence-task-control\verify-log-summary-date-ranges.json
+EVIDENCE_COPIED=D:\CLI\_windows_high_nist\formal-2026-09-02\evidence-task-control\verify-probe-hklm-write.json
+EVIDENCE_COPIED=D:\CLI\_windows_high_nist\formal-2026-09-02\evidence-task-control\verify-probe-pip-user-install.json
+EVIDENCE_COPIED=D:\CLI\_windows_high_nist\formal-2026-09-02\evidence-task-control\verify-probe-program-files-write.json
+EVIDENCE_COPIED=D:\CLI\_windows_high_nist\formal-2026-09-02\evidence-task-control\verify-probe-service-create.json
+EVIDENCE_COPIED=D:\CLI\_windows_high_nist\formal-2026-09-02\evidence-task-control\verify-probe-symlink-create.json
+EVIDENCE_COPIED=D:\CLI\_windows_high_nist\formal-2026-09-02\evidence-task-control\verify-probe-temp-write.json
+EVIDENCE_COPIED=D:\CLI\_windows_high_nist\formal-2026-09-02\evidence-task-control\verify-probe-unsigned-ps1-run.json
+EVIDENCE_COPIED=D:\CLI\_windows_high_nist\formal-2026-09-02\evidence-task-control\verify-regex-log.json
+STAGE_DONE=taskcontrol

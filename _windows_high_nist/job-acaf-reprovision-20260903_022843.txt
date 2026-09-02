@@ -1,0 +1,20 @@
+﻿ACAF_TARGET root=C:\Users\AgentUser\AppData\Local\orz\acaf manifest=C:\Users\AgentUser\AppData\Local\orz\acaf\signer-manifest.json
+SBX: {
+SBX:   "arm": "non-admin",
+SBX:   "checks": {
+SBX:     "non_admin": true,
+SBX:     "privileges_removed": true,
+SBX:     "token_virtualization_disabled": true,
+SBX:     "workspace_writable": true
+SBX:   },
+SBX:   "exit_code": 0,
+SBX:   "observation_path": "C:\\workspace\\acaf-reprovision\\obs.json",
+SBX:   "outcome": "compliant",
+SBX:   "stderr_bytes": 0,
+SBX:   "stdout_bytes": 18,
+SBX:   "timed_out": false
+SBX: }
+SBX_EXIT=0
+PROVISION_ERR: orz-acaf-provision: keystore create/load: io error: 鎷掔粷璁块棶銆?(os error 5)
+ACAF_PROVISION_OK=False
+EXIT=1

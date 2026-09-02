@@ -1,0 +1,14 @@
+﻿PACK task=gcode-to-text mode=inputs-present files=1
+DOOM_REPO_LAYOUT: doomgeneric,screenshots
+DOOM_WAD size=4196020
+PACK task=make-doom-for-mips mode=inputs-present files=213
+PATH_TRACING_PPM_HEAD: P3 | 2400 1800
+PACK task=path-tracing mode=inputs-present files=1
+PACK task=model-extraction-relu-logits mode=inputs-present files=1
+PACK task=dna-insert mode=inputs-present files=1
+PACK task=mteb-leaderboard mode=no-input-diagnostic files=0
+PACK task=train-fasttext mode=no-input-diagnostic files=0
+PACK task=adaptive-rejection-sampler mode=no-input-diagnostic files=0
+PACK task=filter-js-from-html mode=no-input-diagnostic files=0
+PACK_MANIFEST_UPDATED=1
+PACK_ALL_DONE=1

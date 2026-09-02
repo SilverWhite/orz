@@ -1,0 +1,75 @@
+{
+  "appcontainer": {
+    "capabilities": [],
+    "profile_created": false,
+    "profile_deleted": false,
+    "sid_derived": false
+  },
+  "appcontainer_mode": "disabled",
+  "arm": "non-admin",
+  "checks": {
+    "non_admin": true,
+    "privileges_removed": true,
+    "token_virtualization_disabled": true,
+    "workspace_writable": true
+  },
+  "command": "C:\\workspace\\agent-tb2.1-chunk1\\cred-bootstrap-905d5f1e31b44259ba3ccb0a588f026a\\cred_probe.exe C:\\workspace\\agent-tb2.1-chunk1\\cred-bootstrap-905d5f1e31b44259ba3ccb0a588f026a\\cred-read.json",
+  "command_sha256": "e3c4ced9dc9d8885dc0dd77429696314212106174385ebc577d9b93356083978",
+  "created_at": "2026-09-02T17:55:09.257119Z",
+  "cwd": "C:\\workspace\\agent-tb2.1-chunk1\\cred-bootstrap-905d5f1e31b44259ba3ccb0a588f026a",
+  "diagnostics": [],
+  "env_overrides": {
+    "CRED_PROBE_DUMP": "C:\\workspace\\agent-tb2.1-chunk1\\cred-bootstrap-905d5f1e31b44259ba3ccb0a588f026a\\key.blob"
+  },
+  "evidence_status": "observed",
+  "firewall": {
+    "allowlist_ips": [],
+    "diagnostic": "not attempted",
+    "outbound_block_rule_created": false,
+    "rule_name": ""
+  },
+  "job_object": {
+    "active_process_limit": 64,
+    "assigned": true,
+    "created": true,
+    "creation_time_assignment": true,
+    "kill_on_close": true,
+    "memory_limit_bytes": 268435456
+  },
+  "limitations": [
+    "Run observation covers spawn-time facts only (token/IL/AppContainer/Job/TEMP redirect).  Behavioral wall assertions (System32/Program Files/HKLM/home/network) are performed by enforcement_probe.ps1 inside this environment.",
+    "CreateProcessAsUserW requires administrator elevation for restricted-token spawns; degraded current-token spawns are fail-closed (outcome=noncompliant).",
+    "AppContainer alone does not block raw TCP outbound on some Windows builds; network isolation relies on the host firewall wall (hardening script blockoutbound default + per-task allowlist)."
+  ],
+  "observation_id": "WNR-E49D04D52EF64072826D85C3FB26DDD7",
+  "observation_kind": "windows_native_sandbox_run_observation",
+  "outcome": "compliant",
+  "output": {
+    "stderr_bytes": 0,
+    "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "stdout_bytes": 153,
+    "stdout_sha256": "faf03f977e559a337cfeb7bed3d1fee5104c3fdb9b990a0f4b6d63cdd4690e77"
+  },
+  "process": {
+    "cancellation_method": null,
+    "exit_code": 0,
+    "pid": 8500,
+    "shell_used": false,
+    "timed_out": false
+  },
+  "profile_sha256": "46d588d3e05fd65028a84d14857d3b2494652f4cc2098bae939a2de484f1f93f",
+  "schema_version": "0.1.0-draft",
+  "temp_redirect": {
+    "temp_env": "C:\\Users\\AgentUser\\AppData\\Local\\Temp",
+    "tmp_env": "C:\\Users\\AgentUser\\AppData\\Local\\Temp",
+    "workspace_tmp": "C:\\workspace\\agent-tb2.1-chunk1\\cred-bootstrap-905d5f1e31b44259ba3ccb0a588f026a\\.tmp"
+  },
+  "token": {
+    "appcontainer": false,
+    "low_integrity": false,
+    "privileges_removed": true,
+    "restricted": true,
+    "virtualization_allowed": false
+  },
+  "workspace_path_sha256": "dfc2942ddfdb72ea8a17fe95deac42a170bc96efdd22b64ce1986af14e77e406"
+}

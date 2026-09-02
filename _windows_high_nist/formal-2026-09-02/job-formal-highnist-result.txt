@@ -1,0 +1,105 @@
+﻿===== REVERT NON-ADMIN =====
+REVNA: [2026-09-02 12:50:06] === apply_hardening.ps1 Arm=non-admin Revert=True RunUser=AgentUser ===
+REVNA: [2026-09-02 12:50:06] OK   local user AgentUser exists
+REVNA: [2026-09-02 12:50:06] UAC 策略保持系统默认（Revert 不动 EnableLUA）
+REVNA: [2026-09-02 12:50:47] OK   acl deny removed C:\WINDOWS
+REVNA: [2026-09-02 12:50:54] OK   acl deny removed C:\Program Files
+REVNA: [2026-09-02 12:50:55] OK   acl deny removed C:\Program Files (x86)
+REVNA: [2026-09-02 12:50:55] OK   acl deny removed C:\ProgramData
+REVNA: [2026-09-02 12:50:57] OK   acl deny removed C:\
+REVNA: [2026-09-02 12:50:59] OK   registry deny removed HKLM:\SOFTWARE
+REVNA: [2026-09-02 12:50:59] OK   acl grant removed C:\workspace
+REVNA: [2026-09-02 12:50:59] OK   workspace C:\workspace ready (RunUser=M)
+REVNA: [2026-09-02 12:50:59] === done (StepFailures=0) ===
+REVNA: [2026-09-02 12:50:59] apply_hardening.ps1 non-admin OK
+REVNA_EXIT=0
+===== APPLY HIGH-NIST (DeepSeek pin + AppLocker restore) =====
+HNH: [2026-09-02 12:51:00] === apply_hardening.ps1 Arm=high-nist Revert=False RunUser=AgentUser ===
+HNH: [2026-09-02 12:51:00] OK   local user AgentUser exists
+HNH: [2026-09-02 12:51:00] OK   reg HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System\EnableLUA = 1
+HNH: [2026-09-02 12:51:00] OK   reg HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System\ConsentPromptBehaviorAdmin = 2
+HNH: [2026-09-02 12:51:00] OK   reg HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System\PromptOnSecureDesktop = 1
+HNH: [2026-09-02 12:51:00] OK   reg HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System\EnableInstallerDetection = 1
+HNH: [2026-09-02 12:51:00] OK   reg HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System\FilterAdministratorToken = 1
+HNH: [2026-09-02 12:51:00] OK   reg HKLM:\SOFTWARE\Policies\Microsoft\Windows\Installer\EnableUserControl = 0
+HNH: [2026-09-02 12:51:24] OK   acl deny C:\WINDOWS ((OI)(CI))
+HNH: [2026-09-02 12:51:27] OK   acl deny C:\Program Files ((OI)(CI))
+HNH: [2026-09-02 12:51:28] OK   acl deny C:\Program Files (x86) ((OI)(CI))
+HNH: [2026-09-02 12:51:28] OK   acl deny C:\ProgramData ((OI)(CI))
+HNH: [2026-09-02 12:51:28] OK   acl deny C:\Users\AgentUser ((OI)(CI))
+HNH: [2026-09-02 12:51:28] OK   acl deny C:\Users\AgentUser\AppData\Roaming ((OI)(CI))
+HNH: [2026-09-02 12:51:28] OK   acl deny C:\Users\AgentUser\AppData\Local ((OI)(CI))
+HNH: [2026-09-02 12:51:29] OK   acl deny C:\ ()
+HNH: [2026-09-02 12:51:31] OK   registry deny HKLM:\SOFTWARE
+HNH: [2026-09-02 12:51:33] OK   registry deny Registry::HKEY_CLASSES_ROOT
+HNH: [2026-09-02 12:51:33] OK   registry deny Registry::HKEY_USERS\gsa_hkcu_e4bc9a9e6f3245ca90819174db29663f
+HNH: [2026-09-02 12:51:33] OK   acl grant C:\Users\AgentUser\AppData\Local\Packages (Modify)
+HNH: [2026-09-02 12:51:33] OK   acl grant C:\workspace (Modify)
+HNH: [2026-09-02 12:51:33] OK   workspace C:\workspace ready (RunUser=M)
+HNH: [2026-09-02 12:51:34] OK   firewall default outbound = block; metadata/link-local/RFC1918/multicast block rule
+HNH: [2026-09-02 12:51:34] OK   firewall allow DeepSeek 221.204.163.76 + hosts pin
+HNH: [2026-09-02 12:51:34] OK   AppLocker whitelist policy applied (C:\WINDOWS\TEMP\gsa-applocker-high-nist-800f6a7a1ade4e4096d4f7f87decc17b.xml)
+HNH: [2026-09-02 12:51:34] === done (StepFailures=0) ===
+HNH: [2026-09-02 12:51:34] apply_hardening.ps1 high-nist OK
+HNH_EXIT=0
+===== HIGH-NIST PROBE =====
+HN: {
+HN:   "arm": "high-nist",
+HN:   "checks": {
+HN:     "appcontainer_token": true,
+HN:     "job_object_assigned": true,
+HN:     "low_integrity": true,
+HN:     "non_admin": true,
+HN:     "privileges_removed": true,
+HN:     "temp_redirected": true,
+HN:     "token_virtualization_disabled": true,
+HN:     "workspace_writable": true
+HN:   },
+HN:   "exit_code": 0,
+HN:   "observation_path": "C:\\workspace\\high-nist\\windows-native-run-observation-high-nist.json",
+HN:   "outcome": "compliant",
+HN:   "stderr_bytes": 0,
+HN:   "stdout_bytes": 0,
+HN:   "timed_out": false
+HN: }
+HN: enforcement-probe high-nist OK — result=C:\workspace\high-nist\enforcement-probe-high-nist.json
+HN_PROBE_EXIT=0
+HN_OBS outcome=compliant exit=0
+HN_DIAG: LoadUserProfileW(AgentUser) failed: [WinError 5023] 组或资源的状态不是执行请求操作的正确状态。
+HN_CHECK appcontainer_token=True
+HN_CHECK job_object_assigned=True
+HN_CHECK low_integrity=True
+HN_CHECK non_admin=True
+HN_CHECK privileges_removed=True
+HN_CHECK temp_redirected=True
+HN_CHECK token_virtualization_disabled=True
+HN_CHECK workspace_writable=True
+{
+  "arm": "high-nist",
+  "workspace": "C:\\workspace\\high-nist",
+  "checks": {
+    "workspace_writable": true,
+    "non_admin": true,
+    "token_virtualization_disabled": true,
+    "program_files_write_blocked": true,
+    "system32_write_blocked": true,
+    "hklm_write_blocked": true,
+    "privileges_removed": true,
+    "runas_blocked": true,
+    "programdata_write_blocked": true,
+    "drive_root_write_blocked": true,
+    "hkcufrozen": true,
+    "home_frozen": true,
+    "appdata_frozen": true,
+    "temp_redirected": true,
+    "low_integrity": true,
+    "appcontainer_token": true,
+    "network_blocked": true,
+    "metadata_blocked": true,
+    "probe_file_cleaned": true
+  },
+  "passed": 19,
+  "failed": 0,
+  "ran_at": "2026-09-02T04:51:43Z"
+}
+EXIT=0

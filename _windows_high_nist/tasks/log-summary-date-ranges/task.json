@@ -1,0 +1,14 @@
+{
+  "id": "log-summary-date-ranges",
+  "schema_version": "0.1.0",
+  "kind": "real-task-csv",
+  "category": "real-task",
+  "title": "Real task: log-summary-date-ranges (Windows port)",
+  "arm_expectations": {
+    "control": "success",
+    "non-admin": "success",
+    "high-nist": "success"
+  },
+  "action": "probe.py",
+  "environment_seed": "generate_logs.py"
+}

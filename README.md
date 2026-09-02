@@ -1,167 +1,117 @@
-# orz — Local Assurance-First CLI Agent
-
-ORZ 是一个本地优先、保障优先的 CLI Agent。项目采用融合架构：尽量复用 Grok Build 等成熟组件，同时由 ORZ 自己拥有 Agent control plane、循环编排、保障事件、权限边界和可验证状态链。
-
-> 当前设计：[`ADR-0010`](adr/ADR-0010-fusion-runtime-and-agent-architecture.md)（冻结基线 v1.1；2026-08-10 至 2026-08-17 追加 v1.2–v1.23 补写），`accepted / frozen`。
->
-> 当前实现：`partial`。现有 Rust workspace 尚未完全符合冻结设计，已知差距集中登记在 [`CLI_PROJECT_INDEX.md`](CLI_PROJECT_INDEX.md) 和冻结审计中。
->
-> 历史 README：[`存档/readme/README_FULL_2026-08-09.md`](存档/readme/README_FULL_2026-08-09.md)。其中的 Phase/Slice、测试数量和旧冻结叙述只用于回溯。
-
-## 核心定位
-
-- **成熟优先的融合架构**：工具、workspace、sandbox、MCP、chat-state 等能力优先采用成熟实现；出现底层冲突时，由 ORZ 融合 control plane 统一裁决。
-- **同构 Agent runtime**：一个主 Agent、一个内部检索子代理和一个外部检索子代理复用同一模型、thinking、transport、工具、上下文、压缩和单会话预算；角色合同与写权限不同。
-- **保障内建**：journal、gate、permission、snapshot、compaction、recovery 和 verifier 是 runtime 的组成部分，不是外部包装器。
-- **显式检索**：检索模式只能显式选择 `local_browser`、`framework_fallback` 或 `off`，禁止失败后隐式切换。
-- **实现不反向定义设计**：代码、Schema 或测试无法表达 ADR-0010 时，登记为差距并扩展实现，不削弱设计以迎合现状。
-
-## 当前状态
-
-| 层面 | 状态 | 说明 |
-|---|---|---|
-| 自然语言设计 | `accepted / frozen` | ADR-0010 是唯一当前自然语言设计权威 |
-| Rust production workspace | `partial` | `orz/` 已有可运行实现，但仍存在已登记符合性差距 |
-| Python assurance | `reference` | conformance、Schema authority、fixture、审计和窄兼容路径 |
-| Component adoption register | `partial` | 逐 crate/component 所有权需按当前代码重新审计 |
-| Windows incident/case evidence | `pending` | 目录已建立，首批结构化证据尚未闭环 |
-| Source quality weighting | `implemented` | 机械三档判定器 + 机器可读种子名单 + 模型加权标注已接线（Schema 先行），见索引 GAP-SOURCE-WEIGHTING-IMPL 与[实施审计](docs/audits/GAP_SOURCE_WEIGHTING_IMPL_AUDIT_2026-08-13.md) |
-| Encoding gate | `implemented` | 机械编码门控已闭合（固定解码链 + `tool_completed.output_encoding`，[实施审计](docs/audits/GAP_ENCODING_GATE_IMPL_AUDIT_2026-08-13.md)），见索引 GAP-ENCODING-GATE |
-| Context compaction | `implemented` | P0-D 压缩机制 S1-S6 已闭合（恢复前置、动作台账坍缩、五段模板摘要、守卫强制报告、会话结束压缩、黑板窗口滚动与复查对齐；ADR-0010 v1.14）；v1.15 起「黑板窗口滚动」废止，黑板改按 plan epoch 轮换（实施未开始，见索引 FUS-BLACKBOARD-PLAN-EPOCH），见索引 FUS-COMPACTION-REDESIGN 与[实施审计](docs/audits/GAP_COMPACTION_REDESIGN_IMPL_AUDIT_2026-08-14.md) |
-
-实现状态不能用 Phase 完成、测试全绿或单次评测结果替代。当前差距见 [`CLI_PROJECT_INDEX.md` §3.1](CLI_PROJECT_INDEX.md#31-已登记实现差距) 和 [`ADR-0010 冻结审计`](docs/audits/ADR_0010_FREEZE_AND_ARCHIVE_AUDIT_2026-08-09.md)。
-
 ## 快速开始
 
-### Rust Agent
+### 前提
 
-要求：Windows 为当前主要开发环境；Rust toolchain 由 [`orz/rust-toolchain.toml`](orz/rust-toolchain.toml) 固定。
+- Windows x86_64 或 Linux x86_64；
+- DeepSeek API Key。
+（注：目前 Linux 仅提供构建产物，未做专门体验适配与优化）
+
+发布包包含三个程序：`orz`（主程序）、`orz-signer`（安全签发器）、`orz-acaf-provision`（一次性初始化工具），需要放在同一目录。
+
+## 配置方式
+
+请按下表配置 Windows 环境与 Linux 环境：
+
+| 步骤 | Windows（PowerShell） | Linux（sh） |
+|---|---|---|
+| 1. 解压 | 把 `orz.exe`、`orz-signer.exe`、`orz-acaf-provision.exe` 放入同一目录（例如 `C:\orz`）。 | `mkdir -p ~/orz && cd ~/orz`<br>`tar -xzf orz-0.2.0-linux-x86_64.tar.gz`<br>`chmod +x orz orz-signer orz-acaf-provision` |
+| 2. 配置 API Key | 存入 Windows 凭据管理器（Generic，目标名 `orz-deepseek/agent`；一次即可）：<br>`cmdkey /generic:orz-deepseek/agent /user:agent /pass:你的DeepSeek_API_Key` | 用环境变量（Windows 凭据管理器通道的显式例外）：<br>`export ORZ_DEEPSEEK_API_KEY=你的DeepSeek_API_Key` |
+| 3. 初始化安全签发（一次性） | `.\orz-acaf-provision.exe "$env:USERPROFILE\.orz-acaf\keystore" "$env:USERPROFILE\.orz-acaf\signer-manifest.json"`<br><br>ACAF 默认 fail-closed，未配置会拒绝启动。 | `./orz-acaf-provision "$HOME/.orz-acaf/keystore" "$HOME/.orz-acaf/signer-manifest.json"` |
+| 4. 设置启动环境 | `$env:ORZ_ACAF_KEYSTORE = "$env:USERPROFILE\.orz-acaf\keystore"`<br>`$env:ORZ_ACAF_MANIFEST = "$env:USERPROFILE\.orz-acaf\signer-manifest.json"`<br>`$env:ORZ_ACAF_BINARY = "C:\orz\orz-signer.exe"` | `export ORZ_ACAF_KEYSTORE="$HOME/.orz-acaf/keystore"`<br>`export ORZ_ACAF_MANIFEST="$HOME/.orz-acaf/signer-manifest.json"`<br>`export ORZ_ACAF_BINARY="$HOME/orz/orz-signer"` |
+| 5. 运行 | `.\orz.exe`（交互 TUI）<br>`.\orz.exe -p "你的任务" --real`（无头模式） | `./orz`（交互 TUI）<br>`./orz -p "你的任务" --real`（无头模式） |
+
+发布包说明与完整性校验见 [`releases/orz-0.2.0-linux-x86_64/README.md`](releases/orz-0.2.0-linux-x86_64/README.md)。
+
+### 从源码运行
+
+Rust toolchain 由 [`orz/rust-toolchain.toml`](orz/rust-toolchain.toml) 固定；在 `orz/` 工作区内构建：
 
 ```powershell
-Set-Location D:\CLI\orz
 cargo build -p orz-bin
+cargo run -p orz-bin -- --fake-provider -p "hello"   # 离线试跑，无需凭据
+cargo run -p orz-bin -- --real -p "你的任务"           # 真实 DeepSeek transport
+cargo run -p orz-bin -- --fake-provider               # TUI
 ```
 
-使用离线 fake provider 运行一个 headless prompt：
+### 常用入口
 
-```powershell
-cargo run -p orz-bin -- --fake-provider -p "hello"
-```
-
-启动 TUI：
-
-```powershell
-cargo run -p orz-bin -- --fake-provider
-```
-
-运行 plan mode：
-
-```powershell
-cargo run -p orz-bin -- --fake-provider --plan -p "inspect this workspace"
-```
-
-其他生产入口：
-
-- `--real -p "<prompt>"`：使用真实 DeepSeek transport；凭据缺失时 fail-closed，不回退 fake provider。
-- `--stdio`：启动 ACP stdio server。
-- `--replay <events.jsonl>`：只读回放 journal。
-- `--allow-write`：仅显式授予 headless 本地文件编辑；不会自动放开 Bash 或网络。
-- `--max-wallclock <seconds>`：设置模型不可见的整轮 wallclock 上限。
-
-真实 transport 的凭据约束见 [`ADR-0006`](adr/ADR-0006-credential-target-registry.md)，transport/retry 边界见 [`ADR-0007`](adr/ADR-0007-transport-retry-policy.md)。
-
-### Python assurance reference
-
-Python 路径不是 production Agent runtime。它用于 conformance、fixture、Schema 和离线验证：
-
-```powershell
-Set-Location D:\CLI
-python -m pip install -e ".[dev]"
-python gsa.py doctor --quick
-```
-
-详细入口见 [`assurance/README.md`](assurance/README.md) 和 [`PYTHON_REFERENCE_SPEC_CONTRACT`](architecture/PYTHON_REFERENCE_SPEC_CONTRACT_v0.1.md)。
-
-## 架构概览
-
-| 组件 | 当前职责 |
+| 场景 | 命令 |
 |---|---|
-| `orz-loop` | 共享 Agent loop、模型/工具轮、检索角色调度和运行时守卫接线 |
-| `orz-host` | ACP/session host、工具执行、权限桥和 runtime integration |
-| `orz-assurance` | journal、gate、snapshot、credential、permit、recovery 和验证机制 |
-| `orz-bin` | TUI、headless prompt、plan、ACP stdio 和 replay 入口 |
-| `orz-tui` | 默认终端工作台和 journal projection |
-| `orz-codex` | 默认不启用的 Codex-style fallback surface；不扩展为完整 IDE |
-| `assurance/` | Python reference/conformance、Schema authority 和离线验证 |
+| 交互 TUI | `orz` |
+| 无头执行 | `orz -p "<任务>" --real` |
+| 计划模式（先记录计划再执行） | `orz --plan -p "<任务>" --real` |
+| ACP stdio server | `orz --stdio` |
+| 只读回放 journal | `orz --replay <events.jsonl>` |
+| 离线试跑（无需凭据） | `orz --fake-provider -p "hello"` |
+| 显式检索模式 | `orz --retrieval-mode local_browser \| framework_fallback \| off` |
 
-主 Agent 和两个检索子代理必须复用共享 runtime。子代理只能编辑自身 blackboard 检索分区、当前任务检索文档和检索记录存档；具体合同见 ADR-0010。
+联网检索默认关闭；需要联网的任务请显式选择 `--retrieval-mode local_browser`（推荐）或 `framework_fallback`。`local_browser` 下浏览器启动失败会自动降级到 `framework_fallback` 并在事件链留痕。
 
-## 仓库结构
+无头与批量场景的权限开关：
 
-| 路径 | 内容 |
-|---|---|
-| [`TODO.md`](TODO.md) | 实施待办勾选清单（派生自 BACKLOG，随优先级变化同步） |
-| [`orz/`](orz/) | Rust production workspace |
-| [`assurance/`](assurance/) | Python reference/conformance 实现 |
-| [`runtime/`](runtime/) | run-event、manifest、fixture 和 runtime Schema |
-| [`protocol/`](protocol/) | 协议草案、原因码、gate matrix 与结构化操作协议 v0.1 |
-| [`scripts/`](scripts/) | PowerShell 探针/工具与结构化操作协议桥接脚本 |
-| [`regression/`](regression/) | 案例、fixture 和覆盖矩阵 |
-| [`evaluation/`](evaluation/) | 评测协议和结果 Schema |
-| [`adr/`](adr/) | 架构裁决记录 |
-| [`architecture/current/`](architecture/current/) | ADR-0010 的当前派生投影入口 |
-| [`docs/audits/`](docs/audits/) | 当前设计冻结与补充审计 |
-| [`docs/incidents/`](docs/incidents/) | 产品事故记录入口 |
-| [`docs/cases/`](docs/cases/) | 精选兼容性案例入口 |
-| [`存档/`](存档/) | 已退出当前基线的历史材料 |
+- `--allow-write`：允许修改本地文件；Bash 与网络仍默认拒绝。
+- `--allow-shell` / `--allow-network`：打开评测/批量场景的 shell 与网络轴；必须与 `--allow-write` 同用，否则报错退出。
+- `--max-wallclock <秒>`：整轮墙钟上限；超时以 `run_invalidated` 终态结束，不做进程级硬杀。
 
-## 设计与审查入口
+常用调优环境变量：`ORZ_STALL_TIMEOUT`（卡住看门狗，默认 360 秒）、`ORZ_TOOL_TIMEOUT_SECS`（单工具超时，默认 300 秒）。`ORZ_ACAF_FAIL_CLOSED=0` 可临时关闭安全层，但不推荐用于正式工作。
 
-建议按以下顺序回查：
+## 框架介绍
 
-1. [`CLI_PROJECT_INDEX.md`](CLI_PROJECT_INDEX.md)：查稳定 ID、当前状态、关键词和精准入口；文件开头固定了写入格式与维护纪律。
-2. [`ADR-0010`](adr/ADR-0010-fusion-runtime-and-agent-architecture.md)：核对当前自然语言设计。
-3. [`architecture/current/README.md`](architecture/current/README.md)：查无新增语义的当前设计投影。
-4. [`ADR-0010 v1.1 补充复核`](docs/audits/ADR_0010_V1_1_SUPPLEMENT_REVIEW_2026-08-09.md)：查裁决来源和待补工程内容。
-5. [`ADR-0010 冻结与归档审计`](docs/audits/ADR_0010_FREEZE_AND_ARCHIVE_AUDIT_2026-08-09.md)：查冻结时实现偏差。
-6. Schema、当前源码和可复现测试：核对机器表达与实际实现，不用它们反向改写设计。
+orz 为本地优先、保障优先的终端 AI 编程 Agent/harness，制作全程使用AI coding。其中，控制面、Agent loop 与保障体系为自研内容，直接复用部分 Grok Build 中已成熟的工具与工作区组件，参考 Codex 的 UI 与代码设计语言，执行侧服务调用形态大量借鉴 Home Assistant（`domain.service + target + data`），并少量参考 DeepSeek Harness 与其他成熟产品。
 
-历史材料统一从 [`存档/README.md`](存档/README.md) 进入。归档材料只作来源回溯和演进审计，不独立产生当前实现需求。
+整体架构可主要分为两大块两小块。
+两大块为**Agent 层**与**机械层**，两小块为作为核心面板的**黑板**和外挂的**时间与动作域判断组件**。
 
-## 已知符合性差距
+### Agent 层
 
-冻结审计（2026-08-09）登记的六项差距中，前四项已闭合
-（GAP-TOOL-BUDGET、GAP-INQUIRY-SPLIT、GAP-SUBAGENT-RUNTIME、
-IMPL-RUN-EVENT-SCHEMA / GAP-SUFFICIENCY-SCHEMA）；当前未闭合项：
+- **主 Agent**：唯一任务推进者。系统提示近零，只面对冻结的固定 8 工具面（`read_file`/`grep`/`search_replace`/`run_terminal_cmd`/`web_search`/`web_fetch`，加 `blackboard_read` 与 `submit`）；默认模型为 DeepSeek v4 flash（thinking 默认 max）。任务最终经 submit 两阶段（请求 → 确认）交付，终答前有一轮机械审计与反例自查。
+- **外部检索子代理**：联网检索经外部检索子代理执行（`web_search` 全局并发 1）。检索通道为显式三态：`local_browser`（本地浏览器，首选。已做人化输入延迟：逐字符键入 + 提交前停顿 + Enter，专门用于 Google 搜索路径）在启动失败时机械降级为 `framework_fallback`（原生 web 检索）并记录切换，页面级失败不降级；未选择时检索关闭。内部检索 lane 保留设计，触发工具当前封存。
+- **会话与计划**：交互会话（TUI/ACP）可跨进程恢复，一次性 `-p` 不携带旧会话。`--plan` 提供机械计划状态机工作流，生产路径中 plan_first 休眠。
 
-- Windows incident/case 需要真实 provenance、脱敏、分类和回归门槛（`partial`，见 GAP-WINDOWS-EVIDENCE）。
-- 逐 crate/component 采用矩阵需要按当前代码重新审计（`partial`，见 FUS-COMPONENT-REGISTER）。
+### 机械层
 
-这些差距的 canonical ID 和入口维护在 [`CLI_PROJECT_INDEX.md`](CLI_PROJECT_INDEX.md)，不得在 README 中继续扩展实施流水。
+- **结构**：机械层承载全部机制、门禁与守卫；其执行侧可进一步拆解为**半助理层**（命令运行、写执行与检索派发，返回有界结构化结果）与**静默机械审查层**（运行中只记录审查事实、终答前给出事实报告，不给建议）。
+- **执行**：模型只描述动作，机械层按注册表路由 → 目标/契约校验 → 执行 → 验证逐层处理。命令、文件写入与联网访问（`web_fetch`/`browser_read`）先过权限与 ACAF 票据门，`web_search` 无 URL 目标不走票据；文件读写带内容锚点核证；失败由半助理层自动记录（进程/文件/环境实体登记），返回结构化错误信封（step/code/message/trace_id）。
+- **安全**：指令来源门（IPG）、权限桥、ACAF（`orz-signer` 独立进程签发一次性票据，未配置即 fail-closed）、凭据目标注册与脱敏、URL 门禁与来源加权、检索候选计数。
+- **审计、状态、压缩**：每次运行写入 hash-chained 事件 journal（事件 schema v0.2）并经 verifier 交叉校验；机械审计事实报告、动作台账、黑板 plan epoch 归档；上下文完全由机械折叠/压缩承接，会话可恢复、journal 可 `--replay` 只读回放。
+- **生成期守卫与中立问询**：复读检测（滚动哈希 + 3-gram 兜底）、空响应重试链、stall 看门狗（`ORZ_STALL_TIMEOUT`，默认 360 秒无活动即收尾）与整轮墙钟上限；守卫触发有明确原因、不静默降档；默认每满 50 轮触发一次简短中立三问（软门，不禁工具），询问动作目标与进度。
 
-## 安全与证据边界
+### 黑板
 
-- 真实 provider 凭据不得写入仓库、prompt、journal 或调试输出；真实 transport 不得静默回退 fake。
-- 工具、wallclock、停滞和权限路径必须 fail-closed，并保留可验证终态。
-- 生产接线后，命令执行默认走结构化操作协议（模型只提交操作 JSON；删除进回收站、缓存分类、超限拒绝，动作 JSONL 审计），跨环境只经固定桥接；当前为参考实现，接线待裁决。见 [结构化操作协议 v0.1](protocol/structured-operation-protocol-v0.1.md)。
-- 外部来源必须记录全文可见性；metadata、摘要或片段不得冒充全文证据。
-- 历史回归案例不得直接作为被测 Agent 的答案提示。
-- 本仓库不是 LIF/FEP 科学 claim 的事实源，不替代相应 INDEX、MAP、R、JSON、日志或原始产物。
-- Global Review Mode 的 activation receipt 只激活审查义务，不等于审查结论。
+黑板是主 Agent 与机械层共用的会话状态面板：分区保存计划、执行动作、实体（文件/进程/环境）、会话与门禁记录。主 Agent 通过 `blackboard_read` 按需读取（PULL），不常驻提示词；写入、轮换与归档由机械层完成，黑板按 plan epoch 归档，旧 epoch 可只读回查。
+机械层依靠黑板进行压缩任务。
 
-## 开发检查
+### 时间与动作域判断组件
 
-按改动范围选择最小充分验证；高风险 runtime 变更再扩大到 workspace 级：
+机械层维护本会话的时间性参考系（LIF）：持续计算时间、进度、错误率与“是否卡住”等特征（T̂、u_prog/u_err/u_stuck），按动作特征来做粗粒度的域区分并记录域切换（spike，随会话侧车存档）。计算与触发全在机械层完成、模型无感；模型需要时经 `blackboard_read` 的时间查询面（now/recent/history/feature）按需读取。fires 只内部留痕，不注入模型面——长任务的时间感知由框架替模型记账。
 
-```powershell
-Set-Location D:\CLI\orz
-cargo fmt --check
-cargo check -p orz-loop -p orz-host -p orz-assurance -p orz-bin
-cargo test -p orz-loop -p orz-host -p orz-assurance
-```
+### 载体与组件
 
-文档、Schema 和 Python reference 变更还应运行仓库检查及相关测试；不得用旧测试锁定已被 ADR-0010 废止的逻辑。
+- 入口：`orz` 一个程序承载 TUI、`-p` 无头、`--plan`、`--stdio`（ACP）与 `--replay`；`orz-signer`/`orz-acaf-provision` 只用于安全层初始化（见上方配置）。
+- Rust 生产 workspace（`orz/`）：`orz-loop`（Agent loop、黑板与守卫）、`orz-host`（工具执行、权限桥、凭据、本地浏览器）、`orz-assurance`（journal、事件、ACAF、verifier）、`orz-bin`（CLI 入口）、`orz-tui`（终端工作台）。
+- 支撑体系：`assurance/` 为 Python reference/conformance 参考；`runtime/` 为事件 Schema；`protocol/` 为结构化操作协议草案。
+
+一次运行的路径大致是：入口 → 会话与 journal 初始化 → 主 Agent 轮次（近零提示 + 固定工具面）→ 动作下单 → 机械层权限/票据门 → 执行与检索 → 结果与事件回流 → submit 两阶段交付 → journal 收尾。之后可以 `--replay` 回放或恢复会话复查。
+
+机制的完整状态、稳定 ID 与深入入口见下方「开发者入口」；设计权威为 [`ADR-0010`](adr/ADR-0010-fusion-runtime-and-agent-architecture.md)，当前投影在 [`architecture/current/README.md`](architecture/current/README.md)。
+
+## 开发者入口
+
+- 全项目路由、状态与稳定 ID：[`CLI_PROJECT_INDEX.md`](CLI_PROJECT_INDEX.md)
+- 当前设计权威：[`ADR-0010`](adr/ADR-0010-fusion-runtime-and-agent-architecture.md)
+- 当前架构投影：[`architecture/current/README.md`](architecture/current/README.md)
+- 统一待办：[`docs/BACKLOG_AND_PRIORITIES.md`](docs/BACKLOG_AND_PRIORITIES.md) / [`TODO.md`](TODO.md)
+- 实施审计：[`docs/audits/`](docs/audits/)
+- Python reference/conformance：[`assurance/README.md`](assurance/README.md)
+- 历史 README 快照：[`存档/readme/README.md`](存档/readme/README.md)
+
+### 当前状态
+
+- **设计**：ADR-0010 是唯一自然语言设计权威，`accepted / frozen`。
+- **实现**：Rust production workspace 可运行，当前整体 `partial`；未闭合差距集中登记在 [`CLI_PROJECT_INDEX.md` §3.1](CLI_PROJECT_INDEX.md#31-已登记实现差距)，不在本 README 展开。
+- **发布**：0.1.0 / 0.2.0 试用发布包入口在 [`releases/`](releases/)；当前未提供 macOS 原生包。
+- 测试全绿或单次跑分不构成架构符合性结论；符合性状态以索引与审计为准。
 
 ## License
 
-Apache License 2.0。见 [`LICENSE`](LICENSE) 和 [`NOTICE`](NOTICE)。
+Apache License 2.0。见 [`LICENSE`](LICENSE) 与 [`NOTICE`](NOTICE)。

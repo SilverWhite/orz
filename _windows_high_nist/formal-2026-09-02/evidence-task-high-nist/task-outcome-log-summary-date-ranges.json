@@ -1,0 +1,20 @@
+{
+  "schema_version": "0.1.0",
+  "task": "log-summary-date-ranges",
+  "arm": "high-nist",
+  "attempt": "success",
+  "error": "",
+  "artifact": "C:\\workspace\\taskhighnist\\task-log-summary-date-ranges\\summary.csv",
+  "extra": {
+    "rows": 6,
+    "counts": {
+      "2026-08-20": 3,
+      "2026-08-21": 5,
+      "2026-08-22": 1,
+      "2026-08-23": 4,
+      "2026-08-24": 2,
+      "2026-08-25": 6
+    }
+  },
+  "ran_at": "2026-09-02T14:00:31Z"
+}

@@ -1,0 +1,129 @@
+﻿=== CASE ctl-python arm=control ===
+SBX: {
+SBX:   "arm": "control",
+SBX:   "checks": {
+SBX:     "workspace_writable": true
+SBX:   },
+SBX:   "exit_code": 0,
+SBX:   "observation_path": "C:\\workspace\\diag-sweep-ctl-python\\obs.json",
+SBX:   "outcome": "compliant",
+SBX:   "stderr_bytes": 0,
+SBX:   "stdout_bytes": 0,
+SBX:   "timed_out": false
+SBX: }
+SBX_EXIT=0
+=== CASE ctl-orz arm=control ===
+SBX: {
+SBX:   "arm": "control",
+SBX:   "checks": {
+SBX:     "workspace_writable": true
+SBX:   },
+SBX:   "exit_code": 2,
+SBX:   "observation_path": "C:\\workspace\\diag-sweep-ctl-orz\\obs.json",
+SBX:   "outcome": "compliant",
+SBX:   "stderr_bytes": 587,
+SBX:   "stdout_bytes": 0,
+SBX:   "timed_out": false
+SBX: }
+SBX_EXIT=0
+=== CASE nonadmin-orz arm=non-admin ===
+SBX: {
+SBX:   "arm": "non-admin",
+SBX:   "checks": {
+SBX:     "non_admin": true,
+SBX:     "privileges_removed": true,
+SBX:     "token_virtualization_disabled": true,
+SBX:     "workspace_writable": true
+SBX:   },
+SBX:   "exit_code": 1,
+SBX:   "observation_path": "C:\\workspace\\diag-sweep-nonadmin-orz\\obs.json",
+SBX:   "outcome": "compliant",
+SBX:   "stderr_bytes": 486,
+SBX:   "stdout_bytes": 0,
+SBX:   "timed_out": false
+SBX: }
+SBX_EXIT=0
+=== CASE hn-python arm=high-nist ===
+SBX: {
+SBX:   "arm": "high-nist",
+SBX:   "checks": {
+SBX:     "appcontainer_token": true,
+SBX:     "job_object_assigned": true,
+SBX:     "low_integrity": true,
+SBX:     "non_admin": true,
+SBX:     "privileges_removed": true,
+SBX:     "temp_redirected": true,
+SBX:     "token_virtualization_disabled": true,
+SBX:     "workspace_writable": true
+SBX:   },
+SBX:   "exit_code": 0,
+SBX:   "observation_path": "C:\\workspace\\diag-sweep-hn-python\\obs.json",
+SBX:   "outcome": "compliant",
+SBX:   "stderr_bytes": 0,
+SBX:   "stdout_bytes": 0,
+SBX:   "timed_out": false
+SBX: }
+SBX_EXIT=0
+=== CASE hn-noac-python arm=high-nist ===
+SBX: {
+SBX:   "arm": "high-nist",
+SBX:   "checks": {
+SBX:     "job_object_assigned": true,
+SBX:     "low_integrity": true,
+SBX:     "non_admin": true,
+SBX:     "privileges_removed": true,
+SBX:     "temp_redirected": true,
+SBX:     "token_virtualization_disabled": true,
+SBX:     "workspace_writable": true
+SBX:   },
+SBX:   "exit_code": 0,
+SBX:   "observation_path": "C:\\workspace\\diag-sweep-hn-noac-python\\obs.json",
+SBX:   "outcome": "compliant",
+SBX:   "stderr_bytes": 0,
+SBX:   "stdout_bytes": 0,
+SBX:   "timed_out": false
+SBX: }
+SBX_EXIT=0
+=== CASE hn-orz arm=high-nist ===
+SBX: {
+SBX:   "arm": "high-nist",
+SBX:   "checks": {
+SBX:     "appcontainer_token": true,
+SBX:     "job_object_assigned": true,
+SBX:     "low_integrity": true,
+SBX:     "non_admin": true,
+SBX:     "privileges_removed": true,
+SBX:     "temp_redirected": true,
+SBX:     "token_virtualization_disabled": true,
+SBX:     "workspace_writable": true
+SBX:   },
+SBX:   "exit_code": 3221225794,
+SBX:   "observation_path": "C:\\workspace\\diag-sweep-hn-orz\\obs.json",
+SBX:   "outcome": "compliant",
+SBX:   "stderr_bytes": 0,
+SBX:   "stdout_bytes": 0,
+SBX:   "timed_out": false
+SBX: }
+SBX_EXIT=0
+=== CASE hn-noac-orz arm=high-nist ===
+SBX: {
+SBX:   "arm": "high-nist",
+SBX:   "checks": {
+SBX:     "job_object_assigned": true,
+SBX:     "low_integrity": true,
+SBX:     "non_admin": true,
+SBX:     "privileges_removed": true,
+SBX:     "temp_redirected": true,
+SBX:     "token_virtualization_disabled": true,
+SBX:     "workspace_writable": true
+SBX:   },
+SBX:   "exit_code": 1,
+SBX:   "observation_path": "C:\\workspace\\diag-sweep-hn-noac-orz\\obs.json",
+SBX:   "outcome": "compliant",
+SBX:   "stderr_bytes": 116,
+SBX:   "stdout_bytes": 0,
+SBX:   "timed_out": false
+SBX: }
+SBX_EXIT=0
+DIAG_ORZ_SWEEP_DONE
+EXIT=0

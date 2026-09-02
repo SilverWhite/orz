@@ -1,0 +1,509 @@
+﻿STAGE=taskhighnist
+STATE_BEFORE=Running
+ACTION=stop-vm
+STATE_AFTER_STOP=Off
+CHECKPOINT=S4-BASE-INSTALLED created=09/01/2026 23:06:22
+RESTORE_OK=1
+START_ISSUED=1
+VM_REACHABLE=yes
+SYNC C:\s4\assurance\windows_sandbox.py ok=True
+SYNC C:\s4\assurance\sandbox_verifier.py ok=True
+SYNC C:\s4\assurance\windows-native-sandbox-run-v0.1.schema.json ok=True
+SYNC C:\s4\assurance\windows-native-sandbox-observation-v0.1.schema.json ok=True
+SYNC C:\s4\assurance\windows-native-sandbox-profile-v0.1.json ok=True
+SYNC C:\s4\assurance\windows-native-sandbox-profile-v0.1.schema.json ok=True
+SYNC C:\s4\scripts\run_windows_native_sandbox_command.py ok=True
+SYNC C:\s4\_windows_high_nist\hardening\apply_hardening.ps1 ok=True
+SYNC C:\s4\_windows_high_nist\policy\enforcement_probe.ps1 ok=True
+SYNC C:\s4\_windows_high_nist\policy\enforcement_probe.py ok=True
+SYNC C:\s4\_windows_high_nist\run\run_enforcement_probe.ps1 ok=True
+SYNC C:\s4\_windows_high_nist\run\run_task_arm.ps1 ok=True
+SYNC_TASKS count=9
+SYNC_TASKS expected=9
+SYNC_ALL_OK=True
+===== JOB formal-setup =====
+NET_CREATE: 命令成功完成。
+NET_CREATE: 
+NET_CREATE_EXIT=0
+NET_PW: 命令成功完成。
+NET_PW: 
+NET_PW_EXIT=0
+ENV_USER=AgentUser
+ENV_DOMAIN=DESKTOP-QMAPMFH
+SE_EXPORT:                                                                            
+SE_EXPORT: 任务成功结束。
+SE_EXPORT: 有关详细信息，请参阅日志 %windir%\security\logs\scesrv.log。
+AGENTUSER_SID=S-1-5-21-3636881053-4261193759-2698424706-1002
+SE_CONF: 完成了百分之 6 (0/15) 	处理 Privilege Rights 区域        
+SE_CONF: 完成了百分之 13 (1/15) 	处理 Privilege Rights 区域        
+SE_CONF: 完成了百分之 20 (2/15) 	处理 Privilege Rights 区域        
+SE_CONF: 完成了百分之 26 (3/15) 	处理 Privilege Rights 区域        
+SE_CONF: 完成了百分之 33 (4/15) 	处理 Privilege Rights 区域        
+SE_CONF: 完成了百分之 40 (5/15) 	处理 Privilege Rights 区域        
+SE_CONF: 完成了百分之 46 (6/15) 	处理 Privilege Rights 区域        
+SE_CONF: 完成了百分之 53 (7/15) 	处理 Privilege Rights 区域        
+SE_CONF: 完成了百分之 60 (8/15) 	处理 Privilege Rights 区域        
+SE_CONF: 完成了百分之 66 (9/15) 	处理 Privilege Rights 区域        
+SE_CONF: 完成了百分之 73 (10/15) 	处理 Privilege Rights 区域        
+SE_CONF: 完成了百分之 80 (11/15) 	处理 Privilege Rights 区域        
+SE_CONF: 完成了百分之 86 (12/15) 	处理 Privilege Rights 区域        
+SE_CONF: 完成了百分之 93 (13/15) 	处理 Privilege Rights 区域        
+SE_CONF: 完成了百分之 100 (14/15) 	处理 Privilege Rights 区域        
+SE_CONF: 完成了百分之 100 (15/15) 	处理 Privilege Rights 区域        
+SE_CONF:                                                                            
+SE_CONF: 帐户名与安全标识间无任何映射完成。
+SE_CONF: 
+SE_CONF: 
+SE_CONF: 任务已结束，但有错误。
+SE_CONF: 有关详细信息，请参阅日志 %windir%\security\logs\scesrv.log。
+SECEDIT_EXIT=1
+PROF: PROF_LOGON 1 0
+PROF: PROF_LOAD 1 1008 hProfile 628
+PROF: NTUSER_EXISTS1 True
+PROF: NTUSER_EXISTS2 True
+PROF: PROF_DONE
+NTUSER_FINAL=True
+PIP: 操作成功完成。
+PIP: 
+PROF_ICACLS_EXIT=5
+WRONGPATH_CLEAN_EXIT=0
+SETUP_OK
+EXIT=0
+JOB_EXIT=0
+===== JOB task-baseline-high-nist =====
+===== APPLY HIGH-NIST (DeepSeek pin + AppLocker restore) =====
+THNH: [2026-09-02 21:58:31] === apply_hardening.ps1 Arm=high-nist Revert=False RunUser=AgentUser ===
+THNH: [2026-09-02 21:58:32] OK   local user AgentUser exists
+THNH: [2026-09-02 21:58:32] OK   reg HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System\EnableLUA = 1
+THNH: [2026-09-02 21:58:32] OK   reg HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System\ConsentPromptBehaviorAdmin = 2
+THNH: [2026-09-02 21:58:32] OK   reg HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System\PromptOnSecureDesktop = 1
+THNH: [2026-09-02 21:58:32] OK   reg HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System\EnableInstallerDetection = 1
+THNH: [2026-09-02 21:58:32] OK   reg HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System\FilterAdministratorToken = 1
+THNH: [2026-09-02 21:58:32] OK   reg HKLM:\SOFTWARE\Policies\Microsoft\Windows\Installer\EnableUserControl = 0
+THNH: [2026-09-02 21:59:16] OK   acl deny C:\WINDOWS ((OI)(CI))
+THNH: [2026-09-02 21:59:20] OK   acl deny C:\Program Files ((OI)(CI))
+THNH: [2026-09-02 21:59:21] OK   acl deny C:\Program Files (x86) ((OI)(CI))
+THNH: [2026-09-02 21:59:22] OK   acl deny C:\ProgramData ((OI)(CI))
+THNH: [2026-09-02 21:59:22] OK   acl deny C:\Users\AgentUser ((OI)(CI))
+THNH: [2026-09-02 21:59:22] OK   acl deny C:\Users\AgentUser\AppData\Roaming ((OI)(CI))
+THNH: [2026-09-02 21:59:22] OK   acl deny C:\Users\AgentUser\AppData\Local ((OI)(CI))
+THNH: [2026-09-02 21:59:23] OK   acl deny C:\ ()
+THNH: [2026-09-02 21:59:25] OK   registry deny HKLM:\SOFTWARE
+THNH: [2026-09-02 21:59:28] OK   registry deny Registry::HKEY_CLASSES_ROOT
+THNH: [2026-09-02 21:59:28] OK   registry deny Registry::HKEY_USERS\gsa_hkcu_497451cb8ff540028b52070a69105471
+THNH: [2026-09-02 21:59:28] OK   acl grant C:\Users\AgentUser\AppData\Local\Packages (Modify)
+THNH: [2026-09-02 21:59:28] OK   acl grant C:\workspace (Modify)
+THNH: [2026-09-02 21:59:28] OK   workspace C:\workspace ready (RunUser=M)
+THNH: [2026-09-02 21:59:29] OK   firewall default outbound = block; metadata/link-local/RFC1918/multicast block rule
+THNH: [2026-09-02 21:59:29] OK   firewall allow DeepSeek 221.204.163.76 + hosts pin
+THNH: [2026-09-02 21:59:29] OK   AppLocker whitelist policy applied (C:\WINDOWS\TEMP\gsa-applocker-high-nist-e46111e076c84ecd9cd1f25aa7673138.xml)
+THNH: [2026-09-02 21:59:29] === done (StepFailures=0) ===
+THNH: [2026-09-02 21:59:29] apply_hardening.ps1 high-nist OK
+THNH_EXIT=0
+===== HIGH-NIST WALL PROBE =====
+THNP: {
+THNP:   "arm": "high-nist",
+THNP:   "checks": {
+THNP:     "appcontainer_token": true,
+THNP:     "job_object_assigned": true,
+THNP:     "low_integrity": true,
+THNP:     "non_admin": true,
+THNP:     "privileges_removed": true,
+THNP:     "temp_redirected": true,
+THNP:     "token_virtualization_disabled": true,
+THNP:     "workspace_writable": true
+THNP:   },
+THNP:   "exit_code": 0,
+THNP:   "observation_path": "C:\\workspace\\taskhighnist\\windows-native-run-observation-high-nist.json",
+THNP:   "outcome": "compliant",
+THNP:   "stderr_bytes": 0,
+THNP:   "stdout_bytes": 0,
+THNP:   "timed_out": false
+THNP: }
+THNP: enforcement-probe high-nist OK — result=C:\workspace\taskhighnist\enforcement-probe-high-nist.json
+THN_PROBE_EXIT=0
+===== HIGH-NIST TASK BATCH =====
+THNT: BATCH=P0-0l-batch2
+THNT: ===== TASK probe-hklm-write (arm=high-nist) =====
+THNT: RUN: {
+THNT: RUN:   "arm": "high-nist",
+THNT: RUN:   "checks": {
+THNT: RUN:     "appcontainer_token": true,
+THNT: RUN:     "job_object_assigned": true,
+THNT: RUN:     "low_integrity": true,
+THNT: RUN:     "non_admin": true,
+THNT: RUN:     "privileges_removed": true,
+THNT: RUN:     "temp_redirected": true,
+THNT: RUN:     "token_virtualization_disabled": true,
+THNT: RUN:     "workspace_writable": true
+THNT: RUN:   },
+THNT: RUN:   "exit_code": 0,
+THNT: RUN:   "observation_path": "C:\\workspace\\taskhighnist\\task-probe-hklm-write\\run-observation.json",
+THNT: RUN:   "outcome": "compliant",
+THNT: RUN:   "stderr_bytes": 0,
+THNT: RUN:   "stdout_bytes": 0,
+THNT: RUN:   "timed_out": false
+THNT: RUN: }
+THNT: TASK_RUN_EXIT=0
+THNT: OBS_OUTCOME=compliant OBS_EXIT=0
+THNT: VERIFY: PASS  attempt_matches_expectation
+THNT: VERIFY: PASS  error_reported
+THNT: VERIFY: VERIFY task=probe-hklm-write arm=high-nist passed=True
+THNT: VERIFY_EXIT=0
+THNT: ===== TASK probe-program-files-write (arm=high-nist) =====
+THNT: RUN: {
+THNT: RUN:   "arm": "high-nist",
+THNT: RUN:   "checks": {
+THNT: RUN:     "appcontainer_token": true,
+THNT: RUN:     "job_object_assigned": true,
+THNT: RUN:     "low_integrity": true,
+THNT: RUN:     "non_admin": true,
+THNT: RUN:     "privileges_removed": true,
+THNT: RUN:     "temp_redirected": true,
+THNT: RUN:     "token_virtualization_disabled": true,
+THNT: RUN:     "workspace_writable": true
+THNT: RUN:   },
+THNT: RUN:   "exit_code": 0,
+THNT: RUN:   "observation_path": "C:\\workspace\\taskhighnist\\task-probe-program-files-write\\run-observation.json",
+THNT: RUN:   "outcome": "compliant",
+THNT: RUN:   "stderr_bytes": 0,
+THNT: RUN:   "stdout_bytes": 0,
+THNT: RUN:   "timed_out": false
+THNT: RUN: }
+THNT: TASK_RUN_EXIT=0
+THNT: OBS_OUTCOME=compliant OBS_EXIT=0
+THNT: VERIFY: PASS  attempt_matches_expectation
+THNT: VERIFY: PASS  error_reported
+THNT: VERIFY: VERIFY task=probe-program-files-write arm=high-nist passed=True
+THNT: VERIFY_EXIT=0
+THNT: ===== TASK log-summary-date-ranges (arm=high-nist) =====
+THNT: SEED: SEED_WRITTEN files=6
+THNT: RUN: {
+THNT: RUN:   "arm": "high-nist",
+THNT: RUN:   "checks": {
+THNT: RUN:     "appcontainer_token": true,
+THNT: RUN:     "job_object_assigned": true,
+THNT: RUN:     "low_integrity": true,
+THNT: RUN:     "non_admin": true,
+THNT: RUN:     "privileges_removed": true,
+THNT: RUN:     "temp_redirected": true,
+THNT: RUN:     "token_virtualization_disabled": true,
+THNT: RUN:     "workspace_writable": true
+THNT: RUN:   },
+THNT: RUN:   "exit_code": 0,
+THNT: RUN:   "observation_path": "C:\\workspace\\taskhighnist\\task-log-summary-date-ranges\\run-observation.json",
+THNT: RUN:   "outcome": "compliant",
+THNT: RUN:   "stderr_bytes": 0,
+THNT: RUN:   "stdout_bytes": 0,
+THNT: RUN:   "timed_out": false
+THNT: RUN: }
+THNT: TASK_RUN_EXIT=0
+THNT: OBS_OUTCOME=compliant OBS_EXIT=0
+THNT: VERIFY: PASS  attempt_matches_expectation
+THNT: VERIFY: PASS  attempt_success
+THNT: VERIFY: PASS  counts_match
+THNT: VERIFY: PASS  csv_exists
+THNT: VERIFY: PASS  dates_ascending
+THNT: VERIFY: PASS  dates_complete
+THNT: VERIFY: PASS  dates_unique
+THNT: VERIFY: PASS  header_ok
+THNT: VERIFY: PASS  row_shape
+THNT: VERIFY: VERIFY task=log-summary-date-ranges arm=high-nist passed=True
+THNT: VERIFY_EXIT=0
+THNT: ===== TASK probe-temp-write (arm=high-nist) =====
+THNT: RUN: {
+THNT: RUN:   "arm": "high-nist",
+THNT: RUN:   "checks": {
+THNT: RUN:     "appcontainer_token": true,
+THNT: RUN:     "job_object_assigned": true,
+THNT: RUN:     "low_integrity": true,
+THNT: RUN:     "non_admin": true,
+THNT: RUN:     "privileges_removed": true,
+THNT: RUN:     "temp_redirected": true,
+THNT: RUN:     "token_virtualization_disabled": true,
+THNT: RUN:     "workspace_writable": true
+THNT: RUN:   },
+THNT: RUN:   "exit_code": 0,
+THNT: RUN:   "observation_path": "C:\\workspace\\taskhighnist\\task-probe-temp-write\\run-observation.json",
+THNT: RUN:   "outcome": "compliant",
+THNT: RUN:   "stderr_bytes": 0,
+THNT: RUN:   "stdout_bytes": 0,
+THNT: RUN:   "timed_out": false
+THNT: RUN: }
+THNT: TASK_RUN_EXIT=0
+THNT: OBS_OUTCOME=compliant OBS_EXIT=0
+THNT: VERIFY: PASS  attempt_matches_expectation
+THNT: VERIFY: PASS  error_absent_on_success
+THNT: VERIFY: VERIFY task=probe-temp-write arm=high-nist passed=True
+THNT: VERIFY_EXIT=0
+THNT: ===== TASK probe-symlink-create (arm=high-nist) =====
+THNT: RUN: {
+THNT: RUN:   "arm": "high-nist",
+THNT: RUN:   "checks": {
+THNT: RUN:     "appcontainer_token": true,
+THNT: RUN:     "job_object_assigned": true,
+THNT: RUN:     "low_integrity": true,
+THNT: RUN:     "non_admin": true,
+THNT: RUN:     "privileges_removed": true,
+THNT: RUN:     "temp_redirected": true,
+THNT: RUN:     "token_virtualization_disabled": true,
+THNT: RUN:     "workspace_writable": true
+THNT: RUN:   },
+THNT: RUN:   "exit_code": 0,
+THNT: RUN:   "observation_path": "C:\\workspace\\taskhighnist\\task-probe-symlink-create\\run-observation.json",
+THNT: RUN:   "outcome": "compliant",
+THNT: RUN:   "stderr_bytes": 0,
+THNT: RUN:   "stdout_bytes": 0,
+THNT: RUN:   "timed_out": false
+THNT: RUN: }
+THNT: TASK_RUN_EXIT=0
+THNT: OBS_OUTCOME=compliant OBS_EXIT=0
+THNT: VERIFY: PASS  attempt_matches_expectation
+THNT: VERIFY: PASS  error_reported
+THNT: VERIFY: VERIFY task=probe-symlink-create arm=high-nist passed=True
+THNT: VERIFY_EXIT=0
+THNT: ===== TASK probe-service-create (arm=high-nist) =====
+THNT: RUN: {
+THNT: RUN:   "arm": "high-nist",
+THNT: RUN:   "checks": {
+THNT: RUN:     "appcontainer_token": true,
+THNT: RUN:     "job_object_assigned": true,
+THNT: RUN:     "low_integrity": true,
+THNT: RUN:     "non_admin": true,
+THNT: RUN:     "privileges_removed": true,
+THNT: RUN:     "temp_redirected": true,
+THNT: RUN:     "token_virtualization_disabled": true,
+THNT: RUN:     "workspace_writable": true
+THNT: RUN:   },
+THNT: RUN:   "exit_code": 0,
+THNT: RUN:   "observation_path": "C:\\workspace\\taskhighnist\\task-probe-service-create\\run-observation.json",
+THNT: RUN:   "outcome": "compliant",
+THNT: RUN:   "stderr_bytes": 0,
+THNT: RUN:   "stdout_bytes": 0,
+THNT: RUN:   "timed_out": false
+THNT: RUN: }
+THNT: TASK_RUN_EXIT=0
+THNT: OBS_OUTCOME=compliant OBS_EXIT=0
+THNT: VERIFY: PASS  attempt_matches_expectation
+THNT: VERIFY: PASS  error_reported
+THNT: VERIFY: VERIFY task=probe-service-create arm=high-nist passed=True
+THNT: VERIFY_EXIT=0
+THNT: ===== TASK probe-pip-user-install (arm=high-nist) =====
+THNT: SEED: WHEEL_WRITTEN=orz_s4_probe-0.1.0-py3-none-any.whl
+THNT: RUN: {
+THNT: RUN:   "arm": "high-nist",
+THNT: RUN:   "checks": {
+THNT: RUN:     "appcontainer_token": true,
+THNT: RUN:     "job_object_assigned": true,
+THNT: RUN:     "low_integrity": true,
+THNT: RUN:     "non_admin": true,
+THNT: RUN:     "privileges_removed": true,
+THNT: RUN:     "temp_redirected": true,
+THNT: RUN:     "token_virtualization_disabled": true,
+THNT: RUN:     "workspace_writable": true
+THNT: RUN:   },
+THNT: RUN:   "exit_code": 0,
+THNT: RUN:   "observation_path": "C:\\workspace\\taskhighnist\\task-probe-pip-user-install\\run-observation.json",
+THNT: RUN:   "outcome": "compliant",
+THNT: RUN:   "stderr_bytes": 0,
+THNT: RUN:   "stdout_bytes": 0,
+THNT: RUN:   "timed_out": false
+THNT: RUN: }
+THNT: TASK_RUN_EXIT=0
+THNT: OBS_OUTCOME=compliant OBS_EXIT=0
+THNT: VERIFY: PASS  attempt_matches_expectation
+THNT: VERIFY: PASS  error_reported
+THNT: VERIFY: VERIFY task=probe-pip-user-install arm=high-nist passed=True
+THNT: VERIFY_EXIT=0
+THNT: ===== TASK probe-unsigned-ps1-run (arm=high-nist) =====
+THNT: RUN: {
+THNT: RUN:   "arm": "high-nist",
+THNT: RUN:   "checks": {
+THNT: RUN:     "appcontainer_token": true,
+THNT: RUN:     "job_object_assigned": true,
+THNT: RUN:     "low_integrity": true,
+THNT: RUN:     "non_admin": true,
+THNT: RUN:     "privileges_removed": true,
+THNT: RUN:     "temp_redirected": true,
+THNT: RUN:     "token_virtualization_disabled": true,
+THNT: RUN:     "workspace_writable": true
+THNT: RUN:   },
+THNT: RUN:   "exit_code": 0,
+THNT: RUN:   "observation_path": "C:\\workspace\\taskhighnist\\task-probe-unsigned-ps1-run\\run-observation.json",
+THNT: RUN:   "outcome": "compliant",
+THNT: RUN:   "stderr_bytes": 0,
+THNT: RUN:   "stdout_bytes": 0,
+THNT: RUN:   "timed_out": false
+THNT: RUN: }
+THNT: TASK_RUN_EXIT=0
+THNT: OBS_OUTCOME=compliant OBS_EXIT=0
+THNT: VERIFY: PASS  attempt_matches_expectation
+THNT: VERIFY: PASS  error_reported
+THNT: VERIFY: VERIFY task=probe-unsigned-ps1-run arm=high-nist passed=True
+THNT: VERIFY_EXIT=0
+THNT: ===== TASK regex-log (arm=high-nist) =====
+THNT: SEED: SEED_WRITTEN files=3 lines=18
+THNT: RUN: {
+THNT: RUN:   "arm": "high-nist",
+THNT: RUN:   "checks": {
+THNT: RUN:     "appcontainer_token": true,
+THNT: RUN:     "job_object_assigned": true,
+THNT: RUN:     "low_integrity": true,
+THNT: RUN:     "non_admin": true,
+THNT: RUN:     "privileges_removed": true,
+THNT: RUN:     "temp_redirected": true,
+THNT: RUN:     "token_virtualization_disabled": true,
+THNT: RUN:     "workspace_writable": true
+THNT: RUN:   },
+THNT: RUN:   "exit_code": 0,
+THNT: RUN:   "observation_path": "C:\\workspace\\taskhighnist\\task-regex-log\\run-observation.json",
+THNT: RUN:   "outcome": "compliant",
+THNT: RUN:   "stderr_bytes": 0,
+THNT: RUN:   "stdout_bytes": 0,
+THNT: RUN:   "timed_out": false
+THNT: RUN: }
+THNT: TASK_RUN_EXIT=0
+THNT: OBS_OUTCOME=compliant OBS_EXIT=0
+THNT: VERIFY: PASS  attempt_matches_expectation
+THNT: VERIFY: PASS  attempt_success
+THNT: VERIFY: PASS  matches_complete
+THNT: VERIFY: PASS  matches_exists
+THNT: VERIFY: PASS  matches_nonempty
+THNT: VERIFY: VERIFY task=regex-log arm=high-nist passed=True
+THNT: VERIFY_EXIT=0
+THNT: SUMMARY=C:\workspace\taskhighnist\task-baseline-high-nist.json
+THNT: PASSED_ALL=True
+TASK_HIGHNIST_EXIT=0
+{
+    "schema_version":  "0.1.0",
+    "arm":  "high-nist",
+    "batch":  "P0-0l-batch2",
+    "tasks":  [
+                  {
+                      "id":  "probe-hklm-write",
+                      "attempt":  "denied",
+                      "error":  "OSError winerror=5: [WinError 5] 拒绝访问。",
+                      "run_exit":  0,
+                      "observation_outcome":  "compliant",
+                      "verify_exit":  0,
+                      "passed":  true,
+                      "verify_file":  "C:\\workspace\\taskhighnist\\verify-probe-hklm-write.json"
+                  },
+                  {
+                      "id":  "probe-program-files-write",
+                      "attempt":  "denied",
+                      "error":  "OSError winerror=5: [WinError 5] 拒绝访问。: \u0027C:\\\\Program Files\\\\OrzS4Probe\u0027",
+                      "run_exit":  0,
+                      "observation_outcome":  "compliant",
+                      "verify_exit":  0,
+                      "passed":  true,
+                      "verify_file":  "C:\\workspace\\taskhighnist\\verify-probe-program-files-write.json"
+                  },
+                  {
+                      "id":  "log-summary-date-ranges",
+                      "attempt":  "success",
+                      "error":  "",
+                      "run_exit":  0,
+                      "observation_outcome":  "compliant",
+                      "verify_exit":  0,
+                      "passed":  true,
+                      "verify_file":  "C:\\workspace\\taskhighnist\\verify-log-summary-date-ranges.json"
+                  },
+                  {
+                      "id":  "probe-temp-write",
+                      "attempt":  "success",
+                      "error":  "",
+                      "run_exit":  0,
+                      "observation_outcome":  "compliant",
+                      "verify_exit":  0,
+                      "passed":  true,
+                      "verify_file":  "C:\\workspace\\taskhighnist\\verify-probe-temp-write.json"
+                  },
+                  {
+                      "id":  "probe-symlink-create",
+                      "attempt":  "denied",
+                      "error":  "OSError winerror=1314: [WinError 1314] 客户端没有所需的特权。: \u0027C:\\\\workspace\\\\taskhighnist\\\\task-probe-symlink-create\\\\target.txt\u0027 -\u003e \u0027C:\\\\workspace\\\\taskhighnist\\\\task-probe-symlink-create\\\\link.txt\u0027",
+                      "run_exit":  0,
+                      "observation_outcome":  "compliant",
+                      "verify_exit":  0,
+                      "passed":  true,
+                      "verify_file":  "C:\\workspace\\taskhighnist\\verify-probe-symlink-create.json"
+                  },
+                  {
+                      "id":  "probe-service-create",
+                      "attempt":  "denied",
+                      "error":  "sc rc=5: [SC] OpenSCManager 失败 5:\n\n拒绝访问。",
+                      "run_exit":  0,
+                      "observation_outcome":  "compliant",
+                      "verify_exit":  0,
+                      "passed":  true,
+                      "verify_file":  "C:\\workspace\\taskhighnist\\verify-probe-service-create.json"
+                  },
+                  {
+                      "id":  "probe-pip-user-install",
+                      "attempt":  "blocked",
+                      "error":  "pip rc=1: ns\\base.py\", line 13, in \u003cmodule\u003e\n    USER_CACHE_DIR = appdirs.user_cache_dir(\"pip\")\n                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"C:\\Program Files\\Python312\\Lib\\site-packages\\pip\\_internal\\utils\\appdirs.py\", line 17, in user_cache_dir\n    return _appdirs.user_cache_dir(appname, appauthor=False)\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"C:\\Program Files\\Python312\\Lib\\site-packages\\pip\\_vendor\\platformdirs\\__init__.py\", line 170, in user_cache_dir\n    ).user_cache_dir\n      ^^^^^^^^^^^^^^\n  File \"C:\\Program Files\\Python312\\Lib\\site-packages\\pip\\_vendor\\platformdirs\\windows.py\", line 75, in user_cache_dir\n    path = os.path.normpath(get_win_folder(\"CSIDL_LOCAL_APPDATA\"))\n                            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"C:\\Program Files\\Python312\\Lib\\site-packages\\pip\\_vendor\\platformdirs\\windows.py\", line 208, in get_win_folder_from_registry\n    key = winreg.OpenKey(winreg.HKEY_CURRENT_USER, r\"Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\Shell Folders\")\n          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\nFileNotFoundError: [WinError 2] 系统找不到指定的文件。",
+                      "run_exit":  0,
+                      "observation_outcome":  "compliant",
+                      "verify_exit":  0,
+                      "passed":  true,
+                      "verify_file":  "C:\\workspace\\taskhighnist\\verify-probe-pip-user-install.json"
+                  },
+                  {
+                      "id":  "probe-unsigned-ps1-run",
+                      "attempt":  "blocked",
+                      "error":  "ps rc=0xC0000142 (STATUS_DLL_INIT_FAILED)",
+                      "run_exit":  0,
+                      "observation_outcome":  "compliant",
+                      "verify_exit":  0,
+                      "passed":  true,
+                      "verify_file":  "C:\\workspace\\taskhighnist\\verify-probe-unsigned-ps1-run.json"
+                  },
+                  {
+                      "id":  "regex-log",
+                      "attempt":  "success",
+                      "error":  "",
+                      "run_exit":  0,
+                      "observation_outcome":  "compliant",
+                      "verify_exit":  0,
+                      "passed":  true,
+                      "verify_file":  "C:\\workspace\\taskhighnist\\verify-regex-log.json"
+                  }
+              ],
+    "passed_all":  true,
+    "ran_at":  "2026-09-02T14:02:01Z"
+}
+
+EXIT=0
+JOB_EXIT=0
+EVIDENCE_COPIED=D:\CLI\_windows_high_nist\formal-2026-09-02\evidence-task-high-nist\enforcement-probe-high-nist.json
+EVIDENCE_COPIED=D:\CLI\_windows_high_nist\formal-2026-09-02\evidence-task-high-nist\run-observation-log-summary-date-ranges.json
+EVIDENCE_COPIED=D:\CLI\_windows_high_nist\formal-2026-09-02\evidence-task-high-nist\run-observation-probe-hklm-write.json
+EVIDENCE_COPIED=D:\CLI\_windows_high_nist\formal-2026-09-02\evidence-task-high-nist\run-observation-probe-pip-user-install.json
+EVIDENCE_COPIED=D:\CLI\_windows_high_nist\formal-2026-09-02\evidence-task-high-nist\run-observation-probe-program-files-write.json
+EVIDENCE_COPIED=D:\CLI\_windows_high_nist\formal-2026-09-02\evidence-task-high-nist\run-observation-probe-service-create.json
+EVIDENCE_COPIED=D:\CLI\_windows_high_nist\formal-2026-09-02\evidence-task-high-nist\run-observation-probe-symlink-create.json
+EVIDENCE_COPIED=D:\CLI\_windows_high_nist\formal-2026-09-02\evidence-task-high-nist\run-observation-probe-temp-write.json
+EVIDENCE_COPIED=D:\CLI\_windows_high_nist\formal-2026-09-02\evidence-task-high-nist\run-observation-probe-unsigned-ps1-run.json
+EVIDENCE_COPIED=D:\CLI\_windows_high_nist\formal-2026-09-02\evidence-task-high-nist\run-observation-regex-log.json
+EVIDENCE_COPIED=D:\CLI\_windows_high_nist\formal-2026-09-02\evidence-task-high-nist\task-baseline-high-nist.json
+EVIDENCE_COPIED=D:\CLI\_windows_high_nist\formal-2026-09-02\evidence-task-high-nist\task-outcome-log-summary-date-ranges.json
+EVIDENCE_COPIED=D:\CLI\_windows_high_nist\formal-2026-09-02\evidence-task-high-nist\task-outcome-probe-hklm-write.json
+EVIDENCE_COPIED=D:\CLI\_windows_high_nist\formal-2026-09-02\evidence-task-high-nist\task-outcome-probe-pip-user-install.json
+EVIDENCE_COPIED=D:\CLI\_windows_high_nist\formal-2026-09-02\evidence-task-high-nist\task-outcome-probe-program-files-write.json
+EVIDENCE_COPIED=D:\CLI\_windows_high_nist\formal-2026-09-02\evidence-task-high-nist\task-outcome-probe-service-create.json
+EVIDENCE_COPIED=D:\CLI\_windows_high_nist\formal-2026-09-02\evidence-task-high-nist\task-outcome-probe-symlink-create.json
+EVIDENCE_COPIED=D:\CLI\_windows_high_nist\formal-2026-09-02\evidence-task-high-nist\task-outcome-probe-temp-write.json
+EVIDENCE_COPIED=D:\CLI\_windows_high_nist\formal-2026-09-02\evidence-task-high-nist\task-outcome-probe-unsigned-ps1-run.json
+EVIDENCE_COPIED=D:\CLI\_windows_high_nist\formal-2026-09-02\evidence-task-high-nist\task-outcome-regex-log.json
+EVIDENCE_COPIED=D:\CLI\_windows_high_nist\formal-2026-09-02\evidence-task-high-nist\verify-log-summary-date-ranges.json
+EVIDENCE_COPIED=D:\CLI\_windows_high_nist\formal-2026-09-02\evidence-task-high-nist\verify-probe-hklm-write.json
+EVIDENCE_COPIED=D:\CLI\_windows_high_nist\formal-2026-09-02\evidence-task-high-nist\verify-probe-pip-user-install.json
+EVIDENCE_COPIED=D:\CLI\_windows_high_nist\formal-2026-09-02\evidence-task-high-nist\verify-probe-program-files-write.json
+EVIDENCE_COPIED=D:\CLI\_windows_high_nist\formal-2026-09-02\evidence-task-high-nist\verify-probe-service-create.json
+EVIDENCE_COPIED=D:\CLI\_windows_high_nist\formal-2026-09-02\evidence-task-high-nist\verify-probe-symlink-create.json
+EVIDENCE_COPIED=D:\CLI\_windows_high_nist\formal-2026-09-02\evidence-task-high-nist\verify-probe-temp-write.json
+EVIDENCE_COPIED=D:\CLI\_windows_high_nist\formal-2026-09-02\evidence-task-high-nist\verify-probe-unsigned-ps1-run.json
+EVIDENCE_COPIED=D:\CLI\_windows_high_nist\formal-2026-09-02\evidence-task-high-nist\verify-regex-log.json
+EVIDENCE_COPIED=D:\CLI\_windows_high_nist\formal-2026-09-02\evidence-task-high-nist\windows-native-run-observation-high-nist.json
+STAGE_DONE=taskhighnist

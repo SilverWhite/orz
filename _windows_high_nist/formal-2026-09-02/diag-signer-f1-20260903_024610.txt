@@ -1,0 +1,189 @@
+﻿=== SIGNER INVENTORY ===
+WHOAMI=nt authority\system
+PF_FILE name=orz.exe size=50368000 sha=CF56620E005F46476B7D4ACCCC3387C415333041D786B27B7A519FA10CFAC4D6
+PF_FILE name=orz-acaf-provision.exe size=6642176 sha=B89E6CB9C82FDAD0D330D1B66898F055DC4AEA82087113527AAE87388E75162F
+PF_FILE name=orz-signer.exe size=6737920 sha=2D8784FEF421A634A1C51F378CFA492358DA8CB455A0F2B18B03DADFC689BCA5
+TOOLS_FILE name=cred_probe.exe size=4890381 sha=339C20D27A98A69FD77694E3C5A024EE30C49BD231A210CC4B3E76912CA6252B
+TOOLS_FILE name=orz.exe size=50368000 sha=CF56620E005F46476B7D4ACCCC3387C415333041D786B27B7A519FA10CFAC4D6
+TOOLS_FILE name=orz-acaf-provision.exe size=6642176 sha=B89E6CB9C82FDAD0D330D1B66898F055DC4AEA82087113527AAE87388E75162F
+TOOLS_FILE name=orz-signer.exe size=6737920 sha=2D8784FEF421A634A1C51F378CFA492358DA8CB455A0F2B18B03DADFC689BCA5
+TOOLS_FILE name=python-3.12.10-amd64.exe size=26964224 sha=67B5635E80EA51072B87941312D00EC8927C4DB9BA18938F7AD2D27B328B95FB
+ENV_MACHINE ORZ_ACAF_MANIFEST=C:\workspace\acaf\signer-manifest.json
+ENV_USER ORZ_ACAF_MANIFEST=
+ENV_PROC ORZ_ACAF_MANIFEST=C:\workspace\acaf\signer-manifest.json
+ENV_MACHINE ORZ_ACAF_KEYSTORE=C:\workspace\acaf
+ENV_USER ORZ_ACAF_KEYSTORE=
+ENV_PROC ORZ_ACAF_KEYSTORE=C:\workspace\acaf
+ENV_MACHINE ORZ_ACAF_BINARY=C:\Program Files\orz\orz-signer.exe
+ENV_USER ORZ_ACAF_BINARY=
+ENV_PROC ORZ_ACAF_BINARY=C:\Program Files\orz\orz-signer.exe
+ENV_MACHINE ORZ_ACAF_FAIL_CLOSED=1
+ENV_USER ORZ_ACAF_FAIL_CLOSED=
+ENV_PROC ORZ_ACAF_FAIL_CLOSED=1
+ENV_MACHINE ORZ_SIGNER_MANIFEST=
+ENV_USER ORZ_SIGNER_MANIFEST=
+ENV_PROC ORZ_SIGNER_MANIFEST=
+ENV_MACHINE ORZ_SIGNER_KEYSTORE_ROOT=
+ENV_USER ORZ_SIGNER_KEYSTORE_ROOT=
+ENV_PROC ORZ_SIGNER_KEYSTORE_ROOT=
+ACAF_RESOLVED manifest=C:\workspace\acaf\signer-manifest.json
+ACAF_RESOLVED keystore=C:\workspace\acaf
+ACAF_RESOLVED binary=C:\Program Files\orz\orz-signer.exe
+MANIFEST path=C:\workspace\acaf\signer-manifest.json
+MANIFEST_LINE {
+MANIFEST_LINE   "manifest_version": 1,
+MANIFEST_LINE   "signer_revision": 1,
+MANIFEST_LINE   "binary_name": "orz-signer",
+MANIFEST_LINE   "binary_sha256": "2d8784fef421a634a1c51f378cfa492358da8cb455a0f2b18b03dadfc689bca5"
+MANIFEST_LINE }
+MANIFEST path=C:\Users\HL\AppData\Local\orz\acaf\signer-manifest.json
+MANIFEST_LINE {
+MANIFEST_LINE   "manifest_version": 1,
+MANIFEST_LINE   "signer_revision": 1,
+MANIFEST_LINE   "binary_name": "orz-signer",
+MANIFEST_LINE   "binary_sha256": "4929eb89f7e13fea3c9bff8b182cbf66df7538cb72568107f6928ca995939634"
+MANIFEST_LINE }
+KEYSTORE path=C:\workspace\acaf
+KEYSTORE_ITEM name=installation-key.dpapi isdir=False size=364
+KEYSTORE_ITEM name=installation-key.json isdir=False size=463
+KEYSTORE_ITEM name=signer-manifest.json isdir=False size=169
+KEYSTORE path=C:\Users\HL\AppData\Local\orz\acaf
+KEYSTORE_ITEM name=installation-key.dpapi isdir=False size=364
+KEYSTORE_ITEM name=installation-key.json isdir=False size=463
+KEYSTORE_ITEM name=signer-manifest.json isdir=False size=169
+SIGNER_EXE=C:\Program Files\orz\orz-signer.exe exists=True
+APP_ROOT_READY=True
+=== SIGNER DIRECT direct-immediate ===
+PROBE_DIRECT_EXIT direct-immediate code=
+SIGNER_ERR orz-signer fatal: keystore error: windows dpapi error: CryptUnprotectData failed: 绯荤粺鎵句笉鍒版寚瀹氱殑璺緞銆?(0x80070003)
+=== SIGNER DIRECT direct-idle ===
+PROBE_DIRECT_EXIT direct-idle code=
+SIGNER_ERR orz-signer fatal: keystore error: windows dpapi error: CryptUnprotectData failed: 绯荤粺鎵句笉鍒版寚瀹氱殑璺緞銆?(0x80070003)
+=== CASE ctl-signer arm=control ===
+SBX: {
+SBX:   "arm": "control",
+SBX:   "checks": {
+SBX:     "workspace_writable": true
+SBX:   },
+SBX:   "exit_code": 0,
+SBX:   "observation_path": "C:\\workspace\\diag-signer-ctl-signer\\obs.json",
+SBX:   "outcome": "compliant",
+SBX:   "stderr_bytes": 0,
+SBX:   "stdout_bytes": 21,
+SBX:   "timed_out": false
+SBX: }
+SBX_EXIT=0
+WALL_OUT.TXT ctl-signer
+WALL_ERR.TXT ctl-signer
+orz-signer fatal: keystore error: windows dpapi error: CryptUnprotectData failed: 绯荤粺鎵句笉鍒版寚瀹氱殑璺緞銆?(0x80070003)
+=== CASE nonadmin-signer arm=non-admin ===
+SBX: {
+SBX:   "arm": "non-admin",
+SBX:   "checks": {
+SBX:     "non_admin": true,
+SBX:     "privileges_removed": true,
+SBX:     "token_virtualization_disabled": true,
+SBX:     "workspace_writable": true
+SBX:   },
+SBX:   "exit_code": 0,
+SBX:   "observation_path": "C:\\workspace\\diag-signer-nonadmin-signer\\obs.json",
+SBX:   "outcome": "compliant",
+SBX:   "stderr_bytes": 0,
+SBX:   "stdout_bytes": 21,
+SBX:   "timed_out": false
+SBX: }
+SBX_EXIT=0
+WALL_OUT.TXT nonadmin-signer
+{"id":1,"result":{"session_key_hex":"f896b4977b4ffcb14d074129f8b13761b8aa5e8fb5f37c3bb12768f2ac4a60d5","signer_revision":1,"signer_measurement":"2d8784fef421a634a1c51f378cfa492358da8cb455a0f2b18b03dadfc689bca5","template_sha256":"63ce66d885a1bdd2ac7f89e6ffbdc8f93aa8656059dbea6e3dc9845aca65678c","sequence_start":0}}
+{"id":2,"result":{"schema_version":"0.2.0-draft","ticket_kind":"command_exec_v1","ticket_id":"TKT-c58f9a16aead4a7f842baa3aeadc97d2","session_id":"DIAG-S1","agent_id":"diag","activation_id":null,"goal_version":0,"goal_digest":"0000000000000000000000000000000000000000000000000000000000000000","policy_revision":0,"capability_scope":"command_exec","template_sha256":null,"canonical_arguments_sha256":"1111111111111111111111111111111111111111111111111111111111111111","resolved_target_sha256":"2222222222222222222222222222222222222222222222222222222222222222","sequence":1,"nonce":"8b9e1ea5d00c4dde808a902a6198a94c","issued_at":"2026-09-02T18:46:29.000000Z","expires_at":"2026-09-02T18:46:34.000000Z","signer_revision":1,"signer_measurement":"2d8784fef421a634a1c51f378cfa492358da8cb455a0f2b18b03dadfc689bca5","hmac":"0s7J5zfQw0U3InllNZ1B6U3YOGRySWDST0UZ-WQGLBE"}}
+WALL_ERR.TXT nonadmin-signer
+=== CASE nonadmin-app arm=non-admin ===
+SBX: {
+SBX:   "arm": "non-admin",
+SBX:   "checks": {
+SBX:     "non_admin": true,
+SBX:     "privileges_removed": true,
+SBX:     "token_virtualization_disabled": true,
+SBX:     "workspace_writable": true
+SBX:   },
+SBX:   "exit_code": 0,
+SBX:   "observation_path": "C:\\workspace\\diag-signer-nonadmin-app\\obs.json",
+SBX:   "outcome": "compliant",
+SBX:   "stderr_bytes": 0,
+SBX:   "stdout_bytes": 28,
+SBX:   "timed_out": false
+SBX: }
+SBX_EXIT=0
+APP_PROBE nonadmin-app
+APP_PROBE_LINE app-write-ok nonadmin-app 
+=== CASE hn-noac-signer arm=high-nist ===
+SBX: {
+SBX:   "arm": "high-nist",
+SBX:   "checks": {
+SBX:     "job_object_assigned": true,
+SBX:     "low_integrity": true,
+SBX:     "non_admin": true,
+SBX:     "privileges_removed": true,
+SBX:     "temp_redirected": true,
+SBX:     "token_virtualization_disabled": true,
+SBX:     "workspace_writable": true
+SBX:   },
+SBX:   "exit_code": 0,
+SBX:   "observation_path": "C:\\workspace\\diag-signer-hn-noac-signer\\obs.json",
+SBX:   "outcome": "compliant",
+SBX:   "stderr_bytes": 0,
+SBX:   "stdout_bytes": 21,
+SBX:   "timed_out": false
+SBX: }
+SBX_EXIT=0
+WALL_OUT.TXT hn-noac-signer
+{"id":1,"result":{"session_key_hex":"f896b4977b4ffcb14d074129f8b13761b8aa5e8fb5f37c3bb12768f2ac4a60d5","signer_revision":1,"signer_measurement":"2d8784fef421a634a1c51f378cfa492358da8cb455a0f2b18b03dadfc689bca5","template_sha256":"63ce66d885a1bdd2ac7f89e6ffbdc8f93aa8656059dbea6e3dc9845aca65678c","sequence_start":0}}
+{"id":2,"result":{"schema_version":"0.2.0-draft","ticket_kind":"command_exec_v1","ticket_id":"TKT-15374aa3bc37450a87c017b4b2e04469","session_id":"DIAG-S1","agent_id":"diag","activation_id":null,"goal_version":0,"goal_digest":"0000000000000000000000000000000000000000000000000000000000000000","policy_revision":0,"capability_scope":"command_exec","template_sha256":null,"canonical_arguments_sha256":"1111111111111111111111111111111111111111111111111111111111111111","resolved_target_sha256":"2222222222222222222222222222222222222222222222222222222222222222","sequence":1,"nonce":"80af7347415d407a85c56182c932e7d0","issued_at":"2026-09-02T18:46:30.000000Z","expires_at":"2026-09-02T18:46:35.000000Z","signer_revision":1,"signer_measurement":"2d8784fef421a634a1c51f378cfa492358da8cb455a0f2b18b03dadfc689bca5","hmac":"ORq1a3GUITANGkLIyTa4Xui-3SZ1WFcVGwQOGi_ZRPA"}}
+WALL_ERR.TXT hn-noac-signer
+=== CASE hn-noac-signer-idle arm=high-nist ===
+SBX: {
+SBX:   "arm": "high-nist",
+SBX:   "checks": {
+SBX:     "job_object_assigned": true,
+SBX:     "low_integrity": true,
+SBX:     "non_admin": true,
+SBX:     "privileges_removed": true,
+SBX:     "temp_redirected": true,
+SBX:     "token_virtualization_disabled": true,
+SBX:     "workspace_writable": true
+SBX:   },
+SBX:   "exit_code": 0,
+SBX:   "observation_path": "C:\\workspace\\diag-signer-hn-noac-signer-idle\\obs.json",
+SBX:   "outcome": "compliant",
+SBX:   "stderr_bytes": 0,
+SBX:   "stdout_bytes": 21,
+SBX:   "timed_out": false
+SBX: }
+SBX_EXIT=0
+WALL_OUT.TXT hn-noac-signer-idle
+{"id":1,"result":{"session_key_hex":"f896b4977b4ffcb14d074129f8b13761b8aa5e8fb5f37c3bb12768f2ac4a60d5","signer_revision":1,"signer_measurement":"2d8784fef421a634a1c51f378cfa492358da8cb455a0f2b18b03dadfc689bca5","template_sha256":"63ce66d885a1bdd2ac7f89e6ffbdc8f93aa8656059dbea6e3dc9845aca65678c","sequence_start":0}}
+{"id":2,"result":{"schema_version":"0.2.0-draft","ticket_kind":"command_exec_v1","ticket_id":"TKT-4587f0ec4e68497cbd8071efceb4a38c","session_id":"DIAG-S1","agent_id":"diag","activation_id":null,"goal_version":0,"goal_digest":"0000000000000000000000000000000000000000000000000000000000000000","policy_revision":0,"capability_scope":"command_exec","template_sha256":null,"canonical_arguments_sha256":"1111111111111111111111111111111111111111111111111111111111111111","resolved_target_sha256":"2222222222222222222222222222222222222222222222222222222222222222","sequence":1,"nonce":"798b481fe5cb45dfb23651104cfb59a7","issued_at":"2026-09-02T18:46:46.000000Z","expires_at":"2026-09-02T18:46:51.000000Z","signer_revision":1,"signer_measurement":"2d8784fef421a634a1c51f378cfa492358da8cb455a0f2b18b03dadfc689bca5","hmac":"jX9T9-Gz4s1ZDht0qi6qiCUw01_-1DQ19V6sM__1p8c"}}
+WALL_ERR.TXT hn-noac-signer-idle
+=== CASE hn-noac-app arm=high-nist ===
+SBX: {
+SBX:   "arm": "high-nist",
+SBX:   "checks": {
+SBX:     "job_object_assigned": true,
+SBX:     "low_integrity": true,
+SBX:     "non_admin": true,
+SBX:     "privileges_removed": true,
+SBX:     "temp_redirected": true,
+SBX:     "token_virtualization_disabled": true,
+SBX:     "workspace_writable": true
+SBX:   },
+SBX:   "exit_code": 1,
+SBX:   "observation_path": "C:\\workspace\\diag-signer-hn-noac-app\\obs.json",
+SBX:   "outcome": "compliant",
+SBX:   "stderr_bytes": 36,
+SBX:   "stdout_bytes": 0,
+SBX:   "timed_out": false
+SBX: }
+SBX_EXIT=0
+APP_PROBE hn-noac-app MISSING
+DIAG_SIGNER_F1_DONE
+EXIT=0

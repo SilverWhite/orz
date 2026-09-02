@@ -1,0 +1,174 @@
+﻿STAGE=wrapup
+STATE_BEFORE=Running
+ACTION=stop-vm
+STATE_AFTER_STOP=Off
+CHECKPOINT=S4-BASE-NET-2026-09-02 created=09/02/2026 23:01:36
+RESTORE_OK=1
+START_ISSUED=1
+VM_REACHABLE=yes
+SYNC C:\s4\assurance\windows_sandbox.py ok=True
+SYNC C:\s4\assurance\sandbox_verifier.py ok=True
+SYNC C:\s4\assurance\windows-native-sandbox-run-v0.1.schema.json ok=True
+SYNC C:\s4\assurance\windows-native-sandbox-observation-v0.1.schema.json ok=True
+SYNC C:\s4\assurance\windows-native-sandbox-profile-v0.1.json ok=True
+SYNC C:\s4\assurance\windows-native-sandbox-profile-v0.1.schema.json ok=True
+SYNC C:\s4\scripts\run_windows_native_sandbox_command.py ok=True
+SYNC C:\s4\_windows_high_nist\hardening\apply_hardening.ps1 ok=True
+SYNC C:\s4\_windows_high_nist\policy\enforcement_probe.ps1 ok=True
+SYNC C:\s4\_windows_high_nist\policy\enforcement_probe.py ok=True
+SYNC C:\s4\_windows_high_nist\run\run_enforcement_probe.ps1 ok=True
+SYNC C:\s4\_windows_high_nist\run\run_task_arm.ps1 ok=True
+SYNC C:\s4\tools\cred_probe.exe ok=True
+SYNC_TASKS count=9
+SYNC_TASKS expected=9
+SYNC_ALL_OK=True
+===== JOB formal-setup =====
+NET_PW: 命令成功完成。
+NET_PW: 
+NET_PW_EXIT=0
+ENV_USER=AgentUser
+ENV_DOMAIN=DESKTOP-QMAPMFH
+SE_EXPORT:                                                                            
+SE_EXPORT: 任务成功结束。
+SE_EXPORT: 有关详细信息，请参阅日志 %windir%\security\logs\scesrv.log。
+AGENTUSER_SID=S-1-5-21-3636881053-4261193759-2698424706-1002
+SE_CONF: 完成了百分之 6 (0/15) 	处理 Privilege Rights 区域        
+SE_CONF: 完成了百分之 13 (1/15) 	处理 Privilege Rights 区域        
+SE_CONF: 完成了百分之 20 (2/15) 	处理 Privilege Rights 区域        
+SE_CONF: 完成了百分之 26 (3/15) 	处理 Privilege Rights 区域        
+SE_CONF: 完成了百分之 33 (4/15) 	处理 Privilege Rights 区域        
+SE_CONF: 完成了百分之 40 (5/15) 	处理 Privilege Rights 区域        
+SE_CONF: 完成了百分之 46 (6/15) 	处理 Privilege Rights 区域        
+SE_CONF: 完成了百分之 53 (7/15) 	处理 Privilege Rights 区域        
+SE_CONF: 完成了百分之 60 (8/15) 	处理 Privilege Rights 区域        
+SE_CONF: 完成了百分之 66 (9/15) 	处理 Privilege Rights 区域        
+SE_CONF: 完成了百分之 73 (10/15) 	处理 Privilege Rights 区域        
+SE_CONF: 完成了百分之 80 (11/15) 	处理 Privilege Rights 区域        
+SE_CONF: 完成了百分之 86 (12/15) 	处理 Privilege Rights 区域        
+SE_CONF: 完成了百分之 93 (13/15) 	处理 Privilege Rights 区域        
+SE_CONF: 完成了百分之 100 (14/15) 	处理 Privilege Rights 区域        
+SE_CONF: 完成了百分之 100 (15/15) 	处理 Privilege Rights 区域        
+SE_CONF:                                                                            
+SE_CONF: 任务成功结束。
+SE_CONF: 有关详细信息，请参阅日志 %windir%\security\logs\scesrv.log。
+SECEDIT_EXIT=0
+PROF: PROF_LOGON 1 0
+PROF: PROF_LOAD 1 1008 hProfile 616
+PROF: NTUSER_EXISTS1 True
+PROF: NTUSER_EXISTS2 True
+PROF: PROF_DONE
+NTUSER_FINAL=True
+PIP: 操作成功完成。
+PIP: 
+PROF_ICACLS_EXIT=5
+WRONGPATH_CLEAN_EXIT=0
+SETUP_OK
+EXIT=0
+JOB_EXIT=0
+===== JOB wrapup-pre =====
+HIVE_PRE mounted=False locked=False
+WRAPUP_PRE_DONE
+EXIT=0
+JOB_EXIT=0
+===== JOB wrapup-apply =====
+HIVE_PRE_APPLY mounted=False
+===== WRAPUP APPLY HIGH-NIST =====
+WRAP_APPLY: [2026-09-02 23:46:49] === apply_hardening.ps1 Arm=high-nist Revert=False RunUser=AgentUser ===
+WRAP_APPLY: [2026-09-02 23:46:50] OK   local user AgentUser exists
+WRAP_APPLY: [2026-09-02 23:46:50] OK   reg HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System\EnableLUA = 1
+WRAP_APPLY: [2026-09-02 23:46:50] OK   reg HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System\ConsentPromptBehaviorAdmin = 2
+WRAP_APPLY: [2026-09-02 23:46:50] OK   reg HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System\PromptOnSecureDesktop = 1
+WRAP_APPLY: [2026-09-02 23:46:50] OK   reg HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System\EnableInstallerDetection = 1
+WRAP_APPLY: [2026-09-02 23:46:50] OK   reg HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System\FilterAdministratorToken = 1
+WRAP_APPLY: [2026-09-02 23:46:50] OK   reg HKLM:\SOFTWARE\Policies\Microsoft\Windows\Installer\EnableUserControl = 0
+WRAP_APPLY: [2026-09-02 23:47:40] OK   acl deny C:\WINDOWS ((OI)(CI))
+WRAP_APPLY: [2026-09-02 23:47:45] OK   acl deny C:\Program Files ((OI)(CI))
+WRAP_APPLY: [2026-09-02 23:47:46] OK   acl deny C:\Program Files (x86) ((OI)(CI))
+WRAP_APPLY: [2026-09-02 23:47:47] OK   acl deny C:\ProgramData ((OI)(CI))
+WRAP_APPLY: [2026-09-02 23:47:47] OK   acl deny C:\Users\AgentUser ((OI)(CI))
+WRAP_APPLY: [2026-09-02 23:47:47] OK   acl deny C:\Users\AgentUser\AppData\Roaming ((OI)(CI))
+WRAP_APPLY: [2026-09-02 23:47:47] OK   acl deny C:\Users\AgentUser\AppData\Local ((OI)(CI))
+WRAP_APPLY: [2026-09-02 23:47:51] OK   acl deny C:\ ()
+WRAP_APPLY: [2026-09-02 23:47:53] OK   registry deny HKLM:\SOFTWARE
+WRAP_APPLY: [2026-09-02 23:47:55] OK   registry deny Registry::HKEY_CLASSES_ROOT
+WRAP_APPLY: [2026-09-02 23:47:55] OK   registry deny Registry::HKEY_USERS\gsa_hkcu_7d70493880ff432388d72aa67349b5af
+WRAP_APPLY: [2026-09-02 23:47:55] OK   hive settled for C:\Users\AgentUser\NTUSER.DAT
+WRAP_APPLY: [2026-09-02 23:47:55] OK   acl grant C:\Users\AgentUser\AppData\Local\Packages (Modify)
+WRAP_APPLY: [2026-09-02 23:47:55] OK   acl grant C:\workspace (Modify)
+WRAP_APPLY: [2026-09-02 23:47:55] OK   workspace C:\workspace ready (RunUser=M)
+WRAP_APPLY: [2026-09-02 23:47:56] OK   firewall default outbound = block; metadata/link-local/RFC1918/multicast block rule
+WRAP_APPLY: [2026-09-02 23:47:56] OK   firewall allow DeepSeek 221.204.163.76 + hosts pin
+WRAP_APPLY: [2026-09-02 23:47:56] OK   AppLocker whitelist policy applied (C:\WINDOWS\TEMP\gsa-applocker-high-nist-b180b54323a24f9ba344eb15f065301d.xml)
+WRAP_APPLY: [2026-09-02 23:47:56] === done (StepFailures=0) ===
+WRAP_APPLY: [2026-09-02 23:47:56] apply_hardening.ps1 high-nist OK
+WRAP_APPLY_EXIT=0
+APPLOCKER effective=True srpv2=True exe_rules=4
+WRAPUP_APPLY_DONE
+EXIT=0
+JOB_EXIT=0
+===== JOB wrapup-probe =====
+===== WRAPUP HIVE READY GATE (5023 cooldown) =====
+GATE: GATE_READY attempt 1 elapsed 0.0
+GATE_EXIT=0
+===== WRAPUP PROBE 1 (immediate after apply) =====
+PROBE1 exit=0 hive5023=True
+===== WRAPUP PROBE 2 (stability) =====
+PROBE2 exit=0 hive5023=True
+HIVE_5023_NOTE=present (compliant; registered gap)
+===== CRED SANDBOX arm=non-admin =====
+CREDSBX: {
+CREDSBX:   "arm": "non-admin",
+CREDSBX:   "checks": {
+CREDSBX:     "non_admin": true,
+CREDSBX:     "privileges_removed": true,
+CREDSBX:     "token_virtualization_disabled": true,
+CREDSBX:     "workspace_writable": true
+CREDSBX:   },
+CREDSBX:   "exit_code": 0,
+CREDSBX:   "observation_path": "C:\\workspace\\wrapup\\windows-native-run-observation-cred-nonadmin.json",
+CREDSBX:   "outcome": "compliant",
+CREDSBX:   "stderr_bytes": 0,
+CREDSBX:   "stdout_bytes": 124,
+CREDSBX:   "timed_out": false
+CREDSBX: }
+CRED_SBX_EXIT=0
+CRED_nonadmin_OK=True
+===== CRED SANDBOX arm=high-nist =====
+CREDSBX: {
+CREDSBX:   "arm": "high-nist",
+CREDSBX:   "checks": {
+CREDSBX:     "appcontainer_token": true,
+CREDSBX:     "job_object_assigned": true,
+CREDSBX:     "low_integrity": true,
+CREDSBX:     "non_admin": true,
+CREDSBX:     "privileges_removed": true,
+CREDSBX:     "temp_redirected": true,
+CREDSBX:     "token_virtualization_disabled": true,
+CREDSBX:     "workspace_writable": true
+CREDSBX:   },
+CREDSBX:   "exit_code": 0,
+CREDSBX:   "observation_path": "C:\\workspace\\wrapup\\windows-native-run-observation-cred-highnist.json",
+CREDSBX:   "outcome": "compliant",
+CREDSBX:   "stderr_bytes": 0,
+CREDSBX:   "stdout_bytes": 0,
+CREDSBX:   "timed_out": false
+CREDSBX: }
+CRED_SBX_EXIT=0
+CRED_highnist_OK=False
+CRED_HIGHNIST_DENIED_EXPECTED=1
+HIVE_POST mounted=False locked=False
+WRAPUP_MAIN_DONE
+EXIT=0
+JOB_EXIT=0
+EVIDENCE_COPIED=D:\CLI\_windows_high_nist\formal-2026-09-02\evidence-wrapup\cred-highnist.json
+EVIDENCE_COPIED=D:\CLI\_windows_high_nist\formal-2026-09-02\evidence-wrapup\cred-nonadmin.json
+EVIDENCE_COPIED=D:\CLI\_windows_high_nist\formal-2026-09-02\evidence-wrapup\enforcement-probe-wrapup-1.json
+EVIDENCE_COPIED=D:\CLI\_windows_high_nist\formal-2026-09-02\evidence-wrapup\enforcement-probe-wrapup-2.json
+EVIDENCE_COPIED=D:\CLI\_windows_high_nist\formal-2026-09-02\evidence-wrapup\windows-native-run-observation-cred-highnist.json
+EVIDENCE_COPIED=D:\CLI\_windows_high_nist\formal-2026-09-02\evidence-wrapup\windows-native-run-observation-cred-nonadmin.json
+EVIDENCE_COPIED=D:\CLI\_windows_high_nist\formal-2026-09-02\evidence-wrapup\windows-native-run-observation-wrapup-1.json
+EVIDENCE_COPIED=D:\CLI\_windows_high_nist\formal-2026-09-02\evidence-wrapup\windows-native-run-observation-wrapup-2.json
+EVIDENCE_COPIED=D:\CLI\_windows_high_nist\formal-2026-09-02\evidence-wrapup\wrapup-apply.json
+EVIDENCE_COPIED=D:\CLI\_windows_high_nist\formal-2026-09-02\evidence-wrapup\wrapup-pre-clean.json
+EVIDENCE_COPIED=D:\CLI\_windows_high_nist\formal-2026-09-02\evidence-wrapup\wrapup-summary.json
+STAGE_DONE=wrapup

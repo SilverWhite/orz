@@ -1,0 +1,53 @@
+{
+  "schema_version": "0.1.0",
+  "batch": "P0-0l-batch2",
+  "arms": ["control", "non-admin", "high-nist"],
+  "tasks": [
+    {
+      "id": "probe-hklm-write",
+      "category": "friction-probe",
+      "axis": "registry-hklm-write",
+      "batch1": true
+    },
+    {
+      "id": "probe-program-files-write",
+      "category": "friction-probe",
+      "axis": "filesystem-program-files-write",
+      "batch1": true
+    },
+    {
+      "id": "log-summary-date-ranges",
+      "category": "real-task",
+      "batch1": true
+    },
+    {
+      "id": "probe-temp-write",
+      "category": "friction-probe",
+      "axis": "filesystem-temp-redirect"
+    },
+    {
+      "id": "probe-symlink-create",
+      "category": "friction-probe",
+      "axis": "filesystem-symlink-privilege"
+    },
+    {
+      "id": "probe-service-create",
+      "category": "friction-probe",
+      "axis": "privilege-service-control"
+    },
+    {
+      "id": "probe-pip-user-install",
+      "category": "friction-probe",
+      "axis": "filesystem-pip-user-home-freeze"
+    },
+    {
+      "id": "probe-unsigned-ps1-run",
+      "category": "friction-probe",
+      "axis": "execution-unsigned-powershell"
+    },
+    {
+      "id": "regex-log",
+      "category": "real-task"
+    }
+  ]
+}

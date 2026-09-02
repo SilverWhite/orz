@@ -18,6 +18,9 @@
    在 AppContainer 进程内 DLL 初始化失败 `0xC0000142`；`python` 的 `_ctypes`
    （libffi-8.dll）导入失败（DLL 初始化失败）；`whoami.exe` 无输出（同类问题）。
    `cmd.exe` / `python.exe`（纯原生）正常。
+   - batch-2 细分（2026-09-02）：上述 powershell 失败发生在“AppContainer 进程内
+     再 spawn（孙进程）”路径；宿主以 CPAU+属性列表直接创建的 PS 直子进程可正常
+     执行（enforcement-probe 19/19），见 `ORZ-WIN-SBX-004`。
    - 可靠路径：AppContainer 探针/宿主用原生程序；令牌类事实（AppContainer SID、完整性）
      由父侧 P/Invoke observation 断言，子进程内用行为代理（Medium 目录写不进 + Low 目录
      可写；LOCALAPPDATA 被 OS 重写为 `Packages\<app>\AC`）。

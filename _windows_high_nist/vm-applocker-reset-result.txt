@@ -1,0 +1,66 @@
+﻿DIAG_START
+--- APPIDSVC BEFORE ---
+SVC: 
+SVC: SERVICE_NAME: AppIDSvc 
+SVC:         TYPE               : 20  WIN32_SHARE_PROCESS  
+SVC:         STATE              : 1  STOPPED 
+SVC:         WIN32_EXIT_CODE    : 1077  (0x435)
+SVC:         SERVICE_EXIT_CODE  : 0  (0x0)
+SVC:         CHECKPOINT         : 0x0
+SVC:         WAIT_HINT          : 0x0
+--- SRP KEYS BEFORE ---
+REG: HKLM\SOFTWARE\Policies\Microsoft\Windows\SrpV2 => 错误: 系统找不到指定的注册表项或值。
+REG: HKLM\SOFTWARE\Policies\Microsoft\Windows\Safer => 错误: 系统找不到指定的注册表项或值。
+--- EFFECTIVE POLICY BEFORE ---
+POLICY_BEFORE_LEN=31
+--- CLEANUP ---
+ABSENT HKLM:\SOFTWARE\Policies\Microsoft\Windows\SrpV2
+ABSENT HKLM:\SOFTWARE\Policies\Microsoft\Windows\Safer
+--- GROUP POLICY STORE CLEANUP ---
+GP_ABSENT C:\Windows\System32\GroupPolicy\Machine\Microsoft\Windows\SrpV2
+GP_ABSENT C:\Windows\System32\GroupPolicy\Machine\Microsoft\Windows\Safer
+--- REGISTRY.POL SCAN ---
+REGISTRY_POL_EXISTS=1 SIZE=2872 HAS_SRPV2=False HAS_SAFER=False
+POL_REMOVED=0 (no applocker/srp entries)
+--- GPUPDATE /FORCE ---
+GPU: 正在更新策略...
+GPU: 
+GPU: 
+GPU: 
+GPU: 计算机策略更新成功完成。
+GPU: 
+GPU: 
+GPU: 
+--- REG KEYS AFTER GPUPDATE ---
+REG_AFTER_REMOVED HKLM:\SOFTWARE\Policies\Microsoft\Windows\SrpV2
+REG_AFTER_ABSENT HKLM:\SOFTWARE\Policies\Microsoft\Windows\Safer
+--- EFFECTIVE POLICY AFTER ---
+POLICY_AFTER=EMPTY
+--- CODE INTEGRITY / SAC STATE ---
+CI_REG: EmodePolicyRequired=0
+CI_REG: SkuPolicyRequired=0
+CI_REG: VerifiedAndReputablePolicyState=0
+--- SAC DISABLE ATTEMPT ---
+SAC_STATE_AFTER_SET=0
+CI_FILE C:\Windows\System32\CodeIntegrity\SiPolicy.p7b EXISTS=False
+CI_FILE C:\Windows\System32\CodeIntegrity\CIPolicies\Active\SiPolicy.p7b EXISTS=False
+--- BLOCK EVENTS (last 30 min) ---
+CI_EV 22:53:45 id=3116 Signature information for Code Integrity policy ID {d2bda982-ccf6-4344-ac5b-0b44427b6816}.
+CI_EV 22:53:45 id=3099 Refreshed and activated Code Integrity policy {d2bda982-ccf6-4344-ac5b-0b44427b6816} Microsoft Windows Driver Policy. id 10.0.27805.0. Status 0x0
+CI_EV 22:53:45 id=3116 Signature information for Code Integrity policy ID {784c4414-79f4-4c32-a6a5-f0fb42a51d0d}.
+CI_EV 22:53:45 id=3099 Refreshed and activated Code Integrity policy {784c4414-79f4-4c32-a6a5-f0fb42a51d0d} Microsoft Windows Cross Certificates for Code Integrity Exceptions Policy. id 10.27766.0.0. Status 0x0
+CI_EV 22:53:45 id=3084 Code Integrity will enable WHQL driver enforcement for this boot session.  Settings 0x0. Exemption 1.
+CI_EV 22:50:37 id=3116 Signature information for Code Integrity policy ID {2678656c-05ef-481f-bc5b-ebd8c991502d}.
+CI_EV 22:50:37 id=3099 Refreshed and activated Code Integrity policy {2678656c-05ef-481f-bc5b-ebd8c991502d} VerifiedAndReputableDesktopEvaluationFlightSupplemental. id 27766.241221-1700. Status 0x0
+CI_EV 22:50:37 id=3116 Signature information for Code Integrity policy ID {d2bda982-ccf6-4344-ac5b-0b44427b6816}.
+AL_EV 22:53:22 id=8030 在对  \??\C:\WINDOWS\system32\schtasks.exe 执行 Appid 验证的过程中，ManagedInstaller 检查已成功。 状态: STATUS_SUCCESS
+AL_EV 22:53:22 id=8002 已允许运行 %SYSTEM32%\SCHTASKS.EXE。
+AL_EV 22:53:14 id=8001 AppLocker 策略已成功应用到此计算机。
+AL_EV 22:52:42 id=8001 AppLocker 策略已成功应用到此计算机。
+AL_EV 22:52:30 id=8030 在对  \??\C:\WINDOWS\system32\schtasks.exe 执行 Appid 验证的过程中，ManagedInstaller 检查已成功。 状态: STATUS_SUCCESS
+AL_EV 22:52:30 id=8002 已允许运行 %SYSTEM32%\SCHTASKS.EXE。
+AL_EV 22:52:19 id=8030 在对  \??\C:\WINDOWS\system32\schtasks.exe 执行 Appid 验证的过程中，ManagedInstaller 检查已成功。 状态: STATUS_SUCCESS
+AL_EV 22:52:19 id=8002 已允许运行 %SYSTEM32%\SCHTASKS.EXE。
+NOTE: AppIDSvc in-memory policy cleared by the follow-up VM reboot.
+DIAG_DONE
+EXIT=0

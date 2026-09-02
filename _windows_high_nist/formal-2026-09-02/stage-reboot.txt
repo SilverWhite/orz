@@ -1,0 +1,7 @@
+﻿STAGE=reboot
+STATE_BEFORE=Running
+ACTION=stop-vm-graceful
+STATE_AFTER_STOP=Off
+START_ISSUED=1
+VM_REACHABLE=yes
+STAGE_DONE=reboot

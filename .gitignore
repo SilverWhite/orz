@@ -12,6 +12,10 @@ candidate-gates/
 
 tmp*/
 *.tmp/
+tmp_*
+_review_lif_replay_check.json
+/HTTP
+/%{http_code}
 
 # GSA runtime artifacts (local only)
 .gsa_chrome_profile/
@@ -21,3 +25,16 @@ evidence/
 
 # S4 Windows VM 模板本地产物（Python 安装包等，不入库）
 _windows_high_nist/tools/
+
+# S4 admin bridge runtime (local only)
+_windows_high_nist/bridge/
+
+# S4 Windows VM 大体积本地产物（安装包缓存、备份二进制、任务资产，不入库）
+_windows_high_nist/env-provision/
+_windows_high_nist/pack-cache/
+_windows_high_nist/backup/
+_windows_high_nist/agent-tasks-tb2.1/
+
+# 临时探测脚本（不入库）
+/scripts/__wtest*.ps1
+/scripts/_s4br_*.ps1

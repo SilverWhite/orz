@@ -1,0 +1,3 @@
+﻿HIVE_PRE mounted=False locked=False
+WRAPUP_PRE_DONE
+EXIT=0

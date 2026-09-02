@@ -1,0 +1,15 @@
+{
+  "id": "probe-pip-user-install",
+  "schema_version": "0.1.0",
+  "kind": "pip-user-install",
+  "category": "friction-probe",
+  "title": "Friction probe: pip install --user (home/appdata freeze axis)",
+  "arm_expectations": {
+    "control": "success",
+    "non-admin": "success",
+    "high-nist": "blocked"
+  },
+  "action": "probe.py",
+  "environment_seed": "make_wheel.py",
+  "sandbox_timeout_seconds": 420
+}

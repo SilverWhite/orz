@@ -1,0 +1,13 @@
+{
+  "schema_version": "0.1.0",
+  "task": "probe-hklm-write",
+  "arm": "high-nist",
+  "expected": "denied",
+  "observed": "denied",
+  "checks": {
+    "attempt_matches_expectation": true,
+    "error_reported": true
+  },
+  "passed": true,
+  "ran_at": "2026-09-02T14:00:02Z"
+}

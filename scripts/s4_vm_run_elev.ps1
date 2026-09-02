@@ -17,6 +17,7 @@ param(
 
 $ErrorActionPreference = 'Stop'
 $lines = New-Object System.Collections.Generic.List[string]
+$failed = $false
 
 try {
     if (-not (Test-Path -LiteralPath $JobBodyFile)) {
@@ -29,10 +30,12 @@ try {
 
     $bodyPath = 'C:\s4\tools\elev-body.ps1'
     $runnerPath = 'C:\s4\tools\elev-runner.ps1'
-    $logPath = 'C:\s4\tools\elev-job.log'
+    $runId = ([guid]::NewGuid().ToString('N').Substring(0, 12))
+    $taskName = 's4elevjob_' + $runId
+    $logPath = 'C:\s4\tools\elev-job-' + $runId + '.log'
 
     $runner = @'
-$log = 'C:\s4\tools\elev-job.log'
+$log = 'C:\s4\tools\elev-job-__RUNID__.log'
 Remove-Item -LiteralPath $log -Force -ErrorAction SilentlyContinue
 try {
     & powershell.exe -NoProfile -ExecutionPolicy Bypass -File 'C:\s4\tools\elev-body.ps1' *> $log
@@ -44,6 +47,7 @@ try {
 }
 "EXIT=$code" | Add-Content -LiteralPath $log -Encoding utf8
 '@
+    $runner = $runner.Replace('__RUNID__', $runId)
 
     Invoke-Command -Session $sess -ScriptBlock {
         New-Item -ItemType Directory -Path 'C:\s4\tools' -Force | Out-Null
@@ -68,13 +72,23 @@ try {
     # (HL admin task tokens lack it; CreateProcessWithTokenW rejects
     # extended startup info with ERROR_INVALID_PARAMETER).  The job account
     # is therefore forced to SYSTEM.
-    $taskName = 's4elevjob'
     $taskReady = Invoke-Command -Session $sess -ArgumentList $taskName -ScriptBlock {
         param($TaskName)
         $tr = '"powershell.exe -NoProfile -ExecutionPolicy Bypass -File C:\s4\tools\elev-runner.ps1"'
-        & schtasks.exe /create /f /tn $TaskName /tr $tr /sc once /st 23:59 `
-            /ru SYSTEM /rl highest 2>&1 | Out-Null
-        if ($LASTEXITCODE -ne 0) { throw "schtasks create failed" }
+        # Replacing a task that is still marked Running can fail with access
+        # denied; delete first and retry creation a few times.
+        $created = $false
+        for ($i = 0; $i -lt 5 -and -not $created; $i++) {
+            & schtasks.exe /delete /tn $TaskName /f 2>&1 | Out-Null
+            & schtasks.exe /create /f /tn $TaskName /tr $tr /sc once /st 23:59 `
+                /ru SYSTEM /rl highest 2>&1 | Out-Null
+            if ($LASTEXITCODE -eq 0) {
+                $created = $true
+                break
+            }
+            Start-Sleep -Seconds 4
+        }
+        if (-not $created) { throw "schtasks create failed" }
         return $true
     }
     if (-not $taskReady) { throw "s4elevjob task not ready" }
@@ -112,12 +126,23 @@ try {
         foreach ($l in $logContent) { $lines.Add($l) }
     } else {
         $lines.Add("JOB_TIMEOUT after $TimeoutSeconds seconds")
+        $failed = $true
+    }
+    try {
+        Invoke-Command -Session $sess -ArgumentList $taskName -ScriptBlock {
+            param($TaskName)
+            & schtasks.exe /delete /tn $TaskName /f 2>&1 | Out-Null
+        }
+    }
+    catch {
+        $lines.Add("TASK_CLEANUP_ERR: $($_.Exception.Message)")
     }
 
 }
 catch {
     $lines.Add("ERROR: $($_.Exception.Message)")
     $lines.Add("STACK: $($_.ScriptStackTrace)")
+    $failed = $true
 }
 finally {
     if ($sess) {
@@ -129,3 +154,7 @@ finally {
     }
 }
 $lines | Set-Content -LiteralPath $OutFile -Encoding utf8
+if ($failed) {
+    exit 1
+}
+exit 0

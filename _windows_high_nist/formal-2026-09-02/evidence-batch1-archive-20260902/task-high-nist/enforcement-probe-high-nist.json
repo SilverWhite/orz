@@ -1,0 +1,28 @@
+{
+  "arm": "high-nist",
+  "workspace": "C:\\workspace\\taskhighnist",
+  "checks": {
+    "workspace_writable": true,
+    "non_admin": true,
+    "token_virtualization_disabled": true,
+    "program_files_write_blocked": true,
+    "system32_write_blocked": true,
+    "hklm_write_blocked": true,
+    "privileges_removed": true,
+    "runas_blocked": true,
+    "programdata_write_blocked": true,
+    "drive_root_write_blocked": true,
+    "hkcufrozen": true,
+    "home_frozen": true,
+    "appdata_frozen": true,
+    "temp_redirected": true,
+    "low_integrity": true,
+    "appcontainer_token": true,
+    "network_blocked": true,
+    "metadata_blocked": true,
+    "probe_file_cleaned": true
+  },
+  "passed": 19,
+  "failed": 0,
+  "ran_at": "2026-09-02T05:53:11Z"
+}

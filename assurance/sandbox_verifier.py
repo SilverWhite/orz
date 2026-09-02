@@ -338,6 +338,9 @@ def verify_windows_native_run_observation(
     from .windows_sandbox import run_observation_checks_for_arm
 
     required_checks = set(run_observation_checks_for_arm(arm))
+    appcontainer_mode = observation.get("appcontainer_mode", "enabled")
+    if arm == "high-nist" and appcontainer_mode == "disabled":
+        required_checks.discard("appcontainer_token")
     observed_keys = set(observation["checks"].keys())
     if not observed_keys >= required_checks:
         missing = sorted(required_checks - observed_keys)
@@ -358,17 +361,31 @@ def verify_windows_native_run_observation(
         if arm == "high-nist" and require_compliant:
             if not token["low_integrity"]:
                 errors.append("compliant high-nist run requires LOW integrity")
-            if not token["appcontainer"]:
-                errors.append("compliant high-nist run requires AppContainer token")
+            if appcontainer_mode == "enabled":
+                if not token["appcontainer"]:
+                    errors.append(
+                        "compliant high-nist run requires AppContainer token"
+                    )
+            elif token["appcontainer"]:
+                errors.append(
+                    "high-nist appcontainer_mode=disabled must not carry an "
+                    "AppContainer token"
+                )
     elif require_compliant and observation["token"]["restricted"]:
         errors.append("control arm must not spawn with a restricted token")
 
     ac = observation["appcontainer"]
     if arm == "high-nist":
-        if not ac["sid_derived"] and not ac["profile_created"]:
-            errors.append("high-nist run must derive or create AppContainer SID")
-        if ac["profile_created"] and not ac["profile_deleted"]:
-            errors.append("AppContainer profile was created but not deleted")
+        if appcontainer_mode == "enabled":
+            if not ac["sid_derived"] and not ac["profile_created"]:
+                errors.append("high-nist run must derive or create AppContainer SID")
+            if ac["profile_created"] and not ac["profile_deleted"]:
+                errors.append("AppContainer profile was created but not deleted")
+        elif ac["sid_derived"] or ac["profile_created"]:
+            errors.append(
+                "high-nist appcontainer_mode=disabled must not derive or create "
+                "an AppContainer SID/profile"
+            )
     if ac["capabilities"]:
         errors.append("AppContainer capabilities must be empty for network isolation")
 

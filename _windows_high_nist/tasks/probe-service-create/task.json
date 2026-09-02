@@ -1,0 +1,14 @@
+{
+  "id": "probe-service-create",
+  "schema_version": "0.1.0",
+  "kind": "service-create",
+  "category": "friction-probe",
+  "title": "Friction probe: create a scratch service via SCM (HKLM SYSTEM write)",
+  "arm_expectations": {
+    "control": "success",
+    "non-admin": "denied",
+    "high-nist": "denied"
+  },
+  "action": "probe.py",
+  "sandbox_timeout_seconds": 300
+}

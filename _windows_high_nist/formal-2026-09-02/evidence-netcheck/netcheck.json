@@ -1,0 +1,211 @@
+﻿{
+    "ran_at":  "2026-09-02T15:59:58Z",
+    "processes":  [
+                      {
+                          "id":  9692,
+                          "name":  "clash-verge",
+                          "session":  1,
+                          "path":  "C:\\Program Files\\Clash Verge\\clash-verge.exe"
+                      },
+                      {
+                          "id":  9468,
+                          "name":  "verge-mihomo",
+                          "session":  1,
+                          "path":  "C:\\Program Files\\Clash Verge\\verge-mihomo.exe"
+                      }
+                  ],
+    "config_dirs":  [
+                        "C:\\Users\\HL\\AppData\\Roaming\\io.github.clash-verge-rev.clash-verge-rev",
+                        "C:\\Users\\HL\\AppData\\Roaming\\io.github.clash-verge-rev.clash-verge-rev\\logs",
+                        "C:\\Users\\HL\\AppData\\Roaming\\io.github.clash-verge-rev.clash-verge-rev\\profiles",
+                        "C:\\Users\\HL\\AppData\\Roaming\\io.github.clash-verge-rev.clash-verge-rev\\ruleset",
+                        "C:\\Users\\HL\\AppData\\Roaming\\io.github.clash-verge-rev.clash-verge-rev\\tasks",
+                        "C:\\Users\\HL\\AppData\\Local\\io.github.clash-verge-rev.clash-verge-rev",
+                        "C:\\Users\\HL\\AppData\\Local\\io.github.clash-verge-rev.clash-verge-rev\\EBWebView",
+                        "C:\\Program Files\\Clash Verge",
+                        "C:\\Program Files\\Clash Verge\\resources"
+                    ],
+    "config_files":  [
+                         "C:\\Users\\HL\\AppData\\Roaming\\io.github.clash-verge-rev.clash-verge-rev\\cache.db|65536",
+                         "C:\\Users\\HL\\AppData\\Roaming\\io.github.clash-verge-rev.clash-verge-rev\\clash-verge-check.yaml|37308",
+                         "C:\\Users\\HL\\AppData\\Roaming\\io.github.clash-verge-rev.clash-verge-rev\\clash-verge.yaml|37308",
+                         "C:\\Users\\HL\\AppData\\Roaming\\io.github.clash-verge-rev.clash-verge-rev\\config.yaml|609",
+                         "C:\\Users\\HL\\AppData\\Roaming\\io.github.clash-verge-rev.clash-verge-rev\\Country.mmdb|8000653",
+                         "C:\\Users\\HL\\AppData\\Roaming\\io.github.clash-verge-rev.clash-verge-rev\\dns_config.yaml|1087",
+                         "C:\\Users\\HL\\AppData\\Roaming\\io.github.clash-verge-rev.clash-verge-rev\\geoip.dat|17784192",
+                         "C:\\Users\\HL\\AppData\\Roaming\\io.github.clash-verge-rev.clash-verge-rev\\geosite.dat|4229320",
+                         "C:\\Users\\HL\\AppData\\Roaming\\io.github.clash-verge-rev.clash-verge-rev\\profiles.yaml|1280",
+                         "C:\\Users\\HL\\AppData\\Roaming\\io.github.clash-verge-rev.clash-verge-rev\\verge.yaml|4748",
+                         "C:\\Users\\HL\\AppData\\Roaming\\io.github.clash-verge-rev.clash-verge-rev\\logs\\latest.log|5456",
+                         "C:\\Users\\HL\\AppData\\Roaming\\io.github.clash-verge-rev.clash-verge-rev\\profiles\\g8PMGqVrUJ5J.yaml|91",
+                         "C:\\Users\\HL\\AppData\\Roaming\\io.github.clash-verge-rev.clash-verge-rev\\profiles\\mDHiKzdYLyx6.yaml|54",
+                         "C:\\Users\\HL\\AppData\\Roaming\\io.github.clash-verge-rev.clash-verge-rev\\profiles\\Merge.yaml|86",
+                         "C:\\Users\\HL\\AppData\\Roaming\\io.github.clash-verge-rev.clash-verge-rev\\profiles\\p6H9DZC7mwjZ.yaml|92",
+                         "C:\\Users\\HL\\AppData\\Roaming\\io.github.clash-verge-rev.clash-verge-rev\\profiles\\r5QGUik3Lmx8.yaml|90",
+                         "C:\\Users\\HL\\AppData\\Roaming\\io.github.clash-verge-rev.clash-verge-rev\\profiles\\RWvk9UHl0R8H.yaml|41657",
+                         "C:\\Users\\HL\\AppData\\Roaming\\io.github.clash-verge-rev.clash-verge-rev\\profiles\\Script.js|96",
+                         "C:\\Users\\HL\\AppData\\Roaming\\io.github.clash-verge-rev.clash-verge-rev\\profiles\\srQ9O6A5mKyr.js|96",
+                         "C:\\Users\\HL\\AppData\\Roaming\\io.github.clash-verge-rev.clash-verge-rev\\ruleset\\Apple-IP.mrs|131",
+                         "C:\\Users\\HL\\AppData\\Roaming\\io.github.clash-verge-rev.clash-verge-rev\\ruleset\\Apple-Site.mrs|16622",
+                         "C:\\Users\\HL\\AppData\\Roaming\\io.github.clash-verge-rev.clash-verge-rev\\ruleset\\Bahamut-Site.mrs|130",
+                         "C:\\Users\\HL\\AppData\\Roaming\\io.github.clash-verge-rev.clash-verge-rev\\ruleset\\Bilibili-IP.mrs|86",
+                         "C:\\Users\\HL\\AppData\\Roaming\\io.github.clash-verge-rev.clash-verge-rev\\ruleset\\Bilibili-Site.mrs|1421",
+                         "C:\\Users\\HL\\AppData\\Roaming\\io.github.clash-verge-rev.clash-verge-rev\\ruleset\\China-IP.mrs|50046",
+                         "C:\\Users\\HL\\AppData\\Roaming\\io.github.clash-verge-rev.clash-verge-rev\\ruleset\\China-Site.mrs|646416",
+                         "C:\\Users\\HL\\AppData\\Roaming\\io.github.clash-verge-rev.clash-verge-rev\\ruleset\\Discord-Site.mrs|468",
+                         "C:\\Users\\HL\\AppData\\Roaming\\io.github.clash-verge-rev.clash-verge-rev\\ruleset\\GFWList-Site.mrs|181753",
+                         "C:\\Users\\HL\\AppData\\Roaming\\io.github.clash-verge-rev.clash-verge-rev\\ruleset\\Google-IP.mrs|95",
+                         "C:\\Users\\HL\\AppData\\Roaming\\io.github.clash-verge-rev.clash-verge-rev\\ruleset\\Google-Site.mrs|6101",
+                         "C:\\Users\\HL\\AppData\\Roaming\\io.github.clash-verge-rev.clash-verge-rev\\ruleset\\GoogleFCM-Site.mrs|98",
+                         "C:\\Users\\HL\\AppData\\Roaming\\io.github.clash-verge-rev.clash-verge-rev\\ruleset\\Local-IP.mrs|164",
+                         "C:\\Users\\HL\\AppData\\Roaming\\io.github.clash-verge-rev.clash-verge-rev\\ruleset\\Microsoft-Site.mrs|6857",
+                         "C:\\Users\\HL\\AppData\\Roaming\\io.github.clash-verge-rev.clash-verge-rev\\ruleset\\Netflix-IP.mrs|4166",
+                         "C:\\Users\\HL\\AppData\\Roaming\\io.github.clash-verge-rev.clash-verge-rev\\ruleset\\Netflix-Site.mrs|408",
+                         "C:\\Users\\HL\\AppData\\Roaming\\io.github.clash-verge-rev.clash-verge-rev\\ruleset\\OpenAI-IP.mrs|51",
+                         "C:\\Users\\HL\\AppData\\Roaming\\io.github.clash-verge-rev.clash-verge-rev\\ruleset\\OpenAI-Site.mrs|496",
+                         "C:\\Users\\HL\\AppData\\Roaming\\io.github.clash-verge-rev.clash-verge-rev\\ruleset\\Speedtest-Site.mrs|118",
+                         "C:\\Users\\HL\\AppData\\Roaming\\io.github.clash-verge-rev.clash-verge-rev\\ruleset\\Spotify-IP.mrs|51",
+                         "C:\\Users\\HL\\AppData\\Roaming\\io.github.clash-verge-rev.clash-verge-rev\\ruleset\\Spotify-Site.mrs|399",
+                         "C:\\Users\\HL\\AppData\\Roaming\\io.github.clash-verge-rev.clash-verge-rev\\ruleset\\Steam-Site.mrs|734",
+                         "C:\\Users\\HL\\AppData\\Roaming\\io.github.clash-verge-rev.clash-verge-rev\\ruleset\\Telegram-IP.mrs|138",
+                         "C:\\Users\\HL\\AppData\\Roaming\\io.github.clash-verge-rev.clash-verge-rev\\ruleset\\Telegram-Site.mrs|309",
+                         "C:\\Users\\HL\\AppData\\Roaming\\io.github.clash-verge-rev.clash-verge-rev\\ruleset\\TikTok-Site.mrs|358",
+                         "C:\\Users\\HL\\AppData\\Roaming\\io.github.clash-verge-rev.clash-verge-rev\\tasks\\clash-verge-task-user.xml|2752",
+                         "C:\\Users\\HL\\AppData\\Local\\io.github.clash-verge-rev.clash-verge-rev\\.cookies|0",
+                         "C:\\Users\\HL\\AppData\\Local\\io.github.clash-verge-rev.clash-verge-rev\\EBWebView\\BrowserMetrics-spare.pma|1310720",
+                         "C:\\Users\\HL\\AppData\\Local\\io.github.clash-verge-rev.clash-verge-rev\\EBWebView\\Last Version|13",
+                         "C:\\Users\\HL\\AppData\\Local\\io.github.clash-verge-rev.clash-verge-rev\\EBWebView\\Local State|10155",
+                         "C:\\Users\\HL\\AppData\\Local\\io.github.clash-verge-rev.clash-verge-rev\\EBWebView\\lockfile|0",
+                         "C:\\Users\\HL\\AppData\\Local\\io.github.clash-verge-rev.clash-verge-rev\\EBWebView\\Variations|86",
+                         "C:\\Users\\HL\\AppData\\Local\\io.github.clash-verge-rev.clash-verge-rev\\EBWebView\\VariationsRuntimeSeedV2|327",
+                         "C:\\Users\\HL\\AppData\\Local\\io.github.clash-verge-rev.clash-verge-rev\\EBWebView\\VariationsSafeSeedV2|11",
+                         "C:\\Users\\HL\\AppData\\Local\\io.github.clash-verge-rev.clash-verge-rev\\EBWebView\\VariationsSeedV2|1295",
+                         "C:\\Program Files\\Clash Verge\\clash-verge.exe|48395264",
+                         "C:\\Program Files\\Clash Verge\\uninstall.exe|421823",
+                         "C:\\Program Files\\Clash Verge\\verge-mihomo-alpha.exe|47458816",
+                         "C:\\Program Files\\Clash Verge\\verge-mihomo.exe|47458816",
+                         "C:\\Program Files\\Clash Verge\\resources\\clash-verge-service-install.exe|178176",
+                         "C:\\Program Files\\Clash Verge\\resources\\clash-verge-service-uninstall.exe|156160",
+                         "C:\\Program Files\\Clash Verge\\resources\\clash-verge-service.exe|1778176",
+                         "C:\\Program Files\\Clash Verge\\resources\\Country.mmdb|8000653",
+                         "C:\\Program Files\\Clash Verge\\resources\\enableLoopback.exe|84040",
+                         "C:\\Program Files\\Clash Verge\\resources\\geoip.dat|17784192",
+                         "C:\\Program Files\\Clash Verge\\resources\\geosite.dat|4229320"
+                     ],
+    "ports":  [
+                  7897,
+                  7897,
+                  7897,
+                  7899,
+                  7898,
+                  7892,
+                  7890,
+                  7891,
+                  53,
+                  7897,
+                  33331,
+                  53
+              ],
+    "listening":  [
+                      {
+                          "proto":  "TCP",
+                          "addr":  "0.0.0.0:53",
+                          "state":  "LISTENING",
+                          "pid":  9468
+                      },
+                      {
+                          "proto":  "TCP",
+                          "addr":  "127.0.0.1:7897",
+                          "state":  "LISTENING",
+                          "pid":  9468
+                      },
+                      {
+                          "proto":  "TCP",
+                          "addr":  "127.0.0.1:33331",
+                          "state":  "LISTENING",
+                          "pid":  9692
+                      },
+                      {
+                          "proto":  "TCP",
+                          "addr":  "[::]:53",
+                          "state":  "LISTENING",
+                          "pid":  9468
+                      }
+                  ],
+    "curl":  [
+                 {
+                     "scheme":  "http",
+                     "port":  7897,
+                     "http":  "000",
+                     "exit":  35
+                 },
+                 {
+                     "scheme":  "socks5",
+                     "port":  7897,
+                     "http":  "000",
+                     "exit":  35
+                 },
+                 {
+                     "scheme":  "http",
+                     "port":  7899,
+                     "http":  "000",
+                     "exit":  7
+                 },
+                 {
+                     "scheme":  "socks5",
+                     "port":  7899,
+                     "http":  "000",
+                     "exit":  7
+                 },
+                 {
+                     "scheme":  "http",
+                     "port":  7898,
+                     "http":  "000",
+                     "exit":  7
+                 },
+                 {
+                     "scheme":  "socks5",
+                     "port":  7898,
+                     "http":  "000",
+                     "exit":  7
+                 },
+                 {
+                     "scheme":  "http",
+                     "port":  7892,
+                     "http":  "000",
+                     "exit":  7
+                 },
+                 {
+                     "scheme":  "socks5",
+                     "port":  7892,
+                     "http":  "000",
+                     "exit":  7
+                 },
+                 {
+                     "scheme":  "http",
+                     "port":  7890,
+                     "http":  "000",
+                     "exit":  7
+                 },
+                 {
+                     "scheme":  "socks5",
+                     "port":  7890,
+                     "http":  "000",
+                     "exit":  7
+                 },
+                 {
+                     "scheme":  "http",
+                     "port":  7891,
+                     "http":  "000",
+                     "exit":  7
+                 },
+                 {
+                     "scheme":  "socks5",
+                     "port":  7891,
+                     "http":  "000",
+                     "exit":  7
+                 }
+             ],
+    "direct_http":  "401",
+    "direct_exit":  0
+}

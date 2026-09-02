@@ -8,8 +8,12 @@
 > **硬化 VM 三臂 enforcement-probe 实机闭环（2026-09-02：control /
 > non-admin / high-nist 全 PASS（non-admin 10/10、high-nist 19/19、
 > sandbox observation compliant）+ 修复链 6 项 + 案例库 6 篇 ORZ-WIN-*，
-> 进度见 [S4_PROGRESS_2026-09-02.md](S4_PROGRESS_2026-09-02.md)）**。
-> 正式三臂序列（模板切换）+ 任务集 + 跑批 + 缺口登记待续。对应
+> 进度见 [S4_PROGRESS_2026-09-02.md](S4_PROGRESS_2026-09-02.md)）；**正式
+> 三臂序列固化（2026-09-02：control 基线快照 2/2 / non-admin 10/10 /
+> high-nist 19/19（AppLocker 恢复）全 PASS；修复驱动输出流误判 /
+> Get-ProtectedPaths SYSTEM profile 根 / sandbox profile 卸载；证据
+> [formal-2026-09-02/](formal-2026-09-02/)）**。
+> 任务集 + 跑批 + 缺口登记待续。对应
 > [WINDOWS-HIGH-NIST-MAX-FRICTION 设计 §10.2](../docs/WINDOWS_HIGH_NIST_MAX_FRICTION_DESIGN_2026-09-01.md)；
 > Linux arm 方法学干跑见 [../_linux_arm_dryrun/README.md](../_linux_arm_dryrun/README.md)。
 

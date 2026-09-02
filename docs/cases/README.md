@@ -5,8 +5,9 @@
 现有分类：
 
 - `windows/` — Windows 原生平台案例（`ORZ-WIN-PROC-001/002/003`、`ORZ-WIN-PS-001/002`、
-  `ORZ-WIN-SBX-001/002/003`、`ORZ-WIN-ACL-001`、`ORZ-WIN-CTYPES-001` 候选；
-  SBX/ACL/CTYPES 系 2026-09-01/09-02 S4 加固与三臂排障晋级）。
+  `ORZ-WIN-SBX-001/002/003/004`、`ORZ-WIN-ACL-001`、`ORZ-WIN-CTYPES-001`、
+  `ORZ-WIN-PIP-001` 候选；SBX/ACL/CTYPES 系 2026-09-01/09-02 S4 加固与三臂
+  排障晋级，SBX-004/PIP-001 系 2026-09-02 ⑥ batch-2 high-nist 主载晋级）。
 - `harness_environment/` — 构建/评测环境案例（`ORZ-BUILD-MOUNT-001` 容器构建挂载契约候选，
   `ORZ-TOOL-BINARY-COMPAT-001` 打包工具二进制兼容候选，2026-08-17 首批）。
 

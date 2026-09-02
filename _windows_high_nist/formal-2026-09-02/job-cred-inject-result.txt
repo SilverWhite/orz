@@ -1,0 +1,53 @@
+﻿===== STEP 1: AgentUser non-admin read + dump =====
+BOOT: {
+BOOT:   "arm": "non-admin",
+BOOT:   "checks": {
+BOOT:     "non_admin": true,
+BOOT:     "privileges_removed": true,
+BOOT:     "token_virtualization_disabled": true,
+BOOT:     "workspace_writable": true
+BOOT:   },
+BOOT:   "exit_code": 0,
+BOOT:   "observation_path": "C:\\workspace\\cred-inject\\obs-bootstrap.json",
+BOOT:   "outcome": "compliant",
+BOOT:   "stderr_bytes": 0,
+BOOT:   "stdout_bytes": 153,
+BOOT:   "timed_out": false
+BOOT: }
+BOOT_EXIT=0
+BOOT_READ ok=True winerror=0 persist=3 blob_bytes=70 dump_ok=True
+CRED_BOOTSTRAP_OK=True
+===== STEP 2: canonicalize key + env JSON =====
+KEY_CHARS=35
+===== STEP 3: high-nist AC env injection + env copy =====
+AC: {
+AC:   "arm": "high-nist",
+AC:   "checks": {
+AC:     "appcontainer_token": true,
+AC:     "job_object_assigned": true,
+AC:     "low_integrity": true,
+AC:     "non_admin": true,
+AC:     "privileges_removed": true,
+AC:     "temp_redirected": true,
+AC:     "token_virtualization_disabled": true,
+AC:     "workspace_writable": true
+AC:   },
+AC:   "exit_code": 0,
+AC:   "observation_path": "C:\\workspace\\cred-inject\\obs-ac.json",
+AC:   "outcome": "compliant",
+AC:   "stderr_bytes": 0,
+AC:   "stdout_bytes": 0,
+AC:   "timed_out": false
+AC: }
+AC_EXIT=0
+AC_ENV_COPY ok=True winerror=0 bytes=35 mode=env_copy
+AC_ENV_COPY_OK=True
+===== STEP 4: compare =====
+INJECT_HASH_MATCH=True
+INJECT_BYTES_MATCH=True
+INJECT_CANON_BYTES=35 INJECT_AC_BYTES=35
+===== STEP 5: secret cleanup =====
+SECRET_FILES_LEFT=0
+CRED_INJECT_ERRORS=0
+CRED_INJECT_DONE
+EXIT=0

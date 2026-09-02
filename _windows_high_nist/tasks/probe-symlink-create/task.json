@@ -1,0 +1,13 @@
+{
+  "id": "probe-symlink-create",
+  "schema_version": "0.1.0",
+  "kind": "symlink-create",
+  "category": "friction-probe",
+  "title": "Friction probe: create a workspace symlink (SeCreateSymbolicLinkPrivilege)",
+  "arm_expectations": {
+    "control": "success",
+    "non-admin": "denied",
+    "high-nist": "denied"
+  },
+  "action": "probe.py"
+}

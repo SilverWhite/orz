@@ -79,7 +79,7 @@
 
 - **机械层数学计算体（P2-10）I1–I6**：T̂/LIF 时间性计算器（102 runs
   离线复验、四对照门）+ 失败目标身份入事件面 + temporal 分区运行时
-  （语义特征域 + 域切换 spike 侧车存档，模型无感）+ 类型化结果信封 +
+  （域按动作特征判定，域切换 spike 侧车存档，模型无感）+ 类型化结果信封 +
   一层 pipe 归约；阶段 3 V1–V3 验证闭环（FakeProvider 测试面、F11
   receipt↔事件链同构、S3 Linux musl 重建 + bookworm 冒烟 + S4 实机冒烟）。
 - **R2 deny 通道接线**：`ToolOutcome::Deny` + 拒绝路径喂入（deny 轮计数
@@ -96,22 +96,25 @@
 - **THIN-HARNESS-REDESIGN-V2**：prompt 置空、orientation 软门、submit
   门修复、复读后置化、半助理层、终端 300s 中间回报、分层默认超时、
   fold bridge reasoning retention。
-- **输出退化守卫**：复读检测序列内容门（DNA/RNA/蛋白序列族双门槛，
-  合法序列引用不再误杀）。
+- **输出退化守卫**：复读检测统一命中门槛 20（序列内容门删除）、3-gram
+  门槛 15、触发改显式拦截不降档；空响应链最多降档至 low。
 - **工程重构**：controller.rs 29,091 → 4,142 行分批拆解（行为不变，
   事件序列与 journal 哈希链不动）。
 
 ## 说明与边界
 
-- 首轮要求先写计划（plan-first 门）；第 2 轮起可直接调用工具。
-- 检索默认 `local_browser`，浏览器不可用时自动降级为原生 web 检索。
+- 生产路径不再强制首轮计划门（plan_first 休眠、近零系统提示 + 固定
+  工具面）；任务交付走 submit 两阶段（请求 → 确认）。
+- 检索为显式三态（`local_browser` / `framework_fallback` / `off`，
+  默认 `off`）；联网检索推荐 `local_browser`，浏览器启动失败由机械层
+  降级为原生 web 检索并记录 transition。
 - 安全层（ACAF）默认强制开启；确需临时关闭请显式设置
   `ORZ_ACAF_FAIL_CLOSED=0`（不推荐用于正式工作）。
 - 常用调优：`ORZ_STALL_TIMEOUT=<秒>`（卡住看门狗，默认 360）、
   `ORZ_TOOL_TIMEOUT_SECS=<秒>`（单工具超时，默认 300）。
 - 版本信息：源码 orz `a539a21b`（父仓库 `925f929`），构建 2026-08-31。
-- 已知边界：未提供 macOS 原生包；内部子代理检索在小型工作区属低频
-  能力；跑分数据尚未完整（正式评测待后续）。
+- 已知边界：未提供 macOS 原生包；内部项目文档检索触发工具当前封存
+  （主 Agent 直接 read/grep 读仓库）；跑分数据尚未完整（正式评测待后续）。
 
 ## 完整性校验
 

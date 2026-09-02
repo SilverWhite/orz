@@ -1,0 +1,13 @@
+{
+  "id": "probe-program-files-write",
+  "schema_version": "0.1.0",
+  "kind": "program-files-write",
+  "category": "friction-probe",
+  "title": "Friction probe: write under C:\\Program Files\\OrzS4Probe",
+  "arm_expectations": {
+    "control": "success",
+    "non-admin": "denied",
+    "high-nist": "denied"
+  },
+  "action": "probe.py"
+}
