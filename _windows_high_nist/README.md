@@ -4,8 +4,12 @@
 > （Windows x86_64 三件套，orz f0eeb524）完成 + S4 本机冒烟闭环
 > （2026-09-01：三件套启动/守卫符号核验、sandbox control 臂端到端
 > compliant、冒烟修复 3 项——ProcThreadAttributeList 查询大小误判、
-> 管道 drain 的 c_void_p 句柄取值、CLI --command REMAINDER；35 passed）**。
-> 硬化 VM 模板实机复验 + 三臂 enforcement-probe 实跑（正式 S4）待放行。对应
+> 管道 drain 的 c_void_p 句柄取值、CLI --command REMAINDER；35 passed）；
+> **硬化 VM 三臂 enforcement-probe 实机闭环（2026-09-02：control /
+> non-admin / high-nist 全 PASS（non-admin 10/10、high-nist 19/19、
+> sandbox observation compliant）+ 修复链 6 项 + 案例库 6 篇 ORZ-WIN-*，
+> 进度见 [S4_PROGRESS_2026-09-02.md](S4_PROGRESS_2026-09-02.md)）**。
+> 正式三臂序列（模板切换）+ 任务集 + 跑批 + 缺口登记待续。对应
 > [WINDOWS-HIGH-NIST-MAX-FRICTION 设计 §10.2](../docs/WINDOWS_HIGH_NIST_MAX_FRICTION_DESIGN_2026-09-01.md)；
 > Linux arm 方法学干跑见 [../_linux_arm_dryrun/README.md](../_linux_arm_dryrun/README.md)。
 

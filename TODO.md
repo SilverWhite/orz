@@ -155,9 +155,9 @@
   high-nist eroFS×1；真实任务三臂同分。干跑记录见
   `_linux_arm_dryrun/PREP_RECORD_2026-09-01.md`。
   - [x] ② Windows 加固脚本 + enforcement-probe（S1/S2 + 全面审查处理完成
-    2026-09-01；**S3 重建 + S4 本机冒烟闭环 2026-09-01**；硬化 VM 正式
-    三臂实跑待放行）：`_windows_high_nist/` 加固脚本（三臂模板、-Revert、
-    日志）+
+    2026-09-01；**S3 重建 + S4 本机冒烟闭环 2026-09-01；硬化 VM 三臂
+    enforcement-probe 实机闭环 2026-09-02**）：`_windows_high_nist/`
+    加固脚本（三臂模板、-Revert、日志）+
     enforcement-probe（每轴断言集）+ `windows_sandbox.py` 运行环境扩展
     （受限 token / LOW IL / AppContainer / Job / TEMP 重定向下 spawn orz
     命令树）+ run observation schema/verifier + CLI 入口；S2 全绿
@@ -165,10 +165,21 @@
     三件套重建（orz f0eeb524，12m15s）+ 守卫符号核验；S4 本机冒烟=
     sandbox control 臂端到端 compliant + 冒烟修复 3 项
     （ProcThreadAttributeList 查询大小误判 / 管道 drain c_void_p 句柄 /
-    CLI --command REMAINDER）；35 passed + 全量 1624 passed。
-- [ ] ③ 摩擦探针集 control 臂基线（k=1）。
-- [ ] ④ high-nist 小批 → 设计 §7 判据逐项核对。
-- [ ] ⑤ 全量 + 缺口判定登记 BACKLOG。
+    CLI --command REMAINDER）；35 passed + 全量 1624 passed；
+    **2026-09-02 硬化 VM 三臂实机闭环**=control/non-admin/high-nist 全
+    PASS（non-admin 10/10、high-nist 19/19、sandbox observation
+    compliant），修复链 6 项（SYSTEM 持久任务提权 / CPAU 选型与 CPTW
+    回退 / session0 桌面 ACL / AppContainer TEMP+LOW+包目录 / run-user
+    NTUSER.DAT 冻结 / 探针宿主 Python 化），案例库新增 6 篇 ORZ-WIN-*
+    （进度见 `_windows_high_nist/S4_PROGRESS_2026-09-02.md`）。
+- [ ] ③ 三臂正式序列固化（control 基线快照 → non-admin → high-nist
+  模板切换重跑 enforcement-probe 先验墙；2026-09-02 已单轮全 PASS）。
+- [ ] ④ 任务集（首批 2 摩擦探针 + 1 真实任务 log-summary-date-ranges
+  + verifier）→ control 臂基线（k=1）。
+- [ ] ⑤ high-nist 小批 → 设计 §7 判据逐项核对。
+- [ ] ⑥ 全量 + 记账 + 缺口判定登记 BACKLOG。
+- [ ] ⑦ 收尾：AppLocker 恢复复验、DeepSeek 凭据 CredRead 验证、临时
+  任务/累积 ACE/旧目录清理、Clash 网络导入。
 
 ### P0-B FUS-RETRIEVAL-MECH（`implemented`；批次 1-6 全部闭合 2026-08-14，保留供核对）
 
