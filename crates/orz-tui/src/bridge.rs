@@ -165,6 +165,11 @@ pub fn run_event_to_tui(event: &RunEvent) -> TuiEvent {
             wall_ms: p.get("wall_ms").and_then(|v| v.as_u64()).unwrap_or(0),
             pid: p.get("pid").and_then(|v| v.as_u64()).map(|v| v as u32),
         },
+        // TER T1.9 (2026-09-04): budget cue injected — journal-only neutral
+        // fact (no TUI surface); degrade to Unknown for replay display.
+        EventType::BudgetCueInjected => TuiEvent::Unknown {
+            event_type: event.event_type.to_string(),
+        },
         EventType::OrientationCheckpoint => TuiEvent::OrientationCheckpoint {
             checkpoint_id: get_str(p, "checkpoint_id"),
             trigger: get_str(p, "trigger"),

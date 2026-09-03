@@ -547,7 +547,8 @@ impl ProcessGroup {
         let mut ticks: u64 = 0;
         let proc_dir = std::fs::read_dir("/proc")?;
         for entry in proc_dir.flatten() {
-            let Some(name) = entry.file_name().to_str() else {
+            let file_name = entry.file_name();
+            let Some(name) = file_name.to_str() else {
                 continue;
             };
             let Ok(pid) = name.parse::<u32>() else {
