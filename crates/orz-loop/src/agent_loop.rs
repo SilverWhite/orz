@@ -1387,6 +1387,17 @@ pub(crate) async fn run_agent_loop(
         // （尾随消息纪律；退役前的 `[TOOL_ROUND_BUDGET] REMAINING` 同此
         // 纪律），system 提示词保持完全静态，前缀缓存不被步骤推进打断。
         controller.sync_status_line_message(messages);
+        // TER T1.9 (2026-09-04)：F6 push 档（默认 off）——剩余评测墙钟
+        // 跨 <600/300/120s 阈值时注入中性事实并记 budget_cue_injected
+        // （仅主车道；开关/上限未配置 = 零注入）。
+        controller
+            .maybe_push_f6_budget_cue(
+                &mut *writer,
+                messages,
+                tool_rounds,
+                profile.role == AgentRole::Main,
+            )
+            .await?;
         // FUS-LEDGER-FOLD-STATE (2026-08-18, ADR-0010 §14.26): the request
         // view comes from the stateful fold point — `messages` verbatim
         // until the first mechanical advance, then preamble + frozen

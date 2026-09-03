@@ -54,6 +54,13 @@ pub enum EventType {
     // call_id).
     ToolRunning,
 
+    // TER T0.2/T1.9 (2026-09-03/04, TODO2 T0.2 §2 / 设计稿 §3.3): F6 push
+    // 档机械注入留痕——剩余评测墙钟跨 <600/<300/<120s 阈值时记一条
+    // （payload: remaining_seconds / rounds_used / threshold_seconds；
+    // 默认 off，PUSH→PULL 例外）。verifier 每 run ≤4 次、remaining 严格
+    // 小于 threshold。
+    BudgetCueInjected,
+
     // Assurance
     OrientationCheckpoint,
     ToolAvailabilityCheck,

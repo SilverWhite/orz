@@ -60,6 +60,9 @@ pub fn is_injected_block_text(content: &str) -> bool {
         || content.starts_with(ORIENTATION_INJECTED_PREFIX)
         || content.starts_with(TOOL_POLICY_BREAKER_PREFIX)
         || content.starts_with(TOOL_ROUND_BUDGET_PREFIX)
+        // TER T1.9 (2026-09-04): F6 push 档 cue 是机械注入块（只报中性
+        // 事实）——绝不持久化回会话（同 TOOL_ROUND_BUDGET 纪律）。
+        || content.starts_with(F6_BUDGET_CUE_PREFIX)
         // 2026-08-08 blackboard partition (review closure, P2-1/D2-1): the
         // incremental-push summary `[本轮编辑] …` is mechanical injected
         // text — same rule as the blocks above. Without registration it
@@ -251,6 +254,34 @@ pub fn build_status_line(goal: Option<&str>, steps: &[crate::blackboard::PlanSte
 /// matched the versioned messages (2026-08-07 review F-04). The closing tag
 /// `[/TOOL_ROUND_BUDGET]` does not match (starts with `[/`).
 pub const TOOL_ROUND_BUDGET_PREFIX: &str = "[TOOL_ROUND_BUDGET";
+
+/// TER T1.9 (2026-09-04)：F6 push 档机械注入块前缀——剩余评测墙钟跨阈值
+/// 时注入一次中性事实（只报剩余/上限/已用轮数，不附建议）；默认 off
+/// （PUSH→PULL 纪律的显式例外）。与其它机械注入块同注册——绝不持久化
+/// 回会话。
+pub const F6_BUDGET_CUE_PREFIX: &str = "[F6_BUDGET_CUE";
+
+/// F6 push 档注入文本（中性事实，无建议）。
+pub fn f6_budget_cue_block(remaining_secs: u64, limit_secs: u64, rounds_used: u32) -> String {
+    format!(
+        "{F6_BUDGET_CUE_PREFIX} v0.1] 评测墙钟剩余约 {remaining_secs}s（上限 {limit_secs}s）；\
+         已用工具轮 {rounds_used}。[/F6_BUDGET_CUE]"
+    )
+}
+
+/// TER T1.9：跨阈值判定（纯函数）——`remaining < 600/300/120` 且该档未
+/// 注入过时返回该档（每 run 每档至多一次 → ≤3 次/run；T0.2 verifier
+/// 上限 4 兼容）。同轮只取第一个未注入的更高档（避免一跳多档刷屏）。
+pub fn f6_push_cue_for_remaining(remaining_secs: u64, crossed: &mut [bool; 3]) -> Option<u64> {
+    const THRESHOLDS: [u64; 3] = [600, 300, 120];
+    for (i, threshold) in THRESHOLDS.iter().enumerate() {
+        if remaining_secs < *threshold && !crossed[i] {
+            crossed[i] = true;
+            return Some(*threshold);
+        }
+    }
+    None
+}
 
 /// IP2a denial-circuit-breaker message (D-3, FIX_PLAN 2026-08-06; ADR-0010
 /// §3.5.4 / V11-IMPL-012): injected after 3 CONSECUTIVE TOOL ROUNDS whose
@@ -500,6 +531,32 @@ mod tests {
         assert!(open.contains("WALLCLOCK_ELAPSED: 45s"), "{open}");
         assert!(open.contains("WALLCLOCK_LIMIT: none"), "{open}");
         assert!(!open.contains("WALLCLOCK_REMAINING"), "{open}");
+    }
+
+    #[test]
+    fn f6_push_cue_is_neutral_and_crosses_each_threshold_once() {
+        // TER T1.9 (2026-09-04)：注入文本只含中性事实，无建议。
+        let block = f6_budget_cue_block(123, 900, 7);
+        assert!(block.contains("剩余约 123s"), "{block}");
+        assert!(block.contains("上限 900s"), "{block}");
+        assert!(block.contains("已用工具轮 7"), "{block}");
+        assert!(!block.contains("建议"), "{block}");
+        assert!(!block.contains("请"), "{block}");
+
+        // 每档至多一次 → 最多 3 次/run；同轮一跳多档只取第一档（更高档）。
+        let mut crossed = [false; 3];
+        assert_eq!(f6_push_cue_for_remaining(590, &mut crossed), Some(600));
+        assert_eq!(f6_push_cue_for_remaining(290, &mut crossed), Some(300));
+        assert_eq!(f6_push_cue_for_remaining(110, &mut crossed), Some(120));
+        assert_eq!(f6_push_cue_for_remaining(50, &mut crossed), None);
+        assert_eq!(crossed, [true, true, true]);
+
+        // 一跳多档：后续轮次逐档补注入，总次数仍 ≤3。
+        let mut jumped = [false; 3];
+        assert_eq!(f6_push_cue_for_remaining(50, &mut jumped), Some(600));
+        assert_eq!(f6_push_cue_for_remaining(50, &mut jumped), Some(300));
+        assert_eq!(f6_push_cue_for_remaining(50, &mut jumped), Some(120));
+        assert_eq!(f6_push_cue_for_remaining(50, &mut jumped), None);
     }
 
     #[test]
