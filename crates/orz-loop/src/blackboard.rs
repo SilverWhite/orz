@@ -3810,4 +3810,166 @@ mod tests {
             }
         }
     }
+
+    /// TER T1.6 (2026-09-04): `blackboard_read section=processes` 经真实
+    /// 工具链回达模型——live 分区渲染（无事实时「（无）」）；工具定义
+    /// section 枚举已声明 processes。
+    #[tokio::test]
+    async fn blackboard_read_serves_processes_section() {
+        let dir = test_dir();
+        let journal = JournalRecorder::new(dir.clone());
+        let host = TestHost {
+            journal,
+            tool_result: Some(ToolResult {
+                output: "irrelevant".to_string(),
+                exit_code: Some(0),
+                output_encoding: None,
+                structured: None,
+                ..Default::default()
+            }),
+        };
+        let fake = Arc::new(FakeProvider::new(vec![
+            ScriptedResponse::tool_calls(vec![ToolCall {
+                name: "blackboard_read".to_string(),
+                arguments: serde_json::json!({"section": "processes"}),
+                call_id: "call-p1".to_string(),
+            }]),
+            ScriptedResponse::text("完成"),
+            ScriptedResponse::text("完成"),
+        ]));
+        let gateway: Arc<dyn ModelGateway> = fake.clone();
+        let controller = AgentLoopController::with_gateway(gateway).with_plan(
+            "PLAN-PROC".to_string(),
+            1,
+            "构建".to_string(),
+            vec!["侦查".to_string()],
+        );
+        controller
+            .run_turn(
+                &host,
+                "读进程面",
+                "RUN-PROC1",
+                MANIFEST,
+                0,
+                None,
+                None,
+                None,
+            )
+            .await
+            .unwrap();
+
+        let received = fake.received_requests();
+        let round = received
+            .iter()
+            .find(|r| {
+                r.messages
+                    .iter()
+                    .any(|m| m.tool_call_id.as_deref() == Some("call-p1"))
+            })
+            .expect("round carrying blackboard_read processes reply");
+        let reply = round
+            .messages
+            .iter()
+            .find(|m| m.tool_call_id.as_deref() == Some("call-p1"))
+            .expect("processes tool result message");
+        assert!(
+            reply.content.contains("== processes (live) ==") && reply.content.contains("（无）"),
+            "processes reply: {:?}",
+            round.messages
+        );
+        // 工具定义增量扩展：blackboard_read 的 section 枚举含 processes。
+        let bb_def = round
+            .tools
+            .iter()
+            .find(|t| t.name == "blackboard_read")
+            .expect("blackboard_read declared in request tools");
+        let sections = bb_def
+            .parameters
+            .get("properties")
+            .and_then(|p| p.get("section"))
+            .and_then(|s| s.get("enum"))
+            .and_then(|e| e.as_array())
+            .expect("section enum declared");
+        assert!(
+            sections.iter().any(|v| v.as_str() == Some("processes")),
+            "processes must be declared in the section enum: {sections:?}"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// TER T1.6 (2026-09-04): processes live 分区的越权组合（epoch /
+    /// receipt_id）显式报错——事件面 ToolCompleted exit_code 1 + error，
+    /// 模型面收到错误文本；不静默回退。
+    #[tokio::test]
+    async fn blackboard_read_processes_combination_errors_are_explicit() {
+        let dir = test_dir();
+        let journal = JournalRecorder::new(dir.clone());
+        let host = TestHost {
+            journal,
+            tool_result: None,
+        };
+        let fake = Arc::new(FakeProvider::new(vec![
+            ScriptedResponse::tool_calls(vec![ToolCall {
+                name: "blackboard_read".to_string(),
+                arguments: serde_json::json!({"section": "processes", "epoch": 1}),
+                call_id: "call-p-e".to_string(),
+            }]),
+            ScriptedResponse::tool_calls(vec![ToolCall {
+                name: "blackboard_read".to_string(),
+                arguments: serde_json::json!({"section": "processes", "receipt_id": "ORD-1"}),
+                call_id: "call-p-r".to_string(),
+            }]),
+            ScriptedResponse::text("完成"),
+            ScriptedResponse::text("完成"),
+        ]));
+        let gateway: Arc<dyn ModelGateway> = fake.clone();
+        let controller = AgentLoopController::with_gateway(gateway);
+        controller
+            .run_turn(
+                &host,
+                "越权组合",
+                "RUN-PROCCOMBO",
+                MANIFEST,
+                0,
+                None,
+                None,
+                None,
+            )
+            .await
+            .unwrap();
+
+        let payloads: Vec<serde_json::Value> = events(&dir)
+            .into_iter()
+            .filter(|e| e.event_type == EventType::ToolCompleted)
+            .map(|e| e.payload)
+            .collect();
+        assert_eq!(payloads.len(), 2, "{payloads:?}");
+        let epoch_payload = payloads
+            .iter()
+            .find(|p| p["call_id"] == "call-p-e")
+            .expect("epoch combo completed");
+        assert_eq!(epoch_payload["exit_code"], 1, "{epoch_payload:?}");
+        assert!(
+            epoch_payload["error"]
+                .as_str()
+                .unwrap()
+                .contains("processes is a live-only partition"),
+            "{epoch_payload:?}"
+        );
+        let receipt_payload = payloads
+            .iter()
+            .find(|p| p["call_id"] == "call-p-r")
+            .expect("receipt combo completed");
+        assert_eq!(receipt_payload["exit_code"], 1, "{receipt_payload:?}");
+        assert!(
+            receipt_payload["error"]
+                .as_str()
+                .unwrap()
+                .contains("当前 section=processes 不支持 receipt_id"),
+            "{receipt_payload:?}"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }

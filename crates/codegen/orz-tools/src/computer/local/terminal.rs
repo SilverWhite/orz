@@ -19,7 +19,7 @@ use crate::computer::local::cgroup::{
     CgroupGuard, CgroupMemoryConfig, MemoryMonitor, PROCESS_OOM_EXIT_CODE,
 };
 use crate::computer::types::{
-    BackgroundHandle, ComputerError, KillOutcome, TaskSnapshot, TerminalBackend,
+    BackgroundHandle, ComputerError, KillOutcome, TaskLiveSnapshot, TaskSnapshot, TerminalBackend,
     TerminalRunRequest, TerminalRunResult,
 };
 use crate::notification::types::{BashNotificationBase, BashOutputChunk, ToolNotificationHandle};
@@ -255,6 +255,11 @@ enum TerminalCommand {
         reply: oneshot::Sender<Vec<TaskSnapshot>>,
     },
 
+    /// TER T1.6: 黑板 processes 分区读取时现算的 live 快照。
+    ListLiveTasks {
+        reply: oneshot::Sender<Vec<TaskLiveSnapshot>>,
+    },
+
     /// Query the persistent shell's current working directory.
     GetShellCwd {
         reply: oneshot::Sender<Option<PathBuf>>,
@@ -329,6 +334,8 @@ impl BackgroundReason {
 struct ProcessState {
     /// The child process
     child: tokio::process::Child,
+    /// Spawn pid——进程退出后仍保留，供 live 视图展示与 PID 中断语义。
+    pid: Option<u32>,
     /// Process-tree teardown handle, shared (`Arc`) with the process-global
     /// `ProcessScope` so the TUI exit paths can reap it if this actor never runs
     /// its own teardown. On Unix this stores the leader pid for `killpg`; on
@@ -1079,6 +1086,9 @@ impl LocalTerminalActor {
                 }
                 let _ = reply.send(snapshots);
             }
+            TerminalCommand::ListLiveTasks { reply } => {
+                let _ = reply.send(self.live_task_snapshots());
+            }
             TerminalCommand::GetShellCwd { reply } => {
                 #[cfg(unix)]
                 let cwd = if self.persistent_shell {
@@ -1205,8 +1215,10 @@ impl LocalTerminalActor {
             }
         };
 
+        let child_pid = child.id();
         let process_state = ProcessState {
             child,
+            pid: child_pid,
             process_group: Some(self.enroll_spawned(process_group)),
             output_buffer: Vec::new(),
             front_buffer: None,
@@ -1338,8 +1350,10 @@ impl LocalTerminalActor {
         // Generate task_id — the actor owns the identity
         let task_id = uuid::Uuid::now_v7().to_string();
 
+        let child_pid = child.id();
         let process_state = ProcessState {
             child,
+            pid: child_pid,
             process_group: Some(self.enroll_spawned(process_group)),
             output_buffer: Vec::new(),
             front_buffer: None,
@@ -1390,7 +1404,7 @@ impl LocalTerminalActor {
         };
 
         // Store under task_id — this is the key that get_task/kill_task will use
-        let pid = process_state.child.id();
+        let pid = child_pid;
         self.processes.insert(task_id.clone(), process_state);
 
         // Reply immediately
@@ -1489,6 +1503,53 @@ impl LocalTerminalActor {
         process.flush_and_truncate_output_file().await;
         let result = Ok(process.to_result());
         process.notify_waiters(result);
+    }
+
+    /// TER T1.6 (2026-09-04): 黑板 `section=processes` 的读取时现算快照。
+    /// 不逐秒写事件；CPU 读数在读取时现算（进程树级）；`idle` 状态来自
+    /// idle+CPU 采样器（T1.5）。
+    fn live_task_snapshots(&self) -> Vec<TaskLiveSnapshot> {
+        let now = Instant::now();
+        self.processes
+            .iter()
+            .map(|(id, p)| {
+                let status = if p.exit_status.is_some() {
+                    if p.explicitly_killed
+                        || p.exit_status
+                            .as_ref()
+                            .and_then(|s| s.signal.as_deref())
+                            .is_some()
+                    {
+                        "killed"
+                    } else {
+                        "completed"
+                    }
+                } else if p.activity.idle_since.is_some() {
+                    "idle"
+                } else {
+                    "running"
+                };
+                let cpu_micros = p
+                    .process_group
+                    .as_ref()
+                    .and_then(|g| g.cpu_time().ok().flatten())
+                    .map(|d| d.as_micros() as u64)
+                    .unwrap_or(0);
+                TaskLiveSnapshot {
+                    task_id: id.clone(),
+                    command: p.command.clone(),
+                    display_command: p.display_command.clone(),
+                    pid: p.pid,
+                    elapsed_ms: now.duration_since(p.start_time).as_millis() as u64,
+                    status: status.to_string(),
+                    total_bytes: p.total_bytes as u64,
+                    cpu_micros,
+                    killable: p.exit_status.is_none(),
+                    owner_session_id: p.owner_session_id.clone(),
+                    description: p.description.clone(),
+                }
+            })
+            .collect()
     }
 
     /// Poll all processes for output and completion
@@ -2784,6 +2845,19 @@ impl TerminalBackend for LocalTerminalBackend {
         reply_rx.await.unwrap_or_default()
     }
 
+    async fn list_live_tasks(&self) -> Vec<TaskLiveSnapshot> {
+        let (reply_tx, reply_rx) = oneshot::channel();
+        if self
+            .cmd_tx
+            .send(TerminalCommand::ListLiveTasks { reply: reply_tx })
+            .await
+            .is_err()
+        {
+            return vec![];
+        }
+        reply_rx.await.unwrap_or_default()
+    }
+
     async fn get_shell_cwd(&self) -> Option<PathBuf> {
         let (reply_tx, reply_rx) = oneshot::channel();
         self.cmd_tx
@@ -4001,6 +4075,68 @@ mod tests {
             matches!(outcome, KillOutcome::Killed | KillOutcome::AlreadyExited),
             "kill after busy test should succeed: {outcome:?}"
         );
+        let _ = tokio::fs::remove_file(&output_file).await;
+    }
+
+    /// TER T1.6 (2026-09-04): `list_live_tasks` 读取时现算——后台运行任务
+    /// 行携带 pid/elapsed/status=idle 或 running/total_bytes/killable；
+    /// idle-kill 后同一 task 行变 killed 且不可 kill。
+    #[tokio::test]
+    async fn test_list_live_tasks_reports_running_then_killed_states() {
+        let backend = LocalTerminalBackend::new_with_idle_kill_timeout(Duration::from_millis(1500));
+        let output_file =
+            std::env::temp_dir().join(format!("terminal-test-live-{}.out", std::process::id()));
+
+        let request = TerminalRunRequest {
+            command: "sleep 60".to_string(),
+            working_directory: PathBuf::from("/tmp"),
+            env: HashMap::new(),
+            timeout: Duration::from_secs(3600),
+            output_byte_limit: 10000,
+            output_file: output_file.clone(),
+            notification_handle: ToolNotificationHandle::noop(),
+            tool_call_id: "test-live-list".to_string(),
+            display_command: None,
+            auto_background_on_timeout: false,
+            foreground_block_budget: None,
+            kind: TaskKind::Bash,
+            owner_session_id: Some("sess-a".to_string()),
+            description: Some("live view probe".to_string()),
+        };
+        let handle = backend
+            .run_background(request)
+            .await
+            .expect("spawn bg task");
+
+        let live = backend.list_live_tasks().await;
+        let row = live
+            .iter()
+            .find(|r| r.task_id == handle.task_id)
+            .unwrap_or_else(|| panic!("live list must include task {}", handle.task_id));
+        assert!(row.pid.is_some(), "live row must carry pid: {row:?}");
+        assert!(row.killable, "running task must be killable: {row:?}");
+        assert!(row.owner_session_id.as_deref() == Some("sess-a"));
+        assert!(row.description.as_deref() == Some("live view probe"));
+        assert!(
+            matches!(row.status.as_str(), "running" | "idle"),
+            "fresh sleep must be running or idle, got {:?}",
+            row.status
+        );
+
+        // 等 idle-kill 完成后，同 task 行应为 killed 且不可 kill。
+        let mut killed = None;
+        for _ in 0..75 {
+            tokio::time::sleep(Duration::from_millis(200)).await;
+            let live = backend.list_live_tasks().await;
+            if let Some(row) = live.iter().find(|r| r.task_id == handle.task_id) {
+                if row.status == "killed" {
+                    killed = Some(row.clone());
+                    break;
+                }
+            }
+        }
+        let killed = killed.expect("task should be idle-killed and visible as killed");
+        assert!(!killed.killable, "killed task must not be killable");
         let _ = tokio::fs::remove_file(&output_file).await;
     }
 

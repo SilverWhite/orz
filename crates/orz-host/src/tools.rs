@@ -9,7 +9,6 @@ use std::path::Path;
 use std::sync::Arc;
 
 use orz_tools::computer::local::file_system::LocalFs;
-use orz_tools::computer::local::terminal::LocalTerminalBackend;
 use orz_tools::computer::types::{AsyncFileSystem, TerminalBackend};
 use orz_tools::implementations::web_search::WebSearchConfig;
 use orz_tools::registry::types::{
@@ -283,8 +282,8 @@ pub fn build_toolset(
     cwd: &Path,
     web_search_config: &WebSearchConfig,
     read_file_coarse_gate_bytes: Option<usize>,
+    backend: Arc<dyn TerminalBackend>,
 ) -> Result<Arc<FinalizedToolset>, String> {
-    let backend: Arc<dyn TerminalBackend> = Arc::new(LocalTerminalBackend::new());
     let fs: Arc<dyn AsyncFileSystem> = Arc::new(LocalFs);
 
     let ctx = SessionContext {

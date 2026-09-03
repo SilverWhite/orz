@@ -32,6 +32,8 @@ use agent_client_protocol as acp;
 use async_trait::async_trait;
 use orz_assurance::gates::ipg::WorkspaceTrust;
 use orz_assurance::journal::JournalRecorder;
+use orz_tools::computer::local::LocalTerminalBackend;
+use orz_tools::computer::types::TerminalBackend;
 use orz_tools::implementations::web_search::WebSearchConfig;
 // NOTE: `PermitError` (orz_loop::host) is the LoopHost contract error; the
 // assurance permit error is aliased to keep the two distinct.
@@ -87,6 +89,9 @@ pub struct OrzHost {
     tool_timeout: Duration,
     /// Session working directory — the run_tests command's cwd.
     cwd: PathBuf,
+    /// TER T1.6 (2026-09-04): 终端 backend 句柄——黑板 `section=processes`
+    /// live 分区事实源（与工具集共用同一实例，读取时现算）。
+    terminal: Arc<dyn TerminalBackend>,
     /// GAP-RETRIEVAL-TOOLS (2026-08-10) + GAP-PROJECT-DOC-INDEX-CACHE
     /// (2026-08-11): the project-doc index — the internal retrieval lane's
     /// real discovery/query tool (ADR-0010 §3.7.4/§3.7.5; host-owned,
@@ -177,7 +182,13 @@ impl OrzHost {
                 "toolset.read_file coarse gate applied"
             );
         }
-        let toolset = tools::build_toolset(cwd, &web_search_config, read_file_coarse_gate_bytes)?;
+        let terminal: Arc<dyn TerminalBackend> = Arc::new(LocalTerminalBackend::new());
+        let toolset = tools::build_toolset(
+            cwd,
+            &web_search_config,
+            read_file_coarse_gate_bytes,
+            terminal.clone(),
+        )?;
         // ADR-0006 (2026-08-11): the only sanctioned serialization exit for
         // the config — never log the raw `WebSearchConfig` (its `Debug`
         // contains the api_key; `redacted()` is the production surface).
@@ -200,6 +211,7 @@ impl OrzHost {
             test_runner: None,
             tool_timeout: TOOL_CALL_TIMEOUT,
             cwd: cwd.to_path_buf(),
+            terminal,
             project_doc_index: crate::project_doc_index::ProjectDocIndex::new(cwd.to_path_buf()),
             web_search_config,
             web_search_semaphore: Arc::new(tokio::sync::Semaphore::new(1)),
@@ -791,6 +803,30 @@ impl LoopHost for OrzHost {
         true
     }
 
+    /// TER T1.6 (2026-09-04): 黑板 `section=processes` live 事实——把终端
+    /// 读取时现算快照映射为 loop 侧结构化事实。
+    async fn terminal_live_processes(&self) -> Vec<orz_loop::host::LiveProcessFact> {
+        use orz_tools::computer::types::TaskLiveSnapshot;
+        self.terminal
+            .list_live_tasks()
+            .await
+            .into_iter()
+            .map(|s: TaskLiveSnapshot| orz_loop::host::LiveProcessFact {
+                task_id: s.task_id,
+                command: s.command,
+                display_command: s.display_command,
+                pid: s.pid,
+                elapsed_ms: s.elapsed_ms,
+                status: s.status,
+                total_bytes: s.total_bytes,
+                cpu_micros: s.cpu_micros,
+                killable: s.killable,
+                owner_session_id: s.owner_session_id,
+                description: s.description,
+            })
+            .collect()
+    }
+
     /// FUS-TOOL-PROBE P0-A-2: the ORZ host currently builds its toolset
     /// with every optional backend disabled (`build_toolset`:
     /// `memory_backend: None`, `lsp: None`, image/video configs
@@ -1153,8 +1189,13 @@ mod tests {
 
     fn shared_toolset() -> &'static Arc<orz_tools::registry::types::FinalizedToolset> {
         SHARED_TOOLSET.get_or_init(|| {
-            tools::build_toolset(&std::env::temp_dir(), &WebSearchConfig::Disabled, None)
-                .expect("shared toolset")
+            tools::build_toolset(
+                &std::env::temp_dir(),
+                &WebSearchConfig::Disabled,
+                None,
+                Arc::new(LocalTerminalBackend::new()),
+            )
+            .expect("shared toolset")
         })
     }
 
@@ -1702,8 +1743,13 @@ mod tests {
         let content = format!("{}\n", "y".repeat(100)).repeat(100); // ~10.2 KiB
         std::fs::write(&path, &content).unwrap();
 
-        let gated = tools::build_toolset(&dir, &WebSearchConfig::Disabled, Some(8 * 1024))
-            .expect("gated toolset");
+        let gated = tools::build_toolset(
+            &dir,
+            &WebSearchConfig::Disabled,
+            Some(8 * 1024),
+            Arc::new(LocalTerminalBackend::new()),
+        )
+        .expect("gated toolset");
         let result = gated
             .call(
                 "read_file",
@@ -1718,8 +1764,13 @@ mod tests {
             "8 KiB gate must envelope a ~10 KiB file, got: {result:?}"
         );
 
-        let default =
-            tools::build_toolset(&dir, &WebSearchConfig::Disabled, None).expect("default toolset");
+        let default = tools::build_toolset(
+            &dir,
+            &WebSearchConfig::Disabled,
+            None,
+            Arc::new(LocalTerminalBackend::new()),
+        )
+        .expect("default toolset");
         let result = default
             .call(
                 "read_file",
@@ -2379,6 +2430,57 @@ mod tests {
             .await
             .expect("process-type tool works after the override timeout");
         assert!(follow_up.output.contains("orz-alive"));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// TER T1.6 (2026-09-04): orz-host 把终端读取时现算的 live 快照映射
+    /// 为 LoopHost 事实（黑板 `section=processes` 分区的事实源）。
+    #[tokio::test]
+    async fn terminal_live_processes_maps_terminal_snapshot() {
+        let dir = std::env::temp_dir().join(format!("orz-host-live-proc-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let journal = JournalRecorder::new(dir.clone());
+        let host = OrzHost::new(journal, &dir, WorkspaceTrust::ObservedTrusted).expect("host");
+        let request = orz_tools::computer::types::TerminalRunRequest {
+            command: "sleep 60".to_string(),
+            working_directory: dir.clone(),
+            env: std::collections::HashMap::new(),
+            timeout: std::time::Duration::from_secs(3600),
+            output_byte_limit: 10000,
+            output_file: dir.join("live-test.out"),
+            notification_handle: orz_tools::notification::types::ToolNotificationHandle::noop(),
+            tool_call_id: "live-host-test".to_string(),
+            display_command: Some("sleep 60".to_string()),
+            auto_background_on_timeout: false,
+            foreground_block_budget: None,
+            kind: orz_tools::computer::types::TaskKind::Bash,
+            owner_session_id: Some("sess-main".to_string()),
+            description: Some("live probe".to_string()),
+        };
+        let handle = host
+            .terminal
+            .run_background(request)
+            .await
+            .expect("spawn bg task");
+        let facts = host.terminal_live_processes().await;
+        let row = facts
+            .iter()
+            .find(|f| f.task_id == handle.task_id)
+            .unwrap_or_else(|| panic!("live facts must include task {}", handle.task_id));
+        assert_eq!(row.display_command.as_deref(), Some("sleep 60"));
+        assert!(row.pid.is_some(), "row must carry pid: {row:?}");
+        assert!(row.killable, "running task must be killable: {row:?}");
+        assert_eq!(row.owner_session_id.as_deref(), Some("sess-main"));
+
+        let outcome = host.terminal.kill_task(&handle.task_id).await;
+        assert!(
+            matches!(
+                outcome,
+                orz_tools::computer::types::KillOutcome::Killed
+                    | orz_tools::computer::types::KillOutcome::AlreadyExited
+            ),
+            "kill cleanup: {outcome:?}"
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

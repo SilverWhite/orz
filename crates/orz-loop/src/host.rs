@@ -165,6 +165,24 @@ pub struct ToolMidRunStatus {
     pub total_bytes: Option<u64>,
 }
 
+/// TER T1.6 (2026-09-04): 黑板 `section=processes` live 分区的结构化事实
+/// ——host 把终端读取时现算快照映射为本类型（`status` 取值 running /
+/// idle / completed / killed）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LiveProcessFact {
+    pub task_id: String,
+    pub command: String,
+    pub display_command: Option<String>,
+    pub pid: Option<u32>,
+    pub elapsed_ms: u64,
+    pub status: String,
+    pub total_bytes: u64,
+    pub cpu_micros: u64,
+    pub killable: bool,
+    pub owner_session_id: Option<String>,
+    pub description: Option<String>,
+}
+
 /// Lightweight error from tool execution.
 #[derive(Debug, thiserror::Error)]
 pub enum ToolError {
@@ -581,6 +599,13 @@ pub trait LoopHost: Send + Sync {
     /// their real backend.
     fn terminal_available(&self) -> bool {
         false
+    }
+
+    /// TER T1.6 (2026-09-04): 黑板 `section=processes` 的 live 事实源
+    /// （读取时现算，≤1s 新鲜度）。不支持的后端默认空列表（fail-closed，
+    /// 不伪造状态）。
+    async fn terminal_live_processes(&self) -> Vec<LiveProcessFact> {
+        Vec::new()
     }
 
     /// FUS-TOOL-PROBE P0-A-2: whether a workspace language-service backend

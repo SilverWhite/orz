@@ -1830,6 +1830,35 @@ impl AgentLoopController {
         ))
     }
 
+    /// TER T1.6 (2026-09-04): 黑板 `section=processes` live 分区——读取时
+    /// 从 host 终端现算快照（≤1s 新鲜度），行含 task_id / 命令摘要 /
+    /// elapsed / status / 字节 / CPU / killable；整分区 ≤ 8KiB 字符。
+    /// live-only：`epoch`（跨 epoch 回看）与 `receipt_id`（归档点读）
+    /// 组合一律显式 `Err`（exit_code 1 + error 字段，O4 同纪律），不静默
+    /// 回退；只读渲染无副作用，kill 只能经既有 PID 中断 / 生命周期动作面。
+    pub(crate) async fn render_processes_section(
+        &self,
+        host: &dyn crate::host::LoopHost,
+        epoch: Option<u64>,
+        receipt_id: Option<&str>,
+    ) -> Result<String, String> {
+        if let Some(epoch) = epoch {
+            return Err(format!(
+                "blackboard_read processes with epoch is not supported — \
+                 processes is a live-only partition (reading recomputes the \
+                 snapshot from the terminal; nothing is archived); omit epoch \
+                 to read the live section (epoch={epoch})"
+            ));
+        }
+        if receipt_id.is_some() {
+            return Err("receipt_id 仅与 section=actions 组合有效（点读结果栏单条 \
+                 receipt）；当前 section=processes 不支持 receipt_id"
+                .to_string());
+        }
+        let facts = host.terminal_live_processes().await;
+        Ok(crate::processes::render_processes_text(&facts))
+    }
+
     /// P2-10 F2 §3.3 (I3, ADR-0010 §14.47): render the temporal partition
     /// query surface — `blackboard_read section=temporal` with optional
     /// `selector` (now | recent | history | feature), `k` (≤ 20) and `name`
@@ -2609,7 +2638,11 @@ impl AgentLoopController {
                      (P2-11 dependency graph — the file anchor chain: read→write \
                      anchor edges and tool→entity mutation edges for \
                      read_file/search_replace; D3 command/retrieval side effects \
-                     are NOT graphed; live-only). \
+                     are NOT graphed; live-only), processes \
+                     (TER T1.6 live terminal process board — reading recomputes \
+                     a fresh ≤1s snapshot from the terminal: task_id / 命令摘要 \
+                     / elapsed / status / 输出字节 / CPU / killable; live-only, \
+                     nothing archived; kill 经既有 PID 中断语义). \
                      Optional `since_timestamp` (RFC 3339, e.g. the timestamp \
                      this tool returned earlier) filters the edits / tool_actions \
                      entries to those at or after that time. Optional \
@@ -2650,6 +2683,7 @@ impl AgentLoopController {
                                 "external_ret",
                                 "entities",
                                 "deps",
+                                "processes",
                                 "temporal",
                             ],
                             "description": "P2-10 F2 §3.3 (2026-08-30): temporal 分区是 LIF 时间观测面——每决策轮域标签/特征行（Now/Recent(k≤20)/History/Feature(name,k≤20)，渲染 ≤1 KiB、fires 不渲染、零注入 PULL 面）。selector 默认 now；recent/feature 可带 k（≤20）；feature 另需 name（u_prog|u_err|u_stuck|t_hat|err10|succ10）。",

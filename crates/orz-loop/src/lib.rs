@@ -35,6 +35,7 @@ mod host_exec;
 pub(crate) mod mechanical_audit;
 pub mod orientation;
 pub(crate) mod planning;
+pub(crate) mod processes;
 pub mod prompt;
 pub mod relay;
 pub(crate) mod render_fold;

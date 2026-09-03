@@ -174,6 +174,31 @@ pub struct BackgroundHandle {
     pub pid: Option<u32>,
 }
 
+/// TER T1.6 (2026-09-04): 黑板 `section=processes` live 分区的读取时现算
+/// 快照（≤1s 新鲜度）。由终端在读取时从进程状态构建；`status` 取值
+/// `running` / `idle` / `completed` / `killed`（`waiting_input` 无机械
+/// 依据时不产生——truthful fail-closed）。
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct TaskLiveSnapshot {
+    pub task_id: String,
+    /// 实际执行的命令（可能含隔离包装）。
+    pub command: String,
+    /// 原始用户命令（优先展示，避免暴露隔离机制）。
+    pub display_command: Option<String>,
+    pub pid: Option<u32>,
+    /// 自进程起跑的墙钟毫秒。
+    pub elapsed_ms: u64,
+    pub status: String,
+    /// 输出累计字节（截断前单调计数）。
+    pub total_bytes: u64,
+    /// 进程树累计 CPU 微秒（读取时现算；不可用 = 0）。
+    pub cpu_micros: u64,
+    /// 运行中即认为可 kill（经既有 PID 中断语义 / 生命周期动作）。
+    pub killable: bool,
+    pub owner_session_id: Option<String>,
+    pub description: Option<String>,
+}
+
 /// Full snapshot of a task's state.
 /// Used by both local and ACP backends.
 #[derive(
@@ -351,6 +376,13 @@ pub trait TerminalBackend: Send + Sync {
     /// List all known background tasks (running and completed).
     /// Used for context compaction to include task state in summaries.
     async fn list_tasks(&self) -> Vec<TaskSnapshot>;
+
+    /// TER T1.6 (2026-09-04): 黑板 `section=processes` 的读取时现算事实源
+    /// （≤1s 新鲜度）。不支持 live 读取的后端默认返回空（fail-closed，
+    /// 不伪造状态）。
+    async fn list_live_tasks(&self) -> Vec<TaskLiveSnapshot> {
+        Vec::new()
+    }
 
     /// Return the persistent shell's current working directory, if persistent
     /// shell state is enabled. Returns `None` when persistence is off or the

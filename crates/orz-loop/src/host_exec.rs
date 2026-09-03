@@ -1243,7 +1243,7 @@ impl AgentLoopController {
                         let content = format!(
                             "invalid blackboard_read section: {raw} — section 必须 \
                              是字符串（plan|edits|tool_actions|exec|actions|session|\
-                             internal_ret|external_ret|entities|deps|temporal）"
+                             internal_ret|external_ret|entities|deps|processes|temporal）"
                         );
                         let mut completed = serde_json::json!({
                             "tool": tc.name,
@@ -1752,6 +1752,48 @@ impl AgentLoopController {
                         return Ok((result, None));
                     }
                 }
+            } else if section == "processes" {
+                // TER T1.6 (2026-09-04): 黑板 processes live 分区——读取时
+                // 从 host 终端现算（≤1s 新鲜度）；live-only 组合（epoch /
+                // receipt_id）显式报错（O4：ToolCompleted exit_code 1 +
+                // error 字段）。
+                match self
+                    .render_processes_section(host, epoch, receipt_id.as_deref())
+                    .await
+                {
+                    Ok(text) => text,
+                    Err(error) => {
+                        let mut completed = serde_json::json!({
+                            "tool": tc.name,
+                            "call_id": tc.call_id,
+                            "exit_code": 1,
+                            "section": section,
+                            "error": error,
+                        });
+                        stamp_direct(&mut completed);
+                        writer.record(EventType::ToolCompleted, completed).await?;
+                        self.push_tool_action_stamped(
+                            ToolDispatcher::action_category(&tc.name).to_string(),
+                            tc.name.clone(),
+                            chrono_utc_now(),
+                        );
+                        let result = ToolResult {
+                            output: error,
+                            exit_code: Some(1),
+                            output_encoding: None,
+                            structured: None,
+                            ..Default::default()
+                        };
+                        messages.push(Message {
+                            role: Role::Tool,
+                            content: result.output.clone(),
+                            tool_call_id: Some(tc.call_id.clone()),
+                            tool_calls: Vec::new(),
+                            reasoning_content: None,
+                        });
+                        return Ok((result, None));
+                    }
+                }
             } else {
                 self.render_blackboard_section_fold(
                     &section,
@@ -1774,9 +1816,12 @@ impl AgentLoopController {
             } else {
                 content
             };
-            // temporal 整响应（增量头 + 查询体）仍 ≤1 KiB（设计 §4/§5）。
+            // temporal 整响应（增量头 + 查询体）仍 ≤1 KiB（设计 §4/§5）；
+            // processes live 分区整响应 ≤8 KiB（TER T1.6，T0.2 §5.1）。
             let content = if section == "temporal" {
                 orz_assurance::tool_envelope::enforce_bound(content, 1024)
+            } else if section == "processes" {
+                orz_assurance::tool_envelope::enforce_bound(content, 8192)
             } else {
                 content
             };
