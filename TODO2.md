@@ -135,9 +135,17 @@
   6 passed（渲染 4 + 回达 + 越权）、orz-host 映射 1 passed、check 净、
   fmt/diff check 净。审计见
   [`TER_T1_6_PROCESSES_LIVE_PARTITION_2026-09-04.md`](docs/audits/TER_T1_6_PROCESSES_LIVE_PARTITION_2026-09-04.md)。）
-- [ ] T1.7 轮预算默认无限制：max_tool_rounds 默认移除（“120 per turn”
+- [x] T1.7 轮预算默认无限制：max_tool_rounds 默认移除（“120 per turn”
   静态文案动态化/移除）；保留可配上限逃生阀与 budget_insufficient。
   验收：默认运行无 120 拦截；显式配置上限时原机制仍生效。
+  （2026-09-04 完成：`MAX_TOOL_ROUNDS` 120 → 0（0=unlimited 默认）；
+  轮数闸加 `>0` 守卫（默认不挂 tool_rounds_limit/exhaustion）；
+  session 面 budget=0 渲染 unlimited（显式上限仍按生效值渲染数字档与
+  remaining）；`budget_insufficient` 预检仅显式非零上限时生效；检索
+  子代理与主车道取 min 的组合在“主车道无上限”下正确落到检索档位。
+  验证：orz-loop 全量 699 passed / 3 ignored、fmt --check 净、git diff
+  --check exit 0。审计见
+  [`TER_T1_7_UNLIMITED_ROUND_BUDGET_DEFAULT_2026-09-04.md`](docs/audits/TER_T1_7_UNLIMITED_ROUND_BUDGET_DEFAULT_2026-09-04.md)。）
 - [ ] T1.8 F6 pull 面：session（或 processes）补 wallclock
   （elapsed/limit/remaining）；blackboard_read 返回含时间轴。验收：
   渲染单测 + 越权边界。
