@@ -146,9 +146,16 @@
   验证：orz-loop 全量 699 passed / 3 ignored、fmt --check 净、git diff
   --check exit 0。审计见
   [`TER_T1_7_UNLIMITED_ROUND_BUDGET_DEFAULT_2026-09-04.md`](docs/audits/TER_T1_7_UNLIMITED_ROUND_BUDGET_DEFAULT_2026-09-04.md)。）
-- [ ] T1.8 F6 pull 面：session（或 processes）补 wallclock
+- [x] T1.8 F6 pull 面：session（或 processes）补 wallclock
   （elapsed/limit/remaining）；blackboard_read 返回含时间轴。验收：
   渲染单测 + 越权边界。
+  （2026-09-04 完成：session 面 `session_face_block_with_wallclock` 增
+  `WALLCLOCK_ELAPSED`（LIF run-relative 只读换算）/ `LIMIT` +
+  `REMAINING`（`ORZ_MAX_WALLCLOCK` >0 生效；未施加渲染 limit none，
+  不虚构 remaining）；旧 wrapper 输出逐字节不变；epoch/receipt_id 越权
+  守卫沿用。验证：orz-loop 全量 700 passed / 3 ignored、fmt --check 净、
+  git diff --check exit 0。审计见
+  [`TER_T1_8_F6_PULL_WALLCLOCK_2026-09-04.md`](docs/audits/TER_T1_8_F6_PULL_WALLCLOCK_2026-09-04.md)。）
 - [ ] T1.9 F6 push 档：阈值 <600/300/120s 注入中性事实 ≤4 次/run +
   `budget_cue_injected` 事件；开关 env/config 默认 off。验收：开关
   off 零注入（回归 PUSH→PULL）；on 时次数上限与事件可审。
