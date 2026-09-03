@@ -1,0 +1,47 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://local.fep-agent.invalid/schema/session-archive-event-payload-v0.2.schema.json",
+  "title": "Conversation single-package archive runtime event payload v0.2",
+  "description": "P2-13 B3 (2026-09-03, ADR-0010 §14.52 / BLACKBOARD_CONVERSATION_SCOPE_FOLD_DESIGN §12 R3): a conversation (对话 + 黑板 live 视图 + 会话元数据) was archived at session close into one gzip package under `.gsa/archives/<session8>.json.gz` — pure packaging (no content transform), atomic write + digest, original sidecars retained until the retention sweep. Each conversation is archived at most once per close; the event is the audit trace (archive_id/path/digest/status/attempts/fatigue_pct).",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "archive_id",
+    "path",
+    "digest",
+    "status",
+    "attempts"
+  ],
+  "properties": {
+    "archive_id": {
+      "description": "会话存档身份 = 会话 id + 时间戳（如 sess-abcdef12-20260903T120000Z）——不保留 plan-epoch 快照编号体系（ADR-0010 §14.52）。",
+      "type": "string",
+      "minLength": 1
+    },
+    "path": {
+      "description": "压缩包路径（`.gsa/archives/<session8>.json.gz`）。",
+      "type": "string",
+      "minLength": 1
+    },
+    "digest": {
+      "description": "压缩包内容的 sha256（hex，64 字符）——原子写后对成品文件计算，供回读复核；`failed` 时为空串（无成品可计）。",
+      "type": "string",
+      "pattern": "^$|^[a-f0-9]{64}$"
+    },
+    "status": {
+      "description": "存档结果：`completed` = 包已原子落盘 + digest 核对；`failed` = 重试后仍未落盘（原 sidecar 仍在，可由 retention/用户再触发）。",
+      "enum": ["completed", "failed"]
+    },
+    "attempts": {
+      "description": "落盘尝试次数（有界重试后上报）。",
+      "type": "integer",
+      "minimum": 1
+    },
+    "fatigue_pct": {
+      "description": "会话终点黑板水位百分比（0–100；会话无黑板内容或计量失败时为 0/省略）。",
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 100
+    }
+  }
+}

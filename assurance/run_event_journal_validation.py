@@ -183,6 +183,13 @@ PAYLOAD_SCHEMA_BY_EVENT_TYPE_V02: dict[str, tuple[str, Path]] = {
           "epoch-archive-write-failed",
           RUNTIME / "epoch-archive-write-failed-event-payload-v0.2.schema.json",
       ),
+      # P2-13 B3 (2026-09-03, ADR-0010 §14.52 / 设计 §12 R3): conversation
+      # archived at session close as a single gzip package (pure packaging,
+      # atomic write + digest; once per session close).
+      "session_archive": (
+          "session-archive",
+          RUNTIME / "session-archive-event-payload-v0.2.schema.json",
+      ),
       # PLAN-FIRST 阶段 A (2026-08-16, ADR-0010 §14.17): first-round plan
       # gate result — plan identity/goal/step count, mechanical validation,
       # one-refill attempt progression and degrade reason.

@@ -563,7 +563,7 @@
   收益（目的仅结构合理性与信息密度）。
 - 计数：设计轮登记不动计数；实施放行时按既有纪律入账。
 
-### 13. BLACKBOARD-CONVERSATION-SCOPE-FOLD（P2；2026-09-03 设计定稿 + ADR-0010 §14.52 转录；实施待放行）
+### 13. BLACKBOARD-CONVERSATION-SCOPE-FOLD（P2；2026-09-03 设计定稿 + ADR-0010 §14.52 转录；B1–B3 已完成，B4 待放行）
 
 - 入口：[设计稿（v0.8 定稿）](BLACKBOARD_CONVERSATION_SCOPE_FOLD_DESIGN_2026-09-03.md)
   / TODO P2-13。
@@ -582,7 +582,36 @@
   守卫 fail loud + 工具声明增量；归档/未达阈值读取逐字节不变，orz-loop
   676 全绿。实施记录见
   [`audits/P2-13_B2_RENDER_FOLD_IMPL_AUDIT_2026-09-03.md`](audits/P2-13_B2_RENDER_FOLD_IMPL_AUDIT_2026-09-03.md)。
-  B3/B4 待续。
+  **B3 已完成（2026-09-03）**——空槽「（无）」统一；用户侧疲劳提醒
+  （fatigue.rs 纯函数 + ACP user_notice/侧车 meta + CLI stderr 降级）；
+  存档单包 gzip + `session_archive` v0.2 事件（schema/verifier/fixtures
+  先行、run-event 枚举 52→53、ARC 前缀）；plan-epoch 生产面退役清理
+  （marker 会话快照行、blackboard_read epoch 参数仅归档目录配置时声明、
+  `--plan` 保留）。orz-loop lib 689 全绿（+5）/ orz-tui 178 / orz-bin
+  全绿 / Python conformance 15 + journal 242。实施记录见
+  [`audits/P2-13_B3_IMPL_AUDIT_2026-09-03.md`](audits/P2-13_B3_IMPL_AUDIT_2026-09-03.md)。
+  B4 待续。
+- **B4 S3 重建完成（2026-09-03）**：Linux musl 三件套（ORZ-BUILD-
+  MOUNT-001 契约，`build_orz_aliyun_trixie.sh`，rust:1.97-slim，
+  `-j1` 发布轮 20m22s）BUILD_EXIT=0；预核证轮（工作树基线 f5232ae4 +
+  B1–B3 改动）与发布轮（orz d4a37fdb，含 0.3.0 bump）双轮核证通过；
+  三件套 orz 108,205,944 B / orz-signer 1,394,504 B / orz-acaf-
+  provision 1,212,568 B（2026-09-03 19:32 HKT）；musl 静态（无
+  PT_INTERP、无 ld-linux-x86-64）、版本串 0.3.0、P2-13 接线符号命中
+  （session_archive / fatigue_pct / round_from / 疲劳 70 档提示 /
+  （无））；bookworm 冒烟通过。构建日志
+  `D:\tb-eval\orz-linux\build-20260903-r03.log`；S4 复验待续。见
+  [`audits/P2-13_B4_S3_BUILD_2026-09-03.md`](audits/P2-13_B4_S3_BUILD_2026-09-03.md)。
+- **B3 复审处理（2026-09-03 全面复审）**：疲劳档位状态机收口——压缩轮数
+  门槛移除（50/70/90 只按 W 水位；70 档越过即给换对话建议）、巨幅跳跃只
+  报最高未提醒档且已越线低档一并落档不滞留补发（`FatigueDecision.
+  tiers_to_mark`）、close 时 in-flight run 的存档推迟到 run 收尾补触发
+  （`pending_archives` 票）；存档同步 IO 移 blocking 池；注释/口径清理与
+  边界登记（session8 命名、Windows 替换原子性、损坏 sidecar 静默边界、
+  TUI 不展示 user_notice、ARC journal 撞名）。设计稿升 **v0.9**。orz-loop
+  lib 691 / orz-host 243（仅既有 flake 单独复跑通过）/ orz-bin 全绿 /
+  fmt-clippy 无新增。处置登记见
+  [`audits/P2-13_B3_REVIEW_HANDLING_2026-09-03.md`](audits/P2-13_B3_REVIEW_HANDLING_2026-09-03.md)。
 - **B2 复审处理（2026-09-03 全面复审）**：折叠态 receipt_id 守卫旁路修复
   （仅 actions 显式报错）、未达阈值显式展开 = 普通读取（不裁剪）、显式展开
   目标行 4K cap 保护（绝不静默丢失）、标注落首个折叠行 + pre-stamp 时间

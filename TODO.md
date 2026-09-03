@@ -482,10 +482,32 @@
   （无段标注总览为既定后果，B4 遥测复核）；orz-loop lib 682 全绿（+6）。
   处置登记见
   [B2 复审处理](docs/audits/P2-13_B2_REVIEW_HANDLING_2026-09-03.md)。
-- [ ] **B3 契约与收尾**：空槽「（无）」、用户侧疲劳提醒、存档单包 gzip +
-  `session_archive` 事件、plan-epoch 生产面退役清理（`--plan` 保留）。
-- [ ] **B4 验证**：S3 重建 + S4 复验（web 通道 A/B、折叠态读取与展开、
-  恢复、长会话遥测）。
+- [x] **B3 契约与收尾（2026-09-03）**：空槽「（无）」统一（目的/计划/
+  变动文件路径/注意事项空态 + 状态行目标默认；后续衔接槽固定占位不改）；
+   用户侧疲劳提醒（W=10MiB 水位 50/70/90 档、单档越线一次、70 档换对话
+   建议——压缩轮数门槛于 B3 复审撤销、ACP user_notice/侧车 meta/CLI
+   stderr 降级）；存档单包
+  gzip（`.gsa/archives/<session8>.json.gz` 纯打包原子写 + digest +
+  `session_archive` v0.2 事件——schema/verifier/fixtures 先行，run-event
+  枚举 52→53、run_id 前缀 +ARC，专用 ARC run journal）；plan-epoch 生产
+  面退役清理（marker `plan_epoch` → 会话快照行、blackboard_read `epoch`
+  参数仅归档目录配置时声明、epoch.rs 头注登记，`--plan` 诊断保留）。
+  orz-loop lib 689 全绿（+5）/ orz-host 242（仅既有 flake 单独复跑通过）
+  / orz-tui 178 / orz-bin 全绿 / Python conformance 15 + journal 242。
+  实施记录见
+  [B3 实施审计](docs/audits/P2-13_B3_IMPL_AUDIT_2026-09-03.md)。
+- [x] **B3 复审处理（2026-09-03，全面复审）**：疲劳档位状态机收口——压缩
+  轮数门槛移除（50/70/90 只按 W 水位）、巨幅跳跃只报最高未提醒档且已越线
+  低档一并落档不滞留补发（`FatigueDecision.tiers_to_mark`）；close 时有
+  in-flight run 则存档推迟到该 run 收尾补触发（`pending_archives` 票）；
+  存档同步 IO 移 blocking 池；注释/口径清理（session8 命名、Windows 替换
+  原子性、损坏 sidecar 边界登记）。orz-loop lib 691 / orz-host 243（仅
+  既有 flake 单独复跑通过）/ orz-bin 全绿 / fmt-clippy 无新增。处置登记见
+  [B3 复审处理](docs/audits/P2-13_B3_REVIEW_HANDLING_2026-09-03.md)。
+- [ ] **B4 验证**：S3 重建完成（2026-09-03：Linux musl 三件套 orz
+  d4a37fdb，静态/符号/冒烟核证通过，见
+  [B4 S3 重建记录](docs/audits/P2-13_B4_S3_BUILD_2026-09-03.md)）；
+  S4 复验（web 通道 A/B、折叠态读取与展开、恢复、长会话遥测）待续。
 
 ## P3 — 收尾 / 清理
 
