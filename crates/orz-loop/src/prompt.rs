@@ -283,13 +283,25 @@ pub fn tool_policy_breaker_block(tool_name: &str, consecutive: u32) -> String {
 /// (`budget_insufficient` precheck, exhaustion block, `run_invalidated`)
 /// stay untouched — this face is advisory, never a correctness premise.
 pub fn session_face_block(used: u32, budget: u32, status_line: Option<&str>) -> String {
+    // TER T1.7 (2026-09-04)：默认 `budget == 0` = 无硬限——模型面不再宣示
+    // 一个并不存在的 120 轮静态上限，改为 unlimited（显式配置非零上限时
+    // 才渲染数字档与 remaining）。
+    let budget_line = if budget == 0 {
+        "TOOL_ROUND_BUDGET: unlimited (配置 ORZ_MAX_TOOL_ROUNDS / 构造上限后显示档位)".to_string()
+    } else {
+        format!("TOOL_ROUND_BUDGET: {budget} tool rounds per turn")
+    };
+    let remaining = if budget == 0 {
+        "unlimited".to_string()
+    } else {
+        budget.saturating_sub(used).to_string()
+    };
     let mut out = format!(
         "[SESSION v0.1]\n\
-         TOOL_ROUND_BUDGET: {budget} tool rounds per turn\n\
+         {budget_line}\n\
          TOOL_ROUNDS_USED: {used} (completed so far; the round in flight \
          counts when it completes)\n\
-         TOOL_ROUNDS_REMAINING: {}\n",
-        budget.saturating_sub(used),
+         TOOL_ROUNDS_REMAINING: {remaining}\n",
     );
     if let Some(line) = status_line {
         out.push_str(line);
@@ -416,6 +428,33 @@ mod tests {
         assert_eq!(bare, "");
         let with_block = builder.build_system_prompt(Some("[PROBE] tools"));
         assert_eq!(with_block, "[PROBE] tools");
+    }
+
+    #[test]
+    fn session_face_reports_unlimited_when_no_cap() {
+        // TER T1.7 (2026-09-04)：默认轮预算无硬限（0）——session 面宣示
+        // unlimited，不再渲染一个并不存在的静态档位。
+        let unlimited = session_face_block(7, 0, None);
+        assert!(
+            unlimited.contains("TOOL_ROUND_BUDGET: unlimited"),
+            "{unlimited}"
+        );
+        assert!(
+            unlimited.contains("TOOL_ROUNDS_REMAINING: unlimited"),
+            "{unlimited}"
+        );
+        assert!(
+            !unlimited.contains("tool rounds per turn"),
+            "unlimited face must not quote a fake static cap: {unlimited}"
+        );
+
+        // 显式配置非零上限 → 原静态档位宣示保留（逃生阀语义）。
+        let capped = session_face_block(7, 120, None);
+        assert!(
+            capped.contains("TOOL_ROUND_BUDGET: 120 tool rounds per turn"),
+            "{capped}"
+        );
+        assert!(capped.contains("TOOL_ROUNDS_REMAINING: 113"), "{capped}");
     }
 
     #[test]

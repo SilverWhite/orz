@@ -561,10 +561,15 @@ impl AgentLoopController {
             Some(ActionKind::TraceRead) | Some(ActionKind::Host) => Some(1),
             _ => None,
         };
-        let remaining = self
-            .max_tool_rounds
-            .saturating_sub(tool_rounds.saturating_add(1));
+        // TER T1.7 (2026-09-04)：默认 `max_tool_rounds == 0` = 无硬限——
+        // budget_insufficient 预检只在显式配置非零上限时挂载（escape
+        // hatch；无上限时订单恒可发放，交由墙钟/其它闸兜底）。
+        let remaining = (self.max_tool_rounds != 0).then(|| {
+            self.max_tool_rounds
+                .saturating_sub(tool_rounds.saturating_add(1))
+        });
         if let Some(required) = required
+            && let Some(remaining) = remaining
             && required > remaining
         {
             let err = ConsoleError {

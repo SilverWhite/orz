@@ -52,26 +52,24 @@ use crate::retrieval::evidence::EvidenceRecord;
 
 /// Cap on model↔tool rounds per turn (anti-runaway backstop).
 ///
-/// D-8 (FIX_PLAN 2026-08-06, P7/LOOP-14): 8 → 40, decided by ADR-0008.
-/// Budget history: 8 was the Grok ecosystem default (mcp-grok maxTurns=8,
-/// recorded inaccurately at first as a Python port — LOOP-14 cross-check:
-/// Python uses max_turns=20/max_tool_calls=0); raised to 40 by ADR-0008
-/// (2026-08-07); **frozen at 120 by ADR-0010 v1.1 (2026-08-09)** — the main
-/// agent and both retrieval subagents each carry a 120-tool-round budget,
-/// counted independently per session (FUS-BUDGET). The model is told the
-/// budget explicitly (static session block) and can read the live remaining
-/// count on demand via `blackboard_read section=session` (PUSH→PULL
-/// 2026-08-21 — the per-round mechanical re-declaration is retired; the
-/// mechanical hard gates stay fail-closed). Anti-runaway protection is
-/// layered: the global round budget is the backstop, the consecutive-denial
-/// circuit breaker (IP2a/D-3) is the primary control. ADR-0008's remaining
-/// semantics (deny rounds count, session/exhaustion blocks) stay unchanged.
-pub const MAX_TOOL_ROUNDS: u32 = 120;
+/// TER T1.7 (2026-09-04, ADR-0010 §14.53 / 设计稿 §3.8)：默认 **无硬限**
+/// （`0` = unlimited）——评测墙钟已兜底，120 轮硬限对「准确性优先」的
+/// 长任务无必要；保留可配上限逃生阀（`ORZ_MAX_TOOL_ROUNDS` >0 或
+/// `with_max_tool_rounds(>0)`）与 `budget_insufficient` / exhaustion
+/// 机制（仅显式配置上限时生效）。
+///
+/// 历史（供审计回看）：D-8 (2026-08-06) 8 → 40 (ADR-0008) → **120 于
+/// ADR-0010 v1.1 (2026-08-09) 冻结**（主代理与检索子代理各自独立计数，
+/// FUS-BUDGET）；2026-09-04 经 TER 用户裁决撤默认。PUSH→PULL 语义不变：
+/// 预算面只读（`blackboard_read section=session`），机械硬闸 fail-closed
+/// 仅在显式配置上限时挂载；防失控主控制仍是连续拒绝断路器（IP2a/D-3）
+/// 与工具层 idle+CPU 兜底（T1.5）。
+pub const MAX_TOOL_ROUNDS: u32 = 0;
 
-/// Env override for the global round budget (benchmark harnesses — SWE-bench
-/// exploration burns 60+ rounds; polyglot stays at the default). Parsed at
-/// controller construction; the session-declared budget block follows it, so
-/// the model always sees the real cap. Default (absent/invalid) = 120.
+/// Env override for the global round budget (benchmark harnesses may pin an
+/// explicit cap). Parsed at controller construction; the session-declared
+/// budget block follows it, so the model always sees the real cap. Default
+/// (absent/invalid) = [`MAX_TOOL_ROUNDS`]（0 = unlimited，TER T1.7）。
 pub fn max_tool_rounds_override() -> Option<u32> {
     std::env::var("ORZ_MAX_TOOL_ROUNDS")
         .ok()
@@ -1086,6 +1084,9 @@ impl AgentLoopController {
     /// the main loop AND the subagent loops share the configured cap
     /// (env override mirrors the main; ADR-0010 §3.4.6 independent
     /// accounting means each loop instance counts separately).
+    ///
+    /// TER T1.7 (2026-09-04)：`0` = unlimited（默认）；`>0` = 显式配置
+    /// 上限逃生阀——仅此时挂载轮数硬闸与 `budget_insufficient` 预检。
     pub fn with_max_tool_rounds(mut self, rounds: u32) -> Self {
         self.max_tool_rounds = rounds;
         self

@@ -377,6 +377,17 @@ impl AgentLoopController {
                 .retrieval_max_tool_rounds
                 .or_else(|| Some(effort.max_tool_rounds_default())),
         };
+        // TER T1.7 (2026-09-04)：主车道默认 `max_tool_rounds == 0` =
+        // 无硬限——与检索档位上限取 min 时不能再把 0 当「1 轮」；有效
+        // 上限 = 主车道显式上限（>0）与检索上限的 min，任一为 None/0 时
+        // 取另一方；两者均无 → 0（unlimited）。
+        let main_cap = (self.max_tool_rounds != 0).then_some(self.max_tool_rounds);
+        let profile_rounds = match (main_cap, retrieval_max_rounds) {
+            (Some(main_cap), Some(retrieval_cap)) => main_cap.min(retrieval_cap),
+            (Some(main_cap), None) => main_cap,
+            (None, Some(retrieval_cap)) => retrieval_cap,
+            (None, None) => 0,
+        };
         let profile = LoopProfile::retrieval(
             role,
             &goal,
@@ -385,9 +396,7 @@ impl AgentLoopController {
             // 子代理独立轮数上限（默认 60），与主车道全局轮数取 min——
             // 测试用 with_max_tool_rounds 缩小时语义不变；None（env 0）
             // = 禁用独立上限，仅用主车道（P3-5 对齐墙钟 0=禁用语义）。
-            retrieval_max_rounds
-                .map(|r| self.max_tool_rounds.min(r))
-                .unwrap_or(self.max_tool_rounds),
+            profile_rounds,
             act.tool_rounds_used,
             &act.activation_id,
             // Only the external lane executes candidate-counted tools

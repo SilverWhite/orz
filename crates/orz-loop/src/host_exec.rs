@@ -6378,6 +6378,72 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    /// TER T1.7 (2026-09-04)：默认轮预算无硬限（`max_tool_rounds == 0`）
+    /// ——多轮工具调用后仍无 tool_rounds_limit 闸、无 exhaustion 注入；
+    /// 只有显式配置非零上限才挂闸（见
+    /// `round_budget_exhaustion_reports_partial_result`）。
+    #[tokio::test]
+    async fn round_budget_unlimited_by_default_does_not_intercept() {
+        let dir = test_dir();
+        let journal = JournalRecorder::new(dir.clone());
+        let host = TestHost {
+            journal,
+            tool_result: Some(ToolResult {
+                output: "ok".to_string(),
+                exit_code: Some(0),
+                output_encoding: None,
+                structured: None,
+                ..Default::default()
+            }),
+        };
+        // 三个工具轮后才交文本——默认无上限时必须全部放行。
+        let fake = Arc::new(FakeProvider::new(vec![
+            ScriptedResponse::tool_calls(vec![tool_call("read_file", "call-u1")]),
+            ScriptedResponse::tool_calls(vec![tool_call("read_file", "call-u2")]),
+            ScriptedResponse::tool_calls(vec![tool_call("read_file", "call-u3")]),
+            ScriptedResponse::text("完成"),
+            ScriptedResponse::text("完成"),
+        ]));
+        let gateway: Arc<dyn ModelGateway> = fake.clone();
+        let controller = AgentLoopController::with_gateway(gateway);
+        assert_eq!(
+            controller.max_tool_rounds, 0,
+            "TER T1.7: default round budget must be unlimited"
+        );
+        controller
+            .run_turn(&host, "读", "RUN-UNL", MANIFEST, 0, None, None, None)
+            .await
+            .unwrap();
+
+        let replay = events(&dir);
+        assert!(
+            !replay
+                .iter()
+                .any(|e| e.event_type == EventType::GateDecision
+                    && e.payload["gate"].as_str() == Some("tool_rounds_limit")),
+            "unlimited default must never fire the tool_rounds_limit gate: {replay:?}"
+        );
+        let received = fake.received_requests();
+        assert!(
+            received.iter().any(|r| {
+                r.messages
+                    .iter()
+                    .any(|m| m.tool_call_id.as_deref() == Some("call-u3"))
+            }),
+            "third tool round must be served under the unlimited default: {received:?}"
+        );
+        assert!(
+            received.iter().all(|r| {
+                r.messages
+                    .iter()
+                    .all(|m| !m.content.contains("budget is exhausted"))
+            }),
+            "no exhaustion block under the unlimited default"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     /// Host that defers every permission request — must fail closed.
     struct DeferHost {
         journal: JournalRecorder,

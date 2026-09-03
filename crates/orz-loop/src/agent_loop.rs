@@ -2689,7 +2689,9 @@ pub(crate) async fn run_agent_loop(
                 )
                 .await?;
         }
-        if tool_rounds >= profile.max_tool_rounds {
+        // TER T1.7 (2026-09-04)：`max_tool_rounds == 0` = 默认无硬限——
+        // 只有显式配置非零上限时才挂载轮数闸（escape hatch 语义）。
+        if profile.max_tool_rounds > 0 && tool_rounds >= profile.max_tool_rounds {
             // Anti-runaway backstop — mark the truncation so the journal
             // records why pending tool calls were dropped. D-8: the cap
             // is a backstop, not a target — the run gets ONE final
