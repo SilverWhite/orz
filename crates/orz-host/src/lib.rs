@@ -12,6 +12,7 @@ pub mod approval;
 pub mod codex_app;
 pub mod codex_permission;
 pub mod credentials;
+mod env_snapshot;
 pub mod grok_home;
 pub mod keystore;
 pub mod local_browser;
@@ -834,6 +835,11 @@ impl LoopHost for OrzHost {
                 description: s.description,
             })
             .collect()
+    }
+
+    /// TER T1.12 (W-F11)：黑板 `section=env` 的机械层环境快照事实。
+    async fn env_snapshot_facts(&self) -> Vec<orz_loop::host::EnvSnapshotFact> {
+        crate::env_snapshot::snapshot_env(&self.cwd).await
     }
 
     /// FUS-TOOL-PROBE P0-A-2: the ORZ host currently builds its toolset

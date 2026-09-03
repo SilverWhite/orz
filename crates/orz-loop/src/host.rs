@@ -198,6 +198,16 @@ pub struct LiveProcessFact {
     pub description: Option<String>,
 }
 
+/// TER T1.12 (W-F11, 2026-09-04)：黑板 `section=env` 的机械层代码工具
+/// 环境快照事实（PULL 白名单面）。`kind` 取值 tool / language / package /
+/// input / connectivity（渲染层白名单登记；越权 kind 渲染层拒绝）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EnvSnapshotFact {
+    pub kind: String,
+    pub key: String,
+    pub value: String,
+}
+
 /// Lightweight error from tool execution.
 #[derive(Debug, thiserror::Error)]
 pub enum ToolError {
@@ -620,6 +630,13 @@ pub trait LoopHost: Send + Sync {
     /// （读取时现算，≤1s 新鲜度）。不支持的后端默认空列表（fail-closed，
     /// 不伪造状态）。
     async fn terminal_live_processes(&self) -> Vec<LiveProcessFact> {
+        Vec::new()
+    }
+
+    /// TER T1.12 (W-F11)：黑板 `section=env` 的机械层环境快照事实源
+    /// （工具/语言/包/版本、关键输入在场；连通性由 W-F12 快速判定闭环）。
+    /// 不支持的后端默认空（fail-closed，不伪造）。
+    async fn env_snapshot_facts(&self) -> Vec<EnvSnapshotFact> {
         Vec::new()
     }
 

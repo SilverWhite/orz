@@ -1966,6 +1966,33 @@ impl AgentLoopController {
         Ok(crate::processes::render_processes_text(&facts))
     }
 
+    /// TER T1.12 (W-F11, 2026-09-04)：黑板 `section=env` live 分区——从
+    /// host 取机械层代码工具环境快照（≤5s；工具/语言/包/版本/输入在场；
+    /// 连通性由 W-F12 快速闭环）。live-only：epoch / receipt_id 组合显式
+    /// `Err`（O4 纪律）；只读渲染无副作用；白名单 kind 由渲染层登记，
+    /// 越权键渲染层拒绝。
+    pub(crate) async fn render_env_section(
+        &self,
+        host: &dyn crate::host::LoopHost,
+        epoch: Option<u64>,
+        receipt_id: Option<&str>,
+    ) -> Result<String, String> {
+        if let Some(epoch) = epoch {
+            return Err(format!(
+                "blackboard_read env with epoch is not supported — env is a \
+                 live-only partition (snapshot recomputed on read; nothing is \
+                 archived); omit epoch to read the live section (epoch={epoch})"
+            ));
+        }
+        if receipt_id.is_some() {
+            return Err("receipt_id 仅与 section=actions 组合有效（点读结果栏单条 \
+                 receipt）；当前 section=env 不支持 receipt_id"
+                .to_string());
+        }
+        let facts = host.env_snapshot_facts().await;
+        Ok(crate::env::render_env_text(&facts))
+    }
+
     /// P2-10 F2 §3.3 (I3, ADR-0010 §14.47): render the temporal partition
     /// query surface — `blackboard_read section=temporal` with optional
     /// `selector` (now | recent | history | feature), `k` (≤ 20) and `name`
@@ -2751,7 +2778,11 @@ impl AgentLoopController {
                      (TER T1.6 live terminal process board — reading recomputes \
                      a fresh ≤1s snapshot from the terminal: task_id / 命令摘要 \
                      / elapsed / status / 输出字节 / CPU / killable; live-only, \
-                     nothing archived; kill 经既有 PID 中断语义). \
+                     nothing archived; kill 经既有 PID 中断语义), env \
+                     (TER T1.12 W-F11 live code-tool environment snapshot — \
+                     tool/language/package/version presence, key input presence, \
+                     connectivity verdicts; ≤5s recompute, PULL whitelist face, \
+                     nothing archived). \
                      Optional `since_timestamp` (RFC 3339, e.g. the timestamp \
                      this tool returned earlier) filters the edits / tool_actions \
                      entries to those at or after that time. Optional \
@@ -2793,6 +2824,7 @@ impl AgentLoopController {
                                 "entities",
                                 "deps",
                                 "processes",
+                                "env",
                                 "temporal",
                             ],
                             "description": "P2-10 F2 §3.3 (2026-08-30): temporal 分区是 LIF 时间观测面——每决策轮域标签/特征行（Now/Recent(k≤20)/History/Feature(name,k≤20)，渲染 ≤1 KiB、fires 不渲染、零注入 PULL 面）。selector 默认 now；recent/feature 可带 k（≤20）；feature 另需 name（u_prog|u_err|u_stuck|t_hat|err10|succ10）。",
