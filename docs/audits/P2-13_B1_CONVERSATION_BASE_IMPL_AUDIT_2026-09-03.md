@@ -85,3 +85,13 @@
 - B3 空槽「（无）」/ 用户侧疲劳提醒 / 单包存档 / plan-epoch 生产退役。
 - B4：S3 Linux musl 重建 + S4 实机复验（web 通道 A/B、折叠读取/展开、
   恢复、长会话遥测 §13.3）。
+
+## 5. 复审处理（2026-09-03，全面复审）
+
+- 对 B1 实施做全面复审（设计合理性 / 实现合理性 / 符合性）后的处置登记：
+  [`audits/P2-13_B1_REVIEW_HANDLING_2026-09-03.md`](audits/P2-13_B1_REVIEW_HANDLING_2026-09-03.md)。
+- 代码修正：entities 恢复版本计数归位 1（restore 后 bump）；检索分区恢复
+  顺序 = 会话黑板先、activation 覆盖后（compare-and-set，activation 为
+  权威源）；failure_agg 轴在 ACP 路径收口为会话相对（取代 CONTEXT §4.4.4
+  的 run 级边界声明）。§1.1/§1.2 的措辞精度以复审处理文档为准（历史审计
+  不重写）。

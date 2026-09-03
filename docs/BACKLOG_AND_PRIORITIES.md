@@ -576,7 +576,23 @@
   基础（盖章 + 会话级 live 黑板/轴迁移）/ B2 渲染折叠（折叠态渲染 + 展开
   参数 + 渲染 cap）/ B3 契约与收尾（空槽、疲劳提醒、存档单包、
   plan-epoch 退役清理）/ B4 验证（S3 重建 + S4 复验）；见 TODO P2-13。
-  **B1 已完成（2026-09-03，S1/S2）**，B2–B4 待续。
+  **B1 已完成（2026-09-03，S1/S2）**；**B2 已完成（2026-09-03，S1/S2）**
+  ——render_fold 纯函数核心 + exec/edits/tool_actions 折叠视图（标注行/
+  pre-stamp 段/显式展开）+ edits/tool_actions 渲染 cap 补齐 + host_exec
+  守卫 fail loud + 工具声明增量；归档/未达阈值读取逐字节不变，orz-loop
+  676 全绿。实施记录见
+  [`audits/P2-13_B2_RENDER_FOLD_IMPL_AUDIT_2026-09-03.md`](audits/P2-13_B2_RENDER_FOLD_IMPL_AUDIT_2026-09-03.md)。
+  B3/B4 待续。
+- **B2 复审处理（2026-09-03 全面复审）**：折叠态 receipt_id 守卫旁路修复
+  （仅 actions 显式报错）、未达阈值显式展开 = 普通读取（不裁剪）、显式展开
+  目标行 4K cap 保护（绝不静默丢失）、标注落首个折叠行 + pre-stamp 时间
+  范围取折叠子集、W 计量短路、单域单段无段标注为既定口径并加语义钉；
+  orz-loop lib 682 全绿（+6）。处置登记见
+  [`audits/P2-13_B2_REVIEW_HANDLING_2026-09-03.md`](audits/P2-13_B2_REVIEW_HANDLING_2026-09-03.md)。
+- 复审处理（2026-09-03 全面复审，登记）：实体版本计数恢复归位 1；检索
+  分区恢复改为 activation 权威覆盖（compare-and-set）；failure_agg 轴在
+  ACP 收口为会话相对（取代 P2-12 登记的 run 级边界声明）；处置登记见
+  [`audits/P2-13_B1_REVIEW_HANDLING_2026-09-03.md`](audits/P2-13_B1_REVIEW_HANDLING_2026-09-03.md)。
 - 来源：2026-09-03 深度讨论（用户逐项裁决）。背景 = plan 门退役后黑板按
   plan epoch 轮换的触发源消失，ACP 每 prompt 重建黑板；压缩五段槽目的/计划
   恒空、marker/回查指针指向不存在的归档；跑分实证上下文压缩几乎不触发、

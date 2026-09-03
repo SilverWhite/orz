@@ -223,6 +223,13 @@
   （非域整体驻留区间，隔空同域合并保留时间轴近似）。当前接线（CLI 新
   plan_id 轮换清空 / ACP 每 prompt 重建黑板）不产生跨 run 混轴，登记为
   边界不动作。
+- 边界取代注（2026-09-03，P2-13 B1 复审）：上条「已知边界」的 run 作用域
+  口径在 ACP 路径已随 B1 会话化基础取消——ACP 经会话快照续载黑板（含
+  `failure_agg` 分区）且 LIF 轴原点 = 会话起始墙钟（R5 conversation-
+  relative），聚合行 t/轮号为会话相对并跨 prompt 单调累计（P2-12 登记的
+  「恢复同 epoch 继续累计属未来切片」随 B1 实现关闭）；CLI 单 run 与
+  `--plan`/epoch 轮换路径维持 run-relative 原文。处置登记：
+  `audits/P2-13_B1_REVIEW_HANDLING_2026-09-03.md`。
 - 本节取代 §4.4.1 第 2 数据源、「排序=计划面 → 执行错误 → 动作失败」的
   执行错误段、§4.4.3 的 exec 单条截断与「同 epoch 多次压缩 exec 错误跨
   marker 重复」边界（行键即去重键，跨 marker 重复顺带消除）。

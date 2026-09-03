@@ -463,9 +463,25 @@
   `call_tool_timeout_kills_process_tree`，串行通过）；fmt/clippy 无新增。
   实施记录见
   [B1 实施审计](docs/audits/P2-13_B1_CONVERSATION_BASE_IMPL_AUDIT_2026-09-03.md)。
-- [ ] **B2 渲染折叠**：blackboard_read 折叠态渲染（默认展开 = 当前域段 ∪
+- [x] **B2 渲染折叠**：blackboard_read 折叠态渲染（默认展开 = 当前域段 ∪
   最近 K 轮 ∪ 最近 20% 行）、展开参数 domain + round_from/round_to、
   分区渲染 cap（edits/tool_actions 补齐）、pre-stamp 段。
+  **S1/S2 完成（2026-09-03）**：render_fold 纯函数核心（T/W/K/20% 参数
+  定档 + env 覆盖、域段切分/展开子集/触发判定）+ exec/edits/tool_actions
+  折叠视图组装（标注行/pre-stamp 独立段/显式展开合并）+ edits/tool_actions
+  渲染 cap 补齐（50 行/200 字符/4K 字符）；host_exec 组合守卫 fail loud
+  （all-or-none/非法值/与 receipt_id/since/epoch 互斥/非折叠分区拒绝）；
+  工具声明增量；归档 epoch 读与未达阈值读取逐字节不变。S2：orz-loop lib
+  676 全绿（+18）/ orz-host 241（仅既有 flake 单独复跑通过）/ fmt/clippy
+  无新增。实施记录见
+  [B2 实施审计](docs/audits/P2-13_B2_RENDER_FOLD_IMPL_AUDIT_2026-09-03.md)。
+- [x] **B2 复审处理（2026-09-03，全面复审）**：折叠态 receipt_id 守卫旁路
+  修复（receipt_id 仅 actions 显式报错）+ 未达阈值显式展开 = 普通读取 +
+  展开目标行 4K cap 保护（绝不静默丢失）+ 标注行落在首个折叠行位置 +
+  pre-stamp 标注时间范围取折叠子集 + W 计量短路 + 单域单段语义裁定登记
+  （无段标注总览为既定后果，B4 遥测复核）；orz-loop lib 682 全绿（+6）。
+  处置登记见
+  [B2 复审处理](docs/audits/P2-13_B2_REVIEW_HANDLING_2026-09-03.md)。
 - [ ] **B3 契约与收尾**：空槽「（无）」、用户侧疲劳提醒、存档单包 gzip +
   `session_archive` 事件、plan-epoch 生产面退役清理（`--plan` 保留）。
 - [ ] **B4 验证**：S3 重建 + S4 复验（web 通道 A/B、折叠态读取与展开、
