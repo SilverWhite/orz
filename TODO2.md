@@ -204,8 +204,16 @@
   验证：orz-loop 全量 709 passed / 3 ignored、env 相关 13 passed、
   orz-host env_snapshot 2 passed（≤5s）、fmt/diff check 净。审计见
   [`TER_T1_12_W_F11_ENV_SNAPSHOT_2026-09-04.md`](docs/audits/TER_T1_12_W_F11_ENV_SNAPSHOT_2026-09-04.md)。）
-- [ ] T1.13 M1 验收：orz-loop/orz-assurance 全量测试绿 + clippy/fmt 净
+- [x] T1.13 M1 验收：orz-loop/orz-assurance 全量测试绿 + clippy/fmt 净
   + Linux 三件套构建成功 + 事件链 verifier 过新 schema。放行进入 M2。
+  （2026-09-04 完成：orz-loop --lib 709 passed / 3 ignored、orz-assurance
+  201 passed；clippy 四 crate 零 error（存量告警登记）、fmt 净；Linux
+  release 构建成功（WSL Ubuntu 24.04 x86_64，rustc 1.98.1：
+  orz-tools/orz-loop/orz-host + orz-bin CLI 闭包 Finished release，
+  Linux 编译修复 tty-utils 借用 + orz-tui EventType arm 并 Windows
+  复检绿）；事件链 verifier 273 passed（T0.2 schema/fixtures）+
+  Rust 新载荷单测。**M1 放行进入 M2**。审计见
+  [`TER_T1_13_M1_GATE_2026-09-04.md`](docs/audits/TER_T1_13_M1_GATE_2026-09-04.md)。）
 
 ## M2 Windows runner / VM（依赖 M1 新 build）
 

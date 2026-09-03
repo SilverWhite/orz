@@ -1,6 +1,29 @@
 # CLI_PROJECT_INDEX
 
-> 索引版本：v2.48；状态：`current`；最近整理：2026-09-03（v2.43 P2-13 B1 复审处理登记——实体版本计数/检索分区恢复优先级/failure_agg 轴语义收口；v2.44 P2-13 B2 渲染折叠 S1/S2 登记——折叠态渲染 + 展开参数 + 分区 cap 补齐，见 [`P2-13_B2_RENDER_FOLD_IMPL_AUDIT`](docs/audits/P2-13_B2_RENDER_FOLD_IMPL_AUDIT_2026-09-03.md)；v2.45 P2-13 B2 全面复审处理登记——receipt_id 守卫旁路修复/未达阈值展开 = 普通读取/展开目标 cap 保护/单域单段语义裁定，见 [`P2-13_B2_REVIEW_HANDLING`](docs/audits/P2-13_B2_REVIEW_HANDLING_2026-09-03.md)；v2.46 P2-13 B3 契约与收尾登记——空槽「（无）」/用户侧疲劳提醒/存档单包 gzip + session_archive 事件/plan-epoch 生产面退役，见 [`P2-13_B3_IMPL_AUDIT`](docs/audits/P2-13_B3_IMPL_AUDIT_2026-09-03.md)；v2.47 P2-13 B3 复审处理登记——疲劳档位状态机收口（压缩轮数门槛移除、巨幅跳跃只报最高档并已越线低档全落档）/ close-with-active-run 存档推迟到 run 收尾补触发 / 存档 IO 移 blocking 池，见 [`P2-13_B3_REVIEW_HANDLING`](docs/audits/P2-13_B3_REVIEW_HANDLING_2026-09-03.md)；v2.48 TER ADR 候选登记——TER 设计稿转 ADR-0010 §14.53 候选项（S5-2 常驻化 / PUSH→PULL push 例外），登记 AUTH-TOOL-EXECUTION-REFORM（`pending`））。
+> 索引版本：v2.49；状态：`current`；最近整理：2026-09-04（v2.49 TER M1
+> 门放行——M1 T1.4–T1.13 闭合（常驻默认/去硬杀/idle 兜底/processes
+> live/轮预算/F6 pull+push/W-F13a+b/W-F11 env/输出检索对象），M1 验收门
+> 过（orz-loop 709 + orz-assurance 201 + Linux release + verifier 273），
+> **放行进入 M2**，见 [TODO2](TODO2.md)/[BACKLOG2](docs/BACKLOG2.md)/
+> [`TER_T1_13_M1_GATE`](docs/audits/TER_T1_13_M1_GATE_2026-09-04.md)；
+> 2026-09-03 版本摘要（v2.43–v2.48，TER ADR 候选登记见下）：
+> v2.43 P2-13 B1 复审处理登记——实体版本计数/检索分区恢复优先级/
+> failure_agg 轴语义收口；v2.44 P2-13 B2 渲染折叠 S1/S2 登记——折叠态
+> 渲染 + 展开参数 + 分区 cap 补齐，见
+> [`P2-13_B2_RENDER_FOLD_IMPL_AUDIT`](docs/audits/P2-13_B2_RENDER_FOLD_IMPL_AUDIT_2026-09-03.md)；
+> v2.45 P2-13 B2 全面复审处理登记——receipt_id 守卫旁路修复/未达阈值
+> 展开 = 普通读取/展开目标 cap 保护/单域单段语义裁定，见
+> [`P2-13_B2_REVIEW_HANDLING`](docs/audits/P2-13_B2_REVIEW_HANDLING_2026-09-03.md)；
+> v2.46 P2-13 B3 契约与收尾登记——空槽「（无）」/用户侧疲劳提醒/存档
+> 单包 gzip + session_archive 事件/plan-epoch 生产面退役，见
+> [`P2-13_B3_IMPL_AUDIT`](docs/audits/P2-13_B3_IMPL_AUDIT_2026-09-03.md)；
+> v2.47 P2-13 B3 复审处理登记——疲劳档位状态机收口（压缩轮数门槛移除、
+> 巨幅跳跃只报最高档并已越线低档全落档）/ close-with-active-run 存档推迟
+> 到 run 收尾补触发 / 存档 IO 移 blocking 池，见
+> [`P2-13_B3_REVIEW_HANDLING`](docs/audits/P2-13_B3_REVIEW_HANDLING_2026-09-03.md)；
+> v2.48 TER ADR 候选登记——TER 设计稿转 ADR-0010 §14.53 候选项
+> （S5-2 常驻化 / PUSH→PULL push 例外），登记
+> AUTH-TOOL-EXECUTION-REFORM（`pending`，M1 放行后 M2 实施中））。
 >
 > 当前唯一自然语言设计权威是 [`ADR-0010`](adr/ADR-0010-fusion-runtime-and-agent-architecture.md)。本文件只负责召回和路由，不替代 ADR、Schema、审计结论、测试证据或源代码。
 >
