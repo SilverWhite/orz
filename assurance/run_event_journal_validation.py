@@ -100,6 +100,22 @@ PAYLOAD_SCHEMA_BY_EVENT_TYPE_V02: dict[str, tuple[str, Path]] = {
         "tool-running",
         RUNTIME / "tool-running-event-payload-v0.2.schema.json",
     ),
+    # TER T0.2 (2026-09-03, TODO2 T0.2 / 设计稿 §10-S0): tool_completed
+    # moves to a v0.2 payload shape on the v0.2 track — W-F13b truncation
+    # fields (output_truncated / total_bytes / output_object_id). The v0.1
+    # file stays authoritative for the v0.1 replay track (payload schema
+    # version bump v0.1 → v0.2).
+    "tool_completed": (
+        "tool-completed",
+        RUNTIME / "tool-completed-event-payload-v0.2.schema.json",
+    ),
+    # TER T0.2 (2026-09-03, TODO2 T0.2 / 设计稿 §3.3/§10-S0): F6 push 档
+    # 中性预算提示——剩余秒/已用轮/触发档位；默认 off 零注入，每 run
+    # ≤4 次（_verify_v02_budget_cue_injected 强制）。
+    "budget_cue_injected": (
+        "budget-cue-injected",
+        RUNTIME / "budget-cue-injected-event-payload-v0.2.schema.json",
+    ),
     "orientation_checkpoint": (
         "orientation-checkpoint",
         RUNTIME / "orientation-checkpoint-event-payload-v0.2.schema.json",
@@ -3316,9 +3332,24 @@ def _verify_v02_tool_running(events: list[dict[str, Any]]) -> list[str]:
     - exactly one tool_completed per mid-run call — the background task's
       final state rides the completion reminder, never a second
       ToolCompleted (P2-4 审查处理, §9.7.3 边界).
+
+    TER T0.2 (2026-09-03, TODO2 T0.2 / 设计稿 §3.1/§3.2): the event type
+    also carries the idle-kill lifecycle form (`status: idle_killed` +
+    `reason`) — the 5-minute no-activity watchdog kill of an
+    auto-backgrounded task. Idle-kill facts:
+
+    - must reference a call_id that already produced exactly one mid-run
+      tool_running and its `running: true` tool_completed (auto-bg first);
+    - must appear after that completion (the kill is a background-task
+      lifecycle event, not an in-flight report) and never before it;
+    - at most one idle-kill per call_id; a call_id never mixes two mid-run
+      or two idle-kill events;
+    - `status`/`reason` pairing is schema-enforced (status requires reason
+      and vice versa); no second tool_completed is introduced by a kill.
     """
     errors: list[str] = []
-    running: list[tuple[int, dict[str, Any]]] = []
+    running_mid: list[tuple[int, dict[str, Any]]] = []
+    running_killed: list[tuple[int, dict[str, Any]]] = []
     started: dict[tuple[str, str, str], int] = {}
     completed: dict[tuple[str, str, str], list[int]] = {}
     for index, event in enumerate(events):
@@ -3332,27 +3363,32 @@ def _verify_v02_tool_running(events: list[dict[str, Any]]) -> list[str]:
             str(payload.get("call_id", "")),
         )
         if event_type == "tool_running":
-            running.append((index, event))
+            if payload.get("status") == "idle_killed":
+                running_killed.append((index, event))
+            else:
+                running_mid.append((index, event))
         elif event_type == "tool_started":
             started.setdefault(key, index)
         elif event_type == "tool_completed":
             completed.setdefault(key, []).append(index)
 
-    seen: set[tuple[str, str, str]] = set()
-    for index, event in running:
+    seen_mid: set[tuple[str, str, str]] = set()
+    mid_index: dict[tuple[str, str, str], int] = {}
+    for index, event in running_mid:
         payload = event["payload"]
         key = (
             str(event.get("run_id", "")),
             str(payload["tool"]),
             str(payload["call_id"]),
         )
-        if key in seen:
+        if key in seen_mid:
             errors.append(
                 f"event {index}: duplicate tool_running for call_id "
                 f"{payload['call_id']!r} — at most one mid-run report per call"
             )
             continue
-        seen.add(key)
+        seen_mid.add(key)
+        mid_index[key] = index
         start_index = started.get(key)
         if start_index is None or start_index > index:
             errors.append(
@@ -3390,6 +3426,124 @@ def _verify_v02_tool_running(events: list[dict[str, Any]]) -> list[str]:
                 f"{payload['call_id']!r} carries running:true but exit_code "
                 f"{cpayload.get('exit_code')!r} — a still-running command must "
                 "stay exit_code=null"
+            )
+
+    seen_killed: set[tuple[str, str, str]] = set()
+    for index, event in running_killed:
+        payload = event["payload"]
+        key = (
+            str(event.get("run_id", "")),
+            str(payload["tool"]),
+            str(payload["call_id"]),
+        )
+        if key in seen_killed:
+            errors.append(
+                f"event {index}: duplicate idle-kill tool_running for call_id "
+                f"{payload['call_id']!r} — at most one idle-kill per call"
+            )
+            continue
+        seen_killed.add(key)
+        reason = payload.get("reason")
+        if not isinstance(reason, str) or not reason:
+            errors.append(
+                f"event {index}: idle-killed tool_running for call_id "
+                f"{payload['call_id']!r} must carry a non-empty reason"
+            )
+        mid_run_index = mid_index.get(key)
+        if mid_run_index is None:
+            errors.append(
+                f"event {index}: idle-killed tool_running for call_id "
+                f"{payload['call_id']!r} requires a preceding auto-background "
+                "mid-run tool_running of the same tool/call_id in its run"
+            )
+            continue
+        all_end = completed.get(key, [])
+        end_indices = [i for i in all_end if i > mid_run_index]
+        if not end_indices:
+            errors.append(
+                f"event {index}: idle-killed tool_running for call_id "
+                f"{payload['call_id']!r} has no completed auto-bg call to kill"
+            )
+            continue
+        completion_index = end_indices[0]
+        if index <= completion_index:
+            errors.append(
+                f"event {index}: idle-killed tool_running for call_id "
+                f"{payload['call_id']!r} must post-date the call's "
+                f"running:true tool_completed at event {completion_index}"
+            )
+    return errors
+
+
+def _verify_v02_output_truncation(events: list[dict[str, Any]]) -> list[str]:
+    """TER W-F13b (2026-09-03, TODO2 T0.2 / 设计稿 §3.6): `tool_completed`
+    truncation facts on the v0.2 track:
+
+    - `output_truncated` (const true in the schema) is the explicit
+      truncation marker; when present the completion must carry
+      `total_bytes` (the true monotonic byte count before truncation);
+    - `output_object_id` (the persisted retrieval-object pointer) only
+      makes sense together with an explicit truncation marker and its byte
+      count — a pointer to a retrieval object without a truncated delivery
+      would be a dangling contract.
+    """
+    errors: list[str] = []
+    for index, event in enumerate(events):
+        if not _is_v02(event) or event.get("event_type") != "tool_completed":
+            continue
+        payload = event.get("payload", {})
+        truncated = payload.get("output_truncated") is True
+        has_bytes = "total_bytes" in payload
+        has_object = "output_object_id" in payload
+        if truncated and not has_bytes:
+            errors.append(
+                f"event {index}: tool_completed carries output_truncated but "
+                "no total_bytes — the true byte count must accompany the "
+                "truncation marker"
+            )
+        if has_object and not (truncated and has_bytes):
+            errors.append(
+                f"event {index}: tool_completed carries output_object_id but "
+                "no output_truncated+total_bytes pair — the retrieval-object "
+                "pointer requires an explicit truncation fact"
+            )
+    return errors
+
+
+def _verify_v02_budget_cue_injected(events: list[dict[str, Any]]) -> list[str]:
+    """TER F6 push (2026-09-03, TODO2 T0.2 / 设计稿 §3.3): `budget_cue_injected`
+    cross-run facts on the v0.2 track:
+
+    - at most 4 cues per run (design cap 3–4; TODO2 T0.2/T1.9: ≤4 次/run);
+    - the cue is neutral and only fires when the remaining wallclock has
+      crossed the tier threshold: remaining_seconds must be strictly below
+      threshold_seconds (600/300/120).
+    """
+    errors: list[str] = []
+    counts: dict[str, int] = {}
+    for index, event in enumerate(events):
+        if not _is_v02(event) or event.get("event_type") != "budget_cue_injected":
+            continue
+        run_id = str(event.get("run_id", ""))
+        counts[run_id] = counts.get(run_id, 0) + 1
+        payload = event.get("payload", {})
+        remaining = payload.get("remaining_seconds")
+        threshold = payload.get("threshold_seconds")
+        if (
+            isinstance(remaining, int)
+            and isinstance(threshold, int)
+            and remaining >= threshold
+        ):
+            errors.append(
+                f"event {index}: budget_cue_injected remaining_seconds "
+                f"{remaining} is not below its threshold_seconds {threshold} "
+                "— cues fire only after the tier boundary is crossed"
+            )
+    for run_id, count in counts.items():
+        if count > 4:
+            errors.append(
+                f"run {run_id}: {count} budget_cue_injected events exceed the "
+                "≤4-per-run push cap"
             )
     return errors
 
@@ -3529,6 +3683,8 @@ def validate_journal_text(text: str) -> list[str]:
         errors.extend(_verify_v02_ledger_fold_write_failed(events))
         errors.extend(_verify_v02_lifecycle(events))
         errors.extend(_verify_v02_tool_running(events))
+        errors.extend(_verify_v02_output_truncation(events))
+        errors.extend(_verify_v02_budget_cue_injected(events))
         errors.extend(_verify_v02_retrieval_mode(events))
         errors.extend(_verify_v02_result_consistency(events))
         errors.extend(_verify_v02_reason_codes(events))

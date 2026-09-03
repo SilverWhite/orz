@@ -299,7 +299,10 @@ class RunEventV02ContractTests(unittest.TestCase):
         (-diagnostic_coverage_checkpoint, -checkpoint_response,
         MODEL-RESIDUAL-PRESSURE-FOLLOWUP 裁决 2 — DC 强制模板轮删除).
         P2-13 B3 (2026-09-03, ADR-0010 §14.52 / 设计 §12 R3): 52 → 53
-        (+session_archive — 会话关闭/归档单 gzip 包事件)."""
+        (+session_archive — 会话关闭/归档单 gzip 包事件).
+        TER T0.2 (2026-09-03, TODO2 T0.2 / 设计稿 §10-S0): 53 → 54
+        (+budget_cue_injected — F6 push 档中性预算提示；tool_completed 在
+        v0.2 轨换 v0.2 payload，tool_running 增 idle-kill 形态)."""
         schema = load_json(RUN_EVENT_SCHEMA_V02)
         enum_events = set(schema["properties"]["event_type"]["enum"])
         fixture_events = {
@@ -308,7 +311,7 @@ class RunEventV02ContractTests(unittest.TestCase):
             if path.name != "chained-run-finished.valid.json"
         }
         self.assertEqual(fixture_events, enum_events)
-        self.assertEqual(len(enum_events), 53)
+        self.assertEqual(len(enum_events), 54)
         self.assertNotIn("neutral_inquiry", enum_events)
         self.assertNotIn("retrieval_completion_check", enum_events)
         self.assertNotIn("diagnostic_coverage_checkpoint", enum_events)

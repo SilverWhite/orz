@@ -1,0 +1,19 @@
+{
+  "schema_version": "0.2.0-draft",
+  "run_id": "RUN-CONF-BUDGET-CUE-INJECTED",
+  "event_id": "EVT-CONF-000",
+  "sequence": 0,
+  "timestamp": "2026-09-03T00:00:00Z",
+  "event_type": "budget_cue_injected",
+  "run_manifest_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+  "previous_event_sha256": null,
+  "payload_schema": "run-event-v0.2.schema.json",
+  "payload": {
+    "remaining_seconds": 590,
+    "rounds_used": 12,
+    "threshold_seconds": 600
+  },
+  "payload_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+  "redaction": "none",
+  "event_sha256": "0000000000000000000000000000000000000000000000000000000000000000"
+}

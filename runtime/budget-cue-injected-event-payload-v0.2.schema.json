@@ -1,0 +1,33 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://local.scientific-assurance.invalid/schema/budget-cue-injected-event-payload-v0.2.schema.json",
+  "title": "budget_cue_injected runtime event payload",
+  "description": "TER F6 push tier (2026-09-03, TODO2 T0.2 / 设计稿 §3.3/§10-S0): a neutral budget fact injected when the remaining evaluation wallclock crosses a tier threshold (<600 / <300 / <120s) — remaining seconds + rounds used + trigger tier only, no suggestion. Mechanical single-writer record; push is off by default (zero injections) and at most 4 cues per run (verifier-enforced).",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "remaining_seconds",
+    "rounds_used",
+    "threshold_seconds"
+  ],
+  "properties": {
+    "remaining_seconds": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Remaining evaluation wallclock in seconds at the cue point."
+    },
+    "rounds_used": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Tool rounds used so far in this run at the cue point."
+    },
+    "threshold_seconds": {
+      "enum": [
+        600,
+        300,
+        120
+      ],
+      "description": "The tier threshold just crossed (600/300/120)."
+    }
+  }
+}

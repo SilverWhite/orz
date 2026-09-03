@@ -1,0 +1,9 @@
+{
+  "tool": "run_terminal_cmd",
+  "call_id": "call-term-long-1",
+  "exit_code": null,
+  "running": true,
+  "output_truncated": true,
+  "total_bytes": 1048576,
+  "output_object_id": "outobj-run-term-long-1"
+}

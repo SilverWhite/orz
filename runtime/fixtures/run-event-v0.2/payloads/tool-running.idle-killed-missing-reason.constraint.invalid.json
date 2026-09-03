@@ -1,0 +1,10 @@
+{
+  "tool": "run_terminal_cmd",
+  "call_id": "call-term-1",
+  "wall_ms": 600123,
+  "task_id": "call-term-1",
+  "pid": 42,
+  "total_bytes": 8192,
+  "output_file": "/tmp/terminal/call-term-1.log",
+  "status": "idle_killed"
+}

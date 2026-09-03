@@ -1,0 +1,227 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://local.scientific-assurance.invalid/schema/tool-completed-event-payload-v0.2.schema.json",
+  "title": "tool_completed runtime event payload (v0.2 track)",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "tool",
+    "call_id"
+  ],
+  "properties": {
+    "tool": { "type": "string" },
+    "call_id": { "type": "string" },
+    "target": { "enum": ["internal_retrieval", "external_retrieval"] },
+    "exit_code": { "type": ["integer", "null"] },
+    "output_encoding": {
+      "type": ["string", "null"],
+      "description": "Decode stage that produced the tool output (GAP-ENCODING-GATE, OPS-PROTOCOL §8): utf-8 / utf-8-sig / gb18030 / utf-8-lossy, comma-joined for multi-chunk streams."
+    },
+    "delivery_phase": {
+      "enum": ["requested", "confirmed"],
+      "description": "AGENT-DELIVERY-FLOW (2026-08-23, 设计 §2.2): the `submit` two-phase marker — requested = the mechanical delivery status was rendered into the blackboard plan view (pending confirmation); confirmed = the terminal step was marked done and the run entered the final-answer flow."
+    },
+    "wall_ms": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "THIN-HARNESS-REDESIGN-V2 §9.6 (2026-08-29 S5-1): the tool call's wall-clock duration from ToolStarted to ToolCompleted, in milliseconds. Present on executed tool completions (generic host path and run_tests); refusals (no ToolStarted) carry no wall_ms. For a mid-run completion (`running: true`, §9.7 S5-2) wall_ms is the elapsed time at the 300s report point where the command auto-backgrounded — the call is not yet finished."
+    },
+    "timed_out": {
+      "const": true,
+      "description": "THIN-HARNESS-REDESIGN-V2 §9.6 (2026-08-29 S5-1): present only when the tool call ended by timeout — the host's per-call wall-clock kill or a tool-side client timeout (e.g. web_search's 120s budget, surfaced via ToolError::Timeout)."
+    },
+    "running": {
+      "const": true,
+      "description": "THIN-HARNESS-REDESIGN-V2 §9.7 (2026-08-29 S5-2): present when the tool call completed with the command still running — run_terminal_cmd auto-backgrounded at the 300s report point (exit_code null, tool_running journaled just before this completion)."
+    },
+    "output_truncated": {
+      "const": true,
+      "description": "TER W-F13b (2026-09-03, TODO2 T0.2): 工具结果内联输出被截断才出现的显式截断标记；完整输出可经持久化检索对象(output_object_id) 或落盘文件补读。"
+    },
+    "total_bytes": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "TER W-F13b (2026-09-03, TODO2 T0.2): 工具结果总输出字节（截断前单调计数），与 output_truncated 成对出现（verifier 强制）。"
+    },
+    "output_object_id": {
+      "type": "string",
+      "minLength": 1,
+      "description": "TER W-F13b (2026-09-03, TODO2 T0.2): 长输出落盘检索对象指针（pattern / 行区间 / 尾部 N 行语义），模型补读自身输出不再依赖 .gsa。"
+    },
+    "status": { "const": "error" },
+    "error": { "type": "string" },
+    "file_path": {
+      "type": "string",
+      "description": "FUS-READ-ANCHOR-WRITE-GUARD (2026-08-21): the target file path carried by search_replace refusal completions (content_anchor_mismatch). Kept as the producer's existing top-level field; the failure-target identity (F4, 2026-08-30) duplicates it inside failure_target.path for anchor_target."
+    },
+    "candidate_count": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "FUS-RETRIEVAL-MECH P0-B step 2/4 (2026-08-14): the per-activation deduplicated candidate count after this call (or at refusal), shared by the web_fetch family and browser_read (local_browser second segment). Present only on candidate-counted tool_completed events; pairing/range/error-shape rules are enforced by the Python cross-layer verifier (_verify_v02_candidate_count), keeping the schema shape minimal."
+    },
+    "candidate_cap": {
+      "type": "integer",
+      "minimum": 1,
+      "description": "FUS-RETRIEVAL-MECH P0-B step 2/4 (2026-08-14): the candidate cap in effect (ORZ_WEB_FETCH_CANDIDATE_CAP, default 8), shared by web_fetch and browser_read. Present together with candidate_count."
+    },
+    "inject_tokens_used": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "ORZ-CACHE-CONTEXT-COST (2026-08-15, ADR-0010 §3.6): the accumulated estimated tokens of this model round's injected tool results at the refusal (round_inject_budget_exceeded). Present together with inject_tokens_budget."
+    },
+    "inject_tokens_budget": {
+      "type": "integer",
+      "minimum": 1,
+      "description": "ORZ-CACHE-CONTEXT-COST (2026-08-15, ADR-0010 §3.6): the per-round injection budget in effect (ORZ_MAX_INJECT_TOKENS_PER_ROUND, default 50K). Present together with inject_tokens_used."
+    },
+    "policy_denial": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["source", "code", "reason"],
+      "properties": {
+        "source": {
+          "enum": ["permission", "acaf", "retrieval_mode", "taint"],
+          "description": "P0-C S3 前置 (2026-08-15, P1-2 定案): the refusing gate family — permission bridge / ACAF ticket gate / retrieval mode gate / taint (reserved)."
+        },
+        "code": { "type": "string" },
+        "reason": { "type": "string" }
+      },
+      "description": "P0-C S3 前置 (2026-08-15, P1-2 定案): structured policy denial carried by a refusal completion — controller-side no-ToolStarted refusals (ACAF ticket gate / retrieval mode gates) or a host-level structured denial on a ToolStarted+ToolCompleted (permission denials from the built-in bridge stay event-less by audit contract). Every policy_denial completion must be self-describing: status=error, non-zero exit_code and the tool must belong to the known refusal path for the source — enforced by the Python verifier (_verify_v02_policy_denial), keeping the schema shape minimal."
+    },
+    "failure_target": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "id"],
+      "properties": {
+        "kind": {
+          "enum": ["cmd_target", "anchor_target", "file_target", "url_target"],
+          "description": "MECHANICAL-LAYER-MATH-CALCULUS F4 §5.2 (2026-08-30): the failure-target identity family — terminal command / GetPut anchor / file path / canonical URL."
+        },
+        "id": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$",
+          "description": "Deterministic SHA-256 digest of the canonical target (command text / anchor triple / path / canonical URL), §5.2. The journal never carries full command text — only the digest plus the bounded preview."
+        },
+        "cmd_preview": {
+          "type": "string",
+          "maxLength": 80,
+          "description": "F4 §5.2: bounded (≤ 80 B) preview of the canonical command, present iff kind=cmd_target. JSON Schema maxLength counts characters; the 80-byte contract is enforced by the Python verifier (UTF-8 byte length, 审查处理 R8 / F8)."
+        },
+        "path": {
+          "type": "string",
+          "description": "F4 §5.2: file path identity, present iff kind=file_target or anchor_target."
+        },
+        "anchor_hash": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$",
+          "description": "F4 §5.2: GetPut anchor content hash (sha256), present iff kind=anchor_target."
+        },
+        "size": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "F4 §5.2: anchor file size, present iff kind=anchor_target."
+        },
+        "canonical_url": {
+          "type": "string",
+          "description": "F4 §5.2: canonical URL identity, present iff kind=url_target."
+        }
+      },
+      "description": "F4 §5.3: optional failure-target identity on failure completions (tool_completed status=error of the command/anchor/file/URL tool families). Kind/format/field-presence rules are cross-checked by the Python verifier (_verify_v02_failure_target)."
+    },
+    "console_mode": {
+      "const": "direct",
+      "description": "PLAN-FIRST 阶段 C (2026-08-16, ADR-0010 §14.17⑱): present exactly when the completion belongs to a direct-mode model action (audited fallback) — the event chain correlates to the console_mode_transition via transition_id."
+    },
+    "transition_id": {
+      "type": "string",
+      "minLength": 1,
+      "description": "PLAN-FIRST 阶段 C (2026-08-16, ADR-0010 §14.17⑱): the console → direct transition this completion belongs to (present together with console_mode)."
+    },
+    "trace_id": {
+      "type": "string",
+      "minLength": 1,
+      "description": "PLAN-FIRST 阶段 C (2026-08-16, ADR-0010 §14.17⑱): the console trace id of the direct action (call_id) — console_step_done evidence requires a trace_id corresponding to an already-occurred ToolCompleted."
+    },
+    "section": { "type": "string" },
+    "epoch": {
+      "type": "integer",
+      "minimum": 1,
+      "description": "FUS-BLACKBOARD-PLAN-EPOCH / P2-10 R4 (2026-08-31 S4 实机复验对齐): the plan-epoch archive the blackboard_read completion read from (cross-epoch look-back). Present on blackboard_read completions when the caller passed the epoch argument; the tool definition declares the same parameter."
+    },
+    "full_output_path": { "type": "string" },
+    "workspace_delta": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["path", "kind"],
+        "properties": {
+          "path": { "type": "string" },
+          "kind": { "enum": ["added", "modified", "deleted"] },
+          "size": { "type": "integer", "minimum": 0 }
+        }
+      }
+    },
+    "workspace_delta_truncated": { "type": "boolean" },
+    "edits": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["file", "old_lines", "new_lines"],
+        "properties": {
+          "file": { "type": "string" },
+          "old_lines": { "type": "integer", "minimum": 0 },
+          "new_lines": { "type": "integer", "minimum": 0 }
+        }
+      }
+    },
+    "dep_graph": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "path"],
+      "properties": {
+        "kind": {
+          "enum": ["read", "write"],
+          "description": "P2-11 第 4 项 / 依赖图主线设计 §5 (2026-09-01): read = read_file success (read→write anchor-chain source); write = search_replace success (tool→entity mutation edge). Present only on successful read_file/search_replace completions; D3 command/retrieval side effects never carry dep_graph."
+        },
+        "path": {
+          "type": "string",
+          "description": "Normalized target file path (same normalization as the entity registry)."
+        },
+        "anchor": {
+          "$ref": "#/$defs/dep_anchor",
+          "description": "read fact: content anchor at read time (sha256 authoritative ≤16MB; null when oversized/non-file)."
+        },
+        "consumed_read": {
+          "type": ["string", "null"],
+          "description": "write fact: the read fact call_id this write's expected_anchor was consumed from (read→write anchor edge); null when no matching in-run read fact."
+        },
+        "consumed_anchor": {
+          "$ref": "#/$defs/dep_anchor",
+          "description": "write fact: the expected_anchor carried by the write arguments (may carry only size/mtime)."
+        },
+        "new_anchor": {
+          "$ref": "#/$defs/dep_anchor",
+          "description": "write fact: content anchor after the write (same computation as read anchors)."
+        }
+      },
+      "description": "P2-11 第 4 项 (2026-09-01): dependency-graph fact journaled with successful read_file/search_replace completions — the file-anchor chain (read→write anchor edges + tool→entity mutation edges; D3 command/retrieval side effects are never graphed). Shape/cross-reference rules are enforced by the Python verifier (_verify_v02_dep_graph_events), keeping the schema shape minimal."
+    }
+  },
+  "$defs": {
+    "dep_anchor": {
+      "type": ["object", "null"],
+      "additionalProperties": false,
+      "properties": {
+        "sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$",
+          "description": "Content sha256 (authoritative when present)."
+        },
+        "size": { "type": "integer", "minimum": 0 },
+        "mtime": { "type": "integer", "minimum": 0 }
+      }
+    }
+  }
+}

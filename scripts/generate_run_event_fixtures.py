@@ -47,7 +47,14 @@ ZERO_HASH = "0" * 64
 DUMMY_HASH = "1" * 64
 TIMESTAMP = "2026-08-06T00:00:00Z"
 
-V02_ENVELOPE_TIMESTAMP_OVERRIDES: dict[str, str] = {}
+V02_ENVELOPE_TIMESTAMP_OVERRIDES: dict[str, str] = {
+    # TER T0.2 (2026-09-03): budget_cue_injected hand-written envelope uses
+    # the TER date — keep it stable across regeneration.
+    "budget_cue_injected": "2026-09-03T00:00:00Z",
+    # MIDSTREAM-DECODE-RETRY (2026-08-21, ADR-0010 §14.37): committed
+    # envelope carries the batch date — keep it stable across regeneration.
+    "transport_retry": "2026-08-21T00:00:00Z",
+}
 
 # PLAN-FIRST 阶段 C / P0-E / FUS-LEDGER-FOLD-STATE (2026-08-16/17/18): the
 # console-family and plan_write envelope fixtures in the committed tree
@@ -89,10 +96,11 @@ EVENT_TYPES = [
     "permission_decision",
     "tool_started",
     "tool_completed",
-    # THIN-HARNESS-REDESIGN-V2 §9.7 (2026-08-29 S5-2): terminal command
-    # auto-backgrounded at the 300s report point — mid-run status between
-    # the call's tool_started and tool_completed.
-    "tool_running",
+    # tool_running 是 v0.2-only 事件（THIN-HARNESS-REDESIGN-V2 §9.7.3，
+    # 2026-08-29 S5-2：v0.1 schema 无此事件、v0.1 夹具树无对应文件）。
+    # 2026-09-03（TER T0.2 残留处理，方向 A）从 v0.1 EVENT_TYPES 移除，
+    # 否则 v0.1 树重建在 PAYLOAD_GOOD 处 KeyError；该事件只随
+    # V02_EVENT_TYPES 生成。
     "orientation_checkpoint",
     "runtime_stagnation_guard",
     "tool_availability_check",
@@ -141,6 +149,9 @@ V02_EVENT_TYPES = [
     # THIN-HARNESS-REDESIGN-V2 §9.7 (2026-08-29 S5-2): terminal command
     # mid-run status (auto-backgrounded at the 300s report point).
     "tool_running",
+    # TER T0.2 (2026-09-03, TODO2 T0.2 / 设计稿 §3.3): F6 push 档中性
+    # 预算提示（剩余秒/已用轮/触发档位；默认 off 零注入）。
+    "budget_cue_injected",
     "orientation_checkpoint",
     "tool_availability_check",
     "tool_belief_stagnation",
@@ -199,6 +210,10 @@ SLUGS_V02 = {
     # THIN-HARNESS-REDESIGN-V2 §9.7 (2026-08-29 S5-2): terminal command
     # auto-backgrounded at the 300s report point.
     "tool_running": "tool-running",
+    # TER T0.2 (2026-09-03, TODO2 T0.2 / 设计稿 §3.3): F6 push 档中性预算
+    # 提示事件——v0.2-only 事件（无 v0.1 对应 slug），必须在此登记，否则
+    # v0.2 信封树的 `SLUGS_V02.get(...) or SLUGS[...]` 回退 KeyError。
+    "budget_cue_injected": "budget-cue-injected",
     "orientation_checkpoint": "orientation-checkpoint",
     "information_sufficiency_assessment": "information-sufficiency-assessment",
     "retrieval_parent_disposition": "retrieval-parent-disposition",
@@ -254,6 +269,11 @@ V02_PAYLOAD_EVENTS = [
     # THIN-HARNESS-REDESIGN-V2 §9.7 (2026-08-29 S5-2): terminal command
     # mid-run status (auto-backgrounded at the 300s report point).
     "tool_running",
+    # TER T0.2 (2026-09-03, TODO2 T0.2 / 设计稿 §3.6/§10-S0): tool_completed
+    # moves to a v0.2 payload shape on the v0.2 track (W-F13b truncation
+    # fields); budget_cue_injected is the F6 push cue event.
+    "tool_completed",
+    "budget_cue_injected",
     "orientation_checkpoint",
     "information_sufficiency_assessment",
     "retrieval_parent_disposition",
@@ -649,6 +669,20 @@ PAYLOAD_GOOD_V02: dict[str, dict] = {
         "total_bytes": 8_192,
         "output_file": "/tmp/terminal/call-term-1.log",
     },
+    # TER T0.2 (2026-09-03, TODO2 T0.2): tool_completed keeps its v0.1
+    # minimal shape on the v0.2 track (the v0.2 payload is a superset).
+    "tool_completed": {
+        "tool": "search_replace",
+        "call_id": "call-1",
+        "exit_code": 0,
+        "edits": [{"file": "1.py", "old_lines": 12, "new_lines": 34}],
+    },
+    # TER T0.2 (2026-09-03, TODO2 T0.2): F6 push 档——590s 剩余穿过 600s 档。
+    "budget_cue_injected": {
+        "remaining_seconds": 590,
+        "rounds_used": 12,
+        "threshold_seconds": 600,
+    },
     "orientation_checkpoint": {
         "checkpoint_id": "ORIENT-RUN-CONF-0001-0000",
         "inquiry_family": "neutral",
@@ -1020,6 +1054,17 @@ PAYLOAD_GOOD_V02: dict[str, dict] = {
           "view_estimate_tokens": 135000,
           "agent_role": "main",
       },
+      # MIDSTREAM-DECODE-RETRY (2026-08-21, ADR-0010 §14.37 / 设计 §2.3):
+      # transport 重试计数事件面。2026-09-03（TER T0.2 残留处理）补回 v0.2
+      # 表缺失项——规范形态以已提交 payload 样例为准（outcome=exhausted /
+      # kind=zero_chunk），envelope 实例随之归一。
+      "transport_retry": {
+          "agent_role": "main",
+          "outcome": "exhausted",
+          "kind": "zero_chunk",
+          "retries": 3,
+          "reason": "error sending request: connection reset",
+      },
   }
 
 # One constraint violation per v0.2 event (never a bare missing-required when
@@ -1034,6 +1079,20 @@ PAYLOAD_BAD_V02: dict[str, dict] = {
         "wall_ms": -1,
         "task_id": "call-term-1",
         "output_file": "/tmp/terminal/call-term-1.log",
+    },
+    # TER T0.2 (2026-09-03, TODO2 T0.2): const-true marker violated by false.
+    "tool_completed": {
+        "tool": "search_replace",
+        "call_id": "call-1",
+        "exit_code": 0,
+        "edits": [{"file": "1.py", "old_lines": 12, "new_lines": 34}],
+        "output_truncated": False,
+    },
+    # TER T0.2 (2026-09-03, TODO2 T0.2): threshold outside the closed tier set.
+    "budget_cue_injected": {
+        "remaining_seconds": 590,
+        "rounds_used": 12,
+        "threshold_seconds": 999,
     },
     "orientation_checkpoint": {
         "checkpoint_id": "ORIENT-RUN-CONF-0001-0000",
@@ -1370,6 +1429,15 @@ PAYLOAD_BAD_V02: dict[str, dict] = {
           "view_estimate_tokens": 135000,
           "agent_role": "orchestrator",
       },
+      # MIDSTREAM-DECODE-RETRY (2026-08-21, ADR-0010 §14.37): one constraint
+      # violation — retries below the schema minimum (>= 1).
+      "transport_retry": {
+          "agent_role": "main",
+          "outcome": "exhausted",
+          "kind": "zero_chunk",
+          "retries": 0,
+          "reason": "retries must be >= 1",
+      },
   }
 
 # ACAF Slice 2 fail-closed (2026-08-13): extra positive payload fixtures for
@@ -1541,6 +1609,44 @@ EXTRA_V02_PAYLOAD_BADS["tool-completed.policy-denial-bad-source.constraint.inval
         "code": "retrieval_mode_off",
         "reason": "unknown source",
     },
+}
+
+# TER T0.2 (2026-09-03, TODO2 T0.2 / 设计稿 §3.6): W-F13b truncation
+# positive — truncated long output with byte count and retrieval-object
+# pointer; the pairing rules live in _verify_v02_output_truncation.
+EXTRA_V02_PAYLOAD_POSITIVES["tool-completed.output-object.valid"] = {
+    "tool": "run_terminal_cmd",
+    "call_id": "call-term-long-1",
+    "exit_code": None,
+    "running": True,
+    "output_truncated": True,
+    "total_bytes": 1_048_576,
+    "output_object_id": "outobj-run-term-long-1",
+}
+
+# TER T0.2 (2026-09-03, TODO2 T0.2 / 设计稿 §3.1/§3.2): idle-kill positive
+# and its schema constraint violation (status without reason — the
+# if/then pairing rule in the tool-running payload schema).
+EXTRA_V02_PAYLOAD_POSITIVES["tool-running.idle-killed.valid"] = {
+    "tool": "run_terminal_cmd",
+    "call_id": "call-term-1",
+    "wall_ms": 600_123,
+    "task_id": "call-term-1",
+    "pid": 42,
+    "total_bytes": 8_192,
+    "output_file": "/tmp/terminal/call-term-1.log",
+    "status": "idle_killed",
+    "reason": "no output growth or CPU activity for 300s",
+}
+EXTRA_V02_PAYLOAD_BADS["tool-running.idle-killed-missing-reason.constraint.invalid"] = {
+    "tool": "run_terminal_cmd",
+    "call_id": "call-term-1",
+    "wall_ms": 600_123,
+    "task_id": "call-term-1",
+    "pid": 42,
+    "total_bytes": 8_192,
+    "output_file": "/tmp/terminal/call-term-1.log",
+    "status": "idle_killed",
 }
 
 # canonical_cli payload shapes (its own `canonical-cli-*` track). Shapes taken

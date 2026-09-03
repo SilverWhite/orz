@@ -1,0 +1,13 @@
+{
+  "tool": "search_replace",
+  "call_id": "call-1",
+  "exit_code": 0,
+  "edits": [
+    {
+      "file": "1.py",
+      "old_lines": 12,
+      "new_lines": 34
+    }
+  ],
+  "output_truncated": false
+}

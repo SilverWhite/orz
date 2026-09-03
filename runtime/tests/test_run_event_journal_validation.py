@@ -28,6 +28,8 @@ from assurance.run_event_journal_validation import (
     _verify_v02_dep_graph_events,
     _verify_v02_failure_target,
     _verify_v02_inject_budget,
+    _verify_v02_budget_cue_injected,
+    _verify_v02_output_truncation,
     _verify_v02_policy_denial,
     _verify_v02_probe_accuracy,
     _verify_v02_receipt_event_isomorphism,
@@ -2091,6 +2093,229 @@ class V02ToolRunningChainTests(unittest.TestCase):
         self.assertTrue(
             any("no preceding tool_started" in e for e in errors), errors
         )
+
+    # ── TER T0.2 idle-kill form (2026-09-03, TODO2 T0.2 / 设计稿 §3.1/§3.2)
+
+    def _idle_kill_payload(self, call_id: str = "call-term-1") -> dict:
+        payload = _tool_running_payload(call_id)
+        payload["wall_ms"] = 600123
+        payload["status"] = "idle_killed"
+        payload["reason"] = "no output growth or CPU activity for 300s"
+        return payload
+
+    def test_idle_kill_after_completed_validates(self) -> None:
+        """TER T0.2: idle-kill post-dates the auto-bg call's running:true
+        completion — start → mid-run → completed → idle-kill is legal."""
+        journal = _v02_journal(
+            [
+                _mk_v02_event("tool_started", _tool_started_payload(), 0, None),
+                _mk_v02_event("tool_running", _tool_running_payload(), 1, _ZERO),
+                _mk_v02_event("tool_completed", _tool_completed_payload(), 2, _ZERO),
+                _mk_v02_event("tool_running", self._idle_kill_payload(), 3, _ZERO),
+            ]
+        )
+        self.assertEqual(validate_journal_text(journal), [])
+
+    def test_idle_kill_requires_prior_mid_run_rejected(self) -> None:
+        """TER T0.2: only auto-backgrounded calls (mid-run journaled) can be
+        idle-killed — a bare completed call has no background task to kill."""
+        journal = _v02_journal(
+            [
+                _mk_v02_event("tool_started", _tool_started_payload(), 0, None),
+                _mk_v02_event("tool_completed", _tool_completed_payload(), 1, _ZERO),
+                _mk_v02_event("tool_running", self._idle_kill_payload(), 2, _ZERO),
+            ]
+        )
+        errors = validate_journal_text(journal)
+        self.assertTrue(
+            any("requires a preceding auto-background mid-run" in e for e in errors),
+            errors,
+        )
+
+    def test_idle_kill_before_completed_rejected(self) -> None:
+        """TER T0.2: the kill is a background-task lifecycle event — it must
+        post-date the call's completion, never sit between mid-run and
+        completed."""
+        journal = _v02_journal(
+            [
+                _mk_v02_event("tool_started", _tool_started_payload(), 0, None),
+                _mk_v02_event("tool_running", _tool_running_payload(), 1, _ZERO),
+                _mk_v02_event("tool_running", self._idle_kill_payload(), 2, _ZERO),
+                _mk_v02_event("tool_completed", _tool_completed_payload(), 3, _ZERO),
+            ]
+        )
+        errors = validate_journal_text(journal)
+        self.assertTrue(
+            any("must post-date the call's running:true tool_completed" in e for e in errors),
+            errors,
+        )
+
+    def test_duplicate_idle_kill_rejected(self) -> None:
+        """TER T0.2: at most one idle-kill per call_id — no repeated kills."""
+        journal = _v02_journal(
+            [
+                _mk_v02_event("tool_started", _tool_started_payload(), 0, None),
+                _mk_v02_event("tool_running", _tool_running_payload(), 1, _ZERO),
+                _mk_v02_event("tool_completed", _tool_completed_payload(), 2, _ZERO),
+                _mk_v02_event("tool_running", self._idle_kill_payload(), 3, _ZERO),
+                _mk_v02_event("tool_running", self._idle_kill_payload(), 4, _ZERO),
+            ]
+        )
+        errors = validate_journal_text(journal)
+        self.assertTrue(
+            any("duplicate idle-kill tool_running" in e for e in errors), errors
+        )
+
+    def test_idle_kill_missing_reason_rejected(self) -> None:
+        """TER T0.2: status=idle_killed requires reason (schema if/then) —
+        a kill without a cause is not a self-describing lifecycle fact."""
+        payload = _tool_running_payload()
+        payload["wall_ms"] = 600123
+        payload["status"] = "idle_killed"
+        journal = _v02_journal(
+            [
+                _mk_v02_event("tool_started", _tool_started_payload(), 0, None),
+                _mk_v02_event("tool_running", _tool_running_payload(), 1, _ZERO),
+                _mk_v02_event("tool_completed", _tool_completed_payload(), 2, _ZERO),
+                _mk_v02_event("tool_running", payload, 3, _ZERO),
+            ]
+        )
+        errors = validate_journal_text(journal)
+        self.assertTrue(
+            any("'reason' is a required property" in e for e in errors), errors
+        )
+
+
+class ToolCompletedOutputTruncationCrossCheckTests(unittest.TestCase):
+    """TER W-F13b (2026-09-03, TODO2 T0.2 / 设计稿 §3.6):
+    `_verify_v02_output_truncation` — truncation facts on tool_completed
+    (marker ⇄ byte count ⇄ retrieval-object pointer pairing)."""
+
+    def _completed(self, **overrides: object) -> dict:
+        payload: dict[str, object] = {
+            "tool": "run_terminal_cmd",
+            "call_id": "call-term-long-1",
+            "exit_code": 0,
+        }
+        payload.update(overrides)
+        return _v02_event("tool_completed", payload)
+
+    def test_clean_completion_without_fields_passes(self) -> None:
+        self.assertEqual(_verify_v02_output_truncation([self._completed()]), [])
+
+    def test_truncation_with_bytes_validates(self) -> None:
+        events = [
+            self._completed(
+                output_truncated=True,
+                total_bytes=1_048_576,
+                output_object_id="outobj-run-term-long-1",
+            )
+        ]
+        self.assertEqual(_verify_v02_output_truncation(events), [])
+
+    def test_truncated_without_total_bytes_rejected(self) -> None:
+        events = [self._completed(output_truncated=True)]
+        errors = _verify_v02_output_truncation(events)
+        self.assertTrue(
+            any("output_truncated but no total_bytes" in e for e in errors), errors
+        )
+
+    def test_object_id_without_truncation_rejected(self) -> None:
+        events = [self._completed(output_object_id="outobj-run-term-long-1")]
+        errors = _verify_v02_output_truncation(events)
+        self.assertTrue(
+            any("requires an explicit truncation fact" in e for e in errors), errors
+        )
+
+    def test_output_truncated_false_schema_rejected(self) -> None:
+        """The marker is const true in the schema — presence means truncation;
+        a false marker is a schema violation, not a fact."""
+        events = [
+            _mk_v02_event(
+                "tool_completed",
+                {"tool": "run_terminal_cmd", "call_id": "call-1", "output_truncated": False},
+                0,
+                None,
+            )
+        ]
+        errors = _verify_v02_output_truncation(events)
+        self.assertEqual(errors, [])
+        payload = events[0]["payload"]
+        self.assertIs(payload["output_truncated"], False)
+        # Full-journal validation reports the schema const violation.
+        journal = _v02_journal(events)
+        errors = validate_journal_text(journal)
+        self.assertTrue(
+            any("True was expected" in e for e in errors),
+            "schema must reject output_truncated=false: " + str(errors),
+        )
+
+
+class BudgetCueInjectedCrossCheckTests(unittest.TestCase):
+    """TER F6 push (2026-09-03, TODO2 T0.2 / 设计稿 §3.3):
+    `_verify_v02_budget_cue_injected` — ≤4 cues per run and tier-boundary
+    truth (remaining_seconds strictly below threshold_seconds)."""
+
+    def _cue(
+        self,
+        remaining: int = 590,
+        threshold: int = 600,
+        run_id: str = "RUN-V02-0001",
+    ) -> dict:
+        event = _v02_event(
+            "budget_cue_injected",
+            {
+                "remaining_seconds": remaining,
+                "rounds_used": 12,
+                "threshold_seconds": threshold,
+            },
+        )
+        event["run_id"] = run_id
+        return event
+
+    def test_clean_single_cue_passes(self) -> None:
+        self.assertEqual(_verify_v02_budget_cue_injected([self._cue()]), [])
+
+    def test_four_cues_pass(self) -> None:
+        events = [self._cue(remaining=r) for r in (590, 290, 110, 90)]
+        self.assertEqual(_verify_v02_budget_cue_injected(events), [])
+
+    def test_five_cues_rejected(self) -> None:
+        events = [self._cue(remaining=r) for r in (590, 290, 110, 90, 50)]
+        errors = _verify_v02_budget_cue_injected(events)
+        self.assertTrue(
+            any("exceed the ≤4-per-run push cap" in e for e in errors), errors
+        )
+
+    def test_per_run_cap_is_independent(self) -> None:
+        events = [
+            self._cue(remaining=590, run_id="RUN-V02-0001"),
+            self._cue(remaining=290, run_id="RUN-V02-0001"),
+            self._cue(remaining=590, run_id="RUN-V02-0002"),
+            self._cue(remaining=290, run_id="RUN-V02-0002"),
+        ]
+        self.assertEqual(_verify_v02_budget_cue_injected(events), [])
+
+    def test_remaining_not_below_threshold_rejected(self) -> None:
+        events = [self._cue(remaining=590, threshold=300)]
+        errors = _verify_v02_budget_cue_injected(events)
+        self.assertTrue(
+            any("not below its threshold_seconds" in e for e in errors), errors
+        )
+
+    def test_v01_cues_ignored(self) -> None:
+        """The push cue is a v0.2-track event; the verifier never fires on
+        v0.1 journals (payload schema resolution rejects the type there)."""
+        event = _v02_event(
+            "budget_cue_injected",
+            {
+                "remaining_seconds": 590,
+                "rounds_used": 12,
+                "threshold_seconds": 600,
+            },
+        )
+        event["payload_schema"] = "run-event-v0.1.schema.json"
+        self.assertEqual(_verify_v02_budget_cue_injected([event]), [])
 
 
 class ControlTicketPairingTests(unittest.TestCase):
