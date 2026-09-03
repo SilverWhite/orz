@@ -109,9 +109,19 @@
   1 passed、orz-workspace 接线 1 passed、fmt --check 净、git diff
   --check exit 0。审计见
   [`TER_T1_4_NO_HARD_TIMEOUT_KILL_2026-09-04.md`](docs/audits/TER_T1_4_NO_HARD_TIMEOUT_KILL_2026-09-04.md)。）
-- [ ] T1.5 idle+CPU 兜底：进程监视采样器（输出字节增长 + CPU 时间）；
+- [x] T1.5 idle+CPU 兜底：进程监视采样器（输出字节增长 + CPU 时间）；
   连续 300s 无活跃 → kill + 提醒文本 + idle_killed 事件；阈值参数化。
   验收：模拟“无输出计算”与“真 idle”两类用例，不误杀前者。
+  （2026-09-04 完成：`ActivitySampler` 每 tick 比输出字节、1s 节流读
+  进程树 CPU（Windows Job 记账 / Linux /proc pgrp 汇总；其它平台 CPU
+  未知不判 idle）；连续无两者增长满 `idle_kill_timeout`（默认 300s，
+  actor/env `GROK_IDLE_KILL_TIMEOUT_MS` 参数化，0=禁用）→ SIGTERM+
+  `signal=idle_killed`；完成提醒渲染 `idle-killed (no output growth or
+  CPU activity for 300s)`（T0.2 同口径）；`KillReason` 增 idle_killed。
+  验证：终端 actor 47 passed（含 5 采样器用例 + sleep idle-kill 实机 +
+  无输出忙循环不误杀实机）、bash 231 passed、task_completion 49
+  passed、fmt --check 净、git diff --check exit 0。审计见
+  [`TER_T1_5_IDLE_CPU_BACKSTOP_2026-09-04.md`](docs/audits/TER_T1_5_IDLE_CPU_BACKSTOP_2026-09-04.md)。）
 - [ ] T1.6 黑板 processes live 分区：读取时现算快照（task_id/命令/
   elapsed/状态/活跃度/字节/可 kill）；状态跃迁落事件；kill 动作模型面
   可达且不暴露 `&`。验收：live 渲染单测 + 越权边界用例。
