@@ -3741,6 +3741,29 @@ ADR §3.6 正文修订随实施登记。
    Linux `ORZ_DEEPSEEK_API_KEY` env（ADR-0006 §2.2/§2.3）。登记于
    [0.2.0 发布包](../releases/orz-0.2.0-linux-x86_64/README.md)。
 
+10. **0.3.0 发布（2026-09-03；计数不动）**：双平台发布——版本号
+    orz-bin 0.2.0 → 0.3.0（orz d4a37fdb，已推送
+    cli/feat/fusion-architecture）；Windows x86_64 release 构建
+    （orz.exe 51,263,488 B / orz-signer.exe 6,737,920 B /
+    orz-acaf-provision.exe 6,642,176 B，续编 2m37s）+ Linux musl
+    三件套（orz 108,205,944 B / orz-signer 1,394,504 B /
+    orz-acaf-provision 1,212,568 B，编译 20m22s，musl 静态；
+    bookworm 容器冒烟通过——provision usage / signer manifest 缺失 /
+    `orz --real` 缺 key 禁用 web / `--version` TTY 错误路径均属预期
+    加载后行为）；两平台二进制均内嵌版本串 0.3.0；0.3.0 主要变更=黑板
+    会话作用域（一个对话一个黑板、round/domain 写时盖章、live 续载/
+    恢复，取代 plan-epoch 生产语义，`--plan` 诊断保留）、渲染折叠
+    （域→轮数折叠视图 + 展开参数 + 渲染 cap）、会话疲劳提醒（W 水位
+    50/70/90 档，无压缩轮数门槛）、会话存档单包（session_archive
+    v0.2 事件 + close 时 in-flight run 推迟补触发）、失败目标聚合
+    （failure_agg + 注意事项槽渲染）、依赖图主线 + PULL 自描述 +
+    DC 清理退役；本地资产=orz-0.3.0-linux-x86_64.tar.gz（33.0 MB）
+    + orz-0.3.0-windows-x86_64.zip（25.3 MB），API Key 不入包，注入=
+    Windows 凭据管理器 / Linux `ORZ_DEEPSEEK_API_KEY` env
+    （ADR-0006 §2.2/§2.3）。GitHub Release 上传待凭据更新后执行。
+    登记于
+    [0.3.0 发布包](../releases/orz-0.3.0-linux-x86_64/README.md)。
+
 ### 14.41 v1.41 补写裁决索引（2026-08-25）
 
 本节记录冻结后的显式补写；规范正文以所指章节为准，补写明确
