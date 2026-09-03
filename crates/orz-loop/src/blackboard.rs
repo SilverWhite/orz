@@ -717,7 +717,8 @@ impl Blackboard {
         // 恢复 = 可见内容整体替换——各分区统一归位为「1 次变化」，首次
         // blackboard_read 恰好各挂 +1 徽章（与 restore_epoch_snapshot 的
         // bump 语义对齐；不延续上 run 的累积计数，防跨 prompt 徽章噪声）。
-        // 依赖图已随会话快照置空（版本 0）。
+        // actions/entities 自含计数同样归位 1（reset 后 bump）；依赖图已随
+        // 会话快照置空（空图保持版本 0，直到 run 内重新建图）。
         self.revisions = PartitionRevisions {
             plan: 1,
             exec: 1,
@@ -729,6 +730,7 @@ impl Blackboard {
         self.actions.reset_revision();
         self.actions.bump();
         self.entities.reset_revision();
+        self.entities.bump_revision();
     }
 
     /// plan 分区零散写点（mark_step_* / delivery_status 等）的计数入口。
@@ -747,6 +749,15 @@ impl Blackboard {
             }
             _ => {}
         }
+    }
+
+    /// B2 折叠触发 / B3 疲劳度共用（§11.1 v0.7 存储字节口径）：整份黑板
+    /// live 内容的紧凑 JSON 字节——revision / dep_graph 等 `skip` 字段不
+    /// 参与；actions 注册/订单槽按 live 面现状计入（与 run 末持久化的
+    /// 会话快照口径差一个注册/订单槽清理，量级可忽略，登记于 B2 审计）。
+    /// 序列化失败回退 0（渲染层安全方向：视为未达 W，不误折叠）。
+    pub fn live_compact_bytes(&self) -> usize {
+        serde_json::to_vec(self).map(|v| v.len()).unwrap_or(0)
     }
 
     /// PULL 自描述 §2：固定分区序的黑板直属版本快照（live-only）。
@@ -2154,6 +2165,331 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    /// P2-13 B2（2026-09-03，设计 §9.3/R2 + §12）：blackboard_read 工具声明
+    /// 增量扩展——可选 `domain`/`round_from`/`round_to` 展开参数（含边界、
+    /// 相等 = 单轮）随请求工具定义回达模型。
+    #[tokio::test]
+    async fn blackboard_read_declares_fold_expand_params() {
+        let dir = test_dir();
+        let journal = JournalRecorder::new(dir.clone());
+        let host = TestHost {
+            journal,
+            tool_result: Some(ToolResult {
+                output: "irrelevant".to_string(),
+                exit_code: Some(0),
+                output_encoding: None,
+                structured: None,
+                ..Default::default()
+            }),
+        };
+        let fake = Arc::new(FakeProvider::new(vec![
+            ScriptedResponse::tool_calls(vec![ToolCall {
+                name: "blackboard_read".to_string(),
+                arguments: serde_json::json!({"section": "exec"}),
+                call_id: "call-fold-decl".to_string(),
+            }]),
+            ScriptedResponse::text("完成"),
+            ScriptedResponse::text("完成"),
+        ]));
+        let gateway: Arc<dyn ModelGateway> = fake.clone();
+        let controller = AgentLoopController::with_gateway(gateway);
+        controller
+            .run_turn(
+                &host,
+                "看 exec 声明",
+                "RUN-FOLD-DECL",
+                MANIFEST,
+                0,
+                None,
+                None,
+                None,
+            )
+            .await
+            .unwrap();
+        let received = fake.received_requests();
+        let round = received
+            .iter()
+            .find(|r| {
+                r.messages
+                    .iter()
+                    .any(|m| m.tool_call_id.as_deref() == Some("call-fold-decl"))
+            })
+            .expect("round carrying blackboard_read");
+        let bb_def = round
+            .tools
+            .iter()
+            .find(|t| t.name == "blackboard_read")
+            .expect("blackboard_read declared in request tools");
+        let props = bb_def
+            .parameters
+            .get("properties")
+            .expect("tool parameters properties");
+        for key in ["domain", "round_from", "round_to"] {
+            assert!(
+                props.get(key).is_some(),
+                "{key} must be declared: {bb_def:?}"
+            );
+        }
+        assert_eq!(
+            props["domain"]["enum"]
+                .as_array()
+                .map(|a| a.len())
+                .unwrap_or(0),
+            5,
+            "{bb_def:?}"
+        );
+        assert_eq!(props["round_from"]["minimum"], 1);
+        assert_eq!(props["round_to"]["minimum"], 1);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// P2-13 B2（2026-09-03，设计 §9.3/R2 + §12）：展开参数组合守卫全部
+    /// fail loud（exit_code 1 + error 字段，事件面记录；模型面收到显式错误）
+    /// ——all-or-none、非法域名、round 范围倒置、与 receipt_id 互斥、
+    /// 非可折叠分区拒绝。
+    #[tokio::test]
+    async fn blackboard_read_fold_expand_guards_fail_loud() {
+        let dir = test_dir();
+        let journal = JournalRecorder::new(dir.clone());
+        let host = TestHost {
+            journal,
+            tool_result: Some(ToolResult {
+                output: "irrelevant".to_string(),
+                exit_code: Some(0),
+                output_encoding: None,
+                structured: None,
+                ..Default::default()
+            }),
+        };
+        let calls = vec![
+            serde_json::json!({"section": "exec", "domain": "normal", "round_from": 1}),
+            serde_json::json!({"section": "exec", "domain": "bogus", "round_from": 1, "round_to": 2}),
+            serde_json::json!({"section": "edits", "domain": "normal", "round_from": 2, "round_to": 1}),
+            serde_json::json!({"section": "exec", "receipt_id": "ORD-1", "domain": "normal", "round_from": 1, "round_to": 2}),
+            serde_json::json!({"section": "plan", "domain": "normal", "round_from": 1, "round_to": 2}),
+        ];
+        let mut script = Vec::new();
+        for (i, args) in calls.iter().enumerate() {
+            script.push(ScriptedResponse::tool_calls(vec![ToolCall {
+                name: "blackboard_read".to_string(),
+                arguments: args.clone(),
+                call_id: format!("call-fold-guard-{i}"),
+            }]));
+        }
+        script.push(ScriptedResponse::text("完成"));
+        script.push(ScriptedResponse::text("完成"));
+        let fake = Arc::new(FakeProvider::new(script));
+        let gateway: Arc<dyn ModelGateway> = fake.clone();
+        let controller = AgentLoopController::with_gateway(gateway);
+        controller
+            .run_turn(
+                &host,
+                "守卫测试",
+                "RUN-FOLD-GUARD",
+                MANIFEST,
+                0,
+                None,
+                None,
+                None,
+            )
+            .await
+            .unwrap();
+
+        let payloads: Vec<serde_json::Value> = events(&dir)
+            .into_iter()
+            .filter(|e| e.event_type == EventType::ToolCompleted)
+            .map(|e| e.payload)
+            .collect();
+        assert_eq!(payloads.len(), 5, "{payloads:?}");
+        let hints = [
+            "必须同时给出",
+            "invalid blackboard_read domain",
+            "round_to=1 < round_from=2",
+            "与 receipt_id 互斥",
+            "仅与 exec|edits|tool_actions",
+        ];
+        for (i, hint) in hints.iter().enumerate() {
+            let p = payloads
+                .iter()
+                .find(|p| p["call_id"] == format!("call-fold-guard-{i}"))
+                .unwrap_or_else(|| panic!("missing payload {i}: {payloads:?}"));
+            assert_eq!(p["exit_code"], 1, "{p:?}");
+            assert!(
+                p["error"].as_str().unwrap_or_default().contains(hint),
+                "{i}: {p:?}"
+            );
+        }
+        // 模型面：错误文本回达（取任一守卫的代表性消息）。
+        let received = fake.received_requests();
+        assert!(received.iter().any(|r| {
+            r.messages.iter().any(|m| {
+                m.tool_call_id.as_deref() == Some("call-fold-guard-0")
+                    && m.content.contains("必须同时给出")
+            })
+        }));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// P2-13 B2（2026-09-03，设计 §9.2/§9.3 + §12 R5）：exec 分区 live
+    /// 字符 ≥ T 时默认读取进入折叠态（更早域段折叠为标注、当前域段 +
+    /// 最近 K 轮 + 最近 20% 行展开）；携带 domain+round 显式展开可精读目标
+    /// 轮段（跨会话恢复的 LIF 轮号/域为轴）。
+    #[tokio::test]
+    async fn blackboard_read_folded_exec_default_view_and_expand() {
+        let dir = test_dir();
+        let journal = JournalRecorder::new(dir.clone());
+        let host = TestHost {
+            journal,
+            tool_result: Some(ToolResult {
+                output: "irrelevant".to_string(),
+                exit_code: Some(0),
+                output_encoding: None,
+                structured: None,
+                ..Default::default()
+            }),
+        };
+        let fake = Arc::new(FakeProvider::new(vec![
+            ScriptedResponse::tool_calls(vec![ToolCall {
+                name: "blackboard_read".to_string(),
+                arguments: serde_json::json!({"section": "exec"}),
+                call_id: "call-fold-1".to_string(),
+            }]),
+            ScriptedResponse::tool_calls(vec![ToolCall {
+                name: "blackboard_read".to_string(),
+                arguments: serde_json::json!({
+                    "section": "exec",
+                    "domain": "normal",
+                    "round_from": 1,
+                    "round_to": 2,
+                }),
+                call_id: "call-fold-2".to_string(),
+            }]),
+            ScriptedResponse::text("完成"),
+            ScriptedResponse::text("完成"),
+        ]));
+        let gateway: Arc<dyn ModelGateway> = fake.clone();
+        let controller = AgentLoopController::with_gateway(gateway);
+        // 会话恢复续接：当前轮 r400 / pressure（B1 conversation-relative 轴）。
+        controller.restore_lif_session(
+            &orz_assurance::lif::TemporalSessionSnapshot {
+                round: 400,
+                has_success: true,
+                current_domain: orz_assurance::lif::Domain::Pressure,
+                entry_round: 301,
+                spikes: Vec::new(),
+            },
+            Some(AgentLoopController::now_epoch_secs()),
+        );
+        {
+            let mut bb = controller.blackboard().write();
+            // normal r1–r300：每行 >220 字符 → 分区 live 字符 >64K（T 触发）。
+            for r in 1..=300 {
+                bb.exec.results.push(crate::blackboard::ExecEntry::stamped(
+                    format!("n{r}-{}", "x".repeat(220)),
+                    r,
+                    orz_assurance::lif::Domain::Normal,
+                    format!("2026-09-03T00:{:02}:00Z", r % 60),
+                ));
+            }
+            // pressure r301–r400（当前域段，短行）。
+            for r in 301..=400 {
+                bb.exec.results.push(crate::blackboard::ExecEntry::stamped(
+                    format!("p{r}"),
+                    r,
+                    orz_assurance::lif::Domain::Pressure,
+                    format!("2026-09-03T01:{:02}:00Z", r % 60),
+                ));
+            }
+        }
+        controller
+            .run_turn(
+                &host,
+                "看折叠 exec",
+                "RUN-FOLD-EXEC",
+                MANIFEST,
+                0,
+                None,
+                None,
+                None,
+            )
+            .await
+            .unwrap();
+
+        let received = fake.received_requests();
+        let fold_round = received
+            .iter()
+            .find(|r| {
+                r.messages
+                    .iter()
+                    .any(|m| m.tool_call_id.as_deref() == Some("call-fold-1"))
+            })
+            .expect("round carrying folded exec reply");
+        let fold_reply = fold_round
+            .messages
+            .iter()
+            .find(|m| m.tool_call_id.as_deref() == Some("call-fold-1"))
+            .expect("folded exec tool result message");
+        // 旧 normal 段折叠为标注（计数 + 轮区间）；当前 pressure 段行可见；
+        // 折叠段明细行不注入默认视图。
+        assert!(
+            fold_reply.content.contains("[域段 normal r1–r300 · 300 条"),
+            "{:?}",
+            fold_round.messages
+        );
+        assert!(
+            fold_reply.content.contains("p301"),
+            "{:?}",
+            fold_round.messages
+        );
+        assert!(
+            fold_reply.content.contains("p400"),
+            "{:?}",
+            fold_round.messages
+        );
+        assert!(
+            !fold_reply.content.contains("n1-"),
+            "{:?}",
+            fold_round.messages
+        );
+
+        let expand_round = received
+            .iter()
+            .find(|r| {
+                r.messages
+                    .iter()
+                    .any(|m| m.tool_call_id.as_deref() == Some("call-fold-2"))
+            })
+            .expect("round carrying expand reply");
+        let expand_reply = expand_round
+            .messages
+            .iter()
+            .find(|m| m.tool_call_id.as_deref() == Some("call-fold-2"))
+            .expect("expand tool result message");
+        assert!(
+            expand_reply.content.contains("n1-"),
+            "{:?}",
+            expand_round.messages
+        );
+        assert!(
+            expand_reply.content.contains("n2-"),
+            "{:?}",
+            expand_round.messages
+        );
+        assert!(
+            expand_reply
+                .content
+                .contains("[域段 normal r3–r300 · 298 条"),
+            "{:?}",
+            expand_round.messages
+        );
+        assert!(
+            expand_reply.content.contains("p301"),
+            "{:?}",
+            expand_round.messages
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     /// 2026-08-19 黑板缓存成本设计（ADR-0010 §14.31 / §4.5，方案 B，S2
     /// 工具级断言）：非法 `receipt_id`（非字符串/空串）= 显式报错
     /// （exit_code 1），绝不静默回退整段读取。
@@ -2360,6 +2696,93 @@ mod tests {
 
         let _ = std::fs::remove_dir_all(&dir);
         let _ = std::fs::remove_dir_all(&dir2);
+    }
+
+    /// P2-13 B2 复审（2026-09-03，P2-1 e2e）：exec 分区已触发折叠态时携带
+    /// `receipt_id`（无展开参数）仍返回显式“receipt_id 仅 actions”文本错误
+    /// （render-error 形状 → 不挂增量头、不推进游标），绝不静默忽略点读
+    /// 参数并回折叠内容。
+    #[tokio::test]
+    async fn blackboard_read_receipt_id_on_fold_triggered_exec_errors_not_fold() {
+        let dir = test_dir();
+        let journal = JournalRecorder::new(dir.clone());
+        let host = TestHost {
+            journal,
+            tool_result: Some(ToolResult {
+                output: "irrelevant".to_string(),
+                exit_code: Some(0),
+                output_encoding: None,
+                structured: None,
+                ..Default::default()
+            }),
+        };
+        let fake = Arc::new(FakeProvider::new(vec![
+            ScriptedResponse::tool_calls(vec![ToolCall {
+                name: "blackboard_read".to_string(),
+                arguments: serde_json::json!({"section": "exec", "receipt_id": "ORD-1"}),
+                call_id: "call-fold-rid".to_string(),
+            }]),
+            ScriptedResponse::text("完成"),
+            ScriptedResponse::text("完成"),
+        ]));
+        let gateway: Arc<dyn ModelGateway> = fake.clone();
+        let controller = AgentLoopController::with_gateway(gateway);
+        {
+            let mut bb = controller.blackboard().write();
+            for r in 1..=300 {
+                bb.exec.results.push(crate::blackboard::ExecEntry::stamped(
+                    format!("r{r}-{}", "x".repeat(220)),
+                    r,
+                    orz_assurance::lif::Domain::Normal,
+                    format!("2026-09-03T00:{:02}:00Z", r % 60),
+                ));
+            }
+        }
+        controller
+            .run_turn(
+                &host,
+                "折叠态点读守卫",
+                "RUN-FOLD-RID",
+                MANIFEST,
+                0,
+                None,
+                None,
+                None,
+            )
+            .await
+            .unwrap();
+        let received = fake.received_requests();
+        let round = received
+            .iter()
+            .find(|r| {
+                r.messages
+                    .iter()
+                    .any(|m| m.tool_call_id.as_deref() == Some("call-fold-rid"))
+            })
+            .expect("round carrying fold-state receipt_id read");
+        let reply = round
+            .messages
+            .iter()
+            .find(|m| m.tool_call_id.as_deref() == Some("call-fold-rid"))
+            .expect("receipt_id error tool result message");
+        assert!(
+            reply
+                .content
+                .contains("receipt_id 仅与 section=actions 组合有效"),
+            "{:?}",
+            round.messages
+        );
+        assert!(
+            !reply.content.contains("[exec: 折叠视图"),
+            "{:?}",
+            round.messages
+        );
+        assert!(
+            !reply.content.contains("[黑板增量]"),
+            "{:?}",
+            round.messages
+        );
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// 2026-08-19 黑板缓存成本设计（ADR-0010 §14.31 / §4.5，方案 B，S2
@@ -3217,7 +3640,8 @@ mod tests {
     /// 注册板块 / pending 订单槽 / 依赖图），保留分区内容与章；JSON 序列
     /// 化不携带 dep_graph（live-only）；`restore_conversation_snapshot`
     /// 后各分区版本计数归位为 1（恢复 = 一次整体变化，跨 prompt 徽章
-    /// 不延续上 run 累积计数）。
+    /// 不延续上 run 累积计数；entities 自含计数同此，dep_graph 空图
+    /// 保持 0）。
     #[test]
     fn conversation_snapshot_and_restore_keep_board_but_strip_run_faces() {
         let mut bb = Blackboard::default();
@@ -3299,8 +3723,10 @@ mod tests {
         for (name, value) in rev {
             match name {
                 "plan" | "exec" | "edits" | "tool_actions" | "actions" | "internal_ret"
-                | "external_ret" => assert_eq!(value, 1, "{name} shows one restore change"),
-                "entities" | "deps" => assert_eq!(value, 0, "{name} stays silent until touched"),
+                | "external_ret" | "entities" => {
+                    assert_eq!(value, 1, "{name} shows one restore change")
+                }
+                "deps" => assert_eq!(value, 0, "deps stays silent (empty graph until touched)"),
                 other => panic!("unexpected partition {other}"),
             }
         }

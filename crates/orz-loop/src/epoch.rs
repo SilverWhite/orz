@@ -1,6 +1,10 @@
 //! Blackboard plan-epoch archives (ADR-0010 §14.15 / v1.15, 2026-08-14;
 //! v1.15⑧ 补强 2026-08-15: timestamp-stamped monotonic epoch numbers).
 //!
+//! P2-13（2026-09-03，ADR-0010 §14.52）：生产黑板生命周期已切换为会话作用域
+//! （B1 会话化基础 + B2 渲染折叠，见下）；本文件的 plan-epoch 归档面仅剩
+//! `--plan` 诊断/测试路径，生产接线退役清理为 P2-13 B3 排期项。
+//!
 //! The blackboard's lifetime is a plan epoch: rotation archives the old
 //! epoch's full path/action records as a deterministic JSON snapshot
 //! (`.gsa/blackboard/epoch-<plan_epoch>.json`), clears the epoch-scoped
@@ -13,13 +17,18 @@
 
 use std::path::{Path, PathBuf};
 
+use orz_assurance::lif::Domain;
+
 use crate::blackboard::{
-    ActionBoard, ActionResult, EditRecord, EpochSnapshot, ExecSection, ExternalRetSection,
-    InternalRetSection, PlanSection, ToolActionRecord,
+    ActionBoard, ActionResult, Blackboard, EditRecord, EpochSnapshot, ExecSection,
+    ExternalRetSection, InternalRetSection, PlanSection, ToolActionRecord,
 };
 // 2026-08-19 黑板缓存成本设计（ADR-0010 §14.31）：actions 结果板固定形态行
 // 与 exec 行截断复用 summary.rs 同口径辅助（D1=(c) 已确立的机械语义）。
 use crate::summary::{failure_envelope_fields, truncate_chars};
+// P2-13 B2 渲染折叠（2026-09-03）：纯函数核心在 render_fold（分段/展开子集/
+// 参数定档），本模块组装各分区行文本。
+use crate::render_fold::{self, FoldExpand, FoldParams, FoldRowMeta, SegmentKind, SegmentRun};
 
 /// Archive directory name under the session cwd's `.gsa` root.
 pub const EPOCH_ARCHIVE_DIR: &str = ".gsa/blackboard";
@@ -321,7 +330,9 @@ pub fn render_section(
             if lines.is_empty() {
                 "(no edit records)".to_string()
             } else {
-                lines.join("\n")
+                // B2 补齐渲染 cap（2026-09-03）：edits 此前无硬上限，
+                // conversation 轴后必须与 exec 同口径有界（超限截断 + 指针）。
+                render_capped_rows("edits", lines)
             }
         }
         "tool_actions" => {
@@ -341,7 +352,8 @@ pub fn render_section(
             if lines.is_empty() {
                 "(no tool actions yet)".to_string()
             } else {
-                lines.join("\n")
+                // B2 补齐渲染 cap（同 edits 理由；tool_actions 此前无上限）。
+                render_capped_rows("tool_actions", lines)
             }
         }
         "exec" => {
@@ -514,6 +526,564 @@ pub fn render_section(
             )
         }
     }
+}
+
+// ===========================================================================
+// P2-13 B2 渲染折叠（2026-09-03，设计 §9/§11/§12，ADR-0010 §14.52）
+// ===========================================================================
+//
+// 方案 B：可折叠分区（exec / edits / tool_actions）的 live 读取在触发折叠态
+// （分区 live 字符 ≥ T 或整板 live 字节 ≥ W）或携带显式展开参数时走本组
+// 渲染；其余路径（含归档 epoch 读）保持逐字节不变。存储零改写、无事件。
+//
+// 折叠视图输出 = 默认展开子集（当前域段 ∪ 最近 K 轮 ∪ 最近 20% 行）+ 显式
+// 展开目标行；其余行按域段聚合为标注行。标注行/行文本受 FOLDABLE_* 上限
+// 约束（edits/tool_actions 由此补齐渲染 cap——B2 排期项，与 exec 同口径）。
+
+/// 折叠视图/补齐 cap：单行截断上限（与 exec 行 200 字符同口径）。
+pub const FOLDABLE_ROW_MAX_CHARS: usize = 200;
+/// 补齐 cap：单分区可见行上限（与 exec 50 条同口径）。
+pub const FOLDABLE_SECTION_ROW_CAP: usize = 50;
+/// 补齐 cap：单分区可见字符上限（与 exec 4K 同口径）。
+pub const FOLDABLE_SECTION_MAX_CHARS: usize = 4_000;
+/// 折叠标注行长度上限（标注是总览行，必须紧凑）。
+pub const FOLD_ANNOTATION_MAX_CHARS: usize = 160;
+
+/// 单行 r 区间显示：`r1` / `r1–r30`（设计标注格式，含边界）。
+fn round_span(first: u64, last: u64) -> String {
+    if first == last {
+        format!("r{first}")
+    } else {
+        format!("r{first}–r{last}")
+    }
+}
+
+/// RFC 3339 since 过滤闭包（与 render_section 同口径：非法/不可解析回退
+/// 不过滤，绝不因过滤边界隐藏记录）。
+fn since_filter(since: Option<&str>) -> impl Fn(&str) -> bool {
+    let since_dt = since.and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok());
+    move |ts: &str| -> bool {
+        match since_dt {
+            None => true,
+            Some(dt) => chrono::DateTime::parse_from_rfc3339(ts)
+                .map(|t| t >= dt)
+                .unwrap_or(true),
+        }
+    }
+}
+
+/// B2 折叠触发计量（§11.1 T 的字符口径落地）：分区 live 全量行渲染估算
+/// 字符 = Σ(行文本字符 + 行分隔 1)，行文本取未截断的渲染形态。T=64K 量级
+/// 阈值下，估算口径的少量偏差不影响触发判定（实现决策，登记于 B2 审计）。
+pub fn live_foldable_partition_chars(section: &str, bb: &Blackboard) -> usize {
+    let mut chars = 0usize;
+    match section {
+        "edits" => {
+            for r in &bb.edits {
+                chars += r.timestamp.chars().count()
+                    + 1
+                    + crate::controller::format_edit_record(r).chars().count()
+                    + 1;
+            }
+        }
+        "tool_actions" => {
+            for r in &bb.tool_actions {
+                chars += r.timestamp.chars().count() + 1 + r.tool.chars().count() + 1;
+            }
+        }
+        "exec" => {
+            for e in bb.exec.results.iter().chain(bb.exec.errors.iter()) {
+                chars += e.text.chars().count() + 1;
+            }
+        }
+        _ => {}
+    }
+    chars
+}
+
+/// 渲染 cap 辅助（edits/tool_actions 补齐；exec 既有分支保持原样以保证
+/// 逐字节不变）：行数超 `FOLDABLE_SECTION_ROW_CAP` 时只留最近行并加头行；
+/// 字符超 `FOLDABLE_SECTION_MAX_CHARS` 时明细整体省略（同 exec 头行 +
+/// 计数行纪律）。`label` = 分区名（edits/tool_actions）。
+fn render_capped_rows(label: &str, lines: Vec<String>) -> String {
+    if lines.is_empty() {
+        return format!("(no {label} yet)");
+    }
+    let mut lines: Vec<String> = lines
+        .into_iter()
+        .map(|l| truncate_chars(&l, FOLDABLE_ROW_MAX_CHARS))
+        .collect();
+    let total = lines.len();
+    let omitted = lines.len().saturating_sub(FOLDABLE_SECTION_ROW_CAP);
+    if omitted > 0 {
+        lines.drain(0..omitted);
+        lines.insert(
+            0,
+            format!(
+                "[{label}: 共 {total} 条，仅显示最近 {FOLDABLE_SECTION_ROW_CAP} 条（较早条目省略 {omitted} 条）]"
+            ),
+        );
+    }
+    let mut text = lines.join("\n");
+    if text.chars().count() > FOLDABLE_SECTION_MAX_CHARS {
+        let head = if omitted > 0 {
+            format!(
+                "[{label}: 共 {total} 条，仅显示最近 {FOLDABLE_SECTION_ROW_CAP} 条（较早条目省略 {omitted} 条）]"
+            )
+        } else {
+            format!(
+                "[{label}: 共 {total} 条，未省略；明细超 {FOLDABLE_SECTION_MAX_CHARS} 字符上限]"
+            )
+        };
+        text = format!(
+            "{head}\n[{label}: 全部省略（共 {total} 条）；完整内容见 \
+             blackboard_read 分区 {label} 与存档]"
+        );
+    }
+    text
+}
+
+/// 折叠视图总上限：超 `FOLDABLE_SECTION_MAX_CHARS` 时优先保留显式展开目标
+/// 行（`protected` 标记，B2 复审：绝不静默丢失请求行；目标自身超上限时
+/// 显式提示缩小范围），其余内容从最旧整行开始丢弃、保留最近部分；被丢
+/// 内容永远可经展开参数/分区全文回查，不丢失存储。无保护行时行为与 B2
+/// 初版一致（最近优先 + 头行说明）。
+fn cap_fold_view(
+    section: &str,
+    rows_total: usize,
+    segments_total: usize,
+    lines: Vec<String>,
+    protected: &[bool],
+) -> String {
+    let full = lines.join("\n");
+    if full.chars().count() <= FOLDABLE_SECTION_MAX_CHARS {
+        return full;
+    }
+    let has_protected = protected.iter().any(|p| *p);
+    let head = if has_protected {
+        format!(
+            "[{section}: 折叠视图 {rows_total} 条记录 / {segments_total} 个域段；\
+             超 {FOLDABLE_SECTION_MAX_CHARS} 字符上限：优先保留展开目标行，\
+             其余保留最近内容（可用 domain+round_from/round_to 精确展开回查）]"
+        )
+    } else {
+        format!(
+            "[{section}: 折叠视图 {rows_total} 条记录 / {segments_total} 个域段；\
+             最早内容超 {FOLDABLE_SECTION_MAX_CHARS} 字符上限已省略（可用 \
+             domain+round_from/round_to 精确展开回查）]"
+        )
+    };
+    let budget = FOLDABLE_SECTION_MAX_CHARS.saturating_sub(head.chars().count() + 1);
+    let mut kept: Vec<String> = Vec::new();
+    let mut used = 0usize;
+    // 1) 显式展开目标行优先（按组装序，不被“最近优先”裁掉）。
+    if has_protected {
+        let mut dropped_target = 0usize;
+        for (line, prot) in lines.iter().zip(protected) {
+            if !*prot {
+                continue;
+            }
+            let add = line.chars().count() + 1;
+            if used + add > budget {
+                dropped_target += 1;
+                continue;
+            }
+            used += add;
+            kept.push(line.clone());
+        }
+        if dropped_target > 0 {
+            // 目标自身超上限：显式 fail loud（绝不静默空回）。
+            kept.push(format!(
+                "（展开目标另有 {dropped_target} 行因超 {FOLDABLE_SECTION_MAX_CHARS} \
+                 字符视图上限未显示——请缩小轮数范围分批展开）"
+            ));
+            return format!("{head}\n{}", kept.join("\n"));
+        }
+    }
+    // 2) 其余内容从最旧（行首）开始丢：倒序累积最近行，再反转保持时间序。
+    let mut keep_rev: Vec<String> = Vec::new();
+    for (line, prot) in lines.iter().zip(protected).rev() {
+        if *prot {
+            continue;
+        }
+        let add = line.chars().count() + 1;
+        if used + add > budget {
+            break;
+        }
+        used += add;
+        keep_rev.push(line.clone());
+    }
+    keep_rev.reverse();
+    kept.extend(keep_rev);
+    if kept.is_empty() {
+        head
+    } else {
+        format!("{head}\n{}", kept.join("\n"))
+    }
+}
+
+/// 折叠段标注行（共用格式；`preview` 已由各分区组装并截断）。
+fn segment_annotation(
+    kind: SegmentKind,
+    first: u64,
+    last: u64,
+    count: usize,
+    preview: String,
+) -> String {
+    let line = match kind {
+        // R1：pre-stamp 段只给计数 + 时间范围，无轮号区间。
+        SegmentKind::PreStamp => {
+            format!("[域段 pre-stamp（旧行无章） · {count} 条 · {preview}]")
+        }
+        SegmentKind::Domain(d) => format!(
+            "[域段 {} {} · {count} 条 · {preview}]",
+            d.as_str(),
+            round_span(first, last)
+        ),
+    };
+    truncate_chars(&line, FOLD_ANNOTATION_MAX_CHARS)
+}
+
+/// 组装折叠视图行（B2 复审 2026-09-03 统一三段共用的装配逻辑）：
+/// - 标注行落在该段**首个折叠行**的位置（段内“展开前缀 + 折叠尾/中”时
+///   标注随行序后移，保持时间序；B2 初版固定放段首，复审修正）；
+/// - 显式展开目标行（`explicit_target`）标记 protected——超 4K 上限时
+///   优先保留，绝不静默丢失请求行；
+/// - `preview` 由各分区按自身记录语义提供（edits=路径 / tool_actions=
+///   类别计数 / exec=文本预览；pre-stamp=时间范围），`folded_idx` 为段内
+///   折叠行索引（升序，非空）。
+fn fold_view_lines(
+    rows: &[FoldRowMeta],
+    segments: &[SegmentRun],
+    expanded: &[bool],
+    explicit_target: &[bool],
+    preview: impl Fn(SegmentKind, &[usize]) -> String,
+    no_match_note: Option<String>,
+) -> (Vec<String>, Vec<bool>) {
+    let mut lines: Vec<String> = Vec::new();
+    let mut protected: Vec<bool> = Vec::new();
+    for seg in segments {
+        let folded_idx: Vec<usize> = (seg.start..seg.end).filter(|&i| !expanded[i]).collect();
+        let annotation = if folded_idx.is_empty() {
+            None
+        } else {
+            let mut lo = u64::MAX;
+            let mut hi = 0u64;
+            for &i in &folded_idx {
+                if rows[i].round >= 1 {
+                    lo = lo.min(rows[i].round);
+                    hi = hi.max(rows[i].round);
+                }
+            }
+            let (lo, hi) = if lo == u64::MAX {
+                (0u64, 0u64)
+            } else {
+                (lo, hi)
+            };
+            Some(segment_annotation(
+                seg.kind,
+                lo,
+                hi,
+                folded_idx.len(),
+                preview(seg.kind, &folded_idx),
+            ))
+        };
+        let first_folded = folded_idx.first().copied();
+        match first_folded {
+            // 无折叠行：全段展开行直接顺序输出。
+            None => {
+                for i in seg.start..seg.end {
+                    if expanded[i] {
+                        lines.push(rows[i].text.clone());
+                        protected.push(explicit_target[i]);
+                    }
+                }
+            }
+            // 有折叠行：标注落在首个折叠行位置（首折叠行必为折叠态，随后的
+            // 折叠行不再重复输出），展开行按行序穿插。
+            Some(first) => {
+                let ann = annotation.expect("first folded row implies annotation");
+                for i in seg.start..seg.end {
+                    if expanded[i] {
+                        lines.push(rows[i].text.clone());
+                        protected.push(explicit_target[i]);
+                    } else if i == first {
+                        lines.push(ann.clone());
+                        protected.push(false);
+                    }
+                }
+            }
+        }
+    }
+    if let Some(note) = no_match_note {
+        lines.push(note);
+        protected.push(false);
+    }
+    (lines, protected)
+}
+
+/// 显式展开目标行标记：命中 `domain`+轮数范围的行在折叠视图中受 4K 上限
+/// 保护（含已属默认展开子集的行——默认行也可能被“最近优先”cap 裁掉）。
+fn explicit_target_flags(rows: &[FoldRowMeta], expand: Option<&FoldExpand>) -> Vec<bool> {
+    match expand {
+        Some(q) => rows.iter().map(|r| q.matches(r.round, r.domain)).collect(),
+        None => vec![false; rows.len()],
+    }
+}
+
+/// 展开无匹配提示（仅折叠态：域段不存在 / 轮数范围外 / pre-stamp 无轮号）。
+fn no_match_expand_note(expand: Option<&FoldExpand>, matched: bool) -> Option<String> {
+    match expand {
+        Some(q) if !matched => Some(format!(
+            "（展开目标 {} r{}–r{} 无匹配行——域段不存在或轮数范围外；\
+             pre-stamp 旧行无轮号，只能用 since/receipt_id 点读）",
+            q.domain.as_str(),
+            q.round_from,
+            q.round_to
+        )),
+        _ => None,
+    }
+}
+
+/// B2 edits 折叠视图（live；仅折叠态/显式展开时调用）。`records` 为分区
+/// 全量（since 在此过滤，语义同非折叠分支）；pre-stamp 标注带时间范围
+/// （R1），带章段标注带最新两条文件路径（Top-N 路径口径，实现决策登记于
+/// B2 审计）。
+pub fn render_edits_folded(
+    records: &[EditRecord],
+    since: Option<&str>,
+    current_round: u64,
+    current_domain: Domain,
+    params: &FoldParams,
+    expand: Option<&FoldExpand>,
+) -> String {
+    let filter = since_filter(since);
+    let recs: Vec<&EditRecord> = records.iter().filter(|r| filter(&r.timestamp)).collect();
+    if recs.is_empty() {
+        return "(no edit records)".to_string();
+    }
+    let rows: Vec<FoldRowMeta> = recs
+        .iter()
+        .map(|r| FoldRowMeta {
+            text: truncate_chars(
+                &format!(
+                    "{} {}",
+                    r.timestamp,
+                    crate::controller::format_edit_record(r)
+                ),
+                FOLDABLE_ROW_MAX_CHARS,
+            ),
+            round: r.round,
+            domain: r.domain,
+        })
+        .collect();
+    let layout = render_fold::fold_layout(&rows, current_round, current_domain, params);
+    let expanded = match expand {
+        Some(q) => render_fold::merge_expand(&layout, &rows, q),
+        None => layout.expanded.clone(),
+    };
+    let explicit_target = explicit_target_flags(&rows, expand);
+    let no_match_note = no_match_expand_note(expand, explicit_target.iter().any(|b| *b));
+    let (lines, protected) = fold_view_lines(
+        &rows,
+        &layout.segments,
+        &expanded,
+        &explicit_target,
+        |kind, folded_idx| match kind {
+            SegmentKind::PreStamp => {
+                // B2 复审：时间范围只取折叠子集（与折叠计数一致）。
+                let first_ts = recs[folded_idx[0]].timestamp.as_str();
+                let last_ts = recs[folded_idx[folded_idx.len() - 1]].timestamp.as_str();
+                if first_ts.is_empty() && last_ts.is_empty() {
+                    "无时间戳".to_string()
+                } else {
+                    format!("时间 {first_ts}–{last_ts}")
+                }
+            }
+            SegmentKind::Domain(d) => {
+                let mut files: Vec<&str> = Vec::new();
+                for &i in folded_idx.iter().rev() {
+                    let f = recs[i].file.as_str();
+                    if !files.contains(&f) {
+                        files.push(f);
+                        if files.len() == 2 {
+                            break;
+                        }
+                    }
+                }
+                if files.is_empty() {
+                    d.as_str().to_string()
+                } else {
+                    format!("路径 {}", files.join("；"))
+                }
+            }
+        },
+        no_match_note,
+    );
+    cap_fold_view(
+        "edits",
+        recs.len(),
+        layout.segments.len(),
+        lines,
+        &protected,
+    )
+}
+
+/// B2 tool_actions 折叠视图（live）。标注带折叠段内类别计数 Top-2
+/// （read/edit/terminal/retrieval/other，实现决策登记于 B2 审计）。
+pub fn render_tool_actions_folded(
+    records: &[ToolActionRecord],
+    since: Option<&str>,
+    current_round: u64,
+    current_domain: Domain,
+    params: &FoldParams,
+    expand: Option<&FoldExpand>,
+) -> String {
+    let filter = since_filter(since);
+    let recs: Vec<&ToolActionRecord> = records.iter().filter(|r| filter(&r.timestamp)).collect();
+    if recs.is_empty() {
+        return "(no tool actions yet)".to_string();
+    }
+    let rows: Vec<FoldRowMeta> = recs
+        .iter()
+        .map(|r| FoldRowMeta {
+            text: truncate_chars(
+                &format!("{} {}", r.timestamp, r.tool),
+                FOLDABLE_ROW_MAX_CHARS,
+            ),
+            round: r.round,
+            domain: r.domain,
+        })
+        .collect();
+    let layout = render_fold::fold_layout(&rows, current_round, current_domain, params);
+    let expanded = match expand {
+        Some(q) => render_fold::merge_expand(&layout, &rows, q),
+        None => layout.expanded.clone(),
+    };
+    let category_rank = ["read", "edit", "terminal", "retrieval", "other"];
+    let explicit_target = explicit_target_flags(&rows, expand);
+    let no_match_note = no_match_expand_note(expand, explicit_target.iter().any(|b| *b));
+    let (lines, protected) = fold_view_lines(
+        &rows,
+        &layout.segments,
+        &expanded,
+        &explicit_target,
+        |kind, folded_idx| match kind {
+            SegmentKind::PreStamp => {
+                // B2 复审：时间范围只取折叠子集（与折叠计数一致）。
+                let first_ts = recs[folded_idx[0]].timestamp.as_str();
+                let last_ts = recs[folded_idx[folded_idx.len() - 1]].timestamp.as_str();
+                if first_ts.is_empty() && last_ts.is_empty() {
+                    "无时间戳".to_string()
+                } else {
+                    format!("时间 {first_ts}–{last_ts}")
+                }
+            }
+            SegmentKind::Domain(_) => {
+                let mut counts: Vec<(&str, usize)> = Vec::new();
+                for cat in category_rank {
+                    let n = folded_idx
+                        .iter()
+                        .filter(|&&i| recs[i].category == cat)
+                        .count();
+                    if n > 0 {
+                        counts.push((cat, n));
+                    }
+                }
+                // Top-2 类别：按计数降序（stable：同计数保持 read/edit/…
+                // 既有序）。
+                counts.sort_by_key(|(_, n)| std::cmp::Reverse(*n));
+                let top: Vec<String> = counts
+                    .into_iter()
+                    .take(2)
+                    .map(|(c, n)| format!("{c}×{n}"))
+                    .collect();
+                if top.is_empty() {
+                    "无类别计数".to_string()
+                } else {
+                    top.join("，")
+                }
+            }
+        },
+        no_match_note,
+    );
+    cap_fold_view(
+        "tool_actions",
+        recs.len(),
+        layout.segments.len(),
+        lines,
+        &protected,
+    )
+}
+
+/// B2 exec 折叠视图（live；results 后 errors 的存储序即轮序近似，与
+/// 非折叠渲染同链序）。标注带折叠段最新两条文本预览（“摘要预览”口径，
+/// 实现决策登记于 B2 审计；exec 无条目级 since 过滤——pre-stamp 旧行
+/// ts 空，见 B2 边界登记）。
+pub fn render_exec_folded(
+    exec: &ExecSection,
+    current_round: u64,
+    current_domain: Domain,
+    params: &FoldParams,
+    expand: Option<&FoldExpand>,
+) -> String {
+    let recs: Vec<&crate::blackboard::ExecEntry> =
+        exec.results.iter().chain(exec.errors.iter()).collect();
+    if recs.is_empty() {
+        return "(no exec results yet)".to_string();
+    }
+    let rows: Vec<FoldRowMeta> = recs
+        .iter()
+        .map(|e| FoldRowMeta {
+            text: truncate_chars(&e.text, FOLDABLE_ROW_MAX_CHARS),
+            round: e.round,
+            domain: e.domain,
+        })
+        .collect();
+    let layout = render_fold::fold_layout(&rows, current_round, current_domain, params);
+    let expanded = match expand {
+        Some(q) => render_fold::merge_expand(&layout, &rows, q),
+        None => layout.expanded.clone(),
+    };
+    let explicit_target = explicit_target_flags(&rows, expand);
+    let no_match_note = no_match_expand_note(expand, explicit_target.iter().any(|b| *b));
+    let (lines, protected) = fold_view_lines(
+        &rows,
+        &layout.segments,
+        &expanded,
+        &explicit_target,
+        |kind, folded_idx| match kind {
+            SegmentKind::PreStamp => {
+                // B2 复审：时间范围只取折叠子集（与折叠计数一致）。
+                let first_ts = recs[folded_idx[0]].ts.as_str();
+                let last_ts = recs[folded_idx[folded_idx.len() - 1]].ts.as_str();
+                if first_ts.is_empty() && last_ts.is_empty() {
+                    "无时间戳".to_string()
+                } else {
+                    format!("时间 {first_ts}–{last_ts}")
+                }
+            }
+            SegmentKind::Domain(_) => {
+                let mut previews: Vec<String> = Vec::new();
+                for &i in folded_idx.iter().rev() {
+                    let t = rows[i].text.trim();
+                    if !t.is_empty() && !previews.iter().any(|p| p == t) {
+                        previews.push(t.to_string());
+                        if previews.len() == 2 {
+                            break;
+                        }
+                    }
+                }
+                if previews.is_empty() {
+                    "（无文本预览）".to_string()
+                } else {
+                    previews.join("；")
+                }
+            }
+        },
+        no_match_note,
+    );
+    cap_fold_view("exec", recs.len(), layout.segments.len(), lines, &protected)
 }
 
 /// THIN-HARNESS-REDESIGN R2a (2026-08-27, §4.4): 检索分区条目上限（8K
@@ -1942,5 +2512,283 @@ mod tests {
         let json = serde_json::to_string(&snapshot).unwrap();
         assert!(json.contains("\"persisted_at\""), "{json}");
         assert!(!json.contains("\"rotated_at\""), "{json}");
+    }
+
+    // -------------------------------------------------------------------
+    // P2-13 B2 渲染折叠：分区视图组装（epoch.rs 消费 render_fold 纯函数）
+    // -------------------------------------------------------------------
+
+    fn edit(file: &str, ts: &str, round: u64, domain: Option<Domain>) -> EditRecord {
+        EditRecord {
+            file: file.to_string(),
+            old_lines: 1,
+            new_lines: 2,
+            timestamp: ts.to_string(),
+            round,
+            domain,
+        }
+    }
+
+    #[test]
+    fn folded_edits_annotate_older_domain_and_keep_current_rows() {
+        let mut records = Vec::new();
+        for r in 1..=3 {
+            records.push(edit(
+                &format!("old-{r}.rs"),
+                &format!("2026-09-03T00:00:0{r}Z"),
+                r,
+                Some(Domain::Normal),
+            ));
+        }
+        for r in 4..=5 {
+            records.push(edit(
+                &format!("new-{r}.rs"),
+                &format!("2026-09-03T00:00:0{r}Z"),
+                r,
+                Some(Domain::Pressure),
+            ));
+        }
+        let text = render_edits_folded(
+            &records,
+            None,
+            5,
+            Domain::Pressure,
+            &FoldParams {
+                tail_rounds: 3,
+                ..FoldParams::default()
+            },
+            None,
+        );
+        // K=3：最近轮窗口 r3–r5 → pressure r4–r5 与 normal r3 展开；旧
+        // normal r1–r2 折叠为标注（含路径）。
+        assert!(text.contains("[域段 normal r1–r2 · 2 条 · 路径"), "{text}");
+        assert!(text.contains("new-4.rs"), "{text}");
+        assert!(text.contains("new-5.rs"), "{text}");
+        assert!(text.contains("00:00:03Z old-3.rs"), "{text}");
+        assert!(!text.contains("00:00:01Z old-1.rs"), "{text}");
+        assert!(!text.contains("00:00:02Z old-2.rs"), "{text}");
+
+        // 显式展开 normal r1–r2：目标行追加，剩余 r3 仍折叠。
+        let text2 = render_edits_folded(
+            &records,
+            None,
+            5,
+            Domain::Pressure,
+            &FoldParams {
+                tail_rounds: 3,
+                ..FoldParams::default()
+            },
+            Some(&FoldExpand {
+                domain: Domain::Normal,
+                round_from: 1,
+                round_to: 2,
+            }),
+        );
+        assert!(text2.contains("00:00:01Z old-1.rs"), "{text2}");
+        assert!(text2.contains("00:00:02Z old-2.rs"), "{text2}");
+        assert!(!text2.contains("[域段 normal"), "{text2}");
+        assert!(text2.contains("00:00:03Z old-3.rs"), "{text2}");
+    }
+
+    #[test]
+    fn folded_edits_prestamp_annotation_counts_and_time_range() {
+        let records = vec![
+            edit("a.rs", "2026-09-03T00:00:00Z", 0, None),
+            edit("b.rs", "2026-09-03T00:00:05Z", 0, None),
+            edit("c.rs", "2026-09-03T00:00:06Z", 1, Some(Domain::Start)),
+        ];
+        let text = render_edits_folded(
+            &records,
+            None,
+            1,
+            Domain::Start,
+            &FoldParams::default(),
+            None,
+        );
+        assert!(
+            text.contains("[域段 pre-stamp（旧行无章） · 2 条 · 时间"),
+            "{text}"
+        );
+        assert!(
+            text.contains("2026-09-03T00:00:00Z–2026-09-03T00:00:05Z"),
+            "{text}"
+        );
+        assert!(!text.contains("a.rs"), "{text}");
+    }
+
+    #[test]
+    fn folded_tool_actions_show_category_counts_in_annotation() {
+        let mut records = Vec::new();
+        for r in 1..=3 {
+            records.push(ToolActionRecord {
+                category: "read".into(),
+                tool: format!("read_file r{r}"),
+                timestamp: format!("2026-09-03T00:00:0{r}Z"),
+                round: r,
+                domain: Some(Domain::Normal),
+            });
+        }
+        records.push(ToolActionRecord {
+            category: "edit".into(),
+            tool: "search_replace r4".into(),
+            timestamp: "2026-09-03T00:00:04Z".into(),
+            round: 4,
+            domain: Some(Domain::Pressure),
+        });
+        let text = render_tool_actions_folded(
+            &records,
+            None,
+            4,
+            Domain::Pressure,
+            &FoldParams {
+                tail_rounds: 3,
+                ..FoldParams::default()
+            },
+            None,
+        );
+        assert!(text.contains("[域段 normal r1 · 1 条 · read×1"), "{text}");
+        assert!(text.contains("search_replace r4"), "{text}");
+        assert!(text.contains("read_file r2"), "{text}");
+        assert!(text.contains("read_file r3"), "{text}");
+        assert!(!text.contains("read_file r1"), "{text}");
+    }
+
+    #[test]
+    fn folded_exec_view_handles_prestamp_and_domain_segments() {
+        use crate::blackboard::ExecEntry;
+        let mut exec = ExecSection::default();
+        exec.results.push(ExecEntry::from("legacy-old"));
+        exec.results.push(ExecEntry::from("legacy-new"));
+        for r in 1..=2 {
+            exec.results.push(ExecEntry::stamped(
+                format!("stamped-result-r{r}"),
+                r,
+                Domain::Start,
+                format!("2026-09-03T00:00:0{r}Z"),
+            ));
+        }
+        let text = render_exec_folded(&exec, 2, Domain::Start, &FoldParams::default(), None);
+        // pre-stamp 旧行（无 ts）折叠为计数 + 无时间戳标注；Start 段展开。
+        assert!(
+            text.contains("[域段 pre-stamp（旧行无章） · 2 条 · 无时间戳]"),
+            "{text}"
+        );
+        assert!(text.contains("stamped-result-r1"), "{text}");
+        assert!(text.contains("stamped-result-r2"), "{text}");
+        assert!(!text.contains("legacy-old"), "{text}");
+    }
+
+    #[test]
+    fn folded_expand_outside_data_surfaces_no_match_note() {
+        let records = vec![
+            edit("a.rs", "2026-09-03T00:00:01Z", 1, Some(Domain::Normal)),
+            edit("b.rs", "2026-09-03T00:00:02Z", 2, Some(Domain::Normal)),
+        ];
+        let text = render_edits_folded(
+            &records,
+            None,
+            2,
+            Domain::Normal,
+            &FoldParams::default(),
+            Some(&FoldExpand {
+                domain: Domain::Stuck,
+                round_from: 10,
+                round_to: 20,
+            }),
+        );
+        assert!(text.contains("展开目标 stuck r10–r20 无匹配行"), "{text}");
+    }
+
+    /// B2 复审（2026-09-03，cap 保护）：折叠视图超 4K 字符上限时，显式展开
+    /// 目标行优先保留——目标虽是最旧行也不会被“最近优先”cap 静默裁掉。
+    #[test]
+    fn folded_exec_expand_target_survives_cap_overflow() {
+        use crate::blackboard::ExecEntry;
+        let mut exec = ExecSection::default();
+        exec.results.push(ExecEntry::stamped(
+            format!("OLD-A-{}", "a".repeat(150)),
+            1,
+            Domain::Normal,
+            "2026-09-03T00:00:01Z".to_string(),
+        ));
+        exec.results.push(ExecEntry::stamped(
+            format!("OLD-B-{}", "b".repeat(150)),
+            2,
+            Domain::Normal,
+            "2026-09-03T00:00:02Z".to_string(),
+        ));
+        for r in 3..=40 {
+            exec.results.push(ExecEntry::stamped(
+                format!("recent-{r}-{}", "r".repeat(180)),
+                r,
+                Domain::Pressure,
+                format!("2026-09-03T00:{r:02}:00Z"),
+            ));
+        }
+        let text = render_exec_folded(
+            &exec,
+            40,
+            Domain::Pressure,
+            &FoldParams::default(),
+            Some(&FoldExpand {
+                domain: Domain::Normal,
+                round_from: 1,
+                round_to: 2,
+            }),
+        );
+        // 默认视图的 pressure 行尾远超 4K；若按“最近优先”cap，OLD-A/OLD-B
+        // 是最旧行会被裁掉——protected 语义保证其可见。
+        assert!(text.contains("OLD-A-"), "{text}");
+        assert!(text.contains("OLD-B-"), "{text}");
+        assert!(text.contains("recent-40-"), "{text}");
+        assert!(text.contains("优先保留展开目标行"), "{text}");
+    }
+
+    /// B2 复审（2026-09-03，标注定位）：段内部分展开（显式展开老前缀 +
+    /// K 轮窗口展开尾部）时，标注行落在首个折叠行位置（r4–r8 前），不再
+    /// 固定压在段首，保持行序可读。
+    #[test]
+    fn folded_edits_partial_expand_places_annotation_at_first_folded_row() {
+        let mut records = Vec::new();
+        for r in 1..=12 {
+            records.push(edit(
+                &format!("n{r}.rs"),
+                &format!("2026-09-03T00:00:{r:02}Z"),
+                r,
+                Some(Domain::Normal),
+            ));
+        }
+        for r in 13..=18 {
+            records.push(edit(
+                &format!("p{r}.rs"),
+                &format!("2026-09-03T00:00:{r:02}Z"),
+                r,
+                Some(Domain::Pressure),
+            ));
+        }
+        let text = render_edits_folded(
+            &records,
+            None,
+            18,
+            Domain::Pressure,
+            &FoldParams::default(),
+            Some(&FoldExpand {
+                domain: Domain::Normal,
+                round_from: 1,
+                round_to: 3,
+            }),
+        );
+        // 展开子集 = normal r1–r3（显式）+ r9–r12（K 窗口 r9–r18）+ pressure
+        // r13–r18（当前段）；normal r4–r8 为折叠中部 → 标注范围 r4–r8。
+        assert!(text.contains("[域段 normal r4–r8 · 5 条 · 路径"), "{text}");
+        let pos = |needle: &str| {
+            text.find(needle)
+                .unwrap_or_else(|| panic!("{needle} missing"))
+        };
+        // 严格行序断言：r1、r2、r3 行都在标注之前，r9 行在标注之后。
+        assert!(pos("00:00:01Z") < pos("[域段 normal r4–r8"), "{text}");
+        assert!(pos("00:00:02Z") < pos("[域段 normal r4–r8"), "{text}");
+        assert!(pos("00:00:03Z") < pos("[域段 normal r4–r8"), "{text}");
+        assert!(pos("[域段 normal r4–r8") < pos("00:00:09Z"), "{text}");
     }
 }

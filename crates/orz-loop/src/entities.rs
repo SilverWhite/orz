@@ -131,10 +131,18 @@ impl EntityRegistry {
     }
 
     /// B1（2026-09-03）：恢复会话黑板快照时归零版本计数——分区版本只随
-    /// run 存活，跨 prompt 恢复的既有实体内容由恢复入口统一计「1 次
-    /// 变化」（Blackboard::restore_conversation_snapshot 负责 bump）。
+    /// run 存活；恢复入口在 reset 后经 [`Self::bump_revision`] 统一计
+    /// 「1 次变化」（Blackboard::restore_conversation_snapshot 负责）。
     pub(crate) fn reset_revision(&mut self) {
         self.revision = 0;
+    }
+
+    /// B1 复审（2026-09-03，P2-13 全面审查处理）：恢复会话快照后由恢复
+    /// 入口调用——实体分区与其他恢复分区一致地计「1 次变化」（restore =
+    /// 可见内容整体替换，与 restore_epoch_snapshot 的 bump 语义对齐；
+    /// 跨 prompt 不延续上 run 的累积计数）。
+    pub(crate) fn bump_revision(&mut self) {
+        self.revision = self.revision.saturating_add(1);
     }
 
     fn insert(&mut self, state: EntityState) {

@@ -1375,6 +1375,193 @@ impl AgentLoopController {
                 },
                 None => None,
             };
+            // B2 渲染折叠（2026-09-03，P2-13 / 设计 §9.3/R2）：可选展开参数
+            // `domain` + `round_from`/`round_to`——显式展开 = 折叠态 + 目标
+            // 段行。解析层负责 all-or-none / 合法域名 / 轮数范围；互斥与
+            // 分区能力守卫在此显式报错（fail loud，绝不静默忽略）。
+            let expand = match tc.arguments.as_object() {
+                Some(map) => match crate::render_fold::parse_fold_expand(map) {
+                    Ok(q) => q,
+                    Err(msg) => {
+                        let content = format!(
+                            "{msg}（参数: domain/round_from/round_to；省略全部读取\
+                             默认折叠视图）"
+                        );
+                        let mut completed = serde_json::json!({
+                            "tool": tc.name,
+                            "call_id": tc.call_id,
+                            "exit_code": 1,
+                            "section": section,
+                            "error": content,
+                        });
+                        stamp_direct(&mut completed);
+                        writer.record(EventType::ToolCompleted, completed).await?;
+                        self.push_tool_action_stamped(
+                            ToolDispatcher::action_category(&tc.name).to_string(),
+                            tc.name.clone(),
+                            chrono_utc_now(),
+                        );
+                        let result = ToolResult {
+                            output: content,
+                            exit_code: Some(1),
+                            output_encoding: None,
+                            structured: None,
+                            ..Default::default()
+                        };
+                        messages.push(Message {
+                            role: Role::Tool,
+                            content: result.output.clone(),
+                            tool_call_id: Some(tc.call_id.clone()),
+                            tool_calls: Vec::new(),
+                            reasoning_content: None,
+                        });
+                        return Ok((result, None));
+                    }
+                },
+                None => None,
+            };
+            if expand.is_some() && receipt_id.is_some() {
+                let content = "blackboard_read expand（domain/round_from/round_to）与 receipt_id \
+                     互斥——receipt_id 是按 id 点读单条 receipt；省略 receipt_id 后用 \
+                     domain+轮数范围展开"
+                    .to_string();
+                let mut completed = serde_json::json!({
+                    "tool": tc.name,
+                    "call_id": tc.call_id,
+                    "exit_code": 1,
+                    "section": section,
+                    "error": content,
+                });
+                stamp_direct(&mut completed);
+                writer.record(EventType::ToolCompleted, completed).await?;
+                self.push_tool_action_stamped(
+                    ToolDispatcher::action_category(&tc.name).to_string(),
+                    tc.name.clone(),
+                    chrono_utc_now(),
+                );
+                let result = ToolResult {
+                    output: content,
+                    exit_code: Some(1),
+                    output_encoding: None,
+                    structured: None,
+                    ..Default::default()
+                };
+                messages.push(Message {
+                    role: Role::Tool,
+                    content: result.output.clone(),
+                    tool_call_id: Some(tc.call_id.clone()),
+                    tool_calls: Vec::new(),
+                    reasoning_content: None,
+                });
+                return Ok((result, None));
+            }
+            if expand.is_some() && since.is_some() {
+                let content = "blackboard_read expand（domain/round_from/round_to）与 \
+                     since_timestamp 互斥——since 只用于按时间过滤（含 pre-stamp 旧行）；\
+                     省略 since 后用 domain+轮数范围展开"
+                    .to_string();
+                let mut completed = serde_json::json!({
+                    "tool": tc.name,
+                    "call_id": tc.call_id,
+                    "exit_code": 1,
+                    "section": section,
+                    "error": content,
+                });
+                stamp_direct(&mut completed);
+                writer.record(EventType::ToolCompleted, completed).await?;
+                self.push_tool_action_stamped(
+                    ToolDispatcher::action_category(&tc.name).to_string(),
+                    tc.name.clone(),
+                    chrono_utc_now(),
+                );
+                let result = ToolResult {
+                    output: content,
+                    exit_code: Some(1),
+                    output_encoding: None,
+                    structured: None,
+                    ..Default::default()
+                };
+                messages.push(Message {
+                    role: Role::Tool,
+                    content: result.output.clone(),
+                    tool_call_id: Some(tc.call_id.clone()),
+                    tool_calls: Vec::new(),
+                    reasoning_content: None,
+                });
+                return Ok((result, None));
+            }
+            if expand.is_some() && epoch.is_some() {
+                let content = "blackboard_read expand（domain/round_from/round_to）与 epoch 互斥——\
+                     归档快照是历史视图，无 live LIF 上下文；省略 epoch 读取 live 分区后\
+                     用 domain+轮数范围展开"
+                    .to_string();
+                let mut completed = serde_json::json!({
+                    "tool": tc.name,
+                    "call_id": tc.call_id,
+                    "exit_code": 1,
+                    "section": section,
+                    "error": content,
+                });
+                stamp_direct(&mut completed);
+                writer.record(EventType::ToolCompleted, completed).await?;
+                self.push_tool_action_stamped(
+                    ToolDispatcher::action_category(&tc.name).to_string(),
+                    tc.name.clone(),
+                    chrono_utc_now(),
+                );
+                let result = ToolResult {
+                    output: content,
+                    exit_code: Some(1),
+                    output_encoding: None,
+                    structured: None,
+                    ..Default::default()
+                };
+                messages.push(Message {
+                    role: Role::Tool,
+                    content: result.output.clone(),
+                    tool_call_id: Some(tc.call_id.clone()),
+                    tool_calls: Vec::new(),
+                    reasoning_content: None,
+                });
+                return Ok((result, None));
+            }
+            if expand.is_some() && !matches!(section.as_str(), "exec" | "edits" | "tool_actions") {
+                let content = format!(
+                    "blackboard_read expand（domain/round_from/round_to）仅与 \
+                     exec|edits|tool_actions 分区组合有效（带 (round, domain) \
+                     章的累积行分区）；当前 section={section} 不支持——\
+                     pre-stamp 旧行用 since/receipt_id 展开"
+                );
+                let mut completed = serde_json::json!({
+                    "tool": tc.name,
+                    "call_id": tc.call_id,
+                    "exit_code": 1,
+                    "section": section,
+                    "error": content,
+                });
+                stamp_direct(&mut completed);
+                writer.record(EventType::ToolCompleted, completed).await?;
+                self.push_tool_action_stamped(
+                    ToolDispatcher::action_category(&tc.name).to_string(),
+                    tc.name.clone(),
+                    chrono_utc_now(),
+                );
+                let result = ToolResult {
+                    output: content,
+                    exit_code: Some(1),
+                    output_encoding: None,
+                    structured: None,
+                    ..Default::default()
+                };
+                messages.push(Message {
+                    role: Role::Tool,
+                    content: result.output.clone(),
+                    tool_call_id: Some(tc.call_id.clone()),
+                    tool_calls: Vec::new(),
+                    reasoning_content: None,
+                });
+                return Ok((result, None));
+            }
             // PUSH→PULL (2026-08-21, CONTEXT_SCAFFOLDING_PULL_REDESIGN §4
             // 方案 A): `section=session` 是 live 会话面（预算剩余 + 状态行），
             // 由 controller 直接渲染、不进 epoch 归档；其余分区走黑板渲染。
@@ -1566,7 +1753,13 @@ impl AgentLoopController {
                     }
                 }
             } else {
-                self.render_blackboard_section(&section, since, epoch, receipt_id.as_deref())
+                self.render_blackboard_section_fold(
+                    &section,
+                    since,
+                    epoch,
+                    receipt_id.as_deref(),
+                    expand.as_ref(),
+                )
             };
             // PULL 自描述 (2026-08-31, P2-11 第 1 项 / 设计 §3-§4): 成功的
             // live 读取挂「自上次读取以来」增量头并推进本次分区游标；归档

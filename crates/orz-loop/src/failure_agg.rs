@@ -27,6 +27,15 @@
 //!   继续累计属未来切片。
 //! - 段轮区间 = 该目标在该域的失败事件首末轮（非域整体驻留区间）；同域
 //!   隔空合并保留时间轴近似（同域并入当前段，非连续同域各自成段）。
+//!
+//! > B1 取代注（2026-09-03，P2-13 / R5 conversation-relative 轴 + 会话级
+//! > 续载）：上条已知边界的「run 作用域 / ACP 每 prompt 重建黑板 / 恢复
+//! > 同 epoch 继续累计属未来切片」在 ACP 路径已被 B1 关闭——黑板（含本
+//! > 分区）随会话快照跨 prompt 保留，LIF 轴原点 = `session_started_at`，
+//! > 写入的 `t` 与决策轮号为会话相对且跨 prompt 单调累计，行可跨 prompt
+//! > 续算（P2-12 登记的「未来切片」随 B1 实现落地）。该边界现仅适用于
+//! > CLI 单 run 与 `--plan`/epoch 轮换路径（run-relative、随轮换重置）。
+//! > 处置登记：仓库根 `docs/audits/P2-13_B1_REVIEW_HANDLING_2026-09-03.md`。
 
 use orz_assurance::lif::Domain;
 use serde::{Deserialize, Serialize};

@@ -991,12 +991,17 @@ impl AgentLoopController {
         self
     }
 
-    /// THIN-HARNESS-REDESIGN R2a 审查处理 (P3-1, 2026-08-27)：恢复时重建
-    /// 检索分区——PULL 模式下子代理全文不进主对话，跨 run 后分区是模型
-    /// 唯一可追溯视图；ACP 会话重启后黑板为全新内存态，由 sidecar 快照
-    /// 携带的 internal_ret / external_ret 经本 builder 灌回。`None` =
-    /// 该会话尚无对应分区（保持空分区）。单写者纪律：灌回发生在 run 外
-    /// （会话恢复边界），run 内仍由派发路径独占写入。
+    /// THIN-HARNESS-REDESIGN R2a 审查处理 (P3-1, 2026-08-27) + B1 复审
+    /// （2026-09-03）：恢复时重建检索分区——PULL 模式下子代理全文不进主
+    /// 对话，分区是模型跨 run/prompt 可追溯视图；由 activation 侧车携带的
+    /// internal_ret / external_ret 经本 builder 灌回。
+    /// compare-and-set（M3 同源口径）：内容与当前分区一致时不动（不产生
+    /// 徽章噪声），变化才覆盖并 bump——使「会话黑板快照恢复」与「activation
+    /// 分区覆盖」在同内容时保持 restore 的 +1 徽章、不同内容（如失败 run
+    /// 后 activation 携带更新的派发结果）时如实计一次变化。
+    /// `None` = 该会话尚无对应分区（保持分区现状：先行的会话黑板快照内容
+    /// 作为回退）。单写者纪律：灌回发生在 run 外（会话恢复边界），run 内
+    /// 仍由派发路径独占写入。
     pub fn with_retrieval_partitions(
         self,
         internal: Option<InternalRetSection>,
@@ -1004,11 +1009,15 @@ impl AgentLoopController {
     ) -> Self {
         if internal.is_some() || external.is_some() {
             let mut w = self.blackboard.write();
-            if let Some(section) = internal {
+            if let Some(section) = internal
+                && w.internal_ret != section
+            {
                 w.internal_ret = section;
                 w.bump_retrieval("internal_ret");
             }
-            if let Some(section) = external {
+            if let Some(section) = external
+                && w.external_ret != section
+            {
                 w.external_ret = section;
                 w.bump_retrieval("external_ret");
             }
@@ -1020,8 +1029,11 @@ impl AgentLoopController {
     /// prompt 结束时持久化的会话黑板 live 快照整体灌回（`None` = 全新
     /// 会话，保持默认空板）。快照已含会话边界清理（动作栏注册/订单槽
     /// 与依赖图已剥离；见 [`Blackboard::conversation_snapshot`]）。
-    /// 调用顺序：本方法应放在既有检索分区灌回之后（快照同时携带检索
-    /// 分区，内容与 activation 侧车同源；快照存在时以其为准）。
+    /// 调用顺序：本方法应在 [`Self::with_retrieval_partitions`] **之前**
+    /// 调用——检索分区归属 activation 侧车生命周期（派发全量覆盖、随
+    /// activation 持久化并跨失败 run 延续既有语义），会话黑板恢复后以其
+    /// 为准覆盖；快照携带的分区仅在 activation 无分区时作为回退（见 B1
+    /// 复审 2026-09-03：失败 run 后 activation 可能携带更新的派发结果）。
     pub fn with_live_blackboard(self, snapshot: Option<Blackboard>) -> Self {
         if let Some(snapshot) = snapshot {
             let mut w = self.blackboard.write();
@@ -1546,6 +1558,7 @@ impl AgentLoopController {
     /// a bare string compare silently dropped same-instant records when the
     /// model passed 'Z' or truncated precision. Unparseable values fall
     /// back to no filtering (read everything), never nothing.
+    #[cfg_attr(not(test), allow(dead_code))] // 测试/兼容四参入口；生产走 _fold
     pub(crate) fn render_blackboard_section(
         &self,
         section: &str,
@@ -1553,6 +1566,48 @@ impl AgentLoopController {
         epoch: Option<u64>,
         receipt_id: Option<&str>,
     ) -> String {
+        self.render_blackboard_section_fold(section, since, epoch, receipt_id, None)
+    }
+
+    /// B2 渲染折叠（2026-09-03，P2-13 / 设计 §9/§12）：在
+    /// [`Self::render_blackboard_section`] 之上叠加 `domain`+`round_from`/
+    /// `round_to` 显式展开参数（R2）与折叠态 live 渲染。
+    ///
+    /// - 可折叠分区 = exec / edits / tool_actions（带 (round, domain) 章的
+    ///   累积行；actions/plan/entities/deps/retrieval/session/temporal
+    ///   不折叠）；其余分区携带展开参数 = 显式文本错误（fail loud）。
+    /// - `expand` 与 `epoch`（归档快照读）互斥：归档路径无 live LIF 上下文，
+    ///   组合 = 显式文本错误（调用方 host_exec 已先拒绝，本方法兜底）。
+    /// - 折叠态只在 live 读取上生效：分区 live 字符 ≥ T 或整板 live 字节
+    ///   ≥ W 时进入折叠视图（默认展开子集 + 标注行）；未达阈值且无展开
+    ///   参数时输出与 B1 逐字节一致（存储零改写、无事件）。
+    #[allow(clippy::too_many_arguments)] // 分区渲染签名 = section/since/epoch/
+    // receipt_id + B2 展开参数（与 run_turn 同纪律）
+    pub(crate) fn render_blackboard_section_fold(
+        &self,
+        section: &str,
+        since: Option<&str>,
+        epoch: Option<u64>,
+        receipt_id: Option<&str>,
+        expand: Option<&crate::render_fold::FoldExpand>,
+    ) -> String {
+        if let Some(epoch) = epoch
+            && expand.is_some()
+        {
+            return format!(
+                "blackboard_read expand（domain/round_from/round_to）与 epoch 归档\
+                 读互斥——归档快照是历史视图，无 live LIF 上下文；省略 epoch \
+                 参数读取 live 分区并用展开参数回查（epoch={epoch}）"
+            );
+        }
+        if expand.is_some() && !matches!(section, "exec" | "edits" | "tool_actions") {
+            return format!(
+                "blackboard_read expand（domain/round_from/round_to）仅与 \
+                 exec|edits|tool_actions 分区组合有效（带 (round, domain) 章的\
+                 累积行分区）；当前 section={section} 不支持——pre-stamp 旧行\
+                 用 since/receipt_id 展开"
+            );
+        }
         // THIN-HARNESS-REDESIGN R2a (2026-08-27, §4.4): 检索分区按需拉取
         // （PUSH → PULL）。live-only——检索结果从不进 epoch 快照（全文
         // 走 journal + retrieval-results 存档），带 epoch 读取 = 显式报错
@@ -1657,6 +1712,65 @@ impl AgentLoopController {
             self.sync_console_registrations();
         }
         let bb = self.blackboard.read();
+        // B2 渲染折叠（2026-09-03，P2-13 / 设计 §9.2.4/§9.3 + B2 复审）：
+        // live 折叠态只作用于带 (round, domain) 章的累积行分区（exec /
+        // edits / tool_actions）。触发 = 分区 live 字符 ≥ T，或整板 live
+        // 紧凑 JSON 字节 ≥ W（OR，§11.1 v0.7 存储口径；T 已满足时短路，
+        // 不再序列化整板——B2 复审 P3）。
+        // - 显式展开参数只在折叠态下生效：未达阈值 = 普通渲染，目标行已在
+        //   普通视图内（B2 复审口径 #5，不额外裁剪、不报错）；
+        // - receipt_id + 可折叠分区维持 render_section 显式报错（receipt_id
+        //   仅 actions），折叠分支不得静默吞掉该组合（B2 复审 P2-1）；
+        // - 归档 epoch 读 / 其余分区保持逐字节不变（存储零改写、无事件）。
+        if epoch.is_none()
+            && receipt_id.is_none()
+            && matches!(section, "exec" | "edits" | "tool_actions")
+        {
+            let params = crate::render_fold::FoldParams::from_env();
+            let partition_chars = crate::epoch::live_foldable_partition_chars(section, &bb);
+            let fold_state = if partition_chars >= params.partition_threshold_chars {
+                true
+            } else {
+                crate::render_fold::fold_triggered(
+                    partition_chars,
+                    bb.live_compact_bytes(),
+                    &params,
+                )
+            };
+            if fold_state {
+                // 读路径锁序（B2 复审 P3 登记）：此处持有黑板读锁后再取 LIF
+                // 锁（blackboard_stamp）；写路径先取章（LIF 锁内取、函数返回
+                // 即释放）再独立获取黑板写锁，无嵌套持有。若未来引入同时
+                // 持有两锁的写面，须保持同序，避免交叉死锁。
+                let (current_round, current_domain) = self.blackboard_stamp();
+                return match section {
+                    "edits" => crate::epoch::render_edits_folded(
+                        &bb.edits,
+                        since,
+                        current_round,
+                        current_domain,
+                        &params,
+                        expand,
+                    ),
+                    "tool_actions" => crate::epoch::render_tool_actions_folded(
+                        &bb.tool_actions,
+                        since,
+                        current_round,
+                        current_domain,
+                        &params,
+                        expand,
+                    ),
+                    "exec" => crate::epoch::render_exec_folded(
+                        &bb.exec,
+                        current_round,
+                        current_domain,
+                        &params,
+                        expand,
+                    ),
+                    _ => unreachable!("foldable sections only"),
+                };
+            }
+        }
         crate::epoch::render_section(
             &bb.plan,
             &bb.edits,
@@ -2503,13 +2617,22 @@ impl AgentLoopController {
                      board hides — only valid with `section=actions`; combine \
                      with `epoch` to read archived receipts; \
                      `since_timestamp` is ignored when `receipt_id` is \
-                     present. Call this when you need to recall what changed \
-                     or what you did earlier — it costs nothing when you do \
-                     not call it. Every live response starts with an optional \
-                     `[黑板增量]` line listing per-partition change counts \
-                     since their last read (and the latest temporal domain \
-                     migration) — read a partition to clear its unread badge; \
-                     omit `epoch` for the live view."
+                     present. B2 折叠视图 (P2-13): 当分区很大（exec/edits/\
+                     tool_actions 达到阈值）时，live 读取默认只展开 \
+                     “当前域段 + 最近 K 轮 + 最近 20% 行”，更早内容折叠为 \
+                     `[域段 normal r1–r30 · N 条 · 摘要]` 标注行；要精读某段\
+                     历史，给 `domain`（start|normal|pressure|low_progress|\
+                     stuck）+ `round_from`/`round_to`（含边界、相等=单轮）——\
+                     三者必须同时给，且与 `receipt_id`/`since_timestamp`/\
+                     `epoch` 互斥（显式报错）；pre-stamp 旧行（无轮号）只能\
+                     用 since/receipt_id 展开。Call this when you need to \
+                     recall what changed or what you did earlier — it costs \
+                     nothing when you do not call it. Every live response \
+                     starts with an optional `[黑板增量]` line listing \
+                     per-partition change counts since their last read (and \
+                     the latest temporal domain migration) — read a \
+                     partition to clear its unread badge; omit `epoch` for \
+                     the live view."
                     .to_string(),
                 parameters: serde_json::json!({
                     "type": "object",
@@ -2557,6 +2680,27 @@ impl AgentLoopController {
                             "type": "string",
                             "minLength": 1,
                             "description": "Optional single-receipt point-read: an order_id from the actions results board (e.g. ORD-000012). Returns that receipt's full response/error content, bounded at 8000 chars. Only valid with section=actions; combine with epoch to point-read an archived receipt; since_timestamp is ignored when present.",
+                        },
+                        "domain": {
+                            "type": "string",
+                            "enum": [
+                                "start",
+                                "normal",
+                                "pressure",
+                                "low_progress",
+                                "stuck",
+                            ],
+                            "description": "B2 fold expansion target domain (exec/edits/tool_actions). Must be given together with round_from/round_to; mutually exclusive with receipt_id, since_timestamp and epoch.",
+                        },
+                        "round_from": {
+                            "type": "integer",
+                            "minimum": 1,
+                            "description": "B2 fold expansion round lower bound (inclusive; session-relative). Must be given together with domain and round_to.",
+                        },
+                        "round_to": {
+                            "type": "integer",
+                            "minimum": 1,
+                            "description": "B2 fold expansion round upper bound (inclusive; equal to round_from reads one round). Must be given together with domain and round_from.",
                         },
                     },
                     "required": ["section"],
@@ -4741,6 +4885,95 @@ mod tests {
         assert_eq!(temporal.spikes().len(), spikes_before);
     }
 
+    /// P2-13 B1 复审（2026-09-03）：恢复顺序语义——先会话黑板快照、后
+    /// activation 检索分区覆盖（compare-and-set）。同内容覆盖不额外计变化
+    /// （保持 restore 的 +1 徽章）；不同内容（失败 run 后 activation 携带
+    /// 更新的派发结果）覆盖并如实计一次变化，未触及分区保持 restore 徽章。
+    #[test]
+    fn retrieval_partitions_overlay_after_conversation_restore() {
+        use crate::blackboard::{
+            Blackboard, DispatchStamp, ExternalRetSection, InternalRetSection,
+        };
+
+        let make_internal = |tag: &str, round: u64| InternalRetSection {
+            project_docs: vec![format!("{tag}.md")],
+            source_ledger: vec![format!("SRC-001 {tag}.md")],
+            response: Some(format!("检索完成 {tag}")),
+            stamp: Some(DispatchStamp {
+                round,
+                domain: orz_assurance::lif::Domain::Normal,
+                timestamp: "2026-09-03T00:00:00Z".to_string(),
+            }),
+        };
+        let make_external = |tag: &str, round: u64| ExternalRetSection {
+            web_sources: vec![format!("https://example.com/{tag}")],
+            source_ledger: vec![format!("SRC-002 {tag}")],
+            response: Some(format!("网页检索完成 {tag}")),
+            stamp: Some(DispatchStamp {
+                round,
+                domain: orz_assurance::lif::Domain::Normal,
+                timestamp: "2026-09-03T00:00:00Z".to_string(),
+            }),
+        };
+
+        // 会话黑板快照携带 pre-run 分区（最后成功 prompt 的派发结果），
+        // activation 侧车同源 → 覆盖不产生额外徽章（保持 restore 的 +1）。
+        let bb = Blackboard {
+            internal_ret: make_internal("pre-run", 1),
+            external_ret: make_external("pre-run", 1),
+            ..Default::default()
+        };
+        let controller = AgentLoopController::with_gateway(Arc::new(FakeProvider::new(Vec::new())))
+            .with_live_blackboard(Some(bb))
+            .with_retrieval_partitions(
+                Some(make_internal("pre-run", 1)),
+                Some(make_external("pre-run", 1)),
+            );
+        {
+            let w = controller.blackboard().read();
+            assert_eq!(w.internal_ret.project_docs, vec!["pre-run.md".to_string()]);
+            assert_eq!(w.internal_ret.stamp.as_ref().map(|s| s.round), Some(1));
+            assert_eq!(
+                w.external_ret.web_sources,
+                vec!["https://example.com/pre-run".to_string()]
+            );
+            assert_eq!(w.external_ret.stamp.as_ref().map(|s| s.round), Some(1));
+            assert_eq!(
+                w.revisions.internal_ret, 1,
+                "identical overlay adds no badge"
+            );
+            assert_eq!(
+                w.revisions.external_ret, 1,
+                "identical overlay adds no badge"
+            );
+        }
+
+        // 失败 run 后 activation 携带更新派发结果（round 2）→ 覆盖 + 计一次
+        // 变化；未提供的 external 分区保持快照内容与 restore 徽章。
+        let bb = Blackboard {
+            internal_ret: make_internal("pre-run", 1),
+            ..Default::default()
+        };
+        let controller = AgentLoopController::with_gateway(Arc::new(FakeProvider::new(Vec::new())))
+            .with_live_blackboard(Some(bb))
+            .with_retrieval_partitions(Some(make_internal("post-failed-run", 2)), None);
+        {
+            let w = controller.blackboard().read();
+            assert_eq!(
+                w.internal_ret.project_docs,
+                vec!["post-failed-run.md".to_string()],
+                "activation section wins over the pre-run snapshot"
+            );
+            assert_eq!(w.internal_ret.stamp.as_ref().map(|s| s.round), Some(2));
+            assert_eq!(w.revisions.internal_ret, 2, "restore(+1) then overlay(+1)");
+            assert_eq!(
+                w.revisions.external_ret, 1,
+                "untouched partition keeps restore badge"
+            );
+            assert!(w.external_ret.web_sources.is_empty());
+        }
+    }
+
     /// PULL 自描述（2026-08-31，P2-11 第 1 项 / 设计 §3-§4）：增量头只列
     /// delta>0 的分区；读取某分区只推进该分区游标（未读徽章保留到对应
     /// 分区被读）；无增量时零噪音不加头。
@@ -5018,5 +5251,94 @@ mod tests {
             "receipt error must be render-error shaped: {receipt_err}"
         );
         assert!(receipt_err.contains("receipt_id"), "{receipt_err}");
+    }
+
+    /// P2-13 B2 复审（2026-09-03，P2-1）：折叠触发态（exec 分区 ≥ T）下
+    /// receipt_id + 可折叠分区不再被折叠分支静默吞掉——仍走 render_section
+    /// 显式报错（receipt_id 仅 actions），fail-loud 纪律与未触发时一致。
+    #[test]
+    fn fold_state_receipt_id_on_foldable_section_still_errors_explicitly() {
+        let controller = AgentLoopController::with_gateway(Arc::new(FakeProvider::new(Vec::new())));
+        {
+            let mut bb = controller.blackboard().write();
+            for r in 1..=300 {
+                bb.exec.results.push(crate::blackboard::ExecEntry::stamped(
+                    format!("r{r}-{}", "x".repeat(220)),
+                    r,
+                    Domain::Normal,
+                    format!("2026-09-03T00:{:02}:00Z", r % 60),
+                ));
+            }
+        }
+        let text =
+            controller.render_blackboard_section_fold("exec", None, None, Some("ORD-1"), None);
+        assert!(
+            AgentLoopController::is_blackboard_render_error(&text),
+            "receipt_id 组合必须保持 render-error 形状: {text}"
+        );
+        assert!(
+            text.contains("receipt_id 仅与 section=actions 组合有效"),
+            "{text}"
+        );
+        assert!(!text.contains("[exec: 折叠视图"), "{text}");
+    }
+
+    /// P2-13 B2 复审（2026-09-03，P2-2）：未达折叠阈值（T/W）时携带显式
+    /// 展开参数 = 普通渲染（目标行已在普通视图内，不额外裁剪、不报错），
+    /// 输出与不带参数的普通读取逐字节一致。
+    #[test]
+    fn expand_below_threshold_matches_ordinary_read() {
+        let controller = AgentLoopController::with_gateway(Arc::new(FakeProvider::new(Vec::new())));
+        controller.restore_lif_session(
+            &TemporalSessionSnapshot {
+                round: 18,
+                has_success: true,
+                current_domain: Domain::Pressure,
+                entry_round: 13,
+                spikes: Vec::new(),
+            },
+            Some(AgentLoopController::now_epoch_secs()),
+        );
+        {
+            let mut bb = controller.blackboard().write();
+            for r in 1..=12 {
+                bb.edits.push(crate::blackboard::EditRecord {
+                    file: format!("n{r}.rs"),
+                    old_lines: 1,
+                    new_lines: 1,
+                    timestamp: format!("2026-09-03T00:00:{r:02}Z"),
+                    round: r,
+                    domain: Some(Domain::Normal),
+                });
+            }
+            for r in 13..=18 {
+                bb.edits.push(crate::blackboard::EditRecord {
+                    file: format!("p{r}.rs"),
+                    old_lines: 1,
+                    new_lines: 1,
+                    timestamp: format!("2026-09-03T00:00:{r:02}Z"),
+                    round: r,
+                    domain: Some(Domain::Pressure),
+                });
+            }
+        }
+        let plain = controller.render_blackboard_section("edits", None, None, None);
+        let expanded = controller.render_blackboard_section_fold(
+            "edits",
+            None,
+            None,
+            None,
+            Some(&crate::render_fold::FoldExpand {
+                domain: Domain::Normal,
+                round_from: 1,
+                round_to: 2,
+            }),
+        );
+        assert_eq!(expanded, plain, "未达阈值 + expand = 普通读取，不裁剪");
+        assert!(plain.contains("n1.rs"), "{plain}");
+        assert!(
+            plain.contains("n8.rs"),
+            "r8 属 K 窗口外旧行，普通视图全量可见"
+        );
     }
 }

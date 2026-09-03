@@ -36,6 +36,7 @@ pub mod orientation;
 pub(crate) mod planning;
 pub mod prompt;
 pub mod relay;
+pub(crate) mod render_fold;
 mod retrieval;
 pub mod summary;
 pub mod tool;

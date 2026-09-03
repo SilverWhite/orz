@@ -1168,20 +1168,22 @@ impl AcpServer {
                 activation_snapshot.pending_transition_authority.clone(),
             )
             .with_activation_snapshot(Some(&activation_snapshot_json))
-            // THIN-HARNESS-REDESIGN R2a 审查处理 (P3-1, 2026-08-27)：恢复
-            // 时重建检索分区——PULL 模式下全文不进主对话，重启后分区是
-            // 模型唯一可追溯视图；sidecar 快照携带的 internal_ret /
-            // external_ret 灌回全新黑板的对应分区（None = 无历史）。
-            .with_retrieval_partitions(
-                activation_snapshot.internal_ret.clone(),
-                activation_snapshot.external_ret.clone(),
-            )
             // P2-13 B1 (2026-09-03)：会话级 live 黑板续载——上个成功
             // prompt 的整板快照灌回（含 exec/edits/tool_actions/actions
             // receipts/failure_agg/检索分区/entities；动作栏注册与订单槽、
-            // 依赖图在快照生成时已剥离）。排在检索分区灌回之后——快照
-            // 与 activation 侧车同源，快照存在时以其为准（含分区章）。
-            .with_live_blackboard(restored_blackboard);
+            // 依赖图在快照生成时已剥离）。先恢复整板（快照携带的检索
+            // 分区副本在 activation 无分区时作为回退）。
+            .with_live_blackboard(restored_blackboard)
+            // THIN-HARNESS-REDESIGN R2a 审查处理 (P3-1, 2026-08-27) + B1
+            // 复审（2026-09-03）：检索分区归属 activation 侧车生命周期
+            // （派发全量覆盖、run 结束无条件下沉、跨失败 run 延续既有
+            // 语义），因此在会话黑板恢复后以其为准覆盖——compare-and-set
+            // 保证与快照同内容时保持 restore 的 +1 徽章、不额外计变化；
+            // `None` 保持快照内容（回退）。
+            .with_retrieval_partitions(
+                activation_snapshot.internal_ret.clone(),
+                activation_snapshot.external_ret.clone(),
+            );
         // P2-10 F2 §3.5 (I4) + P2-13 B1 (R5 conversation-relative 轴)：
         // 续接 LIF 会话轴——优先用精确快照（轮号 + 域机器 + spike 时间
         // 线）；legacy 侧车只有 temporal_spikes 时退回既有近似恢复。
