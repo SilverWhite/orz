@@ -118,6 +118,17 @@ pub fn format_bash_completion(
     let command = task.display_command.as_deref().unwrap_or(&task.command);
     let duration_secs = task.duration_secs();
     let status_str = match task.signal.as_deref() {
+        // TER T1.5 (2026-09-04): idle-kill 提醒文本——T0.2 夹具同一口径。
+        // 说明：snapshot 不带实际 idle 时长，文案按 resident 默认 300s
+        // 渲染；非默认阈值下的精确时长由审计/日志侧追踪字段承载。
+        Some(crate::computer::local::terminal::IDLE_KILL_SIGNAL) => {
+            format!(
+                "idle-killed ({})",
+                crate::computer::local::terminal::idle_kill_reason(
+                    crate::computer::local::terminal::DEFAULT_IDLE_KILL_TIMEOUT,
+                )
+            )
+        }
         Some(sig) => format!("terminated by signal {sig}"),
         None => {
             let exit_code_str = task
@@ -810,6 +821,38 @@ mod tests {
         assert!(msg.contains("exit code: 0"));
         assert!(msg.contains("cargo test"));
         assert!(msg.contains("get_command_or_subagent_output(\"abc-123\")"));
+    }
+    #[test]
+    fn format_bash_completion_idle_killed_lists_reason() {
+        // TER T1.5 (2026-09-04): idle-kill 完成提醒必须自描述杀因，而不是
+        // 泛化的 “terminated by signal idle_killed”。
+        let task = TaskSnapshot {
+            task_id: "abc-idle".into(),
+            command: "sleep 999".into(),
+            display_command: None,
+            cwd: String::new(),
+            start_time: std::time::SystemTime::now(),
+            end_time: Some(std::time::SystemTime::now()),
+            output: String::new(),
+            output_file: std::path::PathBuf::new(),
+            truncated: false,
+            exit_code: None,
+            signal: Some(crate::computer::local::terminal::IDLE_KILL_SIGNAL.to_string()),
+            completed: true,
+            kind: Default::default(),
+            block_waited: false,
+            explicitly_killed: false,
+            owner_session_id: None,
+            description: None,
+            is_backgrounded: false,
+        };
+        let msg = format_bash_completion(&task, Some("get_command_or_subagent_output"), None);
+        assert!(msg.contains("idle-killed"), "{msg}");
+        assert!(
+            msg.contains("no output growth or CPU activity for 300s"),
+            "idle-kill reason must be self-describing: {msg}"
+        );
+        assert!(!msg.contains("terminated by signal idle_killed"), "{msg}");
     }
     #[test]
     fn format_monitor_completion_exit_zero() {

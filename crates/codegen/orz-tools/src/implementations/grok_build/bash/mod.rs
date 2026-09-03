@@ -403,6 +403,10 @@ pub(crate) enum KillReason {
     Timeout,
     /// Background task exceeded `BACKGROUND_MAX_RUNTIME`.
     MaxRuntime,
+    /// TER T1.5 (2026-09-04): background task idle-killed — 连续
+    /// `idle_kill_timeout` 无输出增长且 CPU 不增（terminal actor 写入
+    /// `idle_killed`）。
+    IdleKilled,
     /// User-initiated cancel via the `kill_task` tool.
     Cancelled,
     /// Actor shutdown abandoned the process.
@@ -419,6 +423,7 @@ impl std::str::FromStr for KillReason {
         match s {
             "timeout" => Ok(Self::Timeout),
             "max_runtime" => Ok(Self::MaxRuntime),
+            "idle_killed" => Ok(Self::IdleKilled),
             "cancelled" => Ok(Self::Cancelled),
             "killed" => Ok(Self::Killed),
             s => s
@@ -435,6 +440,7 @@ impl std::fmt::Display for KillReason {
         match self {
             Self::Timeout => f.write_str("timeout"),
             Self::MaxRuntime => f.write_str("max_runtime"),
+            Self::IdleKilled => f.write_str("idle_killed"),
             Self::Cancelled => f.write_str("cancelled"),
             Self::Killed => f.write_str("killed"),
             Self::Signal(n) => write!(f, "signal {n}"),
@@ -4180,7 +4186,14 @@ mod tests {
     #[test]
     fn default_prompt_killed_reasons() {
         // Every synthetic harness-kill signal renders as `exit: killed (reason)`.
-        for reason in ["timeout", "max_runtime", "cancelled", "killed", "signal 15"] {
+        for reason in [
+            "timeout",
+            "max_runtime",
+            "idle_killed",
+            "cancelled",
+            "killed",
+            "signal 15",
+        ] {
             let mut bash = make_bash_output(-1, "partial\n");
             bash.signal = Some(reason.to_string());
             bash.output_for_prompt =

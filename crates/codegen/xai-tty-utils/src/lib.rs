@@ -479,6 +479,113 @@ impl ProcessGroup {
         }
     }
 
+    /// TER T1.5 (2026-09-04)：进程树 CPU 累计时间（用户 + 内核），供终端
+    /// idle+CPU 兜底采样——「无输出增长且 CPU 不增」才判 idle。
+    ///
+    /// - Windows：Job Object 记账（`QueryInformationJobObject` Basic
+    ///   Accounting），覆盖 Job 内全部后代进程。
+    /// - Linux：扫描 `/proc/*/stat` 汇总同 pgrp 进程的 utime+stime（进程
+    ///   组树级）。
+    /// - 其它平台：CPU 记账不可用返回 `Ok(None)`（调用方按「CPU 未知即
+    ///   不判 idle」处理，宁可不杀也不误杀无输出的计算任务）。
+    pub fn cpu_time(&self) -> io::Result<Option<std::time::Duration>> {
+        #[cfg(windows)]
+        {
+            self.windows_job_cpu_time().map(Some)
+        }
+        #[cfg(target_os = "linux")]
+        {
+            let Some(pgid) = self.pgid() else {
+                return Ok(None);
+            };
+            Self::linux_pgid_cpu_time(pgid).map(Some)
+        }
+        #[cfg(not(any(windows, target_os = "linux")))]
+        {
+            Ok(None)
+        }
+    }
+
+    /// Unix 进程组 id（`None` 直到 `attach_pid` 登记后才有值）。
+    #[cfg(unix)]
+    pub fn pgid(&self) -> Option<u32> {
+        self.leader.map(|id| id.get())
+    }
+
+    #[cfg(windows)]
+    fn windows_job_cpu_time(&self) -> io::Result<std::time::Duration> {
+        use std::mem::{size_of, zeroed};
+        use windows::Win32::System::JobObjects::{
+            JOBOBJECT_BASIC_ACCOUNTING_INFORMATION, JobObjectBasicAccountingInformation,
+            QueryInformationJobObject,
+        };
+
+        let mut info: JOBOBJECT_BASIC_ACCOUNTING_INFORMATION = unsafe { zeroed() };
+        let result = unsafe {
+            QueryInformationJobObject(
+                Some(self.job),
+                JobObjectBasicAccountingInformation,
+                (&mut info as *mut JOBOBJECT_BASIC_ACCOUNTING_INFORMATION).cast(),
+                size_of::<JOBOBJECT_BASIC_ACCOUNTING_INFORMATION>() as u32,
+                None,
+            )
+        };
+        result.map_err(|e| io::Error::other(format!("QueryInformationJobObject: {e}")))?;
+
+        let user = hundred_ns_to_duration(info.TotalUserTime);
+        let kernel = hundred_ns_to_duration(info.TotalKernelTime);
+        Ok(user + kernel)
+    }
+
+    /// Linux：按进程组（`/proc/*/stat` 第 5 字段 pgrp）汇总 utime+stime。
+    #[cfg(target_os = "linux")]
+    fn linux_pgid_cpu_time(pgid: u32) -> io::Result<std::time::Duration> {
+        let clk_tck = unsafe { libc::sysconf(libc::_SC_CLK_TCK) };
+        if clk_tck <= 0 {
+            return Ok(std::time::Duration::ZERO);
+        }
+        let mut ticks: u64 = 0;
+        let proc_dir = std::fs::read_dir("/proc")?;
+        for entry in proc_dir.flatten() {
+            let Some(name) = entry.file_name().to_str() else {
+                continue;
+            };
+            let Ok(pid) = name.parse::<u32>() else {
+                continue;
+            };
+            let Ok(stat) = std::fs::read_to_string(format!("/proc/{pid}/stat")) else {
+                continue;
+            };
+            // `comm` 可能含空格/括号：以最后一个 `)` 为界，其后按空白切。
+            let Some(close_paren) = stat.rfind(')') else {
+                continue;
+            };
+            let fields: Vec<&str> = stat[close_paren + 1..].split_whitespace().collect();
+            // 0-based（`)` 之后）：[0]=state(3), [1]=ppid(4), [2]=pgrp(5),
+            // …, [11]=utime(14), [12]=stime(15)。
+            if fields.len() <= 12 {
+                continue;
+            }
+            let Ok(pgrp) = fields[2].parse::<u32>() else {
+                continue;
+            };
+            if pgrp != pgid {
+                continue;
+            }
+            let Ok(utime) = fields[11].parse::<u64>() else {
+                continue;
+            };
+            let Ok(stime) = fields[12].parse::<u64>() else {
+                continue;
+            };
+            ticks = ticks.saturating_add(utime.saturating_add(stime));
+        }
+        let micros_per_tick = 1_000_000u64 / (clk_tck as u64).max(1);
+        Ok(std::time::Duration::from_micros(
+            ticks.saturating_mul(micros_per_tick),
+        ))
+    }
+
     #[cfg(unix)]
     fn killpg_unix(&self, signal: nix::sys::signal::Signal) -> io::Result<()> {
         // `leader` is `None` until a child is enrolled, and a `ProcessGroupId`
@@ -504,6 +611,14 @@ impl Drop for ProcessGroup {
     fn drop(&mut self) {
         let _ = unsafe { windows::Win32::Foundation::CloseHandle(self.job) };
     }
+}
+
+/// Convert a Windows 100ns 计数字段（`windows` 0.61 中 Job 记账时间以
+/// `i64` 表达）到 [`Duration`]。
+#[cfg(windows)]
+fn hundred_ns_to_duration(hundred_ns: i64) -> std::time::Duration {
+    let hundred_ns = hundred_ns.max(0) as u64;
+    std::time::Duration::from_nanos(hundred_ns.saturating_mul(100))
 }
 
 // ---------------------------------------------------------------------------

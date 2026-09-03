@@ -67,6 +67,35 @@ fn foreground_block_budget_from_env() -> Duration {
         .unwrap_or(FOREGROUND_BLOCK_BUDGET)
 }
 
+/// TER T1.5 (2026-09-04)：idle+CPU 兜底——后台任务连续多久「无输出字节
+/// 增长且 CPU 时间不增」即被机械 kill。默认 300s（5min，设计稿 §3.1 /
+/// §7 定案）。Env override：`GROK_IDLE_KILL_TIMEOUT_MS`（0 = 禁用兜底）。
+pub(crate) const DEFAULT_IDLE_KILL_TIMEOUT: Duration = Duration::from_secs(300);
+
+fn idle_kill_timeout_from_env() -> Duration {
+    std::env::var("GROK_IDLE_KILL_TIMEOUT_MS")
+        .ok()
+        .and_then(|s| s.parse::<u64>().ok())
+        .map(Duration::from_millis)
+        .unwrap_or(DEFAULT_IDLE_KILL_TIMEOUT)
+}
+
+/// CPU 采样节流：每进程每秒最多一次进程树 CPU 读数（/proc 扫描 / Job
+/// 记账都有成本）；输出字节检查每 tick 都做（廉价）。
+const IDLE_CPU_SAMPLE_INTERVAL: Duration = Duration::from_secs(1);
+
+/// TER T1.5 idle-kill 的信号串——提醒/事件层据此呈现
+/// `status=idle_killed` 与 `exit: killed (idle_killed)`。
+pub(crate) const IDLE_KILL_SIGNAL: &str = "idle_killed";
+
+/// idle-kill 原因文本（与 T0.2 夹具口径一致：默认 300s）。
+pub(crate) fn idle_kill_reason(idle_timeout: Duration) -> String {
+    format!(
+        "no output growth or CPU activity for {}s",
+        idle_timeout.as_secs().max(1)
+    )
+}
+
 /// Max bytes a command's output file may reach before the actor kills it — the
 /// size analogue of [`BACKGROUND_MAX_RUNTIME`], stopping an unbounded writer
 /// (`yes`, a runaway log) from filling the disk. Env override:
@@ -99,6 +128,82 @@ fn notification_interval() -> Duration {
 pub struct ExitStatus {
     pub exit_code: Option<i32>,
     pub signal: Option<String>,
+}
+
+/// TER T1.5 (2026-09-04)：单进程 idle+CPU 采样器——判定「连续
+/// `idle_timeout` 无输出字节增长且 CPU 时间不增」即该 kill。CPU 记账
+/// 不可用的平台（`cpu_time()` 返回 `None`）按「CPU 未知 = 不判 idle」
+/// 处理，宁可不杀也不误杀无输出的计算任务。
+struct ActivitySampler {
+    /// 连续无活跃多久触发 idle-kill；`Duration::ZERO` = 禁用该兜底。
+    idle_timeout: Duration,
+    last_bytes: usize,
+    last_cpu_micros: Option<u64>,
+    /// CPU 记账是否可用（首个 CPU 采样后确定）。
+    cpu_accounting_known: bool,
+    next_cpu_sample_at: Instant,
+    last_sample_at: Option<Instant>,
+    idle_since: Option<Instant>,
+}
+
+impl ActivitySampler {
+    fn new(idle_timeout: Duration) -> Self {
+        Self {
+            idle_timeout,
+            last_bytes: 0,
+            last_cpu_micros: None,
+            cpu_accounting_known: false,
+            next_cpu_sample_at: Instant::now() + IDLE_CPU_SAMPLE_INTERVAL,
+            last_sample_at: None,
+            idle_since: None,
+        }
+    }
+
+    /// CPU 采样节流到点？调用方只在到点时读进程树 CPU（避免每 tick
+    /// 扫 /proc / 查 Job 记账）。
+    fn cpu_sample_due(&self, now: Instant) -> bool {
+        now >= self.next_cpu_sample_at
+    }
+
+    /// 喂一次采样。`cpu_micros` 为进程树累计 CPU（微秒），仅在采样节流
+    /// 到点时可 `Some`；其余 tick 传 `None`（沿用上次值，不判 CPU 活跃）。
+    /// 返回 `true` 表示 idle 超时已到、应机械 kill。
+    fn tick(&mut self, now: Instant, total_bytes: usize, cpu_micros: Option<u64>) -> bool {
+        if self.idle_timeout.is_zero() {
+            return false;
+        }
+        let bytes_active = total_bytes != self.last_bytes;
+        self.last_bytes = total_bytes;
+
+        let mut cpu_active = false;
+        if now >= self.next_cpu_sample_at {
+            self.next_cpu_sample_at = now + IDLE_CPU_SAMPLE_INTERVAL;
+            if let Some(cpu) = cpu_micros {
+                cpu_active = self.last_cpu_micros.map(|prev| cpu > prev).unwrap_or(false);
+                self.last_cpu_micros = Some(cpu);
+                self.cpu_accounting_known = true;
+            }
+        }
+
+        if self.last_sample_at.is_none() {
+            // 首个样本只建基线；进程刚起跑，不得因「还没产出」误杀。
+            self.last_sample_at = Some(now);
+            return false;
+        }
+
+        let active = bytes_active || cpu_active;
+        if active {
+            self.idle_since = None;
+            return false;
+        }
+        if !self.cpu_accounting_known {
+            // CPU 记账不可用：无法区分「真 idle」与「无输出计算」，不杀。
+            return false;
+        }
+
+        let idle_since = *self.idle_since.get_or_insert(now);
+        now.duration_since(idle_since) >= self.idle_timeout
+    }
 }
 
 /// Commands that can be sent to the LocalTerminalActor
@@ -259,6 +364,8 @@ struct ProcessState {
     timeout: Duration,
     /// When auto_bg_on_timeout: max FG block before auto-bg (per-request or backend default).
     foreground_block_budget: Duration,
+    /// TER T1.5 (2026-09-04): idle+CPU 活跃采样器（后台任务兜底）。
+    activity: ActivitySampler,
     start_time: Instant,
     /// Path to output file (always written to)
     output_file: PathBuf,
@@ -522,6 +629,10 @@ struct LocalTerminalActor {
     /// See [`FOREGROUND_BLOCK_BUDGET`].
     foreground_block_budget: Duration,
 
+    /// TER T1.5: idle+CPU 兜底阈值（actor 级，测试可缩短；
+    /// `Duration::ZERO` = 禁用）。
+    idle_kill_timeout: Duration,
+
     /// Per-command output-file size cap (on the actor so tests can shrink it).
     /// See [`MAX_OUTPUT_FILE_BYTES`].
     output_file_cap: u64,
@@ -575,6 +686,7 @@ impl LocalTerminalActor {
         search_shadows: SearchShadowConfig,
         completed_task_ttl: Duration,
         foreground_block_budget: Duration,
+        idle_kill_timeout: Duration,
         output_file_cap: u64,
         scope: crate::util::ProcessScope,
         session_scope: Option<crate::util::ProcessScope>,
@@ -591,6 +703,7 @@ impl LocalTerminalActor {
             completed_task_snapshots: HashMap::new(),
             completed_task_ttl,
             foreground_block_budget,
+            idle_kill_timeout,
             output_file_cap,
             _cgroup_guard: cgroup_guard,
             memory_monitor,
@@ -1109,6 +1222,7 @@ impl LocalTerminalActor {
             foreground_block_budget: request
                 .foreground_block_budget
                 .unwrap_or(self.foreground_block_budget),
+            activity: ActivitySampler::new(self.idle_kill_timeout),
             start_time: Instant::now(),
             output_file: request.output_file,
             file_handle,
@@ -1242,6 +1356,7 @@ impl LocalTerminalActor {
             foreground_block_budget: request
                 .foreground_block_budget
                 .unwrap_or(self.foreground_block_budget),
+            activity: ActivitySampler::new(self.idle_kill_timeout),
             start_time: Instant::now(),
             output_file: request.output_file.clone(),
             file_handle,
@@ -1348,6 +1463,32 @@ impl LocalTerminalActor {
             .push(CompletionWaiter { reply, deadline });
 
         // Return immediately — actor loop resumes processing other commands.
+    }
+
+    /// TER T1.5 (2026-09-04): 机械 idle-kill——后台任务连续 `idle_timeout`
+    /// 无输出增长且 CPU 不增。SIGTERM 起手（poll 循环按既有路径升级
+    /// SIGKILL），exit status 记 `idle_killed`，使完成通知/提醒/事件链
+    /// 自描述（T0.2 schema：status=idle_killed + reason）。
+    async fn idle_kill_background_task(&mut self, terminal_id: &str) {
+        let Some(process) = self.processes.get_mut(terminal_id) else {
+            return;
+        };
+        let idle_timeout = process.activity.idle_timeout;
+        tracing::warn!(
+            task_id = terminal_id,
+            idle_timeout = ?idle_timeout,
+            reason = %idle_kill_reason(idle_timeout),
+            "Idle background task killed (no output growth or CPU activity)"
+        );
+        send_sigterm_to_group(process);
+        process.exit_status = Some(ExitStatus {
+            exit_code: None,
+            signal: Some(IDLE_KILL_SIGNAL.to_string()),
+        });
+        process.end_wall_time = Some(std::time::SystemTime::now());
+        process.flush_and_truncate_output_file().await;
+        let result = Ok(process.to_result());
+        process.notify_waiters(result);
     }
 
     /// Poll all processes for output and completion
@@ -1880,6 +2021,40 @@ impl LocalTerminalActor {
 
         // Check if process exited (both streams at EOF or process exited)
         let process_done = stdout_eof && stderr_eof;
+
+        // TER T1.5 (2026-09-04): idle+CPU 兜底——只对「管道仍开且已后台化」
+        // 的运行中任务采样：输出字节每 tick 比较（廉价），CPU 累计按 1s
+        // 节流读取进程树；连续 `idle_kill_timeout` 无两者增长 → 机械 kill
+        // （signal=idle_killed，完成通知/提醒/事件链据此自描述）。计算密集
+        // 但无输出的任务（编译/训练/渲染内核）有 CPU 增长，不误杀；CPU
+        // 记账不可用平台按「不判 idle」处理。
+        // `try_wait` 先排除「本 tick 已自然退出」的任务，避免把自然退出
+        // 误记成 idle-kill。
+        if !process_done
+            && process.exit_status.is_none()
+            && process.bg_status.is_backgrounded()
+            && process
+                .child
+                .try_wait()
+                .map(|s| s.is_none())
+                .unwrap_or(false)
+        {
+            let now = Instant::now();
+            let cpu_micros = if process.activity.cpu_sample_due(now) {
+                process
+                    .process_group
+                    .as_ref()
+                    .and_then(|g| g.cpu_time().ok().flatten())
+                    .map(|d| d.as_micros() as u64)
+            } else {
+                None
+            };
+            if process.activity.tick(now, process.total_bytes, cpu_micros) {
+                self.idle_kill_background_task(terminal_id).await;
+                return;
+            }
+        }
+
         match process.child.try_wait() {
             Ok(Some(status)) => {
                 // Process exited — drain any remaining stdout/stderr that arrived
@@ -2220,6 +2395,7 @@ struct LocalTerminalConfig {
     search_shadows: SearchShadowConfig,
     shell_env_policy: Option<crate::util::ShellEnvironmentPolicy>,
     process_scope: Option<crate::util::ProcessScope>,
+    idle_kill_timeout: Duration,
 }
 
 impl Default for LocalTerminalConfig {
@@ -2232,6 +2408,7 @@ impl Default for LocalTerminalConfig {
             search_shadows: SearchShadowConfig::default(),
             shell_env_policy: None,
             process_scope: None,
+            idle_kill_timeout: idle_kill_timeout_from_env(),
         }
     }
 }
@@ -2332,6 +2509,7 @@ impl LocalTerminalBackend {
             search_shadows,
             COMPLETED_TASK_TTL,
             FOREGROUND_BLOCK_BUDGET,
+            DEFAULT_IDLE_KILL_TIMEOUT,
             MAX_OUTPUT_FILE_BYTES,
             scope,
             session_scope,
@@ -2350,6 +2528,7 @@ impl LocalTerminalBackend {
             SearchShadowConfig::default(),
             ttl,
             FOREGROUND_BLOCK_BUDGET,
+            DEFAULT_IDLE_KILL_TIMEOUT,
             MAX_OUTPUT_FILE_BYTES,
             crate::util::global_process_scope().clone(),
             None,
@@ -2368,6 +2547,26 @@ impl LocalTerminalBackend {
             SearchShadowConfig::default(),
             COMPLETED_TASK_TTL,
             budget,
+            DEFAULT_IDLE_KILL_TIMEOUT,
+            MAX_OUTPUT_FILE_BYTES,
+            crate::util::global_process_scope().clone(),
+            None,
+            None,
+        )
+    }
+
+    /// Backend with a custom idle+CPU kill timeout (test-only; TER T1.5).
+    #[cfg(test)]
+    pub(crate) fn new_with_idle_kill_timeout(idle_kill_timeout: Duration) -> Self {
+        Self::new_with_ttl(
+            None,
+            false,
+            false,
+            true,
+            SearchShadowConfig::default(),
+            COMPLETED_TASK_TTL,
+            FOREGROUND_BLOCK_BUDGET,
+            idle_kill_timeout,
             MAX_OUTPUT_FILE_BYTES,
             crate::util::global_process_scope().clone(),
             None,
@@ -2386,6 +2585,7 @@ impl LocalTerminalBackend {
             SearchShadowConfig::default(),
             COMPLETED_TASK_TTL,
             FOREGROUND_BLOCK_BUDGET,
+            DEFAULT_IDLE_KILL_TIMEOUT,
             output_file_cap,
             crate::util::global_process_scope().clone(),
             None,
@@ -2402,6 +2602,7 @@ impl LocalTerminalBackend {
             search_shadows,
             shell_env_policy,
             process_scope,
+            idle_kill_timeout,
         } = config;
         Self::new_with_ttl(
             memory_config,
@@ -2411,6 +2612,7 @@ impl LocalTerminalBackend {
             search_shadows,
             COMPLETED_TASK_TTL,
             foreground_block_budget_from_env(),
+            idle_kill_timeout,
             output_file_cap_from_env(),
             crate::util::global_process_scope().clone(),
             process_scope,
@@ -2426,6 +2628,7 @@ impl LocalTerminalBackend {
         search_shadows: SearchShadowConfig,
         completed_task_ttl: Duration,
         foreground_block_budget: Duration,
+        idle_kill_timeout: Duration,
         output_file_cap: u64,
         scope: crate::util::ProcessScope,
         session_scope: Option<crate::util::ProcessScope>,
@@ -2454,6 +2657,7 @@ impl LocalTerminalBackend {
                 search_shadows,
                 completed_task_ttl,
                 foreground_block_budget,
+                idle_kill_timeout,
                 output_file_cap,
                 scope,
                 session_scope,
@@ -3611,6 +3815,191 @@ mod tests {
         assert!(
             matches!(outcome, KillOutcome::Killed | KillOutcome::AlreadyExited),
             "kill after auto-bg should succeed: {outcome:?}"
+        );
+        let _ = tokio::fs::remove_file(&output_file).await;
+    }
+
+    // ── TER T1.5 (2026-09-04): idle+CPU 兜底 ──────────────────────────
+
+    /// Sampler 数学核对：首个样本只建基线；CPU 记账已知且无输出/CPU 增长
+    /// 连续满 idle_timeout 才返回 kill。
+    #[test]
+    fn activity_sampler_kills_only_after_continuous_quiet() {
+        let mut s = ActivitySampler::new(Duration::from_millis(1500));
+        let t0 = Instant::now();
+        // 基线样本（进程刚起跑，不判 idle）。
+        assert!(!s.tick(t0, 0, None));
+        // CPU 记账到点：0 增长 → 进入 idle 计时。
+        let t1 = t0 + Duration::from_millis(1000);
+        assert!(!s.tick(t1, 0, Some(0)));
+        // 距 idle 起点不足阈值 → 不杀。
+        let t2 = t1 + Duration::from_millis(1000);
+        assert!(!s.tick(t2, 0, Some(0)));
+        // 满阈值且仍无输出/CPU → kill。
+        let t3 = t1 + Duration::from_millis(1600);
+        assert!(s.tick(t3, 0, Some(0)));
+    }
+
+    /// 输出字节增长会重置 idle 计时——「慢输出但活着」不误杀。
+    #[test]
+    fn activity_sampler_output_growth_resets_idle() {
+        let mut s = ActivitySampler::new(Duration::from_millis(1500));
+        let t0 = Instant::now();
+        s.tick(t0, 0, None);
+        s.tick(t0 + Duration::from_millis(1000), 0, Some(0));
+        // 3s 后输出增长 → 活跃，idle 计时复位。
+        let t2 = t0 + Duration::from_millis(4000);
+        assert!(!s.tick(t2, 4096, Some(0)));
+        // 复位后再安静：先进入 idle 计时，越过后一拍才 kill。
+        let t3 = t2 + Duration::from_millis(1000);
+        assert!(!s.tick(t3, 4096, Some(0)));
+        let t4 = t2 + Duration::from_millis(4000);
+        assert!(s.tick(t4, 4096, Some(0)));
+    }
+
+    /// CPU 增长但无输出（计算密集）→ 不杀。
+    #[test]
+    fn activity_sampler_cpu_growth_prevents_idle_kill() {
+        let mut s = ActivitySampler::new(Duration::from_millis(1500));
+        let t0 = Instant::now();
+        s.tick(t0, 0, None);
+        let mut cpu = 0u64;
+        let mut now = t0;
+        for _ in 0..10 {
+            now += Duration::from_millis(1000);
+            cpu += 250_000; // 每样本 +0.25s CPU（模拟无输出计算）
+            assert!(
+                !s.tick(now, 0, Some(cpu)),
+                "busy no-output must not be killed"
+            );
+        }
+    }
+
+    /// CPU 记账不可用 → 宁可不杀（平台兜底，不误杀无输出计算）。
+    #[test]
+    fn activity_sampler_unknown_cpu_never_kills() {
+        let mut s = ActivitySampler::new(Duration::from_millis(1500));
+        let t0 = Instant::now();
+        s.tick(t0, 0, None);
+        for i in 1..20 {
+            assert!(
+                !s.tick(t0 + Duration::from_millis(i * 1000), 0, None),
+                "CPU 未知时不得判 idle"
+            );
+        }
+    }
+
+    /// `Duration::ZERO` = 禁用 idle 兜底。
+    #[test]
+    fn activity_sampler_zero_timeout_disables() {
+        let mut s = ActivitySampler::new(Duration::ZERO);
+        let t0 = Instant::now();
+        for i in 0..20 {
+            assert!(!s.tick(t0 + Duration::from_millis(i * 1000), 0, Some(0)));
+        }
+    }
+
+    /// 真 idle 后台任务（`sleep`，无输出无 CPU）在阈值后被杀，快照带
+    /// `signal=idle_killed`。
+    #[tokio::test]
+    async fn test_idle_background_task_killed_after_quiet_period() {
+        let backend = LocalTerminalBackend::new_with_idle_kill_timeout(Duration::from_millis(1500));
+        let output_file = std::env::temp_dir().join(format!(
+            "terminal-test-idle-kill-{}.out",
+            std::process::id()
+        ));
+
+        let request = TerminalRunRequest {
+            command: "sleep 60".to_string(),
+            working_directory: PathBuf::from("/tmp"),
+            env: HashMap::new(),
+            timeout: Duration::from_secs(3600),
+            output_byte_limit: 10000,
+            output_file: output_file.clone(),
+            notification_handle: ToolNotificationHandle::noop(),
+            tool_call_id: "test-idle-kill".to_string(),
+            display_command: None,
+            auto_background_on_timeout: false,
+            foreground_block_budget: None,
+            kind: TaskKind::Bash,
+            owner_session_id: None,
+            description: None,
+        };
+        let handle = backend
+            .run_background(request)
+            .await
+            .expect("spawn bg task");
+
+        let mut snap = None;
+        for _ in 0..75 {
+            tokio::time::sleep(Duration::from_millis(200)).await;
+            if let Some(s) = backend.get_task(&handle.task_id).await {
+                if s.completed {
+                    snap = Some(s);
+                    break;
+                }
+            }
+        }
+        let snap = snap.expect("idle task should be killed within the poll window");
+        assert_eq!(
+            snap.signal.as_deref(),
+            Some(IDLE_KILL_SIGNAL),
+            "idle-killed snapshot must carry idle_killed signal: {snap:?}"
+        );
+        let _ = tokio::fs::remove_file(&output_file).await;
+    }
+
+    /// 无输出但 CPU 忙的后台任务不得被误杀（验收点：不误杀「无输出计算」）。
+    #[tokio::test]
+    async fn test_busy_no_output_task_not_idle_killed() {
+        let backend = LocalTerminalBackend::new_with_idle_kill_timeout(Duration::from_millis(1500));
+        let output_file =
+            std::env::temp_dir().join(format!("terminal-test-busy-{}.out", std::process::id()));
+
+        let request = TerminalRunRequest {
+            // 无输出但持续占 CPU 的忙循环：Windows 用 PowerShell 语法，
+            // Linux 用 bash 内建循环（测试须在两种 shell 下都能跑）。
+            command: if cfg!(windows) {
+                "while ($true) { }".to_string()
+            } else {
+                "while :; do :; done".to_string()
+            },
+            working_directory: PathBuf::from("/tmp"),
+            env: HashMap::new(),
+            timeout: Duration::from_secs(3600),
+            output_byte_limit: 10000,
+            output_file: output_file.clone(),
+            notification_handle: ToolNotificationHandle::noop(),
+            tool_call_id: "test-busy-no-output".to_string(),
+            display_command: None,
+            auto_background_on_timeout: false,
+            foreground_block_budget: None,
+            kind: TaskKind::Bash,
+            owner_session_id: None,
+            description: None,
+        };
+        let handle = backend
+            .run_background(request)
+            .await
+            .expect("spawn bg task");
+
+        // 越过 idle 阈值 + 裕量仍必须存活（计算密集不被 idle-kill）。
+        tokio::time::sleep(Duration::from_millis(4200)).await;
+        let snap = backend
+            .get_task(&handle.task_id)
+            .await
+            .expect("busy task snapshot");
+        assert!(
+            !snap.completed,
+            "busy no-output task must NOT be idle-killed: {snap:?}"
+        );
+        assert_ne!(snap.signal.as_deref(), Some(IDLE_KILL_SIGNAL));
+
+        // Cleanup: kill the background task so the test doesn't leak a busy loop.
+        let outcome = backend.kill_task(&handle.task_id).await;
+        assert!(
+            matches!(outcome, KillOutcome::Killed | KillOutcome::AlreadyExited),
+            "kill after busy test should succeed: {outcome:?}"
         );
         let _ = tokio::fs::remove_file(&output_file).await;
     }
