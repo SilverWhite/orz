@@ -122,9 +122,19 @@
   无输出忙循环不误杀实机）、bash 231 passed、task_completion 49
   passed、fmt --check 净、git diff --check exit 0。审计见
   [`TER_T1_5_IDLE_CPU_BACKSTOP_2026-09-04.md`](docs/audits/TER_T1_5_IDLE_CPU_BACKSTOP_2026-09-04.md)。）
-- [ ] T1.6 黑板 processes live 分区：读取时现算快照（task_id/命令/
+- [x] T1.6 黑板 processes live 分区：读取时现算快照（task_id/命令/
   elapsed/状态/活跃度/字节/可 kill）；状态跃迁落事件；kill 动作模型面
   可达且不暴露 `&`。验收：live 渲染单测 + 越权边界用例。
+  （2026-09-04 完成：终端 `TaskLiveSnapshot` + `list_live_tasks`（读取
+  时现算，status=running/idle/completed/killed）；LoopHost
+  `terminal_live_processes`（fail-closed 默认空）；`section=processes`
+  渲染（命令摘要 ≤80B、≤8KiB 预算截断、空态「（无）」）；live-only
+  越权守卫（epoch/receipt_id 显式报错 exit 1）；tool schema/错误文案
+  同步；kill 形态核对 = 进程行 pid + 既有 run_terminal_cmd PID 中断
+  （不暴露 `&`/is_background）。验证：终端 48 passed、orz-loop processes
+  6 passed（渲染 4 + 回达 + 越权）、orz-host 映射 1 passed、check 净、
+  fmt/diff check 净。审计见
+  [`TER_T1_6_PROCESSES_LIVE_PARTITION_2026-09-04.md`](docs/audits/TER_T1_6_PROCESSES_LIVE_PARTITION_2026-09-04.md)。）
 - [ ] T1.7 轮预算默认无限制：max_tool_rounds 默认移除（“120 per turn”
   静态文案动态化/移除）；保留可配上限逃生阀与 budget_insufficient。
   验收：默认运行无 120 拦截；显式配置上限时原机制仍生效。
