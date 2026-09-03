@@ -160,6 +160,13 @@ impl LifEngine {
         self.rel(t)
     }
 
+    /// TER T1.8 (2026-09-04): run 时间轴原点（wall-clock epoch 秒）；
+    /// `None` = 引擎尚未锚定（读取侧按 elapsed 0 呈现，不 side-effect
+    /// 锚定）。
+    pub fn run_origin_secs(&self) -> Option<f64> {
+        self.run_t0
+    }
+
     pub fn set_err_tau_mode(&mut self, mode: ErrTauMode) {
         self.err_tau_mode = mode;
     }

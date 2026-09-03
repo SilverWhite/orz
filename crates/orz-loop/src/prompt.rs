@@ -283,6 +283,18 @@ pub fn tool_policy_breaker_block(tool_name: &str, consecutive: u32) -> String {
 /// (`budget_insufficient` precheck, exhaustion block, `run_invalidated`)
 /// stay untouched — this face is advisory, never a correctness premise.
 pub fn session_face_block(used: u32, budget: u32, status_line: Option<&str>) -> String {
+    session_face_block_with_wallclock(used, budget, None, status_line)
+}
+
+/// TER T1.8 (2026-09-04)：session 面扩展入口——`wallclock` =
+/// `(elapsed_secs, limit_secs)`；`limit_secs=None` = 评测墙钟未施加
+/// （渲染 elapsed + limit none，不虚构 remaining）。
+pub fn session_face_block_with_wallclock(
+    used: u32,
+    budget: u32,
+    wallclock: Option<(u64, Option<u64>)>,
+    status_line: Option<&str>,
+) -> String {
     // TER T1.7 (2026-09-04)：默认 `budget == 0` = 无硬限——模型面不再宣示
     // 一个并不存在的 120 轮静态上限，改为 unlimited（显式配置非零上限时
     // 才渲染数字档与 remaining）。
@@ -303,6 +315,23 @@ pub fn session_face_block(used: u32, budget: u32, status_line: Option<&str>) -> 
          counts when it completes)\n\
          TOOL_ROUNDS_REMAINING: {remaining}\n",
     );
+    if let Some((elapsed_secs, limit_secs)) = wallclock {
+        out.push_str(&format!("WALLCLOCK_ELAPSED: {elapsed_secs}s\n"));
+        match limit_secs {
+            Some(limit_secs) => {
+                let remaining = limit_secs.saturating_sub(elapsed_secs);
+                out.push_str(&format!(
+                    "WALLCLOCK_LIMIT: {limit_secs}s\nWALLCLOCK_REMAINING: {remaining}s\n"
+                ));
+            }
+            None => {
+                out.push_str(
+                    "WALLCLOCK_LIMIT: none (评测墙钟未施加；配置 \
+                     ORZ_MAX_WALLCLOCK 后显示档位)\n",
+                );
+            }
+        }
+    }
     if let Some(line) = status_line {
         out.push_str(line);
         out.push('\n');
@@ -455,6 +484,22 @@ mod tests {
             "{capped}"
         );
         assert!(capped.contains("TOOL_ROUNDS_REMAINING: 113"), "{capped}");
+    }
+
+    #[test]
+    fn session_face_wallclock_renders_elapsed_limit_remaining() {
+        // TER T1.8 (2026-09-04)：F6 pull——有限评测墙钟时渲染
+        // elapsed/limit/remaining。
+        let capped = session_face_block_with_wallclock(3, 120, Some((123, Some(900))), None);
+        assert!(capped.contains("WALLCLOCK_ELAPSED: 123s"), "{capped}");
+        assert!(capped.contains("WALLCLOCK_LIMIT: 900s"), "{capped}");
+        assert!(capped.contains("WALLCLOCK_REMAINING: 777s"), "{capped}");
+
+        // 未施加墙钟：elapsed + limit none，不虚构 remaining。
+        let open = session_face_block_with_wallclock(3, 120, Some((45, None)), None);
+        assert!(open.contains("WALLCLOCK_ELAPSED: 45s"), "{open}");
+        assert!(open.contains("WALLCLOCK_LIMIT: none"), "{open}");
+        assert!(!open.contains("WALLCLOCK_REMAINING"), "{open}");
     }
 
     #[test]

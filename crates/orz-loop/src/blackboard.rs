@@ -1484,6 +1484,8 @@ mod tests {
                 && reply
                     .content
                     .contains("TOOL_ROUND_BUDGET: 120 tool rounds per turn")
+                && reply.content.contains("WALLCLOCK_ELAPSED:")
+                && reply.content.contains("WALLCLOCK_LIMIT: none")
                 && reply.content.contains("[任务状态 v0.1]"),
             "session reply: {:?}",
             round.messages

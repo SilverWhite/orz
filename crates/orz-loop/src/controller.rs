@@ -106,6 +106,25 @@ pub fn retrieval_subagent_wallclock_override() -> Option<Option<std::time::Durat
         .and_then(|s| parse_retrieval_subagent_wallclock(&s))
 }
 
+/// TER T1.8 (2026-09-04)：主车道评测墙钟上限来源——env
+/// `ORZ_MAX_WALLCLOCK`（秒，orz-bin `--max-wallclock` 施加；>0 生效）。
+/// `0` / 缺失 / 非法 = 无上限（unlimited）。M2 T2.1 墙钟单一化后，评测
+/// 侧以 runner/sandbox 施加值为准，本 env 仍作为本地显式上限逃生阀。
+pub(crate) fn parse_main_wallclock_limit_secs(s: &str) -> Option<Option<u64>> {
+    match s.trim().parse::<u64>() {
+        Ok(0) => Some(None),
+        Ok(secs) => Some(Some(secs)),
+        Err(_) => None,
+    }
+}
+
+pub(crate) fn main_wallclock_limit_secs_override() -> Option<u64> {
+    std::env::var("ORZ_MAX_WALLCLOCK")
+        .ok()
+        .and_then(|s| parse_main_wallclock_limit_secs(&s))
+        .flatten()
+}
+
 /// Parse rule for the subagent max-tool-rounds env value (tested without
 /// env mutation): trimmed u32; `0` disables (unbounded — only the main
 /// lane cap applies); non-numeric → None (invalid ignored, same convention
@@ -1824,11 +1843,29 @@ impl AgentLoopController {
                     .to_string(),
             );
         }
-        Ok(crate::prompt::session_face_block(
+        // TER T1.8 (2026-09-04)：F6 pull——session 面补 wallclock
+        // （elapsed / limit / remaining）；limit 来源 =
+        // `ORZ_MAX_WALLCLOCK`（评测墙钟单一化见 M2 T2.1）。
+        let wallclock = Some((
+            self.run_elapsed_wallclock_secs(),
+            main_wallclock_limit_secs_override(),
+        ));
+        Ok(crate::prompt::session_face_block_with_wallclock(
             tool_rounds,
             self.max_tool_rounds,
+            wallclock,
             self.render_status_line().as_deref(),
         ))
+    }
+
+    /// TER T1.8: run 相对墙钟 elapsed——读 LIF 时间轴原点（只读、无
+    /// side-effect 锚定）；未锚定按 0 呈现。
+    fn run_elapsed_wallclock_secs(&self) -> u64 {
+        let lif = self.lif.lock().unwrap();
+        match lif.run_origin_secs() {
+            Some(t0) => (Self::now_epoch_secs() - t0).max(0.0) as u64,
+            None => 0,
+        }
     }
 
     /// TER T1.6 (2026-09-04): 黑板 `section=processes` live 分区——读取时
