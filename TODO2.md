@@ -192,9 +192,18 @@
   passed、journal 三字段 1 passed、host 实机 30K 截断映射 1 passed、
   orz-loop 全量 704 passed / 3 ignored、fmt/diff check 净。审计见
   [`TER_T1_11_W_F13B_OUTPUT_RETRIEVAL_OBJECT_2026-09-04.md`](docs/audits/TER_T1_11_W_F13B_OUTPUT_RETRIEVAL_OBJECT_2026-09-04.md)。）
-- [ ] T1.12 W-F11 环境快照：probe 扩展至代码工具环境（工具/语言/包/
+- [x] T1.12 W-F11 环境快照：probe 扩展至代码工具环境（工具/语言/包/
   版本/连通判定，Linux 先本地快速判定）；落黑板 `section=env`（PULL）。
   验收：快照 ≤5s；env 分区 PULL 渲染 + 越权边界。
+  （2026-09-04 完成：orz-host `env_snapshot`（固定注册表 PATH 存在性 +
+  `--version` 并发探测单项 1s 超时、输入在场布尔、无 allowlist/任务结论
+  ——实测 ≈1.6s < 5s）；`LoopHost::env_snapshot_facts`；`section=env`
+  渲染（kind 白名单登记 tool/language/package/input/connectivity，越权
+  kind 渲染层拒绝、8KiB 预算、空态（无））；epoch/receipt_id live-only
+  显式报错；连通性行由 W-F12（M2 T2.2）闭环后接入（本步不伪造）。
+  验证：orz-loop 全量 709 passed / 3 ignored、env 相关 13 passed、
+  orz-host env_snapshot 2 passed（≤5s）、fmt/diff check 净。审计见
+  [`TER_T1_12_W_F11_ENV_SNAPSHOT_2026-09-04.md`](docs/audits/TER_T1_12_W_F11_ENV_SNAPSHOT_2026-09-04.md)。）
 - [ ] T1.13 M1 验收：orz-loop/orz-assurance 全量测试绿 + clippy/fmt 净
   + Linux 三件套构建成功 + 事件链 verifier 过新 schema。放行进入 M2。
 

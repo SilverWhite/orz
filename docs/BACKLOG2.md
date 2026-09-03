@@ -3,13 +3,13 @@
 > 用途：TER 专用未闭合项路由（P0）；主
 > [BACKLOG_AND_PRIORITIES.md](BACKLOG_AND_PRIORITIES.md) 只保留指针，
 > 本文为 TER 明细权威。状态：`current`（2026-09-03 设计定稿；M0 设计门
-> T0.1–T0.4 已放行；M1 实施中——T1.1–T1.11 已闭合，见 TODO2.md）。
+> T0.1–T0.4 已放行；M1 实施中——T1.1–T1.12 已闭合，见 TODO2.md）。
 > 入口：设计稿
 > [TOOL_EXECUTION_LAYER_REFORM_DESIGN_2026-09-03.md](TOOL_EXECUTION_LAYER_REFORM_DESIGN_2026-09-03.md)
 > / 实施步骤 [TODO2.md](../TODO2.md) / S4_PROGRESS §16.17/§16.18。
 
 ## TER-0 工具执行层改革（P0；2026-09-03 设计定稿 + 分步计划落盘；M0
-设计门 T0.1–T0.4 已放行，M1 实施中——T1.1–T1.11 已闭合）
+设计门 T0.1–T0.4 已放行，M1 实施中——T1.1–T1.12 已闭合）
 
 一句话定义：orz 工具执行层“独立可用 + 无自身硬超时”改革——常驻能力
 默认开启（S5-2/180s 首报/模型面封闭）、去硬杀（删 runner 自加墙钟、
@@ -67,7 +67,11 @@ runner/VM → M3 回归复验（明细在 TODO2.md）。边界：15min 长档、
   id=落盘 log 路径；ToolCompleted 截断三字段 output_truncated/
   total_bytes/output_object_id 落盘与透传）已于 2026-09-04 闭合
   （output_object 4 / journal 1 / host 实机截断映射 1 / orz-loop 全量
-  704 passed；审计 TER_T1_11_W_F13B_OUTPUT_RETRIEVAL_OBJECT_2026-09-04）。
+  704 passed；审计 TER_T1_11_W_F13B_OUTPUT_RETRIEVAL_OBJECT_2026-09-04）；
+  T1.12 W-F11 环境快照 section=env（orz-host env_snapshot ≤5s 并发版本
+  探测/输入在场；kind 白名单渲染层拒绝越权键；live-only 守卫；连通性
+  归 W-F12）已于 2026-09-04 闭合（orz-loop 全量 709 passed；审计
+  TER_T1_12_W_F11_ENV_SNAPSHOT_2026-09-04）。
 - 专项：TER-0.1 生成器 v0.2 表全面对齐已登记（见下），不阻塞 M1。
 
 ## TER-0.1 生成器 v0.2 表全面对齐（专项；P0；2026-09-03 登记，不阻塞
