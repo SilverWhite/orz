@@ -169,9 +169,17 @@
   验证：orz-loop 全量 703 passed / 3 ignored、orz-assurance 201
   passed、fmt --check 净、git diff --check exit 0。审计见
   [`TER_T1_9_F6_PUSH_BUDGET_CUE_2026-09-04.md`](docs/audits/TER_T1_9_F6_PUSH_BUDGET_CUE_2026-09-04.md)。）
-- [ ] T1.10 W-F13a read_file 64KB 档：限制链核对（粗门 clamp/行 limit/
+- [x] T1.10 W-F13a read_file 64KB 档：限制链核对（粗门 clamp/行 limit/
   50K 注入预算）后放宽至 64KB 级。验收：vm.js 级文件 ≤2 次读完；
   单次注入不触发截断；大文件仍可结构化分段。
+  （2026-09-04 完成：coarse gate 默认/上限 16/32K → **64K**（下限 8K
+  逃生阀保留）；限制链核对：64K ASCII ≈ ≤16K token < 25K 读档/50K 单轮
+  预算、行档 1000 行语义保留；>64K 仍回有界信封（preview ≤4K + offset
+  结构化分段）；orz-host 配置口子 clamp 同步 8–64K；full/concise/
+  handle 文档与旧 16K 测试档位同步。验证：read_file 桶 208 passed、
+  orz-host clamp 1 passed、fmt --check 净、git diff --check exit 0。
+  审计见
+  [`TER_T1_10_W_F13A_READ_FILE_64K_2026-09-04.md`](docs/audits/TER_T1_10_W_F13A_READ_FILE_64K_2026-09-04.md)。）
 - [ ] T1.11 W-F13b 输出检索对象：长输出落盘对象 + pattern/行区间/尾部
   N 行检索；ToolCompleted 截断标记 + 对象指针（schema 已 T0.2 定稿）。
   验收：检索语义单测；模型无需 .gsa 即可补读自身输出。
