@@ -270,6 +270,28 @@ pub fn terminal_mid_run_from_output(
     })
 }
 
+/// TER T1.11 (W-F13b)：run_terminal_cmd **前台完成且输出被截断**时映射
+/// 持久化输出检索对象（完整输出落盘路径 = `output_object_id` +
+/// 截断前字节）；其余工具/形态为 None（未截断不需要对象指针）。
+pub fn terminal_output_object_from_output(
+    name: &str,
+    output: &orz_tools::types::output::ToolOutput,
+) -> Option<orz_loop::host::TerminalOutputObject> {
+    if name != "run_terminal_cmd" {
+        return None;
+    }
+    let orz_tools::types::output::ToolOutput::Bash(bash) = output else {
+        return None;
+    };
+    if !bash.truncated {
+        return None;
+    }
+    Some(orz_loop::host::TerminalOutputObject {
+        total_bytes: bash.total_bytes as u64,
+        output_object_id: bash.output_file.clone(),
+    })
+}
+
 /// Build a finalized toolset for a session working directory.
 ///
 /// SessionContext is constructed with minimal-but-functional defaults:

@@ -123,6 +123,11 @@ pub struct ToolResult {
     /// mechanical decode stage. The controller journals it as
     /// `tool_completed.output_encoding`.
     pub output_encoding: Option<String>,
+    /// TER T1.11 (W-F13b)：run_terminal_cmd 输出被截断时的结构化事实——
+    /// 完整输出已落盘为检索对象（`output_object_id` 可 pattern/行区间/
+    /// 尾部检索），模型无需 .gsa 摸黑补读。
+    pub output_truncated: bool,
+    pub output_object: Option<TerminalOutputObject>,
     /// FUS-RETRIEVAL-MECH B-1 (2026-08-13): optional structured tool
     /// metadata forwarded by the host across the loop seam. Today only
     /// `web_search` fills it — `{"citations": ["https://…", …]}` — the
@@ -147,6 +152,16 @@ pub struct ToolResult {
     /// `tool_running` journal event are built from these structured facts
     /// (never text parsing). `None` for every other call.
     pub mid_run: Option<ToolMidRunStatus>,
+}
+
+/// TER T1.11 (W-F13b)：截断输出的持久化对象事实。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TerminalOutputObject {
+    /// 截断前的真实单调输出字节。
+    pub total_bytes: u64,
+    /// 检索对象指针 = 落盘 log 路径（read_file/grep/offset/tail 语义
+    /// 均以该对象为准）。
+    pub output_object_id: String,
 }
 
 /// THIN-HARNESS-REDESIGN-V2 §9.7 (2026-08-29 S5-2): structured mid-run

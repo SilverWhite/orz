@@ -2868,6 +2868,16 @@ impl AgentLoopController {
                 if res.timed_out {
                     completed_payload["timed_out"] = serde_json::json!(true);
                 }
+                // TER T1.11 (W-F13b)：截断输出三字段（schema T0.2 配对：
+                // output_truncated ⇒ total_bytes；output_object_id ⇒ 两者）。
+                if res.output_truncated {
+                    completed_payload["output_truncated"] = serde_json::json!(true);
+                    if let Some(obj) = &res.output_object {
+                        completed_payload["total_bytes"] = serde_json::json!(obj.total_bytes);
+                        completed_payload["output_object_id"] =
+                            serde_json::json!(obj.output_object_id);
+                    }
+                }
                 // THIN-HARNESS-REDESIGN-V2 §9.7 (2026-08-29 S5-2): 中间回报
                 // ——run_terminal_cmd 满 300s 自动后台化时，先记一条
                 // `tool_running`（运行时长/进程状态/输出活跃度/落盘指针，
@@ -2995,6 +3005,10 @@ impl AgentLoopController {
                         // output_encoding）却从返回结果丢失；R2 半助理层
                         // 失败诊断/实体登记的 encoding_lossy 签名需要它。
                         output_encoding: res.output_encoding.clone(),
+                        // TER T1.11 (W-F13b)：截断输出检索对象透传（console
+                        // 重建路径与主回达一致）。
+                        output_truncated: res.output_truncated,
+                        output_object: res.output_object.clone(),
                         structured: None,
                         policy_denial: res.policy_denial.clone(),
                         timed_out: res.timed_out,
@@ -3734,6 +3748,69 @@ mod tests {
             "{payloads:?}"
         );
         assert_eq!(payloads[0]["tool"], serde_json::json!("run_terminal_cmd"));
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+    /// TER T1.11 (W-F13b)：截断的 run_terminal_cmd 输出在 tool_completed
+    /// 落 output_truncated/total_bytes/output_object_id（schema T0.2 配对：
+    /// object_id ⇒ truncated + total_bytes）。
+    #[tokio::test]
+    async fn tool_completed_carries_output_object_truncation_fields() {
+        let dir = test_dir();
+        let journal = JournalRecorder::new(dir.clone());
+        let host = TestHost {
+            journal,
+            tool_result: Some(ToolResult {
+                output: "long output (truncated)".to_string(),
+                exit_code: Some(0),
+                output_truncated: true,
+                output_object: Some(crate::host::TerminalOutputObject {
+                    total_bytes: 66_000,
+                    output_object_id: "terminal/call-f13.log".to_string(),
+                }),
+                ..Default::default()
+            }),
+        };
+        let fake = Arc::new(FakeProvider::new(vec![
+            ScriptedResponse::tool_calls(vec![ToolCall {
+                name: "run_terminal_cmd".to_string(),
+                arguments: serde_json::json!({
+                    "command": "echo long",
+                    "description": "output object journal test",
+                }),
+                call_id: "call-f13".to_string(),
+            }]),
+            ScriptedResponse::text("完成"),
+            ScriptedResponse::text("完成"),
+        ]));
+        let gateway: Arc<dyn ModelGateway> = fake.clone();
+        let controller = AgentLoopController::with_gateway(gateway);
+        controller
+            .run_turn(&host, "跑命令", "RUN-F13", MANIFEST, 0, None, None, None)
+            .await
+            .unwrap();
+
+        let payloads: Vec<serde_json::Value> = events(&dir)
+            .into_iter()
+            .filter(|e| e.event_type == EventType::ToolCompleted)
+            .map(|e| e.payload)
+            .collect();
+        assert_eq!(payloads.len(), 1, "{payloads:?}");
+        assert_eq!(
+            payloads[0]["output_truncated"],
+            serde_json::json!(true),
+            "{payloads:?}"
+        );
+        assert_eq!(
+            payloads[0]["total_bytes"],
+            serde_json::json!(66_000),
+            "{payloads:?}"
+        );
+        assert_eq!(
+            payloads[0]["output_object_id"],
+            serde_json::json!("terminal/call-f13.log"),
+            "{payloads:?}"
+        );
 
         let _ = std::fs::remove_dir_all(&dir);
     }

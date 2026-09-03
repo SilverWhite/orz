@@ -714,6 +714,15 @@ impl OrzHost {
             tool_result.mid_run = Some(mid_run);
             tool_result.exit_code = None;
         }
+        // TER T1.11 (W-F13b)：截断输出的结构化事实（output_truncated +
+        // 持久化对象指针）——控制器据此在 tool_completed 落
+        // output_truncated/total_bytes/output_object_id（schema T0.2）。
+        if let Some(output_object) =
+            crate::tools::terminal_output_object_from_output(name, &result.output)
+        {
+            tool_result.output_truncated = true;
+            tool_result.output_object = Some(output_object);
+        }
         if let Some(before) = delta_before {
             let (workspace_delta, workspace_delta_truncated) = workspace_delta_diff(
                 &before,
@@ -2480,6 +2489,58 @@ mod tests {
                     | orz_tools::computer::types::KillOutcome::AlreadyExited
             ),
             "kill cleanup: {outcome:?}"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// TER T1.11 (W-F13b)：run_terminal_cmd 长输出被截断时，host 映射
+    /// `output_truncated` + 持久化输出检索对象（完整输出落盘路径 + 截断前
+    /// 字节）——模型无需 .gsa 即可按对象补读。
+    #[tokio::test]
+    async fn run_terminal_cmd_truncation_carries_output_object() {
+        let dir = std::env::temp_dir().join(format!("orz-host-f13-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let host = OrzHost::new(
+            JournalRecorder::new(dir.join("j")),
+            &dir,
+            WorkspaceTrust::ObservedTrusted,
+        )
+        .expect("host");
+        // 30K 字符输出远超默认 8K 工具输出档 → 必截断（Windows PowerShell /
+        // Linux bash 双语法）。
+        let command = if cfg!(windows) {
+            "'x' * 30000".to_string()
+        } else {
+            "python3 -c \"print('x' * 30000)\"".to_string()
+        };
+        let result = host
+            .call_tool(
+                "run_terminal_cmd",
+                serde_json::json!({
+                    "command": command,
+                    "description": "output object truncation test",
+                }),
+                "call-f13-host",
+            )
+            .await
+            .expect("run_terminal_cmd succeeds");
+        assert!(
+            result.output_truncated,
+            "30K output must truncate under the default 8K budget"
+        );
+        let object = result
+            .output_object
+            .expect("truncated output must carry the retrieval object");
+        assert!(object.total_bytes >= 30_000, "{object:?}");
+        assert!(
+            std::path::Path::new(&object.output_object_id).exists(),
+            "output object must persist on disk: {}",
+            object.output_object_id
+        );
+        assert!(
+            result.output.contains("read_file"),
+            "model-facing pointer text must survive: {}",
+            result.output
         );
         let _ = std::fs::remove_dir_all(&dir);
     }
