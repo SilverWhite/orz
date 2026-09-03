@@ -2611,12 +2611,35 @@ mod tests {
     /// `TemplateRenderer`. With reminders disabled, the bash description and
     /// the `is_background` field description must not promise notifications;
     /// they point at the get-output tool instead when one is served.
+    ///
+    /// TER T1.3 (2026-09-04)：这类“通知承诺 / is_background 字段文案”属于
+    /// 可见后台面（显式 `is_background` 开放）——默认已封闭，本用例显式
+    /// `hide_background_input=false` 重开逃生阀后再校验 reminder 分支。
     #[tokio::test]
     async fn bash_descriptions_track_system_reminders_setting() {
         let config_with = |ids: &[&str]| ToolServerConfig {
             tools: ids
                 .iter()
-                .map(|id| ToolConfig::from_id((*id).to_string()))
+                .map(|id| {
+                    if *id == "GrokBuild:run_terminal_cmd" {
+                        ToolConfig {
+                            id: (*id).to_string(),
+                            params: Some(
+                                serde_json::json!({ "hide_background_input": false })
+                                    .as_object()
+                                    .unwrap()
+                                    .clone(),
+                            ),
+                            name_override: None,
+                            params_name_overrides: None,
+                            description_override: None,
+                            behavior_version: None,
+                            kind: None,
+                        }
+                    } else {
+                        ToolConfig::from_id((*id).to_string())
+                    }
+                })
                 .collect(),
             behavior_preset: None,
         };
@@ -3625,10 +3648,15 @@ mod tests {
             tools: vec![ToolConfig {
                 id: "GrokBuild:run_terminal_cmd".to_string(),
                 params: Some(
-                    serde_json::json!({ "enabled_background": false })
-                        .as_object()
-                        .unwrap()
-                        .clone(),
+                    // TER T1.1: auto-bg 常驻默认 true——关闭态需显式 false
+                    //（仅关 enabled_background 会撞 params_constraint 校验）。
+                    serde_json::json!({
+                        "enabled_background": false,
+                        "auto_background_on_timeout": false
+                    })
+                    .as_object()
+                    .unwrap()
+                    .clone(),
                 ),
                 name_override: None,
                 params_name_overrides: None,
@@ -3668,6 +3696,9 @@ mod tests {
             "disabled background should remove is_background guidance from default description"
         );
     }
+    /// TER T1.3 (2026-09-04)：可见后台面（schema 保留 `is_background`）是
+    /// 显式 `hide_background_input=false` 的逃生阀——默认已封闭（见
+    /// `bash_definition_closed_by_default`）。
     #[tokio::test]
     async fn bash_definition_preserves_is_background_when_enabled() {
         let builder = ToolRegistryBuilder::new();
@@ -3676,10 +3707,15 @@ mod tests {
                 ToolConfig {
                     id: "GrokBuild:run_terminal_cmd".to_string(),
                     params: Some(
-                        serde_json::json!({ "enabled_background": true })
-                            .as_object()
-                            .unwrap()
-                            .clone(),
+                        // TER T1.3: hide_background_input 常驻默认 true——
+                        // 本用例显式重开可见后台面（escape hatch）。
+                        serde_json::json!({
+                            "enabled_background": true,
+                            "hide_background_input": false,
+                        })
+                        .as_object()
+                        .unwrap()
+                        .clone(),
                     ),
                     name_override: None,
                     params_name_overrides: None,
@@ -3738,6 +3774,59 @@ mod tests {
             "enabled background should preserve is_background guidance in default description"
         );
     }
+    /// TER T1.3 (2026-09-04)：模型面封闭是 resident 默认——run_terminal_cmd
+    /// 缺省 params 时导出 schema 不暴露 `is_background`、描述不提及它，
+    /// 且不要求后台任务工具同台。
+    #[tokio::test]
+    async fn bash_definition_closed_by_default() {
+        let builder = ToolRegistryBuilder::new();
+        let config = ToolServerConfig {
+            tools: vec![ToolConfig {
+                id: "GrokBuild:run_terminal_cmd".to_string(),
+                params: None,
+                name_override: None,
+                params_name_overrides: None,
+                description_override: None,
+                behavior_version: None,
+                kind: None,
+            }],
+            behavior_preset: None,
+        };
+        let errors = builder.validate_config(&config);
+        assert!(
+            errors.is_empty(),
+            "closed-by-default bash must not require get_task_output/kill_task: {errors:?}"
+        );
+        let tmp = TempDir::new().unwrap();
+        let ctx = test_session_context(&tmp);
+        let toolset = builder
+            .finalize(config, ctx)
+            .expect("finalize should succeed with default-closed bash");
+        let defs = toolset.tool_definitions();
+        let bash_def = defs
+            .iter()
+            .find(|d| d.function.name == "run_terminal_cmd")
+            .expect("bash tool definition not found");
+        let properties = bash_def
+            .function
+            .parameters
+            .get("properties")
+            .and_then(|p| p.as_object())
+            .expect("bash schema must have properties");
+        assert!(
+            !properties.contains_key("is_background"),
+            "default must hide is_background from the exported schema"
+        );
+        let desc = bash_def
+            .function
+            .description
+            .as_deref()
+            .expect("description must be present");
+        assert!(
+            !desc.contains("is_background"),
+            "default description must not advertise is_background: {desc}"
+        );
+    }
     /// Regression guard: background-param template references must use the real
     /// input-schema property names — `${{ params.execute.is_background }}` and
     /// `${{ params.task.run_in_background }}`. A mistyped key (e.g. the old
@@ -3749,9 +3838,21 @@ mod tests {
     #[tokio::test]
     async fn background_param_templates_reference_real_schema_keys() {
         let builder = ToolRegistryBuilder::new();
+        // TER T1.3 (2026-09-04)：模板解析回归跑在「可见后台面」上——
+        // run_terminal_cmd 默认已封闭（hide_background_input=true），需
+        // 显式 false 重开，描述才会解析 `${{ params.execute.is_background }}`。
         let tool = |id: &str| ToolConfig {
             id: id.to_string(),
-            params: None,
+            params: if id == "GrokBuild:run_terminal_cmd" {
+                Some(
+                    serde_json::json!({ "hide_background_input": false })
+                        .as_object()
+                        .unwrap()
+                        .clone(),
+                )
+            } else {
+                None
+            },
             name_override: None,
             params_name_overrides: None,
             description_override: None,
@@ -3916,13 +4017,21 @@ mod tests {
             "bash with disabled background should not require get_task_output/kill_task: {errors:?}"
         );
     }
+    /// TER T1.3 (2026-09-04)：缺省 run_terminal_cmd 已封闭（不要求后台
+    /// 工具族，见 `bash_definition_closed_by_default`）——本用例显式重开
+    /// 可见后台面，确认缺任务工具仍报 requirements 错误。
     #[test]
     fn bash_with_enabled_background_reports_missing_task_tools() {
         let builder = ToolRegistryBuilder::new();
         let config = ToolServerConfig {
             tools: vec![ToolConfig {
                 id: "GrokBuild:run_terminal_cmd".to_string(),
-                params: None,
+                params: Some(
+                    serde_json::json!({ "hide_background_input": false })
+                        .as_object()
+                        .unwrap()
+                        .clone(),
+                ),
                 name_override: None,
                 params_name_overrides: None,
                 description_override: None,
@@ -4751,10 +4860,14 @@ mod tests {
             tools: vec![ToolConfig {
                 id: "GrokBuild:run_terminal_cmd".to_string(),
                 params: Some(
-                    serde_json::json!({"enabled_background": false})
-                        .as_object()
-                        .unwrap()
-                        .clone(),
+                    // TER T1.1: auto-bg 常驻默认 true——关闭态需显式 false。
+                    serde_json::json!({
+                        "enabled_background": false,
+                        "auto_background_on_timeout": false
+                    })
+                    .as_object()
+                    .unwrap()
+                    .clone(),
                 ),
                 name_override: None,
                 params_name_overrides: None,

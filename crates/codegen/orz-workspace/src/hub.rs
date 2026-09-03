@@ -982,7 +982,26 @@ mod tests {
     fn bg_config() -> ToolServerConfig {
         ToolServerConfig {
             tools: vec![
-                tc("GrokBuild:run_terminal_cmd", Some(ToolKind::Execute)),
+                // TER T1.3 (2026-09-04)：hide_background_input 常驻默认
+                // true（模型面封闭）——这些接线用例显式调用 is_background，
+                // 必须走「可见后台面」逃生阀（显式 false）。
+                ToolConfig {
+                    id: "GrokBuild:run_terminal_cmd".to_string(),
+                    params: Some(
+                        serde_json::json!({
+                            "enabled_background": true,
+                            "hide_background_input": false,
+                        })
+                        .as_object()
+                        .unwrap()
+                        .clone(),
+                    ),
+                    name_override: None,
+                    params_name_overrides: None,
+                    description_override: None,
+                    behavior_version: None,
+                    kind: Some(ToolKind::Execute),
+                },
                 tc(
                     "GrokBuild:get_task_output",
                     Some(ToolKind::BackgroundTaskAction),
@@ -1125,6 +1144,12 @@ mod tests {
         cfg.tools[0].params = serde_json::json!({
             "enabled_background": true,
             "auto_background_on_timeout": true,
+            // TER T1.2 (2026-09-03)：auto-bg 由「有限预算」驱动——解析超时
+            // 严格大于预算时才开启逐调用 auto-bg（满预算后台化并返回中间
+            // 状态）；模型 timeout < 预算时仍为 kill-on-timeout（T1.4 去硬
+            // 杀再把 timeout 改成 auto-bg deadline）。故此处用 500ms 短预算
+            // + 300s 模型超时触发后台化，保持 tracker 接线覆盖。
+            "foreground_block_budget_ms": 500,
         })
         .as_object()
         .cloned();
@@ -1134,7 +1159,7 @@ mod tests {
             &handle,
             "main",
             "run_terminal_cmd",
-            serde_json::json!({ "command": "sleep 2", "description": "test", "timeout": 300 }),
+            serde_json::json!({ "command": "sleep 2", "description": "test", "timeout": 300000 }),
         )
         .await;
         let busy = wait_until(

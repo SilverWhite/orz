@@ -52,7 +52,12 @@ const BACKGROUND_MAX_RUNTIME: Duration = Duration::from_secs(36_000);
 /// it's moved to the background (kept running, never killed), independent of its
 /// requested `timeout`. A short second timer for the auto-background budget.
 /// Env override: `GROK_FOREGROUND_BLOCK_BUDGET_MS`.
-const FOREGROUND_BLOCK_BUDGET: Duration = Duration::from_secs(15);
+///
+/// TER T1.2 (2026-09-03)：15s 独立默认退役——兜底值同步为 180s，与
+/// BashParams `DEFAULT_FOREGROUND_BLOCK_BUDGET_MS`（serde/`Default`
+/// 单一生效源）同值；grok bash 主线经 BashParams 恒携带显式预算，
+/// 本常量只兜底不带预算的直连 `TerminalRunRequest`。
+const FOREGROUND_BLOCK_BUDGET: Duration = Duration::from_secs(180);
 
 fn foreground_block_budget_from_env() -> Duration {
     std::env::var("GROK_FOREGROUND_BLOCK_BUDGET_MS")
@@ -1815,10 +1820,12 @@ impl LocalTerminalActor {
 
         // Foreground budget: auto-backgroundable commands stop blocking the
         // turn after the per-process budget (independent of `timeout`) — this
-        // second timer only backgrounds, never kills. Default is 15s; sessions
-        // can override via BashParams.foreground_block_budget_ms (0 = disable
-        // short budget so only `timeout` auto-bgs). The `timeout` check below
-        // also auto-bgs when auto_bg is on, or kills when it is off.
+        // second timer only backgrounds, never kills. Backend default is 180s
+        // (TER T1.2, 2026-09-03: the standalone 15s default was retired);
+        // BashParams sessions carry their own budget via
+        // `foreground_block_budget_ms` (0 = disable the short budget so only
+        // `timeout` auto-bgs). The `timeout` check below also auto-bgs when
+        // auto_bg is on, or kills when it is off.
         if process.exit_status.is_none()
             && matches!(
                 process.bg_status,
@@ -3296,6 +3303,13 @@ mod tests {
     use super::*;
     use crate::computer::types::TaskKind;
     use std::path::PathBuf;
+
+    /// TER T1.2 (2026-09-03)：后端 15s 独立默认退役——兜底常量与
+    /// BashParams resident 默认（180s）同值（只兜底不带预算的直连请求）。
+    #[test]
+    fn foreground_block_budget_backstop_is_180s() {
+        assert_eq!(FOREGROUND_BLOCK_BUDGET, Duration::from_secs(180));
+    }
 
     fn make_request(command: &str) -> TerminalRunRequest {
         // Use a unique temp file for each test

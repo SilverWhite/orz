@@ -62,6 +62,14 @@ fn default_true() -> bool {
     true
 }
 
+/// TER T1.2 (2026-09-03)：前台首报/后台化预算 resident 默认 180s——
+/// serde 缺省、`Default` 与显式 `null` 回退共用
+/// [`DEFAULT_FOREGROUND_BLOCK_BUDGET_MS`] 单一常量；不再走后端 15s
+/// 独立默认。
+fn default_foreground_block_budget() -> Option<u64> {
+    Some(DEFAULT_FOREGROUND_BLOCK_BUDGET_MS)
+}
+
 /// Maximum size, in bytes, of a single emitted progress `delta`. Guards
 /// against a pathological single-tick burst (a large accumulation flushed in
 /// one ~100 ms tick) flooding the harness in one frame. A delta larger than
@@ -170,19 +178,25 @@ pub struct BashParams {
     /// The FG wait deadline is `min(resolved_timeout, foreground_block_budget)`:
     /// - resolved timeout: model `timeout` or [`Self::timeout_secs`] (default 120s),
     ///   clamped by [`Self::max_timeout_secs`] (default 5m).
-    /// - short budget: [`Self::foreground_block_budget_ms`] (default 15s).
+    /// - short budget: [`Self::foreground_block_budget_ms`] (default 180s,
+    ///   TER T1.2 单一生效源).
     ///
     /// Set `foreground_block_budget_ms: 0` to disable the short budget so only
     /// the resolved timeout triggers auto-bg (reference-compatible).
-    #[serde(default)]
+    ///
+    /// TER T1.1 (2026-09-03, ADR-0010 §14.53 候选条目 1)：常驻默认开启——
+    /// `Default` 与 serde 缺省均为 `true`，无 host 注入时亦自带 auto-bg；
+    /// 显式 `false`（关闭态仍可配）继续生效。
+    #[serde(default = "default_true")]
     pub auto_background_on_timeout: bool,
     /// Max FG block before auto-bg when [`Self::auto_background_on_timeout`] is
     /// true (milliseconds). Independent of model `timeout`.
     ///
-    /// - `None` → 15_000 (default short budget).
+    /// - `None` → [`DEFAULT_FOREGROUND_BLOCK_BUDGET_MS`] (180_000，TER T1.2
+    ///   单一生效源；显式 `null` 与缺省同值，不再走后端 15s 独立默认)。
     /// - `Some(0)` → no short budget; auto-bg only when model/default timeout elapses.
     /// - `Some(ms)` → auto-bg after `ms` if still running.
-    #[serde(default)]
+    #[serde(default = "default_foreground_block_budget")]
     pub foreground_block_budget_ms: Option<u64>,
     /// Ceiling for `Shell` model `block_until_ms` (and OLD-variant
     /// `timeout`) in **milliseconds**.
@@ -210,9 +224,16 @@ pub struct BashParams {
     /// and reject explicit backgrounding, while keeping the tool's internal
     /// auto-background path available. THIN-HARNESS-REDESIGN-V2 §9.7
     /// (2026-08-29 S5-2): ORZ keeps the model surface at "one call = one
-    /// result" — the 300s mid-run report is produced by the framework's
-    /// auto-background, never by a model-requested background.
-    #[serde(default)]
+    /// result" — the budget mid-run report (default 180s since TER T1.2) is
+    /// produced by the framework's auto-background, never by a model-requested
+    /// background.
+    ///
+    /// TER T1.3 (2026-09-04)：模型面封闭为 resident 默认——`Default` 与
+    /// serde 缺省均为 `true`，无 host 注入时 `is_background` 也不出现在
+    /// 模型面 schema，显式后台输入被拒绝；显式 `false` 保留为逃生阀
+    /// （工具集显式开放可见后台面时使用，此时 `requires_expr` 要求
+    /// get_task_output/kill_task 同台）。
+    #[serde(default = "default_true")]
     pub hide_background_input: bool,
 }
 
@@ -224,12 +245,12 @@ impl Default for BashParams {
             output_byte_limit: None,
             cmd_prefix: None,
             enabled_background: true,
-            auto_background_on_timeout: false,
-            foreground_block_budget_ms: None,
+            auto_background_on_timeout: true,
+            foreground_block_budget_ms: Some(DEFAULT_FOREGROUND_BLOCK_BUDGET_MS),
             max_block_until_ms: None,
             allow_background_operator: true,
             surface_bg_completion_reminders: true,
-            hide_background_input: false,
+            hide_background_input: true,
         }
     }
 }
@@ -552,13 +573,14 @@ pub(crate) fn format_default_prompt(bash: &BashOutput, append_noop_reminder: boo
 // the background-task tooling. Absolute safety clamp for configured maxes: 10h.
 pub(crate) const DEFAULT_MAX_TIMEOUT_MS: u64 = 300_000; // 5 minutes
 const ABSOLUTE_MAX_TIMEOUT_MS: u64 = 36_000_000;
-/// Default short FG block before auto-bg when auto_background_on_timeout is on.
-/// Matches terminal `FOREGROUND_BLOCK_BUDGET`.
+/// Resident default FG block before auto-bg when auto_background_on_timeout
+/// is on. TER T1.2 (2026-09-03) 单一生效源：serde 缺省 / `Default` / 显式
+/// `null` 回退 / schema 描述渲染共用本常量；终端后端兜底常量同步为同值
+/// （15s 独立默认退役）。
 ///
-/// Currently used by tests / `effective_auto_bg_wait_ms` (description follow-up);
-/// production runtime uses the terminal backend default when budget is unset.
-#[allow(dead_code)] // description follow-up + tests (not yet model-facing)
-pub(crate) const DEFAULT_FOREGROUND_BLOCK_BUDGET_MS: u64 = 15_000;
+/// 180_000 = 用户裁定的 3min 首报档（ADR-0010 §14.53 候选条目 1 / 设计稿
+/// §3.1）。
+pub(crate) const DEFAULT_FOREGROUND_BLOCK_BUDGET_MS: u64 = 180_000;
 
 /// Internal version discriminant for run_terminal_cmd.
 ///
@@ -1059,8 +1081,11 @@ const BACKGROUND_TIMEOUT: Duration = Duration::from_secs(86400); // 24 hours
 /// Max time a *non-backgroundable* foreground command may block the turn. Such
 /// a command has only its requested `timeout` (up to 10h), so a long timeout
 /// would wedge the turn; we clamp and kill at this cap instead. Backgroundable
-/// commands use the terminal's `FOREGROUND_BLOCK_BUDGET` instead. Long work
-/// should use `background: true`. Env override: `GROK_MAX_FOREGROUND_BLOCK_MS`.
+/// commands use their per-request auto-bg budget (`foreground_block_budget_ms`;
+/// resident default 180s since TER T1.2) instead — the terminal's
+/// `FOREGROUND_BLOCK_BUDGET` only backstops direct requests that carry no
+/// budget. Long work should use `background: true`. Env override:
+/// `GROK_MAX_FOREGROUND_BLOCK_MS`.
 const MAX_FOREGROUND_BLOCK: Duration = Duration::from_secs(300); // 5 minutes
 
 fn max_foreground_block() -> Duration {
@@ -1393,10 +1418,12 @@ impl BashTool {
 
     /// Per-request FG auto-bg budget for the terminal when auto_bg is on.
     ///
-    /// - `None` when auto_bg is off, **or** when `foreground_block_budget_ms` is
-    ///   unset — leave `TerminalRunRequest.foreground_block_budget` as `None` so
-    ///   the terminal backend default applies (`GROK_FOREGROUND_BLOCK_BUDGET_MS`
-    ///   / 15s). Do not materialize a fixed 15s here; that would override the env.
+    /// TER T1.2 (2026-09-03)：15s 后端独立默认退役——缺省/`null` 收敛为
+    /// [`DEFAULT_FOREGROUND_BLOCK_BUDGET_MS`]（180s，与 serde/`Default`
+    /// 同一常量），请求恒携带有限预算（auto_bg 开时）；终端后端只对不带
+    /// 预算的直连请求兜底。
+    ///
+    /// - `None` when auto_bg is off (budget irrelevant for a kill-only run).
     /// - `Some(Duration::MAX)` when budget is `0` (timeout-only auto-bg).
     /// - `Some(ms)` when an explicit budget is configured.
     pub(crate) fn effective_foreground_block_budget(
@@ -1409,21 +1436,30 @@ impl BashTool {
             // 0 = disable short budget: only model/default timeout auto-bgs.
             Some(0) => Some(std::time::Duration::MAX),
             Some(ms) => Some(std::time::Duration::from_millis(ms)),
-            // Unset → backend default (env-overridable).
-            None => None,
+            // Unset / explicit null → resident default (single source; the
+            // former backend 15s / env default no longer applies here).
+            None => Some(std::time::Duration::from_millis(
+                DEFAULT_FOREGROUND_BLOCK_BUDGET_MS,
+            )),
         }
     }
 
-    /// Effective auto-bg wait: min(default_timeout, budget) when auto_bg is on
-    /// and budget is finite; otherwise default_timeout.
+    /// Effective foreground wait deadline: `min(default_timeout, budget)` when
+    /// auto-bg is on and the budget is finite; otherwise `default_timeout`.
     ///
-    /// When the session does not set `foreground_block_budget_ms`, assumes the
-    /// backend's documented default (15s) for this helper — the real process
-    /// still honors `GROK_FOREGROUND_BLOCK_BUDGET_MS` via `None` on the request.
+    /// This is the FG wait deadline, not necessarily the auto-bg point: when
+    /// `budget < default_timeout` it is the auto-bg report point, and when
+    /// `default_timeout <= budget` the per-request auto-bg gate in `run()`
+    /// stays off, so the deadline is the kill-on-timeout point.
+    ///
+    /// TER T1.2 (2026-09-03)：预算缺省/`null` 收敛为 resident 180s（与
+    /// serde/`Default` 同一常量），不再假定后端 15s；本 helper 只作测试与
+    /// 数学核对用（2026-09-04 复审处理：由 `effective_auto_bg_wait_ms` 改名，
+    /// 避免与 per-request auto-bg 判定混淆）。
     ///
     /// Not yet used in model-facing descriptions (historical auto-bg copy only).
-    #[allow(dead_code)] // description follow-up + unit tests
-    pub(crate) fn effective_auto_bg_wait_ms(params: &BashParams) -> Option<u64> {
+    #[allow(dead_code)] // 测试 + 数学核对（描述文案直接渲染 budget，不走本 helper）
+    pub(crate) fn effective_fg_wait_ms(params: &BashParams) -> Option<u64> {
         if !Self::auto_background_on_timeout_enabled(params) {
             return None;
         }
@@ -1460,6 +1496,40 @@ impl BashTool {
         ))
     }
 
+    /// TER T1.2 (2026-09-03)：模型面「中间回报点」文案从生效预算单源渲染
+    /// （`foreground_block_budget_ms` → request 同一来源），不再硬编码
+    /// “after 300s”。有限预算渲染为秒数（不足 1s 按 1s 展示）；
+    /// `0`（仅 timeout 触发 auto-bg）无有限回报点，改为按 timeout 描述。
+    fn auto_bg_property_mid_run_sentence(params: &BashParams) -> String {
+        match Self::effective_foreground_block_budget(params) {
+            Some(budget) if budget != Duration::MAX => {
+                let secs = (budget.as_millis() as u64).div_ceil(1000);
+                format!(
+                    "Commands still running after {secs}s (with a timeout that \
+                     allows it) return one mid-run status and keep running; the \
+                     final result arrives with a later tool result."
+                )
+            }
+            _ => "Commands still running when their resolved timeout fires \
+                 (auto-backgrounding enabled) are automatically backgrounded \
+                 instead of killed and return one mid-run status; the final \
+                 result arrives with a later tool result."
+                .to_string(),
+        }
+    }
+
+    /// Same-source clause for the tool-description bullet
+    /// (see [`Self::auto_bg_property_mid_run_sentence`]).
+    fn auto_bg_mid_run_when_clause(params: &BashParams) -> String {
+        match Self::effective_foreground_block_budget(params) {
+            Some(budget) if budget != Duration::MAX => {
+                let secs = (budget.as_millis() as u64).div_ceil(1000);
+                format!("after {secs}s and its timeout allows it")
+            }
+            _ => "as its resolved timeout fires".to_string(),
+        }
+    }
+
     /// Model-facing input schema. `timeout_param_name` is the client-facing
     /// timeout field (canonical or alias) — must match the remapped key.
     fn exported_input_schema(
@@ -1483,17 +1553,14 @@ impl BashTool {
                     // Background semantics live in the tool-description usage
                     // notes (single copy); the "foreground only" scoping here
                     // keeps the property from contradicting them.
-                    // Keep main-style auto-bg wording (no FG-budget ms advertised).
-                    // Follow-up: surface effective_auto_bg_wait_ms / FG budget here
-                    // once we deliberately change model-facing copy.
+                    // TER T1.2 (2026-09-03)：hide+auto-bg 形态的中间回报点
+                    // 由生效预算渲染（与 request 同源），不硬编码秒数。
                     let desc = if params.hide_background_input && auto_bg {
                         format!(
                             "Optional {timeout_param_name} in milliseconds (max {max_ms}). \
                              When omitted, the default timeout applies (300s for ordinary \
-                             commands, 600s for program/script commands). Commands still \
-                             running after 300s (with a timeout that allows it) return one \
-                             mid-run status and keep running; the final result arrives with \
-                             a later tool result."
+                             commands, 600s for program/script commands). {}",
+                            Self::auto_bg_property_mid_run_sentence(params)
                         )
                     } else if !background_enabled {
                         format!(
@@ -1534,10 +1601,11 @@ impl BashTool {
             Some(desc) => desc,
             None => Self::default_description_template(background_enabled, params),
         };
-        // Template only interpolates max/default timeout numbers + auto_bg flag.
-        // Do not advertise FG block budget ms here yet (follow-up PR).
+        // TER T1.2 (2026-09-03)：内部 auto-bg 模板的「中间回报点」从句由
+        // 生效预算渲染（auto_bg_mid_run_when），与 request/schema 描述同源。
         let extras = serde_json::json!({
             "auto_background_on_timeout": auto_bg,
+            "auto_bg_mid_run_when": Self::auto_bg_mid_run_when_clause(params),
             "max_timeout_ms": Self::effective_max_timeout_ms(params),
             "default_timeout_ms": Self::effective_default_timeout_ms(params),
             "max_timeout_configured": Self::max_timeout_configured(params),
@@ -1553,8 +1621,10 @@ impl BashTool {
         if background_enabled && params.hide_background_input {
             // THIN-HARNESS-REDESIGN-V2 §9.7 (2026-08-29 S5-2): ORZ keeps the
             // explicit background surface closed (`is_background` hidden) —
-            // the description must not advertise it; the 300s mid-run report
-            // is the framework's auto-background behavior.
+            // the description must not advertise it; the budget mid-run report
+            // (180s default since TER T1.2) is the framework's
+            // auto-background behavior. The report-point clause renders from
+            // `auto_bg_mid_run_when` (same source as the request budget).
             Self::default_description_template_internal_auto_bg()
         } else if background_enabled {
             Self::default_description_template_enabled()
@@ -1568,7 +1638,9 @@ impl BashTool {
 
 Usage notes:
   - You can specify an optional ${{ params.execute.timeout }} in milliseconds (up to ${{ max_timeout_ms | default(300000) }}ms). When omitted, the default timeout applies: 300s for ordinary commands, 600s for program/script commands.
-  - Long-running commands: when a command is still running after 300s and its timeout allows it, the tool returns one mid-run status (elapsed time, PID, partial output, full-output file path) and the command keeps running; its final result (exit code or timeout) is reported with a later tool result. To interrupt it, terminate the reported PID (e.g. `taskkill /PID <pid> /F` on Windows or `kill -9 <pid>` on Unix).
+${%- if auto_background_on_timeout %}
+  - Long-running commands: when a command is still running ${{ auto_bg_mid_run_when }}, the tool returns one mid-run status (elapsed time, PID, partial output, full-output file path) and the command keeps running; its final result (exit code or timeout) is reported with a later tool result. To interrupt it, terminate the reported PID (e.g. `taskkill /PID <pid> /F` on Windows or `kill -9 <pid>` on Unix).
+${%- endif %}
   - Timeout enforcement: when the timeout fires, the wrapper${%- if is_windows %} terminates the child's Job Object, killing every descendant process immediately (no graceful-termination grace period).${%- else %} kills the child process group (SIGTERM, escalated to SIGKILL after a ~1s grace period). Descendants that did not detach via `setsid` / `nohup` will also be killed.${%- endif %}
   - If the output exceeds {max_output_bytes} characters, the middle is truncated (you keep the beginning and end) and the result includes the path to a log file with the full output, which you can read or search.
 ${%- if shell_uses_semicolon %}
@@ -1729,7 +1801,7 @@ impl crate::types::tool_metadata::ToolMetadata for BashTool {
         // THIN-HARNESS-REDESIGN-V2 §9.7 (2026-08-29 S5-2): 仅当显式后台
         // 输入开放（enabled_background=true 且 NOT hide_background_input）
         // 时才要求 get_task_output/kill_task 同台；`hide_background_input`
-        // = 内部自动后台化（ORZ 300s 中间回报）——可观察性/可取消性由
+        // = 内部自动后台化（ORZ 预算中间回报，默认 180s，TER T1.2）——可观察性/可取消性由
         // 中间回报（PID）+ 完成提醒 + 终止命令承担，无后台工具族也可
         // finalize。
         let visible_background = Expr::<ToolParamsRequirement>::And(vec![
@@ -2218,11 +2290,12 @@ impl xai_tool_runtime::Tool for BashTool {
             // THIN-HARNESS-REDESIGN-V2 §9.7 (2026-08-29 S5-2): 中间回报的
             // 逐调用判定——当配置了「有限」回报点（非参考兼容的
             // `Duration::MAX`）时，只有解析超时严格大于回报点的命令才开启
-            // auto-background（满 300s 后台化并返回一次中间状态）；解析
-            // 超时 ≤ 回报点的命令保持 kill-on-timeout（普通 300s 默认在
-            // 300s 树杀，不产生无意义的「先回报后即杀」序列）。参考兼容的
-            // `Duration::MAX`（禁用短预算、仅 timeout 触发 auto-bg）与
-            // 未配置预算（后端默认）保持会话级原语义。
+            // auto-background（满预算后台化并返回一次中间状态，默认 180s
+            // TER T1.2）；解析超时 ≤ 回报点的命令保持 kill-on-timeout
+            // （不产生无意义的「先回报后即杀」序列）。参考兼容的
+            // `Duration::MAX`（禁用短预算）→ 仅 timeout 触发 auto-bg；
+            // 未配置/`null` 预算经 resident 180s 单源收敛为有限档，判定
+            // 同上（解析超时须 > 180s 才开启 auto-bg）。
             let auto_background_on_timeout = Self::auto_background_on_timeout_enabled(&params)
                 && match Self::effective_foreground_block_budget(&params) {
                     Some(budget) if budget != Duration::MAX => timeout > budget,
@@ -2248,10 +2321,10 @@ impl xai_tool_runtime::Tool for BashTool {
                 // every Shell call carries an explicit `block_until_ms`
                 // and the harness's observed behavior is to auto-background
                 // past that deadline rather than kill the process.
-                // Backwards compatible because
-                // `auto_background_on_timeout` defaults to `false`;
-                // existing grok_build callers that never opted in are
-                // unaffected.
+                // TER T1.1 (2026-09-03): `auto_background_on_timeout` now
+                // defaults to `true` (resident auto-bg); callers that need
+                // the old kill-on-timeout semantics must opt out explicitly
+                // with `false`.
                 auto_background_on_timeout,
                 foreground_block_budget: Self::effective_foreground_block_budget(&params),
                 kind: crate::computer::types::TaskKind::Bash,
@@ -2607,6 +2680,8 @@ mod tests {
         bg_error: Option<String>,
         /// Captured background request for assertions.
         captured_bg_request: CapturedRequest,
+        /// Captured foreground request for assertions.
+        captured_run_request: CapturedRequest,
     }
 
     impl MockTerminal {
@@ -2627,6 +2702,7 @@ mod tests {
                 bg_output_file: PathBuf::from("/tmp/bg.log"),
                 bg_error: None,
                 captured_bg_request: CapturedRequest::default(),
+                captured_run_request: CapturedRequest::default(),
             }
         }
 
@@ -2647,6 +2723,7 @@ mod tests {
                 bg_output_file: PathBuf::from("/tmp/bg.log"),
                 bg_error: None,
                 captured_bg_request: CapturedRequest::default(),
+                captured_run_request: CapturedRequest::default(),
             }
         }
 
@@ -2657,6 +2734,7 @@ mod tests {
                 bg_output_file: PathBuf::new(),
                 bg_error: Some("command failed".to_string()),
                 captured_bg_request: CapturedRequest::default(),
+                captured_run_request: CapturedRequest::default(),
             }
         }
 
@@ -2677,6 +2755,7 @@ mod tests {
                 bg_output_file: PathBuf::from(format!("/tmp/{}.log", task_id)),
                 bg_error: None,
                 captured_bg_request: CapturedRequest::default(),
+                captured_run_request: CapturedRequest::default(),
             }
         }
 
@@ -2684,6 +2763,15 @@ mod tests {
             let captured = CapturedRequest::default();
             let mut mock = Self::background_ok(task_id);
             mock.captured_bg_request = captured.clone();
+            (mock, captured)
+        }
+
+        /// TER T1.2 (2026-09-03)：success + 前台请求捕获——断言不传预算时
+        /// resident 默认 180s 落到 `TerminalRunRequest`。
+        fn success_capturing_run(output: &str, exit_code: i32) -> (Self, CapturedRequest) {
+            let captured = CapturedRequest::default();
+            let mut mock = Self::success(output, exit_code);
+            mock.captured_run_request = captured.clone();
             (mock, captured)
         }
 
@@ -2708,6 +2796,7 @@ mod tests {
                 bg_output_file: PathBuf::from("/tmp/bg.log"),
                 bg_error: None,
                 captured_bg_request: CapturedRequest::default(),
+                captured_run_request: CapturedRequest::default(),
             }
         }
     }
@@ -2716,8 +2805,9 @@ mod tests {
     impl TerminalBackend for MockTerminal {
         async fn run(
             &self,
-            _request: TerminalRunRequest,
+            request: TerminalRunRequest,
         ) -> Result<TerminalRunResult, ComputerError> {
+            *self.captured_run_request.lock().unwrap() = Some(request);
             self.foreground_result.clone()
         }
 
@@ -2793,11 +2883,28 @@ mod tests {
 
     /// Resources with the `&` rejection enabled. The flag defaults on (allow),
     /// so the detection-path tests opt back into rejection explicitly.
+    /// TER T1.3 (2026-09-04)：`hide_background_input=false` 把这类用例
+    /// 固定在「可见后台面」逃生阀上——其拒绝文案才会引导
+    /// `is_background=true`（默认封闭面下该参数不可见）。
     fn make_resources_reject_bg_op(mock: MockTerminal) -> Resources {
         make_resources_with_params(
             mock,
             BashParams {
                 allow_background_operator: false,
+                hide_background_input: false,
+                ..BashParams::default()
+            },
+        )
+    }
+
+    /// TER T1.3 (2026-09-04)：显式 `is_background` 端到端用例走「模型面
+    /// 开放」逃生阀——默认已封闭（hide=true），需显式 `false` 重开可见
+    /// 后台面（真实工具集如此 opt-in）。
+    fn make_resources_visible_background(mock: MockTerminal) -> Resources {
+        make_resources_with_params(
+            mock,
+            BashParams {
+                hide_background_input: false,
                 ..BashParams::default()
             },
         )
@@ -3331,6 +3438,7 @@ mod tests {
             bg_output_file: PathBuf::from("/tmp/bg.log"),
             bg_error: None,
             captured_bg_request: CapturedRequest::default(),
+            captured_run_request: CapturedRequest::default(),
         };
         let resources = make_resources(mock);
         let tool = BashTool;
@@ -3419,15 +3527,58 @@ mod tests {
         }
     }
 
-    /// THIN-HARNESS-REDESIGN-V2 §9.7 (2026-08-29 S5-2)：`hide_background_input`
-    /// 时显式 `is_background=true` 被拒绝——模型面保持「一次调用 = 一个结果」。
+    /// TER T1.2 (2026-09-03)：不传 `foreground_block_budget_ms` 参数时，
+    /// BashParams resident 默认 180_000 落到前台 `TerminalRunRequest`；
+    /// 解析超时（此处 300s）> 180s 时 auto-bg 开关打开——即主线「不传
+    /// 参数、前台命令满 180s 触发 auto-bg」的转换层验收点。
+    #[tokio::test]
+    async fn default_budget_180s_materializes_auto_bg_foreground_request() {
+        let (mock, captured) = MockTerminal::success_capturing_run("hello\n", 0);
+        let resources = make_resources_with_params(
+            mock,
+            BashParams {
+                timeout_secs: Some(300.0),
+                ..BashParams::default()
+            },
+        );
+        let tool = BashTool;
+        let result = xai_tool_runtime::Tool::run(
+            &tool,
+            test_ctx(resources.into_shared()),
+            make_input("sleep 999"),
+        )
+        .await
+        .unwrap();
+        assert!(
+            matches!(result, BashToolOutput::Foreground(_)),
+            "mock success must return a foreground result"
+        );
+
+        let req = captured.lock().unwrap();
+        let req = req.as_ref().expect("foreground request captured");
+        assert_eq!(
+            req.foreground_block_budget,
+            Some(std::time::Duration::from_millis(
+                DEFAULT_FOREGROUND_BLOCK_BUDGET_MS
+            )),
+            "omitted budget must resolve to the 180s resident default on the request"
+        );
+        assert!(
+            req.auto_background_on_timeout,
+            "resolved timeout 300s > 180s budget must enable auto-background"
+        );
+        assert_eq!(req.timeout, std::time::Duration::from_secs(300));
+    }
+
+    /// THIN-HARNESS-REDESIGN-V2 §9.7 (2026-08-29 S5-2) + TER T1.3
+    /// (2026-09-04)：默认 BashParams（hide_background_input=true）下显式
+    /// `is_background=true` 被拒绝——模型面保持「一次调用 = 一个结果」。
     #[tokio::test]
     async fn hide_background_input_rejects_explicit_background() {
         let resources = make_resources_with_params(
             MockTerminal::background_ok("t-hidden"),
             BashParams {
                 enabled_background: true,
-                hide_background_input: true,
                 ..BashParams::default()
             },
         );
@@ -3461,7 +3612,8 @@ mod tests {
 
     #[tokio::test]
     async fn background_command_starts() {
-        let resources = make_resources(MockTerminal::background_ok("bg-task-42"));
+        let resources =
+            make_resources_visible_background(MockTerminal::background_ok("bg-task-42"));
         let tool = BashTool;
 
         let result = xai_tool_runtime::Tool::run(
@@ -3489,7 +3641,7 @@ mod tests {
     #[tokio::test]
     async fn background_injects_python_unbuffered() {
         let (mock, captured) = MockTerminal::background_ok_capturing("bg-env");
-        let resources = make_resources(mock);
+        let resources = make_resources_visible_background(mock);
         let tool = BashTool;
 
         let _ = xai_tool_runtime::Tool::run(
@@ -3583,6 +3735,8 @@ mod tests {
             MockTerminal::background_ok("bg-task-disabled"),
             BashParams {
                 enabled_background: false,
+                // TER T1.1: auto-bg 常驻默认 true——关闭态需一并显式 false。
+                auto_background_on_timeout: false,
                 ..BashParams::default()
             },
         );
@@ -3606,6 +3760,8 @@ mod tests {
             MockTerminal::success("", 0),
             BashParams {
                 enabled_background: false,
+                // TER T1.1: auto-bg 常驻默认 true——关闭态需一并显式 false。
+                auto_background_on_timeout: false,
                 ..BashParams::default()
             },
         );
@@ -3691,7 +3847,7 @@ mod tests {
 
     #[tokio::test]
     async fn tool_name_mapping_in_background_hint() {
-        let mut resources = make_resources(MockTerminal::background_ok("t1"));
+        let mut resources = make_resources_visible_background(MockTerminal::background_ok("t1"));
         // Custom model-facing tool AND param names — the hint must track both
         // (a hardcoded `task_ids` goes stale after randomization renames).
         resources.insert(TemplateRenderer::new(
@@ -3736,7 +3892,7 @@ mod tests {
     /// so the old `Result`-based fallback never fired.
     #[tokio::test]
     async fn background_hint_falls_back_when_get_output_tool_absent() {
-        let mut resources = make_resources(MockTerminal::background_ok("t2"));
+        let mut resources = make_resources_visible_background(MockTerminal::background_ok("t2"));
         resources.insert(TemplateRenderer::new(HashMap::new(), HashMap::new()));
 
         let tool = BashTool;
@@ -4612,9 +4768,11 @@ mod tests {
                 .to_string()
         }
 
-        /// THIN-HARNESS-REDESIGN-V2 §9.7 (2026-08-29 S5-2)：
-        /// `hide_background_input` 从模型可见 schema 移除 `is_background`，
-        /// timeout 描述说明两档默认与 300s 中间回报。
+        /// THIN-HARNESS-REDESIGN-V2 §9.7 (2026-08-29 S5-2) +
+        /// TER T1.2 (2026-09-03)：
+        /// `hide_background_input` 从模型可见 schema 移除 `is_background`；
+        /// timeout 描述说明两档默认，中间回报点由生效预算渲染（此处预算
+        /// 300_000 → “after 300s”，与 request 同源）。
         #[test]
         fn schema_hides_is_background_when_hide_background_input() {
             let params = BashParams {
@@ -4639,6 +4797,7 @@ mod tests {
             assert!(desc.contains("300s for ordinary"), "{desc}");
             assert!(desc.contains("600s for program/script"), "{desc}");
             assert!(desc.contains("mid-run"), "{desc}");
+            assert!(desc.contains("after 300s"), "{desc}");
         }
 
         fn tool_desc(params: &BashParams) -> String {
@@ -4658,17 +4817,54 @@ mod tests {
             BashTool::rendered_description(None, &renderer, params)
         }
 
+        /// TER T1.1/T1.2 (2026-09-03)：常驻默认开启——默认构造即
+        /// `auto_background_on_timeout=true`，且 `foreground_block_budget_ms`
+        /// = 180_000（struct 与 serde 同源，15s 后端默认退役）。
         #[test]
-        fn budget_none_when_auto_bg_off() {
+        fn default_enables_auto_bg() {
             let params = BashParams::default();
-            assert!(!params.auto_background_on_timeout);
-            assert!(BashTool::effective_foreground_block_budget(&params).is_none());
-            assert!(BashTool::effective_auto_bg_wait_ms(&params).is_none());
+            assert!(params.auto_background_on_timeout, "default must be true");
+            assert_eq!(
+                params.foreground_block_budget_ms,
+                Some(DEFAULT_FOREGROUND_BLOCK_BUDGET_MS),
+            );
+            assert_eq!(
+                BashTool::effective_foreground_block_budget(&params),
+                Some(Duration::from_millis(DEFAULT_FOREGROUND_BLOCK_BUDGET_MS)),
+                "default budget must materialize as a finite 180s request budget"
+            );
+            // helper 的 FG wait deadline = min(默认超时, 预算)；默认超时
+            // 120s < 180s 时 deadline 取 120s——此值此时是 kill-on-timeout
+            // 点而非 auto-bg 点（逐请求 auto-bg 门要求解析超时 > 预算；
+            // 主线 timeout_secs 600/普通 300 均 > 180s，实际在 180s 后台化
+            // ——见 request 捕获用例）。
+            assert_eq!(
+                BashTool::effective_fg_wait_ms(&params),
+                Some(
+                    BashTool::effective_default_timeout_ms(&params)
+                        .min(DEFAULT_FOREGROUND_BLOCK_BUDGET_MS)
+                ),
+            );
         }
 
-        /// THIN-HARNESS-REDESIGN-V2 §9.7 (2026-08-29 S5-2)：
-        /// `hide_background_input` 下工具描述不提及 `is_background`，并说明
-        /// 两档默认与 300s 中间回报（渲染不 panic）。
+        /// TER T1.1 (2026-09-03)：关闭态仍可配——显式 `false` 时 budget /
+        /// FG wait deadline 均为 None，旧语义不回归。
+        #[test]
+        fn explicit_false_disables_auto_bg() {
+            let params = BashParams {
+                auto_background_on_timeout: false,
+                ..BashParams::default()
+            };
+            assert!(!params.auto_background_on_timeout);
+            assert!(BashTool::effective_foreground_block_budget(&params).is_none());
+            assert!(BashTool::effective_fg_wait_ms(&params).is_none());
+        }
+
+        /// THIN-HARNESS-REDESIGN-V2 §9.7 (2026-08-29 S5-2) +
+        /// TER T1.2 (2026-09-03)：
+        /// `hide_background_input` 下工具描述不提及 `is_background`；中间
+        /// 回报点由预算渲染（此处预算 300_000 → “after 300s”，渲染不
+        /// panic）。
         #[test]
         fn internal_auto_bg_description_renders_without_background_surface() {
             let params = BashParams {
@@ -4684,21 +4880,84 @@ mod tests {
             assert!(desc.contains("600s for program/script"), "{desc}");
             assert!(desc.contains("mid-run status"), "{desc}");
             assert!(desc.contains("terminate the reported PID"), "{desc}");
+            assert!(desc.contains("after 300s"), "{desc}");
         }
 
+        /// TER T1.2 (2026-09-03)：显式 `null`/`None` 与缺省同值——不再把
+        /// request 留给后端 15s 默认，而是收敛到 resident 180s 单源。
         #[test]
-        fn unset_budget_leaves_request_none_for_backend_default() {
+        fn explicit_null_budget_falls_back_to_180s_resident_default() {
             let params = BashParams {
                 auto_background_on_timeout: true,
                 foreground_block_budget_ms: None,
                 ..BashParams::default()
             };
-            // Must not pin 15s on the request — backend applies env/default.
-            assert!(BashTool::effective_foreground_block_budget(&params).is_none());
-            // Helper still assumes documented 15s default for wait math.
+            assert!(params.foreground_block_budget_ms.is_none());
             assert_eq!(
-                BashTool::effective_auto_bg_wait_ms(&params),
-                Some(DEFAULT_FOREGROUND_BLOCK_BUDGET_MS),
+                BashTool::effective_foreground_block_budget(&params),
+                Some(Duration::from_millis(DEFAULT_FOREGROUND_BLOCK_BUDGET_MS)),
+                "explicit null must fall back to the 180s resident default"
+            );
+        }
+
+        /// TER T1.2 (2026-09-03) + TER T1.3 (2026-09-04)：默认模型面文案与
+        /// 生效值同源——缺省 BashParams（hide_background_input=true 封闭面）
+        /// 下，schema timeout 描述与工具描述都渲染“after 180s”（由 resident
+        /// 180_000 渲染，非硬编码），且均不提及 `is_background`。
+        #[test]
+        fn default_budget_180s_renders_in_model_facing_copy() {
+            let params = BashParams::default();
+            let desc = timeout_desc(&params);
+            assert!(desc.contains("after 180s"), "{desc}");
+            assert!(!desc.contains("after 300s"), "{desc}");
+            assert!(!desc.contains("is_background"), "{desc}");
+
+            let tdesc = tool_desc(&params);
+            assert!(tdesc.contains("after 180s"), "{tdesc}");
+            assert!(!tdesc.contains("after 300s"), "{tdesc}");
+            assert!(!tdesc.contains("is_background"), "{tdesc}");
+        }
+
+        /// TER T1.3 (2026-09-04)：模型面封闭为 resident 默认——缺省
+        /// BashParams 下 exported schema 移除 `is_background`（属性与
+        /// required 同步），default 构造与 serde 缺省一致；显式 `false`
+        /// 逃生阀保留可见后台面（schema 显隐由有效 params 派生）。
+        #[test]
+        fn default_closes_is_background_surface() {
+            let params = BashParams::default();
+            assert!(
+                params.hide_background_input,
+                "T1.3: struct default must close the explicit background surface"
+            );
+
+            let mut schema = base_schema();
+            if let Some(req) = schema["required"].as_array_mut() {
+                req.push(serde_json::json!("is_background"));
+            }
+            let exported = BashTool::exported_input_schema(&schema, &params, "timeout");
+            assert!(
+                exported["properties"].get("is_background").is_none(),
+                "default must hide is_background from the model surface"
+            );
+            let required = exported["required"].as_array().expect("required array");
+            assert!(
+                !required.iter().any(|v| v == "is_background"),
+                "default must strip is_background from required too: {required:?}"
+            );
+
+            let open = BashParams {
+                hide_background_input: false,
+                ..BashParams::default()
+            };
+            let opened = BashTool::exported_input_schema(&schema, &open, "timeout");
+            assert!(
+                opened["properties"].get("is_background").is_some(),
+                "explicit hide_background_input=false must keep the visible escape hatch"
+            );
+            let opened_required = opened["required"].as_array().expect("required array");
+            assert!(
+                opened_required.iter().any(|v| v == "is_background"),
+                "explicit false must keep is_background in required when the base schema lists it"
             );
         }
 
@@ -4714,8 +4973,9 @@ mod tests {
                 BashTool::effective_foreground_block_budget(&params),
                 Some(Duration::MAX),
             );
-            // Wait is purely the default timeout when short budget is off.
-            assert_eq!(BashTool::effective_auto_bg_wait_ms(&params), Some(30_000));
+            // FG wait deadline is purely the default timeout when the short
+            // budget is off.
+            assert_eq!(BashTool::effective_fg_wait_ms(&params), Some(30_000));
         }
 
         #[test]
@@ -4730,7 +4990,7 @@ mod tests {
                 BashTool::effective_foreground_block_budget(&params),
                 Some(Duration::from_millis(5_000)),
             );
-            assert_eq!(BashTool::effective_auto_bg_wait_ms(&params), Some(5_000));
+            assert_eq!(BashTool::effective_fg_wait_ms(&params), Some(5_000));
         }
 
         #[test]
@@ -4741,16 +5001,21 @@ mod tests {
                 timeout_secs: Some(10.0),
                 ..BashParams::default()
             };
-            assert_eq!(BashTool::effective_auto_bg_wait_ms(&params), Some(10_000));
+            assert_eq!(BashTool::effective_fg_wait_ms(&params), Some(10_000));
         }
 
         /// Descriptions already advertise max/default timeout numbers — those
-        /// must track BashParams. Do **not** require FG-budget ms in copy yet.
+        /// must track BashParams. The hide+auto-bg mid-run copy renders the
+        /// FG budget (see `default_budget_180s_renders_in_model_facing_copy`);
+        /// this non-hidden branch intentionally keeps the short historical
+        /// wording. TER T1.3 (2026-09-04)：可见面已非默认——该分支显式
+        /// `hide_background_input=false` 逃生阀。
         #[test]
         fn schema_timeout_numbers_track_config() {
             let params = BashParams {
                 max_timeout_secs: Some(60.0),
                 timeout_secs: Some(30.0),
+                hide_background_input: false,
                 ..BashParams::default()
             };
             let desc = timeout_desc(&params);
@@ -4772,6 +5037,7 @@ mod tests {
                 auto_background_on_timeout: true,
                 max_timeout_secs: Some(60.0),
                 foreground_block_budget_ms: Some(2_000),
+                hide_background_input: false,
                 ..BashParams::default()
             };
             let auto_desc = timeout_desc(&auto);
@@ -4861,6 +5127,7 @@ mod tests {
                 max_timeout_secs: Some(90.0),
                 timeout_secs: Some(45.0),
                 auto_background_on_timeout: false,
+                hide_background_input: false,
                 ..BashParams::default()
             };
             let desc = tool_desc(&params);
@@ -4885,9 +5152,39 @@ mod tests {
             )
             .unwrap();
             assert_eq!(p.foreground_block_budget_ms, Some(0));
-            // Omitted → None (server default)
+            // Omitted → resident 180_000（TER T1.2 单一生效源，不再 None
+            // → 后端 15s）。
             let p2: BashParams = serde_json::from_str(r#"{"enabled_background":true}"#).unwrap();
-            assert!(p2.foreground_block_budget_ms.is_none());
+            assert_eq!(
+                p2.foreground_block_budget_ms,
+                Some(DEFAULT_FOREGROUND_BLOCK_BUDGET_MS)
+            );
+            // 显式 null 保持 None（effective 层收敛到 180s，见
+            // `explicit_null_budget_falls_back_to_180s_resident_default`）。
+            let p3: BashParams =
+                serde_json::from_str(r#"{"foreground_block_budget_ms":null}"#).unwrap();
+            assert!(p3.foreground_block_budget_ms.is_none());
+        }
+
+        /// TER T1.3 (2026-09-04)：`hide_background_input` 的 serde 缺省与
+        /// struct `Default` 同源（true）——省略键即封闭模型面；显式
+        /// `false` 逃生阀仍可配。
+        #[test]
+        fn serde_omission_and_explicit_false_for_hide_background_input() {
+            let omitted: BashParams = serde_json::from_str(r#"{}"#).unwrap();
+            assert!(
+                omitted.hide_background_input,
+                "T1.3: omitted key must resolve to the resident true default"
+            );
+            let explicit_true: BashParams =
+                serde_json::from_str(r#"{"hide_background_input":true}"#).unwrap();
+            assert!(explicit_true.hide_background_input);
+            let open: BashParams =
+                serde_json::from_str(r#"{"hide_background_input":false}"#).unwrap();
+            assert!(
+                !open.hide_background_input,
+                "T1.3: explicit false escape hatch must stay configurable"
+            );
         }
     }
 

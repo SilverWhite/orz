@@ -105,34 +105,25 @@ pub fn read_file_coarse_gate_from_config(config: &toml::Value) -> Option<usize> 
 /// - 分层默认超时：程序/脚本类 600s、普通命令 300s，由宿主逐调用按命令
 ///   形态注入（见 [`terminal_tier_default_timeout_ms`]）；模型可传
 ///   `timeout` 覆盖，上限 900s（`max_timeout_secs`）。
-/// - 中间回报：`auto_background_on_timeout` + `foreground_block_budget_ms`
-///   = 300_000——命令满 300s 且解析超时 >300s 时转入后台并返回一次
-///   「运行 + 工具自身情况」中间状态；后台截止=原解析超时。
-/// - 工具面封闭：`enabled_background=true` 仅为 actor 自动后台化所需；
-///   `allow_background_operator=false` + `hide_background_input=true`
-///   保持模型侧「一次调用 = 一个结果」，显式后台化不开放。
+/// - 中间回报：`auto_background_on_timeout` 自 TER T1.1（2026-09-03）起由
+///   BashParams struct/serde 默认（true）单一提供，不再显式注入；
+///   `foreground_block_budget_ms` 自 TER T1.2（2026-09-03）起同样由
+///   BashParams struct/serde 默认（180_000）单一提供，本函数不再注入
+///   （缺省经 serde 解析即 180_000）——命令满 180s 且解析超时 >180s 时
+///   转入后台并返回一次「运行 + 工具自身情况」中间状态；后台截止=原
+///   解析超时。
+/// - 工具面封闭：`enabled_background` 自 T1.1 起由 struct/serde 默认 true
+///   单一提供；`hide_background_input` 自 TER T1.3（2026-09-04）起同样由
+///   BashParams struct/serde 默认（true）单一提供，本函数不再显式注入
+///   （缺省经 serde 解析即 true，`is_background` 不出现在模型面 schema）；
+///   另注入 `allow_background_operator=false` 封掉 `&`，保持模型侧
+///   「一次调用 = 一个结果」，显式后台化不开放。
 /// 外层 ORZ_TOOL_TIMEOUT_SECS=900 维持全局兜底（终端命令实际到不了外层值）。
 pub(crate) fn run_terminal_cmd_tool_params() -> Option<serde_json::Map<String, serde_json::Value>> {
     Some(serde_json::Map::from_iter([
         (
-            "enabled_background".to_string(),
-            serde_json::Value::Bool(true),
-        ),
-        (
-            "auto_background_on_timeout".to_string(),
-            serde_json::Value::Bool(true),
-        ),
-        (
-            "foreground_block_budget_ms".to_string(),
-            serde_json::Value::from(300_000u64),
-        ),
-        (
             "allow_background_operator".to_string(),
             serde_json::Value::Bool(false),
-        ),
-        (
-            "hide_background_input".to_string(),
-            serde_json::Value::Bool(true),
         ),
         ("timeout_secs".to_string(), serde_json::Value::from(600.0)),
         (
@@ -345,11 +336,12 @@ pub fn build_toolset(
                     .any(|t| id.ends_with(&format!(":{t}")))
         })
         .map(|id| {
-            // bash background mode (`enabled_background`) requires the banned
-            // `kill_task` (background tasks must be observable/cancellable),
-            // so it is disabled too — synchronous-only tool surface, per the
-            // scheduler-family ban above. Long-running commands rely on the
-            // P0-1 tool timeout + P1-1 stall watchdogs instead.
+            // TER T1.3 (2026-09-04)：模型面封闭（`hide_background_input`
+            // struct/serde 默认 true）+ `allow_background_operator=false`
+            // ——显式 `&`/`is_background` 不开放，`requires_expr` 不再要求
+            // 被禁的 get_task_output/kill_task 同台；内部 auto-background
+            // 仍开启，可观察性/可取消性由 180s 中间回报（PID + 落盘输出）
+            // 与完成提醒承担（scheduler 族工具不保留）。
             let params = if id.ends_with(":run_terminal_cmd") {
                 run_terminal_cmd_tool_params()
             } else if id == "GrokBuild:read_file"
@@ -738,30 +730,40 @@ mod config_tests {
 
     /// THIN-HARNESS-REDESIGN §4.6 审查处理 (2026-08-27) +
     /// THIN-HARNESS-REDESIGN-V2 §9.7 (2026-08-29 S5-2)：run_terminal_cmd
-    /// 的分层超时与中间回报配置——`enabled_background=true` 仅为 actor
-    /// 自动后台化所需，`auto_background_on_timeout=true` +
-    /// `foreground_block_budget_ms=300_000`（满 300s 后台化并返回一次
-    /// 中间状态），`allow_background_operator=false` +
-    /// `hide_background_input=true`（模型面封闭），`timeout_secs=600`
-    /// （程序/脚本缺省；普通命令 300s 由宿主逐调用注入）、
-    /// `max_timeout_secs=900`（模型可传上限）。配置键名与 BashParams
-    /// serde 字段一致（未知键静默 no-op，必须逐字匹配）。
+    /// 的分层超时与中间回报配置——`enabled_background` /
+    /// `auto_background_on_timeout` 自 TER T1.1 起由 BashParams
+    /// struct/serde 默认（true）单一提供（此处不注入，缺省即 true），
+    /// `foreground_block_budget_ms` 自 TER T1.2 起由 BashParams
+    /// struct/serde 默认（180_000，满 180s 后台化并返回一次中间状态）
+    /// 单一提供（此处不注入，缺省经 serde 解析即 180_000）、
+    /// `hide_background_input` 自 TER T1.3 起由 BashParams struct/serde
+    /// 默认（true）单一提供（此处不注入，缺省经 serde 解析即 true——
+    /// `is_background` 不出现在模型面 schema）、
+    /// `allow_background_operator=false`（封掉 `&`）、
+    /// `timeout_secs=600`（程序/脚本缺省；普通命令 300s 由宿主逐调用
+    /// 注入）、`max_timeout_secs=900`（模型可传上限）。配置键名与
+    /// BashParams serde 字段一致（未知键静默 no-op，必须逐字匹配）。
     #[test]
     fn run_terminal_cmd_params_s5_2_layered_timeout_and_mid_run() {
         let params = run_terminal_cmd_tool_params().expect("params present");
         assert_eq!(
-            params.get("enabled_background"),
-            Some(&serde_json::Value::Bool(true)),
-            "actor auto-background requires enabled_background"
-        );
-        assert_eq!(
-            params.get("auto_background_on_timeout"),
-            Some(&serde_json::Value::Bool(true))
-        );
-        assert_eq!(
             params.get("foreground_block_budget_ms"),
-            Some(&serde_json::Value::from(300_000u64)),
-            "300s mid-run report point"
+            None,
+            "TER T1.2: budget no longer injected — BashParams resident default is the single source"
+        );
+        // 单一生效源联检：无注入时把主线 params 交给 BashParams serde，
+        // 缺省键必须收敛为 180_000。
+        let parsed: orz_tools::implementations::grok_build::bash::BashParams =
+            serde_json::from_value(serde_json::Value::Object(params.clone()))
+                .expect("mainline params parse into BashParams");
+        assert_eq!(
+            parsed.foreground_block_budget_ms,
+            Some(180_000),
+            "TER T1.2: omitted budget must resolve to the 180s resident default"
+        );
+        assert!(
+            parsed.hide_background_input,
+            "TER T1.3: omitted hide_background_input must resolve to the resident true default"
         );
         assert_eq!(
             params.get("allow_background_operator"),
@@ -770,8 +772,8 @@ mod config_tests {
         );
         assert_eq!(
             params.get("hide_background_input"),
-            Some(&serde_json::Value::Bool(true)),
-            "is_background stays off the model surface"
+            None,
+            "TER T1.3: hide flag no longer injected — BashParams resident default is the single source"
         );
         assert_eq!(
             params.get("timeout_secs"),
@@ -783,13 +785,15 @@ mod config_tests {
             Some(&serde_json::Value::from(900.0)),
             "model-passed timeout ceiling raised to 900s"
         );
+        assert!(
+            params.get("enabled_background").is_none()
+                && params.get("auto_background_on_timeout").is_none(),
+            "TER T1.1/T1.2/T1.3: flags + budget + hide now come from BashParams resident defaults, \
+             no redundant mainline injection"
+        );
         // 键名逐字匹配 BashParams 字段（未知键会被静默忽略，防拼写漂移）。
         for key in [
-            "enabled_background",
-            "auto_background_on_timeout",
-            "foreground_block_budget_ms",
             "allow_background_operator",
-            "hide_background_input",
             "timeout_secs",
             "max_timeout_secs",
         ] {
