@@ -3760,8 +3760,10 @@ ADR §3.6 正文修订随实施登记。
     DC 清理退役；本地资产=orz-0.3.0-linux-x86_64.tar.gz（33.0 MB）
     + orz-0.3.0-windows-x86_64.zip（25.3 MB），API Key 不入包，注入=
     Windows 凭据管理器 / Linux `ORZ_DEEPSEEK_API_KEY` env
-    （ADR-0006 §2.2/§2.3）。GitHub Release 上传待凭据更新后执行。
-    登记于
+    （ADR-0006 §2.2/§2.3）。GitHub Release v0.3.0（SilverWhite/CLI，
+    [releases/tag/v0.3.0](https://github.com/SilverWhite/CLI/releases/tag/v0.3.0)），
+    资产=orz-0.3.0-linux-x86_64.tar.gz（33.0 MB）+ orz-0.3.0-windows-
+    x86_64.zip（25.3 MB）。登记于
     [0.3.0 发布包](../releases/orz-0.3.0-linux-x86_64/README.md)。
 
 ### 14.41 v1.41 补写裁决索引（2026-08-25）
