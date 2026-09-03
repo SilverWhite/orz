@@ -4,7 +4,7 @@
 > [BACKLOG_AND_PRIORITIES.md](BACKLOG_AND_PRIORITIES.md) 只保留指针，
 > 本文为 TER 明细权威。状态：`current`（2026-09-03 设计定稿；M0 设计门
 > T0.1–T0.4 已放行；**M1（T1.1–T1.13）已闭合并放行进入 M2**，见
-> TODO2.md）。
+> TODO2.md；M2 实施中——T2.1 已闭合）。
 > 入口：设计稿
 > [TOOL_EXECUTION_LAYER_REFORM_DESIGN_2026-09-03.md](TOOL_EXECUTION_LAYER_REFORM_DESIGN_2026-09-03.md)
 > / 实施步骤 [TODO2.md](../TODO2.md) / S4_PROGRESS §16.17/§16.18。
@@ -76,7 +76,11 @@ runner/VM → M3 回归复验（明细在 TODO2.md）。边界：15min 长档、
   709 / orz-assurance 201 全绿、clippy 零 error、fmt 净、Linux release
   构建成功（WSL Ubuntu 24.04）、事件链 verifier 273 passed）已于
   2026-09-04 闭合并**放行进入 M2**（审计
-  TER_T1_13_M1_GATE_2026-09-04）。
+  TER_T1_13_M1_GATE_2026-09-04）；M2 实施中——T2.1 墙钟单一化（runner
+  删 `--max-wallclock`/`timeout-60` 余量；sandbox `--timeout`=官方
+  agent_timeout_seconds 唯一评测墙钟；官方值经 ORZ_MAX_WALLCLOCK 透传
+  F6 读源）已于 2026-09-04 闭合（DryRun 两题无 840、逐题 timeout 生效；
+  审计 TER_T2_1_WALLCLOCK_SINGLE_SOURCE_2026-09-04）。
 - 专项：TER-0.1 生成器 v0.2 表全面对齐已登记（见下），不阻塞 M1。
 
 ## TER-0.1 生成器 v0.2 表全面对齐（专项；P0；2026-09-03 登记，不阻塞

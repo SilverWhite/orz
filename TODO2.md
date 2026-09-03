@@ -217,10 +217,18 @@
 
 ## M2 Windows runner / VM（依赖 M1 新 build）
 
-- [ ] T2.1 墙钟单一化：删 runner `--max-wallclock` 与 60s 余量；
+- [x] T2.1 墙钟单一化：删 runner `--max-wallclock` 与 60s 余量；
   sandbox `--timeout`=官方 agent_timeout_seconds 为唯一评测墙钟；F6
   push 读源以 runner 施加值为准。验收：DryRun 确认无 840 参数、逐题
   timeout 生效。
+  （2026-09-04 完成：`run_agent_arm.ps1` 删除 `perTask-60` 派生与
+  `--max-wallclock`（840 余量移除）；sandbox `--timeout` = task.json
+  官方 agent_timeout_seconds 为唯一评测墙钟；官方值经
+  `ORZ_MAX_WALLCLOCK` env 透传 orz（F6 pull/push 读源以 runner 施加值
+  为准，T1.8/T1.9 消费）；DryRun 新增 wallclock 计划行。验证：DryRun
+  两题 900s/3600s 计划输出无 --max-wallclock/840、逐题 --timeout 与
+  env 生效、AGENT_ERRORS=0。审计见
+  [`TER_T2_1_WALLCLOCK_SINGLE_SOURCE_2026-09-04.md`](docs/audits/TER_T2_1_WALLCLOCK_SINGLE_SOURCE_2026-09-04.md)。）
 - [ ] T2.2 W-F12 本地透明层：先测基准（当前墙外 Test-NetConnection /
   curl / Invoke-WebRequest / python requests 各自失败耗时表）→ 实现
   DNS/TCP 本地拒答 → 复测 ≤2s/目标；allowlist 内连通不变。验收：mteb

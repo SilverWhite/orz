@@ -317,7 +317,11 @@ foreach ($taskId in $selectedIds) {
     if ($perTaskTimeoutSeconds -lt 60) {
         $perTaskTimeoutSeconds = 60
     }
-    $wallclockSec = [Math]::Max(60, $perTaskTimeoutSeconds - 60)
+    # TER T2.1 (2026-09-04) 墙钟单一化：不再派生 `perTask-60` 的
+    # `--max-wallclock`（840 余量删除）——sandbox `--timeout`（=官方
+    # agent_timeout_seconds）是唯一评测墙钟；官方值经 `ORZ_MAX_WALLCLOCK`
+    # env 透传给 orz 内部（F6 pull/push 读源以 runner 施加值为准，
+    # T1.8/T1.9 已消费该 env）。
     $workdir = Join-Path $Workspace ("task-" + $taskId)
     New-Item -ItemType Directory -Path $workdir -Force | Out-Null
     Copy-Item -LiteralPath $instructionPath -Destination $workdir -Force
@@ -404,9 +408,9 @@ foreach ($taskId in $selectedIds) {
         '--allow-write',
         '--allow-shell',
         '--allow-network',
-        '--max-wallclock', "$wallclockSec",
         '--run-root', $workdir
     )
+    $env:ORZ_MAX_WALLCLOCK = "$perTaskTimeoutSeconds"
 
     if ($Arm -eq 'control') {
         if (-not $DryRun) {
@@ -430,6 +434,7 @@ foreach ($taskId in $selectedIds) {
     if ($DryRun) {
         Write-Output "AGENT_DRYRUN TASK=$taskId env=$($taskResult.env_inject) allowlist=$($taskResult.allowlist) appcontainer=off"
         Write-Output "AGENT_DRYRUN SBX: python $SandboxCli $($sbxArgs -join ' ')"
+        Write-Output "AGENT_DRYRUN wallclock runner_imposed=sandbox --timeout $perTaskTimeoutSeconds max_wallclock_arg=none env_ORZ_MAX_WALLCLOCK=$perTaskTimeoutSeconds"
         $taskResult.attempt = 'dry-run'
         $taskResult.orz_exit = 0
         [void]$summary.tasks.Add($taskResult)
@@ -476,6 +481,7 @@ foreach ($taskId in $selectedIds) {
 if (-not $DryRun) {
     Remove-Item Env:ORZ_DEEPSEEK_API_KEY -ErrorAction SilentlyContinue
     Remove-Item Env:ORZ_MAIN_AGENT_MODEL -ErrorAction SilentlyContinue
+    Remove-Item Env:ORZ_MAX_WALLCLOCK -ErrorAction SilentlyContinue
 }
 foreach ($f in @($secretFiles)) {
     if (Test-Path -LiteralPath $f) {
