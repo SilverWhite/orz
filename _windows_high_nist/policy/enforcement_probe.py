@@ -23,6 +23,7 @@ import re
 import socket
 import subprocess as sp
 import sys
+import time
 import traceback
 import uuid
 import winreg
@@ -207,6 +208,7 @@ def main() -> int:
         if not condition:
             failures += 1
 
+    wf12_timings: dict[str, int] = {}
     check("workspace_writable", path_write_succeeded(workspace))
 
     if arm == "control":
@@ -338,13 +340,21 @@ def main() -> int:
                 if candidate != args.AllowlistReachabilityIp:
                     blocked_probe_ip = candidate
                     break
-        check("network_blocked", tcp_blocked(blocked_probe_ip, 443))
+        # TER T2.2 (W-F12)：墙内 egress 判定附时延（ms）——外部目标
+        # ≤1.5s 可判定失败、allowlist ≤1.5s 可达，作为验收线证据。
+        _t0 = time.monotonic()
+        _blocked = tcp_blocked(blocked_probe_ip, 443)
+        wf12_timings["network_blocked_ms"] = int((time.monotonic() - _t0) * 1000)
+        check("network_blocked", _blocked)
         if args.AllowlistReachabilityIp:
-            check(
-                "allowlist_reachable",
-                not tcp_blocked(args.AllowlistReachabilityIp, 443),
-            )
-        check("metadata_blocked", tcp_blocked("169.254.169.254", 80))
+            _t0 = time.monotonic()
+            _reachable = not tcp_blocked(args.AllowlistReachabilityIp, 443)
+            wf12_timings["allowlist_reachable_ms"] = int((time.monotonic() - _t0) * 1000)
+            check("allowlist_reachable", _reachable)
+        _t0 = time.monotonic()
+        _meta_blocked = tcp_blocked("169.254.169.254", 80)
+        wf12_timings["metadata_blocked_ms"] = int((time.monotonic() - _t0) * 1000)
+        check("metadata_blocked", _meta_blocked)
 
         leftover = []
         try:
@@ -357,6 +367,7 @@ def main() -> int:
 
     if args.ResultPath:
         result = {
+            "wf12_timings_ms": wf12_timings,
             "arm": arm,
             "workspace": workspace,
             "checks": checks,
