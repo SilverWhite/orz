@@ -94,10 +94,21 @@
   orz-host 参数测试 1 passed、orz-workspace 后台接线 7 passed、
   fmt --check 净、git diff --check exit 0。审计见
   [`TER_T1_3_MODEL_FACE_CLOSURE_2026-09-04.md`](docs/audits/TER_T1_3_MODEL_FACE_CLOSURE_2026-09-04.md)。）
-- [ ] T1.4 去硬杀语义：timeout 分层（普通/程序/模型上限）不再作为杀
+- [x] T1.4 去硬杀语义：timeout 分层（普通/程序/模型上限）不再作为杀
   进程点，改为 auto-bg deadline 引用；原 timed_out 杀进程测试改为
   “auto-bg 或 idle-kill”断言。验收：无任何“满 timeout 杀活跃命令”
   代码路径（评测墙钟除外）。
+  （2026-09-04 完成：前台解析超时与 180s 预算先到者即 auto-bg deadline
+  （终端按 `min` 判定，bash 层取消“timeout ≤ 预算 → kill-on-timeout”
+  逐调用门）；auto-bg/用户后台化后原解析超时退役，统一收敛 10h 绝对兜底
+  （0b 清扫只撞绝对上限；显式后台任务正向模型超时 kill-backstop 保留）；
+  kill-on-timeout 仅剩显式 `auto_background_on_timeout=false` 逃生阀；
+  模型面文案删除 “Timeout enforcement … kills” 与 “300s ordinary /
+  600s program” 静态分层宣示，改由 `min(默认超时, 预算)` 单源渲染。
+  验证：orz-tools bash 230 passed、终端 actor 40 passed、orz-host 参数
+  1 passed、orz-workspace 接线 1 passed、fmt --check 净、git diff
+  --check exit 0。审计见
+  [`TER_T1_4_NO_HARD_TIMEOUT_KILL_2026-09-04.md`](docs/audits/TER_T1_4_NO_HARD_TIMEOUT_KILL_2026-09-04.md)。）
 - [ ] T1.5 idle+CPU 兜底：进程监视采样器（输出字节增长 + CPU 时间）；
   连续 300s 无活跃 → kill + 提醒文本 + idle_killed 事件；阈值参数化。
   验收：模拟“无输出计算”与“真 idle”两类用例，不误杀前者。
