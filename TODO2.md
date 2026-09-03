@@ -180,9 +180,18 @@
   orz-host clamp 1 passed、fmt --check 净、git diff --check exit 0。
   审计见
   [`TER_T1_10_W_F13A_READ_FILE_64K_2026-09-04.md`](docs/audits/TER_T1_10_W_F13A_READ_FILE_64K_2026-09-04.md)。）
-- [ ] T1.11 W-F13b 输出检索对象：长输出落盘对象 + pattern/行区间/尾部
+- [x] T1.11 W-F13b 输出检索对象：长输出落盘对象 + pattern/行区间/尾部
   N 行检索；ToolCompleted 截断标记 + 对象指针（schema 已 T0.2 定稿）。
   验收：检索语义单测；模型无需 .gsa 即可补读自身输出。
+  （2026-09-04 完成：orz-tools `computer::output_object` 公共检索 API
+  （pattern 大小写不敏感/上限、1-based 行区间闭区间+越界 clamp、尾部
+  N 行，统一固定解码链）；对象 id = 落盘 log 路径（read_file/grep 直接
+  消费，无需 .gsa 摸黑）；host 映射截断输出为 TerminalOutputObject，
+  ToolCompleted（v0.2 轨）落 output_truncated/total_bytes/output_object_id
+  （配对规则照 T0.2）；console 重建路径透传。验证：output_object 4
+  passed、journal 三字段 1 passed、host 实机 30K 截断映射 1 passed、
+  orz-loop 全量 704 passed / 3 ignored、fmt/diff check 净。审计见
+  [`TER_T1_11_W_F13B_OUTPUT_RETRIEVAL_OBJECT_2026-09-04.md`](docs/audits/TER_T1_11_W_F13B_OUTPUT_RETRIEVAL_OBJECT_2026-09-04.md)。）
 - [ ] T1.12 W-F11 环境快照：probe 扩展至代码工具环境（工具/语言/包/
   版本/连通判定，Linux 先本地快速判定）；落黑板 `section=env`（PULL）。
   验收：快照 ≤5s；env 分区 PULL 渲染 + 越权边界。
