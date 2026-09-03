@@ -1782,7 +1782,7 @@ mod tests {
             .expect("read_file call");
         assert!(
             !result.prompt_text.contains("[read handle]"),
-            "default 16 KiB gate must return full content for ~10 KiB, got: {result:?}"
+            "default 64 KiB gate must return full content for ~10 KiB, got: {result:?}"
         );
 
         let _ = std::fs::remove_dir_all(&dir);

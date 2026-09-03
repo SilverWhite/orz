@@ -342,12 +342,13 @@ pub struct ReadAnchor {
     /// identity).
     pub sha256: String,
 }
-/// ORZ-LARGE-FILE-READ-CONTRACT (ADR-0010 §14.22, 2026-08-17): bounded
-/// read-handle envelope returned by `read_file` when the target text file
-/// exceeds the coarse gate (default 16 KiB, configurable 8–32 KiB via
-/// `ORZ_READ_FILE_COARSE_GATE_BYTES`). Carries identity/range metadata plus a
-/// bounded preview (≤ 4 KiB) and an offset continuation pointer; the model
-/// continues with `read_file(offset=…)` or switches to grep/structure-first.
+/// ORZ-LARGE-FILE-READ-CONTRACT (ADR-0010 §14.22, 2026-08-17) + TER T1.10
+/// (W-F13a)：bounded read-handle envelope returned by `read_file` when the
+/// target text file exceeds the coarse gate (default 64 KiB, configurable
+/// 8–64 KiB via `ORZ_READ_FILE_COARSE_GATE_BYTES`). Carries identity/range
+/// metadata plus a bounded preview (≤ 4 KiB) and an offset continuation
+/// pointer; the model continues with `read_file(offset=…)` or switches to
+/// grep/structure-first.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct ReadHandleEnvelope {
     /// Absolute path of the file.

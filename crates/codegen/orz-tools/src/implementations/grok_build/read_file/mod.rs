@@ -33,8 +33,9 @@ pub struct ReadFileParams {
     #[serde(default)]
     pub cursor_rules_on_read: bool,
     /// ORZ-LARGE-FILE-READ-CONTRACT (ADR-0010 §14.22): coarse gate in bytes
-    /// (8–32 KiB). Overrides `ORZ_READ_FILE_COARSE_GATE_BYTES` when set
-    /// (TOML/config resource 口子).
+    /// (8–64 KiB；TER T1.10 档位=64 KiB)。Overrides
+    /// `ORZ_READ_FILE_COARSE_GATE_BYTES` when set (TOML/config resource
+    /// 口子).
     #[serde(default)]
     pub coarse_gate_bytes: Option<usize>,
 }
@@ -64,11 +65,13 @@ pub(crate) const MAX_NUM_TOKENS: usize = 25_000;
 pub const MAX_LINES_READ: usize = 1_000;
 /// ORZ-LARGE-FILE-READ-CONTRACT (ADR-0010 §14.22, 2026-08-17): coarse gate
 /// in bytes — text files at/below this size return full content; larger
-/// files return the bounded read-handle envelope. Default 16 KiB, clamped
-/// to 8–32 KiB.
-const READ_COARSE_GATE_DEFAULT: usize = 16 * 1024;
+/// files return the bounded read-handle envelope. TER T1.10
+/// (2026-09-04, W-F13a)：档位放宽至 64 KiB（默认 = 上限 = 64K；下限 8K
+/// 保留逃生阀）。核对：64 KiB ASCII 文本 ≈ ≤16K token，远低于单轮 50K
+/// token 注入预算与 25K token/1000 行读档，单次注入不触发截断。
+const READ_COARSE_GATE_DEFAULT: usize = 64 * 1024;
 const READ_COARSE_GATE_MIN: usize = 8 * 1024;
-const READ_COARSE_GATE_MAX: usize = 32 * 1024;
+const READ_COARSE_GATE_MAX: usize = 64 * 1024;
 /// Envelope preview budget — the formatted preview is capped at 4 KiB
 /// (design: 有界预览 ≤2–4KB).
 const READ_PREVIEW_BYTES: usize = 4 * 1024;
@@ -77,7 +80,7 @@ pub use crate::implementations::read_file::{
 };
 
 /// Env 口子 for the coarse gate (`ORZ_READ_FILE_COARSE_GATE_BYTES`,
-/// default 16 KiB, clamped 8–32 KiB).
+/// default 64 KiB, clamped 8–64 KiB — TER T1.10 档位)。
 fn read_coarse_gate_bytes_env() -> usize {
     std::env::var("ORZ_READ_FILE_COARSE_GATE_BYTES")
         .ok()
@@ -87,7 +90,7 @@ fn read_coarse_gate_bytes_env() -> usize {
 }
 
 /// Resolve the coarse gate: `ReadFileParams.coarse_gate_bytes` (TOML/config
-/// 口子) wins over the env var; both are clamped to 8–32 KiB.
+/// 口子) wins over the env var; both are clamped to 8–64 KiB (TER T1.10)。
 async fn resolve_read_coarse_gate(resources: &SharedResources) -> usize {
     let res = resources.lock().await;
     res.get::<Params<ReadFileParams>>()
@@ -258,7 +261,7 @@ Usage:
 - The ${{ params.read.target_file }} parameter can be a relative path in the workspace or an absolute path
 - By default, it reads up to {max_lines_read} lines starting from the beginning of the file
 - Line numbers (1-based) appear as anchors in the format LINE_NUMBER→LINE_CONTENT on the first returned line and on every 10th line of the file; the lines in between show content only. Count from the nearest anchor when referring to a specific line
-- Text files larger than the coarse gate (default 16 KiB, configurable 8–32 KiB via ORZ_READ_FILE_COARSE_GATE_BYTES) return a read-handle envelope — path / size / encoding / content_sha256 / available range / bounded preview (≤4 KiB) / truncated / offset — instead of full content. Continue with offset=… (1-based line) or switch to grep/structure-first.
+- Text files larger than the coarse gate (default 64 KiB, configurable 8–64 KiB via ORZ_READ_FILE_COARSE_GATE_BYTES — TER T1.10 W-F13a) return a read-handle envelope — path / size / encoding / content_sha256 / available range / bounded preview (≤4 KiB) / truncated / offset — instead of full content. Continue with offset=… (1-based line) or switch to grep/structure-first.
 - Every text read returns a content anchor — sha256 / size / mtime (mtime may be absent) — in the envelope header or as a trailing [read anchor] line. Before editing a file, copy that anchor into the edit call's expected_anchor so the write gate verifies the file is unchanged; a mismatch rejects the edit and requires re-reading first.
 - This tool can read PDF files (.pdf), PowerPoint files (.pptx), Jupyter notebooks (.ipynb files), and image files (e.g. PNG, JPG, etc).
 - When reading an image file the contents are presented visually as this tool uses multimodal LLMs."#;
@@ -1152,7 +1155,10 @@ mod tests {
             .unwrap();
         match result {
             ReadFileOutput::ReadHandle(handle) => {
-                assert!(handle.size > 16 * 1024, "file must be above the gate");
+                assert!(
+                    handle.size > 64 * 1024,
+                    "file must be above the 64 KiB gate"
+                );
                 let expected_sha = crate::implementations::pdf_evidence::hex_string(
                     &Sha256::digest(big_content.as_bytes()),
                 );
@@ -1509,7 +1515,10 @@ mod tests {
             .unwrap();
         match result {
             ReadFileOutput::ReadHandle(handle) => {
-                assert!(handle.size > 16 * 1024, "file must be above the gate");
+                assert!(
+                    handle.size > 64 * 1024,
+                    "file must be above the 64 KiB gate"
+                );
                 assert_eq!(handle.encoding, "utf-8");
                 assert_eq!(handle.content_sha256.len(), 64, "sha256 hex digest");
                 assert_eq!(handle.available_range.start_line, 1);
@@ -1595,10 +1604,11 @@ mod tests {
             other => panic!("Expected ReadHandle, got {other:?}"),
         }
     }
-    /// ORZ-LARGE-FILE-READ-CONTRACT: the coarse gate is configurable via the
-    /// TOML/config resource 口子 (`ReadFileParams.coarse_gate_bytes`) — a
-    /// 10 KiB file is full-content with the default gate but returns the
-    /// envelope once the gate is lowered to 8 KiB.
+    /// ORZ-LARGE-FILE-READ-CONTRACT + TER T1.10 (W-F13a): the coarse gate is
+    /// configurable via the TOML/config resource 口子
+    /// (`ReadFileParams.coarse_gate_bytes`) — a 10 KiB file is full-content
+    /// with the default 64 KiB gate but returns the envelope once the gate is
+    /// lowered to 8 KiB.
     #[tokio::test]
     async fn coarse_gate_param_override_flips_large_file_to_handle() {
         let tmp = TempDir::new().unwrap();
@@ -1621,7 +1631,7 @@ mod tests {
         .unwrap();
         assert!(
             matches!(default, ReadFileOutput::FileContent(_)),
-            "10 KiB is below the default 16 KiB gate, got {default:?}"
+            "10 KiB is below the default 64 KiB gate, got {default:?}"
         );
         let mut lowered_resources = test_resources(tmp.path());
         lowered_resources.insert(Params(ReadFileParams {
@@ -1644,6 +1654,61 @@ mod tests {
             other => panic!("expected ReadHandle with an 8 KiB gate, got {other:?}"),
         }
     }
+    /// TER T1.10 (W-F13a)：默认 64 KiB 档——~60 KiB 文本单次全量返回
+    /// （vm.js 量级 ≤2 次读完；不触发信封/截断）；>64 KiB 仍回信封，
+    /// 结构化分段（offset/limit）保持成立。
+    #[tokio::test]
+    async fn default_64k_gate_reads_60k_file_in_one_call() {
+        let tmp = TempDir::new().unwrap();
+        let line = "x".repeat(200);
+        let medium = std::iter::repeat_n(line.as_str(), 300)
+            .collect::<Vec<_>>()
+            .join("\n"); // ≈ 60.3 KiB
+        assert!(medium.len() <= 64 * 1024 && medium.len() > 40 * 1024);
+        std::fs::write(tmp.path().join("medium.js"), &medium).unwrap();
+        let input = ReadFileInput {
+            path: "medium.js".to_string(),
+            offset: None,
+            limit: None,
+            pages: None,
+            format: None,
+        };
+        let resources = test_resources(tmp.path());
+        let result =
+            xai_tool_runtime::Tool::run(&ReadFileTool, test_ctx(resources.into_shared()), input)
+                .await
+                .unwrap();
+        assert!(
+            matches!(result, ReadFileOutput::FileContent(_)),
+            "~60 KiB must be full content under the default 64 KiB gate: {result:?}"
+        );
+
+        // >64 KiB → 信封（大文件仍可 offset/limit 结构化分段）。
+        let large = std::iter::repeat_n(line.as_str(), 380)
+            .collect::<Vec<_>>()
+            .join("\n"); // ≈ 76.4 KiB
+        assert!(large.len() > 64 * 1024);
+        std::fs::write(tmp.path().join("large.js"), &large).unwrap();
+        let input = ReadFileInput {
+            path: "large.js".to_string(),
+            offset: None,
+            limit: None,
+            pages: None,
+            format: None,
+        };
+        let resources = test_resources(tmp.path());
+        let result =
+            xai_tool_runtime::Tool::run(&ReadFileTool, test_ctx(resources.into_shared()), input)
+                .await
+                .unwrap();
+        match result {
+            ReadFileOutput::ReadHandle(handle) => {
+                assert!(handle.truncated, ">64 KiB must stay structured reads");
+                assert!(handle.offset.is_some());
+            }
+            other => panic!(">64 KiB must return the read-handle envelope: {other:?}"),
+        }
+    }
     /// Skill markdown keeps the historical full-read carve-out: a SKILL.md
     /// above the gate is still returned as full `FileContent` (skill docs are
     /// never silently truncated).
@@ -1651,8 +1716,11 @@ mod tests {
     async fn skill_markdown_above_gate_stays_full_content() {
         let tmp = TempDir::new().unwrap();
         let body: String = (1..=300).map(|i| format!("rule line {i}\n")).collect(); // ~4.2 KiB — raise above gate with a padded line
-        let content = format!("{body}{}\n", "z".repeat(15_000));
-        assert!(content.len() > 16 * 1024);
+        let content = format!("{body}{}\n", "z".repeat(70_000));
+        assert!(
+            content.len() > 64 * 1024,
+            "skill file must exceed the 64 KiB gate"
+        );
         let skills_dir = tmp.path().join("skills");
         std::fs::create_dir_all(&skills_dir).unwrap();
         std::fs::write(skills_dir.join("SKILL.md"), &content).unwrap();
@@ -2854,7 +2922,7 @@ pub fn verify(req: &HttpRequest) -> Result<Claims, Error> {
     #[tokio::test]
     async fn oversized_line_above_gate_is_terminal_only_handle() {
         let tmp = TempDir::new().unwrap();
-        let long = "a".repeat(20_000);
+        let long = "a".repeat(70_000);
         std::fs::write(tmp.path().join("long.txt"), format!("{long}\nshort\n")).unwrap();
         let resources = test_resources(tmp.path());
         let input = ReadFileInput {
@@ -2883,7 +2951,8 @@ pub fn verify(req: &HttpRequest) -> Result<Claims, Error> {
             other => panic!("expected ReadHandle, got {other:?}"),
         }
     }
-    /// ORZ-LARGE-FILE-READ-CONTRACT: a single-line ~49.5KB payload is above
+    /// ORZ-LARGE-FILE-READ-CONTRACT (TER T1.10)：a single-line ~70KB
+    /// payload is above
     /// the gate and returns a bounded read-handle preview (the old full-read
     /// path is superseded by the contract — the model greps/extracts instead).
     #[tokio::test]
@@ -2891,7 +2960,7 @@ pub fn verify(req: &HttpRequest) -> Result<Claims, Error> {
         let tmp = TempDir::new().unwrap();
         let payload = format!(
             "{{\"uid\":\"cdlmfnq6x2o74e\",\"panels\":\"{}\"}}",
-            "x".repeat(49_500)
+            "x".repeat(70_000)
         );
         std::fs::write(tmp.path().join("payload.json"), &payload).unwrap();
         let resources = test_resources(tmp.path());

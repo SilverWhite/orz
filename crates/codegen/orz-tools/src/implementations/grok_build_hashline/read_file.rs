@@ -785,7 +785,7 @@ mod tests {
     #[tokio::test]
     async fn large_file_truncated_to_max_lines() {
         let tmp = TempDir::new().unwrap();
-        let content: String = (0..2000).map(|i| format!("line {i}\n")).collect();
+        let content: String = (0..8000).map(|i| format!("line {i}\n")).collect();
         std::fs::write(tmp.path().join("big.txt"), &content).unwrap();
 
         let tool = HashlineReadTool;
@@ -804,7 +804,7 @@ mod tests {
 
         match result {
             ReadFileOutput::ReadHandle(handle) => {
-                assert_eq!(handle.available_range.end_line, 2001);
+                assert_eq!(handle.available_range.end_line, 8001);
                 assert_eq!(handle.preview_range.start_line, 1);
                 assert!(
                     handle.preview.len() <= 4 * 1024,
@@ -821,7 +821,7 @@ mod tests {
     #[tokio::test]
     async fn explicit_small_limit_honored() {
         let tmp = TempDir::new().unwrap();
-        let content: String = (0..2000).map(|i| format!("line {i}\n")).collect();
+        let content: String = (0..8000).map(|i| format!("line {i}\n")).collect();
         std::fs::write(tmp.path().join("big.txt"), &content).unwrap();
 
         let tool = HashlineReadTool;
@@ -856,7 +856,7 @@ mod tests {
     #[tokio::test]
     async fn explicit_large_limit_capped_to_max_lines() {
         let tmp = TempDir::new().unwrap();
-        let content: String = (0..3000).map(|i| format!("line {i}\n")).collect();
+        let content: String = (0..8000).map(|i| format!("line {i}\n")).collect();
         std::fs::write(tmp.path().join("big.txt"), &content).unwrap();
 
         let tool = HashlineReadTool;
@@ -875,7 +875,7 @@ mod tests {
 
         match result {
             ReadFileOutput::ReadHandle(handle) => {
-                assert_eq!(handle.available_range.end_line, 3001);
+                assert_eq!(handle.available_range.end_line, 8001);
                 assert_eq!(handle.preview_range.start_line, 1);
                 assert!(
                     handle.preview.len() <= 4 * 1024,
