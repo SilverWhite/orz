@@ -1683,8 +1683,14 @@ impl AgentLoopController {
         }
         if let Some(epoch) = epoch {
             let Some(dir) = &self.blackboard_archive_dir else {
+                // P2-13 B3（2026-09-03，ADR-0010 §14.52 / 设计 §12 R4）：
+                // `epoch` 参数生产面退役——生产控制器不配置归档目录，调用
+                // 仍 fail-loud（不静默回退 live），并显式说明退役语义。
                 return format!(
-                    "epoch snapshot {epoch} unavailable: blackboard archive dir not configured"
+                    "epoch snapshot {epoch} unavailable: blackboard archive dir not \
+                     configured — `epoch` 参数已在生产面退役：黑板随会话延续、\
+                     历史全量保留在 live 记录（可用 domain+round 展开 / since / \
+                     receipt_id 回查）；epoch 归档读仅诊断 --plan 模式提供"
                 );
             };
             return match crate::epoch::load_epoch_snapshot(dir, epoch) {
@@ -2606,16 +2612,11 @@ impl AgentLoopController {
                      are NOT graphed; live-only). \
                      Optional `since_timestamp` (RFC 3339, e.g. the timestamp \
                      this tool returned earlier) filters the edits / tool_actions \
-                     entries to those at or after that time. Optional `epoch` \
-                     (integer) reads that plan-epoch ARCHIVE instead of the \
-                     live view — use it to recall a previous task's plan/edits \
-                     after a new plan epoch rotated the blackboard (retrieval \
-                     partitions are live-only and reject `epoch`). Optional \
+                     entries to those at or after that time. Optional \
                      `receipt_id` (an order_id from the actions results board, \
                      e.g. ORD-000012) point-reads ONE result receipt's full \
                      response/error content (bounded ≤8K chars) that the slim \
-                     board hides — only valid with `section=actions`; combine \
-                     with `epoch` to read archived receipts; \
+                     board hides — only valid with `section=actions`; \
                      `since_timestamp` is ignored when `receipt_id` is \
                      present. B2 折叠视图 (P2-13): 当分区很大（exec/edits/\
                      tool_actions 达到阈值）时，live 读取默认只展开 \
@@ -2623,16 +2624,15 @@ impl AgentLoopController {
                      `[域段 normal r1–r30 · N 条 · 摘要]` 标注行；要精读某段\
                      历史，给 `domain`（start|normal|pressure|low_progress|\
                      stuck）+ `round_from`/`round_to`（含边界、相等=单轮）——\
-                     三者必须同时给，且与 `receipt_id`/`since_timestamp`/\
-                     `epoch` 互斥（显式报错）；pre-stamp 旧行（无轮号）只能\
+                     三者必须同时给，且与 `receipt_id`/`since_timestamp` 互斥\
+                     （显式报错）；pre-stamp 旧行（无轮号）只能\
                      用 since/receipt_id 展开。Call this when you need to \
                      recall what changed or what you did earlier — it costs \
                      nothing when you do not call it. Every live response \
                      starts with an optional `[黑板增量]` line listing \
                      per-partition change counts since their last read (and \
                      the latest temporal domain migration) — read a \
-                     partition to clear its unread badge; omit `epoch` for \
-                     the live view."
+                     partition to clear its unread badge."
                     .to_string(),
                 parameters: serde_json::json!({
                     "type": "object",
@@ -2670,17 +2670,12 @@ impl AgentLoopController {
                             "enum": ["u_prog", "u_err", "u_stuck", "t_hat", "err10", "succ10"],
                             "description": "P2-10 F2 §3.3 (2026-08-30): temporal Feature 查询的特征名（selector=feature 时必填）。仅与 section=temporal 组合有效（审查处理 R4 / F7）。",
                         },
-                        "since_timestamp": {"type": "string"},
-                        "epoch": {
-                            "type": "integer",
-                            "minimum": 1,
-                            "description": "Optional plan-epoch archive to read (cross-epoch look-back).",
-                        },
-                        "receipt_id": {
-                            "type": "string",
-                            "minLength": 1,
-                            "description": "Optional single-receipt point-read: an order_id from the actions results board (e.g. ORD-000012). Returns that receipt's full response/error content, bounded at 8000 chars. Only valid with section=actions; combine with epoch to point-read an archived receipt; since_timestamp is ignored when present.",
-                        },
+                         "since_timestamp": {"type": "string"},
+                         "receipt_id": {
+                             "type": "string",
+                             "minLength": 1,
+                             "description": "Optional single-receipt point-read: an order_id from the actions results board (e.g. ORD-000012). Returns that receipt's full response/error content, bounded at 8000 chars. Only valid with section=actions; since_timestamp is ignored when present.",
+                         },
                         "domain": {
                             "type": "string",
                             "enum": [
@@ -2690,7 +2685,7 @@ impl AgentLoopController {
                                 "low_progress",
                                 "stuck",
                             ],
-                            "description": "B2 fold expansion target domain (exec/edits/tool_actions). Must be given together with round_from/round_to; mutually exclusive with receipt_id, since_timestamp and epoch.",
+                             "description": "B2 fold expansion target domain (exec/edits/tool_actions). Must be given together with round_from/round_to; mutually exclusive with receipt_id and since_timestamp.",
                         },
                         "round_from": {
                             "type": "integer",
@@ -2706,6 +2701,29 @@ impl AgentLoopController {
                     "required": ["section"],
                 }),
             });
+        }
+        // P2-13 B3（2026-09-03，ADR-0010 §14.52 / 设计 §12 R4）：`epoch`
+        // 参数生产面退役——生产控制器不配置归档目录，故黑板上不再声明
+        // `epoch`（模型不可见）；诊断 `--plan`/测试域配置归档目录时随声明
+        // 恢复，供 cross-epoch 归档读。
+        if self.blackboard_archive_dir.is_some()
+            && let Some(def) = tool_defs.iter_mut().find(|t| t.name == "blackboard_read")
+            && let Some(props) = def
+                .parameters
+                .as_object_mut()
+                .and_then(|p| p.get_mut("properties"))
+                .and_then(serde_json::Value::as_object_mut)
+        {
+            props.insert(
+                "epoch".to_string(),
+                serde_json::json!({
+                    "type": "integer",
+                    "minimum": 1,
+                    "description": "Optional plan-epoch archive to read \
+                     (cross-epoch look-back; --plan 诊断/测试域专用——生产面 \
+                     epoch 参数已退役，黑板随会话延续、历史全量保留在 live)",
+                }),
+            );
         }
         // PLAN-FIRST 阶段 A (2026-08-16, ADR-0010 §14.17 / PLAN_FIRST_BLACKBOARD
         // _DESIGN §3-§5): `plan_write` — 首轮计划轮的唯一写面（结构化分步
@@ -3109,6 +3127,7 @@ impl AgentLoopController {
                 policy_revision: &self.policy_revision,
                 max_inject_tokens_per_round: self.max_inject_tokens_per_round,
                 blackboard_archive_dir: self.blackboard_archive_dir(),
+                session_id: self.session_id.as_deref(),
                 // 0k 审查处理 (P3-4)：主车道无子代理墙钟超时收口，槽不启用。
                 in_flight_tools: None,
             },
@@ -3161,6 +3180,7 @@ impl AgentLoopController {
                     policy_revision: &self.policy_revision,
                     max_inject_tokens_per_round: self.max_inject_tokens_per_round,
                     blackboard_archive_dir: self.blackboard_archive_dir(),
+                    session_id: self.session_id.as_deref(),
                     in_flight_tools: None,
                 };
                 let _ = run_template_compact(

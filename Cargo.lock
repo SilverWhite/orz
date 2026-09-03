@@ -6092,6 +6092,7 @@ dependencies = [
  "chrono",
  "dunce",
  "filetime",
+ "flate2",
  "futures",
  "orz-assurance",
  "orz-config",

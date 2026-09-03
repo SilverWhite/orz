@@ -52,6 +52,9 @@ futures = { workspace = true }
 # 2026-08-30)：条目内容身份哈希——workspace 既有依赖（orz-config /
 # orz-memory 在用），零新增传递依赖。
 blake3 = { workspace = true }
+# P2-13 B3（2026-09-03，ADR-0010 §14.52 / 设计 §11.3）：会话存档单 gzip
+# 包（`.gsa/archives/<session8>.json.gz`，纯打包零内容变换）。
+flate2 = { workspace = true }
 
 [target.'cfg(windows)'.dependencies]
 windows = { workspace = true }

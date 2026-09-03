@@ -404,6 +404,12 @@ pub fn run_event_to_tui(event: &RunEvent) -> TuiEvent {
             archive_dir: get_str(p, "archive_dir"),
             kind: get_str(p, "kind"),
         },
+        // P2-13 B3 (2026-09-03, ADR-0010 §14.52 / 设计 §12 R3): conversation
+        // archived as a single gzip package (专用 ARC run journal).
+        EventType::SessionArchive => TuiEvent::SessionArchive {
+            path: get_str(p, "path"),
+            status: get_str(p, "status"),
+        },
         EventType::SnapshotCreated => TuiEvent::SnapshotCreated {
             tool: get_str(p, "tool"),
             targets: get_str_list(p, "targets"),

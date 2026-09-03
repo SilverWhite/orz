@@ -23,6 +23,8 @@ use orz_loop::gateway::model::{Message, Role};
 use orz_loop::orientation::OrientationSessionState;
 use orz_workspace::permission::PermissionHookTransport;
 
+use flate2::Compression;
+use flate2::write::GzEncoder;
 use serde::{Deserialize, Serialize};
 
 use crate::permission::PermissionPolicy;
@@ -433,6 +435,12 @@ struct StoredConversation {
     /// 续载而非重建）。`None` = 尚无黑板内容（首 prompt 前/legacy）。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     blackboard: Option<Blackboard>,
+    /// P2-13 B3：已向用户投递过的疲劳提醒档位键（50/70/90）——每档越线
+    /// 提醒一次、用户忽略不重复；随侧车持久化（跨 prompt 不重发）。
+    /// （B3 复审裁决：提醒只按黑板 live 字节水位判定，无压缩轮数门槛，
+    /// 故不持久化压缩累计。）
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    fatigue_tiers_notified: Vec<String>,
 }
 
 impl StoredConversation {
@@ -447,6 +455,7 @@ impl StoredConversation {
             session_started_at,
             lif: None,
             blackboard: None,
+            fatigue_tiers_notified: Vec::new(),
         }
     }
 
@@ -471,6 +480,7 @@ impl StoredConversation {
             session_started_at,
             lif: Some(temporal.clone()),
             blackboard: Some(blackboard.clone()),
+            fatigue_tiers_notified: Vec::new(),
         }
     }
 }
@@ -622,6 +632,197 @@ fn persist_conversation_sidecar(base_dir: &Path, continuation: &StoredConversati
     }
 }
 
+/// 会话存档产物（blocking 打包阶段的结果）。`None` = 无可归档内容（从未
+/// 有成功 prompt 的会话）或源 sidecar 损坏（warn 后跳过，不产生事件——
+/// B3 复审登记为不可恢复静默边界）。
+struct PackagedSessionArchive {
+    archive_id: String,
+    /// 专用 ARC run id：`ARC-<session8>-<prompt_count>`。
+    run_id: String,
+    path: PathBuf,
+    digest: String,
+    status: String,
+    attempts: u32,
+    fatigue_pct: u64,
+}
+
+/// 归档票：会话关闭时若仍有 run 在进行，先把归档挂起，待该 run 收尾
+/// （sidecar 更新落盘后）再补触发——保证存档包含会话最后一段内容
+/// （B3 复审 P2-3）。
+struct PendingArchiveTicket {
+    session_id: String,
+    base_dir: PathBuf,
+    prompt_count: u64,
+    trust_policy: crate::session::TrustPolicy,
+}
+
+/// P2-13 B3（2026-09-03，ADR-0010 §14.52 / 设计 §11.3/§12 R3）：会话关闭/
+/// 归档 = 对话 + 黑板 live 视图合成**单一 gzip 包**
+/// （`.gsa/archives/<session8>.json.gz`——沿用 conversations sidecar 的
+/// 8 字符前缀约定，设计 §11.3 的 `<session>` 字面按此口径执行，B3 复审
+/// 登记）——纯打包、零内容变换、sha256 digest；tmp+rename 原子写（替换
+/// 既有归档时为 remove+rename、非严格原子，B3 复审登记）；原 sidecar 保留
+/// 至 retention 清扫。成功后以专用 `ARC-` run journal 记录
+/// `session_archive` v0.2 事件（每条会话存档一次）。best-effort：失败只
+/// warn、绝不阻断会话关闭。同步文件 IO + gzip 放入 blocking 池执行，
+/// 避免阻塞 async worker。
+async fn archive_session_package(
+    base_dir: &Path,
+    session_id: &str,
+    prompt_count: u64,
+    trust_policy: crate::session::TrustPolicy,
+) {
+    let base_dir = base_dir.to_path_buf();
+    let session_id = session_id.to_string();
+    let package_base_dir = base_dir.clone();
+    let package_session_id = session_id.clone();
+    let packaged = tokio::task::spawn_blocking(move || {
+        package_session_archive(&package_base_dir, &package_session_id, prompt_count)
+    })
+    .await;
+    let Some(pkg) = packaged.ok().flatten() else {
+        // 任务 panic 或无可归档内容/源损坏：无成品可记事件。
+        return;
+    };
+
+    // `session_archive` v0.2 事件 → 专用 ARC run journal（run_preflight 由
+    // bootstrap 写入）——每条会话存档一次；journal 失败只 warn（包已落盘，
+    // 存档动作本身不因审计面失败回滚）。
+    let mut payload = serde_json::json!({
+        "archive_id": pkg.archive_id,
+        "path": pkg.path.display().to_string(),
+        "digest": pkg.digest,
+        "status": pkg.status.clone(),
+        "attempts": pkg.attempts,
+    });
+    if pkg.fatigue_pct > 0 {
+        payload["fatigue_pct"] = serde_json::Value::from(pkg.fatigue_pct);
+    }
+    let run_id = pkg.run_id;
+    match bootstrap_session(&run_id, Some(base_dir), trust_policy).await {
+        Ok(handle) => {
+            let mut recorder = RunRecorder::new(
+                &handle.journal,
+                &handle.run_id,
+                &handle.run_manifest_sha256,
+                handle.next_sequence,
+                handle.last_event_sha256.clone(),
+            );
+            let mut recorded = recorder.record(EventType::SessionArchive, payload).await;
+            if recorded.is_ok() {
+                recorded = recorder
+                    .record(
+                        EventType::RunFinished,
+                        serde_json::json!({"status": pkg.status}),
+                    )
+                    .await;
+            }
+            let _ = handle.journal.shutdown_async().await;
+            if let Err(e) = recorded {
+                tracing::warn!("session archive journal failed ({run_id}): {e}");
+            }
+        }
+        Err(e) => {
+            tracing::warn!("session archive journal bootstrap failed ({run_id}): {e}");
+        }
+    }
+}
+
+/// 同步打包阶段：读 sidecar → 校验 → gzip → digest（tmp + rename）。
+fn package_session_archive(
+    base_dir: &Path,
+    session_id: &str,
+    prompt_count: u64,
+) -> Option<PackagedSessionArchive> {
+    let sidecar_path = conversation_sidecar_path(base_dir, session_id);
+    // 纯打包 = 对磁盘上的既有 sidecar 原样压缩；无文件（从未有成功
+    // prompt）→ 无可存档内容。
+    let raw_sidecar = std::fs::read(&sidecar_path).ok()?;
+    let parsed = match serde_json::from_slice::<StoredConversation>(&raw_sidecar) {
+        Ok(parsed) => parsed,
+        Err(_) => {
+            tracing::warn!(
+                "session archive skipped: corrupt sidecar {}",
+                sidecar_path.display()
+            );
+            return None;
+        }
+    };
+    let suffix: String = session_id.chars().take(8).collect();
+    let archive_dir = base_dir.join(".gsa").join("archives");
+    let final_path = archive_dir.join(format!("{suffix}.json.gz"));
+    let archive_id = format!(
+        "{session_id}-{}",
+        chrono::Utc::now().format("%Y%m%dT%H%M%SZ")
+    );
+    // 终点疲劳水位（百分比，0–100）：黑板 live 紧凑 JSON 字节 / W。
+    let fatigue_pct = parsed
+        .blackboard
+        .as_ref()
+        .map(|bb| {
+            let bytes = serde_json::to_vec(bb).map(|v| v.len()).unwrap_or(0);
+            orz_loop::fatigue::fatigue_percent(bytes, orz_loop::fatigue::live_budget_bytes())
+        })
+        .unwrap_or(0);
+
+    let mut attempts = 0u32;
+    let mut status = "failed";
+    let mut digest = String::new();
+    const MAX_ATTEMPTS: u32 = 3;
+    while attempts < MAX_ATTEMPTS {
+        attempts += 1;
+        if std::fs::create_dir_all(&archive_dir).is_err() {
+            continue;
+        }
+        let tmp_path = archive_dir.join(format!(".{suffix}.{archive_id}.tmp"));
+        let write_ok = (|| -> std::io::Result<()> {
+            let file = std::fs::File::create(&tmp_path)?;
+            let mut enc = GzEncoder::new(file, Compression::default());
+            enc.write_all(&raw_sidecar)?;
+            enc.finish()?;
+            Ok(())
+        })();
+        if write_ok.is_err() {
+            let _ = std::fs::remove_file(&tmp_path);
+            continue;
+        }
+        let Ok(bytes) = std::fs::read(&tmp_path) else {
+            let _ = std::fs::remove_file(&tmp_path);
+            continue;
+        };
+        digest = orz_assurance::journal::sha256_hex(&bytes);
+        // 替换既有归档：Windows rename 不能覆盖目标，先 remove 再 rename
+        // （非严格原子——B3 复审登记；首次写入为原子 tmp+rename）。
+        if final_path.exists() {
+            let _ = std::fs::remove_file(&final_path);
+        }
+        match std::fs::rename(&tmp_path, &final_path) {
+            Ok(_) => {
+                status = "completed";
+                break;
+            }
+            Err(_) => {
+                let _ = std::fs::remove_file(&tmp_path);
+            }
+        }
+    }
+    if status == "failed" {
+        tracing::warn!(
+            "session archive failed after {attempts} attempts: {}",
+            final_path.display()
+        );
+    }
+    Some(PackagedSessionArchive {
+        archive_id,
+        run_id: format!("ARC-{suffix}-{prompt_count}"),
+        path: final_path,
+        digest,
+        status: status.to_string(),
+        attempts,
+        fatigue_pct,
+    })
+}
+
 /// Grill-mode session state (2026-08-08 write-placement slice, design §3):
 /// the accumulated conversation (persists across turns), the turn counter,
 /// and the audit JSONL path. Independent of run journals — a grill session
@@ -687,6 +888,10 @@ pub struct AcpServer {
     /// within a short window, so a stale/idle cancel never poisons an
     /// unrelated later prompt (2026-08-05 review P2-1).
     pending_cancels: Arc<Mutex<HashMap<String, std::time::Instant>>>,
+    /// B3 复审 P2-3：close 时仍有 run 在进行 → 归档推迟到该 run 收尾
+    /// （run 完成路径在 persist 后消费并补触发，保证存档包含会话最后一段
+    /// 内容）。key = session id；每次 close 至多挂一张票，消费后即删。
+    pending_archives: Arc<Mutex<HashMap<String, PendingArchiveTicket>>>,
     /// Optional interactive permission transport (Phase 3 slice #12): when
     /// set, the permission manager routes interactive prompts through
     /// `PermissionHookTransport::request_permission` (the codex app-server
@@ -778,6 +983,7 @@ impl AcpServer {
             acaf_fail_closed: false,
             runs: Arc::new(Mutex::new(HashMap::new())),
             pending_cancels: Arc::new(Mutex::new(HashMap::new())),
+            pending_archives: Arc::new(Mutex::new(HashMap::new())),
             hub_permission: Arc::new(Mutex::new(None)),
             grill: Mutex::new(None),
             grill_episode: AtomicU32::new(0),
@@ -1033,6 +1239,9 @@ impl AcpServer {
         let bootstrap = bootstrap_session(&run_id, Some(base_dir.clone()), trust_policy).await;
         if bootstrap.is_err() {
             self.runs.lock().unwrap().remove(session_id);
+            // B3 复审 P2-3：close 若已在 run 注册后发生（归档票已挂），
+            // bootstrap 失败中止 run 时补触发存档。
+            self.take_deferred_archive(session_id);
         }
         let handle = bootstrap?;
 
@@ -1042,7 +1251,15 @@ impl AcpServer {
         // (`None` gateway) fails closed: Read auto-allows, Bash → Deny.
         // (PermissionBridge spawns the manager actor via spawn_local, so
         // this path must run inside a LocalSet — the stdio server does.)
-        let mut host = self.build_host(&handle, session_id, &base_dir, policy)?;
+        let mut host = match self.build_host(&handle, session_id, &base_dir, policy) {
+            Ok(host) => host,
+            Err(e) => {
+                // B3 复审 P2-3：build_host 失败中止 run 时同样补触发
+                // deferred 存档（若 close 已发生）。
+                self.take_deferred_archive(session_id);
+                return Err(e);
+            }
+        };
         // GAP-INQUIRY-SPLIT (review P1-1, 2026-08-10): take the orientation
         // counter out of the session ONLY after every fallible step above
         // (restore-in-flight check, bootstrap, build_host) has succeeded —
@@ -1053,9 +1270,12 @@ impl AcpServer {
         // created before this slice (`None`): resume from it, else start 0.
         let mut orientation = {
             let mut sessions = self.sessions.lock().unwrap();
-            let session = sessions
-                .get_mut(session_id)
-                .ok_or_else(|| AcpError::SessionNotFound(session_id.to_string()))?;
+            let Some(session) = sessions.get_mut(session_id) else {
+                // B3 复审 P2-3：close 发生在 run 注册后、取态前——run 中止，
+                // 补触发 deferred 存档（读最近一次成功持久化的 sidecar）。
+                self.take_deferred_archive(session_id);
+                return Err(AcpError::SessionNotFound(session_id.to_string()));
+            };
             session.orientation.take().unwrap_or_else(|| {
                 load_orientation_sidecar(&base_dir, session_id)
                     .unwrap_or_else(|| OrientationSessionState::new(session_id))
@@ -1067,9 +1287,10 @@ impl AcpServer {
         // leaves the session with a taken-out snapshot.
         let mut activation_snapshot = {
             let mut sessions = self.sessions.lock().unwrap();
-            let session = sessions
-                .get_mut(session_id)
-                .ok_or_else(|| AcpError::SessionNotFound(session_id.to_string()))?;
+            let Some(session) = sessions.get_mut(session_id) else {
+                self.take_deferred_archive(session_id);
+                return Err(AcpError::SessionNotFound(session_id.to_string()));
+            };
             session.activation_snapshot.take().unwrap_or_else(|| {
                 load_activation_sidecar(&base_dir, session_id)
                     .unwrap_or_else(|| StoredActivationSnapshot::for_session(session_id))
@@ -1083,9 +1304,10 @@ impl AcpServer {
         // silently restart from zero and the sidecar would be overwritten).
         let mut continuation = {
             let mut sessions = self.sessions.lock().unwrap();
-            let session = sessions
-                .get_mut(session_id)
-                .ok_or_else(|| AcpError::SessionNotFound(session_id.to_string()))?;
+            let Some(session) = sessions.get_mut(session_id) else {
+                self.take_deferred_archive(session_id);
+                return Err(AcpError::SessionNotFound(session_id.to_string()));
+            };
             match session.continuation.take() {
                 Some(cont) => cont,
                 None => load_conversation_sidecar(&base_dir, session_id)
@@ -1100,6 +1322,10 @@ impl AcpServer {
         let restored_blackboard = continuation.blackboard.take();
         let mut conversation = std::mem::take(&mut continuation.messages);
         let restored_legacy_spikes = continuation.temporal_spikes.clone().unwrap_or_default();
+        // P2-13 B3：会话级疲劳元数据（已投递档位）随续接包跨 prompt 延续
+        // （SUCCESS-ONLY 纪律：失败 run 不更新；提醒只按水位判定，无压缩
+        // 轮数门槛——B3 复审裁决）。
+        let mut fatigue_tiers_notified = continuation.fatigue_tiers_notified.clone();
         drop(continuation);
         // IP5: attach the session's pre-mutation snapshot store — mutation
         // tools with knowable targets get tracked before execution.
@@ -1215,10 +1441,10 @@ impl AcpServer {
             )
             .await;
 
-        // Every path: release the run token (stale cancels become no-ops)
-        // and the journal writer task (previously only the success path
-        // released it).
-        self.runs.lock().unwrap().remove(session_id);
+        // Every path: shut the journal writer task down (previously only the
+        // success path released it). The run token is released AFTER the
+        // sidecar persists below — close 落在收尾窗口内仍视为 run 进行中，
+        // 归档按 B3 复审 P2-3 推迟，避免包缺最后一段内容。
         let _ = handle.journal.shutdown_async().await;
 
         // GAP-INQUIRY-SPLIT: persist the orientation counter — back into the
@@ -1283,29 +1509,66 @@ impl AcpServer {
         // leaves `session.continuation` at `None`, so the next prompt's
         // take-out falls back to the sidecar (the pre-run state) instead
         // of diverging from it.
+        // P2-13 B3：用户侧疲劳提醒（E9/§11.2）——机械附言、不进模型上下文；
+        // 无新档 = None。会话关闭后的提醒去重随侧车持久化。
+        let mut fatigue_notice_text: Option<String> = None;
         if run_result.is_ok() {
             let lif = controller.lif_session_snapshot();
             let blackboard = controller.blackboard_conversation_snapshot();
-            let full = StoredConversation::full(
+            let mut full = StoredConversation::full(
                 session_id,
                 conversation,
                 &lif,
                 session_started_at,
                 &blackboard,
             );
+            // 疲劳提醒只按黑板 live 字节水位判定（无压缩轮数门槛——B3 复审
+            // 裁决）；单次只投最高未提醒档，已越线的低档一并落档。
+            let threshold = orz_loop::fatigue::live_budget_bytes();
+            let board_bytes = serde_json::to_vec(&blackboard)
+                .map(|v| v.len())
+                .unwrap_or(0);
+            if let Some(decision) = orz_loop::fatigue::pending_fatigue_notice(
+                board_bytes,
+                threshold,
+                &fatigue_tiers_notified,
+            ) {
+                for tier in decision.tiers_to_mark {
+                    if !fatigue_tiers_notified.iter().any(|t| t == tier) {
+                        fatigue_tiers_notified.push(tier.to_string());
+                    }
+                }
+                fatigue_notice_text = Some(decision.notice.text);
+            }
+            full.fatigue_tiers_notified = fatigue_tiers_notified.clone();
             persist_conversation_sidecar(&base_dir, &full);
             if let Some(session) = self.sessions.lock().unwrap().get_mut(session_id) {
                 session.continuation = Some(full);
             }
         }
 
+        // Every path: release the run token here (stale cancels become
+        // no-ops) — after persist, so the close-with-active-run detection in
+        // `close_session` stays accurate through the whole tail window.
+        self.runs.lock().unwrap().remove(session_id);
+        // B3 复审 P2-3：close 在 run 进行中发生时，归档票在此消费（run 已
+        // 收尾、成功路径的 sidecar 已同步落盘；失败/取消路径不更新
+        // sidecar，存档最近一次成功内容）。会话未被 close（无票）= 无操作。
+        self.take_deferred_archive(session_id);
+
         match run_result {
-            Ok((response, _, _)) => Ok(serde_json::json!({
+            Ok((response, _, _)) => {
+                let mut payload = serde_json::json!({
                 "session_id": session_id,
                 "response": response,
                 "status": "completed",
                 "run_id": run_id,
-            })),
+                });
+                if let Some(notice) = fatigue_notice_text {
+                    payload["user_notice"] = serde_json::Value::String(notice);
+                }
+                Ok(payload)
+            }
             // A user cancel propagates distinctly — the stdio layer maps it
             // to `StopReason::Cancelled` (the ACP-correct reply to a
             // cancelled session/prompt), not an internal error.
@@ -1634,6 +1897,28 @@ impl AcpServer {
         self.sessions.lock().unwrap().keys().cloned().collect()
     }
 
+    /// Spawn the archive task for a ticket（后台 best-effort，失败只 warn、
+    /// 不阻塞调用方）。
+    fn spawn_archive_task(ticket: PendingArchiveTicket) {
+        tokio::spawn(async move {
+            archive_session_package(
+                &ticket.base_dir,
+                &ticket.session_id,
+                ticket.prompt_count,
+                ticket.trust_policy,
+            )
+            .await;
+        });
+    }
+
+    /// 消费 deferred 归档票并触发存档——run 收尾路径（以及注册后的早期
+    /// 失败路径）调用；无票 = 无操作。
+    fn take_deferred_archive(&self, session_id: &str) {
+        if let Some(ticket) = self.pending_archives.lock().unwrap().remove(session_id) {
+            Self::spawn_archive_task(ticket);
+        }
+    }
+
     /// Close a session and release its stored metadata.
     ///
     /// ACP 0.10.4 has no `session/close` method — the stdio server terminates
@@ -1645,6 +1930,34 @@ impl AcpServer {
             let mut sessions = self.sessions.lock().unwrap();
             sessions.remove(session_id)
         };
+        // 判定 close 瞬间是否仍有 run 在进行（Prompt）——必须在下面移除
+        // runs token 之前检查。
+        let run_in_flight = {
+            let runs = self.runs.lock().unwrap();
+            matches!(runs.get(session_id), Some(RunInFlight::Prompt(_)))
+        };
+        // P2-13 B3（2026-09-03，ADR-0010 §14.52 / 设计 §11.3/§12 R3）：
+        // 会话关闭/归档 = 对话 + 黑板 live 视图合成单一 gzip 包 + 专用
+        // ARC run journal 记 `session_archive` 事件。后台 best-effort——
+        // close_session 保持同步、不等待压缩/审计完成（失败只 warn）。
+        // B3 复审 P2-3：若仍有 run 在进行，归档推迟到该 run 收尾（persist
+        // 之后 session 已不在表时补触发），保证包包含会话最后一段内容。
+        if let Some(session) = removed.as_ref() {
+            let ticket = PendingArchiveTicket {
+                session_id: session_id.to_string(),
+                base_dir: session.base_dir.clone(),
+                prompt_count: session.prompt_count,
+                trust_policy: session.trust_policy,
+            };
+            if run_in_flight {
+                self.pending_archives
+                    .lock()
+                    .unwrap()
+                    .insert(session_id.to_string(), ticket);
+            } else {
+                Self::spawn_archive_task(ticket);
+            }
+        }
         // local_browser (2026-08-10): tear the browser down (process-tree
         // kill + best-effort profile-dir delete). `close_session` is sync —
         // the shutdown runs detached (best-effort; an orphaned profile dir
@@ -2158,6 +2471,149 @@ mod tests {
             .handle_session_prompt("test-session-close", "hi")
             .await;
         assert!(result.is_err());
+
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// P2-13 B3（2026-09-03，ADR-0010 §14.52 / 设计 §11.3/§12 R3）：会话
+    /// 存档 = 单一 gzip 包（对话 + 黑板 live 视图 + 元数据，纯打包零内容
+    /// 变换）+ 专用 ARC run journal 的 `session_archive` v0.2 事件。
+    #[tokio::test]
+    async fn session_archive_single_gzip_package_and_event() {
+        use std::io::Read;
+
+        let base = test_dir();
+        let session_id = "sess-arch-test-0001";
+        let full = StoredConversation::full(
+            session_id,
+            vec![Message {
+                role: Role::User,
+                content: "任务".to_string(),
+                tool_call_id: None,
+                tool_calls: Vec::new(),
+                reasoning_content: None,
+            }],
+            &TemporalSessionSnapshot {
+                round: 1,
+                has_success: true,
+                current_domain: orz_assurance::lif::Domain::Normal,
+                entry_round: 1,
+                spikes: Vec::new(),
+            },
+            Some(1_700_000_000.0),
+            &Blackboard::default(),
+        );
+        persist_conversation_sidecar(&base, &full);
+
+        archive_session_package(&base, session_id, 3, crate::session::TrustPolicy::Skip).await;
+
+        let suffix: String = session_id.chars().take(8).collect();
+        let gz_path = base
+            .join(".gsa")
+            .join("archives")
+            .join(format!("{suffix}.json.gz"));
+        assert!(
+            gz_path.is_file(),
+            "archive package missing: {}",
+            gz_path.display()
+        );
+        let mut decoder = flate2::read::GzDecoder::new(
+            std::fs::File::open(&gz_path).expect("archive package opens"),
+        );
+        let mut decoded = Vec::new();
+        decoder
+            .read_to_end(&mut decoded)
+            .expect("archive package decodes");
+        let stored: StoredConversation =
+            serde_json::from_slice(&decoded).expect("archive content parses");
+        assert_eq!(stored.session_id, session_id);
+        assert_eq!(stored.messages.len(), 1);
+        assert_eq!(stored.messages[0].content, "任务");
+
+        // 专用 ARC run journal：run_preflight（bootstrap）→ session_archive
+        // → run_finished。
+        let journal_dir = base
+            .join(".gsa")
+            .join("runs")
+            .join(format!("ARC-{suffix}-3"));
+        let events = std::fs::read_to_string(journal_dir.join("events.jsonl"))
+            .expect("ARC archive journal written");
+        assert!(
+            events.contains("\"event_type\":\"session_archive\""),
+            "{events}"
+        );
+        assert!(
+            events.contains("\"event_type\":\"run_finished\""),
+            "{events}"
+        );
+        assert!(events.contains("\"status\":\"completed\""), "{events}");
+
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// B3 复审 P2-3：close 时仍有 run 在进行 → 归档推迟到该 run 收尾
+    /// （run 完成路径消费票后补触发），包包含最新 sidecar；不立即落包。
+    #[tokio::test]
+    async fn close_with_active_run_defers_archive_until_run_completion() {
+        let base = test_dir();
+        let session_id = "sess-defer-test-0001";
+        let full = StoredConversation::full(
+            session_id,
+            vec![Message {
+                role: Role::User,
+                content: "任务".to_string(),
+                tool_call_id: None,
+                tool_calls: Vec::new(),
+                reasoning_content: None,
+            }],
+            &TemporalSessionSnapshot {
+                round: 1,
+                has_success: true,
+                current_domain: orz_assurance::lif::Domain::Normal,
+                entry_round: 1,
+                spikes: Vec::new(),
+            },
+            Some(1_700_000_000.0),
+            &Blackboard::default(),
+        );
+        persist_conversation_sidecar(&base, &full);
+
+        let server = AcpServer::new();
+        server
+            .handle_session_new(
+                session_id,
+                Some(base.clone()),
+                crate::session::TrustPolicy::Skip,
+            )
+            .await
+            .unwrap();
+        // 模拟 run 进行中（真实路径在 bootstrap 前注册 token）。
+        server.runs.lock().unwrap().insert(
+            session_id.to_string(),
+            RunInFlight::Prompt(tokio_util::sync::CancellationToken::new()),
+        );
+
+        assert!(server.close_session(session_id));
+        let suffix: String = session_id.chars().take(8).collect();
+        let gz_path = base
+            .join(".gsa")
+            .join("archives")
+            .join(format!("{suffix}.json.gz"));
+        assert!(
+            !gz_path.exists(),
+            "archive must be deferred while a run is in flight"
+        );
+
+        // run 收尾路径（handle_session_prompt 尾部同款调用）消费票并补触发。
+        server.take_deferred_archive(session_id);
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while !gz_path.exists() && std::time::Instant::now() < deadline {
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
+        assert!(
+            gz_path.is_file(),
+            "deferred archive written after run completion"
+        );
 
         let _ = std::fs::remove_dir_all(&base);
     }
@@ -3532,6 +3988,10 @@ mod tests {
             Some(1_700_000_000.0),
             &blackboard,
         );
+        // P2-13 B3：疲劳元数据随侧车往返（已投递档位去重；无压缩累计——
+        // B3 复审裁决移除压缩轮数门槛）。
+        let mut full = full;
+        full.fatigue_tiers_notified = vec![orz_loop::fatigue::FATIGUE_TIER_50.to_string()];
         persist_conversation_sidecar(&base, &full);
         let stored = load_conversation_sidecar(&base, "sess-roundtrip").expect("sidecar loads");
         assert_eq!(stored.session_id, "sess-roundtrip");
@@ -3555,6 +4015,10 @@ mod tests {
             Some("推理过程")
         );
         assert_eq!(stored.messages[2].tool_call_id.as_deref(), Some("call-1"));
+        assert_eq!(
+            stored.fatigue_tiers_notified,
+            vec![orz_loop::fatigue::FATIGUE_TIER_50.to_string()]
+        );
         // Exact path shape.
         assert!(conv_sidecar_path(&base, "sess-roundtrip").exists());
         let _ = std::fs::remove_dir_all(&base);

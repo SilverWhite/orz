@@ -298,6 +298,12 @@ pub enum TuiEvent {
         archive_dir: String,
         kind: String,
     },
+    // P2-13 B3 (2026-09-03, ADR-0010 §14.52 / 设计 §12 R3): a conversation
+    // was archived as a single gzip package (专用 ARC run journal).
+    SessionArchive {
+        path: String,
+        status: String,
+    },
 
     // ── IP5 snapshot ──
     SnapshotCreated {
@@ -411,6 +417,7 @@ impl TuiEvent {
             TuiEvent::ContextCompressed { .. } => "context_compressed",
             TuiEvent::ContextRecoveryTruncated { .. } => "context_recovery_truncated",
             TuiEvent::EpochArchiveWriteFailed { .. } => "epoch_archive_write_failed",
+            TuiEvent::SessionArchive { .. } => "session_archive",
             TuiEvent::SnapshotCreated { .. } => "snapshot_created",
             TuiEvent::SnapshotRestored { .. } => "snapshot_restored",
             TuiEvent::ArtifactRegistered { .. } => "artifact_registered",

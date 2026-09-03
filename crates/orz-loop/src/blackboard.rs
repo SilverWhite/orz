@@ -2243,6 +2243,85 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    /// P2-13 B3（2026-09-03，ADR-0010 §14.52 / 设计 §12 R4）：`epoch` 参数
+    /// 生产面退役——未配置归档目录的控制器（生产面）模型工具声明不含
+    /// `epoch`（live 参数 receipt_id/domain 等仍在）；配置归档目录的
+    /// `--plan`/测试域恢复声明（cross-epoch 归档读入口）。
+    #[tokio::test]
+    async fn blackboard_read_epoch_param_retired_unless_archive_dir_configured() {
+        async fn declared_epoch(archive_dir: Option<std::path::PathBuf>) -> bool {
+            let dir = test_dir();
+            let journal = JournalRecorder::new(dir.clone());
+            let host = TestHost {
+                journal,
+                tool_result: Some(ToolResult {
+                    output: "irrelevant".to_string(),
+                    exit_code: Some(0),
+                    output_encoding: None,
+                    structured: None,
+                    ..Default::default()
+                }),
+            };
+            let fake = Arc::new(FakeProvider::new(vec![
+                ScriptedResponse::tool_calls(vec![ToolCall {
+                    name: "blackboard_read".to_string(),
+                    arguments: serde_json::json!({"section": "exec"}),
+                    call_id: "call-epoch-decl".to_string(),
+                }]),
+                ScriptedResponse::text("完成"),
+                ScriptedResponse::text("完成"),
+            ]));
+            let gateway: Arc<dyn ModelGateway> = fake.clone();
+            let controller =
+                AgentLoopController::with_gateway(gateway).with_blackboard_archive_dir(archive_dir);
+            controller
+                .run_turn(
+                    &host,
+                    "看 blackboard_read 声明",
+                    "RUN-EPOCH-DECL",
+                    MANIFEST,
+                    0,
+                    None,
+                    None,
+                    None,
+                )
+                .await
+                .unwrap();
+            let received = fake.received_requests();
+            let round = received
+                .iter()
+                .find(|r| {
+                    r.messages
+                        .iter()
+                        .any(|m| m.tool_call_id.as_deref() == Some("call-epoch-decl"))
+                })
+                .expect("round carrying blackboard_read");
+            let bb_def = round
+                .tools
+                .iter()
+                .find(|t| t.name == "blackboard_read")
+                .expect("blackboard_read declared in request tools");
+            let epoch_declared = bb_def
+                .parameters
+                .get("properties")
+                .and_then(|p| p.get("epoch"))
+                .is_some();
+            let _ = std::fs::remove_dir_all(&dir);
+            epoch_declared
+        }
+
+        assert!(
+            !declared_epoch(None).await,
+            "production tool def must NOT declare the retired epoch parameter"
+        );
+        let plan_dir = test_dir();
+        assert!(
+            declared_epoch(Some(plan_dir.clone())).await,
+            "archive-configured (--plan/test) tool def must declare epoch for cross-epoch reads"
+        );
+        let _ = std::fs::remove_dir_all(&plan_dir);
+    }
+
     /// P2-13 B2（2026-09-03，设计 §9.3/R2 + §12）：展开参数组合守卫全部
     /// fail loud（exit_code 1 + error 字段，事件面记录；模型面收到显式错误）
     /// ——all-or-none、非法域名、round 范围倒置、与 receipt_id 互斥、

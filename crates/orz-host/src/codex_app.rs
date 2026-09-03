@@ -631,11 +631,18 @@ impl CodexAppServer {
         };
         match outcome {
             Ok(value) => {
-                let text = value
+                let mut text = value
                     .get("response")
                     .and_then(Value::as_str)
                     .unwrap_or("")
                     .to_owned();
+                // P2-13 B3（2026-09-03，ADR-0010 §14.52 / 设计 §11.2 E9）：
+                // 用户侧疲劳提醒——机械追加在模型输出最后、弹给用户；会话
+                // 持久化在 ACP 内已完成（不含本附言），不进模型上下文。
+                if let Some(notice) = value.get("user_notice").and_then(Value::as_str) {
+                    text.push_str("\n\n");
+                    text.push_str(notice);
+                }
                 self.send_notify(
                     "item/completed",
                     json!({

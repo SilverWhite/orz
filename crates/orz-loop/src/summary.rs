@@ -29,9 +29,10 @@ pub const SUMMARY_SLOT_LIMITS: [usize; 5] = [3_000, 3_000, 5_000, 3_000, 3_000];
 pub const ARCHIVE_WRITE_MAX_ATTEMPTS: usize = 3;
 
 /// 注意事项槽空态文案（阶段 (c) 定稿，ADR-0010 §14.30 / 设计 §4.4.1）：
-/// 三数据源均无失败事实时显示「（无注意事项）」——不再使用阶段 (b)
-/// 「机械模式无模型槽位」措辞。
-pub const NOTES_FACTS_EMPTY: &str = "（无注意事项）";
+/// 三数据源均无失败事实时显示「（无）」——P2-13 D4（2026-09-03，
+/// ADR-0010 §14.52）将压缩五段槽空槽统一渲染为「（无）」，取代阶段 (c)
+/// 「（无注意事项）」与更早的「（未设置）」/空串混用。
+pub const NOTES_FACTS_EMPTY: &str = "（无）";
 
 /// 后续衔接槽固定中性占位（阶段 (c) 定稿，设计 §4.4.2）：不聚合任何
 /// 「当前步/下一步/待办」——助理层不变量=不理解语义，机械建议可能与主
@@ -40,7 +41,7 @@ pub const NOTES_FACTS_EMPTY: &str = "（无注意事项）";
 /// THIN-HARNESS-REDESIGN R2a 审查处理 (P3-2, 2026-08-27)：分区清单与
 /// `build_summary_marker` 的回查行同步补 internal_ret / external_ret
 /// （检索分区 live-only，不进 epoch 归档）。
-pub const MECHANICAL_CONTINUATION_PLACEHOLDER: &str = "（后续衔接由主模型自行判断：可回查 blackboard_read 分区 plan/edits/tool_actions/exec/actions/internal_ret/external_ret（历史 plan epoch 用 epoch 参数；检索分区 live-only）、摘要存档与外挂台账）";
+pub const MECHANICAL_CONTINUATION_PLACEHOLDER: &str = "（后续衔接由主模型自行判断：可回查 blackboard_read 分区 plan/edits/tool_actions/exec/actions/internal_ret/external_ret（检索分区 live-only；历史记录全量保留在 live 黑板，按域/轮数展开或 since/receipt_id 回查——epoch 归档读已于生产面退役）、摘要存档与外挂台账）";
 
 /// Estimated tokens of one summary marker in the kept context. The marker
 /// carries the five slots (up to ~17K chars ≈ 8.5K tokens under the
@@ -105,7 +106,7 @@ pub fn mechanical_slots(
         .plan
         .goal
         .clone()
-        .unwrap_or_else(|| "（未设置）".to_string());
+        .unwrap_or_else(|| "（无）".to_string());
     let plan = render_plan(&blackboard.plan.steps);
     let paths = render_paths(blackboard, archive_path, epoch_archive);
     (purpose, plan, paths)
@@ -139,7 +140,7 @@ fn render_plan(steps: &[PlanStep]) -> String {
         out.push_str(&line);
     }
     if out.is_empty() {
-        out = "（未设置）".to_string();
+        out = "（无）".to_string();
     }
     out
 }
@@ -171,15 +172,16 @@ fn render_paths(
     }
     overflow += blackboard.edits.len().saturating_sub(PATH_TOP_N);
     if out.is_empty() {
-        out = "（本窗口无编辑）".to_string();
+        out = "（无）".to_string();
     } else if overflow > 0 {
         let holder = epoch_archive
             .unwrap_or(archive_path)
             .to_string_lossy()
             .to_string();
-        out.push_str(&format!(
-            "\n（其余 {overflow} 条路径见本 plan epoch 快照 {holder}）",
-        ));
+        // P2-13 B3（2026-09-03，ADR-0010 §14.52）：生产面不再有 plan-epoch
+        // 快照指针——holder 在 --plan/测试域为 epoch 快照、生产面回退摘要
+        // 存档，措辞统一为中性「见 {holder}」，不再声称 plan epoch。
+        out.push_str(&format!("\n（其余 {overflow} 条路径见 {holder}）"));
     }
     out
 }
@@ -198,7 +200,7 @@ fn render_paths(
 ///      trace_id）。
 ///
 /// 排序=计划面失败/阻塞 → 失败目标聚合 → 动作失败（计划面优先，影响最大）；
-/// 空时「（无注意事项）」；≤3K 超限截断并给「其余 N 条见 blackboard_read
+/// 空时「（无）」（P2-13 D4 统一口径）；≤3K 超限截断并给「其余 N 条见 blackboard_read
 /// 分区/摘要存档」指针。压缩内部失败（guard/archive/外挂台账）继续走
 /// marker 既有独立标注，不进本槽。零模型调用。
 ///
@@ -488,7 +490,7 @@ pub fn build_summary_marker(
     rounds_dropped: u32,
     guard_failed: bool,
     archive_write_failed: bool,
-    plan_epoch: u64,
+    session_snapshot: Option<&str>,
     // FUS-LEDGER-FOLD-STATE external-file design (2026-08-18, ADR-0010
     // §14.28): the fixed external ledger path — the marker line points a
     // restored conversation at the surviving append-only history.
@@ -506,21 +508,17 @@ pub fn build_summary_marker(
          {ledger_line}\
          摘要 ID: {id}\n被压轮次: {rounds_dropped} 轮\n\
          摘要存档: {}\n{digest_line}\n\
-         黑板 plan_epoch: {}\n\
+         黑板会话: {}\n\
          目的: {}\n\
          计划: {}\n\
          变动文件路径: {}\n\
          注意事项: {}\n\
          后续衔接: {}\n\
          回查: blackboard_read（分区 plan / edits / tool_actions / exec / actions / \
-         internal_ret / external_ret；历史 plan epoch 用 epoch 参数）\n\
+         internal_ret / external_ret；历史全量保留在 live，可按域/轮数展开）\n\
          [/前文上下文已压缩]",
         archive_path.display(),
-        if plan_epoch > 0 {
-            plan_epoch.to_string()
-        } else {
-            "（未设置）".to_string()
-        },
+        session_snapshot.unwrap_or("（无）"),
         slots.purpose,
         slots.plan,
         slots.paths,
@@ -609,6 +607,61 @@ mod tests {
         assert!(paths.contains("1→2 行"));
     }
 
+    /// P2-13 D4（2026-09-03，ADR-0010 §14.52）：压缩五段槽保留字段，
+    /// 空槽统一渲染「（无）」——取代「（未设置）」/空串/「（本窗口无
+    /// 编辑）」/「（无注意事项）」混用；非空槽只放真实内容。
+    #[test]
+    fn empty_slots_render_uniform_wu_in_marker_and_archive() {
+        let bb = SharedBlackboard::new();
+        let (purpose, plan, paths) =
+            mechanical_slots(&bb.read(), Path::new(".gsa/compaction/x.md"), None);
+        assert_eq!(purpose, "（无）");
+        assert_eq!(plan, "（无）");
+        assert_eq!(paths, "（无）");
+        let notes = render_facts_notes(&bb.read());
+        assert_eq!(notes.text, NOTES_FACTS_EMPTY);
+        let slots = SummarySlots {
+            purpose,
+            plan,
+            paths,
+            notes: String::new(),
+            continuation: String::new(),
+        };
+        let markdown =
+            summary_archive_markdown("compaction-RUN-WU-001", &slots, 1, false, None, None);
+        for expected in [
+            "## 目的\n（无）",
+            "## 计划\n（无）",
+            "## 变动文件路径\n（无）",
+            "## 注意事项\n（无）",
+        ] {
+            assert!(
+                markdown.contains(expected),
+                "missing {expected:?}: {markdown}"
+            );
+        }
+        let digest = archive_digest(&markdown);
+        let marker = build_summary_marker(
+            "compaction-RUN-WU-001",
+            &digest,
+            Path::new(".gsa/compaction/x.md"),
+            &slots,
+            1,
+            false,
+            false,
+            None,
+            None,
+        );
+        for expected in [
+            "目的: （无）",
+            "计划: （无）",
+            "变动文件路径: （无）",
+            NOTES_FACTS_EMPTY,
+        ] {
+            assert!(marker.contains(expected), "missing {expected}: {marker}");
+        }
+    }
+
     #[test]
     fn render_paths_caps_at_top_40_with_archive_pointer() {
         let bb = SharedBlackboard::new();
@@ -633,8 +686,8 @@ mod tests {
         assert!(paths.contains("f39.py"));
         assert!(!paths.contains("f40.py"));
         assert!(paths.contains("其余 5 条路径"));
-        // v1.15: the overflow pointer targets the plan-epoch snapshot, not
-        // the compaction archive.
+        // --plan/测试域（显式传 epoch_archive）：溢出指针指向 plan-epoch
+        // 快照而非压缩摘要存档（B3 后生产面无此指针，回退摘要存档）。
         assert!(paths.contains(epoch_archive.to_string_lossy().as_ref()));
         assert!(!paths.contains(archive.to_string_lossy().as_ref()));
     }
@@ -685,7 +738,7 @@ mod tests {
     #[test]
     fn facts_notes_empty_shows_no_notes() {
         // 阶段 (c) 定稿（ADR-0010 §14.30 / 设计 §4.4.1）：三数据源均无
-        // 失败事实时显示「（无注意事项）」——不再用「机械模式无模型槽位」。
+        // 失败事实时显示「（无）」——不再用「机械模式无模型槽位」。
         let bb = SharedBlackboard::new();
         assert_eq!(render_facts_notes(&bb.read()).text, NOTES_FACTS_EMPTY);
         assert!(
@@ -1077,7 +1130,7 @@ mod tests {
             3,
             false,
             false,
-            3,
+            Some("SESSION-abc"),
             Some(Path::new(".gsa/ledger/current.md")),
         );
         assert!(marker.starts_with(crate::prompt::CONTEXT_COMPRESSED_PREFIX));
@@ -1085,7 +1138,7 @@ mod tests {
         assert!(marker.contains("compaction-RUN-X-001.md"));
         assert!(marker.contains("历史摘要累积于 .gsa/ledger/current.md"));
         assert!(marker.contains("修复缓存回归"));
-        assert!(marker.contains("黑板 plan_epoch: 3"));
+        assert!(marker.contains("黑板会话: SESSION-abc"));
         assert!(crate::prompt::is_restore_retained_block(&marker));
         assert!(crate::prompt::is_injected_block_text(&marker));
     }
@@ -1122,7 +1175,7 @@ mod tests {
             3,
             false,
             false,
-            3,
+            Some("SESSION-abc"),
             Some(Path::new(".gsa/ledger/current.md")),
         );
         assert!(marker.starts_with(crate::prompt::CONTEXT_COMPRESSED_PREFIX));
@@ -1153,14 +1206,14 @@ mod tests {
             2,
             false,
             false,
-            2,
+            Some("SESSION-abc"),
             None,
         );
         assert!(!marker.contains("summary_incomplete"));
         assert!(marker.contains(NOTES_FACTS_EMPTY));
         assert!(marker.contains(MECHANICAL_CONTINUATION_PLACEHOLDER));
         assert!(marker.contains(&format!("sha256:{digest}")));
-        assert!(marker.contains("黑板 plan_epoch: 2"));
+        assert!(marker.contains("黑板会话: SESSION-abc"));
     }
 
     #[test]
@@ -1174,12 +1227,12 @@ mod tests {
             2,
             true,
             true,
-            0,
+            None,
             None,
         );
         assert!(marker.contains("机制失败：缩减守卫连续不满足"));
         assert!(marker.contains("存档写入失败：摘要未落盘"));
-        assert!(marker.contains("黑板 plan_epoch: （未设置）"));
+        assert!(marker.contains("黑板会话: （无）"));
         assert!(crate::prompt::is_restore_retained_block(&marker));
     }
 

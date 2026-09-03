@@ -115,6 +115,10 @@ pub enum EventType {
     // snapshot — this event is the audit trace (`kind` distinguishes the
     // rotated-old snapshot from the current-epoch persistence).
     EpochArchiveWriteFailed,
+    // P2-13 B3 (2026-09-03, ADR-0010 §14.52 / 设计 §12 R3): a conversation
+    // was archived as a single gzip package at session close —
+    // archive_id/path/digest/status/attempts/fatigue_pct.
+    SessionArchive,
 
     // IP5 pre-mutation snapshot (Phase 3, slice #4 wiring)
     SnapshotCreated,

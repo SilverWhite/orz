@@ -422,6 +422,9 @@ pub(crate) struct SharedLoopServices<'a> {
     /// epoch archive directory — the single source for the path-slot
     /// overflow pointer (never re-derived from the session cwd).
     pub blackboard_archive_dir: Option<&'a Path>,
+    /// P2-13 B3（2026-09-03，ADR-0010 §14.52）：会话快照身份（ACP session
+    /// id；CLI 单 run/测试控制器 = None）——压缩 marker 的「黑板会话」行。
+    pub session_id: Option<&'a str>,
     /// 0k 审查处理 (P3-4, 2026-08-30)：子代理墙钟超时收口用的 in-flight
     /// 工具槽——串行路径工具执行前记录 `(tool, call_id)`、完成后移除；
     /// 超时 drop loop future 后 dispatch 据此为链上孤儿 ToolStarted 补
@@ -626,17 +629,18 @@ pub(crate) async fn run_template_compact(
     let id = format!("compaction-{}-{:04}", writer.run_id(), writer.seq());
     let archive_dir = host.session_cwd().join(".gsa").join("compaction");
     let archive_path = archive_dir.join(format!("{id}.md"));
-    // v1.15 (2026-08-14): the path slot's overflow pointer targets the
-    // current plan-epoch snapshot (the epoch archive is the permanent
-    // holder of the full path/action records). F5 (2026-08-15): the path
-    // comes from the controller's configured archive dir — the single
-    // source — so a custom archive dir stays the real pointer target.
+    // v1.15 (2026-08-14) 起路径槽溢出指针指向当前 plan-epoch 快照；F5
+    // (2026-08-15) 后路径取自定义归档目录（单一来源）。P2-13 B3
+    // (2026-09-03)：生产面不再写 epoch 快照（plan_epoch 恒 0 → 指针回退
+    // 摘要存档）；epoch 指针仅 --plan/测试域配置归档目录后产生；marker 的
+    // plan_epoch 行已退役为「黑板会话」行。
     let plan_epoch = svc.blackboard.read().plan.plan_epoch;
     let epoch_archive = (plan_epoch > 0).then(|| {
         svc.blackboard_archive_dir
             .map(|dir| dir.join(format!("epoch-{plan_epoch}.json")))
     });
     let epoch_archive = epoch_archive.flatten();
+    let session_snapshot = svc.session_id;
     // P2-12 审查处理（2026-09-02）：注意事项槽 3K 溢出时，被挤出的失败
     // 目标聚合行随压缩存档以补全段保存——failure_agg 不是 blackboard_read
     // 查询分区，指针「其余 N 条见 … 摘要存档」靠存档补全段保持可回查。
@@ -717,7 +721,7 @@ pub(crate) async fn run_template_compact(
         dropped,
         guard_failed,
         archive_write_failed,
-        plan_epoch,
+        session_snapshot,
         ledger_hint,
     );
     messages.insert(
@@ -3228,6 +3232,7 @@ mod tests {
             policy_revision: policy,
             max_inject_tokens_per_round: 50_000,
             blackboard_archive_dir: None,
+            session_id: None,
             in_flight_tools: None,
         }
     }
@@ -3379,8 +3384,8 @@ mod tests {
         assert_eq!(messages[2].tool_calls[0].call_id, "c2");
         assert_eq!(messages[3].tool_call_id.as_deref(), Some("c2"));
         assert!(!fold.is_folded(), "执行后折叠状态重置");
-        // 阶段 (c)（ADR-0010 §14.30 / 设计 §4.4.1）：空黑板 → 注意事项槽
-        // 显示「（无注意事项）」；marker 携带回查入口与后续衔接占位。
+        // 阶段 (c)（ADR-0010 §14.30 / 设计 §4.4.1）+ P2-13 D4：空黑板 →
+        // 注意事项槽显示「（无）」；marker 携带回查入口与后续衔接占位。
         assert!(
             messages[1]
                 .content
@@ -3527,7 +3532,16 @@ mod tests {
             .unwrap();
         let a_action = archive_text.find("[动作失败] ORD-000002").unwrap();
         assert!(a_plan < a_block && a_block < a_fail && a_fail < a_action);
-        assert!(!archive_text.contains(crate::summary::NOTES_FACTS_EMPTY));
+        // P2-13 D4（2026-09-03）：空槽统一渲染「（无）」——本测试的意图是
+        // 注意事项槽有真实事实（非空态回退），改为按段头断言而非哨兵常量。
+        assert!(
+            !archive_text.contains("## 注意事项\n（无）"),
+            "notes slot must not fall back to the empty marker: {archive_text}"
+        );
+        assert!(
+            archive_text.contains("## 注意事项\n[步骤 s1]"),
+            "notes slot must carry the first failed step: {archive_text}"
+        );
         assert!(!archive_text.contains("[执行错误]"));
     }
 

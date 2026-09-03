@@ -1114,6 +1114,18 @@ async fn run(
 
         handle.journal.shutdown_async().await?;
 
+        // P2-13 B3（2026-09-03，ADR-0010 §14.52 / 设计 §11.2 E9；B3 复审
+        // 裁决：只按黑板水位、无压缩轮数门槛）：CLI 单 run = 单会话、无
+        // 独立 UI 通道——疲劳提醒降级为 run 结束时的 stderr 附言（不注入
+        // 模型消息、不写入对话侧车）。
+        let board_bytes = controller.blackboard().read().live_compact_bytes();
+        let threshold = orz_loop::fatigue::live_budget_bytes();
+        if let Some(decision) =
+            orz_loop::fatigue::pending_fatigue_notice(board_bytes, threshold, &[])
+        {
+            eprintln!("{}", decision.notice.text);
+        }
+
         Ok::<_, Box<dyn std::error::Error>>((response, handle.journal_dir.join("events.jsonl")))
     };
     // Compose the guards: the stall watchdog wraps the work (dropping it on

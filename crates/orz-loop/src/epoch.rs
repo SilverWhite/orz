@@ -3,7 +3,10 @@
 //!
 //! P2-13（2026-09-03，ADR-0010 §14.52）：生产黑板生命周期已切换为会话作用域
 //! （B1 会话化基础 + B2 渲染折叠，见下）；本文件的 plan-epoch 归档面仅剩
-//! `--plan` 诊断/测试路径，生产接线退役清理为 P2-13 B3 排期项。
+//! `--plan` 诊断/测试路径（B3 已随 P2-13 实施批完成生产面退役：生产入口
+//! 不配置归档目录、不触发 with_plan/rotate/claim，`.gsa/blackboard/
+//! epoch-*.json` 生产面不再写入；marker `plan_epoch` 行与 blackboard_read
+//! `epoch` 参数均已收口，仅 `--plan`/测试域保留归档读）。
 //!
 //! The blackboard's lifetime is a plan epoch: rotation archives the old
 //! epoch's full path/action records as a deterministic JSON snapshot

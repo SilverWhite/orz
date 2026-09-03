@@ -740,6 +740,11 @@ pub fn apply_event(app: &mut TuiApp, event: TuiEvent) -> Vec<String> {
             }
             vec![]
         }
+        TuiEvent::SessionArchive { path, status } => {
+            app.content
+                .add_system_message(&format!("[会话已归档] {path}（{status}）"), false);
+            vec![format!("会话已归档: {path}（{status}）")]
+        }
         TuiEvent::Unknown { event_type } => {
             app.content
                 .add_system_message(&format!("[未知事件] {event_type}"), true);

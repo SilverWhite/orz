@@ -206,7 +206,7 @@ pub const STATUS_LINE_PREFIX: &str = "[任务状态";
 /// already arrive via the `[本轮编辑]` push; totals are one blackboard_read
 /// (edits partition) away.
 pub fn build_status_line(goal: Option<&str>, steps: &[crate::blackboard::PlanStep]) -> String {
-    let goal = goal.unwrap_or("(未设置)");
+    let goal = goal.unwrap_or("（无）");
     let mut lines = vec![format!("{STATUS_LINE_PREFIX} v0.1]")];
     if steps.is_empty() {
         lines.push(format!("目标: {goal}（无计划步骤）"));
@@ -225,7 +225,7 @@ pub fn build_status_line(goal: Option<&str>, steps: &[crate::blackboard::PlanSte
                 steps[i - 1].id,
                 steps[i - 1].goal,
             ),
-            None => "当前步骤: (无)".to_string(),
+            None => "当前步骤: （无）".to_string(),
         };
         lines.push(format!("目标: {goal}"));
         lines.push(format!(
@@ -607,7 +607,7 @@ mod tests {
 
         // No plan section → fallback goal text.
         let bare = build_status_line(None, &[]);
-        assert!(bare.contains("目标: (未设置)"));
+        assert!(bare.contains("目标: （无）"));
         assert!(bare.contains("无计划步骤"));
     }
 

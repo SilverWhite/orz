@@ -429,6 +429,7 @@ impl AgentLoopController {
             policy_revision: &self.policy_revision,
             max_inject_tokens_per_round: self.max_inject_tokens_per_round,
             blackboard_archive_dir: self.blackboard_archive_dir(),
+            session_id: self.session_id.as_deref(),
             in_flight_tools: Some(&in_flight_tools),
         };
         let loop_future = Box::pin(run_agent_loop(
@@ -517,6 +518,7 @@ impl AgentLoopController {
                         policy_revision: &self.policy_revision,
                         max_inject_tokens_per_round: self.max_inject_tokens_per_round,
                         blackboard_archive_dir: self.blackboard_archive_dir(),
+                        session_id: self.session_id.as_deref(),
                         in_flight_tools: Some(&in_flight_tools),
                     };
                     // FUS-LEDGER-FOLD-STATE (2026-08-18, ADR-0010
