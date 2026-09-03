@@ -147,6 +147,11 @@ fn terminal_notification_base(notif: &ToolNotification) -> Option<&BashNotificat
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct BashParams {
     /// Default command timeout in seconds. None → 120s.
+    ///
+    /// TER T1.4 (2026-09-04)：去硬杀——本值（以及
+    /// [`Self::max_timeout_secs`] 上限）只作前台 auto-bg deadline / 上限
+    /// 引用，不再是杀活跃命令的超时点；命中语义见
+    /// [`Self::auto_background_on_timeout`]。
     pub timeout_secs: Option<f64>,
     /// **Foreground-only** ceiling for model-provided `timeout` (seconds).
     /// None → built-in [`DEFAULT_MAX_TIMEOUT_MS`] (5 minutes); production
@@ -187,6 +192,12 @@ pub struct BashParams {
     /// TER T1.1 (2026-09-03, ADR-0010 §14.53 候选条目 1)：常驻默认开启——
     /// `Default` 与 serde 缺省均为 `true`，无 host 注入时亦自带 auto-bg；
     /// 显式 `false`（关闭态仍可配）继续生效。
+    ///
+    /// TER T1.4 (2026-09-04)：去硬杀语义——无论解析超时与
+    /// `foreground_block_budget_ms` 谁更短，先到者都是 **auto-bg
+    /// deadline**（后台化并返回一次中间状态），永不因分层 timeout 杀活跃
+    /// 命令；显式 `false` 仅作逃生阀保留（不可后台化工具集 / 旧
+    /// kill-on-timeout 语义的显式 opt-out）。
     #[serde(default = "default_true")]
     pub auto_background_on_timeout: bool,
     /// Max FG block before auto-bg when [`Self::auto_background_on_timeout`] is
@@ -1444,21 +1455,24 @@ impl BashTool {
         }
     }
 
-    /// Effective foreground wait deadline: `min(default_timeout, budget)` when
-    /// auto-bg is on and the budget is finite; otherwise `default_timeout`.
+    /// Effective foreground auto-bg deadline (ms): `min(default_timeout,
+    /// budget)` when auto-bg is on and the budget is finite; otherwise
+    /// `default_timeout`.
     ///
-    /// This is the FG wait deadline, not necessarily the auto-bg point: when
-    /// `budget < default_timeout` it is the auto-bg report point, and when
-    /// `default_timeout <= budget` the per-request auto-bg gate in `run()`
-    /// stays off, so the deadline is the kill-on-timeout point.
+    /// TER T1.4 (2026-09-04)：去硬杀——auto-bg 开启时该 deadline 一定是
+    /// **auto-bg 点**（先到者自动后台化并返回一次中间状态），不再是
+    /// kill-on-timeout 点；kill-on-timeout 只存在于显式
+    /// `auto_background_on_timeout=false`（逃生阀）。模型显式传入更短
+    /// timeout 时实际后台化点还会更早（终端按
+    /// `min(resolved_timeout, budget)` 判定）。
     ///
     /// TER T1.2 (2026-09-03)：预算缺省/`null` 收敛为 resident 180s（与
-    /// serde/`Default` 同一常量），不再假定后端 15s；本 helper 只作测试与
-    /// 数学核对用（2026-09-04 复审处理：由 `effective_auto_bg_wait_ms` 改名，
-    /// 避免与 per-request auto-bg 判定混淆）。
+    /// serde/`Default` 同一常量），不再假定后端 15s（2026-09-04 复审处理：
+    /// 由 `effective_auto_bg_wait_ms` 改名，避免与 per-request auto-bg
+    /// 判定混淆）。
     ///
-    /// Not yet used in model-facing descriptions (historical auto-bg copy only).
-    #[allow(dead_code)] // 测试 + 数学核对（描述文案直接渲染 budget，不走本 helper）
+    /// 自 TER T1.4 起供模型面文案渲染「after Ns」（与 request 同一数学
+    /// 来源）。
     pub(crate) fn effective_fg_wait_ms(params: &BashParams) -> Option<u64> {
         if !Self::auto_background_on_timeout_enabled(params) {
             return None;
@@ -1496,37 +1510,40 @@ impl BashTool {
         ))
     }
 
-    /// TER T1.2 (2026-09-03)：模型面「中间回报点」文案从生效预算单源渲染
-    /// （`foreground_block_budget_ms` → request 同一来源），不再硬编码
-    /// “after 300s”。有限预算渲染为秒数（不足 1s 按 1s 展示）；
-    /// `0`（仅 timeout 触发 auto-bg）无有限回报点，改为按 timeout 描述。
+    /// TER T1.2 (2026-09-03) + TER T1.4 (2026-09-04)：模型面「中间回报 /
+    /// 后台化点」文案从生效 deadline 单源渲染
+    /// （[`Self::effective_fg_wait_ms`] = `min(默认超时, 预算)`，与
+    /// request 同一来源），不再硬编码秒数，也不再宣示 “300s for ordinary /
+    /// 600s for program” 分层杀语义。去硬杀口径：命中即自动后台化并返回
+    /// 一次中间状态，永不因分层 timeout 杀活跃命令。
     fn auto_bg_property_mid_run_sentence(params: &BashParams) -> String {
-        match Self::effective_foreground_block_budget(params) {
-            Some(budget) if budget != Duration::MAX => {
-                let secs = (budget.as_millis() as u64).div_ceil(1000);
+        match Self::effective_fg_wait_ms(params) {
+            Some(wait_ms) => {
+                let secs = wait_ms.div_ceil(1000).max(1);
                 format!(
-                    "Commands still running after {secs}s (with a timeout that \
-                     allows it) return one mid-run status and keep running; the \
+                    "Commands still running after {secs}s (or after a shorter \
+                     model-chosen timeout) are automatically backgrounded \
+                     instead of killed and return one mid-run status; the \
                      final result arrives with a later tool result."
                 )
             }
-            _ => "Commands still running when their resolved timeout fires \
-                 (auto-backgrounding enabled) are automatically backgrounded \
-                 instead of killed and return one mid-run status; the final \
-                 result arrives with a later tool result."
-                .to_string(),
+            // auto_bg 关闭（逃生阀）时不渲染该句——调用方只在 auto_bg
+            // 开启分支引用。
+            None => String::new(),
         }
     }
 
     /// Same-source clause for the tool-description bullet
     /// (see [`Self::auto_bg_property_mid_run_sentence`]).
+    /// TER T1.4：deadline = `min(默认超时, 预算)`；模型显式更短 timeout
+    /// 在终端层更早触发。
     fn auto_bg_mid_run_when_clause(params: &BashParams) -> String {
-        match Self::effective_foreground_block_budget(params) {
-            Some(budget) if budget != Duration::MAX => {
-                let secs = (budget.as_millis() as u64).div_ceil(1000);
-                format!("after {secs}s and its timeout allows it")
+        match Self::effective_fg_wait_ms(params) {
+            Some(wait_ms) => {
+                let secs = wait_ms.div_ceil(1000).max(1);
+                format!("after {secs}s, or when a shorter model-chosen timeout fires")
             }
-            _ => "as its resolved timeout fires".to_string(),
+            None => "as its resolved timeout fires".to_string(),
         }
     }
 
@@ -1555,11 +1572,18 @@ impl BashTool {
                     // keeps the property from contradicting them.
                     // TER T1.2 (2026-09-03)：hide+auto-bg 形态的中间回报点
                     // 由生效预算渲染（与 request 同源），不硬编码秒数。
+                    // TER T1.4 (2026-09-04)：去硬杀——不再宣示「300s for
+                    // ordinary / 600s for program」分层杀默认；改由生效
+                    // 默认值与 deadline 文案同源渲染（timeout = auto-bg
+                    // deadline，永不杀活跃命令）。
                     let desc = if params.hide_background_input && auto_bg {
                         format!(
                             "Optional {timeout_param_name} in milliseconds (max {max_ms}). \
-                             When omitted, the default timeout applies (300s for ordinary \
-                             commands, 600s for program/script commands). {}",
+                             When omitted, the default timeout applies; commands are \
+                             never killed for hitting a timeout — auto-backgrounding \
+                             (the default/model timeout or the foreground block \
+                             budget, whichever fires first) returns one mid-run \
+                             status. {}",
                             Self::auto_bg_property_mid_run_sentence(params)
                         )
                     } else if !background_enabled {
@@ -1637,11 +1661,12 @@ impl BashTool {
         r#"Run a ${%- if is_windows %} shell command${%- else %} bash command${%- endif %} and return its output.
 
 Usage notes:
-  - You can specify an optional ${{ params.execute.timeout }} in milliseconds (up to ${{ max_timeout_ms | default(300000) }}ms). When omitted, the default timeout applies: 300s for ordinary commands, 600s for program/script commands.
+  - You can specify an optional ${{ params.execute.timeout }} in milliseconds (up to ${{ max_timeout_ms | default(300000) }}ms). When omitted, the default timeout (${{ default_timeout_ms | default(120000) }}ms) is the auto-backgrounding deadline.
 ${%- if auto_background_on_timeout %}
-  - Long-running commands: when a command is still running ${{ auto_bg_mid_run_when }}, the tool returns one mid-run status (elapsed time, PID, partial output, full-output file path) and the command keeps running; its final result (exit code or timeout) is reported with a later tool result. To interrupt it, terminate the reported PID (e.g. `taskkill /PID <pid> /F` on Windows or `kill -9 <pid>` on Unix).
-${%- endif %}
+  - No timeout kill: when a command is still running ${{ auto_bg_mid_run_when }}, the tool returns one mid-run status (elapsed time, PID, partial output, full-output file path) and the command keeps running in the background; its final result is reported with a later tool result. To interrupt it, terminate the reported PID (e.g. `taskkill /PID <pid> /F` on Windows or `kill -9 <pid>` on Unix).
+${%- else %}
   - Timeout enforcement: when the timeout fires, the wrapper${%- if is_windows %} terminates the child's Job Object, killing every descendant process immediately (no graceful-termination grace period).${%- else %} kills the child process group (SIGTERM, escalated to SIGKILL after a ~1s grace period). Descendants that did not detach via `setsid` / `nohup` will also be killed.${%- endif %}
+${%- endif %}
   - If the output exceeds {max_output_bytes} characters, the middle is truncated (you keep the beginning and end) and the result includes the path to a log file with the full output, which you can read or search.
 ${%- if shell_uses_semicolon %}
   - '&&' is not supported in this shell; chain sequential commands with ';'.
@@ -1659,7 +1684,11 @@ ${%- endif %}"#
 
 Usage notes:
   - You can specify an optional ${{ params.execute.timeout }} in milliseconds (up to ${{ max_timeout_ms | default(300000) }}ms). ${%- if auto_background_on_timeout %} If not specified, foreground commands exceeding the default timeout will be automatically backgrounded instead of killed. You will receive a task id to check output later.${%- else %} If not specified, foreground commands will timeout after ${{ default_timeout_ms | default(120000) }}ms.${%- endif %} Background tasks are not bounded by the default: with ${{ params.execute.timeout }} omitted or 0 they run until they exit or are killed; a positive ${{ params.execute.timeout }} still applies.
-  - Timeout enforcement: when the timeout fires, the wrapper${%- if is_windows %} terminates the child's Job Object, killing every descendant process immediately (no graceful-termination grace period).${%- else %} kills the child process group (SIGTERM, escalated to SIGKILL after a ~1s grace period). Descendants that did not detach via `setsid` / `nohup` will also be killed.${%- endif %} `${{ params.execute.timeout }}: 0` in `${%- if params is defined and params.execute is defined and params.execute.is_background %}${{ params.execute.is_background }}${%- else %}background${%- endif %}: true` mode disables the wrapper timeout entirely${%- if tools.by_kind.kill_task_action %}; the child's lifetime is owned by the model via ${{ tools.by_kind.kill_task_action }}${%- endif %}.
+${%- if auto_background_on_timeout %}
+  - No timeout kill: a foreground command is never killed for hitting its timeout — it is automatically backgrounded and you receive a task id to check output later.
+${%- else %}
+  - Timeout enforcement: when the timeout fires, the wrapper${%- if is_windows %} terminates the child's Job Object, killing every descendant process immediately (no graceful-termination grace period).${%- else %} kills the child process group (SIGTERM, escalated to SIGKILL after a ~1s grace period). Descendants that did not detach via `setsid` / `nohup` will also be killed.${%- endif %}
+${%- endif %} `${{ params.execute.timeout }}: 0` in `${%- if params is defined and params.execute is defined and params.execute.is_background %}${{ params.execute.is_background }}${%- else %}background${%- endif %}: true` mode disables the wrapper timeout entirely${%- if tools.by_kind.kill_task_action %}; the child's lifetime is owned by the model via ${{ tools.by_kind.kill_task_action }}${%- endif %}.
   - If the output exceeds {max_output_bytes} characters, the middle is truncated (you keep the beginning and end) and the result includes the path to a log file with the full output, which you can read or search.
   - You can use the ${{ params.execute.is_background }} parameter to run the command in the background (e.g., dev servers, long builds): it returns a task id immediately and keeps running in the background.${%- if system_reminders_enabled %} You are notified on completion, so do not poll or sleep-wait for it.${%- elif tools.by_kind.background_task_action %} Check on it later with the ${{ tools.by_kind.background_task_action }} tool.${%- endif %}${%- if has_unix_utilities %} You do not need to use '&' at the end of the command when using this parameter.${%- endif %}
 ${%- if shell_uses_semicolon %}
@@ -2278,29 +2307,25 @@ impl xai_tool_runtime::Tool for BashTool {
                 &params,
             );
             // Backgroundable commands get the terminal's short budget (the
-            // requested `timeout` stays as the kill backstop, nothing to clamp).
-            // Non-backgroundable ones have no background path, so a large
-            // `timeout` would wedge the turn — clamp it to `MAX_FOREGROUND_BLOCK`.
+            // requested `timeout` stays as the auto-bg deadline reference,
+            // nothing to clamp). Non-backgroundable ones have no background
+            // path, so a large `timeout` would wedge the turn — clamp it to
+            // `MAX_FOREGROUND_BLOCK` (kill-on-timeout 逃生阀语义，T1.4 保留
+            // 于显式关闭态)。
             let timeout = if Self::auto_background_on_timeout_enabled(&params) {
                 timeout
             } else {
                 clamp_foreground_block(timeout, config_timeout, max_foreground_block())
             };
 
-            // THIN-HARNESS-REDESIGN-V2 §9.7 (2026-08-29 S5-2): 中间回报的
-            // 逐调用判定——当配置了「有限」回报点（非参考兼容的
-            // `Duration::MAX`）时，只有解析超时严格大于回报点的命令才开启
-            // auto-background（满预算后台化并返回一次中间状态，默认 180s
-            // TER T1.2）；解析超时 ≤ 回报点的命令保持 kill-on-timeout
-            // （不产生无意义的「先回报后即杀」序列）。参考兼容的
-            // `Duration::MAX`（禁用短预算）→ 仅 timeout 触发 auto-bg；
-            // 未配置/`null` 预算经 resident 180s 单源收敛为有限档，判定
-            // 同上（解析超时须 > 180s 才开启 auto-bg）。
-            let auto_background_on_timeout = Self::auto_background_on_timeout_enabled(&params)
-                && match Self::effective_foreground_block_budget(&params) {
-                    Some(budget) if budget != Duration::MAX => timeout > budget,
-                    _ => true,
-                };
+            // TER T1.4 (2026-09-04) 去硬杀：逐调用 auto-bg 门不再比较
+            // timeout 与预算——会话级 `auto_background_on_timeout` 开启即
+            // 携带 auto-bg，终端按 `min(解析超时, 预算)` 先到者自动后台化
+            // 并返回一次中间状态；解析超时 ≤ 预算不再 kill-on-timeout
+            // （T1.2 时代的门随本步取消）。旧 kill-on-timeout 语义只能通过
+            // 显式 `auto_background_on_timeout=false`（逃生阀）保留。
+            // 预算 `0`（参考兼容 `Duration::MAX`）→ 仅 timeout 触发 auto-bg。
+            let auto_background_on_timeout = Self::auto_background_on_timeout_enabled(&params);
 
             let request = TerminalRunRequest {
                 command: command.clone(),
@@ -3570,6 +3595,80 @@ mod tests {
         assert_eq!(req.timeout, std::time::Duration::from_secs(300));
     }
 
+    /// TER T1.4 (2026-09-04) 去硬杀：逐调用 auto-bg 门取消——即使解析
+    /// 超时 ≤ 180s 预算（纯默认 120s < 180s），request 仍携带
+    /// `auto_background_on_timeout=true`；timeout 只作 auto-bg deadline
+    /// 引用，命中即后台化并返回一次中间状态，不再 kill-on-timeout。
+    #[tokio::test]
+    async fn timeout_within_budget_requests_auto_bg_not_kill() {
+        let tool = BashTool;
+
+        // 纯默认：解析超时 120s ≤ 预算 180s —— 旧门会关掉 auto-bg 并
+        // kill-on-timeout；T1.4 后必须仍携带 auto-bg。
+        let (mock, captured) = MockTerminal::success_capturing_run("hello\n", 0);
+        let resources = make_resources_with_params(mock, BashParams::default());
+        let result = xai_tool_runtime::Tool::run(
+            &tool,
+            test_ctx(resources.into_shared()),
+            make_input("sleep 999"),
+        )
+        .await
+        .unwrap();
+        assert!(
+            matches!(result, BashToolOutput::Foreground(_)),
+            "mock success must return a foreground result"
+        );
+        {
+            let req = captured.lock().unwrap();
+            let req = req.as_ref().expect("foreground request captured");
+            assert_eq!(
+                req.timeout,
+                std::time::Duration::from_secs(120),
+                "pure-default resolved timeout"
+            );
+            assert_eq!(
+                req.foreground_block_budget,
+                Some(std::time::Duration::from_millis(
+                    DEFAULT_FOREGROUND_BLOCK_BUDGET_MS
+                )),
+            );
+            assert!(
+                req.auto_background_on_timeout,
+                "T1.4: resolved timeout <= budget must still request auto-backgrounding"
+            );
+        }
+
+        // 显式更短模型 timeout：同样是 auto-bg deadline，而非 kill 点。
+        let (mock2, captured2) = MockTerminal::success_capturing_run("hello\n", 0);
+        let resources2 = make_resources_with_params(mock2, BashParams::default());
+        let input = BashToolInput {
+            command: "sleep 999".to_string(),
+            timeout: Some(30_000),
+            description: "test".to_string(),
+            is_background: false,
+        };
+        xai_tool_runtime::Tool::run(&tool, test_ctx(resources2.into_shared()), input)
+            .await
+            .expect("explicit-timeout run succeeds");
+        let req2 = captured2.lock().unwrap();
+        let req2 = req2.as_ref().expect("foreground request captured");
+        assert_eq!(
+            req2.timeout,
+            std::time::Duration::from_secs(30),
+            "explicit model timeout resolved"
+        );
+        assert!(
+            req2.auto_background_on_timeout,
+            "T1.4: explicit model timeout is an auto-bg deadline, never a kill point"
+        );
+        assert_eq!(
+            req2.foreground_block_budget,
+            Some(std::time::Duration::from_millis(
+                DEFAULT_FOREGROUND_BLOCK_BUDGET_MS
+            )),
+        );
+    }
+
     /// THIN-HARNESS-REDESIGN-V2 §9.7 (2026-08-29 S5-2) + TER T1.3
     /// (2026-09-04)：默认 BashParams（hide_background_input=true）下显式
     /// `is_background=true` 被拒绝——模型面保持「一次调用 = 一个结果」。
@@ -4769,10 +4868,12 @@ mod tests {
         }
 
         /// THIN-HARNESS-REDESIGN-V2 §9.7 (2026-08-29 S5-2) +
-        /// TER T1.2 (2026-09-03)：
+        /// TER T1.2 (2026-09-03) + TER T1.4 (2026-09-04)：
         /// `hide_background_input` 从模型可见 schema 移除 `is_background`；
-        /// timeout 描述说明两档默认，中间回报点由生效预算渲染（此处预算
-        /// 300_000 → “after 300s”，与 request 同源）。
+        /// timeout 描述说明去硬杀口径——auto-bg deadline 由
+        /// `min(默认超时, 预算)` 渲染（此处默认超时 300s、预算 300_000 →
+        /// “after 300s”，与 request 同源），不再宣示 “300s for ordinary /
+        /// 600s for program” 分层杀默认。
         #[test]
         fn schema_hides_is_background_when_hide_background_input() {
             let params = BashParams {
@@ -4780,6 +4881,9 @@ mod tests {
                 hide_background_input: true,
                 auto_background_on_timeout: true,
                 foreground_block_budget_ms: Some(300_000),
+                // 默认超时经 5min 前台默认上限收敛到 300s，min(300s, 300s)
+                // = 300s → 文案 “after 300s”。
+                timeout_secs: Some(600.0),
                 ..BashParams::default()
             };
             let schema = BashTool::exported_input_schema(&base_schema(), &params, "timeout");
@@ -4794,8 +4898,12 @@ mod tests {
             let desc = schema["properties"]["timeout"]["description"]
                 .as_str()
                 .expect("timeout description");
-            assert!(desc.contains("300s for ordinary"), "{desc}");
-            assert!(desc.contains("600s for program/script"), "{desc}");
+            assert!(!desc.contains("300s for ordinary"), "{desc}");
+            assert!(!desc.contains("600s for program/script"), "{desc}");
+            assert!(
+                desc.contains("never killed for hitting a timeout"),
+                "{desc}"
+            );
             assert!(desc.contains("mid-run"), "{desc}");
             assert!(desc.contains("after 300s"), "{desc}");
         }
@@ -4817,7 +4925,8 @@ mod tests {
             BashTool::rendered_description(None, &renderer, params)
         }
 
-        /// TER T1.1/T1.2 (2026-09-03)：常驻默认开启——默认构造即
+        /// TER T1.1/T1.2 (2026-09-03) + TER T1.4 (2026-09-04)：常驻默认
+        /// 开启——默认构造即
         /// `auto_background_on_timeout=true`，且 `foreground_block_budget_ms`
         /// = 180_000（struct 与 serde 同源，15s 后端默认退役）。
         #[test]
@@ -4833,11 +4942,11 @@ mod tests {
                 Some(Duration::from_millis(DEFAULT_FOREGROUND_BLOCK_BUDGET_MS)),
                 "default budget must materialize as a finite 180s request budget"
             );
-            // helper 的 FG wait deadline = min(默认超时, 预算)；默认超时
-            // 120s < 180s 时 deadline 取 120s——此值此时是 kill-on-timeout
-            // 点而非 auto-bg 点（逐请求 auto-bg 门要求解析超时 > 预算；
-            // 主线 timeout_secs 600/普通 300 均 > 180s，实际在 180s 后台化
-            // ——见 request 捕获用例）。
+            // helper 的 auto-bg deadline = min(默认超时, 预算)；默认超时
+            // 120s < 180s 时 deadline 取 120s——TER T1.4 起该值就是 auto-bg
+            // 点（解析超时 ≤ 预算同样后台化，不再 kill-on-timeout；主线
+            // timeout_secs 600/普通 300 均 > 180s，实际在 180s 后台化——
+            // 见 request 捕获用例）。
             assert_eq!(
                 BashTool::effective_fg_wait_ms(&params),
                 Some(
@@ -4861,10 +4970,11 @@ mod tests {
         }
 
         /// THIN-HARNESS-REDESIGN-V2 §9.7 (2026-08-29 S5-2) +
-        /// TER T1.2 (2026-09-03)：
-        /// `hide_background_input` 下工具描述不提及 `is_background`；中间
-        /// 回报点由预算渲染（此处预算 300_000 → “after 300s”，渲染不
-        /// panic）。
+        /// TER T1.2 (2026-09-03) + TER T1.4 (2026-09-04)：
+        /// `hide_background_input` 下工具描述不提及 `is_background`，且
+        /// 不含 “Timeout enforcement … kills” 杀文案；中间回报点由
+        /// `min(默认超时, 预算)` 渲染（此处默认超时 300s、预算 300_000 →
+        /// “after 300s”，渲染不 panic）。
         #[test]
         fn internal_auto_bg_description_renders_without_background_surface() {
             let params = BashParams {
@@ -4872,12 +4982,15 @@ mod tests {
                 auto_background_on_timeout: true,
                 foreground_block_budget_ms: Some(300_000),
                 hide_background_input: true,
+                timeout_secs: Some(600.0),
                 ..BashParams::default()
             };
             let desc = tool_desc(&params);
             assert!(!desc.contains("is_background"), "{desc}");
-            assert!(desc.contains("300s for ordinary"), "{desc}");
-            assert!(desc.contains("600s for program/script"), "{desc}");
+            assert!(!desc.contains("300s for ordinary"), "{desc}");
+            assert!(!desc.contains("600s for program/script"), "{desc}");
+            assert!(desc.contains("No timeout kill"), "{desc}");
+            assert!(!desc.contains("Timeout enforcement"), "{desc}");
             assert!(desc.contains("mid-run status"), "{desc}");
             assert!(desc.contains("terminate the reported PID"), "{desc}");
             assert!(desc.contains("after 300s"), "{desc}");
@@ -4900,22 +5013,44 @@ mod tests {
             );
         }
 
-        /// TER T1.2 (2026-09-03) + TER T1.3 (2026-09-04)：默认模型面文案与
-        /// 生效值同源——缺省 BashParams（hide_background_input=true 封闭面）
-        /// 下，schema timeout 描述与工具描述都渲染“after 180s”（由 resident
-        /// 180_000 渲染，非硬编码），且均不提及 `is_background`。
+        /// TER T1.2 (2026-09-03) + TER T1.3 (2026-09-04) +
+        /// TER T1.4 (2026-09-04)：默认模型面文案与生效值同源——缺省
+        /// BashParams（hide_background_input=true 封闭面）下，auto-bg
+        /// deadline = min(默认超时 120s, 预算 180s) = 120s → schema timeout
+        /// 描述与工具描述都渲染 “after 120s”（T1.4：120s < 180s 是
+        /// auto-bg 点而非 kill 点）；主线性 `timeout_secs=600` 时渲染
+        /// “after 180s”。均不提及 `is_background`，也无 timeout 杀文案。
         #[test]
-        fn default_budget_180s_renders_in_model_facing_copy() {
+        fn default_deadline_renders_in_model_facing_copy() {
             let params = BashParams::default();
             let desc = timeout_desc(&params);
-            assert!(desc.contains("after 180s"), "{desc}");
+            assert!(desc.contains("after 120s"), "{desc}");
+            assert!(!desc.contains("after 180s"), "{desc}");
             assert!(!desc.contains("after 300s"), "{desc}");
             assert!(!desc.contains("is_background"), "{desc}");
+            assert!(
+                desc.contains("never killed for hitting a timeout"),
+                "{desc}"
+            );
 
             let tdesc = tool_desc(&params);
-            assert!(tdesc.contains("after 180s"), "{tdesc}");
+            assert!(tdesc.contains("after 120s"), "{tdesc}");
             assert!(!tdesc.contains("after 300s"), "{tdesc}");
             assert!(!tdesc.contains("is_background"), "{tdesc}");
+            assert!(tdesc.contains("No timeout kill"), "{tdesc}");
+            assert!(!tdesc.contains("Timeout enforcement"), "{tdesc}");
+
+            // 主线性配置（timeout_secs=600，经 5min 前台上限收敛到 300s）：
+            // min(300s, 180s) = 180s → 文案回到 “after 180s”。
+            let mainline = BashParams {
+                timeout_secs: Some(600.0),
+                ..BashParams::default()
+            };
+            let mdesc = timeout_desc(&mainline);
+            assert!(mdesc.contains("after 180s"), "{mdesc}");
+            assert!(!mdesc.contains("after 120s"), "{mdesc}");
+            let mtdesc = tool_desc(&mainline);
+            assert!(mtdesc.contains("after 180s"), "{mtdesc}");
         }
 
         /// TER T1.3 (2026-09-04)：模型面封闭为 resident 默认——缺省
@@ -5006,7 +5141,7 @@ mod tests {
 
         /// Descriptions already advertise max/default timeout numbers — those
         /// must track BashParams. The hide+auto-bg mid-run copy renders the
-        /// FG budget (see `default_budget_180s_renders_in_model_facing_copy`);
+        /// FG budget (see `default_deadline_renders_in_model_facing_copy`);
         /// this non-hidden branch intentionally keeps the short historical
         /// wording. TER T1.3 (2026-09-04)：可见面已非默认——该分支显式
         /// `hide_background_input=false` 逃生阀。
@@ -5673,13 +5808,18 @@ mod tests {
         /// Windows; Unix is the inverse. Use [`render_flags`] to decouple the two
         /// axes (e.g. the Windows + Git Bash quadrant, where both are true).
         fn render(template: &str, has_unix_utilities: bool) -> String {
-            render_flags(template, !has_unix_utilities, has_unix_utilities)
+            render_flags(template, !has_unix_utilities, has_unix_utilities, true)
         }
 
-        fn render_flags(template: &str, is_windows: bool, has_unix_utilities: bool) -> String {
+        fn render_flags(
+            template: &str,
+            is_windows: bool,
+            has_unix_utilities: bool,
+            auto_background_on_timeout: bool,
+        ) -> String {
             let renderer = full_renderer();
             let extras = serde_json::json!({
-                "auto_background_on_timeout": true,
+                "auto_background_on_timeout": auto_background_on_timeout,
                 "is_windows": is_windows,
                 "shell_uses_semicolon": !has_unix_utilities,
                 "has_unix_utilities": has_unix_utilities,
@@ -5756,33 +5896,37 @@ mod tests {
             );
         }
 
-        /// Timeout/kill wording and the bash `&` note are shell-specific: Unix
-        /// shows SIGTERM/SIGKILL + setsid/nohup; Windows shows Job Object
-        /// termination and drops the Unix-only jargon and the trailing-`&` note.
+        /// Timeout/kill wording and the bash `&` note are shell-specific.
+        /// TER T1.4 (2026-09-04) 去硬杀：auto_bg 开启（默认）时模型面不
+        /// 渲染 timeout 杀文案（无 SIGTERM/Job Object 终止宣示），shell
+        /// 分支只体现在 `&`/工具链提示；显式 `auto_background_on_timeout=
+        /// false`（逃生阀）与后台禁用面仍按 shell 渲染旧 kill 文案——
+        /// Unix 显示 SIGTERM/SIGKILL + setsid/nohup，Windows 显示 Job
+        /// Object 终止。
         #[test]
         fn timeout_and_ampersand_text_branch_on_shell() {
             let enabled = BashTool::default_description_template_enabled();
 
-            // Unix (is_windows=false, utilities=true): SIGTERM/SIGKILL + setsid + `&` note.
-            let unix = render_flags(enabled, false, true);
-            assert!(unix.contains("SIGTERM, escalated to SIGKILL"));
-            assert!(unix.contains("setsid"));
+            // Unix (is_windows=false, utilities=true) + auto_bg 默认开：
+            // 无 timeout 杀文案；`&` note 保留。
+            let unix = render_flags(enabled, false, true, true);
+            assert!(unix.contains("No timeout kill"), "{unix}");
+            assert!(!unix.contains("SIGTERM"), "{unix}");
             assert!(unix.contains("You do not need to use '&' at the end"));
 
-            // PowerShell (is_windows=true, utilities=false): Job Object wording, no
-            // Unix jargon, no `&` note; OS-neutral timeout tail still present.
-            let pwsh = render_flags(enabled, true, false);
+            // PowerShell + auto_bg 默认开：同样无杀文案、无 Unix jargon、
+            // 无 `&` note；OS-neutral 后台语义尾巴仍在。
+            let pwsh = render_flags(enabled, true, false, true);
+            assert!(pwsh.contains("No timeout kill"), "{pwsh}");
             assert!(
-                pwsh.contains("terminates the child's Job Object"),
-                "missing Windows Job Object wording, got:\n{pwsh}"
+                !pwsh.contains("terminates the child's Job Object"),
+                "auto_bg 开时不得渲染 Windows 杀文案:\n{pwsh}"
             );
             assert!(
                 !pwsh.contains("SIGTERM"),
                 "Unix SIGTERM leaked, got:\n{pwsh}"
             );
             assert!(!pwsh.contains("SIGKILL"));
-            assert!(!pwsh.contains("setsid"));
-            assert!(!pwsh.contains("nohup"));
             assert!(
                 !pwsh.contains("You do not need to use '&' at the end"),
                 "bash `&` note leaked into PowerShell description, got:\n{pwsh}"
@@ -5792,20 +5936,39 @@ mod tests {
                 "OS-neutral timeout tail dropped on Windows, got:\n{pwsh}"
             );
 
-            // Windows + Git Bash (is_windows=true, utilities=true): the kill text is
-            // OS-level (Job Object) while the `&` note is shell-level — both appear.
-            let git_bash = render_flags(enabled, true, true);
-            assert!(git_bash.contains("terminates the child's Job Object"));
+            // Windows + Git Bash + auto_bg 默认开：无 kill 文案；`&` note 按
+            // shell 出现。
+            let git_bash = render_flags(enabled, true, true, true);
+            assert!(!git_bash.contains("terminates the child's Job Object"));
             assert!(!git_bash.contains("SIGTERM"));
             assert!(
                 git_bash.contains("You do not need to use '&' at the end"),
                 "Git Bash must keep the `&` note, got:\n{git_bash}"
             );
 
-            // The disabled template branches the timeout line identically.
+            // Escape hatch（auto_background_on_timeout=false）：旧 kill 文案
+            // 按 shell 分支保留。
+            let unix_off = render_flags(enabled, false, true, false);
+            assert!(
+                unix_off.contains("SIGTERM, escalated to SIGKILL"),
+                "escape-hatch kill copy missing on Unix:\n{unix_off}"
+            );
+            assert!(unix_off.contains("setsid"));
+            assert!(!unix_off.contains("No timeout kill"));
+
+            let pwsh_off = render_flags(enabled, true, false, false);
+            assert!(
+                pwsh_off.contains("terminates the child's Job Object"),
+                "escape-hatch kill copy missing on Windows:\n{pwsh_off}"
+            );
+            assert!(!pwsh_off.contains("SIGTERM"));
+            assert!(pwsh_off.contains("disables the wrapper timeout"));
+
+            // 后台禁用模板恒渲染杀文案，shell 分支一致。
             let pwsh_disabled = render_flags(
                 BashTool::default_description_template_disabled(),
                 true,
+                false,
                 false,
             );
             assert!(pwsh_disabled.contains("terminates the child's Job Object"));

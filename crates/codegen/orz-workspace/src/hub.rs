@@ -1144,11 +1144,12 @@ mod tests {
         cfg.tools[0].params = serde_json::json!({
             "enabled_background": true,
             "auto_background_on_timeout": true,
-            // TER T1.2 (2026-09-03)：auto-bg 由「有限预算」驱动——解析超时
-            // 严格大于预算时才开启逐调用 auto-bg（满预算后台化并返回中间
-            // 状态）；模型 timeout < 预算时仍为 kill-on-timeout（T1.4 去硬
-            // 杀再把 timeout 改成 auto-bg deadline）。故此处用 500ms 短预算
-            // + 300s 模型超时触发后台化，保持 tracker 接线覆盖。
+            // TER T1.2 (2026-09-03) + TER T1.4 (2026-09-04)：auto-bg 由
+            // 「有限预算」驱动——解析超时与预算先到者即 auto-bg deadline
+            // （T1.4 去硬杀后模型 timeout < 预算同样自动后台化，不再
+            // kill-on-timeout）。此处用 500ms 短预算 + 300s 模型超时，
+            // 在可接受时长内经真实 auto-bg 路径触发后台化，保持 tracker
+            // 接线覆盖。
             "foreground_block_budget_ms": 500,
         })
         .as_object()

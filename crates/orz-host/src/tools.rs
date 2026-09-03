@@ -104,14 +104,17 @@ pub fn read_file_coarse_gate_from_config(config: &toml::Value) -> Option<usize> 
 /// 中间回报——
 /// - 分层默认超时：程序/脚本类 600s、普通命令 300s，由宿主逐调用按命令
 ///   形态注入（见 [`terminal_tier_default_timeout_ms`]）；模型可传
-///   `timeout` 覆盖，上限 900s（`max_timeout_secs`）。
+///   `timeout` 覆盖，上限 900s（`max_timeout_secs`）。TER T1.4
+///   （2026-09-04）去硬杀后，这些值只作前台 auto-bg deadline / 上限
+///   引用，不再是杀活跃命令的超时点。
 /// - 中间回报：`auto_background_on_timeout` 自 TER T1.1（2026-09-03）起由
 ///   BashParams struct/serde 默认（true）单一提供，不再显式注入；
 ///   `foreground_block_budget_ms` 自 TER T1.2（2026-09-03）起同样由
 ///   BashParams struct/serde 默认（180_000）单一提供，本函数不再注入
-///   （缺省经 serde 解析即 180_000）——命令满 180s 且解析超时 >180s 时
-///   转入后台并返回一次「运行 + 工具自身情况」中间状态；后台截止=原
-///   解析超时。
+///   （缺省经 serde 解析即 180_000）。TER T1.4（2026-09-04）：命令在
+///   `min(解析超时, 180s 预算)` 先到者处自动后台化并返回一次「运行 +
+///   工具自身情况」中间状态；后台化后原解析超时退役，仅 10h 绝对兜底
+///   （T1.5 idle+CPU 兜底随后接管）——不再有「满 timeout 杀活跃命令」。
 /// - 工具面封闭：`enabled_background` 自 T1.1 起由 struct/serde 默认 true
 ///   单一提供；`hide_background_input` 自 TER T1.3（2026-09-04）起同样由
 ///   BashParams struct/serde 默认（true）单一提供，本函数不再显式注入
@@ -146,6 +149,10 @@ pub(crate) fn run_terminal_cmd_tool_params() -> Option<serde_json::Map<String, s
 /// - 或首 token 以 `./` 开头（工作区脚本/可执行文件）。
 ///
 /// 其余判为普通命令。误判由模型显式 `timeout` 覆盖（可低可高）。
+/// TER T1.4（2026-09-04）去硬杀：本函数的值经
+/// [`inject_terminal_default_timeout`] 注入后只作前台 auto-bg deadline
+/// 引用（主线 180s 预算先到时在 180s 后台化；预算关闭时才以注入值为
+/// 后台化点），不再作为杀活跃命令的超时。
 pub fn terminal_tier_default_timeout_ms(command: &str) -> u64 {
     const ORDINARY_MS: u64 = 300_000;
     const PROGRAM_MS: u64 = 600_000;
@@ -222,7 +229,8 @@ pub fn terminal_tier_default_timeout_ms(command: &str) -> u64 {
 /// 注入（毫秒）；显式传入的任意非 null 值（含 0）原样保留，由工具层再
 /// 按 max_timeout_secs 封顶；`null` 视为未传（审查处理 P3-1：语义与
 /// BashParams serde 的 `Option` 一致——0 是显式值、null 是缺省）。
-/// 纯函数，供 `call_tool_inner` 执行侧调用。
+/// TER T1.4（2026-09-04）：注入的分层值只作 auto-bg deadline 引用，
+/// 不再杀活跃命令。纯函数，供 `call_tool_inner` 执行侧调用。
 pub fn inject_terminal_default_timeout(args: serde_json::Value) -> serde_json::Value {
     let timeout_present = args.get("timeout").map(|v| !v.is_null()).unwrap_or(false);
     if timeout_present {
@@ -741,7 +749,9 @@ mod config_tests {
     /// `is_background` 不出现在模型面 schema）、
     /// `allow_background_operator=false`（封掉 `&`）、
     /// `timeout_secs=600`（程序/脚本缺省；普通命令 300s 由宿主逐调用
-    /// 注入）、`max_timeout_secs=900`（模型可传上限）。配置键名与
+    /// 注入；TER T1.4 起只作 auto-bg deadline 引用）、
+    /// `max_timeout_secs=900`（模型可传上限；TER T1.4 起同样只作上限
+    /// 引用）。配置键名与
     /// BashParams serde 字段一致（未知键静默 no-op，必须逐字匹配）。
     #[test]
     fn run_terminal_cmd_params_s5_2_layered_timeout_and_mid_run() {

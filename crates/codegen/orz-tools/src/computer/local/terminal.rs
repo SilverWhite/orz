@@ -1386,11 +1386,13 @@ impl LocalTerminalActor {
             }
         }
 
-        // 0b. Kill backgrounded tasks that exceeded their deadline — the
-        // original resolved timeout kept on transition (THIN-HARNESS-
-        // REDESIGN-V2 §9.7, 2026-08-29 S5-2: the two-tier default timeout
-        // stays effective after auto-backgrounding), capped by the absolute
-        // BACKGROUND_MAX_RUNTIME safety net.
+        // 0b. Kill backgrounded tasks that exceeded their absolute deadline.
+        // TER T1.4 (2026-09-04)：去硬杀——自动后台化任务在
+        // `transition_to_background` 处把原解析超时退役为
+        // `BACKGROUND_MAX_RUNTIME`（10h 绝对兜底），因此这里只对「绝对
+        // 兜底」或「显式后台任务的正向模型超时 kill-backstop」生效，分层
+        // timeout（普通/程序/模型上限）不再是杀活跃命令的点；无活跃场景
+        // 由 T1.5 idle+CPU 兜底接管（连续 300s 无输出增长才 kill）。
         let bg_expired: Vec<String> = self
             .processes
             .iter()
@@ -1404,14 +1406,14 @@ impl LocalTerminalActor {
 
         for task_id in &bg_expired {
             if let Some(process) = self.processes.get_mut(task_id) {
-                // The tier timeout (a resolved command timeout < the 10h hard
-                // cap) reports `signal: timeout`; only the absolute backstop
-                // reports `max_runtime`.
+                // 显式后台任务的正向模型超时（< 10h 硬上限）报
+                // `signal: timeout`（kill-backstop）；自动后台化任务与
+                // 未设超时的后台任务都只撞 10h 绝对兜底，报 `max_runtime`。
                 let tier_timeout = process.timeout < BACKGROUND_MAX_RUNTIME;
                 tracing::warn!(
                     task_id,
                     tier_timeout,
-                    "Background task exceeded its deadline, killing"
+                    "Background task exceeded its absolute runtime limit, killing"
                 );
                 // Fire-and-forget SIGTERM — poll loop escalates to SIGKILL
                 // on the next tick if the process doesn't exit.
@@ -1824,8 +1826,10 @@ impl LocalTerminalActor {
         // (TER T1.2, 2026-09-03: the standalone 15s default was retired);
         // BashParams sessions carry their own budget via
         // `foreground_block_budget_ms` (0 = disable the short budget so only
-        // `timeout` auto-bgs). The `timeout` check below also auto-bgs when
-        // auto_bg is on, or kills when it is off.
+        // `timeout` auto-bgs). The `timeout` check below auto-bgs whenever
+        // auto_bg is on (TER T1.4: timeout = auto-bg deadline, never a kill
+        // point); the kill branch only serves the explicit
+        // `auto_background_on_timeout=false` escape hatch.
         if process.exit_status.is_none()
             && matches!(
                 process.bg_status,
@@ -1839,19 +1843,29 @@ impl LocalTerminalActor {
             return;
         }
 
-        // Check for timeout.
-        if process.is_timed_out() && process.exit_status.is_none() {
+        // Check for timeout. TER T1.4 (2026-09-04)：只有前台进程走本分支；
+        // 后台化任务的原解析超时已在转换时退役，由 `0b` 清扫（10h 绝对
+        // 兜底）与 T1.5 idle+CPU 兜底接管，分层 timeout 不再杀活跃命令。
+        if !process.bg_status.is_backgrounded()
+            && process.is_timed_out()
+            && process.exit_status.is_none()
+        {
             if matches!(
                 process.bg_status,
                 BackgroundStatus::Foreground {
                     auto_bg_on_timeout: true
                 }
             ) {
+                // T1.4：解析超时 ≤ 180s 预算时，超时点就是 auto-bg
+                // deadline（先于预算触发 → 在此后台化并返回一次中间状态）。
                 self.transition_to_background(terminal_id, BackgroundReason::ForegroundTimeout);
                 return;
             }
 
-            // Default: kill the process on timeout.
+            // Escape hatch（非默认、非分层）：`auto_background_on_timeout:
+            // false`（显式关闭或不可后台化工具集）保留 bounded
+            // kill-on-timeout；TER T1.1 起关闭态仍可配，本分支只服务该
+            // 显式逃生阀，评测墙钟杀路径在 runner/sandbox（M2 T2.1）。
             send_sigterm_to_group(process);
             process.exit_status = Some(ExitStatus {
                 exit_code: None,
@@ -1918,19 +1932,15 @@ impl LocalTerminalActor {
             return false;
         };
         process.bg_status = BackgroundStatus::Backgrounded { reason };
-        // THIN-HARNESS-REDESIGN-V2 §9.7 (2026-08-29 S5-2): 后台化截止语义
-        // 分型（审查处理 P2-2）——自动后台化（ForegroundTimeout，300s 中间
-        // 回报路径）保留**原解析超时**为截止，使两档默认超时/模型覆盖在
-        // 后台化后仍生效（`0b` 清扫按 `min(timeout, BACKGROUND_MAX_RUNTIME)`
-        // 收口）；用户主动后台化（Explicit / UserSignal，显式 is_background
-        // 或 Ctrl+G）维持 S5-2 之前的 10h 硬上限语义，不因本次改动顺带
-        // 缩水。
-        match reason {
-            BackgroundReason::ForegroundTimeout => {}
-            BackgroundReason::Explicit | BackgroundReason::UserSignal => {
-                process.timeout = BACKGROUND_MAX_RUNTIME;
-            }
-        }
+        // THIN-HARNESS-REDESIGN-V2 §9.7 (2026-08-29 S5-2) 演进 +
+        // TER T1.4 (2026-09-04) 去硬杀：后台化截止语义统一——自动后台化
+        // （ForegroundTimeout）不再保留原解析超时（分层 timeout 只作前台
+        // auto-bg deadline 引用，后台化后即退役）；用户主动后台化
+        // （Explicit / UserSignal）维持 10h 硬上限。三种后台化路径统一
+        // 收敛到 `BACKGROUND_MAX_RUNTIME`（`0b` 清扫 signal=max_runtime），
+        // 无活跃场景由 T1.5 idle+CPU 兜底接管；显式后台任务的正向模型
+        // 超时 kill-backstop 在 `handle_run_background` 处解析，不走本转换。
+        process.timeout = BACKGROUND_MAX_RUNTIME;
         let result = Ok(process.to_result());
         process.notify_waiters(result);
         let tool_call_id = process.tool_call_id.clone();
@@ -3830,18 +3840,18 @@ mod tests {
         let _ = tokio::fs::remove_file(&output_file).await;
     }
 
-    // THIN-HARNESS-REDESIGN-V2 §9.7 (2026-08-29 S5-2)：自动后台化后，任务
-    // 保持**原解析超时**为截止（`min(timeout, BACKGROUND_MAX_RUNTIME)`）——
-    // 300ms 后台化 + 800ms 解析超时的任务应在 ~800ms 处被树杀（signal
-    // timeout），而不是延长到 10h 硬上限。
+    // TER T1.4 (2026-09-04) 去硬杀：自动后台化后，**原解析超时退役**——
+    // 300ms 预算后台化 + 800ms 解析超时的任务必须越过 800ms 继续运行
+    // （分层 timeout 只作 auto-bg deadline 引用，不再杀活跃命令；10h
+    // 绝对兜底与 T1.5 idle+CPU 兜底另行接管）。
     #[tokio::test]
-    async fn test_backgrounded_task_keeps_original_timeout_deadline() {
+    async fn test_auto_backgrounded_task_survives_original_timeout_deadline() {
         let backend = LocalTerminalBackend::new_with_foreground_budget(Duration::from_millis(100));
         let output_file = std::env::temp_dir().join(format!(
             "terminal-test-bg-deadline-{}.out",
             std::process::id()
         ));
-        let tool_call_id = "test-bg-deadline";
+        let tool_call_id = "test-bg-survives-deadline";
 
         let request = TerminalRunRequest {
             command: "sleep 60".to_string(),
@@ -3863,13 +3873,24 @@ mod tests {
         let result = backend.run(request).await.unwrap();
         assert_eq!(result.signal.as_deref(), Some("auto_backgrounded"));
 
-        // 越过原解析超时（800ms）再查：任务应以 signal=timeout 结束。
+        // 越过原解析超时（800ms）再查：任务仍在运行（不再是 signal=
+        // timeout 的树杀——TER T1.4 去硬杀）。
         tokio::time::sleep(Duration::from_millis(900)).await;
         let snap = backend.get_task(tool_call_id).await.expect("task snapshot");
+        assert!(
+            !snap.completed,
+            "auto-backgrounded task must survive its original resolved timeout: {snap:?}"
+        );
         assert_eq!(
             snap.signal.as_deref(),
-            Some("timeout"),
-            "backgrounded task must die at its original resolved timeout, not the 10h cap: {snap:?}"
+            None,
+            "auto-backgrounded task must not report a timeout kill: {snap:?}"
+        );
+        // Cleanup: kill the background task so the test doesn't leak.
+        let outcome = backend.kill_task(tool_call_id).await;
+        assert!(
+            matches!(outcome, KillOutcome::Killed | KillOutcome::AlreadyExited),
+            "kill after auto-bg should succeed: {outcome:?}"
         );
         let _ = tokio::fs::remove_file(&output_file).await;
     }
