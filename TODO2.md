@@ -156,9 +156,19 @@
   守卫沿用。验证：orz-loop 全量 700 passed / 3 ignored、fmt --check 净、
   git diff --check exit 0。审计见
   [`TER_T1_8_F6_PULL_WALLCLOCK_2026-09-04.md`](docs/audits/TER_T1_8_F6_PULL_WALLCLOCK_2026-09-04.md)。）
-- [ ] T1.9 F6 push 档：阈值 <600/300/120s 注入中性事实 ≤4 次/run +
+- [x] T1.9 F6 push 档：阈值 <600/300/120s 注入中性事实 ≤4 次/run +
   `budget_cue_injected` 事件；开关 env/config 默认 off。验收：开关
   off 零注入（回归 PUSH→PULL）；on 时次数上限与事件可审。
+  （2026-09-04 完成：`EventType` 增 BudgetCueInjected（v0.2 轨，
+  snake_case 与 run-event schema 一致）；`ORZ_F6_PUSH` 默认 off +
+  `ORZ_MAX_WALLCLOCK` 上限配置时，主车道每轮请求前按剩余 <600/300/120
+  逐档注入一次中性事实（`[F6_BUDGET_CUE …]`，只报剩余/上限/已用轮、
+  无建议，注册进 injected-block filter 不持久化）并记
+  `budget_cue_injected`（remaining_seconds/rounds_used/threshold_seconds）；
+  每 run ≤3 次（T0.2 verifier ≤4 兼容）；off 零注入/零事件/零文本。
+  验证：orz-loop 全量 703 passed / 3 ignored、orz-assurance 201
+  passed、fmt --check 净、git diff --check exit 0。审计见
+  [`TER_T1_9_F6_PUSH_BUDGET_CUE_2026-09-04.md`](docs/audits/TER_T1_9_F6_PUSH_BUDGET_CUE_2026-09-04.md)。）
 - [ ] T1.10 W-F13a read_file 64KB 档：限制链核对（粗门 clamp/行 limit/
   50K 注入预算）后放宽至 64KB 级。验收：vm.js 级文件 ≤2 次读完；
   单次注入不触发截断；大文件仍可结构化分段。
