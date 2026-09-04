@@ -2231,6 +2231,25 @@ def check_repository() -> dict[str, Any]:
         run_event_v02_payload_root
         / "retrieval-result.tier-weight-mismatch.constraint.invalid.json"
     ] = ROOT / "runtime/retrieval-result-event-payload-v0.2.schema.json"
+    # TER T0.2 (2026-09-03, TODO2 T0.2 / 设计稿 §10-S0):
+    # ① tool_completed v0.2 payload: output_truncated / total_bytes / output_object_id
+    tool_completed_v02_schema = (
+        ROOT / "runtime/tool-completed-event-payload-v0.2.schema.json"
+    )
+    run_event_v02_payload_positive_contracts[
+        run_event_v02_payload_root / "tool-completed.output-object.valid.json"
+    ] = tool_completed_v02_schema
+    # ② tool_running v0.2 payload: idle_killed + reason positive & missing-reason negative
+    tool_running_v02_schema = (
+        ROOT / "runtime/tool-running-event-payload-v0.2.schema.json"
+    )
+    run_event_v02_payload_positive_contracts[
+        run_event_v02_payload_root / "tool-running.idle-killed.valid.json"
+    ] = tool_running_v02_schema
+    run_event_v02_payload_negative_contracts[
+        run_event_v02_payload_root
+        / "tool-running.idle-killed-missing-reason.constraint.invalid.json"
+    ] = tool_running_v02_schema
     for instance_path, schema_path in run_event_v02_payload_positive_contracts.items():
         errors.extend(
             _validate_instance(

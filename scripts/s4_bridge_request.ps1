@@ -25,6 +25,7 @@ param(
     [int]$TimeoutSeconds = 5400,
     [string]$Src = '',
     [string]$Dst = '',
+    [string]$KeyFile = '',
     [string]$CheckpointName = '',
     [string]$BridgeRoot = 'D:\CLI\_windows_high_nist\bridge'
 )
@@ -71,6 +72,9 @@ if ($Op -eq 'vm-agent') {
     $body.arm = $Arm
     $body.taskSet = $TaskSet
     $body.taskIds = $TaskIds
+    if ($KeyFile) {
+        $body.keyFile = $KeyFile
+    }
     if ($RunTag) {
         $body.runTag = $RunTag
     }

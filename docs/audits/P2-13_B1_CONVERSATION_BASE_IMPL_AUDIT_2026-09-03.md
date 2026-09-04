@@ -89,7 +89,7 @@
 ## 5. 复审处理（2026-09-03，全面复审）
 
 - 对 B1 实施做全面复审（设计合理性 / 实现合理性 / 符合性）后的处置登记：
-  [`audits/P2-13_B1_REVIEW_HANDLING_2026-09-03.md`](audits/P2-13_B1_REVIEW_HANDLING_2026-09-03.md)。
+  [`P2-13_B1_REVIEW_HANDLING_2026-09-03.md`](P2-13_B1_REVIEW_HANDLING_2026-09-03.md)。
 - 代码修正：entities 恢复版本计数归位 1（restore 后 bump）；检索分区恢复
   顺序 = 会话黑板先、activation 覆盖后（compare-and-set，activation 为
   权威源）；failure_agg 轴在 ACP 路径收口为会话相对（取代 CONTEXT §4.4.4

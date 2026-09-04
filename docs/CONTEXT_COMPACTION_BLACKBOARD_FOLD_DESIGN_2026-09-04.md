@@ -243,7 +243,7 @@ since/receipt_id 展开；更早历史见摘要存档与 run journal。
   断言）。第 8 项由 **S2 恢复预检 e2e 复验收口（2026-09-04）**：恢复预检
   整轮机械截断后 v0.3 marker 仍在、内容逐字节原样（preamble 恒保留；
   截断 marker 追加其后，D3-1 write-back 均存活），证据见
-  [P2-14 S2 e2e 审计](docs/audits/P2-14_S2_E2E_2026-09-04.md)。
+  [P2-14 S2 e2e 审计](audits/P2-14_S2_E2E_2026-09-04.md)。
 
 ## 8. 裁决记录（v0.2，2026-09-04 用户逐项裁决，无异议）
 

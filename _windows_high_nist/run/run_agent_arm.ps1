@@ -164,6 +164,24 @@ function New-ProbeWorkspace {
 # appears on argv or in any output line.
 function Invoke-CredBootstrap {
     param([string]$BootstrapRoot)
+    # 2026-09-03 key-file override channel (ORZ_AGENT_KEY_FILE): when the
+    # environment pins a key file, prefer it over the Credential Manager
+    # bootstrap (the AgentUser credential-store ownership in the wall is
+    # ambiguous).  Fail-closed: env set but file missing/invalid = no run.
+    $overrideFile = [Environment]::GetEnvironmentVariable('ORZ_AGENT_KEY_FILE')
+    if ($overrideFile) {
+        if (-not (Test-Path -LiteralPath $overrideFile)) {
+            throw "ORZ_AGENT_KEY_FILE set but missing: $overrideFile"
+        }
+        $overrideKey = ((Get-Content -LiteralPath $overrideFile -Raw -Encoding UTF8).Trim())
+        if ($overrideKey -notmatch '^sk-[A-Za-z0-9]{32}$') {
+            throw 'override key failed canonical shape validation (fail-closed)'
+        }
+        $script:AgentBootKey = $overrideKey
+        $summary.bootstrap_ok = $true
+        Write-Output ("AGENT_KEY_OVERRIDE=1 key_chars=" + $overrideKey.Length)
+        return
+    }
     if ($DryRun) {
         Write-Output "AGENT_DRYRUN BOOTSTRAP: python $SandboxCli --workspace <cred-bootstrap-dir> --arm non-admin --env CRED_PROBE_DUMP=<dir>/key.blob --command <dir>/cred_probe.exe <readRes>"
         $script:AgentBootKey = ''

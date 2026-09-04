@@ -14,13 +14,13 @@
 
 | 步骤 | Windows（PowerShell） | Linux（sh） |
 |---|---|---|
-| 1. 解压 | 把 `orz.exe`、`orz-signer.exe`、`orz-acaf-provision.exe` 放入同一目录（例如 `C:\orz`）。 | `mkdir -p ~/orz && cd ~/orz`<br>`tar -xzf orz-0.2.0-linux-x86_64.tar.gz`<br>`chmod +x orz orz-signer orz-acaf-provision` |
+| 1. 解压 | 把 `orz.exe`、`orz-signer.exe`、`orz-acaf-provision.exe` 放入同一目录（例如 `C:\orz`）。 | `mkdir -p ~/orz && cd ~/orz`<br>`tar -xzf orz-0.3.0-linux-x86_64.tar.gz`<br>`chmod +x orz orz-signer orz-acaf-provision` |
 | 2. 配置 API Key | 存入 Windows 凭据管理器（Generic，目标名 `orz-deepseek/agent`；一次即可）：<br>`cmdkey /generic:orz-deepseek/agent /user:agent /pass:你的DeepSeek_API_Key` | 用环境变量（Windows 凭据管理器通道的显式例外）：<br>`export ORZ_DEEPSEEK_API_KEY=你的DeepSeek_API_Key` |
 | 3. 初始化安全签发（一次性） | `.\orz-acaf-provision.exe "$env:USERPROFILE\.orz-acaf\keystore" "$env:USERPROFILE\.orz-acaf\signer-manifest.json"`<br><br>ACAF 默认 fail-closed，未配置会拒绝启动。 | `./orz-acaf-provision "$HOME/.orz-acaf/keystore" "$HOME/.orz-acaf/signer-manifest.json"` |
 | 4. 设置启动环境 | `$env:ORZ_ACAF_KEYSTORE = "$env:USERPROFILE\.orz-acaf\keystore"`<br>`$env:ORZ_ACAF_MANIFEST = "$env:USERPROFILE\.orz-acaf\signer-manifest.json"`<br>`$env:ORZ_ACAF_BINARY = "C:\orz\orz-signer.exe"` | `export ORZ_ACAF_KEYSTORE="$HOME/.orz-acaf/keystore"`<br>`export ORZ_ACAF_MANIFEST="$HOME/.orz-acaf/signer-manifest.json"`<br>`export ORZ_ACAF_BINARY="$HOME/orz/orz-signer"` |
 | 5. 运行 | `.\orz.exe`（交互 TUI）<br>`.\orz.exe -p "你的任务" --real`（无头模式） | `./orz`（交互 TUI）<br>`./orz -p "你的任务" --real`（无头模式） |
 
-发布包说明与完整性校验见 [`releases/orz-0.2.0-linux-x86_64/README.md`](releases/orz-0.2.0-linux-x86_64/README.md)。
+发布包说明与完整性校验见 [`releases/orz-0.3.0-linux-x86_64/README.md`](releases/orz-0.3.0-linux-x86_64/README.md)。
 
 ### 从源码运行
 
@@ -71,15 +71,14 @@ orz 为本地优先、保障优先的终端 AI 编程 Agent/harness，制作全�
 ### 机械层
 
 - **结构**：机械层承载全部机制、门禁与守卫；其执行侧可进一步拆解为**半助理层**（命令运行、写执行与检索派发，返回有界结构化结果）与**静默机械审查层**（运行中只记录审查事实、终答前给出事实报告，不给建议）。
-- **执行**：模型只描述动作，机械层按注册表路由 → 目标/契约校验 → 执行 → 验证逐层处理。命令、文件写入与联网访问（`web_fetch`/`browser_read`）先过权限与 ACAF 票据门，`web_search` 无 URL 目标不走票据；文件读写带内容锚点核证；失败由半助理层自动记录（进程/文件/环境实体登记），返回结构化错误信封（step/code/message/trace_id）。
+- **执行**：模型直接提议 8 工具调用，机械层按注册表路由 → 目标/契约校验 → 执行 → 验证逐层处理。命令、文件写入与联网访问（`web_fetch`/`browser_read`）先过权限与 ACAF 票据门，`web_search` 无 URL 目标不走票据；文件读写带内容锚点核证；去自身硬超时，长前台命令超阈（默认 180s）自动后台化并维持输出/CPU 活跃兜底（idle-kill）；失败由半助理层自动记录（进程/文件/环境实体登记），返回结构化错误信封（step/code/message/trace_id）。
 - **安全**：指令来源门（IPG）、权限桥、ACAF（`orz-signer` 独立进程签发一次性票据，未配置即 fail-closed）、凭据目标注册与脱敏、URL 门禁与来源加权、检索候选计数。
-- **审计、状态、压缩**：每次运行写入 hash-chained 事件 journal（事件 schema v0.2）并经 verifier 交叉校验；机械审计事实报告、动作台账、黑板 plan epoch 归档；上下文完全由机械折叠/压缩承接，会话可恢复、journal 可 `--replay` 只读回放。
-- **生成期守卫与中立问询**：复读检测（滚动哈希 + 3-gram 兜底）、空响应重试链、stall 看门狗（`ORZ_STALL_TIMEOUT`，默认 360 秒无活动即收尾）与整轮墙钟上限；守卫触发有明确原因、不静默降档；默认每满 50 轮触发一次简短中立三问（软门，不禁工具），询问动作目标与进度。
+- **审计、状态、压缩**：每次运行写入 hash-chained 事件 journal（事件 schema v0.2）并经 verifier 交叉校验；机械审计事实报告、会话黑板单包归档；上下文完全由机械折叠/压缩承接，会话可恢复、journal 可 `--replay` 只读回放。
+- **生成期守卫与轮预算**：复读检测（滚动哈希 + 3-gram 兜底）、空响应重试链、stall 看门狗（`ORZ_STALL_TIMEOUT`，默认 360 秒无活动即收尾）与整轮墙钟上限；轮预算默认无限制（`MAX_TOOL_ROUNDS=0`，撤除默认 120 轮硬限）；默认每满 50 轮触发一次简短中立三问（软门，不禁工具），询问动作目标与进度。
 
 ### 黑板
 
-黑板是主 Agent 与机械层共用的会话状态面板：分区保存计划、执行动作、实体（文件/进程/环境）、会话与门禁记录。主 Agent 通过 `blackboard_read` 按需读取（PULL），不常驻提示词；写入、轮换与归档由机械层完成，黑板按 plan epoch 归档，旧 epoch 可只读回查。
-机械层依靠黑板进行压缩任务。
+黑板是主 Agent 与机械层共用的单会话状态面板：分区保存计划、执行动作、实体（文件/进程/环境）、会话与门禁记录。主 Agent 通过 `blackboard_read` 按需读取（PULL），不常驻提示词；写入与归档由机械层完成，黑板为单会话作用域（conversation-scoped，旧 plan-epoch 生产语义已退役），写时按 `(domain, round)` 盖章；`blackboard_read` 按需进行域与轮数的折叠渲染（render fold），会话结束时由 `session_archive` 打包为单 gzip 归档文件。
 
 ### 时间与动作域判断组件
 
@@ -91,7 +90,7 @@ orz 为本地优先、保障优先的终端 AI 编程 Agent/harness，制作全�
 - Rust 生产 workspace（`orz/`）：`orz-loop`（Agent loop、黑板与守卫）、`orz-host`（工具执行、权限桥、凭据、本地浏览器）、`orz-assurance`（journal、事件、ACAF、verifier）、`orz-bin`（CLI 入口）、`orz-tui`（终端工作台）。
 - 支撑体系：`assurance/` 为 Python reference/conformance 参考；`runtime/` 为事件 Schema；`protocol/` 为结构化操作协议草案。
 
-一次运行的路径大致是：入口 → 会话与 journal 初始化 → 主 Agent 轮次（近零提示 + 固定工具面）→ 动作下单 → 机械层权限/票据门 → 执行与检索 → 结果与事件回流 → submit 两阶段交付 → journal 收尾。之后可以 `--replay` 回放或恢复会话复查。
+一次运行的路径大致是：入口 → 会话与 journal 初始化 → 主 Agent 轮次（近零提示 + 固定工具面）→ 8 工具直接调用执行 → 机械层权限/票据门 → 执行与检索 → 结果与事件回流 → submit 两阶段交付 → journal 收尾。之后可以 `--replay` 回放或恢复会话复查。
 
 机制的完整状态、稳定 ID 与深入入口见下方「开发者入口」；设计权威为 [`ADR-0010`](adr/ADR-0010-fusion-runtime-and-agent-architecture.md)，当前投影在 [`architecture/current/README.md`](architecture/current/README.md)。
 
@@ -109,7 +108,7 @@ orz 为本地优先、保障优先的终端 AI 编程 Agent/harness，制作全�
 
 - **设计**：ADR-0010 是唯一自然语言设计权威，`accepted / frozen`。
 - **实现**：Rust production workspace 可运行，当前整体 `partial`；未闭合差距集中登记在 [`CLI_PROJECT_INDEX.md` §3.1](CLI_PROJECT_INDEX.md#31-已登记实现差距)，不在本 README 展开。
-- **发布**：0.1.0 / 0.2.0 试用发布包入口在 [`releases/`](releases/)；当前未提供 macOS 原生包。
+- **发布**：0.1.0 / 0.2.0 / 0.3.0 试用发布包入口在 [`releases/`](releases/)；当前未提供 macOS 原生包。
 - 测试全绿或单次跑分不构成架构符合性结论；符合性状态以索引与审计为准。
 
 ## License

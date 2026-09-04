@@ -30,6 +30,8 @@ param(
 
     [string]$RunTag = '',
 
+    [string]$KeyFile = '',
+
     [string]$OutDir = 'D:\CLI\_windows_high_nist\formal-2026-09-02',
 
     [switch]$DryRun
@@ -147,6 +149,22 @@ try {
 
     Copy-Item -LiteralPath $taskSetDir -Destination 'C:\s4\_windows_high_nist' -Recurse -Force -ToSession $sess
     $lines.Add("SYNC_TASKSET $TaskSet -> $guestSetRoot ok")
+    if ($KeyFile) {
+        if (-not (Test-Path -LiteralPath $KeyFile)) {
+            throw "key file missing: $KeyFile"
+        }
+        $guestKeyStage = 'C:\s4\tools\ds-key-stage.txt'
+        Copy-Item -LiteralPath $KeyFile -Destination $guestKeyStage -ToSession $sess -Force
+        $kh1 = (Get-FileHash -LiteralPath $KeyFile -Algorithm SHA256).Hash
+        $kh2 = Invoke-Command -Session $sess -ArgumentList $guestKeyStage -ScriptBlock {
+            param($p) (Get-FileHash -LiteralPath $p -Algorithm SHA256).Hash
+        }
+        $keyOk = ($kh1 -eq $kh2)
+        $lines.Add("SYNC_KEY_STAGE ok=$keyOk")
+        if (-not $keyOk) {
+            throw "key stage hash mismatch: $guestKeyStage"
+        }
+    }
 }
 finally {
     Remove-PSSession -Session $sess -ErrorAction SilentlyContinue
@@ -175,10 +193,27 @@ $ws = '__WORKSPACE__'
 $setDir = '__SETDIR__'
 $ids = '__IDS__'
 $arm = '__ARM__'
+# F9 (2026-09-03): clean stale cross-batch agent workspaces under C:\workspace
+# so later runs cannot read prior runs' journals/results (keep C:\workspace\acaf
+# and the current run's own workspace).  Evidence lives host-side already.
+$agentRoot = 'C:\workspace'
+Get-ChildItem -LiteralPath $agentRoot -Directory -Filter 'agent-*' -ErrorAction SilentlyContinue |
+    Where-Object { $_.FullName -ne $ws } |
+    ForEach-Object {
+        Remove-Item -LiteralPath $_.FullName -Recurse -Force -ErrorAction SilentlyContinue
+        Write-Output "AGENT_WS_CLEAN removed=$($_.FullName)"
+    }
 if (Test-Path -LiteralPath $ws) {
     Remove-Item -LiteralPath $ws -Recurse -Force -ErrorAction SilentlyContinue
 }
 New-Item -ItemType Directory -Path $ws -Force | Out-Null
+$keyStage = 'C:\s4\tools\ds-key-stage.txt'
+$keyOverride = 'C:\workspace\agent-key.txt'
+if (Test-Path -LiteralPath $keyStage) {
+    Copy-Item -LiteralPath $keyStage -Destination $keyOverride -Force
+    $env:ORZ_AGENT_KEY_FILE = $keyOverride
+    Write-Output 'AGENT_KEY_OVERRIDE_STAGED=1'
+}
 Write-Output "===== AGENT LIVE RUN arm=$arm taskSet=$setDir ids=$ids dryRun=__DRY__ ====="
 & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $agentRun -Arm $arm -Workspace $ws `
     -TasksDir $setDir -TaskIds $ids -ResultPath (Join-Path $ws "agent-baseline-$arm.json") __DRYFLAG__ 2>&1 |
@@ -188,6 +223,12 @@ Write-Output "AGENT_LIVE_EXIT=$code"
 if (Test-Path -LiteralPath (Join-Path $ws "agent-baseline-$arm.json")) {
     Get-Content -LiteralPath (Join-Path $ws "agent-baseline-$arm.json") -Raw
 }
+foreach ($p in @($keyOverride, $keyStage)) {
+    if (Test-Path -LiteralPath $p) {
+        Remove-Item -LiteralPath $p -Force -ErrorAction SilentlyContinue
+    }
+}
+Write-Output 'AGENT_KEY_SCRUB=1'
 exit $code
 '@
 $body = $body.Replace('__WORKSPACE__', $wsGuest)

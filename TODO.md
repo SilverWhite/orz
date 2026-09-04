@@ -24,6 +24,25 @@
 
 ## P0 — 当前工作集
 
+### P0-GOV 全项目宏观架构对齐与门禁修复（最优先阻断项，2026-09-04 登记）
+
+> 入口：[首轮审查报告](docs/audits/GLOBAL_ARCHITECTURE_AND_INTEGRITY_AUDIT_2026-09-04.md) / [深层审查报告](docs/audits/GLOBAL_ARCHITECTURE_DEEP_AUDIT_2026-09-04.md)；BACKLOG 00；AUTH-GLOBAL-ARCHITECTURE-AUDIT。
+> 来源：2026-09-04 本地实测、Grok 4.6 架构审查与深层源码穿透。在继续处理 TER M1/M2 审查暴露的问题之前，必须先将本项全量闭合。
+
+- [x] 门禁断链修复：修正 `docs/CONTEXT_COMPACTION_BLACKBOARD_FOLD_DESIGN_2026-09-04.md:246` 与 `docs/audits/P2-13_B1_CONVERSATION_BASE_IMPL_AUDIT_2026-09-03.md:92` 两处相对路径死链。（2026-09-04 闭合）
+- [x] 门禁夹具补齐：在 `scripts/check_repository.py` 登记 3 个未映射的 run-event v0.2 payload 夹具（`tool-completed.output-object.valid.json` 等）。（2026-09-04 闭合）
+- [x] 源码指纹重算：运行 `python scripts/generate_orz_source_manifest.py`，更新 `orz_source_manifest.sha256`。（2026-09-04 闭合：1434 文件）
+- [x] 消除 Rust 告警：修复 `host_exec.rs:187` `run_host_tool` dead_code 及 `local_browser/mod.rs:670` unused assignment。（2026-09-04 闭合：`cargo check -p orz-bin` 0 warnings）
+- [x] 门禁验收全绿：运行 `python scripts/check_repository.py` 退出码验证为 0（PASS，error_count=0，valid=true）。（2026-09-04 闭合）
+- [x] 根目录卫生治理：彻底删除根目录 31 个临时调试目录（`tmp*`）及遗留调试文件（`HTTP`, `%{http_code}`, `_review_lif_replay_check.json` 等）。（2026-09-04 闭合）
+- [x] 仓库日志收敛：更新 `.gitignore` 过滤 `_windows_high_nist/**/job-*`、`vm-*-result*.txt`、`diag-*.txt`、`evidence-*` 与 `.t23tmp/` 等本地测试输出。（2026-09-04 闭合）
+- [x] 权威与实现对齐：重写 ADR-0010 导言与主 README，消除过时的 120 轮及 plan-epoch 轮换描述，在 architecture/current/ 扩充真实产品面架构投影（8 工具直调、会话黑板单实例、无硬杀）。（2026-09-04 闭合）
+- [x] 全工作区编译摸排：运行 `cargo check --workspace` 验证 64 个 workspace members 零告警零错误。（2026-09-04 闭合：耗时 1m 38s）
+- [x] 任务 A（解耦寄生代码）：创建 `render_fold.rs`，将生产折叠渲染与黑板压缩快照从 `epoch.rs` 剥离，切断对 epoch 状态的依赖；`epoch.rs` 保留 legacy plan-epoch 归档/`--plan` 支持（现 1970 行）与兼容重导出，不参与会话黑板生产折叠主链。（2026-09-04 闭合：render_fold 净移入 1338 行，epoch 净减 1363 行；723→725 个单元测试 + workspace check + fmt 全绿）
+- [x] 任务 B（清理僵尸 Crate）：在 `orz/Cargo.toml` 中剔除未被 `orz-bin` 引用的 15 个无头 Crate，加速构建并净化审计面。（2026-09-04 闭合：剔除 15 个无头 Crate，工作区成员 64 → 49，全工作区 cargo check 零警告零错误，门禁 Exit Code 0 全绿）
+- [x] 任务 C（路径沙箱与 ACAF 下沉）：读工具（`read_file`/`grep`/`list_dir`）统一建立 CWD 工作区 canonical 级越界硬拦截——`..` 越级、绝对路径指向 cwd 外、以及工作区内符号链接/重解析点指向 cwd 外均拒绝（skills 文档豁免；目标不存在时回退词法判定）；ACAF fail-closed 默认强校验下沉至 `AgentLoopController`（ACP/TUI 默认 fail-closed、`ticket_flow` 无 signer 即拒、`ORZ_ACAF_FAIL_CLOSED` 解析单源化并可显式逃生）。（2026-09-04 闭合：orz 提交 + 12 项沙箱单测 + orz-loop 725 + orz-bin env 单测 + 全工作区 check/fmt 绿，见 [P0-GOV 收口审计](docs/audits/P0_GOV_UNCOMMITTED_REVIEW_HANDLING_2026-09-04.md)）
+- [ ] 任务 D（双实现终局治理）：在 Rust `orz-assurance` 补齐规则，逐步退役 Python `assurance` 双重法官。
+
 ### P0-E 评测冒烟暴露问题（2026-08-17 登记；2026-08-18 全部闭合）
 
 - [x] 全部闭合：ACAF 容器内供应 / console 工具名下划线 / plan_write 校验消息形状 / actions 形状探针锁定 / 计划视图步骤 ID / 订单发放前拒绝入事件面 / grep 搜索范围契约（结构化信封 + 结局三型 + hidden/no_ignore + 静态 rg）/ list_dir 范围计数 / grep files_searched 全结局探针。入口：BACKLOG 0a / ADR-0010 §14.21/§14.23 / 对应实施审计（GAP_ACAF_HARNESS_PASSTHROUGH、GAP_CACHE_CONTEXT_COST 等）。
@@ -237,7 +256,25 @@
     timeout/env-file/allowlist 全对）；TB2.1 最新错题集 9 题资产树
     `_windows_high_nist/agent-tasks-tb2.1/` + 3 题/批口径（chunk1-3，
     S4_PROGRESS §16.8）；runner 修 1 项变量遮蔽（大小写不敏感参数覆盖）。
-    真跑待放行**。
+    真跑待放行**。**2026-09-03 §7 事件面分析（chunk1-f4 三 journal +
+    LIF 离线重放）已完成并登记 S4_PROGRESS §16.15**：六判据结论=
+    deny/err 通道零 fire、slow 1（mteb 300s 工具）、stall 0、判据 5
+    本任务集 N/A、无事件面假写；新增候选缺口 F6–F10（run 墙钟模型
+    不可见 / 长工具无中间回报 / file-write×junction 不兼容 /
+    workspace 跨批残留泄漏 / permission deny 不入 deny 通道）。判据
+    1–6 需 0.3.0 journal 复验后闭合；0.3.0 Windows 三件套待同步 VM。
+- [ ] ⑦ 模型侧 §7 判据 0.3.0 复验（2026-09-03 已推进：0.3.0 三件套
+  同步 + keystore 重建 + signer 复检完成；DeepSeek key 经用户轮换后
+  改走 key 文件覆盖通道（ORZ_AGENT_KEY_FILE，VM AgentUser 凭据库写
+    路径不可靠已登记）；chunk1-0303 3/3 ran（make-doom/gcode 仍死于
+    840s 墙钟，mteb 348s 完成），§7 判据 1–6 复验结论与 F6–F10 状态
+   更新见 S4_PROGRESS §16.16；F9 驱动修复已落地）。下一步：⑥ 全量
+    主体 chunk2（path-tracing / train-fasttext /
+    adaptive-rejection-sampler）3 题/批续跑。
+- [ ] ⑧ 工具执行层改革（TER）：明细移至 [TODO2.md](TODO2.md)（M0 设计
+  门 → M1 orz 主线 → M2 Windows runner/VM → M3 回归复验），开放项见
+  [BACKLOG2.md](docs/BACKLOG2.md)；本行仅作主 TODO 指针，勾选以 TODO2
+  为准。
 
 ### P0-B FUS-RETRIEVAL-MECH（`implemented`；批次 1-6 全部闭合 2026-08-14，保留供核对）
 

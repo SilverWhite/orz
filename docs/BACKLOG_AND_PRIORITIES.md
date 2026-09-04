@@ -14,7 +14,7 @@
 
 | 优先级 | 含义 | 开放项（入口小节） |
 |---|---|---|
-| P0 | 当前工作集：设计已冻结，裁决后立即实施 | FUS-BENCHMARK-FULL-EXEC 验证②③(reward)④⑤（0b）；0d 后续 3/4/5 S4 复验（0d）；THIN-HARNESS-REDESIGN-V2 余项（0j）；WINDOWS-HIGH-NIST-MAX-FRICTION ⑥/⑦（0l） |
+| P0 | 当前工作集：设计已冻结，裁决后立即实施 | **P0-GOV 全仓架构对齐与门禁修复（00，阻断前置）**；FUS-BENCHMARK-FULL-EXEC 验证②③(reward)④⑤（0b）；0d 后续 3/4/5 S4 复验（0d）；THIN-HARNESS-REDESIGN-V2 余项（0j）；WINDOWS-HIGH-NIST-MAX-FRICTION ⑥/⑦（0l） |
 | P1 | 无需裁决，可与 P0 并行 | FUS-COMPONENT-REGISTER（4）；GAP-WINDOWS-EVIDENCE（5）；IMPL-DEEPSEEK-TRANSPORT / SEC-CREDENTIALS live 证据（6）；ORZ-SESSION-CONTEXT-MONITOR（6d） |
 | P2 | 生产化决策门：需用户裁决 | IMPL-CONTROL-FABRIC Slice 3/4（7）；OPS-PROTOCOL 裁剪与接线裁决（8）；MODEL-RESIDUAL-PRESSURE-FOLLOWUP（11）；COMPRESSION-LINGUISTIC-FORMAL-LAYER（12）；BLACKBOARD-CONVERSATION-SCOPE-FOLD B2–B4（13） |
 | P3 | 收尾 / 清理 | EVIDENCE-LOCAL-BROWSER（9）；GATE-CHAIN（10）；遗留小项（11） |
@@ -33,8 +33,30 @@
 
 ## P0 — 当前工作集
 
-开放项：0b / 0j / 0l 与 0d 后续 3/4/5 S4 复验（0d）；前置收尾见 0。已闭合 0a / 0c / 0e / 0f / 0g / 0h / 0i / 0k / 1 / 1b / 2 / 3 / 3a / 3b 与 0d 主项以 `[x]` 单行核对保留在各自小节，明细见全量快照与 TODO。
+开放项：00（全仓架构与门禁治理，阻断前置）/ 0b / 0j / 0l 与 0d 后续 3/4/5 S4 复验（0d）；前置收尾见 0。已闭合 0a / 0c / 0e / 0f / 0g / 0h / 0i / 0k / 1 / 1b / 2 / 3 / 3a / 3b 与 0d 主项以 `[x]` 单行核对保留在各自小节，明细见全量快照与 TODO。
 
+### 00. 全仓宏观架构对齐与门禁修复（P0-GOV 最优先阻断项，2026-09-04 登记）
+
+- 入口：[首轮审查报告](audits/GLOBAL_ARCHITECTURE_AND_INTEGRITY_AUDIT_2026-09-04.md) / [深层审查报告](audits/GLOBAL_ARCHITECTURE_DEEP_AUDIT_2026-09-04.md)；索引：`AUTH-GLOBAL-ARCHITECTURE-AUDIT`。
+- 来源：2026-09-04 本地实测、Grok 4.6 架构审查与深层源码穿透综合审定。在继续推进 TER M1/M2 之前，必须优先切除深层结构性腐化。
+- 实施任务（分步）：
+  1. **Phase 1 门禁与编译紧急修复（2026-09-04 全部闭合）**：
+     - [x] 修复 Markdown 2 处断链（`CONTEXT_COMPACTION_BLACKBOARD_FOLD_DESIGN` 与 `P2-13_B1_CONVERSATION_BASE_IMPL_AUDIT`）。
+     - [x] 在 `check_repository.py` 补齐 3 个 run-event v0.2 payload 夹具映射。
+     - [x] 重新生成 `orz_source_manifest.sha256`（覆盖 7 个未登记源文件与 50+ 漂移文件，共 1434 文件）。
+     - [x] 修复 `host_exec.rs` 的 `run_host_tool` dead_code 及 `local_browser/mod.rs` 的 unused assignment（`cargo check -p orz-bin` 0 warnings）。
+     - [x] 验证 `python scripts/check_repository.py` 退出码为 0（PASS，error_count=0，valid=true）。
+  2. **Phase 2 仓库卫生清理与 Git 规范化（2026-09-04 全部闭合）**：
+     - [x] 清理根目录 31 个临时调试目录（`tmp*`）与一次性脚本/数据文件（`HTTP`, `%{http_code}`, `_review_lif_replay_check.json` 等）。
+     - [x] 更新 `.gitignore` 收拢 `_windows_high_nist/**/job-*`、`vm-*-result*.txt`、`diag-*.txt`、`evidence-*` 与 `.t23tmp/` 等本地测试输出。
+  3. **Phase 3 权威与产品对齐（2026-09-04 第一批闭合）**：
+     - [x] 重写 ADR-0010 导言区与主 README，消除过时的 120 轮及 plan-epoch 轮换描述，在 `architecture/current/README.md` 扩充真实产品面架构投影（8 工具直调、会话黑板单实例、无自身硬超时）。（2026-09-04 闭合）
+     - [x] 全仓 `cargo check --workspace` 摸排验证（全量 64 个 workspace members 0 错误 0 告警通过）。（2026-09-04 闭合）
+  4. **Phase 4 深层架构切除与解耦（第二轮审查核心落地计划）**：
+     - **任务 A（解耦寄生）**：新建 `render_fold.rs`，将生产折叠渲染（`render_exec_folded`/`render_edits_folded` 等）与黑板压缩快照计算从 `epoch.rs` 剥离并切断对 epoch 状态的依赖；`epoch.rs` 保留 legacy plan-epoch 归档/`--plan` 支持（现 1970 行）与兼容重导出，不参与会话黑板生产折叠主链。（2026-09-04 闭合：render_fold 净移入 1338 行 / epoch 净减 1363 行；依赖树与 725 单测复核见 [P0-GOV 收口审计](audits/P0_GOV_UNCOMMITTED_REVIEW_HANDLING_2026-09-04.md)）
+     - **任务 B（底座瘦身）**：在 `orz/Cargo.toml` 中剔除未被 `orz-bin` 引用的 15 个无头僵尸 Crate，加速全仓构建并净化审计面。（2026-09-04 闭合：workspace members 64 → 49、Cargo.lock −1131 行、`cargo tree -p orz-bin` 不含任一被剔除 crate、源码目录保留未删，见 [P0-GOV 收口审计](audits/P0_GOV_UNCOMMITTED_REVIEW_HANDLING_2026-09-04.md)）
+     - **任务 C（安全收敛）**：读工具（read_file/grep/list_dir）统一建立 CWD 工作区 canonical 级越界硬拦截——模型路径 `..` 越级、绝对路径指向 cwd 外、工作区内符号链接/重解析点指向 cwd 外均拒绝（skills 白名单豁免；目标不存在回退词法判定）；将 ACAF fail-closed 默认强校验下沉至 `AgentLoopController`（ACP/TUI 默认 fail-closed、ticket_flow 无 signer 即拒、`ORZ_ACAF_FAIL_CLOSED` 解析单源化）。（2026-09-04 闭合：orz 提交见审计，实现与边界见 [P0-GOV 收口审计](audits/P0_GOV_UNCOMMITTED_REVIEW_HANDLING_2026-09-04.md)）
+     - **任务 D（双实现治理）**：在 Rust `orz-assurance` 补齐关键校验断言，逐步退役 Python `assurance` 双法官冗余。（未闭合，保留开放）
 
 ### 0. 前置收尾（提交前需用户确认）
 
@@ -331,6 +353,34 @@
   （9 题，recheck-10t 未解出）+ 3 题/批 chunk1-3；runner 修变量遮蔽
   1 项，详见 S4_PROGRESS §16.7/§16.8。待续：⑦ 模型侧 agent k=1（§7
   事件面判据）真跑放行。
+- **§7 事件面分析（chunk1-f4，2026-09-03）**：对旧 Windows build
+  （CF5662…CFAC4D6）三 journal 完成六判据核对 + 生产 LIF 内核离线
+  重放（err/deny/stall 零 fire、slow 1 = mteb 300s 工具；stuck 峰值
+  0.19–0.33）；结论=通道“安静”源于摩擦以子进程值失败到达、wallclock
+  预算模型不可见（make-doom/gcode 死于 840s 墙钟而非 120 轮预算）；
+  新增候选缺口 F6–F10（run 墙钟模型可见性 / 长工具 ≥300s 中间回报
+  触发条件 / file-write 与每任务 junction 不兼容 / workspace 跨批
+  残留致跨 run 结果泄漏 / permission deny 不生成结构化 ToolCompleted
+  + .gsa 可经终端读取）；0.3.0（d4a37fdb，双平台发布）待同步 VM 后
+  以新 journal 复验判据 1–6。明细见
+  `_windows_high_nist/S4_PROGRESS_2026-09-02.md` §16.15。
+- **0.3.0 同步 + chunk1-0303 复跑（2026-09-03，S4_PROGRESS §16.16）**：
+  0.3.0 三件套 + keystore 重建 + signer 复检闭环；DeepSeek key 经用户
+  轮换（旧 e904 停用）后改走 key 文件覆盖通道（ORZ_AGENT_KEY_FILE，
+  fail-closed；VM AgentUser 凭据库 CredWrite 后读回不变，登记为未解
+  操作问题）；chunk1-0303 3/3 ran、observation compliant——make-doom
+  （654 事件/77 轮）与 gcode（404 事件/44 轮）仍死于 840s 墙钟（F6 主因
+  未变），mteb 348s 完成（提交
+  Snowflake/snowflake-arctic-embed2-v1.5，无 live 核验）；§7 判据
+  1–6 0.3.0 复验：err/deny/stall 零 fire、slow 2（196s/300s）、无
+  tool_running 中间回报；F9 跨批残留已驱动级修复；F10 保持。证据
+  `_windows_high_nist/formal-2026-09-02/evidence-agent-tb2.1-chunk1-
+  0303-high-nist/`。
+- **工具执行层改革（TER）**：明细移至 [BACKLOG2.md](BACKLOG2.md)（TER
+  专用开放项路由）与 [TODO2.md](../TODO2.md)（分步勾选树 M0–M3）；本行
+  仅作主 BACKLOG 指针。设计稿
+  [TOOL_EXECUTION_LAYER_REFORM_DESIGN_2026-09-03.md](TOOL_EXECUTION_LAYER_REFORM_DESIGN_2026-09-03.md)
+  为设计权威；S4_PROGRESS §16.17/§16.18 为进度记录。
 
 ### 1. FUS-TOOL-PROBE（`implemented`；P0-A 批次 1-7 与 P0-A-2 已闭合）
 

@@ -464,6 +464,10 @@ while ($true) {
                         $dryRaw = ([string]$req.dryRun).ToLowerInvariant()
                         $dryRun = ($dryRaw -in @('true', '1'))
                         $argsList = @('-Arm', $arm, '-TaskIds', $taskIds, '-TaskSet', $taskSet, '-RunTag', $runTag)
+                        $keyFile = [string]$req.keyFile
+                        if ($keyFile) {
+                            $argsList += @('-KeyFile', $keyFile)
+                        }
                         if ($dryRun) {
                             $argsList += '-DryRun'
                         }

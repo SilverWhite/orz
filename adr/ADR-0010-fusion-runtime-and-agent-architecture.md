@@ -10,11 +10,12 @@
   - **取代** `存档/docs/design-inputs/CN_AGENT_BASE_GRAFT_VALUE_REVIEW_2026-07-30.md` §5.2/§5.10 中“不自建 production model loop/tool dispatcher”的限制；
   - **保留** CN 的成熟实现优先、默认最多两个检索子代理、显式任务边界、中立问询与反例问询分离等约束；
   - **取代 ADR-0005**：输出重复、tool calls、tool variety 和 semantic action 均不再驱动方向问询；方向问询改为 session-level 7 轮触发；
-  - **修订 ADR-0008 §2.2**：默认工具轮预算由 40 提升到 120；其 anti-runaway、机械告知、deny 轮计数和最终无工具轮语义继续有效；
+  - **修订 ADR-0008 §2.2**：默认工具轮预算由 40 提升到 120；其 anti-runaway、机械告知、deny 轮计数和最终无工具轮语义继续有效；（**2026-09-04 经 §14.55 正式裁决再次修订**：撤除默认 120 轮硬限，生产主线默认无限制 `max_tool_rounds=0`，保留显式配置逃生阀，见 §14.55 第 2 项）；
   - **保留 ADR-0006、ADR-0007、ADR-0009**：凭据目标、transport retry/timeout 与写入落点继续有效，并由本 ADR 纳入统一基线；
   - **取代** `存档/architecture/pre-adr-0010/INTEGRATED_AGENT_LOOP_AND_FORK_DESIGN_v0.2.md` 的 current-authority 地位以及其中与本 ADR 冲突的 thinking、问询、session 所有权和子代理降级表述；
   - **取代** `存档/architecture/pre-adr-0010/SESSION_PERSISTENCE_AND_LAYOUT_COMPACTION_v0.1.md` 中“Grok 完整拥有 session 持久化/恢复”的所有权裁决；其中布局和只读会话投影仍作为 UI 输入；
-  - 历史融合、问询、黑板、检索、运行守卫与 Windows 文档的有效规范性内容已转录入本 ADR；原文件之后只保留为设计来源、实施记录或审计证据，不再与本文件共同构成 current design。
+  - 历史融合、问询、黑板、检索、运行守卫与 Windows 文档的有效规范性内容已转录入本 ADR；原文件之后只保留为设计来源、实施记录或审计证据，不再与本文件共同构成 current design；
+  - **生产真实面裁决校准（2026-09-04 登记）**：黑板 plan-epoch 生产语义已由 §14.52 会话黑板（`AUTH-BLACKBOARD-CONVERSATION-FOLD`）取代，生产黑板为单会话作用域、折叠渲染、会话结束单包归档；生产路径工具调用由 8 工具直接执行（direct execution）承接，console 动作下单与 plan-first 生产硬门已休眠/退役；去自身硬超时，长前台命令自动后台化并由 idle-kill 兜底（§14.55）。
   - **v1.1 补充**：恢复显式检索模式、Diagnostic Coverage、Global Review 和 IDE 生命周期证据边界；重裁 Information Sufficiency、来源绑定、`run_tests`、UI 投影、模型/轮次与拒绝熔断语义。
   - **2026-08-09 登记**：ADR-0011 承担受信控制与动作授权面（ACAF）的决策权威；ACAF 派生自本 ADR §2.4、§3.2、§3.8、§4、§5.3、§5.4 与 §11.3，不改变本 ADR 任何既有条款；登记见 §11.8。
   - **v1.2 补充（2026-08-10）**：显式化子代理工具轮预算的 session 累计语义——`continue(requirement_delta)` 重入是同一检索 session 的延续，预算跨 dispatch 累计、不得因重入重置；仅 activation 关闭后新激活从 0 起；主 Agent 维持每 run 独立起算的既有语义。正文见 §3.4.6，索引见 §14.2；来源：GAP-SUBAGENT-RUNTIME 实施审计 D-18（用户裁决）。
