@@ -943,6 +943,26 @@ fn build_gateway() -> Arc<dyn ModelGateway> {
             }
         }
     }
+    // TER T2.3 (2026-09-04): `ORZ_FAKE_SCENARIO=<path>` — deterministic
+    // scripted-provider scenario for real-tool real-machine verification
+    // (auto-bg / idle-kill / cross-call survival under the Windows wall).
+    // JSON array of entries: {"text": "..."} or
+    // {"tool_calls": [{"name","arguments","call_id"}]}.  Fail-closed: an
+    // unreadable or malformed scenario exits 2 — never a silent fallback to
+    // the demo script.
+    if let Ok(scenario_path) = std::env::var("ORZ_FAKE_SCENARIO") {
+        match load_fake_scenario(&scenario_path) {
+            Ok(script) => {
+                return Arc::new(
+                    FakeProvider::new(script).with_chunk_delay(std::time::Duration::from_millis(0)),
+                );
+            }
+            Err(message) => {
+                eprintln!("error: {message}");
+                std::process::exit(2);
+            }
+        }
+    }
     if std::env::var("ORZ_FAKE_TOOL").is_ok() {
         Arc::new(
             FakeProvider::new(vec![
@@ -989,6 +1009,73 @@ fn build_gateway() -> Arc<dyn ModelGateway> {
             "(fake) 已收到请求。",
         ]))
     }
+}
+
+/// Parse a deterministic fake-provider scenario file (see `build_gateway`).
+fn load_fake_scenario(path: &str) -> Result<Vec<ScriptedResponse>, String> {
+    let text = std::fs::read_to_string(path)
+        .map_err(|e| format!("ORZ_FAKE_SCENARIO unreadable: {path}: {e}"))?;
+    let value: serde_json::Value = serde_json::from_str(&text)
+        .map_err(|e| format!("ORZ_FAKE_SCENARIO invalid JSON: {path}: {e}"))?;
+    let arr = value
+        .as_array()
+        .ok_or_else(|| format!("ORZ_FAKE_SCENARIO must be a JSON array: {path}"))?;
+    let mut out: Vec<ScriptedResponse> = Vec::with_capacity(arr.len());
+    for (i, entry) in arr.iter().enumerate() {
+        let obj = entry
+            .as_object()
+            .ok_or_else(|| format!("ORZ_FAKE_SCENARIO entry {i} must be an object"))?;
+        if let Some(text_value) = obj.get("text") {
+            let text = text_value
+                .as_str()
+                .ok_or_else(|| format!("ORZ_FAKE_SCENARIO entry {i} text must be a string"))?;
+            out.push(ScriptedResponse::text(text.to_string()));
+            continue;
+        }
+        if let Some(calls_value) = obj.get("tool_calls") {
+            let calls = calls_value.as_array().ok_or_else(|| {
+                format!("ORZ_FAKE_SCENARIO entry {i} tool_calls must be an array")
+            })?;
+            let mut tool_calls: Vec<ToolCall> = Vec::with_capacity(calls.len());
+            for (j, call) in calls.iter().enumerate() {
+                let call_obj = call.as_object().ok_or_else(|| {
+                    format!("ORZ_FAKE_SCENARIO entry {i} tool_calls[{j}] must be an object")
+                })?;
+                let name = call_obj
+                    .get("name")
+                    .and_then(|v| v.as_str())
+                    .ok_or_else(|| {
+                        format!(
+                            "ORZ_FAKE_SCENARIO entry {i} tool_calls[{j}] name (string) required"
+                        )
+                    })?;
+                let arguments = call_obj
+                    .get("arguments")
+                    .cloned()
+                    .unwrap_or_else(|| serde_json::json!({}));
+                let default_call_id = format!("call-{i}-{j}");
+                let call_id = call_obj
+                    .get("call_id")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or(&default_call_id)
+                    .to_string();
+                tool_calls.push(ToolCall {
+                    name: name.to_string(),
+                    arguments,
+                    call_id,
+                });
+            }
+            out.push(ScriptedResponse::tool_calls(tool_calls));
+            continue;
+        }
+        return Err(format!(
+            "ORZ_FAKE_SCENARIO entry {i} must have text or tool_calls"
+        ));
+    }
+    if out.is_empty() {
+        return Err("ORZ_FAKE_SCENARIO must not be an empty array".to_string());
+    }
+    Ok(out)
 }
 
 /// Render the plan artifact's four sections for the plan-write counterexample
@@ -1305,6 +1392,35 @@ mod tests {
         );
         assert!(parse_max_wallclock(Some("abc".into())).is_err());
         assert!(parse_max_wallclock(Some("".into())).is_err());
+    }
+
+    /// TER T2.3 (2026-09-04): the deterministic fake-provider scenario
+    /// loader round-trips text/tool_calls entries and is fail-closed on
+    /// malformed or empty input.
+    #[test]
+    fn fake_scenario_loader_round_trip_and_fail_closed() {
+        let dir = test_dir();
+        let good = dir.join("scenario.json");
+        std::fs::write(
+            &good,
+            r#"[
+                {"text": "hello"},
+                {"tool_calls": [
+                    {"name": "run_terminal_cmd", "arguments": {"command": "echo hi"}, "call_id": "c1"}
+                ]},
+                {"text": "done"}
+            ]"#,
+        )
+        .unwrap();
+        let script = load_fake_scenario(good.to_str().unwrap()).unwrap();
+        assert_eq!(script.len(), 3, "three entries must round-trip");
+        let bad = dir.join("bad.json");
+        std::fs::write(&bad, r#"[{"text": 5}]"#).unwrap();
+        assert!(load_fake_scenario(bad.to_str().unwrap()).is_err());
+        let empty = dir.join("empty.json");
+        std::fs::write(&empty, "[]").unwrap();
+        assert!(load_fake_scenario(empty.to_str().unwrap()).is_err());
+        assert!(load_fake_scenario("Z:\\no-such-scenario.json").is_err());
     }
 
     /// ACAF production flip (2026-08-16): fail-closed is the DEFAULT —
