@@ -509,7 +509,7 @@
   [B4 S3 重建记录](docs/audits/P2-13_B4_S3_BUILD_2026-09-03.md)）；
   S4 复验（web 通道 A/B、折叠态读取与展开、恢复、长会话遥测）待续。
 
-### P2-14 CONTEXT-COMPACTION-FOLD-SNAPSHOT（P2；2026-09-04 设计定稿；S1 已收口，S2–S4 待续）
+### P2-14 CONTEXT-COMPACTION-FOLD-SNAPSHOT（P2；2026-09-04 设计定稿；S1/S2 已收口，S3–S4 待续）
 
 > 入口：[设计稿](docs/CONTEXT_COMPACTION_BLACKBOARD_FOLD_DESIGN_2026-09-04.md)
 > / [BACKLOG P2-14](docs/BACKLOG_AND_PRIORITIES.md) / ADR-0010 §14.54。
@@ -539,8 +539,16 @@
       e2e 主车道 v0.3 marker 断言；orz-loop lib 720 passed / 0 failed /
       3 ignored，fmt/diff 净。全面复审处置与审计证据见
       [P2-14 S1 复审处理](docs/audits/P2-14_S1_REVIEW_HANDLING_2026-09-04.md)。
-  - [ ] **S2 压缩 e2e**：rhythm / fallback / session_end / 恢复预检全串行
-    绿（v0.3 marker 恢复保留、r_keep 边界在真实长会话的遥测前置）。
+  - [x] **S2 压缩 e2e（2026-09-04 收口）**：rhythm / fallback /
+    session_end / 恢复预检全串行绿——同一主会话一次 run 真实触发
+    rhythm → fallback（绕冷却 ×2）→ session_end，压缩零模型调用、滚动
+    单 v0.3 marker（A–E 块、无 v0.2 五段槽）逐请求与收尾会话断言；恢复
+    预检（§7 矩阵第 8 项复验）后 v0.3 marker 仍在、内容逐字节原样（属
+    preamble 恒保留，截断 marker 追加其后，D3-1 write-back 均存活）。
+    r_keep 边界在真实长会话的遥测前置（S4 实机复验执行）。证据：新增
+    2 项 compact e2e（串行链 + 恢复保留），orz-loop lib 722 passed / 0
+    failed / 3 ignored、orz-host ACP 43 passed、fmt/diff 净；审计见
+    [P2-14 S2 e2e 审计](docs/audits/P2-14_S2_E2E_2026-09-04.md)。
   - [ ] **S3 Linux musl 重建**（沿用 ORZ-BUILD-MOUNT-001 契约）。
   - [ ] **S4 实机复验 + 遥测**：marker 实际字符分布、块 B/C 溢出频率、
     压缩后 blackboard_read 跟随调用频率、restore 后 marker 可用性。

@@ -8,7 +8,7 @@
 
 ## 未闭合计数（2026-09-04 口径）
 
-- 未闭合总数：**28 项**（2026-08-31：P2-10 阶段 3 验证闭环 38 → 32；0k S4 实机复验闭环 32 → 30；2026-09-01：P2-11 DC 强制模板轮清理闭合 30 → 29，P3「DC 硬信号 4/6」退役 29 → 28；2026-09-02：P2-12 讨论稿登记不动计数；2026-09-03：P2-13 设计定稿与 B1 S1/S2 完成，未入账、计数不变；2026-09-04：P2-14 压缩 marker 折叠视图快照设计定稿与裁决收口，未入账、计数不变）。TODO `[ ]` 明细含父/子项，计数以 BACKLOG 为准。
+- 未闭合总数：**28 项**（2026-08-31：P2-10 阶段 3 验证闭环 38 → 32；0k S4 实机复验闭环 32 → 30；2026-09-01：P2-11 DC 强制模板轮清理闭合 30 → 29，P3「DC 硬信号 4/6」退役 29 → 28；2026-09-02：P2-12 讨论稿登记不动计数；2026-09-03：P2-13 设计定稿与 B1 S1/S2 完成，未入账、计数不变；2026-09-04：P2-14 设计定稿与裁决收口 + S1/S2 实施收口（主会话转 v0.3、压缩 e2e 全串行绿），未入账、计数不变）。TODO `[ ]` 明细含父/子项，计数以 BACKLOG 为准。
 
 ## 优先级总览
 
@@ -670,7 +670,7 @@
   久期代理；软上限不做额外弱保软（E12，超出不强制/不拦截/不降级）。
 - 计数：设计轮登记不动计数；设计定稿 + 用户放行后按既有纪律入账。
 
-### 14. COMPACTION-FOLD-SNAPSHOT（P2；2026-09-04 设计定稿 + ADR-0010 §14.54 转录；S1 已收口，S2–S4 待续，未入账）
+### 14. COMPACTION-FOLD-SNAPSHOT（P2；2026-09-04 设计定稿 + ADR-0010 §14.54 转录；S1/S2 已收口，S3–S4 待续，未入账）
 
 - 机制：压缩 marker 由五段模板改为**压缩点冻结黑板折叠视图快照**——近窗
   明细块（折叠默认展开子集 = 当前域段 ∪ 最近 K 轮 ∪ 最近 20% 行，∩
@@ -697,14 +697,22 @@
   passed / 0 failed / 3 ignored，fmt/diff 净，orz-host ACP 43 项全绿。
   全面复审证据见
   [P2-14 S1 复审处理](audits/P2-14_S1_REVIEW_HANDLING_2026-09-04.md)。
-- S2–S4 待续：S2 压缩 e2e（rhythm / fallback / session_end / 恢复预检）；
-  S3 Linux musl 重建；S4 实机复验 + marker 尺寸/块溢出/blackboard_read
-  跟随率遥测。
+- S2 已收口（2026-09-04）：压缩 e2e 全串行绿——同一主会话一次 run 真实
+  触发 rhythm → fallback（绕冷却 ×2）→ session_end，机械压缩零模型调用、
+  滚动单 v0.3 marker（A–E 块、无 v0.2 五段槽）逐请求与收尾会话断言；恢复
+  预检（§7 矩阵第 8 项复验）后 v0.3 marker 仍在、内容逐字节原样（preamble
+  恒保留，截断 marker 追加其后，D3-1 write-back 均存活）。证据：新增 2 项
+  compact e2e，orz-loop lib 722 passed / 0 failed / 3 ignored、orz-host
+  ACP 43 passed、fmt/diff 净；审计见
+  [P2-14 S2 e2e 审计](audits/P2-14_S2_E2E_2026-09-04.md)。
+- S3–S4 待续：S3 Linux musl 重建（沿用 ORZ-BUILD-MOUNT-001 契约）；S4
+  实机复验 + marker 尺寸/块溢出/blackboard_read 跟随率遥测。
 - 入口：[设计稿](CONTEXT_COMPACTION_BLACKBOARD_FOLD_DESIGN_2026-09-04.md)
   / [ADR-0010 §14.54](../adr/ADR-0010-fusion-runtime-and-agent-architecture.md)
   / [复审处理](audits/P2-14_S1_REVIEW_HANDLING_2026-09-04.md)
+  / [S2 e2e 审计](audits/P2-14_S2_E2E_2026-09-04.md)
   / [TODO P2-14](../TODO.md) / CLI_PROJECT_INDEX
-  （AUTH-COMPACTION-FOLD-SNAPSHOT，`pending`）。
+  （AUTH-COMPACTION-FOLD-SNAPSHOT，`partial`）。
 
 
 ## P3 — 收尾 / 清理

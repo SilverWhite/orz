@@ -3,7 +3,9 @@
 > 状态：`design-final`（v0.2，2026-09-04；用户逐项裁决 R1–R5 无异议，
 > 总量 20K 定档；2026-09-04 第三条路放行 + **S1 收口**：主会话压缩转
 > v0.3 折叠快照（A–E 装配 + r_keep 接线 + §7 矩阵 1–7 落地）；检索/
-> grill 车道与消息无轮章的旧会话按 §6 车道范围裁决回退 v0.2 五段模板）。
+> grill 车道与消息无轮章的旧会话按 §6 车道范围裁决回退 v0.2 五段模板；
+> **S2 收口（2026-09-04）**：压缩 e2e 全串行绿——rhythm / fallback /
+> session_end / 恢复预检（§7 矩阵第 8 项复验），见 §9）。
 > 本文只登记机制与裁决记录，不改变任何既有生产语义；替换对象 =
 > `CONTEXT_COMPACTION_DESIGN` §4 五段模板（含 marker / 存档 / 机械校验
 > 口径）。
@@ -238,8 +240,10 @@ since/receipt_id 展开；更早历史见摘要存档与 run journal。
 
   S1 落地登记（2026-09-04）：1–7 项已有快照/装配/e2e 测试覆盖（epoch.rs
   快照与选择器测试、summary.rs v0.3 装配测试、compact.rs 主车道 e2e v0.3
-  断言）；第 8 项由既有 prefix 级恢复保留 + session-end 存档测试覆盖、
-  S2 恢复预检 e2e 复验。
+  断言）。第 8 项由 **S2 恢复预检 e2e 复验收口（2026-09-04）**：恢复预检
+  整轮机械截断后 v0.3 marker 仍在、内容逐字节原样（preamble 恒保留；
+  截断 marker 追加其后，D3-1 write-back 均存活），证据见
+  [P2-14 S2 e2e 审计](docs/audits/P2-14_S2_E2E_2026-09-04.md)。
 
 ## 8. 裁决记录（v0.2，2026-09-04 用户逐项裁决，无异议）
 
@@ -269,7 +273,13 @@ since/receipt_id 展开；更早历史见摘要存档与 run journal。
   lib 720 passed / 0 failed / 3 ignored、fmt/diff 净、orz-host ACP 43
   项全绿；复审证据见
   `docs/audits/P2-14_S1_REVIEW_HANDLING_2026-09-04.md`。
-- S2：e2e 压缩场景（rhythm / fallback / session_end / 恢复预检）全串行绿。
+- S2（2026-09-04 完成）：压缩 e2e 全串行绿——同一主会话一次 run 真实
+  触发 rhythm → fallback（绕冷却 ×2）→ session_end（全机械零模型调用、
+  滚动单 v0.3 marker 逐请求与收尾会话断言），下一 run 恢复预检越过触发
+  时整轮截断、v0.3 marker 保留且内容逐字节原样（矩阵第 8 项复验）。证据：
+  orz-loop lib 722 passed / 0 failed / 3 ignored、orz-host ACP 43
+  passed、fmt/diff 净；审计见
+  `docs/audits/P2-14_S2_E2E_2026-09-04.md`。
 - S3：Linux musl 三件套重建与核证（沿用 ORZ-BUILD-MOUNT-001 契约）。
 - S4：实机复验 + 遥测：marker 实际字符分布、块 B/C 溢出频率、压缩后
   blackboard_read 跟随调用频率（验证块 E 指令是否真的被模型使用）、

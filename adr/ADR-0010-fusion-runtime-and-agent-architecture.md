@@ -4360,9 +4360,10 @@ ADR §3.6 正文修订随实施登记。
 定稿裁决登记（2026-09-04 用户逐项裁决 R1–R5 无异议，总量 20K
 定档）。2026-09-04 用户放行第三条路并完成 **S1 实施**（消息补
 轮章 + 子车道行盖派发主轮章；快照入口 + v0.3 A–E 装配 + 接线 +
-§7 单测矩阵 1–7）：主会话压缩自 S1 收口起转 v0.3 折叠快照语义；
-检索/grill 车道与消息无轮章的旧会话按补注 5 回退 v0.2 五段模板
-（回退路径既有实现不构成 gap）。
+§7 单测矩阵 1–7）与 **S2 压缩 e2e 收口**（补注 7）：主会话压缩
+自 S1 收口起转 v0.3 折叠快照语义；检索/grill 车道与消息无轮章
+的旧会话按补注 5 回退 v0.2 五段模板（回退路径既有实现不构成
+gap）。
 
 1. **压缩 marker 内容生成改黑板折叠视图快照（P2-14，2026-09-04
    定稿）**：取代 `CONTEXT_COMPACTION_DESIGN` §4 五段模板
@@ -4385,7 +4386,7 @@ ADR §3.6 正文修订随实施登记。
    轮 cadence 的验证为准（不一致时写入点补同轮章）。入口：
    `docs/CONTEXT_COMPACTION_BLACKBOARD_FOLD_DESIGN_2026-09-04.md`
    / BACKLOG P2-14 / TODO P2-14 / CLI_PROJECT_INDEX
-   （AUTH-COMPACTION-FOLD-SNAPSHOT，`pending`）。
+   （AUTH-COMPACTION-FOLD-SNAPSHOT，`partial`）。
 2. **取代/衔接 ①：五段槽退役**：目的 / 计划 / 变动文件路径 /
    注意事项 / 后续衔接五槽退役；新块 B/C/D 空态统一渲染「（无）」；
    failure_agg 保持随 marker/存档携带（非 blackboard_read 查询
@@ -4425,3 +4426,15 @@ ADR §3.6 正文修订随实施登记。
    720 passed / 0 failed / 3 ignored、fmt/diff 净、orz-host ACP 43
    项全绿；审计见
    `docs/audits/P2-14_S1_REVIEW_HANDLING_2026-09-04.md`。
+7. **S2 压缩 e2e 收口登记（2026-09-04）**：设计稿 §9 S2 落地——
+   压缩 e2e 全串行绿。同一主会话一次 run 真实触发 rhythm →
+   fallback（绕冷却 ×2）→ session_end：三类压缩全机械零模型调用，
+   滚动单 v0.3 marker（A–E 块、无 v0.2 五段槽）逐请求出现且收尾
+   会话只保留一个；恢复预检（§7 矩阵第 8 项复验）在下一 run 越过
+   恢复触发时整轮机械截断，旧 v0.3 marker 位于 preamble 恒保留、
+   内容逐字节原样（截断 marker 追加其后，D3-1 write-back 均存活）。
+   r_keep 边界在真实长会话的遥测前置（S4 实机复验执行）。证据：
+   新增 2 项 compact e2e（串行链 + 恢复保留），orz-loop lib 722
+   passed / 0 failed / 3 ignored、orz-host ACP 43 passed、
+   fmt/diff 净；审计见
+   `docs/audits/P2-14_S2_E2E_2026-09-04.md`。
