@@ -229,10 +229,23 @@
   两题 900s/3600s 计划输出无 --max-wallclock/840、逐题 --timeout 与
   env 生效、AGENT_ERRORS=0。审计见
   [`TER_T2_1_WALLCLOCK_SINGLE_SOURCE_2026-09-04.md`](docs/audits/TER_T2_1_WALLCLOCK_SINGLE_SOURCE_2026-09-04.md)。）
-- [ ] T2.2 W-F12 本地透明层：先测基准（当前墙外 Test-NetConnection /
+- [x] T2.2 W-F12 本地透明层：先测基准（当前墙外 Test-NetConnection /
   curl / Invoke-WebRequest / python requests 各自失败耗时表）→ 实现
   DNS/TCP 本地拒答 → 复测 ≤2s/目标；allowlist 内连通不变。验收：mteb
   HF 探测 ≤2s、连通扫描总成本 ≤10s。
+  （2026-09-04 完成：根因定案——AppContainer（空能力）+ allowlist 不兼容
+  （allow 规则被 AC compartment 吞，allowlist_reachable 必 FAIL），生产墙
+  为 `--no-appcontainer` + allowlist（2026-09-03 裁决）；enforcement 探针
+  增 `-ExpectAppcontainer` 与 WF12 stdout 时延行、runner 增
+  `-NoAppcontainer`（no-AC 原位执行探针，修复 Errno 13 读文件）、sandbox
+  工作区 grant 加 `/T` + 子进程 stderr/out spill、新增受控 op
+  `vm-wf12-probe`（AC 基线 + no-AC 生产墙 + egress 前/复测 + DNS 拒答可逆
+  部署）。验证（win-s4 实机）：no-AC 墙 allowlist_reachable PASS
+  （15–47ms，连通不变）+ network/metadata_blocked 0–16ms；egress 复测
+  （DNS 拒答 127.0.0.1:53，NXDOMAIN 7ms，测后 DNS 恢复）总成本 920ms
+  （≤10s）、最差行 735ms（≤2s）；AC 基线 allowlist FAIL 作对照登记。
+  审计见
+  [`TER_T2_2_WF12_LOCAL_TRANSPARENT_LAYER_2026-09-04.md`](docs/audits/TER_T2_2_WF12_LOCAL_TRANSPARENT_LAYER_2026-09-04.md)。）
 - [ ] T2.3 Windows 后台任务存活验证：auto-bg 进程在 Job/LOW IL 下跨
   调用存活、输出持续落盘、完成提醒与 idle-kill 可达（实机）。验收：
   单测式实机脚本证据。

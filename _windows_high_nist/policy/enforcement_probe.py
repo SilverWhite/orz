@@ -158,11 +158,17 @@ def main() -> int:
     parser.add_argument("-ResultPath", default="")
     parser.add_argument("-AllowlistProbeIp", default="1.1.1.1")
     parser.add_argument("-AllowlistReachabilityIp", default="")
+    parser.add_argument("-ExpectAppcontainer", default="1")
     args = parser.parse_args()
 
     arm = args.Arm
     workspace = args.Workspace or os.environ.get("GSA_PROBE_WORKSPACE", os.getcwd())
     temp_dir = args.TempDir or os.environ.get("GSA_PROBE_TEMPDIR", "")
+    expect_appcontainer = str(args.ExpectAppcontainer).strip().lower() in (
+        "1",
+        "true",
+        "yes",
+    )
 
     # Started marker: distinguishes "child never ran the script" from
     # "script crashed mid-run" when stdout is not capturable.
@@ -324,11 +330,20 @@ def main() -> int:
             "low_integrity",
             path_write_blocked(ws_root) and path_write_succeeded(workspace),
         )
-        check(
-            "appcontainer_token",
-            "AppData\\Local\\Packages" in os.environ.get("LOCALAPPDATA", "")
-            and "\\AC" in os.environ.get("LOCALAPPDATA", ""),
-        )
+        if expect_appcontainer:
+            check(
+                "appcontainer_token",
+                "AppData\\Local\\Packages" in os.environ.get("LOCALAPPDATA", "")
+                and "\\AC" in os.environ.get("LOCALAPPDATA", ""),
+            )
+        else:
+            # mode=disabled (--no-appcontainer, 2026-09-03 ruling for orz.exe
+            # loader compatibility): the wall keeps non-admin + LOW IL + Job +
+            # TEMP redirect + egress allowlist without the AppContainer layer.
+            # LOCALAPPDATA is not package-rewritten, so the AppContainer child
+            # proxy must not be asserted (mirrors the parent-side observation,
+            # which discards appcontainer_token when appcontainer=False).
+            dbg("SKIP appcontainer_token (mode=disabled / no-appcontainer)")
         # job_object_assigned is asserted by the parent-side sandbox
         # observation (IsProcessInJob on the child handle): AppContainer
         # children cannot observe job membership without ctypes, and
@@ -345,15 +360,27 @@ def main() -> int:
         _t0 = time.monotonic()
         _blocked = tcp_blocked(blocked_probe_ip, 443)
         wf12_timings["network_blocked_ms"] = int((time.monotonic() - _t0) * 1000)
+        print(
+            f"WF12 network_blocked_ms={wf12_timings['network_blocked_ms']}",
+            flush=True,
+        )
         check("network_blocked", _blocked)
         if args.AllowlistReachabilityIp:
             _t0 = time.monotonic()
             _reachable = not tcp_blocked(args.AllowlistReachabilityIp, 443)
             wf12_timings["allowlist_reachable_ms"] = int((time.monotonic() - _t0) * 1000)
+            print(
+                f"WF12 allowlist_reachable_ms={wf12_timings['allowlist_reachable_ms']}",
+                flush=True,
+            )
             check("allowlist_reachable", _reachable)
         _t0 = time.monotonic()
         _meta_blocked = tcp_blocked("169.254.169.254", 80)
         wf12_timings["metadata_blocked_ms"] = int((time.monotonic() - _t0) * 1000)
+        print(
+            f"WF12 metadata_blocked_ms={wf12_timings['metadata_blocked_ms']}",
+            flush=True,
+        )
         check("metadata_blocked", _meta_blocked)
 
         leftover = []
@@ -370,6 +397,7 @@ def main() -> int:
             "wf12_timings_ms": wf12_timings,
             "arm": arm,
             "workspace": workspace,
+            "appcontainer_expected": expect_appcontainer,
             "checks": checks,
             "passed": sum(1 for v in checks.values() if v),
             "failed": failures,

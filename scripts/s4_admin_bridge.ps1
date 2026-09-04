@@ -5,7 +5,7 @@
       {
         "id":    "<same id>",
         "token": "<token from token.txt>",
-      "op":    "ping" | "vm-state" | "vm-start" | "vm-connect" | "vm-copy" | "vm-revert" | "vm-applocker-reset" | "vm-install-clash" | "vm-checkpoint" | "vm-hive-diag" | "vm-read-wrapup" | "vm-cred-lm" | "vm-cred-inject" | "vm-sync-orz" | "vm-agent" | "vm-diag-orz" | "vm-diag-signer" | "vm-acaf-reprovision" | "vm-env-probe" | "vm-env-provision" | "check-setup" | "stage" | "quit",
+      "op":    "ping" | "vm-state" | "vm-start" | "vm-connect" | "vm-copy" | "vm-revert" | "vm-applocker-reset" | "vm-install-clash" | "vm-checkpoint" | "vm-hive-diag" | "vm-read-wrapup" | "vm-cred-lm" | "vm-cred-inject" | "vm-sync-orz" | "vm-agent" | "vm-diag-orz" | "vm-diag-signer" | "vm-acaf-reprovision" | "vm-env-probe" | "vm-wf12-probe" | "vm-env-provision" | "check-setup" | "stage" | "quit",
       "checkpoint": "<snapshot name, op=vm-checkpoint>",
       "src":   "<host path, op=vm-copy>",
       "dst":   "<guest path, op=vm-copy>",
@@ -541,6 +541,23 @@ while ($true) {
                         $all = @(); $all += $head; $all += @($r.Lines); $all += @($tail)
                         Write-Result $id $all
                         Write-Log "vm-env-probe done exit=$codeStr timedout=$($r.TimedOut)"
+                    }
+                    'vm-wf12-probe' {
+                        $r = @(Invoke-FixedScript -ScriptPath 'D:\CLI\scripts\s4_vm_wf12_probe.ps1' -TimeoutMs 900000)[-1]
+                        $resFile = 'D:\CLI\_windows_high_nist\vm-wf12-probe-result.txt'
+                        $tail = @()
+                        if (Test-Path -LiteralPath $resFile) {
+                            $tail = @(Get-Content -LiteralPath $resFile -Encoding UTF8)
+                        }
+                        $ok = (-not $r.TimedOut) -and ($r.Code -eq 0) -and
+                            (Has-Match $tail '^WF12_PROBE_HOST_OK=True$')
+                        $status = $(if ($ok) { 'OK' } else { 'FAIL' })
+                        $codeStr = if ($null -eq $r.Code) { '' } else { [string]$r.Code }
+                        $tdStr = if ($r.TimedOut) { '1' } else { '0' }
+                        $head = @("STATUS=$status", "ID=$id", 'OP=vm-wf12-probe', "EXIT=$codeStr", "TIMEDOUT=$tdStr")
+                        $all = @(); $all += $head; $all += @($r.Lines); $all += @($tail)
+                        Write-Result $id $all
+                        Write-Log "vm-wf12-probe done exit=$codeStr timedout=$($r.TimedOut)"
                     }
                     'vm-env-provision' {
                         $r = @(Invoke-FixedScript -ScriptPath 'D:\CLI\scripts\s4_vm_env_provision.ps1' -TimeoutMs 3600000)[-1]

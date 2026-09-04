@@ -212,6 +212,7 @@ function Sync-Harness {
                 'C:\s4\_windows_high_nist\hardening',
                 'C:\s4\_windows_high_nist\policy',
                 'C:\s4\_windows_high_nist\run',
+                'C:\s4\_windows_high_nist\wf12',
                 'C:\s4\_windows_high_nist\agent-tasks-tb2.1',
                 'C:\workspace'
             )) {
@@ -230,6 +231,9 @@ function Sync-Harness {
             @{ Src = 'D:\CLI\_windows_high_nist\policy\enforcement_probe.ps1'; Dst = 'C:\s4\_windows_high_nist\policy\enforcement_probe.ps1' },
             @{ Src = 'D:\CLI\_windows_high_nist\policy\enforcement_probe.py'; Dst = 'C:\s4\_windows_high_nist\policy\enforcement_probe.py' },
             @{ Src = 'D:\CLI\_windows_high_nist\run\run_enforcement_probe.ps1'; Dst = 'C:\s4\_windows_high_nist\run\run_enforcement_probe.ps1' },
+            @{ Src = 'D:\CLI\_windows_high_nist\run\run_wf12_egress_probe.ps1'; Dst = 'C:\s4\_windows_high_nist\run\run_wf12_egress_probe.ps1' },
+            @{ Src = 'D:\CLI\_windows_high_nist\wf12\dns_refusal.py'; Dst = 'C:\s4\_windows_high_nist\wf12\dns_refusal.py' },
+            @{ Src = 'D:\CLI\_windows_high_nist\wf12\README.md'; Dst = 'C:\s4\_windows_high_nist\wf12\README.md' },
             @{ Src = 'D:\CLI\_windows_high_nist\run\run_task_arm.ps1'; Dst = 'C:\s4\_windows_high_nist\run\run_task_arm.ps1' },
             @{ Src = 'D:\CLI\_windows_high_nist\run\run_agent_arm.ps1'; Dst = 'C:\s4\_windows_high_nist\run\run_agent_arm.ps1' },
             @{ Src = 'D:\CLI\_windows_high_nist\tools\cred_probe.exe'; Dst = 'C:\s4\tools\cred_probe.exe' },

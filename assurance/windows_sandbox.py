@@ -720,13 +720,18 @@ def _grant_appcontainer_workspace_access(
         return False
     try:
         # Object inherit + container inherit + modify so AppContainer child can
-        # create/read/write the disposable workspace probe file.
+        # create/read/write the disposable workspace probe file.  /T is
+        # required: files copied into the workspace before this grant (e.g.
+        # enforcement_probe.py staged by the runner) are pre-existing children
+        # and otherwise keep a DACL without the package SID (TER T2.2 finding
+        # on a fresh no-appcontainer workspace).
         result = subprocess.run(
             [
                 "icacls",
                 str(workspace),
                 "/grant",
                 f"*{sid_string}:(OI)(CI)(M)",
+                "/T",
             ],
             capture_output=True,
             shell=False,
@@ -2143,7 +2148,13 @@ def _grant_workspace_access_current_user(
     account = f"{userdomain}\\{username}" if userdomain else username
     try:
         result = subprocess.run(
-            ["icacls", str(workspace), "/grant", f"{account}:(OI)(CI)(M)"],
+            [
+                "icacls",
+                str(workspace),
+                "/grant",
+                f"{account}:(OI)(CI)(M)",
+                "/T",
+            ],
             capture_output=True,
             shell=False,
             timeout=15,
@@ -2169,7 +2180,13 @@ def _grant_workspace_access_account(
     account = f"{domain}\\{user}" if domain else user
     try:
         result = subprocess.run(
-            ["icacls", str(workspace), "/grant", f"{account}:(OI)(CI)(M)"],
+            [
+                "icacls",
+                str(workspace),
+                "/grant",
+                f"{account}:(OI)(CI)(M)",
+                "/T",
+            ],
             capture_output=True,
             shell=False,
             timeout=15,
@@ -3449,6 +3466,22 @@ def run_windows_native_sandbox(
 
     stdout_bytes = b"".join(stdout_chunks)
     stderr_bytes = b"".join(stderr_chunks)
+    # TER T2.2 (W-F12): when capture is on (non-AppContainer spawns), spill
+    # the child's captured output into the disposable workspace so harness
+    # diagnostics can read the exact failure (e.g. a probe child that exits
+    # before writing its own markers).  Best-effort only.
+    if not use_appcontainer:
+        try:
+            if stderr_bytes:
+                (resolved_workspace / ".sandbox-child-stderr.log").write_bytes(
+                    stderr_bytes
+                )
+            if stdout_bytes:
+                (resolved_workspace / ".sandbox-child-stdout.log").write_bytes(
+                    stdout_bytes
+                )
+        except OSError:
+            pass
     required_checks = set(run_observation_checks_for_arm(arm))
     if arm == "high-nist" and not use_appcontainer:
         required_checks.discard("appcontainer_token")

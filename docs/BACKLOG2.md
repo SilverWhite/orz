@@ -4,13 +4,14 @@
 > [BACKLOG_AND_PRIORITIES.md](BACKLOG_AND_PRIORITIES.md) 只保留指针，
 > 本文为 TER 明细权威。状态：`current`（2026-09-03 设计定稿；M0 设计门
 > T0.1–T0.4 已放行；**M1（T1.1–T1.13）已闭合并放行进入 M2**，见
-> TODO2.md；M2 实施中——T2.1 已闭合）。
+> TODO2.md；M2 实施中——T2.1/T2.2 已闭合）。
 > 入口：设计稿
 > [TOOL_EXECUTION_LAYER_REFORM_DESIGN_2026-09-03.md](TOOL_EXECUTION_LAYER_REFORM_DESIGN_2026-09-03.md)
 > / 实施步骤 [TODO2.md](../TODO2.md) / S4_PROGRESS §16.17/§16.18。
 
 ## TER-0 工具执行层改革（P0；2026-09-03 设计定稿 + 分步计划落盘；M0
-设计门 T0.1–T0.4 已放行；**M1 已闭合（T1.1–T1.13），放行进入 M2**）
+设计门 T0.1–T0.4 已放行；**M1 已闭合（T1.1–T1.13），放行进入 M2；
+M2 T2.1/T2.2 已闭合**）
 
 一句话定义：orz 工具执行层“独立可用 + 无自身硬超时”改革——常驻能力
 默认开启（S5-2/180s 首报/模型面封闭）、去硬杀（删 runner 自加墙钟、
@@ -80,7 +81,14 @@ runner/VM → M3 回归复验（明细在 TODO2.md）。边界：15min 长档、
   删 `--max-wallclock`/`timeout-60` 余量；sandbox `--timeout`=官方
   agent_timeout_seconds 唯一评测墙钟；官方值经 ORZ_MAX_WALLCLOCK 透传
   F6 读源）已于 2026-09-04 闭合（DryRun 两题无 840、逐题 timeout 生效；
-  审计 TER_T2_1_WALLCLOCK_SINGLE_SOURCE_2026-09-04）。
+  审计 TER_T2_1_WALLCLOCK_SINGLE_SOURCE_2026-09-04）；T2.2 W-F12 本地透明层
+  （根因定案：AC 空能力 compartment 吞 allowlist allow 规则 → 生产墙
+  no-AC + allowlist；enforcement 探针 `-ExpectAppcontainer`/runner
+  `-NoAppcontainer`/sandbox grant `/T` + 子进程输出 spill/受控 op
+  `vm-wf12-probe`/egress 前后对照/DNS 拒答可逆部署）已于 2026-09-04 闭合
+  （win-s4 实机：allowlist_reachable PASS 15–47ms、egress 复测总成本
+  920ms、最差行 735ms、DNS 恢复；审计
+  TER_T2_2_WF12_LOCAL_TRANSPARENT_LAYER_2026-09-04）。
 - 专项：TER-0.1 生成器 v0.2 表全面对齐已登记（见下），不阻塞 M1。
 
 ## TER-0.1 生成器 v0.2 表全面对齐（专项；P0；2026-09-03 登记，不阻塞

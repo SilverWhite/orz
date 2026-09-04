@@ -11,7 +11,7 @@
 [CmdletBinding()]
 param(
     [Parameter(Mandatory = $true)]
-[ValidateSet('ping', 'vm-state', 'vm-start', 'vm-connect', 'vm-copy', 'vm-revert', 'vm-applocker-reset', 'vm-install-clash', 'vm-checkpoint', 'vm-hive-diag', 'vm-read-wrapup', 'vm-cred-lm', 'vm-cred-inject', 'vm-sync-orz', 'vm-agent', 'vm-diag-orz', 'vm-diag-signer', 'vm-acaf-reprovision', 'vm-env-probe', 'vm-env-provision', 'check-setup', 'stage', 'restart', 'quit')]
+    [ValidateSet('ping', 'vm-state', 'vm-start', 'vm-connect', 'vm-copy', 'vm-revert', 'vm-applocker-reset', 'vm-install-clash', 'vm-checkpoint', 'vm-hive-diag', 'vm-read-wrapup', 'vm-cred-lm', 'vm-cred-inject', 'vm-sync-orz', 'vm-agent', 'vm-diag-orz', 'vm-diag-signer', 'vm-acaf-reprovision', 'vm-env-probe', 'vm-env-provision', 'vm-wf12-probe', 'check-setup', 'stage', 'restart', 'quit')]
     [string]$Op,
     [ValidateSet('restore', 'sync', 'setup', 'control', 'nonadmin', 'highnist', 'taskcontrol', 'tasknonadmin', 'taskhighnist', 'agentcontrol', 'agenthighnist', 'netcheck', 'wrapup', 'all', 'full', 'reboot')]
     [string]$Stage = 'all',

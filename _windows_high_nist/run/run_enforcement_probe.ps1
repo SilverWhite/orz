@@ -5,6 +5,8 @@
       .\run_enforcement_probe.ps1 -Arm high-nist          # sandbox 模式（默认）
       .\run_enforcement_probe.ps1 -Arm control -Native    # 当前会话直跑
       .\run_enforcement_probe.ps1 -Arm non-admin -AllowlistIp 1.1.1.1
+      .\run_enforcement_probe.ps1 -Arm high-nist -AllowlistIp 1.1.1.1 `
+          -NoAppcontainer   # 生产墙（no-AC + allowlist，TER T2.2 同接线）
 
     -Sandbox 模式用 assurance/windows_sandbox.py 运行环境在对应墙内拉起探针：
       control   — 当前 token + Job containment
@@ -12,6 +14,10 @@
                   TokenVirtualizationAllowed=0）
       high-nist — 非 admin + LOW IL + AppContainer + Job + TEMP 重定向 +
                   egress wall
+      high-nist -NoAppcontainer — 同上但不含 AppContainer 层（2026-09-03
+                  裁决：orz.exe 在 AppContainer 下 DLL init 失败；agent
+                  runner 的 allowlist 墙即此形态）。子探针跳过
+                  appcontainer_token 断言（mode=disabled）。
     探针退出码非 0 → 该臂不作数（fail-closed），runner 退出 1。
 #>
 
@@ -22,6 +28,8 @@ param(
     [string]$Arm,
 
     [switch]$Native,
+
+    [switch]$NoAppcontainer,
 
     [string]$Workspace = '',
 
@@ -48,6 +56,16 @@ if (-not $ResultPath) {
 }
 
 try {
+    if ($NoAppcontainer) {
+        if ($Arm -ne 'high-nist') {
+            Write-Error "-NoAppcontainer 只对 -Arm high-nist 有意义"
+            exit 1
+        }
+        if ($Native) {
+            Write-Error "-NoAppcontainer 不能与 -Native 同用（Native 不经 sandbox）"
+            exit 1
+        }
+    }
     $reachIp = if ($AllowlistIp.Count -gt 0) { $AllowlistIp[0] } else { '' }
     if ($Native) {
         $nativeArgs = @(
@@ -76,19 +94,27 @@ try {
         $obsOutput = Join-Path $Workspace "windows-native-run-observation-$Arm.json"
         $pyProbeScript = Join-Path $PSScriptRoot '..\policy\enforcement_probe.py'
         $pyProbeScript = (Resolve-Path $pyProbeScript).Path
-        # Copy the probe into the workspace: AppContainer children can only
-        # read paths granted to the package SID / ALL APPLICATION PACKAGES
-        # (C:\s4 is not), and the sandbox grants the workspace to the
-        # AppContainer SID at spawn time.
-        $wsProbe = Join-Path $Workspace 'enforcement_probe.py'
-        Copy-Item -LiteralPath $pyProbeScript -Destination $wsProbe -Force
-        $pyProbeScript = $wsProbe
+        # Copy the probe into the workspace only for AppContainer-enabled
+        # spawns: AppContainer children can only read paths granted to the
+        # package SID / ALL APPLICATION PACKAGES (C:\s4 is not), and the
+        # sandbox grants the workspace to the AppContainer SID at spawn time.
+        # With -NoAppcontainer the child is the plain (restricted) run user,
+        # which reads C:\s4 normally (same layout as orz.exe in agent runs),
+        # so the probe runs in place.
+        if (-not $NoAppcontainer) {
+            $wsProbe = Join-Path $Workspace 'enforcement_probe.py'
+            Copy-Item -LiteralPath $pyProbeScript -Destination $wsProbe -Force
+            $pyProbeScript = $wsProbe
+        }
         $args = @(
             (Join-Path $root 'scripts\run_windows_native_sandbox_command.py'),
             '--workspace', $Workspace,
             '--arm', $Arm,
             '--timeout', $TimeoutSeconds
         )
+        if ($NoAppcontainer) {
+            $args += '--no-appcontainer'
+        }
         foreach ($ip in $AllowlistIp) {
             $args += @('--allowlist-ip', $ip)
         }
@@ -109,6 +135,9 @@ try {
         )
         if ($reachIp) {
             $args += @('-AllowlistReachabilityIp', $reachIp)
+        }
+        if ($NoAppcontainer) {
+            $args += @('-ExpectAppcontainer', '0')
         }
 
         $probeExit = 1
