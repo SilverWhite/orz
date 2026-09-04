@@ -56,7 +56,19 @@
      - **任务 A（解耦寄生）**：新建 `render_fold.rs`，将生产折叠渲染（`render_exec_folded`/`render_edits_folded` 等）与黑板压缩快照计算从 `epoch.rs` 剥离并切断对 epoch 状态的依赖；`epoch.rs` 保留 legacy plan-epoch 归档/`--plan` 支持（现 1970 行）与兼容重导出，不参与会话黑板生产折叠主链。（2026-09-04 闭合：render_fold 净移入 1338 行 / epoch 净减 1363 行；依赖树与 725 单测复核见 [P0-GOV 收口审计](audits/P0_GOV_UNCOMMITTED_REVIEW_HANDLING_2026-09-04.md)）
      - **任务 B（底座瘦身）**：在 `orz/Cargo.toml` 中剔除未被 `orz-bin` 引用的 15 个无头僵尸 Crate，加速全仓构建并净化审计面。（2026-09-04 闭合：workspace members 64 → 49、Cargo.lock −1131 行、`cargo tree -p orz-bin` 不含任一被剔除 crate、源码目录保留未删，见 [P0-GOV 收口审计](audits/P0_GOV_UNCOMMITTED_REVIEW_HANDLING_2026-09-04.md)）
      - **任务 C（安全收敛）**：读工具（read_file/grep/list_dir）统一建立 CWD 工作区 canonical 级越界硬拦截——模型路径 `..` 越级、绝对路径指向 cwd 外、工作区内符号链接/重解析点指向 cwd 外均拒绝（skills 白名单豁免；目标不存在回退词法判定）；将 ACAF fail-closed 默认强校验下沉至 `AgentLoopController`（ACP/TUI 默认 fail-closed、ticket_flow 无 signer 即拒、`ORZ_ACAF_FAIL_CLOSED` 解析单源化）。（2026-09-04 闭合：orz 提交见审计，实现与边界见 [P0-GOV 收口审计](audits/P0_GOV_UNCOMMITTED_REVIEW_HANDLING_2026-09-04.md)）
-     - **任务 D（双实现治理）**：在 Rust `orz-assurance` 补齐关键校验断言，逐步退役 Python `assurance` 双法官冗余。（未闭合，保留开放）
+     - **任务 D（双实现治理）**：在 Rust `orz-assurance` 补齐关键校验断言，逐步退役 Python `assurance` 双法官冗余。
+       - [x] **batch-1（2026-09-04）**：差异梳理 + Rust `journal/conformance.rs`
+         schema 级离线法官（envelope / 按轨 payload / raw-JSON 哈希链 /
+         整刊单轨）+ 18 fixture 全量对拍 + 篡改负测；
+         `runtime/run-event-payload-registry-v0.1.json` 单源映射（导出脚本 +
+         门禁同步钩子）；消解 `runtime_stagnation_guard` 历史 v0.1 回放漂移面。
+         证据见
+         [Task D 批次 1 审计](audits/P0_GOV_TASK_D_DUAL_IMPL_GOVERNANCE_2026-09-04.md)。
+       - [ ] **S2**：31 个 `_verify_v02_*` 机械规则族盘点（Rust 已强制附证据 /
+         需 Rust 显式实现）并补齐关键族。
+       - [ ] **S3**：门禁真实 fixture journal 校验改接 Rust 法官；Python Rust
+         轨 `validate_journal_file` 退役；registry 源翻转 JSON 转正。
+       - [ ] **S4**：Python 双法官退役/归档登记、契约变更流程同步、索引收口。
 
 ### 0. 前置收尾（提交前需用户确认）
 

@@ -2417,11 +2417,49 @@ def check_repository() -> dict[str, Any]:
                 )
     counts["run_event_v02_journal_fixtures"] = len(run_event_journal_v02_names)
 
+    # Task D (2026-09-04, batch-1): the machine-readable payload-schema
+    # registry must stay in sync with the Python registry dicts — a registry
+    # change without `python scripts/export_run_event_payload_registry.py`
+    # is a silent gap for the Rust-side conformance judge.
+    run_event_payload_registry_path = (
+        ROOT / "runtime/run-event-payload-registry-v0.1.json"
+    )
+    try:
+        run_event_payload_registry = _load_json(run_event_payload_registry_path)
+    except Exception as exc:
+        errors.append(f"cannot load run-event payload registry: {exc}")
+        run_event_payload_registry = {}
+    registry_tracks = run_event_payload_registry.get("tracks", {})
+    for track_key, live_map in (
+        ("v01", PAYLOAD_SCHEMA_BY_EVENT_TYPE),
+        ("v02", PAYLOAD_SCHEMA_BY_EVENT_TYPE_V02),
+    ):
+        live = {
+            event_type: (
+                slug,
+                schema_path.resolve().relative_to(ROOT.resolve()).as_posix(),
+            )
+            for event_type, (slug, schema_path) in live_map.items()
+        }
+        reg = {
+            event_type: (item.get("slug"), item.get("schema"))
+            for event_type, item in registry_tracks.get(track_key, {}).items()
+        }
+        if live != reg:
+            errors.append(
+                f"run-event payload registry {track_key} drifts from "
+                "assurance.run_event_journal_validation — rerun "
+                "`python scripts/export_run_event_payload_registry.py`"
+            )
+    counts["run_event_payload_registry"] = 1
+
     for required_path in (
         ROOT / "architecture/PYTHON_REFERENCE_SPEC_CONTRACT_v0.1.md",
         ROOT / "scripts/generate_run_event_fixtures.py",
         ROOT / "runtime/tests/test_run_event_conformance.py",
         ROOT / "assurance/run_event_journal_validation.py",
+        ROOT / "runtime/run-event-payload-registry-v0.1.json",
+        ROOT / "scripts/export_run_event_payload_registry.py",
         run_event_fixture_root / "README.md",
     ):
         if not required_path.is_file():

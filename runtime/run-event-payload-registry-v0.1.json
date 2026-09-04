@@ -1,0 +1,256 @@
+{
+  "kind": "run-event-payload-schema-registry",
+  "paths": "repo-root-relative",
+  "source": "assurance/run_event_journal_validation.py PAYLOAD_SCHEMA_BY_EVENT_TYPE / PAYLOAD_SCHEMA_BY_EVENT_TYPE_V02",
+  "tracks": {
+    "v01": {
+      "acp_initialize": {
+        "schema": "runtime/acp-initialize-event-payload-v0.1.schema.json",
+        "slug": "acp-initialize"
+      },
+      "acp_session_created": {
+        "schema": "runtime/acp-session-created-event-payload-v0.1.schema.json",
+        "slug": "acp-session-created"
+      },
+      "action_approved": {
+        "schema": "runtime/action-approved-event-payload-v0.1.schema.json",
+        "slug": "action-approved"
+      },
+      "artifact_registered": {
+        "schema": "runtime/artifact-registered-event-payload-v0.1.schema.json",
+        "slug": "artifact-registered"
+      },
+      "context_compressed": {
+        "schema": "runtime/context-compressed-event-payload-v0.1.schema.json",
+        "slug": "context-compressed"
+      },
+      "counterexample_gate": {
+        "schema": "runtime/counterexample-gate-event-payload-v0.1.schema.json",
+        "slug": "counterexample-gate"
+      },
+      "gate_decision": {
+        "schema": "runtime/gate-decision-event-payload-v0.1.schema.json",
+        "slug": "gate-decision"
+      },
+      "instruction_provenance_gate": {
+        "schema": "runtime/instruction-provenance-gate-event-payload-v0.1.schema.json",
+        "slug": "instruction-provenance-gate"
+      },
+      "model_output": {
+        "schema": "runtime/model-output-event-payload-v0.1.schema.json",
+        "slug": "model-output"
+      },
+      "model_request": {
+        "schema": "runtime/model-request-event-payload-v0.1.schema.json",
+        "slug": "model-request"
+      },
+      "model_response_received": {
+        "schema": "runtime/model-response-received-event-payload-v0.1.schema.json",
+        "slug": "model-response-received"
+      },
+      "neutral_inquiry": {
+        "schema": "runtime/neutral-inquiry-event-payload-v0.1.schema.json",
+        "slug": "neutral-inquiry"
+      },
+      "orientation_checkpoint": {
+        "schema": "runtime/orientation-checkpoint-event-payload-v0.1.schema.json",
+        "slug": "orientation-checkpoint"
+      },
+      "permission_decision": {
+        "schema": "runtime/permission-decision-event-payload-v0.1.schema.json",
+        "slug": "permission-decision"
+      },
+      "permission_requested": {
+        "schema": "runtime/permission-requested-event-payload-v0.1.schema.json",
+        "slug": "permission-requested"
+      },
+      "plan_approved": {
+        "schema": "runtime/plan-approved-event-payload-v0.1.schema.json",
+        "slug": "plan-approved"
+      },
+      "plan_proposed": {
+        "schema": "runtime/plan-proposed-event-payload-v0.1.schema.json",
+        "slug": "plan-proposed"
+      },
+      "plan_rejected": {
+        "schema": "runtime/plan-rejected-event-payload-v0.1.schema.json",
+        "slug": "plan-rejected"
+      },
+      "prompt_submitted": {
+        "schema": "runtime/prompt-submitted-event-payload-v0.1.schema.json",
+        "slug": "prompt-submitted"
+      },
+      "retrieval_completion_check": {
+        "schema": "runtime/retrieval-completion-check-event-payload-v0.1.schema.json",
+        "slug": "retrieval-completion-check"
+      },
+      "run_cancelled": {
+        "schema": "runtime/run-cancelled-event-payload-v0.1.schema.json",
+        "slug": "run-cancelled"
+      },
+      "run_failed": {
+        "schema": "runtime/run-failed-event-payload-v0.1.schema.json",
+        "slug": "run-failed"
+      },
+      "run_finished": {
+        "schema": "runtime/run-finished-event-payload-v0.1.schema.json",
+        "slug": "run-finished"
+      },
+      "run_invalidated": {
+        "schema": "runtime/run-invalidated-event-payload-v0.1.schema.json",
+        "slug": "run-invalidated"
+      },
+      "run_preflight": {
+        "schema": "runtime/run-preflight-event-payload-v0.1.schema.json",
+        "slug": "run-preflight"
+      },
+      "run_started": {
+        "schema": "runtime/run-started-event-payload-v0.1.schema.json",
+        "slug": "run-started"
+      },
+      "runtime_stagnation_guard": {
+        "schema": "runtime/runtime-stagnation-guard-event-payload-v0.1.schema.json",
+        "slug": "runtime-stagnation-guard"
+      },
+      "snapshot_created": {
+        "schema": "runtime/snapshot-created-event-payload-v0.1.schema.json",
+        "slug": "snapshot-created"
+      },
+      "snapshot_restored": {
+        "schema": "runtime/snapshot-restored-event-payload-v0.1.schema.json",
+        "slug": "snapshot-restored"
+      },
+      "tool_availability_check": {
+        "schema": "runtime/tool-availability-check-event-payload-v0.1.schema.json",
+        "slug": "tool-availability-check"
+      },
+      "tool_belief_stagnation": {
+        "schema": "assurance/tool-belief-stagnation-event-payload-v0.1.schema.json",
+        "slug": "tool-belief-stagnation"
+      },
+      "tool_completed": {
+        "schema": "runtime/tool-completed-event-payload-v0.1.schema.json",
+        "slug": "tool-completed"
+      },
+      "tool_proposal": {
+        "schema": "runtime/tool-proposal-event-payload-v0.1.schema.json",
+        "slug": "tool-proposal"
+      },
+      "tool_started": {
+        "schema": "runtime/tool-started-event-payload-v0.1.schema.json",
+        "slug": "tool-started"
+      }
+    },
+    "v02": {
+      "budget_cue_injected": {
+        "schema": "runtime/budget-cue-injected-event-payload-v0.2.schema.json",
+        "slug": "budget-cue-injected"
+      },
+      "console_mode_transition": {
+        "schema": "runtime/console-mode-transition-event-payload-v0.2.schema.json",
+        "slug": "console-mode-transition"
+      },
+      "console_order_rejected": {
+        "schema": "runtime/console-order-rejected-event-payload-v0.2.schema.json",
+        "slug": "console-order-rejected"
+      },
+      "console_order_written": {
+        "schema": "runtime/console-order-written-event-payload-v0.2.schema.json",
+        "slug": "console-order-written"
+      },
+      "context_compressed": {
+        "schema": "runtime/context-compressed-event-payload-v0.2.schema.json",
+        "slug": "context-compressed"
+      },
+      "context_recovery_truncated": {
+        "schema": "runtime/context-recovery-truncated-event-payload-v0.2.schema.json",
+        "slug": "context-recovery-truncated"
+      },
+      "control_ticket_consumed": {
+        "schema": "runtime/control-ticket-consumed-event-payload-v0.2.schema.json",
+        "slug": "control-ticket-consumed"
+      },
+      "control_ticket_issued": {
+        "schema": "runtime/control-ticket-issued-event-payload-v0.2.schema.json",
+        "slug": "control-ticket-issued"
+      },
+      "control_ticket_rejected": {
+        "schema": "runtime/control-ticket-rejected-event-payload-v0.2.schema.json",
+        "slug": "control-ticket-rejected"
+      },
+      "epoch_archive_write_failed": {
+        "schema": "runtime/epoch-archive-write-failed-event-payload-v0.2.schema.json",
+        "slug": "epoch-archive-write-failed"
+      },
+      "information_sufficiency_assessment": {
+        "schema": "runtime/information-sufficiency-assessment-event-payload-v0.2.schema.json",
+        "slug": "information-sufficiency-assessment"
+      },
+      "ledger_fold_advance": {
+        "schema": "runtime/ledger-fold-advance-event-payload-v0.2.schema.json",
+        "slug": "ledger-fold-advance"
+      },
+      "ledger_fold_write_failed": {
+        "schema": "runtime/ledger-fold-write-failed-event-payload-v0.2.schema.json",
+        "slug": "ledger-fold-write-failed"
+      },
+      "mechanical_audit_update": {
+        "schema": "runtime/mechanical-audit-update-event-payload-v0.2.schema.json",
+        "slug": "mechanical-audit-update"
+      },
+      "orientation_checkpoint": {
+        "schema": "runtime/orientation-checkpoint-event-payload-v0.2.schema.json",
+        "slug": "orientation-checkpoint"
+      },
+      "plan_write": {
+        "schema": "runtime/plan-write-event-payload-v0.2.schema.json",
+        "slug": "plan-write"
+      },
+      "request_header_change": {
+        "schema": "runtime/request-header-change-event-payload-v0.2.schema.json",
+        "slug": "request-header-change"
+      },
+      "retrieval_activation_restored": {
+        "schema": "runtime/retrieval-activation-restored-event-payload-v0.2.schema.json",
+        "slug": "retrieval-activation-restored"
+      },
+      "retrieval_close_record": {
+        "schema": "runtime/retrieval-close-record-event-payload-v0.2.schema.json",
+        "slug": "retrieval-close-record"
+      },
+      "retrieval_mode_transition": {
+        "schema": "runtime/retrieval-mode-transition-event-payload-v0.2.schema.json",
+        "slug": "retrieval-mode-transition"
+      },
+      "retrieval_parent_disposition": {
+        "schema": "runtime/retrieval-parent-disposition-event-payload-v0.2.schema.json",
+        "slug": "retrieval-parent-disposition"
+      },
+      "retrieval_result_committed": {
+        "schema": "runtime/retrieval-result-event-payload-v0.2.schema.json",
+        "slug": "retrieval-result"
+      },
+      "session_archive": {
+        "schema": "runtime/session-archive-event-payload-v0.2.schema.json",
+        "slug": "session-archive"
+      },
+      "tool_availability_check": {
+        "schema": "runtime/tool-availability-check-event-payload-v0.2.schema.json",
+        "slug": "tool-availability-check"
+      },
+      "tool_completed": {
+        "schema": "runtime/tool-completed-event-payload-v0.2.schema.json",
+        "slug": "tool-completed"
+      },
+      "tool_running": {
+        "schema": "runtime/tool-running-event-payload-v0.2.schema.json",
+        "slug": "tool-running"
+      },
+      "transport_retry": {
+        "schema": "runtime/transport-retry-event-payload-v0.2.schema.json",
+        "slug": "transport-retry"
+      }
+    }
+  },
+  "version": "0.1"
+}

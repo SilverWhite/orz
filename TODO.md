@@ -41,7 +41,17 @@
 - [x] 任务 A（解耦寄生代码）：创建 `render_fold.rs`，将生产折叠渲染与黑板压缩快照从 `epoch.rs` 剥离，切断对 epoch 状态的依赖；`epoch.rs` 保留 legacy plan-epoch 归档/`--plan` 支持（现 1970 行）与兼容重导出，不参与会话黑板生产折叠主链。（2026-09-04 闭合：render_fold 净移入 1338 行，epoch 净减 1363 行；723→725 个单元测试 + workspace check + fmt 全绿）
 - [x] 任务 B（清理僵尸 Crate）：在 `orz/Cargo.toml` 中剔除未被 `orz-bin` 引用的 15 个无头 Crate，加速构建并净化审计面。（2026-09-04 闭合：剔除 15 个无头 Crate，工作区成员 64 → 49，全工作区 cargo check 零警告零错误，门禁 Exit Code 0 全绿）
 - [x] 任务 C（路径沙箱与 ACAF 下沉）：读工具（`read_file`/`grep`/`list_dir`）统一建立 CWD 工作区 canonical 级越界硬拦截——`..` 越级、绝对路径指向 cwd 外、以及工作区内符号链接/重解析点指向 cwd 外均拒绝（skills 文档豁免；目标不存在时回退词法判定）；ACAF fail-closed 默认强校验下沉至 `AgentLoopController`（ACP/TUI 默认 fail-closed、`ticket_flow` 无 signer 即拒、`ORZ_ACAF_FAIL_CLOSED` 解析单源化并可显式逃生）。（2026-09-04 闭合：orz 提交 + 12 项沙箱单测 + orz-loop 725 + orz-bin env 单测 + 全工作区 check/fmt 绿，见 [P0-GOV 收口审计](docs/audits/P0_GOV_UNCOMMITTED_REVIEW_HANDLING_2026-09-04.md)）
-- [ ] 任务 D（双实现终局治理）：在 Rust `orz-assurance` 补齐规则，逐步退役 Python `assurance` 双重法官。
+- [ ] 任务 D（双实现终局治理）：在 Rust `orz-assurance` 补齐规则，逐步退役 Python `assurance` 双重法官。（batch-1 已闭合 2026-09-04，S2–S4 保留开放，入口：[Task D 批次 1 审计](docs/audits/P0_GOV_TASK_D_DUAL_IMPL_GOVERNANCE_2026-09-04.md)）
+  - [x] batch-1（2026-09-04）：Rust `journal/conformance.rs` schema 级离线法官
+    （envelope + 按轨 payload + raw-JSON 哈希链 + 整刊单轨）+ 18 fixture
+    全量对拍 + 6 类篡改负测；`runtime/run-event-payload-registry-v0.1.json`
+    单源映射 + 导出脚本 + 门禁同步钩子；实测并消解 `runtime_stagnation_guard`
+    历史 v0.1 回放漂移面（离线链按 raw JSON 重算）。
+  - [ ] S2：31 个 `_verify_v02_*` 机械规则族盘点为「Rust 已强制（附证据）/
+    需 Rust 显式实现」两档并补齐。
+  - [ ] S3：`check_repository.py` 真实 fixture journal 校验改接 Rust 法官，
+    Python Rust 轨 `validate_journal_file` 退役，registry 源翻转 JSON 转正。
+  - [ ] S4：Python 双法官退役/归档登记、契约变更流程同步、索引/BACKLOG 收口。
 
 ### P0-E 评测冒烟暴露问题（2026-08-17 登记；2026-08-18 全部闭合）
 
@@ -608,6 +618,10 @@
 
 ## 审计登记边界（条件触发，不占当前优先级）
 
+- [ ] GLM-2026-09-04 外部只读审查候选（F1 skills 豁免面过宽 / F2 approval
+  存根未登记 / R-1 .gitignore 与已跟踪文件矛盾 / R-2 manifest CRLF /
+  R-3 根目录一次性产物；本窗口复核为真，处置待用户裁决）——入口：
+  [登记审计](docs/audits/GLM_EXTERNAL_REVIEW_REGISTRATION_2026-09-04.md)。
 - [ ] orz-host 可选后端接线（lsp / memory / 图像 / 视频 / MCP）：接线时翻转能力访问器并补翻转测试（FUS-TOOL-PROBE 边界）。
   - 成熟复用评估（2026-08-16，只读）：明确——LSP/MCP 为成熟开放标准，仓库内已有 orz-mcp；图像/视频走成熟服务 API。
 - [ ] headless 计划模式能力信号（plan 模式探针当前以交互用户信号代理，未来 headless 计划模式需独立信号）。
