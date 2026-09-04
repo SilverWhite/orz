@@ -393,25 +393,21 @@ async fn build_acaf_client() -> Result<
 /// `ORZ_ACAF_FAIL_CLOSED=0|false|no|off` opts back into shadow mode;
 /// `1|true|yes|on` confirms enforcement. Any other value is malformed and
 /// fails closed (exit 2) — a typo must never silently disable a security
-/// gate (value semantics preserved from the 2026-08-13 review fix).
+/// gate. Value parsing is single-sourced at
+/// `orz_loop::controller::parse_acaf_fail_closed_env` (P0-GOV Task C,
+/// 2026-09-04 convergence).
 fn acaf_fail_closed_enabled() -> bool {
     match std::env::var("ORZ_ACAF_FAIL_CLOSED") {
-        Ok(v)
-            if matches!(
-                v.to_ascii_lowercase().as_str(),
-                "0" | "false" | "no" | "off"
-            ) =>
-        {
-            false
-        }
-        Ok(v) if matches!(v.to_ascii_lowercase().as_str(), "1" | "true" | "yes" | "on") => true,
-        Ok(v) => {
-            eprintln!(
-                "error: ORZ_ACAF_FAIL_CLOSED={v:?} is not a valid value \
-                 (1/true/yes/on enforce, 0/false/no/off shadow; unset = enforce)"
-            );
-            std::process::exit(2);
-        }
+        Ok(v) => match orz_loop::controller::parse_acaf_fail_closed_env(&v) {
+            Ok(enforce) => enforce,
+            Err(()) => {
+                eprintln!(
+                    "error: ORZ_ACAF_FAIL_CLOSED={v:?} is not a valid value \
+                     (1/true/yes/on enforce, 0/false/no/off shadow; unset = enforce)"
+                );
+                std::process::exit(2);
+            }
+        },
         Err(_) => true,
     }
 }

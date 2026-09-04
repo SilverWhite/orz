@@ -238,6 +238,18 @@ pub(crate) fn retrieval_result_channel_from_env() -> RetrievalResultChannel {
     }
 }
 
+/// 单一解析源（2026-09-04 Task C 收敛）：`ORZ_ACAF_FAIL_CLOSED` 的取值解析。
+/// `0|false|no|off` → shadow；`1|true|yes|on` → enforce；其它 → `Err(())`
+/// （调用方各自决定错误处置：CLI 退出码 2，库层告警并回退 enforce）。值先
+/// `trim` 再小写，消除两处解析器原先 trim/不 trim 的不一致。
+pub fn parse_acaf_fail_closed_env(value: &str) -> Result<bool, ()> {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "0" | "false" | "no" | "off" => Ok(false),
+        "1" | "true" | "yes" | "on" => Ok(true),
+        _ => Err(()),
+    }
+}
+
 /// ACAF fail-closed default resolver (2026-09-04 downsink / Slice 2 fail-closed):
 /// fail-closed is the DEFAULT — unset means enforced. Explicit
 /// `ORZ_ACAF_FAIL_CLOSED=0|false|no|off` opts back into shadow mode;
@@ -245,30 +257,17 @@ pub(crate) fn retrieval_result_channel_from_env() -> RetrievalResultChannel {
 /// enforce (fail-closed) with a warning (fail-closed posture preserved).
 pub fn default_acaf_fail_closed() -> bool {
     match std::env::var("ORZ_ACAF_FAIL_CLOSED") {
-        Ok(v)
-            if matches!(
-                v.trim().to_ascii_lowercase().as_str(),
-                "0" | "false" | "no" | "off"
-            ) =>
-        {
-            false
-        }
-        Ok(v)
-            if matches!(
-                v.trim().to_ascii_lowercase().as_str(),
-                "1" | "true" | "yes" | "on"
-            ) =>
-        {
-            true
-        }
-        Ok(v) => {
-            tracing::warn!(
-                "ORZ_ACAF_FAIL_CLOSED={v:?} is not a valid value \
-                 (1/true/yes/on enforce, 0/false/no/off shadow; unset = enforce); \
-                 falling back to fail-closed enforce"
-            );
-            true
-        }
+        Ok(v) => match parse_acaf_fail_closed_env(&v) {
+            Ok(enforce) => enforce,
+            Err(()) => {
+                tracing::warn!(
+                    "ORZ_ACAF_FAIL_CLOSED={v:?} is not a valid value \
+                     (1/true/yes/on enforce, 0/false/no/off shadow; unset = enforce); \
+                     falling back to fail-closed enforce"
+                );
+                true
+            }
+        },
         Err(_) => true,
     }
 }
@@ -282,17 +281,10 @@ pub(crate) fn initial_acaf_fail_closed() -> bool {
 pub(crate) fn initial_acaf_fail_closed() -> bool {
     // 单元测试中，未显式配置 signer 的逻辑测试默认保持 shadow，
     // 专门测试 ACAF 的单测通过 .with_acaf_fail_closed(true) 显式开启强校验。
-    match std::env::var("ORZ_ACAF_FAIL_CLOSED") {
-        Ok(v)
-            if matches!(
-                v.trim().to_ascii_lowercase().as_str(),
-                "1" | "true" | "yes" | "on"
-            ) =>
-        {
-            true
-        }
-        _ => false,
-    }
+    std::env::var("ORZ_ACAF_FAIL_CLOSED")
+        .ok()
+        .and_then(|v| parse_acaf_fail_closed_env(&v).ok())
+        .unwrap_or(false)
 }
 
 /// Streaming pacing (Phase 3 slice #6): a round's `model_output` (journaled,
@@ -3970,6 +3962,23 @@ mod tests {
     use crate::host::{LoopHost, PermitDecision, PermitError, RiskClass, ToolError, ToolRegistry};
     use async_trait::async_trait;
     use orz_assurance::JournalRecorder;
+
+    #[test]
+    fn parse_acaf_fail_closed_env_accepts_canonical_tokens() {
+        for on in ["1", "true", "yes", "on", " TRUE ", " yes "] {
+            assert_eq!(parse_acaf_fail_closed_env(on), Ok(true), "token {on:?}");
+        }
+        for off in ["0", "false", "no", "off", " OFF ", " false "] {
+            assert_eq!(parse_acaf_fail_closed_env(off), Ok(false), "token {off:?}");
+        }
+    }
+
+    #[test]
+    fn parse_acaf_fail_closed_env_rejects_malformed_values() {
+        for bad in ["", "2", "maybe", "enforce", " enabled "] {
+            assert_eq!(parse_acaf_fail_closed_env(bad), Err(()), "token {bad:?}");
+        }
+    }
 
     #[tokio::test]
     async fn run_turn_full_gate_sequence() {

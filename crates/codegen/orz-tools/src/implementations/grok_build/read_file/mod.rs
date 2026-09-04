@@ -521,12 +521,12 @@ pub(crate) async fn run_read_file(
         Err(_) => (joined_path.clone(), None),
     };
 
-    // 工作区词法沙箱防护（P0-GOV Task C，2026-09-04）：模型提供的路径若经
-    // `..` 相对越级跳出 cwd，或为绝对路径且指向工作区外，均拒绝读取；技能
-    // 文档（SKILL.md / skills 组件）为只读知识注入豁免。沙箱边界按输入路径
-    // 的词法解析判定：工作区内既有符号链接/重解析点（如 .gsa 内部面）的目标
-    // 不额外展开，予以信任放行（边界见 resources::is_path_within_workspace
-    // 与 P0-GOV Task C 审计）。
+    // 工作区沙箱防护（P0-GOV Task C，2026-09-04，canonical 级）：模型提供的
+    // 路径经 `..` 相对越级跳出 cwd、绝对路径指向工作区外、或经工作区内符号
+    // 链接/重解析点指向工作区外，均拒绝读取；技能文档（SKILL.md / skills
+    // 组件）为只读知识注入豁免。目标不存在时回退词法归一化判定。判定统一在
+    // resources::is_path_within_workspace（`.gsa` 等会话内部面为真实目录，
+    // 不受影响）。
     if !crate::types::resources::is_path_within_workspace(&cwd, &joined_path, Some(&path)) {
         let display_dcwd = display_cwd_or_cwd(&cwd, display_cwd.as_deref());
         let display_path = display_dcwd.join(&input.path);

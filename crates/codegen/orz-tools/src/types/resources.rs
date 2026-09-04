@@ -527,38 +527,32 @@ pub fn is_skill_markdown(path: &std::path::Path) -> bool {
         .any(|comp| comp.to_string_lossy().eq_ignore_ascii_case("skills"))
 }
 
-/// 判定模型提供的路径是否位于工作区（cwd）词法沙箱内部（或属于合法的外部
-/// 技能文档放行）。
+/// 判定模型提供的路径是否位于工作区（cwd）沙箱内部（或属于合法的外部技能
+/// 文档放行）。
 ///
-/// P0-GOV Task C（2026-09-04）沙箱语义：按模型输入路径的词法解析做越界硬
-/// 拦截——`../` 相对越级跳出 cwd、或绝对路径直接指向 cwd 之外的目标均返回
-/// `false`，由调用工具返回 PermissionDenied。边界登记：
+/// P0-GOV Task C（2026-09-04）沙箱语义——canonical 级越界硬拦截：
+/// - 目标存在时，先做 canonical（符号链接/重解析点展开）解析，真实落点必须
+///   位于 cwd（或其 canonical 拼写）之内；`..` 相对越级、绝对路径指向外部，
+///   以及「工作区内符号链接/重解析点指向 cwd 外」三类通道一律返回 `false`。
+///   `.gsa` 等会话内部面为真实目录（`session_cwd/.gsa` 由 `create_dir_all`
+///   创建），不受影响；如未来引入重解析点内部面需先显式登记豁免。
 /// - 技能文档豁免：路径含 `skills` 组件或文件名为 `SKILL.md` 时放行（只读
 ///   知识注入通道，见 [`is_skill_markdown`]）。
-/// - 工作区内既有符号链接/重解析点（如 `.gsa` 内部面）的目标不额外展开解析；
-///   只要模型路径在词法上位于 cwd 内即信任放行。模型输入本身无法借 `..` 或
-///   绝对路径到达外部（该语义由 read_file/grep/list_dir 的调用测试锁定）。
-/// - 路径尚不存在（读前先写、目录未创建等）时回退为词法归一化判定，避免把
-///   工作区内待创建路径误拦。
+/// - 路径尚不存在（读前先写、目录未创建等）时无法 canonical，回退为词法
+///   归一化判定，避免误拦工作区内待创建路径。
 pub fn is_path_within_workspace(
     cwd: &std::path::Path,
     joined_path: &std::path::Path,
     resolved_path: Option<&std::path::Path>,
 ) -> bool {
-    if is_skill_markdown(joined_path) {
+    // 技能文档豁免（只读知识注入）优先于沙箱判定。
+    if is_skill_markdown(joined_path) || resolved_path.is_some_and(is_skill_markdown) {
         return true;
-    }
-    if let Some(res) = resolved_path {
-        if is_skill_markdown(res) {
-            return true;
-        }
     }
 
     let canonical_cwd = dunce::canonicalize(cwd).unwrap_or_else(|_| cwd.to_path_buf());
-    let normalized_cwd = orz_paths::normalize_lexically(&canonical_cwd);
     let cwd_norm = orz_paths::normalize_lexically(cwd);
-
-    let normalized_joined = orz_paths::normalize_lexically(joined_path);
+    let canonical_cwd_norm = orz_paths::normalize_lexically(&canonical_cwd);
 
     let path_is_under = |p: &std::path::Path, base: &std::path::Path| -> bool {
         if p.starts_with(base) {
@@ -584,33 +578,37 @@ pub fn is_path_within_workspace(
         false
     };
 
-    let joined_under_cwd = path_is_under(joined_path, cwd)
-        && (path_is_under(&normalized_joined, &cwd_norm)
-            || path_is_under(&normalized_joined, &normalized_cwd));
+    // 归一化（`..` 折叠）后仍做一次包含判定，覆盖 Windows 大小写/短名等
+    // 拼写差异下 `starts_with` 的盲区。
+    let under = |p: &std::path::Path, base: &std::path::Path| -> bool {
+        let norm_p = orz_paths::normalize_lexically(p);
+        let norm_b = orz_paths::normalize_lexically(base);
+        path_is_under(p, base) || path_is_under(&norm_p, &norm_b)
+    };
 
-    if joined_under_cwd {
-        return true;
-    }
-
-    if let Some(target) = resolved_path {
-        let canonical_target = dunce::canonicalize(target).unwrap_or_else(|_| target.to_path_buf());
-        let normalized_target = orz_paths::normalize_lexically(&canonical_target);
-        let target_norm = orz_paths::normalize_lexically(target);
-
-        if path_is_under(target, &canonical_cwd)
-            || path_is_under(target, cwd)
-            || path_is_under(&canonical_target, &canonical_cwd)
-            || path_is_under(&canonical_target, cwd)
-            || path_is_under(&normalized_target, &normalized_cwd)
-            || path_is_under(&normalized_target, &cwd_norm)
-            || path_is_under(&target_norm, &normalized_cwd)
-            || path_is_under(&target_norm, &cwd_norm)
-        {
+    // 目标存在：以 canonical 落点为准（调用方传入已解析目标，或本函数对
+    // joined_path 现场解析）。工作区内符号链接/重解析点指向 cwd 外时，其
+    // canonical 落点不在 cwd 内，直接拒绝。
+    let resolved = resolved_path
+        .map(|p| p.to_path_buf())
+        .or_else(|| dunce::canonicalize(joined_path).ok());
+    if let Some(target) = resolved {
+        let canon_target = dunce::canonicalize(&target).unwrap_or_else(|_| target.clone());
+        if under(&canon_target, &canonical_cwd) || under(&canon_target, cwd) {
             return true;
         }
+        // canonical 不可得（目标在两次解析间消失等）时退回词法拼写判定。
+        if under(&target, &canonical_cwd) || under(&target, cwd) {
+            return true;
+        }
+        return false;
     }
 
-    false
+    // 目标尚不存在（读前先写 / 目录未创建）：词法归一化判定。
+    let joined_norm = orz_paths::normalize_lexically(joined_path);
+    path_is_under(joined_path, cwd)
+        && (path_is_under(&joined_norm, &cwd_norm)
+            || path_is_under(&joined_norm, &canonical_cwd_norm))
 }
 /// Newtype wrapper for `Arc<dyn xai_tool_runtime::ToolDispatch>` so it can
 /// be stored in `ToolCallContext::extensions`. Used by `use_tool` and the
@@ -1772,21 +1770,36 @@ mod tests {
     }
 
     #[test]
-    fn path_within_workspace_keeps_lexical_boundary_for_in_workspace_joined_path() {
-        // 模型路径词法上位于 cwd 内时放行；其解析目标（如工作区内符号链接/重
-        // 解析点指向外部）不额外展开——沙箱边界按输入路径词法判定（P0-GOV
-        // Task C 登记边界）。
+    fn path_within_workspace_rejects_symlink_escape_via_resolved_target() {
+        // 模型路径词法上位于 cwd 内，但解析目标（工作区内符号链接/重解析点
+        // 指向外部）落在 cwd 外：canonical 级沙箱必须拒绝（P0-GOV Task C）。
         let tmp = TempDir::new().unwrap();
         let ws = tmp.path().join("workspace");
         std::fs::create_dir_all(&ws).unwrap();
         let outside = tmp.path().join("secret.txt");
         std::fs::write(&outside, "sensitive").unwrap();
         let joined_inside = ws.join(".gsa/session/terminal/run.log");
-        assert!(is_path_within_workspace(
+        assert!(!is_path_within_workspace(
             &ws,
             &joined_inside,
             Some(&outside)
         ));
+    }
+
+    #[test]
+    fn path_within_workspace_allows_internal_targets_and_not_yet_created_paths() {
+        let tmp = TempDir::new().unwrap();
+        let ws = tmp.path().join("workspace");
+        std::fs::create_dir_all(&ws).unwrap();
+        let inside = ws.join("src/main.rs");
+        std::fs::create_dir_all(inside.parent().unwrap()).unwrap();
+        std::fs::write(&inside, "x").unwrap();
+        // 真实内部文件（含 `..` 折叠后仍在内部）与 None/Some 两种调用面均放行。
+        assert!(is_path_within_workspace(&ws, &inside, None));
+        assert!(is_path_within_workspace(&ws, &inside, Some(&inside)));
+        // 尚不存在的工作区内路径（读前先写）：词法回退放行。
+        let pending = ws.join("out/new.json");
+        assert!(is_path_within_workspace(&ws, &pending, None));
     }
 
     #[test]

@@ -833,9 +833,10 @@ async fn prepare_grep(
     let display_base = display_cwd_or_cwd(&cwd, display_cwd.as_deref());
     let cwd_display = display_base.display().to_string();
 
-    // 工作区词法沙箱防护（P0-GOV Task C，2026-09-04）：模型指定的搜索路径
-    // 若经 `..` 相对越级跳出 cwd 或为绝对路径且指向工作区外，直接拒绝执行；
-    // 技能文档豁免与符号链接边界同 read_file（resources::is_path_within_workspace）。
+    // 工作区沙箱防护（P0-GOV Task C，2026-09-04，canonical 级）：搜索路径若
+    // 经 `..` 越级、为绝对路径且指向工作区外、或经符号链接/重解析点指向
+    // 工作区外，直接拒绝执行；技能文档豁免同 read_file
+    // （resources::is_path_within_workspace）。
     if !crate::types::resources::is_path_within_workspace(&cwd, &workdir, None) {
         let display_path = if let Ok(suffix) = workdir.strip_prefix(&cwd) {
             display_base.join(suffix)

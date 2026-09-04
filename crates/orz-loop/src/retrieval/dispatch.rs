@@ -356,14 +356,16 @@ impl AgentLoopController {
 
         // GAP-SUBAGENT-RUNTIME (2026-08-10): the subagent runs the SAME
         // shared loop as the main agent — its own budget accounting
-        // (`profile.max_tool_rounds` — independent 120), its own journal
-        // events in the same hash chain (run terminal uniqueness stays with
-        // the parent), the retrieval task contract as IPG input. The lane
-        // feeding (orientation) is wired in M5; the session identity above
-        // still derives from the session state.
+        // (`profile.max_tool_rounds` — 独立上限，0k 第二批起按委托契约档位
+        // 默认 30/60/90 轮，可经 ORZ_RETRIEVAL_MAX_TOOL_ROUNDS 覆盖；TER
+        // §14.55 后与主车道取 min 时主车道 0=unlimited 不再截断检索档位),
+        // its own journal events in the same hash chain (run terminal
+        // uniqueness stays with the parent), the retrieval task contract as
+        // IPG input. The lane feeding (orientation) is wired in M5; the
+        // session identity above still derives from the session state.
         // F5 (user adjudication 2026-08-10): the activation's consumed
         // rounds carry into this dispatch — a `continue` re-entry is the
-        // same retrieval session, so the 120-round budget accumulates.
+        // same retrieval session, so the subagent budget accumulates.
         // RETRIEVAL-ORCHESTRATION-MECHANICAL 0k 第二批 (2026-08-30)：
         // 委托契约复杂度分档——预算解析顺序：显式 env（含 0=禁用） >
         // 测试/配置 seam（controller 字段） > 档位默认（240/600/900s、
