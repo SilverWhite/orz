@@ -238,6 +238,63 @@ pub(crate) fn retrieval_result_channel_from_env() -> RetrievalResultChannel {
     }
 }
 
+/// ACAF fail-closed default resolver (2026-09-04 downsink / Slice 2 fail-closed):
+/// fail-closed is the DEFAULT — unset means enforced. Explicit
+/// `ORZ_ACAF_FAIL_CLOSED=0|false|no|off` opts back into shadow mode;
+/// `1|true|yes|on` confirms enforcement. Any other value is treated as
+/// enforce (fail-closed) with a warning (fail-closed posture preserved).
+pub fn default_acaf_fail_closed() -> bool {
+    match std::env::var("ORZ_ACAF_FAIL_CLOSED") {
+        Ok(v)
+            if matches!(
+                v.trim().to_ascii_lowercase().as_str(),
+                "0" | "false" | "no" | "off"
+            ) =>
+        {
+            false
+        }
+        Ok(v)
+            if matches!(
+                v.trim().to_ascii_lowercase().as_str(),
+                "1" | "true" | "yes" | "on"
+            ) =>
+        {
+            true
+        }
+        Ok(v) => {
+            tracing::warn!(
+                "ORZ_ACAF_FAIL_CLOSED={v:?} is not a valid value \
+                 (1/true/yes/on enforce, 0/false/no/off shadow; unset = enforce); \
+                 falling back to fail-closed enforce"
+            );
+            true
+        }
+        Err(_) => true,
+    }
+}
+
+#[cfg(not(test))]
+pub(crate) fn initial_acaf_fail_closed() -> bool {
+    default_acaf_fail_closed()
+}
+
+#[cfg(test)]
+pub(crate) fn initial_acaf_fail_closed() -> bool {
+    // 单元测试中，未显式配置 signer 的逻辑测试默认保持 shadow，
+    // 专门测试 ACAF 的单测通过 .with_acaf_fail_closed(true) 显式开启强校验。
+    match std::env::var("ORZ_ACAF_FAIL_CLOSED") {
+        Ok(v)
+            if matches!(
+                v.trim().to_ascii_lowercase().as_str(),
+                "1" | "true" | "yes" | "on"
+            ) =>
+        {
+            true
+        }
+        _ => false,
+    }
+}
+
 /// Streaming pacing (Phase 3 slice #6): a round's `model_output` (journaled,
 /// fsync-acked) must be projected by a live client before the next round's
 /// first text delta arrives (deltas travel in-memory at arrival rate). The
@@ -830,7 +887,7 @@ impl AgentLoopController {
                 orz_assurance::candidate_prefilter::CandidatePrefilterConfig::from_env_or_default(),
             restored_activations: Mutex::new(Vec::new()),
             acaf: None,
-            acaf_fail_closed: false,
+            acaf_fail_closed: initial_acaf_fail_closed(),
             goal_context: Mutex::new(GoalContext::default()),
             policy_revision: std::sync::atomic::AtomicU64::new(0),
             probe_state: Mutex::new(crate::tool_probe::MinimalProbeMap::default()),
@@ -1449,7 +1506,7 @@ impl AgentLoopController {
                 orz_assurance::candidate_prefilter::CandidatePrefilterConfig::from_env_or_default(),
             restored_activations: Mutex::new(Vec::new()),
             acaf: None,
-            acaf_fail_closed: false,
+            acaf_fail_closed: initial_acaf_fail_closed(),
             goal_context: Mutex::new(GoalContext::default()),
             policy_revision: std::sync::atomic::AtomicU64::new(0),
             probe_state: Mutex::new(crate::tool_probe::MinimalProbeMap::default()),

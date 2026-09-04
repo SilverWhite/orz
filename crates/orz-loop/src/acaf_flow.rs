@@ -59,8 +59,21 @@ impl AgentLoopController {
     ) -> Result<TicketGate, AgentLoopError> {
         let Some(acaf) = &self.acaf else {
             // D-15 fail-closed: an unconfigured fabric is caught at run
-            // start (startup fail-fast). This defensive branch keeps the
-            // zero-behaviour-change guarantee for unconfigured shadow runs.
+            // start (startup fail-fast). If ticket_flow is reached with fail-closed
+            // enabled but without a signer, refuse immediately.
+            if self.acaf_fail_closed {
+                let now = chrono::Utc::now();
+                return self
+                    .fail_closed_refusal(
+                        writer,
+                        kind,
+                        orz_assurance::acaf::RejectCode::SignerUnreachable,
+                        "ACAF fail-closed is enabled but no signer client is configured"
+                            .to_string(),
+                        &now,
+                    )
+                    .await;
+            }
             return Ok(TicketGate::Proceed);
         };
         let Some((goal_digest, goal_version)) = self.goal_binding_snapshot() else {
@@ -272,6 +285,19 @@ impl AgentLoopController {
         // fabric would otherwise journal shadow rejections for invalid
         // URLs/commands.
         if self.acaf.is_none() {
+            if self.acaf_fail_closed {
+                let now = chrono::Utc::now();
+                return self
+                    .fail_closed_refusal(
+                        writer,
+                        kind,
+                        orz_assurance::acaf::RejectCode::SignerUnreachable,
+                        "ACAF fail-closed is enabled but no signer client is configured"
+                            .to_string(),
+                        &now,
+                    )
+                    .await;
+            }
             return Ok(TicketGate::Proceed);
         }
         // Slice 2 full phase (2026-08-12): the network and command branches

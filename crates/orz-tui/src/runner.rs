@@ -90,7 +90,7 @@ impl Default for TuiConfig {
             cwd: std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
             replay: None,
             acaf: None,
-            acaf_fail_closed: false,
+            acaf_fail_closed: orz_loop::controller::default_acaf_fail_closed(),
         }
     }
 }

@@ -549,6 +549,16 @@ impl xai_tool_runtime::Tool for ListDirTool {
         let path = resolve_model_path(&cwd, display_cwd.as_deref(), &input.target_directory);
         let display_base = display_cwd_or_cwd(&cwd, display_cwd.as_deref());
         let display_path = compute_display_path(&display_base, &input.target_directory);
+
+        // 工作区词法沙箱防护（P0-GOV Task C，2026-09-04）：目标目录若经 `..`
+        // 相对越级跳出 cwd 或为绝对路径且指向工作区外，直接拒绝；技能文档豁免
+        // 与符号链接边界同 read_file（resources::is_path_within_workspace）。
+        if !crate::types::resources::is_path_within_workspace(&cwd, &path, None) {
+            return Ok(ListDirOutput::PermissionDenied(format!(
+                "Permission denied: directory escapes workspace sandbox: {}",
+                display_path.display()
+            )));
+        }
         let meta = tokio::fs::metadata(&path).await;
         let is_dir = meta.as_ref().is_ok_and(|m| m.is_dir());
         if !is_dir {
@@ -1634,6 +1644,64 @@ mod tests {
                 assert_eq!(c.truncated, None);
             }
             other => panic!("unexpected error: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn list_dir_rejects_path_escaping_workspace() {
+        let tmp = TempDir::new().unwrap();
+        let sub = tmp.path().join("workspace");
+        std::fs::create_dir_all(&sub).unwrap();
+        let outside = tmp.path().join("outside_dir");
+        std::fs::create_dir_all(&outside).unwrap();
+
+        let mut resources = Resources::new();
+        resources.insert(Cwd(sub));
+        let tool = ListDirTool;
+        let ctx = test_ctx(resources.into_shared());
+        let output = xai_tool_runtime::Tool::run(
+            &tool,
+            ctx,
+            ListDirInput {
+                target_directory: "../outside_dir".to_string(),
+            },
+        )
+        .await
+        .unwrap();
+        match output {
+            ListDirOutput::PermissionDenied(msg) => {
+                assert!(msg.contains("escapes workspace sandbox"), "msg: {msg}");
+            }
+            other => panic!("Expected PermissionDenied, got {:?}", other),
+        }
+    }
+
+    #[tokio::test]
+    async fn list_dir_rejects_absolute_path_outside_workspace() {
+        let tmp = TempDir::new().unwrap();
+        let sub = tmp.path().join("workspace");
+        std::fs::create_dir_all(&sub).unwrap();
+        let outside = tmp.path().join("outside_dir");
+        std::fs::create_dir_all(&outside).unwrap();
+
+        let mut resources = Resources::new();
+        resources.insert(Cwd(sub));
+        let tool = ListDirTool;
+        let ctx = test_ctx(resources.into_shared());
+        let output = xai_tool_runtime::Tool::run(
+            &tool,
+            ctx,
+            ListDirInput {
+                target_directory: outside.to_string_lossy().into_owned(),
+            },
+        )
+        .await
+        .unwrap();
+        match output {
+            ListDirOutput::PermissionDenied(msg) => {
+                assert!(msg.contains("escapes workspace sandbox"), "msg: {msg}");
+            }
+            other => panic!("Expected PermissionDenied, got {:?}", other),
         }
     }
 }

@@ -337,35 +337,9 @@ fn stored_read_offset(offset: Option<i64>) -> Option<usize> {
     offset.filter(|&o| o >= 0).map(|o| o as usize)
 }
 /// Files read in full (no line/token cap): any file named exactly `SKILL.md`,
-/// plus any Markdown file with a `skills` path component so docs a `SKILL.md`
-/// references are never silently truncated. `.`/`..` are folded lexically
-/// (symlinks are not resolved). Intentionally broader than
-/// skill discovery's dir check — matches any `skills` segment
-/// (plugin/bundled/user roots), and matches it exactly (not case-folded) so
-/// near-misses like `skills-cursor` do not qualify.
+#[inline]
 fn is_skill_markdown(path: &std::path::Path) -> bool {
-    if path.file_name().is_some_and(|n| n == "SKILL.md") {
-        return true;
-    }
-    let is_md = path
-        .extension()
-        .and_then(|e| e.to_str())
-        .is_some_and(|ext| ext.eq_ignore_ascii_case("md"));
-    if !is_md {
-        return false;
-    }
-    use std::path::Component;
-    let mut stack: Vec<&std::ffi::OsStr> = Vec::new();
-    for comp in path.components() {
-        match comp {
-            Component::CurDir | Component::RootDir | Component::Prefix(_) => {}
-            Component::ParentDir => {
-                stack.pop();
-            }
-            Component::Normal(c) => stack.push(c),
-        }
-    }
-    stack.into_iter().any(|c| c == "skills")
+    crate::types::resources::is_skill_markdown(path)
 }
 /// Result of extracting file content lines with both default and concise formats
 pub struct ExtractedContent {
@@ -541,11 +515,26 @@ pub(crate) async fn run_read_file(
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
             match crate::util::try_resolve_unicode_filename(&joined_path).await {
                 Some(m) => (m.resolved_path, Some(m.note)),
-                None => (joined_path, None),
+                None => (joined_path.clone(), None),
             }
         }
-        Err(_) => (joined_path, None),
+        Err(_) => (joined_path.clone(), None),
     };
+
+    // 工作区词法沙箱防护（P0-GOV Task C，2026-09-04）：模型提供的路径若经
+    // `..` 相对越级跳出 cwd，或为绝对路径且指向工作区外，均拒绝读取；技能
+    // 文档（SKILL.md / skills 组件）为只读知识注入豁免。沙箱边界按输入路径
+    // 的词法解析判定：工作区内既有符号链接/重解析点（如 .gsa 内部面）的目标
+    // 不额外展开，予以信任放行（边界见 resources::is_path_within_workspace
+    // 与 P0-GOV Task C 审计）。
+    if !crate::types::resources::is_path_within_workspace(&cwd, &joined_path, Some(&path)) {
+        let display_dcwd = display_cwd_or_cwd(&cwd, display_cwd.as_deref());
+        let display_path = display_dcwd.join(&input.path);
+        return Ok(ReadFileOutput::PermissionDenied(format!(
+            "Permission denied: path escapes workspace sandbox: {}",
+            display_path.display()
+        )));
+    }
     let version = ReadFileVersion::from_contract(contract_version);
     let is_legacy = version.is_legacy();
     let skip_gitignore = is_legacy && versions::legacy_0_4_10::allows_gitignored_reads();
@@ -3244,5 +3233,91 @@ pub fn verify(req: &HttpRequest) -> Result<Claims, Error> {
         assert_eq!(stored_read_offset(Some(0)), Some(0));
         assert_eq!(stored_read_offset(Some(4)), Some(4));
         assert_eq!(stored_read_offset(None), None);
+    }
+
+    #[tokio::test]
+    async fn read_file_rejects_path_escaping_workspace() {
+        let tmp = TempDir::new().unwrap();
+        let sub = tmp.path().join("workspace");
+        std::fs::create_dir_all(&sub).unwrap();
+        let outside_file = tmp.path().join("secret.txt");
+        std::fs::write(&outside_file, "sensitive").unwrap();
+
+        let tool = ReadFileTool;
+        let resources = test_resources(&sub);
+        let input = ReadFileInput {
+            path: "../secret.txt".to_string(),
+            offset: None,
+            limit: None,
+            pages: None,
+            format: None,
+        };
+        let result = xai_tool_runtime::Tool::run(&tool, test_ctx(resources.into_shared()), input)
+            .await
+            .unwrap();
+        match result {
+            ReadFileOutput::PermissionDenied(msg) => {
+                assert!(msg.contains("escapes workspace sandbox"), "msg: {msg}");
+            }
+            other => panic!("Expected PermissionDenied, got {:?}", other),
+        }
+    }
+
+    #[tokio::test]
+    async fn read_file_rejects_absolute_path_outside_workspace() {
+        let tmp = TempDir::new().unwrap();
+        let sub = tmp.path().join("workspace");
+        std::fs::create_dir_all(&sub).unwrap();
+        let outside_file = tmp.path().join("secret.txt");
+        std::fs::write(&outside_file, "sensitive").unwrap();
+
+        let tool = ReadFileTool;
+        let resources = test_resources(&sub);
+        let input = ReadFileInput {
+            path: outside_file.to_string_lossy().into_owned(),
+            offset: None,
+            limit: None,
+            pages: None,
+            format: None,
+        };
+        let result = xai_tool_runtime::Tool::run(&tool, test_ctx(resources.into_shared()), input)
+            .await
+            .unwrap();
+        match result {
+            ReadFileOutput::PermissionDenied(msg) => {
+                assert!(msg.contains("escapes workspace sandbox"), "msg: {msg}");
+            }
+            other => panic!("Expected PermissionDenied, got {:?}", other),
+        }
+    }
+
+    #[tokio::test]
+    async fn read_file_allows_skills_outside_workspace() {
+        let tmp = TempDir::new().unwrap();
+        let sub = tmp.path().join("workspace");
+        std::fs::create_dir_all(&sub).unwrap();
+        let skills_dir = tmp.path().join("skills");
+        std::fs::create_dir_all(&skills_dir).unwrap();
+        let skill_file = skills_dir.join("SKILL.md");
+        std::fs::write(&skill_file, "skill documentation").unwrap();
+
+        let tool = ReadFileTool;
+        let resources = test_resources(&sub);
+        let input = ReadFileInput {
+            path: "../skills/SKILL.md".to_string(),
+            offset: None,
+            limit: None,
+            pages: None,
+            format: None,
+        };
+        let result = xai_tool_runtime::Tool::run(&tool, test_ctx(resources.into_shared()), input)
+            .await
+            .unwrap();
+        match result {
+            ReadFileOutput::FileContent(content) => {
+                assert!(content.content.contains("skill documentation"));
+            }
+            other => panic!("Expected FileContent for skill markdown, got {:?}", other),
+        }
     }
 }

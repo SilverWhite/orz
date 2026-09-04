@@ -833,6 +833,29 @@ async fn prepare_grep(
     let display_base = display_cwd_or_cwd(&cwd, display_cwd.as_deref());
     let cwd_display = display_base.display().to_string();
 
+    // 工作区词法沙箱防护（P0-GOV Task C，2026-09-04）：模型指定的搜索路径
+    // 若经 `..` 相对越级跳出 cwd 或为绝对路径且指向工作区外，直接拒绝执行；
+    // 技能文档豁免与符号链接边界同 read_file（resources::is_path_within_workspace）。
+    if !crate::types::resources::is_path_within_workspace(&cwd, &workdir, None) {
+        let display_path = if let Ok(suffix) = workdir.strip_prefix(&cwd) {
+            display_base.join(suffix)
+        } else {
+            workdir.clone()
+        };
+        let err_msg = format!(
+            "Permission denied: search path escapes workspace sandbox: {}",
+            display_path.display()
+        );
+        return Ok(GrepStep::Early(GrepSearchOutput {
+            stdout: Vec::new(),
+            stderr: err_msg.into_bytes(),
+            exit_code: 1,
+            match_count: 0,
+            file_matches: Vec::new(),
+            files_searched: None,
+        }));
+    }
+
     // Pre-check: if the search path doesn't exist, return enriched hints
     // before rg runs. We intentionally pre-check with metadata() rather
     // than parsing rg's stderr after the fact because rg lumps all errors
@@ -2934,5 +2957,55 @@ mod tests {
             deltas, body_from_card,
             "accumulated deltas must equal the terminal card body even when truncated"
         );
+    }
+
+    #[tokio::test]
+    async fn grep_rejects_path_escaping_workspace() {
+        let tmp = TempDir::new().unwrap();
+        let sub = tmp.path().join("workspace");
+        std::fs::create_dir_all(&sub).unwrap();
+        let outside = tmp.path().join("outside_dir");
+        std::fs::create_dir_all(&outside).unwrap();
+        std::fs::write(outside.join("target.txt"), "sensitive_data").unwrap();
+
+        let mut resources = Resources::new();
+        resources.insert(Cwd(sub));
+
+        let mut input = make_grep_input("sensitive_data");
+        input.path = Some("../outside_dir".to_string());
+
+        let tool = GrepTool;
+        let output = xai_tool_runtime::Tool::run(&tool, test_ctx(resources.into_shared()), input)
+            .await
+            .unwrap();
+
+        assert_eq!(output.exit_code, 1);
+        let err = String::from_utf8_lossy(&output.stderr);
+        assert!(err.contains("escapes workspace sandbox"), "stderr: {err}");
+    }
+
+    #[tokio::test]
+    async fn grep_rejects_absolute_path_outside_workspace() {
+        let tmp = TempDir::new().unwrap();
+        let sub = tmp.path().join("workspace");
+        std::fs::create_dir_all(&sub).unwrap();
+        let outside = tmp.path().join("outside_dir");
+        std::fs::create_dir_all(&outside).unwrap();
+        std::fs::write(outside.join("target.txt"), "sensitive_data").unwrap();
+
+        let mut resources = Resources::new();
+        resources.insert(Cwd(sub));
+
+        let mut input = make_grep_input("sensitive_data");
+        input.path = Some(outside.to_string_lossy().into_owned());
+
+        let tool = GrepTool;
+        let output = xai_tool_runtime::Tool::run(&tool, test_ctx(resources.into_shared()), input)
+            .await
+            .unwrap();
+
+        assert_eq!(output.exit_code, 1);
+        let err = String::from_utf8_lossy(&output.stderr);
+        assert!(err.contains("escapes workspace sandbox"), "stderr: {err}");
     }
 }

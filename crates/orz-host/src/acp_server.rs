@@ -980,7 +980,7 @@ impl AcpServer {
             gateway: Arc::new(Mutex::new(None)),
             model_gateway,
             acaf: None,
-            acaf_fail_closed: false,
+            acaf_fail_closed: orz_loop::controller::default_acaf_fail_closed(),
             runs: Arc::new(Mutex::new(HashMap::new())),
             pending_cancels: Arc::new(Mutex::new(HashMap::new())),
             pending_archives: Arc::new(Mutex::new(HashMap::new())),

@@ -492,6 +492,126 @@ pub fn resolve_model_path(
 pub fn display_cwd_or_cwd(cwd: &std::path::Path, display_cwd: Option<&std::path::Path>) -> PathBuf {
     display_cwd.unwrap_or(cwd).to_path_buf()
 }
+
+/// 检查给定的路径是否为技能文档（如 SKILL.md 或包含 `skills` 目录组件的
+/// markdown 文件）。
+///
+/// 作为只读知识注入，技能文档允许跨目录豁免读取（read_file/grep/list_dir 的
+/// 工作区词法沙箱均放行）。目录组件按 ASCII 大小写不敏感匹配（Windows/macOS
+/// 文件系统本身大小写不敏感，避免 `SKILLS`/`Skills` 这类真实目录被误拦）；
+/// `skills-cursor` 这类“包含 skills 前缀但非独立组件”的目录不命中。
+pub fn is_skill_markdown(path: &std::path::Path) -> bool {
+    if path.file_name().is_some_and(|n| n == "SKILL.md") {
+        return true;
+    }
+    let is_md = path
+        .extension()
+        .and_then(|e| e.to_str())
+        .is_some_and(|ext| ext.eq_ignore_ascii_case("md"));
+    if !is_md {
+        return false;
+    }
+    use std::path::Component;
+    let mut stack: Vec<&std::ffi::OsStr> = Vec::new();
+    for comp in path.components() {
+        match comp {
+            Component::CurDir | Component::RootDir | Component::Prefix(_) => {}
+            Component::ParentDir => {
+                stack.pop();
+            }
+            Component::Normal(c) => stack.push(c),
+        }
+    }
+    stack
+        .iter()
+        .any(|comp| comp.to_string_lossy().eq_ignore_ascii_case("skills"))
+}
+
+/// 判定模型提供的路径是否位于工作区（cwd）词法沙箱内部（或属于合法的外部
+/// 技能文档放行）。
+///
+/// P0-GOV Task C（2026-09-04）沙箱语义：按模型输入路径的词法解析做越界硬
+/// 拦截——`../` 相对越级跳出 cwd、或绝对路径直接指向 cwd 之外的目标均返回
+/// `false`，由调用工具返回 PermissionDenied。边界登记：
+/// - 技能文档豁免：路径含 `skills` 组件或文件名为 `SKILL.md` 时放行（只读
+///   知识注入通道，见 [`is_skill_markdown`]）。
+/// - 工作区内既有符号链接/重解析点（如 `.gsa` 内部面）的目标不额外展开解析；
+///   只要模型路径在词法上位于 cwd 内即信任放行。模型输入本身无法借 `..` 或
+///   绝对路径到达外部（该语义由 read_file/grep/list_dir 的调用测试锁定）。
+/// - 路径尚不存在（读前先写、目录未创建等）时回退为词法归一化判定，避免把
+///   工作区内待创建路径误拦。
+pub fn is_path_within_workspace(
+    cwd: &std::path::Path,
+    joined_path: &std::path::Path,
+    resolved_path: Option<&std::path::Path>,
+) -> bool {
+    if is_skill_markdown(joined_path) {
+        return true;
+    }
+    if let Some(res) = resolved_path {
+        if is_skill_markdown(res) {
+            return true;
+        }
+    }
+
+    let canonical_cwd = dunce::canonicalize(cwd).unwrap_or_else(|_| cwd.to_path_buf());
+    let normalized_cwd = orz_paths::normalize_lexically(&canonical_cwd);
+    let cwd_norm = orz_paths::normalize_lexically(cwd);
+
+    let normalized_joined = orz_paths::normalize_lexically(joined_path);
+
+    let path_is_under = |p: &std::path::Path, base: &std::path::Path| -> bool {
+        if p.starts_with(base) {
+            return true;
+        }
+        #[cfg(windows)]
+        {
+            let p_str = p.to_string_lossy();
+            let base_str = base.to_string_lossy();
+            if p_str.len() >= base_str.len() {
+                let prefix = &p_str[..base_str.len()];
+                if prefix.eq_ignore_ascii_case(&base_str) {
+                    if p_str.len() == base_str.len() {
+                        return true;
+                    }
+                    let next_char = p_str.as_bytes()[base_str.len()];
+                    if next_char == b'/' || next_char == b'\\' {
+                        return true;
+                    }
+                }
+            }
+        }
+        false
+    };
+
+    let joined_under_cwd = path_is_under(joined_path, cwd)
+        && (path_is_under(&normalized_joined, &cwd_norm)
+            || path_is_under(&normalized_joined, &normalized_cwd));
+
+    if joined_under_cwd {
+        return true;
+    }
+
+    if let Some(target) = resolved_path {
+        let canonical_target = dunce::canonicalize(target).unwrap_or_else(|_| target.to_path_buf());
+        let normalized_target = orz_paths::normalize_lexically(&canonical_target);
+        let target_norm = orz_paths::normalize_lexically(target);
+
+        if path_is_under(target, &canonical_cwd)
+            || path_is_under(target, cwd)
+            || path_is_under(&canonical_target, &canonical_cwd)
+            || path_is_under(&canonical_target, cwd)
+            || path_is_under(&normalized_target, &normalized_cwd)
+            || path_is_under(&normalized_target, &cwd_norm)
+            || path_is_under(&target_norm, &normalized_cwd)
+            || path_is_under(&target_norm, &cwd_norm)
+        {
+            return true;
+        }
+    }
+
+    false
+}
 /// Newtype wrapper for `Arc<dyn xai_tool_runtime::ToolDispatch>` so it can
 /// be stored in `ToolCallContext::extensions`. Used by `use_tool` and the
 /// external MCP-call tool, which dispatch to target tools without going
@@ -911,6 +1031,7 @@ impl std::fmt::Debug for McpResourceAccess {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tempfile::TempDir;
     #[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
     struct EditConfig {
         skip_read_before_edit: bool,
@@ -1602,5 +1723,80 @@ mod tests {
             result,
             std::path::PathBuf::from("/worktree/abc/path/with\"quote/file.rs"),
         );
+    }
+
+    #[test]
+    fn is_skill_markdown_matches_skills_component_case_insensitively() {
+        assert!(is_skill_markdown(std::path::Path::new("/a/SKILL.md")));
+        assert!(is_skill_markdown(std::path::Path::new(
+            "/a/skills/guide.md"
+        )));
+        assert!(is_skill_markdown(std::path::Path::new(
+            "/a/SKILLS/guide.MD"
+        )));
+        assert!(is_skill_markdown(std::path::Path::new(
+            "/a/Skills/guide.md"
+        )));
+        // 非独立组件（skills-cursor）与普通 md 不命中。
+        assert!(!is_skill_markdown(std::path::Path::new(
+            "/repo/skills-cursor/notes.md"
+        )));
+        assert!(!is_skill_markdown(std::path::Path::new("/repo/notes.md")));
+    }
+
+    #[test]
+    fn path_within_workspace_rejects_absolute_and_parent_escapes() {
+        let tmp = TempDir::new().unwrap();
+        let ws = tmp.path().join("workspace");
+        std::fs::create_dir_all(&ws).unwrap();
+        let inside = ws.join("src/main.rs");
+        std::fs::create_dir_all(inside.parent().unwrap()).unwrap();
+        std::fs::write(&inside, "x").unwrap();
+        let outside = tmp.path().join("secret.txt");
+        std::fs::write(&outside, "sensitive").unwrap();
+
+        // 绝对路径指向工作区外：拒绝（含 None 与 Some(resolved) 两种调用面）。
+        assert!(!is_path_within_workspace(&ws, &outside, None));
+        assert!(!is_path_within_workspace(&ws, &outside, Some(&outside)));
+        // `../` 词法越级但目标实际位于工作区外：拒绝。
+        let escape = ws.join("../secret.txt");
+        assert!(!is_path_within_workspace(&ws, &escape, None));
+        // 工作区内目标（含 `..` 折叠后仍落在工作区内的路径）：放行。
+        assert!(is_path_within_workspace(&ws, &inside, None));
+        let inside_via_parent = ws.join("src/../src/main.rs");
+        assert!(is_path_within_workspace(
+            &ws,
+            &inside_via_parent,
+            Some(&inside)
+        ));
+    }
+
+    #[test]
+    fn path_within_workspace_keeps_lexical_boundary_for_in_workspace_joined_path() {
+        // 模型路径词法上位于 cwd 内时放行；其解析目标（如工作区内符号链接/重
+        // 解析点指向外部）不额外展开——沙箱边界按输入路径词法判定（P0-GOV
+        // Task C 登记边界）。
+        let tmp = TempDir::new().unwrap();
+        let ws = tmp.path().join("workspace");
+        std::fs::create_dir_all(&ws).unwrap();
+        let outside = tmp.path().join("secret.txt");
+        std::fs::write(&outside, "sensitive").unwrap();
+        let joined_inside = ws.join(".gsa/session/terminal/run.log");
+        assert!(is_path_within_workspace(
+            &ws,
+            &joined_inside,
+            Some(&outside)
+        ));
+    }
+
+    #[test]
+    fn path_within_workspace_skills_exemption_applies_outside_cwd() {
+        let tmp = TempDir::new().unwrap();
+        let ws = tmp.path().join("workspace");
+        std::fs::create_dir_all(&ws).unwrap();
+        let skills = tmp.path().join("skills/guide.md");
+        assert!(is_path_within_workspace(&ws, &skills, None));
+        let skill_file = tmp.path().join("bundled/SKILL.md");
+        assert!(is_path_within_workspace(&ws, &skill_file, None));
     }
 }
