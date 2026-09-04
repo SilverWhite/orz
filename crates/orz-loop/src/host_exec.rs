@@ -133,6 +133,53 @@ impl AgentLoopController {
         }
     }
 
+    /// TER 全面审查 P1-1 (2026-09-04)：idle-kill `tool_running` 事件生产者。
+    /// host 在工具执行 / run 收尾边界 drain `LoopHost::drain_terminal_idle_kills`；
+    /// loop 只对**本 run 内已记过 mid-run `tool_running`** 的 auto-bg 调用补记
+    /// `tool_running(status=idle_killed + reason)`（T0.2 §4 链规则：晚于该调用
+    /// 的 `running:true` `tool_completed`、每 call_id 至多一次、不引入第二个
+    /// `tool_completed`）。跨 run 复用 call_id 不会串链（按 run_id 过滤）。
+    pub(crate) async fn journal_pending_idle_kills(
+        &self,
+        host: &dyn LoopHost,
+        writer: &mut EventWriter<'_>,
+    ) -> Result<(), AgentLoopError> {
+        let run_id = writer.run_id().to_string();
+        let facts = host.drain_terminal_idle_kills().await;
+        if facts.is_empty() {
+            return Ok(());
+        }
+        let eligible = {
+            let guard = self.mid_run_call_ids.lock().unwrap();
+            facts
+                .into_iter()
+                .filter(|f| guard.get(&f.task_id).map(String::as_str) == Some(run_id.as_str()))
+                .collect::<Vec<_>>()
+        };
+        for fact in eligible {
+            let mut payload = serde_json::json!({
+                "tool": "run_terminal_cmd",
+                "call_id": fact.task_id,
+                "task_id": fact.task_id,
+                "total_bytes": fact.total_bytes,
+                "output_file": fact.output_file,
+                "wall_ms": fact.wall_ms,
+                "status": "idle_killed",
+                "reason": fact.reason,
+            });
+            if let Some(pid) = fact.pid {
+                payload["pid"] = serde_json::json!(pid);
+            }
+            writer.record(EventType::ToolRunning, payload).await?;
+            tracing::info!(
+                run_id,
+                task_id = %fact.task_id,
+                "journaled idle-killed tool_running lifecycle event"
+            );
+        }
+        Ok(())
+    }
+
     /// Run a host tool call through the permission and execution gates.
     /// (IP3a IPG evaluation is hoisted to the controller's tool phase — a
     /// block ends the whole phase without further model calls.)
@@ -2982,6 +3029,13 @@ impl AgentLoopController {
                         .record(EventType::ToolRunning, running_payload)
                         .await?;
                     completed_payload["running"] = serde_json::json!(true);
+                    // TER 全面审查 P1-1 (2026-09-04)：登记本 run 的 mid-run
+                    // 调用——后续 idle-kill 事件生产者按 (task_id, run_id)
+                    // 匹配，只对“同 run 先 auto-bg”的任务补生命周期事件。
+                    self.mid_run_call_ids
+                        .lock()
+                        .unwrap()
+                        .insert(mid.task_id.clone(), writer.run_id().to_string());
                 }
                 if !edits_payload.is_empty() {
                     completed_payload["edits"] = serde_json::Value::Array(edits_payload);
@@ -3039,6 +3093,11 @@ impl AgentLoopController {
                 writer
                     .record(EventType::ToolCompleted, completed_payload)
                     .await?;
+                // TER 全面审查 P1-1 (2026-09-04)：每个工具执行边界在本调用
+                // 完成事件之后 drain 一次 idle-kill 生命周期事件——相对原
+                // auto-bg 调用的 running:true 完成事件恒为后续（链规则），
+                // 且本调用自身的完成先落账，避免自身事件序错位。
+                self.journal_pending_idle_kills(host, writer).await?;
                 // 2026-08-08 blackboard partition: fold the executed call
                 // into the tool-action section (category from the dispatcher).
                 // P2-14 S1：共享折叠分区按执行窗主轮章盖章。
@@ -3148,6 +3207,9 @@ impl AgentLoopController {
                 );
                 stamp_direct(&mut err_payload);
                 writer.record(EventType::ToolCompleted, err_payload).await?;
+                // TER 全面审查 P1-1：执行出错边界同样 drain（错误也是工具
+                // 边界；后台 idle-kill 生命周期事件不应因本调用失败而丢）。
+                self.journal_pending_idle_kills(host, writer).await?;
                 // P0-A step 5 (design §5): 调用即探针 — a real work-tool call
                 // failure (ToolCompleted status=error) corrects the minimal
                 // previous-round map; the next probe compares against it.
@@ -4486,6 +4548,175 @@ mod tests {
         assert!(replay.valid, "journal errors: {:?}", replay.errors);
         assert_eq!(replay.terminal_event.as_deref(), Some("run_finished"));
 
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// TER 全面审查 P1-1 (2026-09-04)：idle-kill `tool_running` 事件生产者
+    /// 闭环——先 auto-bg（mid-run `tool_running` + `running:true`
+    /// `tool_completed`），后续工具边界 host drain 返回同一任务 idle-kill
+    /// 事实时，loop 补记 `tool_running(status=idle_killed + reason)`；事件
+    /// 晚于原调用完成事件、每 call_id 至多一次。
+    #[tokio::test]
+    async fn idle_kill_after_mid_run_journals_lifecycle_tool_running() {
+        use std::sync::atomic::{AtomicU64, Ordering};
+
+        struct IdleKillHost {
+            journal: JournalRecorder,
+            calls: AtomicU64,
+            idle_facts: Mutex<Vec<crate::host::TerminalIdleKillFact>>,
+        }
+        #[async_trait::async_trait]
+        impl LoopHost for IdleKillHost {
+            fn journal(&self) -> &JournalRecorder {
+                &self.journal
+            }
+            fn tools_registry(&self) -> &dyn ToolRegistry {
+                &EmptyRegistry
+            }
+            async fn call_tool(
+                &self,
+                name: &str,
+                _arguments: serde_json::Value,
+                _call_id: &str,
+            ) -> Result<ToolResult, ToolError> {
+                let n = self.calls.fetch_add(1, Ordering::SeqCst);
+                if n == 0 && name == "run_terminal_cmd" {
+                    Ok(ToolResult {
+                        output: "[Command still running after 180s] PID: 1234 ...".to_string(),
+                        exit_code: None,
+                        output_encoding: None,
+                        structured: None,
+                        mid_run: Some(crate::host::ToolMidRunStatus {
+                            task_id: "call-t1".to_string(),
+                            pid: Some(1234),
+                            output_file: "/tmp/terminal/call-t1.log".to_string(),
+                            total_bytes: Some(8192),
+                        }),
+                        ..Default::default()
+                    })
+                } else {
+                    Ok(ToolResult {
+                        output: "read ok".to_string(),
+                        exit_code: Some(0),
+                        output_encoding: None,
+                        structured: None,
+                        ..Default::default()
+                    })
+                }
+            }
+            async fn request_permission(
+                &self,
+                _risk: RiskClass,
+                _tool: &str,
+                _arguments: &serde_json::Value,
+            ) -> Result<PermitDecision, PermitError> {
+                Ok(PermitDecision::AllowOnce)
+            }
+            async fn drain_terminal_idle_kills(&self) -> Vec<crate::host::TerminalIdleKillFact> {
+                std::mem::take(&mut *self.idle_facts.lock().unwrap())
+            }
+        }
+        let dir = test_dir();
+        let journal = JournalRecorder::new(dir.clone());
+        let host = IdleKillHost {
+            journal,
+            calls: AtomicU64::new(0),
+            idle_facts: Mutex::new(vec![crate::host::TerminalIdleKillFact {
+                task_id: "call-t1".to_string(),
+                pid: Some(1234),
+                total_bytes: 8192,
+                output_file: "/tmp/terminal/call-t1.log".to_string(),
+                wall_ms: 185_000,
+                reason: "no output growth or CPU activity for 5s".to_string(),
+            }]),
+        };
+        let fake = Arc::new(FakeProvider::new(vec![
+            ScriptedResponse::tool_calls(vec![ToolCall {
+                name: "run_terminal_cmd".to_string(),
+                arguments: serde_json::json!({ "command": "sleep 300" }),
+                call_id: "call-t1".to_string(),
+            }]),
+            ScriptedResponse::text("继续"),
+            ScriptedResponse::tool_calls(vec![ToolCall {
+                name: "read_file".to_string(),
+                arguments: serde_json::json!({ "path": "a.txt" }),
+                call_id: "call-t2".to_string(),
+            }]),
+            ScriptedResponse::text("完成"),
+            ScriptedResponse::text("完成"),
+        ]));
+        let controller = AgentLoopController::with_gateway(fake);
+        controller
+            .run_turn(
+                &host,
+                "测试 idle-kill 生命周期事件",
+                "RUN-IDLEKILL",
+                MANIFEST,
+                0,
+                None,
+                None,
+                None,
+            )
+            .await
+            .expect("run succeeds");
+
+        let events = events(&dir);
+        let running: Vec<(usize, serde_json::Value)> = events
+            .iter()
+            .enumerate()
+            .filter(|(_, e)| e.event_type == EventType::ToolRunning)
+            .map(|(i, e)| (i, e.payload.clone()))
+            .collect();
+        assert_eq!(running.len(), 2, "mid-run + idle-kill: {running:?}");
+        let _mid = running
+            .iter()
+            .find(|(_, p)| p.get("status").is_none())
+            .expect("mid-run tool_running");
+        let idle = running
+            .iter()
+            .find(|(_, p)| p.get("status").and_then(|s| s.as_str()) == Some("idle_killed"))
+            .expect("idle-kill tool_running");
+        assert_eq!(idle.1["tool"], "run_terminal_cmd");
+        assert_eq!(idle.1["call_id"], "call-t1");
+        assert_eq!(idle.1["task_id"], "call-t1");
+        assert_eq!(idle.1["pid"], serde_json::json!(1234));
+        assert_eq!(idle.1["total_bytes"], serde_json::json!(8192));
+        assert_eq!(idle.1["output_file"], "/tmp/terminal/call-t1.log");
+        assert_eq!(idle.1["wall_ms"], serde_json::json!(185_000u64));
+        assert_eq!(idle.1["reason"], "no output growth or CPU activity for 5s");
+
+        let completed: Vec<(usize, serde_json::Value)> = events
+            .iter()
+            .enumerate()
+            .filter(|(_, e)| e.event_type == EventType::ToolCompleted)
+            .map(|(i, e)| (i, e.payload.clone()))
+            .collect();
+        assert_eq!(
+            completed.len(),
+            2,
+            "auto-bg call + follow-up call: {completed:?}"
+        );
+        let bg_completed = completed
+            .iter()
+            .find(|(_, p)| p["call_id"] == "call-t1")
+            .expect("auto-bg completed");
+        assert_eq!(bg_completed.1["running"], serde_json::json!(true));
+        assert!(
+            idle.0 > bg_completed.0,
+            "idle-kill event must post-date the call's running:true completion \
+             (idle idx {} vs completed idx {})",
+            idle.0,
+            bg_completed.0
+        );
+
+        // 同一任务只补记一次：再次 drain（空）+ 下一工具边界不产生重复事件。
+        let replay = orz_assurance::replay_journal(
+            &dir.join("events.jsonl"),
+            Some("RUN-IDLEKILL"),
+            None,
+            true,
+        );
+        assert!(replay.valid, "journal errors: {:?}", replay.errors);
         let _ = std::fs::remove_dir_all(&dir);
     }
 

@@ -121,6 +121,10 @@ pub fn read_file_coarse_gate_from_config(config: &toml::Value) -> Option<usize> 
 ///   （缺省经 serde 解析即 true，`is_background` 不出现在模型面 schema）；
 ///   另注入 `allow_background_operator=false` 封掉 `&`，保持模型侧
 ///   「一次调用 = 一个结果」，显式后台化不开放。
+/// - TER 全面审查 S6（2026-09-04）边界登记：模型面封闭 = orz-host 装配
+///   默认（此处显式注入 false 保证）；codegen BashParams 库层默认保留
+///   兼容开放（`allow_background_operator` 默认 true，纯 struct 直用仍可
+///   显式后台），该边界随 ADR §14.53 转正一并裁定。
 /// 外层 ORZ_TOOL_TIMEOUT_SECS=900 维持全局兜底（终端命令实际到不了外层值）。
 pub(crate) fn run_terminal_cmd_tool_params() -> Option<serde_json::Map<String, serde_json::Value>> {
     Some(serde_json::Map::from_iter([

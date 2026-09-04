@@ -1025,6 +1025,14 @@ fn load_fake_scenario(path: &str) -> Result<Vec<ScriptedResponse>, String> {
         let obj = entry
             .as_object()
             .ok_or_else(|| format!("ORZ_FAKE_SCENARIO entry {i} must be an object"))?;
+        // TER 全面审查 M2W-4 (2026-09-04)：text 与 tool_calls 并存是形状
+        // 歧义——静默取 text 会让场景作者误以为 tool_calls 生效；显式 Err
+        // (fail-closed)。
+        if obj.contains_key("text") && obj.contains_key("tool_calls") {
+            return Err(format!(
+                "ORZ_FAKE_SCENARIO entry {i} must not mix text and tool_calls"
+            ));
+        }
         if let Some(text_value) = obj.get("text") {
             let text = text_value
                 .as_str()
@@ -1036,6 +1044,12 @@ fn load_fake_scenario(path: &str) -> Result<Vec<ScriptedResponse>, String> {
             let calls = calls_value.as_array().ok_or_else(|| {
                 format!("ORZ_FAKE_SCENARIO entry {i} tool_calls must be an array")
             })?;
+            if calls.is_empty() {
+                // 空批会让 loop 空转一轮且无任何模型面进展——fail-closed。
+                return Err(format!(
+                    "ORZ_FAKE_SCENARIO entry {i} tool_calls must not be empty"
+                ));
+            }
             let mut tool_calls: Vec<ToolCall> = Vec::with_capacity(calls.len());
             for (j, call) in calls.iter().enumerate() {
                 let call_obj = call.as_object().ok_or_else(|| {
@@ -1049,16 +1063,27 @@ fn load_fake_scenario(path: &str) -> Result<Vec<ScriptedResponse>, String> {
                             "ORZ_FAKE_SCENARIO entry {i} tool_calls[{j}] name (string) required"
                         )
                     })?;
-                let arguments = call_obj
-                    .get("arguments")
-                    .cloned()
-                    .unwrap_or_else(|| serde_json::json!({}));
+                let arguments = match call_obj.get("arguments") {
+                    Some(v) if v.is_object() => v.clone(),
+                    Some(_) => {
+                        return Err(format!(
+                            "ORZ_FAKE_SCENARIO entry {i} tool_calls[{j}] arguments must be \
+                             an object when present"
+                        ));
+                    }
+                    None => serde_json::json!({}),
+                };
                 let default_call_id = format!("call-{i}-{j}");
-                let call_id = call_obj
-                    .get("call_id")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or(&default_call_id)
-                    .to_string();
+                let call_id = match call_obj.get("call_id") {
+                    Some(v) if v.is_string() => v.as_str().unwrap().to_string(),
+                    Some(_) => {
+                        return Err(format!(
+                            "ORZ_FAKE_SCENARIO entry {i} tool_calls[{j}] call_id must be \
+                             a string when present"
+                        ));
+                    }
+                    None => default_call_id,
+                };
                 tool_calls.push(ToolCall {
                     name: name.to_string(),
                     arguments,
@@ -1420,6 +1445,43 @@ mod tests {
         let empty = dir.join("empty.json");
         std::fs::write(&empty, "[]").unwrap();
         assert!(load_fake_scenario(empty.to_str().unwrap()).is_err());
+        // TER 全面审查 M2W-4 (2026-09-04)：三种歧义/空转形状 fail-closed。
+        let mixed = dir.join("mixed.json");
+        std::fs::write(
+            &mixed,
+            r#"[{"text": "x", "tool_calls": [{"name": "read_file"}]}]"#,
+        )
+        .unwrap();
+        assert!(
+            load_fake_scenario(mixed.to_str().unwrap()).is_err(),
+            "text + tool_calls mixed entry must be rejected"
+        );
+        let empty_calls = dir.join("empty-calls.json");
+        std::fs::write(&empty_calls, r#"[{"tool_calls": []}]"#).unwrap();
+        assert!(
+            load_fake_scenario(empty_calls.to_str().unwrap()).is_err(),
+            "empty tool_calls batch must be rejected"
+        );
+        let bad_call_id = dir.join("bad-call-id.json");
+        std::fs::write(
+            &bad_call_id,
+            r#"[{"tool_calls": [{"name": "read_file", "call_id": 7}]}]"#,
+        )
+        .unwrap();
+        assert!(
+            load_fake_scenario(bad_call_id.to_str().unwrap()).is_err(),
+            "non-string call_id must be rejected instead of silently defaulted"
+        );
+        let bad_arguments = dir.join("bad-arguments.json");
+        std::fs::write(
+            &bad_arguments,
+            r#"[{"tool_calls": [{"name": "read_file", "arguments": ["x"]}]}]"#,
+        )
+        .unwrap();
+        assert!(
+            load_fake_scenario(bad_arguments.to_str().unwrap()).is_err(),
+            "non-object arguments must be rejected"
+        );
         assert!(load_fake_scenario("Z:\\no-such-scenario.json").is_err());
     }
 

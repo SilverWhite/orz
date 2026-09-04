@@ -86,10 +86,10 @@ const IDLE_CPU_SAMPLE_INTERVAL: Duration = Duration::from_secs(1);
 
 /// TER T1.5 idle-kill 的信号串——提醒/事件层据此呈现
 /// `status=idle_killed` 与 `exit: killed (idle_killed)`。
-pub(crate) const IDLE_KILL_SIGNAL: &str = "idle_killed";
+pub const IDLE_KILL_SIGNAL: &str = "idle_killed";
 
 /// idle-kill 原因文本（与 T0.2 夹具口径一致：默认 300s）。
-pub(crate) fn idle_kill_reason(idle_timeout: Duration) -> String {
+pub fn idle_kill_reason(idle_timeout: Duration) -> String {
     format!(
         "no output growth or CPU activity for {}s",
         idle_timeout.as_secs().max(1)
@@ -373,6 +373,9 @@ struct ProcessState {
     foreground_block_budget: Duration,
     /// TER T1.5 (2026-09-04): idle+CPU 活跃采样器（后台任务兜底）。
     activity: ActivitySampler,
+    /// TER 审查 P1-1/S3 (2026-09-04)：实际生效的 idle 阈值（idle-kill 时
+    /// 记录；供 live 快照/事件按真实阈值渲染 reason，非默认阈值不失真）。
+    idle_timeout_used: Option<Duration>,
     start_time: Instant,
     /// Path to output file (always written to)
     output_file: PathBuf,
@@ -1235,6 +1238,7 @@ impl LocalTerminalActor {
                 .foreground_block_budget
                 .unwrap_or(self.foreground_block_budget),
             activity: ActivitySampler::new(self.idle_kill_timeout),
+            idle_timeout_used: None,
             start_time: Instant::now(),
             output_file: request.output_file,
             file_handle,
@@ -1371,6 +1375,7 @@ impl LocalTerminalActor {
                 .foreground_block_budget
                 .unwrap_or(self.foreground_block_budget),
             activity: ActivitySampler::new(self.idle_kill_timeout),
+            idle_timeout_used: None,
             start_time: Instant::now(),
             output_file: request.output_file.clone(),
             file_handle,
@@ -1488,6 +1493,7 @@ impl LocalTerminalActor {
             return;
         };
         let idle_timeout = process.activity.idle_timeout;
+        process.idle_timeout_used = Some(idle_timeout);
         tracing::warn!(
             task_id = terminal_id,
             idle_timeout = ?idle_timeout,
@@ -1535,13 +1541,33 @@ impl LocalTerminalActor {
                     .and_then(|g| g.cpu_time().ok().flatten())
                     .map(|d| d.as_micros() as u64)
                     .unwrap_or(0);
+                // TER 审查 P2 (2026-09-04)：completed 行 elapsed 冻结为
+                // `end − start`，不再随 5 分钟保留期持续增长（状态与计时
+                // 自洽）；运行中行仍按 now − start 现算。
+                let elapsed_ms = if p.exit_status.is_some() {
+                    p.end_wall_time
+                        .and_then(|end| end.duration_since(p.start_wall_time).ok())
+                        .map(|d| d.as_millis() as u64)
+                        .unwrap_or_else(|| now.duration_since(p.start_time).as_millis() as u64)
+                } else {
+                    now.duration_since(p.start_time).as_millis() as u64
+                };
+                let signal = p.exit_status.as_ref().and_then(|s| s.signal.clone());
+                // TER 审查 P1-1 (2026-09-04)：idle-kill 任务携带实际生效
+                // 阈值（S3 口径——非默认阈值的事件 reason 如实渲染）。
+                let idle_timeout_ms = (signal.as_deref() == Some(IDLE_KILL_SIGNAL))
+                    .then(|| p.idle_timeout_used)
+                    .flatten()
+                    .map(|d| d.as_millis() as u64);
                 TaskLiveSnapshot {
                     task_id: id.clone(),
                     command: p.command.clone(),
                     display_command: p.display_command.clone(),
                     pid: p.pid,
-                    elapsed_ms: now.duration_since(p.start_time).as_millis() as u64,
+                    elapsed_ms,
                     status: status.to_string(),
+                    signal,
+                    idle_timeout_ms,
                     total_bytes: p.total_bytes as u64,
                     cpu_micros,
                     killable: p.exit_status.is_none(),
@@ -2089,6 +2115,12 @@ impl LocalTerminalActor {
         // （signal=idle_killed，完成通知/提醒/事件链据此自描述）。计算密集
         // 但无输出的任务（编译/训练/渲染内核）有 CPU 增长，不误杀；CPU
         // 记账不可用平台按「不判 idle」处理。
+        // 登记边界（TER 全面审查 S2a/S2b，2026-09-04）：① 子进程关闭继承管道
+        // 但仍存活（daemonize/nohup）后，本采样停止——该形态由 10h 绝对兜底 +
+        // 会话清理负责，不再被 idle-kill 覆盖；② Linux CPU 记账只汇总同进程组
+        // （/proc pgrp），自成进程组的忙碌后代不计 CPU——该面视为“部分未知”，
+        // 宁可少杀不误杀的原则由跨 pgrp 用例与后续全树记账评估承接（Windows
+        // Job Object 记账覆盖全后代，无此缺口）。
         // `try_wait` 先排除「本 tick 已自然退出」的任务，避免把自然退出
         // 误记成 idle-kill。
         if !process_done

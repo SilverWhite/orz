@@ -48,6 +48,12 @@ impl LoopHost for TestHost {
     fn session_cwd(&self) -> std::path::PathBuf {
         self.journal.journal_dir().to_path_buf()
     }
+    // TER 全面审查 F7 (2026-09-04)：TestHost 支持 live 进程读取——空列表
+    // 渲染「（无）」；与「宿主不支持 live 读取」区分（不支持由渲染层显式
+    // 标注，防止模型把不支持误读成“确实没有进程”）。
+    fn terminal_live_capable(&self) -> bool {
+        true
+    }
     // Explicit override — the trait default is fail-closed Deny; the tool
     // round-trip tests need an authorized host.
     async fn request_permission(

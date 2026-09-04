@@ -198,6 +198,28 @@ pub struct LiveProcessFact {
     pub description: Option<String>,
 }
 
+/// TER 全面审查 P1-1（2026-09-04）：后台任务 idle-kill 生命周期事实——
+/// host 在工具执行边界回收“自上次回收以来被 idle 机制 kill”的后台任务；
+/// `task_id` = 原 auto-bg 调用 id（auto-background 语义下 task 以工具
+/// call_id 注册，见 T0.2 §4 / T1.6）。loop 侧据此补记
+/// `tool_running(status=idle_killed + reason)` 事件（链规则要求该调用先有
+/// mid-run `tool_running` + `running:true` `tool_completed`）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TerminalIdleKillFact {
+    /// 原 auto-bg 工具调用 id（终端 task id）。
+    pub task_id: String,
+    /// Shell 进程 pid（终端能提供时）。
+    pub pid: Option<u32>,
+    /// kill 时刻前累计输出字节（截断前单调计数）。
+    pub total_bytes: u64,
+    /// 输出落盘路径（检索对象指针语义与 mid-run 一致）。
+    pub output_file: String,
+    /// 自调用 tool_started 起的墙钟毫秒（kill 时刻）。
+    pub wall_ms: u64,
+    /// kill 原因（按实际生效阈值渲染，非默认阈值不失真——TER 审查 S3）。
+    pub reason: String,
+}
+
 /// TER T1.12 (W-F11, 2026-09-04)：黑板 `section=env` 的机械层代码工具
 /// 环境快照事实（PULL 白名单面）。`kind` 取值 tool / language / package /
 /// input / connectivity（渲染层白名单登记；越权 kind 渲染层拒绝）。
@@ -633,10 +655,25 @@ pub trait LoopHost: Send + Sync {
         Vec::new()
     }
 
+    /// TER 全面审查 F7 (2026-09-04)：宿主是否支持 `section=processes` 的
+    /// live 读取。默认 `false`（fail-closed）——渲染层区分「不支持」与
+    /// 「支持但当前无进程」，模型不会把不支持误读成“确实没有进程”。
+    fn terminal_live_capable(&self) -> bool {
+        false
+    }
+
     /// TER T1.12 (W-F11)：黑板 `section=env` 的机械层环境快照事实源
     /// （工具/语言/包/版本、关键输入在场；连通性由 W-F12 快速判定闭环）。
     /// 不支持的后端默认空（fail-closed，不伪造）。
     async fn env_snapshot_facts(&self) -> Vec<EnvSnapshotFact> {
+        Vec::new()
+    }
+
+    /// TER 全面审查 P1-1（2026-09-04）：idle-kill 生命周期事实源——host
+    /// 在每次工具执行/run 收尾时被 loop 回收（drain 语义，自上次调用以来
+    /// 新发生的 idle-kill；只报 `is_backgrounded` 且 signal=idle_killed 的
+    /// 已完成任务）。不支持的后端默认空（fail-closed，不伪造）。
+    async fn drain_terminal_idle_kills(&self) -> Vec<TerminalIdleKillFact> {
         Vec::new()
     }
 

@@ -93,6 +93,9 @@ pub struct OrzHost {
     /// TER T1.6 (2026-09-04): 终端 backend 句柄——黑板 `section=processes`
     /// live 分区事实源（与工具集共用同一实例，读取时现算）。
     terminal: Arc<dyn TerminalBackend>,
+    /// TER 全面审查 P1-1 (2026-09-04)：已向 loop 上报过的 idle-kill 任务 id
+    /// （drain 去重——同一任务只上报一次，防止重复 `tool_running` 事件）。
+    idle_kill_reported: std::sync::Mutex<std::collections::HashSet<String>>,
     /// GAP-RETRIEVAL-TOOLS (2026-08-10) + GAP-PROJECT-DOC-INDEX-CACHE
     /// (2026-08-11): the project-doc index — the internal retrieval lane's
     /// real discovery/query tool (ADR-0010 §3.7.4/§3.7.5; host-owned,
@@ -213,6 +216,7 @@ impl OrzHost {
             tool_timeout: TOOL_CALL_TIMEOUT,
             cwd: cwd.to_path_buf(),
             terminal,
+            idle_kill_reported: std::sync::Mutex::new(std::collections::HashSet::new()),
             project_doc_index: crate::project_doc_index::ProjectDocIndex::new(cwd.to_path_buf()),
             web_search_config,
             web_search_semaphore: Arc::new(tokio::sync::Semaphore::new(1)),
@@ -745,6 +749,45 @@ impl OrzHost {
     }
 }
 
+/// TER 全面审查 P1-1 (2026-09-04)：把「live 快照 + 解析到的输出路径」映射
+/// 为 loop 侧 idle-kill 事实（纯函数，drain 去重语义——`reported` 已含的
+/// 任务跳过）。reason 按任务实际生效阈值渲染（S3：非默认阈值不失真）。
+fn terminal_idle_kill_facts_from(
+    resolved: Vec<(
+        orz_tools::computer::types::TaskLiveSnapshot,
+        Option<std::path::PathBuf>,
+    )>,
+    reported: &mut std::collections::HashSet<String>,
+) -> Vec<orz_loop::host::TerminalIdleKillFact> {
+    let mut facts = Vec::new();
+    for (s, output_file) in resolved {
+        if s.signal.as_deref() != Some(orz_tools::computer::local::terminal::IDLE_KILL_SIGNAL)
+            || s.status != "killed"
+        {
+            continue;
+        }
+        if reported.contains(&s.task_id) {
+            continue;
+        }
+        let Some(output_file) = output_file else {
+            continue;
+        };
+        reported.insert(s.task_id.clone());
+        let idle_timeout_ms = s.idle_timeout_ms.unwrap_or(300_000);
+        facts.push(orz_loop::host::TerminalIdleKillFact {
+            task_id: s.task_id,
+            pid: s.pid,
+            total_bytes: s.total_bytes,
+            output_file: output_file.display().to_string(),
+            wall_ms: s.elapsed_ms,
+            reason: orz_tools::computer::local::terminal::idle_kill_reason(
+                std::time::Duration::from_millis(idle_timeout_ms),
+            ),
+        });
+    }
+    facts
+}
+
 #[async_trait]
 impl LoopHost for OrzHost {
     fn journal(&self) -> &JournalRecorder {
@@ -813,6 +856,12 @@ impl LoopHost for OrzHost {
         true
     }
 
+    /// TER 全面审查 F7 (2026-09-04)：orz 主线固定接线 LocalTerminalBackend，
+    /// 支持 live 进程读取（空列表 = 当前无进程，与「不支持」区分）。
+    fn terminal_live_capable(&self) -> bool {
+        true
+    }
+
     /// TER T1.6 (2026-09-04): 黑板 `section=processes` live 事实——把终端
     /// 读取时现算快照映射为 loop 侧结构化事实。
     async fn terminal_live_processes(&self) -> Vec<orz_loop::host::LiveProcessFact> {
@@ -835,6 +884,30 @@ impl LoopHost for OrzHost {
                 description: s.description,
             })
             .collect()
+    }
+
+    /// TER 全面审查 P1-1 (2026-09-04)：idle-kill 生命周期事实源（drain
+    /// 语义）——自上次调用以来新 idle-kill 的后台任务（signal=idle_killed
+    /// 且 status=killed），去重后映射为 loop 侧事实。输出路径经
+    /// `get_task` 解析（live 快照不带落盘路径，事件 schema 需要）。
+    async fn drain_terminal_idle_kills(&self) -> Vec<orz_loop::host::TerminalIdleKillFact> {
+        let live = self.terminal.list_live_tasks().await;
+        let mut resolved = Vec::new();
+        for s in live {
+            if s.signal.as_deref() != Some(orz_tools::computer::local::terminal::IDLE_KILL_SIGNAL)
+                || s.status != "killed"
+            {
+                continue;
+            }
+            let output_file = self
+                .terminal
+                .get_task(&s.task_id)
+                .await
+                .map(|t| t.output_file);
+            resolved.push((s, output_file));
+        }
+        let mut reported = self.idle_kill_reported.lock().unwrap();
+        crate::terminal_idle_kill_facts_from(resolved, &mut reported)
     }
 
     /// TER T1.12 (W-F11)：黑板 `section=env` 的机械层环境快照事实。
@@ -2497,6 +2570,78 @@ mod tests {
             "kill cleanup: {outcome:?}"
         );
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// TER 全面审查 P1-1 (2026-09-04)：idle-kill 事实映射——只收
+    /// signal=idle_killed + status=killed 的任务；reason 按实际阈值渲染；
+    /// 无输出路径不标记已报（可下次补报）；drain 去重。
+    #[test]
+    fn terminal_idle_kill_facts_from_dedupes_and_formats_reason() {
+        use orz_tools::computer::types::TaskLiveSnapshot;
+        let snap = |id: &str,
+                    signal: Option<&str>,
+                    timeout_ms: Option<u64>,
+                    status: &str|
+         -> TaskLiveSnapshot {
+            TaskLiveSnapshot {
+                task_id: id.to_string(),
+                command: "sleep".to_string(),
+                display_command: Some("sleep".to_string()),
+                pid: Some(42),
+                elapsed_ms: 5005,
+                status: status.to_string(),
+                signal: signal.map(str::to_string),
+                idle_timeout_ms: timeout_ms,
+                total_bytes: 1024,
+                cpu_micros: 0,
+                killable: false,
+                owner_session_id: Some("sess".to_string()),
+                description: None,
+            }
+        };
+        let mut reported = std::collections::HashSet::new();
+        let facts = super::terminal_idle_kill_facts_from(
+            vec![
+                (
+                    snap("t1", Some("idle_killed"), Some(5000), "killed"),
+                    Some(std::path::PathBuf::from("/tmp/t1.log")),
+                ),
+                (
+                    snap("t2", Some("idle_killed"), None, "killed"),
+                    Some(std::path::PathBuf::from("/tmp/t2.log")),
+                ),
+                (
+                    snap("t3", Some("timeout"), Some(5000), "killed"),
+                    Some(std::path::PathBuf::from("/tmp/t3.log")),
+                ),
+                (snap("t4", Some("idle_killed"), Some(5000), "killed"), None),
+            ],
+            &mut reported,
+        );
+        assert_eq!(facts.len(), 2, "{facts:?}");
+        assert_eq!(facts[0].task_id, "t1");
+        assert_eq!(facts[0].reason, "no output growth or CPU activity for 5s");
+        assert_eq!(facts[0].output_file, "/tmp/t1.log");
+        assert_eq!(facts[0].wall_ms, 5005);
+        assert_eq!(facts[0].total_bytes, 1024);
+        assert_eq!(facts[1].reason, "no output growth or CPU activity for 300s");
+        assert!(reported.contains("t1"));
+        assert!(
+            !reported.contains("t3"),
+            "non-idle kill must not be reported"
+        );
+        assert!(
+            !reported.contains("t4"),
+            "missing output path must not mark the task reported"
+        );
+        let again = super::terminal_idle_kill_facts_from(
+            vec![(
+                snap("t1", Some("idle_killed"), Some(5000), "killed"),
+                Some(std::path::PathBuf::from("/tmp/t1.log")),
+            )],
+            &mut reported,
+        );
+        assert!(again.is_empty(), "drain must dedupe: {again:?}");
     }
 
     /// TER T1.11 (W-F13b)：run_terminal_cmd 长输出被截断时，host 映射

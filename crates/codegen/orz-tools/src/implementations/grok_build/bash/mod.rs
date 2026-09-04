@@ -294,8 +294,12 @@ use serde::{Deserialize, Serialize};
 
 /// Product default advertised in the model-facing schema (FG). Not applied as a
 /// serde default: omit/`None` must remain "use host/FG policy, BG unbounded".
+/// TER 全面审查 S5 (2026-09-04)：不再广告单一静态数值——生效默认按命令
+/// 形态由宿主逐调用注入（普通 300s / 程序 600s），schema 描述改由
+/// `effective_default_timeout_ms` 按参数渲染；静态 default 移除避免与
+/// 生效值不一致。
 fn schema_default_timeout_ms() -> Option<u64> {
-    Some(120_000)
+    None
 }
 
 /// Input for the bash/terminal command tool.
@@ -305,12 +309,13 @@ pub struct BashToolInput {
     #[cfg_attr(not(unix), schemars(description = "The command to run."))]
     pub command: String,
 
-    /// Optional timeout in milliseconds (max 300000). Default: 120000
-    /// (2 minutes), enforced for foreground commands only. Background
-    /// semantics live in the tool-description usage notes.
+    /// Optional timeout in milliseconds (max 300000), foreground only. No
+    /// static default is advertised here — the effective default is
+    /// command-shape-injected by the host (TER T1.4: an auto-bg deadline,
+    /// never a kill point); background semantics live in the usage notes.
     // keep in sync with the rustdoc above
     #[schemars(
-        description = "Optional timeout in milliseconds (max 300000). Default: 120000 (2 minutes), enforced for foreground commands only.",
+        description = "Optional timeout in milliseconds (max 300000), foreground only. No static default advertised — the host injects a command-shape default (auto-bg deadline, never a kill point).",
         default = "schema_default_timeout_ms"
     )]
     // Some models serialize numeric tool args
@@ -1667,7 +1672,7 @@ impl BashTool {
         r#"Run a ${%- if is_windows %} shell command${%- else %} bash command${%- endif %} and return its output.
 
 Usage notes:
-  - You can specify an optional ${{ params.execute.timeout }} in milliseconds (up to ${{ max_timeout_ms | default(300000) }}ms). When omitted, the default timeout (${{ default_timeout_ms | default(120000) }}ms) is the auto-backgrounding deadline.
+  - You can specify an optional ${{ params.execute.timeout }} in milliseconds (up to ${{ max_timeout_ms | default(300000) }}ms). When omitted, the host applies a command-shape default (ordinary 300s / program 600s); the default is only an auto-backgrounding deadline — never a kill point.
 ${%- if auto_background_on_timeout %}
   - No timeout kill: when a command is still running ${{ auto_bg_mid_run_when }}, the tool returns one mid-run status (elapsed time, PID, partial output, full-output file path) and the command keeps running in the background; its final result is reported with a later tool result. To interrupt it, terminate the reported PID (e.g. `taskkill /PID <pid> /F` on Windows or `kill -9 <pid>` on Unix).
 ${%- else %}

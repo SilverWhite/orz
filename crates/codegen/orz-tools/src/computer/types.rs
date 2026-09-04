@@ -98,7 +98,9 @@ pub struct TerminalRunRequest {
     /// command may block the turn before being moved to the background (process
     /// keeps running). Independent of [`Self::timeout`].
     ///
-    /// - `None` → use the terminal backend default (typically 15s).
+    /// - `None` → use the terminal backend default (180s — TER T1.2
+    ///   (2026-09-03) retired the legacy 15s backend default;
+    ///   `DEFAULT_FOREGROUND_BLOCK_BUDGET_MS` is the single source).
     /// - `Some(Duration::MAX)` → no short budget; auto-bg only when `timeout` elapses.
     /// - `Some(d)` → auto-bg after `d` if still running.
     pub foreground_block_budget: Option<Duration>,
@@ -189,6 +191,15 @@ pub struct TaskLiveSnapshot {
     /// 自进程起跑的墙钟毫秒。
     pub elapsed_ms: u64,
     pub status: String,
+    /// 退出信号（如 `idle_killed` / `timeout` / `max_runtime`）；运行中为
+    /// `None`。TER 审查 P1-1（2026-09-04）引入——loop 侧 idle-kill 事件
+    /// 生产者据此区分“idle 机械 kill”与其它 kill 形态。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub signal: Option<String>,
+    /// 生效的 idle 阈值毫秒（仅 idle-kill 任务携带；其它为 `None`）。TER
+    /// 审查 P1-1/S3：事件与提醒 reason 用实际阈值渲染，非默认阈值不失真。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub idle_timeout_ms: Option<u64>,
     /// 输出累计字节（截断前单调计数）。
     pub total_bytes: u64,
     /// 进程树累计 CPU 微秒（读取时现算；不可用 = 0）。

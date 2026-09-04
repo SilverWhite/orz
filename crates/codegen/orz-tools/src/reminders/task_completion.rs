@@ -118,16 +118,13 @@ pub fn format_bash_completion(
     let command = task.display_command.as_deref().unwrap_or(&task.command);
     let duration_secs = task.duration_secs();
     let status_str = match task.signal.as_deref() {
-        // TER T1.5 (2026-09-04): idle-kill 提醒文本——T0.2 夹具同一口径。
-        // 说明：snapshot 不带实际 idle 时长，文案按 resident 默认 300s
-        // 渲染；非默认阈值下的精确时长由审计/日志侧追踪字段承载。
+        // TER T1.5 (2026-09-04) + 全面审查 S3 (2026-09-04)：idle-kill 提醒
+        // 文本。snapshot 不携带实际 idle 阈值——为避免非默认阈值（env/actor
+        // 缩短）下误导性渲染 “for 300s”，文本不写死时长；精确时长由
+        // `tool_running(status=idle_killed + reason)` 事件 reason 与 tracing
+        // 侧按实际生效阈值承载。
         Some(crate::computer::local::terminal::IDLE_KILL_SIGNAL) => {
-            format!(
-                "idle-killed ({})",
-                crate::computer::local::terminal::idle_kill_reason(
-                    crate::computer::local::terminal::DEFAULT_IDLE_KILL_TIMEOUT,
-                )
-            )
+            "idle-killed (no output growth or CPU activity)".to_string()
         }
         Some(sig) => format!("terminated by signal {sig}"),
         None => {
@@ -849,8 +846,13 @@ mod tests {
         let msg = format_bash_completion(&task, Some("get_command_or_subagent_output"), None);
         assert!(msg.contains("idle-killed"), "{msg}");
         assert!(
-            msg.contains("no output growth or CPU activity for 300s"),
-            "idle-kill reason must be self-describing: {msg}"
+            msg.contains("idle-killed (no output growth or CPU activity)"),
+            "idle-kill reason must be self-describing without a hardcoded \
+             threshold (S3 — actual threshold rides the journal event): {msg}"
+        );
+        assert!(
+            !msg.contains("for 300s"),
+            "no misleading default-threshold text: {msg}"
         );
         assert!(!msg.contains("terminated by signal idle_killed"), "{msg}");
     }

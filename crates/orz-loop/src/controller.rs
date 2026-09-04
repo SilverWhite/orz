@@ -83,7 +83,8 @@ pub fn max_tool_rounds_override() -> Option<u32> {
 /// 只约束单次检索派发，防止一个检索会话烧掉主 run 的墙钟。
 pub const RETRIEVAL_SUBAGENT_WALLCLOCK_DEFAULT_SECS: u64 = 600;
 
-/// 检索子代理独立工具轮上限（默认 60；主车道仍为 `MAX_TOOL_ROUNDS`=120）。
+/// 检索子代理独立工具轮上限（默认 60；主车道 `MAX_TOOL_ROUNDS`=0 即
+/// unlimited——TER T1.7 撤默认硬限，取 min 语义下检索档位生效）。
 /// 与 `max_tool_rounds` 取 min 生效（测试用 `with_max_tool_rounds` 缩小
 /// 时语义不变）。0 禁用（unbounded，仅用主车道上限）——0k 审查处理
 /// (P3-5) 与墙钟 `0`=禁用语义对齐。
@@ -114,7 +115,17 @@ pub(crate) fn parse_main_wallclock_limit_secs(s: &str) -> Option<Option<u64>> {
     match s.trim().parse::<u64>() {
         Ok(0) => Some(None),
         Ok(secs) => Some(Some(secs)),
-        Err(_) => None,
+        Err(_) => {
+            // TER 全面审查 F4 (2026-09-04)：非法值在此回落 unlimited（与
+            // 0/缺失同语义），但必须留可见告警——TUI/嵌入路径不经 orz-bin
+            // 的 exit-2 校验，静默拼错会悄悄关掉 F6 push/预算读源。
+            tracing::warn!(
+                raw = %s,
+                "ORZ_MAX_WALLCLOCK parse failed — treating as unlimited (typo would \
+                 otherwise silently disable the wallclock read source)"
+            );
+            None
+        }
     }
 }
 
@@ -391,6 +402,11 @@ pub struct AgentLoopController {
     pub(crate) f6_push_limit_secs: Option<u64>,
     /// 每 run 已跨阈值记账（600/300/120；run 起始复位）。
     f6_push_crossed: Mutex<[bool; 3]>,
+    /// TER 全面审查 P1-1 (2026-09-04)：本会话已记过 mid-run `tool_running`
+    /// 的 auto-bg 调用（task_id → run_id）。loop 侧 idle-kill 事件生产者
+    /// 据此只对“同 run 内先有 mid-run + running:true 完成”的任务补记
+    /// `tool_running(status=idle_killed)`，跨 run 复用 call_id 不会串链。
+    pub(crate) mid_run_call_ids: Mutex<std::collections::HashMap<String, String>>,
     /// RETRIEVAL-ORCHESTRATION-MECHANICAL 0k (2026-08-30)：检索子代理单次
     /// 派发墙钟预算。`None` = 禁用（unbounded）。
     pub(crate) retrieval_subagent_wallclock: Option<std::time::Duration>,
@@ -768,6 +784,7 @@ impl AgentLoopController {
             f6_push_enabled: f6_push_enabled_override(),
             f6_push_limit_secs: main_wallclock_limit_secs_override(),
             f6_push_crossed: Mutex::new([false; 3]),
+            mid_run_call_ids: Mutex::new(std::collections::HashMap::new()),
             // RETRIEVAL-ORCHESTRATION-MECHANICAL 0k 第二批 (2026-08-30)：
             // 委托契约复杂度分档——构造时不再固化默认预算；dispatch 按
             // 「显式 env > controller 字段（seam） > 档位默认」解析。
@@ -1398,6 +1415,7 @@ impl AgentLoopController {
             f6_push_enabled: f6_push_enabled_override(),
             f6_push_limit_secs: main_wallclock_limit_secs_override(),
             f6_push_crossed: Mutex::new([false; 3]),
+            mid_run_call_ids: Mutex::new(std::collections::HashMap::new()),
             // 第二批分档：测试组件构造不固化预算默认，档位默认在 dispatch
             // 生效；需要显式预算的测试直接写 controller 字段。
             retrieval_subagent_wallclock: None,
@@ -1988,6 +2006,13 @@ impl AgentLoopController {
         if receipt_id.is_some() {
             return Err("receipt_id 仅与 section=actions 组合有效（点读结果栏单条 \
                  receipt）；当前 section=processes 不支持 receipt_id"
+                .to_string());
+        }
+        // TER 全面审查 F7 (2026-09-04)：不支持 live 读取的宿主显式标注
+        // 「不可用」，不渲染成「（无）」让模型误读为“确实没有进程”。
+        if !host.terminal_live_capable() {
+            return Ok("== processes (live) ==\n（live 分区不可用：当前宿主不支持 \
+                 live 进程读取）\n"
                 .to_string());
         }
         let facts = host.terminal_live_processes().await;
@@ -3445,6 +3470,11 @@ impl AgentLoopController {
                 .await?;
             }
         }
+        // TER 全面审查 P1-1 (2026-09-04)：run 收尾 drain 一次 idle-kill
+        // 生命周期事件——后台任务在最后一次工具调用之后、run 结束前被
+        // idle-kill 时，事件仍会落在 RunFinished 之前（链规则要求晚于原
+        // auto-bg 调用的 running:true 完成事件，此处恒满足）。
+        self.journal_pending_idle_kills(host, writer).await?;
         writer
             .record(
                 terminal_event,
