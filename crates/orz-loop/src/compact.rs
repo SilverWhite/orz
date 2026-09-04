@@ -432,7 +432,7 @@ mod tests {
         PermitDecision, PermitError, RiskClass, ToolError, ToolRegistry, ToolResult,
     };
     use async_trait::async_trait;
-    use orz_assurance::{EventType, JournalRecorder};
+    use orz_assurance::{EventType, JournalRecorder, RunEvent};
     use std::path::PathBuf;
     use std::sync::Arc;
     use std::sync::atomic::{AtomicU64, Ordering};
@@ -2286,6 +2286,271 @@ mod tests {
             "other injected blocks stay filtered: {kept:?}"
         );
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    // ── P2-14 S2（2026-09-04，ADR-0010 §14.54 / 设计稿 §7 第 8 项、§9）──
+
+    /// S2 共用前置：一次主车道长 run，同一会话串行真实触发三类压缩——
+    /// r1..r3 的 measured 50K 越过 rhythm（cooldown 2，r3 后首个可压轮），
+    /// r4/r5 的 measured 300K 越过 fallback（绕冷却、r4/r5 后各一），r6
+    /// 回落 50K 不再触发，run 收尾（conversation 模式）越过 session_end
+    /// 恒压。压缩全机械零模型调用；返回写回会话（含滚动单 v0.3 marker）
+    /// 与模型网关（请求观测）。
+    async fn p2_14_s2_run_serial_v03(dir: &PathBuf) -> (Vec<Message>, Arc<FakeProvider>) {
+        let journal = JournalRecorder::new(dir.clone());
+        let host = TestHost {
+            journal,
+            tool_result: Some(ToolResult {
+                output: "x".repeat(600),
+                exit_code: Some(0),
+                output_encoding: None,
+                structured: None,
+                ..Default::default()
+            }),
+        };
+        let tool_call = |id: &str, prompt: u64| ScriptedResponse {
+            text: None,
+            tool_calls: vec![ToolCall {
+                name: "read_file".to_string(),
+                arguments: serde_json::json!({"target_file": "a.txt"}),
+                call_id: id.to_string(),
+            }],
+            finish_reason: FinishReason::ToolCalls,
+            reasoning_content: None,
+            prompt_tokens: Some(prompt),
+        };
+        let fake = Arc::new(FakeProvider::new(vec![
+            tool_call("call-s1", 50_000),
+            tool_call("call-s2", 50_000),
+            tool_call("call-s3", 50_000),
+            tool_call("call-s4", 300_000),
+            tool_call("call-s5", 300_000),
+            tool_call("call-s6", 50_000),
+            ScriptedResponse::text("候选答案").with_prompt_tokens(100),
+            ScriptedResponse::text("最终答案").with_prompt_tokens(100),
+        ]));
+        let controller = AgentLoopController::with_gateway(fake.clone())
+            .with_context_compact(5_000, 400, 2, 100_000)
+            .with_summary_guards(1, 1.0)
+            .with_session_end_trigger(1);
+        let mut conversation = vec![conv_message(Role::User, "第一问")];
+        controller
+            .run_turn(
+                &host,
+                "压缩测试",
+                "RUN-S2-SERIAL",
+                MANIFEST,
+                0,
+                None,
+                None,
+                Some(&mut conversation),
+            )
+            .await
+            .unwrap();
+        (conversation, fake)
+    }
+
+    /// P2-14 S2（2026-09-04，设计稿 §9）：压缩 e2e 全串行——同一主会话
+    /// 一次 run 依序真实触发 rhythm → fallback（×2，绕冷却）→ session_end，
+    /// 全机械零模型调用；每次压缩后下一模型请求携带滚动单 v0.3 折叠快照
+    /// marker（A–E 块、无 v0.2 五段槽），收尾写回的会话只保留一个 v0.3
+    /// marker（旧 marker 被替换）。
+    #[tokio::test]
+    async fn p2_14_s2_rhythm_fallback_session_end_serial_v03_marker() {
+        let dir = test_dir();
+        let (conversation, fake) = p2_14_s2_run_serial_v03(&dir).await;
+
+        // 触发按序 journal：rhythm（r3 后）→ fallback（r4/r5 后各一）→
+        // session_end（run 收尾）。
+        let reasons: Vec<String> = events(&dir)
+            .into_iter()
+            .filter(|e| e.event_type == EventType::ContextCompressed)
+            .map(|e| e.payload["reason"].as_str().unwrap().to_string())
+            .collect();
+        assert_eq!(
+            reasons,
+            ["rhythm", "fallback", "fallback", "session_end"],
+            "serial trigger chain must fire rhythm → fallback → session_end"
+        );
+
+        // 8 个模型请求（6 工具轮 + 候选 + 最终）——机械压缩零模型调用。
+        let reqs = fake.received_requests();
+        assert_eq!(reqs.len(), 8, "{reqs:?}");
+        for (idx, req) in reqs.iter().enumerate() {
+            let markers: Vec<&str> = req
+                .messages
+                .iter()
+                .filter(|m| {
+                    m.content
+                        .starts_with(crate::prompt::CONTEXT_COMPRESSED_PREFIX)
+                })
+                .map(|m| m.content.as_str())
+                .collect();
+            if idx < 3 {
+                assert!(
+                    markers.is_empty(),
+                    "no marker before the first rhythm gap (request {idx}): {req:?}"
+                );
+            } else {
+                assert_eq!(
+                    markers.len(),
+                    1,
+                    "rolling single marker per post-compaction request {idx}: {req:?}"
+                );
+                assert!(
+                    markers[0].starts_with("[前文上下文已压缩 v0.3]"),
+                    "main-lane compaction must keep v0.3 through the serial chain: {}",
+                    markers[0]
+                );
+                assert!(
+                    !markers[0].contains("目的: ") && !markers[0].contains("后续衔接: "),
+                    "v0.2 五段槽不得出现在串行链 v0.3 marker: {}",
+                    markers[0]
+                );
+            }
+        }
+
+        // 收尾会话 = 滚动单 v0.3 marker + 保留尾；A–E 块齐全。
+        let markers: Vec<&Message> = conversation
+            .iter()
+            .filter(|m| {
+                m.content
+                    .starts_with(crate::prompt::CONTEXT_COMPRESSED_PREFIX)
+            })
+            .collect();
+        assert_eq!(
+            markers.len(),
+            1,
+            "session-end write-back must carry exactly one rolling marker: {conversation:?}"
+        );
+        let marker = markers[0].content.as_str();
+        assert!(marker.starts_with("[前文上下文已压缩 v0.3]"), "{marker}");
+        for head in [
+            "保留尾首轮 r_keep=",
+            "== 近窗明细（round < r_keep，已排除保留尾） ==",
+            "== 旧段聚合",
+            "== 失败目标聚合 ==",
+            "== 查询指针 ==",
+            "[/前文上下文已压缩]",
+        ] {
+            assert!(marker.contains(head), "missing {head}: {marker}");
+        }
+        assert!(
+            !marker.contains("目的: ") && !marker.contains("后续衔接: "),
+            "v0.2 五段槽不得出现在收尾 v0.3 marker: {marker}"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// P2-14 S2（2026-09-04，设计稿 §7 矩阵第 8 项）：恢复预检后压缩 marker
+    /// 仍在、内容原样——前一 run 收尾写回的 v0.3 会话在下次 run 越过恢复
+    /// 触发（测试化 10）时整轮机械截断；旧 v0.3 marker 消息位于 preamble
+    /// 恒原样保留（逐字节相等，非仅前缀），截断 marker 追加其后，二者均经
+    /// D3-1 write-back 存活。
+    #[tokio::test]
+    async fn p2_14_s2_restore_preflight_keeps_v03_marker_verbatim() {
+        let dir1 = test_dir();
+        let (conversation1, _) = p2_14_s2_run_serial_v03(&dir1).await;
+        let marker_v03 = conversation1
+            .iter()
+            .find(|m| m.content.starts_with("[前文上下文已压缩 v0.3]"))
+            .map(|m| m.content.clone())
+            .expect("run1 must leave a v0.3 marker in the sidecar");
+        assert_eq!(
+            conversation1
+                .iter()
+                .filter(|m| m.content == marker_v03)
+                .count(),
+            1
+        );
+
+        let dir2 = test_dir();
+        let journal2 = JournalRecorder::new(dir2.clone());
+        let host2 = TestHost {
+            journal: journal2,
+            tool_result: None,
+        };
+        let fake2 = Arc::new(FakeProvider::new(vec![
+            ScriptedResponse::text("收到"),
+            ScriptedResponse::text("收到"),
+        ]));
+        // 恢复预检触发/目标测试化：10 tokens 触发 → 只保留最新整轮（丢 ≥1
+        // 轮）；session_end/rhythm 保持生产默认（截断后估计远低于门槛）。
+        let controller2 =
+            AgentLoopController::with_gateway(fake2.clone()).with_recovery_compact(10, 2);
+        let mut conversation2 = conversation1;
+        controller2
+            .run_turn(
+                &host2,
+                "第二问",
+                "RUN-S2-RESTORE",
+                MANIFEST,
+                0,
+                None,
+                None,
+                Some(&mut conversation2),
+            )
+            .await
+            .unwrap();
+
+        // 截断确实发生（整轮 drop）且旧 marker 逐字节保留在首个模型请求。
+        let evs2 = events(&dir2);
+        let trunc: Vec<&RunEvent> = evs2
+            .iter()
+            .filter(|e| e.event_type == EventType::ContextRecoveryTruncated)
+            .collect();
+        assert_eq!(trunc.len(), 1, "{trunc:?}");
+        assert!(
+            trunc[0].payload["rounds_dropped"].as_u64().unwrap() >= 1,
+            "{:?}",
+            trunc[0].payload
+        );
+        let reqs = fake2.received_requests();
+        assert_eq!(reqs.len(), 2, "{reqs:?}");
+        let first = &reqs[0].messages;
+        assert!(
+            first.iter().any(|m| m.content == marker_v03),
+            "v0.3 marker must reach the restored first request byte-identical: {first:?}"
+        );
+        assert!(
+            first
+                .iter()
+                .any(|m| m.content.starts_with("[前文上下文已压缩 v0.1-恢复]")),
+            "recovery truncation marker must follow: {first:?}"
+        );
+        let v03_pos = first.iter().position(|m| m.content == marker_v03).unwrap();
+        let recovery_pos = first
+            .iter()
+            .position(|m| m.content.starts_with("[前文上下文已压缩 v0.1-恢复]"))
+            .unwrap();
+        assert!(
+            v03_pos < recovery_pos,
+            "old marker stays in the preamble before the truncation marker: {first:?}"
+        );
+
+        // D3-1 write-back 后会话仍只有一个 v0.3 marker，内容原样。
+        assert_eq!(
+            conversation2
+                .iter()
+                .filter(|m| m.content == marker_v03)
+                .count(),
+            1,
+            "v0.3 marker must survive the restore write-back verbatim: {conversation2:?}"
+        );
+        assert_eq!(
+            conversation2
+                .iter()
+                .filter(|m| m
+                    .content
+                    .starts_with(crate::prompt::CONTEXT_COMPRESSED_PREFIX))
+                .count(),
+            2,
+            "sidecar must hold the retained v0.3 marker + the recovery marker: {conversation2:?}"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir1);
+        let _ = std::fs::remove_dir_all(&dir2);
     }
 
     /// THIN-HARNESS-REDESIGN R1 (§4.1)：compaction_whitelist_add 已封存
