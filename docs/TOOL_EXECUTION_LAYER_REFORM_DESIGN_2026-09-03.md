@@ -1,9 +1,12 @@
 # 工具执行层改革设计（去硬杀 + 常驻默认 + 环境可判定 + 阅读面大修）
 
-> 日期：2026-09-03；状态：**设计稿（未实施；2026-09-03 经 TODO2 T0.3
-> 登记为 ADR-0010 §14.53 候选项，M1–M3 放行后转正式裁决）**；范围：orz
+> 日期：2026-09-03；状态：**正式裁决（2026-09-04 经 ADR-0010 §14.55
+> 转正——M1（T1.1–T1.13）与 M2 T2.1/T2.2 批次正式成立；T2.3 代码半程/
+> 实机未跑、T2.4/M3 待实施；TER M1/M2 全面审查有条件 PASS，处理见
+> `docs/audits/TER_REVIEW_HANDLING_2026-09-04.md`）**；范围：orz
 > 主线工具执行层默认行为 + Windows high-nist 评测 runner 接线 + VM 环境侧
-> 改造。上游裁决：2026-09-03 用户逐条确认（见 §2 与 §9 决策记录）。
+> 改造。上游裁决：2026-09-03 用户逐条确认（见 §2 与 §9 决策记录）+
+> 2026-09-04 全面审查处理裁决（P1-1/P1-2/全部问题处理）。
 
 ## 1. 背景与证据
 
@@ -55,6 +58,9 @@ probe/transcript/breakdown 产物）给出四类摩擦：
    完整结果（一次延迟回报，模型感知“180s 提醒一次 → 结束带回”）。
 4. 兜底：后台/前台进程连续 300s（5min）无输出活跃 → 机械层 kill 并返回
    “idle killed + 原因”提醒；无硬超时杀活跃进程。
+   **10h 绝对安全兜底例外（2026-09-04 全面审查 S1/D-7 登记）**：活跃后台
+   任务统一 10h 上限（`BACKGROUND_MAX_RUNTIME`，防失控泄漏），撞限即杀；
+   该兜底不计入评测时间窗，不构成“无自身硬超时”的违反。
 
 **活跃判定（兜底口径）**：输出字节增长为主 + **CPU 活跃辅助**——5min 内
 输出字节无增长且 CPU 时间基本不增才判 idle kill；计算密集但无输出（编译/
@@ -74,6 +80,10 @@ probe/transcript/breakdown 产物）给出四类摩擦：
 实现核对项：orz 工具 schema 侧与 BashParams 结构默认值存在不一致风险
 （schema 展示 300s/struct 后端 15s），落地时以单一生效源收敛；确认 15s
 短预算（GROK env）在 orz 面被 orz 默认覆盖为 180s。
+（2026-09-04 全面审查 D-4/S7/S6 登记：GROK_*/ORZ_* env 均为显式
+override、非第二默认源；模型面封闭 = orz-host 装配默认（显式注入
+`allow_background_operator=false` 封 `&`），codegen BashParams 库层默认
+保留兼容开放——语义以 ADR-0010 §14.55 条目 3 为准。）
 
 **档位扩展（远期，不在首轮实施）**：若 180s（3min）对长运行任务过短，增加
 15min 长档；形态=参数化分档（如 180s/15min 两档，按任务/会话配置选择），
@@ -96,7 +106,8 @@ probe/transcript/breakdown 产物）给出四类摩擦：
 - `pull`：blackboard `section=session`（或 processes）补 wallclock 面
   （elapsed / limit / remaining / rounds used），按需查询。
 - `push`（评测/限时开）：剩余预算跨阈值（<600 / <300 / <120s）机械注入
-  中性事实，上限 3–4 次/run，只报剩余不附建议。
+  中性事实，**实现 ≤3 次/run、verifier 上限 ≤4/run**（2026-09-04 全面
+  审查 D-3/M1L-4 统一口径），只报剩余不附建议。
 - 评测墙钟来源 = 官方 task agent_timeout_seconds（900/3600…），由
   runner/sandbox 施加；orz 内部自减余量逻辑（840）删除。
 
@@ -140,8 +151,13 @@ probe/transcript/breakdown 产物）给出四类摩擦：
 - **read_file 单次有效返回放宽**：目标 64KB 量级（vm.js 一次/两次读完），
   核对限制链=粗门 clamp（8–32KB）与单轮注入预算（50K token）的耦合，按
   “放宽后仍不爆注入预算”取档；行数 limit 语义保留（结构化跳读仍然成立）。
+  （2026-09-04 全面审查 M1R-1/3 边界登记：token 估算按 ASCII 成立，多字节
+  内容可能超 25K 读档但仍在 50K 单轮硬预算内——按最坏 3 byte/char 复核随
+  M3 压测；“vm.js 级文件 ≤2 次读完”以 ≤64KB 且 ≤1000 行为前提。）
 - **命令输出正式检索对象**：每条长输出落盘为对象，提供 pattern / 行区间 /
   尾部 N 行检索语义，替代模型逐段 read_file + .gsa 摸黑；输出可到 MB 级。
+  （2026-09-04 全面审查 M1R-2 收口：命中行单行渲染 ≤4K 字符并标注截断，
+  超长 minified/base64 单行不整行回传。）
 - **截断标记**：ToolCompleted 显式 output_truncated + total_bytes +
   指向检索对象。
 - **单列项（不在 W-F13）**：fold 后任务状态摘要（解决 make-doom fold 后读
@@ -171,7 +187,10 @@ Windows 沙箱（Job/LOW IL）跨调用存活与输出落盘。
 - F10/.gsa 口径：W-F13 把“读自己输出”正规化后，模型对 .gsa 的自读动机
   降低；不引入 .gsa 写保护（沿用 2026-08-31 裁决）。
 - Windows 沙箱：评测墙钟由 sandbox `--timeout` 执行；`--max-wallclock`
-  删除；AppContainer off 与 allowlist 语义不变。
+  删除。**生产墙定案（2026-09-04 全面审查 D-2/M2W-1 登记，ADR-0010
+  §14.55 条目 6）**：no-AC（`--no-appcontainer`）+ allowlist；AC 空能力
+  compartment 吞 allow 规则已实证（allowlist 必 FAIL），AC 臂仅作
+  enforcement-probe 对照基线，不再是生产墙。
 
 ## 5. 待实现核对项 / 风险
 
@@ -277,7 +296,8 @@ Windows 沙箱（Job/LOW IL）跨调用存活与输出落盘。
 5. **轮预算默认无限制**：max_tool_rounds 默认移除（“120 per turn”静态
    文案动态化/移除）；保留可配上限逃生阀与 budget_insufficient 机制。
 6. **F6 三档**：session/processes 面补 wallclock（elapsed/limit/
-   remaining）；push 档阈值 <600/300/120s 注入 ≤4 次/run +
+   remaining）；push 档阈值 <600/300/120s 注入 ≤3 次/run（verifier
+   上限 ≤4/run）+
    `budget_cue_injected` 事件；开关 env/config，默认 off。
 7. **W-F13a read_file 64KB 档**：限制链核对（粗门 clamp / 行 limit /
    50K 注入预算）后放宽至 64KB 级；压测单次注入不触发截断。

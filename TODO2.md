@@ -213,7 +213,12 @@
   Linux 编译修复 tty-utils 借用 + orz-tui EventType arm 并 Windows
   复检绿）；事件链 verifier 273 passed（T0.2 schema/fixtures）+
   Rust 新载荷单测。**M1 放行进入 M2**。审计见
-  [`TER_T1_13_M1_GATE_2026-09-04.md`](docs/audits/TER_T1_13_M1_GATE_2026-09-04.md)。）
+  [`TER_T1_13_M1_GATE_2026-09-04.md`](docs/audits/TER_T1_13_M1_GATE_2026-09-04.md)。
+  2026-09-04 全面审查：门审计 §1.3 “tool_running idle_killed 由单测锁定”
+  属过度声明（当时只有 schema/fixtures/verifier）；生产者已由审查处理批
+  补入（orz `35db6741`，见
+  [`TER_REVIEW_HANDLING_2026-09-04.md`](docs/audits/TER_REVIEW_HANDLING_2026-09-04.md)
+  与 ADR-0010 §14.55 条目 5）。）
 
 ## M2 Windows runner / VM（依赖 M1 新 build）
 
@@ -249,9 +254,26 @@
 - [ ] T2.3 Windows 后台任务存活验证：auto-bg 进程在 Job/LOW IL 下跨
   调用存活、输出持续落盘、完成提醒与 idle-kill 可达（实机）。验收：
   单测式实机脚本证据。
+  （2026-09-04 进度：fake 确定性场景驱动已提交（orz `dd5b1dac`，
+  `ORZ_FAKE_SCENARIO`）；全面审查处理批补入 idle-kill journal 生产者
+  （orz `35db6741`）——实机脚本可按 `tool_running(status=idle_killed)`
+  事件设计断言；实机执行仍未跑，本行保持未勾选。）
 - [ ] T2.4 同步与接线：M1 新 Windows 三件套进 VM（Program Files +
   C:\s4\tools + keystore/signer 复检）；runner 配置收敛（不再补开
   S5-2）。验收：vm-agent DryRun + enforcement-probe 墙内全绿。
+
+## 审查处理（2026-09-04）
+
+- [x] TER M1/M2 全面审查处理：P1-1 idle-kill journal 生产者补入＋单测
+  （orz `35db6741`）；P1-2 ADR-0010 §14.55 正式裁决（转正/取代清单）；
+  P2 × 5 与 P3 ~24 逐项处理/登记（含 no-AC 生产墙、10h 例外、push 次数
+  口径、completed elapsed 冻结、live-capable 标注、命中行 4K 钳制、DNS
+  fail-fast、fake loader fail-closed、文案残留清理）。验证：orz-tools
+  output_object 5 / idle 2 / description 97、orz-loop idle-kill 1、
+  orz-host mapping 1、orz-bin loader 1 + cargo check 全绿、dns_refusal
+  selftest/fail-fast OK。审计：
+  [`TER_M1_M2_COMPREHENSIVE_REVIEW_2026-09-04.md`](docs/audits/TER_M1_M2_COMPREHENSIVE_REVIEW_2026-09-04.md)
+  + [`TER_REVIEW_HANDLING_2026-09-04.md`](docs/audits/TER_REVIEW_HANDLING_2026-09-04.md)。
 
 ## M3 回归复验
 

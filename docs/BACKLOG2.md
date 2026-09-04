@@ -4,14 +4,16 @@
 > [BACKLOG_AND_PRIORITIES.md](BACKLOG_AND_PRIORITIES.md) 只保留指针，
 > 本文为 TER 明细权威。状态：`current`（2026-09-03 设计定稿；M0 设计门
 > T0.1–T0.4 已放行；**M1（T1.1–T1.13）已闭合并放行进入 M2**，见
-> TODO2.md；M2 实施中——T2.1/T2.2 已闭合）。
+> TODO2.md；M2 实施中——T2.1/T2.2 已闭合；**2026-09-04 TER M1/M2 全面
+> 审查处理闭合（ADR-0010 §14.55 正式裁决；orz `35db6741`）**）。
 > 入口：设计稿
 > [TOOL_EXECUTION_LAYER_REFORM_DESIGN_2026-09-03.md](TOOL_EXECUTION_LAYER_REFORM_DESIGN_2026-09-03.md)
 > / 实施步骤 [TODO2.md](../TODO2.md) / S4_PROGRESS §16.17/§16.18。
 
 ## TER-0 工具执行层改革（P0；2026-09-03 设计定稿 + 分步计划落盘；M0
 设计门 T0.1–T0.4 已放行；**M1 已闭合（T1.1–T1.13），放行进入 M2；
-M2 T2.1/T2.2 已闭合**）
+M2 T2.1/T2.2 已闭合；2026-09-04 全面审查处理闭合——ADR-0010 §14.55
+正式裁决、orz `35db6741`**）
 
 一句话定义：orz 工具执行层“独立可用 + 无自身硬超时”改革——常驻能力
 默认开启（S5-2/180s 首报/模型面封闭）、去硬杀（删 runner 自加墙钟、
@@ -89,6 +91,14 @@ runner/VM → M3 回归复验（明细在 TODO2.md）。边界：15min 长档、
   （win-s4 实机：allowlist_reachable PASS 15–47ms、egress 复测总成本
   920ms、最差行 735ms、DNS 恢复；审计
   TER_T2_2_WF12_LOCAL_TRANSPARENT_LAYER_2026-09-04）。
+- 审查：2026-09-04 TER M1/M2 全面审查（多子代理并行 + 提交态复核）结论
+  **有条件 PASS、无 P0**；处理批闭合——P1-1 idle-kill journal 生产者补入
+  （orz `35db6741`）、P1-2 ADR-0010 §14.55 正式裁决（转正/取代清单）、
+  P2 × 5 与 P3 ~24 逐项处置/登记（含 no-AC 生产墙、10h 例外、push 次数
+  口径、命中行 4K 钳制、DNS fail-fast、fake loader fail-closed 等）。
+  审计见
+  [TER_M1_M2_COMPREHENSIVE_REVIEW_2026-09-04.md](audits/TER_M1_M2_COMPREHENSIVE_REVIEW_2026-09-04.md)
+  与 [TER_REVIEW_HANDLING_2026-09-04.md](audits/TER_REVIEW_HANDLING_2026-09-04.md)。
 - 专项：TER-0.1 生成器 v0.2 表全面对齐已登记（见下），不阻塞 M1。
 
 ## TER-0.1 生成器 v0.2 表全面对齐（专项；P0；2026-09-03 登记，不阻塞

@@ -162,12 +162,29 @@ def main() -> int:
     if args.selftest:
         _selftest()
         return 0
-    allowlist = [d for d in args.allowlist_domains.split(",") if d]
-    server = DnsRefusalServer(
-        port=args.port,
-        allowlist_domains=allowlist,
-        upstream_dns=args.upstream_dns or None,
-    )
+    # TER 全面审查 M2W-3 (2026-09-04)：空段（",," / 逗号尾随）是配置错误，
+    # 静默忽略会让人以为域名已放行——fail-closed 显式报错。
+    raw_segments = args.allowlist_domains.split(",") if args.allowlist_domains else []
+    empty_hits = [seg for seg in raw_segments if not seg.strip()]
+    if empty_hits:
+        print(
+            "DNS_REFUSAL_FAILED allowlist-domains contains empty segments "
+            f"(parsed={raw_segments!r}) — refusing to start",
+            flush=True,
+        )
+        return 2
+    allowlist = [seg.strip().lower() for seg in raw_segments]
+    try:
+        server = DnsRefusalServer(
+            port=args.port,
+            allowlist_domains=allowlist,
+            upstream_dns=args.upstream_dns or None,
+        )
+    except (OSError, ValueError) as exc:
+        # TER 全面审查 M2W-3：bind/权限/端口占用在启动前 fail-fast，给可读
+        # 错误而不是让线程悄悄死掉或等运行期才暴露。
+        print(f"DNS_REFUSAL_FAILED startup preflight error: {exc}", flush=True)
+        return 2
     print(f"DNS_REFUSAL_LISTENING 127.0.0.1:{server.port} allowlist={allowlist}")
     server.start()
     try:

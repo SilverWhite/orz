@@ -22,6 +22,11 @@ allowlist 域名立即 NXDOMAIN；默认无域名 allowlist（评测允许端经
 
 自测：`python dns_refusal.py --selftest` → `DNS_REFUSAL_SELFTEST_OK`。
 
+覆盖边界（TER 全面审查 M2W-2，2026-09-04 登记）：拒答器只服务 **UDP DNS**；
+TCP DNS / DoT / QUIC 回退面未覆盖——Windows DNS Client 当前链路实测不会
+回退到 TCP（NXDOMAIN 7ms、最差 735ms），但若后续网络栈行为变化出现 TCP
+回退超时，需在 WFP 层补 TCP 快速拒答（§3 可选未来项）。
+
 部署（VM guest，需管理员）：
 
 1. 以计划任务/服务常驻运行拒答器；
