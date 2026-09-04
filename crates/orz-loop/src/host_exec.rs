@@ -183,7 +183,7 @@ impl AgentLoopController {
     /// Run a host tool call through the permission and execution gates.
     /// (IP3a IPG evaluation is hoisted to the controller's tool phase — a
     /// block ends the whole phase without further model calls.)
-    #[allow(clippy::too_many_arguments)] // mirrors run_turn_with_cancel + the retrieval dispatch lane contract
+    #[allow(dead_code, clippy::too_many_arguments)] // mirrors run_turn_with_cancel + the retrieval dispatch lane contract
     pub(crate) async fn run_host_tool(
         &self,
         host: &dyn LoopHost,

@@ -667,7 +667,6 @@ fn keyword_excerpts(text: &str, keywords: &[String]) -> (String, usize, usize) {
                 break;
             }
             out.push_str(&piece.chars().take(remaining).collect::<String>());
-            total_chars = KEYWORD_TOTAL_CHARS;
             emitted_spans.push((s, e));
             excerpt_count += 1;
             break;
