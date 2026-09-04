@@ -1821,7 +1821,7 @@ impl AgentLoopController {
             && matches!(section, "exec" | "edits" | "tool_actions")
         {
             let params = crate::render_fold::FoldParams::from_env();
-            let partition_chars = crate::epoch::live_foldable_partition_chars(section, &bb);
+            let partition_chars = crate::render_fold::live_foldable_partition_chars(section, &bb);
             let fold_state = if partition_chars >= params.partition_threshold_chars {
                 true
             } else {
@@ -1838,7 +1838,7 @@ impl AgentLoopController {
                 // 持有两锁的写面，须保持同序，避免交叉死锁。
                 let (current_round, current_domain) = self.blackboard_stamp();
                 return match section {
-                    "edits" => crate::epoch::render_edits_folded(
+                    "edits" => crate::render_fold::render_edits_folded(
                         &bb.edits,
                         since,
                         current_round,
@@ -1846,7 +1846,7 @@ impl AgentLoopController {
                         &params,
                         expand,
                     ),
-                    "tool_actions" => crate::epoch::render_tool_actions_folded(
+                    "tool_actions" => crate::render_fold::render_tool_actions_folded(
                         &bb.tool_actions,
                         since,
                         current_round,
@@ -1854,7 +1854,7 @@ impl AgentLoopController {
                         &params,
                         expand,
                     ),
-                    "exec" => crate::epoch::render_exec_folded(
+                    "exec" => crate::render_fold::render_exec_folded(
                         &bb.exec,
                         current_round,
                         current_domain,

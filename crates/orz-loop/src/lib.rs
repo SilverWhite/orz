@@ -39,7 +39,7 @@ pub(crate) mod planning;
 pub(crate) mod processes;
 pub mod prompt;
 pub mod relay;
-pub(crate) mod render_fold;
+pub mod render_fold;
 mod retrieval;
 pub mod summary;
 pub mod tool;

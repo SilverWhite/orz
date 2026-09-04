@@ -770,13 +770,13 @@ fn render_failure_target_block(blackboard: &Blackboard, budget: usize) -> (Strin
 /// 4K 字符，头行说明省略——`cap_fold_view`），空分区返回 None。
 fn render_partition_detail(
     section: &'static str,
-    snapshot: &crate::epoch::FoldPartitionSnapshot,
+    snapshot: &crate::render_fold::FoldPartitionSnapshot,
 ) -> Option<String> {
     if snapshot.detail_lines.is_empty() {
         return None;
     }
     let protected = vec![false; snapshot.detail_lines.len()];
-    Some(crate::epoch::cap_fold_view(
+    Some(crate::render_fold::cap_fold_view(
         section,
         snapshot.rows_total,
         snapshot.segments_total,
@@ -820,7 +820,7 @@ fn assemble_blocks(
     let snapshots = [
         (
             "exec",
-            crate::epoch::render_exec_snapshot(
+            crate::render_fold::render_exec_snapshot(
                 &bb.exec,
                 ctx.current_round,
                 ctx.current_domain,
@@ -830,7 +830,7 @@ fn assemble_blocks(
         ),
         (
             "edits",
-            crate::epoch::render_edits_snapshot(
+            crate::render_fold::render_edits_snapshot(
                 &bb.edits,
                 ctx.current_round,
                 ctx.current_domain,
@@ -840,7 +840,7 @@ fn assemble_blocks(
         ),
         (
             "tool_actions",
-            crate::epoch::render_tool_actions_snapshot(
+            crate::render_fold::render_tool_actions_snapshot(
                 &bb.tool_actions,
                 ctx.current_round,
                 ctx.current_domain,
@@ -849,14 +849,14 @@ fn assemble_blocks(
             ),
         ),
     ];
-    let mut sections: Vec<(&'static str, Vec<crate::epoch::FoldAnnotation>)> = Vec::new();
+    let mut sections: Vec<(&'static str, Vec<crate::render_fold::FoldAnnotation>)> = Vec::new();
     for (name, snap) in snapshots {
         if !snap.annotations.is_empty() {
             sections.push((name, snap.annotations));
         }
     }
     let (kept, c_omitted) =
-        crate::epoch::select_annotations_closest_to_window(sections, budget.segment_lines);
+        crate::render_fold::select_annotations_closest_to_window(sections, budget.segment_lines);
     let mut c_text = String::new();
     let mut current: Option<&'static str> = None;
     for (section, ann) in kept {
@@ -965,7 +965,7 @@ pub fn build_fold_snapshot_marker(
     for (section, snapshot) in [
         (
             "exec",
-            crate::epoch::render_exec_snapshot(
+            crate::render_fold::render_exec_snapshot(
                 &bb.exec,
                 input.ctx.current_round,
                 input.ctx.current_domain,
@@ -975,7 +975,7 @@ pub fn build_fold_snapshot_marker(
         ),
         (
             "edits",
-            crate::epoch::render_edits_snapshot(
+            crate::render_fold::render_edits_snapshot(
                 &bb.edits,
                 input.ctx.current_round,
                 input.ctx.current_domain,
@@ -985,7 +985,7 @@ pub fn build_fold_snapshot_marker(
         ),
         (
             "tool_actions",
-            crate::epoch::render_tool_actions_snapshot(
+            crate::render_fold::render_tool_actions_snapshot(
                 &bb.tool_actions,
                 input.ctx.current_round,
                 input.ctx.current_domain,
