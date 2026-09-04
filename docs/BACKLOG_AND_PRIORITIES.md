@@ -6,9 +6,9 @@
 > 全量快照（含 2026-09-03 瘦身轮前全部已闭合分区明细与变更记录）：[`存档/backlog/BACKLOG_AND_PRIORITIES_FULL_2026-09-03.md`](../存档/backlog/BACKLOG_AND_PRIORITIES_FULL_2026-09-03.md)。
 > 实施勾选清单：见 [`TODO.md`](../TODO.md)（派生投影，勾选状态随本文件同步；优先级、决策门与状态以本文件为准）。
 
-## 未闭合计数（2026-09-03 口径）
+## 未闭合计数（2026-09-04 口径）
 
-- 未闭合总数：**28 项**（2026-08-31：P2-10 阶段 3 验证闭环 38 → 32；0k S4 实机复验闭环 32 → 30；2026-09-01：P2-11 DC 强制模板轮清理闭合 30 → 29，P3「DC 硬信号 4/6」退役 29 → 28；2026-09-02：P2-12 讨论稿登记不动计数；2026-09-03：P2-13 设计定稿与 B1 S1/S2 完成，未入账、计数不变）。TODO `[ ]` 明细含父/子项，计数以 BACKLOG 为准。
+- 未闭合总数：**28 项**（2026-08-31：P2-10 阶段 3 验证闭环 38 → 32；0k S4 实机复验闭环 32 → 30；2026-09-01：P2-11 DC 强制模板轮清理闭合 30 → 29，P3「DC 硬信号 4/6」退役 29 → 28；2026-09-02：P2-12 讨论稿登记不动计数；2026-09-03：P2-13 设计定稿与 B1 S1/S2 完成，未入账、计数不变；2026-09-04：P2-14 压缩 marker 折叠视图快照设计定稿与裁决收口，未入账、计数不变）。TODO `[ ]` 明细含父/子项，计数以 BACKLOG 为准。
 
 ## 优先级总览
 
@@ -669,6 +669,42 @@
   寿命软上限为据，待真实长会话遥测复核（§13）；压缩次数门槛改述为会话
   久期代理；软上限不做额外弱保软（E12，超出不强制/不拦截/不降级）。
 - 计数：设计轮登记不动计数；设计定稿 + 用户放行后按既有纪律入账。
+
+### 14. COMPACTION-FOLD-SNAPSHOT（P2；2026-09-04 设计定稿 + ADR-0010 §14.54 转录；S1 已收口，S2–S4 待续，未入账）
+
+- 机制：压缩 marker 由五段模板改为**压缩点冻结黑板折叠视图快照**——近窗
+  明细块（折叠默认展开子集 = 当前域段 ∪ 最近 K 轮 ∪ 最近 20% 行，∩
+  round < r_keep，排除保留尾行）+ 旧段聚合块（≤30 条段标注行，取最接近
+  近窗者）+ failure_agg 块（≤3K，溢出随存档 annex）+ 查询指针块；marker
+  总量 20K 定档。触发 / drain / 保留尾 / 缩减守卫 / rolling 单 marker /
+  存档 digest / 事件面不变；压缩不触碰黑板；快照与 blackboard_read 折叠
+  渲染同源（复用 render_fold，未达 T/W 也强制折叠视图保证有界）。
+- 裁决（2026-09-04 用户逐项裁决，无异议）：设计稿 §8 R1–R5 全部按推荐
+  收口；marker 五段槽退役，但实施放行前既有语义继续生效（既有实现非
+  gap）。
+- 车道范围裁决（2026-09-04 全面复审处理）：v0.3 折叠快照 marker 只用于
+  主会话压缩；检索/grill 车道与消息无轮章的旧会话回退 v0.2 五段模板
+  （既有语义不变）；主消息轮章只盖 Main 车道声明；共享折叠分区行 /
+  dispatch mirror / DispatchStamp / handle_parent_disposition audit
+  mirror 统一取执行窗主轮章（effective）。
+- S1 已收口（2026-09-04，用户放行第三条路「消息补轮章 + 子车道行盖派发
+  主轮章」后开工 + 全面复审处理）：gateway `Message.round` 可选轮章
+  （serde default/skip、不上 wire）+ 主车道决策轮执行窗 pin + 快照入口
+  （render_*_snapshot：r_keep 过滤 / pre-stamp 强制折叠 / 最近 N 条选择）
+  + summary.rs v0.3 A–E 块装配（A 600 / B 8K / C 30 / D 3K / E 1K，总量
+  20K + env 覆盖，D 溢出随存档 annex）+ run_template_compact 接线（drain
+  后取保留尾首条声明轮章作 r_keep）+ §7 单测矩阵 1–7；orz-loop lib 720
+  passed / 0 failed / 3 ignored，fmt/diff 净，orz-host ACP 43 项全绿。
+  全面复审证据见
+  [P2-14 S1 复审处理](audits/P2-14_S1_REVIEW_HANDLING_2026-09-04.md)。
+- S2–S4 待续：S2 压缩 e2e（rhythm / fallback / session_end / 恢复预检）；
+  S3 Linux musl 重建；S4 实机复验 + marker 尺寸/块溢出/blackboard_read
+  跟随率遥测。
+- 入口：[设计稿](CONTEXT_COMPACTION_BLACKBOARD_FOLD_DESIGN_2026-09-04.md)
+  / [ADR-0010 §14.54](../adr/ADR-0010-fusion-runtime-and-agent-architecture.md)
+  / [复审处理](audits/P2-14_S1_REVIEW_HANDLING_2026-09-04.md)
+  / [TODO P2-14](../TODO.md) / CLI_PROJECT_INDEX
+  （AUTH-COMPACTION-FOLD-SNAPSHOT，`pending`）。
 
 
 ## P3 — 收尾 / 清理

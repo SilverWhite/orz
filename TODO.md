@@ -509,6 +509,42 @@
   [B4 S3 重建记录](docs/audits/P2-13_B4_S3_BUILD_2026-09-03.md)）；
   S4 复验（web 通道 A/B、折叠态读取与展开、恢复、长会话遥测）待续。
 
+### P2-14 CONTEXT-COMPACTION-FOLD-SNAPSHOT（P2；2026-09-04 设计定稿；S1 已收口，S2–S4 待续）
+
+> 入口：[设计稿](docs/CONTEXT_COMPACTION_BLACKBOARD_FOLD_DESIGN_2026-09-04.md)
+> / [BACKLOG P2-14](docs/BACKLOG_AND_PRIORITIES.md) / ADR-0010 §14.54。
+
+- [x] 设计定稿与裁决收口（2026-09-04：R1–R5 按推荐定案、总量 20K 定档；
+  ADR-0010 §14.54 转录；CLI_PROJECT_INDEX 登记
+  AUTH-COMPACTION-FOLD-SNAPSHOT，`pending`）。
+  - [x] **S1（2026-09-04 用户放行第三条路后开工，全面复审处理收口）**：
+    r_keep 接线验证（消息轮/LIF 轮 cadence）+ render_fold 快照入口纯
+    函数 + v0.3 A–E marker 装配与 run_template_compact 接线 + §7 单测
+    矩阵 1–7。落地明细：
+    - 第三条路 = 消息补轮章 + 主车道决策轮执行窗 pin：gateway
+      `Message.round`（serde default/skip、transport 不上 wire）、声明
+      消息只盖 Main 车道轮章（车道范围裁决）、共享折叠分区行 /
+      dispatch mirror / DispatchStamp / handle_parent_disposition audit
+      mirror 统一取执行窗主轮章（effective_blackboard_stamp）；
+    - epoch.rs 快照入口：`render_*_snapshot`（r_keep 过滤 + pre-stamp
+      强制折叠归 C）+ `select_annotations_closest_to_window`（最接近
+      近窗 ≤N 条 + 溢出计数）+ `cap_fold_view` 复用（B 明细视图 cap）；
+    - summary.rs v0.3 A–E 块装配（A 600 / B 8K / C 30 / D 3K / E 1K、
+      总量 20K 定档 + env 覆盖）、D 溢出随存档 annex、`SUMMARY_MARKER_
+      ESTIMATE_TOKENS` 重校准 11K；v0.2 五段路径保留为检索/grill 车道
+      与旧会话（消息无轮章）回退；
+    - run_template_compact 接线：drain/fallback 后取保留尾首条声明轮章
+      作 r_keep，槽构建移到 drain 后；v0.3 主会话 / v0.2 回退双轨；
+    - 测试：cadence 锁定 + DispatchStamp 同轴断言、快照 6 项、装配 4 项、
+      e2e 主车道 v0.3 marker 断言；orz-loop lib 720 passed / 0 failed /
+      3 ignored，fmt/diff 净。全面复审处置与审计证据见
+      [P2-14 S1 复审处理](docs/audits/P2-14_S1_REVIEW_HANDLING_2026-09-04.md)。
+  - [ ] **S2 压缩 e2e**：rhythm / fallback / session_end / 恢复预检全串行
+    绿（v0.3 marker 恢复保留、r_keep 边界在真实长会话的遥测前置）。
+  - [ ] **S3 Linux musl 重建**（沿用 ORZ-BUILD-MOUNT-001 契约）。
+  - [ ] **S4 实机复验 + 遥测**：marker 实际字符分布、块 B/C 溢出频率、
+    压缩后 blackboard_read 跟随调用频率、restore 后 marker 可用性。
+
 ## P3 — 收尾 / 清理
 
 - [ ] EVIDENCE-LOCAL-BROWSER：Python 路径（retrieval_workflow / evidence_store / pdf_evidence）按 ADR-0010 重新符合性审查或退役。
