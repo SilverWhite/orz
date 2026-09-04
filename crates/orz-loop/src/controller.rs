@@ -613,10 +613,34 @@ pub struct AgentLoopController {
     /// tool events; read-only surface via `blackboard_read
     /// section=temporal` (PULL, zero injection — §3/§6.1).
     pub(crate) lif: Mutex<orz_assurance::lif::LifEngine>,
+    /// P2-14 S1（2026-09-04，ADR-0010 §14.54 / 压缩 marker 折叠视图快照
+    /// 设计 §3.1 R1 不一致分支）：共享折叠分区（exec / edits /
+    /// tool_actions）行章的「执行窗主决策轮」pin——主车道某轮模型输出带
+    /// 工具调用时，在工具执行窗内把 pin 置为该轮决策后的 LIF (round,
+    /// domain)；检索子车道共享同一 controller，其工具在 pin 期间写共享
+    /// 折叠分区时即盖「派发主轮章」（与 internal_ret/external_ret 的
+    /// DispatchStamp 同口径——2026-09-04 复审处理把 DispatchStamp 提交点
+    /// 也切到 effective，两个面同轴）。None = 无执行窗（读取面/非折叠写面
+    /// 沿用 live `blackboard_stamp`）。pin 由主车道轮工具段持有、段末 Drop
+    /// 清除，绝不跨模型请求残留。
+    board_stamp_pin: Mutex<Option<(u64, Domain)>>,
     /// PULL 自描述（2026-08-31，P2-11 第 1 项 / 设计 §3）：每分区「上次
     /// 成功读取」的版本游标——live-only、随 run 复位；`blackboard_read`
     /// 成功 live 读取后推进对应分区游标（其余分区保持未读徽章）。
     pub(crate) blackboard_read_cursors: Mutex<std::collections::HashMap<String, u64>>,
+}
+
+/// P2-14 S1：`board_stamp_pin` 的 RAII 守卫——主车道决策轮工具段持有，
+/// 段末（含 continue/break/Err 早退）Drop 清除，保证 pin 不跨模型请求
+/// 残留。只持 `&Mutex` 不持锁跨 await，无死锁面。
+pub(crate) struct BoardStampPinGuard<'a> {
+    slot: &'a Mutex<Option<(u64, Domain)>>,
+}
+
+impl Drop for BoardStampPinGuard<'_> {
+    fn drop(&mut self) {
+        *self.slot.lock().unwrap() = None;
+    }
 }
 
 /// F7 (2026-08-15, BACKLOG 6e 复查遗留): which epoch snapshot failed to
@@ -805,6 +829,7 @@ impl AgentLoopController {
             delivery_baseline: Mutex::new(None),
             delivery_pending: Mutex::new((0, false)),
             lif: Mutex::new(orz_assurance::lif::LifEngine::new()),
+            board_stamp_pin: Mutex::new(None),
             blackboard_read_cursors: Mutex::new(std::collections::HashMap::new()),
             plan_first_enabled: false,
             plan_first_session_done: false,
@@ -1352,6 +1377,7 @@ impl AgentLoopController {
                     tool_call_id: None,
                     tool_calls: Vec::new(),
                     reasoning_content: None,
+                    round: None,
                 });
             }
             *last = line;
@@ -1421,6 +1447,7 @@ impl AgentLoopController {
             delivery_baseline: Mutex::new(None),
             delivery_pending: Mutex::new((0, false)),
             lif: Mutex::new(orz_assurance::lif::LifEngine::new()),
+            board_stamp_pin: Mutex::new(None),
             blackboard_read_cursors: Mutex::new(std::collections::HashMap::new()),
             plan_first_enabled: false,
             plan_first_session_done: false,
@@ -1933,6 +1960,7 @@ impl AgentLoopController {
             tool_call_id: None,
             tool_calls: Vec::new(),
             reasoning_content: None,
+            round: None,
         });
         Ok(())
     }
@@ -2333,6 +2361,29 @@ impl AgentLoopController {
         (temporal.round(), temporal.current_domain())
     }
 
+    /// P2-14 S1：共享折叠分区写面的生效轮章——执行窗 pin 优先（主车道
+    /// 决策轮工具段 / 检索子车道派发窗），无 pin 回退 live
+    /// `blackboard_stamp`（读取面与 actions/failure_agg/检索分区等非折叠
+    /// 写面语义不变）。
+    pub(crate) fn effective_blackboard_stamp(&self) -> (u64, Domain) {
+        self.board_stamp_pin
+            .lock()
+            .unwrap()
+            .unwrap_or_else(|| self.blackboard_stamp())
+    }
+
+    /// 主车道决策轮工具段进入点：以决策后 LIF (round, domain) 置 pin，
+    /// 返回 Drop 即清除的守卫。检索子车道（非 Main profile）不调用本
+    /// 方法——共享 pin 保持派发主轮章；主车道每轮工具段结束后守卫清除，
+    /// 绝不跨模型请求残留。
+    pub(crate) fn pin_main_board_stamp(&self) -> BoardStampPinGuard<'_> {
+        let stamp = self.blackboard_stamp();
+        *self.board_stamp_pin.lock().unwrap() = Some(stamp);
+        BoardStampPinGuard {
+            slot: &self.board_stamp_pin,
+        }
+    }
+
     /// B1 统一写时盖章工具动作推送：盖 LIF (round, domain) 章后入工具
     /// 动作分区（单一落点，避免各调用点漏章/重复取章）。
     pub(crate) fn push_tool_action_stamped(
@@ -2341,7 +2392,10 @@ impl AgentLoopController {
         tool: String,
         timestamp: String,
     ) {
-        let (round, domain) = self.blackboard_stamp();
+        // P2-14 S1：共享折叠分区行按执行窗主轮章（pin 优先）盖章——子
+        // 车道写共享 tool_actions 时盖派发主轮，与检索分区 DispatchStamp
+        // 同口径（ADR-0010 §14.54 实施）。
+        let (round, domain) = self.effective_blackboard_stamp();
         self.blackboard.write().push_tool_action(ToolActionRecord {
             category,
             tool,
@@ -3189,6 +3243,7 @@ impl AgentLoopController {
                         tool_call_id: None,
                         tool_calls: Vec::new(),
                         reasoning_content: None,
+                        round: None,
                     });
                 }
                 m.push(Message {
@@ -3197,6 +3252,7 @@ impl AgentLoopController {
                     tool_call_id: None,
                     tool_calls: Vec::new(),
                     reasoning_content: None,
+                    round: None,
                 });
                 m
             }
@@ -3215,6 +3271,7 @@ impl AgentLoopController {
                     tool_call_id: None,
                     tool_calls: Vec::new(),
                     reasoning_content: None,
+                    round: None,
                 });
                 m
             }
@@ -3260,6 +3317,7 @@ impl AgentLoopController {
                             tool_call_id: None,
                             tool_calls: Vec::new(),
                             reasoning_content: None,
+                            round: None,
                         },
                     );
                     writer
@@ -3358,6 +3416,7 @@ impl AgentLoopController {
                     session_id: self.session_id.as_deref(),
                     in_flight_tools: None,
                 };
+                let (bb_round, bb_domain) = self.blackboard_stamp();
                 let _ = run_template_compact(
                     &svc,
                     writer,
@@ -3374,6 +3433,13 @@ impl AgentLoopController {
                     // 压缩的 marker 携带外挂台账路径提示（内部再按
                     // 文件存在/已折叠过滤）。
                     Some(&crate::action_ledger::ledger_file_path(&host.session_cwd())),
+                    // P2-14 S1：主会话收尾压缩走 v0.3 折叠快照（此处即
+                    // 主会话 —— grill 已在上文排除、检索车道走 dispatch.rs
+                    // 自己的 session-end 调用并传 None）。
+                    Some(crate::summary::FoldSnapshotCtx {
+                        current_round: bb_round,
+                        current_domain: bb_domain,
+                    }),
                     &mut fold_state,
                 )
                 .await?;
@@ -3540,6 +3606,7 @@ impl AgentLoopController {
             tool_call_id: None,
             tool_calls: Vec::new(),
             reasoning_content: None,
+            round: None,
         });
         Ok(deferred.then_some(rec))
     }
@@ -3596,6 +3663,7 @@ impl AgentLoopController {
             tool_call_id: Some(tc.call_id.clone()),
             tool_calls: Vec::new(),
             reasoning_content: None,
+            round: None,
         });
         Ok((
             ToolResult {
@@ -4766,6 +4834,7 @@ mod tests {
                 tool_call_id: None,
                 tool_calls: Vec::new(),
                 reasoning_content: Some("思考过程".to_string()),
+                round: None,
             },
         ];
         let response = controller

@@ -97,6 +97,7 @@ impl AgentLoopController {
                 tool_call_id: Some(tc.call_id.clone()),
                 tool_calls: Vec::new(),
                 reasoning_content: None,
+                round: None,
             });
             return Ok(ToolResult {
                 output: msg,
@@ -150,6 +151,7 @@ impl AgentLoopController {
                         tool_call_id: Some(tc.call_id.clone()),
                         tool_calls: Vec::new(),
                         reasoning_content: None,
+                        round: None,
                     });
                     return Ok(ToolResult {
                         output: msg,
@@ -242,6 +244,7 @@ impl AgentLoopController {
                 tool_call_id: Some(tc.call_id.clone()),
                 tool_calls: Vec::new(),
                 reasoning_content: None,
+                round: None,
             });
             return Ok(ToolResult {
                 output: msg,
@@ -273,6 +276,7 @@ impl AgentLoopController {
                         tool_call_id: None,
                         tool_calls: Vec::new(),
                         reasoning_content: None,
+                        round: None,
                     });
                     (a, task_goal)
                 }
@@ -300,6 +304,7 @@ impl AgentLoopController {
                                 tool_call_id: None,
                                 tool_calls: Vec::new(),
                                 reasoning_content: None,
+                                round: None,
                             }],
                             pending: None,
                             next_goal: None,
@@ -550,6 +555,10 @@ impl AgentLoopController {
                         self.context_compact.recent_tail_rounds,
                         // 检索车道不折叠：marker 不携带外挂台账提示。
                         None,
+                        // P2-14 S1 车道范围裁决：检索车道压缩保持 v0.2
+                        // 五段模板（子会话消息无主决策轮章，fold 快照轴不
+                        // 适用），不传折叠快照 LIF 上下文。
+                        None,
                         &mut fold_state,
                     )
                     .await?;
@@ -665,7 +674,12 @@ impl AgentLoopController {
                 // B1 会话化基础（2026-09-03，R1）：派发完成时取写时章——
                 // round/domain 来自本派发所属主决策轮的 LIF 当前态（写时
                 // 单一来源，与 failure_agg/exec 同刻度）。锁不跨 write_section。
-                let (round, domain) = self.blackboard_stamp();
+                // P2-14 S1（2026-09-04，ADR-0010 §14.54 复审处理）：提交点
+                // 在子车道 loop 结束后（共享 LIF 已被子决策推进），若取
+                // live 章会落到子车道轮号、与共享折叠镜像行（主轮章）双轴
+                // 错配——改取执行窗主轮章（effective，主 pin 优先），使
+                // DispatchStamp 与同窗镜像行/折叠行同一主决策轮轴。
+                let (round, domain) = self.effective_blackboard_stamp();
                 crate::agents::retrieval::write_section(
                     role,
                     &self.blackboard,
@@ -896,7 +910,9 @@ impl AgentLoopController {
         // tool-action section (category "retrieval" — subagent calls count
         // as one semantic action each).
         // B1：写时盖 (round, domain) 章（与主决策轮同刻度）。
-        let (round, domain) = self.blackboard_stamp();
+        // P2-14 S1：镜像行在派发主轮执行窗内（主 pin 生效），按执行窗
+        // 主轮章盖章——与 internal_ret/external_ret DispatchStamp 同轮。
+        let (round, domain) = self.effective_blackboard_stamp();
         {
             let mut w = self.blackboard.write();
             w.push_tool_action(ToolActionRecord {
@@ -921,6 +937,7 @@ impl AgentLoopController {
             tool_call_id: Some(tc.call_id.clone()),
             tool_calls: Vec::new(),
             reasoning_content: None,
+            round: None,
         });
         Ok(tool_result)
     }
@@ -951,6 +968,79 @@ mod tests {
     /// 突变窗口；std::sync::MutexGuard 跨 await 仅对 current_thread
     /// 测试运行时成立，本文件 tokio::test 默认即此）。
     static RETRIEVAL_CHANNEL_ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    /// P2-14 S1 r_keep cadence 验证（2026-09-04，ADR-0010 §14.54 实施）：
+    /// ① 共享 LIF 轮轴确实计入检索子车道决策轮（run 结束 temporal round
+    /// = 主 1 + 子 2 = 3，而主对话只有 1 个主声明轮）——消息轮与 LIF 轮
+    /// 非 1:1，压缩点必须取「保留尾首条声明消息」自身的轮章而非
+    /// 「LIF − 保留数 + 1」；
+    /// ② 共享折叠分区（exec/tool_actions）行章按「执行窗主轮」盖写——
+    /// 子车道工具行不再携带不可见的子车道轮号（最大行轮章 = 派发主轮
+    /// 1，与 internal_ret/external_ret DispatchStamp 同口径），使黑板行
+    /// 轮轴与主会话消息轮轴对齐（r_keep 单边界精确排除保留尾内容）。
+    #[tokio::test]
+    async fn retrieval_lane_decisions_share_lif_round_axis() {
+        let dir = test_dir();
+        let journal = JournalRecorder::new(dir.clone());
+        let host = TestHost {
+            journal,
+            tool_result: None,
+        };
+        let gateway: Arc<dyn ModelGateway> = Arc::new(FakeProvider::new(vec![
+            ScriptedResponse::tool_calls(vec![tool_call("web_search", "call-1")]),
+            ScriptedResponse::tool_calls(vec![web_fetch_call("call-2", "https://a.example")]),
+            ScriptedResponse::tool_calls(vec![web_fetch_call("call-3", "https://b.example")]),
+            ScriptedResponse::text("检索完成"),
+            ScriptedResponse::text("完成"),
+            ScriptedResponse::text("完成"),
+        ]));
+        let controller = with_retrieval_enabled(AgentLoopController::with_gateway(gateway));
+        controller
+            .run_turn(&host, "查网页", "RUN-LIFCAD", MANIFEST, 0, None, None, None)
+            .await
+            .unwrap();
+
+        // 共享 LIF 计数子车道决策（消息轮不 1:1——见模块注释 ①）。
+        let snapshot = controller.lif_session_snapshot();
+        assert_eq!(
+            snapshot.round, 3,
+            "检索车道决策必须计入共享 LIF 轮轴（r_keep 推导的前提验证）"
+        );
+
+        // 执行窗主轮章：子车道工具行盖派发主轮（=1），不再出现子车道
+        // 轮号 2/3——黑板行轮轴与主会话消息轮轴一致（见模块注释 ②）。
+        let bb = controller.blackboard().read();
+        let mut max_round = 0u64;
+        for r in &bb.tool_actions {
+            max_round = max_round.max(r.round);
+        }
+        for e in bb.exec.results.iter().chain(bb.exec.errors.iter()) {
+            max_round = max_round.max(e.round);
+        }
+        assert_eq!(
+            max_round, 1,
+            "共享折叠分区行必须盖派发主轮章（实测最大轮章 {max_round}）"
+        );
+        assert!(
+            bb.tool_actions.iter().any(|r| r.tool == "web_fetch"),
+            "检索车道自执行的 web_fetch 行必须已入共享 tool_actions 分区"
+        );
+        // 2026-09-04 复审处理：DispatchStamp 提交点改取执行窗主轮章——
+        // 外部检索分区章与共享折叠镜像行同轴（主轮 1），不再残留子车道
+        // 实时轮号（2/3）。
+        assert_eq!(
+            bb.external_ret.stamp.as_ref().map(|s| s.round),
+            Some(1),
+            "DispatchStamp 必须与共享折叠行同主决策轮（实测 {:?}）",
+            bb.external_ret.stamp
+        );
+        assert!(
+            bb.internal_ret.stamp.as_ref().is_none_or(|s| s.round <= 1),
+            "内部检索分区无本次外部派发章或章须为主轮 1"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 
     /// THIN-HARNESS-REDESIGN R2a 审查处理 (P3-1): 恢复时重建检索分区——
     /// sidecar 快照携带的 internal_ret / external_ret 经

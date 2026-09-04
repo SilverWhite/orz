@@ -524,20 +524,22 @@ pub(crate) enum CompactDecision {
     Executed,
 }
 
-/// The shared five-section mechanical compaction flow (P0-D S3 + review
-/// fixes + 2026-08-18 B 定案, ADR-0010 §14.29).
+/// The shared mechanical compaction flow (P0-D S3 + review fixes +
+/// 2026-08-18 B 定案, ADR-0010 §14.29 + P2-14 v0.3 折叠快照 marker，
+/// ADR-0010 §14.54).
 ///
 /// Used by the loop-top rhythm/fallback trigger and by the end-of-session
-/// compaction (reason = "session_end", forced). Makes ZERO model calls:
-/// the five slots come from the blackboard + mechanical placeholders
-/// (注意事项 = HA 结构化事实聚合阶段 (c) 定稿，ADR-0010 §14.30 / 设计
-/// §4.4.1；后续衔接 = 固定中性占位，不交助理层，设计 §4.4.2), the
-/// archive is persisted with bounded retries (an archive failure is
-/// explicitly reported in the marker and the event), the conversation is
-/// truncated, the rolling single marker is inserted and
-/// `context_compressed` v0.2 is journaled with `mode: "mechanical"`.
-/// v1.15 (2026-08-14): compaction never touches the blackboard — the
-/// blackboard lifecycle is the plan epoch, not the context window.
+/// compaction (reason = "session_end", forced). Makes ZERO model calls.
+/// Marker 双轨（2026-09-04 复审处理，车道范围裁决）：
+/// - `fold_ctx = Some(主车道 LIF round/domain)` 且保留尾首条声明消息带轮章
+///   时 → v0.3 压缩点冻结黑板折叠视图快照（A–E 块，r_keep 排除保留尾行；
+///   主会话压缩专用）；
+/// - 其余（检索/grill 车道、旧会话消息无轮章）→ v0.2 五段模板（既有语义
+///   原样保留：目的/计划/变动文件路径机械填充、注意事项 = HA 结构化事实
+///   聚合、后续衔接 = 固定中性占位）。
+/// 两条路径都：存档恒写入（审计副本 + digest，bounded retries，失败显式
+/// 上报）、滚动单 marker 插入、`context_compressed` v0.2 事件（mode:
+/// "mechanical"，事件面不变）。v1.15：压缩永不触碰黑板（快照只读）。
 #[allow(clippy::too_many_arguments)]
 pub(crate) async fn run_template_compact(
     svc: &SharedLoopServices<'_>,
@@ -556,6 +558,10 @@ pub(crate) async fn run_template_compact(
     // files that exist or a fold that happened, so a restored
     // conversation never gets a dangling pointer.
     ledger_path: Option<&std::path::Path>,
+    // P2-14 S1（2026-09-04，ADR-0010 §14.54）：主会话折叠快照 LIF 上下文。
+    // 非 Main 车道（检索/grill）传 None → 保持 v0.2 五段模板（车道范围
+    // 裁决见模块注释）；调用方在压缩触发点取 `blackboard_stamp()`。
+    fold_ctx: Option<crate::summary::FoldSnapshotCtx>,
     // FUS-LEDGER-FOLD-STATE (2026-08-18, ADR-0010 §14.26): the loop's
     // stateful fold point — the summary input uses the same folded view
     // as the main requests (同源), the drain cut is `fold_cut` when
@@ -641,36 +647,16 @@ pub(crate) async fn run_template_compact(
     });
     let epoch_archive = epoch_archive.flatten();
     let session_snapshot = svc.session_id;
-    // P2-12 审查处理（2026-09-02）：注意事项槽 3K 溢出时，被挤出的失败
-    // 目标聚合行随压缩存档以补全段保存——failure_agg 不是 blackboard_read
-    // 查询分区，指针「其余 N 条见 … 摘要存档」靠存档补全段保持可回查。
-    let mut failure_annex: Option<Vec<String>> = None;
-    let slots = {
-        let bb = svc.blackboard.read();
-        let (purpose, plan, paths) =
-            crate::summary::mechanical_slots(&bb, &archive_path, epoch_archive.as_deref());
-        let notes = crate::summary::render_facts_notes(&bb);
-        if !notes.hidden_failure_rows.is_empty() {
-            failure_annex = Some(notes.hidden_failure_rows);
-        }
-        crate::summary::SummarySlots {
-            purpose,
-            plan,
-            paths,
-            // 2026-08-19 阶段 (c) 定稿（ADR-0010 §14.30 / 设计 §4.4.1）
-            // + P2-12 方案 A（2026-09-02）：注意事项槽 = HA 结构化事实
-            // 聚合（零模型、只机械聚合 controller 已写入的 plan 失败步骤 /
-            // F4 失败目标聚合（取代 exec 错误原文窗口）/ 动作失败 receipt）。
-            notes: notes.text,
-            // 阶段 (c) 定稿（设计 §4.4.2）：后续衔接槽不交助理层——固定
-            // 中性占位 + 回查入口，由主模型自行判断，避免限制或机械性误导。
-            continuation: crate::summary::MECHANICAL_CONTINUATION_PLACEHOLDER.to_string(),
-        }
-    };
     let first_round_start = messages
         .iter()
         .position(|m| m.role == Role::Assistant && !m.tool_calls.is_empty())
         .unwrap_or(messages.len());
+    // P2-14 S1：被压区间首轮（首条被 drain 声明消息的轮章）在 drain 前
+    // 捕获（旧会话消息无章时为 None → 存档/marker 不虚构轮区间）。
+    let drained_first_round = messages[first_round_start..kept_start]
+        .iter()
+        .find(|m| m.role == Role::Assistant && !m.tool_calls.is_empty())
+        .and_then(|m| m.round);
     let mut dropped = rounds_dropped;
     let mut messages_dropped = messages.drain(first_round_start..kept_start).count();
     // FALLBACK 紧急口径保持（D2-2）：200K 兜底触发时，常规 drain 后再按
@@ -695,35 +681,93 @@ pub(crate) async fn run_template_compact(
     // marker 恒携带真实 digest/路径——无 summary_incomplete 终止态。
     // 审查修复（2026-08-19）：存档/marker 在 drain + fallback 截断后定稿，
     // 「被压轮次」= 总轮数，与事件口径一致。
-    let markdown = crate::summary::summary_archive_markdown(
-        &id,
-        &slots,
-        dropped,
-        guard_failed,
-        failure_annex.as_deref(),
-        // FUS-LEDGER-FOLD-STATE (2026-08-18, ADR-0010 §14.26 + §14.28
-        // external-file design): the archive preserves the folded view the
-        // model saw — the byte-fixed pointer message. The folded ROWS
-        // survive in the append-only external ledger file (never drained
-        // by compaction), which the marker points a restored conversation
-        // at. The fold state is still folded here (reset happens after the
-        // drain).
-        fold_state.folded_ledger.as_deref(),
-    );
+    // P2-14 S1：r_keep = 保留尾首条声明消息的轮章（drain 后取，fallback
+    // 截断后仍以最终保留尾为准）；主会话传 ctx 且 r_keep 可得 → v0.3 折叠
+    // 快照 marker；否则（非 Main 车道/旧会话无章）→ v0.2 五段模板回退。
+    let r_keep = messages[insert_at..]
+        .iter()
+        .find(|m| m.role == Role::Assistant && !m.tool_calls.is_empty())
+        .and_then(|m| m.round);
+    let ledger_hint_text = ledger_hint.map(|p| p.display().to_string());
+    // 两分支各自赋值（v0.3 / v0.2），事件与 marker 共用。
+    let archive_write_failed;
+    let (markdown, marker) = match (fold_ctx, r_keep) {
+        (Some(ctx), Some(r_keep)) => {
+            // v0.3：先装配存档文本（不含 digest 自引用）→ 写盘 → 得
+            // archive_write_failed → 再以真实失败态生成 marker（A 注记）。
+            let budget = crate::summary::CompactionBudget::from_env();
+            let make = |archive_write_failed: bool| {
+                let bb = svc.blackboard.read();
+                let out = crate::summary::build_fold_snapshot_marker(
+                    &bb,
+                    &crate::summary::FoldSnapshotInput {
+                        id: &id,
+                        archive_path: &archive_path,
+                        session: session_snapshot,
+                        rounds_dropped: dropped,
+                        round_from: drained_first_round,
+                        r_keep,
+                        ctx,
+                        guard_failed,
+                        archive_write_failed,
+                        ledger_note: ledger_hint_text.as_deref(),
+                        frozen_ledger: fold_state.folded_ledger.as_deref(),
+                        budget,
+                    },
+                );
+                out
+            };
+            let first = make(false);
+            archive_write_failed =
+                !crate::summary::write_archive_retry(&archive_dir, &archive_path, &first.archive);
+            let final_out = make(archive_write_failed);
+            (first.archive.clone(), final_out.marker)
+        }
+        _ => {
+            // v0.2 五段模板回退（非 Main 车道 / 旧会话无轮章；语义不变）。
+            let mut failure_annex: Option<Vec<String>> = None;
+            let slots = {
+                let bb = svc.blackboard.read();
+                let (purpose, plan, paths) =
+                    crate::summary::mechanical_slots(&bb, &archive_path, epoch_archive.as_deref());
+                let notes = crate::summary::render_facts_notes(&bb);
+                if !notes.hidden_failure_rows.is_empty() {
+                    failure_annex = Some(notes.hidden_failure_rows);
+                }
+                crate::summary::SummarySlots {
+                    purpose,
+                    plan,
+                    paths,
+                    notes: notes.text,
+                    continuation: crate::summary::MECHANICAL_CONTINUATION_PLACEHOLDER.to_string(),
+                }
+            };
+            let markdown = crate::summary::summary_archive_markdown(
+                &id,
+                &slots,
+                dropped,
+                guard_failed,
+                failure_annex.as_deref(),
+                fold_state.folded_ledger.as_deref(),
+            );
+            let digest = crate::summary::archive_digest(&markdown);
+            archive_write_failed =
+                !crate::summary::write_archive_retry(&archive_dir, &archive_path, &markdown);
+            let marker = crate::summary::build_summary_marker(
+                &id,
+                &digest,
+                &archive_path,
+                &slots,
+                dropped,
+                guard_failed,
+                archive_write_failed,
+                session_snapshot,
+                ledger_hint,
+            );
+            (markdown, marker)
+        }
+    };
     let digest = crate::summary::archive_digest(&markdown);
-    let archive_write_failed =
-        !crate::summary::write_archive_retry(&archive_dir, &archive_path, &markdown);
-    let marker = crate::summary::build_summary_marker(
-        &id,
-        &digest,
-        &archive_path,
-        &slots,
-        dropped,
-        guard_failed,
-        archive_write_failed,
-        session_snapshot,
-        ledger_hint,
-    );
     messages.insert(
         insert_at,
         Message {
@@ -732,6 +776,7 @@ pub(crate) async fn run_template_compact(
             tool_call_id: None,
             tool_calls: Vec::new(),
             reasoning_content: None,
+            round: None,
         },
     );
     // FUS-LEDGER-FOLD-STATE (2026-08-18, ADR-0010 §14.26): the conversation
@@ -950,6 +995,16 @@ pub(crate) async fn run_agent_loop(
         if summary_now && let Some(measured) = last_prompt_tokens {
             let reason = if fallback_now { "fallback" } else { "rhythm" };
             let tail = svc.context_compact.recent_tail_rounds;
+            // P2-14 S1：主会话压缩才走 v0.3 折叠快照（取压缩触发点 LIF
+            // round/domain 作快照上下文）；检索/grill 车道传 None 保持
+            // v0.2 五段模板（车道范围裁决 2026-09-04 复审处理）。
+            let fold_ctx = (profile.role == AgentRole::Main).then(|| {
+                let (round, domain) = controller.blackboard_stamp();
+                crate::summary::FoldSnapshotCtx {
+                    current_round: round,
+                    current_domain: domain,
+                }
+            });
             // FUS-LEDGER-FOLD-STATE external-file design (2026-08-18,
             // ADR-0010 §14.28 审查修复): the external ledger is the MAIN
             // lane's conversation projection — retrieval lanes never fold,
@@ -968,6 +1023,7 @@ pub(crate) async fn run_agent_loop(
                 rounds_since_compact,
                 tail,
                 ledger_hint.as_deref(),
+                fold_ctx,
                 &mut fold_state,
             )
             .await?
@@ -1000,6 +1056,7 @@ pub(crate) async fn run_agent_loop(
                             rounds_since_compact,
                             tail,
                             ledger_hint.as_deref(),
+                            fold_ctx,
                             &mut fold_state,
                         )
                         .await?
@@ -1633,6 +1690,35 @@ pub(crate) async fn run_agent_loop(
                 .unwrap()
                 .on_decision_round(AgentLoopController::now_epoch_secs());
         }
+        // P2-14 S1（2026-09-04，ADR-0010 §14.54）：决策轮 = model_output
+        // 带工具调用。捕获决策后 LIF 轮章（声明消息与黑板行共用同一轴），
+        // 主车道同时置「执行窗主轮章」pin——本轮工具段（含嵌套检索子
+        // 车道）写共享折叠分区一律盖本主轮章（派发主轮口径）；守卫随
+        // 循环体结束/break/return Drop 清除，不跨模型请求残留。
+        // 车道范围裁决（2026-09-04 复审处理，ADR-0010 §14.54 补注）：v0.3
+        // 折叠视图快照 marker 只用于主会话压缩（主会话消息轮轴 = 主决策
+        // 轮轴，行章由 pin 对齐）；检索子车道会话按自己的消息轮次 drain，
+        // 其消息不盖主决策轮章（保持 None）——子车道压缩继续走 v0.2 五段
+        // 模板，避免「子消息实时 LIF 轮号 vs 行主轮章」双轴错配（若给子
+        // 消息盖实时轮章，将来按「保留尾首条声明轮章」推 r_keep 会把保留
+        // 尾消息对应的行全部误收进 marker）。
+        let decision_round: Option<u64> = if response.tool_calls.is_empty() {
+            None
+        } else {
+            Some(controller.blackboard_stamp().0)
+        };
+        // 检索/grill 等非 Main 车道不盖消息轮章（见上车道范围裁决）。
+        let decision_round = if profile.role == AgentRole::Main {
+            decision_round
+        } else {
+            None
+        };
+        let _board_stamp_pin = if response.tool_calls.is_empty() || profile.role != AgentRole::Main
+        {
+            None
+        } else {
+            Some(controller.pin_main_board_stamp())
+        };
 
         // P0-D: track the round — measured prompt tokens feed the next
         // loop-top trigger check; the round counter is the summary
@@ -1683,6 +1769,7 @@ pub(crate) async fn run_agent_loop(
                             tool_call_id: None,
                             tool_calls: Vec::new(),
                             reasoning_content: None,
+                            round: None,
                         });
                         pending_checkpoint = Some(pending.with_attempt(*attempt + 1));
                         continue;
@@ -1717,6 +1804,7 @@ pub(crate) async fn run_agent_loop(
                         tool_call_id: None,
                         tool_calls: Vec::new(),
                         reasoning_content: response.reasoning_content.clone(),
+                        round: None,
                     });
                 }
                 continue;
@@ -1733,6 +1821,7 @@ pub(crate) async fn run_agent_loop(
                         tool_call_id: None,
                         tool_calls: Vec::new(),
                         reasoning_content: response.reasoning_content.clone(),
+                        round: None,
                     });
                 }
                 continue;
@@ -1774,6 +1863,7 @@ pub(crate) async fn run_agent_loop(
                         tool_call_id: None,
                         tool_calls: Vec::new(),
                         reasoning_content: response.reasoning_content.clone(),
+                        round: None,
                     });
                 }
                 continue;
@@ -1793,6 +1883,7 @@ pub(crate) async fn run_agent_loop(
                     tool_call_id: None,
                     tool_calls: Vec::new(),
                     reasoning_content: response.reasoning_content.clone(),
+                    round: None,
                 });
             }
             last_text = response.text;
@@ -1834,6 +1925,7 @@ pub(crate) async fn run_agent_loop(
                     tool_call_id: None,
                     tool_calls: Vec::new(),
                     reasoning_content: None,
+                    round: None,
                 });
                 messages.push(Message {
                     role: Role::User,
@@ -1841,6 +1933,7 @@ pub(crate) async fn run_agent_loop(
                     tool_call_id: None,
                     tool_calls: Vec::new(),
                     reasoning_content: None,
+                    round: None,
                 });
                 counterexample_fired = true;
                 continue;
@@ -1856,6 +1949,7 @@ pub(crate) async fn run_agent_loop(
                     tool_call_id: None,
                     tool_calls: Vec::new(),
                     reasoning_content: response.reasoning_content.clone(),
+                    round: None,
                 });
             }
             last_text = response.text;
@@ -1918,6 +2012,9 @@ pub(crate) async fn run_agent_loop(
             tool_call_id: None,
             tool_calls: response.tool_calls.clone(),
             reasoning_content: response.reasoning_content.clone(),
+            // P2-14 S1：声明消息盖所属决策轮 LIF 轮章——压缩点据此取保留
+            // 尾首条声明的轮章作 r_keep（跨恢复/多 prompt 精确）。
+            round: decision_round,
         });
         // Pending policy messages (denial breaker) — appended AFTER the
         // tool batch completes so no user message lands between the
@@ -2150,6 +2247,7 @@ pub(crate) async fn run_agent_loop(
                                 tool_call_id: None,
                                 tool_calls: Vec::new(),
                                 reasoning_content: None,
+                                round: None,
                             }));
                     }
                 }
@@ -2518,6 +2616,7 @@ pub(crate) async fn run_agent_loop(
                     tool_call_id: None,
                     tool_calls: Vec::new(),
                     reasoning_content: None,
+                    round: None,
                 }));
 
             // GAP-INQUIRY-SPLIT (2026-08-09): the old per-tool-call
@@ -2581,6 +2680,7 @@ pub(crate) async fn run_agent_loop(
                     tool_call_id: None,
                     tool_calls: Vec::new(),
                     reasoning_content: None,
+                    round: None,
                 });
             }
         }
@@ -2609,6 +2709,7 @@ pub(crate) async fn run_agent_loop(
                 tool_call_id: None,
                 tool_calls: Vec::new(),
                 reasoning_content: None,
+                round: None,
             });
         }
         // GAP-INQUIRY-SPLIT (2026-08-09) — MAIN orientation injection
@@ -2676,6 +2777,7 @@ pub(crate) async fn run_agent_loop(
                 tool_call_id: None,
                 tool_calls: Vec::new(),
                 reasoning_content: None,
+                round: None,
             });
         }
 
@@ -2725,6 +2827,7 @@ pub(crate) async fn run_agent_loop(
                 tool_call_id: None,
                 tool_calls: Vec::new(),
                 reasoning_content: None,
+                round: None,
             });
             budget_exhausted = true;
         }
@@ -2826,6 +2929,7 @@ async fn role_gate_denied(
         tool_call_id: Some(tc.call_id.clone()),
         tool_calls: Vec::new(),
         reasoning_content: None,
+        round: None,
     });
     Ok((
         ToolResult {
@@ -2896,6 +3000,7 @@ async fn plan_round_denied(
         tool_call_id: Some(tc.call_id.clone()),
         tool_calls: Vec::new(),
         reasoning_content: None,
+        round: None,
     });
     Ok((
         ToolResult {
@@ -2957,6 +3062,7 @@ async fn refuse_inject_budget(
         tool_call_id: Some(tc.call_id.clone()),
         tool_calls: Vec::new(),
         reasoning_content: None,
+        round: None,
     });
     Ok((
         ToolResult {
@@ -3260,6 +3366,7 @@ mod tests {
             tool_call_id: None,
             tool_calls: Vec::new(),
             reasoning_content: None,
+            round: None,
         }];
         messages.push(Message {
             role: Role::User,
@@ -3267,6 +3374,7 @@ mod tests {
             tool_call_id: None,
             tool_calls: Vec::new(),
             reasoning_content: None,
+            round: None,
         });
         for (id, target, result) in [("c1", "a.py", "A"), ("c2", "b.rs", "B")] {
             messages.push(Message {
@@ -3279,6 +3387,7 @@ mod tests {
                     call_id: id.to_string(),
                 }],
                 reasoning_content: None,
+                round: None,
             });
             messages.push(Message {
                 role: Role::Tool,
@@ -3286,6 +3395,7 @@ mod tests {
                 tool_call_id: Some(id.to_string()),
                 tool_calls: Vec::new(),
                 reasoning_content: None,
+                round: None,
             });
         }
         messages
@@ -3332,6 +3442,8 @@ mod tests {
             0,
             2,
             None,
+            // P2-14 S1 测试直调：消息构造无轮章 → 保持 v0.2 模板路径。
+            None,
             &mut fold,
         )
         .await
@@ -3376,6 +3488,8 @@ mod tests {
             false,
             0,
             2,
+            None,
+            // P2-14 S1 测试直调：消息构造无轮章 → 保持 v0.2 模板路径。
             None,
             &mut fold,
         )
@@ -3507,6 +3621,8 @@ mod tests {
             0,
             2,
             None,
+            // P2-14 S1 测试直调：消息构造无轮章 → 保持 v0.2 模板路径。
+            None,
             &mut fold,
         )
         .await
@@ -3588,6 +3704,7 @@ mod tests {
             tool_call_id: None,
             tool_calls: Vec::new(),
             reasoning_content: None,
+            round: None,
         }];
         for (id, target) in [
             ("c1", "a.py"),
@@ -3605,6 +3722,7 @@ mod tests {
                     call_id: id.to_string(),
                 }],
                 reasoning_content: None,
+                round: None,
             });
             messages.push(Message {
                 role: Role::Tool,
@@ -3612,6 +3730,7 @@ mod tests {
                 tool_call_id: Some(id.to_string()),
                 tool_calls: Vec::new(),
                 reasoning_content: None,
+                round: None,
             });
         }
         let mut fold = LedgerFoldState::default();
@@ -3626,6 +3745,8 @@ mod tests {
             false,
             0,
             2, // recent_tail_rounds
+            None,
+            // P2-14 S1 测试直调：消息构造无轮章 → 保持 v0.2 模板路径。
             None,
             &mut fold,
         )

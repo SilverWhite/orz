@@ -154,6 +154,15 @@ pub enum Role {
 /// prompts via the conversation sidecar. Privacy boundary: the sidecar is NOT
 /// the journal evidence face — ADR-0010 §5.4.6 restricts reasoning text only
 /// from the journal.
+/// P2-14 S1（2026-09-04，ADR-0010 §14.54 / 压缩 marker 折叠视图快照设计
+/// §3.1 R1）：`round` = 写消息时所属主决策轮的 LIF 会话相对轮章（仅盖在
+/// 主车道 assistant 声明消息上；其余角色与检索/grill 等非 Main 车道恒
+/// None——车道范围裁决 2026-09-04 复审处理：v0.3 折叠快照 marker 只服务
+/// 主会话压缩，子车道会话继续 v0.2 五段模板）。压缩执行点据此取「保留尾
+/// 首条声明消息」的轮章作 r_keep 排除边界——主消息轮与黑板行轮章共用
+/// 同一主决策轮轴，跨恢复/多 prompt 精确。`serde(default/
+/// skip_serializing_if)` 保证旧会话侧车（无章消息）兼容；transport 按字段
+/// 映射出 provider 请求，本字段不落 wire。
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Message {
     pub role: Role,
@@ -161,6 +170,8 @@ pub struct Message {
     pub tool_call_id: Option<String>,
     pub tool_calls: Vec<ToolCall>,
     pub reasoning_content: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub round: Option<u64>,
 }
 
 /// A tool call requested by the model.

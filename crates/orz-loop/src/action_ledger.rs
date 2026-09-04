@@ -524,6 +524,7 @@ pub fn build_collapsed_request(messages: &[Message], keep_recent_rounds: usize) 
         tool_call_id: None,
         tool_calls: Vec::new(),
         reasoning_content: None,
+        round: None,
     });
     collapsed.extend_from_slice(&messages[kept_start..]);
     collapsed
@@ -639,6 +640,7 @@ pub fn build_request_view(
         tool_call_id: None,
         tool_calls: Vec::new(),
         reasoning_content: None,
+        round: None,
     });
     // FUS-LEDGER-FOLD-BRIDGE (2026-08-19, ADR-0010 §14.32 / 设计 §3.1/§3.2):
     // 桥 = 最近一次推进冻结的 `[cut..bridge_end)`（推进时 messages 末尾）——
@@ -956,6 +958,7 @@ mod tests {
             tool_call_id: None,
             tool_calls: Vec::new(),
             reasoning_content: None,
+            round: None,
         }
     }
 
@@ -971,6 +974,7 @@ mod tests {
                     call_id: call_id.to_string(),
                 }],
                 reasoning_content: None,
+                round: None,
             },
             Message {
                 role: Role::Tool,
@@ -978,6 +982,7 @@ mod tests {
                 tool_call_id: Some(call_id.to_string()),
                 tool_calls: Vec::new(),
                 reasoning_content: None,
+                round: None,
             },
         ]
     }
@@ -1228,6 +1233,7 @@ mod tests {
                 },
             ],
             reasoning_content: None,
+            round: None,
         });
         messages.push(Message {
             role: Role::Tool,
@@ -1235,6 +1241,7 @@ mod tests {
             tool_call_id: Some("c1".into()),
             tool_calls: Vec::new(),
             reasoning_content: None,
+            round: None,
         });
         messages.push(Message {
             role: Role::Tool,
@@ -1242,6 +1249,7 @@ mod tests {
             tool_call_id: Some("c2".into()),
             tool_calls: Vec::new(),
             reasoning_content: None,
+            round: None,
         });
         messages.extend(round("c3", "read_file", "c.py", "结果C"));
         let collapsed = build_collapsed_request(&messages, 1);
@@ -1267,6 +1275,7 @@ mod tests {
                 call_id: "c2".into(),
             }],
             reasoning_content: None,
+            round: None,
         });
         let collapsed = build_collapsed_request(&messages, 1);
         assert!(
@@ -1315,6 +1324,7 @@ mod tests {
                 call_id: "c2".into(),
             }],
             reasoning_content: None,
+            round: None,
         });
         messages.extend(round("c3", "web_fetch", "https://x.dev", "页面"));
         messages.extend(round("c4", "read_file", "d.py", "结果D"));
@@ -1863,6 +1873,7 @@ mod tests {
                 call_id: "c3".to_string(),
             }],
             reasoning_content: None,
+            round: None,
         });
         let ledger_path = std::path::Path::new(".gsa/ledger/current.md");
         let mut fold = LedgerFoldState::default();
@@ -1951,6 +1962,7 @@ mod tests {
                 call_id: "c2".into(),
             }],
             reasoning_content: None,
+            round: None,
         });
         messages.extend(round("c3", "read_file", "c.py", "C"));
         let cut = bridge_cut(&messages, 10).unwrap();
@@ -1999,6 +2011,7 @@ mod tests {
                 call_id: "c1".into(),
             }],
             reasoning_content: Some("思考链内容".to_string()),
+            round: None,
         });
         messages.push(Message {
             role: Role::Tool,
@@ -2006,6 +2019,7 @@ mod tests {
             tool_call_id: Some("c1".to_string()),
             tool_calls: Vec::new(),
             reasoning_content: None,
+            round: None,
         });
         let fold = LedgerFoldState {
             fold_start: Some(1),
@@ -2055,6 +2069,7 @@ mod tests {
                 call_id: "c1".into(),
             }],
             reasoning_content: Some("思考链".to_string()),
+            round: None,
         });
         messages.push(Message {
             role: Role::Tool,
@@ -2062,6 +2077,7 @@ mod tests {
             tool_call_id: Some("c1".to_string()),
             tool_calls: Vec::new(),
             reasoning_content: None,
+            round: None,
         });
         let fold = LedgerFoldState {
             fold_start: Some(1),
@@ -2100,6 +2116,7 @@ mod tests {
             tool_call_id: None,
             tool_calls: Vec::new(),
             reasoning_content: Some("方向检查思考链".to_string()),
+            round: None,
         });
         // 声明消息（带 tool_calls）：reasoning 仍剔除。
         messages.push(Message {
@@ -2112,6 +2129,7 @@ mod tests {
                 call_id: "c1".into(),
             }],
             reasoning_content: Some("声明思考链".to_string()),
+            round: None,
         });
         messages.push(Message {
             role: Role::Tool,
@@ -2119,6 +2137,7 @@ mod tests {
             tool_call_id: Some("c1".to_string()),
             tool_calls: Vec::new(),
             reasoning_content: None,
+            round: None,
         });
         let fold = LedgerFoldState {
             fold_start: Some(1),
@@ -2164,6 +2183,7 @@ mod tests {
                 call_id: "c1".into(),
             }],
             reasoning_content: Some("思考链".to_string()),
+            round: None,
         });
         messages.push(Message {
             role: Role::Tool,
@@ -2171,6 +2191,7 @@ mod tests {
             tool_call_id: Some("c1".to_string()),
             tool_calls: Vec::new(),
             reasoning_content: None,
+            round: None,
         });
         let fold = LedgerFoldState {
             fold_start: Some(1),
@@ -2224,6 +2245,7 @@ mod tests {
                 call_id: "c1".into(),
             }],
             reasoning_content: None,
+            round: None,
         });
         // 模拟终端 8K 截断后的工具结果：长输出 + 末尾机械指针行。
         messages.push(Message {
@@ -2235,7 +2257,7 @@ mod tests {
             tool_call_id: Some("c1".to_string()),
             tool_calls: Vec::new(),
             reasoning_content: None,
-        });
+round: None,        });
         let fold = LedgerFoldState {
             fold_start: Some(1),
             fold_cut: Some(1),
@@ -2278,6 +2300,7 @@ mod tests {
                 call_id: "c1".into(),
             }],
             reasoning_content: None,
+            round: None,
         });
         messages.push(Message {
             role: Role::Tool,
@@ -2285,6 +2308,7 @@ mod tests {
             tool_call_id: Some("c1".to_string()),
             tool_calls: Vec::new(),
             reasoning_content: None,
+            round: None,
         });
         // 轮内 assistant 最终回复文本（无 tool_calls）超限。
         messages.push(Message {
@@ -2293,6 +2317,7 @@ mod tests {
             tool_call_id: None,
             tool_calls: Vec::new(),
             reasoning_content: None,
+            round: None,
         });
         let fold = LedgerFoldState {
             fold_start: Some(1),

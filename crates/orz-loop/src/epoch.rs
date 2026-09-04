@@ -651,7 +651,7 @@ fn render_capped_rows(label: &str, lines: Vec<String>) -> String {
 /// 显式提示缩小范围），其余内容从最旧整行开始丢弃、保留最近部分；被丢
 /// 内容永远可经展开参数/分区全文回查，不丢失存储。无保护行时行为与 B2
 /// 初版一致（最近优先 + 头行说明）。
-fn cap_fold_view(
+pub(crate) fn cap_fold_view(
     section: &str,
     rows_total: usize,
     segments_total: usize,
@@ -848,6 +848,123 @@ fn no_match_expand_note(expand: Option<&FoldExpand>, matched: bool) -> Option<St
     }
 }
 
+// ---- P2-14 S1：三段共用标注预览（render_*_folded 与快照入口同源） ----
+
+/// edits 段标注预览：pre-stamp = 时间范围（折叠子集内首末时间戳）；带章段
+/// = 折叠子集内最新两条文件路径（Top-2 路径口径，与既有折叠视图一致）。
+fn edits_segment_preview(recs: &[&EditRecord], kind: SegmentKind, folded_idx: &[usize]) -> String {
+    match kind {
+        SegmentKind::PreStamp => {
+            let first_ts = recs[folded_idx[0]].timestamp.as_str();
+            let last_ts = recs[folded_idx[folded_idx.len() - 1]].timestamp.as_str();
+            if first_ts.is_empty() && last_ts.is_empty() {
+                "无时间戳".to_string()
+            } else {
+                format!("时间 {first_ts}–{last_ts}")
+            }
+        }
+        SegmentKind::Domain(d) => {
+            let mut files: Vec<&str> = Vec::new();
+            for &i in folded_idx.iter().rev() {
+                let f = recs[i].file.as_str();
+                if !files.contains(&f) {
+                    files.push(f);
+                    if files.len() == 2 {
+                        break;
+                    }
+                }
+            }
+            if files.is_empty() {
+                d.as_str().to_string()
+            } else {
+                format!("路径 {}", files.join("；"))
+            }
+        }
+    }
+}
+
+/// tool_actions 段标注预览：折叠子集内类别计数 Top-2（read/edit/terminal/
+/// retrieval/other 序，stable 同计数保序）。
+fn tool_actions_segment_preview(
+    recs: &[&ToolActionRecord],
+    kind: SegmentKind,
+    folded_idx: &[usize],
+) -> String {
+    match kind {
+        SegmentKind::PreStamp => {
+            let first_ts = recs[folded_idx[0]].timestamp.as_str();
+            let last_ts = recs[folded_idx[folded_idx.len() - 1]].timestamp.as_str();
+            if first_ts.is_empty() && last_ts.is_empty() {
+                "无时间戳".to_string()
+            } else {
+                format!("时间 {first_ts}–{last_ts}")
+            }
+        }
+        SegmentKind::Domain(_) => {
+            let category_rank = ["read", "edit", "terminal", "retrieval", "other"];
+            let mut counts: Vec<(&str, usize)> = Vec::new();
+            for cat in category_rank {
+                let n = folded_idx
+                    .iter()
+                    .filter(|&&i| recs[i].category == cat)
+                    .count();
+                if n > 0 {
+                    counts.push((cat, n));
+                }
+            }
+            counts.sort_by_key(|(_, n)| std::cmp::Reverse(*n));
+            let top: Vec<String> = counts
+                .into_iter()
+                .take(2)
+                .map(|(c, n)| format!("{c}×{n}"))
+                .collect();
+            if top.is_empty() {
+                "无类别计数".to_string()
+            } else {
+                top.join("，")
+            }
+        }
+    }
+}
+
+/// exec 段标注预览：pre-stamp = 时间范围；带章段 = 折叠子集内最新两条
+/// 文本预览（“摘要预览”口径，去重、非空）。
+fn exec_segment_preview(
+    rows: &[FoldRowMeta],
+    recs: &[&crate::blackboard::ExecEntry],
+    kind: SegmentKind,
+    folded_idx: &[usize],
+) -> String {
+    match kind {
+        SegmentKind::PreStamp => {
+            let first_ts = recs[folded_idx[0]].ts.as_str();
+            let last_ts = recs[folded_idx[folded_idx.len() - 1]].ts.as_str();
+            if first_ts.is_empty() && last_ts.is_empty() {
+                "无时间戳".to_string()
+            } else {
+                format!("时间 {first_ts}–{last_ts}")
+            }
+        }
+        SegmentKind::Domain(_) => {
+            let mut previews: Vec<String> = Vec::new();
+            for &i in folded_idx.iter().rev() {
+                let t = rows[i].text.trim();
+                if !t.is_empty() && !previews.iter().any(|p| p == t) {
+                    previews.push(t.to_string());
+                    if previews.len() == 2 {
+                        break;
+                    }
+                }
+            }
+            if previews.is_empty() {
+                "（无文本预览）".to_string()
+            } else {
+                previews.join("；")
+            }
+        }
+    }
+}
+
 /// B2 edits 折叠视图（live；仅折叠态/显式展开时调用）。`records` 为分区
 /// 全量（since 在此过滤，语义同非折叠分支）；pre-stamp 标注带时间范围
 /// （R1），带章段标注带最新两条文件路径（Top-N 路径口径，实现决策登记于
@@ -892,35 +1009,7 @@ pub fn render_edits_folded(
         &layout.segments,
         &expanded,
         &explicit_target,
-        |kind, folded_idx| match kind {
-            SegmentKind::PreStamp => {
-                // B2 复审：时间范围只取折叠子集（与折叠计数一致）。
-                let first_ts = recs[folded_idx[0]].timestamp.as_str();
-                let last_ts = recs[folded_idx[folded_idx.len() - 1]].timestamp.as_str();
-                if first_ts.is_empty() && last_ts.is_empty() {
-                    "无时间戳".to_string()
-                } else {
-                    format!("时间 {first_ts}–{last_ts}")
-                }
-            }
-            SegmentKind::Domain(d) => {
-                let mut files: Vec<&str> = Vec::new();
-                for &i in folded_idx.iter().rev() {
-                    let f = recs[i].file.as_str();
-                    if !files.contains(&f) {
-                        files.push(f);
-                        if files.len() == 2 {
-                            break;
-                        }
-                    }
-                }
-                if files.is_empty() {
-                    d.as_str().to_string()
-                } else {
-                    format!("路径 {}", files.join("；"))
-                }
-            }
-        },
+        |kind, folded_idx| edits_segment_preview(&recs, kind, folded_idx),
         no_match_note,
     );
     cap_fold_view(
@@ -963,7 +1052,6 @@ pub fn render_tool_actions_folded(
         Some(q) => render_fold::merge_expand(&layout, &rows, q),
         None => layout.expanded.clone(),
     };
-    let category_rank = ["read", "edit", "terminal", "retrieval", "other"];
     let explicit_target = explicit_target_flags(&rows, expand);
     let no_match_note = no_match_expand_note(expand, explicit_target.iter().any(|b| *b));
     let (lines, protected) = fold_view_lines(
@@ -971,43 +1059,7 @@ pub fn render_tool_actions_folded(
         &layout.segments,
         &expanded,
         &explicit_target,
-        |kind, folded_idx| match kind {
-            SegmentKind::PreStamp => {
-                // B2 复审：时间范围只取折叠子集（与折叠计数一致）。
-                let first_ts = recs[folded_idx[0]].timestamp.as_str();
-                let last_ts = recs[folded_idx[folded_idx.len() - 1]].timestamp.as_str();
-                if first_ts.is_empty() && last_ts.is_empty() {
-                    "无时间戳".to_string()
-                } else {
-                    format!("时间 {first_ts}–{last_ts}")
-                }
-            }
-            SegmentKind::Domain(_) => {
-                let mut counts: Vec<(&str, usize)> = Vec::new();
-                for cat in category_rank {
-                    let n = folded_idx
-                        .iter()
-                        .filter(|&&i| recs[i].category == cat)
-                        .count();
-                    if n > 0 {
-                        counts.push((cat, n));
-                    }
-                }
-                // Top-2 类别：按计数降序（stable：同计数保持 read/edit/…
-                // 既有序）。
-                counts.sort_by_key(|(_, n)| std::cmp::Reverse(*n));
-                let top: Vec<String> = counts
-                    .into_iter()
-                    .take(2)
-                    .map(|(c, n)| format!("{c}×{n}"))
-                    .collect();
-                if top.is_empty() {
-                    "无类别计数".to_string()
-                } else {
-                    top.join("，")
-                }
-            }
-        },
+        |kind, folded_idx| tool_actions_segment_preview(&recs, kind, folded_idx),
         no_match_note,
     );
     cap_fold_view(
@@ -1055,38 +1107,249 @@ pub fn render_exec_folded(
         &layout.segments,
         &expanded,
         &explicit_target,
-        |kind, folded_idx| match kind {
-            SegmentKind::PreStamp => {
-                // B2 复审：时间范围只取折叠子集（与折叠计数一致）。
-                let first_ts = recs[folded_idx[0]].ts.as_str();
-                let last_ts = recs[folded_idx[folded_idx.len() - 1]].ts.as_str();
-                if first_ts.is_empty() && last_ts.is_empty() {
-                    "无时间戳".to_string()
-                } else {
-                    format!("时间 {first_ts}–{last_ts}")
-                }
-            }
-            SegmentKind::Domain(_) => {
-                let mut previews: Vec<String> = Vec::new();
-                for &i in folded_idx.iter().rev() {
-                    let t = rows[i].text.trim();
-                    if !t.is_empty() && !previews.iter().any(|p| p == t) {
-                        previews.push(t.to_string());
-                        if previews.len() == 2 {
-                            break;
-                        }
-                    }
-                }
-                if previews.is_empty() {
-                    "（无文本预览）".to_string()
-                } else {
-                    previews.join("；")
-                }
-            }
-        },
+        |kind, folded_idx| exec_segment_preview(&rows, &recs, kind, folded_idx),
         no_match_note,
     );
     cap_fold_view("exec", recs.len(), layout.segments.len(), lines, &protected)
+}
+
+// ---- P2-14 S1：压缩 marker 折叠视图快照（2026-09-04，ADR-0010 §14.54）----
+
+/// 一条段标注（marker 块 C 候选）：`span_end_round` = 该段折叠行的最大轮号
+/// （pre-stamp 段 = 0）——跨分区「取最接近近窗」的确定性排序键。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FoldAnnotation {
+    pub text: String,
+    pub span_end_round: u64,
+}
+
+/// 单分区折叠视图快照（marker 块 B/C 数据源）：与 blackboard_read 折叠
+/// 渲染**同源**（同一分段 / 展开子集 / 标注词汇 / 行级 200 字符截断），
+/// 差异：
+/// ① 固定按折叠视图生成（强制折叠，不依赖 T/W 是否已达阈值）；
+/// ② 行输入先按 `round < r_keep` 过滤（保留尾行不进 marker），且 pre-stamp
+///    行（round=0）一律折叠归 C（marker 口径 §3.1：旧无章行不进块 B）。
+/// marker 的有界性由装配层执行：B 明细按折叠视图既有 50 行/4K cap 截断
+/// （`cap_fold_view`），C 标注经 `select_annotations_closest_to_window`
+/// 取 ≤30 条并给溢出指针；本入口不承担块级预算，只保证与 blackboard_read
+/// 同源的候选行/标注行。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FoldPartitionSnapshot {
+    /// 块 B 明细行（展开子集真实行，round ∈ [1, r_keep)），行序 = 存储序。
+    pub detail_lines: Vec<String>,
+    /// 块 C 候选标注（段序 = 视图序；每条 = 一个含折叠行的段）。
+    pub annotations: Vec<FoldAnnotation>,
+    /// r_keep 过滤后的分区总行数（空分区 = 0）。
+    pub rows_total: usize,
+    /// 过滤后的段数。
+    pub segments_total: usize,
+}
+
+/// C 块选取（marker 设计 §3.3 / §8 R3）：跨分区候选标注合并后取**最接近
+/// 近窗**的 `cap` 条——排序键 = `span_end_round` 降序（越晚的段越近；
+/// pre-stamp 段 = 0 恒最远），同轮时按分区序（exec → edits →
+/// tool_actions）与段视图序稳定（later 段优先）；保留后在各自分区内按
+/// 视图序复原（输出与折叠视图行序一致）。返回（保留的 `(section, ann)`
+/// 对，省略总数）。空/全 pre-stamp 输入返回空 + 0。
+pub fn select_annotations_closest_to_window(
+    sections: Vec<(&'static str, Vec<FoldAnnotation>)>,
+    cap: usize,
+) -> (Vec<(&'static str, FoldAnnotation)>, usize) {
+    let total: usize = sections.iter().map(|(_, anns)| anns.len()).sum();
+    if cap == 0 || total == 0 {
+        return (Vec::new(), total);
+    }
+    let mut keyed: Vec<((u64, usize, usize), &'static str, FoldAnnotation)> = Vec::new();
+    let mut section_rank = 0usize;
+    for (section, anns) in &sections {
+        for (i, ann) in anns.iter().enumerate() {
+            keyed.push(((ann.span_end_round, section_rank, i), section, ann.clone()));
+        }
+        section_rank += 1;
+    }
+    keyed.sort_by(|a, b| {
+        // 近窗最近 = span_end_round 最大；同轮 = section_rank 小者先；
+        // 再同 = 段视图序后者（i 大者）先——三者均确定性。
+        b.0.0
+            .cmp(&a.0.0)
+            .then_with(|| a.0.1.cmp(&b.0.1))
+            .then_with(|| b.0.2.cmp(&a.0.2))
+    });
+    let kept = keyed.into_iter().take(cap).collect::<Vec<_>>();
+    let mut kept_sorted = kept;
+    // 复原输出序：分区序 + 段视图序（确定性；marker 排版与折叠视图同序）。
+    kept_sorted.sort_by(|a, b| {
+        let (sa, ia) = (a.1, a.0.2);
+        let (sb, ib) = (b.1, b.0.2);
+        let ra = sections
+            .iter()
+            .position(|(s, _)| *s == sa)
+            .unwrap_or(usize::MAX);
+        let rb = sections
+            .iter()
+            .position(|(s, _)| *s == sb)
+            .unwrap_or(usize::MAX);
+        ra.cmp(&rb).then_with(|| ia.cmp(&ib))
+    });
+    let out = kept_sorted
+        .into_iter()
+        .map(|(_, section, ann)| (section, ann))
+        .collect();
+    (out, total.saturating_sub(cap))
+}
+
+/// exec 分区快照（r_keep = 排除边界；`u64::MAX` = 不过滤，供同源对照测试）。
+pub fn render_exec_snapshot(
+    exec: &ExecSection,
+    current_round: u64,
+    current_domain: Domain,
+    params: &FoldParams,
+    r_keep: u64,
+) -> FoldPartitionSnapshot {
+    let recs: Vec<&crate::blackboard::ExecEntry> = exec
+        .results
+        .iter()
+        .chain(exec.errors.iter())
+        .filter(|e| e.round < r_keep)
+        .collect();
+    let rows: Vec<FoldRowMeta> = recs
+        .iter()
+        .map(|e| FoldRowMeta {
+            text: truncate_chars(&e.text, FOLDABLE_ROW_MAX_CHARS),
+            round: e.round,
+            domain: e.domain,
+        })
+        .collect();
+    partition_snapshot(&rows, current_round, current_domain, params, |kind, idx| {
+        exec_segment_preview(&rows, &recs, kind, idx)
+    })
+}
+
+/// edits 分区快照（无 since——压缩点是全板冻结，不做时间窗口过滤）。
+pub fn render_edits_snapshot(
+    records: &[EditRecord],
+    current_round: u64,
+    current_domain: Domain,
+    params: &FoldParams,
+    r_keep: u64,
+) -> FoldPartitionSnapshot {
+    let recs: Vec<&EditRecord> = records.iter().filter(|r| r.round < r_keep).collect();
+    let rows: Vec<FoldRowMeta> = recs
+        .iter()
+        .map(|r| FoldRowMeta {
+            text: truncate_chars(
+                &format!(
+                    "{} {}",
+                    r.timestamp,
+                    crate::controller::format_edit_record(r)
+                ),
+                FOLDABLE_ROW_MAX_CHARS,
+            ),
+            round: r.round,
+            domain: r.domain,
+        })
+        .collect();
+    partition_snapshot(&rows, current_round, current_domain, params, |kind, idx| {
+        edits_segment_preview(&recs, kind, idx)
+    })
+}
+
+/// tool_actions 分区快照。
+pub fn render_tool_actions_snapshot(
+    records: &[ToolActionRecord],
+    current_round: u64,
+    current_domain: Domain,
+    params: &FoldParams,
+    r_keep: u64,
+) -> FoldPartitionSnapshot {
+    let recs: Vec<&ToolActionRecord> = records.iter().filter(|r| r.round < r_keep).collect();
+    let rows: Vec<FoldRowMeta> = recs
+        .iter()
+        .map(|r| FoldRowMeta {
+            text: truncate_chars(
+                &format!("{} {}", r.timestamp, r.tool),
+                FOLDABLE_ROW_MAX_CHARS,
+            ),
+            round: r.round,
+            domain: r.domain,
+        })
+        .collect();
+    partition_snapshot(&rows, current_round, current_domain, params, |kind, idx| {
+        tool_actions_segment_preview(&recs, kind, idx)
+    })
+}
+
+/// 快照公共装配：分段 → 默认展开子集 → pre-stamp 强制折叠 → 拆分 B 明细
+/// （展开真实行）与 C 标注（每折叠段一条；计数只含折叠行，与折叠视图标注
+/// 完全同口径）。空输入返回空快照（rows_total=0）。
+fn partition_snapshot(
+    rows: &[FoldRowMeta],
+    current_round: u64,
+    current_domain: Domain,
+    params: &FoldParams,
+    preview: impl Fn(SegmentKind, &[usize]) -> String,
+) -> FoldPartitionSnapshot {
+    if rows.is_empty() {
+        return FoldPartitionSnapshot {
+            detail_lines: Vec::new(),
+            annotations: Vec::new(),
+            rows_total: 0,
+            segments_total: 0,
+        };
+    }
+    let mut layout = render_fold::fold_layout(rows, current_round, current_domain, params);
+    // marker 口径：pre-stamp 行一律折叠（不进块 B；折叠视图“全旧行展开”
+    // 的退化为 marker 不适用——marker 必须保持有界聚合）。
+    for (i, r) in rows.iter().enumerate() {
+        if r.round == 0 {
+            layout.expanded[i] = false;
+        }
+    }
+    let mut detail_lines = Vec::new();
+    let mut annotations = Vec::new();
+    for seg in &layout.segments {
+        let folded_idx: Vec<usize> = (seg.start..seg.end)
+            .filter(|&i| !layout.expanded[i])
+            .collect();
+        for i in seg.start..seg.end {
+            if layout.expanded[i] && rows[i].round >= 1 {
+                detail_lines.push(rows[i].text.clone());
+            }
+        }
+        if folded_idx.is_empty() {
+            continue;
+        }
+        let mut lo = u64::MAX;
+        let mut hi = 0u64;
+        for &i in &folded_idx {
+            if rows[i].round >= 1 {
+                lo = lo.min(rows[i].round);
+                hi = hi.max(rows[i].round);
+            }
+        }
+        let (lo, hi) = if lo == u64::MAX {
+            (0u64, 0u64)
+        } else {
+            (lo, hi)
+        };
+        let ann = segment_annotation(
+            seg.kind,
+            lo,
+            hi,
+            folded_idx.len(),
+            preview(seg.kind, &folded_idx),
+        );
+        annotations.push(FoldAnnotation {
+            text: ann,
+            span_end_round: hi,
+        });
+    }
+    FoldPartitionSnapshot {
+        detail_lines,
+        annotations,
+        rows_total: rows.len(),
+        segments_total: layout.segments.len(),
+    }
 }
 
 /// THIN-HARNESS-REDESIGN R2a (2026-08-27, §4.4): 检索分区条目上限（8K
@@ -2793,5 +3056,254 @@ mod tests {
         assert!(pos("00:00:02Z") < pos("[域段 normal r4–r8"), "{text}");
         assert!(pos("00:00:03Z") < pos("[域段 normal r4–r8"), "{text}");
         assert!(pos("[域段 normal r4–r8") < pos("00:00:09Z"), "{text}");
+    }
+
+    // ---- P2-14 S1：压缩 marker 折叠视图快照（2026-09-04）----
+
+    /// 同源对照 fixture：pre-stamp 2 行 + normal r1–r12 + pressure r13–r18，
+    /// 当前轮 18 / pressure。供快照与 render_*_folded 逐行对照。
+    fn snapshot_exec_fixture() -> crate::blackboard::ExecSection {
+        let mut exec = crate::blackboard::ExecSection::default();
+        exec.results
+            .push(crate::blackboard::ExecEntry::from("legacy-1"));
+        exec.results
+            .push(crate::blackboard::ExecEntry::from("legacy-2"));
+        for r in 1..=12 {
+            exec.results.push(crate::blackboard::ExecEntry::stamped(
+                format!("n{r}"),
+                r,
+                Domain::Normal,
+                format!("2026-09-04T00:00:{r:02}Z"),
+            ));
+        }
+        for r in 13..=18 {
+            exec.results.push(crate::blackboard::ExecEntry::stamped(
+                format!("p{r}"),
+                r,
+                Domain::Pressure,
+                format!("2026-09-04T00:01:{r:02}Z"),
+            ));
+        }
+        exec
+    }
+
+    /// 同源：r_keep = u64::MAX（不过滤）且视图未超 cap 时，快照的
+    /// B 明细行 + C 标注行与 blackboard_read 折叠渲染输出逐行同源——
+    /// 标注行 = 视图中 `[域段 …]` 行（同序），明细行 = 其余行（同序）。
+    #[test]
+    fn snapshot_matches_fold_view_line_for_line_when_unfiltered() {
+        let exec = snapshot_exec_fixture();
+        let p = FoldParams {
+            tail_rounds: 5,
+            tail_rows_percent: 20,
+            ..FoldParams::default()
+        };
+        let view = render_exec_folded(&exec, 18, Domain::Pressure, &p, None);
+        let snap = render_exec_snapshot(&exec, 18, Domain::Pressure, &p, u64::MAX);
+        let view_lines: Vec<&str> = view.lines().collect();
+        let ann_lines: Vec<&str> = view_lines
+            .iter()
+            .copied()
+            .filter(|l| l.starts_with("[域段 "))
+            .collect();
+        let detail_expected: Vec<&str> = view_lines
+            .iter()
+            .copied()
+            .filter(|l| !l.starts_with("[域段 "))
+            .collect();
+        assert_eq!(
+            view_lines.len(),
+            snap.detail_lines.len() + snap.annotations.len()
+        );
+        assert_eq!(
+            snap.annotations
+                .iter()
+                .map(|a| a.text.as_str())
+                .collect::<Vec<_>>(),
+            ann_lines
+        );
+        assert_eq!(
+            snap.detail_lines
+                .iter()
+                .map(|s| s.as_str())
+                .collect::<Vec<_>>(),
+            detail_expected
+        );
+        assert_eq!(snap.rows_total, 20);
+    }
+
+    /// r_keep 排除：轮号 ≥ r_keep 的行不进快照（保留尾行不重复进 marker）。
+    #[test]
+    fn snapshot_excludes_rows_at_or_after_r_keep() {
+        let exec = snapshot_exec_fixture();
+        let p = FoldParams::default();
+        // r_keep = 13：normal r1–r12（+ pre-stamp）保留；pressure r13–r18 剔除。
+        let snap = render_exec_snapshot(&exec, 18, Domain::Pressure, &p, 13);
+        assert_eq!(snap.rows_total, 14);
+        assert!(
+            snap.detail_lines.iter().all(|l| !l.starts_with('p')),
+            "pressure 轮行不得进入快照"
+        );
+        assert!(
+            snap.detail_lines.iter().any(|l| l.starts_with('n')),
+            "normal 旧行仍应在展开子集内"
+        );
+    }
+
+    /// pre-stamp 行一律归 C（不进 B），即使整分区只有旧无章行（强制折叠，
+    /// 不复用 blackboard_read 的“全旧行展开”退化）。
+    #[test]
+    fn snapshot_prestamp_rows_always_fold_to_annotations() {
+        let mut exec = crate::blackboard::ExecSection::default();
+        exec.results
+            .push(crate::blackboard::ExecEntry::from("legacy-a"));
+        exec.results
+            .push(crate::blackboard::ExecEntry::from("legacy-b"));
+        let p = FoldParams::default();
+        let snap = render_exec_snapshot(&exec, 1, Domain::Start, &p, u64::MAX);
+        assert!(snap.detail_lines.is_empty(), "pre-stamp 行不得进 B");
+        assert_eq!(snap.annotations.len(), 1);
+        assert!(
+            snap.annotations[0].text.contains("pre-stamp")
+                && snap.annotations[0].text.contains("2 条"),
+            "pre-stamp 段标注须含计数: {}",
+            snap.annotations[0].text
+        );
+        assert_eq!(snap.annotations[0].span_end_round, 0);
+        assert_eq!(snap.rows_total, 2);
+    }
+
+    /// pre-stamp 折叠语义对 edits / tool_actions 分区同源生效（与 exec 同
+    /// 口径：不进 B、标注含计数、span_end_round=0）。
+    #[test]
+    fn snapshot_prestamp_rows_fold_across_edits_and_tool_actions() {
+        let p = FoldParams::default();
+        let records = vec![
+            crate::blackboard::EditRecord {
+                file: "a.py".to_string(),
+                old_lines: 1,
+                new_lines: 2,
+                timestamp: "2026-09-04T00:00:01Z".to_string(),
+                round: 0,
+                domain: None,
+            },
+            crate::blackboard::EditRecord {
+                file: "b.rs".to_string(),
+                old_lines: 3,
+                new_lines: 5,
+                timestamp: "2026-09-04T00:00:02Z".to_string(),
+                round: 0,
+                domain: None,
+            },
+        ];
+        let snap = render_edits_snapshot(&records, 1, Domain::Start, &p, u64::MAX);
+        assert!(snap.detail_lines.is_empty(), "edits pre-stamp 不进 B");
+        assert_eq!(snap.annotations.len(), 1);
+        assert!(snap.annotations[0].text.contains("pre-stamp"));
+        assert_eq!(snap.annotations[0].span_end_round, 0);
+
+        let actions = vec![
+            crate::blackboard::ToolActionRecord {
+                category: "read".to_string(),
+                tool: "read_file".to_string(),
+                timestamp: "2026-09-04T00:00:03Z".to_string(),
+                round: 0,
+                domain: None,
+            },
+            crate::blackboard::ToolActionRecord {
+                category: "terminal".to_string(),
+                tool: "run_terminal".to_string(),
+                timestamp: "2026-09-04T00:00:04Z".to_string(),
+                round: 0,
+                domain: None,
+            },
+        ];
+        let snap2 = render_tool_actions_snapshot(&actions, 1, Domain::Start, &p, u64::MAX);
+        assert!(
+            snap2.detail_lines.is_empty(),
+            "tool_actions pre-stamp 不进 B"
+        );
+        assert_eq!(snap2.annotations.len(), 1);
+        assert!(snap2.annotations[0].text.contains("pre-stamp"));
+        assert_eq!(snap2.annotations[0].span_end_round, 0);
+    }
+
+    /// 空分区快照为空（marker 按「（无）」渲染，不产生假标注）。
+    #[test]
+    fn snapshot_empty_partition_is_empty() {
+        let exec = crate::blackboard::ExecSection::default();
+        let p = FoldParams::default();
+        let snap = render_exec_snapshot(&exec, 1, Domain::Start, &p, u64::MAX);
+        assert!(snap.detail_lines.is_empty());
+        assert!(snap.annotations.is_empty());
+        assert_eq!(snap.rows_total, 0);
+        assert_eq!(snap.segments_total, 0);
+    }
+
+    /// §7 矩阵第 3 项：C 超过 30 段 → 取最接近近窗的 30 + 溢出指针。
+    /// 跨分区合并后按 span_end_round 降序取 30（pre-stamp=0 恒最远）；
+    /// 输出按分区序 + 段视图序复原；省略数供装配层写指针。
+    #[test]
+    fn select_annotations_caps_at_30_nearest_with_stable_order() {
+        let ann = |text: &str, span_end_round: u64| FoldAnnotation {
+            text: text.to_string(),
+            span_end_round,
+        };
+        let exec_anns: Vec<FoldAnnotation> =
+            (1..=20).map(|r| ann(&format!("exec r{r}"), r)).collect();
+        let edits_anns: Vec<FoldAnnotation> =
+            (21..=40).map(|r| ann(&format!("edits r{r}"), r)).collect();
+        let tool_anns: Vec<FoldAnnotation> = vec![
+            ann("tool pre-stamp", 0),
+            ann("tool r41", 41),
+            ann("tool r42", 42),
+        ];
+        let (kept, omitted) = select_annotations_closest_to_window(
+            vec![
+                ("exec", exec_anns.clone()),
+                ("edits", edits_anns.clone()),
+                ("tool_actions", tool_anns.clone()),
+            ],
+            30,
+        );
+        // 43 候选 → 保留 30、省略 13。
+        assert_eq!(omitted, 43 - 30);
+        assert_eq!(kept.len(), 30);
+        // 最近者必含 tool_actions r42/r41、edits r40…r21 全部、exec r20…r13
+        // （合计 2+20+8=30）；exec r12 及更早被挤出。
+        let texts: Vec<&str> = kept.iter().map(|(_, a)| a.text.as_str()).collect();
+        assert!(texts.contains(&"tool r42") && texts.contains(&"tool r41"));
+        assert!(texts.contains(&"edits r21") && texts.contains(&"edits r40"));
+        assert!(texts.contains(&"exec r20"));
+        assert!(texts.contains(&"exec r13"));
+        assert!(!texts.contains(&"exec r12"), "r12 应被挤出");
+        assert!(!texts.contains(&"tool pre-stamp"), "pre-stamp 恒最远");
+        assert_eq!(
+            kept.iter().filter(|(s, _)| *s == "exec").count(),
+            8,
+            "exec 只保留最近 8 段"
+        );
+        // 复原序：分区序内按段视图序（view 序递增）。
+        let mut last = "";
+        for (section, _a) in &kept {
+            if *section != last {
+                assert!(matches!(*section, "exec" | "edits" | "tool_actions"));
+                last = section;
+            }
+        }
+        assert_eq!(kept.first().unwrap().0, "exec");
+        assert_eq!(kept.last().unwrap().0, "tool_actions");
+        // 单分区内保持视图序（数字递增）。
+        let exec_kept: Vec<u64> = kept
+            .iter()
+            .filter(|(s, _)| *s == "exec")
+            .map(|(_, a)| a.span_end_round)
+            .collect();
+        assert!(exec_kept.windows(2).all(|w| w[0] < w[1]));
+        // cap=0/空输入退化。
+        let (empty, om) = select_annotations_closest_to_window(vec![("exec", Vec::new())], 30);
+        assert!(empty.is_empty() && om == 0);
+        let (none, om2) = select_annotations_closest_to_window(vec![("exec", exec_anns)], 0);
+        assert!(none.is_empty() && om2 == 20);
     }
 }

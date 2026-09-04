@@ -302,6 +302,7 @@ impl AgentLoopController {
                 tool_call_id: Some(tc.call_id.clone()),
                 tool_calls: Vec::new(),
                 reasoning_content: None,
+                round: None,
             });
             // P2-10 R2 (2026-08-31): retired-tool refusal = deny event.
             self.feed_lif_deny(None);
@@ -361,6 +362,7 @@ impl AgentLoopController {
                 tool_call_id: Some(tc.call_id.clone()),
                 tool_calls: Vec::new(),
                 reasoning_content: None,
+                round: None,
             });
             // P2-10 R2 (2026-08-31): sealed-tool refusal = deny event.
             self.feed_lif_deny(None);
@@ -426,6 +428,7 @@ impl AgentLoopController {
                 tool_call_id: Some(tc.call_id.clone()),
                 tool_calls: Vec::new(),
                 reasoning_content: None,
+                round: None,
             });
             // P2-10 R2 (2026-08-31): anchor mismatch refusal = deny event.
             self.feed_lif_deny(None);
@@ -500,6 +503,7 @@ impl AgentLoopController {
                 tool_call_id: Some(tc.call_id.clone()),
                 tool_calls: Vec::new(),
                 reasoning_content: None,
+                round: None,
             });
             // P2-10 R2 (2026-08-31): retrieval-mode-off refusal = deny event.
             self.feed_lif_deny(None);
@@ -559,6 +563,7 @@ impl AgentLoopController {
                 tool_call_id: Some(tc.call_id.clone()),
                 tool_calls: Vec::new(),
                 reasoning_content: None,
+                round: None,
             });
             // P2-10 R2 (2026-08-31): framework-fallback mode refusal = deny.
             self.feed_lif_deny(None);
@@ -615,6 +620,7 @@ impl AgentLoopController {
                 tool_call_id: Some(tc.call_id.clone()),
                 tool_calls: Vec::new(),
                 reasoning_content: None,
+                round: None,
             });
             // P2-10 R2 (2026-08-31): local-browser mode refusal = deny.
             self.feed_lif_deny(None);
@@ -761,6 +767,7 @@ impl AgentLoopController {
                 tool_call_id: Some(tc.call_id.clone()),
                 tool_calls: Vec::new(),
                 reasoning_content: None,
+                round: None,
             });
             // The breaker user message is NOT constructed or pushed here —
             // the denial key is returned to the caller, which aggregates the
@@ -829,6 +836,7 @@ impl AgentLoopController {
                     tool_call_id: Some(tc.call_id.clone()),
                     tool_calls: Vec::new(),
                     reasoning_content: None,
+                    round: None,
                 });
                 // P0-A step 5 (design §5): 调用即探针 — the refused work-tool
                 // call writes back into the minimal previous-round map.
@@ -925,6 +933,7 @@ impl AgentLoopController {
                             tool_call_id: Some(tc.call_id.clone()),
                             tool_calls: Vec::new(),
                             reasoning_content: None,
+                            round: None,
                         });
                         // P0-A step 5 (design §5): 调用即探针 — the failed
                         // work-tool call writes back into the minimal map.
@@ -1011,6 +1020,7 @@ impl AgentLoopController {
                 tool_call_id: Some(tc.call_id.clone()),
                 tool_calls: Vec::new(),
                 reasoning_content: None,
+                round: None,
             });
             // run_tests executed the host's fixed command — a success for
             // the denial streak (ADR-0010 §3.5.4: only actual success resets).
@@ -1163,6 +1173,7 @@ impl AgentLoopController {
                     tool_call_id: Some(tc.call_id.clone()),
                     tool_calls: Vec::new(),
                     reasoning_content: None,
+                    round: None,
                 });
                 return Ok((
                     ToolResult {
@@ -1215,6 +1226,7 @@ impl AgentLoopController {
                 tool_call_id: Some(tc.call_id.clone()),
                 tool_calls: Vec::new(),
                 reasoning_content: None,
+                round: None,
             });
             return Ok((
                 ToolResult {
@@ -1273,6 +1285,7 @@ impl AgentLoopController {
                             tool_call_id: Some(tc.call_id.clone()),
                             tool_calls: Vec::new(),
                             reasoning_content: None,
+                            round: None,
                         });
                         return Ok((result, None));
                     }
@@ -1321,6 +1334,7 @@ impl AgentLoopController {
                             tool_call_id: Some(tc.call_id.clone()),
                             tool_calls: Vec::new(),
                             reasoning_content: None,
+                            round: None,
                         });
                         return Ok((result, None));
                     }
@@ -1369,6 +1383,7 @@ impl AgentLoopController {
                             tool_call_id: Some(tc.call_id.clone()),
                             tool_calls: Vec::new(),
                             reasoning_content: None,
+                            round: None,
                         });
                         return Ok((result, None));
                     }
@@ -1414,6 +1429,7 @@ impl AgentLoopController {
                             tool_call_id: Some(tc.call_id.clone()),
                             tool_calls: Vec::new(),
                             reasoning_content: None,
+                            round: None,
                         });
                         return Ok((result, None));
                     }
@@ -1452,6 +1468,7 @@ impl AgentLoopController {
                     tool_call_id: Some(tc.call_id.clone()),
                     tool_calls: Vec::new(),
                     reasoning_content: None,
+                    round: None,
                 });
                 return Ok((result, None));
             }
@@ -1487,6 +1504,7 @@ impl AgentLoopController {
                     tool_call_id: Some(tc.call_id.clone()),
                     tool_calls: Vec::new(),
                     reasoning_content: None,
+                    round: None,
                 });
                 return Ok((result, None));
             }
@@ -1522,6 +1540,7 @@ impl AgentLoopController {
                     tool_call_id: Some(tc.call_id.clone()),
                     tool_calls: Vec::new(),
                     reasoning_content: None,
+                    round: None,
                 });
                 return Ok((result, None));
             }
@@ -1559,6 +1578,7 @@ impl AgentLoopController {
                     tool_call_id: Some(tc.call_id.clone()),
                     tool_calls: Vec::new(),
                     reasoning_content: None,
+                    round: None,
                 });
                 return Ok((result, None));
             }
@@ -1603,6 +1623,7 @@ impl AgentLoopController {
                         tool_call_id: Some(tc.call_id.clone()),
                         tool_calls: Vec::new(),
                         reasoning_content: None,
+                        round: None,
                     });
                     return Ok((result, None));
                 }
@@ -1637,6 +1658,7 @@ impl AgentLoopController {
                         tool_call_id: Some(tc.call_id.clone()),
                         tool_calls: Vec::new(),
                         reasoning_content: None,
+                        round: None,
                     });
                     return Ok((result, None));
                 }
@@ -1675,6 +1697,7 @@ impl AgentLoopController {
                                 tool_call_id: Some(tc.call_id.clone()),
                                 tool_calls: Vec::new(),
                                 reasoning_content: None,
+                                round: None,
                             });
                             return Ok((result, None));
                         }
@@ -1712,6 +1735,7 @@ impl AgentLoopController {
                             tool_call_id: Some(tc.call_id.clone()),
                             tool_calls: Vec::new(),
                             reasoning_content: None,
+                            round: None,
                         });
                         return Ok((result, None));
                     }
@@ -1748,6 +1772,7 @@ impl AgentLoopController {
                             tool_call_id: Some(tc.call_id.clone()),
                             tool_calls: Vec::new(),
                             reasoning_content: None,
+                            round: None,
                         });
                         return Ok((result, None));
                     }
@@ -1790,6 +1815,7 @@ impl AgentLoopController {
                             tool_call_id: Some(tc.call_id.clone()),
                             tool_calls: Vec::new(),
                             reasoning_content: None,
+                            round: None,
                         });
                         return Ok((result, None));
                     }
@@ -1830,6 +1856,7 @@ impl AgentLoopController {
                             tool_call_id: Some(tc.call_id.clone()),
                             tool_calls: Vec::new(),
                             reasoning_content: None,
+                            round: None,
                         });
                         return Ok((result, None));
                     }
@@ -1929,6 +1956,7 @@ impl AgentLoopController {
                 tool_call_id: Some(tc.call_id.clone()),
                 tool_calls: Vec::new(),
                 reasoning_content: None,
+                round: None,
             });
             return Ok((result, None));
         }
@@ -1959,6 +1987,7 @@ impl AgentLoopController {
                     tool_call_id: Some(tc.call_id.clone()),
                     tool_calls: Vec::new(),
                     reasoning_content: None,
+                    round: None,
                 });
                 // P2-10 R2 (2026-08-31): console action-write lane refusal =
                 // deny event.
@@ -2019,6 +2048,7 @@ impl AgentLoopController {
                     tool_call_id: Some(tc.call_id.clone()),
                     tool_calls: Vec::new(),
                     reasoning_content: None,
+                    round: None,
                 });
                 return Ok((
                     ToolResult {
@@ -2099,6 +2129,7 @@ impl AgentLoopController {
                         tool_call_id: Some(tc.call_id.clone()),
                         tool_calls: Vec::new(),
                         reasoning_content: None,
+                        round: None,
                     });
                     return Ok((
                         ToolResult {
@@ -2134,6 +2165,7 @@ impl AgentLoopController {
                         tool_call_id: Some(tc.call_id.clone()),
                         tool_calls: Vec::new(),
                         reasoning_content: None,
+                        round: None,
                     });
                     // P2-10 R2 (2026-08-31): order-slot busy refusal = deny.
                     self.feed_lif_deny(None);
@@ -2179,6 +2211,7 @@ impl AgentLoopController {
                     tool_call_id: Some(tc.call_id.clone()),
                     tool_calls: Vec::new(),
                     reasoning_content: None,
+                    round: None,
                 });
                 // P2-10 R2 (2026-08-31): plan_write lane refusal = deny event.
                 self.feed_lif_deny(None);
@@ -2213,6 +2246,7 @@ impl AgentLoopController {
                     tool_call_id: Some(tc.call_id.clone()),
                     tool_calls: Vec::new(),
                     reasoning_content: None,
+                    round: None,
                 });
                 return Ok((
                     ToolResult {
@@ -2338,6 +2372,7 @@ impl AgentLoopController {
                 tool_call_id: Some(tc.call_id.clone()),
                 tool_calls: Vec::new(),
                 reasoning_content: None,
+                round: None,
             });
             return Ok((
                 ToolResult {
@@ -2475,6 +2510,7 @@ impl AgentLoopController {
                 tool_call_id: Some(tc.call_id.clone()),
                 tool_calls: Vec::new(),
                 reasoning_content: None,
+                round: None,
             });
             return Ok((
                 ToolResult {
@@ -2712,6 +2748,7 @@ impl AgentLoopController {
                 tool_call_id: Some(tc.call_id.clone()),
                 tool_calls: Vec::new(),
                 reasoning_content: None,
+                round: None,
             });
             return Ok((
                 ToolResult {
@@ -2762,6 +2799,7 @@ impl AgentLoopController {
                     tool_call_id: Some(tc.call_id.clone()),
                     tool_calls: Vec::new(),
                     reasoning_content: None,
+                    round: None,
                 });
                 return Ok((
                     ToolResult {
@@ -2793,6 +2831,7 @@ impl AgentLoopController {
                 tool_call_id: Some(tc.call_id.clone()),
                 tool_calls: Vec::new(),
                 reasoning_content: None,
+                round: None,
             });
             return Ok((
                 ToolResult {
@@ -2870,7 +2909,8 @@ impl AgentLoopController {
                         .to_string();
                     if !file.is_empty() {
                         let timestamp = chrono_utc_now();
-                        let (round, domain) = self.blackboard_stamp();
+                        // P2-14 S1：edits 属共享折叠分区，按执行窗主轮章盖章。
+                        let (round, domain) = self.effective_blackboard_stamp();
                         self.blackboard.write().push_edit(EditRecord {
                             file: file.clone(),
                             old_lines,
@@ -3001,7 +3041,8 @@ impl AgentLoopController {
                     .await?;
                 // 2026-08-08 blackboard partition: fold the executed call
                 // into the tool-action section (category from the dispatcher).
-                let (round, domain) = self.blackboard_stamp();
+                // P2-14 S1：共享折叠分区按执行窗主轮章盖章。
+                let (round, domain) = self.effective_blackboard_stamp();
                 self.blackboard.write().push_tool_action(ToolActionRecord {
                     category: ToolDispatcher::action_category(&tc.name).to_string(),
                     tool: tc.name.clone(),
@@ -3115,7 +3156,8 @@ impl AgentLoopController {
                 // HAPPENED — fold it into the tool-action section (the
                 // "实际变动" rule applies to edit records, not to the action
                 // ledger).
-                let (round, domain) = self.blackboard_stamp();
+                // P2-14 S1：共享折叠分区按执行窗主轮章盖章。
+                let (round, domain) = self.effective_blackboard_stamp();
                 self.blackboard.write().push_tool_action(ToolActionRecord {
                     category: ToolDispatcher::action_category(&tc.name).to_string(),
                     tool: tc.name.clone(),
@@ -3199,6 +3241,7 @@ impl AgentLoopController {
             tool_call_id: Some(tc.call_id.clone()),
             tool_calls: Vec::new(),
             reasoning_content: None,
+            round: None,
         });
         let feedback = if succeeded {
             Some(PolicyFeedback::Succeeded)
@@ -3350,6 +3393,7 @@ impl AgentLoopController {
             tool_call_id: Some(tc.call_id.clone()),
             tool_calls: Vec::new(),
             reasoning_content: None,
+            round: None,
         });
         Ok(CandidateGateDecision::Refused(
             ToolResult {

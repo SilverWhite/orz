@@ -1705,6 +1705,7 @@ impl AcpServer {
                     tool_call_id: None,
                     tool_calls: Vec::new(),
                     reasoning_content: None,
+                    round: None,
                 });
                 entry.messages = messages;
                 append_grill_record(
@@ -2492,6 +2493,7 @@ mod tests {
                 tool_call_id: None,
                 tool_calls: Vec::new(),
                 reasoning_content: None,
+                round: None,
             }],
             &TemporalSessionSnapshot {
                 round: 1,
@@ -2565,6 +2567,7 @@ mod tests {
                 tool_call_id: None,
                 tool_calls: Vec::new(),
                 reasoning_content: None,
+                round: None,
             }],
             &TemporalSessionSnapshot {
                 round: 1,
@@ -3944,6 +3947,7 @@ mod tests {
                 tool_call_id: None,
                 tool_calls: Vec::new(),
                 reasoning_content: None,
+                round: None,
             },
             Message {
                 role: Role::Assistant,
@@ -3951,6 +3955,7 @@ mod tests {
                 tool_call_id: None,
                 tool_calls: Vec::new(),
                 reasoning_content: Some("推理过程".to_string()),
+                round: None,
             },
             Message {
                 role: Role::Tool,
@@ -3958,6 +3963,7 @@ mod tests {
                 tool_call_id: Some("call-1".to_string()),
                 tool_calls: Vec::new(),
                 reasoning_content: None,
+                round: None,
             },
         ];
         // P2-10 F2 §3.5 (I4) + P2-13 B1: temporal spikes / LIF 会话轴快照

@@ -19,6 +19,7 @@ use std::path::Path;
 
 use crate::blackboard::{Blackboard, PlanStep, StepStatus};
 use orz_assurance::journal::sha256_hex;
+use orz_assurance::lif::Domain;
 
 pub const SUMMARY_MAX_TOTAL_CHARS: usize = 17_000;
 /// 目的 / 计划 / 变动文件路径 / 注意事项 / 后续衔接 — 3/3/5/3/3K.
@@ -43,12 +44,12 @@ pub const NOTES_FACTS_EMPTY: &str = "（无）";
 /// （检索分区 live-only，不进 epoch 归档）。
 pub const MECHANICAL_CONTINUATION_PLACEHOLDER: &str = "（后续衔接由主模型自行判断：可回查 blackboard_read 分区 plan/edits/tool_actions/exec/actions/internal_ret/external_ret（检索分区 live-only；历史记录全量保留在 live 黑板，按域/轮数展开或 since/receipt_id 回查——epoch 归档读已于生产面退役）、摘要存档与外挂台账）";
 
-/// Estimated tokens of one summary marker in the kept context. The marker
-/// carries the five slots (up to ~17K chars ≈ 8.5K tokens under the
-/// chars/2 estimate) plus framing — 9K is the conservative ceiling.
-/// (P0-D review fix 2026-08-14: the previous 2K constant undercounted the
-/// marker by up to ~4× and skewed the reduction guard.)
-pub const SUMMARY_MARKER_ESTIMATE_TOKENS: u64 = 9_000;
+/// Estimated tokens of one summary marker in the kept context.
+/// P2-14（2026-09-04，ADR-0010 §14.54 / 设计稿 §4）：v0.3 折叠视图快照
+/// marker 总量 20_000 字符定档 → chars/2 ≈ 10K + 余量 ≈ 11K 起步（S4 实测
+/// 后定档）。缩减守卫用同一估算常量（对仍走 v0.2 的检索车道略保守 ≤2K，
+/// 相对 200K 触发窗口可忽略——登记于 P2-14 复审处理）。
+pub const SUMMARY_MARKER_ESTIMATE_TOKENS: u64 = 11_000;
 
 /// The five summary slots.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -549,6 +550,599 @@ pub fn build_summary_marker(
 /// sha256 digest of the archive content (the marker's digest binding).
 pub fn archive_digest(markdown: &str) -> String {
     sha256_hex(markdown.as_bytes())
+}
+
+// ===========================================================================
+// P2-14 压缩 marker 折叠视图快照 v0.3（2026-09-04，ADR-0010 §14.54 / 设计稿
+// CONTEXT_COMPACTION_BLACKBOARD_FOLD_DESIGN v0.2 定稿）
+// ===========================================================================
+// 五段槽 v0.2 路径保留为兼容回退（车道范围裁决 2026-09-04 复审处理：检索/
+// grill 等非 Main 车道压缩、以及旧会话消息无轮章 r_keep 不可推导的主会话
+// 压缩继续走 v0.2）；主会话压缩点生成 v0.3 = 压缩点冻结的黑板折叠视图快照：
+//   A 框架（ID / 被压轮次与轮区间 / r_keep / 会话 / 存档路径 + digest）
+//   B 近窗明细（round < r_keep，已排除保留尾；视图 cap 同源）
+//   C 旧段聚合（≤30 条标注行，取最接近近窗者，更早省略留指针）
+//   D failure_agg（≤3K，溢出随存档 annex 补全段保存）
+//   E 查询指针（省略区/旧区的显式回查指令）
+// marker 总量 ≤ 20_000 字符（定档）；分区块级超限一律「截断 + 指针」，绝不
+// 静默丢失。生成零模型调用；快照与 blackboard_read 折叠渲染同源
+// （render_*_snapshot / cap_fold_view / segment 标注词汇）。
+
+/// v0.3 marker 版本号（prefix 不变，CONTEXT_COMPRESSED_PREFIX 识别不受影响）。
+pub const COMPACTION_MARKER_VERSION: &str = "v0.3";
+
+/// A 框架块预算（600 字符；设计稿 §2.2）。
+pub const COMPACTION_FRAMEWORK_CHARS: usize = 600;
+/// D failure_agg 块预算（3_000 字符；设计稿 §2.2）。
+pub const COMPACTION_FAILURE_CHARS: usize = 3_000;
+/// E 查询指针块预算（1_000 字符；设计稿 §2.2）。
+pub const COMPACTION_POINTER_CHARS: usize = 1_000;
+
+/// env 覆盖名（编译期默认 + env 覆盖，沿用 ORZ_* 模式；设计稿 §4）。
+pub const SNAPSHOT_DETAIL_CHARS_ENV: &str = "ORZ_COMPACTION_SNAPSHOT_DETAIL_CHARS";
+pub const SNAPSHOT_SEGMENT_LINES_ENV: &str = "ORZ_COMPACTION_SNAPSHOT_SEGMENT_LINES";
+pub const MARKER_TOTAL_CHARS_ENV: &str = "ORZ_COMPACTION_MARKER_TOTAL_CHARS";
+/// B 近窗明细块级预算默认（8_000 字符）。
+pub const DEFAULT_SNAPSHOT_DETAIL_CHARS: usize = 8_000;
+/// C 旧段聚合标注行数上限默认（30 条）。
+pub const DEFAULT_SNAPSHOT_SEGMENT_LINES: usize = 30;
+/// marker 总量上限默认（20_000 字符，设计稿 §4 定档）。
+pub const DEFAULT_MARKER_TOTAL_CHARS: usize = 20_000;
+
+/// v0.3 marker 预算（编译期默认 + env 覆盖；测试直接构造绕开进程级 env
+/// 并发竞态，与 `render_fold::FoldParams` 同纪律）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct CompactionBudget {
+    /// B 近窗明细块级字符预算。
+    pub detail_chars: usize,
+    /// C 旧段聚合标注行数上限（跨分区合计）。
+    pub segment_lines: usize,
+    /// A+B+C+D+E 总量字符上限。
+    pub total_chars: usize,
+    /// D failure_agg 块字符预算。
+    pub failure_chars: usize,
+}
+
+impl Default for CompactionBudget {
+    fn default() -> Self {
+        Self {
+            detail_chars: DEFAULT_SNAPSHOT_DETAIL_CHARS,
+            segment_lines: DEFAULT_SNAPSHOT_SEGMENT_LINES,
+            total_chars: DEFAULT_MARKER_TOTAL_CHARS,
+            failure_chars: COMPACTION_FAILURE_CHARS,
+        }
+    }
+}
+
+impl CompactionBudget {
+    /// 编译期默认 + env 覆盖：缺失/非法/0 一律回退默认。
+    pub fn from_env() -> Self {
+        let positive = |env: &str, default: usize| -> usize {
+            std::env::var(env)
+                .ok()
+                .and_then(|v| v.trim().parse::<usize>().ok())
+                .filter(|n| *n > 0)
+                .unwrap_or(default)
+        };
+        Self {
+            detail_chars: positive(SNAPSHOT_DETAIL_CHARS_ENV, DEFAULT_SNAPSHOT_DETAIL_CHARS),
+            segment_lines: positive(SNAPSHOT_SEGMENT_LINES_ENV, DEFAULT_SNAPSHOT_SEGMENT_LINES),
+            total_chars: positive(MARKER_TOTAL_CHARS_ENV, DEFAULT_MARKER_TOTAL_CHARS),
+            failure_chars: COMPACTION_FAILURE_CHARS,
+        }
+    }
+}
+
+/// 主会话压缩点的折叠快照 LIF 上下文（round, domain）——由调用方传入
+/// （`SharedLoopServices` 无 LIF 引用；设计稿 §6 实施影响）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct FoldSnapshotCtx {
+    pub current_round: u64,
+    pub current_domain: Domain,
+}
+
+/// 单次 v0.3 marker 生成的输入（调用方在 drain 后定稿）。
+#[derive(Debug, Clone, Copy)]
+pub struct FoldSnapshotInput<'a> {
+    pub id: &'a str,
+    pub archive_path: &'a Path,
+    pub session: Option<&'a str>,
+    pub rounds_dropped: u32,
+    /// 被压区间的首轮（首条被 drain 声明消息的轮章；旧会话无章时 None）。
+    pub round_from: Option<u64>,
+    /// 保留尾首轮（保留尾首条声明消息的轮章；行排除边界 round >= r_keep）。
+    pub r_keep: u64,
+    pub ctx: FoldSnapshotCtx,
+    pub guard_failed: bool,
+    pub archive_write_failed: bool,
+    /// marker A 注记的外挂台账路径提示（主车道折叠态；与 v0.2 marker
+    /// 「历史摘要累积于 …」行同口径）。
+    pub ledger_note: Option<&'a str>,
+    /// 存档「冻结折叠视图」段的字节固定指针消息（`fold_state.folded_ledger`
+    /// 原文；与 v0.2 存档段一致，None = 未折叠/无指针）。
+    pub frozen_ledger: Option<&'a str>,
+    pub budget: CompactionBudget,
+}
+
+/// v0.3 生成统计（供校验与遥测）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct FoldSnapshotStats {
+    pub marker_chars: usize,
+    /// 因 B 块级预算被省略的明细行数（含整分区未入块的行）。
+    pub b_omitted_lines: usize,
+    /// 因 C 条数上限被省略的段标注数。
+    pub c_omitted_segments: usize,
+    /// 因 D 块级预算被挤出、随存档 annex 保存的失败目标行数。
+    pub d_omitted_rows: usize,
+}
+
+/// v0.3 装配输出：marker（A–E）、存档 markdown（同源 + annex + 冻结指针）、
+/// failure_agg 溢出补全行、统计。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FoldSnapshotOutput {
+    pub marker: String,
+    pub archive: String,
+    pub failure_annex: Vec<String>,
+    pub stats: FoldSnapshotStats,
+}
+
+/// E 查询指针固定模板（机械、零模型；块预算 1K 内）。
+pub const FOLD_SNAPSHOT_POINTER_TEXT: &str = "回查：blackboard_read section=exec|edits|tool_actions，\
+先看域段标注，再带 domain + round_from/round_to 精确展开；pre-stamp 旧行（round=0）用 \
+since/receipt_id 展开；更早历史见摘要存档与 run journal；plan/actions/internal_ret/\
+external_ret 等非折叠分区不在 marker 内，直接 blackboard_read 对应分区";
+
+/// 行集合按字符上限保留头部、尾部溢出行逐条挤出以容纳指针（与既有
+/// `render_notes_capped` 同纪律：整行边界操作、指针必须可见）。返回
+/// （块文本，被挤出/未显示的完整行——顺序保持）。
+fn cap_rows_with_annex(
+    lines: Vec<String>,
+    max_chars: usize,
+    pointer: impl Fn(usize) -> String,
+) -> (String, Vec<String>) {
+    if lines.is_empty() {
+        return (NOTES_FACTS_EMPTY.to_string(), Vec::new());
+    }
+    let mut shown: Vec<String> = Vec::new();
+    let mut used = 0usize;
+    for line in &lines {
+        let add = line.chars().count() + if shown.is_empty() { 0 } else { 1 };
+        if used + add > max_chars {
+            break;
+        }
+        shown.push(line.clone());
+        used += add;
+    }
+    let mut hidden: Vec<String> = lines[shown.len()..].to_vec();
+    let mut out = shown.join("\n");
+    if hidden.is_empty() {
+        return (out, hidden);
+    }
+    loop {
+        let note = pointer(hidden.len());
+        if out.is_empty() || out.chars().count() + 1 + note.chars().count() <= max_chars {
+            if !out.is_empty() {
+                out.push('\n');
+            }
+            out.push_str(&note);
+            break;
+        }
+        match out.rfind('\n') {
+            Some(idx) => {
+                hidden.insert(0, out[idx + 1..].to_string());
+                out.truncate(idx);
+            }
+            None => {
+                hidden.insert(0, out.clone());
+                out.clear();
+            }
+        }
+    }
+    (out, hidden)
+}
+
+/// 折叠快照装配的内部块（B/C/D/E 文本，空态统一「（无）」）。
+struct FoldBlocks {
+    b: String,
+    c: String,
+    d: String,
+    e: String,
+    /// C 块因条数上限被省略的段标注数（供统计与指针）。
+    c_omitted: usize,
+}
+
+/// D failure_agg 块：全量行按序渲染 ≤3K；溢出行以完整行随 `annex` 带出
+/// （随存档补全段保存——failure_agg 非 blackboard_read 查询分区）。
+fn render_failure_target_block(blackboard: &Blackboard, budget: usize) -> (String, Vec<String>) {
+    let rows: Vec<String> = blackboard
+        .failure_agg
+        .rows
+        .iter()
+        .map(render_failure_target_row)
+        .collect();
+    let (text, hidden) = cap_rows_with_annex(rows, budget, |n| {
+        format!("其余 {n} 条见摘要存档失败目标聚合补全段")
+    });
+    (text, hidden)
+}
+
+/// 单分区近窗明细文本：与 blackboard_read 折叠渲染同源的视图 cap（50 行/
+/// 4K 字符，头行说明省略——`cap_fold_view`），空分区返回 None。
+fn render_partition_detail(
+    section: &'static str,
+    snapshot: &crate::epoch::FoldPartitionSnapshot,
+) -> Option<String> {
+    if snapshot.detail_lines.is_empty() {
+        return None;
+    }
+    let protected = vec![false; snapshot.detail_lines.len()];
+    Some(crate::epoch::cap_fold_view(
+        section,
+        snapshot.rows_total,
+        snapshot.segments_total,
+        snapshot.detail_lines.clone(),
+        &protected,
+    ))
+}
+
+/// 生成 A–E 块文本（marker 与存档共用块级渲染）。B 明细已由调用方按块级
+/// 预算预裁，`b_omitted_*` 供指针；C/D 在此装配。
+fn assemble_blocks(
+    bb: &Blackboard,
+    ctx: FoldSnapshotCtx,
+    r_keep: u64,
+    params: &crate::render_fold::FoldParams,
+    budget: CompactionBudget,
+    b_sections: &[(&'static str, String)],
+    b_omitted_lines: usize,
+    b_omitted_sections: &[&'static str],
+) -> FoldBlocks {
+    let mut b_text = String::new();
+    for (section, body) in b_sections {
+        if !b_text.is_empty() {
+            b_text.push('\n');
+        }
+        b_text.push_str(&format!("-- {section} --\n{body}"));
+    }
+    if !b_omitted_sections.is_empty() && b_omitted_lines > 0 {
+        b_text.push_str(&format!(
+            "\n（近窗明细另有 {b_omitted_lines} 行（{}）因块预算 {} 字符省略——可经 \
+             blackboard_read section=exec|edits|tool_actions 展开回查）",
+            b_omitted_sections.join("、"),
+            budget.detail_chars
+        ));
+    }
+    if b_text.is_empty() {
+        b_text = NOTES_FACTS_EMPTY.to_string();
+    }
+
+    // C 旧段聚合：跨分区标注合并，取最接近近窗的 ≤segment_lines 条。
+    let snapshots = [
+        (
+            "exec",
+            crate::epoch::render_exec_snapshot(
+                &bb.exec,
+                ctx.current_round,
+                ctx.current_domain,
+                params,
+                r_keep,
+            ),
+        ),
+        (
+            "edits",
+            crate::epoch::render_edits_snapshot(
+                &bb.edits,
+                ctx.current_round,
+                ctx.current_domain,
+                params,
+                r_keep,
+            ),
+        ),
+        (
+            "tool_actions",
+            crate::epoch::render_tool_actions_snapshot(
+                &bb.tool_actions,
+                ctx.current_round,
+                ctx.current_domain,
+                params,
+                r_keep,
+            ),
+        ),
+    ];
+    let mut sections: Vec<(&'static str, Vec<crate::epoch::FoldAnnotation>)> = Vec::new();
+    for (name, snap) in snapshots {
+        if !snap.annotations.is_empty() {
+            sections.push((name, snap.annotations));
+        }
+    }
+    let (kept, c_omitted) =
+        crate::epoch::select_annotations_closest_to_window(sections, budget.segment_lines);
+    let mut c_text = String::new();
+    let mut current: Option<&'static str> = None;
+    for (section, ann) in kept {
+        if current != Some(section) {
+            if !c_text.is_empty() {
+                c_text.push('\n');
+            }
+            c_text.push_str(&format!("-- {section} --"));
+            current = Some(section);
+        }
+        c_text.push('\n');
+        c_text.push_str(&ann.text);
+    }
+    if c_omitted > 0 {
+        c_text.push_str(&format!(
+            "\n（其余 {c_omitted} 段因条数上限 {} 省略——见 blackboard_read \
+             section=exec|edits|tool_actions，先看域段标注，再带 domain + \
+             round_from/round_to 精确展开；pre-stamp 旧行用 since/receipt_id）",
+            budget.segment_lines
+        ));
+    }
+    if c_text.is_empty() {
+        c_text = NOTES_FACTS_EMPTY.to_string();
+    }
+
+    // D failure_agg（溢出 annex 由调用方写存档补全段）。
+    let (d_text, _hidden) = render_failure_target_block(bb, budget.failure_chars);
+
+    // E 查询指针（固定模板；预算 1K）。
+    let mut e_text = FOLD_SNAPSHOT_POINTER_TEXT.to_string();
+    if e_text.chars().count() > COMPACTION_POINTER_CHARS {
+        e_text = truncate_chars(&e_text, COMPACTION_POINTER_CHARS);
+    }
+
+    FoldBlocks {
+        b: b_text,
+        c: c_text,
+        d: d_text,
+        e: e_text,
+        c_omitted,
+    }
+}
+
+/// A 框架 + B/C/D/E 的最终 marker 文本（含 digest 绑定；digest 为存档摘要）。
+#[allow(clippy::too_many_arguments)]
+fn assemble_marker_text(
+    version: &str,
+    segment_cap: usize,
+    id: &str,
+    rounds_dropped: u32,
+    round_from: Option<u64>,
+    r_keep: u64,
+    archive_path: &Path,
+    digest: &str,
+    session: Option<&str>,
+    guard_failed: bool,
+    archive_write_failed: bool,
+    ledger: Option<&str>,
+    blocks: &FoldBlocks,
+) -> String {
+    let mut head = format!("[前文上下文已压缩 {version}]\n");
+    if guard_failed {
+        head.push_str("机制失败：缩减守卫连续不满足，已强制压缩，需处理\n");
+    }
+    if archive_write_failed {
+        head.push_str("存档写入失败：摘要未落盘，需处理\n");
+    }
+    if let Some(p) = ledger {
+        head.push_str(&format!("历史摘要累积于 {p}\n"));
+    }
+    let paren = match round_from {
+        Some(f) if f <= r_keep.saturating_sub(1) => {
+            format!("会话轮 r{f}–r{}，保留尾首轮 r_keep={r_keep}", r_keep - 1)
+        }
+        _ => format!("保留尾首轮 r_keep={r_keep}"),
+    };
+    format!(
+        "{head}摘要 ID: {id}\n被压轮次: {rounds_dropped} 轮（{paren}）\n\
+         摘要存档: {}\n摘要 digest: sha256:{digest}\n黑板会话: {}\n\n\
+         == 近窗明细（round < r_keep，已排除保留尾） ==\n{}\n\n\
+         == 旧段聚合（≤{segment_cap} 条标注行） ==\n{}\n\n\
+         == 失败目标聚合 ==\n{}\n\n\
+         == 查询指针 ==\n{}\n\
+         [/前文上下文已压缩]",
+        archive_path.display(),
+        session.unwrap_or("（无）"),
+        blocks.b,
+        blocks.c,
+        blocks.d,
+        blocks.e,
+    )
+}
+
+/// 装配 v0.3 marker + 存档（含 D annex / 冻结折叠指针）。B 明细先按块级
+/// 预算预裁（链序 exec → edits → tool_actions），总量仍超限时从 B 尾部
+/// 逐段裁切并补指针——分区块级超限一律「截断 + 指针」，绝不静默丢失。
+pub fn build_fold_snapshot_marker(
+    bb: &Blackboard,
+    input: &FoldSnapshotInput<'_>,
+) -> FoldSnapshotOutput {
+    let budget = input.budget;
+    let params = crate::render_fold::FoldParams::from_env();
+    // 各分区近窗明细（视图 cap 内文本；空分区不入块）。
+    let mut kept_b: Vec<(&'static str, String)> = Vec::new();
+    let mut omitted_b: Vec<(&'static str, String)> = Vec::new();
+    for (section, snapshot) in [
+        (
+            "exec",
+            crate::epoch::render_exec_snapshot(
+                &bb.exec,
+                input.ctx.current_round,
+                input.ctx.current_domain,
+                &params,
+                input.r_keep,
+            ),
+        ),
+        (
+            "edits",
+            crate::epoch::render_edits_snapshot(
+                &bb.edits,
+                input.ctx.current_round,
+                input.ctx.current_domain,
+                &params,
+                input.r_keep,
+            ),
+        ),
+        (
+            "tool_actions",
+            crate::epoch::render_tool_actions_snapshot(
+                &bb.tool_actions,
+                input.ctx.current_round,
+                input.ctx.current_domain,
+                &params,
+                input.r_keep,
+            ),
+        ),
+    ] {
+        if let Some(body) = render_partition_detail(section, &snapshot) {
+            kept_b.push((section, body));
+        }
+    }
+    // B 块级预算预裁（确定性链序，超限从尾部裁切）。
+    let mut used = 0usize;
+    let mut kept_cursor = Vec::new();
+    for (section, body) in kept_b {
+        let add =
+            section.len() + 2 + body.chars().count() + if kept_cursor.is_empty() { 0 } else { 2 };
+        if used + add > budget.detail_chars {
+            omitted_b.push((section, body));
+            continue;
+        }
+        used += add;
+        kept_cursor.push((section, body));
+    }
+    let mut b_sections = kept_cursor;
+    let mut b_omitted = omitted_b;
+    let mut b_omitted_lines: usize = b_omitted.iter().map(|(_, b)| b.lines().count()).sum();
+    let omitted_names: Vec<&str> = b_omitted.iter().map(|(s, _)| *s).collect();
+    let mut blocks = assemble_blocks(
+        bb,
+        input.ctx,
+        input.r_keep,
+        &params,
+        budget,
+        &b_sections,
+        b_omitted_lines,
+        &omitted_names,
+    );
+    // 总量超限兜底：逐段裁掉 B 尾部明细（逆链序：tool_actions → edits →
+    // exec），指针随裁切重建。
+    let mut c_omitted = blocks.c_omitted;
+    loop {
+        let probe = assemble_marker_text(
+            COMPACTION_MARKER_VERSION,
+            budget.segment_lines,
+            input.id,
+            input.rounds_dropped,
+            input.round_from,
+            input.r_keep,
+            input.archive_path,
+            &"0".repeat(64),
+            input.session,
+            input.guard_failed,
+            input.archive_write_failed,
+            input.ledger_note,
+            &blocks,
+        );
+        if probe.chars().count() <= budget.total_chars || b_sections.is_empty() {
+            break;
+        }
+        let (section, body) = b_sections.pop().expect("non-empty checked above");
+        b_omitted.push((section, body));
+        b_omitted_lines = b_omitted.iter().map(|(_, b)| b.lines().count()).sum();
+        let omitted_names: Vec<&str> = b_omitted.iter().map(|(s, _)| *s).collect();
+        blocks = assemble_blocks(
+            bb,
+            input.ctx,
+            input.r_keep,
+            &params,
+            budget,
+            &b_sections,
+            b_omitted_lines,
+            &omitted_names,
+        );
+        c_omitted = blocks.c_omitted;
+    }
+    // D annex 单独取一次（与块内 D 文本同源；写存档补全段用）。
+    let (_d_text, d_annex) = render_failure_target_block(bb, budget.failure_chars);
+    let omitted_names: Vec<&str> = b_omitted.iter().map(|(s, _)| *s).collect();
+    blocks = assemble_blocks(
+        bb,
+        input.ctx,
+        input.r_keep,
+        &params,
+        budget,
+        &b_sections,
+        b_omitted_lines,
+        &omitted_names,
+    );
+    let mut archive = format!(
+        "# ORZ 会话压缩摘要（折叠视图快照 {version}）{id}\n\n\
+         - 状态: complete（机械模式，零模型调用——ADR-0010 §14.54）\n\
+         - 被压轮次: {rounds_dropped} 轮\n- 保留尾首轮 r_keep: {r_keep}\n\
+         - 黑板会话: {session}\n- 守卫强制: {guard}\n- 摘要存档: {path}\n\n\
+         ## 近窗明细（round < r_keep，已排除保留尾）\n{b}\n\n\
+         ## 旧段聚合（≤{cap} 条标注行）\n{c}\n\n\
+         ## 失败目标聚合\n{d}\n\n\
+         ## 查询指针\n{e}\n",
+        version = COMPACTION_MARKER_VERSION,
+        id = input.id,
+        rounds_dropped = input.rounds_dropped,
+        r_keep = input.r_keep,
+        session = input.session.unwrap_or("（无）"),
+        guard = if input.guard_failed {
+            "是（缩减守卫连续不满足，已强制压缩）"
+        } else {
+            "否"
+        },
+        path = input.archive_path.display(),
+        b = blocks.b,
+        cap = budget.segment_lines,
+        c = blocks.c,
+        d = blocks.d,
+        e = blocks.e,
+    );
+    if !d_annex.is_empty() {
+        archive.push_str("\n## 失败目标聚合（D 块溢出补全）\n\n");
+        for row in &d_annex {
+            archive.push_str(row);
+            archive.push('\n');
+        }
+    }
+    if let Some(ledger) = input.frozen_ledger {
+        archive.push_str("\n## 折叠视图（冻结快照：外挂指针）\n\n```\n");
+        archive.push_str(ledger);
+        archive.push_str("\n```\n");
+    }
+    let digest = archive_digest(&archive);
+    let marker = assemble_marker_text(
+        COMPACTION_MARKER_VERSION,
+        budget.segment_lines,
+        input.id,
+        input.rounds_dropped,
+        input.round_from,
+        input.r_keep,
+        input.archive_path,
+        &digest,
+        input.session,
+        input.guard_failed,
+        input.archive_write_failed,
+        input.ledger_note,
+        &blocks,
+    );
+    let marker_chars = marker.chars().count();
+    let d_omitted_rows = d_annex.len();
+    FoldSnapshotOutput {
+        marker,
+        archive,
+        failure_annex: d_annex,
+        stats: FoldSnapshotStats {
+            marker_chars,
+            b_omitted_lines,
+            c_omitted_segments: c_omitted,
+            d_omitted_rows,
+        },
+    }
 }
 
 #[cfg(test)]
@@ -1324,5 +1918,193 @@ mod tests {
 
         let _ = std::fs::remove_dir_all(&dir);
         let _ = std::fs::remove_dir_all(&blocked_cwd);
+    }
+
+    // ---- P2-14 S1：v0.3 折叠视图快照 marker（2026-09-04，ADR-0010
+    // §14.54 / 设计稿 §2、§7 矩阵 4–6）----
+
+    const FOLD_ID: &str = "compaction-RUN-V03-001";
+
+    fn fold_input(budget: CompactionBudget, r_keep: u64) -> FoldSnapshotInput<'static> {
+        FoldSnapshotInput {
+            id: FOLD_ID,
+            archive_path: Path::new(".gsa/compaction/x.md"),
+            session: Some("SESSION-v03"),
+            rounds_dropped: 3,
+            round_from: Some(1),
+            r_keep,
+            ctx: FoldSnapshotCtx {
+                current_round: 200,
+                current_domain: orz_assurance::lif::Domain::Normal,
+            },
+            guard_failed: false,
+            archive_write_failed: false,
+            ledger_note: None,
+            frozen_ledger: None,
+            budget,
+        }
+    }
+
+    /// §7 矩阵 5 + 空态：全空黑板 → B/C/D 统一「（无）」，A–E 块齐全、
+    /// 总量有界、digest 绑定、restore 保留块识别不变。
+    #[test]
+    fn fold_snapshot_empty_blackboard_blocks_and_bounds() {
+        let bb = SharedBlackboard::new();
+        let out =
+            build_fold_snapshot_marker(&bb.read(), &fold_input(CompactionBudget::default(), 1));
+        assert!(
+            out.marker.starts_with("[前文上下文已压缩 v0.3]"),
+            "{}",
+            out.marker
+        );
+        for head in [
+            "== 近窗明细（round < r_keep，已排除保留尾） ==",
+            "== 旧段聚合（≤30 条标注行） ==",
+            "== 失败目标聚合 ==",
+            "== 查询指针 ==",
+            "[/前文上下文已压缩]",
+        ] {
+            assert!(out.marker.contains(head), "missing {head}: {}", out.marker);
+        }
+        // B/C/D 全空 → 「（无）」出现 ≥3 次（每块一次）。
+        assert!(
+            out.marker.matches(NOTES_FACTS_EMPTY).count() >= 3,
+            "{}",
+            out.marker
+        );
+        assert!(out.marker.contains("sha256:"));
+        assert!(out.marker.contains("保留尾首轮 r_keep=1"));
+        assert!(out.marker.chars().count() <= CompactionBudget::default().total_chars);
+        assert!(crate::prompt::is_restore_retained_block(&out.marker));
+        assert!(!out.archive.contains("D 块溢出补全"));
+        assert_eq!(out.failure_annex.len(), 0);
+    }
+
+    /// §7 矩阵 1（装配级）：round ≥ r_keep 的行（保留尾）不进 marker——
+    /// B 明细/归档文本均不得携带保留尾内容。
+    #[test]
+    fn fold_snapshot_excludes_retained_tail_rows() {
+        let bb = SharedBlackboard::new();
+        {
+            let mut w = bb.write();
+            for r in 1..=12u64 {
+                let text = if r < 5 {
+                    format!("kept-row-{r}")
+                } else {
+                    format!("retained-row-{r}")
+                };
+                w.exec.results.push(crate::blackboard::ExecEntry::stamped(
+                    text,
+                    r,
+                    orz_assurance::lif::Domain::Normal,
+                    format!("2026-09-04T00:00:{r:02}Z"),
+                ));
+            }
+        }
+        let out =
+            build_fold_snapshot_marker(&bb.read(), &fold_input(CompactionBudget::default(), 5));
+        assert!(out.marker.contains("kept-row-1"), "{}", out.marker);
+        assert!(
+            !out.marker.contains("retained-row-"),
+            "保留尾行不得进 marker: {}",
+            out.marker
+        );
+        assert!(
+            !out.archive.contains("retained-row-"),
+            "存档同口径不得含保留尾行: {}",
+            out.archive
+        );
+    }
+
+    /// §7 矩阵 3/6（装配级）：C 条数上限 + 溢出指针；总量预算封顶不静默
+    /// 丢失（B 裁切补指针）；未达 T/W 阈值也强制折叠且有界（快照强制）。
+    #[test]
+    fn fold_snapshot_caps_c_segments_and_total_budget() {
+        let bb = SharedBlackboard::new();
+        {
+            let mut w = bb.write();
+            // 40 行交替域段 → 40 个段标注候选（当前轮 200 在 K 窗外，
+            // 仅尾部 20% 展开，其余折叠）。
+            for r in 1..=40u64 {
+                let domain = if r % 2 == 0 {
+                    orz_assurance::lif::Domain::Pressure
+                } else {
+                    orz_assurance::lif::Domain::Normal
+                };
+                w.exec.results.push(crate::blackboard::ExecEntry::stamped(
+                    format!("exec-{r} {}", "x".repeat(180)),
+                    r,
+                    domain,
+                    format!("2026-09-04T00:00:{r:02}Z"),
+                ));
+            }
+        }
+        let budget = CompactionBudget {
+            detail_chars: 300,
+            segment_lines: 2,
+            total_chars: 1_800,
+            failure_chars: 300,
+        };
+        let out = build_fold_snapshot_marker(&bb.read(), &fold_input(budget, 100));
+        assert!(
+            out.marker.chars().count() <= budget.total_chars,
+            "marker 超总量预算: {} / {}",
+            out.marker.chars().count(),
+            budget.total_chars
+        );
+        assert!(
+            out.stats.c_omitted_segments > 0,
+            "C 必须省略段并给指针: {:?}",
+            out.stats
+        );
+        assert!(out.marker.contains("段因条数上限"), "{}", out.marker);
+        // B 块预算（300 字符）必然裁掉部分分区 → 指针不静默。
+        assert!(
+            out.marker.contains("因块预算") || out.marker.contains("省略"),
+            "{}",
+            out.marker
+        );
+        assert!(out.archive.contains("== 近窗明细") || out.archive.contains("## 近窗明细"));
+    }
+
+    /// §7 矩阵 7（D annex）：failure_agg 溢出随存档补全段保存，marker 指针
+    /// 指向存档补全段（可回查）。
+    #[test]
+    fn fold_snapshot_failure_annex_persists_in_archive() {
+        let bb = SharedBlackboard::new();
+        {
+            let mut w = bb.write();
+            for i in 0..120 {
+                w.failure_agg.record(
+                    "cmd_target",
+                    &format!("id-{i}"),
+                    &format!("cmd {i} {}", "长".repeat(90)),
+                    "tool_timeout",
+                    i as f64,
+                    i as u64 + 1,
+                    orz_assurance::lif::Domain::Start,
+                );
+            }
+        }
+        let budget = CompactionBudget {
+            failure_chars: 300,
+            ..CompactionBudget::default()
+        };
+        let out = build_fold_snapshot_marker(&bb.read(), &fold_input(budget, 100));
+        assert!(out.stats.d_omitted_rows > 0, "{:?}", out.stats);
+        assert!(
+            out.marker.contains("见摘要存档失败目标聚合补全段"),
+            "{}",
+            out.marker
+        );
+        assert!(
+            out.archive.contains("## 失败目标聚合（D 块溢出补全）"),
+            "{}",
+            out.archive
+        );
+        assert!(!out.failure_annex.is_empty());
+        for row in &out.failure_annex {
+            assert!(out.archive.contains(row.as_str()), "annex missing: {row}");
+        }
     }
 }

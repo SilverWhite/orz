@@ -348,6 +348,7 @@ pub(crate) fn conv_message(role: Role, content: &str) -> Message {
         tool_call_id: None,
         tool_calls: Vec::new(),
         reasoning_content: None,
+        round: None,
     }
 }
 
@@ -366,6 +367,7 @@ pub(crate) fn tool_round(call_id: &str, result: &str) -> Vec<Message> {
                 call_id: call_id.to_string(),
             }],
             reasoning_content: None,
+            round: None,
         },
         Message {
             role: Role::Tool,
@@ -373,6 +375,7 @@ pub(crate) fn tool_round(call_id: &str, result: &str) -> Vec<Message> {
             tool_call_id: Some(call_id.to_string()),
             tool_calls: Vec::new(),
             reasoning_content: None,
+            round: None,
         },
     ]
 }

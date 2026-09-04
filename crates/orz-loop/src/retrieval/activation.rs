@@ -477,6 +477,7 @@ mod tests {
                     tool_call_id: None,
                     tool_calls: Vec::new(),
                     reasoning_content: None,
+                    round: None,
                 }],
                 pending: Some(PendingDisposition {
                     assessment_id: "ASSESS-1".to_string(),

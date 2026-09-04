@@ -217,6 +217,7 @@ impl AgentLoopController {
                 tool_call_id: None,
                 tool_calls: Vec::new(),
                 reasoning_content: None,
+                round: None,
             },
         );
     }
@@ -452,6 +453,7 @@ mod tests {
                 call_id: id.to_string(),
             }],
             reasoning_content: None,
+            round: None,
         };
         let tool_reply = |id: &str| Message {
             role: Role::Tool,
@@ -459,6 +461,7 @@ mod tests {
             tool_call_id: Some(id.to_string()),
             tool_calls: Vec::new(),
             reasoning_content: None,
+            round: None,
         };
         let summary = |text: &str| Message {
             role: Role::Assistant,
@@ -466,6 +469,7 @@ mod tests {
             tool_call_id: None,
             tool_calls: Vec::new(),
             reasoning_content: None,
+            round: None,
         };
         let mut messages = vec![
             Message {
@@ -474,6 +478,7 @@ mod tests {
                 tool_call_id: None,
                 tool_calls: Vec::new(),
                 reasoning_content: None,
+                round: None,
             },
             decl("call-1"),
             tool_reply("call-1"),
@@ -522,6 +527,7 @@ mod tests {
             tool_call_id: None,
             tool_calls: Vec::new(),
             reasoning_content: None,
+            round: None,
         }];
         let stats = compact_messages(&mut messages, 0);
         assert_eq!(stats.rounds_dropped, 0);
@@ -658,6 +664,12 @@ mod tests {
             "{archive_text}"
         );
         assert!(archive_text.contains("机械模式"));
+        // P2-14 S1：v0.3 存档含折叠视图快照各段（主车道）。
+        assert!(
+            archive_text.contains("## 近窗明细（round < r_keep，已排除保留尾）"),
+            "{archive_text}"
+        );
+        assert!(archive_text.contains("## 查询指针"), "{archive_text}");
 
         // The MID-TASK gap (request 4, after tool round 3) carries the
         // marker — the old "final-answer gap only" semantics are revoked.
@@ -718,6 +730,33 @@ mod tests {
                 "orphan tool result: {m:?}"
             );
         }
+        // P2-14 S1（2026-09-04，ADR-0010 §14.54）：主车道压缩走 v0.3 折叠
+        // 视图快照 marker——A–E 块齐全、r_keep 单边界行排除（既有 A 轮
+        // 原文不在 marker/消息中即 r_keep 排除的等价断言），v0.2 五段槽
+        // 不在主车道 marker 出现。
+        let marker = round4
+            .iter()
+            .find(|m| m.content.starts_with("[前文上下文已压缩"))
+            .expect("marker present");
+        assert!(
+            marker.content.contains("[前文上下文已压缩 v0.3]"),
+            "main-lane compaction must emit the v0.3 marker: {}",
+            marker.content
+        );
+        for head in [
+            "保留尾首轮 r_keep=",
+            "== 近窗明细（round < r_keep，已排除保留尾） ==",
+            "== 旧段聚合",
+            "== 失败目标聚合 ==",
+            "== 查询指针 ==",
+            "[/前文上下文已压缩]",
+        ] {
+            assert!(marker.content.contains(head), "missing {head}");
+        }
+        assert!(
+            !marker.content.contains("目的: ") && !marker.content.contains("后续衔接: "),
+            "v0.2 五段槽不得出现在主车道 v0.3 marker"
+        );
 
         let _ = std::fs::remove_dir_all(&dir);
     }

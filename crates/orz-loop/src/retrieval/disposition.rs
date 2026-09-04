@@ -89,6 +89,7 @@ impl AgentLoopController {
                     tool_call_id: Some(tc.call_id.clone()),
                     tool_calls: Vec::new(),
                     reasoning_content: None,
+                    round: None,
                 });
                 return Ok(ToolResult {
                     output: msg,
@@ -114,6 +115,7 @@ impl AgentLoopController {
                     tool_call_id: Some(tc.call_id.clone()),
                     tool_calls: Vec::new(),
                     reasoning_content: None,
+                    round: None,
                 });
                 return Ok(ToolResult {
                     output: msg,
@@ -145,6 +147,7 @@ impl AgentLoopController {
                 tool_call_id: Some(tc.call_id.clone()),
                 tool_calls: Vec::new(),
                 reasoning_content: None,
+                round: None,
             });
             return Ok(ToolResult {
                 output: msg,
@@ -162,6 +165,7 @@ impl AgentLoopController {
                 tool_call_id: Some(tc.call_id.clone()),
                 tool_calls: Vec::new(),
                 reasoning_content: None,
+                round: None,
             });
             return Ok(ToolResult {
                 output: msg,
@@ -213,6 +217,7 @@ impl AgentLoopController {
                     tool_call_id: Some(tc.call_id.clone()),
                     tool_calls: Vec::new(),
                     reasoning_content: None,
+                    round: None,
                 });
                 return Ok(ToolResult {
                     output: msg,
@@ -268,6 +273,7 @@ impl AgentLoopController {
                 tool_call_id: Some(tc.call_id.clone()),
                 tool_calls: Vec::new(),
                 reasoning_content: None,
+                round: None,
             });
             return Ok(ToolResult {
                 output,
@@ -304,6 +310,7 @@ impl AgentLoopController {
                 tool_call_id: Some(tc.call_id.clone()),
                 tool_calls: Vec::new(),
                 reasoning_content: None,
+                round: None,
             });
             return Ok(ToolResult {
                 output: msg,
@@ -432,6 +439,7 @@ impl AgentLoopController {
                 tool_call_id: Some(tc.call_id.clone()),
                 tool_calls: Vec::new(),
                 reasoning_content: None,
+                round: None,
             });
             return Ok(ToolResult {
                 output: msg,
@@ -620,10 +628,16 @@ impl AgentLoopController {
             tool_call_id: Some(tc.call_id.clone()),
             tool_calls: Vec::new(),
             reasoning_content: None,
+            round: None,
         });
         // Audit mirror — the control call is one semantic action.
         // B1：写时盖 (round, domain) 章。
-        let (round, domain) = self.blackboard_stamp();
+        // P2-14 S1（2026-09-04，ADR-0010 §14.54 复审处理）：父派发控制工具
+        // 在检索子车道内执行，但写的是共享折叠分区（exec/tool_actions）——
+        // 行章必须取执行窗主轮章（effective_blackboard_stamp，主 pin 优先），
+        // 与同窗其它共享折叠写面同轴（此前漏改 live 章 = 双轴错配，登记
+        // 于复审处理）。
+        let (round, domain) = self.effective_blackboard_stamp();
         {
             let mut w = self.blackboard.write();
             w.push_tool_action(ToolActionRecord {
