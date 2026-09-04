@@ -5560,6 +5560,7 @@ dependencies = [
  "base64",
  "chrono",
  "dunce",
+ "jsonschema",
  "orz-paths",
  "regex",
  "ring",
