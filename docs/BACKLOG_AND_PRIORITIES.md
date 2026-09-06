@@ -555,6 +555,12 @@ GAP-GSA-SYMLINK-STALE-TEST 连带观察（`.gsa` terminal-log 白名单会话卷
   失败集逐项 diff 完全一致（ACAF signer 存量族 + 1 挂死均存量，登记
   观察）；Python assurance 不受影响。入口：
   [S1+S2 实施审计](audits/P0_0M_GSA_SESSION_VOLUME_S1_S2_IMPL_AUDIT_2026-09-07.md)）。
+  同日 S1 三路全面复审 + 全部问题处理收口（P2×2：设计 §3 D2 顺序句勘误注 +
+  D1 解析规则抽 `session_volume_canonical_root` 共享单源接 permission 镜像；
+  P3×6：grep/list_dir 域内 deny 文案区分 + 矩阵 #8 工具级/`..`-路径/
+  Windows 尾点变体三新测试 + ADR §14.56 登记 + 既有拒读测试形态注记；
+  orz-tools 2832 全绿、orz-host 失败集仍与基线一致。入口：
+  [复审处理审计](audits/P0_0M_S1_S2_REVIEW_HANDLING_2026-09-07.md)）。
 - [ ] S3 接线复验：终端截断补读链 + run_tests 输出窗口端到端（含 `.gsa`
   symlink 会话卷实机构造）；GAP-GSA-SYMLINK-STALE-TEST 收口注记演进。
 - [ ] S4 收口：索引/BACKLOG/TODO 状态同步 + 门禁 Exit 0。

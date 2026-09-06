@@ -143,6 +143,14 @@ canonical 双拼写对照语义钉死）。
 2. `grep`/`list_dir` 的 deny 消息未区分会话卷域文案（与 read_file 不同）：
    两工具输出走结构化信封（exit code 1 stderr / PermissionDenied 变体），
    文案统一非语义项，S3 复验时视实机反馈定夺。
+   **（2026-09-07 已随复审处理批修复——见
+   [复审处理审计](P0_0M_S1_S2_REVIEW_HANDLING_2026-09-07.md) P3-①）**
 3. 上游 `orz-agent`/`orz-workspace` 的 SessionContext 无会话卷注入
    （None = 窗口全关）：Grok Build 血统面无 `.gsa` 运行时，fail-closed
    符合设计；若未来上游需要窗口，须由其 host 层显式裁决注入。
+
+> 复审登记（2026-09-07）：本审计落盘后同日完成 S1 三路全面复审，P2×2 +
+> P3×6 全部处理，见
+> [复审处理审计](P0_0M_S1_S2_REVIEW_HANDLING_2026-09-07.md)——其中 §3
+> 语义单源核验的「permission 镜像冻结」口径细化为「规则单源
+> （`session_volume_canonical_root` 共享）+ 判定双载体」。

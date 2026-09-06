@@ -4515,7 +4515,11 @@ TER M1/M2 全面审查（多子代理并行 + 提交态复核，有条件 PASS�
 2026-09-06 用户裁决方向（`.gsa` 为 LIF 科学性组件——可审计状态链落盘面，
 必须保留并下沉为底层部件；权限层保留不裁撤，安全面放开压到最窄）。
 设计权威：[`GSA_SESSION_VOLUME_BOTTOM_LAYER_DESIGN_2026-09-06`](../docs/GSA_SESSION_VOLUME_BOTTOM_LAYER_DESIGN_2026-09-06.md)。
-实施未开始（BACKLOG 0m），各切步闭合时另行登记。
+实施进度（2026-09-07 登记）：S1 代码 + S2 测试（§5 矩阵 11 项双层覆盖）
+已闭合（orz `59eba7f2`，实施审计
+[`P0_0M_GSA_SESSION_VOLUME_S1_S2_IMPL_AUDIT_2026-09-07`](../docs/audits/P0_0M_GSA_SESSION_VOLUME_S1_S2_IMPL_AUDIT_2026-09-07.md)，
+同日复审处理收口 P2×2+P3×6 见复审处理审计）；S3 接线复验 + S4 收口待续
+（BACKLOG 0m）。各切步闭合时另行登记。
 
 1. **SessionVolume 类型化资源（走 SkillRoots 先例）**：`.gsa` 登记为
    底层拥有的系统状态域；`Resources.SessionVolume` 由 orz-host 装配期

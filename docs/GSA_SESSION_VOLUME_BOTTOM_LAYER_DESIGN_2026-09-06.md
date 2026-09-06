@@ -69,6 +69,16 @@ terminal-log / run_tests 两个科学功能窗口；fail-closed 默认不放松�
 
 判定顺序：先 workspace，后 session volume；SkillRoots 豁免优先级不变。
 
+> **勘误注（2026-09-07，S1 复审处理 P2-1）**：上句「先 workspace，后
+> session volume」指判定域的**分类优先序**——会话卷域作为 workspace 上的
+> 覆盖层先行分类、workspace 仅作回退判定（实现
+> `orz-tools resources::is_path_allowed_for_read`：技能根豁免 → 会话卷域
+> → workspace → 拒）。字面短路序不可满足本设计自身测试矩阵：workspace
+> 判 false 即拒将使 §5 矩阵 #6（`.gsa` symlink 卷挂载形态窗口放行，
+> canonical 落点在 cwd 外）永不成立；「在 workspace 即放行」短路将破坏
+> 矩阵 #5（cwd 内真实 `.gsa` 内部面 agent-invisible）。ADR-0010 §14.56
+> 条 2 只列三个判定域、无此顺序句，不受影响。
+
 ### D3 窗口契约（单源下沉）
 
 `.gsa` 面可见性语义唯一权威 = 本节；permission.rs 现行语义原样下沉：

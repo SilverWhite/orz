@@ -389,6 +389,8 @@
   完全一致（ACAF signer 存量失败族 + 1 挂死均存量，登记观察）；Python
   assurance 无 `.gsa` 判定不受影响。入口：
   docs/audits/P0_0M_GSA_SESSION_VOLUME_S1_S2_IMPL_AUDIT_2026-09-07.md）。
+  同日 S1 三路复审 + 全部问题处理收口（P2×2 + P3×6，orz-tools 2832 全绿；
+  入口：docs/audits/P0_0M_S1_S2_REVIEW_HANDLING_2026-09-07.md）。
 - [ ] S3 接线复验：补读链/run_tests 窗口端到端（`.gsa` symlink 会话卷
   实机构造）+ GAP-GSA-SYMLINK-STALE-TEST 演进注记。
 - [ ] S4 收口：索引/BACKLOG/TODO 同步 + 门禁 Exit 0。
