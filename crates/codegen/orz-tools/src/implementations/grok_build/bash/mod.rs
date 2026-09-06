@@ -322,7 +322,8 @@ pub struct BashToolInput {
     // as JSON strings (`"120000"`), which a plain `Option<u64>` rejects. Accept
     // string-or-number here; the schema still advertises an integer.
     // Serde default stays None so omit ≠ Some(120000): background omit must stay
-    // unbounded (see resolve_effective_timeout). Schema still advertises 120000.
+    // unbounded (see resolve_effective_timeout). Schema advertises no static
+    // default (TER T1.4 / ADR-0010 §14.55).
     #[serde(
         default,
         deserialize_with = "crate::types::schema::deserialize_lenient_u64",
