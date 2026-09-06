@@ -124,6 +124,15 @@
              族复验零回归（判官两侧字面不动，250 语料×30 族 0 差，18 历史期刊
              0 错误）；orz-loop 728 lib 全绿、orz `00b9a440`，见
              [批 2 实施审计](audits/TASK_D_S2D_BATCH2_IMPL_AUDIT_2026-09-06.md)。
+             同日三路全面复审 + 用户补裁决收口（P1×1——tool_availability_probe
+             族 exact-partition 子句与收窄生产刊冲突，补裁决收窄为「分区 ⊆
+             WORK_TOOLS 且两集互斥」（保留重叠/判断词检出），ADR-0010
+             §14.59 转录、两侧判官同步，收窄载荷零误报实证；P2 登记修正
+             ——收窄快照消费点五处枚举 + 板块/实体面效应按预期收敛登记；
+             P3 采纳×3（共享谓词 helper / 文档注记 / §3.5 条 7 内联加注）
+             登记×4；orz `1595303b`：spec 表 233×30=6990 格 + 对拍 251
+             语料×30 族=7530 格 0 差 + orz-loop 729 lib），见
+             [批 2 复审处理](audits/TASK_D_S2D_BATCH2_REVIEW_HANDLING_2026-09-06.md)。
              两批完成，S2d 翻转前裁决清单清空。
        - [ ] **S3**：门禁真实 fixture journal 校验改接 Rust 法官；Python Rust
          轨 `validate_journal_file` 退役；registry 源翻转 JSON 转正。

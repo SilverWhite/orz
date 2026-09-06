@@ -36,6 +36,16 @@
   `verify_probe_accuracy` 字面不动；历史 fixture 期刊（全量分区事件）
   继续按原语义回放。
 
+> **2026-09-06 批 2 三路复审勘误**（[复审处理](TASK_D_S2D_BATCH2_REVIEW_HANDLING_2026-09-06.md)）：
+> ①上句「判官两侧零改动对真实刊零误报」仅对 probe_accuracy 族成立——
+> `tool_availability_probe` 族的 exact-partition 形状子句与收窄后生产刊
+> 冲突，经用户补裁决收窄该子句（ADR-0010 §14.59），两侧判官已同步；
+> ②「可见面效果为零」不完整——收窄快照另有 console 注册板块与环境
+> 实体清单两处消费，`workspace.run_tests` 动作随收窄从板块/实体面消失，
+> 经用户确认按预期收敛登记（ADR §14.58 项 2 v1.59 修正）。本文其余
+> 数字以复审处理 §3 为准（spec 表 233×30=6990 格、对拍 251 语料×30=
+> 7530 格 0 差、orz-loop 729 lib）。
+
 ### 1.3 S2 单测矩阵（同批）
 
 - `narrow_to_declared` 纯函数三单测：封存 + registry 缺席剔除（保序保

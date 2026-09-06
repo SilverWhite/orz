@@ -2082,11 +2082,17 @@ _JUDGMENT_WORD_TOKENS = (
 
 
 def _verify_v02_tool_availability_probe(events: list[dict[str, Any]]) -> list[str]:
-    """FUS-TOOL-PROBE (2026-08-13, design §3/§7) v0.2 cross-checks:
+    """FUS-TOOL-PROBE (2026-08-13, design §3/§7) v0.2 cross-checks
+    (partition clause narrowed 2026-09-06, ADR-0010 §14.59 / 任务 D S2d
+    裁决二补裁决 — the producer's availability accounting covers the
+    declared surface only, so the partition must be a subset of the work
+    tools rather than the exact full set; historical full-partition
+    journals keep replaying clean as a subset):
 
-    - `complete`/`incomplete` cover exactly the work tools, each exactly
-      once (two-state partition — no tool may appear on both sides, no
-      work tool may be absent);
+    - `complete`/`incomplete` are disjoint (two-state — no tool may appear
+      on both sides) and cover work tools only (no non-work tool may
+      appear); declared-surface narrowing (ADR-0010 §14.58) legitimately
+      leaves sealed/absent tools out;
     - incomplete reasons are stable neutral statements — never availability
       judgment words (可用/不可用/成功/失败/available/...).
     """
@@ -2106,19 +2112,18 @@ def _verify_v02_tool_availability_probe(events: list[dict[str, Any]]) -> list[st
                 f"event {index}: tool(s) in both complete and incomplete: "
                 f"{sorted(overlap)}"
             )
-        union = complete | set(incomplete)
-        if union != _WORK_TOOLS:
+        extra = (complete | set(incomplete)) - _WORK_TOOLS
+        if extra:
             errors.append(
-                f"event {index}: probe partition must cover exactly the work tools; "
-                f"missing={sorted(_WORK_TOOLS - union)}, "
-                f"extra={sorted(union - _WORK_TOOLS)}"
+                f"event {index}: probe partition must be a subset of the "
+                f"work tools; extra={sorted(extra)}"
             )
         for tool, reason in sorted(incomplete.items()):
             lowered = reason.lower()
             if any(token in lowered for token in _JUDGMENT_WORD_TOKENS):
                 errors.append(
                     f"event {index}: incomplete reason for {tool!r} uses an "
-                    f"availability judgment word: {reason!r}"
+                    "availability judgment word: {reason!r}"
                 )
     return errors
 
