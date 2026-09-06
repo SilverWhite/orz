@@ -14,7 +14,7 @@
 
 | 优先级 | 含义 | 开放项（入口小节） |
 |---|---|---|
-| P0 | 当前工作集：设计已冻结，裁决后立即实施 | **P0-GOV 全仓架构对齐与门禁修复（00，阻断前置）**；FUS-BENCHMARK-FULL-EXEC 验证②③(reward)④⑤（0b）；0d 后续 3/4/5 S4 复验（0d）；THIN-HARNESS-REDESIGN-V2 余项（0j）；WINDOWS-HIGH-NIST-MAX-FRICTION ⑥/⑦（0l）；GSA-SESSION-VOLUME-BOTTOM-LAYER S1–S4（0m，2026-09-06 用户裁决放行）；GAP-APPROVAL-PROMPTER S1–S4（0n，2026-09-06 排期，S1 设计先行） |
+| P0 | 当前工作集：设计已冻结，裁决后立即实施 | **P0-GOV 全仓架构对齐与门禁修复（00，阻断前置）**；FUS-BENCHMARK-FULL-EXEC 验证②③(reward)④⑤（0b）；0d 后续 3/4/5 S4 复验（0d）；THIN-HARNESS-REDESIGN-V2 余项（0j）；WINDOWS-HIGH-NIST-MAX-FRICTION ⑥/⑦（0l）；GSA-SESSION-VOLUME-BOTTOM-LAYER S1–S4（0m，2026-09-06 用户裁决放行） |
 | P1 | 无需裁决，可与 P0 并行 | FUS-COMPONENT-REGISTER（4）；GAP-WINDOWS-EVIDENCE（5）；IMPL-DEEPSEEK-TRANSPORT / SEC-CREDENTIALS live 证据（6）；ORZ-SESSION-CONTEXT-MONITOR（6d） |
 | P2 | 生产化决策门：需用户裁决 | IMPL-CONTROL-FABRIC Slice 3/4（7）；OPS-PROTOCOL 裁剪与接线裁决（8）；MODEL-RESIDUAL-PRESSURE-FOLLOWUP（11）；COMPRESSION-LINGUISTIC-FORMAL-LAYER（12）；BLACKBOARD-CONVERSATION-SCOPE-FOLD B2–B4（13） |
 | P3 | 收尾 / 清理 | EVIDENCE-LOCAL-BROWSER（9）；GATE-CHAIN（10）；遗留小项（11） |
@@ -109,8 +109,8 @@
   `存档/root-artifacts-2026-09-06/`；`gsa.py` 例外保留（门禁 required 文件）。
   （2026-09-06 闭合）
 - [x] **F2 approval prompter 存根**：登记为 `GAP-APPROVAL-PROMPTER`
-  （索引 §3.1）；2026-09-06 用户裁决排期（S1–S4，S1 设计先行，见 0n），
-  不入任务 D S2。（2026-09-06 登记 + 排期）
+  （索引 §3.1）；2026-09-06 排期（S1–S4，见 0n）后同日延期（无具体设计
+  文档项非急切/必需，S1 设计定稿前置），不入任务 D S2。（2026-09-06）
 - [x] **观察项 (c) 权限判定分散**：登记 OBS-PERMISSION-DUAL-IMPL（另立观察，
   不入任务 D S2 盘点；终局治理视野再排期）。（2026-09-06 登记）
 - [x] **复核修正批（2026-09-06 审查收口）**：R-1 计数口径（353 + 夹具恢复）、
@@ -476,7 +476,11 @@ GAP-GSA-SYMLINK-STALE-TEST 连带观察（`.gsa` terminal-log 白名单会话卷
 / [ADR-0010 §14.56](../adr/ADR-0010-fusion-runtime-and-agent-architecture.md)。
 登记不动计数（设计定稿批未入账；2026-09-06 排期批仍不动计数，闭合时动账）。
 
-### 0n. GAP-APPROVAL-PROMPTER（P0；2026-09-06 用户裁决排期登记，S1 设计先行）
+### 0n. GAP-APPROVAL-PROMPTER（**延期**；2026-09-06 排期登记，同日用户裁决延期）
+
+延期裁决（2026-09-06 用户）：当前无具体设计文档的项均非急切或必需内容——
+本项实施以 S1 设计定稿为前置门，设计定稿完成前不排期实施、不占当前工作集；
+本小节保留作排期登记档案，S1 定稿后按下列批次恢复推进。
 
 GLM F2 处置转排期（2026-09-06 用户裁决）：`orz-host/src/approval.rs` 全文件
 注释 + TODO 存根、`lib.rs` 标注 approval path still a stub——交互审批器补齐。
