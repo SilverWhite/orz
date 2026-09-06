@@ -83,6 +83,12 @@
 
 ## 6. 对 S2b/S2c 后续批次的输入
 
+> **S2b 已闭合（2026-09-06）**：核心六族（7 函数入口）Rust conformance
+> 实现完成——orz `809cdb4e` + 复审处理批（P1×2 修复：permission 精确集合
+> / V01 gating；对拍 0 差 546 裁决格），入口：
+> [S2b 实施审计](TASK_D_S2B_FAMILIES_IMPL_AUDIT_2026-09-06.md) /
+> [S2b 复审处理](TASK_D_S2B_REVIEW_HANDLING_2026-09-06.md)。
+
 1. **B 族清单（4 个，S2c 显式实现对象）**：`receipt_event_isomorphism`、
    `probe_accuracy`（S2c-1 检索族）；`console_order_written`、
    `console_order_rejected`（S2c-3 控制面族）。后两族需先裁决「写单面退役

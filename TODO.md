@@ -61,9 +61,10 @@
     - [x] S2b：核心族 Rust conformance 显式实现（control_tickets /
       lifecycle / retrieval_mode / ledger_fold advance+write_failed /
       policy_denial / failure_target）+ fixture 正/负对拍——**2026-09-06
-      完成**（orz `809cdb4e`；对拍 0 差 350 裁决格；orz-assurance 204
-      passed），见
-      [S2b 实施审计](docs/audits/TASK_D_S2B_FAMILIES_IMPL_AUDIT_2026-09-06.md)。
+      完成**（orz `809cdb4e` + 复审处理批 P1×2 修复；对拍 0 差 546 裁决格
+      78 语料；60 场景表驱动单测；orz-assurance 204 passed），见
+      [S2b 实施审计](docs/audits/TASK_D_S2B_FAMILIES_IMPL_AUDIT_2026-09-06.md)
+      / [S2b 复审处理](docs/audits/TASK_D_S2B_REVIEW_HANDLING_2026-09-06.md)。
     - [ ] S2c：其余族按档位收口（检索族 / 上下文与压缩族 / 控制面族子批）。
     - [ ] S2d：31 族 Python↔Rust 全量对拍 0 差 + registry 翻转准备。
   - [ ] S3：`check_repository.py` 真实 fixture journal 校验改接 Rust 法官，
