@@ -628,6 +628,140 @@ pub fn is_path_within_workspace(
         && (candidate_is_under(&cwd_norm, &joined_norm)
             || candidate_is_under(&canonical_cwd_norm, &joined_norm))
 }
+/// `.gsa` 会话卷底层类型化系统状态域（P0-0m GSA-SESSION-VOLUME，ADR-0010
+/// §14.56 D1，2026-09-06）：host 装配期对 `{cwd}/.gsa` 做**一次**
+/// symlink-aware canonical 解析（失败回退词法路径）后的卷根。host 是唯一
+/// 知道会话卷真实落点（含评测容器把 `.gsa` 挂载为指向 cwd 外卷目录的符号
+/// 链接）的角色，下层不再各自 canonicalize 再猜。
+///
+/// **fail-closed**：资源缺席（host 未注入）时窗口全关，沙箱退回纯
+/// workspace 二元判定（Task C 现状语义）。
+#[derive(Debug, Clone)]
+pub struct SessionVolumeRoot(pub PathBuf);
+
+/// 会话卷的模型可寻址词法落点：`{cwd}/.gsa`。
+fn session_volume_lexical_root(cwd: &std::path::Path) -> PathBuf {
+    cwd.join(".gsa")
+}
+
+/// 模型可寻址词法路径：相对路径按 cwd 拼接后词法归一化（对应 permission.rs
+/// 的 `normalize_lexical(cwd.join(path))` 口径；白名单形态只认这一形态，
+/// canonical 落点只用于包容性对照）。
+fn session_volume_lexical_path(cwd: &std::path::Path, joined_path: &std::path::Path) -> PathBuf {
+    let lexical = if joined_path.is_absolute() {
+        joined_path.to_path_buf()
+    } else {
+        cwd.join(joined_path)
+    };
+    orz_paths::normalize_lexically(&lexical)
+}
+
+/// 判定路径是否属于会话卷域（P0-0m D2）。
+///
+/// 词法落点位于 `{cwd}/.gsa` 内（评测容器把 `.gsa` 挂载为符号链接时，
+/// 模型可寻址路径的词法形态即触发域归属），或 canonical 落点位于装配期
+/// 解析的卷根内。
+pub fn is_path_in_session_volume_domain(
+    canonical_root: &std::path::Path,
+    cwd: &std::path::Path,
+    joined_path: &std::path::Path,
+    resolved_path: Option<&std::path::Path>,
+) -> bool {
+    let lexical_root = session_volume_lexical_root(cwd);
+    let lexical_norm = session_volume_lexical_path(cwd, joined_path);
+    if candidate_is_under(&lexical_root, &lexical_norm) {
+        return true;
+    }
+    let resolved = resolved_path.unwrap_or(&lexical_norm);
+    let canonical = dunce::canonicalize(resolved).unwrap_or(lexical_norm);
+    candidate_is_under(canonical_root, &canonical)
+}
+
+/// `.gsa` 面可见性窗口契约（P0-0m D3，`.gsa` 访问语义唯一权威）。
+///
+/// 只读窗口仅两个（permission.rs 现行语义原样下沉）：
+/// - `session/terminal/*.log`——终端截断补读链（OUTPUT-DEGENERATION-GUARD）；
+/// - `run_tests_output.txt`——run_tests 完整输出窗口（GAP-RUN-TESTS）。
+///
+/// **双条件**：canonical 落点 ∈ canonical_root **且** 词法路径 ∈ cwd，且
+/// 命中白名单文件形态。双条件保证：`.gsa` 本身是符号链接（会话卷挂载）→
+/// 放行（canonical 条件对卷根解析后比较）；种在 `session/terminal/` 内的
+/// 二级 symlink 逃向卷外 → canonical 条件拒绝；白名单外的一切 `.gsa`
+/// 内部面（journal、会话状态、keystore、快照、PDF 证据、conversations…）
+/// agent-invisible。
+pub fn is_session_volume_window_path(
+    canonical_root: &std::path::Path,
+    cwd: &std::path::Path,
+    joined_path: &std::path::Path,
+    resolved_path: Option<&std::path::Path>,
+) -> bool {
+    let lexical_norm = session_volume_lexical_path(cwd, joined_path);
+    let lexical_root = session_volume_lexical_root(cwd);
+    let resolved = resolved_path.unwrap_or(&lexical_norm);
+    let canonical = dunce::canonicalize(resolved).unwrap_or_else(|_| lexical_norm.clone());
+
+    // 窗口 1：terminal 截断补读链——词法形态 `session/terminal/*.log`，
+    // canonical 落点必须留在卷内（防 `session/terminal/` 内二级 symlink
+    // 逃逸到卷外或任意宿主路径）。
+    let terminal_dir = lexical_root.join("session").join("terminal");
+    let terminal_log = candidate_is_under(&terminal_dir, &lexical_norm)
+        && lexical_norm
+            .extension()
+            .map(|e| e.eq_ignore_ascii_case("log"))
+            .unwrap_or(false);
+    if terminal_log {
+        return candidate_is_under(canonical_root, &canonical)
+            && candidate_is_under(cwd, &lexical_norm);
+    }
+    // 窗口 2：run_tests 完整输出——精确固定文件名，canonical 对照词法与
+    // 卷根两种拼写（symlink-aware；名字被 symlink 顶替到卷内其它落点仍拒，
+    // 与 permission.rs 现行语义逐条对应）。
+    let run_tests_lexical =
+        orz_paths::normalize_lexically(lexical_root.join("run_tests_output.txt").as_path());
+    let run_tests =
+        canonical == run_tests_lexical || canonical == canonical_root.join("run_tests_output.txt");
+    if run_tests {
+        return candidate_is_under(canonical_root, &canonical)
+            && candidate_is_under(cwd, &lexical_norm);
+    }
+    false
+}
+
+/// 读工具沙箱三分判定（P0-0m D2，read_file/grep/list_dir 三个读工具统一
+/// 入口；`.gsa` 访问语义单点）：
+///
+/// 1. 已注册技能根豁免（P0-GOV GLM F1，优先级不变）→ 放行；
+/// 2. 会话卷域（词法 `{cwd}/.gsa` 内或 canonical ∈ 卷根）→ 按 D3 窗口
+///    契约判定——白名单两窗口放行，其余 agent-invisible（拒）；
+/// 3. workspace 内 → 放行（Task C 现状不变）；
+/// 4. 其余 → 拒（canonical 级 fail-closed 不放松）。
+///
+/// 会话卷域先于 workspace 判定：`.gsa` 真实目录在 cwd 内属 Task C
+/// workspace 判定的放行面，必须由窗口契约接管（journal 等内部面
+/// agent-invisible），否则白名单形同虚设。`session_volume` 为 `None` 时
+/// 窗口全关，沙箱退回纯 workspace 二元判定（Task C 现状，fail-closed）。
+pub fn is_path_allowed_for_read(
+    cwd: &std::path::Path,
+    joined_path: &std::path::Path,
+    resolved_path: Option<&std::path::Path>,
+    registered_skill_roots: &[PathBuf],
+    session_volume: Option<&SessionVolumeRoot>,
+) -> bool {
+    if !registered_skill_roots.is_empty()
+        && (is_within_registered_skill_roots(joined_path, registered_skill_roots)
+            || resolved_path
+                .is_some_and(|p| is_within_registered_skill_roots(p, registered_skill_roots)))
+    {
+        return true;
+    }
+    if let Some(volume) = session_volume
+        && is_path_in_session_volume_domain(&volume.0, cwd, joined_path, resolved_path)
+    {
+        return is_session_volume_window_path(&volume.0, cwd, joined_path, resolved_path);
+    }
+    is_path_within_workspace(cwd, joined_path, resolved_path, registered_skill_roots)
+}
+
 /// Newtype wrapper for `Arc<dyn xai_tool_runtime::ToolDispatch>` so it can
 /// be stored in `ToolCallContext::extensions`. Used by `use_tool` and the
 /// external MCP-call tool, which dispatch to target tools without going
@@ -1889,6 +2023,302 @@ mod tests {
             &skill_file,
             Some(&skill_file),
             &[]
+        ));
+    }
+
+    // ===== P0-0m GSA-SESSION-VOLUME：§5 测试矩阵（纯函数级） =====
+
+    /// 构造一个真实 `.gsa` 目录形态的会话卷（cwd 内，常见本机形态）。
+    fn make_real_volume(ws: &std::path::Path) -> (PathBuf, PathBuf, PathBuf, PathBuf) {
+        let gsa = ws.join(".gsa");
+        let terminal = gsa.join("session").join("terminal");
+        std::fs::create_dir_all(&terminal).unwrap();
+        std::fs::write(terminal.join("ord-1.log"), "terminal output\n").unwrap();
+        std::fs::write(gsa.join("run_tests_output.txt"), "1 passed\n").unwrap();
+        std::fs::write(gsa.join("journal.jsonl"), "{\"e\":1}\n").unwrap();
+        let canonical_root = dunce::canonicalize(&gsa).unwrap();
+        let journal = gsa.join("journal.jsonl");
+        (gsa, terminal, canonical_root, journal)
+    }
+
+    /// 矩阵 #1/#2：workspace 内普通路径放行、workspace 外绝对路径拒
+    /// （Task C 现状回归，经三分入口）。
+    #[test]
+    fn allowed_for_read_keeps_task_c_workspace_semantics() {
+        let tmp = TempDir::new().unwrap();
+        let ws = tmp.path().join("workspace");
+        std::fs::create_dir_all(&ws).unwrap();
+        let inside = ws.join("src/main.rs");
+        std::fs::create_dir_all(inside.parent().unwrap()).unwrap();
+        std::fs::write(&inside, "x").unwrap();
+        let outside = tmp.path().join("secret.txt");
+        std::fs::write(&outside, "sensitive").unwrap();
+        let volume =
+            SessionVolumeRoot(dunce::canonicalize(&ws.join(".gsa")).unwrap_or(ws.join(".gsa")));
+
+        assert!(is_path_allowed_for_read(
+            &ws,
+            &inside,
+            None,
+            &[],
+            Some(&volume)
+        ));
+        assert!(!is_path_allowed_for_read(
+            &ws,
+            &outside,
+            Some(&outside),
+            &[],
+            Some(&volume)
+        ));
+    }
+
+    /// 矩阵 #3/#4：`.gsa` 真实目录（cwd 内）+ 两个白名单窗口 → 放行。
+    #[test]
+    fn real_gsa_volume_windows_are_allowed() {
+        let tmp = TempDir::new().unwrap();
+        let ws = dunce::canonicalize(tmp.path()).unwrap();
+        let (gsa, _terminal, canonical_root, _journal) = make_real_volume(&ws);
+        let volume = SessionVolumeRoot(canonical_root);
+
+        // 窗口 1：session/terminal/*.log（词法与 canonical 两种调用面）。
+        let log = gsa.join("session").join("terminal").join("ord-1.log");
+        assert!(is_path_allowed_for_read(
+            &ws,
+            &log,
+            None,
+            &[],
+            Some(&volume)
+        ));
+        assert!(is_path_allowed_for_read(
+            &ws,
+            &log,
+            Some(&dunce::canonicalize(&log).unwrap()),
+            &[],
+            Some(&volume)
+        ));
+        // 窗口 2：run_tests_output.txt（精确文件名）。
+        let rt = gsa.join("run_tests_output.txt");
+        assert!(is_path_allowed_for_read(&ws, &rt, None, &[], Some(&volume)));
+        // 词法路径必须 ∈ cwd：指向卷外拼写不因 canonical ∈ 卷根而放行。
+        assert!(!is_session_volume_window_path(
+            &volume.0,
+            &ws,
+            &tmp.path().join("elsewhere").join("run_tests_output.txt"),
+            None
+        ));
+    }
+
+    /// 矩阵 #5：`.gsa` 真实目录 + journal 等内部面 → 拒（agent-invisible
+    /// 默认；域判定先于 workspace 放行面）。
+    #[test]
+    fn real_gsa_volume_internal_faces_are_invisible() {
+        let tmp = TempDir::new().unwrap();
+        let ws = dunce::canonicalize(tmp.path()).unwrap();
+        let (gsa, _terminal, canonical_root, journal) = make_real_volume(&ws);
+        let volume = SessionVolumeRoot(canonical_root);
+
+        assert!(is_path_in_session_volume_domain(
+            &volume.0, &ws, &journal, None
+        ));
+        assert!(!is_path_allowed_for_read(
+            &ws,
+            &journal,
+            None,
+            &[],
+            Some(&volume)
+        ));
+        // 目录面同样不可见（域内非白名单形态）。
+        assert!(!is_path_allowed_for_read(
+            &ws,
+            &gsa.join("session"),
+            None,
+            &[],
+            Some(&volume)
+        ));
+    }
+
+    /// 矩阵 #6/#7：`.gsa` 为 symlink → cwd 外会话卷目录（评测容器形态），
+    /// terminal log 放行、卷内 journal 拒。
+    #[test]
+    fn symlinked_volume_terminal_log_allowed_but_journal_denied() {
+        let tmp = TempDir::new().unwrap();
+        let ws = dunce::canonicalize(tmp.path()).unwrap();
+        let outside = TempDir::new().unwrap();
+        let gsa_real = outside.path().join("gsa-real");
+        let terminal = gsa_real.join("session").join("terminal");
+        std::fs::create_dir_all(&terminal).unwrap();
+        std::fs::write(terminal.join("ord-1.log"), "terminal output\n").unwrap();
+        std::fs::write(gsa_real.join("journal.jsonl"), "{\"e\":1}\n").unwrap();
+        let link = ws.join(".gsa");
+        #[cfg(unix)]
+        let link_ok = std::os::unix::fs::symlink(&gsa_real, &link).is_ok();
+        #[cfg(windows)]
+        let link_ok = std::os::windows::fs::symlink_dir(&gsa_real, &link).is_ok();
+        if !link_ok {
+            eprintln!("symlink creation unsupported, skipping");
+            return;
+        }
+        let canonical_root = dunce::canonicalize(&link).unwrap();
+        assert_ne!(canonical_root, ws.join(".gsa"));
+        let volume = SessionVolumeRoot(canonical_root);
+
+        // #6：词法形态 `.gsa/session/terminal/*.log`（canonical 落点在卷内）。
+        let log_lexical = ws
+            .join(".gsa")
+            .join("session")
+            .join("terminal")
+            .join("ord-1.log");
+        let log_canonical = dunce::canonicalize(&log_lexical).unwrap();
+        assert!(is_path_allowed_for_read(
+            &ws,
+            &log_lexical,
+            Some(&log_canonical),
+            &[],
+            Some(&volume)
+        ));
+        // None 调用面（grep/list_dir 不传 resolved）同样放行。
+        assert!(is_path_allowed_for_read(
+            &ws,
+            &log_lexical,
+            None,
+            &[],
+            Some(&volume)
+        ));
+        // #7：卷内 journal —— 白名单外，拒。
+        let journal_lexical = ws.join(".gsa").join("journal.jsonl");
+        assert!(!is_path_allowed_for_read(
+            &ws,
+            &journal_lexical,
+            None,
+            &[],
+            Some(&volume)
+        ));
+    }
+
+    /// 矩阵 #8：`.gsa` 为 symlink → 任意非会话卷路径 → 拒（现行拒读语义
+    /// 保持；read_file 集成测试另有锁定）。
+    #[test]
+    fn gsa_symlink_to_non_volume_path_denied() {
+        let tmp = TempDir::new().unwrap();
+        let ws = dunce::canonicalize(tmp.path()).unwrap();
+        let outside = TempDir::new().unwrap();
+        let link = ws.join(".gsa");
+        #[cfg(unix)]
+        let link_ok = std::os::unix::fs::symlink(outside.path(), &link).is_ok();
+        #[cfg(windows)]
+        let link_ok = std::os::windows::fs::symlink_dir(outside.path(), &link).is_ok();
+        if !link_ok {
+            eprintln!("symlink creation unsupported, skipping");
+            return;
+        }
+        // 卷根 = 任意外部目录；窗口判定按白名单形态，`.gsa` 下任何路径
+        // 都不在白名单内（这里取一个形似 terminal log 的词法路径——其
+        // canonical 落点也不含该文件，读取面同样拒）。
+        let volume = SessionVolumeRoot(dunce::canonicalize(&link).unwrap());
+        let probe = ws
+            .join(".gsa")
+            .join("session")
+            .join("terminal")
+            .join("x.log");
+        assert!(!is_session_volume_window_path(&volume.0, &ws, &probe, None));
+    }
+
+    /// 矩阵 #9：`session/terminal/` 内二级 symlink → 卷外 → 拒（防逃逸）。
+    #[test]
+    fn terminal_dir_inner_symlink_escape_denied() {
+        let tmp = TempDir::new().unwrap();
+        let ws = dunce::canonicalize(tmp.path()).unwrap();
+        let (gsa, terminal, canonical_root, _journal) = make_real_volume(&ws);
+        let volume = SessionVolumeRoot(canonical_root);
+        let outside = TempDir::new().unwrap();
+        let secret = outside.path().join("secret.txt");
+        std::fs::write(&secret, "sensitive").unwrap();
+        let escape = terminal.join("evil.log");
+        #[cfg(unix)]
+        let link_ok = std::os::unix::fs::symlink(&secret, &escape).is_ok();
+        #[cfg(windows)]
+        let link_ok = std::os::windows::fs::symlink_file(&secret, &escape).is_ok();
+        if !link_ok {
+            eprintln!("symlink creation unsupported, skipping");
+            return;
+        }
+        let escape_canonical = dunce::canonicalize(&escape).unwrap();
+        assert_ne!(
+            escape_canonical,
+            gsa.join("session").join("terminal").join("evil.log")
+        );
+        assert!(!is_path_allowed_for_read(
+            &ws,
+            &escape,
+            Some(&escape_canonical),
+            &[],
+            Some(&volume)
+        ));
+    }
+
+    /// 矩阵 #11：SessionVolume 资源缺席 → 窗口全关，沙箱退回纯 workspace
+    /// 二元判定（Task C 现状：cwd 内真实 `.gsa` 目录按 workspace 面放行、
+    /// 卷形态 symlink 越界仍拒）。
+    #[test]
+    fn absent_session_volume_falls_back_to_task_c_semantics() {
+        let tmp = TempDir::new().unwrap();
+        let ws = dunce::canonicalize(tmp.path()).unwrap();
+        let (gsa, _terminal, _canonical_root, journal) = make_real_volume(&ws);
+
+        // 资源缺席：`.gsa` 真实目录在 cwd 内 → Task C workspace 面放行
+        // （fail-closed 语义由 host 恒注入资源保证，本行为仅为回退现状）。
+        assert!(is_path_allowed_for_read(&ws, &journal, None, &[], None));
+        // 资源缺席时越界 symlink 语义不变：canonical 落点在 cwd 外 → 拒。
+        let outside_dir = TempDir::new().unwrap();
+        let outside = outside_dir.path().join("secret.txt");
+        std::fs::write(&outside, "sensitive").unwrap();
+        assert!(!is_path_allowed_for_read(
+            &ws,
+            &gsa.join("session").join("terminal").join("x.log"),
+            Some(&outside),
+            &[],
+            None
+        ));
+    }
+
+    /// D3 附带：run_tests_output.txt 名字被 symlink 顶替到卷内其它落点
+    /// （如 journal）仍拒——canonical 双拼写对照保持 permission.rs 语义。
+    #[test]
+    fn run_tests_name_symlinked_to_other_volume_target_denied() {
+        let tmp = TempDir::new().unwrap();
+        let ws = dunce::canonicalize(tmp.path()).unwrap();
+        let outside = TempDir::new().unwrap();
+        let gsa_real = outside.path().join("gsa-real");
+        std::fs::create_dir_all(&gsa_real).unwrap();
+        std::fs::write(gsa_real.join("journal.jsonl"), "{\"e\":1}\n").unwrap();
+        let link = ws.join(".gsa");
+        #[cfg(unix)]
+        let link_ok = std::os::unix::fs::symlink(&gsa_real, &link).is_ok();
+        #[cfg(windows)]
+        let link_ok = std::os::windows::fs::symlink_dir(&gsa_real, &link).is_ok();
+        if !link_ok {
+            eprintln!("symlink creation unsupported, skipping");
+            return;
+        }
+        // 卷内再种一个指向 journal 的 run_tests_output.txt symlink。
+        let rt_link = link.join("run_tests_output.txt");
+        #[cfg(unix)]
+        let rt_ok = std::os::unix::fs::symlink(gsa_real.join("journal.jsonl"), &rt_link).is_ok();
+        #[cfg(windows)]
+        let rt_ok =
+            std::os::windows::fs::symlink_file(gsa_real.join("journal.jsonl"), &rt_link).is_ok();
+        if !rt_ok {
+            eprintln!("symlink creation unsupported, skipping");
+            return;
+        }
+        let volume = SessionVolumeRoot(dunce::canonicalize(&link).unwrap());
+        let rt_canonical = dunce::canonicalize(&rt_link).unwrap();
+        assert_eq!(rt_canonical, gsa_real.join("journal.jsonl"));
+        assert!(!is_session_volume_window_path(
+            &volume.0,
+            &ws,
+            &rt_link,
+            Some(&rt_canonical)
         ));
     }
 }

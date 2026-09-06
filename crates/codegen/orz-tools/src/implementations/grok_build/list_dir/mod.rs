@@ -539,7 +539,7 @@ impl xai_tool_runtime::Tool for ListDirTool {
         let cwd = resolve_cwd(&ctx, &resources).await?;
         let is_legacy =
             ListDirVersion::from_contract(behavior_version(&ctx).as_deref()).is_legacy();
-        let (display_cwd, hints_enabled, skill_roots) = {
+        let (display_cwd, hints_enabled, skill_roots, session_volume) = {
             let res = resources.lock().await;
             (
                 res.get::<DisplayCwd>().map(|d| d.0.clone()),
@@ -547,17 +547,28 @@ impl xai_tool_runtime::Tool for ListDirTool {
                 res.get::<crate::types::resources::SkillRoots>()
                     .map(|r| r.0.clone())
                     .unwrap_or_default(),
+                res.get::<crate::types::resources::SessionVolumeRoot>()
+                    .cloned(),
             )
         };
         let path = resolve_model_path(&cwd, display_cwd.as_deref(), &input.target_directory);
         let display_base = display_cwd_or_cwd(&cwd, display_cwd.as_deref());
         let display_path = compute_display_path(&display_base, &input.target_directory);
 
-        // 工作区沙箱防护（P0-GOV Task C，2026-09-04，canonical 级）：目标目录
-        // 若经 `..` 越级、为绝对路径且指向工作区外、或经符号链接/重解析点指向
-        // 工作区外，直接拒绝；已注册技能根豁免同 read_file（GLM F1 收窄，
-        // resources::is_path_within_workspace）。
-        if !crate::types::resources::is_path_within_workspace(&cwd, &path, None, &skill_roots) {
+        // 读工具沙箱三分判定（P0-GOV Task C 2026-09-04 + P0-0m GSA-SESSION-
+        // VOLUME 2026-09-06，canonical 级）：目标目录若经 `..` 越级、为绝对
+        // 路径且指向工作区外、或经符号链接/重解析点指向工作区外，直接拒绝；
+        // 已注册技能根豁免同 read_file（GLM F1 收窄）。`.gsa` 会话卷域由
+        // 窗口契约接管（ADR-0010 §14.56 D3）：仅两个白名单窗口形态放行，
+        // 其余内部面 agent-invisible。判定统一单点在
+        // resources::is_path_allowed_for_read。
+        if !crate::types::resources::is_path_allowed_for_read(
+            &cwd,
+            &path,
+            None,
+            &skill_roots,
+            session_volume.as_ref(),
+        ) {
             return Ok(ListDirOutput::PermissionDenied(format!(
                 "Permission denied: directory escapes workspace sandbox: {}",
                 display_path.display()

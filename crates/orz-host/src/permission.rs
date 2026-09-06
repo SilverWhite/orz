@@ -313,6 +313,16 @@ impl PermissionBridge {
     /// lexical path AND the canonical target must stay inside the session
     /// cwd or the session's own `.gsa` volume (a symlink planted inside
     /// `session/terminal/` cannot escape).
+    ///
+    /// RETIRED-IN-PLACE（P0-0m GSA-SESSION-VOLUME，ADR-0010 §14.56 D5，
+    /// 2026-09-06）：`.gsa` 面可见性语义已单源下沉至 orz-tools 读工具沙箱
+    /// （`resources::is_session_volume_window_path`，SessionVolumeRoot 由
+    /// host 装配期注入）；本方法中的 `.gsa` 白名单段**标记退役、原样保留**
+    /// ——权限层本身不裁撤（用户裁决 2026-09-06），此段作为权限门第一道的
+    /// 等义镜像继续放行/拒绝，但不再演进、不得据此声称第二判定权威
+    /// （语义修订只改 orz-tools 单点）。`.gsa` 豁免观察（会话卷形态下对
+    /// read_file 不可达）随下沉消解；权限双实现整体收敛仍随
+    /// OBS-PERMISSION-DUAL-IMPL 终局治理排期。
     fn access_in_scope(&self, access: &AccessKind) -> bool {
         let path = match access {
             AccessKind::Read(p) | AccessKind::Grep { path: p, .. } => p.as_deref(),
@@ -328,6 +338,9 @@ impl PermissionBridge {
             normalize_lexical(&self.cwd.join(path).to_path_buf())
         };
         let canonical = dunce::canonicalize(&resolved).unwrap_or_else(|_| resolved.clone());
+        // RETIRED-IN-PLACE（P0-0m D5，2026-09-06）：以下 `.gsa` 白名单段语义
+        // 已单源下沉 orz-tools 读工具沙箱（resources::is_session_volume_
+        // window_path），此处为等义镜像、保留不演进——见方法级 doc 注记。
         let gsa_root = self.cwd.join(".gsa");
         // `.gsa` may itself be a symlink (eval containers mount a session
         // volume, e.g. `/orz-gsa/<uuid>`); the canonical root is what the

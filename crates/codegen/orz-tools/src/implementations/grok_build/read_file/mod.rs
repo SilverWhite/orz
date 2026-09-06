@@ -492,7 +492,7 @@ pub(crate) async fn run_read_file(
     streamable_out: Option<&mut bool>,
     invoking_param_names: &crate::types::resources::InvokingToolParamNames,
 ) -> Result<ReadFileOutput, xai_tool_runtime::ToolError> {
-    let (cwd, display_cwd, fs, hints_enabled, skill_roots);
+    let (cwd, display_cwd, fs, hints_enabled, skill_roots, session_volume);
     {
         let res = resources.lock().await;
         cwd = match cwd_override {
@@ -506,6 +506,9 @@ pub(crate) async fn run_read_file(
             .get::<crate::types::resources::SkillRoots>()
             .map(|r| r.0.clone())
             .unwrap_or_default();
+        session_volume = res
+            .get::<crate::types::resources::SessionVolumeRoot>()
+            .cloned();
     }
     let joined_path = resolve_model_path(&cwd, display_cwd.as_deref(), &input.path);
     let (path, _unicode_note) = match crate::util::fs::try_canonicalize(&joined_path).await {
@@ -524,30 +527,54 @@ pub(crate) async fn run_read_file(
         crate::types::resources::is_within_registered_skill_roots(&joined_path, &skill_roots)
             || crate::types::resources::is_within_registered_skill_roots(&path, &skill_roots);
 
-    // 工作区沙箱防护（P0-GOV Task C，2026-09-04，canonical 级）：模型提供的
-    // 路径经 `..` 相对越级跳出 cwd、绝对路径指向工作区外、或经工作区内符号
-    // 链接/重解析点指向工作区外，均拒绝读取；已注册技能根内的技能包目录为
-    // 只读知识注入豁免（GLM F1 收窄——不再放行任意 skills 组件/SKILL.md）。
-    // 目标不存在时回退词法归一化判定。判定统一在
-    // resources::is_path_within_workspace（`.gsa` 等会话内部面为真实目录，
-    // 不受影响）。
-    if !crate::types::resources::is_path_within_workspace(
+    // 读工具沙箱三分判定（P0-GOV Task C 2026-09-04 + P0-0m GSA-SESSION-
+    // VOLUME 2026-09-06，canonical 级）：模型提供的路径经 `..` 相对越级跳出
+    // cwd、绝对路径指向工作区外、或经工作区内符号链接/重解析点指向工作区外，
+    // 均拒绝读取；已注册技能根内的技能包目录为只读知识注入豁免（GLM F1
+    // 收窄——不再放行任意 skills 组件/SKILL.md）。`.gsa` 会话卷域由窗口
+    // 契约接管（ADR-0010 §14.56 D3）：仅 `session/terminal/*.log` 与
+    // `run_tests_output.txt` 两个只读窗口放行，其余内部面 agent-invisible。
+    // 判定统一单点在 resources::is_path_allowed_for_read（SessionVolume
+    // 资源缺席时窗口全关，退回 Task C 纯 workspace 二元判定）。
+    let in_session_volume_domain = session_volume.as_ref().is_some_and(|volume| {
+        crate::types::resources::is_path_in_session_volume_domain(
+            &volume.0,
+            &cwd,
+            &joined_path,
+            Some(&path),
+        )
+    });
+    if !crate::types::resources::is_path_allowed_for_read(
         &cwd,
         &joined_path,
         Some(&path),
         &skill_roots,
+        session_volume.as_ref(),
     ) {
         let display_dcwd = display_cwd_or_cwd(&cwd, display_cwd.as_deref());
         let display_path = display_dcwd.join(&input.path);
-        return Ok(ReadFileOutput::PermissionDenied(format!(
-            "Permission denied: path escapes workspace sandbox: {}",
-            display_path.display()
-        )));
+        return Ok(ReadFileOutput::PermissionDenied(
+            if in_session_volume_domain {
+                format!(
+                    "Permission denied: path is inside the agent-invisible session volume: {}",
+                    display_path.display()
+                )
+            } else {
+                format!(
+                    "Permission denied: path escapes workspace sandbox: {}",
+                    display_path.display()
+                )
+            },
+        ));
     }
     let version = ReadFileVersion::from_contract(contract_version);
     let is_legacy = version.is_legacy();
     let skip_gitignore = is_legacy && versions::legacy_0_4_10::allows_gitignored_reads();
-    if !skip_gitignore {
+    // D4（P0-0m，2026-09-06）：会话卷不是工作区内容，gitignore 对它无语义
+    // ——窗口路径被 `.gsa/`、`*.log` 等模式命中时仍放行（恢复 OUTPUT-
+    // DEGENERATION-GUARD「gitignored 也必须可读」的完整意图；orz 生产面
+    // 本不注入 GitignoreFilter，本条收口上游 harness 集成面）。
+    if !skip_gitignore && !in_session_volume_domain {
         let res = resources.lock().await;
         let respect_gitignore = res.get::<RespectGitignore>().is_some_and(|r| r.0);
         if respect_gitignore
@@ -2027,12 +2054,191 @@ mod tests {
             }
         }
     }
+    // ===== P0-0m GSA-SESSION-VOLUME：§5 测试矩阵（工具级） =====
+
+    /// 构造注入了 SessionVolumeRoot 的测试资源（host 装配注入的等价物）。
+    fn test_resources_with_session_volume(cwd: &std::path::Path) -> Resources {
+        let mut resources = test_resources(cwd);
+        let gsa_root = cwd.join(".gsa");
+        let canonical = dunce::canonicalize(&gsa_root).unwrap_or(gsa_root);
+        resources.insert(crate::types::resources::SessionVolumeRoot(canonical));
+        resources
+    }
+
+    /// 矩阵 #3：`.gsa` 真实目录（cwd 内）+ `session/terminal/*.log` → 放行。
+    #[tokio::test]
+    async fn read_file_allows_real_gsa_terminal_log_window() {
+        let tmp = TempDir::new().unwrap();
+        let ws = dunce::canonicalize(tmp.path()).unwrap();
+        let terminal = ws.join(".gsa").join("session").join("terminal");
+        std::fs::create_dir_all(&terminal).unwrap();
+        std::fs::write(terminal.join("ord-1.log"), "terminal full output\n").unwrap();
+        let tool = ReadFileTool;
+        let resources = test_resources_with_session_volume(&ws);
+        let input = ReadFileInput {
+            path: ".gsa/session/terminal/ord-1.log".to_string(),
+            offset: None,
+            limit: None,
+            pages: None,
+            format: None,
+        };
+        let result = xai_tool_runtime::Tool::run(&tool, test_ctx(resources.into_shared()), input)
+            .await
+            .unwrap();
+        match result {
+            ReadFileOutput::FileContent(content) => {
+                assert!(content.raw_output.contains("terminal full output"));
+            }
+            other => panic!("Expected FileContent for terminal-log window, got {other:?}"),
+        }
+    }
+
+    /// 矩阵 #4：`.gsa` 真实目录 + `run_tests_output.txt` → 放行。
+    #[tokio::test]
+    async fn read_file_allows_run_tests_output_window() {
+        let tmp = TempDir::new().unwrap();
+        let ws = dunce::canonicalize(tmp.path()).unwrap();
+        let gsa = ws.join(".gsa");
+        std::fs::create_dir_all(&gsa).unwrap();
+        std::fs::write(gsa.join("run_tests_output.txt"), "3 passed; 0 failed\n").unwrap();
+        let tool = ReadFileTool;
+        let resources = test_resources_with_session_volume(&ws);
+        let input = ReadFileInput {
+            path: ".gsa/run_tests_output.txt".to_string(),
+            offset: None,
+            limit: None,
+            pages: None,
+            format: None,
+        };
+        let result = xai_tool_runtime::Tool::run(&tool, test_ctx(resources.into_shared()), input)
+            .await
+            .unwrap();
+        match result {
+            ReadFileOutput::FileContent(content) => {
+                assert!(content.raw_output.contains("3 passed"));
+            }
+            other => panic!("Expected FileContent for run_tests window, got {other:?}"),
+        }
+    }
+
+    /// 矩阵 #5：`.gsa` 真实目录 + journal 等内部面 → 拒（agent-invisible
+    /// 默认；工具级 deny 落 PermissionDenied 信封）。
+    #[tokio::test]
+    async fn read_file_denies_gsa_journal_as_agent_invisible() {
+        let tmp = TempDir::new().unwrap();
+        let ws = dunce::canonicalize(tmp.path()).unwrap();
+        let gsa = ws.join(".gsa");
+        std::fs::create_dir_all(&gsa).unwrap();
+        std::fs::write(gsa.join("journal.jsonl"), "{\"e\":1}\n").unwrap();
+        std::fs::write(gsa.join("state.json"), "{}").unwrap();
+        let tool = ReadFileTool;
+        for rel in [".gsa/journal.jsonl", ".gsa/state.json", ".gsa"] {
+            let resources = test_resources_with_session_volume(&ws);
+            let input = ReadFileInput {
+                path: rel.to_string(),
+                offset: None,
+                limit: None,
+                pages: None,
+                format: None,
+            };
+            let result =
+                xai_tool_runtime::Tool::run(&tool, test_ctx(resources.into_shared()), input)
+                    .await
+                    .unwrap();
+            match result {
+                ReadFileOutput::PermissionDenied(msg) => {
+                    assert!(
+                        msg.contains("agent-invisible session volume"),
+                        "{rel}: expected session-volume deny, got {msg}"
+                    );
+                }
+                other => panic!("{rel}: Expected PermissionDenied, got {other:?}"),
+            }
+        }
+    }
+
+    /// 矩阵 #6：`.gsa` 为 symlink → cwd 外会话卷目录（评测容器挂载形态），
+    /// 读 terminal log 放行——Task C 工具级沙箱与窗口契约的衔接点。
+    #[tokio::test]
+    async fn read_file_allows_symlinked_volume_terminal_log_window() {
+        let tmp = TempDir::new().unwrap();
+        let ws = dunce::canonicalize(tmp.path()).unwrap();
+        let outside = TempDir::new().unwrap();
+        let gsa_real = outside.path().join("gsa-real");
+        let terminal = gsa_real.join("session").join("terminal");
+        std::fs::create_dir_all(&terminal).unwrap();
+        std::fs::write(terminal.join("ord-1.log"), "truncated tail recovery\n").unwrap();
+        let link = ws.join(".gsa");
+        #[cfg(unix)]
+        let link_ok = std::os::unix::fs::symlink(&gsa_real, &link).is_ok();
+        #[cfg(windows)]
+        let link_ok = std::os::windows::fs::symlink_dir(&gsa_real, &link).is_ok();
+        if !link_ok {
+            eprintln!("symlink creation unsupported, skipping");
+            return;
+        }
+        let tool = ReadFileTool;
+        let resources = test_resources_with_session_volume(&ws);
+        let input = ReadFileInput {
+            path: ".gsa/session/terminal/ord-1.log".to_string(),
+            offset: None,
+            limit: None,
+            pages: None,
+            format: None,
+        };
+        let result = xai_tool_runtime::Tool::run(&tool, test_ctx(resources.into_shared()), input)
+            .await
+            .unwrap();
+        match result {
+            ReadFileOutput::FileContent(content) => {
+                assert!(content.raw_output.contains("truncated tail recovery"));
+            }
+            other => panic!(
+                "Expected FileContent for symlinked-volume terminal-log window, got {other:?}"
+            ),
+        }
+    }
+
+    /// 矩阵 #10：窗口路径被 `.gsa/` + `*.log` gitignore 模式覆盖仍放行
+    /// （D4——会话卷不是工作区内容，gitignore 对它无语义；harness 面）。
+    #[tokio::test]
+    async fn read_file_bypasses_gitignore_for_session_volume_window() {
+        let tmp = TempDir::new().unwrap();
+        let ws = dunce::canonicalize(tmp.path()).unwrap();
+        let terminal = ws.join(".gsa").join("session").join("terminal");
+        std::fs::create_dir_all(&terminal).unwrap();
+        std::fs::write(terminal.join("ord-1.log"), "gitignored window output\n").unwrap();
+        let tool = ReadFileTool;
+        let mut resources = test_resources_with_session_volume(&ws);
+        let gi = build_gitignore(&ws, &[".gsa/", "*.log"]);
+        resources.insert(GitignoreFilter::new(gi, ws.clone()));
+        resources.insert(RespectGitignore(true));
+        let input = ReadFileInput {
+            path: ".gsa/session/terminal/ord-1.log".to_string(),
+            offset: None,
+            limit: None,
+            pages: None,
+            format: None,
+        };
+        let result = xai_tool_runtime::Tool::run(&tool, test_ctx(resources.into_shared()), input)
+            .await
+            .unwrap();
+        match result {
+            ReadFileOutput::FileContent(content) => {
+                assert!(content.raw_output.contains("gitignored window output"));
+            }
+            other => {
+                panic!("Expected FileContent for gitignored window path (D4 bypass), got {other:?}")
+            }
+        }
+    }
+
     #[tokio::test]
     async fn legacy_read_file_allows_gitignored_files() {
         let tmp = TempDir::new().unwrap();
         let canonical_root = dunce::canonicalize(tmp.path()).unwrap();
         let build_dir = canonical_root.join("build");
-        std::fs::create_dir(&build_dir).unwrap();
+        std::fs::create_dir_all(&build_dir).unwrap();
         std::fs::write(build_dir.join("output.txt"), "build output data\n").unwrap();
         let tool = ReadFileTool;
         let resources = test_resources_with_gitignore(tmp.path());

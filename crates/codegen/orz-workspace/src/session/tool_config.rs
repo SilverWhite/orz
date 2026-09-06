@@ -472,6 +472,9 @@ impl SessionContextFactory for WorkspaceSessionContextFactory {
             parent_scheduler_handle: None,
             skills: vec![],
             state_path: self.resolve_state_path(session_id),
+            // P0-0m GSA-SESSION-VOLUME：上游 workspace 面不注入会话卷
+            // （fail-closed，窗口全关）。
+            session_volume_root: None,
             memory_backend: None,
             web_search_config,
             web_fetch_config: build_web_fetch_config(),
@@ -595,6 +598,7 @@ pub mod test_support {
                 parent_scheduler_handle: None,
                 skills: vec![],
                 state_path: session_root.join("tool_state.json"),
+                session_volume_root: None,
                 memory_backend: None,
                 web_search_config: Default::default(),
                 web_fetch_config: Default::default(),

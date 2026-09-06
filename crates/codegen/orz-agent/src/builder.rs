@@ -1060,6 +1060,9 @@ impl AgentBuilder {
                 parent_scheduler_handle: self.parent_scheduler_handle.take(),
                 skills: skill_info.clone(),
                 state_path,
+                // P0-0m GSA-SESSION-VOLUME：上游通用 builder 无会话卷落点
+                // 知情权，资源缺席 = 窗口全关（fail-closed）。
+                session_volume_root: None,
                 memory_backend: self.memory_backend,
                 web_search_config: self.web_search_config,
                 web_fetch_config: self.web_fetch_config,

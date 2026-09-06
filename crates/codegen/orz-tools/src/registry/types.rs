@@ -255,6 +255,12 @@ pub struct SessionContext {
     /// after every tool execution. The file stores serialized `State<T>`
     /// values (e.g., `TodoState`).
     pub state_path: PathBuf,
+    /// `.gsa` 会话卷根（P0-0m GSA-SESSION-VOLUME，ADR-0010 §14.56 D1）：
+    /// host 装配期一次 symlink-aware canonical 解析后的卷根，注入
+    /// [`crate::types::resources::SessionVolumeRoot`] 供读工具沙箱三分
+    /// 判定使用。`None`（默认）= 窗口全关，沙箱退回纯 workspace 二元判定
+    /// （fail-closed）。
+    pub session_volume_root: Option<PathBuf>,
     /// Optional memory backend for cross-session knowledge retrieval.
     /// When `Some`, injected into `Resources` so `memory_search` / `memory_get`
     /// tools can access it. When `None`, the tools return "not enabled".
@@ -1029,6 +1035,13 @@ impl ToolRegistryBuilder {
             })
             .collect();
         resources.insert(crate::types::resources::SkillRoots(skill_roots));
+        // P0-0m GSA-SESSION-VOLUME（2026-09-06）：`.gsa` 会话卷根注入。
+        // None = 资源缺席，读工具沙箱窗口全关（fail-closed，Task C 现状）。
+        if let Some(session_volume_root) = ctx.session_volume_root.clone() {
+            resources.insert(crate::types::resources::SessionVolumeRoot(
+                session_volume_root,
+            ));
+        }
         {
             let mut mgr = crate::types::skill_discovery_tracker::SkillManager::new();
             mgr.set_discovery_snapshot_names(
@@ -2162,6 +2175,7 @@ mod tests {
             parent_scheduler_handle: None,
             skills: vec![],
             state_path: tmp.path().join("state.json"),
+            session_volume_root: None,
             memory_backend: None,
             web_search_config: crate::implementations::web_search::WebSearchConfig::default(),
             web_fetch_config:

@@ -812,7 +812,7 @@ async fn prepare_grep(
     use crate::types::tool_metadata::{resolve_cwd, shared_resources};
     let resources = shared_resources(ctx)?;
     let cwd = resolve_cwd(ctx, &resources).await?;
-    let (display_cwd, hints_enabled, deny_read_globs, skill_roots) = {
+    let (display_cwd, hints_enabled, deny_read_globs, skill_roots, session_volume) = {
         let res = resources.lock().await;
         (
             res.get::<DisplayCwd>().map(|d| d.0.clone()),
@@ -823,6 +823,8 @@ async fn prepare_grep(
             res.get::<crate::types::resources::SkillRoots>()
                 .map(|r| r.0.clone())
                 .unwrap_or_default(),
+            res.get::<crate::types::resources::SessionVolumeRoot>()
+                .cloned(),
         )
     };
 
@@ -836,11 +838,19 @@ async fn prepare_grep(
     let display_base = display_cwd_or_cwd(&cwd, display_cwd.as_deref());
     let cwd_display = display_base.display().to_string();
 
-    // 工作区沙箱防护（P0-GOV Task C，2026-09-04，canonical 级）：搜索路径若
-    // 经 `..` 越级、为绝对路径且指向工作区外、或经符号链接/重解析点指向
-    // 工作区外，直接拒绝执行；已注册技能根豁免同 read_file（GLM F1 收窄，
-    // resources::is_path_within_workspace）。
-    if !crate::types::resources::is_path_within_workspace(&cwd, &workdir, None, &skill_roots) {
+    // 读工具沙箱三分判定（P0-GOV Task C 2026-09-04 + P0-0m GSA-SESSION-
+    // VOLUME 2026-09-06，canonical 级）：搜索路径若经 `..` 越级、为绝对路径
+    // 且指向工作区外、或经符号链接/重解析点指向工作区外，直接拒绝执行；
+    // 已注册技能根豁免同 read_file（GLM F1 收窄）。`.gsa` 会话卷域由窗口
+    // 契约接管（ADR-0010 §14.56 D3）：仅两个白名单窗口形态放行，其余内部
+    // 面 agent-invisible。判定统一单点在 resources::is_path_allowed_for_read。
+    if !crate::types::resources::is_path_allowed_for_read(
+        &cwd,
+        &workdir,
+        None,
+        &skill_roots,
+        session_volume.as_ref(),
+    ) {
         let display_path = if let Ok(suffix) = workdir.strip_prefix(&cwd) {
             display_base.join(suffix)
         } else {
