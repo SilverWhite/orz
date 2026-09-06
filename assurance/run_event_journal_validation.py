@@ -221,7 +221,9 @@ PAYLOAD_SCHEMA_BY_EVENT_TYPE_V02: dict[str, tuple[str, Path]] = {
       ),
       # PLAN-FIRST 阶段 C (2026-08-16, ADR-0010 §14.17⑱): the action-bar
       # order record — order identity, step binding and mechanical stamps
-      # (PLAN_FIRST_BLACKBOARD_DESIGN §5-§6).
+      # (PLAN_FIRST_BLACKBOARD_DESIGN §5-§6). Cross-check rule retired
+      # 2026-09-06 (ADR-0010 §14.57, 任务 D S2d 裁决一) — schema stays for
+      # historical v0.2 journals; no negative check either.
       "console_order_written": (
           "console-order-written",
           RUNTIME / "console-order-written-event-payload-v0.2.schema.json",
@@ -737,93 +739,12 @@ def _verify_v02_console_mode_transition(
     return errors
 
 
-def _verify_v02_console_order_written(events: list[dict[str, Any]]) -> list[str]:
-    """ADR-0010 §14.17⑱ / PLAN_FIRST_BLACKBOARD_DESIGN §5-§6 cross-checks
-    (PLAN-FIRST 阶段 C, 2026-08-16):
-
-    - every console_order_written carries the mechanical
-      round/plan_epoch/run_id stamps and the write_call_id of the
-      blackboard_action_write completion it closes;
-    - order ids are unique per run;
-    - a console_order_written must be preceded by a blackboard_action_write
-      tool_completed success of the same run whose call_id matches the
-      write_call_id (the producer ordering: write completion, then the
-      order record); each write completion backs at most one order record.
-    """
-    errors: list[str] = []
-    order_ids_per_run: dict[str, set[str]] = {}
-    for index, event in enumerate(events):
-        if not _is_v02(event) or event.get("event_type") != "console_order_written":
-            continue
-        payload = event["payload"]
-        run_id = event.get("run_id", "")
-        order_id = payload["order_id"]
-        seen = order_ids_per_run.setdefault(run_id, set())
-        if order_id in seen:
-            errors.append(
-                f"event {index}: duplicate console_order_written order_id "
-                f"{order_id!r} in run {run_id}"
-            )
-        seen.add(order_id)
-        action = payload.get("action")
-        if not isinstance(action, str) or not action:
-            errors.append(
-                f"event {index}: console_order_written action must be a "
-                "non-empty string"
-            )
-        step_id = payload.get("step_id")
-        if step_id is not None and (not isinstance(step_id, str) or not step_id):
-            errors.append(
-                f"event {index}: console_order_written step_id must be null "
-                "or a non-empty string"
-            )
-    # Producer ordering: the action_write success completion precedes the
-    # order record in the same run; the order record carries the write's
-    # call_id (write_call_id), and one write backs at most one order record.
-    # (2026-08-16 review closure F1: match against write_call_id instead of
-    # order_id — the producer stamps the model's real call_id on the write
-    # completion while order_id is the internal ORD-xxxxx identity.)
-    writes_per_run: dict[str, list[tuple[int, str]]] = {}
-    for index, event in enumerate(events):
-        if not _is_v02(event) or event.get("event_type") != "tool_completed":
-            continue
-        payload = event.get("payload", {})
-        if payload.get("tool") == "blackboard_action_write" and payload.get(
-            "exit_code"
-        ) == 0:
-            writes_per_run.setdefault(event.get("run_id", ""), []).append(
-                (index, str(payload.get("call_id", "")))
-            )
-    consumed: dict[str, set[int]] = {}
-    for index, event in enumerate(events):
-        if not _is_v02(event) or event.get("event_type") != "console_order_written":
-            continue
-        payload = event["payload"]
-        run_id = event.get("run_id", "")
-        write_call_id = payload.get("write_call_id")
-        matched: int | None = None
-        for wi, (w_index, w_call) in enumerate(writes_per_run.get(run_id, [])):
-            if wi in consumed.setdefault(run_id, set()):
-                continue
-            if w_index < index and w_call == write_call_id:
-                matched = wi
-                break
-        if matched is None:
-            errors.append(
-                f"event {index}: console_order_written {payload['order_id']!r} "
-                "without a prior blackboard_action_write success in its run"
-            )
-        else:
-            consumed[run_id].add(matched)
-    return errors
-
-
 def _verify_v02_console_order_rejected(events: list[dict[str, Any]]) -> list[str]:
     """ADR-0010 §14.21 项 3 / PLAN_FIRST_BLACKBOARD_DESIGN §5-§6 cross-checks
-    (P0-E 第 4 项, 2026-08-17):
+    (P0-E 第 4 项, 2026-08-17; narrowed 2026-09-06, ADR-0010 §14.57 /
+    TASK_D_S2D_FLIP_ADJUDICATION 裁决一 — 写单链规则退役后收窄为形状不变量):
 
-    - every console_order_rejected carries the rejected order's mechanical
-      stamps (round/plan_epoch/run_id) and a phase/step/code triple:
+    - every console_order_rejected carries a closed phase/step/code triple:
       * phase=pre_issue → step=protocol and code ∈ {order_stale,
         step_not_done, budget_insufficient} (refused before issuance);
       * phase=issue → step ∈ {registry, contract, target, policy}
@@ -831,22 +752,18 @@ def _verify_v02_console_order_rejected(events: list[dict[str, Any]]) -> list[str
         denials normalize to step=policy / code=policy_denied);
       execute/verify steps never appear here — executed orders journal
       their outcome through tool_started/tool_completed.
-    - a console_order_rejected must be preceded by a console_order_written
-      of the same run carrying the same order_id and the same
-      round/plan_epoch/run_id stamps (the order record precedes its
-      rejection; the stamps are the order's own);
-    - at most one console_order_rejected per order_id per run (a rejected
-      order is consumed and never re-issued).
+    - reason must be a non-empty string;
+    - at most one console_order_rejected per order_id per run.
+
+    Retired friction sub-rules (2026-09-06, §14.57): the prior-same-run
+    console_order_written requirement and the round/plan_epoch/run_id stamp
+    consistency with the written order. The write-order chain
+    (FUS-MECHANICAL-AUDIT-LAYER, §14.39) is retired — rejections are
+    journaled before any written order could exist; `_verify_v02_console_
+    order_written` was retired alongside (no negative check either —
+    historical 2026-08-16~24 v0.2 journals legally carry written chains).
     """
     errors: list[str] = []
-    written_by_run: dict[str, dict[str, dict[str, Any]]] = {}
-    for event in events:
-        if not _is_v02(event) or event.get("event_type") != "console_order_written":
-            continue
-        payload = event["payload"]
-        run_id = event.get("run_id", "")
-        written_by_run.setdefault(run_id, {})[payload["order_id"]] = payload
-
     rejected_per_run: dict[str, set[str]] = {}
     for index, event in enumerate(events):
         if not _is_v02(event) or event.get("event_type") != "console_order_rejected":
@@ -894,21 +811,6 @@ def _verify_v02_console_order_rejected(events: list[dict[str, Any]]) -> list[str
                 f"event {index}: console_order_rejected reason must be a "
                 "non-empty string"
             )
-
-        written = written_by_run.get(run_id, {}).get(order_id)
-        if written is None:
-            errors.append(
-                f"event {index}: console_order_rejected {order_id!r} without "
-                "a prior console_order_written of the same run"
-            )
-            continue
-        for stamp in ("round", "plan_epoch", "run_id"):
-            if payload.get(stamp) != written.get(stamp):
-                errors.append(
-                    f"event {index}: console_order_rejected {order_id!r} "
-                    f"{stamp}={payload.get(stamp)!r} != written order "
-                    f"{stamp}={written.get(stamp)!r}"
-                )
     return errors
 
 
@@ -3677,7 +3579,10 @@ def validate_journal_text(text: str) -> list[str]:
         errors.extend(_verify_v02_inquiry_kind(events))
         errors.extend(_verify_v02_plan_write(events))
         errors.extend(_verify_v02_console_mode_transition(events))
-        errors.extend(_verify_v02_console_order_written(events))
+        # console_order_written retired 2026-09-06 (ADR-0010 §14.57, 任务 D
+        # S2d 裁决一): the write-order chain is retired with §14.39 and is
+        # deliberately NOT converted into a negative check (historical
+        # 2026-08-16~24 v0.2 journals legally carry written chains).
         errors.extend(_verify_v02_console_order_rejected(events))
         errors.extend(_verify_v02_ledger_fold_advance(events))
         errors.extend(_verify_v02_ledger_fold_write_failed(events))

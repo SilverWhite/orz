@@ -54,15 +54,20 @@
    （header 随之变化）仍在不变量管辖内——「抓探针失真」的价值完整保留。
 5. **边界登记**：未来工具面从根本上发生变动时，本裁决重新议定。
 
-## 3. 实施批次规划（待放行；登记不动计数）
+## 3. 实施批次规划
 
-- **批 1（裁决一落地）**：ADR-0010 §14.x 转录（写单链规则退役 + rejected
-  语义收窄）→ Python 法官同步（written 规则退役、rejected 去前置保留形状）
-  → Rust conformance 同步（families/families_s2c 对应调整）→ 对拍复验
-  （既有 written/rejected 场景改为退役口径正/负例）→ BACKLOG/TODO/索引登记。
-- **批 2（裁决二落地）**：`tool_probe` 记账口径收窄（生产侧）→ 设计转录 →
-  单测 → probe_accuracy 族对拍/fixture 复验零回归 → 登记。
-- 两批完成后，S2d 翻转前裁决清单清空，可推进 S2d（31 族全量对拍矩阵落盘 +
+> 2026-09-06 用户放行裁决一；批 1 已实施（orz `362b6071`），见
+> [批 1 实施审计](TASK_D_S2D_BATCH1_IMPL_AUDIT_2026-09-06.md)。
+
+- **批 1（裁决一落地）——已完成 2026-09-06**：ADR-0010 §14.57 转录（写单
+  链规则退役 + rejected 语义收窄）→ Python 法官同步（written 规则退役、
+  rejected 去前置保留形状）→ Rust conformance 同步（families/families_s2c
+  对应调整，31→30 族）→ 对拍复验（229 场景×30 族=6870 格 spec 表 +
+  247 语料×30 族=7410 格 0 差；written 三场景转历史回放合法守卫）→
+  BACKLOG/TODO 登记。
+- **批 2（裁决二落地）——待放行**：`tool_probe` 记账口径收窄（生产侧）→
+  设计转录 → 单测 → probe_accuracy 族对拍/fixture 复验零回归 → 登记。
+- 两批完成后，S2d 翻转前裁决清单清空，可推进 S2d（30 族全量对拍矩阵落盘 +
   registry 翻转准备）→ S3（门禁改接）。
 
 ## 4. 裁决影响面小结

@@ -93,14 +93,22 @@
            Rust↔Python 对拍 246 语料×31=7626 格 0 差 + S2c e2e 篡改负测），
            入口：[S2c 实施审计](audits/TASK_D_S2C_FAMILIES_IMPL_AUDIT_2026-09-06.md)
            / [S2c 复审处理](audits/TASK_D_S2C_REVIEW_HANDLING_2026-09-06.md)。
-         - [ ] **S2d**：31 族全量 Python↔Rust 对拍 0 差 + registry 翻转准备。
-           翻转前裁决清单两项**已于 2026-09-06 用户裁决定案、实施待放行**：
+         - [ ] **S2d**：全量 Python↔Rust 对拍 0 差 + registry 翻转准备。
+           翻转前裁决清单两项**已于 2026-09-06 用户裁决定案**：
            console_order_written/rejected 写单链规则退役（rejected 保留形状
            子规则）+ probe_accuracy 收窄至当前可见工具（生产 tool_probe
            记账口径收窄，判官零改动）——目标语义与实施批次见
            [S2d 翻转裁决登记](audits/TASK_D_S2D_FLIP_ADJUDICATION_2026-09-06.md)。
            （排期登记：2026-09-06，见
            [GLM 处置 + S2 排期登记](audits/P0_GOV_GLM_DISPOSITION_AND_TASK_D_S2_SCHEDULE_2026-09-06.md)）
+           - [x] **批 1（裁决一落地，2026-09-06 完成）**：ADR-0010 §14.57
+             转录 + Python/Rust 判官两侧同步（written 整体退役不转负检、
+             rejected 收窄为形状不变量，31→30 族）+ spec 表退役口径
+             （229×30=6870 格；written 三场景转历史回放合法守卫）+ 对拍
+             247 语料×30 族=7410 格 0 差；orz `362b6071`，见
+             [批 1 实施审计](audits/TASK_D_S2D_BATCH1_IMPL_AUDIT_2026-09-06.md)。
+           - [ ] 批 2（裁决二落地，待放行）：tool_probe 记账口径收窄 +
+             probe_accuracy 族复验零回归。
        - [ ] **S3**：门禁真实 fixture journal 校验改接 Rust 法官；Python Rust
          轨 `validate_journal_file` 退役；registry 源翻转 JSON 转正。
        - [ ] **S4**：Python 双法官退役/归档登记、契约变更流程同步、索引收口。
