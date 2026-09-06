@@ -15,7 +15,7 @@
 ## 未闭合扫描快照（2026-08-31 清理轮）
 
 - 未闭合总数：**28 项**（BACKLOG 计数口径，2026-08-31：阶段 3 验证闭环 38 → 32；0k S4 实机复验闭环 32 → 30；P2-11 设计轮登记不动计数；2026-09-01：P2-11 DC 强制模板轮清理闭合 30 → 29，P3「DC 硬信号 4/6」退役 29 → 28；2026-09-02：P2-12 讨论稿登记不动计数，28 不变）。TODO `[ ]` 明细含父/子项，计数以 BACKLOG 为准。
-- P0：FUS-BENCHMARK-FULL-EXEC 验证②③④⑤ + 闭合（见 P0-F）；0d 后续 3/4/5 的 S4 复验（各 1，S3 已随合并批次核证闭合）；0j（W1-R1 S4 复验、W3-R3 余项×3、W4-R4 S5-2 总项 + 验证期发现）；0l（WINDOWS-HIGH-NIST-MAX-FRICTION 设计定稿、实施待放行，见 P0-0l）。
+- P0：FUS-BENCHMARK-FULL-EXEC 验证②③④⑤ + 闭合（见 P0-F）；0d 后续 3/4/5 的 S4 复验（各 1，S3 已随合并批次核证闭合）；0j（W1-R1 S4 复验、W3-R3 余项×3、W4-R4 S5-2 总项 + 验证期发现）；0l（WINDOWS-HIGH-NIST-MAX-FRICTION 设计定稿、实施待放行，见 P0-0l）；0m（GSA-SESSION-VOLUME 2026-09-06 用户裁决放行，S1–S4 排期实施，见 P0-0m）；GAP-APPROVAL-PROMPTER（2026-09-06 排期，S1 设计先行，见 P0-0n）。2026-09-06 补记：任务 D S2a/S2b 已闭合（S2c–S4 开放，见 P0-GOV）。
 - P1：FUS-COMPONENT-REGISTER 组件审计；GAP-WINDOWS-EVIDENCE 三项；IMPL-DEEPSEEK-TRANSPORT DeepSeek live 晋级证据；ORZ-SESSION-CONTEXT-MONITOR 四项。
 - P2：IMPL-CONTROL-FABRIC（Slice 3 / Slice 4 / 可选）；OPS-PROTOCOL（裁剪设计 + 生产接线裁决）；MODEL-RESIDUAL-PRESSURE-FOLLOWUP 四项（P2-11）；COMPRESSION-LINGUISTIC-FORMAL-LAYER（P2-12，2026-09-02 登记：域标注 + 失败目标聚合 + 建构暂缓，设计/实施待放行）。
 - P3：EVIDENCE-LOCAL-BROWSER、GATE-CHAIN、observed-scope 枚举、V11-IMPL-003、V11-IMPL-007、orz-host flaky（DC 硬信号已随 P2-11 退役）。
@@ -80,8 +80,8 @@
 - [x] R-2：manifest 生成器显式 LF 并重算。
 - [x] R-3：9 个根目录一次性产物归档 `存档/root-artifacts-2026-09-06/`
   （gsa.py 保留，门禁 required 文件）。
-- [ ] F2：approval prompter 存根登记为 GAP-APPROVAL-PROMPTER（已登记，
-  实施待排期）。
+- [x] F2：approval prompter 存根登记为 GAP-APPROVAL-PROMPTER（已登记；
+  2026-09-06 用户裁决排期，S1–S4 见 P0-0n）。
 - [x] 观察项 (c)：权限判定分散登记 OBS-PERMISSION-DUAL-IMPL（另立观察）。
 - [x] 复核修正批（2026-09-06）：R-1 口径（353 + 夹具恢复）、BACKLOG 00a
   引用修正、任务 D S2–S4 层级修正、处置审计 §3 限制清单补录
@@ -322,10 +322,13 @@
   [BACKLOG2.md](docs/BACKLOG2.md)；本行仅作主 TODO 指针，勾选以 TODO2
   为准。
 
-### P0-0m GSA-SESSION-VOLUME-BOTTOM-LAYER（P0；2026-09-06 设计定稿，实施待放行）
+### P0-0m GSA-SESSION-VOLUME-BOTTOM-LAYER（P0；2026-09-06 设计定稿，同日用户裁决放行，排期实施）
 
 用户裁决：`.gsa` 为 LIF 科学性组件，保留并下沉为底层部件；权限层不裁撤
 （后续「助理层拦截系统核心路径、仅删除保护」另行立项），放开压到最窄。
+排期（2026-09-06 放行）：S1 代码先行，S1–S4 独立审计 + 独立提交；S3 复验
+吸收 GAP-GSA-SYMLINK-STALE-TEST 连带观察（`.gsa` terminal-log 白名单会话卷
+形态豁免）。
 
 - [ ] S1 代码：SessionVolume 资源 + host 装配 canonical 单源注入 + 沙箱
   三分判定 + 窗口契约下沉（terminal-log / run_tests 只读窗口）+
@@ -338,6 +341,29 @@
 入口：[设计](docs/GSA_SESSION_VOLUME_BOTTOM_LAYER_DESIGN_2026-09-06.md) /
 [ADR-0010 §14.56](adr/ADR-0010-fusion-runtime-and-agent-architecture.md) /
 [BACKLOG 0m](docs/BACKLOG_AND_PRIORITIES.md)。
+
+### P0-0n GAP-APPROVAL-PROMPTER（P0；2026-09-06 用户裁决排期登记，S1 设计先行）
+
+GLM F2 处置转排期（2026-09-06 用户裁决）：`orz-host/src/approval.rs` 全文件
+注释 + TODO 存根、`lib.rs` 标注 approval path still a stub——交互审批器补齐。
+边界：审批器只承担交互审批呈现、决策回传与持久化，不收敛权限判定双实现
+（OBS-PERMISSION-DUAL-IMPL 另案）；缺省 fail-closed 不变。
+
+- [ ] S1 设计定稿：审批触发面（Interactive 权限门）+ 决策词汇（allow / deny /
+  持久化语义，含 `approval_allow_persists_for_identical_bash` 既有语义收编）+
+  permission 判定层接口 + TUI/ACP 两车道呈现 + 缺省 fail-closed；产出设计
+  文档（涉及 ADR-0010 时按 §14.x 转录）。
+- [ ] S2 实施：`approval.rs` 实装 + `lib.rs` approval stub 摘除 + 决策持久化 +
+  契约/事件面登记（如涉及）。
+- [ ] S3 测试与复验：单测矩阵 + orz-host 既有 flaky
+  `approval_allow_persists_for_identical_bash` 复核收编 + Interactive 实机复验。
+- [ ] S4 收口：GAP-APPROVAL-PROMPTER 状态翻转 + 索引/BACKLOG/TODO 同步 +
+  门禁 Exit 0。
+
+入口：[approval.rs](orz/crates/orz-host/src/approval.rs) /
+[GLM 登记审计](docs/audits/GLM_EXTERNAL_REVIEW_REGISTRATION_2026-09-04.md) /
+[处置 + S2 排期审计](docs/audits/P0_GOV_GLM_DISPOSITION_AND_TASK_D_S2_SCHEDULE_2026-09-06.md) /
+[BACKLOG 0n](docs/BACKLOG_AND_PRIORITIES.md)。
 
 ### P0-B FUS-RETRIEVAL-MECH（`implemented`；批次 1-6 全部闭合 2026-08-14，保留供核对）
 
@@ -672,7 +698,8 @@
 ## 审计登记边界（条件触发，不占当前优先级）
 
 - [x] GLM-2026-09-04 外部只读审查候选处置（2026-09-06 用户裁决：F1 /
-  R-1 / R-2 / R-3 / 观察 (c) 完成，F2 登记 GAP-APPROVAL-PROMPTER 待实施）
+  R-1 / R-2 / R-3 / 观察 (c) 完成，F2 登记 GAP-APPROVAL-PROMPTER，同日
+  排期 0n）
   ——入口：[登记审计](docs/audits/GLM_EXTERNAL_REVIEW_REGISTRATION_2026-09-04.md)
   / [处置审计](docs/audits/P0_GOV_GLM_DISPOSITION_AND_TASK_D_S2_SCHEDULE_2026-09-06.md)。
 - [x] orz read_file `.gsa` 符号链接旧回归测试与 Task C canonical 沙箱语义

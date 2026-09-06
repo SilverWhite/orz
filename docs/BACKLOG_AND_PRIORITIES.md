@@ -14,7 +14,7 @@
 
 | 优先级 | 含义 | 开放项（入口小节） |
 |---|---|---|
-| P0 | 当前工作集：设计已冻结，裁决后立即实施 | **P0-GOV 全仓架构对齐与门禁修复（00，阻断前置）**；FUS-BENCHMARK-FULL-EXEC 验证②③(reward)④⑤（0b）；0d 后续 3/4/5 S4 复验（0d）；THIN-HARNESS-REDESIGN-V2 余项（0j）；WINDOWS-HIGH-NIST-MAX-FRICTION ⑥/⑦（0l）；GSA-SESSION-VOLUME-BOTTOM-LAYER S1–S4（0m） |
+| P0 | 当前工作集：设计已冻结，裁决后立即实施 | **P0-GOV 全仓架构对齐与门禁修复（00，阻断前置）**；FUS-BENCHMARK-FULL-EXEC 验证②③(reward)④⑤（0b）；0d 后续 3/4/5 S4 复验（0d）；THIN-HARNESS-REDESIGN-V2 余项（0j）；WINDOWS-HIGH-NIST-MAX-FRICTION ⑥/⑦（0l）；GSA-SESSION-VOLUME-BOTTOM-LAYER S1–S4（0m，2026-09-06 用户裁决放行）；GAP-APPROVAL-PROMPTER S1–S4（0n，2026-09-06 排期，S1 设计先行） |
 | P1 | 无需裁决，可与 P0 并行 | FUS-COMPONENT-REGISTER（4）；GAP-WINDOWS-EVIDENCE（5）；IMPL-DEEPSEEK-TRANSPORT / SEC-CREDENTIALS live 证据（6）；ORZ-SESSION-CONTEXT-MONITOR（6d） |
 | P2 | 生产化决策门：需用户裁决 | IMPL-CONTROL-FABRIC Slice 3/4（7）；OPS-PROTOCOL 裁剪与接线裁决（8）；MODEL-RESIDUAL-PRESSURE-FOLLOWUP（11）；COMPRESSION-LINGUISTIC-FORMAL-LAYER（12）；BLACKBOARD-CONVERSATION-SCOPE-FOLD B2–B4（13） |
 | P3 | 收尾 / 清理 | EVIDENCE-LOCAL-BROWSER（9）；GATE-CHAIN（10）；遗留小项（11） |
@@ -108,8 +108,9 @@
 - [x] **R-3 根目录产物**：9 个一次性产物归档
   `存档/root-artifacts-2026-09-06/`；`gsa.py` 例外保留（门禁 required 文件）。
   （2026-09-06 闭合）
-- [ ] **F2 approval prompter 存根**：登记为 `GAP-APPROVAL-PROMPTER`
-  （索引 §3.1 + 本小节）；实施待排期，不入任务 D S2。
+- [x] **F2 approval prompter 存根**：登记为 `GAP-APPROVAL-PROMPTER`
+  （索引 §3.1）；2026-09-06 用户裁决排期（S1–S4，S1 设计先行，见 0n），
+  不入任务 D S2。（2026-09-06 登记 + 排期）
 - [x] **观察项 (c) 权限判定分散**：登记 OBS-PERMISSION-DUAL-IMPL（另立观察，
   不入任务 D S2 盘点；终局治理视野再排期）。（2026-09-06 登记）
 - [x] **复核修正批（2026-09-06 审查收口）**：R-1 计数口径（353 + 夹具恢复）、
@@ -452,11 +453,15 @@
   [TOOL_EXECUTION_LAYER_REFORM_DESIGN_2026-09-03.md](TOOL_EXECUTION_LAYER_REFORM_DESIGN_2026-09-03.md)
   为设计权威；S4_PROGRESS §16.17/§16.18 为进度记录。
 
-### 0m. GSA-SESSION-VOLUME-BOTTOM-LAYER（P0；2026-09-06 设计定稿，实施待放行）
+### 0m. GSA-SESSION-VOLUME-BOTTOM-LAYER（P0；2026-09-06 设计定稿，同日用户裁决放行，排期实施）
 
 用户裁决（2026-09-06）：`.gsa` 为 LIF 科学性组件（可审计状态链落盘面），
 必须保留并下沉为底层部件；权限层保留不裁撤（后续按「助理层运行中拦截
 系统核心路径、仅删除保护」另行立项），安全面放开压到最窄。
+排期（2026-09-06 用户裁决放行）：S1 代码先行（设计已定稿可立即开工），
+S1–S4 按「最小可验收单元 + 独立审计 + 独立提交」推进；S3 复验吸收
+GAP-GSA-SYMLINK-STALE-TEST 连带观察（`.gsa` terminal-log 白名单会话卷形态
+豁免）。
 
 - [ ] S1 代码：SessionVolume 类型化资源 + host 装配 canonical 单源注入 +
   工具级沙箱三分判定 + 窗口契约单源下沉（terminal-log / run_tests 两个
@@ -469,7 +474,32 @@
 
 设计权威：[`GSA_SESSION_VOLUME_BOTTOM_LAYER_DESIGN_2026-09-06`](GSA_SESSION_VOLUME_BOTTOM_LAYER_DESIGN_2026-09-06.md)
 / [ADR-0010 §14.56](../adr/ADR-0010-fusion-runtime-and-agent-architecture.md)。
-登记不动计数（设计定稿批，未入账）。
+登记不动计数（设计定稿批未入账；2026-09-06 排期批仍不动计数，闭合时动账）。
+
+### 0n. GAP-APPROVAL-PROMPTER（P0；2026-09-06 用户裁决排期登记，S1 设计先行）
+
+GLM F2 处置转排期（2026-09-06 用户裁决）：`orz-host/src/approval.rs` 全文件
+注释 + TODO 存根、`lib.rs` 标注 approval path still a stub——交互审批器补齐。
+边界：审批器只承担交互审批呈现、决策回传与持久化，不收敛权限判定双实现
+（OBS-PERMISSION-DUAL-IMPL 另案，随终局治理视野排期）；缺省 fail-closed
+不变。
+
+- [ ] S1 设计定稿：交互审批器设计——审批触发面（Interactive 权限门）、决策
+  词汇（allow / deny / 持久化语义，含 `approval_allow_persists_for_identical_bash`
+  既有语义收编）、与 permission 判定层接口、TUI/ACP 两车道呈现、缺省
+  fail-closed；产出设计文档（涉及 ADR-0010 时按 §14.x 转录）。
+- [ ] S2 实施：`approval.rs` 实装 + `lib.rs` approval stub 摘除 + 决策持久化
+  + 契约/事件面登记（如涉及）。
+- [ ] S3 测试与复验：单测矩阵 + orz-host 既有 flaky
+  `approval_allow_persists_for_identical_bash` 复核收编 + Interactive 实机
+  复验。
+- [ ] S4 收口：GAP-APPROVAL-PROMPTER 状态翻转（`partial`/`implemented`）+
+  索引/BACKLOG/TODO 同步 + 门禁 Exit 0。
+
+入口：[approval.rs](../orz/crates/orz-host/src/approval.rs) /
+[GLM 登记审计](audits/GLM_EXTERNAL_REVIEW_REGISTRATION_2026-09-04.md) /
+[处置 + S2 排期审计](audits/P0_GOV_GLM_DISPOSITION_AND_TASK_D_S2_SCHEDULE_2026-09-06.md)。
+登记不动计数（排期批，闭合时动账）。
 
 ### 1. FUS-TOOL-PROBE（`implemented`；P0-A 批次 1-7 与 P0-A-2 已闭合）
 
@@ -868,10 +898,6 @@
 
 ### 11. 遗留小项
 
-- GAP-APPROVAL-PROMPTER（GLM F2，2026-09-06 登记）：`orz-host/src/approval.rs`
-  全文件注释 + TODO 存根、`lib.rs` 标注 approval path still a stub——补登记为
-  gap（索引 §3.1 + BACKLOG 00a），实施待用户裁决排期。入口：
-  [处置 + S2 排期审计](audits/P0_GOV_GLM_DISPOSITION_AND_TASK_D_S2_SCHEDULE_2026-09-06.md)。
 - OBS-PERMISSION-DUAL-IMPL（GLM 观察 (c)，2026-09-06 登记）：权限判定分散
   （orz-workspace permission manager 8,756 行 / orz-host permission.rs 1,331
   行）——另立观察、不入任务 D S2；随终局治理视野排期。
@@ -891,7 +917,8 @@
 - prompt observed-scope 枚举补列（可选优化，P0-B 步骤 6 复核观察登记）：主提示词/检索提示词未列出合法 scope 枚举（`full_text_observed` / `partial_text_observed` / `metadata_only`），模型可能先踩一次 verifier 拒绝（`url_missing_observed_scope`）再修正；verifier 机械兜底已覆盖，暂不实施。
 - V11-IMPL-003：Global Review receipt 与真正审查结论严格分离——复核并登记闭合或转 gap。
 - V11-IMPL-007：Toolbar/run-history 数据源统一到 ORZ session ownership、旧路径残留检查——复核并登记闭合或转 gap。
-- orz-host 既有 flaky（`approval_allow_persists_for_identical_bash`，顺序/负载相关、与本批无关）——复核并登记闭合或转 gap。
+- orz-host 既有 flaky（`approval_allow_persists_for_identical_bash`，顺序/负载
+  相关、与本批无关）——已收编 0n S3 复核（2026-09-06 排期批）。
 - 工作区收尾：见 P0 前置收尾。
 
 ## 条件触发（不占当前优先级）
