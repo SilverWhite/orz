@@ -34,8 +34,9 @@ use crate::host::ToolPolicy;
 
 /// Every main-agent work tool in canonical (stable) projection order.
 /// Single source of truth for membership, the probe snapshot partition and
-/// the Python verifier's work-tool set (mirrored in
-/// `assurance/run_event_journal_validation.py`). Since S2d 裁决二
+/// the Python reference's work-tool set (mirrored in
+/// `assurance/run_event_journal_validation.py` — frozen reference since the
+/// Task D S3 flip, 2026-09-06). Since S2d 裁决二
 /// (ADR-0010 §14.58/§14.59) the journaled availability accounting covers
 /// the declared surface only — a subset of this list; the raw probe
 /// (`probe_work_tools`) still partitions the full set.

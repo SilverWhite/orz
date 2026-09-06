@@ -13,10 +13,11 @@
 //! ```text
 //! journal-conformance <journal.jsonl> --repo-root <repository root>
 //! ```
-//! Exit codes: `0` = journal valid; `1` = journal invalid (one
-//! `error: …` line per judge error on stderr); `2` = usage error.
-//! `ORZ_JOURNAL_CONFORMANCE_BIN` is not read here — the gate resolves the
-//! executable; this binary only validates.
+//! `--repo-root` may be repeated (the last value wins); any other flag or a
+//! second positional argument is a usage error. Exit codes: `0` = journal
+//! valid; `1` = journal invalid (one `error: …` line per judge error on
+//! stderr); `2` = usage error. `ORZ_JOURNAL_CONFORMANCE_BIN` is not read
+//! here — the gate resolves the executable; this binary only validates.
 
 use std::path::PathBuf;
 use std::process::ExitCode;
