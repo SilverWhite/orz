@@ -15,7 +15,7 @@
 ## 未闭合扫描快照（2026-08-31 清理轮）
 
 - 未闭合总数：**28 项**（BACKLOG 计数口径，2026-08-31：阶段 3 验证闭环 38 → 32；0k S4 实机复验闭环 32 → 30；P2-11 设计轮登记不动计数；2026-09-01：P2-11 DC 强制模板轮清理闭合 30 → 29，P3「DC 硬信号 4/6」退役 29 → 28；2026-09-02：P2-12 讨论稿登记不动计数，28 不变）。TODO `[ ]` 明细含父/子项，计数以 BACKLOG 为准。
-- P0：FUS-BENCHMARK-FULL-EXEC 验证②③④⑤ + 闭合（见 P0-F）；0d 后续 3/4/5 的 S4 复验（各 1，S3 已随合并批次核证闭合）；0j（W1-R1 S4 复验、W3-R3 余项×3、W4-R4 S5-2 总项 + 验证期发现）；0l（WINDOWS-HIGH-NIST-MAX-FRICTION 设计定稿、实施待放行，见 P0-0l）；0m（GSA-SESSION-VOLUME 2026-09-06 用户裁决放行，S1–S4 排期实施，见 P0-0m）。2026-09-06 补记：任务 D S2a/S2b 已闭合（S2c–S4 开放，见 P0-GOV）；GAP-APPROVAL-PROMPTER（0n）排期后同日延期（无具体设计文档项非急切/必需，S1 设计定稿前置，见 P0-0n）。
+- P0：FUS-BENCHMARK-FULL-EXEC 验证②③④⑤ + 闭合（见 P0-F）；0d 后续 3/4/5 的 S4 复验（各 1，S3 已随合并批次核证闭合）；0j（W1-R1 S4 复验、W3-R3 余项×3、W4-R4 S5-2 总项 + 验证期发现）；0l（WINDOWS-HIGH-NIST-MAX-FRICTION 设计定稿、实施待放行，见 P0-0l）；0m（GSA-SESSION-VOLUME 2026-09-06 用户裁决放行，S1–S4 排期实施，见 P0-0m）。2026-09-06 补记：任务 D S2a–S2d 已闭合（S3–S4 开放，见 P0-GOV）；GAP-APPROVAL-PROMPTER（0n）排期后同日延期（无具体设计文档项非急切/必需，S1 设计定稿前置，见 P0-0n）。
 - P1：FUS-COMPONENT-REGISTER 组件审计；GAP-WINDOWS-EVIDENCE 三项；IMPL-DEEPSEEK-TRANSPORT DeepSeek live 晋级证据；ORZ-SESSION-CONTEXT-MONITOR 四项。
 - P2：IMPL-CONTROL-FABRIC（Slice 3 / Slice 4 / 可选）；OPS-PROTOCOL（裁剪设计 + 生产接线裁决）；MODEL-RESIDUAL-PRESSURE-FOLLOWUP 四项（P2-11）；COMPRESSION-LINGUISTIC-FORMAL-LAYER（P2-12，2026-09-02 登记：域标注 + 失败目标聚合 + 建构暂缓，设计/实施待放行）。
 - P3：EVIDENCE-LOCAL-BROWSER、GATE-CHAIN、observed-scope 枚举、V11-IMPL-003、V11-IMPL-007、orz-host flaky（DC 硬信号已随 P2-11 退役）。
@@ -71,7 +71,12 @@
       （语料计数勘误：真实 248，见批 1 实施审计 §2）+ S2c e2e 负测；
       入口：docs/audits/TASK_D_S2C_FAMILIES_IMPL_AUDIT_2026-09-06.md
       / docs/audits/TASK_D_S2C_REVIEW_HANDLING_2026-09-06.md）。
-    - [ ] S2d：全量 Python↔Rust 对拍 0 差 + registry 翻转准备。
+    - [x] S2d：全量 Python↔Rust 对拍 0 差 + registry 翻转准备——
+      **2026-09-06 收口**（零代码改动：spec 表 233×30=6990 格（186 负例格
+      30 族全覆盖）+ 对拍 251 语料×30 族=7530 格 0 差新鲜实测 + Python
+      判官 18 fixture 直扫 0 错误/540 族格 0 firing；registry 翻转触点
+      盘点 + S3 三步序列/回滚方案登记，翻转执行属 S3 待放行；入口：
+      docs/audits/TASK_D_S2D_CLOSURE_2026-09-06.md）。
       翻转前裁决清单两项已定案（2026-09-06 用户裁定），落地
       批次见 [S2d 翻转裁决登记](docs/audits/TASK_D_S2D_FLIP_ADJUDICATION_2026-09-06.md)：
       - [x] 批 1：console_order_written 规则退役 + console_order_rejected

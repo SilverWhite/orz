@@ -96,7 +96,14 @@
            + S2c e2e 篡改负测），
            入口：[S2c 实施审计](audits/TASK_D_S2C_FAMILIES_IMPL_AUDIT_2026-09-06.md)
            / [S2c 复审处理](audits/TASK_D_S2C_REVIEW_HANDLING_2026-09-06.md)。
-         - [ ] **S2d**：全量 Python↔Rust 对拍 0 差 + registry 翻转准备。
+         - [x] **S2d**：全量 Python↔Rust 对拍 0 差 + registry 翻转准备
+           ——**2026-09-06 收口**（零代码改动、orz 维持 `1595303b`：spec 表
+           233 场景×30 族=6990 格（186 负例格、30 族无一零覆盖）+ 对拍
+           251 语料×30 族=7530 格 0 差新鲜实测 + Python 判官 18 fixture
+           直扫 schema 级 0 错误 / 540 族格 0 firing；registry 翻转触点
+           盘点（现状权威链五层）+ S3 执行三步序列与回滚方案登记，翻转
+           执行属 S3 待放行；入口：
+           [S2d 收口审计](audits/TASK_D_S2D_CLOSURE_2026-09-06.md)）。
            翻转前裁决清单两项**已于 2026-09-06 用户裁决定案**：
            console_order_written/rejected 写单链规则退役（rejected 保留形状
            子规则）+ probe_accuracy 收窄至当前可见工具（生产 tool_probe
