@@ -73,9 +73,14 @@
            [S2a 盘点表](audits/TASK_D_S2A_INVENTORY_2026-09-06.md)。
            三路全面复审无 P1/P2、9 项 P3 全部收口，入口：
            [S2a 复审处理](audits/TASK_D_S2A_REVIEW_HANDLING_2026-09-06.md)。
-         - [ ] **S2b**：核心族 Rust conformance 显式实现——control_tickets /
+         - [x] **S2b**：核心族 Rust conformance 显式实现——control_tickets /
            lifecycle / retrieval_mode / ledger_fold(advance+write_failed) /
-           policy_denial / failure_target。
+           policy_denial / failure_target——**2026-09-06 完成**（orz
+           `809cdb4e`：`journal/families.rs` 七校验器 + conformance 第 5 阶段
+           接线；38 场景×7 族表驱动正/负单测 + Rust↔Python 逐族对拍 0 差
+           350 裁决格 + fixture 全量正验；orz-assurance 204 passed，
+           workspace check 零警告），入口：
+           [S2b 实施审计](audits/TASK_D_S2B_FAMILIES_IMPL_AUDIT_2026-09-06.md)。
          - [ ] **S2c**：其余族按档位收口（检索族 / 上下文与压缩族 / 控制面族
            三个子批）。
          - [ ] **S2d**：31 族全量 Python↔Rust 对拍 0 差 + registry 翻转准备。
