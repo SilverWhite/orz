@@ -87,9 +87,14 @@ fixture 侧逐族 firing 全 0（18 期刊为合法语料；负例信号全部�
 3. **门禁强同步**：`scripts/check_repository.py:2420-2454` JSON↔dict 同构
    比对，漂移即报错；registry + 导出脚本在 required 文件清单
    （`:2456-2469`）。
-4. **门禁 journal 校验**：`check_repository.py:2403-2407` 对 12 个 v0.2
-   fixture 期刊调 Python `validate_journal_file`（`:3621`；v0.1 期刊不进
-   门禁期刊校验，其 payload/envelope 夹具按实例校验走 `:1948-2010`）。
+4. **门禁 journal 校验**：`check_repository.py:2364`（v0.1，6 期刊）与
+   `:2404`（v0.2，12 期刊）两循环共 **18 期刊**调 Python
+   `validate_journal_file`（`:3621`）——**双轨全量均在门禁期刊校验内**
+   （v0.1 期刊的 payload/envelope 夹具另按实例校验走 `:1948-2010`）。
+   *（2026-09-06 S3 深挖批勘误：本节原写「门禁只校 12 v0.2 期刊」漏计
+   `:2364` 的 v0.1 循环，实际门禁期刊校验覆盖 18 个双轨期刊，§2.3/§2.4
+   相应口径以此为准——v0.1 纳入门禁为既成事实，S3 改接只需 Rust CLI 等
+   面承接。）*
 5. **Rust 法官**：`orz-assurance/src/journal/conformance.rs:302`
    `validate_journal_file(journal_path, repo_root)`——**库函数入口，无独立
    CLI**；`--repo-root` 参数化已备（batch-1 审计 §6 措辞）；消费点仅

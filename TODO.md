@@ -102,6 +102,11 @@
         两批完成，S2d 翻转前裁决清单清空。
   - [ ] S3：`check_repository.py` 真实 fixture journal 校验改接 Rust 法官，
     Python Rust 轨 `validate_journal_file` 退役，registry 源翻转 JSON 转正。
+    2026-09-06 用户裁决：接线形态=独立 CLI、门禁期刊校验含 v0.1（双轨
+    18 期刊承接不减）；退役边界深挖完成（模块四层职责 + 12 消费点盘点，
+    D-1 parity 对照面归宿 / D-2 测试面 / D-3 `_WORK_TOOLS` 单源三裁决点
+    待裁），S3 放行待签——入口：
+    docs/audits/TASK_D_S3_S4_PYTHON_RETIREMENT_BOUNDARY_2026-09-06.md。
   - [ ] S4：Python 双法官退役/归档登记、契约变更流程同步、索引/BACKLOG 收口。
 
 ### P0-GOV GLM 外部只读审查处置（2026-09-06 用户裁决）
