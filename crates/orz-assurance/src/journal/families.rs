@@ -1286,13 +1286,13 @@ pub const S2B_FAMILIES: &[&str] = &[
     "control_tickets",
 ];
 
-/// S2c family ids (Task D S2c, 2026-09-06): the remaining 24 rule families,
-/// implemented in [`super::families_s2c`].
+/// S2c family ids (Task D S2c, 2026-09-06): the remaining rule families,
+/// implemented in [`super::families_s2c`]. `console_order_written` was
+/// retired 2026-09-06 (S2d 裁决一, ADR-0010 §14.57) — 24 → 23.
 pub const S2C_FAMILIES: &[&str] = &[
     "inquiry_kind",
     "plan_write",
     "console_mode_transition",
-    "console_order_written",
     "console_order_rejected",
     "tool_running",
     "output_truncation",
@@ -1315,13 +1315,15 @@ pub const S2C_FAMILIES: &[&str] = &[
     "probe_accuracy",
 ];
 
-/// All 31 families in the Python `validate_journal_text` call order
-/// (Py 3677-3707) — the S2d full-corpus crosscheck order.
+/// All 30 families in the Python `validate_journal_text` call order
+/// (Py order; `console_order_written` retired 2026-09-06, S2d 裁决一 /
+/// ADR-0010 §14.57 — the write-order chain rule is gone on both judges and
+/// NOT converted into a negative check, so historical journals replay clean)
+/// — the S2d full-corpus crosscheck order.
 pub const ALL_FAMILIES: &[&str] = &[
     "inquiry_kind",
     "plan_write",
     "console_mode_transition",
-    "console_order_written",
     "console_order_rejected",
     "ledger_fold_advance",
     "ledger_fold_write_failed",
@@ -2425,6 +2427,10 @@ mod tests {
                     ),
                 ],
             ),
+            // console_order_written retired 2026-09-06 (S2d 裁决一, ADR-0010
+            // §14.57): these three scenarios are the historical-replay-legal
+            // guards — written chains (backed / duplicate / unbacked) must
+            // produce ZERO errors from every family (no negative check).
             (
                 "console_order_written_ok",
                 vec![
@@ -2475,119 +2481,24 @@ mod tests {
                     }),
                 )],
             ),
-            (
-                "console_order_written_write_reuse",
-                vec![
-                    ev(
-                        "tool_completed",
-                        json!({"tool": "blackboard_action_write", "call_id": "w1", "status": "success", "exit_code": 0}),
-                    ),
-                    ev(
-                        "console_order_written",
-                        json!({
-                            "order_id": "ORD-1", "action": "workspace.run_terminal",
-                            "write_call_id": "w1", "round": 3, "plan_epoch": "e1", "run_id": "run-1",
-                        }),
-                    ),
-                    ev(
-                        "console_order_written",
-                        json!({
-                            "order_id": "ORD-2", "action": "workspace.run_terminal",
-                            "write_call_id": "w1", "round": 3, "plan_epoch": "e1", "run_id": "run-1",
-                        }),
-                    ),
-                ],
-            ),
+            // console_order_rejected narrowed to shape invariants (S2d 裁决一,
+            // ADR-0010 §14.57): no prior-written requirement, no stamp
+            // consistency — the ok scenario carries NO written order and the
+            // stamp-drift scenario proves the retired friction stays retired.
             (
                 "console_order_rejected_ok",
-                vec![
-                    ev(
-                        "tool_completed",
-                        json!({"tool": "blackboard_action_write", "call_id": "w1", "status": "success", "exit_code": 0}),
-                    ),
-                    ev(
-                        "console_order_written",
-                        json!({
-                            "order_id": "ORD-1", "action": "workspace.run_terminal",
-                            "write_call_id": "w1", "round": 3, "plan_epoch": "e1", "run_id": "run-1",
-                        }),
-                    ),
-                    ev(
-                        "console_order_rejected",
-                        json!({
-                            "order_id": "ORD-1", "phase": "issue", "step": "policy",
-                            "code": "policy_denied", "reason": "mechanical refusal",
-                            "round": 3, "plan_epoch": "e1", "run_id": "run-1",
-                        }),
-                    ),
-                ],
-            ),
-            (
-                "console_order_rejected_unwritten",
                 vec![ev(
                     "console_order_rejected",
                     json!({
-                        "order_id": "ORD-9", "phase": "issue", "step": "policy",
+                        "order_id": "ORD-1", "phase": "issue", "step": "policy",
                         "code": "policy_denied", "reason": "mechanical refusal",
                         "round": 3, "plan_epoch": "e1", "run_id": "run-1",
                     }),
                 )],
             ),
             (
-                "console_order_rejected_bad_phase",
+                "console_order_rejected_stamp_drift_legal",
                 vec![
-                    ev(
-                        "tool_completed",
-                        json!({"tool": "blackboard_action_write", "call_id": "w1", "status": "success", "exit_code": 0}),
-                    ),
-                    ev(
-                        "console_order_written",
-                        json!({
-                            "order_id": "ORD-2", "action": "workspace.run_terminal",
-                            "write_call_id": "w1", "round": 3, "plan_epoch": "e1", "run_id": "run-1",
-                        }),
-                    ),
-                    ev(
-                        "console_order_rejected",
-                        json!({
-                            "order_id": "ORD-2", "phase": "execute", "step": "execute",
-                            "code": "boom", "reason": "mechanical refusal",
-                            "round": 3, "plan_epoch": "e1", "run_id": "run-1",
-                        }),
-                    ),
-                ],
-            ),
-            (
-                "console_order_rejected_pre_issue_bad_code",
-                vec![
-                    ev(
-                        "tool_completed",
-                        json!({"tool": "blackboard_action_write", "call_id": "w1", "status": "success", "exit_code": 0}),
-                    ),
-                    ev(
-                        "console_order_written",
-                        json!({
-                            "order_id": "ORD-3", "action": "workspace.run_terminal",
-                            "write_call_id": "w1", "round": 3, "plan_epoch": "e1", "run_id": "run-1",
-                        }),
-                    ),
-                    ev(
-                        "console_order_rejected",
-                        json!({
-                            "order_id": "ORD-3", "phase": "pre_issue", "step": "protocol",
-                            "code": "boom", "reason": "mechanical refusal",
-                            "round": 3, "plan_epoch": "e1", "run_id": "run-1",
-                        }),
-                    ),
-                ],
-            ),
-            (
-                "console_order_rejected_stamp_mismatch",
-                vec![
-                    ev(
-                        "tool_completed",
-                        json!({"tool": "blackboard_action_write", "call_id": "w1", "status": "success", "exit_code": 0}),
-                    ),
                     ev(
                         "console_order_written",
                         json!({
@@ -2604,6 +2515,71 @@ mod tests {
                         }),
                     ),
                 ],
+            ),
+            (
+                "console_order_rejected_duplicate",
+                vec![
+                    ev(
+                        "console_order_rejected",
+                        json!({
+                            "order_id": "ORD-1", "phase": "issue", "step": "policy",
+                            "code": "policy_denied", "reason": "mechanical refusal",
+                            "round": 3, "plan_epoch": "e1", "run_id": "run-1",
+                        }),
+                    ),
+                    ev(
+                        "console_order_rejected",
+                        json!({
+                            "order_id": "ORD-1", "phase": "issue", "step": "policy",
+                            "code": "policy_denied", "reason": "mechanical refusal",
+                            "round": 3, "plan_epoch": "e1", "run_id": "run-1",
+                        }),
+                    ),
+                ],
+            ),
+            (
+                "console_order_rejected_empty_reason",
+                vec![ev(
+                    "console_order_rejected",
+                    json!({
+                        "order_id": "ORD-1", "phase": "issue", "step": "policy",
+                        "code": "policy_denied", "reason": "",
+                        "round": 3, "plan_epoch": "e1", "run_id": "run-1",
+                    }),
+                )],
+            ),
+            (
+                "console_order_rejected_issue_bad_step",
+                vec![ev(
+                    "console_order_rejected",
+                    json!({
+                        "order_id": "ORD-1", "phase": "issue", "step": "execute",
+                        "code": "policy_denied", "reason": "mechanical refusal",
+                        "round": 3, "plan_epoch": "e1", "run_id": "run-1",
+                    }),
+                )],
+            ),
+            (
+                "console_order_rejected_bad_phase",
+                vec![ev(
+                    "console_order_rejected",
+                    json!({
+                        "order_id": "ORD-2", "phase": "execute", "step": "execute",
+                        "code": "boom", "reason": "mechanical refusal",
+                        "round": 3, "plan_epoch": "e1", "run_id": "run-1",
+                    }),
+                )],
+            ),
+            (
+                "console_order_rejected_pre_issue_bad_code",
+                vec![ev(
+                    "console_order_rejected",
+                    json!({
+                        "order_id": "ORD-3", "phase": "pre_issue", "step": "protocol",
+                        "code": "boom", "reason": "mechanical refusal",
+                        "round": 3, "plan_epoch": "e1", "run_id": "run-1",
+                    }),
+                )],
             ),
             (
                 "tool_running_ok",
@@ -4394,39 +4370,6 @@ mod tests {
                 )],
             ),
             (
-                "cow_action_empty",
-                vec![
-                    ev(
-                        "tool_completed",
-                        json!({"tool": "blackboard_action_write", "call_id": "w1", "status": "success", "exit_code": 0}),
-                    ),
-                    ev(
-                        "console_order_written",
-                        json!({
-                            "order_id": "ORD-1", "action": "",
-                            "write_call_id": "w1", "round": 3, "plan_epoch": "e1", "run_id": "run-1",
-                        }),
-                    ),
-                ],
-            ),
-            (
-                "cow_step_id_empty",
-                vec![
-                    ev(
-                        "tool_completed",
-                        json!({"tool": "blackboard_action_write", "call_id": "w1", "status": "success", "exit_code": 0}),
-                    ),
-                    ev(
-                        "console_order_written",
-                        json!({
-                            "order_id": "ORD-1", "action": "workspace.run_terminal",
-                            "step_id": "", "write_call_id": "w1",
-                            "round": 3, "plan_epoch": "e1", "run_id": "run-1",
-                        }),
-                    ),
-                ],
-            ),
-            (
                 "rcpt_gate_before_start",
                 vec![
                     ev(
@@ -4557,18 +4500,15 @@ mod tests {
         ] {
             expect(name, "console_mode_transition");
         }
+        // console_order_written family retired 2026-09-06 (S2d 裁决一,
+        // ADR-0010 §14.57): the written scenarios are historical-replay-legal
+        // guards and expect NO violations from any family (absent here).
         for name in [
-            "console_order_written_duplicate",
-            "console_order_written_unbacked",
-            "console_order_written_write_reuse",
-        ] {
-            expect(name, "console_order_written");
-        }
-        for name in [
-            "console_order_rejected_unwritten",
+            "console_order_rejected_duplicate",
+            "console_order_rejected_empty_reason",
+            "console_order_rejected_issue_bad_step",
             "console_order_rejected_bad_phase",
             "console_order_rejected_pre_issue_bad_code",
-            "console_order_rejected_stamp_mismatch",
         ] {
             expect(name, "console_order_rejected");
         }
@@ -4786,9 +4726,6 @@ mod tests {
         for name in ["pw_validation_failed_degrade", "pw_accepted_valid_false"] {
             expect(name, "plan_write");
         }
-        for name in ["cow_action_empty", "cow_step_id_empty"] {
-            expect(name, "console_order_written");
-        }
         expect("rcpt_gate_before_start", "receipt_event_isomorphism");
         rows
     }
@@ -4813,9 +4750,10 @@ mod tests {
     }
 
     /// Task D acceptance: per-family verdict parity with the Python judge on
-    /// the same corpus (all 31 families since S2c) — the synthetic scenarios above PLUS every real v0.2
-    /// fixture journal. Verdict parity = (errors empty) agrees on both sides;
-    /// message text is deliberately Rust-form.
+    /// the same corpus (all 30 families since the S2d 裁决一 written-rule
+    /// retirement, ADR-0010 §14.57) — the synthetic scenarios above PLUS
+    /// every real v0.2 fixture journal. Verdict parity = (errors empty)
+    /// agrees on both sides; message text is deliberately Rust-form.
     #[test]
     fn s2b_family_verdicts_match_python() {
         // Mount-contract guard (ORZ-BUILD-MOUNT-001): the judge reads the
@@ -4880,7 +4818,8 @@ mod tests {
         }
         fixture_names.sort();
 
-        // Python side: run the 31 `_verify_v02_*` functions per corpus item.
+        // Python side: run the 30 `_verify_v02_*` functions per corpus item
+        // (console_order_written retired 2026-09-06, ADR-0010 §14.57).
         let script = r#"
 import sys, json
 sys.path.insert(0, sys.argv[1])
@@ -4889,7 +4828,6 @@ fams = {
     "inquiry_kind": v._verify_v02_inquiry_kind,
     "plan_write": v._verify_v02_plan_write,
     "console_mode_transition": v._verify_v02_console_mode_transition,
-    "console_order_written": v._verify_v02_console_order_written,
     "console_order_rejected": v._verify_v02_console_order_rejected,
     "ledger_fold_advance": v._verify_v02_ledger_fold_advance,
     "ledger_fold_write_failed": v._verify_v02_ledger_fold_write_failed,
@@ -5000,7 +4938,7 @@ json.dump(out, sys.stdout)
             "crosscheck cell accounting drifted"
         );
         assert_eq!(
-            scenario_count, 230,
+            scenario_count, 229,
             "synthetic scenario corpus count drifted from its registered size              ({scenario_count})"
         );
         assert!(

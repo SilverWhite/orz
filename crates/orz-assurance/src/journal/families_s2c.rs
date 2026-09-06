@@ -1961,141 +1961,18 @@ pub fn verify_console_mode_transition(events: &[Value]) -> Vec<String> {
     errors
 }
 
-/// Python `_verify_v02_console_order_written` (PLAN-FIRST 阶段 C, B 族 —
-/// 写单面退役后仅 Python 法官持有该规则): mechanical stamps + per-run order id
-/// uniqueness + a prior same-run successful `blackboard_action_write`
-/// completion backing the order via `write_call_id` (one write backs at most
-/// one order record).
-pub fn verify_console_order_written(events: &[Value]) -> Vec<String> {
-    let mut errors = Vec::new();
-    let mut order_ids_per_run: std::collections::HashMap<String, BTreeSet<String>> =
-        std::collections::HashMap::new();
-    for (index, event) in events.iter().enumerate() {
-        if !is_v02(event)
-            || event.get("event_type").and_then(Value::as_str) != Some("console_order_written")
-        {
-            continue;
-        }
-        let payload = &event["payload"];
-        let run_id = event.get("run_id").and_then(Value::as_str).unwrap_or("");
-        let order_id = str_of(payload.get("order_id")).unwrap_or_default();
-        if !order_ids_per_run
-            .entry(run_id.to_string())
-            .or_default()
-            .insert(order_id.to_string())
-        {
-            errors.push(format!(
-                "event {index}: duplicate console_order_written order_id \
-                 {order_id:?} in run {run_id}"
-            ));
-        }
-        let action = str_of(payload.get("action"));
-        if action.is_none_or(str::is_empty) {
-            errors.push(format!(
-                "event {index}: console_order_written action must be a non-empty string"
-            ));
-        }
-        if let Some(step_id) = py_none(payload.get("step_id"))
-            && str_of(Some(step_id)).is_none_or(str::is_empty)
-        {
-            errors.push(format!(
-                "event {index}: console_order_written step_id must be null or a \
-                 non-empty string"
-            ));
-        }
-    }
-    // Producer ordering: the action_write success completion precedes the
-    // order record in the same run; write_call_id matches (F1, 2026-08-16);
-    // one write backs at most one order record.
-    let mut writes_per_run: std::collections::HashMap<String, Vec<(usize, String)>> =
-        std::collections::HashMap::new();
-    for (index, event) in events.iter().enumerate() {
-        if !is_v02(event)
-            || event.get("event_type").and_then(Value::as_str) != Some("tool_completed")
-        {
-            continue;
-        }
-        let payload = event.get("payload").cloned().unwrap_or(Value::Null);
-        if payload.get("tool").and_then(Value::as_str) == Some("blackboard_action_write")
-            && py_value_eq_inner(
-                payload.get("exit_code").unwrap_or(&Value::Null),
-                &Value::from(0),
-            )
-        {
-            let run_id = event.get("run_id").and_then(Value::as_str).unwrap_or("");
-            writes_per_run.entry(run_id.to_string()).or_default().push((
-                index,
-                str_of(payload.get("call_id")).unwrap_or("").to_string(),
-            ));
-        }
-    }
-    let mut consumed: std::collections::HashMap<String, BTreeSet<usize>> =
-        std::collections::HashMap::new();
-    for (index, event) in events.iter().enumerate() {
-        if !is_v02(event)
-            || event.get("event_type").and_then(Value::as_str) != Some("console_order_written")
-        {
-            continue;
-        }
-        let payload = &event["payload"];
-        let run_id = event.get("run_id").and_then(Value::as_str).unwrap_or("");
-        let order_id = str_of(payload.get("order_id")).unwrap_or_default();
-        let write_call_id = str_of(py_none(payload.get("write_call_id")));
-        let writes = writes_per_run.entry(run_id.to_string()).or_default();
-        let consumed = consumed.entry(run_id.to_string()).or_default();
-        let matched = writes
-            .iter()
-            .enumerate()
-            .find(|(wi, (w_index, w_call))| {
-                !consumed.contains(wi) && *w_index < index && Some(w_call.as_str()) == write_call_id
-            })
-            .map(|(wi, _)| wi);
-        match matched {
-            None => {
-                errors.push(format!(
-                    "event {index}: console_order_written {order_id:?} without a \
-                     prior blackboard_action_write success in its run"
-                ));
-            }
-            Some(wi) => {
-                consumed.insert(wi);
-            }
-        }
-    }
-    errors
-}
-
-/// Python `_verify_v02_console_order_rejected` (P0-E 第 4 项, B 族 — 写单面
-/// 退役后与 Python 规则存在真实分歧，先镜像裁决): closed phase/step/code
-/// triples, non-empty reason, a same-run written order record with equal
-/// stamps, and one rejection per order per run.
+/// Python `_verify_v02_console_order_rejected` (P0-E 第 4 项, B 族 — 收窄于
+/// 2026-09-06 任务 D S2d 裁决一 / ADR-0010 §14.57: 写单链规则退役后收窄为
+/// 形状不变量 — closed phase/step/code triples, non-empty reason, one
+/// rejection per order per run; the prior-same-run written requirement and
+/// the stamp-consistency friction sub-rules are retired with the §14.39
+/// write-order chain, and `console_order_written` is retired outright
+/// without a negative check — historical v0.2 journals legally carry
+/// written chains).
 pub fn verify_console_order_rejected(events: &[Value]) -> Vec<String> {
     const PRE_ISSUE_CODES: &[&str] = &["order_stale", "step_not_done", "budget_insufficient"];
     const ISSUE_STEPS: &[&str] = &["registry", "contract", "target", "policy"];
     let mut errors = Vec::new();
-    // Mirrors the Python judge: written_by_run is built over the WHOLE
-    // journal (no index check) and matched by order_id.
-    let mut written_by_run: std::collections::HashMap<
-        String,
-        std::collections::HashMap<String, Value>,
-    > = std::collections::HashMap::new();
-    for event in events {
-        if !is_v02(event)
-            || event.get("event_type").and_then(Value::as_str) != Some("console_order_written")
-        {
-            continue;
-        }
-        let payload = event.get("payload").cloned().unwrap_or(Value::Null);
-        let run_id = event.get("run_id").and_then(Value::as_str).unwrap_or("");
-        let order_id = str_of(payload.get("order_id"))
-            .unwrap_or_default()
-            .to_string();
-        written_by_run
-            .entry(run_id.to_string())
-            .or_default()
-            .insert(order_id, payload);
-    }
-
     let mut rejected_per_run: std::collections::HashMap<String, BTreeSet<String>> =
         std::collections::HashMap::new();
     for (index, event) in events.iter().enumerate() {
@@ -2150,32 +2027,6 @@ pub fn verify_console_order_rejected(events: &[Value]) -> Vec<String> {
             errors.push(format!(
                 "event {index}: console_order_rejected reason must be a non-empty string"
             ));
-        }
-        let Some(written) = written_by_run
-            .get(run_id)
-            .and_then(|orders| orders.get(order_id))
-        else {
-            errors.push(format!(
-                "event {index}: console_order_rejected {order_id:?} without a prior \
-                 console_order_written of the same run"
-            ));
-            continue;
-        };
-        for stamp in ["round", "plan_epoch", "run_id"] {
-            if !py_value_eq(py_none(payload.get(stamp)), py_none(written.get(stamp))) {
-                errors.push(format!(
-                    "event {index}: console_order_rejected {order_id:?} {stamp}={} != \
-                     written order {stamp}={}",
-                    payload
-                        .get(stamp)
-                        .map(|v| v.to_string())
-                        .unwrap_or_default(),
-                    written
-                        .get(stamp)
-                        .map(|v| v.to_string())
-                        .unwrap_or_default(),
-                ));
-            }
         }
     }
     errors
@@ -2560,7 +2411,9 @@ pub fn verify_s2c_family(family: &str, events: &[Value]) -> Vec<String> {
         "inquiry_kind" => verify_inquiry_kind(events),
         "plan_write" => verify_plan_write(events),
         "console_mode_transition" => verify_console_mode_transition(events),
-        "console_order_written" => verify_console_order_written(events),
+        // "console_order_written" retired 2026-09-06 (任务 D S2d 裁决一,
+        // ADR-0010 §14.57): no Rust rule either, and no negative check —
+        // historical v0.2 journals legally carry written chains.
         "console_order_rejected" => verify_console_order_rejected(events),
         "tool_running" => verify_tool_running(events),
         "output_truncation" => verify_output_truncation(events),
