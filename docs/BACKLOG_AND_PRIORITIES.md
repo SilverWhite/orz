@@ -998,6 +998,20 @@ GLM F2 处置转排期（2026-09-06 用户裁决）：`orz-host/src/approval.rs`
 - OBS-PERMISSION-DUAL-IMPL（GLM 观察 (c)，2026-09-06 登记）：权限判定分散
   （orz-workspace permission manager 8,756 行 / orz-host permission.rs 1,331
   行）——另立观察、不入任务 D S2；随终局治理视野排期。
+  **2026-09-07 推进**：摸底精确化（实为一套引擎 + 桥 + 桥独有判定段，非两套
+  独立判定器；`.gsa` 面与 deny_read_globs 已单源）+ 收敛方向讨论稿落盘
+  （α 判定面单图/β 桥内聚+休眠面裁剪/γ 自研内核，推荐 α 立即 + β 立项，
+  γ 不排期）——**方向待用户裁决**，见
+  [收敛设计讨论稿](../docs/PERMISSION_DUAL_IMPL_CONVERGENCE_DESIGN_2026-09-07.md)。
+- **ACAF 默认翻转下游测试面族（2026-09-07 闭合）**：Task C（2026-09-04）
+  fail-closed 生产默认翻转后，依赖旧「env 未设 = shadow」默认的下游测试面
+  静默跑在 enforce 下——orz-host 全量 34 失败 + 1 挂死、orz-bin acaf_e2e
+  3 失败（0j 原登记 7 项，4 项已被中间批修复）同族；另 1 项为 TER T1.10
+  粗门 64K 后夹具漂移（同被掩盖）。修复 = 生产构造器默认零改动 + 测试面
+  显式声明模式（shadow 场景 `with_acaf_fail_closed(false)` ×52 处）+
+  大文件夹具对齐 64K；orz-host 全量 **249/0/4 EXIT=0（无跳过）**、
+  acaf_e2e **23/23**。见
+  [修复审计](audits/ACAF_TEST_DEFAULT_FLIP_INFRA_FIX_2026-09-07.md)。
 - GAP-GSA-SYMLINK-STALE-TEST（2026-09-06 复核登记，同日用户裁决收口）：orz
   `read_file_allows_gsa_symlink_outside_git_root_even_when_gitignored` 预期
   `.gsa` 重解析越界可读，与 Task C canonical 沙箱（2026-09-04）拒读语义

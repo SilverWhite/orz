@@ -241,7 +241,15 @@
 - [x] W4-R4 S5 修复 + S5-1（2026-08-29 完成，orz ad5f9ee）：A=fold 桥保留纯文本 assistant 消息 reasoning_content；B=orientation 触发轮放行工具（DC 强制模板轮仍禁工具）；web_search 客户端总超时 120s + connect 10s + 结构化 Timeout。
 - [ ] W4-R4 S5-2 终端分层超时 + 中间回报（2026-08-29 用户裁决，独立批）——普通命令默认 300s / 程序脚本类 600s（模型可传 timeout 覆盖、上限 900s）；运行满 300s 未完成 → 机械插入一次「运行 + 工具自身情况」中间状态（单次仅一次），回报后默认继续、模型可主动中断；后台路径=终端 actor 自动后台化（满 300s 且解析超时 >300s 才后台化，后台截止=原解析超时）；事件面=`tool_running`（v0.2）+ ToolCompleted `running: true`。S1 代码 + S2 测试 + 全面审查处理已闭合（2026-08-29，见下）。
 - [x] W4-R4 S5-2 S1 代码 + S2 测试 + 全面审查处理 + 审查处理补充（2026-08-29 完成）：宿主分类注入 + 自动后台化报告 + actor 后台截止 + `tool_running` 事件面（schema/verifier/fixtures）+ console 订单面同步（移除 is_background、timeout 上限 900s、默认 600s）；orz-tools/host/loop/tui/assurance 全绿、pytest 236。
-- [ ] W4-R4 S5-2 验证期发现（2026-08-29 登记，S5-1 遗留回归，独立排查）：orz-bin `acaf_e2e` 7 项失败（`controller_control_events_carry_tickets` / `fail_closed_continue_consumes_goal_revision_ticket` / `fail_closed_goal_revision_rejected_does_not_migrate` / `fail_closed_web_search_executes_unticketed_with_zero_ticket_events` / `goal_revision_continue_flow_re_derives_session_key` / `missing_browser_read_url_refuses_before_acaf_with_count_gate` / `signer_unreachable_shadow_records_rejection_and_proceeds`），16 通过。归因链：S5-1 提交 ad5f9ee 引入的 ACAF 控制事件/disposition/票据域遗留回归（与 S5-2 改动路径不相交），需独立轮次定位（建议先核对 disposition 处理链与 orientation 触发轮交互）后再进 S3/S4。
+- [x] W4-R4 S5-2 验证期发现（2026-08-29 登记）——**2026-09-07 闭合**：
+  acaf_e2e 原登记 7 项失败，4 项已被中间批次修复；现存 3 项 shadow 场景
+  失败实测根因 = Task C（2026-09-04）fail-closed 默认翻转后下游测试面未
+  显式声明（journal 形态比对证实为 Blocked 形态，非 ad5f9ee 回归残留），
+  与 orz-host 34 失败 + 1 挂死完全同族；修复 = shadow 场景显式
+  `with_acaf_fail_closed(false)`（acaf_e2e 11 处 + orz-host 52 处）+
+  大文件夹具对齐 TER T1.10 64K 门；orz-host 全量 249/0/4 EXIT=0（无跳过）、
+  acaf_e2e 23/23。入口：
+  docs/audits/ACAF_TEST_DEFAULT_FLIP_INFRA_FIX_2026-09-07.md。
 - [x] CONTROLLER-SPLIT 二轮（2026-08-30 全部闭合）：N1-N5 全部分批完成（controller.rs 29,091 → 4,142 行，测试区 202 项按主题归位，验收 ≤10,000 行达成；每批独立提交 + 全量回归）。
 
 ### P0-0k RETRIEVAL-ORCHESTRATION-MECHANICAL（P0；2026-08-30 定稿；第一批 + 第二批实施 + S4 实机复验闭环 2026-08-31）
@@ -390,7 +398,12 @@
   assurance 无 `.gsa` 判定不受影响。入口：
   docs/audits/P0_0M_GSA_SESSION_VOLUME_S1_S2_IMPL_AUDIT_2026-09-07.md）。
   同日 S1 三路复审 + 全部问题处理收口（P2×2 + P3×6，orz-tools 2832 全绿；
-  入口：docs/audits/P0_0M_S1_S2_REVIEW_HANDLING_2026-09-07.md）。
+  入口：docs/audits/P0_0M_S1_S2_REVIEW_HANDLING_2026-09-07.md）。复审遗留
+  两项既有观察同日处理：ACAF 默认翻转下游测试面族闭合（orz-host 249/0/4
+  无跳过 + acaf_e2e 23/23，入口：docs/audits/ACAF_TEST_DEFAULT_FLIP_INFRA_
+  FIX_2026-09-07.md）；OBS 权限双实现摸底 + 收敛方向讨论稿落盘（α/β/γ
+  待用户裁决，入口：docs/PERMISSION_DUAL_IMPL_CONVERGENCE_DESIGN_
+  2026-09-07.md）。
 - [ ] S3 接线复验：补读链/run_tests 窗口端到端（`.gsa` symlink 会话卷
   实机构造）+ GAP-GSA-SYMLINK-STALE-TEST 演进注记。
 - [ ] S4 收口：索引/BACKLOG/TODO 同步 + 门禁 Exit 0。
