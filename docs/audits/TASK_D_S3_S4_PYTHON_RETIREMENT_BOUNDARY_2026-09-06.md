@@ -6,6 +6,20 @@
 > ① S3 门禁改接形态 = **独立 CLI**（orz-bin 薄封装 Rust 法官，非 cargo
 > test 复用）；② 门禁期刊校验 = **v0.1 纳入**（深挖证实 v0.1 六期刊本已
 > 在门禁校验内，本裁决实义 = Rust CLI 承接后双轨 18 期刊校验面不减）。
+>
+> **2026-09-06 复审处理批勘误/状态更新**（[复审处理审计](TASK_D_S3S4_REVIEW_HANDLING_2026-09-06.md)）：
+> ① 本文为 `1e5e086` 时点快照——其后 D-1/D-2/D-3 已由用户裁为**方案 α**
+> 并随 S3 放行实施（父仓库 `20fd762` / orz `5053bc7f`），§4 状态表「待
+> 裁决/待放行」各行以此为准；② 本文全部行号为翻转前快照，S3 翻转后
+> `run_event_journal_validation.py` 3,627 → 3,464 行（两 dict 定义
+> `:49`/`:95` 已不存在，由 `_derive_payload_registry_views()` 派生取代）、
+> `validate_journal_text :3551→:3388`、`validate_journal_file :3621→:3458`、
+> 机械族区间 `:457-3526→:294-3454`、`PRODUCER_SCHEMAS :272→:109`；
+> `check_repository.py` v0.1 循环 `:2364→:2422`、v0.2 循环 `:2404→:2462`、
+> registry 同步段 `:2420-2454→:2490` 区段、v0.1 夹具实例校验
+> `:1948-2010→:2005-2068`；orz 侧 `conformance.rs`/`tool_probe.rs` 引用
+> 未漂移；③ 本文与 batch-1 审计中的「契约 §8 变更流程」应为 **§9**
+> （§8 = Rust 镜像同步纪律），就地更正。
 > **关联**：[S2d 收口审计](TASK_D_S2D_CLOSURE_2026-09-06.md)（本批对其 §2
 > 作一处数字勘误）/ [batch-1 治理审计](P0_GOV_TASK_D_DUAL_IMPL_GOVERNANCE_2026-09-04.md)。
 
@@ -33,7 +47,7 @@
 | 7 | orz `families.rs` / `families_s2c.rs` crosscheck（subprocess 整模块喂 30 族） | **整模块作为 parity 对照面** | 不动（S3 期间对拍继续全绿） | **取决于 §3 D-1 裁决**——这是退役边界最重的一刀 |
 | 8 | orz `conformance.rs:5` / `tool_probe.rs:38` | 文档注释提及 | 不动 | 措辞随退役标注同步 |
 | 9 | `scripts/generate_run_event_fixtures.py` | 仅注释级提及（fixture 与判官语义对齐的约定出处） | 不动 | 注释措辞随退役标注同步 |
-| 10 | 契约文档 `architecture/PYTHON_REFERENCE_SPEC_CONTRACT_v0.1.md`（§3 判官地位 / §7 reference 轨 / §8 变更流程） | 治理表述 | §8 变更流程先行登记（或随 S4 一并） | **S4 必改**：schema 演进第一执法 = registry JSON + Rust 法官，Python reference 同步降为第二动作 |
+| 10 | 契约文档 `architecture/PYTHON_REFERENCE_SPEC_CONTRACT_v0.1.md`（§3 判官地位 / §7 reference 轨 / §9 变更流程） | 治理表述 | §9 变更流程先行登记（或随 S4 一并） | **S4 必改**：schema 演进第一执法 = registry JSON + Rust 法官，Python reference 同步降为第二动作 |
 | 11 | `runtime/run-event-payload-registry-v0.1.json` `source` 字段 | 自证「源 = Python dict」 | S3 步 1 改自指（JSON 升权威） | — |
 | 12 | 索引 `IMPL-PYTHON-REFERENCE` / BACKLOG 00 / 历史审计文档引用 | 召回路由 | 不动 | S4 收口时更新状态表述 |
 
@@ -82,17 +96,20 @@ S2b/S2c/S2d 建立的 parity 体系（spec 表 6990 格 + 对拍 7530 格）的�
 |---|---|
 | S3 接线形态 = 独立 CLI（orz-bin 薄封装 `validate_journal_file(journal_path, repo_root)`） | **用户已裁**（2026-09-06） |
 | 门禁期刊校验含 v0.1（Rust CLI 承接双轨 18 期刊，校验面不减） | **用户已裁**（2026-09-06）；深挖证实 v0.1 六期刊本已在门禁（S2d 收口审计 §2.1-4 勘误） |
-| D-1 parity 对照面归宿（α 冻结 reference 推荐 / β 彻底退役） | **待用户裁决** |
-| D-2 258 测试面归宿 | **待用户裁决**（随 D-1 联动：α→保留 / β→归档） |
-| D-3 `_WORK_TOOLS` 单源 | **待用户裁决**（α→自动消解 / β→须搬迁） |
-| S3 开工放行 | **待用户放行**（D-1~D-3 定案后即可签） |
+| D-1 parity 对照面归宿（α 冻结 reference 推荐 / β 彻底退役） | **用户已裁 = α**（2026-09-06，随 S3/S4 翻转批落地） |
+| D-2 258 测试面归宿 | **用户已裁**（随 α：保留） |
+| D-3 `_WORK_TOOLS` 单源 | **用户已裁**（随 α：导入自动消解，零改动） |
+| S3 开工放行 | **用户已放行并实施**（2026-09-06，父仓库 `20fd762` / orz `5053bc7f`） |
 
 S3 实施序列更新（合并用户裁决①②，取代 S2d 收口审计 §2.4 步 2 的形态
 备选）：步 1 registry 转正不变 → 步 2 = orz-bin 增 `journal-conformance`
 独立 CLI + 门禁 18 期刊循环（`:2364` + `:2404`）改接（双轨一次承接，负测
 = 篡改 fixture 副本验证门禁报错后还原）→ 步 3 Python 门禁调用摘除 +
-`validate_journal_file` 退役标注。S4 = D-1/D-2/D-3 落地 + 契约 §8 改写 +
-导出脚本退役登记 + 索引/BACKLOG 收口。
+`validate_journal_file` 退役标注。S4 = D-1/D-2/D-3 落地 + 契约 §9 改写 +
+导出脚本退役登记 + 索引/BACKLOG 收口。（**2026-09-06 复审处理批注**：本
+序列已按上文勘误注完整执行——步 1–3 与 S4 见
+[翻转实施审计](TASK_D_S3_S4_FLIP_IMPL_AUDIT_2026-09-06.md)；契约「§8
+变更流程」系节号笔误，实为 §9，已就地更正。）
 
 ## 5. 本批变更
 

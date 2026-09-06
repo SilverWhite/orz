@@ -139,7 +139,8 @@ orz 子模块：
   Rust 法官执行（cargo test 或独立 CLI，--repo-root 参数化已备），Python
   `validate_journal_file` 对 Rust 轨退役；registry dict 源翻转 JSON 转正。
 - **S4 收口**：`run_event_journal_validation.py` 归档/退役登记、契约文档
-  （`architecture/PYTHON_REFERENCE_SPEC_CONTRACT_v0.1.md` §8 变更流程）同步、
+  （`architecture/PYTHON_REFERENCE_SPEC_CONTRACT_v0.1.md` §9 变更流程；
+  原文误写 §8，2026-09-06 复审处理批更正——§8 为 Rust 镜像同步纪律）同步、
   BACKLOG/TODO/索引状态收口与全量回归。
 
 ## 7. 状态

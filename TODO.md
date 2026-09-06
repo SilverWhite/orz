@@ -47,8 +47,9 @@
     全量对拍 + 6 类篡改负测；`runtime/run-event-payload-registry-v0.1.json`
     单源映射 + 导出脚本 + 门禁同步钩子；实测并消解 `runtime_stagnation_guard`
     历史 v0.1 回放漂移面（离线链按 raw JSON 重算）。
-  - [ ] S2：31 个 `_verify_v02_*` 机械规则族盘点为「Rust 已强制（附证据）/
-    需 Rust 显式实现」两档并补齐。
+  - [x] S2：31 个 `_verify_v02_*` 机械规则族盘点为「Rust 已强制（附证据）/
+    需 Rust 显式实现」两档并补齐——**2026-09-06 全部子批闭合**
+    （S2a/S2b/S2c/S2d；S2d 批 1 后族数 31→30）。
     - [x] S2a（盘点先行，2026-09-06 排期起点）：31 族两档盘点表 + A 档证据
       引用（不写业务代码）——**2026-09-06 完成**：27 A + 4 B，B 族=
       receipt_event_isomorphism / probe_accuracy / console_order_written /

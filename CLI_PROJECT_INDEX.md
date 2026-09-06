@@ -1,6 +1,12 @@
 # CLI_PROJECT_INDEX
 
-> 索引版本：v2.59；状态：`current`；最近整理：2026-09-06（v2.59：GAP-APPROVAL-PROMPTER
+> 索引版本：v2.60；状态：`current`；最近整理：2026-09-06（v2.60：任务 D
+> S3/S4 翻转实施 + 复审处理批——registry JSON 升唯一权威、run-event 期刊
+> 校验执法权翻转至 Rust 法官（`journal-conformance` CLI），IMPL-PYTHON-
+> REFERENCE 翻转注记，任务 D 全部闭合，见
+> [`S3/S4 翻转实施审计`](docs/audits/TASK_D_S3_S4_FLIP_IMPL_AUDIT_2026-09-06.md)
+> / [`复审处理审计`](docs/audits/TASK_D_S3S4_REVIEW_HANDLING_2026-09-06.md)；
+> v2.59：GAP-APPROVAL-PROMPTER
 > （0n）排期后同日延期——无具体设计文档项非急切/必需，S1 设计定稿前置；
 > v2.58：排期登记
 > 批——GSA-SESSION-VOLUME-BOTTOM-LAYER 用户裁决放行（S1–S4 排期实施，

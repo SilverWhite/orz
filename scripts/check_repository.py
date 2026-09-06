@@ -445,7 +445,8 @@ def _rust_journal_conformance_errors(journal_path: Path) -> list[str]:
             ["cargo", "build", "-p", "orz-assurance", "--bin", "journal-conformance"],
             cwd=ROOT / "orz",
             capture_output=True,
-            text=True,
+            encoding="utf-8",
+            errors="replace",
             timeout=1200,
         )
         if build.returncode != 0:
@@ -460,7 +461,12 @@ def _rust_journal_conformance_errors(journal_path: Path) -> list[str]:
         proc = subprocess.run(
             [exe, str(journal_path), "--repo-root", str(ROOT)],
             capture_output=True,
-            text=True,
+            # Explicit UTF-8 (not the platform ANSI code page): judge error
+            # messages quote journal payload values, which carry non-ASCII
+            # text — same trap the orz crosscheck documented for its stdin
+            # corpus (S2b review P2).
+            encoding="utf-8",
+            errors="replace",
             timeout=300,
         )
     except (OSError, subprocess.TimeoutExpired) as exc:
