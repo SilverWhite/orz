@@ -316,6 +316,23 @@
   [BACKLOG2.md](docs/BACKLOG2.md)；本行仅作主 TODO 指针，勾选以 TODO2
   为准。
 
+### P0-0m GSA-SESSION-VOLUME-BOTTOM-LAYER（P0；2026-09-06 设计定稿，实施待放行）
+
+用户裁决：`.gsa` 为 LIF 科学性组件，保留并下沉为底层部件；权限层不裁撤
+（后续「助理层拦截系统核心路径、仅删除保护」另行立项），放开压到最窄。
+
+- [ ] S1 代码：SessionVolume 资源 + host 装配 canonical 单源注入 + 沙箱
+  三分判定 + 窗口契约下沉（terminal-log / run_tests 只读窗口）+
+  gitignore 绕过 + permission.rs `.gsa` 段退役标注。
+- [ ] S2 测试：11 项测试矩阵 + 全量回归。
+- [ ] S3 接线复验：补读链/run_tests 窗口端到端（`.gsa` symlink 会话卷
+  实机构造）+ GAP-GSA-SYMLINK-STALE-TEST 演进注记。
+- [ ] S4 收口：索引/BACKLOG/TODO 同步 + 门禁 Exit 0。
+
+入口：[设计](docs/GSA_SESSION_VOLUME_BOTTOM_LAYER_DESIGN_2026-09-06.md) /
+[ADR-0010 §14.56](adr/ADR-0010-fusion-runtime-and-agent-architecture.md) /
+[BACKLOG 0m](docs/BACKLOG_AND_PRIORITIES.md)。
+
 ### P0-B FUS-RETRIEVAL-MECH（`implemented`；批次 1-6 全部闭合 2026-08-14，保留供核对）
 
 - [x] 全部闭合：B-1 citations 结构化透传 / 步骤 2 web_fetch 候选计数门禁（cap=8）/ 步骤 3 机械预筛（canonical 去重 + 失败形态剔除 + tier/weight）/ 步骤 4 browser_read 模式扩展 + 计数域复用 / 步骤 5 输出级引用校验器 / 步骤 6 提示词缩短。入口：[检索机械控制设计](docs/RETRIEVAL_MECHANICAL_CONTROLS_DESIGN_2026-08-13.md) / 各步骤实施审计 / BACKLOG 0B。

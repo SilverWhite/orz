@@ -14,7 +14,7 @@
 
 | 优先级 | 含义 | 开放项（入口小节） |
 |---|---|---|
-| P0 | 当前工作集：设计已冻结，裁决后立即实施 | **P0-GOV 全仓架构对齐与门禁修复（00，阻断前置）**；FUS-BENCHMARK-FULL-EXEC 验证②③(reward)④⑤（0b）；0d 后续 3/4/5 S4 复验（0d）；THIN-HARNESS-REDESIGN-V2 余项（0j）；WINDOWS-HIGH-NIST-MAX-FRICTION ⑥/⑦（0l） |
+| P0 | 当前工作集：设计已冻结，裁决后立即实施 | **P0-GOV 全仓架构对齐与门禁修复（00，阻断前置）**；FUS-BENCHMARK-FULL-EXEC 验证②③(reward)④⑤（0b）；0d 后续 3/4/5 S4 复验（0d）；THIN-HARNESS-REDESIGN-V2 余项（0j）；WINDOWS-HIGH-NIST-MAX-FRICTION ⑥/⑦（0l）；GSA-SESSION-VOLUME-BOTTOM-LAYER S1–S4（0m） |
 | P1 | 无需裁决，可与 P0 并行 | FUS-COMPONENT-REGISTER（4）；GAP-WINDOWS-EVIDENCE（5）；IMPL-DEEPSEEK-TRANSPORT / SEC-CREDENTIALS live 证据（6）；ORZ-SESSION-CONTEXT-MONITOR（6d） |
 | P2 | 生产化决策门：需用户裁决 | IMPL-CONTROL-FABRIC Slice 3/4（7）；OPS-PROTOCOL 裁剪与接线裁决（8）；MODEL-RESIDUAL-PRESSURE-FOLLOWUP（11）；COMPRESSION-LINGUISTIC-FORMAL-LAYER（12）；BLACKBOARD-CONVERSATION-SCOPE-FOLD B2–B4（13） |
 | P3 | 收尾 / 清理 | EVIDENCE-LOCAL-BROWSER（9）；GATE-CHAIN（10）；遗留小项（11） |
@@ -441,6 +441,25 @@
   仅作主 BACKLOG 指针。设计稿
   [TOOL_EXECUTION_LAYER_REFORM_DESIGN_2026-09-03.md](TOOL_EXECUTION_LAYER_REFORM_DESIGN_2026-09-03.md)
   为设计权威；S4_PROGRESS §16.17/§16.18 为进度记录。
+
+### 0m. GSA-SESSION-VOLUME-BOTTOM-LAYER（P0；2026-09-06 设计定稿，实施待放行）
+
+用户裁决（2026-09-06）：`.gsa` 为 LIF 科学性组件（可审计状态链落盘面），
+必须保留并下沉为底层部件；权限层保留不裁撤（后续按「助理层运行中拦截
+系统核心路径、仅删除保护」另行立项），安全面放开压到最窄。
+
+- [ ] S1 代码：SessionVolume 类型化资源 + host 装配 canonical 单源注入 +
+  工具级沙箱三分判定 + 窗口契约单源下沉（terminal-log / run_tests 两个
+  只读窗口）+ gitignore 绕过 + permission.rs `.gsa` 段退役标注。
+- [ ] S2 测试：11 项测试矩阵全绿（会话卷 symlink 正/负、卷内 invisible
+  默认、二级 symlink 防逃逸、资源缺席 fail-closed 等）+ 全量回归。
+- [ ] S3 接线复验：终端截断补读链 + run_tests 输出窗口端到端（含 `.gsa`
+  symlink 会话卷实机构造）；GAP-GSA-SYMLINK-STALE-TEST 收口注记演进。
+- [ ] S4 收口：索引/BACKLOG/TODO 状态同步 + 门禁 Exit 0。
+
+设计权威：[`GSA_SESSION_VOLUME_BOTTOM_LAYER_DESIGN_2026-09-06`](GSA_SESSION_VOLUME_BOTTOM_LAYER_DESIGN_2026-09-06.md)
+/ [ADR-0010 §14.56](../adr/ADR-0010-fusion-runtime-and-agent-architecture.md)。
+登记不动计数（设计定稿批，未入账）。
 
 ### 1. FUS-TOOL-PROBE（`implemented`；P0-A 批次 1-7 与 P0-A-2 已闭合）
 

@@ -4506,3 +4506,36 @@ TER M1/M2 全面审查（多子代理并行 + 提交态复核，有条件 PASS�
    验收（依赖 1/5 的 journal 断言）、T2.4 同步接线、M3 T3.1–T3.5、待实机
    复核项（干净工作树计数、ORZ_MAX_WALLCLOCK 穿 sandbox、LIF run-origin
    与 sandbox 时钟偏差、env 快照墙内计时）按 TODO2/BACKLOG2 继续。
+
+### 14.56 v1.56 补写裁决索引（2026-09-06）
+
+本节为 **`.gsa` 会话卷底层部件化（GSA Session Volume）设计定稿登记**：
+2026-09-06 用户裁决方向（`.gsa` 为 LIF 科学性组件——可审计状态链落盘面，
+必须保留并下沉为底层部件；权限层保留不裁撤，安全面放开压到最窄）。
+设计权威：[`GSA_SESSION_VOLUME_BOTTOM_LAYER_DESIGN_2026-09-06`](../docs/GSA_SESSION_VOLUME_BOTTOM_LAYER_DESIGN_2026-09-06.md)。
+实施未开始（BACKLOG 0m），各切步闭合时另行登记。
+
+1. **SessionVolume 类型化资源（走 SkillRoots 先例）**：`.gsa` 登记为
+   底层拥有的系统状态域；`Resources.SessionVolume` 由 orz-host 装配期
+   注入，装配期一次 symlink-aware canonical 解析（会话卷挂载形态由构造
+   支持）；资源缺席时窗口全关、退回纯 workspace 判定（fail-closed）。
+2. **工具级沙箱三分判定**：read_file/grep/list_dir 判定域 = workspace
+   内（Task C 现状）/ SessionVolume 内（窗口契约）/ 其余拒；SkillRoots
+   豁免优先级不变。
+3. **窗口契约单源下沉（取代 orz-host permission.rs 的 `.gsa` 白名单段
+   作为唯一权威）**：`.gsa` 默认 agent-invisible；只读窗口仅
+   `session/terminal/*.log` 与 `run_tests_output.txt`；判定 = canonical
+   落点 ∈ canonical 卷根 且 词法路径 ∈ cwd 且命中白名单形态——`.gsa`
+   为符号链接放行、卷内二级 symlink 逃逸拒、白名单外全拒。不新增写入
+   面，模型对 `.gsa` 不可写。
+4. **gitignore 交互收口**：会话卷路径绕过 GitignoreFilter（非工作区
+   内容），恢复 OUTPUT-DEGENERATION-GUARD「gitignored 也必须可读」完整
+   意图；orz 生产面不受影响，上游 harness 面同批对齐。
+5. **权限层衔接（非裁撤登记）**：permission.rs `.gsa` 特判随本条退役，
+   权限层本身保留并将按「助理层运行中拦截系统核心路径、仅删除保护」
+   方向另行立项演进（2026-09-06 用户定向）；OBS-PERMISSION-DUAL-IMPL
+   部分消解（`.gsa` 面单 owner），双权限实现整体收敛仍随终局治理排期。
+6. **与 GAP-GSA-SYMLINK-STALE-TEST 的关系（精确化，非回退）**：任意
+   symlink 越界可读的旧行为保持否决；拒读回归测试语义继续成立；新增的
+   仅是会话卷内两个白名单窗口。实施批落地时在 GAP 收口注记追加演进
+   记录。
