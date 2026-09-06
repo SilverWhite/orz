@@ -8,13 +8,13 @@
 
 ## 未闭合计数（2026-09-04 口径）
 
-- 未闭合总数：**28 项**（2026-08-31：P2-10 阶段 3 验证闭环 38 → 32；0k S4 实机复验闭环 32 → 30；2026-09-01：P2-11 DC 强制模板轮清理闭合 30 → 29，P3「DC 硬信号 4/6」退役 29 → 28；2026-09-02：P2-12 讨论稿登记不动计数；2026-09-03：P2-13 设计定稿与 B1 S1/S2 完成，未入账、计数不变；2026-09-04：P2-14 设计定稿与裁决收口 + S1/S2 实施收口（主会话转 v0.3、压缩 e2e 全串行绿），未入账、计数不变）。TODO `[ ]` 明细含父/子项，计数以 BACKLOG 为准。
+- 未闭合总数：**28 项**（2026-08-31：P2-10 阶段 3 验证闭环 38 → 32；0k S4 实机复验闭环 32 → 30；2026-09-01：P2-11 DC 强制模板轮清理闭合 30 → 29，P3「DC 硬信号 4/6」退役 29 → 28；2026-09-02：P2-12 讨论稿登记不动计数；2026-09-03：P2-13 设计定稿与 B1 S1/S2 完成，未入账、计数不变；2026-09-04：P2-14 设计定稿与裁决收口 + S1/S2 实施收口（主会话转 v0.3、压缩 e2e 全串行绿），未入账、计数不变；2026-09-06：P0-GOV 00 任务 D 全部闭合（S2a–S2d + S3/S4 翻转），登记不动计数）。TODO `[ ]` 明细含父/子项，计数以 BACKLOG 为准。
 
 ## 优先级总览
 
 | 优先级 | 含义 | 开放项（入口小节） |
 |---|---|---|
-| P0 | 当前工作集：设计已冻结，裁决后立即实施 | **P0-GOV 全仓架构对齐与门禁修复（00，阻断前置）**；FUS-BENCHMARK-FULL-EXEC 验证②③(reward)④⑤（0b）；0d 后续 3/4/5 S4 复验（0d）；THIN-HARNESS-REDESIGN-V2 余项（0j）；WINDOWS-HIGH-NIST-MAX-FRICTION ⑥/⑦（0l）；GSA-SESSION-VOLUME-BOTTOM-LAYER S1–S4（0m，2026-09-06 用户裁决放行） |
+| P0 | 当前工作集：设计已冻结，裁决后立即实施 | FUS-BENCHMARK-FULL-EXEC 验证②③(reward)④⑤（0b）；0d 后续 3/4/5 S4 复验（0d）；THIN-HARNESS-REDESIGN-V2 余项（0j）；WINDOWS-HIGH-NIST-MAX-FRICTION ⑥/⑦（0l）；GSA-SESSION-VOLUME-BOTTOM-LAYER S1–S4（0m，2026-09-06 用户裁决放行）——P0-GOV 00（含任务 D）已于 2026-09-06 全部闭合 |
 | P1 | 无需裁决，可与 P0 并行 | FUS-COMPONENT-REGISTER（4）；GAP-WINDOWS-EVIDENCE（5）；IMPL-DEEPSEEK-TRANSPORT / SEC-CREDENTIALS live 证据（6）；ORZ-SESSION-CONTEXT-MONITOR（6d） |
 | P2 | 生产化决策门：需用户裁决 | IMPL-CONTROL-FABRIC Slice 3/4（7）；OPS-PROTOCOL 裁剪与接线裁决（8）；MODEL-RESIDUAL-PRESSURE-FOLLOWUP（11）；COMPRESSION-LINGUISTIC-FORMAL-LAYER（12）；BLACKBOARD-CONVERSATION-SCOPE-FOLD B2–B4（13） |
 | P3 | 收尾 / 清理 | EVIDENCE-LOCAL-BROWSER（9）；GATE-CHAIN（10）；遗留小项（11） |
@@ -56,7 +56,11 @@
      - **任务 A（解耦寄生）**：新建 `render_fold.rs`，将生产折叠渲染（`render_exec_folded`/`render_edits_folded` 等）与黑板压缩快照计算从 `epoch.rs` 剥离并切断对 epoch 状态的依赖；`epoch.rs` 保留 legacy plan-epoch 归档/`--plan` 支持（现 1970 行）与兼容重导出，不参与会话黑板生产折叠主链。（2026-09-04 闭合：render_fold 净移入 1338 行 / epoch 净减 1363 行；依赖树与 725 单测复核见 [P0-GOV 收口审计](audits/P0_GOV_UNCOMMITTED_REVIEW_HANDLING_2026-09-04.md)）
      - **任务 B（底座瘦身）**：在 `orz/Cargo.toml` 中剔除未被 `orz-bin` 引用的 15 个无头僵尸 Crate，加速全仓构建并净化审计面。（2026-09-04 闭合：workspace members 64 → 49、Cargo.lock −1131 行、`cargo tree -p orz-bin` 不含任一被剔除 crate、源码目录保留未删，见 [P0-GOV 收口审计](audits/P0_GOV_UNCOMMITTED_REVIEW_HANDLING_2026-09-04.md)）
      - **任务 C（安全收敛）**：读工具（read_file/grep/list_dir）统一建立 CWD 工作区 canonical 级越界硬拦截——模型路径 `..` 越级、绝对路径指向 cwd 外、工作区内符号链接/重解析点指向 cwd 外均拒绝（skills 白名单豁免；目标不存在回退词法判定）；将 ACAF fail-closed 默认强校验下沉至 `AgentLoopController`（ACP/TUI 默认 fail-closed、ticket_flow 无 signer 即拒、`ORZ_ACAF_FAIL_CLOSED` 解析单源化）。（2026-09-04 闭合：orz 提交见审计，实现与边界见 [P0-GOV 收口审计](audits/P0_GOV_UNCOMMITTED_REVIEW_HANDLING_2026-09-04.md)）
-     - **任务 D（双实现治理）**：在 Rust `orz-assurance` 补齐关键校验断言，逐步退役 Python `assurance` 双法官冗余。
+     - **任务 D（双实现治理）——2026-09-06 全部闭合**：在 Rust
+       `orz-assurance` 补齐关键校验断言，逐步退役 Python `assurance`
+       双法官冗余。终态 = **Rust 单一执法（`journal/conformance.rs` +
+       `journal-conformance` CLI）+ Python 冻结 reference（对拍对照面 +
+       `_WORK_TOOLS` 单源，方案 α）+ 对拍长期回归**。
        - [x] **batch-1（2026-09-04）**：差异梳理 + Rust `journal/conformance.rs`
          schema 级离线法官（envelope / 按轨 payload / raw-JSON 哈希链 /
          整刊单轨）+ 18 fixture 全量对拍 + 篡改负测；
@@ -141,18 +145,27 @@
              语料×30 族=7530 格 0 差 + orz-loop 729 lib），见
              [批 2 复审处理](audits/TASK_D_S2D_BATCH2_REVIEW_HANDLING_2026-09-06.md)。
              两批完成，S2d 翻转前裁决清单清空。
-       - [ ] **S3**：门禁真实 fixture journal 校验改接 Rust 法官；Python Rust
-         轨 `validate_journal_file` 退役；registry 源翻转 JSON 转正。
-         裁决进展（2026-09-06 用户）：接线形态定案 = **独立 CLI**（orz-bin
-         薄封装）；门禁期刊校验定案 = **v0.1 纳入**（深挖证实 v0.1 六期刊
-         本已在门禁——实义为 Rust CLI 承接双轨 18 期刊校验面不减，S2d
-         收口审计 §2.1-4 数字勘误随之）；退役边界深挖完成——Python 判官
-         模块四层职责（注册表/schema 级法官/30 机械族/reference 轨受理）
-         与 12 处代码消费点全息盘点，三个真裁决点（D-1 parity 对照面归宿
-         α 冻结 reference 推荐 / β 彻底退役、D-2 258 测试面、D-3
-         `_WORK_TOOLS` 评测面单源）待用户裁决后即可签 S3 放行；入口：
-         [S3/S4 退役边界深挖](audits/TASK_D_S3_S4_PYTHON_RETIREMENT_BOUNDARY_2026-09-06.md)。
-       - [ ] **S4**：Python 双法官退役/归档登记、契约变更流程同步、索引收口。
+       - [x] **S3**：门禁真实 fixture journal 校验改接 Rust 法官；Python Rust
+         轨 `validate_journal_file` 退役；registry 源翻转 JSON 转正——
+         **2026-09-06 实施**（裁决：独立 CLI + v0.1 纳入 + D-1=α 方案）。
+         registry JSON 升唯一权威（`source` 自指）+ Python dict 改导入时
+         派生视图（翻转前基线逐条目等值核验 IDENTICAL）；orz-assurance 新增
+         `journal-conformance` 独立 CLI（薄封装库法官，exit 0/1/2）+ 4 集成
+         测试（双轨正测/篡改负测/usage fail-closed/缺席文件）；门禁双轨
+         18 期刊循环改接 `_rust_journal_conformance_errors`（env 覆盖 →
+         target/debug → cargo 构建兜底），Python `validate_journal_file`
+         门禁调用摘除。入口：
+         [S3/S4 翻转实施审计](audits/TASK_D_S3_S4_FLIP_IMPL_AUDIT_2026-09-06.md)。
+       - [x] **S4**：Python 双法官退役/归档登记、契约变更流程同步、索引
+         收口——**2026-09-06 收口（方案 α 落地）**：`run_event_journal_validation.py`
+         头部 RETIREMENT STATUS（frozen reference、执法权
+         翻转、仅保留对拍对照面 + `_WORK_TOOLS` 单源两合法角色）；
+         258 判官测试保留；导出脚本退役删除（batch-1 审计死链勘误）；
+         契约 §9 变更流程改写（registry JSON 第一动作 / Rust 法官 0 差硬
+         约束）+ §10 参考行更新；验证：Python 三套件 281 passed、
+         orz-assurance 全量绿（lib 204 + CLI 4）、workspace check 零警告、
+         篡改副本经门禁助手 9 错/原刊 0 错、门禁 Exit 0。入口：
+         [S3/S4 翻转实施审计](audits/TASK_D_S3_S4_FLIP_IMPL_AUDIT_2026-09-06.md)。
 
 ### 00a. GLM 外部只读审查处置（2026-09-06 用户裁决；P0-GOV 附带批）
 

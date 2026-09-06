@@ -1,7 +1,7 @@
 {
   "kind": "run-event-payload-schema-registry",
   "paths": "repo-root-relative",
-  "source": "assurance/run_event_journal_validation.py PAYLOAD_SCHEMA_BY_EVENT_TYPE / PAYLOAD_SCHEMA_BY_EVENT_TYPE_V02",
+  "source": "single authority (Task D S3 flip, 2026-09-06): edit this file to change the event_type→payload-schema mapping; assurance/run_event_journal_validation.py derives its PAYLOAD_SCHEMA_BY_EVENT_TYPE(_V02) views from it at import time; the Rust judge (orz-assurance journal/conformance.rs) reads it directly",
   "tracks": {
     "v01": {
       "acp_initialize": {

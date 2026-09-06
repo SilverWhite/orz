@@ -15,7 +15,7 @@
 ## 未闭合扫描快照（2026-08-31 清理轮）
 
 - 未闭合总数：**28 项**（BACKLOG 计数口径，2026-08-31：阶段 3 验证闭环 38 → 32；0k S4 实机复验闭环 32 → 30；P2-11 设计轮登记不动计数；2026-09-01：P2-11 DC 强制模板轮清理闭合 30 → 29，P3「DC 硬信号 4/6」退役 29 → 28；2026-09-02：P2-12 讨论稿登记不动计数，28 不变）。TODO `[ ]` 明细含父/子项，计数以 BACKLOG 为准。
-- P0：FUS-BENCHMARK-FULL-EXEC 验证②③④⑤ + 闭合（见 P0-F）；0d 后续 3/4/5 的 S4 复验（各 1，S3 已随合并批次核证闭合）；0j（W1-R1 S4 复验、W3-R3 余项×3、W4-R4 S5-2 总项 + 验证期发现）；0l（WINDOWS-HIGH-NIST-MAX-FRICTION 设计定稿、实施待放行，见 P0-0l）；0m（GSA-SESSION-VOLUME 2026-09-06 用户裁决放行，S1–S4 排期实施，见 P0-0m）。2026-09-06 补记：任务 D S2a–S2d 已闭合（S3–S4 开放，见 P0-GOV）；GAP-APPROVAL-PROMPTER（0n）排期后同日延期（无具体设计文档项非急切/必需，S1 设计定稿前置，见 P0-0n）。
+- P0：FUS-BENCHMARK-FULL-EXEC 验证②③④⑤ + 闭合（见 P0-F）；0d 后续 3/4/5 的 S4 复验（各 1，S3 已随合并批次核证闭合）；0j（W1-R1 S4 复验、W3-R3 余项×3、W4-R4 S5-2 总项 + 验证期发现）；0l（WINDOWS-HIGH-NIST-MAX-FRICTION 设计定稿、实施待放行，见 P0-0l）；0m（GSA-SESSION-VOLUME 2026-09-06 用户裁决放行，S1–S4 排期实施，见 P0-0m）。2026-09-06 补记：任务 D 已全部闭合（S2a–S2d + S3/S4 翻转，P0-GOV 00 收口）；GAP-APPROVAL-PROMPTER（0n）排期后同日延期（无具体设计文档项非急切/必需，S1 设计定稿前置，见 P0-0n）。
 - P1：FUS-COMPONENT-REGISTER 组件审计；GAP-WINDOWS-EVIDENCE 三项；IMPL-DEEPSEEK-TRANSPORT DeepSeek live 晋级证据；ORZ-SESSION-CONTEXT-MONITOR 四项。
 - P2：IMPL-CONTROL-FABRIC（Slice 3 / Slice 4 / 可选）；OPS-PROTOCOL（裁剪设计 + 生产接线裁决）；MODEL-RESIDUAL-PRESSURE-FOLLOWUP 四项（P2-11）；COMPRESSION-LINGUISTIC-FORMAL-LAYER（P2-12，2026-09-02 登记：域标注 + 失败目标聚合 + 建构暂缓，设计/实施待放行）。
 - P3：EVIDENCE-LOCAL-BROWSER、GATE-CHAIN、observed-scope 枚举、V11-IMPL-003、V11-IMPL-007、orz-host flaky（DC 硬信号已随 P2-11 退役）。
@@ -41,7 +41,7 @@
 - [x] 任务 A（解耦寄生代码）：创建 `render_fold.rs`，将生产折叠渲染与黑板压缩快照从 `epoch.rs` 剥离，切断对 epoch 状态的依赖；`epoch.rs` 保留 legacy plan-epoch 归档/`--plan` 支持（现 1970 行）与兼容重导出，不参与会话黑板生产折叠主链。（2026-09-04 闭合：render_fold 净移入 1338 行，epoch 净减 1363 行；723→725 个单元测试 + workspace check + fmt 全绿）
 - [x] 任务 B（清理僵尸 Crate）：在 `orz/Cargo.toml` 中剔除未被 `orz-bin` 引用的 15 个无头 Crate，加速构建并净化审计面。（2026-09-04 闭合：剔除 15 个无头 Crate，工作区成员 64 → 49，全工作区 cargo check 零警告零错误，门禁 Exit Code 0 全绿）
 - [x] 任务 C（路径沙箱与 ACAF 下沉）：读工具（`read_file`/`grep`/`list_dir`）统一建立 CWD 工作区 canonical 级越界硬拦截——`..` 越级、绝对路径指向 cwd 外、以及工作区内符号链接/重解析点指向 cwd 外均拒绝（skills 文档豁免；目标不存在时回退词法判定）；ACAF fail-closed 默认强校验下沉至 `AgentLoopController`（ACP/TUI 默认 fail-closed、`ticket_flow` 无 signer 即拒、`ORZ_ACAF_FAIL_CLOSED` 解析单源化并可显式逃生）。（2026-09-04 闭合：orz 提交 + 12 项沙箱单测 + orz-loop 725 + orz-bin env 单测 + 全工作区 check/fmt 绿，见 [P0-GOV 收口审计](docs/audits/P0_GOV_UNCOMMITTED_REVIEW_HANDLING_2026-09-04.md)）
-- [ ] 任务 D（双实现终局治理）：在 Rust `orz-assurance` 补齐规则，逐步退役 Python `assurance` 双重法官。（batch-1 已闭合 2026-09-04，S2–S4 保留开放，入口：[Task D 批次 1 审计](docs/audits/P0_GOV_TASK_D_DUAL_IMPL_GOVERNANCE_2026-09-04.md)）
+- [x] 任务 D（双实现终局治理）：在 Rust `orz-assurance` 补齐规则，逐步退役 Python `assurance` 双重法官。**2026-09-06 全部闭合**——终态 = Rust 单一执法（`journal/conformance.rs` + `journal-conformance` CLI）+ Python 冻结 reference（对拍对照面 + `_WORK_TOOLS` 单源，方案 α）+ 对拍长期回归。（batch-1 2026-09-04，S2a–S2d 2026-09-06，S3/S4 翻转 2026-09-06；入口：[Task D 批次 1 审计](docs/audits/P0_GOV_TASK_D_DUAL_IMPL_GOVERNANCE_2026-09-04.md) / [S3/S4 翻转实施审计](docs/audits/TASK_D_S3_S4_FLIP_IMPL_AUDIT_2026-09-06.md)）
   - [x] batch-1（2026-09-04）：Rust `journal/conformance.rs` schema 级离线法官
     （envelope + 按轨 payload + raw-JSON 哈希链 + 整刊单轨）+ 18 fixture
     全量对拍 + 6 类篡改负测；`runtime/run-event-payload-registry-v0.1.json`
@@ -100,14 +100,18 @@
         登记×4；orz `1595303b`：spec 表 233×30=6990 格 + 对拍 251×30=
         7530 格 0 差 + 729 lib；入口：docs/audits/TASK_D_S2D_BATCH2_REVIEW_HANDLING_2026-09-06.md）。
         两批完成，S2d 翻转前裁决清单清空。
-  - [ ] S3：`check_repository.py` 真实 fixture journal 校验改接 Rust 法官，
-    Python Rust 轨 `validate_journal_file` 退役，registry 源翻转 JSON 转正。
-    2026-09-06 用户裁决：接线形态=独立 CLI、门禁期刊校验含 v0.1（双轨
-    18 期刊承接不减）；退役边界深挖完成（模块四层职责 + 12 消费点盘点，
-    D-1 parity 对照面归宿 / D-2 测试面 / D-3 `_WORK_TOOLS` 单源三裁决点
-    待裁），S3 放行待签——入口：
-    docs/audits/TASK_D_S3_S4_PYTHON_RETIREMENT_BOUNDARY_2026-09-06.md。
-  - [ ] S4：Python 双法官退役/归档登记、契约变更流程同步、索引/BACKLOG 收口。
+  - [x] S3：`check_repository.py` 真实 fixture journal 校验改接 Rust 法官，
+    Python Rust 轨 `validate_journal_file` 退役，registry 源翻转 JSON 转正
+    ——**2026-09-06 实施**（裁决：独立 CLI + v0.1 纳入 + D-1=α）：registry
+    JSON 升唯一权威 + dict 改导入时派生视图（基线等值 IDENTICAL）+
+    orz-assurance `journal-conformance` CLI（+4 集成测试）+ 门禁双轨
+    18 期刊循环改接 + Python 门禁调用摘除。入口：
+    docs/audits/TASK_D_S3_S4_FLIP_IMPL_AUDIT_2026-09-06.md。
+  - [x] S4：Python 双法官退役/归档登记、契约变更流程同步、索引/BACKLOG
+    收口——**2026-09-06 收口（方案 α）**：模块头部 RETIREMENT STATUS +
+    258 测试保留 + 导出脚本退役删除 + 契约 §9 改写；Python 三套件
+    281 passed、篡改负测 9 错/原刊 0 错、门禁 Exit 0。入口：
+    docs/audits/TASK_D_S3_S4_FLIP_IMPL_AUDIT_2026-09-06.md。
 
 ### P0-GOV GLM 外部只读审查处置（2026-09-06 用户裁决）
 

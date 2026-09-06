@@ -126,14 +126,22 @@ Python 项目（`D:\CLI`）在融合架构中不再是生产 runtime——生产
 - 新增/改名事件类型：envelope enum + §4 注册表 + fixtures + 测试断言四者同步（`test_all_34_event_types_covered` 与 `test_payload_schema_file_convention` 自动捕获漂移）。
 - Rust 侧 payload 构造点的形状变更必须先过 §9 流程，禁止先行改形状再补契约。
 
-## 9. 变更流程
+## 9. 变更流程（Task D S3 翻转后口径，2026-09-06）
 
-1. 修改/新增 `runtime/` 或 `assurance/` 的 schema 文件（Python 侧先行）。
-2. 更新 `scripts/generate_run_event_fixtures.py` 内嵌形状 → 重生成 fixtures。
-3. 同步 `assurance/run_event_journal_validation.py` 的 `PAYLOAD_SCHEMA_BY_EVENT_TYPE` 与 `PRODUCER_SCHEMAS` 注册表（与 §4/§5 同步；测试与 check_repository 共同消费，无第三处映射）。
-4. 跑 conformance 测试 + check_repository.py（两者任一失败即阻断）。
-5. 更新本文档 §4 注册表 / §5 解析表 / §6 豁免 / §7 缺口。
-6. Rust 侧核对构造点（event.rs 镜像 + controller.rs/main.rs/session.rs 形状），需要时同步修改。
+> 2026-09-06 任务 D S3 权威翻转（用户裁决 D-1=方案 α）：registry JSON
+> `runtime/run-event-payload-registry-v0.1.json` 是 event_type→payload
+> schema 映射的唯一权威；Rust 法官
+> （`orz-assurance journal/conformance.rs` + `journal-conformance` CLI）
+> 是期刊校验的唯一执法者；`assurance/run_event_journal_validation.py`
+> 转**冻结 reference**（dict 视图由 registry 派生、不再执法，仅作为
+> Rust↔Python 对拍对照面与 `_WORK_TOOLS` 单源保留）。导出脚本已退役。
+
+1. 修改/新增 registry JSON 的映射条目（唯一权威；Python 侧视图随导入自动派生，无第二步登记）。
+2. 修改/新增 `runtime/` 或 `assurance/` 的 schema 文件本体；更新 `scripts/generate_run_event_fixtures.py` 内嵌形状 → 重生成 fixtures。
+3. Rust 法官面同步：event.rs 镜像 + payload 构造点（controller.rs/main.rs/session.rs 形状）——spec 表（`families.rs` expected_violations）与 Rust↔Python 对拍（`s2b_family_verdicts_match_python`）必须保持 0 差。
+4. 冻结 Python reference 同步（`run_event_journal_validation.py` 机械族与对拍函数一一镜像；单侧改动会被对拍拒绝——这是唯一允许触碰该模块机械族的场景）。
+5. 跑 conformance 测试（orz-assurance lib + `journal-conformance` CLI 集成测试）+ pytest `runtime/tests` + `check_repository.py`（三者任一失败即阻断）。
+6. 更新本文档 §4 注册表 / §5 解析表 / §6 豁免 / §7 缺口。
 
 ## 10. 参考
 
@@ -142,5 +150,5 @@ Python 项目（`D:\CLI`）在融合架构中不再是生产 runtime——生产
 - `runtime/run-event-v0.1.schema.json`（envelope 事实源）+ `runtime/*-event-payload-v0.1.schema.json`（24 个 2026-08-06 新建 + 5 个既有 + **3 个 slice #17 Rust 轨双轨文件**）
 - `assurance/*-event-payload-v0.1.schema.json`（4 个既有）+ `assurance/canonical-cli-*-v0.1.schema.json`（7 个 2026-08-06 补齐）+ `assurance/orientation-stagnation-{preflight,run-started,terminal}-v0.1.schema.json`（3 个 slice #17 补齐）
 - `runtime/fixtures/run-event-v0.1/`（fixtures + README + **journals/ 6 个真实捕获**）、`assurance/fixtures/canonical_cli/`
-- `runtime/tests/test_run_event_conformance.py`、`runtime/tests/test_run_event_journal_validation.py`、`assurance/run_event_journal_validation.py`（#7 交叉验证器）、`scripts/generate_run_event_fixtures.py`、`scripts/check_repository.py`
+- `runtime/tests/test_run_event_conformance.py`、`runtime/tests/test_run_event_journal_validation.py`、`assurance/run_event_journal_validation.py`（#7 交叉验证器；**2026-09-06 起为冻结 reference——执法权在 Rust 法官**）、`scripts/generate_run_event_fixtures.py`、`scripts/check_repository.py`（期刊校验经 `journal-conformance` CLI 调 Rust 法官）
 - 相关记忆：`fusion-phase-tracking.md`（Phase 3 slice #14）

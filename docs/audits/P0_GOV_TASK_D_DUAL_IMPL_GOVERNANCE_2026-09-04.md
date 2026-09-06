@@ -52,8 +52,12 @@ Python 验证器（`assurance/run_event_journal_validation.py`，3,700 行）
 
 ### 3.1 单源映射：`runtime/run-event-payload-registry-v0.1.json`
 
-- 导出脚本 [`scripts/export_run_event_payload_registry.py`](../../scripts/export_run_event_payload_registry.py)
+- 导出脚本 `scripts/export_run_event_payload_registry.py`
   从 Python 注册表 dict 生成 JSON（v01=34 / v02=27，repo-root 相对路径）。
+  *（2026-09-06 勘误注：该脚本已随任务 D S3 registry 翻转退役——JSON 升
+  唯一权威、Python dict 改为派生视图，见
+  [S3/S4 翻转实施审计](TASK_D_S3_S4_FLIP_IMPL_AUDIT_2026-09-06.md)；
+  本节保留作翻转前现状记录。）*
 - `check_repository.py` 新增同构比对：JSON `tracks.v01/v02` 与
   `PAYLOAD_SCHEMA_BY_EVENT_TYPE(_V02)` 不一致即门禁报错（rerun 提示），
   并把 registry + 导出脚本列入 required 文件。

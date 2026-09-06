@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import io
 import json
+import os
 from pathlib import Path, PurePosixPath
 import re
 import subprocess
@@ -421,6 +422,62 @@ def _check_orz_source_manifest() -> tuple[list[str], int]:
     if status.returncode == 0 and status.stdout.strip():
         errors.append("orz submodule working tree is dirty")
     return errors, len(expected)
+
+
+def _rust_journal_conformance_errors(journal_path: Path) -> list[str]:
+    """Task D S3 (2026-09-06, user adjudication: standalone CLI): run-event
+    fixture journals are validated by the Rust offline judge via the
+    standalone `journal-conformance` binary (orz submodule,
+    orz-assurance/src/bin/journal-conformance.rs). The Python judge
+    (`run_event_journal_validation.validate_journal_file`) is retired from
+    enforcement — frozen reference kept only as the crosscheck parity
+    counterpart."""
+    exe = os.environ.get("ORZ_JOURNAL_CONFORMANCE_BIN")
+    if not exe:
+        debug_dir = ROOT / "orz" / "target" / "debug"
+        for candidate in ("journal-conformance.exe", "journal-conformance"):
+            path = debug_dir / candidate
+            if path.is_file():
+                exe = str(path)
+                break
+    if not exe:
+        build = subprocess.run(
+            ["cargo", "build", "-p", "orz-assurance", "--bin", "journal-conformance"],
+            cwd=ROOT / "orz",
+            capture_output=True,
+            text=True,
+            timeout=1200,
+        )
+        if build.returncode != 0:
+            return [
+                "journal-conformance CLI unavailable and cargo build failed: "
+                + build.stderr.strip()[-2000:]
+            ]
+        exe = str(ROOT / "orz" / "target" / "debug" / "journal-conformance.exe")
+        if not Path(exe).is_file():
+            exe = str(ROOT / "orz" / "target" / "debug" / "journal-conformance")
+    try:
+        proc = subprocess.run(
+            [exe, str(journal_path), "--repo-root", str(ROOT)],
+            capture_output=True,
+            text=True,
+            timeout=300,
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        return [f"journal-conformance CLI failed on {journal_path.name}: {exc}"]
+    if proc.returncode == 0:
+        return []
+    lines = [
+        line.strip()
+        for line in (proc.stderr + "\n" + proc.stdout).splitlines()
+        if line.strip()
+    ]
+    if proc.returncode == 1:
+        return [f"journal-conformance: {line}" for line in lines]
+    return [
+        f"journal-conformance CLI failed (exit {proc.returncode}) on "
+        f"{journal_path.name}: {' | '.join(lines[-5:])}"
+    ]
 
 
 def _validate_instance(instance: Any, schema_path: Path, label: str) -> list[str]:
@@ -1948,13 +2005,14 @@ def check_repository() -> dict[str, Any]:
     run_event_fixture_root = ROOT / "runtime/fixtures/run-event-v0.1"
     run_event_payload_root = run_event_fixture_root / "payloads"
     run_event_envelope_root = run_event_fixture_root / "envelope"
-    # Phase 3 #7: single registry source — the cross-validator's
-    # PAYLOAD_SCHEMA_BY_EVENT_TYPE (the three dual-track slugs point at the
-    # runtime/ Rust-track files; assurance/ twins stay the orientation-track
-    # shapes). No third copy of the mapping.
+    # Phase 3 #7: single registry source — the registry JSON
+    # `runtime/run-event-payload-registry-v0.1.json` (Task D S3 flip,
+    # 2026-09-06); the module's dicts are import-time derived views. The
+    # three dual-track slugs point at the runtime/ Rust-track files;
+    # assurance/ twins stay the orientation-track shapes. No third copy of
+    # the mapping.
     from assurance.run_event_journal_validation import (
         PAYLOAD_SCHEMA_BY_EVENT_TYPE,
-        validate_journal_file,
     )
 
     run_event_payload_schema_by_slug = {
@@ -2361,7 +2419,7 @@ def check_repository() -> dict[str, Any]:
             f"missing={sorted(run_event_journal_expected - run_event_journal_names)}"
         )
     for journal_path in sorted(run_event_journal_root.glob("*.jsonl")):
-        for message in validate_journal_file(journal_path):
+        for message in _rust_journal_conformance_errors(journal_path):
             errors.append(
                 f"run-event journal invalid ({journal_path.relative_to(ROOT)}): {message}"
             )
@@ -2401,7 +2459,7 @@ def check_repository() -> dict[str, Any]:
             f"missing={sorted(run_event_journal_v02_expected - run_event_journal_v02_names)}"
         )
     for journal_path in sorted(run_event_journal_v02_root.glob("*.jsonl")):
-        for message in validate_journal_file(journal_path):
+        for message in _rust_journal_conformance_errors(journal_path):
             errors.append(
                 f"run-event-v0.2 journal invalid ({journal_path.relative_to(ROOT)}): {message}"
             )
@@ -2417,10 +2475,12 @@ def check_repository() -> dict[str, Any]:
                 )
     counts["run_event_v02_journal_fixtures"] = len(run_event_journal_v02_names)
 
-    # Task D (2026-09-04, batch-1): the machine-readable payload-schema
-    # registry must stay in sync with the Python registry dicts — a registry
-    # change without `python scripts/export_run_event_payload_registry.py`
-    # is a silent gap for the Rust-side conformance judge.
+    # Task D (2026-09-04, batch-1; authority flipped 2026-09-06 S3): the
+    # registry JSON is the single authority and the module dicts are
+    # import-time derived views — this check now guards the derivation
+    # itself (a hand-edit reintroducing a hardcoded dict, or a derivation
+    # regression, shows up as drift). The former export script
+    # (`scripts/export_run_event_payload_registry.py`) is retired.
     run_event_payload_registry_path = (
         ROOT / "runtime/run-event-payload-registry-v0.1.json"
     )
@@ -2447,9 +2507,10 @@ def check_repository() -> dict[str, Any]:
         }
         if live != reg:
             errors.append(
-                f"run-event payload registry {track_key} drifts from "
-                "assurance.run_event_journal_validation — rerun "
-                "`python scripts/export_run_event_payload_registry.py`"
+                f"run-event payload registry {track_key} drifts from the "
+                "derived dict views in assurance.run_event_journal_validation "
+                "(registry JSON is the single authority since the Task D S3 "
+                "flip, 2026-09-06) — fix the derivation or the registry"
             )
     counts["run_event_payload_registry"] = 1
 
@@ -2459,7 +2520,6 @@ def check_repository() -> dict[str, Any]:
         ROOT / "runtime/tests/test_run_event_conformance.py",
         ROOT / "assurance/run_event_journal_validation.py",
         ROOT / "runtime/run-event-payload-registry-v0.1.json",
-        ROOT / "scripts/export_run_event_payload_registry.py",
         run_event_fixture_root / "README.md",
     ):
         if not required_path.is_file():

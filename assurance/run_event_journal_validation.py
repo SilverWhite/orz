@@ -1,6 +1,19 @@
 """Run-event journal cross-validation — the Phase 3 #7 conformance suite.
 
-The final validator of the Python reference-spec contract
+**RETIREMENT STATUS (Task D S3/S4, 2026-09-06, 用户裁决 D-1=方案 α)**: this
+module is a FROZEN REFERENCE — it no longer enforces anything. The schema
+judge authority for run-event journals flipped to the Rust offline judge
+(`orz/crates/orz-assurance/src/journal/conformance.rs::validate_journal_file`,
+invoked by the repository gate through the standalone `journal-conformance`
+CLI in orz-assurance). The module is kept importable for exactly two jobs:
+(1) the Python side of the Rust↔Python mechanical crosscheck (the parity
+counterpart — see orz-assurance `journal/families.rs`), and (2) the
+`_WORK_TOOLS` single source consumed by `assurance/probe_accuracy_audit.py`.
+Do not add new enforcement consumers; do not extend the mechanical families
+here without mirroring them in the Rust judge (the crosscheck will catch a
+one-sided change).
+
+The reference validator of the Python reference-spec contract
 (`architecture/PYTHON_REFERENCE_SPEC_CONTRACT_v0.1.md`): validates REAL run
 journals (e.g. produced by the Rust implementation) line-by-line against the
 run-event envelope schema, per-event payload schemas selected by the
@@ -18,10 +31,13 @@ Parity scope (matches the Rust verifier): `event_id` format, timestamp
 parseability and `schema_version` are NOT checked beyond the envelope schema
 itself plus the chain rules.
 
-Single registry source: `PAYLOAD_SCHEMA_BY_EVENT_TYPE` (34 events, the 3
-dual-track slugs pointing at the `runtime/` Rust-track files) is consumed by
-this module, `runtime/tests/test_run_event_conformance.py` and
-`scripts/check_repository.py`.
+Single registry authority (Task D S3 flip, 2026-09-06): the mapping lives in
+`runtime/run-event-payload-registry-v0.1.json` (v01=34 / v02=27); the
+`PAYLOAD_SCHEMA_BY_EVENT_TYPE(_V02)` dicts below are import-time derived
+views consumed by this module, `runtime/tests/test_run_event_conformance.py`
+and `scripts/check_repository.py`. The former export script
+(`scripts/export_run_event_payload_registry.py`) is retired — the JSON is no
+longer a projection.
 """
 
 from __future__ import annotations
@@ -46,223 +62,44 @@ RUN_EVENT_SCHEMA_V02 = RUNTIME / "run-event-v0.2.schema.json"
 # dual-track slugs resolve to the runtime/ Rust-track files (slice #17
 # adjudication — contract §6); `tool_belief_stagnation` stays assurance-only
 # (Rust never constructs it).
-PAYLOAD_SCHEMA_BY_EVENT_TYPE: dict[str, tuple[str, Path]] = {
-    "run_preflight": ("run-preflight", RUNTIME / "run-preflight-event-payload-v0.1.schema.json"),
-    "run_started": ("run-started", RUNTIME / "run-started-event-payload-v0.1.schema.json"),
-    "prompt_submitted": ("prompt-submitted", RUNTIME / "prompt-submitted-event-payload-v0.1.schema.json"),
-    "model_request": ("model-request", RUNTIME / "model-request-event-payload-v0.1.schema.json"),
-    "model_response_received": ("model-response-received", RUNTIME / "model-response-received-event-payload-v0.1.schema.json"),
-    "model_output": ("model-output", RUNTIME / "model-output-event-payload-v0.1.schema.json"),
-    "acp_initialize": ("acp-initialize", RUNTIME / "acp-initialize-event-payload-v0.1.schema.json"),
-    "acp_session_created": ("acp-session-created", RUNTIME / "acp-session-created-event-payload-v0.1.schema.json"),
-    "tool_proposal": ("tool-proposal", RUNTIME / "tool-proposal-event-payload-v0.1.schema.json"),
-    "permission_requested": ("permission-requested", RUNTIME / "permission-requested-event-payload-v0.1.schema.json"),
-    "permission_decision": ("permission-decision", RUNTIME / "permission-decision-event-payload-v0.1.schema.json"),
-    "tool_started": ("tool-started", RUNTIME / "tool-started-event-payload-v0.1.schema.json"),
-    "tool_completed": ("tool-completed", RUNTIME / "tool-completed-event-payload-v0.1.schema.json"),
-    # dual-track: Rust track (runtime/) — the assurance/ twins remain the
-    # orientation-track shapes (contract §6, slice #17).
-    "orientation_checkpoint": ("orientation-checkpoint", RUNTIME / "orientation-checkpoint-event-payload-v0.1.schema.json"),
-    "runtime_stagnation_guard": ("runtime-stagnation-guard", RUNTIME / "runtime-stagnation-guard-event-payload-v0.1.schema.json"),
-    "tool_availability_check": ("tool-availability-check", RUNTIME / "tool-availability-check-event-payload-v0.1.schema.json"),
-    "tool_belief_stagnation": ("tool-belief-stagnation", ASSURANCE / "tool-belief-stagnation-event-payload-v0.1.schema.json"),
-    "instruction_provenance_gate": ("instruction-provenance-gate", RUNTIME / "instruction-provenance-gate-event-payload-v0.1.schema.json"),
-    "gate_decision": ("gate-decision", RUNTIME / "gate-decision-event-payload-v0.1.schema.json"),
-    "neutral_inquiry": ("neutral-inquiry", RUNTIME / "neutral-inquiry-event-payload-v0.1.schema.json"),
-    "counterexample_gate": ("counterexample-gate", RUNTIME / "counterexample-gate-event-payload-v0.1.schema.json"),
-    "retrieval_completion_check": ("retrieval-completion-check", RUNTIME / "retrieval-completion-check-event-payload-v0.1.schema.json"),
-    # A6 (2026-08-08): explicit context compaction event — controller-written.
-    "context_compressed": ("context-compressed", RUNTIME / "context-compressed-event-payload-v0.1.schema.json"),
-    "snapshot_created": ("snapshot-created", RUNTIME / "snapshot-created-event-payload-v0.1.schema.json"),
-    "snapshot_restored": ("snapshot-restored", RUNTIME / "snapshot-restored-event-payload-v0.1.schema.json"),
-    "artifact_registered": ("artifact-registered", RUNTIME / "artifact-registered-event-payload-v0.1.schema.json"),
-    "plan_proposed": ("plan-proposed", RUNTIME / "plan-proposed-event-payload-v0.1.schema.json"),
-    "plan_approved": ("plan-approved", RUNTIME / "plan-approved-event-payload-v0.1.schema.json"),
-    "plan_rejected": ("plan-rejected", RUNTIME / "plan-rejected-event-payload-v0.1.schema.json"),
-    "action_approved": ("action-approved", RUNTIME / "action-approved-event-payload-v0.1.schema.json"),
-    "run_finished": ("run-finished", RUNTIME / "run-finished-event-payload-v0.1.schema.json"),
-    "run_failed": ("run-failed", RUNTIME / "run-failed-event-payload-v0.1.schema.json"),
-    "run_cancelled": ("run-cancelled", RUNTIME / "run-cancelled-event-payload-v0.1.schema.json"),
-    "run_invalidated": ("run-invalidated", RUNTIME / "run-invalidated-event-payload-v0.1.schema.json"),
-}
+# Task D S3 registry flip (2026-09-06, 用户裁决): the machine-readable
+# registry `runtime/run-event-payload-registry-v0.1.json` is the SINGLE
+# AUTHORITY for the event_type→payload-schema mapping. The dicts below are
+# import-time derived views kept for this frozen reference module's remaining
+# consumers (Rust↔Python crosscheck parity, runtime conformance tests,
+# check_repository fixture mapping). Editing the registry JSON is the only
+# way to change the mapping — re-hardcoding a dict here is a drift bug and
+# the check_repository registry-sync guard will reject it.
+def _derive_payload_registry_views() -> tuple[dict[str, tuple[str, Path]], dict[str, tuple[str, Path]]]:
+    registry_path = RUNTIME / "run-event-payload-registry-v0.1.json"
+    try:
+        registry = json.loads(registry_path.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as exc:
+        raise RuntimeError(
+            f"run-event payload registry unreadable at {registry_path}: {exc}"
+        ) from exc
+    tracks = registry.get("tracks")
+    if not isinstance(tracks, dict) or set(tracks) != {"v01", "v02"}:
+        raise RuntimeError(
+            f"run-event payload registry must carry exactly v01+v02 tracks: {registry_path}"
+        )
+    views: list[dict[str, tuple[str, Path]]] = []
+    for track_key in ("v01", "v02"):
+        view: dict[str, tuple[str, Path]] = {}
+        for event_type, item in tracks[track_key].items():
+            slug = item.get("slug") if isinstance(item, dict) else None
+            schema_rel = item.get("schema") if isinstance(item, dict) else None
+            if not slug or not schema_rel:
+                raise RuntimeError(
+                    f"run-event payload registry entry malformed for "
+                    f"{track_key}/{event_type}: {item!r}"
+                )
+            view[event_type] = (slug, ROOT / schema_rel)
+        views.append(view)
+    return views[0], views[1]
 
-# v0.2 track (Phase B, ADR-0010 §11.2/§5.2): the five events with their own
-# v0.2 payload schema. Any other event on the v0.2 track resolves to its v0.1
-# payload schema file (payload shapes unchanged — adjudicated decision, see
-# runtime/fixtures/run-event-v0.2/README.md).
-# GAP-RETRIEVAL-TOOLS (2026-08-10): +retrieval_mode_transition,
-# +retrieval_result_committed, +retrieval_activation_restored (ADR §3.7.1/§3.3.3).
-PAYLOAD_SCHEMA_BY_EVENT_TYPE_V02: dict[str, tuple[str, Path]] = {
-    # THIN-HARNESS-REDESIGN-V2 §9.7 (2026-08-29 S5-2): terminal command
-    # auto-backgrounded at the 300s report point — mid-run status between
-    # the call's tool_started and tool_completed (at most one per call_id).
-    "tool_running": (
-        "tool-running",
-        RUNTIME / "tool-running-event-payload-v0.2.schema.json",
-    ),
-    # TER T0.2 (2026-09-03, TODO2 T0.2 / 设计稿 §10-S0): tool_completed
-    # moves to a v0.2 payload shape on the v0.2 track — W-F13b truncation
-    # fields (output_truncated / total_bytes / output_object_id). The v0.1
-    # file stays authoritative for the v0.1 replay track (payload schema
-    # version bump v0.1 → v0.2).
-    "tool_completed": (
-        "tool-completed",
-        RUNTIME / "tool-completed-event-payload-v0.2.schema.json",
-    ),
-    # TER T0.2 (2026-09-03, TODO2 T0.2 / 设计稿 §3.3/§10-S0): F6 push 档
-    # 中性预算提示——剩余秒/已用轮/触发档位；默认 off 零注入，每 run
-    # ≤4 次（_verify_v02_budget_cue_injected 强制）。
-    "budget_cue_injected": (
-        "budget-cue-injected",
-        RUNTIME / "budget-cue-injected-event-payload-v0.2.schema.json",
-    ),
-    "orientation_checkpoint": (
-        "orientation-checkpoint",
-        RUNTIME / "orientation-checkpoint-event-payload-v0.2.schema.json",
-    ),
-    "information_sufficiency_assessment": (
-        "information-sufficiency-assessment",
-        RUNTIME / "information-sufficiency-assessment-event-payload-v0.2.schema.json",
-    ),
-    "retrieval_parent_disposition": (
-        "retrieval-parent-disposition",
-        RUNTIME / "retrieval-parent-disposition-event-payload-v0.2.schema.json",
-    ),
-    "retrieval_close_record": (
-        "retrieval-close-record",
-        RUNTIME / "retrieval-close-record-event-payload-v0.2.schema.json",
-    ),
-    "retrieval_mode_transition": (
-        "retrieval-mode-transition",
-        RUNTIME / "retrieval-mode-transition-event-payload-v0.2.schema.json",
-    ),
-    "retrieval_result_committed": (
-        "retrieval-result",
-        RUNTIME / "retrieval-result-event-payload-v0.2.schema.json",
-    ),
-    "retrieval_activation_restored": (
-        "retrieval-activation-restored",
-        RUNTIME / "retrieval-activation-restored-event-payload-v0.2.schema.json",
-    ),
-    # MECHANICAL-AUDIT-LAYER (2026-08-24, ADR-0010 §14.39 / 设计 §2.4):
-    # 机械审查层轻量事件留痕——对象键覆盖写（含 step/契约类）以一条记录
-    # 留痕；报告块随最终答案前中立问询轮注入且不进归档。主车道专属。
-    "mechanical_audit_update": (
-        "mechanical-audit-update",
-        RUNTIME / "mechanical-audit-update-event-payload-v0.2.schema.json",
-    ),
-    # ACAF Slice 1 (设计文档 §4.2/§4.6): control-ticket lifecycle events —
-    # issued → consumed|rejected pairing enforced by _verify_v02_control_tickets.
-    "control_ticket_issued": (
-        "control-ticket-issued",
-        RUNTIME / "control-ticket-issued-event-payload-v0.2.schema.json",
-    ),
-    "control_ticket_consumed": (
-        "control-ticket-consumed",
-        RUNTIME / "control-ticket-consumed-event-payload-v0.2.schema.json",
-    ),
-    "control_ticket_rejected": (
-        "control-ticket-rejected",
-        RUNTIME / "control-ticket-rejected-event-payload-v0.2.schema.json",
-    ),
-    # FUS-TOOL-PROBE (2026-08-13; P0-A-2 2026-08-13): tool_availability_check
-    # moves to the two-state work-tool probe shape on the v0.2 track (old
-    # available/unavailable/degraded/unprobed shape stays v0.1 replay-only).
-    "tool_availability_check": (
-        "tool-availability-check",
-        RUNTIME / "tool-availability-check-event-payload-v0.2.schema.json",
-    ),
-    # ORZ-CACHE-CONTEXT-COST (2026-08-15, ADR-0010 §3.5 条6/§14.9): the
-    # model-request header fingerprint — system+tools+config digests,
-    # emitted only on initial/change per agent lane.
-    "request_header_change": (
-        "request-header-change",
-        RUNTIME / "request-header-change-event-payload-v0.2.schema.json",
-    ),
-    # D2-2 (2026-08-14, ADR-0010 v1.10 / CONTEXT_COMPACTION_DESIGN §6):
-    # recovery pre-check truncation of a restored conversation — written by
-    # the controller between prompt_submitted and the first model_request.
-    "context_recovery_truncated": (
-        "context-recovery-truncated",
-        RUNTIME / "context-recovery-truncated-event-payload-v0.2.schema.json",
-    ),
-    # P0-D S3 (2026-08-14): template-summary payload on the v0.2 track (the
-    # v0.1 file stays authoritative for the v0.1 replay track).
-      "context_compressed": (
-          "context-compressed",
-          RUNTIME / "context-compressed-event-payload-v0.2.schema.json",
-      ),
-      # F7 (2026-08-15, BACKLOG 6e 复查遗留 / ADR-0010 §14.15): blackboard
-      # plan-epoch archive write failure — audit trace when a rotation
-      # committed but the durable snapshot is missing.
-      "epoch_archive_write_failed": (
-          "epoch-archive-write-failed",
-          RUNTIME / "epoch-archive-write-failed-event-payload-v0.2.schema.json",
-      ),
-      # P2-13 B3 (2026-09-03, ADR-0010 §14.52 / 设计 §12 R3): conversation
-      # archived at session close as a single gzip package (pure packaging,
-      # atomic write + digest; once per session close).
-      "session_archive": (
-          "session-archive",
-          RUNTIME / "session-archive-event-payload-v0.2.schema.json",
-      ),
-      # PLAN-FIRST 阶段 A (2026-08-16, ADR-0010 §14.17): first-round plan
-      # gate result — plan identity/goal/step count, mechanical validation,
-      # one-refill attempt progression and degrade reason.
-      "plan_write": (
-          "plan-write",
-          RUNTIME / "plan-write-event-payload-v0.2.schema.json",
-      ),
-      # PLAN-FIRST 阶段 C (2026-08-16, ADR-0010 §14.17⑱): console/direct
-      # dual-mode transition decision record (PLAN_FIRST_BLACKBOARD_DESIGN §7).
-      "console_mode_transition": (
-          "console-mode-transition",
-          RUNTIME / "console-mode-transition-event-payload-v0.2.schema.json",
-      ),
-      # PLAN-FIRST 阶段 C (2026-08-16, ADR-0010 §14.17⑱): the action-bar
-      # order record — order identity, step binding and mechanical stamps
-      # (PLAN_FIRST_BLACKBOARD_DESIGN §5-§6). Cross-check rule retired
-      # 2026-09-06 (ADR-0010 §14.57, 任务 D S2d 裁决一) — schema stays for
-      # historical v0.2 journals; no negative check either.
-      "console_order_written": (
-          "console-order-written",
-          RUNTIME / "console-order-written-event-payload-v0.2.schema.json",
-      ),
-      # P0-E 第 4 项 (2026-08-17, ADR-0010 §14.21 项 3): pre-issuance
-      # rejection of a written order — order identity, envelope step,
-      # phase (pre_issue/issue), rejection code and reason; the receipt
-      # stays the human-readable view (PLAN_FIRST_BLACKBOARD_DESIGN §5-§6).
-      "console_order_rejected": (
-          "console-order-rejected",
-          RUNTIME / "console-order-rejected-event-payload-v0.2.schema.json",
-      ),
-      # FUS-LEDGER-FOLD-STATE (2026-08-18, ADR-0010 §14.26): mechanical
-      # action-ledger fold advance — the request-view prefix is rewritten
-      # once per fold window, so the event carries the new fold point, the
-      # folded-round count and the triggering view estimate for cache-miss
-      # attribution (LEDGER_FOLD_STATE_CACHE_DESIGN §3.3/§8).
-      "ledger_fold_advance": (
-          "ledger-fold-advance",
-          RUNTIME / "ledger-fold-advance-event-payload-v0.2.schema.json",
-      ),
-      # FUS-LEDGER-FOLD-STATE (2026-08-18, ADR-0010 §14.28 审查修复):
-      # external-ledger append failure — fold rollback + consecutive failure
-      # count + budget-exhaustion disable (the audit trace of the degrade
-      # path that keeps the session moving with the unfolded view).
-      "ledger_fold_write_failed": (
-          "ledger-fold-write-failed",
-          RUNTIME / "ledger-fold-write-failed-event-payload-v0.2.schema.json",
-      ),
-      # MIDSTREAM-DECODE-RETRY (2026-08-21, ADR-0010 §14.37 / 设计 §2.3):
-      # transport 重试计数事件面——一次逻辑模型请求内零 chunk/中段截断
-      # 重试的 recovered/exhausted 摘要（成功随 ModelResponse 上报、
-      # 耗尽随 StreamInterrupted 上报）。v0.2 专用新事件（v0.1 为历史
-      # 冻结面，不扩展）。
-      "transport_retry": (
-          "transport-retry",
-          RUNTIME / "transport-retry-event-payload-v0.2.schema.json",
-      ),
-  }
+
+PAYLOAD_SCHEMA_BY_EVENT_TYPE, PAYLOAD_SCHEMA_BY_EVENT_TYPE_V02 = _derive_payload_registry_views()
 
 # Track-resolution table (contract §5 enforcement): every registered
 # `payload_schema` string outside the Rust track, mapped to the payload
