@@ -83,8 +83,13 @@
         显式断言 + 注释同步）；spec 表 232 场景×30 族=6960 格 + 对拍 250
         语料×30 族=7500 格 0 差；入口：docs/audits/TASK_D_S2D_BATCH1_IMPL_AUDIT_2026-09-06.md
         / docs/audits/TASK_D_S2D_BATCH1_REVIEW_HANDLING_2026-09-06.md）。
-      - [ ] 批 2：probe_accuracy 收窄至当前可见工具（tool_probe 记账口径
-        收窄，判官零改动）+ 复验（待放行）。
+      - [x] 批 2：probe_accuracy 收窄至当前可见工具——**2026-09-06 完成**
+        （tool_probe 记账口径收窄：narrow_to_declared + run-start/逐轮两
+        装配点接入，封存工具不进 complete/incomplete，翻转留痕点封堵；
+        ADR-0010 §14.58 转录；判官两侧字面不动、对拍 250 语料×30 族 0 差
+        零回归；orz-loop 728 lib 全绿；orz `00b9a440`；入口：
+        docs/audits/TASK_D_S2D_BATCH2_IMPL_AUDIT_2026-09-06.md）。
+        两批完成，S2d 翻转前裁决清单清空。
   - [ ] S3：`check_repository.py` 真实 fixture journal 校验改接 Rust 法官，
     Python Rust 轨 `validate_journal_file` 退役，registry 源翻转 JSON 转正。
   - [ ] S4：Python 双法官退役/归档登记、契约变更流程同步、索引/BACKLOG 收口。

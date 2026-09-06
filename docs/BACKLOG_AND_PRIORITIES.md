@@ -116,8 +116,15 @@
              `141bd2cf`：spec 表 232 场景×30 族=6960 格 + 对拍 250 语料
              ×30 族=7500 格 0 差 + 判官测试 258 passed），见
              [批 1 复审处理](audits/TASK_D_S2D_BATCH1_REVIEW_HANDLING_2026-09-06.md)。
-           - [ ] 批 2（裁决二落地，待放行）：tool_probe 记账口径收窄 +
-             probe_accuracy 族复验零回归。
+           - [x] **批 2（裁决二落地，2026-09-06 完成）**：tool_probe 记账
+             口径收窄（生产侧唯一改动——narrow_to_declared + run-start/
+             逐轮两装配点接入，封存工具不进 complete/incomplete，S2a 注记
+             的翻转留痕点封堵）+ ADR-0010 §14.58 转录 + 单测矩阵（纯函数
+             三单测 + 两 e2e 改声明面载体 + 封存静默断言）+ probe_accuracy
+             族复验零回归（判官两侧字面不动，250 语料×30 族 0 差，18 历史期刊
+             0 错误）；orz-loop 728 lib 全绿、orz `00b9a440`，见
+             [批 2 实施审计](audits/TASK_D_S2D_BATCH2_IMPL_AUDIT_2026-09-06.md)。
+             两批完成，S2d 翻转前裁决清单清空。
        - [ ] **S3**：门禁真实 fixture journal 校验改接 Rust 法官；Python Rust
          轨 `validate_journal_file` 退役；registry 源翻转 JSON 转正。
        - [ ] **S4**：Python 双法官退役/归档登记、契约变更流程同步、索引收口。
