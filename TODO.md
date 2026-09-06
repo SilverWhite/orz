@@ -66,8 +66,10 @@
       [S2b 实施审计](docs/audits/TASK_D_S2B_FAMILIES_IMPL_AUDIT_2026-09-06.md)
       / [S2b 复审处理](docs/audits/TASK_D_S2B_REVIEW_HANDLING_2026-09-06.md)。
     - [x] S2c：其余族按档位收口（检索族 / 上下文与压缩族 / 控制面族子批）
-      ——2026-09-06 完成（orz `195c71b8`，families_s2c.rs 24 校验器，对拍
-      5890 格 0 差；入口：docs/audits/TASK_D_S2C_FAMILIES_IMPL_AUDIT_2026-09-06.md）。
+      ——2026-09-06 完成 + 同日三路复审收口（orz `195c71b8` + `a7981654`，
+      families_s2c.rs 24 校验器；230 场景×31=7130 格 + 对拍 7626 格 0 差 +
+      S2c e2e 负测；入口：docs/audits/TASK_D_S2C_FAMILIES_IMPL_AUDIT_2026-09-06.md
+      / docs/audits/TASK_D_S2C_REVIEW_HANDLING_2026-09-06.md）。
     - [ ] S2d：31 族 Python↔Rust 全量对拍 0 差 + registry 翻转准备。
   - [ ] S3：`check_repository.py` 真实 fixture journal 校验改接 Rust 法官，
     Python Rust 轨 `validate_journal_file` 退役，registry 源翻转 JSON 转正。

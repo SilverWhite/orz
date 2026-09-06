@@ -85,13 +85,18 @@
            [S2b 实施审计](audits/TASK_D_S2B_FAMILIES_IMPL_AUDIT_2026-09-06.md)
            / [S2b 复审处理](audits/TASK_D_S2B_REVIEW_HANDLING_2026-09-06.md)。
          - [x] **S2c**：其余族按档位收口（检索族 / 上下文与压缩族 / 控制面族
-           三个子批）——**2026-09-06 完成**（orz `195c71b8`：
-           `journal/families_s2c.rs` 24 校验器，含 4 个 B 族按 Python 现行
-           语义镜像；spec 表 172 场景×31 族=5332 裁决格 + Rust↔Python 对拍
-           190 语料×31=5890 格 0 差；console_order_written/rejected 写单面
-           退役后目标语义裁决留 S2d 翻转前），入口：
-           [S2c 实施审计](audits/TASK_D_S2C_FAMILIES_IMPL_AUDIT_2026-09-06.md)。
+           三个子批）——**2026-09-06 完成 + 同日三路全面复审收口**（orz
+           `195c71b8` + 复审处理批 `a7981654`：`journal/families_s2c.rs` 24
+           校验器，含 4 个 B 族按 Python 现行语义镜像；复审修复 P1×1
+           （dep_graph consumed_read 空串）+ P2×2（py_int_value 浮点整数
+           值比较 5 处 / 覆盖缺口收口）；spec 表 230 场景×31 族=7130 格 +
+           Rust↔Python 对拍 246 语料×31=7626 格 0 差 + S2c e2e 篡改负测），
+           入口：[S2c 实施审计](audits/TASK_D_S2C_FAMILIES_IMPL_AUDIT_2026-09-06.md)
+           / [S2c 复审处理](audits/TASK_D_S2C_REVIEW_HANDLING_2026-09-06.md)。
          - [ ] **S2d**：31 族全量 Python↔Rust 对拍 0 差 + registry 翻转准备。
+           翻转前裁决清单：console_order_written/rejected 写单面退役后目标
+           语义 + probe_accuracy 封存工具翻转语义（见
+           [S2c 复审处理 §3](audits/TASK_D_S2C_REVIEW_HANDLING_2026-09-06.md)）。
            （排期登记：2026-09-06，见
            [GLM 处置 + S2 排期登记](audits/P0_GOV_GLM_DISPOSITION_AND_TASK_D_S2_SCHEDULE_2026-09-06.md)）
        - [ ] **S3**：门禁真实 fixture journal 校验改接 Rust 法官；Python Rust
