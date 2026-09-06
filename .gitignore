@@ -6,7 +6,7 @@ prototype/.pytest_cache/
 **/__pycache__/
 **/*.py[cod]
 .tools/
-.claude/
+/.claude/
 .observed-runs/
 candidate-gates/
 
