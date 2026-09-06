@@ -65,13 +65,17 @@
 
 - [x] F1 skills 豁免收窄为注册技能根白名单（orz `67b51eb1`；SkillRoots +
   registry finalize 派生 + read_file/grep/list_dir 接线 + 负测）。
-- [x] R-1：354 个已跟踪本地运行产物转本地件（`git rm --cached`，磁盘保留）。
+- [x] R-1：353 个已跟踪本地运行产物转本地件（`git rm --cached`，磁盘保留；
+  另 1 个误中夹具随 59423ac 恢复跟踪）。
 - [x] R-2：manifest 生成器显式 LF 并重算。
 - [x] R-3：9 个根目录一次性产物归档 `存档/root-artifacts-2026-09-06/`
   （gsa.py 保留，门禁 required 文件）。
 - [ ] F2：approval prompter 存根登记为 GAP-APPROVAL-PROMPTER（已登记，
   实施待排期）。
 - [x] 观察项 (c)：权限判定分散登记 OBS-PERMISSION-DUAL-IMPL（另立观察）。
+- [x] 复核修正批（2026-09-06）：R-1 口径（353 + 夹具恢复）、BACKLOG 00a
+  引用修正、任务 D S2–S4 层级修正、处置审计 §3 限制清单补录
+  （GAP-GSA-SYMLINK-STALE-TEST 另立）。
 - 入口：[GLM 登记审计](docs/audits/GLM_EXTERNAL_REVIEW_REGISTRATION_2026-09-04.md)
   / [处置 + S2 排期审计](docs/audits/P0_GOV_GLM_DISPOSITION_AND_TASK_D_S2_SCHEDULE_2026-09-06.md)。
 
@@ -644,6 +648,10 @@
   R-1 / R-2 / R-3 / 观察 (c) 完成，F2 登记 GAP-APPROVAL-PROMPTER 待实施）
   ——入口：[登记审计](docs/audits/GLM_EXTERNAL_REVIEW_REGISTRATION_2026-09-04.md)
   / [处置审计](docs/audits/P0_GOV_GLM_DISPOSITION_AND_TASK_D_S2_SCHEDULE_2026-09-06.md)。
+- [ ] orz read_file `.gsa` 符号链接旧回归测试与 Task C canonical 沙箱语义
+  冲突（GAP-GSA-SYMLINK-STALE-TEST，2026-09-06 复核登记）——处理待独立
+  裁决：更新测试预期对齐 Task C，或显式登记会话重解析面豁免；不擅自翻转
+  安全语义。入口：[处置审计 §5](docs/audits/P0_GOV_GLM_DISPOSITION_AND_TASK_D_S2_SCHEDULE_2026-09-06.md)。
 - [ ] orz-host 可选后端接线（lsp / memory / 图像 / 视频 / MCP）：接线时翻转能力访问器并补翻转测试（FUS-TOOL-PROBE 边界）。
   - 成熟复用评估（2026-08-16，只读）：明确——LSP/MCP 为成熟开放标准，仓库内已有 orz-mcp；图像/视频走成熟服务 API。
 - [ ] headless 计划模式能力信号（plan 模式探针当前以交互用户信号代理，未来 headless 计划模式需独立信号）。

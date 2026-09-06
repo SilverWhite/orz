@@ -64,20 +64,20 @@
          门禁同步钩子）；消解 `runtime_stagnation_guard` 历史 v0.1 回放漂移面。
          证据见
          [Task D 批次 1 审计](audits/P0_GOV_TASK_D_DUAL_IMPL_GOVERNANCE_2026-09-04.md)。
-     - [ ] **S2**：31 个 `_verify_v02_*` 机械规则族盘点（Rust 已强制附证据 /
-       需 Rust 显式实现）并补齐关键族。
-       - [ ] **S2a**（盘点先行）：31 族两档盘点表 + A 档证据引用（不写业务代码）。
-       - [ ] **S2b**：核心族 Rust conformance 显式实现——control_tickets /
-         lifecycle / retrieval_mode / ledger_fold(advance+write_failed) /
-         policy_denial / failure_target。
-       - [ ] **S2c**：其余族按档位收口（检索族 / 上下文与压缩族 / 控制面族
-         三个子批）。
-       - [ ] **S2d**：31 族全量 Python↔Rust 对拍 0 差 + registry 翻转准备。
-       （排期登记：2026-09-06，见
-       [GLM 处置 + S2 排期登记](audits/P0_GOV_GLM_DISPOSITION_AND_TASK_D_S2_SCHEDULE_2026-09-06.md)）
-     - [ ] **S3**：门禁真实 fixture journal 校验改接 Rust 法官；Python Rust
-       轨 `validate_journal_file` 退役；registry 源翻转 JSON 转正。
-     - [ ] **S4**：Python 双法官退役/归档登记、契约变更流程同步、索引收口。
+       - [ ] **S2**：31 个 `_verify_v02_*` 机械规则族盘点（Rust 已强制附证据 /
+         需 Rust 显式实现）并补齐关键族。
+         - [ ] **S2a**（盘点先行）：31 族两档盘点表 + A 档证据引用（不写业务代码）。
+         - [ ] **S2b**：核心族 Rust conformance 显式实现——control_tickets /
+           lifecycle / retrieval_mode / ledger_fold(advance+write_failed) /
+           policy_denial / failure_target。
+         - [ ] **S2c**：其余族按档位收口（检索族 / 上下文与压缩族 / 控制面族
+           三个子批）。
+         - [ ] **S2d**：31 族全量 Python↔Rust 对拍 0 差 + registry 翻转准备。
+           （排期登记：2026-09-06，见
+           [GLM 处置 + S2 排期登记](audits/P0_GOV_GLM_DISPOSITION_AND_TASK_D_S2_SCHEDULE_2026-09-06.md)）
+       - [ ] **S3**：门禁真实 fixture journal 校验改接 Rust 法官；Python Rust
+         轨 `validate_journal_file` 退役；registry 源翻转 JSON 转正。
+       - [ ] **S4**：Python 双法官退役/归档登记、契约变更流程同步、索引收口。
 
 ### 00a. GLM 外部只读审查处置（2026-09-06 用户裁决；P0-GOV 附带批）
 
@@ -85,8 +85,10 @@
   `SKILL.md`/`skills` 组件放行，改为注册技能根白名单（`SkillRoots`，registry
   finalize 从 `SessionContext.skills` 派生；空 = fail-closed）。orz
   `67b51eb1`；read_file/grep/list_dir 接线 + 负测。（2026-09-06 闭合）
-- [x] **R-1 tracked-ignored 矛盾**：354 个本地运行产物 `git rm --cached` 转
-  本地件（磁盘保留、历史可恢复），`ls-files -ci` = 0。（2026-09-06 闭合）
+- [x] **R-1 tracked-ignored 矛盾**：353 个本地运行产物 `git rm --cached` 转
+  本地件（另 1 个集成夹具被泛化 `.claude/` 规则误中、锚定 `/.claude/` 后原样
+  恢复；磁盘保留、历史可恢复），`ls-files -ci` = 0。（2026-09-06 闭合；
+  计数口径修正见 [处置审计 §5](audits/P0_GOV_GLM_DISPOSITION_AND_TASK_D_S2_SCHEDULE_2026-09-06.md)）
 - [x] **R-2 manifest CRLF**：生成脚本显式 LF 写出并重算 manifest。
   （2026-09-06 闭合）
 - [x] **R-3 根目录产物**：9 个一次性产物归档
@@ -96,6 +98,14 @@
   （索引 §3.1 + 本小节）；实施待排期，不入任务 D S2。
 - [x] **观察项 (c) 权限判定分散**：登记 OBS-PERMISSION-DUAL-IMPL（另立观察，
   不入任务 D S2 盘点；终局治理视野再排期）。（2026-09-06 登记）
+- [x] **复核修正批（2026-09-06 审查收口）**：R-1 计数口径（353 + 夹具恢复）、
+  BACKLOG 00a 引用修正、00 小节任务 D S2–S4 层级修正、处置审计 §3 验证限制
+  清单补录——见 [处置审计 §5](audits/P0_GOV_GLM_DISPOSITION_AND_TASK_D_S2_SCHEDULE_2026-09-06.md)。
+- [ ] **GAP-GSA-SYMLINK-STALE-TEST（2026-09-06 复核登记）**：orz read_file
+  `.gsa` 符号链接旧回归测试与 Task C canonical 沙箱语义冲突（非 GLM 本批
+  回归；处理需独立裁决：更新测试预期或显式登记豁免，不擅自翻转安全语义）。
+  入口：[处置审计 §5](audits/P0_GOV_GLM_DISPOSITION_AND_TASK_D_S2_SCHEDULE_2026-09-06.md)
+  / [read_file 测试](../orz/crates/codegen/orz-tools/src/implementations/grok_build/read_file/mod.rs)。
 - 入口：[GLM 登记审计](audits/GLM_EXTERNAL_REVIEW_REGISTRATION_2026-09-04.md)
   / [处置 + S2 排期审计](audits/P0_GOV_GLM_DISPOSITION_AND_TASK_D_S2_SCHEDULE_2026-09-06.md)。
 
@@ -827,6 +837,14 @@
 - OBS-PERMISSION-DUAL-IMPL（GLM 观察 (c)，2026-09-06 登记）：权限判定分散
   （orz-workspace permission manager 8,756 行 / orz-host permission.rs 1,331
   行）——另立观察、不入任务 D S2；随终局治理视野排期。
+- GAP-GSA-SYMLINK-STALE-TEST（2026-09-06 复核登记）：orz
+  `read_file_allows_gsa_symlink_outside_git_root_even_when_gitignored` 预期
+  `.gsa` 重解析越界可读，与 Task C canonical 沙箱（2026-09-04）拒读语义
+  冲突——定向复跑确定性失败，`-S`/差异复核确认早于 F1（a348901a 同逻辑），
+  非 GLM 本批回归；处理待独立裁决（更新测试预期或显式登记会话重解析面
+  豁免），不擅自翻转安全语义。入口：
+  [处置审计 §5](audits/P0_GOV_GLM_DISPOSITION_AND_TASK_D_S2_SCHEDULE_2026-09-06.md)
+  / [read_file 测试](../orz/crates/codegen/orz-tools/src/implementations/grok_build/read_file/mod.rs)。
 - DC 硬信号 4/6（`same_module_no_evidence` / `key_surface_unexamined`）——
   **2026-08-31 随 [P2 §11](#11-model-residual-pressure-followupp22026-08-31-二次讨论裁决登记设计实施待放行)
   DC 强制模板轮清理一并退役**（信号与机制随删除，不再单独接线）。

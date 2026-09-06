@@ -32,10 +32,15 @@
 ## 3. 处置状态
 
 - **2026-09-06 用户裁决处置完成**：F1（技能豁免收窄为注册技能根白名单）已
-  实施（orz `67b51eb1`）；R-1（354 个本地运行产物移出索引、磁盘保留）/
+  实施（orz `67b51eb1`）；R-1（353 个本地运行产物移出索引、磁盘保留；另
+  1 个被泛化 `.claude/` 规则误中的集成夹具随 59423ac 锚定后原样恢复跟踪）/
   R-2（manifest 生成器显式 LF 并重算）/ R-3（9 个根目录产物归档
   `存档/root-artifacts-2026-09-06/`，`gsa.py` 保留跟踪）已落地；F2 登记为
   `GAP-APPROVAL-PROMPTER`（实施待排期）；观察项 (c) 登记为
   OBS-PERMISSION-DUAL-IMPL。明细见
   [P0-GOV GLM 处置批 + 任务 D S2 排期登记](P0_GOV_GLM_DISPOSITION_AND_TASK_D_S2_SCHEDULE_2026-09-06.md)。
+- **2026-09-06 复核修正批**：R-1 计数口径（353 + 夹具恢复）、BACKLOG 00a
+  引用修正、任务 D S2–S4 层级修正、处置审计 §3 验证限制清单补录（另立
+  GAP-GSA-SYMLINK-STALE-TEST）——见
+  [处置审计 §5](P0_GOV_GLM_DISPOSITION_AND_TASK_D_S2_SCHEDULE_2026-09-06.md)。
 - GLM 报告对门禁全绿、Task C 沙箱、ACAF fail-closed、journal 链、IPG 等的正向核验与既有审计一致，不重复登记。
