@@ -25,11 +25,13 @@
 //! - `conformance` — offline schema-level journal judge (Task D batch-1)
 //! - `families` — v0.2 rule-family verifiers, S2b first six families
 //!   (Task D, 2026-09-06; mirrors `_verify_v02_*` in the Python judge)
+//! - `families_s2c` — the remaining 24 rule families (Task D S2c, 2026-09-06)
 
 pub mod chain;
 pub mod conformance;
 pub mod event;
 pub mod families;
+pub mod families_s2c;
 pub mod recorder;
 pub mod verifier;
 
@@ -37,6 +39,6 @@ pub mod verifier;
 pub use chain::{ChainValidation, canonical_json, compute_event_hash, seal_event, sha256_hex};
 pub use conformance::{ConformanceReport, validate_journal_file};
 pub use event::{EventTrack, EventType, Redaction, RunEvent, TERMINAL_EVENTS};
-pub use families::{S2B_FAMILIES, verify_all_families, verify_family};
+pub use families::{ALL_FAMILIES, S2B_FAMILIES, S2C_FAMILIES, verify_all_families, verify_family};
 pub use recorder::{JournalRecorder, JournalRecorderError};
 pub use verifier::{ReplayResult, replay_journal};

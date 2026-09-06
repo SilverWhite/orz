@@ -21,13 +21,13 @@ use super::chain::canonical_json;
 /// Payload schema id of the v0.2 track (Python `_is_v02`).
 const V02_PAYLOAD_SCHEMA: &str = "run-event-v0.2.schema.json";
 
-fn is_v02(event: &Value) -> bool {
+pub(crate) fn is_v02(event: &Value) -> bool {
     event.get("payload_schema").and_then(Value::as_str) == Some(V02_PAYLOAD_SCHEMA)
 }
 
 /// Python `isinstance(x, int)` for JSON values: integers and booleans count
 /// (bool is an int in Python), floats do not.
-fn py_int(value: Option<&Value>) -> Option<i64> {
+pub(crate) fn py_int(value: Option<&Value>) -> Option<i64> {
     match value {
         Some(Value::Number(n)) => n.as_i64(),
         Some(Value::Bool(b)) => Some(*b as i64),
@@ -35,12 +35,12 @@ fn py_int(value: Option<&Value>) -> Option<i64> {
     }
 }
 
-fn str_of(value: Option<&Value>) -> Option<&str> {
+pub(crate) fn str_of(value: Option<&Value>) -> Option<&str> {
     value.and_then(Value::as_str)
 }
 
 /// Tool-family constants mirroring the Python module tables.
-mod toolsets {
+pub(crate) mod toolsets {
     pub const WORK_TOOLS: &[&str] = &[
         "read_file",
         "list_dir",
@@ -1286,8 +1286,73 @@ pub const S2B_FAMILIES: &[&str] = &[
     "control_tickets",
 ];
 
-/// Run one named S2b family over a parsed journal; unknown names yield an
-/// empty list (the caller validates the name).
+/// S2c family ids (Task D S2c, 2026-09-06): the remaining 24 rule families,
+/// implemented in [`super::families_s2c`].
+pub const S2C_FAMILIES: &[&str] = &[
+    "inquiry_kind",
+    "plan_write",
+    "console_mode_transition",
+    "console_order_written",
+    "console_order_rejected",
+    "tool_running",
+    "output_truncation",
+    "budget_cue_injected",
+    "result_consistency",
+    "reason_codes",
+    "source_weighting",
+    "search_candidate_pool",
+    "candidate_prefilter",
+    "candidate_count",
+    "inject_budget",
+    "receipt_event_isomorphism",
+    "dep_graph_events",
+    "mechanical_audit",
+    "recovery_truncation",
+    "context_compressed",
+    "activation_restore",
+    "tool_availability_probe",
+    "request_header",
+    "probe_accuracy",
+];
+
+/// All 31 families in the Python `validate_journal_text` call order
+/// (Py 3677-3707) — the S2d full-corpus crosscheck order.
+pub const ALL_FAMILIES: &[&str] = &[
+    "inquiry_kind",
+    "plan_write",
+    "console_mode_transition",
+    "console_order_written",
+    "console_order_rejected",
+    "ledger_fold_advance",
+    "ledger_fold_write_failed",
+    "lifecycle",
+    "tool_running",
+    "output_truncation",
+    "budget_cue_injected",
+    "retrieval_mode",
+    "result_consistency",
+    "reason_codes",
+    "source_weighting",
+    "search_candidate_pool",
+    "candidate_prefilter",
+    "candidate_count",
+    "inject_budget",
+    "policy_denial",
+    "failure_target",
+    "receipt_event_isomorphism",
+    "dep_graph_events",
+    "mechanical_audit",
+    "recovery_truncation",
+    "context_compressed",
+    "activation_restore",
+    "control_tickets",
+    "tool_availability_probe",
+    "request_header",
+    "probe_accuracy",
+];
+
+/// Run one named rule family (S2b ∪ S2c) over a parsed journal; unknown names
+/// yield an empty list (the caller validates the name).
 pub fn verify_family(family: &str, events: &[Value]) -> Vec<String> {
     match family {
         "ledger_fold_advance" => verify_ledger_fold_advance(events),
@@ -1297,14 +1362,14 @@ pub fn verify_family(family: &str, events: &[Value]) -> Vec<String> {
         "failure_target" => verify_failure_target(events),
         "control_tickets" => verify_control_tickets(events),
         "lifecycle" => verify_lifecycle(events),
-        _ => Vec::new(),
+        family => super::families_s2c::verify_s2c_family(family, events),
     }
 }
 
-/// Run every S2b family (Python call order) over a parsed journal.
+/// Run every rule family (Python call order) over a parsed journal.
 pub fn verify_all_families(events: &[Value]) -> Vec<String> {
     let mut errors = Vec::new();
-    for family in S2B_FAMILIES {
+    for family in ALL_FAMILIES {
         errors.extend(verify_family(family, events));
     }
     errors
@@ -1458,6 +1523,186 @@ mod tests {
         )
     }
 
+    // ── S2c corpus helpers (Task D S2c, 2026-09-06) ─────────────────────
+
+    use crate::journal::chain::sha256_hex;
+
+    fn payload_digest(payload: &Value) -> String {
+        sha256_hex(&canonical_json(payload).unwrap_or_default())
+    }
+
+    /// Build a payload-valid `retrieval_result_committed` whose mechanical
+    /// facts (source_counts, degraded flag, digests, result_id) are computed
+    /// from its own four segments — callers mutate the payload to introduce
+    /// specific violations. `prefilter_log` sits outside the digest segments,
+    /// so it can be added afterwards without invalidating the digests.
+    fn finish_commit(activation: &str, revision: i64, ledger: Value, refs: Value) -> Value {
+        let entries = ledger.as_array().cloned().unwrap_or_default();
+        let count_vis = |vis: &str| {
+            entries
+                .iter()
+                .filter(|e| e.get("visibility").and_then(Value::as_str) == Some(vis))
+                .count()
+        };
+        let degraded =
+            count_vis("full_text_observed") == 0 && count_vis("partial_text_observed") == 0;
+        let mut counts = serde_json::Map::new();
+        for vis in [
+            "full_text_observed",
+            "partial_text_observed",
+            "metadata_only",
+            "unavailable",
+        ] {
+            counts.insert(vis.to_string(), json!(count_vis(vis)));
+        }
+        counts.insert("total".to_string(), json!(entries.len()));
+        let four = json!({
+            "query_summary": "q",
+            "source_ledger": ledger.clone(),
+            "filtering_log": [],
+            "raw_source_refs": refs.clone(),
+        });
+        let result_digest = payload_digest(&four);
+        let ledger_digest = payload_digest(&ledger);
+        ev(
+            "retrieval_result_committed",
+            json!({
+                "activation_id": activation,
+                "contract_revision": revision,
+                "query_summary": "q",
+                "source_ledger": ledger,
+                "filtering_log": [],
+                "raw_source_refs": refs,
+                "source_counts": Value::Object(counts),
+                "visibility_degraded": degraded,
+                "result_digest": result_digest,
+                "ledger_digest": ledger_digest,
+                "result_id": format!("RET-RES-{}-1", &result_digest[..16]),
+            }),
+        )
+    }
+
+    fn committed(activation: &str, revision: i64, ledger: Value) -> Value {
+        finish_commit(activation, revision, ledger, json!([]))
+    }
+
+    fn mutate_payload(event: Value, key: &str, value: Value) -> Value {
+        let mut event = event;
+        event["payload"][key] = value;
+        event
+    }
+
+    /// The assessment bound to a committed result (matching digests/counts,
+    /// `no_fulltext_evidence` exactly when the commit is degraded).
+    fn bound_assessment(commit: &Value) -> Value {
+        let p = &commit["payload"];
+        let digest = p["result_digest"].as_str().unwrap_or_default().to_string();
+        let codes = if p["visibility_degraded"].as_bool().unwrap_or(false) {
+            vec!["no_fulltext_evidence"]
+        } else {
+            vec![]
+        };
+        ev(
+            "information_sufficiency_assessment",
+            json!({
+                "assessment_id": format!("ASSESS-{}-1", &digest[..16]),
+                "activation_id": p["activation_id"],
+                "contract_revision": p["contract_revision"],
+                "contract_id": "C1",
+                "result_digest": p["result_digest"],
+                "ledger_digest": p["ledger_digest"],
+                "source_counts": p["source_counts"],
+                "reason_codes": codes,
+            }),
+        )
+    }
+
+    fn ledger_entry(sid: &str, source_type: &str, visibility: &str) -> Value {
+        json!({"source_id": sid, "source_type": source_type, "visibility": visibility})
+    }
+
+    fn pool_entry(sid: &str, candidates: Value, pool: Value) -> Value {
+        json!({
+            "source_id": sid, "source_type": "web_search_result",
+            "visibility": "metadata_only",
+            "candidate_urls": candidates, "candidate_pool": pool,
+        })
+    }
+
+    fn pool_item(url: &str) -> Value {
+        json!({
+            "url": url, "canonical_url": url, "tier": "default",
+            "mechanical_weight": 1.0, "weight_reason": "default tier",
+            "relevance": "direct", "form_reasons": [],
+        })
+    }
+
+    fn pool_refs(entries: &[Value]) -> Value {
+        Value::Array(
+            entries
+                .iter()
+                .filter_map(|entry| {
+                    let urls = entry.get("candidate_urls")?.clone();
+                    let pool = entry.get("candidate_pool")?.clone();
+                    Some(json!({
+                        "source_id": entry["source_id"],
+                        "candidate_urls": urls,
+                        "candidate_pool": pool,
+                    }))
+                })
+                .collect(),
+        )
+    }
+
+    fn tstart(tool: &str, call: &str) -> Value {
+        ev("tool_started", json!({"tool": tool, "call_id": call}))
+    }
+
+    fn probe_event(complete: Vec<&str>, incomplete: Value) -> Value {
+        ev(
+            "tool_availability_check",
+            json!({"complete": complete, "incomplete": incomplete}),
+        )
+    }
+
+    fn work_tools_minus(name: &str) -> Vec<&'static str> {
+        toolsets::WORK_TOOLS
+            .iter()
+            .copied()
+            .filter(|t| *t != name)
+            .collect()
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn header_event(
+        reason: &str,
+        header: &str,
+        previous: Option<&str>,
+        system: &str,
+        tools_sha: &str,
+        config: &str,
+        tools: Vec<&str>,
+        change_kind: Option<&str>,
+    ) -> Value {
+        let mut payload = json!({
+            "agent_role": "main",
+            "reason": reason,
+            "header_sha256": header,
+            "system_sha256": system,
+            "tools_sha256": tools_sha,
+            "config_sha256": config,
+            "tools": tools,
+            "tool_count": tools.len(),
+        });
+        if let Some(prev) = previous {
+            payload["previous_header_sha256"] = json!(prev);
+        }
+        if let Some(kind) = change_kind {
+            payload["change_kind"] = json!(kind);
+        }
+        ev("request_header_change", payload)
+    }
+
     /// Shared scenario corpus: (name, events). Used by the table-driven unit
     /// test below and by the Python crosscheck (same corpus, both judges).
     fn scenarios() -> Vec<(&'static str, Vec<Value>)> {
@@ -1569,7 +1814,7 @@ mod tests {
                         "information_sufficiency_assessment",
                         json!({"assessment_id": "A9", "activation_id": "a1", "contract_revision": 1, "contract_id": "C", "result_digest": "D"}),
                     ),
-                    ev("retrieval_result_committed", json!({"activation_id": "a1"})),
+                    committed("a1", 1, json!([])),
                 ],
             ),
             (
@@ -1579,7 +1824,7 @@ mod tests {
                         "retrieval_mode_transition",
                         json!({"old_mode": "off", "new_mode": "local_browser", "authority": "mechanical_probe", "capability_status": "degraded"}),
                     ),
-                    ev("retrieval_result_committed", json!({"activation_id": "a1"})),
+                    committed("a1", 1, json!([])),
                     ev(
                         "tool_completed",
                         json!({"tool": "browser_read", "target": "external_retrieval", "status": "ok"}),
@@ -1981,14 +2226,1432 @@ mod tests {
                     ),
                 ],
             ),
+            // ── S2c scenarios (Task D S2c, 2026-09-06) ──────────────────
+            (
+                "inquiry_kind_ok",
+                vec![ev(
+                    "orientation_checkpoint",
+                    json!({"inquiry_kind": "orientation_checkpoint", "prompt": "continue?"}),
+                )],
+            ),
+            (
+                "inquiry_kind_mismatch",
+                vec![ev(
+                    "orientation_checkpoint",
+                    json!({"inquiry_kind": "orientation", "prompt": "continue?"}),
+                )],
+            ),
+            (
+                "plan_write_ok",
+                vec![ev(
+                    "plan_write",
+                    json!({"attempt": 1, "outcome": "accepted", "validation": {"valid": true}}),
+                )],
+            ),
+            (
+                "plan_write_refill_attempt_2",
+                vec![ev(
+                    "plan_write",
+                    json!({"attempt": 2, "outcome": "refill_requested", "validation": {"valid": false}}),
+                )],
+            ),
+            (
+                "plan_write_refill_unfollowed",
+                vec![ev(
+                    "plan_write",
+                    json!({"attempt": 1, "outcome": "refill_requested", "validation": {"valid": false}}),
+                )],
+            ),
+            (
+                "plan_write_refill_valid_true",
+                vec![
+                    ev(
+                        "plan_write",
+                        json!({"attempt": 1, "outcome": "refill_requested", "validation": {"valid": true}}),
+                    ),
+                    ev(
+                        "plan_write",
+                        json!({"attempt": 2, "outcome": "accepted", "validation": {"valid": true}}),
+                    ),
+                ],
+            ),
+            (
+                "plan_write_after_refill_attempt_1",
+                vec![ev(
+                    "plan_write",
+                    json!({"attempt": 1, "outcome": "degraded", "degrade_reason": "validation_failed_after_refill", "validation": {"valid": false}}),
+                )],
+            ),
+            (
+                "plan_write_rotate_degrade_valid_false",
+                vec![ev(
+                    "plan_write",
+                    json!({"attempt": 1, "outcome": "degraded", "degrade_reason": "plan_rotate_failed", "validation": {"valid": false}}),
+                )],
+            ),
+            (
+                "plan_write_accepted_attempt_3",
+                vec![ev(
+                    "plan_write",
+                    json!({"attempt": 3, "outcome": "accepted", "validation": {"valid": true}}),
+                )],
+            ),
+            (
+                "console_mode_ok",
+                vec![
+                    ev(
+                        "console_mode_transition",
+                        json!({
+                            "run_id": "run-1", "from": "console", "to": "direct",
+                            "trigger": "assistant_failure_streak", "model_decision": "switch",
+                            "streak": 3, "order_ids": ["ORD-1"], "transition_id": "t1",
+                            "related_transition_id": null,
+                        }),
+                    ),
+                    ev(
+                        "tool_started",
+                        json!({"tool": "run_terminal_cmd", "call_id": "c1", "console_mode": "direct", "transition_id": "t1"}),
+                    ),
+                    ev(
+                        "console_mode_transition",
+                        json!({
+                            "run_id": "run-1", "from": "direct", "to": "console",
+                            "trigger": "model_return", "model_decision": "return_to_console",
+                            "transition_id": "t2", "related_transition_id": "t1",
+                        }),
+                    ),
+                ],
+            ),
+            (
+                "console_mode_stay_ok",
+                vec![ev(
+                    "console_mode_transition",
+                    json!({
+                        "run_id": "run-1", "from": "console", "to": "console",
+                        "trigger": "assistant_failure_streak", "model_decision": "stay",
+                        "transition_id": "t1", "related_transition_id": null,
+                    }),
+                )],
+            ),
+            (
+                "console_mode_c2d_bad_trigger",
+                vec![ev(
+                    "console_mode_transition",
+                    json!({
+                        "run_id": "run-1", "from": "console", "to": "direct",
+                        "trigger": "model_return", "model_decision": "switch",
+                        "streak": 3, "order_ids": ["ORD-1"], "transition_id": "t1",
+                        "related_transition_id": null,
+                    }),
+                )],
+            ),
+            (
+                "console_mode_d2c_bad_related",
+                vec![
+                    ev(
+                        "console_mode_transition",
+                        json!({
+                            "run_id": "run-1", "from": "console", "to": "direct",
+                            "trigger": "assistant_failure_streak", "model_decision": "switch",
+                            "streak": 3, "order_ids": ["ORD-1"], "transition_id": "t1",
+                            "related_transition_id": null,
+                        }),
+                    ),
+                    ev(
+                        "console_mode_transition",
+                        json!({
+                            "run_id": "run-1", "from": "direct", "to": "console",
+                            "trigger": "model_return", "model_decision": "return_to_console",
+                            "transition_id": "t2", "related_transition_id": "tX",
+                        }),
+                    ),
+                ],
+            ),
+            (
+                "console_mode_double_streak",
+                vec![
+                    ev(
+                        "console_mode_transition",
+                        json!({
+                            "run_id": "run-1", "from": "console", "to": "direct",
+                            "trigger": "assistant_failure_streak", "model_decision": "switch",
+                            "streak": 3, "order_ids": ["ORD-1"], "transition_id": "t1",
+                            "related_transition_id": null,
+                        }),
+                    ),
+                    ev(
+                        "console_mode_transition",
+                        json!({
+                            "run_id": "run-1", "from": "console", "to": "console",
+                            "trigger": "assistant_failure_streak", "model_decision": "stay",
+                            "transition_id": "t2", "related_transition_id": null,
+                        }),
+                    ),
+                ],
+            ),
+            (
+                "console_mode_direct_tool_unstamped",
+                vec![
+                    ev(
+                        "console_mode_transition",
+                        json!({
+                            "run_id": "run-1", "from": "console", "to": "direct",
+                            "trigger": "assistant_failure_streak", "model_decision": "switch",
+                            "streak": 3, "order_ids": ["ORD-1"], "transition_id": "t1",
+                            "related_transition_id": null,
+                        }),
+                    ),
+                    ev(
+                        "tool_started",
+                        json!({"tool": "run_terminal_cmd", "call_id": "c1", "console_mode": "direct"}),
+                    ),
+                ],
+            ),
+            (
+                "console_mode_direct_tool_wrong_tid",
+                vec![
+                    ev(
+                        "console_mode_transition",
+                        json!({
+                            "run_id": "run-1", "from": "console", "to": "direct",
+                            "trigger": "assistant_failure_streak", "model_decision": "switch",
+                            "streak": 3, "order_ids": ["ORD-1"], "transition_id": "t1",
+                            "related_transition_id": null,
+                        }),
+                    ),
+                    ev(
+                        "tool_started",
+                        json!({"tool": "run_terminal_cmd", "call_id": "c1", "console_mode": "direct", "transition_id": "t9"}),
+                    ),
+                ],
+            ),
+            (
+                "console_order_written_ok",
+                vec![
+                    ev(
+                        "tool_completed",
+                        json!({"tool": "blackboard_action_write", "call_id": "w1", "status": "success", "exit_code": 0}),
+                    ),
+                    ev(
+                        "console_order_written",
+                        json!({
+                            "order_id": "ORD-1", "action": "workspace.run_terminal",
+                            "step_id": null, "write_call_id": "w1",
+                            "round": 3, "plan_epoch": "e1", "run_id": "run-1",
+                        }),
+                    ),
+                ],
+            ),
+            (
+                "console_order_written_duplicate",
+                vec![
+                    ev(
+                        "tool_completed",
+                        json!({"tool": "blackboard_action_write", "call_id": "w1", "status": "success", "exit_code": 0}),
+                    ),
+                    ev(
+                        "console_order_written",
+                        json!({
+                            "order_id": "ORD-1", "action": "workspace.run_terminal",
+                            "write_call_id": "w1", "round": 3, "plan_epoch": "e1", "run_id": "run-1",
+                        }),
+                    ),
+                    ev(
+                        "console_order_written",
+                        json!({
+                            "order_id": "ORD-1", "action": "workspace.run_terminal",
+                            "write_call_id": "w1", "round": 3, "plan_epoch": "e1", "run_id": "run-1",
+                        }),
+                    ),
+                ],
+            ),
+            (
+                "console_order_written_unbacked",
+                vec![ev(
+                    "console_order_written",
+                    json!({
+                        "order_id": "ORD-1", "action": "workspace.run_terminal",
+                        "write_call_id": "wX", "round": 3, "plan_epoch": "e1", "run_id": "run-1",
+                    }),
+                )],
+            ),
+            (
+                "console_order_written_write_reuse",
+                vec![
+                    ev(
+                        "tool_completed",
+                        json!({"tool": "blackboard_action_write", "call_id": "w1", "status": "success", "exit_code": 0}),
+                    ),
+                    ev(
+                        "console_order_written",
+                        json!({
+                            "order_id": "ORD-1", "action": "workspace.run_terminal",
+                            "write_call_id": "w1", "round": 3, "plan_epoch": "e1", "run_id": "run-1",
+                        }),
+                    ),
+                    ev(
+                        "console_order_written",
+                        json!({
+                            "order_id": "ORD-2", "action": "workspace.run_terminal",
+                            "write_call_id": "w1", "round": 3, "plan_epoch": "e1", "run_id": "run-1",
+                        }),
+                    ),
+                ],
+            ),
+            (
+                "console_order_rejected_ok",
+                vec![
+                    ev(
+                        "tool_completed",
+                        json!({"tool": "blackboard_action_write", "call_id": "w1", "status": "success", "exit_code": 0}),
+                    ),
+                    ev(
+                        "console_order_written",
+                        json!({
+                            "order_id": "ORD-1", "action": "workspace.run_terminal",
+                            "write_call_id": "w1", "round": 3, "plan_epoch": "e1", "run_id": "run-1",
+                        }),
+                    ),
+                    ev(
+                        "console_order_rejected",
+                        json!({
+                            "order_id": "ORD-1", "phase": "issue", "step": "policy",
+                            "code": "policy_denied", "reason": "mechanical refusal",
+                            "round": 3, "plan_epoch": "e1", "run_id": "run-1",
+                        }),
+                    ),
+                ],
+            ),
+            (
+                "console_order_rejected_unwritten",
+                vec![ev(
+                    "console_order_rejected",
+                    json!({
+                        "order_id": "ORD-9", "phase": "issue", "step": "policy",
+                        "code": "policy_denied", "reason": "mechanical refusal",
+                        "round": 3, "plan_epoch": "e1", "run_id": "run-1",
+                    }),
+                )],
+            ),
+            (
+                "console_order_rejected_bad_phase",
+                vec![
+                    ev(
+                        "tool_completed",
+                        json!({"tool": "blackboard_action_write", "call_id": "w1", "status": "success", "exit_code": 0}),
+                    ),
+                    ev(
+                        "console_order_written",
+                        json!({
+                            "order_id": "ORD-2", "action": "workspace.run_terminal",
+                            "write_call_id": "w1", "round": 3, "plan_epoch": "e1", "run_id": "run-1",
+                        }),
+                    ),
+                    ev(
+                        "console_order_rejected",
+                        json!({
+                            "order_id": "ORD-2", "phase": "execute", "step": "execute",
+                            "code": "boom", "reason": "mechanical refusal",
+                            "round": 3, "plan_epoch": "e1", "run_id": "run-1",
+                        }),
+                    ),
+                ],
+            ),
+            (
+                "console_order_rejected_pre_issue_bad_code",
+                vec![
+                    ev(
+                        "tool_completed",
+                        json!({"tool": "blackboard_action_write", "call_id": "w1", "status": "success", "exit_code": 0}),
+                    ),
+                    ev(
+                        "console_order_written",
+                        json!({
+                            "order_id": "ORD-3", "action": "workspace.run_terminal",
+                            "write_call_id": "w1", "round": 3, "plan_epoch": "e1", "run_id": "run-1",
+                        }),
+                    ),
+                    ev(
+                        "console_order_rejected",
+                        json!({
+                            "order_id": "ORD-3", "phase": "pre_issue", "step": "protocol",
+                            "code": "boom", "reason": "mechanical refusal",
+                            "round": 3, "plan_epoch": "e1", "run_id": "run-1",
+                        }),
+                    ),
+                ],
+            ),
+            (
+                "console_order_rejected_stamp_mismatch",
+                vec![
+                    ev(
+                        "tool_completed",
+                        json!({"tool": "blackboard_action_write", "call_id": "w1", "status": "success", "exit_code": 0}),
+                    ),
+                    ev(
+                        "console_order_written",
+                        json!({
+                            "order_id": "ORD-4", "action": "workspace.run_terminal",
+                            "write_call_id": "w1", "round": 3, "plan_epoch": "e1", "run_id": "run-1",
+                        }),
+                    ),
+                    ev(
+                        "console_order_rejected",
+                        json!({
+                            "order_id": "ORD-4", "phase": "issue", "step": "policy",
+                            "code": "policy_denied", "reason": "mechanical refusal",
+                            "round": 4, "plan_epoch": "e1", "run_id": "run-1",
+                        }),
+                    ),
+                ],
+            ),
+            (
+                "tool_running_ok",
+                vec![
+                    tstart("run_terminal_cmd", "c1"),
+                    ev(
+                        "tool_running",
+                        json!({"tool": "run_terminal_cmd", "call_id": "c1", "note": "still building"}),
+                    ),
+                    ev(
+                        "tool_completed",
+                        json!({"tool": "run_terminal_cmd", "call_id": "c1", "status": "success", "running": true, "exit_code": null}),
+                    ),
+                ],
+            ),
+            (
+                "tool_running_duplicate",
+                vec![
+                    tstart("run_terminal_cmd", "c1"),
+                    ev(
+                        "tool_running",
+                        json!({"tool": "run_terminal_cmd", "call_id": "c1"}),
+                    ),
+                    ev(
+                        "tool_running",
+                        json!({"tool": "run_terminal_cmd", "call_id": "c1"}),
+                    ),
+                    ev(
+                        "tool_completed",
+                        json!({"tool": "run_terminal_cmd", "call_id": "c1", "status": "success", "running": true, "exit_code": null}),
+                    ),
+                ],
+            ),
+            (
+                "tool_running_no_start",
+                vec![ev(
+                    "tool_running",
+                    json!({"tool": "run_terminal_cmd", "call_id": "c1"}),
+                )],
+            ),
+            (
+                "tool_running_completion_not_running",
+                vec![
+                    tstart("run_terminal_cmd", "c1"),
+                    ev(
+                        "tool_running",
+                        json!({"tool": "run_terminal_cmd", "call_id": "c1"}),
+                    ),
+                    ev(
+                        "tool_completed",
+                        json!({"tool": "run_terminal_cmd", "call_id": "c1", "status": "success", "exit_code": 0}),
+                    ),
+                ],
+            ),
+            (
+                "tool_running_idle_kill_ok",
+                vec![
+                    tstart("run_terminal_cmd", "c1"),
+                    ev(
+                        "tool_running",
+                        json!({"tool": "run_terminal_cmd", "call_id": "c1"}),
+                    ),
+                    ev(
+                        "tool_completed",
+                        json!({"tool": "run_terminal_cmd", "call_id": "c1", "status": "success", "running": true, "exit_code": null}),
+                    ),
+                    ev(
+                        "tool_running",
+                        json!({"tool": "run_terminal_cmd", "call_id": "c1", "status": "idle_killed", "reason": "no output activity for 300s"}),
+                    ),
+                ],
+            ),
+            (
+                "tool_running_idle_kill_premature",
+                vec![
+                    tstart("run_terminal_cmd", "c1"),
+                    ev(
+                        "tool_running",
+                        json!({"tool": "run_terminal_cmd", "call_id": "c1"}),
+                    ),
+                    ev(
+                        "tool_running",
+                        json!({"tool": "run_terminal_cmd", "call_id": "c1", "status": "idle_killed", "reason": "no output activity for 300s"}),
+                    ),
+                    ev(
+                        "tool_completed",
+                        json!({"tool": "run_terminal_cmd", "call_id": "c1", "status": "success", "running": true, "exit_code": null}),
+                    ),
+                ],
+            ),
+            (
+                "output_truncation_ok",
+                vec![ev(
+                    "tool_completed",
+                    json!({
+                        "tool": "run_terminal_cmd", "status": "success", "exit_code": 0,
+                        "output_truncated": true, "total_bytes": 90000,
+                        "output_object_id": "OBJ-1",
+                    }),
+                )],
+            ),
+            (
+                "output_truncation_missing_bytes",
+                vec![ev(
+                    "tool_completed",
+                    json!({
+                        "tool": "run_terminal_cmd", "status": "success", "exit_code": 0,
+                        "output_truncated": true,
+                    }),
+                )],
+            ),
+            (
+                "output_truncation_object_unmarked",
+                vec![ev(
+                    "tool_completed",
+                    json!({
+                        "tool": "run_terminal_cmd", "status": "success", "exit_code": 0,
+                        "output_object_id": "OBJ-1",
+                    }),
+                )],
+            ),
+            (
+                "budget_cue_ok",
+                vec![
+                    ev(
+                        "budget_cue_injected",
+                        json!({"remaining_seconds": 599, "threshold_seconds": 600}),
+                    ),
+                    ev(
+                        "budget_cue_injected",
+                        json!({"remaining_seconds": 299, "threshold_seconds": 300}),
+                    ),
+                ],
+            ),
+            (
+                "budget_cue_cap_exceeded",
+                vec![
+                    ev(
+                        "budget_cue_injected",
+                        json!({"remaining_seconds": 5, "threshold_seconds": 120}),
+                    ),
+                    ev(
+                        "budget_cue_injected",
+                        json!({"remaining_seconds": 4, "threshold_seconds": 120}),
+                    ),
+                    ev(
+                        "budget_cue_injected",
+                        json!({"remaining_seconds": 3, "threshold_seconds": 120}),
+                    ),
+                    ev(
+                        "budget_cue_injected",
+                        json!({"remaining_seconds": 2, "threshold_seconds": 120}),
+                    ),
+                    ev(
+                        "budget_cue_injected",
+                        json!({"remaining_seconds": 1, "threshold_seconds": 120}),
+                    ),
+                ],
+            ),
+            (
+                "budget_cue_not_below_threshold",
+                vec![ev(
+                    "budget_cue_injected",
+                    json!({"remaining_seconds": 600, "threshold_seconds": 600}),
+                )],
+            ),
+            (
+                "result_consistency_ok",
+                vec![committed(
+                    "act-1",
+                    1,
+                    json!([
+                        ledger_entry("s1", "doc_page", "full_text_observed"),
+                        ledger_entry("s2", "doc_page", "metadata_only"),
+                    ]),
+                )],
+            ),
+            ("result_consistency_with_binding_ok", {
+                let commit = committed(
+                    "act-1",
+                    1,
+                    json!([
+                        ledger_entry("s1", "doc_page", "full_text_observed"),
+                        ledger_entry("s2", "doc_page", "metadata_only"),
+                    ]),
+                );
+                let assess = bound_assessment(&commit);
+                vec![commit, assess]
+            }),
+            (
+                "result_consistency_counts_mismatch",
+                vec![mutate_payload(
+                    committed(
+                        "act-1",
+                        1,
+                        json!([ledger_entry("s1", "doc_page", "full_text_observed")]),
+                    ),
+                    "source_counts",
+                    json!({"full_text_observed": 0, "partial_text_observed": 0, "metadata_only": 0, "unavailable": 0, "total": 1}),
+                )],
+            ),
+            (
+                "result_consistency_degraded_mismatch",
+                vec![mutate_payload(
+                    committed(
+                        "act-1",
+                        1,
+                        json!([ledger_entry("s1", "doc_page", "full_text_observed")]),
+                    ),
+                    "visibility_degraded",
+                    json!(true),
+                )],
+            ),
+            (
+                "result_consistency_bad_digest",
+                vec![mutate_payload(
+                    committed(
+                        "act-1",
+                        1,
+                        json!([ledger_entry("s1", "doc_page", "metadata_only")]),
+                    ),
+                    "result_digest",
+                    json!(hex64(9)),
+                )],
+            ),
+            (
+                "result_consistency_retired_organized",
+                vec![mutate_payload(
+                    committed(
+                        "act-1",
+                        1,
+                        json!([ledger_entry("s1", "doc_page", "metadata_only")]),
+                    ),
+                    "organized_response",
+                    json!({"blocks": []}),
+                )],
+            ),
+            ("result_consistency_assessment_drift", {
+                let commit = committed(
+                    "act-1",
+                    1,
+                    json!([ledger_entry("s1", "doc_page", "full_text_observed")]),
+                );
+                let assess = mutate_payload(
+                    bound_assessment(&commit),
+                    "source_counts",
+                    json!({"full_text_observed": 9, "partial_text_observed": 0, "metadata_only": 0, "unavailable": 0, "total": 9}),
+                );
+                vec![commit, assess]
+            }),
+            (
+                "reason_codes_ok",
+                vec![ev(
+                    "information_sufficiency_assessment",
+                    json!({
+                        "assessment_id": "ASSESS-1", "activation_id": "act-1",
+                        "contract_revision": 1, "contract_id": "C1",
+                        "reason_codes": ["no_mechanical_coverage_requirement", "no_fulltext_evidence"],
+                    }),
+                )],
+            ),
+            (
+                "reason_codes_retired",
+                vec![ev(
+                    "information_sufficiency_assessment",
+                    json!({
+                        "assessment_id": "ASSESS-1", "activation_id": "act-1",
+                        "contract_revision": 1, "contract_id": "C1",
+                        "reason_codes": ["structured_result_validation_failed"],
+                    }),
+                )],
+            ),
+            (
+                "reason_codes_unknown",
+                vec![ev(
+                    "information_sufficiency_assessment",
+                    json!({
+                        "assessment_id": "ASSESS-1", "activation_id": "act-1",
+                        "contract_revision": 1, "contract_id": "C1",
+                        "reason_codes": ["vibes_based"],
+                    }),
+                )],
+            ),
+            (
+                "source_weighting_ok",
+                vec![committed(
+                    "act-1",
+                    1,
+                    json!([json!({
+                        "source_id": "s1", "source_type": "web_page",
+                        "visibility": "metadata_only", "tier": "authoritative",
+                        "mechanical_weight": 1.1, "weight_reason": "seed whitelist",
+                    })]),
+                )],
+            ),
+            (
+                "source_weighting_web_page_no_tier",
+                vec![committed(
+                    "act-1",
+                    1,
+                    json!([ledger_entry("s1", "web_page", "metadata_only")]),
+                )],
+            ),
+            (
+                "source_weighting_partial_fields",
+                vec![committed(
+                    "act-1",
+                    1,
+                    json!([json!({
+                        "source_id": "s1", "source_type": "doc_page",
+                        "visibility": "metadata_only", "tier": "default",
+                    })]),
+                )],
+            ),
+            (
+                "source_weighting_wrong_weight",
+                vec![committed(
+                    "act-1",
+                    1,
+                    json!([json!({
+                        "source_id": "s1", "source_type": "doc_page",
+                        "visibility": "metadata_only", "tier": "low_quality",
+                        "mechanical_weight": 1.0, "weight_reason": "wrong table entry",
+                    })]),
+                )],
+            ),
+            (
+                "source_weighting_retired_annotation",
+                vec![committed(
+                    "act-1",
+                    1,
+                    json!([json!({
+                        "source_id": "s1", "source_type": "doc_page",
+                        "visibility": "metadata_only", "model_weight": 0.5,
+                    })]),
+                )],
+            ),
+            (
+                "candidate_pool_ok",
+                vec![{
+                    let entries = vec![pool_entry(
+                        "s1",
+                        json!(["u1", "u2"]),
+                        json!([pool_item("u1"), pool_item("u2")]),
+                    )];
+                    let mut commit =
+                        finish_commit("act-1", 1, json!(entries.clone()), pool_refs(&entries));
+                    commit["payload"]["prefilter_log"] = json!([
+                        {"source_id": "s1", "url": "u3", "reason": "bad_url", "action": "removed", "canonical_url": null},
+                    ]);
+                    commit
+                }],
+            ),
+            (
+                "candidate_pool_non_web_search",
+                vec![{
+                    let entry = json!({
+                        "source_id": "s1", "source_type": "doc_page",
+                        "visibility": "metadata_only",
+                        "candidate_urls": ["u1"], "candidate_pool": [pool_item("u1")],
+                    });
+                    let entries = vec![entry];
+                    let mut commit =
+                        finish_commit("act-1", 1, json!(entries.clone()), pool_refs(&entries));
+                    commit["payload"]["prefilter_log"] = json!([]);
+                    commit
+                }],
+            ),
+            (
+                "candidate_pool_empty_no_removal",
+                vec![{
+                    let entries = vec![pool_entry("s1", json!([]), json!([]))];
+                    let mut commit =
+                        finish_commit("act-1", 1, json!(entries.clone()), pool_refs(&entries));
+                    commit["payload"]["prefilter_log"] = json!([]);
+                    commit
+                }],
+            ),
+            (
+                "candidate_pool_url_mismatch",
+                vec![{
+                    let entries = vec![pool_entry(
+                        "s1",
+                        json!(["u1"]),
+                        json!([{
+                            "url": "uX", "canonical_url": "uX", "tier": "default",
+                            "mechanical_weight": 1.0, "weight_reason": "default tier",
+                            "relevance": "direct", "form_reasons": [],
+                        }]),
+                    )];
+                    let mut commit =
+                        finish_commit("act-1", 1, json!(entries.clone()), pool_refs(&entries));
+                    commit["payload"]["prefilter_log"] = json!([]);
+                    commit
+                }],
+            ),
+            (
+                "candidate_pool_refs_not_mirrored",
+                vec![{
+                    let entries = vec![pool_entry("s1", json!(["u1"]), json!([pool_item("u1")]))];
+                    let mut commit = finish_commit("act-1", 1, json!(entries), json!([]));
+                    commit["payload"]["prefilter_log"] = json!([]);
+                    commit
+                }],
+            ),
+            (
+                "candidate_prefilter_ok",
+                vec![{
+                    let entries = vec![pool_entry("s1", json!(["u1"]), json!([pool_item("u1")]))];
+                    let mut commit =
+                        finish_commit("act-1", 1, json!(entries.clone()), pool_refs(&entries));
+                    commit["payload"]["prefilter_log"] = json!([
+                        {"source_id": "s1", "url": "u2", "reason": "bad_url", "action": "removed", "canonical_url": null},
+                    ]);
+                    commit
+                }],
+            ),
+            (
+                "candidate_prefilter_missing_log",
+                vec![{
+                    let entries = vec![pool_entry("s1", json!(["u1"]), json!([pool_item("u1")]))];
+                    finish_commit("act-1", 1, json!(entries), pool_refs(&entries))
+                }],
+            ),
+            (
+                "candidate_prefilter_bad_reason",
+                vec![{
+                    let entries = vec![pool_entry("s1", json!(["u1"]), json!([pool_item("u1")]))];
+                    let mut commit =
+                        finish_commit("act-1", 1, json!(entries.clone()), pool_refs(&entries));
+                    commit["payload"]["prefilter_log"] = json!([
+                        {"source_id": "s1", "url": "u2", "reason": "vibes", "action": "removed"},
+                    ]);
+                    commit
+                }],
+            ),
+            (
+                "candidate_prefilter_removed_retained",
+                vec![{
+                    let entries = vec![pool_entry("s1", json!(["u1"]), json!([pool_item("u1")]))];
+                    let mut commit =
+                        finish_commit("act-1", 1, json!(entries.clone()), pool_refs(&entries));
+                    commit["payload"]["prefilter_log"] = json!([
+                        {"source_id": "s1", "url": "u1", "reason": "bad_url", "action": "removed"},
+                    ]);
+                    commit
+                }],
+            ),
+            (
+                "candidate_prefilter_duplicate_entry",
+                vec![{
+                    let entries = vec![pool_entry("s1", json!(["u1"]), json!([pool_item("u1")]))];
+                    let mut commit =
+                        finish_commit("act-1", 1, json!(entries.clone()), pool_refs(&entries));
+                    commit["payload"]["prefilter_log"] = json!([
+                        {"source_id": "s1", "url": "u2", "reason": "bad_url", "action": "removed"},
+                        {"source_id": "s1", "url": "u2", "reason": "bad_url", "action": "removed"},
+                    ]);
+                    commit
+                }],
+            ),
+            (
+                "candidate_count_ok",
+                vec![ev(
+                    "tool_completed",
+                    json!({
+                        "tool": "browser_read", "call_id": "c1", "status": "success",
+                        "candidate_count": 3, "candidate_cap": 8,
+                    }),
+                )],
+            ),
+            (
+                "candidate_count_fields_alone",
+                vec![ev(
+                    "tool_completed",
+                    json!({
+                        "tool": "web_fetch", "call_id": "c1", "status": "success",
+                        "candidate_count": 3,
+                    }),
+                )],
+            ),
+            (
+                "candidate_count_wrong_family",
+                vec![ev(
+                    "tool_completed",
+                    json!({
+                        "tool": "read_file", "call_id": "c1", "status": "success",
+                        "candidate_count": 3, "candidate_cap": 8,
+                    }),
+                )],
+            ),
+            (
+                "candidate_count_missing_on_lane",
+                vec![ev(
+                    "tool_completed",
+                    json!({
+                        "tool": "browser_read", "call_id": "c1", "status": "success",
+                    }),
+                )],
+            ),
+            (
+                "candidate_count_cap_mismatch",
+                vec![ev(
+                    "tool_completed",
+                    json!({
+                        "tool": "web_fetch", "call_id": "c1", "status": "error", "exit_code": 1,
+                        "error": "web_fetch_candidate_cap_exceeded",
+                        "candidate_count": 5, "candidate_cap": 8,
+                    }),
+                )],
+            ),
+            (
+                "candidate_count_wrapper_ok",
+                vec![ev(
+                    "tool_completed",
+                    json!({
+                        "tool": "web_fetch", "call_id": "c1", "status": "success",
+                        "target": "external_retrieval",
+                    }),
+                )],
+            ),
+            (
+                "inject_budget_ok",
+                vec![ev(
+                    "tool_completed",
+                    json!({
+                        "tool": "read_file", "call_id": "c1", "status": "error", "exit_code": 1,
+                        "error": "round_inject_budget_exceeded",
+                        "inject_tokens_used": 60000, "inject_tokens_budget": 50000,
+                    }),
+                )],
+            ),
+            (
+                "inject_budget_missing_fields",
+                vec![ev(
+                    "tool_completed",
+                    json!({
+                        "tool": "read_file", "call_id": "c1", "status": "error", "exit_code": 1,
+                        "error": "round_inject_budget_exceeded",
+                    }),
+                )],
+            ),
+            (
+                "inject_budget_fields_other_code",
+                vec![ev(
+                    "tool_completed",
+                    json!({
+                        "tool": "read_file", "call_id": "c1", "status": "success", "error": "boom",
+                        "inject_tokens_used": 5, "inject_tokens_budget": 10,
+                    }),
+                )],
+            ),
+            (
+                "inject_budget_zero_budget",
+                vec![ev(
+                    "tool_completed",
+                    json!({
+                        "tool": "read_file", "call_id": "c1", "status": "error", "exit_code": 1,
+                        "error": "round_inject_budget_exceeded",
+                        "inject_tokens_used": 5, "inject_tokens_budget": 0,
+                    }),
+                )],
+            ),
+            (
+                "receipt_gate_without_start_ok",
+                vec![denial("search_replace", "acaf", "error", 1)],
+            ),
+            (
+                "receipt_execution_pair_ok",
+                vec![
+                    tstart("run_terminal_cmd", "c1"),
+                    ev(
+                        "tool_completed",
+                        json!({"tool": "run_terminal_cmd", "call_id": "c1", "status": "error", "exit_code": 1, "error": "timeout"}),
+                    ),
+                ],
+            ),
+            (
+                "receipt_completed_before_start",
+                vec![
+                    ev(
+                        "tool_completed",
+                        json!({"tool": "run_terminal_cmd", "call_id": "c1", "status": "error", "exit_code": 1, "error": "timeout"}),
+                    ),
+                    tstart("run_terminal_cmd", "c1"),
+                ],
+            ),
+            (
+                "receipt_non_gate_no_start",
+                vec![ev(
+                    "tool_completed",
+                    json!({"tool": "run_terminal_cmd", "call_id": "c1", "status": "error", "exit_code": 1, "error": "timeout"}),
+                )],
+            ),
+            (
+                "receipt_duplicate_completed",
+                vec![
+                    tstart("run_terminal_cmd", "c1"),
+                    ev(
+                        "tool_completed",
+                        json!({"tool": "run_terminal_cmd", "call_id": "c1", "status": "error", "exit_code": 1, "error": "timeout"}),
+                    ),
+                    ev(
+                        "tool_completed",
+                        json!({"tool": "run_terminal_cmd", "call_id": "c1", "status": "error", "exit_code": 1, "error": "timeout"}),
+                    ),
+                ],
+            ),
+            (
+                "receipt_open_start_at_terminal",
+                vec![
+                    tstart("run_terminal_cmd", "c1"),
+                    ev("run_finished", json!({})),
+                ],
+            ),
+            (
+                "receipt_open_start_invalidated_ok",
+                vec![
+                    tstart("run_terminal_cmd", "c1"),
+                    ev("run_invalidated", json!({})),
+                ],
+            ),
+            (
+                "dep_graph_ok",
+                vec![
+                    ev(
+                        "tool_completed",
+                        json!({
+                            "tool": "read_file", "call_id": "r1", "status": "success", "exit_code": 0,
+                            "dep_graph": {"kind": "read", "path": "a.rs", "anchor": {"sha256": hex64(1), "size": 10, "mtime": 1}},
+                        }),
+                    ),
+                    ev(
+                        "tool_completed",
+                        json!({
+                            "tool": "search_replace", "call_id": "w1", "status": "success", "exit_code": 0,
+                            "dep_graph": {"kind": "write", "path": "a.rs", "consumed_read": "r1",
+                                "consumed_anchor": {"sha256": hex64(1), "size": 10, "mtime": 1}, "new_anchor": null},
+                        }),
+                    ),
+                ],
+            ),
+            (
+                "dep_graph_bad_kind",
+                vec![ev(
+                    "tool_completed",
+                    json!({
+                        "tool": "read_file", "call_id": "r1", "status": "success", "exit_code": 0,
+                        "dep_graph": {"kind": "mutate", "path": "a.rs", "anchor": null},
+                    }),
+                )],
+            ),
+            (
+                "dep_graph_wrong_tool",
+                vec![ev(
+                    "tool_completed",
+                    json!({
+                        "tool": "grep", "call_id": "r1", "status": "success", "exit_code": 0,
+                        "dep_graph": {"kind": "read", "path": "a.rs", "anchor": null},
+                    }),
+                )],
+            ),
+            (
+                "dep_graph_non_success",
+                vec![ev(
+                    "tool_completed",
+                    json!({
+                        "tool": "read_file", "call_id": "r1", "status": "success", "exit_code": 1,
+                        "dep_graph": {"kind": "read", "path": "a.rs", "anchor": null},
+                    }),
+                )],
+            ),
+            (
+                "dep_graph_dangling_consumed",
+                vec![ev(
+                    "tool_completed",
+                    json!({
+                        "tool": "search_replace", "call_id": "w1", "status": "success", "exit_code": 0,
+                        "dep_graph": {"kind": "write", "path": "a.rs", "consumed_read": "rX",
+                            "consumed_anchor": {"sha256": hex64(1), "size": 10, "mtime": 1}, "new_anchor": null},
+                    }),
+                )],
+            ),
+            (
+                "dep_graph_anchor_mismatch",
+                vec![
+                    ev(
+                        "tool_completed",
+                        json!({
+                            "tool": "read_file", "call_id": "r1", "status": "success", "exit_code": 0,
+                            "dep_graph": {"kind": "read", "path": "a.rs", "anchor": {"sha256": hex64(1), "size": 10, "mtime": 1}},
+                        }),
+                    ),
+                    ev(
+                        "tool_completed",
+                        json!({
+                            "tool": "search_replace", "call_id": "w1", "status": "success", "exit_code": 0,
+                            "dep_graph": {"kind": "write", "path": "a.rs", "consumed_read": "r1",
+                                "consumed_anchor": {"sha256": hex64(2), "size": 10, "mtime": 1}, "new_anchor": null},
+                        }),
+                    ),
+                ],
+            ),
+            (
+                "mechanical_audit_ok",
+                vec![ev(
+                    "mechanical_audit_update",
+                    json!({
+                        "kind": "tool_result",
+                        "payload": {"key": "file:a.rs", "round": 3, "summary": "read a.rs", "anomaly": null},
+                    }),
+                )],
+            ),
+            (
+                "mechanical_audit_bad_kind",
+                vec![ev(
+                    "mechanical_audit_update",
+                    json!({
+                        "kind": "vibes",
+                        "payload": {"key": "file:a.rs", "round": 3, "summary": "read a.rs", "anomaly": null},
+                    }),
+                )],
+            ),
+            (
+                "mechanical_audit_negative_round",
+                vec![ev(
+                    "mechanical_audit_update",
+                    json!({
+                        "kind": "tool_result",
+                        "payload": {"key": "file:a.rs", "round": -1, "summary": "read a.rs", "anomaly": null},
+                    }),
+                )],
+            ),
+            (
+                "mechanical_audit_anomaly_type",
+                vec![ev(
+                    "mechanical_audit_update",
+                    json!({
+                        "kind": "tool_result",
+                        "payload": {"key": "file:a.rs", "round": 3, "summary": "read a.rs", "anomaly": 5},
+                    }),
+                )],
+            ),
+            (
+                "recovery_truncation_ok",
+                vec![
+                    ev("context_recovery_truncated", json!({"rounds_dropped": 5})),
+                    ev("model_request", json!({})),
+                ],
+            ),
+            (
+                "recovery_truncation_after_model_request",
+                vec![
+                    ev("model_request", json!({})),
+                    ev("context_recovery_truncated", json!({"rounds_dropped": 5})),
+                ],
+            ),
+            (
+                "recovery_truncation_zero_rounds",
+                vec![
+                    ev("context_recovery_truncated", json!({"rounds_dropped": 0})),
+                    ev("model_request", json!({})),
+                ],
+            ),
+            (
+                "context_compressed_ok",
+                vec![ev(
+                    "context_compressed",
+                    json!({
+                        "mode": "mechanical", "reason": "rhythm", "summary_incomplete": false,
+                        "summary_id": "S1", "summary_digest": "d1", "summary_path": "p1",
+                    }),
+                )],
+            ),
+            (
+                "context_compressed_bad_reason",
+                vec![ev(
+                    "context_compressed",
+                    json!({
+                        "mode": "mechanical", "reason": "bored", "summary_incomplete": false,
+                        "summary_id": "S1", "summary_digest": "d1", "summary_path": "p1",
+                    }),
+                )],
+            ),
+            (
+                "context_compressed_mechanical_incomplete",
+                vec![ev(
+                    "context_compressed",
+                    json!({
+                        "mode": "mechanical", "reason": "fallback", "summary_incomplete": true,
+                        "summary_id": null, "summary_digest": null, "summary_path": null,
+                    }),
+                )],
+            ),
+            (
+                "context_compressed_incomplete_with_archive",
+                vec![ev(
+                    "context_compressed",
+                    json!({
+                        "mode": "template_summary", "reason": "rhythm", "summary_incomplete": true,
+                        "summary_id": "S1", "summary_digest": "d1", "summary_path": "p1",
+                    }),
+                )],
+            ),
+            (
+                "context_compressed_write_failed_on_incomplete",
+                vec![ev(
+                    "context_compressed",
+                    json!({
+                        "mode": "template_summary", "reason": "fallback", "summary_incomplete": true,
+                        "summary_id": null, "summary_digest": null, "summary_path": null,
+                        "archive_write_failed": true,
+                    }),
+                )],
+            ),
+            (
+                "activation_restore_ok",
+                vec![ev(
+                    "retrieval_activation_restored",
+                    json!({"activation_id": "act-9"}),
+                )],
+            ),
+            (
+                "activation_restore_duplicate",
+                vec![
+                    ev(
+                        "retrieval_activation_restored",
+                        json!({"activation_id": "act-9"}),
+                    ),
+                    ev(
+                        "retrieval_activation_restored",
+                        json!({"activation_id": "act-9"}),
+                    ),
+                ],
+            ),
+            (
+                "probe_partition_ok",
+                vec![probe_event(
+                    work_tools_minus("grep"),
+                    json!([{"tool": "grep", "reason": "not registered in this session"}]),
+                )],
+            ),
+            (
+                "probe_overlap",
+                vec![probe_event(
+                    toolsets::WORK_TOOLS.to_vec(),
+                    json!([{"tool": "read_file", "reason": "not registered in this session"}]),
+                )],
+            ),
+            (
+                "probe_judgment_word",
+                vec![probe_event(
+                    work_tools_minus("grep"),
+                    json!([{"tool": "grep", "reason": "unavailable in this session"}]),
+                )],
+            ),
+            (
+                "probe_partition_gap",
+                vec![probe_event(
+                    work_tools_minus("grep"),
+                    json!([{"tool": "ghost_tool", "reason": "not registered in this session"}]),
+                )],
+            ),
+            (
+                "request_header_ok",
+                vec![
+                    header_event(
+                        "initial",
+                        "H1",
+                        None,
+                        "S1",
+                        "T1",
+                        "C1",
+                        vec!["read_file"],
+                        None,
+                    ),
+                    header_event(
+                        "change",
+                        "H2",
+                        Some("H1"),
+                        "S1",
+                        "T2",
+                        "C1",
+                        vec!["read_file", "grep"],
+                        Some("tools"),
+                    ),
+                ],
+            ),
+            (
+                "request_header_initial_with_previous",
+                vec![header_event(
+                    "initial",
+                    "H1",
+                    Some("H0"),
+                    "S1",
+                    "T1",
+                    "C1",
+                    vec!["read_file"],
+                    None,
+                )],
+            ),
+            (
+                "request_header_change_prev_mismatch",
+                vec![
+                    header_event(
+                        "initial",
+                        "H1",
+                        None,
+                        "S1",
+                        "T1",
+                        "C1",
+                        vec!["read_file"],
+                        None,
+                    ),
+                    header_event(
+                        "change",
+                        "H2",
+                        Some("HX"),
+                        "S1",
+                        "T2",
+                        "C1",
+                        vec!["read_file", "grep"],
+                        Some("tools"),
+                    ),
+                ],
+            ),
+            (
+                "request_header_change_kind_wrong",
+                vec![
+                    header_event(
+                        "initial",
+                        "H1",
+                        None,
+                        "S1",
+                        "T1",
+                        "C1",
+                        vec!["read_file"],
+                        None,
+                    ),
+                    header_event(
+                        "change",
+                        "H2",
+                        Some("H1"),
+                        "S1",
+                        "T2",
+                        "C1",
+                        vec!["read_file", "grep"],
+                        Some("config"),
+                    ),
+                ],
+            ),
+            (
+                "request_header_tools_dup",
+                vec![header_event(
+                    "initial",
+                    "H1",
+                    None,
+                    "S1",
+                    "T1",
+                    "C1",
+                    vec!["read_file", "read_file"],
+                    None,
+                )],
+            ),
+            (
+                "probe_accuracy_ok",
+                vec![
+                    header_event(
+                        "initial",
+                        "H1",
+                        None,
+                        "S1",
+                        "T1",
+                        "C1",
+                        vec!["read_file"],
+                        None,
+                    ),
+                    probe_event(toolsets::WORK_TOOLS.to_vec(), json!([])),
+                    probe_event(
+                        work_tools_minus("grep"),
+                        json!([{"tool": "grep", "reason": "not registered in this session"}]),
+                    ),
+                    header_event(
+                        "change",
+                        "H2",
+                        Some("H1"),
+                        "S1",
+                        "T2",
+                        "C1",
+                        vec!["read_file", "grep"],
+                        Some("tools"),
+                    ),
+                    ev("model_output", json!({})),
+                ],
+            ),
+            (
+                "probe_accuracy_unreported_flip",
+                vec![
+                    header_event(
+                        "initial",
+                        "H1",
+                        None,
+                        "S1",
+                        "T1",
+                        "C1",
+                        vec!["read_file"],
+                        None,
+                    ),
+                    probe_event(toolsets::WORK_TOOLS.to_vec(), json!([])),
+                    probe_event(
+                        work_tools_minus("grep"),
+                        json!([{"tool": "grep", "reason": "not registered in this session"}]),
+                    ),
+                    ev("model_output", json!({})),
+                ],
+            ),
+            (
+                "probe_accuracy_no_header_events_ok",
+                vec![
+                    probe_event(toolsets::WORK_TOOLS.to_vec(), json!([])),
+                    probe_event(
+                        work_tools_minus("grep"),
+                        json!([{"tool": "grep", "reason": "not registered in this session"}]),
+                    ),
+                    ev("model_output", json!({})),
+                ],
+            ),
+            (
+                "v01_tool_budget_fields",
+                vec![
+                    ev01(
+                        "tool_completed",
+                        json!({"tool": "web_fetch", "status": "success", "candidate_count": 3}),
+                    ),
+                    ev01(
+                        "tool_completed",
+                        json!({"tool": "read_file", "status": "success", "error": "boom", "inject_tokens_used": 5, "inject_tokens_budget": 10}),
+                    ),
+                ],
+            ),
         ]
     }
 
-    /// Expected verdicts per scenario per family (the S2b spec table).
+    /// Expected verdicts per scenario per family (the S2b/S2c spec table).
     /// `true` = the family must report at least one error.
     fn expected_violations() -> Vec<(&'static str, Vec<(&'static str, bool)>)> {
         let ok: Vec<(&'static str, bool)> =
-            S2B_FAMILIES.iter().map(|family| (*family, false)).collect();
+            ALL_FAMILIES.iter().map(|family| (*family, false)).collect();
         let mut rows: Vec<(&'static str, Vec<(&'static str, bool)>)> = scenarios()
             .iter()
             .map(|(name, _)| (*name, ok.clone()))
@@ -2056,7 +3719,188 @@ mod tests {
         expect("lifecycle_restore_not_preceding", "lifecycle");
         expect("lifecycle_restore_activation_mismatch", "lifecycle");
         expect("lifecycle_continue_plus_one_wrong", "lifecycle");
+        expect("failure_target_url_wrong_tool", "failure_target");
         expect("lifecycle_close_replayed_outcome_errors", "lifecycle");
+        // S2c cross-family cell: the ledger window-reset scenario journals a
+        // bare context_compressed marker, which the S2c context_compressed
+        // family (correctly) flags on BOTH judges.
+        expect("ledger_advance_window_reset_ok", "context_compressed");
+        // S2c cross-family cells: these failure_target scenarios carry a
+        // non-gate error completion without a preceding tool_started, so the
+        // receipt_event_isomorphism family (S2c) reports them as well.
+        for name in [
+            "failure_target_ok",
+            "failure_target_bad_id",
+            "failure_target_wrong_tool",
+            "failure_target_preview_too_long",
+            "failure_target_file_ok",
+            "failure_target_file_wrong_tool",
+            "failure_target_url_ok",
+            "failure_target_url_wrong_tool",
+        ] {
+            expect(name, "receipt_event_isomorphism");
+        }
+        // ── S2c violation rows ─────────────────────────────────────────
+        expect("inquiry_kind_mismatch", "inquiry_kind");
+        for name in [
+            "plan_write_refill_attempt_2",
+            "plan_write_refill_unfollowed",
+            "plan_write_refill_valid_true",
+            "plan_write_after_refill_attempt_1",
+            "plan_write_rotate_degrade_valid_false",
+            "plan_write_accepted_attempt_3",
+        ] {
+            expect(name, "plan_write");
+        }
+        for name in [
+            "console_mode_c2d_bad_trigger",
+            "console_mode_d2c_bad_related",
+            "console_mode_double_streak",
+            "console_mode_direct_tool_unstamped",
+            "console_mode_direct_tool_wrong_tid",
+        ] {
+            expect(name, "console_mode_transition");
+        }
+        for name in [
+            "console_order_written_duplicate",
+            "console_order_written_unbacked",
+            "console_order_written_write_reuse",
+        ] {
+            expect(name, "console_order_written");
+        }
+        for name in [
+            "console_order_rejected_unwritten",
+            "console_order_rejected_bad_phase",
+            "console_order_rejected_pre_issue_bad_code",
+            "console_order_rejected_stamp_mismatch",
+        ] {
+            expect(name, "console_order_rejected");
+        }
+        for name in [
+            "tool_running_duplicate",
+            "tool_running_no_start",
+            "tool_running_completion_not_running",
+            "tool_running_idle_kill_premature",
+        ] {
+            expect(name, "tool_running");
+        }
+        for name in [
+            "output_truncation_missing_bytes",
+            "output_truncation_object_unmarked",
+        ] {
+            expect(name, "output_truncation");
+        }
+        for name in ["budget_cue_cap_exceeded", "budget_cue_not_below_threshold"] {
+            expect(name, "budget_cue_injected");
+        }
+        for name in [
+            "result_consistency_counts_mismatch",
+            "result_consistency_degraded_mismatch",
+            "result_consistency_bad_digest",
+            "result_consistency_retired_organized",
+            "result_consistency_assessment_drift",
+        ] {
+            expect(name, "result_consistency");
+        }
+        for name in ["reason_codes_retired", "reason_codes_unknown"] {
+            expect(name, "reason_codes");
+        }
+        for name in [
+            "source_weighting_web_page_no_tier",
+            "source_weighting_partial_fields",
+            "source_weighting_wrong_weight",
+            "source_weighting_retired_annotation",
+        ] {
+            expect(name, "source_weighting");
+        }
+        for name in [
+            "candidate_pool_non_web_search",
+            "candidate_pool_empty_no_removal",
+            "candidate_pool_url_mismatch",
+            "candidate_pool_refs_not_mirrored",
+        ] {
+            expect(name, "search_candidate_pool");
+        }
+        for name in [
+            "candidate_prefilter_missing_log",
+            "candidate_prefilter_bad_reason",
+            "candidate_prefilter_removed_retained",
+            "candidate_prefilter_duplicate_entry",
+        ] {
+            expect(name, "candidate_prefilter");
+        }
+        for name in [
+            "candidate_count_fields_alone",
+            "candidate_count_wrong_family",
+            "candidate_count_missing_on_lane",
+            "candidate_count_cap_mismatch",
+            "v01_tool_budget_fields",
+        ] {
+            expect(name, "candidate_count");
+        }
+        for name in [
+            "inject_budget_missing_fields",
+            "inject_budget_fields_other_code",
+            "inject_budget_zero_budget",
+            "v01_tool_budget_fields",
+        ] {
+            expect(name, "inject_budget");
+        }
+        for name in [
+            "receipt_completed_before_start",
+            "receipt_non_gate_no_start",
+            "receipt_duplicate_completed",
+            "receipt_open_start_at_terminal",
+        ] {
+            expect(name, "receipt_event_isomorphism");
+        }
+        for name in [
+            "dep_graph_bad_kind",
+            "dep_graph_wrong_tool",
+            "dep_graph_non_success",
+            "dep_graph_dangling_consumed",
+            "dep_graph_anchor_mismatch",
+        ] {
+            expect(name, "dep_graph_events");
+        }
+        for name in [
+            "mechanical_audit_bad_kind",
+            "mechanical_audit_negative_round",
+            "mechanical_audit_anomaly_type",
+        ] {
+            expect(name, "mechanical_audit");
+        }
+        for name in [
+            "recovery_truncation_after_model_request",
+            "recovery_truncation_zero_rounds",
+        ] {
+            expect(name, "recovery_truncation");
+        }
+        for name in [
+            "context_compressed_bad_reason",
+            "context_compressed_mechanical_incomplete",
+            "context_compressed_incomplete_with_archive",
+            "context_compressed_write_failed_on_incomplete",
+        ] {
+            expect(name, "context_compressed");
+        }
+        expect("activation_restore_duplicate", "activation_restore");
+        for name in [
+            "probe_overlap",
+            "probe_judgment_word",
+            "probe_partition_gap",
+        ] {
+            expect(name, "tool_availability_probe");
+        }
+        for name in [
+            "request_header_initial_with_previous",
+            "request_header_change_prev_mismatch",
+            "request_header_change_kind_wrong",
+            "request_header_tools_dup",
+        ] {
+            expect(name, "request_header");
+        }
+        expect("probe_accuracy_unreported_flip", "probe_accuracy");
         rows
     }
 
@@ -2079,8 +3923,8 @@ mod tests {
         }
     }
 
-    /// S2b acceptance: per-family verdict parity with the Python judge on the
-    /// same corpus — the synthetic scenarios above PLUS every real v0.2
+    /// Task D acceptance: per-family verdict parity with the Python judge on
+    /// the same corpus (all 31 families since S2c) — the synthetic scenarios above PLUS every real v0.2
     /// fixture journal. Verdict parity = (errors empty) agrees on both sides;
     /// message text is deliberately Rust-form.
     #[test]
@@ -2147,19 +3991,43 @@ mod tests {
         }
         fixture_names.sort();
 
-        // Python side: run the seven `_verify_v02_*` functions per corpus item.
+        // Python side: run the 31 `_verify_v02_*` functions per corpus item.
         let script = r#"
 import sys, json
 sys.path.insert(0, sys.argv[1])
 import run_event_journal_validation as v
 fams = {
-    "control_tickets": v._verify_v02_control_tickets,
-    "retrieval_mode": v._verify_v02_retrieval_mode,
+    "inquiry_kind": v._verify_v02_inquiry_kind,
+    "plan_write": v._verify_v02_plan_write,
+    "console_mode_transition": v._verify_v02_console_mode_transition,
+    "console_order_written": v._verify_v02_console_order_written,
+    "console_order_rejected": v._verify_v02_console_order_rejected,
     "ledger_fold_advance": v._verify_v02_ledger_fold_advance,
     "ledger_fold_write_failed": v._verify_v02_ledger_fold_write_failed,
+    "lifecycle": v._verify_v02_lifecycle,
+    "tool_running": v._verify_v02_tool_running,
+    "output_truncation": v._verify_v02_output_truncation,
+    "budget_cue_injected": v._verify_v02_budget_cue_injected,
+    "retrieval_mode": v._verify_v02_retrieval_mode,
+    "result_consistency": v._verify_v02_result_consistency,
+    "reason_codes": v._verify_v02_reason_codes,
+    "source_weighting": v._verify_v02_source_weighting,
+    "search_candidate_pool": v._verify_v02_search_candidate_pool,
+    "candidate_prefilter": v._verify_v02_candidate_prefilter,
+    "candidate_count": v._verify_v02_candidate_count,
+    "inject_budget": v._verify_v02_inject_budget,
     "policy_denial": v._verify_v02_policy_denial,
     "failure_target": v._verify_v02_failure_target,
-    "lifecycle": v._verify_v02_lifecycle,
+    "receipt_event_isomorphism": v._verify_v02_receipt_event_isomorphism,
+    "dep_graph_events": v._verify_v02_dep_graph_events,
+    "mechanical_audit": v._verify_v02_mechanical_audit,
+    "recovery_truncation": v._verify_v02_recovery_truncation,
+    "context_compressed": v._verify_v02_context_compressed,
+    "activation_restore": v._verify_v02_activation_restore,
+    "control_tickets": v._verify_v02_control_tickets,
+    "tool_availability_probe": v._verify_v02_tool_availability_probe,
+    "request_header": v._verify_v02_request_header,
+    "probe_accuracy": v._verify_v02_probe_accuracy,
 }
 data = json.load(sys.stdin)
 out = {}
@@ -2222,7 +4090,7 @@ json.dump(out, sys.stdout)
             let py_row = py_verdicts
                 .get(name)
                 .unwrap_or_else(|| panic!("python missing scenario {name}"));
-            for family in S2B_FAMILIES {
+            for family in ALL_FAMILIES {
                 let rust_violation = !verify_family(family, events).is_empty();
                 let py_violation = *py_row
                     .get(*family)
@@ -2239,11 +4107,11 @@ json.dump(out, sys.stdout)
         // scenario loss pass silently — S2b review P2).
         assert_eq!(
             checked,
-            S2B_FAMILIES.len() * corpus.len(),
+            ALL_FAMILIES.len() * corpus.len(),
             "crosscheck cell accounting drifted"
         );
         assert!(
-            scenario_count >= 58,
+            scenario_count >= 120,
             "synthetic scenario corpus shrunk below its registered floor \
              ({scenario_count})"
         );
