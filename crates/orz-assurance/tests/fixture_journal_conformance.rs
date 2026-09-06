@@ -222,3 +222,95 @@ fn chain_tamper_detected_after_schema_valid_payload() {
         report.errors
     );
 }
+// ── S2b (2026-09-06): end-to-end family-stage negative evidence ─────────
+//
+// The conformance stage-5 gating (`payload_valid` → families run) must be
+// exercised through the full `validate_journal_file` pipeline: a payload-
+// schema-valid tamper of a real fixture journal must surface the family-
+// stage error (and ONLY that class of error after re-sealing the chain).
+
+use orz_assurance::journal::{canonical_json, sha256_hex};
+
+/// Copy a fixture journal, apply `mutate`, RE-SEAL the payload/event digests
+/// and the previous-event chain, and return the (tempdir, journal path).
+fn resealed_journal(
+    track: &str,
+    name: &str,
+    mutate: impl Fn(&mut Vec<Value>),
+) -> (tempfile::TempDir, PathBuf) {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let text = std::fs::read_to_string(fixture_path(track, name)).expect("fixture journal");
+    let mut events: Vec<Value> = text
+        .lines()
+        .filter(|line| !line.trim().is_empty())
+        .map(|line| serde_json::from_str(line).expect("fixture line"))
+        .collect();
+    mutate(&mut events);
+
+    let mut previous: Option<String> = None;
+    for event in events.iter_mut() {
+        // previous link first: the event digest covers it.
+        if let Some(prev) = &previous {
+            event["previous_event_sha256"] = json!(prev);
+        }
+        let payload_sha = sha256_hex(&canonical_json(&event["payload"]).expect("canonical"));
+        event["payload_sha256"] = json!(payload_sha);
+        if let Some(object) = event.as_object_mut() {
+            object.remove("event_sha256");
+            let event_sha =
+                sha256_hex(&canonical_json(&Value::Object(object.clone())).expect("canonical"));
+            object.insert("event_sha256".to_string(), json!(event_sha));
+        }
+        previous = event
+            .get("event_sha256")
+            .and_then(Value::as_str)
+            .map(String::from);
+    }
+
+    let out = dir.path().join("events.jsonl");
+    let mut content = String::new();
+    for event in &events {
+        content.push_str(&serde_json::to_string(event).expect("serialize"));
+        content.push('\n');
+    }
+    std::fs::write(&out, content).expect("write re-sealed journal");
+    (dir, out)
+}
+
+#[test]
+fn family_stage_tamper_detected_end_to_end() {
+    let root = repo_root();
+    // orientation-fire-run carries 5 accepted dispositions: bumping an
+    // expected_contract_revision breaks the lifecycle CAS binding — a rule
+    // ONLY the S2b family stage checks (payload schema accepts any integer).
+    let (_dir, path) = resealed_journal("v0.2", "orientation-fire-run.jsonl", |events| {
+        for event in events.iter_mut() {
+            if event["event_type"] == "retrieval_parent_disposition" {
+                event["payload"]["expected_contract_revision"] = json!(99);
+                break;
+            }
+        }
+    });
+    let report = validate_journal_file(&path, &root);
+    assert!(!report.valid);
+    assert!(
+        report
+            .errors
+            .iter()
+            .any(|e| e.contains("expected_contract_revision")),
+        "family-stage (lifecycle) error expected, got: {:?}",
+        report.errors
+    );
+    // The re-sealed journal must be clean everywhere BEFORE the family
+    // stage — this locks the stage-5 gating (a flipped gate condition would
+    // leave the suite green without this test).
+    assert!(
+        report.errors.iter().all(|e| {
+            !e.contains("envelope schema violation")
+                && !e.contains("payload schema violation")
+                && !e.contains("digest mismatch")
+        }),
+        "re-sealed journal must only fail in the family stage, got: {:?}",
+        report.errors
+    );
+}

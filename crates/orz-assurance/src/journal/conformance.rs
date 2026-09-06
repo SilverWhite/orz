@@ -501,10 +501,12 @@ pub fn validate_journal_file(journal_path: &Path, repo_root: &Path) -> Conforman
 
     // 5. S2b rule-family verifiers (Task D, 2026-09-06). Python gating: the
     // cross-layer families run only on schema-valid input (`not
-    // payload_errors`) and every family filters `_is_v02` per event — on a
-    // homogeneous V01 journal they are no-ops, so the Rust judge skips the
-    // stage for V01.
-    if payload_valid && first_track == EventTrack::V02 {
+    // payload_errors`) — on BOTH tracks. Five families filter `_is_v02` per
+    // event (no-ops on a V01 journal), but `policy_denial` and
+    // `failure_target` do NOT (they only match `event_type`), and the v0.1
+    // tool-completed payload schema defines those fields — so the stage must
+    // run on V01 journals too (S2b review P1, 2026-09-06).
+    if payload_valid {
         errors.extend(super::families::verify_all_families(&events));
     }
 

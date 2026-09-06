@@ -610,8 +610,16 @@ pub fn verify_ledger_fold_write_failed(events: &[Value]) -> Vec<String> {
 /// `status=error` + non-zero `exit_code`, and source→tool-family consistency.
 pub fn verify_policy_denial(events: &[Value]) -> Vec<String> {
     use toolsets::{ACAF_TICKETED_TOOLS, WORK_TOOLS, contains, is_retrieval_mode_gated_tool};
-    let permission_gated =
-        |name: Option<&str>| contains(WORK_TOOLS, name) || is_retrieval_mode_gated_tool(name);
+    // Python `_PERMISSION_GATED_TOOLS = _WORK_TOOLS | _RETRIEVAL_MODE_GATED_TOOLS`
+    // is an EXACT name set (26 entries, Py 2419) — NOT the prefix predicate
+    // `_is_retrieval_mode_gated_tool` (which additionally admits web_search/
+    // web_fetch/retrieve_project_*). Using the predicate here would let
+    // source=permission through on web-family tools where Python errors
+    // (S2b review P1, 2026-09-06).
+    const RETRIEVAL_MODE_GATED_TOOLS: &[&str] = toolsets::RETRIEVAL_MODE_GATED_TOOLS;
+    let permission_gated = |name: Option<&str>| {
+        contains(WORK_TOOLS, name) || contains(RETRIEVAL_MODE_GATED_TOOLS, name)
+    };
 
     let mut errors = Vec::new();
     for (index, event) in events.iter().enumerate() {
@@ -1266,15 +1274,16 @@ pub fn verify_lifecycle(events: &[Value]) -> Vec<String> {
 
 // ── dispatch ────────────────────────────────────────────────────────────
 
-/// S2b family ids in Python `validate_journal_text` call order (relative).
+/// S2b family ids in Python `validate_journal_text` call order (relative
+/// order among these seven; Py 3682-3704).
 pub const S2B_FAMILIES: &[&str] = &[
     "ledger_fold_advance",
     "ledger_fold_write_failed",
+    "lifecycle",
     "retrieval_mode",
     "policy_denial",
     "failure_target",
     "control_tickets",
-    "lifecycle",
 ];
 
 /// Run one named S2b family over a parsed journal; unknown names yield an
@@ -1419,6 +1428,18 @@ mod tests {
                 "fold_start": start, "fold_cut": cut, "rounds_folded": rounds,
                 "view_estimate_tokens": estimate, "view_estimate_after": after,
                 "agent_role": "main",
+            }),
+        )
+    }
+
+    fn restore(activation: &str, assessment: &str, revision: i64, status: &str) -> Value {
+        ev(
+            "retrieval_activation_restored",
+            json!({
+                "activation_id": activation,
+                "assessment_id": assessment,
+                "contract_revision": revision,
+                "status": status,
             }),
         )
     }
@@ -1776,6 +1797,178 @@ mod tests {
                 ],
             ),
             (
+                "retrieval_mode_off_target_only",
+                vec![
+                    ev(
+                        "retrieval_mode_transition",
+                        json!({"old_mode": "web_search", "new_mode": "off", "authority": "session_bootstrap"}),
+                    ),
+                    // target-clause-only hit (no host-lane tool) — the clause
+                    // the browser_read scenarios mask.
+                    ev(
+                        "tool_started",
+                        json!({"tool": "web_search", "target": "external_retrieval"}),
+                    ),
+                ],
+            ),
+            (
+                "retrieval_mode_lb_target_only",
+                vec![
+                    ev(
+                        "retrieval_mode_transition",
+                        json!({"old_mode": "off", "new_mode": "local_browser", "authority": "mechanical_probe", "capability_status": "unsupported"}),
+                    ),
+                    ev(
+                        "tool_completed",
+                        json!({"tool": "web_fetch", "target": "external_retrieval", "status": "ok"}),
+                    ),
+                ],
+            ),
+            (
+                "policy_denial_permission_ok",
+                vec![denial("read_file", "permission", "error", 1)],
+            ),
+            (
+                // Locks the exact-set permission mapping (S2b review P1):
+                // web-family tools are NOT permission-gated in Python.
+                "policy_denial_permission_web_fetch",
+                vec![denial("web_fetch", "permission", "error", 1)],
+            ),
+            (
+                "policy_denial_taint_ok",
+                vec![denial("read_file", "taint", "error", 1)],
+            ),
+            (
+                "policy_denial_retrieval_mode_ok",
+                vec![denial("browser_read", "retrieval_mode", "error", 1)],
+            ),
+            (
+                "failure_target_file_ok",
+                vec![ev(
+                    "tool_completed",
+                    json!({
+                        "tool": "read_file", "status": "error", "exit_code": 1,
+                        "failure_target": {"kind": "file_target", "id": hex64(4), "path": "a.rs"},
+                    }),
+                )],
+            ),
+            (
+                "failure_target_file_wrong_tool",
+                vec![ev(
+                    "tool_completed",
+                    json!({
+                        "tool": "run_terminal_cmd", "status": "error", "exit_code": 1,
+                        "failure_target": {"kind": "file_target", "id": hex64(4), "path": "a.rs"},
+                    }),
+                )],
+            ),
+            (
+                "failure_target_url_ok",
+                vec![ev(
+                    "tool_completed",
+                    json!({
+                        "tool": "web_fetch", "status": "error", "exit_code": 1,
+                        "failure_target": {"kind": "url_target", "id": hex64(5), "canonical_url": "https://example.com/a"},
+                    }),
+                )],
+            ),
+            (
+                "failure_target_url_wrong_tool",
+                vec![ev(
+                    "tool_completed",
+                    json!({
+                        "tool": "read_file", "status": "error", "exit_code": 1,
+                        "failure_target": {"kind": "url_target", "id": hex64(5), "canonical_url": "https://example.com/a"},
+                    }),
+                )],
+            ),
+            (
+                "lifecycle_close_bad_decision",
+                vec![
+                    assessment("A1", "act-1", 1, "C1", "D1"),
+                    disposition("P1", "act-1", "A1", 1, "continue", "accepted"),
+                    close_record("L1", "act-1", "P1", "A1", 1, "C1", "D1"),
+                ],
+            ),
+            (
+                "lifecycle_close_bad_outcome",
+                vec![
+                    assessment("A1", "act-1", 1, "C1", "D1"),
+                    disposition("P1", "act-1", "A1", 1, "close", "rejected_stale"),
+                    close_record("L1", "act-1", "P1", "A1", 1, "C1", "D1"),
+                ],
+            ),
+            (
+                "lifecycle_close_revision_mismatch",
+                vec![
+                    assessment("A1", "act-1", 1, "C1", "D1"),
+                    disposition("P1", "act-1", "A1", 1, "close", "accepted"),
+                    close_record("L1", "act-1", "P1", "A1", 2, "C1", "D1"),
+                ],
+            ),
+            (
+                "lifecycle_close_digest_mismatch",
+                vec![
+                    assessment("A1", "act-1", 1, "C1", "R1"),
+                    disposition("P1", "act-1", "A1", 1, "close", "accepted"),
+                    close_record("L1", "act-1", "P1", "A1", 1, "C1", "RX"),
+                ],
+            ),
+            (
+                // rejected_stale / rejected_conflicting outcomes pass through
+                // the disposition state machine without advancing it.
+                "lifecycle_passthrough_outcomes",
+                vec![
+                    assessment("A1", "act-1", 1, "C1", "D1"),
+                    disposition("P2", "act-1", "A1", 1, "continue", "rejected_stale"),
+                    disposition("P3", "act-1", "A1", 1, "close", "rejected_conflicting"),
+                ],
+            ),
+            (
+                // A first-occurrence disposition with outcome
+                // replayed_idempotent is an unknown outcome on BOTH judges
+                // (the close pass accepts that outcome value, but the
+                // disposition pass rejects it first) — verdict parity pinned.
+                "lifecycle_close_replayed_outcome_errors",
+                vec![
+                    assessment("A1", "act-1", 1, "C1", "D1"),
+                    disposition("P1", "act-1", "A1", 1, "close", "replayed_idempotent"),
+                ],
+            ),
+            (
+                "lifecycle_restore_not_preceding",
+                vec![
+                    disposition("P1", "act-1", "A1", 1, "close", "accepted"),
+                    restore("act-1", "A1", 1, "awaiting_disposition"),
+                ],
+            ),
+            (
+                "lifecycle_restore_activation_mismatch",
+                vec![
+                    restore("act-2", "A1", 1, "awaiting_disposition"),
+                    disposition("P1", "act-1", "A1", 1, "close", "accepted"),
+                ],
+            ),
+            (
+                "lifecycle_continue_plus_one_wrong",
+                vec![
+                    assessment("A1", "act-1", 1, "C1", "D1"),
+                    disposition("P1", "act-1", "A1", 1, "continue", "accepted"),
+                    assessment("A2", "act-1", 3, "C1", "D2"),
+                ],
+            ),
+            (
+                "ledger_advance_start_ge_cut",
+                vec![fold_advance(10, 5, 1, 100, 50)],
+            ),
+            (
+                "ledger_advance_rounds_shrink",
+                vec![
+                    fold_advance(0, 10, 5, 2000, 1000),
+                    fold_advance(0, 20, 4, 2000, 500),
+                ],
+            ),
+            (
                 "v01_noop",
                 vec![
                     ev01(
@@ -1820,9 +2013,13 @@ mod tests {
         expect("retrieval_mode_off_dispatch", "retrieval_mode");
         expect("retrieval_mode_lb_unavailable", "retrieval_mode");
         expect("retrieval_mode_lb_missing_capability", "retrieval_mode");
+        expect("retrieval_mode_off_target_only", "retrieval_mode");
+        expect("retrieval_mode_lb_target_only", "retrieval_mode");
         expect("ledger_advance_after_not_below", "ledger_fold_advance");
         expect("ledger_advance_cut_not_increasing", "ledger_fold_advance");
         expect("ledger_advance_start_changed", "ledger_fold_advance");
+        expect("ledger_advance_start_ge_cut", "ledger_fold_advance");
+        expect("ledger_advance_rounds_shrink", "ledger_fold_advance");
         expect(
             "ledger_write_failed_bad_disabled",
             "ledger_fold_write_failed",
@@ -1839,9 +2036,12 @@ mod tests {
         expect("policy_denial_zero_exit", "policy_denial");
         expect("policy_denial_wrong_family", "policy_denial");
         expect("policy_denial_unknown_source", "policy_denial");
+        expect("policy_denial_permission_web_fetch", "policy_denial");
         expect("failure_target_bad_id", "failure_target");
         expect("failure_target_wrong_tool", "failure_target");
         expect("failure_target_preview_too_long", "failure_target");
+        expect("failure_target_file_wrong_tool", "failure_target");
+        expect("failure_target_url_wrong_tool", "failure_target");
         expect("lifecycle_unknown_assessment", "lifecycle");
         expect("lifecycle_cas_mismatch", "lifecycle");
         expect("lifecycle_revision_decrease", "lifecycle");
@@ -1849,6 +2049,14 @@ mod tests {
         expect("lifecycle_double_close", "lifecycle");
         expect("lifecycle_after_close", "lifecycle");
         expect("lifecycle_conflicting_replay", "lifecycle");
+        expect("lifecycle_close_bad_decision", "lifecycle");
+        expect("lifecycle_close_bad_outcome", "lifecycle");
+        expect("lifecycle_close_revision_mismatch", "lifecycle");
+        expect("lifecycle_close_digest_mismatch", "lifecycle");
+        expect("lifecycle_restore_not_preceding", "lifecycle");
+        expect("lifecycle_restore_activation_mismatch", "lifecycle");
+        expect("lifecycle_continue_plus_one_wrong", "lifecycle");
+        expect("lifecycle_close_replayed_outcome_errors", "lifecycle");
         rows
     }
 
@@ -1877,36 +2085,67 @@ mod tests {
     /// message text is deliberately Rust-form.
     #[test]
     fn s2b_family_verdicts_match_python() {
+        // Mount-contract guard (ORZ-BUILD-MOUNT-001): the judge reads the
+        // Python module and the fixture corpus from the parent repository.
         let repo_root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../..");
         let assurance_dir = repo_root.join("assurance");
+        assert!(
+            assurance_dir
+                .join("run_event_journal_validation.py")
+                .is_file(),
+            "S2b crosscheck must run inside the parent repository \
+             (assurance/ missing at {})",
+            assurance_dir.display()
+        );
 
-        // Corpus = synthetic scenarios + real v0.2 fixture journals.
+        // Corpus = synthetic scenarios + real fixture journals (both tracks —
+        // policy_denial / failure_target run on v0.1 journals too).
+        let scenario_count = scenarios().len();
         let mut corpus: Vec<(String, Vec<Value>)> = scenarios()
             .into_iter()
             .map(|(name, events)| (name.to_string(), events))
             .collect();
-        let fixtures_dir = repo_root.join("runtime/fixtures/run-event-v0.2/journals");
-        let mut fixture_names: Vec<String> = std::fs::read_dir(&fixtures_dir)
-            .expect("fixture journals dir")
-            .map(|entry| {
-                entry
-                    .expect("fixture entry")
-                    .file_name()
-                    .to_string_lossy()
-                    .into_owned()
-            })
-            .filter(|name| name.ends_with(".jsonl"))
-            .collect();
-        fixture_names.sort();
-        for name in &fixture_names {
-            let text = std::fs::read_to_string(fixtures_dir.join(name)).expect("fixture journal");
-            let events: Vec<Value> = text
-                .lines()
-                .filter(|line| !line.trim().is_empty())
-                .map(|line| serde_json::from_str(line).expect("fixture line"))
+        let mut fixture_names: Vec<String> = Vec::new();
+        for track in ["run-event-v0.2", "run-event-v0.1"] {
+            let fixtures_dir = repo_root
+                .join("runtime/fixtures")
+                .join(track)
+                .join("journals");
+            let names: Vec<String> = std::fs::read_dir(&fixtures_dir)
+                .unwrap_or_else(|e| {
+                    panic!(
+                        "fixture journals dir {} unreadable: {e}",
+                        fixtures_dir.display()
+                    )
+                })
+                .map(|entry| {
+                    entry
+                        .expect("fixture entry")
+                        .file_name()
+                        .to_string_lossy()
+                        .into_owned()
+                })
+                .filter(|name| name.ends_with(".jsonl"))
                 .collect();
-            corpus.push((name.clone(), events));
+            assert!(
+                !names.is_empty(),
+                "fixture journals dir {} is empty — the crosscheck would \
+                 silently lose its real-journal signal",
+                fixtures_dir.display()
+            );
+            for name in &names {
+                let text =
+                    std::fs::read_to_string(fixtures_dir.join(name)).expect("fixture journal");
+                let events: Vec<Value> = text
+                    .lines()
+                    .filter(|line| !line.trim().is_empty())
+                    .map(|line| serde_json::from_str(line).expect("fixture line"))
+                    .collect();
+                corpus.push((format!("{track}/{name}"), events));
+                fixture_names.push(format!("{track}/{name}"));
+            }
         }
+        fixture_names.sort();
 
         // Python side: run the seven `_verify_v02_*` functions per corpus item.
         let script = r#"
@@ -1939,21 +2178,35 @@ json.dump(out, sys.stdout)
         use std::io::Write;
         use std::process::{Command, Stdio};
         let python = std::env::var("ORZ_PYTHON").unwrap_or_else(|_| "python".into());
-        let mut child = Command::new(python)
+        // -X utf8: the corpus carries non-ASCII fixture text — never decode
+        // stdin through the platform ANSI code page (S2b review P2).
+        let spawned = Command::new(&python)
+            .arg("-X")
+            .arg("utf8")
             .arg("-c")
             .arg(script)
             .arg(assurance_dir.display().to_string())
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
-            .spawn()
-            .expect("spawn python for S2b family crosscheck");
-        child
+            .spawn();
+        let mut child = match spawned {
+            Ok(child) => child,
+            Err(e) => panic!(
+                "spawn `{python}` for the S2b family crosscheck failed: {e} — \
+                 install Python (with the jsonschema package) or point \
+                 ORZ_PYTHON at an interpreter"
+            ),
+        };
+        let write = child
             .stdin
             .take()
             .expect("python stdin")
-            .write_all(corpus_json.as_bytes())
-            .expect("write corpus to python");
+            .write_all(corpus_json.as_bytes());
+        if let Err(e) = write {
+            let _ = child.wait();
+            panic!("write corpus to python failed (interpreter exited early?): {e}");
+        }
         let output = child.wait_with_output().expect("python crosscheck");
         assert!(
             output.status.success(),
@@ -1982,7 +2235,22 @@ json.dump(out, sys.stdout)
                 checked += 1;
             }
         }
-        // 7 families × (scenarios + fixtures) sanity floor.
-        assert!(checked >= 7 * (fixture_names.len() + 35));
+        // Exact cell accounting (a tautological floor would let fixture or
+        // scenario loss pass silently — S2b review P2).
+        assert_eq!(
+            checked,
+            S2B_FAMILIES.len() * corpus.len(),
+            "crosscheck cell accounting drifted"
+        );
+        assert!(
+            scenario_count >= 58,
+            "synthetic scenario corpus shrunk below its registered floor \
+             ({scenario_count})"
+        );
+        assert!(
+            fixture_names.len() >= 18,
+            "real fixture journals shrunk below their registered floor ({})",
+            fixture_names.len()
+        );
     }
 }
