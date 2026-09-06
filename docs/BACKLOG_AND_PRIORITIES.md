@@ -66,7 +66,11 @@
          [Task D 批次 1 审计](audits/P0_GOV_TASK_D_DUAL_IMPL_GOVERNANCE_2026-09-04.md)。
        - [ ] **S2**：31 个 `_verify_v02_*` 机械规则族盘点（Rust 已强制附证据 /
          需 Rust 显式实现）并补齐关键族。
-         - [ ] **S2a**（盘点先行）：31 族两档盘点表 + A 档证据引用（不写业务代码）。
+         - [x] **S2a**（盘点先行）：31 族两档盘点表 + A 档证据引用（不写业务
+           代码）——**2026-09-06 完成**：27 A + 4 B（B=receipt_event_isomorphism /
+           probe_accuracy / console_order_written / console_order_rejected；
+           后两族需先裁决写单面退役后的目标语义），入口：
+           [S2a 盘点表](audits/TASK_D_S2A_INVENTORY_2026-09-06.md)。
          - [ ] **S2b**：核心族 Rust conformance 显式实现——control_tickets /
            lifecycle / retrieval_mode / ledger_fold(advance+write_failed) /
            policy_denial / failure_target。

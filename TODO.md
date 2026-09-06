@@ -49,8 +49,12 @@
     历史 v0.1 回放漂移面（离线链按 raw JSON 重算）。
   - [ ] S2：31 个 `_verify_v02_*` 机械规则族盘点为「Rust 已强制（附证据）/
     需 Rust 显式实现」两档并补齐。
-    - [ ] S2a（盘点先行，2026-09-06 排期起点）：31 族两档盘点表 + A 档证据
-      引用（不写业务代码）。排期/挂批见
+    - [x] S2a（盘点先行，2026-09-06 排期起点）：31 族两档盘点表 + A 档证据
+      引用（不写业务代码）——**2026-09-06 完成**：27 A + 4 B，B 族=
+      receipt_event_isomorphism / probe_accuracy / console_order_written /
+      console_order_rejected，盘点表见
+      [S2a 盘点审计](docs/audits/TASK_D_S2A_INVENTORY_2026-09-06.md)；
+      挂批路由见
       [GLM 处置 + S2 排期审计](docs/audits/P0_GOV_GLM_DISPOSITION_AND_TASK_D_S2_SCHEDULE_2026-09-06.md)。
     - [ ] S2b：核心族 Rust conformance 显式实现（control_tickets /
       lifecycle / retrieval_mode / ledger_fold advance+write_failed /
