@@ -1,6 +1,0 @@
-﻿UNINSTALL_PERUSER exit=0
-LEGACY_REMOVED=True
-INSTALL attempt=1 exit=0
-PY=C:\Program\python.exe 3.12.10 (tags/v3.12.10:0cc8128, Apr  8 2025, 12:21:36) [MSC v.1943 64 bit (AMD64)]
-PY3=C:\Program\python.exe
-EXIT=0

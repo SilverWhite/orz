@@ -1,9 +1,0 @@
-﻿BINARY=C:\Program Files\orz\orz-signer.exe
-SIGNER_HASH=4929EB89F7E13FEA3C9BFF8B182CBF66DF7538CB72568107F6928CA995939634
-MANIFEST_HASH=4929eb89f7e13fea3c9bff8b182cbf66df7538cb72568107f6928ca995939634
-SIGNER_HASH_MATCH=yes
-PY=Python was not found; run without arguments to install from the Microsoft Store, or disable this shortcut from Settings > Manage App Execution Aliases.
-PF_orz.exe=True
-PF_orz-signer.exe=True
-PF_orz-acaf-provision.exe=True
-EXIT=0

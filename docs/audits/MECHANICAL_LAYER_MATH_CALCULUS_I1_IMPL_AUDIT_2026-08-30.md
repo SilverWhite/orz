@@ -29,7 +29,7 @@
 
 ## 3. 102 runs 离线复验（`D:\tb-eval\jobs-official`，全量 102）
 
-报告：`D:\CLI\LIF_102RUNS_REPLAY_2026-08-30.json`（harness 输出，含逐 run
+报告：`../../存档/root-artifacts-2026-09-06/LIF_102RUNS_REPLAY_2026-08-30.json`（harness 输出，含逐 run
 fires/域计数/T̂/spikes/migrations/C1 置换）。
 
 | 指标 | 设计锚点（2026-08-30 首轮） | 本实现复验 | 核对 |

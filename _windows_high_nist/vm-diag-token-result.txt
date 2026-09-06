@@ -1,6 +1,0 @@
-﻿PY: SID_PTR True
-PY: DIAGS []
-PY: SPEC {'disable_sids': ['S-1-5-32-544'], 'deny_only_sids': ['S-1-5-32-544'], 'remove_privileges': ['SeDebugPrivilege', 'SeBackupPrivilege', 'SeRestorePrivilege', 'SeTakeOwnershipPrivilege', 'SeLoadDriverPrivilege', 'SeCreateSymbolicLinkPrivilege'], 'low_integrity': False, 'appcontainer': False, 'virtualization_allowed': False}
-PY: TOKEN False
-PY: DIAGS2 ['CreateRestrictedToken failed: [WinError 998] 内存位置访问无效。']
-EXIT=0

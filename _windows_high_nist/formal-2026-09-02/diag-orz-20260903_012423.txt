@@ -1,3 +1,0 @@
-﻿ERROR: 拒绝访问 
-STACK: at <ScriptBlock>, <No file>: line 1
-at <ScriptBlock>, D:\CLI\scripts\s4_vm_run_elev.ps1: line 29

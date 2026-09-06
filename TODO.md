@@ -49,9 +49,31 @@
     历史 v0.1 回放漂移面（离线链按 raw JSON 重算）。
   - [ ] S2：31 个 `_verify_v02_*` 机械规则族盘点为「Rust 已强制（附证据）/
     需 Rust 显式实现」两档并补齐。
+    - [ ] S2a（盘点先行，2026-09-06 排期起点）：31 族两档盘点表 + A 档证据
+      引用（不写业务代码）。排期/挂批见
+      [GLM 处置 + S2 排期审计](docs/audits/P0_GOV_GLM_DISPOSITION_AND_TASK_D_S2_SCHEDULE_2026-09-06.md)。
+    - [ ] S2b：核心族 Rust conformance 显式实现（control_tickets /
+      lifecycle / retrieval_mode / ledger_fold advance+write_failed /
+      policy_denial / failure_target）+ fixture 正/负对拍。
+    - [ ] S2c：其余族按档位收口（检索族 / 上下文与压缩族 / 控制面族子批）。
+    - [ ] S2d：31 族 Python↔Rust 全量对拍 0 差 + registry 翻转准备。
   - [ ] S3：`check_repository.py` 真实 fixture journal 校验改接 Rust 法官，
     Python Rust 轨 `validate_journal_file` 退役，registry 源翻转 JSON 转正。
   - [ ] S4：Python 双法官退役/归档登记、契约变更流程同步、索引/BACKLOG 收口。
+
+### P0-GOV GLM 外部只读审查处置（2026-09-06 用户裁决）
+
+- [x] F1 skills 豁免收窄为注册技能根白名单（orz `67b51eb1`；SkillRoots +
+  registry finalize 派生 + read_file/grep/list_dir 接线 + 负测）。
+- [x] R-1：354 个已跟踪本地运行产物转本地件（`git rm --cached`，磁盘保留）。
+- [x] R-2：manifest 生成器显式 LF 并重算。
+- [x] R-3：9 个根目录一次性产物归档 `存档/root-artifacts-2026-09-06/`
+  （gsa.py 保留，门禁 required 文件）。
+- [ ] F2：approval prompter 存根登记为 GAP-APPROVAL-PROMPTER（已登记，
+  实施待排期）。
+- [x] 观察项 (c)：权限判定分散登记 OBS-PERMISSION-DUAL-IMPL（另立观察）。
+- 入口：[GLM 登记审计](docs/audits/GLM_EXTERNAL_REVIEW_REGISTRATION_2026-09-04.md)
+  / [处置 + S2 排期审计](docs/audits/P0_GOV_GLM_DISPOSITION_AND_TASK_D_S2_SCHEDULE_2026-09-06.md)。
 
 ### P0-E 评测冒烟暴露问题（2026-08-17 登记；2026-08-18 全部闭合）
 

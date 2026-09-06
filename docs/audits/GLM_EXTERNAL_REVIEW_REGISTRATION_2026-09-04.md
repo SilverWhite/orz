@@ -19,7 +19,7 @@
 | F2 | P2 | **属实**：交互审批器是未登记存根 | `orz-host/src/approval.rs` 全文件为注释 + `// TODO: Implement approval prompter (Phase 1)`；`orz-host/src/lib.rs:313` 注明 "approval path (still a stub)"；索引/BACKLOG/TODO 无该存根的 gap 登记（仅存在同名无关的既有 flaky 测试条目） | 补登记为 gap（索引 + BACKLOG） |
 | R-1 | P2 | **属实且范围更大**：`.gitignore:47` 新规则与已跟踪文件矛盾 | `git check-ignore -v --no-index _windows_high_nist/vm-acaf-reprovision-result.txt` → `.gitignore:47:_windows_high_nist/**/vm-*-result*.txt`（exit 0）；`git ls-files` 显示 `_windows_high_nist/` 下数十个 `vm-*-result*.txt` 仍被跟踪 | `git rm --cached` 转本地件，或收窄 ignore 模式 |
 | R-2 | P3 | **属实**：manifest 全 CRLF | `orz_source_manifest.sha256` 1437 行全部 `\r\n`；`scripts/generate_orz_source_manifest.py:113` 用 `write_text("\n"...)`，Windows 文本模式自动转 CRLF，POSIX `sha256sum -c` 无法直接整文件校验 | 生成脚本显式以 LF（`newline="\n"` 或二进制）写出 |
-| R-3 | P3 | **属实**：根目录一次性实验产物被跟踪 | `git ls-files` 命中 `LIF_102RUNS_*.json`×5、`_final_smoke_*.{json,ps1}`、`container-probe-2026-08-20.sh`、`gsa.py` | 归档至 `存档/` 或移出跟踪 |
+| R-3 | P3 | **属实**：根目录一次性实验产物被跟踪 | `git ls-files` 命中 `LIF_102RUNS_*.json`×5、`_final_smoke_*.{json,ps1}`、`container-probe-2026-08-20.sh`、`gsa.py` | 归档至 `存档/` 或移出跟踪；`gsa.py` 为门禁 required 文件与旧 canonical CLI 入口，**保留跟踪** |
 | F3 | 已知项 | **口径可复现**：Python 参考实现规模约 6.6×Rust | 独立复算：`assurance/` 下 `*.py` = 189 文件 / 94,507 行（GLM 口径一致）；Rust `orz-assurance` 约 1.43 万行 | Task D batch-1（schema/链级法官 + 单源映射）已落地；S2 机械族盘点/排期按用户指示暂缓 |
 
 ## 2. 观察项（非缺陷，登记备查）
@@ -31,6 +31,11 @@
 
 ## 3. 处置状态
 
-- 上表 F1/F2/R-1/R-2/R-3 均为**候选登记，待用户裁决处置**；本批不实施修复，也不改写既有 BACKLOG/TODO 优先级（按用户指示：先不进行盘点与排期）。
+- **2026-09-06 用户裁决处置完成**：F1（技能豁免收窄为注册技能根白名单）已
+  实施（orz `67b51eb1`）；R-1（354 个本地运行产物移出索引、磁盘保留）/
+  R-2（manifest 生成器显式 LF 并重算）/ R-3（9 个根目录产物归档
+  `存档/root-artifacts-2026-09-06/`，`gsa.py` 保留跟踪）已落地；F2 登记为
+  `GAP-APPROVAL-PROMPTER`（实施待排期）；观察项 (c) 登记为
+  OBS-PERMISSION-DUAL-IMPL。明细见
+  [P0-GOV GLM 处置批 + 任务 D S2 排期登记](P0_GOV_GLM_DISPOSITION_AND_TASK_D_S2_SCHEDULE_2026-09-06.md)。
 - GLM 报告对门禁全绿、Task C 沙箱、ACAF fail-closed、journal 链、IPG 等的正向核验与既有审计一致，不重复登记。
-- 后续如用户裁决，将逐项转 BACKLOG 对应优先级小节并附本登记为入口证据。

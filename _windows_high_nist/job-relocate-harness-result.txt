@@ -1,4 +1,0 @@
-﻿MOVED run_enforcement_probe.ps1 -> C:\s4\_windows_high_nist\run\run_enforcement_probe.ps1
-MOVED enforcement_probe.ps1 -> C:\s4\_windows_high_nist\policy\enforcement_probe.ps1
-MOVED apply_hardening.ps1 -> C:\s4\_windows_high_nist\hardening\apply_hardening.ps1
-EXIT=0

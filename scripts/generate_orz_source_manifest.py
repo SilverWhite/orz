@@ -110,7 +110,10 @@ def generate() -> None:
     lines = [HEADER, HEADER_CMD, ""]
     for rel in sorted(files):
         lines.append(f"{digests[rel]}  {rel}")
-    MANIFEST.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    # R-2 (GLM 2026-09-04)：Windows 文本模式默认 CRLF 会令 POSIX sha256sum -c
+    # 无法整文件校验；显式以 LF 写出。
+    with MANIFEST.open("w", encoding="utf-8", newline="\n") as fh:
+        fh.write("\n".join(lines) + "\n")
     print(f"wrote {len(files)} entries to {MANIFEST.relative_to(ROOT)}")
 
 

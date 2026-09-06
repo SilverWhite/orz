@@ -1,9 +1,0 @@
-﻿MACHINE_USER=AgentUser
-PROC_USER=AgentUser
-PY: OS_ENV_USER AgentUser
-PY: OS_ENV_PW_SET True
-PY: ELEVATED True
-PY: CREDS ('DESKTOP-QMAPMFH', 'AgentUser', 'S4Run!2026')
-PY: LOGON True []
-PY: PRIMARY True []
-EXIT=0

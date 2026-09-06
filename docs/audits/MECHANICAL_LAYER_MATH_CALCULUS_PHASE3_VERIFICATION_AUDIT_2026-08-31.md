@@ -57,7 +57,7 @@
     （τ→∞ 纯计数，保留复位/不应期）——同一更新律重放，与引擎同基
     （run 起点归一）对拍；
   - 逐决策轮特征轨迹导出（u_prog/u_err/u_stuck/T̂/err10/succ10 + 语义域）。
-- 产出：`LIF_102RUNS_REPLAY_2026-08-31_V2.json`（102 runs / 4157 决策点）。
+- 产出：`../../存档/root-artifacts-2026-09-06/LIF_102RUNS_REPLAY_2026-08-31_V2.json`（102 runs / 4157 决策点）。
 - **确定性对拍**：err/deny/stall/slow 四通道参考 LIF fires 与引擎
   `reference_parity_fail_runs = 0`（102 runs 全一致）——参考实现与生产引擎
   同构，对照结论可信。
@@ -81,7 +81,7 @@
 
 - 新增 `assurance/lif_v2_cluster_analysis.py`（sklearn k-means k=3、
   random_state=0，z 归一，仅探索用）；产出
-  `LIF_102RUNS_CLUSTERING_2026-08-31_V2.json`：
+  `../../存档/root-artifacts-2026-09-06/LIF_102RUNS_CLUSTERING_2026-08-31_V2.json`：
   - 4157 决策点，簇 {0: 771, 1: 254, 2: 3132}；簇均值：簇 0 u_err 0.857/
     succ10 0.822（压力类比）、簇 1 u_prog 0.086/succ10 0.237（低进度/启动
     类比）、簇 2 u_err 0.106/succ10 0.839（干净正常）；

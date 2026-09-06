@@ -1,7 +1,0 @@
-﻿EXE_EXISTS=True
-TASK: 成功: 成功创建计划任务 "s4clashinstall"。
-RUN: 成功: 尝试运行 "s4clashinstall"。
-MARK: RC=0
-CLASH_INSTALL_OK=1
-LAST_TASK_RESULT=0
-EXIT=0
