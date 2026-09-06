@@ -2106,6 +2106,23 @@ mod tests {
         dirs.iter().map(|d| d.join("events.jsonl")).collect()
     }
 
+    /// ACAF shadow 默认（ACAF signer 存量失败族修复，2026-09-07）：本文件
+    /// 测试面沿用 orz-loop 单元测试约定——逻辑测试默认 shadow，ACAF 语义
+    /// 由专门测试经 `with_acaf_fail_closed(true)` 显式开启（见
+    /// `acaf_fail_closed_without_fabric_refuses_prompt`）。生产默认
+    /// fail-closed 在下游 crate 测试编译时生效（orz-loop 的 `#[cfg(test)]`
+    /// 特例不跨 crate），Task C（2026-09-04）翻转默认后未跟进的测试面
+    /// 由此修复。
+    fn shadow_server() -> AcpServer {
+        AcpServer::new().with_acaf_fail_closed(false)
+    }
+
+    fn shadow_server_with_gateway(
+        gateway: Arc<dyn orz_loop::gateway::model::ModelGateway>,
+    ) -> AcpServer {
+        AcpServer::with_gateway(gateway).with_acaf_fail_closed(false)
+    }
+
     static TEST_COUNTER: AtomicU64 = AtomicU64::new(0);
 
     /// Typed events of the single run journal under `base`.
@@ -2295,7 +2312,7 @@ mod tests {
     async fn session_new_registers_session() {
         let base = test_dir();
 
-        let server = AcpServer::new();
+        let server = shadow_server();
         let result = server
             .handle_session_new(
                 "test-session-1234",
@@ -2323,7 +2340,7 @@ mod tests {
             .run_until(async {
                 let base = test_dir();
 
-                let server = AcpServer::new();
+                let server = shadow_server();
                 server
                     .handle_session_new(
                         "test-session-prompt",
@@ -2375,7 +2392,7 @@ mod tests {
 
     #[tokio::test]
     async fn unknown_session_returns_error() {
-        let server = AcpServer::new();
+        let server = shadow_server();
         let result = server.handle_session_prompt("nonexistent", "test").await;
         assert!(result.is_err());
     }
@@ -2388,7 +2405,7 @@ mod tests {
 
                 // Four scripted responses — two per prompt turn (draft +
                 // final; the counterexample gate adds one round).
-                let server = AcpServer::with_gateway(Arc::new(FakeProvider::new(vec![
+                let server = shadow_server_with_gateway(Arc::new(FakeProvider::new(vec![
                     ScriptedResponse::text("(fake) 第一轮。"),
                     ScriptedResponse::text("(fake) 第一轮终答。"),
                     ScriptedResponse::text("(fake) 第二轮。"),
@@ -2443,7 +2460,7 @@ mod tests {
     async fn close_session_releases_metadata() {
         let base = test_dir();
 
-        let server = AcpServer::new();
+        let server = shadow_server();
         server
             .handle_session_new(
                 "test-session-close",
@@ -2581,7 +2598,7 @@ mod tests {
         );
         persist_conversation_sidecar(&base, &full);
 
-        let server = AcpServer::new();
+        let server = shadow_server();
         server
             .handle_session_new(
                 session_id,
@@ -2629,7 +2646,7 @@ mod tests {
         tokio::task::LocalSet::new()
             .run_until(async {
                 let base = test_dir();
-                let server = AcpServer::with_gateway(Arc::new(FakeProvider::new(vec![
+                let server = shadow_server_with_gateway(Arc::new(FakeProvider::new(vec![
                     ScriptedResponse::text("完成"),
                 ])))
                 .with_acaf_fail_closed(true);
@@ -2667,7 +2684,7 @@ mod tests {
                 let target = base.join("sample.txt");
                 std::fs::write(&target, "wired file content").unwrap();
 
-                let server = AcpServer::with_gateway(Arc::new(FakeProvider::new(vec![
+                let server = shadow_server_with_gateway(Arc::new(FakeProvider::new(vec![
                     // THIN-HARNESS-REDESIGN R2a 审查处理 (2026-08-27): 无
                     // plan 门——首轮直接调 read_file（direct 面，不再经
                     // 订单层，2026-08-24 起）。
@@ -2727,7 +2744,7 @@ mod tests {
             .run_until(async {
                 let base = test_dir();
 
-                let server = AcpServer::with_gateway(Arc::new(FakeProvider::new(vec![
+                let server = shadow_server_with_gateway(Arc::new(FakeProvider::new(vec![
                     // MECHANICAL-AUDIT-LAYER 审查处理 (2026-08-24): direct
                     // 面——模型直接调 search_replace（写权限在直连调用时
                     // 到达 permission bridge，dead gateway → 拒绝）。
@@ -2849,7 +2866,7 @@ mod tests {
                     ScriptedResponse::text("完成。"),
                     ScriptedResponse::text("完成。"),
                 ];
-                let server = AcpServer::with_gateway(Arc::new(FakeProvider::new(script)));
+                let server = shadow_server_with_gateway(Arc::new(FakeProvider::new(script)));
                 server.set_gateway(dead_gateway());
                 server.set_hub_permission(Arc::new(AlwaysAllowTransport));
 
@@ -2915,7 +2932,7 @@ mod tests {
                 let base = test_dir();
                 std::fs::write(base.join("lib.rs"), "fn main() {}").unwrap();
 
-                let server = AcpServer::with_gateway(Arc::new(FakeProvider::new(vec![
+                let server = shadow_server_with_gateway(Arc::new(FakeProvider::new(vec![
                     // MECHANICAL-AUDIT-LAYER 审查处理 (2026-08-24): direct
                     // 面——模型直接调 search_replace（dead gateway 下写权限
                     // 拒绝 → 无快照记录）。
@@ -2977,7 +2994,7 @@ mod tests {
         tokio::task::LocalSet::new()
             .run_until(async {
                 let base = test_dir();
-                let server = Arc::new(AcpServer::with_gateway(Arc::new(
+                let server = Arc::new(shadow_server_with_gateway(Arc::new(
                     FakeProvider::new(vec![
                         ScriptedResponse::text("第一轮回答。"),
                         ScriptedResponse::text("第一轮回答。"),
@@ -3042,7 +3059,7 @@ mod tests {
         tokio::task::LocalSet::new()
             .run_until(async {
                 let base = test_dir();
-                let server = Arc::new(AcpServer::new());
+                let server = Arc::new(shadow_server());
                 server
                     .handle_session_new(
                         "sess-idle",
@@ -3084,9 +3101,9 @@ mod tests {
         tokio::task::LocalSet::new()
             .run_until(async {
                 let base = test_dir();
-                let server = Arc::new(AcpServer::with_gateway(Arc::new(FakeProvider::from_texts(
-                    vec!["结果：完成", "结果：完成"],
-                ))));
+                let server = Arc::new(shadow_server_with_gateway(Arc::new(
+                    FakeProvider::from_texts(vec!["结果：完成", "结果：完成"]),
+                )));
                 server.set_gateway(dead_gateway());
                 server
                     .handle_session_new(
@@ -3132,7 +3149,7 @@ mod tests {
                 // THIN-HARNESS-REDESIGN R2a 审查处理 (2026-08-27): 无 plan
                 // 门——run #1 中断于第一段草稿的流式期间（消费 0–1 项）；
                 // run #2 需要 [草稿, 终答]。四项文本覆盖消费 0–2 项。
-                let server = Arc::new(AcpServer::with_gateway(Arc::new(
+                let server = Arc::new(shadow_server_with_gateway(Arc::new(
                     FakeProvider::new(vec![
                         ScriptedResponse::text("第一轮回答。"),
                         ScriptedResponse::text("第一轮回答。"),
@@ -3194,7 +3211,7 @@ mod tests {
         tokio::task::LocalSet::new()
             .run_until(async {
                 let base = test_dir();
-                let server = Arc::new(AcpServer::with_gateway(Arc::new(
+                let server = Arc::new(shadow_server_with_gateway(Arc::new(
                     FakeProvider::new(vec![
                         ScriptedResponse::text("第一轮回答。"),
                         ScriptedResponse::text("第一轮回答。"),
@@ -3284,7 +3301,7 @@ mod tests {
         let record = store.track(&[PathBuf::from("a.txt")]).await.unwrap();
         std::fs::write(&target, "v2").unwrap();
 
-        let server = AcpServer::new();
+        let server = shadow_server();
         server
             .handle_session_new(
                 "sess-restore-1",
@@ -3347,7 +3364,7 @@ mod tests {
         std::fs::write(&a, "a-v2").unwrap();
         std::fs::write(&b, "b-v2").unwrap();
 
-        let server = AcpServer::new();
+        let server = shadow_server();
         server
             .handle_session_new(
                 "sess-revert",
@@ -3391,7 +3408,7 @@ mod tests {
     #[tokio::test]
     async fn restore_snapshot_unknown_hash_records_error_and_run_failed() {
         let base = test_dir();
-        let server = AcpServer::new();
+        let server = shadow_server();
         server
             .handle_session_new(
                 "sess-bad-hash",
@@ -3435,7 +3452,7 @@ mod tests {
     #[tokio::test]
     async fn restore_snapshot_unknown_session_rejected() {
         let base = test_dir();
-        let server = AcpServer::new();
+        let server = shadow_server();
         let err = server
             .restore_snapshot("sess-nope", &"c".repeat(64), None)
             .await
@@ -3467,7 +3484,7 @@ mod tests {
         .unwrap();
         let record = store.track(&[PathBuf::from("a.txt")]).await.unwrap();
 
-        let server = AcpServer::new();
+        let server = shadow_server();
         server
             .handle_session_new(
                 "sess-escape",
@@ -3508,7 +3525,7 @@ mod tests {
     #[tokio::test]
     async fn restore_snapshot_rejected_while_run_in_flight() {
         let base = test_dir();
-        let server = AcpServer::new();
+        let server = shadow_server();
         server
             .handle_session_new(
                 "sess-busy",
@@ -3547,7 +3564,7 @@ mod tests {
     #[tokio::test]
     async fn restore_snapshot_rejected_while_restore_in_flight() {
         let base = test_dir();
-        let server = AcpServer::new();
+        let server = shadow_server();
         server
             .handle_session_new(
                 "sess-restore-busy",
@@ -3588,7 +3605,7 @@ mod tests {
         tokio::task::LocalSet::new()
             .run_until(async {
                 let base = test_dir();
-                let server = AcpServer::new();
+                let server = shadow_server();
                 server
                     .handle_session_new(
                         "sess-restore-prompt",
@@ -3639,7 +3656,7 @@ mod tests {
         .unwrap();
         let record = store.track(&[PathBuf::from("a.txt")]).await.unwrap();
 
-        let server = AcpServer::new();
+        let server = shadow_server();
         server
             .handle_session_new(
                 "sess-release",
@@ -3687,7 +3704,7 @@ mod tests {
         tokio::task::LocalSet::new()
             .run_until(async {
                 let base = test_dir();
-                let server = AcpServer::new();
+                let server = shadow_server();
                 server
                     .handle_session_new(
                         "sess-token",
@@ -3750,7 +3767,7 @@ mod tests {
                 .unwrap();
                 let record = store.track(&[PathBuf::from("a.txt")]).await.unwrap();
 
-                let server = AcpServer::new();
+                let server = shadow_server();
                 server
                     .handle_session_new(
                         "sess-indep",
@@ -3799,7 +3816,7 @@ mod tests {
                 let base = test_dir();
                 // Scripts: turn1 → question (gate skipped → exactly one
                 // provider round), turn2 → question, finish → summary.
-                let server = AcpServer::with_gateway(Arc::new(FakeProvider::new(vec![
+                let server = shadow_server_with_gateway(Arc::new(FakeProvider::new(vec![
                     ScriptedResponse::text("问题一: 是否考虑……?"),
                     ScriptedResponse::text("问题二: 方案取舍……?"),
                     ScriptedResponse::text("总结: 决策清单……"),
@@ -3896,7 +3913,7 @@ mod tests {
         tokio::task::LocalSet::new()
             .run_until(async {
                 let base = test_dir();
-                let server = AcpServer::with_gateway(Arc::new(FakeProvider::new(vec![
+                let server = shadow_server_with_gateway(Arc::new(FakeProvider::new(vec![
                     ScriptedResponse::tool_calls(vec![ToolCall {
                         name: "search_replace".to_string(),
                         arguments: serde_json::json!({"path": "x.py"}),
@@ -4102,7 +4119,7 @@ mod tests {
                     ScriptedResponse::text("第二答"),
                     ScriptedResponse::text("第二答"),
                 ]));
-                let server = AcpServer::with_gateway(fake.clone());
+                let server = shadow_server_with_gateway(fake.clone());
                 server
                     .handle_session_new(
                         "sess-conv",
@@ -4184,7 +4201,7 @@ mod tests {
                     script.push(ScriptedResponse::text(format!("{marker} 完成")));
                 }
                 let fake = Arc::new(FakeProvider::new(script));
-                let server = AcpServer::with_gateway(fake.clone());
+                let server = shadow_server_with_gateway(fake.clone());
                 // Interactive shape — a dead receiver still lets the
                 // low-risk read auto-allow (same as the bridge test).
                 server.set_gateway(dead_gateway());
@@ -4257,7 +4274,7 @@ mod tests {
                     ScriptedResponse::text("第一答"),
                     ScriptedResponse::text("第一答"),
                 ]));
-                let server1 = AcpServer::with_gateway(fake1.clone());
+                let server1 = shadow_server_with_gateway(fake1.clone());
                 server1
                     .handle_session_new(
                         "sess-restart",
@@ -4277,7 +4294,7 @@ mod tests {
                     ScriptedResponse::text("第二答"),
                     ScriptedResponse::text("第二答"),
                 ]));
-                let server2 = AcpServer::with_gateway(fake2.clone());
+                let server2 = shadow_server_with_gateway(fake2.clone());
                 server2
                     .handle_session_new(
                         "sess-restart",
@@ -4319,7 +4336,7 @@ mod tests {
                 let base = test_dir();
                 // One successful prompt consumes the scripted replies; the
                 // second prompt hits an empty script → model failure.
-                let server = AcpServer::with_gateway(Arc::new(FakeProvider::new(vec![
+                let server = shadow_server_with_gateway(Arc::new(FakeProvider::new(vec![
                     ScriptedResponse::text("第一答"),
                     ScriptedResponse::text("第一答"),
                 ])));
@@ -4402,7 +4419,7 @@ mod tests {
                     ScriptedResponse::text("收到"),
                     ScriptedResponse::text("收到"),
                 ]));
-                let server = AcpServer::with_gateway(fake.clone());
+                let server = shadow_server_with_gateway(fake.clone());
                 server
                     .handle_session_new(
                         "sess-act",

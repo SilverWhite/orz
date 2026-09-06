@@ -1703,14 +1703,18 @@ mod tests {
             orz_loop::gateway::fake::ScriptedResponse::text("完成"),
             orz_loop::gateway::fake::ScriptedResponse::text("完成"),
         ]));
-        let controller = orz_loop::AgentLoopController::with_gateway(gateway).with_retrieval_mode(
-            orz_loop::controller::RetrievalMode::FrameworkFallback,
-            orz_loop::controller::RetrievalCapability::Available,
-            false,
-            None,
-            None,
-            None,
-        );
+        // ACAF shadow 默认（signer 存量失败族修复，2026-09-07）：逻辑测试
+        // 默认 shadow；生产默认 fail-closed 在下游 crate 测试编译时生效。
+        let controller = orz_loop::AgentLoopController::with_gateway(gateway)
+            .with_acaf_fail_closed(false)
+            .with_retrieval_mode(
+                orz_loop::controller::RetrievalMode::FrameworkFallback,
+                orz_loop::controller::RetrievalCapability::Available,
+                false,
+                None,
+                None,
+                None,
+            );
         controller
             .run_turn(
                 &host,
@@ -1790,8 +1794,11 @@ mod tests {
     async fn call_read_file_large_file_returns_handle_envelope() {
         let dir = test_dir();
         let path = dir.join("big.txt");
-        let content = format!("{}\n", "x".repeat(200)).repeat(200);
-        assert!(content.len() > 16 * 1024);
+        // 尺寸对齐 TER T1.10（2026-09-04）粗门 16K→64K 新口径——旧 39 KiB
+        // 夹具在 64K 门下返回全文、句柄信封不再触发（signer 失败族修复中
+        // 暴露的测试漂移，2026-09-07 修正）。
+        let content = format!("{}\n", "x".repeat(200)).repeat(400);
+        assert!(content.len() > 64 * 1024);
         std::fs::write(&path, &content).unwrap();
 
         let toolset = shared_toolset();
@@ -1957,7 +1964,7 @@ mod tests {
         // Two texts — the counterexample gate (§4.6) intercepts the first.
         let gateway: Arc<dyn ModelGateway> =
             Arc::new(FakeProvider::from_texts(vec!["完成", "完成"]));
-        let controller = AgentLoopController::with_gateway(gateway);
+        let controller = AgentLoopController::with_gateway(gateway).with_acaf_fail_closed(false);
         let (response, _, _) = controller
             .run_turn(&host, "hi", "RUN-T", "manifest-sha", 0, None, None, None)
             .await

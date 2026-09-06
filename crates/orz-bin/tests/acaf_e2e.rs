@@ -344,6 +344,7 @@ async fn controller_control_events_carry_tickets() {
     ]));
 
     let controller = AgentLoopController::with_gateway(gateway)
+        .with_acaf_fail_closed(false)
         .with_retrieval_mode(
             RetrievalMode::FrameworkFallback,
             RetrievalCapability::Available,
@@ -504,6 +505,7 @@ async fn signer_unreachable_shadow_records_rejection_and_proceeds() {
         ScriptedResponse::text("完成"),
     ]));
     let controller = AgentLoopController::with_gateway(gateway)
+        .with_acaf_fail_closed(false)
         .with_retrieval_mode(
             RetrievalMode::FrameworkFallback,
             RetrievalCapability::Available,
@@ -800,6 +802,7 @@ async fn file_write_ticket_full_chain() {
         ScriptedResponse::text("完成"),
     ]));
     let controller = AgentLoopController::with_gateway(gateway)
+        .with_acaf_fail_closed(false)
         .with_snapshot_store(Some(store))
         .with_acaf(Some(client));
     controller
@@ -922,6 +925,7 @@ async fn file_write_shadow_on_signer_unreachable() {
         ScriptedResponse::text("完成"),
     ]));
     let controller = AgentLoopController::with_gateway(gateway)
+        .with_acaf_fail_closed(false)
         .with_snapshot_store(Some(store))
         .with_acaf(Some(client));
     controller
@@ -1015,6 +1019,7 @@ async fn goal_revision_continue_flow_re_derives_session_key() {
     ]));
 
     let controller = AgentLoopController::with_gateway(gateway)
+        .with_acaf_fail_closed(false)
         .with_activation_snapshot(Some(&seeded_internal_activation_snapshot()))
         .with_retrieval_mode(
             RetrievalMode::FrameworkFallback,
@@ -1193,6 +1198,7 @@ async fn network_ticket_full_chain() {
         ScriptedResponse::text("完成"),
     ]));
     let controller = AgentLoopController::with_gateway(gateway)
+        .with_acaf_fail_closed(false)
         .with_retrieval_mode(
             RetrievalMode::LocalBrowser,
             RetrievalCapability::Available,
@@ -1337,6 +1343,7 @@ async fn run_terminal_cmd_command_ticket_full_chain() {
         ScriptedResponse::text("完成"),
     ]));
     let controller = AgentLoopController::with_gateway(gateway)
+        .with_acaf_fail_closed(false)
         .with_snapshot_store(Some(store))
         .with_acaf(Some(client));
     controller
@@ -1451,6 +1458,7 @@ async fn run_tests_command_ticket_full_chain() {
         ScriptedResponse::text("完成"),
     ]));
     let controller = AgentLoopController::with_gateway(gateway)
+        .with_acaf_fail_closed(false)
         .with_snapshot_store(Some(store))
         .with_acaf(Some(client));
     controller
@@ -1577,6 +1585,7 @@ async fn invalid_network_url_shadow_records_rejection_and_proceeds() {
         ScriptedResponse::text("完成"),
     ]));
     let controller = AgentLoopController::with_gateway(gateway)
+        .with_acaf_fail_closed(false)
         .with_retrieval_mode(
             RetrievalMode::LocalBrowser,
             RetrievalCapability::Available,
@@ -1667,6 +1676,7 @@ async fn run_terminal_cmd_empty_command_shadow_records_rejection_and_proceeds() 
         ScriptedResponse::text("完成"),
     ]));
     let controller = AgentLoopController::with_gateway(gateway)
+        .with_acaf_fail_closed(false)
         .with_snapshot_store(Some(store))
         .with_acaf(Some(client));
     controller
@@ -1758,6 +1768,7 @@ async fn missing_browser_read_url_refuses_before_acaf_with_count_gate() {
         ScriptedResponse::text("完成"),
     ]));
     let controller = AgentLoopController::with_gateway(gateway)
+        .with_acaf_fail_closed(false)
         .with_retrieval_mode(
             RetrievalMode::LocalBrowser,
             RetrievalCapability::Available,

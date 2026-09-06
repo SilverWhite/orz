@@ -877,7 +877,11 @@ mod tests {
     }
 
     fn server_with(fake: FakeProvider) -> Arc<AcpServer> {
-        Arc::new(AcpServer::with_gateway(Arc::new(fake)))
+        // ACAF shadow 默认（signer 存量失败族修复，2026-09-07，同
+        // acp_server 测试面约定）：逻辑测试默认 shadow；fail-closed 语义
+        // 由专门测试显式开启。生产默认 fail-closed 在下游 crate 测试编译
+        // 时生效（orz-loop `#[cfg(test)]` 特例不跨 crate）。
+        Arc::new(AcpServer::with_gateway(Arc::new(fake)).with_acaf_fail_closed(false))
     }
 
     /// MECHANICAL-AUDIT-LAYER 审查处理 (2026-08-24): direct 执行面——
