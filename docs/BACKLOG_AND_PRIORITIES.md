@@ -90,7 +90,10 @@
            校验器，含 4 个 B 族按 Python 现行语义镜像；复审修复 P1×1
            （dep_graph consumed_read 空串）+ P2×2（py_int_value 浮点整数
            值比较 5 处 / 覆盖缺口收口）；spec 表 230 场景×31 族=7130 格 +
-           Rust↔Python 对拍 246 语料×31=7626 格 0 差 + S2c e2e 篡改负测），
+           Rust↔Python 对拍 246 语料×31=7626 格 0 差（语料计数勘误：真实
+           248，登记误差 2——见
+           [批 1 实施审计 §2](audits/TASK_D_S2D_BATCH1_IMPL_AUDIT_2026-09-06.md)）
+           + S2c e2e 篡改负测），
            入口：[S2c 实施审计](audits/TASK_D_S2C_FAMILIES_IMPL_AUDIT_2026-09-06.md)
            / [S2c 复审处理](audits/TASK_D_S2C_REVIEW_HANDLING_2026-09-06.md)。
          - [ ] **S2d**：全量 Python↔Rust 对拍 0 差 + registry 翻转准备。
@@ -104,9 +107,15 @@
            - [x] **批 1（裁决一落地，2026-09-06 完成）**：ADR-0010 §14.57
              转录 + Python/Rust 判官两侧同步（written 整体退役不转负检、
              rejected 收窄为形状不变量，31→30 族）+ spec 表退役口径
-             （229×30=6870 格；written 三场景转历史回放合法守卫）+ 对拍
-             247 语料×30 族=7410 格 0 差；orz `362b6071`，见
+             （written 三场景转历史回放合法守卫）+ 对拍 0 差；orz
+             `362b6071`，见
              [批 1 实施审计](audits/TASK_D_S2D_BATCH1_IMPL_AUDIT_2026-09-06.md)。
+             同日三路全面复审收口（P1×1 父仓库判官测试面同步修复、P2×2
+             登记修正——rejected 发射点运行时休眠定性 / 复活边界
+             content_anchor_mismatch 码表冲突、P3 采纳×5 登记×3；orz
+             `141bd2cf`：spec 表 232 场景×30 族=6960 格 + 对拍 250 语料
+             ×30 族=7500 格 0 差 + 判官测试 258 passed），见
+             [批 1 复审处理](audits/TASK_D_S2D_BATCH1_REVIEW_HANDLING_2026-09-06.md)。
            - [ ] 批 2（裁决二落地，待放行）：tool_probe 记账口径收窄 +
              probe_accuracy 族复验零回归。
        - [ ] **S3**：门禁真实 fixture journal 校验改接 Rust 法官；Python Rust

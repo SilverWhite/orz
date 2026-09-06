@@ -4559,9 +4559,16 @@ TER M1/M2 全面审查（多子代理并行 + 提交态复核，有条件 PASS�
    同 run written + 戳一致」两个摩擦子规则（写单面退役后天然不可满足，
    且拒绝事件本就发生在任何 written 之前）；**保留三个形状子规则**——
    phase/step/code 三元组封闭（pre_issue 3 码 / issue 4 步 / policy
-   归一）、reason 非空、每 order 至多一条。rejected 发射点（五个）与
-   拒绝审计面不变。
+   归一）、reason 非空、每 order 至多一条。rejected 发射点（五个）代码
+   保留、拒绝审计面形状不变；**运行时休眠**（订单槽唯一生产写入面
+   `blackboard_action_write` 已随 §14.39 调用面窄门拒发，rejected 与
+   written 同源休眠，见 2026-09-06 复审处理登记）。
 3. **先读后写不受影响**：read-anchor 写前核证（`content_anchor_mismatch`，
    §14.38）是生产硬门、不依赖判官规则族，为唯一保留的写纪律。
 4. **边界登记**：写单链退役后无机械核对兜底；未来若复活写单路径，重新
-   立项（含规则重建与本 ADR 转录）。
+   立项（含规则重建与本 ADR 转录）。**复活立项须一并裁决**：休眠发射点
+   的订单链 read-anchor 拒单使用 `pre_issue/protocol/
+   content_anchor_mismatch` 码，不在保留的 pre_issue 三码封闭集内
+   （退役前既有冲突，休眠期对真实期刊零影响）——复活时该码表要么豁免
+   要么扩集，须显式裁决；且 written 无负检、复活无机械绊线，只能靠
+   立项流程拦截。

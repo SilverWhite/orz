@@ -739,11 +739,27 @@ class ConsoleModeTransitionRuleTests(unittest.TestCase):
         errors = _verify_v02_console_mode_transition([base, bad])
         self.assertTrue(any("transition_id" in e for e in errors), errors)
 
-    def test_order_written_requires_prior_action_write(self) -> None:
+    def test_order_written_rule_retired_no_negative_check(self) -> None:
+        """S2d 裁决一 (2026-09-06, ADR-0010 §14.57): the
+        console_order_written rule family is retired outright on both judges
+        and deliberately NOT converted into a negative check — historical
+        2026-08-16~24 v0.2 journals legally carry written chains (backed,
+        duplicate and unbacked alike), so a written event must produce zero
+        errors from every surviving rule."""
         from assurance.run_event_journal_validation import (
-            _verify_v02_console_order_written,
+            _verify_v02_console_order_rejected,
         )
 
+        write = {
+            "payload_schema": "run-event-v0.2.schema.json",
+            "event_type": "tool_completed",
+            "run_id": "RUN-T",
+            "payload": {
+                "tool": "blackboard_action_write",
+                "call_id": "call-write-1",
+                "exit_code": 0,
+            },
+        }
         order = {
             "payload_schema": "run-event-v0.2.schema.json",
             "event_type": "console_order_written",
@@ -758,32 +774,22 @@ class ConsoleModeTransitionRuleTests(unittest.TestCase):
                 "run_id": "RUN-T",
             },
         }
-        errors = _verify_v02_console_order_written([order])
-        self.assertTrue(any("without a prior" in e for e in errors), errors)
-
-        write = {
-            "payload_schema": "run-event-v0.2.schema.json",
-            "event_type": "tool_completed",
-            "run_id": "RUN-T",
-            "payload": {
-                "tool": "blackboard_action_write",
-                "call_id": "call-write-1",
-                "exit_code": 0,
-            },
-        }
-        self.assertEqual(_verify_v02_console_order_written([write, order]), [])
+        # Backed, duplicate and unbacked written chains are all legal.
         dup = dict(order)
-        dup["event_type"] = "console_order_written"
-        errors = _verify_v02_console_order_written([write, order, dup])
-        self.assertTrue(any("duplicate" in e for e in errors), errors)
+        unbacked = {
+            **order,
+            "payload": {**order["payload"], "write_call_id": "call-missing"},
+        }
+        self.assertEqual(_verify_v02_console_order_rejected([write, order]), [])
+        self.assertEqual(_verify_v02_console_order_rejected([write, order, dup]), [])
+        self.assertEqual(_verify_v02_console_order_rejected([unbacked]), [])
 
-    def test_order_written_write_call_id_matches_producer_shape(self) -> None:
-        """F1 review closure (2026-08-16): the producer emits the action_write
-        completion with the model's real call_id (never ORD-xxxxx) and the
-        order record carries that same call_id as write_call_id; multiple
-        orders in one run must all validate (no last-write overwrite)."""
+    def test_order_written_rule_retired_multi_order_chains_legal(self) -> None:
+        """S2d 裁决一 (2026-09-06, ADR-0010 §14.57): multi-order written
+        chains with mismatched or reused write_call_id (former F1 rule
+        violations) replay legal — the rule is gone, not negated."""
         from assurance.run_event_journal_validation import (
-            _verify_v02_console_order_written,
+            _verify_v02_console_order_rejected,
         )
 
         def write(call_id: str) -> dict:
@@ -814,38 +820,31 @@ class ConsoleModeTransitionRuleTests(unittest.TestCase):
                 },
             }
 
-        events = [
+        well_formed = [
             write("call-f1"),
             order("ORD-1", "call-f1", "s1", 2),
             write("call-f2"),
             order("ORD-2", "call-f2", "s2", 3),
         ]
-        self.assertEqual(_verify_v02_console_order_written(events), [])
+        self.assertEqual(_verify_v02_console_order_rejected(well_formed), [])
 
-        # Mismatched write_call_id must be rejected (no cross-order matching).
-        bad = [write("call-f1"), order("ORD-1", "call-other", "s1", 2)]
-        errors = _verify_v02_console_order_written(bad)
-        self.assertTrue(
-            any("without a prior blackboard_action_write success" in e for e in errors),
-            errors,
-        )
+        mismatched = [write("call-f1"), order("ORD-1", "call-other", "s1", 2)]
+        self.assertEqual(_verify_v02_console_order_rejected(mismatched), [])
 
-        # One write cannot back two order records.
         reused = [
             write("call-f1"),
             order("ORD-1", "call-f1", "s1", 2),
             order("ORD-2", "call-f1", "s2", 3),
         ]
-        errors = _verify_v02_console_order_written(reused)
-        self.assertEqual(len(errors), 1, errors)
+        self.assertEqual(_verify_v02_console_order_rejected(reused), [])
 
-    def test_order_rejected_requires_prior_written_order_and_matching_stamps(
-        self,
-    ) -> None:
-        """P0-E 第 4 项 (2026-08-17, ADR-0010 §14.21 项 3): a
-        console_order_rejected must be preceded by a console_order_written of
-        the same run carrying the same order_id and the same mechanical
-        stamps; at most one rejection per order."""
+    def test_order_rejected_friction_retired_shape_only(self) -> None:
+        """S2d 裁决一 (2026-09-06, ADR-0010 §14.57): the prior-written
+        requirement and the round/plan_epoch/run_id stamp-consistency
+        friction sub-rules are retired (the write-order chain is retired
+        with ADR-0010 §14.39 — rejections are journaled before any written
+        order could exist); the shape sub-rules survive (at most one
+        rejection per order per run, closed triples, non-empty reason)."""
         from assurance.run_event_journal_validation import (
             _verify_v02_console_order_rejected,
         )
@@ -879,14 +878,11 @@ class ConsoleModeTransitionRuleTests(unittest.TestCase):
                 "run_id": "RUN-T",
             },
         }
-        # Without the written order the rejection cannot be attributed.
-        errors = _verify_v02_console_order_rejected([rejected])
-        self.assertTrue(
-            any("without a prior console_order_written" in e for e in errors), errors
-        )
-        self.assertEqual(_verify_v02_console_order_rejected([written, rejected]), [])
+        # A rejection without any prior written order is legal (retired
+        # friction): rejections happen before issuance.
+        self.assertEqual(_verify_v02_console_order_rejected([rejected]), [])
 
-        # Stamp mismatch against the written order must be caught.
+        # Stamp drift against a written order is legal (retired friction).
         bad_stamp = {
             "payload_schema": "run-event-v0.2.schema.json",
             "event_type": "console_order_rejected",
@@ -896,14 +892,26 @@ class ConsoleModeTransitionRuleTests(unittest.TestCase):
                 "round": 9,
             },
         }
-        errors = _verify_v02_console_order_rejected([written, bad_stamp])
-        self.assertTrue(any("round=9" in e for e in errors), errors)
+        self.assertEqual(
+            _verify_v02_console_order_rejected([written, bad_stamp]), []
+        )
 
-        # A rejected order is consumed — one rejection per written order.
+        # At most one rejection per order per run still holds.
         dup = dict(rejected)
         dup["payload"] = dict(rejected["payload"])
         errors = _verify_v02_console_order_rejected([written, rejected, dup])
         self.assertTrue(any("duplicate console_order_rejected" in e for e in errors), errors)
+
+        # Cross-run isolation: the same order_id in another run is a fresh
+        # rejection budget.
+        other_run = {
+            **rejected,
+            "run_id": "RUN-U",
+            "payload": {**rejected["payload"], "run_id": "RUN-U"},
+        }
+        self.assertEqual(
+            _verify_v02_console_order_rejected([written, rejected, other_run]), []
+        )
 
     def test_order_rejected_phase_step_code_consistency(self) -> None:
         """P0-E 第 4 项: pre_issue rejections are protocol-step with the three

@@ -67,17 +67,22 @@
       / [S2b 复审处理](docs/audits/TASK_D_S2B_REVIEW_HANDLING_2026-09-06.md)。
     - [x] S2c：其余族按档位收口（检索族 / 上下文与压缩族 / 控制面族子批）
       ——2026-09-06 完成 + 同日三路复审收口（orz `195c71b8` + `a7981654`，
-      families_s2c.rs 24 校验器；230 场景×31=7130 格 + 对拍 7626 格 0 差 +
-      S2c e2e 负测；入口：docs/audits/TASK_D_S2C_FAMILIES_IMPL_AUDIT_2026-09-06.md
+      families_s2c.rs 24 校验器；230 场景×31=7130 格 + 对拍 7626 格 0 差
+      （语料计数勘误：真实 248，见批 1 实施审计 §2）+ S2c e2e 负测；
+      入口：docs/audits/TASK_D_S2C_FAMILIES_IMPL_AUDIT_2026-09-06.md
       / docs/audits/TASK_D_S2C_REVIEW_HANDLING_2026-09-06.md）。
     - [ ] S2d：全量 Python↔Rust 对拍 0 差 + registry 翻转准备。
       翻转前裁决清单两项已定案（2026-09-06 用户裁定），落地
       批次见 [S2d 翻转裁决登记](docs/audits/TASK_D_S2D_FLIP_ADJUDICATION_2026-09-06.md)：
       - [x] 批 1：console_order_written 规则退役 + console_order_rejected
-        去摩擦留形状——**2026-09-06 完成**（ADR-0010 §14.57 转录 + 判官
-        两侧同步，31→30 族；spec 表 229×30=6870 格（written 三场景转历史
-        回放合法守卫）+ 对拍 247 语料×30 族=7410 格 0 差；orz `362b6071`；
-        入口：docs/audits/TASK_D_S2D_BATCH1_IMPL_AUDIT_2026-09-06.md）。
+        去摩擦留形状——**2026-09-06 完成 + 同日三路全面复审收口**（实施
+        orz `362b6071`：ADR-0010 §14.57 转录 + 判官两侧同步，31→30 族；
+        复审处理 orz `141bd2cf`：P1×1 父仓库判官测试面同步修复 258 passed、
+        P2×2 登记修正（rejected 发射点运行时休眠 / 复活边界
+        content_anchor_mismatch 码表）、P3 采纳×5（+3 场景 + written 守卫
+        显式断言 + 注释同步）；spec 表 232 场景×30 族=6960 格 + 对拍 250
+        语料×30 族=7500 格 0 差；入口：docs/audits/TASK_D_S2D_BATCH1_IMPL_AUDIT_2026-09-06.md
+        / docs/audits/TASK_D_S2D_BATCH1_REVIEW_HANDLING_2026-09-06.md）。
       - [ ] 批 2：probe_accuracy 收窄至当前可见工具（tool_probe 记账口径
         收窄，判官零改动）+ 复验（待放行）。
   - [ ] S3：`check_repository.py` 真实 fixture journal 校验改接 Rust 法官，
