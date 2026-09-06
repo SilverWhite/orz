@@ -812,13 +812,16 @@ async fn prepare_grep(
     use crate::types::tool_metadata::{resolve_cwd, shared_resources};
     let resources = shared_resources(ctx)?;
     let cwd = resolve_cwd(ctx, &resources).await?;
-    let (display_cwd, hints_enabled, deny_read_globs) = {
+    let (display_cwd, hints_enabled, deny_read_globs, skill_roots) = {
         let res = resources.lock().await;
         (
             res.get::<DisplayCwd>().map(|d| d.0.clone()),
             res.get::<PathNotFoundHints>().is_some_and(|h| h.0),
             res.get::<DenyReadGlobs>()
                 .map(|d| d.0.clone())
+                .unwrap_or_default(),
+            res.get::<crate::types::resources::SkillRoots>()
+                .map(|r| r.0.clone())
                 .unwrap_or_default(),
         )
     };
@@ -835,9 +838,9 @@ async fn prepare_grep(
 
     // 工作区沙箱防护（P0-GOV Task C，2026-09-04，canonical 级）：搜索路径若
     // 经 `..` 越级、为绝对路径且指向工作区外、或经符号链接/重解析点指向
-    // 工作区外，直接拒绝执行；技能文档豁免同 read_file
-    // （resources::is_path_within_workspace）。
-    if !crate::types::resources::is_path_within_workspace(&cwd, &workdir, None) {
+    // 工作区外，直接拒绝执行；已注册技能根豁免同 read_file（GLM F1 收窄，
+    // resources::is_path_within_workspace）。
+    if !crate::types::resources::is_path_within_workspace(&cwd, &workdir, None, &skill_roots) {
         let display_path = if let Ok(suffix) = workdir.strip_prefix(&cwd) {
             display_base.join(suffix)
         } else {

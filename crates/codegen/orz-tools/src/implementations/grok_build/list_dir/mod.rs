@@ -539,11 +539,14 @@ impl xai_tool_runtime::Tool for ListDirTool {
         let cwd = resolve_cwd(&ctx, &resources).await?;
         let is_legacy =
             ListDirVersion::from_contract(behavior_version(&ctx).as_deref()).is_legacy();
-        let (display_cwd, hints_enabled) = {
+        let (display_cwd, hints_enabled, skill_roots) = {
             let res = resources.lock().await;
             (
                 res.get::<DisplayCwd>().map(|d| d.0.clone()),
                 res.get::<PathNotFoundHints>().is_some_and(|h| h.0),
+                res.get::<crate::types::resources::SkillRoots>()
+                    .map(|r| r.0.clone())
+                    .unwrap_or_default(),
             )
         };
         let path = resolve_model_path(&cwd, display_cwd.as_deref(), &input.target_directory);
@@ -552,9 +555,9 @@ impl xai_tool_runtime::Tool for ListDirTool {
 
         // 工作区沙箱防护（P0-GOV Task C，2026-09-04，canonical 级）：目标目录
         // 若经 `..` 越级、为绝对路径且指向工作区外、或经符号链接/重解析点指向
-        // 工作区外，直接拒绝；技能文档豁免同 read_file
-        // （resources::is_path_within_workspace）。
-        if !crate::types::resources::is_path_within_workspace(&cwd, &path, None) {
+        // 工作区外，直接拒绝；已注册技能根豁免同 read_file（GLM F1 收窄，
+        // resources::is_path_within_workspace）。
+        if !crate::types::resources::is_path_within_workspace(&cwd, &path, None, &skill_roots) {
             return Ok(ListDirOutput::PermissionDenied(format!(
                 "Permission denied: directory escapes workspace sandbox: {}",
                 display_path.display()

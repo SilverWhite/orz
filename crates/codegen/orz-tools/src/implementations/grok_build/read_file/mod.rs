@@ -336,11 +336,6 @@ fn resolve_read_start_line(file_content: &str, offset: Option<i64>) -> usize {
 fn stored_read_offset(offset: Option<i64>) -> Option<usize> {
     offset.filter(|&o| o >= 0).map(|o| o as usize)
 }
-/// Files read in full (no line/token cap): any file named exactly `SKILL.md`,
-#[inline]
-fn is_skill_markdown(path: &std::path::Path) -> bool {
-    crate::types::resources::is_skill_markdown(path)
-}
 /// Result of extracting file content lines with both default and concise formats
 pub struct ExtractedContent {
     /// Default format: line numbers with → separator (no padding)
@@ -497,7 +492,7 @@ pub(crate) async fn run_read_file(
     streamable_out: Option<&mut bool>,
     invoking_param_names: &crate::types::resources::InvokingToolParamNames,
 ) -> Result<ReadFileOutput, xai_tool_runtime::ToolError> {
-    let (cwd, display_cwd, fs, hints_enabled);
+    let (cwd, display_cwd, fs, hints_enabled, skill_roots);
     {
         let res = resources.lock().await;
         cwd = match cwd_override {
@@ -507,9 +502,12 @@ pub(crate) async fn run_read_file(
         display_cwd = res.get::<DisplayCwd>().map(|d| d.0.clone());
         fs = res.require::<FileSystem>()?.0.clone();
         hints_enabled = res.get::<PathNotFoundHints>().is_some_and(|h| h.0);
+        skill_roots = res
+            .get::<crate::types::resources::SkillRoots>()
+            .map(|r| r.0.clone())
+            .unwrap_or_default();
     }
     let joined_path = resolve_model_path(&cwd, display_cwd.as_deref(), &input.path);
-    let is_skill_markdown = is_skill_markdown(&joined_path);
     let (path, _unicode_note) = match crate::util::fs::try_canonicalize(&joined_path).await {
         Ok(p) => (p, None),
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
@@ -520,14 +518,25 @@ pub(crate) async fn run_read_file(
         }
         Err(_) => (joined_path.clone(), None),
     };
+    // P0-GOV GLM F1（2026-09-06）：整读/免截断 carve-out 只适用于已注册技能
+    // 根内的技能文档（不再按文件名/目录名猜测）。
+    let registered_skill_doc =
+        crate::types::resources::is_within_registered_skill_roots(&joined_path, &skill_roots)
+            || crate::types::resources::is_within_registered_skill_roots(&path, &skill_roots);
 
     // 工作区沙箱防护（P0-GOV Task C，2026-09-04，canonical 级）：模型提供的
     // 路径经 `..` 相对越级跳出 cwd、绝对路径指向工作区外、或经工作区内符号
-    // 链接/重解析点指向工作区外，均拒绝读取；技能文档（SKILL.md / skills
-    // 组件）为只读知识注入豁免。目标不存在时回退词法归一化判定。判定统一在
+    // 链接/重解析点指向工作区外，均拒绝读取；已注册技能根内的技能包目录为
+    // 只读知识注入豁免（GLM F1 收窄——不再放行任意 skills 组件/SKILL.md）。
+    // 目标不存在时回退词法归一化判定。判定统一在
     // resources::is_path_within_workspace（`.gsa` 等会话内部面为真实目录，
     // 不受影响）。
-    if !crate::types::resources::is_path_within_workspace(&cwd, &joined_path, Some(&path)) {
+    if !crate::types::resources::is_path_within_workspace(
+        &cwd,
+        &joined_path,
+        Some(&path),
+        &skill_roots,
+    ) {
         let display_dcwd = display_cwd_or_cwd(&cwd, display_cwd.as_deref());
         let display_path = display_dcwd.join(&input.path);
         return Ok(ReadFileOutput::PermissionDenied(format!(
@@ -681,9 +690,9 @@ pub(crate) async fn run_read_file(
     // ORZ-LARGE-FILE-READ-CONTRACT (ADR-0010 §14.22, 2026-08-17): text files
     // above the coarse gate return a bounded read-handle envelope instead of
     // full content — the model continues with `read_file(offset=…)` or grep.
-    // Skill markdown keeps the historical full-read carve-out (skill docs are
-    // never silently truncated).
-    if !is_skill_markdown && file_bytes.len() > resolve_read_coarse_gate(&resources).await {
+    // Registered skill docs keep the historical full-read carve-out (skill docs
+    // are never silently truncated) — only for registered skill roots (GLM F1).
+    if !registered_skill_doc && file_bytes.len() > resolve_read_coarse_gate(&resources).await {
         let limit = input.limit.unwrap_or(usize::MAX).min(max_lines);
         let start_line = resolve_read_start_line(&file_content, input.offset);
         let (preview, preview_end, line_truncated) =
@@ -736,7 +745,7 @@ pub(crate) async fn run_read_file(
             offset,
         }));
     }
-    let (effective_offset, effective_limit) = if is_skill_markdown {
+    let (effective_offset, effective_limit) = if registered_skill_doc {
         (None, None)
     } else {
         (
@@ -751,7 +760,7 @@ pub(crate) async fn run_read_file(
         total_lines,
     );
     let token_count = crate::util::truncate::estimate_tokens(&extracted.content);
-    if !is_skill_markdown && token_count > MAX_NUM_TOKENS {
+    if !registered_skill_doc && token_count > MAX_NUM_TOKENS {
         let (grep_name, execute_name);
         {
             let res = resources.lock().await;
@@ -799,7 +808,7 @@ pub(crate) async fn run_read_file(
         };
         return Ok(ReadFileOutput::FileTooLarge(msg));
     }
-    let (stored_offset, stored_limit) = if is_skill_markdown {
+    let (stored_offset, stored_limit) = if registered_skill_doc {
         (None, None)
     } else {
         (stored_read_offset(input.offset), input.limit)
@@ -1713,7 +1722,10 @@ mod tests {
         let skills_dir = tmp.path().join("skills");
         std::fs::create_dir_all(&skills_dir).unwrap();
         std::fs::write(skills_dir.join("SKILL.md"), &content).unwrap();
-        let resources = test_resources(tmp.path());
+        let mut resources = test_resources(tmp.path());
+        resources.insert(crate::types::resources::SkillRoots(vec![
+            skills_dir.clone(),
+        ]));
         let input = ReadFileInput {
             path: "skills/SKILL.md".to_string(),
             offset: None,
@@ -2435,7 +2447,8 @@ pub fn verify(req: &HttpRequest) -> Result<Claims, Error> {
         )
         .unwrap();
         let tool = ReadFileTool;
-        let resources = test_resources(tmp.path());
+        let mut resources = test_resources(tmp.path());
+        resources.insert(crate::types::resources::SkillRoots(vec![skill_dir.clone()]));
         let input = ReadFileInput {
             path: ".grok/skills/commit/SKILL.md".to_string(),
             offset: Some(3),
@@ -2476,6 +2489,7 @@ pub fn verify(req: &HttpRequest) -> Result<Claims, Error> {
         std::fs::write(skill_dir.join("SKILL.md"), &big_content).unwrap();
         let tool = ReadFileTool;
         let mut resources = test_resources(tmp.path());
+        resources.insert(crate::types::resources::SkillRoots(vec![skill_dir.clone()]));
         resources.insert(TemplateRenderer::new(
             [(ToolKind::Search, "grep".to_string())].into(),
             Default::default(),
@@ -2507,7 +2521,8 @@ pub fn verify(req: &HttpRequest) -> Result<Claims, Error> {
             .join("\n");
         std::fs::write(skill_dir.join("reference.md"), &content).unwrap();
         let tool = ReadFileTool;
-        let resources = test_resources(tmp.path());
+        let mut resources = test_resources(tmp.path());
+        resources.insert(crate::types::resources::SkillRoots(vec![skill_dir.clone()]));
         let input = ReadFileInput {
             path: ".grok/skills/my-skill/reference.md".to_string(),
             offset: Some(3),
@@ -3302,7 +3317,10 @@ pub fn verify(req: &HttpRequest) -> Result<Claims, Error> {
         std::fs::write(&skill_file, "skill documentation").unwrap();
 
         let tool = ReadFileTool;
-        let resources = test_resources(&sub);
+        let mut resources = test_resources(&sub);
+        resources.insert(crate::types::resources::SkillRoots(vec![
+            skills_dir.clone(),
+        ]));
         let input = ReadFileInput {
             path: "../skills/SKILL.md".to_string(),
             offset: None,
@@ -3318,6 +3336,39 @@ pub fn verify(req: &HttpRequest) -> Result<Claims, Error> {
                 assert!(content.content.contains("skill documentation"));
             }
             other => panic!("Expected FileContent for skill markdown, got {:?}", other),
+        }
+    }
+
+    /// P0-GOV GLM F1（2026-09-06）：未注册的技能目录/任意 SKILL.md 不再拥有
+    /// 越界只读通道——无注册根时工作区外读取必须 PermissionDenied。
+    #[tokio::test]
+    async fn read_file_rejects_unregistered_skills_outside_workspace() {
+        let tmp = TempDir::new().unwrap();
+        let sub = tmp.path().join("workspace");
+        std::fs::create_dir_all(&sub).unwrap();
+        let bundled = tmp.path().join("bundled");
+        std::fs::create_dir_all(&bundled).unwrap();
+        let skill_file = bundled.join("SKILL.md");
+        std::fs::write(&skill_file, "secret skill content").unwrap();
+
+        let tool = ReadFileTool;
+        // 无 SkillRoots 注入（orz-host 现状：skills 为空 = fail-closed）。
+        let resources = test_resources(&sub);
+        let input = ReadFileInput {
+            path: "../bundled/SKILL.md".to_string(),
+            offset: None,
+            limit: None,
+            pages: None,
+            format: None,
+        };
+        let result = xai_tool_runtime::Tool::run(&tool, test_ctx(resources.into_shared()), input)
+            .await
+            .unwrap();
+        match result {
+            ReadFileOutput::PermissionDenied(msg) => {
+                assert!(msg.contains("escapes workspace sandbox"), "msg: {msg}");
+            }
+            other => panic!("Expected PermissionDenied, got {:?}", other),
         }
     }
 }

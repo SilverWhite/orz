@@ -493,42 +493,83 @@ pub fn display_cwd_or_cwd(cwd: &std::path::Path, display_cwd: Option<&std::path:
     display_cwd.unwrap_or(cwd).to_path_buf()
 }
 
-/// 检查给定的路径是否为技能文档（如 SKILL.md 或包含 `skills` 目录组件的
-/// markdown 文件）。
+/// Raw containment test: `candidate` starts under `base`.
 ///
-/// 作为只读知识注入，技能文档允许跨目录豁免读取（read_file/grep/list_dir 的
-/// 工作区词法沙箱均放行）。目录组件按 ASCII 大小写不敏感匹配（Windows/macOS
-/// 文件系统本身大小写不敏感，避免 `SKILLS`/`Skills` 这类真实目录被误拦）；
-/// `skills-cursor` 这类“包含 skills 前缀但非独立组件”的目录不命中。
-pub fn is_skill_markdown(path: &std::path::Path) -> bool {
-    if path.file_name().is_some_and(|n| n == "SKILL.md") {
+/// Windows/macOS 文件系统本身大小写不敏感，因此 Windows 上追加大小写不敏感
+/// 的前缀比较，避免 `starts_with` 对大小写拼写差异的盲区。
+fn candidate_is_under_raw(base: &std::path::Path, candidate: &std::path::Path) -> bool {
+    if candidate.starts_with(base) {
         return true;
     }
-    let is_md = path
-        .extension()
-        .and_then(|e| e.to_str())
-        .is_some_and(|ext| ext.eq_ignore_ascii_case("md"));
-    if !is_md {
-        return false;
-    }
-    use std::path::Component;
-    let mut stack: Vec<&std::ffi::OsStr> = Vec::new();
-    for comp in path.components() {
-        match comp {
-            Component::CurDir | Component::RootDir | Component::Prefix(_) => {}
-            Component::ParentDir => {
-                stack.pop();
+    #[cfg(windows)]
+    {
+        let candidate_str = candidate.to_string_lossy();
+        let base_str = base.to_string_lossy();
+        if candidate_str.len() >= base_str.len() {
+            let prefix = &candidate_str[..base_str.len()];
+            if prefix.eq_ignore_ascii_case(&base_str) {
+                if candidate_str.len() == base_str.len() {
+                    return true;
+                }
+                let next_char = candidate_str.as_bytes()[base_str.len()];
+                if next_char == b'/' || next_char == b'\\' {
+                    return true;
+                }
             }
-            Component::Normal(c) => stack.push(c),
         }
     }
-    stack
-        .iter()
-        .any(|comp| comp.to_string_lossy().eq_ignore_ascii_case("skills"))
+    false
 }
 
-/// 判定模型提供的路径是否位于工作区（cwd）沙箱内部（或属于合法的外部技能
-/// 文档放行）。
+/// Containment test with lexical `..` 归一化（覆盖 Windows 大小写/短名等
+/// 拼写差异下 `starts_with` 的盲区）。
+fn candidate_is_under(base: &std::path::Path, candidate: &std::path::Path) -> bool {
+    let norm_candidate = orz_paths::normalize_lexically(candidate);
+    let norm_base = orz_paths::normalize_lexically(base);
+    candidate_is_under_raw(base, candidate) || candidate_is_under_raw(&norm_base, &norm_candidate)
+}
+
+/// Registered skill package roots (P0-GOV GLM F1 收窄，2026-09-06)。
+///
+/// 由 registry finalize 从已注册 `SkillInfo` 派生并注入 Resources；空列表 =
+/// 无技能豁免（fail-closed）。只读知识注入豁免不再匹配任意 `skills` 目录组件
+/// 或任意 `SKILL.md` 文件名（GLM F1 越界只读通道），而是限定在登记的技能包
+/// 目录子树内。
+#[derive(Debug, Clone, Default)]
+pub struct SkillRoots(pub Vec<PathBuf>);
+
+/// 从已注册技能路径派生技能包根：
+/// - `SKILL.md` 文件路径 → 其父目录（技能包目录）；
+/// - 其它路径原样作为根。
+pub fn skill_root_from_skill_path(skill_path: &std::path::Path) -> PathBuf {
+    if skill_path
+        .file_name()
+        .is_some_and(|name| name == "SKILL.md")
+    {
+        skill_path.parent().unwrap_or(skill_path).to_path_buf()
+    } else {
+        skill_path.to_path_buf()
+    }
+}
+
+/// 判定路径是否位于任一已注册技能根（技能包目录）内。
+///
+/// 目标存在时以 canonical 落点比较（覆盖符号链接/重解析点），canonical 不可
+/// 得时退回词法归一化比较；根目录同样先 canonical 后词法。roots 为空时恒为
+/// `false`（无注册技能即无跨目录豁免）。
+pub fn is_within_registered_skill_roots(path: &std::path::Path, roots: &[PathBuf]) -> bool {
+    if roots.is_empty() {
+        return false;
+    }
+    let canonical_path = dunce::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
+    roots.iter().any(|root| {
+        let canonical_root = dunce::canonicalize(root).unwrap_or_else(|_| root.clone());
+        candidate_is_under(&canonical_root, &canonical_path) || candidate_is_under(root, path)
+    })
+}
+
+/// 判定模型提供的路径是否位于工作区（cwd）沙箱内部（或属于已注册技能根
+/// 放行）。
 ///
 /// P0-GOV Task C（2026-09-04）沙箱语义——canonical 级越界硬拦截：
 /// - 目标存在时，先做 canonical（符号链接/重解析点展开）解析，真实落点必须
@@ -536,55 +577,30 @@ pub fn is_skill_markdown(path: &std::path::Path) -> bool {
 ///   以及「工作区内符号链接/重解析点指向 cwd 外」三类通道一律返回 `false`。
 ///   `.gsa` 等会话内部面为真实目录（`session_cwd/.gsa` 由 `create_dir_all`
 ///   创建），不受影响；如未来引入重解析点内部面需先显式登记豁免。
-/// - 技能文档豁免：路径含 `skills` 组件或文件名为 `SKILL.md` 时放行（只读
-///   知识注入通道，见 [`is_skill_markdown`]）。
+/// - 技能文档豁免（P0-GOV GLM F1，2026-09-06 收窄）：仅当路径位于已注册技能
+///   根（`SkillRoots`，由 registry finalize 从 `SessionContext.skills` 派生）
+///   内时放行（只读知识注入通道）。任意 `skills` 目录组件 / `SKILL.md` 文件
+///   名不再单独构成越界豁免。
 /// - 路径尚不存在（读前先写、目录未创建等）时无法 canonical，回退为词法
 ///   归一化判定，避免误拦工作区内待创建路径。
 pub fn is_path_within_workspace(
     cwd: &std::path::Path,
     joined_path: &std::path::Path,
     resolved_path: Option<&std::path::Path>,
+    registered_skill_roots: &[PathBuf],
 ) -> bool {
-    // 技能文档豁免（只读知识注入）优先于沙箱判定。
-    if is_skill_markdown(joined_path) || resolved_path.is_some_and(is_skill_markdown) {
+    // 已注册技能根豁免（只读知识注入）优先于沙箱判定。
+    if !registered_skill_roots.is_empty()
+        && (is_within_registered_skill_roots(joined_path, registered_skill_roots)
+            || resolved_path
+                .is_some_and(|p| is_within_registered_skill_roots(p, registered_skill_roots)))
+    {
         return true;
     }
 
     let canonical_cwd = dunce::canonicalize(cwd).unwrap_or_else(|_| cwd.to_path_buf());
     let cwd_norm = orz_paths::normalize_lexically(cwd);
     let canonical_cwd_norm = orz_paths::normalize_lexically(&canonical_cwd);
-
-    let path_is_under = |p: &std::path::Path, base: &std::path::Path| -> bool {
-        if p.starts_with(base) {
-            return true;
-        }
-        #[cfg(windows)]
-        {
-            let p_str = p.to_string_lossy();
-            let base_str = base.to_string_lossy();
-            if p_str.len() >= base_str.len() {
-                let prefix = &p_str[..base_str.len()];
-                if prefix.eq_ignore_ascii_case(&base_str) {
-                    if p_str.len() == base_str.len() {
-                        return true;
-                    }
-                    let next_char = p_str.as_bytes()[base_str.len()];
-                    if next_char == b'/' || next_char == b'\\' {
-                        return true;
-                    }
-                }
-            }
-        }
-        false
-    };
-
-    // 归一化（`..` 折叠）后仍做一次包含判定，覆盖 Windows 大小写/短名等
-    // 拼写差异下 `starts_with` 的盲区。
-    let under = |p: &std::path::Path, base: &std::path::Path| -> bool {
-        let norm_p = orz_paths::normalize_lexically(p);
-        let norm_b = orz_paths::normalize_lexically(base);
-        path_is_under(p, base) || path_is_under(&norm_p, &norm_b)
-    };
 
     // 目标存在：以 canonical 落点为准（调用方传入已解析目标，或本函数对
     // joined_path 现场解析）。工作区内符号链接/重解析点指向 cwd 外时，其
@@ -594,11 +610,13 @@ pub fn is_path_within_workspace(
         .or_else(|| dunce::canonicalize(joined_path).ok());
     if let Some(target) = resolved {
         let canon_target = dunce::canonicalize(&target).unwrap_or_else(|_| target.clone());
-        if under(&canon_target, &canonical_cwd) || under(&canon_target, cwd) {
+        if candidate_is_under(&canonical_cwd, &canon_target)
+            || candidate_is_under(cwd, &canon_target)
+        {
             return true;
         }
         // canonical 不可得（目标在两次解析间消失等）时退回词法拼写判定。
-        if under(&target, &canonical_cwd) || under(&target, cwd) {
+        if candidate_is_under(&canonical_cwd, &target) || candidate_is_under(cwd, &target) {
             return true;
         }
         return false;
@@ -606,9 +624,9 @@ pub fn is_path_within_workspace(
 
     // 目标尚不存在（读前先写 / 目录未创建）：词法归一化判定。
     let joined_norm = orz_paths::normalize_lexically(joined_path);
-    path_is_under(joined_path, cwd)
-        && (path_is_under(&joined_norm, &cwd_norm)
-            || path_is_under(&joined_norm, &canonical_cwd_norm))
+    candidate_is_under(cwd, joined_path)
+        && (candidate_is_under(&cwd_norm, &joined_norm)
+            || candidate_is_under(&canonical_cwd_norm, &joined_norm))
 }
 /// Newtype wrapper for `Arc<dyn xai_tool_runtime::ToolDispatch>` so it can
 /// be stored in `ToolCallContext::extensions`. Used by `use_tool` and the
@@ -1724,22 +1742,51 @@ mod tests {
     }
 
     #[test]
-    fn is_skill_markdown_matches_skills_component_case_insensitively() {
-        assert!(is_skill_markdown(std::path::Path::new("/a/SKILL.md")));
-        assert!(is_skill_markdown(std::path::Path::new(
-            "/a/skills/guide.md"
-        )));
-        assert!(is_skill_markdown(std::path::Path::new(
-            "/a/SKILLS/guide.MD"
-        )));
-        assert!(is_skill_markdown(std::path::Path::new(
-            "/a/Skills/guide.md"
-        )));
-        // 非独立组件（skills-cursor）与普通 md 不命中。
-        assert!(!is_skill_markdown(std::path::Path::new(
-            "/repo/skills-cursor/notes.md"
-        )));
-        assert!(!is_skill_markdown(std::path::Path::new("/repo/notes.md")));
+    fn skill_root_derives_parent_dir_of_skill_md() {
+        assert_eq!(
+            skill_root_from_skill_path(std::path::Path::new(
+                "/home/u/.claude/skills/commit/SKILL.md"
+            )),
+            std::path::PathBuf::from("/home/u/.claude/skills/commit")
+        );
+        // 非 SKILL.md 路径（目录型根）原样保留。
+        assert_eq!(
+            skill_root_from_skill_path(std::path::Path::new("/home/u/.claude/skills/commit")),
+            std::path::PathBuf::from("/home/u/.claude/skills/commit")
+        );
+    }
+
+    #[test]
+    fn registered_skill_roots_allow_only_registered_package_subtrees() {
+        let tmp = TempDir::new().unwrap();
+        let root_a = tmp.path().join("skills/commit");
+        let root_b = tmp.path().join(".codex/skills/probe");
+        std::fs::create_dir_all(&root_a).unwrap();
+        std::fs::create_dir_all(&root_b).unwrap();
+        let roots = vec![root_a.clone(), root_b.clone()];
+
+        // 已注册技能包内（含参考文件）放行；未注册的其它 skills 目录拒绝。
+        assert!(is_within_registered_skill_roots(
+            &root_a.join("SKILL.md"),
+            &roots
+        ));
+        assert!(is_within_registered_skill_roots(
+            &root_a.join("references/guide.md"),
+            &roots
+        ));
+        assert!(is_within_registered_skill_roots(
+            &root_b.join("SKILL.md"),
+            &roots
+        ));
+        assert!(!is_within_registered_skill_roots(
+            &tmp.path().join("skills/other/SKILL.md"),
+            &roots
+        ));
+        // 空白名单 = 无任何技能豁免（fail-closed）。
+        assert!(!is_within_registered_skill_roots(
+            &root_a.join("SKILL.md"),
+            &[]
+        ));
     }
 
     #[test]
@@ -1754,18 +1801,24 @@ mod tests {
         std::fs::write(&outside, "sensitive").unwrap();
 
         // 绝对路径指向工作区外：拒绝（含 None 与 Some(resolved) 两种调用面）。
-        assert!(!is_path_within_workspace(&ws, &outside, None));
-        assert!(!is_path_within_workspace(&ws, &outside, Some(&outside)));
+        assert!(!is_path_within_workspace(&ws, &outside, None, &[]));
+        assert!(!is_path_within_workspace(
+            &ws,
+            &outside,
+            Some(&outside),
+            &[]
+        ));
         // `../` 词法越级但目标实际位于工作区外：拒绝。
         let escape = ws.join("../secret.txt");
-        assert!(!is_path_within_workspace(&ws, &escape, None));
+        assert!(!is_path_within_workspace(&ws, &escape, None, &[]));
         // 工作区内目标（含 `..` 折叠后仍落在工作区内的路径）：放行。
-        assert!(is_path_within_workspace(&ws, &inside, None));
+        assert!(is_path_within_workspace(&ws, &inside, None, &[]));
         let inside_via_parent = ws.join("src/../src/main.rs");
         assert!(is_path_within_workspace(
             &ws,
             &inside_via_parent,
-            Some(&inside)
+            Some(&inside),
+            &[]
         ));
     }
 
@@ -1782,7 +1835,8 @@ mod tests {
         assert!(!is_path_within_workspace(
             &ws,
             &joined_inside,
-            Some(&outside)
+            Some(&outside),
+            &[]
         ));
     }
 
@@ -1795,21 +1849,46 @@ mod tests {
         std::fs::create_dir_all(inside.parent().unwrap()).unwrap();
         std::fs::write(&inside, "x").unwrap();
         // 真实内部文件（含 `..` 折叠后仍在内部）与 None/Some 两种调用面均放行。
-        assert!(is_path_within_workspace(&ws, &inside, None));
-        assert!(is_path_within_workspace(&ws, &inside, Some(&inside)));
+        assert!(is_path_within_workspace(&ws, &inside, None, &[]));
+        assert!(is_path_within_workspace(&ws, &inside, Some(&inside), &[]));
         // 尚不存在的工作区内路径（读前先写）：词法回退放行。
         let pending = ws.join("out/new.json");
-        assert!(is_path_within_workspace(&ws, &pending, None));
+        assert!(is_path_within_workspace(&ws, &pending, None, &[]));
     }
 
     #[test]
-    fn path_within_workspace_skills_exemption_applies_outside_cwd() {
+    fn path_within_workspace_skills_exemption_requires_registered_roots() {
         let tmp = TempDir::new().unwrap();
         let ws = tmp.path().join("workspace");
         std::fs::create_dir_all(&ws).unwrap();
-        let skills = tmp.path().join("skills/guide.md");
-        assert!(is_path_within_workspace(&ws, &skills, None));
-        let skill_file = tmp.path().join("bundled/SKILL.md");
-        assert!(is_path_within_workspace(&ws, &skill_file, None));
+        let registered = tmp.path().join("skills/commit");
+        std::fs::create_dir_all(&registered).unwrap();
+        std::fs::write(registered.join("SKILL.md"), "doc").unwrap();
+        let roots = vec![registered.clone()];
+
+        // 已注册技能包内（工作区外）放行。
+        let skill_file = registered.join("SKILL.md");
+        assert!(is_path_within_workspace(
+            &ws,
+            &skill_file,
+            Some(&skill_file),
+            &roots
+        ));
+        // 未注册的 skills 目录 / 任意 SKILL.md 不再拥有越界豁免（GLM F1）。
+        let unregistered = tmp.path().join("skills/other/SKILL.md");
+        std::fs::create_dir_all(unregistered.parent().unwrap()).unwrap();
+        std::fs::write(&unregistered, "x").unwrap();
+        assert!(!is_path_within_workspace(&ws, &unregistered, None, &roots));
+        let bundled = tmp.path().join("bundled/SKILL.md");
+        std::fs::create_dir_all(bundled.parent().unwrap()).unwrap();
+        std::fs::write(&bundled, "x").unwrap();
+        assert!(!is_path_within_workspace(&ws, &bundled, None, &roots));
+        // 无任何注册根（orz-host 现状：skills 为空）时全部拒绝。
+        assert!(!is_path_within_workspace(
+            &ws,
+            &skill_file,
+            Some(&skill_file),
+            &[]
+        ));
     }
 }

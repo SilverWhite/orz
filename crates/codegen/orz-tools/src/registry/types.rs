@@ -1017,6 +1017,18 @@ impl ToolRegistryBuilder {
         resources.insert(crate::types::resources::AvailableSkills(
             startup_skills.clone(),
         ));
+        // P0-GOV GLM F1（2026-09-06）：技能豁免收窄为注册技能根白名单。
+        // 每个已注册 SKILL.md 的父目录（技能包目录）成为只读豁免根；空列表 =
+        // 无豁免（fail-closed）。read_file/grep/list_dir 沙箱据此放行。
+        let skill_roots: Vec<PathBuf> = startup_skills
+            .iter()
+            .map(|skill| {
+                crate::types::resources::skill_root_from_skill_path(std::path::Path::new(
+                    &skill.path,
+                ))
+            })
+            .collect();
+        resources.insert(crate::types::resources::SkillRoots(skill_roots));
         {
             let mut mgr = crate::types::skill_discovery_tracker::SkillManager::new();
             mgr.set_discovery_snapshot_names(
