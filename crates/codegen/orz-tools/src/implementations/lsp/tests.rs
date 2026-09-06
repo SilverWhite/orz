@@ -1357,7 +1357,9 @@ async fn e2e_restart_replay_requeues_pending_diagnostics() {
     mgr.clients.insert("delayed".to_string(), restarted);
 
     let mgr = tokio::sync::Mutex::new(mgr);
-    let summary = drain_lsp_diagnostics(&mgr, std::time::Duration::from_secs(3))
+    // 预算须覆盖最坏路径：python 子进程启动（startup_timeout 10s）+ LSP
+    // 握手 + mock server 固定 1s 延迟；全量并发负载下 3s 会偶发超时。
+    let summary = drain_lsp_diagnostics(&mgr, std::time::Duration::from_secs(15))
         .await
         .expect("replayed document should still produce diagnostics");
     assert!(summary.text.contains("delayed diagnostic after restart"));

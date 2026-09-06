@@ -1973,18 +1973,16 @@ mod tests {
             }
         }
     }
-    /// OUTPUT-DEGENERATION-GUARD (2026-08-19, ADR-0010 §14.33 / 设计 §3.2，
-    /// 全面审查处理 P3 / S2 清单补项)：终端截断指针指向
-    /// `.gsa/session/terminal/<order_id>.log`——`.gsa` 为指向 git root 之外
-    /// 的符号链接时，read_file 的 gitignore 检查 canonicalize 后
-    /// `strip_prefix(git_root)` 失败返回 not-ignored，直接放行（设计
-    /// 「落盘路径可读性已验证」的专属回归测试：即使 `.gsa/` 与 `*.log`
-    /// 都在 gitignore 模式内也必须可读）。
+    /// GAP-GSA-SYMLINK-STALE-TEST（2026-09-06 用户裁决：对齐 Task C）：
+    /// 旧 OUTPUT-DEGENERATION-GUARD 回归测试曾预期 `.gsa` 符号链接越出
+    /// git root 仍可读；Task C（2026-09-04）canonical 沙箱后按解析落点
+    /// fail-closed 拒读。本测试锁定该安全语义：工作区内 reparse 点解析到
+    /// 工作区外必须拒绝，即使 `.gsa/` 与 `*.log` 都在 gitignore 模式内。
     #[tokio::test]
-    async fn read_file_allows_gsa_symlink_outside_git_root_even_when_gitignored() {
+    async fn read_file_rejects_gsa_symlink_resolving_outside_git_root_even_when_gitignored() {
         let tmp = TempDir::new().unwrap();
         let canonical_root = dunce::canonicalize(tmp.path()).unwrap();
-        // `.gsa` 符号链接指向 git root 之外的真实目录（终端日志落盘形态）。
+        // `.gsa` 符号链接指向 git root 之外的真实目录（越界重解析形态）。
         let outside = TempDir::new().unwrap();
         let gsa_real = outside.path().join("gsa-real");
         let log_dir = gsa_real.join("session").join("terminal");
@@ -2015,15 +2013,15 @@ mod tests {
             .await
             .unwrap();
         match result {
-            ReadFileOutput::FileContent(content) => {
+            ReadFileOutput::PermissionDenied(message) => {
                 assert!(
-                    content.raw_output.contains("terminal output line"),
-                    "symlink-resolved .gsa log must be readable"
+                    message.contains("path escapes workspace sandbox"),
+                    "out-of-root .gsa symlink must be denied by canonical sandbox, got {message}"
                 );
             }
             other => {
                 panic!(
-                    "Expected FileContent for symlinked .gsa log, got {:?}",
+                    "Expected PermissionDenied for symlinked .gsa log outside root, got {:?}",
                     other
                 )
             }

@@ -1411,14 +1411,18 @@ mod tests {
             other => panic!("Expected Content output, got {:?}", other),
         }
     }
+    // Task C（2026-09-04）canonical 沙箱后，绝对路径仍按字面使用（不被 cwd
+    // 拼接），但必须落在工作区内——fixture 的 cwd 即临时根，若工具错误地把
+    // cwd 拼到绝对路径上，本测试会因解析出不存在路径而失败。
     #[tokio::test]
     async fn tool_absolute_path_ignores_cwd() {
         let tmp = TempDir::new().unwrap();
-        let subdir = tmp.path().join("abs_test");
+        let canonical_root = dunce::canonicalize(tmp.path()).unwrap();
+        let subdir = canonical_root.join("abs_test");
         fs::create_dir(&subdir).unwrap();
         File::create(subdir.join("file.rs")).unwrap();
         let mut resources = Resources::new();
-        resources.insert(Cwd(PathBuf::from("/does/not/matter")));
+        resources.insert(Cwd(canonical_root.clone()));
         let tool = ListDirTool;
         let output = xai_tool_runtime::Tool::run(
             &tool,

@@ -2570,14 +2570,25 @@ impl xai_tool_runtime::Tool for BashTool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    // ADR-0010 §14.55 (TER T1.4)：timeout 不再是杀进程点，schema 不静态
+    // 广播默认值——host 注入命令形态默认（auto-bg deadline，never a kill
+    // point）。旧「default == 120000」断言随去硬杀裁决退役。
     #[test]
-    fn bash_timeout_schema_defaults_to_120s() {
+    fn bash_timeout_schema_no_static_default() {
         let schema = serde_json::to_value(schemars::schema_for!(BashToolInput)).unwrap();
         let timeout = &schema["properties"]["timeout"];
         assert_eq!(
             timeout.get("default"),
-            Some(&serde_json::json!(120_000)),
-            "timeout schema should advertise default 120000, got {timeout}"
+            None,
+            "timeout schema must not advertise a static default, got {timeout}"
+        );
+        let description = timeout
+            .get("description")
+            .and_then(|v| v.as_str())
+            .unwrap_or_default();
+        assert!(
+            description.contains("No static default advertised"),
+            "timeout schema description should state the no-static-default contract, got {description}"
         );
         // Serde omit stays None so background without timeout remains unbounded.
         let missing: BashToolInput =
