@@ -6003,14 +6003,27 @@ mod tests {
             .iter()
             .find(|e| e.event_type == EventType::ToolAvailabilityCheck)
             .unwrap();
+        // S2d 裁决二 (ADR-0010 §14.58): run_tests is R1-sealed from the
+        // main face — it can never re-enter the model-visible list, so its
+        // probe verdict no longer rides the availability accounting at all
+        // (complete/incomplete alike). The probe-vs-registry declaration
+        // semantics it used to exercise live on through declared tools.
+        let partition: Vec<String> = availability.payload["complete"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|v| v.as_str().map(str::to_string))
+            .chain(
+                availability.payload["incomplete"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .filter_map(|v| v["tool"].as_str().map(str::to_string)),
+            )
+            .collect();
         assert!(
-            availability.payload["incomplete"]
-                .as_array()
-                .unwrap()
-                .iter()
-                .any(|v| v["tool"] == "run_tests" && v["reason"] == "缺少测试运行器"),
-            "probe incomplete reasons: {:?}",
-            availability.payload["incomplete"]
+            !partition.iter().any(|t| t == "run_tests"),
+            "sealed run_tests must not ride the narrowed partition: {partition:?}"
         );
         let _ = std::fs::remove_dir_all(&dir);
     }

@@ -3270,12 +3270,22 @@ impl AgentLoopController {
             video_backend_configured: host.video_backend_configured(),
             mcp_registry_available: host.mcp_registry_available(),
         };
-        let probe_snapshot = crate::tool_probe::probe_work_tools(&probe_context);
+        let probe_snapshot = crate::tool_probe::narrow_to_declared(
+            crate::tool_probe::probe_work_tools(&probe_context),
+            |tool| {
+                tool_defs.iter().any(|d| d.name == tool)
+                    && !Self::R1_SEALED_MAIN_TOOLS.contains(&tool)
+            },
+        );
         // P0-A-2 (design §4/§8 v0.2): the initial snapshot journals the
         // pre-run_started event and seeds the minimal previous-round map.
         // The per-round list projection (探针完整集 ∩ 会话声明集 + 非工作工具)
         // runs inside the loop before every model request — `tool_defs`
         // passed below is the unfiltered BASE list.
+        // S2d 裁决二 (2026-09-06, ADR-0010 §14.58): the partition is
+        // narrowed to the declared surface — sealed (R1) and registry-absent
+        // work tools never enter complete/incomplete, so their phantom
+        // verdict flips cannot journal as availability flips.
         writer
             .record(
                 EventType::ToolAvailabilityCheck,

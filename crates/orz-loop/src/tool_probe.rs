@@ -412,6 +412,34 @@ pub fn probe_work_tools(ctx: &ProbeContext) -> ToolProbeSnapshot {
     snapshot
 }
 
+/// S2d 裁决二 (2026-09-06, ADR-0010 §14.58): narrow the probe partition to
+/// the currently-visible declared surface — a tool that can never re-enter
+/// the model-visible face (R1-sealed from the main face, or absent from the
+/// registry) is dropped from `complete`/`incomplete`. Its mechanical verdict
+/// can still flip internally, but that flip can never change the projected
+/// tool list, so journaling it as an availability flip would trip the
+/// probe↔header accuracy invariant (ADR-0010 §3.5 条 7) for a phantom
+/// change. Legitimate declaration-surface flips (e.g. retrieval mode A
+/// browser-capability degradation) keep their declared tools in the
+/// partition and remain governed.
+pub fn narrow_to_declared(
+    snapshot: ToolProbeSnapshot,
+    is_declared: impl Fn(&str) -> bool,
+) -> ToolProbeSnapshot {
+    ToolProbeSnapshot {
+        complete: snapshot
+            .complete
+            .into_iter()
+            .filter(|tool| is_declared(tool))
+            .collect(),
+        incomplete: snapshot
+            .incomplete
+            .into_iter()
+            .filter(|failure| is_declared(&failure.tool))
+            .collect(),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -420,7 +448,8 @@ mod tests {
     use crate::gateway::fake::{FakeProvider, ScriptedResponse};
     use crate::gateway::model::{GatewayError, ModelGateway, ModelRequest, ModelResponse};
     use crate::host::{
-        LoopHost, PermitDecision, PermitError, RiskClass, ToolError, ToolRegistry, ToolResult,
+        LoopHost, PermitDecision, PermitError, RiskClass, ToolDef, ToolError, ToolRegistry,
+        ToolResult,
     };
     use async_trait::async_trait;
     use orz_assurance::{EventType, JournalRecorder, RunEvent};
@@ -501,6 +530,122 @@ mod tests {
                 "{tool} must not be a work tool"
             );
         }
+    }
+
+    // ── S2d 裁决二 (2026-09-06, ADR-0010 §14.58): declared-surface
+    //    narrowing of the availability accounting ────────────────────────
+
+    /// The declared-surface predicate as wired at both snapshot call sites:
+    /// registry-present AND not R1-sealed. A sealed tool that is registry-
+    /// present (e.g. `todo_write`) and a registry-absent tool (e.g. an
+    /// unwired backend) both drop out.
+    fn declared_face(tool: &str) -> bool {
+        tool != "todo_write" && tool != "lsp"
+    }
+
+    #[test]
+    fn narrow_to_declared_drops_sealed_and_registry_absent() {
+        let snapshot = ToolProbeSnapshot {
+            complete: vec!["read_file".into(), "todo_write".into(), "grep".into()],
+            incomplete: vec![
+                ProbeFailure {
+                    tool: "lsp".into(),
+                    reason: REASON_LSP_NOT_CONFIGURED,
+                },
+                ProbeFailure {
+                    tool: "run_terminal_cmd".into(),
+                    reason: REASON_TERMINAL_CHAIN_INCOMPLETE,
+                },
+            ],
+        };
+        let narrowed = narrow_to_declared(snapshot, declared_face);
+        // Sealed (todo_write) and registry-absent (lsp) are gone from BOTH
+        // sets; declared tools keep canonical order and reasons.
+        assert_eq!(
+            narrowed.complete,
+            vec!["read_file".to_string(), "grep".to_string()]
+        );
+        assert_eq!(
+            narrowed.incomplete,
+            vec![ProbeFailure {
+                tool: "run_terminal_cmd".into(),
+                reason: REASON_TERMINAL_CHAIN_INCOMPLETE,
+            }]
+        );
+    }
+
+    #[test]
+    fn narrow_to_declared_sealed_flip_is_not_an_availability_flip() {
+        // A sealed tool flipping complete↔incomplete must NOT produce a
+        // flip after narrowing (the projected face cannot change) — this is
+        // the phantom-flip leak the 裁决二 accounting narrowing seals.
+        let sealed_complete = ToolProbeSnapshot {
+            complete: vec!["read_file".into(), "todo_write".into()],
+            incomplete: vec![],
+        };
+        let sealed_flipped = ToolProbeSnapshot {
+            complete: vec!["read_file".into()],
+            incomplete: vec![ProbeFailure {
+                tool: "todo_write".into(),
+                reason: REASON_NO_GOAL_CONTEXT,
+            }],
+        };
+        let before =
+            MinimalProbeMap::from_snapshot(&narrow_to_declared(sealed_complete, declared_face));
+        let after =
+            MinimalProbeMap::from_snapshot(&narrow_to_declared(sealed_flipped, declared_face));
+        assert_eq!(before, after, "sealed-tool flip must be invisible");
+
+        // A declared tool flipping still flips after narrowing (legitimate
+        // declaration-surface change → header change stays governed).
+        let declared_flipped = ToolProbeSnapshot {
+            complete: vec![],
+            incomplete: vec![ProbeFailure {
+                tool: "read_file".into(),
+                reason: REASON_WORKSPACE_UNREADABLE,
+            }],
+        };
+        let after_declared =
+            MinimalProbeMap::from_snapshot(&narrow_to_declared(declared_flipped, declared_face));
+        assert_ne!(
+            before, after_declared,
+            "declared-tool flip must remain a flip"
+        );
+    }
+
+    #[test]
+    fn narrowed_full_chain_partition_excludes_r1_sealed_work_tools() {
+        // Full-chain context: every work tool probes complete; after
+        // narrowing, the R1-sealed work tools (todo_write / update_goal /
+        // compaction_whitelist_add / list_dir / search_tool / run_tests /
+        // retrieval_disposition) must leave the partition while the
+        // unsealed declared face stays intact.
+        let dir = std::env::temp_dir().join("orz-tool-probe-narrow-full");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("probe test dir");
+        let snapshot = probe_work_tools(&full_ctx(&dir));
+        assert!(snapshot.incomplete.is_empty(), "{:?}", snapshot.incomplete);
+        // Registry = every work tool present (the projection can only be
+        // blocked by the R1 seal in this configuration).
+        let narrowed = narrow_to_declared(snapshot, |tool| {
+            !AgentLoopController::R1_SEALED_MAIN_TOOLS.contains(&tool)
+        });
+        for tool in AgentLoopController::R1_SEALED_MAIN_TOOLS {
+            assert!(
+                !narrowed.complete.iter().any(|c| c == tool),
+                "sealed {tool} must not ride the narrowed partition"
+            );
+        }
+        let sealed_work_tools = AgentLoopController::R1_SEALED_MAIN_TOOLS
+            .iter()
+            .filter(|tool| WORK_TOOLS.contains(tool))
+            .count();
+        assert_eq!(
+            narrowed.complete.len(),
+            WORK_TOOLS.len() - sealed_work_tools,
+            "declared face = probe matrix minus the R1 seal"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
@@ -901,11 +1046,34 @@ mod tests {
 
     // ── P0-A step 5: minimal previous-round map + flip-only events ──────
 
-    /// A host whose runner presence can flip mid-run — the per-round probe
-    /// must observe the change and emit a second `tool_availability_check`.
+    /// Registry declaring a SEALED work tool (`run_tests`) plus a DECLARED
+    /// flip vehicle (`run_terminal_cmd`) — S2d 裁决二 (ADR-0010 §14.58):
+    /// the sealed tool must stay silent in the availability accounting while
+    /// the declared one remains flip-observable.
+    struct SealedAndDeclaredRegistry;
+    impl ToolRegistry for SealedAndDeclaredRegistry {
+        fn get(&self, name: &str) -> Option<ToolDef> {
+            self.list().into_iter().find(|t| t.name == name)
+        }
+        fn list(&self) -> Vec<ToolDef> {
+            ["run_tests", "run_terminal_cmd"]
+                .iter()
+                .map(|n| ToolDef {
+                    name: n.to_string(),
+                    description: format!("tool {n}"),
+                    parameters: serde_json::json!({}),
+                })
+                .collect()
+        }
+    }
+
+    /// A host whose runner/terminal presence can flip mid-run — the
+    /// per-round probe must observe the DECLARED change and emit a second
+    /// `tool_availability_check`; the sealed tool's flip stays silent.
     struct FlipRunnerHost {
         journal: JournalRecorder,
         runner: std::sync::Arc<AtomicBool>,
+        terminal: std::sync::Arc<AtomicBool>,
     }
     #[async_trait]
     impl LoopHost for FlipRunnerHost {
@@ -913,10 +1081,13 @@ mod tests {
             &self.journal
         }
         fn tools_registry(&self) -> &dyn ToolRegistry {
-            &RunTestsDeclaringRegistry
+            &SealedAndDeclaredRegistry
         }
         fn tool_policy(&self) -> crate::host::ToolPolicy {
-            crate::host::ToolPolicy::Benchmark
+            // BenchmarkFull: the exec policy gate must pass so the terminal
+            // chain probe can flip with `terminal_available` (裁决二 flip
+            // vehicle run_terminal_cmd is a declared tool).
+            crate::host::ToolPolicy::BenchmarkFull
         }
         fn test_runner(&self) -> Option<crate::host::TestRunner> {
             self.runner
@@ -926,6 +1097,9 @@ mod tests {
                     timeout: None,
                     env: Vec::new(),
                 })
+        }
+        fn terminal_available(&self) -> bool {
+            self.terminal.load(Ordering::SeqCst)
         }
         async fn request_permission(
             &self,
@@ -945,21 +1119,24 @@ mod tests {
         }
     }
 
-    /// Flips the host runner flag during the FIRST model round — the next
-    /// loop-top probe sees the new state.
+    /// Flips the host terminal AND runner flags during the FIRST model
+    /// round — the next loop-top probe sees the new state. Only the
+    /// declared flip (run_terminal_cmd) may journal an event.
     struct FlipRunnerAfterFirstRound {
         inner: Arc<FakeProvider>,
         runner: std::sync::Arc<AtomicBool>,
+        terminal: std::sync::Arc<AtomicBool>,
         flipped: std::sync::Arc<AtomicBool>,
     }
     #[async_trait]
     impl ModelGateway for FlipRunnerAfterFirstRound {
         fn for_new_run(&self) -> std::sync::Arc<dyn ModelGateway> {
             // per-run 隔离语义：新 run 从「未翻转」开始（共享底层
-            // fake/runner/flipped ——测试断言语义不变）。
+            // fake/runner/terminal/flipped ——测试断言语义不变）。
             std::sync::Arc::new(Self {
                 inner: self.inner.clone(),
                 runner: self.runner.clone(),
+                terminal: self.terminal.clone(),
                 flipped: std::sync::Arc::new(AtomicBool::new(false)),
             })
         }
@@ -971,26 +1148,34 @@ mod tests {
                 .is_ok()
             {
                 self.runner.store(false, Ordering::SeqCst);
+                self.terminal.store(false, Ordering::SeqCst);
             }
             self.inner.generate(request).await
         }
     }
 
-    /// P0-A step 5: a mid-run probe flip (run_tests complete → incomplete)
-    /// emits a SECOND `tool_availability_check` event and re-projects the
-    /// next model request — no event fires while the partition is stable.
+    /// P0-A step 5 + S2d 裁决二 (ADR-0010 §14.58): a mid-run probe flip on
+    /// a DECLARED tool (run_terminal_cmd complete → incomplete) emits a
+    /// SECOND `tool_availability_check` event and re-projects the next
+    /// model request — no event fires while the partition is stable. The
+    /// SEALED tool's simultaneous flip (run_tests) stays silent: it can
+    /// never change the projected face, so it must not ride the
+    /// availability accounting.
     #[tokio::test]
     async fn probe_flip_emits_second_availability_event_and_reprojects() {
         let dir = test_dir();
         let runner = std::sync::Arc::new(AtomicBool::new(true));
+        let terminal = std::sync::Arc::new(AtomicBool::new(true));
         let host = FlipRunnerHost {
             journal: JournalRecorder::new(dir.clone()),
             runner: runner.clone(),
+            terminal: terminal.clone(),
         };
         let fake = Arc::new(FakeProvider::from_texts(vec!["完成", "完成"]));
         let gateway: Arc<dyn ModelGateway> = Arc::new(FlipRunnerAfterFirstRound {
             inner: fake.clone(),
             runner,
+            terminal,
             flipped: std::sync::Arc::new(AtomicBool::new(false)),
         });
         let controller = AgentLoopController::with_gateway(gateway);
@@ -1004,7 +1189,11 @@ mod tests {
             .iter()
             .filter(|e| e.event_type == EventType::ToolAvailabilityCheck)
             .collect();
-        assert_eq!(checks.len(), 2, "one initial + one flip event");
+        assert_eq!(
+            checks.len(),
+            2,
+            "one initial + one flip event — the sealed run_tests flip emits nothing"
+        );
         let first_idx = all
             .iter()
             .position(|e| e.event_type == EventType::ToolAvailabilityCheck)
@@ -1017,24 +1206,45 @@ mod tests {
             first_idx < run_started_idx,
             "initial event must precede run_started"
         );
-        // Initial snapshot: runner present → run_tests complete.
+        // Both events carry the DECLARED surface only — the sealed
+        // run_tests never rides complete or incomplete (裁决二).
+        for check in &checks {
+            let partition: Vec<String> = check.payload["complete"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .filter_map(|v| v.as_str().map(str::to_string))
+                .chain(
+                    check.payload["incomplete"]
+                        .as_array()
+                        .unwrap()
+                        .iter()
+                        .filter_map(|v| v["tool"].as_str().map(str::to_string)),
+                )
+                .collect();
+            assert!(
+                !partition.iter().any(|t| t == "run_tests"),
+                "sealed run_tests must not ride the narrowed partition: {partition:?}"
+            );
+        }
+        // Initial snapshot: terminal present → run_terminal_cmd complete.
         assert!(
             checks[0].payload["complete"]
                 .as_array()
                 .unwrap()
                 .iter()
-                .any(|v| v.as_str() == Some("run_tests")),
+                .any(|v| v.as_str() == Some("run_terminal_cmd")),
             "initial payload: {:?}",
             checks[0].payload
         );
-        // Flip snapshot: run_tests incomplete with the neutral reason.
+        // Flip snapshot: run_terminal_cmd incomplete with the neutral reason.
         let p = &checks[1].payload;
         assert!(
             !p["complete"]
                 .as_array()
                 .unwrap()
                 .iter()
-                .any(|v| v.as_str() == Some("run_tests")),
+                .any(|v| v.as_str() == Some("run_terminal_cmd")),
             "flip payload complete: {:?}",
             p["complete"]
         );
@@ -1043,13 +1253,13 @@ mod tests {
                 .as_array()
                 .unwrap()
                 .iter()
-                .any(|v| v["tool"] == "run_tests" && v["reason"] == "缺少测试运行器"),
+                .any(|v| v["tool"] == "run_terminal_cmd" && v["reason"] == "终端链路不完整"),
             "flip payload incomplete: {:?}",
             p["incomplete"]
         );
         assert_eq!(p["gate_decision"], "pass", "probe never blocks");
-        // R1 封存：run_tests 无论探针状态都不进声明面——两个请求均不出现
-        // （探针事件仍记录翻转，但声明面不受探针影响）。
+        // R1 封存：run_tests 无论探针状态都不进声明面——两个请求均不出现；
+        // 声明面翻转（run_terminal_cmd）随探针重投影。
         let received = fake.received_requests();
         assert!(
             received
@@ -1060,6 +1270,20 @@ mod tests {
                 .iter()
                 .map(|r| r.tools.iter().map(|t| &t.name).collect::<Vec<_>>())
                 .collect::<Vec<_>>()
+        );
+        assert!(
+            received[0]
+                .tools
+                .iter()
+                .any(|t| t.name == "run_terminal_cmd"),
+            "declared face initially projects run_terminal_cmd"
+        );
+        assert!(
+            !received[1]
+                .tools
+                .iter()
+                .any(|t| t.name == "run_terminal_cmd"),
+            "flip re-projects the next model request"
         );
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -1216,18 +1440,20 @@ mod tests {
     }
 
     /// P0-A step 5: the minimal previous-round map is per-run — a second
-    /// run on the same controller starts fresh. Run 1 has a runner
-    /// (run_tests complete); run 2 loses it. If run 1's map leaked, run 2's
-    /// first loop-top probe would differ and emit a SECOND availability
-    /// event — asserting exactly one per run locks the reset.
+    /// run on the same controller starts fresh. Run 1 has a terminal
+    /// (run_terminal_cmd complete); run 2 loses it. If run 1's map leaked,
+    /// run 2's first loop-top probe would differ and emit a SECOND
+    /// availability event — asserting exactly one per run locks the reset.
     #[tokio::test]
     async fn probe_state_resets_across_runs() {
         let dir1 = test_dir();
         let dir2 = test_dir();
         let runner = std::sync::Arc::new(AtomicBool::new(true));
+        let terminal = std::sync::Arc::new(AtomicBool::new(true));
         let host1 = FlipRunnerHost {
             journal: JournalRecorder::new(dir1.clone()),
             runner: runner.clone(),
+            terminal: terminal.clone(),
         };
         // Four texts: two per run (counterexample gate + final answer).
         let fake = Arc::new(FakeProvider::from_texts(vec![
@@ -1252,14 +1478,15 @@ mod tests {
                 .as_array()
                 .unwrap()
                 .iter()
-                .any(|v| v.as_str() == Some("run_tests")),
-            "run 1: run_tests complete"
+                .any(|v| v.as_str() == Some("run_terminal_cmd")),
+            "run 1: run_terminal_cmd complete"
         );
 
-        runner.store(false, Ordering::SeqCst);
+        terminal.store(false, Ordering::SeqCst);
         let host2 = FlipRunnerHost {
             journal: JournalRecorder::new(dir2.clone()),
             runner,
+            terminal,
         };
         controller
             .run_turn(&host2, "hi", "RUN-R2", MANIFEST, 0, None, None, None)
@@ -1284,8 +1511,8 @@ mod tests {
                 .as_array()
                 .unwrap()
                 .iter()
-                .any(|v| v["tool"] == "run_tests" && v["reason"] == "缺少测试运行器"),
-            "run 2: run_tests incomplete"
+                .any(|v| v["tool"] == "run_terminal_cmd" && v["reason"] == "终端链路不完整"),
+            "run 2: run_terminal_cmd incomplete"
         );
         let _ = std::fs::remove_dir_all(&dir1);
         let _ = std::fs::remove_dir_all(&dir2);
