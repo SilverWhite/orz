@@ -398,11 +398,13 @@ impl AgentLoopController {
 
     /// P0-E 第 4 项 (2026-08-17, ADR-0010 §14.21 项 3): 发放前拒绝事件
     /// 的统一 payload——订单身份 + 信封 step + phase（pre_issue/issue）+
-    /// 拒绝码 + 原因 + 订单机械盖章（round/plan_epoch/run_id 与
-    /// `console_order_written` 记录一致，verifier 交叉核对）。step 只取
-    /// 拒绝门步（protocol / registry / contract / target / policy），
-    /// 永不取 execute/verify（已执行订单经 tool_started/tool_completed
-    /// 留痕）。
+    /// 拒绝码 + 原因 + 订单机械盖章。step 只取拒绝门步（protocol /
+    /// registry / contract / target / policy），永不取 execute/verify
+    /// （已执行订单经 tool_started/tool_completed 留痕）。
+    /// 判官侧 2026-09-06 起收窄为形状不变量（S2d 裁决一，ADR-0010
+    /// §14.57）：written 前置与戳一致交叉核对已随写单链（§14.39）退役；
+    /// 发射点运行时休眠（订单槽唯一生产写入面 blackboard_action_write
+    /// 已被窄门拒发），形状子规则对写单复活后的 rejection 继续生效。
     fn console_order_rejected_payload(
         order: &ActionOrder,
         step: &str,

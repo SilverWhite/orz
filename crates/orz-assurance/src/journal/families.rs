@@ -2549,6 +2549,56 @@ mod tests {
                 )],
             ),
             (
+                "console_order_rejected_reason_null",
+                vec![ev(
+                    "console_order_rejected",
+                    json!({
+                        "order_id": "ORD-1", "phase": "issue", "step": "policy",
+                        "code": "policy_denied", "reason": null,
+                        "round": 3, "plan_epoch": "e1", "run_id": "run-1",
+                    }),
+                )],
+            ),
+            (
+                "console_order_rejected_pre_issue_bad_step",
+                vec![ev(
+                    "console_order_rejected",
+                    json!({
+                        "order_id": "ORD-1", "phase": "pre_issue", "step": "registry",
+                        "code": "step_not_done", "reason": "mechanical refusal",
+                        "round": 3, "plan_epoch": "e1", "run_id": "run-1",
+                    }),
+                )],
+            ),
+            (
+                "console_order_rejected_cross_run_duplicate_legal",
+                // Same order_id in two DIFFERENT runs is a fresh rejection
+                // budget each — the per-run isolation must not be tripped by
+                // the shared id (envelope run_id differs, built manually
+                // because `ev` pins run-1).
+                vec![
+                    ev(
+                        "console_order_rejected",
+                        json!({
+                            "order_id": "ORD-1", "phase": "issue", "step": "policy",
+                            "code": "policy_denied", "reason": "mechanical refusal",
+                            "round": 3, "plan_epoch": "e1", "run_id": "run-1",
+                        }),
+                    ),
+                    json!({
+                        "schema_version": "0.2.0-draft",
+                        "payload_schema": V02_PAYLOAD_SCHEMA,
+                        "event_type": "console_order_rejected",
+                        "run_id": "run-2",
+                        "payload": {
+                            "order_id": "ORD-1", "phase": "issue", "step": "policy",
+                            "code": "policy_denied", "reason": "mechanical refusal",
+                            "round": 1, "plan_epoch": "e2", "run_id": "run-2",
+                        },
+                    }),
+                ],
+            ),
+            (
                 "console_order_rejected_issue_bad_step",
                 vec![ev(
                     "console_order_rejected",
@@ -4506,7 +4556,9 @@ mod tests {
         for name in [
             "console_order_rejected_duplicate",
             "console_order_rejected_empty_reason",
+            "console_order_rejected_reason_null",
             "console_order_rejected_issue_bad_step",
+            "console_order_rejected_pre_issue_bad_step",
             "console_order_rejected_bad_phase",
             "console_order_rejected_pre_issue_bad_code",
         ] {
@@ -4732,6 +4784,26 @@ mod tests {
 
     #[test]
     fn family_verdicts_match_spec_table() {
+        // Written-rule retirement guard (S2d 裁决一, ADR-0010 §14.57): the
+        // three historical-replay scenarios must produce ZERO errors from
+        // every family — the retirement must never drift into a negative
+        // check on one side only (the crosscheck below could hide a shared
+        // both-sides drift).
+        for name in [
+            "console_order_written_ok",
+            "console_order_written_duplicate",
+            "console_order_written_unbacked",
+        ] {
+            let events = scenarios()
+                .into_iter()
+                .find(|(n, _)| *n == name)
+                .unwrap_or_else(|| panic!("scenario {name} missing"))
+                .1;
+            assert!(
+                verify_all_families(&events).is_empty(),
+                "written-chain historical scenario {name} must replay legal"
+            );
+        }
         for (name, expected) in expected_violations() {
             let events = scenarios()
                 .into_iter()
@@ -4938,7 +5010,7 @@ json.dump(out, sys.stdout)
             "crosscheck cell accounting drifted"
         );
         assert_eq!(
-            scenario_count, 229,
+            scenario_count, 232,
             "synthetic scenario corpus count drifted from its registered size              ({scenario_count})"
         );
         assert!(
