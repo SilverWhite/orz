@@ -94,9 +94,11 @@
            入口：[S2c 实施审计](audits/TASK_D_S2C_FAMILIES_IMPL_AUDIT_2026-09-06.md)
            / [S2c 复审处理](audits/TASK_D_S2C_REVIEW_HANDLING_2026-09-06.md)。
          - [ ] **S2d**：31 族全量 Python↔Rust 对拍 0 差 + registry 翻转准备。
-           翻转前裁决清单：console_order_written/rejected 写单面退役后目标
-           语义 + probe_accuracy 封存工具翻转语义（见
-           [S2c 复审处理 §3](audits/TASK_D_S2C_REVIEW_HANDLING_2026-09-06.md)）。
+           翻转前裁决清单两项**已于 2026-09-06 用户裁决定案、实施待放行**：
+           console_order_written/rejected 写单链规则退役（rejected 保留形状
+           子规则）+ probe_accuracy 收窄至当前可见工具（生产 tool_probe
+           记账口径收窄，判官零改动）——目标语义与实施批次见
+           [S2d 翻转裁决登记](audits/TASK_D_S2D_FLIP_ADJUDICATION_2026-09-06.md)。
            （排期登记：2026-09-06，见
            [GLM 处置 + S2 排期登记](audits/P0_GOV_GLM_DISPOSITION_AND_TASK_D_S2_SCHEDULE_2026-09-06.md)）
        - [ ] **S3**：门禁真实 fixture journal 校验改接 Rust 法官；Python Rust

@@ -71,6 +71,12 @@
       S2c e2e 负测；入口：docs/audits/TASK_D_S2C_FAMILIES_IMPL_AUDIT_2026-09-06.md
       / docs/audits/TASK_D_S2C_REVIEW_HANDLING_2026-09-06.md）。
     - [ ] S2d：31 族 Python↔Rust 全量对拍 0 差 + registry 翻转准备。
+      翻转前裁决清单两项已定案（2026-09-06 用户裁定，实施待放行），落地
+      批次见 [S2d 翻转裁决登记](docs/audits/TASK_D_S2D_FLIP_ADJUDICATION_2026-09-06.md)：
+      - [ ] 批 1：console_order_written 规则退役 + console_order_rejected
+        去摩擦留形状（ADR §14.x 转录 → Python/Rust 判官同步 → 对拍复验）。
+      - [ ] 批 2：probe_accuracy 收窄至当前可见工具（tool_probe 记账口径
+        收窄，判官零改动）+ 复验。
   - [ ] S3：`check_repository.py` 真实 fixture journal 校验改接 Rust 法官，
     Python Rust 轨 `validate_journal_file` 退役，registry 源翻转 JSON 转正。
   - [ ] S4：Python 双法官退役/归档登记、契约变更流程同步、索引/BACKLOG 收口。
