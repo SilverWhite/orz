@@ -493,10 +493,20 @@ pub fn validate_journal_file(journal_path: &Path, repo_root: &Path) -> Conforman
             payload_errors.push(format!("payload schema violation at event {index}: {e}"));
         }
     }
+    let payload_valid = payload_errors.is_empty();
     errors.extend(payload_errors);
 
     // 4. Full raw-JSON hash-chain recompute + terminal semantics.
     verify_chain_raw(&events, &mut errors);
+
+    // 5. S2b rule-family verifiers (Task D, 2026-09-06). Python gating: the
+    // cross-layer families run only on schema-valid input (`not
+    // payload_errors`) and every family filters `_is_v02` per event — on a
+    // homogeneous V01 journal they are no-ops, so the Rust judge skips the
+    // stage for V01.
+    if payload_valid && first_track == EventTrack::V02 {
+        errors.extend(super::families::verify_all_families(&events));
+    }
 
     ConformanceReport {
         valid: errors.is_empty(),
