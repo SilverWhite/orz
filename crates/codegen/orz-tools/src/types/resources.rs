@@ -639,6 +639,18 @@ pub fn is_path_within_workspace(
 #[derive(Debug, Clone)]
 pub struct SessionVolumeRoot(pub PathBuf);
 
+/// D1 装配期单源解析规则（P0-0m）：`{cwd}/.gsa` 一次 symlink-aware
+/// canonical 解析，失败回退词法路径。
+///
+/// 两个合法消费方共用本函数——host 装配 [`SessionVolumeRoot`] 注入工具
+/// 沙箱（工具层单源权威），与 orz-host `permission.rs` 的 `.gsa` 等义
+/// 镜像（RETIRED-IN-PLACE，语义冻结不演进；S1 复审处理 P2-2，2026-09-07：
+/// 镜像消费同一规则函数，消除双计算漂移面）。
+pub fn session_volume_canonical_root(cwd: &std::path::Path) -> PathBuf {
+    let gsa_root = cwd.join(".gsa");
+    dunce::canonicalize(&gsa_root).unwrap_or(gsa_root)
+}
+
 /// 会话卷的模型可寻址词法落点：`{cwd}/.gsa`。
 fn session_volume_lexical_root(cwd: &std::path::Path) -> PathBuf {
     cwd.join(".gsa")
@@ -2319,6 +2331,96 @@ mod tests {
             &ws,
             &rt_link,
             Some(&rt_canonical)
+        ));
+    }
+
+    /// S1 复审处理 P3-③（2026-09-07）：`..`-含路径进窗口——词法归一化后
+    /// 命中白名单的放行、归一化后落到白名单外面（journal）的拒。
+    #[test]
+    fn dotdot_paths_into_volume_judge_by_normalized_window_shape() {
+        let tmp = TempDir::new().unwrap();
+        let ws = dunce::canonicalize(tmp.path()).unwrap();
+        let (_gsa, _terminal, canonical_root, _journal) = make_real_volume(&ws);
+        let volume = SessionVolumeRoot(canonical_root);
+
+        // `..` 折叠后 = 精确白名单文件（run_tests_output.txt）：放行。
+        let via_terminal = ws
+            .join(".gsa")
+            .join("session")
+            .join("terminal")
+            .join("..")
+            .join("..")
+            .join("..")
+            .join("run_tests_output.txt");
+        assert!(is_path_allowed_for_read(
+            &ws,
+            &via_terminal,
+            None,
+            &[],
+            Some(&volume)
+        ));
+        // `..` 折叠后 = 白名单外（journal.jsonl）：拒。
+        let to_journal = ws
+            .join(".gsa")
+            .join("session")
+            .join("..")
+            .join("journal.jsonl");
+        assert!(!is_path_allowed_for_read(
+            &ws,
+            &to_journal,
+            None,
+            &[],
+            Some(&volume)
+        ));
+    }
+
+    /// S1 复审处理 P3-④（2026-09-07）：Windows 尾点拼写（`.gsa.`）——
+    /// Win32 打开时剥尾点，canonical 域臂命中真实卷 → 域归属成立；窗口
+    /// 词法形态（带尾点）不匹配白名单 → 拒。域内白名单文件经尾点拼写同样
+    /// 拒（fail-closed 可用性损失，安全无破口；POSIX 下 `.gsa.` 是另一个
+    /// 不存在的目录名，走 workspace 面 NotFound，无暴露面）。
+    #[cfg(windows)]
+    #[test]
+    fn windows_trailing_dot_gsa_spelling_denied() {
+        let tmp = TempDir::new().unwrap();
+        let ws = dunce::canonicalize(tmp.path()).unwrap();
+        let (_gsa, _terminal, canonical_root, journal) = make_real_volume(&ws);
+        let volume = SessionVolumeRoot(canonical_root);
+
+        let dotted_journal = ws.join(".gsa.").join("journal.jsonl");
+        // 域归属由 canonical 臂兜住（尾点被 Win32 剥掉后落点在卷内）。
+        assert!(is_path_in_session_volume_domain(
+            &volume.0,
+            &ws,
+            &dotted_journal,
+            None
+        ));
+        // 白名单外面（journal）：拒。
+        assert!(!is_path_allowed_for_read(
+            &ws,
+            &dotted_journal,
+            None,
+            &[],
+            Some(&volume)
+        ));
+        // 白名单窗口文件经尾点拼写：同样拒（词法形态不匹配窗口形态）。
+        let dotted_log = ws
+            .join(".gsa.")
+            .join("session")
+            .join("terminal")
+            .join("ord-1.log");
+        assert!(is_path_in_session_volume_domain(
+            &volume.0,
+            &ws,
+            &dotted_log,
+            None
+        ));
+        assert!(!is_path_allowed_for_read(
+            &ws,
+            &dotted_log,
+            None,
+            &[],
+            Some(&volume)
         ));
     }
 }

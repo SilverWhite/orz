@@ -341,13 +341,16 @@ impl PermissionBridge {
         // RETIRED-IN-PLACE（P0-0m D5，2026-09-06）：以下 `.gsa` 白名单段语义
         // 已单源下沉 orz-tools 读工具沙箱（resources::is_session_volume_
         // window_path），此处为等义镜像、保留不演进——见方法级 doc 注记。
+        // canonical 卷根解析消费同一 D1 单源规则
+        // （resources::session_volume_canonical_root；S1 复审处理 P2-2，
+        // 2026-09-07——镜像不自算解析规则，消除双计算漂移面）。
         let gsa_root = self.cwd.join(".gsa");
         // `.gsa` may itself be a symlink (eval containers mount a session
         // volume, e.g. `/orz-gsa/<uuid>`); the canonical root is what the
         // whitelists must compare against, otherwise the same real file
         // resolves outside the lexical cwd and every `.gsa` read is denied.
-        let gsa_canon = dunce::canonicalize(gsa_root.as_path())
-            .unwrap_or_else(|_| gsa_root.as_path().to_path_buf());
+        let gsa_canon =
+            orz_tools::types::resources::session_volume_canonical_root(self.cwd.as_path());
         let terminal_dir = gsa_root.join("session").join("terminal");
         let terminal_log = path_under(terminal_dir.as_path(), &resolved)
             && resolved

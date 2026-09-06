@@ -562,6 +562,9 @@ impl xai_tool_runtime::Tool for ListDirTool {
         // 窗口契约接管（ADR-0010 §14.56 D3）：仅两个白名单窗口形态放行，
         // 其余内部面 agent-invisible。判定统一单点在
         // resources::is_path_allowed_for_read。
+        let in_session_volume_domain = session_volume.as_ref().is_some_and(|volume| {
+            crate::types::resources::is_path_in_session_volume_domain(&volume.0, &cwd, &path, None)
+        });
         if !crate::types::resources::is_path_allowed_for_read(
             &cwd,
             &path,
@@ -569,10 +572,19 @@ impl xai_tool_runtime::Tool for ListDirTool {
             &skill_roots,
             session_volume.as_ref(),
         ) {
-            return Ok(ListDirOutput::PermissionDenied(format!(
-                "Permission denied: directory escapes workspace sandbox: {}",
-                display_path.display()
-            )));
+            return Ok(ListDirOutput::PermissionDenied(
+                if in_session_volume_domain {
+                    format!(
+                        "Permission denied: directory is inside the agent-invisible session volume: {}",
+                        display_path.display()
+                    )
+                } else {
+                    format!(
+                        "Permission denied: directory escapes workspace sandbox: {}",
+                        display_path.display()
+                    )
+                },
+            ));
         }
         let meta = tokio::fs::metadata(&path).await;
         let is_dir = meta.as_ref().is_ok_and(|m| m.is_dir());

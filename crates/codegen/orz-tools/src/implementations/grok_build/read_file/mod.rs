@@ -2005,6 +2005,11 @@ mod tests {
     /// git root 仍可读；Task C（2026-09-04）canonical 沙箱后按解析落点
     /// fail-closed 拒读。本测试锁定该安全语义：工作区内 reparse 点解析到
     /// 工作区外必须拒绝，即使 `.gsa/` 与 `*.log` 都在 gitignore 模式内。
+    /// 形态注记（S1 复审处理 P3-⑥，2026-09-07）：本测试**不注入**
+    /// SessionVolumeRoot——行使的是资源缺席回退路径（Task C 纯 workspace
+    /// 二元判定，矩阵 #11 形态）；资源在场的等价负测（symlink→非卷目录、
+    /// 域内白名单形态仍拒）见
+    /// `read_file_denies_gsa_symlink_to_non_volume_with_resource_present`。
     #[tokio::test]
     async fn read_file_rejects_gsa_symlink_resolving_outside_git_root_even_when_gitignored() {
         let tmp = TempDir::new().unwrap();
@@ -2229,6 +2234,81 @@ mod tests {
             }
             other => {
                 panic!("Expected FileContent for gitignored window path (D4 bypass), got {other:?}")
+            }
+        }
+    }
+
+    /// 矩阵 #8 工具级资源在场形态（S1 复审处理 P3-②，2026-09-07）：
+    /// `.gsa` 为 symlink → 任意非会话卷目录，资源注入后该目录即卷根——
+    /// 窗口契约仍 gate 域内一切请求：幽灵白名单形态（卷内无此文件，
+    /// canonical 不可得回退词法落点不在卷内）拒、卷内白名单外（journal）
+    /// 拒。资源缺席形态（Task C 回退）由
+    /// `read_file_rejects_gsa_symlink_resolving_outside_git_root_even_when_
+    /// gitignored` 锁定。
+    #[tokio::test]
+    async fn read_file_denies_gsa_symlink_to_non_volume_with_resource_present() {
+        let tmp = TempDir::new().unwrap();
+        let ws = dunce::canonicalize(tmp.path()).unwrap();
+        let outside = TempDir::new().unwrap();
+        let not_a_volume = outside.path().join("arbitrary-dir");
+        std::fs::create_dir_all(&not_a_volume).unwrap();
+        std::fs::write(not_a_volume.join("journal.jsonl"), "{\"e\":1}\n").unwrap();
+        let link = ws.join(".gsa");
+        #[cfg(unix)]
+        let link_ok = std::os::unix::fs::symlink(&not_a_volume, &link).is_ok();
+        #[cfg(windows)]
+        let link_ok = std::os::windows::fs::symlink_dir(&not_a_volume, &link).is_ok();
+        if !link_ok {
+            eprintln!("symlink creation unsupported, skipping");
+            return;
+        }
+        let tool = ReadFileTool;
+        // 幽灵白名单形态：`.gsa/session/terminal/ghost.log`（卷内无此文件）。
+        {
+            let resources = test_resources_with_session_volume(&ws);
+            let input = ReadFileInput {
+                path: ".gsa/session/terminal/ghost.log".to_string(),
+                offset: None,
+                limit: None,
+                pages: None,
+                format: None,
+            };
+            let result =
+                xai_tool_runtime::Tool::run(&tool, test_ctx(resources.into_shared()), input)
+                    .await
+                    .unwrap();
+            match result {
+                ReadFileOutput::PermissionDenied(msg) => {
+                    assert!(
+                        msg.contains("agent-invisible session volume"),
+                        "ghost whitelist shape must be denied as session volume, got {msg}"
+                    );
+                }
+                other => panic!("Expected PermissionDenied for ghost terminal-log, got {other:?}"),
+            }
+        }
+        // 卷内白名单外：journal.jsonl。
+        {
+            let resources = test_resources_with_session_volume(&ws);
+            let input = ReadFileInput {
+                path: ".gsa/journal.jsonl".to_string(),
+                offset: None,
+                limit: None,
+                pages: None,
+                format: None,
+            };
+            let result =
+                xai_tool_runtime::Tool::run(&tool, test_ctx(resources.into_shared()), input)
+                    .await
+                    .unwrap();
+            match result {
+                ReadFileOutput::PermissionDenied(msg) => {
+                    assert!(
+                        msg.contains("agent-invisible session volume"),
+                        "journal in arbitrary symlink target must be denied, got {msg}"
+                    );
+                }
+                other => panic!("Expected PermissionDenied for journal, got {other:?}"),
             }
         }
     }

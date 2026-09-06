@@ -316,12 +316,14 @@ pub fn build_toolset(
     // P0-0m GSA-SESSION-VOLUME（ADR-0010 §14.56 D1，2026-09-06）：host 是
     // 唯一知道 `.gsa` 真实落点（含 fallback 链、评测容器把 `.gsa` 挂载为
     // 指向卷目录的符号链接）的角色——装配期做**一次** symlink-aware
-    // canonical 解析，解析结果即 SessionVolumeRoot.canonical_root，下层
-    // 工具沙箱不再各自 canonicalize 再猜。解析失败（`.gsa` 尚不存在等）
-    // 回退词法路径；窗口判定仍 fail-closed（canonical 不可得时按词法落点
-    // 判定）。
-    let gsa_root = cwd.join(".gsa");
-    let session_volume_root = Some(dunce::canonicalize(&gsa_root).unwrap_or(gsa_root));
+    // canonical 解析（D1 单源规则 resources::session_volume_canonical_root，
+    // permission.rs 等义镜像共用），解析结果即 SessionVolumeRoot.
+    // canonical_root，下层工具沙箱不再各自 canonicalize 再猜。解析失败
+    // （`.gsa` 尚不存在等）回退词法路径；窗口判定仍 fail-closed（canonical
+    // 不可得时按词法落点判定）。
+    let session_volume_root = Some(orz_tools::types::resources::session_volume_canonical_root(
+        cwd,
+    ));
 
     let ctx = SessionContext {
         backend,

@@ -844,6 +844,9 @@ async fn prepare_grep(
     // 已注册技能根豁免同 read_file（GLM F1 收窄）。`.gsa` 会话卷域由窗口
     // 契约接管（ADR-0010 §14.56 D3）：仅两个白名单窗口形态放行，其余内部
     // 面 agent-invisible。判定统一单点在 resources::is_path_allowed_for_read。
+    let in_session_volume_domain = session_volume.as_ref().is_some_and(|volume| {
+        crate::types::resources::is_path_in_session_volume_domain(&volume.0, &cwd, &workdir, None)
+    });
     if !crate::types::resources::is_path_allowed_for_read(
         &cwd,
         &workdir,
@@ -856,10 +859,17 @@ async fn prepare_grep(
         } else {
             workdir.clone()
         };
-        let err_msg = format!(
-            "Permission denied: search path escapes workspace sandbox: {}",
-            display_path.display()
-        );
+        let err_msg = if in_session_volume_domain {
+            format!(
+                "Permission denied: search path is inside the agent-invisible session volume: {}",
+                display_path.display()
+            )
+        } else {
+            format!(
+                "Permission denied: search path escapes workspace sandbox: {}",
+                display_path.display()
+            )
+        };
         return Ok(GrepStep::Early(GrepSearchOutput {
             stdout: Vec::new(),
             stderr: err_msg.into_bytes(),
