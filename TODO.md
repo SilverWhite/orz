@@ -640,10 +640,10 @@
 
 ## 审计登记边界（条件触发，不占当前优先级）
 
-- [ ] GLM-2026-09-04 外部只读审查候选（F1 skills 豁免面过宽 / F2 approval
-  存根未登记 / R-1 .gitignore 与已跟踪文件矛盾 / R-2 manifest CRLF /
-  R-3 根目录一次性产物；本窗口复核为真，处置待用户裁决）——入口：
-  [登记审计](docs/audits/GLM_EXTERNAL_REVIEW_REGISTRATION_2026-09-04.md)。
+- [x] GLM-2026-09-04 外部只读审查候选处置（2026-09-06 用户裁决：F1 /
+  R-1 / R-2 / R-3 / 观察 (c) 完成，F2 登记 GAP-APPROVAL-PROMPTER 待实施）
+  ——入口：[登记审计](docs/audits/GLM_EXTERNAL_REVIEW_REGISTRATION_2026-09-04.md)
+  / [处置审计](docs/audits/P0_GOV_GLM_DISPOSITION_AND_TASK_D_S2_SCHEDULE_2026-09-06.md)。
 - [ ] orz-host 可选后端接线（lsp / memory / 图像 / 视频 / MCP）：接线时翻转能力访问器并补翻转测试（FUS-TOOL-PROBE 边界）。
   - 成熟复用评估（2026-08-16，只读）：明确——LSP/MCP 为成熟开放标准，仓库内已有 orz-mcp；图像/视频走成熟服务 API。
 - [ ] headless 计划模式能力信号（plan 模式探针当前以交互用户信号代理，未来 headless 计划模式需独立信号）。
