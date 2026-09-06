@@ -3644,6 +3644,802 @@ mod tests {
                     ),
                 ],
             ),
+            // ── S2c review-handling coverage batch (2026-09-06) ─────────
+            (
+                "rc_unknown_visibility",
+                vec![committed(
+                    "act-1",
+                    1,
+                    json!([ledger_entry("s1", "doc_page", "vibes")]),
+                )],
+            ),
+            (
+                "rc_claim_mismatch",
+                vec![committed(
+                    "act-1",
+                    1,
+                    json!([json!({
+                        "source_id": "s1", "source_type": "doc_page",
+                        "visibility": "metadata_only", "highest_allowed_claim": "observed",
+                    })]),
+                )],
+            ),
+            (
+                "rc_ledger_digest_mismatch",
+                vec![mutate_payload(
+                    committed(
+                        "act-1",
+                        1,
+                        json!([ledger_entry("s1", "doc_page", "metadata_only")]),
+                    ),
+                    "ledger_digest",
+                    json!(hex64(8)),
+                )],
+            ),
+            (
+                "rc_result_id_prefix",
+                vec![mutate_payload(
+                    committed(
+                        "act-1",
+                        1,
+                        json!([ledger_entry("s1", "doc_page", "metadata_only")]),
+                    ),
+                    "result_id",
+                    json!("RET-RES-deadbeef-1"),
+                )],
+            ),
+            ("rc_assessment_digest_drift", {
+                let commit = committed(
+                    "act-1",
+                    1,
+                    json!([ledger_entry("s1", "doc_page", "full_text_observed")]),
+                );
+                let assess =
+                    mutate_payload(bound_assessment(&commit), "result_digest", json!(hex64(7)));
+                vec![commit, assess]
+            }),
+            ("rc_assessment_id_prefix", {
+                let commit = committed(
+                    "act-1",
+                    1,
+                    json!([ledger_entry("s1", "doc_page", "full_text_observed")]),
+                );
+                let assess = mutate_payload(
+                    bound_assessment(&commit),
+                    "assessment_id",
+                    json!("ASSESS-aaaa-1"),
+                );
+                vec![commit, assess]
+            }),
+            ("rc_no_fulltext_missing", {
+                let commit = committed(
+                    "act-1",
+                    1,
+                    json!([ledger_entry("s1", "doc_page", "metadata_only")]),
+                );
+                let assess = mutate_payload(bound_assessment(&commit), "reason_codes", json!([]));
+                vec![commit, assess]
+            }),
+            ("rc_no_fulltext_spurious", {
+                let commit = committed(
+                    "act-1",
+                    1,
+                    json!([ledger_entry("s1", "doc_page", "full_text_observed")]),
+                );
+                let assess = mutate_payload(
+                    bound_assessment(&commit),
+                    "reason_codes",
+                    json!(["no_fulltext_evidence"]),
+                );
+                vec![commit, assess]
+            }),
+            (
+                "pool_without_urls",
+                vec![{
+                    let mut commit = finish_commit(
+                        "act-1",
+                        1,
+                        json!([{"source_id": "s1", "source_type": "web_search_result", "visibility": "metadata_only", "candidate_pool": [pool_item("u1")]}]),
+                        json!([]),
+                    );
+                    commit["payload"]["prefilter_log"] = json!([]);
+                    commit
+                }],
+            ),
+            (
+                "pool_urls_non_array",
+                vec![{
+                    let mut commit = finish_commit(
+                        "act-1",
+                        1,
+                        json!([{"source_id": "s1", "source_type": "web_search_result", "visibility": "metadata_only", "candidate_urls": "u1"}]),
+                        json!([]),
+                    );
+                    commit["payload"]["prefilter_log"] = json!([]);
+                    commit
+                }],
+            ),
+            (
+                "pool_urls_without_pool",
+                vec![{
+                    let mut commit = finish_commit(
+                        "act-1",
+                        1,
+                        json!([{"source_id": "s1", "source_type": "web_search_result", "visibility": "metadata_only", "candidate_urls": ["u1"]}]),
+                        json!([]),
+                    );
+                    commit["payload"]["prefilter_log"] = json!([]);
+                    commit
+                }],
+            ),
+            (
+                "pool_length_mismatch",
+                vec![{
+                    let entries = vec![pool_entry(
+                        "s1",
+                        json!(["u1", "u2"]),
+                        json!([pool_item("u1")]),
+                    )];
+                    let mut commit =
+                        finish_commit("act-1", 1, json!(entries.clone()), pool_refs(&entries));
+                    commit["payload"]["prefilter_log"] = json!([]);
+                    commit
+                }],
+            ),
+            (
+                "pool_bad_canonical",
+                vec![{
+                    let mut item = pool_item("u1");
+                    item["canonical_url"] = json!("");
+                    let entries = vec![pool_entry("s1", json!(["u1"]), json!([item]))];
+                    let mut commit =
+                        finish_commit("act-1", 1, json!(entries.clone()), pool_refs(&entries));
+                    commit["payload"]["prefilter_log"] = json!([]);
+                    commit
+                }],
+            ),
+            (
+                "pool_bad_relevance",
+                vec![{
+                    let mut item = pool_item("u1");
+                    item["relevance"] = json!("vibes");
+                    let entries = vec![pool_entry("s1", json!(["u1"]), json!([item]))];
+                    let mut commit =
+                        finish_commit("act-1", 1, json!(entries.clone()), pool_refs(&entries));
+                    commit["payload"]["prefilter_log"] = json!([]);
+                    commit
+                }],
+            ),
+            (
+                "pool_bad_form_reasons",
+                vec![{
+                    let mut item = pool_item("u1");
+                    item["form_reasons"] = json!([5]);
+                    let entries = vec![pool_entry("s1", json!(["u1"]), json!([item]))];
+                    let mut commit =
+                        finish_commit("act-1", 1, json!(entries.clone()), pool_refs(&entries));
+                    commit["payload"]["prefilter_log"] = json!([]);
+                    commit
+                }],
+            ),
+            (
+                "prefilter_missing_sid",
+                vec![{
+                    let entries = vec![pool_entry("s1", json!(["u1"]), json!([pool_item("u1")]))];
+                    let mut commit =
+                        finish_commit("act-1", 1, json!(entries.clone()), pool_refs(&entries));
+                    commit["payload"]["prefilter_log"] =
+                        json!([{"url": "u2", "reason": "bad_url", "action": "removed"}]);
+                    commit
+                }],
+            ),
+            (
+                "prefilter_action_not_removed",
+                vec![{
+                    let entries = vec![pool_entry("s1", json!(["u1"]), json!([pool_item("u1")]))];
+                    let mut commit =
+                        finish_commit("act-1", 1, json!(entries.clone()), pool_refs(&entries));
+                    commit["payload"]["prefilter_log"] = json!([
+                        {"source_id": "s1", "url": "u2", "reason": "bad_url", "action": "kept"},
+                    ]);
+                    commit
+                }],
+            ),
+            (
+                "prefilter_canonical_empty",
+                vec![{
+                    let entries = vec![pool_entry("s1", json!(["u1"]), json!([pool_item("u1")]))];
+                    let mut commit =
+                        finish_commit("act-1", 1, json!(entries.clone()), pool_refs(&entries));
+                    commit["payload"]["prefilter_log"] = json!([
+                        {"source_id": "s1", "url": "u2", "reason": "bad_url", "action": "removed", "canonical_url": ""},
+                    ]);
+                    commit
+                }],
+            ),
+            (
+                "prefilter_entry_not_pool_source",
+                vec![{
+                    let mut commit = finish_commit(
+                        "act-1",
+                        1,
+                        json!([ledger_entry("s1", "doc_page", "metadata_only")]),
+                        json!([]),
+                    );
+                    commit["payload"]["prefilter_log"] = json!([
+                        {"source_id": "s1", "url": "u2", "reason": "bad_url", "action": "removed"},
+                    ]);
+                    commit
+                }],
+            ),
+            (
+                "cm_c2d_no_streak",
+                vec![ev(
+                    "console_mode_transition",
+                    json!({
+                        "run_id": "run-1", "from": "console", "to": "direct",
+                        "trigger": "assistant_failure_streak", "model_decision": "switch",
+                        "order_ids": ["ORD-1"], "transition_id": "t1",
+                        "related_transition_id": null,
+                    }),
+                )],
+            ),
+            (
+                "cm_c2d_empty_order_ids",
+                vec![ev(
+                    "console_mode_transition",
+                    json!({
+                        "run_id": "run-1", "from": "console", "to": "direct",
+                        "trigger": "assistant_failure_streak", "model_decision": "switch",
+                        "streak": 3, "order_ids": [], "transition_id": "t1",
+                        "related_transition_id": null,
+                    }),
+                )],
+            ),
+            (
+                "cm_c2d_related_set",
+                vec![ev(
+                    "console_mode_transition",
+                    json!({
+                        "run_id": "run-1", "from": "console", "to": "direct",
+                        "trigger": "assistant_failure_streak", "model_decision": "switch",
+                        "streak": 3, "order_ids": ["ORD-1"], "transition_id": "t1",
+                        "related_transition_id": "t0",
+                    }),
+                )],
+            ),
+            (
+                "cm_stay_bad_decision",
+                vec![ev(
+                    "console_mode_transition",
+                    json!({
+                        "run_id": "run-1", "from": "console", "to": "console",
+                        "trigger": "assistant_failure_streak", "model_decision": "switch",
+                        "transition_id": "t1", "related_transition_id": null,
+                    }),
+                )],
+            ),
+            (
+                "cm_invalid_direction",
+                vec![ev(
+                    "console_mode_transition",
+                    json!({
+                        "run_id": "run-1", "from": "direct", "to": "direct",
+                        "trigger": "model_return", "model_decision": "return_to_console",
+                        "transition_id": "t1", "related_transition_id": "t1",
+                    }),
+                )],
+            ),
+            (
+                "cm_duplicate_transition_id",
+                vec![
+                    ev(
+                        "console_mode_transition",
+                        json!({
+                            "run_id": "run-1", "from": "console", "to": "direct",
+                            "trigger": "assistant_failure_streak", "model_decision": "switch",
+                            "streak": 3, "order_ids": ["ORD-1"], "transition_id": "t1",
+                            "related_transition_id": null,
+                        }),
+                    ),
+                    ev(
+                        "console_mode_transition",
+                        json!({
+                            "run_id": "run-1", "from": "console", "to": "direct",
+                            "trigger": "assistant_failure_streak", "model_decision": "switch",
+                            "streak": 4, "order_ids": ["ORD-2"], "transition_id": "t1",
+                            "related_transition_id": null,
+                        }),
+                    ),
+                ],
+            ),
+            (
+                "tr_multi_completion",
+                vec![
+                    tstart("run_terminal_cmd", "c1"),
+                    ev(
+                        "tool_running",
+                        json!({"tool": "run_terminal_cmd", "call_id": "c1"}),
+                    ),
+                    ev(
+                        "tool_completed",
+                        json!({"tool": "run_terminal_cmd", "call_id": "c1", "status": "success", "running": true, "exit_code": null}),
+                    ),
+                    ev(
+                        "tool_completed",
+                        json!({"tool": "run_terminal_cmd", "call_id": "c1", "status": "success", "running": true, "exit_code": null}),
+                    ),
+                ],
+            ),
+            (
+                "tr_no_following_completion",
+                vec![
+                    tstart("run_terminal_cmd", "c1"),
+                    ev(
+                        "tool_running",
+                        json!({"tool": "run_terminal_cmd", "call_id": "c1"}),
+                    ),
+                ],
+            ),
+            (
+                "tr_running_with_exit",
+                vec![
+                    tstart("run_terminal_cmd", "c1"),
+                    ev(
+                        "tool_running",
+                        json!({"tool": "run_terminal_cmd", "call_id": "c1"}),
+                    ),
+                    ev(
+                        "tool_completed",
+                        json!({"tool": "run_terminal_cmd", "call_id": "c1", "status": "success", "running": true, "exit_code": 0}),
+                    ),
+                ],
+            ),
+            (
+                "tr_idle_kill_no_mid",
+                vec![ev(
+                    "tool_running",
+                    json!({
+                        "tool": "run_terminal_cmd", "call_id": "c1",
+                        "status": "idle_killed", "reason": "no output activity for 300s",
+                    }),
+                )],
+            ),
+            (
+                "tr_idle_kill_no_completion",
+                vec![
+                    tstart("run_terminal_cmd", "c1"),
+                    ev(
+                        "tool_running",
+                        json!({"tool": "run_terminal_cmd", "call_id": "c1"}),
+                    ),
+                    ev(
+                        "tool_running",
+                        json!({
+                            "tool": "run_terminal_cmd", "call_id": "c1",
+                            "status": "idle_killed", "reason": "no output activity for 300s",
+                        }),
+                    ),
+                ],
+            ),
+            (
+                "tr_idle_kill_empty_reason",
+                vec![
+                    tstart("run_terminal_cmd", "c1"),
+                    ev(
+                        "tool_running",
+                        json!({"tool": "run_terminal_cmd", "call_id": "c1"}),
+                    ),
+                    ev(
+                        "tool_completed",
+                        json!({"tool": "run_terminal_cmd", "call_id": "c1", "status": "success", "running": true, "exit_code": null}),
+                    ),
+                    ev(
+                        "tool_running",
+                        json!({
+                            "tool": "run_terminal_cmd", "call_id": "c1",
+                            "status": "idle_killed", "reason": "",
+                        }),
+                    ),
+                ],
+            ),
+            (
+                "tr_idle_kill_duplicate",
+                vec![
+                    tstart("run_terminal_cmd", "c1"),
+                    ev(
+                        "tool_running",
+                        json!({"tool": "run_terminal_cmd", "call_id": "c1"}),
+                    ),
+                    ev(
+                        "tool_completed",
+                        json!({"tool": "run_terminal_cmd", "call_id": "c1", "status": "success", "running": true, "exit_code": null}),
+                    ),
+                    ev(
+                        "tool_running",
+                        json!({
+                            "tool": "run_terminal_cmd", "call_id": "c1",
+                            "status": "idle_killed", "reason": "no output activity for 300s",
+                        }),
+                    ),
+                    ev(
+                        "tool_running",
+                        json!({
+                            "tool": "run_terminal_cmd", "call_id": "c1",
+                            "status": "idle_killed", "reason": "no output activity for 300s",
+                        }),
+                    ),
+                ],
+            ),
+            (
+                "rh_initial_with_change_kind",
+                vec![header_event(
+                    "initial",
+                    "H1",
+                    None,
+                    "S1",
+                    "T1",
+                    "C1",
+                    vec!["read_file"],
+                    Some("tools"),
+                )],
+            ),
+            (
+                "rh_change_no_initial",
+                vec![header_event(
+                    "change",
+                    "H2",
+                    Some("H1"),
+                    "S1",
+                    "T2",
+                    "C1",
+                    vec!["read_file", "grep"],
+                    Some("tools"),
+                )],
+            ),
+            (
+                "rh_same_header",
+                vec![
+                    header_event(
+                        "initial",
+                        "H1",
+                        None,
+                        "S1",
+                        "T1",
+                        "C1",
+                        vec!["read_file"],
+                        None,
+                    ),
+                    header_event(
+                        "change",
+                        "H2",
+                        Some("H2"),
+                        "S1",
+                        "T2",
+                        "C1",
+                        vec!["read_file", "grep"],
+                        Some("tools"),
+                    ),
+                ],
+            ),
+            (
+                "rh_missing_change_kind",
+                vec![
+                    header_event(
+                        "initial",
+                        "H1",
+                        None,
+                        "S1",
+                        "T1",
+                        "C1",
+                        vec!["read_file"],
+                        None,
+                    ),
+                    header_event(
+                        "change",
+                        "H2",
+                        Some("H1"),
+                        "S1",
+                        "T2",
+                        "C1",
+                        vec!["read_file", "grep"],
+                        None,
+                    ),
+                ],
+            ),
+            (
+                "rh_tool_count_mismatch",
+                vec![mutate_payload(
+                    header_event(
+                        "initial",
+                        "H1",
+                        None,
+                        "S1",
+                        "T1",
+                        "C1",
+                        vec!["read_file", "grep"],
+                        None,
+                    ),
+                    "tool_count",
+                    json!(5),
+                )],
+            ),
+            (
+                "rh_bad_reason",
+                vec![header_event(
+                    "bored",
+                    "H1",
+                    None,
+                    "S1",
+                    "T1",
+                    "C1",
+                    vec!["read_file"],
+                    None,
+                )],
+            ),
+            (
+                "rh_change_kind_multiple",
+                vec![
+                    header_event(
+                        "initial",
+                        "H1",
+                        None,
+                        "S1",
+                        "T1",
+                        "C1",
+                        vec!["read_file"],
+                        None,
+                    ),
+                    header_event(
+                        "change",
+                        "H2",
+                        Some("H1"),
+                        "S2",
+                        "T2",
+                        "C2",
+                        vec!["read_file"],
+                        Some("system"),
+                    ),
+                ],
+            ),
+            (
+                "rh_change_kind_config_ok",
+                vec![
+                    header_event(
+                        "initial",
+                        "H1",
+                        None,
+                        "S1",
+                        "T1",
+                        "C1",
+                        vec!["read_file"],
+                        None,
+                    ),
+                    header_event(
+                        "change",
+                        "H2",
+                        Some("H1"),
+                        "S1",
+                        "T1",
+                        "C2",
+                        vec!["read_file"],
+                        Some("config"),
+                    ),
+                ],
+            ),
+            (
+                "dg_empty_path",
+                vec![ev(
+                    "tool_completed",
+                    json!({
+                        "tool": "read_file", "call_id": "r1", "status": "success", "exit_code": 0,
+                        "dep_graph": {"kind": "read", "path": "", "anchor": null},
+                    }),
+                )],
+            ),
+            (
+                "dg_anchor_non_object",
+                vec![ev(
+                    "tool_completed",
+                    json!({
+                        "tool": "read_file", "call_id": "r1", "status": "success", "exit_code": 0,
+                        "dep_graph": {"kind": "read", "path": "a.rs", "anchor": 5},
+                    }),
+                )],
+            ),
+            (
+                "dg_consumed_non_string",
+                vec![ev(
+                    "tool_completed",
+                    json!({
+                        "tool": "search_replace", "call_id": "w1", "status": "success", "exit_code": 0,
+                        "dep_graph": {"kind": "write", "path": "a.rs", "consumed_read": 5,
+                            "consumed_anchor": null, "new_anchor": null},
+                    }),
+                )],
+            ),
+            (
+                "dg_consumed_empty_string",
+                vec![
+                    ev(
+                        "tool_completed",
+                        json!({
+                            "tool": "read_file", "call_id": "", "status": "success", "exit_code": 0,
+                            "dep_graph": {"kind": "read", "path": "a.rs", "anchor": {"sha256": hex64(1), "size": 10, "mtime": 1}},
+                        }),
+                    ),
+                    ev(
+                        "tool_completed",
+                        json!({
+                            "tool": "search_replace", "call_id": "w1", "status": "success", "exit_code": 0,
+                            "dep_graph": {"kind": "write", "path": "a.rs", "consumed_read": "",
+                                "consumed_anchor": {"sha256": hex64(1), "size": 10, "mtime": 1}, "new_anchor": null},
+                        }),
+                    ),
+                ],
+            ),
+            (
+                "dg_path_mismatch",
+                vec![
+                    ev(
+                        "tool_completed",
+                        json!({
+                            "tool": "read_file", "call_id": "r1", "status": "success", "exit_code": 0,
+                            "dep_graph": {"kind": "read", "path": "a.rs", "anchor": {"sha256": hex64(1), "size": 10, "mtime": 1}},
+                        }),
+                    ),
+                    ev(
+                        "tool_completed",
+                        json!({
+                            "tool": "search_replace", "call_id": "w1", "status": "success", "exit_code": 0,
+                            "dep_graph": {"kind": "write", "path": "b.rs", "consumed_read": "r1",
+                                "consumed_anchor": {"sha256": hex64(1), "size": 10, "mtime": 1}, "new_anchor": null},
+                        }),
+                    ),
+                ],
+            ),
+            (
+                "ma_payload_not_object",
+                vec![ev(
+                    "mechanical_audit_update",
+                    json!({
+                        "kind": "tool_result",
+                        "payload": "flat text",
+                    }),
+                )],
+            ),
+            (
+                "ma_key_empty",
+                vec![ev(
+                    "mechanical_audit_update",
+                    json!({
+                        "kind": "tool_result",
+                        "payload": {"key": "", "round": 3, "summary": "read a.rs", "anomaly": null},
+                    }),
+                )],
+            ),
+            (
+                "ma_summary_empty",
+                vec![ev(
+                    "mechanical_audit_update",
+                    json!({
+                        "kind": "tool_result",
+                        "payload": {"key": "file:a.rs", "round": 3, "summary": "", "anomaly": null},
+                    }),
+                )],
+            ),
+            (
+                "ma_plan_gate_ok",
+                vec![ev(
+                    "mechanical_audit_update",
+                    json!({
+                        "kind": "plan_gate",
+                        "payload": {"key": "plan", "round": 1, "summary": "plan gate closed", "anomaly": null},
+                    }),
+                )],
+            ),
+            (
+                "ma_budget_ok",
+                vec![ev(
+                    "mechanical_audit_update",
+                    json!({
+                        "kind": "budget",
+                        "payload": {"key": "budget", "round": 2, "summary": "budget cue", "anomaly": "overflow"},
+                    }),
+                )],
+            ),
+            (
+                "cc_guard_failed_session_end",
+                vec![ev(
+                    "context_compressed",
+                    json!({
+                        "mode": "mechanical", "reason": "session_end", "summary_incomplete": false,
+                        "guard_failed": true,
+                        "summary_id": "S1", "summary_digest": "d1", "summary_path": "p1",
+                    }),
+                )],
+            ),
+            (
+                "cc_complete_missing_archive",
+                vec![ev(
+                    "context_compressed",
+                    json!({
+                        "mode": "mechanical", "reason": "rhythm", "summary_incomplete": false,
+                        "summary_id": "S1", "summary_digest": null, "summary_path": "p1",
+                    }),
+                )],
+            ),
+            (
+                "cc_mode_invalid",
+                vec![ev(
+                    "context_compressed",
+                    json!({
+                        "mode": "vibes", "reason": "rhythm", "summary_incomplete": false,
+                        "summary_id": "S1", "summary_digest": "d1", "summary_path": "p1",
+                    }),
+                )],
+            ),
+            (
+                "pw_validation_failed_degrade",
+                vec![ev(
+                    "plan_write",
+                    json!({"attempt": 1, "outcome": "degraded", "degrade_reason": "validation_failed", "validation": {"valid": true}}),
+                )],
+            ),
+            (
+                "pw_accepted_valid_false",
+                vec![ev(
+                    "plan_write",
+                    json!({"attempt": 1, "outcome": "accepted", "validation": {"valid": false}}),
+                )],
+            ),
+            (
+                "cow_action_empty",
+                vec![
+                    ev(
+                        "tool_completed",
+                        json!({"tool": "blackboard_action_write", "call_id": "w1", "status": "success", "exit_code": 0}),
+                    ),
+                    ev(
+                        "console_order_written",
+                        json!({
+                            "order_id": "ORD-1", "action": "",
+                            "write_call_id": "w1", "round": 3, "plan_epoch": "e1", "run_id": "run-1",
+                        }),
+                    ),
+                ],
+            ),
+            (
+                "cow_step_id_empty",
+                vec![
+                    ev(
+                        "tool_completed",
+                        json!({"tool": "blackboard_action_write", "call_id": "w1", "status": "success", "exit_code": 0}),
+                    ),
+                    ev(
+                        "console_order_written",
+                        json!({
+                            "order_id": "ORD-1", "action": "workspace.run_terminal",
+                            "step_id": "", "write_call_id": "w1",
+                            "round": 3, "plan_epoch": "e1", "run_id": "run-1",
+                        }),
+                    ),
+                ],
+            ),
+            (
+                "rcpt_gate_before_start",
+                vec![
+                    ev(
+                        "tool_completed",
+                        json!({
+                            "tool": "search_replace", "call_id": "c1",
+                            "status": "error", "exit_code": 1,
+                            "policy_denial": {"source": "acaf", "code": "denied", "reason": "mechanical refusal"},
+                        }),
+                    ),
+                    tstart("search_replace", "c1"),
+                ],
+            ),
         ]
     }
 
@@ -3901,6 +4697,99 @@ mod tests {
             expect(name, "request_header");
         }
         expect("probe_accuracy_unreported_flip", "probe_accuracy");
+        // ── S2c review-handling coverage rows (2026-09-06) ──────────────
+        for name in [
+            "rc_unknown_visibility",
+            "rc_claim_mismatch",
+            "rc_ledger_digest_mismatch",
+            "rc_result_id_prefix",
+            "rc_assessment_digest_drift",
+            "rc_assessment_id_prefix",
+            "rc_no_fulltext_missing",
+            "rc_no_fulltext_spurious",
+        ] {
+            expect(name, "result_consistency");
+        }
+        for name in [
+            "pool_without_urls",
+            "pool_urls_non_array",
+            "pool_urls_without_pool",
+            "pool_length_mismatch",
+            "pool_bad_canonical",
+            "pool_bad_relevance",
+            "pool_bad_form_reasons",
+        ] {
+            expect(name, "search_candidate_pool");
+        }
+        for name in [
+            "prefilter_missing_sid",
+            "prefilter_action_not_removed",
+            "prefilter_canonical_empty",
+            "prefilter_entry_not_pool_source",
+        ] {
+            expect(name, "candidate_prefilter");
+        }
+        for name in [
+            "cm_c2d_no_streak",
+            "cm_c2d_empty_order_ids",
+            "cm_c2d_related_set",
+            "cm_stay_bad_decision",
+            "cm_invalid_direction",
+            "cm_duplicate_transition_id",
+        ] {
+            expect(name, "console_mode_transition");
+        }
+        for name in [
+            "tr_no_following_completion",
+            "tr_running_with_exit",
+            "tr_idle_kill_no_mid",
+            "tr_idle_kill_no_completion",
+            "tr_idle_kill_empty_reason",
+            "tr_idle_kill_duplicate",
+        ] {
+            expect(name, "tool_running");
+        }
+        // Multi-completion also breaks the receipt run-level pairing (S2c
+        // receipt_event_isomorphism duplicate-completed branch).
+        expect("tr_multi_completion", "tool_running");
+        expect("tr_multi_completion", "receipt_event_isomorphism");
+        for name in [
+            "rh_initial_with_change_kind",
+            "rh_change_no_initial",
+            "rh_same_header",
+            "rh_missing_change_kind",
+            "rh_tool_count_mismatch",
+            "rh_bad_reason",
+            "rh_change_kind_multiple",
+        ] {
+            expect(name, "request_header");
+        }
+        for name in [
+            "dg_empty_path",
+            "dg_anchor_non_object",
+            "dg_consumed_non_string",
+            "dg_consumed_empty_string",
+            "dg_path_mismatch",
+        ] {
+            expect(name, "dep_graph_events");
+        }
+        for name in ["ma_payload_not_object", "ma_key_empty", "ma_summary_empty"] {
+            expect(name, "mechanical_audit");
+        }
+        for name in [
+            "cc_guard_failed_session_end",
+            "cc_complete_missing_archive",
+            "cc_mode_invalid",
+        ] {
+            expect(name, "context_compressed");
+        }
+        for name in ["pw_validation_failed_degrade", "pw_accepted_valid_false"] {
+            expect(name, "plan_write");
+        }
+        for name in ["cow_action_empty", "cow_step_id_empty"] {
+            expect(name, "console_order_written");
+        }
+        expect("rcpt_gate_before_start", "receipt_event_isomorphism");
         rows
     }
 
@@ -4110,10 +4999,9 @@ json.dump(out, sys.stdout)
             ALL_FAMILIES.len() * corpus.len(),
             "crosscheck cell accounting drifted"
         );
-        assert!(
-            scenario_count >= 120,
-            "synthetic scenario corpus shrunk below its registered floor \
-             ({scenario_count})"
+        assert_eq!(
+            scenario_count, 230,
+            "synthetic scenario corpus count drifted from its registered size              ({scenario_count})"
         );
         assert!(
             fixture_names.len() >= 18,

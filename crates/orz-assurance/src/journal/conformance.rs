@@ -499,13 +499,14 @@ pub fn validate_journal_file(journal_path: &Path, repo_root: &Path) -> Conforman
     // 4. Full raw-JSON hash-chain recompute + terminal semantics.
     verify_chain_raw(&events, &mut errors);
 
-    // 5. S2b rule-family verifiers (Task D, 2026-09-06). Python gating: the
-    // cross-layer families run only on schema-valid input (`not
-    // payload_errors`) — on BOTH tracks. Five families filter `_is_v02` per
-    // event (no-ops on a V01 journal), but `policy_denial` and
-    // `failure_target` do NOT (they only match `event_type`), and the v0.1
-    // tool-completed payload schema defines those fields — so the stage must
-    // run on V01 journals too (S2b review P1, 2026-09-06).
+    // 5. Rule-family verifiers (Task D S2b/S2c, 2026-09-06). Python gating:
+    // the cross-layer families run only on schema-valid input (`not
+    // payload_errors`) — on BOTH tracks. Most families filter `_is_v02` per
+    // event (no-ops on a V01 journal), but FOUR do NOT (they only match
+    // `event_type`): `policy_denial` / `failure_target` (S2b) and
+    // `candidate_count` / `inject_budget` (S2c) — the v0.1 tool-completed
+    // payload schema defines those fields, so the stage must run on V01
+    // journals too (S2b review P1, 2026-09-06).
     if payload_valid {
         errors.extend(super::families::verify_all_families(&events));
     }

@@ -314,3 +314,36 @@ fn family_stage_tamper_detected_end_to_end() {
         report.errors
     );
 }
+
+#[test]
+fn family_stage_s2c_tamper_detected_end_to_end() {
+    let root = repo_root();
+    // real-doc-retrieval carries a retrieval_result_committed: inflating the
+    // declared source_counts.total breaks the mechanical ledger distribution —
+    // a rule ONLY the S2c result_consistency family checks (the payload
+    // schema accepts any non-negative integer).
+    let (_dir, path) = resealed_journal("v0.2", "real-doc-retrieval.jsonl", |events| {
+        for event in events.iter_mut() {
+            if event["event_type"] == "retrieval_result_committed" {
+                event["payload"]["source_counts"]["total"] = json!(99);
+                break;
+            }
+        }
+    });
+    let report = validate_journal_file(&path, &root);
+    assert!(!report.valid);
+    assert!(
+        report.errors.iter().any(|e| e.contains("source_counts")),
+        "family-stage (result_consistency) error expected, got: {:?}",
+        report.errors
+    );
+    assert!(
+        report.errors.iter().all(|e| {
+            !e.contains("envelope schema violation")
+                && !e.contains("payload schema violation")
+                && !e.contains("digest mismatch")
+        }),
+        "re-sealed journal must only fail in the family stage, got: {:?}",
+        report.errors
+    );
+}

@@ -83,6 +83,21 @@ fn digest16(digest: &str) -> &str {
     &digest[..digest.len().min(16)]
 }
 
+/// Python value-comparison view of a JSON value for `==` / `<=` contexts:
+/// integers pass through, zero-fraction floats normalize to their integer
+/// value (`1.0 == 1` holds in Python), bools coerce to 0/1 (`True == 1`).
+/// NOT for `isinstance(int)` checks — there [`super::families::py_int`]
+/// (None on float) is the faithful mirror (S2c review P2, 2026-09-06).
+fn py_int_value(value: Option<&Value>) -> Option<i64> {
+    match value {
+        Some(Value::Number(n)) => n
+            .as_i64()
+            .or_else(|| n.as_f64().filter(|f| f.fract() == 0.0).map(|f| f as i64)),
+        Some(Value::Bool(b)) => Some(*b as i64),
+        _ => None,
+    }
+}
+
 // ── S2c-1 retrieval families ────────────────────────────────────────────
 
 /// Python `_verify_v02_result_consistency` (ADR-0010 §3.3.3/§3.7.5): source
@@ -126,7 +141,7 @@ pub fn verify_result_consistency(events: &[Value]) -> Vec<String> {
         let activation = str_of(payload.get("activation_id"))
             .unwrap_or_default()
             .to_string();
-        let revision = py_int(payload.get("contract_revision")).unwrap_or(i64::MIN);
+        let revision = py_int_value(payload.get("contract_revision")).unwrap_or(i64::MIN);
         assessments_by_key
             .entry((activation, revision))
             .or_default()
@@ -199,12 +214,12 @@ pub fn verify_result_consistency(events: &[Value]) -> Vec<String> {
                  (GAP-RETRIEVAL-STRUCTURED-RESULT 方向 C)"
             ));
         }
-        let full = py_int(
+        let full = py_int_value(
             payload
                 .get("source_counts")
                 .and_then(|c| c.get("full_text_observed")),
         );
-        let partial = py_int(
+        let partial = py_int_value(
             payload
                 .get("source_counts")
                 .and_then(|c| c.get("partial_text_observed")),
@@ -268,7 +283,7 @@ pub fn verify_result_consistency(events: &[Value]) -> Vec<String> {
             str_of(payload.get("activation_id"))
                 .unwrap_or_default()
                 .to_string(),
-            py_int(payload.get("contract_revision")).unwrap_or(i64::MIN),
+            py_int_value(payload.get("contract_revision")).unwrap_or(i64::MIN),
         );
         for &(a_index, a_event) in assessments_by_key.get(&key).into_iter().flatten() {
             if a_index < index {
@@ -302,13 +317,16 @@ pub fn verify_result_consistency(events: &[Value]) -> Vec<String> {
                 .map(|list| list.iter().filter_map(Value::as_str).collect())
                 .unwrap_or_default();
             let has_no_fulltext = codes.contains(&"no_fulltext_evidence");
-            if no_text_evidence && !has_no_fulltext {
+            // Python keys these checks on the DECLARED visibility_degraded
+            // truthiness, not the derived no-text-evidence flag.
+            let declared_degraded = py_truthy(payload.get("visibility_degraded"));
+            if declared_degraded && !has_no_fulltext {
                 errors.push(format!(
                     "event {a_index}: assessment {a_id} for a degraded committed \
                      result must carry reason code 'no_fulltext_evidence'"
                 ));
             }
-            if !no_text_evidence && has_no_fulltext {
+            if !declared_degraded && has_no_fulltext {
                 errors.push(format!(
                     "event {a_index}: assessment {a_id} claims 'no_fulltext_evidence' \
                      for a committed result with text-level evidence"
@@ -489,7 +507,16 @@ pub fn verify_search_candidate_pool(events: &[Value]) -> Vec<String> {
                 ));
                 continue;
             }
-            let Some(candidates) = candidates.and_then(Value::as_array) else {
+            let Some(candidates_value) = candidates else {
+                continue; // absent candidate_urls: silent on both judges
+            };
+            let Some(candidates) = candidates_value.as_array() else {
+                // Python 1571-1578: a present, non-array candidate_urls is the
+                // same "list of non-empty strings" violation — never silent.
+                errors.push(format!(
+                    "event {index}: source {sid} candidate_urls must be a list of \
+                     non-empty strings"
+                ));
                 continue;
             };
             if entry.get("source_type").and_then(Value::as_str) != Some("web_search_result") {
@@ -653,9 +680,11 @@ pub fn verify_search_candidate_pool(events: &[Value]) -> Vec<String> {
             let sid = str_of(reference.get("source_id")).unwrap_or("<missing>");
             let entry = ledger_by_id.get(sid);
             for field in ["candidate_urls", "candidate_pool"] {
+                // Python `if field in ref` — explicit null counts as present.
                 if reference.get(field).is_some() {
-                    let matches = entry
-                        .is_some_and(|entry| py_value_eq(entry.get(field), reference.get(field)));
+                    let matches = entry.is_some_and(|entry| {
+                        py_value_eq(py_none(entry.get(field)), py_none(reference.get(field)))
+                    });
                     if !matches {
                         errors.push(format!(
                             "event {index}: raw_source_refs {sid} {field} does not \
@@ -1107,7 +1136,7 @@ pub fn verify_recovery_truncation(events: &[Value]) -> Vec<String> {
                  model_request"
             ));
         }
-        match py_int(
+        match py_int_value(
             event
                 .get("payload")
                 .unwrap_or(&Value::Null)
@@ -1326,7 +1355,10 @@ pub fn verify_dep_graph_events(events: &[Value]) -> Vec<String> {
                 }
             }
             let consumed = py_none(fact.get("consumed_read"));
-            let Some(consumed) = str_of(consumed) else {
+            // Python 2891-2897: a present-but-empty string takes the
+            // "must be a non-empty string or null" branch and never reaches
+            // the lookup (S2c review P1, 2026-09-06).
+            let Some(consumed) = str_of(consumed).filter(|c| !c.is_empty()) else {
                 if consumed.is_some() {
                     errors.push(format!(
                         "event {index}: dep_graph.consumed_read must be a non-empty \
@@ -1641,7 +1673,7 @@ pub fn verify_plan_write(events: &[Value]) -> Vec<String> {
         .collect();
     for (position, (index, event)) in writes.iter().enumerate() {
         let payload = &event["payload"];
-        let attempt = py_int(payload.get("attempt")).unwrap_or_default();
+        let attempt = py_int_value(payload.get("attempt")).unwrap_or_default();
         let outcome = str_of(payload.get("outcome")).unwrap_or_default();
         let degrade_reason = str_of(payload.get("degrade_reason"));
         let valid = payload.get("validation").and_then(|v| v.get("valid"));
@@ -2351,7 +2383,7 @@ pub fn verify_request_header(events: &[Value]) -> Vec<String> {
                 "event {index}: request_header_change tools must be unique"
             ));
         }
-        if py_int(payload.get("tool_count")) != Some(raw_len as i64) {
+        if py_int_value(payload.get("tool_count")) != Some(raw_len as i64) {
             errors.push(format!(
                 "event {index}: request_header_change tool_count {:?} != tools \
                  length {raw_len}",
