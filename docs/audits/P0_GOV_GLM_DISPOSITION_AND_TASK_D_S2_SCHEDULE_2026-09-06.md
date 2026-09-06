@@ -161,7 +161,10 @@ fold、policy denial/failure target）」一致。
 
 - GLM 批：F1/R-1/R-2/R-3/(c) 处置完成；F2 登记完成（实施待排期，任务 D
   之外的独立 gap）。
-- 任务 D：`open`（batch-1 闭合；S2a 排期起点已登记，S2b–S4 待实施）。
+- 任务 D：`open`（batch-1 + S2a 闭合 2026-09-06——31 族盘点 **27 A + 4 B**，
+  B 族 = receipt_event_isomorphism / probe_accuracy / console_order_written /
+  console_order_rejected，见
+  [S2a 盘点表](TASK_D_S2A_INVENTORY_2026-09-06.md)；S2b–S4 待实施）。
 
 ## 5. 复核修正批（2026-09-06 审查发现处理）
 

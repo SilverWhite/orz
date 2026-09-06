@@ -56,6 +56,8 @@
       [S2a 盘点审计](docs/audits/TASK_D_S2A_INVENTORY_2026-09-06.md)；
       挂批路由见
       [GLM 处置 + S2 排期审计](docs/audits/P0_GOV_GLM_DISPOSITION_AND_TASK_D_S2_SCHEDULE_2026-09-06.md)。
+      三路全面复审无 P1/P2、9 项 P3 全部收口（含 orz `f45a9e39` 注释修正），
+      见 [S2a 复审处理](docs/audits/TASK_D_S2A_REVIEW_HANDLING_2026-09-06.md)。
     - [ ] S2b：核心族 Rust conformance 显式实现（control_tickets /
       lifecycle / retrieval_mode / ledger_fold advance+write_failed /
       policy_denial / failure_target）+ fixture 正/负对拍。

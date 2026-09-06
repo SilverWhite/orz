@@ -6,8 +6,9 @@
 > 规则族逐族盘点为两档：**A** = Rust 运行时已机械强制（附测试证据入口）；
 > **B** = 需 Rust conformance 显式实现（`journal/conformance.rs` 或后续
 > 扩展）。本步不写业务代码（S2a 验收约束）。
-> **方法**：逐函数读取 Python 法官源码（行号区间=函数起至下一族函数止），
-> 在 orz Rust 工作区检索生产强制点与测试证据；档位口径见 §1。
+> **方法**：逐函数读取 Python 法官源码（行号区间起点 = def 行，终点为函数
+> 体末行或下一族 def 前一行，以实际边界为准；S2a 复审处理批 2026-09-06
+> 统一口径），在 orz Rust 工作区检索生产强制点与测试证据；档位口径见 §1。
 > **关联前序**：[任务 D batch-1](P0_GOV_TASK_D_DUAL_IMPL_GOVERNANCE_2026-09-04.md)
 > / [GLM 处置 + S2 排期](P0_GOV_GLM_DISPOSITION_AND_TASK_D_S2_SCHEDULE_2026-09-06.md)。
 
@@ -29,7 +30,7 @@
   `receipt_event_isomorphism`、`probe_accuracy`（S2c-1 检索族）、
   `console_order_written`、`console_order_rejected`（S2c-3 控制面族）。
 
-## 2. S2b 核心 7 族（全 A）
+## 2. S2b 核心六族（7 个函数入口 = 7 行，全 A）
 
 | 族 | Py 行号 | 规则语义要点 | 档位 | Rust 强制点 / 测试证据 |
 |---|---|---|---|---|
@@ -51,7 +52,7 @@
 | search_candidate_pool | 1520–1689 | ①candidate_urls 仅 web_search_result；②非空唯一串列表；③空池须有移除留痕；④pool 与 urls 同长同序；⑤池条目元数据+固定 weight；⑥raw_source_refs 双向镜像 | A | 强制：orz-loop `retrieval/evidence.rs:91-94/405-441/542-547`；orz-assurance `candidate_prefilter.rs:79-90`。测试：evidence.rs:1100/1222/1317 |
 | candidate_prefilter | 1702–1800 | ①有池必有 log；②log 引用带池条目且 (source,url,reason) 唯一；③reason 封闭 5 码 + action=removed；④非 duplicate 移除者不得留在保留池 | A | 强制：orz-assurance `candidate_prefilter.rs:62-79`（封闭枚举）+ prefilter() 主流程；evidence.rs:346-351/428-440。测试：candidate_prefilter.rs 11 项；evidence.rs:1222/1317 |
 | candidate_count | 1818–1902 | ①count/cap 仅候选计数工具且成对；②0≤count≤cap、cap≥1；③lane 内完成必带、包装完成不带；④超限拒绝 error+count==cap | A | 强制：orz-loop `relay.rs:49`（家族边界）；`host_exec.rs:3342/3374-3404/3423-3447`（gate）；dispatch.rs:2174-2180（cap≥1）。测试：relay.rs:142；dispatch.rs:1969/2315/2086/2512 |
-| receipt_event_isomorphism | 2697–2803 | ①gate 拒绝完成 start 先于完成；②非 gate 错误完成 1:1 映射 tool_started；③同 call 至多一条 completed；④run 级配对（非 run_invalidated 终止的 run 无开放 start） | **B** | 未发现任何 Rust 跨事件 start/completed 对账校验；生产仅构造性满足①②（host_exec.rs:933/1173），③④无强制无测试。conformance 需显式实现对账器 |
+| receipt_event_isomorphism | 2697–2803 | ①gate 拒绝完成 start 先于完成；②非 gate 错误完成 1:1 映射 tool_started；③同 call 至多一条 completed；④run 级配对（非 run_invalidated 终止的 run 无开放 start） | **B** | 未发现任何 Rust 跨事件 start/completed 对账校验；生产仅构造性满足①②（host_exec.rs:933/1173）；③无强制无测试；④在串行子代理路径有 `in_flight_tools` 孤儿补事件构造性机制（agent_loop.rs:430/2456-2466，无验证器无测试，B 定档不变；S2c 实现时勿重复实现）。conformance 需显式实现对账器 |
 | probe_accuracy | 2925–2974 | ①兼容边界：有 request_header_change 才启用；②complete 集翻转后必须随主车道 header change（下一 model_output 前） | **B** | header 留痕有（agent_loop.rs:1395-1427/216-234），但 flip⇒header 变化不变量不成立——R1 封存工具（如 run_tests）探针翻转不进声明面，可产出 Python 法官违规 journal（tool_probe.rs:983 记录翻转而工具面不变）。conformance 需显式实现（或先裁决封存工具翻转语义） |
 
 ## 4. S2c-2 上下文与压缩族 7 项（全 A）
@@ -74,7 +75,7 @@
 | plan_write | 488–568 | ①refill 仅 attempt=1 且后随第二次写且 invalid；②validation_failed_after_refill 仅 attempt=2；③机械降级 valid=true、validation 族 valid=false；④accepted⇒valid 且 attempt∈{1,2} | A | 强制：orz-loop `planning.rs:462-477`（decide_outcome 状态机）+ `:484-498`（valid=errors.empty）；agent_loop.rs:1853/2651、host_exec.rs:2366。测试：planning.rs:1026/1037/1467/1515/1635。缺口：rotate_failed payload 无专测 |
 | console_mode_transition | 571–737 | ①c→d 固定字段；②d→c related 指向同 run 在先 c→d；③stay 固定；④每 run 一次 streak 询问；⑤transition_id 同 run 唯一；⑥direct 工具事件携带当前 transition_id | A | 强制：orz-loop `console_mode.rs:45-90/176-181/288-295`；`console_exec.rs:30-74/1123/1158-1195`；controller.rs:1633-1653 + host_exec.rs:316-319（盖章）。测试：console_mode.rs:310-378。缺口：事件级 payload/盖章关联无 journal 断言 |
 | console_order_written | 740–818 | ①机械盖章齐备；②order_id 同 run 唯一；③同 run 在先同 call_id 的 blackboard_action_write 成功完成背书 | **B** | 写单路径已被 direct 执行面退役（host_exec.rs:321-368 窄门拒 `blackboard_action_write`，handler 休眠不可达）；活动面仅「零事件」（负向测试 console_exec.rs:2700/2970/3143）。规则语义现仅 Python 法官持有；conformance 需按退役语义显式实现 |
-| console_order_rejected | 821–912 | ①phase/step/code 三元组封闭（pre_issue 3 码 / issue 4 步，policy 归一）；②同 run 在先同章 written；③每 order 至多一条 | **B** | 三元组由 `console_exec.rs:406-421` 统一构造器+四发射点机械固定，测试充分（console_exec.rs:1478/1655/2543 等）；但子规则②的前置 written 在写单面退役后不可满足——活动面对残留/恢复订单仍可发 rejected，与 Python 规则存在真实分歧，需 conformance 裁决退役语义 |
+| console_order_rejected | 821–912 | ①phase/step/code 三元组封闭（pre_issue 3 码 / issue 4 步，policy 归一）；②同 run 在先同章 written；③每 order 至多一条 | **B** | 三元组由 `console_exec.rs:406-421` 统一构造器+五发射点（console_exec.rs:484/528/593/629/758）机械固定，测试充分（console_exec.rs:1478/1655/2543 等）；但子规则②的前置 written 在写单面退役后不可满足——活动面对残留/恢复订单仍可发 rejected，与 Python 规则存在真实分歧，需 conformance 裁决退役语义 |
 | mechanical_audit | 1905–1953 | ①kind∈3 枚举；②payload 非空 key/非负 round/非空 summary/anomaly 可空；③key 形态前缀封闭 | A | 强制：orz-loop `mechanical_audit.rs:56-83/95-125/199-209/217+`；agent_loop.rs:2597/2800（plan_gate/budget 发射点）。测试：mechanical_audit.rs:402-603；console_exec.rs:2838。缺口：plan_gate/budget kind 的事件 payload 无专测 |
 | tool_availability_probe | 2182–2221 | ①complete/incomplete 恰好划分全部工作工具各一次；②incomplete reason 中性固定、禁判断词 | A | 强制：orz-loop `tool_probe.rs:39/265-392/401-410`（常量+封闭归类）+ controller.rs:972-990/1018-1027。测试：tool_probe.rs:484/507/983/1106/1170/1224 |
 | request_header | 2224–2319 | ①按 role 链：链首 initial 无 previous；②change 紧随 last、previous==last、kind=组件 digest 差异；③tools 唯一且 count 一致 | A | 强制：orz-loop `agent_loop.rs:219-234/240-264/1395-1432`（发射守卫，lane 局部链）。测试：agent_loop.rs:3127/3172/3193。缺口：tools 唯一性无显式断言 |
@@ -100,7 +101,7 @@
 
 ## 7. 验收核对（S2a）
 
-- 31 行全档位落盘：§2（7）+ §3（8）+ §4（7）+ §5（9）= 31 ✔
+- 31 行全档位落盘：§2（6 族 / 7 函数入口）+ §3（8）+ §4（7）+ §5（9）= 31 ✔
 - 每行至少一个入口：全部行含 Python 行号 + Rust 强制点/测试证据入口 ✔
 - 档位口径一致：§1 定义，逐行适用 ✔
 - 本步不写业务代码：本批无 Rust/Python 源码变更（仅文档登记）✔

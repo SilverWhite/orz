@@ -71,6 +71,8 @@
            probe_accuracy / console_order_written / console_order_rejected；
            后两族需先裁决写单面退役后的目标语义），入口：
            [S2a 盘点表](audits/TASK_D_S2A_INVENTORY_2026-09-06.md)。
+           三路全面复审无 P1/P2、9 项 P3 全部收口，入口：
+           [S2a 复审处理](audits/TASK_D_S2A_REVIEW_HANDLING_2026-09-06.md)。
          - [ ] **S2b**：核心族 Rust conformance 显式实现——control_tickets /
            lifecycle / retrieval_mode / ledger_fold(advance+write_failed) /
            policy_denial / failure_target。
