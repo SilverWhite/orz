@@ -84,8 +84,13 @@
            orz-assurance 204 passed，workspace check 零警告），入口：
            [S2b 实施审计](audits/TASK_D_S2B_FAMILIES_IMPL_AUDIT_2026-09-06.md)
            / [S2b 复审处理](audits/TASK_D_S2B_REVIEW_HANDLING_2026-09-06.md)。
-         - [ ] **S2c**：其余族按档位收口（检索族 / 上下文与压缩族 / 控制面族
-           三个子批）。
+         - [x] **S2c**：其余族按档位收口（检索族 / 上下文与压缩族 / 控制面族
+           三个子批）——**2026-09-06 完成**（orz `195c71b8`：
+           `journal/families_s2c.rs` 24 校验器，含 4 个 B 族按 Python 现行
+           语义镜像；spec 表 172 场景×31 族=5332 裁决格 + Rust↔Python 对拍
+           190 语料×31=5890 格 0 差；console_order_written/rejected 写单面
+           退役后目标语义裁决留 S2d 翻转前），入口：
+           [S2c 实施审计](audits/TASK_D_S2C_FAMILIES_IMPL_AUDIT_2026-09-06.md)。
          - [ ] **S2d**：31 族全量 Python↔Rust 对拍 0 差 + registry 翻转准备。
            （排期登记：2026-09-06，见
            [GLM 处置 + S2 排期登记](audits/P0_GOV_GLM_DISPOSITION_AND_TASK_D_S2_SCHEDULE_2026-09-06.md)）
