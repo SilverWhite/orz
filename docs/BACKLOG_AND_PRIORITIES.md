@@ -538,11 +538,23 @@ S1–S4 按「最小可验收单元 + 独立审计 + 独立提交」推进；S3 
 GAP-GSA-SYMLINK-STALE-TEST 连带观察（`.gsa` terminal-log 白名单会话卷形态
 豁免）。
 
-- [ ] S1 代码：SessionVolume 类型化资源 + host 装配 canonical 单源注入 +
+- [x] S1 代码：SessionVolume 类型化资源 + host 装配 canonical 单源注入 +
   工具级沙箱三分判定 + 窗口契约单源下沉（terminal-log / run_tests 两个
   只读窗口）+ gitignore 绕过 + permission.rs `.gsa` 段退役标注。
-- [ ] S2 测试：11 项测试矩阵全绿（会话卷 symlink 正/负、卷内 invisible
+  ——**2026-09-07 完成**（orz-tools `SessionVolumeRoot` + 
+  `is_path_allowed_for_read` 三分单点 + `is_session_volume_window_path`
+  窗口契约；SessionContext `session_volume_root` 字段 + host
+  `build_toolset` 一次 symlink-aware canonical 注入；read_file/grep/
+  list_dir 统一改接；D4 gitignore 绕过；permission.rs RETIRED-IN-PLACE
+  注记非裁撤。workspace check 零警告 / clippy 新增零告警 / fmt 净）。
+- [x] S2 测试：11 项测试矩阵全绿（会话卷 symlink 正/负、卷内 invisible
   默认、二级 symlink 防逃逸、资源缺席 fail-closed 等）+ 全量回归。
+  ——**2026-09-07 完成**（纯函数 8 + 工具级 5 新测试双层覆盖矩阵 11 项 +
+  run_tests 名字 symlink 顶替附加负测；orz-tools 2829 / orz-loop 729 /
+  orz-agent 573 / orz-workspace 22 全绿；orz-host 214/34 与 stash 基线
+  失败集逐项 diff 完全一致（ACAF signer 存量族 + 1 挂死均存量，登记
+  观察）；Python assurance 不受影响。入口：
+  [S1+S2 实施审计](audits/P0_0M_GSA_SESSION_VOLUME_S1_S2_IMPL_AUDIT_2026-09-07.md)）。
 - [ ] S3 接线复验：终端截断补读链 + run_tests 输出窗口端到端（含 `.gsa`
   symlink 会话卷实机构造）；GAP-GSA-SYMLINK-STALE-TEST 收口注记演进。
 - [ ] S4 收口：索引/BACKLOG/TODO 状态同步 + 门禁 Exit 0。
