@@ -101,9 +101,14 @@
 - [x] **复核修正批（2026-09-06 审查收口）**：R-1 计数口径（353 + 夹具恢复）、
   BACKLOG 00a 引用修正、00 小节任务 D S2–S4 层级修正、处置审计 §3 验证限制
   清单补录——见 [处置审计 §5](audits/P0_GOV_GLM_DISPOSITION_AND_TASK_D_S2_SCHEDULE_2026-09-06.md)。
-- [ ] **GAP-GSA-SYMLINK-STALE-TEST（2026-09-06 复核登记）**：orz read_file
-  `.gsa` 符号链接旧回归测试与 Task C canonical 沙箱语义冲突（非 GLM 本批
-  回归；处理需独立裁决：更新测试预期或显式登记豁免，不擅自翻转安全语义）。
+- [x] **GAP-GSA-SYMLINK-STALE-TEST（2026-09-06 复核登记，同日用户裁决收口）**：
+  orz read_file `.gsa` 符号链接旧回归测试与 Task C canonical 沙箱语义冲突
+  （非 GLM 本批回归）——裁决=对齐 Task C：旧「symlink 越界可读」预期改写为
+  拒读安全回归测试（orz `a29f7377`），orz-tools lib 2816 passed / 0 failed
+  全绿。连带观察（待用户裁决）：orz-host `permission.rs` `.gsa` terminal-log
+  白名单（symlink-aware canonical 比较，评测容器 `.gsa` 会话卷形态）在 Task C
+  工具级沙箱后对 read_file 不可达——终端日志补读链在会话卷挂载形态下是否需
+  显式豁免另议。
   入口：[处置审计 §5](audits/P0_GOV_GLM_DISPOSITION_AND_TASK_D_S2_SCHEDULE_2026-09-06.md)
   / [read_file 测试](../orz/crates/codegen/orz-tools/src/implementations/grok_build/read_file/mod.rs)。
 - 入口：[GLM 登记审计](audits/GLM_EXTERNAL_REVIEW_REGISTRATION_2026-09-04.md)
@@ -837,12 +842,14 @@
 - OBS-PERMISSION-DUAL-IMPL（GLM 观察 (c)，2026-09-06 登记）：权限判定分散
   （orz-workspace permission manager 8,756 行 / orz-host permission.rs 1,331
   行）——另立观察、不入任务 D S2；随终局治理视野排期。
-- GAP-GSA-SYMLINK-STALE-TEST（2026-09-06 复核登记）：orz
+- GAP-GSA-SYMLINK-STALE-TEST（2026-09-06 复核登记，同日用户裁决收口）：orz
   `read_file_allows_gsa_symlink_outside_git_root_even_when_gitignored` 预期
   `.gsa` 重解析越界可读，与 Task C canonical 沙箱（2026-09-04）拒读语义
-  冲突——定向复跑确定性失败，`-S`/差异复核确认早于 F1（a348901a 同逻辑），
-  非 GLM 本批回归；处理待独立裁决（更新测试预期或显式登记会话重解析面
-  豁免），不擅自翻转安全语义。入口：
+  冲突——裁决=对齐 Task C，旧测试改写为拒读安全回归测试
+  `read_file_rejects_gsa_symlink_resolving_outside_git_root_even_when_gitignored`
+  （orz `a29f7377`）；连带观察：orz-host `permission.rs` `.gsa` terminal-log
+  白名单在 Task C 工具级沙箱后对 read_file 不可达，会话卷形态豁免待用户
+  裁决（见 00a）。入口：
   [处置审计 §5](audits/P0_GOV_GLM_DISPOSITION_AND_TASK_D_S2_SCHEDULE_2026-09-06.md)
   / [read_file 测试](../orz/crates/codegen/orz-tools/src/implementations/grok_build/read_file/mod.rs)。
 - DC 硬信号 4/6（`same_module_no_evidence` / `key_surface_unexamined`）——

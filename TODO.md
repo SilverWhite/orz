@@ -648,10 +648,11 @@
   R-1 / R-2 / R-3 / 观察 (c) 完成，F2 登记 GAP-APPROVAL-PROMPTER 待实施）
   ——入口：[登记审计](docs/audits/GLM_EXTERNAL_REVIEW_REGISTRATION_2026-09-04.md)
   / [处置审计](docs/audits/P0_GOV_GLM_DISPOSITION_AND_TASK_D_S2_SCHEDULE_2026-09-06.md)。
-- [ ] orz read_file `.gsa` 符号链接旧回归测试与 Task C canonical 沙箱语义
-  冲突（GAP-GSA-SYMLINK-STALE-TEST，2026-09-06 复核登记）——处理待独立
-  裁决：更新测试预期对齐 Task C，或显式登记会话重解析面豁免；不擅自翻转
-  安全语义。入口：[处置审计 §5](docs/audits/P0_GOV_GLM_DISPOSITION_AND_TASK_D_S2_SCHEDULE_2026-09-06.md)。
+- [x] orz read_file `.gsa` 符号链接旧回归测试与 Task C canonical 沙箱语义
+  冲突（GAP-GSA-SYMLINK-STALE-TEST，2026-09-06 复核登记）——已按用户裁决
+  对齐 Task C：旧测试改写为拒读安全回归测试（orz `a29f7377`）；连带观察
+  （permission.rs `.gsa` 白名单对 read_file 不可达）登记于 BACKLOG 00a 待
+  裁决。入口：[处置审计 §5](docs/audits/P0_GOV_GLM_DISPOSITION_AND_TASK_D_S2_SCHEDULE_2026-09-06.md)。
 - [ ] orz-host 可选后端接线（lsp / memory / 图像 / 视频 / MCP）：接线时翻转能力访问器并补翻转测试（FUS-TOOL-PROBE 边界）。
   - 成熟复用评估（2026-08-16，只读）：明确——LSP/MCP 为成熟开放标准，仓库内已有 orz-mcp；图像/视频走成熟服务 API。
 - [ ] headless 计划模式能力信号（plan 模式探针当前以交互用户信号代理，未来 headless 计划模式需独立信号）。

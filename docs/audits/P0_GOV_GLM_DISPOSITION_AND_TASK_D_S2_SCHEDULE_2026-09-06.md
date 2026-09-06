@@ -181,7 +181,11 @@ fold、policy denial/failure target）」一致。
    处理=登记 `GAP-GSA-SYMLINK-STALE-TEST`（索引 §3.1 + BACKLOG 00a/§11 +
    TODO 审计登记边界）；涉及安全语义（拒读 vs 豁免），不擅自翻转既有回归
    预期，待独立裁决：更新测试预期对齐 Task C，或为会话重解析面显式登记
-   豁免。
+   豁免。（**2026-09-06 收口**：用户裁决=对齐 Task C，旧测试改写为拒读
+   安全回归测试，orz `a29f7377`，orz-tools lib 2816 passed / 0 failed 全绿；
+   环境清理批另修 bash timeout 旧断言对齐 §14.55、LSP drain 预算 3s→15s
+   消除负载偶发。连带观察——permission.rs `.gsa` terminal-log 白名单对
+   read_file 不可达——登记 BACKLOG 00a 待裁决。）
 5. **R-3 归档可复跑性注记**：`_final_smoke_2026-08-25_launcher.ps1` 内部
    保留历史绝对路径引用；`存档/` 定位为 provenance/evidence，不改写归档
    原内容（见 §1.5）。
