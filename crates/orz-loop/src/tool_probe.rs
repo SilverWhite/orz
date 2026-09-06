@@ -35,7 +35,10 @@ use crate::host::ToolPolicy;
 /// Every main-agent work tool in canonical (stable) projection order.
 /// Single source of truth for membership, the probe snapshot partition and
 /// the Python verifier's work-tool set (mirrored in
-/// `assurance/run_event_journal_validation.py`).
+/// `assurance/run_event_journal_validation.py`). Since S2d 裁决二
+/// (ADR-0010 §14.58/§14.59) the journaled availability accounting covers
+/// the declared surface only — a subset of this list; the raw probe
+/// (`probe_work_tools`) still partitions the full set.
 pub const WORK_TOOLS: [&str; 23] = [
     // Locally deterministic tools (former Face B).
     "read_file",
@@ -141,8 +144,10 @@ pub struct MinimalProbeMap {
 }
 
 impl MinimalProbeMap {
-    /// Canonical map for a probe snapshot — every work tool carries
-    /// exactly one status.
+    /// Canonical map for a probe snapshot — every ACCOUNTED tool carries
+    /// exactly one status. Since S2d 裁决二 (ADR-0010 §14.58) the snapshot
+    /// is narrowed to the declared surface before it reaches the map, so
+    /// sealed/registry-absent work tools are absent from the map too.
     pub fn from_snapshot(snapshot: &ToolProbeSnapshot) -> Self {
         let mut status = std::collections::BTreeMap::new();
         for tool in &snapshot.complete {
@@ -440,6 +445,21 @@ pub fn narrow_to_declared(
     }
 }
 
+/// Declared-surface narrowing as wired at BOTH production snapshot sites
+/// (run-start + per-round): registry-present AND not R1-sealed from the
+/// main face — single source so the two call sites cannot drift (S2d 批 2
+/// 复审处理采纳). The base tool-defs list must be the same mode-projected
+/// base the visible-face projection consumes.
+pub fn narrow_to_declared_face(
+    snapshot: ToolProbeSnapshot,
+    base_tool_defs: &[crate::host::ToolDef],
+) -> ToolProbeSnapshot {
+    narrow_to_declared(snapshot, |tool| {
+        base_tool_defs.iter().any(|d| d.name == tool)
+            && !crate::controller::AgentLoopController::R1_SEALED_MAIN_TOOLS.contains(&tool)
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -541,6 +561,32 @@ mod tests {
     /// unwired backend) both drop out.
     fn declared_face(tool: &str) -> bool {
         tool != "todo_write" && tool != "lsp"
+    }
+
+    #[test]
+    fn narrow_to_declared_face_helper_contract() {
+        // The shared production predicate (批 2 复审处理采纳): base declares
+        // a declared tool (read_file) and a sealed one (todo_write); lsp is
+        // registry-absent. Helper keeps the declared tool, drops the sealed
+        // one from incomplete and the absent one from complete.
+        let base: Vec<ToolDef> = ["read_file", "todo_write"]
+            .iter()
+            .map(|n| ToolDef {
+                name: n.to_string(),
+                description: format!("tool {n}"),
+                parameters: serde_json::json!({}),
+            })
+            .collect();
+        let snapshot = ToolProbeSnapshot {
+            complete: vec!["read_file".into(), "lsp".into()],
+            incomplete: vec![ProbeFailure {
+                tool: "todo_write".into(),
+                reason: REASON_NO_GOAL_CONTEXT,
+            }],
+        };
+        let narrowed = narrow_to_declared_face(snapshot, &base);
+        assert_eq!(narrowed.complete, vec!["read_file".to_string()]);
+        assert!(narrowed.incomplete.is_empty());
     }
 
     #[test]

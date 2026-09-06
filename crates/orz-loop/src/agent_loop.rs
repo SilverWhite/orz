@@ -1275,12 +1275,9 @@ pub(crate) async fn run_agent_loop(
                     video_backend_configured: host.video_backend_configured(),
                     mcp_registry_available: host.mcp_registry_available(),
                 };
-                let snapshot = crate::tool_probe::narrow_to_declared(
+                let snapshot = crate::tool_probe::narrow_to_declared_face(
                     crate::tool_probe::probe_work_tools(&probe_context),
-                    |tool| {
-                        tool_defs.iter().any(|d| d.name == tool)
-                            && !AgentLoopController::R1_SEALED_MAIN_TOOLS.contains(&tool)
-                    },
+                    tool_defs,
                 );
                 if controller.probe_flip(&snapshot) {
                     writer

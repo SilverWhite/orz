@@ -2095,9 +2095,12 @@ pub fn verify_mechanical_audit(events: &[Value]) -> Vec<String> {
     errors
 }
 
-/// Python `_verify_v02_tool_availability_probe` (FUS-TOOL-PROBE): the
-/// complete/incomplete sets partition the work tools exactly, and incomplete
-/// reasons stay neutral (no availability judgment words).
+/// Python `_verify_v02_tool_availability_probe` (FUS-TOOL-PROBE; partition
+/// clause narrowed 2026-09-06, ADR-0010 §14.59 — the complete/incomplete
+/// sets must be disjoint and cover work tools only, a subset rather than
+/// the exact full set since the producer accounts the declared surface,
+/// §14.58), and incomplete reasons stay neutral (no availability judgment
+/// words).
 pub fn verify_tool_availability_probe(events: &[Value]) -> Vec<String> {
     const JUDGMENT_WORD_TOKENS: &[&str] = &[
         "可用",
@@ -2149,12 +2152,16 @@ pub fn verify_tool_availability_probe(events: &[Value]) -> Vec<String> {
         let mut union = complete.clone();
         union.extend(incomplete.keys().cloned());
         let work: BTreeSet<String> = toolsets::WORK_TOOLS.iter().map(|s| s.to_string()).collect();
-        if union != work {
-            let missing: Vec<&String> = work.difference(&union).collect();
-            let extra: Vec<&String> = union.difference(&work).collect();
+        // Partition clause narrowed 2026-09-06 (ADR-0010 §14.59, 任务 D S2d
+        // 裁决二补裁决): the producer's availability accounting covers the
+        // declared surface only (§14.58), so the partition must be a subset
+        // of the work tools rather than the exact full set — historical
+        // full-partition journals keep replaying clean as a subset.
+        let extra: Vec<&String> = union.difference(&work).collect();
+        if !extra.is_empty() {
             errors.push(format!(
-                "event {index}: probe partition must cover exactly the work tools; \
-                 missing={missing:?}, extra={extra:?}"
+                "event {index}: probe partition must be a subset of the work tools; \
+                 extra={extra:?}"
             ));
         }
         for (tool, reason) in &incomplete {

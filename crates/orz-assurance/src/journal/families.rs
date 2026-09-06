@@ -3487,11 +3487,22 @@ mod tests {
                 )],
             ),
             (
-                "probe_partition_gap",
+                // Partition clause narrowed 2026-09-06 (ADR-0010 §14.59): a
+                // missing work tool is now legal (declared-surface
+                // accounting, §14.58) — the violation is a NON-work tool in
+                // the partition.
+                "probe_partition_extra",
                 vec![probe_event(
                     work_tools_minus("grep"),
                     json!([{"tool": "ghost_tool", "reason": "not registered in this session"}]),
                 )],
+            ),
+            (
+                // Narrowed declared-surface partition (subset of the work
+                // tools, sealed/absent tools legitimately out) replays
+                // clean — the 裁决二补裁决 positive example.
+                "probe_partition_narrowed_legal",
+                vec![probe_event(work_tools_minus("grep"), json!([]))],
             ),
             (
                 "request_header_ok",
@@ -4676,7 +4687,7 @@ mod tests {
         for name in [
             "probe_overlap",
             "probe_judgment_word",
-            "probe_partition_gap",
+            "probe_partition_extra",
         ] {
             expect(name, "tool_availability_probe");
         }
@@ -5010,7 +5021,7 @@ json.dump(out, sys.stdout)
             "crosscheck cell accounting drifted"
         );
         assert_eq!(
-            scenario_count, 232,
+            scenario_count, 233,
             "synthetic scenario corpus count drifted from its registered size              ({scenario_count})"
         );
         assert!(
