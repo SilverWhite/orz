@@ -8,14 +8,14 @@
 
 ## 未闭合计数（2026-09-04 口径）
 
-- 未闭合总数：**28 项**（2026-08-31：P2-10 阶段 3 验证闭环 38 → 32；0k S4 实机复验闭环 32 → 30；2026-09-01：P2-11 DC 强制模板轮清理闭合 30 → 29，P3「DC 硬信号 4/6」退役 29 → 28；2026-09-02：P2-12 讨论稿登记不动计数；2026-09-03：P2-13 设计定稿与 B1 S1/S2 完成，未入账、计数不变；2026-09-04：P2-14 设计定稿与裁决收口 + S1/S2 实施收口（主会话转 v0.3、压缩 e2e 全串行绿），未入账、计数不变；2026-09-06：P0-GOV 00 任务 D 全部闭合（S2a–S2d + S3/S4 翻转），登记不动计数；2026-09-07：0o S3/S4 集中实机验证批排期登记，不动计数）。TODO `[ ]` 明细含父/子项，计数以 BACKLOG 为准。
+- 未闭合总数：**28 项**（2026-08-31：P2-10 阶段 3 验证闭环 38 → 32；0k S4 实机复验闭环 32 → 30；2026-09-01：P2-11 DC 强制模板轮清理闭合 30 → 29，P3「DC 硬信号 4/6」退役 29 → 28；2026-09-02：P2-12 讨论稿登记不动计数；2026-09-03：P2-13 设计定稿与 B1 S1/S2 完成，未入账、计数不变；2026-09-04：P2-14 设计定稿与裁决收口 + S1/S2 实施收口（主会话转 v0.3、压缩 e2e 全串行绿），未入账、计数不变；2026-09-06：P0-GOV 00 任务 D 全部闭合（S2a–S2d + S3/S4 翻转），登记不动计数；2026-09-07：0o S3/S4 集中实机验证批排期登记，不动计数；2026-09-07：0q 统一失败事件管线登记（0p S1 复审 F-C 治本），不动计数）。TODO `[ ]` 明细含父/子项，计数以 BACKLOG 为准。
 
 ## 优先级总览
 
 | 优先级 | 含义 | 开放项（入口小节） |
 |---|---|---|
 | P0 | 当前工作集：设计已冻结，裁决后立即实施 | FUS-BENCHMARK-FULL-EXEC 验证②③(reward)④⑤（0b）；0d 后续 3/4/5 S4 复验（0d）；THIN-HARNESS-REDESIGN-V2 余项（0j）；WINDOWS-HIGH-NIST-MAX-FRICTION ⑥/⑦（0l）；GSA-SESSION-VOLUME-BOTTOM-LAYER S1–S4（0m，2026-09-06 用户裁决放行）；S3/S4 集中实机验证批（0o，2026-09-07 排期放行——集中执行上述实机类开放项，见排期文档）；模型自信息面补强与 .gsa 两段门（0p，2026-09-07 设计定稿同日排期——黑板自历史面 + 两段门 + key 不落卷 + 0.3.2 + 重跑 train-fasttext，见设计文档）——P0-GOV 00（含任务 D）已于 2026-09-06 全部闭合 |
-| P1 | 无需裁决，可与 P0 并行 | FUS-COMPONENT-REGISTER（4）；GAP-WINDOWS-EVIDENCE（5）；IMPL-DEEPSEEK-TRANSPORT / SEC-CREDENTIALS live 证据（6）；ORZ-SESSION-CONTEXT-MONITOR（6d） |
+| P1 | 无需裁决，可与 P0 并行 | 统一失败事件管线（0q，2026-09-07 登记——0p S1 复审 F-C 治本，S1 设计定稿前置）；FUS-COMPONENT-REGISTER（4）；GAP-WINDOWS-EVIDENCE（5）；IMPL-DEEPSEEK-TRANSPORT / SEC-CREDENTIALS live 证据（6）；ORZ-SESSION-CONTEXT-MONITOR（6d） |
 | P2 | 生产化决策门：需用户裁决 | IMPL-CONTROL-FABRIC Slice 3/4（7）；OPS-PROTOCOL 裁剪与接线裁决（8）；MODEL-RESIDUAL-PRESSURE-FOLLOWUP（11）；COMPRESSION-LINGUISTIC-FORMAL-LAYER（12）；BLACKBOARD-CONVERSATION-SCOPE-FOLD B2–B4（13） |
 | P3 | 收尾 / 清理 | EVIDENCE-LOCAL-BROWSER（9）；GATE-CHAIN（10）；遗留小项（11） |
 | 条件触发 | 不占当前优先级 | ORZ-RECOVERY-TOOL-OUTCOME、ORZ-STAGNATION-TOOL-SIGNAL |
@@ -660,9 +660,14 @@ D-1/D-2/D-3）→ 用户裁决：黑板补强先行（「黑板必须暴露模�
 / ADR-0010 §14.61。
 
 - [ ] T0：orz 版本 bump 0.3.2（独立提交；源冻结对本批解除）。
-- [ ] S1 黑板补强：failure_agg 按需面（failures_only）+ 字面检索
+- [x] S1 黑板补强：failure_agg 按需面（failures_only）+ 字面检索
   （search ≤20 行）+ 工具描述教学；turn_count 真实计数退役硬编码 1；
-  orz 测试全绿。
+  orz 测试全绿。（2026-09-07 实施闭合 orz `928dceb3`：selfhistory.rs
+  新模块 + 守卫六类 fail loud + with_session_turn ACP 接线；同日复审
+  处理批 orz `fd46d4f9` 闭合 F-A/F-B/F-C/F-D/F-H——exit_code 字段 +
+  命令级失败补盖章 exit_{n} + receipt 指针删除 + 表头截断 + 3K 注记入
+  预算修正；设计文档 §3.A 勘误注随批；orz-loop 743 全绿 / clippy 零
+  新增 / 门禁 valid。F-C 治本转 **0q** 单列。）
 - [ ] S2 两段门：内部区首读通知信封（职责图+台账结构预览+黑板指针+
   询问句，code=session_volume_notice）→ 二读放行（open_after_notice）；
   状态会话卷级持久化；区域分类（台账/journal/conversations=两段式，
@@ -703,12 +708,36 @@ D-1/D-2/D-3）→ 用户裁决：黑板补强先行（「黑板必须暴露模�
 
 ### 3b. ORZ-COMPACTION-REDESIGN（`implemented`；P0，S1-S6 已闭合 2026-08-14）
 
-- [x] **ORZ-COMPACTION-REDESIGN（S1-S6 全部闭合 2026-08-14，`implemented`）**：恢复预检截断 / 动作台账机械坍缩 / 五段模板摘要 + 事件面 + 存档 / 审计同步 / 审查修复 / 二次复查。入口：[设计](CONTEXT_COMPACTION_DESIGN_2026-08-14.md) / ADR-0010 §14.10/§14.14 / 实施审计 / TODO P0-D。
+- [x] **ORZ-COMPACTION-REDESIGN（S1-S6 全部闭合 2026-08-14，`implemented`）**：恢复预检截断 / 动作台账机械坍缩 / 五段模板摘要 + 事件面 + 存档 / 审查修复 / 二次复查。入口：[设计](CONTEXT_COMPACTION_DESIGN_2026-08-14.md) / ADR-0010 §14.10/§14.14 / 实施审计 / TODO P0-D。
+
+### 0q. 统一失败事件管线（F4 盖章治本；P1；2026-09-07 登记——0p S1 复审 F-C 治本项，S1 设计定稿前置，不占当前工作集）
+
+- 来源（2026-09-07 用户裁决「治标不治本，治本内容单独立一项」）：0p S1
+  复审 F-C 暴露的根因——F4 失败目标盖章为**逐路径散布形态**，每个失败
+  路径靠各自调用 `note_failure_agg`（现有四写点：锚点拒单 / host
+  ToolError / web_fetch 候选上限 / 0p S1 复审新增的 Ok 臂命令级失败
+  `exit_{n}`），漏盖即覆盖缺口——命令级失败遗漏至 0p S1 复审才发现；
+  console 订单业务失败至今不进聚合（receipt error 信封无 F4 身份）。
+- 治本方向（设计先行，产出设计文档并涉 ADR-0010 时按 §14.x 转录）：
+  单一机械收口点——失败事实从事件面/结果面**形状**统一机械抽取进聚合，
+  覆盖面由结构保证而非路径记忆。设计需裁决：
+  1. 收口点选型——ToolCompleted 事件面统一抽取（消费侧）vs 写入侧单一
+     funnel（供给侧）；
+  2. console 订单失败的 F4 身份来源——receipt error 信封补身份，或明确
+     排除并文档标注不对称性；
+  3. 校验面同步——`_verify_v02_failure_target`（Python 对照）与 Rust
+     法官的覆盖范围；
+  4. 行集语义影响——failure_agg 覆盖面变化对 P2-12 压缩注意事项槽 /
+     0p `failures_only` 面消费方的下游影响与迁移口径。
+- 边界：不为跑分特化；不阻塞 0p S2–S5（压测场景已由 F-C 最小盖章点
+  覆盖：Ok 臂 exit≠0 + failure_target 四族 → `exit_{n}`，orz
+  `fd46d4f9`）；本项实施以 S1 设计定稿为前置门（0n 同款纪律）。
+- 计数：登记不动计数（闭合时动账）。
 
 
 ## P1 — 可并行审计 / 证据
 
-开放项：4 / 5 / 6 / 6d。已闭合 6b / 6c / 6e / 6f / 6g 以单行核对保留（6c 与 6e 为退役条目）。
+开放项：0q / 4 / 5 / 6 / 6d。已闭合 6b / 6c / 6e / 6f / 6g 以单行核对保留（6c 与 6e 为退役条目）。
 
 ### 4. FUS-COMPONENT-REGISTER（`partial`）
 

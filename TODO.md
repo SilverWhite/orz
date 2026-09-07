@@ -524,12 +524,14 @@ GLM F2 处置转排期（2026-09-06 用户裁决）：`orz-host/src/approval.rs`
 
 - [ ] T0 版本 bump：orz 0.3.1 → **0.3.2**（独立提交；源冻结对本批解除；
   后续 chunk3/批次L/O 以 0.3.2 为基线）。
-- [ ] S1 黑板补强（先行）：`blackboard_read section=exec` 增
+- [x] S1 黑板补强（先行）：`blackboard_read section=exec` 增
   `failures_only`（failure_agg 行集复用 P2-12 语义，≤3K 截断标注）+
   `search=<literal>`（字面子串、命中 ≤20 行、截断显式）+ 工具描述教学
   三句（展开参数/failures_only/search）；
   `run_finished.turn_count` 真实会话轮计数（退役 controller.rs:3541
   硬编码 1，单提示=1 语义不变）；orz 测试全绿 + clippy 零新增。
+  （2026-09-07 闭合：orz `928dceb3` 实施 + `fd46d4f9` 复审处理批
+  F-A/F-B/F-C/F-D/F-H 全闭合；F-C 治本转 P1-0q。）
 - [ ] S2 两段门 + 信封：`.gsa` 内部区（ledger/runs/conversations）首读
   通知信封（职责图+台账结构预览+黑板指针+询问句，
   code=session_volume_notice，非阻塞轮）→ 二读放行
@@ -568,6 +570,28 @@ GLM F2 处置转排期（2026-09-06 用户裁决）：`orz-host/src/approval.rs`
 - [x] 全部闭合：S1 恢复预检截断 + marker/白名单保留 / S2 动作台账机械坍缩 / S3 五段模板摘要 + 事件面 + 存档 / S4 审计同步 / S5 审查修复（守卫重试、session_end、冷却、超时）/ S6 二次复查。入口：[压缩设计](docs/CONTEXT_COMPACTION_DESIGN_2026-08-14.md) / ADR-0010 §14.10/§14.14 / [审计](docs/audits/GAP_COMPACTION_REDESIGN_IMPL_AUDIT_2026-08-14.md) / BACKLOG 3b。
 
 ## P1 — 可并行审计 / 证据
+
+### P1-0q 统一失败事件管线（F4 盖章治本；2026-09-07 登记；BACKLOG 0q；S1 设计定稿前置，不占当前工作集）
+
+> 来源：0p S1 复审 F-C（2026-09-07 用户裁决「治标不治本，治本内容单独
+> 成一项」）——F4 失败目标盖章为逐路径散布形态（四写点：锚点拒单 /
+> host ToolError / web_fetch 候选上限 / 0p 复审新增 Ok 臂命令级失败
+> `exit_{n}`），漏盖即覆盖缺口（命令级失败遗漏至 0p 复审才发现；console
+> 订单业务失败至今不进聚合）。压测场景已由 F-C 最小盖章点覆盖（orz
+> `fd46d4f9`），本项为覆盖面完备性治本。
+
+- [ ] S1 设计定稿：单一机械收口点（失败事实从事件面/结果面形状统一抽取
+  进聚合，覆盖面由结构保证而非路径记忆）——需裁决 ① 收口点选型
+  （ToolCompleted 消费侧统一抽取 vs 写入侧单一 funnel）；② console 订单
+  失败的 F4 身份来源（receipt error 信封补身份或明确排除并标注）；③
+  `_verify_v02_failure_target` / Rust 法官校验面同步；④ 行集语义变化对
+  P2-12 注意事项槽 / 0p failures_only 面的下游影响与迁移口径；产出设计
+  文档（涉 ADR-0010 时按 §14.x 转录）。
+- [ ] S2 实施：收口点落地 + 散布盖章点退役（四写点收敛）+ console 订单
+  失败覆盖面裁决执行。
+- [ ] S3 测试与复验：覆盖面矩阵单测（四族身份 × 各失败路径 × console
+  订单）+ verifier/法官同步回归。
+- [ ] S4 收口：BACKLOG/TODO/索引同步 + manifest 重算 + 门禁 Exit 0。
 
 ### FUS-COMPONENT-REGISTER（`partial`）
 
