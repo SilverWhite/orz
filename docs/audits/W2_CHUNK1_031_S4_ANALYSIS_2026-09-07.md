@@ -1,5 +1,10 @@
 # W2 批次 chunk1（w2-chunk1-031）事件面分析（2026-09-07）
 
+> **勘误（2026-09-07 晚，口径修正）**：本文 §2/§3 中「POSIX 习惯撞墙」
+> 等模型侧摩擦属墙对模型的正常摩擦，**不计入 orz 框架缺陷**；orz 自身
+> 缺陷以 [`W2_ORZ_DEFECT_EXTRACTION`](W2_ORZ_DEFECT_EXTRACTION_2026-09-07.md)
+> 修正口径版为准（该版新增 D-1 `.gsa` shell 旁路等框架缺陷）。
+
 > **上级**：[`S3/S4 集中实机验证批排期 §4.2/§7 C`](../LIVE_VERIFICATION_BATCH_SCHEDULE_2026-09-07.md)
 > / BACKLOG 0o / TODO P0-0o T3。
 > **定位**：批次 W2 第 1/3 批的实机事实与判据核对记录；正式闭合登记仍在

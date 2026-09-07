@@ -563,7 +563,17 @@ GAP-GSA-SYMLINK-STALE-TEST 连带观察（`.gsa` terminal-log 白名单会话卷
   [复审处理审计](audits/P0_0M_S1_S2_REVIEW_HANDLING_2026-09-07.md)）。
 - [ ] S3 接线复验：终端截断补读链 + run_tests 输出窗口端到端（含 `.gsa`
   symlink 会话卷实机构造）；GAP-GSA-SYMLINK-STALE-TEST 收口注记演进。
+  （2026-09-07 实机复验完成，见 TODO P0-0o T1/批次 0。）
 - [ ] S4 收口：索引/BACKLOG/TODO 状态同步 + 门禁 Exit 0。
+- **新观察（2026-09-07，W2 压测暴露，待用户裁决是否立项）**：`.gsa`
+  agent-invisible 边界存在 **shell 通道旁路**——run_terminal_cmd 类
+  shell 命令可直读 `.gsa` 全部内容（W2 六 run 实证 31 条命令全部
+  exit 0，含 `resources_state.json` 与机械审计台账 `ledger/current.md`
+  被模型读取成功；工具层三分判定本身无误杀）。工具层拦截对 shell 串
+  内容不做检查，目录结构经 `ls -Force` 亦可见。修法选项（解冻后）：命令
+  串检查（脆弱）/ `.gsa` 卷 ACL 化或移出 cwd 可达域 / 设计上明确接受并
+  文档标注边界。证据
+  [`W2_ORZ_DEFECT_EXTRACTION D-1`](audits/W2_ORZ_DEFECT_EXTRACTION_2026-09-07.md)。
 
 设计权威：[`GSA_SESSION_VOLUME_BOTTOM_LAYER_DESIGN_2026-09-06`](GSA_SESSION_VOLUME_BOTTOM_LAYER_DESIGN_2026-09-06.md)
 / [ADR-0010 §14.56](../adr/ADR-0010-fusion-runtime-and-agent-architecture.md)。
