@@ -67,6 +67,24 @@ pattern `fasttext|MemoryError|bad allocation|g\+\+|编译|pip install` 直指
 
 ### B `.gsa` 两段门（后落；修订 §14.56 agent-invisible 语义）
 
+> **0p S2 实施注记（2026-09-07）**：
+> ① §7 待确认点 1 落定——`resources_state.json` 按 B1 直读类实现
+> （免通知直读面，与两白名单窗口同级）；
+> ② **逃逸恒拒**（设计文本之外的安全语义保持）——词法在域内但
+> canonical 逸出卷外的路径（种在域内的二级 symlink / 幽灵白名单
+> 形态）不进入两段门，恒拒且不因通知而放开（GAP-GSA-SYMLINK-
+> STALE-TEST 安全语义不被 B4 放松）；
+> ③ B4「journal 记 open_after_notice」落地为 `tool_completed` v0.2
+> 载荷可选字段 `session_volume_opened`（const true；非独立事件
+> 类型），schema 已同步，与前序 `policy_denial{code=session_volume_
+> notice}` 完成事件构成「通知→放行」审计对；
+> ④ 设计 C 的 permission 源扩展覆盖内建读沙箱 deny（read_file/
+> grep/list_dir；code：outside_workspace / session_volume_notice /
+> session_volume_agent_invisible），schema `policy_denial` 描述已
+> 修订（原文「内建桥权限拒绝不落事件」退役）；词汇与 0n 对齐：
+> allow / deny / notice（session_volume_notice）/
+> open_after_notice（session_volume_opened）。
+
 - **B1 区域分类**（设计默认，可调）：
   - 两段式：`ledger/**`、`runs/**`（journal 事件）、`conversations/`
     侧车；
