@@ -551,40 +551,90 @@ impl xai_tool_runtime::Tool for ListDirTool {
                     .cloned(),
             )
         };
+        let session_volume_access = {
+            let res = resources.lock().await;
+            res.get::<crate::types::resources::SessionVolumeAccess>()
+                .cloned()
+        };
         let path = resolve_model_path(&cwd, display_cwd.as_deref(), &input.target_directory);
         let display_base = display_cwd_or_cwd(&cwd, display_cwd.as_deref());
         let display_path = compute_display_path(&display_base, &input.target_directory);
 
-        // 读工具沙箱三分判定（P0-GOV Task C 2026-09-04 + P0-0m GSA-SESSION-
-        // VOLUME 2026-09-06，canonical 级）：目标目录若经 `..` 越级、为绝对
-        // 路径且指向工作区外、或经符号链接/重解析点指向工作区外，直接拒绝；
-        // 已注册技能根豁免同 read_file（GLM F1 收窄）。`.gsa` 会话卷域由
-        // 窗口契约接管（ADR-0010 §14.56 D3）：仅两个白名单窗口形态放行，
-        // 其余内部面 agent-invisible。判定统一单点在
-        // resources::is_path_allowed_for_read。
-        let in_session_volume_domain = session_volume.as_ref().is_some_and(|volume| {
-            crate::types::resources::is_path_in_session_volume_domain(&volume.0, &cwd, &path, None)
+        // 0p S2 两段门（2026-09-07，ADR-0010 §14.61 设计 B）：会话卷域列目录
+        // 先经两段门判决——窗口恒放行；内部区（含卷根）首读返回通知信封
+        // （B2）并持久化已通知态；二读放行（B4）。同 read_file/grep。
+        let volume_verdict = session_volume.as_ref().map(|volume| {
+            let noticed = session_volume_access
+                .as_ref()
+                .map(|access| access.noticed())
+                .unwrap_or(false);
+            crate::types::resources::session_volume_read_verdict(
+                &volume.0, &cwd, &path, None, noticed,
+            )
         });
-        if !crate::types::resources::is_path_allowed_for_read(
-            &cwd,
-            &path,
-            None,
-            &skill_roots,
-            session_volume.as_ref(),
-        ) {
+        if volume_verdict == Some(crate::types::resources::SessionVolumeReadVerdict::NoticeRequired)
+            && let Some(access) = &session_volume_access
+        {
+            access.mark_noticed();
+        }
+        if volume_verdict == Some(crate::types::resources::SessionVolumeReadVerdict::NoticeRequired)
+        {
             return Ok(ListDirOutput::PermissionDenied(
-                if in_session_volume_domain {
-                    format!(
-                        "Permission denied: directory is inside the agent-invisible session volume: {}",
-                        display_path.display()
-                    )
-                } else {
-                    format!(
-                        "Permission denied: directory escapes workspace sandbox: {}",
-                        display_path.display()
-                    )
-                },
+                crate::types::resources::session_volume_notice_text(&cwd.join(".gsa")),
             ));
+        }
+        if volume_verdict
+            == Some(crate::types::resources::SessionVolumeReadVerdict::InternalAfterNotice)
+            && let Some(access) = &session_volume_access
+        {
+            access.mark_opened_this_call();
+        }
+        // 词法在域内但 canonical 逸出卷外——恒拒（安全语义不放松）。
+        if volume_verdict == Some(crate::types::resources::SessionVolumeReadVerdict::Denied) {
+            if let Some(access) = &session_volume_access {
+                access.set_denial_this_call(
+                    "session_volume_agent_invisible",
+                    format!(
+                        "directory is inside the agent-invisible session volume with an \
+                         escaping canonical target: {}",
+                        display_path.display()
+                    ),
+                );
+            }
+            return Ok(ListDirOutput::PermissionDenied(format!(
+                "Permission denied: directory is inside the agent-invisible session volume: {}",
+                display_path.display()
+            )));
+        }
+        let allowed_by_volume = matches!(
+            volume_verdict,
+            Some(
+                crate::types::resources::SessionVolumeReadVerdict::WindowAllowed
+                    | crate::types::resources::SessionVolumeReadVerdict::InternalAfterNotice
+            )
+        );
+        if !allowed_by_volume
+            && !crate::types::resources::is_path_allowed_for_read(
+                &cwd,
+                &path,
+                None,
+                &skill_roots,
+                session_volume.as_ref(),
+            )
+        {
+            if let Some(access) = &session_volume_access {
+                access.set_denial_this_call(
+                    "outside_workspace",
+                    format!(
+                        "list_dir directory escapes workspace sandbox: {}",
+                        display_path.display()
+                    ),
+                );
+            }
+            return Ok(ListDirOutput::PermissionDenied(format!(
+                "Permission denied: directory escapes workspace sandbox: {}",
+                display_path.display()
+            )));
         }
         let meta = tokio::fs::metadata(&path).await;
         let is_dir = meta.as_ref().is_ok_and(|m| m.is_dir());

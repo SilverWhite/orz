@@ -512,7 +512,8 @@ impl ProcessState {
         self.truncated = true;
     }
 
-    /// Flush and truncate the output file to [`MAX_RETAINED_OUTPUT_FILE_BYTES`].
+    /// Flush and truncate the output file to [`MAX_RETAINED_OUTPUT_FILE_BYTES`],
+    /// then run the B5 secret sweep.
     async fn flush_and_truncate_output_file(&mut self) {
         if let Some(ref mut file) = self.file_handle {
             let _ = file.flush().await;
@@ -521,6 +522,30 @@ impl ProcessState {
                 // Seek to new end so post-exit drain appends correctly.
                 let _ = file.seek(std::io::SeekFrom::End(0)).await;
             }
+        }
+        self.sweep_output_file_secrets().await;
+    }
+
+    /// 0p S2 B5（2026-09-07，ADR-0010 §14.61 设计 B5）：终端日志落
+    /// `.gsa/session/terminal/`，是会话卷持久化面——完成点对整文件做
+    /// orz-secrets 机械脱敏（sk-shape 等 + 占位符替换，确定性）后重写。
+    /// sweep 放在完成点而非逐 chunk 写盘处：逐 chunk lossy 解码会破坏
+    /// 跨块多字节字符（CJK 输出回归），整文件经固定解码链则无损。key 不
+    /// 落卷是两段门放开的前提不变量。best-effort：IO 失败静默（与既有
+    /// flush 纪律一致）。
+    async fn sweep_output_file_secrets(&mut self) {
+        let Some(path) = self.file_handle.as_ref().map(|_| self.output_file.clone()) else {
+            return;
+        };
+        let Ok(bytes) = tokio::fs::read(&path).await else {
+            return;
+        };
+        if bytes.is_empty() {
+            return;
+        }
+        let (text, _) = crate::util::encoding::decode_text(&bytes);
+        if let std::borrow::Cow::Owned(scrubbed) = orz_secrets::redact_secrets(&text) {
+            let _ = tokio::fs::write(&path, scrubbed.into_bytes()).await;
         }
     }
 

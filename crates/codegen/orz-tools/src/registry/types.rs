@@ -1041,6 +1041,12 @@ impl ToolRegistryBuilder {
             resources.insert(crate::types::resources::SessionVolumeRoot(
                 session_volume_root,
             ));
+            // 0p S2 两段门（2026-09-07，ADR-0010 §14.61 设计 B）：访问状态
+            // （notice_shown 持久化于 `.gsa/access_state.json` + per-call
+            // 瞬态旗标，host 侧转译 policy_denial / session_volume_opened）。
+            resources.insert(crate::types::resources::SessionVolumeAccess::open(
+                cwd.join(".gsa"),
+            ));
         }
         {
             let mut mgr = crate::types::skill_discovery_tracker::SkillManager::new();

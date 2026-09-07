@@ -493,6 +493,7 @@ pub(crate) async fn run_read_file(
     invoking_param_names: &crate::types::resources::InvokingToolParamNames,
 ) -> Result<ReadFileOutput, xai_tool_runtime::ToolError> {
     let (cwd, display_cwd, fs, hints_enabled, skill_roots, session_volume);
+    let session_volume_access;
     {
         let res = resources.lock().await;
         cwd = match cwd_override {
@@ -508,6 +509,9 @@ pub(crate) async fn run_read_file(
             .unwrap_or_default();
         session_volume = res
             .get::<crate::types::resources::SessionVolumeRoot>()
+            .cloned();
+        session_volume_access = res
+            .get::<crate::types::resources::SessionVolumeAccess>()
             .cloned();
     }
     let joined_path = resolve_model_path(&cwd, display_cwd.as_deref(), &input.path);
@@ -536,36 +540,92 @@ pub(crate) async fn run_read_file(
     // `run_tests_output.txt` 两个只读窗口放行，其余内部面 agent-invisible。
     // 判定统一单点在 resources::is_path_allowed_for_read（SessionVolume
     // 资源缺席时窗口全关，退回 Task C 纯 workspace 二元判定）。
-    let in_session_volume_domain = session_volume.as_ref().is_some_and(|volume| {
-        crate::types::resources::is_path_in_session_volume_domain(
+    // 0p S2 两段门（2026-09-07，ADR-0010 §14.61 设计 B）：会话卷域读取
+    // 先经两段门判决——窗口/直读恒放行；内部区首读返回通知信封（非内容，
+    // B2）并持久化已通知态；二读直接放行（B4）。通知与放行的结构化 seam
+    // 在 SessionVolumeAccess 旗标上，host 侧转译 journal 事件面。
+    let volume_verdict = session_volume.as_ref().map(|volume| {
+        let noticed = session_volume_access
+            .as_ref()
+            .map(|access| access.noticed())
+            .unwrap_or(false);
+        crate::types::resources::session_volume_read_verdict(
             &volume.0,
             &cwd,
             &joined_path,
             Some(&path),
+            noticed,
         )
     });
-    if !crate::types::resources::is_path_allowed_for_read(
-        &cwd,
-        &joined_path,
-        Some(&path),
-        &skill_roots,
-        session_volume.as_ref(),
-    ) {
+    if volume_verdict == Some(crate::types::resources::SessionVolumeReadVerdict::NoticeRequired)
+        && let Some(access) = &session_volume_access
+    {
+        access.mark_noticed();
+    }
+    if volume_verdict == Some(crate::types::resources::SessionVolumeReadVerdict::NoticeRequired) {
+        return Ok(ReadFileOutput::PermissionDenied(
+            crate::types::resources::session_volume_notice_text(&cwd.join(".gsa")),
+        ));
+    }
+    if volume_verdict
+        == Some(crate::types::resources::SessionVolumeReadVerdict::InternalAfterNotice)
+        && let Some(access) = &session_volume_access
+    {
+        access.mark_opened_this_call();
+    }
+    // 词法在域内但 canonical 逸出卷外（symlink 逃逸/幽灵白名单形态）——
+    // 恒拒，两段门不放松安全语义（0m 矩阵 #7/#8 的逃逸拒绝原样保留）。
+    if volume_verdict == Some(crate::types::resources::SessionVolumeReadVerdict::Denied) {
         let display_dcwd = display_cwd_or_cwd(&cwd, display_cwd.as_deref());
         let display_path = display_dcwd.join(&input.path);
-        return Ok(ReadFileOutput::PermissionDenied(
-            if in_session_volume_domain {
+        if let Some(access) = &session_volume_access {
+            access.set_denial_this_call(
+                "session_volume_agent_invisible",
                 format!(
-                    "Permission denied: path is inside the agent-invisible session volume: {}",
+                    "path is inside the agent-invisible session volume with an escaping \
+                     canonical target: {}",
                     display_path.display()
-                )
-            } else {
+                ),
+            );
+        }
+        return Ok(ReadFileOutput::PermissionDenied(format!(
+            "Permission denied: path is inside the agent-invisible session volume: {}",
+            display_path.display()
+        )));
+    }
+    let allowed_by_volume = matches!(
+        volume_verdict,
+        Some(
+            crate::types::resources::SessionVolumeReadVerdict::WindowAllowed
+                | crate::types::resources::SessionVolumeReadVerdict::InternalAfterNotice
+        )
+    );
+    // OutsideDomain（含无 volume 资源的形态）回退 workspace/技能根判定
+    // （is_path_allowed_for_read 的域内分支只服务无判决形态的旧路径）。
+    if !allowed_by_volume
+        && !crate::types::resources::is_path_allowed_for_read(
+            &cwd,
+            &joined_path,
+            Some(&path),
+            &skill_roots,
+            session_volume.as_ref(),
+        )
+    {
+        let display_dcwd = display_cwd_or_cwd(&cwd, display_cwd.as_deref());
+        let display_path = display_dcwd.join(&input.path);
+        if let Some(access) = &session_volume_access {
+            access.set_denial_this_call(
+                "outside_workspace",
                 format!(
-                    "Permission denied: path escapes workspace sandbox: {}",
+                    "read_file path escapes workspace sandbox: {}",
                     display_path.display()
-                )
-            },
-        ));
+                ),
+            );
+        }
+        return Ok(ReadFileOutput::PermissionDenied(format!(
+            "Permission denied: path escapes workspace sandbox: {}",
+            display_path.display()
+        )));
     }
     let version = ReadFileVersion::from_contract(contract_version);
     let is_legacy = version.is_legacy();
@@ -574,7 +634,7 @@ pub(crate) async fn run_read_file(
     // ——窗口路径被 `.gsa/`、`*.log` 等模式命中时仍放行（恢复 OUTPUT-
     // DEGENERATION-GUARD「gitignored 也必须可读」的完整意图；orz 生产面
     // 本不注入 GitignoreFilter，本条收口上游 harness 集成面）。
-    if !skip_gitignore && !in_session_volume_domain {
+    if !skip_gitignore && !allowed_by_volume {
         let res = resources.lock().await;
         let respect_gitignore = res.get::<RespectGitignore>().is_some_and(|r| r.0);
         if respect_gitignore
@@ -2061,12 +2121,14 @@ mod tests {
     }
     // ===== P0-0m GSA-SESSION-VOLUME：§5 测试矩阵（工具级） =====
 
-    /// 构造注入了 SessionVolumeRoot 的测试资源（host 装配注入的等价物）。
+    /// 构造注入了 SessionVolumeRoot + SessionVolumeAccess 的测试资源
+    /// （host 装配注入的等价物——0p S2 起两者成对注入）。
     fn test_resources_with_session_volume(cwd: &std::path::Path) -> Resources {
         let mut resources = test_resources(cwd);
         let gsa_root = cwd.join(".gsa");
-        let canonical = dunce::canonicalize(&gsa_root).unwrap_or(gsa_root);
+        let canonical = dunce::canonicalize(&gsa_root).unwrap_or_else(|_| gsa_root.clone());
         resources.insert(crate::types::resources::SessionVolumeRoot(canonical));
+        resources.insert(crate::types::resources::SessionVolumeAccess::open(gsa_root));
         resources
     }
 
@@ -2126,39 +2188,132 @@ mod tests {
         }
     }
 
-    /// 矩阵 #5：`.gsa` 真实目录 + journal 等内部面 → 拒（agent-invisible
-    /// 默认；工具级 deny 落 PermissionDenied 信封）。
+    // ===== 0p S2 两段门测试组（2026-09-07，ADR-0010 §14.61 设计 B，
+    // 取代 0m 矩阵 #5 的 agent-invisible 语义——内部区改为两段式有界开放）=====
+
+    async fn run_read(resources: Resources, rel: &str) -> ReadFileOutput {
+        let tool = ReadFileTool;
+        let input = ReadFileInput {
+            path: rel.to_string(),
+            offset: None,
+            limit: None,
+            pages: None,
+            format: None,
+        };
+        xai_tool_runtime::Tool::run(&tool, test_ctx(resources.into_shared()), input)
+            .await
+            .unwrap()
+    }
+
+    /// 两段门 ①：内部区首读返回通知信封（非内容，含职责图/结构预览/
+    /// 黑板指针/询问句）+ access_state.json 落盘。
     #[tokio::test]
-    async fn read_file_denies_gsa_journal_as_agent_invisible() {
+    async fn read_file_two_stage_first_read_returns_notice_envelope() {
         let tmp = TempDir::new().unwrap();
         let ws = dunce::canonicalize(tmp.path()).unwrap();
         let gsa = ws.join(".gsa");
         std::fs::create_dir_all(&gsa).unwrap();
-        std::fs::write(gsa.join("journal.jsonl"), "{\"e\":1}\n").unwrap();
         std::fs::write(gsa.join("state.json"), "{}").unwrap();
-        let tool = ReadFileTool;
-        for rel in [".gsa/journal.jsonl", ".gsa/state.json", ".gsa"] {
-            let resources = test_resources_with_session_volume(&ws);
-            let input = ReadFileInput {
-                path: rel.to_string(),
-                offset: None,
-                limit: None,
-                pages: None,
-                format: None,
-            };
-            let result =
-                xai_tool_runtime::Tool::run(&tool, test_ctx(resources.into_shared()), input)
-                    .await
-                    .unwrap();
-            match result {
-                ReadFileOutput::PermissionDenied(msg) => {
-                    assert!(
-                        msg.contains("agent-invisible session volume"),
-                        "{rel}: expected session-volume deny, got {msg}"
-                    );
-                }
-                other => panic!("{rel}: Expected PermissionDenied, got {other:?}"),
+        let result = run_read(test_resources_with_session_volume(&ws), ".gsa/state.json").await;
+        match result {
+            ReadFileOutput::PermissionDenied(notice) => {
+                assert!(notice.contains("[session_volume_notice]"), "{notice}");
+                assert!(notice.contains("ledger/"), "{notice}");
+                assert!(notice.contains("blackboard_read"), "{notice}");
+                assert!(notice.contains("open_after_notice"), "{notice}");
             }
+            other => panic!("Expected notice envelope, got {other:?}"),
+        }
+        let state = std::fs::read_to_string(gsa.join("access_state.json")).unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(&state).unwrap();
+        assert_eq!(parsed["notice_shown"], serde_json::json!(true));
+    }
+
+    /// 两段门 ②③：二读放行（open_after_notice）+ 跨 prompt 持久
+    /// （重新 open 的资源不再通知——二次会话/进程重启语义）。
+    #[tokio::test]
+    async fn read_file_two_stage_second_read_opens_and_persists() {
+        let tmp = TempDir::new().unwrap();
+        let ws = dunce::canonicalize(tmp.path()).unwrap();
+        let gsa = ws.join(".gsa");
+        std::fs::create_dir_all(&gsa).unwrap();
+        std::fs::write(gsa.join("ledger-current.md"), "seq 1 | run_terminal_cmd\n").unwrap();
+        // 首 prompt：通知。
+        let first = run_read(
+            test_resources_with_session_volume(&ws),
+            ".gsa/ledger-current.md",
+        )
+        .await;
+        assert!(matches!(first, ReadFileOutput::PermissionDenied(_)));
+        // 二读（同 prompt）：放行。
+        let second = run_read(
+            test_resources_with_session_volume(&ws),
+            ".gsa/ledger-current.md",
+        )
+        .await;
+        match second {
+            ReadFileOutput::FileContent(content) => {
+                assert!(content.raw_output.contains("seq 1"));
+            }
+            other => panic!("Expected open_after_notice content, got {other:?}"),
+        }
+        // 跨 prompt（重新 open 装配 = 二次会话）：不再通知。
+        let third = run_read(
+            test_resources_with_session_volume(&ws),
+            ".gsa/ledger-current.md",
+        )
+        .await;
+        assert!(matches!(third, ReadFileOutput::FileContent(_)));
+    }
+
+    /// 两段门 ④：窗口类与 resources_state 直读面不经两段门——读取不产生
+    /// access_state.json（无通知副作用）。
+    #[tokio::test]
+    async fn read_file_windows_and_resource_state_skip_two_stage_gate() {
+        let tmp = TempDir::new().unwrap();
+        let ws = dunce::canonicalize(tmp.path()).unwrap();
+        let gsa = ws.join(".gsa");
+        let terminal = gsa.join("session").join("terminal");
+        std::fs::create_dir_all(&terminal).unwrap();
+        std::fs::write(terminal.join("ord-1.log"), "tail output\n").unwrap();
+        std::fs::write(gsa.join("resources_state.json"), "{\"resources\":[]}").unwrap();
+        for rel in [
+            ".gsa/session/terminal/ord-1.log",
+            ".gsa/resources_state.json",
+        ] {
+            let result = run_read(test_resources_with_session_volume(&ws), rel).await;
+            match result {
+                ReadFileOutput::FileContent(content) => {
+                    assert!(!content.raw_output.contains("[session_volume_notice]"));
+                }
+                other => panic!("{rel}: Expected direct window read, got {other:?}"),
+            }
+        }
+        assert!(
+            !gsa.join("access_state.json").exists(),
+            "窗口/直读面不得触发两段门状态落盘"
+        );
+    }
+
+    /// 两段门 ⑤：卷缺席（无 SessionVolumeRoot/Access 资源）= 两段门关闭
+    /// ——退回 Task C workspace 二元判定（0m 文档化现状：cwd 内 `.gsa`
+    /// 真实目录属 workspace 放行面），且绝不产生两段门通知。
+    #[tokio::test]
+    async fn read_file_volume_absent_gate_off_no_notice() {
+        let tmp = TempDir::new().unwrap();
+        let ws = dunce::canonicalize(tmp.path()).unwrap();
+        let gsa = ws.join(".gsa");
+        std::fs::create_dir_all(&gsa).unwrap();
+        std::fs::write(gsa.join("state.json"), "{}").unwrap();
+        let result = run_read(test_resources(&ws), ".gsa/state.json").await;
+        match result {
+            ReadFileOutput::FileContent(content) => {
+                assert!(!content.raw_output.contains("[session_volume_notice]"));
+            }
+            ReadFileOutput::PermissionDenied(msg) => {
+                assert!(!msg.contains("[session_volume_notice]"), "{msg}");
+            }
+            other => panic!("Expected Task C fallback outcome, got {other:?}"),
         }
     }
 
@@ -2287,7 +2442,8 @@ mod tests {
                 other => panic!("Expected PermissionDenied for ghost terminal-log, got {other:?}"),
             }
         }
-        // 卷内白名单外：journal.jsonl。
+        // 卷内白名单外：journal.jsonl——0p S2 两段门语义（内部区首读 =
+        // 通知信封；取代 0m 的 agent-invisible 恒拒）。
         {
             let resources = test_resources_with_session_volume(&ws);
             let input = ReadFileInput {
@@ -2304,11 +2460,11 @@ mod tests {
             match result {
                 ReadFileOutput::PermissionDenied(msg) => {
                     assert!(
-                        msg.contains("agent-invisible session volume"),
-                        "journal in arbitrary symlink target must be denied, got {msg}"
+                        msg.contains("[session_volume_notice]"),
+                        "journal in symlink target must get the two-stage notice, got {msg}"
                     );
                 }
-                other => panic!("Expected PermissionDenied for journal, got {other:?}"),
+                other => panic!("Expected notice envelope for journal, got {other:?}"),
             }
         }
     }

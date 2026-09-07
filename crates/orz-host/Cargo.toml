@@ -15,10 +15,12 @@ orz-loop = { path = "../orz-loop" }
 orz-assurance = { path = "../orz-assurance" }
 
 # Grok providers (public APIs only)
-# NOTE: orz-chat-state / orz-hooks / orz-auth / orz-secrets / orz-sandbox are
-# listed in the fusion design §3.2 but intentionally not yet declared — they
-# are wired in Phase 3 (2026-08-04 review P2-7).
+# NOTE: orz-chat-state / orz-hooks / orz-auth / orz-sandbox are listed in the
+# fusion design §3.2 but intentionally not yet declared — they are wired in
+# Phase 3 (2026-08-04 review P2-7). orz-secrets joined 2026-09-07 (0p S2 B5:
+# `.gsa` session-sidecar persistent-write scrubbing).
 orz-tools = { path = "../codegen/orz-tools" }
+orz-secrets = { workspace = true }
 orz-workspace = { path = "../codegen/orz-workspace" }
 orz-paths = { path = "../codegen/orz-paths" }
 orz-config = { path = "../codegen/orz-config" }

@@ -6,6 +6,7 @@ license = "Apache-2.0"
 description = "orz assurance kernel — gates, journal, orientation, session, sandbox, credential, permit"
 
 [dependencies]
+orz-secrets = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 sha2 = { workspace = true }

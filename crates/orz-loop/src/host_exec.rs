@@ -3182,6 +3182,22 @@ impl AgentLoopController {
                             serde_json::json!(obj.output_object_id);
                     }
                 }
+                // 0p S2 / W2 D-3（2026-09-07，ADR-0010 §14.61 设计 C）：权限
+                // 门拒绝统一结构化信封落 journal——与失败返回同纪律
+                // （policy_denial 载荷要求 status=error + 非零 exit_code，
+                // 法官族校验 _verify_v02_policy_denial 同口径）；两段门二读
+                // 放行以 session_volume_opened 落审计（设计 B4）。
+                if let Some(denial) = &res.policy_denial {
+                    completed_payload["status"] = serde_json::json!("error");
+                    completed_payload["policy_denial"] = serde_json::json!({
+                        "source": denial.source.as_str(),
+                        "code": denial.code,
+                        "reason": denial.reason,
+                    });
+                }
+                if res.session_volume_opened {
+                    completed_payload["session_volume_opened"] = serde_json::json!(true);
+                }
                 // THIN-HARNESS-REDESIGN-V2 §9.7 (2026-08-29 S5-2): 中间回报
                 // ——run_terminal_cmd 满 300s 自动后台化时，先记一条
                 // `tool_running`（运行时长/进程状态/输出活跃度/落盘指针，
@@ -3333,6 +3349,7 @@ impl AgentLoopController {
                     ToolResult {
                         output,
                         exit_code: res.exit_code,
+                        session_volume_opened: res.session_volume_opened,
                         // GAP-ENCODING-GATE (OPS-PROTOCOL §8): 重建时透传
                         // 解码阶段——此前只进 journal（tool_completed.
                         // output_encoding）却从返回结果丢失；R2 半助理层

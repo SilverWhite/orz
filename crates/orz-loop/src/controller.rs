@@ -4050,6 +4050,90 @@ mod tests {
         assert_eq!(turn_count_of(Some(0)).await, 1, "n<1 钳为 1");
     }
 
+    /// 0p S2 / W2 D-3（2026-09-07，ADR-0010 §14.61 设计 C）：权限门拒绝的
+    /// 结构化信封落 journal——`tool_completed.policy_denial{source,code,
+    /// reason}` + `status=error`（与失败返回同纪律，法官族同口径）；
+    /// 两段门二读放行落 `session_volume_opened`（open_after_notice 审计）。
+    #[tokio::test]
+    async fn tool_completed_journals_policy_denial_and_opened_marker() {
+        async fn journal_events_of(tool_result: ToolResult) -> Vec<serde_json::Value> {
+            let dir = test_dir();
+            let journal = JournalRecorder::new(dir.clone());
+            let host = TestHost {
+                journal,
+                tool_result: Some(tool_result),
+            };
+            let fake = Arc::new(FakeProvider::new(vec![
+                ScriptedResponse::tool_calls(vec![ToolCall {
+                    name: "read_file".to_string(),
+                    arguments: serde_json::json!({"path": ".gsa/ledger/current.md"}),
+                    call_id: "call-d3".to_string(),
+                }]),
+                ScriptedResponse::text("完成"),
+                ScriptedResponse::text("完成"),
+            ]));
+            let gateway: Arc<dyn ModelGateway> = fake;
+            let controller = AgentLoopController::with_gateway(gateway);
+            controller
+                .run_turn(&host, "读卷", "RUN-D3", MANIFEST, 0, None, None, None)
+                .await
+                .unwrap();
+            let events = std::fs::read_to_string(dir.join("events.jsonl")).unwrap();
+            let lines: Vec<serde_json::Value> = events
+                .lines()
+                .filter_map(|l| serde_json::from_str(l).ok())
+                .collect();
+            let _ = std::fs::remove_dir_all(&dir);
+            lines
+        }
+
+        // ① 通知拒绝（session_volume_notice）：status=error + 非零
+        // exit_code + 结构化 policy_denial（法官族校验同口径）。
+        let events = journal_events_of(ToolResult {
+            output: "[session_volume_notice] `.gsa` 是运行时会话卷……".to_string(),
+            exit_code: Some(1),
+            policy_denial: Some(crate::host::PolicyDenial {
+                source: crate::host::PolicyDenialSource::Permission,
+                code: "session_volume_notice".to_string(),
+                reason: "session volume first access".to_string(),
+            }),
+            ..Default::default()
+        })
+        .await;
+        let completed = events
+            .iter()
+            .find(|e| e["event_type"] == "tool_completed" && e["payload"]["call_id"] == "call-d3")
+            .expect("tool_completed for the denied read");
+        assert_eq!(completed["payload"]["status"], "error", "{completed}");
+        assert_eq!(
+            completed["payload"]["policy_denial"]["source"],
+            "permission"
+        );
+        assert_eq!(
+            completed["payload"]["policy_denial"]["code"],
+            "session_volume_notice"
+        );
+        assert!(completed["payload"]["exit_code"].as_i64().unwrap_or(0) != 0);
+
+        // ② 二读放行：session_volume_opened 落审计（open_after_notice）。
+        let events = journal_events_of(ToolResult {
+            output: "ledger content".to_string(),
+            exit_code: Some(0),
+            session_volume_opened: true,
+            ..Default::default()
+        })
+        .await;
+        let completed = events
+            .iter()
+            .find(|e| e["event_type"] == "tool_completed" && e["payload"]["call_id"] == "call-d3")
+            .expect("tool_completed for the opened read");
+        assert_eq!(
+            completed["payload"]["session_volume_opened"],
+            serde_json::json!(true)
+        );
+        assert_eq!(completed["payload"]["exit_code"], serde_json::json!(0));
+    }
+
     #[test]
     fn parse_acaf_fail_closed_env_accepts_canonical_tokens() {
         for on in ["1", "true", "yes", "on", " TRUE ", " yes "] {

@@ -375,6 +375,16 @@ fn load_activation_sidecar(base_dir: &Path, session_id: &str) -> Option<StoredAc
 
 /// Persist the activation snapshot — best-effort (a read-only workspace must
 /// never fail the run); failures are WARNED (orientation sidecar pattern).
+/// 0p S2 B5（2026-09-07，ADR-0010 §14.61 设计 B5）：`.gsa` 侧车持久化的
+/// 统一脱敏出口——序列化为 JSON 后对全部字符串值做 orz-secrets 机械脱敏
+/// （sk-shape 等结构化形态 + 占位符替换，确定性），再落盘。key 不落卷是
+/// 两段门放开的前提不变量；脱敏失败 = 不写盘（fail-closed，不落明文）。
+fn scrubbed_json_pretty<T: serde::Serialize>(value: &T) -> Option<String> {
+    let mut json = serde_json::to_value(value).ok()?;
+    orz_secrets::redact_json_string_values(&mut json);
+    serde_json::to_string_pretty(&json).ok()
+}
+
 fn persist_activation_sidecar(base_dir: &Path, session_id: &str, state: &StoredActivationSnapshot) {
     let path = activation_sidecar_path(base_dir, session_id);
     if let Some(parent) = path.parent()
@@ -386,13 +396,13 @@ fn persist_activation_sidecar(base_dir: &Path, session_id: &str, state: &StoredA
         );
         return;
     }
-    match serde_json::to_string_pretty(state) {
-        Ok(json) => {
+    match scrubbed_json_pretty(state) {
+        Some(json) => {
             if let Err(e) = std::fs::write(&path, json) {
                 tracing::warn!("activation sidecar write failed ({}): {e}", path.display());
             }
         }
-        Err(e) => tracing::warn!("activation sidecar serialize failed: {e}"),
+        None => tracing::warn!("activation sidecar scrub/serialize failed — not written"),
     }
 }
 
@@ -539,13 +549,13 @@ fn persist_orientation_sidecar(base_dir: &Path, session_id: &str, state: &Orient
         );
         return;
     }
-    match serde_json::to_string_pretty(state) {
-        Ok(json) => {
+    match scrubbed_json_pretty(state) {
+        Some(json) => {
             if let Err(e) = std::fs::write(&path, json) {
                 tracing::warn!("orientation sidecar write failed ({}): {e}", path.display());
             }
         }
-        Err(e) => tracing::warn!("orientation sidecar serialize failed: {e}"),
+        None => tracing::warn!("orientation sidecar scrub/serialize failed — not written"),
     }
 }
 
@@ -619,8 +629,8 @@ fn persist_conversation_sidecar(base_dir: &Path, continuation: &StoredConversati
         );
         return;
     }
-    match serde_json::to_string_pretty(continuation) {
-        Ok(json) => {
+    match scrubbed_json_pretty(continuation) {
+        Some(json) => {
             if let Err(e) = std::fs::write(&path, json) {
                 tracing::warn!(
                     "conversation sidecar write failed ({}): {e}",
@@ -628,7 +638,7 @@ fn persist_conversation_sidecar(base_dir: &Path, continuation: &StoredConversati
                 );
             }
         }
-        Err(e) => tracing::warn!("conversation sidecar serialize failed: {e}"),
+        None => tracing::warn!("conversation sidecar scrub/serialize failed — not written"),
     }
 }
 
@@ -2107,6 +2117,47 @@ mod tests {
             .collect();
         dirs.sort();
         dirs.iter().map(|d| d.join("events.jsonl")).collect()
+    }
+
+    /// 0p S2 B5（2026-09-07，ADR-0010 §14.61 设计 B5）：`.gsa` 会话侧车
+    /// 持久化写入路径接 orz-secrets 脱敏——conversations sidecar（对话 +
+    /// 黑板 live 快照）落盘前对全部字符串值机械脱敏；archive 包直接压缩
+    /// sidecar 字节，随本漏斗同链覆盖。
+    #[test]
+    fn conversation_sidecar_scrubs_secret_shaped_strings() {
+        let base = std::env::temp_dir().join(format!(
+            "orz-sidecar-scrub-{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let _ = std::fs::remove_dir_all(&base);
+        std::fs::create_dir_all(&base).unwrap();
+        let mut continuation = StoredConversation::empty("sess-scrub-01", None);
+        let secret = "sk-abcdefghijklmnopqrstuvwxyz012345";
+        continuation
+            .messages
+            .push(orz_loop::gateway::model::Message {
+                role: orz_loop::gateway::model::Role::Tool,
+                content: format!("pip install --api-key {secret} done"),
+                tool_call_id: Some("call-scrub-1".to_string()),
+                tool_calls: Vec::new(),
+                reasoning_content: None,
+                round: None,
+            });
+        persist_conversation_sidecar(&base, &continuation);
+        let sidecar = base
+            .join(".gsa")
+            .join("conversations")
+            .join("sess-scr.json");
+        let content = std::fs::read_to_string(sidecar).unwrap();
+        assert!(
+            !content.contains(secret),
+            "secret-shaped strings must not reach the sidecar: {content}"
+        );
+        assert!(content.contains("[REDACTED_SECRET]"), "{content}");
+        let _ = std::fs::remove_dir_all(&base);
     }
 
     /// ACAF shadow 默认（ACAF signer 存量失败族修复，2026-09-07）：本文件

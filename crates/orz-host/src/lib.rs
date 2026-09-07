@@ -711,6 +711,46 @@ impl OrzHost {
             structured: crate::tools::structured_from_output(&result.output),
             ..Default::default()
         };
+        // 0p S2 两段门 / W2 D-3（2026-09-07，ADR-0010 §14.61 设计 B/C）：
+        // 会话卷访问状态的 per-call 瞬态旗标转译——内部区首读通知 →
+        // 结构化 `policy_denial{source=permission, code=session_volume_
+        // notice}` + exit_code=1；普通读沙箱拒绝 → `policy_denial`
+        // （code=outside_workspace 等）+ exit_code=1；二读放行 →
+        // `session_volume_opened`（journal 记 open_after_notice）。结构化
+        // seam 在资源旗标上，绝不做输出文本前缀判定
+        // （FUS-CONSOLE-POLICY-DENIAL 纪律）。
+        {
+            let access = self
+                .registry
+                .toolset()
+                .resources
+                .lock()
+                .await
+                .get::<orz_tools::types::resources::SessionVolumeAccess>()
+                .cloned();
+            if let Some(access) = access {
+                if access.take_notice_this_call() {
+                    tool_result.exit_code = Some(1);
+                    tool_result.policy_denial = Some(orz_loop::host::PolicyDenial {
+                        source: orz_loop::host::PolicyDenialSource::Permission,
+                        code: "session_volume_notice".to_string(),
+                        reason: "session volume first access: duties and structure preview \
+                                 provided; read again to open (open_after_notice)"
+                            .to_string(),
+                    });
+                } else if let Some(denial) = access.take_denial_this_call() {
+                    tool_result.exit_code = Some(1);
+                    tool_result.policy_denial = Some(orz_loop::host::PolicyDenial {
+                        source: orz_loop::host::PolicyDenialSource::Permission,
+                        code: denial.code.to_string(),
+                        reason: denial.reason,
+                    });
+                }
+                if access.take_opened_this_call() {
+                    tool_result.session_volume_opened = true;
+                }
+            }
+        }
         // THIN-HARNESS-REDESIGN-V2 §9.7 (2026-08-29 S5-2): 中间回报结构化
         // 透传——run_terminal_cmd 自动后台化返回 `BackgroundTaskStarted`
         // （命令仍在运行）：填 `mid_run` 供控制器记 `tool_running` 事件；
@@ -2787,9 +2827,10 @@ mod tests {
             "read-back must return the logged content"
         );
 
-        // 3) 卷内非窗口面负测：agent-invisible（资源在场时域判定先于
-        //    workspace 兜底）。宿主面拒绝以 Ok 信封 + Permission denied
-        //    文案返回（复审批 P3-① 域内 deny 文案）。
+        // 3) 卷内非窗口面：0p S2 两段门（ADR-0010 §14.61 设计 B，取代
+        //    0m 的 agent-invisible 恒拒）——内部区首读返回通知信封
+        //    （非内容 + 职责图/结构预览/黑板指针/询问句），access_state
+        //    落盘；二读放行（open_after_notice）。
         let denied = host
             .call_tool(
                 "read_file",
@@ -2799,10 +2840,36 @@ mod tests {
             .await
             .expect("deny path surfaces as a result envelope");
         assert!(
-            denied.output.contains("Permission denied")
-                && denied.output.contains("agent-invisible session volume"),
-            "non-window volume interior must stay agent-invisible: {}",
+            denied.output.contains("[session_volume_notice]"),
+            "non-window volume interior first read must return the notice envelope: {}",
             denied.output
+        );
+        // D-3 闭合（设计 C）：拒绝信封结构化——policy_denial{source=
+        // permission, code=session_volume_notice} + exit_code=1（journal
+        // 面由 host_exec 落 status=error + policy_denial，见 orz-loop 测试）。
+        let denial = denied
+            .policy_denial
+            .as_ref()
+            .expect("structured denial envelope");
+        assert_eq!(denial.source.as_str(), "permission");
+        assert_eq!(denial.code, "session_volume_notice");
+        assert_eq!(denied.exit_code, Some(1));
+        let opened = host
+            .call_tool(
+                "read_file",
+                serde_json::json!({ "target_file": ".gsa/secret.txt" }),
+                "call-0m-s3-open",
+            )
+            .await
+            .expect("second read must open");
+        assert!(
+            !opened.output.contains("[session_volume_notice]"),
+            "second read must be opened (open_after_notice): {}",
+            opened.output
+        );
+        assert!(
+            opened.session_volume_opened,
+            "post-notice open must set the audit marker"
         );
 
         // 4) run_tests 输出窗口：全量输出 `run_tests_output.txt` 落卷且

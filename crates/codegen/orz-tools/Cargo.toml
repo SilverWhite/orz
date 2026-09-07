@@ -17,6 +17,7 @@ async-openai = { workspace = true }
 encoding_rs = { workspace = true }
 xai-tty-utils = { workspace = true }
 orz-config = { path = "../orz-config" }
+orz-secrets = { workspace = true }
 orz-tools-api = { path = "../orz-tools-api" }
 orz-workspace-types = { path = "../orz-workspace-types" }
 orz-version = { workspace = true }

@@ -209,6 +209,10 @@ pub fn append_ledger_rows(path: &std::path::Path, rows: &[ActionLedgerRow]) -> s
         buf.push_str(&external_row_line(seq, row));
         buf.push('\n');
     }
+    // 0p S2 B5（2026-09-07，ADR-0010 §14.61 设计 B5）：台账落
+    // `.gsa/ledger/`，是会话卷持久化面——行文本（命令摘要/订单摘要）经
+    // orz-secrets 机械脱敏后写盘（key 不落卷不变量）。
+    let buf = orz_secrets::redact_secrets(&buf);
     let mut file = std::fs::OpenOptions::new()
         .create(true)
         .append(true)
@@ -1767,6 +1771,39 @@ mod tests {
             "row bounded by field cap + prefix: {}",
             line2.chars().count()
         );
+    }
+
+    /// 0p S2 B5（2026-09-07，ADR-0010 §14.61 设计 B5）：台账落
+    /// `.gsa/ledger/`（会话卷持久化面）——append 漏斗对行文本做
+    /// orz-secrets 机械脱敏（sk-shape → 占位符），key 不落卷不变量。
+    #[test]
+    fn append_ledger_rows_scrubs_secret_shaped_targets() {
+        let dir = std::env::temp_dir().join(format!(
+            "orz-ledger-scrub-{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = ledger_file_path(&dir);
+        let secret = "sk-abcdefghijklmnopqrstuvwxyz012345";
+        let row = ActionLedgerRow {
+            round_index: 0,
+            tool: "run_terminal_cmd".to_string(),
+            target: format!("pip install --api-key {secret}"),
+            pointer: "sha256:ef".to_string(),
+            final_reply: String::new(),
+        };
+        append_ledger_rows(&path, &[row]).unwrap();
+        let content = std::fs::read_to_string(&path).unwrap();
+        assert!(
+            !content.contains(secret),
+            "secret-shaped strings must not reach the ledger: {content}"
+        );
+        assert!(content.contains("[REDACTED_SECRET]"), "{content}");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// 2026-08-18 S4 复验回归：多行最终回复的批次写入后，下一次追加必须

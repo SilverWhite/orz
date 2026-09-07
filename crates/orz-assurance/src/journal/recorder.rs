@@ -86,8 +86,14 @@ impl JournalRecorder {
     /// `TerminalAppended` after a terminal event. Callers must treat a refused
     /// append as a journal integrity violation (the event was NOT recorded).
     pub fn record(&self, event: RunEvent) -> Result<(), JournalRecorderError> {
-        // Auto-seal the event (compute hashes)
         let mut event = event;
+        // 0p S2 B5（2026-09-07，ADR-0010 §14.61 设计 B5）：journal 落
+        // `.gsa/runs/`，是会话卷持久化面——写盘前在唯一漏斗对 payload 全部
+        // 字符串值做 orz-secrets 机械脱敏（sk-shape 等结构化形态 + 占位符
+        // 替换，确定性）；脱敏先于哈希封印，链与落盘内容一致。key 不落卷
+        // 是两段门放开的前提不变量。
+        orz_secrets::redact_json_string_values(&mut event.payload);
+        // Auto-seal the event (compute hashes)
         seal_event(&mut event)?;
 
         // POST-PLANA BUGFIX #1: blocking send — never silently drop.
@@ -109,6 +115,8 @@ impl JournalRecorder {
     /// Uses `send().await` instead of `blocking_send`. Otherwise identical to `record()`.
     pub async fn record_async(&self, event: RunEvent) -> Result<(), JournalRecorderError> {
         let mut event = event;
+        // 0p S2 B5：与 record 同一漏斗纪律（见上）。
+        orz_secrets::redact_json_string_values(&mut event.payload);
         seal_event(&mut event)?;
 
         let (ack_tx, ack_rx) = oneshot::channel();
@@ -355,6 +363,35 @@ mod tests {
             Redaction::None,
             "2026-08-04T00:00:00Z".into(),
         )
+    }
+
+    /// 0p S2 B5（2026-09-07，ADR-0010 §14.61 设计 B5）：journal 落
+    /// `.gsa/runs/`（会话卷持久化面）——record 漏斗对 payload 字符串值做
+    /// orz-secrets 机械脱敏（sk-shape → 占位符），脱敏先于哈希封印。
+    #[test]
+    fn record_scrubs_secret_shaped_payload_strings() {
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        let _guard = rt.enter();
+        let dir = temp_dir();
+        let recorder = JournalRecorder::new(dir.clone());
+
+        let mut e = make_event("RUN-SCRUB", 0, EventType::ToolCompleted, None);
+        let secret = "sk-abcdefghijklmnopqrstuvwxyz012345";
+        e.payload = serde_json::json!({
+            "tool": "run_terminal_cmd",
+            "call_id": "call-scrub-1",
+            "exit_code": 0,
+            "output": format!("pip install --api-key {secret} done"),
+        });
+        recorder.record(e).unwrap();
+        recorder.shutdown().unwrap();
+
+        let content = std::fs::read_to_string(dir.join("events.jsonl")).unwrap();
+        assert!(
+            !content.contains(secret),
+            "secret-shaped strings must not reach the journal: {content}"
+        );
+        assert!(content.contains("[REDACTED_SECRET]"), "{content}");
     }
 
     #[test]

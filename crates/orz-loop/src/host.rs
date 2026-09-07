@@ -104,6 +104,10 @@ pub enum ToolErrorKind {
 pub struct ToolResult {
     pub output: String,
     pub exit_code: Option<i32>,
+    /// 0p S2 两段门（2026-09-07，ADR-0010 §14.61 设计 B4）：本次调用经
+    /// 通知后放行了会话卷内部区读取——随 ToolCompleted 事件面落
+    /// `session_volume_opened`（journal 记 `open_after_notice` 审计）。
+    pub session_volume_opened: bool,
     /// AGENT-DELIVERY-FLOW (2026-08-23, 设计 §2.3): workspace changes a
     /// mutation-capable host tool call caused (capped list; same semantics
     /// as the run_tests delta). Populated by orz-host for mutation tools;
