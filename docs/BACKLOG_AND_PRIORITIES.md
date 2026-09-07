@@ -8,13 +8,13 @@
 
 ## 未闭合计数（2026-09-04 口径）
 
-- 未闭合总数：**28 项**（2026-08-31：P2-10 阶段 3 验证闭环 38 → 32；0k S4 实机复验闭环 32 → 30；2026-09-01：P2-11 DC 强制模板轮清理闭合 30 → 29，P3「DC 硬信号 4/6」退役 29 → 28；2026-09-02：P2-12 讨论稿登记不动计数；2026-09-03：P2-13 设计定稿与 B1 S1/S2 完成，未入账、计数不变；2026-09-04：P2-14 设计定稿与裁决收口 + S1/S2 实施收口（主会话转 v0.3、压缩 e2e 全串行绿），未入账、计数不变；2026-09-06：P0-GOV 00 任务 D 全部闭合（S2a–S2d + S3/S4 翻转），登记不动计数）。TODO `[ ]` 明细含父/子项，计数以 BACKLOG 为准。
+- 未闭合总数：**28 项**（2026-08-31：P2-10 阶段 3 验证闭环 38 → 32；0k S4 实机复验闭环 32 → 30；2026-09-01：P2-11 DC 强制模板轮清理闭合 30 → 29，P3「DC 硬信号 4/6」退役 29 → 28；2026-09-02：P2-12 讨论稿登记不动计数；2026-09-03：P2-13 设计定稿与 B1 S1/S2 完成，未入账、计数不变；2026-09-04：P2-14 设计定稿与裁决收口 + S1/S2 实施收口（主会话转 v0.3、压缩 e2e 全串行绿），未入账、计数不变；2026-09-06：P0-GOV 00 任务 D 全部闭合（S2a–S2d + S3/S4 翻转），登记不动计数；2026-09-07：0o S3/S4 集中实机验证批排期登记，不动计数）。TODO `[ ]` 明细含父/子项，计数以 BACKLOG 为准。
 
 ## 优先级总览
 
 | 优先级 | 含义 | 开放项（入口小节） |
 |---|---|---|
-| P0 | 当前工作集：设计已冻结，裁决后立即实施 | FUS-BENCHMARK-FULL-EXEC 验证②③(reward)④⑤（0b）；0d 后续 3/4/5 S4 复验（0d）；THIN-HARNESS-REDESIGN-V2 余项（0j）；WINDOWS-HIGH-NIST-MAX-FRICTION ⑥/⑦（0l）；GSA-SESSION-VOLUME-BOTTOM-LAYER S1–S4（0m，2026-09-06 用户裁决放行）——P0-GOV 00（含任务 D）已于 2026-09-06 全部闭合 |
+| P0 | 当前工作集：设计已冻结，裁决后立即实施 | FUS-BENCHMARK-FULL-EXEC 验证②③(reward)④⑤（0b）；0d 后续 3/4/5 S4 复验（0d）；THIN-HARNESS-REDESIGN-V2 余项（0j）；WINDOWS-HIGH-NIST-MAX-FRICTION ⑥/⑦（0l）；GSA-SESSION-VOLUME-BOTTOM-LAYER S1–S4（0m，2026-09-06 用户裁决放行）；S3/S4 集中实机验证批（0o，2026-09-07 排期放行——集中执行上述实机类开放项，见排期文档）——P0-GOV 00（含任务 D）已于 2026-09-06 全部闭合 |
 | P1 | 无需裁决，可与 P0 并行 | FUS-COMPONENT-REGISTER（4）；GAP-WINDOWS-EVIDENCE（5）；IMPL-DEEPSEEK-TRANSPORT / SEC-CREDENTIALS live 证据（6）；ORZ-SESSION-CONTEXT-MONITOR（6d） |
 | P2 | 生产化决策门：需用户裁决 | IMPL-CONTROL-FABRIC Slice 3/4（7）；OPS-PROTOCOL 裁剪与接线裁决（8）；MODEL-RESIDUAL-PRESSURE-FOLLOWUP（11）；COMPRESSION-LINGUISTIC-FORMAL-LAYER（12）；BLACKBOARD-CONVERSATION-SCOPE-FOLD B2–B4（13） |
 | P3 | 收尾 / 清理 | EVIDENCE-LOCAL-BROWSER（9）；GATE-CHAIN（10）；遗留小项（11） |
@@ -597,6 +597,23 @@ GLM F2 处置转排期（2026-09-06 用户裁决）：`orz-host/src/approval.rs`
 [GLM 登记审计](audits/GLM_EXTERNAL_REVIEW_REGISTRATION_2026-09-04.md) /
 [处置 + S2 排期审计](audits/P0_GOV_GLM_DISPOSITION_AND_TASK_D_S2_SCHEDULE_2026-09-06.md)。
 登记不动计数（排期批，闭合时动账）。
+
+### 0o. S3/S4 集中实机验证批（2026-09-07 排期，同日用户裁决放行）
+
+- 入口：[排期文档](LIVE_VERIFICATION_BATCH_SCHEDULE_2026-09-07.md)；TODO P0-0o。
+- 来源（2026-09-07 用户裁决）：P0 线剩余项基本均为实机验证类——一次双
+  平台重建（同一 orz 源，版本 0.3.1）+ 三批次实机跑批 + 离线分析，一份
+  journal 喂多个判据，统一分析一次性收口，免逐项流程放行。
+- 用户裁决：① 版本号 0.3.1（过程验证版本，非修完版本）；② 放行纪律 =
+  事实可严格放行即可闭合，不逐项流程放行——P2-11×3 / P2-12 / P2-13 B4 /
+  P2-14 各项 S4 搭批次 journal 就地核验闭合。
+- 覆盖：0m S3/S4；0b ②③④（⑤ 89 题独立用户门不混入）；0d 后续 3/4/5
+  S4；0j W1-R1 S4（W3-R3 A/B 搭小样本成绩，实现余项另线）；0l ⑥ agent
+  主载 + ⑦ 模型侧；TER T2.3/T2.4/M3；P2-11×3 / P2-12 / P2-13 B4 /
+  P2-14 的 S3+S4。
+- 边界：批次期间 orz 源冻结（仅版本 bump 一次提交）；0d 后续 3/5 依赖
+  真实断连/解码错误复现，未复现则观察登记不硬闭合。
+- 计数：排期登记不动计数（闭合时按各条目自身小节入账）。
 
 ### 1. FUS-TOOL-PROBE（`implemented`；P0-A 批次 1-7 与 P0-A-2 已闭合）
 

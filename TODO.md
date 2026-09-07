@@ -15,7 +15,7 @@
 ## 未闭合扫描快照（2026-08-31 清理轮）
 
 - 未闭合总数：**28 项**（BACKLOG 计数口径，2026-08-31：阶段 3 验证闭环 38 → 32；0k S4 实机复验闭环 32 → 30；P2-11 设计轮登记不动计数；2026-09-01：P2-11 DC 强制模板轮清理闭合 30 → 29，P3「DC 硬信号 4/6」退役 29 → 28；2026-09-02：P2-12 讨论稿登记不动计数，28 不变）。TODO `[ ]` 明细含父/子项，计数以 BACKLOG 为准。
-- P0：FUS-BENCHMARK-FULL-EXEC 验证②③④⑤ + 闭合（见 P0-F）；0d 后续 3/4/5 的 S4 复验（各 1，S3 已随合并批次核证闭合）；0j（W1-R1 S4 复验、W3-R3 余项×3、W4-R4 S5-2 总项 + 验证期发现）；0l（WINDOWS-HIGH-NIST-MAX-FRICTION 设计定稿、实施待放行，见 P0-0l）；0m（GSA-SESSION-VOLUME 2026-09-06 用户裁决放行，S1–S4 排期实施，见 P0-0m）。2026-09-06 补记：任务 D 已全部闭合（S2a–S2d + S3/S4 翻转，P0-GOV 00 收口）；GAP-APPROVAL-PROMPTER（0n）排期后同日延期（无具体设计文档项非急切/必需，S1 设计定稿前置，见 P0-0n）。
+- P0：FUS-BENCHMARK-FULL-EXEC 验证②③④⑤ + 闭合（见 P0-F）；0d 后续 3/4/5 的 S4 复验（各 1，S3 已随合并批次核证闭合）；0j（W1-R1 S4 复验、W3-R3 余项×3、W4-R4 S5-2 总项 + 验证期发现）；0l（WINDOWS-HIGH-NIST-MAX-FRICTION 设计定稿、实施待放行，见 P0-0l）；0m（GSA-SESSION-VOLUME 2026-09-06 用户裁决放行，S1–S4 排期实施，见 P0-0m）。2026-09-06 补记：任务 D 已全部闭合（S2a–S2d + S3/S4 翻转，P0-GOV 00 收口）；GAP-APPROVAL-PROMPTER（0n）排期后同日延期（无具体设计文档项非急切/必需，S1 设计定稿前置，见 P0-0n）。2026-09-07 补记：0o S3/S4 集中实机验证批排期登记（双平台重建 + 三批次跑批，一份 journal 喂多判据，用户裁决放行，见 P0-0o）。
 - P1：FUS-COMPONENT-REGISTER 组件审计；GAP-WINDOWS-EVIDENCE 三项；IMPL-DEEPSEEK-TRANSPORT DeepSeek live 晋级证据；ORZ-SESSION-CONTEXT-MONITOR 四项。
 - P2：IMPL-CONTROL-FABRIC（Slice 3 / Slice 4 / 可选）；OPS-PROTOCOL（裁剪设计 + 生产接线裁决）；MODEL-RESIDUAL-PRESSURE-FOLLOWUP 四项（P2-11）；COMPRESSION-LINGUISTIC-FORMAL-LAYER（P2-12，2026-09-02 登记：域标注 + 失败目标聚合 + 建构暂缓，设计/实施待放行）。
 - P3：EVIDENCE-LOCAL-BROWSER、GATE-CHAIN、observed-scope 枚举、V11-IMPL-003、V11-IMPL-007、orz-host flaky（DC 硬信号已随 P2-11 退役）。
@@ -441,6 +441,35 @@ GLM F2 处置转排期（2026-09-06 用户裁决）：`orz-host/src/approval.rs`
 [GLM 登记审计](docs/audits/GLM_EXTERNAL_REVIEW_REGISTRATION_2026-09-04.md) /
 [处置 + S2 排期审计](docs/audits/P0_GOV_GLM_DISPOSITION_AND_TASK_D_S2_SCHEDULE_2026-09-06.md) /
 [BACKLOG 0n](docs/BACKLOG_AND_PRIORITIES.md)。
+
+### P0-0o S3/S4 集中实机验证批（2026-09-07 排期，同日用户裁决放行）
+
+> 入口：[排期文档](docs/LIVE_VERIFICATION_BATCH_SCHEDULE_2026-09-07.md) /
+> [BACKLOG 0o](docs/BACKLOG_AND_PRIORITIES.md)。
+> 裁决：版本 0.3.1（过程验证版本，非修完版本）；放行 = 事实可严格放行即
+> 闭合，不逐项流程放行；一份 journal 喂多个判据、统一分析一次性收口。
+> orz 源冻结基线 `a1b73aeb`，批次期间仅版本 bump 一次提交。
+
+- [ ] T0 双平台重建：orz 版本 bump 0.3.1 → Linux musl 三件套（闭合 0b ②
+  / P2-14 S3 / P2-11×3 S3，P2-12/P2-13 S3 翻新注记）→ Windows 三件套 +
+  VM 同步 + DryRun + enforcement-probe（闭合 TER T2.4）。
+- [ ] T1 批次 0（本地实机）：0m S3——`.gsa` symlink 会话卷实机构造 +
+  补读链/run_tests 窗口端到端 + GAP-GSA-SYMLINK-STALE-TEST 注记演进。
+- [ ] T2 批次 W1（VM 确定性短批）：TER T2.3——fake 场景 auto-bg 跨调用
+  存活 / 输出持续落盘 / 完成提醒 / `tool_running(idle_killed)` journal
+  断言。
+- [ ] T3 批次 W2（VM 任务批）：chunk1 复跑 + chunk2/chunk3 续跑（TB2.1
+  错题集 9 题 3 题/批，`ORZ_F6_PUSH=on` + 官方墙钟唯一）——0l ⑥ agent
+  主载 + 记账、0l ⑦ 模型侧 §7 判据、TER T3.1–T3.5。
+- [ ] T4 批次 L（Linux/TB2 容器批）：make-doom（0b ③ + P2-14 S4 /
+  P2-13 B4 / P2-12 S4 长会话遥测）、compile-compcert +
+  hf-model-inference（0b ④ + web 通道 A/B）、dna-assembly（0d 后续 5）；
+  全批通用统计：零 400 + 命中率 ≥90%（0d 后续 3/4、0j W1-R1）+ 哨兵 ≤3
+  + P2-11 三项 S4（增量头/temporal/deps/retryable）。
+- [ ] T5 批次 O（离线）：0j W1-R1 EGFP/sam-cell-seg span 回放 + 构造真
+  循环触发；判据分析脚本化统一出表。
+- [ ] T6 统一收口：逐项审计/复验记录（docs/audits/）+ BACKLOG/TODO/
+  TODO2/BACKLOG2/索引同步 + 计数入账 + manifest 重算 + 门禁 Exit 0。
 
 ### P0-B FUS-RETRIEVAL-MECH（`implemented`；批次 1-6 全部闭合 2026-08-14，保留供核对）
 
