@@ -102,6 +102,9 @@ fn append_grill_record(
             if let Some(err) = error {
                 record["error"] = serde_json::json!(err);
             }
+            // 0p S2 复审 P2 修复（B5 第 5 漏斗，2026-09-07）：grill 会话
+            // 记录落卷（`.gsa/grill/*.jsonl`）接 orz-secrets 机械脱敏。
+            orz_secrets::redact_json_string_values(&mut record);
             let _ = writeln!(f, "{record}");
         }
         Err(e) => tracing::warn!("grill JSONL append failed: {e}"),
@@ -120,16 +123,15 @@ fn append_grill_terminal(log_path: &Path, episode: u32, summary: &str) {
         .open(log_path)
     {
         Ok(mut f) => {
-            let _ = writeln!(
-                f,
-                "{}",
-                serde_json::json!({
-                    "terminal": "finished",
-                    "episode": episode,
-                    "summary": summary,
-                    "timestamp": chrono::Utc::now().to_rfc3339(),
-                })
-            );
+            let mut record = serde_json::json!({
+                "terminal": "finished",
+                "episode": episode,
+                "summary": summary,
+                "timestamp": chrono::Utc::now().to_rfc3339(),
+            });
+            // 0p S2 复审 P2 修复（B5 第 5 漏斗，2026-09-07）：同 grill 记录。
+            orz_secrets::redact_json_string_values(&mut record);
+            let _ = writeln!(f, "{}", record);
         }
         Err(e) => tracing::warn!("grill JSONL terminal append failed: {e}"),
     }

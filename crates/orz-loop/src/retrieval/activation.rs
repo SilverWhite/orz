@@ -42,13 +42,19 @@ impl AgentLoopController {
         );
         let path = dir.join(&name);
         match serde_json::to_string_pretty(&committed.payload) {
-            Ok(json) => match std::fs::write(&path, json) {
-                Ok(()) => Some(path.to_string_lossy().to_string()),
-                Err(e) => {
-                    tracing::warn!("result artifact write failed ({}): {e}", path.display());
-                    None
+            // 0p S2 复审 P1-2 修复（B5 第 5 漏斗，2026-09-07，ADR-0010
+            // §14.61）：检索结果工件与 journal 同目录（runs/<run>/
+            // retrieval-results/），却绕过 journal record 漏斗直写盘——
+            // 落盘前接 orz-secrets 机械脱敏，key 不落卷不变量闭合旁路。
+            Ok(json) => {
+                match std::fs::write(&path, orz_secrets::redact_secrets(&json).as_bytes()) {
+                    Ok(()) => Some(path.to_string_lossy().to_string()),
+                    Err(e) => {
+                        tracing::warn!("result artifact write failed ({}): {e}", path.display());
+                        None
+                    }
                 }
-            },
+            }
             Err(e) => {
                 tracing::warn!("result artifact serialize failed: {e}");
                 None

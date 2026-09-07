@@ -1,6 +1,7 @@
 use regex::{Regex, RegexSet};
 use std::borrow::Cow;
-use std::sync::LazyLock;
+use std::collections::HashSet;
+use std::sync::{LazyLock, RwLock};
 
 const REDACTED: &str = "[REDACTED_SECRET]";
 const REDACTED_URL_VALUE: &str = "redacted";
@@ -91,11 +92,79 @@ static MATCH_ANY: LazyLock<RegexSet> = LazyLock::new(|| {
     .expect("redact_secrets RegexSet")
 });
 
+/// 已知密钥值字面替换注册表（0p S2 B5，2026-09-07，ADR-0010 §14.61：
+/// 「sk-shape + 已知 key 值字面替换占位符」的后半——无 sk- 前缀、无赋值
+/// 形态的裸密钥值，只有进程显式登记后才能拦）。注册表空时行为与纯
+/// shape 检测完全一致（零新增误脱敏面）；登记后按字面（regex escape
+/// 精确匹配，非子串模糊）替换为 [`REDACTED`]。
+struct KnownSecrets {
+    values: HashSet<String>,
+    regex: Option<Regex>,
+}
+
+static KNOWN_SECRETS: LazyLock<RwLock<KnownSecrets>> = LazyLock::new(|| {
+    RwLock::new(KnownSecrets {
+        values: HashSet::new(),
+        regex: None,
+    })
+});
+
+/// 登记一个进程内已知密钥值（如模型 API key）。空白 / 长度 <8 的值忽略
+/// （8 字符下限与 SECRET_ASSIGNMENT_REGEX 一致，避免占位符级误伤）；
+/// 重复登记幂等。
+pub fn register_known_secret(value: &str) {
+    let value = value.trim();
+    if value.chars().count() < 8 {
+        return;
+    }
+    let mut registry = KNOWN_SECRETS.write().unwrap();
+    if registry.values.insert(value.to_string()) {
+        let pattern = registry
+            .values
+            .iter()
+            .map(|v| regex::escape(v))
+            .collect::<Vec<_>>()
+            .join("|");
+        registry.regex = Some(compile(&pattern));
+    }
+}
+
+/// 从环境变量批量登记候选密钥值（0p S2 B5 启动登记入口）：变量名（大小写
+/// 不敏感）含 key/token/secret/password/passwd/credential 且值长 8–512、
+/// 不含路径分隔符（排除 KEY_PATH 类误登记）的值按字面登记。宿主装配 /
+/// 进程入口调用一次即可；重复调用幂等。
+pub fn register_known_secrets_from_env() {
+    const NAME_MARKERS: &[&str] = &["KEY", "TOKEN", "SECRET", "PASSWORD", "PASSWD", "CREDENTIAL"];
+    for (name, value) in std::env::vars() {
+        let upper = name.to_uppercase();
+        let name_matches = NAME_MARKERS.iter().any(|m| upper.contains(m));
+        if !name_matches {
+            continue;
+        }
+        let value = value.trim();
+        let len = value.chars().count();
+        if !(8..=512).contains(&len) || value.contains('/') || value.contains('\\') {
+            continue;
+        }
+        register_known_secret(value);
+    }
+}
+
+fn known_secrets_regex() -> Option<Regex> {
+    KNOWN_SECRETS.read().unwrap().regex.clone()
+}
+
 pub fn redact_secrets(input: &str) -> Cow<'_, str> {
-    if !MATCH_ANY.is_match(input) {
+    let known = known_secrets_regex();
+    let known_hit = known.as_ref().is_some_and(|re| re.is_match(input));
+    if !known_hit && !MATCH_ANY.is_match(input) {
         return Cow::Borrowed(input);
     }
-    let s = PEM_PRIVATE_KEY_REGEX.replace_all(input, REDACTED);
+    let s = match known {
+        Some(re) => re.replace_all(input, REDACTED),
+        None => Cow::Borrowed(input),
+    };
+    let s = PEM_PRIVATE_KEY_REGEX.replace_all(&s, REDACTED);
     let s = API_KEY_PREFIX_REGEX.replace_all(&s, REDACTED);
     let s = AWS_ACCESS_KEY_REGEX.replace_all(&s, REDACTED);
     let s = GITHUB_TOKEN_REGEX.replace_all(&s, REDACTED);
@@ -559,5 +628,55 @@ mod tests {
             !out.contains("%5B") && !out.contains("%5D"),
             "placeholder bracket-encoded: {out}"
         );
+    }
+
+    // ==== 0p S2 B5：已知密钥值字面替换注册表 ====
+    // 用独特值避免与并行测试的注册面串扰（注册表进程级共享）。
+
+    #[test]
+    fn known_secret_literal_is_redacted_once_registered() {
+        let secret = "Zk9pQ2a7R4sT1uV3wX0yB-register-test-0pS2";
+        assert!(
+            !redact_secrets(secret).contains(REDACTED),
+            "pre-register must be untouched (shape regexes don't match)"
+        );
+        register_known_secret(secret);
+        let input = format!("echo {secret} | base64");
+        let out = redact_secrets(&input);
+        assert!(out.contains(REDACTED), "registered literal leaked: {out}");
+        assert!(!out.contains(secret), "registered literal leaked: {out}");
+        // 幂等：占位符不被再匹配。
+        let out_str = out.into_owned();
+        assert_eq!(redact_secrets(&out_str), out_str);
+    }
+
+    #[test]
+    fn known_secret_registration_ignores_short_and_blank() {
+        register_known_secret("  ");
+        register_known_secret("short");
+        assert!(
+            !KNOWN_SECRETS
+                .read()
+                .unwrap()
+                .values
+                .contains("short".to_string().as_str())
+        );
+    }
+
+    #[test]
+    fn known_secret_from_env_registers_key_named_vars() {
+        // 唯一变量名防并行测试串扰；值不含路径分隔符、长 8–512。
+        let name = "ORZ_TEST_KNOWN_SECRET_0P_S2_REGISTRY";
+        let value = "qW7zEnvScanLiteral0pS2x9K";
+        // 2024 edition：set_var 为 unsafe，测试进程单线程初始化段使用。
+        unsafe { std::env::set_var(name, value) };
+        register_known_secrets_from_env();
+        let input = format!("token is {value} end");
+        let out = redact_secrets(&input);
+        assert!(
+            out.contains(REDACTED),
+            "env-registered literal leaked: {out}"
+        );
+        unsafe { std::env::remove_var(name) };
     }
 }

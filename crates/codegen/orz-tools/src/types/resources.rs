@@ -793,9 +793,8 @@ pub struct SessionVolumeAccess(pub std::sync::Arc<std::sync::Mutex<SessionVolume
 pub struct SessionVolumeAccessInner {
     lexical_root: std::path::PathBuf,
     notice_shown: bool,
-    notice_this_call: bool,
-    opened_this_call: bool,
-    denial_this_call: Option<SessionVolumeDenial>,
+    /// call-id 键控的 per-call 瞬态旗标（并发批下防跨调用错配）。
+    flags: std::collections::HashMap<String, SessionVolumeCallFlags>,
 }
 
 /// 一次读工具权限拒绝的结构化记录（设计 §3.C：deny 一律返回结构化
@@ -805,6 +804,23 @@ pub struct SessionVolumeDenial {
     pub code: &'static str,
     pub reason: String,
 }
+
+/// 单个工具调用的瞬态旗标（0p S2 复审 P2 修复，2026-09-07）：旗标按
+/// call-id 键控——direct 面同一轮的工具批是并发执行的
+/// （agent_loop join_all），共享单旗标会让 A 调用的 take 取走 B 调用
+/// 置的信封（审计错配/丢失）。键 = host `call_tool` 传入的 call_id，
+/// 与工具侧 `ToolCallContext.call_id` 同源。
+#[derive(Default)]
+struct SessionVolumeCallFlags {
+    notice: bool,
+    opened: bool,
+    denial: Option<SessionVolumeDenial>,
+}
+
+/// 旗标表的容量上限（防 Err 路径漏 take 的条目无限累积；超过即整体
+/// 清空——旗标是 best-effort 审计 seam，清理只降级为该批信封缺失，
+/// 绝不改变读判定本身）。
+const SESSION_VOLUME_FLAGS_CAP: usize = 64;
 
 impl SessionVolumeAccess {
     /// 装配期构造：_lexical_root = `{cwd}/.gsa`；`access_state.json` 存在
@@ -824,9 +840,7 @@ impl SessionVolumeAccess {
             SessionVolumeAccessInner {
                 lexical_root,
                 notice_shown,
-                notice_this_call: false,
-                opened_this_call: false,
-                denial_this_call: None,
+                flags: std::collections::HashMap::new(),
             },
         )))
     }
@@ -836,10 +850,10 @@ impl SessionVolumeAccess {
         self.0.lock().unwrap().notice_shown
     }
 
-    /// 内部区首读：登记通知已给 + 瞬态旗标 + 持久化（best-effort——写盘
-    /// 失败不 fail 工具调用；内存态本次 run 仍生效，跨 prompt 降级为
-    /// 「通知重放一次」，绝不泄漏内容）。
-    pub fn mark_noticed(&self) {
+    /// 内部区首读：登记通知已给 + call-id 键控瞬态旗标 + 持久化
+    /// （best-effort——写盘失败不 fail 工具调用；内存态本次 run 仍生效，
+    /// 跨 prompt 降级为「通知重放一次」，绝不泄漏内容）。
+    pub fn mark_noticed(&self, call_id: &str) {
         let mut inner = self.0.lock().unwrap();
         if !inner.notice_shown {
             inner.notice_shown = true;
@@ -857,41 +871,67 @@ impl SessionVolumeAccess {
                 payload.to_string(),
             );
         }
-        inner.notice_this_call = true;
+        if inner.flags.len() >= SESSION_VOLUME_FLAGS_CAP {
+            inner.flags.clear();
+        }
+        inner.flags.entry(call_id.to_string()).or_default().notice = true;
     }
 
     /// 二读放行旗标（B4：journal 记 `session_volume_opened`）。
-    pub fn mark_opened_this_call(&self) {
-        self.0.lock().unwrap().opened_this_call = true;
+    pub fn mark_opened_this_call(&self, call_id: &str) {
+        let mut inner = self.0.lock().unwrap();
+        if inner.flags.len() >= SESSION_VOLUME_FLAGS_CAP {
+            inner.flags.clear();
+        }
+        inner.flags.entry(call_id.to_string()).or_default().opened = true;
     }
 
     /// 普通权限拒绝登记（结构化 seam；host 侧转译 policy_denial）。
-    pub fn set_denial_this_call(&self, code: &'static str, reason: String) {
+    pub fn set_denial_this_call(&self, call_id: &str, code: &'static str, reason: String) {
         let mut inner = self.0.lock().unwrap();
-        if inner.denial_this_call.is_none() {
-            inner.denial_this_call = Some(SessionVolumeDenial { code, reason });
+        if inner.flags.len() >= SESSION_VOLUME_FLAGS_CAP {
+            inner.flags.clear();
+        }
+        let flags = inner.flags.entry(call_id.to_string()).or_default();
+        if flags.denial.is_none() {
+            flags.denial = Some(SessionVolumeDenial { code, reason });
         }
     }
 
-    pub fn take_notice_this_call(&self) -> bool {
+    pub fn take_notice_this_call(&self, call_id: &str) -> bool {
         let mut inner = self.0.lock().unwrap();
-        std::mem::take(&mut inner.notice_this_call)
+        std::mem::take(&mut inner.flags.entry(call_id.to_string()).or_default().notice)
     }
 
-    pub fn take_opened_this_call(&self) -> bool {
+    pub fn take_opened_this_call(&self, call_id: &str) -> bool {
         let mut inner = self.0.lock().unwrap();
-        std::mem::take(&mut inner.opened_this_call)
+        std::mem::take(&mut inner.flags.entry(call_id.to_string()).or_default().opened)
     }
 
-    pub fn take_denial_this_call(&self) -> Option<SessionVolumeDenial> {
+    pub fn take_denial_this_call(&self, call_id: &str) -> Option<SessionVolumeDenial> {
         let mut inner = self.0.lock().unwrap();
-        inner.denial_this_call.take()
+        inner
+            .flags
+            .entry(call_id.to_string())
+            .or_default()
+            .denial
+            .take()
+    }
+
+    /// host 侧取走全部旗标后的条目清理（正常完成路径调用；Err 路径
+    /// 漏调由 [`SESSION_VOLUME_FLAGS_CAP`] 兜底）。
+    pub fn finish_call(&self, call_id: &str) {
+        self.0.lock().unwrap().flags.remove(call_id);
     }
 }
 
 /// 会话卷读判决（B1 区域分类的运行时形态）：
 /// - `OutsideDomain`：不在会话卷域 → 回退 workspace 判定（Task C 现状）；
-/// - `WindowAllowed`：两白名单窗口 + resources_state 直读面 → 恒放行；
+/// - `WindowAllowed`：两白名单窗口 + resources_state 直读面 + access_state
+///   机制文件 → 恒放行；
+/// - `CredentialsDenied`：凭据/秘密区（keystore/、one_shot_permit/、
+///   grok-home/、chrome-profile*/）→ **恒拒**（B1 永久拒类，不因通知
+///   放开——0p S2 复审修复：卷内既有凭据落点不得随两段门事实放开）；
 /// - `InternalAfterNotice`：内部区（canonical 在卷内）且已通知（B4 二读放行）；
 /// - `NoticeRequired`：内部区首读（B2 通知信封）；
 /// - `Denied`：词法在域内但 canonical 逸出卷外（symlink 逃逸/幽灵白名单
@@ -899,14 +939,60 @@ impl SessionVolumeAccess {
 ///   语义（通知放行只对 canonical 可证实在卷内的路径生效）。
 ///
 /// `resources_state.json` 是只读直读面（设计 §7 待确认点 1 落定：按窗口
-/// 同级直读登记）。
+/// 同级直读登记）；`access_state.json` 是两段门自身的机制文件（设计 B3：
+/// 不受两段门管辖），同为直读面。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SessionVolumeReadVerdict {
     OutsideDomain,
     WindowAllowed,
+    CredentialsDenied,
     InternalAfterNotice,
     NoticeRequired,
     Denied,
+}
+
+/// B1 永久拒凭据区（0p S2 复审修复，2026-09-07）：卷根下一级目录名
+/// （大小写不敏感，Windows 卷不区分大小写）。`chrome-profile` 按前缀
+/// 匹配（多 profile 形态 `chrome-profile-1` 等）。
+fn is_session_volume_credentials_region(relative_components: &[std::ffi::OsString]) -> bool {
+    let Some(first) = relative_components.first() else {
+        return false;
+    };
+    let first = first.to_string_lossy();
+    let lower = first.to_ascii_lowercase();
+    matches!(lower.as_str(), "keystore" | "one_shot_permit" | "grok-home")
+        || lower.starts_with("chrome-profile")
+}
+
+/// `access_state.json` 机制文件直读面（设计 B3：两段门自身状态，不归门
+/// 管辖；词法或 canonical 落点为卷根下固定文件名）。
+pub fn is_session_volume_access_state_path(
+    canonical_root: &std::path::Path,
+    cwd: &std::path::Path,
+    joined_path: &std::path::Path,
+    resolved_path: Option<&std::path::Path>,
+) -> bool {
+    let lexical_norm = session_volume_lexical_path(cwd, joined_path);
+    let lexical_root = session_volume_lexical_root(cwd);
+    let resolved = resolved_path.unwrap_or(&lexical_norm);
+    let canonical = dunce::canonicalize(resolved).unwrap_or_else(|_| lexical_norm.clone());
+    let state_lexical =
+        orz_paths::normalize_lexically(lexical_root.join("access_state.json").as_path());
+    canonical == state_lexical || canonical == canonical_root.join("access_state.json")
+}
+
+/// 判定路径相对卷根的组件序列（词法与 canonical 两种拼写，任一命中即
+/// 判凭据区——防「词法是普通名、经 symlink 指进凭据区」或反向绕过）。
+fn session_volume_relative_components(
+    root: &std::path::Path,
+    candidate: &std::path::Path,
+) -> Option<Vec<std::ffi::OsString>> {
+    candidate.strip_prefix(root).ok().map(|rel| {
+        rel.components()
+            .filter(|c| matches!(c, std::path::Component::Normal(_)))
+            .map(|c| c.as_os_str().to_os_string())
+            .collect()
+    })
 }
 
 /// `resources_state.json` 只读直读面（0p S2 B1 直读类；词法或 canonical
@@ -926,8 +1012,8 @@ pub fn is_session_volume_resource_state_path(
     canonical == resource_lexical || canonical == canonical_root.join("resources_state.json")
 }
 
-/// 判定会话卷内一次读取的两段门处置（优先级：窗口/直读 > 逃逸恒拒 >
-/// 已通知放行 > 首读通知）。
+/// 判定会话卷内一次读取的两段门处置（优先级：窗口/直读/机制文件 >
+/// 凭据区恒拒 > 逃逸恒拒 > 已通知放行 > 首读通知）。
 pub fn session_volume_read_verdict(
     canonical_root: &std::path::Path,
     cwd: &std::path::Path,
@@ -940,15 +1026,28 @@ pub fn session_volume_read_verdict(
     }
     if is_session_volume_window_path(canonical_root, cwd, joined_path, resolved_path)
         || is_session_volume_resource_state_path(canonical_root, cwd, joined_path, resolved_path)
+        || is_session_volume_access_state_path(canonical_root, cwd, joined_path, resolved_path)
     {
         return SessionVolumeReadVerdict::WindowAllowed;
+    }
+    let lexical_norm = session_volume_lexical_path(cwd, joined_path);
+    let lexical_root = session_volume_lexical_root(cwd);
+    let resolved = resolved_path.unwrap_or(&lexical_norm);
+    let canonical = dunce::canonicalize(resolved).unwrap_or_else(|_| lexical_norm.clone());
+    // B1 永久拒凭据区：词法或 canonical 任一拼写落进凭据区即恒拒（通知
+    // 不放开；先于逃逸判定——凭据区在卷内的形态由本分支给出精确语义）。
+    let lexical_relative =
+        session_volume_relative_components(&lexical_root, &lexical_norm).unwrap_or_default();
+    let canonical_relative =
+        session_volume_relative_components(canonical_root, &canonical).unwrap_or_default();
+    if is_session_volume_credentials_region(&lexical_relative)
+        || is_session_volume_credentials_region(&canonical_relative)
+    {
+        return SessionVolumeReadVerdict::CredentialsDenied;
     }
     // 内部区放行（通知后）只对 canonical 可证实在卷内的路径生效——词法
     // 形态命中 `.gsa` 但 canonical 逸出（种在域内的二级 symlink / 幽灵
     // 白名单形态）恒拒，防「通知→放行」成为逃逸通道。
-    let lexical_norm = session_volume_lexical_path(cwd, joined_path);
-    let resolved = resolved_path.unwrap_or(&lexical_norm);
-    let canonical = dunce::canonicalize(resolved).unwrap_or_else(|_| lexical_norm.clone());
     if !candidate_is_under(canonical_root, &canonical) {
         return SessionVolumeReadVerdict::Denied;
     }
@@ -960,10 +1059,15 @@ pub fn session_volume_read_verdict(
 }
 
 /// 会话卷内部区结构预览（B2：覆盖轮次范围/条目数/字节的有界机械摘要）。
-/// 只统计文件数与字节数（ledger/ runs/ conversations/ 三内部区），不读
-/// 内容、不回显任何条目文本。单区扫描上限 200 个文件（防异常大卷）。
+/// 只统计文件数与字节数（runs/ conversations/），不读内容、不回显任何
+/// 条目文本；ledger/ 额外流式统计条目行数与轮次范围（行首 `轮次 N`
+/// 盖章，扫描上限 20000 行——B2 明文「覆盖轮次范围/条目数/字节」，0p S2
+/// 复审 P2 修复补齐）。单区扫描上限 200 个文件（防异常大卷）。
 fn session_volume_region_preview(lexical_root: &std::path::Path, region: &str) -> String {
     let dir = lexical_root.join(region);
+    if region == "ledger" {
+        return ledger_region_preview(&dir, region);
+    }
     let mut files = 0usize;
     let mut bytes = 0u64;
     let mut stack = vec![dir.clone()];
@@ -991,6 +1095,72 @@ fn session_volume_region_preview(lexical_root: &std::path::Path, region: &str) -
     format!("{region}/ {files} 文件 {bytes} 字节")
 }
 
+/// ledger/ 预览：条目行数 + 轮次范围 + 字节（B2 台账结构预览三要素）。
+/// 流式逐行读（不整文件入内存），行扫描上限 [`LEDGER_PREVIEW_LINE_CAP`]；
+/// 行首 `[seq] 轮次 N:` 为台账行契约（action_ledger::external_row_line）。
+fn ledger_region_preview(dir: &std::path::Path, region: &str) -> String {
+    const LEDGER_PREVIEW_LINE_CAP: usize = 20_000;
+    let mut entries = 0usize;
+    let mut bytes = 0u64;
+    let mut min_round: Option<u64> = None;
+    let mut max_round: Option<u64> = None;
+    let mut files = 0usize;
+    let mut stack = vec![dir.to_path_buf()];
+    let mut scanned = 0usize;
+    'outer: while let Some(current) = stack.pop() {
+        let Ok(read) = std::fs::read_dir(&current) else {
+            continue;
+        };
+        for entry in read.flatten() {
+            scanned += 1;
+            if scanned > 200 {
+                return format!("{region}/ ≥200 项");
+            }
+            let Ok(meta) = entry.metadata() else {
+                continue;
+            };
+            if meta.is_dir() {
+                stack.push(entry.path());
+                continue;
+            }
+            files += 1;
+            bytes += meta.len();
+            let Ok(file) = std::fs::File::open(entry.path()) else {
+                continue;
+            };
+            use std::io::BufRead;
+            for line in std::io::BufReader::new(file).lines().map_while(Result::ok) {
+                if entries >= LEDGER_PREVIEW_LINE_CAP {
+                    break 'outer;
+                }
+                // 行契约前缀：`[{seq}] 轮次 {N}: `——只看前 32 字节防长行。
+                let head: String = line.chars().take(32).collect();
+                if let Some(rest) = head.strip_prefix('[')
+                    && let Some(colon) = rest.find(']')
+                    && let Some(round_str) = rest[colon + 1..].trim().strip_prefix("轮次")
+                    && let Ok(round) = round_str.trim().trim_end_matches(':').trim().parse::<u64>()
+                {
+                    entries += 1;
+                    min_round = Some(min_round.map_or(round, |m: u64| m.min(round)));
+                    max_round = Some(max_round.map_or(round, |m: u64| m.max(round)));
+                }
+            }
+        }
+    }
+    if entries == 0 {
+        return format!("{region}/（空）");
+    }
+    match (min_round, max_round) {
+        (Some(min), Some(max)) if min == max => {
+            format!("{region}/ {entries} 条目（轮次 {min}） {bytes} 字节 / {files} 文件")
+        }
+        (Some(min), Some(max)) => {
+            format!("{region}/ {entries} 条目（轮次 {min}–{max}） {bytes} 字节 / {files} 文件")
+        }
+        _ => format!("{region}/ {files} 文件 {bytes} 字节"),
+    }
+}
+
 /// B2 首读通知信封文本（非内容）：职责图 + 区域分类 + 台账结构预览 +
 /// 黑板指针 + 询问句。返回给模型的 deny 载体是本文本；结构化 seam
 /// （policy_denial code=session_volume_notice）由 host 侧旗标转译。
@@ -1004,8 +1174,11 @@ pub fn session_volume_notice_text(lexical_root: &std::path::Path) -> String {
          职责图：ledger/=机械动作台账（工具与订单的追加审计记录）；\
          runs/=运行 journal（事件链，不可散读）；conversations/=跨 prompt \
          会话侧车。\n\
+         凭据/秘密区永久不可读（不因本通知放开）：keystore/、\
+         one_shot_permit/、grok-home/、chrome-profile*/。\n\
          直读窗口（始终可读，无需本通知）：session/terminal/*.log、\
-         run_tests_output.txt、resources_state.json。\n\
+         run_tests_output.txt、resources_state.json；access_state.json \
+         为门状态机制文件，同级直读。\n\
          当前结构：{ledger}；{runs}；{conversations}。\n\
          这些信息黑板多数已有按需投影：blackboard_read section=exec 支持 \
          failures_only=true（失败目标聚合）与 search=<字面子串>（全历史\

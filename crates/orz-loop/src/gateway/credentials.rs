@@ -44,6 +44,7 @@ impl std::error::Error for CredentialError {}
 pub fn read_agent_api_key() -> Result<String, CredentialError> {
     if let Ok(key) = std::env::var(API_KEY_ENV) {
         if !key.trim().is_empty() {
+            orz_secrets::register_known_secret(&key);
             return Ok(key);
         }
         return Err(CredentialError(format!(
@@ -117,7 +118,14 @@ pub fn read_agent_api_key() -> Result<String, CredentialError> {
 #[cfg(not(windows))]
 pub fn read_agent_api_key() -> Result<String, CredentialError> {
     match std::env::var(API_KEY_ENV) {
-        Ok(key) if !key.trim().is_empty() => Ok(key),
+        // 0p S2 复审（B5 已知 key 字面替换，2026-09-07）：成功读取即登记
+        // 已知密钥——无 sk- 形态/无赋值形态的裸 key 值也能被四漏斗+第 5
+        // 漏斗的字面替换拦住（设计 B5 明文：sk-shape + 已知 key 值字面
+        // 替换占位符）。
+        Ok(key) if !key.trim().is_empty() => {
+            orz_secrets::register_known_secret(&key);
+            Ok(key)
+        }
         _ => Err(CredentialError(
             "ORZ_DEEPSEEK_API_KEY is not set (Linux container credential channel)".into(),
         )),

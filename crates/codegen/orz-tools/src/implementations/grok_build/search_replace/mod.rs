@@ -179,10 +179,11 @@ pub(crate) async fn run_search_replace(
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
             match crate::util::try_resolve_unicode_filename(&resolved).await {
                 Some(m) => m.resolved_path,
-                None => resolved,
+                // clone：`.gsa` 写守卫（下方）仍需词法拼写作域判定。
+                None => resolved.clone(),
             }
         }
-        Err(_) => resolved,
+        Err(_) => resolved.clone(),
     };
     if let Some(err) = validate_path_length(&input.file_path) {
         return Ok(err);
@@ -191,6 +192,26 @@ pub(crate) async fn run_search_replace(
         return Ok(SearchReplaceOutput::InvalidInput(
             "File path is a directory".to_owned(),
         ));
+    }
+    // 0p S2 复审 P2 修复（2026-09-07，ADR-0010 §14.61 设计 B）：会话卷是
+    // 机制所有（mechanism-owned），设计只放开「读」——写保护此前仅靠
+    // gitignore 巧合与权限策略承担，无机械门。写目标词法或 canonical 落
+    // 进 `.gsa` 会话卷域即拒（与 gitignore 拒编同一 InvalidInput 形态；
+    // 与注入资源无关，由 cwd 机械推导，不依赖模型面装配）。
+    {
+        let gsa_canonical_root = crate::types::resources::session_volume_canonical_root(&cwd);
+        if crate::types::resources::is_path_in_session_volume_domain(
+            &gsa_canonical_root,
+            &cwd,
+            &resolved,
+            Some(&path),
+        ) {
+            return Ok(SearchReplaceOutput::InvalidInput(format!(
+                "Error: {} is inside the runtime-owned `.gsa` session volume, which is \
+                 not model-writable.",
+                input.file_path
+            )));
+        }
     }
     let is_legacy = SearchReplaceVersion::from_contract(contract_version.as_deref()).is_legacy();
     if !is_legacy {
@@ -2683,5 +2704,47 @@ neutTest_set);
             }
             other => panic!("Expected EditsApplied, got {:?}", other),
         }
+    }
+
+    /// 0p S2 复审 P2 修复（2026-09-07，ADR-0010 §14.61 设计 B）：会话卷
+    /// 机制所有、只放开读——写目标落入 `.gsa` 会话卷域（词法或 canonical）
+    /// 机械拒绝（InvalidInput，与 gitignore 拒编同形态）。
+    #[tokio::test]
+    async fn search_replace_refuses_session_volume_targets() {
+        let tmp = TempDir::new().unwrap();
+        let ws = dunce::canonicalize(tmp.path()).unwrap();
+        let gsa = ws.join(".gsa");
+        std::fs::create_dir_all(&gsa).unwrap();
+        std::fs::write(gsa.join("notes.md"), "old text\n").unwrap();
+        let tool = SearchReplaceTool;
+        let output = xai_tool_runtime::Tool::run(
+            &tool,
+            test_ctx(test_resources(&ws).into_shared()),
+            make_input(".gsa/notes.md", "old text", "new text"),
+        )
+        .await
+        .unwrap();
+        match output {
+            SearchReplaceOutput::InvalidInput(msg) => {
+                assert!(
+                    msg.contains("not model-writable"),
+                    "volume write must be refused: {msg}"
+                );
+            }
+            other => panic!("Expected InvalidInput for volume write, got {other:?}"),
+        }
+        // 卷外正常写不受影响（守卫不误伤 workspace）。
+        std::fs::write(ws.join("normal.txt"), "old text\n").unwrap();
+        let ok = xai_tool_runtime::Tool::run(
+            &tool,
+            test_ctx(test_resources(&ws).into_shared()),
+            make_input("normal.txt", "old text", "new text"),
+        )
+        .await
+        .unwrap();
+        assert!(
+            matches!(ok, SearchReplaceOutput::EditsApplied(_)),
+            "workspace write must still work, got {ok:?}"
+        );
     }
 }

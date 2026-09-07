@@ -491,6 +491,7 @@ pub(crate) async fn run_read_file(
     resources: SharedResources,
     streamable_out: Option<&mut bool>,
     invoking_param_names: &crate::types::resources::InvokingToolParamNames,
+    call_id: &str,
 ) -> Result<ReadFileOutput, xai_tool_runtime::ToolError> {
     let (cwd, display_cwd, fs, hints_enabled, skill_roots, session_volume);
     let session_volume_access;
@@ -560,7 +561,7 @@ pub(crate) async fn run_read_file(
     if volume_verdict == Some(crate::types::resources::SessionVolumeReadVerdict::NoticeRequired)
         && let Some(access) = &session_volume_access
     {
-        access.mark_noticed();
+        access.mark_noticed(call_id);
     }
     if volume_verdict == Some(crate::types::resources::SessionVolumeReadVerdict::NoticeRequired) {
         return Ok(ReadFileOutput::PermissionDenied(
@@ -571,7 +572,30 @@ pub(crate) async fn run_read_file(
         == Some(crate::types::resources::SessionVolumeReadVerdict::InternalAfterNotice)
         && let Some(access) = &session_volume_access
     {
-        access.mark_opened_this_call();
+        access.mark_opened_this_call(call_id);
+    }
+    // B1 永久拒凭据区（0p S2 复审修复）：keystore/one_shot_permit/grok-home/
+    // chrome-profile* 通知也不放开。
+    if volume_verdict == Some(crate::types::resources::SessionVolumeReadVerdict::CredentialsDenied)
+    {
+        let display_dcwd = display_cwd_or_cwd(&cwd, display_cwd.as_deref());
+        let display_path = display_dcwd.join(&input.path);
+        if let Some(access) = &session_volume_access {
+            access.set_denial_this_call(
+                call_id,
+                "session_volume_agent_invisible",
+                format!(
+                    "path is inside the session volume credentials region, which is \
+                     permanently denied (notice does not open it): {}",
+                    display_path.display()
+                ),
+            );
+        }
+        return Ok(ReadFileOutput::PermissionDenied(format!(
+            "Permission denied: path is inside the session volume credentials region \
+             (permanently denied): {}",
+            display_path.display()
+        )));
     }
     // 词法在域内但 canonical 逸出卷外（symlink 逃逸/幽灵白名单形态）——
     // 恒拒，两段门不放松安全语义（0m 矩阵 #7/#8 的逃逸拒绝原样保留）。
@@ -580,6 +604,7 @@ pub(crate) async fn run_read_file(
         let display_path = display_dcwd.join(&input.path);
         if let Some(access) = &session_volume_access {
             access.set_denial_this_call(
+                call_id,
                 "session_volume_agent_invisible",
                 format!(
                     "path is inside the agent-invisible session volume with an escaping \
@@ -615,6 +640,7 @@ pub(crate) async fn run_read_file(
         let display_path = display_dcwd.join(&input.path);
         if let Some(access) = &session_volume_access {
             access.set_denial_this_call(
+                call_id,
                 "outside_workspace",
                 format!(
                     "read_file path escapes workspace sandbox: {}",
@@ -1065,6 +1091,7 @@ impl ReadFileTool {
             resources.clone(),
             Some(&mut streamable_text),
             &invoking,
+            ctx.call_id.as_str(),
         )
         .await?;
         Ok((output, streamable_text))
@@ -2315,6 +2342,129 @@ mod tests {
             }
             other => panic!("Expected Task C fallback outcome, got {other:?}"),
         }
+    }
+
+    /// 0p S2 复审补测（P2-8）：`access_state.json` 损坏（坏 JSON / 字段
+    /// 缺失）→ fail 向「重新通知」安全侧——fresh 装配后首读仍走通知信封。
+    #[tokio::test]
+    async fn read_file_two_stage_corrupt_state_fails_toward_renotify() {
+        let tmp = TempDir::new().unwrap();
+        let ws = dunce::canonicalize(tmp.path()).unwrap();
+        let gsa = ws.join(".gsa");
+        std::fs::create_dir_all(&gsa).unwrap();
+        std::fs::write(gsa.join("state.json"), "{}").unwrap();
+        // 正常通知一次（落盘 valid 状态）。
+        let first = run_read(test_resources_with_session_volume(&ws), ".gsa/state.json").await;
+        assert!(matches!(first, ReadFileOutput::PermissionDenied(_)));
+        assert!(gsa.join("access_state.json").exists());
+        // 状态损坏（截断写 / 坏 JSON）。
+        std::fs::write(gsa.join("access_state.json"), "{\"notice_sh\":").unwrap();
+        // fresh 装配（跨进程语义）→ 重新通知，绝不默认放行。
+        let second = run_read(test_resources_with_session_volume(&ws), ".gsa/state.json").await;
+        match second {
+            ReadFileOutput::PermissionDenied(notice) => {
+                assert!(notice.contains("[session_volume_notice]"), "{notice}");
+            }
+            other => panic!("Corrupt state must re-notify (fail-safe), got {other:?}"),
+        }
+        // 损坏修复后（valid 状态已随第二次通知重写）→ 放行。
+        let parsed: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(gsa.join("access_state.json")).unwrap())
+                .unwrap();
+        assert_eq!(parsed["notice_shown"], serde_json::json!(true));
+        let third = run_read(test_resources_with_session_volume(&ws), ".gsa/state.json").await;
+        assert!(matches!(third, ReadFileOutput::FileContent(_)));
+    }
+
+    /// 0p S2 复审补测（P2-8）：通知只放行 canonical 可证实在卷内的路径
+    /// ——通知后幽灵白名单形态（symlink → 卷外）仍恒拒，两段门不放松
+    /// GAP-GSA-SYMLINK-STALE-TEST 安全语义。
+    #[tokio::test]
+    async fn read_file_two_stage_notice_does_not_open_escape() {
+        let tmp = TempDir::new().unwrap();
+        let ws = dunce::canonicalize(tmp.path()).unwrap();
+        let gsa = ws.join(".gsa");
+        std::fs::create_dir_all(&gsa).unwrap();
+        std::fs::write(gsa.join("ledger.md"), "row\n").unwrap();
+        // 首读内部区 → 通知（状态落盘）。
+        let first = run_read(test_resources_with_session_volume(&ws), ".gsa/ledger.md").await;
+        assert!(matches!(first, ReadFileOutput::PermissionDenied(_)));
+        // 种在窗口形态内的二级 symlink → 卷外（逃逸形态），通知已示。
+        let outside = TempDir::new().unwrap();
+        std::fs::write(outside.path().join("secret.txt"), "top secret\n").unwrap();
+        let terminal = gsa.join("session").join("terminal");
+        std::fs::create_dir_all(&terminal).unwrap();
+        let link = terminal.join("escape.log");
+        #[cfg(unix)]
+        let link_ok = std::os::unix::fs::symlink(outside.path().join("secret.txt"), &link).is_ok();
+        #[cfg(windows)]
+        let link_ok =
+            std::os::windows::fs::symlink_file(outside.path().join("secret.txt"), &link).is_ok();
+        if !link_ok {
+            eprintln!("symlink creation unsupported, skipping");
+            return;
+        }
+        let second = run_read(
+            test_resources_with_session_volume(&ws),
+            ".gsa/session/terminal/escape.log",
+        )
+        .await;
+        match second {
+            ReadFileOutput::PermissionDenied(denial) => {
+                assert!(
+                    denial.contains("agent-invisible session volume"),
+                    "escape must stay denied after notice, got: {denial}"
+                );
+                assert!(!denial.contains("[session_volume_notice]"), "{denial}");
+            }
+            ReadFileOutput::FileContent(content) => {
+                panic!("escape must NOT be opened by notice, got content: {content:?}")
+            }
+            other => panic!("escape must stay denied, got {other:?}"),
+        }
+    }
+
+    /// 0p S2 复审修复（P1-2/B1 永久拒类）：keystore 凭据区通知亦不放开；
+    /// `access_state.json` 为机制文件直读（不受两段门管辖）。
+    #[tokio::test]
+    async fn read_file_credentials_region_denied_even_after_notice() {
+        let tmp = TempDir::new().unwrap();
+        let ws = dunce::canonicalize(tmp.path()).unwrap();
+        let gsa = ws.join(".gsa");
+        let keystore = gsa.join("keystore");
+        std::fs::create_dir_all(&keystore).unwrap();
+        std::fs::write(keystore.join("installation-key.bin"), "k").unwrap();
+        std::fs::write(gsa.join("ledger.md"), "row\n").unwrap();
+        // 先完成通知（对 ledger 首读 → 通知 → 二读放行）。
+        let notice = run_read(test_resources_with_session_volume(&ws), ".gsa/ledger.md").await;
+        assert!(matches!(notice, ReadFileOutput::PermissionDenied(_)));
+        let opened = run_read(test_resources_with_session_volume(&ws), ".gsa/ledger.md").await;
+        assert!(matches!(opened, ReadFileOutput::FileContent(_)));
+        // 已通知态下凭据区仍恒拒。
+        let cred = run_read(
+            test_resources_with_session_volume(&ws),
+            ".gsa/keystore/installation-key.bin",
+        )
+        .await;
+        match cred {
+            ReadFileOutput::PermissionDenied(denial) => {
+                assert!(
+                    denial.contains("credentials region"),
+                    "keystore must be permanently denied, got: {denial}"
+                );
+            }
+            other => panic!("credentials region must never open, got {other:?}"),
+        }
+        // 机制文件 access_state.json 直读（存在后）→ 不经通知直接可读。
+        let state = run_read(
+            test_resources_with_session_volume(&ws),
+            ".gsa/access_state.json",
+        )
+        .await;
+        assert!(
+            matches!(state, ReadFileOutput::FileContent(_)),
+            "mechanism file must be directly readable, got {state:?}"
+        );
     }
 
     /// 矩阵 #6：`.gsa` 为 symlink → cwd 外会话卷目录（评测容器挂载形态），

@@ -170,6 +170,13 @@ impl OrzHost {
         permission: Option<PermissionBridge>,
         reader: Arc<dyn crate::credentials::CredentialReader>,
     ) -> Result<Self, String> {
+        // 0p S2 复审（B5 已知 key 字面替换，2026-09-07，ADR-0010 §14.61）：
+        // 装配期一次性扫描环境变量，把 KEY/TOKEN/SECRET/PASSWORD 命名的
+        // 候选密钥值登记进 orz-secrets 已知密钥注册表（幂等；注册表空时
+        // 脱敏行为与纯 shape 检测一致）。模型 API key 另由
+        // read_agent_api_key 成功路径显式登记（覆盖 Windows 凭据管理器
+        // 通道）。
+        orz_secrets::register_known_secrets_from_env();
         let web_search_config = tools::web_search_config(reader.as_ref());
         // ORZ-LARGE-FILE-READ-CONTRACT (ADR-0010 §14.22): the `[toolset.read_file]`
         // coarse gate is resolved once at host build from the effective config
@@ -729,7 +736,11 @@ impl OrzHost {
                 .get::<orz_tools::types::resources::SessionVolumeAccess>()
                 .cloned();
             if let Some(access) = access {
-                if access.take_notice_this_call() {
+                // 0p S2 复审 P2 修复（2026-09-07）：旗标按 call-id 键控——
+                // 并发工具批下 take 只消费本调用的信封，绝不错配到同批
+                // 其他调用。finish_call 清理条目（Err 路径漏调由旗标表
+                // 容量上限兜底）。
+                if access.take_notice_this_call(call_id) {
                     tool_result.exit_code = Some(1);
                     tool_result.policy_denial = Some(orz_loop::host::PolicyDenial {
                         source: orz_loop::host::PolicyDenialSource::Permission,
@@ -738,7 +749,7 @@ impl OrzHost {
                                  provided; read again to open (open_after_notice)"
                             .to_string(),
                     });
-                } else if let Some(denial) = access.take_denial_this_call() {
+                } else if let Some(denial) = access.take_denial_this_call(call_id) {
                     tool_result.exit_code = Some(1);
                     tool_result.policy_denial = Some(orz_loop::host::PolicyDenial {
                         source: orz_loop::host::PolicyDenialSource::Permission,
@@ -746,9 +757,10 @@ impl OrzHost {
                         reason: denial.reason,
                     });
                 }
-                if access.take_opened_this_call() {
+                if access.take_opened_this_call(call_id) {
                     tool_result.session_volume_opened = true;
                 }
+                access.finish_call(call_id);
             }
         }
         // THIN-HARNESS-REDESIGN-V2 §9.7 (2026-08-29 S5-2): 中间回报结构化
@@ -1122,6 +1134,12 @@ impl LoopHost for OrzHost {
         }
         let output_encoding =
             orz_tools::util::encoding::merge_encoding_labels(encodings.iter().copied());
+        // 0p S2 复审 P1-2 修复（B5 第 5 漏斗，2026-09-07，ADR-0010 §14.61）：
+        // run_tests 全量输出落 `.gsa/run_tests_output.txt`（恒直读窗口，
+        // B1 直读类）——env_clear+allowlist 只隔离宿主 env，测试进程仍可能
+        // 打印工作区自带密钥。落盘与对话尾窗统一在此接 orz-secrets 机械
+        // 脱敏（key 不落卷是两段门放开的先决不变量；「全卷零 sk-」判据）。
+        let text = orz_secrets::redact_secrets(&text).into_owned();
         // F-09: write the full (capped) output to a file the model can read
         // (read_file) — the conversation only carries the final 32KB.
         let gsa_dir = self.cwd.join(".gsa");
@@ -2920,5 +2938,182 @@ mod tests {
         );
 
         let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// 0p S2 复审 P1-1 修复回归（2026-09-07，ADR-0010 §14.61 设计 B）：
+    /// 带桥 host（生产装配形态）下，`.gsa` 内部区读由桥放行、落入工具层
+    /// 两段门——通知信封（policy_denial code=session_volume_notice）与
+    /// 二读放行（session_volume_opened）在**穿透桥的全链**上可达。修复前
+    /// 桥镜像先拒，两段门在带桥路径不可达（W2 D-3 原形）。
+    #[tokio::test]
+    async fn bridge_yields_internal_reads_and_envelope_lands() {
+        let dir = test_dir();
+        let gsa = dir.join(".gsa");
+        std::fs::create_dir_all(gsa.join("ledger")).unwrap();
+        std::fs::write(gsa.join("ledger").join("current.md"), "[1] row\n").unwrap();
+        let bridge = crate::permission::bridge_allow_all_for_test(&dir);
+        let host = OrzHost::with_permission(
+            JournalRecorder::new(dir.join("j")),
+            &dir,
+            WorkspaceTrust::ObservedTrusted,
+            Some(bridge),
+        )
+        .expect("host with bridge");
+
+        // ① 桥面：内部区读不再被镜像预拒（AllowOnce）。
+        let decision = host
+            .request_permission(
+                RiskClass::ReadOnly,
+                "read_file",
+                &serde_json::json!({"target_file": ".gsa/ledger/current.md"}),
+            )
+            .await
+            .expect("permission request resolves");
+        assert_eq!(
+            decision,
+            PermitDecision::AllowOnce,
+            "bridge must yield internal-region reads to the tool-layer gate"
+        );
+
+        // ② 工具层两段门：首读通知信封 + 结构化 policy_denial（exit 1）。
+        let first = host
+            .call_tool(
+                "read_file",
+                serde_json::json!({"target_file": ".gsa/ledger/current.md"}),
+                "call-bridge-1",
+            )
+            .await
+            .expect("first read returns");
+        assert!(
+            first.output.contains("[session_volume_notice]"),
+            "notice envelope expected: {}",
+            first.output
+        );
+        let denial = first
+            .policy_denial
+            .as_ref()
+            .expect("structured denial envelope on the bridged path");
+        assert_eq!(denial.code, "session_volume_notice");
+        assert_eq!(first.exit_code, Some(1));
+
+        // ③ 二读放行 + session_volume_opened 审计标记。
+        let second = host
+            .call_tool(
+                "read_file",
+                serde_json::json!({"target_file": ".gsa/ledger/current.md"}),
+                "call-bridge-2",
+            )
+            .await
+            .expect("second read must open");
+        assert!(
+            second.output.contains("[1] row"),
+            "content served after notice: {}",
+            second.output
+        );
+        assert!(
+            second.session_volume_opened,
+            "post-notice open must set the audit marker"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// 0p S2 复审 P2 修复回归（旗标按 call-id 键控）：并发批下两个调用
+    /// 各自取走各自的 `session_volume_opened` 旗标——共享单旗标形态下后
+    /// take 的一方会拿到 false（信封丢失）。
+    #[tokio::test]
+    async fn session_volume_flags_attribution_per_call_under_concurrency() {
+        let dir = test_dir();
+        let gsa = dir.join(".gsa");
+        std::fs::create_dir_all(&gsa).unwrap();
+        // 预置已通知态：两读都走「通知后放行」臂。
+        std::fs::write(
+            gsa.join("access_state.json"),
+            "{\"schema_version\":\"0.1.0-draft\",\"notice_shown\":true,\
+             \"notice_shown_at_unix\":0}",
+        )
+        .unwrap();
+        std::fs::write(gsa.join("a.md"), "aaa\n").unwrap();
+        std::fs::write(gsa.join("b.md"), "bbb\n").unwrap();
+        let host = OrzHost::new(
+            JournalRecorder::new(dir.join("j")),
+            &dir,
+            WorkspaceTrust::ObservedTrusted,
+        )
+        .expect("host");
+        let (ra, rb) = tokio::join!(
+            host.call_tool(
+                "read_file",
+                serde_json::json!({"target_file": ".gsa/a.md"}),
+                "call-conc-a"
+            ),
+            host.call_tool(
+                "read_file",
+                serde_json::json!({"target_file": ".gsa/b.md"}),
+                "call-conc-b"
+            )
+        );
+        let ra = ra.expect("call a");
+        let rb = rb.expect("call b");
+        assert!(
+            ra.session_volume_opened,
+            "call A must carry its own opened flag: {}",
+            ra.output
+        );
+        assert!(
+            rb.session_volume_opened,
+            "call B must carry its own opened flag: {}",
+            rb.output
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// 0p S2 复审 P1-2 修复回归（B5 第 5 漏斗）：run_tests 全量输出落
+    /// `run_tests_output.txt`（恒直读窗口）前接 orz-secrets 脱敏——
+    /// 测试进程打印的 key 形态串以占位符落卷（判据「全卷零 sk-」）。
+    #[tokio::test]
+    async fn run_tests_output_scrubbed_of_secrets() {
+        let dir = test_dir();
+        let secret = "sk-abcdefghijklmnopqrstuvwxyz012345";
+        let runner = orz_loop::host::TestRunner {
+            command: if cfg!(windows) {
+                vec![
+                    "python".to_string(),
+                    "-c".to_string(),
+                    format!("print('{secret}')"),
+                ]
+            } else {
+                vec![
+                    "python3".to_string(),
+                    "-c".to_string(),
+                    format!("print('{secret}')"),
+                ]
+            },
+            timeout: Some(std::time::Duration::from_secs(30)),
+            env: Vec::new(),
+        };
+        let host = OrzHost::new(
+            JournalRecorder::new(dir.join("j")),
+            &dir,
+            WorkspaceTrust::ObservedTrusted,
+        )
+        .expect("host")
+        .with_test_runner(Some(runner));
+        let result = host.run_tests().await.expect("run_tests returns");
+        assert!(
+            result.output.contains("[REDACTED_SECRET]"),
+            "conversation tail must be scrubbed too: {}",
+            result.output
+        );
+        let full = std::fs::read_to_string(dir.join(".gsa").join("run_tests_output.txt"))
+            .expect("full output persisted");
+        assert!(
+            !full.contains(secret),
+            "raw key must never land in the volume: {full}"
+        );
+        assert!(
+            full.contains("[REDACTED_SECRET]"),
+            "placeholder expected in the volume artifact: {full}"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

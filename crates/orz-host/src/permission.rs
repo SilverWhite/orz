@@ -103,6 +103,18 @@ pub struct PermissionBridge {
     policy: PermissionPolicy,
 }
 
+/// 测试 seam（crate 内，0p S2 复审 P1-1 全链测试用）：以 allow-all
+/// manager 构造桥。生产构造走 `spawn*` 家族；私有字段仅本模块可初始化，
+/// 故由本模块提供受限测试构造器（`#[cfg(test)]`，不入生产面）。
+#[cfg(test)]
+pub(crate) fn bridge_allow_all_for_test(dir: &std::path::Path) -> PermissionBridge {
+    PermissionBridge {
+        handle: PermissionHandle::allow_all(),
+        cwd: orz_paths::AbsPathBuf::new(dir.to_path_buf()).unwrap(),
+        policy: PermissionPolicy::Interactive,
+    }
+}
+
 impl PermissionBridge {
     /// Spawn the Grok permission manager over the ACP outbound gateway.
     ///
@@ -323,6 +335,12 @@ impl PermissionBridge {
     /// （语义修订只改 orz-tools 单点）。`.gsa` 豁免观察（会话卷形态下对
     /// read_file 不可达）随下沉消解；权限双实现整体收敛仍随
     /// OBS-PERMISSION-DUAL-IMPL 终局治理排期。
+    ///
+    /// **0p S2 修订（2026-09-07，ADR-0010 §14.61 设计 B，P1-1 修复）**：
+    /// 上段「等义镜像继续放行/拒绝」自本批起收窄——内部区读的拒绝臂
+    /// **退役**（镜像让路，见 else 臂注记），两段门在 orz-tools 单点执法；
+    /// 镜像仅保留两窗口的 canonical 逃逸守卫（幽灵白名单形态恒拒）与
+    /// run_tests 精确文件名守卫。
     fn access_in_scope(&self, access: &AccessKind) -> bool {
         let path = match access {
             AccessKind::Read(p) | AccessKind::Grep { path: p, .. } => p.as_deref(),
@@ -383,10 +401,17 @@ impl PermissionBridge {
             // additionally stay under the session cwd.
             path_under(self.cwd.as_path(), &resolved)
         } else {
-            // MECHANICAL-AUDIT-LAYER: cwd 包含性已删除——cwd 外路径可读；
-            // `.gsa` 树（含 symlink 挂载的会话卷）仍不可见。`gsa_canon`
-            // 对照覆盖 `.gsa` 本身是 symlink 的 eval 容器形态。
-            !path_under(gsa_root.as_path(), &canonical) && !path_under(&gsa_canon, &canonical)
+            // 0p S2 两段门（2026-09-07，ADR-0010 §14.61 设计 B，P1-1 修复）：
+            // `.gsa` 内部区读的判定权**单点归 orz-tools 两段门**——本镜像
+            // 不再在工具执行前恒拒内部区（旧 agent-invisible 镜像退役）。
+            // 若镜像先拒，两段门（首读通知信封/二读放行/凭据区恒拒）在
+            // 所有带桥生产路径不可达，且拒绝走无 ToolCompleted 的
+            // event-less 路径（W2 D-3 原形）。窗口幽灵形态守卫（上方
+            // terminal_log/run_tests 臂的 canonical 双条件）原样保留：
+            // 白名单形态 + canonical 逃逸在桥与工具层双双恒拒。MECHANICAL-
+            // AUDIT-LAYER 的 cwd 外可读基线不变；cwd 外的非 `.gsa` 读照旧
+            // 放行，越权读仍由权限策略轴与 ACAF 承担。
+            true
         }
     }
 }
@@ -776,7 +801,11 @@ mod tests {
             read_req(&bridge, &outside.join("secret.txt").to_string_lossy()).await,
             PermitDecision::AllowOnce
         );
-        // The runtime's own `.gsa` tree → denied.
+        // The runtime's own `.gsa` tree → ALLOWED at the bridge（0p S2
+        // P1-1 修复，2026-09-07，ADR-0010 §14.61 设计 B）：内部区读判定权
+        // 单点归 orz-tools 两段门（首读通知→二读放行；凭据区恒拒），桥
+        // 镜像让路——若镜像先拒，两段门在所有带桥生产路径不可达且拒绝
+        // 走 event-less 路径（W2 D-3 原形）。旧断言 `Deny` 随镜像退役。
         assert_eq!(
             read_req(
                 &bridge,
@@ -786,7 +815,8 @@ mod tests {
                     .to_string_lossy()
             )
             .await,
-            PermitDecision::Deny
+            PermitDecision::AllowOnce,
+            "internal-region reads yield to the tool-layer two-stage gate"
         );
         // GAP-RUN-TESTS (2026-08-11): the run_tests output artifact is the
         // model's permission-gated window into the full test output — the
@@ -803,7 +833,10 @@ mod tests {
             PermitDecision::AllowOnce,
             "run_tests output artifact readable per ADR §3.8.3"
         );
-        // ...and everything else under `.gsa` stays denied (no wildcard).
+        // ...and near-miss filenames are not the window（0p S2 P1-1 后桥
+        // 镜像不再一刀切拒 `.gsa`，但窗口守卫臂仍按精确文件名放行——
+        // `.bak` 形态不命中窗口臂，落入让路臂交由工具层判决；桥面无
+        // 特权放行，tool 层对其拒/门照旧）。
         assert_eq!(
             read_req(
                 &bridge,
@@ -812,7 +845,8 @@ mod tests {
                     .to_string_lossy()
             )
             .await,
-            PermitDecision::Deny
+            PermitDecision::AllowOnce,
+            "non-window .gsa reads yield to the tool-layer gate (no bridge privilege)"
         );
         // OUTPUT-DEGENERATION-GUARD (2026-08-19, ADR-0010 §14.33 / 设计
         // §3.2): terminal output logs under `session/terminal/` are the
@@ -846,7 +880,10 @@ mod tests {
             PermitDecision::AllowOnce
         );
         // `..` escaping out of `session/terminal/` into other `.gsa`
-        // internals stays denied (no wildcard / no parent escape).
+        // internals（0p S2 P1-1 后桥面让路：词法折叠后非窗口形态 →
+        // AllowOnce；工具层两段门对该路径恒拒——keystore 属 B1 凭据区
+        // CredentialsDenied，通知亦不放开。安全锁在 orz-tools 判决单点
+        // 与 GAP-GSA-SYMLINK-STALE-TEST 回归，桥不再持第二判定权威）。
         assert_eq!(
             read_req(
                 &bridge,
@@ -859,9 +896,12 @@ mod tests {
                     .to_string_lossy()
             )
             .await,
-            PermitDecision::Deny
+            PermitDecision::AllowOnce,
+            "bridge yields; tool-layer gate permanently denies the credentials region"
         );
-        // Non-`.log` siblings under `session/terminal/` are not whitelisted.
+        // Non-`.log` siblings under `session/terminal/` are not whitelisted
+        // at the bridge（0p S2 P1-1 后交由工具层两段门：内部区首读通知/
+        // 二读放行，桥面不再预判）。
         assert_eq!(
             read_req(
                 &bridge,
@@ -872,7 +912,8 @@ mod tests {
                     .to_string_lossy()
             )
             .await,
-            PermitDecision::Deny
+            PermitDecision::AllowOnce,
+            "bridge yields non-window shapes to the tool-layer gate"
         );
 
         let _ = std::fs::remove_dir_all(&dir);

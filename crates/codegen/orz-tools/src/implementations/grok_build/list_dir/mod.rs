@@ -560,6 +560,7 @@ impl xai_tool_runtime::Tool for ListDirTool {
         let display_base = display_cwd_or_cwd(&cwd, display_cwd.as_deref());
         let display_path = compute_display_path(&display_base, &input.target_directory);
 
+        let call_id = ctx.call_id.as_str().to_owned();
         // 0p S2 两段门（2026-09-07，ADR-0010 §14.61 设计 B）：会话卷域列目录
         // 先经两段门判决——窗口恒放行；内部区（含卷根）首读返回通知信封
         // （B2）并持久化已通知态；二读放行（B4）。同 read_file/grep。
@@ -575,7 +576,7 @@ impl xai_tool_runtime::Tool for ListDirTool {
         if volume_verdict == Some(crate::types::resources::SessionVolumeReadVerdict::NoticeRequired)
             && let Some(access) = &session_volume_access
         {
-            access.mark_noticed();
+            access.mark_noticed(&call_id);
         }
         if volume_verdict == Some(crate::types::resources::SessionVolumeReadVerdict::NoticeRequired)
         {
@@ -587,12 +588,34 @@ impl xai_tool_runtime::Tool for ListDirTool {
             == Some(crate::types::resources::SessionVolumeReadVerdict::InternalAfterNotice)
             && let Some(access) = &session_volume_access
         {
-            access.mark_opened_this_call();
+            access.mark_opened_this_call(&call_id);
+        }
+        // B1 永久拒凭据区（0p S2 复审修复）：通知也不放开。
+        if volume_verdict
+            == Some(crate::types::resources::SessionVolumeReadVerdict::CredentialsDenied)
+        {
+            if let Some(access) = &session_volume_access {
+                access.set_denial_this_call(
+                    &call_id,
+                    "session_volume_agent_invisible",
+                    format!(
+                        "directory is inside the session volume credentials region, which \
+                         is permanently denied (notice does not open it): {}",
+                        display_path.display()
+                    ),
+                );
+            }
+            return Ok(ListDirOutput::PermissionDenied(format!(
+                "Permission denied: directory is inside the session volume credentials \
+                 region (permanently denied): {}",
+                display_path.display()
+            )));
         }
         // 词法在域内但 canonical 逸出卷外——恒拒（安全语义不放松）。
         if volume_verdict == Some(crate::types::resources::SessionVolumeReadVerdict::Denied) {
             if let Some(access) = &session_volume_access {
                 access.set_denial_this_call(
+                    &call_id,
                     "session_volume_agent_invisible",
                     format!(
                         "directory is inside the agent-invisible session volume with an \
@@ -624,6 +647,7 @@ impl xai_tool_runtime::Tool for ListDirTool {
         {
             if let Some(access) = &session_volume_access {
                 access.set_denial_this_call(
+                    &call_id,
                     "outside_workspace",
                     format!(
                         "list_dir directory escapes workspace sandbox: {}",
@@ -1783,6 +1807,88 @@ mod tests {
                 assert!(msg.contains("escapes workspace sandbox"), "msg: {msg}");
             }
             other => panic!("Expected PermissionDenied, got {:?}", other),
+        }
+    }
+
+    // ===== 0p S2 两段门测试组（2026-09-07 复审 P2-8 补全——list_dir 面
+    // 此前零两段门测试）=====
+
+    fn make_volume_resources(cwd: &std::path::Path) -> Resources {
+        let mut resources = Resources::new();
+        resources.insert(Cwd(cwd.to_path_buf()));
+        let gsa_root = cwd.join(".gsa");
+        let canonical = dunce::canonicalize(&gsa_root).unwrap_or_else(|_| gsa_root.clone());
+        resources.insert(crate::types::resources::SessionVolumeRoot(canonical));
+        resources.insert(crate::types::resources::SessionVolumeAccess::open(gsa_root));
+        resources
+    }
+
+    fn list_input(target: &str) -> ListDirInput {
+        ListDirInput {
+            target_directory: target.to_string(),
+        }
+    }
+
+    /// 两段门 ①②（list_dir 面）：内部区列目录首读返回通知信封；
+    /// 二读放行（真实列出台账目录内容）。
+    #[tokio::test]
+    async fn list_dir_two_stage_notice_then_open() {
+        let tmp = TempDir::new().unwrap();
+        let ws = dunce::canonicalize(tmp.path()).unwrap();
+        let ledger = ws.join(".gsa").join("ledger");
+        std::fs::create_dir_all(&ledger).unwrap();
+        std::fs::write(ledger.join("current.md"), "[1] row\n").unwrap();
+
+        let tool = ListDirTool;
+        let first = xai_tool_runtime::Tool::run(
+            &tool,
+            test_ctx(make_volume_resources(&ws).into_shared()),
+            list_input(".gsa/ledger"),
+        )
+        .await
+        .unwrap();
+        match &first {
+            ListDirOutput::PermissionDenied(notice) => {
+                assert!(notice.contains("[session_volume_notice]"), "{notice}");
+            }
+            other => panic!("Expected notice envelope, got {other:?}"),
+        }
+        assert!(ws.join(".gsa").join("access_state.json").exists());
+
+        let second = xai_tool_runtime::Tool::run(
+            &tool,
+            test_ctx(make_volume_resources(&ws).into_shared()),
+            list_input(".gsa/ledger"),
+        )
+        .await
+        .unwrap();
+        match &second {
+            ListDirOutput::Content(c) => {
+                assert!(c.content.contains("current.md"), "open must list: {c:?}");
+            }
+            other => panic!("Expected open_after_notice listing, got {other:?}"),
+        }
+    }
+
+    /// 凭据区永久拒（list_dir 面）。
+    #[tokio::test]
+    async fn list_dir_credentials_region_permanently_denied() {
+        let tmp = TempDir::new().unwrap();
+        let ws = dunce::canonicalize(tmp.path()).unwrap();
+        std::fs::create_dir_all(ws.join(".gsa").join("grok-home")).unwrap();
+        let tool = ListDirTool;
+        let out = xai_tool_runtime::Tool::run(
+            &tool,
+            test_ctx(make_volume_resources(&ws).into_shared()),
+            list_input(".gsa/grok-home"),
+        )
+        .await
+        .unwrap();
+        match &out {
+            ListDirOutput::PermissionDenied(denial) => {
+                assert!(denial.contains("credentials region"), "{denial}");
+            }
+            other => panic!("credentials region must never open, got {other:?}"),
         }
     }
 }

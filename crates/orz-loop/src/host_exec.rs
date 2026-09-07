@@ -3183,18 +3183,10 @@ impl AgentLoopController {
                     }
                 }
                 // 0p S2 / W2 D-3（2026-09-07，ADR-0010 §14.61 设计 C）：权限
-                // 门拒绝统一结构化信封落 journal——与失败返回同纪律
-                // （policy_denial 载荷要求 status=error + 非零 exit_code，
-                // 法官族校验 _verify_v02_policy_denial 同口径）；两段门二读
+                // 门拒绝统一结构化信封落 journal——status/error/policy_
+                // denial 载荷由下方 P0-C S3 既有块统一落（含 error 字段），
+                // 本批删除原重复写点（0p S2 复审 P3 卫生项）；两段门二读
                 // 放行以 session_volume_opened 落审计（设计 B4）。
-                if let Some(denial) = &res.policy_denial {
-                    completed_payload["status"] = serde_json::json!("error");
-                    completed_payload["policy_denial"] = serde_json::json!({
-                        "source": denial.source.as_str(),
-                        "code": denial.code,
-                        "reason": denial.reason,
-                    });
-                }
                 if res.session_volume_opened {
                     completed_payload["session_volume_opened"] = serde_json::json!(true);
                 }
@@ -3327,7 +3319,12 @@ impl AgentLoopController {
                 // 纪律记入 failure_agg（结构化 code = exit_{n}，非日志内
                 // 容）。failure_target 不识别的工具（grep 等）返回 None，
                 // 零误盖；无退出语义（None）与零退出不盖章。
+                // 0p S2 复审 P2 修复（2026-09-07）：policy_denial 载荷
+                // （读沙箱拒绝/通知信封）不是命令级失败——grep 带 path
+                // 参数会命中 file_target，deny exit 1 曾被误盖 exit_1 章
+                // 污染 failures_only 聚合面，此处置信封优先、不盖章。
                 if let Some(exit) = res.exit_code.filter(|n| *n != 0)
+                    && res.policy_denial.is_none()
                     && let Some(ft) = crate::failure_target::failure_target(&tc.name, &tc.arguments)
                 {
                     self.note_failure_agg(&ft, &format!("exit_{exit}"));

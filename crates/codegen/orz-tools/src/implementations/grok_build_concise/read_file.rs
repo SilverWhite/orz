@@ -87,7 +87,16 @@ impl xai_tool_runtime::Tool for ReadFileConciseTool {
         // `None`: the concise tool does not stream, so it needs no
         // text-path streamability signal (see `run_read_file`).
         let invoking = crate::types::tool_metadata::invoking_param_names(&ctx);
-        let result = run_read_file(input, cwd_override, None, resources, None, &invoking).await?;
+        let result = run_read_file(
+            input,
+            cwd_override,
+            None,
+            resources,
+            None,
+            &invoking,
+            ctx.call_id.as_str(),
+        )
+        .await?;
 
         match result {
             ReadFileOutput::FileContent(mut fc) => {

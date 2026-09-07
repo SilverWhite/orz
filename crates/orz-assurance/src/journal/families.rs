@@ -5030,4 +5030,129 @@ json.dump(out, sys.stdout)
             fixture_names.len()
         );
     }
+
+    // ==== 0p S2 复审补测（2026-09-07）：两段门/读沙箱事件面载荷直调
+    // 法官族 + v0.2 载荷 schema 校验——修复前 `session_volume_*` 载荷
+    // 零 assurance 侧覆盖（复审 P3-6）。独立测试不进 Rust↔Python 对拍
+    // corpus（对拍场景数钉死，Python 侧为冻结 reference）。
+
+    /// 0p S2 设计 C：三形态完成事件全部过 `verify_policy_denial` 族——
+    /// 首读通知（session_volume_notice）、逃逸恒拒
+    /// （session_volume_agent_invisible）、通知后放行（session_volume_
+    /// opened，非 deny 形态）。
+    #[test]
+    fn policy_denial_session_volume_payloads_pass_family() {
+        let notice = vec![ev(
+            "tool_completed",
+            json!({
+                "tool": "read_file", "status": "error", "exit_code": 1,
+                "policy_denial": {"source": "permission", "code": "session_volume_notice",
+                    "reason": "session volume first access: duties and structure preview \
+                               provided; read again to open (open_after_notice)"},
+            }),
+        )];
+        assert!(
+            verify_policy_denial(&notice).is_empty(),
+            "notice envelope must pass: {:?}",
+            verify_policy_denial(&notice)
+        );
+
+        let invisible = vec![ev(
+            "tool_completed",
+            json!({
+                "tool": "grep", "status": "error", "exit_code": 1,
+                "policy_denial": {"source": "permission",
+                    "code": "session_volume_agent_invisible",
+                    "reason": "escaping canonical target"},
+            }),
+        )];
+        assert!(
+            verify_policy_denial(&invisible).is_empty(),
+            "escape denial must pass: {:?}",
+            verify_policy_denial(&invisible)
+        );
+
+        // 通知后放行是成功完成（status=ok + opened 标记），不是 deny。
+        let opened = vec![ev(
+            "tool_completed",
+            json!({
+                "tool": "read_file", "status": "ok", "exit_code": 0,
+                "session_volume_opened": true,
+            }),
+        )];
+        assert!(
+            verify_policy_denial(&opened).is_empty(),
+            "opened completion is not a denial: {:?}",
+            verify_policy_denial(&opened)
+        );
+
+        // 反例锁定：denial 载荷缺非零 exit / status=ok → 族仍拦截。
+        let broken = vec![ev(
+            "tool_completed",
+            json!({
+                "tool": "read_file", "status": "ok", "exit_code": 0,
+                "policy_denial": {"source": "permission", "code": "session_volume_notice",
+                    "reason": "self-describing refusal required"},
+            }),
+        )];
+        assert!(
+            !verify_policy_denial(&broken).is_empty(),
+            "status=ok + exit=0 denial must be rejected by the family"
+        );
+    }
+
+    /// v0.2 载荷 schema（additionalProperties=false + const true）接受
+    /// `session_volume_opened` 载荷并拒绝假值——schema 层的机械锁定。
+    #[test]
+    fn tool_completed_payload_schema_accepts_session_volume_opened() {
+        // 从 crate 目录向上探测含 runtime/ 的仓库根（容器挂载形态安全）。
+        let manifest = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+        let mut dir = manifest.clone();
+        let schema_path = loop {
+            let candidate = dir.join("runtime/tool-completed-event-payload-v0.2.schema.json");
+            if candidate.exists() {
+                break candidate;
+            }
+            dir = dir
+                .parent()
+                .expect("repo root with runtime/ schema not found")
+                .to_path_buf();
+        };
+        let text = std::fs::read_to_string(&schema_path).expect("schema file reads");
+        let schema: Value = serde_json::from_str(&text).expect("schema parses");
+        let validator = jsonschema::options()
+            .with_draft(jsonschema::Draft::Draft202012)
+            .should_validate_formats(false)
+            .build(&schema)
+            .expect("schema compiles");
+        // 生产形状：成功完成不写 status 字段（schema 合约「status 存在即
+        // 必须为 error」——status 只在拒绝完成上由生产者写入）。
+        let payload = json!({
+            "tool": "read_file", "call_id": "call-1",
+            "exit_code": 0,
+            "session_volume_opened": true,
+        });
+        validator
+            .validate(&payload)
+            .expect("opened payload must validate against v0.2 schema");
+        let bad = json!({
+            "tool": "read_file", "call_id": "call-1",
+            "exit_code": 0,
+            "session_volume_opened": false,
+        });
+        assert!(
+            validator.validate(&bad).is_err(),
+            "const-true must reject false"
+        );
+        // 通知信封完成事件（status=error + 结构化 denial）同过 schema。
+        let notice = json!({
+            "tool": "read_file", "call_id": "call-2",
+            "status": "error", "exit_code": 1,
+            "policy_denial": {"source": "permission", "code": "session_volume_notice",
+                "reason": "first access notice"},
+        });
+        validator
+            .validate(&notice)
+            .expect("notice envelope completion must validate");
+    }
 }

@@ -75,10 +75,17 @@ impl SummarySlots {
 /// Persist the summary archive with bounded retries. Returns whether the
 /// file exists after the attempts; a failure is NEVER silent here — the
 /// caller surfaces it in the marker and the `context_compressed` event.
+///
+/// 0p S2 复审 P1-2 修复（B5 第 5 漏斗，2026-09-07，ADR-0010 §14.61）：
+/// 压缩存档是「会话快照」家族最大体量落卷面（`.gsa/compaction/*.md`，
+/// 含冻结台账视图原文），写盘点统一接 orz-secrets 机械脱敏——key 不落
+/// 卷不变量；台账漏斗的脱敏产出在折叠视图嵌入处被内存原文重现的旁路
+/// 由此闭合（审计面可接受脱敏失真，用户裁决「审计部分不怕」）。
 pub fn write_archive_retry(archive_dir: &Path, archive_path: &Path, markdown: &str) -> bool {
+    let scrubbed = orz_secrets::redact_secrets(markdown);
     for _ in 0..ARCHIVE_WRITE_MAX_ATTEMPTS {
         if std::fs::create_dir_all(archive_dir).is_ok()
-            && std::fs::write(archive_path, markdown).is_ok()
+            && std::fs::write(archive_path, scrubbed.as_bytes()).is_ok()
             && archive_path.exists()
         {
             return true;

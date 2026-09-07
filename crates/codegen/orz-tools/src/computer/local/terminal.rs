@@ -538,14 +538,26 @@ impl ProcessState {
             return;
         };
         let Ok(bytes) = tokio::fs::read(&path).await else {
+            // 0p S2 复审 P2 修复：sweep 读失败不再静默——本不变量是两段门
+            // 放开的先决条件，fail-open 必须留痕（fail loud）。
+            tracing::warn!(
+                file = %path.display(),
+                "B5 secret sweep: terminal log read failed — file may hold unredacted content"
+            );
             return;
         };
         if bytes.is_empty() {
             return;
         }
         let (text, _) = crate::util::encoding::decode_text(&bytes);
-        if let std::borrow::Cow::Owned(scrubbed) = orz_secrets::redact_secrets(&text) {
-            let _ = tokio::fs::write(&path, scrubbed.into_bytes()).await;
+        if let std::borrow::Cow::Owned(scrubbed) = orz_secrets::redact_secrets(&text)
+            && let Err(e) = tokio::fs::write(&path, scrubbed.into_bytes()).await
+        {
+            tracing::warn!(
+                file = %path.display(),
+                error = %e,
+                "B5 secret sweep: terminal log rewrite failed — file may hold unredacted content"
+            );
         }
     }
 
@@ -2214,6 +2226,11 @@ impl LocalTerminalActor {
             if let Some(handle) = process.state_dump_handle.take() {
                 handle.abort();
             }
+            // 0p S2 复审 P2 修复（B5 不变量，2026-09-07，ADR-0010 §14.61）：
+            // 会话拆除路径此前直接 clear、跳过完成点 sweep——被杀进程的
+            // 终端日志可能带未脱敏 key 永久落卷。kill 后补 sweep（best-
+            // effort，与完成点纪律一致）再清理。
+            process.flush_and_truncate_output_file().await;
         }
         self.processes.clear();
     }

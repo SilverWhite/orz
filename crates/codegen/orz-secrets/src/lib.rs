@@ -1,5 +1,6 @@
 mod sanitizer;
 
 pub use sanitizer::{
-    redact_json_string_values, redact_secrets, redact_url, redact_user_paths, walk_json_strings,
+    redact_json_string_values, redact_secrets, redact_url, redact_user_paths,
+    register_known_secret, register_known_secrets_from_env, walk_json_strings,
 };

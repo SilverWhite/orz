@@ -149,6 +149,13 @@ pub fn write_epoch_archive_retry(archive_dir: &Path, snapshot: &EpochSnapshot) -
     let Ok(json) = serde_json::to_string_pretty(snapshot) else {
         return false;
     };
+    // 0p S2 复审 P2 修复（B5 第 5 漏斗，2026-09-07，ADR-0010 §14.61）：
+    // epoch 归档落 `.gsa/blackboard/`（exec/tool_actions 承载工具动作与
+    // 结果摘要），写盘点接 orz-secrets 机械脱敏。自检 re-parse 仍通过
+    // （占位符替换不破坏 JSON 结构）；restore 读到的是脱敏后文本——
+    // plan-epoch 生产语义已退役（ADR §14.52），诊断面接受该失真，
+    // key 不落卷不变量优先。
+    let json = orz_secrets::redact_secrets(&json).into_owned();
     let path = epoch_archive_path(archive_dir, snapshot.plan_epoch);
     let tmp_path = path.with_extension("json.tmp");
     for _ in 0..EPOCH_ARCHIVE_MAX_ATTEMPTS {

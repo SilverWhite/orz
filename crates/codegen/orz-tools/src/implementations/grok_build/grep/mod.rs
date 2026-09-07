@@ -812,7 +812,7 @@ async fn prepare_grep(
     use crate::types::tool_metadata::{resolve_cwd, shared_resources};
     let resources = shared_resources(ctx)?;
     let cwd = resolve_cwd(ctx, &resources).await?;
-    let (display_cwd, hints_enabled, deny_read_globs, skill_roots, session_volume) = {
+    let (display_cwd, hints_enabled, mut deny_read_globs, skill_roots, session_volume) = {
         let res = resources.lock().await;
         (
             res.get::<DisplayCwd>().map(|d| d.0.clone()),
@@ -832,6 +832,7 @@ async fn prepare_grep(
         res.get::<crate::types::resources::SessionVolumeAccess>()
             .cloned()
     };
+    let call_id = ctx.call_id.as_str().to_owned();
 
     // Resolve the model-provided path for the working directory.
     let workdir = resolve_model_path(
@@ -864,7 +865,7 @@ async fn prepare_grep(
     if volume_verdict == Some(crate::types::resources::SessionVolumeReadVerdict::NoticeRequired)
         && let Some(access) = &session_volume_access
     {
-        access.mark_noticed();
+        access.mark_noticed(&call_id);
     }
     if volume_verdict == Some(crate::types::resources::SessionVolumeReadVerdict::NoticeRequired) {
         return Ok(GrepStep::Early(GrepSearchOutput {
@@ -881,7 +882,40 @@ async fn prepare_grep(
         == Some(crate::types::resources::SessionVolumeReadVerdict::InternalAfterNotice)
         && let Some(access) = &session_volume_access
     {
-        access.mark_opened_this_call();
+        access.mark_opened_this_call(&call_id);
+    }
+    // B1 永久拒凭据区（0p S2 复审修复）：通知也不放开。
+    if volume_verdict == Some(crate::types::resources::SessionVolumeReadVerdict::CredentialsDenied)
+    {
+        let display_path = if let Ok(suffix) = workdir.strip_prefix(&cwd) {
+            display_base.join(suffix)
+        } else {
+            workdir.clone()
+        };
+        if let Some(access) = &session_volume_access {
+            access.set_denial_this_call(
+                &call_id,
+                "session_volume_agent_invisible",
+                format!(
+                    "search path is inside the session volume credentials region, which \
+                     is permanently denied (notice does not open it): {}",
+                    display_path.display()
+                ),
+            );
+        }
+        return Ok(GrepStep::Early(GrepSearchOutput {
+            stdout: Vec::new(),
+            stderr: format!(
+                "Permission denied: search path is inside the session volume credentials \
+                 region (permanently denied): {}",
+                display_path.display()
+            )
+            .into_bytes(),
+            exit_code: 1,
+            match_count: 0,
+            file_matches: Vec::new(),
+            files_searched: None,
+        }));
     }
     // 词法在域内但 canonical 逸出卷外——恒拒（安全语义不放松）。
     if volume_verdict == Some(crate::types::resources::SessionVolumeReadVerdict::Denied) {
@@ -892,6 +926,7 @@ async fn prepare_grep(
         };
         if let Some(access) = &session_volume_access {
             access.set_denial_this_call(
+                &call_id,
                 "session_volume_agent_invisible",
                 format!(
                     "search path is inside the agent-invisible session volume with an \
@@ -936,6 +971,7 @@ async fn prepare_grep(
         };
         if let Some(access) = &session_volume_access {
             access.set_denial_this_call(
+                &call_id,
                 "outside_workspace",
                 format!(
                     "grep search path escapes workspace sandbox: {}",
@@ -955,6 +991,21 @@ async fn prepare_grep(
             file_matches: Vec::new(),
             files_searched: None,
         }));
+    }
+
+    // 0p S2 复审 P2 修复（先存旁路收口，2026-09-07）：两段门未开门时，
+    // 从 workspace 根发起的 `--hidden` 搜索会由 rg 遍历深入 `.gsa` 内部区，
+    // 绕过门直接命中内容——追加 exclude glob 与既有 deny_read_globs 同
+    // 机制（Managed Read-deny）。开门后（已通知）内部区属已放行面，
+    // 不再排除。卷资源缺席（Task C 回退基线）维持原行为。
+    if session_volume.is_some()
+        && volume_verdict == Some(crate::types::resources::SessionVolumeReadVerdict::OutsideDomain)
+        && !session_volume_access
+            .as_ref()
+            .map(|access| access.noticed())
+            .unwrap_or(false)
+    {
+        deny_read_globs.push("**/.gsa/**".to_string());
     }
 
     // Pre-check: if the search path doesn't exist, return enriched hints
@@ -3108,5 +3159,151 @@ mod tests {
         assert_eq!(output.exit_code, 1);
         let err = String::from_utf8_lossy(&output.stderr);
         assert!(err.contains("escapes workspace sandbox"), "stderr: {err}");
+    }
+
+    // ===== 0p S2 两段门测试组（2026-09-07 复审 P2-8 补全——grep 面此前
+    // 零两段门测试，三读工具一致性只有 read_file 被锁）=====
+
+    fn make_volume_resources(cwd: &std::path::Path) -> Resources {
+        let mut resources = Resources::new();
+        resources.insert(Cwd(cwd.to_path_buf()));
+        let gsa_root = cwd.join(".gsa");
+        let canonical = dunce::canonicalize(&gsa_root).unwrap_or_else(|_| gsa_root.clone());
+        resources.insert(crate::types::resources::SessionVolumeRoot(canonical));
+        resources.insert(crate::types::resources::SessionVolumeAccess::open(gsa_root));
+        resources
+    }
+
+    /// 两段门 ①②（grep 面）：内部区搜索首读返回通知信封（非内容）；
+    /// 二读直接执行（open_after_notice——命中真实内容）。
+    #[tokio::test]
+    async fn grep_two_stage_notice_then_open() {
+        let tmp = TempDir::new().unwrap();
+        let ws = dunce::canonicalize(tmp.path()).unwrap();
+        let ledger = ws.join(".gsa").join("ledger");
+        std::fs::create_dir_all(&ledger).unwrap();
+        std::fs::write(
+            ledger.join("current.md"),
+            "[1] 轮次 1: run_terminal_cmd 目标=pip install 结果=exit_1\n",
+        )
+        .unwrap();
+
+        // 首读 → 通知信封（exit 1、无匹配内容）。
+        let mut first = make_grep_input("pip install");
+        first.path = Some(".gsa/ledger".to_string());
+        let tool = GrepTool;
+        let out = xai_tool_runtime::Tool::run(
+            &tool,
+            test_ctx(make_volume_resources(&ws).into_shared()),
+            first,
+        )
+        .await
+        .unwrap();
+        let err = String::from_utf8_lossy(&out.stderr);
+        assert!(err.contains("[session_volume_notice]"), "{err}");
+        assert!(err.contains("open_after_notice"), "{err}");
+        assert_eq!(out.exit_code, 1);
+        assert!(ws.join(".gsa").join("access_state.json").exists());
+
+        // 二读 → 放行（真实命中）。
+        let mut second = make_grep_input("pip install");
+        second.path = Some(".gsa/ledger".to_string());
+        let out2 = xai_tool_runtime::Tool::run(
+            &tool,
+            test_ctx(make_volume_resources(&ws).into_shared()),
+            second,
+        )
+        .await
+        .unwrap();
+        assert_eq!(out2.exit_code, 0, "second read must execute, not re-notify");
+        let stdout = String::from_utf8_lossy(&out2.stdout);
+        assert!(stdout.contains("pip install"), "hit expected: {stdout}");
+    }
+
+    /// 0p S2 复审 P2 修复（先存旁路收口）：两段门未开门时，workspace 根
+    /// `--hidden` 搜索由 rg 遍历深入 `.gsa` 内部区绕过门——追加 exclude
+    /// glob 后不得命中内部区内容；开门后同一搜索放行（内部区属已开放面）。
+    #[tokio::test]
+    async fn grep_pre_notice_traversal_excludes_volume_internal() {
+        let tmp = TempDir::new().unwrap();
+        let ws = dunce::canonicalize(tmp.path()).unwrap();
+        let ledger = ws.join(".gsa").join("ledger");
+        std::fs::create_dir_all(&ledger).unwrap();
+        std::fs::write(ledger.join("current.md"), "uniquetoken_internal_secret\n").unwrap();
+        std::fs::write(ws.join("workspace.txt"), "workspace content\n").unwrap();
+
+        // 未开门：从 workspace 根 hidden 搜索 → 不得命中内部区。
+        let mut pre = make_grep_input("uniquetoken_internal_secret");
+        pre.hidden = true;
+        let tool = GrepTool;
+        let out = xai_tool_runtime::Tool::run(
+            &tool,
+            test_ctx(make_volume_resources(&ws).into_shared()),
+            pre,
+        )
+        .await
+        .unwrap();
+        // rg 无命中本就 exit 1——断言落在内容面：exclude glob 生效 = 零命中。
+        let stdout = String::from_utf8_lossy(&out.stdout);
+        assert!(
+            !stdout.contains("uniquetoken_internal_secret"),
+            "pre-notice traversal must not read volume internals: {stdout}"
+        );
+
+        // 开门（先对内部区显式读取一次完成通知）：同一搜索命中。
+        let mut opener = make_grep_input("uniquetoken_internal_secret");
+        opener.path = Some(".gsa/ledger".to_string());
+        let _notice = xai_tool_runtime::Tool::run(
+            &tool,
+            test_ctx(make_volume_resources(&ws).into_shared()),
+            opener,
+        )
+        .await
+        .unwrap();
+        let mut post = make_grep_input("uniquetoken_internal_secret");
+        post.hidden = true;
+        let out2 = xai_tool_runtime::Tool::run(
+            &tool,
+            test_ctx(make_volume_resources(&ws).into_shared()),
+            post,
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            out2.exit_code, 0,
+            "post-notice traversal must reach internals"
+        );
+        let stdout2 = String::from_utf8_lossy(&out2.stdout);
+        assert!(
+            stdout2.contains("uniquetoken_internal_secret"),
+            "post-notice hit expected: {stdout2}"
+        );
+    }
+
+    /// B1 永久拒凭据区（0p S2 复审修复）：对 keystore 区的搜索恒拒，
+    /// 通知亦不放开。
+    #[tokio::test]
+    async fn grep_credentials_region_permanently_denied() {
+        let tmp = TempDir::new().unwrap();
+        let ws = dunce::canonicalize(tmp.path()).unwrap();
+        let keystore = ws.join(".gsa").join("keystore");
+        std::fs::create_dir_all(&keystore).unwrap();
+        std::fs::write(keystore.join("installation-key.bin"), "rawkeymaterial\n").unwrap();
+
+        let mut input = make_grep_input("rawkeymaterial");
+        input.path = Some(".gsa/keystore".to_string());
+        let tool = GrepTool;
+        let out = xai_tool_runtime::Tool::run(
+            &tool,
+            test_ctx(make_volume_resources(&ws).into_shared()),
+            input,
+        )
+        .await
+        .unwrap();
+        let err = String::from_utf8_lossy(&out.stderr);
+        assert!(
+            err.contains("credentials region"),
+            "keystore search must be permanently denied: {err}"
+        );
     }
 }
