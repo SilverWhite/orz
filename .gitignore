@@ -54,3 +54,6 @@ _windows_high_nist/analysis/
 _windows_high_nist/staging-*/
 .t23tmp/
 /.ter_review_*/
+
+# W2 跑批桥客户端过程日志（本地件，不入库；结果以 formal-2026-09-02/ 证据与 runlog 登记为准）
+_windows_high_nist/w2-chunk*-runlog*.txt

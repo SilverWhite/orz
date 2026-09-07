@@ -480,6 +480,19 @@ GLM F2 处置转排期（2026-09-06 用户裁决）：`orz-host/src/approval.rs`
 - [ ] T3 批次 W2（VM 任务批）：chunk1 复跑 + chunk2/chunk3 续跑（TB2.1
   错题集 9 题 3 题/批，`ORZ_F6_PUSH=on` + 官方墙钟唯一）——0l ⑥ agent
   主载 + 记账、0l ⑦ 模型侧 §7 判据、TER T3.1–T3.5。
+  （2026-09-07 进度：chunk1（w2-chunk1-031）3/3 ran/compliant/journal 齐
+  收——make-doom run_finished @862s 越过 840s 旧硬杀线（840 硬杀除名
+  决定性实证）、gcode run_invalidated(wallclock) @900s 官方墙钟唯一、
+  mteb 409s 完成（答案 Qwen/Qwen3-Embedding-8B，≠0303 基线，入 ⑥ 记账）；
+  T3.3 F6 push cue 3+3 条 payload 可审（mteb 0 条=remaining 始终 >600s
+  设计自洽）、T3.4 vm.js read_file 0 次（0303 为 20+ 轮）；通用零 400 +
+  零哨兵 + 命中率 96.82%；P2-11 dep_graph 事件字段随 ToolCompleted 落
+  journal（read 58 / write 4 边）。边界：T3.1 真实面无 ≥180s 前台命令
+  （tool_running 未发生，机制已由 W1 fake 覆盖）；HF 探测 12.5s 判定失败
+  （≤2s 理想受 DROP 模式限制，零泄漏）。首跑作废件（GBK 注释吞换行
+  $workdir 空值 + elev 退出码假绿）双修复 `173ade6`。分析
+  [`W2_CHUNK1_031_S4_ANALYSIS`](docs/audits/W2_CHUNK1_031_S4_ANALYSIS_2026-09-07.md)；
+  chunk2 跑批中，chunk3 待续。）
 - [ ] T4 批次 L（Linux/TB2 容器批）：make-doom（0b ③ + P2-14 S4 /
   P2-13 B4 / P2-12 S4 长会话遥测）、compile-compcert +
   hf-model-inference（0b ④ + web 通道 A/B）、dna-assembly（0d 后续 5）；

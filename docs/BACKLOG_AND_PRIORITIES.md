@@ -619,8 +619,14 @@ GLM F2 处置转排期（2026-09-06 用户裁决）：`orz-host/src/approval.rs`
   T2.4 验收事实达成）、T1 批次 0（0m S3，orz `19585b88`）、T2 批次 W1
   （TER T2.3 三判据 ALL_PASS，零 API）完成；证据 `_windows_high_nist/
   evidence-t0-restore-20260907/`、`evidence-w1-20260907/`。W2 前置就绪
-  （key 通道 -KeyFile→env-file→跑后清除）。各项正式闭合登记仍按排期在
-  T6 统一收口落 docs/audits/ 与各条目小节。
+  （key 通道 -KeyFile→env-file→跑后清除）。T3 批次 W2 chunk1
+  （w2-chunk1-031）3/3 ran/compliant：make-doom run_finished @862s 越过
+  840s 旧硬杀线、gcode 官方 900s 墙钟收尾、mteb 409s 完成；T3.3/T3.4 达成
+  （F6 push cue payload 可审 / vm.js read 0 次）；零 400 + 零哨兵 + 命中率
+  96.82%；dep_graph 字段落 journal（read 58/write 4）。首跑作废双修复
+  `173ade6`（GBK 注释吞换行 + elev 退出码假绿）。chunk2 跑批中。分析
+  [`W2_CHUNK1_031_S4_ANALYSIS`](audits/W2_CHUNK1_031_S4_ANALYSIS_2026-09-07.md)。
+  各项正式闭合登记仍按排期在 T6 统一收口落 docs/audits/ 与各条目小节。
 
 ### 1. FUS-TOOL-PROBE（`implemented`；P0-A 批次 1-7 与 P0-A-2 已闭合）
 
