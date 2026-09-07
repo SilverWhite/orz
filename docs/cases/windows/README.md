@@ -19,6 +19,9 @@
   命令行；退出码 Int32 溢出，候选）
 - `ORZ-WIN-CTYPES-001` — ctypes P/Invoke 坑清单（函数名/DLL 归属/argtypes/结构数组/
   句柄包装/指针生命周期/Path 语义，候选）
+- `ORZ-WIN-HV-001` — Hyper-V hypervisor 加载状态鉴别（固件读数假阴怪癖 vs 本 boot
+  真故障；事件日志 20148 + 功能探针 + 物理环境关键查询，候选；
+  2026-09-07 S3/S4 集中实机验证批 T0 排障晋级）
 
 **状态口径**：全部条目均为 `candidate`（晋级自
 `GROK_WINDOWS_CHILD_TREE_PROBE_2026-07-23.md` 的三场景，fixture/verifier/digest
