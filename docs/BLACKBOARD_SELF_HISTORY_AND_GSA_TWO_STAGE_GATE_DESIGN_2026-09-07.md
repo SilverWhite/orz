@@ -84,6 +84,25 @@ pattern `fasttext|MemoryError|bad allocation|g\+\+|编译|pip install` 直指
 > 修订（原文「内建桥权限拒绝不落事件」退役）；词汇与 0n 对齐：
 > allow / deny / notice（session_volume_notice）/
 > open_after_notice（session_volume_opened）。
+> **0p S2 复审处理批注记（2026-09-07，全面复审后用户裁决直接修复）**：
+> ⑤ **桥镜像让路（P1 修复）**——复审实证权限桥 `access_in_scope`
+> 对 `.gsa` 内部区的冻结镜像在工具执行前恒拒（且走无 ToolCompleted
+> 的 event-less 路径 = W2 D-3 原形），两段门在所有带桥生产路径不可
+> 达；修复为镜像内部区拒绝臂退役、判定权单点归 orz-tools 两段门，
+> 桥仅保留两窗口 canonical 逃逸守卫与 run_tests 精确文件名守卫；
+> §14.56 语义修订的执法点自此真正单源。
+> ⑥ **key 拦截覆盖面闭合（P1 修复）**——复审穷举证实四漏斗之外尚有
+> 五条落卷路径（run_tests_output.txt 恒直读窗口 / runs/retrieval-
+> results 工件 / compaction 存档 / blackboard epoch 归档 / grill 日志）
+> 未接脱敏，「全卷零 sk-」判据可被证伪；修复为第 5 漏斗统一在写盘点
+> 接 orz-secrets + 已知 key 值字面替换注册表（B5 明文后半落地）+
+> B1 凭据区（keystore/one_shot_permit/grok-home/chrome-profile*）落
+> 判决 CredentialsDenied 恒拒 + shutdown_all 补 sweep；snapshots/
+> （回滚字节完整性）与 grok-home 外部写手登记为边界。
+> ⑦ **opened 置位口径校准**——实现按 B4 字面「每次内部区放行都置位」
+> （审计对 = 1×N），schema 描述原文「first post-notice access」随批
+> 勘误；旗标按 call-id 键控修复并发批错配；通知信封增凭据区职责句、
+> 结构预览补轮次范围/条目数（B2 三要素齐备）。
 
 - **B1 区域分类**（设计默认，可调）：
   - 两段式：`ledger/**`、`runs/**`（journal 事件）、`conversations/`

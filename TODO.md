@@ -532,7 +532,7 @@ GLM F2 处置转排期（2026-09-06 用户裁决）：`orz-host/src/approval.rs`
   硬编码 1，单提示=1 语义不变）；orz 测试全绿 + clippy 零新增。
   （2026-09-07 闭合：orz `928dceb3` 实施 + `fd46d4f9` 复审处理批
   F-A/F-B/F-C/F-D/F-H 全闭合；F-C 治本转 P1-0q。）
-- [ ] S2 两段门 + 信封：`.gsa` 内部区（ledger/runs/conversations）首读
+- [x] S2 两段门 + 信封：`.gsa` 内部区（ledger/runs/conversations）首读
   通知信封（职责图+台账结构预览+黑板指针+询问句，
   code=session_volume_notice，非阻塞轮）→ 二读放行
   （open_after_notice）；通知状态会话卷级持久化
@@ -542,6 +542,12 @@ GLM F2 处置转排期（2026-09-06 用户裁决）：`orz-host/src/approval.rs`
   权限门 deny 统一结构化 `policy_denial {source, code, reason}` +
   `ToolCompleted.policy_denial` 落 journal（闭合 W2 D-3）；词汇与 0n
   approval 对齐注记；shell 直读定性「跳过教育的旁路」文档标注。
+  （2026-09-07 闭合：orz `7d7d89e7` 实施 + `542c35d5` 全面复审处理批——两 P1 修复
+  （桥镜像让路两段门生产可达 / 第 5 漏斗+已知 key 注册表+B1 凭据恒拒
+  闭合全卷判据）+ P2 七项（call-id 键控旗标/grep 误盖 failure_agg/
+  search_replace 写守卫/未开门遍历排除/预览三要素/schema 描述×2）+
+  测试 +14；orz-tools 2844 / orz-host 254 / orz-loop 745 / orz-assurance
+  207 全绿；入口：[复审处理审计](docs/audits/0P_S2_REVIEW_HANDLING_2026-09-07.md)。）
 - [ ] T2 双平台重建：Windows 三件套 0.3.2 + Linux musl 顺带翻新 + VM
   同步 + acaf manifest 重刷 + DryRun 全对 + enforcement-probe 三臂全绿。
 - [ ] S4 重跑 train-fasttext（RunTag tf-selfhistory-032，官方 3600s 墙

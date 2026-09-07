@@ -668,12 +668,20 @@ D-1/D-2/D-3）→ 用户裁决：黑板补强先行（「黑板必须暴露模�
   命令级失败补盖章 exit_{n} + receipt 指针删除 + 表头截断 + 3K 注记入
   预算修正；设计文档 §3.A 勘误注随批；orz-loop 743 全绿 / clippy 零
   新增 / 门禁 valid。F-C 治本转 **0q** 单列。）
-- [ ] S2 两段门：内部区首读通知信封（职责图+台账结构预览+黑板指针+
+- [x] S2 两段门：内部区首读通知信封（职责图+台账结构预览+黑板指针+
   询问句，code=session_volume_notice）→ 二读放行（open_after_notice）；
   状态会话卷级持久化；区域分类（台账/journal/conversations=两段式，
   窗口与 resources_state=直读）；key 拦截（.gsa 全部持久化写入路径接
   orz-secrets 脱敏，全卷零 sk- 命中回归）；权限门 deny 信封统一落
   ToolCompleted.policy_denial（闭合 W2 D-3）；词汇与 0n 对齐注记。
+  （2026-09-07 S2 实施 orz `7d7d89e7` + 同日全面复审处理批 orz
+  `542c35d5`（+ `7b00bbc9` T0 bump 0.3.2 补做）闭合：复审
+  实证两 P1——权限桥镜像在工具前恒拒内部区使两段门生产不可达、key
+  拦截四漏斗外尚有五条未脱敏落卷路径——修复为桥镜像让路判定权单点
+  orz-tools + 第 5 漏斗（run_tests_output/retrieval-results/compaction/
+  epoch/grill）+ 已知 key 注册表 + B1 凭据区恒拒落判决 + call-id 键控
+  旗标；测试 +14（orz-tools 2844/orz-host 254/orz-assurance 207 全绿）；
+  设计注记 ⑤⑥⑦ 随批，详见[复审处理审计](audits/0P_S2_REVIEW_HANDLING_2026-09-07.md)。）
 - [ ] T2 双平台重建：Windows 三件套 + Linux musl 顺带翻新 + VM 同步 +
   acaf manifest 重刷 + DryRun + enforcement-probe。
 - [ ] S4 重跑 train-fasttext（RunTag tf-selfhistory-032，官方 3600s
