@@ -13,6 +13,9 @@
       2. control   - ORZ_DEEPSEEK_API_KEY + ORZ_MAIN_AGENT_MODEL are set in
                      the runner process environment; the control-arm child
                      (current token, Job-contained) inherits it.
+                     W2 batch: ORZ_F6_PUSH=on is injected in both arms
+                     (env-file for high-nist, process env here) per
+                     LIVE_VERIFICATION_BATCH_SCHEDULE_2026-09-07 sec 4.2.
       3. high-nist - each orz spawn gets a per-run BOM-less env JSON injected
                      with --env-file (the sandbox CLI deletes it after a
                      successful read) and the sandbox is given
@@ -92,6 +95,7 @@ $summary = [ordered]@{
     model = $Model
     dry_run = [bool]$DryRun
     allowlist_ip = $AllowlistIp
+    f6_push = 'on'
     task_timeout_seconds = $TaskTimeoutSeconds
     bootstrap_ok = $false
     secret_files_left = -1
@@ -115,7 +119,7 @@ function Add-SecretFile([string]$Path) {
 # F2 (2026-09-03): C:\app is a per-task directory JUNCTION to the task
 # workdir, so unmodified instructions that reference /app keep working and
 # every /app read/write lands in the workdir (which the high-nist LOW-IL
-# child can actually write — a real C:\app directory was integrity-denied).
+# child can actually write -- a real C:\app directory was integrity-denied).
 function Reset-AppJunction {
     param([string]$Target)
     if ($DryRun) {
@@ -244,9 +248,15 @@ function Write-SandboxEnvJson {
     if ($Key -notmatch '^sk-[A-Za-z0-9]{32}$') {
         throw 'env-file key failed canonical shape validation (fail-closed)'
     }
+    # W2 batch (LIVE_VERIFICATION_BATCH_SCHEDULE_2026-09-07 sec 4.2): the F6
+    # push budget-cue lane runs enabled for every W2 chunk (mteb criterion
+    # T3.3, other chunks piggyback bookkeeping).  Consumed by orz
+    # f6_push_enabled_override together with ORZ_MAX_WALLCLOCK (set below
+    # per task from the official agent_timeout_seconds).
     $envObj = [ordered]@{
         ORZ_DEEPSEEK_API_KEY = $Key
         ORZ_MAIN_AGENT_MODEL = $Model
+        ORZ_F6_PUSH          = 'on'
     }
     [System.IO.File]::WriteAllText($Path, ($envObj | ConvertTo-Json -Compress), $utf8NoBom)
 }
@@ -335,11 +345,16 @@ foreach ($taskId in $selectedIds) {
     if ($perTaskTimeoutSeconds -lt 60) {
         $perTaskTimeoutSeconds = 60
     }
-    # TER T2.1 (2026-09-04) 墙钟单一化：不再派生 `perTask-60` 的
-    # `--max-wallclock`（840 余量删除）——sandbox `--timeout`（=官方
-    # agent_timeout_seconds）是唯一评测墙钟；官方值经 `ORZ_MAX_WALLCLOCK`
-    # env 透传给 orz 内部（F6 pull/push 读源以 runner 施加值为准，
-    # T1.8/T1.9 已消费该 env）。
+    # TER T2.1 (2026-09-04) single wall clock: no more perTask-60 derived
+    # --max-wallclock (the 840s margin is gone) - the sandbox --timeout
+    # (= official agent_timeout_seconds) is the ONLY evaluation wall clock;
+    # the official value reaches orz internals via the ORZ_MAX_WALLCLOCK
+    # env passthrough (F6 pull/push read the runner-imposed value;
+    # T1.8/T1.9 consume this env).  KEEP THIS FILE ASCII-ONLY: PowerShell 5.1
+    # parses non-BOM files in the ANSI codepage (GBK on zh systems) and a
+    # multi-byte char at a comment line end can swallow the newline, joining
+    # the NEXT code line into the comment (broke $workdir assignment on
+    # 2026-09-07 W2 chunk1; see runlog elev-job-d81a54fad889.log).
     $workdir = Join-Path $Workspace ("task-" + $taskId)
     New-Item -ItemType Directory -Path $workdir -Force | Out-Null
     Copy-Item -LiteralPath $instructionPath -Destination $workdir -Force
@@ -434,6 +449,7 @@ foreach ($taskId in $selectedIds) {
         if (-not $DryRun) {
             $env:ORZ_DEEPSEEK_API_KEY = $keyText
             $env:ORZ_MAIN_AGENT_MODEL = $Model
+            $env:ORZ_F6_PUSH = 'on'
         }
     }
 
@@ -450,7 +466,7 @@ foreach ($taskId in $selectedIds) {
     }
 
     if ($DryRun) {
-        Write-Output "AGENT_DRYRUN TASK=$taskId env=$($taskResult.env_inject) allowlist=$($taskResult.allowlist) appcontainer=off"
+        Write-Output "AGENT_DRYRUN TASK=$taskId env=$($taskResult.env_inject) allowlist=$($taskResult.allowlist) appcontainer=off f6_push=on"
         Write-Output "AGENT_DRYRUN SBX: python $SandboxCli $($sbxArgs -join ' ')"
         Write-Output "AGENT_DRYRUN wallclock runner_imposed=sandbox --timeout $perTaskTimeoutSeconds max_wallclock_arg=none env_ORZ_MAX_WALLCLOCK=$perTaskTimeoutSeconds"
         $taskResult.attempt = 'dry-run'
@@ -500,6 +516,7 @@ if (-not $DryRun) {
     Remove-Item Env:ORZ_DEEPSEEK_API_KEY -ErrorAction SilentlyContinue
     Remove-Item Env:ORZ_MAIN_AGENT_MODEL -ErrorAction SilentlyContinue
     Remove-Item Env:ORZ_MAX_WALLCLOCK -ErrorAction SilentlyContinue
+    Remove-Item Env:ORZ_F6_PUSH -ErrorAction SilentlyContinue
 }
 foreach ($f in @($secretFiles)) {
     if (Test-Path -LiteralPath $f) {

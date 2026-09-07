@@ -124,6 +124,14 @@ try {
             param($LogPath) Get-Content -LiteralPath $LogPath
         }
         foreach ($l in $logContent) { $lines.Add($l) }
+        # 2026-09-07: propagate the guest body exit code.  A body exit != 0
+        # (e.g. the agent runner exiting AGENT_LIVE_EXIT=1) must fail this
+        # runner instead of surfacing as STATUS=OK (this false green masked
+        # the hollow $workdir agent run in W2 chunk1).
+        $exitLine = @($logContent) | Where-Object { $_ -match '^EXIT=\d+\s*$' } | Select-Object -Last 1
+        if ($exitLine -and $exitLine -match '^EXIT=(\d+)\s*$' -and ([int]$Matches[1]) -ne 0) {
+            $failed = $true
+        }
     } else {
         $lines.Add("JOB_TIMEOUT after $TimeoutSeconds seconds")
         $failed = $true
