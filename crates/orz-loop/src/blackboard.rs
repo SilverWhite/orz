@@ -2245,6 +2245,304 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    /// 0p S1（2026-09-07，ADR-0010 §14.61 设计 A1/A2）：blackboard_read 工具
+    /// 声明增量扩展——可选 `failures_only`（boolean）与 `search`（string，
+    /// minLength 1）自历史查询参数随请求工具定义回达；描述含教学句
+    /// （failures_only 失败总览 / search 字面检索）。
+    #[tokio::test]
+    async fn blackboard_read_declares_selfhistory_params() {
+        let dir = test_dir();
+        let journal = JournalRecorder::new(dir.clone());
+        let host = TestHost {
+            journal,
+            tool_result: Some(ToolResult {
+                output: "irrelevant".to_string(),
+                exit_code: Some(0),
+                output_encoding: None,
+                structured: None,
+                ..Default::default()
+            }),
+        };
+        let fake = Arc::new(FakeProvider::new(vec![
+            ScriptedResponse::text("完成"),
+            ScriptedResponse::text("完成"),
+        ]));
+        let gateway: Arc<dyn ModelGateway> = fake.clone();
+        let controller = AgentLoopController::with_gateway(gateway);
+        controller
+            .run_turn(
+                &host,
+                "看声明",
+                "RUN-SH-DECL",
+                MANIFEST,
+                0,
+                None,
+                None,
+                None,
+            )
+            .await
+            .unwrap();
+        let received = fake.received_requests();
+        let round = received
+            .first()
+            .expect("first request declares the tool surface");
+        let bb_def = round
+            .tools
+            .iter()
+            .find(|t| t.name == "blackboard_read")
+            .expect("blackboard_read declared in request tools");
+        let props = bb_def
+            .parameters
+            .get("properties")
+            .expect("tool parameters properties");
+        assert_eq!(props["failures_only"]["type"], "boolean", "{bb_def:?}");
+        assert_eq!(props["search"]["type"], "string", "{bb_def:?}");
+        assert_eq!(props["search"]["minLength"], 1, "{bb_def:?}");
+        // A3 教学句：描述里 failures_only / search 用法可见。
+        assert!(
+            bb_def.description.contains("failures_only") && bb_def.description.contains("search"),
+            "{bb_def:?}"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// 0p S1（2026-09-07，ADR-0010 §14.61 设计 A1/A2）：自信息面经真实工具
+    /// 链回达——`failures_only=true` 返回 failure_agg 聚合行集（P2-12 行
+    /// 语义 + 回查指针）；`search=<literal>` 大小写不敏感命中早期失败行与
+    /// actions receipt（行含 order_id 指针）；两响应均挂 [黑板增量] 头
+    /// （live PULL 面一致纪律）。
+    #[tokio::test]
+    async fn blackboard_read_serves_failures_only_and_search_faces() {
+        let dir = test_dir();
+        let journal = JournalRecorder::new(dir.clone());
+        let host = TestHost {
+            journal,
+            tool_result: Some(ToolResult {
+                output: "irrelevant".to_string(),
+                exit_code: Some(0),
+                output_encoding: None,
+                structured: None,
+                ..Default::default()
+            }),
+        };
+        let fake = Arc::new(FakeProvider::new(vec![
+            ScriptedResponse::tool_calls(vec![ToolCall {
+                name: "blackboard_read".to_string(),
+                arguments: serde_json::json!({"section": "exec", "failures_only": true}),
+                call_id: "call-sh-fo".to_string(),
+            }]),
+            ScriptedResponse::tool_calls(vec![ToolCall {
+                name: "blackboard_read".to_string(),
+                arguments: serde_json::json!({"section": "exec", "search": "MEMORYERROR"}),
+                call_id: "call-sh-search".to_string(),
+            }]),
+            ScriptedResponse::text("完成"),
+            ScriptedResponse::text("完成"),
+        ]));
+        let gateway: Arc<dyn ModelGateway> = fake.clone();
+        let controller = AgentLoopController::with_gateway(gateway);
+        {
+            let mut bb = controller.blackboard().write();
+            // 早期轮失败聚合（F4 身份 + 错误码）。
+            bb.failure_agg.record(
+                "cmd_target",
+                "id-a",
+                "python train.py",
+                "tool_timeout",
+                10.0,
+                3,
+                orz_assurance::lif::Domain::Normal,
+            );
+            // 早期轮 exec 失败行（折叠视图默认不含的行）。
+            bb.exec.errors.push(crate::blackboard::ExecEntry::stamped(
+                "[workspace.run_terminal] pip install fasttext → MemoryError: bad allocation"
+                    .to_string(),
+                2,
+                orz_assurance::lif::Domain::Normal,
+                "2026-09-07T00:00:00Z".to_string(),
+            ));
+            // receipt 失败（message 是检索面的一部分；行带 order_id 指针）。
+            bb.actions.push_result(crate::blackboard::ActionResult {
+                order_id: "ORD-SH-1".into(),
+                action: Some("workspace.run_terminal".into()),
+                ok: false,
+                response: None,
+                error: Some(serde_json::json!({
+                    "step": "execute",
+                    "code": "execution_failed",
+                    "message": "g++: fatal error: MemoryError at fasttext.o",
+                })),
+                trace_id: "t-sh-1".into(),
+                timestamp: "2026-09-07T00:00:01Z".into(),
+                round: 4,
+                domain: Some(orz_assurance::lif::Domain::Normal),
+            });
+        }
+        controller
+            .run_turn(&host, "看自历史", "RUN-SH", MANIFEST, 0, None, None, None)
+            .await
+            .unwrap();
+        let received = fake.received_requests();
+
+        // —— failures_only 面：P2-12 行语义 + 指针行 + 增量头。
+        let fo_round = received
+            .iter()
+            .find(|r| {
+                r.messages
+                    .iter()
+                    .any(|m| m.tool_call_id.as_deref() == Some("call-sh-fo"))
+            })
+            .expect("round carrying failures_only reply");
+        let fo_reply = fo_round
+            .messages
+            .iter()
+            .find(|m| m.tool_call_id.as_deref() == Some("call-sh-fo"))
+            .expect("failures_only tool result message");
+        assert!(
+            fo_reply
+                .content
+                .contains("== exec · 失败聚合（failures_only=true）=="),
+            "{:?}",
+            fo_round.messages
+        );
+        assert!(
+            fo_reply
+                .content
+                .contains("[失败目标 cmd_target] python train.py ×1"),
+            "{:?}",
+            fo_round.messages
+        );
+        assert!(
+            fo_reply.content.contains("domain/round_from/round_to"),
+            "{:?}",
+            fo_round.messages
+        );
+        assert!(
+            fo_reply
+                .content
+                .lines()
+                .next()
+                .unwrap()
+                .starts_with("[黑板增量]"),
+            "{:?}",
+            fo_round.messages
+        );
+
+        // —— search 面：早期失败行 + receipt（大小写不敏感）。
+        let search_round = received
+            .iter()
+            .find(|r| {
+                r.messages
+                    .iter()
+                    .any(|m| m.tool_call_id.as_deref() == Some("call-sh-search"))
+            })
+            .expect("round carrying search reply");
+        let search_reply = search_round
+            .messages
+            .iter()
+            .find(|m| m.tool_call_id.as_deref() == Some("call-sh-search"))
+            .expect("search tool result message");
+        assert!(
+            search_reply
+                .content
+                .contains("== exec · search \"MEMORYERROR\"（命中 2 条）=="),
+            "{:?}",
+            search_round.messages
+        );
+        assert!(
+            search_reply.content.contains("r2 | exit=err |"),
+            "{:?}",
+            search_round.messages
+        );
+        assert!(
+            search_reply.content.contains("ORD-SH-1"),
+            "{:?}",
+            search_round.messages
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// 0p S1 组合守卫：failures_only×search、非 exec 分区、×receipt_id
+    /// 三种非法组合全部显式报错（exit 1 + error 文案回达模型，绝不静默
+    /// 忽略——同非法 epoch/receipt_id 纪律）。
+    #[tokio::test]
+    async fn blackboard_read_selfhistory_combo_guards_error_explicitly() {
+        let dir = test_dir();
+        let journal = JournalRecorder::new(dir.clone());
+        let host = TestHost {
+            journal,
+            tool_result: Some(ToolResult {
+                output: "irrelevant".to_string(),
+                exit_code: Some(0),
+                output_encoding: None,
+                structured: None,
+                ..Default::default()
+            }),
+        };
+        let fake = Arc::new(FakeProvider::new(vec![
+            ScriptedResponse::tool_calls(vec![ToolCall {
+                name: "blackboard_read".to_string(),
+                arguments: serde_json::json!(
+                    {"section": "exec", "failures_only": true, "search": "x"}
+                ),
+                call_id: "call-g1".to_string(),
+            }]),
+            ScriptedResponse::tool_calls(vec![ToolCall {
+                name: "blackboard_read".to_string(),
+                arguments: serde_json::json!({"section": "plan", "failures_only": true}),
+                call_id: "call-g2".to_string(),
+            }]),
+            ScriptedResponse::tool_calls(vec![ToolCall {
+                name: "blackboard_read".to_string(),
+                arguments: serde_json::json!(
+                    {"section": "exec", "search": "x", "receipt_id": "ORD-1"}
+                ),
+                call_id: "call-g3".to_string(),
+            }]),
+            ScriptedResponse::text("完成"),
+            ScriptedResponse::text("完成"),
+        ]));
+        let gateway: Arc<dyn ModelGateway> = fake.clone();
+        let controller = AgentLoopController::with_gateway(gateway);
+        controller
+            .run_turn(&host, "守卫", "RUN-SH-GUARD", MANIFEST, 0, None, None, None)
+            .await
+            .unwrap();
+        let received = fake.received_requests();
+        let reply_of = |call_id: &str| {
+            received
+                .iter()
+                .find_map(|r| {
+                    r.messages
+                        .iter()
+                        .find(|m| m.tool_call_id.as_deref() == Some(call_id))
+                })
+                .unwrap_or_else(|| panic!("reply for {call_id}"))
+        };
+        assert!(
+            reply_of("call-g1")
+                .content
+                .contains("failures_only 与 search 互斥"),
+            "{:?}",
+            reply_of("call-g1").content
+        );
+        assert!(
+            reply_of("call-g2")
+                .content
+                .contains("仅与 section=exec 组合有效"),
+            "{:?}",
+            reply_of("call-g2").content
+        );
+        assert!(
+            reply_of("call-g3")
+                .content
+                .contains("与 failures_only/search 互斥"),
+            "{:?}",
+            reply_of("call-g3").content
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     /// P2-13 B3（2026-09-03，ADR-0010 §14.52 / 设计 §12 R4）：`epoch` 参数
     /// 生产面退役——未配置归档目录的控制器（生产面）模型工具声明不含
     /// `epoch`（live 参数 receipt_id/domain 等仍在）；配置归档目录的

@@ -496,6 +496,12 @@ pub struct AgentLoopController {
     /// sessions with history are marked done). Runs in the same session
     /// after the first one skip the gate.
     plan_first_session_done: bool,
+    /// 0p S1 / W2 D-2 (2026-09-07, ADR-0010 §14.61 设计 D)：真实会话轮
+    /// 计数——`run_finished.turn_count` 的数据源（退役硬编码 1）。会话轮
+    /// = 会话内第 N 个用户 prompt（1 起算）；ACP prompt 路径按 prompt
+    /// 计数注入（`with_session_turn`），CLI 单 run / grill / restore 保持
+    /// 缺省 1（单提示语义不变）。
+    session_turn: u64,
     /// Monotonic model-round counter across turns (streaming pacing guard).
     /// Kept on the controller (not per-turn) so a turn ≥ 2's FIRST round is
     /// also paced: a programmatic stdio client issuing prompt #2 immediately
@@ -899,6 +905,7 @@ impl AgentLoopController {
             blackboard_read_cursors: Mutex::new(std::collections::HashMap::new()),
             plan_first_enabled: false,
             plan_first_session_done: false,
+            session_turn: 1,
         }
     }
 
@@ -1518,6 +1525,7 @@ impl AgentLoopController {
             blackboard_read_cursors: Mutex::new(std::collections::HashMap::new()),
             plan_first_enabled: false,
             plan_first_session_done: false,
+            session_turn: 1,
         }
     }
 
@@ -1588,6 +1596,15 @@ impl AgentLoopController {
     /// surface by default.
     pub fn with_console_default_enabled(mut self, enabled: bool) -> Self {
         self.console_default_enabled = enabled;
+        self
+    }
+
+    /// 0p S1 / W2 D-2 (2026-09-07, ADR-0010 §14.61 设计 D)：注入真实会话
+    /// 轮计数——`run_finished.turn_count` 数据源。ACP prompt 路径传会话内
+    /// 第 N 个用户 prompt（1 起算）；CLI 单 run / grill / restore 不调用
+    /// （缺省 1，单提示语义不变）。`n < 1` 钳为 1。
+    pub fn with_session_turn(mut self, n: u64) -> Self {
+        self.session_turn = n.max(1);
         self
     }
 
@@ -2927,7 +2944,16 @@ impl AgentLoopController {
                      stuck）+ `round_from`/`round_to`（含边界、相等=单轮）——\
                      三者必须同时给，且与 `receipt_id`/`since_timestamp` 互斥\
                      （显式报错）；pre-stamp 旧行（无轮号）只能\
-                     用 since/receipt_id 展开。Call this when you need to \
+                     用 since/receipt_id 展开。自历史按需面 (0p S1, \
+                     2026-09-07): 失败总览（哪些目标反复失败、错误码集、\
+                     发生轮段）用 `failures_only=true`（F4 失败目标聚合行集，\
+                     整响应 ≤3K、截断显式标注）；在全部历史里找关键词（早期\
+                     报错文本、文件名、命令片段）用 `search=<literal>`（大小写\
+                     不敏感字面子串，非正则；扫 exec 动作/结果摘要与 actions \
+                     receipt 摘要，命中 ≤20 行，行 = 轮号 + exit + 摘要 + \
+                     order_id 指针）；二者仅与 section=exec 组合，且彼此及与 \
+                     receipt_id/since_timestamp/expand/epoch 互斥（显式报错）。\
+                     Call this when you need to \
                      recall what changed or what you did earlier — it costs \
                      nothing when you do not call it. Every live response \
                      starts with an optional `[黑板增量]` line listing \
@@ -2999,6 +3025,15 @@ impl AgentLoopController {
                             "type": "integer",
                             "minimum": 1,
                             "description": "B2 fold expansion round upper bound (inclusive; equal to round_from reads one round). Must be given together with domain and round_from.",
+                        },
+                        "failures_only": {
+                            "type": "boolean",
+                            "description": "0p S1 (2026-09-07): 失败聚合按需面——true 时返回 F4 失败目标聚合行集（P2-12 行语义：(kind,id) 身份、累计计数、错误码集、首末墙钟、行内域段），整响应 ≤3K、截断显式标注。仅与 section=exec 组合有效；与 search/receipt_id/since_timestamp/expand/epoch 互斥（显式报错）。",
+                        },
+                        "search": {
+                            "type": "string",
+                            "minLength": 1,
+                            "description": "0p S1 (2026-09-07): 自历史字面检索——大小写不敏感字面子串（非正则）扫 exec 动作/结果摘要与 actions receipt 摘要，命中 ≤20 行（行 = 轮号 + exit + 摘要 + order_id 指针），截断显式标注。仅与 section=exec 组合有效；与 failures_only/receipt_id/since_timestamp/expand/epoch 互斥（显式报错）。",
                         },
                     },
                     "required": ["section"],
@@ -3538,7 +3573,9 @@ impl AgentLoopController {
                 terminal_event,
                 serde_json::json!({
                     "status": status,
-                    "turn_count": 1,
+                    // 0p S1 / W2 D-2 (2026-09-07)：真实会话轮计数（ACP 会话
+                    // 内第 N 个 prompt；CLI 单 run 缺省 1）——退役硬编码 1。
+                    "turn_count": self.session_turn,
                     "tool_rounds": tool_rounds,
                 }),
             )
@@ -3971,6 +4008,45 @@ mod tests {
     use crate::host::{LoopHost, PermitDecision, PermitError, RiskClass, ToolError, ToolRegistry};
     use async_trait::async_trait;
     use orz_assurance::JournalRecorder;
+
+    /// 0p S1 / W2 D-2 (2026-09-07, ADR-0010 §14.61 设计 D)：`run_finished.
+    /// turn_count` 携带真实会话轮计数——`with_session_turn(n)` 注入值直达
+    /// 事件面（多轮会话 N>1）；缺省（CLI 单 run）与显式 0 钳位均为 1
+    /// （单提示语义回归）。
+    #[tokio::test]
+    async fn run_finished_turn_count_carries_session_turn() {
+        async fn turn_count_of(with_session_turn: Option<u64>) -> serde_json::Value {
+            let dir = test_dir();
+            let journal = JournalRecorder::new(dir.clone());
+            let host = TestHost {
+                journal,
+                tool_result: None,
+            };
+            let gateway: Arc<dyn ModelGateway> =
+                Arc::new(FakeProvider::from_texts(vec!["完成", "完成"]));
+            let mut controller = AgentLoopController::with_gateway(gateway);
+            if let Some(n) = with_session_turn {
+                controller = controller.with_session_turn(n);
+            }
+            controller
+                .run_turn(&host, "hi", "RUN-TURN-COUNT", MANIFEST, 0, None, None, None)
+                .await
+                .unwrap();
+            let events = std::fs::read_to_string(dir.join("events.jsonl")).unwrap();
+            let finished = events
+                .lines()
+                .filter_map(|l| serde_json::from_str::<serde_json::Value>(l).ok())
+                .find(|l| l["event_type"] == "run_finished")
+                .expect("run_finished event");
+            let value = finished["payload"]["turn_count"].clone();
+            let _ = std::fs::remove_dir_all(&dir);
+            value
+        }
+        assert_eq!(turn_count_of(Some(3)).await, 3, "多轮会话报真实轮号");
+        assert_eq!(turn_count_of(Some(1)).await, 1);
+        assert_eq!(turn_count_of(None).await, 1, "缺省 = 单提示语义不变");
+        assert_eq!(turn_count_of(Some(0)).await, 1, "n<1 钳为 1");
+    }
 
     #[test]
     fn parse_acaf_fail_closed_env_accepts_canonical_tokens() {

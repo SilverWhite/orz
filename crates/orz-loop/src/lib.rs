@@ -41,6 +41,7 @@ pub mod prompt;
 pub mod relay;
 pub mod render_fold;
 mod retrieval;
+pub mod selfhistory;
 pub mod summary;
 pub mod tool;
 pub mod tool_probe;

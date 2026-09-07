@@ -1629,6 +1629,172 @@ impl AgentLoopController {
                 });
                 return Ok((result, None));
             }
+            // 0p S1（2026-09-07，ADR-0010 §14.61 设计 A1/A2）：自信息面查询
+            // 参数——`failures_only`（失败聚合面）与 `search`（字面检索面）。
+            // 非 bool / 空/非串 = 显式报错（同非法 epoch/receipt_id 纪律，
+            // 绝不静默忽略）；显式 false = 不启用该面（等价省略）。
+            let failures_only = match tc.arguments.get("failures_only") {
+                Some(raw) => match raw.as_bool() {
+                    Some(true) => Some(true),
+                    Some(false) => None,
+                    None => {
+                        let content = format!(
+                            "invalid blackboard_read failures_only: {raw} — failures_only \
+                             必须是布尔值（true = 返回 F4 失败目标聚合行集）；省略该参数\
+                             读取 exec 分区默认视图"
+                        );
+                        let mut completed = serde_json::json!({
+                            "tool": tc.name,
+                            "call_id": tc.call_id,
+                            "exit_code": 1,
+                            "section": section,
+                            "error": content,
+                        });
+                        stamp_direct(&mut completed);
+                        writer.record(EventType::ToolCompleted, completed).await?;
+                        self.push_tool_action_stamped(
+                            ToolDispatcher::action_category(&tc.name).to_string(),
+                            tc.name.clone(),
+                            chrono_utc_now(),
+                        );
+                        let result = ToolResult {
+                            output: content,
+                            exit_code: Some(1),
+                            output_encoding: None,
+                            structured: None,
+                            ..Default::default()
+                        };
+                        messages.push(Message {
+                            role: Role::Tool,
+                            content: result.output.clone(),
+                            tool_call_id: Some(tc.call_id.clone()),
+                            tool_calls: Vec::new(),
+                            reasoning_content: None,
+                            round: None,
+                        });
+                        return Ok((result, None));
+                    }
+                },
+                None => None,
+            };
+            let search = match tc.arguments.get("search") {
+                Some(raw) => match raw.as_str() {
+                    Some(s) if !s.trim().is_empty() => Some(s.trim().to_string()),
+                    _ => {
+                        let content = format!(
+                            "invalid blackboard_read search: {raw} — search 必须是非空\
+                             字符串（字面子串，非正则，大小写不敏感）；省略该参数读取 \
+                             exec 分区默认视图"
+                        );
+                        let mut completed = serde_json::json!({
+                            "tool": tc.name,
+                            "call_id": tc.call_id,
+                            "exit_code": 1,
+                            "section": section,
+                            "error": content,
+                        });
+                        stamp_direct(&mut completed);
+                        writer.record(EventType::ToolCompleted, completed).await?;
+                        self.push_tool_action_stamped(
+                            ToolDispatcher::action_category(&tc.name).to_string(),
+                            tc.name.clone(),
+                            chrono_utc_now(),
+                        );
+                        let result = ToolResult {
+                            output: content,
+                            exit_code: Some(1),
+                            output_encoding: None,
+                            structured: None,
+                            ..Default::default()
+                        };
+                        messages.push(Message {
+                            role: Role::Tool,
+                            content: result.output.clone(),
+                            tool_call_id: Some(tc.call_id.clone()),
+                            tool_calls: Vec::new(),
+                            reasoning_content: None,
+                            round: None,
+                        });
+                        return Ok((result, None));
+                    }
+                },
+                None => None,
+            };
+            // 0p S1 组合守卫（fail loud，一次一错，按序判定；同 expand
+            // 互斥纪律——绝不静默忽略参数组合）。
+            if failures_only.is_some() || search.is_some() {
+                let conflict = if failures_only.is_some() && search.is_some() {
+                    Some(
+                        "blackboard_read failures_only 与 search 互斥——失败总览与字面\
+                         检索二选一；省略其一重试"
+                            .to_string(),
+                    )
+                } else if section != "exec" {
+                    Some(format!(
+                        "blackboard_read failures_only/search 仅与 section=exec 组合有效\
+                         （自历史面挂在 exec 累积日志上）；当前 section={section}"
+                    ))
+                } else if receipt_id.is_some() {
+                    Some(
+                        "receipt_id 仅与 section=actions 组合有效（点读结果栏单条 \
+                         receipt）；与 failures_only/search 互斥"
+                            .to_string(),
+                    )
+                } else if since.is_some() {
+                    Some(
+                        "since_timestamp 与 failures_only/search 互斥——自历史面扫全量\
+                         累积日志，不做时间过滤"
+                            .to_string(),
+                    )
+                } else if expand.is_some() {
+                    Some(
+                        "expand（domain/round_from/round_to）与 failures_only/search \
+                         互斥——展开是原文精读面，failures_only/search 是聚合/检索面；\
+                         省略其一重试"
+                            .to_string(),
+                    )
+                } else if epoch.is_some() {
+                    Some(
+                        "failures_only/search 是 live 面（黑板随会话延续、全量保留，\
+                         不进 epoch 归档）；省略 epoch 读取"
+                            .to_string(),
+                    )
+                } else {
+                    None
+                };
+                if let Some(content) = conflict {
+                    let mut completed = serde_json::json!({
+                        "tool": tc.name,
+                        "call_id": tc.call_id,
+                        "exit_code": 1,
+                        "section": section,
+                        "error": content,
+                    });
+                    stamp_direct(&mut completed);
+                    writer.record(EventType::ToolCompleted, completed).await?;
+                    self.push_tool_action_stamped(
+                        ToolDispatcher::action_category(&tc.name).to_string(),
+                        tc.name.clone(),
+                        chrono_utc_now(),
+                    );
+                    let result = ToolResult {
+                        output: content,
+                        exit_code: Some(1),
+                        output_encoding: None,
+                        structured: None,
+                        ..Default::default()
+                    };
+                    messages.push(Message {
+                        role: Role::Tool,
+                        content: result.output.clone(),
+                        tool_call_id: Some(tc.call_id.clone()),
+                        tool_calls: Vec::new(),
+                        reasoning_content: None,
+                        round: None,
+                    });
+                    return Ok((result, None));
+                }
+            }
             // PUSH→PULL (2026-08-21, CONTEXT_SCAFFOLDING_PULL_REDESIGN §4
             // 方案 A): `section=session` 是 live 会话面（预算剩余 + 状态行），
             // 由 controller 直接渲染、不进 epoch 归档；其余分区走黑板渲染。
@@ -1907,6 +2073,17 @@ impl AgentLoopController {
                         });
                         return Ok((result, None));
                     }
+                }
+            } else if section == "exec" && (failures_only.is_some() || search.is_some()) {
+                // 0p S1（2026-09-07，ADR-0010 §14.61 设计 A1/A2）：自信息面
+                // 派发——failures_only 走 failure_agg 聚合行集（P2-12 行语义
+                // ≤3K），search 走字面检索（exec 摘要 + actions receipt，
+                // ≤20 行）；均为有界 PULL 面，全量数据源（折叠视图之外）。
+                let bb = self.blackboard.read();
+                if let Some(q) = &search {
+                    crate::selfhistory::render_exec_search(&bb.exec, &bb.actions, q)
+                } else {
+                    crate::selfhistory::render_failures_only(&bb.failure_agg)
                 }
             } else {
                 self.render_blackboard_section_fold(

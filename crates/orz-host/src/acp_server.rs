@@ -1379,6 +1379,9 @@ impl AcpServer {
             // 结构）；`plan_first` 仅作休眠开关保留（测试/回退），生产
             // 不再启用。console 默认面随生产路径保留（与 CLI 一致）。
             .with_console_default_enabled(true)
+            // 0p S1 / W2 D-2 (2026-09-07)：真实会话轮计数——本 run 是会话
+            // 内第 N 个用户 prompt（prompt_number 0 起算，事件面 1 起算）。
+            .with_session_turn(prompt_number + 1)
             .with_snapshot_store(Some(handle.snapshot_store.clone()))
             // ACAF production flip (2026-08-16): the ACP session path shares
             // the signer-process client + fail-closed posture of the CLI run

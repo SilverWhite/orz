@@ -293,7 +293,9 @@ const NOTES_FACTS_ACTION_FAILURES_MAX: usize = 3;
 /// 单个失败目标聚合行渲染（P2-12，2026-09-02 方案 A）。域序列如
 /// `normal(r10–12)→pressure(r13)`；错误码行内集合全留/不留（全留=集合
 /// 成员不截断，超 3K 槽上限走既有「显式截断 + 指针」纪律）。
-fn render_failure_target_row(row: &crate::failure_agg::FailureTargetRow) -> String {
+/// 0p S1（2026-09-07）：`selfhistory::render_failures_only` 同源复用——
+/// blackboard_read failures_only 面与压缩注意事项槽共用同一行语义。
+pub(crate) fn render_failure_target_row(row: &crate::failure_agg::FailureTargetRow) -> String {
     let mut parts = vec![format!(
         "[失败目标 {}] {} ×{}",
         row.kind, row.preview, row.count
@@ -321,7 +323,7 @@ fn render_failure_target_row(row: &crate::failure_agg::FailureTargetRow) -> Stri
 }
 
 /// 域段书签渲染：`normal(r10–12)`（单轮段压缩为 `normal(r10)`）。
-fn render_domain_segment(seg: &crate::failure_agg::DomainSegment) -> String {
+pub(crate) fn render_domain_segment(seg: &crate::failure_agg::DomainSegment) -> String {
     if seg.from_round == seg.to_round {
         format!("{}(r{})", seg.domain.as_str(), seg.from_round)
     } else {
