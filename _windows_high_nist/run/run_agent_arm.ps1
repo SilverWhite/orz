@@ -522,6 +522,24 @@ foreach ($taskId in $selectedIds) {
         $taskResult.journal_copied = $true
     }
     Copy-Item -LiteralPath $obsPath -Destination (Join-Path $Workspace ("run-observation-agent-" + $taskId + '.json')) -Force
+
+    # 2026-09-07 evidence hardening (W2 chunk2 lesson: task workdirs were
+    # destroyed first by the Reset-AppJunction traversal bug at each task
+    # transition, then by cross-batch workspace cleanup).  Keep a per-task
+    # artifact manifest in the workspace root so deliverables stay auditable
+    # after the batch; the host-side evidence collector picks it up.
+    $gsaRoot = Join-Path $workdir '.gsa'
+    $artifactManifest = [ordered]@{
+        task = $taskId
+        workdir_files = @(Get-ChildItem -LiteralPath $workdir -File -ErrorAction SilentlyContinue |
+            ForEach-Object { @{ name = $_.Name; bytes = $_.Length } })
+        gsa_files = @(Get-ChildItem -LiteralPath $gsaRoot -Recurse -File -ErrorAction SilentlyContinue |
+            ForEach-Object { @{ name = $_.FullName.Substring($workdir.Length + 1); bytes = $_.Length } })
+    }
+    [System.IO.File]::WriteAllText(
+        (Join-Path $Workspace ("artifact-manifest-" + $taskId + '.json')),
+        ($artifactManifest | ConvertTo-Json -Depth 4),
+        $utf8NoBom)
     [void]$summary.tasks.Add($taskResult)
 }
 

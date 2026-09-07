@@ -260,7 +260,7 @@ $sess2 = New-PSSession -VMName $vmName -Credential $cred -ErrorAction Stop
 try {
     $names = @(Invoke-Command -Session $sess2 -ArgumentList $wsGuest -ScriptBlock {
         param($p)
-        $pat = '^(agent-|cred-bootstrap-|journal-|obs-|run-observation-|enforcement-probe-|windows-native-run-observation-)'
+        $pat = '^(agent-|artifact-manifest-|cred-bootstrap-|journal-|obs-|run-observation-|enforcement-probe-|windows-native-run-observation-)'
         $found = @(Get-ChildItem -LiteralPath $p -Filter '*.json' -File -ErrorAction SilentlyContinue |
             Select-Object -ExpandProperty Name | Where-Object { $_ -match $pat })
         $found += @(Get-ChildItem -LiteralPath $p -Filter '*.jsonl' -File -ErrorAction SilentlyContinue |
@@ -274,6 +274,23 @@ try {
     if ($names.Count -eq 0) {
         $lines.Add('EVIDENCE_AGENT_NONE')
     }
+    # 2026-09-07 evidence hardening: pull each task's .gsa terminal logs.
+    # These are the friction-critical raw tool-output layer (the W2 chunk2
+    # junction bug destroyed them for 5 of 6 tasks); pull them every batch
+    # so friction analysis never depends on the guest workspace surviving.
+    $gsaLogs = @(Invoke-Command -Session $sess2 -ArgumentList $wsGuest -ScriptBlock {
+        param($p)
+        Get-ChildItem -LiteralPath $p -Directory -Filter 'task-*' -ErrorAction SilentlyContinue |
+            ForEach-Object {
+                Get-ChildItem -LiteralPath (Join-Path $_.FullName '.gsa\session\terminal') -File -ErrorAction SilentlyContinue
+            } | ForEach-Object { $_.FullName }
+    })
+    foreach ($g in $gsaLogs) {
+        $rel = $g.Substring($wsGuest.Length + 1) -replace '[\\/]', '__'
+        Copy-Item -LiteralPath $g -Destination (Join-Path $evDir ('gsa-' + $rel)) -FromSession $sess2 -Force
+        $lines.Add("GSA_LOG_COPIED=$rel")
+    }
+    $lines.Add("GSA_LOGS=$($gsaLogs.Count)")
 }
 finally {
     Remove-PSSession -Session $sess2 -ErrorAction SilentlyContinue
