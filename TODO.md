@@ -513,6 +513,43 @@ GLM F2 处置转排期（2026-09-06 用户裁决）：`orz-host/src/approval.rs`
 - [ ] T6 统一收口：逐项审计/复验记录（docs/audits/）+ BACKLOG/TODO/
   TODO2/BACKLOG2/索引同步 + 计数入账 + manifest 重算 + 门禁 Exit 0。
 
+### P0-0p 模型自信息面补强与 `.gsa` 两段门（2026-09-07 设计定稿，同日用户裁决排期；BACKLOG 0p）
+
+> 设计：[`BLACKBOARD_SELF_HISTORY_AND_GSA_TWO_STAGE_GATE_DESIGN_2026-09-07`](docs/BLACKBOARD_SELF_HISTORY_AND_GSA_TWO_STAGE_GATE_DESIGN_2026-09-07.md)
+> / ADR-0010 §14.61。证据：[`W2_ORZ_DEFECT_EXTRACTION`](docs/audits/W2_ORZ_DEFECT_EXTRACTION_2026-09-07.md)
+> D-1/D-2/D-3。裁决要点：黑板先行（暴露模型需要的全部信息）、台账两段
+> 式放开（首读职责说明+结构预览+黑板指针+询问，二读放行）、key 不落卷
+> 不变量、拒绝信封与失败同纪律、落 journal 必须、状态会话级持久化、
+> 0.3.2、修完重跑 train-fasttext。
+
+- [ ] T0 版本 bump：orz 0.3.1 → **0.3.2**（独立提交；源冻结对本批解除；
+  后续 chunk3/批次L/O 以 0.3.2 为基线）。
+- [ ] S1 黑板补强（先行）：`blackboard_read section=exec` 增
+  `failures_only`（failure_agg 行集复用 P2-12 语义，≤3K 截断标注）+
+  `search=<literal>`（字面子串、命中 ≤20 行、截断显式）+ 工具描述教学
+  三句（展开参数/failures_only/search）；
+  `run_finished.turn_count` 真实会话轮计数（退役 controller.rs:3541
+  硬编码 1，单提示=1 语义不变）；orz 测试全绿 + clippy 零新增。
+- [ ] S2 两段门 + 信封：`.gsa` 内部区（ledger/runs/conversations）首读
+  通知信封（职责图+台账结构预览+黑板指针+询问句，
+  code=session_volume_notice，非阻塞轮）→ 二读放行
+  （open_after_notice）；通知状态会话卷级持久化
+  （access_state.json，跨 prompt 一次）；窗口类与 resources_state 直读
+  不变；卷缺席 fail-closed 不变；key 拦截——`.gsa` 全部持久化写入路径
+  接 orz-secrets 脱敏（回归：含 key 命令 → 全卷零 sk- 命中）；
+  权限门 deny 统一结构化 `policy_denial {source, code, reason}` +
+  `ToolCompleted.policy_denial` 落 journal（闭合 W2 D-3）；词汇与 0n
+  approval 对齐注记；shell 直读定性「跳过教育的旁路」文档标注。
+- [ ] T2 双平台重建：Windows 三件套 0.3.2 + Linux musl 顺带翻新 + VM
+  同步 + acaf manifest 重刷 + DryRun 全对 + enforcement-probe 三臂全绿。
+- [ ] S4 重跑 train-fasttext（RunTag tf-selfhistory-032，官方 3600s 墙
+  钟）：判据表（设计 §4）——证据完整性（终端日志+artifact-manifest 齐
+  收）/ 通知与放行事件面可审计 / deny 后同路径连续重试 ≤2（软）/
+  全卷零 sk- 命中 / blackboard_read 用量对照基线 3 次（观察）/
+  零真实 400 + 命中率 ≥90% → 分析落 docs/audits/。
+- [ ] S5 收口：BACKLOG/TODO/索引/ADR 注记同步 + manifest 重算 + 门禁
+  Exit 0。
+
 ### P0-B FUS-RETRIEVAL-MECH（`implemented`；批次 1-6 全部闭合 2026-08-14，保留供核对）
 
 - [x] 全部闭合：B-1 citations 结构化透传 / 步骤 2 web_fetch 候选计数门禁（cap=8）/ 步骤 3 机械预筛（canonical 去重 + 失败形态剔除 + tier/weight）/ 步骤 4 browser_read 模式扩展 + 计数域复用 / 步骤 5 输出级引用校验器 / 步骤 6 提示词缩短。入口：[检索机械控制设计](docs/RETRIEVAL_MECHANICAL_CONTROLS_DESIGN_2026-08-13.md) / 各步骤实施审计 / BACKLOG 0B。

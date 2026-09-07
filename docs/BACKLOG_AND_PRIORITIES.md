@@ -14,7 +14,7 @@
 
 | 优先级 | 含义 | 开放项（入口小节） |
 |---|---|---|
-| P0 | 当前工作集：设计已冻结，裁决后立即实施 | FUS-BENCHMARK-FULL-EXEC 验证②③(reward)④⑤（0b）；0d 后续 3/4/5 S4 复验（0d）；THIN-HARNESS-REDESIGN-V2 余项（0j）；WINDOWS-HIGH-NIST-MAX-FRICTION ⑥/⑦（0l）；GSA-SESSION-VOLUME-BOTTOM-LAYER S1–S4（0m，2026-09-06 用户裁决放行）；S3/S4 集中实机验证批（0o，2026-09-07 排期放行——集中执行上述实机类开放项，见排期文档）——P0-GOV 00（含任务 D）已于 2026-09-06 全部闭合 |
+| P0 | 当前工作集：设计已冻结，裁决后立即实施 | FUS-BENCHMARK-FULL-EXEC 验证②③(reward)④⑤（0b）；0d 后续 3/4/5 S4 复验（0d）；THIN-HARNESS-REDESIGN-V2 余项（0j）；WINDOWS-HIGH-NIST-MAX-FRICTION ⑥/⑦（0l）；GSA-SESSION-VOLUME-BOTTOM-LAYER S1–S4（0m，2026-09-06 用户裁决放行）；S3/S4 集中实机验证批（0o，2026-09-07 排期放行——集中执行上述实机类开放项，见排期文档）；模型自信息面补强与 .gsa 两段门（0p，2026-09-07 设计定稿同日排期——黑板自历史面 + 两段门 + key 不落卷 + 0.3.2 + 重跑 train-fasttext，见设计文档）——P0-GOV 00（含任务 D）已于 2026-09-06 全部闭合 |
 | P1 | 无需裁决，可与 P0 并行 | FUS-COMPONENT-REGISTER（4）；GAP-WINDOWS-EVIDENCE（5）；IMPL-DEEPSEEK-TRANSPORT / SEC-CREDENTIALS live 证据（6）；ORZ-SESSION-CONTEXT-MONITOR（6d） |
 | P2 | 生产化决策门：需用户裁决 | IMPL-CONTROL-FABRIC Slice 3/4（7）；OPS-PROTOCOL 裁剪与接线裁决（8）；MODEL-RESIDUAL-PRESSURE-FOLLOWUP（11）；COMPRESSION-LINGUISTIC-FORMAL-LAYER（12）；BLACKBOARD-CONVERSATION-SCOPE-FOLD B2–B4（13） |
 | P3 | 收尾 / 清理 | EVIDENCE-LOCAL-BROWSER（9）；GATE-CHAIN（10）；遗留小项（11） |
@@ -565,14 +565,15 @@ GAP-GSA-SYMLINK-STALE-TEST 连带观察（`.gsa` terminal-log 白名单会话卷
   symlink 会话卷实机构造）；GAP-GSA-SYMLINK-STALE-TEST 收口注记演进。
   （2026-09-07 实机复验完成，见 TODO P0-0o T1/批次 0。）
 - [ ] S4 收口：索引/BACKLOG/TODO 状态同步 + 门禁 Exit 0。
-- **新观察（2026-09-07，W2 压测暴露，待用户裁决是否立项）**：`.gsa`
+- **观察处置（2026-09-07 W2 压测暴露，同日用户裁决由 0p 承接）**：`.gsa`
   agent-invisible 边界存在 **shell 通道旁路**——run_terminal_cmd 类
   shell 命令可直读 `.gsa` 全部内容（W2 六 run 实证 31 条命令全部
   exit 0，含 `resources_state.json` 与机械审计台账 `ledger/current.md`
   被模型读取成功；工具层三分判定本身无误杀）。工具层拦截对 shell 串
-  内容不做检查，目录结构经 `ls -Force` 亦可见。修法选项（解冻后）：命令
-  串检查（脆弱）/ `.gsa` 卷 ACL 化或移出 cwd 可达域 / 设计上明确接受并
-  文档标注边界。证据
+  内容不做检查，目录结构经 `ls -Force` 亦可见。已裁决：不做命令串检查，由两段门 +
+  文档标注承接（shell 直读定性为「跳过教育的旁路」），落地见
+  **0p 小节**与设计
+  [`BLACKBOARD_SELF_HISTORY_AND_GSA_TWO_STAGE_GATE_DESIGN_2026-09-07`](BLACKBOARD_SELF_HISTORY_AND_GSA_TWO_STAGE_GATE_DESIGN_2026-09-07.md)；证据
   [`W2_ORZ_DEFECT_EXTRACTION D-1`](audits/W2_ORZ_DEFECT_EXTRACTION_2026-09-07.md)。
 
 设计权威：[`GSA_SESSION_VOLUME_BOTTOM_LAYER_DESIGN_2026-09-06`](GSA_SESSION_VOLUME_BOTTOM_LAYER_DESIGN_2026-09-06.md)
@@ -646,6 +647,39 @@ GLM F2 处置转排期（2026-09-06 用户裁决）：`orz-host/src/approval.rs`
   /
   [`W2_CHUNK2_031_S4_ANALYSIS`](audits/W2_CHUNK2_031_S4_ANALYSIS_2026-09-07.md)。
   各项正式闭合登记仍按排期在 T6 统一收口落 docs/audits/ 与各条目小节。
+
+### 0p. 模型自信息面补强与 `.gsa` 两段门（P0；2026-09-07 设计定稿，同日用户裁决排期实施）
+
+W2 压测证据链（[`W2_ORZ_DEFECT_EXTRACTION`](audits/W2_ORZ_DEFECT_EXTRACTION_2026-09-07.md)
+D-1/D-2/D-3）→ 用户裁决：黑板补强先行（「黑板必须暴露模型需要的全部信
+息」）、`.gsa` 台账两段式放开（首读职责说明+结构预览+黑板指针+询问，
+二读放行；「框架本身就是帮助模型的，不是限制的，审计部分不怕」）、key
+不落卷不变量、拒绝信封与失败同纪律、落 journal 必须、会话级状态持久化、
+版本基线 **0.3.2**、修完重跑 train-fasttext。
+设计权威：[`BLACKBOARD_SELF_HISTORY_AND_GSA_TWO_STAGE_GATE_DESIGN_2026-09-07`](BLACKBOARD_SELF_HISTORY_AND_GSA_TWO_STAGE_GATE_DESIGN_2026-09-07.md)
+/ ADR-0010 §14.61。
+
+- [ ] T0：orz 版本 bump 0.3.2（独立提交；源冻结对本批解除）。
+- [ ] S1 黑板补强：failure_agg 按需面（failures_only）+ 字面检索
+  （search ≤20 行）+ 工具描述教学；turn_count 真实计数退役硬编码 1；
+  orz 测试全绿。
+- [ ] S2 两段门：内部区首读通知信封（职责图+台账结构预览+黑板指针+
+  询问句，code=session_volume_notice）→ 二读放行（open_after_notice）；
+  状态会话卷级持久化；区域分类（台账/journal/conversations=两段式，
+  窗口与 resources_state=直读）；key 拦截（.gsa 全部持久化写入路径接
+  orz-secrets 脱敏，全卷零 sk- 命中回归）；权限门 deny 信封统一落
+  ToolCompleted.policy_denial（闭合 W2 D-3）；词汇与 0n 对齐注记。
+- [ ] T2 双平台重建：Windows 三件套 + Linux musl 顺带翻新 + VM 同步 +
+  acaf manifest 重刷 + DryRun + enforcement-probe。
+- [ ] S4 重跑 train-fasttext（RunTag tf-selfhistory-032，官方 3600s
+  墙钟）：判据表见设计 §4（证据完整性/通知与放行事件面/key 零落卷/
+  blackboard_read 用量观察/通用统计）→ 分析落 docs/audits/。
+- [ ] S5 收口：BACKLOG/TODO/索引/ADR 注记同步 + manifest 重算 + 门禁
+  Exit 0。
+- 边界：不做 shell 命令串内容检查（shell 直读定性为跳过教育的旁路，
+  文档标注）；不为跑分特化（通用长会话能力）；chunk3/批次L/O 以 0.3.2
+  为基线（随各批次运行时确认）；0n approval 仅词汇对齐注记。
+- 计数：排期登记不动计数（闭合时按各条目小节入账）。
 
 ### 1. FUS-TOOL-PROBE（`implemented`；P0-A 批次 1-7 与 P0-A-2 已闭合）
 
