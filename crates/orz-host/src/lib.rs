@@ -2702,4 +2702,156 @@ mod tests {
         );
         let _ = std::fs::remove_dir_all(&dir);
     }
+
+    /// P0-0m S3（ADR-0010 §14.56 D3 装配接线端到端）：`.gsa` symlink 会话
+    /// 卷实机构造——host 装配期经链接 canonical 解析卷根；终端截断补读链
+    /// 把完整输出落进卷内并经 `session/terminal/*.log` 窗口 read_file 可达；
+    /// run_tests 全量输出 `run_tests_output.txt` 同样落卷且窗口可读；卷内
+    /// 非窗口面保持 agent-invisible。
+    #[tokio::test]
+    async fn session_volume_symlink_windows_end_to_end() {
+        let base = std::env::temp_dir().join(format!("orz-host-0m-s3-{}", std::process::id()));
+        let volume = base.join("volume");
+        let workspace = base.join("workspace");
+        std::fs::create_dir_all(&volume).unwrap();
+        std::fs::create_dir_all(&workspace).unwrap();
+        // 会话卷在卷根之外、`.gsa` 为指向卷根的链接（评测容器挂载形态）。
+        #[cfg(windows)]
+        let link_ok = std::os::windows::fs::symlink_dir(&volume, workspace.join(".gsa")).is_ok();
+        #[cfg(not(windows))]
+        let link_ok = std::os::unix::fs::symlink(&volume, workspace.join(".gsa")).is_ok();
+        if !link_ok {
+            eprintln!("symlink creation unsupported, skipping");
+            return;
+        }
+        // 卷内非窗口面负测样本（装配前就位）。
+        std::fs::write(volume.join("secret.txt"), "interior").unwrap();
+
+        let host = OrzHost::new(
+            JournalRecorder::new(base.join("j")),
+            &workspace,
+            WorkspaceTrust::ObservedTrusted,
+        )
+        .expect("host");
+
+        // 1) 终端截断补读链：>8K 输出 → 截断 + 检索对象词法 id 在
+        //    `.gsa/session/terminal/*.log`，内容经链接落进卷内。
+        let command = if cfg!(windows) {
+            "'x' * 30000".to_string()
+        } else {
+            "python3 -c \"print('x' * 30000)\"".to_string()
+        };
+        let result = host
+            .call_tool(
+                "run_terminal_cmd",
+                serde_json::json!({
+                    "command": command,
+                    "description": "session volume truncation window test",
+                }),
+                "call-0m-s3-term",
+            )
+            .await
+            .expect("run_terminal_cmd succeeds");
+        assert!(result.output_truncated, "30K output must truncate");
+        let object = result
+            .output_object
+            .expect("truncated output must carry the retrieval object");
+        let object_id = std::path::PathBuf::from(&object.output_object_id);
+        let rel = object_id
+            .strip_prefix(&workspace)
+            .expect("object id stays under the workspace cwd");
+        let rel_str = rel.to_string_lossy().replace('\\', "/");
+        assert!(
+            rel_str.starts_with(".gsa/session/terminal/") && rel_str.ends_with(".log"),
+            "object id must match the terminal window shape: {rel_str}"
+        );
+        // 链接本身即卷根：卷内落点 = rel 去掉 `.gsa` 段。
+        let in_volume = volume.join(rel.strip_prefix(".gsa").unwrap_or(rel));
+        assert!(
+            in_volume.exists(),
+            "full output must land inside the volume through the link: {}",
+            in_volume.display()
+        );
+
+        // 2) 窗口 1 正测：read_file 经窗口读回截断全文。
+        let read_back = host
+            .call_tool(
+                "read_file",
+                serde_json::json!({ "target_file": rel_str }),
+                "call-0m-s3-read",
+            )
+            .await
+            .expect("terminal window read must succeed");
+        assert!(
+            read_back.output.contains("xxxx"),
+            "read-back must return the logged content"
+        );
+
+        // 3) 卷内非窗口面负测：agent-invisible（资源在场时域判定先于
+        //    workspace 兜底）。宿主面拒绝以 Ok 信封 + Permission denied
+        //    文案返回（复审批 P3-① 域内 deny 文案）。
+        let denied = host
+            .call_tool(
+                "read_file",
+                serde_json::json!({ "target_file": ".gsa/secret.txt" }),
+                "call-0m-s3-deny",
+            )
+            .await
+            .expect("deny path surfaces as a result envelope");
+        assert!(
+            denied.output.contains("Permission denied")
+                && denied.output.contains("agent-invisible session volume"),
+            "non-window volume interior must stay agent-invisible: {}",
+            denied.output
+        );
+
+        // 4) run_tests 输出窗口：全量输出 `run_tests_output.txt` 落卷且
+        //    窗口可读（TestRunner 注入，避免依赖真实测试框架）。
+        let runner = orz_loop::host::TestRunner {
+            command: if cfg!(windows) {
+                vec![
+                    "cmd".to_string(),
+                    "/c".to_string(),
+                    "echo rt-window".to_string(),
+                ]
+            } else {
+                vec!["echo".to_string(), "rt-window".to_string()]
+            },
+            timeout: Some(std::time::Duration::from_secs(30)),
+            env: Vec::new(),
+        };
+        let host = host.with_test_runner(Some(runner));
+        let test_run = host.run_tests().await.expect("run_tests returns");
+        let full_path = test_run
+            .full_output_path
+            .expect("run_tests full output must persist");
+        let full = std::path::PathBuf::from(&full_path);
+        let rel_tests = full
+            .strip_prefix(&workspace)
+            .expect("run_tests output stays under cwd");
+        assert_eq!(
+            rel_tests.to_string_lossy().replace('\\', "/"),
+            ".gsa/run_tests_output.txt",
+            "window 2 fixed file name"
+        );
+        assert!(
+            volume.join("run_tests_output.txt").exists(),
+            "run_tests output must land inside the volume through the link"
+        );
+        let read_tests = host
+            .call_tool(
+                "read_file",
+                serde_json::json!({ "target_file": ".gsa/run_tests_output.txt" }),
+                "call-0m-s3-rt",
+            )
+            .await
+            .expect("run_tests window read must succeed");
+        assert!(
+            read_tests.output.contains("rt-window"),
+            "run_tests window read-back must return the logged content: {}",
+            read_tests.output
+        );
+
+        let _ = std::fs::remove_dir_all(&base);
+    }
 }
