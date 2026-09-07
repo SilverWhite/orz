@@ -205,8 +205,15 @@ pub struct PlanSection {
 /// LIF 域机器当前域；旧无章行（round=0/domain=None，ts 空串）在 B2 渲染
 /// 折叠中归 `pre-stamp` 段。
 ///
+/// `exit_code`（0p S1 复审 F-A，2026-09-07）：命令真实退出码——仅
+/// run_terminal_cmd/run_tests 等命令族工具在 Ok 臂写入（工具执行成功但
+/// 命令退出码≠0 是命令级失败，与 host 级 ToolError 分开记账）；None =
+/// 工具级成功且无命令退出语义（read_file 等）或 host 级错误行（errors
+/// 臂）。`selfhistory::render_exec_search` 据此渲染 `exit=N`。
+///
 /// 兼容：旧 epoch 归档/侧车里的 exec 行是纯字符串（无字段对象），经
-/// untagged 反序列化读回为无章行，不静默丢弃。
+/// untagged 反序列化读回为无章行，不静默丢弃；缺字段对象按 serde(default)
+/// 补 None，既有板零迁移。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct ExecEntry {
     pub text: String,
@@ -216,6 +223,8 @@ pub struct ExecEntry {
     pub domain: Option<Domain>,
     #[serde(default, alias = "timestamp")]
     pub ts: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub exit_code: Option<i32>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
@@ -235,6 +244,8 @@ struct StructuredExecEntry {
     pub domain: Option<Domain>,
     #[serde(default, alias = "timestamp")]
     pub ts: String,
+    #[serde(default)]
+    pub exit_code: Option<i32>,
 }
 
 impl<'de> Deserialize<'de> for ExecEntry {
@@ -248,12 +259,14 @@ impl<'de> Deserialize<'de> for ExecEntry {
                 round: 0,
                 domain: None,
                 ts: String::new(),
+                exit_code: None,
             }),
             ExecEntryRepr::Structured(s) => Ok(ExecEntry {
                 text: s.text,
                 round: s.round,
                 domain: s.domain,
                 ts: s.ts,
+                exit_code: s.exit_code,
             }),
         }
     }
@@ -261,13 +274,15 @@ impl<'de> Deserialize<'de> for ExecEntry {
 
 impl ExecEntry {
     /// 写时盖章构造（round/domain 必填——生产写入点只走本入口；直接
-    /// 字段字面量仅测试/legacy 使用）。
+    /// 字面量仅测试/legacy 使用）。`exit_code` 缺省 None，命令族 Ok 臂
+    /// 写入点在构造后回填（`entry.exit_code = res.exit_code`）。
     pub fn stamped(text: String, round: u64, domain: Domain, ts: String) -> Self {
         ExecEntry {
             text,
             round,
             domain: Some(domain),
             ts,
+            exit_code: None,
         }
     }
 
@@ -287,6 +302,7 @@ impl From<&str> for ExecEntry {
             round: 0,
             domain: None,
             ts: String::new(),
+            exit_code: None,
         }
     }
 }
@@ -298,6 +314,7 @@ impl From<String> for ExecEntry {
             round: 0,
             domain: None,
             ts: String::new(),
+            exit_code: None,
         }
     }
 }
@@ -2462,9 +2479,9 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
-    /// 0p S1 组合守卫：failures_only×search、非 exec 分区、×receipt_id
-    /// 三种非法组合全部显式报错（exit 1 + error 文案回达模型，绝不静默
-    /// 忽略——同非法 epoch/receipt_id 纪律）。
+    /// 0p S1 组合守卫：六类非法组合全部显式报错（exit 1 + error 文案回达
+    /// 模型，绝不静默忽略——同非法 epoch/receipt_id 纪律；F-H 补全
+    /// ×since/×expand/×epoch 三例）。
     #[tokio::test]
     async fn blackboard_read_selfhistory_combo_guards_error_explicitly() {
         let dir = test_dir();
@@ -2498,6 +2515,28 @@ mod tests {
                     {"section": "exec", "search": "x", "receipt_id": "ORD-1"}
                 ),
                 call_id: "call-g3".to_string(),
+            }]),
+            ScriptedResponse::tool_calls(vec![ToolCall {
+                name: "blackboard_read".to_string(),
+                arguments: serde_json::json!(
+                    {"section": "exec", "search": "x", "since_timestamp": "2026-01-01T00:00:00Z"}
+                ),
+                call_id: "call-g4".to_string(),
+            }]),
+            ScriptedResponse::tool_calls(vec![ToolCall {
+                name: "blackboard_read".to_string(),
+                arguments: serde_json::json!(
+                    {"section": "exec", "search": "x", "domain": "normal",
+                     "round_from": 1, "round_to": 2}
+                ),
+                call_id: "call-g5".to_string(),
+            }]),
+            ScriptedResponse::tool_calls(vec![ToolCall {
+                name: "blackboard_read".to_string(),
+                arguments: serde_json::json!(
+                    {"section": "exec", "failures_only": true, "epoch": 1}
+                ),
+                call_id: "call-g6".to_string(),
             }]),
             ScriptedResponse::text("完成"),
             ScriptedResponse::text("完成"),
@@ -2539,6 +2578,112 @@ mod tests {
                 .contains("与 failures_only/search 互斥"),
             "{:?}",
             reply_of("call-g3").content
+        );
+        assert!(
+            reply_of("call-g4")
+                .content
+                .contains("since_timestamp 与 failures_only/search 互斥"),
+            "{:?}",
+            reply_of("call-g4").content
+        );
+        assert!(
+            reply_of("call-g5")
+                .content
+                .contains("expand（domain/round_from/round_to）与 failures_only/search 互斥"),
+            "{:?}",
+            reply_of("call-g5").content
+        );
+        assert!(
+            reply_of("call-g6")
+                .content
+                .contains("failures_only/search 是 live 面"),
+            "{:?}",
+            reply_of("call-g6").content
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// 0p S1 复审 F-C 最小闭合（2026-09-07）：命令级失败（工具 Ok 臂 +
+    /// exit≠0）补盖章 failure_agg——run_terminal_cmd → cmd_target、
+    /// code=exit_1；exec 行回填真实退出码，search 面渲染 exit=1（而非
+    /// 误导性 exit=ok）。聚合行随后被 failures_only 面回达模型。
+    #[tokio::test]
+    async fn command_exit_failure_stamps_failure_agg_and_search_shows_exit() {
+        let dir = test_dir();
+        let journal = JournalRecorder::new(dir.clone());
+        let host = TestHost {
+            journal,
+            tool_result: Some(ToolResult {
+                output: "pip install fasttext\r\nMemoryError: bad allocation".to_string(),
+                exit_code: Some(1),
+                output_encoding: None,
+                structured: None,
+                ..Default::default()
+            }),
+        };
+        let fake = Arc::new(FakeProvider::new(vec![
+            ScriptedResponse::tool_calls(vec![ToolCall {
+                name: "run_terminal_cmd".to_string(),
+                arguments: serde_json::json!({"command": "pip install fasttext"}),
+                call_id: "call-fc-1".to_string(),
+            }]),
+            ScriptedResponse::tool_calls(vec![ToolCall {
+                name: "blackboard_read".to_string(),
+                arguments: serde_json::json!({"section": "exec", "failures_only": true}),
+                call_id: "call-fc-2".to_string(),
+            }]),
+            ScriptedResponse::tool_calls(vec![ToolCall {
+                name: "blackboard_read".to_string(),
+                arguments: serde_json::json!({"section": "exec", "search": "pip install"}),
+                call_id: "call-fc-3".to_string(),
+            }]),
+            ScriptedResponse::text("完成"),
+            ScriptedResponse::text("完成"),
+        ]));
+        let gateway: Arc<dyn ModelGateway> = fake.clone();
+        let controller = AgentLoopController::with_gateway(gateway);
+        controller
+            .run_turn(&host, "跑命令", "RUN-FC", MANIFEST, 0, None, None, None)
+            .await
+            .unwrap();
+        // 聚合面：cmd_target ×1，code=exit_1；exec 行携带真实退出码。
+        {
+            let bb = controller.blackboard().read();
+            assert_eq!(bb.failure_agg.rows.len(), 1, "命令级失败必须补盖章");
+            let row = &bb.failure_agg.rows[0];
+            assert_eq!(row.kind, "cmd_target");
+            assert_eq!(row.count, 1);
+            assert_eq!(row.codes.len(), 1);
+            assert_eq!(row.codes[0].code, "exit_1");
+            assert_eq!(bb.exec.results[0].exit_code, Some(1));
+        }
+        let received = fake.received_requests();
+        let fo_reply = received
+            .iter()
+            .find_map(|r| {
+                r.messages
+                    .iter()
+                    .find(|m| m.tool_call_id.as_deref() == Some("call-fc-2"))
+            })
+            .expect("failures_only reply");
+        assert!(
+            fo_reply.content.contains("[失败目标 cmd_target]")
+                && fo_reply.content.contains("exit_1"),
+            "{:?}",
+            fo_reply.content
+        );
+        let search_reply = received
+            .iter()
+            .find_map(|r| {
+                r.messages
+                    .iter()
+                    .find(|m| m.tool_call_id.as_deref() == Some("call-fc-3"))
+            })
+            .expect("search reply");
+        assert!(
+            search_reply.content.contains("exit=1 | "),
+            "search row must carry the real command exit: {:?}",
+            search_reply.content
         );
         let _ = std::fs::remove_dir_all(&dir);
     }

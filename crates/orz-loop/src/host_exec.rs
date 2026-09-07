@@ -3288,7 +3288,10 @@ impl AgentLoopController {
                 });
                 {
                     let mut w = self.blackboard.write();
-                    w.push_exec_result(crate::blackboard::ExecEntry::stamped(
+                    // 0p S1 复审 F-A（2026-09-07）：命令族 Ok 臂回填真实
+                    // 退出码——工具执行成功但命令退出码≠0 是命令级失败，
+                    // search 面据此渲染 exit=N（而非误导性的 exit=ok）。
+                    let mut entry = crate::blackboard::ExecEntry::stamped(
                         format!(
                             "[{}] {}{}",
                             tc.name,
@@ -3298,7 +3301,20 @@ impl AgentLoopController {
                         round,
                         domain,
                         chrono_utc_now(),
-                    ));
+                    );
+                    entry.exit_code = res.exit_code;
+                    w.push_exec_result(entry);
+                }
+                // 0p S1 复审 F-C 最小闭合（2026-09-07）：命令级失败补盖章
+                // ——exit≠0 且该调用携带 F4 身份（failure_target 四族，
+                // run_terminal_cmd/run_tests → cmd_target）时按 Err 臂同
+                // 纪律记入 failure_agg（结构化 code = exit_{n}，非日志内
+                // 容）。failure_target 不识别的工具（grep 等）返回 None，
+                // 零误盖；无退出语义（None）与零退出不盖章。
+                if let Some(exit) = res.exit_code.filter(|n| *n != 0)
+                    && let Some(ft) = crate::failure_target::failure_target(&tc.name, &tc.arguments)
+                {
+                    self.note_failure_agg(&ft, &format!("exit_{exit}"));
                 }
                 // IP2a (D-3): 失败必显式 — a tool result must NEVER be blank
                 // in the conversation (blank tool messages give the model

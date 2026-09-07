@@ -2951,7 +2951,9 @@ impl AgentLoopController {
                      报错文本、文件名、命令片段）用 `search=<literal>`（大小写\
                      不敏感字面子串，非正则；扫 exec 动作/结果摘要与 actions \
                      receipt 摘要，命中 ≤20 行，行 = 轮号 + exit + 摘要 + \
-                     order_id 指针）；二者仅与 section=exec 组合，且彼此及与 \
+                     order_id 指针（exit=N 为命令真实退出码，N≠0 即命令级\
+                     失败；exit=ok/err 为工具级成功/失败）；二者仅与 \
+                     section=exec 组合，且彼此及与 \
                      receipt_id/since_timestamp/expand/epoch 互斥（显式报错）。\
                      Call this when you need to \
                      recall what changed or what you did earlier — it costs \
@@ -3033,7 +3035,7 @@ impl AgentLoopController {
                         "search": {
                             "type": "string",
                             "minLength": 1,
-                            "description": "0p S1 (2026-09-07): 自历史字面检索——大小写不敏感字面子串（非正则）扫 exec 动作/结果摘要与 actions receipt 摘要，命中 ≤20 行（行 = 轮号 + exit + 摘要 + order_id 指针），截断显式标注。仅与 section=exec 组合有效；与 failures_only/receipt_id/since_timestamp/expand/epoch 互斥（显式报错）。",
+                            "description": "0p S1 (2026-09-07): 自历史字面检索——大小写不敏感字面子串（非正则）扫 exec 动作/结果摘要与 actions receipt 摘要，命中 ≤20 行（行 = 轮号 + exit + 摘要 + order_id 指针；exit=N 为命令真实退出码，N≠0 即命令级失败，exit=ok/err 为工具级成功/失败），截断显式标注。仅与 section=exec 组合有效；与 failures_only/receipt_id/since_timestamp/expand/epoch 互斥（显式报错）。",
                         },
                     },
                     "required": ["section"],
