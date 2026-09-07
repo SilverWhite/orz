@@ -43,10 +43,24 @@ pattern `fasttext|MemoryError|bad allocation|g\+\+|编译|pip install` 直指
 
 - **A1 失败聚合按需面**：`section=exec` 新增 `failures_only=true`——
   返回 failure_agg 行集（复用 P2-12 行语义：F4 身份 (kind,id)、epoch
-  内累计计数、首末墙钟、错误码集、receipt 指针），上限 3K 截断标注。
+  内累计计数、首末墙钟、错误码集），上限 3K 截断标注。
+  > **0p S1 复审勘误（2026-09-07）**：原文「receipt 指针」删除——
+  > `FailureAgg` 不存 receipt 数据（`record()` 无此参数），行级
+  > receipt 指针不存在；回查指针仅保留 domain/round 展开面（真实
+  > 可得）。同批复审最小闭合：命令级失败补盖章——工具 Ok 臂且
+  > `exit_code≠0` 且携带 F4 身份（failure_target 四族，
+  > run_terminal_cmd/run_tests → cmd_target）时记入 failure_agg
+  > （结构化 code = `exit_{n}`），聚合覆盖面与 W2 命令失败场景对齐。
 - **A2 自历史检索**：`section=exec` 新增 `search=<literal>`——大小写
   不敏感**字面子串**（非正则）扫动作/结果摘要，命中 ≤20 行（行 =
   round + 摘要 + exit + receipt 指针），截断显式标注。
+  > **0p S1 复审注记（2026-09-07）**：`exit` 语义落地 = `ExecEntry
+  > .exit_code`（serde default 兼容旧板）——exec 行 `exit=N` 为命令
+  > 真实退出码（N≠0 即命令级失败）、`exit=ok/err` 为工具级成功/host
+  > 级 ToolError；行级 receipt 指针仅 receipt 行存在（order_id）。
+  > 扫描源 = exec results/errors + actions receipt 摘要（receipt 为
+  > 「动作摘要」在 console 订单面的落点，结果栏 50 条上限外历史唯一
+  > 可检索视图）。
 - **A3 工具描述教学**：描述补三句——早期轮次用 `domain/round_from/
   round_to` 展开；失败总览用 `failures_only`；找内容用 `search`。
 - 边界：全部 PULL、有界响应；不新增 PUSH 注入、不改预算面。
