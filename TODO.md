@@ -403,7 +403,9 @@
   无跳过 + acaf_e2e 23/23，入口：docs/audits/ACAF_TEST_DEFAULT_FLIP_INFRA_
   FIX_2026-09-07.md）；OBS 权限双实现摸底 + 同日用户裁决定稿方向 = α
   （判定面单图 + 休眠面冻结标注，纯文档批；β/γ 否决——自研面不膨胀、
-  薄层哲学、桥接为特意形态）；α 实施设计待确认后实施（入口：
+  薄层哲学、桥接为特意形态），五项推荐确认后 α 同日实施完成（单图
+  docs/PERMISSION_JUDGMENT_SURFACE_MAP.md + 标注 14 文件 + ADR §14.60 +
+  索引 v2.61，零行为变更，OBS 终态已管控；入口：
   docs/PERMISSION_DUAL_IMPL_CONVERGENCE_DESIGN_2026-09-07.md）。
 - [ ] S3 接线复验：补读链/run_tests 窗口端到端（`.gsa` symlink 会话卷
   实机构造）+ GAP-GSA-SYMLINK-STALE-TEST 演进注记。

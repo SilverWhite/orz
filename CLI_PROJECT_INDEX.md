@@ -1,6 +1,13 @@
 # CLI_PROJECT_INDEX
 
-> 索引版本：v2.60；状态：`current`；最近整理：2026-09-06（v2.60：任务 D
+> 索引版本：v2.61；状态：`current`；最近整理：2026-09-07（v2.61：OBS-
+> PERMISSION-DUAL-IMPL 处置定稿——用户裁决方向 α：判定分布为薄层特意形态
+> （自研面不膨胀/不跟随 Grok/只做薄层，桥接为特意形态，β/γ 否决），权威
+> 判定面单图落盘（ACTIVE/DORMANT/PARTIAL + 唯一 owner），workspace 权限
+> 栈源码头标注 14 模块，自研面不膨胀原则转录 ADR-0010 §14.60，OBS 转
+> 已管控，见[`判定面单图`](docs/PERMISSION_JUDGMENT_SURFACE_MAP.md) /
+> [`处置设计`](docs/PERMISSION_DUAL_IMPL_CONVERGENCE_DESIGN_2026-09-07.md)；
+> v2.60：任务 D
 > S3/S4 翻转实施 + 复审处理批——registry JSON 升唯一权威、run-event 期刊
 > 校验执法权翻转至 Rust 法官（`journal-conformance` CLI），IMPL-PYTHON-
 > REFERENCE 翻转注记，任务 D 全部闭合，见
@@ -168,7 +175,7 @@
 - **AUTH-TOOL-EXECUTION-REFORM** (`current-design`; 2026-09-03；**2026-09-04 经 ADR-0010 §14.55 正式裁决转正**——TER 工具执行层改革权威（原 §14.53 候选项）：常驻能力自身默认全开（auto-background=true / 首报后台化 180s / 模型面封闭）、去自身硬超时（超阈自动后台化 + 300s 输出/CPU 活跃兜底 idle-kill + 10h 绝对兜底例外）、黑板 processes live 视图、轮预算撤默认 120 硬限（保留可配逃生阀）、F6 预算三档默认 off（push 为 PUSH→PULL 可开关例外，实现 ≤3/verifier ≤4）、W-F11 env PULL 快照 / W-F12 快速确定性失败（no-AC + allowlist 生产墙）/ W-F13 阅读面（64KB + 输出检索对象 + 截断标记 + 命中行 4K 钳制）、评测墙钟单一化、idle-kill journal 事件生产者（orz `35db6741`）。边界：M1 与 M2 T2.1/T2.2 批次正式成立；T2.3/T2.4/M3 待实施。关键词：TER、工具执行层改革、去硬杀、auto-background、idle-kill、processes live、轮预算、W-F13、S5-2 常驻化、PUSH→PULL push 例外。入口：[`ADR-0010 §14.55`](adr/ADR-0010-fusion-runtime-and-agent-architecture.md) / [设计稿](docs/TOOL_EXECUTION_LAYER_REFORM_DESIGN_2026-09-03.md) / [审查处理](docs/audits/TER_REVIEW_HANDLING_2026-09-04.md) / [BACKLOG2 TER-0](docs/BACKLOG2.md) / [TODO2](TODO2.md)。
 - **AUTH-GLOBAL-ARCHITECTURE-AUDIT** (`reference`; 2026-09-04)：全项目宏观架构与工程完整性审查报告（综合本地环境实测 + Grok 4.6 架构审计 + 第二轮深层穿透）——揭示权威分裂（ADR 与代码脱节）、门禁崩溃（check_repository 62 处报错已修复恢复全绿）、双实现未除（Python 3.7k行校验法官 vs Rust）、15 个无头僵尸 crate 寄生底座、安全面三层穿透（read_file 穿透工作区/ACAF未下沉）与 epoch.rs 3300行死代码寄生折叠渲染。规划四阶段解耦切除。关键词：全局审查、权威分裂、门禁修复、Grok审查、深层穿透、僵尸crate、epoch寄生、双实现。入口：[`GLOBAL_ARCHITECTURE_AND_INTEGRITY_AUDIT`](docs/audits/GLOBAL_ARCHITECTURE_AND_INTEGRITY_AUDIT_2026-09-04.md) / [`GLOBAL_ARCHITECTURE_DEEP_AUDIT`](docs/audits/GLOBAL_ARCHITECTURE_DEEP_AUDIT_2026-09-04.md) / [`P0-GOV 收口与审查处理`](docs/audits/P0_GOV_UNCOMMITTED_REVIEW_HANDLING_2026-09-04.md) / [`任务 D S2a 盘点表`](docs/audits/TASK_D_S2A_INVENTORY_2026-09-06.md) / [`BACKLOG`](docs/BACKLOG_AND_PRIORITIES.md)。
 - **AUTH-GLM-EXTERNAL-REVIEW** (`reference`; 2026-09-06)：GLM 外部只读审查候选与 2026-09-06 用户裁决处置登记——F1 skills 豁免收窄为注册技能根白名单（orz `67b51eb1`）/ R-1 353 个本地运行产物转本地件（+1 误中夹具恢复，59423ac）/ R-2 manifest 显式 LF / R-3 根目录产物归档（gsa.py 保留）/ F2 approval 存根登记 gap / 观察 (c) 权限判定分散登记。关键词：GLM、外部审查、F1-F2、R-1-R-3、技能根豁免、approval 存根、观察项。入口：[`GLM_EXTERNAL_REVIEW_REGISTRATION`](docs/audits/GLM_EXTERNAL_REVIEW_REGISTRATION_2026-09-04.md) / [`处置 + S2 排期登记`](docs/audits/P0_GOV_GLM_DISPOSITION_AND_TASK_D_S2_SCHEDULE_2026-09-06.md)。
-- **OBS-PERMISSION-DUAL-IMPL** (`reference`; 2026-09-06)：权限判定分散观察项（GLM 外部审查 (c)）——移植层 `orz-workspace/permission/manager.rs`（8,756 行）与自研 `orz-host/permission.rs`（1,331 行）双处承担权限判定，长期为复杂度与审计盲区风险；另立观察，不入任务 D S2 盘点，随终局治理视野排期。关键词：权限判定分散、双实现观察、GLM (c)。入口：[`GLM_EXTERNAL_REVIEW_REGISTRATION`](docs/audits/GLM_EXTERNAL_REVIEW_REGISTRATION_2026-09-04.md) / [`处置 + S2 排期登记`](docs/audits/P0_GOV_GLM_DISPOSITION_AND_TASK_D_S2_SCHEDULE_2026-09-06.md) / [`BACKLOG`](docs/BACKLOG_AND_PRIORITIES.md)。
+- **OBS-PERMISSION-DUAL-IMPL** (`reference`; 2026-09-06；**2026-09-07 已管控**——用户裁决方向 α：判定分布为薄层特意形态非缺陷（桥独有判定段 = 薄层 owner、workspace 栈 = 血统引擎，不合并不收敛，β/γ 否决），残余风险仅休眠面标注与认知单图两项，α 落地即终态)：权限判定分散观察项（GLM 外部审查 (c)）——移植层 `orz-workspace/permission/` 栈（15 文件 29,842 行，ORZ 生产仅 manager actor 核心活跃）与自研 `orz-host/permission.rs`（1,347 行，桥 + 独有判定段）分工。权威判定面单图（六大块 + ACTIVE/DORMANT/PARTIAL 分类 + 唯一 owner 声明）与治理原则（自研面不膨胀，ADR-0010 §14.60）。关键词：权限判定分散、薄层边界、判定面单图、休眠面冻结、GLM (c)。入口：[`判定面单图`](docs/PERMISSION_JUDGMENT_SURFACE_MAP.md) / [`处置设计`](docs/PERMISSION_DUAL_IMPL_CONVERGENCE_DESIGN_2026-09-07.md) / [`BACKLOG`](docs/BACKLOG_AND_PRIORITIES.md)。
 - **AUTH-GSA-SESSION-VOLUME** (`current-design`; 2026-09-06)：`.gsa` 会话卷底层部件化设计权威（ADR-0010 §14.56 转录；2026-09-06 用户裁决放行，S1–S4 排期实施，BACKLOG 0m）——`.gsa` 为 LIF 可审计状态链落盘面（科学性组件），下沉为底层类型化系统状态域：`Resources.SessionVolume` 由 host 装配期一次 symlink-aware canonical 解析注入（评测容器会话卷挂载形态由构造支持），工具级沙箱三分判定（workspace 内 / 会话卷内 / 其余拒），`.gsa` 默认 agent-invisible、仅 `session/terminal/*.log` 与 `run_tests_output.txt` 两个只读窗口（canonical 落点 ∈ 卷根 ∧ 词法路径 ∈ cwd ∧ 白名单形态），会话卷路径绕过 GitignoreFilter；permission.rs `.gsa` 特判退役、权限层本身保留（后续按「助理层拦截系统核心路径、仅删除保护」另行立项）；资源缺席 fail-closed 全关。关键词：会话卷、SessionVolume、证据面、白名单窗口、symlink-aware、fail-closed。入口：[`设计`](docs/GSA_SESSION_VOLUME_BOTTOM_LAYER_DESIGN_2026-09-06.md) / [`ADR-0010 §14.56`](adr/ADR-0010-fusion-runtime-and-agent-architecture.md) / [`BACKLOG 0m`](docs/BACKLOG_AND_PRIORITIES.md) / [`TODO P0-0m`](TODO.md)。
 
 ## 2. 融合架构主题路由

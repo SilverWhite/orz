@@ -1007,7 +1007,13 @@ GLM F2 处置转排期（2026-09-06 用户裁决）：`orz-host/src/approval.rs`
   终态（已管控）**。α 实施设计（S1 可达性核证 → S2 判定面单图 → S3 标注
   + 收口，验收口径与 5 项待确认点）见
   [设计 v1.1](../docs/PERMISSION_DUAL_IMPL_CONVERGENCE_DESIGN_2026-09-07.md)
-  ——**待用户确认后实施**。
+  ——**2026-09-07 用户确认五项推荐后 α 同日实施完成**：S1 分类表
+  （14 模块逐一带 manager.rs:行号证据：ACTIVE×8 / PARTIAL×5 / DORMANT×1）
+  + S2 判定面单图落盘（`docs/PERMISSION_JUDGMENT_SURFACE_MAP.md`，六大块
+  + 治理原则 + 唯一 owner 声明）+ S3 源码头标注 14 文件 + ADR-0010
+  §14.60 转录（自研面不膨胀）+ 索引 v2.61；零行为变更（orz-workspace
+  测试面零变化）。**OBS 终态 = 已管控**，索引口径见
+  [CLI_PROJECT_INDEX](../CLI_PROJECT_INDEX.md) OBS 条目。
 - **ACAF 默认翻转下游测试面族（2026-09-07 闭合）**：Task C（2026-09-04）
   fail-closed 生产默认翻转后，依赖旧「env 未设 = shadow」默认的下游测试面
   静默跑在 enforce 下——orz-host 全量 34 失败 + 1 挂死、orz-bin acaf_e2e
