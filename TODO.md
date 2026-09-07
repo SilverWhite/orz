@@ -401,9 +401,10 @@
   入口：docs/audits/P0_0M_S1_S2_REVIEW_HANDLING_2026-09-07.md）。复审遗留
   两项既有观察同日处理：ACAF 默认翻转下游测试面族闭合（orz-host 249/0/4
   无跳过 + acaf_e2e 23/23，入口：docs/audits/ACAF_TEST_DEFAULT_FLIP_INFRA_
-  FIX_2026-09-07.md）；OBS 权限双实现摸底 + 收敛方向讨论稿落盘（α/β/γ
-  待用户裁决，入口：docs/PERMISSION_DUAL_IMPL_CONVERGENCE_DESIGN_
-  2026-09-07.md）。
+  FIX_2026-09-07.md）；OBS 权限双实现摸底 + 同日用户裁决定稿方向 = α
+  （判定面单图 + 休眠面冻结标注，纯文档批；β/γ 否决——自研面不膨胀、
+  薄层哲学、桥接为特意形态）；α 实施设计待确认后实施（入口：
+  docs/PERMISSION_DUAL_IMPL_CONVERGENCE_DESIGN_2026-09-07.md）。
 - [ ] S3 接线复验：补读链/run_tests 窗口端到端（`.gsa` symlink 会话卷
   实机构造）+ GAP-GSA-SYMLINK-STALE-TEST 演进注记。
 - [ ] S4 收口：索引/BACKLOG/TODO 同步 + 门禁 Exit 0。
