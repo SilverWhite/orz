@@ -1,3 +1,8 @@
+//! 判定面 PARTIAL（OBS α 批 2026-09-07）：ACTIVE = yolo_disabled_by_policy
+//! 单点（manager.rs:1238，读 orz_config requirements layers）；休眠 = 规则
+//! 解析引擎主体（消费方 discovery.rs 为 Grok Build 面，ORZ 不可达）。
+//! 判定面单图：docs/PERMISSION_JUDGMENT_SURFACE_MAP.md（父仓库）
+
 //! Permission resolution engine: merges native `.grok/config.toml`,
 //! managed/enterprise settings, and (via `claude_settings`) `.claude`
 //! settings into the effective `PermissionConfig`; MCP/marketplace

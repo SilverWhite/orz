@@ -1,3 +1,8 @@
+//! 判定面 PARTIAL（OBS α 批 2026-09-07）：ACTIVE = script_env_risk / EnvRisk /
+//! KUBECTL_UNSAFE_FLAGS（manager.rs:584，env 风险分析主链）；休眠 = classifier /
+//! fast-path 家族（manager.rs:1680 装配，auto mode 在 ORZ 恒不启用——复活须
+//! 显式立项）。判定面单图：docs/PERMISSION_JUDGMENT_SURFACE_MAP.md（父仓库）
+
 //! Auto permission mode: LLM transcript classifier with safe fast-paths.
 //!
 //! Port of common agent auto-permission classifier semantics adapted to Grok's

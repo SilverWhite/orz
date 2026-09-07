@@ -1,3 +1,7 @@
+//! 判定面 ACTIVE（OBS α 批 2026-09-07）：codex hub 车道——
+//! PermissionHookTransport 由 orz-host codex_permission.rs:115 实现；ACP
+//! 车道走 AcpPrompter。判定面单图：docs/PERMISSION_JUDGMENT_SURFACE_MAP.md（父仓库）
+
 //! Tool-permission emit: when the rules engine returns "ask" for a guarded
 //! tool, request the decision from chat over the server instead of prompting a
 //! local ACP client, then map chat's reply back onto a [`PromptOutcome`] so the

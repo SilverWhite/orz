@@ -1,3 +1,6 @@
+//! 判定面 ACTIVE（OBS α 批 2026-09-07）：ORZ 生产写保护分析——manager.rs:582
+//! （is_safe_write_sink）/ 1572（edit_target_protection）。判定面单图：docs/PERMISSION_JUDGMENT_SURFACE_MAP.md（父仓库）
+
 //! Detect file reads/writes inside a shell command so a managed `Read`/`Edit`
 //! deny/ask can't be bypassed via a shell reader/writer/redirect.
 

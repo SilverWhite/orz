@@ -1,3 +1,6 @@
+//! 判定面 ACTIVE（OBS α 批 2026-09-07）：ORZ 生产 shell 命令风险分析——
+//! manager.rs:1537（ambient_exec_risk_from_plan）。判定面单图：docs/PERMISSION_JUDGMENT_SURFACE_MAP.md（父仓库）
+
 //! Bash request-level execution risk: argv flags that spawn programs, and ambient
 //! local/worktree git config. Flag floors run inline; ambient git2 uses
 //! `spawn_blocking` from the permission actor.

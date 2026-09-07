@@ -1,3 +1,8 @@
+//! 判定面 PARTIAL（OBS α 批 2026-09-07）：ACTIVE = ShellWord（manager.rs:618，
+//! bash 词法分析）；休眠 = CompiledPolicy / evaluate_policy 规则策略引擎
+//! （manager.rs:1347 仅 permission_config Some 时构造，ORZ 桥传 None 恒不
+//! 触发）。判定面单图：docs/PERMISSION_JUDGMENT_SURFACE_MAP.md（父仓库）
+
 use crate::permission::bash_command_splitting::{
     MAX_INLINE_SHELL_DEPTH, all_commands_from_script, env_split_string_script,
     normalize_command_words,

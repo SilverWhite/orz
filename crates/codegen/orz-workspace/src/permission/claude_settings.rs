@@ -1,3 +1,7 @@
+//! 判定面 PARTIAL（OBS α 批 2026-09-07）：ACTIVE = project_claude_settings_present
+//! （folder_trust.rs:391 → ORZ session trust 路径，仅查文件存在）；休眠 =
+//! 权限规则/env 导入主体（rules 解析在 ORZ 不触发）。判定面单图：docs/PERMISSION_JUDGMENT_SURFACE_MAP.md（父仓库）
+
 //! Reads and parses `.claude/settings.json` (vendor settings interop).
 
 use std::collections::HashMap;

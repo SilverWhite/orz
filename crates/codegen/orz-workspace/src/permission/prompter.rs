@@ -1,3 +1,7 @@
+//! 判定面 PARTIAL（OBS α 批 2026-09-07）：ACTIVE = AcpPrompter 主链（manager
+//! spawn 装配，manager.rs:1322，bash/edit 交互提示）；休眠 = MCP 命名辅助
+//! 家族（mcp_pretty_name_if_qualified 等，ORZ 无 MCP 配置不触发）。单图：docs/PERMISSION_JUDGMENT_SURFACE_MAP.md（父仓库）
+
 use indexmap::IndexMap;
 use std::sync::Arc;
 use std::time::Instant;

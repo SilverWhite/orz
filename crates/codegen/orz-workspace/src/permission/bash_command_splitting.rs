@@ -1,3 +1,7 @@
+//! 判定面 ACTIVE（OBS α 批 2026-09-07）：ORZ 生产 bash 权限分析主链——
+//! manager.rs:568（try_parse_shell）/ 580（写路径提取）/ 617（unwrap_wrappers）/
+//! 630（is_setup_command）。判定面单图：docs/PERMISSION_JUDGMENT_SURFACE_MAP.md（父仓库）
+
 use tree_sitter::{Node, Parser, Tree};
 use tree_sitter_bash::LANGUAGE as BASH;
 

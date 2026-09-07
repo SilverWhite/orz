@@ -1,3 +1,7 @@
+//! 判定面 ACTIVE（OBS α 批 2026-09-07）：AccessKind/Decision/ClientType 等
+//! 被 orz-host 桥直用（orz-host/src/permission.rs:25）并贯穿 manager actor。
+//! 判定面单图：docs/PERMISSION_JUDGMENT_SURFACE_MAP.md（父仓库）
+
 use agent_client_protocol as acp;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};

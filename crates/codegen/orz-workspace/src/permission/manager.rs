@@ -1,3 +1,8 @@
+//! 判定面 ACTIVE（OBS α 批 2026-09-07）：本模块为权限 actor 本体，ORZ 生产
+//! 经 orz-host PermissionBridge::spawn → spawn_permission_manager_with_hub
+//! 装配（spawn_local，本文件 1290+ 行起），参与全部读面 auto-allow / 提示 /
+//! 持久化判定。判定面单图：docs/PERMISSION_JUDGMENT_SURFACE_MAP.md（父仓库）
+
 use std::collections::HashSet;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};

@@ -1,3 +1,8 @@
+//! 判定面 DORMANT（OBS α 批 2026-09-07）：ORZ 生产不可达——parse_permission_rule
+//! 的生产消费方仅 claude_settings 规则导入（ORZ 不触发）；manager.rs:4704 与
+//! policy.rs:935/951 均测试区。冻结不演进、不新增 ORZ 接线；复活须显式立项
+//! （自研面不膨胀，薄层边界与判定面单图见 docs/PERMISSION_JUDGMENT_SURFACE_MAP.md（父仓库））。
+
 //! Native permission rule-string DSL and permission-mode vocabulary.
 
 use std::str::FromStr;

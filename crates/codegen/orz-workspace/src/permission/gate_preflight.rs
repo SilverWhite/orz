@@ -1,3 +1,6 @@
+//! 判定面 ACTIVE（OBS α 批 2026-09-07）：ORZ 生产托管规则预检——
+//! manager.rs:1588（GatePreflight::evaluate）。判定面单图：docs/PERMISSION_JUDGMENT_SURFACE_MAP.md（父仓库）
+
 //! Managed-policy preflight for one permission request.
 //!
 //! Evaluates the direct rule pass and both bash security gates once and keeps

@@ -1,3 +1,8 @@
+//! 判定面 PARTIAL（OBS α 批 2026-09-07）：ACTIVE = load_state_from_disk
+//! （manager.rs:1292，spawn 无条件加载）+ edit_policy 迁移持久化（1317）；
+//! 休眠 = 工具审批持久化（1403/2130，ORZ remember_tool_approvals=false）。
+//! 判定面单图：docs/PERMISSION_JUDGMENT_SURFACE_MAP.md（父仓库）
+
 #![allow(dead_code)] // Phase 1 internal helpers
 
 use crate::permission::types::EditPolicy;
