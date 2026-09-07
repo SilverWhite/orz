@@ -492,7 +492,17 @@ GLM F2 处置转排期（2026-09-06 用户裁决）：`orz-host/src/approval.rs`
   （≤2s 理想受 DROP 模式限制，零泄漏）。首跑作废件（GBK 注释吞换行
   $workdir 空值 + elev 退出码假绿）双修复 `173ade6`。分析
   [`W2_CHUNK1_031_S4_ANALYSIS`](docs/audits/W2_CHUNK1_031_S4_ANALYSIS_2026-09-07.md)；
-  chunk2 跑批中，chunk3 待续。）
+  chunk2（w2-chunk2-031）3/3 ran/compliant——train-fasttext run_finished
+  @3443s（submit 两阶段确认，2471 事件/283 工具调用）、adaptive-rejection
+  run_finished @889s 压线（ars.R+样本文件交付，工件已拉回宿主）、
+  path-tracing run_invalidated(wallclock) @1800s（同 gcode 模型面耗时
+  形态）；cue 3/2/3 全 ≤4；零 400/哨兵，命中率 96.81%；chunk2 journal
+  零 API 自调 → v4-pro 4 次全归属 chunk1 mteb（对账闭环）。**新发现并
+  修复：Reset-AppJunction 穿透删除**——任务切换时经 junction 递归清空
+  前一任务工作区（F2 2026-09-03 引入的工件证据毁灭缺陷；journal 面
+  无损），修复为 ReparsePoint 只删链接。chunk2 后按用户指示暂停
+  （chunk3 待指示）。分析
+  [`W2_CHUNK2_031_S4_ANALYSIS`](docs/audits/W2_CHUNK2_031_S4_ANALYSIS_2026-09-07.md)。）
 - [ ] T4 批次 L（Linux/TB2 容器批）：make-doom（0b ③ + P2-14 S4 /
   P2-13 B4 / P2-12 S4 长会话遥测）、compile-compcert +
   hf-model-inference（0b ④ + web 通道 A/B）、dna-assembly（0d 后续 5）；

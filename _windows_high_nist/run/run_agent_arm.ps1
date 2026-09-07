@@ -128,9 +128,23 @@ function Reset-AppJunction {
     }
     try {
         if (Test-Path -LiteralPath $AppRoot) {
-            Get-ChildItem -LiteralPath $AppRoot -Force -ErrorAction SilentlyContinue |
-                Remove-Item -Recurse -Force -ErrorAction SilentlyContinue
-            & cmd.exe /d /c ('rmdir "' + $AppRoot + '"') 2>&1 | Out-Null
+            $appItem = Get-Item -LiteralPath $AppRoot -Force
+            if ($appItem.Attributes -band [System.IO.FileAttributes]::ReparsePoint) {
+                # Junction/reparse point: remove the LINK only.  Never
+                # enumerate contents through the link -- at this moment it
+                # still points at the PREVIOUS task's workdir, and a
+                # recursive clear through it wiped that workdir (evidence
+                # loss found 2026-09-07 in W2 chunk2: every task
+                # transition emptied the prior task directory).
+                & cmd.exe /d /c ('rmdir "' + $AppRoot + '"') 2>&1 | Out-Null
+            }
+            else {
+                # Real directory (legacy F2 fallback): clear contents so
+                # mklink /J can take the path.
+                Get-ChildItem -LiteralPath $AppRoot -Force -ErrorAction SilentlyContinue |
+                    Remove-Item -Recurse -Force -ErrorAction SilentlyContinue
+                & cmd.exe /d /c ('rmdir "' + $AppRoot + '"') 2>&1 | Out-Null
+            }
         }
         & cmd.exe /d /c ('mklink /J "' + $AppRoot + '" "' + $Target + '"') 2>&1 | Out-Null
         $linkOk = (Test-Path -LiteralPath $AppRoot)
