@@ -614,6 +614,13 @@ GLM F2 处置转排期（2026-09-06 用户裁决）：`orz-host/src/approval.rs`
 - 边界：批次期间 orz 源冻结（仅版本 bump 一次提交）；0d 后续 3/5 依赖
   真实断连/解码错误复现，未复现则观察登记不硬闭合。
 - 计数：排期登记不动计数（闭合时按各条目自身小节入账）。
+- 进度（2026-09-07）：T0 双平台重建（musl BUILD_EXIT=0/静态性/冒烟/符号
+  命中 + Windows 同步 + DryRun 全对 + 三臂 enforcement-probe 全绿 → TER
+  T2.4 验收事实达成）、T1 批次 0（0m S3，orz `19585b88`）、T2 批次 W1
+  （TER T2.3 三判据 ALL_PASS，零 API）完成；证据 `_windows_high_nist/
+  evidence-t0-restore-20260907/`、`evidence-w1-20260907/`。W2 前置就绪
+  （key 通道 -KeyFile→env-file→跑后清除）。各项正式闭合登记仍按排期在
+  T6 统一收口落 docs/audits/ 与各条目小节。
 
 ### 1. FUS-TOOL-PROBE（`implemented`；P0-A 批次 1-7 与 P0-A-2 已闭合）
 

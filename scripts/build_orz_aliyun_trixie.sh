@@ -9,6 +9,15 @@
 # manifest/keystore at install time.
 set -euo pipefail
 
+# 2026-09-07: Clash TUN 环境下 http://deb.debian.org (80) 经代理节点回
+# 502 Bad Gateway / InRelease 签名不可达；HTTPS (443) 实测可用 —— apt 源
+# 强制 https（工具链网络适配，不触及 orz 源）。
+for f in /etc/apt/sources.list /etc/apt/sources.list.d/*; do
+  if [ -f "$f" ]; then
+    sed -i 's|http://deb.debian.org|https://deb.debian.org|g' "$f" || true
+  fi
+done
+
 # ORZ-BUILD-MOUNT-001 (2026-08-17): the parent repo MUST be mounted at /orz
 # and the workspace at /orz/orz — orz-assurance embeds ../../../runtime/*.json
 # via include_str! resolved from CARGO_MANIFEST_DIR. A wrong mount fails here

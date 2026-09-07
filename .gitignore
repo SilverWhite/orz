@@ -49,5 +49,8 @@ _windows_high_nist/**/vm-*-run*.txt
 _windows_high_nist/**/diag-*.txt
 _windows_high_nist/**/evidence-*
 _windows_high_nist/analysis/
+# 0.3.1 三件套本地 staging 产物（二进制不入库，sha256 锁定随证据目录本地留存
+# ——见 TODO P0-0o T0c 登记，2026-09-07）
+_windows_high_nist/staging-*/
 .t23tmp/
 /.ter_review_*/

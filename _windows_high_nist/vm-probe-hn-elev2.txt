@@ -1,0 +1,21 @@
+﻿{
+  "arm": "high-nist",
+  "checks": {
+    "appcontainer_token": true,
+    "job_object_assigned": true,
+    "low_integrity": true,
+    "non_admin": true,
+    "privileges_removed": true,
+    "temp_redirected": true,
+    "token_virtualization_disabled": true,
+    "workspace_writable": true
+  },
+  "exit_code": 0,
+  "observation_path": "C:\\workspace\\high-nist\\windows-native-run-observation-high-nist.json",
+  "outcome": "compliant",
+  "stderr_bytes": 0,
+  "stdout_bytes": 0,
+  "timed_out": false
+}
+enforcement-probe high-nist OK — result=C:\workspace\high-nist\probe-result.json
+EXIT=0

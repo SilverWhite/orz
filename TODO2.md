@@ -251,16 +251,23 @@
   （≤10s）、最差行 735ms（≤2s）；AC 基线 allowlist FAIL 作对照登记。
   审计见
   [`TER_T2_2_WF12_LOCAL_TRANSPARENT_LAYER_2026-09-04.md`](docs/audits/TER_T2_2_WF12_LOCAL_TRANSPARENT_LAYER_2026-09-04.md)。）
-- [ ] T2.3 Windows 后台任务存活验证：auto-bg 进程在 Job/LOW IL 下跨
-  调用存活、输出持续落盘、完成提醒与 idle-kill 可达（实机）。验收：
-  单测式实机脚本证据。
-  （2026-09-04 进度：fake 确定性场景驱动已提交（orz `dd5b1dac`，
-  `ORZ_FAKE_SCENARIO`）；全面审查处理批补入 idle-kill journal 生产者
-  （orz `35db6741`）——实机脚本可按 `tool_running(status=idle_killed)`
-  事件设计断言；实机执行仍未跑，本行保持未勾选。）
-- [ ] T2.4 同步与接线：M1 新 Windows 三件套进 VM（Program Files +
-  C:\s4\tools + keystore/signer 复检）；runner 配置收敛（不再补开
-  S5-2）。验收：vm-agent DryRun + enforcement-probe 墙内全绿。
+- [x] T2.3 Windows 后台任务存活验证（2026-09-07 完成，S3/S4 集中实机
+  验证批 T2/批次 W1）：fake 场景三判据 ALL_PASS——① auto-bg 中报事件
+  @180s + 跨调用存活（R2 采样 ≥95 tick 且增长至收尾）；② bg 交接 + 任务
+  在子进程存活期间自然跑满；③ `tool_running(status=idle_killed)` journal
+  事件。零 API（`ORZ_FAKE_SCENARIO` 驱动、无 `--real`）。产物
+  `_windows_high_nist/job-w1-fake-batch.ps1` + `evidence-w1-20260907/`
+  （3 journal + bg 心跳日志 + sandbox observations + 断言 JSON）。
+  （边界：完成提醒文本仅模型会话面注入、不落持久面，fake harness 下
+  不可直接断言——提醒可达性判据归 W2 真实模型面 §7 C 组。）
+- [x] T2.4 同步与接线（2026-09-07 完成，S3/S4 集中实机验证批 T0c）：
+  M1 新 Windows 三件套 0.3.1 进 VM（copy_to_vm 15/15 哈希核验 + Program
+  Files 换装备份 + C:\s4\tools）+ keystore/signer 复检（0.3.1 provision
+  重刷 C:\workspace\acaf manifest，signer sha256 自校验通过）+ runner 配置
+  收敛（不再补开 S5-2）。验收过：vm-agent DryRun 全对（AGENT_RUN_OK=True /
+  ERRORS=0）+ enforcement-probe 三臂墙内全绿（control exit 0 / non-admin
+  9/9 / high-nist 19/19，SYSTEM 提权作业通道）。证据
+  `_windows_high_nist/evidence-t0-restore-20260907/`。
 
 ## 审查处理（2026-09-04）
 

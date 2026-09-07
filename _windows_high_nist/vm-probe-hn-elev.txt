@@ -1,0 +1,35 @@
+﻿{
+  "arm": "high-nist",
+  "checks": {
+    "appcontainer_token": true,
+    "job_object_assigned": true,
+    "low_integrity": true,
+    "non_admin": true,
+    "privileges_removed": true,
+    "temp_redirected": true,
+    "token_virtualization_disabled": true,
+    "workspace_writable": true
+  },
+  "exit_code": 1,
+  "observation_path": "C:\\workspace\\high-nist\\windows-native-run-observation-high-nist.json",
+  "outcome": "compliant",
+  "stderr_bytes": 0,
+  "stdout_bytes": 0,
+  "timed_out": false
+}
+powershell.exe : C:\s4\_windows_high_nist\run\run_enforcement_probe.ps1 : enforcement-probe high-nist FAILED（exit=1）— 该
+臂不作数（fai
+所在位置 C:\s4\tools\elev-runner.ps1:4 字符: 5
++     & powershell.exe -NoProfile -ExecutionPolicy Bypass -File 'C:\s4\ ...
++     ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: (C:\s4\_windows_...t=1）— 该臂不作数（fai:String) [], RemoteException
+    + FullyQualifiedErrorId : NativeCommandError
+ 
+l-closed）
+所在位置 C:\s4\_windows_high_nist\run\run_enforcement_probe.ps1:162 字符: 9
++         Write-Error "enforcement-probe $Arm FAILED（exit=$probeExit）—  ...
++         ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: (:) [Write-Error], WriteErrorException
+    + FullyQualifiedErrorId : Microsoft.PowerShell.Commands.WriteErrorException,run_enforcement_probe.ps1
+ 
+EXIT=1

@@ -450,14 +450,33 @@ GLM F2 处置转排期（2026-09-06 用户裁决）：`orz-host/src/approval.rs`
 > 闭合，不逐项流程放行；一份 journal 喂多个判据、统一分析一次性收口。
 > orz 源冻结基线 `a1b73aeb`，批次期间仅版本 bump 一次提交。
 
-- [ ] T0 双平台重建：orz 版本 bump 0.3.1 → Linux musl 三件套（闭合 0b ②
-  / P2-14 S3 / P2-11×3 S3，P2-12/P2-13 S3 翻新注记）→ Windows 三件套 +
-  VM 同步 + DryRun + enforcement-probe（闭合 TER T2.4）。
-- [ ] T1 批次 0（本地实机）：0m S3——`.gsa` symlink 会话卷实机构造 +
-  补读链/run_tests 窗口端到端 + GAP-GSA-SYMLINK-STALE-TEST 注记演进。
-- [ ] T2 批次 W1（VM 确定性短批）：TER T2.3——fake 场景 auto-bg 跨调用
-  存活 / 输出持续落盘 / 完成提醒 / `tool_running(idle_killed)` journal
-  断言。
+- [x] T0 双平台重建（2026-09-07 完成）：orz 版本 bump 0.3.1（`d21b883e`）→
+  Linux musl 三件套（BUILD_EXIT=0、static-pie 零 ld-linux、bookworm 容器
+  冒烟三件执行、接线符号 dep_graph/session_volume_canonical_root/render_
+  命中 → 闭合 0b ② / P2-14 S3 / P2-11×3 S3，P2-12/P2-13 S3 翻新注记）→
+  Windows 三件套（staging-0.3.1，sha256 锁定）+ VM 同步（copy_to_vm 15/15
+  哈希核验 + Program Files 0.3.1 换装备份）+ DryRun 全对（AGENT_RUN_OK=
+  True / ERRORS=0）+ enforcement-probe 三臂全绿（control exit 0 / non-admin
+  9/9 / high-nist 19/19，SYSTEM 提权作业通道、ResultPath 墙内落盘）→ TER
+  T2.4 验收事实达成。证据 `_windows_high_nist/evidence-t0-restore-20260907/`；
+  操作沉淀：构建脚本 apt 源 HTTPS 化；copy_to_vm 探针路径漂移（C:\s4\run\
+  vs 规范 C:\s4\_windows_high_nist\run\）登记 T6 修正。
+- [x] T1 批次 0（本地实机）（2026-09-07 完成）：0m S3 接线复验——
+  `.gsa` symlink 会话卷端到端五段断言（评测容器挂载形态构造、终端 >8K
+  截断补读链窗口、read_file 窗口、卷内非窗口 agent-invisible、run_tests
+  输出窗口），orz-host 250 passed；orz `19585b88` + 父仓库 `ed145dc`
+  （manifest 重算、门禁 Exit 0）。
+- [x] T2 批次 W1（VM 确定性短批）（2026-09-07 完成）：TER T2.3 三判据
+  全过（ALL_PASS）——① auto-bg 中报事件 @180s + 跨调用存活（R2 采样
+  ≥95 tick 且增长至收尾）；② bg 交接 + 任务在子进程存活期间自然跑满；
+  ③ `tool_running(status=idle_killed)` journal 事件。零 API（fake 场景
+  驱动、无 --real）。产物 `_windows_high_nist/job-w1-fake-batch.ps1` +
+  `evidence-w1-20260907/`。边界：完成提醒文本仅模型会话面注入、不落
+  持久面，可达性判据归 W2 真实模型面（§7 C 组）。操作沉淀：`--real`
+  抢占 fake provider；`-p` 工具集 shell 工具 = run_terminal_cmd
+  （description 必填）；换新二进制须重刷 C:\workspace\acaf manifest
+  （机器级 ORZ_ACAF_* 启动链 + signer sha256 自校验）；no-AC 墙形态必须
+  --allowlist-ip（否则 egress 规则零创建、fail-closed 拒证）。
 - [ ] T3 批次 W2（VM 任务批）：chunk1 复跑 + chunk2/chunk3 续跑（TB2.1
   错题集 9 题 3 题/批，`ORZ_F6_PUSH=on` + 官方墙钟唯一）——0l ⑥ agent
   主载 + 记账、0l ⑦ 模型侧 §7 判据、TER T3.1–T3.5。
