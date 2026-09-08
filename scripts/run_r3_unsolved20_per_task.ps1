@@ -39,7 +39,8 @@ $Tasks = @(
 
 function Test-JobComplete {
   param([string]$TaskName)
-  $rj = Join-Path $JobsDir "official-r3-unsolved20-$TaskName" 'result.json'
+  $jobDir = Join-Path $JobsDir "official-r3-unsolved20-$TaskName"
+  $rj = Join-Path $jobDir 'result.json'
   if (-not (Test-Path -LiteralPath $rj)) { return $false }
   $raw = Get-Content -LiteralPath $rj -Raw -Encoding UTF8
   return $raw -match '"finished_at":\s*"'
@@ -50,7 +51,7 @@ function Invoke-OneTask {
   $jobName = "official-r3-unsolved20-$TaskName"
   $volDir = Join-Path $VolRoot $jobName
   New-Item -ItemType Directory -Path $volDir -Force | Out-Null
-  $mounts = ('[{"type":"bind","source":"{0}","target":"/orz-gsa"}]' -f ($volDir -replace '\\','/'))
+  $mounts = '[{"type":"bind","source":"' + ($volDir -replace '\\','/') + '","target":"/orz-gsa"}]'
   $runArgs = @('run','-d',$Dataset,'-i',("terminal-bench/$TaskName"),'-n','1','-r','3',
     '-a','tb_agents.orz:Orz','-m',$Model,
     '--ak',"orz_binary=$Binary",
