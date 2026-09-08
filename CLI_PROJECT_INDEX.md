@@ -1,6 +1,14 @@
 # CLI_PROJECT_INDEX
 
-> 索引版本：v2.62；状态：`current`；最近整理：2026-09-07（v2.62：0p
+> 索引版本：v2.63；状态：`current`；最近整理：2026-09-08（v2.63：0p
+> 批全部闭合（S1–S5 转 `implemented`）——T2 双平台重建（0.3.2 三件套 +
+> VM 换装 + manifest 重刷 + DryRun 全对 + enforcement-probe high-nist
+> 19/19，用户裁决只跑此臂）+ S4 重跑 train-fasttext 判据表全项通过
+> （两段门审计对首次生产落账 / 全卷零 sk- / 命中率 96.37% / 任务未过=
+> 环境缺 fasttext 登记候选缺陷）+ 黑板粒度特意形态裁决 + 检查点还原
+> DPAPI 物化 SOP，见 [`T2 审计`](docs/audits/0P_T2_DUAL_PLATFORM_REBUILD_2026-09-08.md)
+> / [`S4 分析`](docs/audits/0P_S4_TRAIN_FASTTEXT_TF_SELFHISTORY_032_ANALYSIS_2026-09-08.md)
+> / ADR-0010 §14.62；v2.62：0p
 > 模型自信息面补强与 .gsa 两段门设计定稿——W2 压测暴露 .gsa shell 旁
 > 路/拒绝无信封/黑板自历史供给缺口，用户裁决黑板先行 + 台账两段式放开
 > （首读通知+结构预览+黑板指针，二读放行，状态会话级持久化）+ key 不
@@ -184,7 +192,7 @@
 - **AUTH-GLM-EXTERNAL-REVIEW** (`reference`; 2026-09-06)：GLM 外部只读审查候选与 2026-09-06 用户裁决处置登记——F1 skills 豁免收窄为注册技能根白名单（orz `67b51eb1`）/ R-1 353 个本地运行产物转本地件（+1 误中夹具恢复，59423ac）/ R-2 manifest 显式 LF / R-3 根目录产物归档（gsa.py 保留）/ F2 approval 存根登记 gap / 观察 (c) 权限判定分散登记。关键词：GLM、外部审查、F1-F2、R-1-R-3、技能根豁免、approval 存根、观察项。入口：[`GLM_EXTERNAL_REVIEW_REGISTRATION`](docs/audits/GLM_EXTERNAL_REVIEW_REGISTRATION_2026-09-04.md) / [`处置 + S2 排期登记`](docs/audits/P0_GOV_GLM_DISPOSITION_AND_TASK_D_S2_SCHEDULE_2026-09-06.md)。
 - **OBS-PERMISSION-DUAL-IMPL** (`reference`; 2026-09-06；**2026-09-07 已管控**——用户裁决方向 α：判定分布为薄层特意形态非缺陷（桥独有判定段 = 薄层 owner、workspace 栈 = 血统引擎，不合并不收敛，β/γ 否决），残余风险仅休眠面标注与认知单图两项，α 落地即终态)：权限判定分散观察项（GLM 外部审查 (c)）——移植层 `orz-workspace/permission/` 栈（15 文件 29,842 行，ORZ 生产仅 manager actor 核心活跃）与自研 `orz-host/permission.rs`（1,347 行，桥 + 独有判定段）分工。权威判定面单图（六大块 + ACTIVE/DORMANT/PARTIAL 分类 + 唯一 owner 声明）与治理原则（自研面不膨胀，ADR-0010 §14.60）。关键词：权限判定分散、薄层边界、判定面单图、休眠面冻结、GLM (c)。入口：[`判定面单图`](docs/PERMISSION_JUDGMENT_SURFACE_MAP.md) / [`处置设计`](docs/PERMISSION_DUAL_IMPL_CONVERGENCE_DESIGN_2026-09-07.md) / [`BACKLOG`](docs/BACKLOG_AND_PRIORITIES.md)。
 - **AUTH-GSA-SESSION-VOLUME** (`current-design`; 2026-09-06)：`.gsa` 会话卷底层部件化设计权威（ADR-0010 §14.56 转录；2026-09-06 用户裁决放行，S1–S4 排期实施，BACKLOG 0m）——`.gsa` 为 LIF 可审计状态链落盘面（科学性组件），下沉为底层类型化系统状态域：`Resources.SessionVolume` 由 host 装配期一次 symlink-aware canonical 解析注入（评测容器会话卷挂载形态由构造支持），工具级沙箱三分判定（workspace 内 / 会话卷内 / 其余拒），`.gsa` 默认 agent-invisible、仅 `session/terminal/*.log` 与 `run_tests_output.txt` 两个只读窗口（canonical 落点 ∈ 卷根 ∧ 词法路径 ∈ cwd ∧ 白名单形态），会话卷路径绕过 GitignoreFilter；permission.rs `.gsa` 特判退役、权限层本身保留（后续按「助理层拦截系统核心路径、仅删除保护」另行立项）；资源缺席 fail-closed 全关。关键词：会话卷、SessionVolume、证据面、白名单窗口、symlink-aware、fail-closed。入口：[`设计`](docs/GSA_SESSION_VOLUME_BOTTOM_LAYER_DESIGN_2026-09-06.md) / [`ADR-0010 §14.56`](adr/ADR-0010-fusion-runtime-and-agent-architecture.md) / [`BACKLOG 0m`](docs/BACKLOG_AND_PRIORITIES.md) / [`TODO P0-0m`](TODO.md)。
-- **AUTH-BLACKBOARD-SELF-HISTORY-GSA-GATE** (`current-design`; 2026-09-07)：模型自信息面补强与 `.gsa` 两段门设计权威（ADR-0010 §14.61；同日用户裁决排期，BACKLOG 0p）——黑板自历史按需面（failure_agg 聚合 + 字面检索 + 描述教学，全 PULL）先行；`.gsa` 内部区两段式有界开放（首读通知信封=职责图+台账结构预览+黑板指针+询问，二读放行，状态会话卷级持久化），key 不落卷为放开前提不变量，权限门拒绝信封与失败同纪律落事件面，shell 直读定性为跳过教育的旁路；0.3.2 基线，修完重跑 train-fasttext。关键词：自历史、两段门、结构预览、session_volume_notice、open_after_notice、key 拦截。入口：[`设计`](docs/BLACKBOARD_SELF_HISTORY_AND_GSA_TWO_STAGE_GATE_DESIGN_2026-09-07.md) / [`ADR-0010 §14.61`](adr/ADR-0010-fusion-runtime-and-agent-architecture.md) / [`BACKLOG 0p`](docs/BACKLOG_AND_PRIORITIES.md) / [`TODO P0-0p`](TODO.md)。
+- **AUTH-BLACKBOARD-SELF-HISTORY-GSA-GATE** (`implemented`; 2026-09-07 设计定稿同日排期，2026-09-08 S1–S5 全部闭合)：模型自信息面补强与 `.gsa` 两段门（ADR-0010 §14.61 设计 + §14.62 执行闭合，BACKLOG 0p）——黑板自历史按需面（failure_agg 聚合 + 字面检索 + 描述教学，全 PULL）先行；`.gsa` 内部区两段式有界开放（首读通知信封=职责图+台账结构预览+黑板指针+询问，二读放行，状态会话卷级持久化），key 不落卷为放开前提不变量，权限门拒绝信封与失败同纪律落事件面，shell 直读定性为跳过教育的旁路；0.3.2 基线，修完重跑 train-fasttext。关键词：自历史、两段门、结构预览、session_volume_notice、open_after_notice、key 拦截。入口：[`设计`](docs/BLACKBOARD_SELF_HISTORY_AND_GSA_TWO_STAGE_GATE_DESIGN_2026-09-07.md) / [`ADR-0010 §14.61/§14.62`](adr/ADR-0010-fusion-runtime-and-agent-architecture.md) / [`BACKLOG 0p`](docs/BACKLOG_AND_PRIORITIES.md) / [`TODO P0-0p`](TODO.md) / [`T2 审计`](docs/audits/0P_T2_DUAL_PLATFORM_REBUILD_2026-09-08.md) / [`S4 分析`](docs/audits/0P_S4_TRAIN_FASTTEXT_TF_SELFHISTORY_032_ANALYSIS_2026-09-08.md)。
 
 ## 2. 融合架构主题路由
 

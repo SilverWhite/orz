@@ -513,7 +513,7 @@ GLM F2 处置转排期（2026-09-06 用户裁决）：`orz-host/src/approval.rs`
 - [ ] T6 统一收口：逐项审计/复验记录（docs/audits/）+ BACKLOG/TODO/
   TODO2/BACKLOG2/索引同步 + 计数入账 + manifest 重算 + 门禁 Exit 0。
 
-### P0-0p 模型自信息面补强与 `.gsa` 两段门（2026-09-07 设计定稿，同日用户裁决排期；BACKLOG 0p）
+### P0-0p 模型自信息面补强与 `.gsa` 两段门（2026-09-07 设计定稿同日排期；**T0/S1/S2/T2/S4/S5 全部闭合 2026-09-08**；BACKLOG 0p 转 `implemented`）
 
 > 设计：[`BLACKBOARD_SELF_HISTORY_AND_GSA_TWO_STAGE_GATE_DESIGN_2026-09-07`](docs/BLACKBOARD_SELF_HISTORY_AND_GSA_TWO_STAGE_GATE_DESIGN_2026-09-07.md)
 > / ADR-0010 §14.61。证据：[`W2_ORZ_DEFECT_EXTRACTION`](docs/audits/W2_ORZ_DEFECT_EXTRACTION_2026-09-07.md)
@@ -548,15 +548,39 @@ GLM F2 处置转排期（2026-09-06 用户裁决）：`orz-host/src/approval.rs`
   search_replace 写守卫/未开门遍历排除/预览三要素/schema 描述×2）+
   测试 +14；orz-tools 2844 / orz-host 254 / orz-loop 745 / orz-assurance
   207 全绿；入口：[复审处理审计](docs/audits/0P_S2_REVIEW_HANDLING_2026-09-07.md)。）
-- [ ] T2 双平台重建：Windows 三件套 0.3.2 + Linux musl 顺带翻新 + VM
+- [x] T2 双平台重建：Windows 三件套 0.3.2 + Linux musl 顺带翻新 + VM
   同步 + acaf manifest 重刷 + DryRun 全对 + enforcement-probe 三臂全绿。
-- [ ] S4 重跑 train-fasttext（RunTag tf-selfhistory-032，官方 3600s 墙
+  （2026-09-08 闭合：orz `7b00bbc9` 基线——Windows 三件套 staging-0.3.2 哈希
+  锁定；Linux musl BUILD_EXIT=0/static-pie 零 PT_INTERP/bookworm 冒烟/两段门
+  符号命中；VM 换装哈希逐对吻合+旧件备份+MANIFEST_SIGNER_HASH_MATCH=True；
+  DryRun 全对（dryrun-t2-032-final）；enforcement-probe high-nist 19/19 全绿
+  （control 顺带 exit 0；non-admin 臂按用户裁决不要求三臂可比）。排障：C 盘
+  清理（用户裁决删 .codex\visualizations 6.9GB 等→13GB 可用）/检查点还原后
+  必须补跑 stage setup（0xC0000142 根因）/构建脚本 apt 源 USTC HTTPS+重试环
+  （aliyun 瞬时故障）+ 管道吞退出码改 fail-loud。入口：
+  [T2 审计](docs/audits/0P_T2_DUAL_PLATFORM_REBUILD_2026-09-08.md)；证据
+  `_windows_high_nist/evidence-t2-032-20260908/`。正式计数收口随 S5。）
+- [x] S4 重跑 train-fasttext（RunTag tf-selfhistory-032，官方 3600s 墙
   钟）：判据表（设计 §4）——证据完整性（终端日志+artifact-manifest 齐
   收）/ 通知与放行事件面可审计 / deny 后同路径连续重试 ≤2（软）/
   全卷零 sk- 命中 / blackboard_read 用量对照基线 3 次（观察）/
   零真实 400 + 命中率 ≥90% → 分析落 docs/audits/。
-- [ ] S5 收口：BACKLOG/TODO/索引/ADR 注记同步 + manifest 重算 + 门禁
-  Exit 0。
+  （2026-09-08 闭合：attempt=ran/orz_exit=0/compliant、journal 2129 事件
+  跨度 3543s 墙钟内自然 run_finished；turn_count=1 真实轮计数生产验证；
+  两段门审计对首次生产落账（notice @seq869 → opened @seq1541/1565/1571）
+  + outside_workspace deny ×8 结构化信封、deny 连续重试 max=1；全卷
+  200 文件零 sk- + key 字面量零落卷 + SECRET_FILES_LEFT=0；
+  blackboard_read 11 次 vs 基线 3（failures_only/search 零触发登记观察）；
+  零真实 400、命中率 96.37%、F6 cue 3≤4、交付面照旧。排障：key 文件
+  中文路径桥链路转码损坏→ASCII 路径；检查点还原回滚 AgentUser DPAPI
+  主密钥→orz keystore 首建失败 0x80070003（非代码回归，diff 证明），
+  修复=Protect 骨架+ACL+主密钥物化+acaf 重刷，「还原后必做 DPAPI 物化」
+  登记 SOP 修正待办。入口：[S4 分析](docs/audits/0P_S4_TRAIN_FASTTEXT_TF_SELFHISTORY_032_ANALYSIS_2026-09-08.md)。）
+- [x] S5 收口：BACKLOG/TODO/索引/ADR 注记同步 + manifest 重算 + 门禁
+  Exit 0。（2026-09-08 闭合：BACKLOG 0p 勾选闭合转 `implemented` + 0r
+  GAP-TB21-FASTTEXT-ENV-CLAIM 登记不动计数 + 索引 v2.63 + ADR-0010
+  §14.62；manifest 重算 orz 源零改动 check valid 1441 条；门禁 Exit 0。
+  P0-0p 全部闭合。）
 
 ### P0-B FUS-RETRIEVAL-MECH（`implemented`；批次 1-6 全部闭合 2026-08-14，保留供核对）
 

@@ -1,0 +1,80 @@
+﻿STAGE=nonadmin
+GUEST_JOB_ATTEMPT=formal-nonadmin attempt=1 runnerExit=1 resFailed=False
+GUEST_JOB_RETRY=formal-nonadmin in 10s
+GUEST_JOB_ATTEMPT=formal-nonadmin attempt=2 runnerExit=1 resFailed=False
+===== JOB formal-nonadmin =====
+===== APPLY NON-ADMIN =====
+NAH: [2026-09-08 01:21:13] === apply_hardening.ps1 Arm=non-admin Revert=False RunUser=AgentUser ===
+NAH: [2026-09-08 01:21:13] OK   local user AgentUser exists
+NAH: [2026-09-08 01:21:13] OK   reg HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System\EnableLUA = 1
+NAH: [2026-09-08 01:21:13] OK   reg HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System\ConsentPromptBehaviorAdmin = 2
+NAH: [2026-09-08 01:21:13] OK   reg HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System\PromptOnSecureDesktop = 1
+NAH: [2026-09-08 01:21:13] OK   reg HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System\EnableInstallerDetection = 1
+NAH: [2026-09-08 01:21:13] OK   reg HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System\FilterAdministratorToken = 1
+NAH: [2026-09-08 01:21:13] OK   reg HKLM:\SOFTWARE\Policies\Microsoft\Windows\Installer\EnableUserControl = 0
+NAH: [2026-09-08 01:21:38] OK   acl deny C:\WINDOWS ((OI)(CI))
+NAH: [2026-09-08 01:21:43] OK   acl deny C:\Program Files ((OI)(CI))
+NAH: [2026-09-08 01:21:44] OK   acl deny C:\Program Files (x86) ((OI)(CI))
+NAH: [2026-09-08 01:21:44] OK   acl deny C:\ProgramData ((OI)(CI))
+NAH: [2026-09-08 01:23:17] OK   acl deny C:\ ()
+NAH: [2026-09-08 01:23:18] OK   registry deny HKLM:\SOFTWARE
+NAH: [2026-09-08 01:23:18] OK   acl grant C:\workspace (Modify)
+NAH: [2026-09-08 01:23:18] OK   workspace C:\workspace ready (RunUser=M)
+NAH: [2026-09-08 01:23:18] === done (StepFailures=0) ===
+NAH: [2026-09-08 01:23:18] apply_hardening.ps1 non-admin OK
+NAH_EXIT=0
+===== NON-ADMIN PROBE =====
+NA: {
+NA:   "arm": "non-admin",
+NA:   "checks": {
+NA:     "non_admin": true,
+NA:     "privileges_removed": true,
+NA:     "token_virtualization_disabled": true,
+NA:     "workspace_writable": true
+NA:   },
+NA:   "exit_code": 1,
+NA:   "observation_path": "C:\\workspace\\non-admin\\windows-native-run-observation-non-admin.json",
+NA:   "outcome": "compliant",
+NA:   "stderr_bytes": 0,
+NA:   "stdout_bytes": 333,
+NA:   "timed_out": false
+NA: }
+NA: C:\s4\_windows_high_nist\run\run_enforcement_probe.ps1 : enforcement-probe non-admin FAILED（exit=1）— 该臂不作数（fai
+NA: l-closed）
+NA: 所在位置 C:\s4\_windows_high_nist\run\run_enforcement_probe.ps1:162 字符: 9
+NA: +         Write-Error "enforcement-probe $Arm FAILED（exit=$probeExit）—  ...
+NA: +         ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+NA:     + CategoryInfo          : NotSpecified: (:) [Write-Error], WriteErrorException
+NA:     + FullyQualifiedErrorId : Microsoft.PowerShell.Commands.WriteErrorException,run_enforcement_probe.ps1
+NA:  
+NA_PROBE_EXIT=1
+NA_OBS outcome=compliant exit=1
+NA_CHECK non_admin=True
+NA_CHECK privileges_removed=True
+NA_CHECK token_virtualization_disabled=True
+NA_CHECK workspace_writable=True
+{
+  "wf12_timings_ms": {},
+  "arm": "non-admin",
+  "workspace": "C:\\workspace\\non-admin",
+  "appcontainer_expected": true,
+  "checks": {
+    "workspace_writable": true,
+    "non_admin": true,
+    "token_virtualization_disabled": true,
+    "program_files_write_blocked": true,
+    "system32_write_blocked": true,
+    "hklm_write_blocked": true,
+    "privileges_removed": true,
+    "runas_blocked": true,
+    "temp_write_succeeded": true,
+    "home_write_succeeded": false
+  },
+  "passed": 9,
+  "failed": 1,
+  "ran_at": "2026-09-07T17:23:19Z"
+}
+EXIT=1
+JOB_EXIT=-1
+ERROR: non-admin probe failed (exit -1) - arm not valid (fail-closed)
+STAGE_ABORTED=nonadmin

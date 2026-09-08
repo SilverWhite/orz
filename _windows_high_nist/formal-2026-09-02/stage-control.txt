@@ -1,0 +1,37 @@
+﻿STAGE=control
+===== JOB formal-control =====
+===== CONTROL PROBE =====
+CTL: {
+CTL:   "arm": "control",
+CTL:   "checks": {
+CTL:     "workspace_writable": true
+CTL:   },
+CTL:   "exit_code": 0,
+CTL:   "observation_path": "C:\\workspace\\control\\windows-native-run-observation-control.json",
+CTL:   "outcome": "compliant",
+CTL:   "stderr_bytes": 0,
+CTL:   "stdout_bytes": 76,
+CTL:   "timed_out": false
+CTL: }
+CTL: enforcement-probe control OK — result=C:\workspace\control\enforcement-probe-control.json
+CTL_PROBE_EXIT=0
+CTL_OBS outcome=compliant exit=0
+CTL_CHECK workspace_writable=True
+{
+  "wf12_timings_ms": {},
+  "arm": "control",
+  "workspace": "C:\\workspace\\control",
+  "appcontainer_expected": true,
+  "checks": {
+    "workspace_writable": true,
+    "os_writable": true
+  },
+  "passed": 2,
+  "failed": 0,
+  "ran_at": "2026-09-07T17:20:10Z"
+}
+EXIT=0
+JOB_EXIT=0
+EVIDENCE_COPIED=D:\CLI\_windows_high_nist\formal-2026-09-02\evidence-control\enforcement-probe-control.json
+EVIDENCE_COPIED=D:\CLI\_windows_high_nist\formal-2026-09-02\evidence-control\windows-native-run-observation-control.json
+STAGE_DONE=control

@@ -1,3 +1,9 @@
 ﻿STAGE=restore
-ERROR: You do not have the required permission to complete this task. Contact the administrator of the authorization policy for the computer 'SWITCH'.
-STAGE_ABORTED=restore
+STATE_BEFORE=Running
+ACTION=stop-vm
+STATE_AFTER_STOP=Off
+CHECKPOINT=S4-BASE-INSTALLED created=09/01/2026 23:06:22
+RESTORE_OK=1
+START_ISSUED=1
+VM_REACHABLE=yes
+STAGE_DONE=restore

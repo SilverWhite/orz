@@ -10,51 +10,63 @@ SYNC C:\s4\_windows_high_nist\hardening\apply_hardening.ps1 ok=True
 SYNC C:\s4\_windows_high_nist\policy\enforcement_probe.ps1 ok=True
 SYNC C:\s4\_windows_high_nist\policy\enforcement_probe.py ok=True
 SYNC C:\s4\_windows_high_nist\run\run_enforcement_probe.ps1 ok=True
+SYNC C:\s4\_windows_high_nist\run\run_wf12_egress_probe.ps1 ok=True
+SYNC C:\s4\_windows_high_nist\wf12\dns_refusal.py ok=True
+SYNC C:\s4\_windows_high_nist\wf12\README.md ok=True
+SYNC C:\s4\_windows_high_nist\run\run_task_arm.ps1 ok=True
+SYNC C:\s4\_windows_high_nist\run\run_agent_arm.ps1 ok=True
+SYNC C:\s4\tools\cred_probe.exe ok=True
+SYNC C:\s4\tools\orz.exe ok=True
+SYNC_TASKS count=9
+SYNC_TASKS expected=9
+SYNC_AGENT_TASKS_TB count=9
+SYNC_AGENT_TASKS_TB expected=9
 SYNC_ALL_OK=True
 ===== JOB formal-highnist =====
 ===== REVERT NON-ADMIN =====
-REVNA: [2026-09-02 12:50:06] === apply_hardening.ps1 Arm=non-admin Revert=True RunUser=AgentUser ===
-REVNA: [2026-09-02 12:50:06] OK   local user AgentUser exists
-REVNA: [2026-09-02 12:50:06] UAC 策略保持系统默认（Revert 不动 EnableLUA）
-REVNA: [2026-09-02 12:50:47] OK   acl deny removed C:\WINDOWS
-REVNA: [2026-09-02 12:50:54] OK   acl deny removed C:\Program Files
-REVNA: [2026-09-02 12:50:55] OK   acl deny removed C:\Program Files (x86)
-REVNA: [2026-09-02 12:50:55] OK   acl deny removed C:\ProgramData
-REVNA: [2026-09-02 12:50:57] OK   acl deny removed C:\
-REVNA: [2026-09-02 12:50:59] OK   registry deny removed HKLM:\SOFTWARE
-REVNA: [2026-09-02 12:50:59] OK   acl grant removed C:\workspace
-REVNA: [2026-09-02 12:50:59] OK   workspace C:\workspace ready (RunUser=M)
-REVNA: [2026-09-02 12:50:59] === done (StepFailures=0) ===
-REVNA: [2026-09-02 12:50:59] apply_hardening.ps1 non-admin OK
+REVNA: [2026-09-08 01:57:58] === apply_hardening.ps1 Arm=non-admin Revert=True RunUser=AgentUser ===
+REVNA: [2026-09-08 01:57:58] OK   local user AgentUser exists
+REVNA: [2026-09-08 01:57:58] UAC 策略保持系统默认（Revert 不动 EnableLUA）
+REVNA: [2026-09-08 01:58:52] OK   acl deny removed C:\WINDOWS
+REVNA: [2026-09-08 01:58:57] OK   acl deny removed C:\Program Files
+REVNA: [2026-09-08 01:58:59] OK   acl deny removed C:\Program Files (x86)
+REVNA: [2026-09-08 01:58:59] OK   acl deny removed C:\ProgramData
+REVNA: [2026-09-08 01:59:02] OK   acl deny removed C:\
+REVNA: [2026-09-08 01:59:04] OK   registry deny removed HKLM:\SOFTWARE
+REVNA: [2026-09-08 01:59:04] OK   acl grant removed C:\workspace
+REVNA: [2026-09-08 01:59:04] OK   workspace C:\workspace ready (RunUser=M)
+REVNA: [2026-09-08 01:59:04] === done (StepFailures=0) ===
+REVNA: [2026-09-08 01:59:04] apply_hardening.ps1 non-admin OK
 REVNA_EXIT=0
 ===== APPLY HIGH-NIST (DeepSeek pin + AppLocker restore) =====
-HNH: [2026-09-02 12:51:00] === apply_hardening.ps1 Arm=high-nist Revert=False RunUser=AgentUser ===
-HNH: [2026-09-02 12:51:00] OK   local user AgentUser exists
-HNH: [2026-09-02 12:51:00] OK   reg HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System\EnableLUA = 1
-HNH: [2026-09-02 12:51:00] OK   reg HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System\ConsentPromptBehaviorAdmin = 2
-HNH: [2026-09-02 12:51:00] OK   reg HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System\PromptOnSecureDesktop = 1
-HNH: [2026-09-02 12:51:00] OK   reg HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System\EnableInstallerDetection = 1
-HNH: [2026-09-02 12:51:00] OK   reg HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System\FilterAdministratorToken = 1
-HNH: [2026-09-02 12:51:00] OK   reg HKLM:\SOFTWARE\Policies\Microsoft\Windows\Installer\EnableUserControl = 0
-HNH: [2026-09-02 12:51:24] OK   acl deny C:\WINDOWS ((OI)(CI))
-HNH: [2026-09-02 12:51:27] OK   acl deny C:\Program Files ((OI)(CI))
-HNH: [2026-09-02 12:51:28] OK   acl deny C:\Program Files (x86) ((OI)(CI))
-HNH: [2026-09-02 12:51:28] OK   acl deny C:\ProgramData ((OI)(CI))
-HNH: [2026-09-02 12:51:28] OK   acl deny C:\Users\AgentUser ((OI)(CI))
-HNH: [2026-09-02 12:51:28] OK   acl deny C:\Users\AgentUser\AppData\Roaming ((OI)(CI))
-HNH: [2026-09-02 12:51:28] OK   acl deny C:\Users\AgentUser\AppData\Local ((OI)(CI))
-HNH: [2026-09-02 12:51:29] OK   acl deny C:\ ()
-HNH: [2026-09-02 12:51:31] OK   registry deny HKLM:\SOFTWARE
-HNH: [2026-09-02 12:51:33] OK   registry deny Registry::HKEY_CLASSES_ROOT
-HNH: [2026-09-02 12:51:33] OK   registry deny Registry::HKEY_USERS\gsa_hkcu_e4bc9a9e6f3245ca90819174db29663f
-HNH: [2026-09-02 12:51:33] OK   acl grant C:\Users\AgentUser\AppData\Local\Packages (Modify)
-HNH: [2026-09-02 12:51:33] OK   acl grant C:\workspace (Modify)
-HNH: [2026-09-02 12:51:33] OK   workspace C:\workspace ready (RunUser=M)
-HNH: [2026-09-02 12:51:34] OK   firewall default outbound = block; metadata/link-local/RFC1918/multicast block rule
-HNH: [2026-09-02 12:51:34] OK   firewall allow DeepSeek 221.204.163.76 + hosts pin
-HNH: [2026-09-02 12:51:34] OK   AppLocker whitelist policy applied (C:\WINDOWS\TEMP\gsa-applocker-high-nist-800f6a7a1ade4e4096d4f7f87decc17b.xml)
-HNH: [2026-09-02 12:51:34] === done (StepFailures=0) ===
-HNH: [2026-09-02 12:51:34] apply_hardening.ps1 high-nist OK
+HNH: [2026-09-08 01:59:05] === apply_hardening.ps1 Arm=high-nist Revert=False RunUser=AgentUser ===
+HNH: [2026-09-08 01:59:05] OK   local user AgentUser exists
+HNH: [2026-09-08 01:59:05] OK   reg HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System\EnableLUA = 1
+HNH: [2026-09-08 01:59:05] OK   reg HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System\ConsentPromptBehaviorAdmin = 2
+HNH: [2026-09-08 01:59:05] OK   reg HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System\PromptOnSecureDesktop = 1
+HNH: [2026-09-08 01:59:05] OK   reg HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System\EnableInstallerDetection = 1
+HNH: [2026-09-08 01:59:05] OK   reg HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System\FilterAdministratorToken = 1
+HNH: [2026-09-08 01:59:05] OK   reg HKLM:\SOFTWARE\Policies\Microsoft\Windows\Installer\EnableUserControl = 0
+HNH: [2026-09-08 01:59:58] OK   acl deny C:\WINDOWS ((OI)(CI))
+HNH: [2026-09-08 02:00:02] OK   acl deny C:\Program Files ((OI)(CI))
+HNH: [2026-09-08 02:00:03] OK   acl deny C:\Program Files (x86) ((OI)(CI))
+HNH: [2026-09-08 02:00:04] OK   acl deny C:\ProgramData ((OI)(CI))
+HNH: [2026-09-08 02:00:04] OK   acl deny C:\Users\AgentUser ((OI)(CI))
+HNH: [2026-09-08 02:00:04] OK   acl deny C:\Users\AgentUser\AppData\Roaming ((OI)(CI))
+HNH: [2026-09-08 02:00:04] OK   acl deny C:\Users\AgentUser\AppData\Local ((OI)(CI))
+HNH: [2026-09-08 02:00:07] OK   acl deny C:\ ()
+HNH: [2026-09-08 02:00:09] OK   registry deny HKLM:\SOFTWARE
+HNH: [2026-09-08 02:00:12] OK   registry deny Registry::HKEY_CLASSES_ROOT
+HNH: [2026-09-08 02:00:12] OK   registry deny Registry::HKEY_USERS\gsa_hkcu_1ab2a41243ff4c808225d2ce63b5b195
+HNH: [2026-09-08 02:00:12] OK   hive settled for C:\Users\AgentUser\NTUSER.DAT
+HNH: [2026-09-08 02:00:12] OK   acl grant C:\Users\AgentUser\AppData\Local\Packages (Modify)
+HNH: [2026-09-08 02:00:12] OK   acl grant C:\workspace (Modify)
+HNH: [2026-09-08 02:00:12] OK   workspace C:\workspace ready (RunUser=M)
+HNH: [2026-09-08 02:00:15] OK   firewall default outbound = block; metadata/link-local/RFC1918/multicast block rule
+HNH: [2026-09-08 02:00:16] OK   firewall allow DeepSeek 221.204.163.76 + hosts pin
+HNH: [2026-09-08 02:00:16] OK   AppLocker whitelist policy applied (C:\WINDOWS\TEMP\gsa-applocker-high-nist-1c6fdf8355f24840b01d53feb8ca7107.xml)
+HNH: [2026-09-08 02:00:16] === done (StepFailures=0) ===
+HNH: [2026-09-08 02:00:16] apply_hardening.ps1 high-nist OK
 HNH_EXIT=0
 ===== HIGH-NIST PROBE =====
 HN: {
@@ -79,7 +91,6 @@ HN: }
 HN: enforcement-probe high-nist OK — result=C:\workspace\high-nist\enforcement-probe-high-nist.json
 HN_PROBE_EXIT=0
 HN_OBS outcome=compliant exit=0
-HN_DIAG: LoadUserProfileW(AgentUser) failed: [WinError 5023] 组或资源的状态不是执行请求操作的正确状态。
 HN_CHECK appcontainer_token=True
 HN_CHECK job_object_assigned=True
 HN_CHECK low_integrity=True
@@ -89,8 +100,13 @@ HN_CHECK temp_redirected=True
 HN_CHECK token_virtualization_disabled=True
 HN_CHECK workspace_writable=True
 {
+  "wf12_timings_ms": {
+    "network_blocked_ms": 0,
+    "metadata_blocked_ms": 0
+  },
   "arm": "high-nist",
   "workspace": "C:\\workspace\\high-nist",
+  "appcontainer_expected": true,
   "checks": {
     "workspace_writable": true,
     "non_admin": true,
@@ -114,7 +130,7 @@ HN_CHECK workspace_writable=True
   },
   "passed": 19,
   "failed": 0,
-  "ran_at": "2026-09-02T04:51:43Z"
+  "ran_at": "2026-09-07T18:00:19Z"
 }
 EXIT=0
 JOB_EXIT=0

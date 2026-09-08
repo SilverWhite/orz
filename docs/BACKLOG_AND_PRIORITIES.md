@@ -8,13 +8,13 @@
 
 ## 未闭合计数（2026-09-04 口径）
 
-- 未闭合总数：**28 项**（2026-08-31：P2-10 阶段 3 验证闭环 38 → 32；0k S4 实机复验闭环 32 → 30；2026-09-01：P2-11 DC 强制模板轮清理闭合 30 → 29，P3「DC 硬信号 4/6」退役 29 → 28；2026-09-02：P2-12 讨论稿登记不动计数；2026-09-03：P2-13 设计定稿与 B1 S1/S2 完成，未入账、计数不变；2026-09-04：P2-14 设计定稿与裁决收口 + S1/S2 实施收口（主会话转 v0.3、压缩 e2e 全串行绿），未入账、计数不变；2026-09-06：P0-GOV 00 任务 D 全部闭合（S2a–S2d + S3/S4 翻转），登记不动计数；2026-09-07：0o S3/S4 集中实机验证批排期登记，不动计数；2026-09-07：0q 统一失败事件管线登记（0p S1 复审 F-C 治本），不动计数）。TODO `[ ]` 明细含父/子项，计数以 BACKLOG 为准。
+- 未闭合总数：**28 项**（2026-08-31：P2-10 阶段 3 验证闭环 38 → 32；0k S4 实机复验闭环 32 → 30；2026-09-01：P2-11 DC 强制模板轮清理闭合 30 → 29，P3「DC 硬信号 4/6」退役 29 → 28；2026-09-02：P2-12 讨论稿登记不动计数；2026-09-03：P2-13 设计定稿与 B1 S1/S2 完成，未入账、计数不变；2026-09-04：P2-14 设计定稿与裁决收口 + S1/S2 实施收口（主会话转 v0.3、压缩 e2e 全串行绿），未入账、计数不变；2026-09-06：P0-GOV 00 任务 D 全部闭合（S2a–S2d + S3/S4 翻转），登记不动计数；2026-09-07：0o S3/S4 集中实机验证批排期登记，不动计数；2026-09-07：0q 统一失败事件管线登记（0p S1 复审 F-C 治本），不动计数；2026-09-08：0p S1–S5 全部闭合（排期登记时未入账，闭合同形态不动计数），0r GAP-TB21-FASTTEXT-ENV-CLAIM 登记不动计数）。TODO `[ ]` 明细含父/子项，计数以 BACKLOG 为准。
 
 ## 优先级总览
 
 | 优先级 | 含义 | 开放项（入口小节） |
 |---|---|---|
-| P0 | 当前工作集：设计已冻结，裁决后立即实施 | FUS-BENCHMARK-FULL-EXEC 验证②③(reward)④⑤（0b）；0d 后续 3/4/5 S4 复验（0d）；THIN-HARNESS-REDESIGN-V2 余项（0j）；WINDOWS-HIGH-NIST-MAX-FRICTION ⑥/⑦（0l）；GSA-SESSION-VOLUME-BOTTOM-LAYER S1–S4（0m，2026-09-06 用户裁决放行）；S3/S4 集中实机验证批（0o，2026-09-07 排期放行——集中执行上述实机类开放项，见排期文档）；模型自信息面补强与 .gsa 两段门（0p，2026-09-07 设计定稿同日排期——黑板自历史面 + 两段门 + key 不落卷 + 0.3.2 + 重跑 train-fasttext，见设计文档）——P0-GOV 00（含任务 D）已于 2026-09-06 全部闭合 |
+| P0 | 当前工作集：设计已冻结，裁决后立即实施 | FUS-BENCHMARK-FULL-EXEC 验证②③(reward)④⑤（0b）；0d 后续 3/4/5 S4 复验（0d）；THIN-HARNESS-REDESIGN-V2 余项（0j）；WINDOWS-HIGH-NIST-MAX-FRICTION ⑥/⑦（0l）；GSA-SESSION-VOLUME-BOTTOM-LAYER S1–S4（0m，2026-09-06 用户裁决放行）；S3/S4 集中实机验证批（0o，2026-09-07 排期放行——集中执行上述实机类开放项，见排期文档）；——P0-GOV 00（含任务 D）已于 2026-09-06 全部闭合；0p 模型自信息面补强与 .gsa 两段门已于 2026-09-08 S1–S5 全部闭合转 `implemented`（T2/S4 见 audits 0P_T2 / 0P_S4 分析） |
 | P1 | 无需裁决，可与 P0 并行 | 统一失败事件管线（0q，2026-09-07 登记——0p S1 复审 F-C 治本，S1 设计定稿前置）；FUS-COMPONENT-REGISTER（4）；GAP-WINDOWS-EVIDENCE（5）；IMPL-DEEPSEEK-TRANSPORT / SEC-CREDENTIALS live 证据（6）；ORZ-SESSION-CONTEXT-MONITOR（6d） |
 | P2 | 生产化决策门：需用户裁决 | IMPL-CONTROL-FABRIC Slice 3/4（7）；OPS-PROTOCOL 裁剪与接线裁决（8）；MODEL-RESIDUAL-PRESSURE-FOLLOWUP（11）；COMPRESSION-LINGUISTIC-FORMAL-LAYER（12）；BLACKBOARD-CONVERSATION-SCOPE-FOLD B2–B4（13） |
 | P3 | 收尾 / 清理 | EVIDENCE-LOCAL-BROWSER（9）；GATE-CHAIN（10）；遗留小项（11） |
@@ -648,7 +648,7 @@ GLM F2 处置转排期（2026-09-06 用户裁决）：`orz-host/src/approval.rs`
   [`W2_CHUNK2_031_S4_ANALYSIS`](audits/W2_CHUNK2_031_S4_ANALYSIS_2026-09-07.md)。
   各项正式闭合登记仍按排期在 T6 统一收口落 docs/audits/ 与各条目小节。
 
-### 0p. 模型自信息面补强与 `.gsa` 两段门（P0；2026-09-07 设计定稿，同日用户裁决排期实施）
+### 0p. 模型自信息面补强与 `.gsa` 两段门（P0；2026-09-07 设计定稿同日排期；**S1–S5 全部闭合 2026-09-08，转 `implemented`**）
 
 W2 压测证据链（[`W2_ORZ_DEFECT_EXTRACTION`](audits/W2_ORZ_DEFECT_EXTRACTION_2026-09-07.md)
 D-1/D-2/D-3）→ 用户裁决：黑板补强先行（「黑板必须暴露模型需要的全部信
@@ -682,13 +682,35 @@ D-1/D-2/D-3）→ 用户裁决：黑板补强先行（「黑板必须暴露模�
   epoch/grill）+ 已知 key 注册表 + B1 凭据区恒拒落判决 + call-id 键控
   旗标；测试 +14（orz-tools 2844/orz-host 254/orz-assurance 207 全绿）；
   设计注记 ⑤⑥⑦ 随批，详见[复审处理审计](audits/0P_S2_REVIEW_HANDLING_2026-09-07.md)。）
-- [ ] T2 双平台重建：Windows 三件套 + Linux musl 顺带翻新 + VM 同步 +
+- [x] T2 双平台重建：Windows 三件套 + Linux musl 顺带翻新 + VM 同步 +
   acaf manifest 重刷 + DryRun + enforcement-probe。
-- [ ] S4 重跑 train-fasttext（RunTag tf-selfhistory-032，官方 3600s
+  （2026-09-08 闭合：orz `7b00bbc9` 基线——Windows staging-0.3.2 哈希锁定；
+  Linux musl BUILD_EXIT=0/static-pie/bookworm 冒烟/两段门符号命中；VM 换装
+  哈希逐对吻合+旧件备份+MANIFEST_SIGNER_HASH_MATCH=True；DryRun 全对；
+  enforcement-probe high-nist 19/19（用户裁决只跑此臂，不要求三臂可比——
+  工程项目非研究）；control 臂顺带 exit 0。排障沉淀：构建脚本 apt 源
+  USTC HTTPS+重试环、管道吞退出码改 fail-loud；C 盘清理经用户裁决
+  （删 .codex\visualizations 6.9GB 等→13GB）；**检查点还原后必补
+  stage setup + AgentUser DPAPI 主密钥物化 + acaf 重刷**（否则 orz
+  keystore 首建 0x80070003，非代码回归 diff 证明）。入口：
+  [T2 审计](audits/0P_T2_DUAL_PLATFORM_REBUILD_2026-09-08.md)。）
+- [x] S4 重跑 train-fasttext（RunTag tf-selfhistory-032，官方 3600s
   墙钟）：判据表见设计 §4（证据完整性/通知与放行事件面/key 零落卷/
   blackboard_read 用量观察/通用统计）→ 分析落 docs/audits/。
-- [ ] S5 收口：BACKLOG/TODO/索引/ADR 注记同步 + manifest 重算 + 门禁
-  Exit 0。
+  （2026-09-08 闭合：attempt=ran/orz_exit=0/3543s 墙钟内 run_finished；
+  **判据表全项通过**——两段门审计对首次生产落账（notice @seq869 →
+  opened @seq1541/1565/1571，外域 deny ×8 结构化信封、连续重试 max=1）；
+  全卷 200 文件零 sk- + key 字面量零落卷；blackboard_read 11 次 vs 基线 3
+  （search 新面 1 次；粒度裁决：黑板聚合面特意形态，模型转台账属理性
+  路径，闭合不追打）；命中率 96.37%、零真实 400、turn_count=1 真实计数。
+  **任务未过**（未交付 model.bin）：环境缺 fasttext 与 task.json 声明
+  矛盾——harness 缺陷候选单列登记（GAP-TB21-FASTTEXT-ENV-CLAIM），
+  非 orz 判据问题。入口：
+  [S4 分析](audits/0P_S4_TRAIN_FASTTEXT_TF_SELFHISTORY_032_ANALYSIS_2026-09-08.md)。）
+- [x] S5 收口：BACKLOG/TODO/索引/ADR 注记同步 + manifest 重算 + 门禁
+  Exit 0。（2026-09-08 闭合：本小节勾选 + 索引 v2.63 + ADR-0010 §14.62
+  + manifest 重算 1441 条（orz 源零改动，check valid）+ 门禁 Exit 0；
+  0p 全部闭合转 `implemented`。）
 - 边界：不做 shell 命令串内容检查（shell 直读定性为跳过教育的旁路，
   文档标注）；不为跑分特化（通用长会话能力）；chunk3/批次L/O 以 0.3.2
   为基线（随各批次运行时确认）；0n approval 仅词汇对齐注记。
@@ -741,6 +763,20 @@ D-1/D-2/D-3）→ 用户裁决：黑板补强先行（「黑板必须暴露模�
   覆盖：Ok 臂 exit≠0 + failure_target 四族 → `exit_{n}`，orz
   `fd46d4f9`）；本项实施以 S1 设计定稿为前置门（0n 同款纪律）。
 - 计数：登记不动计数（闭合时动账）。
+
+### 0r. GAP-TB21-FASTTEXT-ENV-CLAIM（harness 环境缺陷候选；P2 观察；2026-09-08 随 0p S4 登记，不动计数）
+
+- 来源：0p S4 实跑 train-fasttext（tf-selfhistory-032）模型收尾报告实证——
+  task.json / inputs-manifest.json 声称 "fasttext python module provisioned
+  machine-wide"，但 VM 实测 `import fasttext` ModuleNotFoundError、全盘
+  文件名搜索无果且无网络可补（egress 单 IP + pip 代理 400）——**任务
+  环境声明与实测矛盾**，Windows 任务化时依赖未落地。该题属 TB2.1
+  unsolved 复测集（W2 两轮同形态未过），orz 判据面不受影响。
+- 处置方向（待裁决）：核对 TB2.1 任务化清单中 fasttext 的 provision 步骤
+  落点（镜像/seed 脚本/inputs-manifest 生成链），补装或改声明；连带核对
+  同批 unsolved 集合其余任务的同形态声明漂移。证据：
+  [S4 分析 §4A](audits/0P_S4_TRAIN_FASTTEXT_TF_SELFHISTORY_032_ANALYSIS_2026-09-08.md)。
+- 计数：登记不动计数。
 
 
 ## P1 — 可并行审计 / 证据
