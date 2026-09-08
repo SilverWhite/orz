@@ -783,13 +783,16 @@ impl AgentLoopController {
                         crate::console::STEP_EXECUTE | crate::console::STEP_VERIFY
                     ),
                 );
-                let error_value = serde_json::to_value(&envelope.error).unwrap_or_else(|_| {
+                let mut error_value = serde_json::to_value(&envelope.error).unwrap_or_else(|_| {
                     serde_json::json!({
                         "step": err.step,
                         "code": err.code,
                         "message": err.message,
                     })
                 });
+                // 0q（ADR-0010 §14.63 裁决 ②）：订单失败收据同过漏斗——
+                // action_target 第五族身份入聚合 + receipt 信封挂载。
+                self.note_order_failure(&mut error_value, &order.order_id, &order.action, err.code);
                 self.push_console_result(
                     order.order_id.clone(),
                     order.action.clone(),
@@ -821,13 +824,17 @@ impl AgentLoopController {
             .unwrap()
             .new_trace(Some(order.order_id.clone()));
         let envelope = failure_envelope(&mut trace, Some(&order.action), &err, 10);
-        let error_value = serde_json::to_value(&envelope.error).unwrap_or_else(|_| {
+        let mut error_value = serde_json::to_value(&envelope.error).unwrap_or_else(|_| {
             serde_json::json!({
                 "step": err.step,
                 "code": err.code,
                 "message": err.message,
             })
         });
+        // 0q（ADR-0010 §14.63 裁决 ②）：发放前拒绝（order_stale /
+        // step_not_done / budget_insufficient 等）与执行失败同纪律——
+        // 订单收据失败统一过漏斗。
+        self.note_order_failure(&mut error_value, &order.order_id, &order.action, err.code);
         self.push_console_result(
             order.order_id,
             order.action,
@@ -1565,6 +1572,90 @@ mod tests {
         assert_eq!(rejected[0].payload["round"], 0);
         assert_eq!(rejected[0].payload["plan_epoch"], 1);
         assert_eq!(rejected[0].payload["run_id"], "RUN-OLD");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// 0q 第五族（2026-09-08，ADR-0010 §14.63 裁决 ②）：订单失败收据同过
+    /// 漏斗——`action_target` 身份入 `failure_agg` 聚合 + receipt 错误
+    /// 信封挂载。此前订单失败不进聚合，是 0q 治本清单上的已知缺口。
+    #[tokio::test]
+    async fn console_order_failure_stamps_action_target_into_agg_and_receipt() {
+        let dir = test_dir();
+        let journal = JournalRecorder::new(dir.clone());
+        let host = TestHost {
+            journal: journal.clone(),
+            tool_result: Some(ToolResult {
+                output: "never".to_string(),
+                exit_code: Some(0),
+                output_encoding: None,
+                structured: None,
+                ..Default::default()
+            }),
+        };
+        let controller = AgentLoopController::with_gateway(Arc::new(FakeProvider::new(Vec::new())));
+        {
+            let mut w = controller.blackboard().write();
+            w.plan.plan_epoch = 1;
+            w.actions
+                .write_order(ActionOrder {
+                    order_id: "ORD-000077".to_string(),
+                    action: "workspace.run_terminal".to_string(),
+                    arguments: serde_json::json!({"command": "make test"}),
+                    target: None,
+                    step_id: None,
+                    round: 0,
+                    plan_epoch: 1,
+                    run_id: "RUN-OLD".to_string(),
+                })
+                .unwrap();
+        }
+        let mut writer = EventWriter::new(
+            Some(&journal),
+            EventTrack::V02,
+            "RUN-0Q-ORDER",
+            "",
+            0,
+            None,
+            None,
+        );
+        controller
+            .issue_pending_console_order(
+                &host,
+                &mut writer,
+                "stale",
+                orz_assurance::gates::ipg::WorkspaceTrust::NotObserved,
+                1,
+                None,
+            )
+            .await
+            .unwrap();
+
+        // receipt 错误信封挂 action_target 身份（同源同刻的订单面对账物）。
+        let r = controller.blackboard().read();
+        assert_eq!(r.actions.results.len(), 1, "{:?}", r.actions.results);
+        let receipt = &r.actions.results[0];
+        assert!(!receipt.ok);
+        assert_eq!(receipt.error.as_ref().unwrap()["code"], "order_stale");
+        let ft = receipt
+            .error
+            .as_ref()
+            .unwrap()
+            .get("failure_target")
+            .unwrap();
+        assert_eq!(ft["kind"], "action_target");
+        assert_eq!(ft["id"], orz_assurance::journal::sha256_hex(b"ORD-000077"));
+        assert_eq!(ft["action"], "workspace.run_terminal");
+
+        // 聚合面：action_target 一行，code = order_stale，渲染 preview =
+        // action 名（failures_only 面可见此前缺失的订单失败行）。
+        let agg = &r.failure_agg;
+        assert_eq!(agg.rows.len(), 1, "{agg:?}");
+        let row = &agg.rows[0];
+        assert_eq!(row.kind, "action_target");
+        assert_eq!(row.id, orz_assurance::journal::sha256_hex(b"ORD-000077"));
+        assert_eq!(row.preview, "workspace.run_terminal");
+        assert_eq!(row.codes[0].code, "order_stale");
 
         let _ = std::fs::remove_dir_all(&dir);
     }

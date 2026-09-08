@@ -12,6 +12,12 @@
 //!   {path, anchor_hash, size});
 //! - `file_target`  ← search_replace without anchor / read_file / grep (path);
 //! - `url_target`   ← web_fetch / browser_read (ACAF canonical URL).
+//!
+//! 0q 统一失败事件管线（2026-09-08，ADR-0010 §14.63）新增第五族：
+//! - `action_target`← console 订单失败收据（`id = sha256(order_id)`，
+//!   preview = action 名）。订单身份在收据装配点从既有字段确定性导出，
+//!   仅入黑板 `failure_agg` 聚合与 receipt 错误信封，不进 journal 事件面
+//!   （收据错误信封不是 journal 事件——法官族面不校验本族）。
 
 use orz_assurance::journal::sha256_hex;
 use serde_json::{Value, json};
@@ -48,16 +54,45 @@ pub fn bounded_preview(text: &str, max_bytes: usize) -> String {
 /// Human-facing display preview for an F4 identity object (≤ 80 B, never
 /// log-level detail) — the P2-12 failure-target aggregation's per-row label.
 /// cmd targets use the command preview, anchor/file targets the path, URL
-/// targets the canonical URL; unknown kinds yield `None`.
+/// targets the canonical URL, action targets the action name; unknown kinds
+/// yield `None`.
 pub fn target_preview(ft: &Value) -> Option<String> {
     let kind = ft.get("kind").and_then(Value::as_str)?;
     let raw = match kind {
         "cmd_target" => ft.get("cmd_preview").and_then(Value::as_str)?,
         "anchor_target" | "file_target" => ft.get("path").and_then(Value::as_str)?,
         "url_target" => ft.get("canonical_url").and_then(Value::as_str)?,
+        "action_target" => ft.get("action").and_then(Value::as_str)?,
         _ => return None,
     };
     Some(bounded_preview(raw, 80))
+}
+
+/// 0q（2026-09-08，ADR-0010 §14.63）：失败聚合覆盖面工具集——四族身份
+/// 可及的工具并集。漏斗只对该集合的 error 形状完成做盖章/标记判定；其余
+/// 工具（计划轮黑板面、console 内建、检索派发包装等）身份定义性 None，
+/// 聚合面维持不进现状，法官族面也按同表跳过。
+pub fn identity_capable(tool: &str) -> bool {
+    matches!(
+        tool,
+        "run_terminal_cmd"
+            | "run_tests"
+            | "search_replace"
+            | "read_file"
+            | "grep"
+            | "web_fetch"
+            | "browser_read"
+    )
+}
+
+/// 0q 第五族：console 订单失败的 F4 身份（SARIF ruleId×指纹同构）——
+/// `id = sha256(order_id)`，`action` 字段承载动作名（渲染 preview 的源）。
+pub fn action_failure_target(order_id: &str, action: &str) -> Value {
+    json!({
+        "kind": "action_target",
+        "id": sha256_hex(order_id.as_bytes()),
+        "action": action,
+    })
 }
 
 /// Build the `failure_target` JSON object for a failing tool call, or `None`
@@ -242,5 +277,48 @@ mod tests {
         assert!(failure_target("plan_write", &json!({})).is_none());
         assert!(failure_target("run_terminal_cmd", &json!({})).is_none());
         assert!(failure_target("web_fetch", &json!({})).is_none());
+    }
+
+    #[test]
+    fn identity_capable_is_exactly_the_four_family_union() {
+        for tool in [
+            "run_terminal_cmd",
+            "run_tests",
+            "search_replace",
+            "read_file",
+            "grep",
+            "web_fetch",
+            "browser_read",
+        ] {
+            assert!(identity_capable(tool), "{tool} must be capable");
+        }
+        for tool in [
+            "plan_write",
+            "blackboard_read",
+            "list_dir",
+            "assistant.trace",
+            "retrieve_project_docs",
+            "web_search",
+        ] {
+            assert!(!identity_capable(tool), "{tool} must not be capable");
+        }
+    }
+
+    #[test]
+    fn action_target_carries_sha256_order_identity_and_action_preview() {
+        let ft = action_failure_target("ORD-000042", "workspace.run_terminal");
+        assert_eq!(ft["kind"], "action_target");
+        let id = ft["id"].as_str().unwrap();
+        assert_eq!(id, sha256_hex(b"ORD-000042"));
+        assert_eq!(ft["action"], "workspace.run_terminal");
+        assert_eq!(
+            target_preview(&ft).as_deref(),
+            Some("workspace.run_terminal")
+        );
+        // Deterministic: same order id → same identity (SARIF fingerprint
+        // isomorphism — identity derives from order_id alone, not the
+        // action name); distinct orders never collide on identity.
+        assert_eq!(action_failure_target("ORD-000042", "x")["id"], ft["id"]);
+        assert_ne!(action_failure_target("ORD-000043", "x")["id"], ft["id"]);
     }
 }

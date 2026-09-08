@@ -26,6 +26,20 @@ use crate::host::{
 };
 use crate::tool::ToolDispatcher;
 
+/// 0q（ADR-0010 §14.63）：漏斗 `stamp_failure` 的原始结果形状——调用点
+/// 只如实上报执行/装配结果，盖章与否由漏斗内集中形状谓词裁决。
+pub(crate) enum ToolFailureOutcome<'a> {
+    /// Err 臂：host 工具错误（code = ToolErrorKind 结构化码）。
+    HostError(&'a ToolError),
+    /// 拒绝完成（结构化 code；调用点保证无 `policy_denial` 信封）。
+    Refused(&'a str),
+    /// Ok 臂完成退出码（`None` = running/无退出语义）。
+    CommandExit(Option<i32>),
+    /// 子代理墙钟掐杀的 in-flight 合成收口（0k P3-4）：args 不可及，
+    /// 身份定义性 None——恒落「有意不聚合」标记。
+    SyntheticTimeout,
+}
+
 impl AgentLoopController {
     /// P2-10 R2 (2026-08-31): feed a structured denial event into the LIF
     /// deny channel — the shared entry point for every refusal path
@@ -86,6 +100,101 @@ impl AgentLoopController {
             ToolError::Timeout(_) => CODE_TOOL_TIMEOUT,
             ToolError::ExecutionFailed(_) => CODE_EXECUTION_FAILED,
         }
+    }
+
+    /// 0q 统一失败事件管线（2026-09-08，ADR-0010 §14.63）：写入侧边界
+    /// 单一漏斗——工具完成装配点的唯一 `stamp_failure`。形状谓词集中在此
+    /// 一处定义（OTel 语义约定形态），覆盖面由结构保证而非路径记忆：
+    ///
+    /// - 盖章（写 `failure_agg` 聚合 + 事件挂 `failure_target`）= 四写点
+    ///   语义逐项对齐，不扩不缩：
+    ///   ① host ToolError（Err 臂）→ code = ToolErrorKind 结构化码；
+    ///   ② Ok 臂命令级失败（exit≠0 且无拒绝信封）→ code = `exit_{n}`；
+    ///   ③ 锚点核证拒单（`content_anchor_mismatch`）；
+    ///   ④ 候选门拒单（`*_candidate_*` 码族）；
+    ///   且 `failure_target(tool, args)` 命中（None-identity 维持不进聚合
+    ///   现状——0p S2 复审同款：覆盖面由谓词与身份联合决定）。
+    /// - 标记（事件挂 `failure_agg_absent: true`）= error 形状、身份可及
+    ///   工具、谓词未盖章且无 `policy_denial` 信封——「漏斗已评估、有意
+    ///   不聚合」的 journal 可见事实。`policy_denial` 载荷自身即是否决
+    ///   证据（0p S2 裁决：信封优先、不盖章），无需标记。
+    /// - 其余（成功、中性、身份不可及工具）零作用。
+    ///
+    /// 每个工具结果恰过一次漏斗（error 形状装配点各接线一次）；漏盖由
+    /// journal-conformance 法官对账族机械证明（`failure_agg_coverage`，
+    /// 以 run_started `failure_pipeline: "funnel-v1"` 为 grandfather 锚）。
+    pub(crate) fn stamp_failure(
+        &self,
+        payload: &mut serde_json::Value,
+        tool: &str,
+        arguments: &serde_json::Value,
+        outcome: ToolFailureOutcome<'_>,
+    ) {
+        // 身份不可及工具：谓词与标记都不适用（法官族按同表跳过）。
+        if !crate::failure_target::identity_capable(tool) {
+            return;
+        }
+        // 请求侧结构化拒绝信封（权限/ACAF/检索模式/两段门）＝0p S2 裁决
+        // 的「信封优先、不盖章」——既不聚合也不标记，事件自证评估事实。
+        if payload.get("policy_denial").is_some() {
+            return;
+        }
+        let code: Option<String> = match &outcome {
+            ToolFailureOutcome::HostError(e) => Some(Self::host_error_code(e).to_string()),
+            ToolFailureOutcome::Refused(code) => {
+                // 拒绝码白名单＝四写点中的两个拒单族（③④）；其余拒绝
+                // （计划轮/角色门/注入预算/测试运行器缺席等）维持不进
+                // 聚合现状，仅落标记。
+                let refused = *code == CODE_CONTENT_ANCHOR_MISMATCH
+                    || code.ends_with("_candidate_count_unbound")
+                    || code.ends_with("_candidate_url_missing")
+                    || code.ends_with("_candidate_cap_exceeded");
+                refused.then(|| (*code).to_string())
+            }
+            ToolFailureOutcome::CommandExit(exit) => match exit {
+                // Ok 臂：非零退出 = 命令级失败（0p S1 复审 F-C 口径原样
+                // 收编）；零退出 / 无退出语义（running:true）非 error
+                // 形状——漏斗零作用，不标记。
+                Some(n) if *n != 0 => Some(format!("exit_{n}")),
+                _ => return,
+            },
+            ToolFailureOutcome::SyntheticTimeout => None,
+        };
+        let Some(code) = code else {
+            // 谓词未命中：error 形状仍在漏斗上——落「有意不聚合」标记。
+            payload["failure_agg_absent"] = serde_json::json!(true);
+            return;
+        };
+        let Some(ft) = crate::failure_target::failure_target(tool, arguments) else {
+            // 形状命中但身份 None（全库 grep / 缺参 / run_tests 固定命令）：
+            // 维持不进聚合现状（0q §3.2-1），同样落标记。
+            payload["failure_agg_absent"] = serde_json::json!(true);
+            return;
+        };
+        payload["failure_target"] = ft.clone();
+        // 事件与聚合同源同刻：聚合写入先于事件发出（调用点保证本函数
+        // 在 writer.record 之前执行）。
+        self.note_failure_agg(&ft, &code);
+    }
+
+    /// 0q 第五族（ADR-0010 §14.63 裁决 ②）：console 订单失败收据的漏斗
+    /// 接线——订单完成装配（receipt error 信封处）同过单一漏斗。身份
+    /// `action_target {id = sha256(order_id), action}` 写入黑板
+    /// `failure_agg`（订单业务失败此前不进聚合，是 0q 治本清单上的已知
+    /// 缺口），receipt 错误信封同批挂载身份（「事件与聚合同源同刻」的
+    /// 订单面等价物；收据信封不是 journal 事件，法官族面不涉及本族）。
+    /// 聚合 code = 结构化 ConsoleError 码（order_stale / execution_failed
+    /// 等），永不解析消息文本。
+    pub(crate) fn note_order_failure(
+        &self,
+        error_value: &mut serde_json::Value,
+        order_id: &str,
+        action: &str,
+        code: &str,
+    ) {
+        let ft = crate::failure_target::action_failure_target(order_id, action);
+        self.note_failure_agg(&ft, code);
+        error_value["failure_target"] = ft;
     }
 
     /// P2-11 第 4 项 / 依赖图主线设计 §3 (2026-09-01)：依赖图事实记录——
@@ -461,12 +570,15 @@ impl AgentLoopController {
                 "file_path": file_path,
                 "reason": err.upstream,
             });
-            // P2-10 F4 (I2): GetPut anchor failure identity.
-            if let Some(ft) = crate::failure_target::failure_target(&tc.name, &tc.arguments) {
-                completed["failure_target"] = ft.clone();
-                // P2-12（2026-09-02）：写时盖章——锚点拒单的失败目标聚合。
-                self.note_failure_agg(&ft, CODE_CONTENT_ANCHOR_MISMATCH);
-            }
+            // 0q（ADR-0010 §14.63）：原「P2-10 F4 身份挂载 + P2-12 写时
+            // 盖章」散布写点退役——语义由单一漏斗的集中形状谓词等价覆盖
+            // （写点 ①：锚点核证拒单）。
+            self.stamp_failure(
+                &mut completed,
+                &tc.name,
+                &tc.arguments,
+                ToolFailureOutcome::Refused(CODE_CONTENT_ANCHOR_MISMATCH),
+            );
             stamp_direct(&mut completed);
             writer.record(EventType::ToolCompleted, completed).await?;
             messages.push(Message {
@@ -873,6 +985,15 @@ impl AgentLoopController {
                     "status": "error",
                     "error": "missing_test_runner",
                 });
+                // 0q：error 形状完成统一过漏斗（拒绝码不在四写点白名单、
+                // run_tests 固定命令无 args 身份 → 「有意不聚合」标记，
+                // 法官对账物齐备）。
+                self.stamp_failure(
+                    &mut completed,
+                    &tc.name,
+                    &tc.arguments,
+                    ToolFailureOutcome::Refused("missing_test_runner"),
+                );
                 // F3 (2026-08-16 审查收口): run_tests 拒绝路径同样盖章
                 // （direct 模式事件链关联，§7.4）。
                 stamp_direct(&mut completed);
@@ -972,6 +1093,16 @@ impl AgentLoopController {
                             "error": msg,
                             "wall_ms": wall_started.elapsed().as_millis() as u64,
                         });
+                        // 0q：run_tests 特例路径的 host 错误此前是散布
+                        // 形态下的漏盖缺口（0q §1 问题陈述的实证类）——
+                        // 统一过漏斗（host 错误形状；固定命令无 args
+                        // 身份 → 标记）。
+                        self.stamp_failure(
+                            &mut payload,
+                            &tc.name,
+                            &tc.arguments,
+                            ToolFailureOutcome::HostError(&e),
+                        );
                         stamp_direct(&mut payload);
                         writer.record(EventType::ToolCompleted, payload).await?;
                         messages.push(Message {
@@ -1028,6 +1159,14 @@ impl AgentLoopController {
             if result.timed_out {
                 completed_payload["timed_out"] = serde_json::json!(true);
             }
+            // 0q：run_tests 特例路径的 Ok 臂同样过漏斗（命令级失败形状
+            // 统一收口；固定命令无 args 身份 → 非零退出落标记）。
+            self.stamp_failure(
+                &mut completed_payload,
+                &tc.name,
+                &tc.arguments,
+                ToolFailureOutcome::CommandExit(result.exit_code),
+            );
             stamp_direct(&mut completed_payload);
             writer
                 .record(EventType::ToolCompleted, completed_payload)
@@ -3253,6 +3392,18 @@ impl AgentLoopController {
                         "reason": pd.reason,
                     });
                 }
+                // 0q（ADR-0010 §14.63）：单一漏斗在事件发出前过一次——
+                // Ok 臂命令级失败盖章（写点 ②，原 0p S1 复审 F-C 散布
+                // 写点退役）；policy_denial 载荷由漏斗自检跳过（0p S2
+                // 复审 P2 口径：信封优先、不盖章）。事件与聚合同源同刻，
+                // 且命令级失败完成事件现挂 failure_target（此前仅 Err
+                // 臂挂载——0p F-C 只补了聚合面，本批补齐事件面对账物）。
+                self.stamp_failure(
+                    &mut completed_payload,
+                    &tc.name,
+                    &tc.arguments,
+                    ToolFailureOutcome::CommandExit(res.exit_code),
+                );
                 // P2-10 F3 (I3) + R2 (2026-08-31): feed the LIF engine — a
                 // structured denial (policy_denial marker) is a Deny event,
                 // timeout = error (fail-closed effect), exit_code 0 =
@@ -3313,22 +3464,10 @@ impl AgentLoopController {
                     entry.exit_code = res.exit_code;
                     w.push_exec_result(entry);
                 }
-                // 0p S1 复审 F-C 最小闭合（2026-09-07）：命令级失败补盖章
-                // ——exit≠0 且该调用携带 F4 身份（failure_target 四族，
-                // run_terminal_cmd/run_tests → cmd_target）时按 Err 臂同
-                // 纪律记入 failure_agg（结构化 code = exit_{n}，非日志内
-                // 容）。failure_target 不识别的工具（grep 等）返回 None，
-                // 零误盖；无退出语义（None）与零退出不盖章。
-                // 0p S2 复审 P2 修复（2026-09-07）：policy_denial 载荷
-                // （读沙箱拒绝/通知信封）不是命令级失败——grep 带 path
-                // 参数会命中 file_target，deny exit 1 曾被误盖 exit_1 章
-                // 污染 failures_only 聚合面，此处置信封优先、不盖章。
-                if let Some(exit) = res.exit_code.filter(|n| *n != 0)
-                    && res.policy_denial.is_none()
-                    && let Some(ft) = crate::failure_target::failure_target(&tc.name, &tc.arguments)
-                {
-                    self.note_failure_agg(&ft, &format!("exit_{exit}"));
-                }
+                // 0p S1 复审 F-C 最小闭合（2026-09-07）的散布写点已于
+                // 0q 退役（ADR-0010 §14.63）：命令级失败盖章收敛进漏斗
+                // （事件发出前的 ToolFailureOutcome::CommandExit 接线），
+                // 本处不再重复盖章。
                 // IP2a (D-3): 失败必显式 — a tool result must NEVER be blank
                 // in the conversation (blank tool messages give the model
                 // nothing to react to; a host that returns empty output is
@@ -3383,15 +3522,16 @@ impl AgentLoopController {
                         "error": e.to_string(),
                         "wall_ms": wall_started.elapsed().as_millis() as u64,
                     });
-                    // P2-10 F4 (I2): failure-target identity on the
-                    // command/anchor/file/URL tool families.
-                    if let Some(ft) = crate::failure_target::failure_target(&tc.name, &tc.arguments)
-                    {
-                        payload["failure_target"] = ft.clone();
-                        // P2-12（2026-09-02）：写时盖章——host 工具错误的
-                        // 失败目标聚合（code = ToolErrorKind 结构化码）。
-                        self.note_failure_agg(&ft, Self::host_error_code(&e));
-                    }
+                    // 0q（ADR-0010 §14.63）：原「P2-10 F4 身份挂载 + P2-12
+                    // 写时盖章」散布写点退役——语义由单一漏斗等价覆盖
+                    // （写点 ③：host ToolError，code = ToolErrorKind
+                    // 结构化码）。
+                    self.stamp_failure(
+                        &mut payload,
+                        &tc.name,
+                        &tc.arguments,
+                        ToolFailureOutcome::HostError(&e),
+                    );
                     if timed_out {
                         payload["timed_out"] = serde_json::json!(true);
                     }
@@ -3636,13 +3776,15 @@ impl AgentLoopController {
             "status": "error",
             "error": code,
         });
-        // P2-10 F4 (I2): candidate-cap refusal on the URL families keeps its
-        // target identity (web_fetch / browser_read).
-        if let Some(ft) = crate::failure_target::failure_target(&tc.name, &tc.arguments) {
-            payload["failure_target"] = ft.clone();
-            // P2-12（2026-09-02）：写时盖章——候选门拒单的失败目标聚合。
-            self.note_failure_agg(&ft, code);
-        }
+        // 0q（ADR-0010 §14.63）：原「P2-10 F4 身份挂载 + P2-12 写时盖章」
+        // 散布写点退役——语义由单一漏斗等价覆盖（写点 ④：候选门拒单，
+        // `{family}_candidate_*` 码族）。
+        self.stamp_failure(
+            &mut payload,
+            &tc.name,
+            &tc.arguments,
+            ToolFailureOutcome::Refused(code),
+        );
         // Only lane refusals carry the dispatch target: `count_unbound`
         // fires in a lane with no count domain (main/grill belt-and-braces),
         // where no dispatch occurred (review fix 2026-08-14).
@@ -4604,8 +4746,312 @@ mod tests {
             "{}",
             notes.text
         );
-        assert!(!notes.text.contains("[执行错误]"), "{}", notes.text);
-        assert!(notes.hidden_failure_rows.is_empty());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    // ==== 0q 统一失败事件管线（2026-09-08，ADR-0010 §14.63）====
+    // 漏斗 `stamp_failure` 的集中形状谓词矩阵 + Ok 臂 e2e 对拍。
+
+    /// 谓词矩阵：盖章 / 标记 / 零作用三态在单一漏斗上逐形状核对。
+    #[test]
+    fn funnel_shape_predicate_matrix() {
+        let controller = AgentLoopController::default();
+        let cmd_args = serde_json::json!({"command": "pip install fasttext"});
+        let grep_args = serde_json::json!({"pattern": "x"});
+        let url_args = serde_json::json!({"url": "http://example.com/a"});
+        let tool_not_found = ToolError::NotFound("no such tool".into());
+
+        // ① host ToolError + 身份命中 → 盖章（聚合行 + 事件身份）。
+        let mut payload = serde_json::json!({"tool": "run_terminal_cmd"});
+        controller.stamp_failure(
+            &mut payload,
+            "run_terminal_cmd",
+            &cmd_args,
+            ToolFailureOutcome::HostError(&tool_not_found),
+        );
+        assert!(payload.get("failure_target").is_some());
+        assert!(payload.get("failure_agg_absent").is_none());
+        assert_eq!(controller.blackboard().read().failure_agg.rows.len(), 1);
+
+        // ② Ok 臂命令级失败 + 身份命中 → 盖章（exit_{n}）。不同命令 =
+        // 不同 (kind, id) 行（聚合按身份去重，同命令会并为一行）。
+        let mut payload = serde_json::json!({"tool": "run_terminal_cmd"});
+        controller.stamp_failure(
+            &mut payload,
+            "run_terminal_cmd",
+            &serde_json::json!({"command": "make -j8"}),
+            ToolFailureOutcome::CommandExit(Some(2)),
+        );
+        assert!(payload.get("failure_target").is_some());
+        assert_eq!(controller.blackboard().read().failure_agg.rows.len(), 2);
+
+        // ③ 锚点拒单 + ④ 候选门拒单（白名单拒绝码）→ 盖章。
+        let mut payload = serde_json::json!({"tool": "search_replace"});
+        controller.stamp_failure(
+            &mut payload,
+            "search_replace",
+            &serde_json::json!({"file_path": "a.rs"}),
+            ToolFailureOutcome::Refused(CODE_CONTENT_ANCHOR_MISMATCH),
+        );
+        assert!(payload.get("failure_target").is_some());
+        let mut payload = serde_json::json!({"tool": "web_fetch"});
+        controller.stamp_failure(
+            &mut payload,
+            "web_fetch",
+            &url_args,
+            ToolFailureOutcome::Refused("web_fetch_candidate_cap_exceeded"),
+        );
+        assert!(payload.get("failure_target").is_some());
+        assert_eq!(controller.blackboard().read().failure_agg.rows.len(), 4);
+
+        // 标记态：error 形状 + 身份 None（全库 grep）→ 只落
+        // failure_agg_absent，聚合零行（None-identity 现状不变）。
+        let mut payload = serde_json::json!({"tool": "grep"});
+        controller.stamp_failure(
+            &mut payload,
+            "grep",
+            &grep_args,
+            ToolFailureOutcome::HostError(&tool_not_found),
+        );
+        assert_eq!(payload["failure_agg_absent"], serde_json::json!(true));
+        assert!(payload.get("failure_target").is_none());
+
+        // 标记态：非白名单拒绝码（计划轮/角色门/预算/测试运行器缺席）。
+        let mut payload = serde_json::json!({"tool": "read_file"});
+        controller.stamp_failure(
+            &mut payload,
+            "read_file",
+            &serde_json::json!({"file_path": "a.py"}),
+            ToolFailureOutcome::Refused("missing_test_runner"),
+        );
+        assert_eq!(payload["failure_agg_absent"], serde_json::json!(true));
+
+        // 零作用态：零退出 / 无退出语义（非 error 形状）不盖章不标记。
+        let mut payload = serde_json::json!({"tool": "run_terminal_cmd"});
+        controller.stamp_failure(
+            &mut payload,
+            "run_terminal_cmd",
+            &cmd_args,
+            ToolFailureOutcome::CommandExit(Some(0)),
+        );
+        let mut payload = serde_json::json!({"tool": "run_terminal_cmd"});
+        controller.stamp_failure(
+            &mut payload,
+            "run_terminal_cmd",
+            &cmd_args,
+            ToolFailureOutcome::CommandExit(None),
+        );
+        assert!(payload.get("failure_target").is_none());
+        assert!(payload.get("failure_agg_absent").is_none());
+
+        // 零作用态：policy_denial 信封优先（0p S2 口径）——两字段都不落。
+        let mut payload = serde_json::json!({
+            "tool": "grep",
+            "policy_denial": {"source": "permission", "code": "session_volume_notice", "reason": "r"},
+        });
+        controller.stamp_failure(
+            &mut payload,
+            "grep",
+            &grep_args,
+            ToolFailureOutcome::CommandExit(Some(1)),
+        );
+        assert!(payload.get("failure_target").is_none());
+        assert!(payload.get("failure_agg_absent").is_none());
+
+        // 零作用态：身份不可及工具（计划轮黑板面等）——跳过。
+        let mut payload = serde_json::json!({"tool": "plan_write"});
+        controller.stamp_failure(
+            &mut payload,
+            "plan_write",
+            &serde_json::json!({}),
+            ToolFailureOutcome::HostError(&tool_not_found),
+        );
+        assert!(payload.get("failure_target").is_none());
+        assert!(payload.get("failure_agg_absent").is_none());
+
+        // 聚合面终态：只有四个盖章形状入行，标记态零行。
+        let agg = &controller.blackboard().read().failure_agg;
+        assert_eq!(agg.rows.len(), 4, "{agg:?}");
+    }
+
+    /// Ok 臂命令级失败 e2e 对拍（写点 ②）：run_terminal_cmd exit≠0 →
+    /// 完成事件挂 failure_target（此前仅 Err 臂挂载）+ 聚合行
+    /// cmd_target·exit_{n}，事件与聚合同源。
+    #[tokio::test]
+    async fn funnel_ok_arm_command_failure_stamps_agg_and_event() {
+        let dir = test_dir();
+        let journal = JournalRecorder::new(dir.clone());
+        struct CmdFailHost {
+            journal: JournalRecorder,
+        }
+        #[async_trait]
+        impl LoopHost for CmdFailHost {
+            fn journal(&self) -> &JournalRecorder {
+                &self.journal
+            }
+            fn tools_registry(&self) -> &dyn ToolRegistry {
+                &EmptyRegistry
+            }
+            async fn call_tool(
+                &self,
+                _name: &str,
+                _arguments: serde_json::Value,
+                _call_id: &str,
+            ) -> Result<ToolResult, ToolError> {
+                Ok(ToolResult {
+                    output: "error: externally-managed-environment".to_string(),
+                    exit_code: Some(1),
+                    output_encoding: Some("utf-8".to_string()),
+                    ..Default::default()
+                })
+            }
+            async fn request_permission(
+                &self,
+                _risk: RiskClass,
+                _tool: &str,
+                _arguments: &serde_json::Value,
+            ) -> Result<PermitDecision, PermitError> {
+                Ok(PermitDecision::AllowOnce)
+            }
+        }
+        let host = CmdFailHost { journal };
+        let call = |id: &str| {
+            ScriptedResponse::tool_calls(vec![ToolCall {
+                name: "run_terminal_cmd".to_string(),
+                arguments: serde_json::json!({"command": "pip install fasttext"}),
+                call_id: id.to_string(),
+            }])
+        };
+        let fake = Arc::new(FakeProvider::new(vec![
+            call("call-q1"),
+            ScriptedResponse::text("完成"),
+            ScriptedResponse::text("完成"),
+        ]));
+        let gateway: Arc<dyn ModelGateway> = fake.clone();
+        let controller = AgentLoopController::with_gateway(gateway);
+        let result = controller
+            .run_turn(
+                &host,
+                "测试 Ok 臂命令级失败漏斗",
+                "RUN-OK-EXIT",
+                MANIFEST,
+                0,
+                None,
+                None,
+                None,
+            )
+            .await;
+        assert!(result.is_ok(), "{result:?}");
+
+        let completed: Vec<serde_json::Value> = events(&dir)
+            .into_iter()
+            .filter(|e| e.event_type == EventType::ToolCompleted)
+            .map(|e| e.payload)
+            .collect();
+        assert_eq!(completed.len(), 1, "{completed:?}");
+        let c = &completed[0];
+        // 事件面：命令级失败携带身份（0q 补齐 Ok 臂事件面对账物）。
+        assert_eq!(c["exit_code"], 1);
+        assert_eq!(c["failure_target"]["kind"], "cmd_target");
+        assert!(c.get("failure_agg_absent").is_none());
+
+        // 聚合面：cmd_target 一行，code = exit_1。
+        let bb = controller.blackboard().read();
+        let agg = &bb.failure_agg;
+        assert_eq!(agg.rows.len(), 1, "{agg:?}");
+        let row = &agg.rows[0];
+        assert_eq!(row.kind, "cmd_target");
+        assert_eq!(
+            row.id,
+            orz_assurance::journal::sha256_hex(b"pip install fasttext")
+        );
+        assert_eq!(row.count, 1);
+        assert_eq!(row.codes[0].code, "exit_1");
+
+        // run_started 带 funnel-v1 版本锚（法官对账族的 grandfather 锚）。
+        let started: Vec<serde_json::Value> = events(&dir)
+            .into_iter()
+            .filter(|e| e.event_type == EventType::RunStarted)
+            .map(|e| e.payload)
+            .collect();
+        assert_eq!(started.len(), 1);
+        assert_eq!(started[0]["failure_pipeline"], "funnel-v1");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// None-identity e2e 对拍：全库 grep（无 path）host 错误 → 完成事件
+    /// 落「有意不聚合」标记，聚合零行——漏盖与有意排除在 journal 面可分。
+    #[tokio::test]
+    async fn funnel_none_identity_error_carries_marker_only() {
+        let dir = test_dir();
+        let journal = JournalRecorder::new(dir.clone());
+        struct GrepFailHost {
+            journal: JournalRecorder,
+        }
+        #[async_trait]
+        impl LoopHost for GrepFailHost {
+            fn journal(&self) -> &JournalRecorder {
+                &self.journal
+            }
+            fn tools_registry(&self) -> &dyn ToolRegistry {
+                &EmptyRegistry
+            }
+            async fn call_tool(
+                &self,
+                _name: &str,
+                _arguments: serde_json::Value,
+                _call_id: &str,
+            ) -> Result<ToolResult, ToolError> {
+                Err(ToolError::ExecutionFailed("rg crashed".into()))
+            }
+            async fn request_permission(
+                &self,
+                _risk: RiskClass,
+                _tool: &str,
+                _arguments: &serde_json::Value,
+            ) -> Result<PermitDecision, PermitError> {
+                Ok(PermitDecision::AllowOnce)
+            }
+        }
+        let host = GrepFailHost { journal };
+        let call = |id: &str| {
+            ScriptedResponse::tool_calls(vec![ToolCall {
+                name: "grep".to_string(),
+                arguments: serde_json::json!({"pattern": "x"}),
+                call_id: id.to_string(),
+            }])
+        };
+        let fake = Arc::new(FakeProvider::new(vec![
+            call("call-g1"),
+            ScriptedResponse::text("完成"),
+            ScriptedResponse::text("完成"),
+        ]));
+        let gateway: Arc<dyn ModelGateway> = fake.clone();
+        let controller = AgentLoopController::with_gateway(gateway);
+        let result = controller
+            .run_turn(
+                &host,
+                "测试 None-identity 标记",
+                "RUN-GREP-MARKER",
+                MANIFEST,
+                0,
+                None,
+                None,
+                None,
+            )
+            .await;
+        assert!(result.is_ok(), "{result:?}");
+
+        let completed: Vec<serde_json::Value> = events(&dir)
+            .into_iter()
+            .filter(|e| e.event_type == EventType::ToolCompleted)
+            .map(|e| e.payload)
+            .collect();
+        assert_eq!(completed.len(), 1, "{completed:?}");
+        assert_eq!(completed[0]["failure_agg_absent"], serde_json::json!(true));
+        assert!(completed[0].get("failure_target").is_none());
+        assert!(controller.blackboard().read().failure_agg.is_empty());
 
         let _ = std::fs::remove_dir_all(&dir);
     }

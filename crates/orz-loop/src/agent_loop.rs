@@ -2177,6 +2177,7 @@ pub(crate) async fn run_agent_loop(
                     }
                     if budget_refused {
                         let (_, f) = refuse_inject_budget(
+                            controller,
                             writer,
                             messages,
                             &tc,
@@ -2272,6 +2273,7 @@ pub(crate) async fn run_agent_loop(
             }
             if round_inject_tokens >= svc.max_inject_tokens_per_round {
                 let (_, feedback) = refuse_inject_budget(
+                    controller,
                     writer,
                     messages,
                     tc,
@@ -2303,6 +2305,7 @@ pub(crate) async fn run_agent_loop(
                 // 重填反馈在下一轮注入，同轮第二次提交无意义且会绕过
                 // “错误反馈后重填”的交互语义。
                 let (_, f) = plan_round_denied(
+                    controller,
                     writer,
                     messages,
                     tc,
@@ -2325,6 +2328,7 @@ pub(crate) async fn run_agent_loop(
                 && tc.name != crate::planning::BLACKBOARD_READ_TOOL
             {
                 let (_, f) = plan_round_denied(
+                    controller,
                     writer,
                     messages,
                     tc,
@@ -2369,6 +2373,7 @@ pub(crate) async fn run_agent_loop(
                         // One seat per role — a retrieval lane never
                         // dispatches another retrieval (ADR-0010 §11.3).
                         let (r, f) = role_gate_denied(
+                            controller,
                             writer,
                             messages,
                             tc,
@@ -2406,6 +2411,7 @@ pub(crate) async fn run_agent_loop(
                     // belt-and-braces for scripted lanes.
                     if profile.tool_filter.denies_nested_dispatch() {
                         let (r, f) = role_gate_denied(
+                            controller,
                             writer,
                             messages,
                             tc,
@@ -2432,6 +2438,7 @@ pub(crate) async fn run_agent_loop(
                         // refusal, not a user choice — the permission
                         // dialog is never consulted).
                         let (r, f) = role_gate_denied(
+                            controller,
                             writer,
                             messages,
                             tc,
@@ -2891,6 +2898,7 @@ pub(crate) fn aggregate_denial_round(
 /// every declared call is answered; 2026-08-06 polyglot probe). The denial
 /// key feeds the shared 3-round breaker via the round-level aggregation.
 async fn role_gate_denied(
+    controller: &AgentLoopController,
     writer: &mut EventWriter<'_>,
     messages: &mut Vec<Message>,
     tc: &ToolCall,
@@ -2913,19 +2921,23 @@ async fn role_gate_denied(
          (write-domain deny-only gate, GAP-SUBAGENT-RUNTIME).",
         tc.name, reason,
     );
-    writer
-        .record(
-            EventType::ToolCompleted,
-            serde_json::json!({
-                "tool": tc.name,
-                "call_id": tc.call_id,
-                "target": target,
-                "exit_code": 1,
-                "status": "error",
-                "error": reason,
-            }),
-        )
-        .await?;
+    let mut payload = serde_json::json!({
+        "tool": tc.name,
+        "call_id": tc.call_id,
+        "target": target,
+        "exit_code": 1,
+        "status": "error",
+        "error": reason,
+    });
+    // 0q：error 形状完成统一过漏斗（角色门拒绝不在四写点白名单 →
+    // 「有意不聚合」标记，法官对账物齐备）。
+    controller.stamp_failure(
+        &mut payload,
+        &tc.name,
+        &tc.arguments,
+        crate::host_exec::ToolFailureOutcome::Refused(reason),
+    );
+    writer.record(EventType::ToolCompleted, payload).await?;
     messages.push(Message {
         role: Role::Tool,
         content: output.clone(),
@@ -2957,6 +2969,7 @@ async fn role_gate_denied(
 /// 声明）都在派发前拒绝并留痕（ToolStarted → ToolCompleted(status=error)），
 /// 与角色门的审计形状一致。
 async fn plan_round_denied(
+    controller: &AgentLoopController,
     writer: &mut EventWriter<'_>,
     messages: &mut Vec<Message>,
     tc: &ToolCall,
@@ -2985,18 +2998,22 @@ async fn plan_round_denied(
         }
         _ => format!("tool '{}' denied — {reason}", tc.name),
     };
-    writer
-        .record(
-            EventType::ToolCompleted,
-            serde_json::json!({
-                "tool": tc.name,
-                "call_id": tc.call_id,
-                "exit_code": 1,
-                "status": "error",
-                "error": reason,
-            }),
-        )
-        .await?;
+    let mut payload = serde_json::json!({
+        "tool": tc.name,
+        "call_id": tc.call_id,
+        "exit_code": 1,
+        "status": "error",
+        "error": reason,
+    });
+    // 0q：error 形状完成统一过漏斗（计划轮拒绝不在四写点白名单 →
+    // 「有意不聚合」标记，法官对账物齐备）。
+    controller.stamp_failure(
+        &mut payload,
+        &tc.name,
+        &tc.arguments,
+        crate::host_exec::ToolFailureOutcome::Refused(reason),
+    );
+    writer.record(EventType::ToolCompleted, payload).await?;
     messages.push(Message {
         role: Role::Tool,
         content: output.clone(),
@@ -3028,7 +3045,9 @@ async fn plan_round_denied(
 /// budget and the model receives an explicit offset/grep-first hint. The
 /// refusal feeds the consecutive-denial breaker (same normalized key →
 /// after 3 rounds the strategy-switch message fires, ADR-0010 §3.5.4).
+#[allow(clippy::too_many_arguments)] // 0q: controller threaded for the failure funnel
 async fn refuse_inject_budget(
+    controller: &AgentLoopController,
     writer: &mut EventWriter<'_>,
     messages: &mut Vec<Message>,
     tc: &ToolCall,
@@ -3044,20 +3063,24 @@ async fn refuse_inject_budget(
         tc.name, used, budget,
     );
     if write_completed {
-        writer
-            .record(
-                EventType::ToolCompleted,
-                serde_json::json!({
-                    "tool": tc.name,
-                    "call_id": tc.call_id,
-                    "exit_code": 1,
-                    "status": "error",
-                    "error": code,
-                    "inject_tokens_used": used,
-                    "inject_tokens_budget": budget,
-                }),
-            )
-            .await?;
+        let mut payload = serde_json::json!({
+            "tool": tc.name,
+            "call_id": tc.call_id,
+            "exit_code": 1,
+            "status": "error",
+            "error": code,
+            "inject_tokens_used": used,
+            "inject_tokens_budget": budget,
+        });
+        // 0q：error 形状完成统一过漏斗（预算拒绝不在四写点白名单 →
+        // 「有意不聚合」标记，法官对账物齐备）。
+        controller.stamp_failure(
+            &mut payload,
+            &tc.name,
+            &tc.arguments,
+            crate::host_exec::ToolFailureOutcome::Refused(code),
+        );
+        writer.record(EventType::ToolCompleted, payload).await?;
     }
     messages.push(Message {
         role: Role::Tool,
@@ -3914,10 +3937,18 @@ mod tests {
         let mut messages: Vec<Message> = Vec::new();
         // 并行路径语义：write_completed=false —— 事件已在 buffered writer
         // 中留痕，此处只注入消息 + deny。
-        let (_, feedback) =
-            refuse_inject_budget(&mut writer, &mut messages, &tc, 60_000, 50_000, 0, false)
-                .await
-                .unwrap();
+        let (_, feedback) = refuse_inject_budget(
+            &AgentLoopController::default(),
+            &mut writer,
+            &mut messages,
+            &tc,
+            60_000,
+            50_000,
+            0,
+            false,
+        )
+        .await
+        .unwrap();
         assert!(matches!(feedback, Some(PolicyFeedback::Denied(_))));
         assert_eq!(messages.len(), 1);
         let events_path = dir.join("events.jsonl");
@@ -3939,9 +3970,18 @@ mod tests {
         };
         let mut writer2 = crate::controller::journal_event_writer(&host2.journal, "RUN-BUDGET2");
         let mut messages2: Vec<Message> = Vec::new();
-        let _ = refuse_inject_budget(&mut writer2, &mut messages2, &tc, 60_000, 50_000, 0, true)
-            .await
-            .unwrap();
+        let _ = refuse_inject_budget(
+            &AgentLoopController::default(),
+            &mut writer2,
+            &mut messages2,
+            &tc,
+            60_000,
+            50_000,
+            0,
+            true,
+        )
+        .await
+        .unwrap();
         let events2 = std::fs::read_to_string(dir2.join("events.jsonl")).unwrap();
         assert!(
             events2.contains("\"event_type\":\"tool_completed\""),

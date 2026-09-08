@@ -3331,8 +3331,15 @@ impl AgentLoopController {
         self.probe_state_seed(&probe_snapshot);
 
         // 2. run_started + prompt_submitted
+        // 0q（ADR-0010 §14.63）：`failure_pipeline: "funnel-v1"` 是失败
+        // 事件管线的 journal 级 grandfather 锚——法官对账族
+        // （failure_agg_coverage）只对本标记之后的刊执法；旧刊不回溯
+        // （0q 设计 §3.2-4）。
         writer
-            .record(EventType::RunStarted, serde_json::json!({"prompt": prompt}))
+            .record(
+                EventType::RunStarted,
+                serde_json::json!({"prompt": prompt, "failure_pipeline": "funnel-v1"}),
+            )
             .await?;
         writer
             .record(

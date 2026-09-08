@@ -851,6 +851,109 @@ pub fn verify_failure_target(events: &[Value]) -> Vec<String> {
     errors
 }
 
+// ── failure_agg_coverage (0q) ───────────────────────────────────────────
+
+/// Tools whose error-shaped completions the 0q funnel covers — the union of
+/// the four identity-family tool tables (mirrors the Rust producer
+/// `failure_target::identity_capable` in orz-loop).
+fn failure_agg_capable_tool(tool: Option<&str>) -> bool {
+    use toolsets::{
+        ANCHOR_TARGET_TOOLS, CMD_TARGET_TOOLS, FILE_TARGET_TOOLS, URL_TARGET_TOOLS, contains,
+    };
+    contains(CMD_TARGET_TOOLS, tool)
+        || contains(ANCHOR_TARGET_TOOLS, tool)
+        || contains(FILE_TARGET_TOOLS, tool)
+        || contains(URL_TARGET_TOOLS, tool)
+}
+
+/// Python `_verify_v02_failure_agg_coverage` (0q 统一失败事件管线,
+/// 2026-09-08, ADR-0010 §14.63): coverage reconciliation for the
+/// write-side failure funnel — "没有漏盖" becomes an executable assertion.
+///
+/// - Grandfather anchor: the rule fires only on journals whose `run_started`
+///   payload declares `failure_pipeline: "funnel-v1"`; older journals are
+///   not retroactively enforced (0q 设计 §3.2-4). Any other declared
+///   version is an error.
+/// - On a post-funnel journal, every error-shaped `tool_completed` of an
+///   identity-capable tool carries exactly one of `failure_target`
+///   (identity stamped → agg row written by the same funnel pass) or
+///   `failure_agg_absent: true` (funnel evaluated, deliberately not
+///   aggregated). Neither = the F-C class of bug (missed stamp); both =
+///   double-write. A structured `policy_denial` envelope is itself the
+///   evaluated-no-stamp evidence (0p S2 裁决) and needs neither field.
+/// - `failure_agg_absent` outside an error shape is producer misuse.
+pub fn verify_failure_agg_coverage(events: &[Value]) -> Vec<String> {
+    let mut errors = Vec::new();
+    let mut post_funnel = false;
+    for (index, event) in events.iter().enumerate() {
+        if event.get("event_type").and_then(Value::as_str) != Some("run_started") {
+            continue;
+        }
+        match str_of(event["payload"].get("failure_pipeline")) {
+            None => {}
+            Some("funnel-v1") => post_funnel = true,
+            Some(other) => errors.push(format!(
+                "event {index}: run_started failure_pipeline {other:?} is not \
+                 a known failure-pipeline version (funnel-v1)"
+            )),
+        }
+    }
+    if !post_funnel {
+        return errors;
+    }
+    for (index, event) in events.iter().enumerate() {
+        if event.get("event_type").and_then(Value::as_str) != Some("tool_completed") {
+            continue;
+        }
+        let payload = &event["payload"];
+        if !failure_agg_capable_tool(str_of(payload.get("tool"))) {
+            continue;
+        }
+        // 0p S2 信封优先口径：结构化拒绝信封自身即评估证据，两字段都
+        // 不要求。
+        if payload.get("policy_denial").is_some() {
+            continue;
+        }
+        let status = str_of(payload.get("status"));
+        let exit_code = py_int(payload.get("exit_code"));
+        let error_shaped = status == Some("error") || exit_code.is_some_and(|code| code != 0);
+        let marker = payload.get("failure_agg_absent");
+        if !error_shaped {
+            if marker.is_some() {
+                errors.push(format!(
+                    "event {index}: failure_agg_absent on a non-error \
+                     completion (misuse); got {marker:?}"
+                ));
+            }
+            continue;
+        }
+        if let Some(marker) = marker
+            && *marker != Value::Bool(true)
+        {
+            errors.push(format!(
+                "event {index}: failure_agg_absent must be the literal true; \
+                 got {marker}"
+            ));
+        }
+        let marker_ok = marker == Some(&Value::Bool(true));
+        let has_target = matches!(payload.get("failure_target"), Some(Value::Object(_)));
+        match (has_target, marker_ok) {
+            (true, true) => errors.push(format!(
+                "event {index}: failure_target and failure_agg_absent are \
+                 mutually exclusive (XOR); funnel double-write"
+            )),
+            (false, false) => errors.push(format!(
+                "event {index}: error-shaped completion of identity-capable \
+                 tool {:?} carries neither failure_target nor \
+                 failure_agg_absent (missed failure-aggregation stamp)",
+                str_of(payload.get("tool")).unwrap_or("<missing>")
+            )),
+            _ => {}
+        }
+    }
+    errors
+}
+
 // ── lifecycle ───────────────────────────────────────────────────────────
 
 struct LifecycleEvent<'a> {
@@ -1315,10 +1418,11 @@ pub const S2C_FAMILIES: &[&str] = &[
     "probe_accuracy",
 ];
 
-/// All 30 families in the Python `validate_journal_text` call order
+/// All 31 families in the Python `validate_journal_text` call order
 /// (Py order; `console_order_written` retired 2026-09-06, S2d 裁决一 /
 /// ADR-0010 §14.57 — the write-order chain rule is gone on both judges and
 /// NOT converted into a negative check, so historical journals replay clean)
+/// `failure_agg_coverage` added 2026-09-08, 0q / ADR-0010 §14.63)
 /// — the S2d full-corpus crosscheck order.
 pub const ALL_FAMILIES: &[&str] = &[
     "inquiry_kind",
@@ -1341,6 +1445,7 @@ pub const ALL_FAMILIES: &[&str] = &[
     "inject_budget",
     "policy_denial",
     "failure_target",
+    "failure_agg_coverage",
     "receipt_event_isomorphism",
     "dep_graph_events",
     "mechanical_audit",
@@ -1362,6 +1467,7 @@ pub fn verify_family(family: &str, events: &[Value]) -> Vec<String> {
         "retrieval_mode" => verify_retrieval_mode(events),
         "policy_denial" => verify_policy_denial(events),
         "failure_target" => verify_failure_target(events),
+        "failure_agg_coverage" => verify_failure_agg_coverage(events),
         "control_tickets" => verify_control_tickets(events),
         "lifecycle" => verify_lifecycle(events),
         family => super::families_s2c::verify_s2c_family(family, events),
@@ -4833,7 +4939,7 @@ mod tests {
     }
 
     /// Task D acceptance: per-family verdict parity with the Python judge on
-    /// the same corpus (all 30 families since the S2d 裁决一 written-rule
+    /// the same corpus (all 31 families since the S2d 裁决一 written-rule
     /// retirement, ADR-0010 §14.57) — the synthetic scenarios above PLUS
     /// every real v0.2 fixture journal. Verdict parity = (errors empty)
     /// agrees on both sides; message text is deliberately Rust-form.
@@ -4928,6 +5034,7 @@ fams = {
     "inject_budget": v._verify_v02_inject_budget,
     "policy_denial": v._verify_v02_policy_denial,
     "failure_target": v._verify_v02_failure_target,
+    "failure_agg_coverage": v._verify_v02_failure_agg_coverage,
     "receipt_event_isomorphism": v._verify_v02_receipt_event_isomorphism,
     "dep_graph_events": v._verify_v02_dep_graph_events,
     "mechanical_audit": v._verify_v02_mechanical_audit,
@@ -5154,5 +5261,337 @@ json.dump(out, sys.stdout)
         validator
             .validate(&notice)
             .expect("notice envelope completion must validate");
+    }
+
+    // ==== 0q 统一失败事件管线（2026-09-08，ADR-0010 §14.63）：法官对账
+    // 族 `failure_agg_coverage` 正反两测 + 专属 Rust↔Python 对拍。独立
+    // 测试不进 pinned 对拍 corpus（场景数钉死，Python 侧为冻结 reference）。
+
+    /// Post-funnel journal scaffold: run_started carries the
+    /// `failure_pipeline: "funnel-v1"` grandfather anchor.
+    fn funnel_run_started() -> Value {
+        ev(
+            "run_started",
+            json!({"prompt": "p", "failure_pipeline": "funnel-v1"}),
+        )
+    }
+
+    fn stamped_error(tool: &str, ft: Value) -> Value {
+        ev(
+            "tool_completed",
+            json!({
+                "tool": tool,
+                "call_id": "call-1",
+                "exit_code": 1,
+                "status": "error",
+                "error": "boom",
+                "failure_target": ft,
+            }),
+        )
+    }
+
+    #[test]
+    fn failure_agg_coverage_post_funnel_positive_and_grandfather() {
+        // 正测：post-funnel 刊，error 形状完成带 failure_target（盖章）或
+        // failure_agg_absent（标记）→ 0 错。
+        let ok = vec![
+            funnel_run_started(),
+            stamped_error(
+                "read_file",
+                json!({"kind": "file_target", "id": hex64(0), "path": "a.py"}),
+            ),
+            ev(
+                "tool_completed",
+                json!({
+                    "tool": "grep",
+                    "call_id": "call-2",
+                    "exit_code": 1,
+                    "status": "error",
+                    "error": "boom",
+                    "failure_agg_absent": true,
+                }),
+            ),
+        ];
+        assert!(
+            verify_failure_agg_coverage(&ok).is_empty(),
+            "{:?}",
+            verify_failure_agg_coverage(&ok)
+        );
+
+        // grandfather：同一形状去掉 run_started 版本锚（漏斗前旧刊）→
+        // 不回溯执法，连「漏盖」负测形状也放行。
+        let legacy = vec![stamped_error(
+            "read_file",
+            json!({"kind": "file_target", "id": hex64(0), "path": "a.py"}),
+        )];
+        assert!(verify_failure_agg_coverage(&legacy).is_empty());
+
+        // 拒绝信封完成（policy_denial）自身即评估证据 → 无需两字段。
+        let denial = vec![
+            funnel_run_started(),
+            ev(
+                "tool_completed",
+                json!({
+                    "tool": "grep",
+                    "call_id": "call-3",
+                    "exit_code": 1,
+                    "status": "error",
+                    "error": "session_volume_notice",
+                    "policy_denial": {"source": "permission", "code": "session_volume_notice", "reason": "r"},
+                }),
+            ),
+        ];
+        assert!(verify_failure_agg_coverage(&denial).is_empty());
+    }
+
+    #[test]
+    fn failure_agg_coverage_tamper_and_xor_negatives() {
+        // 篡改负测（S3 正反两测的「删聚合行」journal 面）：post-funnel 刊
+        // 上剥掉 failure_target（模拟漏盖）→ 法官报错。
+        let mut tampered = stamped_error(
+            "read_file",
+            json!({"kind": "file_target", "id": hex64(0), "path": "a.py"}),
+        );
+        tampered["payload"]
+            .as_object_mut()
+            .unwrap()
+            .remove("failure_target");
+        let journal = vec![funnel_run_started(), tampered];
+        let errors = verify_failure_agg_coverage(&journal);
+        assert!(
+            errors
+                .iter()
+                .any(|e| e.contains("missed failure-aggregation stamp")),
+            "{errors:?}"
+        );
+
+        // XOR 反测：两字段并存 = 漏斗双写。
+        let both = vec![
+            funnel_run_started(),
+            ev(
+                "tool_completed",
+                json!({
+                    "tool": "read_file",
+                    "call_id": "call-4",
+                    "exit_code": 1,
+                    "status": "error",
+                    "error": "boom",
+                    "failure_target": json!({"kind": "file_target", "id": hex64(1), "path": "a.py"}),
+                    "failure_agg_absent": true,
+                }),
+            ),
+        ];
+        let errors = verify_failure_agg_coverage(&both);
+        assert!(
+            errors.iter().any(|e| e.contains("mutually exclusive")),
+            "{errors:?}"
+        );
+
+        // 误用反测：marker 出现在非 error 形状（成功完成）。
+        let misuse = vec![
+            funnel_run_started(),
+            ev(
+                "tool_completed",
+                json!({"tool": "read_file", "call_id": "call-5", "exit_code": 0, "failure_agg_absent": true}),
+            ),
+        ];
+        let errors = verify_failure_agg_coverage(&misuse);
+        assert!(
+            errors.iter().any(|e| e.contains("non-error completion")),
+            "{errors:?}"
+        );
+
+        // 未知管线版本 → 报错（版本锚封闭词表执法）。
+        let unknown = vec![
+            ev(
+                "run_started",
+                json!({"prompt": "p", "failure_pipeline": "funnel-v9"}),
+            ),
+            stamped_error(
+                "read_file",
+                json!({"kind": "file_target", "id": hex64(2), "path": "a.py"}),
+            ),
+        ];
+        let errors = verify_failure_agg_coverage(&unknown);
+        assert!(errors.iter().any(|e| e.contains("funnel-v9")), "{errors:?}");
+
+        // Ok 臂命令级失败（exit≠0、无 status）同样是 error 形状：剥掉
+        // 身份字段后必须报错——F-C 漏盖类漏洞的机械证明。
+        let mut ok_arm = ev(
+            "tool_completed",
+            json!({
+                "tool": "run_terminal_cmd",
+                "call_id": "call-6",
+                "exit_code": 7,
+                "failure_target": json!({"kind": "cmd_target", "id": hex64(3), "cmd_preview": "make"}),
+            }),
+        );
+        ok_arm["payload"]
+            .as_object_mut()
+            .unwrap()
+            .remove("failure_target");
+        let journal = vec![funnel_run_started(), ok_arm];
+        let errors = verify_failure_agg_coverage(&journal);
+        assert!(
+            errors
+                .iter()
+                .any(|e| e.contains("missed failure-aggregation stamp")),
+            "{errors:?}"
+        );
+    }
+
+    /// 0q 新族专属 Rust↔Python 对拍（0p 补测同款：不进 pinned corpus）——
+    /// 正测 / grandfather / 篡改 / XOR / 误用 / 未知版本六场景 verdict
+    /// parity。
+    #[test]
+    fn failure_agg_coverage_verdicts_match_python() {
+        let repo_root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../..");
+        let assurance_dir = repo_root.join("assurance");
+        assert!(
+            assurance_dir
+                .join("run_event_journal_validation.py")
+                .is_file(),
+            "0q crosscheck must run inside the parent repository"
+        );
+
+        let mut tampered = stamped_error(
+            "read_file",
+            json!({"kind": "file_target", "id": hex64(0), "path": "a.py"}),
+        );
+        tampered["payload"]
+            .as_object_mut()
+            .unwrap()
+            .remove("failure_target");
+        let scenarios: Vec<(String, Vec<Value>)> = vec![
+            (
+                "positive".into(),
+                vec![
+                    funnel_run_started(),
+                    stamped_error(
+                        "read_file",
+                        json!({"kind": "file_target", "id": hex64(0), "path": "a.py"}),
+                    ),
+                    ev(
+                        "tool_completed",
+                        json!({
+                            "tool": "grep",
+                            "call_id": "call-2",
+                            "exit_code": 1,
+                            "status": "error",
+                            "error": "boom",
+                            "failure_agg_absent": true,
+                        }),
+                    ),
+                ],
+            ),
+            (
+                "grandfather".into(),
+                vec![stamped_error(
+                    "read_file",
+                    json!({"kind": "file_target", "id": hex64(0), "path": "a.py"}),
+                )],
+            ),
+            ("missed_stamp".into(), vec![funnel_run_started(), tampered]),
+            (
+                "double_write".into(),
+                vec![
+                    funnel_run_started(),
+                    ev(
+                        "tool_completed",
+                        json!({
+                            "tool": "read_file",
+                            "call_id": "call-3",
+                            "exit_code": 1,
+                            "status": "error",
+                            "error": "boom",
+                            "failure_target": json!({"kind": "file_target", "id": hex64(1), "path": "a.py"}),
+                            "failure_agg_absent": true,
+                        }),
+                    ),
+                ],
+            ),
+            (
+                "marker_misuse".into(),
+                vec![
+                    funnel_run_started(),
+                    ev(
+                        "tool_completed",
+                        json!({
+                            "tool": "read_file", "call_id": "call-4", "exit_code": 0,
+                            "failure_agg_absent": true,
+                        }),
+                    ),
+                ],
+            ),
+            (
+                "unknown_version".into(),
+                vec![
+                    ev(
+                        "run_started",
+                        json!({"prompt": "p", "failure_pipeline": "funnel-v9"}),
+                    ),
+                    stamped_error(
+                        "read_file",
+                        json!({"kind": "file_target", "id": hex64(2), "path": "a.py"}),
+                    ),
+                ],
+            ),
+        ];
+        let corpus_json = serde_json::to_string(
+            &scenarios
+                .iter()
+                .map(|(name, events)| json!({"name": name, "events": events}))
+                .collect::<Vec<_>>(),
+        )
+        .unwrap();
+
+        let script = r#"
+import sys, json
+sys.path.insert(0, sys.argv[1])
+import run_event_journal_validation as v
+data = json.load(sys.stdin)
+out = {}
+for sc in data:
+    out[sc["name"]] = bool(v._verify_v02_failure_agg_coverage(sc["events"]))
+json.dump(out, sys.stdout)
+"#;
+        use std::io::Write as _;
+        use std::process::{Command, Stdio};
+        let python = std::env::var("ORZ_PYTHON").unwrap_or_else(|_| "python".into());
+        let mut child = Command::new(&python)
+            .arg("-X")
+            .arg("utf8")
+            .arg("-c")
+            .arg(script)
+            .arg(assurance_dir.display().to_string())
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .expect("spawn python for the 0q failure_agg_coverage crosscheck");
+        child
+            .stdin
+            .take()
+            .expect("python stdin")
+            .write_all(corpus_json.as_bytes())
+            .expect("write corpus");
+        let output = child.wait_with_output().expect("python crosscheck");
+        assert!(
+            output.status.success(),
+            "python crosscheck failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let py_verdicts: BTreeMap<String, bool> =
+            serde_json::from_slice(&output.stdout).expect("python verdict JSON");
+        for (name, events) in &scenarios {
+            let rust_violation = !verify_failure_agg_coverage(events).is_empty();
+            let py_violation = *py_verdicts
+                .get(name)
+                .unwrap_or_else(|| panic!("python missing scenario {name}"));
+            assert_eq!(
+                rust_violation, py_violation,
+                "verdict mismatch on {name} (rust={rust_violation}, python={py_violation})"
+            );
+        }
     }
 }

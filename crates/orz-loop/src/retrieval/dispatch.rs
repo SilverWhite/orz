@@ -483,17 +483,22 @@ impl AgentLoopController {
                     let interrupted: Vec<(String, String)> =
                         in_flight_tools.lock().unwrap().clone();
                     for (tool, call_id) in interrupted {
-                        writer
-                            .record(
-                                EventType::ToolCompleted,
-                                serde_json::json!({
-                                    "tool": tool,
-                                    "call_id": call_id,
-                                    "status": "error",
-                                    "error": "subagent_wallclock_timeout_mid_tool",
-                                }),
-                            )
-                            .await?;
+                        let mut payload = serde_json::json!({
+                            "tool": tool,
+                            "call_id": call_id,
+                            "status": "error",
+                            "error": "subagent_wallclock_timeout_mid_tool",
+                        });
+                        // 0q：error 形状合成收口统一过漏斗（args 不可及、
+                        // 身份定义性 None → 「有意不聚合」标记，法官对账
+                        // 物齐备）。
+                        self.stamp_failure(
+                            &mut payload,
+                            &tool,
+                            &serde_json::Value::Null,
+                            crate::host_exec::ToolFailureOutcome::SyntheticTimeout,
+                        );
+                        writer.record(EventType::ToolCompleted, payload).await?;
                     }
                     Err(AgentLoopError::RetrievalSubagentTimeout)
                 }
