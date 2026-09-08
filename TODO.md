@@ -617,6 +617,11 @@ GLM F2 处置转排期（2026-09-06 用户裁决）：`orz-host/src/approval.rs`
   `_verify_v02_failure_target` / Rust 法官校验面同步；④ 行集语义变化对
   P2-12 注意事项槽 / 0p failures_only 面的下游影响与迁移口径；产出设计
   文档（涉 ADR-0010 时按 §14.x 转录）。
+  （2026-09-08 设计稿产出待裁决：
+  [设计稿](docs/0Q_FAILURE_EVENT_PIPELINE_DESIGN_2026-09-08.md)——六家
+  调研 + 硬约束（journal 不带 args）+ 四点推荐（① 写入侧边界漏斗 ②
+  action_target 第五族 ③ 法官执法+Python 对照 ④ 纯增量零迁移），裁决
+  四点后 S1 即定稿。）
 - [ ] S2 实施：收口点落地 + 散布盖章点退役（四写点收敛）+ console 订单
   失败覆盖面裁决执行。
 - [ ] S3 测试与复验：覆盖面矩阵单测（四族身份 × 各失败路径 × console

@@ -759,6 +759,15 @@ D-1/D-2/D-3）→ 用户裁决：黑板补强先行（「黑板必须暴露模�
      法官的覆盖范围；
   4. 行集语义影响——failure_agg 覆盖面变化对 P2-12 压缩注意事项槽 /
      0p `failures_only` 面消费方的下游影响与迁移口径。
+- **S1 设计稿产出（2026-09-08，待四点裁决后定稿）**：
+  [`0Q_FAILURE_EVENT_PIPELINE_DESIGN_2026-09-08`](../docs/0Q_FAILURE_EVENT_PIPELINE_DESIGN_2026-09-08.md)。
+  调研六家（OpenTelemetry 语义约定/LangSmith 执行边界包裹/OpenAI Agents
+  SDK 消费侧反例/SARIF ruleId×指纹/RFC 9457 身份分离/K8s Events
+  correlator），关键硬约束=journal 事件面不带 args（0p S4 实证）→ 纯
+  消费侧抽取在身份推导处即断。四点推荐：① 写入侧边界单一漏斗（host_exec
+  完成装配点）+ 消费侧只做法官对账；② receipt 补身份 `action_target`
+  第五族；③ Rust 法官唯一执法 + Python 冻结对照同步；④ 行集纯增量零
+  迁移。待用户逐点裁决后 S1 定稿、进 S2。
 - 边界：不为跑分特化；不阻塞 0p S2–S5（压测场景已由 F-C 最小盖章点
   覆盖：Ok 臂 exit≠0 + failure_target 四族 → `exit_{n}`，orz
   `fd46d4f9`）；本项实施以 S1 设计定稿为前置门（0n 同款纪律）。
