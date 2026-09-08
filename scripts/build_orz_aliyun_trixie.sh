@@ -35,8 +35,18 @@ export RUSTUP_DIST_SERVER=https://static.rust-lang.org
 
 # 2026-08-27 (trixie): mirrors.aliyun.com/debian 缺 trixie 目录（404）——
 # 不再替换镜像，直连官方源（容器内实测 apt-get update 全绿）。
-apt-get update -qq
-apt-get install -y -qq musl-tools protobuf-compiler ripgrep make
+# 2026-09-08: CN 镜像（USTC/aliyun）间歇 TLS 中断；直连官方 deb.debian.org
+# （443 主机侧实测可达）。apt-get update 半失败仍 exit 0（索引缺失随后
+# install 报"找不到包"）——update+install 合并重试环，5 次后 fail-loud。
+ok=0
+for i in 1 2 3 4 5; do
+  if apt-get update -qq && apt-get install -y -qq musl-tools protobuf-compiler ripgrep make; then
+    ok=1; break
+  fi
+  echo "apt update/install attempt $i failed; sleeping 10s" >&2
+  sleep 10
+done
+[ "$ok" = 1 ] || { echo "FATAL: apt update+install failed after 5 tries" >&2; exit 1; }
 
 rustup target add x86_64-unknown-linux-musl
 
