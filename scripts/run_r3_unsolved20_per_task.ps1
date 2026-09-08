@@ -59,6 +59,13 @@ function Test-JobComplete {
 function Invoke-OneTask {
   param([string]$TaskName)
   $jobName = "official-r3-unsolved20-$TaskName"
+  $jobDir = Join-Path $JobsDir $jobName
+  # 无效/未完成作业目录若已存在，harbor 同名重跑会把既有错误试次直接计入
+  # （不再真正执行），因此先移存归档强制开新 job。
+  if (Test-Path -LiteralPath $jobDir) {
+    $stale = $jobName + '-stale-' + (Get-Date -Format 'yyyyMMdd-HHmmss')
+    Move-Item -LiteralPath $jobDir -Destination (Join-Path $JobsDir $stale)
+  }
   $volDir = Join-Path $VolRoot $jobName
   New-Item -ItemType Directory -Path $volDir -Force | Out-Null
   $mounts = '[{"type":"bind","source":"' + ($volDir -replace '\\','/') + '","target":"/orz-gsa"}]'
