@@ -42,8 +42,18 @@ function Test-JobComplete {
   $jobDir = Join-Path $JobsDir "official-r3-unsolved20-$TaskName"
   $rj = Join-Path $jobDir 'result.json'
   if (-not (Test-Path -LiteralPath $rj)) { return $false }
-  $raw = Get-Content -LiteralPath $rj -Raw -Encoding UTF8
-  return $raw -match '"finished_at":\s*"'
+  try {
+    $r = Get-Content -LiteralPath $rj -Raw -Encoding UTF8 | ConvertFrom-Json
+  } catch {
+    return $false
+  }
+  if (-not $r.finished_at) { return $false }
+  # job 级 result.json 中 reward 位于 stats.evals[*].reward_stats.reward，
+  # 形如 {"1.0": ["<trial>", ...]}；有任一非空数值键才算有效试次。
+  $ev = $r.stats.evals.PSObject.Properties.Value | Select-Object -First 1
+  if (-not $ev -or -not $ev.reward_stats -or -not $ev.reward_stats.reward) { return $false }
+  $any = @($ev.reward_stats.reward.PSObject.Properties | Where-Object { @($_.Value).Count -gt 0 }).Count -gt 0
+  return $any
 }
 
 function Invoke-OneTask {
