@@ -764,7 +764,7 @@ D-1/D-2/D-3）→ 用户裁决：黑板补强先行（「黑板必须暴露模�
   `fd46d4f9`）；本项实施以 S1 设计定稿为前置门（0n 同款纪律）。
 - 计数：登记不动计数（闭合时动账）。
 
-### 0r. GAP-TB21-FASTTEXT-ENV-CLAIM（harness 环境缺陷候选；P2 观察；2026-09-08 随 0p S4 登记，不动计数）
+### 0r. GAP-TB21-FASTTEXT-ENV-CLAIM（**已闭合 2026-09-08：用户裁决不修，环境特意形态**；登记时为 P2 观察，不动计数）
 
 - 来源：0p S4 实跑 train-fasttext（tf-selfhistory-032）模型收尾报告实证——
   task.json / inputs-manifest.json 声称 "fasttext python module provisioned
@@ -772,11 +772,13 @@ D-1/D-2/D-3）→ 用户裁决：黑板补强先行（「黑板必须暴露模�
   文件名搜索无果且无网络可补（egress 单 IP + pip 代理 400）——**任务
   环境声明与实测矛盾**，Windows 任务化时依赖未落地。该题属 TB2.1
   unsolved 复测集（W2 两轮同形态未过），orz 判据面不受影响。
-- 处置方向（待裁决）：核对 TB2.1 任务化清单中 fasttext 的 provision 步骤
-  落点（镜像/seed 脚本/inputs-manifest 生成链），补装或改声明；连带核对
-  同批 unsolved 集合其余任务的同形态声明漂移。证据：
+- **处置（2026-09-08 用户裁决闭合）**：「VM 内部环境不补了，本身反正就
+  是跑 high-nist 的特殊环境，限制网络是正常设计」——VM 为 high-nist 特
+  殊环境、网络受限属正常设计，fasttext 缺失不作为 harness 缺陷追打；
+  inputs-manifest 声明漂移仅作文档面已知事实保留。任务未过归因于环境
+  形态 + 题目本身属 unsolved 复测集，与 orz 判据无关。证据：
   [S4 分析 §4A](audits/0P_S4_TRAIN_FASTTEXT_TF_SELFHISTORY_032_ANALYSIS_2026-09-08.md)。
-- 计数：登记不动计数。
+- 计数：登记不动计数（闭合同形态）。
 
 
 ## P1 — 可并行审计 / 证据
