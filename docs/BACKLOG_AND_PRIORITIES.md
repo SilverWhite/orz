@@ -759,7 +759,12 @@ D-1/D-2/D-3）→ 用户裁决：黑板补强先行（「黑板必须暴露模�
      法官的覆盖范围；
   4. 行集语义影响——failure_agg 覆盖面变化对 P2-12 压缩注意事项槽 /
      0p `failures_only` 面消费方的下游影响与迁移口径。
-- **S1 设计稿产出（2026-09-08，待四点裁决后定稿）**：
+- **S1 定稿（2026-09-08）**：四点裁决权由用户授予主代理（「这一部分
+  工程化内容我了解不多，你做决定更好」），按推荐裁定——① 写入侧边界
+  单一漏斗 ② `action_target` 第五族 ③ Rust 法官唯一执法 + Python 冻结
+  对照 ④ 纯增量零迁移。ADR-0010 §14.63 转录。设计定稿即 S2 前置门达成，
+  排期 S2（orz 单批实施）→ S3（矩阵+法官两测）→ S4（收口）。原设计稿
+  小节：
   [`0Q_FAILURE_EVENT_PIPELINE_DESIGN_2026-09-08`](../docs/0Q_FAILURE_EVENT_PIPELINE_DESIGN_2026-09-08.md)。
   调研六家（OpenTelemetry 语义约定/LangSmith 执行边界包裹/OpenAI Agents
   SDK 消费侧反例/SARIF ruleId×指纹/RFC 9457 身份分离/K8s Events

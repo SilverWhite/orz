@@ -610,23 +610,21 @@ GLM F2 处置转排期（2026-09-06 用户裁决）：`orz-host/src/approval.rs`
 > 订单业务失败至今不进聚合）。压测场景已由 F-C 最小盖章点覆盖（orz
 > `fd46d4f9`），本项为覆盖面完备性治本。
 
-- [ ] S1 设计定稿：单一机械收口点（失败事实从事件面/结果面形状统一抽取
-  进聚合，覆盖面由结构保证而非路径记忆）——需裁决 ① 收口点选型
-  （ToolCompleted 消费侧统一抽取 vs 写入侧单一 funnel）；② console 订单
-  失败的 F4 身份来源（receipt error 信封补身份或明确排除并标注）；③
-  `_verify_v02_failure_target` / Rust 法官校验面同步；④ 行集语义变化对
-  P2-12 注意事项槽 / 0p failures_only 面的下游影响与迁移口径；产出设计
-  文档（涉 ADR-0010 时按 §14.x 转录）。
-  （2026-09-08 设计稿产出待裁决：
-  [设计稿](docs/0Q_FAILURE_EVENT_PIPELINE_DESIGN_2026-09-08.md)——六家
-  调研 + 硬约束（journal 不带 args）+ 四点推荐（① 写入侧边界漏斗 ②
-  action_target 第五族 ③ 法官执法+Python 对照 ④ 纯增量零迁移），裁决
-  四点后 S1 即定稿。）
-- [ ] S2 实施：收口点落地 + 散布盖章点退役（四写点收敛）+ console 订单
-  失败覆盖面裁决执行。
-- [ ] S3 测试与复验：覆盖面矩阵单测（四族身份 × 各失败路径 × console
-  订单）+ verifier/法官同步回归。
-- [ ] S4 收口：BACKLOG/TODO/索引同步 + manifest 重算 + 门禁 Exit 0。
+- [x] S1 设计定稿（2026-09-08）：单一机械收口点——写入侧边界单一漏斗
+  （host_exec 完成装配点 `stamp_failure`：集中形状谓词 + failure_target
+  身份推导），四散布写点退役逐点对拍；console 订单补 `action_target`
+  第五族身份；Rust journal-conformance 法官对账执法（error 形状 ↔ 聚合
+  行，缺失即报错，旧刊 grandfather）+ Python 冻结对照镜像同步；行集纯
+  增量零迁移。四点裁决权由用户授予主代理，ADR-0010 §14.63 转录。入口：
+  [设计定稿](docs/0Q_FAILURE_EVENT_PIPELINE_DESIGN_2026-09-08.md)。
+- [ ] S2 实施：漏斗落 host_exec 装配点 + 四写点退役对拍 + 第五族 + 法官
+  对账规则 + Python 镜像同步；registry/manifest 随批（orz 单批；
+  orz 全绿 + clippy 零新增 + 法官篡改负测通过）。
+- [ ] S3 测试与复验：覆盖面矩阵单测（五族 × 各失败形状 × None-identity
+  排除）+ 逐写点等价对拍 + 法官正反两测。
+- [ ] S4 收口：BACKLOG/TODO/索引/ADR 闭合转录 + manifest 重算 + 门禁
+  Exit 0。
+
 
 ### FUS-COMPONENT-REGISTER（`partial`）
 
