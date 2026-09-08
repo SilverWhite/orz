@@ -74,6 +74,10 @@
       },
       "description": "P0-C S3 前置 (2026-08-15, P1-2 定案): structured policy denial carried by a refusal completion — controller-side no-ToolStarted refusals (ACAF ticket gate / retrieval mode gates) or a host-level structured denial on a ToolStarted+ToolCompleted (permission denials from the built-in bridge stay event-less by audit contract). Every policy_denial completion must be self-describing: status=error, non-zero exit_code and the tool must belong to the known refusal path for the source — enforced by the Python verifier (_verify_v02_policy_denial), keeping the schema shape minimal."
     },
+    "failure_agg_absent": {
+      "const": true,
+      "description": "0q 统一失败事件管线 (2026-09-08, ADR-0010 §14.63): 「漏斗已评估、有意不聚合」标记 —— identity-capable 工具（四族并集）的 error 形状完成未过聚合时的 journal 可见事实（None-identity / 非四写点拒绝形状 / 0p S2 信封优先口径除外——后者自带 policy_denial，无本字段）。与 failure_target 互斥（XOR，failure_agg_coverage 法官族执法）；仅 funnel-v1 之后的刊出现（run_started.failure_pipeline = \"funnel-v1\"）。"
+    },
     "failure_target": {
       "type": "object",
       "additionalProperties": false,

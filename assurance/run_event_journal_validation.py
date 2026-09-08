@@ -2438,6 +2438,92 @@ def _verify_v02_failure_target(events: list[dict[str, Any]]) -> list[str]:
     return errors
 
 
+# 0q 统一失败事件管线 (2026-09-08, ADR-0010 §14.63): the identity-capable
+# tool set for the coverage family — the union of the four family tables
+# (mirrors the Rust producer `failure_target::identity_capable`).
+_FAILURE_AGG_CAPABLE_TOOLS = (
+    _CMD_TARGET_TOOLS | _ANCHOR_TARGET_TOOLS | _FILE_TARGET_TOOLS | _URL_TARGET_TOOLS
+)
+
+
+def _verify_v02_failure_agg_coverage(events: list[dict[str, Any]]) -> list[str]:
+    """0q 统一失败事件管线 (2026-09-08, ADR-0010 §14.63): write-side
+    failure-funnel coverage reconciliation — "没有漏盖" as an executable
+    assertion. Frozen Python mirror: parity-checked against the Rust judge
+    family `failure_agg_coverage` (orz-assurance journal/families.rs); the
+    Rust judge is the single enforcement surface (任务 D 终态沿用).
+
+    - Grandfather anchor: the rule fires only on journals whose run_started
+      payload declares `failure_pipeline: "funnel-v1"`; older journals are
+      not retroactively enforced (0q 设计 §3.2-4). Any other declared
+      version is an error.
+    - On a post-funnel journal, every error-shaped tool_completed of an
+      identity-capable tool carries exactly one of `failure_target` or
+      `failure_agg_absent: true`. Neither = missed stamp; both = funnel
+      double-write. A structured `policy_denial` envelope is itself the
+      evaluated-no-stamp evidence (0p S2 裁决) and needs neither field.
+    - `failure_agg_absent` outside an error shape is producer misuse.
+    """
+    errors: list[str] = []
+    post_funnel = False
+    for index, event in enumerate(events):
+        if event.get("event_type") != "run_started":
+            continue
+        version = event.get("payload", {}).get("failure_pipeline")
+        if version is None:
+            continue
+        if version == "funnel-v1":
+            post_funnel = True
+        else:
+            errors.append(
+                f"event {index}: run_started failure_pipeline {version!r} is not "
+                "a known failure-pipeline version (funnel-v1)"
+            )
+    if not post_funnel:
+        return errors
+    for index, event in enumerate(events):
+        if event.get("event_type") != "tool_completed":
+            continue
+        p = event["payload"]
+        tool = p.get("tool")
+        if not (isinstance(tool, str) and tool in _FAILURE_AGG_CAPABLE_TOOLS):
+            continue
+        if "policy_denial" in p:
+            continue
+        status = p.get("status")
+        exit_code = p.get("exit_code")
+        error_shaped = status == "error" or (
+            isinstance(exit_code, int) and not isinstance(exit_code, bool) and exit_code != 0
+        )
+        marker = p.get("failure_agg_absent")
+        if not error_shaped:
+            if marker is not None:
+                errors.append(
+                    f"event {index}: failure_agg_absent on a non-error "
+                    f"completion (misuse); got {marker!r}"
+                )
+            continue
+        if marker is not None and marker is not True:
+            errors.append(
+                f"event {index}: failure_agg_absent must be the literal true; "
+                f"got {marker!r}"
+            )
+        marker_ok = marker is True
+        has_target = isinstance(p.get("failure_target"), dict)
+        if has_target and marker_ok:
+            errors.append(
+                f"event {index}: failure_target and failure_agg_absent are "
+                "mutually exclusive (XOR); funnel double-write"
+            )
+        elif not has_target and not marker_ok:
+            errors.append(
+                f"event {index}: error-shaped completion of identity-capable "
+                f"tool {tool!r} carries neither failure_target nor "
+                "failure_agg_absent (missed failure-aggregation stamp)"
+            )
+    return errors
+
+
 def _verify_v02_receipt_event_isomorphism(
     events: list[dict[str, Any]],
 ) -> list[str]:
@@ -3442,6 +3528,7 @@ def validate_journal_text(text: str) -> list[str]:
         errors.extend(_verify_v02_inject_budget(events))
         errors.extend(_verify_v02_policy_denial(events))
         errors.extend(_verify_v02_failure_target(events))
+        errors.extend(_verify_v02_failure_agg_coverage(events))
         errors.extend(_verify_v02_receipt_event_isomorphism(events))
         errors.extend(_verify_v02_dep_graph_events(events))
         errors.extend(_verify_v02_mechanical_audit(events))

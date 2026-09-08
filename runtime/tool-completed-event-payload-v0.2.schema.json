@@ -92,6 +92,10 @@
       "const": true,
       "description": "0p S2 two-stage gate (2026-09-07, ADR-0010 §14.61 design B4; 0p S2 复审核准 2026-09-07): present on each read_file/grep/list_dir completion that served content from the `.gsa` session-volume internal region AFTER the notice — design B4 marks every post-notice internal access (open_after_notice audit trail), not only the first one. Pairs with the preceding `policy_denial{code=session_volume_notice}` completion. Window paths (session/terminal/*.log, run_tests_output.txt, resources_state.json) and the mechanism file access_state.json never set this field."
     },
+    "failure_agg_absent": {
+      "const": true,
+      "description": "0q 统一失败事件管线 (2026-09-08, ADR-0010 §14.63): 「漏斗已评估、有意不聚合」标记 —— identity-capable 工具（四族并集）的 error 形状完成未过聚合时的 journal 可见事实（None-identity / 非四写点拒绝形状 / 0p S2 信封优先口径除外——后者自带 policy_denial，无本字段）。与 failure_target 互斥（XOR，failure_agg_coverage 法官族执法）；仅 funnel-v1 之后的刊出现（run_started.failure_pipeline = \"funnel-v1\"）。"
+    },
     "failure_target": {
       "type": "object",
       "additionalProperties": false,

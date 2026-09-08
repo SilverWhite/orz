@@ -8,14 +8,14 @@
 
 ## 未闭合计数（2026-09-04 口径）
 
-- 未闭合总数：**28 项**（2026-08-31：P2-10 阶段 3 验证闭环 38 → 32；0k S4 实机复验闭环 32 → 30；2026-09-01：P2-11 DC 强制模板轮清理闭合 30 → 29，P3「DC 硬信号 4/6」退役 29 → 28；2026-09-02：P2-12 讨论稿登记不动计数；2026-09-03：P2-13 设计定稿与 B1 S1/S2 完成，未入账、计数不变；2026-09-04：P2-14 设计定稿与裁决收口 + S1/S2 实施收口（主会话转 v0.3、压缩 e2e 全串行绿），未入账、计数不变；2026-09-06：P0-GOV 00 任务 D 全部闭合（S2a–S2d + S3/S4 翻转），登记不动计数；2026-09-07：0o S3/S4 集中实机验证批排期登记，不动计数；2026-09-07：0q 统一失败事件管线登记（0p S1 复审 F-C 治本），不动计数；2026-09-08：0p S1–S5 全部闭合（排期登记时未入账，闭合同形态不动计数），0r GAP-TB21-FASTTEXT-ENV-CLAIM 登记不动计数）。TODO `[ ]` 明细含父/子项，计数以 BACKLOG 为准。
+- 未闭合总数：**27 项**（2026-08-31：P2-10 阶段 3 验证闭环 38 → 32；0k S4 实机复验闭环 32 → 30；2026-09-01：P2-11 DC 强制模板轮清理闭合 30 → 29，P3「DC 硬信号 4/6」退役 29 → 28；2026-09-02：P2-12 讨论稿登记不动计数；2026-09-03：P2-13 设计定稿与 B1 S1/S2 完成，未入账、计数不变；2026-09-04：P2-14 设计定稿与裁决收口 + S1/S2 实施收口（主会话转 v0.3、压缩 e2e 全串行绿），未入账、计数不变；2026-09-06：P0-GOV 00 任务 D 全部闭合（S2a–S2d + S3/S4 翻转），登记不动计数；2026-09-07：0o S3/S4 集中实机验证批排期登记，不动计数；2026-09-07：0q 统一失败事件管线登记（0p S1 复审 F-C 治本），不动计数；2026-09-08：0p S1–S5 全部闭合（排期登记时未入账，闭合同形态不动计数），0r GAP-TB21-FASTTEXT-ENV-CLAIM 登记不动计数；同日 0q 统一失败事件管线 S2–S4 全部闭合 28 → 27）。TODO `[ ]` 明细含父/子项，计数以 BACKLOG 为准。
 
 ## 优先级总览
 
 | 优先级 | 含义 | 开放项（入口小节） |
 |---|---|---|
 | P0 | 当前工作集：设计已冻结，裁决后立即实施 | FUS-BENCHMARK-FULL-EXEC 验证②③(reward)④⑤（0b）；0d 后续 3/4/5 S4 复验（0d）；THIN-HARNESS-REDESIGN-V2 余项（0j）；WINDOWS-HIGH-NIST-MAX-FRICTION ⑥/⑦（0l）；GSA-SESSION-VOLUME-BOTTOM-LAYER S1–S4（0m，2026-09-06 用户裁决放行）；S3/S4 集中实机验证批（0o，2026-09-07 排期放行——集中执行上述实机类开放项，见排期文档）；——P0-GOV 00（含任务 D）已于 2026-09-06 全部闭合；0p 模型自信息面补强与 .gsa 两段门已于 2026-09-08 S1–S5 全部闭合转 `implemented`（T2/S4 见 audits 0P_T2 / 0P_S4 分析） |
-| P1 | 无需裁决，可与 P0 并行 | 统一失败事件管线（0q，2026-09-07 登记——0p S1 复审 F-C 治本，S1 设计定稿前置）；FUS-COMPONENT-REGISTER（4）；GAP-WINDOWS-EVIDENCE（5）；IMPL-DEEPSEEK-TRANSPORT / SEC-CREDENTIALS live 证据（6）；ORZ-SESSION-CONTEXT-MONITOR（6d） |
+| P1 | 无需裁决，可与 P0 并行 | FUS-COMPONENT-REGISTER（4）；GAP-WINDOWS-EVIDENCE（5）；IMPL-DEEPSEEK-TRANSPORT / SEC-CREDENTIALS live 证据（6）；ORZ-SESSION-CONTEXT-MONITOR（6d） |
 | P2 | 生产化决策门：需用户裁决 | IMPL-CONTROL-FABRIC Slice 3/4（7）；OPS-PROTOCOL 裁剪与接线裁决（8）；MODEL-RESIDUAL-PRESSURE-FOLLOWUP（11）；COMPRESSION-LINGUISTIC-FORMAL-LAYER（12）；BLACKBOARD-CONVERSATION-SCOPE-FOLD B2–B4（13） |
 | P3 | 收尾 / 清理 | EVIDENCE-LOCAL-BROWSER（9）；GATE-CHAIN（10）；遗留小项（11） |
 | 条件触发 | 不占当前优先级 | ORZ-RECOVERY-TOOL-OUTCOME、ORZ-STAGNATION-TOOL-SIGNAL |
@@ -740,30 +740,30 @@ D-1/D-2/D-3）→ 用户裁决：黑板补强先行（「黑板必须暴露模�
 
 - [x] **ORZ-COMPACTION-REDESIGN（S1-S6 全部闭合 2026-08-14，`implemented`）**：恢复预检截断 / 动作台账机械坍缩 / 五段模板摘要 + 事件面 + 存档 / 审查修复 / 二次复查。入口：[设计](CONTEXT_COMPACTION_DESIGN_2026-08-14.md) / ADR-0010 §14.10/§14.14 / 实施审计 / TODO P0-D。
 
-### 0q. 统一失败事件管线（F4 盖章治本；P1；2026-09-07 登记——0p S1 复审 F-C 治本项，S1 设计定稿前置，不占当前工作集）
+### 0q. 统一失败事件管线（F4 盖章治本；P1；**S1–S4 全部闭合 2026-09-08，转 `implemented`**——四点裁决权由用户授予主代理，漏斗落地 orz `4dfb3d77`，ADR §14.63/§14.64）
 
-- 来源（2026-09-07 用户裁决「治标不治本，治本内容单独立一项」）：0p S1
-  复审 F-C 暴露的根因——F4 失败目标盖章为**逐路径散布形态**，每个失败
-  路径靠各自调用 `note_failure_agg`（现有四写点：锚点拒单 / host
-  ToolError / web_fetch 候选上限 / 0p S1 复审新增的 Ok 臂命令级失败
-  `exit_{n}`），漏盖即覆盖缺口——命令级失败遗漏至 0p S1 复审才发现；
-  console 订单业务失败至今不进聚合（receipt error 信封无 F4 身份）。
-- 治本方向（设计先行，产出设计文档并涉 ADR-0010 时按 §14.x 转录）：
-  单一机械收口点——失败事实从事件面/结果面**形状**统一机械抽取进聚合，
-  覆盖面由结构保证而非路径记忆。设计需裁决：
-  1. 收口点选型——ToolCompleted 事件面统一抽取（消费侧）vs 写入侧单一
-     funnel（供给侧）；
-  2. console 订单失败的 F4 身份来源——receipt error 信封补身份，或明确
-     排除并文档标注不对称性；
-  3. 校验面同步——`_verify_v02_failure_target`（Python 对照）与 Rust
-     法官的覆盖范围；
-  4. 行集语义影响——failure_agg 覆盖面变化对 P2-12 压缩注意事项槽 /
-     0p `failures_only` 面消费方的下游影响与迁移口径。
-- **S1 定稿（2026-09-08）**：四点裁决权由用户授予主代理（「这一部分
+- [x] 全部闭合：S1 设计定稿（写入侧边界单一漏斗 / receipt 补
+  `action_target` 第五族 / Rust 法官唯一执法 + Python 冻结对照 / 行集纯
+  增量零迁移，ADR §14.63）→ S2+S3 漏斗 `stamp_failure` 落 host_exec 完
+  成装配点 + 四写点退役逐点对拍 + error 形状完成统一接线（run_tests 三
+  发射点 / agent_loop 三拒绝函数 / 子代理 mid-tool 合成收口）+
+  `failure_agg_absent` 标记（与 failure_target XOR，policy_denial 信封
+  优先）+ console 订单漏斗（action_target 入聚合 + receipt 信封）+
+  grandfather 锚 run_started `failure_pipeline: "funnel-v1"` + 法官新族
+  `failure_agg_coverage`（31 族）+ Python 镜像同步 + schema 三处
+  （tool-completed v0.1/v0.2 + run-started v0.1，registry 零变更）+ 矩阵
+  /e2e/正反两测/六场景对拍（orz-loop 751 / orz-assurance 210 /
+  orz-tools 2844 全绿，clippy 86=基线零新增）→ S4 收口（BACKLOG/TODO/
+  索引/ADR §14.64 闭合转录 + manifest 重算 1441 条 + 门禁 Exit 0）。
+  基线 0.3.2 不 bump（无实机重跑需求）。
+- 来源与治本方向（设计先行，ADR §14.63 转录）：0p S1 复审 F-C 暴露的
+  根因——F4 失败目标盖章为**逐路径散布形态**，漏盖即覆盖缺口（命令级
+  失败遗漏至 0p S1 复审才发现；console 订单业务失败不进聚合）——治本 =
+  单一机械收口点，覆盖面由结构保证而非路径记忆。四点裁决（S1 定稿，
+  2026-09-08）：四点裁决权由用户授予主代理（「这一部分
   工程化内容我了解不多，你做决定更好」），按推荐裁定——① 写入侧边界
   单一漏斗 ② `action_target` 第五族 ③ Rust 法官唯一执法 + Python 冻结
-  对照 ④ 纯增量零迁移。ADR-0010 §14.63 转录。设计定稿即 S2 前置门达成，
-  排期 S2（orz 单批实施）→ S3（矩阵+法官两测）→ S4（收口）。原设计稿
+  对照 ④ 纯增量零迁移。ADR-0010 §14.63 转录。原设计稿
   小节：
   [`0Q_FAILURE_EVENT_PIPELINE_DESIGN_2026-09-08`](../docs/0Q_FAILURE_EVENT_PIPELINE_DESIGN_2026-09-08.md)。
   调研六家（OpenTelemetry 语义约定/LangSmith 执行边界包裹/OpenAI Agents
@@ -772,11 +772,10 @@ D-1/D-2/D-3）→ 用户裁决：黑板补强先行（「黑板必须暴露模�
   消费侧抽取在身份推导处即断。四点推荐：① 写入侧边界单一漏斗（host_exec
   完成装配点）+ 消费侧只做法官对账；② receipt 补身份 `action_target`
   第五族；③ Rust 法官唯一执法 + Python 冻结对照同步；④ 行集纯增量零
-  迁移。待用户逐点裁决后 S1 定稿、进 S2。
-- 边界：不为跑分特化；不阻塞 0p S2–S5（压测场景已由 F-C 最小盖章点
-  覆盖：Ok 臂 exit≠0 + failure_target 四族 → `exit_{n}`，orz
-  `fd46d4f9`）；本项实施以 S1 设计定稿为前置门（0n 同款纪律）。
-- 计数：登记不动计数（闭合时动账）。
+  迁移。
+- 边界：不为跑分特化；不做失败原因语义归因；不动 failure_agg 渲染/
+  截断纪律；0p failures_only 消费接口零变更（行集纯增量，裁决 ④）。
+- 计数：闭合动账（28 → 27）。
 
 ### 0r. GAP-TB21-FASTTEXT-ENV-CLAIM（**已闭合 2026-09-08：用户裁决不修，环境特意形态**；登记时为 P2 观察，不动计数）
 
@@ -797,7 +796,7 @@ D-1/D-2/D-3）→ 用户裁决：黑板补强先行（「黑板必须暴露模�
 
 ## P1 — 可并行审计 / 证据
 
-开放项：0q / 4 / 5 / 6 / 6d。已闭合 6b / 6c / 6e / 6f / 6g 以单行核对保留（6c 与 6e 为退役条目）。
+开放项：4 / 5 / 6 / 6d。已闭合 0q（2026-09-08）与 6b / 6c / 6e / 6f / 6g 以单行核对保留（6c 与 6e 为退役条目）。
 
 ### 4. FUS-COMPONENT-REGISTER（`partial`）
 

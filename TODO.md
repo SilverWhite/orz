@@ -601,7 +601,7 @@ GLM F2 处置转排期（2026-09-06 用户裁决）：`orz-host/src/approval.rs`
 
 ## P1 — 可并行审计 / 证据
 
-### P1-0q 统一失败事件管线（F4 盖章治本；2026-09-07 登记；BACKLOG 0q；S1 设计定稿前置，不占当前工作集）
+### P1-0q 统一失败事件管线（F4 盖章治本；2026-09-07 登记；BACKLOG 0q；**S1–S4 全部闭合 2026-09-08，转 `implemented`**）
 
 > 来源：0p S1 复审 F-C（2026-09-07 用户裁决「治标不治本，治本内容单独
 > 成一项」）——F4 失败目标盖章为逐路径散布形态（四写点：锚点拒单 /
@@ -617,13 +617,27 @@ GLM F2 处置转排期（2026-09-06 用户裁决）：`orz-host/src/approval.rs`
   行，缺失即报错，旧刊 grandfather）+ Python 冻结对照镜像同步；行集纯
   增量零迁移。四点裁决权由用户授予主代理，ADR-0010 §14.63 转录。入口：
   [设计定稿](docs/0Q_FAILURE_EVENT_PIPELINE_DESIGN_2026-09-08.md)。
-- [ ] S2 实施：漏斗落 host_exec 装配点 + 四写点退役对拍 + 第五族 + 法官
-  对账规则 + Python 镜像同步；registry/manifest 随批（orz 单批；
-  orz 全绿 + clippy 零新增 + 法官篡改负测通过）。
-- [ ] S3 测试与复验：覆盖面矩阵单测（五族 × 各失败形状 × None-identity
-  排除）+ 逐写点等价对拍 + 法官正反两测。
-- [ ] S4 收口：BACKLOG/TODO/索引/ADR 闭合转录 + manifest 重算 + 门禁
-  Exit 0。
+- [x] S2+S3 实施（2026-09-08 同批交付，orz `4dfb3d77`）：漏斗
+  `stamp_failure` 落 host_exec 完成装配点（形状谓词集中一处：host
+  ToolError / Ok 臂 exit≠0 无信封 / 锚点拒单 / 候选门拒单，四写点退役
+  逐点对拍等价）+ error 形状完成统一接线（run_tests 特例三发射点 /
+  agent_loop 三拒绝函数 / 子代理 mid-tool 合成收口）+ `failure_agg_
+  absent` 标记（None-identity / 非白名单拒绝 → 「有意不聚合」，与
+  failure_target XOR；policy_denial 信封优先不盖章不标记，0p S2 口径）+
+  console 订单漏斗（action_target 第五族入聚合 + receipt 信封）+
+  grandfather 锚 run_started `failure_pipeline: "funnel-v1"` + 法官新族
+  `failure_agg_coverage`（31 族）+ Python `_verify_v02_failure_agg_
+  coverage` 镜像同步 + schema 三处（tool-completed v0.1/v0.2 +
+  run-started v0.1，registry 零变更）；覆盖面矩阵单测（盖章/标记/零作用
+  × 九形状）+ Ok 臂/None-identity/console e2e 对拍 + 法官正反两测
+  （正刊 0 错 / 漏盖篡改报错 / XOR / 误用 / 未知版本 / grandfather）+
+  专属六场景 Rust↔Python verdict parity（pinned 233 corpus 不动）。
+  验收全过：orz-loop 751 / orz-assurance 210（含 31 族 crosscheck）/
+  orz-tools 2844 全绿，orz-host 253+1（既有环境抖动，基线同形态、隔离
+  单跑过）+ clippy 86=基线零新增 + fmt 净。
+- [x] S4 收口（2026-09-08）：BACKLOG/TODO/索引/ADR §14.64 闭合转录 +
+  manifest 重算 1441 条 + 门禁 Exit 0（valid: true）；基线 0.3.2 不
+  bump（无实机重跑需求）；0q 转 `implemented`，计数 28 → 27。
 
 
 ### FUS-COMPONENT-REGISTER（`partial`）

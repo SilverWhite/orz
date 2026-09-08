@@ -8,6 +8,10 @@
     "prompt"
   ],
   "properties": {
-    "prompt": { "type": "string" }
+    "prompt": { "type": "string" },
+    "failure_pipeline": {
+      "const": "funnel-v1",
+      "description": "0q 统一失败事件管线 (2026-09-08, ADR-0010 §14.63): 失败事件管线的 journal 级版本锚 —— failure_agg_coverage 法官族（error 形状完成 ↔ failure_target/failure_agg_absent XOR 对账）只在本标记之后的刊执法；缺省 = 漏斗前旧刊，grandfather 不回溯（0q 设计 §3.2-4）。"
+    }
   }
 }
