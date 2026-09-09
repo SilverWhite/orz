@@ -357,6 +357,15 @@ pub fn run_event_to_tui(event: &RunEvent) -> TuiEvent {
             activation_id: get_str(p, "activation_id"),
             status: get_str(p, "status"),
         },
+        // 0t (2026-09-09, ADR-0010 §14.65): browser launch fact event.
+        EventType::BrowserLaunchResult => TuiEvent::BrowserLaunchResult {
+            attempt_id: get_str(p, "attempt_id"),
+            status: get_str(p, "status"),
+            cause: p
+                .pointer("/cause")
+                .and_then(serde_json::Value::as_str)
+                .map(str::to_string),
+        },
         // MECHANICAL-AUDIT-LAYER (2026-08-24, ADR-0010 §14.39): 轻量事件
         // 留痕——键/轮/异常；摘要细节留在 journal payload。
         EventType::MechanicalAuditUpdate => TuiEvent::MechanicalAuditUpdate {

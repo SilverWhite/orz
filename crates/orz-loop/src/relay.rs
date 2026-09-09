@@ -52,24 +52,28 @@ pub(crate) fn is_candidate_counted_tool(name: &str) -> bool {
 
 /// GAP-RETRIEVAL-TOOLS (2026-08-10): the retrieval dispatch family —
 /// internal (`retrieve_project_*`) and external (`web_search*`/`web_fetch*`)
-/// tool names. The mode projection uses it to remove the family from the
-/// model-visible declarations under mode=off (ADR-0010 §3.7.1/§3.5.2); the
-/// relay refuses the same names at dispatch time (belt and braces).
+/// tool names. 0t (2026-09-09, ADR-0010 §14.65): 独立检索启用门用它把
+/// 未启用会话的检索族从声明面剔除（fail-closed）；relay 在派发时拒绝同名
+/// 调用（belt and braces）。
 pub fn is_retrieval_dispatch_name(name: &str) -> bool {
     name.starts_with("retrieve_project_") || is_web_retrieval_tool(name)
 }
 
 /// GAP-RETRIEVAL-TOOLS (2026-08-10, H1 review): the host-routed retrieval
 /// tool family. These are retrieval tools even though they do not go
-/// through the subagent dispatch lanes, so the mode=off projection and the
-/// dispatch gate cover them too (ADR-0010 §3.7.1 — off means no retrieval
-/// tools; a model must not bypass the gate by switching to one of these
-/// names). local_browser (2026-08-10): `browser_read` joins the family —
-/// its reachability is mode-gated (local_browser mode only). PDF evidence
-/// (2026-08-11): `pdf_read` reads externally-sourced evidence — gated like
-/// the other retrieval tools.
+/// through the subagent dispatch lanes, so the 0t enable-gate projection and
+/// the dispatch gate cover them too (ADR-0010 §14.65 — 未启用会话无检索
+/// 工具；模型不得经这些名字绕过门)。local_browser (2026-08-10):
+/// `browser_read` joins the family — 0t 后声明由启用门置位、浏览器缺席由
+/// 调用期懒启动兜底（不再是 mode 互斥）。PDF evidence (2026-08-11):
+/// `pdf_read` reads externally-sourced evidence — gated like the other
+/// retrieval tools. S2-R P3 / P1-2b (2026-09-09): `browser_control` 同属
+/// 本地浏览器车道（导航级动作），检索启用门族一并覆盖。
 pub fn is_retrieval_mode_gated_host_tool(name: &str) -> bool {
-    name == "project_doc_index" || name == "browser_read" || name == "pdf_read"
+    name == "project_doc_index"
+        || name == "browser_read"
+        || name == "browser_control"
+        || name == "pdf_read"
 }
 
 /// Route a function name to the appropriate dispatch target.

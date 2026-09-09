@@ -14,10 +14,9 @@ use crate::agent_loop::{
 use crate::agents::{RetrievalSubagent, SubagentRole};
 use crate::blackboard::{DispatchStamp, ToolActionRecord};
 use crate::controller::{
-    AgentLoopController, AgentLoopError, EventWriter, RetrievalCapability, RetrievalMode,
-    RetrievalResultChannel, chrono_utc_now, estimate_messages_tokens,
-    retrieval_result_channel_from_env, retrieval_subagent_max_tool_rounds_override,
-    retrieval_subagent_wallclock_override,
+    AgentLoopController, AgentLoopError, EventWriter, RetrievalResultChannel, chrono_utc_now,
+    estimate_messages_tokens, retrieval_result_channel_from_env,
+    retrieval_subagent_max_tool_rounds_override, retrieval_subagent_wallclock_override,
 };
 use crate::gateway::model::{Message, ModelGateway, Role, ToolCall};
 use crate::host::{LoopHost, ToolDef, ToolResult};
@@ -65,19 +64,16 @@ impl AgentLoopController {
             }
             DispatchTarget::Host => unreachable!("host calls go to run_host_tool"),
         };
-        // GAP-RETRIEVAL-TOOLS (2026-08-10): mode gate (ADR-0010 §3.7.1 —
-        // explicit mode, never an implicit fallback).
-        //
-        // mode=off refuses WITHOUT a ToolStarted: the verifier's mode rule
-        // forbids any retrieval dispatch (tool_started with a retrieval
-        // target) after a transition to off — the refusal is journaled as
-        // the terminal ToolCompleted(error) alone.
-        if self.retrieval_mode == RetrievalMode::Off {
+        // 0t (2026-09-09, ADR-0010 §14.65 / 设计 §3.1, v1.3): 独立检索启用门
+        // ——三值模式退役后唯一授权状态。未启用会话 refuse WITHOUT a
+        // ToolStarted（拒绝码 `retrieval_not_enabled`，脱离模式状态机）：
+        // 拒绝是 terminal ToolCompleted(error) alone。
+        if !self.retrieval_enabled {
             let msg = format!(
-                "retrieval '{target_name}' refused — retrieval mode is 'off' \
-                 for this session (ADR-0010 §3.7.1); no retrieval tools are \
-                 available. Submit retrieval_disposition close for any \
-                 already-pending activation.",
+                "retrieval '{target_name}' refused — retrieval is not \
+                 enabled for this session (ADR-0010 §14.65); no \
+                 retrieval tools are available. Submit retrieval_disposition \
+                 close for any already-pending activation.",
             );
             writer
                 .record(
@@ -87,7 +83,7 @@ impl AgentLoopController {
                         "call_id": tc.call_id,
                         "target": target_name,
                         "status": "error",
-                        "error": "retrieval_mode_off",
+                        "error": "retrieval_not_enabled",
                     }),
                 )
                 .await?;
@@ -106,62 +102,6 @@ impl AgentLoopController {
                 structured: None,
                 ..Default::default()
             });
-        }
-        // mode=local_browser with an unavailable capability fails EXPLICITLY
-        // (browser automation is not implemented in this slice; the probe
-        // recorded unsupported — no silent degradation to the framework
-        // tools). The refusal follows the standard ToolStarted →
-        // ToolCompleted(error) audit shape.
-        if self.retrieval_mode == RetrievalMode::LocalBrowser {
-            match &self.retrieval_capability {
-                RetrievalCapability::Available => {}
-                RetrievalCapability::Unsupported(reason)
-                | RetrievalCapability::Degraded(reason) => {
-                    writer
-                        .record(
-                            EventType::ToolStarted,
-                            serde_json::json!({
-                                "tool": tc.name,
-                                "call_id": tc.call_id,
-                                "target": target_name,
-                            }),
-                        )
-                        .await?;
-                    let msg = format!(
-                        "retrieval '{target_name}' refused — local_browser \
-                         capability is not available ({reason}); no silent \
-                         fallback to framework retrieval tools (ADR-0010 \
-                         §3.7.1)",
-                    );
-                    writer
-                        .record(
-                            EventType::ToolCompleted,
-                            serde_json::json!({
-                                "tool": tc.name,
-                                "call_id": tc.call_id,
-                                "target": target_name,
-                                "status": "error",
-                                "error": "retrieval_capability_unavailable",
-                            }),
-                        )
-                        .await?;
-                    messages.push(Message {
-                        role: Role::Tool,
-                        content: msg.clone(),
-                        tool_call_id: Some(tc.call_id.clone()),
-                        tool_calls: Vec::new(),
-                        reasoning_content: None,
-                        round: None,
-                    });
-                    return Ok(ToolResult {
-                        output: msg,
-                        exit_code: Some(1),
-                        output_encoding: None,
-                        structured: None,
-                        ..Default::default()
-                    });
-                }
-            }
         }
         writer
             .record(
@@ -347,7 +287,7 @@ impl AgentLoopController {
             tool_defs,
             host.tools_registry(),
             role,
-            self.retrieval_mode,
+            self.retrieval_enabled,
         );
         // per-run 隔离：子代理用本 run 的 gateway 实例（不再引用
         // controller 上跨 run 共享的 `internal_retrieval` /
@@ -398,7 +338,6 @@ impl AgentLoopController {
         let profile = LoopProfile::retrieval(
             role,
             &goal,
-            self.retrieval_mode,
             // RETRIEVAL-ORCHESTRATION-MECHANICAL 0k (2026-08-30): 检索
             // 子代理独立轮数上限（默认 60），与主车道全局轮数取 min——
             // 测试用 with_max_tool_rounds 缩小时语义不变；None（env 0）
@@ -1687,21 +1626,19 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
-    /// C2-1 (2026-08-11): the mode=off gate covers the web family at the
-    /// host path too (belt and braces — "off means no retrieval tools",
-    /// ADR-0010 §3.7.1). Topologically the lane self-execution path can
-    /// only carry web tools under framework_fallback, so this exercises
-    /// run_host_tool directly (in-flight mode transitions are the edge it
-    /// defends).
+    /// C2-1 (2026-08-11) + 0t (2026-09-09, ADR-0010 §14.65): the enable-gate
+    /// covers the web family at the host path too (belt and braces —
+    /// "检索未启用 = 无检索工具", §3.1/§3.3). Exercises run_host_tool
+    /// directly with the default disabled controller.
     #[tokio::test]
-    async fn mode_off_gate_covers_lane_web_search() {
+    async fn disabled_gate_covers_lane_web_search() {
         let dir = test_dir();
         let journal = JournalRecorder::new(dir.clone());
         let host = TestHost {
             journal,
             tool_result: None,
         };
-        // Default controller — mode=off.
+        // Default controller — retrieval disabled (fail-closed).
         let controller = AgentLoopController::with_gateway(Arc::new(FakeProvider::new(vec![
             ScriptedResponse::text("x"),
         ])));
@@ -1731,7 +1668,7 @@ mod tests {
             .unwrap();
         assert_eq!(result.exit_code, Some(1));
         assert!(
-            result.output.contains("refused") && result.output.contains("off"),
+            result.output.contains("refused") && result.output.contains("not enabled"),
             "{}",
             result.output
         );
@@ -1742,18 +1679,17 @@ mod tests {
             denial.source,
             crate::host::PolicyDenialSource::RetrievalMode
         );
-        assert_eq!(denial.code, "retrieval_mode_off");
+        assert_eq!(denial.code, "retrieval_not_enabled");
         assert!(feedback.is_none());
         let _ = std::fs::remove_dir_all(&dir);
     }
 
-    /// C2-1 (2026-08-11): the mirror lane gate — web tools are only
-    /// reachable under framework_fallback; under local_browser the
-    /// subagent's self-executed web call is refused with an explicit
-    /// `retrieval_mode_requires_framework_fallback` (no silent cross-lane
-    /// fallback, ADR-0010 §3.7.1). No ToolStarted for the refused call.
+    /// C2-1 (2026-08-11) + 0t (2026-09-09, ADR-0010 §14.65 / 设计 §3.1):
+    /// 双车道并存——启用会话 external lane 的 web 调用不再被模式互斥门
+    /// 拒绝（`retrieval_mode_requires_framework_fallback` 拒绝族退役）；
+    /// 执行尝试照常发生（ToolStarted），失败按普通 host 错误回传。
     #[tokio::test]
-    async fn local_browser_lane_refuses_web_tools() {
+    async fn dual_lane_web_tools_are_not_mode_refused() {
         let dir = test_dir();
         let journal = JournalRecorder::new(dir.clone());
         let host = TestHost {
@@ -1767,23 +1703,15 @@ mod tests {
             ScriptedResponse::text("完成"),
             ScriptedResponse::text("完成"),
         ]));
-        let controller = AgentLoopController::with_gateway(gateway).with_retrieval_mode(
-            RetrievalMode::LocalBrowser,
-            RetrievalCapability::Available,
-            false,
-            None,
-            None,
-            None,
-        );
+        let controller = AgentLoopController::with_gateway(gateway).with_retrieval_enabled(true);
         controller
             .run_turn(&host, "查网页", "RUN-LBW", MANIFEST, 0, None, None, None)
             .await
             .unwrap();
 
         let events = events(&dir);
-        // The lane-internal web call is refused by the framework_fallback
-        // gate (the ONLY refusal — the dispatch-level off gate does not
-        // fire under local_browser).
+        // The lane-internal web call is NOT refused by any mode gate under
+        // the dual-lane enabled session.
         let refused: Vec<&RunEvent> = events
             .iter()
             .filter(|e| {
@@ -1792,40 +1720,21 @@ mod tests {
             })
             .collect();
         assert!(
-            refused.iter().any(|e| e.payload["error"]
-                == serde_json::json!("retrieval_mode_requires_framework_fallback")),
-            "{refused:?}"
-        );
-        assert!(
-            refused.iter().any(|e| {
+            !refused.iter().any(|e| {
                 e.payload["error"]
-                    == serde_json::json!("retrieval_mode_requires_framework_fallback")
-                    && e.payload["policy_denial"]["source"] == serde_json::json!("retrieval_mode")
-                    && e.payload["policy_denial"]["code"]
-                        == serde_json::json!("retrieval_mode_requires_framework_fallback")
+                    .as_str()
+                    .is_some_and(|s| s.starts_with("retrieval_mode_"))
             }),
-            "framework_fallback refusal must carry the structured denial: {refused:?}"
+            "mode-specific refusal codes are retired under dual-lane: {refused:?}"
         );
-        // P0-C S3 前置审查修复 (F1): every refusal completion carries the
-        // non-zero exit_code required by the Python cross-check.
-        for event in &refused {
-            assert_eq!(
-                event.payload["exit_code"],
-                serde_json::json!(1),
-                "refusal completion must carry exit_code=1: {event:?}"
-            );
-            assert_eq!(event.payload["status"], serde_json::json!("error"));
-        }
-        // The refused lane-internal web call (call-2) has NO ToolStarted —
-        // same refusal shape as the other mode gates. (The main-lane
-        // dispatch wrapper for call-1 does start — that is the subagent
-        // dispatch, not the web execution.)
+        // The lane-internal web call (call-2) DID start — 双族并存下执行
+        // 尝试照常发生；host 无结果时按普通错误回传（非模式拒绝）。
         assert!(
-            !events.iter().any(|e| {
+            events.iter().any(|e| {
                 e.event_type == EventType::ToolStarted
                     && e.payload.get("call_id").and_then(|v| v.as_str()) == Some("call-2")
             }),
-            "refused web tool must not start"
+            "web tool execution must start under dual-lane"
         );
         assert!(
             !events.iter().any(|e| {

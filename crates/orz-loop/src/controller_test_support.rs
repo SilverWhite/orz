@@ -6,12 +6,11 @@
 use orz_assurance::{EventType, JournalRecorder, RunEvent};
 use std::collections::VecDeque;
 use std::path::{Path, PathBuf};
-use std::sync::Mutex;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use async_trait::async_trait;
 
-use crate::controller::{AgentLoopController, RetrievalCapability, RetrievalMode};
+use crate::controller::AgentLoopController;
 use crate::gateway::model::{Message, ModelGateway, Role, ToolCall};
 use crate::host::{
     LoopHost, PermitDecision, PermitError, RiskClass, ToolDef, ToolError, ToolRegistry, ToolResult,
@@ -162,57 +161,6 @@ impl LoopHost for DenyHost {
     }
 }
 
-/// PLAN-FIRST 阶段 C (2026-08-16): per-call scripted host — a queue of
-/// results so a single run can mix failing orders and succeeding direct
-/// calls (the plain TestHost returns one result for every call).
-pub(crate) struct QueueHost {
-    pub(crate) journal: JournalRecorder,
-    pub(crate) results: Mutex<VecDeque<Result<ToolResult, ToolError>>>,
-}
-
-#[async_trait]
-impl LoopHost for QueueHost {
-    fn journal(&self) -> &JournalRecorder {
-        &self.journal
-    }
-    fn tools_registry(&self) -> &dyn ToolRegistry {
-        &EmptyRegistry
-    }
-    fn session_cwd(&self) -> std::path::PathBuf {
-        self.journal.journal_dir().to_path_buf()
-    }
-    async fn request_permission(
-        &self,
-        _risk: RiskClass,
-        _tool: &str,
-        _args: &serde_json::Value,
-    ) -> Result<PermitDecision, PermitError> {
-        Ok(PermitDecision::AllowOnce)
-    }
-    async fn call_tool(
-        &self,
-        _name: &str,
-        _args: serde_json::Value,
-        _call_id: &str,
-    ) -> Result<ToolResult, ToolError> {
-        self.results
-            .lock()
-            .unwrap()
-            .pop_front()
-            .unwrap_or_else(|| Err(ToolError::NotFound("queue host exhausted".into())))
-    }
-}
-
-pub(crate) fn fail_result() -> ToolResult {
-    ToolResult {
-        output: "host failed".to_string(),
-        exit_code: None,
-        output_encoding: None,
-        structured: None,
-        ..Default::default()
-    }
-}
-
 pub(crate) fn ok_result() -> ToolResult {
     ToolResult {
         output: "ok".to_string(),
@@ -305,32 +253,18 @@ pub(crate) fn browser_read_call(call_id: &str, url: &str) -> ToolCall {
     }
 }
 
-/// GAP-RETRIEVAL-TOOLS (2026-08-10): the retrieval tests run under an
-/// explicit `framework_fallback` mode with an available capability —
-/// the bare `with_gateway` default is mode=off (ADR-0010 §3.7.1).
+/// 0t (2026-09-09, ADR-0010 §14.65 / 设计 §3.1): retrieval tests run under
+/// the enable gate on — the bare `with_gateway` default is disabled
+/// (fail-closed). 双族（browser_read + web 族）恒在，换道由模型自主。
 pub(crate) fn with_retrieval_enabled(controller: AgentLoopController) -> AgentLoopController {
-    controller.with_retrieval_mode(
-        RetrievalMode::FrameworkFallback,
-        RetrievalCapability::Available,
-        false,
-        None,
-        None,
-        None,
-    )
+    controller.with_retrieval_enabled(true)
 }
 
-/// FUS-RETRIEVAL-MECH P0-B step 4 (2026-08-14): the browser_read
-/// tests run under an explicit `local_browser` mode with an available
-/// capability (browser_read's mode gate requires it).
+/// FUS-RETRIEVAL-MECH P0-B step 4 (2026-08-14) 历史语义 + 0t：browser_read
+/// 用例在启用门下运行——现为 `with_retrieval_enabled(true)` 的别名（三值
+/// 模式退役后无独立 local_browser 状态）。
 pub(crate) fn with_local_browser_enabled(controller: AgentLoopController) -> AgentLoopController {
-    controller.with_retrieval_mode(
-        RetrievalMode::LocalBrowser,
-        RetrievalCapability::Available,
-        false,
-        None,
-        None,
-        None,
-    )
+    controller.with_retrieval_enabled(true)
 }
 
 pub(crate) fn events(dir: &Path) -> Vec<RunEvent> {

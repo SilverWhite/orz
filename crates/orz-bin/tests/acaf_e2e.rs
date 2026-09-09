@@ -40,7 +40,7 @@ use orz_host::keystore::WindowsDpapiInstallationKeyStore;
 use orz_loop::acaf::{
     AcafClient, AcafConfig, TicketOutcome, command_env_sha256, command_exec_target_digest,
 };
-use orz_loop::controller::{AgentLoopController, RetrievalCapability, RetrievalMode};
+use orz_loop::controller::AgentLoopController;
 use orz_loop::gateway::fake::{FakeProvider, ScriptedResponse};
 use orz_loop::gateway::model::{ModelGateway, ToolCall};
 use orz_loop::host::{
@@ -345,14 +345,7 @@ async fn controller_control_events_carry_tickets() {
 
     let controller = AgentLoopController::with_gateway(gateway)
         .with_acaf_fail_closed(false)
-        .with_retrieval_mode(
-            RetrievalMode::FrameworkFallback,
-            RetrievalCapability::Available,
-            false,
-            None,
-            None,
-            None,
-        )
+        .with_retrieval_enabled(true)
         .with_acaf(Some(client));
     controller
         .run_turn(
@@ -506,14 +499,7 @@ async fn signer_unreachable_shadow_records_rejection_and_proceeds() {
     ]));
     let controller = AgentLoopController::with_gateway(gateway)
         .with_acaf_fail_closed(false)
-        .with_retrieval_mode(
-            RetrievalMode::FrameworkFallback,
-            RetrievalCapability::Available,
-            false,
-            None,
-            None,
-            None,
-        )
+        .with_retrieval_enabled(true)
         .with_acaf(Some(client));
     controller
         .run_turn(
@@ -1021,14 +1007,7 @@ async fn goal_revision_continue_flow_re_derives_session_key() {
     let controller = AgentLoopController::with_gateway(gateway)
         .with_acaf_fail_closed(false)
         .with_activation_snapshot(Some(&seeded_internal_activation_snapshot()))
-        .with_retrieval_mode(
-            RetrievalMode::FrameworkFallback,
-            RetrievalCapability::Available,
-            false,
-            None,
-            None,
-            None,
-        )
+        .with_retrieval_enabled(true)
         .with_acaf(Some(client));
     controller
         .run_turn(
@@ -1199,14 +1178,7 @@ async fn network_ticket_full_chain() {
     ]));
     let controller = AgentLoopController::with_gateway(gateway)
         .with_acaf_fail_closed(false)
-        .with_retrieval_mode(
-            RetrievalMode::LocalBrowser,
-            RetrievalCapability::Available,
-            false,
-            None,
-            None,
-            None,
-        )
+        .with_retrieval_enabled(true)
         .with_snapshot_store(Some(store))
         .with_acaf(Some(client));
     controller
@@ -1586,14 +1558,7 @@ async fn invalid_network_url_shadow_records_rejection_and_proceeds() {
     ]));
     let controller = AgentLoopController::with_gateway(gateway)
         .with_acaf_fail_closed(false)
-        .with_retrieval_mode(
-            RetrievalMode::LocalBrowser,
-            RetrievalCapability::Available,
-            false,
-            None,
-            None,
-            None,
-        )
+        .with_retrieval_enabled(true)
         .with_snapshot_store(Some(store))
         .with_acaf(Some(client));
     controller
@@ -1769,14 +1734,7 @@ async fn missing_browser_read_url_refuses_before_acaf_with_count_gate() {
     ]));
     let controller = AgentLoopController::with_gateway(gateway)
         .with_acaf_fail_closed(false)
-        .with_retrieval_mode(
-            RetrievalMode::LocalBrowser,
-            RetrievalCapability::Available,
-            false,
-            None,
-            None,
-            None,
-        )
+        .with_retrieval_enabled(true)
         .with_snapshot_store(Some(store))
         .with_acaf(Some(client));
     controller
@@ -1933,14 +1891,7 @@ async fn fail_closed_web_search_tool_unticketed_lane_auto_close_ticketed() {
         ScriptedResponse::text("完成"),
     ]));
     let controller = AgentLoopController::with_gateway(gateway)
-        .with_retrieval_mode(
-            RetrievalMode::FrameworkFallback,
-            RetrievalCapability::Available,
-            false,
-            None,
-            None,
-            None,
-        )
+        .with_retrieval_enabled(true)
         .with_snapshot_store(Some(store))
         .with_acaf(Some(client))
         .with_acaf_fail_closed(true);
@@ -2080,14 +2031,7 @@ async fn fail_closed_verify_rpc_failure_journals_once_and_blocks() {
         ScriptedResponse::text("完成"),
     ]));
     let controller = AgentLoopController::with_gateway(gateway)
-        .with_retrieval_mode(
-            RetrievalMode::LocalBrowser,
-            RetrievalCapability::Available,
-            false,
-            None,
-            None,
-            None,
-        )
+        .with_retrieval_enabled(true)
         .with_snapshot_store(Some(store))
         .with_acaf(Some(client))
         .with_acaf_fail_closed(true);
@@ -2236,14 +2180,7 @@ async fn fail_closed_goal_revision_rejected_does_not_migrate() {
     ]));
     let controller = AgentLoopController::with_gateway(gateway)
         .with_activation_snapshot(Some(&seeded_internal_activation_snapshot()))
-        .with_retrieval_mode(
-            RetrievalMode::FrameworkFallback,
-            RetrievalCapability::Available,
-            false,
-            None,
-            None,
-            None,
-        )
+        .with_retrieval_enabled(true)
         .with_snapshot_store(Some(store))
         .with_acaf(Some(client))
         .with_acaf_fail_closed(true);
@@ -2356,14 +2293,7 @@ async fn fail_closed_missing_url_blocks_network_tool() {
         ScriptedResponse::text("完成"),
     ]));
     let controller = AgentLoopController::with_gateway(gateway)
-        .with_retrieval_mode(
-            RetrievalMode::LocalBrowser,
-            RetrievalCapability::Available,
-            false,
-            None,
-            None,
-            None,
-        )
+        .with_retrieval_enabled(true)
         .with_snapshot_store(Some(store))
         .with_acaf(Some(client))
         .with_acaf_fail_closed(true);
@@ -2633,14 +2563,7 @@ async fn fail_closed_retrieval_lane_web_fetch_binds_activation_d13() {
         ScriptedResponse::text("完成"),
     ]));
     let controller = AgentLoopController::with_gateway(gateway)
-        .with_retrieval_mode(
-            RetrievalMode::FrameworkFallback,
-            RetrievalCapability::Available,
-            false,
-            None,
-            None,
-            None,
-        )
+        .with_retrieval_enabled(true)
         .with_snapshot_store(Some(store))
         .with_acaf(Some(client))
         .with_acaf_fail_closed(true);
@@ -2749,14 +2672,7 @@ async fn fail_closed_continue_consumes_goal_revision_ticket() {
     ]));
     let controller = AgentLoopController::with_gateway(gateway)
         .with_activation_snapshot(Some(&seeded_internal_activation_snapshot()))
-        .with_retrieval_mode(
-            RetrievalMode::FrameworkFallback,
-            RetrievalCapability::Available,
-            false,
-            None,
-            None,
-            None,
-        )
+        .with_retrieval_enabled(true)
         .with_snapshot_store(Some(store))
         .with_acaf(Some(client))
         .with_acaf_fail_closed(true);

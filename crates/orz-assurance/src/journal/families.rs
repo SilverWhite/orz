@@ -66,8 +66,15 @@ pub(crate) mod toolsets {
         "reference_to_video",
         "use_tool",
     ];
-    pub const RETRIEVAL_MODE_GATED_TOOLS: &[&str] =
-        &["project_doc_index", "browser_read", "pdf_read"];
+    // 0t S2-R P3 / P1-2b (2026-09-09): `browser_control` 同属 host 路由
+    // 检索工具（relay `is_retrieval_mode_gated_host_tool`），启用门族与
+    // launch 义务判定面一并纳入（P5 对拍固化）。
+    pub const RETRIEVAL_MODE_GATED_TOOLS: &[&str] = &[
+        "project_doc_index",
+        "browser_read",
+        "browser_control",
+        "pdf_read",
+    ];
     pub const ACAF_TICKETED_TOOLS: &[&str] = &[
         "search_replace",
         "run_tests",
@@ -76,7 +83,7 @@ pub(crate) mod toolsets {
         "browser_read",
     ];
     pub const RETRIEVAL_TARGETS: &[&str] = &["internal_retrieval", "external_retrieval"];
-    pub const HOST_LANE_RETRIEVAL_TOOLS: &[&str] = &["browser_read"];
+    pub const HOST_LANE_RETRIEVAL_TOOLS: &[&str] = &["browser_read", "browser_control"];
     pub const CMD_TARGET_TOOLS: &[&str] = &["run_terminal_cmd", "run_tests"];
     pub const ANCHOR_TARGET_TOOLS: &[&str] = &["search_replace"];
     pub const FILE_TARGET_TOOLS: &[&str] = &["search_replace", "read_file", "grep"];
@@ -320,6 +327,100 @@ pub fn verify_retrieval_mode(events: &[Value]) -> Vec<String> {
             "journal has {bootstrap_count} session_bootstrap transitions — \
              at most one allowed"
         ));
+    }
+    errors
+}
+
+// ── retrieval enable gate + browser launch facts (0t, ADR-0010 §14.65) ──
+
+/// 0t (2026-09-09, ADR-0010 §14.65 / 设计 §3.1/§3.3, v1.3): 检索启用门
+/// 不变量——未启用会话无检索工具声明、无检索 ToolStarted。三值检索模式 γ
+/// 退役后 enable gate 是唯一授权门。实现口径与 Python
+/// `_verify_v02_retrieval_enable_gate` 完全一致：期刊存在
+/// request_header_change 且所有 header 都未声明过检索族工具时，任何检索
+/// ToolStarted 都是违反；无 header 事件（旧刊/精简夹具）时规则空转。
+pub fn verify_retrieval_enable_gate(events: &[Value]) -> Vec<String> {
+    use toolsets::{RETRIEVAL_TARGETS, contains, is_retrieval_mode_gated_tool};
+
+    let mut errors = Vec::new();
+    let mut header_count = 0usize;
+    let mut declared_retrieval = false;
+    for event in events {
+        if !is_v02(event) || event["event_type"] != "request_header_change" {
+            continue;
+        }
+        header_count += 1;
+        let tools = event
+            .get("payload")
+            .and_then(|p| p.get("tools"))
+            .and_then(Value::as_array);
+        if let Some(tools) = tools
+            && tools
+                .iter()
+                .filter_map(Value::as_str)
+                .any(|t| is_retrieval_mode_gated_tool(Some(t)))
+        {
+            declared_retrieval = true;
+        }
+    }
+    if header_count == 0 || declared_retrieval {
+        return errors;
+    }
+    for (index, event) in events.iter().enumerate() {
+        if !is_v02(event) || event["event_type"] != "tool_started" {
+            continue;
+        }
+        let payload = event.get("payload").cloned().unwrap_or(Value::Null);
+        let tool = str_of(payload.get("tool"));
+        let target = str_of(payload.get("target"));
+        if tool.is_some_and(|t| is_retrieval_mode_gated_tool(Some(t)))
+            || contains(RETRIEVAL_TARGETS, target)
+        {
+            errors.push(format!(
+                "event {index}: retrieval dispatch {} tool_started in a \
+                 journal whose request headers never declared a retrieval \
+                 tool (enable gate — 未启用会话无检索 ToolStarted)",
+                str_of(payload.get("tool")).unwrap_or("<missing>")
+            ));
+        }
+    }
+    errors
+}
+
+/// 0t (2026-09-09, ADR-0010 §14.65 / 设计 §3.3, v1.3): 浏览器启动/探活
+/// 事实事件存在性义务——launch 层失败的 browser_read 调用必须在同期刊中
+/// 由更早的 `browser_launch_result`(status=failure) 承托。payload shape
+/// 由 schema/registry 执法；页面级失败按真实类别正常回传，不在此义务内。
+pub fn verify_browser_launch_result(events: &[Value]) -> Vec<String> {
+    use toolsets::{HOST_LANE_RETRIEVAL_TOOLS, contains};
+
+    let mut errors = Vec::new();
+    let failure_indices: Vec<usize> = events
+        .iter()
+        .enumerate()
+        .filter(|(_, event)| {
+            is_v02(event)
+                && event["event_type"] == "browser_launch_result"
+                && event["payload"]["status"] == "failure"
+        })
+        .map(|(index, _)| index)
+        .collect();
+    for (index, event) in events.iter().enumerate() {
+        if !is_v02(event) || event["event_type"] != "tool_completed" {
+            continue;
+        }
+        let payload = event.get("payload").cloned().unwrap_or(Value::Null);
+        if contains(HOST_LANE_RETRIEVAL_TOOLS, str_of(payload.get("tool")))
+            && payload.get("status").and_then(Value::as_str) == Some("error")
+            && payload.get("error").and_then(Value::as_str) == Some("browser_launch_failed")
+            && !failure_indices.iter().any(|&fi| fi < index)
+        {
+            errors.push(format!(
+                "event {index}: {} launch failure lacks a preceding \
+                 browser_launch_result failure fact event",
+                str_of(payload.get("tool")).unwrap_or("<missing>")
+            ));
+        }
     }
     errors
 }
@@ -1418,11 +1519,13 @@ pub const S2C_FAMILIES: &[&str] = &[
     "probe_accuracy",
 ];
 
-/// All 31 families in the Python `validate_journal_text` call order
+/// All 33 families in the Python `validate_journal_text` call order
 /// (Py order; `console_order_written` retired 2026-09-06, S2d 裁决一 /
 /// ADR-0010 §14.57 — the write-order chain rule is gone on both judges and
 /// NOT converted into a negative check, so historical journals replay clean)
-/// `failure_agg_coverage` added 2026-09-08, 0q / ADR-0010 §14.63)
+/// `failure_agg_coverage` added 2026-09-08 (0q / ADR-0010 §14.63);
+/// `retrieval_enable_gate` + `browser_launch_result` added 2026-09-09
+/// (0t / ADR-0010 §14.65))
 /// — the S2d full-corpus crosscheck order.
 pub const ALL_FAMILIES: &[&str] = &[
     "inquiry_kind",
@@ -1436,6 +1539,8 @@ pub const ALL_FAMILIES: &[&str] = &[
     "output_truncation",
     "budget_cue_injected",
     "retrieval_mode",
+    "retrieval_enable_gate",
+    "browser_launch_result",
     "result_consistency",
     "reason_codes",
     "source_weighting",
@@ -1465,6 +1570,8 @@ pub fn verify_family(family: &str, events: &[Value]) -> Vec<String> {
         "ledger_fold_advance" => verify_ledger_fold_advance(events),
         "ledger_fold_write_failed" => verify_ledger_fold_write_failed(events),
         "retrieval_mode" => verify_retrieval_mode(events),
+        "retrieval_enable_gate" => verify_retrieval_enable_gate(events),
+        "browser_launch_result" => verify_browser_launch_result(events),
         "policy_denial" => verify_policy_denial(events),
         "failure_target" => verify_failure_target(events),
         "failure_agg_coverage" => verify_failure_agg_coverage(events),
@@ -4550,6 +4657,195 @@ mod tests {
                     tstart("search_replace", "c1"),
                 ],
             ),
+            // ── 0t S2-R P5（2026-09-09）：retrieval_enable_gate /
+            // browser_launch_result 两族正反例场景 ─────────────────────
+            (
+                "enable_gate_declared_dual_lane_ok",
+                vec![
+                    header_event(
+                        "initial",
+                        "H1",
+                        None,
+                        "S1",
+                        "T1",
+                        "C1",
+                        vec![
+                            "read_file",
+                            "web_search",
+                            "web_fetch",
+                            "browser_read",
+                            "browser_control",
+                        ],
+                        None,
+                    ),
+                    ev(
+                        "tool_started",
+                        json!({"tool": "web_search", "call_id": "w1", "target": "external_retrieval"}),
+                    ),
+                    ev(
+                        "tool_completed",
+                        json!({"tool": "web_search", "call_id": "w1", "target": "external_retrieval", "status": "ok"}),
+                    ),
+                    ev(
+                        "tool_started",
+                        json!({"tool": "browser_read", "call_id": "b1"}),
+                    ),
+                    ev(
+                        "browser_launch_result",
+                        json!({"attempt_id": "BLAUNCH-RUN-1-0001", "status": "success", "cause": null}),
+                    ),
+                    ev(
+                        "tool_completed",
+                        json!({"tool": "browser_read", "call_id": "b1", "status": "ok", "candidate_count": 1, "candidate_cap": 8}),
+                    ),
+                    ev(
+                        "tool_started",
+                        json!({"tool": "browser_control", "call_id": "bc1"}),
+                    ),
+                    ev(
+                        "tool_completed",
+                        json!({"tool": "browser_control", "call_id": "bc1", "status": "ok"}),
+                    ),
+                ],
+            ),
+            (
+                "enable_gate_disabled_host_dispatch",
+                vec![
+                    header_event(
+                        "initial",
+                        "H1",
+                        None,
+                        "S1",
+                        "T1",
+                        "C1",
+                        vec!["read_file", "grep"],
+                        None,
+                    ),
+                    ev(
+                        "tool_started",
+                        json!({"tool": "browser_control", "call_id": "bc1"}),
+                    ),
+                ],
+            ),
+            (
+                "enable_gate_disabled_web_dispatch",
+                vec![
+                    header_event(
+                        "initial",
+                        "H1",
+                        None,
+                        "S1",
+                        "T1",
+                        "C1",
+                        vec!["read_file"],
+                        None,
+                    ),
+                    ev(
+                        "tool_started",
+                        json!({"tool": "web_search", "call_id": "w1", "target": "external_retrieval"}),
+                    ),
+                ],
+            ),
+            (
+                "browser_launch_s1_failure_fact_ok",
+                vec![
+                    tstart("browser_read", "b1"),
+                    ev(
+                        "browser_launch_result",
+                        json!({"attempt_id": "BLAUNCH-RUN-1-0002", "status": "failure", "cause": "browser_not_found: ORZ_BROWSER_PATH unset"}),
+                    ),
+                    ev(
+                        "tool_completed",
+                        json!({"tool": "browser_read", "call_id": "b1", "status": "error", "error": "browser_launch_failed", "candidate_count": 1, "candidate_cap": 8}),
+                    ),
+                ],
+            ),
+            (
+                "browser_launch_s1_missing_fact",
+                vec![
+                    tstart("browser_read", "b1"),
+                    ev(
+                        "tool_completed",
+                        json!({"tool": "browser_read", "call_id": "b1", "status": "error", "error": "browser_launch_failed", "candidate_count": 1, "candidate_cap": 8}),
+                    ),
+                ],
+            ),
+            (
+                "browser_launch_s1_late_fact",
+                vec![
+                    tstart("browser_read", "b1"),
+                    ev(
+                        "tool_completed",
+                        json!({"tool": "browser_read", "call_id": "b1", "status": "error", "error": "browser_launch_failed", "candidate_count": 1, "candidate_cap": 8}),
+                    ),
+                    ev(
+                        "browser_launch_result",
+                        json!({"attempt_id": "BLAUNCH-RUN-1-0003", "status": "failure", "cause": "browser_not_found: ORZ_BROWSER_PATH unset"}),
+                    ),
+                ],
+            ),
+            (
+                "browser_launch_s1_control_failure_fact_ok",
+                vec![
+                    tstart("browser_control", "bc1"),
+                    ev(
+                        "browser_launch_result",
+                        json!({"attempt_id": "BLAUNCH-RUN-1-0004", "status": "failure", "cause": "browser_not_found: ORZ_BROWSER_PATH unset"}),
+                    ),
+                    ev(
+                        "tool_completed",
+                        json!({"tool": "browser_control", "call_id": "bc1", "status": "error", "error": "browser_launch_failed"}),
+                    ),
+                ],
+            ),
+            (
+                "browser_launch_s1_control_missing_fact",
+                vec![
+                    tstart("browser_control", "bc1"),
+                    ev(
+                        "tool_completed",
+                        json!({"tool": "browser_control", "call_id": "bc1", "status": "error", "error": "browser_launch_failed"}),
+                    ),
+                ],
+            ),
+            (
+                "browser_launch_s2_success_ok",
+                vec![
+                    tstart("browser_read", "b1"),
+                    ev(
+                        "browser_launch_result",
+                        json!({"attempt_id": "BLAUNCH-RUN-1-0005", "status": "success", "cause": null}),
+                    ),
+                    ev(
+                        "tool_completed",
+                        json!({"tool": "browser_read", "call_id": "b1", "status": "ok", "candidate_count": 1, "candidate_cap": 8}),
+                    ),
+                ],
+            ),
+            (
+                "browser_launch_s3_step_failed_ok",
+                vec![
+                    tstart("browser_read", "b1"),
+                    ev(
+                        "browser_launch_result",
+                        json!({"attempt_id": "BLAUNCH-RUN-1-0006", "status": "success", "cause": null}),
+                    ),
+                    ev(
+                        "tool_completed",
+                        json!({"tool": "browser_read", "call_id": "b1", "status": "error", "error": "browser_read failed [browser_read_empty_content]: page produced no readable text", "candidate_count": 1, "candidate_cap": 8}),
+                    ),
+                ],
+            ),
+            (
+                "browser_launch_s4_ready_no_fact_ok",
+                vec![
+                    tstart("browser_read", "b1"),
+                    ev(
+                        "tool_completed",
+                        json!({"tool": "browser_read", "call_id": "b1", "status": "ok", "candidate_count": 1, "candidate_cap": 8}),
+                    ),
+                ],
+            ),
         ]
     }
 
@@ -4896,6 +5192,19 @@ mod tests {
             expect(name, "plan_write");
         }
         expect("rcpt_gate_before_start", "receipt_event_isomorphism");
+        // 0t S2-R P5（2026-09-09）：retrieval_enable_gate /
+        // browser_launch_result 两族正反例期望表。
+        expect(
+            "enable_gate_disabled_host_dispatch",
+            "retrieval_enable_gate",
+        );
+        expect("enable_gate_disabled_web_dispatch", "retrieval_enable_gate");
+        expect("browser_launch_s1_missing_fact", "browser_launch_result");
+        expect("browser_launch_s1_late_fact", "browser_launch_result");
+        expect(
+            "browser_launch_s1_control_missing_fact",
+            "browser_launch_result",
+        );
         rows
     }
 
@@ -4939,10 +5248,12 @@ mod tests {
     }
 
     /// Task D acceptance: per-family verdict parity with the Python judge on
-    /// the same corpus (all 31 families since the S2d 裁决一 written-rule
-    /// retirement, ADR-0010 §14.57) — the synthetic scenarios above PLUS
-    /// every real v0.2 fixture journal. Verdict parity = (errors empty)
-    /// agrees on both sides; message text is deliberately Rust-form.
+    /// the same corpus (all 33 families since the S2d 裁决一 written-rule
+    /// retirement, ADR-0010 §14.57; +0q failure pipeline +0t retrieval gate
+    /// / browser_launch_result 两族, 2026-09-09) — the synthetic scenarios
+    /// above PLUS every real v0.2 fixture journal. Verdict parity =
+    /// (errors empty) agrees on both sides; message text is deliberately
+    /// Rust-form.
     #[test]
     fn s2b_family_verdicts_match_python() {
         // Mount-contract guard (ORZ-BUILD-MOUNT-001): the judge reads the
@@ -5025,6 +5336,8 @@ fams = {
     "output_truncation": v._verify_v02_output_truncation,
     "budget_cue_injected": v._verify_v02_budget_cue_injected,
     "retrieval_mode": v._verify_v02_retrieval_mode,
+    "retrieval_enable_gate": v._verify_v02_retrieval_enable_gate,
+    "browser_launch_result": v._verify_v02_browser_launch_result,
     "result_consistency": v._verify_v02_result_consistency,
     "reason_codes": v._verify_v02_reason_codes,
     "source_weighting": v._verify_v02_source_weighting,
@@ -5128,7 +5441,7 @@ json.dump(out, sys.stdout)
             "crosscheck cell accounting drifted"
         );
         assert_eq!(
-            scenario_count, 233,
+            scenario_count, 244,
             "synthetic scenario corpus count drifted from its registered size              ({scenario_count})"
         );
         assert!(

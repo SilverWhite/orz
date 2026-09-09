@@ -20,7 +20,6 @@ pub mod pdf_evidence;
 pub mod permission;
 pub mod project_doc_index;
 pub mod retention;
-pub mod retrieval_mode;
 pub mod session;
 pub mod stdio;
 pub mod tools;
@@ -117,10 +116,17 @@ pub struct OrzHost {
     /// owned by the tokio future, so the P0-1 timeout drop releases it
     /// automatically.
     web_search_semaphore: Arc<tokio::sync::Semaphore>,
-    /// local_browser (2026-08-10): the session's browser lane handle.
-    /// Defaults to a fail-closed [`UnavailableBrowserSession`] (probe failed
-    /// or mode ≠ local_browser); the probe injects the real manager.
-    browser: crate::local_browser::SharedBrowser,
+    /// local_browser (2026-08-10) + 0t (2026-09-09): the session's browser
+    /// lane handle — `Mutex` 使 browser_read 调用期（`&self`）可按需懒启动
+    /// 并换入真实 manager（启动/探活尝试落 `browser_launch_result` 事实
+    /// 事件）。Defaults to a fail-closed [`UnavailableBrowserSession`]。
+    browser: Arc<std::sync::Mutex<crate::local_browser::SharedBrowser>>,
+    /// S2-R P3 / P2-1（2026-09-09）：懒启动 check+launch 串行锁——首次
+    /// 并发 browser 调用的双重检查锁定：持锁期间二次检查 readiness，避免
+    /// 双调用同见 not-ready、同 profile 拉第二个 Chrome（撞 SingletonLock
+    /// 误报 `BrowserLaunchFailed`）。只串行「检查+启动」窗口；启动完成后
+    /// 的页面动作仍可并发（browser_read tab 池语义不变）。
+    browser_launch_lock: tokio::sync::Mutex<()>,
 }
 
 impl OrzHost {
@@ -227,16 +233,21 @@ impl OrzHost {
             project_doc_index: crate::project_doc_index::ProjectDocIndex::new(cwd.to_path_buf()),
             web_search_config,
             web_search_semaphore: Arc::new(tokio::sync::Semaphore::new(1)),
-            browser: Arc::new(crate::local_browser::UnavailableBrowserSession::new(
-                "no browser handle injected".to_string(),
-            )),
+            browser: Arc::new(std::sync::Mutex::new(Arc::new(
+                crate::local_browser::UnavailableBrowserSession::new(
+                    "no browser handle injected".to_string(),
+                ),
+            ))),
+            browser_launch_lock: tokio::sync::Mutex::new(()),
         })
     }
 
-    /// local_browser (2026-08-10): inject the session's browser lane handle
-    /// (the capability probe calls this with a launched manager; tests and
-    /// conformance captures inject fakes). Declaration follows readiness —
-    /// `browser_read` is only advertised when the lane is actually usable.
+    /// local_browser (2026-08-10) + 0t (2026-09-09, S2-R P3 / P2-3): inject
+    /// the session's browser lane handle (the capability probe calls this
+    /// with a launched manager; tests and conformance captures inject
+    /// fakes)。注入**不影响**声明——0t 静态双族语义下 `browser_read` 声明
+    /// 由检索启用门（`declare_browser_declared`）决定，句柄 readiness 只
+    /// 驱动调用期懒启动。
     pub fn with_browser_session(mut self, browser: crate::local_browser::SharedBrowser) -> Self {
         self.set_browser_session(browser);
         self
@@ -245,20 +256,77 @@ impl OrzHost {
     /// local_browser (2026-08-10): in-place variant for the async probe
     /// (which holds `&mut self`).
     pub fn set_browser_session(&mut self, browser: crate::local_browser::SharedBrowser) {
-        let ready = browser.ready();
-        self.registry.set_browser_ready(ready);
-        self.browser = browser;
+        *self.browser.lock().unwrap() = browser;
     }
 
-    /// Whether the browser lane is ready — drives the `browser_read` tool
-    /// declaration (same source of truth as the capability probe).
+    /// 0t (2026-09-09, ADR-0010 §14.65 / 设计 §3.1/§3.3): 检索启用会话把
+    /// `browser_read` 声明为常驻（静态双族工具面——浏览器缺席时调用按普通
+    /// 失败回传，不再以探活结果裁剪声明）。调用期懒启动成功后由
+    /// [`OrzHost::swap_browser_session`] 换入真实句柄。
+    pub fn declare_browser_declared(&mut self) {
+        self.registry.set_browser_declared(true);
+    }
+
+    /// 0t: 调用期懒启动成功后换入真实 manager（`&self` 安全——句柄在
+    /// `Mutex` 内）。
+    pub fn swap_browser_session(&self, browser: crate::local_browser::SharedBrowser) {
+        *self.browser.lock().unwrap() = browser;
+    }
+
+    /// S2-R P3 / P2-1 + P1-2b（2026-09-09）：浏览器车道懒启动——check +
+    /// launch 在 `browser_launch_lock` 内二次检查（双重检查锁定）：并发首调
+    /// 只有一个执行 probe_launch；先完成者换入真实句柄后，等待者二次检查
+    /// 见 ready、直接跳过启动（S4 无 fact）。锁在启动完成即释放，不串行
+    /// 页面动作（browser_read tab 池并发不变）。返回 `true` = 本次调用完成
+    /// 启动（调用方据此落 launch fact）。
+    async fn ensure_browser_launched(&self) -> Result<bool, ToolError> {
+        self.ensure_browser_launched_with(|cwd, session_key| {
+            let cwd = cwd.to_path_buf();
+            let session_key = session_key.to_string();
+            async move {
+                let manager = crate::local_browser::probe_launch(&cwd, &session_key).await?;
+                let shared: crate::local_browser::SharedBrowser = Arc::new(manager);
+                Ok::<_, String>(shared)
+            }
+        })
+        .await
+    }
+
+    /// S2-R P3 / P2-1 复审处理 X3（2026-09-09）：启动 seam——生产路径委托
+    /// [`crate::local_browser::probe_launch`]；测试注入计数启动器，可观测
+    /// 「并发首调同一 profile 只拉起一次」（结构正确性由串行锁 + 二次检查
+    /// 保证，此处把该语义变成可断言行为）。
+    async fn ensure_browser_launched_with<F, Fut>(&self, launch: F) -> Result<bool, ToolError>
+    where
+        F: Fn(&std::path::Path, &str) -> Fut,
+        Fut: std::future::Future<Output = Result<crate::local_browser::SharedBrowser, String>>,
+    {
+        let mut launch_attempted = false;
+        {
+            let _launch_guard = self.browser_launch_lock.lock().await;
+            if !self.browser.lock().unwrap().ready() {
+                launch_attempted = true;
+                // profile 目录键沿用既有约定：ACP 会话 id 前 8 位；CLI
+                // 一次性运行（无 live session id）用稳定 "cli"。
+                let session_key = self.session_id.clone().unwrap_or_else(|| "cli".to_string());
+                match launch(&self.cwd, &session_key).await {
+                    Ok(browser) => self.swap_browser_session(browser),
+                    Err(cause) => return Err(ToolError::BrowserLaunchFailed(cause)),
+                }
+            }
+        }
+        Ok(launch_attempted)
+    }
+
+    /// Whether the browser lane is ready——调用期懒启动的判定源（就绪则
+    /// 跳过 probe_launch，否则按需启动；不再驱动工具声明）。
     pub fn browser_ready(&self) -> bool {
-        self.browser.ready()
+        self.browser.lock().unwrap().ready()
     }
 
     /// The browser lane handle (for the probe and shutdown paths).
-    pub fn browser_session(&self) -> &crate::local_browser::SharedBrowser {
-        &self.browser
+    pub fn browser_session(&self) -> crate::local_browser::SharedBrowser {
+        self.browser.lock().unwrap().clone()
     }
 
     /// GAP-RETRIEVAL-TOOLS (2026-08-10): whether the web_search client is
@@ -499,6 +567,33 @@ use orz_loop::host::{
     RUN_TESTS_DELTA_MAX_ENTRIES, TOOL_DELTA_MAX_ENTRIES, workspace_delta_diff, workspace_delta_walk,
 };
 
+/// 0t P1-2a（2026-09-09, S2-R P2 / 设计 §3.2）：浏览器工具调用收尾装配——
+/// 启动尝试事实独立于动作结果。`launch_attempted` 由调用点如实上报：
+///
+/// - 启动成功 + 动作成功 → Ok 附带 success fact（S2，loop 在 ToolCompleted
+///   前落 `browser_launch_result`）；
+/// - 启动成功 + 动作失败 → `BrowserStepFailed` 携带 success fact（S3，新增
+///   Err 接缝，页面/导航真实错误原样进 reason，FP-2 正常回传）；
+/// - 未启动的普通失败 → 原样返回（S4，不包装）。
+///
+/// 启动失败不经本函数（调用点直接 `BrowserLaunchFailed` 返回，S1）。
+fn finish_browser_call(
+    launch_attempted: bool,
+    result: Result<ToolResult, ToolError>,
+) -> Result<ToolResult, ToolError> {
+    match (launch_attempted, result) {
+        (true, Ok(mut res)) => {
+            res.browser_launch_fact = Some(orz_loop::host::BrowserLaunchFact::success());
+            Ok(res)
+        }
+        (true, Err(e)) => Err(ToolError::BrowserStepFailed {
+            reason: e.to_string(),
+            launch_fact: orz_loop::host::BrowserLaunchFact::success(),
+        }),
+        (false, res) => res,
+    }
+}
+
 impl OrzHost {
     /// P0-C S4 (2026-08-16): shared tool-execution core with an optional
     /// per-call timeout override (script step deadlines). `None` = the
@@ -549,21 +644,25 @@ impl OrzHost {
         if name == "project_doc_index" {
             return self.project_doc_index.query(&args);
         }
-        // local_browser (2026-08-10): `browser_read` is host-owned (the
-        // browser lane is session state, not a finalized-toolset resource).
-        // The mode gate lives in the controller (`is_retrieval_mode_gated_
-        // host_tool`); here we only execute when the session carries a
-        // browser. Fail-closed: no handle → explicit error, never a stub
-        // success (ADR-0010 §3.7.2).
-        if name == "browser_read" {
-            if !self.browser.ready() {
-                return Err(ToolError::ExecutionFailed(
-                    "browser_read: browser lane not available (probe failed or \
-                     mode ≠ local_browser)"
-                        .to_string(),
-                ));
-            }
-            return crate::local_browser::handle_browser_read(self.browser.as_ref(), &args).await;
+        // local_browser (2026-08-10) + 0t (2026-09-09, ADR-0010 §14.65 /
+        // 设计 §3.3/§3.5) + S2-R P3 / P1-2b：`browser_read` / `browser_control`
+        // 是 host-owned（浏览器车道 = 会话状态）。启用门在 controller
+        // （`is_retrieval_mode_gated_host_tool`）；此处只执行——无句柄时
+        // 经 [`OrzHost::ensure_browser_launched`] 按需懒启动（P2-1 双重
+        // 检查锁定）。启动失败按普通 host 错误回传（`BrowserLaunchFailed`，
+        // loop 落 failure fact）；页面级失败走各 handler 显式错误（FP-2 正常
+        // 回传）。P1-2a：启动尝试事实独立于动作结果——启动成功但动作失败
+        // 也落 success fact（`BrowserStepFailed` 携带，设计 §3.2 场景 S3）。
+        if matches!(name, "browser_read" | "browser_control") {
+            let launch_attempted = self.ensure_browser_launched().await?;
+            let browser = self.browser.lock().unwrap().clone();
+            let result = match name {
+                "browser_read" => {
+                    crate::local_browser::handle_browser_read(browser.as_ref(), &args).await
+                }
+                _ => crate::local_browser::handle_browser_control(browser.as_ref(), &args).await,
+            };
+            return finish_browser_call(launch_attempted, result);
         }
         // PDF evidence (2026-08-11): `pdf_read` reads the local evidence
         // store — synchronous, workspace-local (project_doc_index pattern).
@@ -583,10 +682,11 @@ impl OrzHost {
             )
         {
             let url = args.get("url").and_then(|u| u.as_str()).unwrap_or_default();
+            let browser = self.browser.lock().unwrap().clone();
             return crate::pdf_evidence::handle_browser_pdf(
                 &self.cwd,
                 self.session_id.as_deref(),
-                self.browser.as_ref(),
+                browser.as_ref(),
                 url,
             )
             .await;
@@ -1392,38 +1492,79 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
-    /// local_browser (2026-08-10): the registry declares `browser_read`
-    /// ONLY when the browser lane is ready (fail-closed default), and the
-    /// host routes it to the injected browser session.
+    /// local_browser (2026-08-10) + 0t (2026-09-09, S2-R P3 / P2-3): the
+    /// registry declares `browser_read` by the 0t enable-gate declaration
+    /// bit（静态双族），NOT by lane readiness——未置位 fail-closed 默认不
+    /// 声明；置位后恒声明（浏览器缺席由调用期懒启动/普通失败回传兜底）。
     #[tokio::test]
-    async fn browser_read_declaration_follows_browser_ready() {
-        // Default registry: not ready → not declared.
+    async fn browser_read_declaration_follows_enable_gate_bit() {
         let mut registry = ToolsetRegistry::new(shared_toolset().clone());
+        // Default: 启用门未置位 → 不声明（fail-closed）。
         assert!(registry.get("browser_read").is_none());
+        assert!(registry.get("browser_control").is_none());
         assert!(!registry.list().iter().any(|d| d.name == "browser_read"));
-        // Flip ready → declared (declaration and probe are one source).
-        registry.set_browser_ready(true);
+        assert!(!registry.list().iter().any(|d| d.name == "browser_control"));
+        // 置位 → 恒声明。
+        registry.set_browser_declared(true);
         assert!(registry.get("browser_read").is_some());
+        assert!(registry.get("browser_control").is_some());
         assert!(registry.list().iter().any(|d| d.name == "browser_read"));
-        // Flip back → gone again.
-        registry.set_browser_ready(false);
+        assert!(registry.list().iter().any(|d| d.name == "browser_control"));
+        // 复位 → 移除。
+        registry.set_browser_declared(false);
         assert!(registry.get("browser_read").is_none());
+        assert!(registry.get("browser_control").is_none());
     }
 
-    /// local_browser (2026-08-10): `call_tool("browser_read")` routes to the
-    /// injected browser session; without a ready lane it fails explicitly
-    /// (never a silent stub success — ADR-0010 §3.7.2).
+    /// 0t (2026-09-09, S2-R P3 / P2-3)：句柄注入不翻转声明位——未启用
+    /// 会话注入 ready 句柄仍不声明 browser_read（fail-closed 面由启用门
+    /// 决定）；启用会话的声明由 `declare_browser_declared` 置位、与注入
+    /// 次序无关。
     #[tokio::test]
-    async fn call_browser_read_routes_to_session_and_fails_closed() {
+    async fn browser_session_injection_does_not_flip_declaration() {
         let dir = test_dir();
-
-        // Fail-closed default: no handle injected → explicit error.
         let host = OrzHost::new(
             JournalRecorder::new(dir.clone()),
             &dir,
             WorkspaceTrust::ObservedTrusted,
         )
         .unwrap();
+        let stub = crate::local_browser::tests::ready_stub_browser();
+        let mut host = host.with_browser_session(stub);
+        // 注入 ready 句柄本身不得翻转声明（未置位仍不声明）。
+        assert!(
+            host.registry.get("browser_read").is_none(),
+            "handle injection must not flip the declaration bit"
+        );
+        // 启用门置位后经 registry 声明。
+        host.declare_browser_declared();
+        assert!(
+            host.registry.get("browser_read").is_some(),
+            "enable-gate declaration must expose browser_read via the registry"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// local_browser (2026-08-10) + 0t (2026-09-09, ADR-0010 §14.65 /
+    /// 设计 §3.3/§3.5): `call_tool("browser_read")` routes to the injected
+    /// browser session; 无句柄时调用期懒启动——启动失败按普通 host 错误
+    /// 回传（`BrowserLaunchFailed`，真实原因），成功则完成读取。
+    #[tokio::test]
+    async fn call_browser_read_routes_to_session_and_fails_closed() {
+        let dir = test_dir();
+
+        // 无句柄 + 浏览器发现失败（ORZ_BROWSER_PATH 指向不存在文件）→
+        // BrowserLaunchFailed 携带真实原因（never a silent stub success）。
+        let host = OrzHost::new(
+            JournalRecorder::new(dir.clone()),
+            &dir,
+            WorkspaceTrust::ObservedTrusted,
+        )
+        .unwrap();
+        let missing = dir.join("no-such-browser.exe");
+        // SAFETY: test-only env mutation; the real-browser tests read it
+        // through find_browser which tolerates concurrent set/remove.
+        unsafe { std::env::set_var(crate::local_browser::ORZ_BROWSER_PATH_ENV, &missing) };
         let err = host
             .call_tool(
                 "browser_read",
@@ -1432,8 +1573,10 @@ mod tests {
             )
             .await
             .unwrap_err();
+        unsafe { std::env::remove_var(crate::local_browser::ORZ_BROWSER_PATH_ENV) };
         assert!(
-            err.to_string().contains("browser lane not available"),
+            err.to_string().contains("browser launch failed")
+                && err.to_string().contains("browser_not_found"),
             "{err}"
         );
 
@@ -1459,6 +1602,281 @@ mod tests {
         assert!(result.output.contains("hello page"), "{}", result.output);
 
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// S2-R P3 / P2-1（2026-09-09）：懒启动 check+launch 串行锁烟雾——
+    /// 并发首调 browser_read 不得死锁、不得误报；浏览器不可用时双双按
+    /// `BrowserLaunchFailed` 普通失败（真实原因），Ready 场景并发成功。
+    /// 「同一 profile 只拉起一次」的可观测断言由
+    /// `concurrent_first_launch_invokes_probe_once`（launch seam 计数）
+    /// 覆盖（X3 补强，2026-09-09 复审处理）。
+    #[tokio::test]
+    async fn concurrent_browser_read_lazy_launch_does_not_deadlock() {
+        let _env_lock = crate::tests::tests_env_lock().lock().await;
+        let dir = test_dir();
+        let host = OrzHost::new(
+            JournalRecorder::new(dir.clone()),
+            &dir,
+            WorkspaceTrust::ObservedTrusted,
+        )
+        .unwrap();
+        let missing = dir.join("no-such-browser.exe");
+        // SAFETY: test-only env mutation (find_browser tolerates concurrent
+        // set/remove; the env lock above keeps cross-test races out).
+        unsafe { std::env::set_var(crate::local_browser::ORZ_BROWSER_PATH_ENV, &missing) };
+        let (a, b) = tokio::join!(
+            host.call_tool(
+                "browser_read",
+                serde_json::json!({"url": "https://example.com"}),
+                "c-race-a",
+            ),
+            host.call_tool(
+                "browser_read",
+                serde_json::json!({"url": "https://example.com"}),
+                "c-race-b",
+            ),
+        );
+        unsafe { std::env::remove_var(crate::local_browser::ORZ_BROWSER_PATH_ENV) };
+        for err in [a, b] {
+            let err = err.expect_err("both calls must fail explicitly");
+            assert!(err.to_string().contains("browser launch failed"), "{err}");
+        }
+
+        // Ready 场景：注入 stub 后并发调用都成功（锁不串行页面动作）。
+        let stub = crate::local_browser::tests::ready_stub_browser();
+        let host = OrzHost::new(
+            JournalRecorder::new(dir.clone()),
+            &dir,
+            WorkspaceTrust::ObservedTrusted,
+        )
+        .unwrap()
+        .with_browser_session(stub);
+        let (a, b) = tokio::join!(
+            host.call_tool(
+                "browser_read",
+                serde_json::json!({"url": "https://example.com"}),
+                "c-race-ok-a",
+            ),
+            host.call_tool(
+                "browser_read",
+                serde_json::json!({"url": "https://example.com"}),
+                "c-race-ok-b",
+            ),
+        );
+        assert_eq!(a.expect("ok a").exit_code, Some(0));
+        assert_eq!(b.expect("ok b").exit_code, Some(0));
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// S2-R P3 / P2-1 复审处理 X3（2026-09-09）：并发首调成功启动只发生
+    /// 一次——launch seam 计数 + 双重检查语义：先完成者换入 ready 句柄，
+    /// 等待者二次检查见 ready 直接跳过（返回 false）；随后 ready 会话的
+    /// 并发调用零启动。
+    #[tokio::test]
+    async fn concurrent_first_launch_invokes_probe_once() {
+        let _env_lock = crate::tests::tests_env_lock().lock().await;
+        let dir = test_dir();
+        let host = OrzHost::new(
+            JournalRecorder::new(dir.clone()),
+            &dir,
+            WorkspaceTrust::ObservedTrusted,
+        )
+        .unwrap();
+        let launches = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let stub = crate::local_browser::tests::ready_stub_browser();
+        let (a, b) = tokio::join!(
+            host.ensure_browser_launched_with(|_cwd, _session| {
+                let launches = launches.clone();
+                let stub = stub.clone();
+                async move {
+                    launches.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                    Ok::<_, String>(stub)
+                }
+            }),
+            host.ensure_browser_launched_with(|_cwd, _session| {
+                let launches = launches.clone();
+                let stub = stub.clone();
+                async move {
+                    launches.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                    Ok::<_, String>(stub)
+                }
+            }),
+        );
+        assert!(
+            a.expect("first caller must launch"),
+            "first caller must attempt the launch"
+        );
+        assert!(
+            !b.expect("second caller must not fail"),
+            "second caller must see the ready handle and skip the launch"
+        );
+        assert_eq!(
+            launches.load(std::sync::atomic::Ordering::SeqCst),
+            1,
+            "the same profile must only be launched once under concurrent first calls"
+        );
+
+        // Ready 会话并发调用：零启动（既有调用直接走 ready 分支，S4 无
+        // launch fact 的 host 侧同源语义）。
+        let (c, d) = tokio::join!(
+            host.ensure_browser_launched_with(|_cwd, _session| {
+                let launches = launches.clone();
+                let stub = stub.clone();
+                async move {
+                    launches.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                    Ok::<_, String>(stub)
+                }
+            }),
+            host.ensure_browser_launched_with(|_cwd, _session| {
+                let launches = launches.clone();
+                let stub = stub.clone();
+                async move {
+                    launches.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                    Ok::<_, String>(stub)
+                }
+            }),
+        );
+        assert!(!c.expect("ready call c"), "ready calls must not launch");
+        assert!(!d.expect("ready call d"), "ready calls must not launch");
+        assert_eq!(
+            launches.load(std::sync::atomic::Ordering::SeqCst),
+            1,
+            "ready-lane concurrent calls must not launch the browser"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// S2-R P3 / P1-2b：`browser_control` 经 host `call_tool` 路由到会话层
+    /// 控制 stub——ready 场景正常返回动作信封（懒启动跳过，无 launch
+    /// fact）；未注入句柄 + 浏览器发现失败按 `BrowserLaunchFailed` 普通
+    /// 失败回传（与 browser_read 同懒启动路径）。
+    #[tokio::test]
+    async fn call_browser_control_routes_to_session_and_fails_closed() {
+        let _env_lock = crate::tests::tests_env_lock().lock().await;
+        let dir = test_dir();
+        let host = OrzHost::new(
+            JournalRecorder::new(dir.clone()),
+            &dir,
+            WorkspaceTrust::ObservedTrusted,
+        )
+        .unwrap();
+        let missing = dir.join("no-such-browser.exe");
+        // SAFETY: test-only env mutation (find_browser tolerates concurrent
+        // set/remove; the env lock above keeps cross-test races out).
+        unsafe { std::env::set_var(crate::local_browser::ORZ_BROWSER_PATH_ENV, &missing) };
+        let err = host
+            .call_tool(
+                "browser_control",
+                serde_json::json!({"action": "navigate", "url": "https://example.com"}),
+                "call-ctrl-1",
+            )
+            .await
+            .unwrap_err();
+        unsafe { std::env::remove_var(crate::local_browser::ORZ_BROWSER_PATH_ENV) };
+        assert!(err.to_string().contains("browser launch failed"), "{err}");
+
+        // Ready stub → 正常信封回传（stub 默认 idle outcome）。
+        let stub = crate::local_browser::tests::ready_stub_browser();
+        let host = OrzHost::new(
+            JournalRecorder::new(dir.clone()),
+            &dir,
+            WorkspaceTrust::ObservedTrusted,
+        )
+        .unwrap()
+        .with_browser_session(stub);
+        let result = host
+            .call_tool(
+                "browser_control",
+                serde_json::json!({"action": "snapshot"}),
+                "call-ctrl-2",
+            )
+            .await
+            .unwrap();
+        assert_eq!(result.exit_code, Some(0));
+        assert!(
+            result.browser_launch_fact.is_none(),
+            "ready lane must not emit a launch fact (S4)"
+        );
+        let parsed: serde_json::Value = serde_json::from_str(&result.output).unwrap();
+        assert_eq!(parsed["action"], "snapshot");
+        assert_eq!(parsed["action_status"], "ok");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// 0t P1-2a（2026-09-09, S2-R P2 / 设计 §3.2）：浏览器调用收尾装配——
+    /// 启动尝试事实独立于动作结果。确定性覆盖三臂：
+    /// S2 启动成功 + 动作成功 → Ok 附 success fact；
+    /// S3 启动成功 + 动作失败 → `BrowserStepFailed` 携带 success fact（真实
+    /// 原因进 reason，不吞错）；
+    /// S4 未启动 + 普通失败 → 原样返回（不包装）。
+    #[test]
+    fn finish_browser_call_attaches_launch_fact_on_success_or_step_failure() {
+        use orz_loop::host::BrowserLaunchFact;
+
+        // S2: launch attempted + Ok → success fact attached。
+        let res = finish_browser_call(
+            true,
+            Ok(ToolResult {
+                output: "page text".to_string(),
+                exit_code: Some(0),
+                ..Default::default()
+            }),
+        )
+        .expect("S2 ok");
+        assert_eq!(res.browser_launch_fact, Some(BrowserLaunchFact::success()));
+
+        // S3: launch attempted + Err → BrowserStepFailed 携带 success fact，
+        // reason 保留页面层真实错误文本。
+        let err = finish_browser_call(
+            true,
+            Err(ToolError::ExecutionFailed(
+                "browser_read failed [browser_read_empty_content]: page produced \
+                 no readable text"
+                    .to_string(),
+            )),
+        )
+        .expect_err("S3 err");
+        match &err {
+            ToolError::BrowserStepFailed {
+                reason,
+                launch_fact,
+            } => {
+                assert!(
+                    reason.contains("browser_read_empty_content"),
+                    "real page-level cause preserved: {reason}"
+                );
+                assert_eq!(*launch_fact, BrowserLaunchFact::success());
+            }
+            other => panic!("expected BrowserStepFailed, got {other:?}"),
+        }
+
+        // S4: no launch attempted + Err → unchanged（不包装）。
+        let err = finish_browser_call(
+            false,
+            Err(ToolError::ExecutionFailed(
+                "browser_read failed [browser_read_missing_url]: ...".to_string(),
+            )),
+        )
+        .expect_err("S4 err");
+        assert!(
+            matches!(err, ToolError::ExecutionFailed(_)),
+            "unlaunched failures must not be wrapped: {err:?}"
+        );
+
+        // S4: no launch attempted + Ok → unchanged, no fact。
+        let res = finish_browser_call(
+            false,
+            Ok(ToolResult {
+                output: "page text".to_string(),
+                exit_code: Some(0),
+                ..Default::default()
+            }),
+        )
+        .expect("S4 ok");
+        assert!(res.browser_launch_fact.is_none());
     }
 
     /// PDF evidence (2026-08-11): `call_tool("web_fetch", whitelisted url)`
@@ -1765,14 +2183,7 @@ mod tests {
         // 默认 shadow；生产默认 fail-closed 在下游 crate 测试编译时生效。
         let controller = orz_loop::AgentLoopController::with_gateway(gateway)
             .with_acaf_fail_closed(false)
-            .with_retrieval_mode(
-                orz_loop::controller::RetrievalMode::FrameworkFallback,
-                orz_loop::controller::RetrievalCapability::Available,
-                false,
-                None,
-                None,
-                None,
-            );
+            .with_retrieval_enabled(true);
         controller
             .run_turn(
                 &host,

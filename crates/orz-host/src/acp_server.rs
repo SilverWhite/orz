@@ -235,12 +235,13 @@ struct StoredSession {
     /// sidecar; only an actual fire resets it). Taken out during a run,
     /// written back afterwards.
     orientation: Option<OrientationSessionState>,
-    /// GAP-RETRIEVAL-TOOLS (2026-08-10): the retrieval-mode + activation
-    /// snapshot (ADR-0010 §3.7.1/§3.3) — persisted across prompts AND
-    /// process restarts via `{cwd}/.gsa/activations/<session8>.json`.
-    /// Taken out during a run, written back afterwards (orientation
-    /// pattern). S2 carries the mode; per-role activation state rides the
-    /// same file (S4).
+    /// GAP-RETRIEVAL-TOOLS (2026-08-10) + 0t (2026-09-09, ADR-0010 §14.65):
+    /// the retrieval enable-gate + activation snapshot — persisted across
+    /// prompts AND process restarts via
+    /// `{cwd}/.gsa/activations/<session8>.json`. Taken out during a run,
+    /// written back afterwards (orientation pattern). 三值检索模式已退役，
+    /// 快照只承载独立启用门（retrieval_enabled）；per-role activation
+    /// state rides the same file (S4).
     activation_snapshot: Option<StoredActivationSnapshot>,
     /// local_browser (2026-08-10): the session's browser lane handle —
     /// survives across runs (the process stays up on its isolated profile;
@@ -258,9 +259,11 @@ struct StoredSession {
     continuation: Option<StoredConversation>,
 }
 
-/// GAP-RETRIEVAL-TOOLS (2026-08-10): the persisted retrieval-mode +
-/// activation snapshot. S2 (mode slice) persists `retrieval_mode` and
-/// `bootstrap_transition_pending`; S4 (activation persistence) fills
+/// GAP-RETRIEVAL-TOOLS (2026-08-10) + 0t (2026-09-09, ADR-0010 §14.65):
+/// the persisted retrieval enable-gate + activation snapshot. 三值检索模式
+/// γ 退役后只持久化 `retrieval_enabled`（独立启用门）；旧侧车中的
+/// `retrieval_mode` 字段经 [`legacy_retrieval_mode`] 兼容读取（非 off 旧值
+/// ⇒ 启用），新写不再产出该字段。S4 (activation persistence) fills
 /// `next_seq`/`activations`. Same sidecar discipline as the orientation
 /// counter: best-effort persist, corrupt → warn, take-out only after every
 /// fallible step.
@@ -268,19 +271,18 @@ struct StoredSession {
 struct StoredActivationSnapshot {
     schema_version: String,
     session_id: String,
-    retrieval_mode: RetrievalMode,
-    bootstrap_transition_pending: bool,
-    /// M4 (review 2026-08-10): the persisted mode BEFORE a pending explicit
-    /// selection — the transition journal reads it as the real `old_mode`.
-    /// Cleared once the controller journaled the transition.
+    /// 0t: 独立检索启用门（默认 false = fail-closed）。旧侧车（无此字段）
+    /// 由 [`load_activation_sidecar`] 按 legacy `retrieval_mode` 归一化。
     #[serde(default)]
-    previous_retrieval_mode: Option<RetrievalMode>,
-    /// RETRIEVAL-SUBAGENT-WIRING 审查处理 (2026-08-25)：模式 A 机械降级
-    /// 的 pending transition 元数据（authority, reason_code）——降级改写
-    /// 快照时落盘，controller journal 成功后清除；防止「降级后本次 run 在
-    /// journal 前失败、下轮重试退化为 session_bootstrap」丢失机械元数据。
-    #[serde(default)]
-    pending_transition_authority: Option<(String, String)>,
+    retrieval_enabled: bool,
+    /// DEPRECATED 兼容字段：只读旧侧车的 `retrieval_mode` 旧值；新侧车
+    /// 不写（skip_serializing_if）。不再有 lane 语义，仅用于启用门归一化。
+    #[serde(
+        default,
+        rename = "retrieval_mode",
+        skip_serializing_if = "Option::is_none"
+    )]
+    legacy_retrieval_mode: Option<RetrievalMode>,
     /// S4: per-role activation sequence counters (`activation_id` suffixes).
     #[serde(default)]
     next_seq: HashMap<String, u32>,
@@ -302,39 +304,13 @@ impl StoredActivationSnapshot {
         StoredActivationSnapshot {
             schema_version: "0.1.0-draft".to_string(),
             session_id: session_id.to_string(),
-            retrieval_mode: RetrievalMode::Off,
-            bootstrap_transition_pending: false,
-            previous_retrieval_mode: None,
-            pending_transition_authority: None,
+            retrieval_enabled: false,
+            legacy_retrieval_mode: None,
             next_seq: HashMap::new(),
             activations: Vec::new(),
             internal_ret: None,
             external_ret: None,
         }
-    }
-}
-
-/// RETRIEVAL-SUBAGENT-WIRING 审查处理：把共享 probe 结果应用到会话快照
-/// ——模式 A 降级时改写模式 + 置 bootstrap transition pending + 落盘机械
-/// 元数据（authority/reason_code，防「run 在 journal 前失败、下轮重试退化
-/// 为 session_bootstrap」丢失元数据）。
-fn apply_mode_a_outcome_to_snapshot(
-    snapshot: &mut StoredActivationSnapshot,
-    outcome: &crate::retrieval_mode::ModeAProbeOutcome,
-) {
-    if outcome.degraded {
-        snapshot.retrieval_mode = outcome.effective_mode;
-        snapshot.previous_retrieval_mode = outcome.previous_mode;
-        snapshot.bootstrap_transition_pending = true;
-        snapshot.pending_transition_authority = Some((
-            "mechanical_probe".to_string(),
-            "browser_launch_failed".to_string(),
-        ));
-        tracing::warn!(
-            "retrieval mode A auto-degrade: local_browser unavailable \
-             (browser_launch_failed) -> framework_fallback; transition \
-             journaled at next run start"
-        );
     }
 }
 
@@ -354,16 +330,34 @@ fn activation_sidecar_path(base_dir: &Path, session_id: &str) -> PathBuf {
 fn load_activation_sidecar(base_dir: &Path, session_id: &str) -> Option<StoredActivationSnapshot> {
     let path = activation_sidecar_path(base_dir, session_id);
     match std::fs::read_to_string(&path) {
-        Ok(text) => match serde_json::from_str(&text) {
-            Ok(state) => Some(state),
-            Err(e) => {
-                tracing::warn!(
-                    "activation sidecar corrupt ({}): {e} — starting fresh",
-                    path.display()
-                );
-                None
+        Ok(text) => {
+            let raw: Option<serde_json::Value> = serde_json::from_str(&text).ok();
+            let has_explicit_enable = raw
+                .as_ref()
+                .and_then(|v| v.get("retrieval_enabled"))
+                .is_some();
+            match serde_json::from_str::<StoredActivationSnapshot>(&text) {
+                Ok(mut state) => {
+                    // 0t (ADR-0010 §14.65): 旧侧车（无 retrieval_enabled 字段）
+                    // 按 legacy retrieval_mode 归一化启用门——非 off 旧值 ⇒
+                    // enabled（值不再区分车道）。
+                    if !has_explicit_enable {
+                        state.retrieval_enabled = state
+                            .legacy_retrieval_mode
+                            .as_ref()
+                            .is_some_and(|m| m.enables_retrieval());
+                    }
+                    Some(state)
+                }
+                Err(e) => {
+                    tracing::warn!(
+                        "activation sidecar corrupt ({}): {e} — starting fresh",
+                        path.display()
+                    );
+                    None
+                }
             }
-        },
+        }
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
         Err(e) => {
             tracing::warn!(
@@ -1098,24 +1092,23 @@ impl AcpServer {
         trust_policy: crate::session::TrustPolicy,
         policy: PermissionPolicy,
     ) -> Result<serde_json::Value, AcpError> {
-        self.handle_session_new_with_options(session_id, base_dir, trust_policy, policy, None)
+        self.handle_session_new_with_options(session_id, base_dir, trust_policy, policy, false)
             .await
     }
 
-    /// GAP-RETRIEVAL-TOOLS (2026-08-10): `retrieval_mode` is the
-    /// session-level explicit mode (ADR-0010 §3.7.1 — `Some` = explicit user
-    /// / parent-task-contract selection; `None` = the `off` default). An
-    /// explicit selection different from the persisted mode marks a bootstrap
-    /// transition pending (journaled on the next run's startup). The
-    /// activation sidecar (mode + per-role activations) resumes across
-    /// process restarts.
+    /// 0t (2026-09-09, ADR-0010 §14.65 / 设计 §3.1): `retrieval_enabled` 是
+    /// 会话级独立启用门（三值检索模式退役后唯一授权状态；`false` 默认 =
+    /// fail-closed）。orz-bin env/CLI 与 stdio/TUI 入口把旧 `retrieval_mode`
+    /// 兼容解析映射为 bool 后传入（旧值不再有 lane 语义）。The activation
+    /// sidecar (enable gate + per-role activations) resumes across process
+    /// restarts.
     pub async fn handle_session_new_with_options(
         &self,
         session_id: &str,
         base_dir: Option<PathBuf>,
         trust_policy: crate::session::TrustPolicy,
         policy: PermissionPolicy,
-        retrieval_mode: Option<RetrievalMode>,
+        retrieval_enabled: bool,
     ) -> Result<serde_json::Value, AcpError> {
         // Journals are created per-run at `session/prompt` time — the session
         // itself only records where, under what trust policy, and under what
@@ -1127,22 +1120,13 @@ impl AcpServer {
         // at 0.
         let orientation = load_orientation_sidecar(&base, session_id)
             .unwrap_or_else(|| OrientationSessionState::new(session_id));
-        // GAP-RETRIEVAL-TOOLS: resume the activation sidecar; an explicit
-        // mode selection that differs from the persisted mode marks a
-        // bootstrap transition pending (off → mode, journaled once).
+        // GAP-RETRIEVAL-TOOLS + 0t: resume the activation sidecar; an
+        // explicit enable selection overrides the persisted gate (no
+        // transition journaling — 三值模式退役，mode transition 事件族不再
+        // 产出)。
         let mut activation_snapshot = load_activation_sidecar(&base, session_id)
             .unwrap_or_else(|| StoredActivationSnapshot::for_session(session_id));
-        if let Some(mode) = retrieval_mode
-            && mode != activation_snapshot.retrieval_mode
-        {
-            // M4 (review 2026-08-10): every explicit mode change journals —
-            // including a change TO off (a transition like any other,
-            // §3.7.1 "never implicit"); the previous persisted mode is
-            // carried as the transition's real old_mode.
-            activation_snapshot.previous_retrieval_mode = Some(activation_snapshot.retrieval_mode);
-            activation_snapshot.retrieval_mode = mode;
-            activation_snapshot.bootstrap_transition_pending = true;
-        }
+        activation_snapshot.retrieval_enabled = retrieval_enabled;
         // GAP-CONVERSATION-RESTORE + P2-13 B1: resume the full continuation
         // envelope (conversation + 黑板 live 视图 + LIF 会话轴) when a
         // previous process left one (cross-process continuation); a
@@ -1173,6 +1157,24 @@ impl AcpServer {
             "session_id": session_id,
             "status": "created",
         }))
+    }
+
+    /// P1-1（2026-09-09, S2-R P2）：run 收尾把 host 内**存活**的浏览器句柄
+    /// 回写会话，供下个 prompt 复用。只在 `ready()` 时覆盖——未启动/已死
+    /// 句柄不得替换先前 ready 句柄（浏览器进程由会话 Arc 持有，host drop
+    /// 只释放本 run 引用，不杀进程）。独立成函数以便确定性单测 ready 判定
+    /// 与覆盖语义（真实「run 中懒启动换入 → 回写」依赖检索子代理链路 +
+    /// 真实浏览器，属 S4 宿主机实测载体，P9）。
+    fn fold_back_browser(
+        sessions: &Mutex<HashMap<String, StoredSession>>,
+        session_id: &str,
+        live: crate::local_browser::SharedBrowser,
+    ) {
+        if live.ready()
+            && let Some(session) = sessions.lock().unwrap().get_mut(session_id)
+        {
+            session.browser = Some(live);
+        }
     }
 
     /// Handle a `session/prompt` request.
@@ -1353,37 +1355,21 @@ impl AcpServer {
         {
             host.set_browser_session(browser);
         }
-        // RETRIEVAL-SUBAGENT-WIRING (2026-08-25, ADR-0010 §14.40)：外部
-        // 子代理=模式 A 自动定档（共享入口 retrieval_mode::probe_retrieval_
-        // with_mode_a）——local_browser probe 失败（浏览器启动失败）机械
-        // 降级 framework_fallback：改写快照模式 + 置 bootstrap transition
-        // pending + 落盘机械元数据（authority/reason，防跨 run 重试丢失）。
-        // 降级后 capability 已由共享入口以 framework_fallback 的真实能力
-        // 重探（transition 的 capability_status 不残留浏览器失败原因）。
-        let mode_a_outcome = crate::retrieval_mode::probe_retrieval_with_mode_a(
-            activation_snapshot.retrieval_mode,
-            host.web_search_configured(),
-            &mut host,
-            &base_dir,
-            session_id,
-        )
-        .await;
-        apply_mode_a_outcome_to_snapshot(&mut activation_snapshot, &mode_a_outcome);
+        // 0t (2026-09-09, ADR-0010 §14.65 / 设计 §3.1): 检索启用会话把
+        // browser_read 声明为常驻（静态双族工具面）——无持久句柄时也
+        // 声明；调用期按需懒启动（§3.3/§3.5）。
+        if activation_snapshot.retrieval_enabled {
+            host.declare_browser_declared();
+        }
+        // 0t (2026-09-09, ADR-0010 §14.65 / 设计 §3.3): 模式 A 机械 probe/
+        // 降级整体退役——不再在 run 启动期拉起浏览器或做 capability 定档；
+        // 浏览器可用性是纯事件事实（browser_launch_result），browser_read
+        // 调用期按普通失败回传（§3.4），换道由模型自主。
         // GAP-RETRIEVAL-TOOLS (S4): seed the activation registry from the
         // sidecar — a cross-run AwaitingDisposition activation is restored
-        // and journaled (the parent may dispose it in this run). 序列化在
-        // 模式 A 降级之后——controller 拿到的是降级后的快照（retrieval_mode
-        // = framework_fallback + bootstrap_transition_pending=true）。
+        // and journaled (the parent may dispose it in this run).
         let activation_snapshot_json =
             serde_json::to_value(&activation_snapshot).unwrap_or(serde_json::Value::Null);
-        // Freshly-launched browser (the probe injected it): persist the
-        // handle back onto the session so it survives across runs. An
-        // existing handle is never replaced.
-        if let Some(session) = self.sessions.lock().unwrap().get_mut(session_id)
-            && session.browser.is_none()
-        {
-            session.browser = Some(host.browser_session().clone());
-        }
         let controller = AgentLoopController::with_gateway(self.model_gateway.clone())
             // THIN-HARNESS-REDESIGN R2a 审查处理 (2026-08-27, 实际使用
             // 裁决)：plan 门为普适删减——ACP 交互会话面与 CLI 一致不再
@@ -1400,14 +1386,8 @@ impl AcpServer {
             // path (previously the ACP path ran unticketed).
             .with_acaf(self.acaf.clone())
             .with_acaf_fail_closed(self.acaf_fail_closed)
-            .with_retrieval_mode(
-                activation_snapshot.retrieval_mode,
-                mode_a_outcome.capability,
-                activation_snapshot.bootstrap_transition_pending,
-                Some(session_id.to_string()),
-                activation_snapshot.previous_retrieval_mode.clone(),
-                activation_snapshot.pending_transition_authority.clone(),
-            )
+            .with_retrieval_enabled(activation_snapshot.retrieval_enabled)
+            .with_session_id(Some(session_id.to_string()))
             .with_activation_snapshot(Some(&activation_snapshot_json))
             // P2-13 B1 (2026-09-03)：会话级 live 黑板续载——上个成功
             // prompt 的整板快照灌回（含 exec/edits/tool_actions/actions
@@ -1470,19 +1450,9 @@ impl AcpServer {
         if let Some(session) = self.sessions.lock().unwrap().get_mut(session_id) {
             session.orientation = Some(orientation);
         }
-        // GAP-RETRIEVAL-TOOLS: persist the activation snapshot (mode +
-        // pending + activations). The bootstrap transition flag clears once
-        // the controller journaled it (the transition is written exactly
-        // once; a failed run before it keeps the flag for the next prompt).
-        if controller.bootstrap_transition_journaled() {
-            activation_snapshot.bootstrap_transition_pending = false;
-            // M4: the transition's old_mode is consumed — the next change
-            // records its own previous value.
-            activation_snapshot.previous_retrieval_mode = None;
-            // RETRIEVAL-SUBAGENT-WIRING 审查处理：pending 机械元数据随
-            // transition 消费清除（已落盘的 authority/reason 不再保留）。
-            activation_snapshot.pending_transition_authority = None;
-        }
+        // GAP-RETRIEVAL-TOOLS + 0t: persist the activation snapshot
+        // (enable gate + activations + retrieval partitions)。三值模式退役
+        // 后无 bootstrap/mode-transition 状态待清。
         // S4: fold the controller's live registry back into the snapshot
         // (next_seq + non-Closed activations; Closed excluded).
         let live = controller.activation_snapshot_json(&handle.run_id);
@@ -1570,6 +1540,13 @@ impl AcpServer {
         // 收尾、成功路径的 sidecar 已同步落盘；失败/取消路径不更新
         // sidecar，存档最近一次成功内容）。会话未被 close（无票）= 无操作。
         self.take_deferred_archive(session_id);
+        // P1-1（2026-09-09, S2-R P2）：浏览器生命周期跨 prompt 复用——run
+        // 内懒启动换入的真实句柄在 host drop 前回写会话（host 每次 prompt
+        // 新建；run 前不再预存默认 unavailable 句柄，见审查处理 §2 P1-1）。
+        // 只在 ready 时回写：未启动/已死句柄不得覆盖先前 ready 句柄。浏览器
+        // 进程由会话持有（Arc），host drop 只释放本 run 的引用、不杀进程；
+        // 下个 prompt 经上方 re-inject 复用同一进程（§3.5 宿主机日常可用）。
+        Self::fold_back_browser(&self.sessions, session_id, host.browser_session());
 
         match run_result {
             Ok((response, _, _)) => {
@@ -2095,16 +2072,12 @@ impl LoopHost for JournalOnlyHost {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::local_browser::ORZ_BROWSER_PATH_ENV;
     use crate::permission::dead_gateway;
-    use crate::retrieval_mode::probe_retrieval_capability;
     use crate::stdio::StdioAgentHandler;
     use agent_client_protocol as acp;
     use agent_client_protocol::MessageHandler;
     use orz_assurance::EventType;
-    use orz_assurance::gates::ipg::WorkspaceTrust;
     use orz_loop::controller::AgentLoopError;
-    use orz_loop::controller::RetrievalCapability;
     use orz_loop::gateway::fake::ScriptedResponse;
     use orz_loop::gateway::model::ToolCall;
     use std::path::{Path, PathBuf};
@@ -2204,55 +2177,6 @@ mod tests {
         dir
     }
 
-    /// RETRIEVAL-SUBAGENT-WIRING 审查处理 (2026-08-25)：模式 A 降级结果
-    /// 应用到会话快照——改写模式 + transition pending + 机械元数据落盘；
-    /// 未降级时快照不动。降级决策规则本体在
-    /// `retrieval_mode::mode_a_degrade_rules`（共享入口，ACP/CLI 共用）。
-    #[test]
-    fn mode_a_outcome_applies_to_snapshot() {
-        // 降级 → 快照改写 + pending + 机械元数据。
-        let mut snap = StoredActivationSnapshot::for_session("sess-a");
-        snap.retrieval_mode = RetrievalMode::LocalBrowser;
-        apply_mode_a_outcome_to_snapshot(
-            &mut snap,
-            &crate::retrieval_mode::ModeAProbeOutcome {
-                effective_mode: RetrievalMode::FrameworkFallback,
-                capability: RetrievalCapability::Available,
-                previous_mode: Some(RetrievalMode::LocalBrowser),
-                degraded: true,
-            },
-        );
-        assert_eq!(snap.retrieval_mode, RetrievalMode::FrameworkFallback);
-        assert_eq!(
-            snap.previous_retrieval_mode,
-            Some(RetrievalMode::LocalBrowser)
-        );
-        assert!(snap.bootstrap_transition_pending);
-        assert_eq!(
-            snap.pending_transition_authority,
-            Some((
-                "mechanical_probe".to_string(),
-                "browser_launch_failed".to_string()
-            ))
-        );
-
-        // 未降级 → 快照不动（显式选择路径语义不变）。
-        let mut snap = StoredActivationSnapshot::for_session("sess-b");
-        snap.retrieval_mode = RetrievalMode::LocalBrowser;
-        apply_mode_a_outcome_to_snapshot(
-            &mut snap,
-            &crate::retrieval_mode::ModeAProbeOutcome {
-                effective_mode: RetrievalMode::LocalBrowser,
-                capability: RetrievalCapability::Available,
-                previous_mode: None,
-                degraded: false,
-            },
-        );
-        assert_eq!(snap.retrieval_mode, RetrievalMode::LocalBrowser);
-        assert!(!snap.bootstrap_transition_pending);
-        assert_eq!(snap.pending_transition_authority, None);
-    }
-
     /// THIN-HARNESS-REDESIGN R2a 审查处理 (P3-1)：检索分区随快照 serde
     /// 往返（sidecar 持久化/恢复不丢全文与条目）；旧版快照（无该字段）
     /// 反序列化为 None——恢复时保持空分区而非报错。
@@ -2291,77 +2215,6 @@ mod tests {
         let legacy_snap: StoredActivationSnapshot = serde_json::from_value(legacy).unwrap();
         assert_eq!(legacy_snap.internal_ret, None);
         assert_eq!(legacy_snap.external_ret, None);
-    }
-
-    /// local_browser (2026-08-10): the probe reuses an already-ready lane
-    /// (Available without re-launching), fails Degraded with a subdivided
-    /// cause when the browser cannot start, and keeps the framework_fallback
-    /// semantics untouched (off → Unsupported; missing key → Degraded).
-    #[tokio::test]
-    async fn probe_retrieval_capability_three_states() {
-        let dir = test_dir();
-        let journal = JournalRecorder::new(dir.clone());
-
-        // LocalBrowser + ready lane → Available (no re-launch).
-        let stub = crate::local_browser::tests::ready_stub_browser();
-        let mut host = crate::OrzHost::new(journal.clone(), &dir, WorkspaceTrust::ObservedTrusted)
-            .unwrap()
-            .with_browser_session(stub);
-        let cap = probe_retrieval_capability(
-            RetrievalMode::LocalBrowser,
-            true,
-            &mut host,
-            &dir,
-            "RUN-TEST01",
-        )
-        .await;
-        assert_eq!(cap, RetrievalCapability::Available);
-
-        // LocalBrowser + no lane + ORZ_BROWSER_PATH pointing nowhere →
-        // Degraded("browser_launch_failed: browser_not_found: ...").
-        let missing = dir.join("no-such-browser.exe");
-        // SAFETY: test-only; parallel tests read the env through
-        // find_browser which tolerates concurrent set/remove (worst case a
-        // degraded reason names a missing path).
-        unsafe { std::env::set_var(ORZ_BROWSER_PATH_ENV, &missing) };
-        let mut host =
-            crate::OrzHost::new(journal.clone(), &dir, WorkspaceTrust::ObservedTrusted).unwrap();
-        let cap = probe_retrieval_capability(
-            RetrievalMode::LocalBrowser,
-            true,
-            &mut host,
-            &dir,
-            "RUN-TEST02",
-        )
-        .await;
-        unsafe { std::env::remove_var(ORZ_BROWSER_PATH_ENV) };
-        match cap {
-            RetrievalCapability::Degraded(reason) => {
-                assert!(reason.starts_with("browser_launch_failed: "), "{reason}");
-                assert!(reason.contains("browser_not_found"), "{reason}");
-            }
-            other => panic!("expected Degraded, got {other:?}"),
-        }
-
-        // Off → Unsupported; framework_fallback without key → Degraded.
-        let mut host = crate::OrzHost::new(journal, &dir, WorkspaceTrust::ObservedTrusted).unwrap();
-        assert_eq!(
-            probe_retrieval_capability(RetrievalMode::Off, true, &mut host, &dir, "RUN-TEST03")
-                .await,
-            RetrievalCapability::Unsupported("retrieval_mode_not_selected".to_string())
-        );
-        assert_eq!(
-            probe_retrieval_capability(
-                RetrievalMode::FrameworkFallback,
-                false,
-                &mut host,
-                &dir,
-                "RUN-TEST04"
-            )
-            .await,
-            RetrievalCapability::Degraded("web_search_not_configured".to_string())
-        );
-        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[tokio::test]
@@ -2547,6 +2400,258 @@ mod tests {
         assert!(result.is_err());
 
         let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// P1-1（2026-09-09, S2-R P2）：run 前不再把默认 unavailable 句柄预存
+    /// 进会话（审查发现：run 前存入 unavailable、run 收尾不回写真实句柄 →
+    /// host drop 杀浏览器，下个 prompt 只能整体冷启动）。未启动浏览器的
+    /// 两轮 prompt 后，会话 browser 保持 None（修复前 = Some(unavailable)）。
+    #[tokio::test]
+    async fn prompt_does_not_seed_unavailable_browser_handle() {
+        tokio::task::LocalSet::new()
+            .run_until(async {
+                let base = test_dir();
+                let server = shadow_server_with_gateway(Arc::new(FakeProvider::new(vec![
+                    ScriptedResponse::text("(fake) 第一轮。"),
+                    ScriptedResponse::text("(fake) 第一轮终答。"),
+                    ScriptedResponse::text("(fake) 第二轮。"),
+                    ScriptedResponse::text("(fake) 第二轮终答。"),
+                ])));
+                server
+                    .handle_session_new(
+                        "sess-browser-none",
+                        Some(base.clone()),
+                        crate::session::TrustPolicy::Skip,
+                    )
+                    .await
+                    .unwrap();
+                server
+                    .handle_session_prompt("sess-browser-none", "第一问")
+                    .await
+                    .unwrap();
+                {
+                    let sessions = server.sessions.lock().unwrap();
+                    let session = sessions.get("sess-browser-none").expect("session");
+                    assert!(
+                        session.browser.is_none(),
+                        "no launch happened → no seeded default handle expected"
+                    );
+                }
+                server
+                    .handle_session_prompt("sess-browser-none", "第二问")
+                    .await
+                    .unwrap();
+                {
+                    let sessions = server.sessions.lock().unwrap();
+                    let session = sessions.get("sess-browser-none").expect("session");
+                    assert!(
+                        session.browser.is_none(),
+                        "still none after the second prompt"
+                    );
+                }
+                let _ = std::fs::remove_dir_all(&base);
+            })
+            .await
+    }
+
+    /// P1-1（2026-09-09, S2-R P2）：`fold_back_browser` 的 ready 判定与覆盖
+    /// 语义——ready 句柄覆盖；未启动/已死句柄不得覆盖先前 ready 句柄；无
+    /// 句柄时保持 None。
+    #[tokio::test]
+    async fn fold_back_browser_only_overwrites_with_ready_handle() {
+        let base = test_dir();
+        let server = shadow_server();
+        server
+            .handle_session_new(
+                "sess-fold-back",
+                Some(base.clone()),
+                crate::session::TrustPolicy::Skip,
+            )
+            .await
+            .unwrap();
+
+        // not-ready live（未启动）+ 会话无句柄 → 保持 None（不预存 unavailable）。
+        let unavailable: crate::local_browser::SharedBrowser = Arc::new(
+            crate::local_browser::UnavailableBrowserSession::new("no browser".to_string()),
+        );
+        assert!(!unavailable.ready());
+        AcpServer::fold_back_browser(&server.sessions, "sess-fold-back", unavailable);
+        {
+            let sessions = server.sessions.lock().unwrap();
+            let session = sessions.get("sess-fold-back").expect("session");
+            assert!(session.browser.is_none(), "unready handle must not seed");
+        }
+
+        // 先注入 ready 句柄 S。
+        let ready: crate::local_browser::SharedBrowser =
+            crate::local_browser::tests::ready_stub_browser();
+        {
+            let mut sessions = server.sessions.lock().unwrap();
+            sessions.get_mut("sess-fold-back").expect("session").browser = Some(ready.clone());
+        }
+        // not-ready live 不得覆盖先前 ready 句柄。
+        let unavailable2: crate::local_browser::SharedBrowser = Arc::new(
+            crate::local_browser::UnavailableBrowserSession::new("dead".to_string()),
+        );
+        AcpServer::fold_back_browser(&server.sessions, "sess-fold-back", unavailable2);
+        {
+            let sessions = server.sessions.lock().unwrap();
+            let session = sessions.get("sess-fold-back").expect("session");
+            assert!(
+                Arc::ptr_eq(&ready, session.browser.as_ref().expect("ready handle")),
+                "unready handle must not replace a ready one"
+            );
+        }
+        // ready live 覆盖（换入新句柄后回写）。
+        let live: crate::local_browser::SharedBrowser =
+            crate::local_browser::tests::ready_stub_browser();
+        AcpServer::fold_back_browser(&server.sessions, "sess-fold-back", live.clone());
+        {
+            let sessions = server.sessions.lock().unwrap();
+            let session = sessions.get("sess-fold-back").expect("session");
+            assert!(
+                Arc::ptr_eq(&live, session.browser.as_ref().expect("live handle")),
+                "ready live handle must be folded back"
+            );
+        }
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// P1-1（2026-09-09, S2-R P2）：会话级浏览器句柄的机械生命周期——
+    /// ready 句柄注入后跨两个 prompt 保持同一 Arc（run 收尾只在 ready 时
+    /// 回写，host drop 只释放本 run 引用、不触发底层 drop）；close_session
+    /// 恰好 shutdown 一次并释放最后一个 Arc。
+    #[tokio::test]
+    async fn browser_handle_survives_prompt_boundary_and_close_shuts_down_once() {
+        use std::sync::atomic::AtomicUsize;
+
+        struct CountingBrowser {
+            shutdowns: Arc<AtomicUsize>,
+            drops: Arc<AtomicUsize>,
+        }
+
+        impl Drop for CountingBrowser {
+            fn drop(&mut self) {
+                self.drops.fetch_add(1, Ordering::SeqCst);
+            }
+        }
+
+        #[async_trait::async_trait]
+        impl crate::local_browser::BrowserSession for CountingBrowser {
+            async fn read_page(
+                &self,
+                _url: &str,
+                _mode: crate::local_browser::ReadMode,
+            ) -> Result<crate::local_browser::PageReadOutcome, crate::local_browser::CdpError>
+            {
+                Err(crate::local_browser::CdpError::Io(
+                    "test stub: no read".to_string(),
+                ))
+            }
+
+            async fn control(
+                &self,
+                _action: crate::local_browser::BrowserControlAction,
+                _timeout: std::time::Duration,
+            ) -> Result<crate::local_browser::BrowserControlOutcome, crate::local_browser::CdpError>
+            {
+                Err(crate::local_browser::CdpError::Io(
+                    "test stub: no control".to_string(),
+                ))
+            }
+
+            async fn download_or_read(
+                &self,
+                _url: &str,
+                _download_dir: &std::path::Path,
+            ) -> Result<crate::local_browser::BrowserDownloadOutcome, crate::local_browser::CdpError>
+            {
+                Err(crate::local_browser::CdpError::Io(
+                    "test stub: no download".to_string(),
+                ))
+            }
+
+            fn ready(&self) -> bool {
+                true
+            }
+
+            async fn shutdown(&self) {
+                self.shutdowns.fetch_add(1, Ordering::SeqCst);
+            }
+        }
+
+        tokio::task::LocalSet::new()
+            .run_until(async {
+                let base = test_dir();
+                let shutdowns = Arc::new(AtomicUsize::new(0));
+                let drops = Arc::new(AtomicUsize::new(0));
+                let server = shadow_server_with_gateway(Arc::new(FakeProvider::new(vec![
+                    ScriptedResponse::text("(fake) 第一轮。"),
+                    ScriptedResponse::text("(fake) 第一轮终答。"),
+                    ScriptedResponse::text("(fake) 第二轮。"),
+                    ScriptedResponse::text("(fake) 第二轮终答。"),
+                ])));
+                server
+                    .handle_session_new(
+                        "sess-browser-lifecycle",
+                        Some(base.clone()),
+                        crate::session::TrustPolicy::Skip,
+                    )
+                    .await
+                    .unwrap();
+                let browser: crate::local_browser::SharedBrowser = Arc::new(CountingBrowser {
+                    shutdowns: shutdowns.clone(),
+                    drops: drops.clone(),
+                });
+                {
+                    let mut sessions = server.sessions.lock().unwrap();
+                    sessions
+                        .get_mut("sess-browser-lifecycle")
+                        .expect("session")
+                        .browser = Some(browser.clone());
+                }
+
+                server
+                    .handle_session_prompt("sess-browser-lifecycle", "第一问")
+                    .await
+                    .unwrap();
+                server
+                    .handle_session_prompt("sess-browser-lifecycle", "第二问")
+                    .await
+                    .unwrap();
+
+                // host 两轮 drop 后底层对象不得被释放（会话仍持同一 Arc）。
+                assert_eq!(drops.load(Ordering::SeqCst), 0, "host drop must not kill");
+                let same_handle = {
+                    let sessions = server.sessions.lock().unwrap();
+                    let session = sessions.get("sess-browser-lifecycle").expect("session");
+                    session.browser.clone().expect("browser handle")
+                };
+                assert!(
+                    Arc::ptr_eq(&browser, &same_handle),
+                    "同一 ready 句柄跨 prompt 保持"
+                );
+                assert_eq!(shutdowns.load(Ordering::SeqCst), 0);
+
+                // 释放测试自身持有的 Arc——close 后会话表移除应是最后一个引用。
+                drop(same_handle);
+                drop(browser);
+                assert!(server.close_session("sess-browser-lifecycle"));
+                // close_session 触发 detached shutdown——短暂等待任务落地。
+                tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+                assert_eq!(
+                    shutdowns.load(Ordering::SeqCst),
+                    1,
+                    "close_session must shut down the lane exactly once"
+                );
+                assert_eq!(
+                    drops.load(Ordering::SeqCst),
+                    1,
+                    "session removal drops the last Arc"
+                );
+                let _ = std::fs::remove_dir_all(&base);
+            })
+            .await
     }
 
     /// P2-13 B3（2026-09-03，ADR-0010 §14.52 / 设计 §11.3/§12 R3）：会话

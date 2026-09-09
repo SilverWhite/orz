@@ -92,9 +92,16 @@ pub enum EventType {
     // GAP-RETRIEVAL-TOOLS (2026-08-10): retrieval mode authority (§3.7.1),
     // structured result commit (§3.3.3) and cross-run activation restore
     // (§3.3) — all three are non-terminal v0.2 mechanism events.
+    // 0t (2026-09-09, ADR-0010 §14.65 / v1.65): `RetrievalModeTransition`
+    // 生产者侧退役——事件类型保留（旧 v0.2 刊只读回放；schema 枚举不收缩），
+    // 新 run 不再产出（三值检索模式 γ 整体退役）。
     RetrievalModeTransition,
     RetrievalResultCommitted,
     RetrievalActivationRestored,
+    /// 0t (2026-09-09, ADR-0010 §14.65 / v1.65): 浏览器启动/探活尝试事实
+    /// 事件——success/failure + 真实原因（三值模式退役后浏览器可用性纯
+    /// 事件事实化）。v0.2 非终态机制事件。
+    BrowserLaunchResult,
     // MECHANICAL-AUDIT-LAYER (2026-08-24, ADR-0010 §14.39 / BACKLOG 0g):
     // 机械审查层轻量事件留痕——每次对象键覆盖写（含 step/契约类检查）以
     // `{kind, payload:{key, round, summary, anomaly}}` 记一条，供回放与

@@ -311,7 +311,7 @@ pub(crate) use crate::compact::{
 };
 pub use crate::denial::DENIAL_BREAKER_CONSECUTIVE;
 pub(crate) use crate::denial::{DenialKey, DenialState, PolicyFeedback};
-pub use crate::retrieval::mode::{RetrievalCapability, RetrievalMode};
+pub use crate::retrieval::mode::RetrievalMode;
 
 /// Error during agent loop execution.
 #[derive(Debug, thiserror::Error)]
@@ -535,34 +535,14 @@ pub struct AgentLoopController {
     /// next prompt (registered boundary — cross-turn persistence is a
     /// later slice).
     pub(crate) activations: Mutex<ActivationRegistry>,
-    /// GAP-RETRIEVAL-TOOLS (2026-08-10): ADR-0010 §3.7.1 explicit retrieval
-    /// mode — session/task-contract level. `off` is the default; a session
-    /// bootstrap transition (session/new with an explicit mode) journals one
-    /// `retrieval_mode_transition` on the first run that sees it.
-    pub(crate) retrieval_mode: RetrievalMode,
-    /// M4 (review 2026-08-10): the mode the session had BEFORE a pending
-    /// bootstrap transition — the transition journal uses it as the real
-    /// `old_mode` (ADR-0010 §3.7.1 — every transition carries old/new; a
-    /// hardcoded "off" would misstate a mode change away from an
-    /// already-enabled mode). `None` = the session default (off).
-    pub(crate) previous_retrieval_mode: Option<RetrievalMode>,
-    /// Capability probe result for `retrieval_mode` — never a silent
-    /// fallback: Unsupported/Degraded carry the reason.
-    pub(crate) retrieval_capability: RetrievalCapability,
-    /// Session bootstrap carried an explicit mode selection — journal the
-    /// transition on the next run's startup sequence, then clear. Atomic
-    /// because the run path holds only `&self`.
-    pub(crate) bootstrap_transition_pending: std::sync::atomic::AtomicBool,
-    /// RETRIEVAL-SUBAGENT-WIRING (2026-08-25, ADR-0010 §14.40)：模式 A
-    /// 自动降级 transition 的机械元数据（authority, reason_code）——
-    /// local_browser probe 失败降级 framework_fallback 时
-    /// (mechanical_probe, browser_launch_failed)；显式选择路径为 None
-    /// （沿用 session_bootstrap/session_default）。自有字符串以支持从
-    /// ACP 侧车跨 run 恢复（审查处理：降级后 run 在 journal 前失败时
-    /// 下轮重试不丢失机械元数据）。
-    pub(crate) transition_authority: Option<(String, String)>,
-    /// The owning session id (for the transition payload; `None` in bare
-    /// test controllers).
+    /// 0t (2026-09-09, ADR-0010 §14.65 / 设计 v1.3): 独立检索启用门——三值
+    /// 检索模式 γ 退役后唯一授权状态。`false`（默认）= 未启用：主面与外部
+    /// lane 均无检索工具、任何检索派发 fail-closed 拒绝（`retrieval_not_
+    /// enabled`，无 ToolStarted）；`true` = 启用：检索启用会话双族恒在
+    /// （browser_read + web_search/web_fetch），换道由模型自主。
+    pub(crate) retrieval_enabled: bool,
+    /// The owning session id (used by retrieval/activation event payloads;
+    /// `None` in bare test controllers).
     pub(crate) session_id: Option<String>,
     /// GAP-RETRIEVAL-TOOLS (2026-08-10): tool-call evidence collected from
     /// the retrieval lane's host calls — the MECHANICAL source of the
@@ -867,13 +847,7 @@ impl AgentLoopController {
             whitelist: Mutex::new(Vec::new()),
             whitelist_cap: DEFAULT_WHITELIST_CAP,
             activations: Mutex::new(ActivationRegistry::default()),
-            retrieval_mode: RetrievalMode::Off,
-            previous_retrieval_mode: None,
-            retrieval_capability: RetrievalCapability::Unsupported(
-                "retrieval_mode_not_selected".to_string(),
-            ),
-            bootstrap_transition_pending: std::sync::atomic::AtomicBool::new(false),
-            transition_authority: None,
+            retrieval_enabled: false,
             session_id: None,
             evidence: Mutex::new(Vec::new()),
             main_evidence: Mutex::new(Vec::new()),
@@ -1053,30 +1027,25 @@ impl AgentLoopController {
         self.activations.lock().unwrap().has_live()
     }
 
-    /// GAP-RETRIEVAL-TOOLS (2026-08-10): attach the session-level retrieval
-    /// mode (ADR-0010 §3.7.1). `bootstrap_transition_pending` journals one
-    /// `retrieval_mode_transition` (off → mode) at the next run's startup.
-    /// RETRIEVAL-SUBAGENT-WIRING (2026-08-25, ADR-0010 §14.40)：可选
-    /// transition 元数据（authority/reason）——模式 A 自动降级
-    /// （local_browser probe 失败 → framework_fallback）以
-    /// `mechanical_probe` / `browser_launch_failed` 落盘；缺省保持
-    /// `session_bootstrap` / `session_default`（既有显式选择语义）。
-    pub fn with_retrieval_mode(
-        mut self,
-        mode: RetrievalMode,
-        capability: RetrievalCapability,
-        bootstrap_transition_pending: bool,
-        session_id: Option<String>,
-        previous_mode: Option<RetrievalMode>,
-        transition_authority: Option<(String, String)>,
-    ) -> Self {
-        self.retrieval_mode = mode;
-        self.retrieval_capability = capability;
-        self.bootstrap_transition_pending =
-            std::sync::atomic::AtomicBool::new(bootstrap_transition_pending);
+    /// 0t (2026-09-09, ADR-0010 §14.65 / 设计 v1.3): 独立检索启用门——
+    /// 三值模式退役后唯一授权状态（默认关闭/fail-closed）。启用会话主面
+    /// 与外部 lane 双族恒在；未启用会话无检索工具且派发拒绝。
+    pub fn with_retrieval_enabled(mut self, enabled: bool) -> Self {
+        self.retrieval_enabled = enabled;
+        self
+    }
+
+    /// DEPRECATED legacy 接线（0t, ADR-0010 §14.65）：按旧 `retrieval_mode`
+    /// 值映射启用门（非 off ⇒ 开）。只供 orz-bin env/CLI 与 ACP 会话创建面
+    /// 的兼容解析调用；lane 语义不再存在。
+    pub fn with_legacy_retrieval_mode(mut self, legacy: RetrievalMode) -> Self {
+        self.retrieval_enabled = legacy.enables_retrieval();
+        self
+    }
+
+    /// The owning session id — used by retrieval/activation event payloads.
+    pub fn with_session_id(mut self, session_id: Option<String>) -> Self {
         self.session_id = session_id;
-        self.previous_retrieval_mode = previous_mode;
-        self.transition_authority = transition_authority;
         self
     }
 
@@ -1100,15 +1069,6 @@ impl AgentLoopController {
     ) -> Self {
         self.candidate_prefilter = config;
         self
-    }
-
-    /// GAP-RETRIEVAL-TOOLS: whether the bootstrap mode transition was
-    /// journaled (the pending flag cleared) — the acp_server uses it to
-    /// clear the sidecar flag after a successful run.
-    pub fn bootstrap_transition_journaled(&self) -> bool {
-        !self
-            .bootstrap_transition_pending
-            .load(std::sync::atomic::Ordering::Relaxed)
     }
 
     /// GAP-RETRIEVAL-TOOLS (2026-08-10): seed the activation registry from a
@@ -1487,13 +1447,7 @@ impl AgentLoopController {
             whitelist: Mutex::new(Vec::new()),
             whitelist_cap: DEFAULT_WHITELIST_CAP,
             activations: Mutex::new(ActivationRegistry::default()),
-            retrieval_mode: RetrievalMode::Off,
-            previous_retrieval_mode: None,
-            retrieval_capability: RetrievalCapability::Unsupported(
-                "retrieval_mode_not_selected".to_string(),
-            ),
-            bootstrap_transition_pending: std::sync::atomic::AtomicBool::new(false),
-            transition_authority: None,
+            retrieval_enabled: false,
             session_id: None,
             evidence: Mutex::new(Vec::new()),
             main_evidence: Mutex::new(Vec::new()),
@@ -3216,82 +3170,31 @@ impl AgentLoopController {
         // retrieval/disposition.rs 的 handle_parent_disposition；幻觉调用
         // 内部 lane 会产生一次子代理运行（成本已评估），R3 裁决彻底封死/
         // 物理删除）。
-        // GAP-RETRIEVAL-TOOLS (2026-08-10): mode=off removes the retrieval
-        // dispatch family from the model-visible declarations (ADR-0010
-        // §3.7.1 — unauthenticated retrieval starts from off; §3.5.2
-        // name-level refusal: the model never sees tools that cannot run).
-        // `retrieval_disposition` STAYS — disposing an already-pending
-        // (possibly cross-run restored) activation is a legal off-mode
-        // action; the relay still refuses the family at dispatch time
-        // (belt and braces).
-        if self.retrieval_mode == RetrievalMode::Off {
+        // 0t (2026-09-09, ADR-0010 §14.65 / 设计 §3.1): 独立检索启用门——
+        // 未启用会话移除检索派发族与 host 路由检索工具（原 mode=off 的
+        // fail-closed 语义，脱离模式状态机；§3.5.2 name-level refusal:
+        // 模型看不到无法运行的工具）。`retrieval_disposition` STAYS —
+        // 处置已 pending（可能跨 run 恢复）的激活是合法动作；relay 派发
+        // 期仍 fail-closed 拒绝（belt and braces）。
+        if !self.retrieval_enabled {
             // H1 (review 2026-08-10): `project_doc_index` is a retrieval
-            // tool routed through the host lane — the off projection hides
-            // it too (the dispatch gate in run_host_tool is belt and
-            // braces).
+            // tool routed through the host lane — 未启用投影同样隐藏它
+            // （run_host_tool 派发门是 belt and braces）。
             tool_defs.retain(|t| {
                 !crate::relay::is_retrieval_dispatch_name(&t.name)
                     && !crate::relay::is_retrieval_mode_gated_host_tool(&t.name)
             });
         }
-        // RETRIEVAL-SUBAGENT-WIRING 审查处理 (2026-08-25)：工具面跟随
-        // 模式 A 定档——local_browser 隐藏 web 族、framework_fallback
-        // 隐藏 browser_read（主面 base 投影；子代理父面继承同一规则，
-        // 外部 lane 的 browser_read 恢复另行按模式门控）。
-        Self::apply_retrieval_surface_projection(&mut tool_defs, self.retrieval_mode);
-        // GAP-RETRIEVAL-TOOLS (2026-08-10): journal the session bootstrap
-        // mode transition (ADR-0010 §3.7.1 — every transition carries
-        // old/new/authority/reason; never implicit). Written BEFORE
-        // tool_availability_check so the availability gate reflects the
-        // mode's tool projection. Cleared on journal success (the
-        // acp_server sidecar write-back flips the session flag).
-        // M4 (review 2026-08-10): any explicit mode change journals —
-        // including a change TO off (that is a transition like any other);
-        // old_mode is the real persisted value, never a hardcoded "off".
-        if self
-            .bootstrap_transition_pending
-            .load(std::sync::atomic::Ordering::Relaxed)
-        {
-            let suffix = writer
-                .run_id()
-                .strip_prefix("RUN-")
-                .unwrap_or(writer.run_id());
-            let capability_status = if self.retrieval_mode == RetrievalMode::Off {
-                // Schema allOf: new_mode=off ⇒ capability_status must be null.
-                serde_json::Value::Null
-            } else {
-                serde_json::json!(self.retrieval_capability.status_str())
-            };
-            writer
-                .record(
-                    EventType::RetrievalModeTransition,
-                    serde_json::json!({
-                        "transition_id": format!("MODETRANS-{}-{:04}", suffix, writer.seq()),
-                        "session_id": self.session_id.clone().unwrap_or_else(|| writer.run_id().to_string()),
-                        "old_mode": self
-                            .previous_retrieval_mode
-                            .as_ref()
-                            .map_or("off", |m| m.as_str()),
-                        "new_mode": self.retrieval_mode.as_str(),
-                        "authority": self
-                            .transition_authority
-                            .as_ref()
-                            .map_or("session_bootstrap", |(a, _)| a.as_str()),
-                        "reason_code": self
-                            .transition_authority
-                            .as_ref()
-                            .map_or("session_default", |(_, r)| r.as_str()),
-                        "capability_status": capability_status,
-                    }),
-                )
-                .await?;
-            self.bootstrap_transition_pending
-                .store(false, std::sync::atomic::Ordering::Relaxed);
-        }
+        // 0t (2026-09-09, ADR-0010 §14.65 / 设计 §3.1): 主面投影不再按模式
+        // 分支——启用会话恒以现行 local_browser 形态投影（裸 web_search
+        // 单一派发入口 + 既有英文入口标注）；未启用会话已在上方剔除检索族。
+        Self::apply_retrieval_surface_projection(&mut tool_defs, self.retrieval_enabled);
+        // 0t: `retrieval_mode_transition` 生产者侧退役——启动序列不再 journal
+        // bootstrap transition（schema 枚举与 verifier 族保留只读回放）。
         // GAP-RETRIEVAL-TOOLS (2026-08-10): journal the sidecar-restored
         // activations (ADR-0010 §3.3 — the assessment is declared known so a
-        // parent disposition may close/continue across runs). After the mode
-        // transition, before the availability gate.
+        // parent disposition may close/continue across runs). After the
+        // enable-gate projection, before the availability gate.
         self.journal_activation_restores(writer).await?;
         let probe_context = crate::tool_probe::ProbeContext {
             cwd: host.session_cwd(),

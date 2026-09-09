@@ -22,18 +22,15 @@ use agent_client_protocol::{
 use tokio_util::compat::{TokioAsyncReadCompatExt, TokioAsyncWriteCompatExt};
 use xai_acp_lib::acp_gateway;
 
-use orz_loop::controller::RetrievalMode;
-
 use crate::acp_server::AcpServer;
 
 /// Agent-side handler: dispatches inbound client requests to the AcpServer.
 pub struct StdioAgentHandler {
     server: Arc<AcpServer>,
     trust_policy: crate::session::TrustPolicy,
-    /// GAP-RETRIEVAL-TOOLS (2026-08-10): session-level retrieval mode for
-    /// every session this handler creates (ADR-0010 §3.7.1). `None` = the
-    /// `off` default with no bootstrap transition.
-    retrieval_mode: Option<RetrievalMode>,
+    /// 0t (2026-09-09, ADR-0010 §14.65 / 设计 §3.1): session-level 检索启用门
+    /// ——三值模式退役后唯一授权状态；`false` = fail-closed（无检索工具）。
+    retrieval_enabled: bool,
 }
 
 impl StdioAgentHandler {
@@ -51,22 +48,23 @@ impl StdioAgentHandler {
         Self {
             server,
             trust_policy,
-            retrieval_mode: None,
+            retrieval_enabled: false,
         }
     }
 
-    /// GAP-RETRIEVAL-TOOLS (2026-08-10): fix the session-level retrieval
-    /// mode for sessions created through this handler (the TUI/stdio
-    /// surfaces pass their `--retrieval-mode` through here).
-    pub fn with_retrieval_mode(
+    /// 0t (2026-09-09, ADR-0010 §14.65): fix the session-level retrieval
+    /// enable gate for sessions created through this handler (the TUI/stdio
+    /// surfaces pass their resolved enable flag here; 旧 `--retrieval-mode`
+    /// 已在调用方兼容解析为 bool)。
+    pub fn with_retrieval_enabled(
         server: Arc<AcpServer>,
         trust_policy: crate::session::TrustPolicy,
-        retrieval_mode: Option<RetrievalMode>,
+        retrieval_enabled: bool,
     ) -> Self {
         Self {
             server,
             trust_policy,
-            retrieval_mode,
+            retrieval_enabled,
         }
     }
 }
@@ -100,7 +98,7 @@ impl acp::MessageHandler<acp::AgentSide> for StdioAgentHandler {
                         Some(args.cwd),
                         self.trust_policy,
                         Default::default(),
-                        self.retrieval_mode,
+                        self.retrieval_enabled,
                     )
                     .await
                     .map_err(acp::Error::into_internal_error)?;
@@ -155,17 +153,14 @@ impl acp::MessageHandler<acp::AgentSide> for StdioAgentHandler {
 /// Wires the outbound gateway into the server (permission bridge reads it),
 /// then awaits the connection I/O future — which completes on stdin EOF.
 ///
-/// `retrieval_mode` (GAP-RETRIEVAL-TOOLS 2026-08-10): the session-level
-/// mode (ADR-0010 §3.7.1) applied to every session created over this
-/// connection; `None` = the `off` default.
-pub async fn run_stdio_server(
-    server: Arc<AcpServer>,
-    retrieval_mode: Option<RetrievalMode>,
-) -> acp::Result<()> {
-    let handler = StdioAgentHandler::with_retrieval_mode(
+/// `retrieval_enabled` (0t, ADR-0010 §14.65): the session-level 检索启用门
+/// applied to every session created over this connection; `false` =
+/// fail-closed（无检索工具）。
+pub async fn run_stdio_server(server: Arc<AcpServer>, retrieval_enabled: bool) -> acp::Result<()> {
+    let handler = StdioAgentHandler::with_retrieval_enabled(
         server.clone(),
         crate::session::TrustPolicy::Enforce,
-        retrieval_mode,
+        retrieval_enabled,
     );
     let (conn, io_future) = acp::AgentSideConnection::new(
         handler,

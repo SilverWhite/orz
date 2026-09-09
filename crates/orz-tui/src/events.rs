@@ -244,6 +244,12 @@ pub enum TuiEvent {
         old_mode: String,
         new_mode: String,
     },
+    // 0t (2026-09-09, ADR-0010 §14.65): 浏览器启动/探活尝试事实事件。
+    BrowserLaunchResult {
+        attempt_id: String,
+        status: String,
+        cause: Option<String>,
+    },
     RetrievalResultCommitted {
         result_id: String,
         source_total: u64,
@@ -410,6 +416,7 @@ impl TuiEvent {
             TuiEvent::RetrievalModeTransition { .. } => "retrieval_mode_transition",
             TuiEvent::RetrievalResultCommitted { .. } => "retrieval_result_committed",
             TuiEvent::RetrievalActivationRestored { .. } => "retrieval_activation_restored",
+            TuiEvent::BrowserLaunchResult { .. } => "browser_launch_result",
             TuiEvent::MechanicalAuditUpdate { .. } => "mechanical_audit_update",
             TuiEvent::ControlTicketIssued { .. } => "control_ticket_issued",
             TuiEvent::ControlTicketConsumed { .. } => "control_ticket_consumed",

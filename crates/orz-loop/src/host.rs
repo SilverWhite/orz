@@ -104,6 +104,12 @@ pub enum ToolErrorKind {
 pub struct ToolResult {
     pub output: String,
     pub exit_code: Option<i32>,
+    /// 0t (2026-09-09, ADR-0010 §14.65 / 设计 §3.3): 本次调用发生的浏览器
+    /// 启动/探活尝试事实——host 在 browser_read 调用期懒启动并注入句柄时
+    /// 填充；loop 在 ToolStarted 与 ToolCompleted 之间落
+    /// `browser_launch_result`（success/failure + 真实原因）。成功路径在
+    /// 调用完成前消费；`None` = 本次调用未发生启动尝试。
+    pub browser_launch_fact: Option<BrowserLaunchFact>,
     /// 0p S2 两段门（2026-09-07，ADR-0010 §14.61 设计 B4）：本次调用经
     /// 通知后放行了会话卷内部区读取——随 ToolCompleted 事件面落
     /// `session_volume_opened`（journal 记 `open_after_notice` 审计）。
@@ -156,6 +162,37 @@ pub struct ToolResult {
     /// `tool_running` journal event are built from these structured facts
     /// (never text parsing). `None` for every other call.
     pub mid_run: Option<ToolMidRunStatus>,
+}
+
+/// 0t (2026-09-09, ADR-0010 §14.65): 浏览器启动/探活尝试事实。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BrowserLaunchFact {
+    pub status: BrowserLaunchStatus,
+    /// failure 时携带真实原因类别（browser_not_found/网络/超时等）；
+    /// success 为 None。
+    pub cause: Option<String>,
+}
+
+impl BrowserLaunchFact {
+    pub fn success() -> Self {
+        Self {
+            status: BrowserLaunchStatus::Success,
+            cause: None,
+        }
+    }
+
+    pub fn failure(cause: impl Into<String>) -> Self {
+        Self {
+            status: BrowserLaunchStatus::Failure,
+            cause: Some(cause.into()),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BrowserLaunchStatus {
+    Success,
+    Failure,
 }
 
 /// TER T1.11 (W-F13b)：截断输出的持久化对象事实。
@@ -241,6 +278,22 @@ pub enum ToolError {
     NotFound(String),
     #[error("tool execution failed: {0}")]
     ExecutionFailed(String),
+    /// 0t (2026-09-09, ADR-0010 §14.65 / 设计 §3.3): 浏览器启动/探活尝试
+    /// 失败——cause 是真实原因类别（browser_not_found/网络/超时等），按
+    /// 普通 host 错误回传（§3.4），非模式拒绝。loop 在 ToolCompleted 前落
+    /// `browser_launch_result` 事实事件。
+    #[error("browser launch failed: {0}")]
+    BrowserLaunchFailed(String),
+    /// 0t P1-2a（2026-09-09, S2-R P2 / 设计 §3.2 场景 S3）：启动/探活尝试
+    /// 成功但本次浏览器动作失败——启动事实独立于页面结果，success
+    /// `launch_fact` 随 Err 携带（loop 在 ToolCompleted 前落
+    /// `browser_launch_result`）；`reason` 是页面/导航层真实错误（FP-2
+    /// 正常回传，无教学句），稳定码归 ExecutionFailed 系（不新增码）。
+    #[error("browser step failed: {reason}")]
+    BrowserStepFailed {
+        reason: String,
+        launch_fact: BrowserLaunchFact,
+    },
     /// P0-1 (2026-08-08 stall guards): the tool exceeded the host's
     /// per-call wall-clock budget and its process tree was killed. The
     /// reason carries the budget so the journal (`tool_completed.error`)

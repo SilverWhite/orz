@@ -31,6 +31,7 @@ mod url_gate;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, OnceLock};
+use std::time::Duration;
 
 use async_trait::async_trait;
 use orz_loop::host::{ToolDef, ToolError, ToolResult};
@@ -67,6 +68,49 @@ impl ReadMode {
         }
     }
 }
+
+/// S2-R P3 / P1-2b（2026-09-09, P1 设计 §2.1）：`browser_control` Phase 1
+/// 最小动作集——导航级动作 + 状态观测，**不含正文读取**（正文读取仍走
+/// `browser_read`；候选与 evidence 纪律不扩）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum BrowserControlAction {
+    /// 直导航（URL gate / ACAF 与 browser_read 同级，CDP 层执行）。
+    Navigate { url: String },
+    /// 历史后退。
+    Back,
+    /// 历史前进。
+    Forward,
+    /// 刷新当前页。
+    Refresh,
+    /// 等待加载/文本就绪（有界超时）。
+    WaitLoad,
+    /// 当前页状态观测（url/title/nav_phase + 日志特征）。
+    Snapshot,
+}
+
+/// 每动作统一返回的机械段（P1 设计 §2.2）——状态 + 真实类别 + 导航阶段 +
+/// url/title + 有界日志特征。`action_status=error` 是**状态化失败**（正常
+/// Ok 回传，FP-2 真实类别，无教学句）；启动层失败才走 `ToolError`。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BrowserControlOutcome {
+    /// `ok` / `error`。
+    pub action_status: String,
+    /// error 时的真实类别：dns / connection_reset / timeout / blocked /
+    /// certificate / other（FP-2 口径）。
+    pub error_class: Option<String>,
+    /// idle / loading / completed / error。
+    pub nav_phase: String,
+    /// 当前落点 URL（识别重定向；无控制 tab 时为 None）。
+    pub url: Option<String>,
+    pub title: Option<String>,
+    /// 有界日志特征——console error/warning + network error 节选，
+    /// `[browser_log]` 容器、引用语域、脱敏（P1 设计 §2.2）。
+    pub log: String,
+}
+
+/// 特征回传边界（P1 设计 §2.2 / §3.2-1）：≤12 行 / ≤2 KiB，超出截断标记。
+pub const BROWSER_LOG_MAX_LINES: usize = 12;
+pub const BROWSER_LOG_MAX_BYTES: usize = 2048;
 
 /// Max characters of page text returned to the model in full mode (tool
 /// contract — §3.7.7 download-size limits; aligned with the Python LBR
@@ -126,6 +170,17 @@ pub trait BrowserSession: Send + Sync {
         download_dir: &Path,
     ) -> Result<BrowserDownloadOutcome, CdpError>;
 
+    /// S2-R P3 / P1-2b（2026-09-09, P1 设计 §2.1–§2.3）：执行一个浏览器
+    /// 控制动作（导航/历史/刷新/等待/快照），作用于会话持续控制 tab——
+    /// back/forward 历史依赖同一 target 不销毁。`timeout` 是导航/等待的
+    /// 有界超时。实现必须自行执行 URL gate（fail-closed）并返回状态化
+    /// 失败（`error_class` + 日志），不静默回退。
+    async fn control(
+        &self,
+        action: BrowserControlAction,
+        timeout: Duration,
+    ) -> Result<BrowserControlOutcome, CdpError>;
+
     /// True when a browser is actually available (drives tool declaration).
     fn ready(&self) -> bool;
 
@@ -172,6 +227,20 @@ impl BrowserSession for LocalBrowserManager {
             .clone()
             .ok_or_else(|| CdpError::Io("browser session not launched".into()))?;
         session.read_page(url, mode).await
+    }
+
+    async fn control(
+        &self,
+        action: BrowserControlAction,
+        timeout: Duration,
+    ) -> Result<BrowserControlOutcome, CdpError> {
+        let session = self
+            .inner
+            .lock()
+            .await
+            .clone()
+            .ok_or_else(|| CdpError::Io("browser session not launched".into()))?;
+        session.control(action, timeout).await
     }
 
     async fn download_or_read(
@@ -224,6 +293,17 @@ impl UnavailableBrowserSession {
 #[async_trait]
 impl BrowserSession for UnavailableBrowserSession {
     async fn read_page(&self, _url: &str, _mode: ReadMode) -> Result<PageReadOutcome, CdpError> {
+        Err(CdpError::Io(format!(
+            "browser unavailable: {}",
+            self.reason
+        )))
+    }
+
+    async fn control(
+        &self,
+        _action: BrowserControlAction,
+        _timeout: Duration,
+    ) -> Result<BrowserControlOutcome, CdpError> {
         Err(CdpError::Io(format!(
             "browser unavailable: {}",
             self.reason
@@ -550,6 +630,279 @@ pub async fn handle_browser_read(
     }
 }
 
+/// S2-R P3 / P1-2b（2026-09-09, P1 设计 §2.1/§2.4）：`browser_control`
+/// 工具定义——导航级控制（external lane、检索启用会话声明）。静态车道
+/// 标注由 projection 追加（与 browser_read 同路径）；动作返回状态 + 有界
+/// 日志特征，正文读取仍走 browser_read。
+pub fn browser_control_tool_def() -> ToolDef {
+    ToolDef {
+        name: "browser_control".to_string(),
+        description: "Control the local browser lane: navigate to a URL, \
+             go back/forward in history, refresh, wait for load, or snapshot \
+             the current page state. Each action returns action_status + a \
+             real error class (dns / connection_reset / timeout / blocked / \
+             certificate / other) + navigation phase + current url/title + a \
+             bounded [browser_log] excerpt (console/network errors only, \
+             never page prose). Reading page content is done with \
+             browser_read — this tool never returns full page text. Public \
+             http(s) URLs only (file://, localhost, private IPs and cloud \
+             metadata are blocked by policy)."
+            .to_string(),
+        parameters: json!({
+            "type": "object",
+            "properties": {
+                "action": {
+                    "type": "string",
+                    "enum": ["navigate", "back", "forward", "refresh", "wait_load", "snapshot"],
+                    "description": "Action to perform: navigate(url) direct \
+                        navigation; back/forward history; refresh reloads the \
+                        current page; wait_load waits up to timeout_secs for \
+                        load/text readiness; snapshot reports the current page \
+                        state without navigating.",
+                },
+                "url": {
+                    "type": "string",
+                    "description": "Required when action=navigate: public \
+                        http(s) URL to navigate to.",
+                },
+                "timeout_secs": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 30,
+                    "description": "Optional bounded wait for navigate / \
+                        wait_load (default 30s, capped at 30s).",
+                },
+            },
+            "required": ["action"],
+        }),
+    }
+}
+
+/// S2-R P3 / P1-2b（2026-09-09, P1 设计 §2.1–§2.2）：`browser_control`
+/// 执行——严格解析参数，调会话层动作，统一返回机械信封（成功或状态化
+/// 失败都 Ok 回传；仅参数错误/序列化错误走 `ToolError`）。启动层失败由
+/// host 懒启动路径负责（`BrowserLaunchFailed`），不进本函数。
+pub async fn handle_browser_control(
+    browser: &dyn BrowserSession,
+    args: &serde_json::Value,
+) -> Result<ToolResult, ToolError> {
+    let obj = args.as_object().ok_or_else(|| {
+        ToolError::ExecutionFailed(
+            "browser_control failed [browser_control_invalid_arguments]: \
+             arguments must be a JSON object"
+                .to_string(),
+        )
+    })?;
+    let unknown: Vec<&String> = obj
+        .keys()
+        .filter(|k| !matches!(k.as_str(), "action" | "url" | "timeout_secs"))
+        .collect();
+    if !unknown.is_empty() {
+        return Err(ToolError::ExecutionFailed(format!(
+            "browser_control failed [browser_control_invalid_arguments]: \
+             unknown argument(s): {}",
+            unknown
+                .iter()
+                .map(|k| k.as_str())
+                .collect::<Vec<_>>()
+                .join(", ")
+        )));
+    }
+    let action_name = obj
+        .get("action")
+        .and_then(|v| v.as_str())
+        .filter(|s| !s.trim().is_empty())
+        .ok_or_else(|| {
+            ToolError::ExecutionFailed(
+                "browser_control failed [browser_control_missing_action]: \
+                 requires a non-empty `action` argument"
+                    .to_string(),
+            )
+        })?;
+    let url_arg = obj.get("url").and_then(|v| v.as_str()).map(str::to_string);
+    let action = match action_name {
+        "navigate" => {
+            if obj.contains_key("url") && url_arg.is_none() {
+                return Err(ToolError::ExecutionFailed(
+                    "browser_control failed [browser_control_invalid_arguments]: \
+                     `url` must be a string"
+                        .to_string(),
+                ));
+            }
+            let url = url_arg
+                .as_ref()
+                .filter(|s| !s.trim().is_empty())
+                .cloned()
+                .ok_or_else(|| {
+                    ToolError::ExecutionFailed(
+                        "browser_control failed [browser_control_missing_url]: \
+                         action=navigate requires a non-empty `url` argument"
+                            .to_string(),
+                    )
+                })?;
+            BrowserControlAction::Navigate { url }
+        }
+        "back" => {
+            reject_url_for_action(action_name, &obj)?;
+            BrowserControlAction::Back
+        }
+        "forward" => {
+            reject_url_for_action(action_name, &obj)?;
+            BrowserControlAction::Forward
+        }
+        "refresh" => {
+            reject_url_for_action(action_name, &obj)?;
+            BrowserControlAction::Refresh
+        }
+        "wait_load" => {
+            reject_url_for_action(action_name, &obj)?;
+            BrowserControlAction::WaitLoad
+        }
+        "snapshot" => {
+            reject_url_for_action(action_name, &obj)?;
+            BrowserControlAction::Snapshot
+        }
+        _ => {
+            return Err(ToolError::ExecutionFailed(format!(
+                "browser_control failed [browser_control_invalid_arguments]: \
+                 `action` must be one of \"navigate\", \"back\", \"forward\", \
+                 \"refresh\", \"wait_load\" or \"snapshot\" (got {action_name})"
+            )));
+        }
+    };
+    let timeout = match obj.get("timeout_secs") {
+        None => DEFAULT_CONTROL_TIMEOUT,
+        Some(v) => {
+            let secs = v
+                .as_u64()
+                .filter(|&s| (1..=30).contains(&s))
+                .ok_or_else(|| {
+                    ToolError::ExecutionFailed(
+                        "browser_control failed [browser_control_invalid_arguments]: \
+                     `timeout_secs` must be an integer in 1..=30"
+                            .to_string(),
+                    )
+                })?;
+            Duration::from_secs(secs)
+        }
+    };
+    let outcome = browser
+        .control(action.clone(), timeout)
+        .await
+        .map_err(|e| {
+            // 状态机/连接层意外错误按普通失败回传（FP-2 真实类别文本）。
+            ToolError::ExecutionFailed(format!(
+                "browser_control failed [browser_control_failed]: {e}"
+            ))
+        })?;
+    let out = json!({
+        "action": action_name,
+        "action_status": outcome.action_status,
+        "error_class": outcome.error_class,
+        "nav_phase": outcome.nav_phase,
+        "url": outcome.url,
+        "title": outcome.title,
+        "log": outcome.log,
+    });
+    Ok(ToolResult {
+        output: serde_json::to_string(&out)
+            .map_err(|e| ToolError::ExecutionFailed(format!("browser_control serialize: {e}")))?,
+        exit_code: Some(0),
+        output_encoding: None,
+        structured: None,
+        ..Default::default()
+    })
+}
+
+/// navigate 以外的动作不接受 `url` 参数（严格解析纪律与 browser_read 同）。
+fn reject_url_for_action(
+    action: &str,
+    obj: &serde_json::Map<String, serde_json::Value>,
+) -> Result<(), ToolError> {
+    if obj.contains_key("url") {
+        return Err(ToolError::ExecutionFailed(format!(
+            "browser_control failed [browser_control_invalid_arguments]: \
+             `url` is only allowed when action=navigate (action={action})"
+        )));
+    }
+    Ok(())
+}
+
+/// 控制动作默认等待上限（P1 设计 §2.1：默认 ≤30s，可配）。
+pub const DEFAULT_CONTROL_TIMEOUT: Duration = Duration::from_secs(30);
+
+/// S2-R P3 / P1-2b（2026-09-09, P1 设计 §2.2/§3.2-1）：把 CDP 层收集的
+/// 日志行（已按严重度过滤）折叠成有界 `[browser_log]` 容器——≤12 行 /
+/// ≤2 KiB，超限机械截断标记；每行带引用语域前缀，页面文本不得以原声进
+/// 对话正文。
+pub(crate) fn bounded_browser_log(lines: &[String]) -> String {
+    let kept: Vec<&String> = lines.iter().take(BROWSER_LOG_MAX_LINES).collect();
+    let mut truncated = lines.len() > BROWSER_LOG_MAX_LINES;
+    let mut out = String::from("[browser_log]");
+    for line in kept.iter() {
+        let redacted = redact_browser_log_line(line);
+        let piece = format!("\n  {redacted}");
+        if out.len() + piece.len() > BROWSER_LOG_MAX_BYTES {
+            truncated = true;
+            break;
+        }
+        out.push_str(&piece);
+    }
+    if truncated {
+        out.push_str(&format!(
+            "\n  [truncated: >{} lines or >{} bytes]",
+            BROWSER_LOG_MAX_LINES, BROWSER_LOG_MAX_BYTES
+        ));
+    }
+    out
+}
+
+/// 日志行保守脱敏（凭据 pattern 值掩码；页面文本不经本函数进正文）。
+pub(crate) fn redact_browser_log_line(line: &str) -> String {
+    const MARKERS: &[&str] = &[
+        "sk-",
+        "Bearer ",
+        "api_key=",
+        "apikey=",
+        "token=",
+        "password=",
+        "passwd=",
+        "secret=",
+        "authorization=",
+    ];
+    let mut out = String::with_capacity(line.len());
+    let bytes = line.as_bytes();
+    let mut i = 0;
+    while i < bytes.len() {
+        let mut marker_found = None;
+        for marker in MARKERS {
+            if bytes[i..].starts_with(marker.as_bytes()) {
+                marker_found = Some(marker);
+                break;
+            }
+        }
+        if let Some(marker) = marker_found {
+            out.push_str(marker);
+            i += marker.len();
+            // 掩码到下一个空白/引号/逗号（保守，不吞结构性字符）。
+            while i < bytes.len()
+                && !bytes[i].is_ascii_whitespace()
+                && bytes[i] != b'"'
+                && bytes[i] != b'\''
+                && bytes[i] != b','
+            {
+                i += 1;
+            }
+            out.push_str("***REDACTED***");
+        } else {
+            let ch = line[i..].chars().next().expect("char boundary");
+            out.push(ch);
+            i += ch.len_utf8();
+        }
+    }
+    out
+}
+
 /// Nearest char boundary at or before `idx` (never splits a UTF-8 char).
 fn floor_char_boundary(text: &str, mut idx: usize) -> usize {
     if idx >= text.len() {
@@ -834,6 +1187,153 @@ pub(crate) mod tests {
         let _ = std::fs::remove_dir_all(&workspace);
     }
 
+    /// S2-R P3 / P1-2b（2026-09-09, P1 设计 §2.1–§2.3）：browser_control
+    /// 真协议 e2e——导航/快照/历史后退前进/刷新/wait_load/日志特征 + URL
+    /// gate 拦截形态 + 同 URL 免重复导航（read_page 命中控制 tab）。Env-
+    /// gated（真实 Chrome + 网络），同 local_browser e2e 先例。
+    #[tokio::test]
+    #[ignore = "live browser e2e — GSA_RUN_LIVE_BROWSER_TESTS=1 cargo test -p orz-host -- --ignored browser_control_live_e2e"]
+    async fn browser_control_live_e2e() {
+        if std::env::var_os(LIVE_BROWSER_ENV).is_none() {
+            return;
+        }
+        let workspace = std::env::temp_dir().join(format!(
+            "orz-browser-control-e2e-{:?}",
+            std::thread::current().id()
+        ));
+        let _ = std::fs::remove_dir_all(&workspace);
+        std::fs::create_dir_all(&workspace).unwrap();
+        let session = CdpBrowserSession::launch(
+            find_browser(None)
+                .expect("a Chrome/Edge binary must be discoverable")
+                .path,
+            LocalBrowserManager::profile_dir_for(&workspace, "RUN-CTRL-E2E"),
+            CdpConfig::default(),
+        )
+        .await
+        .expect("headless browser must launch");
+
+        // navigate → completed + 落点识别（重定向后的 canonical URL）。
+        let out = session
+            .control(
+                BrowserControlAction::Navigate {
+                    url: "https://example.com/".to_string(),
+                },
+                Duration::from_secs(30),
+            )
+            .await
+            .expect("control navigate");
+        assert_eq!(out.action_status, "ok", "{out:?}");
+        assert_eq!(out.nav_phase, "completed", "{out:?}");
+        assert_eq!(out.url.as_deref(), Some("https://example.com/"), "{out:?}");
+        assert!(out.title.as_deref().is_some_and(|t| !t.is_empty()));
+
+        // 同 URL 免重复导航：read_page 命中控制 tab（不新建导航）→ 内容
+        // 返回且控制 tab 状态不变。
+        let read = session
+            .read_page("https://example.com/", ReadMode::Full)
+            .await
+            .expect("same-url read via control tab");
+        assert!(read.text.contains("Example Domain"), "{}", read.text);
+
+        // 第二次导航 → 历史可后退/前进。
+        let out = session
+            .control(
+                BrowserControlAction::Navigate {
+                    url: "https://example.com/?second=1".to_string(),
+                },
+                Duration::from_secs(30),
+            )
+            .await
+            .expect("second navigate");
+        assert_eq!(out.action_status, "ok", "{out:?}");
+
+        let back = session
+            .control(BrowserControlAction::Back, Duration::from_secs(30))
+            .await
+            .expect("back");
+        assert_eq!(back.action_status, "ok", "{back:?}");
+        assert_eq!(
+            back.url.as_deref(),
+            Some("https://example.com/"),
+            "{back:?}"
+        );
+
+        let fwd = session
+            .control(BrowserControlAction::Forward, Duration::from_secs(30))
+            .await
+            .expect("forward");
+        assert_eq!(fwd.action_status, "ok", "{fwd:?}");
+        assert_eq!(
+            fwd.url.as_deref(),
+            Some("https://example.com/?second=1"),
+            "{fwd:?}"
+        );
+
+        // refresh + snapshot。
+        let refresh = session
+            .control(BrowserControlAction::Refresh, Duration::from_secs(30))
+            .await
+            .expect("refresh");
+        assert_eq!(refresh.action_status, "ok", "{refresh:?}");
+        let snap = session
+            .control(BrowserControlAction::Snapshot, Duration::from_secs(30))
+            .await
+            .expect("snapshot");
+        assert_eq!(snap.action_status, "ok", "{snap:?}");
+        assert!(snap.url.as_deref().is_some());
+
+        // wait_load（已加载页面 → 文本就绪即返回）。
+        let wait = session
+            .control(BrowserControlAction::WaitLoad, Duration::from_secs(30))
+            .await
+            .expect("wait_load");
+        assert_eq!(wait.action_status, "ok", "{wait:?}");
+
+        // URL gate 拦截 = blocked 状态化失败（fail-closed，非导航尝试）。
+        let blocked = session
+            .control(
+                BrowserControlAction::Navigate {
+                    url: "http://169.254.169.254/latest/meta-data/".to_string(),
+                },
+                Duration::from_secs(30),
+            )
+            .await
+            .expect("gate failure is a stateful outcome");
+        assert_eq!(blocked.action_status, "error", "{blocked:?}");
+        assert_eq!(
+            blocked.error_class.as_deref(),
+            Some("blocked"),
+            "{blocked:?}"
+        );
+
+        // 不可解析域名 → gate 前置 DNS 预检 fail-closed 拦截（blocked +
+        // 真实 gate 文本；导航层 dns 类别逻辑由 classify_log_class 单测
+        // 覆盖——gate 放行后的 Chrome 层 DNS 失败在沙箱内不可稳定构造）。
+        let dns_gate = session
+            .control(
+                BrowserControlAction::Navigate {
+                    url: "http://nonexistent-0t-browser-lane.invalid/".to_string(),
+                },
+                Duration::from_secs(30),
+            )
+            .await
+            .expect("dns failure is a stateful outcome");
+        assert_eq!(dns_gate.action_status, "error", "{dns_gate:?}");
+        assert_eq!(
+            dns_gate.error_class.as_deref(),
+            Some("blocked"),
+            "{dns_gate:?}"
+        );
+        assert!(
+            dns_gate.log.contains("DNS resolution failed"),
+            "{dns_gate:?}"
+        );
+
+        session.shutdown().await;
+        let _ = std::fs::remove_dir_all(&workspace);
+    }
+
     /// PDF evidence (2026-08-11 review C1-1): real-Chrome download e2e —
     /// download a public test PDF through the CDP channel, assert the file
     /// lands in the staging dir with %PDF magic, and that the final URL
@@ -909,6 +1409,23 @@ pub(crate) mod tests {
             self.outcome.clone()
         }
 
+        async fn control(
+            &self,
+            _action: BrowserControlAction,
+            _timeout: Duration,
+        ) -> Result<BrowserControlOutcome, CdpError> {
+            // 只读 stub：control 默认返回空闲快照（具体动作语义由
+            // ControlScriptedBrowser / CDP live 路径覆盖）。
+            Ok(BrowserControlOutcome {
+                action_status: "ok".to_string(),
+                error_class: None,
+                nav_phase: "idle".to_string(),
+                url: None,
+                title: None,
+                log: String::new(),
+            })
+        }
+
         async fn download_or_read(
             &self,
             _url: &str,
@@ -938,6 +1455,218 @@ pub(crate) mod tests {
             outcome: Ok(sample_outcome("hello page")),
             download: Ok(BrowserDownloadOutcome::Page(sample_outcome("hello page"))),
         })
+    }
+
+    /// S2-R P3 / P1-2b：可脚本化 `control` 结果的 stub——browser_control
+    /// 信封与特征回传的确定性测试面（CDP 真协议行为由 env-gated live
+    /// e2e 覆盖，见 `control_actions_live_e2e` 先例边界）。
+    pub(crate) struct ControlScriptedBrowser {
+        outcome: Result<BrowserControlOutcome, CdpError>,
+    }
+
+    #[async_trait]
+    impl BrowserSession for ControlScriptedBrowser {
+        async fn read_page(
+            &self,
+            _url: &str,
+            _mode: ReadMode,
+        ) -> Result<PageReadOutcome, CdpError> {
+            unreachable!("control tests never read pages")
+        }
+        async fn control(
+            &self,
+            _action: BrowserControlAction,
+            _timeout: Duration,
+        ) -> Result<BrowserControlOutcome, CdpError> {
+            self.outcome.clone()
+        }
+        async fn download_or_read(
+            &self,
+            _url: &str,
+            _download_dir: &Path,
+        ) -> Result<BrowserDownloadOutcome, CdpError> {
+            unreachable!("control tests never download")
+        }
+        fn ready(&self) -> bool {
+            true
+        }
+        async fn shutdown(&self) {}
+    }
+
+    fn sample_control_outcome(
+        status: &str,
+        error_class: Option<&str>,
+        url: Option<&str>,
+        log_lines: Vec<String>,
+    ) -> BrowserControlOutcome {
+        BrowserControlOutcome {
+            action_status: status.to_string(),
+            error_class: error_class.map(str::to_string),
+            nav_phase: if status == "ok" {
+                "completed".to_string()
+            } else {
+                "error".to_string()
+            },
+            url: url.map(str::to_string),
+            title: Some("Example".to_string()),
+            log: bounded_browser_log(&log_lines),
+        }
+    }
+
+    /// S2-R P3 / P1-2b（P1 设计 §2.2）：browser_control 每动作信封——成功
+    /// 与状态化失败都以 Ok 回传，字段齐全（action_status/error_class/
+    /// nav_phase/url/title/log），日志只进工具结果文本。
+    #[tokio::test]
+    async fn browser_control_envelope_carries_action_state_and_log() {
+        let log_lines = vec![
+            "network: net::ERR_CONNECTION_RESET".to_string(),
+            "console error: fetch failed".to_string(),
+        ];
+        let ok_browser = ControlScriptedBrowser {
+            outcome: Ok(sample_control_outcome(
+                "ok",
+                None,
+                Some("https://example.com/redirected"),
+                log_lines.clone(),
+            )),
+        };
+        let result = handle_browser_control(
+            &ok_browser,
+            &json!({"action": "navigate", "url": "https://example.com"}),
+        )
+        .await
+        .unwrap();
+        assert_eq!(result.exit_code, Some(0));
+        let parsed: serde_json::Value = serde_json::from_str(&result.output).unwrap();
+        assert_eq!(parsed["action"], "navigate");
+        assert_eq!(parsed["action_status"], "ok");
+        assert!(parsed["error_class"].is_null());
+        assert_eq!(parsed["nav_phase"], "completed");
+        assert_eq!(parsed["url"], "https://example.com/redirected");
+        assert_eq!(parsed["title"], "Example");
+        assert!(parsed["log"].as_str().unwrap().contains("[browser_log]"));
+        assert!(
+            parsed["log"]
+                .as_str()
+                .unwrap()
+                .contains("ERR_CONNECTION_RESET"),
+            "log feature rides the tool result: {}",
+            parsed["log"]
+        );
+
+        // 状态化失败（error_class 真实类别）同样 Ok 回传（FP-2 无教学句）。
+        let err_browser = ControlScriptedBrowser {
+            outcome: Ok(sample_control_outcome(
+                "error",
+                Some("connection_reset"),
+                Some("https://example.com"),
+                log_lines,
+            )),
+        };
+        let result = handle_browser_control(
+            &err_browser,
+            &json!({"action": "navigate", "url": "https://example.com"}),
+        )
+        .await
+        .unwrap();
+        assert_eq!(result.exit_code, Some(0));
+        let parsed: serde_json::Value = serde_json::from_str(&result.output).unwrap();
+        assert_eq!(parsed["action_status"], "error");
+        assert_eq!(parsed["error_class"], "connection_reset");
+        assert_eq!(parsed["nav_phase"], "error");
+    }
+
+    /// S2-R P3 / P1-2b：严格参数解析——缺 action/url、非 navigate 带
+    /// url、非法 timeout 均显式拒绝（稳定码前缀，无静默容错）。
+    #[tokio::test]
+    async fn browser_control_validation_rejects_bad_arguments() {
+        let browser = ControlScriptedBrowser {
+            outcome: Ok(sample_control_outcome("ok", None, None, vec![])),
+        };
+        let cases = [
+            (json!({}), "browser_control_missing_action"),
+            (json!({"action": "navigate"}), "browser_control_missing_url"),
+            (
+                json!({"action": "navigate", "url": 42}),
+                "browser_control_invalid_arguments",
+            ),
+            (
+                json!({"action": "back", "url": "https://example.com"}),
+                "browser_control_invalid_arguments",
+            ),
+            (
+                json!({"action": "snapshot", "timeout_secs": 99}),
+                "browser_control_invalid_arguments",
+            ),
+            (
+                json!({"action": "type"}),
+                "browser_control_invalid_arguments",
+            ),
+            (
+                json!({"action": "navigate", "url": "https://example.com", "extra": 1}),
+                "browser_control_invalid_arguments",
+            ),
+        ];
+        for (args, code) in cases {
+            let err = handle_browser_control(&browser, &args).await.unwrap_err();
+            assert!(
+                err.to_string().contains(code),
+                "case {args}: expected {code}, got {err}"
+            );
+        }
+    }
+
+    /// S2-R P3 / P1-2b（P1 设计 §2.2 边界）：日志节选 ≤12 行 / ≤2 KiB，
+    /// 超出机械截断标记；凭据 pattern 保守脱敏。
+    #[test]
+    fn bounded_browser_log_caps_and_redacts() {
+        let lines: Vec<String> = (0..20)
+            .map(|i| format!("console error: line {i}"))
+            .collect();
+        let log = bounded_browser_log(&lines);
+        assert!(log.contains("[browser_log]"));
+        assert!(log.contains("line 0"));
+        assert!(!log.contains("line 15"), "over-cap lines dropped");
+        assert!(log.contains("[truncated:"));
+        assert!(log.lines().count() <= BROWSER_LOG_MAX_LINES + 2);
+        assert!(
+            log.len() <= BROWSER_LOG_MAX_BYTES + 64,
+            "byte cap with truncation marker"
+        );
+
+        let secret = "network: https://user:pass@example.com?token=sk-abc1234567890def";
+        let redacted = redact_browser_log_line(secret);
+        assert!(!redacted.contains("sk-abc1234567890def"), "{redacted}");
+        assert!(redacted.contains("***REDACTED***"), "{redacted}");
+    }
+
+    /// S2-R P3 / P1-2b：工具定义形状——单工具多动作，动作集 = Phase 1
+    /// 六动作，url 仅在 navigate 场景语义存在（schema 无法表达条件必需，
+    /// 由执行层严格解析兜底）。
+    #[test]
+    fn browser_control_tool_def_shape() {
+        let def = browser_control_tool_def();
+        assert_eq!(def.name, "browser_control");
+        let props = &def.parameters["properties"];
+        let actions: Vec<&str> = props["action"]["enum"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|v| v.as_str().unwrap())
+            .collect();
+        assert_eq!(
+            actions,
+            vec![
+                "navigate",
+                "back",
+                "forward",
+                "refresh",
+                "wait_load",
+                "snapshot"
+            ]
+        );
+        assert!(props["url"].is_object());
+        assert_eq!(def.parameters["required"][0], "action");
     }
 
     #[tokio::test]

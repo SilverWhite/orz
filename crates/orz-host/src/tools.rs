@@ -425,17 +425,20 @@ pub fn build_toolset(
 /// Adapt `FinalizedToolset` definitions to the orz-loop `ToolRegistry` view.
 pub struct ToolsetRegistry {
     toolset: Arc<FinalizedToolset>,
-    /// local_browser (2026-08-10): whether `browser_read` is declared.
-    /// Set by the session bootstrap via the capability probe — declaration
-    /// and probe are the same source of truth (fail-closed default: false).
-    browser_ready: bool,
+    /// local_browser (2026-08-10) + 0t (2026-09-09, ADR-0010 §14.65 /
+    /// 设计 §3.1): whether the local-browser lane (`browser_read`) is
+    /// declared. 0t 语义 = 静态双族工具面：声明位由检索启用门置位
+    /// （`OrzHost::declare_browser_declared`），**不跟随**探活/句柄
+    /// readiness——浏览器缺席时调用期按普通失败回传（fail-closed 默认
+    /// false：未启用会话无检索工具）。
+    browser_declared: bool,
 }
 
 impl ToolsetRegistry {
     pub fn new(toolset: Arc<FinalizedToolset>) -> Self {
         Self {
             toolset,
-            browser_ready: false,
+            browser_declared: false,
         }
     }
 
@@ -443,20 +446,26 @@ impl ToolsetRegistry {
         &self.toolset
     }
 
-    /// local_browser (2026-08-10): flip `browser_read` declaration on/off
-    /// (caller is the host's `with_browser_session`).
-    pub fn set_browser_ready(&mut self, ready: bool) {
-        self.browser_ready = ready;
+    /// 0t (2026-09-09, S2-R P3 / P2-3): flip the local-browser lane
+    /// declaration on/off（检索启用门语义；不再由句柄 readiness 驱动）。
+    pub fn set_browser_declared(&mut self, declared: bool) {
+        self.browser_declared = declared;
     }
 }
 
 impl orz_loop::host::ToolRegistry for ToolsetRegistry {
     fn get(&self, name: &str) -> Option<orz_loop::host::ToolDef> {
-        // local_browser (2026-08-10): `browser_read` is only declared when
-        // the session's browser lane is actually ready — a model must never
-        // see a tool that will fail on every call.
-        if name == "browser_read" && self.browser_ready {
-            return Some(crate::local_browser::browser_read_tool_def());
+        // 0t + S2-R P3 / P1-2b：启用门置位后恒声明（本地浏览器车道 =
+        // browser_read + browser_control）；浏览器 readiness 不再裁剪声明
+        // 面（调用期懒启动，缺席按普通失败回传）。
+        if self.browser_declared {
+            match name {
+                "browser_read" => return Some(crate::local_browser::browser_read_tool_def()),
+                "browser_control" => {
+                    return Some(crate::local_browser::browser_control_tool_def());
+                }
+                _ => {}
+            }
         }
         self.toolset
             .tool_definitions()
@@ -480,9 +489,13 @@ impl orz_loop::host::ToolRegistry for ToolsetRegistry {
                 parameters: d.function.parameters,
             })
             .collect();
-        // local_browser (2026-08-10): declared only when the lane is ready.
-        if self.browser_ready && !defs.iter().any(|d| d.name == "browser_read") {
-            defs.push(crate::local_browser::browser_read_tool_def());
+        if self.browser_declared {
+            if !defs.iter().any(|d| d.name == "browser_read") {
+                defs.push(crate::local_browser::browser_read_tool_def());
+            }
+            if !defs.iter().any(|d| d.name == "browser_control") {
+                defs.push(crate::local_browser::browser_control_tool_def());
+            }
         }
         defs
     }

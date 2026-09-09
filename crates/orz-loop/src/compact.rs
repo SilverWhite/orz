@@ -565,7 +565,7 @@ mod tests {
             }
             async fn call_tool(
                 &self,
-                name: &str,
+                _name: &str,
                 _arguments: serde_json::Value,
                 _call_id: &str,
             ) -> Result<ToolResult, ToolError> {

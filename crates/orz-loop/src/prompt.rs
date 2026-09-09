@@ -401,34 +401,32 @@ pub fn tool_round_budget_exhaustion_block(budget: u32) -> String {
 /// mechanical (`ORZ_WEB_FETCH_CANDIDATE_CAP`, per-result feedback
 /// "候选 N/M，剩余 K"); the source-weighting / citation-rule paragraphs
 /// are de-duplicated.
+/// 0t (2026-09-09, ADR-0010 §14.65 / 设计 §3.2): 三值检索模式退役——通道
+/// 契约不再按 mode 分支；外部 lane 双族恒在并携带 ≤1 句静态推荐序
+/// （本地浏览器优先、失败按普通错误回传可自由换道），内部 lane 仅文档
+/// 读族。标注只出现在一次性子代理提示与工具描述，无新增常驻 token。
 pub fn build_retrieval_system_prompt(
-    section_name: &str,
+    role: crate::agents::SubagentRole,
     goal: &str,
-    retrieval_mode: &str,
     blocks: &str,
 ) -> String {
-    // GAP-SOURCE-WEIGHTING-IMPL (2026-08-13) / GAP-RETRIEVAL-STRUCTURED-
-    // RESULT 方向 C (2026-08-30): ADR-0010 §3.7 条 12 — the two-channel
-    // contract rides the subagent prompt. The mechanical tier judge labels
-    // every web source in the ledger; this text tells the subagent HOW to
-    // use the labels (prefer higher weight, never hard-block) and WHICH
-    // channel may verify what (二存一 — never mix lanes). The layer-3 model
-    // annotation contract is retired — the mechanical tier is the ONLY
-    // weighting signal (see §14.45).
-    let weighting_contract = match retrieval_mode {
-        "framework_fallback" => {
-            "Retrieval channel: web_search is the entry; verify only \
-             high-value / conclusion-dependent candidates with web_fetch \
-             — the candidate budget is mechanical (per-result feedback \
-             '候选 N/M，剩余 K'). browser_read is FORBIDDEN in this mode \
-             (one channel per task)."
+    let section_name = role.section_name();
+    let lanes_contract = match role {
+        crate::agents::SubagentRole::ExternalRetrieval => {
+            "Retrieval lanes (0t dual-lane): both lanes are available in \
+             this session — browser_read — [车道:本地浏览器检索|推荐首选] \
+             reads pages directly (the read IS the original text); \
+             web_search — [车道:原生检索] is the native lane (verify only \
+             high-value / conclusion-dependent candidates with web_fetch; \
+             the candidate budget is mechanical '候选 N/M，剩余 K'). Prefer \
+             the local-browser lane first; lane failures are returned as \
+             ordinary errors with their real cause — switch lanes freely."
         }
-        "local_browser" => {
-            "Retrieval channel: browser_read reads pages directly — the \
-             read IS the original text (no separate verification layer, no \
-             web_fetch/web_search in this mode)."
+        crate::agents::SubagentRole::InternalRetrieval => {
+            "Retrieval scope: internal project documentation only — use the \
+             read family / project_doc_index; external web tools are not \
+             part of this lane."
         }
-        _ => "Retrieval channel: off — no web retrieval tools.",
     };
     format!(
         "Retrieval subagent ({section_name}). Goal: {goal}\n\
@@ -438,7 +436,7 @@ pub fn build_retrieval_system_prompt(
          low-quality source MAY be used — the mechanical tier is the only \
          weighting signal (model annotations retired, GAP-RETRIEVAL-\
          STRUCTURED-RESULT 方向 C).\n\
-         {weighting_contract}\n\
+         {lanes_contract}\n\
          Citation rule (ADR-0010 §3.7.9): every claim based on external \
          evidence, a reference implementation, or internal docs must carry \
          an inline `[来源: source_id]` marker (ledger-backed) at the citing \
@@ -791,43 +789,56 @@ mod tests {
     }
 
     #[test]
-    fn retrieval_prompt_carries_mode_specific_weighting_contract() {
+    fn retrieval_prompt_carries_dual_lane_contract() {
         // GAP-SOURCE-WEIGHTING-IMPL (2026-08-13) / GAP-RETRIEVAL-STRUCTURED-
-        // RESULT 方向 C (2026-08-30): ADR-0010 §3.7 条 12 — the two-channel
-        // contract rides the retrieval system prompt; the layer-3 model
-        // annotation shape and the [RESULT_JSON] block are GONE.
-        let framework =
-            build_retrieval_system_prompt("external_ret", "goal", "framework_fallback", "");
-        assert!(framework.contains("Source weighting"));
+        // RESULT 方向 C (2026-08-30) + 0t (2026-09-09, ADR-0010 §14.65):
+        // 外部 lane 双族契约 rides the retrieval system prompt; 模式分支
+        // 文本（framework_fallback/local_browser/off）退役；[RESULT_JSON]
+        // 与 layer-3 标注已删。
+        let external = build_retrieval_system_prompt(
+            crate::agents::SubagentRole::ExternalRetrieval,
+            "goal",
+            "",
+        );
+        assert!(external.contains("Source weighting"));
         assert!(
-            !framework.contains("source_annotations"),
+            !external.contains("source_annotations"),
             "layer-3 model annotation contract retired"
         );
         assert!(
-            !framework.contains("[RESULT_JSON]"),
+            !external.contains("[RESULT_JSON]"),
             "organized block contract removed"
         );
-        assert!(framework.contains("browser_read is FORBIDDEN in this mode"));
         assert!(
-            framework.contains("候选 N/M，剩余 K"),
+            external.contains("[车道:本地浏览器检索|推荐首选]")
+                && external.contains("[车道:原生检索]"),
+            "dual-lane static labels ride the prompt"
+        );
+        assert!(
+            external.contains("候选 N/M，剩余 K"),
             "mechanical budget feedback contract present"
         );
         assert!(
-            !framework.contains("at most 5"),
+            !external.contains("at most 5"),
             "obsolete soft candidate cap removed"
         );
         assert!(
-            !framework.contains("\"annotated\""),
+            !external.contains("browser_read is FORBIDDEN"),
+            "二存一禁令退役"
+        );
+        assert!(
+            !external.contains("\"annotated\""),
             "annotation status vocabulary retired"
         );
 
-        let local = build_retrieval_system_prompt("external_ret", "goal", "local_browser", "");
-        assert!(local.contains("no web_fetch/web_search in this mode"));
-        assert!(local.contains("browser_read"));
-        assert!(!local.contains("[RESULT_JSON]"));
-
-        let off = build_retrieval_system_prompt("external_ret", "goal", "off", "");
-        assert!(off.contains("no web retrieval tools"));
-        assert!(!off.contains("[RESULT_JSON]"));
+        // 内部 lane：仅项目文档读族描述，无外部 web 工具文本。
+        let internal = build_retrieval_system_prompt(
+            crate::agents::SubagentRole::InternalRetrieval,
+            "goal",
+            "",
+        );
+        assert!(internal.contains("internal project documentation only"));
+        assert!(!internal.contains("[车道:原生检索]"));
+        assert!(!internal.contains("[RESULT_JSON]"));
     }
 }

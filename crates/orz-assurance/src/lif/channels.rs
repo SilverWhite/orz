@@ -119,13 +119,19 @@ impl ToolEvent {
 /// deny rather than a host-level execution error (`Error`) or a D2 value
 /// exit (`Other`). Mirrors the production refusal paths in `orz-loop`
 /// (`host_exec.rs` / `agent_loop.rs`): anchor mismatch, candidate gate,
-/// retired/sealed tool, permission/ACAF/mode, role gate, plan gate, budget.
+/// retired/sealed tool, permission/ACAF/retrieval-enable gate, role gate,
+/// plan gate, budget. 0t (2026-09-09, ADR-0010 §14.65): 旧三值模式码
+/// （retrieval_mode_off / retrieval_mode_requires_framework_fallback /
+/// retrieval_mode_requires_local_browser）保留为 replay-legal（新生产者
+/// 不再产出、不设负向检查，历史刊干净回放）；新增 `retrieval_not_enabled`
+/// 为检索启用门拒绝码。
 pub fn is_denial_code(code: &str) -> bool {
     matches!(
         code,
         "content_anchor_mismatch"
             | "sealed_tool_denied"
             | "retired_tool_denied"
+            | "retrieval_not_enabled"
             | "retrieval_mode_off"
             | "retrieval_mode_requires_framework_fallback"
             | "retrieval_mode_requires_local_browser"
@@ -538,6 +544,7 @@ mod tests {
             "content_anchor_mismatch",
             "sealed_tool_denied",
             "retired_tool_denied",
+            "retrieval_not_enabled",
             "retrieval_mode_off",
             "retrieval_mode_requires_framework_fallback",
             "retrieval_mode_requires_local_browser",

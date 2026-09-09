@@ -46,6 +46,15 @@ pub const ALLOWED_CDP_METHODS: &[&str] = &[
     "Target.closeTarget",
     "Page.enable",
     "Page.navigate",
+    // S2-R P3 / P1-2b (2026-09-09)：browser_control 历史/刷新动作——
+    // getNavigationHistory / navigateToHistoryEntry / reload 均为机械固定
+    // 调用（无任意 JS eval；navigateToHistoryEntry 的 entryId 来自本会话
+    // 自身的 getNavigationHistory 响应）。
+    "Page.getNavigationHistory",
+    "Page.navigateToHistoryEntry",
+    "Page.reload",
+    // S2-R P3 / P1-2b：Log.entryAdded 收集（页面 console/网络错误节选）。
+    "Log.enable",
     "Browser.setDownloadBehavior",
     // RETRIEVAL-ORCHESTRATION-MECHANICAL 0k (2026-08-30, TODO P0-0k 第一批
     // 第 4 项)：preview/keywords 模式资源拦截——只阻断图片/字体/媒体等
@@ -98,20 +107,38 @@ pub struct CdpConfig {
 
 impl Default for CdpConfig {
     fn default() -> Self {
-        let tab_pool_size = std::env::var("ORZ_BROWSER_TAB_POOL_SIZE")
-            .ok()
-            .and_then(|s| s.trim().parse().ok())
-            .unwrap_or(4);
-        let dns_ttl_secs = std::env::var("ORZ_BROWSER_DNS_TTL_SECS")
-            .ok()
-            .and_then(|s| s.trim().parse().ok())
-            .unwrap_or(300);
+        // S2-R P3 / P4：非法 env 值不再静默吞掉——显式 warn + 回退默认
+        // （行为不变，可观测性补上；与 ORZ_TOOL_TIMEOUT_SECS 显式报错纪律
+        // 同级，此处属可回退配置故 warn 而非报错）。
+        let tab_pool_size = parse_env_or_warn("ORZ_BROWSER_TAB_POOL_SIZE", 4usize);
+        let dns_ttl_secs = parse_env_or_warn("ORZ_BROWSER_DNS_TTL_SECS", 300u64);
         Self {
             load_timeout: DEFAULT_LOAD_TIMEOUT,
             total_budget: DEFAULT_TOTAL_BUDGET,
             tab_pool_size,
             dns_ttl: Duration::from_secs(dns_ttl_secs),
         }
+    }
+}
+
+/// 解析 env 为数值；未设置/非法时 warn（非法值带原文）并回退默认。
+fn parse_env_or_warn<T>(key: &str, default: T) -> T
+where
+    T: std::str::FromStr,
+{
+    match std::env::var(key) {
+        Ok(raw) => match raw.trim().parse::<T>() {
+            Ok(v) => v,
+            Err(_) => {
+                tracing::warn!(
+                    env = key,
+                    raw = %raw,
+                    "invalid value; falling back to default"
+                );
+                default
+            }
+        },
+        Err(_) => default,
     }
 }
 
@@ -357,6 +384,9 @@ pub struct CdpBrowserSession {
     creation_lock: tokio::sync::Mutex<()>,
     /// v2：DNS 预检结果缓存（按 host + TTL；只缓存成功结果）。
     dns: Mutex<HashMap<String, DnsCacheEntry>>,
+    /// S2-R P3 / P1-2b：会话控制 tab（browser_control 状态机）——动作
+    /// 全程持锁（tokio Mutex，可跨 await），控制动作天然串行。
+    control: tokio::sync::Mutex<Option<ControlTab>>,
 }
 
 #[derive(Default)]
@@ -374,10 +404,63 @@ struct PooledTab {
     last_used: std::time::Instant,
 }
 
+/// S2-R P3 / P1-2b（2026-09-09）：browser_control 的会话持续控制 tab——
+/// back/forward 历史依赖同一 CDP target 不销毁（browser_read 的池 tab
+/// 每次读后归还/复用，不承载导航历史）。`current_url`/`title` 缓存最近
+/// 一次落点，供同 URL 免重复导航优化与 snapshot 快速返回。
+struct ControlTab {
+    page_ws: WsSession,
+    current_url: String,
+    title: String,
+}
+
 /// v2：DNS 预检缓存条目（只缓存成功结果；失败不缓存、下次重试）。
 #[derive(Debug, Clone)]
 struct DnsCacheEntry {
     at: std::time::Instant,
+}
+
+/// Seed the session profile so PDF navigations go through Chrome's NATIVE
+/// download channel instead of the built-in PDF viewer (P7 fix, 2026-09-09;
+/// Chrome 153 observed rendering `application/pdf` inline — `loadEventFired`
+/// fires but no `downloadWillBegin` ever arrives, so `download_or_read`
+/// falls through to text extraction and returns `EmptyContent`).
+///
+/// `plugins.always_open_pdf_externally` is the profile preference behind
+/// chrome://settings/content/pdfDocuments ("download PDF files instead of
+/// automatically opening them") — the same knob Selenium/ChromeDriver
+/// prefs set. Seeding it (merge, idempotent) keeps the existing
+/// `Browser.setDownloadBehavior` + download-event design intact and adds NO
+/// CDP method: no Input.*/Runtime.* synthesis, no network interception, no
+/// viewer-DOM automation.
+///
+/// The seed MUST go into `<profile_dir>/Default/Preferences`, not
+/// `<profile_dir>/Preferences`: Chrome keeps per-profile prefs under the
+/// `Default/` subdirectory and never reads a top-level `Preferences` file
+/// (verified 2026-09-09 — an early seed written to the top level survived
+/// on disk untouched because Chrome ignored it; PDFs stayed in the viewer
+/// and no download event fired. Seeding `Default/Preferences` before the
+/// first cold launch makes Chrome honour the pref: headed and headless both
+/// emit `Page.downloadWillBegin` and land the file).
+fn seed_pdf_download_preference(profile_dir: &Path) -> Result<(), CdpError> {
+    let default_dir = profile_dir.join("Default");
+    std::fs::create_dir_all(&default_dir).map_err(|e| CdpError::Io(e.to_string()))?;
+    let path = default_dir.join("Preferences");
+    let mut prefs: Value = match std::fs::read_to_string(&path) {
+        Ok(raw) => serde_json::from_str(&raw).unwrap_or_else(|_| json!({})),
+        Err(_) => json!({}),
+    };
+    // Merge without clobbering existing profile state (cookies/logins and
+    // Chrome's own bookkeeping survive a later cold relaunch on the same
+    // profile dir).
+    let plugins = prefs
+        .as_object_mut()
+        .expect("seeded prefs object")
+        .entry("plugins")
+        .or_insert_with(|| json!({}));
+    plugins["always_open_pdf_externally"] = json!(true);
+    std::fs::write(&path, serde_json::to_string_pretty(&prefs).unwrap())
+        .map_err(|e| CdpError::Io(e.to_string()))
 }
 
 impl CdpBrowserSession {
@@ -389,6 +472,7 @@ impl CdpBrowserSession {
         profile_dir: PathBuf,
         config: CdpConfig,
     ) -> Result<Self, CdpError> {
+        seed_pdf_download_preference(&profile_dir)?;
         let mut cmd = tokio::process::Command::new(&binary);
         // Headed by default (user ruling 2026-08-10 — the operator can log
         // in through the visible window); ORZ_BROWSER_HEADLESS=1 forces
@@ -430,6 +514,7 @@ impl CdpBrowserSession {
             pool_sem: tokio::sync::Semaphore::new(pool_size.max(1)),
             creation_lock: tokio::sync::Mutex::new(()),
             dns: Mutex::new(HashMap::new()),
+            control: tokio::sync::Mutex::new(None),
         })
     }
 
@@ -466,11 +551,32 @@ impl CdpBrowserSession {
         // 私有/metadata 地址在浏览器导航前拒绝，ADR-0010 §3.7.3；DNS 结果
         // 会话级缓存，redirect 重检门保留）。
         self.check_navigation_url_cached(url).await?;
+        // S2-R P3 / P1-2b（P1 设计 §2.1）：同 URL 免重复导航——控制 tab
+        // 当前落点与请求一致时直接在控制 tab 提取（保留页面状态，不新建
+        // 导航）；控制动作进行中/落点不一致时回退常规池读（对既有调用
+        // 透明，url 参数保持必填）。
+        if let Some(result) = self.try_control_tab_read(url).await {
+            return result;
+        }
         if self.config.tab_pool_size == 0 {
             self.read_page_legacy(url, mode).await
         } else {
             self.read_page_pooled(url, mode).await
         }
+    }
+
+    /// S2-R P3 / P1-2b：控制 tab 复用读取（仅 URL 精确一致 + 控制 tab
+    /// 空闲时）。`try_lock` 失败（控制动作进行中）与 URL 不一致都回退
+    /// 常规池读——优化是尽力而为，不引入等待/竞态。
+    async fn try_control_tab_read(&self, url: &str) -> Option<Result<PageReadOutcome, CdpError>> {
+        let mut guard = self.control.try_lock().ok()?;
+        let tab = guard.as_mut()?;
+        if tab.current_url != url {
+            return None;
+        }
+        // 页面文本 eval 是固定表达式（EXPR_TEXT），与 read_in_page 的
+        // extract 阶段同源；不做正文以外的任何操作。
+        Some(extract_page(&mut tab.page_ws, url).await)
     }
 
     /// v2：池化读取——信号量（池上限）→ 租约（独占 busy）→ 读取 → 归还
@@ -539,6 +645,579 @@ impl CdpBrowserSession {
         // Tab teardown on EVERY path（成功/错误/超时）——固定 5s cap。
         let _ = tokio::time::timeout(Duration::from_secs(5), self.close_target(&target_id)).await;
         outcome.map_err(|_| budget_err)?
+    }
+
+    /// S2-R P3 / P1-2b（2026-09-09, P1 设计 §2.1–§2.3）：browser_control
+    /// 动作执行——作用于会话持续控制 tab（back/forward 历史依赖同一
+    /// target）。动作全程持 `control` 锁，控制动作天然串行；URL gate
+    /// fail-closed；导航/等待失败 = 状态化失败（`error_class` + 日志节选，
+    /// FP-2 真实类别），连接层意外才 Err。
+    pub async fn control(
+        &self,
+        action: super::BrowserControlAction,
+        timeout: Duration,
+    ) -> Result<super::BrowserControlOutcome, CdpError> {
+        let mut control = self.control.lock().await;
+        let mut log_lines: Vec<String> = Vec::new();
+        let outcome = match action {
+            super::BrowserControlAction::Navigate { url } => {
+                // URL gate（fail-closed）：拦截 = blocked 状态化失败，带真实
+                // gate 文本（与 browser_read 同门；动作反馈面形态不同）。
+                if let Err(gate) = self.check_navigation_url_cached(&url).await {
+                    log_lines.push(format!("url gate: {gate}"));
+                    Self::control_failure("blocked", &gate.to_string(), None, None, log_lines)
+                } else {
+                    let nav = tokio::time::timeout(
+                        timeout,
+                        self.control_navigate(&mut control, &url, &mut log_lines),
+                    )
+                    .await;
+                    match nav {
+                        Ok(Ok((final_url, title))) => {
+                            Self::control_ok("completed", Some(final_url), Some(title), log_lines)
+                        }
+                        Ok(Err(e)) => {
+                            let (url_now, title_now) = self
+                                .control_try_snapshot(&mut control)
+                                .await
+                                .unwrap_or((None, None));
+                            Self::control_failure_from_err(&e, url_now, title_now, log_lines)
+                        }
+                        Err(_elapsed) => {
+                            let (url_now, title_now) = self
+                                .control_try_snapshot(&mut control)
+                                .await
+                                .unwrap_or((None, None));
+                            Self::control_timeout_failure(
+                                timeout,
+                                "navigation",
+                                url_now,
+                                title_now,
+                                log_lines,
+                            )
+                        }
+                    }
+                }
+            }
+            super::BrowserControlAction::Back => {
+                self.control_history_step(&mut control, -1, timeout, &mut log_lines)
+                    .await?
+            }
+            super::BrowserControlAction::Forward => {
+                self.control_history_step(&mut control, 1, timeout, &mut log_lines)
+                    .await?
+            }
+            super::BrowserControlAction::Refresh => {
+                let Some(tab) = control.as_mut() else {
+                    return Ok(Self::control_failure(
+                        "other",
+                        "no page to refresh: start a control tab with action=navigate first",
+                        None,
+                        None,
+                        log_lines,
+                    ));
+                };
+                Self::drain_events(&mut tab.page_ws);
+                let reload = tokio::time::timeout(timeout, async {
+                    tab.page_ws
+                        .send_command("Page.reload", json!({ "ignoreCache": true }))
+                        .await?;
+                    Self::control_wait_load(&mut tab.page_ws, timeout, &mut log_lines).await?;
+                    Self::control_extract(&mut tab.page_ws, &tab.current_url).await
+                })
+                .await;
+                match reload {
+                    Ok(Ok((final_url, title))) => {
+                        tab.current_url = final_url.clone();
+                        tab.title = title.clone();
+                        Self::control_ok("completed", Some(final_url), Some(title), log_lines)
+                    }
+                    Ok(Err(e)) => {
+                        let (url_now, title_now) =
+                            Self::control_try_snapshot_tab(tab).unwrap_or((None, None));
+                        Self::control_failure_from_err(&e, url_now, title_now, log_lines)
+                    }
+                    Err(_elapsed) => {
+                        let (url_now, title_now) =
+                            Self::control_try_snapshot_tab(tab).unwrap_or((None, None));
+                        Self::control_timeout_failure(
+                            timeout, "reload", url_now, title_now, log_lines,
+                        )
+                    }
+                }
+            }
+            super::BrowserControlAction::WaitLoad => {
+                let Some(tab) = control.as_mut() else {
+                    return Ok(Self::control_failure(
+                        "other",
+                        "no page to wait on: start a control tab with action=navigate first",
+                        None,
+                        None,
+                        log_lines,
+                    ));
+                };
+                Self::drain_events(&mut tab.page_ws);
+                let waited = tokio::time::timeout(
+                    timeout,
+                    Self::control_wait_text_ready(&mut tab.page_ws, timeout, &mut log_lines),
+                )
+                .await;
+                match waited {
+                    Ok(Ok(())) => {
+                        let (url_now, title_now) =
+                            Self::control_try_snapshot_tab(tab).unwrap_or((None, None));
+                        if let (Some(u), Some(t)) = (&url_now, &title_now) {
+                            tab.current_url = u.clone();
+                            tab.title = t.clone();
+                        }
+                        Self::control_ok("completed", url_now, title_now, log_lines)
+                    }
+                    Ok(Err(e)) => {
+                        let (url_now, title_now) =
+                            Self::control_try_snapshot_tab(tab).unwrap_or((None, None));
+                        Self::control_failure_from_err(&e, url_now, title_now, log_lines)
+                    }
+                    Err(_elapsed) => {
+                        let (url_now, title_now) =
+                            Self::control_try_snapshot_tab(tab).unwrap_or((None, None));
+                        Self::control_timeout_failure(
+                            timeout,
+                            "wait_load",
+                            url_now,
+                            title_now,
+                            log_lines,
+                        )
+                    }
+                }
+            }
+            super::BrowserControlAction::Snapshot => {
+                let Some(tab) = control.as_mut() else {
+                    return Ok(super::BrowserControlOutcome {
+                        action_status: "ok".to_string(),
+                        error_class: None,
+                        nav_phase: "idle".to_string(),
+                        url: None,
+                        title: None,
+                        log: String::new(),
+                    });
+                };
+                match Self::control_extract(&mut tab.page_ws, &tab.current_url).await {
+                    Ok((final_url, title)) => {
+                        tab.current_url = final_url.clone();
+                        tab.title = title.clone();
+                        Self::control_ok("completed", Some(final_url), Some(title), log_lines)
+                    }
+                    Err(e) => Self::control_failure_from_err(&e, None, None, log_lines),
+                }
+            }
+        };
+        Ok(outcome)
+    }
+
+    /// 控制导航（URL gate 已通过）：确保控制 tab → 清残留事件 → navigate
+    /// → 等 load（带日志收集）→ 取落点 url/title → 更新缓存。
+    async fn control_navigate(
+        &self,
+        control: &mut Option<ControlTab>,
+        url: &str,
+        log_lines: &mut Vec<String>,
+    ) -> Result<(String, String), CdpError> {
+        let tab = self.ensure_control_tab(control).await?;
+        Self::drain_events(&mut tab.page_ws);
+        tab.page_ws
+            .send_command("Page.navigate", json!({ "url": url }))
+            .await?;
+        Self::control_wait_load(&mut tab.page_ws, self.config.load_timeout, log_lines).await?;
+        let (final_url, title) = Self::control_extract(&mut tab.page_ws, url).await?;
+        tab.current_url = final_url.clone();
+        tab.title = title.clone();
+        Ok((final_url, title))
+    }
+
+    /// 历史后退/前进（delta = -1/+1）：取导航历史 → 目标 entryId →
+    /// navigateToHistoryEntry（机械固定调用，entryId 来自本会话响应）。
+    async fn control_history_step(
+        &self,
+        control: &mut Option<ControlTab>,
+        delta: i32,
+        timeout: Duration,
+        log_lines: &mut Vec<String>,
+    ) -> Result<super::BrowserControlOutcome, CdpError> {
+        let Some(tab) = control.as_mut() else {
+            return Ok(Self::control_failure(
+                "other",
+                "no navigation history: start a control tab with action=navigate first",
+                None,
+                None,
+                Vec::new(),
+            ));
+        };
+        Self::drain_events(&mut tab.page_ws);
+        let hist = tab
+            .page_ws
+            .send_command("Page.getNavigationHistory", json!({}))
+            .await?;
+        let Some(entries) = hist.get("entries").and_then(Value::as_array) else {
+            return Ok(Self::control_failure(
+                "other",
+                "navigation history unavailable (no entries)",
+                None,
+                None,
+                std::mem::take(log_lines),
+            ));
+        };
+        let current_index = hist
+            .get("currentIndex")
+            .and_then(Value::as_i64)
+            .unwrap_or(0);
+        let target_index = current_index as i32 + delta;
+        if target_index < 0 || target_index as usize >= entries.len() {
+            return Ok(Self::control_failure(
+                "other",
+                &format!(
+                    "no history entry in that direction (index {} of {})",
+                    target_index,
+                    entries.len()
+                ),
+                None,
+                None,
+                std::mem::take(log_lines),
+            ));
+        }
+        let entry_id = entries[target_index as usize]["id"]
+            .as_i64()
+            .ok_or_else(|| CdpError::Command {
+                method: "Page.getNavigationHistory".to_string(),
+                message: "entry missing id".to_string(),
+            })?;
+        let target_url = entries[target_index as usize]["url"]
+            .as_str()
+            .unwrap_or(&tab.current_url)
+            .to_string();
+        let step = tokio::time::timeout(timeout, async {
+            tab.page_ws
+                .send_command(
+                    "Page.navigateToHistoryEntry",
+                    json!({ "entryId": entry_id }),
+                )
+                .await?;
+            // bfcache 恢复的后退/前进不重发 loadEventFired——按目标 URL
+            // 轮询确认（事件通道同时收集日志/过 redirect 门）。
+            Self::control_wait_at_url(&mut tab.page_ws, &target_url, timeout, log_lines).await?;
+            Self::control_extract(&mut tab.page_ws, &tab.current_url).await
+        })
+        .await;
+        match step {
+            Ok(Ok((final_url, title))) => {
+                tab.current_url = final_url.clone();
+                tab.title = title.clone();
+                Ok(Self::control_ok(
+                    "completed",
+                    Some(final_url),
+                    Some(title),
+                    std::mem::take(log_lines),
+                ))
+            }
+            Ok(Err(e)) => {
+                let (url_now, title_now) =
+                    Self::control_try_snapshot_tab(tab).unwrap_or((None, None));
+                Ok(Self::control_failure_from_err(
+                    &e,
+                    url_now,
+                    title_now,
+                    std::mem::take(log_lines),
+                ))
+            }
+            Err(_elapsed) => {
+                let (url_now, title_now) =
+                    Self::control_try_snapshot_tab(tab).unwrap_or((None, None));
+                Ok(Self::control_timeout_failure(
+                    timeout,
+                    "history step",
+                    url_now,
+                    title_now,
+                    std::mem::take(log_lines),
+                ))
+            }
+        }
+    }
+
+    /// 确保控制 tab 存在（首次创建 target + 连接 page ws + 启用域）。
+    async fn ensure_control_tab<'a>(
+        &self,
+        control: &'a mut Option<ControlTab>,
+    ) -> Result<&'a mut ControlTab, CdpError> {
+        if control.is_none() {
+            let target_id = self.create_target().await?;
+            let page_ws_url = format!("ws://127.0.0.1:{}/devtools/page/{target_id}", self.port);
+            let mut page_ws = WsSession::connect(&page_ws_url, "control page ws").await?;
+            page_ws.send_command("Page.enable", json!({})).await?;
+            page_ws.send_command("Runtime.enable", json!({})).await?;
+            page_ws.send_command("Network.enable", json!({})).await?;
+            page_ws.send_command("Log.enable", json!({})).await?;
+            *control = Some(ControlTab {
+                page_ws,
+                current_url: "about:blank".to_string(),
+                title: String::new(),
+            });
+        }
+        Ok(control.as_mut().expect("just ensured"))
+    }
+
+    /// 尝试取当前控制 tab 的 url/title（失败返回 None——动作失败路径的
+    /// 尽力信息，不吞主错误）。
+    async fn control_try_snapshot(
+        &self,
+        control: &mut Option<ControlTab>,
+    ) -> Option<(Option<String>, Option<String>)> {
+        let tab = control.as_mut()?;
+        Self::control_try_snapshot_tab(tab)
+    }
+
+    fn control_try_snapshot_tab(tab: &mut ControlTab) -> Option<(Option<String>, Option<String>)> {
+        // 尽力快照 = 最近缓存落点（动作失败路径的信息附着力；导航本身已
+        // 在成功时更新缓存，失败时的实时 eval 大概率同样失败——不额外造
+        // 错吞主错误）。
+        Some((Some(tab.current_url.clone()), Some(tab.title.clone())))
+    }
+
+    /// 等待 loadEventFired，期间收集 console/network 错误日志并过 redirect
+    /// 门（P1-2b 特征回传；best-effort 节选——事件洪泛丢日志可接受）。
+    async fn control_wait_load(
+        page: &mut WsSession,
+        timeout: Duration,
+        log_lines: &mut Vec<String>,
+    ) -> Result<(), CdpError> {
+        let deadline = tokio::time::Instant::now() + timeout;
+        loop {
+            let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
+            let ev = tokio::time::timeout(remaining, page.events.recv())
+                .await
+                .map_err(|_| CdpError::LoadTimeout {
+                    timeout: timeout.as_secs(),
+                })?
+                .ok_or_else(|| CdpError::Io("CDP event channel closed".into()))?;
+            if let Some(line) = collect_control_log_event(&ev) {
+                log_lines.push(line);
+            }
+            if let Some(line) = document_loading_failed(&ev) {
+                log_lines.push(line.clone());
+                return Err(CdpError::Io(line));
+            }
+            gate_top_frame_redirect(&ev).await?;
+            if ev["method"].as_str() == Some("Page.loadEventFired") {
+                return Ok(());
+            }
+        }
+    }
+
+    /// 历史步骤专用等待：bfcache 恢复不重发 loadEventFired，轮询
+    /// `location.href` 到达目标 URL（150ms 周期，事件通道同时收集日志与
+    /// 过 redirect 门）。目标 URL 来自 getNavigationHistory 响应（机械侧，
+    /// 非模型输入）。
+    async fn control_wait_at_url(
+        page: &mut WsSession,
+        target_url: &str,
+        timeout: Duration,
+        log_lines: &mut Vec<String>,
+    ) -> Result<(), CdpError> {
+        let deadline = tokio::time::Instant::now() + timeout;
+        let poll = Duration::from_millis(150);
+        loop {
+            let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
+            if remaining.is_zero() {
+                return Err(CdpError::LoadTimeout {
+                    timeout: timeout.as_secs(),
+                });
+            }
+            let eval = tokio::time::timeout(remaining, page.evaluate_string(EXPR_FINAL_URL)).await;
+            if let Ok(Ok(href)) = eval
+                && href == target_url
+            {
+                return Ok(());
+            }
+            tokio::select! {
+                ev = page.events.recv() => {
+                    if let Some(ev) = ev {
+                        if let Some(line) = collect_control_log_event(&ev) {
+                            log_lines.push(line);
+                        }
+                        if let Some(line) = document_loading_failed(&ev) {
+                            log_lines.push(line.clone());
+                            return Err(CdpError::Io(line));
+                        }
+                        gate_top_frame_redirect(&ev).await?;
+                    } else {
+                        return Err(CdpError::Io("CDP event channel closed".into()));
+                    }
+                }
+                _ = tokio::time::sleep(poll.min(remaining)) => {}
+            }
+        }
+    }
+
+    /// 文本就绪轮询（wait_load 动作）：等待 innerText 非空（不等三方慢
+    /// 资源），期间收集日志；复用 text-ready 语义但有日志收集。
+    async fn control_wait_text_ready(
+        page: &mut WsSession,
+        timeout: Duration,
+        log_lines: &mut Vec<String>,
+    ) -> Result<(), CdpError> {
+        let deadline = tokio::time::Instant::now() + timeout;
+        let poll = Duration::from_millis(150);
+        loop {
+            let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
+            if remaining.is_zero() {
+                return Err(CdpError::LoadTimeout {
+                    timeout: timeout.as_secs(),
+                });
+            }
+            let evaluate = tokio::time::timeout(remaining, page.evaluate_string(EXPR_TEXT)).await;
+            if let Ok(Ok(text)) = evaluate
+                && !text.trim().is_empty()
+            {
+                return Ok(());
+            }
+            tokio::select! {
+                ev = page.events.recv() => {
+                    if let Some(ev) = ev {
+                        if let Some(line) = collect_control_log_event(&ev) {
+                            log_lines.push(line);
+                        }
+                        if let Some(line) = document_loading_failed(&ev) {
+                            log_lines.push(line.clone());
+                            return Err(CdpError::Io(line));
+                        }
+                        gate_top_frame_redirect(&ev).await?;
+                    } else {
+                        return Err(CdpError::Io("CDP event channel closed".into()));
+                    }
+                }
+                _ = tokio::time::sleep(poll.min(remaining)) => {}
+            }
+        }
+    }
+
+    /// drain 控制 tab 事件通道的残留事件（导航前清旧页 load 事件，避免
+    /// 误判终态）。
+    fn drain_events(page: &mut WsSession) {
+        while let Ok(_ev) = page.events.try_recv() {}
+    }
+
+    /// 取当前控制页落点 url/title（固定表达式；不做正文 eval——正文读取
+    /// 仍走 browser_read）。
+    async fn control_extract(
+        page: &mut WsSession,
+        fallback_url: &str,
+    ) -> Result<(String, String), CdpError> {
+        let final_url = page.evaluate_string(EXPR_FINAL_URL).await?;
+        let final_url = if final_url.is_empty() || final_url == "about:blank" {
+            fallback_url.to_string()
+        } else {
+            check_navigation_url(&final_url).await?;
+            final_url
+        };
+        let title = page.evaluate_string(EXPR_TITLE).await?;
+        Ok((final_url, title))
+    }
+
+    fn control_ok(
+        nav_phase: &str,
+        url: Option<String>,
+        title: Option<String>,
+        log_lines: Vec<String>,
+    ) -> super::BrowserControlOutcome {
+        super::BrowserControlOutcome {
+            action_status: "ok".to_string(),
+            error_class: None,
+            nav_phase: nav_phase.to_string(),
+            url,
+            title,
+            log: super::bounded_browser_log(&log_lines),
+        }
+    }
+
+    /// 从执行错误映射状态化失败（FP-2 真实类别，非教学句）。
+    fn control_failure_from_err(
+        err: &CdpError,
+        url: Option<String>,
+        title: Option<String>,
+        log_lines: Vec<String>,
+    ) -> super::BrowserControlOutcome {
+        let base = match err {
+            CdpError::UrlGate(_) => "blocked",
+            CdpError::LoadTimeout { .. } | CdpError::TotalTimeout { .. } => "timeout",
+            _ => "other",
+        };
+        let (class, reason) = Self::classify_log_class(base, &log_lines, &err.to_string());
+        Self::control_failure(&class, &reason, url, title, log_lines)
+    }
+
+    fn control_failure(
+        error_class: &str,
+        reason: &str,
+        url: Option<String>,
+        title: Option<String>,
+        mut log_lines: Vec<String>,
+    ) -> super::BrowserControlOutcome {
+        if !reason.trim().is_empty() {
+            log_lines.push(format!("error: {reason}"));
+        }
+        super::BrowserControlOutcome {
+            action_status: "error".to_string(),
+            error_class: Some(error_class.to_string()),
+            nav_phase: "error".to_string(),
+            url,
+            title,
+            log: super::bounded_browser_log(&log_lines),
+        }
+    }
+
+    /// 超时类失败的统一构造——先从已收集日志提炼真实网络类别（DNS /
+    /// 连接重置 / 证书 / 拦截），无匹配才回落 timeout。
+    fn control_timeout_failure(
+        timeout: Duration,
+        what: &str,
+        url: Option<String>,
+        title: Option<String>,
+        log_lines: Vec<String>,
+    ) -> super::BrowserControlOutcome {
+        let reason = format!("{what} timed out after {timeout:?}");
+        let (class, reason) = Self::classify_log_class("timeout", &log_lines, &reason);
+        Self::control_failure(&class, &reason, url, title, log_lines)
+    }
+
+    /// 日志特征 → 真实错误类别（FP-2）：console/network 错误文本的
+    /// `net::ERR_*` 码映射；无匹配回落 base。blocked（gate 前置拦截）不
+    /// 被日志改写。
+    fn classify_log_class(base: &str, log_lines: &[String], fallback: &str) -> (String, String) {
+        if base == "blocked" {
+            return (base.to_string(), fallback.to_string());
+        }
+        let joined = log_lines.join("\n");
+        let class = if joined.contains("ERR_NAME_NOT_RESOLVED")
+            || joined.contains("ERR_NAME_OR_SERVICE_NOT_KNOWN")
+            || joined.contains("ERR_DNS_")
+        {
+            "dns"
+        } else if joined.contains("ERR_CONNECTION_RESET")
+            || joined.contains("ERR_CONNECTION_REFUSED")
+            || joined.contains("ERR_CONNECTION_CLOSED")
+            || joined.contains("ERR_EMPTY_RESPONSE")
+            || joined.contains("ERR_INTERNET_DISCONNECTED")
+            || joined.contains("ERR_ADDRESS_UNREACHABLE")
+        {
+            "connection_reset"
+        } else if joined.contains("ERR_CERT_") {
+            "certificate"
+        } else if joined.contains("ERR_BLOCKED_BY_CLIENT")
+            || joined.contains("ERR_BLOCKED_BY_RESPONSE")
+        {
+            "blocked"
+        } else {
+            base
+        };
+        (class.to_string(), fallback.to_string())
     }
 
     /// v2：DNS 预检——形状检查每次执行（无 IO）；DNS/SSRF 结果按 host
@@ -751,6 +1430,95 @@ impl CdpBrowserSession {
             }
         })
         .await;
+    }
+}
+
+/// S2-R P3 / P1-2b（2026-09-09, P1 设计 §2.2）：从 CDP 事件提取日志特征
+/// 行——console error/warning + 未捕获异常 + Log.entryAdded(error/warning)
+/// + Network.loadingFailed 错误文本。best-effort（洪泛丢事件可接受），只
+/// 供有界节选；页面正文永不进本通道。
+fn collect_control_log_event(ev: &Value) -> Option<String> {
+    let method = ev.get("method")?.as_str()?;
+    match method {
+        "Runtime.consoleAPICalled" => {
+            let params = ev.get("params")?;
+            let level = params.get("type")?.as_str().unwrap_or("log");
+            if !matches!(level, "error" | "warning" | "assert") {
+                return None;
+            }
+            let text = params
+                .get("args")?
+                .as_array()?
+                .iter()
+                .filter_map(|arg| {
+                    arg.get("value")
+                        .and_then(Value::as_str)
+                        .or_else(|| arg.get("description").and_then(Value::as_str))
+                        .map(str::to_string)
+                })
+                .collect::<Vec<_>>()
+                .join(" ");
+            if text.trim().is_empty() {
+                None
+            } else {
+                Some(format!("console {level}: {text}"))
+            }
+        }
+        "Runtime.exceptionThrown" => {
+            let details = ev.pointer("/params/exceptionDetails")?;
+            let text = details
+                .get("text")
+                .and_then(Value::as_str)
+                .unwrap_or("uncaught exception");
+            Some(format!("exception: {text}"))
+        }
+        "Log.entryAdded" => {
+            let entry = ev.pointer("/params/entry")?;
+            let level = entry.get("level").and_then(Value::as_str).unwrap_or("");
+            if !matches!(level, "error" | "warning") {
+                return None;
+            }
+            let text = entry.get("text").and_then(Value::as_str).unwrap_or("");
+            if text.trim().is_empty() {
+                None
+            } else {
+                Some(format!("log {level}: {text}"))
+            }
+        }
+        "Network.loadingFailed" => {
+            let text = ev
+                .pointer("/params/errorText")
+                .and_then(Value::as_str)
+                .unwrap_or("");
+            if text.trim().is_empty() {
+                None
+            } else {
+                Some(format!("network: {text}"))
+            }
+        }
+        _ => None,
+    }
+}
+
+/// S2-R P3 / P1-2b：主文档（type=Document）加载失败 = 导航终态失败——
+/// 不等 load 超时（DNS/连接重置/证书错误在事件流即时可达）；子资源失败
+/// 与 canceled（导航被替换）不中止。返回的错误行已可作日志特征与类别
+/// 提炼来源。
+fn document_loading_failed(ev: &Value) -> Option<String> {
+    if ev["method"].as_str() == Some("Network.loadingFailed")
+        && ev.pointer("/params/type").and_then(Value::as_str) == Some("Document")
+        && !ev
+            .pointer("/params/canceled")
+            .and_then(Value::as_bool)
+            .unwrap_or(false)
+    {
+        let text = ev
+            .pointer("/params/errorText")
+            .and_then(Value::as_str)
+            .unwrap_or("document load failed");
+        Some(format!("network: {text}"))
+    } else {
+        None
     }
 }
 
@@ -1230,6 +1998,67 @@ mod tests {
         }
     }
 
+    /// P7（2026-09-09）：PDF 下载偏好种子——合并写（保留既有 profile
+    /// 内容）、幂等、空 profile 也能新建。种子落在 Chrome 实际读取的
+    /// `<user-data-dir>/Default/Preferences`（顶层 Preferences 被忽略，
+    /// 2026-09-09 真机取证）。
+    #[test]
+    fn pdf_preference_seed_writes_merges_and_is_idempotent() {
+        let dir = std::env::temp_dir().join(format!(
+            "orz-cdp-pdf-prefs-{:?}",
+            std::thread::current().id()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        // Simulate an existing profile (Chrome bookkeeping/cookies etc.).
+        let default_dir = dir.join("Default");
+        std::fs::create_dir_all(&default_dir).unwrap();
+        // Simulate an existing profile (Chrome bookkeeping/cookies etc.).
+        std::fs::write(
+            default_dir.join("Preferences"),
+            r#"{"download":{"default_directory":"downloads"}}"#,
+        )
+        .unwrap();
+
+        seed_pdf_download_preference(&dir).unwrap();
+        let prefs: Value = serde_json::from_str(
+            &std::fs::read_to_string(default_dir.join("Preferences")).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(prefs["plugins"]["always_open_pdf_externally"], json!(true));
+        assert_eq!(
+            prefs["download"]["default_directory"],
+            json!("downloads"),
+            "existing profile prefs must survive the merge"
+        );
+
+        // Idempotent: re-seeding keeps a single plugin key.
+        seed_pdf_download_preference(&dir).unwrap();
+        let prefs: Value = serde_json::from_str(
+            &std::fs::read_to_string(default_dir.join("Preferences")).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(prefs["plugins"]["always_open_pdf_externally"], json!(true));
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn pdf_preference_seed_creates_fresh_profile() {
+        let dir = std::env::temp_dir().join(format!(
+            "orz-cdp-pdf-prefs-fresh-{:?}",
+            std::thread::current().id()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        seed_pdf_download_preference(&dir).unwrap();
+        let prefs: Value = serde_json::from_str(
+            &std::fs::read_to_string(dir.join("Default").join("Preferences")).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(prefs["plugins"]["always_open_pdf_externally"], json!(true));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     /// 测试用会话构造（无需真实浏览器进程；gate/池语义可离线断言）。
     fn test_session(config: CdpConfig) -> CdpBrowserSession {
         let pool_size = config.tab_pool_size;
@@ -1246,6 +2075,7 @@ mod tests {
             pool_sem: tokio::sync::Semaphore::new(pool_size.max(1)),
             creation_lock: tokio::sync::Mutex::new(()),
             dns: Mutex::new(HashMap::new()),
+            control: tokio::sync::Mutex::new(None),
         }
     }
 
@@ -1257,10 +2087,14 @@ mod tests {
             set,
             vec![
                 "Browser.setDownloadBehavior",
+                "Log.enable",
                 "Network.enable",
                 "Network.setBlockedURLs",
                 "Page.enable",
+                "Page.getNavigationHistory",
                 "Page.navigate",
+                "Page.navigateToHistoryEntry",
+                "Page.reload",
                 "Runtime.enable",
                 "Runtime.evaluate",
                 "Target.closeTarget",
@@ -1287,6 +2121,108 @@ mod tests {
                     "{m}"
                 );
             }
+        }
+    }
+
+    /// S2-R P3 / P1-2b：日志事件收集——console error/warning、未捕获
+    /// 异常、Log.entryAdded(error/warning) 与 Network.loadingFailed 进特征；
+    /// console log/info 与无关事件不进（有界节选只收真实问题）。
+    #[test]
+    fn collect_control_log_event_filters_and_formats() {
+        let cases = [
+            (
+                json!({
+                    "method": "Runtime.consoleAPICalled",
+                    "params": {
+                        "type": "error",
+                        "args": [
+                            {"value": "fetch failed"},
+                            {"value": "at line 1"}
+                        ]
+                    }
+                }),
+                Some("console error: fetch failed at line 1"),
+            ),
+            (
+                json!({
+                    "method": "Runtime.consoleAPICalled",
+                    "params": {"type": "log", "args": [{"value": "noise"}]}
+                }),
+                None,
+            ),
+            (
+                json!({
+                    "method": "Runtime.exceptionThrown",
+                    "params": {"exceptionDetails": {"text": "TypeError: x"}}
+                }),
+                Some("exception: TypeError: x"),
+            ),
+            (
+                json!({
+                    "method": "Log.entryAdded",
+                    "params": {
+                        "entry": {
+                            "level": "error",
+                            "text": "net::ERR_CERT_AUTHORITY_INVALID"
+                        }
+                    }
+                }),
+                Some("log error: net::ERR_CERT_AUTHORITY_INVALID"),
+            ),
+            (
+                json!({
+                    "method": "Network.loadingFailed",
+                    "params": {"errorText": "net::ERR_NAME_NOT_RESOLVED"}
+                }),
+                Some("network: net::ERR_NAME_NOT_RESOLVED"),
+            ),
+            (json!({"method": "Page.loadEventFired"}), None),
+        ];
+        for (ev, expected) in cases {
+            assert_eq!(collect_control_log_event(&ev).as_deref(), expected, "{ev}");
+        }
+    }
+
+    /// S2-R P3 / P1-2b：日志特征 → 真实错误类别映射（FP-2）——DNS /
+    /// 连接重置 / 证书从 `net::ERR_*` 文本提炼；无匹配回落 base；
+    /// blocked（gate 前置拦截）不被日志改写。
+    #[test]
+    fn classify_log_class_maps_network_error_text() {
+        let cases = [
+            (
+                vec!["network: net::ERR_NAME_NOT_RESOLVED".to_string()],
+                "timeout",
+                "dns",
+            ),
+            (
+                vec!["network: net::ERR_CONNECTION_RESET".to_string()],
+                "timeout",
+                "connection_reset",
+            ),
+            (
+                vec!["network: net::ERR_CONNECTION_REFUSED".to_string()],
+                "other",
+                "connection_reset",
+            ),
+            (
+                vec!["network: net::ERR_CERT_AUTHORITY_INVALID".to_string()],
+                "other",
+                "certificate",
+            ),
+            (
+                vec!["console error: fetch failed".to_string()],
+                "timeout",
+                "timeout",
+            ),
+            (
+                vec!["network: net::ERR_NAME_NOT_RESOLVED".to_string()],
+                "blocked",
+                "blocked",
+            ),
+        ];
+        for (log_lines, base, expected) in cases {
+            let (class, _) = CdpBrowserSession::classify_log_class(base, &log_lines, "reason");
+            assert_eq!(class, expected, "{log_lines:?}");
         }
     }
 

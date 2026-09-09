@@ -13,12 +13,13 @@ use std::sync::Mutex;
 
 use crate::blackboard::{ActionOrder, EditRecord, ToolActionRecord};
 use crate::console::{
-    CODE_CONTENT_ANCHOR_MISMATCH, CODE_EXECUTION_FAILED, CODE_TOOL_NOT_FOUND, CODE_TOOL_TIMEOUT,
+    CODE_BROWSER_LAUNCH_FAILED, CODE_CONTENT_ANCHOR_MISMATCH, CODE_EXECUTION_FAILED,
+    CODE_TOOL_NOT_FOUND, CODE_TOOL_TIMEOUT,
 };
 use crate::controller::{
     AgentLoopController, AgentLoopError, CandidateGateDecision, DenialKey, EventWriter,
-    PolicyFeedback, RetrievalMode, TicketGate, candidate_tool_prefix, chrono_utc_now,
-    commit_candidate, compose_test_output_message, rollback_candidate,
+    PolicyFeedback, TicketGate, candidate_tool_prefix, chrono_utc_now, commit_candidate,
+    compose_test_output_message, rollback_candidate,
 };
 use crate::gateway::model::{Message, Role, ToolCall};
 use crate::host::{
@@ -54,6 +55,34 @@ impl AgentLoopController {
             AgentLoopController::now_epoch_secs(),
             orz_assurance::lif::ToolEvent::deny(wall_ms),
         );
+    }
+
+    /// 0t (2026-09-09, ADR-0010 §14.65 / 设计 §3.3): 落 `browser_launch_result`
+    /// 事实事件——必须在 ToolStarted 之后、对应 ToolCompleted 之前调用。
+    /// 事件不带 args、key 不落卷纪律不变。
+    pub(crate) async fn journal_browser_launch(
+        &self,
+        writer: &mut EventWriter<'_>,
+        fact: &crate::host::BrowserLaunchFact,
+    ) -> Result<(), AgentLoopError> {
+        let suffix = writer
+            .run_id()
+            .strip_prefix("RUN-")
+            .unwrap_or(writer.run_id());
+        let status = match fact.status {
+            crate::host::BrowserLaunchStatus::Success => "success",
+            crate::host::BrowserLaunchStatus::Failure => "failure",
+        };
+        writer
+            .record(
+                EventType::BrowserLaunchResult,
+                serde_json::json!({
+                    "attempt_id": format!("BLAUNCH-{}-{:04}", suffix, writer.seq()),
+                    "status": status,
+                    "cause": fact.cause,
+                }),
+            )
+            .await
     }
 
     /// P2-12 COMPRESSION-LINGUISTIC-FORMAL-LAYER 方案 A（2026-09-02）：
@@ -99,6 +128,9 @@ impl AgentLoopController {
             ToolError::NotFound(_) => CODE_TOOL_NOT_FOUND,
             ToolError::Timeout(_) => CODE_TOOL_TIMEOUT,
             ToolError::ExecutionFailed(_) => CODE_EXECUTION_FAILED,
+            ToolError::BrowserLaunchFailed(_) => CODE_BROWSER_LAUNCH_FAILED,
+            // P1-2a：启动成功但动作失败——不新增稳定码，归 ExecutionFailed 系。
+            ToolError::BrowserStepFailed { .. } => CODE_EXECUTION_FAILED,
         }
     }
 
@@ -316,8 +348,9 @@ impl AgentLoopController {
         // C2-1 (2026-08-11): whether the per-call permission bridge is
         // consulted. The main lane passes `true`; retrieval-lane
         // self-execution (web tools inside a retrieval lane) passes
-        // `false` — the explicit retrieval-mode gate (§3.7.1) is its
-        // authorization chain (2026-08-11 user adjudication).
+        // `false` — the explicit retrieval enable gate (ADR-0010 §14.65)
+        // is its authorization chain (2026-08-11 user adjudication;
+        // 0t 后 = 独立启用门，模式状态机退役).
         permission_gated: bool,
         // P0-A step 5 review fix (2026-08-13): whether this lane owns the
         // work-tool probe map. Main/grill lanes pass `true` — a real call
@@ -612,12 +645,11 @@ impl AgentLoopController {
         // and the tool replies violates the provider protocol (400,
         // 2026-08-07 wordy); ADR-0010 §3.5.4 counts rounds, not calls, so
         // the aggregation belongs at round granularity anyway.
-        // H1 (review 2026-08-10): the host-routed retrieval tool is gated by
-        // the mode=off refusal — same no-ToolStarted shape as the subagent
-        // dispatch gate (the verifier's mode rule forbids retrieval dispatch
-        // after a transition to off; the refusal is the ToolCompleted(error)
-        // alone).
-        if self.retrieval_mode == RetrievalMode::Off
+        // H1 (review 2026-08-10) + 0t (2026-09-09, ADR-0010 §14.65): host
+        // 路由检索工具由独立启用门 gated——未启用会话的 refusal 与 subagent
+        // 派发门同形（no-ToolStarted；ToolCompleted(error) alone，拒绝码
+        // `retrieval_not_enabled`，脱离模式状态机）。
+        if !self.retrieval_enabled
             && (crate::relay::is_retrieval_mode_gated_host_tool(&tc.name)
                 // C2-1 (2026-08-11): the web family joins the off gate —
                 // lane self-execution routes web tools through the host
@@ -626,8 +658,9 @@ impl AgentLoopController {
                 || crate::relay::is_web_retrieval_tool(&tc.name))
         {
             let msg = format!(
-                "retrieval '{}' refused — retrieval mode is 'off' for this \
-                 session (ADR-0010 §3.7.1); no retrieval tools are available.",
+                "retrieval '{}' refused — retrieval is not enabled for this \
+                 session (ADR-0010 §14.65); no retrieval tools are \
+                 available.",
                 tc.name,
             );
             let target = if crate::relay::is_web_retrieval_tool(&tc.name) {
@@ -635,7 +668,7 @@ impl AgentLoopController {
             } else {
                 "internal_retrieval"
             };
-            let code = "retrieval_mode_off";
+            let code = "retrieval_not_enabled";
             let policy_denial = PolicyDenial {
                 source: PolicyDenialSource::RetrievalMode,
                 code: code.to_string(),
@@ -664,7 +697,7 @@ impl AgentLoopController {
                 reasoning_content: None,
                 round: None,
             });
-            // P2-10 R2 (2026-08-31): retrieval-mode-off refusal = deny event.
+            // P2-10 R2 (2026-08-31): retrieval enable-gate refusal = deny.
             self.feed_lif_deny(None);
             return Ok((
                 ToolResult {
@@ -679,123 +712,11 @@ impl AgentLoopController {
                 None,
             ));
         }
-        // C2-1 (2026-08-11): the mirror lane gate for the web family —
-        // web tools are only reachable in framework_fallback mode (the
-        // web-tool lane). Without this gate, lane self-execution would let
-        // web tools run under local_browser (cross-lane), violating the
-        // explicit mode semantics (ADR-0010 §3.7.1). No ToolStarted — same
-        // refusal shape as the off gate and the browser_read gate.
-        if crate::relay::is_web_retrieval_tool(&tc.name)
-            && self.retrieval_mode != RetrievalMode::FrameworkFallback
-        {
-            let msg = format!(
-                "retrieval '{}' refused — retrieval mode is '{}' for this \
-                 session; web tools require framework_fallback mode \
-                 (ADR-0010 §3.7.1); no silent fallback to the browser lane.",
-                tc.name,
-                self.retrieval_mode.as_str(),
-            );
-            let code = "retrieval_mode_requires_framework_fallback";
-            let policy_denial = PolicyDenial {
-                source: PolicyDenialSource::RetrievalMode,
-                code: code.to_string(),
-                reason: msg.clone(),
-            };
-            let mut payload = serde_json::json!({
-                "tool": tc.name,
-                "call_id": tc.call_id,
-                "exit_code": 1,
-                "target": "external_retrieval",
-                "status": "error",
-                "error": code,
-                "policy_denial": {
-                    "source": "retrieval_mode",
-                    "code": code,
-                    "reason": msg,
-                },
-            });
-            stamp_direct(&mut payload);
-            writer.record(EventType::ToolCompleted, payload).await?;
-            messages.push(Message {
-                role: Role::Tool,
-                content: msg.clone(),
-                tool_call_id: Some(tc.call_id.clone()),
-                tool_calls: Vec::new(),
-                reasoning_content: None,
-                round: None,
-            });
-            // P2-10 R2 (2026-08-31): framework-fallback mode refusal = deny.
-            self.feed_lif_deny(None);
-            return Ok((
-                ToolResult {
-                    output: msg,
-                    exit_code: Some(1),
-                    output_encoding: None,
-                    structured: None,
-                    policy_denial: Some(policy_denial),
-                    timed_out: false,
-                    ..Default::default()
-                },
-                None,
-            ));
-        }
-        // local_browser (2026-08-10): `browser_read` is only reachable in
-        // local_browser mode — framework_fallback is the web-tool lane and
-        // the model must not cross lanes (ADR-0010 §3.7.1; the off case was
-        // already refused above via the gated-host-tool family). No
-        // ToolStarted — same refusal shape as the off gate.
-        if tc.name == "browser_read" && self.retrieval_mode != RetrievalMode::LocalBrowser {
-            let msg = format!(
-                "retrieval '{}' refused — retrieval mode is '{}' for this \
-                 session; browser_read requires local_browser mode \
-                 (ADR-0010 §3.7.1); no silent fallback to web tools.",
-                tc.name,
-                self.retrieval_mode.as_str(),
-            );
-            let code = "retrieval_mode_requires_local_browser";
-            let policy_denial = PolicyDenial {
-                source: PolicyDenialSource::RetrievalMode,
-                code: code.to_string(),
-                reason: msg.clone(),
-            };
-            let mut payload = serde_json::json!({
-                "tool": tc.name,
-                "call_id": tc.call_id,
-                "exit_code": 1,
-                "target": "external_retrieval",
-                "status": "error",
-                "error": code,
-                "policy_denial": {
-                    "source": "retrieval_mode",
-                    "code": code,
-                    "reason": msg,
-                },
-            });
-            stamp_direct(&mut payload);
-            writer.record(EventType::ToolCompleted, payload).await?;
-            messages.push(Message {
-                role: Role::Tool,
-                content: msg.clone(),
-                tool_call_id: Some(tc.call_id.clone()),
-                tool_calls: Vec::new(),
-                reasoning_content: None,
-                round: None,
-            });
-            // P2-10 R2 (2026-08-31): local-browser mode refusal = deny.
-            self.feed_lif_deny(None);
-            return Ok((
-                ToolResult {
-                    output: msg,
-                    exit_code: Some(1),
-                    output_encoding: None,
-                    structured: None,
-                    policy_denial: Some(policy_denial),
-                    timed_out: false,
-                    ..Default::default()
-                },
-                None,
-            ));
-        }
+        // 0t (2026-09-09, ADR-0010 §14.65 / 设计 §3.1): γ 退役后不存在
+        // 车道互斥门——检索启用会话双族并存（browser_read + web 族），
+        // 换道由模型自主；`retrieval_mode_requires_framework_fallback` /
+        // `retrieval_mode_requires_local_browser` 拒绝族退役。浏览器不可用
+        // 按普通失败回传（§3.4），不再是模式拒绝。
         // FUS-RETRIEVAL-MECH P0-B step 2/4 (2026-08-14): candidate
         // mechanical count gate (design §1) — the prompt's soft "候选 ≤5"
         // becomes a hard per-activation cap (ORZ_WEB_FETCH_CANDIDATE_CAP,
@@ -3242,6 +3163,11 @@ impl AgentLoopController {
         };
         let (mut result, succeeded) = match call_result {
             Ok(res) => {
+                // 0t (2026-09-09, ADR-0010 §14.65 / 设计 §3.3): 本次调用发生
+                // 浏览器启动/探活尝试 → 在 ToolCompleted 前落事实事件。
+                if let Some(fact) = &res.browser_launch_fact {
+                    self.journal_browser_launch(writer, fact).await?;
+                }
                 // 2026-08-08 blackboard partition: a SUCCESSFUL file-edit
                 // tool records its line-range delta — old/new line counts
                 // from the call's old_string/new_string args ("行范围从
@@ -3485,6 +3411,7 @@ impl AgentLoopController {
                     ToolResult {
                         output,
                         exit_code: res.exit_code,
+                        browser_launch_fact: res.browser_launch_fact.clone(),
                         session_volume_opened: res.session_volume_opened,
                         // GAP-ENCODING-GATE (OPS-PROTOCOL §8): 重建时透传
                         // 解码阶段——此前只进 journal（tool_completed.
@@ -3514,6 +3441,20 @@ impl AgentLoopController {
             }
             Err(e) => {
                 let timed_out = matches!(e, ToolError::Timeout(_));
+                // 0t P1-2a: 启动/探活尝试事实独立于动作结果——启动失败走
+                // `BrowserLaunchFailed`（failure fact），启动成功但动作失败
+                // 走 `BrowserStepFailed`（success fact 随 Err 携带）；两者都
+                // 在 ToolCompleted 之前落 `browser_launch_result`。
+                let launch_fact = match &e {
+                    ToolError::BrowserLaunchFailed(reason) => {
+                        Some(crate::host::BrowserLaunchFact::failure(reason.clone()))
+                    }
+                    ToolError::BrowserStepFailed { launch_fact, .. } => Some(launch_fact.clone()),
+                    _ => None,
+                };
+                if let Some(fact) = &launch_fact {
+                    self.journal_browser_launch(writer, fact).await?;
+                }
                 let mut err_payload = {
                     let mut payload = serde_json::json!({
                         "tool": tc.name,
@@ -3522,6 +3463,12 @@ impl AgentLoopController {
                         "error": e.to_string(),
                         "wall_ms": wall_started.elapsed().as_millis() as u64,
                     });
+                    if matches!(e, ToolError::BrowserLaunchFailed(_)) {
+                        // 稳定码进 journal；真实原因在 browser_launch_result
+                        // 事实事件与模型可见消息中。
+                        payload["error"] =
+                            serde_json::json!(crate::console::CODE_BROWSER_LAUNCH_FAILED);
+                    }
                     // 0q（ADR-0010 §14.63）：原「P2-10 F4 身份挂载 + P2-12
                     // 写时盖章」散布写点退役——语义由单一漏斗等价覆盖
                     // （写点 ③：host ToolError，code = ToolErrorKind
@@ -3594,6 +3541,12 @@ impl AgentLoopController {
                             ToolError::Timeout(reason) => {
                                 format!("tool TIMED OUT — it did not complete: {reason}")
                             }
+                            ToolError::BrowserLaunchFailed(reason) => {
+                                format!("browser launch failed: {reason}")
+                            }
+                            ToolError::BrowserStepFailed { reason, .. } => {
+                                format!("browser step failed: {reason}")
+                            }
                             _ => format!("tool error: {e}"),
                         },
                         exit_code: Some(1),
@@ -3605,7 +3558,9 @@ impl AgentLoopController {
                         tool_error_kind: Some(match &e {
                             ToolError::NotFound(_) => crate::host::ToolErrorKind::NotFound,
                             ToolError::Timeout(_) => crate::host::ToolErrorKind::Timeout,
-                            ToolError::ExecutionFailed(_) => {
+                            ToolError::ExecutionFailed(_)
+                            | ToolError::BrowserLaunchFailed(_)
+                            | ToolError::BrowserStepFailed { .. } => {
                                 crate::host::ToolErrorKind::ExecutionFailed
                             }
                         }),
@@ -3836,12 +3791,12 @@ impl AgentLoopController {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::controller::RetrievalCapability;
     use crate::controller_test_support::*;
     use crate::gateway::fake::{FakeProvider, ScriptedResponse};
     use crate::gateway::model::ModelGateway;
-    use crate::host::{PermitError, RiskClass, ToolRegistry};
+    use crate::host::{BrowserLaunchFact, PermitError, RiskClass, ToolRegistry};
     use async_trait::async_trait;
+    use orz_assurance::EventTrack;
     use orz_assurance::session::snapshot::SnapshotStore;
     use orz_assurance::{JournalRecorder, RunEvent};
     use std::sync::Arc;
@@ -6436,14 +6391,7 @@ mod tests {
         ]));
         // No .with_acaf — unconfigured fabric (zero behaviour change).
         let controller = AgentLoopController::with_gateway(gateway)
-            .with_retrieval_mode(
-                RetrievalMode::LocalBrowser,
-                RetrievalCapability::Available,
-                false,
-                None,
-                None,
-                None,
-            )
+            .with_retrieval_enabled(true)
             .with_snapshot_store(Some(store));
         controller
             .run_turn(
@@ -6475,6 +6423,323 @@ mod tests {
             "tool paths unchanged: {types:?}"
         );
 
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// 0t (2026-09-09, ADR-0010 §14.65 / 设计 §3.3): browser_read 调用期
+    /// 懒启动结果经 ToolResult/`BrowserLaunchFailed` 接缝回传——loop 在
+    /// ToolStarted 之后、ToolCompleted 之前落 `browser_launch_result`
+    /// 事实事件。
+    struct BrowserLaunchHost {
+        journal: JournalRecorder,
+        outcome: BrowserLaunchHostOutcome,
+    }
+
+    enum BrowserLaunchHostOutcome {
+        OkWithLaunchFact,
+        LaunchFailed(String),
+        /// P1-2a 场景 S3：启动成功但动作失败——success fact 随 Err 携带。
+        StepFailed(String),
+    }
+
+    #[async_trait]
+    impl LoopHost for BrowserLaunchHost {
+        fn journal(&self) -> &JournalRecorder {
+            &self.journal
+        }
+        fn tools_registry(&self) -> &dyn ToolRegistry {
+            &EmptyRegistry
+        }
+        fn session_cwd(&self) -> std::path::PathBuf {
+            self.journal.journal_dir().to_path_buf()
+        }
+        async fn request_permission(
+            &self,
+            _risk: RiskClass,
+            _tool: &str,
+            _args: &serde_json::Value,
+        ) -> Result<PermitDecision, PermitError> {
+            Ok(PermitDecision::AllowOnce)
+        }
+        async fn call_tool(
+            &self,
+            _name: &str,
+            _args: serde_json::Value,
+            _call_id: &str,
+        ) -> Result<ToolResult, ToolError> {
+            match &self.outcome {
+                BrowserLaunchHostOutcome::OkWithLaunchFact => Ok(ToolResult {
+                    output: "page text".to_string(),
+                    exit_code: Some(0),
+                    browser_launch_fact: Some(BrowserLaunchFact::success()),
+                    ..Default::default()
+                }),
+                BrowserLaunchHostOutcome::LaunchFailed(cause) => {
+                    Err(ToolError::BrowserLaunchFailed(cause.clone()))
+                }
+                BrowserLaunchHostOutcome::StepFailed(reason) => Err(ToolError::BrowserStepFailed {
+                    reason: reason.clone(),
+                    launch_fact: BrowserLaunchFact::success(),
+                }),
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn browser_launch_success_fact_journaled_before_completion() {
+        let dir = test_dir();
+        let host = BrowserLaunchHost {
+            journal: JournalRecorder::new(dir.clone()),
+            outcome: BrowserLaunchHostOutcome::OkWithLaunchFact,
+        };
+        let controller = AgentLoopController::with_gateway(Arc::new(FakeProvider::new(Vec::new())))
+            .with_retrieval_enabled(true);
+        let tc = ToolCall {
+            name: "browser_read".to_string(),
+            arguments: serde_json::json!({ "url": "https://example.com" }),
+            call_id: "call-blaunch-ok".to_string(),
+        };
+        let mut messages: Vec<Message> = Vec::new();
+        let candidates = Arc::new(Mutex::new(Vec::new()));
+        let mut writer = EventWriter::new(
+            Some(host.journal()),
+            EventTrack::V02,
+            "RUN-BOK",
+            "",
+            0,
+            None,
+            None,
+        );
+        controller
+            .run_host_tool(
+                &host,
+                &mut writer,
+                &tc,
+                "",
+                orz_assurance::gates::ipg::WorkspaceTrust::ObservedTrusted,
+                &mut messages,
+                0,
+                None,
+                None,
+                Some(&candidates),
+                true,
+                true,
+            )
+            .await
+            .unwrap();
+        let events = events(&dir);
+        let started_index = events
+            .iter()
+            .position(|e| e.event_type == EventType::ToolStarted)
+            .expect("tool_started precedes the launch fact");
+        let fact_index = events
+            .iter()
+            .position(|e| e.event_type == EventType::BrowserLaunchResult)
+            .expect("browser_launch_result success fact");
+        let completed_index = events
+            .iter()
+            .position(|e| e.event_type == EventType::ToolCompleted)
+            .expect("tool_completed");
+        assert!(
+            started_index < fact_index && fact_index < completed_index,
+            "ToolStarted → browser_launch_result → ToolCompleted 全序: {events:?}"
+        );
+        assert_eq!(
+            events[fact_index].payload["status"],
+            serde_json::json!("success")
+        );
+        assert!(events[fact_index].payload["cause"].is_null());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[tokio::test]
+    async fn browser_launch_failure_fact_and_stable_code_journaled() {
+        let dir = test_dir();
+        let host = BrowserLaunchHost {
+            journal: JournalRecorder::new(dir.clone()),
+            outcome: BrowserLaunchHostOutcome::LaunchFailed(
+                "browser_not_found: ORZ_BROWSER_PATH unset".to_string(),
+            ),
+        };
+        let controller = AgentLoopController::with_gateway(Arc::new(FakeProvider::new(Vec::new())))
+            .with_retrieval_enabled(true);
+        let tc = ToolCall {
+            name: "browser_read".to_string(),
+            arguments: serde_json::json!({ "url": "https://example.com" }),
+            call_id: "call-blaunch-fail".to_string(),
+        };
+        let mut messages: Vec<Message> = Vec::new();
+        let candidates = Arc::new(Mutex::new(Vec::new()));
+        let mut writer = EventWriter::new(
+            Some(host.journal()),
+            EventTrack::V02,
+            "RUN-BFAIL",
+            "",
+            0,
+            None,
+            None,
+        );
+        let (result, _) = controller
+            .run_host_tool(
+                &host,
+                &mut writer,
+                &tc,
+                "",
+                orz_assurance::gates::ipg::WorkspaceTrust::ObservedTrusted,
+                &mut messages,
+                0,
+                None,
+                None,
+                Some(&candidates),
+                true,
+                true,
+            )
+            .await
+            .unwrap();
+        assert_eq!(result.exit_code, Some(1));
+        assert!(
+            result.output.contains("browser launch failed")
+                && result.output.contains("browser_not_found"),
+            "real cause rides the model-visible message: {}",
+            result.output
+        );
+        let events = events(&dir);
+        let started_index = events
+            .iter()
+            .position(|e| e.event_type == EventType::ToolStarted)
+            .expect("tool_started precedes the launch fact");
+        let fact_index = events
+            .iter()
+            .position(|e| e.event_type == EventType::BrowserLaunchResult)
+            .expect("browser_launch_result failure fact");
+        let completed_index = events
+            .iter()
+            .position(|e| e.event_type == EventType::ToolCompleted)
+            .expect("tool_completed");
+        assert!(
+            started_index < fact_index && fact_index < completed_index,
+            "ToolStarted → browser_launch_result → ToolCompleted 全序: {events:?}"
+        );
+        assert_eq!(
+            events[fact_index].payload["status"],
+            serde_json::json!("failure")
+        );
+        assert_eq!(
+            events[fact_index].payload["cause"],
+            serde_json::json!("browser_not_found: ORZ_BROWSER_PATH unset")
+        );
+        let completed = &events[completed_index];
+        assert_eq!(
+            completed.payload["error"],
+            serde_json::json!("browser_launch_failed")
+        );
+        assert_eq!(completed.payload["status"], serde_json::json!("error"));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// 0t P1-2a（2026-09-09, S2-R P2 / 设计 §3.2 场景 S3）：启动成功但页面
+    /// 动作失败——`BrowserStepFailed` 携带 success fact，loop 在 ToolCompleted
+    /// 前落 `browser_launch_result(success)`；ToolCompleted 错误保留真实类别
+    /// 文本（不覆盖稳定码，FP-2），失败漏斗归 ExecutionFailed 系。
+    #[tokio::test]
+    async fn browser_step_failed_success_fact_journaled_before_completion() {
+        let dir = test_dir();
+        let host = BrowserLaunchHost {
+            journal: JournalRecorder::new(dir.clone()),
+            outcome: BrowserLaunchHostOutcome::StepFailed(
+                "browser_read failed [browser_read_empty_content]: page produced \
+                 no readable text"
+                    .to_string(),
+            ),
+        };
+        let controller = AgentLoopController::with_gateway(Arc::new(FakeProvider::new(Vec::new())))
+            .with_retrieval_enabled(true);
+        let tc = ToolCall {
+            name: "browser_read".to_string(),
+            arguments: serde_json::json!({ "url": "https://example.com" }),
+            call_id: "call-bstep-fail".to_string(),
+        };
+        let mut messages: Vec<Message> = Vec::new();
+        let candidates = Arc::new(Mutex::new(Vec::new()));
+        let mut writer = EventWriter::new(
+            Some(host.journal()),
+            EventTrack::V02,
+            "RUN-BSTEP",
+            "",
+            0,
+            None,
+            None,
+        );
+        let (result, _feedback) = controller
+            .run_host_tool(
+                &host,
+                &mut writer,
+                &tc,
+                "",
+                orz_assurance::gates::ipg::WorkspaceTrust::ObservedTrusted,
+                &mut messages,
+                0,
+                None,
+                None,
+                Some(&candidates),
+                true,
+                true,
+            )
+            .await
+            .unwrap();
+        assert_eq!(result.exit_code, Some(1));
+        assert_eq!(
+            result.tool_error_kind,
+            Some(crate::host::ToolErrorKind::ExecutionFailed)
+        );
+        assert!(
+            result.output.contains("browser step failed")
+                && result.output.contains("browser_read_empty_content"),
+            "real page-level cause rides the model-visible message: {}",
+            result.output
+        );
+        let events = events(&dir);
+        let started_index = events
+            .iter()
+            .position(|e| e.event_type == EventType::ToolStarted)
+            .expect("tool_started precedes the launch fact");
+        let fact_index = events
+            .iter()
+            .position(|e| e.event_type == EventType::BrowserLaunchResult)
+            .expect("browser_launch_result success fact (S3)");
+        let completed_index = events
+            .iter()
+            .position(|e| e.event_type == EventType::ToolCompleted)
+            .expect("tool_completed");
+        assert!(
+            started_index < fact_index && fact_index < completed_index,
+            "ToolStarted → browser_launch_result → ToolCompleted 全序: {events:?}"
+        );
+        assert_eq!(
+            events[fact_index].payload["status"],
+            serde_json::json!("success")
+        );
+        assert!(events[fact_index].payload["cause"].is_null());
+        let completed = &events[completed_index];
+        assert_eq!(completed.payload["status"], serde_json::json!("error"));
+        assert!(
+            completed.payload["error"]
+                .as_str()
+                .unwrap()
+                .contains("browser_read_empty_content"),
+            "{}",
+            completed.payload["error"]
+        );
+        // 启动成功 + 动作失败归 ExecutionFailed 系（不新增稳定码），失败
+        // 漏斗照常盖章（browser_read 有 URL 身份）。
+        assert_eq!(
+            completed.payload["failure_target"]["kind"],
+            serde_json::json!("url_target")
+        );
+        assert_eq!(
+            completed.payload["failure_target"]["canonical_url"],
+            serde_json::json!("https://example.com/")
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 

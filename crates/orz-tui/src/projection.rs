@@ -529,6 +529,19 @@ pub fn apply_event(app: &mut TuiApp, event: TuiEvent) -> Vec<String> {
             );
             vec![format!("激活恢复: {status}")]
         }
+        // 0t (2026-09-09, ADR-0010 §14.65): browser launch fact event.
+        TuiEvent::BrowserLaunchResult {
+            attempt_id,
+            status,
+            cause,
+        } => {
+            let detail = cause.unwrap_or_else(|| "ok".to_string());
+            app.content.add_system_message(
+                &format!("[浏览器启动] {attempt_id}: {status} ({detail})"),
+                false,
+            );
+            vec![format!("浏览器启动: {status}")]
+        }
         // MECHANICAL-AUDIT-LAYER (2026-08-24, ADR-0010 §14.39): 机械审查
         // 层轻量事件留痕——只展示键与异常（摘要细节留在 journal）。
         TuiEvent::MechanicalAuditUpdate {

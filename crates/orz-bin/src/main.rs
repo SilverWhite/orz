@@ -127,10 +127,16 @@ fn main() {
             std::env::set_var("ORZ_MAX_WALLCLOCK", secs);
         }
     }
-    // GAP-RETRIEVAL-TOOLS (2026-08-10): `--retrieval-mode <off|local_browser|
-    // framework_fallback>` — the session-level retrieval mode (ADR-0010
-    // §3.7.1) for sessions created by this process (stdio/TUI). Explicit
-    // selection only; invalid values exit 2.
+    // 0t (2026-09-09, ADR-0010 §14.65 / 设计 §3.1): `--retrieval-enabled` —
+    // 会话级独立检索启用门（默认 false = fail-closed；三值模式退役后唯一
+    // 授权开关）。旧 `--retrieval-mode <off|local_browser|framework_fallback>`
+    // 保留兼容解析（标注废弃）：非 off 旧值仍按 legacy 兼容映射启用（不再
+    // 有 lane 语义），并由 `retrieval_enabled_from_env` 打印弃用提示。
+    if args.iter().any(|a| a == "--retrieval-enabled") {
+        unsafe {
+            std::env::set_var("ORZ_RETRIEVAL_ENABLED", "1");
+        }
+    }
     if let Some(pos) = args.iter().position(|a| a == "--retrieval-mode") {
         let mode = match args.get(pos + 1) {
             Some(s) => s.clone(),
@@ -332,34 +338,35 @@ fn run_replay_entry(path: &std::path::Path) {
     }
 }
 
-/// GAP-RETRIEVAL-TOOLS (2026-08-10): read `ORZ_RETRIEVAL_MODE`
-/// (set by `--retrieval-mode`) — the session-level retrieval mode for
-/// sessions created by this process; `None` = the `off` default.
+/// DEPRECATED (0t, ADR-0010 §14.65): read legacy `ORZ_RETRIEVAL_MODE`
+/// (set by deprecated `--retrieval-mode`) — 保留兼容解析。
 fn retrieval_mode_from_env() -> Option<orz_loop::controller::RetrievalMode> {
     std::env::var("ORZ_RETRIEVAL_MODE")
         .ok()
         .and_then(|v| orz_loop::controller::RetrievalMode::from_wire(Some(&v)))
 }
 
-/// RETRIEVAL-SUBAGENT-WIRING 审查处理 (2026-08-25, ADR-0010 §14.40)：
-/// CLI 一次性运行（`orz -p ...`）的检索模式接线决策——由 probe 结果决定
-/// controller 的 `bootstrap_transition_pending` 与 transition 元数据：
-/// - off（缺省）：不 journal（无检索选择）；
-/// - 显式非 off：journal `off → mode`（session_bootstrap/session_default）；
-/// - 模式 A 降级：journal `local_browser → framework_fallback`
-///   （mechanical_probe/browser_launch_failed）。
-fn cli_retrieval_wiring(
-    outcome: &orz_host::retrieval_mode::ModeAProbeOutcome,
-) -> (bool, Option<(String, String)>) {
-    let pending =
-        outcome.degraded || outcome.effective_mode != orz_loop::controller::RetrievalMode::Off;
-    let authority = outcome.degraded.then(|| {
-        (
-            "mechanical_probe".to_string(),
-            "browser_launch_failed".to_string(),
-        )
-    });
-    (pending, authority)
+/// 0t (2026-09-09, ADR-0010 §14.65 / 设计 §3.1): 会话级检索启用门解析——
+/// 优先级：显式 `ORZ_RETRIEVAL_ENABLED`（1/true/yes/on ⇒ 开；0/false/no/off
+/// ⇒ 关）> legacy `ORZ_RETRIEVAL_MODE` 兼容映射（非 off ⇒ 开，打印弃用
+/// 提示）> 默认关（fail-closed）。
+fn retrieval_enabled_from_env() -> bool {
+    if let Ok(v) = std::env::var("ORZ_RETRIEVAL_ENABLED") {
+        return matches!(
+            v.trim().to_ascii_lowercase().as_str(),
+            "1" | "true" | "yes" | "on"
+        );
+    }
+    if let Some(mode) = retrieval_mode_from_env() {
+        eprintln!(
+            "warning: --retrieval-mode / ORZ_RETRIEVAL_MODE is deprecated \
+             (0t γ, ADR-0010 §14.65) — lane selection is automatic; use \
+             --retrieval-enabled / ORZ_RETRIEVAL_ENABLED to control the \
+             enable gate"
+        );
+        return mode.enables_retrieval();
+    }
+    false
 }
 
 /// ACAF Slice 1 (ADR-0011 §4.4): spawn the signer-process client when the
@@ -443,7 +450,7 @@ fn run_stdio() {
                 .with_acaf(acaf)
                 .with_acaf_fail_closed(acaf_fail_closed_enabled()),
         );
-        orz_host::stdio::run_stdio_server(server, retrieval_mode_from_env())
+        orz_host::stdio::run_stdio_server(server, retrieval_enabled_from_env())
             .await
             .map_err(|e| e.to_string())
     });
@@ -1153,22 +1160,19 @@ async fn run(
         // Phase 3 wiring: real OrzHost (GrokBuild toolset + trust) behind
         // the IP6 permission bridge. Headless (`None` gateway): Read
         // auto-allows, Bash Ask → Deny.
+        let retrieval_enabled = retrieval_enabled_from_env();
         let mut host = build_cli_host(&handle, &run_id, &cwd)?;
+        // 0t (ADR-0010 §14.65 / 设计 §3.1): 启用会话声明 browser_read 常驻
+        // （静态双族工具面）；调用期按需懒启动。
+        if retrieval_enabled {
+            host.declare_browser_declared();
+        }
 
-        // RETRIEVAL-SUBAGENT-WIRING 审查处理 (2026-08-25, ADR-0010 §14.40)：
-        // CLI 一次性运行接通检索模式——`--retrieval-mode` / `ORZ_RETRIEVAL_MODE`
-        // 走与 ACP 会话路径共享的 probe + 模式 A 机械定档（local_browser
-        // probe 失败 → framework_fallback + transition 元数据）。此前
-        // ORZ_RETRIEVAL_MODE 仅被 stdio 入口消费，`orz -p` 会话恒停 off。
-        let retrieval_outcome = orz_host::retrieval_mode::probe_retrieval_with_mode_a(
-            retrieval_mode_from_env().unwrap_or(orz_loop::controller::RetrievalMode::Off),
-            host.web_search_configured(),
-            &mut host,
-            &cwd,
-            &run_id,
-        )
-        .await;
-        let (retrieval_pending, transition_authority) = cli_retrieval_wiring(&retrieval_outcome);
+        // 0t (2026-09-09, ADR-0010 §14.65 / 设计 §3.1): CLI 一次性运行接通
+        // 独立检索启用门——`--retrieval-enabled` / `ORZ_RETRIEVAL_ENABLED`
+        // 或 legacy `--retrieval-mode`/`ORZ_RETRIEVAL_MODE` 兼容映射（非
+        // off ⇒ 开）。模式 A probe/机械降级退役：不再启动期拉起浏览器或
+        // 产生 retrieval_mode_transition。
         let controller = orz_loop::AgentLoopController::with_gateway(build_gateway())
             // THIN-HARNESS-REDESIGN R1 (2026-08-27, §4.5): plan 门摘除——
             // 首轮直接进入工作工具（与第 2 轮 direct 面一致）；plan 分区
@@ -1178,14 +1182,7 @@ async fn run(
             // default + direct 受控降级（双模式）随生产路径启用。
             .with_console_default_enabled(true)
             .with_snapshot_store(Some(handle.snapshot_store.clone()))
-            .with_retrieval_mode(
-                retrieval_outcome.effective_mode,
-                retrieval_outcome.capability,
-                retrieval_pending,
-                None,
-                retrieval_outcome.previous_mode,
-                transition_authority,
-            )
+            .with_retrieval_enabled(retrieval_enabled)
             // ACAF Slice 1 (ADR-0011 §4.4): optional signer-process client
             // (env-gated; unconfigured → unticketed control events, zero
             // behaviour change). Shadow mode by default; Slice 2
@@ -1816,6 +1813,28 @@ mod conformance_capture {
             })
         }
 
+        async fn control(
+            &self,
+            action: orz_host::local_browser::BrowserControlAction,
+            _timeout: std::time::Duration,
+        ) -> Result<orz_host::local_browser::BrowserControlOutcome, orz_host::local_browser::CdpError>
+        {
+            // Conformance stub：控制动作确定性返回当前落点（read stub 同
+            // 形态），供 browser_control 的 conformance capture 使用。
+            let url = match &action {
+                orz_host::local_browser::BrowserControlAction::Navigate { url } => url.clone(),
+                _ => "https://example.com/".to_string(),
+            };
+            Ok(orz_host::local_browser::BrowserControlOutcome {
+                action_status: "ok".to_string(),
+                error_class: None,
+                nav_phase: "completed".to_string(),
+                url: Some(url),
+                title: Some("Example".to_string()),
+                log: String::new(),
+            })
+        }
+
         async fn download_or_read(
             &self,
             url: &str,
@@ -1865,6 +1884,17 @@ mod conformance_capture {
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         dir
+    }
+
+    /// Restore a process env var on drop (scenario-scoped env mutation —
+    /// conformance captures run with `--test-threads=1`; the guard keeps a
+    /// later assertion failure from leaking the override into other tests).
+    struct RestoreEnvOnDrop(&'static str);
+
+    impl Drop for RestoreEnvOnDrop {
+        fn drop(&mut self) {
+            unsafe { std::env::remove_var(self.0) };
+        }
     }
 
     /// Copy `{journal_dir}/events.jsonl` into the scenario staging dir.
@@ -1947,6 +1977,9 @@ mod conformance_capture {
                         "tool_availability_check",
                         "run_started",
                         "prompt_submitted",
+                        // 0t 事件面（2026-09-09）：每次模型请求前落
+                        // request_header_change（S2 Task 1 起）。
+                        "request_header_change",
                         "model_output",
                         "counterexample_gate",
                         "model_output",
@@ -2035,12 +2068,16 @@ mod conformance_capture {
                         "tool_availability_check",
                         "run_started",
                         "prompt_submitted",
+                        "request_header_change",
                         "model_output",
                         "permission_requested",
                         "permission_decision",
                         "snapshot_created",
                         "tool_started",
                         "tool_completed",
+                        // 工具轮后的机械审计更新（2026-09-09 起双条）。
+                        "mechanical_audit_update",
+                        "mechanical_audit_update",
                         "model_output",
                         "counterexample_gate",
                         "model_output",
@@ -2177,6 +2214,7 @@ mod conformance_capture {
                         "tool_availability_check",
                         "run_started",
                         "prompt_submitted",
+                        "request_header_change",
                         "run_cancelled",
                     ],
                     "run_cancelled",
@@ -2225,6 +2263,7 @@ mod conformance_capture {
                         "tool_availability_check",
                         "run_started",
                         "prompt_submitted",
+                        "request_header_change",
                         "run_failed",
                     ],
                     "run_failed",
@@ -2329,6 +2368,9 @@ mod conformance_capture {
                     "当前任务定位：处理查询批次；下一步：汇总结果",
                 ));
                 script.push(ScriptedResponse::text("最终汇总完成。"));
+                // 2026-09-09：checkpoint 注入轮后模型仍需一个终答文本轮
+                // （注入回答 → 反例门 → 终答）；旧脚本止于反例门即耗尽。
+                script.push(ScriptedResponse::text("（终答）检索批次已汇总。"));
                 let controller = orz_loop::AgentLoopController::with_gateway(Arc::new(
                     FakeProvider::new(script),
                 ))
@@ -2337,14 +2379,7 @@ mod conformance_capture {
                 // retrieval — run under an explicit framework_fallback mode
                 // with a fully available capability (the bare default is
                 // mode=off, which would refuse every dispatch).
-                .with_retrieval_mode(
-                    orz_loop::controller::RetrievalMode::FrameworkFallback,
-                    orz_loop::controller::RetrievalCapability::Available,
-                    false,
-                    None,
-                    None,
-                    None,
-                );
+                .with_retrieval_enabled(true);
                 // This scenario is the 7-round-crossing proof — the session
                 // orientation state MUST be threaded in (a one-shot CLI run
                 // would pass None and never fire). R1: 显式 7 保持原触发
@@ -2371,17 +2406,23 @@ mod conformance_capture {
                     "tool_availability_check",
                     "run_started",
                     "prompt_submitted",
+                    // 0t 事件面（2026-09-09）：每次模型请求前落
+                    // request_header_change（S2 Task 1 起）。
+                    "request_header_change",
                 ];
                 // Per retrieval iteration: the shared-loop dispatch (subagent
                 // model round inside the parent's wrapper) + the assessment +
                 // the auto_close close record (R1 §4.4 — no disposition
                 // round, no probe flips). The orientation crosses the
                 // 7-round threshold on the 7th retrieve's post-tool-batch
-                // gap (the 7th completed main round).
+                // gap (the 7th completed main round). 2026-09-09：工具轮后
+                // 双 mechanical_audit_update；第 7 轮 checkpoint 夹在两条
+                // 审计更新之间（post_tool_batch_gap 语义不变）。
                 for i in 0..7 {
                     expected.extend([
                         "model_output",
                         "tool_started",
+                        "request_header_change",
                         "model_output",
                         "tool_completed",
                         // GAP-RETRIEVAL-TOOLS (2026-08-10): the committed
@@ -2390,12 +2431,17 @@ mod conformance_capture {
                         "information_sufficiency_assessment",
                         // R1 (§4.4): auto_close close record per dispatch.
                         "retrieval_close_record",
+                        "mechanical_audit_update",
                     ]);
                     if i == 6 {
                         expected.push("orientation_checkpoint");
                     }
+                    expected.push("mechanical_audit_update");
                 }
                 expected.extend([
+                    "model_output",
+                    // 2026-09-09：checkpoint 注入后的回答轮先行，随后才是
+                    // 反例门与终答（注入回答 → 汇总轮 → 反例门 → 终答）。
                     "model_output",
                     "counterexample_gate",
                     "model_output",
@@ -2454,11 +2500,12 @@ mod conformance_capture {
             .await
     }
 
-    /// 8. mode-off refusal — GAP-RETRIEVAL-TOOLS: the default mode=off
-    /// refuses a scripted retrieval dispatch with the explicit
-    /// `retrieval_mode_off` error (ToolCompleted alone — no ToolStarted:
-    /// the verifier's mode rule forbids any dispatch after a transition to
-    /// off); the model's declaration projection hides the retrieval family.
+    /// 8. disabled-gate refusal — 0t (2026-09-09, ADR-0010 §14.65 / 设计
+    /// §3.1): a default (retrieval not enabled) session refuses a scripted
+    /// retrieval dispatch with the explicit `retrieval_not_enabled` error —
+    /// ToolCompleted(error) ALONE, no ToolStarted (the enable gate has no
+    /// mode state machine to transition; the declaration projection hides
+    /// the retrieval family).
     #[tokio::test]
     #[ignore = "conformance capture — run with: cargo test -p orz-bin -- --ignored conformance_capture"]
     async fn capture_mode_off_refusal() {
@@ -2503,8 +2550,11 @@ mod conformance_capture {
                         "tool_availability_check",
                         "run_started",
                         "prompt_submitted",
+                        "request_header_change",
                         "model_output",
                         "tool_completed",
+                        "mechanical_audit_update",
+                        "mechanical_audit_update",
                         "model_output",
                         "counterexample_gate",
                         "model_output",
@@ -2519,24 +2569,45 @@ mod conformance_capture {
                     .find(|l| l.contains("\"tool_completed\""))
                     .map(|l| serde_json::from_str(l).unwrap())
                     .unwrap();
-                assert_eq!(refused["payload"]["error"], "retrieval_mode_off");
+                assert_eq!(refused["payload"]["status"], "error");
+                assert_eq!(refused["payload"]["error"], "retrieval_not_enabled");
                 assert_eq!(refused["payload"]["target"], "internal_retrieval");
+                // The enable gate is not a mode state machine: no
+                // transition event, no ToolStarted, no policy_denial
+                // envelope (the dispatch gate is the authorization).
+                assert!(!content.contains("\"retrieval_mode_transition\""));
+                assert!(!content.contains("\"tool_started\""));
+                assert!(refused["payload"].get("policy_denial").is_none());
                 copy_journal(&handle.journal_dir, "mode-off-refusal");
             })
             .await
     }
 
-    /// 9. local-browser capability — GAP-RETRIEVAL-TOOLS: mode=local_browser
-    /// with an unsupported capability fails every retrieval dispatch
-    /// explicitly (ToolStarted → ToolCompleted(error,
-    /// retrieval_capability_unavailable)) — no silent degradation to the
-    /// framework tools.
+    /// 9. local-browser launch failure — 0t (2026-09-09, ADR-0010 §14.65 /
+    /// P1 设计 §3.2 场景 S1): an ENABLED session with no usable browser
+    /// backend does NOT refuse at a mode/capability gate. The web_search
+    /// dispatch starts (web/native family ToolStarted), the external lane
+    /// attempts browser_read (host/browser family ToolStarted), the lazy
+    /// launch fails, and the loop journals
+    /// ToolStarted → browser_launch_result(failure) → ToolCompleted(error
+    /// `browser_launch_failed`) — the failure rides the ordinary host error
+    /// path (FP-2 real cause), never a capability-status precheck. Scenario
+    /// name retained for fixture continuity; semantics = S1 launch failure.
     #[tokio::test]
     #[ignore = "conformance capture — run with: cargo test -p orz-bin -- --ignored conformance_capture"]
     async fn capture_local_browser_capability_error() {
         tokio::task::LocalSet::new()
             .run_until(async {
                 let base = worktree("local-browser-capability");
+                // Force discovery to fail loudly without ever touching a
+                // real browser: ORZ_BROWSER_PATH set-but-missing is the
+                // hermetic S1 (probe_launch never falls back to discovery).
+                let missing = base.join("no-such-browser.exe");
+                assert!(!missing.exists(), "scenario path must not exist");
+                let _env_guard = RestoreEnvOnDrop("ORZ_BROWSER_PATH");
+                unsafe {
+                    std::env::set_var("ORZ_BROWSER_PATH", missing.to_string_lossy().to_string());
+                }
                 let run_id = "RUN-LBROW-CONF";
                 let handle = bootstrap_session(run_id, Some(base.clone()), TrustPolicy::Skip)
                     .await
@@ -2549,20 +2620,17 @@ mod conformance_capture {
                             arguments: serde_json::json!({"query": "x"}),
                             call_id: "call-1".to_string(),
                         }]),
+                        ScriptedResponse::tool_calls(vec![ToolCall {
+                            name: "browser_read".to_string(),
+                            arguments: serde_json::json!({"url": "https://example.com/"}),
+                            call_id: "call-b1".to_string(),
+                        }]),
+                        ScriptedResponse::text("[FAIL] 浏览器不可用"),
                         ScriptedResponse::text("完成。"),
                         ScriptedResponse::text("完成。"),
                     ])))
                     .with_snapshot_store(Some(handle.snapshot_store.clone()))
-                    .with_retrieval_mode(
-                        orz_loop::controller::RetrievalMode::LocalBrowser,
-                        orz_loop::controller::RetrievalCapability::Unsupported(
-                            "local_browser_automation_not_implemented".to_string(),
-                        ),
-                        true,
-                        None,
-                        None,
-                        None,
-                    );
+                    .with_retrieval_enabled(true);
                 controller
                     .run_turn(
                         &host,
@@ -2582,15 +2650,26 @@ mod conformance_capture {
                     "local-browser-capability",
                     &[
                         "run_preflight",
-                        // Bootstrap transition (off → local_browser) journals
-                        // before the availability gate.
-                        "retrieval_mode_transition",
                         "tool_availability_check",
                         "run_started",
                         "prompt_submitted",
+                        "request_header_change",
                         "model_output",
                         "tool_started",
+                        "request_header_change",
+                        "model_output",
+                        "permission_requested",
+                        "permission_decision",
+                        "tool_started",
+                        "browser_launch_result",
                         "tool_completed",
+                        "model_output",
+                        "tool_completed",
+                        "retrieval_result_committed",
+                        "information_sufficiency_assessment",
+                        "retrieval_close_record",
+                        "mechanical_audit_update",
+                        "mechanical_audit_update",
                         "model_output",
                         "counterexample_gate",
                         "model_output",
@@ -2600,23 +2679,72 @@ mod conformance_capture {
                 );
                 let content =
                     std::fs::read_to_string(handle.journal_dir.join("events.jsonl")).unwrap();
-                let refused: serde_json::Value = content
+                // 双族并存：web_search（原生/web 族，external 派发面）与
+                // browser_read（浏览器族，host 面）都真实启动——不再有任何
+                // capability 预检拒绝。
+                let started_tools: Vec<serde_json::Value> = content
                     .lines()
-                    .find(|l| l.contains("\"retrieval_capability_unavailable\""))
+                    .filter(|l| l.contains("\"tool_started\""))
                     .map(|l| serde_json::from_str(l).unwrap())
-                    .unwrap();
-                assert_eq!(refused["payload"]["status"], "error");
+                    .collect();
+                assert!(
+                    started_tools.iter().any(|e| {
+                        e["payload"]["tool"] == "web_search"
+                            && e["payload"]["target"] == "external_retrieval"
+                    }),
+                    "web family dispatch must start under the enabled session"
+                );
+                assert!(
+                    started_tools
+                        .iter()
+                        .any(|e| e["payload"]["tool"] == "browser_read"),
+                    "browser family host tool must start under the enabled session"
+                );
+                // S1: ToolStarted → browser_launch_result(failure) →
+                // ToolCompleted(error browser_launch_failed) 全序 + 稳定码。
+                let fact: serde_json::Value = content
+                    .lines()
+                    .find(|l| l.contains("\"browser_launch_result\""))
+                    .map(|l| serde_json::from_str(l).unwrap())
+                    .expect("browser_launch_result failure fact");
+                assert_eq!(fact["payload"]["status"], "failure");
+                assert!(
+                    fact["payload"]["cause"]
+                        .as_str()
+                        .is_some_and(|c| c.contains("ORZ_BROWSER_PATH")),
+                    "real launch cause must ride the fact: {}",
+                    fact["payload"]["cause"]
+                );
+                let completed: Vec<serde_json::Value> = content
+                    .lines()
+                    .filter(|l| l.contains("\"tool_completed\""))
+                    .map(|l| serde_json::from_str(l).unwrap())
+                    .collect();
+                let launched_completed = completed
+                    .iter()
+                    .find(|e| {
+                        e["payload"]["tool"] == "browser_read" && e["payload"]["status"] == "error"
+                    })
+                    .expect("browser_read launch-failure completion");
+                assert_eq!(
+                    launched_completed["payload"]["error"],
+                    "browser_launch_failed"
+                );
+                assert!(!content.contains("\"retrieval_mode_transition\""));
+                assert!(!content.contains("\"retrieval_capability_unavailable\""));
                 copy_journal(&handle.journal_dir, "local-browser-capability");
             })
             .await
     }
 
-    /// 10. local-browser read — local_browser (2026-08-10): mode=
-    /// local_browser with an AVAILABLE capability runs the real host
-    /// `browser_read` tool (fake lane) inside the external retrieval
-    /// subagent; the committed structured result carries REAL full-text
-    /// web_page evidence and the transition records capability_status
-    /// = available.
+    /// 10. local-browser read — 0t (2026-09-09, ADR-0010 §14.65 / 设计
+    /// §3.1/§3.2): an ENABLED session with a ready fake browser lane runs
+    /// the real host `browser_read` tool inside the external retrieval
+    /// subagent. The event stream carries BOTH families' ToolStarted
+    /// (web_search dispatch + browser_read host tool); because the session
+    /// is already ready (S4), no launch attempt happens and therefore NO
+    /// browser_launch_result event is written. The committed structured
+    /// result carries REAL full-text web_page evidence.
     #[tokio::test]
     #[ignore = "conformance capture — run with: cargo test -p orz-bin -- --ignored conformance_capture"]
     async fn capture_local_browser_read() {
@@ -2647,14 +2775,7 @@ mod conformance_capture {
                         ScriptedResponse::text("完成。"),
                     ])))
                     .with_snapshot_store(Some(handle.snapshot_store.clone()))
-                    .with_retrieval_mode(
-                        orz_loop::controller::RetrievalMode::LocalBrowser,
-                        orz_loop::controller::RetrievalCapability::Available,
-                        true,
-                        None,
-                        None,
-                        None,
-                    );
+                    .with_retrieval_enabled(true);
                 controller
                     .run_turn(
                         &host,
@@ -2674,14 +2795,13 @@ mod conformance_capture {
                     "local-browser-read",
                     &[
                         "run_preflight",
-                        // Bootstrap transition (off → local_browser) with
-                        // capability_status=available.
-                        "retrieval_mode_transition",
                         "tool_availability_check",
                         "run_started",
                         "prompt_submitted",
+                        "request_header_change",
                         "model_output",
                         "tool_started",
+                        "request_header_change",
                         // Subagent round → the host browser_read tool
                         // (Interactive bridge auto-allow, then execution).
                         "model_output",
@@ -2698,6 +2818,8 @@ mod conformance_capture {
                         // record per dispatch——无 disposition 往返、无
                         // retrieval_disposition 探针翻转。
                         "retrieval_close_record",
+                        "mechanical_audit_update",
+                        "mechanical_audit_update",
                         "model_output",
                         "counterexample_gate",
                         "model_output",
@@ -2707,12 +2829,31 @@ mod conformance_capture {
                 );
                 let content =
                     std::fs::read_to_string(handle.journal_dir.join("events.jsonl")).unwrap();
-                let transition: serde_json::Value = content
+                // 双族并存：web_search 派发与 browser_read host 工具均
+                // 产生 ToolStarted（启用门不再有 capability 预检/模式互斥）。
+                let started_tools: Vec<serde_json::Value> = content
                     .lines()
-                    .find(|l| l.contains("\"retrieval_mode_transition\""))
+                    .filter(|l| l.contains("\"tool_started\""))
                     .map(|l| serde_json::from_str(l).unwrap())
-                    .unwrap();
-                assert_eq!(transition["payload"]["capability_status"], "available");
+                    .collect();
+                assert!(
+                    started_tools.iter().any(|e| {
+                        e["payload"]["tool"] == "web_search"
+                            && e["payload"]["target"] == "external_retrieval"
+                    }),
+                    "web family dispatch ToolStarted must be present"
+                );
+                assert!(
+                    started_tools
+                        .iter()
+                        .any(|e| e["payload"]["tool"] == "browser_read"),
+                    "browser family host ToolStarted must be present"
+                );
+                // 已就绪会话 = 无启动尝试 → S4 无 fact；同时退役面完全不
+                // 再出现（无 transition、无 capability_status）。
+                assert!(!content.contains("\"browser_launch_result\""));
+                assert!(!content.contains("\"retrieval_mode_transition\""));
+                assert!(!content.contains("\"capability_status\""));
                 let commit: serde_json::Value = content
                     .lines()
                     .find(|l| l.contains("\"retrieval_result_committed\""))
@@ -2767,14 +2908,7 @@ mod conformance_capture {
                         ScriptedResponse::text("完成。"),
                     ])))
                     .with_snapshot_store(Some(handle.snapshot_store.clone()))
-                    .with_retrieval_mode(
-                        orz_loop::controller::RetrievalMode::FrameworkFallback,
-                        orz_loop::controller::RetrievalCapability::Available,
-                        false,
-                        None,
-                        None,
-                        None,
-                    );
+                    .with_retrieval_enabled(true);
                 controller
                     .run_turn(
                         &host,
@@ -2797,11 +2931,13 @@ mod conformance_capture {
                         "tool_availability_check",
                         "run_started",
                         "prompt_submitted",
+                        "request_header_change",
                         "model_output",
                         "tool_started",
                         // Subagent round → read_file (host): the Interactive
                         // permission bridge records its auto-allow, then the
                         // tool runs.
+                        "request_header_change",
                         "model_output",
                         "permission_requested",
                         "permission_decision",
@@ -2815,6 +2951,9 @@ mod conformance_capture {
                         // THIN-HARNESS-REDESIGN R1 (§4.4): auto_close close
                         // record per dispatch——无探针翻转。
                         "retrieval_close_record",
+                        // 工具轮后的机械审计更新（2026-09-09 起双条）。
+                        "mechanical_audit_update",
+                        "mechanical_audit_update",
                         "model_output",
                         "counterexample_gate",
                         "model_output",
@@ -2888,14 +3027,7 @@ mod conformance_capture {
                         ScriptedResponse::text("完成。"),
                     ])))
                     .with_snapshot_store(Some(handle.snapshot_store.clone()))
-                    .with_retrieval_mode(
-                        orz_loop::controller::RetrievalMode::FrameworkFallback,
-                        orz_loop::controller::RetrievalCapability::Available,
-                        false,
-                        None,
-                        None,
-                        None,
-                    )
+                    .with_retrieval_enabled(true)
                     .with_activation_snapshot(Some(&snapshot));
                 controller
                     .run_turn(
@@ -2920,15 +3052,15 @@ mod conformance_capture {
                         "tool_availability_check",
                         "run_started",
                         "prompt_submitted",
+                        "request_header_change",
                         "model_output",
                         "tool_started",
                         "retrieval_parent_disposition",
                         "retrieval_close_record",
                         "tool_completed",
-                        // FUS-TOOL-PROBE P0-A-2 审查复核（2026-08-13）：
-                        // disposition 消费后 pending assessment 清除，
-                        // retrieval_disposition 探针翻转事件。
-                        "tool_availability_check",
+                        // 工具轮后的机械审计更新（2026-09-09 起；
+                        // disposition 工具单条——无普通工具审计对）。
+                        "mechanical_audit_update",
                         "model_output",
                         "counterexample_gate",
                         "model_output",
@@ -2945,56 +3077,55 @@ mod conformance_capture {
 #[cfg(test)]
 mod benchmark_flags_tests {
     use super::parse_benchmark_flags;
-    use orz_host::retrieval_mode::ModeAProbeOutcome;
-    use orz_loop::controller::{RetrievalCapability, RetrievalMode};
 
     fn args(list: &[&str]) -> Vec<String> {
         list.iter().map(|s| s.to_string()).collect()
     }
 
-    /// RETRIEVAL-SUBAGENT-WIRING 审查处理 (2026-08-25)：CLI 一次性运行
-    /// 的检索模式接线决策——off 不 journal；显式非 off journal
-    /// session_bootstrap；模式 A 降级 journal
-    /// mechanical_probe/browser_launch_failed。
+    /// 0t (2026-09-09, ADR-0010 §14.65 / 设计 §3.1): CLI 检索启用门解析——
+    /// 显式 ORZ_RETRIEVAL_ENABLED 优先；legacy ORZ_RETRIEVAL_MODE 非 off
+    /// 兼容映射为开；缺省关（fail-closed）。
     #[test]
-    fn cli_retrieval_wiring_decisions() {
-        // off（缺省）：不 journal。
-        let (pending, authority) = super::cli_retrieval_wiring(&ModeAProbeOutcome {
-            effective_mode: RetrievalMode::Off,
-            capability: RetrievalCapability::Unsupported("retrieval_mode_not_selected".into()),
-            previous_mode: None,
-            degraded: false,
-        });
-        assert!(!pending);
-        assert_eq!(authority, None);
-
-        // 显式 local_browser 可用：journal off → local_browser
-        // （session_bootstrap/session_default 由 controller 缺省填写）。
-        let (pending, authority) = super::cli_retrieval_wiring(&ModeAProbeOutcome {
-            effective_mode: RetrievalMode::LocalBrowser,
-            capability: RetrievalCapability::Available,
-            previous_mode: None,
-            degraded: false,
-        });
-        assert!(pending);
-        assert_eq!(authority, None);
-
-        // 模式 A 降级：journal local_browser → framework_fallback
-        // （mechanical_probe/browser_launch_failed）。
-        let (pending, authority) = super::cli_retrieval_wiring(&ModeAProbeOutcome {
-            effective_mode: RetrievalMode::FrameworkFallback,
-            capability: RetrievalCapability::Available,
-            previous_mode: Some(RetrievalMode::LocalBrowser),
-            degraded: true,
-        });
-        assert!(pending);
-        assert_eq!(
-            authority,
-            Some((
-                "mechanical_probe".to_string(),
-                "browser_launch_failed".to_string()
-            ))
+    fn retrieval_enabled_env_decisions() {
+        // SAFETY: test-only env mutation; these tests do not run in
+        // parallel with each other's env assertions (cargo runs tests in
+        // threads — the vars are unique to this module's tests).
+        unsafe {
+            std::env::remove_var("ORZ_RETRIEVAL_ENABLED");
+            std::env::remove_var("ORZ_RETRIEVAL_MODE");
+        }
+        assert!(
+            !super::retrieval_enabled_from_env(),
+            "default = fail-closed"
         );
+
+        unsafe {
+            std::env::set_var("ORZ_RETRIEVAL_ENABLED", "1");
+        }
+        assert!(super::retrieval_enabled_from_env());
+        unsafe {
+            std::env::set_var("ORZ_RETRIEVAL_ENABLED", "false");
+        }
+        assert!(!super::retrieval_enabled_from_env(), "explicit off wins");
+
+        unsafe {
+            std::env::remove_var("ORZ_RETRIEVAL_ENABLED");
+            std::env::set_var("ORZ_RETRIEVAL_MODE", "local_browser");
+        }
+        assert!(
+            super::retrieval_enabled_from_env(),
+            "legacy non-off maps to enabled (deprecation path)"
+        );
+        unsafe {
+            std::env::set_var("ORZ_RETRIEVAL_MODE", "off");
+        }
+        assert!(
+            !super::retrieval_enabled_from_env(),
+            "legacy off = disabled"
+        );
+        unsafe {
+            std::env::remove_var("ORZ_RETRIEVAL_MODE");
+        }
     }
 
     #[test]

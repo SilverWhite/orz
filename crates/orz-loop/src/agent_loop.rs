@@ -85,15 +85,7 @@ pub(crate) enum SystemPromptKind {
     Main,
     /// A retrieval task contract (ADR-0010 §3.2) — citation rules + the
     /// `[DOC]`/`[SOURCE]` delivery contract, NOT `BASE_SYSTEM_PROMPT`.
-    Retrieval {
-        role: SubagentRole,
-        goal: String,
-        /// GAP-SOURCE-WEIGHTING-IMPL (2026-08-13): the explicit retrieval
-        /// mode rides the prompt so the subagent's weighting/verification
-        /// instructions match the active channel (framework_fallback = layer
-        /// 2 web_fetch verification; local_browser = direct page reads).
-        mode: crate::controller::RetrievalMode,
-    },
+    Retrieval { role: SubagentRole, goal: String },
 }
 
 /// Retrieval-lane tool filtering (ADR-0010 §3.2 — deny-only write domain:
@@ -365,7 +357,6 @@ impl LoopProfile {
     pub(crate) fn retrieval(
         role: SubagentRole,
         goal: &str,
-        mode: crate::controller::RetrievalMode,
         max_tool_rounds: u32,
         initial_tool_rounds: u32,
         activation_id: &str,
@@ -383,7 +374,6 @@ impl LoopProfile {
             system_kind: SystemPromptKind::Retrieval {
                 role,
                 goal: goal.to_string(),
-                mode,
             },
             tool_filter: ToolFilter::Retrieval,
             max_tool_rounds,
@@ -1349,17 +1339,12 @@ pub(crate) async fn run_agent_loop(
                 .main_agent
                 .prompt_builder
                 .build_system_prompt(None),
-            SystemPromptKind::Retrieval { role, goal, mode } => {
+            SystemPromptKind::Retrieval { role, goal } => {
                 // ADR-0010 §3.2 task contract — the subagent's own system
                 // (citation rules + [DOC]/[SOURCE] delivery contract), with
                 // the shared budget declaration (retired in R1 — mechanical
                 // hard gate only).
-                crate::prompt::build_retrieval_system_prompt(
-                    role.section_name(),
-                    goal,
-                    mode.as_str(),
-                    "",
-                )
+                crate::prompt::build_retrieval_system_prompt(*role, goal, "")
             }
         };
         // PLAN-FIRST 阶段 A (2026-08-16, ADR-0010 §14.17): 计划型执行框架
@@ -2355,10 +2340,11 @@ pub(crate) async fn run_agent_loop(
             // actually run). The nested-dispatch refusal keeps its
             // anti-recursion meaning for `retrieve_project_*`. The host
             // path preserves the write gate, the semaphore, the evidence
-            // ledger and the mode gates; the permission bridge is skipped
-            // — the explicit retrieval-mode gate (ADR-0010 §3.7.1) is the
-            // authorization chain (2026-08-11 user adjudication; the main
-            // lane's delegated path has no per-call gate either).
+            // ledger and the enable gate; the permission bridge is skipped
+            // — the explicit retrieval enable gate (ADR-0010 §14.65) is the
+            // authorization chain (2026-08-11 user adjudication; 0t 后三值
+            // 模式状态机退役，仅独立启用门；the main lane's delegated path
+            // has no per-call gate either).
             let lane_self_execute = target == DispatchTarget::ExternalRetrieval
                 && profile.tool_filter.denies_nested_dispatch();
             let effective = if lane_self_execute {

@@ -480,6 +480,13 @@ mod tests {
         ) -> Result<crate::local_browser::PageReadOutcome, CdpError> {
             unreachable!("pdf tests never read pages")
         }
+        async fn control(
+            &self,
+            _action: crate::local_browser::BrowserControlAction,
+            _timeout: std::time::Duration,
+        ) -> Result<crate::local_browser::BrowserControlOutcome, CdpError> {
+            unreachable!("pdf tests never run browser_control")
+        }
         async fn download_or_read(
             &self,
             _url: &str,

@@ -81,6 +81,10 @@ pub const CODE_UNKNOWN_SERVICE: &str = "unknown_service";
 pub const CODE_INVALID_ARGUMENTS: &str = "invalid_arguments";
 pub const CODE_INVALID_RESPONSE: &str = "invalid_response";
 pub const CODE_EXECUTION_FAILED: &str = "execution_failed";
+/// 0t (2026-09-09, ADR-0010 §14.65 / 设计 §3.3): browser_read 启动/探活
+/// 失败——ToolCompleted.error 稳定码（真实原因进 `browser_launch_result`
+/// 事实事件与模型可见消息）。
+pub const CODE_BROWSER_LAUNCH_FAILED: &str = "browser_launch_failed";
 pub const CODE_OUT_OF_SCOPE: &str = "out_of_scope";
 pub const CODE_POLICY_DENIED: &str = "policy_denied";
 pub const CODE_INTERNAL_ERROR: &str = "internal_error";
