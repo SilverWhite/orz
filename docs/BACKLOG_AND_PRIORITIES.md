@@ -8,13 +8,13 @@
 
 ## 未闭合计数（2026-09-10 口径）
 
-- 未闭合总数：**27 项**（2026-08-31：P2-10 阶段 3 验证闭环 38 → 32；0k S4 实机复验闭环 32 → 30；2026-09-01：P2-11 DC 强制模板轮清理闭合 30 → 29，P3「DC 硬信号 4/6」退役 29 → 28；2026-09-02：P2-12 讨论稿登记不动计数；2026-09-03：P2-13 设计定稿与 B1 S1/S2 完成，未入账、计数不变；2026-09-04：P2-14 设计定稿与裁决收口 + S1/S2 实施收口（主会话转 v0.3、压缩 e2e 全串行绿），未入账、计数不变；2026-09-06：P0-GOV 00 任务 D 全部闭合（S2a–S2d + S3/S4 翻转），登记不动计数；2026-09-07：0o S3/S4 集中实机验证批排期登记，不动计数；2026-09-07：0q 统一失败事件管线登记（0p S1 复审 F-C 治本），不动计数；2026-09-08：0p S1–S5 全部闭合（排期登记时未入账，闭合同形态不动计数），0r GAP-TB21-FASTTEXT-ENV-CLAIM 登记不动计数；同日 0q 统一失败事件管线 S2–S4 全部闭合 28 → 27；2026-09-09：0s 官方 R3 未通过 20 题复跑结果落档登记不动计数，同日细节分析收口（不动计数，闭合同形态；新摩擦点 FP-1～FP-9 登记待裁决）；同日 0t 检索子代理双车道用户裁决立项登记（同日两轮复核 + v1.3 复核收口：R1–R5 并入、设计层面放行；同日 S1 定稿转录完成——ADR-0010 §14.65 + §3.7 条 1/12 与 §14.40/§14.43–44 修订 + FUS-RETRIEVAL-MODE 退役标注）不动计数；同日 0t S2（Task 1 + S2-R P1–P7）实施完成登记（不动计数）；同日 0t S3 双平台重建完成登记（不动计数——S4 待续）；2026-09-10：整理轮滞后入账（0b 验证② / P2-14 S3 / P2-11×3 S3 随 0o T0 2026-09-07 闭合补入账，均同形态不动计数——父项因 S4 未复验保持开放）。TODO`[ ]` 明细含父/子项，计数以 BACKLOG 为准。
+- 未闭合总数：**27 项**（2026-08-31：P2-10 阶段 3 验证闭环 38 → 32；0k S4 实机复验闭环 32 → 30；2026-09-01：P2-11 DC 强制模板轮清理闭合 30 → 29，P3「DC 硬信号 4/6」退役 29 → 28；2026-09-02：P2-12 讨论稿登记不动计数；2026-09-03：P2-13 设计定稿与 B1 S1/S2 完成，未入账、计数不变；2026-09-04：P2-14 设计定稿与裁决收口 + S1/S2 实施收口（主会话转 v0.3、压缩 e2e 全串行绿），未入账、计数不变；2026-09-06：P0-GOV 00 任务 D 全部闭合（S2a–S2d + S3/S4 翻转），登记不动计数；2026-09-07：0o S3/S4 集中实机验证批排期登记，不动计数；2026-09-07：0q 统一失败事件管线登记（0p S1 复审 F-C 治本），不动计数；2026-09-08：0p S1–S5 全部闭合（排期登记时未入账，闭合同形态不动计数），0r GAP-TB21-FASTTEXT-ENV-CLAIM 登记不动计数；同日 0q 统一失败事件管线 S2–S4 全部闭合 28 → 27；2026-09-09：0s 官方 R3 未通过 20 题复跑结果落档登记不动计数，同日细节分析收口（不动计数，闭合同形态；新摩擦点 FP-1～FP-9 登记待裁决）；同日 0t 检索子代理双车道用户裁决立项登记（同日两轮复核 + v1.3 复核收口：R1–R5 并入、设计层面放行；同日 S1 定稿转录完成——ADR-0010 §14.65 + §3.7 条 1/12 与 §14.40/§14.43–44 修订 + FUS-RETRIEVAL-MODE 退役标注）不动计数；同日 0t S2（Task 1 + S2-R P1–P7）实施完成登记（不动计数）；同日 0t S3 双平台重建完成登记（不动计数——S4 待续）；2026-09-10：整理轮滞后入账（0b 验证② / P2-14 S3 / P2-11×3 S3 随 0o T0 2026-09-07 闭合补入账，均同形态不动计数——父项因 S4 未复验保持开放）；2026-09-10：0u 官方 R4 未通过 15 题复跑排期登记（用户裁决放行，无代理直连 + 本地镜像，0t S4 实机复验载体）不动计数。TODO`[ ]` 明细含父/子项，计数以 BACKLOG 为准。
 
 ## 优先级总览
 
 | 优先级 | 含义 | 开放项（入口小节） |
 |---|---|---|
-| P0 | 当前工作集：设计已冻结，裁决后立即实施 | FUS-BENCHMARK-FULL-EXEC 验证③(reward)④⑤（0b）；0d 后续 3/4/5 S4 复验（0d）；THIN-HARNESS-REDESIGN-V2 余项（0j）；WINDOWS-HIGH-NIST-MAX-FRICTION ⑥/⑦（0l）；GSA-SESSION-VOLUME-BOTTOM-LAYER S1–S4（0m，2026-09-06 用户裁决放行）；S3/S4 集中实机验证批（0o，2026-09-07 排期放行——集中执行上述实机类开放项，见排期文档）；检索子代理双车道并行标注面与 R3 摩擦处置（0t，2026-09-09 用户裁决立项 + 同日两轮复核，v1.3 复核放行（R1–R5 并入；γ 模式退役 + 宿主机实测由执行代理操作），S1 定稿转录完成）——S2 实施完成（Task 1 + S2-R P1–P7，2026-09-09 收口，见 [审查处理](audits/0T_S2_TASK1_REVIEW_HANDLING_2026-09-09.md) 与 [0T_S2R_P1P3_IMPL_REVIEW](audits/0T_S2R_P1P3_IMPL_REVIEW_2026-09-09.md)）；S3 双平台重建完成（2026-09-09，见 [0T S3 重建记录](audits/0T_S3_DUAL_PLATFORM_REBUILD_2026-09-09.md)）；S4 实机复验待续；——P0-GOV 00（含任务 D）已于 2026-09-06 全部闭合；0p 模型自信息面补强与 .gsa 两段门已于 2026-09-08 S1–S5 全部闭合转 `implemented`（T2/S4 见 audits 0P_T2 / 0P_S4 分析） |
+| P0 | 当前工作集：设计已冻结，裁决后立即实施 | FUS-BENCHMARK-FULL-EXEC 验证③(reward)④⑤（0b）；0d 后续 3/4/5 S4 复验（0d）；THIN-HARNESS-REDESIGN-V2 余项（0j）；WINDOWS-HIGH-NIST-MAX-FRICTION ⑥/⑦（0l）；GSA-SESSION-VOLUME-BOTTOM-LAYER S1–S4（0m，2026-09-06 用户裁决放行）；S3/S4 集中实机验证批（0o，2026-09-07 排期放行——集中执行上述实机类开放项，见排期文档）；检索子代理双车道并行标注面与 R3 摩擦处置（0t，2026-09-09 用户裁决立项 + 同日两轮复核，v1.3 复核放行（R1–R5 并入；γ 模式退役 + 宿主机实测由执行代理操作），S1 定稿转录完成）——S2 实施完成（Task 1 + S2-R P1–P7，2026-09-09 收口，见 [审查处理](audits/0T_S2_TASK1_REVIEW_HANDLING_2026-09-09.md) 与 [0T_S2R_P1P3_IMPL_REVIEW](audits/0T_S2R_P1P3_IMPL_REVIEW_2026-09-09.md)）；S3 双平台重建完成（2026-09-09，见 [0T S3 重建记录](audits/0T_S3_DUAL_PLATFORM_REBUILD_2026-09-09.md)）；S4 实机复验待续；官方 R4 未通过 15 题复跑（0u，2026-09-10 放行，0t S4 载体）；——P0-GOV 00（含任务 D）已于 2026-09-06 全部闭合；0p 模型自信息面补强与 .gsa 两段门已于 2026-09-08 S1–S5 全部闭合转 `implemented`（T2/S4 见 audits 0P_T2 / 0P_S4 分析） |
 | P1 | 无需裁决，可与 P0 并行 | FUS-COMPONENT-REGISTER（4）；GAP-WINDOWS-EVIDENCE（5）；IMPL-DEEPSEEK-TRANSPORT / SEC-CREDENTIALS live 证据（6）；ORZ-SESSION-CONTEXT-MONITOR（6d） |
 | P2 | 生产化决策门：需用户裁决 | IMPL-CONTROL-FABRIC Slice 3/4（7）；OPS-PROTOCOL 裁剪与接线裁决（8）；MODEL-RESIDUAL-PRESSURE-FOLLOWUP（11）；COMPRESSION-LINGUISTIC-FORMAL-LAYER（12）；BLACKBOARD-CONVERSATION-SCOPE-FOLD B2–B4（13） |
 | P3 | 收尾 / 清理 | EVIDENCE-LOCAL-BROWSER（9）；GATE-CHAIN（10）；遗留小项（11） |
@@ -630,6 +630,17 @@ GLM F2 处置转排期（2026-09-06 用户裁决）：`orz-host/src/approval.rs`
   不构成镜像健康证据；mteb 从未靠 browser 车道通过过。**后续方向按裁决⑫
   + v1.3 操作映射转宿主机实测**（执行代理操作，活体探针取消）。
 - 计数：立项与 S2 完成登记均不动计数（S3/S4 未闭合，闭合时按条目入账）。
+
+### 0u. 官方 R4 未通过 15 题复跑（P0；2026-09-10 用户裁决放行；**0t S4 实机复验载体**）
+
+- 用户裁决（2026-09-10）：机场波动不开代理，以**无代理直连 + 本地预拉镜像**跑 R3 未通过 15 题——正是 0t 双车道的目标真实环境（检索失败正常回传、模型自主换道），本轮兼作 **0t S4 实机复验载体**（设计 §5 判据 5 对照集 = R3 检索主导 4 题，本轮全集覆盖）。
+- 口径（与 R3 一致）：官方数据集 pin `terminal-bench/terminal-bench-2-1@sha256:7d7bdc1c…`、k=1、一题一作业、deepseek-v4-flash、eval_browser=true、官方墙钟唯一（无超时覆盖）、Docker 容器。
+- 载体：**orz 0.4.0 正式发布三件套**（`D:/tb-eval/orz-linux/orz`，109,066,552 B，SHA256 `0797610e…` = [0.4.0 发布审计](audits/0.4.0_RELEASE_2026-09-09.md) 锁定值；orz `a467d0f9` = 0t S3 `92875fd5` + 版本 bump，双车道代码同一）——双车道代码首次官方口径实机。
+- 任务集（15 题 = R3 未通过，[0s 细节分析](audits/0S_DETAIL_ANALYSIS_2026-09-09.md) 四分类）：检索主导 4（dna-assembly / extract-elf / gpt2-codegolf / path-tracing-reverse）+ 轮次延迟主导 5（adaptive-rejection-sampler / gcode-to-text / make-doom-for-mips / make-mips-interpreter / path-tracing）+ 长命令 2（extract-moves-from-video / train-fasttext）+ verifier·题目域 4（dna-insert / filter-js-from-html / model-extraction-relu-logits / protein-assembly）。
+- 判据预登记：① 逐题 reward 对照 R3 + 四分类再归因；② 0t S4 判据 1–5（web 族零拒绝 / 静态标注在案 / 新 run 零 `retrieval_mode`+`retrieval_mode_transition` 且 `browser_launch_result` 在案 / 失败回传真实类别无教学句 / 命中率 ≥90% + 零真实 400）；③ P2-11×3 / P2-12 / P2-13 B4 / P2-14 S4 遥测搭车核验（0o 放行纪律：一份 journal 喂多判据）。判据 6（宿主机日常可用性）另线，不随本批。
+- 执行器：[`run_r4_unsolved15_per_task.py`](../scripts/run_r4_unsolved15_per_task.py)——Python argv 直传（当前机器无 pwsh 7；PS 5.1 原生参数 JSON 引号破坏系 [R3 母审计 §4.2](audits/OFFICIAL_R3_UNSOLVED20_RERUN_2026-09-09.md) 已登记教训，语义与 r3 逐题执行器逐参数一致）；job 前缀 `official-r4-unsolved15-<task>`；镜像 15/15 本地在位（不依赖 Docker Hub）。
+- 边界：不替代 0o 批次 L 交叉题（compile-compcert / hf-model-inference，0b ④）与 0b ⑤ 全量 89 题官方门；期望管理——翻案面集中在检索主导 4 + verifier 网络运气（FP-7），轮次延迟 / 长命令 / 题目域 10 题为结构性问题不随双车道翻转。
+- 计数：排期登记不动计数（闭合时按 0t S4 与各搭车条目小节入账）。
 
 ## P1 — 可并行审计 / 证据
 
