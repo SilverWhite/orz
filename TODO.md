@@ -582,34 +582,39 @@ GLM F2 处置转排期（2026-09-06 用户裁决）：`orz-host/src/approval.rs`
   §14.62；manifest 重算 orz 源零改动 check valid 1441 条；门禁 Exit 0。
   P0-0p 全部闭合。）
 
-### P0-0t 检索子代理双车道并行标注面与 R3 摩擦处置（2026-09-09 用户裁决立项，同日复核；设计 v1.1 待定稿）
+### P0-0t 检索子代理双车道并行标注面与 R3 摩擦处置（2026-09-09 用户裁决立项，同日两轮复核；设计 v1.2 待确认定稿）
 
 > 用户裁决（立项）：Clash 已关、本地镜像下 Google 检索与 Chrome 实质不可用
 > 但无法降级原生检索；原生检索与本地浏览器检索都开放给检索子代理，像主
 > agent 工具栏一样打标注，推荐先用本地浏览器检索；R3 新摩擦（FP-1～FP-9）
-> 随本项统一处置。复核（v1.1）：FP-2 不教学不阻拦仅正常回传错误（根因=
-> 浏览器可拉起但实质不可用，可用性声明冲突同族）；不做标注健康度，仅静态
-> 标注让模型自主选择；mteb 镜像转核查（既往 VM high-nist 可跑）；framework_fallback
-> 语义待议；FP-3 节点用户自理；FP-4 不干预；FP-5 拦截+正常反馈即要求
-> （R3 已验证满足）；FP-6 非问题。证据：
-> [0S 细节分析](docs/audits/0S_DETAIL_ANALYSIS_2026-09-09.md)。
-> 入口：[设计 v1.1](docs/RETRIEVAL_SUBAGENT_DUAL_LANE_DESIGN_2026-09-09.md) /
+> 随本项统一处置。第一轮复核（v1.1）：FP-2 不教学不阻拦仅正常回传错误
+> （根因=浏览器可拉起但实质不可用，可用性声明冲突同族）；不做标注健康度，
+> 仅静态标注让模型自主选择；mteb 镜像转核查；framework_fallback 待议；
+> FP-3 节点用户自理；FP-4 不干预；FP-5 拦截+正常反馈即要求（R3 已验证
+> 满足）；FP-6 非问题。第二轮复核（v1.2）：浏览器问题=注入＋网络环境，
+> 用户真机环境测试处理，orz 保证真机日常使用真实浏览器正常（锁版本等
+> 不通用方案不做，跑分不重要）——FP-1 解除立项、活体探针取消；
+> framework_fallback 采纳 γ 方案（三值检索模式退役、浏览器可用性纯事件
+> 事实化，修改成本不作考量）。证据：
+> [0S 细节分析](docs/audits/0S_DETAIL_ANALYSIS_2026-09-09.md) /
+> [mteb 核查](docs/audits/0T_MTEB_IMAGE_CHECK_2026-09-09.md)。
+> 入口：[设计 v1.2](docs/RETRIEVAL_SUBAGENT_DUAL_LANE_DESIGN_2026-09-09.md) /
 > [BACKLOG 0t](docs/BACKLOG_AND_PRIORITIES.md)。
 
-- [ ] S1 设计定稿：§6 两项裁决（`framework_fallback` 语义与 verifier 兼容 /
-  mteb 核查结论是否衍生动作）；定稿后转录 ADR-0010 §14.65 + 修订
-  §3.7/§14.40/§14.43–44。
+- [ ] S1 设计定稿：本稿确认 + ADR-0010 §14.65 转录 + §3.7/§14.40/§14.43–44
+  修订 + FUS-RETRIEVAL-MODE 三态语义退役标注。
 - [ ] S2 实施：orz 双车道（`retrieval_mode_requires_framework_fallback`
-  拒绝族退役、静态工具栏标注、`model_lane_switch` 事件）+ 检索失败正常
-  回传（FP-2：真实错误类别，无教学/无阻拦）+ 评测侧注入健壮化（FP-1，
-  tb_agents/orz.py：unzip→python3 zipfile、下载重试）随批 + mteb 活体
-  探针（镜像内钉 151/152 注入+导航测试+curl 对照；核查结论：镜像降嫌疑、
-  嫌疑转移至 apt 浮动注入版本，见
-  [0T_MTEB_IMAGE_CHECK](docs/audits/0T_MTEB_IMAGE_CHECK_2026-09-09.md)）。
+  拒绝族退役、静态工具栏标注）+ γ 模式退役（`retrieval_mode`/
+  `retrieval_mode_transition`/`framework_fallback`/机械降级语义退役；
+  `browser_launch_result` 事实事件，schema/verifier/fixtures 先行 + 旧
+  journal 只读兼容；无 `model_lane_switch`——ToolCompleted 即事实）+
+  检索失败正常回传（FP-2：真实错误类别，无教学/无阻拦）。
 - [ ] S3 重建（双平台三件套 + manifest）。
-- [ ] S4 实机复验：双车道存在性 / 静态标注存在性 / 换道事件 / 检索失败
-  回传形态 / 通用统计（判据见设计 §5）；对照集 = R3 检索主导 4 题或搭
-  0o 批次 L。
+- [ ] S4 实机复验：双车道存在性 / 静态标注存在性 / γ 退役兼容（旧回放过
+  verifier、新生产不产出模式面）/ 失败回传形态 / 通用统计（判据见设计
+  §5）；对照集 = R3 检索主导 4 题或搭 0o 批次 L。
+- [ ] 真机日常浏览器可用性验证（用户主导，可与 S2/S3 并行；口径=日常
+  使用，orz 侧按暴露问题做通用性修复，不做锁版本等特化）。
 
 ### P0-B FUS-RETRIEVAL-MECH（`implemented`；批次 1-6 全部闭合 2026-08-14，保留供核对）
 
