@@ -102,7 +102,7 @@ runner/VM → M3 回归复验（明细在 TODO2.md）。边界：15min 长档、
 - 专项：TER-0.1 生成器 v0.2 表全面对齐已登记（见下），不阻塞 M1。
 
 ## TER-0.1 生成器 v0.2 表全面对齐（专项；P0；2026-09-03 登记，不阻塞
-T0.4/M1）
+T0.4/M1；**2026-09-09 完成**）
 
 一句话定义：run-event v0.2 夹具树与生成器表脱节——P2-11/P2-13 起的约
 20 项夹具增量仍为手工维护、未同步进
@@ -121,3 +121,17 @@ M1 期间可并行抽做；重跑生成器前先读
 [T0.3 审计 §4/§5](audits/TER_T0_3_ADR_CANDIDATE_REGISTRATION_2026-09-03.md)
 / 夹具树 `runtime/fixtures/run-event-v0.2/` +
 `assurance/fixtures/canonical_cli/` / 测试基线 273 passed（T0.2）。
+
+完成登记（2026-09-09）：`V02_EVENT_TYPES` 补 `session_archive`（55 事件
+与 schema enum 全对齐）+ PAYLOAD_GOOD/BAD_V02 + SLUGS/V02_PAYLOAD_EVENTS；
+EXTRA positives +8 / BADS +5（retrieval-close-record effort 档位变体、
+tool-completed dep-graph ×4 / failure-target ×6 全量入表）；信封
+timestamp/identity override 补齐（tool_running 2026-08-29、
+session_archive 2026-09-03、mechanical_audit_update RUN-CONF-MECH-AUDIT）
+并新增 V02_ENVELOPE_PAYLOAD_OVERRIDES（mechanical_audit_update /
+retrieval_close_record / transport_retry 信封样例与 payload 最小正例
+分轨）；FIXTURES_README_V02 与已验收 README 逐字节同源。验证：临时干跑
+与仓库内实跑均 GEN_EXIT=0，重建后与已验收树 **0 差异**（payloads /
+envelope / README / canonical_cli），conformance + journal validation
+**273 passed**，git diff --check 净。审计：
+[TER-0.1 对齐审计](audits/TER_0_1_GENERATOR_V02_ALIGN_2026-09-09.md)。

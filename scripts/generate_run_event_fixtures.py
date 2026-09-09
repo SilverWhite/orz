@@ -54,6 +54,12 @@ V02_ENVELOPE_TIMESTAMP_OVERRIDES: dict[str, str] = {
     # MIDSTREAM-DECODE-RETRY (2026-08-21, ADR-0010 §14.37): committed
     # envelope carries the batch date — keep it stable across regeneration.
     "transport_retry": "2026-08-21T00:00:00Z",
+    # THIN-HARNESS-REDESIGN-V2 §9.7 (2026-08-29 S5-2): the committed
+    # tool_running envelope carries the S5-2 batch date — keep it stable.
+    "tool_running": "2026-08-29T00:00:00Z",
+    # BLACKBOARD-CONVERSATION-SCOPE-FOLD B3 (2026-09-03, ADR-0010 §14.52):
+    # session_archive envelope carries the B3 batch date.
+    "session_archive": "2026-09-03T00:00:00Z",
 }
 
 # PLAN-FIRST 阶段 C / P0-E / FUS-LEDGER-FOLD-STATE (2026-08-16/17/18): the
@@ -79,6 +85,59 @@ V02_ENVELOPE_IDENTITY_OVERRIDES = {
         "2026-08-17T00:00:00Z",
     ),
     "plan_write": (None, None, "2026-08-16T00:00:00Z"),
+    # MECHANICAL-AUDIT-LAYER (2026-08-24, ADR-0010 §14.39): the committed
+    # envelope fixture carries the audit batch identity/date; the generator
+    # slug-derived run id would be RUN-CONF-MECHANICAL-AUDIT-UPDATE.
+    "mechanical_audit_update": (
+        "RUN-CONF-MECH-AUDIT",
+        None,
+        "2026-08-24T00:00:00Z",
+    ),
+}
+
+# TER-0.1 v0.2 表全面对齐 (2026-09-09): 已验收信封树中三个事件的信封样例与
+# payload 最小正例分轨（信封样例保留手工捕获形态；最小正例随 schema 演进）——
+# 生成信封时优先取本表，否则回落 PAYLOAD_GOOD_V02/PAYLOAD_GOOD。
+V02_ENVELOPE_PAYLOAD_OVERRIDES: dict[str, dict] = {
+    # MECHANICAL-AUDIT-LAYER (2026-08-24): 信封样例为对象键覆盖写留痕的
+    # file:app/result.txt 形态（anomaly=null），与 payloads 目录最小正例
+    # （cmd:call-9 / anomaly 非空）分轨。
+    "mechanical_audit_update": {
+        "kind": "tool_result",
+        "payload": {
+            "key": "file:app/result.txt",
+            "round": 5,
+            "summary": "search_replace 成功（+1 文件）",
+            "anomaly": None,
+        },
+    },
+    # BLACKBOARD-CONVERSATION-SCOPE-FOLD B3 (2026-09-03, ADR-0010 §14.52):
+    # 已验收信封样例（P2-13 B3 存档契约）不含后续加入的 effort 字段。
+    "retrieval_close_record": {
+        "close_record_id": "CLOSE-0001",
+        "parent_session_id": "sess-main-1",
+        "subagent_session_id": "sess-ext-2",
+        "activation_id": "ACT-EXT-0001",
+        "contract_id": "CONTRACT-EXT-0001",
+        "contract_revision": 0,
+        "result_digest": ZERO_HASH,
+        "assessment_id": "ASSESS-0001",
+        "validated_disposition_id": "DISP-0001",
+        "terminal_reason": "normal_close",
+        "resumable": True,
+        "live_state_reset": True,
+        "archive_ref": "archive/ACT-EXT-0001",
+    },
+    # MIDSTREAM-DECODE-RETRY (2026-08-21, ADR-0010 §14.37): 信封样例为
+    # recovered/midstream 形态（与 payloads 目录 exhausted/zero_chunk 最小
+    # 正例分轨，二者均为合法 schema 形态）。
+    "transport_retry": {
+        "agent_role": "main",
+        "outcome": "recovered",
+        "kind": "midstream",
+        "retries": 1,
+        "reason": "stream ended without finish_reason",
+    },
 }
 
 # 33 event types in run-event-v0.1.schema.json enum order.
@@ -177,6 +236,10 @@ V02_EVENT_TYPES = [
     # F7 (2026-08-15, BACKLOG 6e 复查遗留 / ADR-0010 §14.15): blackboard
     # plan-epoch archive write failure audit trace.
     "epoch_archive_write_failed",
+    # BLACKBOARD-CONVERSATION-SCOPE-FOLD B3 (2026-09-03, ADR-0010 §14.52):
+    # 会话黑板存档单包（.gsa/archives/<session8>.json.gz 纯打包原子写 +
+    # digest；run_id 前缀 +ARC 的专用归档 run journal）。
+    "session_archive",
     # PLAN-FIRST 阶段 A (2026-08-16, ADR-0010 §14.17): first-round plan
     # gate result — plan identity/goal/step count, mechanical validation,
     # one-refill attempt progression and degrade reason.
@@ -248,6 +311,9 @@ SLUGS_V02 = {
     # F7 (2026-08-15; ADR-0010 §14.15): blackboard plan-epoch archive
     # write failure (rotated/current + attempts).
     "epoch_archive_write_failed": "epoch-archive-write-failed",
+    # BLACKBOARD-CONVERSATION-SCOPE-FOLD B3 (2026-09-03, ADR-0010 §14.52):
+    # 会话黑板存档事件。
+    "session_archive": "session-archive",
     # PLAN-FIRST 阶段 A (2026-08-16, ADR-0010 §14.17): first-round plan
     # gate result.
     "plan_write": "plan-write",
@@ -310,6 +376,9 @@ V02_PAYLOAD_EVENTS = [
     # F7 (2026-08-15; ADR-0010 §14.15): blackboard plan-epoch archive
     # write failure (rotated/current + attempts).
     "epoch_archive_write_failed",
+    # BLACKBOARD-CONVERSATION-SCOPE-FOLD B3 (2026-09-03, ADR-0010 §14.52):
+    # 会话黑板存档事件。
+    "session_archive",
     # PLAN-FIRST 阶段 A (2026-08-16, ADR-0010 §14.17): first-round plan
     # gate result — plan identity/goal/step count, mechanical validation,
     # one-refill attempt progression and degrade reason.
@@ -748,6 +817,8 @@ PAYLOAD_GOOD_V02: dict[str, dict] = {
         "assessment_id": "ASSESS-0001",
         "validated_disposition_id": "DISP-0001",
         "terminal_reason": "normal_close",
+        # 0q/0p 复审后 schema 增补：effort 档位（standard/extended/deep）。
+        "effort": "standard",
         "resumable": True,
         "live_state_reset": True,
         "archive_ref": "archive/ACT-EXT-0001",
@@ -1079,6 +1150,17 @@ PAYLOAD_GOOD_V02: dict[str, dict] = {
           "kind": "zero_chunk",
           "retries": 3,
           "reason": "error sending request: connection reset",
+      },
+      # BLACKBOARD-CONVERSATION-SCOPE-FOLD B3 (2026-09-03, ADR-0010 §14.52):
+      # 会话黑板存档最小正例——digest/status/attempts/fatigue_pct（payload
+      # 形态以已验收样例为准）。
+      "session_archive": {
+          "archive_id": "sess-abcdef12-20260903T120000Z",
+          "path": ".gsa/archives/abcdef12.json.gz",
+          "digest": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+          "status": "completed",
+          "attempts": 1,
+          "fatigue_pct": 72,
       },
   }
 
@@ -1460,6 +1542,15 @@ PAYLOAD_BAD_V02: dict[str, dict] = {
           "retries": 0,
           "reason": "retries must be >= 1",
       },
+      # BLACKBOARD-CONVERSATION-SCOPE-FOLD B3 (2026-09-03, ADR-0010 §14.52):
+      # 约束违反——digest 非 sha256 且 attempts < 1（已验收样例原样入表）。
+      "session_archive": {
+          "archive_id": "sess-abcdef12-20260903T120000Z",
+          "path": ".gsa/archives/abcdef12.json.gz",
+          "digest": "not-a-sha256",
+          "status": "completed",
+          "attempts": 0,
+      },
   }
 
 # ACAF Slice 2 fail-closed (2026-08-13): extra positive payload fixtures for
@@ -1524,6 +1615,130 @@ EXTRA_V02_PAYLOAD_POSITIVES: dict[str, dict] = {
         "signer_revision": 1,
         "signer_measurement": ZERO_HASH,
     },
+    # TER-0.1 v0.2 表全面对齐 (2026-09-09): P2-11/P2-13 起手工维护、未入
+    # 生成器表的额外正例——检索关闭记录 effort 档位变体（auto_close /
+    # subagent_timeout 终止无 assessment，effort 档位随 schema 演进）。
+    "retrieval-close-record.auto-close.valid": {
+        "close_record_id": "CLOSE-0001",
+        "parent_session_id": "sess-main-1",
+        "subagent_session_id": "sess-ext-2",
+        "activation_id": "ACT-EXT-0001",
+        "contract_id": "CONTRACT-EXT-0001",
+        "contract_revision": 0,
+        "result_digest": ZERO_HASH,
+        "assessment_id": "ASSESS-0001",
+        "validated_disposition_id": None,
+        "terminal_reason": "auto_close",
+        "effort": "extended",
+        "resumable": True,
+        "live_state_reset": True,
+        "archive_ref": "archive/ACT-EXT-0001",
+    },
+    "retrieval-close-record.subagent-timeout.valid": {
+        "close_record_id": "CLOSE-0001",
+        "parent_session_id": "sess-main-1",
+        "subagent_session_id": "sess-ext-2",
+        "activation_id": "ACT-EXT-0001",
+        "contract_id": "CONTRACT-EXT-0001",
+        "contract_revision": 0,
+        "result_digest": None,
+        "assessment_id": None,
+        "validated_disposition_id": None,
+        "terminal_reason": "subagent_timeout",
+        "effort": "deep",
+        "resumable": True,
+        "live_state_reset": True,
+        "archive_ref": "run-journal:RUN-0001",
+    },
+    # P2-11 依赖图主线 (2026-09-01, ADR-0010 §14.51): tool_completed 可选
+    # dep_graph 事件字段 read/write 正例。
+    "tool-completed.dep-graph-read.valid": {
+        "tool": "read_file",
+        "call_id": "call-dep-r1",
+        "exit_code": 0,
+        "dep_graph": {
+            "kind": "read",
+            "path": "src/a.rs",
+            "anchor": {
+                "sha256": DUMMY_HASH,
+                "size": 100,
+                "mtime": 1700000000,
+            },
+        },
+    },
+    "tool-completed.dep-graph-write.valid": {
+        "tool": "search_replace",
+        "call_id": "call-dep-w1",
+        "exit_code": 0,
+        "dep_graph": {
+            "kind": "write",
+            "path": "src/a.rs",
+            "consumed_read": "call-dep-r1",
+            "consumed_anchor": {
+                "sha256": DUMMY_HASH,
+                "size": 100,
+            },
+            "new_anchor": {
+                "sha256": "2" * 64,
+                "size": 110,
+            },
+        },
+    },
+    # 0q 统一失败事件管线 (2026-09-08, ADR-0010 §14.63): failure_target
+    # 四族身份正例（anchor_target / cmd_target / file_target / url_target）。
+    "tool-completed.failure-target-anchor.valid": {
+        "tool": "search_replace",
+        "call_id": "call-ft-anchor",
+        "exit_code": 1,
+        "status": "error",
+        "error": "content_anchor_mismatch",
+        "file_path": "src/lib.rs",
+        "failure_target": {
+            "kind": "anchor_target",
+            "id": "8f434346648f6b96df89dda901c5176b10a6d83961dd3c1ac88b59b2dc327aa4",
+            "path": "src/lib.rs",
+            "anchor_hash": "8f434346648f6b96df89dda901c5176b10a6d83961dd3c1ac88b59b2dc327aa4",
+            "size": 4096,
+        },
+    },
+    "tool-completed.failure-target-cmd.valid": {
+        "tool": "run_terminal_cmd",
+        "call_id": "call-ft-cmd",
+        "exit_code": 1,
+        "status": "error",
+        "error": "timed_out",
+        "timed_out": True,
+        "wall_ms": 120000,
+        "failure_target": {
+            "kind": "cmd_target",
+            "id": "9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08",
+            "cmd_preview": "test",
+        },
+    },
+    "tool-completed.failure-target-file.valid": {
+        "tool": "read_file",
+        "call_id": "call-ft-file",
+        "exit_code": 1,
+        "status": "error",
+        "error": "file_not_found",
+        "failure_target": {
+            "kind": "file_target",
+            "id": ZERO_HASH,
+            "path": "missing/target.rs",
+        },
+    },
+    "tool-completed.failure-target-url.valid": {
+        "tool": "web_fetch",
+        "call_id": "call-ft-url",
+        "exit_code": 1,
+        "status": "error",
+        "error": "fetch_failed",
+        "failure_target": {
+            "kind": "url_target",
+            "id": "d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2",
+            "canonical_url": "https://example.com/papers/mr-cr.html",
+        },
+    },
 }
 
 # GAP-SOURCE-WEIGHTING-IMPL (2026-08-13): extra negative payload fixture —
@@ -1555,6 +1770,81 @@ EXTRA_V02_PAYLOAD_BADS[
     "previous_header_sha256": ZERO_HASH,
     "tools": ["read_file"],
     "tool_count": 1,
+}
+
+# TER-0.1 v0.2 表全面对齐 (2026-09-09): 手工维护的约束反例入表——
+# retrieval-close-record effort 档位非法值。
+EXTRA_V02_PAYLOAD_BADS["retrieval-close-record.bad-effort.invalid"] = {
+    "close_record_id": "CLOSE-0001",
+    "parent_session_id": "sess-main-1",
+    "subagent_session_id": "sess-ext-2",
+    "activation_id": "ACT-EXT-0001",
+    "contract_id": "CONTRACT-EXT-0001",
+    "contract_revision": 0,
+    "result_digest": None,
+    "assessment_id": None,
+    "validated_disposition_id": None,
+    "terminal_reason": "subagent_timeout",
+    "effort": "turbo",
+    "resumable": True,
+    "live_state_reset": True,
+    "archive_ref": "run-journal:RUN-0001",
+}
+# P2-11 依赖图主线 (2026-09-01, ADR-0010 §14.51): dep_graph 约束反例——
+# kind 未注册 / 额外字段（均落在 dep_graph 子对象内、单一约束违反）。
+EXTRA_V02_PAYLOAD_BADS[
+    "tool-completed.dep-graph-bad-kind.constraint.invalid"
+] = {
+    "tool": "read_file",
+    "call_id": "call-dep-bad-kind",
+    "exit_code": 0,
+    "dep_graph": {
+        "kind": "scan",
+        "path": "src/a.rs",
+    },
+}
+EXTRA_V02_PAYLOAD_BADS[
+    "tool-completed.dep-graph-extra-field.constraint.invalid"
+] = {
+    "tool": "read_file",
+    "call_id": "call-dep-extra",
+    "exit_code": 0,
+    "dep_graph": {
+        "kind": "read",
+        "path": "src/a.rs",
+        "anchor": None,
+        "bogus": 1,
+    },
+}
+# 0q 统一失败事件管线 (2026-09-08, ADR-0010 §14.63): failure_target 约束
+# 反例——id 非 sha256 / kind 未注册。
+EXTRA_V02_PAYLOAD_BADS[
+    "tool-completed.failure-target-bad-id.constraint.invalid"
+] = {
+    "tool": "run_terminal_cmd",
+    "call_id": "call-ft-bad-id",
+    "exit_code": 1,
+    "status": "error",
+    "error": "timed_out",
+    "failure_target": {
+        "kind": "cmd_target",
+        "id": "not-a-sha256-digest",
+        "cmd_preview": "make -j8",
+    },
+}
+EXTRA_V02_PAYLOAD_BADS[
+    "tool-completed.failure-target-bad-kind.constraint.invalid"
+] = {
+    "tool": "run_terminal_cmd",
+    "call_id": "call-ft-bad-kind",
+    "exit_code": 1,
+    "status": "error",
+    "error": "timed_out",
+    "failure_target": {
+        "kind": "proc_target",
+        "id": "9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08",
+        "cmd_preview": "make -j8",
+    },
 }
 
 
@@ -1894,19 +2184,23 @@ after any v0.2 payload schema change).
 Scope:
 
 - `payloads/<slug>.minimal.valid.json` / `<slug>.constraint.invalid.json` —
-    legal / one-constraint-violation payloads for the v0.2 mechanism events
-    with their own v0.2 payload schema: `orientation_checkpoint`
-    (v0.2 shape), `information_sufficiency_assessment`,
-    `retrieval_parent_disposition`,
-    `retrieval_close_record`, plus the GAP-RETRIEVAL-TOOLS trio
+  legal / one-constraint-violation payloads for the v0.2 mechanism events
+  with their own v0.2 payload schema: `orientation_checkpoint`
+  (v0.2 shape), `information_sufficiency_assessment`,
+  `retrieval_parent_disposition`,
+  `retrieval_close_record`, plus the GAP-RETRIEVAL-TOOLS trio
   `retrieval_mode_transition`, `retrieval_result_committed`,
   `retrieval_activation_restored`, plus the ACAF trio (Slice 1, 2026-08-12)
   `control_ticket_issued`, `control_ticket_consumed`,
   `control_ticket_rejected` (ticket lifecycle binding fields — never the
   HMAC tag, which stays inside the issuing process), plus
-    `tool_availability_check` (FUS-TOOL-PROBE 2026-08-13, P0-A-2: two-state
-    single probe face snapshot — complete/incomplete cover ALL work tools).
-  - ACAF Slice 2 fail-closed (2026-08-13): `control-ticket-rejected` gains
+  `tool_availability_check` (FUS-TOOL-PROBE 2026-08-13, P0-A-2: two-state
+  single probe face snapshot — complete/incomplete cover ALL work tools).
+- P2-11 DC 清理 (2026-08-31): `diagnostic_coverage_checkpoint` and
+  `checkpoint_response` are retired — the diagnostic-coverage forced-template
+  mechanism is deleted (MODEL-RESIDUAL-PRESSURE-FOLLOWUP 裁决 2); their
+  payload schemas and fixtures are removed from the v0.2 track.
+- ACAF Slice 2 fail-closed (2026-08-13): `control-ticket-rejected` gains
   three extra positive payload fixtures for the new pre-signing reject codes
   `missing_target_argument` / `missing_snapshot_store` / `missing_goal_context`
   (each carries `ticket_id: null` — no ticket exists when the refusal
@@ -1920,6 +2214,12 @@ Scope:
   ③ `control-ticket-issued.network-lane-bound.valid`（D-13 检索 lane 绑定
   语义——动作票 activation_id 可选绑定，检索 lane network 票携带真实
   activation_id，主 lane 保持 null）。
+- 0t (2026-09-09, ADR-0010 §14.65 / 设计 v1.3)：`retrieval_mode_transition`
+  生产者侧退役——事件类型与 v0.2 payload schema 保留为旧 v0.2 刊只读回放
+  （旧 fixture `retrieval-mode-transition.*` 与旧期刊均继续合法，不设负向
+  检查）；新增 `browser_launch_result` 事实事件（浏览器每次启动/探活尝试
+  success/failure + 真实原因，`attempt_id`/`status`/`cause` 条件约束），
+  覆盖 envelope + payload 最小正例/约束反例。
 - GAP-SOURCE-WEIGHTING-IMPL (2026-08-13): `retrieval-result` gains one extra
   negative payload fixture for the fixed tier/weight table (authoritative
   MUST pair with 1.1; the good fixture carries the full weighting fields).
@@ -1949,10 +2249,11 @@ Scope:
   `tool-completed.policy-denial-bad-source.constraint.invalid` (unknown
   source enum).
 - `envelope/<slug>.valid.json` — a full 13-field v0.2 envelope for **every**
-  event in the v0.2 enum (**52 events** — 54 prior −
+  event in the v0.2 enum (**55 events** — 54 prior +
+  `browser_launch_result`（0t 2026-09-09, ADR-0010 §14.65；54 prior −
   `diagnostic_coverage_checkpoint` − `checkpoint_response`（P2-11 DC 清理
-  2026-08-31，MODEL-RESIDUAL-PRESSURE-FOLLOWUP 裁决 2）；
-  `runtime_stagnation_guard` 已于 2026-08-22 退役，计入 54 前史). The
+  2026-08-31，MODEL-RESIDUAL-PRESSURE-FOLLOWUP 裁决 2）后含其余
+  TER/P2-13 增量；`runtime_stagnation_guard` 已于 2026-08-22 退役). The
   v0.2-payload events carry
   their v0.2 payload; the other events reuse the v0.1 payload shape
   unchanged (their payload schema files did not change — adjudicated
@@ -2044,7 +2345,6 @@ GAP-RETRIEVAL-TOOLS audit doc §5). Re-captured 2026-08-10 after the review
 | `local-browser-read.jsonl` | bootstrap transition to `local_browser` with capability `available` — external lane runs the host `browser_read` tool (fake lane), committed result carries real full-text `web_page` evidence (ADR §3.7.3/§3.7.5); P0-B step 4: browser_read 计入候选计数域，`tool_completed` 携带 `candidate_count`/`candidate_cap` |
 | `real-doc-retrieval.jsonl` | internal lane: `project_doc_index` include_content → mechanical ledger/visibility/`retrieval_result_committed`/assessment (ADR §3.7.4/§3.7.5) |
 | `cross-prompt-restore.jsonl` | activation sidecar restore → restore event → cross-run disposition close (verifier restore-declaration chain) |
-| `pre-handoff-checkpoint.jsonl` | stagnation restart_requested → `orientation_checkpoint{trigger: "pre_handoff", injection_position: "pre_terminal"}` with empty message_block (audit-only, §11.1) |
 """
 
 
@@ -2114,7 +2414,9 @@ def main() -> None:
         write_json(v02_payloads_dir / f"{name}.json", payload)
     for event_type in V02_EVENT_TYPES:
         slug = SLUGS_V02.get(event_type) or SLUGS[event_type]
-        payload = PAYLOAD_GOOD_V02.get(event_type) or PAYLOAD_GOOD[event_type]
+        payload = V02_ENVELOPE_PAYLOAD_OVERRIDES.get(event_type)
+        if payload is None:
+            payload = PAYLOAD_GOOD_V02.get(event_type) or PAYLOAD_GOOD[event_type]
         write_json(
             v02_envelope_dir / f"{slug}.valid.json",
             _envelope_v02(event_type, payload, 0, None),
