@@ -10,3 +10,5 @@
 - [`readme/`](readme/)：退出当前维护面的仓库 README 快照和历史产品叙述。
 
 当前设计入口仍位于 [`architecture/current/`](../architecture/current/README.md)，审计、事故与案例记录仍分别保留在 `docs/audits/`、`docs/incidents/` 和 `docs/cases/`。
+
+快照为归档时点的逐字节原样副本，其中的相对链接按归档时原路径（仓库根或 `docs/` 等）解析，在本目录下打开会失效；回查时请按各快照「原路径」栏锚定解析。仓库门禁的链接检查对归档区豁免（`scripts/check_repository.py` `_check_markdown_links`）。

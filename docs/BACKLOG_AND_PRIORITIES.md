@@ -6,15 +6,15 @@
 > 全量快照（含 2026-09-09 整理轮前全部已闭合分区明细与变更记录）：[`存档/backlog/BACKLOG_AND_PRIORITIES_FULL_2026-09-09.md`](../存档/backlog/BACKLOG_AND_PRIORITIES_FULL_2026-09-09.md)；此前轮快照（2026-09-03 瘦身轮前）：[`BACKLOG_AND_PRIORITIES_FULL_2026-09-03.md`](../存档/backlog/BACKLOG_AND_PRIORITIES_FULL_2026-09-03.md)。
 > 实施勾选清单：见 [`TODO.md`](../TODO.md)（派生投影，勾选状态随本文件同步；优先级、决策门与状态以本文件为准）。
 
-## 未闭合计数（2026-09-04 口径）
+## 未闭合计数（2026-09-10 口径）
 
-- 未闭合总数：**27 项**（2026-08-31：P2-10 阶段 3 验证闭环 38 → 32；0k S4 实机复验闭环 32 → 30；2026-09-01：P2-11 DC 强制模板轮清理闭合 30 → 29，P3「DC 硬信号 4/6」退役 29 → 28；2026-09-02：P2-12 讨论稿登记不动计数；2026-09-03：P2-13 设计定稿与 B1 S1/S2 完成，未入账、计数不变；2026-09-04：P2-14 设计定稿与裁决收口 + S1/S2 实施收口（主会话转 v0.3、压缩 e2e 全串行绿），未入账、计数不变；2026-09-06：P0-GOV 00 任务 D 全部闭合（S2a–S2d + S3/S4 翻转），登记不动计数；2026-09-07：0o S3/S4 集中实机验证批排期登记，不动计数；2026-09-07：0q 统一失败事件管线登记（0p S1 复审 F-C 治本），不动计数；2026-09-08：0p S1–S5 全部闭合（排期登记时未入账，闭合同形态不动计数），0r GAP-TB21-FASTTEXT-ENV-CLAIM 登记不动计数；同日 0q 统一失败事件管线 S2–S4 全部闭合 28 → 27；2026-09-09：0s 官方 R3 未通过 20 题复跑结果落档登记不动计数，同日细节分析收口（不动计数，闭合同形态；新摩擦点 FP-1～FP-9 登记待裁决）；同日 0t 检索子代理双车道用户裁决立项登记（同日两轮复核 + v1.3 复核收口：R1–R5 并入、设计层面放行；同日 S1 定稿转录完成——ADR-0010 §14.65 + §3.7 条 1/12 与 §14.40/§14.43–44 修订 + FUS-RETRIEVAL-MODE 退役标注）不动计数；同日 0t S2（Task 1 + S2-R P1–P7）实施完成登记（不动计数）；同日 0t S3 双平台重建完成登记（不动计数——S4 待续）。TODO`[ ]` 明细含父/子项，计数以 BACKLOG 为准。
+- 未闭合总数：**27 项**（2026-08-31：P2-10 阶段 3 验证闭环 38 → 32；0k S4 实机复验闭环 32 → 30；2026-09-01：P2-11 DC 强制模板轮清理闭合 30 → 29，P3「DC 硬信号 4/6」退役 29 → 28；2026-09-02：P2-12 讨论稿登记不动计数；2026-09-03：P2-13 设计定稿与 B1 S1/S2 完成，未入账、计数不变；2026-09-04：P2-14 设计定稿与裁决收口 + S1/S2 实施收口（主会话转 v0.3、压缩 e2e 全串行绿），未入账、计数不变；2026-09-06：P0-GOV 00 任务 D 全部闭合（S2a–S2d + S3/S4 翻转），登记不动计数；2026-09-07：0o S3/S4 集中实机验证批排期登记，不动计数；2026-09-07：0q 统一失败事件管线登记（0p S1 复审 F-C 治本），不动计数；2026-09-08：0p S1–S5 全部闭合（排期登记时未入账，闭合同形态不动计数），0r GAP-TB21-FASTTEXT-ENV-CLAIM 登记不动计数；同日 0q 统一失败事件管线 S2–S4 全部闭合 28 → 27；2026-09-09：0s 官方 R3 未通过 20 题复跑结果落档登记不动计数，同日细节分析收口（不动计数，闭合同形态；新摩擦点 FP-1～FP-9 登记待裁决）；同日 0t 检索子代理双车道用户裁决立项登记（同日两轮复核 + v1.3 复核收口：R1–R5 并入、设计层面放行；同日 S1 定稿转录完成——ADR-0010 §14.65 + §3.7 条 1/12 与 §14.40/§14.43–44 修订 + FUS-RETRIEVAL-MODE 退役标注）不动计数；同日 0t S2（Task 1 + S2-R P1–P7）实施完成登记（不动计数）；同日 0t S3 双平台重建完成登记（不动计数——S4 待续）；2026-09-10：整理轮滞后入账（0b 验证② / P2-14 S3 / P2-11×3 S3 随 0o T0 2026-09-07 闭合补入账，均同形态不动计数——父项因 S4 未复验保持开放）。TODO`[ ]` 明细含父/子项，计数以 BACKLOG 为准。
 
 ## 优先级总览
 
 | 优先级 | 含义 | 开放项（入口小节） |
 |---|---|---|
-| P0 | 当前工作集：设计已冻结，裁决后立即实施 | FUS-BENCHMARK-FULL-EXEC 验证②③(reward)④⑤（0b）；0d 后续 3/4/5 S4 复验（0d）；THIN-HARNESS-REDESIGN-V2 余项（0j）；WINDOWS-HIGH-NIST-MAX-FRICTION ⑥/⑦（0l）；GSA-SESSION-VOLUME-BOTTOM-LAYER S1–S4（0m，2026-09-06 用户裁决放行）；S3/S4 集中实机验证批（0o，2026-09-07 排期放行——集中执行上述实机类开放项，见排期文档）；检索子代理双车道并行标注面与 R3 摩擦处置（0t，2026-09-09 用户裁决立项 + 同日两轮复核，v1.3 复核放行（R1–R5 并入；γ 模式退役 + 宿主机实测由执行代理操作），S1 定稿转录完成）——S2 实施完成（Task 1 + S2-R P1–P7，2026-09-09 收口，见 [审查处理](audits/0T_S2_TASK1_REVIEW_HANDLING_2026-09-09.md) 与 [0T_S2R_P1P3_IMPL_REVIEW](audits/0T_S2R_P1P3_IMPL_REVIEW_2026-09-09.md)）；S3 双平台重建完成（2026-09-09，见 [0T S3 重建记录](audits/0T_S3_DUAL_PLATFORM_REBUILD_2026-09-09.md)）；S4 实机复验待续；——P0-GOV 00（含任务 D）已于 2026-09-06 全部闭合；0p 模型自信息面补强与 .gsa 两段门已于 2026-09-08 S1–S5 全部闭合转 `implemented`（T2/S4 见 audits 0P_T2 / 0P_S4 分析） |
+| P0 | 当前工作集：设计已冻结，裁决后立即实施 | FUS-BENCHMARK-FULL-EXEC 验证③(reward)④⑤（0b）；0d 后续 3/4/5 S4 复验（0d）；THIN-HARNESS-REDESIGN-V2 余项（0j）；WINDOWS-HIGH-NIST-MAX-FRICTION ⑥/⑦（0l）；GSA-SESSION-VOLUME-BOTTOM-LAYER S1–S4（0m，2026-09-06 用户裁决放行）；S3/S4 集中实机验证批（0o，2026-09-07 排期放行——集中执行上述实机类开放项，见排期文档）；检索子代理双车道并行标注面与 R3 摩擦处置（0t，2026-09-09 用户裁决立项 + 同日两轮复核，v1.3 复核放行（R1–R5 并入；γ 模式退役 + 宿主机实测由执行代理操作），S1 定稿转录完成）——S2 实施完成（Task 1 + S2-R P1–P7，2026-09-09 收口，见 [审查处理](audits/0T_S2_TASK1_REVIEW_HANDLING_2026-09-09.md) 与 [0T_S2R_P1P3_IMPL_REVIEW](audits/0T_S2R_P1P3_IMPL_REVIEW_2026-09-09.md)）；S3 双平台重建完成（2026-09-09，见 [0T S3 重建记录](audits/0T_S3_DUAL_PLATFORM_REBUILD_2026-09-09.md)）；S4 实机复验待续；——P0-GOV 00（含任务 D）已于 2026-09-06 全部闭合；0p 模型自信息面补强与 .gsa 两段门已于 2026-09-08 S1–S5 全部闭合转 `implemented`（T2/S4 见 audits 0P_T2 / 0P_S4 分析） |
 | P1 | 无需裁决，可与 P0 并行 | FUS-COMPONENT-REGISTER（4）；GAP-WINDOWS-EVIDENCE（5）；IMPL-DEEPSEEK-TRANSPORT / SEC-CREDENTIALS live 证据（6）；ORZ-SESSION-CONTEXT-MONITOR（6d） |
 | P2 | 生产化决策门：需用户裁决 | IMPL-CONTROL-FABRIC Slice 3/4（7）；OPS-PROTOCOL 裁剪与接线裁决（8）；MODEL-RESIDUAL-PRESSURE-FOLLOWUP（11）；COMPRESSION-LINGUISTIC-FORMAL-LAYER（12）；BLACKBOARD-CONVERSATION-SCOPE-FOLD B2–B4（13） |
 | P3 | 收尾 / 清理 | EVIDENCE-LOCAL-BROWSER（9）；GATE-CHAIN（10）；遗留小项（11） |
@@ -117,7 +117,10 @@
   valid；过程中修复 PLAN-FIRST/console 双模式落地后的既有测试漂移
   （codex_app 12 + acp_server 1，orz c4772fc；orz-host 需
   `--test-threads=1` 规避负载敏感超时竞争）；② Linux musl 重建
-  （ORZ-BUILD-MOUNT-001，输出 `D:/tb-eval/orz-linux`）；③ 单题
+  （ORZ-BUILD-MOUNT-001，输出 `D:/tb-eval/orz-linux`）——**2026-09-07 随 0o
+  T0 闭合**（musl BUILD_EXIT=0 + static-pie 零 ld-linux + bookworm 容器冒烟
+  三件执行 + 接线符号命中；产物后经 0t S3（2026-09-09，0.3.2）与 0.4.0 发布
+  轮翻新，2026-09-10 滞后入账）；③ 单题
   make-doom-for-mips 复验（reward > 0、journal 出现 `workspace.run_terminal`
   订单→run_host_tool→ACAF `command_exec` issued/consumed、无 400/无异常
   policy_denied）——**2026-08-18 取证进展**：核心机制已验证（订单→发放→
@@ -491,6 +494,10 @@ GLM F2 处置转排期（2026-09-06 用户裁决）：`orz-host/src/approval.rs`
   /
   [`W2_CHUNK2_031_S4_ANALYSIS`](audits/W2_CHUNK2_031_S4_ANALYSIS_2026-09-07.md)。
   各项正式闭合登记仍按排期在 T6 统一收口落 docs/audits/ 与各条目小节。
+- 滞后入账（2026-09-10）：T0 已达成的 S3 型闭合先行按条目自身小节补入账——
+  0b 验证②（0b 小节）、P2-14 S3（14 小节）、P2-11×3 S3（11 小节 PULL 自描述
+  / retryable / 依赖图），与 TODO P0-0o T0 行「闭合 0b ② / P2-14 S3 /
+  P2-11×3 S3」对齐；各 S4 判据仍按排期随批次 journal 在 T6 统一收口。
 
 ### 0p. 模型自信息面补强与 `.gsa` 两段门（P0；2026-09-07 设计定稿同日排期；**S1–S5 全部闭合 2026-09-08，转 `implemented`**）
 
@@ -723,7 +730,7 @@ GLM F2 处置转排期（2026-09-06 用户裁决）：`orz-host/src/approval.rs`
   0 触发、工具名幻觉 15 次自回正、浏览器结构化错误 3 次、DC 0 触发）。
 - 裁决与待办：
   1. **PULL 自描述（2026-08-31 设计定稿 + S1/S2 完成 + 审查修复完成，
-     `partial`；S3 重建 + S4 实机复验待放行）**：`blackboard_read` 响应携带
+     `partial`；S3 重建已随 0o T0 闭合（2026-09-07，后续 0p T2 / 0t S3 轮翻新），S4 实机复验待放行）**：`blackboard_read` 响应携带
      「自上次读取以来」增量（分区变化计数 + temporal 域迁移摘要，迁移段
      独立基线）+ temporal 单次查询按意图一次返回（≤1 KiB、简单描述、减少
      二次查询）；零注入、模型无感边界不变。审查修复见
@@ -737,7 +744,7 @@ GLM F2 处置转排期（2026-09-06 用户裁决）：`orz-host/src/approval.rs`
       实施记录见 `docs/audits/P2-11_DC_FORCED_TEMPLATE_CLEANUP_IMPL_AUDIT_2026-09-01.md`
       / ADR-0010 §14.49。
   3. **retryable 机械分类位（2026-09-01 设计转录 + S1 实施 + S2 测试完成；
-     S3 重建 + S4 实机复验待放行）**：类型化错误信封 `Fail` 增
+     S3 重建已随 0o T0 闭合（2026-09-07，后续 0p T2 / 0t S3 轮翻新），S4 实机复验待放行）**：类型化错误信封 `Fail` 增
      `retryable: bool`（确定性失败 false：scheme/锚点/sealed/cap；暂时性 true：
      超时/网络），错误码事实推导、非建议；schema/verifier/fixtures 先行。
      实施：`orz-assurance/src/tool_envelope.rs` `retryable_for_code` 构造期
@@ -748,7 +755,7 @@ GLM F2 处置转排期（2026-09-06 用户裁决）：`orz-host/src/approval.rs`
      覆盖）、归约边界位归一化（缺位/错位按 code 修正）、transient 优先与
      边界测试补强——199 lib + 9 fake-provider 全绿。
   4. **依赖图实施（2026-09-01 设计定稿 + S1 实施 + S1 全面审查处理 +
-     S2 测试完成，`partial`；S3 重建 + S4 实机复验待放行）**：文件锚点链最小范围
+     S2 测试完成，`partial`；S3 重建已随 0o T0 闭合（2026-09-07，后续 0p T2 / 0t S3 轮翻新），S4 实机复验待放行）**：文件锚点链最小范围
      （read→write 锚点边 + 工具→实体变更边；D3 命令/检索副作用不建图），
      PULL 查询面、模型零改动；顺带闭合 F11 receipt↔事件链逐段同构核对。
      实施：`orz-loop/src/dep_graph.rs`（ReadFact/WriteFact、锚点边匹配
@@ -937,7 +944,7 @@ GLM F2 处置转排期（2026-09-06 用户裁决）：`orz-host/src/approval.rs`
   久期代理；软上限不做额外弱保软（E12，超出不强制/不拦截/不降级）。
 - 计数：设计轮登记不动计数；设计定稿 + 用户放行后按既有纪律入账。
 
-### 14. COMPACTION-FOLD-SNAPSHOT（P2；2026-09-04 设计定稿 + ADR-0010 §14.54 转录；S1/S2 已收口，S3–S4 待续，未入账）
+### 14. COMPACTION-FOLD-SNAPSHOT（P2；2026-09-04 设计定稿 + ADR-0010 §14.54 转录；S1–S3 已收口（S3 2026-09-10 滞后入账），S4 待续）
 
 - 机制：压缩 marker 由五段模板改为**压缩点冻结黑板折叠视图快照**——近窗
   明细块（折叠默认展开子集 = 当前域段 ∪ 最近 K 轮 ∪ 最近 20% 行，∩
@@ -972,8 +979,10 @@ GLM F2 处置转排期（2026-09-06 用户裁决）：`orz-host/src/approval.rs`
   compact e2e，orz-loop lib 722 passed / 0 failed / 3 ignored、orz-host
   ACP 43 passed、fmt/diff 净；审计见
   [P2-14 S2 e2e 审计](audits/P2-14_S2_E2E_2026-09-04.md)。
-- S3–S4 待续：S3 Linux musl 重建（沿用 ORZ-BUILD-MOUNT-001 契约）；S4
-  实机复验 + marker 尺寸/块溢出/blackboard_read 跟随率遥测。
+- S3 已闭合（**2026-09-07 随 0o T0**：Linux musl 重建，沿用
+  ORZ-BUILD-MOUNT-001 契约——BUILD_EXIT=0 + static-pie + 冒烟 + 符号命中；
+  产物后经 0p T2 / 0t S3 轮翻新；2026-09-10 滞后入账）。
+- S4 待续：实机复验 + marker 尺寸/块溢出/blackboard_read 跟随率遥测。
 - 入口：[设计稿](CONTEXT_COMPACTION_BLACKBOARD_FOLD_DESIGN_2026-09-04.md)
   / [ADR-0010 §14.54](../adr/ADR-0010-fusion-runtime-and-agent-architecture.md)
   / [复审处理](audits/P2-14_S1_REVIEW_HANDLING_2026-09-04.md)
