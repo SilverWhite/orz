@@ -3796,6 +3796,32 @@ ADR §3.6 正文修订随实施登记。
     x86_64.zip（25.3 MB）。登记于
     [0.3.0 发布包](../releases/orz-0.3.0-linux-x86_64/README.md)。
 
+11. **0.4.0 发布（2026-09-09；里程碑；计数不动）**：双平台发布——版本号
+    orz-bin 0.3.2 → 0.4.0（orz a467d0f9，已推送
+    cli/feat/fusion-architecture；父仓库 6a97820）；Windows x86_64
+    release 构建（orz.exe 51,982,336 B / orz-signer.exe 6,737,920 B /
+    orz-acaf-provision.exe 6,642,176 B，续编 54s）+ Linux musl 三件套
+    （orz 109,066,552 B / orz-signer 1,396,200 B / orz-acaf-provision
+    1,214,656 B，musl 静态；bookworm 容器冒烟通过——provision usage /
+    signer manifest 缺失 / `--version` TTY 错误路径均属预期加载后行为）；
+    0.4.0 主要变更=0.3.0 后 47 提交：检索子代理双车道与 γ 模式退役
+    （0t：browser_control / browser_launch_result / 静态标注 / 失败正常
+    回传 / PDF 外置偏好）、TER M1（去硬杀/自动后台化/黑板 processes/
+    64K 读档+输出检索对象/env PULL 快照/F6 默认 off）、GSA 会话卷底层
+    层 + 两段门与 key 不落卷（0m/0p）、统一失败事件管线（0q
+    stamp_failure 漏斗 + failure_agg_absent + action_target）、run-event
+    执法权翻转（Task D：Rust 单法官 journal-conformance + registry 唯一
+    权威 + 31 族对拍）、Task C canonical 沙箱与 ACAF fail-closed 默认、
+    P2-14 压缩 marker v0.3；0.3.1/0.3.2 为过程验证内部基线（未单独
+    发版）；本地资产=orz-0.4.0-linux-x86_64.tar.gz（33.2 MiB）+
+    orz-0.4.0-windows-x86_64.zip（24.9 MiB），API Key 不入包，注入=
+    Windows 凭据管理器 / Linux `ORZ_DEEPSEEK_API_KEY` env
+    （ADR-0006 §2.2/§2.3）。GitHub Release v0.4.0（SilverWhite/CLI，
+    [releases/tag/v0.4.0](https://github.com/SilverWhite/CLI/releases/tag/v0.4.0)），
+    资产=orz-0.4.0-linux-x86_64.tar.gz（34,858,023 B）+ orz-0.4.0-
+    windows-x86_64.zip（26,118,844 B）。登记于
+    [0.4.0 发布包](../releases/orz-0.4.0-linux-x86_64/README.md)。
+
 ### 14.41 v1.41 补写裁决索引（2026-08-25）
 
 本节记录冻结后的显式补写；规范正文以所指章节为准，补写明确

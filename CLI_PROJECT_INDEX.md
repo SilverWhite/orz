@@ -1,6 +1,6 @@
 # CLI_PROJECT_INDEX
 
-> 索引版本：v2.67；状态：`current`；最近整理：2026-09-09（v2.67：0t S3 双平台重建完成登记——双平台三件套 + manifest 构建冒烟绿（Windows release `cargo build --release -p orz-bin` + Linux musl Docker `rust:1.97-slim`，`BUILD_EXIT=0`；SHA256 锁定 + 0t 接线符号命中 + bookworm 冒烟三件加载执行全过；orz `92875fd5`、版本 0.3.2 不 bump），见 [`0T S3 重建记录`](docs/audits/0T_S3_DUAL_PLATFORM_REBUILD_2026-09-09.md)；S4 实机复验待续。v2.66：0t S2 实施完成登记——Task 1 + S2-R P1–P7（browser_control 导航级动作面 + P1-2a BrowserStepFailed 接缝 + web_fetch 声明恢复 + P5/P6 conformance 收口 + P7 PDF 下载修复与重捕小批 10 fixture 换新；ADR-0010 v1.66 转录 + BACKLOG/TODO 同步）。v2.65：0t
+> 索引版本：v2.68；状态：`current`；最近整理：2026-09-09（v2.68：0.4.0 双平台里程碑发布登记——0.3.0 后 47 提交（TER M1 / Task C/D / 0m / 0p / 0q / 0t / P2-14），双平台包 orz-0.4.0-linux-x86_64.tar.gz + orz-0.4.0-windows-x86_64.zip，GitHub Release v0.4.0，ADR-0010 §14.40 第 11 项 + [0.4.0 发布包](releases/orz-0.4.0-linux-x86_64/README.md)。v2.67：0t S3 双平台重建完成登记——双平台三件套 + manifest 构建冒烟绿（Windows release `cargo build --release -p orz-bin` + Linux musl Docker `rust:1.97-slim`，`BUILD_EXIT=0`；SHA256 锁定 + 0t 接线符号命中 + bookworm 冒烟三件加载执行全过；orz `92875fd5`、版本 0.3.2 不 bump），见 [`0T S3 重建记录`](docs/audits/0T_S3_DUAL_PLATFORM_REBUILD_2026-09-09.md)；S4 实机复验待续。v2.66：0t S2 实施完成登记——Task 1 + S2-R P1–P7（browser_control 导航级动作面 + P1-2a BrowserStepFailed 接缝 + web_fetch 声明恢复 + P5/P6 conformance 收口 + P7 PDF 下载修复与重捕小批 10 fixture 换新；ADR-0010 v1.66 转录 + BACKLOG/TODO 同步）。v2.65：0t
 > 检索子代理双车道设计 S1 定稿转录——ADR-0010 §14.65（双车道并存 + 独立
 > 检索启用门、三值检索模式 γ 退役、浏览器可用性事件事实化
 > `browser_launch_result`；修订 §3.7 条 1/12 + §14.40/§14.43–44 退役标注），
