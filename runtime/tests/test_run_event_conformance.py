@@ -302,7 +302,10 @@ class RunEventV02ContractTests(unittest.TestCase):
         (+session_archive — 会话关闭/归档单 gzip 包事件).
         TER T0.2 (2026-09-03, TODO2 T0.2 / 设计稿 §10-S0): 53 → 54
         (+budget_cue_injected — F6 push 档中性预算提示；tool_completed 在
-        v0.2 轨换 v0.2 payload，tool_running 增 idle-kill 形态)."""
+        v0.2 轨换 v0.2 payload，tool_running 增 idle-kill 形态).
+        0t (2026-09-09, ADR-0010 §14.65 / 设计 v1.3): 54 → 55
+        (+browser_launch_result — 浏览器启动/探活尝试事实事件；
+        retrieval_mode_transition 生产者侧退役，事件类型保留回放)."""
         schema = load_json(RUN_EVENT_SCHEMA_V02)
         enum_events = set(schema["properties"]["event_type"]["enum"])
         fixture_events = {
@@ -311,7 +314,7 @@ class RunEventV02ContractTests(unittest.TestCase):
             if path.name != "chained-run-finished.valid.json"
         }
         self.assertEqual(fixture_events, enum_events)
-        self.assertEqual(len(enum_events), 54)
+        self.assertEqual(len(enum_events), 55)
         self.assertNotIn("neutral_inquiry", enum_events)
         self.assertNotIn("retrieval_completion_check", enum_events)
         self.assertNotIn("diagnostic_coverage_checkpoint", enum_events)

@@ -120,21 +120,55 @@ ALL_JOURNALS_V02 = (
     # activation restore scenarios.
     "mode-off-refusal.jsonl",
     "local-browser-capability.jsonl",
+    "local-browser-read.jsonl",
     "real-doc-retrieval.jsonl",
     "cross-prompt-restore.jsonl",
 )
 
+
+def _orientation_fire_v02_sequence() -> tuple[str, ...]:
+    """0t 重捕 (2026-09-09) 的 orientation-fire 期望序列——与 Rust capture
+    `capture_orientation_fire_run` 的 expected 构造同构：每次模型请求前
+    request_header_change；每次检索派发 = 主模型工具调用轮 → 子代理文本轮
+    → 结果提交 → 机械评估 → auto_close → 双 mechanical_audit_update；第 7 轮
+    checkpoint 夹在两条审计更新之间（post_tool_batch_gap）；checkpoint 注入
+    后模型还需回答轮 + 汇总轮才到反例门与终答。"""
+    seq: list[str] = [
+        "run_preflight", "tool_availability_check", "run_started",
+        "prompt_submitted", "request_header_change",
+    ]
+    for i in range(7):
+        seq.extend([
+            "model_output", "tool_started", "request_header_change",
+            "model_output", "tool_completed", "retrieval_result_committed",
+            "information_sufficiency_assessment", "retrieval_close_record",
+            "mechanical_audit_update",
+        ])
+        if i == 6:
+            seq.append("orientation_checkpoint")
+        seq.append("mechanical_audit_update")
+    seq.extend([
+        "model_output", "model_output", "counterexample_gate",
+        "model_output", "run_finished",
+    ])
+    return tuple(seq)
+
+
 EXPECTED_SEQUENCES_V02: dict[str, tuple[str, ...]] = {
     "plain-run.jsonl": (
         "run_preflight", "tool_availability_check", "run_started",
-        "prompt_submitted", "model_output", "counterexample_gate",
+        "prompt_submitted", "request_header_change", "model_output",
+        "counterexample_gate",
         "model_output", "run_finished",
     ),
     "tool-snapshot-run.jsonl": (
         "run_preflight", "tool_availability_check", "run_started",
-        "prompt_submitted", "model_output", "permission_requested",
+        "prompt_submitted", "request_header_change", "model_output",
+        "permission_requested",
         "permission_decision", "snapshot_created", "tool_started",
-        "tool_completed", "model_output", "counterexample_gate",
+        "tool_completed",
+        "mechanical_audit_update", "mechanical_audit_update",
+        "model_output", "counterexample_gate",
         "model_output", "run_finished",
     ),
     # P2-11 DC 清理 (2026-08-31): the plan-write counterexample gate round is
@@ -148,140 +182,80 @@ EXPECTED_SEQUENCES_V02: dict[str, tuple[str, ...]] = {
     ),
     "cancelled-run.jsonl": (
         "run_preflight", "tool_availability_check", "run_started",
-        "prompt_submitted", "run_cancelled",
+        "prompt_submitted", "request_header_change", "run_cancelled",
     ),
     "failed-run.jsonl": (
         "run_preflight", "tool_availability_check", "run_started",
-        "prompt_submitted", "run_failed",
+        "prompt_submitted", "request_header_change", "run_failed",
     ),
     "restore-run.jsonl": (
         "run_preflight", "snapshot_restored", "run_finished",
     ),
-    # GAP-SUBAGENT-RUNTIME (2026-08-10, M3/M4): each retrieval dispatch runs
-    # the SHARED loop — the subagent's model round lands in the same chain
-    # guard land in the same chain between the parent's tool_started/
-    # tool_completed wrapper; each assessment is followed by the parent's
-    # retrieval_disposition round (the control call's disposition event —
-    # and the close record on the accepted close — land between the tool's
-    # start and completion); the 7-round orientation crossing fires once, on
-    # the 4th retrieve's post-tool-batch gap.
-    # GAP-RETRIEVAL-TOOLS (2026-08-10): each iteration commits its structured
-    # result (retrieval_result_committed) between the dispatch's
-    # tool_completed and the mechanical assessment.
-    # FUS-TOOL-PROBE P0-A-2 审查复核（2026-08-13）：评估落地后
-    # has_live_activation 置真（未决 pending assessment）、disposition 消费后
-    # 清除——每轮 retrieval_disposition 探针翻转各记一次
-    # tool_availability_check。
-    "orientation-fire-run.jsonl": (
-        "run_preflight", "tool_availability_check", "run_started",
-        "prompt_submitted",
-        "model_output", "tool_started", "model_output",
-        "tool_completed",
-        "retrieval_result_committed",
-        "information_sufficiency_assessment",
-        "tool_availability_check",
-        "model_output", "tool_started", "retrieval_parent_disposition",
-        "tool_completed",
-        "tool_availability_check",
-        "model_output", "tool_started", "model_output",
-        "tool_completed",
-        "retrieval_result_committed",
-        "information_sufficiency_assessment",
-        "tool_availability_check",
-        "model_output", "tool_started", "retrieval_parent_disposition",
-        "tool_completed",
-        "tool_availability_check",
-        "model_output", "tool_started", "model_output",
-        "tool_completed",
-        "retrieval_result_committed",
-        "information_sufficiency_assessment",
-        "tool_availability_check",
-        "model_output", "tool_started", "retrieval_parent_disposition",
-        "tool_completed",
-        "tool_availability_check",
-        "model_output", "tool_started", "model_output",
-        "tool_completed",
-        "retrieval_result_committed",
-        "information_sufficiency_assessment", "orientation_checkpoint",
-        "tool_availability_check",
-        "model_output", "tool_started", "retrieval_parent_disposition",
-        "tool_completed",
-        "tool_availability_check",
-        "model_output", "tool_started", "model_output",
-        "tool_completed",
-        "retrieval_result_committed",
-        "information_sufficiency_assessment",
-        "tool_availability_check",
-        "model_output", "tool_started", "retrieval_parent_disposition",
-        "retrieval_close_record", "tool_completed",
-        "tool_availability_check",
-        "model_output", "counterexample_gate", "model_output",
-        "run_finished",
-    ),
-    # GAP-RETRIEVAL-TOOLS (2026-08-10): mode=off refuses the scripted
-    # retrieval dispatch — the refusal is the terminal ToolCompleted(error)
-    # ALONE (no ToolStarted: the verifier's mode rule forbids any dispatch
-    # after a transition to off).
+    # 0t / THIN-HARNESS-REDESIGN R1 重捕 (2026-09-09)：每次模型请求前
+    # request_header_change；每次检索派发 = 主模型工具调用轮 → 子代理文本轮
+    # → 结果提交 → 机械评估 → auto_close（无 disposition 往返）→ 双
+    # mechanical_audit_update；第 7 轮 checkpoint 夹在两条审计更新之间
+    # （post_tool_batch_gap）。期望序列与 Rust capture 同构，见
+    # `_orientation_fire_v02_sequence()`。
+    "orientation-fire-run.jsonl": _orientation_fire_v02_sequence(),
+    # 0t 重捕 (2026-09-09)：retrieval 未启用的拒绝——ToolCompleted(error)
+    # ALONE（无 ToolStarted；启用门无状态机可 transition）。
     "mode-off-refusal.jsonl": (
         "run_preflight", "tool_availability_check", "run_started",
-        "prompt_submitted", "model_output", "tool_completed",
+        "prompt_submitted", "request_header_change", "model_output",
+        "tool_completed", "mechanical_audit_update",
+        "mechanical_audit_update", "model_output",
+        "counterexample_gate", "model_output", "run_finished",
+    ),
+    # 0t 重捕 (2026-09-09)：S1 启动失败——browser_launch_result(failure)
+    # fact 落在子代理 ToolStarted → ToolCompleted 之间（S4 无 transition）。
+    "local-browser-capability.jsonl": (
+        "run_preflight", "tool_availability_check", "run_started",
+        "prompt_submitted", "request_header_change", "model_output",
+        "tool_started", "request_header_change", "model_output",
+        "permission_requested", "permission_decision", "tool_started",
+        "browser_launch_result", "tool_completed", "model_output",
+        "tool_completed", "retrieval_result_committed",
+        "information_sufficiency_assessment", "retrieval_close_record",
+        "mechanical_audit_update", "mechanical_audit_update",
         "model_output", "counterexample_gate", "model_output",
         "run_finished",
     ),
-    # local_browser with an unsupported capability: the bootstrap transition
-    # journals before the availability gate; the refusal follows the
-    # standard ToolStarted → ToolCompleted(error) audit shape.
-    "local-browser-capability.jsonl": (
-        "run_preflight", "retrieval_mode_transition",
-        "tool_availability_check", "run_started", "prompt_submitted",
-        "model_output", "tool_started", "tool_completed", "model_output",
-        "counterexample_gate", "model_output",
-        "run_finished",
-    ),
-    # Real project-doc retrieval: the subagent's index call runs through
-    # the host (permission bridge records its auto-allow), the committed
-    # result carries the real visibility, the assessment consumes it.
+    # Real project-doc retrieval：子代理 read_file 经 host（permission
+    # auto-allow），提交结果带真实可见性，机械评估 + auto_close。
     "real-doc-retrieval.jsonl": (
         "run_preflight", "tool_availability_check", "run_started",
-        "prompt_submitted", "model_output", "tool_started",
-        "model_output", "permission_requested", "permission_decision",
-        "tool_started", "tool_completed", "model_output",
-        "tool_completed",
-        "retrieval_result_committed", "information_sufficiency_assessment",
-        "tool_availability_check",
-        "model_output", "counterexample_gate", "model_output",
-        "run_finished",
-    ),
-    # local_browser (2026-08-10): mode=local_browser with an AVAILABLE
-    # capability — the external subagent runs the host browser_read tool
-    # (permission auto-allow), the committed result carries REAL full-text
-    # web_page evidence, and the transition records capability_status
-    # = available.
-    "local-browser-read.jsonl": (
-        "run_preflight", "retrieval_mode_transition",
-        "tool_availability_check", "run_started", "prompt_submitted",
-        "model_output", "tool_started", "model_output",
+        "prompt_submitted", "request_header_change", "model_output",
+        "tool_started", "request_header_change", "model_output",
         "permission_requested", "permission_decision", "tool_started",
-        "tool_completed", "model_output",
-        "tool_completed", "retrieval_result_committed",
-        "information_sufficiency_assessment",
-        "tool_availability_check",
-        "model_output",
-        "counterexample_gate", "model_output",
-        "run_finished",
+        "tool_completed", "model_output", "tool_completed",
+        "retrieval_result_committed", "information_sufficiency_assessment",
+        "retrieval_close_record", "mechanical_audit_update",
+        "mechanical_audit_update", "model_output", "counterexample_gate",
+        "model_output", "run_finished",
     ),
-    # Cross-run activation restore: the seeded AwaitingDisposition
-    # activation journals its restore at startup, the parent's disposition
-    # closes it (close record binds through the restore declaration).
+    # 0t 重捕 (2026-09-09)：local_browser read 成功场景——S4 ready 会话
+    # 无 browser_launch_result（无启动尝试）。
+    "local-browser-read.jsonl": (
+        "run_preflight", "tool_availability_check", "run_started",
+        "prompt_submitted", "request_header_change", "model_output",
+        "tool_started", "request_header_change", "model_output",
+        "permission_requested", "permission_decision", "tool_started",
+        "tool_completed", "model_output", "tool_completed",
+        "retrieval_result_committed", "information_sufficiency_assessment",
+        "retrieval_close_record", "mechanical_audit_update",
+        "mechanical_audit_update", "model_output", "counterexample_gate",
+        "model_output", "run_finished",
+    ),
+    # Cross-run activation restore：seeded AwaitingDisposition activation
+    # journals its restore at startup；父方 disposition 关闭它。
     "cross-prompt-restore.jsonl": (
         "run_preflight", "retrieval_activation_restored",
         "tool_availability_check", "run_started", "prompt_submitted",
-        "model_output", "tool_started", "retrieval_parent_disposition",
-        "retrieval_close_record", "tool_completed",
-        "tool_availability_check",
-        "model_output",
-        "counterexample_gate", "model_output",
-        "run_finished",
+        "request_header_change", "model_output", "tool_started",
+        "retrieval_parent_disposition", "retrieval_close_record",
+        "tool_completed", "mechanical_audit_update", "model_output",
+        "counterexample_gate", "model_output", "run_finished",
     ),
     # Pre-handoff checkpoint: the stagnation restart decision journals the
     # orientation checkpoint (independent lifecycle trigger) before the
@@ -425,16 +399,15 @@ class V02JournalConformanceTests(unittest.TestCase):
         assessments = [
             e for e in events if e["event_type"] == "information_sufficiency_assessment"
         ]
-        # GAP-SUBAGENT-RUNTIME (2026-08-10): the M4 scenario interleaves a
-        # disposition after every assessment (4 × continue + 1 × close) —
-        # each continue bumps the contract revision, so the assessments
-        # carry revisions 0..4.
-        self.assertEqual(len(assessments), 5)
-        for i, a in enumerate(assessments):
+        # 0t 重捕 (2026-09-09)：THIN-HARNESS-REDESIGN R1 (§4.4) auto_close —
+        # 7 次检索派发各一次机械评估；每次派发即闭环（无 continue），
+        # contract_revision 恒 0（不再有 disposition 往返递增）。
+        self.assertEqual(len(assessments), 7)
+        for a in assessments:
             p = a["payload"]
             self.assertEqual(p["status"], "indeterminate")
             self.assertEqual(p["source_visibility_gate"], "not_applicable")
-            self.assertEqual(p["contract_revision"], i)
+            self.assertEqual(p["contract_revision"], 0)
             # GAP-RETRIEVAL-TOOLS (2026-08-10): the structured result is
             # PER-ITERATION — each round's ledger covers that round's one
             # [DOC] declaration (metadata-grade).

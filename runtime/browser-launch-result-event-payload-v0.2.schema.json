@@ -1,0 +1,54 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://local.scientific-assurance.invalid/schema/browser-launch-result-event-payload-v0.2.schema.json",
+  "title": "Browser launch result fact event payload (Rust track, v0.2)",
+  "description": "0t (2026-09-09, ADR-0010 §14.65 / §3.7 条 1, v1.65): 浏览器每次启动/探活尝试的事实事件——success/failure + 真实原因。检索模式三值状态（off/local_browser/framework_fallback）γ 整体退役后，浏览器可用性纯事件事实化：不再有模式状态机、机械降级或 retrieval_mode_transition 新产出（该事件族保留为旧 v0.2 刊只读回放）。事件面不带 args、key 不落卷等既有纪律不变。",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "attempt_id",
+    "status"
+  ],
+  "properties": {
+    "attempt_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "status": {
+      "type": "string",
+      "enum": ["success", "failure"]
+    },
+    "cause": {
+      "oneOf": [
+        {
+          "type": "string",
+          "minLength": 1
+        },
+        {
+          "type": "null"
+        }
+      ]
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": { "status": { "const": "failure" } },
+        "required": ["status"]
+      },
+      "then": {
+        "properties": { "cause": { "type": "string", "minLength": 1 } },
+        "required": ["cause"]
+      }
+    },
+    {
+      "if": {
+        "properties": { "status": { "const": "success" } },
+        "required": ["status"]
+      },
+      "then": {
+        "properties": { "cause": { "type": "null" } }
+      }
+    }
+  ]
+}

@@ -2,7 +2,14 @@
 
 - 状态：**accepted / frozen**（2026-08-09；本文件是 ORZ 当前自然语言设计的唯一权威基线）
 - 冻结版本：1.1（2026-08-10 追加 v1.2 补写，见 §14.2；2026-08-11 追加 v1.3 补写，见 §14.3；2026-08-11 追加 v1.4 补写，见 §14.4；2026-08-12 追加 v1.5 补写，见 §14.5；2026-08-12 追加 v1.6 补写，见 §14.6；2026-08-13 追加 v1.7 补写，见 §14.7；2026-08-13 追加 v1.8 补写，见 §14.8；2026-08-14 追加 v1.9 补写，见 §14.9；2026-08-14 追加 v1.10 补写，见 §14.10；2026-08-14 追加 v1.11 补写，见 §14.11；2026-08-14 追加 v1.12 补写，见 §14.12；2026-08-14 追加 v1.13-v1.15 补写，见 §14.13-§14.15；2026-08-15 v1.15⑧/⑨ 补强，见 §14.15 ⑧/⑨；2026-08-15 追加 v1.16 补写，见 §14.16；2026-08-15 追加 v1.17 补写，见 §14.17；2026-08-16 v1.17⑩ 审查收口登记，见 §14.17⑩；2026-08-16 v1.17⑪ S4 实施登记，见 §14.17⑪；2026-08-16 v1.17⑫ 审查收口登记，见 §14.17⑫；2026-08-16 v1.17⑬ 超时语义复核登记，见 §14.17⑬；2026-08-16 v1.17⑭/⑮ 决策门与阶段 A 登记，见 §14.17⑭/⑮；2026-08-16 v1.17⑯ 阶段 A 审查收口登记，见 §14.17⑯；2026-08-16 v1.17⑰ 阶段 B 实施登记，见 §14.17⑰；2026-08-16 v1.17⑱ 阶段 C 实施登记，见 §14.17⑱；2026-08-16 追加 v1.18 补写，见 §14.18；2026-08-17 追加 v1.19 补写，见 §14.19；2026-08-17 追加 v1.20 补写，见 §14.20；2026-08-17 追加 v1.21 补写，见 §14.21；2026-08-17 追加 v1.22 补写，见 §14.22；2026-08-17 追加 v1.23 补写，见 §14.23；2026-08-18 追加 v1.24 补写，见 §14.24；2026-08-18 追加 v1.25 补写，见 §14.25；2026-08-18 追加 v1.26 补写，见 §14.26；2026-08-18 追加 v1.27 补写，见 §14.27；2026-08-18 追加 v1.28 补写，见 §14.28；2026-08-18 追加 v1.29 补写，见 §14.29；2026-08-19 追加 v1.30-v1.33 补写，见 §14.30-§14.33；2026-08-20 追加 v1.34 补写，见 §14.34；2026-08-20 追加 v1.35 补写，见 §14.35；2026-08-21 追加 v1.36 补写，见 §14.36；2026-08-21 追加 v1.37 补写，见 §14.37；2026-08-21 追加 v1.38 补写，见 §14.38；2026-08-24 追加 v1.39 补写，见 §14.39；2026-08-25 追加 v1.40 补写，见 §14.40；2026-08-25 追加 v1.41 补写，见 §14.41；2026-08-29 追加 v1.42 补写，见 §14.42；2026-08-30 追加 v1.43-v1.46 补写，见 §14.43-§14.46；2026-08-30 追加 v1.47 补写，见 §14.47；2026-08-31 追加 v1.48 补写，见 §14.48；2026-09-01 追加 v1.49-v1.51 补写，见 §14.49-§14.51；2026-09-03 追加 v1.52 补写，见 §14.52；2026-09-03 追加 v1.53 TER 候选登记，见 §14.53；2026-09-04 追加 v1.54 补写，见 §14.54；2026-09-04 追加 v1.55 TER 正式裁决（转正/取代清单），见 §14.55；2026-09-06 追加 v1.56 `.gsa` 会话卷定稿，见 §14.56；2026-09-06 追加 v1.57 写单链判官规则退役裁决，见 §14.57；2026-09-06 追加 v1.58 probe_accuracy 封存工具翻转裁决，见 §14.58；2026-09-06 追加 v1.59 probe 分区形状子句收窄补裁决，见 §14.59；2026-09-07 追加 v1.60 权限判定面分布治理裁决（自研面不膨胀/薄层特意形态/休眠面冻结），见 §14.60；2026-09-07 追加 v1.61 模型自信息面补强与 .gsa 两段门裁决，见 §14.61；2026-09-08 追加 v1.62 0p 批执行闭合登记（T2/S4 + 黑板粒度特意形态裁决 + 检查点还原 DPAPI SOP），见 §14.62；2026-09-08 追加 v1.63 0q 统一失败事件管线 S1 定稿（四点裁决 + 排期），见 §14.63；2026-09-08 追加 v1.64 0q S2–S4 执行闭合（漏斗落地/四写点退役/第五族/法官对账族/grandfather 锚），见 §14.64）
-- 日期：2026-08-09（v1.1 补充裁决同日冻结）
+   - 冻结版本补记（2026-09-09 追加 v1.65）：0t 检索子代理双车道设计定稿转录——双车道并存 +
+     独立检索启用门、三值检索模式 γ 退役、浏览器可用性事件事实化；修订 §3.7 条 1/12 与
+     §14.40/§14.43–44，见 §14.65。
+   - 冻结版本补记（2026-09-09 追加 v1.66）：0t S2 实施完成与 P1 设计新增项转录——P1 设计
+     （browser_control Phase 1 导航级动作面 + P1-2a 启动事实口径 BrowserStepFailed 接缝 +
+     P2-2 web_fetch 声明恢复）随 S2-R 实施并转录；S2（Task 1 + S2-R P1–P7）闭合登记，见
+     §14.65 第 7 项。
+   - 日期：2026-08-09（v1.1 补充裁决同日冻结）
 - 决策范围：产品 runtime 所有权、成熟组件复用、自研准入、主/子 Agent 架构、模型与 transport、工具与权限、检索证据、context/compaction、问询与活性守卫、journal/snapshot、隐私、UI、Windows 兼容性、Schema 演进与设计文档治理
 - 取代/修订：
   - **取代** ADR-0003 §2.6 与 §3 中“本仓库不拥有通用 model/tool/session runtime、仅通过窄 adapter 使用外部 runtime”的产品所有权裁决；
@@ -350,6 +357,14 @@ offset 分段）落成工具契约；与 pdf_read 的 `document_id` + `page_rang
    未授权检索时从 `off` 开始；启用检索时优先选择 `local_browser`。`framework_fallback` 只有在用户或
    parent task contract 明确选择时才能进入，不能因 browser timeout、登录失败、CAPTCHA 或结果不足而
    自动切换。任何 mode transition 都必须产生带旧值、新值、authority 和 reason code 的机械事件。
+   该条为冻结后补写（v1.65，2026-09-09，0t 检索子代理双车道定稿，见 §14.65）：检索模式三值状态
+   （`off`/`local_browser`/`framework_fallback`）**整体退役**——不再作为激活状态，mode transition
+   机械事件族不再产出；原 `off` 的「未授权默认无可检索工具」语义改由**独立检索启用门**承接（如
+   `retrieval_enabled=false`，未启用会话主面与外部 lane 均无检索工具、派发仍 fail-closed 拒绝）；
+   检索启用会话 external 子代理工具面**双族恒在**（browser_read + web_search/web_fetch，
+   `retrieval_mode_requires_framework_fallback` 拒绝族退役），浏览器可用性改为纯事件事实
+   （`browser_launch_result`），浏览器不可用按普通失败回传（§3.7.2 显式状态语义继续适用），
+   换道由模型依静态标注自主完成、机械层不再降级。
 2. `local_browser` 保留旧 LBR 设计的规范性状态与异常结果，但不冻结旧文档的单一线性步骤、60 秒
    timeout 或具体 tab 数：搜索、打开、读取、PDF 发现/下载/验证/索引、来源验证、清理均为显式状态；
    `LOGIN_REQUIRED`、`CAPTCHA_REQUIRED`、`SOURCE_UNAVAILABLE`、`INVALID_PDF`、`NO_TEXT_LAYER`、
@@ -426,6 +441,14 @@ offset 分段）落成工具契约；与 pdf_read 的 `document_id` + `page_rang
     修复）；`visibility_degraded` 重定义为「机械 ledger 无文本级证据
     （full_text_observed/partial_text_observed 均 0）」；机械来源梯队 ①
     与选择性原文核验 ② 语义不变。
+    该条为冻结后补写（v1.65，2026-09-09，0t 检索子代理双车道定稿，见 §14.65）：v1.9 补写中
+    「执行面仍二存一……原生 web_search 兜底是机械路径（`retrieval_mode_transition`，
+    authority=mechanical_probe），不是子代理模型的自由选择」随三值检索模式 γ 退役——检索启用
+    会话外部 lane 双族并存、换道为模型自由选择（机械层只做事实记录与正常回传）；「主面可声明
+    web_search 单一**派发入口**（纯机械侧标注）」保留为检索启用会话主面投影的既有形态，不再
+    限定于 local_browser 模式，模式差异不再进入工具面；web_fetch 族与 web_search_* 变体不进
+    主面的单入口语义不变。本条第 ① 机械来源梯队、② 选择性原文核验与分级加权（local_browser
+    直接分级）语义不变。
 
 ### 3.8 受控 `run_tests` / hidden-test 反馈环
 
@@ -3575,6 +3598,10 @@ ADR §3.6 正文修订随实施登记。
 
 本节记录冻结后的显式补写；规范正文以所指章节为准，补写明确
 取代以下既往条款。
+（**2026-09-09 修订标注**：第 1–4 项所载外部检索子代理「模式 A 自动定档/机械降级 + 工具面按模式
+二选一」的定稿与实施语义随 0t 双车道设计定稿退役（三值检索模式 γ 退役、双车道并存 + 独立检索
+启用门、浏览器可用性事件事实化），见 §14.65；本条保留为历史裁决/实施记录。内部子代理结构化检索
+外包与模式门之外的接线结论不在退役面。）
 
 1. **检索子代理接线重设计定稿（2026-08-25 用户裁决；设计轮不动计数）**：
    问题=MECHANICAL-AUDIT-LAYER S4 复验（2026-08-24，5 题 reward 全 1.00）
@@ -3898,6 +3925,11 @@ ADR §3.6 正文修订随实施登记。
 
 本节记录冻结后的显式补写；规范正文以所指章节为准，补写明确
 取代以下既往条款。
+（**2026-09-09 修订标注**：第 1 项「检索双模式定案」中依赖 `retrieval_mode_transition` 的机械
+降级/兜底语义（SERP 页面级失败 → authority=mechanical_probe 显式记录的原生兜底、以
+local_browser/framework_fallback 为激活模式状态的双模式保留）随 0t 三值模式 γ 退役，见 §14.65；
+引擎 SERP 主序（Google 主序、Bing 回退）、人化输入延迟 pacing 与查询频率上限保留为浏览器车道
+内部首选路径语义，不在退役面。）
 
 1. **检索双模式定案（2026-08-30 用户确认最终评判；修订 §3.7.1/§3.7.10
    检索来源语义）**：
@@ -3940,6 +3972,10 @@ ADR §3.6 正文修订随实施登记。
 
 本节记录冻结后的显式补写；规范正文以所指章节为准，补写明确
 取代以下既往条款。
+（**2026-09-09 修订标注**：第 1 项中「执行面二存一不变……原生 web_search 兜底是机械路径
+（`retrieval_mode_transition`……）……不是子代理模型的自由选择」及「外部 lane 在 local_browser
+下剔除继承的 web 族」随三值模式 γ 退役，见 §14.65；「主面恢复外部 web_search 单一派发入口
+（纯机械侧标注）」保留为检索启用会话主面投影的既有形态，模式限定词退役。）
 
 1. **主面恢复外部 web_search 派发入口（2026-08-30 用户裁决「先恢复
    外部」；修订 §3.7 条 12「二存一」）**：
@@ -4801,3 +4837,123 @@ registry/manifest 随批）→ S3 覆盖面矩阵与法官正反两测 → S4 �
    复现、隔离单跑通过，非本批回归）；clippy 86 = 基线零新增、fmt 净、
    仓库门禁 valid: true。行集纯增量零迁移（§14.63 裁决 ④）：消费方
    （P2-12 注意事项槽 / 0p failures_only）零接口变更。
+
+### 14.65 v1.65 补写裁决索引（2026-09-09）
+
+本节为 **0t 检索子代理双车道并行标注面与 R3 摩擦处置 S1 定稿**转录：设计
+[`RETRIEVAL_SUBAGENT_DUAL_LANE_DESIGN_2026-09-09`](../docs/RETRIEVAL_SUBAGENT_DUAL_LANE_DESIGN_2026-09-09.md)
+（v1.3，2026-09-09 用户确认 R1–R5 全部并入、设计层面放行；纯文档转录轮，无代码改动，计数
+不动）；证据基线=[`0S 细节分析`](../docs/audits/0S_DETAIL_ANALYSIS_2026-09-09.md) /
+[`0T mteb 核查`](../docs/audits/0T_MTEB_IMAGE_CHECK_2026-09-09.md)。
+
+1. **用户裁决登记（立项 + 两轮复核 + v1.3 复核修正）**：立项（2026-09-09 上午）——①环境背景
+   =Clash 关闭后 R3 跑批使用本地镜像，Google 检索与 Chrome 实质不可用，但现行机制无法降级原生
+   检索；②原生检索（web 族）与本地浏览器检索（browser_read）都开放给检索子代理，像主 agent
+   工具栏一样打标注，推荐模型先用本地浏览器检索；③R3 新摩擦（FP-1～FP-9）随本项统一处置。
+   第一轮复核（v1.1）：④FP-2 不教学不阻拦，仅按真实类别正常回传检索失败；⑤不做标注健康度，
+   仅静态标注让模型自主选择；⑥mteb 镜像转核查；⑦framework_fallback 待议；⑧FP-3 节点用户
+   自理；⑨FP-4 不干预；⑩FP-5 机械拦截+正常反馈即满足（R3 29/29）；⑪FP-6 非问题。第二轮复核
+   （v1.2）：⑫浏览器问题定性为注入＋网络环境，用户在真机环境测试处理；orz 需保证真机日常使用
+   真实浏览器正常；锁版本等不通用方案不做；跑分不重要、日常可用为准——FP-1 解除立项、活体探针
+   取消；⑬framework_fallback 采纳彻底的 γ 方案：三值检索模式退役、浏览器可用性纯事件事实化、
+   框架修改成本不作考量。v1.3 复核修正（R1 操作映射）：裁决 ⑫ 中「用户在真机环境测试处理」的
+   操作执行主体为**执行代理**——由代理把 orz 放到宿主机环境（日常开发机，已安装真实浏览器 +
+   真实网络条件）直接运行并完成检索测试；用户不担任操作者，只提供环境/网络条件、审查结果与
+   裁决；全稿「用户主导/真机自理」类表述一律按此口径执行。
+
+2. **规范取代与修订（本定稿转录为当前设计权威）**：①§3.7 条 1 检索模式三值枚举
+   （`off`/`local_browser`/`framework_fallback`）与 mode transition 机械事件族整体退役；原 `off`
+   的 fail-closed 授权语义由**独立检索启用门**承接（未启用会话主面与外部 lane 均无检索工具、
+   派发拒绝保留、拒绝码脱离模式状态机）。②§3.7 条 12 v1.9 补写中「执行面仍二存一——外部 lane
+   在 local_browser 下仅 browser_read、原生 web_search 兜底为机械路径而非子代理模型自由选择」
+   退役；主面 web_search 单一派发入口保留为检索启用会话主面投影的既有形态，模式差异不再进入
+   工具面。③§14.40 项 1–4 所载外部检索子代理模式 A 自动定档/机械降级 + 工具面按模式二选一的
+   定稿与实施语义退役（内部子代理结构化检索外包与模式门之外的接线结论不在退役面）。④§14.43 项
+   1「双模式保留 + SERP 页面级失败经 `retrieval_mode_transition` 原生兜底」的机械降级语义退役；
+   引擎 SERP 主序（Google 主序、Bing 回退）与人化输入延迟 pacing/频率上限保留为浏览器车道内部
+   首选路径。⑤§14.44 项 1「执行面二存一不变」部分退役；主面单入口恢复语义保留（去 local_browser
+   模式限定）。历史裁决原文保留，只作审计回放。
+
+3. **设计规范要点（0t 定稿）**：①检索启用会话 external 子代理工具面**双族恒在**
+   （browser_read + web_search/web_fetch），`retrieval_mode_requires_framework_fallback` 拒绝族
+   退役，换道由模型自主、无需专门事件（journal 的 ToolCompleted 即事实）；②**静态标注**固定两条
+   （车道名 + 推荐序，本地浏览器优先；`browser_read — [车道:本地浏览器检索|推荐首选]` /
+   `web_search — [车道:原生检索]`），零动态字段、零新增常驻 token（≤1 句框架使用提示沿
+   FUS-RETRIEVAL-SUBAGENT-WIRING 既有风格）；③γ 退役=激活状态字段、`retrieval_mode_transition`
+   事件族、`framework_fallback` 模式值、拒绝码与 SERP 页级机械降级全部退役；schema 退役策略=
+   **生产者侧退役**——`retrieval_mode`/`retrieval_mode_transition` 枚举与 `verify_retrieval_mode`
+   conformance 族不收缩，保留为旧 v0.2 刊只读回放规则，新 run 不再产出（与 Task D
+   `console_order_written` 退役同口径）；④**事实化与替代 conformance 义务**：浏览器每次启动/探活
+   尝试落 `browser_launch_result`（success/failure + 真实原因），可用性翻转沿用
+   `tool_availability_check`；新增校验=检索启用门不变量（未启用会话无检索工具声明、无检索
+   ToolStarted）+ `browser_launch_result` 事实事件存在性，只删旧规则不补新规则视为缺口；
+   ⑤**检索失败正常回传（FP-2）**：导航失败按真实错误类别（网络错误/超时/防火墙拦截/DNS 等）
+   普通回传，与其它工具失败同一纪律，无教学句、无额外阻拦；⑥**宿主机日常可用性**：执行代理在
+   宿主机环境以真实浏览器完成拉起→导航→内容交付（口径=日常使用可靠性，非评测容器注入链；
+   mteb 核查档案存档、FP-1 解除立项）；⑦来源加权/证据分级三档跨车道生效（web_search 三层结构、
+   local_browser 直接分级不变，二存一禁令退役）。
+
+4. **S2 触点清单与实施义务（R4，转录为设计义务）**：dispatch.rs
+   `retrieval_mode_requires_framework_fallback` 拒绝族退役之外至少含——families.rs
+   `verify_retrieval_mode` 族与 `RETRIEVAL_MODE_GATED_TOOLS`/权限门工具表、host_exec 与 LIF
+   channels.rs 的拒绝码表、orz-bin env/CLI 与 ACP 会话创建面的 `retrieval_mode` 参数（保留字段
+   兼容解析、标注废弃、不再影响语义）、runtime schema/fixtures/registry 事件面与夹具（旧 fixture
+   保留作历史回放样本，新 fixture 覆盖双族与授权门）；新增 conformance 义务见第 3 项 ④。排期：
+   S2 实施 → S3 重建 → S4 实机复验（判据=双车道存在性 / 静态标注存在性 / γ 退役兼容（新 run 零
+   产出、旧刊过 verifier、`browser_launch_result` 在案、未启用会话仍无检索工具）/ 失败回传形态 /
+   通用统计（命中率 ≥90%、零真实 400，对照 R3 检索主导 4 题或 0o 批次 L）/ 宿主机日常可用性
+   （执行代理操作）。设计 §5 判据 5（通用统计）为机制统计口径、判据 6（宿主机日常可用性）为
+   宿主机日常可用口径，两者分列，不以跑分权重混计。
+
+5. **摩擦处置定版映射（FP-1～FP-9）**：FP-1 解除立项（评测容器注入场景不作目标；备忘：如未来
+   需要，`tb_agents/orz.py` 解压可改 `python3 -m zipfile`）；FP-2 按第 3 项 ⑤ 正常回传 + 0T
+   核查档案；FP-3 节点用户自理不立项（journal 留作 0d 后续 3/5 真实样本）；FP-4 不干预，闭；
+   FP-5 确认满足，闭；FP-6 非问题，闭；FP-7/FP-8 口径注记（TB2.1 基建形态，与 0r 同族）；
+   FP-9 观察登记，闭。
+
+6. **登记与计数**：BACKLOG 0t / TODO P0-0t / CLI_PROJECT_INDEX（FUS-RETRIEVAL-MODE 退役标注 +
+   FUS-RETRIEVAL-DUAL-LANE 登记）。S1 为纯文档转录，不动计数（闭合按条目入账纪律不变，S2 实施
+   与 S4 闭环另行按既有纪律入账）。
+
+7. **v1.66 S2-R P1 设计新增项转录与 S2 实施完成登记（2026-09-09）**：设计
+   [`RETRIEVAL_BROWSER_LANE_P1_DESIGN_2026-09-09`](../docs/RETRIEVAL_BROWSER_LANE_P1_DESIGN_2026-09-09.md)
+   （P1 设计定稿轮，用户放行；实施与复核证据=
+   [`0T_S2R_P1P3_IMPL_REVIEW`](../docs/audits/0T_S2R_P1P3_IMPL_REVIEW_2026-09-09.md)）随 S2-R
+   实施并转录为第 2 项双车道设计的补充规范：
+
+   - **A. `browser_control` 工具面（P1-2b，外部 lane 第三工具）**：单工具多动作，Phase 1 动作集
+     = navigate/back/forward/refresh/wait_load/snapshot（导航与状态观测，**不含正文读取**——
+     证据与候选纪律保持 `browser_read` 单工具）；每动作统一返回机械段信封
+     `action_status`/`error_class`（DNS/连接重置/超时/拦截/证书/其它真实类别，FP-2 无教学）/
+     `nav_phase`/`url`+`title`/`log`（console error/warning + network 错误类有界节选 ≤12 行
+     ≤2 KiB，`[browser_log]` 引用语域容器）；日志特征只进工具结果文本，不进 journal 事件载荷/
+     黑板/主面。`browser_read` 增同 URL 免重复导航优化（url 保持必填）。声明与门：host-owned、
+     启用会话恒声明、external lane 恢复 browser_read + browser_control、主面与内部 lane 不声明、
+     未启用全无；relay=Host、入 `is_retrieval_mode_gated_host_tool`（未启用即拒）、不入
+     `is_candidate_counted_tool`；静态标注与 browser_read 同车道同文本
+     （`[车道:本地浏览器检索|推荐首选]`）。串行化：控制动作经会话级控制 tab 持锁串行（CDP
+     会话层）；`browser_read` 池化读不互阻（同 URL 控制 tab 读取为 try_lock 尽力，忙则池读）。
+     记录不行动：click/type/任意 JS eval（Phase 2 交互面）、多内核接口扩展。
+   - **B. P1-2a 启动事实口径（BrowserStepFailed 接缝）**：`browser_launch_result` 记录启动/探活
+     尝试本身成败，与本次动作结果解耦；时间序恒 ToolStarted → fact → ToolCompleted。场景矩阵：
+     S1 启动失败 = `BrowserLaunchFailed(cause)` + failure fact + 稳定码
+     `browser_launch_failed`；S2 启动成功+动作成功 = Ok + `browser_launch_fact` success
+     （cause=null）；S3 启动成功+动作失败（首调，**新增**）= Err 携带 success fact——接缝
+     `ToolError::BrowserStepFailed { reason, launch_fact }`，host_error_code 归
+     CODE_EXECUTION_FAILED 系（不新增稳定码）、tool_error_kind=ExecutionFailed、0q 漏斗归
+     ExecutionFailed 系；host_exec Err 分支先 journal 携带 fact 再写 ToolCompleted；S4 已就绪
+     后续调用无 fact。既有 families 规则不变（仍只强制 launch-failure 前置），P5 补 S2/S3
+     正例与 S1 反例对拍。
+   - **C. P2-2 外部 lane web_fetch 声明恢复**：启用会话 external lane 声明集 =
+     browser_read + browser_control + web_search + web_fetch（与双族措辞及激活提示验证句一致）；
+     web_fetch description 追加 `[车道:原生检索]`（与 web_search 同车道固定文本）；计数纪律不变
+     （web_fetch 维持既有候选计数）。
+   - **S2 实施完成登记（Task 1 + S2-R P1–P7，2026-09-09）**：Task 1（schema 先行 + 生产改写 +
+     `browser_launch_result` 生产闭环）经三线全面审查无 P0；S2-R 各批闭合——P1 设计定稿轮、
+     P2 正确性批（P1-1 跨 prompt 浏览器生命周期 + P1-2a 接缝）、P3 语义/声明批（P2-1 懒启动
+     并发竞态 + P2-2 web_fetch 声明 + P2-3 registry 声明语义 + P1-2b browser_control 实现）、
+     P4 卫生批、P5 conformance 正反例（retrieval_enable_gate / browser_launch_result 两族 +
+     11 场景，Rust↔Python 对拍绿）、P6 三个 conformance capture 重写、P7 S2-T4 收口（本转录 +
+     BACKLOG/TODO/索引同步 + 重捕小批 10 fixture 换新 + PDF 下载修复——Chrome 153 viewer 接管
+     根因为 profile 偏好写错层级，改种 `Default/Preferences` 后下载通道恢复）。S3 重建与 S4
+     实机复验（判据见第 4 项）待续，未入账闭合计数。

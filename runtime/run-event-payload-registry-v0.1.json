@@ -1,7 +1,7 @@
 {
   "kind": "run-event-payload-schema-registry",
   "paths": "repo-root-relative",
-  "source": "single authority (Task D S3 flip, 2026-09-06): edit this file to change the event_type→payload-schema mapping; assurance/run_event_journal_validation.py derives its PAYLOAD_SCHEMA_BY_EVENT_TYPE(_V02) views from it at import time; the Rust judge (orz-assurance journal/conformance.rs) reads it directly",
+  "source": "single authority (Task D S3 flip, 2026-09-06): edit this file to change the event_type→payload-schema mapping; assurance/run_event_journal_validation.py derives its PAYLOAD_SCHEMA_BY_EVENT_TYPE(_V02) views from it at import time; the Rust judge (orz-assurance journal/conformance.rs) reads it directly. 0t (2026-09-09, ADR-0010 §14.65, v1.65): retrieval_mode_transition 生产者侧退役——事件类型与 v0.2 payload schema 保留（旧 v0.2 刊只读回放），新 run 不再产出；新增 browser_launch_result 事实事件（浏览器启动/探活尝试 success/failure + 真实原因）",
   "tracks": {
     "v01": {
       "acp_initialize": {
@@ -213,6 +213,10 @@
       "retrieval_activation_restored": {
         "schema": "runtime/retrieval-activation-restored-event-payload-v0.2.schema.json",
         "slug": "retrieval-activation-restored"
+      },
+      "browser_launch_result": {
+        "schema": "runtime/browser-launch-result-event-payload-v0.2.schema.json",
+        "slug": "browser-launch-result"
       },
       "retrieval_close_record": {
         "schema": "runtime/retrieval-close-record-event-payload-v0.2.schema.json",

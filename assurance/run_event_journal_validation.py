@@ -314,14 +314,15 @@ def _verify_v02_inquiry_kind(events: list[dict[str, Any]]) -> list[str]:
 _RETRIEVAL_TARGETS = frozenset({"internal_retrieval", "external_retrieval"})
 
 # Host-lane retrieval tools whose tool events carry NO `target` field
-# (D-2, 2026-08-10 local_browser slice): `browser_read` runs on the host
-# lane, so the target-based dispatch rules below cannot see it — a
-# successful browser_read under off / unavailable capability would slip
+# (D-2, 2026-08-10 local_browser slice; 0t S2-R P3 / P1-2b 2026-09-09 adds
+# `browser_control`): `browser_read`/`browser_control` run on the host
+# lane, so the target-based dispatch rules below cannot see them — a
+# successful host-lane call under off / unavailable capability would slip
 # past exactly the "no silent fallback" the mode rules enforce. web_fetch /
 # web_search are NOT listed: they dispatch through the external lane and
 # their events carry target=external_retrieval (covered by the target
 # checks).
-_HOST_LANE_RETRIEVAL_TOOLS = frozenset({"browser_read"})
+_HOST_LANE_RETRIEVAL_TOOLS = frozenset({"browser_read", "browser_control"})
 
 
 def _verify_v02_plan_write(events: list[dict[str, Any]]) -> list[str]:
@@ -978,6 +979,87 @@ def _verify_v02_retrieval_mode(events: list[dict[str, Any]]) -> list[str]:
             f"journal has {bootstrap_count} session_bootstrap transitions — "
             f"at most one allowed"
         )
+    return errors
+
+
+def _verify_v02_retrieval_enable_gate(events: list[dict[str, Any]]) -> list[str]:
+    """0t (2026-09-09, ADR-0010 §14.65 / 设计 §3.1/§3.3, v1.3): 检索启用门
+    不变量——未启用会话无检索工具声明、无检索 ToolStarted。
+
+    检索模式三值状态 γ 退役后，enable gate 是唯一的授权门：未启用会话主面
+    与外部 lane 均无检索工具声明，任何检索派发只落 no-ToolStarted 的
+    ToolCompleted(error) 拒绝。可观察事实 = request_header_change 的
+    `tools` 数组（会话/车道声明面）。实现口径：
+    - 期刊存在 request_header_change 事件时，若所有 header 都未声明过
+      检索族工具（`_is_retrieval_mode_gated_tool` 或检索 target），任何
+      检索 ToolStarted 都是启用门违反；
+    - 无 request_header_change（旧刊/精简夹具）时规则空转（vacuous
+      replay），不产生负向误报——与 console_order_written 退役后历史
+      回放合法同口径。
+    """
+    errors: list[str] = []
+    header_count = 0
+    declared_retrieval = False
+    for event in events:
+        if not _is_v02(event) or event.get("event_type") != "request_header_change":
+            continue
+        header_count += 1
+        tools = event.get("payload", {}).get("tools")
+        if isinstance(tools, list) and any(
+            isinstance(t, str) and _is_retrieval_mode_gated_tool(t) for t in tools
+        ):
+            declared_retrieval = True
+    if header_count == 0 or declared_retrieval:
+        return errors
+    for index, event in enumerate(events):
+        if not _is_v02(event) or event.get("event_type") != "tool_started":
+            continue
+        p = event.get("payload", {})
+        tool = p.get("tool")
+        target = p.get("target")
+        if (isinstance(tool, str) and _is_retrieval_mode_gated_tool(tool)) or (
+            target in _RETRIEVAL_TARGETS
+        ):
+            errors.append(
+                f"event {index}: retrieval dispatch {tool!r} tool_started in a "
+                "journal whose request headers never declared a retrieval "
+                "tool (enable gate — 未启用会话无检索 ToolStarted)"
+            )
+    return errors
+
+
+def _verify_v02_browser_launch_result(events: list[dict[str, Any]]) -> list[str]:
+    """0t (2026-09-09, ADR-0010 §14.65 / 设计 §3.3, v1.3): 浏览器启动/探活
+    事实事件的存在性义务——浏览器启动失败（launch 层失败，非页面导航失败）
+    必须在同期刊中落 `browser_launch_result` failure 事实事件。
+
+    payload shape（attempt_id/status/cause 条件约束）由 payload schema 与
+    注册表执法，本族只做跨事件存在性：tool_completed(tool ∈ {browser_read,
+    browser_control}，0t S2-R P3 / P1-2b 共享懒启动路径,
+    status=error, error=browser_launch_failed) 必须由更早的
+    browser_launch_result(status=failure) 承托。页面级失败（导航/超时/拦截）
+    按真实类别正常回传，不在此义务内。
+    """
+    errors: list[str] = []
+    failure_indices = [
+        index
+        for index, event in enumerate(events)
+        if _is_v02(event)
+        and event.get("event_type") == "browser_launch_result"
+        and event.get("payload", {}).get("status") == "failure"
+    ]
+    for index, event in enumerate(events):
+        if not _is_v02(event) or event.get("event_type") != "tool_completed":
+            continue
+        p = event.get("payload", {})
+        if p.get("tool") in _HOST_LANE_RETRIEVAL_TOOLS and p.get("status") == "error" and p.get(
+            "error"
+        ) == "browser_launch_failed":
+            if not any(failure_index < index for failure_index in failure_indices):
+                errors.append(
+                    f"event {index}: {p.get('tool')} launch failure lacks a "
+                    "preceding browser_launch_result failure fact event"
+                )
     return errors
 
 
@@ -2155,17 +2237,21 @@ _ACAF_TICKETED_TOOLS = frozenset(
         "browser_read",
     }
 )
-_RETRIEVAL_MODE_GATED_TOOLS = frozenset({"project_doc_index", "browser_read", "pdf_read"})
+_RETRIEVAL_MODE_GATED_TOOLS = frozenset(
+    {"project_doc_index", "browser_read", "browser_control", "pdf_read"}
+)
 # P0-C S3 前置审查修复 (F7): permission-gated host tools include the
-# host-routed retrieval family (project_doc_index / browser_read / pdf_read)
-# on the main lane. Web-family tools are not permission-gated today (lane
-# self-execution skips the bridge), so they stay outside this set.
+# host-routed retrieval family (project_doc_index / browser_read /
+# browser_control / pdf_read) on the main lane. Web-family tools are not
+# permission-gated today (lane self-execution skips the bridge), so they
+# stay outside this set.
 _PERMISSION_GATED_TOOLS = _WORK_TOOLS | _RETRIEVAL_MODE_GATED_TOOLS
 
 
 def _is_retrieval_mode_gated_tool(name: str) -> bool:
     """P0-C S3 前置 (2026-08-15, P1-2 定案): mirrors the Rust relay family —
-    host-routed retrieval tools (`project_doc_index`/`browser_read`/`pdf_read`)
+    host-routed retrieval tools (`project_doc_index`/`browser_read`/
+    `browser_control`/`pdf_read`)
     plus the retrieval dispatch names (`retrieve_project_*`, web_search /
     web_fetch families)."""
     return (
@@ -2281,6 +2367,13 @@ _DENIAL_CODES = frozenset(
         "content_anchor_mismatch",
         "sealed_tool_denied",
         "retired_tool_denied",
+        # 0t (2026-09-09, ADR-0010 §14.65 / 设计 v1.3): 检索启用门拒绝码。
+        # 旧三值模式码（retrieval_mode_off /
+        # retrieval_mode_requires_framework_fallback /
+        # retrieval_mode_requires_local_browser）保留于本表为
+        # replay-legal（新生产者不再产出；不设负向检查，历史刊干净回放，
+        # 与 console_order_written 退役同口径）。
+        "retrieval_not_enabled",
         "retrieval_mode_off",
         "retrieval_mode_requires_framework_fallback",
         "retrieval_mode_requires_local_browser",
@@ -3519,6 +3612,8 @@ def validate_journal_text(text: str) -> list[str]:
         errors.extend(_verify_v02_output_truncation(events))
         errors.extend(_verify_v02_budget_cue_injected(events))
         errors.extend(_verify_v02_retrieval_mode(events))
+        errors.extend(_verify_v02_retrieval_enable_gate(events))
+        errors.extend(_verify_v02_browser_launch_result(events))
         errors.extend(_verify_v02_result_consistency(events))
         errors.extend(_verify_v02_reason_codes(events))
         errors.extend(_verify_v02_source_weighting(events))

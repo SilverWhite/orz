@@ -37,6 +37,12 @@ Scope:
   ③ `control-ticket-issued.network-lane-bound.valid`（D-13 检索 lane 绑定
   语义——动作票 activation_id 可选绑定，检索 lane network 票携带真实
   activation_id，主 lane 保持 null）。
+- 0t (2026-09-09, ADR-0010 §14.65 / 设计 v1.3)：`retrieval_mode_transition`
+  生产者侧退役——事件类型与 v0.2 payload schema 保留为旧 v0.2 刊只读回放
+  （旧 fixture `retrieval-mode-transition.*` 与旧期刊均继续合法，不设负向
+  检查）；新增 `browser_launch_result` 事实事件（浏览器每次启动/探活尝试
+  success/failure + 真实原因，`attempt_id`/`status`/`cause` 条件约束），
+  覆盖 envelope + payload 最小正例/约束反例。
 - GAP-SOURCE-WEIGHTING-IMPL (2026-08-13): `retrieval-result` gains one extra
   negative payload fixture for the fixed tier/weight table (authoritative
   MUST pair with 1.1; the good fixture carries the full weighting fields).
@@ -66,10 +72,11 @@ Scope:
   `tool-completed.policy-denial-bad-source.constraint.invalid` (unknown
   source enum).
 - `envelope/<slug>.valid.json` — a full 13-field v0.2 envelope for **every**
-  event in the v0.2 enum (**52 events** — 54 prior −
+  event in the v0.2 enum (**55 events** — 54 prior +
+  `browser_launch_result`（0t 2026-09-09, ADR-0010 §14.65；54 prior −
   `diagnostic_coverage_checkpoint` − `checkpoint_response`（P2-11 DC 清理
-  2026-08-31，MODEL-RESIDUAL-PRESSURE-FOLLOWUP 裁决 2）；
-  `runtime_stagnation_guard` 已于 2026-08-22 退役，计入 54 前史). The
+  2026-08-31，MODEL-RESIDUAL-PRESSURE-FOLLOWUP 裁决 2）后含其余
+  TER/P2-13 增量；`runtime_stagnation_guard` 已于 2026-08-22 退役). The
   v0.2-payload events carry
   their v0.2 payload; the other events reuse the v0.1 payload shape
   unchanged (their payload schema files did not change — adjudicated

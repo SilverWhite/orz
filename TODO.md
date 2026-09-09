@@ -582,7 +582,7 @@ GLM F2 处置转排期（2026-09-06 用户裁决）：`orz-host/src/approval.rs`
   §14.62；manifest 重算 orz 源零改动 check valid 1441 条；门禁 Exit 0。
   P0-0p 全部闭合。）
 
-### P0-0t 检索子代理双车道并行标注面与 R3 摩擦处置（2026-09-09 用户裁决立项，同日两轮复核；设计 v1.2 待确认定稿）
+### P0-0t 检索子代理双车道并行标注面与 R3 摩擦处置（2026-09-09 用户裁决立项，同日两轮复核 + v1.3 复核收口（R1–R5 并入）；**S1 定稿转录 + S2 实施完成 2026-09-09**）
 
 > 用户裁决（立项）：Clash 已关、本地镜像下 Google 检索与 Chrome 实质不可用
 > 但无法降级原生检索；原生检索与本地浏览器检索都开放给检索子代理，像主
@@ -595,26 +595,75 @@ GLM F2 处置转排期（2026-09-06 用户裁决）：`orz-host/src/approval.rs`
 > 用户真机环境测试处理，orz 保证真机日常使用真实浏览器正常（锁版本等
 > 不通用方案不做，跑分不重要）——FP-1 解除立项、活体探针取消；
 > framework_fallback 采纳 γ 方案（三值检索模式退役、浏览器可用性纯事件
-> 事实化，修改成本不作考量）。证据：
+> 事实化，修改成本不作考量）。v1.3 复核收口（R1–R5 并入，用户确认）：
+> 宿主机真机验证执行主体=执行代理（用户只提供环境/网络条件与裁决）；
+> 授权门与模式退役分离（独立启用门承接 fail-closed）；schema 生产者侧
+> 退役（枚举/verifier 只读回放）；S2 触点清单与替代 conformance 义务
+> 补全；静态标注措辞与 token 口径定稿。证据：
 > [0S 细节分析](docs/audits/0S_DETAIL_ANALYSIS_2026-09-09.md) /
 > [mteb 核查](docs/audits/0T_MTEB_IMAGE_CHECK_2026-09-09.md)。
-> 入口：[设计 v1.2](docs/RETRIEVAL_SUBAGENT_DUAL_LANE_DESIGN_2026-09-09.md) /
+> 入口：[设计 v1.3](docs/RETRIEVAL_SUBAGENT_DUAL_LANE_DESIGN_2026-09-09.md) /
 > [BACKLOG 0t](docs/BACKLOG_AND_PRIORITIES.md)。
 
-- [ ] S1 设计定稿：本稿确认 + ADR-0010 §14.65 转录 + §3.7/§14.40/§14.43–44
-  修订 + FUS-RETRIEVAL-MODE 三态语义退役标注。
-- [ ] S2 实施：orz 双车道（`retrieval_mode_requires_framework_fallback`
-  拒绝族退役、静态工具栏标注）+ γ 模式退役（`retrieval_mode`/
-  `retrieval_mode_transition`/`framework_fallback`/机械降级语义退役；
-  `browser_launch_result` 事实事件，schema/verifier/fixtures 先行 + 旧
-  journal 只读兼容；无 `model_lane_switch`——ToolCompleted 即事实）+
-  检索失败正常回传（FP-2：真实错误类别，无教学/无阻拦）。
+- [x] S1 设计定稿（2026-09-09 完成）：v1.3 确认 + ADR-0010 §14.65 转录
+  + §3.7 条 1/12 与 §14.40/§14.43–44 退役标注 + FUS-RETRIEVAL-MODE
+  退役（索引转 `withdrawn`）+ FUS-RETRIEVAL-DUAL-LANE 登记 +
+  BACKLOG/TODO/索引同步。
+- [x] S2 实施（2026-09-09 完成）：orz 双车道（
+  `retrieval_mode_requires_framework_fallback` 拒绝族退役、静态工具栏
+  标注）+ γ 模式退役（`retrieval_mode`/`retrieval_mode_transition`/
+  `framework_fallback`/机械降级语义退役；`browser_launch_result` 事实
+  事件，schema/verifier/fixtures 先行 + 旧 journal 只读兼容；无
+  `model_lane_switch`——ToolCompleted 即事实）+ 检索失败正常回传（FP-2：
+  真实错误类别，无教学/无阻拦）。
+  - Task 1（schema 先行 + 生产改写 + `browser_launch_result` 生产闭环）
+    已实施；2026-09-09 三线全面审查收口（无 P0；P1×2 + P2×4 + P3），
+    审查与修复批排期见
+    [审查处理](docs/audits/0T_S2_TASK1_REVIEW_HANDLING_2026-09-09.md)。
+- [x] S2-R 正式行动阶段（2026-09-09 排期并全部执行完成）：P1 设计定稿轮
+  （P1-2b = browser_control Phase 1 导航级动作集
+  navigate/back/forward/refresh/wait_load/snapshot + 每动作日志特征回传，
+  价值裁决已放行；P1-2a 启动事实口径；P2-2 web_fetch 声明）→ P2 正确性批
+  （P1-1 跨 prompt 浏览器生命周期 + P1-2a）→ P3 语义/声明批（P2-1 懒启动
+  并发竞态 + P2-2 web_fetch 声明恢复 + P2-3 registry 声明语义 + P1-2b
+  实现）→ P4 卫生批（P3 全项）→ P5 conformance 正反例 → P6 capture
+  重写 → P7 S2 收口（本条目下方各阶段注记）。P8 S3 重建 → P9 S4 实机复验
+  + 宿主机可用性（R-D1 TUI 载体起手裁决）待续。记录不行动：多内核接口
+  扩展、click/type/任意 JS eval（Phase 2 交互）。明细见
+  [审查处理](docs/audits/0T_S2_TASK1_REVIEW_HANDLING_2026-09-09.md) §5/§3.6。
+  - （2026-09-09 P1–P3 实现复核处理批 X1–X4 已执行：envelope 键名对齐
+    action_status / ToolStarted→fact→ToolCompleted 全序断言 / 启动单次
+    seam 计数测试 / P1 设计状态头与 §2.3 注记；ADR §14.65 转录 P1 新增项
+    登记为 P7 必含项。证据：
+    [0T_S2R_P1P3_IMPL_REVIEW](docs/audits/0T_S2R_P1P3_IMPL_REVIEW_2026-09-09.md)。）
+  - （2026-09-09 P5 conformance 正反例补全完成：retrieval_enable_gate /
+    browser_launch_result 两族 +11 场景（含 S1/S2/S3/S4、gate 反例与
+    browser_control 声明面）；Rust↔Python 双侧法官工具表纳入
+    browser_control，launch 义务覆盖 browser_read + browser_control；
+    语料计数 233→244 钉死，Rust↔Python 对拍绿。证据：
+    [0T_S2R_P1P3_IMPL_REVIEW](docs/audits/0T_S2R_P1P3_IMPL_REVIEW_2026-09-09.md)。）
+  - （2026-09-09 P4 卫生批（S2-R3，P3 全项）执行完成：§3.7.1 条文号引用
+    清理、env 非法值显式 warn、fact 全序断言、families 注释 31→33、过时
+    注释与未用 import/dead code 清理；cargo check/clippy 零新增告警、fmt
+    净。证据：[0T_S2R_P1P3_IMPL_REVIEW](docs/audits/0T_S2R_P1P3_IMPL_REVIEW_2026-09-09.md)
+    §8 R3 建议批与 P1–P3 处理批 X1–X4。）
+  - （2026-09-09 P6 三个 conformance capture 重写完成：capture_mode_off_refusal
+    → retrieval_not_enabled 拒绝语义、capture_local_browser_capability_error
+    → S1 启动失败 browser_launch_result 语义、capture_local_browser_read →
+    S4 就绪成功读语义；13/25/24 事件各自重放绿。证据：同上 §12。）
+  - （2026-09-09 P7 S2-T4 收口完成：ADR §14.65 v1.66 P1 新增项转录 + S2
+    实施完成登记（本条）；BACKLOG/TODO/CLI_PROJECT_INDEX 同步；PDF 下载
+    修复（profile 偏好种子层级 Default/Preferences，真机 e2e 绿）；重捕
+    小批 10 fixture 换新 + Rust/Python 期望同步（12 capture + Python
+    273 全绿）。证据：同上 §13/§14。）
 - [ ] S3 重建（双平台三件套 + manifest）。
 - [ ] S4 实机复验：双车道存在性 / 静态标注存在性 / γ 退役兼容（旧回放过
   verifier、新生产不产出模式面）/ 失败回传形态 / 通用统计（判据见设计
   §5）；对照集 = R3 检索主导 4 题或搭 0o 批次 L。
-- [ ] 真机日常浏览器可用性验证（用户主导，可与 S2/S3 并行；口径=日常
-  使用，orz 侧按暴露问题做通用性修复，不做锁版本等特化）。
+- [ ] 真机日常浏览器可用性验证（**执行代理操作**，可与 S2/S3 并行；口径
+  =日常使用——代理在宿主机环境以真实浏览器完成拉起→导航→交付，用户提供
+  环境/网络条件与裁决、不担任操作者；orz 侧按暴露问题做通用性修复，不做
+  锁版本等特化）。
 
 ### P0-B FUS-RETRIEVAL-MECH（`implemented`；批次 1-6 全部闭合 2026-08-14，保留供核对）
 

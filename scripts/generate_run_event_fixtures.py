@@ -164,6 +164,10 @@ V02_EVENT_TYPES = [
     "retrieval_mode_transition",
     "retrieval_result_committed",
     "retrieval_activation_restored",
+    # 0t (2026-09-09, ADR-0010 §14.65, v1.65): 浏览器启动/探活尝试事实事件
+    # ——success/failure + 真实原因（三值检索模式 γ 退役后纯事件事实化；
+    # retrieval_mode_transition 生产者侧退役，枚举保留只读回放）。
+    "browser_launch_result",
     "mechanical_audit_update",
     "control_ticket_issued",
     "control_ticket_consumed",
@@ -221,6 +225,8 @@ SLUGS_V02 = {
     "retrieval_mode_transition": "retrieval-mode-transition",
     "retrieval_result_committed": "retrieval-result",
     "retrieval_activation_restored": "retrieval-activation-restored",
+    # 0t (2026-09-09, ADR-0010 §14.65, v1.65): browser-launch-result。
+    "browser_launch_result": "browser-launch-result",
     # MECHANICAL-AUDIT-LAYER (2026-08-24, ADR-0010 §14.39): 机械审查层
     # 轻量事件留痕（对象键覆盖写/键/轮/摘要/异常）。
     "mechanical_audit_update": "mechanical-audit-update",
@@ -281,6 +287,8 @@ V02_PAYLOAD_EVENTS = [
     "retrieval_mode_transition",
     "retrieval_result_committed",
     "retrieval_activation_restored",
+    # 0t (2026-09-09, ADR-0010 §14.65, v1.65): browser_launch_result。
+    "browser_launch_result",
     # MECHANICAL-AUDIT-LAYER (2026-08-24, ADR-0010 §14.39): 机械审查层
     # 轻量事件留痕（对象键覆盖写/键/轮/摘要/异常）。
     "mechanical_audit_update",
@@ -845,6 +853,13 @@ PAYLOAD_GOOD_V02: dict[str, dict] = {
         "sidecar_ref": ".gsa/activations/sess-abc.json",
         "tool_rounds_used": 3,
     },
+    # 0t (2026-09-09, ADR-0010 §14.65, v1.65): 浏览器启动/探活尝试成功
+    # 事实事件——cause 为 null。
+    "browser_launch_result": {
+        "attempt_id": "BLAUNCH-RUN-CONF-0000",
+        "status": "success",
+        "cause": None,
+    },
     # MECHANICAL-AUDIT-LAYER (2026-08-24, ADR-0010 §14.39 / 设计 §2.4):
     # 机械审查层轻量事件留痕——对象键覆盖写（键/轮/摘要/异常）。
     "mechanical_audit_update": {
@@ -1228,6 +1243,13 @@ PAYLOAD_BAD_V02: dict[str, dict] = {
         "origin_run_id": "RUN-CONF-0001",
         "sidecar_ref": ".gsa/activations/sess-abc.json",
         "tool_rounds_used": 3,
+    },
+    # 0t (2026-09-09, ADR-0010 §14.65, v1.65): 约束违反——status=failure
+    # 必须携带非空 cause（if/then）。
+    "browser_launch_result": {
+        "attempt_id": "BLAUNCH-RUN-CONF-0000",
+        "status": "failure",
+        "cause": None,
     },
     # MECHANICAL-AUDIT-LAYER (2026-08-24, ADR-0010 §14.39 / 设计 §2.4):
     # 约束违反——kind 未注册 / key 空 / round 负 / anomaly 非字符串。
