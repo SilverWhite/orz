@@ -141,12 +141,21 @@
   快照下载加 3 次重试 + 失败原因透传 console；apt 双路径报告不吞并。
 - 边界：评测侧工具链改动，不进 orz 判据面；与 0r 同族管理（环境形态文档化）。
 
-### 3.6 mteb 镜像核查（FP-2 关联子项）
+### 3.6 mteb 核查（FP-2 关联子项，2026-09-09 文档轮已完成）
 
-- 用户指出 mteb 镜像（`:20260430`，tag 与众不同）既往在 VM high-nist 下
-  可跑通；R3 容器内该镜像 Chrome 全导航坏死（curl 可用）需核查镜像本身
-  是否有问题（chromium 依赖/网络栈/镜像内配置与 VM 环境差异）。
-- 产出：核查注记（对比 VM high-nist 既往证据），不预设修复、不追打。
+- 核查结论（详见 [`0T_MTEB_IMAGE_CHECK`](audits/0T_MTEB_IMAGE_CHECK_2026-09-09.md)）：
+  **镜像降嫌疑**——同一镜像 08-31 browser_read 39/41 健康（apt Chromium
+  151.0.7922.173），09-08/09 R3 0/52 全导航 chrome-error（apt Chromium
+  152.0.7977.82，同容器 curl 可用）。Chrome 系运行时注入（apt 浮动版优先/
+  快照回退），151→152 自动升级与「可拉起但实质不可用」时间吻合，嫌疑转移
+  至**注入策略的浮动版本**（相关性成立、因果待活体探针）。
+  用户记忆中的「下载构建跑通」为 08-30 gate-google-1 与 08-31 sweep-0h 两次
+  本机容器通过（终端 curl/git clone 构建，browser 车道未实际参与）；VM
+  W2-031 那次为直跑提示词 + HF 被拦 + 知识作答（模型原文承认），不构成
+  镜像健康证据。mteb 从未靠 browser 车道通过过。
+- 后续（S2）：活体探针定案（镜像内分别钉 151/152 注入 + 无头导航测试 +
+  curl 对照，约 5–10 分钟）；处置按探针结果择一（钉版本 / 快照优先 /
+  注入后导航自检，失败即按 §3.4 正常回传错误）。
 
 ### 3.7 FP-5 既有行为确认（无需动作）
 
@@ -176,10 +185,25 @@
 
 ## 6. 开放问题（定稿前需裁决）
 
-1. `framework_fallback` 语义：是否收窄为「浏览器能力不存在」、是否保留
-   机械降级路径、对既有 `retrieval_mode_transition` 语义与 verifier 的兼容
-   （用户裁决：需再额外考虑，本版不定）。
-2. mteb 镜像核查结论出来后，是否需要镜像侧修复动作（预设不追打，见 §3.6）。
+1. **`framework_fallback` 语义**（用户裁决：需再额外考虑；名词解释随注）。
+   - 现状（ADR-0010 / FUS-RETRIEVAL-MODE / FUS-RETRIEVAL-SUBAGENT-WIRING）：
+     检索模式为显式三值状态 `off` / `local_browser` / `framework_fallback`，
+     它同时承担两层含义——①**能力状态声明**：浏览器不可用（启动失败/探针
+     失败）时机械层把激活降级为 `framework_fallback` 并记
+     `retrieval_mode_transition`（authority=mechanical_probe）；②**工具面
+     裁剪开关**：`local_browser` 模式下子代理只见 browser_read，
+     `framework_fallback` 模式下只见 web 族（`retrieval_mode_requires_
+     framework_fallback` 拒绝族）。
+   - 「收窄」提议的含义：双车道并存后 ② 已无必要（两族工具恒在、选择权在
+     模型），fallback 可只保留 ①——作为「浏览器能力不存在的降级事实」记在
+     事件面，不再决定工具面。牵连点：模式枚举与事件 schema 的兼容、旧会话
+     回放/verifier、SERP 页级失败降级（模式 A）是否同步修订。
+   - 可选方向（供后续裁决，本版均不实施）：α 最小改动——fallback 完全不动，
+     仅退役 `local_browser` 方向的裁剪；β 收窄——fallback 只留声明意义，
+     工具面恒双族；γ 退役模式字段，浏览器可用性纯事件事实化（影响面最大，
+     需 ADR 修订）。
+2. mteb 活体探针结论出来后，注入策略处置择一（钉版本 / 快照优先 / 注入后
+   导航自检），见 §3.6。
 
 （v1.1 撤销项：标注健康度更新时机、车道坏死判定窗口 N——随「不做健康度/
 不做动态机制」裁决一并撤销。）

@@ -602,8 +602,10 @@ GLM F2 处置转排期（2026-09-06 用户裁决）：`orz-host/src/approval.rs`
 - [ ] S2 实施：orz 双车道（`retrieval_mode_requires_framework_fallback`
   拒绝族退役、静态工具栏标注、`model_lane_switch` 事件）+ 检索失败正常
   回传（FP-2：真实错误类别，无教学/无阻拦）+ 评测侧注入健壮化（FP-1，
-  tb_agents/orz.py：unzip→python3 zipfile、下载重试）随批 + mteb 镜像
-  核查注记。
+  tb_agents/orz.py：unzip→python3 zipfile、下载重试）随批 + mteb 活体
+  探针（镜像内钉 151/152 注入+导航测试+curl 对照；核查结论：镜像降嫌疑、
+  嫌疑转移至 apt 浮动注入版本，见
+  [0T_MTEB_IMAGE_CHECK](docs/audits/0T_MTEB_IMAGE_CHECK_2026-09-09.md)）。
 - [ ] S3 重建（双平台三件套 + manifest）。
 - [ ] S4 实机复验：双车道存在性 / 静态标注存在性 / 换道事件 / 检索失败
   回传形态 / 通用统计（判据见设计 §5）；对照集 = R3 检索主导 4 题或搭
