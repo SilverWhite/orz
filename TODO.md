@@ -536,14 +536,9 @@ GLM F2 处置转排期（2026-09-06 用户裁决）：`orz-host/src/approval.rs`
 > orz `a467d0f9` = 0t S3 `92875fd5` + 版本 bump，双车道代码同一）。
 > 明细与判据预登记见 [BACKLOG 0u](docs/BACKLOG_AND_PRIORITIES.md)。
 
-- [ ] 跑批：15 题串行（失败独立重试至多 3 轮），执行器
-  [`scripts/run_r4_unsolved15_per_task.py`](scripts/run_r4_unsolved15_per_task.py)
-  （Python argv 直传，规避 PS 5.1 引号破坏教训；job 前缀
-  `official-r4-unsolved15-`）。
-- [ ] journal 分析：0t S4 判据 1–5 + 逐题 reward 对照 R3 + 0s 四分类再归因；
-  P2-11×3 / P2-12 / P2-13 B4 / P2-14 S4 遥测搭车核验。
-- [ ] 收口：审计落档 docs/audits/ + BACKLOG/TODO/索引同步 + 计数入账
-  （0t S4 判据 6 宿主机日常可用性另线）。
+- [x] 跑批（2026-09-10 完成）：15/15 reward 面有效；**真实试次 13/15**——DeepSeek 余额 06:25 耗尽致 protein/train-fasttext 未运行、path-reverse 中断、filter-js pass-2 未运行（verifier-only 不计机制口径）；审计 §3。
+- [x] journal 分析（2026-09-10 完成）：**0t S4 判据 1–5 全部过**（全卷零 γ 模式面字符串、web 族零拒绝、launch 事实事件带真实原因、失败回传无教学句、零 transport_retry）；四分类再归因——检索主导 4 题死亡形态质变（浏览器注入健康、双车道行为实证）但无代理 web 慢通道仍是预算杀手；轮次延迟/长命令结构性复现；model-extraction 靠 verifier 运气通过。入口：[R4 复跑审计](docs/audits/OFFICIAL_R4_UNSOLVED15_RERUN_2026-09-10.md)。
+- [ ] 收口余项：DeepSeek 充值 + 4 个余额受影响题是否补跑（待用户裁决）；0t S4 判据 6 宿主机日常可用性另线；计数按 0t 小节闭合时入账。
 
 ### P0-B FUS-RETRIEVAL-MECH（`implemented`；批次 1-6 全部闭合 2026-08-14，保留供核对）
 
