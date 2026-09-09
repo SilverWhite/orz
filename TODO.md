@@ -582,25 +582,32 @@ GLM F2 处置转排期（2026-09-06 用户裁决）：`orz-host/src/approval.rs`
   §14.62；manifest 重算 orz 源零改动 check valid 1441 条；门禁 Exit 0。
   P0-0p 全部闭合。）
 
-### P0-0t 检索子代理双车道并行标注面与 R3 摩擦处置（2026-09-09 用户裁决立项；设计 v1 待定稿）
+### P0-0t 检索子代理双车道并行标注面与 R3 摩擦处置（2026-09-09 用户裁决立项，同日复核；设计 v1.1 待定稿）
 
-> 用户裁决（2026-09-09）：Clash 已关、本地镜像下 Google 检索与 Chrome 实质
-> 不可用但无法降级原生检索；原生检索与本地浏览器检索都开放给检索子代理，
-> 像主 agent 工具栏一样打标注，推荐先用本地浏览器检索；R3 新摩擦（FP-1～
-> FP-9）随本项统一处置。证据：[0S 细节分析](docs/audits/0S_DETAIL_ANALYSIS_2026-09-09.md)。
-> 入口：[设计 v1](docs/RETRIEVAL_SUBAGENT_DUAL_LANE_DESIGN_2026-09-09.md) /
+> 用户裁决（立项）：Clash 已关、本地镜像下 Google 检索与 Chrome 实质不可用
+> 但无法降级原生检索；原生检索与本地浏览器检索都开放给检索子代理，像主
+> agent 工具栏一样打标注，推荐先用本地浏览器检索；R3 新摩擦（FP-1～FP-9）
+> 随本项统一处置。复核（v1.1）：FP-2 不教学不阻拦仅正常回传错误（根因=
+> 浏览器可拉起但实质不可用，可用性声明冲突同族）；不做标注健康度，仅静态
+> 标注让模型自主选择；mteb 镜像转核查（既往 VM high-nist 可跑）；framework_fallback
+> 语义待议；FP-3 节点用户自理；FP-4 不干预；FP-5 拦截+正常反馈即要求
+> （R3 已验证满足）；FP-6 非问题。证据：
+> [0S 细节分析](docs/audits/0S_DETAIL_ANALYSIS_2026-09-09.md)。
+> 入口：[设计 v1.1](docs/RETRIEVAL_SUBAGENT_DUAL_LANE_DESIGN_2026-09-09.md) /
 > [BACKLOG 0t](docs/BACKLOG_AND_PRIORITIES.md)。
 
-- [ ] S1 设计定稿：开放问题四项裁决（标注健康度更新时机 / 车道坏死判定
-  窗口 N / mteb 镜像是否追打 / verifier 兼容）；定稿后转录 ADR-0010 §14.65
-  + 修订 §3.7/§14.40/§14.43–44。
+- [ ] S1 设计定稿：§6 两项裁决（`framework_fallback` 语义与 verifier 兼容 /
+  mteb 核查结论是否衍生动作）；定稿后转录 ADR-0010 §14.65 + 修订
+  §3.7/§14.40/§14.43–44。
 - [ ] S2 实施：orz 双车道（`retrieval_mode_requires_framework_fallback`
-  拒绝族退役、`framework_fallback` 收窄、机械标注面、`model_lane_switch`
-  事件）+ chrome-error 信封教学（FP-2）+ 评测侧注入健壮化（FP-1，
-  tb_agents/orz.py：unzip→python3 zipfile、下载重试）随批。
+  拒绝族退役、静态工具栏标注、`model_lane_switch` 事件）+ 检索失败正常
+  回传（FP-2：真实错误类别，无教学/无阻拦）+ 评测侧注入健壮化（FP-1，
+  tb_agents/orz.py：unzip→python3 zipfile、下载重试）随批 + mteb 镜像
+  核查注记。
 - [ ] S3 重建（双平台三件套 + manifest）。
-- [ ] S4 实机复验：双车道存在性 / 标注面 / 换道事件 / chrome-error 后换道率
-  对照 R3 mteb 基线 / 通用统计；对照集 = R3 检索主导 4 题或搭 0o 批次 L。
+- [ ] S4 实机复验：双车道存在性 / 静态标注存在性 / 换道事件 / 检索失败
+  回传形态 / 通用统计（判据见设计 §5）；对照集 = R3 检索主导 4 题或搭
+  0o 批次 L。
 
 ### P0-B FUS-RETRIEVAL-MECH（`implemented`；批次 1-6 全部闭合 2026-08-14，保留供核对）
 
