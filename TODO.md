@@ -627,7 +627,8 @@ GLM F2 处置转排期（2026-09-06 用户裁决）：`orz-host/src/approval.rs`
   （P1-1 跨 prompt 浏览器生命周期 + P1-2a）→ P3 语义/声明批（P2-1 懒启动
   并发竞态 + P2-2 web_fetch 声明恢复 + P2-3 registry 声明语义 + P1-2b
   实现）→ P4 卫生批（P3 全项）→ P5 conformance 正反例 → P6 capture
-  重写 → P7 S2 收口（本条目下方各阶段注记）。P8 S3 重建 → P9 S4 实机复验
+  重写 → P7 S2 收口（本条目下方各阶段注记）。P8 S3 重建（已完成，
+  2026-09-09，见下）→ P9 S4 实机复验
   + 宿主机可用性（R-D1 TUI 载体起手裁决）待续。记录不行动：多内核接口
   扩展、click/type/任意 JS eval（Phase 2 交互）。明细见
   [审查处理](docs/audits/0T_S2_TASK1_REVIEW_HANDLING_2026-09-09.md) §5/§3.6。
@@ -656,7 +657,13 @@ GLM F2 处置转排期（2026-09-06 用户裁决）：`orz-host/src/approval.rs`
     修复（profile 偏好种子层级 Default/Preferences，真机 e2e 绿）；重捕
     小批 10 fixture 换新 + Rust/Python 期望同步（12 capture + Python
     273 全绿）。证据：同上 §13/§14。）
-- [ ] S3 重建（双平台三件套 + manifest）。
+- [x] S3 重建（双平台三件套 + manifest，2026-09-09 完成）：Windows
+  release 三件套（`cargo build --release -p orz-bin`，CARGO_EXIT=0）+
+  Linux musl 三件套（Docker `rust:1.97-slim`，BUILD_EXIT=0）构建冒烟绿；
+  SHA256 锁定 + 0t 接线符号命中（`browser_control` / `browser_launch_result`
+  / 双族静态标注）+ bookworm 冒烟三件加载执行全过；orz `92875fd5`、
+  版本 0.3.2 不 bump。证据见
+  [0T S3 重建记录](docs/audits/0T_S3_DUAL_PLATFORM_REBUILD_2026-09-09.md)。
 - [ ] S4 实机复验：双车道存在性 / 静态标注存在性 / γ 退役兼容（旧回放过
   verifier、新生产不产出模式面）/ 失败回传形态 / 通用统计（判据见设计
   §5）；对照集 = R3 检索主导 4 题或搭 0o 批次 L。

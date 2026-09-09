@@ -8,13 +8,13 @@
 
 ## 未闭合计数（2026-09-04 口径）
 
-- 未闭合总数：**27 项**（2026-08-31：P2-10 阶段 3 验证闭环 38 → 32；0k S4 实机复验闭环 32 → 30；2026-09-01：P2-11 DC 强制模板轮清理闭合 30 → 29，P3「DC 硬信号 4/6」退役 29 → 28；2026-09-02：P2-12 讨论稿登记不动计数；2026-09-03：P2-13 设计定稿与 B1 S1/S2 完成，未入账、计数不变；2026-09-04：P2-14 设计定稿与裁决收口 + S1/S2 实施收口（主会话转 v0.3、压缩 e2e 全串行绿），未入账、计数不变；2026-09-06：P0-GOV 00 任务 D 全部闭合（S2a–S2d + S3/S4 翻转），登记不动计数；2026-09-07：0o S3/S4 集中实机验证批排期登记，不动计数；2026-09-07：0q 统一失败事件管线登记（0p S1 复审 F-C 治本），不动计数；2026-09-08：0p S1–S5 全部闭合（排期登记时未入账，闭合同形态不动计数），0r GAP-TB21-FASTTEXT-ENV-CLAIM 登记不动计数；同日 0q 统一失败事件管线 S2–S4 全部闭合 28 → 27；2026-09-09：0s 官方 R3 未通过 20 题复跑结果落档登记不动计数，同日细节分析收口（不动计数，闭合同形态；新摩擦点 FP-1～FP-9 登记待裁决）；同日 0t 检索子代理双车道用户裁决立项登记（同日两轮复核 + v1.3 复核收口：R1–R5 并入、设计层面放行；同日 S1 定稿转录完成——ADR-0010 §14.65 + §3.7 条 1/12 与 §14.40/§14.43–44 修订 + FUS-RETRIEVAL-MODE 退役标注）不动计数；同日 0t S2（Task 1 + S2-R P1–P7）实施完成登记（不动计数——S3/S4 待续）。TODO`[ ]` 明细含父/子项，计数以 BACKLOG 为准。
+- 未闭合总数：**27 项**（2026-08-31：P2-10 阶段 3 验证闭环 38 → 32；0k S4 实机复验闭环 32 → 30；2026-09-01：P2-11 DC 强制模板轮清理闭合 30 → 29，P3「DC 硬信号 4/6」退役 29 → 28；2026-09-02：P2-12 讨论稿登记不动计数；2026-09-03：P2-13 设计定稿与 B1 S1/S2 完成，未入账、计数不变；2026-09-04：P2-14 设计定稿与裁决收口 + S1/S2 实施收口（主会话转 v0.3、压缩 e2e 全串行绿），未入账、计数不变；2026-09-06：P0-GOV 00 任务 D 全部闭合（S2a–S2d + S3/S4 翻转），登记不动计数；2026-09-07：0o S3/S4 集中实机验证批排期登记，不动计数；2026-09-07：0q 统一失败事件管线登记（0p S1 复审 F-C 治本），不动计数；2026-09-08：0p S1–S5 全部闭合（排期登记时未入账，闭合同形态不动计数），0r GAP-TB21-FASTTEXT-ENV-CLAIM 登记不动计数；同日 0q 统一失败事件管线 S2–S4 全部闭合 28 → 27；2026-09-09：0s 官方 R3 未通过 20 题复跑结果落档登记不动计数，同日细节分析收口（不动计数，闭合同形态；新摩擦点 FP-1～FP-9 登记待裁决）；同日 0t 检索子代理双车道用户裁决立项登记（同日两轮复核 + v1.3 复核收口：R1–R5 并入、设计层面放行；同日 S1 定稿转录完成——ADR-0010 §14.65 + §3.7 条 1/12 与 §14.40/§14.43–44 修订 + FUS-RETRIEVAL-MODE 退役标注）不动计数；同日 0t S2（Task 1 + S2-R P1–P7）实施完成登记（不动计数）；同日 0t S3 双平台重建完成登记（不动计数——S4 待续）。TODO`[ ]` 明细含父/子项，计数以 BACKLOG 为准。
 
 ## 优先级总览
 
 | 优先级 | 含义 | 开放项（入口小节） |
 |---|---|---|
-| P0 | 当前工作集：设计已冻结，裁决后立即实施 | FUS-BENCHMARK-FULL-EXEC 验证②③(reward)④⑤（0b）；0d 后续 3/4/5 S4 复验（0d）；THIN-HARNESS-REDESIGN-V2 余项（0j）；WINDOWS-HIGH-NIST-MAX-FRICTION ⑥/⑦（0l）；GSA-SESSION-VOLUME-BOTTOM-LAYER S1–S4（0m，2026-09-06 用户裁决放行）；S3/S4 集中实机验证批（0o，2026-09-07 排期放行——集中执行上述实机类开放项，见排期文档）；检索子代理双车道并行标注面与 R3 摩擦处置（0t，2026-09-09 用户裁决立项 + 同日两轮复核，v1.3 复核放行（R1–R5 并入；γ 模式退役 + 宿主机实测由执行代理操作），S1 定稿转录完成）——S2 实施完成（Task 1 + S2-R P1–P7，2026-09-09 收口，见 [审查处理](audits/0T_S2_TASK1_REVIEW_HANDLING_2026-09-09.md) 与 [0T_S2R_P1P3_IMPL_REVIEW](audits/0T_S2R_P1P3_IMPL_REVIEW_2026-09-09.md)）；S3 重建与 S4 实机复验待续；——P0-GOV 00（含任务 D）已于 2026-09-06 全部闭合；0p 模型自信息面补强与 .gsa 两段门已于 2026-09-08 S1–S5 全部闭合转 `implemented`（T2/S4 见 audits 0P_T2 / 0P_S4 分析） |
+| P0 | 当前工作集：设计已冻结，裁决后立即实施 | FUS-BENCHMARK-FULL-EXEC 验证②③(reward)④⑤（0b）；0d 后续 3/4/5 S4 复验（0d）；THIN-HARNESS-REDESIGN-V2 余项（0j）；WINDOWS-HIGH-NIST-MAX-FRICTION ⑥/⑦（0l）；GSA-SESSION-VOLUME-BOTTOM-LAYER S1–S4（0m，2026-09-06 用户裁决放行）；S3/S4 集中实机验证批（0o，2026-09-07 排期放行——集中执行上述实机类开放项，见排期文档）；检索子代理双车道并行标注面与 R3 摩擦处置（0t，2026-09-09 用户裁决立项 + 同日两轮复核，v1.3 复核放行（R1–R5 并入；γ 模式退役 + 宿主机实测由执行代理操作），S1 定稿转录完成）——S2 实施完成（Task 1 + S2-R P1–P7，2026-09-09 收口，见 [审查处理](audits/0T_S2_TASK1_REVIEW_HANDLING_2026-09-09.md) 与 [0T_S2R_P1P3_IMPL_REVIEW](audits/0T_S2R_P1P3_IMPL_REVIEW_2026-09-09.md)）；S3 双平台重建完成（2026-09-09，见 [0T S3 重建记录](audits/0T_S3_DUAL_PLATFORM_REBUILD_2026-09-09.md)）；S4 实机复验待续；——P0-GOV 00（含任务 D）已于 2026-09-06 全部闭合；0p 模型自信息面补强与 .gsa 两段门已于 2026-09-08 S1–S5 全部闭合转 `implemented`（T2/S4 见 audits 0P_T2 / 0P_S4 分析） |
 | P1 | 无需裁决，可与 P0 并行 | FUS-COMPONENT-REGISTER（4）；GAP-WINDOWS-EVIDENCE（5）；IMPL-DEEPSEEK-TRANSPORT / SEC-CREDENTIALS live 证据（6）；ORZ-SESSION-CONTEXT-MONITOR（6d） |
 | P2 | 生产化决策门：需用户裁决 | IMPL-CONTROL-FABRIC Slice 3/4（7）；OPS-PROTOCOL 裁剪与接线裁决（8）；MODEL-RESIDUAL-PRESSURE-FOLLOWUP（11）；COMPRESSION-LINGUISTIC-FORMAL-LAYER（12）；BLACKBOARD-CONVERSATION-SCOPE-FOLD B2–B4（13） |
 | P3 | 收尾 / 清理 | EVIDENCE-LOCAL-BROWSER（9）；GATE-CHAIN（10）；遗留小项（11） |
@@ -877,7 +877,13 @@ D-1/D-2/D-3）→ 用户裁决：黑板补强先行（「黑板必须暴露模�
     任意 JS eval（Phase 2 交互）。证据：
     [`0T_S2R_P1P3_IMPL_REVIEW`](audits/0T_S2R_P1P3_IMPL_REVIEW_2026-09-09.md)
     §10–§14。
-- [ ] S3 重建。
+- [x] S3 重建（2026-09-09 完成）：双平台三件套 + manifest——Windows release
+  三件套（`cargo build --release -p orz-bin`）+ Linux musl 三件套
+  （Docker `rust:1.97-slim`，`BUILD_EXIT=0`）构建冒烟绿；SHA256 锁定 +
+  0t 接线符号命中（`browser_control` / `browser_launch_result` / 双族静态
+  标注）+ bookworm 冒烟三件加载执行全过；orz `92875fd5`、版本 0.3.2
+  不 bump。证据见
+  [0T S3 重建记录](audits/0T_S3_DUAL_PLATFORM_REBUILD_2026-09-09.md)。
 - [ ] S4 实机复验（判据见设计 §5：双车道存在性 / 静态标注 / γ 退役兼容 /
   失败回传形态 / 通用统计 / 宿主机日常可用性；对照 R3 检索主导 4 题或搭
   0o 批次 L + 宿主机日常可用性验证（执行代理操作，可与 S2/S3 并行）。
