@@ -1,12 +1,119 @@
 # CLI_PROJECT_INDEX
 
-> 索引版本：v2.69；状态：`current`；最近整理：2026-09-09（**整理轮：索引瘦身**——v2.68 及此前头部版本流水与全量条目归档至 [`v2.68 全量快照`](存档/index/CLI_PROJECT_INDEX_FULL_2026-09-09.md)，本文件只保留主题/状态路由与近版摘要；无新登记、无条目语义变更，路由仅新增归档入口）。
->
-> 近版摘要：**v2.68**：0.4.0 双平台里程碑发布登记——0.3.0 后 47 提交（TER M1 / Task C/D / 0m / 0p / 0q / 0t / P2-14），双平台包 orz-0.4.0-linux-x86_64.tar.gz + orz-0.4.0-windows-x86_64.zip，GitHub Release v0.4.0，ADR-0010 §14.40 第 11 项 + [0.4.0 发布包](releases/orz-0.4.0-linux-x86_64/README.md)。**v2.67**：0t S3 双平台重建完成（三件套 + manifest 构建冒烟绿 + SHA256 锁定，见 [`0T S3 重建记录`](docs/audits/0T_S3_DUAL_PLATFORM_REBUILD_2026-09-09.md)；S4 实机复验待续）。**v2.66**：0t S2 实施完成（Task 1 + S2-R P1–P7 收口：browser_control 导航级动作面 + BrowserStepFailed 接缝 + web_fetch 声明恢复 + PDF 下载修复）。**v2.65**：0t 检索子代理双车道设计 S1 定稿转录（ADR-0010 §14.65 + FUS-RETRIEVAL-MODE 退役 + FUS-RETRIEVAL-DUAL-LANE 登记，见 [`设计 v1.3`](docs/RETRIEVAL_SUBAGENT_DUAL_LANE_DESIGN_2026-09-09.md)）。
->
-> 历史实施流水只能从归档快照回查：v2.41 及此前见 [`CLI_PROJECT_INDEX_FULL_2026-09-03.md`](存档/index/CLI_PROJECT_INDEX_FULL_2026-09-03.md)；v2.42–v2.68 见 [`CLI_PROJECT_INDEX_FULL_2026-09-09.md`](存档/index/CLI_PROJECT_INDEX_FULL_2026-09-09.md)；2026-08-09 前见 [`CLI_PROJECT_INDEX_FULL_2026-08-09.md`](存档/index/CLI_PROJECT_INDEX_FULL_2026-08-09.md)；2026-08-09 至 2026-08-21 见 [`CLI_PROJECT_INDEX_FULL_2026-08-21.md`](存档/index/CLI_PROJECT_INDEX_FULL_2026-08-21.md)。不得回填污染当前索引。
+> 索引版本：v2.68；状态：`current`；最近整理：2026-09-09（v2.68：0.4.0 双平台里程碑发布登记——0.3.0 后 47 提交（TER M1 / Task C/D / 0m / 0p / 0q / 0t / P2-14），双平台包 orz-0.4.0-linux-x86_64.tar.gz + orz-0.4.0-windows-x86_64.zip，GitHub Release v0.4.0，ADR-0010 §14.40 第 11 项 + [0.4.0 发布包](releases/orz-0.4.0-linux-x86_64/README.md)。v2.67：0t S3 双平台重建完成登记——双平台三件套 + manifest 构建冒烟绿（Windows release `cargo build --release -p orz-bin` + Linux musl Docker `rust:1.97-slim`，`BUILD_EXIT=0`；SHA256 锁定 + 0t 接线符号命中 + bookworm 冒烟三件加载执行全过；orz `92875fd5`、版本 0.3.2 不 bump），见 [`0T S3 重建记录`](docs/audits/0T_S3_DUAL_PLATFORM_REBUILD_2026-09-09.md)；S4 实机复验待续。v2.66：0t S2 实施完成登记——Task 1 + S2-R P1–P7（browser_control 导航级动作面 + P1-2a BrowserStepFailed 接缝 + web_fetch 声明恢复 + P5/P6 conformance 收口 + P7 PDF 下载修复与重捕小批 10 fixture 换新；ADR-0010 v1.66 转录 + BACKLOG/TODO 同步）。v2.65：0t
+> 检索子代理双车道设计 S1 定稿转录——ADR-0010 §14.65（双车道并存 + 独立
+> 检索启用门、三值检索模式 γ 退役、浏览器可用性事件事实化
+> `browser_launch_result`；修订 §3.7 条 1/12 + §14.40/§14.43–44 退役标注），
+> FUS-RETRIEVAL-MODE 退役（`withdrawn`）+ FUS-RETRIEVAL-DUAL-LANE 登记，
+> 见 [`设计 v1.3`](docs/RETRIEVAL_SUBAGENT_DUAL_LANE_DESIGN_2026-09-09.md)
+> / ADR-0010 §14.65；v2.64：0q
+> 统一失败事件管线 S1–S4 全部闭合（转 `implemented`）——写入侧边界单一
+> 漏斗 `stamp_failure`（四写点退役逐点对拍）+ `failure_agg_absent` 标记
+> XOR 语义 + console 订单 `action_target` 第五族 + 法官新族
+> `failure_agg_coverage`（grandfather 锚 funnel-v1）+ Python 镜像同步 +
+> schema 三处，见 [`设计稿`](docs/0Q_FAILURE_EVENT_PIPELINE_DESIGN_2026-09-08.md)
+> / ADR-0010 §14.63/§14.64；v2.63：0p
+> 批全部闭合（S1–S5 转 `implemented`）——T2 双平台重建（0.3.2 三件套 +
+> VM 换装 + manifest 重刷 + DryRun 全对 + enforcement-probe high-nist
+> 19/19，用户裁决只跑此臂）+ S4 重跑 train-fasttext 判据表全项通过
+> （两段门审计对首次生产落账 / 全卷零 sk- / 命中率 96.37% / 任务未过=
+> 环境缺 fasttext 登记候选缺陷）+ 黑板粒度特意形态裁决 + 检查点还原
+> DPAPI 物化 SOP，见 [`T2 审计`](docs/audits/0P_T2_DUAL_PLATFORM_REBUILD_2026-09-08.md)
+> / [`S4 分析`](docs/audits/0P_S4_TRAIN_FASTTEXT_TF_SELFHISTORY_032_ANALYSIS_2026-09-08.md)
+> / ADR-0010 §14.62；v2.62：0p
+> 模型自信息面补强与 .gsa 两段门设计定稿——W2 压测暴露 .gsa shell 旁
+> 路/拒绝无信封/黑板自历史供给缺口，用户裁决黑板先行 + 台账两段式放开
+> （首读通知+结构预览+黑板指针，二读放行，状态会话级持久化）+ key 不
+> 落卷不变量 + 拒绝信封与失败同纪律 + turn_count 真实计数，0.3.2 基
+> 线，修完重跑 train-fasttext，见
+> [`设计`](docs/BLACKBOARD_SELF_HISTORY_AND_GSA_TWO_STAGE_GATE_DESIGN_2026-09-07.md)；
+> v2.61：OBS-
+> PERMISSION-DUAL-IMPL 处置定稿——用户裁决方向 α：判定分布为薄层特意形态
+> （自研面不膨胀/不跟随 Grok/只做薄层，桥接为特意形态，β/γ 否决），权威
+> 判定面单图落盘（ACTIVE/DORMANT/PARTIAL + 唯一 owner），workspace 权限
+> 栈源码头标注 14 模块，自研面不膨胀原则转录 ADR-0010 §14.60，OBS 转
+> 已管控，见[`判定面单图`](docs/PERMISSION_JUDGMENT_SURFACE_MAP.md) /
+> [`处置设计`](docs/PERMISSION_DUAL_IMPL_CONVERGENCE_DESIGN_2026-09-07.md)；
+> v2.60：任务 D
+> S3/S4 翻转实施 + 复审处理批——registry JSON 升唯一权威、run-event 期刊
+> 校验执法权翻转至 Rust 法官（`journal-conformance` CLI），IMPL-PYTHON-
+> REFERENCE 翻转注记，任务 D 全部闭合，见
+> [`S3/S4 翻转实施审计`](docs/audits/TASK_D_S3_S4_FLIP_IMPL_AUDIT_2026-09-06.md)
+> / [`复审处理审计`](docs/audits/TASK_D_S3S4_REVIEW_HANDLING_2026-09-06.md)；
+> v2.59：GAP-APPROVAL-PROMPTER
+> （0n）排期后同日延期——无具体设计文档项非急切/必需，S1 设计定稿前置；
+> v2.58：排期登记
+> 批——GSA-SESSION-VOLUME-BOTTOM-LAYER 用户裁决放行（S1–S4 排期实施，
+> BACKLOG 0m）+ GAP-APPROVAL-PROMPTER 排期登记（S1 设计先行，BACKLOG 0n /
+> TODO P0-0n）；v2.57：S2a 复审
+> 处理批——任务 D S2a 盘点表 P3 修正（receipt_event_isomorphism ④构造机制
+> 注记 / console_order_rejected 五发射点计数 / 行号区间口径统一 / S2b
+> 「六族 7 函数入口」措辞统一）、排期文档 §4 回填 S2a 完成态（27 A + 4 B）、
+> AUTH-GLOBAL-ARCHITECTURE-AUDIT 增 S2a 盘点表召回入口、orz bash 注释残句
+> 修正（`f45a9e39`）；v2.56：GSA-SESSION-VOLUME-BOTTOM-LAYER 设计定稿——`.gsa` 会话卷下沉为底层
+> 类型化系统状态域（SessionVolume 资源 + 沙箱三分判定 + terminal-log/
+> run_tests 两只读窗口单源下沉 + gitignore 绕过），权限层保留不裁撤
+> （ADR-0010 §14.56，BACKLOG 0m，实施待放行）；v2.55：环境清理
+> 批——GAP-GSA-SYMLINK-STALE-TEST 按用户裁决对齐 Task C 收口（旧「symlink
+> 越界可读」测试改写为拒读安全回归，orz `a29f7377`，orz-tools lib 全绿）；
+> 另登记观察：orz-host permission.rs `.gsa` terminal-log 白名单在 Task C
+> 工具级沙箱后对 read_file 不可达，会话卷形态豁免待用户裁决；v2.54：GLM 处置
+> 复核修正批——R-1 计数口径修正（353 个本地运行产物 + 1 个误中夹具恢复，
+> 59423ac）、处置审计 BACKLOG 00a 引用与任务 D S2–S4 层级修正、验证限制
+> 清单补录（GAP-GSA-SYMLINK-STALE-TEST 另立，见处置审计 §5）；v2.53：P0-GOV
+> GLM 外部审查处置批——F1 skills 豁免收窄为注册技能根白名单（orz
+> `67b51eb1`）、R-1 353 个本地运行产物转本地件、R-2 manifest 显式 LF、R-3
+> 九个根目录产物归档 `存档/root-artifacts-2026-09-06/`、F2 登记
+> GAP-APPROVAL-PROMPTER、观察 (c) 登记 OBS-PERMISSION-DUAL-IMPL；任务 D
+> S2–S4 排期登记（S2a 盘点先行），见
+> [`P0_GOV_GLM_DISPOSITION_AND_TASK_D_S2_SCHEDULE_2026-09-06`](docs/audits/P0_GOV_GLM_DISPOSITION_AND_TASK_D_S2_SCHEDULE_2026-09-06.md)；v2.52：TER
+> M1/M2 全面审查处理闭合——多子代理并行审查有条件 PASS（无 P0），处理批
+> 落地：P1-1 idle-kill journal 生产者补入（orz `35db6741`）、P1-2
+> ADR-0010 §14.55 正式裁决（TER 候选转正/取代清单：去硬杀、轮预算无上限、
+> S5-2 常驻默认、F6 push 例外、idle-kill 事件、no-AC 生产墙、10h 例外等），
+> AUTH-TOOL-EXECUTION-REFORM 转 `current-design`；审计
+> [`TER_M1_M2_COMPREHENSIVE_REVIEW`](docs/audits/TER_M1_M2_COMPREHENSIVE_REVIEW_2026-09-04.md)
+> + [`TER_REVIEW_HANDLING`](docs/audits/TER_REVIEW_HANDLING_2026-09-04.md)；
+> v2.51 登记：P2-14 S2 压缩 e2e 全串行绿收口——rhythm / fallback /
+> session_end / 恢复预检
+> 串行 e2e（滚动单 v0.3 marker 逐请求与收尾断言，恢复预检后 marker 保留
+> 且内容逐字节原样 = §7 矩阵第 8 项复验；orz-loop 722 + orz-host ACP 43），
+> AUTH-COMPACTION-FOLD-SNAPSHOT 转 `partial`（S1/S2 已实施，S3/S4 待续），
+> 见
+> [`P2-14 S2 e2e 审计`](docs/audits/P2-14_S2_E2E_2026-09-04.md)；
+> v2.50 登记：P2-14 压缩 marker 折叠视图快照设计定稿（五段模板 marker 改
+> 为压缩点冻结黑板折叠视图快照：近窗明细 ∪ 旧段聚合 ≤30 ∪ failure_agg ∪
+> 查询指针，总量 20K 定档；r_keep 排除保留尾行；与 blackboard_read 折叠
+> 渲染同源；ADR-0010 §14.54 转录），见
+> [`CONTEXT_COMPACTION_BLACKBOARD_FOLD_DESIGN`](docs/CONTEXT_COMPACTION_BLACKBOARD_FOLD_DESIGN_2026-09-04.md)；
+> 2026-09-04 版本摘要（v2.49 TER M1 门放行——M1 T1.4–T1.13 闭合（常驻
+> 默认/去硬杀/idle 兜底/processes live/轮预算/F6 pull+push/W-F13a+b/
+> W-F11 env/输出检索对象），M1 验收门过（orz-loop 709 + orz-assurance
+> 201 + Linux release + verifier 273），**放行进入 M2**，见
+> [TODO2](TODO2.md)/[BACKLOG2](docs/BACKLOG2.md)/
+> [`TER_T1_13_M1_GATE`](docs/audits/TER_T1_13_M1_GATE_2026-09-04.md)；
+> 2026-09-03 版本摘要（v2.43–v2.48，TER ADR 候选登记见下）：
+> v2.43 P2-13 B1 复审处理登记——实体版本计数/检索分区恢复优先级/
+> failure_agg 轴语义收口；v2.44 P2-13 B2 渲染折叠 S1/S2 登记——折叠态
+> 渲染 + 展开参数 + 分区 cap 补齐，见
+> [`P2-13_B2_RENDER_FOLD_IMPL_AUDIT`](docs/audits/P2-13_B2_RENDER_FOLD_IMPL_AUDIT_2026-09-03.md)；
+> v2.45 P2-13 B2 全面复审处理登记——receipt_id 守卫旁路修复/未达阈值
+> 展开 = 普通读取/展开目标 cap 保护/单域单段语义裁定，见
+> [`P2-13_B2_REVIEW_HANDLING`](docs/audits/P2-13_B2_REVIEW_HANDLING_2026-09-03.md)；
+> v2.46 P2-13 B3 契约与收尾登记——空槽「（无）」/用户侧疲劳提醒/存档
+> 单包 gzip + session_archive 事件/plan-epoch 生产面退役，见
+> [`P2-13_B3_IMPL_AUDIT`](docs/audits/P2-13_B3_IMPL_AUDIT_2026-09-03.md)；
+> v2.47 P2-13 B3 复审处理登记——疲劳档位状态机收口（压缩轮数门槛移除、
+> 巨幅跳跃只报最高档并已越线低档全落档）/ close-with-active-run 存档推迟
+> 到 run 收尾补触发 / 存档 IO 移 blocking 池，见
+> [`P2-13_B3_REVIEW_HANDLING`](docs/audits/P2-13_B3_REVIEW_HANDLING_2026-09-03.md)；
+> v2.48 TER ADR 候选登记——TER 设计稿转 ADR-0010 §14.53 候选项
+> （S5-2 常驻化 / PUSH→PULL push 例外），登记
+> AUTH-TOOL-EXECUTION-REFORM（`pending`，M1 放行后 M2 实施中））。
 >
 > 当前唯一自然语言设计权威是 [`ADR-0010`](adr/ADR-0010-fusion-runtime-and-agent-architecture.md)。本文件只负责召回和路由，不替代 ADR、Schema、审计结论、测试证据或源代码。
+>
+> 历史实施流水只能从归档快照回查（2026-08-09 前见 [`CLI_PROJECT_INDEX_FULL_2026-08-09.md`](存档/index/CLI_PROJECT_INDEX_FULL_2026-08-09.md)；2026-08-09 至 2026-08-21 见 [`CLI_PROJECT_INDEX_FULL_2026-08-21.md`](存档/index/CLI_PROJECT_INDEX_FULL_2026-08-21.md)；v2.41 及此前全量见 [`CLI_PROJECT_INDEX_FULL_2026-09-03.md`](存档/index/CLI_PROJECT_INDEX_FULL_2026-09-03.md)），不得回填污染当前索引。
 
 ## 0. 固定写入格式与维护纪律
 

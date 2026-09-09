@@ -6,6 +6,7 @@
 - [`docs/`](docs/)：已转录的设计输入和阶段性实现历史。
 - [`index/`](index/)：退出当前维护面的完整项目索引快照和实施时间线。
 - [`backlog/`](backlog/)：退出当前维护面的完整待办快照（含变更记录与已闭合分区明细）。
+- [`todo/`](todo/)：退出当前维护面的实施勾选清单全量快照（含已闭合条目勾选明细）。
 - [`readme/`](readme/)：退出当前维护面的仓库 README 快照和历史产品叙述。
 
 当前设计入口仍位于 [`architecture/current/`](../architecture/current/README.md)，审计、事故与案例记录仍分别保留在 `docs/audits/`、`docs/incidents/` 和 `docs/cases/`。
