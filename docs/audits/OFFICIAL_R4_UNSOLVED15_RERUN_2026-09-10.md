@@ -54,6 +54,25 @@
   filter-js pass-1 无效试次；protein-assembly / train-fasttext 的 reward 0.0
   为 verifier-only，**不计入机制对照**。
 
+## 2A. r4b 补跑结果（2026-09-10，余额恢复后同日执行；批次 `official-r4b-unsolved4`）
+
+| 任务 | 真实 run | reward | 结束方式 |
+|---|---|---|---|
+| path-tracing-reverse | 481 事件 | **1.0 通过** | run_finished:completed（58 轮、journal 16min、**零检索调用**——纯终端 + submit 两阶段，命中 91.63%） |
+| protein-assembly | 464 事件 | 0.0 | 自然结束（题目域，同 R3 形态） |
+| train-fasttext | 717 事件 | 0.0 | 3600s 官方墙钟收尾（长命令，同 R3 形态） |
+| filter-js-from-html | pass-1 572 事件 reward 缺失（FAIL 判据正确）；pass-2 763 事件 | 0.0 | pass-2 自然结束 verifier 判 0 |
+
+- **官方账面：63（R3）→ 64（R4 model-extraction）→ 65/89（r4b path-tracing-reverse）**。
+- 口径注记：path-tracing-reverse 本轮通过**未经检索车道**（纯终端路径）——R3
+  它死于检索依赖（browser 报废 + web_search 慢通道），本轮模型以本地知识 +
+  终端自验解出；「检索主导 4 题」在补跑轮 1/4 翻案，翻案载体是模型路径
+  选择而非车道修复。
+- 余额事件收口：四题全部真实试次完成，§3 余额影响边界解除。
+- filter-js pass-1 verifier 无 reward（R3 FP-7 verifier 脆弱同族形态），
+  结果以 pass-2 为准；执行器硬化判据（journal 真实 run >10 事件）本轮
+  生效（余额秒死 stub 均被正确判 FAIL——本轮无 stub 复发，判据为防御性）。
+
 ## 3. 余额事件（影响边界）
 
 - `run_failed {"error": "model error: model error: Insufficient Balance
@@ -163,9 +182,12 @@ lane」的设计预期相悖，疑为角色写边界对 browser_control 动作�
 
 ## 8. 后续
 
-- 用户侧：DeepSeek 余额充值；是否对 4 个余额受影响题补跑小批待裁决。
+- 用户侧：DeepSeek 余额充值（已收口）；4 个余额受影响题补跑（已收口——
+  r4b 4/4 真实试次，见 §2A）。
 - 0t S4：判据 1–5 本批证据已齐（本审计 + agg4）；判据 6 宿主机日常可用性
   待执行代理另线；闭合入账在 BACKLOG 0t / TODO P0-0t。
+- 0v 检索引擎 SERP + browser_control 分类修正：设计定稿待放行
+  （[`RETRIEVAL_ENGINE_SERP_SEARCH_ACTION_DESIGN_2026-09-10`](../RETRIEVAL_ENGINE_SERP_SEARCH_ACTION_DESIGN_2026-09-10.md)）。
 - 收口：BACKLOG 0u / TODO P0-0u 同步（本审计即落档），计数入账沿各条目
   自身小节（0t S4 闭合时按其小节入账）。
 
