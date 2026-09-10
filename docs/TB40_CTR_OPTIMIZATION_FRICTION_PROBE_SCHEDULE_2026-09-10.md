@@ -1,7 +1,9 @@
 # TB 4.0 单题摩擦探针排期（ctr-optimization，2026-09-10）
 
-> **状态**：预登记定稿，**未放行、未启动**（2026-09-10 用户指示「整理清单，
-> 然后准备跑一下试试」——本文件即清单与放行门；启动需用户单独放行）。
+> **状态**：预登记定稿，已完成**首次起跑**（2026-09-10 19:03–19:17）——
+> **批次未成立、顺延待重跑**：pass 1 为真实试次但死于模型流中断（环境），
+> pass 2/3 未进入试次（hub 鉴权 TLS 不通）；执行器已按首跑暴露的 4 处缺陷
+> 修订（§7.6），线路稳定后重跑（§7.7）。
 > **上级**：[`BACKLOG 0w`](BACKLOG_AND_PRIORITIES.md) /
 > [`TODO P0-0w`](../TODO.md)。
 > **定位**：本文件是本探针的执行口径、任务事实、预期摩擦点清单与判据对照的
@@ -82,6 +84,7 @@ TER 长命令、工具执行面、上下文与预算。
   `harbor run -t terminal-bench/ctr-optimization -n 1 -k 1 -a tb_agents.orz:Orz
   -m deepseek-v4-flash`；`eval_browser=true`；TEMP 重定向 `D:/tb-eval/tmp`；
   gsa 卷挂载 `/orz-gsa`；job 前缀 `official-tb40-ctr-optimization`。
+  harbor 侧 `-r 0`（试用例级自动重试关闭，重试单层归执行器，见 §5）。
   边界：单题解析路径不落数据集级 digest 钉；题目自身 ref 由 trial
   `result.json` 的 `task_id.ref`（sha256）记录，跑后回填登记。
 
@@ -109,7 +112,9 @@ TER 长命令、工具执行面、上下文与预算。
    `control_ticket_issued` 与 `consumed` 1:1；零 anomaly、零真实 HTTP 400
    （计费类错误单列）。
 3. **P3 真实试次存在**：卷内 `events.jsonl` 事件数 >10（沿用 r4b 硬化判据，
-   杜绝 stub/秒死被计为有效试次）。
+   杜绝 stub/秒死被计为有效试次），**且该试次未出错**（`n_errored_trials = 0`
+   且 eval 级 `n_errors = 0`）——出错试次同样带 `reward 0.0` 落账，不得计为
+   「批次完成」（2026-09-10 首跑暴露；执行器 `job_complete` 已同口径）。
 4. **P4 F1 有确定结论**：本地 HTTP 的可用路径（工具直连 / shell 绕行 / 均不可）
    必须能从事后 journal 明确判定；**不确定即判为未闭合**，不得以推测记过。
 5. **F1 缺陷判据**：若本地 HTTP 被工具面全拦且 shell 亦不可用（任务在框架侧
@@ -128,18 +133,26 @@ TER 长命令、工具执行面、上下文与预算。
 
 - **前置中止**：镜像拉取失败、数据集解析失败（Harbor 注册表异常）、载体重建
   不一致——任一出现即不启动，登记后顺延。
+- **前置预检门（2026-09-10 首跑后新增）**：起跑前对 hub 与模型端点各做一次
+  TLS+HTTP 预检，任一不通过即**整体顺延、零轮次消耗**（执行器退出码 2）；批内
+  一旦在某一轮控制台日志里识别出鉴权类失败（`AuthenticationError` /
+  `API-key exchange request failed` / `NotAuthenticatedError`），同样立即中止
+  剩余轮次——这属于环境问题，不得烧掉重试预算。
 - **早期中止（软门）**：启动后 30 分钟内若出现「任务在框架侧不可进行」的
   确定性证据（如 F1 的完全不可达 + shell 不可用），可主动中止以免空烧 5 小时；
   中止必须留 journal 与判据记录，不算失败批次。
 - **不中止的情形**：模型能力不足导致做不出来（题目域失败）——**跑满官方墙钟**，
   因为本批目的就是看框架在长任务上的表现。
-- **重试**：无效试次（事件数 ≤10、流断连且无 reward）允许至多 3 轮；
-  有效试次（含 reward 0.0 且事件数正常）不重跑。
+- **重试**：无效试次允许至多 3 轮。**无效试次 = 事件数 ≤10、流断连且无 reward、
+  或试次出错**（`n_errored_trials > 0` / eval 级 `n_errors > 0`）；有效试次
+  （含 reward 0.0、事件数正常且未出错）不重跑。**重试策略单层归属执行器**——
+  harbor 侧固定 `-r 0`（2026-09-10 修订前为 `-r 3`，与脚本三轮叠加最坏可达
+  12 次尝试；对一道 4.8 小时的题，成本与归因均失控）。
 
 ## 6. 产物与账本
 
 - job：`D:\tb-eval\jobs-official\official-tb40-ctr-optimization\`（`result.json`、
-  `*-console.log`）
+  `*-console-pass<N>.log`；每轮独立，2026-09-10 修订后不再覆写）
 - gsa 卷：`D:\tb-eval\gsa-volumes\official-tb40-ctr-optimization\`
 - 摘要：`official-tb40-ctr-optimization-summary.log`
 - 执行器：[`scripts/run_tb40_ctr_probe.py`](../scripts/run_tb40_ctr_probe.py)
@@ -168,3 +181,39 @@ TER 长命令、工具执行面、上下文与预算。
    （§2 拓扑）。同批次「TB 4.0 有 52 道纯单容器题」的计数同样受此影响，
    应以下载核对为准重算；数据集级计数（66 题、11 道 compose、3 道 GPU）来自
    另一次完整下载，未受影响。
+6. **执行器修订（2026-09-10 首跑后，4 处；自测已过）**：①每轮独立控制台日志
+   （原以 `wb` 覆写同一文件，首跑时 pass 1 的控制台证据被 pass 2/3 冲掉，而
+   pass 1 恰是唯一有真实试次的轮次）；②前置预检门（口径见 §5）；③验收口径补漏
+   ——`job_complete` 原只看「作业收尾 + 有 reward + 卷内有事件」，而出错试次
+   同样带 `reward 0.0` 记录，作业若正常收尾即被误判为「完成」，会把一次环境
+   中断写成有效试次结论（首跑 `result.json` 正是 `n_errored_trials=1` +
+   `NonZeroAgentExitCodeError` + `reward {"0.0": …}`，仅因作业未收尾才躲过此误判）；
+   ④`-r 3` → `-r 0`（口径见 §5）。
+   退出码口径：`0` 完成、`1` 未闭合（试次用尽）、`2` 前置不可用（顺延，零轮次消耗）。
+   自测证据：预检探针实测 hub `HTTP 200`、模型端点 `HTTP 401`（拿到任何状态码即
+   视为通路可用）；鉴权签名对首跑真实日志命中、对不存在文件不报错；`job_complete`
+   三分支实测（磁盘实况 → False；已收尾 + 1 个出错试次 → False；已收尾 + 0 出错
+   → True）；语法通过、行尾 LF。
+7. **首次起跑结果（2026-09-10 19:03:37–19:17:42；批次未成立，环境所致）**：
+   三轮全部退出码 1，**0 个有效试次**。
+   ①**pass 1 是唯一真实试次**：19:06:28–19:15:55（9 分 27 秒），285 条事件 /
+   32 次工具调用 / 28 次模型输出，终止于 `transport_retry`（`kind=zero_chunk`、
+   `retries=10`、`outcome=exhausted`）+ `run_failed`（`model error: stream
+   interrupted after 10 re-sends: error sending request for url
+   (https://api.deepseek.com/chat/completions)`）；官方 `result.json` 记
+   `n_errored_trials=1` / `NonZeroAgentExitCodeError` / `reward 0.0`，
+   `finished_at` 为空。
+   ②**pass 2/3 未进入试次**：harbor 自身 `AuthenticationError: API-key exchange
+   request failed`（`auth/tokens.py` 换票路径），发生在 `Job.create` 阶段——同一
+   时段实测 hub 的 443 端口连通但 **TLS 握手失败**，与用户收到的上游线路故障
+   通知一致（本文件 §7.6 自测时该通路已恢复为 `HTTP 200`）。
+   ③**pass 1 仍留下可用证据**：F1 本地 HTTP——模型完全未走框架 web 面
+   （`web_fetch` / `browser_read` 零调用），直接用 shell `curl` 打
+   `http://localhost:5000/openapi.json` **成功取得 OpenAPI 3.1 规范**（API 版本
+   4.0.0），随后转入印象流统计；按 §4 判据 5 属「shell 路径可用」，工具面是否
+   拦截因从未尝试仍为未知项。F6 检索车道误用 **0 次**（与预判一致）；F7 票据
+   发放/消费 31:31、权限请求/判定 32:32、**零异常**；F9 `main` + `api` 双服务
+   正常起来、sidecar healthy，试次失败后 harbor 仍完成了 sidecar 证据采集钩子
+   （`curl -sf /healthz` 成功）。F2/F3/F4/F5/F8 未触及（试次仅 9.5 分钟）。
+   ④**结论**：本批未产出摩擦结论，判据 2–10 未判定（判据 1 载体一致已在起跑前
+   核验通过），归 §5 的前置/环境顺延，**不计为失败批次**；线路稳定后重跑。

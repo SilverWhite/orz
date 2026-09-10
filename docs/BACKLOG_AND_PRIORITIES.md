@@ -659,7 +659,7 @@ GLM F2 处置转排期（2026-09-06 用户裁决）：`orz-host/src/approval.rs`
 - 排期建议：S1 代码 → S2 测试 → S3 双平台重建 → S4 实机（可搭 0t S4 判据 6 宿主机日常可用性同场）。
 - 计数：立项登记不动计数（闭合时按本条目入账）。
 
-### 0w. TB 4.0 单题摩擦探针（P0；2026-09-10 用户指示立项；**预登记定稿，未放行、未启动**）
+### 0w. TB 4.0 单题摩擦探针（P0；2026-09-10 用户指示立项；**首跑未成立（环境）、执行器已修订，顺延待重跑**）
 
 - 用户指示（2026-09-10 逐字口径）：「4.0 的话可以找一个最适合摩擦的题进行单测，关键是看 orz 的水平」——据此立项为**单题、单次（k=1）、官方口径**的摩擦探针批次，**非成绩批次**。
 - 排期与判据（执行权威）：[`TB40_CTR_OPTIMIZATION_FRICTION_PROBE_SCHEDULE_2026-09-10`](TB40_CTR_OPTIMIZATION_FRICTION_PROBE_SCHEDULE_2026-09-10.md)；执行器 [`run_tb40_ctr_probe.py`](../scripts/run_tb40_ctr_probe.py)。
@@ -668,6 +668,8 @@ GLM F2 处置转排期（2026-09-06 用户裁决）：`orz-host/src/approval.rs`
 - 不产出水平结论：TB 4.0 公开榜单 18 条提交**无任何 DeepSeek 型号**，本批无同模型外部参照，只产出摩擦点清单（判据 10 已登记）。
 - 复测结论（2026-09-10 现场实测，四次）：**数据集级解析持续失败**（服务端 `statement timeout` / HTTP/2 `ConnectionState.CLOSED`），但**单题级解析正常**（ctr-optimization 与 2.1 单题均成功、Harbor 站点 200）——故本批改用 `harbor run -t terminal-bench/ctr-optimization`，不依赖 `-d`；代价是不落数据集级 digest 钉（题目 ref 以 trial `task_id.ref` 回填）。三枚镜像（environment `718822ca…` / sidecar `4dee63e2…` / verifier `5b1c5955…`）均已按 digest 预拉成功。8 小时墙钟成本，跑批期间不并行其他实机批次。
 - 口径更正（2026-09-10 复核）：初稿把本题记为「非多容器」系 compose 扫描过滤失效所致，**该判断错误**（本题是多服务题）；同批「52 道纯单容器题」的计数同样受影响，需以下载核对重算。数据集级计数（66 题 / 11 compose / 3 GPU）未受影响。
+- 首跑（2026-09-10 19:03–19:17，用户放行后）：**批次未成立、零有效试次**，归 §5 前置/环境顺延、不计为失败批次——pass 1 真实试次 9 分 27 秒后死于模型流中断（`transport_retry` zero_chunk ×10 耗尽 → `run_failed`），pass 2/3 未进入试次（harbor `AuthenticationError: API-key exchange request failed`，同时段 hub 443 通但 TLS 握手失败，与用户收到的上游线路故障通知一致）。pass 1 仍留下 F1/F6/F7/F9 的部分证据（见排期 §7.7）。
+- 执行器修订（2026-09-10，首跑后 4 处，自测已过）：每轮独立控制台日志；前置鉴权预检门（不通过即顺延、零轮次消耗，另新增退出码 2）；`job_complete` 排除出错试次（原会把 `reward 0.0` 的环境中断误判为「批次完成」）；harbor `-r 3` → `-r 0`（重试单层归脚本）。口径已同步排期文档 §2/§4/§5/§6/§7.6。
 - 计数：立项登记不动计数（闭合时按本条目入账；结果落档 `docs/audits/TB40_CTR_OPTIMIZATION_FRICTION_PROBE_<date>.md`）。
 
 ## P1 — 可并行审计 / 证据
