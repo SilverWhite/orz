@@ -59,9 +59,9 @@
 | 任务 | 真实 run | reward | 结束方式 |
 |---|---|---|---|
 | path-tracing-reverse | 481 事件 | **1.0 通过** | run_finished:completed（58 轮、journal 16min、**零检索调用**——纯终端 + submit 两阶段，命中 91.63%） |
-| protein-assembly | 464 事件 | 0.0 | 自然结束（题目域，同 R3 形态） |
-| train-fasttext | 717 事件 | 0.0 | 3600s 官方墙钟收尾（长命令，同 R3 形态） |
-| filter-js-from-html | pass-1 572 事件 reward 缺失（FAIL 判据正确）；pass-2 763 事件 | 0.0 | pass-2 自然结束 verifier 判 0 |
+| protein-assembly | 464 事件 | 0.0 | 官方墙钟耗尽 `AgentTimeoutError`（journal 无终止事件，末条为 `tool_completed`；题目域，同 R3 形态） |
+| train-fasttext | 717 事件 | 0.0 | 3600s 官方墙钟耗尽 `AgentTimeoutError`（长命令，同 R3 形态） |
+| filter-js-from-html | pass-1 572 事件 reward 缺失（FAIL 判据正确）；pass-2 763 事件 | 0.0 | pass-2 `run_failed`（模型流中断 `stream interrupted after 0 re-sends`）+ 官方 `AgentTimeoutError`（非自然结束） |
 
 - **官方账面：63（R3）→ 64（R4 model-extraction）→ 65/89（r4b path-tracing-reverse）**。
 - 口径注记：path-tracing-reverse 本轮通过**未经检索车道**（纯终端路径）——R3
@@ -69,6 +69,13 @@
   终端自验解出；「检索主导 4 题」在补跑轮 1/4 翻案，翻案载体是模型路径
   选择而非车道修复。
 - 余额事件收口：四题全部真实试次完成，§3 余额影响边界解除。
+- **结束方式复核（2026-09-10 现场核对，用户质询触发）**：本条初稿把
+  protein-assembly 与 filter-js pass-2 记为「自然结束」，与 `result.json`
+  的 `exception_stats` 和 journal 末条不符，已按证据改写为上表；三题
+  （protein-assembly / train-fasttext / filter-js pass-2）实际均以官方墙钟
+  耗尽 `AgentTimeoutError` 收尾。口径影响：filter-js pass-2 的 0.0 含
+  DeepSeek 流中断成分，**不是干净题面试次**，后续归因按「环境受影响」
+  标注，不作纯题目域证据；path-tracing-reverse 为该批唯一无异常试次。
 - filter-js pass-1 verifier 无 reward（R3 FP-7 verifier 脆弱同族形态），
   结果以 pass-2 为准；执行器硬化判据（journal 真实 run >10 事件）本轮
   生效（余额秒死 stub 均被正确判 FAIL——本轮无 stub 复发，判据为防御性）。

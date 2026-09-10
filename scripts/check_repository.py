@@ -2303,6 +2303,18 @@ def check_repository() -> dict[str, Any]:
     run_event_v02_payload_positive_contracts[
         run_event_v02_payload_root / "tool-completed.output-object.valid.json"
     ] = tool_completed_v02_schema
+    # P0-0v P2-4 / P2-3 (2026-09-10): browser_control SERP refusal completions
+    # carry structured counts — the lane budget refusal (engine navigations per
+    # lane) and the session-floor refusal (engines spent in the shared browser
+    # session). Registered here so the v0.2 payload schema keeps the fields
+    # (GAP-EVENT-SCHEMA-DRIFT class: producer fields without a schema entry).
+    for name in (
+        "tool-completed.serp-budget-exceeded.valid.json",
+        "tool-completed.serp-session-reserved.valid.json",
+    ):
+        run_event_v02_payload_positive_contracts[run_event_v02_payload_root / name] = (
+            tool_completed_v02_schema
+        )
     # ② tool_running v0.2 payload: idle_killed + reason positive & missing-reason negative
     tool_running_v02_schema = (
         ROOT / "runtime/tool-running-event-payload-v0.2.schema.json"

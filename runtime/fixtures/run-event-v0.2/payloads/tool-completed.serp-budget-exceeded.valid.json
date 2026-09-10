@@ -1,0 +1,8 @@
+{
+  "tool": "browser_control",
+  "call_id": "call-serp-budget-1",
+  "status": "error",
+  "error": "browser_control_search_budget_exceeded",
+  "serp_budget_used": 8,
+  "serp_budget_cap": 8
+}

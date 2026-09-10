@@ -64,6 +64,26 @@
       "minimum": 1,
       "description": "FUS-RETRIEVAL-MECH P0-B step 2/4 (2026-08-14): the candidate cap in effect (ORZ_WEB_FETCH_CANDIDATE_CAP, default 8), shared by web_fetch and browser_read. Present together with candidate_count."
     },
+    "serp_budget_used": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "P0-0v P2-4 (2026-09-10): the lane's consumed SERP engine-navigation count at the dispatch-time refusal (browser_control_search_budget_exceeded). Unit is engine navigations, not search calls — one auto search may navigate up to three engines. Present together with serp_budget_cap."
+    },
+    "serp_budget_cap": {
+      "type": "integer",
+      "minimum": 1,
+      "description": "P0-0v P2-4 (2026-09-10): the lane SERP engine-navigation budget in effect (main/grill = 8 per run; external retrieval = 8/16/32 by effort tier). Present together with serp_budget_used."
+    },
+    "serp_session_navigations": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "P0-0v P2-3 (2026-09-10): the browser session's consumed SERP engine-navigation count (shared across lanes, one browser per session) at a refusal that protects the retrieval-lane session floor (browser_control_search_session_reserved). Present together with serp_session_ceiling."
+    },
+    "serp_session_ceiling": {
+      "type": "integer",
+      "minimum": 1,
+      "description": "P0-0v P2-3 (2026-09-10): the browser session's SERP engine-navigation ceiling (SERP_MAX_NAVIGATIONS_PER_SESSION) in effect at that refusal. Present together with serp_session_navigations."
+    },
     "inject_tokens_used": {
       "type": "integer",
       "minimum": 0,
