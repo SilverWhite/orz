@@ -69,6 +69,18 @@ impl EffortTier {
             EffortTier::Deep => None,
         }
     }
+
+    /// P2-4（2026-09-10）：档位检索车道 SERP **引擎导航**预算（每 activation
+    /// 计数，loop 侧预留在派发前、调用结果回来按实际导航数结算）。检索本身
+    /// 要有预算，但不该被过度限制——档位越高额度越大，deep 仍不是无限
+    /// （host 侧另有物理兜底）。
+    pub fn serp_navigation_budget(self) -> u32 {
+        match self {
+            EffortTier::Standard => 8,
+            EffortTier::Extended => 16,
+            EffortTier::Deep => 32,
+        }
+    }
 }
 
 /// 广度/聚合词面（命中即 +0.5，上限 +1）——「调研/比较/总结 全部/多个」等
@@ -268,6 +280,10 @@ mod tests {
         assert_eq!(EffortTier::Standard.browser_read_concurrency(), Some(2));
         assert_eq!(EffortTier::Extended.browser_read_concurrency(), Some(4));
         assert_eq!(EffortTier::Deep.browser_read_concurrency(), None);
+        // P2-4：SERP 引擎导航预算随档位放大（standard < extended < deep）。
+        assert_eq!(EffortTier::Standard.serp_navigation_budget(), 8);
+        assert_eq!(EffortTier::Extended.serp_navigation_budget(), 16);
+        assert_eq!(EffortTier::Deep.serp_navigation_budget(), 32);
     }
 
     #[test]

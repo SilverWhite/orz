@@ -120,6 +120,7 @@ impl ActivationRegistry {
                     status: a.status,
                     tool_rounds_used: a.tool_rounds_used,
                     candidate_urls: a.candidate_urls.clone(),
+                    serp_navigations_used: a.serp_navigations_used,
                     result_digest: a.result_digest.clone(),
                     result_archive_ref: a.result_archive_ref.clone(),
                     next_goal: a.next_goal.clone(),
@@ -219,6 +220,7 @@ impl ActivationRegistry {
                     submitted: Vec::new(),
                     tool_rounds_used: stored.tool_rounds_used,
                     candidate_urls: stored.candidate_urls.clone(),
+                    serp_navigations_used: stored.serp_navigations_used,
                     result_archive_ref: stored.result_archive_ref.clone(),
                     // 恢复激活不携带 effort（下一次派发重新计算并覆盖）。
                     effort: None,
@@ -288,6 +290,13 @@ pub(crate) struct ActivationState {
     /// the cap meaningful). Moved into the dispatch's shared counter while
     /// the subagent loop runs and written back on every path.
     pub candidate_urls: Vec<String>,
+    /// P2-3/P2-2（2026-09-10）：本激活已消耗的 SERP **引擎导航次数**——
+    /// 与 `candidate_urls` 同形：每激活累计、随 sidecar 存活、`continue`
+    /// 重入沿用、close 才清零（新激活从 0 起）。派发时作为
+    /// `SerpSearchBudget` 的初始用量，loop 结束后回写（每条路径都回写，
+    /// 与候选计数一致）——这样"每激活一张额度"在结构上成立，而不是
+    /// "每次派发一张"。
+    pub serp_navigations_used: u32,
     /// GAP-RETRIEVAL-TOOLS (2026-08-10): the committed structured result's
     /// artifact path (ADR-0010 §3.3.5 archive_ref — the close record cites
     /// the real artifact instead of the `run-journal:{run_id}` placeholder).
@@ -350,6 +359,11 @@ pub(crate) struct StoredActivation {
     /// lifecycle). `#[serde(default)]` keeps old sidecars parseable.
     #[serde(default)]
     pub candidate_urls: Vec<String>,
+    /// P2-3/P2-2（2026-09-10）：激活的 SERP 引擎导航用量（与
+    /// `candidate_urls` 同生命周期）。`#[serde(default)]` 让旧 sidecar
+    /// （无该键）可解析，恢复为 0。
+    #[serde(default)]
+    pub serp_navigations_used: u32,
     #[serde(default)]
     pub result_digest: Option<String>,
     #[serde(default)]
@@ -498,6 +512,7 @@ mod tests {
                     "https://a.example".to_string(),
                     "https://b.example".to_string(),
                 ],
+                serp_navigations_used: 3,
                 result_archive_ref: Some(".gsa/runs/RUN-X/retrieval-results/a.json".to_string()),
                 effort: None,
             },
@@ -519,6 +534,7 @@ mod tests {
                 submitted: Vec::new(),
                 tool_rounds_used: 0,
                 candidate_urls: Vec::new(),
+                serp_navigations_used: 0,
                 result_archive_ref: None,
                 effort: None,
             },
@@ -555,6 +571,10 @@ mod tests {
                 "https://b.example".to_string()
             ]
         );
+        // P2-3 (2026-09-10): the SERP engine-navigation usage rides the same
+        // sidecar path as the candidate count — a restored activation resumes
+        // its activation-scoped SERP budget instead of starting a fresh one.
+        assert_eq!(act.serp_navigations_used, 3);
         // GAP-CONVERSATION-RESTORE (2026-08-10): the conversation now rides
         // the sidecar (D-6 update — it round-trips intact); the replay
         // ledger (`submitted`) still does not ride the sidecar.
@@ -586,6 +606,7 @@ mod tests {
                 submitted: Vec::new(),
                 tool_rounds_used: 0,
                 candidate_urls: Vec::new(),
+                serp_navigations_used: 0,
                 result_archive_ref: None,
                 effort: None,
             };
@@ -754,6 +775,7 @@ mod tests {
             submitted: Vec::new(),
             tool_rounds_used: 1,
             candidate_urls: Vec::new(),
+            serp_navigations_used: 2,
             result_archive_ref: None,
             effort: None,
         };
@@ -777,6 +799,7 @@ mod tests {
             restored[0].activation_id,
             "retrieval-internal_retrieval-sess-abc-00"
         );
+        assert_eq!(restored[0].serp_navigations_used, 2);
     }
 
     /// An OLD sidecar (no `conversation` key) still parses — `serde(default)`
@@ -802,6 +825,8 @@ mod tests {
         let restored = registry.seed_from_json(&snapshot);
         assert_eq!(restored.len(), 1);
         assert!(restored[0].conversation.is_empty(), "default empty");
+        // P2-3: an old sidecar without the SERP usage key restores to 0.
+        assert_eq!(restored[0].serp_navigations_used, 0);
         assert!(
             registry
                 .states

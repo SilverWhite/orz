@@ -11,6 +11,7 @@ use serde_json::Value;
 
 use std::sync::Mutex;
 
+use crate::agent_loop::{SERP_SESSION_RETRIEVAL_FLOOR, SerpSearchBudget};
 use crate::blackboard::{ActionOrder, EditRecord, ToolActionRecord};
 use crate::console::{
     CODE_BROWSER_LAUNCH_FAILED, CODE_CONTENT_ANCHOR_MISMATCH, CODE_EXECUTION_FAILED,
@@ -23,9 +24,44 @@ use crate::controller::{
 };
 use crate::gateway::model::{Message, Role, ToolCall};
 use crate::host::{
-    LoopHost, PermitDecision, PolicyDenial, PolicyDenialSource, ToolError, ToolResult,
+    LoopHost, PermitDecision, PolicyDenial, PolicyDenialSource, SerpSessionFacts, ToolError,
+    ToolResult,
 };
 use crate::tool::ToolDispatcher;
+
+/// P2-4 (2026-09-10)：SERP 车道预算耗尽的稳定拒绝码。
+pub(crate) const SERP_BUDGET_EXCEEDED_CODE: &str = "browser_control_search_budget_exceeded";
+
+/// P2-3 (2026-09-10)：主车道侵蚀"为检索车道保留的会话额度"时的稳定拒绝码。
+pub(crate) const SERP_SESSION_FLOOR_CODE: &str = "browser_control_search_session_reserved";
+
+/// P2-4：SERP 预算门的适用谓词——只对 `browser_control` 的 `search` 动作
+/// 计数（navigate/back/forward/refresh/wait_load/snapshot 不消耗 SERP 预算）。
+fn is_serp_search_call(name: &str, args: &Value) -> bool {
+    name == "browser_control" && args.get("action").and_then(Value::as_str) == Some("search")
+}
+
+/// P2-4：从 search 信封读回实际发生的引擎导航数（`status` = ok/failed；
+/// `skipped` 是会话备忘跳过、`pending` 是内部态，两者都不计）。信封不可
+/// 解析时返回 1——保留派发前的预留（失败的调用同样占用了 SERP 机会）。
+fn serp_navigations_from_output(output: &str) -> u32 {
+    let Ok(value) = serde_json::from_str::<Value>(output) else {
+        return 1;
+    };
+    let Some(attempts) = value.get("engine_attempts").and_then(Value::as_array) else {
+        return 1;
+    };
+    let navigated = attempts
+        .iter()
+        .filter(|attempt| {
+            matches!(
+                attempt.get("status").and_then(Value::as_str),
+                Some("ok") | Some("failed")
+            )
+        })
+        .count() as u32;
+    navigated.max(1)
+}
 
 /// 0q（ADR-0010 §14.63）：漏斗 `stamp_failure` 的原始结果形状——调用点
 /// 只如实上报执行/装配结果，盖章与否由漏斗内集中形状谓词裁决。
@@ -371,6 +407,10 @@ impl AgentLoopController {
             heartbeat,
             activation_id,
             fetch_candidates,
+            // P2-4 (2026-09-10): this helper is the test／legacy 12-argument
+            // form; the lane SERP budget rides the plan-gate／timeout
+            // variants that the production loop actually calls.
+            None,
             permission_gated,
             probe_writeback,
             None,
@@ -398,6 +438,7 @@ impl AgentLoopController {
         heartbeat: Option<&crate::gateway::model::ActivityClock>,
         activation_id: Option<&str>,
         fetch_candidates: Option<&Mutex<Vec<String>>>,
+        serp_budget: Option<&Mutex<SerpSearchBudget>>,
         permission_gated: bool,
         probe_writeback: bool,
         plan_gate_attempt: Option<u32>,
@@ -414,6 +455,7 @@ impl AgentLoopController {
             heartbeat,
             activation_id,
             fetch_candidates,
+            serp_budget,
             permission_gated,
             probe_writeback,
             plan_gate_attempt,
@@ -439,6 +481,7 @@ impl AgentLoopController {
         heartbeat: Option<&crate::gateway::model::ActivityClock>,
         activation_id: Option<&str>,
         fetch_candidates: Option<&Mutex<Vec<String>>>,
+        serp_budget: Option<&Mutex<SerpSearchBudget>>,
         permission_gated: bool,
         probe_writeback: bool,
         // PLAN-FIRST 阶段 A (2026-08-16, ADR-0010 §14.17): the first-round
@@ -747,6 +790,52 @@ impl AgentLoopController {
                 }
             }
         }
+        // P2-4 (2026-09-10)：检索车道 SERP 引擎导航预算门——与候选门同族
+        // 形态（派发前决定、无 ToolStarted、拒绝进 Denial 反馈与 LIF deny
+        // 通道）。单位是引擎导航次数；这里只预留 1（预算为 0 即拒），调用
+        // 返回后按信封 `engine_attempts` 的实际导航数结算差额。主车道与
+        // 外部检索车道各自持有独立预算（loop 层注入），互不挤占。
+        let mut serp_reserved = false;
+        if is_serp_search_call(&tc.name, &tc.arguments)
+            && let Some(budget) = serp_budget
+        {
+            // P2-3（2026-09-10）：主车道／grill 先做会话底线检查——为检索
+            // 车道保留的那一段会话额度不得被主车道吃掉。宿主没有车道身份，
+            // 所以事实由宿主上报（`serp_session_facts`），策略在本层施加。
+            // 判定口径与宿主会话上限一致（检查点式，最坏再侵蚀 ≤2 次导航）。
+            // 先取布尔再判，避免在 let-chain 条件里持有 MutexGuard 临时值。
+            let reserves_session_floor = budget.lock().unwrap().reserves_session_floor();
+            if reserves_session_floor
+                && let Some(facts) = host.serp_session_facts().await
+                && facts.headroom() <= SERP_SESSION_RETRIEVAL_FLOOR
+            {
+                let msg = format!(
+                    "browser_control search 已拒绝 — 本会话 SERP 额度中为检索车道保留的\
+                     部分不可占用（会话已用 {used}/{ceiling}，保留 {floor}）",
+                    used = facts.navigations,
+                    ceiling = facts.ceiling,
+                    floor = SERP_SESSION_RETRIEVAL_FLOOR,
+                );
+                return Ok(self
+                    .refuse_serp_session_floor(writer, messages, tc, &msg, facts)
+                    .await?);
+            }
+            // 预留与用量读取分两次短锁（scrutinee 的临时 guard 会活到整个
+            // match 结束，直接在 match 里二次加锁会自锁）。
+            let reservation = budget.lock().unwrap().reserve();
+            match reservation {
+                Ok(()) => serp_reserved = true,
+                Err(()) => {
+                    let (used, cap) = budget.lock().unwrap().usage();
+                    let msg = format!(
+                        "browser_control search 已拒绝 — 本车道 SERP 导航预算已用尽（{used}/{cap}）"
+                    );
+                    return Ok(self
+                        .refuse_serp_budget(writer, messages, tc, &msg, used, cap)
+                        .await?);
+                }
+            }
+        }
         // Permission gate. C2-1 (2026-08-11): lane self-execution skips
         // the bridge entirely (no PermissionRequested/PermissionDecision
         // events) — the explicit retrieval-mode gate above is its
@@ -860,6 +949,10 @@ impl AgentLoopController {
                 && let Some(counter) = fetch_candidates
             {
                 rollback_candidate(counter, &url);
+            }
+            // P2-4：被权限／模式门拒绝的 search 没有发生导航 → 释放预留。
+            if serp_reserved && let Some(budget) = serp_budget {
+                budget.lock().unwrap().rollback();
             }
             // P2-10 R2 (2026-08-31): permission deny/defer = deny event.
             self.feed_lif_deny(None);
@@ -1156,6 +1249,13 @@ impl AgentLoopController {
                     && let Some(counter) = fetch_candidates
                 {
                     rollback_candidate(counter, &url);
+                }
+                // P2-4 复审 P2-6（2026-09-10）：SERP 预留与候选占位同族，
+                // 票据拒绝（从未执行）同样释放。当前 `browser_control` 不在
+                // `action_kind_for_tool` 映射里、本分支对它不可达；此处是
+                // 形态对齐的防御（一旦它纳入票据面，额度不会静默多计）。
+                if serp_reserved && let Some(budget) = serp_budget {
+                    budget.lock().unwrap().rollback();
                 }
                 return self
                     .refuse_ticketed_tool(writer, messages, tc, &gate, probe_writeback)
@@ -3571,6 +3671,20 @@ impl AgentLoopController {
             }
         };
 
+        // P2-4 (2026-09-10)：按信封里实际发生的引擎导航数结算预算差额
+        // （预留的 1 已计入）。信封不可解析（调用失败／被超时树杀）时保留
+        // 预留的 1——失败的调用同样占用了车道的 SERP 机会。
+        // P3-1 复审注（2026-09-10）：`browser_control search` 的动作级失败
+        // 走 Ok 臂的错误信封（`action_status=error`，exit_code 仍为 0），
+        // 所以宿主错误臂（非信封文本）实际只覆盖"浏览器未启动/未导航"的
+        // 情形——此时保留 1 次预留是保守且诚实的一侧；真实打过多引擎却
+        // 以非信封失败收场的路径当前不存在，若日后出现需把导航数改为由
+        // 宿主事实回传，而不是靠信封解析。
+        if serp_reserved && let Some(budget) = serp_budget {
+            let navigations = serp_navigations_from_output(&result.output);
+            budget.lock().unwrap().settle(navigations);
+        }
+
         // FUS-RETRIEVAL-MECH P0-B step 2 (2026-08-14): mechanical count
         // feedback rides the web_fetch tool result (design §1.2) — the
         // model decides full vs keyword fetch under a known budget. It is
@@ -3710,6 +3824,124 @@ impl AgentLoopController {
                 .await
             }
         }
+    }
+
+    /// P2-4 (2026-09-10)：SERP 车道预算耗尽的派发前拒绝——与候选门同形
+    /// （无 ToolStarted、中性陈述、Denied 反馈进连续拒绝断路器、LIF deny
+    /// 通道 + 结构化错误码），单位是引擎导航次数。
+    async fn refuse_serp_budget(
+        &self,
+        writer: &mut EventWriter<'_>,
+        messages: &mut Vec<Message>,
+        tc: &ToolCall,
+        msg: &str,
+        used: u32,
+        cap: u32,
+    ) -> Result<(ToolResult, Option<PolicyFeedback>), AgentLoopError> {
+        let code = SERP_BUDGET_EXCEEDED_CODE;
+        let mut payload = serde_json::json!({
+            "tool": tc.name,
+            "call_id": tc.call_id,
+            "status": "error",
+            "error": code,
+            "serp_budget_used": used,
+            "serp_budget_cap": cap,
+        });
+        // 0q：拒绝完成同样过单一漏斗（该码不在聚合白名单 → 形状如实；
+        // browser_control 非身份可及工具，不落 failure_agg_absent 标记）。
+        self.stamp_failure(
+            &mut payload,
+            &tc.name,
+            &tc.arguments,
+            ToolFailureOutcome::Refused(code),
+        );
+        self.feed_lif_deny(None);
+        writer.record(EventType::ToolCompleted, payload).await?;
+        messages.push(Message {
+            role: Role::Tool,
+            content: msg.to_string(),
+            tool_call_id: Some(tc.call_id.clone()),
+            tool_calls: Vec::new(),
+            reasoning_content: None,
+            round: None,
+        });
+        Ok((
+            ToolResult {
+                output: msg.to_string(),
+                exit_code: Some(1),
+                output_encoding: None,
+                structured: Some(serde_json::json!({
+                    "error": code,
+                    "serp_budget_used": used,
+                    "serp_budget_cap": cap,
+                })),
+                ..Default::default()
+            },
+            Some(PolicyFeedback::Denied(DenialKey {
+                tool_name: tc.name.clone(),
+                reason_code: code.to_string(),
+                policy_revision: self.policy_revision(),
+            })),
+        ))
+    }
+
+    /// P2-3（2026-09-10）：主车道侵蚀检索车道会话底线额度的派发前拒绝——
+    /// 与 [`Self::refuse_serp_budget`] 同形（无 ToolStarted、中性陈述、
+    /// Denied 反馈、LIF deny 通道、结构化字段），但记的是**会话**头寸
+    /// （跨车道共享的物理计数器），不是本车道额度。
+    async fn refuse_serp_session_floor(
+        &self,
+        writer: &mut EventWriter<'_>,
+        messages: &mut Vec<Message>,
+        tc: &ToolCall,
+        msg: &str,
+        facts: SerpSessionFacts,
+    ) -> Result<(ToolResult, Option<PolicyFeedback>), AgentLoopError> {
+        let code = SERP_SESSION_FLOOR_CODE;
+        let mut payload = serde_json::json!({
+            "tool": tc.name,
+            "call_id": tc.call_id,
+            "status": "error",
+            "error": code,
+            "serp_session_navigations": facts.navigations,
+            "serp_session_ceiling": facts.ceiling,
+        });
+        // 0q：拒绝完成同样过单一漏斗（browser_control 非身份可及工具，
+        // 不落 failure_agg_absent 标记）。
+        self.stamp_failure(
+            &mut payload,
+            &tc.name,
+            &tc.arguments,
+            ToolFailureOutcome::Refused(code),
+        );
+        self.feed_lif_deny(None);
+        writer.record(EventType::ToolCompleted, payload).await?;
+        messages.push(Message {
+            role: Role::Tool,
+            content: msg.to_string(),
+            tool_call_id: Some(tc.call_id.clone()),
+            tool_calls: Vec::new(),
+            reasoning_content: None,
+            round: None,
+        });
+        Ok((
+            ToolResult {
+                output: msg.to_string(),
+                exit_code: Some(1),
+                output_encoding: None,
+                structured: Some(serde_json::json!({
+                    "error": code,
+                    "serp_session_navigations": facts.navigations,
+                    "serp_session_ceiling": facts.ceiling,
+                })),
+                ..Default::default()
+            },
+            Some(PolicyFeedback::Denied(DenialKey {
+                tool_name: tc.name.clone(),
+                reason_code: code.to_string(),
+                policy_revision: self.policy_revision(),
+            })),
+        ))
     }
 
     /// Shared no-ToolStarted refusal for the candidate gate — event +

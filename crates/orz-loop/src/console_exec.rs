@@ -117,6 +117,9 @@ impl AgentLoopController {
                 heartbeat,
                 None,
                 None,
+                // P2-4 (2026-09-10): console issuance has no lane SERP
+                // budget — the host-side session ceiling still applies.
+                None,
                 true,
                 true,
                 // PLAN-FIRST 阶段 A (2026-08-16): console issuance runs

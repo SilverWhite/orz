@@ -257,6 +257,251 @@ pub(crate) fn request_header_payload(
 
 /// Role-specific loop semantics (ADR-0010 §3.2 — the ONLY difference surface
 /// between the three agents' loop execution).
+/// P2-4（2026-09-10）：SERP **引擎导航**预算（每个车道／每个检索 activation
+/// 一个实例；主车道每个 run 一个实例）。
+///
+/// 单位是「引擎导航次数」而不是「search 调用次数」：一次 `auto` 调用可能
+/// 依次打 Google→Bing→DDG，按调用计数会低估真实 SERP 流量。计费模型 =
+/// 派发前预留 1（预算为 0 即拒绝，与候选门同族形态），调用返回后按信封里的
+/// `engine_attempts` 实际导航数结算差额——多引擎调用最多只短暂超发 ≤2，
+/// 由 host 侧物理兜底上限封住。
+///
+/// 为什么在 loop 层而不是 host：车道身份只在 loop 层可知（宿主工具接口不带
+/// role），而预算必须按车道独立——否则主车道的探索会挤占检索车道的额度
+/// （2026-09-10 复审 P2-4）。
+#[derive(Debug)]
+pub struct SerpSearchBudget {
+    cap: u32,
+    used: u32,
+    /// P2-3（2026-09-10）：主车道／grill = `true`——本车道的会话头寸受
+    /// [`SERP_SESSION_RETRIEVAL_FLOOR`] 约束（不得吃掉为检索车道保留的
+    /// 那一段会话额度）；外部检索车道 = `false`（它就是被保留的一方）。
+    reserves_session_floor: bool,
+}
+
+/// 主车道（含 grill）每个 run 的 SERP 导航预算。
+pub const MAIN_SERP_NAVIGATION_BUDGET: u32 = 8;
+
+/// P2-3（2026-09-10）：浏览器会话里**为检索车道保留**的引擎导航底线额度。
+///
+/// 会话上限是跨车道共享的物理面（每会话一个浏览器实例）；主车道每个 run
+/// 都拿一张独立额度、且一个会话可以有多个 run，若不设底线，主车道的探索
+/// 会把整会话额度吃光，检索车道随后只能收到宿主的
+/// `browser_control_search_cap_exceeded`。本常量表达"检索至少拿得到一次
+/// standard（8）或 extended（16）档激活的量"；deep（32/40）超出该底线，
+/// 属尽力而为（设计 §3.2.5 已登记该边界）。
+///
+/// 判定口径与宿主会话上限一致，是**检查点式**：派发前读取会话头寸，头寸
+/// ≤ 本常量即拒绝主车道的 search；单次多引擎调用最多再侵蚀 ≤2 次导航
+/// （与会话上限的最坏超发同量级）。
+pub const SERP_SESSION_RETRIEVAL_FLOOR: u32 = 16;
+
+impl SerpSearchBudget {
+    pub fn new(cap: u32) -> Self {
+        Self::build(cap, false)
+    }
+
+    /// P2-3：主车道／grill 形态——会话头寸受检索底线约束。
+    pub fn for_main_lane(cap: u32) -> Self {
+        Self::build(cap, true)
+    }
+
+    /// P2-3/P2-2（2026-09-10）：以本激活**已消耗**的引擎导航数为初始用量
+    /// 构造（`continue` 重入与 sidecar 恢复沿用同一额度，不重置）。档位
+    /// 下调时把旧用量钳到新上限——已用尽的额度保持"用尽"语义。
+    pub fn with_used(cap: u32, used: u32) -> Self {
+        let mut budget = Self::new(cap);
+        budget.used = used.min(budget.cap);
+        budget
+    }
+
+    fn build(cap: u32, reserves_session_floor: bool) -> Self {
+        Self {
+            cap: cap.max(1),
+            used: 0,
+            reserves_session_floor,
+        }
+    }
+
+    /// 本额度是否必须为检索车道保留会话底线（主车道／grill 为真）。
+    pub fn reserves_session_floor(&self) -> bool {
+        self.reserves_session_floor
+    }
+
+    /// 已消耗的引擎导航次数（激活写回用）。
+    pub fn used(&self) -> u32 {
+        self.used
+    }
+
+    pub fn remaining(&self) -> u32 {
+        self.cap.saturating_sub(self.used)
+    }
+
+    pub fn usage(&self) -> (u32, u32) {
+        (self.used, self.cap)
+    }
+
+    /// 派发前预留 1 次导航；预算为 0 时拒绝（用量经 `usage()` 读取）。
+    pub fn reserve(&mut self) -> Result<(), ()> {
+        if self.remaining() == 0 {
+            return Err(());
+        }
+        self.used = self.used.saturating_add(1);
+        Ok(())
+    }
+
+    /// 调用返回后按实际导航数结算（预留的 1 已计入，只补差额）。
+    pub fn settle(&mut self, navigations: u32) {
+        let extra = navigations.saturating_sub(1);
+        self.used = self.used.saturating_add(extra).min(self.cap);
+    }
+
+    /// 调用被权限／模式门拒绝、从未执行时释放预留（候选门 rollback 同义）。
+    pub fn rollback(&mut self) {
+        self.used = self.used.saturating_sub(1);
+    }
+}
+
+#[cfg(test)]
+mod serp_budget_tests {
+    use super::{
+        LoopProfile, MAIN_SERP_NAVIGATION_BUDGET, SERP_SESSION_RETRIEVAL_FLOOR, SerpSearchBudget,
+    };
+
+    #[test]
+    fn reserve_exhausts_and_reports_usage() {
+        let mut budget = SerpSearchBudget::new(2);
+        assert_eq!(budget.usage(), (0, 2));
+        assert_eq!(budget.remaining(), 2);
+        assert!(budget.reserve().is_ok());
+        assert_eq!(budget.usage(), (1, 2));
+        assert!(budget.reserve().is_ok());
+        assert_eq!(budget.usage(), (2, 2));
+        assert_eq!(budget.reserve(), Err(()));
+    }
+
+    #[test]
+    fn settle_charges_only_the_extra_navigations_and_clamps() {
+        let mut budget = SerpSearchBudget::new(4);
+        assert!(budget.reserve().is_ok());
+        // 一次三引擎 fallback：预留 1 + 结算补 2。
+        budget.settle(3);
+        assert_eq!(budget.usage(), (3, 4));
+        // 单引擎成功：预留 1 已足够，不再补。
+        assert!(budget.reserve().is_ok());
+        budget.settle(1);
+        assert_eq!(budget.usage(), (4, 4));
+        // 越界结算钳制在 cap，不产生 used > cap 的伪状态。
+        budget.settle(9);
+        assert_eq!(budget.usage(), (4, 4));
+    }
+
+    #[test]
+    fn rollback_releases_a_reservation_for_never_executed_calls() {
+        let mut budget = SerpSearchBudget::new(3);
+        assert!(budget.reserve().is_ok());
+        assert_eq!(budget.usage(), (1, 3));
+        budget.rollback();
+        assert_eq!(budget.usage(), (0, 3));
+        // 空预算上回滚不会下溢。
+        budget.rollback();
+        assert_eq!(budget.usage(), (0, 3));
+    }
+
+    /// P2-3/P2-2：激活已消耗的导航数作为初始用量承接（`continue` 重入与
+    /// sidecar 恢复不重置额度）；档位下调时钳到新上限，保持"用尽"语义。
+    #[test]
+    fn with_used_carries_the_activation_usage_and_clamps_it() {
+        let mut budget = SerpSearchBudget::with_used(8, 3);
+        assert_eq!(budget.usage(), (3, 8));
+        assert!(budget.reserve().is_ok());
+        budget.settle(3);
+        assert_eq!(budget.usage(), (6, 8));
+
+        // 档位下调（extended → standard）时旧用量被钳到新上限。
+        let mut exhausted = SerpSearchBudget::with_used(8, 16);
+        assert_eq!(exhausted.usage(), (8, 8));
+        assert_eq!(exhausted.reserve(), Err(()));
+
+        // 承接用量的额度同样不承担会话底线保留（只有主车道形态承担）。
+        assert!(!budget.reserves_session_floor());
+    }
+
+    #[test]
+    fn zero_cap_still_admits_exactly_one_navigation() {
+        let mut budget = SerpSearchBudget::new(0);
+        assert_eq!(budget.usage(), (0, 1));
+        assert!(budget.reserve().is_ok());
+        assert_eq!(budget.reserve(), Err(()));
+        assert_eq!(budget.usage(), (1, 1));
+    }
+
+    /// P2-4：主车道与 grill 各自持有独立预算实例——一个车道花掉的额度不会
+    /// 影响另一个（同理，外部检索车道的额度与主车道互不挤占）。
+    #[test]
+    fn main_and_grill_lanes_get_independent_budgets() {
+        let main = LoopProfile::main(5);
+        let grill = LoopProfile::grill(5);
+        let main_budget = main.serp_budget.clone().expect("main carries a budget");
+        let grill_budget = grill.serp_budget.clone().expect("grill carries a budget");
+        assert_eq!(
+            main_budget.lock().unwrap().usage(),
+            (0, MAIN_SERP_NAVIGATION_BUDGET)
+        );
+        assert!(main_budget.lock().unwrap().reserve().is_ok());
+        assert_eq!(
+            grill_budget.lock().unwrap().usage(),
+            (0, MAIN_SERP_NAVIGATION_BUDGET),
+            "grill budget must not observe the main lane's usage"
+        );
+        assert_eq!(
+            main_budget.lock().unwrap().usage(),
+            (1, MAIN_SERP_NAVIGATION_BUDGET)
+        );
+    }
+
+    /// P2-3：主车道／grill 的额度带"会话底线保留"标记（派发前受
+    /// [`SERP_SESSION_RETRIEVAL_FLOOR`] 约束）；检索车道形态不带该标记
+    /// （它不是被保留的一方，会话物理上限仍由宿主把守）。
+    #[test]
+    fn session_floor_reservation_is_a_main_lane_attribute() {
+        let main = LoopProfile::main(5);
+        let grill = LoopProfile::grill(5);
+        assert!(
+            main.serp_budget
+                .clone()
+                .expect("main carries a budget")
+                .lock()
+                .unwrap()
+                .reserves_session_floor()
+        );
+        assert!(
+            grill
+                .serp_budget
+                .clone()
+                .expect("grill carries a budget")
+                .lock()
+                .unwrap()
+                .reserves_session_floor()
+        );
+        assert!(!SerpSearchBudget::new(8).reserves_session_floor());
+
+        // 底线本身必须低于会话上限量级，并为检索留出 ≥ 一次 standard 档。
+        assert_eq!(SERP_SESSION_RETRIEVAL_FLOOR, 16);
+        assert!(
+            SERP_SESSION_RETRIEVAL_FLOOR >= 8,
+            "covers a standard activation"
+        );
+
+        // `used()` 是激活写回接口（与 usage() 同源）。
+        let mut budget = SerpSearchBudget::new(4);
+        assert_eq!(budget.used(), 0);
+        assert!(budget.reserve().is_ok());
+        budget.settle(3);
+        assert_eq!(budget.used(), 3);
+    }
+}
+
 #[derive(Debug, Clone)]
 pub(crate) struct LoopProfile {
     /// Whose loop this is — gates the main-only surfaces (plan status line,
@@ -307,6 +552,11 @@ pub(crate) struct LoopProfile {
     /// extended 4 / deep None=不限）。主/grill lane 传 `None`。host tab
     /// 池是最终物理上限，本字段只约束 loop 批次内的并发启动。
     pub browser_read_concurrency: Option<usize>,
+    /// P2-4（2026-09-10）：本车道的 SERP 引擎导航预算——主/grill = 每 run
+    /// 一张（独立额度，不再与检索车道抢同一个会话计数器）；外部检索 =
+    /// 每 activation 一张（按 effort 档位取额度）；内部检索 = `None`
+    /// （检索声明面本就无 browser_control）。
+    pub serp_budget: Option<Arc<Mutex<SerpSearchBudget>>>,
 }
 
 impl LoopProfile {
@@ -323,6 +573,9 @@ impl LoopProfile {
             activation_id: None,
             fetch_candidates: None,
             browser_read_concurrency: None,
+            serp_budget: Some(Arc::new(Mutex::new(SerpSearchBudget::for_main_lane(
+                MAIN_SERP_NAVIGATION_BUDGET,
+            )))),
         }
     }
 
@@ -342,6 +595,9 @@ impl LoopProfile {
             activation_id: None,
             fetch_candidates: None,
             browser_read_concurrency: None,
+            serp_budget: Some(Arc::new(Mutex::new(SerpSearchBudget::for_main_lane(
+                MAIN_SERP_NAVIGATION_BUDGET,
+            )))),
         }
     }
 
@@ -353,6 +609,8 @@ impl LoopProfile {
     /// the activation).
     /// 0k 第二批 (2026-08-30)：末尾追加 `browser_read_concurrency` 档位
     /// 参数——8 参数是已登记成本（同 write_close_record 先例）。
+    /// P2-4 (2026-09-10)：再追加 `serp_budget`（每 activation 一张，按
+    /// effort 档位取额度；内部检索恒 `None`）。
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn retrieval(
         role: SubagentRole,
@@ -362,6 +620,7 @@ impl LoopProfile {
         activation_id: &str,
         fetch_candidates: Option<Arc<Mutex<Vec<String>>>>,
         browser_read_concurrency: Option<usize>,
+        serp_budget: Option<Arc<Mutex<SerpSearchBudget>>>,
     ) -> Self {
         let agent_role = match role {
             SubagentRole::InternalRetrieval => AgentRole::InternalRetrieval,
@@ -382,6 +641,7 @@ impl LoopProfile {
             activation_id: Some(activation_id.to_string()),
             fetch_candidates,
             browser_read_concurrency,
+            serp_budget,
         }
     }
 }
@@ -2094,6 +2354,7 @@ pub(crate) async fn run_agent_loop(
                         && profile.tool_filter.denies_nested_dispatch();
                     let permission_gated = !lane_self_execute;
                     let fetch_candidates = profile.fetch_candidates.clone();
+                    let serp_budget = profile.serp_budget.clone();
                     let activation_id = profile.activation_id.clone();
                     futures.push(async move {
                         // 档位并发上限：browser_read 先取 permit 再执行
@@ -2126,6 +2387,7 @@ pub(crate) async fn run_agent_loop(
                                 heartbeat,
                                 activation_id.as_deref(),
                                 fetch_candidates.as_deref(),
+                                serp_budget.as_deref(),
                                 permission_gated,
                                 profile.probe_work_tools,
                                 None,
@@ -2477,6 +2739,11 @@ pub(crate) async fn run_agent_loop(
                                 // the dispatch's web_fetch candidate counter
                                 // (None on main/grill — fails the gate closed).
                                 profile.fetch_candidates.as_deref(),
+                                // P2-4 (2026-09-10): the lane's SERP
+                                // engine-navigation budget (per run on
+                                // main/grill, per activation on the external
+                                // retrieval lane).
+                                profile.serp_budget.as_deref(),
                                 // C2-1 (2026-08-11): lane self-execution skips
                                 // the per-call permission bridge — the mode
                                 // gate is the authorization chain (see the
@@ -3127,6 +3394,7 @@ mod tests {
         // is scope-level at call time (§3.5.2).
         assert_eq!(ToolFilter::Retrieval.write_gate("read_file"), None);
         assert_eq!(ToolFilter::Retrieval.write_gate("web_search"), None);
+        assert_eq!(ToolFilter::Retrieval.write_gate("browser_control"), None);
         // The main lane's gate refuses nothing.
         assert_eq!(ToolFilter::None.write_gate("search_replace"), None);
         assert_eq!(ToolFilter::None.write_gate("bash"), None);

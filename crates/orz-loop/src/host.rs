@@ -271,6 +271,28 @@ pub struct EnvSnapshotFact {
     pub value: String,
 }
 
+/// P2-3（2026-09-10）：宿主侧浏览器会话的 SERP **物理事实**——本会话已
+/// 消耗的引擎导航次数与会话上限（`SERP_MAX_NAVIGATIONS_PER_SESSION`）。
+///
+/// 宿主工具接口不带车道身份（只有 `call_tool(name, args, call_id)`），
+/// 所以"检索车道底线额度"这类**车道策略**只能在 loop 层施加；本类型是
+/// loop 施加策略前需要的唯一机器事实（与 `LiveProcessFact` /
+/// `EnvSnapshotFact` 同族：宿主报事实、loop 做策略，宿主不猜车道）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SerpSessionFacts {
+    /// 本浏览器会话已发生的引擎导航次数（跨车道共享的同一计数器）。
+    pub navigations: u32,
+    /// 本浏览器会话的引擎导航上限（host 侧物理兜底常量）。
+    pub ceiling: u32,
+}
+
+impl SerpSessionFacts {
+    /// 剩余可用导航次数（会话头寸）；饱和减，不产生下溢。
+    pub fn headroom(&self) -> u32 {
+        self.ceiling.saturating_sub(self.navigations)
+    }
+}
+
 /// Lightweight error from tool execution.
 #[derive(Debug, thiserror::Error)]
 pub enum ToolError {
@@ -732,6 +754,17 @@ pub trait LoopHost: Send + Sync {
     /// 已完成任务）。不支持的后端默认空（fail-closed，不伪造）。
     async fn drain_terminal_idle_kills(&self) -> Vec<TerminalIdleKillFact> {
         Vec::new()
+    }
+
+    /// P2-3（2026-09-10）：本会话浏览器 SERP 的物理事实（已用导航 / 会话
+    /// 上限），供 loop 层为检索车道保留底线额度（0v 设计 §3.2.5）。`None`
+    /// （默认）= 该宿主没有浏览器会话或未接入该事实面——此时 loop 不施加
+    /// 底线规则（浏览器缺席的调用按普通失败回传，不由额度面兜）。
+    ///
+    /// 语义边界：本方法只报事实，不做车道判定（宿主没有车道身份）；返回
+    /// 的是**跨车道共享**的同一计数器，宿主不得按调用者分桶。
+    async fn serp_session_facts(&self) -> Option<SerpSessionFacts> {
+        None
     }
 
     /// FUS-TOOL-PROBE P0-A-2: whether a workspace language-service backend

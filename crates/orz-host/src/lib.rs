@@ -1067,6 +1067,19 @@ impl LoopHost for OrzHost {
         crate::env_snapshot::snapshot_env(&self.cwd).await
     }
 
+    /// P2-3（2026-09-10）：会话浏览器 SERP 物理事实——loop 层据此为检索
+    /// 车道保留底线额度。事实源是会话共享的浏览器句柄（跨 run 存活、
+    /// 跨车道共享同一计数器）；无浏览器会话时返回 `None`（loop 不施加
+    /// 底线规则，调用按普通失败回传）。
+    async fn serp_session_facts(&self) -> Option<orz_loop::host::SerpSessionFacts> {
+        let browser = self.browser.lock().unwrap().clone();
+        let (navigations, ceiling) = browser.serp_session_navigations().await?;
+        Some(orz_loop::host::SerpSessionFacts {
+            navigations,
+            ceiling,
+        })
+    }
+
     /// FUS-TOOL-PROBE P0-A-2: the ORZ host currently builds its toolset
     /// with every optional backend disabled (`build_toolset`:
     /// `memory_backend: None`, `lsp: None`, image/video configs

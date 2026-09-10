@@ -92,6 +92,15 @@ impl ToolDispatcher {
             // (auto-allowed under every policy; the mode gate in the
             // controller governs when it is reachable at all).
             || tool_name == "browser_read"
+            // P0-0v (2026-09-10): `browser_control` navigates the session's
+            // headless browser and reports page state / bounded SERP results
+            // — a pure read in the same sense as `browser_read`. The
+            // retrieval write gate previously folded it into LocalMutation
+            // and refused `navigate`/`search` in the external lane; one
+            // classification fix repairs permission gate, action section and
+            // pre-mutation snapshot simultaneously. Future Phase 2
+            // interactive actions (click/type/eval) must re-review this.
+            || tool_name == "browser_control"
         {
             RiskClass::ReadOnly
         } else if tool_name.starts_with("web_") {
@@ -305,6 +314,12 @@ mod tests {
             RiskClass::ReadOnly
         );
         assert!(!ToolDispatcher::modifies_files("browser_read"));
+        assert_eq!(
+            ToolDispatcher::risk_class("browser_control"),
+            RiskClass::ReadOnly
+        );
+        assert!(!ToolDispatcher::modifies_files("browser_control"));
+        assert_eq!(ToolDispatcher::action_category("browser_control"), "read");
         // P0-C S2 (2026-08-15): `blackboard_action_write` writes only the
         // in-memory action-bar slot — ReadOnly class (auto-allowed).
         assert_eq!(

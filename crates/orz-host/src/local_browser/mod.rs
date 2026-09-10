@@ -26,6 +26,7 @@
 
 mod cdp;
 mod discovery;
+mod serp;
 mod url_gate;
 
 use std::collections::HashMap;
@@ -41,6 +42,7 @@ pub use cdp::{CdpBrowserSession, CdpConfig, CdpError, PageReadOutcome};
 pub use discovery::{
     BrowserBinary, DiscoveryError, DiscoveryOrigin, ORZ_BROWSER_PATH_ENV, find_browser,
 };
+pub use serp::{SERP_MAX_SEARCH_QUERY_CHARS, SerpEngineAttempt, SerpResult};
 pub use url_gate::{UrlGateError, check_navigation_url, check_navigation_url_sync};
 
 /// `browser_read` read-scope values (P0-B step 4, 2026-08-14).
@@ -86,12 +88,15 @@ pub enum BrowserControlAction {
     WaitLoad,
     /// 当前页状态观测（url/title/nav_phase + 日志特征）。
     Snapshot,
+    /// 检索引擎 SERP 链（Google → Bing → DuckDuckGo；机械固定 en-US 区域
+    /// 参数）。搜索引擎需求由本动作承载，不加新工具。
+    Search { query: String },
 }
 
 /// 每动作统一返回的机械段（P1 设计 §2.2）——状态 + 真实类别 + 导航阶段 +
 /// url/title + 有界日志特征。`action_status=error` 是**状态化失败**（正常
 /// Ok 回传，FP-2 真实类别，无教学句）；启动层失败才走 `ToolError`。
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Default)]
 pub struct BrowserControlOutcome {
     /// `ok` / `error`。
     pub action_status: String,
@@ -106,6 +111,15 @@ pub struct BrowserControlOutcome {
     /// 有界日志特征——console error/warning + network error 节选，
     /// `[browser_log]` 容器、引用语域、脱敏（P1 设计 §2.2）。
     pub log: String,
+    /// search 动作成功时命中的引擎（非 search 动作恒为 None）。
+    pub engine: Option<String>,
+    /// P2-1（2026-09-10）：search 动作的每引擎尝试明细（成功与失败都携带）
+    /// ——失败时模型据此知道是哪个引擎、以何类别失败。非 search 动作恒为
+    /// None。
+    pub engine_attempts: Option<Vec<SerpEngineAttempt>>,
+    /// search 动作成功时的结构化结果（≤10 条；tier/weight/reason 为
+    /// 低质量来源机械标注，不硬过滤）。非 search 动作恒为 None。
+    pub results: Option<Vec<SerpResult>>,
 }
 
 /// 特征回传边界（P1 设计 §2.2 / §3.2-1）：≤12 行 / ≤2 KiB，超出截断标记。
@@ -183,6 +197,15 @@ pub trait BrowserSession: Send + Sync {
 
     /// True when a browser is actually available (drives tool declaration).
     fn ready(&self) -> bool;
+
+    /// P2-3（2026-09-10）：本会话已消耗的 SERP **引擎导航次数**与会话上限
+    /// （`(navigations, ceiling)`）。宿主把它作为机械事实上报给 loop，loop
+    /// 据此为检索车道保留底线额度（0v 设计 §3.2.5）——车道策略不在本层
+    /// （宿主没有车道身份）。`None`（默认）= 该实现没有 SERP 会话计数器
+    /// （unavailable/stub 形态）；返回的是**跨车道共享**的同一计数器。
+    async fn serp_session_navigations(&self) -> Option<(u32, u32)> {
+        None
+    }
 
     /// Session teardown: kill the process tree, best-effort remove the
     /// profile directory.
@@ -267,6 +290,13 @@ impl BrowserSession for LocalBrowserManager {
             .try_lock()
             .map(|g| g.as_ref().is_some_and(|s| s.is_alive()))
             .unwrap_or(false)
+    }
+
+    /// P2-3：转发会话内部的 SERP 计数器（跨 run 存活；锁内 clone、锁外
+    /// 读取，与 read_page/control 同一纪律）。
+    async fn serp_session_navigations(&self) -> Option<(u32, u32)> {
+        let session = self.inner.lock().await.clone()?;
+        Some(session.serp_session_navigations())
     }
 
     async fn shutdown(&self) {
@@ -639,7 +669,9 @@ pub fn browser_control_tool_def() -> ToolDef {
         name: "browser_control".to_string(),
         description: "Control the local browser lane: navigate to a URL, \
              go back/forward in history, refresh, wait for load, or snapshot \
-             the current page state. Each action returns action_status + a \
+             the current page state, or run a bounded search-engine SERP \
+             lookup (Google → Bing → DuckDuckGo, fixed en-US region). Each \
+             action returns action_status + a \
              real error class (dns / connection_reset / timeout / blocked / \
              certificate / other) + navigation phase + current url/title + a \
              bounded [browser_log] excerpt (console/network errors only, \
@@ -653,17 +685,26 @@ pub fn browser_control_tool_def() -> ToolDef {
             "properties": {
                 "action": {
                     "type": "string",
-                    "enum": ["navigate", "back", "forward", "refresh", "wait_load", "snapshot"],
+                    "enum": ["navigate", "back", "forward", "refresh", "wait_load", "snapshot", "search"],
                     "description": "Action to perform: navigate(url) direct \
                         navigation; back/forward history; refresh reloads the \
                         current page; wait_load waits up to timeout_secs for \
                         load/text readiness; snapshot reports the current page \
-                        state without navigating.",
+                        state without navigating; search(query) runs the fixed \
+                        Google → Bing → DuckDuckGo SERP chain and returns up \
+                        to 10 weighted organic results.",
                 },
                 "url": {
                     "type": "string",
                     "description": "Required when action=navigate: public \
                         http(s) URL to navigate to.",
+                },
+                "query": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 500,
+                    "description": "Required when action=search: the search \
+                        query sent to the fixed engine chain.",
                 },
                 "timeout_secs": {
                     "type": "integer",
@@ -695,7 +736,7 @@ pub async fn handle_browser_control(
     })?;
     let unknown: Vec<&String> = obj
         .keys()
-        .filter(|k| !matches!(k.as_str(), "action" | "url" | "timeout_secs"))
+        .filter(|k| !matches!(k.as_str(), "action" | "url" | "query" | "timeout_secs"))
         .collect();
     if !unknown.is_empty() {
         return Err(ToolError::ExecutionFailed(format!(
@@ -762,11 +803,36 @@ pub async fn handle_browser_control(
             reject_url_for_action(action_name, &obj)?;
             BrowserControlAction::Snapshot
         }
+        "search" => {
+            reject_url_for_action(action_name, &obj)?;
+            let query = obj
+                .get("query")
+                .and_then(|v| v.as_str())
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .ok_or_else(|| {
+                    ToolError::ExecutionFailed(
+                        "browser_control failed [browser_control_missing_query]: \
+                         action=search requires a non-empty `query` argument"
+                            .to_string(),
+                    )
+                })?;
+            if query.chars().count() > SERP_MAX_SEARCH_QUERY_CHARS {
+                return Err(ToolError::ExecutionFailed(format!(
+                    "browser_control failed [browser_control_invalid_arguments]: \
+                     `query` must be at most {SERP_MAX_SEARCH_QUERY_CHARS} chars"
+                )));
+            }
+            BrowserControlAction::Search {
+                query: query.to_string(),
+            }
+        }
         _ => {
             return Err(ToolError::ExecutionFailed(format!(
                 "browser_control failed [browser_control_invalid_arguments]: \
                  `action` must be one of \"navigate\", \"back\", \"forward\", \
-                 \"refresh\", \"wait_load\" or \"snapshot\" (got {action_name})"
+                 \"refresh\", \"wait_load\", \"snapshot\" or \"search\" \
+                 (got {action_name})"
             )));
         }
     };
@@ -795,15 +861,27 @@ pub async fn handle_browser_control(
                 "browser_control failed [browser_control_failed]: {e}"
             ))
         })?;
-    let out = json!({
+    let mut out = json!({
         "action": action_name,
         "action_status": outcome.action_status,
         "error_class": outcome.error_class,
         "nav_phase": outcome.nav_phase,
-        "url": outcome.url,
-        "title": outcome.title,
         "log": outcome.log,
     });
+    if action_name == "search" {
+        if let Some(engine) = outcome.engine {
+            out["engine"] = json!(engine);
+        }
+        if let Some(attempts) = outcome.engine_attempts {
+            out["engine_attempts"] = json!(attempts);
+        }
+        if let Some(results) = outcome.results {
+            out["results"] = json!(results);
+        }
+    } else {
+        out["url"] = json!(outcome.url);
+        out["title"] = json!(outcome.title);
+    }
     Ok(ToolResult {
         output: serde_json::to_string(&out)
             .map_err(|e| ToolError::ExecutionFailed(format!("browser_control serialize: {e}")))?,
@@ -1423,6 +1501,7 @@ pub(crate) mod tests {
                 url: None,
                 title: None,
                 log: String::new(),
+                ..Default::default()
             })
         }
 
@@ -1510,6 +1589,7 @@ pub(crate) mod tests {
             url: url.map(str::to_string),
             title: Some("Example".to_string()),
             log: bounded_browser_log(&log_lines),
+            ..Default::default()
         }
     }
 
@@ -1576,6 +1656,101 @@ pub(crate) mod tests {
         assert_eq!(parsed["nav_phase"], "error");
     }
 
+    /// P0-0v：search 信封不携带 navigate 的 url/title，携带 engine/results；
+    /// low_quality 结果保留（不硬过滤），且带 tier/weight/reason 标注。
+    #[tokio::test]
+    async fn browser_control_search_envelope_carries_weighted_results() {
+        let browser = ControlScriptedBrowser {
+            outcome: Ok(BrowserControlOutcome {
+                action_status: "ok".to_string(),
+                error_class: None,
+                nav_phase: "completed".to_string(),
+                url: Some("https://example.com/should-not-appear".to_string()),
+                title: Some("should-not-appear".to_string()),
+                log: String::new(),
+                engine: Some("bing".to_string()),
+                engine_attempts: Some(vec![
+                    SerpEngineAttempt {
+                        engine: super::serp::SerpEngine::Google,
+                        status: "failed",
+                        error_class: Some("network".to_string()),
+                        reason: Some("timeout".to_string()),
+                    },
+                    SerpEngineAttempt {
+                        engine: super::serp::SerpEngine::Bing,
+                        status: "ok",
+                        error_class: None,
+                        reason: None,
+                    },
+                ]),
+                results: Some(vec![SerpResult {
+                    title: "low quality".to_string(),
+                    url: "https://blog.csdn.net/a".to_string(),
+                    snippet: "still visible".to_string(),
+                    tier: "low_quality",
+                    weight: 0.7,
+                    reason: "low_quality_platform:csdn.net".to_string(),
+                }]),
+            }),
+        };
+        let result = handle_browser_control(
+            &browser,
+            &json!({"action": "search", "query": "rust borrow checker"}),
+        )
+        .await
+        .unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(&result.output).unwrap();
+        assert_eq!(parsed["action"], "search");
+        assert_eq!(parsed["action_status"], "ok");
+        assert_eq!(parsed["engine"], "bing");
+        assert_eq!(parsed["results"][0]["tier"], "low_quality");
+        assert_eq!(parsed["results"][0]["weight"], 0.7);
+        assert_eq!(parsed["engine_attempts"][0]["engine"], "google");
+        assert_eq!(parsed["engine_attempts"][0]["status"], "failed");
+        assert_eq!(parsed["engine_attempts"][1]["engine"], "bing");
+        assert!(parsed.get("url").is_none(), "{parsed}");
+        assert!(parsed.get("title").is_none(), "{parsed}");
+    }
+
+    /// P2-1：search 失败信封必须标注引擎——失败时模型要能分辨「是哪个
+    /// 引擎、以何类别失败」，而不是只看到一个笼统的 all_engines_failed。
+    #[tokio::test]
+    async fn browser_control_search_failure_names_the_engine() {
+        let browser = ControlScriptedBrowser {
+            outcome: Ok(BrowserControlOutcome {
+                action_status: "error".to_string(),
+                error_class: Some("all_engines_failed".to_string()),
+                nav_phase: "error".to_string(),
+                log: "[browser_log]\n  error: all SERP engines failed for this session".to_string(),
+                engine_attempts: Some(vec![
+                    SerpEngineAttempt {
+                        engine: super::serp::SerpEngine::Google,
+                        status: "failed",
+                        error_class: Some("network".to_string()),
+                        reason: Some("timeout".to_string()),
+                    },
+                    SerpEngineAttempt {
+                        engine: super::serp::SerpEngine::Bing,
+                        status: "failed",
+                        error_class: Some("captcha".to_string()),
+                        reason: Some("search bing hit CAPTCHA/consent".to_string()),
+                    },
+                ]),
+                ..Default::default()
+            }),
+        };
+        let result =
+            handle_browser_control(&browser, &json!({"action": "search", "query": "rust"}))
+                .await
+                .unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(&result.output).unwrap();
+        assert_eq!(parsed["action_status"], "error");
+        assert_eq!(parsed["error_class"], "all_engines_failed");
+        assert_eq!(parsed["engine_attempts"][0]["engine"], "google");
+        assert_eq!(parsed["engine_attempts"][1]["engine"], "bing");
+        assert_eq!(parsed["engine_attempts"][1]["error_class"], "captcha");
+    }
+
     /// S2-R P3 / P1-2b：严格参数解析——缺 action/url、非 navigate 带
     /// url、非法 timeout 均显式拒绝（稳定码前缀，无静默容错）。
     #[tokio::test]
@@ -1596,6 +1771,11 @@ pub(crate) mod tests {
             ),
             (
                 json!({"action": "snapshot", "timeout_secs": 99}),
+                "browser_control_invalid_arguments",
+            ),
+            (json!({"action": "search"}), "browser_control_missing_query"),
+            (
+                json!({"action": "search", "query": "rust", "url": "https://example.com"}),
                 "browser_control_invalid_arguments",
             ),
             (
@@ -1662,10 +1842,13 @@ pub(crate) mod tests {
                 "forward",
                 "refresh",
                 "wait_load",
-                "snapshot"
+                "snapshot",
+                "search"
             ]
         );
         assert!(props["url"].is_object());
+        assert!(props["query"].is_object());
+        assert_eq!(props["query"]["maxLength"], 500);
         assert_eq!(def.parameters["required"][0], "action");
     }
 
@@ -2024,6 +2207,14 @@ pub(crate) mod tests {
             .await
             .unwrap_err();
         assert!(err.to_string().contains("browser unavailable"), "{err}");
+    }
+
+    /// P2-3（2026-09-10）：无浏览器会话不报 SERP 事实——loop 因此不施加
+    /// "检索保留额度"规则（浏览器缺席的调用按普通失败回传，不由额度面兜）。
+    #[tokio::test]
+    async fn unavailable_session_reports_no_serp_facts() {
+        let browser = UnavailableBrowserSession::new("browser_launch_failed: test".into());
+        assert_eq!(browser.serp_session_navigations().await, None);
     }
 
     /// Windows 盘符路径语义（Linux 上 `C:\` 是相对路径，行为不同）。

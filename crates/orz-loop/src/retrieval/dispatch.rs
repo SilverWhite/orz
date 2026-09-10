@@ -258,6 +258,7 @@ impl AgentLoopController {
                             // §1.1: reset only on activation close).
                             tool_rounds_used: 0,
                             candidate_urls: Vec::new(),
+                            serp_navigations_used: 0,
                             result_archive_ref: None,
                             effort: Some(effort),
                         },
@@ -276,6 +277,20 @@ impl AgentLoopController {
         // a new activation starts empty (design §1.1: per-activation
         // accumulation, reset only on close).
         let fetch_candidates = Arc::new(Mutex::new(std::mem::take(&mut act.candidate_urls)));
+        // P2-4 + P2-2/P2-3（2026-09-10）：检索车道 SERP 引擎导航预算——
+        // 按 effort 档位取额度，**初始用量承接本激活已消耗的导航数**
+        // （`continue` 重入与 sidecar 恢复不重置；与候选计数同形），loop
+        // 结束后回写。内部检索恒 `None`——其声明面没有 browser_control，
+        // 预算无意义（宿主物理上限仍照旧）。
+        let serp_budget: Option<Arc<Mutex<crate::agent_loop::SerpSearchBudget>>> = match role {
+            SubagentRole::ExternalRetrieval => Some(Arc::new(Mutex::new(
+                crate::agent_loop::SerpSearchBudget::with_used(
+                    effort.serp_navigation_budget(),
+                    act.serp_navigations_used,
+                ),
+            ))),
+            SubagentRole::InternalRetrieval => None,
+        };
 
         // The subagent's tool projection = the parent's registry minus the
         // main-only control/whitelist tools (the retrieval lane never sees
@@ -356,6 +371,9 @@ impl AgentLoopController {
             // 第二批分档：同轮 browser_read 并行上限（standard 2 /
             // extended 4 / deep 不限——host tab 池为最终物理上限）。
             effort.browser_read_concurrency(),
+            // P2-4 + P2-2（2026-09-10）：本车道（每激活）的 SERP 引擎导航
+            // 预算——上面已按激活已用量构造，这里只把同一 Arc 交给 profile。
+            serp_budget.clone(),
         );
         // Box::pin: the subagent loop is a recursive call through the
         // dispatch edge (main loop → subagent loop; depth is capped at one
@@ -518,6 +536,12 @@ impl AgentLoopController {
         // path — success, error and cancel keep the count; the close
         // record still observes the consumed candidates).
         act.candidate_urls = std::mem::take(&mut *fetch_candidates.lock().unwrap());
+        // P2-3/P2-2（2026-09-10）：SERP 引擎导航用量同样每条路径回写——
+        // 与候选计数同生命周期（每激活累计、close 才清零），这样"每激活
+        // 一张额度"在结构上成立，而不是"每次派发一张"。
+        if let Some(budget) = &serp_budget {
+            act.serp_navigations_used = budget.lock().unwrap().used();
+        }
 
         // Re-insert the activation — the conversation is preserved on every
         // path (§4.4: journal, docs, ledger, receipts never deleted).
@@ -1895,6 +1919,425 @@ mod tests {
                     && e.payload.get("call_id").and_then(|v| v.as_str()) == Some("call-8")
             }),
             "refused web_fetch must not start"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// P2-4 (2026-09-10)：检索车道 SERP 引擎导航预算——派发前预留 1、按
+    /// 信封 `engine_attempts` 的实际导航数结算、预算耗尽的调用派发前拒绝
+    /// （无 ToolStarted、Denied 反馈、结构化 serp_budget_used/cap）。主车道
+    /// 与检索车道各持独立预算，取值由 loop 层注入——本测试只验证门与结算。
+    #[tokio::test]
+    async fn serp_budget_gate_reserves_settles_and_refuses_at_zero() {
+        let dir = test_dir();
+        let journal = JournalRecorder::new(dir.clone());
+        let search_envelope = serde_json::json!({
+            "action": "search",
+            "action_status": "ok",
+            "engine": "duckduckgo",
+            "engine_attempts": [
+                {"engine": "google", "status": "failed", "error_class": "network"},
+                {"engine": "bing", "status": "failed", "error_class": "captcha"},
+                {"engine": "duckduckgo", "status": "ok"},
+            ],
+            "results": [],
+        })
+        .to_string();
+        let host = TestHost {
+            journal: journal.clone(),
+            tool_result: Some(ToolResult {
+                output: search_envelope,
+                exit_code: Some(0),
+                output_encoding: None,
+                structured: None,
+                ..Default::default()
+            }),
+        };
+        let controller = with_retrieval_enabled(AgentLoopController::with_gateway(Arc::new(
+            FakeProvider::new(vec![ScriptedResponse::text("x")]),
+        )));
+        let budget = Mutex::new(crate::agent_loop::SerpSearchBudget::new(2));
+        let mut messages: Vec<Message> = Vec::new();
+        let mut writer = EventWriter::new(
+            Some(&journal),
+            EventTrack::V02,
+            "RUN-SERP-BUDGET",
+            "",
+            0,
+            None,
+            None,
+        );
+        let call = |i: usize| ToolCall {
+            name: "browser_control".to_string(),
+            arguments: serde_json::json!({ "action": "search", "query": format!("q{i}") }),
+            call_id: format!("serp-{i}"),
+        };
+        // 一次三引擎 fallback 把 2 次导航的额度用满（预留 1 + 结算补 1）。
+        let (result, feedback) = controller
+            .run_host_tool_with_plan_gate(
+                &host,
+                &mut writer,
+                &call(0),
+                "",
+                orz_assurance::gates::ipg::WorkspaceTrust::ObservedTrusted,
+                &mut messages,
+                0,
+                None,
+                Some("act-1"),
+                None,
+                Some(&budget),
+                false,
+                false,
+                None,
+                None,
+            )
+            .await
+            .unwrap();
+        assert_eq!(result.exit_code, Some(0));
+        assert_eq!(
+            budget.lock().unwrap().usage(),
+            (2, 2),
+            "three navigations settle the reservation up to the cap"
+        );
+        assert!(matches!(feedback, Some(PolicyFeedback::Succeeded)));
+        // 预算耗尽：第二次调用在派发前被拒（引擎根本没被触达）。
+        let (result, feedback) = controller
+            .run_host_tool_with_plan_gate(
+                &host,
+                &mut writer,
+                &call(1),
+                "",
+                orz_assurance::gates::ipg::WorkspaceTrust::ObservedTrusted,
+                &mut messages,
+                0,
+                None,
+                Some("act-1"),
+                None,
+                Some(&budget),
+                false,
+                false,
+                None,
+                None,
+            )
+            .await
+            .unwrap();
+        assert_eq!(result.exit_code, Some(1));
+        assert!(
+            result.output.contains("SERP 导航预算已用尽"),
+            "{}",
+            result.output
+        );
+        assert!(
+            matches!(feedback, Some(PolicyFeedback::Denied(_))),
+            "budget refusal must feed the denial breaker"
+        );
+        assert_eq!(
+            budget.lock().unwrap().usage(),
+            (2, 2),
+            "a refused call consumes no extra budget"
+        );
+        let structured = result.structured.clone().unwrap();
+        assert_eq!(
+            structured["error"],
+            serde_json::json!("browser_control_search_budget_exceeded")
+        );
+        assert_eq!(structured["serp_budget_used"], serde_json::json!(2));
+        assert_eq!(structured["serp_budget_cap"], serde_json::json!(2));
+        // Journal 事实：拒绝无 ToolStarted，ToolCompleted 携带稳定码与计数。
+        let events = events(&dir);
+        assert!(
+            !events.iter().any(|e| {
+                e.event_type == EventType::ToolStarted
+                    && e.payload.get("call_id").and_then(|v| v.as_str()) == Some("serp-1")
+            }),
+            "budget refusal must not start the tool"
+        );
+        let refused = events
+            .iter()
+            .find(|e| {
+                e.event_type == EventType::ToolCompleted
+                    && e.payload["error"]
+                        == serde_json::json!("browser_control_search_budget_exceeded")
+            })
+            .expect("budget refusal journaled");
+        assert_eq!(refused.payload["serp_budget_cap"], serde_json::json!(2));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// P2-3（2026-09-10）：宿主上报会话 SERP 事实的测试壳——只覆写
+    /// `serp_session_facts`，其余委托给 `TestHost` 的同名表面。
+    struct SerpFactHost {
+        journal: JournalRecorder,
+        tool_result: Option<ToolResult>,
+        facts: Option<crate::host::SerpSessionFacts>,
+    }
+
+    #[async_trait]
+    impl LoopHost for SerpFactHost {
+        fn journal(&self) -> &JournalRecorder {
+            &self.journal
+        }
+        fn tools_registry(&self) -> &dyn crate::host::ToolRegistry {
+            &EmptyRegistry
+        }
+        fn session_cwd(&self) -> std::path::PathBuf {
+            self.journal.journal_dir().to_path_buf()
+        }
+        async fn request_permission(
+            &self,
+            _risk: crate::host::RiskClass,
+            _tool: &str,
+            _args: &serde_json::Value,
+        ) -> Result<crate::host::PermitDecision, crate::host::PermitError> {
+            Ok(crate::host::PermitDecision::AllowOnce)
+        }
+        async fn call_tool(
+            &self,
+            _name: &str,
+            _args: serde_json::Value,
+            _call_id: &str,
+        ) -> Result<ToolResult, crate::host::ToolError> {
+            self.tool_result.clone().ok_or_else(|| {
+                crate::host::ToolError::NotFound("test host has no tool result".into())
+            })
+        }
+        async fn serp_session_facts(&self) -> Option<crate::host::SerpSessionFacts> {
+            self.facts
+        }
+    }
+
+    /// P2-3（2026-09-10）：会话底线保留——主车道在"只剩检索保留额度"时被
+    /// 派发前拒绝（稳定码 + 会话字段 + 无 ToolStarted + Denied 反馈），头寸
+    /// 足够时正常放行。判定是检查点式（与会话上限同口径）。
+    #[tokio::test]
+    async fn serp_session_floor_refuses_main_lane_and_admits_with_headroom() {
+        let dir = test_dir();
+        let journal = JournalRecorder::new(dir.clone());
+        let search_envelope = serde_json::json!({
+            "action": "search",
+            "action_status": "ok",
+            "engine": "bing",
+            "engine_attempts": [{"engine": "bing", "status": "ok"}],
+            "results": [],
+        })
+        .to_string();
+        let host = SerpFactHost {
+            journal: journal.clone(),
+            tool_result: Some(ToolResult {
+                output: search_envelope,
+                exit_code: Some(0),
+                output_encoding: None,
+                structured: None,
+                ..Default::default()
+            }),
+            // 头寸 = 40 - 24 = 16 = 底线 → 拒绝。
+            facts: Some(crate::host::SerpSessionFacts {
+                navigations: 24,
+                ceiling: 40,
+            }),
+        };
+        let controller = with_retrieval_enabled(AgentLoopController::with_gateway(Arc::new(
+            FakeProvider::new(vec![ScriptedResponse::text("x")]),
+        )));
+        let budget = Mutex::new(crate::agent_loop::SerpSearchBudget::for_main_lane(8));
+        let mut messages: Vec<Message> = Vec::new();
+        let mut writer = EventWriter::new(
+            Some(&journal),
+            EventTrack::V02,
+            "RUN-SERP-FLOOR",
+            "",
+            0,
+            None,
+            None,
+        );
+        let call = |i: usize| ToolCall {
+            name: "browser_control".to_string(),
+            arguments: serde_json::json!({ "action": "search", "query": format!("q{i}") }),
+            call_id: format!("serp-floor-{i}"),
+        };
+        let (result, feedback) = controller
+            .run_host_tool_with_plan_gate(
+                &host,
+                &mut writer,
+                &call(0),
+                "",
+                orz_assurance::gates::ipg::WorkspaceTrust::ObservedTrusted,
+                &mut messages,
+                0,
+                None,
+                None,
+                None,
+                Some(&budget),
+                false,
+                false,
+                None,
+                None,
+            )
+            .await
+            .unwrap();
+        assert_eq!(result.exit_code, Some(1));
+        assert!(result.output.contains("保留"), "{}", result.output);
+        assert!(matches!(feedback, Some(PolicyFeedback::Denied(_))));
+        let structured = result.structured.clone().unwrap();
+        assert_eq!(
+            structured["error"],
+            serde_json::json!("browser_control_search_session_reserved")
+        );
+        assert_eq!(
+            structured["serp_session_navigations"],
+            serde_json::json!(24)
+        );
+        assert_eq!(structured["serp_session_ceiling"], serde_json::json!(40));
+        // 会话底线拒绝不消耗车道额度（引擎根本没被触达）。
+        assert_eq!(budget.lock().unwrap().usage(), (0, 8));
+        let events = events(&dir);
+        assert!(
+            !events.iter().any(|e| {
+                e.event_type == EventType::ToolStarted
+                    && e.payload.get("call_id").and_then(|v| v.as_str()) == Some("serp-floor-0")
+            }),
+            "session-floor refusal must not start the tool"
+        );
+        assert!(
+            events.iter().any(|e| {
+                e.event_type == EventType::ToolCompleted
+                    && e.payload["error"]
+                        == serde_json::json!("browser_control_search_session_reserved")
+            }),
+            "session-floor refusal journaled"
+        );
+
+        // 头寸 17 > 16 → 放行（宿主被真实触达）。
+        let host = SerpFactHost {
+            journal: journal.clone(),
+            tool_result: Some(ToolResult {
+                output: serde_json::json!({
+                    "action": "search",
+                    "action_status": "ok",
+                    "engine": "bing",
+                    "engine_attempts": [{"engine": "bing", "status": "ok"}],
+                    "results": [],
+                })
+                .to_string(),
+                exit_code: Some(0),
+                output_encoding: None,
+                structured: None,
+                ..Default::default()
+            }),
+            facts: Some(crate::host::SerpSessionFacts {
+                navigations: 23,
+                ceiling: 40,
+            }),
+        };
+        let (result, feedback) = controller
+            .run_host_tool_with_plan_gate(
+                &host,
+                &mut writer,
+                &call(1),
+                "",
+                orz_assurance::gates::ipg::WorkspaceTrust::ObservedTrusted,
+                &mut messages,
+                0,
+                None,
+                None,
+                None,
+                Some(&budget),
+                false,
+                false,
+                None,
+                None,
+            )
+            .await
+            .unwrap();
+        assert_eq!(result.exit_code, Some(0));
+        assert!(matches!(feedback, Some(PolicyFeedback::Succeeded)));
+        assert_eq!(budget.lock().unwrap().usage(), (1, 8));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// P2-3/P2-2（2026-09-10）：激活已消耗的 SERP 导航用量承接进本激活的
+    /// 车道额度——预置用满的激活在检索车道里发起 search 被**派发前**拒绝
+    /// （宿主从未被触达：TestHost 无 tool result，到达即 NotFound）。
+    #[tokio::test]
+    async fn activation_serp_usage_carries_into_the_lane_budget() {
+        let dir = test_dir();
+        let journal = JournalRecorder::new(dir.clone());
+        let host = TestHost {
+            journal,
+            tool_result: None,
+        };
+        let gateway: Arc<dyn ModelGateway> = Arc::new(FakeProvider::new(vec![
+            // 主车道先派发**外部**检索车道（web_search → ExternalRetrieval），
+            // 只有外部车道才携带 SERP 车道额度。
+            ScriptedResponse::tool_calls(vec![tool_call("web_search", "call-1")]),
+            ScriptedResponse::tool_calls(vec![ToolCall {
+                name: "browser_control".to_string(),
+                arguments: serde_json::json!({ "action": "search", "query": "rust" }),
+                call_id: "call-2".to_string(),
+            }]),
+            ScriptedResponse::text("检索完成"),
+            ScriptedResponse::text("完成"),
+            ScriptedResponse::text("完成"),
+        ]));
+        let controller = with_retrieval_enabled(AgentLoopController::with_gateway(gateway));
+        {
+            let mut reg = controller.activations.lock().unwrap();
+            reg.states.insert(
+                SubagentRole::ExternalRetrieval,
+                ActivationState {
+                    activation_id: "retrieval-external_retrieval-sess-abc-00".to_string(),
+                    parent_session_id: "sess-abcdef123456".to_string(),
+                    subagent_session_id: "SUB-external_retrieval-sess-abc".to_string(),
+                    contract_id: "retrieval-contract-external_retrieval".to_string(),
+                    contract_revision: 0,
+                    status: ActivationStatus::Active,
+                    conversation: Vec::new(),
+                    pending: None,
+                    next_goal: None,
+                    result_digest: None,
+                    submitted: Vec::new(),
+                    tool_rounds_used: 0,
+                    candidate_urls: Vec::new(),
+                    // 已用满（≥ 任何档位上限）→ 本激活不得再打引擎。
+                    serp_navigations_used: 32,
+                    result_archive_ref: None,
+                    effort: None,
+                },
+            );
+        }
+        controller
+            .run_turn(
+                &host,
+                "查项目文档",
+                "RUN-SERP-CARRY",
+                MANIFEST,
+                0,
+                None,
+                None,
+                None,
+            )
+            .await
+            .unwrap();
+
+        let events = events(&dir);
+        let refusal = events
+            .iter()
+            .find(|e| {
+                e.payload.get("error").and_then(|v| v.as_str())
+                    == Some("browser_control_search_budget_exceeded")
+            })
+            .expect("carried usage must refuse the lane search before dispatch");
+        assert_eq!(refusal.payload["status"], serde_json::json!("error"));
+        assert_eq!(
+            refusal.payload["serp_budget_used"], refusal.payload["serp_budget_cap"],
+            "clamped usage reports an exhausted lane budget"
+        );
+        assert!(
+            !events.iter().any(|e| {
+                e.event_type == EventType::ToolStarted
+                    && e.payload.get("call_id").and_then(|v| v.as_str()) == Some("call-2")
+            }),
+            "the carried-usage refusal is dispatch-time (no ToolStarted)"
         );
         let _ = std::fs::remove_dir_all(&dir);
     }

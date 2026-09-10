@@ -170,6 +170,10 @@ pub fn browser_launch_args(profile_dir: &Path, headless: bool) -> Vec<String> {
     args.push("--disable-background-networking".to_string());
     args.push("--disable-sync".to_string());
     args.push("--disable-translate".to_string());
+    // P0-0v (2026-09-10): keep `navigator.webdriver` from leaking the CDP
+    // automation flag to search engines (Bing anti-pollution). This is a
+    // browser-launch flag, not a page mutation or UA spoof.
+    args.push("--disable-blink-features=AutomationControlled".to_string());
     // RETRIEVAL-ORCHESTRATION-MECHANICAL 0k (2026-08-30, TODO P0-0k 第一批
     // 第 4 项)：容器必需参数（docker 下无 sandbox/dev-shm 会启动失败或
     // 崩溃）＋headless 文本读取资源优化。`--blink-settings=imagesEnabled
@@ -181,6 +185,11 @@ pub fn browser_launch_args(profile_dir: &Path, headless: bool) -> Vec<String> {
     // 必需，保持恒在。
     if headless {
         args.push("--no-sandbox".to_string());
+        // P2-3 (2026-09-10): browser-level viewport, so the automation window
+        // is never a degenerate size even before the per-tab emulation
+        // override lands (headless has no real screen: `--window-size` drives
+        // innerWidth/outerWidth, the emulation call covers `screen.*`).
+        args.push("--window-size=1280,800".to_string());
     }
     args.push("--disable-dev-shm-usage".to_string());
     args.push("--disable-gpu".to_string());
@@ -293,5 +302,25 @@ mod tests {
             headless.iter().any(|a| a == "--no-sandbox"),
             "headless/container mode requires --no-sandbox"
         );
+        // P0-0v / P2-3 (2026-09-10): the browser-level half of the SERP
+        // anti-pollution set. `--window-size` is headless-only (headless has
+        // no real screen); the automation feature flag stays in both modes so
+        // `navigator.webdriver` can never leak a future `--enable-automation`
+        // launch.
+        assert!(
+            headless.iter().any(|a| a == "--window-size=1280,800"),
+            "headless must carry a non-degenerate window size"
+        );
+        assert!(
+            !headed.iter().any(|a| a.starts_with("--window-size=")),
+            "headed operator windows keep their own size"
+        );
+        for args in [&headed, &headless] {
+            assert!(
+                args.iter()
+                    .any(|a| a == "--disable-blink-features=AutomationControlled"),
+                "automation flag must be disabled in every mode"
+            );
+        }
     }
 }

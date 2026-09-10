@@ -19,9 +19,10 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use futures::{SinkExt, StreamExt};
+use orz_assurance::source_weighting::SourceWeightConfig;
 use serde_json::{Value, json};
 use tokio::net::TcpStream;
 use tokio::sync::{mpsc, oneshot};
@@ -29,6 +30,10 @@ use tokio_tungstenite::tungstenite::Message as WsMessage;
 use tokio_tungstenite::{MaybeTlsStream, WebSocketStream};
 
 use super::BrowserDownloadOutcome;
+use super::serp::{
+    SerpEngine, SerpEngineAttempt, SerpFailureClass, SerpResult, SerpSessionState,
+    parse_extraction, search_url, stabilize_and_weight,
+};
 use super::url_gate::{UrlGateError, check_navigation_url};
 
 /// Every CDP method this client may send. Anything else fails closed at the
@@ -53,6 +58,15 @@ pub const ALLOWED_CDP_METHODS: &[&str] = &[
     "Page.getNavigationHistory",
     "Page.navigateToHistoryEntry",
     "Page.reload",
+    // P0-0v (2026-09-10): search-engine anti-pollution preconditions —
+    // non-zero viewport and a real (non-HeadlessChrome) UA. Both are
+    // host-owned fixed values; the model never supplies any of them, and a
+    // failure is logged (best effort) rather than failing the action.
+    // Verified 2026-09-10 against headless Chrome 153: `window.chrome`
+    // already exists and `navigator.webdriver` is already false for a plain
+    // `--remote-debugging-port` launch, so neither needs an injected stub.
+    "Emulation.setDeviceMetricsOverride",
+    "Emulation.setUserAgentOverride",
     // S2-R P3 / P1-2b：Log.entryAdded 收集（页面 console/网络错误节选）。
     "Log.enable",
     "Browser.setDownloadBehavior",
@@ -71,6 +85,53 @@ pub const ALLOWED_CDP_METHODS: &[&str] = &[
 const EXPR_TITLE: &str = "document.title";
 const EXPR_TEXT: &str = "document.body ? document.body.innerText : ''";
 const EXPR_FINAL_URL: &str = "window.location.href";
+
+/// P0-0v fixed search expressions. These are host-owned constants, not model
+/// input — the model can only choose `browser_control { action: "search" }`.
+const EXPR_SEARCH_GOOGLE: &str = r#"
+(() => {
+  const results = [];
+  const nodes = document.querySelectorAll('#search a h3');
+  for (const node of nodes) {
+    const a = node.closest('a');
+    if (!a || !a.href) { continue; }
+    const title = (node.innerText || node.textContent || '').trim();
+    const container = a.closest('div.g, div[data-hveid], div[data-sokoban-container]') || a.parentElement;
+    const snippetEl = container ? container.querySelector('div[data-sncf], div[data-content-feature], div.VwiC3b, span.aCOpRe') : null;
+    results.push({ title, url: a.href, snippet: (snippetEl ? (snippetEl.innerText || snippetEl.textContent || '') : '').trim() });
+  }
+  return { results: results.slice(0, 10), captcha: !!(document.querySelector('#captcha-form') || document.querySelector('form[action*="sorry"]')) };
+})()
+"#;
+
+const EXPR_SEARCH_BING: &str = r#"
+(() => {
+  const results = [];
+  const nodes = document.querySelectorAll('#b_results > li.b_algo');
+  for (const node of nodes) {
+    if (node.matches('li.b_ad') || node.classList.contains('b_ad')) { continue; }
+    const a = node.querySelector('h2 a') || node.querySelector('h2')?.querySelector('a') || node.querySelector('a[aria-label]');
+    const href = a && a.href ? a.href : '';
+    const title = a ? (a.innerText || a.getAttribute('aria-label') || '').trim() : (node.querySelector('h2')?.innerText || '').trim();
+    const snippetEl = node.querySelector('div.b_caption p') || node.querySelector('div.b_caption div') || node.querySelector('p.b_algoSlug') || node.querySelector('.b_caption .ipText');
+    results.push({ title, url: href, snippet: (snippetEl ? (snippetEl.innerText || snippetEl.textContent || '') : '').trim() });
+  }
+  return { results: results.slice(0, 10), captcha: !!(document.querySelector('div.captcha') || document.querySelector('div.captcha_header')) };
+})()
+"#;
+
+const EXPR_SEARCH_DDG: &str = r#"
+(() => {
+  const results = [];
+  const nodes = document.querySelectorAll('a.result__a');
+  for (const a of nodes) {
+    const title = (a.innerText || a.textContent || '').trim();
+    const snippetEl = a.closest('.result')?.querySelector('.result__snippet');
+    results.push({ title, url: a.href || '', snippet: (snippetEl ? (snippetEl.innerText || snippetEl.textContent || '') : '').trim() });
+  }
+  return { results: results.slice(0, 10), captcha: !!document.querySelector('div.anomaly-detected') };
+})()
+"#;
 
 /// RETRIEVAL-ORCHESTRATION-MECHANICAL 0k (2026-08-30)：preview/keywords
 /// 模式拦截的资源后缀（Chrome URL pattern，`*` 通配、匹配完整 URL）。
@@ -269,6 +330,18 @@ impl WsSession {
 
     /// Run one fixed host expression and return its string value.
     async fn evaluate_string(&mut self, expression: &str) -> Result<String, CdpError> {
+        Ok(self
+            .evaluate_value(expression)
+            .await?
+            .as_str()
+            .map(|s| s.to_string())
+            .unwrap_or_default())
+    }
+
+    /// Run one fixed host expression and return its JSON value. Used by the
+    /// SERP extraction expressions, which return a bounded object rather
+    /// than a string.
+    async fn evaluate_value(&mut self, expression: &str) -> Result<Value, CdpError> {
         let result = self
             .send_command(
                 "Runtime.evaluate",
@@ -291,10 +364,7 @@ impl WsSession {
                 message: desc.unwrap_or(text).to_string(),
             });
         }
-        Ok(result["result"]["value"]
-            .as_str()
-            .map(|s| s.to_string())
-            .unwrap_or_default())
+        Ok(result["result"]["value"].clone())
     }
 }
 
@@ -387,6 +457,10 @@ pub struct CdpBrowserSession {
     /// S2-R P3 / P1-2b：会话控制 tab（browser_control 状态机）——动作
     /// 全程持锁（tokio Mutex，可跨 await），控制动作天然串行。
     control: tokio::sync::Mutex<Option<ControlTab>>,
+    /// P0-0v：search 动作的会话级失败备忘/频率上限状态。
+    serp_state: Mutex<SerpSessionState>,
+    /// P0-0v：低质量来源判定器（一次装载，search 路径复用；不逐次读 env）。
+    source_weighting: Arc<SourceWeightConfig>,
 }
 
 #[derive(Default)]
@@ -412,6 +486,12 @@ struct ControlTab {
     page_ws: WsSession,
     current_url: String,
     title: String,
+}
+
+/// Internal search-engine failure before it is memoized into session state.
+struct SerpSearchFailure {
+    class: SerpFailureClass,
+    reason: String,
 }
 
 /// v2：DNS 预检缓存条目（只缓存成功结果；失败不缓存、下次重试）。
@@ -515,6 +595,8 @@ impl CdpBrowserSession {
             creation_lock: tokio::sync::Mutex::new(()),
             dns: Mutex::new(HashMap::new()),
             control: tokio::sync::Mutex::new(None),
+            serp_state: Mutex::new(SerpSessionState::new()),
+            source_weighting: Arc::new(SourceWeightConfig::from_env_or_default()),
         })
     }
 
@@ -799,6 +881,7 @@ impl CdpBrowserSession {
                         url: None,
                         title: None,
                         log: String::new(),
+                        ..Default::default()
                     });
                 };
                 match Self::control_extract(&mut tab.page_ws, &tab.current_url).await {
@@ -810,8 +893,293 @@ impl CdpBrowserSession {
                     Err(e) => Self::control_failure_from_err(&e, None, None, log_lines),
                 }
             }
+            super::BrowserControlAction::Search { query } => {
+                self.control_search(&mut control, &query, timeout).await?
+            }
         };
         Ok(outcome)
+    }
+
+    /// P0-0v：`search` 动作编排——引擎链 Google → Bing → DDG，会话失败
+    /// 备忘，冷却/上限，成功时回传结构化、已加权、有界 SERP 结果。全部
+    /// 引擎失败 = 状态化 `all_engines_failed`。
+    ///
+    /// P2-1 (2026-09-10)：成功与失败信封都携带 `engine_attempts`——失败
+    /// 时必须标注是哪个引擎、以何类别失败；被会话备忘跳过的引擎也没有
+    /// 静默消失（status=skipped + 备忘类别）。
+    ///
+    /// P2-3（2026-09-10）：会话物理事实的只读出口见
+    /// [`CdpBrowserSession::serp_session_navigations`]——宿主据此上报给
+    /// loop，由 loop 向主车道施加"检索保留额度"策略（本层不做车道判定）。
+    async fn control_search(
+        &self,
+        control: &mut Option<ControlTab>,
+        query: &str,
+        timeout: Duration,
+    ) -> Result<super::BrowserControlOutcome, CdpError> {
+        let now = Instant::now();
+        let wait = {
+            let mut state = self.serp_state.lock().unwrap();
+            if state.ceiling_reached() {
+                return Ok(Self::control_failure(
+                    "browser_control_search_cap_exceeded",
+                    &format!(
+                        "browser_control SERP engine-navigation ceiling reached ({})",
+                        super::serp::SERP_MAX_NAVIGATIONS_PER_SESSION
+                    ),
+                    None,
+                    None,
+                    Vec::new(),
+                ));
+            }
+            state.begin_search(query, now)
+        };
+        if !wait.is_zero() {
+            tokio::time::sleep(wait).await;
+        }
+
+        let engines = {
+            let state = self.serp_state.lock().unwrap();
+            super::serp::available_engines(&state)
+        };
+        // Fixed-order attempt sheet: memoized engines start as `skipped`, the
+        // rest are filled in as the loop reaches them (`pending` entries are
+        // dropped before the envelope is built).
+        let mut attempts: Vec<SerpEngineAttempt> = Vec::new();
+        let mut skipped: Vec<String> = Vec::new();
+        {
+            let state = self.serp_state.lock().unwrap();
+            for engine in super::serp::SERP_ENGINE_ORDER {
+                match state.failure(engine) {
+                    Some(class) => {
+                        skipped.push(format!(
+                            "search {}: skipped ({})",
+                            engine.as_str(),
+                            class.as_str()
+                        ));
+                        attempts.push(SerpEngineAttempt::skipped(engine, class));
+                    }
+                    None => attempts.push(SerpEngineAttempt::pending(engine)),
+                }
+            }
+        }
+        let mut failures: Vec<(SerpEngine, SerpFailureClass, String)> = Vec::new();
+
+        for engine in engines {
+            match self
+                .control_search_engine(control, engine, query, timeout)
+                .await
+            {
+                Ok((results, engine_log)) => {
+                    Self::set_attempt(&mut attempts, engine, SerpEngineAttempt::ok(engine));
+                    return Ok(Self::control_search_ok(
+                        engine, results, engine_log, attempts,
+                    ));
+                }
+                Err(failure) => {
+                    let mut state = self.serp_state.lock().unwrap();
+                    state.record_failure(engine, failure.class);
+                    Self::set_attempt(
+                        &mut attempts,
+                        engine,
+                        SerpEngineAttempt::failed(engine, failure.class, &failure.reason),
+                    );
+                    failures.push((engine, failure.class, failure.reason));
+                }
+            }
+        }
+
+        let mut log_lines: Vec<String> = failures
+            .iter()
+            .map(|(engine, class, reason)| {
+                format!("search {}: {} ({reason})", engine.as_str(), class.as_str())
+            })
+            .collect();
+        log_lines.extend(skipped);
+        Ok(Self::with_attempts(
+            Self::control_failure(
+                "all_engines_failed",
+                "all SERP engines failed for this session",
+                None,
+                None,
+                log_lines,
+            ),
+            attempts,
+        ))
+    }
+
+    /// P2-3（2026-09-10）：本会话的 SERP **物理事实**（已发生引擎导航数 /
+    /// 会话上限）——只读出口，宿主把它上报给 loop；"检索保留额度"这类车道
+    /// 策略在 loop 层施加（宿主没有车道身份，本层不做判定）。
+    pub(crate) fn serp_session_navigations(&self) -> (u32, u32) {
+        let state = self.serp_state.lock().unwrap();
+        (
+            state.navigations(),
+            super::serp::SERP_MAX_NAVIGATIONS_PER_SESSION as u32,
+        )
+    }
+
+    /// Replace the attempt entry for one engine (fixed order preserved).
+    fn set_attempt(
+        attempts: &mut [SerpEngineAttempt],
+        engine: SerpEngine,
+        entry: SerpEngineAttempt,
+    ) {
+        if let Some(slot) = attempts.iter_mut().find(|a| a.engine == engine) {
+            *slot = entry;
+        }
+    }
+
+    /// Attach the attempt sheet; `pending` entries are internal only.
+    fn with_attempts(
+        mut outcome: super::BrowserControlOutcome,
+        attempts: Vec<SerpEngineAttempt>,
+    ) -> super::BrowserControlOutcome {
+        let attempts: Vec<SerpEngineAttempt> = attempts
+            .into_iter()
+            .filter(|a| a.status != "pending")
+            .collect();
+        outcome.engine_attempts = Some(attempts);
+        outcome
+    }
+
+    /// One engine attempt: navigate to the fixed `en-US` search URL, evaluate
+    /// the engine's fixed extraction expression, then decode + weight results.
+    /// CAPTCHA/empty results are explicit failures, never silent successes.
+    async fn control_search_engine(
+        &self,
+        control: &mut Option<ControlTab>,
+        engine: SerpEngine,
+        query: &str,
+        timeout: Duration,
+    ) -> Result<(Vec<SerpResult>, Vec<String>), SerpSearchFailure> {
+        let url = search_url(engine, query);
+        let deadline = tokio::time::Instant::now() + timeout;
+        let mut log_lines = Vec::new();
+
+        if let Err(gate) = self.check_navigation_url_cached(&url).await {
+            log_lines.push(format!("url gate: {gate}"));
+            let err: CdpError = gate.into();
+            return Err(Self::search_failure_from_err(&err, log_lines));
+        }
+
+        let navigation = tokio::time::timeout_at(deadline, async {
+            // P2-4：物理上限计的是真实导航（gate 未过的不算）。
+            self.serp_state.lock().unwrap().record_navigation();
+            self.control_navigate(control, &url, &mut log_lines).await
+        })
+        .await;
+        match navigation {
+            Ok(Ok(_)) => {}
+            Ok(Err(err)) => return Err(Self::search_failure_from_err(&err, log_lines)),
+            Err(_) => {
+                return Err(SerpSearchFailure {
+                    class: SerpFailureClass::Network,
+                    reason: format!("search {engine} navigation timed out after {timeout:?}"),
+                });
+            }
+        }
+
+        let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
+        if remaining.is_zero() {
+            return Err(SerpSearchFailure {
+                class: SerpFailureClass::Network,
+                reason: format!("search {engine} timed out after {timeout:?}"),
+            });
+        }
+
+        let Some(tab) = control.as_mut() else {
+            return Err(SerpSearchFailure {
+                class: SerpFailureClass::Network,
+                reason: "control tab disappeared during search".to_string(),
+            });
+        };
+        let evaluated = tokio::time::timeout(
+            remaining,
+            tab.page_ws.evaluate_value(Self::serp_expression(engine)),
+        )
+        .await;
+        let value = match evaluated {
+            Ok(Ok(value)) => value,
+            Ok(Err(err)) => {
+                return Err(SerpSearchFailure {
+                    class: SerpFailureClass::Network,
+                    reason: format!("search {engine} extraction failed: {err}"),
+                });
+            }
+            Err(_) => {
+                return Err(SerpSearchFailure {
+                    class: SerpFailureClass::Network,
+                    reason: format!("search {engine} extraction timed out"),
+                });
+            }
+        };
+
+        let extraction = parse_extraction(engine, &value);
+        if extraction.captcha {
+            return Err(SerpSearchFailure {
+                class: SerpFailureClass::Captcha,
+                reason: format!("search {engine} hit CAPTCHA/consent"),
+            });
+        }
+        if extraction.hits.is_empty() {
+            return Err(SerpSearchFailure {
+                class: SerpFailureClass::Empty,
+                reason: format!("search {engine} returned no organic results"),
+            });
+        }
+        Ok((
+            stabilize_and_weight(engine, extraction.hits, self.source_weighting.as_ref()),
+            log_lines,
+        ))
+    }
+
+    fn serp_expression(engine: SerpEngine) -> &'static str {
+        match engine {
+            SerpEngine::Google => EXPR_SEARCH_GOOGLE,
+            SerpEngine::Bing => EXPR_SEARCH_BING,
+            SerpEngine::DuckDuckGo => EXPR_SEARCH_DDG,
+        }
+    }
+
+    fn search_failure_from_err(err: &CdpError, log_lines: Vec<String>) -> SerpSearchFailure {
+        let base = match err {
+            CdpError::UrlGate(_) => "blocked",
+            CdpError::LoadTimeout { .. } | CdpError::TotalTimeout { .. } => "timeout",
+            _ => "other",
+        };
+        let (class_str, reason) = Self::classify_log_class(base, &log_lines, &err.to_string());
+        let class = if class_str == "blocked" {
+            SerpFailureClass::Blocked
+        } else {
+            SerpFailureClass::Network
+        };
+        SerpSearchFailure {
+            class,
+            reason: format!("{class_str}: {reason}"),
+        }
+    }
+
+    fn control_search_ok(
+        engine: SerpEngine,
+        results: Vec<SerpResult>,
+        log_lines: Vec<String>,
+        attempts: Vec<SerpEngineAttempt>,
+    ) -> super::BrowserControlOutcome {
+        Self::with_attempts(
+            super::BrowserControlOutcome {
+                action_status: "ok".to_string(),
+                error_class: None,
+                nav_phase: "completed".to_string(),
+                url: None,
+                title: None,
+                log: super::bounded_browser_log(&log_lines),
+                engine: Some(engine.as_str().to_string()),
+                results: Some(results),
+                ..Default::default()
+            },
+            attempts,
+        )
     }
 
     /// 控制导航（URL gate 已通过）：确保控制 tab → 清残留事件 → navigate
@@ -822,7 +1190,7 @@ impl CdpBrowserSession {
         url: &str,
         log_lines: &mut Vec<String>,
     ) -> Result<(String, String), CdpError> {
-        let tab = self.ensure_control_tab(control).await?;
+        let tab = self.ensure_control_tab(control, log_lines).await?;
         Self::drain_events(&mut tab.page_ws);
         tab.page_ws
             .send_command("Page.navigate", json!({ "url": url }))
@@ -943,9 +1311,16 @@ impl CdpBrowserSession {
     }
 
     /// 确保控制 tab 存在（首次创建 target + 连接 page ws + 启用域）。
+    ///
+    /// P2-3 (2026-09-10)：反污染前置改为**尽力而为**——域启用仍是硬前置
+    /// （没有它们动作本就不成立），视口/UA 只在会话首次创建 tab 时施加，
+    /// 失败只落 `[browser_log]` 特征、不再让 navigate/back/refresh 连带
+    /// 失败。可在启动层固化的部分（窗口尺寸、webdriver 位）已移入
+    /// [`super::discovery::browser_launch_args`]。
     async fn ensure_control_tab<'a>(
         &self,
         control: &'a mut Option<ControlTab>,
+        log_lines: &mut Vec<String>,
     ) -> Result<&'a mut ControlTab, CdpError> {
         if control.is_none() {
             let target_id = self.create_target().await?;
@@ -955,6 +1330,7 @@ impl CdpBrowserSession {
             page_ws.send_command("Runtime.enable", json!({})).await?;
             page_ws.send_command("Network.enable", json!({})).await?;
             page_ws.send_command("Log.enable", json!({})).await?;
+            Self::apply_serp_hardening(&mut page_ws, log_lines).await;
             *control = Some(ControlTab {
                 page_ws,
                 current_url: "about:blank".to_string(),
@@ -962,6 +1338,51 @@ impl CdpBrowserSession {
             });
         }
         Ok(control.as_mut().expect("just ensured"))
+    }
+
+    /// P2-3：会话级反污染前置（尽力而为，绝不返回错误）。
+    ///
+    /// - 视口：headless 无真实屏幕，`screen.*`/`innerWidth` 需要 emulation
+    ///   覆写才非退化（`--window-size` 已随启动参数生效，见 discovery）。
+    /// - UA：无头 UA 仍带 `HeadlessChrome` 标记（实测 Chrome 153），替换成
+    ///   `Chrome` 保留平台与版本。这里读取浏览器自身 UA 再改写，因此
+    ///   Chromium/Edge 等分支也不会被伪装成另一种浏览器。
+    ///
+    /// 失败时只记一条 `[browser_log]` 特征：反污染是加固，不是动作本体，
+    /// 不应把 navigate/search 连带拖垮（P2-3 审查结论）。
+    async fn apply_serp_hardening(page_ws: &mut WsSession, log_lines: &mut Vec<String>) {
+        if let Err(err) = page_ws
+            .send_command(
+                "Emulation.setDeviceMetricsOverride",
+                json!({
+                    "width": 1280,
+                    "height": 800,
+                    "deviceScaleFactor": 1,
+                    "mobile": false
+                }),
+            )
+            .await
+        {
+            log_lines.push(format!("anti-pollution: viewport override skipped ({err})"));
+        }
+        match page_ws.evaluate_value("navigator.userAgent").await {
+            Ok(value) => {
+                let raw_ua = value.as_str().unwrap_or("").to_string();
+                let cleaned_ua = raw_ua.replace("HeadlessChrome", "Chrome");
+                if !cleaned_ua.is_empty()
+                    && cleaned_ua != raw_ua
+                    && let Err(err) = page_ws
+                        .send_command(
+                            "Emulation.setUserAgentOverride",
+                            json!({ "userAgent": cleaned_ua }),
+                        )
+                        .await
+                {
+                    log_lines.push(format!("anti-pollution: UA override skipped ({err})"));
+                }
+            }
+            Err(err) => log_lines.push(format!("anti-pollution: UA probe failed ({err})")),
+        }
     }
 
     /// 尝试取当前控制 tab 的 url/title（失败返回 None——动作失败路径的
@@ -1134,6 +1555,7 @@ impl CdpBrowserSession {
             url,
             title,
             log: super::bounded_browser_log(&log_lines),
+            ..Default::default()
         }
     }
 
@@ -1170,6 +1592,7 @@ impl CdpBrowserSession {
             url,
             title,
             log: super::bounded_browser_log(&log_lines),
+            ..Default::default()
         }
     }
 
@@ -2076,6 +2499,8 @@ mod tests {
             creation_lock: tokio::sync::Mutex::new(()),
             dns: Mutex::new(HashMap::new()),
             control: tokio::sync::Mutex::new(None),
+            serp_state: Mutex::new(SerpSessionState::new()),
+            source_weighting: Arc::new(SourceWeightConfig::from_env_or_default()),
         }
     }
 
@@ -2087,6 +2512,8 @@ mod tests {
             set,
             vec![
                 "Browser.setDownloadBehavior",
+                "Emulation.setDeviceMetricsOverride",
+                "Emulation.setUserAgentOverride",
                 "Log.enable",
                 "Network.enable",
                 "Network.setBlockedURLs",
@@ -2122,6 +2549,71 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn serp_search_expressions_are_fixed_and_bing_filters_ads() {
+        assert_eq!(
+            CdpBrowserSession::serp_expression(SerpEngine::Google),
+            EXPR_SEARCH_GOOGLE
+        );
+        assert_eq!(
+            CdpBrowserSession::serp_expression(SerpEngine::Bing),
+            EXPR_SEARCH_BING
+        );
+        assert_eq!(
+            CdpBrowserSession::serp_expression(SerpEngine::DuckDuckGo),
+            EXPR_SEARCH_DDG
+        );
+        assert!(EXPR_SEARCH_BING.contains("#b_results > li.b_algo"));
+        assert!(EXPR_SEARCH_BING.contains("li.b_ad"));
+        assert!(EXPR_SEARCH_BING.contains("div.captcha"));
+        assert!(EXPR_SEARCH_BING.contains("div.b_caption p"));
+        assert!(EXPR_SEARCH_GOOGLE.contains("#search a h3"));
+        assert!(EXPR_SEARCH_DDG.contains("a.result__a"));
+        assert!(EXPR_SEARCH_DDG.contains(".result__snippet"));
+    }
+
+    #[tokio::test]
+    async fn control_search_cap_is_explicit_before_browser_work() {
+        let session = test_session(CdpConfig::default());
+        {
+            let mut state = session.serp_state.lock().unwrap();
+            let now = Instant::now();
+            for _ in 0..super::super::serp::SERP_MAX_NAVIGATIONS_PER_SESSION {
+                state.record_navigation();
+                state.begin_search("q", now);
+            }
+            assert!(state.ceiling_reached());
+        }
+        let mut control = None;
+        let outcome = session
+            .control_search(&mut control, "q", Duration::from_secs(1))
+            .await
+            .unwrap();
+        assert_eq!(outcome.action_status, "error");
+        assert_eq!(
+            outcome.error_class.as_deref(),
+            Some("browser_control_search_cap_exceeded")
+        );
+        assert!(control.is_none(), "cap refusal must not create a tab");
+        assert!(outcome.log.contains("ceiling reached"), "{}", outcome.log);
+    }
+
+    /// P2-3（2026-09-10）：会话 SERP 物理事实出口——已发生导航数与会话上限
+    /// （宿主把它上报给 loop，由 loop 向主车道施加"检索保留额度"策略）。
+    #[test]
+    fn serp_session_navigations_reports_usage_and_ceiling() {
+        let session = test_session(CdpConfig::default());
+        let ceiling = super::super::serp::SERP_MAX_NAVIGATIONS_PER_SESSION as u32;
+        assert_eq!(session.serp_session_navigations(), (0, ceiling));
+        {
+            let mut state = session.serp_state.lock().unwrap();
+            state.record_navigation();
+            state.record_navigation();
+            state.record_navigation();
+        }
+        assert_eq!(session.serp_session_navigations(), (3, ceiling));
     }
 
     /// S2-R P3 / P1-2b：日志事件收集——console error/warning、未捕获
