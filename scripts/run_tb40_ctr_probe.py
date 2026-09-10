@@ -24,6 +24,15 @@
 #      试次）。现在出错试次一律判为无效试次并走重试。
 #   4) 关闭 harbor 侧 -r（原为 3）：与脚本自身三轮重试叠加最坏可达 12 次尝试，
 #      对一道 4.8 小时题成本与归因均失控；重试策略统一由本脚本承担。
+#
+# 2026-09-11 修订（第二跑暴露的第三处执行器缺陷）：
+#   5) 前置类失败签名扩到准备阶段：第二跑三轮全部止于 agent 准备阶段超时
+#      （`AgentSetupTimeoutError`，容器内 apt 装 Chromium 超 360s），但签名只覆盖
+#      鉴权换票，三轮照烧不误（约 25 分钟，零模型调用）。现把
+#      `AgentSetupTimeoutError` / `EnvironmentStartTimeoutError` 一并纳入
+#      「前置类失败」——命中即中止剩余轮次、退出码 2。
+#   6) agent 准备阶段超时余量 ×4（360s → 24min）：坏线路下 apt 拉 Chromium 只是
+#      慢而不是不通，给足时间让批次有机会成立（`--agent-setup-timeout-multiplier`）。
 import json
 import os
 import subprocess
@@ -53,13 +62,21 @@ HUB_PROBE_URL = 'https://hub.harborframework.com/datasets'
 MODEL_PROBE_URL = 'https://api.deepseek.com/'
 PREFLIGHT_TIMEOUT_S = 20
 
-# 鉴权类失败签名：出现在某一 pass 的控制台日志里即判为「前置类失败」，
-# 不消耗剩余 pass（环境问题而非框架/模型问题）。
-AUTH_FAILURE_SIGNATURES = (
+# 前置类失败签名：出现在某一 pass 的控制台日志里即判为「环境/准备类失败」，
+# 不消耗剩余 pass（非框架、非模型问题）。两类：
+#   ①鉴权换票失败（hub 的 TLS 通路）；②agent 准备阶段超时。
+PREFLIGHT_CLASS_SIGNATURES = (
     'AuthenticationError',
     'API-key exchange request failed',
     'NotAuthenticatedError',
+    'AgentSetupTimeoutError',
+    'EnvironmentStartTimeoutError',
 )
+
+# agent 准备阶段超时余量：harbor 默认 360s（trial.py `_AGENT_SETUP_TIMEOUT_SEC`）；
+# orz 适配器自记「apt 装 Chromium 正常 30–60s」，但坏线路下会超 360s——2026-09-11
+# 第二跑三轮全部 AgentSetupTimeoutError（6m28s / 6m23s / 6m25s，零试次）。
+AGENT_SETUP_TIMEOUT_MULTIPLIER = '4'
 
 # 退出码口径：0=完成；1=未闭合（试次用尽）；2=前置不可用（顺延，未消耗 pass）。
 EXIT_DONE = 0
@@ -99,12 +116,12 @@ def console_path(pass_no: int) -> Path:
     return JOBS_DIR / f'{JOB}-console-pass{pass_no}.log'
 
 
-def console_has_auth_failure(pass_no: int) -> bool:
+def console_has_preflight_failure(pass_no: int) -> bool:
     try:
         text = console_path(pass_no).read_text(encoding='utf-8', errors='replace')
     except OSError:
         return False
-    return any(sig in text for sig in AUTH_FAILURE_SIGNATURES)
+    return any(sig in text for sig in PREFLIGHT_CLASS_SIGNATURES)
 
 
 def real_run_exists() -> bool:
@@ -159,6 +176,7 @@ def invoke(pass_no: int) -> int:
     }])
     args = [
         'run', '-t', f'terminal-bench/{TASK}', '-n', '1', '-r', '0',
+        '--agent-setup-timeout-multiplier', AGENT_SETUP_TIMEOUT_MULTIPLIER,
         '-a', 'tb_agents.orz:Orz', '-m', MODEL,
         '--ak', f'orz_binary={BINARY.as_posix()}',
         '--ak', f'model_id={MODEL}',
@@ -193,8 +211,9 @@ def main() -> int:
             log(f'DONE exit={code}')
             return EXIT_DONE
         log(f'FAIL exit={code}')
-        if console_has_auth_failure(pass_no):
-            log(f'AUTH FAILURE in pass {pass_no} — aborting batch; remaining passes not consumed')
+        if console_has_preflight_failure(pass_no):
+            log(f'PRE-FLIGHT-CLASS FAILURE in pass {pass_no} — aborting batch; '
+                f'remaining passes not consumed')
             return EXIT_DEFERRED
     log('== finished; unresolved (invalid trials exhausted) ==')
     return EXIT_UNRESOLVED

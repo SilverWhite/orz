@@ -1,9 +1,10 @@
 # TB 4.0 单题摩擦探针排期（ctr-optimization，2026-09-10）
 
-> **状态**：预登记定稿，已完成**首次起跑**（2026-09-10 19:03–19:17）——
-> **批次未成立、顺延待重跑**：pass 1 为真实试次但死于模型流中断（环境），
-> pass 2/3 未进入试次（hub 鉴权 TLS 不通）；执行器已按首跑暴露的 4 处缺陷
-> 修订（§7.6），线路稳定后重跑（§7.7）。
+> **状态**：预登记定稿，已起跑两次，**两次均因环境未成立、顺延待重跑**。
+> 第一跑（2026-09-10 19:03–19:17）：pass 1 真实试次 9m27s 后死于模型流中断，
+> pass 2/3 未进入试次（hub 鉴权 TLS 不通）。第二跑（2026-09-10 23:57–2026-09-11
+> 00:22）：三轮全部止于 agent 准备阶段超时（容器内装 Chromium 超 360s），零试次。
+> 执行器已按两跑暴露的 6 处缺陷修订（§7.6、§7.8），线路稳定后重跑。
 > **上级**：[`BACKLOG 0w`](BACKLOG_AND_PRIORITIES.md) /
 > [`TODO P0-0w`](../TODO.md)。
 > **定位**：本文件是本探针的执行口径、任务事实、预期摩擦点清单与判据对照的
@@ -85,6 +86,7 @@ TER 长命令、工具执行面、上下文与预算。
   -m deepseek-v4-flash`；`eval_browser=true`；TEMP 重定向 `D:/tb-eval/tmp`；
   gsa 卷挂载 `/orz-gsa`；job 前缀 `official-tb40-ctr-optimization`。
   harbor 侧 `-r 0`（试用例级自动重试关闭，重试单层归执行器，见 §5）。
+  `--agent-setup-timeout-multiplier 4`（agent 准备阶段 360s → 24min，见 §7.8）。
   边界：单题解析路径不落数据集级 digest 钉；题目自身 ref 由 trial
   `result.json` 的 `task_id.ref`（sha256）记录，跑后回填登记。
 
@@ -133,11 +135,14 @@ TER 长命令、工具执行面、上下文与预算。
 
 - **前置中止**：镜像拉取失败、数据集解析失败（Harbor 注册表异常）、载体重建
   不一致——任一出现即不启动，登记后顺延。
-- **前置预检门（2026-09-10 首跑后新增）**：起跑前对 hub 与模型端点各做一次
-  TLS+HTTP 预检，任一不通过即**整体顺延、零轮次消耗**（执行器退出码 2）；批内
-  一旦在某一轮控制台日志里识别出鉴权类失败（`AuthenticationError` /
-  `API-key exchange request failed` / `NotAuthenticatedError`），同样立即中止
-  剩余轮次——这属于环境问题，不得烧掉重试预算。
+- **前置预检门（2026-09-10 首跑后新增，2026-09-11 扩围）**：起跑前对 hub 与模型
+  端点各做一次 TLS+HTTP 预检，任一不通过即**整体顺延、零轮次消耗**（执行器退出码
+  2）；批内一旦在某一轮控制台日志里识别出**前置类失败**，同样立即中止剩余轮次
+  ——这属于环境问题，不得烧掉重试预算。前置类失败签名两类：
+  ①**鉴权换票**（`AuthenticationError` / `API-key exchange request failed` /
+  `NotAuthenticatedError`，hub 的 TLS 通路）；②**agent 准备阶段超时**
+  （`AgentSetupTimeoutError` / `EnvironmentStartTimeoutError`，第二跑三轮即此类；
+  预热不足的坏线路下该阶段会超时——见 §7.8 的余量设定）。
 - **早期中止（软门）**：启动后 30 分钟内若出现「任务在框架侧不可进行」的
   确定性证据（如 F1 的完全不可达 + shell 不可用），可主动中止以免空烧 5 小时；
   中止必须留 journal 与判据记录，不算失败批次。
@@ -154,7 +159,9 @@ TER 长命令、工具执行面、上下文与预算。
 - job：`D:\tb-eval\jobs-official\official-tb40-ctr-optimization\`（`result.json`、
   `*-console-pass<N>.log`；每轮独立，2026-09-10 修订后不再覆写）
 - gsa 卷：`D:\tb-eval\gsa-volumes\official-tb40-ctr-optimization\`
-- 摘要：`official-tb40-ctr-optimization-summary.log`
+- 摘要：`official-tb40-ctr-optimization-summary.log`（**跨轮累计**，每轮以
+  `== <时间> … start ==` / `== finished ==` 为界；2026-09-10 首跑的块已在
+  2026-09-11 拆存为 `official-tb40-ctr-optimization-summary-run1-20260910.log`）
 - 执行器：[`scripts/run_tb40_ctr_probe.py`](../scripts/run_tb40_ctr_probe.py)
 - 结果落档：`docs/audits/TB40_CTR_OPTIMIZATION_FRICTION_PROBE_<date>.md`（跑后新建）
 
@@ -217,3 +224,27 @@ TER 长命令、工具执行面、上下文与预算。
    （`curl -sf /healthz` 成功）。F2/F3/F4/F5/F8 未触及（试次仅 9.5 分钟）。
    ④**结论**：本批未产出摩擦结论，判据 2–10 未判定（判据 1 载体一致已在起跑前
    核验通过），归 §5 的前置/环境顺延，**不计为失败批次**；线路稳定后重跑。
+8. **第二跑结果与执行器增补（2026-09-10 23:57:55–2026-09-11 00:22:38；批次仍未
+   成立，环境所致）**：三轮全部止于 **agent 准备阶段超时**，**零试次、零模型
+   token 消耗**（agent 从未被调用，答案卷无新增会话）。
+   ①**逐轮事实**：pass 1 `AgentSetupTimeoutError` 6m28s / pass 2 同 6m23s /
+   pass 3 同 6m25s；整批墙钟 24m43s。根因是 harbor 默认 agent 准备超时
+   **360s**（`harbor/trial/trial.py:_AGENT_SETUP_TIMEOUT_SEC`），而本步需在容器内
+   装 Chromium（`eval_browser=true` 触发浏览器注入）——orz 适配器自记「apt 装
+   Chromium 正常 30–60s」，坏线路下超出 360s。第一跑该步恰好在阈值内通过。
+   ②**验收口径与 `-r 0` 均被证实有效**：harbor 对这两次作业判「正常退出
+   （exit=0）」，执行器的 `job_complete` 仍因 `n_errored_trials=1` 正确拒绝、未记
+   为完成；作业配置已无 `retry` 字段（`-r 0` 生效）；每轮独立控制台日志把三轮
+   证据完整保留（pass1/pass2/pass3 三份俱在）。
+   ③**执行器增补两处（第 5、6 项，自测已过）**：**第 5 项**——前置类失败签名扩围，
+   把 `AgentSetupTimeoutError` / `EnvironmentStartTimeoutError` 一并纳入，命中即
+   中止剩余轮次并退出码 2（本次若已生效，25 分钟可压到约 7 分钟）；**第 6 项**——
+   `--agent-setup-timeout-multiplier 4`（360s → 24min），坏线路下 apt 拉 Chromium
+   只是慢而非不通，给足余量让批次有机会成立。
+   自测证据：`console_has_preflight_failure` 对第二跑 pass1/pass3 真实日志均命中
+   `True`、对第一跑鉴权日志仍命中、对不存在文件返回 `False`；语法通过、行尾 LF。
+   ④**结论**：本批仍未产出摩擦结论，判据 2–10 未判定，归 §5 前置/环境顺延，
+   不计为失败批次；线路稳定后重跑（预检门 + 准备余量已就位）。
+   ⑤**未取的结构性修法（登记备查，暂不实施）**：把 Chromium 预烤进镜像可让准备
+   阶段完全不依赖网络，代价是打破当前按 digest 钉死的三枚镜像、需重新登记 digest；
+   待线路稳定后若准备阶段仍反复出问题再上。
