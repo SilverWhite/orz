@@ -97,7 +97,7 @@
   超时 + 4×HTTP 断流）+ 检索子代理 600s 超时 ×2 + chrome-error 重试
   （FP-2 形态按裁决保留正常回传，extract-elf 7 次 163s 错误墙）。
   **结论：双车道机制面按设计工作；无代理环境的 web 慢通道质量是剩余
-  瓶颈（用户已裁决节点自理、不作 orz 处置）。**
+  瓶颈（用户已裁决节点自理、不作 orz 处置）。**（归因修正见 §5A。）
 - **轮次延迟主导 5 题（0/5）**：结构性复现——adaptive 单轮 440s 无事件
   （900s 预算 49%，FP-4 同族）；make-mips 202 次调用终端墙钟仅 18s；
   path-tracing 自然完成但 verifier 不过。与 R3 同判，双车道不作用于此类。
@@ -106,6 +106,37 @@
 - **verifier·题目域 4 题（1/4）**：model-extraction 通过（FP-7 verifier
   网络运气兑现）；dna-insert（ΔTm 定义分歧）、protein-assembly（未运行）、
   filter-js（pass-1 流断连无效）。
+
+## 5A. 归因修正（2026-09-10 复核，用户质询触发；修正 §5「web 慢通道质量」表述）
+
+调用级证据（dna-assembly 40 次检索调用全序列 + extract-elf 失败目标清单）
+不支持「web 慢通道自身质量」的笼统归因，修正为三类分解：
+
+1. **web_search 120s 超时与 46–79s 慢成功 = DeepSeek 服务端搜索后端延迟**
+   （Responses API server-side search 在服务侧执行，与本地代理无关；成功
+   调用 46–79s、超时打满 120s 客户端预算）。本地网络只作用于响应体流读取。
+2. **web_fetch / browser_read 失败呈域名集中性 = 无代理下目标域名本地可达
+   问题**：extract-elf 15 次失败目标 = github.com ×7 / huggingface.co ×5 /
+   jsdelivr ×2 / duckduckgo ×1（本地不可达或不稳定，10–35s 失败）；可达域
+   （neb.com / addgene.org / idtdna / pubmed）web_fetch 1–2s、browser_read
+   5–6s 即成功。dna-assembly 同构：wikipedia / web.archive.org /
+   protocols.io 失败，NEB/Addgene 成功。
+3. **模型换道行为与用户判断一致**：dna-assembly 序列实证——web_search
+   超时（seq115）→ browser_read neb.com 5s ok（seq123）→ chrome-error →
+   web_fetch 直读 PDF（seq175 1s ok）→ 再回 web_search……双车道全程自适应
+   交替；「超时→错误信封（120s 有界返回）→模型转通道」路径成立。后期
+   （seq247/249/278）仍重试 web_search 属 FP-2 裁决范围（不抑制、模型自主）。
+
+**dna-assembly 预算死因重述**：1800s ≈ web_search 累计 1209s（7×120s 超时
+840s + 慢成功 ~370s）+ 2×检索子代理 600s 窗口到期重委派 + 其余执行；即
+DeepSeek 服务端搜索延迟叠加本地不可达域试探耗尽墙钟，双车道机制本身按
+设计工作。
+
+**新观察（候选接缝，待用户裁决是否立项）**：`browser_control` navigate 在
+external 检索车道被拒 `retrieval_role_write_denied`（dna-assembly seq196，
+每检索任务恰好 1 次）——与 0t P1-2b「Phase 1 导航级动作面加入 external
+lane」的设计预期相悖，疑为角色写边界对 browser_control 动作分类问题；
+登记为 0t 后续候选。
 
 ## 6. 机械层正面确认
 
