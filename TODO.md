@@ -571,14 +571,14 @@ GLM F2 处置转排期（2026-09-06 用户裁决）：`orz-host/src/approval.rs`
 - [ ] O1 实施（待放行）：S1 常量+会话状态+触发接线 → S2 事件面/schema/fixtures/Python 镜像同步 → S3 双平台重建 → S4 实机复验。
 - 边界：非成绩批次——TB 4.0 榜单无任何 DeepSeek 型号，无同模型参照，不产出水平结论；本题不触碰检索车道，不验证 0t/0v。
 
-### P0-0x 初始轮中立问询（2026-09-11 用户裁决立项；**设计定稿、无待裁决项、未实施**）
+### P0-0x 初始轮中立问询（2026-09-11 用户裁决立项；**设计定稿、无待裁决项；S1 已实施，S2–S4 待续**）
 
 > 来源：TB 4.0 探针审计 O1（agent 4h53m 优化了与验收口径不同的代理指标，方向性错误直到收尾才暴露；与「过度自制」同源）。
 > 设计权威：[`INITIAL_ORIENTATION_DECLARATION_DESIGN_2026-09-11`](docs/INITIAL_ORIENTATION_DECLARATION_DESIGN_2026-09-11.md)；ADR-0010 §14.66 / v1.67；BACKLOG 0x。
 
 - [x] 设计定稿（2026-09-11，含同日两轮复核，**无待裁决项**）：复用中立问询软门/票据/事件面/pending 闸，在**首轮动作批次结束**（`post_tool_batch_gap`）一次性机械注入三问（交付物与判定口径 / 大方向与阶段 / 做法优劣与任务评估）；**不携带机械审查报告**（审查依旧只在结尾）；**不在周期问询里加问**（动作中只回看与确定、不质疑）；不落黑板、不做消费审计（「只要让模型想了那就足够」）、复用 `OrientationV1` 票据；无工具首轮顺延边界已认可。
-- [ ] S1 实施（待放行）：`INITIAL_ROUND_INQUIRY_BLOCK` 常量 + 注入块前缀登记 + 会话一次性触发状态 + 控制器分派 + `post_tool_batch_gap` 首轮触发判定（终答前审查报告注入不动）+ 测试矩阵最小集。
-- [ ] S2：事件面 `trigger` 枚举新增 `initial_round` → runtime schema / fixtures 正负例 / `run_event_journal_validation` 族 / Python 镜像同步；`scripts/check_repository.py` 全绿收口；`orz-signer` 第二模板摘要登记。
+- [x] S1 实施（2026-09-11 完成）：`INITIAL_ROUND_INQUIRY_BLOCK` 常量 + 注入块前缀登记（`is_injected_block_text`）+ 会话一次性触发状态（`initial_round_fired`，`#[serde(default)]` 兼容旧侧车）+ 控制器分派（`maybe_fire_orientation` 统一出口；触发判定落点相对设计的更正已登记）+ 测试矩阵最小集（一次性/顺延/不互扰/软门不禁工具/纯文本消费/审查报告与反例门不变且不含三问）；受影响既有测试同步（orz-loop 2 例、orz-host 8 例）。入口：[S1 实施记录](docs/audits/0X_S1_INITIAL_ROUND_INQUIRY_IMPL_2026-09-11.md)。（同刀顺带修复：`orz-bin` 测试目标 0v S2 遗留编译缺口 + 三条守卫测试的 ACAF 环境隔离。）
+- [ ] S2（待放行）：事件面 fixtures 正负例 / `run_event_journal_validation` 族 / Python 镜像同步 / `orz-signer` 第二模板摘要登记；`scripts/check_repository.py` 全绿收口。（runtime schema `trigger` 枚举与描述已在 S1 内提前落地——S1 产出的 v0.2 事件必须过自己的 schema。）
 - [ ] S3 双平台重建（进载体）→ S4 实机复验（验证「开局一次、动作中不复发」）。
 
 

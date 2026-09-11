@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://local.scientific-assurance.invalid/schema/orientation-checkpoint-event-payload-v0.2.schema.json",
   "title": "Orientation checkpoint runtime event payload v0.2 (neutral inquiry)",
-  "description": "ADR-0010 §5.2 payload boundary: session/agent identity, trigger point, turn state, message block and injection position. Neutral inquiry family — inquiry_kind must equal the envelope event_type (verifier cross-check).",
+  "description": "ADR-0010 §5.2 payload boundary: session/agent identity, trigger point, turn state, message block and injection position. Neutral inquiry family — inquiry_kind must equal the envelope event_type (verifier cross-check). P0-0x (§14.66): trigger=initial_round is the one-shot initial-round inquiry (message_block starts with [INITIAL_ROUND_INQUIRY); completed_turns_interval is the periodic threshold inquiry ([ORIENTATION).",
   "type": "object",
   "additionalProperties": false,
   "required": [
@@ -28,7 +28,7 @@
     "session_id": { "type": "string", "minLength": 1 },
     "trigger": {
       "type": "string",
-      "enum": ["completed_turns_interval", "pre_handoff"]
+      "enum": ["completed_turns_interval", "pre_handoff", "initial_round"]
     },
     "completed_turns_since_orientation": { "type": "integer", "minimum": 0 },
     "step_index": { "type": "integer", "minimum": 0 },

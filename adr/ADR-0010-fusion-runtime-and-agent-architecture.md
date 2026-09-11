@@ -5053,4 +5053,27 @@ registry/manifest 随批）→ S3 覆盖面矩阵与法官正反两测 → S4 �
    类事件；⑦测试矩阵——触发恰好一次 / 无工具首轮顺延 / 与周期问询不互扰 / 中断后恢复
    重触发 / 软门不阻断工具 / 纯文本回答被消费后续跑 / **终答前审查报告与反例质询行为
    完全不变且不含三问**。排期建议 S1 常量+会话状态+触发接线 → S2 事件面/schema/fixtures/
-   Python 镜像同步（`check_repository` 全绿为收口）→ S3 双平台重建 → S4 实机复验。
+    Python 镜像同步（`check_repository` 全绿为收口）→ S3 双平台重建 → S4 实机复验。
+
+5. **S1 实施登记（2026-09-11，同日）**：①常量 `INITIAL_ROUND_INQUIRY_BLOCK`
+   与注入块前缀 `INITIAL_ROUND_INQUIRY_INJECTED_PREFIX`（`is_injected_block_text`
+   登记，机械注入文本不落会话）；②会话一次性状态 `initial_round_fired`
+   （`#[serde(default)]`——旧侧车反序列化为未触发）；③
+   `build_initial_round_fire_record` / `commit_initial_round_fire`：**初始轮 commit
+   只置一次性标志 + 推进 fire 序号，不重置周期计数**（§3.2 互不影响、互不重置），
+   `checkpoint::commit_pending` 按 `record.is_initial_round()` 分派；④**落点更正**：
+   触发判定并入唯一分派出口 `controller::maybe_fire_orientation`（`agent_loop.rs`
+   保留原 `post_tool_batch_gap` 调用点并改用 `ORIENTATION_POST_TOOL_BATCH_GAP`
+   常量）——语义不变，避免 trigger 分支散入循环；`loop_top_gap` 仍只承担周期问询；
+   ⑤**runtime v0.2 payload schema 的 `trigger` 枚举 + 描述提前到 S1**
+   （S1 产出的 v0.2 事件必须过自己的 schema，否则即生产者/合约不一致）；
+   fixtures 正/负例、`run_event_journal_validation` 族、Python 镜像、
+   `orz-signer` 第二模板摘要仍留 S2；⑥测试矩阵落地（触发恰好一次 / 旧侧车兼容 /
+   无工具首轮顺延 / 与周期问询不互扰 / 软门不阻断工具且触发轮工具面不变 /
+   纯文本回答被消费后续跑 / **终答前审查报告与反例质询完全不变且不含三问**），
+   `orz-loop` 762 全绿；⑦同刀顺带修复 `orz-bin` 测试目标 0v S2 遗留的
+   `BrowserControlOutcome` 初始化编译缺口与三条守卫测试的 ACAF 环境隔离；
+   预存在失败（`orz-assurance` family-stage 篡改检测 1 例、`orz-tui` ACP 客户端 9 例、
+   `orz-host` 并行负载时序 flake 2 例）已在改动前的干净树上复现，登记不入本刀。
+   证据：[`0X S1 实施记录`](../docs/audits/0X_S1_INITIAL_ROUND_INQUIRY_IMPL_2026-09-11.md)。
+   **S2–S4 未放行；未跑实机、未重建载体。**
