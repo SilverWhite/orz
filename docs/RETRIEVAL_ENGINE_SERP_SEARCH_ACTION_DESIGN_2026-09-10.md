@@ -6,7 +6,8 @@
 > 设计基线：[`RETRIEVAL_AND_SUBAGENT_COMMUNICATION_BORROW_RESEARCH_2026-08-30`](RETRIEVAL_AND_SUBAGENT_COMMUNICATION_BORROW_RESEARCH_2026-08-30.md)
 > §8.1/§8.3（引擎链裁决 + 机械防护清单）、索引 `FUS-RETRIEVAL-ENGINE-SERP`
 > （current-design；0t 后模式语义退役、引擎链与 pacing 保留）、ADR-0010
-> §14.65（0t 双车道）。状态：**S1–S3 完成（S3 随 0x S3 同批重建进载体，2026-09-11）；
+> §14.65（0t 双车道）。状态：**S1–S3′ 完成（S3 随 0x S3 同批重建进载体；S3′ 载体重建
+> 0.4.1 → 0.4.2 见 [0v S4 复跑重建记录](audits/0V_S4_REFRESH_REBUILD_2026-09-11.md)，2026-09-11）；
 > S4 实机复验未通过——受阻于两项**：**F1 权限门「双面修一面」**（`risk_class` 已改
 > ReadOnly，但宿主 `orz-host/src/permission.rs::access_kind` 未补 `browser_control`
 > 映射 → 落 `Edit` 兜底 → 无头模式下确定性拒；实测 3/3 次 `browser_control search`
@@ -17,7 +18,7 @@
 > 同刀补跨表护栏测试 `read_only_tools_never_fall_into_the_edit_bucket`）；
 > **F2 改造为宿主侧供给真实 Chromium**（一次性取官方快照 rev `1696156` 落
 > `D:\tb-eval\browser\chrome-linux\`，跑批只读挂 `/opt/chrome-linux`，容器内实测
-> `Chromium 155.0.8053.0` 启动正常）。判据 1/5/6/7 待**载体重建后**复跑取证；
+> `Chromium 155.0.8053.0` 启动正常）。判据 1/5/6/7 待**载体已完成重建、复跑放行后**取证；
 > 判据 2 部分成立、判据 4 部分成立。详见
 > [0X/0V S4 实机复验记录](audits/0X_0V_S4_LIVE_VERIFICATION_2026-09-11.md)
 > （[0X S3 重建记录](audits/0X_S3_DUAL_PLATFORM_REBUILD_2026-09-11.md)）；

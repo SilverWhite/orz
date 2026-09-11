@@ -5206,3 +5206,32 @@ registry/manifest 随批）→ S3 覆盖面矩阵与法官正反两测 → S4 �
    + `/devtools/browser/<id>`）——原失败形态（该文件 30s 未写出）已消除。该目录与
    `snapshot-rev.txt` 为本地件不入库。④**后续（待放行）**：orz 源已超前于 0.4.1 载体，
    0v S4 复跑需先按批次做双平台重建（届时 bump 版本串），再执行判据 1/5/6/7 取证。
+
+11. **0v S3′ 载体重建登记（2026-09-11，同日）**：①**版本 bump 0.4.1 → 0.4.2**
+   （orz `b81c90ac`，两文件两行）冻结本批源基线——F1 修复（`340fe4a7`）落在
+   0x S3 冻结的 0.4.1 之后，不 bump 会让同一版本串指向「修 F1 前 / 后」两个
+   不同制品。②双平台重建完成：Windows 宿主 release（`CARGO_EXIT=0`，增量
+   38.68s）与 Linux musl（`rust:1.97-slim` + ORZ-BUILD-MOUNT-001 官方源变体，
+   `BUILD_EXIT=0`，`-j 1` 编译 **28m43s**）三件套；载体
+   `D:\tb-eval\orz-windows` / `orz-linux` 刷新为 0.4.2，staging 与载体哈希逐对
+   吻合。③产物锁定：Windows `orz.exe` 52,254,208 B / `orz-signer.exe`
+   6,742,528 B / `orz-acaf-provision.exe` 6,642,176 B；Linux `orz`
+   109,387,800 B / `orz-signer` 1,396,232 B / `orz-acaf-provision` 1,214,816 B。
+   与 0.4.1 的差：`orz.exe` +512 B、Linux `orz` +3,816 B（即 F1
+   `access_kind` 分档分支的增量及重链接差异）。④Linux 三件 `ET_DYN` +
+   **PT_INTERP 计数 0**（musl static-pie；bookworm-slim 无 `readelf`，改用宿主侧
+   ELF 程序头解析器核验）；bookworm 与宿主双向加载冒烟全过（provision usage /
+   signer manifest 缺失 / `--version` 无 TTY，均 exit 1 预期形态）。⑤接线符号
+   核证双平台全命中：车道标注 2/2、`browser_launch_result` 3/3、`browser_control`
+   75/59、`retrieval_enabled` 5/8、`wait_load` 4/7、`setmkt=en-US` 1/1、
+   `low_quality` 11/11、`engine_attempts` 2/2、`[INITIAL_ROUND_INQUIRY v0.1]`
+   1/1、`post_tool_batch_gap` 7/7、`template_sha256_initial_round` 1/1、
+   `0.4.2` 12/106；家族名 `initial_round_inquiry` 两平台仍为 0（同 0q 形态，
+   非缺陷）。⑥manifest 重算 1441 条、差异面恰两行（`Cargo.lock` /
+   `crates/orz-bin/Cargo.toml`）、门禁 `valid: true` / `error_count: 0`；
+   0.4.0 发布资产未被触碰。⑦**装置观察（供后续成本估计）**：本次 `/target`
+   持有上批 0.4.1 完整产物（5.75 GB）但 cargo 仍从 `proc-macro2` 起重编全依赖图
+   （等价全量）；领先假设为容器 `--rm` 只挂 `cargo-config.toml` 而未挂
+   CARGO_HOME，依赖指纹每轮重新推导——原因未隔离，只作事实登记。
+   证据：[`0v S4 复跑重建记录`](../docs/audits/0V_S4_REFRESH_REBUILD_2026-09-11.md)。
+   **0v S4 复跑待放行；未跑实机。**
