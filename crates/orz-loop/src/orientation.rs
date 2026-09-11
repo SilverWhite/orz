@@ -626,6 +626,112 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir2);
     }
 
+    /// 集成（设计 §5-7「中断后恢复重触发」）：fire 已 journal、消费前即中断
+    /// （生成失败）→ 一次性标志不提交 → **下次 run 在首个含工具调用的批次
+    /// 结束再次触发一次**（§3.4 登记：初始轮注入位置固定为
+    /// `post_tool_batch_gap`，`loop_top_gap` 只承担周期问询，故恢复形态是
+    /// 「下次 run 首个动作批次」而非 loop-top）。
+    ///
+    /// 中断用「run1 的网关脚本只有动作批次一轮」复现：初始轮问询注入后的
+    /// pending 轮一生成即耗尽（等价于注入后未消费即中断），run1 以错误终止；
+    /// 两个 run 共用同一份会话级 orientation 状态（run2 用独立网关与 journal）。
+    #[tokio::test]
+    async fn initial_round_refires_next_run_when_the_fire_was_not_consumed() {
+        let dir1 = test_dir();
+        let host1 = TestHost {
+            journal: JournalRecorder::new(dir1.clone()),
+            tool_result: Some(ToolResult {
+                output: "ok".to_string(),
+                exit_code: Some(0),
+                output_encoding: None,
+                structured: None,
+                ..Default::default()
+            }),
+        };
+        let dir2 = test_dir();
+        let host2 = TestHost {
+            journal: JournalRecorder::new(dir2.clone()),
+            tool_result: Some(ToolResult {
+                output: "ok".to_string(),
+                exit_code: Some(0),
+                output_encoding: None,
+                structured: None,
+                ..Default::default()
+            }),
+        };
+        let mut orientation =
+            OrientationSessionState::new_with_threshold("sess-initial-recover", 50);
+
+        // run1：首个动作批次 → 初始轮 fire（pending 未消费）→ 生成失败中断。
+        let controller1 = AgentLoopController::with_gateway(Arc::new(FakeProvider::new(vec![
+            ScriptedResponse::tool_calls(vec![tool_call("read_file", "call-0")]),
+        ])));
+        let run1 = controller1
+            .run_turn(
+                &host1,
+                "任务",
+                "RUN-0X-R1",
+                MANIFEST,
+                0,
+                None,
+                Some(&mut orientation),
+                None,
+            )
+            .await;
+        assert!(
+            run1.is_err(),
+            "run1 必须在 pending 轮生成失败处中断（脚本耗尽）"
+        );
+        let fires1: Vec<_> = events(&dir1)
+            .into_iter()
+            .filter(|e| e.event_type == EventType::OrientationCheckpoint)
+            .collect();
+        assert_eq!(fires1.len(), 1, "{:?}", event_types(&dir1));
+        assert_eq!(fires1[0].payload["trigger"], TRIGGER_INITIAL_ROUND);
+        // 关键：fire 已落 journal，但一次性标志**未提交**（消费前中断）。
+        assert!(
+            !orientation.initial_round_fired,
+            "未消费的 fire 不得提交一次性标志（否则恢复即丢问询）"
+        );
+        assert_eq!(orientation.sequence, 0);
+
+        // run2：首个动作批次结束再次触发（恢复重触发），回答被软消费后照常收尾。
+        let controller2 = AgentLoopController::with_gateway(Arc::new(FakeProvider::new(vec![
+            ScriptedResponse::tool_calls(vec![tool_call("read_file", "call-1")]),
+            // 初始轮问询的回答（软门消费后续跑）。
+            ScriptedResponse::text("完成"),
+            // 反例门轮 + 终答轮。
+            ScriptedResponse::text("完成"),
+            ScriptedResponse::text("完成"),
+        ])));
+        controller2
+            .run_turn(
+                &host2,
+                "任务",
+                "RUN-0X-R2",
+                MANIFEST,
+                0,
+                None,
+                Some(&mut orientation),
+                None,
+            )
+            .await
+            .unwrap();
+        let fires2: Vec<_> = events(&dir2)
+            .into_iter()
+            .filter(|e| e.event_type == EventType::OrientationCheckpoint)
+            .collect();
+        assert_eq!(fires2.len(), 1, "{:?}", event_types(&dir2));
+        assert_eq!(fires2[0].payload["trigger"], TRIGGER_INITIAL_ROUND);
+        assert_eq!(
+            fires2[0].payload["injection_position"],
+            "post_tool_batch_gap"
+        );
+        assert!(orientation.initial_round_fired);
+        let _ = std::fs::remove_dir_all(&dir1);
+        let _ = std::fs::remove_dir_all(&dir2);
+    }
+
     /// 集成：初始轮问询与阈值周期问询互不影响（初始轮 commit 不重置计数，
     /// 周期问询照常在阈值处触发），且触发轮保持常规工具面（软门不禁工具）。
     #[tokio::test]

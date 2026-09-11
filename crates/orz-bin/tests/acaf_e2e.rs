@@ -310,6 +310,34 @@ async fn signer_process_full_lifecycle() {
         "initial-round ticket must consume under its own trigger: {outcome:?}"
     );
 
+    // P0-0x S2 negative — a ticket minted under one trigger must NOT verify
+    // under the other: a PERIODIC-digest ticket presented with
+    // `trigger=initial_round` fails check 2 (`template_mismatch`) and never
+    // consumes (the signer's expected digest is selected by the verifier's
+    // trigger, so the two built-ins cannot be crossed).
+    let periodic = client
+        .sign_ticket(TicketKind::OrientationV1, None, &"0".repeat(64), None, None)
+        .await
+        .expect("sign periodic orientation");
+    assert_eq!(
+        periodic.template_sha256, ticket.template_sha256,
+        "an absent trigger must keep binding the periodic built-in"
+    );
+    let outcome = client
+        .verify_and_consume(&periodic, &"0".repeat(64), None, None, Some("initial_round"))
+        .await
+        .expect("verify periodic ticket as the initial round");
+    assert!(
+        matches!(
+            outcome,
+            TicketOutcome::Rejected {
+                code: RejectCode::TemplateMismatch,
+                ..
+            }
+        ),
+        "periodic ticket verified as the initial round must reject with template_mismatch: {outcome:?}"
+    );
+
     let ticket2 = client
         .sign_ticket(
             TicketKind::DispositionV1,
