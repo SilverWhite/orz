@@ -900,13 +900,19 @@ impl CdpBrowserSession {
         Ok(outcome)
     }
 
-    /// P0-0v：`search` 动作编排——引擎链 Google → Bing → DDG，会话失败
-    /// 备忘，冷却/上限，成功时回传结构化、已加权、有界 SERP 结果。全部
-    /// 引擎失败 = 状态化 `all_engines_failed`。
+    /// P0-0v：`search` 动作编排——引擎链 Google → Bing → DDG，冷却/上限，
+    /// 成功时回传结构化、已加权、有界 SERP 结果。三引擎均被真实尝试且均
+    /// 失败 = `all_engines_failed`。
+    ///
+    /// 0v 第二批（2026-09-12，软备忘）：候选恒为三引擎全集
+    /// （[`super::serp::ordered_engines`]，失败者置队尾、从不移除）。本循环
+    /// 按当前顺序逐个真实尝试，首个成功即返回；成功时未被触及的引擎显式记
+    /// `not_attempted`（原 `skipped` = 会话备忘短路，随备忘退役）。防重试
+    /// 风暴由会话上限/冷却/车道预算承担，不由备忘承担。
     ///
     /// P2-1 (2026-09-10)：成功与失败信封都携带 `engine_attempts`——失败
-    /// 时必须标注是哪个引擎、以何类别失败；被会话备忘跳过的引擎也没有
-    /// 静默消失（status=skipped + 备忘类别）。
+    /// 时必须标注是哪个引擎、以何类别失败；未被本次调用触及的引擎也不得
+    /// 静默消失（status=not_attempted）。
     ///
     /// P2-3（2026-09-10）：会话物理事实的只读出口见
     /// [`CdpBrowserSession::serp_session_navigations`]——宿主据此上报给
@@ -921,15 +927,34 @@ impl CdpBrowserSession {
         let wait = {
             let mut state = self.serp_state.lock().unwrap();
             if state.ceiling_reached() {
-                return Ok(Self::control_failure(
-                    "browser_control_search_cap_exceeded",
-                    &format!(
-                        "browser_control SERP engine-navigation ceiling reached ({})",
-                        super::serp::SERP_MAX_NAVIGATIONS_PER_SESSION
+                // 0v-A 复审 O-2（2026-09-12）：上限拒绝信封也携带全量
+                // `engine_attempts`（三引擎均 `not_attempted`，按当前
+                // would-be 尝试序排列）——引擎面不因拒绝路径静默消失，
+                // 取证面（有信封即落）随之覆盖上限路径。
+                let engines = super::serp::ordered_engines(&state);
+                let attempts = engines
+                    .iter()
+                    .copied()
+                    .map(|engine| {
+                        SerpEngineAttempt::not_attempted_reason(
+                            engine,
+                            "not attempted in this call: session engine-navigation ceiling \
+                             already reached",
+                        )
+                    })
+                    .collect();
+                return Ok(Self::with_attempts(
+                    Self::control_failure(
+                        "browser_control_search_cap_exceeded",
+                        &format!(
+                            "browser_control SERP engine-navigation ceiling reached ({})",
+                            super::serp::SERP_MAX_NAVIGATIONS_PER_SESSION
+                        ),
+                        None,
+                        None,
+                        Vec::new(),
                     ),
-                    None,
-                    None,
-                    Vec::new(),
+                    attempts,
                 ));
             }
             state.begin_search(query, now)
@@ -940,66 +965,68 @@ impl CdpBrowserSession {
 
         let engines = {
             let state = self.serp_state.lock().unwrap();
-            super::serp::available_engines(&state)
+            super::serp::ordered_engines(&state)
         };
-        // Fixed-order attempt sheet: memoized engines start as `skipped`, the
-        // rest are filled in as the loop reaches them (`pending` entries are
-        // dropped before the envelope is built).
-        let mut attempts: Vec<SerpEngineAttempt> = Vec::new();
-        let mut skipped: Vec<String> = Vec::new();
-        {
-            let state = self.serp_state.lock().unwrap();
-            for engine in super::serp::SERP_ENGINE_ORDER {
-                match state.failure(engine) {
-                    Some(class) => {
-                        skipped.push(format!(
-                            "search {}: skipped ({})",
-                            engine.as_str(),
-                            class.as_str()
-                        ));
-                        attempts.push(SerpEngineAttempt::skipped(engine, class));
-                    }
-                    None => attempts.push(SerpEngineAttempt::pending(engine)),
-                }
-            }
-        }
+        // Attempt sheet in attempt order: every engine starts `pending` and
+        // is replaced as the loop reaches it. Nothing is pre-skipped — the
+        // soft memo changes position, never membership.
+        let mut attempts: Vec<SerpEngineAttempt> = engines
+            .iter()
+            .copied()
+            .map(SerpEngineAttempt::pending)
+            .collect();
         let mut failures: Vec<(SerpEngine, SerpFailureClass, String)> = Vec::new();
 
         for engine in engines {
+            let started = Instant::now();
             match self
                 .control_search_engine(control, engine, query, timeout)
                 .await
             {
                 Ok((results, engine_log)) => {
-                    Self::set_attempt(&mut attempts, engine, SerpEngineAttempt::ok(engine));
+                    Self::set_attempt(
+                        &mut attempts,
+                        engine,
+                        SerpEngineAttempt::ok(engine, started.elapsed().as_millis() as u64),
+                    );
+                    // The chain ends here: engines this call never reached are
+                    // explicit `not_attempted` — never silently dropped (P2-1
+                    // discipline), never `skipped` (retired with the memo).
+                    Self::mark_unreached_as_not_attempted(&mut attempts);
                     return Ok(Self::control_search_ok(
                         engine, results, engine_log, attempts,
                     ));
                 }
                 Err(failure) => {
-                    let mut state = self.serp_state.lock().unwrap();
-                    state.record_failure(engine, failure.class);
+                    let wall_ms = started.elapsed().as_millis() as u64;
+                    {
+                        let mut state = self.serp_state.lock().unwrap();
+                        state.record_failure(engine, failure.class);
+                    }
                     Self::set_attempt(
                         &mut attempts,
                         engine,
-                        SerpEngineAttempt::failed(engine, failure.class, &failure.reason),
+                        SerpEngineAttempt::failed(engine, failure.class, &failure.reason, wall_ms),
                     );
                     failures.push((engine, failure.class, failure.reason));
                 }
             }
         }
 
-        let mut log_lines: Vec<String> = failures
+        // Tightened meaning (0v 第二批): reaching this point means every
+        // engine in the sheet was really attempted and really failed — the
+        // memoized short-circuit that used to collapse the chain no longer
+        // exists.
+        let log_lines: Vec<String> = failures
             .iter()
             .map(|(engine, class, reason)| {
                 format!("search {}: {} ({reason})", engine.as_str(), class.as_str())
             })
             .collect();
-        log_lines.extend(skipped);
         Ok(Self::with_attempts(
             Self::control_failure(
                 "all_engines_failed",
-                "all SERP engines failed for this session",
+                "all three SERP engines were attempted and failed",
                 None,
                 None,
                 log_lines,
@@ -1027,6 +1054,16 @@ impl CdpBrowserSession {
     ) {
         if let Some(slot) = attempts.iter_mut().find(|a| a.engine == engine) {
             *slot = entry;
+        }
+    }
+
+    /// Success path (0v 第二批, 2026-09-12): engines the chain never reached
+    /// this call get the explicit `not_attempted` sheet entry — never silently
+    /// dropped (P2-1 discipline), never `skipped` (retired with the memo).
+    /// Pure so the sheet semantics stay mechanically pinned without a browser.
+    fn mark_unreached_as_not_attempted(attempts: &mut [SerpEngineAttempt]) {
+        for attempt in attempts.iter_mut().filter(|a| a.status == "pending") {
+            *attempt = SerpEngineAttempt::not_attempted(attempt.engine);
         }
     }
 
@@ -2598,6 +2635,142 @@ mod tests {
         );
         assert!(control.is_none(), "cap refusal must not create a tab");
         assert!(outcome.log.contains("ceiling reached"), "{}", outcome.log);
+        // 0v-A 复审 O-2（2026-09-12）：拒绝信封也携带全量 engine_attempts——
+        // 三引擎均 not_attempted（上限已达，非链首成功），顺序 = 当前 would-be
+        // 尝试序（本测无失败备忘 = 固定链序）。
+        let attempts = outcome
+            .engine_attempts
+            .expect("cap envelope carries attempts");
+        assert_eq!(attempts.len(), 3);
+        assert!(
+            attempts
+                .iter()
+                .all(|a| a.status == "not_attempted" && a.error_class.is_none()),
+            "{attempts:?}"
+        );
+        assert!(
+            attempts.iter().all(|a| {
+                a.reason
+                    .as_deref()
+                    .unwrap_or("")
+                    .contains("ceiling already reached")
+            }),
+            "{attempts:?}"
+        );
+    }
+
+    /// 0v 第二批 S2（2026-09-12）：成功路径的 attempt sheet 语义——链在首个
+    /// 成功引擎处结束，其后的引擎逐个显式记 `not_attempted`（固定 reason、
+    /// 无 error_class、无 wall_ms），成功/失败条目原样保留（纯函数钉字，
+    /// 无需真实浏览器）。
+    #[test]
+    fn success_marks_unreached_engines_not_attempted_in_attempt_order() {
+        // 会话内 Google/Bing 已失败 → 尝试序 [DDG, Google, Bing]；DDG 首个
+        // 成功，Google/Bing 尚处 `pending`。
+        let mut attempts: Vec<SerpEngineAttempt> =
+            [SerpEngine::DuckDuckGo, SerpEngine::Google, SerpEngine::Bing]
+                .iter()
+                .copied()
+                .map(SerpEngineAttempt::pending)
+                .collect();
+        CdpBrowserSession::set_attempt(
+            &mut attempts,
+            SerpEngine::DuckDuckGo,
+            SerpEngineAttempt::ok(SerpEngine::DuckDuckGo, 42),
+        );
+
+        CdpBrowserSession::mark_unreached_as_not_attempted(&mut attempts);
+
+        assert_eq!(attempts.len(), 3);
+        let (ddg, google, bing) = (&attempts[0], &attempts[1], &attempts[2]);
+        assert_eq!((ddg.engine, ddg.status), (SerpEngine::DuckDuckGo, "ok"));
+        assert_eq!(ddg.wall_ms, Some(42));
+        for (engine, entry) in [(SerpEngine::Google, google), (SerpEngine::Bing, bing)] {
+            assert_eq!((entry.engine, entry.status), (engine, "not_attempted"));
+            assert_eq!(entry.error_class, None);
+            assert_eq!(entry.wall_ms, None, "not_attempted carries no wall_ms");
+            assert_eq!(
+                entry.reason.as_deref(),
+                Some("not attempted in this call: the chain succeeded on an earlier engine"),
+            );
+        }
+    }
+
+    /// 0v 第二批 S2（2026-09-12）：软备忘下的链循环——①三引擎**均被真实
+    /// 尝试且均失败**才 `all_engines_failed`（每条 attempt 带 error_class 与
+    /// wall_ms）；②同一会话内先前失败的引擎仍被真实重试（导航计数持续增长，
+    /// 备忘短路已不存在）。离线确定性：DNS 缓存预热后门零解析，失败点固定
+    /// 在浏览器 WS 拒连（端口 1）。
+    #[tokio::test]
+    async fn search_chain_really_retries_engines_failed_earlier_in_the_session() {
+        let session = test_session(test_config());
+        {
+            let mut dns = session.dns.lock().unwrap();
+            for host in ["www.google.com", "www.bing.com", "html.duckduckgo.com"] {
+                dns.insert(
+                    host.to_string(),
+                    DnsCacheEntry {
+                        at: std::time::Instant::now(),
+                    },
+                );
+            }
+        }
+        let mut control = None;
+
+        let first = session
+            .control_search(&mut control, "q", Duration::from_millis(300))
+            .await
+            .unwrap();
+        assert_eq!(first.error_class.as_deref(), Some("all_engines_failed"));
+        assert!(control.is_none(), "offline failure never opens a tab");
+        let attempts = first.engine_attempts.expect("failure carries the sheet");
+        assert_eq!(attempts.len(), 3, "every engine is on the sheet");
+        // 全员置尾 → 尝试序退回固定链序。
+        assert_eq!(
+            attempts
+                .iter()
+                .map(|a| a.engine.as_str())
+                .collect::<Vec<_>>(),
+            vec!["google", "bing", "duckduckgo"]
+        );
+        assert!(
+            attempts.iter().all(|a| {
+                a.status == "failed" && a.error_class.is_some() && a.wall_ms.is_some()
+            }),
+            "all_engines_failed means three real attempts: {attempts:?}"
+        );
+        let ceiling = super::super::serp::SERP_MAX_NAVIGATIONS_PER_SESSION as u32;
+        assert_eq!(
+            session.serp_session_navigations(),
+            (3, ceiling),
+            "each attempt navigated once"
+        );
+
+        // 预置 pacing 时间戳，让第二次调用不真睡冷却（jitter ≤ 2.5s 尾差
+        // 可接受；underflow 时回退 now，最坏多等一个冷却，不 panics）。
+        {
+            let mut state = session.serp_state.lock().unwrap();
+            let aged = std::time::Instant::now()
+                .checked_sub(Duration::from_secs(3600))
+                .unwrap_or_else(std::time::Instant::now);
+            state.begin_search("q", aged);
+        }
+
+        let second = session
+            .control_search(&mut control, "q", Duration::from_millis(300))
+            .await
+            .unwrap();
+        assert_eq!(second.error_class.as_deref(), Some("all_engines_failed"));
+        let attempts = second.engine_attempts.expect("failure carries the sheet");
+        assert!(
+            attempts.iter().all(|a| a.status == "failed"),
+            "previously failed engines are really re-attempted: {attempts:?}"
+        );
+        assert_eq!(
+            session.serp_session_navigations(),
+            (6, ceiling),
+            "navigations keep growing — the memo never short-circuits the chain"
+        );
     }
 
     /// P2-3（2026-09-10）：会话 SERP 物理事实出口——已发生导航数与会话上限

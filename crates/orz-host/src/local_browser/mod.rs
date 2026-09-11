@@ -1675,12 +1675,14 @@ pub(crate) mod tests {
                         status: "failed",
                         error_class: Some("network".to_string()),
                         reason: Some("timeout".to_string()),
+                        wall_ms: Some(1200),
                     },
                     SerpEngineAttempt {
                         engine: super::serp::SerpEngine::Bing,
                         status: "ok",
                         error_class: None,
                         reason: None,
+                        wall_ms: Some(30),
                     },
                 ]),
                 results: Some(vec![SerpResult {
@@ -1707,7 +1709,9 @@ pub(crate) mod tests {
         assert_eq!(parsed["results"][0]["weight"], 0.7);
         assert_eq!(parsed["engine_attempts"][0]["engine"], "google");
         assert_eq!(parsed["engine_attempts"][0]["status"], "failed");
+        assert_eq!(parsed["engine_attempts"][0]["wall_ms"], 1200);
         assert_eq!(parsed["engine_attempts"][1]["engine"], "bing");
+        assert_eq!(parsed["engine_attempts"][1]["wall_ms"], 30);
         assert!(parsed.get("url").is_none(), "{parsed}");
         assert!(parsed.get("title").is_none(), "{parsed}");
     }
@@ -1728,12 +1732,14 @@ pub(crate) mod tests {
                         status: "failed",
                         error_class: Some("network".to_string()),
                         reason: Some("timeout".to_string()),
+                        wall_ms: Some(1200),
                     },
                     SerpEngineAttempt {
                         engine: super::serp::SerpEngine::Bing,
                         status: "failed",
                         error_class: Some("captcha".to_string()),
                         reason: Some("search bing hit CAPTCHA/consent".to_string()),
+                        wall_ms: Some(45),
                     },
                 ]),
                 ..Default::default()

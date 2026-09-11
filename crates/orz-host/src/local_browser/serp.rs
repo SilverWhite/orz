@@ -3,7 +3,9 @@
 //!
 //! This module owns the machine-side, testable pieces:
 //! - fixed engine order and `en-US` search URLs;
-//! - session-level failure memo and pacing/limit state;
+//! - session-level soft memo (ordering-only, 0v 第二批 2026-09-12: a failed
+//!   engine moves to the chain TAIL and is never removed) and pacing/limit
+//!   state;
 //! - Bing `/ck/a` and DuckDuckGo `uddg` redirect decoding;
 //! - low-quality domain weighting through the shared
 //!   `orz_assurance::source_weighting::SourceWeightConfig` judge;
@@ -117,13 +119,20 @@ pub struct SerpResult {
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct SerpEngineAttempt {
     pub engine: SerpEngine,
-    /// `ok` / `failed` / `skipped` (skipped = memoized earlier failure in
-    /// this browser session). `pending` is internal and never emitted.
+    /// `ok` / `failed` / `not_attempted` (0v 第二批, 2026-09-12: soft memo
+    /// retired `skipped` — engines are never memoized out of the chain, so
+    /// the only not-attempted case is "this call ended on an earlier
+    /// engine"). `pending` is internal and never emitted.
     pub status: &'static str,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub error_class: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub reason: Option<String>,
+    /// Per-engine attempt wall time in milliseconds (0v-A forensic surface,
+    /// 2026-09-12). Present only for engines this call really attempted;
+    /// additive to the model-visible envelope, never a replacement of it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub wall_ms: Option<u64>,
 }
 
 impl SerpEngineAttempt {
@@ -133,48 +142,71 @@ impl SerpEngineAttempt {
             status: "pending",
             error_class: None,
             reason: None,
+            wall_ms: None,
         }
     }
 
-    pub(crate) fn ok(engine: SerpEngine) -> Self {
+    pub(crate) fn ok(engine: SerpEngine, wall_ms: u64) -> Self {
         Self {
             engine,
             status: "ok",
             error_class: None,
             reason: None,
+            wall_ms: Some(wall_ms),
         }
     }
 
-    pub(crate) fn failed(engine: SerpEngine, class: SerpFailureClass, reason: &str) -> Self {
+    pub(crate) fn failed(
+        engine: SerpEngine,
+        class: SerpFailureClass,
+        reason: &str,
+        wall_ms: u64,
+    ) -> Self {
         Self {
             engine,
             status: "failed",
             error_class: Some(class.as_str().to_string()),
             reason: Some(truncate_chars(reason, SERP_REASON_MAX_CHARS)),
+            wall_ms: Some(wall_ms),
         }
     }
 
-    /// A memoized engine is not retried this session; the model still needs
-    /// to see that it was skipped and why.
-    pub(crate) fn skipped(engine: SerpEngine, class: SerpFailureClass) -> Self {
+    /// The chain ended on an earlier engine this call, so this one was never
+    /// navigated. Engines are never memoized out of the candidate set (soft
+    /// memo), so `not_attempted` says nothing about the engine's health —
+    /// only about where this call stopped.
+    pub(crate) fn not_attempted(engine: SerpEngine) -> Self {
+        Self::not_attempted_reason(
+            engine,
+            "not attempted in this call: the chain succeeded on an earlier engine",
+        )
+    }
+
+    /// Same status, caller-supplied reason — the session-ceiling path (0v-A
+    /// 复审 O-2, 2026-09-12) also emits a full sheet, where nothing was
+    /// attempted because the ceiling was already reached, not because an
+    /// earlier engine succeeded.
+    pub(crate) fn not_attempted_reason(engine: SerpEngine, reason: &str) -> Self {
         Self {
             engine,
-            status: "skipped",
-            error_class: Some(class.as_str().to_string()),
-            reason: Some("skipped: failed earlier in this browser session".to_string()),
+            status: "not_attempted",
+            error_class: None,
+            reason: Some(reason.to_string()),
+            wall_ms: None,
         }
     }
 }
 
-/// Why an engine failed for this session. Only these classes are memoized:
-/// network failures, CAPTCHA/consent walls, and empty organic results.
+/// Why an engine failed for this session. Only these classes are recorded —
+/// 0v 第二批软备忘（2026-09-12）：记录只作排序依据（置队尾），失败引擎仍
+/// 在候选集内、仍会被真实重试。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum SerpFailureClass {
     Network,
     Captcha,
     Empty,
-    /// URL gate / policy block. Not a network failure but still memoized so
-    /// a poisoned navigation target is not retried every search.
+    /// URL gate / policy block. Not a network failure but still recorded so
+    /// a deterministically gated target is demoted to the chain tail.
     Blocked,
 }
 
@@ -191,6 +223,10 @@ impl SerpFailureClass {
 
 /// Session-scoped SERP state. Lives for the lifetime of one
 /// [`super::CdpBrowserSession`] and is invisible to the model.
+///
+/// 0v 第二批（2026-09-12，软备忘）：失败记录是**纯排序依据**——失败的引擎
+/// 在后续 `auto` 调用中排到队尾，但**从不移出候选集**；不存在「引擎被禁用」
+/// 状态。防重试风暴由会话上限/冷却/车道预算承担，不由备忘承担。
 #[derive(Debug, Clone, Default)]
 pub struct SerpSessionState {
     failures: HashMap<SerpEngine, SerpFailureClass>,
@@ -203,10 +239,15 @@ impl SerpSessionState {
         Self::default()
     }
 
+    /// The memoized failure class, if any — ordering input only. A memoized
+    /// engine is still a candidate (tail of the chain), never removed.
     pub fn failure(&self, engine: SerpEngine) -> Option<SerpFailureClass> {
         self.failures.get(&engine).copied()
     }
 
+    /// Demote an engine to the chain tail. Re-recording the same engine
+    /// updates the class (latest failure wins) but never stacks a second
+    /// penalty — the tail is a single position.
     pub fn record_failure(&mut self, engine: SerpEngine, class: SerpFailureClass) {
         self.failures.insert(engine, class);
     }
@@ -246,14 +287,23 @@ impl SerpSessionState {
     }
 }
 
-/// The engines still eligible for this session, keeping the fixed chain
-/// order after removing memoized failures.
-pub fn available_engines(state: &SerpSessionState) -> Vec<SerpEngine> {
-    SERP_ENGINE_ORDER
-        .iter()
-        .copied()
-        .filter(|engine| state.failure(*engine).is_none())
-        .collect()
+/// The full candidate set for this session in attempt order (0v 第二批,
+/// 2026-09-12: soft memo — replaces the removal-style `available_engines`).
+/// Clean engines keep the fixed chain order; memoized-failure engines are
+/// demoted to the tail, preserving the fixed order among themselves. Every
+/// engine is always returned: failure changes position, never membership.
+pub fn ordered_engines(state: &SerpSessionState) -> Vec<SerpEngine> {
+    let mut head = Vec::new();
+    let mut tail = Vec::new();
+    for engine in SERP_ENGINE_ORDER {
+        if state.failure(engine).is_some() {
+            tail.push(engine);
+        } else {
+            head.push(engine);
+        }
+    }
+    head.extend(tail);
+    head
 }
 
 /// Construct the fixed `en-US` search URL for an engine.
@@ -673,24 +723,37 @@ mod tests {
         }
     }
 
+    /// 0v 第二批（2026-09-12）：软备忘——失败只置队尾、从不移除。头/尾两段
+    /// 各自保持固定链序；全员置尾时次序退回固定链序（不倒序、无第二种惩罚位）。
     #[test]
-    fn available_engines_skip_memoized_failures_in_fixed_order() {
+    fn ordered_engines_demotes_failures_to_the_tail_without_removal() {
         let mut state = SerpSessionState::new();
         assert_eq!(
-            available_engines(&state),
+            ordered_engines(&state),
             vec![SerpEngine::Google, SerpEngine::Bing, SerpEngine::DuckDuckGo]
         );
         state.record_failure(SerpEngine::Google, SerpFailureClass::Network);
         assert_eq!(
-            available_engines(&state),
-            vec![SerpEngine::Bing, SerpEngine::DuckDuckGo]
+            ordered_engines(&state),
+            vec![SerpEngine::Bing, SerpEngine::DuckDuckGo, SerpEngine::Google]
         );
         state.record_failure(SerpEngine::DuckDuckGo, SerpFailureClass::Captcha);
-        assert_eq!(available_engines(&state), vec![SerpEngine::Bing]);
+        assert_eq!(
+            ordered_engines(&state),
+            vec![SerpEngine::Bing, SerpEngine::Google, SerpEngine::DuckDuckGo]
+        );
+        // Membership never shrinks: with every engine demoted the order is
+        // exactly the fixed chain order again.
         state.record_failure(SerpEngine::Bing, SerpFailureClass::Empty);
-        assert!(available_engines(&state).is_empty());
+        assert_eq!(
+            ordered_engines(&state),
+            vec![SerpEngine::Google, SerpEngine::Bing, SerpEngine::DuckDuckGo]
+        );
     }
 
+    /// 0v 第二批 S2（2026-09-12）改写：软备忘下备忘失败只是排序依据——
+    /// 备忘不删除（引擎仍全量在候选集），护栏上限原样保留（§8.2 第 6 条：
+    /// 防重试风暴由上限/冷却/车道预算承担，不由备忘承担）。
     #[test]
     fn session_state_memoizes_failures_and_caps_navigations() {
         let mut state = SerpSessionState::new();
@@ -701,12 +764,42 @@ mod tests {
             state.failure(SerpEngine::Google),
             Some(SerpFailureClass::Network)
         );
+        // 失败不删除：备忘后的引擎仍是候选（只是排尾）。
+        let ordered = ordered_engines(&state);
+        assert_eq!(ordered.len(), 3);
+        assert!(ordered.contains(&SerpEngine::Google));
         // P2-4：上限计的是引擎导航次数，不是 search 调用次数。
         for _ in 0..SERP_MAX_NAVIGATIONS_PER_SESSION {
             state.record_navigation();
             state.begin_search("q", now);
         }
+        // 上限仍在：备忘永不放松物理护栏。
         assert!(state.ceiling_reached());
+    }
+
+    /// 0v 第二批 S2（2026-09-12）：置尾后再失败**保持队尾**——不叠加惩罚、
+    /// 不倒序、尾段内部保持固定链序（单一惩罚位，§8.2 第 2 条）。
+    #[test]
+    fn demoted_engine_that_fails_again_stays_at_the_tail() {
+        let mut state = SerpSessionState::new();
+        state.record_failure(SerpEngine::Google, SerpFailureClass::Network);
+        assert_eq!(
+            ordered_engines(&state),
+            vec![SerpEngine::Bing, SerpEngine::DuckDuckGo, SerpEngine::Google]
+        );
+        // 第二个失败者排到已置尾者之后（尾段保持固定链序）。
+        state.record_failure(SerpEngine::Bing, SerpFailureClass::Captcha);
+        assert_eq!(
+            ordered_engines(&state),
+            vec![SerpEngine::DuckDuckGo, SerpEngine::Google, SerpEngine::Bing]
+        );
+        // 已置尾的 Google 再次失败（换类别同理）：仍在其原队尾位，Bing 不
+        // 被反向压到它前面。
+        state.record_failure(SerpEngine::Google, SerpFailureClass::Empty);
+        assert_eq!(
+            ordered_engines(&state),
+            vec![SerpEngine::DuckDuckGo, SerpEngine::Google, SerpEngine::Bing]
+        );
     }
 
     #[test]
