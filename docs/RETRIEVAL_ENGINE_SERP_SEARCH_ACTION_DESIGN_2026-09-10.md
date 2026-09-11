@@ -740,8 +740,9 @@ DuckDuckGo」，静态文本（0t 静态标注纪律），两条车道一致。`
     （导航计数 3 → 6，备忘短路不存在）。
   - `serp_attempts_forensic_files_match_each_search_call`（orz-loop
     host_exec.rs）：取证面**逐条对应**——每次带信封的 search 调用恰落一份
-    文件、同轮第二次顺延 `-2` 后缀、`envelope` 与模型实际收到的输出**逐字
-    同源**（含引擎名/类别/wall_ms/tier）、机械读数逐字段
+    文件、同轮第二次顺延 `-2` 后缀、`envelope` 与模型实际收到的输出**内容同源**
+    （含引擎名/类别/wall_ms/tier；精确口径见下方复审处理 P2 项——经机械脱敏、
+    非字节序一致）、机械读数逐字段
     （`results_count`/`low_quality_count`/`lane_budget` 结算推进 3/8→4/8/
     `session` 三字段）；纯文本宿主错误（无信封）**不落文件**；journal 的
     browser_control 完成事件数 = 调用数。
@@ -755,6 +756,10 @@ DuckDuckGo」，静态文本（0t 静态标注纪律），两条车道一致。`
   **765**/0/3；`cargo fmt` 干净（两个测试文件经格式化）；新增代码 clippy
   零告警（clippy 命中行均在既有基线，本批零新增）；`check_repository`
   `valid: true`（error_count 0，manifest 随本批重算 1441 条）。
+- **复审处理（2026-09-12 同日三面复审：实现+测试面 pass（0 P0/0 P1）、记录符合性面 pass（0 P0/2 P1 已修）、设计合理性面 pass）**：
+  - **P2「逐字同源」表述限定（已修，纯文档）**：精确口径 = **内容逐字段同源、经 `orz_secrets::redact_secrets` 机械脱敏后落盘**——脱敏命中时（如结果 URL 含 token/key/`password =` 等值形态）落盘信封**不等于**模型所见，key 不落卷不变量有意优先（与 `persist_result_artifact` 同漏斗的既定安全偏离，非缺陷）；且落盘为 `to_string_pretty` 重序列化、模型所见为紧凑串，「逐字」从不指字节序一致。宿主侧代码注释在同一漏斗句内已声明脱敏，不改码；「脱敏确实发生在取证漏斗」无专用测试钉住——登记为可选项（S3 前或随 S4 一并补，一行测试即可），不阻塞。
+  - P1×2 文档状态行同步滞后（TODO P0-0v 小节标题、BACKLOG P0 工作集 0v 片段仍停在「S1 已落码」/「S4 复跑待放行」）——已随本批修正。
+  - P3×5 登记：成功路径循环接线仅靠纯函数测试 + 视读覆盖（真实成功需浏览器，S4 实机取证补位）；`mark_unreached_as_not_attempted` 抽取等价性因 S1/S2 同提交无中间态 git 证据（终态语义 + 唯一调用点核证相符）；`SERP_MAX_SEARCH_QUERY_CHARS=500` 跨 crate 硬复制（注释已钉口径，生产恒为防御性 no-op）；`mod.rs:1728` 测试 fixture 残留旧失败文案（装饰性，不动）；`serp_budget=None`（lane=null）成功落盘内容路径未测（低价值补位可缓）。
 - **登记观察（不动码，留用户裁决）**：`SerpSessionState::begin_search` 的
   pacing 公式 `SERP_SEARCH_COOLDOWN.saturating_sub(elapsed) + jitter` 中
   jitter 为**无条件相加**——冷却早已过期后的每次 search 仍付 0–2.5s 等待

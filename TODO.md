@@ -541,7 +541,7 @@ GLM F2 处置转排期（2026-09-06 用户裁决）：`orz-host/src/approval.rs`
 - [x] 余额受影响 4 题补跑（2026-09-10 完成，r4b 批次当日收尾）：4/4 真实试次，账面 64/89 → **65/89**（唯一翻案 path-tracing-reverse）；protein-assembly / train-fasttext / filter-js pass-2 为官方墙钟耗尽 0.0。入口：[R4 复跑审计 §2A](docs/audits/OFFICIAL_R4_UNSOLVED15_RERUN_2026-09-10.md)。
 - [ ] 收口余项：0t S4 判据 6 宿主机日常可用性另线；计数按 0t 小节闭合时入账。
 
-### P0-0v 检索引擎 SERP 接入与 `browser_control` 车道分类修正（2026-09-10 立项；**S1–S3′ 完成（S3 随 0x S3 同批重建进载体；S3′ 载体重建 0.4.1 → 0.4.2 完成）；S4 复跑（2026-09-12）F1/F2 实机确认修复、本体判据未取得 → 2026-09-12 用户裁决第二批（软备忘 + 0v-A 取证面合批）：S1 已落码，S2–S4 待续**）
+### P0-0v 检索引擎 SERP 接入与 `browser_control` 车道分类修正（2026-09-10 立项；**S1–S3′ 完成（S3 随 0x S3 同批重建进载体；S3′ 载体重建 0.4.1 → 0.4.2 完成）；S4 复跑（2026-09-12）F1/F2 实机确认修复、本体判据未取得 → 2026-09-12 用户裁决第二批（软备忘 + 0v-A 取证面合批）：S1–S2 完成（orz `ee4ef617`），S3–S4 待续**）
 
 > 裁决：navigate 被拒应满足模型需求 + 坐实 DeepSeek 后端慢（调查已闭合）+ 按既有 SERP 设计补实现（候选 Bing）；区域固定 `en-US`；Bing 无登录态污染专项优化；低质量域名加权复用既有 `SourceWeightConfig`（标注 + 稳定排序，不硬过滤，不承担恶意域识别）。
 > 设计：[`RETRIEVAL_ENGINE_SERP_SEARCH_ACTION_DESIGN_2026-09-10`](docs/RETRIEVAL_ENGINE_SERP_SEARCH_ACTION_DESIGN_2026-09-10.md)；BACKLOG 0v。
