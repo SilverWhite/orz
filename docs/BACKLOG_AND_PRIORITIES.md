@@ -14,7 +14,7 @@
 
 | 优先级 | 含义 | 开放项（入口小节） |
 |---|---|---|
-| P0 | 当前工作集：设计已冻结，裁决后立即实施 | FUS-BENCHMARK-FULL-EXEC 验证③(reward)④⑤（0b）；0d 后续 3/4/5 S4 复验（0d）；THIN-HARNESS-REDESIGN-V2 余项（0j）；WINDOWS-HIGH-NIST-MAX-FRICTION ⑥/⑦（0l）；GSA-SESSION-VOLUME-BOTTOM-LAYER S1–S4（0m，2026-09-06 用户裁决放行）；S3/S4 集中实机验证批（0o，2026-09-07 排期放行——集中执行上述实机类开放项，见排期文档）；检索子代理双车道并行标注面与 R3 摩擦处置（0t，2026-09-09 用户裁决立项 + 同日两轮复核，v1.3 复核放行（R1–R5 并入；γ 模式退役 + 宿主机实测由执行代理操作），S1 定稿转录完成）——S2 实施完成（Task 1 + S2-R P1–P7，2026-09-09 收口，见 [审查处理](audits/0T_S2_TASK1_REVIEW_HANDLING_2026-09-09.md) 与 [0T_S2R_P1P3_IMPL_REVIEW](audits/0T_S2R_P1P3_IMPL_REVIEW_2026-09-09.md)）；S3 双平台重建完成（2026-09-09，见 [0T S3 重建记录](audits/0T_S3_DUAL_PLATFORM_REBUILD_2026-09-09.md)）；S4 实机复验待续；官方 R4 未通过 15 题复跑（0u，2026-09-10 放行，0t S4 载体）；检索引擎 SERP 接入与 browser_control 车道分类修正（0v，2026-09-10 立项，S1–S2 完成，S3–S4 待续）；TB 4.0 单题摩擦探针（0w，2026-09-10 立项；第三跑成立并完整跑完 2026-09-11，框架侧判据全过、reward 0.0 为题目域；开放项移交 0x）；初始轮中立问询（0x，2026-09-11 用户裁决立项并按两轮复核定稿；**设计定稿、无待裁决项；S1 已实施（2026-09-11），S2–S4 待续**，ADR-0010 §14.66 / v1.67）；——P0-GOV 00（含任务 D）已于 2026-09-06 全部闭合；0p 模型自信息面补强与 .gsa 两段门已于 2026-09-08 S1–S5 全部闭合转 `implemented`（T2/S4 见 audits 0P_T2 / 0P_S4 分析） |
+| P0 | 当前工作集：设计已冻结，裁决后立即实施 | FUS-BENCHMARK-FULL-EXEC 验证③(reward)④⑤（0b）；0d 后续 3/4/5 S4 复验（0d）；THIN-HARNESS-REDESIGN-V2 余项（0j）；WINDOWS-HIGH-NIST-MAX-FRICTION ⑥/⑦（0l）；GSA-SESSION-VOLUME-BOTTOM-LAYER S1–S4（0m，2026-09-06 用户裁决放行）；S3/S4 集中实机验证批（0o，2026-09-07 排期放行——集中执行上述实机类开放项，见排期文档）；检索子代理双车道并行标注面与 R3 摩擦处置（0t，2026-09-09 用户裁决立项 + 同日两轮复核，v1.3 复核放行（R1–R5 并入；γ 模式退役 + 宿主机实测由执行代理操作），S1 定稿转录完成）——S2 实施完成（Task 1 + S2-R P1–P7，2026-09-09 收口，见 [审查处理](audits/0T_S2_TASK1_REVIEW_HANDLING_2026-09-09.md) 与 [0T_S2R_P1P3_IMPL_REVIEW](audits/0T_S2R_P1P3_IMPL_REVIEW_2026-09-09.md)）；S3 双平台重建完成（2026-09-09，见 [0T S3 重建记录](audits/0T_S3_DUAL_PLATFORM_REBUILD_2026-09-09.md)）；S4 实机复验待续；官方 R4 未通过 15 题复跑（0u，2026-09-10 放行，0t S4 载体）；检索引擎 SERP 接入与 browser_control 车道分类修正（0v，2026-09-10 立项，S1–S2 完成，S3–S4 待续）；TB 4.0 单题摩擦探针（0w，2026-09-10 立项；第三跑成立并完整跑完 2026-09-11，框架侧判据全过、reward 0.0 为题目域；开放项移交 0x）；初始轮中立问询（0x，2026-09-11 用户裁决立项并按两轮复核定稿；**设计定稿、无待裁决项；S1–S2 已实施（2026-09-11），S3–S4 待续**，ADR-0010 §14.66 / v1.67）；——P0-GOV 00（含任务 D）已于 2026-09-06 全部闭合；0p 模型自信息面补强与 .gsa 两段门已于 2026-09-08 S1–S5 全部闭合转 `implemented`（T2/S4 见 audits 0P_T2 / 0P_S4 分析） |
 | P1 | 无需裁决，可与 P0 并行 | FUS-COMPONENT-REGISTER（4）；GAP-WINDOWS-EVIDENCE（5）；IMPL-DEEPSEEK-TRANSPORT / SEC-CREDENTIALS live 证据（6）；ORZ-SESSION-CONTEXT-MONITOR（6d） |
 | P2 | 生产化决策门：需用户裁决 | IMPL-CONTROL-FABRIC Slice 3/4（7）；OPS-PROTOCOL 裁剪与接线裁决（8）；MODEL-RESIDUAL-PRESSURE-FOLLOWUP（11）；COMPRESSION-LINGUISTIC-FORMAL-LAYER（12）；BLACKBOARD-CONVERSATION-SCOPE-FOLD B2–B4（13） |
 | P3 | 收尾 / 清理 | EVIDENCE-LOCAL-BROWSER（9）；GATE-CHAIN（10）；遗留小项（11） |
@@ -678,13 +678,14 @@ GLM F2 处置转排期（2026-09-06 用户裁决）：`orz-host/src/approval.rs`
 - 边界（本批未验证/不产出）：工具面本地 HTTP 路径（模型零尝试，只证明 shell 可用）；0t 双车道与 0v SERP（本题无外网检索，调用 0 次）；无同模型水平参照。
 - 计数：立项登记不动计数（闭合时按本条目入账；结果落档 `docs/audits/TB40_CTR_OPTIMIZATION_FRICTION_PROBE_<date>.md`）。
 
-### 0x. 初始轮中立问询（P0；2026-09-11 用户裁决立项；**设计定稿、无待裁决项；S1 已实施，S2–S4 待续**）
+### 0x. 初始轮中立问询（P0；2026-09-11 用户裁决立项；**设计定稿、无待裁决项；S1–S2 已实施，S3–S4 待续**）
 
 - 来源：[`TB40 探针审计 §6-O1 / §10`](audits/TB40_CTR_OPTIMIZATION_FRICTION_PROBE_2026-09-11.md)——TB 4.0 探针第三跑中 agent 花 4h53m 优化了一个**与验收口径不同**的代理指标（自报 4.0182% vs 真值 0.4363%，差 9.2 倍），方向性错误直到收尾才暴露；同源问题在本项目自身有先例（**过度自制**——本该复用成熟组件却长路自建）。用户判定该缺口「非常有价值且属**方向**问题，提前处理可避免行动方向偏移」。
 - 设计权威：[`INITIAL_ORIENTATION_DECLARATION_DESIGN_2026-09-11`](INITIAL_ORIENTATION_DECLARATION_DESIGN_2026-09-11.md)（ADR-0010 **§14.66 / v1.67** 转录）。形态 = 复用中立问询软门/票据/事件面/pending 闸，在**首轮动作批次结束**（`post_tool_batch_gap`）一次性机械注入三问——①本任务实际要交付什么、会被按什么判定？②大方向是什么？当前处在什么阶段、下一步要解决什么？③当前做法优劣如何？你对任务有何评估？；**不携带机械审查报告**（审查依旧只在结尾）、不落黑板、不做消费审计、复用 `OrientationV1` 票据；与阈值 50 的周期问询（动作中的回看与确定）和结论前反例门三者不重叠。
 - 用户裁决要点（2026-09-11 两轮）：**不在周期问询里加这一问**（否则模型在动作中反复质疑自己）；大方向决定应在开局完成，动作中只回看与确定、不回查质疑；问询哲学「就像安全行业的检查需要一边说一边动作一样，**只要让模型想了那就足够**」；首版草稿第三问「有无更短路径？为什么没选它？」被指为**追责式**提问已弃用。
 - 边界：不改周期问询三问与阈值；不新增硬门/工具/轮次预算变化；不要求结构化回答字段、不把「是否答对」变成评分或拦截条件；**机械审查报告完全不动**。
 - S1 实施（2026-09-11）：常量/前缀登记/一次性会话状态/控制器分派/测试矩阵全部落地；两处落点更正（触发判定并入 `maybe_fire_orientation`；runtime schema `trigger` 枚举提前到 S1，避免生产者与合约不一致）；同刀顺带修复 `orz-bin` 测试目标的 0v S2 遗留编译缺口与三条守卫测试的 ACAF 环境隔离。入口：[S1 实施记录](audits/0X_S1_INITIAL_ROUND_INQUIRY_IMPL_2026-09-11.md)。S2 = fixtures 正负例 / 法官族 / Python 镜像 / orz-signer 第二模板摘要 + `check_repository` 全绿；S3/S4 = 双平台重建与实机复验（未放行）。
+- S2 实施（2026-09-11）：事件面收口四处——payload 正例 fixture（负例沿用 constraint.invalid）+ 第 34 族法官 `initial_round_inquiry`（Rust 执法 / Python 冻结镜像逐格零差；1 正 4 负合成场景）+ `orientation-fire-run` 期刊重捕（两条 fire）与两侧期望序列同步 + `orz-signer` **第二模板摘要**（`template_sha256_initial_round`；`sign_orientation_v1` 可选 `trigger` 选模板、check 2 同 trigger 比对 = kind + 摘要匹配）；门禁 `valid: true`。入口：[S2 实施记录](audits/0X_S2_EVENT_FACE_AND_SIGNER_2026-09-11.md)。同刀修复：`family_stage_tamper_detected_end_to_end` 预存在失败（0t 重捕后篡改目标消失，改锁新族端到端）+ 生成器补登 0v 两条会被重跑静默删除的 fixture 条目。
 - 计数：立项登记不动计数（闭合时按本条目入账）。
 
 ## P1 — 可并行审计 / 证据

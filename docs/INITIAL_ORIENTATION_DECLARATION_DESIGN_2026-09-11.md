@@ -8,6 +8,13 @@
 > 常量 / 前缀登记 / 会话一次性状态 / 控制器分派 / 测试矩阵全部落地；
 > 触点清单的两处落点更正（分派并入 `maybe_fire_orientation`、schema 枚举提前）
 > 见下文 §5 标注。**S2–S4 待续**（实机与重建未放行）。
+> **S2 已实施**（2026-09-11，同日；见
+> [`0X S2 实施记录`](audits/0X_S2_EVENT_FACE_AND_SIGNER_2026-09-11.md)）：
+> payload 正例 fixture + 第 34 族法官 `initial_round_inquiry`（Rust 执法 /
+> Python 镜像，跨执法面零差）+ `orientation-fire-run` 期刊重捕（两条 fire）
+> + **签名侧第二模板摘要**（`trigger` 选模板，check 2 按同一 trigger 比对 =
+> kind + 摘要匹配）；`check_repository` `valid: true`。
+> **S3/S4 待续**（重建与实机未放行）。
 > **来源**：[`TB40 探针审计 §6-O1 / §10`](audits/TB40_CTR_OPTIMIZATION_FRICTION_PROBE_2026-09-11.md)
 > ——TB 4.0 单题探针中，agent 花 4h53m 优化了一个**与验收口径不同**的代理指标
 > （自报 4.0182% vs 真值 0.4363%），方向性错误直到收尾才暴露。
@@ -152,6 +159,10 @@ pending 软消费机制**，在**首轮动作批次结束时**机械注入一次
 5. `orz/crates/orz-bin/src/bin/orz-signer.rs`：**复用 `OrientationV1`**（用户裁决），
    但需登记**第二个模板摘要常量**（票据校验按 kind + 摘要匹配；现有实现只钉了
    `ORIENTATION_TEMPLATE`）——这是"复用票据类型"下唯一必须动的签名侧改动。
+   **S2 落地（2026-09-11）**：签名侧持有两块内置模板 + `template_sha256_initial_round`
+   会话字段；`sign_orientation_v1` 用**可选 `trigger`** 选模板，客户端 `check 2`
+   用**同一个 trigger** 选内置摘要比对（签发与校验同源、同一输入）；
+   非 orientation 票种无模板字段。详见 [S2 记录 §2](audits/0X_S2_EVENT_FACE_AND_SIGNER_2026-09-11.md)。
 6. **事件面与门禁**：`orientation_checkpoint` 的 `trigger` 枚举新增
    `initial_round` → runtime schema + fixtures（正/负例）+
    `run_event_journal_validation` 族 + Python 镜像
@@ -189,6 +200,6 @@ pending 软消费机制**，在**首轮动作批次结束时**机械注入一次
 | 阶段 | 内容 |
 |---|---|
 | S1 | 常量 + 会话状态 + 触发接线（含测试矩阵最小集）——**完成 2026-09-11** |
-| S2 | 事件面 fixtures 正/负例 / `run_event_journal_validation` 族 / Python 镜像同步 / `orz-signer` 第二模板摘要；`check_repository` 全绿收口——**待放行** |
+| S2 | 事件面 fixtures 正/负例 / `run_event_journal_validation` 族 / Python 镜像同步 / `orz-signer` 第二模板摘要；`check_repository` 全绿收口——**完成 2026-09-11**（[记录](audits/0X_S2_EVENT_FACE_AND_SIGNER_2026-09-11.md)） |
 | S3 | 双平台重建（进载体）——**待放行** |
 | S4 | 实机复验（可与 0w 后续长任务或其他长会话同场，验证「开局一次、动作中不复发」）——**待放行** |

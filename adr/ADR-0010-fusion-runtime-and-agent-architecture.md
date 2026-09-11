@@ -5077,3 +5077,32 @@ registry/manifest 随批）→ S3 覆盖面矩阵与法官正反两测 → S4 �
    `orz-host` 并行负载时序 flake 2 例）已在改动前的干净树上复现，登记不入本刀。
    证据：[`0X S1 实施记录`](../docs/audits/0X_S1_INITIAL_ROUND_INQUIRY_IMPL_2026-09-11.md)。
    **S2–S4 未放行；未跑实机、未重建载体。**
+
+6. **S2 实施登记（2026-09-11，同日）**：①事件面四处收口——(a) payload 正例
+   `runtime/fixtures/run-event-v0.2/payloads/orientation-checkpoint.initial-round.valid.json`
+   （`trigger=initial_round` + `[INITIAL_ROUND_INQUIRY` 块 + `post_tool_batch_gap`；
+   枚举负例沿用既有 `constraint.invalid`，生成器条目与 `check_repository` 登记齐备）；
+   (b) 法官新族 **`initial_round_inquiry`**（第 34 族）：Rust 执法
+   `verify_initial_round_inquiry` + Python 冻结镜像 `_verify_v02_initial_round_inquiry`
+   ——trigger↔message_block↔injection_position 三点耦合 + 「会话内恰好一次」
+   （schema 表达不了的跨字段/跨事件规则），跨执法面逐格零差；
+   (c) `orientation-fire-run` **期刊重捕**（行为变化：首轮动作批次多一次初始轮 fire）
+   ——两条 `orientation_checkpoint`（`initial_round` completed=1 与
+   `completed_turns_interval` completed=7），两侧期望序列/载荷断言同步；
+   (d) `check_repository` `valid: true` / `error_count: 0`。
+   ②**签名侧第二模板摘要**（`kind + 摘要匹配`）：signer 持两块内置模板
+   （`ORIENTATION_BLOCK` + `INITIAL_ROUND_INQUIRY_BLOCK`，单一来源同为
+   orz-assurance 常量），会话响应增 `template_sha256_initial_round`，
+   `sign_orientation_v1` 用**可选 `trigger`** 选模板；客户端 `check 2` 用**同一
+   trigger** 选内置摘要比对（签发与校验同源、同输入），票据 schema 与
+   `VerifyContext` 形状不变；版本错配（signer 无第二摘要）时 fail-closed 拒注入是
+   有意姿态。③同刀修复：`family_stage_tamper_detected_end_to_end` 预存在失败
+   （0t 重捕后篡改目标 `retrieval_parent_disposition` 消失，改篡改初始轮
+   `injection_position` —— schema 合法、仅家族阶段可抓，同时为新族提供 stage-5
+   端到端负证据）；fixture 生成器补登 0v 两条会被重跑静默删除的条目
+   （`tool-completed.serp-budget-exceeded` / `serp-session-reserved`）；
+   capture 路径的 `ORZ_ACAF_FAIL_CLOSED=0` 环境说明。
+   ④证据：orz-assurance 全绿（含此前失败的篡改端到端）、orz-loop 762、
+   orz-bin 全目标、orz-host 单线程 286、runtime Python 273、新增代码 clippy 零告警。
+   证据：[`0X S2 实施记录`](../docs/audits/0X_S2_EVENT_FACE_AND_SIGNER_2026-09-11.md)。
+   **S3/S4 未放行；未跑实机、未重建载体。**

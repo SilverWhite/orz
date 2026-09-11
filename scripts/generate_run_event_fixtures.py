@@ -1596,6 +1596,53 @@ EXTRA_V02_PAYLOAD_POSITIVES: dict[str, dict] = {
     # GAP-EVENT-SCHEMA-DRIFT (2026-08-26): D-13 检索 lane 绑定语义入 schema
     # ——动作票 activation_id 放开为可选绑定：检索 lane 内 network_v1 票携带
     # 真实 activation_id（主 lane 保持 null）。
+    # P0-0x S2 (2026-09-11, ADR-0010 §14.66): the SECOND orientation trigger —
+    # the one-shot initial-round inquiry. Same payload schema as the periodic
+    # fire; the trigger value selects the injected block, so the positive
+    # fixture pairs `trigger=initial_round` with the `[INITIAL_ROUND_INQUIRY`
+    # block at `post_tool_batch_gap` (the negative fixture above keeps an
+    # out-of-enum trigger value).
+    "orientation-checkpoint.initial-round.valid": {
+        "checkpoint_id": "ORIENT-RUN-CONF-0002-0000",
+        "inquiry_family": "neutral",
+        "inquiry_kind": "orientation_checkpoint",
+        "agent_role": "main",
+        "session_id": "sess-main-1",
+        "trigger": "initial_round",
+        "completed_turns_since_orientation": 1,
+        "step_index": 0,
+        "message_block": (
+            "[INITIAL_ROUND_INQUIRY v0.1]\n"
+            "开局问询（一次性，非强制模板，不打断动作）：\n"
+            "1. 本任务实际要交付什么、会被按什么判定？\n"
+            "2. 大方向是什么？当前处在什么阶段、下一步要解决什么？\n"
+            "3. 当前做法优劣如何？你对任务有何评估？\n"
+            "[/INITIAL_ROUND_INQUIRY]"
+        ),
+        "injection_position": "post_tool_batch_gap",
+    },
+    # P0-0v P2-3/P2-4 (2026-09-10): browser_control SERP refusal completions
+    # carry structured counts — the lane budget refusal (engines per lane) and
+    # the session-floor refusal (engines spent in the shared browser session).
+    # These two were landed by 0v **without** a generator entry, so the next
+    # regeneration silently dropped them (found by the 0x S2 fixture run —
+    # registered here so the fixture tree is reproducible again).
+    "tool-completed.serp-budget-exceeded.valid": {
+        "tool": "browser_control",
+        "call_id": "call-serp-budget-1",
+        "status": "error",
+        "error": "browser_control_search_budget_exceeded",
+        "serp_budget_used": 8,
+        "serp_budget_cap": 8,
+    },
+    "tool-completed.serp-session-reserved.valid": {
+        "tool": "browser_control",
+        "call_id": "call-serp-session-1",
+        "status": "error",
+        "error": "browser_control_search_session_reserved",
+        "serp_session_navigations": 24,
+        "serp_session_ceiling": 40,
+    },
     "control-ticket-issued.network-lane-bound.valid": {
         "ticket_id": "TKT-CONF-LANE-0001",
         "ticket_kind": "network_v1",
@@ -2214,6 +2261,17 @@ Scope:
   ③ `control-ticket-issued.network-lane-bound.valid`（D-13 检索 lane 绑定
   语义——动作票 activation_id 可选绑定，检索 lane network 票携带真实
   activation_id，主 lane 保持 null）。
+- P0-0x S2 (2026-09-11, ADR-0010 §14.66)：`orientation-checkpoint` 的
+  **第二个合法 trigger 值**——`orientation-checkpoint.initial-round.valid` 把
+  `trigger=initial_round` 与 `[INITIAL_ROUND_INQUIRY` 块、`post_tool_batch_gap`
+  三点对齐（一次性初始轮中立问询）；枚举负例沿用
+  `orientation-checkpoint.constraint.invalid`（trigger=manual）。trigger ↔
+  message_block ↔ injection_position 的耦合与「会话内恰好一次」是
+  **家族级**规则（schema 表达不了），由 Rust/Python 双方
+  `initial_round_inquiry` 族执法。
+- P0-0v P2-3/P2-4 (2026-09-10, 0x S2 重捕补齐登记)：`tool-completed.serp-budget-exceeded`
+  / `tool-completed.serp-session-reserved` 两个 browser_control SERP 拒绝计数
+  正例——0v 落地时未登记生成器条目，重跑生成器会静默删除；现已登记。
 - 0t (2026-09-09, ADR-0010 §14.65 / 设计 v1.3)：`retrieval_mode_transition`
   生产者侧退役——事件类型与 v0.2 payload schema 保留为旧 v0.2 刊只读回放
   （旧 fixture `retrieval-mode-transition.*` 与旧期刊均继续合法，不设负向

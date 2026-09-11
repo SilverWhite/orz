@@ -37,6 +37,17 @@ Scope:
   ③ `control-ticket-issued.network-lane-bound.valid`（D-13 检索 lane 绑定
   语义——动作票 activation_id 可选绑定，检索 lane network 票携带真实
   activation_id，主 lane 保持 null）。
+- P0-0x S2 (2026-09-11, ADR-0010 §14.66)：`orientation-checkpoint` 的
+  **第二个合法 trigger 值**——`orientation-checkpoint.initial-round.valid` 把
+  `trigger=initial_round` 与 `[INITIAL_ROUND_INQUIRY` 块、`post_tool_batch_gap`
+  三点对齐（一次性初始轮中立问询）；枚举负例沿用
+  `orientation-checkpoint.constraint.invalid`（trigger=manual）。trigger ↔
+  message_block ↔ injection_position 的耦合与「会话内恰好一次」是
+  **家族级**规则（schema 表达不了），由 Rust/Python 双方
+  `initial_round_inquiry` 族执法。
+- P0-0v P2-3/P2-4 (2026-09-10, 0x S2 重捕补齐登记)：`tool-completed.serp-budget-exceeded`
+  / `tool-completed.serp-session-reserved` 两个 browser_control SERP 拒绝计数
+  正例——0v 落地时未登记生成器条目，重跑生成器会静默删除；现已登记。
 - 0t (2026-09-09, ADR-0010 §14.65 / 设计 v1.3)：`retrieval_mode_transition`
   生产者侧退役——事件类型与 v0.2 payload schema 保留为旧 v0.2 刊只读回放
   （旧 fixture `retrieval-mode-transition.*` 与旧期刊均继续合法，不设负向

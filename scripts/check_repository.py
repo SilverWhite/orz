@@ -2187,6 +2187,15 @@ def check_repository() -> dict[str, Any]:
         run_event_v02_payload_root
         / "control-ticket-issued.network-lane-bound.valid.json"
     ] = control_ticket_issued_schema
+    # P0-0x S2 (2026-09-11, ADR-0010 §14.66): the initial-round orientation
+    # trigger — a second legal value of the payload `trigger` enum, paired
+    # with the `[INITIAL_ROUND_INQUIRY` block. Negative lock for the enum is
+    # the pre-existing `orientation-checkpoint.constraint.invalid.json`
+    # (trigger=manual).
+    run_event_v02_payload_positive_contracts[
+        run_event_v02_payload_root
+        / "orientation-checkpoint.initial-round.valid.json"
+    ] = ROOT / "runtime/orientation-checkpoint-event-payload-v0.2.schema.json"
     # 0k 审查处理 (P1-1, 2026-08-30)：close-record schema 枚举补
     # `subagent_timeout`（子代理 run 级墙钟超时，RETRIEVAL-ORCHESTRATION-
     # MECHANICAL 0k）与 `auto_close`（THIN-HARNESS-REDESIGN R1 每次调用

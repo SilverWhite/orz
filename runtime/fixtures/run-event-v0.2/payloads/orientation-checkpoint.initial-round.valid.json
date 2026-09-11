@@ -1,0 +1,12 @@
+{
+  "checkpoint_id": "ORIENT-RUN-CONF-0002-0000",
+  "inquiry_family": "neutral",
+  "inquiry_kind": "orientation_checkpoint",
+  "agent_role": "main",
+  "session_id": "sess-main-1",
+  "trigger": "initial_round",
+  "completed_turns_since_orientation": 1,
+  "step_index": 0,
+  "message_block": "[INITIAL_ROUND_INQUIRY v0.1]\n开局问询（一次性，非强制模板，不打断动作）：\n1. 本任务实际要交付什么、会被按什么判定？\n2. 大方向是什么？当前处在什么阶段、下一步要解决什么？\n3. 当前做法优劣如何？你对任务有何评估？\n[/INITIAL_ROUND_INQUIRY]",
+  "injection_position": "post_tool_batch_gap"
+}

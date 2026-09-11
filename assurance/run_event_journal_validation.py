@@ -313,6 +313,67 @@ def _verify_v02_inquiry_kind(events: list[dict[str, Any]]) -> list[str]:
 
 _RETRIEVAL_TARGETS = frozenset({"internal_retrieval", "external_retrieval"})
 
+# P0-0x S2 (ADR-0010 §14.66, 2026-09-11): the one-shot initial-round inquiry
+# shares the `orientation_checkpoint` event with the periodic threshold
+# inquiry — `trigger` dispatches, so the payload must agree with itself and
+# the one-shot contract must hold. Rust twin:
+# `journal::families_s2c::verify_initial_round_inquiry`.
+_INITIAL_ROUND_TRIGGER = "initial_round"
+_INITIAL_ROUND_BLOCK_PREFIX = "[INITIAL_ROUND_INQUIRY"
+_POST_TOOL_BATCH_GAP = "post_tool_batch_gap"
+
+
+def _verify_v02_initial_round_inquiry(events: list[dict[str, Any]]) -> list[str]:
+    """0x S2 (§14.66) cross-checks on `orientation_checkpoint`:
+
+    - `trigger == "initial_round"` ⇒ `message_block` starts with
+      `[INITIAL_ROUND_INQUIRY` AND `injection_position ==
+      "post_tool_batch_gap"` (设计 §3.2: 首个含工具调用的动作批次结束);
+    - any OTHER trigger must NOT carry the initial-round block;
+    - 会话内恰好一次: at most ONE initial-round fire per
+      (`session_id`, `agent_role`) inside one journal.
+    """
+    errors: list[str] = []
+    fires: dict[tuple[str, str], int] = {}
+    for index, event in enumerate(events):
+        if not _is_v02(event):
+            continue
+        if event.get("event_type") != "orientation_checkpoint":
+            continue
+        payload = event.get("payload") or {}
+        trigger = payload.get("trigger")
+        block = payload.get("message_block") or ""
+        position = payload.get("injection_position")
+        if trigger == _INITIAL_ROUND_TRIGGER:
+            if not block.startswith(_INITIAL_ROUND_BLOCK_PREFIX):
+                errors.append(
+                    f"event {index}: orientation_checkpoint trigger "
+                    f"{_INITIAL_ROUND_TRIGGER!r} must carry the "
+                    f"[INITIAL_ROUND_INQUIRY block (got {block!r})"
+                )
+            if position != _POST_TOOL_BATCH_GAP:
+                errors.append(
+                    f"event {index}: orientation_checkpoint trigger "
+                    f"{_INITIAL_ROUND_TRIGGER!r} must be injected at "
+                    f"{_POST_TOOL_BATCH_GAP!r} (got {position!r})"
+                )
+            key = (str(payload.get("session_id")), str(payload.get("agent_role")))
+            fires[key] = fires.get(key, 0) + 1
+        elif block.startswith(_INITIAL_ROUND_BLOCK_PREFIX):
+            errors.append(
+                f"event {index}: orientation_checkpoint trigger {trigger!r} "
+                "carries the initial-round block — trigger and message_block "
+                "must agree"
+            )
+    for (session, role), count in fires.items():
+        if count > 1:
+            errors.append(
+                f"session {session} / agent {role}: {count} initial_round "
+                "inquiries — the initial-round inquiry is one-shot per session"
+            )
+    return errors
+
+
 # Host-lane retrieval tools whose tool events carry NO `target` field
 # (D-2, 2026-08-10 local_browser slice; 0t S2-R P3 / P1-2b 2026-09-09 adds
 # `browser_control`): `browser_read`/`browser_control` run on the host
@@ -3598,6 +3659,7 @@ def validate_journal_text(text: str) -> list[str]:
         # violations present they would crash or report misleading facts, so
         # they run only on schema-valid input.
         errors.extend(_verify_v02_inquiry_kind(events))
+        errors.extend(_verify_v02_initial_round_inquiry(events))
         errors.extend(_verify_v02_plan_write(events))
         errors.extend(_verify_v02_console_mode_transition(events))
         # console_order_written retired 2026-09-06 (ADR-0010 §14.57, 任务 D

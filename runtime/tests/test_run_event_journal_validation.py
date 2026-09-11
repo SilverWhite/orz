@@ -127,12 +127,15 @@ ALL_JOURNALS_V02 = (
 
 
 def _orientation_fire_v02_sequence() -> tuple[str, ...]:
-    """0t 重捕 (2026-09-09) 的 orientation-fire 期望序列——与 Rust capture
+    """0x S2 重捕 (2026-09-11) 的 orientation-fire 期望序列——与 Rust capture
     `capture_orientation_fire_run` 的 expected 构造同构：每次模型请求前
     request_header_change；每次检索派发 = 主模型工具调用轮 → 子代理文本轮
-    → 结果提交 → 机械评估 → auto_close → 双 mechanical_audit_update；第 7 轮
-    checkpoint 夹在两条审计更新之间（post_tool_batch_gap）；checkpoint 注入
-    后模型还需回答轮 + 汇总轮才到反例门与终答。"""
+    → 结果提交 → 机械评估 → auto_close → 双 mechanical_audit_update；
+    P0-0x（ADR-0010 §14.66）后同一 gap 出现**两条** orientation_checkpoint：
+    第 1 轮动作批次结束的一次性初始轮问询（trigger=initial_round）+ 第 7 轮
+    跨越阈值的周期问询（trigger=completed_turns_interval），两条都夹在两条
+    审计更新之间（post_tool_batch_gap）；checkpoint 注入后模型还需回答轮 +
+    汇总轮才到反例门与终答。"""
     seq: list[str] = [
         "run_preflight", "tool_availability_check", "run_started",
         "prompt_submitted", "request_header_change",
@@ -144,7 +147,7 @@ def _orientation_fire_v02_sequence() -> tuple[str, ...]:
             "information_sufficiency_assessment", "retrieval_close_record",
             "mechanical_audit_update",
         ])
-        if i == 6:
+        if i in (0, 6):
             seq.append("orientation_checkpoint")
         seq.append("mechanical_audit_update")
     seq.extend([
@@ -377,22 +380,41 @@ class V02JournalConformanceTests(unittest.TestCase):
 
     def test_orientation_fire_payload_is_v02_shape(self) -> None:
         events = load_journal_v02("orientation-fire-run.jsonl")
-        orientation = next(
-            e for e in events if e["event_type"] == "orientation_checkpoint"
+        # P0-0x S2 (§14.66): two fires share the event type — the one-shot
+        # initial-round inquiry and the periodic threshold inquiry.
+        p = next(
+            e["payload"]
+            for e in events
+            if e["event_type"] == "orientation_checkpoint"
+            and e["payload"]["trigger"] == "completed_turns_interval"
         )
-        p = orientation["payload"]
         self.assertEqual(p["inquiry_family"], "neutral")
         self.assertEqual(p["inquiry_kind"], "orientation_checkpoint")
         self.assertEqual(p["agent_role"], "main")
-        self.assertEqual(p["trigger"], "completed_turns_interval")
         self.assertEqual(p["completed_turns_since_orientation"], 7)
         self.assertEqual(p["injection_position"], "post_tool_batch_gap")
         self.assertTrue(p["message_block"].startswith("[ORIENTATION"))
 
-    def test_orientation_fires_exactly_once_in_seven_rounds(self) -> None:
+    def test_orientation_fires_once_per_trigger(self) -> None:
+        """P0-0x (ADR-0010 §14.66): exactly one ONE-SHOT initial-round
+        inquiry (first action batch) + exactly one periodic threshold
+        inquiry (7 completed main rounds) in the captured run."""
         events = load_journal_v02("orientation-fire-run.jsonl")
-        fires = [e for e in events if e["event_type"] == "orientation_checkpoint"]
-        self.assertEqual(len(fires), 1)
+        fires = [
+            e["payload"]
+            for e in events
+            if e["event_type"] == "orientation_checkpoint"
+        ]
+        self.assertEqual(len(fires), 2)
+        initial = [f for f in fires if f["trigger"] == "initial_round"]
+        periodic = [f for f in fires if f["trigger"] == "completed_turns_interval"]
+        self.assertEqual(len(initial), 1)
+        self.assertEqual(len(periodic), 1)
+        self.assertEqual(initial[0]["completed_turns_since_orientation"], 1)
+        self.assertEqual(initial[0]["injection_position"], "post_tool_batch_gap")
+        self.assertTrue(
+            initial[0]["message_block"].startswith("[INITIAL_ROUND_INQUIRY")
+        )
 
     def test_information_sufficiency_assessment_is_mechanical(self) -> None:
         events = load_journal_v02("orientation-fire-run.jsonl")
