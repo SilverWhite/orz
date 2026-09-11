@@ -6,6 +6,10 @@
 > / [`ADR-0010 §14.66`](../../adr/ADR-0010-fusion-runtime-and-agent-architecture.md) / BACKLOG 0x / TODO P0-0x。
 > **前序**：[`0X S1 实施记录`](0X_S1_INITIAL_ROUND_INQUIRY_IMPL_2026-09-11.md)。
 > **状态**：S2 完成（门禁 `valid: true`）；**S3 双平台重建 / S4 实机复验未放行**。
+> **后序**：S1/S2 全面复审已处理（2026-09-11，同日）——2 处文档一致性更正 +
+> 2 处测试补强（本记录 §1.2 的跨 trigger 负例、§3 未含的「中断后恢复重触发」
+> 端到端钉子）；见 [`0X S2 复审处理`](0X_S2_REVIEW_HANDLING_2026-09-11.md)，
+> 子模块 `dcf4a774`。
 
 ## 1. 事件面（四处）
 

@@ -658,6 +658,7 @@ GLM F2 处置转排期（2026-09-06 用户裁决）：`orz-host/src/approval.rs`
 - 未实施（设计留存）：引擎自选（`engine ∈ {auto,google,bing,duckduckgo}`）+ 去备忘——见设计 §6，用户 2026-09-10 裁决只留文档。
 - 排期建议：S1 代码 → S2 测试 → S3 双平台重建 → S4 实机（可搭 0t S4 判据 6 宿主机日常可用性同场）。
 - 计数：立项登记不动计数（闭合时按本条目入账）。
+- S1/S2 全面复审处理（2026-09-11）：三面复审（设计合理性/实现合理性/设计—实现符合性）结论为整体成立、符合度高；处理 2 处文档一致性（`TODO.md` 路由行状态滞后；设计 §5-6 / ADR §14.66 第 4 项⑥「Python 镜像」指针更正为 `run_event_journal_validation.py`，**v0.1 `assurance/orientation_runtime_guard.py` 保持冻结不动**）+ 2 处测试补强（设计 §5-7「中断后恢复重触发」端到端钉子；签名侧跨 trigger `template_mismatch` 负例）；无代码语义改动（orz-loop 763 / orz-bin 全绿 / 门禁 `valid: true`）。入口：[S2 复审处理](audits/0X_S2_REVIEW_HANDLING_2026-09-11.md)。S3/S4 仍未放行。
 
 ### 0w. TB 4.0 单题摩擦探针（P0；2026-09-10 用户指示立项；**第三跑成立并完整跑完（2026-09-11），F1–F9 与判据 1–10 全部通过或按设计观察；开放项 = 审计 O1–O7**）
 

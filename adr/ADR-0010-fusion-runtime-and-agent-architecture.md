@@ -5047,12 +5047,16 @@ registry/manifest 随批）→ S3 覆盖面矩阵与法官正反两测 → S4 �
    `post_tool_batch_gap` 增加首轮触发判定（与周期判定共用单一 pending 闸），**既有
    终答前审查报告注入不动**；⑤`orz-bin/src/bin/orz-signer.rs` 复用 `OrientationV1`
    但需登记**第二个模板摘要常量**（票据校验按 kind + 摘要匹配，现只钉了
-   `ORIENTATION_TEMPLATE`）；⑥事件面 `orientation_checkpoint` 的 `trigger` 枚举新增
-   `initial_round` → runtime schema + fixtures（正/负例）+ `run_event_journal_validation`
-   族 + Python 镜像 `assurance/orientation_runtime_guard.py` 同步；**不新增** consumption
-   类事件；⑦测试矩阵——触发恰好一次 / 无工具首轮顺延 / 与周期问询不互扰 / 中断后恢复
-   重触发 / 软门不阻断工具 / 纯文本回答被消费后续跑 / **终答前审查报告与反例质询行为
-   完全不变且不含三问**。排期建议 S1 常量+会话状态+触发接线 → S2 事件面/schema/fixtures/
+    `ORIENTATION_TEMPLATE`）；⑥事件面 `orientation_checkpoint` 的 `trigger` 枚举新增
+    `initial_round` → runtime schema + fixtures（正/负例）+ `run_event_journal_validation`
+    族 + Python 冻结镜像 `assurance/run_event_journal_validation.py` 同步
+    （**指针更正 2026-09-11 S2 复审**：原写 `assurance/orientation_runtime_guard.py`
+    ——该文件是 v0.1 冻结 reference、**保持不动**；见
+    [`0X S2 复审处理`](../docs/audits/0X_S2_REVIEW_HANDLING_2026-09-11.md)）；
+    **不新增** consumption
+    类事件；⑦测试矩阵——触发恰好一次 / 无工具首轮顺延 / 与周期问询不互扰 / 中断后恢复
+    重触发 / 软门不阻断工具 / 纯文本回答被消费后续跑 / **终答前审查报告与反例质询行为
+    完全不变且不含三问**。排期建议 S1 常量+会话状态+触发接线 → S2 事件面/schema/fixtures/
     Python 镜像同步（`check_repository` 全绿为收口）→ S3 双平台重建 → S4 实机复验。
 
 5. **S1 实施登记（2026-09-11，同日）**：①常量 `INITIAL_ROUND_INQUIRY_BLOCK`
@@ -5106,3 +5110,18 @@ registry/manifest 随批）→ S3 覆盖面矩阵与法官正反两测 → S4 �
    orz-bin 全目标、orz-host 单线程 286、runtime Python 273、新增代码 clippy 零告警。
    证据：[`0X S2 实施记录`](../docs/audits/0X_S2_EVENT_FACE_AND_SIGNER_2026-09-11.md)。
    **S3/S4 未放行；未跑实机、未重建载体。**
+
+7. **S1/S2 全面复审处理（2026-09-11，同日）**：对 0x S1/S2 落地做设计合理性 /
+   实现合理性 / 设计—实现符合性三面复审，结论为整体成立、符合度高；处理 2 处文档
+   一致性问题 + 2 处测试覆盖补强（无代码语义改动）。①`TODO.md` 开放项路由行仍写
+   0x「未实施」——与同文件 P0-0x 小节及 BACKLOG/索引矛盾，更正为「S1–S2 已实施、
+   S3–S4 待续」；②「Python 镜像」指针更正（上文第 4 项⑥）——原写
+   `assurance/orientation_runtime_guard.py`，实为 v0.1 冻结 reference、保持不动，
+   真正的镜像在 `assurance/run_event_journal_validation.py`；③补设计 §5-7「中断后
+   恢复重触发」端到端钉子（fire 已 journal、消费前中断 → 标志不提交 → 下次 run
+   首个含工具调用的批次结束再次触发一次）；④补签名侧跨 trigger 负例（周期票以
+   `trigger=initial_round` 校验 → check 2 `template_mismatch` 拒绝、不消费）。
+   证据：orz-loop **763** 全绿、orz-bin 全目标绿（acaf_e2e 23）、新增代码 clippy
+   零告警、`check_repository` `valid: true` / manifest 1441。
+   入口：[`0X S2 复审处理`](../docs/audits/0X_S2_REVIEW_HANDLING_2026-09-11.md) /
+   子模块 `dcf4a774`。**S3/S4 仍未放行。**

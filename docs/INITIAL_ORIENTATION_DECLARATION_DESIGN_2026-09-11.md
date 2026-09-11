@@ -15,6 +15,12 @@
 > + **签名侧第二模板摘要**（`trigger` 选模板，check 2 按同一 trigger 比对 =
 > kind + 摘要匹配）；`check_repository` `valid: true`。
 > **S3/S4 待续**（重建与实机未放行）。
+> **S1/S2 全面复审已处理**（2026-09-11，同日；见
+> [`0X S2 复审处理`](audits/0X_S2_REVIEW_HANDLING_2026-09-11.md)）：3 面复审结论
+> 整体成立；处理 2 处文档一致性（`TODO.md` 路由行状态、§5-6「Python 镜像」指针
+> 更正为 `run_event_journal_validation.py`，v0.1 `orientation_runtime_guard.py`
+> 保持冻结）+ 2 处测试补强（§5-7「中断后恢复重触发」端到端钉子、签名侧跨
+> trigger 负例）；**S3/S4 仍未放行**。
 > **来源**：[`TB40 探针审计 §6-O1 / §10`](audits/TB40_CTR_OPTIMIZATION_FRICTION_PROBE_2026-09-11.md)
 > ——TB 4.0 单题探针中，agent 花 4h53m 优化了一个**与验收口径不同**的代理指标
 > （自报 4.0182% vs 真值 0.4363%），方向性错误直到收尾才暴露。
@@ -165,14 +171,23 @@ pending 软消费机制**，在**首轮动作批次结束时**机械注入一次
    非 orientation 票种无模板字段。详见 [S2 记录 §2](audits/0X_S2_EVENT_FACE_AND_SIGNER_2026-09-11.md)。
 6. **事件面与门禁**：`orientation_checkpoint` 的 `trigger` 枚举新增
    `initial_round` → runtime schema + fixtures（正/负例）+
-   `run_event_journal_validation` 族 + Python 镜像
-   `assurance/orientation_runtime_guard.py` 同步；`scripts/check_repository.py`
-   全绿为收口条件。**不新增** consumption 类事件（用户裁决）。
+   `run_event_journal_validation` 族 + Python 冻结镜像
+   `assurance/run_event_journal_validation.py`（法官族的 Rust↔Python 对拍面）
+   同步；`scripts/check_repository.py` 全绿为收口条件。**不新增** consumption
+   类事件（用户裁决）。
+   **指针更正（2026-09-11 S2 复审）**：本条原写「Python 镜像
+   `assurance/orientation_runtime_guard.py`」——该文件是 **v0.1 冻结
+   reference**（其 `ORIENTATION_BLOCK` 至今仍是 `[ORIENTATION_CHECKPOINT
+   v0.1]`），**保持冻结、不动**；本族真正的 Python 镜像在
+   `run_event_journal_validation.py::_verify_v02_initial_round_inquiry`。
    **S1 已做**：runtime v0.2 payload schema 的**枚举值 + 描述**（S1 产出的 v0.2 事件
    必须过自己的 schema，否则即生产者/合约不一致）；fixtures、法官族、Python 镜像留 S2。
 7. 测试矩阵：触发恰好一次；无工具首轮顺延；与周期问询不互扰；
    中断后恢复重触发；软门不阻断工具；纯文本回答被消费后续跑；
    **终答前审查报告与反例质询行为完全不变、且不含三问**。
+   **S1/S2 复审（2026-09-11）**：「中断后恢复重触发」一条已补端到端集成钉子
+   （`initial_round_refires_next_run_when_the_fire_was_not_consumed`，见
+   [复审处理](audits/0X_S2_REVIEW_HANDLING_2026-09-11.md)）；矩阵七项全部有落地证据。
 
 ## 6. 成本与收益
 

@@ -1067,7 +1067,7 @@ fc4fa1cdfa6622f389a62013b021827fdcb38c5c0f819867f433f420f769a126  crates/orz-bin
 50e51395637bddff242f316ea72fc32702ba38720f68afc5def3b7e694856465  crates/orz-bin/src/bin/orz-acaf-provision.rs
 afe008d86b0ae45efedf7b48cd31de9451f6ea7153695d308d3058f858afad39  crates/orz-bin/src/bin/orz-signer.rs
 150d28c5e66b0d5b348b17ec665ebcb7eed1b5ed5313f2c09e515fdf84001a08  crates/orz-bin/src/main.rs
-a0ada8ee8aeee37009cba16c1c8295ee61a912cfde845dbad330da5db04ab33e  crates/orz-bin/tests/acaf_e2e.rs
+55d0d937b059f462a35cb1564d9fb6e8e16188d80b37ff55408da06868eca1ba  crates/orz-bin/tests/acaf_e2e.rs
 47107b94443dbc5f39a81593a11c641f58311a40bd31808f4e24cd2afbe0b72a  crates/orz-bin/tests/real_flag.rs
 2abd8a16a8776da5b435caa787d8d838c8014816925d9a3b8a0d05204a8726b0  crates/orz-bin/tests/stdio_e2e.rs
 86300da80abecc265514e86efa443ee06e41bded4e34809ebb8e4b79f27b44bb  crates/orz-codex/Cargo.toml
@@ -1137,7 +1137,7 @@ bd459fb147ebdab8a339dbf62cf6f5510f60e8624e3fa078978a9ae7b726bbb9  crates/orz-loo
 b93db557dfa5741f2d610e6e0b5dd0878389d8a5a82c8d9a52784887de88a707  crates/orz-loop/src/host_exec.rs
 fcf0cdb727cb00d1b4401e2fbce80b949da69a46a0149259c4f07d1c4df41e27  crates/orz-loop/src/lib.rs
 9ed5bb0563cd354e60f9394bb39757502a864b1365f3fb8916a60c952c92c662  crates/orz-loop/src/mechanical_audit.rs
-70a0f420702efa7a51c2e6e3f42d7ed2fb84c0482b3fc02947a8cd245e0e6349  crates/orz-loop/src/orientation.rs
+1bf5048b5bb82ee14f248f86e6d4a722caa31829daefd10b846a516e825d14e1  crates/orz-loop/src/orientation.rs
 02cc06b2c83dbb277454cf56e508022999c9b578f692d223fb50877462544e75  crates/orz-loop/src/planning.rs
 bdd4bdb25b40a20d1f0c7874803f4571b1c33c39702d18c123d6e8ebdca4501f  crates/orz-loop/src/processes.rs
 6f85e2ddcac3ce38c314a4beb87a6f9c5cce1298ab29da2351cfe1ca4e1df9af  crates/orz-loop/src/prompt.rs
