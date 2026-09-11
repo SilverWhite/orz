@@ -28,8 +28,13 @@
 //!   initialize_session { session_id, agent_id, goal_version, goal_digest,
 //!                        policy_revision }
 //!       -> { session_key_hex, signer_revision, signer_measurement,
-//!            template_sha256, sequence_start }
-//!   sign_orientation_v1    { session_id }
+//!            template_sha256, template_sha256_initial_round,
+//!            sequence_start }
+//!   sign_orientation_v1    { session_id, canonical_arguments_sha256,
+//!                            trigger? }
+//!                            // trigger="initial_round" selects the second
+//!                            // built-in template (P0-0x S2, §14.66);
+//!                            // absent/other → the periodic block
 //!   sign_disposition_v1    { session_id, activation_id, canonical_arguments_sha256 }
 //!   sign_close_v1          { session_id, activation_id, canonical_arguments_sha256 }
 //!   sign_goal_revision_v1  { session_id, activation_id,
@@ -70,6 +75,21 @@ use serde_json::Value;
 /// match the injected block — the template binding was hollow. Fixed by
 /// referencing the canonical constant directly.)
 const ORIENTATION_TEMPLATE: &str = orz_assurance::orientation::checkpoint::ORIENTATION_BLOCK;
+
+/// P0-0x S2 (ADR-0010 §14.66, 2026-09-11): the **second** built-in template —
+/// the one-shot initial-round inquiry block (`[INITIAL_ROUND_INQUIRY v0.1]`).
+/// A control ticket binds the template it was minted against: the caller
+/// names the trigger in `sign_orientation_v1`, and [`Signer::sign_ticket`]
+/// selects the matching digest (ticket validation therefore matches on
+/// **kind + template digest**, not kind alone). SINGLE SOURCE: the same
+/// constant the controller injects — the ticket's `template_sha256` binds
+/// the REAL injected text (check 2 of ADR-0011 §4.2).
+const INITIAL_ROUND_INQUIRY_TEMPLATE: &str =
+    orz_assurance::orientation::checkpoint::INITIAL_ROUND_INQUIRY_BLOCK;
+
+/// The `trigger` value that selects [`INITIAL_ROUND_INQUIRY_TEMPLATE`]
+/// (single source: the loop's orientation producer).
+const TRIGGER_INITIAL_ROUND: &str = orz_loop::orientation::TRIGGER_INITIAL_ROUND;
 
 /// Manifest schema version.
 const MANIFEST_VERSION: u64 = 1;
@@ -126,6 +146,9 @@ struct Signer {
     signer_revision: u64,
     signer_measurement: String,
     template_sha256: String,
+    /// P0-0x S2: digest of the second built-in template (initial-round
+    /// inquiry block) — bound by orientation tickets whose trigger names it.
+    template_sha256_initial_round: String,
 }
 
 impl Drop for Signer {
@@ -143,6 +166,7 @@ impl Signer {
             signer_revision: manifest.signer_revision,
             signer_measurement: manifest.binary_sha256.clone(),
             template_sha256,
+            template_sha256_initial_round: sha256_hex(INITIAL_ROUND_INQUIRY_TEMPLATE.as_bytes()),
         }
     }
 
@@ -174,6 +198,9 @@ impl Signer {
         Ok(session)
     }
 
+    /// P0-0x S2: `trigger` is the 8th argument (registered cost — the
+    /// alternative is a params struct for a single-process narrow-IPC path).
+    #[allow(clippy::too_many_arguments)]
     fn sign_ticket(
         &mut self,
         session_id: &str,
@@ -181,6 +208,7 @@ impl Signer {
         activation_id: Option<String>,
         canonical_arguments_sha256: String,
         resolved_target_sha256: Option<String>,
+        trigger: Option<&str>,
         now_unix_secs: i64,
     ) -> Result<Value, SignerError> {
         let session = self
@@ -188,6 +216,13 @@ impl Signer {
             .get_mut(session_id)
             .ok_or_else(|| SignerError::SessionNotInitialised(session_id.to_string()))?;
         session.sequence += 1;
+        // P0-0x S2: two built-in orientation templates — the trigger names
+        // which one this ticket binds (non-orientation kinds ignore it).
+        let template_sha256 = if trigger == Some(TRIGGER_INITIAL_ROUND) {
+            self.template_sha256_initial_round.clone()
+        } else {
+            self.template_sha256.clone()
+        };
         let ctx = IssueContext {
             session_id: session_id.to_string(),
             agent_id: session.agent_id.clone(),
@@ -197,9 +232,7 @@ impl Signer {
             policy_revision: session.policy_revision,
             signer_revision: self.signer_revision,
             signer_measurement: self.signer_measurement.clone(),
-            template_sha256: kind
-                .requires_template()
-                .then(|| self.template_sha256.clone()),
+            template_sha256: kind.requires_template().then_some(template_sha256),
             canonical_arguments_sha256,
             resolved_target_sha256,
         };
@@ -390,6 +423,7 @@ fn handle_initialize(signer: &mut Signer, params: &Value) -> Result<Value, Signe
         "signer_revision": signer.signer_revision,
         "signer_measurement": signer.signer_measurement,
         "template_sha256": signer.template_sha256,
+        "template_sha256_initial_round": signer.template_sha256_initial_round,
         "sequence_start": session.sequence,
     }))
 }
@@ -411,6 +445,9 @@ fn handle_sign(
         Some(p) => Some(param_str(params, p)?),
         None => None,
     };
+    // P0-0x S2: the optional `trigger` selects between the two built-in
+    // orientation templates (any other kind ignores it — no template field).
+    let trigger = params.get("trigger").and_then(Value::as_str);
     let now = chrono::Utc::now().timestamp();
     let ticket = signer.sign_ticket(
         &session_id,
@@ -418,6 +455,7 @@ fn handle_sign(
         activation_id,
         canonical_arguments_sha256,
         resolved_target_sha256,
+        trigger,
         now,
     )?;
     Ok(ticket)
@@ -450,6 +488,9 @@ fn handle_sign_optional_activation(
         activation_id,
         canonical_arguments_sha256,
         resolved_target_sha256,
+        // Slice 2 action kinds carry no template; the trigger parameter is
+        // only meaningful for orientation tickets (P0-0x S2).
+        None,
         now,
     )?;
     Ok(ticket)
@@ -633,6 +674,18 @@ mod tests {
         .unwrap();
         assert_eq!(init["session_key_hex"].as_str().unwrap().len(), 64);
         assert_eq!(init["template_sha256"].as_str().unwrap().len(), 64);
+        // P0-0x S2: the second built-in template digest is published too.
+        assert_eq!(
+            init["template_sha256_initial_round"]
+                .as_str()
+                .unwrap()
+                .len(),
+            64
+        );
+        assert_ne!(
+            init["template_sha256"], init["template_sha256_initial_round"],
+            "the two orientation templates must be distinct"
+        );
 
         let ticket = handle_sign(
             &mut signer,
@@ -1071,6 +1124,107 @@ mod tests {
         );
         assert!(ORIENTATION_TEMPLATE.contains("[ORIENTATION v0.4]"));
         assert!(ORIENTATION_TEMPLATE.contains("[/ORIENTATION]"));
+        // P0-0x S2: the SECOND held template is the initial-round inquiry
+        // block — its digest must pin that block byte-for-byte too.
+        let initial = orz_assurance::orientation::checkpoint::INITIAL_ROUND_INQUIRY_BLOCK;
+        assert_eq!(
+            INITIAL_ROUND_INQUIRY_TEMPLATE, initial,
+            "signer's second template must equal the injected initial-round block"
+        );
+        assert_eq!(
+            signer.template_sha256_initial_round,
+            sha256_hex(initial.as_bytes()),
+            "second template digest must pin the initial-round block"
+        );
+        assert_ne!(
+            signer.template_sha256, signer.template_sha256_initial_round,
+            "the two orientation templates must be distinct"
+        );
+        assert!(INITIAL_ROUND_INQUIRY_TEMPLATE.starts_with("[INITIAL_ROUND_INQUIRY v0.1]"));
+        assert!(INITIAL_ROUND_INQUIRY_TEMPLATE.ends_with("[/INITIAL_ROUND_INQUIRY]"));
+    }
+
+    /// P0-0x S2 (ADR-0010 §14.66): an orientation ticket binds the built-in
+    /// template named by its `trigger` — `initial_round` selects the second
+    /// template, anything else (absent included) the periodic one. Ticket
+    /// validation therefore matches on kind + template digest.
+    #[test]
+    fn sign_orientation_v1_binds_the_template_named_by_trigger() {
+        let mut signer = test_signer();
+        let _ = handle_initialize(
+            &mut signer,
+            &serde_json::json!({
+                "session_id": "SESS-0X", "agent_id": "main", "goal_version": 0,
+                "goal_digest": "0".repeat(64), "policy_revision": 0,
+            }),
+        )
+        .unwrap();
+        let periodic = handle_sign(
+            &mut signer,
+            &serde_json::json!({
+                "session_id": "SESS-0X",
+                "canonical_arguments_sha256": "0".repeat(64),
+                "trigger": "completed_turns_interval",
+            }),
+            TicketKind::OrientationV1,
+            None,
+            None,
+        )
+        .unwrap();
+        assert_eq!(
+            periodic["template_sha256"].as_str().unwrap(),
+            signer.template_sha256,
+            "a periodic fire binds the periodic block"
+        );
+        let initial = handle_sign(
+            &mut signer,
+            &serde_json::json!({
+                "session_id": "SESS-0X",
+                "canonical_arguments_sha256": "0".repeat(64),
+                "trigger": "initial_round",
+            }),
+            TicketKind::OrientationV1,
+            None,
+            None,
+        )
+        .unwrap();
+        assert_eq!(
+            initial["template_sha256"].as_str().unwrap(),
+            signer.template_sha256_initial_round,
+            "an initial-round fire binds the initial-round block"
+        );
+        // Absent trigger (legacy caller) → the periodic block.
+        let absent = handle_sign(
+            &mut signer,
+            &serde_json::json!({
+                "session_id": "SESS-0X",
+                "canonical_arguments_sha256": "0".repeat(64),
+            }),
+            TicketKind::OrientationV1,
+            None,
+            None,
+        )
+        .unwrap();
+        assert_eq!(
+            absent["template_sha256"].as_str().unwrap(),
+            signer.template_sha256
+        );
+        // Non-orientation kinds carry no template at all — the trigger is
+        // meaningless there.
+        let disposition = handle_sign(
+            &mut signer,
+            &serde_json::json!({
+                "session_id": "SESS-0X",
+                "activation_id": "ACT-1",
+                "canonical_arguments_sha256": "0".repeat(64),
+                "trigger": "initial_round",
+            }),
+            TicketKind::DispositionV1,
+            Some("activation_id"),
+            None,
+        )
+        .unwrap();
+        assert_eq!(disposition["template_sha256"], Value::Null);
     }
 
     #[test]

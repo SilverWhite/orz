@@ -280,13 +280,22 @@ fn resealed_journal(
 #[test]
 fn family_stage_tamper_detected_end_to_end() {
     let root = repo_root();
-    // orientation-fire-run carries 5 accepted dispositions: bumping an
-    // expected_contract_revision breaks the lifecycle CAS binding — a rule
-    // ONLY the S2b family stage checks (payload schema accepts any integer).
+    // P0-0x S2 (§14.66) re-capture note: the current orientation-fire-run
+    // capture is auto_close-only (no dispositions: R1 §4.4 closes every
+    // retrieval dispatch — the pre-0t tamper targeted a
+    // `retrieval_parent_disposition` that no longer exists, so it mutated
+    // nothing and the assertion failed on a clean journal).
+    //
+    // The tamper now targets the ONE-SHOT initial-round inquiry: moving its
+    // `injection_position` off `post_tool_batch_gap` breaks the
+    // trigger↔block↔position coupling — a rule ONLY the family stage checks
+    // (the payload schema accepts any non-empty string).
     let (_dir, path) = resealed_journal("v0.2", "orientation-fire-run.jsonl", |events| {
         for event in events.iter_mut() {
-            if event["event_type"] == "retrieval_parent_disposition" {
-                event["payload"]["expected_contract_revision"] = json!(99);
+            if event["event_type"] == "orientation_checkpoint"
+                && event["payload"]["trigger"] == "initial_round"
+            {
+                event["payload"]["injection_position"] = json!("loop_top_gap");
                 break;
             }
         }
@@ -297,8 +306,8 @@ fn family_stage_tamper_detected_end_to_end() {
         report
             .errors
             .iter()
-            .any(|e| e.contains("expected_contract_revision")),
-        "family-stage (lifecycle) error expected, got: {:?}",
+            .any(|e| e.contains("initial_round") && e.contains("post_tool_batch_gap")),
+        "family-stage (initial_round_inquiry) error expected, got: {:?}",
         report.errors
     );
     // The re-sealed journal must be clean everywhere BEFORE the family

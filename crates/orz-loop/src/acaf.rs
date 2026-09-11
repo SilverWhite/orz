@@ -27,6 +27,8 @@ use orz_assurance::permit::HmacSha256Signer;
 use serde_json::Value;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader, BufWriter};
 
+use crate::orientation::TRIGGER_INITIAL_ROUND;
+
 /// Request timeout for one signer round-trip (the signer is a local process
 /// doing HMAC work — 2 s is generous; a stall means the signer is wedged and
 /// the request fails fast).
@@ -106,6 +108,11 @@ struct ClientSession {
     policy_revision: u64,
     k_session: HmacSha256Signer,
     template_sha256: String,
+    /// P0-0x S2 (ADR-0010 §14.66): the signer's SECOND built-in template
+    /// digest (initial-round inquiry block). Check 2 compares the ticket's
+    /// digest against the built-in version selected by the ticket's trigger —
+    /// a control ticket therefore matches on **kind + template digest**.
+    template_sha256_initial_round: String,
     /// Signer version + binary measurement downloaded at initialize_session
     /// (ADR-0011 §4.4) — recorded for audit/upgrade-wiring (Slice 2 uses them
     /// in the ticket-issued payload audit fields).
@@ -388,6 +395,11 @@ impl AcafClient {
                 .and_then(Value::as_str)
                 .unwrap_or_default()
                 .to_string(),
+            template_sha256_initial_round: result
+                .get("template_sha256_initial_round")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .to_string(),
             signer_revision: result
                 .get("signer_revision")
                 .and_then(Value::as_u64)
@@ -417,6 +429,7 @@ impl AcafClient {
         activation_id: Option<String>,
         canonical_arguments_sha256: &str,
         resolved_target_sha256: Option<String>,
+        trigger: Option<&str>,
     ) -> Result<ControlTicket, AcafClientError> {
         let session = self
             .session
@@ -427,6 +440,11 @@ impl AcafClient {
             "session_id": session.session_id,
             "canonical_arguments_sha256": canonical_arguments_sha256,
         });
+        // P0-0x S2: the trigger tells the signer which built-in orientation
+        // template this ticket binds (`initial_round` → the second one).
+        if let Some(trigger) = trigger {
+            params["trigger"] = serde_json::json!(trigger);
+        }
         if let Some(activation) = &activation_id {
             params["activation_id"] = serde_json::json!(activation);
         }
@@ -465,6 +483,7 @@ impl AcafClient {
         canonical_arguments_sha256: &str,
         live_activation_id: Option<String>,
         live_resolved_target_sha256: Option<String>,
+        trigger: Option<&str>,
     ) -> Result<TicketOutcome, AcafClientError> {
         // e2e-only seam (2026-08-13 review fix): a matching injected
         // failure returns Err before the wire call — the caller journals
@@ -487,6 +506,17 @@ impl AcafClient {
             .as_deref()
             .and_then(|id| self.sessions.get(id))
             .ok_or(AcafClientError::SessionNotInitialised)?;
+        // P0-0x S2: check 2 compares the ticket's `template_sha256` against
+        // the SIGNER-DOWNLOADED built-in template selected by the SAME
+        // trigger the ticket was minted under (initial-round vs periodic
+        // orientation block). Absent trigger → the periodic block, which is
+        // also the legacy shape (a signer without the second digest returns
+        // an empty string and fails closed, as before).
+        let expected_template = if trigger == Some(TRIGGER_INITIAL_ROUND) {
+            session.template_sha256_initial_round.clone()
+        } else {
+            session.template_sha256.clone()
+        };
         let vctx = VerifyContext {
             session_id: session.session_id.clone(),
             agent_id: session.agent_id.clone(),
@@ -498,7 +528,7 @@ impl AcafClient {
             // template version (session field), never the ticket's own claim
             // — a tampered template field already fails check 1 (it is part
             // of the canonical body), this is the independent second layer.
-            template_sha256: Some(session.template_sha256.clone()),
+            template_sha256: Some(expected_template),
             canonical_arguments_sha256: canonical_arguments_sha256.to_string(),
             resolved_target_sha256: live_resolved_target_sha256,
             now_unix_secs: chrono::Utc::now().timestamp(),

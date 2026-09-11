@@ -1,7 +1,9 @@
-//! Task D S2c (2026-09-06): the remaining 24 rule-family verifiers of the
+//! Task D S2c (2026-09-06): the remaining rule-family verifiers of the
 //! v0.2 track — the Rust conformance counterparts of the S2a inventory's
 //! S2c batches (retrieval ×8, context & compaction ×7, control plane ×9),
 //! mirroring `_verify_v02_*` in `assurance/run_event_journal_validation.py`.
+//! 25 since 0x S2 (2026-09-11) added `initial_round_inquiry` (ADR-0010
+//! §14.66).
 //!
 //! Semantics mirror the Python judge rule for rule (single pass over journal
 //! order, per-run / per-activation state machines, mechanical recomputation
@@ -1657,6 +1659,78 @@ pub fn verify_inquiry_kind(events: &[Value]) -> Vec<String> {
     errors
 }
 
+/// P0-0x S2 (ADR-0010 §14.66, 2026-09-11) — `initial_round_inquiry`: the
+/// one-shot initial-round inquiry shares the `orientation_checkpoint` event
+/// with the periodic threshold inquiry, so `trigger` is the dispatcher and
+/// the payload must be self-consistent:
+///
+/// - `trigger == "initial_round"` ⇒ `message_block` starts with
+///   `[INITIAL_ROUND_INQUIRY` AND `injection_position == "post_tool_batch_gap"`
+///   (设计 §3.2: 触发时机固定为首个含工具调用的动作批次结束);
+/// - any OTHER trigger must NOT carry the initial-round block (the two
+///   injected blocks are distinct; a mismatch means the producer wired the
+///   wrong text to the wrong trigger);
+/// - 会话内恰好一次: at most ONE initial-round fire per
+///   (`session_id`, `agent_role`) inside one journal.
+///
+/// Not expressible in the payload schema (cross-field / cross-event), hence
+/// a family-stage rule. Python twin: `_verify_v02_initial_round_inquiry`.
+pub fn verify_initial_round_inquiry(events: &[Value]) -> Vec<String> {
+    const INITIAL_TRIGGER: &str = "initial_round";
+    const INITIAL_BLOCK_PREFIX: &str = "[INITIAL_ROUND_INQUIRY";
+    const POST_TOOL_BATCH_GAP: &str = "post_tool_batch_gap";
+
+    let mut errors = Vec::new();
+    let mut fires: BTreeMap<(String, String), usize> = BTreeMap::new();
+    for (index, event) in events.iter().enumerate() {
+        if !is_v02(event)
+            || event.get("event_type").and_then(Value::as_str) != Some("orientation_checkpoint")
+        {
+            continue;
+        }
+        let payload = event.get("payload").cloned().unwrap_or(Value::Null);
+        let trigger = str_of(payload.get("trigger")).unwrap_or_default();
+        let block = str_of(payload.get("message_block")).unwrap_or_default();
+        let position = str_of(payload.get("injection_position")).unwrap_or_default();
+
+        if trigger == INITIAL_TRIGGER {
+            if !block.starts_with(INITIAL_BLOCK_PREFIX) {
+                errors.push(format!(
+                    "event {index}: orientation_checkpoint trigger \"initial_round\" \
+                     must carry the [INITIAL_ROUND_INQUIRY block (got {block:?})"
+                ));
+            }
+            if position != POST_TOOL_BATCH_GAP {
+                errors.push(format!(
+                    "event {index}: orientation_checkpoint trigger \"initial_round\" \
+                     must be injected at {POST_TOOL_BATCH_GAP} (got {position:?})"
+                ));
+            }
+            let session = str_of(payload.get("session_id"))
+                .unwrap_or_default()
+                .to_string();
+            let role = str_of(payload.get("agent_role"))
+                .unwrap_or_default()
+                .to_string();
+            *fires.entry((session, role)).or_insert(0) += 1;
+        } else if block.starts_with(INITIAL_BLOCK_PREFIX) {
+            errors.push(format!(
+                "event {index}: orientation_checkpoint trigger {trigger:?} carries the \
+                 initial-round block — trigger and message_block must agree"
+            ));
+        }
+    }
+    for ((session, role), count) in &fires {
+        if *count > 1 {
+            errors.push(format!(
+                "session {session} / agent {role}: {count} initial_round inquiries — \
+                 the initial-round inquiry is one-shot per session"
+            ));
+        }
+    }
+    errors
+}
+
 /// Python `_verify_v02_plan_write` (PLAN-FIRST 阶段 C review closure): the
 /// gate attempt state machine — refill only on attempt 1 followed by a
 /// second write, validation_failed_after_refill only on attempt 2, accepted
@@ -2416,6 +2490,7 @@ pub fn verify_probe_accuracy(events: &[Value]) -> Vec<String> {
 pub fn verify_s2c_family(family: &str, events: &[Value]) -> Vec<String> {
     match family {
         "inquiry_kind" => verify_inquiry_kind(events),
+        "initial_round_inquiry" => verify_initial_round_inquiry(events),
         "plan_write" => verify_plan_write(events),
         "console_mode_transition" => verify_console_mode_transition(events),
         // "console_order_written" retired 2026-09-06 (任务 D S2d 裁决一,

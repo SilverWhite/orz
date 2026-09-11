@@ -102,6 +102,10 @@ impl AgentLoopController {
             .clone()
             .unwrap_or_else(|| writer.run_id().to_string());
         let canonical = crate::acaf::canonical_arguments_digest(kind, args);
+        // P0-0x S2: the orientation trigger rides the ticket — the signer
+        // picks the built-in template digest by it, and check 2 compares
+        // against the same one. Absent for every other ticket kind.
+        let trigger = args.get("trigger").and_then(serde_json::Value::as_str);
         let now = chrono::Utc::now();
         // Goal/policy wiring (2026-08-12): the live goal version and policy
         // revision — a mismatch against the client's cached session
@@ -123,6 +127,7 @@ impl AgentLoopController {
                     activation_id.clone(),
                     &canonical,
                     resolved_target.clone(),
+                    trigger,
                 )
                 .await
             {
@@ -139,6 +144,7 @@ impl AgentLoopController {
                             &canonical,
                             activation_id.clone(),
                             resolved_target,
+                            trigger,
                         )
                         .await
                     {
@@ -460,6 +466,9 @@ impl AgentLoopController {
                         activation_id.clone(),
                         &canonical_digest,
                         Some(resolved_digest.clone()),
+                        // Action kinds carry no template (check 2 is
+                        // orientation-only) — no trigger on this path.
+                        None,
                     )
                     .await
                 {
@@ -529,6 +538,7 @@ impl AgentLoopController {
                         &live_canonical_digest,
                         activation_id.clone(),
                         Some(live_target_digest),
+                        None,
                     )
                     .await
             }
@@ -885,6 +895,7 @@ impl AgentLoopController {
                         activation_id.clone(),
                         &canonical_digest,
                         Some(target_digest.clone()),
+                        None,
                     )
                     .await
                 {
@@ -940,6 +951,7 @@ impl AgentLoopController {
                         &live_canonical_digest,
                         activation_id.clone(),
                         Some(live_target_digest),
+                        None,
                     )
                     .await
             }

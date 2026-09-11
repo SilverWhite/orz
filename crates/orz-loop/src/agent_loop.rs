@@ -34,9 +34,7 @@ use crate::gateway::model::{
     ToolCall, TransportRetryKind,
 };
 use crate::host::{LoopHost, RiskClass, ToolDef, ToolResult};
-use crate::orientation::{
-    AgentRole, ORIENTATION_POST_TOOL_BATCH_GAP, OrientationSessionState,
-};
+use crate::orientation::{AgentRole, ORIENTATION_POST_TOOL_BATCH_GAP, OrientationSessionState};
 use crate::prompt::COUNTEREXAMPLE_GATE_BLOCK;
 use crate::relay::{DispatchTarget, route};
 use crate::tool::ToolDispatcher;

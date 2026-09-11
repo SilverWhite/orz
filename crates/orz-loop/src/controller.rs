@@ -3620,7 +3620,13 @@ impl AgentLoopController {
                 writer,
                 TicketKind::OrientationV1,
                 None,
-                &serde_json::json!({ "agent_role": role.as_str() }),
+                // P0-0x S2: the trigger rides the ticket so the signer (and
+                // check 2) binds the built-in template this fire actually
+                // injects — periodic block vs one-shot initial-round block.
+                &serde_json::json!({
+                    "agent_role": role.as_str(),
+                    "trigger": rec.trigger,
+                }),
             )
             .await?;
         if let TicketGate::Blocked { .. } = &gate {

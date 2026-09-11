@@ -245,7 +245,7 @@ async fn signer_process_full_lifecycle() {
         .await
         .expect("initialize");
     let ticket = client
-        .sign_ticket(TicketKind::OrientationV1, None, &"0".repeat(64), None)
+        .sign_ticket(TicketKind::OrientationV1, None, &"0".repeat(64), None, None)
         .await
         .expect("sign orientation");
     assert_eq!(ticket.ticket_kind, "orientation_v1");
@@ -260,7 +260,7 @@ async fn signer_process_full_lifecycle() {
     // against the version downloaded at initialize_session).
 
     let outcome = client
-        .verify_and_consume(&ticket, &"0".repeat(64), None, None)
+        .verify_and_consume(&ticket, &"0".repeat(64), None, None, None)
         .await
         .expect("verify");
     assert!(
@@ -270,7 +270,7 @@ async fn signer_process_full_lifecycle() {
 
     // Replay — same ticket again → replay_detected.
     let outcome = client
-        .verify_and_consume(&ticket, &"0".repeat(64), None, None)
+        .verify_and_consume(&ticket, &"0".repeat(64), None, None, None)
         .await
         .expect("verify again");
     assert!(
@@ -285,17 +285,43 @@ async fn signer_process_full_lifecycle() {
     );
 
     // Target mismatch — the LIVE canonical args differ from the ticket's.
+    // P0-0x S2: an initial-round orientation ticket binds the second
+    // built-in template — sign + verify under the SAME trigger consumes.
+    let initial = client
+        .sign_ticket(
+            TicketKind::OrientationV1,
+            None,
+            &"0".repeat(64),
+            None,
+            Some("initial_round"),
+        )
+        .await
+        .expect("sign initial-round orientation");
+    assert_ne!(
+        initial.template_sha256, ticket.template_sha256,
+        "the initial-round ticket must bind a different built-in template"
+    );
+    let outcome = client
+        .verify_and_consume(&initial, &"0".repeat(64), None, None, Some("initial_round"))
+        .await
+        .expect("verify initial-round ticket");
+    assert!(
+        matches!(outcome, TicketOutcome::Consumed { .. }),
+        "initial-round ticket must consume under its own trigger: {outcome:?}"
+    );
+
     let ticket2 = client
         .sign_ticket(
             TicketKind::DispositionV1,
             Some("ACT-1".into()),
             &"0".repeat(64),
             None,
+            None,
         )
         .await
         .expect("sign disposition");
     let outcome = client
-        .verify_and_consume(&ticket2, &"1".repeat(64), Some("ACT-1".into()), None)
+        .verify_and_consume(&ticket2, &"1".repeat(64), Some("ACT-1".into()), None, None)
         .await
         .expect("verify with wrong args");
     assert!(
@@ -582,12 +608,12 @@ async fn signer_crash_respawns_and_recovers() {
         .await
         .expect("initialize");
     let ticket = client
-        .sign_ticket(TicketKind::OrientationV1, None, &"0".repeat(64), None)
+        .sign_ticket(TicketKind::OrientationV1, None, &"0".repeat(64), None, None)
         .await
         .expect("sign before crash");
     assert!(matches!(
         client
-            .verify_and_consume(&ticket, &"0".repeat(64), None, None)
+            .verify_and_consume(&ticket, &"0".repeat(64), None, None, None)
             .await
             .expect("verify before crash"),
         TicketOutcome::Consumed { .. }
@@ -609,6 +635,7 @@ async fn signer_crash_respawns_and_recovers() {
             Some("ACT-9".into()),
             &"0".repeat(64),
             None,
+            None,
         )
         .await;
     assert!(
@@ -627,6 +654,7 @@ async fn signer_crash_respawns_and_recovers() {
             Some("ACT-9".into()),
             &"0".repeat(64),
             None,
+            None,
         )
         .await
         .expect("sign after self-heal");
@@ -639,7 +667,7 @@ async fn signer_crash_respawns_and_recovers() {
     assert!(
         matches!(
             client
-                .verify_and_consume(&ticket2, &"0".repeat(64), Some("ACT-9".into()), None)
+                .verify_and_consume(&ticket2, &"0".repeat(64), Some("ACT-9".into()), None, None)
                 .await
                 .expect("verify after self-heal"),
             TicketOutcome::Consumed { .. }
@@ -666,13 +694,13 @@ async fn sessions_are_isolated_across_switching() {
         .await
         .expect("init A");
     let ta = client
-        .sign_ticket(TicketKind::OrientationV1, None, &"0".repeat(64), None)
+        .sign_ticket(TicketKind::OrientationV1, None, &"0".repeat(64), None, None)
         .await
         .expect("sign A1");
     assert_eq!(ta.sequence, 1);
     assert!(matches!(
         client
-            .verify_and_consume(&ta, &"0".repeat(64), None, None)
+            .verify_and_consume(&ta, &"0".repeat(64), None, None, None)
             .await
             .expect("consume A1"),
         TicketOutcome::Consumed { .. }
@@ -684,13 +712,13 @@ async fn sessions_are_isolated_across_switching() {
         .await
         .expect("init B");
     let tb = client
-        .sign_ticket(TicketKind::OrientationV1, None, &"0".repeat(64), None)
+        .sign_ticket(TicketKind::OrientationV1, None, &"0".repeat(64), None, None)
         .await
         .expect("sign B1");
     assert_eq!(tb.sequence, 1, "B has its own sequence");
     assert!(matches!(
         client
-            .verify_and_consume(&tb, &"0".repeat(64), None, None)
+            .verify_and_consume(&tb, &"0".repeat(64), None, None, None)
             .await
             .expect("consume B1"),
         TicketOutcome::Consumed { .. }
@@ -708,6 +736,7 @@ async fn sessions_are_isolated_across_switching() {
             Some("ACT-1".into()),
             &"0".repeat(64),
             None,
+            None,
         )
         .await
         .expect("sign A2");
@@ -717,7 +746,7 @@ async fn sessions_are_isolated_across_switching() {
     );
     assert!(matches!(
         client
-            .verify_and_consume(&ta2, &"0".repeat(64), Some("ACT-1".into()), None)
+            .verify_and_consume(&ta2, &"0".repeat(64), Some("ACT-1".into()), None, None)
             .await
             .expect("consume A2"),
         TicketOutcome::Consumed { .. }
@@ -726,7 +755,7 @@ async fn sessions_are_isolated_across_switching() {
     // A's first ticket must STILL be replay-rejected — the ledger was not
     // reset by the A→B→A switching.
     let replay = client
-        .verify_and_consume(&ta, &"0".repeat(64), None, None)
+        .verify_and_consume(&ta, &"0".repeat(64), None, None, None)
         .await
         .expect("replay A1");
     assert!(

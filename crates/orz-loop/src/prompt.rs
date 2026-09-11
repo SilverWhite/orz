@@ -652,8 +652,7 @@ mod tests {
         // P0-0x S1: the one-shot initial-round inquiry block is registered by
         // its own prefix — the two injected blocks must not shadow each other
         // (a leak here would persist the block back into the conversation).
-        let initial_block =
-            orz_assurance::orientation::checkpoint::INITIAL_ROUND_INQUIRY_BLOCK;
+        let initial_block = orz_assurance::orientation::checkpoint::INITIAL_ROUND_INQUIRY_BLOCK;
         assert!(is_injected_block_text(initial_block));
         assert!(is_injected_block_text(
             "[INITIAL_ROUND_INQUIRY v0.1] 本任务实际要交付什么"

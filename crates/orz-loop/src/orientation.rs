@@ -565,8 +565,7 @@ mod tests {
             ScriptedResponse::text("完成"),
             ScriptedResponse::text("完成"),
         ])));
-        let mut orientation =
-            OrientationSessionState::new_with_threshold("sess-initial-defer", 50);
+        let mut orientation = OrientationSessionState::new_with_threshold("sess-initial-defer", 50);
 
         controller
             .run_turn(
@@ -591,7 +590,10 @@ mod tests {
             "无工具批次的首轮不得触发初始轮问询: {:?}",
             event_types(&dir1)
         );
-        assert_eq!(after_run1.last().unwrap().event_type, EventType::RunFinished);
+        assert_eq!(
+            after_run1.last().unwrap().event_type,
+            EventType::RunFinished
+        );
 
         controller
             .run_turn(
@@ -613,7 +615,10 @@ mod tests {
         assert_eq!(fires.len(), 1, "{:?}", event_types(&dir2));
         assert_eq!(fires[0].payload["trigger"], TRIGGER_INITIAL_ROUND);
         assert_eq!(fires[0].payload["agent_role"], "main");
-        assert_eq!(fires[0].payload["injection_position"], "post_tool_batch_gap");
+        assert_eq!(
+            fires[0].payload["injection_position"],
+            "post_tool_batch_gap"
+        );
         assert!(orientation.initial_round_fired);
         // 阈值 50 未到——周期问询不因初始轮而触发。
         assert_eq!(orientation.sequence, 1);
@@ -688,12 +693,9 @@ mod tests {
         let initial_idx = requests
             .iter()
             .position(|req| {
-                req.messages
-                    .iter()
-                    .any(|m| {
-                        m.role == Role::User
-                            && m.content.starts_with("[INITIAL_ROUND_INQUIRY")
-                    })
+                req.messages.iter().any(|m| {
+                    m.role == Role::User && m.content.starts_with("[INITIAL_ROUND_INQUIRY")
+                })
             })
             .expect("initial-round trigger request");
         assert_eq!(initial_idx, 1, "初始轮问询须在首个动作批次后注入");
@@ -809,11 +811,11 @@ mod tests {
             "大方向是什么",
             "当前做法优劣如何",
         ] {
-            assert!(!audit_msg.content.contains(probe), "审查报告不得携带问询: {probe}");
             assert!(
-                !gate_block.contains(probe),
-                "反例门块不得携带问询: {probe}"
+                !audit_msg.content.contains(probe),
+                "审查报告不得携带问询: {probe}"
             );
+            assert!(!gate_block.contains(probe), "反例门块不得携带问询: {probe}");
         }
         let _ = std::fs::remove_dir_all(&dir);
     }

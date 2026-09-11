@@ -1495,6 +1495,10 @@ pub const S2B_FAMILIES: &[&str] = &[
 /// retired 2026-09-06 (S2d 裁决一, ADR-0010 §14.57) — 24 → 23.
 pub const S2C_FAMILIES: &[&str] = &[
     "inquiry_kind",
+    // P0-0x S2 (2026-09-11, ADR-0010 §14.66): the initial-round inquiry
+    // shares the orientation_checkpoint event — its trigger/block/position
+    // coupling and its one-shot contract are family-stage rules.
+    "initial_round_inquiry",
     "plan_write",
     "console_mode_transition",
     "console_order_rejected",
@@ -1519,16 +1523,18 @@ pub const S2C_FAMILIES: &[&str] = &[
     "probe_accuracy",
 ];
 
-/// All 33 families in the Python `validate_journal_text` call order
+/// All 34 families in the Python `validate_journal_text` call order
 /// (Py order; `console_order_written` retired 2026-09-06, S2d 裁决一 /
 /// ADR-0010 §14.57 — the write-order chain rule is gone on both judges and
 /// NOT converted into a negative check, so historical journals replay clean)
 /// `failure_agg_coverage` added 2026-09-08 (0q / ADR-0010 §14.63);
 /// `retrieval_enable_gate` + `browser_launch_result` added 2026-09-09
-/// (0t / ADR-0010 §14.65))
+/// (0t / ADR-0010 §14.65);
+/// `initial_round_inquiry` added 2026-09-11 (0x S2 / ADR-0010 §14.66))
 /// — the S2d full-corpus crosscheck order.
 pub const ALL_FAMILIES: &[&str] = &[
     "inquiry_kind",
+    "initial_round_inquiry",
     "plan_write",
     "console_mode_transition",
     "console_order_rejected",
@@ -2455,6 +2461,93 @@ mod tests {
                     "orientation_checkpoint",
                     json!({"inquiry_kind": "orientation", "prompt": "continue?"}),
                 )],
+            ),
+            // P0-0x S2 (2026-09-11, ADR-0010 §14.66): initial-round inquiry
+            // scenarios — one legal shape + four rule violations (wrong
+            // block, wrong injection position, initial block under another
+            // trigger, and the one-shot contract).
+            (
+                "initial_round_ok",
+                vec![ev(
+                    "orientation_checkpoint",
+                    json!({
+                        "inquiry_kind": "orientation_checkpoint",
+                        "agent_role": "main",
+                        "session_id": "sess-0x",
+                        "trigger": "initial_round",
+                        "message_block": "[INITIAL_ROUND_INQUIRY v0.1]\n开局问询\n[/INITIAL_ROUND_INQUIRY]",
+                        "injection_position": "post_tool_batch_gap",
+                    }),
+                )],
+            ),
+            (
+                "initial_round_wrong_block",
+                vec![ev(
+                    "orientation_checkpoint",
+                    json!({
+                        "inquiry_kind": "orientation_checkpoint",
+                        "agent_role": "main",
+                        "session_id": "sess-0x",
+                        "trigger": "initial_round",
+                        "message_block": "[ORIENTATION v0.4]\n方向检查\n[/ORIENTATION]",
+                        "injection_position": "post_tool_batch_gap",
+                    }),
+                )],
+            ),
+            (
+                "initial_round_wrong_position",
+                vec![ev(
+                    "orientation_checkpoint",
+                    json!({
+                        "inquiry_kind": "orientation_checkpoint",
+                        "agent_role": "main",
+                        "session_id": "sess-0x",
+                        "trigger": "initial_round",
+                        "message_block": "[INITIAL_ROUND_INQUIRY v0.1]\n开局问询\n[/INITIAL_ROUND_INQUIRY]",
+                        "injection_position": "loop_top_gap",
+                    }),
+                )],
+            ),
+            (
+                "initial_round_under_periodic_trigger",
+                vec![ev(
+                    "orientation_checkpoint",
+                    json!({
+                        "inquiry_kind": "orientation_checkpoint",
+                        "agent_role": "main",
+                        "session_id": "sess-0x",
+                        "trigger": "completed_turns_interval",
+                        "message_block": "[INITIAL_ROUND_INQUIRY v0.1]\n开局问询\n[/INITIAL_ROUND_INQUIRY]",
+                        "injection_position": "post_tool_batch_gap",
+                    }),
+                )],
+            ),
+            (
+                "initial_round_twice",
+                vec![
+                    ev(
+                        "orientation_checkpoint",
+                        json!({
+                            "inquiry_kind": "orientation_checkpoint",
+                            "agent_role": "main",
+                            "session_id": "sess-0x",
+                            "trigger": "initial_round",
+                            "message_block": "[INITIAL_ROUND_INQUIRY v0.1]\n开局问询\n[/INITIAL_ROUND_INQUIRY]",
+                            "injection_position": "post_tool_batch_gap",
+                        }),
+                    ),
+                    ev(
+                        "orientation_checkpoint",
+                        json!({
+                            "inquiry_kind": "orientation_checkpoint",
+                            "agent_role": "main",
+                            "session_id": "sess-0x",
+                            "trigger": "initial_round",
+                            "message_block": "[INITIAL_ROUND_INQUIRY v0.1]\n开局问询\n[/INITIAL_ROUND_INQUIRY]",
+                            "injection_position": "post_tool_batch_gap",
+                        }),
+                    ),
+                ],
             ),
             (
                 "plan_write_ok",
@@ -4944,6 +5037,16 @@ mod tests {
         }
         // ── S2c violation rows ─────────────────────────────────────────
         expect("inquiry_kind_mismatch", "inquiry_kind");
+        // P0-0x S2 (ADR-0010 §14.66): trigger ↔ block ↔ position coupling
+        // and the one-shot contract (`initial_round_ok` expects NO violation).
+        for name in [
+            "initial_round_wrong_block",
+            "initial_round_wrong_position",
+            "initial_round_under_periodic_trigger",
+            "initial_round_twice",
+        ] {
+            expect(name, "initial_round_inquiry");
+        }
         for name in [
             "plan_write_refill_attempt_2",
             "plan_write_refill_unfollowed",
@@ -5248,7 +5351,7 @@ mod tests {
     }
 
     /// Task D acceptance: per-family verdict parity with the Python judge on
-    /// the same corpus (all 33 families since the S2d 裁决一 written-rule
+    /// the same corpus (all 34 families since the S2d 裁决一 written-rule
     /// retirement, ADR-0010 §14.57; +0q failure pipeline +0t retrieval gate
     /// / browser_launch_result 两族, 2026-09-09) — the synthetic scenarios
     /// above PLUS every real v0.2 fixture journal. Verdict parity =
@@ -5326,6 +5429,7 @@ sys.path.insert(0, sys.argv[1])
 import run_event_journal_validation as v
 fams = {
     "inquiry_kind": v._verify_v02_inquiry_kind,
+    "initial_round_inquiry": v._verify_v02_initial_round_inquiry,
     "plan_write": v._verify_v02_plan_write,
     "console_mode_transition": v._verify_v02_console_mode_transition,
     "console_order_rejected": v._verify_v02_console_order_rejected,
@@ -5441,7 +5545,7 @@ json.dump(out, sys.stdout)
             "crosscheck cell accounting drifted"
         );
         assert_eq!(
-            scenario_count, 244,
+            scenario_count, 249,
             "synthetic scenario corpus count drifted from its registered size              ({scenario_count})"
         );
         assert!(

@@ -1789,7 +1789,10 @@ mod tests {
 /// slice audit doc) — CI stays pure Python.
 ///
 /// Run: `cargo test -p orz-bin -- --ignored conformance_capture --nocapture
-/// --test-threads=1`
+/// --test-threads=1` — with `ORZ_ACAF_FAIL_CLOSED=0` exported: the capture
+/// hosts configure no signer fabric, and outside `cfg(test)` of orz-loop the
+/// fail-closed default (unset = enforced) would refuse every run
+/// (2026-09-11, 0x S2 re-capture note).
 #[cfg(test)]
 mod conformance_capture {
     use super::*;
@@ -2443,6 +2446,12 @@ mod conformance_capture {
                         "retrieval_close_record",
                         "mechanical_audit_update",
                     ]);
+                    // P0-0x (2026-09-11, ADR-0010 §14.66): the very first
+                    // action batch closes with the ONE-SHOT initial-round
+                    // inquiry (same gap, same event type — trigger differs).
+                    if i == 0 {
+                        expected.push("orientation_checkpoint");
+                    }
                     if i == 6 {
                         expected.push("orientation_checkpoint");
                     }
@@ -2464,20 +2473,41 @@ mod conformance_capture {
                     "run_finished",
                 );
 
-                // The fired checkpoint carries the v0.2 payload shape —
-                // inquiry_family=neutral + inquiry_kind const + the 7-count.
+                // The fired checkpoints carry the v0.2 payload shape —
+                // inquiry_family=neutral + inquiry_kind const. P0-0x S2
+                // (§14.66): two fires share the event type — the one-shot
+                // initial-round inquiry (first action batch) and the periodic
+                // threshold inquiry (round 7); select by trigger.
                 let content =
                     std::fs::read_to_string(handle.journal_dir.join("events.jsonl")).unwrap();
-                let orientation_line = content
-                    .lines()
-                    .find(|l| l.contains("\"orientation_checkpoint\""))
-                    .expect("orientation event present");
-                let payload: serde_json::Value = serde_json::from_str(orientation_line).unwrap();
-                let p = &payload["payload"];
+                let orientation_payload = |trigger: &str| -> serde_json::Value {
+                    content
+                        .lines()
+                        .map(|l| serde_json::from_str::<serde_json::Value>(l).unwrap())
+                        .find(|e| {
+                            e["event_type"] == "orientation_checkpoint"
+                                && e["payload"]["trigger"] == trigger
+                        })
+                        .unwrap_or_else(|| panic!("orientation fire with trigger {trigger}"))
+                        ["payload"]
+                        .clone()
+                };
+                let initial = orientation_payload("initial_round");
+                assert_eq!(initial["inquiry_family"], "neutral");
+                assert_eq!(initial["inquiry_kind"], "orientation_checkpoint");
+                assert_eq!(initial["agent_role"], "main");
+                assert_eq!(initial["completed_turns_since_orientation"], 1);
+                assert_eq!(initial["injection_position"], "post_tool_batch_gap");
+                assert!(
+                    initial["message_block"]
+                        .as_str()
+                        .unwrap()
+                        .starts_with("[INITIAL_ROUND_INQUIRY")
+                );
+                let p = orientation_payload("completed_turns_interval");
                 assert_eq!(p["inquiry_family"], "neutral");
                 assert_eq!(p["inquiry_kind"], "orientation_checkpoint");
                 assert_eq!(p["agent_role"], "main");
-                assert_eq!(p["trigger"], "completed_turns_interval");
                 assert_eq!(p["completed_turns_since_orientation"], 7);
                 assert_eq!(p["injection_position"], "post_tool_batch_gap");
                 assert!(

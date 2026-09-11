@@ -4049,9 +4049,7 @@ mod tests {
         // 主车道的初始轮问询在动作批次结束后落——按 trigger 取，不按序取。
         let p = &fires
             .iter()
-            .find(|e| {
-                e.payload["trigger"].as_str() == Some("completed_turns_interval")
-            })
+            .find(|e| e.payload["trigger"].as_str() == Some("completed_turns_interval"))
             .expect("retrieval-lane periodic fire present")
             .payload;
         assert_eq!(
