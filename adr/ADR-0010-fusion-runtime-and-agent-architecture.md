@@ -5146,5 +5146,36 @@ registry/manifest 随批）→ S3 覆盖面矩阵与法官正反两测 → S4 �
    S1–S2 代码随本批一并进载体（`browser_control` 命中 21→75 / 25→59）。⑦manifest
    重算 1441 条、差异面恰两行（`Cargo.lock` / `crates/orz-bin/Cargo.toml`）、门禁
    `valid: true` / `error_count: 0`；0.4.0 发布资产未被触碰。证据：
-   [`0X S3 双平台重建记录`](../docs/audits/0X_S3_DUAL_PLATFORM_REBUILD_2026-09-11.md)。
-   **S4 实机复验待放行；未跑实机。**
+    [`0X S3 双平台重建记录`](../docs/audits/0X_S3_DUAL_PLATFORM_REBUILD_2026-09-11.md)。
+    **S4 实机复验待放行；未跑实机。**
+
+9. **S4 实机复验登记（2026-09-11，同日；0x 判据通过 / 0v 未通过）**：载体 orz 0.4.1，
+   单题 `terminal-bench/dna-assembly`、k=1、`-r 0`、官方墙钟唯一、deepseek-v4-flash、
+   eval_browser=true、无代理直连 + 本地预拉镜像；试次 12:13:10–12:44:45 UTC（31m35s、
+   407 事件、50 模型轮、67 工具轮）。①**0x 判据通过**——`trigger=initial_round`
+   **恰好 1 次**（seq=12）、`injection_position=post_tool_batch_gap`、在首个动作批次
+   （seq=9）之后、块前缀 `[INITIAL_ROUND_INQUIRY v0.1]` 与三问逐字命中、
+   `completed_turns_since_orientation=1`，50 轮内**无复发**，41 条 `mechanical_audit_update`
+   无一含三问（审查报告未被污染），无黑板锚点。边界：主车道仅 2 个模型轮（其余 48 轮在
+   外部检索子代理）→ 周期问询未触发，「初始轮 fire 与周期问询互不影响」未获实机样本，
+   由 S1/S2 测试矩阵覆盖；本轮为**单会话样本**，0x 闭合入账待用户裁决。
+   ②**0v 未通过（受阻）**——**F1 权限门「双面修一面」**：0v S1 只改控制器侧
+   `orz-loop/src/tool.rs::risk_class`（`browser_control` → ReadOnly），未同步宿主侧
+   `orz-host/src/permission.rs::access_kind`（480 行起；`browser_read` 分支在 543 行），
+   `browser_control` 落入 `else` 的 `AccessKind::Edit(...)` → 无头部署
+   （gateway=None）按 Edit 类询问、通道不可达 → fail-closed **确定性拒绝**；实测
+   3/3 次 `browser_control {action: search}`（seq 24/264/384）`permission_decision=deny`
+   （无 `tool_started`），orz 日志三次 `permission::prompter: failed to request
+   permission ... channel closed`；同车道同 `risk: ReadOnly` 的 `browser_read` 5/5
+   `allow_once`（其 `access_kind` 有 `Read(None)` 分支）即对照。此前 R4 该调用
+   **无权限事件**、直接车道拒 `retrieval_role_write_denied` —— 即 0v 把失败点从车道门
+   搬到权限门，功能仍不可达；设计 §1.1 记的「连带动面：权限门」这一面未落地。
+   修复方向（待放行）：`access_kind` 增 `browser_control` 映射（建议按 `action` 分档），
+   并补 headless fail-closed 测试。**F2（装置/环境，非 orz 缺陷）**：容器内 Chromium 引导
+   `curl --max-time 600` 在 ~240 KB/s 下只取回 143,410,950 / 246,542,626 B（`SNAPSHOT_FAIL`），
+   PATH 回落命中 Ubuntu snap 桩 → `browser_launch_result` 5/5 failure、
+   `browser_read` 5/5 `browser_launch_failed`。判定：0v 判据 1/5/6/7 未观察到、
+   判据 2 与 4 部分成立（零 HTTP 400；命中率 86.17%）、3/9/10 未达额度无样本、
+   8 不适用。观察项（登记备查）：外部检索车道 4 次 `retrieval_role_write_denied`
+   全是 `run_terminal_cmd`（1 次 `curl -o` 写文件属正确拒绝，3 次 `ls`/`find` 只读）。
+   证据：[`0X/0V S4 实机复验记录`](../docs/audits/0X_0V_S4_LIVE_VERIFICATION_2026-09-11.md)。

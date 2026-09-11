@@ -7,7 +7,7 @@
 > [`0X S1 实施记录`](audits/0X_S1_INITIAL_ROUND_INQUIRY_IMPL_2026-09-11.md)）：
 > 常量 / 前缀登记 / 会话一次性状态 / 控制器分派 / 测试矩阵全部落地；
 > 触点清单的两处落点更正（分派并入 `maybe_fire_orientation`、schema 枚举提前）
-> 见下文 §5 标注。**S3 已完成、S4 待续**（重建已放行并闭环，实机未放行）。
+> 见下文 §5 标注。**S3–S4 已完成**（重建与实机均已闭环，见下文 §8）。
 > **S2 已实施**（2026-09-11，同日；见
 > [`0X S2 实施记录`](audits/0X_S2_EVENT_FACE_AND_SIGNER_2026-09-11.md)）：
 > payload 正例 fixture + 第 34 族法官 `initial_round_inquiry`（Rust 执法 /
@@ -18,13 +18,19 @@
 > [`0X S3 双平台重建记录`](audits/0X_S3_DUAL_PLATFORM_REBUILD_2026-09-11.md)）：
 > 版本 bump 0.4.0 → **0.4.1** 冻结源基线；Windows 宿主 release + Linux musl
 > 三件套重建、构建冒烟绿、接线符号命中、manifest 重算 1441 条、门禁
-> `valid: true`。**S4 实机复验待续**。
+> `valid: true`。
+> **S4 实机复验通过**（2026-09-11，同日；见
+> [`0X/0V S4 实机复验记录`](audits/0X_0V_S4_LIVE_VERIFICATION_2026-09-11.md)）：
+> orz 0.4.1 载体、单题 31m35s、50 模型轮——`trigger=initial_round` **恰好 1 次**
+> （seq=12）、位置 `post_tool_batch_gap`、在首个动作批次之后、块文本与三问逐字命中、
+> 50 轮内无复发、41 条机械审查不含三问、无黑板锚点。边界：主车道仅 2 轮，
+> 「与周期问询互不影响」未获实机样本（由 S1/S2 测试矩阵覆盖）。
 > **S1/S2 全面复审已处理**（2026-09-11，同日；见
 > [`0X S2 复审处理`](audits/0X_S2_REVIEW_HANDLING_2026-09-11.md)）：3 面复审结论
 > 整体成立；处理 2 处文档一致性（`TODO.md` 路由行状态、§5-6「Python 镜像」指针
 > 更正为 `run_event_journal_validation.py`，v0.1 `orientation_runtime_guard.py`
 > 保持冻结）+ 2 处测试补强（§5-7「中断后恢复重触发」端到端钉子、签名侧跨
-> trigger 负例）；**S3 已完成、S4 仍未放行**。
+> trigger 负例）；**S3–S4 已完成**（S4 判据通过，单会话样本边界见 §8 记录）。
 > **来源**：[`TB40 探针审计 §6-O1 / §10`](audits/TB40_CTR_OPTIMIZATION_FRICTION_PROBE_2026-09-11.md)
 > ——TB 4.0 单题探针中，agent 花 4h53m 优化了一个**与验收口径不同**的代理指标
 > （自报 4.0182% vs 真值 0.4363%），方向性错误直到收尾才暴露。
@@ -221,4 +227,4 @@ pending 软消费机制**，在**首轮动作批次结束时**机械注入一次
 | S1 | 常量 + 会话状态 + 触发接线（含测试矩阵最小集）——**完成 2026-09-11** |
 | S2 | 事件面 fixtures 正/负例 / `run_event_journal_validation` 族 / Python 镜像同步 / `orz-signer` 第二模板摘要；`check_repository` 全绿收口——**完成 2026-09-11**（[记录](audits/0X_S2_EVENT_FACE_AND_SIGNER_2026-09-11.md)） |
 | S3 | 双平台重建（进载体）——**完成 2026-09-11**（[记录](audits/0X_S3_DUAL_PLATFORM_REBUILD_2026-09-11.md)：基线 orz `a6f902ef` / `orz-bin v0.4.1`，Windows 宿主 release + Linux musl 三件套、冒烟绿、符号核证、manifest 1441 条、门禁 `valid: true`） |
-| S4 | 实机复验（可与 0w 后续长任务或其他长会话同场，验证「开局一次、动作中不复发」）——**待放行** |
+| S4 | 实机复验（可与 0w 后续长任务或其他长会话同场，验证「开局一次、动作中不复发」）——**完成 2026-09-11**（[0X/0V S4 实机复验记录](audits/0X_0V_S4_LIVE_VERIFICATION_2026-09-11.md)：orz 0.4.1 / dna-assembly 单题 31m35s / 50 模型轮；`initial_round` 恰好 1 次、位置与块文本逐条命中、动作中无复发；单会话样本边界已登记） |

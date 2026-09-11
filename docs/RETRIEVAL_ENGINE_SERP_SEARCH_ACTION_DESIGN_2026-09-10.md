@@ -6,8 +6,15 @@
 > 设计基线：[`RETRIEVAL_AND_SUBAGENT_COMMUNICATION_BORROW_RESEARCH_2026-08-30`](RETRIEVAL_AND_SUBAGENT_COMMUNICATION_BORROW_RESEARCH_2026-08-30.md)
 > §8.1/§8.3（引擎链裁决 + 机械防护清单）、索引 `FUS-RETRIEVAL-ENGINE-SERP`
 > （current-design；0t 后模式语义退役、引擎链与 pacing 保留）、ADR-0010
-> §14.65（0t 双车道）。状态：**S1–S3 完成（S3 随 0x S3 同批重建进载体，
-> 2026-09-11），S4 待续**（[0X S3 重建记录](audits/0X_S3_DUAL_PLATFORM_REBUILD_2026-09-11.md)）；
+> §14.65（0t 双车道）。状态：**S1–S3 完成（S3 随 0x S3 同批重建进载体，2026-09-11）；
+> S4 实机复验未通过——受阻于两项**：**F1 权限门「双面修一面」**（`risk_class` 已改
+> ReadOnly，但宿主 `orz-host/src/permission.rs::access_kind` 未补 `browser_control`
+> 映射 → 落 `Edit` 兜底 → 无头模式下确定性拒；实测 3/3 次 `browser_control search`
+> 被 `permission_decision=deny`）、**F2 装置侧容器无可用浏览器**（Chromium 引导
+> 600s 超时 + PATH 回落命中 snap 桩）。判据 1/5/6/7 待两项处理后复跑取证；
+> 判据 2 部分成立、判据 4 部分成立。详见
+> [0X/0V S4 实机复验记录](audits/0X_0V_S4_LIVE_VERIFICATION_2026-09-11.md)
+> （[0X S3 重建记录](audits/0X_S3_DUAL_PLATFORM_REBUILD_2026-09-11.md)）；
 > 2026-09-10 两轮全面复审后的修复均已落地（首轮 P1-1/P2-1/P2-2/P2-3 +
 > P2-4 方案 A，见 §5.3；P2-4 专项轮的 P1-1/P2-1/P2-2/P2-3/P2-6/P3，见
 > §5.4）；引擎自选与去备忘为**设计留存、未实施**（§6）。
