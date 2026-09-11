@@ -34,7 +34,9 @@ use crate::gateway::model::{
     ToolCall, TransportRetryKind,
 };
 use crate::host::{LoopHost, RiskClass, ToolDef, ToolResult};
-use crate::orientation::{AgentRole, OrientationSessionState};
+use crate::orientation::{
+    AgentRole, ORIENTATION_POST_TOOL_BATCH_GAP, OrientationSessionState,
+};
 use crate::prompt::COUNTEREXAMPLE_GATE_BLOCK;
 use crate::relay::{DispatchTarget, route};
 use crate::tool::ToolDispatcher;
@@ -2983,6 +2985,9 @@ pub(crate) async fn run_agent_loop(
         // 工具调用照常执行。When this is the budget-exhausting round,
         // the checkpoint round runs first and the post-budget final round
         // reports the partial result after it (§14.16).
+        // P0-0x S1（ADR-0010 §14.66）：本间隙同时是**初始轮中立问询**的
+        // 触发点——主车道首个含工具调用的动作批次结束时，`maybe_fire_orientation`
+        // 优先派发一次性初始轮 record（会话内恰好一次）。
         if pending_checkpoint.is_none()
             && let Some(role) = profile.orientation_role
             && let Some(record) = controller
@@ -2993,7 +2998,7 @@ pub(crate) async fn run_agent_loop(
                     messages,
                     orientation.as_deref_mut(),
                     role,
-                    "post_tool_batch_gap",
+                    ORIENTATION_POST_TOOL_BATCH_GAP,
                 )
                 .await?
         {

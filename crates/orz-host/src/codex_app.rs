@@ -900,10 +900,12 @@ mod tests {
 
     /// 一个完整的 direct 执行回合脚本（THIN-HARNESS-REDESIGN R2a 审查
     /// 处理，2026-08-27：plan 门普适摘除）：
-    /// 直连终端调用（权限审批/执行即时触发）→ 草稿 → 终答。
+    /// 直连终端调用（权限审批/执行即时触发）→ 开局问询回答（0x S1，软门
+    /// 消费）→ 草稿（反例门候选）→ 终答。
     fn console_exec_script(command: &str) -> Vec<ScriptedResponse> {
         vec![
             ScriptedResponse::tool_calls(vec![terminal_call(command, "call-act-1")]),
+            ScriptedResponse::text("草稿（等待执行结果）。"),
             ScriptedResponse::text("草稿（等待执行结果）。"),
             ScriptedResponse::text("终答（命令已执行）。"),
         ]
@@ -1668,6 +1670,8 @@ mod tests {
                     ]),
                     ScriptedResponse::text("完成（只读沙箱）。"),
                     ScriptedResponse::text("完成（只读沙箱）。"),
+                    // 0x S1：首个动作批次结束后的开局问询回答轮（软门消费）。
+                    ScriptedResponse::text("完成（只读沙箱）。"),
                 ];
                 let parts = CodexAppServer::new_parts(
                     server_with(fake(script)),
@@ -1745,8 +1749,10 @@ mod tests {
             .run_until(async {
                 let base = test_dir();
                 // Interleave-safe for concurrent pulls from the shared
-                // gateway：两线程各需 [直调, 草稿, 终答]——A、B 交错
-                // 消费（沿用原 A calls → B calls → 文本轮 的实证模式）。
+                // gateway：两线程各需 [直调, 开局问询回答, 草稿, 终答]
+                // （0x S1：首个动作批次结束后多一轮开局问询回答）——
+                // A、B 交错消费（沿用原 A calls → B calls → 文本轮 的实证
+                // 模式；文本轮内容不参与断言，池内轮换取用）。
                 let script = vec![
                     ScriptedResponse::tool_calls(vec![terminal_call("echo ro", "call-act-ro")]),
                     ScriptedResponse::tool_calls(vec![terminal_call("echo ww", "call-act-ww")]),
@@ -1754,6 +1760,8 @@ mod tests {
                     ScriptedResponse::text("草稿 B"),
                     ScriptedResponse::text("终答 A"),
                     ScriptedResponse::text("终答 B"),
+                    ScriptedResponse::text("补轮 A"),
+                    ScriptedResponse::text("补轮 B"),
                 ];
                 let parts = CodexAppServer::new_parts(
                     server_with(

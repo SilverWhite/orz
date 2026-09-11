@@ -2856,6 +2856,8 @@ mod tests {
                     }]),
                     ScriptedResponse::text("完成（读取成功）。"),
                     ScriptedResponse::text("完成（读取成功）。"),
+                    // 0x S1：首个动作批次结束后多一轮开局问询回答（软门消费）。
+                    ScriptedResponse::text("完成（读取成功）。"),
                 ])));
                 // Interactive-gateway shape (--stdio wires the same way); a
                 // dead receiver still lets low-risk reads auto-allow.
@@ -2919,6 +2921,8 @@ mod tests {
                         call_id: "call-edit-1".to_string(),
                     }]),
                     ScriptedResponse::text("完成（bash 被拒）。"),
+                    ScriptedResponse::text("完成（bash 被拒）。"),
+                    // 0x S1：开局问询回答轮（软门消费）。
                     ScriptedResponse::text("完成（bash 被拒）。"),
                 ])));
                 server.set_gateway(dead_gateway());
@@ -3000,7 +3004,8 @@ mod tests {
                 let base_ro = test_dir();
                 let base_ww = test_dir();
                 // Two sequential prompts share the one FakeProvider — each
-                // run pulls [直调工具, 草稿, 终答]。
+                // run pulls [直调工具, 开局问询回答, 草稿, 终答]（0x S1：
+                // 首个动作批次结束后多一轮开局问询回答，软门消费）。
                 let script = vec![
                     // MECHANICAL-AUDIT-LAYER 审查处理 (2026-08-24): direct
                     // 面——模型直接调 search_replace。
@@ -3015,6 +3020,7 @@ mod tests {
                     }]),
                     ScriptedResponse::text("完成。"),
                     ScriptedResponse::text("完成。"),
+                    ScriptedResponse::text("完成。"),
                     ScriptedResponse::tool_calls(vec![ToolCall {
                         name: "search_replace".to_string(),
                         arguments: serde_json::json!({
@@ -3024,6 +3030,7 @@ mod tests {
                         }),
                         call_id: "call-edit-ww".to_string(),
                     }]),
+                    ScriptedResponse::text("完成。"),
                     ScriptedResponse::text("完成。"),
                     ScriptedResponse::text("完成。"),
                 ];
@@ -3107,6 +3114,8 @@ mod tests {
                         call_id: "call-edit-snap".to_string(),
                     }]),
                     ScriptedResponse::text("完成（被拒）。"),
+                    ScriptedResponse::text("完成（被拒）。"),
+                    // 0x S1：开局问询回答轮（软门消费）。
                     ScriptedResponse::text("完成（被拒）。"),
                 ])));
                 server.set_gateway(dead_gateway());
@@ -4359,6 +4368,8 @@ mod tests {
                         call_id: format!("call-{marker}"),
                     }]));
                     script.push(ScriptedResponse::text(format!("{marker} 完成")));
+                    script.push(ScriptedResponse::text(format!("{marker} 完成")));
+                    // 0x S1：首个动作批次结束后的开局问询回答轮（软门消费）。
                     script.push(ScriptedResponse::text(format!("{marker} 完成")));
                 }
                 let fake = Arc::new(FakeProvider::new(script));

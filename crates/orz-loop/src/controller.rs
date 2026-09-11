@@ -45,7 +45,9 @@ use crate::console::{ServiceRegistry, TraceStore};
 use crate::gateway::fake::FakeProvider;
 use crate::gateway::model::{Message, ModelGateway, Role, ToolCall};
 use crate::host::{LoopHost, PolicyDenial, PolicyDenialSource, ToolDef, ToolResult};
-use crate::orientation::{AgentRole, OrientationFireRecord, OrientationSessionState};
+use crate::orientation::{
+    AgentRole, ORIENTATION_POST_TOOL_BATCH_GAP, OrientationFireRecord, OrientationSessionState,
+};
 use crate::prompt::{is_injected_block_text, is_restore_retained_block};
 use crate::retrieval::activation::{ActivationRegistry, StoredActivation};
 use crate::retrieval::evidence::EvidenceRecord;
@@ -3575,6 +3577,15 @@ impl AgentLoopController {
     /// Review P2-2 (2026-08-10): build → journal → inject → COMMIT — a
     /// journal-write failure propagates before the counter is reset, so a
     /// failed run never persists a reset-but-never-fired counter.
+    ///
+    /// P0-0x S1（ADR-0010 §14.66，2026-09-11）：本函数同时是**初始轮中立
+    /// 问询**的派发点——主车道在 `post_tool_batch_gap`（首个含工具调用的
+    /// 动作批次结束）且会话内尚未触发过时，优先构建一次性初始轮 record
+    /// （`trigger = "initial_round"`），否则回落到阈值 50 的周期问询。
+    /// 两者共用本函数的票据、事件面、pending 闸与注入路径；commit 语义的
+    /// 分派在 `checkpoint::commit_pending`（初始轮只置标志、不重置周期
+    /// 计数）。`loop_top_gap` 只承担周期问询（初始轮时机固定为
+    /// post_tool_batch_gap，设计 §3.2）。
     pub(crate) async fn maybe_fire_orientation(
         &self,
         writer: &mut EventWriter<'_>,
@@ -3587,7 +3598,16 @@ impl AgentLoopController {
             return Ok(None);
         };
         let run_id = writer.run_id().to_string();
-        let Some(rec) = state.build_fire_record(role, &run_id, injection_position) else {
+        // P0-0x S1: 初始轮问询优先——只在主车道、只在
+        // `post_tool_batch_gap`、会话内恰好一次；未触发前不阻塞阈值问询
+        // （阈值问询的 due 判定与初始轮标志互不影响）。
+        let initial = (matches!(role, AgentRole::Main)
+            && injection_position == ORIENTATION_POST_TOOL_BATCH_GAP)
+            .then(|| state.build_initial_round_fire_record(role, &run_id, injection_position))
+            .flatten();
+        let Some(rec) =
+            initial.or_else(|| state.build_fire_record(role, &run_id, injection_position))
+        else {
             return Ok(None);
         };
         // ACAF Slice 1 (ADR-0011 §4.2/§4.6): an orientation fire is a control

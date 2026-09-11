@@ -1571,7 +1571,10 @@ mod tests {
             ])
             .with_chunk_delay(std::time::Duration::from_millis(150)),
         );
-        let controller = orz_loop::AgentLoopController::with_gateway(gateway);
+        // ACAF 无关的守卫测试：显式关闭 fail-closed（进程环境里的
+        // ORZ_ACAF_FAIL_CLOSED 会被同进程的 env 测试改动——测试隔离修复）。
+        let controller =
+            orz_loop::AgentLoopController::with_gateway(gateway).with_acaf_fail_closed(false);
         let fut = controller.run_turn(
             &host,
             "wallclock 测试",
@@ -1653,7 +1656,9 @@ mod tests {
                 Ok(ModelResponse::text_response("never"))
             }
         }
-        let controller = orz_loop::AgentLoopController::with_gateway(Arc::new(SilentGateway));
+        // 同上：守卫测试与 ACAF 无关，显式关闭 fail-closed。
+        let controller = orz_loop::AgentLoopController::with_gateway(Arc::new(SilentGateway))
+            .with_acaf_fail_closed(false);
         let heartbeat = orz_loop::gateway::model::ActivityClock::new();
         let fut = controller.run_turn_with_guards(
             &host,
@@ -1736,7 +1741,9 @@ mod tests {
             ])
             .with_chunk_delay(std::time::Duration::from_millis(40)),
         );
-        let controller = orz_loop::AgentLoopController::with_gateway(gateway);
+        // 同上：守卫测试与 ACAF 无关，显式关闭 fail-closed。
+        let controller =
+            orz_loop::AgentLoopController::with_gateway(gateway).with_acaf_fail_closed(false);
         let heartbeat = orz_loop::gateway::model::ActivityClock::new();
         let fut = controller.run_turn_with_guards(
             &host,
@@ -1832,6 +1839,9 @@ mod conformance_capture {
                 url: Some(url),
                 title: Some("Example".to_string()),
                 log: String::new(),
+                // 0v S2 追加 search 面（engine / engine_attempts / results）——
+                // conformance stub 只走导航级动作，其余字段取 Default（None）。
+                ..Default::default()
             })
         }
 

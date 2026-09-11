@@ -24,7 +24,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use orz_assurance::orientation::checkpoint::ORIENTATION_BLOCK;
+use orz_assurance::orientation::checkpoint::{INITIAL_ROUND_INQUIRY_BLOCK, ORIENTATION_BLOCK};
 
 /// THIN-HARNESS-REDESIGN R1 (2026-08-27, §4.6, 用户裁决)：中立问询触发
 /// 阈值默认 50（原硬编码 7）——当前注意力窗口衰减低，只需大任务轮方向
@@ -35,6 +35,19 @@ pub const ORIENTATION_THRESHOLD: u32 = 50;
 
 /// Environment override for the orientation fire threshold.
 pub const ORIENTATION_THRESHOLD_ENV: &str = "ORZ_ORIENTATION_THRESHOLD";
+
+/// P0-0x S1 (ADR-0010 §14.66，2026-09-11 设计定稿)：初始轮中立问询的
+/// `trigger` 取值。与周期问询的 `completed_turns_interval` 并列——两者共用
+/// `OrientationV1` 票据与 `orientation_checkpoint` 事件面，靠 `trigger`
+/// 区分（submit 侧按 trigger 分派 commit 语义）。
+pub const TRIGGER_INITIAL_ROUND: &str = "initial_round";
+
+/// 周期问询（阈值 50）的 `trigger` 取值——既有语义，仅登记为常量。
+pub const TRIGGER_COMPLETED_TURNS_INTERVAL: &str = "completed_turns_interval";
+
+/// 主车道初始轮问询的注入位置（设计 §3.2：首轮动作批次结束）——同时是
+/// 周期问询的两个注入点之一（另一个是 `loop_top_gap`，只承担周期问询）。
+pub const ORIENTATION_POST_TOOL_BATCH_GAP: &str = "post_tool_batch_gap";
 
 /// Resolve the orientation threshold from `ORZ_ORIENTATION_THRESHOLD`
 /// (completed logical model rounds; invalid/missing → `ORIENTATION_THRESHOLD`).
@@ -104,6 +117,14 @@ pub struct OrientationFireRecord {
     pub injection_position: String,
 }
 
+impl OrientationFireRecord {
+    /// P0-0x S1: 本条 fire 是否为一次性初始轮问询。commit 语义不同
+    /// （初始轮只置一次性标志、**不重置**周期计数；周期问询重置计数）。
+    pub fn is_initial_round(&self) -> bool {
+        self.trigger == TRIGGER_INITIAL_ROUND
+    }
+}
+
 /// Session-level orientation state — persisted across turns (rides
 /// `StoredSession` and the `{cwd}/.gsa/orientation/<session>.json` sidecar;
 /// ADR-0010 §4.2: recovery resumes counting, only an actual fire resets).
@@ -112,6 +133,11 @@ pub struct OrientationSessionState {
     pub main: AgentOrientationState,
     pub internal: AgentOrientationState,
     pub external: AgentOrientationState,
+    /// P0-0x S1（ADR-0010 §14.66）：初始轮中立问询的一次性标志——
+    /// 会话内恰好一次（侧车持久化）；`#[serde(default)]` 保证旧侧车
+    /// （无此字段）反序列化为「未触发」，不会因升级而丢会话。
+    #[serde(default)]
+    pub initial_round_fired: bool,
     /// Fire threshold — §4.2 default 7; kept on the struct so the schema
     /// version of the rule is visible in persisted state.
     pub threshold: u32,
@@ -135,6 +161,7 @@ impl OrientationSessionState {
             main: AgentOrientationState::default(),
             internal: AgentOrientationState::default(),
             external: AgentOrientationState::default(),
+            initial_round_fired: false,
             threshold,
             session_id: session_id.into(),
             sequence: 0,
@@ -180,7 +207,7 @@ impl OrientationSessionState {
             inquiry_kind: "orientation_checkpoint",
             agent_role: role,
             session_id: self.session_id.clone(),
-            trigger: "completed_turns_interval",
+            trigger: TRIGGER_COMPLETED_TURNS_INTERVAL,
             completed_turns_since_orientation: completed,
             // §5.2 "轮次状态" is carried by completed_turns_since_orientation;
             // step_index stays a producer-local placeholder (0) until a
@@ -189,6 +216,51 @@ impl OrientationSessionState {
             message_block: ORIENTATION_BLOCK.to_string(),
             injection_position: injection_position.to_string(),
         })
+    }
+
+    /// P0-0x S1（ADR-0010 §14.66）：构建**初始轮中立问询**的 fire record
+    /// —— 与 `build_fire_record` 同纪律（构建不改状态；事件先 journal、
+    /// 块先注入，消费点才 commit）。`None` = 已触发过（会话内恰好一次）。
+    ///
+    /// 只由主车道在 `post_tool_batch_gap`（首个含工具调用的动作批次结束）
+    /// 调用；调用方负责 role/时机判定（见 `maybe_fire_orientation`）。
+    /// `completed_turns_since_orientation` 取当刻已完成模型轮数（信息性：
+    /// 初始轮问询**不重置**该计数，只作为事件面轮次状态）。
+    pub fn build_initial_round_fire_record(
+        &self,
+        role: AgentRole,
+        run_id: &str,
+        injection_position: &str,
+    ) -> Option<OrientationFireRecord> {
+        if self.initial_round_fired {
+            return None;
+        }
+        Some(OrientationFireRecord {
+            checkpoint_id: format!("ORIENT-{run_id}-{:04}", self.sequence),
+            inquiry_family: "neutral",
+            inquiry_kind: "orientation_checkpoint",
+            agent_role: role,
+            session_id: self.session_id.clone(),
+            trigger: TRIGGER_INITIAL_ROUND,
+            completed_turns_since_orientation: self.state(role).completed_rounds,
+            // step_index 同周期问询：生产者本地占位（0）。
+            step_index: 0,
+            message_block: INITIAL_ROUND_INQUIRY_BLOCK.to_string(),
+            injection_position: injection_position.to_string(),
+        })
+    }
+
+    /// P0-0x S1：初始轮问询在**消费点**提交——只置一次性标志并推进
+    /// fire 序号（checkpoint_id 单调唯一），**绝不触碰周期计数**
+    /// （§3.2：与阈值 50 的周期问询互不影响、互不重置）。
+    pub fn commit_initial_round_fire(&mut self, role: AgentRole, record: &OrientationFireRecord) {
+        self.initial_round_fired = true;
+        self.sequence += 1;
+        self.last_fire = Some(LastFire {
+            role,
+            sequence: self.sequence,
+            injection_position: record.injection_position.clone(),
+        });
     }
 
     /// Commit a fire AFTER the event was journaled and the block injected:
@@ -383,6 +455,369 @@ mod tests {
         assert_eq!(s2.main.completed_rounds, 7);
     }
 
+    // ── P0-0x S1 初始轮中立问询（ADR-0010 §14.66） ──────────────────────
+
+    /// 状态层：初始轮 record 一次性、不触碰周期计数；commit 只置标志 +
+    /// 推进 fire 序号（checkpoint_id 单调唯一），并随会话持久化。
+    #[test]
+    fn initial_round_record_is_one_shot_and_keeps_periodic_counter() {
+        let mut s = OrientationSessionState::new_with_threshold("SESS-0X", 7);
+        s.feed_round(AgentRole::Main);
+        let rec = s
+            .build_initial_round_fire_record(AgentRole::Main, "RUN-0X", "post_tool_batch_gap")
+            .expect("first fire");
+        assert_eq!(rec.trigger, TRIGGER_INITIAL_ROUND);
+        assert!(rec.is_initial_round());
+        assert_eq!(rec.completed_turns_since_orientation, 1);
+        assert_eq!(rec.message_block, INITIAL_ROUND_INQUIRY_BLOCK);
+        assert!(rec.message_block.starts_with("[INITIAL_ROUND_INQUIRY"));
+        assert_eq!(rec.checkpoint_id, "ORIENT-RUN-0X-0000");
+
+        // 构建不改状态：仍可再构建（事件先行、commit 在后）。
+        assert!(
+            s.build_initial_round_fire_record(AgentRole::Main, "RUN-0X", "post_tool_batch_gap")
+                .is_some()
+        );
+        assert!(!s.initial_round_fired);
+
+        s.commit_initial_round_fire(AgentRole::Main, &rec);
+        assert!(s.initial_round_fired);
+        assert_eq!(s.sequence, 1);
+        // 周期计数不被重置（与阈值问询互不影响）。
+        assert_eq!(s.main.completed_rounds, 1);
+        assert_eq!(s.main.total_rounds, 1);
+        // 二次构建 → None（会话内恰好一次）。
+        assert!(
+            s.build_initial_round_fire_record(AgentRole::Main, "RUN-0X", "post_tool_batch_gap")
+                .is_none()
+        );
+        // 序号推进后周期问询的 checkpoint_id 不与之撞号。
+        for _ in 0..6 {
+            s.feed_round(AgentRole::Main);
+        }
+        let periodic = s
+            .build_fire_record(AgentRole::Main, "RUN-0X", "post_tool_batch_gap")
+            .expect("threshold due");
+        assert_eq!(periodic.checkpoint_id, "ORIENT-RUN-0X-0001");
+        assert!(!periodic.is_initial_round());
+
+        // 会话持久化：标志随状态往返。
+        let json = serde_json::to_string(&s).unwrap();
+        let restored: OrientationSessionState = serde_json::from_str(&json).unwrap();
+        assert!(restored.initial_round_fired);
+    }
+
+    /// 状态层：旧侧车（无 `initial_round_fired` 字段）反序列化为未触发，
+    /// 升级不丢会话、不误判为「已问过」。
+    #[test]
+    fn initial_round_flag_defaults_false_for_legacy_sidecar() {
+        let legacy = serde_json::json!({
+            "main": { "completed_rounds": 3, "total_rounds": 9 },
+            "internal": { "completed_rounds": 0, "total_rounds": 0 },
+            "external": { "completed_rounds": 0, "total_rounds": 0 },
+            "threshold": 50,
+            "session_id": "SESS-LEGACY",
+            "sequence": 1,
+            "last_fire": null
+        });
+        let restored: OrientationSessionState = serde_json::from_value(legacy).unwrap();
+        assert!(!restored.initial_round_fired);
+        assert_eq!(restored.main.completed_rounds, 3);
+    }
+
+    /// 集成：首个**含工具调用**的动作批次结束时恰好注入一次初始轮问询；
+    /// 首轮无工具调用（纯文本回复）时顺延到之后的动作批次（无工具批次
+    /// 不会触发）。
+    #[tokio::test]
+    async fn initial_round_fires_once_at_first_tool_batch_and_defers_without_one() {
+        // 两个 run 各自一份 journal（run_finished 后同一 journal 拒绝再起
+        // run），但共享同一个会话级 orientation 状态——正是「顺延」要
+        // 验证的：状态跨 run 延续，问询只在此后首个动作批次触发一次。
+        let dir1 = test_dir();
+        let host1 = TestHost {
+            journal: JournalRecorder::new(dir1.clone()),
+            tool_result: Some(ToolResult {
+                output: "ok".to_string(),
+                exit_code: Some(0),
+                output_encoding: None,
+                structured: None,
+                ..Default::default()
+            }),
+        };
+        let dir2 = test_dir();
+        let host2 = TestHost {
+            journal: JournalRecorder::new(dir2.clone()),
+            tool_result: Some(ToolResult {
+                output: "ok".to_string(),
+                exit_code: Some(0),
+                output_encoding: None,
+                structured: None,
+                ..Default::default()
+            }),
+        };
+        let controller = AgentLoopController::with_gateway(Arc::new(FakeProvider::new(vec![
+            // run 1：首轮纯文本（无工具批次）→ 反例门 → 终答。顺延。
+            ScriptedResponse::text("完成"),
+            ScriptedResponse::text("完成"),
+            // run 2：首个动作批次 → 初始轮问询 → 回答被软消费 → 反例门 → 终答。
+            ScriptedResponse::tool_calls(vec![tool_call("read_file", "call-0")]),
+            ScriptedResponse::text("完成"),
+            ScriptedResponse::text("完成"),
+            ScriptedResponse::text("完成"),
+        ])));
+        let mut orientation =
+            OrientationSessionState::new_with_threshold("sess-initial-defer", 50);
+
+        controller
+            .run_turn(
+                &host1,
+                "任务",
+                "RUN-0X-A",
+                MANIFEST,
+                0,
+                None,
+                Some(&mut orientation),
+                None,
+            )
+            .await
+            .unwrap();
+        let after_run1 = events(&dir1);
+        assert_eq!(
+            after_run1
+                .iter()
+                .filter(|e| e.event_type == EventType::OrientationCheckpoint)
+                .count(),
+            0,
+            "无工具批次的首轮不得触发初始轮问询: {:?}",
+            event_types(&dir1)
+        );
+        assert_eq!(after_run1.last().unwrap().event_type, EventType::RunFinished);
+
+        controller
+            .run_turn(
+                &host2,
+                "任务",
+                "RUN-0X-B",
+                MANIFEST,
+                0,
+                None,
+                Some(&mut orientation),
+                None,
+            )
+            .await
+            .unwrap();
+        let fires: Vec<_> = events(&dir2)
+            .into_iter()
+            .filter(|e| e.event_type == EventType::OrientationCheckpoint)
+            .collect();
+        assert_eq!(fires.len(), 1, "{:?}", event_types(&dir2));
+        assert_eq!(fires[0].payload["trigger"], TRIGGER_INITIAL_ROUND);
+        assert_eq!(fires[0].payload["agent_role"], "main");
+        assert_eq!(fires[0].payload["injection_position"], "post_tool_batch_gap");
+        assert!(orientation.initial_round_fired);
+        // 阈值 50 未到——周期问询不因初始轮而触发。
+        assert_eq!(orientation.sequence, 1);
+        let _ = std::fs::remove_dir_all(&dir1);
+        let _ = std::fs::remove_dir_all(&dir2);
+    }
+
+    /// 集成：初始轮问询与阈值周期问询互不影响（初始轮 commit 不重置计数，
+    /// 周期问询照常在阈值处触发），且触发轮保持常规工具面（软门不禁工具）。
+    #[tokio::test]
+    async fn initial_round_does_not_interfere_with_periodic_threshold() {
+        let dir = test_dir();
+        let journal = JournalRecorder::new(dir.clone());
+        let host = TestHost {
+            journal,
+            tool_result: Some(ToolResult {
+                output: "ok".to_string(),
+                exit_code: Some(0),
+                output_encoding: None,
+                structured: None,
+                ..Default::default()
+            }),
+        };
+        let mut script = Vec::new();
+        for i in 0..4 {
+            script.push(ScriptedResponse::tool_calls(vec![tool_call(
+                "read_file",
+                &format!("call-{i}"),
+            )]));
+        }
+        script.push(ScriptedResponse::text("完成"));
+        script.push(ScriptedResponse::text("完成"));
+        let fake = Arc::new(FakeProvider::new(script));
+        let controller = AgentLoopController::with_gateway(fake.clone());
+        let mut orientation =
+            OrientationSessionState::new_with_threshold("sess-initial-periodic", 3);
+        controller
+            .run_turn(
+                &host,
+                "任务",
+                "RUN-0X-C",
+                MANIFEST,
+                0,
+                None,
+                Some(&mut orientation),
+                None,
+            )
+            .await
+            .unwrap();
+
+        let fires: Vec<_> = events(&dir)
+            .into_iter()
+            .filter(|e| e.event_type == EventType::OrientationCheckpoint)
+            .collect();
+        assert_eq!(fires.len(), 2, "{:?}", event_types(&dir));
+        assert_eq!(fires[0].payload["trigger"], TRIGGER_INITIAL_ROUND);
+        assert_eq!(
+            fires[0].payload["completed_turns_since_orientation"],
+            serde_json::json!(1)
+        );
+        assert_eq!(
+            fires[1].payload["trigger"],
+            TRIGGER_COMPLETED_TURNS_INTERVAL
+        );
+        assert_eq!(
+            fires[1].payload["completed_turns_since_orientation"],
+            serde_json::json!(3),
+            "初始轮问询不得吞掉周期计数"
+        );
+        // 初始轮触发轮（第 2 次请求）保持常规工具面——软门不禁工具。
+        let requests = fake.received_requests();
+        let initial_idx = requests
+            .iter()
+            .position(|req| {
+                req.messages
+                    .iter()
+                    .any(|m| {
+                        m.role == Role::User
+                            && m.content.starts_with("[INITIAL_ROUND_INQUIRY")
+                    })
+            })
+            .expect("initial-round trigger request");
+        assert_eq!(initial_idx, 1, "初始轮问询须在首个动作批次后注入");
+        let trigger = &requests[initial_idx];
+        let prior = &requests[initial_idx - 1];
+        assert!(
+            !trigger.tools.is_empty()
+                && trigger.tools.len() == prior.tools.len()
+                && trigger.tools.iter().all(|t| {
+                    prior.tools.iter().any(|p| {
+                        p.name == t.name
+                            && p.description == t.description
+                            && p.parameters == t.parameters
+                    })
+                }),
+            "初始轮触发轮工具面必须与前一普通轮一致: prior={:?} trigger={:?}",
+            prior.tools.iter().map(|t| &t.name).collect::<Vec<_>>(),
+            trigger.tools.iter().map(|t| &t.name).collect::<Vec<_>>()
+        );
+        // 周期问询在阈值处提交后归零，只剩反例门轮 + 终答轮两轮。
+        assert_eq!(orientation.main.completed_rounds, 2);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// 集成：终答前的机械审查报告与反例质询行为完全不变——两块照旧同轮
+    /// 注入，且都不携带初始轮三问（审查依旧是结尾的事）。
+    #[tokio::test]
+    async fn final_answer_audit_blocks_unchanged_and_carry_no_inquiry() {
+        let dir = test_dir();
+        let journal = JournalRecorder::new(dir.clone());
+        let host = TestHost {
+            journal,
+            tool_result: Some(ToolResult {
+                output: "ok".to_string(),
+                exit_code: Some(0),
+                output_encoding: None,
+                structured: None,
+                ..Default::default()
+            }),
+        };
+        let fake = Arc::new(FakeProvider::new(vec![
+            ScriptedResponse::tool_calls(vec![tool_call("read_file", "call-0")]),
+            // 初始轮问询的回答（软门消费）。
+            ScriptedResponse::text("完成"),
+            // 终答候选 → 反例门 + 审查报告。
+            ScriptedResponse::text("完成"),
+            ScriptedResponse::text("完成"),
+        ]));
+        let controller = AgentLoopController::with_gateway(fake.clone());
+        let mut orientation = OrientationSessionState::new_with_threshold("sess-0x-audit", 50);
+        let mut conversation: Vec<crate::gateway::model::Message> = Vec::new();
+        controller
+            .run_turn(
+                &host,
+                "任务",
+                "RUN-0X-D",
+                MANIFEST,
+                0,
+                None,
+                Some(&mut orientation),
+                Some(&mut conversation),
+            )
+            .await
+            .unwrap();
+
+        let gate_block = crate::prompt::COUNTEREXAMPLE_GATE_BLOCK;
+        let events = events(&dir);
+        let gate = events
+            .iter()
+            .find(|e| e.event_type == EventType::CounterexampleGate)
+            .expect("counterexample gate fires once");
+        assert_eq!(gate.payload["position"], "final_answer");
+        assert_eq!(gate.payload["once_only"], serde_json::json!(true));
+        assert_eq!(gate.payload["message_block"], gate_block);
+
+        // 机械注入文本绝不持久化回会话（初始轮问询同待遇）。
+        assert!(
+            conversation
+                .iter()
+                .all(|m| !m.content.starts_with("[INITIAL_ROUND_INQUIRY")),
+            "initial-round inquiry block must not persist into the conversation"
+        );
+        assert!(
+            conversation
+                .iter()
+                .all(|m| m.content != gate_block && !m.content.starts_with("[MECHANICAL_AUDIT")),
+            "audit report / gate block must not persist into the conversation"
+        );
+
+        // 终答前那一轮的请求：审查报告 + 反例门各自独立成块，且都不含三问。
+        let requests = fake.received_requests();
+        let final_idx = requests
+            .iter()
+            .rposition(|req| {
+                req.messages
+                    .iter()
+                    .any(|m| m.role == Role::User && m.content == gate_block)
+            })
+            .expect("final-answer round carries the gate block");
+        let final_req = &requests[final_idx];
+        let audit_msg = final_req
+            .messages
+            .iter()
+            .find(|m| {
+                m.role == Role::User
+                    && m.content
+                        .starts_with(crate::mechanical_audit::MECHANICAL_AUDIT_PREFIX)
+            })
+            .expect("mechanical audit report rides the same round");
+        for probe in [
+            "[INITIAL_ROUND_INQUIRY",
+            "本任务实际要交付什么",
+            "大方向是什么",
+            "当前做法优劣如何",
+        ] {
+            assert!(!audit_msg.content.contains(probe), "审查报告不得携带问询: {probe}");
+            assert!(
+                !gate_block.contains(probe),
+                "反例门块不得携带问询: {probe}"
+            );
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     // ── ORZ-ORIENTATION-FORCED-TEMPLATE (2026-08-15, ADR-0010 §14.16) ─────
 
     /// THIN-HARNESS-REDESIGN-V2 §9.2 (2026-08-29 软门): 7 轮跨越阈值时
@@ -437,13 +872,19 @@ mod tests {
             .iter()
             .filter(|e| e.event_type == EventType::OrientationCheckpoint)
             .collect();
-        assert_eq!(fires.len(), 1, "{:?}", event_types(&dir));
+        // 0x S1: 两条 fire —— 第 1 轮动作批次结束的一次性初始轮问询，
+        // 与第 7 轮跨越阈值的周期问询。软门语义对两条都成立。
+        assert_eq!(fires.len(), 2, "{:?}", event_types(&dir));
+        let periodic = fires
+            .iter()
+            .find(|e| e.payload["trigger"].as_str() == Some("completed_turns_interval"))
+            .expect("periodic fire present");
         assert_eq!(
-            fires[0].payload["injection_position"].as_str(),
+            periodic.payload["injection_position"].as_str(),
             Some("post_tool_batch_gap")
         );
         assert_eq!(
-            fires[0]
+            periodic
                 .payload
                 .get("completed_turns_since_orientation")
                 .and_then(|v| v.as_u64()),

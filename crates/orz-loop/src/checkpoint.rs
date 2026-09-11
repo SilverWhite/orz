@@ -67,7 +67,16 @@ pub(crate) fn commit_pending(
     match pending {
         PendingCheckpoint::Orientation { record } => {
             if let Some(state) = orientation {
-                state.commit_fire(record.agent_role, &record);
+                // P0-0x S1: two fire shapes share this pending round —
+                // the one-shot initial-round inquiry (sets its flag only,
+                // never resets the periodic counter) and the periodic
+                // threshold inquiry (resets the counter). The `trigger`
+                // value on the record is the dispatcher.
+                if record.is_initial_round() {
+                    state.commit_initial_round_fire(record.agent_role, &record);
+                } else {
+                    state.commit_fire(record.agent_role, &record);
+                }
             }
         }
         // Console inquiry commits nothing to orientation state — the

@@ -25,6 +25,27 @@ pub const ORIENTATION_BLOCK: &str = concat!(
     "\n[/ORIENTATION]"
 );
 
+/// 初始轮中立问询块（P0-0x / ADR-0010 §14.66，2026-09-11 设计定稿）：
+/// **一次性**开局问询，只在**首个含工具调用的动作批次结束**
+/// （`post_tool_batch_gap`）由机械层独立注入一次——不携带机械审查报告
+/// （审查依旧是结尾的事），不与周期 `ORIENTATION_BLOCK` 共用文本。
+///
+/// 三问取自用户口径原文（设计 §3.3）：只请求模型**想一次**
+/// （口径 / 方向 / 做法评估），不校验回答、不因回答触发额外轮次。
+/// 措辞纪律：不设结构化字段、不用追责式提问（首版草稿的
+/// 「有没有更短路径？为什么没选它？」已否——属动作中的回查与质疑）。
+///
+/// 注入块前缀 `[INITIAL_ROUND_INQUIRY` 注册进 `prompt::is_injected_block_text`
+/// （机械注入文本，绝不持久化回会话，与 `ORIENTATION_BLOCK` 同待遇）。
+pub const INITIAL_ROUND_INQUIRY_BLOCK: &str = concat!(
+    "[INITIAL_ROUND_INQUIRY v0.1]\n",
+    "开局问询（一次性，非强制模板，不打断动作）：\n",
+    "1. 本任务实际要交付什么、会被按什么判定？\n",
+    "2. 大方向是什么？当前处在什么阶段、下一步要解决什么？\n",
+    "3. 当前做法优劣如何？你对任务有何评估？\n",
+    "[/INITIAL_ROUND_INQUIRY]"
+);
+
 /// Checklist context prefix template (Python `CHECKLIST_CONTEXT_TEMPLATE`).
 pub const CHECKLIST_CONTEXT_TEMPLATE: &str = "[CHECKLIST_CONTEXT v0.1]\n\
 当前步骤: {step_id} — {title}\n\
@@ -277,6 +298,55 @@ mod tests {
                 "forbidden field leaked into message block: {field}"
             );
         }
+    }
+
+    /// P0-0x S1: 初始轮中立问询块形状——独立版本标识、三问原文、可识别的
+    /// 注入前缀；且与周期 `ORIENTATION_BLOCK` 互不包含（两块必须能各自
+    /// 被 `is_injected_block_text` 前缀登记区分）。
+    #[test]
+    fn initial_round_inquiry_block_shape() {
+        assert!(INITIAL_ROUND_INQUIRY_BLOCK.starts_with("[INITIAL_ROUND_INQUIRY v0.1]"));
+        assert!(INITIAL_ROUND_INQUIRY_BLOCK.ends_with("[/INITIAL_ROUND_INQUIRY]"));
+        for question in [
+            "本任务实际要交付什么、会被按什么判定？",
+            "大方向是什么？当前处在什么阶段、下一步要解决什么？",
+            "当前做法优劣如何？你对任务有何评估？",
+        ] {
+            assert!(
+                INITIAL_ROUND_INQUIRY_BLOCK.contains(question),
+                "initial-round question missing from block: {question}"
+            );
+        }
+        // 一次性软门——不得出现强制模板 / 工具禁令 / 追责式措辞。
+        for retired in [
+            "只输出",
+            "JSON",
+            "不要调用任何工具",
+            "请暂停动作",
+            "为什么没有选",
+            "为什么没选",
+        ] {
+            assert!(
+                !INITIAL_ROUND_INQUIRY_BLOCK.contains(retired),
+                "forbidden initial-round wording must not appear: {retired}"
+            );
+        }
+        // 两块互不包含：周期问询的三问不得泄漏进初始轮块（反之亦然，
+        // 由文本整体不相等 + 各自版本标识锁定）。
+        for q in [
+            "当前正在做什么？",
+            "当前任务定位是什么？",
+            "下一步输出应该服务哪个用户目标？",
+        ] {
+            assert!(
+                !INITIAL_ROUND_INQUIRY_BLOCK.contains(q),
+                "periodic question leaked into the initial-round block: {q}"
+            );
+        }
+        assert_ne!(ORIENTATION_BLOCK, INITIAL_ROUND_INQUIRY_BLOCK);
+        // 注入块过滤按前缀匹配——初始轮块不得被周期前缀命中，反之亦然。
+        assert!(!INITIAL_ROUND_INQUIRY_BLOCK.starts_with("[ORIENTATION"));
+        assert!(!ORIENTATION_BLOCK.starts_with("[INITIAL_ROUND_INQUIRY"));
     }
 
     #[test]

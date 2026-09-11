@@ -42,6 +42,15 @@ pub const COUNTEREXAMPLE_GATE_BLOCK: &str = "[COUNTEREXAMPLE_GATE v0.1]\n\
 /// journal `message_block` payload and the injected message share it.
 pub const ORIENTATION_INJECTED_PREFIX: &str = "[ORIENTATION";
 
+/// P0-0x S1 (ADR-0010 §14.66): prefix of the injected **initial-round**
+/// neutral inquiry block (`[INITIAL_ROUND_INQUIRY v0.1] …`). Same discipline
+/// as `ORIENTATION_INJECTED_PREFIX` — the one-shot opening inquiry is
+/// mechanical injected text and must never be persisted back into the
+/// conversation (or pollute the injected-block / restore filters). The full
+/// block text lives in `orz-assurance` (`checkpoint.rs`), so the journal
+/// `message_block` payload and the injected message stay one source.
+pub const INITIAL_ROUND_INQUIRY_INJECTED_PREFIX: &str = "[INITIAL_ROUND_INQUIRY";
+
 /// Whether `content` is one of the runtime-injected assurance blocks.
 /// The controller filters these out of the persisted conversation (D7) — fixed injected
 /// text is not model output and repeated blocks would pollute ngram stats.
@@ -58,6 +67,10 @@ pub fn is_injected_block_text(content: &str) -> bool {
         // persisted — a repeated `[ORIENTATION …]` block would
         // otherwise pollute the persisted conversation (R-8 regression point).
         || content.starts_with(ORIENTATION_INJECTED_PREFIX)
+        // P0-0x S1: the one-shot initial-round inquiry block is mechanical
+        // injected text too — own prefix, so the two blocks stay
+        // distinguishable (neither prefix matches the other's text).
+        || content.starts_with(INITIAL_ROUND_INQUIRY_INJECTED_PREFIX)
         || content.starts_with(TOOL_POLICY_BREAKER_PREFIX)
         || content.starts_with(TOOL_ROUND_BUDGET_PREFIX)
         // TER T1.9 (2026-09-04): F6 push 档 cue 是机械注入块（只报中性
@@ -636,6 +649,17 @@ mod tests {
         assert!(is_injected_block_text("[ORIENTATION v0.4] 当前正在做什么"));
         // The closing tag must never match (starts with `[/`).
         assert!(!is_injected_block_text("[/ORIENTATION]"));
+        // P0-0x S1: the one-shot initial-round inquiry block is registered by
+        // its own prefix — the two injected blocks must not shadow each other
+        // (a leak here would persist the block back into the conversation).
+        let initial_block =
+            orz_assurance::orientation::checkpoint::INITIAL_ROUND_INQUIRY_BLOCK;
+        assert!(is_injected_block_text(initial_block));
+        assert!(is_injected_block_text(
+            "[INITIAL_ROUND_INQUIRY v0.1] 本任务实际要交付什么"
+        ));
+        assert!(is_injected_block_text(&format!("  {initial_block}\n")));
+        assert!(!is_injected_block_text("[/INITIAL_ROUND_INQUIRY]"));
         // The retired blocks must NOT match — nothing injects them anymore.
         assert!(!is_injected_block_text("[INFO_SUFFICIENCY v0.1] 部分拷贝"));
         assert!(!is_injected_block_text("[RETRIEVAL_COMPLETION_CHECK v0.1]"));

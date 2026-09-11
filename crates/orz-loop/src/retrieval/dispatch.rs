@@ -3975,7 +3975,9 @@ mod tests {
         };
 
         // The subagent runs 7 read_file tool rounds (7 feeds), then a text
-        // round forms the result; the main wraps it with 3 rounds total.
+        // round forms the result; the main wraps it with 4 rounds total
+        // (0x S1: 主车道首个动作批次结束后多一次初始轮问询回答轮——
+        // 开局问询 → 反例门 → 终答).
         let mut script = vec![ScriptedResponse::tool_calls(vec![tool_call(
             "retrieve_project_docs",
             "call-1",
@@ -3987,6 +3989,9 @@ mod tests {
             )]));
         }
         script.push(ScriptedResponse::text("[DOC] doc.md\n检索完成"));
+        // 主车道：初始轮问询的回答（软门消费后续跑）。
+        script.push(ScriptedResponse::text("完成"));
+        // 主车道：反例门轮 + 终答轮。
         script.push(ScriptedResponse::text("完成"));
         script.push(ScriptedResponse::text("完成"));
         let controller = with_retrieval_enabled(AgentLoopController::with_gateway(Arc::new(
@@ -4013,15 +4018,45 @@ mod tests {
             .iter()
             .filter(|e| e.event_type == EventType::OrientationCheckpoint)
             .collect();
-        assert_eq!(fires.len(), 1, "{:?}", event_types(&dir));
-        let p = &fires[0].payload;
+        // 0x S1: 两条 fire —— 主车道的一次性初始轮问询（首轮动作批次结束）
+        // + 检索车道的阈值周期问询。两者共用事件面，靠 trigger/agent_role 区分。
+        assert_eq!(fires.len(), 2, "{:?}", event_types(&dir));
+        let initial = &fires
+            .iter()
+            .find(|e| e.payload["trigger"].as_str() == Some("initial_round"))
+            .expect("main-lane initial-round fire present")
+            .payload;
+        assert_eq!(
+            initial.get("agent_role").and_then(|v| v.as_str()),
+            Some("main")
+        );
+        assert_eq!(
+            initial.get("completed_turns_since_orientation"),
+            Some(&serde_json::json!(1))
+        );
+        assert_eq!(
+            initial.get("injection_position").and_then(|v| v.as_str()),
+            Some("post_tool_batch_gap")
+        );
+        assert!(
+            initial
+                .get("message_block")
+                .and_then(|v| v.as_str())
+                .unwrap()
+                .starts_with("[INITIAL_ROUND_INQUIRY")
+        );
+        // 检索车道的周期问询事件先落（子代理在工具派发内跑完 7 轮），
+        // 主车道的初始轮问询在动作批次结束后落——按 trigger 取，不按序取。
+        let p = &fires
+            .iter()
+            .find(|e| {
+                e.payload["trigger"].as_str() == Some("completed_turns_interval")
+            })
+            .expect("retrieval-lane periodic fire present")
+            .payload;
         assert_eq!(
             p.get("agent_role").and_then(|v| v.as_str()),
             Some("internal_retrieval")
-        );
-        assert_eq!(
-            p.get("trigger").and_then(|v| v.as_str()),
-            Some("completed_turns_interval")
         );
         assert_eq!(
             p.get("completed_turns_since_orientation"),
@@ -4037,12 +4072,15 @@ mod tests {
                 .unwrap()
                 .starts_with("[ORIENTATION")
         );
-        // Lanes count independently: the main's 3 rounds never fed the
+        // Lanes count independently: the main's rounds never fed the
         // subagent lane and vice versa. The fire COMMIT reset the internal
         // lane (7 → 0); the 8th (result-forming) round re-fed it to 1.
+        // Main lane: 4 completed generations; the initial-round commit did
+        // NOT reset its periodic counter (0x S1 设计 §3.2).
         assert_eq!(orientation.internal.completed_rounds, 1);
-        assert_eq!(orientation.main.completed_rounds, 3);
+        assert_eq!(orientation.main.completed_rounds, 4);
         assert_eq!(orientation.external.completed_rounds, 0);
+        assert!(orientation.initial_round_fired);
         // §14.16 检索车道不变: the subagent lane keeps the legacy
         // fire-and-continue behavior — no forced template round, no
         // `checkpoint_response` event.
