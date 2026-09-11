@@ -5179,3 +5179,30 @@ registry/manifest 随批）→ S3 覆盖面矩阵与法官正反两测 → S4 �
    8 不适用。观察项（登记备查）：外部检索车道 4 次 `retrieval_role_write_denied`
    全是 `run_terminal_cmd`（1 次 `curl -o` 写文件属正确拒绝，3 次 `ls`/`find` 只读）。
    证据：[`0X/0V S4 实机复验记录`](../docs/audits/0X_0V_S4_LIVE_VERIFICATION_2026-09-11.md)。
+
+10. **S4 处理登记（2026-09-11，同日；用户裁决：修 F1 → 闭合 0x → 改 F2）**：
+   ①**0x 闭合入账**：S1–S4 全部闭合、S4 实机判据通过 → 状态转 `implemented`，
+   未闭合 **27 → 26**（单会话样本边界保留在 BACKLOG/索引：周期互不影响未获实机样本，
+   由 S1/S2 测试矩阵覆盖）。②**0v F1 修复落码（orz `340fe4a7`）**：`orz-host/src/
+   permission.rs::access_kind` 增 `browser_control` 分支，按动作分档——
+   `navigate`/`back`/`forward`/`refresh`/`wait_load`/`snapshot`/`search` 七种现行动作
+   全部 → `Read(None)`（与 `browser_read` 同族：URL gate 在浏览器车道、权限层只判
+   「读不是写」），**未知动作与后续 Phase 2 交互动作仍落 `Edit`（fail-closed）**；
+   同刀补**跨表护栏测试** `read_only_tools_never_fall_into_the_edit_bucket`——对 11 组
+   「控制器侧 `ToolDispatcher::risk_class` 判 ReadOnly」的代表样本断言宿主侧不得落
+   `Edit`，把「双面修一面」变成机械可查（本项目已第三次踩此形：project_doc_index /
+   browser_read / browser_control，见 review P1-1）。验证：`orz-host` lib
+   **287 passed / 0 failed / 5 ignored**（单线程；首跑 1 例
+   `codex_app::tests::approval_allow_persists_for_identical_bash` 超时为既知负载 flake，
+   单测与复跑均绿）、`permission` 模块 20 全绿、`cargo fmt` 干净、新增代码 clippy 零告警。
+   ③**0v F2 装置侧改造（用户裁决：改用容器内真实 chromium）**：宿主侧经代理一次性取
+   官方 Chromium 快照（rev `1696156`、246,549,653 B、10.7s）解压至
+   `D:\tb-eval\browser\chrome-linux\`（`chrome` 为 ELF、523,032,168 B），跑批时以只读
+   方式挂到 `/opt/chrome-linux`，命中装置既有 `if [ -x /opt/chrome-linux/chrome ]`
+   判定即直接复用（**不再每次在慢线上现下**，消除 600s 上限下的 `SNAPSHOT_FAIL`）；
+   容器内实测 `/opt/chrome-linux/chrome --version` → `Chromium 155.0.8053.0`、headless
+   启动正常（dbus 噪声无害；`--no-sandbox` 已由 orz 在 headless 下自带），并按 orz 的
+   实际启动参数实测 **CDP 信号**：15s 内 profile 写出 `DevToolsActivePort`（端口 40571
+   + `/devtools/browser/<id>`）——原失败形态（该文件 30s 未写出）已消除。该目录与
+   `snapshot-rev.txt` 为本地件不入库。④**后续（待放行）**：orz 源已超前于 0.4.1 载体，
+   0v S4 复跑需先按批次做双平台重建（届时 bump 版本串），再执行判据 1/5/6/7 取证。

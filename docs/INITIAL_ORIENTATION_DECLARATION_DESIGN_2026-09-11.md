@@ -7,7 +7,8 @@
 > [`0X S1 实施记录`](audits/0X_S1_INITIAL_ROUND_INQUIRY_IMPL_2026-09-11.md)）：
 > 常量 / 前缀登记 / 会话一次性状态 / 控制器分派 / 测试矩阵全部落地；
 > 触点清单的两处落点更正（分派并入 `maybe_fire_orientation`、schema 枚举提前）
-> 见下文 §5 标注。**S3–S4 已完成**（重建与实机均已闭环，见下文 §8）。
+> 见下文 §5 标注。**S1–S4 全部闭合（2026-09-11 用户裁决，计数 27 → 26，转
+> `implemented`）**——重建与实机均已闭环，见下文 §8。
 > **S2 已实施**（2026-09-11，同日；见
 > [`0X S2 实施记录`](audits/0X_S2_EVENT_FACE_AND_SIGNER_2026-09-11.md)）：
 > payload 正例 fixture + 第 34 族法官 `initial_round_inquiry`（Rust 执法 /
@@ -36,6 +37,9 @@
 > （自报 4.0182% vs 真值 0.4363%），方向性错误直到收尾才暴露。
 > **上级**：[`ADR-0010`](../adr/ADR-0010-fusion-runtime-and-agent-architecture.md) §4.2
 > （中立问询/orientation）、§14.16（checkpoint 轮语义）、§9.2（软门）。
+> **闭合登记（2026-09-11 用户裁决）**：S4 实机判据通过 → S1–S4 全部闭合、状态转
+> `implemented`、未闭合 **27 → 26**；单会话样本边界随记录保留（周期问询互不影响
+> 未获实机样本，由 S1/S2 测试矩阵覆盖）。
 
 ## 1. 问题（O1）
 
@@ -227,4 +231,4 @@ pending 软消费机制**，在**首轮动作批次结束时**机械注入一次
 | S1 | 常量 + 会话状态 + 触发接线（含测试矩阵最小集）——**完成 2026-09-11** |
 | S2 | 事件面 fixtures 正/负例 / `run_event_journal_validation` 族 / Python 镜像同步 / `orz-signer` 第二模板摘要；`check_repository` 全绿收口——**完成 2026-09-11**（[记录](audits/0X_S2_EVENT_FACE_AND_SIGNER_2026-09-11.md)） |
 | S3 | 双平台重建（进载体）——**完成 2026-09-11**（[记录](audits/0X_S3_DUAL_PLATFORM_REBUILD_2026-09-11.md)：基线 orz `a6f902ef` / `orz-bin v0.4.1`，Windows 宿主 release + Linux musl 三件套、冒烟绿、符号核证、manifest 1441 条、门禁 `valid: true`） |
-| S4 | 实机复验（可与 0w 后续长任务或其他长会话同场，验证「开局一次、动作中不复发」）——**完成 2026-09-11**（[0X/0V S4 实机复验记录](audits/0X_0V_S4_LIVE_VERIFICATION_2026-09-11.md)：orz 0.4.1 / dna-assembly 单题 31m35s / 50 模型轮；`initial_round` 恰好 1 次、位置与块文本逐条命中、动作中无复发；单会话样本边界已登记） |
+| S4 | 实机复验（可与 0w 后续长任务或其他长会话同场，验证「开局一次、动作中不复发」）——**完成 2026-09-11**（[0X/0V S4 实机复验记录](audits/0X_0V_S4_LIVE_VERIFICATION_2026-09-11.md)：orz 0.4.1 / dna-assembly 单题 31m35s / 50 模型轮；`initial_round` 恰好 1 次、位置与块文本逐条命中、动作中无复发；单会话样本边界已登记）。**同日用户裁决闭合入账：S1–S4 全部闭合 → `implemented`，计数 27 → 26。** |

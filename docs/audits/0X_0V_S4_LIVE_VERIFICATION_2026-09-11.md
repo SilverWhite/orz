@@ -119,8 +119,54 @@ S1 登记口径为「一处修四面：检索写门/权限门/动作分区/快�
 
 ## 4. 结论
 
-- **0x S4：判据通过**（开局一次、动作中不复发，8 项逐条命中，单会话样本边界已登记）。
-- **0v S4：未通过**——`browser_control` 在无头实机里被权限门确定性拒绝（F1，框架缺陷，
-  修复方向明确、改动面小）；且本环境无可用浏览器（F2，装置侧）。
-  0v 判据 1/5/6/7 需在 F1+F2 处理后复跑取证；判据 2 部分成立、判据 4 部分成立。
+- **0x S4：判据通过**（开局一次、动作中不复发，8 项逐条命中，单会话样本边界已登记）；
+  **同日用户裁决闭合入账：S1–S4 全部闭合转 `implemented`，未闭合 27 → 26**。
+- **0v S4：首轮未通过**——`browser_control` 在无头实机里被权限门确定性拒绝（F1，框架缺陷）；且本环境无可用浏览器（F2，装置侧）。
+  两项已按用户裁决处理（见 §5）；0v 判据 1/5/6/7 需在**载体按批次重建后**复跑取证；
+  判据 2 部分成立、判据 4 部分成立。
 - 本批**不产出成绩结论**（官方墙钟耗尽、reward 0.0 与本项目判据无关）。
+
+## 5. 本批处理（2026-09-11 用户裁决）
+
+### 5.1 F1 修复（orz `340fe4a7`）
+
+- 落点：`orz-host/src/permission.rs::access_kind` 增 `browser_control` 分支，按**动作**
+  分档——`navigate`/`back`/`forward`/`refresh`/`wait_load`/`snapshot`/`search` 七种
+  现行动作全部 → `Read(None)`（与 `browser_read` 同族：URL gate 在浏览器车道、
+  权限层只判「读不是写」）；未知动作与后续 Phase 2 交互动作仍落 `Edit`（fail-closed）。
+- **同刀补跨表护栏**：新增测试 `read_only_tools_never_fall_into_the_edit_bucket`——
+  对 11 组「控制器侧 `ToolDispatcher::risk_class` 判 ReadOnly」的代表样本（含
+  `browser_control` 的 `search`/`navigate`）断言宿主侧不得落 `Edit` 兜底。
+  这把「双面修一面」从**靠人记住**变成**机械可查**（本项目已第三次踩此形：
+  `project_doc_index` / `browser_read` / `browser_control`）。
+- 验证：`permission` 模块 20 全绿；`orz-host` lib **287 passed / 0 failed / 5 ignored**
+  （单线程；首跑 1 例 `codex_app::tests::approval_allow_persists_for_identical_bash`
+  超时，为既知负载 flake——单测与复跑均绿）；`cargo fmt -p orz-host --check` 干净；
+  `cargo clippy -p orz-host --lib --tests` 对本次改动**零新增告警**。
+
+### 5.2 F2 装置侧改造（用户裁决：改用容器内真实 chromium）
+
+- 宿主侧经本机代理一次性取官方 Chromium 快照：rev `1696156`、246,549,653 B、**10.7s**
+  （容器内直连同 URL 只有 ~240 KB/s，正是原 600s 上限失败的根因）；
+  解压至 `D:\tb-eval\browser\chrome-linux\`（`chrome` = ELF、523,032,168 B），
+  版本记录 `D:\tb-eval\browser\snapshot-rev.txt`。
+- 跑批时以**只读**方式挂到 `/opt/chrome-linux`：装置既有
+  `if [ -x /opt/chrome-linux/chrome ]` 判定即直接复用，**不再每次现下**。
+- 容器内实测（`alexgshaw/dna-assembly:20251031`，挂载 + 装置同款依赖）：
+  `/opt/chrome-linux/chrome --version` → **`Chromium 155.0.8053.0`**；headless 启动
+  正常（dbus 连接噪声无害）。`--no-sandbox` 由 orz 在 headless 下自带，无需装置补参。
+- **CDP 启动信号实测（关键）**：按 orz 的实际启动参数（`--headless=new
+  --remote-debugging-port=0 --remote-allow-origins=* --user-data-dir=… --no-sandbox
+  --window-size=1280,800 --disable-dev-shm-usage --disable-gpu
+  --blink-settings=imagesEnabled=false …`）拉起，15s 内 profile 目录写出
+  **`DevToolsActivePort`（端口 40571 + `/devtools/browser/<id>`）** —— 这正是 orz
+  等待的信号（原失败形态为该文件 30s 未写出）。即 F2 的失败面已消除。
+- 执行器 `run_0x_0v_s4_live_verify.py` 已加入该挂载（目录缺失时自动跳过、回退装置
+  原有引导，不阻断跑批）。
+- 归因复核：本项为**装置/环境**改造，不改变 orz 代码与设计；`D:\tb-eval\browser\`
+  为本地件，不入库。
+
+### 5.3 后续（待放行）
+
+- orz 源码已超前于 0.4.1 载体（F1 修复在 0.4.1 构建之后落地），0v S4 复跑前需先按
+  批次做双平台重建（届时 bump 版本串），再执行判据 1/5/6/7 取证。

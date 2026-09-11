@@ -11,7 +11,13 @@
 > ReadOnly，但宿主 `orz-host/src/permission.rs::access_kind` 未补 `browser_control`
 > 映射 → 落 `Edit` 兜底 → 无头模式下确定性拒；实测 3/3 次 `browser_control search`
 > 被 `permission_decision=deny`）、**F2 装置侧容器无可用浏览器**（Chromium 引导
-> 600s 超时 + PATH 回落命中 snap 桩）。判据 1/5/6/7 待两项处理后复跑取证；
+> 600s 超时 + PATH 回落命中 snap 桩）。**两项已按用户裁决处理（2026-09-11）**：
+> **F1 修复落码**（orz `340fe4a7`：`access_kind` 增 `browser_control` 按 action 分档
+> 映射——七种现行动作 → `Read(None)`，未知/Phase 2 交互动作 → `Edit` fail-closed；
+> 同刀补跨表护栏测试 `read_only_tools_never_fall_into_the_edit_bucket`）；
+> **F2 改造为宿主侧供给真实 Chromium**（一次性取官方快照 rev `1696156` 落
+> `D:\tb-eval\browser\chrome-linux\`，跑批只读挂 `/opt/chrome-linux`，容器内实测
+> `Chromium 155.0.8053.0` 启动正常）。判据 1/5/6/7 待**载体重建后**复跑取证；
 > 判据 2 部分成立、判据 4 部分成立。详见
 > [0X/0V S4 实机复验记录](audits/0X_0V_S4_LIVE_VERIFICATION_2026-09-11.md)
 > （[0X S3 重建记录](audits/0X_S3_DUAL_PLATFORM_REBUILD_2026-09-11.md)）；

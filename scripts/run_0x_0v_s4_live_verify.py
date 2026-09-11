@@ -11,6 +11,11 @@
 # （无 agent 超时覆盖）、deepseek-v4-flash、eval_browser=true、Docker 容器；
 # 无代理直连 + 本地预拉镜像（2026-09-10 用户裁决；Docker Hub 不可达，
 # 只能跑本地镜像——与 0u R4 同纪律）。
+# F2（2026-09-11 用户裁决「改用容器内真实 chromium」）：宿主侧一次性取官方
+# Chromium 快照落 D:/tb-eval/browser/chrome-linux，跑批时只读挂到
+# `/opt/chrome-linux` —— 命中装置既有 `if [ -x /opt/chrome-linux/chrome ]`
+# 判定即直接复用，不再每次在慢线上现下（原 600s 上限下会 SNAPSHOT_FAIL）。
+# 目录缺失时自动跳过该挂载（回退装置原有引导行为），不阻断跑批。
 # 载体：orz 0.4.1 三件套 D:/tb-eval/orz-linux/orz（0x S3 重建产物，
 # sha256 4b83de75…，见 docs/audits/0X_S3_DUAL_PLATFORM_REBUILD_2026-09-11.md）。
 # 实现说明：Python 而非 PowerShell——PS 5.1 会破坏内嵌 JSON 引号；Python
@@ -28,6 +33,7 @@ HARBOR = Path('D:/tb-eval/venv/Scripts/harbor.exe')
 JOBS_DIR = Path('D:/tb-eval/jobs-s4')
 VOL_ROOT = Path('D:/tb-eval/gsa-volumes')
 BINARY = Path('D:/tb-eval/orz-linux/orz')
+BROWSER_DIR = Path('D:/tb-eval/browser/chrome-linux')
 MODEL = 'deepseek-v4-flash'
 JOB_PREFIX = 's4-0x-0v'
 # agent 准备阶段超时余量：harbor 默认 360s，eval_browser=true 需在容器内装
@@ -71,11 +77,22 @@ def invoke_one_task(task: str) -> int:
         job_dir.rename(JOBS_DIR / stale)
     vol_dir = VOL_ROOT / job
     vol_dir.mkdir(parents=True, exist_ok=True)
-    mounts = json.dumps([{
+    mount_list = [{
         'type': 'bind',
         'source': str(vol_dir).replace('\\', '/'),
         'target': '/orz-gsa',
-    }])
+    }]
+    if (BROWSER_DIR / 'chrome').is_file():
+        mount_list.append({
+            'type': 'bind',
+            'source': str(BROWSER_DIR).replace('\\', '/'),
+            'target': '/opt/chrome-linux',
+            'read_only': True,
+        })
+        log(f'browser mount: {BROWSER_DIR} -> /opt/chrome-linux (ro)')
+    else:
+        log(f'browser mount skipped: {BROWSER_DIR} not found (falling back to harness bootstrap)')
+    mounts = json.dumps(mount_list)
     args = [
         'run', '-t', f'terminal-bench/{task}', '-n', '1', '-r', '0',
         '--agent-setup-timeout-multiplier', AGENT_SETUP_TIMEOUT_MULTIPLIER,
