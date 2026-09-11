@@ -165,3 +165,34 @@ TB 4.0 级长任务」值得记一笔。
 - 本文的 O1–O7 进入 BACKLOG 0w 的开放项，待用户裁决优先级与实施批次。
 - 本批**不触发** 2.1 全量复跑线；0v S3/S4 与后续 2.1 复跑仍按原排期独立推进。
 - 结果落档即本文；执行器与排期文档同步见同笔提交。
+
+## 10. 用户裁决登记（2026-09-11）
+
+| 项 | 裁决 | 处置 |
+|---|---|---|
+| **O1** | **认为非常有价值**，且与日常同样相关——「有一些内容本就不应该绕远去做」，与本项目此前的过度自制转向同源，属**方向**问题；提前处理可避免行动方向偏移 | **进入设计**（落点建议见下）；实施需另行放行 |
+| **O2** | 还需再考虑 | **缓议**，保留观察不动 |
+| **O3** | 要求进一步查清 | **本次查清**（见 §10.1）；机制在位，处置待确认 |
+| **O4** | 不是问题——机械层能拦住就不管 | **关闭**，不再跟踪 |
+| **F1 工具面** | 模型不用 web 面不是问题；「模型喜欢怎么做就按照自己的被训练风格去做」 | **关闭**，登记为边界，不做引导或强制 |
+
+### 10.1 O3 查清结论：机制在位，但对「轮询型 agent」结构性不触发
+
+`surface_bg_completion_reminders` **确实在 ORZ 生产路径上**：它挂在
+`crates/codegen/orz-tools/src/implementations/grok_build/bash/mod.rs`（`BashParams`，
+默认 `true`），由 `crates/codegen/orz-tools/src/reminders/task_completion.rs`
+的 `TaskCompletionReminder` 消费——该 reminder 注册在 `FinalizedToolset` 上，
+**注入到下一次工具结果的 `<system-reminder>`** 里。触发条件（`task_completion.rs:625-720`）：
+任务 `completed == true`、属本会话、未在 `reserved_ids`、且**未被消费过**
+（`consumed_completion_ids` → `state.reported` 去重），并需 `surface_reminders`
+打开（默认开、`goal_loop_active` 时关闭）。
+
+**本跑零触发的成因**：本跑的 agent 是**轮询型**——每次把长命令后台化后，它的下一条命令
+总是显式去取上一个调用的产物（`sleep 240; cat /app/.gsa/session/terminal/call_<id>.log`）
+或直接 `kill -9 <pid>`。读取产物即命中 `consumed_completion_ids` →
+该任务被标记为已报告 → 提醒被抑制。实证：轨迹文件（950 KB）中
+`While you were idle, … background task … completed` 的出现次数为 **0**。
+
+**结论**：这不是接线缺失，是**设计意图（「while you were idle」）与轮询型使用风格
+不匹配**——提醒只在 agent 真去空闲、由框架替它发现任务结束时有价值；而本跑 agent 从不
+空闲，它自己盯着。按 O4 的同一处置精神，建议登记为**设计边界、不改**（待确认）。
