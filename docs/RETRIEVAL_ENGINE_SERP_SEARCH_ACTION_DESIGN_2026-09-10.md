@@ -8,6 +8,13 @@
 > （current-design；0t 后模式语义退役、引擎链与 pacing 保留）、ADR-0010
 > §14.65（0t 双车道）。状态：**S1–S3′ 完成（S3 随 0x S3 同批重建进载体；S3′ 载体重建
 > 0.4.1 → 0.4.2 见 [0v S4 复跑重建记录](audits/0V_S4_REFRESH_REBUILD_2026-09-11.md)，2026-09-11）；
+> **S4 复跑（2026-09-12）已完成：F1/F2 实机确认修复**（`browser_control` 8/8 执行、
+> `browser_launch_result=success`），**但 0v 本体仍未取得**——判据 6 ✓、判据 7 机制面 ✓、
+> 判据 2 改善至 1、判据 4 命中率 94.36% ✓，判据 1 仅「部分」、5/9/10 无样本；
+> **F3**：抽取竞态已排除（load 时点 Bing SERP 已有 `li.b_algo`×10）、通用出口正常，
+> 形态与「会话级失败备忘」一致；**缺口**：`engine_attempts`/`error_class`/`low_quality`
+> 无持久化面 → 判据 1/5/7 不可事后取证（待裁决，见
+> [0v S4 复跑记录](audits/0V_S4_RERUN_2026-09-12.md) §6）；
 > S4 实机复验未通过——受阻于两项**：**F1 权限门「双面修一面」**（`risk_class` 已改
 > ReadOnly，但宿主 `orz-host/src/permission.rs::access_kind` 未补 `browser_control`
 > 映射 → 落 `Edit` 兜底 → 无头模式下确定性拒；实测 3/3 次 `browser_control search`

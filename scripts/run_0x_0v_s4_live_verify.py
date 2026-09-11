@@ -16,8 +16,12 @@
 # `/opt/chrome-linux` —— 命中装置既有 `if [ -x /opt/chrome-linux/chrome ]`
 # 判定即直接复用，不再每次在慢线上现下（原 600s 上限下会 SNAPSHOT_FAIL）。
 # 目录缺失时自动跳过该挂载（回退装置原有引导行为），不阻断跑批。
-# 载体：orz 0.4.1 三件套 D:/tb-eval/orz-linux/orz（0x S3 重建产物，
-# sha256 4b83de75…，见 docs/audits/0X_S3_DUAL_PLATFORM_REBUILD_2026-09-11.md）。
+# 载体：orz 0.4.2 三件套 D:/tb-eval/orz-linux/orz（0v S4 复跑重建产物，
+# sha256 ed59ffb5…，见 docs/audits/0V_S4_REFRESH_REBUILD_2026-09-11.md）。
+# 本轮为 0v S4 第二次跑（F1/F2 处理后的复跑）：首轮 0.4.1 载体上
+# browser_control search 3/3 被权限门拒、且容器无可用浏览器；本轮按
+# docs/audits/0V_S4_CONNECTIVITY_PRECHECK_2026-09-11.md 的前提取证
+# （Google 腿失败 → Bing 兜底；预挂载 Chromium 可用）。
 # 实现说明：Python 而非 PowerShell——PS 5.1 会破坏内嵌 JSON 引号；Python
 # subprocess argv 直传规避（沿 run_r4_unsolved15_per_task.py 教训）。
 import hashlib
@@ -122,7 +126,7 @@ def main() -> int:
     h = hashlib.sha256(BINARY.read_bytes()).hexdigest()
     log(f'== {time.strftime("%Y-%m-%d %H:%M:%S")} 0x/0v S4 live verify start ==')
     log(f'binary {BINARY.as_posix()} size={BINARY.stat().st_size} sha256={h}')
-    log(f'platform orz-bin 0.4.1 (0x S3 rebuild) | model={MODEL} | k=1 | r=0 | tasks={",".join(TASKS)}')
+    log(f'platform orz-bin 0.4.2 (0v S4 refresh rebuild) | model={MODEL} | k=1 | r=0 | tasks={",".join(TASKS)}')
     rc = 0
     for task in TASKS:
         log(f'START {task}')
