@@ -19,6 +19,12 @@
 > （**设计定稿、实施放行**，见 §8.1–§8.5）；§6 的「完全去备忘」被否（本环境下
 > 其代价为**每次**付 Google 超时）。同日裁决**排期**：软备忘与 **0v-A 引擎级
 > 取证面**合批实施、**0v-B 定向探针**挂 S4，见 §8.7。
+> **第二批 S1 已落码（2026-09-12）**：软备忘语义 + 0v-A 取证面；取证面形态
+> 按第 1 步推荐**定案 = 会话卷落盘** `runs/<run>/serp-attempts/<round>.json`
+> （loop 层预算结算点旁路写入；详见 §8.7「S1 实施记录」；三面复审处理
+> 见 §9：O-1 不做增量、O-2（上限信封补全量 attempts 表）已实施）；
+> S2 测试合约已收口（2026-09-12，见 §8.7「S2 实施记录」；orz `ee4ef617`）；
+> S3 重建（0.4.2 → 0.4.3）、S4 实机复验（含 0v-B）待续。
 > S4 实机复验未通过——受阻于两项**：**F1 权限门「双面修一面」**（`risk_class` 已改
 > ReadOnly，但宿主 `orz-host/src/permission.rs::access_kind` 未补 `browser_control`
 > 映射 → 落 `Edit` 兜底 → 无头模式下确定性拒；实测 3/3 次 `browser_control search`
@@ -528,7 +534,7 @@ DuckDuckGo」，静态文本（0t 静态标注纪律），两条车道一致。`
   抓取依赖；许可兼容性在实施时单独核对。
 - orz 两侧工作树保持全净，无任何代码变动。
 
-## 8. 用户裁决：引擎链「软备忘」（2026-09-12；**设计定稿、待实施**）
+## 8. 用户裁决：引擎链「软备忘」（2026-09-12；**设计定稿；第二批 S1 已落码，见 §8.7 S1 实施记录**）
 
 > 触发证据：[`0v S4 复跑记录`](audits/0V_S4_RERUN_2026-09-12.md)（载体 0.4.2，
 > 588 事件 / 68 模型轮 / 1800s 官方墙钟）。本节取代 §6 的「完全去备忘」成为
@@ -651,6 +657,51 @@ DuckDuckGo」，静态文本（0t 静态标注纪律），两条车道一致。`
 边界：不触碰工具面签名（不加 `engine` 参数）；不改模型可见常驻状态；
 `engine_attempts` 对模型的可见内容不缩水。
 
+##### S1 实施记录（2026-09-12）
+
+三步全部落码；第 1 步按推荐方案定案如下（一次性定死）：
+
+- **落盘面**：`{journal_dir}/serp-attempts/<tool_round>.json`（四位轮号；同轮
+  多次 search 顺延 `-2`/`-3` 后缀；与 `retrieval-results/` 同形）。
+- **写入点**：loop 层 `host_exec.rs::persist_serp_attempts`，在 P2-4 预算
+  结算之后调用——`lane_budget`/session 读数为**调用后时点**（含本次消耗）。
+  与 `persist_result_artifact` 同漏斗：落盘前过 orz-secrets 机械脱敏
+  （key 不落卷不变量，0p S2 P1-2 旁路纪律）。
+- **文件内容** = `envelope`（模型实际收到的**完整信封逐字内嵌**：含
+  `engine_attempts` 全量、每引擎 `error_class`/`wall_ms`、结果 tier 标注）
+  + 机械读数：`tool_round` / `lane` / `query`（500 字符防御截断）/
+  `results_count` / `low_quality_count` / `lane_budget`{used,cap} /
+  `session`{navigations,ceiling,floor_reserved}。`lane` 由 P2-3 底线标记
+  导出（`reserves_session_floor=true`=main、false=external；无预算面=null）。
+- **`wall_ms` 落点定案**：信封 `engine_attempts[]` 增 `wall_ms`（可选字段，
+  仅真实尝试的引擎携带；`not_attempted` 不带）——**加性**字段满足「不缩水」，
+  且保证取证文件与模型所见**逐字同源**（不建第二信道；这是把 §8.6 的
+  wall_ms 要求落进信封而非旁路结构体的理由）。
+- **边界落定**：派发前拒绝（预算/底线）与宿主错误（浏览器未启动、超时
+  树杀）没有引擎级事实、**不落文件**——journal 事件面已覆盖这些形态；
+  旁路纪律 = 任何落盘失败只 WARN，不影响工具结果本身。（随 §8.8 O-2
+  裁决更新：会话上限拒绝信封现携带全量 `not_attempted` 表 → **有信封即
+  落**，上限路径进取证面。）
+- **软备忘语义**：`available_engines()` → `ordered_engines()`（头/尾两段各保
+  固定链序；全员置尾时次序退回链序——不倒序、无第二种惩罚位）；
+  `SerpEngineAttempt` `skipped` → `not_attempted`（reason 固定「链在更前的
+  引擎成功」）；cdp.rs 链循环改「按顺序尝试直至成功」，成功时未触及引擎
+  显式记 `not_attempted`；`all_engines_failed` 收紧为「三引擎均被真实尝试
+  且均失败」——由构造保证（备忘短路路径已不存在）。
+- **一处澄清（§8.2 未明说，随 S1 定案）**：**成功不清除备忘**——置尾持续
+  整个浏览器会话（§8.1 接受的代价：「保留一份只影响顺序的隐藏状态」；
+  引擎仍可被试到，只是排尾）。
+- **测试同步**（原列 S2 的两条既有单测因 S1 改名必须同步，改写提前至 S1）：
+  `available_engines_skip_memoized_failures_in_fixed_order` →
+  `ordered_engines_demotes_failures_to_the_tail_without_removal`（断言头/尾
+  顺序与全员置尾退回链序）；`S2 余项 = 新增 4 条 + 取证面测试 + fixture
+  同步 + 收口`。mod.rs 既有信封测试补 `wall_ms` 断言钉字（信封含 wall_ms）。
+- **回归**：orz-host lib 287/0/5（单线程口径；并行首轮 3 失败为机器负载
+  噪声——`call_tool_timeout_kills_process_tree` 等 3 例单线程全过，非本批
+  引入）、orz-loop lib 763/0/3、`cargo fmt` 干净、新增代码 clippy 零告警
+  （命中行均既有基线）。S1 出口「代码绿」达成；未提交（批次提交随 S2/S3
+  收口一并或按用户指示）。
+
 #### S2 测试与合约
 
 - 单测改写：`available_engines_skip_memoized_failures_in_fixed_order`（改断言
@@ -663,6 +714,53 @@ DuckDuckGo」，静态文本（0t 静态标注纪律），两条车道一致。`
 - 合约面：`not_attempted` 涉及的 shape 若被 fixture 固化则同步；
   **本批不新增事件族**（落盘方案不触事件面）。
 - 收口：`check_repository` 全绿 + `cargo fmt` 干净 + 新增代码 clippy 零告警。
+
+##### S2 实施记录（2026-09-12；orz `ee4ef617`）
+
+- **单测改写 1 条**：`session_state_memoizes_failures_and_caps_navigations`
+  改断言「**备忘不删除**（备忘后 `ordered_engines` 仍全量含失败者）+
+  **上限仍在**（40 次导航物理兜底原样）」；另一条改写
+  （`ordered_engines_demotes_failures_to_the_tail_without_removal`）已随 S1
+  提前完成。
+- **单测新增 5 条**（4 项软备忘语义中「三引擎全失败才 `all_engines_failed`」
+  与「同会话先前失败引擎仍可被试到」两条合落于同一链测试的两段断言）：
+  - `demoted_engine_that_fails_again_stays_at_the_tail`（serp.rs）：置尾后
+    再失败**保持队尾**——不叠加惩罚、不倒序、尾段保持固定链序（单一惩罚位）。
+  - `success_marks_unreached_engines_not_attempted_in_attempt_order`
+    （cdp.rs）：成功路径 attempt sheet——`pending` → `not_attempted`（固定
+    reason、无 `error_class`、无 `wall_ms`），成功/失败条目原样保留。**同刀
+    把 S1 的成功路径标注循环抽为行为等价纯函数**
+    `CdpBrowserSession::mark_unreached_as_not_attempted`（无行为变更，语义
+    可离线钉字，无需真实浏览器）。
+  - `search_chain_really_retries_engines_failed_earlier_in_the_session`
+    （cdp.rs）：**离线确定性链测试**——DNS 缓存预热后 URL 门零真实解析，
+    失败点固定在浏览器 WS 拒连（端口 1）；①三引擎均被真实尝试且均失败才
+    `all_engines_failed`（每条 attempt 带 `error_class`+`wall_ms`、全员置尾
+    时尝试序退回固定链序）；②同一会话内先前失败的引擎仍被真实重试
+    （导航计数 3 → 6，备忘短路不存在）。
+  - `serp_attempts_forensic_files_match_each_search_call`（orz-loop
+    host_exec.rs）：取证面**逐条对应**——每次带信封的 search 调用恰落一份
+    文件、同轮第二次顺延 `-2` 后缀、`envelope` 与模型实际收到的输出**逐字
+    同源**（含引擎名/类别/wall_ms/tier）、机械读数逐字段
+    （`results_count`/`low_quality_count`/`lane_budget` 结算推进 3/8→4/8/
+    `session` 三字段）；纯文本宿主错误（无信封）**不落文件**；journal 的
+    browser_control 完成事件数 = 调用数。
+  - `serp_attempts_write_failure_does_not_affect_tool_result`（orz-loop
+    host_exec.rs）：**旁路纪律**——`serp-attempts/` 被同名普通文件占位 →
+    落盘只 WARN，信封逐字返回、`Succeeded` 反馈不变、占位文件原样。
+- **合约面核查**：`skipped` / `engine_attempts` 在 runtime schema、assurance
+  fixtures/conformance 全库零命中（信封是工具输出、非 journal 事件 payload，
+  事件面不固化它）→ **无 fixture 同步项**；**未新增事件族** ✓。
+- **回归与门禁**：orz-host lib **290**/0/5（单线程口径）、orz-loop lib
+  **765**/0/3；`cargo fmt` 干净（两个测试文件经格式化）；新增代码 clippy
+  零告警（clippy 命中行均在既有基线，本批零新增）；`check_repository`
+  `valid: true`（error_count 0，manifest 随本批重算 1441 条）。
+- **登记观察（不动码，留用户裁决）**：`SerpSessionState::begin_search` 的
+  pacing 公式 `SERP_SEARCH_COOLDOWN.saturating_sub(elapsed) + jitter` 中
+  jitter 为**无条件相加**——冷却早已过期后的每次 search 仍付 0–2.5s 等待
+  （离线链测试第二次调用因此最多等 2.5s，可接受；生产长间隔 search 同样
+  付此等待）。是否为设计意图（防突发）或应改为仅在冷却未过期时叠加，
+  本批不裁决不改码。
 
 #### S3 双平台重建
 
@@ -687,3 +785,33 @@ DuckDuckGo」，静态文本（0t 静态标注纪律），两条车道一致。`
   - **判据 12（取证面）**：`serp-attempts/*.json` 与 journal 中的
     `browser_control` 调用**逐条对应**（次数/引擎/类别），且**run 被墙钟杀死
     后仍可复核**（本批 F3 的教训：不可复核 = 等于没有证据）。
+
+## 9. S1 全面复审处理（2026-09-12；三面复审 + 两项裁决）
+
+三面复审（设计合理性 / 实现合理性 / 设计-实现符合性）结论：**全部成立，
+可进入 S2**；需改码缺陷 0，失真注释修正 1（`SerpFailureClass::Blocked` 的
+「not retried every search」在软备忘下不再成立，已改为置尾表述）。复审
+核实的关键覆盖面事实：生产调用点全部漏斗进 `run_host_tool_with_timeout`
+单点（取证写入与 P2-4 预算结算同点同覆盖）；W-F13b 截断面与 auto-bg/
+`tool_running` 均为 terminal 族专属，`browser_control` 输出恒为完整信封、
+恒同步返回，无逃逸取证点的路径。
+
+- **复审观察 O-1（Empty/Captcha 查询相关失败全会话置尾、成功不清除）——
+  用户裁决：不做增量设计**。理由成立：①引擎有机空结果是罕见事件，置尾
+  代价上界 = 先试 1–2 个其他引擎（软备忘保证仍可被试到），非能力损失；
+  ②「大不了多试」结构安全——重试由 40 次上限 + 5s 冷却 + 车道预算兜底，
+  正是 §8.2 第 6 条意图；③「仅 infra 类置尾」是一整套设计增量 + 测试矩阵
+  + 取证解读规则，优化对象罕见且自限，违背最小机制纪律；④`Captcha` 置尾
+  本就合理（墙多为 IP/会话级），真正查询瞬态的只有 `Empty`。**登记闭合；
+  S4 若出现头部引擎反复空转的证据可凭数据重开。**
+- **复审观察 O-2（会话上限 `cap_exceeded` 信封无 `engine_attempts` 表）——
+  用户裁决：实施**。落码：上限拒绝信封现携带全量三引擎 `not_attempted`
+  表（按当前 would-be 尝试序；reason =「session engine-navigation ceiling
+  already reached」，与链首成功路径的固定 reason 区分——`not_attempted`
+  增 caller-supplied reason 构造器）。三项连带效应已核实：①预算结算读数
+  不变（全 `not_attempted` → ok/failed 计数 0 → `.max(1)` 仍记 1，与旧行为
+  逐字节一致）；②**连带收益**：取证面守卫「有信封即落」自动覆盖上限路径
+  （判据 12 对应更完整）；③`not_attempted` 对模型的可见语义不变（「本次
+  未尝试」），reason 字段承载区分。测试：上限测试扩展断言三引擎全
+  `not_attempted` + ceiling reason；orz-host lib 287/0/5（单线程）、orz-loop
+  lib 763/0/3、fmt 干净、新增代码 clippy 零告警（命中行均既有基线）。
