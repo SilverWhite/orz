@@ -549,6 +549,27 @@ fn access_kind(tool: &str, args: &serde_json::Value) -> AccessKind {
         // not edit"). Without this mapping the fallthrough Edit branch
         // denied every call (project_doc_index precedent, review P1-1).
         AccessKind::Read(None)
+    } else if tool == "browser_control" {
+        // P0-0v S4 修复 (2026-09-11)：browser_control 的 `risk_class` 已在
+        // 0v S1 归入 ReadOnly（orz-loop `tool.rs`，与 browser_read 同族：导航
+        // 受 URL gate 约束、读取有界，无工作区副作用），但**本表这一半当时
+        // 没跟上** —— 整工具落进 else 的 `AccessKind::Edit`，于是无头部署
+        // （gateway=None，fail-closed）在权限门就把每一次调用确定性拒掉
+        // （0x/0v S4 实测 3/3 次 `search` 被拒；同车道同 `risk: ReadOnly` 的
+        // browser_read 5/5 放行，差异只在这张表）。这与 review P1-1 记录的
+        // project_doc_index / browser_read 是同形缺陷。
+        //
+        // 判定按**动作**分档（fail-closed 默认）：现行七种动作
+        // （navigate/back/forward/refresh/wait_load/snapshot/search）全部是
+        // 纯读或受 URL gate 约束的导航读 → Read(None)；未知动作与后续
+        // Phase 2 交互动作（click/type/eval 一类，见 `tool.rs` 注释）仍落
+        // Edit，需在放行时另行复核。
+        match args.get("action").and_then(|a| a.as_str()) {
+            Some(
+                "navigate" | "back" | "forward" | "refresh" | "wait_load" | "snapshot" | "search",
+            ) => AccessKind::Read(None),
+            _ => AccessKind::Edit(format!("{tool}: {args}")),
+        }
     } else if tool == "compaction_whitelist_add"
         || tool == "blackboard_read"
         // P0-C orz 内嵌集成 S2 (2026-08-15): `blackboard_action_write`
@@ -700,6 +721,84 @@ mod tests {
             ),
             AccessKind::Read(None)
         ));
+        // P0-0v S4 修复 (2026-09-11): browser_control must NOT fall into the
+        // Edit else-branch — headless deployments deny Edit deterministically
+        // (0x/0v S4: 3/3 `search` calls denied). Every现行 action is a read or
+        // a URL-gated navigation read.
+        for action in [
+            "navigate",
+            "back",
+            "forward",
+            "refresh",
+            "wait_load",
+            "snapshot",
+            "search",
+        ] {
+            assert!(
+                matches!(
+                    access_kind("browser_control", &serde_json::json!({"action": action})),
+                    AccessKind::Read(None)
+                ),
+                "browser_control action {action} must map to Read(None)"
+            );
+        }
+        // Fail-closed: unknown / future Phase 2 interactive actions stay Edit.
+        assert!(matches!(
+            access_kind("browser_control", &serde_json::json!({"action": "click"})),
+            AccessKind::Edit(_)
+        ));
+        assert!(matches!(
+            access_kind("browser_control", &serde_json::json!({})),
+            AccessKind::Edit(_)
+        ));
+    }
+
+    /// 跨表护栏（0v S4 修复同刀）：控制器侧 `risk_class`(orz-loop `tool.rs`)
+    /// 判为 ReadOnly 的工具，宿主侧这里**不得**落进 `Edit` 兜底——否则无头
+    /// 部署会在权限门确定性拒绝（0v 的 `browser_control` 正是这样被判死的；
+    /// 此前 project_doc_index / browser_read 也是同形，见 review P1-1）。
+    /// 任一侧漏改即在此报错，把「双面修一面」变成机械可查。
+    #[test]
+    fn read_only_tools_never_fall_into_the_edit_bucket() {
+        use orz_loop::tool::ToolDispatcher;
+
+        let samples: &[(&str, serde_json::Value)] = &[
+            ("read_file", serde_json::json!({"target_file": "a"})),
+            ("list_dir", serde_json::json!({"target_directory": "/tmp"})),
+            ("grep", serde_json::json!({"pattern": "x"})),
+            ("blackboard_read", serde_json::json!({"section": "plan"})),
+            ("blackboard_action_write", serde_json::json!({"order": "x"})),
+            ("plan_write", serde_json::json!({"plan": {}})),
+            (
+                "compaction_whitelist_add",
+                serde_json::json!({"content": "x"}),
+            ),
+            ("project_doc_index", serde_json::json!({"query": "x"})),
+            (
+                "browser_read",
+                serde_json::json!({"url": "https://example.com"}),
+            ),
+            (
+                "browser_control",
+                serde_json::json!({"action": "search", "query": "x"}),
+            ),
+            (
+                "browser_control",
+                serde_json::json!({"action": "navigate", "url": "https://example.com"}),
+            ),
+        ];
+        for (tool, args) in samples {
+            assert_eq!(
+                ToolDispatcher::risk_class(tool),
+                orz_loop::host::RiskClass::ReadOnly,
+                "sample {tool} is expected to be ReadOnly on the controller side"
+            );
+            assert!(
+                !matches!(access_kind(tool, args), AccessKind::Edit(_)),
+                "{tool} is ReadOnly on the controller side but maps to the Edit bucket here \
+                 (headless deployments would deny it deterministically)"
+            );
+        }
     }
 
     // ── P1 scope enforcement ─────────────────────────────────────────────
