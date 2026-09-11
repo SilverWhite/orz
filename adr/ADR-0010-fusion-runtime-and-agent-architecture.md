@@ -5125,3 +5125,26 @@ registry/manifest 随批）→ S3 覆盖面矩阵与法官正反两测 → S4 �
    零告警、`check_repository` `valid: true` / manifest 1441。
    入口：[`0X S2 复审处理`](../docs/audits/0X_S2_REVIEW_HANDLING_2026-09-11.md) /
    子模块 `dcf4a774`。**S3/S4 仍未放行。**
+
+8. **S3 双平台重建登记（2026-09-11，同日）**：①**版本 bump 0.4.0 → 0.4.1**
+   （orz `a6f902ef`，两文件两行）冻结本批源基线——0v S1–S2 与 0x S1–S2 均落地于
+   0.4.0 里程碑发版（`a467d0f9`）之后，不 bump 会让同一版本串指向两个不同制品；
+   口径同 0.3.1（`d21b883e`）/0.3.2（`7b00bbc9`）的过程验证版本。②Windows 宿主
+   release（增量 1m38s）与 Linux musl（`rust:1.97-slim` + ORZ-BUILD-MOUNT-001
+   官方源变体、冷缓存全量 41m04s）三件套重建完成，`BUILD_EXIT=0`；首轮 USTC
+   镜像变体因 `SSL unexpected eof` 在 apt 阶段失败（与 0.4.0 发布轮同症状，
+   属镜像侧网络、非仓库问题）。③产物锁定：Windows `orz.exe` 52,253,696 B /
+   `orz-signer.exe` 6,742,528 B / `orz-acaf-provision.exe` 6,642,176 B；Linux
+   `orz` 109,383,984 B / `orz-signer` 1,396,368 B / `orz-acaf-provision`
+   1,214,832 B；staging 与载体（`D:\tb-eval\orz-windows` / `orz-linux`）同步哈希
+   逐对吻合。④ELF 三件 `ET_DYN` + **PT_INTERP 计数 0**（musl static-pie）；
+   bookworm 与宿主双向加载冒烟全过（provision usage / signer manifest 缺失 /
+   `--version` 无 TTY，均 exit 1 预期形态）。⑤接线符号核证：`[INITIAL_ROUND_INQUIRY
+   v0.1]` 双平台各 1、`post_tool_batch_gap` 7/7、`template_sha256_initial_round`
+   1/1、`0.4.1` 463/466；家族名 `initial_round_inquiry` 不链接进 orz 主二进制
+   （与 0q 的 `failure_agg_coverage` 同形，非缺陷）。⑥**0v S3 随同批闭合**——0v
+   S1–S2 代码随本批一并进载体（`browser_control` 命中 21→75 / 25→59）。⑦manifest
+   重算 1441 条、差异面恰两行（`Cargo.lock` / `crates/orz-bin/Cargo.toml`）、门禁
+   `valid: true` / `error_count: 0`；0.4.0 发布资产未被触碰。证据：
+   [`0X S3 双平台重建记录`](../docs/audits/0X_S3_DUAL_PLATFORM_REBUILD_2026-09-11.md)。
+   **S4 实机复验待放行；未跑实机。**

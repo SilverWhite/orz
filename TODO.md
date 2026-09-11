@@ -17,7 +17,7 @@
 ## 开放项路由（2026-09-09 同步；勾选与计数权威在 BACKLOG）
 
 - 未闭合总数：**27 项**（BACKLOG 计数口径；逐次计数流水见 [`docs/BACKLOG_AND_PRIORITIES.md`](docs/BACKLOG_AND_PRIORITIES.md) 未闭合计数，TODO 不重复维护）。TODO `[ ]` 明细含父/子项，计数以 BACKLOG 为准。
-- P0：0b 验证③④（⑤ 89 题独立用户门）；0d 后续 3/4/5 S4 复验；0j W1-R1 S4 复验 + W3-R3 余项 + W4-R4 S5-2 总项；0l ⑥⑦（⑧ TER 见 [`TODO2.md`](TODO2.md)）；0m S3/S4；0n GAP-APPROVAL-PROMPTER（延期，S1 设计定稿前置）；0o T3 批次 W2 chunk3 + T4 批次 L + T5 批次 O + T6 统一收口；0t S4 实机复验待续；0u R4 15 题官方复跑（0t S4 载体，2026-09-10 放行）；0v 检索引擎 SERP + browser_control 分类修正（S1–S2 完成，S3–S4 待续）；0w TB 4.0 单题摩擦探针（第三跑成立并跑完（2026-09-11））；0x 初始轮中立问询（S1–S2 已实施（2026-09-11）、S3–S4 待续；ADR-0010 §14.66 / v1.67）。
+- P0：0b 验证③④（⑤ 89 题独立用户门）；0d 后续 3/4/5 S4 复验；0j W1-R1 S4 复验 + W3-R3 余项 + W4-R4 S5-2 总项；0l ⑥⑦（⑧ TER 见 [`TODO2.md`](TODO2.md)）；0m S3/S4；0n GAP-APPROVAL-PROMPTER（延期，S1 设计定稿前置）；0o T3 批次 W2 chunk3 + T4 批次 L + T5 批次 O + T6 统一收口；0t S4 实机复验待续；0u R4 15 题官方复跑（0t S4 载体，2026-09-10 放行）；0v 检索引擎 SERP + browser_control 分类修正（S1–S3 完成——S3 随 0x S3 同批重建进载体 2026-09-11，S4 待续）；0w TB 4.0 单题摩擦探针（第三跑成立并跑完（2026-09-11））；0x 初始轮中立问询（S1–S3 已实施（2026-09-11）、S4 待续；ADR-0010 §14.66 / v1.67）。
 - P1：FUS-COMPONENT-REGISTER 组件审计；GAP-WINDOWS-EVIDENCE 三项；IMPL-DEEPSEEK-TRANSPORT live 晋级证据；ORZ-SESSION-CONTEXT-MONITOR 四项。
 - P2：IMPL-CONTROL-FABRIC Slice 3/4；OPS-PROTOCOL 裁剪与接线裁决；P2-11 余项（PULL 自描述 S3/S4、retryable 分类位、依赖图 S3/S4）；P2-12 S4 复验；P2-13 B4；P2-14 S3/S4。
 - P3：EVIDENCE-LOCAL-BROWSER、GATE-CHAIN、observed-scope 枚举、V11-IMPL-003、V11-IMPL-007、orz-host flaky。
@@ -541,7 +541,7 @@ GLM F2 处置转排期（2026-09-06 用户裁决）：`orz-host/src/approval.rs`
 - [x] 余额受影响 4 题补跑（2026-09-10 完成，r4b 批次当日收尾）：4/4 真实试次，账面 64/89 → **65/89**（唯一翻案 path-tracing-reverse）；protein-assembly / train-fasttext / filter-js pass-2 为官方墙钟耗尽 0.0。入口：[R4 复跑审计 §2A](docs/audits/OFFICIAL_R4_UNSOLVED15_RERUN_2026-09-10.md)。
 - [ ] 收口余项：0t S4 判据 6 宿主机日常可用性另线；计数按 0t 小节闭合时入账。
 
-### P0-0v 检索引擎 SERP 接入与 `browser_control` 车道分类修正（2026-09-10 立项；**S1–S2 完成，S3–S4 待续**）
+### P0-0v 检索引擎 SERP 接入与 `browser_control` 车道分类修正（2026-09-10 立项；**S1–S3 完成（S3 随 0x S3 同批重建进载体），S4 待续**）
 
 > 裁决：navigate 被拒应满足模型需求 + 坐实 DeepSeek 后端慢（调查已闭合）+ 按既有 SERP 设计补实现（候选 Bing）；区域固定 `en-US`；Bing 无登录态污染专项优化；低质量域名加权复用既有 `SourceWeightConfig`（标注 + 稳定排序，不硬过滤，不承担恶意域识别）。
 > 设计：[`RETRIEVAL_ENGINE_SERP_SEARCH_ACTION_DESIGN_2026-09-10`](docs/RETRIEVAL_ENGINE_SERP_SEARCH_ACTION_DESIGN_2026-09-10.md)；BACKLOG 0v。
@@ -550,7 +550,7 @@ GLM F2 处置转排期（2026-09-06 用户裁决）：`orz-host/src/approval.rs`
 - [x] S2 测试（2026-09-10 完成）：纯函数单测（引擎表/失败备忘/可用引擎选择/pacing 上下限/解析与 CAPTCHA/URL 解码/加权稳定排序/字段上限/固定表达式 Bing 广告排除）+ 动作信封与参数校验 + 搜索上限失败态 + 车道门测试（`write_gate None`、ReadOnly、action_category=read）。S2 发现并修复首次 search 误等 5s 冷却基值的实际缺陷。
 - [x] 复审第 1 轮（2026-09-10，设计 §5.3）：P1-1 Bing 跳转解码（`a1<base64url>` + URL 校验 + 原始链接回落）、P2-1 `engine_attempts` 引擎标注（成功/失败/跳过都显式）、P2-2 取消整包 8KiB 截断改字段上限（url 2048 取代整包截断）、P2-3 反污染下沉（启动层 `--window-size` + 会话层尽力而为、白名单收窄）、P2-4 车道 SERP 预算方案 A。
 - [x] 复审第 2 轮（2026-09-10，设计 §5.4，P2-4 专项）：P1-1 拒绝信封字段补 schema 登记 + 2 个 fixture 进 `check_repository`；P2-1 会话上限改"检查点式（最坏 40+2）"措辞；P2-2 用量挂激活（`serp_navigations_used` 随 sidecar／continue／每条路径回写）；P2-3 会话检索底线额度（floor 16，宿主报事实、loop 施加策略）；P2-6 票据分支补预留回滚；P3-1/P3-2/P3-3 注释与边界登记。回归：loop lib 757/0/3、host lib 286/0/5、workspace check 无告警、run-event conformance 15 passed。
-- [ ] S3 双平台重建。
+- [x] S3 双平台重建（2026-09-11 完成，**随 0x S3 同批**）：0v S1–S2 代码随本批版本 bump（0.4.0 → 0.4.1）一并进载体；三件套重建 + 冒烟绿 + 符号核证（`browser_control` 21→75 / 25→59、`retrieval_enabled` 5/8、车道标注 2/2）见 [0X S3 重建记录](docs/audits/0X_S3_DUAL_PLATFORM_REBUILD_2026-09-11.md) §3。
 - [ ] S4 实机（可搭 0t S4 判据 6 宿主机日常可用性同场）。
 
 ### P0-0w TB 4.0 单题摩擦探针（2026-09-10 用户指示立项；**第三跑成立并完整跑完（2026-09-11）；开放项 = 审计 O1–O7**）
@@ -571,7 +571,7 @@ GLM F2 处置转排期（2026-09-06 用户裁决）：`orz-host/src/approval.rs`
 - [ ] O1 实施（待放行）：S1 常量+会话状态+触发接线 → S2 事件面/schema/fixtures/Python 镜像同步 → S3 双平台重建 → S4 实机复验。
 - 边界：非成绩批次——TB 4.0 榜单无任何 DeepSeek 型号，无同模型参照，不产出水平结论；本题不触碰检索车道，不验证 0t/0v。
 
-### P0-0x 初始轮中立问询（2026-09-11 用户裁决立项；**设计定稿、无待裁决项；S1–S2 已实施，S3–S4 待续**）
+### P0-0x 初始轮中立问询（2026-09-11 用户裁决立项；**设计定稿、无待裁决项；S1–S3 已实施，S4 待续**）
 
 > 来源：TB 4.0 探针审计 O1（agent 4h53m 优化了与验收口径不同的代理指标，方向性错误直到收尾才暴露；与「过度自制」同源）。
 > 设计权威：[`INITIAL_ORIENTATION_DECLARATION_DESIGN_2026-09-11`](docs/INITIAL_ORIENTATION_DECLARATION_DESIGN_2026-09-11.md)；ADR-0010 §14.66 / v1.67；BACKLOG 0x。
@@ -580,7 +580,8 @@ GLM F2 处置转排期（2026-09-06 用户裁决）：`orz-host/src/approval.rs`
 - [x] S1 实施（2026-09-11 完成）：`INITIAL_ROUND_INQUIRY_BLOCK` 常量 + 注入块前缀登记（`is_injected_block_text`）+ 会话一次性触发状态（`initial_round_fired`，`#[serde(default)]` 兼容旧侧车）+ 控制器分派（`maybe_fire_orientation` 统一出口；触发判定落点相对设计的更正已登记）+ 测试矩阵最小集（一次性/顺延/不互扰/软门不禁工具/纯文本消费/审查报告与反例门不变且不含三问）；受影响既有测试同步（orz-loop 2 例、orz-host 8 例）。入口：[S1 实施记录](docs/audits/0X_S1_INITIAL_ROUND_INQUIRY_IMPL_2026-09-11.md)。（同刀顺带修复：`orz-bin` 测试目标 0v S2 遗留编译缺口 + 三条守卫测试的 ACAF 环境隔离。）
 - [x] S2 实施（2026-09-11 完成）：①payload 正例 `orientation-checkpoint.initial-round.valid`（负例沿用 `constraint.invalid`；生成器条目 + `check_repository` 登记齐全）；②第 **34** 族法官 `initial_round_inquiry`（Rust 执法 + Python 冻结镜像，跨执法面逐格零差；5 个合成场景 = 1 正 4 负）；③`orientation-fire-run.jsonl` 期刊重捕（两条 fire：initial_round + completed_turns_interval）与两侧期望序列/断言同步；④**签名侧第二模板摘要**——signer 持两块内置模板 + `template_sha256_initial_round`，`sign_orientation_v1` 用可选 `trigger` 选模板、`check 2` 用同一 trigger 比对（kind + 摘要匹配）；⑤门禁 `valid: true`。入口：[S2 实施记录](docs/audits/0X_S2_EVENT_FACE_AND_SIGNER_2026-09-11.md)。（同刀修复：`family_stage_tamper_detected_end_to_end` 预存在失败改锁新族端到端；生成器补登 0v 两条会被重跑静默删除的 fixture 条目；capture 的 ACAF 环境说明。）
 - [x] S1/S2 全面复审处理（2026-09-11 完成，三面复审结论：整体成立、符合度高）：2 处文档一致性更正（`TODO.md` 路由行状态；设计 §5-6 / ADR §14.66 第 4 项⑥「Python 镜像」指针改为 `run_event_journal_validation.py`，v0.1 `orientation_runtime_guard.py` 保持冻结）+ 2 处测试补强（设计 §5-7「中断后恢复重触发」端到端钉子 `initial_round_refires_next_run_when_the_fire_was_not_consumed`；签名侧跨 trigger 负例 `template_mismatch`）；**无代码语义改动**。入口：[S2 复审处理](docs/audits/0X_S2_REVIEW_HANDLING_2026-09-11.md)（子模块 `dcf4a774`）。
-- [ ] S3 双平台重建（进载体）→ S4 实机复验（验证「开局一次、动作中不复发」）。
+- [x] S3 双平台重建（2026-09-11 完成）：**版本 bump 0.4.0 → 0.4.1**（orz `a6f902ef`）冻结本批源基线 → Windows 宿主 release（1m38s）+ Linux musl（rust:1.97-slim 官方源变体，冷缓存全量 41m04s）三件套；`SHA256SUMS` 两份 + staging→载体同步哈希逐对吻合；ELF 三件 PT_INTERP=0（musl static-pie）；双向加载冒烟全过；接线符号命中（`[INITIAL_ROUND_INQUIRY v0.1]` 各 1、`post_tool_batch_gap` 7/7、`template_sha256_initial_round` 1/1）；manifest 重算 1441 条 + 门禁 `valid: true`。入口：[S3 重建记录](docs/audits/0X_S3_DUAL_PLATFORM_REBUILD_2026-09-11.md)。
+- [ ] S4 实机复验（验证「开局一次、动作中不复发」；可与 0w 后续长任务或其他长会话同场）。
 
 
 ### P0-B FUS-RETRIEVAL-MECH（`implemented`；批次 1-6 全部闭合 2026-08-14，保留供核对）

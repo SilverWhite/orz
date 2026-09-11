@@ -6,7 +6,8 @@
 > 设计基线：[`RETRIEVAL_AND_SUBAGENT_COMMUNICATION_BORROW_RESEARCH_2026-08-30`](RETRIEVAL_AND_SUBAGENT_COMMUNICATION_BORROW_RESEARCH_2026-08-30.md)
 > §8.1/§8.3（引擎链裁决 + 机械防护清单）、索引 `FUS-RETRIEVAL-ENGINE-SERP`
 > （current-design；0t 后模式语义退役、引擎链与 pacing 保留）、ADR-0010
-> §14.65（0t 双车道）。状态：**S1–S2 完成（2026-09-10），S3–S4 待续**；
+> §14.65（0t 双车道）。状态：**S1–S3 完成（S3 随 0x S3 同批重建进载体，
+> 2026-09-11），S4 待续**（[0X S3 重建记录](audits/0X_S3_DUAL_PLATFORM_REBUILD_2026-09-11.md)）；
 > 2026-09-10 两轮全面复审后的修复均已落地（首轮 P1-1/P2-1/P2-2/P2-3 +
 > P2-4 方案 A，见 §5.3；P2-4 专项轮的 P1-1/P2-1/P2-2/P2-3/P2-6/P3，见
 > §5.4）；引擎自选与去备忘为**设计留存、未实施**（§6）。
