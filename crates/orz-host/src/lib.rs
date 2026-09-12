@@ -70,19 +70,46 @@ fn in_flight_contains(in_flight: &[std::path::PathBuf], path: &Path) -> bool {
     })
 }
 
-/// The in-flight registration guard: removes this call's targets on drop.
-pub struct InFlightGuard<'a> {
-    host: &'a OrzHost,
+/// One in-flight call's kill handle (0z S2R F-BE-3(a)).
+#[derive(Clone, Debug)]
+struct LiveCallJob {
     token: u64,
+    call_id: String,
+    /// Duplicated call-job handle (0 = none / platform without job handles).
+    job_handle: isize,
+    action_class: String,
 }
 
-impl Drop for InFlightGuard<'_> {
+/// The dispatch registration guard: removes this call's in-flight write
+/// targets AND its live call-job entries (closing the duplicated handles) on
+/// drop. `closed` lets a late spawn observation (racy cross-thread attach)
+/// unregister itself immediately instead of leaking a kill handle.
+pub struct DispatchGuard<'a> {
+    host: &'a OrzHost,
+    token: u64,
+    closed: std::sync::Arc<std::sync::atomic::AtomicBool>,
+}
+
+impl Drop for DispatchGuard<'_> {
     fn drop(&mut self) {
+        self.closed
+            .store(true, std::sync::atomic::Ordering::Relaxed);
         self.host
             .in_flight_targets
             .lock()
             .unwrap()
             .retain(|(token, _)| *token != self.token);
+        let jobs: Vec<LiveCallJob> = {
+            let mut guard = self.host.live_call_jobs.lock().unwrap();
+            std::mem::take(&mut *guard)
+        };
+        let (mine, rest): (Vec<_>, Vec<_>) = jobs
+            .into_iter()
+            .partition(|entry| entry.token == self.token);
+        for entry in mine {
+            OrzHost::close_job_handle(entry.job_handle);
+        }
+        *self.host.live_call_jobs.lock().unwrap() = rest;
     }
 }
 pub mod retention;
@@ -215,6 +242,11 @@ pub struct OrzHost {
     /// （§4.7.1 第 14 条）。
     in_flight_targets: std::sync::Mutex<Vec<(u64, Vec<std::path::PathBuf>)>>,
     in_flight_token: std::sync::atomic::AtomicU64,
+    /// 0z S2R F-BE-3(a)（2026-09-13 用户裁决）：在跑调用的 call job
+    /// 句柄登记——hard 档树杀只 TerminateJobObject **重档**调用的
+    /// call job（内核树杀粒度 = 单调用树），轻活/后台任务不在爆半径内。
+    /// 条目随派发结束由 DispatchGuard 摘除并关闭复制句柄。
+    live_call_jobs: std::sync::Arc<std::sync::Mutex<Vec<LiveCallJob>>>,
     /// 上一次读到的档位（u8 编码，见 `tier_rank`）——跨档才落
     /// `host_resource_snapshot`（§4.5 低频，跨档才落；review F-EV-7）。
     last_resource_tier: std::sync::atomic::AtomicU8,
@@ -338,6 +370,7 @@ impl OrzHost {
             resource_facts: std::sync::Mutex::new(Vec::new()),
             in_flight_targets: std::sync::Mutex::new(Vec::new()),
             in_flight_token: std::sync::atomic::AtomicU64::new(0),
+            live_call_jobs: std::sync::Arc::new(std::sync::Mutex::new(Vec::new())),
             last_resource_tier: std::sync::atomic::AtomicU8::new(0),
         })
     }
@@ -453,7 +486,7 @@ impl OrzHost {
     /// F-BE-2); the returned guard removes them. Overlapping registrations
     /// are fine — protection is a union, and stale entries only ever
     /// *reduce* reclaim scope, never widen it.
-    fn register_in_flight(&self, targets: Vec<std::path::PathBuf>) -> InFlightGuard<'_> {
+    fn register_dispatch(&self, targets: Vec<std::path::PathBuf>) -> DispatchGuard<'_> {
         let token = self
             .in_flight_token
             .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
@@ -461,7 +494,72 @@ impl OrzHost {
             .lock()
             .unwrap()
             .push((token, targets));
-        InFlightGuard { host: self, token }
+        DispatchGuard {
+            host: self,
+            token,
+            closed: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
+        }
+    }
+
+    /// The spawn sink's live-job registration hook (called per child attach;
+    /// review F-BE-3(a)). Late arrivals after the dispatch closed are closed
+    /// out immediately — no stale kill handles.
+    fn register_live_call_job(&self, closed: &std::sync::atomic::AtomicBool, entry: LiveCallJob) {
+        if closed.load(std::sync::atomic::Ordering::Relaxed) {
+            Self::close_job_handle(entry.job_handle);
+            return;
+        }
+        self.live_call_jobs.lock().unwrap().push(entry);
+    }
+
+    /// 0z S2R F-BE-3(a) (user ruling 2026-09-13, design §4.8 表 1 ③
+    /// option (a)): the hard tier terminates ONLY the in-flight **heavy**
+    /// calls' call jobs — whole-tree kernel granularity per call, without
+    /// the run job's blast radius (light calls and backgrounded tasks keep
+    /// running). Returns the killed call ids (dedup) for the
+    /// `resource_exhausted` facts.
+    fn terminate_heavy_call_jobs(&self) -> Vec<String> {
+        let jobs: Vec<LiveCallJob> = {
+            let mut guard = self.live_call_jobs.lock().unwrap();
+            std::mem::take(&mut *guard)
+        };
+        let mut killed: Vec<String> = Vec::new();
+        let mut survivors: Vec<LiveCallJob> = Vec::new();
+        for entry in jobs {
+            if entry.action_class != "heavy" {
+                survivors.push(entry);
+                continue;
+            }
+            match xai_tty_utils::terminate_job_handle(entry.job_handle) {
+                Ok(()) => {
+                    if !killed.contains(&entry.call_id) {
+                        killed.push(entry.call_id.clone());
+                    }
+                }
+                Err(e) => {
+                    tracing::warn!(
+                        call_id = %entry.call_id,
+                        "hard tier: per-call job terminate failed: {e}"
+                    );
+                }
+            }
+            Self::close_job_handle(entry.job_handle);
+        }
+        *self.live_call_jobs.lock().unwrap() = survivors;
+        killed
+    }
+
+    fn close_job_handle(handle: isize) {
+        #[cfg(windows)]
+        if handle != 0 {
+            unsafe {
+                let _ = windows::Win32::Foundation::CloseHandle(
+                    windows::Win32::Foundation::HANDLE(handle as _),
+                );
+            }
+        }
+        #[cfg(not(windows))]
+        let _ = handle;
     }
 
     fn in_flight_snapshot(&self) -> Vec<std::path::PathBuf> {
@@ -1155,6 +1253,11 @@ impl OrzHost {
         // block — the spawn sink (below) carries both into the registry rows.
         let class = crate::resource_gate::classify_action(name, &args);
         let targets = crate::resource_gate::write_targets(name, &args, &self.cwd);
+        // 0z S2R F-BE-3(a)：派发登记（在跑写入面 + live call job 上下文）
+        // 先于门块创建——spawn sink 闭包（下方）据 token/closed 挂钩。
+        let dispatch_guard = self.register_dispatch(targets.clone());
+        let dispatch_token = dispatch_guard.token;
+        let dispatch_closed = dispatch_guard.closed.clone();
         if let Some(gate) = &self.resource_gate {
             // 0z S2 review F-BE-12（2026-09-13）：门只判一次——原实现
             // evaluate_for_volumes 调两次（回收用第一次的档位、拒绝用第二次的
@@ -1239,49 +1342,48 @@ impl OrzHost {
                     // 将杀的 call_id 集 = 本 run 登记表内的在跑记录（§4.8
                     // 表 1「含将杀的 call_id 集」）；登记缺席时以当前被拒
                     // 调用兜底，保证 call_ids 非空（schema minItems:1）。
-                    let in_flight_calls: Vec<String> = self
-                        .process_trees
-                        .as_ref()
-                        .map(|registry| {
-                            registry
-                                .load_all()
-                                .into_iter()
-                                .filter(|record| record.run_id == self.own_run_id())
-                                .map(|record| record.call_id)
-                                .collect()
-                        })
-                        .unwrap_or_default();
-                    let call_ids: Vec<String> = if in_flight_calls.is_empty() {
+                    // 0z S2R F-BE-3(a) (user ruling 2026-09-13): the hard
+                    // tier kills ONLY the in-flight heavy calls' call jobs
+                    // (per-call whole-tree kernel granularity) — the run
+                    // job stays intact, so light calls and backgrounded
+                    // tasks are NOT in the blast radius (§4.8 表 1 ③).
+                    // planned = the heavy set about to be killed.
+                    let heavy_calls: Vec<String> = {
+                        let jobs = self.live_call_jobs.lock().unwrap();
+                        jobs.iter()
+                            .filter(|e| e.action_class == "heavy")
+                            .map(|e| e.call_id.clone())
+                            .collect()
+                    };
+                    let planned_ids: Vec<String> = if heavy_calls.is_empty() {
                         vec![call_id.to_string()]
                     } else {
-                        in_flight_calls
+                        heavy_calls
                     };
                     self.resource_facts.lock().unwrap().push(serde_json::json!({
                         "event": "resource_exhausted",
                         "phase": "planned",
                         "tier": "hard",
-                        "call_ids": call_ids,
+                        "call_ids": planned_ids,
                         "readings": readings,
                     }));
-                    if let Some(job) = xai_tty_utils::global_run_job() {
-                        match job.kill() {
-                            Ok(()) => {
-                                self.resource_facts.lock().unwrap().push(serde_json::json!({
-                                    "event": "resource_exhausted",
-                                    "phase": "executed",
-                                    "tier": "hard",
-                                    "call_ids": call_ids,
-                                    "readings": readings,
-                                }));
-                                tracing::warn!(
-                                    "hard tier: run job tree terminated (design §4.8 item 1)"
-                                );
-                            }
-                            Err(e) => {
-                                tracing::warn!("hard tier: run job kill failed: {e}");
-                            }
-                        }
-                    }
+                    let killed_ids = self.terminate_heavy_call_jobs();
+                    let executed_ids: Vec<String> = if killed_ids.is_empty() {
+                        vec![call_id.to_string()]
+                    } else {
+                        killed_ids
+                    };
+                    self.resource_facts.lock().unwrap().push(serde_json::json!({
+                        "event": "resource_exhausted",
+                        "phase": "executed",
+                        "tier": "hard",
+                        "call_ids": executed_ids,
+                        "readings": readings,
+                    }));
+                    tracing::warn!(
+                        killed = executed_ids.len(),
+                        "hard tier: heavy call jobs terminated (design §4.8 item 1, per-call face)"
+                    );
                     // 先杀后回收（review F-BE-2 次序修正）。
                     self.run_reclaim_pass("hard", true);
                 }
@@ -1326,6 +1428,7 @@ impl OrzHost {
             // sweep's scope guard keys on it.
             let run_id = self.own_run_id();
             let action_class = class.as_str().to_string();
+            let live_call_jobs = self.live_call_jobs.clone();
             xai_tty_utils::set_spawn_sink(std::sync::Arc::new(
                 move |observation: xai_tty_utils::SpawnObservation| {
                     let record = crate::process_tree::ProcessTreeRecord {
@@ -1340,6 +1443,21 @@ impl OrzHost {
                     };
                     if let Err(e) = crate::process_tree::write_record(&dir, &record) {
                         tracing::debug!("process tree registration failed: {e}");
+                    }
+                    // 0z S2R F-BE-3(a): the dispatch's live-call entry — the
+                    // hard tier's per-call kill face. `job_handle_dup == 0`
+                    // (dup failed / no job platform) still registers so the
+                    // call id shows up in the heavy set; the terminate step
+                    // warns and skips a 0 handle.
+                    if !dispatch_closed.load(std::sync::atomic::Ordering::Relaxed) {
+                        live_call_jobs.lock().unwrap().push(LiveCallJob {
+                            token: dispatch_token,
+                            call_id: call_id.clone(),
+                            job_handle: observation.job_handle_dup,
+                            action_class: action_class.clone(),
+                        });
+                    } else {
+                        OrzHost::close_job_handle(observation.job_handle_dup);
                     }
                 },
             ))

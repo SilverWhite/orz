@@ -3978,7 +3978,9 @@ impl<'a> EventWriter<'a> {
 
     /// FUS-HOST-RESOURCE-SAFETY §4.3 (0z S2): true once the journal refused an
     /// append from degraded (skeleton-only) mode — the run's terminal becomes
-    /// `run_terminated { reason: journal_degraded }`.
+    /// `run_terminated { reason: journal_degraded }`. Observation face for
+    /// tests and the S4 session-row readout; lib builds see no caller yet.
+    #[allow(dead_code)]
     pub(crate) fn journal_degraded(&self) -> bool {
         self.journal_degraded
     }

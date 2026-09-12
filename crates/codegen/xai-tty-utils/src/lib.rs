@@ -47,9 +47,9 @@ pub mod runtime;
 mod resource_job;
 pub use resource_job::{
     JobLimits, JobReadback, RunResourceJob, SpawnObservation, SpawnSinkGuard, attach_failure_count,
-    global_run_job, image_fingerprint_from_handle, image_fingerprint_from_pid,
-    install_global_run_job, record_attach_failure, replace_global_run_job_for_tests,
-    set_spawn_sink,
+    duplicate_job_handle, global_run_job, image_fingerprint_from_handle,
+    image_fingerprint_from_pid, install_global_run_job, record_attach_failure,
+    replace_global_run_job_for_tests, set_spawn_sink, terminate_job_handle,
 };
 
 // ---------------------------------------------------------------------------
@@ -423,6 +423,14 @@ impl ProcessGroup {
         }
     }
 
+    /// Duplicate this call's job handle for an external owner (0z S2R
+    /// per-call kill face; see [`crate::resource_job::SpawnObservation`]).
+    /// The caller owns the duplicate and must close it.
+    #[cfg(windows)]
+    pub fn duplicate_call_job_handle(&self) -> io::Result<isize> {
+        crate::resource_job::duplicate_job_handle(self.job)
+    }
+
     /// Read back the ceilings **actually in force** for this call's tree: the
     /// explicit per-call limits when there are any, otherwise the run-level
     /// ceilings (FUS-HOST-RESOURCE-SAFETY §4.7 — the mechanical "is it really
@@ -528,10 +536,15 @@ impl ProcessGroup {
                 .map(|d| d.as_millis() as u64)
                 .unwrap_or(0);
             let _ = unsafe { CloseHandle(process_handle) };
+            // 0z S2R (user ruling 2026-09-13, design §4.8 表 1 ③ option a):
+            // hand the host a duplicated call-job handle so the hard tier can
+            // terminate exactly the heavy calls' trees.
+            let job_handle_dup = crate::resource_job::duplicate_job_handle(self.job).unwrap_or(0);
             crate::resource_job::register_spawn(crate::resource_job::SpawnObservation {
                 pid,
                 image_sha256,
                 started_at,
+                job_handle_dup,
             });
 
             assign_result.map_err(|e| {

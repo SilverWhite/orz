@@ -312,6 +312,16 @@ pub struct SpawnObservation {
     pub image_sha256: Option<String>,
     /// Unix milliseconds.
     pub started_at: u64,
+    /// FUS-HOST-RESOURCE-SAFETY §4.8 表 1 ③ (0z S2R, user ruling 2026-09-13:
+    /// hard-tier tree kill = per-call-job face, option (a)): a **duplicated**
+    /// handle to this call's job, owned by the receiver. The host keeps it
+    /// for the dispatch's lifetime so the hard tier can `TerminateJobObject`
+    /// exactly the heavy calls' trees — whole-tree granularity of a call job
+    /// without the run job's blast radius. `0` when duplication failed (the
+    /// kill face then skips this call). Closing the duplicate is the
+    /// receiver's duty.
+    #[cfg(windows)]
+    pub job_handle_dup: isize,
 }
 
 type SinkFn = dyn Fn(SpawnObservation) + Send + Sync;
@@ -356,6 +366,78 @@ pub fn register_spawn(observation: SpawnObservation) {
     if let Some(sink) = sink {
         sink(observation);
     }
+}
+
+/// Is `pid` alive right now (kill-face test probe; existence only).
+#[cfg(windows)]
+pub fn process_alive(pid: u32) -> bool {
+    use windows::Win32::Foundation::CloseHandle;
+    use windows::Win32::System::Threading::{OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION};
+
+    unsafe {
+        match OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid) {
+            Ok(handle) => {
+                let _ = CloseHandle(handle);
+                true
+            }
+            Err(_) => false,
+        }
+    }
+}
+
+/// Non-Windows existence probe: `kill(pid, 0)`.
+#[cfg(not(windows))]
+pub fn process_alive(pid: u32) -> bool {
+    let rc = unsafe { libc::kill(pid as libc::pid_t, 0) };
+    rc == 0
+}
+
+/// Duplicate the call-job handle for the host's live-call registry (see
+/// [`SpawnObservation::job_handle_dup`]).
+#[cfg(windows)]
+pub fn duplicate_job_handle(job: windows::Win32::Foundation::HANDLE) -> io::Result<isize> {
+    use windows::Win32::Foundation::{DUPLICATE_SAME_ACCESS, DuplicateHandle};
+    use windows::Win32::System::Threading::GetCurrentProcess;
+
+    let mut dup = Default::default();
+    unsafe {
+        DuplicateHandle(
+            GetCurrentProcess(),
+            job,
+            GetCurrentProcess(),
+            &mut dup,
+            0,
+            false,
+            DUPLICATE_SAME_ACCESS,
+        )
+    }
+    .map_err(|e| io::Error::other(format!("DuplicateHandle(call job): {e}")))?;
+    Ok(dup.0 as isize)
+}
+
+/// Terminate every process in the job behind a duplicated call-job handle
+/// (the hard tier's per-call kill face; design §4.8 表 1 ③ as ruled —
+/// option (a), 2026-09-13). `handle == 0` is the "no handle" sentinel.
+#[cfg(windows)]
+pub fn terminate_job_handle(handle: isize) -> io::Result<()> {
+    use windows::Win32::System::JobObjects::TerminateJobObject;
+
+    if handle == 0 {
+        return Err(io::Error::other(
+            "terminate_job_handle: no duplicated handle",
+        ));
+    }
+    unsafe { TerminateJobObject(windows::Win32::Foundation::HANDLE(handle as _), 1) }
+        .map_err(|e| io::Error::other(format!("TerminateJobObject(call): {e}")))
+}
+
+/// Non-Windows: no call-job kill face (the process-group kill stays the
+/// executor's own responsibility).
+#[cfg(not(windows))]
+pub fn terminate_job_handle(_handle: isize) -> io::Result<()> {
+    Err(io::Error::other(
+        "terminate_job_handle: not kernel-enforced on this platform",
+    ))
 }
 
 /// The normalized image fingerprint for a still-open process handle:
@@ -838,6 +920,59 @@ mod tests {
         let mut text = String::from_utf8_lossy(&out.stdout).into_owned();
         text.push_str(&String::from_utf8_lossy(&out.stderr));
         text
+    }
+
+    /// 0z S2R F-BE-3(a)（2026-09-13 用户裁决，per-call 杀面）：复制调用级
+    /// job 句柄 → TerminateJobObject(dup) → **该调用**的子进程树整树死亡，
+    /// 而 job 外的无辜子进程存活——爆半径 = 单调用树的内核级证明。
+    #[cfg(windows)]
+    #[test]
+    fn per_call_job_terminate_kills_its_tree_and_spares_outsiders() {
+        let _guard = topology_lock();
+        let mut child = std::process::Command::new("cmd")
+            .args(["/c", "ping -n 30 127.0.0.1 > NUL"])
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .expect("spawn the in-call probe child");
+        let mut outsider = std::process::Command::new("cmd")
+            .args(["/c", "ping -n 30 127.0.0.1 > NUL"])
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .expect("spawn the outside probe child");
+
+        let mut group = crate::ProcessGroup::new().expect("per-call job");
+        group.attach_std(&child).expect("attach the in-call child");
+
+        // 派发面拿到复制句柄（SpawnObservation 的同一路径）。
+        let dup = group
+            .duplicate_call_job_handle()
+            .expect("duplicate call job");
+        assert!(dup != 0, "the duplicated handle must be non-sentinel");
+
+        crate::resource_job::terminate_job_handle(dup).expect("terminate the call job");
+
+        // in-call 子进程死亡（整树粒度由内核保证）。注意：Windows 上被
+        // 终止但未 reap 的进程对象仍可 OpenProcess 成功——对持有的 Child
+        // 用 try_wait 判定退出（我们持有句柄，语义精确）。
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        let mut in_call_dead = false;
+        while std::time::Instant::now() < deadline {
+            if matches!(child.try_wait(), Ok(Some(_))) {
+                in_call_dead = true;
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(100));
+        }
+        assert!(in_call_dead, "the in-call child must die with its call job");
+        // job 外子进程存活（爆半径不越界），随后清理。
+        assert!(
+            matches!(outsider.try_wait(), Ok(None)),
+            "the outsider must NOT be in the call job's blast radius"
+        );
+        let _ = outsider.kill();
+        let _ = outsider.wait();
     }
 
     /// 复核 F-9：attach 失败必须有**机械可见面**（单调计数），不能只留一行日志
