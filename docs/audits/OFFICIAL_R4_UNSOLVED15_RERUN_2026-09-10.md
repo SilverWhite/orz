@@ -79,6 +79,21 @@
 - filter-js pass-1 verifier 无 reward（R3 FP-7 verifier 脆弱同族形态），
   结果以 pass-2 为准；执行器硬化判据（journal 真实 run >10 事件）本轮
   生效（余额秒死 stub 均被正确判 FAIL——本轮无 stub 复发，判据为防御性）。
+- **模型代际补注（2026-09-12，用户提问触发）**：DeepSeek 已于北京时间
+  2026-09-10 正午（公告 + 新定价 12:00 生效）将 V4 Flash 下线，模型名
+  `deepseek-v4-flash` 暂时路由到 V4.1 Flash。按 journal 事件线判定：本批
+  晨间（00:58–06:56）整批——含唯一通过 model-extraction-relu-logits
+  （05:38–05:46）——仍为**真 V4 Flash**；r4b 补跑批（12:31–16:19）整批
+  为 **V4.1 Flash（兼容路由）**，即 path-tracing-reverse 是账面中唯一的
+  V4.1 通过题，其「翻案载体是模型路径选择」的归因另需叠加模型代际混杂
+  变量。判定与边界详见
+  [`OFFICIAL_LEDGER_MODEL_GENERATION_ANNOTATION_2026-09-12`](OFFICIAL_LEDGER_MODEL_GENERATION_ANNOTATION_2026-09-12.md)。
+  同日口径对账：本审计「官方账面 63/64/65」为窄口径（R1+R3/R4/r4b），
+  未含 R2 波次复验通过题（08-31 用户裁决登记 9 题；盘面 R2 族 distinct
+  13），与 R3 选样「继承成绩口径」（11 题）存在分歧——代际结论不受影响
+  （R2 波次全部在切换前，V4.1 通过题仍仅 path-tracing-reverse 一题）；
+  口径冲突经用户裁决**保留、不并轨**（2026-09-12：目前成绩并不可靠），
+  详见代际补注 §3。
 
 ## 3. 余额事件（影响边界）
 
