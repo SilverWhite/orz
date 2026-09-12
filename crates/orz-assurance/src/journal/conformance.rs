@@ -50,6 +50,32 @@ pub struct ConformanceReport {
     pub journal_path: String,
     pub event_count: u64,
     pub errors: Vec<String>,
+    /// FUS-HOST-RESOURCE-SAFETY §4.3 item 6 (2026-09-12, 0z S2): the journal
+    /// replayed through a **degraded** (chain-skeleton-only) episode — the
+    /// on-disk `degraded` summary markers / `run_terminated
+    /// { reason: journal_degraded }` terminal prove it. A status class, never
+    /// mixed with validity: a degraded-complete journal is chain-valid
+    /// (`valid: true`) while its event set is knowingly incomplete; an
+    /// `invalid` journal is invalid regardless of markers. Historical
+    /// journals carry no marker and keep their classification untouched
+    /// (判据 7).
+    pub degraded_complete: bool,
+}
+
+/// The degraded-journal evidence scan (see [`ConformanceReport::degraded_complete`]).
+fn is_degraded_journal(events: &[Value]) -> bool {
+    events.iter().any(|event| {
+        let payload = event.get("payload");
+        let degraded_marker = payload
+            .map(|p| p.get("degraded").is_some_and(Value::is_object))
+            .unwrap_or(false);
+        let degraded_terminal = event.get("event_type").and_then(Value::as_str)
+            == Some("run_terminated")
+            && payload
+                .map(|p| p.get("reason").and_then(Value::as_str) == Some("journal_degraded"))
+                .unwrap_or(false);
+        degraded_marker || degraded_terminal
+    })
 }
 
 /// Registry entry — one `event_type` on one track.
@@ -138,11 +164,15 @@ fn push_digest_mismatch(
 /// constancy, previous-event links, payload/event digest recompute and
 /// exactly-one-terminal-at-the-end.
 fn verify_chain_raw(events: &[Value], errors: &mut Vec<String>) {
-    const TERMINAL_TYPES: [&str; 4] = [
+    // FUS-HOST-RESOURCE-SAFETY §4.3 (2026-09-12, 0z S2): `run_terminated`
+    // joins the terminal set — the explicit terminal shape for
+    // resource-exhausted and journal-degraded endings.
+    const TERMINAL_TYPES: [&str; 5] = [
         "run_finished",
         "run_failed",
         "run_cancelled",
         "run_invalidated",
+        "run_terminated",
     ];
     let terminals: Vec<usize> = events
         .iter()
@@ -314,6 +344,7 @@ pub fn validate_journal_file(journal_path: &Path, repo_root: &Path) -> Conforman
                 journal_path: journal_path.display().to_string(),
                 event_count: 0,
                 errors,
+                degraded_complete: false,
             };
         }
     };
@@ -338,6 +369,7 @@ pub fn validate_journal_file(journal_path: &Path, repo_root: &Path) -> Conforman
             journal_path: journal_path.display().to_string(),
             event_count: 0,
             errors,
+            degraded_complete: false,
         };
     }
     if events.is_empty() {
@@ -347,6 +379,7 @@ pub fn validate_journal_file(journal_path: &Path, repo_root: &Path) -> Conforman
             journal_path: journal_path.display().to_string(),
             event_count: 0,
             errors,
+            degraded_complete: false,
         };
     }
     let event_count = events.len() as u64;
@@ -361,6 +394,7 @@ pub fn validate_journal_file(journal_path: &Path, repo_root: &Path) -> Conforman
                 journal_path: journal_path.display().to_string(),
                 event_count,
                 errors,
+                degraded_complete: false,
             };
         }
     };
@@ -373,6 +407,7 @@ pub fn validate_journal_file(journal_path: &Path, repo_root: &Path) -> Conforman
                 journal_path: journal_path.display().to_string(),
                 event_count,
                 errors,
+                degraded_complete: false,
             };
         }
     };
@@ -385,6 +420,7 @@ pub fn validate_journal_file(journal_path: &Path, repo_root: &Path) -> Conforman
                 journal_path: journal_path.display().to_string(),
                 event_count,
                 errors,
+                degraded_complete: false,
             };
         }
     };
@@ -421,6 +457,7 @@ pub fn validate_journal_file(journal_path: &Path, repo_root: &Path) -> Conforman
             journal_path: journal_path.display().to_string(),
             event_count,
             errors,
+            degraded_complete: false,
         };
     }
 
@@ -434,6 +471,7 @@ pub fn validate_journal_file(journal_path: &Path, repo_root: &Path) -> Conforman
                 journal_path: journal_path.display().to_string(),
                 event_count,
                 errors,
+                degraded_complete: false,
             };
         }
     };
@@ -511,11 +549,13 @@ pub fn validate_journal_file(journal_path: &Path, repo_root: &Path) -> Conforman
         errors.extend(super::families::verify_all_families(&events));
     }
 
+    let degraded_complete = is_degraded_journal(&events);
     ConformanceReport {
         valid: errors.is_empty(),
         journal_path: journal_path.display().to_string(),
         event_count,
         errors,
+        degraded_complete,
     }
 }
 
@@ -546,6 +586,92 @@ fn track_of(event: &Value) -> Result<EventTrack, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// 0z S2 §4.3 item 6 / 判据 7（2026-09-12）：降级卷判 `degraded_complete`
+    /// ——链骨架完整 + 盘上降级证据；不得与 `invalid` 混判；历史卷（无标记）
+    /// 分类不变（`degraded_complete: false`）。
+    #[test]
+    fn degraded_marker_classifies_degraded_complete_without_mixing_invalid() {
+        fn repo_root() -> std::path::PathBuf {
+            let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../..");
+            assert!(root.join("runtime").is_dir());
+            root
+        }
+
+        let dir = tempfile::tempdir().unwrap();
+        let run_id = "RUN-DEGRADED-CONF";
+        let manifest = "0".repeat(64);
+        // 一条降级形态的 v0.2 卷：降级期间写入者只落骨架事件——终端行
+        // run_terminated(journal_degraded) 携带 degraded 摘要；链用
+        // seal_event 真实封印（与 recorder 的盘上形态同构）。
+        use crate::journal::chain::seal_event;
+        use crate::journal::event::Redaction;
+        let mut e0 = crate::journal::event::RunEvent::new_v02(
+            run_id.into(),
+            0,
+            crate::journal::event::EventType::RunStarted,
+            manifest.clone(),
+            None,
+            "run-event-v0.2.schema.json".into(),
+            serde_json::json!({"prompt": "p"}),
+            Redaction::None,
+            "2026-09-12T00:00:00Z".into(),
+        );
+        seal_event(&mut e0).unwrap();
+        let h0 = e0.event_sha256.clone();
+        let mut e1 = crate::journal::event::RunEvent::new_v02(
+            run_id.into(),
+            1,
+            crate::journal::event::EventType::RunTerminated,
+            manifest,
+            Some(h0),
+            "run-event-v0.2.schema.json".into(),
+            serde_json::json!({
+                "reason": "journal_degraded",
+                "detail": "original terminal run_finished: status=completed",
+                "degraded": {
+                    "entered_at": "2026-09-12T00:00:00Z",
+                    "dropped_events": 7,
+                    "first_dropped_sequence": 0,
+                    "cause": "storage full",
+                },
+            }),
+            Redaction::None,
+            "2026-09-12T00:00:01Z".into(),
+        );
+        seal_event(&mut e1).unwrap();
+        let text = format!(
+            "{}
+{}
+",
+            serde_json::to_string(&e0).unwrap(),
+            serde_json::to_string(&e1).unwrap()
+        );
+        let journal = dir.path().join("events.jsonl");
+        std::fs::write(&journal, &text).unwrap();
+
+        let report = validate_journal_file(&journal, &repo_root());
+        assert!(
+            report.valid,
+            "a degraded journal is chain-valid, not invalid: {:?}",
+            report.errors
+        );
+        assert!(
+            report.degraded_complete,
+            "the degraded evidence must classify degraded_complete"
+        );
+
+        // 历史卷（无降级标记）分类不变：chain-valid → degraded_complete: false。
+        let plain = dir.path().join("plain.jsonl");
+        std::fs::copy(
+            repo_root().join("runtime/fixtures/run-event-v0.2/journals/plain-run.jsonl"),
+            &plain,
+        )
+        .unwrap();
+        let plain_report = validate_journal_file(&plain, &repo_root());
+        assert!(plain_report.valid, "{:?}", plain_report.errors);
+        assert!(!plain_report.degraded_complete);
+    }
 
     #[test]
     fn track_pair_classification() {

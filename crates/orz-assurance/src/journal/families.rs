@@ -1521,6 +1521,14 @@ pub const S2C_FAMILIES: &[&str] = &[
     "tool_availability_probe",
     "request_header",
     "probe_accuracy",
+    // 0z S2 (2026-09-12, FUS-HOST-RESOURCE-SAFETY §5): host-resource facts.
+    "host_resource_snapshot",
+    "host_resource_denied",
+    "resource_exhausted",
+    "run_terminated",
+    "process_tree_reaped",
+    "reclaim_performed",
+    "resource_limit_hit",
 ];
 
 /// All 34 families in the Python `validate_journal_text` call order
@@ -1567,7 +1575,323 @@ pub const ALL_FAMILIES: &[&str] = &[
     "tool_availability_probe",
     "request_header",
     "probe_accuracy",
+    // 0z S2 (2026-09-12, FUS-HOST-RESOURCE-SAFETY §5): host-resource facts.
+    "host_resource_snapshot",
+    "host_resource_denied",
+    "resource_exhausted",
+    "run_terminated",
+    "process_tree_reaped",
+    "reclaim_performed",
+    "resource_limit_hit",
 ];
+
+// ---------------------------------------------------------------------------
+// FUS-HOST-RESOURCE-SAFETY §5 families (2026-09-12, 0z S2) — the seven
+// host-resource fact families. Payload shapes are pinned by the v0.2 payload
+// schemas; these verifiers pin the cross-field contracts the schemas cannot
+// express (tier machine keys, phase coupling, outcome accounting).
+// ---------------------------------------------------------------------------
+
+/// snake_case machine key: lowercase letters, digits, underscores.
+fn is_snake_case_key(value: &Value) -> bool {
+    value
+        .as_str()
+        .map(|s| {
+            !s.is_empty()
+                && s.chars()
+                    .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_')
+                && s.chars()
+                    .next()
+                    .map(|c| c.is_ascii_lowercase())
+                    .unwrap_or(false)
+        })
+        .unwrap_or(false)
+}
+
+const HOST_RESOURCE_TIERS: &[&str] = &[
+    "normal",
+    "watch",
+    "soft",
+    "reclaim_direct",
+    "hard",
+    "unknown",
+];
+
+fn is_host_resource_tier(value: &Value) -> bool {
+    value
+        .as_str()
+        .map(|s| HOST_RESOURCE_TIERS.contains(&s))
+        .unwrap_or(false)
+}
+
+fn is_non_empty_string(value: &Value) -> bool {
+    value.as_str().map(|s| !s.is_empty()).unwrap_or(false)
+}
+
+/// `host_resource_snapshot`: readings face — one row per tier transition
+/// (design §4.5 低频，跨档才落). Tier + trigger machine keys; readings object.
+pub fn verify_host_resource_snapshot(events: &[Value]) -> Vec<String> {
+    let mut errors = Vec::new();
+    for event in events
+        .iter()
+        .filter(|e| e["event_type"] == "host_resource_snapshot")
+    {
+        let payload = &event["payload"];
+        if !is_host_resource_tier(&payload["tier"]) {
+            errors.push("host_resource_snapshot: tier is not a machine key".to_string());
+        }
+        let trigger = payload["trigger"].as_str().unwrap_or_default();
+        if !matches!(trigger, "tier_change" | "run_start") {
+            errors
+                .push("host_resource_snapshot: trigger must be tier_change|run_start".to_string());
+        }
+        if !payload["readings"].is_object() {
+            errors.push("host_resource_snapshot: readings must be an object".to_string());
+        }
+    }
+    errors
+}
+
+/// `host_resource_denied`: pre-issue refusal — readings + action class; the
+/// refusal happens BEFORE dispatch (判据 1's reviewable fact).
+pub fn verify_host_resource_denied(events: &[Value]) -> Vec<String> {
+    let mut errors = Vec::new();
+    for event in events
+        .iter()
+        .filter(|e| e["event_type"] == "host_resource_denied")
+    {
+        let payload = &event["payload"];
+        if payload["phase"].as_str() != Some("pre_issue") {
+            errors.push("host_resource_denied: phase must be pre_issue".to_string());
+        }
+        if !is_snake_case_key(&payload["action_class"]) {
+            errors.push("host_resource_denied: action_class must be a snake_case key".to_string());
+        }
+        if !is_host_resource_tier(&payload["tier"]) {
+            errors.push("host_resource_denied: tier is not a machine key".to_string());
+        }
+        if !is_non_empty_string(&payload["tool"]) || !is_non_empty_string(&payload["call_id"]) {
+            errors.push("host_resource_denied: tool/call_id required".to_string());
+        }
+        if !is_non_empty_string(&payload["reason"]) {
+            errors.push("host_resource_denied: reason required".to_string());
+        }
+        if !payload["readings"].is_object() {
+            errors.push("host_resource_denied: readings must be an object".to_string());
+        }
+    }
+    errors
+}
+
+/// `resource_exhausted`: hard tier only — planned (audit first) / executed
+/// rows carry the call_id set and readings (design §4.8 表 1).
+pub fn verify_resource_exhausted(events: &[Value]) -> Vec<String> {
+    let mut errors = Vec::new();
+    for event in events
+        .iter()
+        .filter(|e| e["event_type"] == "resource_exhausted")
+    {
+        let payload = &event["payload"];
+        if payload["tier"].as_str() != Some("hard") {
+            errors.push("resource_exhausted: only the hard tier may produce this row".to_string());
+        }
+        let phase = payload["phase"].as_str().unwrap_or_default();
+        if !matches!(phase, "planned" | "executed") {
+            errors.push("resource_exhausted: phase must be planned|executed".to_string());
+        }
+        let Some(call_ids) = payload["call_ids"].as_array() else {
+            errors.push("resource_exhausted: call_ids required".to_string());
+            continue;
+        };
+        if call_ids.is_empty() || call_ids.iter().any(|c| !is_non_empty_string(c)) {
+            errors.push("resource_exhausted: call_ids must be non-empty id strings".to_string());
+        }
+        if !payload["readings"].is_object() {
+            errors.push("resource_exhausted: readings must be an object".to_string());
+        }
+    }
+    errors
+}
+
+/// `run_terminated`: the explicit terminal shape — `journal_degraded` rows
+/// must carry the degraded summary (判据 6's chain leg).
+pub fn verify_run_terminated(events: &[Value]) -> Vec<String> {
+    let mut errors = Vec::new();
+    for event in events
+        .iter()
+        .filter(|e| e["event_type"] == "run_terminated")
+    {
+        let payload = &event["payload"];
+        match payload["reason"].as_str() {
+            Some("resource_exhausted") => {}
+            Some("journal_degraded") => {
+                if !payload["degraded"].as_object().is_some_and(|d| {
+                    d.contains_key("entered_at") && d.contains_key("dropped_events")
+                }) {
+                    errors.push(
+                        "run_terminated: reason journal_degraded requires the degraded summary"
+                            .to_string(),
+                    );
+                }
+            }
+            _ => errors.push(
+                "run_terminated: reason must be resource_exhausted|journal_degraded".to_string(),
+            ),
+        }
+    }
+    errors
+}
+
+/// `process_tree_reaped`: sweep audit — planned row before any kill
+/// (hardening c); pids positive; executed rows carry the reaped set.
+pub fn verify_process_tree_reaped(events: &[Value]) -> Vec<String> {
+    let mut errors = Vec::new();
+    for event in events
+        .iter()
+        .filter(|e| e["event_type"] == "process_tree_reaped")
+    {
+        let payload = &event["payload"];
+        let phase = payload["phase"].as_str().unwrap_or_default();
+        if !matches!(phase, "planned" | "executed") {
+            errors.push("process_tree_reaped: phase must be planned|executed".to_string());
+        }
+        let reason = payload["reason"].as_str().unwrap_or_default();
+        if !matches!(reason, "parent_abort" | "run_shutdown") {
+            errors
+                .push("process_tree_reaped: reason must be parent_abort|run_shutdown".to_string());
+        }
+        let Some(pids) = payload["pids"].as_array() else {
+            errors.push("process_tree_reaped: pids required".to_string());
+            continue;
+        };
+        let pids_ok = pids
+            .iter()
+            .all(|p| p.as_u64().map(|n| n >= 1).unwrap_or(false));
+        if pids.is_empty() || !pids_ok {
+            errors.push("process_tree_reaped: pids must be positive integers".to_string());
+        }
+    }
+    errors
+}
+
+/// `reclaim_performed`: reclaim audit — outcome tri-state (no `trash`:
+/// the recycle bin is cancelled, §4.6.1); pending_delete rows owe the window;
+/// rejected rows freed nothing; evidence/unknown classes can only be rejected.
+pub fn verify_reclaim_performed(events: &[Value]) -> Vec<String> {
+    let mut errors = Vec::new();
+    for event in events
+        .iter()
+        .filter(|e| e["event_type"] == "reclaim_performed")
+    {
+        let payload = &event["payload"];
+        let class = payload["class"].as_str().unwrap_or_default();
+        if !matches!(class, "cache" | "unknown" | "evidence") {
+            errors.push("reclaim_performed: class must be cache|unknown|evidence".to_string());
+        }
+        let outcome = payload["outcome"].as_str().unwrap_or_default();
+        if !matches!(outcome, "pending_delete" | "permanent" | "rejected") {
+            errors.push(
+                "reclaim_performed: outcome must be pending_delete|permanent|rejected".to_string(),
+            );
+            continue;
+        }
+        let tier = payload["tier"].as_str().unwrap_or_default();
+        if !matches!(tier, "soft" | "reclaim_direct" | "hard" | "unknown") {
+            errors.push(
+                "reclaim_performed: tier must be a reclaim tier (soft|reclaim_direct|hard|unknown)"
+                    .to_string(),
+            );
+        }
+        let freed = payload["freed_bytes"].as_u64().unwrap_or(0);
+        let paths = payload["paths"].as_array();
+        match outcome {
+            "pending_delete" => {
+                let window = payload["window_rounds"].as_u64();
+                if !matches!(window, Some(1..=3)) {
+                    errors.push(
+                        "reclaim_performed: pending_delete requires the window (1..=3)".to_string(),
+                    );
+                }
+                if freed != 0 {
+                    errors.push(
+                        "reclaim_performed: pending_delete rows freed nothing yet".to_string(),
+                    );
+                }
+                if paths.map(|p| p.is_empty()).unwrap_or(true) {
+                    errors.push(
+                        "reclaim_performed: pending_delete rows carry the queued paths".to_string(),
+                    );
+                }
+            }
+            "rejected" => {
+                if freed != 0 {
+                    errors.push("reclaim_performed: rejected rows freed nothing".to_string());
+                }
+            }
+            "permanent" if paths.map(|p| p.is_empty()).unwrap_or(true) => {
+                errors
+                    .push("reclaim_performed: permanent rows carry the deleted paths".to_string());
+            }
+            _ => {}
+        }
+        if matches!(class, "evidence" | "unknown") && outcome != "rejected" {
+            errors.push(
+                "reclaim_performed: evidence/unknown classes must be rejected (fail-closed)"
+                    .to_string(),
+            );
+        }
+    }
+    errors
+}
+
+/// `resource_limit_hit`: a kernel Job ceiling was hit — the failure is labeled
+/// with the limit axis and the call (design §4.7 失败语义: never silent).
+pub fn verify_resource_limit_hit(events: &[Value]) -> Vec<String> {
+    let mut errors = Vec::new();
+    for event in events
+        .iter()
+        .filter(|e| e["event_type"] == "resource_limit_hit")
+    {
+        let payload = &event["payload"];
+        let limit = payload["limit"].as_str().unwrap_or_default();
+        if !matches!(
+            limit,
+            "commit" | "active_process" | "cpu_rate" | "kill_on_job_close"
+        ) {
+            errors.push(
+                "resource_limit_hit: limit must be commit|active_process|cpu_rate|kill_on_job_close"
+                    .to_string(),
+            );
+        }
+        if !is_non_empty_string(&payload["call_id"]) {
+            errors.push("resource_limit_hit: call_id required".to_string());
+        }
+    }
+    errors
+}
+
+/// All seven host-resource families (corpus + judges).
+pub const HOST_RESOURCE_FAMILIES: &[&str] = &[
+    "host_resource_snapshot",
+    "host_resource_denied",
+    "resource_exhausted",
+    "run_terminated",
+    "process_tree_reaped",
+    "reclaim_performed",
+    "resource_limit_hit",
+];
+
+pub fn verify_host_resource_families(events: &[Value]) -> Vec<String> {
+    let mut errors = Vec::new();
+    errors.extend(verify_host_resource_snapshot(events));
+    errors.extend(verify_host_resource_denied(events));
+    errors.extend(verify_resource_exhausted(events));
+    errors.extend(verify_run_terminated(events));
+    errors.extend(verify_process_tree_reaped(events));
+    errors.extend(verify_reclaim_performed(events));
+    errors.extend(verify_resource_limit_hit(events));
+    errors
+}
 
 /// Run one named rule family (S2b ∪ S2c) over a parsed journal; unknown names
 /// yield an empty list (the caller validates the name).
@@ -1583,6 +1907,14 @@ pub fn verify_family(family: &str, events: &[Value]) -> Vec<String> {
         "failure_agg_coverage" => verify_failure_agg_coverage(events),
         "control_tickets" => verify_control_tickets(events),
         "lifecycle" => verify_lifecycle(events),
+        // 0z S2 (2026-09-12): the host-resource fact families.
+        "host_resource_snapshot" => verify_host_resource_snapshot(events),
+        "host_resource_denied" => verify_host_resource_denied(events),
+        "resource_exhausted" => verify_resource_exhausted(events),
+        "run_terminated" => verify_run_terminated(events),
+        "process_tree_reaped" => verify_process_tree_reaped(events),
+        "reclaim_performed" => verify_reclaim_performed(events),
+        "resource_limit_hit" => verify_resource_limit_hit(events),
         family => super::families_s2c::verify_s2c_family(family, events),
     }
 }
@@ -1928,6 +2260,139 @@ mod tests {
     /// test below and by the Python crosscheck (same corpus, both judges).
     fn scenarios() -> Vec<(&'static str, Vec<Value>)> {
         vec![
+            (
+                "host_resource_families_ok",
+                vec![
+                    ev(
+                        "host_resource_snapshot",
+                        json!({
+                            "tier": "watch", "trigger": "tier_change",
+                            "readings": {"volume_free_bytes": 9000000000i64}
+                        }),
+                    ),
+                    ev(
+                        "host_resource_denied",
+                        json!({
+                            "tool": "run_terminal_cmd", "call_id": "call-1",
+                            "phase": "pre_issue", "action_class": "heavy", "tier": "hard",
+                            "reason": "below the heavy floor",
+                            "readings": {"volume_free_bytes": 1000000i64}
+                        }),
+                    ),
+                    ev(
+                        "resource_exhausted",
+                        json!({
+                            "phase": "planned", "tier": "hard",
+                            "call_ids": ["call-1"], "readings": {"volume_free_bytes": 1000i64}
+                        }),
+                    ),
+                    ev(
+                        "resource_exhausted",
+                        json!({
+                            "phase": "executed", "tier": "hard",
+                            "call_ids": ["call-1"], "readings": {"volume_free_bytes": 1000i64}
+                        }),
+                    ),
+                    ev(
+                        "run_terminated",
+                        json!({
+                            "reason": "resource_exhausted", "detail": "hard tier"
+                        }),
+                    ),
+                    ev(
+                        "process_tree_reaped",
+                        json!({
+                            "phase": "planned", "reason": "run_shutdown", "pids": [42],
+                            "call_ids": ["call-1"]
+                        }),
+                    ),
+                    ev(
+                        "process_tree_reaped",
+                        json!({
+                            "phase": "executed", "reason": "parent_abort", "pids": [42]
+                        }),
+                    ),
+                    ev(
+                        "reclaim_performed",
+                        json!({
+                            "class": "cache", "outcome": "pending_delete", "tier": "soft",
+                            "paths": ["D:/w/target/debug/incremental"], "freed_bytes": 0,
+                            "window_rounds": 2
+                        }),
+                    ),
+                    ev(
+                        "reclaim_performed",
+                        json!({
+                            "class": "evidence", "outcome": "rejected", "tier": "soft",
+                            "paths": ["D:/w/.gsa/runs/r"], "freed_bytes": 0
+                        }),
+                    ),
+                    ev(
+                        "resource_limit_hit",
+                        json!({
+                            "limit": "commit", "call_id": "call-1"
+                        }),
+                    ),
+                ],
+            ),
+            (
+                "host_resource_families_violations",
+                vec![
+                    // snapshot: tier not a machine key + bad trigger.
+                    ev(
+                        "host_resource_snapshot",
+                        json!({
+                            "tier": "full", "trigger": "every_round", "readings": {}
+                        }),
+                    ),
+                    // denied: wrong phase + non-snake_case class.
+                    ev(
+                        "host_resource_denied",
+                        json!({
+                            "tool": "t", "call_id": "c", "phase": "post_issue",
+                            "action_class": "Heavy", "tier": "hard", "reason": "r"
+                        }),
+                    ),
+                    // exhausted: not the hard tier.
+                    ev(
+                        "resource_exhausted",
+                        json!({
+                            "phase": "planned", "tier": "soft", "call_ids": ["c"],
+                            "readings": {}
+                        }),
+                    ),
+                    // run_terminated: journal_degraded without the summary.
+                    ev("run_terminated", json!({"reason": "journal_degraded"})),
+                    // reaped: pid 0 + bad reason.
+                    ev(
+                        "process_tree_reaped",
+                        json!({
+                            "phase": "executed", "reason": "random", "pids": [0]
+                        }),
+                    ),
+                    // reclaim: pending_delete without window + freed bytes;
+                    // evidence class must be rejected.
+                    ev(
+                        "reclaim_performed",
+                        json!({
+                            "class": "cache", "outcome": "pending_delete", "tier": "soft",
+                            "paths": ["D:/w/target"], "freed_bytes": 5
+                        }),
+                    ),
+                    ev(
+                        "reclaim_performed",
+                        json!({
+                            "class": "unknown", "outcome": "permanent", "tier": "hard",
+                            "paths": ["D:/w/x"], "freed_bytes": 1
+                        }),
+                    ),
+                    // limit hit: unknown axis.
+                    ev(
+                        "resource_limit_hit",
+                        json!({"limit": "bandwidth", "call_id": "c"}),
+                    ),
+                ],
+            ),
             (
                 "control_tickets_ok",
                 vec![
@@ -4963,6 +5428,11 @@ mod tests {
                 .expect("known family");
             cell.1 = true;
         };
+        // 0z S2 (2026-09-12): host-resource family violations — the
+        // violations scenario trips exactly its seven families.
+        for family in HOST_RESOURCE_FAMILIES {
+            expect("host_resource_families_violations", family);
+        }
         expect("control_tickets_unknown", "control_tickets");
         expect("control_tickets_kind_conflict", "control_tickets");
         expect("control_tickets_one_shot", "control_tickets");
@@ -5462,6 +5932,13 @@ fams = {
     "tool_availability_probe": v._verify_v02_tool_availability_probe,
     "request_header": v._verify_v02_request_header,
     "probe_accuracy": v._verify_v02_probe_accuracy,
+    "host_resource_snapshot": v._verify_v02_host_resource_snapshot,
+    "host_resource_denied": v._verify_v02_host_resource_denied,
+    "resource_exhausted": v._verify_v02_resource_exhausted,
+    "run_terminated": v._verify_v02_run_terminated,
+    "process_tree_reaped": v._verify_v02_process_tree_reaped,
+    "reclaim_performed": v._verify_v02_reclaim_performed,
+    "resource_limit_hit": v._verify_v02_resource_limit_hit,
 }
 data = json.load(sys.stdin)
 out = {}
@@ -5545,7 +6022,7 @@ json.dump(out, sys.stdout)
             "crosscheck cell accounting drifted"
         );
         assert_eq!(
-            scenario_count, 249,
+            scenario_count, 251,
             "synthetic scenario corpus count drifted from its registered size              ({scenario_count})"
         );
         assert!(

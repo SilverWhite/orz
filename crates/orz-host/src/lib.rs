@@ -18,8 +18,26 @@ pub mod keystore;
 pub mod local_browser;
 pub mod pdf_evidence;
 pub mod permission;
+pub mod process_tree;
 pub mod project_doc_index;
+pub mod reclaim;
 pub mod resource_gate;
+
+/// Recursive byte size of `path` (bounded by the fixed candidate set's depth).
+fn dir_size_sync(path: &Path) -> u64 {
+    let mut total = 0u64;
+    if let Ok(entries) = std::fs::read_dir(path) {
+        for entry in entries.flatten() {
+            let p = entry.path();
+            if p.is_dir() {
+                total += dir_size_sync(&p);
+            } else {
+                total += entry.metadata().map(|m| m.len()).unwrap_or(0);
+            }
+        }
+    }
+    total
+}
 pub mod retention;
 pub mod session;
 pub mod stdio;
@@ -133,6 +151,17 @@ pub struct OrzHost {
     /// 维持零行为变化）；生产装配（`-p` 与 ACP 两路）经
     /// [`OrzHost::with_host_resource_safety`] 注入真实探针并同时安装 run 硬上限。
     resource_gate: Option<crate::resource_gate::ResourceGate>,
+    /// 0z S2 §4.2：进程树登记表（`.gsa/process_trees/`）——装配期扫除
+    /// 上轮孤儿 + 工具调用期登记 + facts drain（loop 侧 journal 面）。
+    process_trees: Option<crate::process_tree::ProcessTreeRegistry>,
+    /// 0z S2 §4.6：回收阶梯（分类 + 轮数窗口 + 预算 + 审计先行）。
+    reclaim: Option<crate::reclaim::ReclaimLadder>,
+    /// 回收冷却（ms 单调时间戳）——两次回收至少间隔 60s（§4.6 四纪律 4）。
+    reclaim_cooldown_ms: std::sync::atomic::AtomicU64,
+    /// 本 run 已执行的工具调用计数（窗口轮数计数）。
+    reclaim_round: std::sync::atomic::AtomicU64,
+    /// 0z S2 journal facts 暂存（reclaim_performed / resource_exhausted）。
+    resource_facts: std::sync::Mutex<Vec<serde_json::Value>>,
 }
 
 impl OrzHost {
@@ -246,6 +275,11 @@ impl OrzHost {
             ))),
             browser_launch_lock: tokio::sync::Mutex::new(()),
             resource_gate: None,
+            process_trees: None,
+            reclaim: None,
+            reclaim_cooldown_ms: std::sync::atomic::AtomicU64::new(0),
+            reclaim_round: std::sync::atomic::AtomicU64::new(0),
+            resource_facts: std::sync::Mutex::new(Vec::new()),
         })
     }
 
@@ -301,6 +335,138 @@ impl OrzHost {
             "host resource probe installed (0z S1)"
         );
         self.resource_gate = Some(crate::resource_gate::ResourceGate::new(probe));
+
+        // 0z S2 §4.2 item 4 (start sweep): reap orphans left by crashed
+        // previous runs BEFORE this run spawns anything. Records newer than
+        // "now" cannot exist yet, so the window boundary is the assembly
+        // instant; facts are stashed for the loop's journal face.
+        let registry = crate::process_tree::ProcessTreeRegistry::new(&self.cwd);
+        let records = registry.load_all();
+        if !records.is_empty() {
+            let now_ms = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_millis() as u64)
+                .unwrap_or(0);
+            let decisions = registry.plan_sweep(
+                &records,
+                Some(now_ms),
+                true,
+                &crate::process_tree::pid_alive,
+                &crate::process_tree::image_hash_of_pid,
+            );
+            registry.execute_sweep(decisions, "parent_abort", &crate::process_tree::kill_pid);
+        }
+        self.process_trees = Some(registry);
+        self.reclaim = Some(crate::reclaim::ReclaimLadder::new(&self.cwd));
+    }
+
+    /// 0z S2 §4.6：soft/reclaim-direct/hard 档的回收触发缝——门判定后调用。
+    /// 候选集固定有界（workspace 下知名 cache 根）；冷却 60s；审计先行；
+    /// facts 进暂存由 loop drain 落 `reclaim_performed` 事件。
+    pub fn run_reclaim_pass(&self, tier: &str, direct: bool) {
+        let Some(ladder) = self.reclaim.as_ref() else {
+            return;
+        };
+        let now_ms = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_millis() as u64)
+            .unwrap_or(0);
+        let last = self
+            .reclaim_cooldown_ms
+            .load(std::sync::atomic::Ordering::Relaxed);
+        if now_ms.saturating_sub(last) < 60_000 {
+            return;
+        }
+        self.reclaim_cooldown_ms
+            .store(now_ms, std::sync::atomic::Ordering::Relaxed);
+        let round = self
+            .reclaim_round
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed) as u32;
+
+        // 候选集：知名 cache 根（存在才进矩阵；固定有界，不做全盘扫描）。
+        let known = [
+            "target/debug/incremental",
+            "target/release/incremental",
+            "node_modules",
+            "__pycache__",
+            "tmp_rebuild_scratch",
+        ];
+        let candidates: Vec<crate::reclaim::ReclaimCandidate> = known
+            .iter()
+            .map(|rel| self.cwd.join(rel))
+            .filter(|p| p.exists())
+            .map(|p| {
+                let size = dir_size_sync(&p);
+                crate::reclaim::ReclaimCandidate {
+                    path: p,
+                    size_bytes: size,
+                }
+            })
+            .collect();
+        if candidates.is_empty() {
+            return;
+        }
+        let decisions = ladder.plan(&candidates, direct, round, &[]);
+        ladder.execute(tier, &decisions, &|p| {
+            if p.is_dir() {
+                std::fs::remove_dir_all(p)
+            } else {
+                std::fs::remove_file(p)
+            }
+        });
+        // 窗口到期行真删（soft 档延迟删除的兑现）。
+        ladder.execute_expiry(round, &|p| {
+            if p.is_dir() {
+                std::fs::remove_dir_all(p)
+            } else {
+                std::fs::remove_file(p)
+            }
+        });
+        for fact in ladder.drain_facts() {
+            self.resource_facts.lock().unwrap().push(serde_json::json!({
+                "event": "reclaim_performed",
+                "class": fact.class,
+                "outcome": fact.outcome,
+                "tier": fact.tier,
+                "paths": fact.paths,
+                "freed_bytes": fact.freed_bytes,
+                "window_rounds": fact.window_rounds,
+                "budget_bytes": fact.budget_bytes,
+            }));
+        }
+    }
+
+    /// Drain the accumulated resource facts (journal face, loop side).
+    pub fn drain_resource_facts(&self) -> Vec<serde_json::Value> {
+        std::mem::take(&mut *self.resource_facts.lock().unwrap())
+    }
+
+    /// The process-tree registry, when one is wired (0z S2 §4.2).
+    pub fn process_tree_registry(&self) -> Option<&crate::process_tree::ProcessTreeRegistry> {
+        self.process_trees.as_ref()
+    }
+
+    /// 0z S2 §4.2 (finalize sweep): reap this run's own leaked children at
+    /// run end — records whose parent chain is this very process (still
+    /// alive during the run, refused by the start sweep) are swept at
+    /// shutdown when the run's tree should be gone but a breakaway/attach
+    /// failure escaped both jobs.
+    pub fn finalize_process_trees(&self) {
+        let Some(registry) = self.process_trees.as_ref() else {
+            return;
+        };
+        let records = registry.load_all();
+        if records.is_empty() {
+            return;
+        }
+        let decisions = registry.plan_sweep(
+            &records,
+            None,
+            false,
+            &crate::process_tree::pid_alive,
+            &crate::process_tree::image_hash_of_pid,
+        );
+        registry.execute_sweep(decisions, "run_shutdown", &crate::process_tree::kill_pid);
     }
 
     /// The injected resource gate, when one is wired.
@@ -798,6 +964,29 @@ impl OrzHost {
             // Review F-5: the gate judges every volume the action would *write*
             // to (cwd plus any static write target), not only the session cwd.
             let targets = crate::resource_gate::write_targets(name, &args, &self.cwd);
+            // 0z S2 §4.6：门判定一次拿到档位（Allow 与 Refuse 都带 tier）。
+            let gate_tier_after = match gate.evaluate_for_volumes(&targets, class) {
+                crate::resource_gate::GateDecision::Allow { tier, .. } => Some(tier),
+                crate::resource_gate::GateDecision::Refuse { tier, .. } => Some(tier),
+            };
+            // 0z S2 §4.6：soft 及以上档位由机械层发起回收（不问模型）。
+            if let Some(tier) = gate_tier_after
+                && matches!(
+                    tier,
+                    crate::resource_gate::ResourceTier::Soft
+                        | crate::resource_gate::ResourceTier::ReclaimDirect
+                        | crate::resource_gate::ResourceTier::Hard
+                )
+            {
+                self.run_reclaim_pass(
+                    tier.as_str(),
+                    matches!(
+                        tier,
+                        crate::resource_gate::ResourceTier::ReclaimDirect
+                            | crate::resource_gate::ResourceTier::Hard
+                    ),
+                );
+            }
             if let crate::resource_gate::GateDecision::Refuse {
                 code,
                 reason,
@@ -814,6 +1003,52 @@ impl OrzHost {
                     write_targets = volumes.len(),
                     "pre-dispatch resource gate refused a heavy action"
                 );
+                // 0z S2 §5：pre-issue 拒绝事实（含读数与动作分档，判据 1 的
+                // 可逐条复核面）。
+                self.resource_facts.lock().unwrap().push(serde_json::json!({
+                    "event": "host_resource_denied",
+                    "tool": name,
+                    "call_id": call_id,
+                    "phase": "pre_issue",
+                    "action_class": class.as_str(),
+                    "tier": tier.as_str(),
+                    "reason": reason,
+                    "readings": snapshot.to_json(),
+                    "write_targets": volumes
+                        .iter()
+                        .map(crate::resource_gate::VolumeReading::to_json)
+                        .collect::<Vec<_>>(),
+                }));
+                // 0z S2 §4.8 表 1：hard 档树杀——审计先行（planned 行含读数）
+                // → 杀本 run 全部工具进程树（RunResourceJob::kill）→ executed
+                // 行。只在此处触发（仅 hard 档、仅重档拒绝路径）。
+                if tier == crate::resource_gate::ResourceTier::Hard {
+                    let readings = snapshot.to_json();
+                    self.resource_facts.lock().unwrap().push(serde_json::json!({
+                        "event": "resource_exhausted",
+                        "phase": "planned",
+                        "tier": "hard",
+                        "readings": readings,
+                    }));
+                    if let Some(job) = xai_tty_utils::global_run_job() {
+                        match job.kill() {
+                            Ok(()) => {
+                                self.resource_facts.lock().unwrap().push(serde_json::json!({
+                                    "event": "resource_exhausted",
+                                    "phase": "executed",
+                                    "tier": "hard",
+                                    "readings": readings,
+                                }));
+                                tracing::warn!(
+                                    "hard tier: run job tree terminated (design §4.8 item 1)"
+                                );
+                            }
+                            Err(e) => {
+                                tracing::warn!("hard tier: run job kill failed: {e}");
+                            }
+                        }
+                    }
+                }
                 return Ok(ToolResult {
                     output: reason,
                     exit_code: Some(1),
@@ -839,6 +1074,35 @@ impl OrzHost {
             args
         };
         let started_exec = std::sync::atomic::AtomicBool::new(false);
+        // 0z S2 §4.2 item 3: the ambient spawn-sink lives exactly for this
+        // dispatch — every ProcessGroup attach inside the tool writes a
+        // `.gsa/process_trees/` record (pid + image fingerprint + started-at).
+        // Best-effort and racy by contract: concurrent tool calls on other
+        // threads may attribute under this call's id; the sweep never trusts
+        // the label alone (fingerprint + window guards decide the kill).
+        let process_trees_dir = self
+            .process_trees
+            .as_ref()
+            .map(|registry| registry.dir().to_path_buf());
+        let spawn_sink_guard = process_trees_dir.map(|dir| {
+            let call_id = call_id.to_string();
+            xai_tty_utils::set_spawn_sink(std::sync::Arc::new(
+                move |observation: xai_tty_utils::SpawnObservation| {
+                    let record = crate::process_tree::ProcessTreeRecord {
+                        call_id: call_id.clone(),
+                        pid: observation.pid,
+                        parent_chain: vec![std::process::id()],
+                        image_sha256: observation.image_sha256,
+                        started_at: observation.started_at,
+                        run_id: String::new(),
+                        job_name: "call".to_string(),
+                    };
+                    if let Err(e) = crate::process_tree::write_record(&dir, &record) {
+                        tracing::debug!("process tree registration failed: {e}");
+                    }
+                },
+            ))
+        });
         let fut = async {
             if crate::tools::is_web_search_tool(name) {
                 tracing::debug!(
@@ -914,6 +1178,7 @@ impl OrzHost {
                 )));
             }
         };
+        drop(spawn_sink_guard);
         let mut tool_result = ToolResult {
             output: result.prompt_text,
             // 2026-08-08 blackboard-partition review closure (conformance
@@ -1179,6 +1444,28 @@ impl LoopHost for OrzHost {
         }
         let mut reported = self.idle_kill_reported.lock().unwrap();
         crate::terminal_idle_kill_facts_from(resolved, &mut reported)
+    }
+
+    /// 0z S2 §4.2（2026-09-12）：进程树扫除事实源——登记表的 drain 面
+    /// （planned/executed 行；审计先行由扫除器保证）。
+    async fn drain_host_resource_facts(&self) -> Vec<serde_json::Value> {
+        self.drain_resource_facts()
+    }
+
+    async fn drain_process_tree_reap_facts(&self) -> Vec<orz_loop::host::ProcessTreeReapFact> {
+        let Some(registry) = self.process_trees.as_ref() else {
+            return Vec::new();
+        };
+        registry
+            .drain_facts()
+            .into_iter()
+            .map(|fact| orz_loop::host::ProcessTreeReapFact {
+                reason: fact.reason.to_string(),
+                phase: fact.phase.to_string(),
+                pids: fact.pids,
+                call_ids: fact.call_ids,
+            })
+            .collect()
     }
 
     /// TER T1.12 (W-F11)：黑板 `section=env` 的机械层环境快照事实。

@@ -12,6 +12,13 @@ pub const TERMINAL_EVENTS: &[EventType] = &[
     EventType::RunFailed,
     EventType::RunCancelled,
     EventType::RunInvalidated,
+    // FUS-HOST-RESOURCE-SAFETY §4.3 (2026-09-12, 0z S2): the explicit
+    // terminal shape for the two abnormal endings this design owns —
+    // `resource_exhausted` (hard tier) and `journal_degraded` (the audit
+    // chain starved). Design 判据 6: under ENOSPC the run still yields an
+    // enumerable terminal shape — `run_terminated` on the chain or the
+    // `TERMINAL.json` sidecar, never a silent death.
+    EventType::RunTerminated,
 ];
 
 /// All event types in the run lifecycle.
@@ -25,6 +32,32 @@ pub enum EventType {
     RunFailed,
     RunCancelled,
     RunInvalidated,
+    // FUS-HOST-RESOURCE-SAFETY §4.3/§5 (2026-09-12, 0z S2): explicit terminal
+    // shape for resource-exhausted and journal-degraded endings (design §6
+    // 判据 6). Terminal — appended to `TERMINAL_EVENTS` above.
+    RunTerminated,
+
+    // FUS-HOST-RESOURCE-SAFETY §5 (2026-09-12, 0z S2): the host-resource
+    // fact families. Tiers/limits use the snake_case machine keys decided in
+    // S1 (`normal` / `watch` / `soft` / `reclaim_direct` / `hard` / `unknown`).
+    /// Low-frequency readings face — one row per tier transition (design §4.5,
+    /// §5 "低频，跨档才落").
+    HostResourceSnapshot,
+    /// Pre-dispatch refusal of a heavy action (gate §4.1 / soft 档) — readings
+    /// plus the action class; the tool result envelope stays the model face.
+    HostResourceDenied,
+    /// Hard tier triggered: the pre-kill audit row (§4.8 表 1: planned with
+    /// the call_id set about to be killed) and the post-kill row.
+    ResourceExhausted,
+    /// Orphan reaping audit — planned row first, then the reaped row
+    /// (design §4.2 sweep, §4.8 表 2).
+    ProcessTreeReaped,
+    /// Reclaim audit — written BEFORE any deletion touches disk (design
+    /// §4.6 四纪律 1; `outcome ∈ pending_delete / permanent / rejected`).
+    ReclaimPerformed,
+    /// A tool call hit a kernel-enforced Job ceiling (design §4.7 失败语义:
+    /// the failure is labeled, never silent).
+    ResourceLimitHit,
 
     // Prompt/model
     PromptSubmitted,

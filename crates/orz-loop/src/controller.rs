@@ -2637,7 +2637,9 @@ impl AgentLoopController {
                     AgentLoopError::Degeneration(_) => EventType::RunInvalidated,
                     _ => EventType::RunFailed,
                 };
-                let _ = writer.record(event, payload).await;
+                // 0z S2 §4.3：降级卷的失败终态同样改走 `run_terminated`
+                // （原失败事实进 detail，不丢失）。
+                let _ = writer.record_terminal(event, payload).await;
                 let _ = journal.flush_async().await;
                 Err(e)
             }
@@ -3482,8 +3484,10 @@ impl AgentLoopController {
         // idle-kill 时，事件仍会落在 RunFinished 之前（链规则要求晚于原
         // auto-bg 调用的 running:true 完成事件，此处恒满足）。
         self.journal_pending_idle_kills(host, writer).await?;
+        // 0z S2 §4.3：降级卷以 `run_terminated { reason: journal_degraded }`
+        // 显式收尾（正常完成时本调用恒为 RunFinished，行为不变）。
         writer
-            .record(
+            .record_terminal(
                 terminal_event,
                 serde_json::json!({
                     "status": status,
@@ -3776,6 +3780,13 @@ pub(crate) struct EventWriter<'a> {
     /// P1-1 (2026-08-08 stall guards): stamped on every recorded event —
     /// journaled activity keeps the stall watchdog armed.
     heartbeat: Option<crate::gateway::model::ActivityClock>,
+    /// FUS-HOST-RESOURCE-SAFETY §4.3 (2026-09-12, 0z S2): set once the journal
+    /// refused an append from degraded (skeleton-only) mode. Dropped events
+    /// never advance `seq`/`prev_hash` — the on-disk chain stays continuous —
+    /// and the run finalizes with `run_terminated { reason: journal_degraded }`
+    /// instead of the ordinary terminal (判据 6's enumerable terminal shape).
+    journal_degraded: bool,
+    journal_degraded_drops: u64,
 }
 
 impl EventWriter<'_> {
@@ -3831,6 +3842,8 @@ impl<'a> EventWriter<'a> {
             seq,
             prev_hash,
             heartbeat,
+            journal_degraded: false,
+            journal_degraded_drops: 0,
         }
     }
 
@@ -3913,10 +3926,79 @@ impl<'a> EventWriter<'a> {
         // Only advance the chain link after the write is accepted — a
         // refused append (Closed/TerminalAppended) must not pollute the
         // caller's bookkeeping (2026-08-04 review P2-7).
-        let event_hash = journal.record_async(event).await?;
-        self.prev_hash = Some(event_hash);
-        self.seq += 1;
-        Ok(())
+        // 0z S2 §4.3: a `DegradedDropped` refusal is the degraded-mode
+        // contract, not a journal integrity violation — the event was
+        // intentionally not written (skeleton-only mode), so the run keeps
+        // going and the caller's chain bookkeeping stays untouched (the
+        // dropped event never consumes a sequence number). The flag routes
+        // the run's terminal to `run_terminated { reason: journal_degraded }`.
+        match journal.record_async(event).await {
+            Ok(event_hash) => {
+                self.prev_hash = Some(event_hash);
+                self.seq += 1;
+                Ok(())
+            }
+            Err(orz_assurance::JournalRecorderError::DegradedDropped {
+                sequence,
+                event_type,
+            }) => {
+                self.journal_degraded = true;
+                self.journal_degraded_drops += 1;
+                tracing::warn!(
+                    sequence,
+                    event_type,
+                    drops = self.journal_degraded_drops,
+                    "journal degraded mode dropped a regenerable event; chain bookkeeping untouched"
+                );
+                Ok(())
+            }
+            Err(e) => Err(e.into()),
+        }
+    }
+
+    /// FUS-HOST-RESOURCE-SAFETY §4.3 (0z S2): true once the journal refused an
+    /// append from degraded (skeleton-only) mode — the run's terminal becomes
+    /// `run_terminated { reason: journal_degraded }`.
+    pub(crate) fn journal_degraded(&self) -> bool {
+        self.journal_degraded
+    }
+
+    /// FUS-HOST-RESOURCE-SAFETY §4.3 item 5 (2026-09-12, 0z S2): the run's
+    /// explicit terminal shape. A degraded journal finalizes with
+    /// `run_terminated { reason: journal_degraded }` instead of the ordinary
+    /// terminal; the original terminal's fact travels in `detail` so the
+    /// failure reason is never lost. 判据 6: the chain always ends in an
+    /// enumerable terminal event (or the recorder's TERMINAL.json sidecar
+    /// when even this append cannot land).
+    pub(crate) async fn record_terminal(
+        &mut self,
+        normal: EventType,
+        payload: serde_json::Value,
+    ) -> Result<(), AgentLoopError> {
+        if self.journal_degraded && normal.is_terminal() {
+            let detail = match &payload {
+                serde_json::Value::Object(map) => map
+                    .iter()
+                    .map(|(k, v)| {
+                        format!("{k}={}", v.as_str().unwrap_or(&v.to_string()).to_string())
+                    })
+                    .collect::<Vec<_>>()
+                    .join("; "),
+                other => other.to_string(),
+            };
+            return self
+                .record(
+                    EventType::RunTerminated,
+                    serde_json::json!({
+                        "reason": "journal_degraded",
+                        "detail": format!(
+                            "original terminal {normal}: {detail}"
+                        ),
+                    }),
+                )
+                .await;
+        }
+        self.record(normal, payload).await
     }
 
     pub(crate) fn seq(&self) -> u64 {
@@ -3949,6 +4031,77 @@ mod tests {
     use crate::host::{LoopHost, PermitDecision, PermitError, RiskClass, ToolError, ToolRegistry};
     use async_trait::async_trait;
     use orz_assurance::JournalRecorder;
+
+    /// 0z S2 §4.3（2026-09-12，FUS-HOST-RESOURCE-SAFETY）：降级卷的显式收尾
+    /// ——降级后的拒绝不推进链，run 终态改写为
+    /// `run_terminated { reason: journal_degraded }`，盘上链连续可重放，
+    /// 终端行带 degraded 摘要（判据 6 的 run_terminated 腿）。
+    #[tokio::test]
+    async fn degraded_journal_finalizes_with_run_terminated() {
+        let dir = test_dir();
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        // 4 次故障 = 首事件的初次 + 10/40/160ms 三次重试全部失败 → 降级。
+        let journal = JournalRecorder::new_with_write_faults_for_tests(dir.clone(), 4);
+        let mut writer = journal_event_writer(&journal, "RUN-DEGRADED-FINAL");
+
+        // 首个事件被降级丢弃：不推进 seq/prev，writer 置降级旗。
+        writer
+            .record(EventType::RunStarted, serde_json::json!({"prompt": "p"}))
+            .await
+            .expect("degraded drop is not an error at the writer level");
+        assert!(writer.journal_degraded(), "the drop must flag degradation");
+
+        // 正常完成路径的终态装配：降级卷改走 run_terminated。
+        writer
+            .record_terminal(
+                EventType::RunFinished,
+                serde_json::json!({"status": "completed", "tool_rounds": 3}),
+            )
+            .await
+            .expect("terminal lands on the degraded skeleton");
+
+        journal.shutdown_async().await.unwrap();
+
+        let events_path = dir.join("events.jsonl");
+        let content = std::fs::read_to_string(&events_path).unwrap();
+        let rows: Vec<serde_json::Value> = content
+            .lines()
+            .map(|line| serde_json::from_str(line).unwrap())
+            .collect();
+        assert_eq!(rows.len(), 1, "only the terminal landed: {content}");
+        assert_eq!(rows[0]["sequence"], serde_json::json!(0));
+        assert_eq!(rows[0]["event_type"], serde_json::json!("run_terminated"));
+        assert_eq!(
+            rows[0]["payload"]["reason"],
+            serde_json::json!("journal_degraded")
+        );
+        assert!(
+            rows[0]["payload"]["detail"]
+                .as_str()
+                .unwrap()
+                .contains("run_finished"),
+            "the original terminal's fact travels in detail"
+        );
+        assert!(
+            rows[0]["payload"]["degraded"].is_object(),
+            "writer-injected degraded summary"
+        );
+
+        // 链骨架连续（判据 6）：恰好一个终止事件、哈希链完好。
+        let replay = orz_assurance::journal::verifier::replay_journal(
+            &events_path,
+            Some("RUN-DEGRADED-FINAL"),
+            None,
+            true,
+        );
+        assert!(
+            replay.valid,
+            "degraded skeleton replays: {:?}",
+            replay.errors
+        );
+        assert_eq!(replay.terminal_event.as_deref(), Some("run_terminated"));
+    }
 
     /// 0p S1 / W2 D-2 (2026-09-07, ADR-0010 §14.61 设计 D)：`run_finished.
     /// turn_count` 携带真实会话轮计数——`with_session_turn(n)` 注入值直达

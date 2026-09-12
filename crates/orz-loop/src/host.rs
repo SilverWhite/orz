@@ -246,7 +246,21 @@ pub struct LiveProcessFact {
 /// `task_id` = 原 auto-bg 调用 id（auto-background 语义下 task 以工具
 /// call_id 注册，见 T0.2 §4 / T1.6）。loop 侧据此补记
 /// `tool_running(status=idle_killed + reason)` 事件（链规则要求该调用先有
-/// mid-run `tool_running` + `running:true` `tool_completed`）。
+/// mid-run `tool_running` + `running:true` `tool_completed`）——见下方
+/// `TerminalIdleKillFact`。
+/// 0z S2 §4.2（2026-09-12，FUS-HOST-RESOURCE-SAFETY）：进程树扫除事实——
+/// 宿主扫除器（装配期扫上轮孤儿 / 收尾扫本 run 泄漏）产出的 audit-first
+/// 行，由 loop 落 `process_tree_reaped` 事件。drain 语义同 idle-kill 面。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProcessTreeReapFact {
+    /// `parent_abort`（装配期扫上轮孤儿）| `run_shutdown`（收尾扫本 run）。
+    pub reason: String,
+    /// `planned`（杀前审计行）| `executed`（实杀结果行）。
+    pub phase: String,
+    pub pids: Vec<u32>,
+    pub call_ids: Vec<String>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TerminalIdleKillFact {
     /// 原 auto-bg 工具调用 id（终端 task id）。
@@ -755,6 +769,19 @@ pub trait LoopHost: Send + Sync {
     /// 新发生的 idle-kill；只报 `is_backgrounded` 且 signal=idle_killed 的
     /// 已完成任务）。不支持的后端默认空（fail-closed，不伪造）。
     async fn drain_terminal_idle_kills(&self) -> Vec<TerminalIdleKillFact> {
+        Vec::new()
+    }
+
+    /// 0z S2 §4.2（2026-09-12）：进程树扫除事实源（drain 语义，同 idle-kill
+    /// 面）。不支持的后端默认空（fail-closed，不伪造）。
+    async fn drain_process_tree_reap_facts(&self) -> Vec<ProcessTreeReapFact> {
+        Vec::new()
+    }
+
+    /// 0z S2 §4.6/§5（2026-09-12）：宿主资源事实源——`reclaim_performed` /
+    /// `resource_exhausted` / `host_resource_denied` 的暂存行（drain 语义）。
+    /// 不支持的后端默认空（fail-closed，不伪造）。
+    async fn drain_host_resource_facts(&self) -> Vec<serde_json::Value> {
         Vec::new()
     }
 

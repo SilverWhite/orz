@@ -46,8 +46,10 @@ pub mod runtime;
 
 mod resource_job;
 pub use resource_job::{
-    JobLimits, JobReadback, RunResourceJob, attach_failure_count, global_run_job,
+    JobLimits, JobReadback, RunResourceJob, SpawnObservation, SpawnSinkGuard, attach_failure_count,
+    global_run_job, image_fingerprint_from_handle, image_fingerprint_from_pid,
     install_global_run_job, record_attach_failure, replace_global_run_job_for_tests,
+    set_spawn_sink,
 };
 
 // ---------------------------------------------------------------------------
@@ -476,6 +478,15 @@ impl ProcessGroup {
         #[cfg(unix)]
         {
             self.leader = Some(ProcessGroupId::new(pid)?);
+            // 0z S2 §4.2 item 3: same registration contract as the Windows arm.
+            crate::resource_job::register_spawn(crate::resource_job::SpawnObservation {
+                pid,
+                image_sha256: crate::resource_job::image_fingerprint_from_pid(pid),
+                started_at: std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map(|d| d.as_millis() as u64)
+                    .unwrap_or(0),
+            });
             Ok(())
         }
         #[cfg(windows)]
@@ -506,7 +517,22 @@ impl ProcessGroup {
             }
 
             let assign_result = unsafe { AssignProcessToJobObject(self.job, process_handle) };
+            // 0z S2 §4.2 item 3: register the child with the ambient spawn
+            // sink (the host set it around this tool call) BEFORE the handle
+            // closes — pid + normalized image fingerprint + started-at, so a
+            // crash right after spawn still leaves the sweep a record to work
+            // from. Best-effort: registration never blocks a spawn.
+            let image_sha256 = crate::resource_job::image_fingerprint_from_handle(process_handle);
+            let started_at = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_millis() as u64)
+                .unwrap_or(0);
             let _ = unsafe { CloseHandle(process_handle) };
+            crate::resource_job::register_spawn(crate::resource_job::SpawnObservation {
+                pid,
+                image_sha256,
+                started_at,
+            });
 
             assign_result.map_err(|e| {
                 crate::resource_job::record_attach_failure();

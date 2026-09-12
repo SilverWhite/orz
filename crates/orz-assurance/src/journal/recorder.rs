@@ -50,6 +50,122 @@ pub enum JournalRecorderError {
     Io(#[from] std::io::Error),
     #[error("journal serialization error: {0}")]
     Serde(#[from] serde_json::Error),
+    /// FUS-HOST-RESOURCE-SAFETY §4.3 (2026-09-12, 0z S2): the event was NOT
+    /// written — the journal is in degraded (skeleton-only) mode and this
+    /// event is regenerable face, or the write itself failed after the
+    /// storage-full backoff ladder. The caller must **not** advance its
+    /// sequence/chain bookkeeping for this event: the on-disk chain only
+    /// stays continuous if dropped events never consume a sequence number
+    /// (`validate_chain` requires `sequence == line index`).
+    #[error("journal degraded mode dropped event (seq {sequence}, {event_type})")]
+    DegradedDropped { sequence: u64, event_type: String },
+}
+
+/// FUS-HOST-RESOURCE-SAFETY §4.3 item 4 (2026-09-12, 0z S2): the state-chain
+/// volume keeps a reserve so the hard tier can still land terminal events.
+/// `ORZ_JOURNAL_RESERVED_BYTES` overrides; the value is a *floor contract*
+/// for the reclaim ladder (E) — the pre-dispatch gate (A) refuses heavy
+/// actions far above it, so build products cannot eat into the reserve.
+pub const DEFAULT_JOURNAL_RESERVED_BYTES: u64 = 64 * 1024 * 1024;
+
+/// The configured state-chain reserve in bytes (design §4.3 item 4).
+pub fn journal_reserved_bytes() -> u64 {
+    std::env::var("ORZ_JOURNAL_RESERVED_BYTES")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(DEFAULT_JOURNAL_RESERVED_BYTES)
+}
+
+/// FUS-HOST-RESOURCE-SAFETY §4.3 item 3 (2026-09-12, 0z S2): a single event
+/// in degraded mode is bounded (default ≤ 8 KiB serialized). Oversized string
+/// values are mechanically truncated to summary+pointer form — the shape of
+/// the payload is preserved so the row stays schema-valid, and the original
+/// seal travels inside the `degraded` marker as the pointer.
+pub const DEGRADED_EVENT_BOUND_BYTES: usize = 8 * 1024;
+
+/// True when an IO error means "the volume cannot accept more data" — the
+/// ENOSPC family the design's backoff ladder targets (Windows
+/// `ERROR_DISK_FULL` 112 / `ERROR_HANDLE_DISK_FULL` 39; POSIX `ENOSPC` 28 /
+/// `EDQUOT` 122; plus the stable `ErrorKind::StorageFull` mapping). Commit
+/// exhaustion and every other IO failure is a different axis and keeps the
+/// historical fatal semantics.
+fn is_storage_full_error(e: &std::io::Error) -> bool {
+    if e.kind() == std::io::ErrorKind::StorageFull {
+        return true;
+    }
+    matches!(
+        e.raw_os_error(),
+        Some(112) | Some(39) | Some(28) | Some(122)
+    )
+}
+
+/// Degraded-mode state — recorded once when the backoff ladder is exhausted.
+#[derive(Debug, Clone)]
+struct DegradedState {
+    entered_at: String,
+    cause: String,
+    dropped_events: u64,
+    first_dropped_sequence: Option<u64>,
+    reserved_bytes: u64,
+}
+
+impl DegradedState {
+    /// The summary object injected into every event written while degraded
+    /// (schema-visible evidence for the `degraded_complete` classification).
+    fn to_summary_json(&self) -> serde_json::Value {
+        serde_json::json!({
+            "entered_at": self.entered_at,
+            "dropped_events": self.dropped_events,
+            "first_dropped_sequence": self.first_dropped_sequence,
+            "reserved_bytes": self.reserved_bytes,
+            "cause": self.cause,
+        })
+    }
+}
+
+/// The `.gsa/runs/<run>/TERMINAL.json` sidecar (design §4.3 item 5): when the
+/// chain itself cannot accept the terminal event, the run still yields an
+/// enumerable terminal shape — a fixed, bounded (< 4 KiB) file on the same
+/// volume plus a stderr line. 判据 6: `run_terminated` **or** this file, both
+/// enumerable, never a silent death.
+fn write_terminal_sidecar(
+    journal_dir: &Path,
+    run_id: &str,
+    state: Option<&DegradedState>,
+    sequence: u64,
+    event_type: &str,
+    cause: &str,
+) {
+    let payload = serde_json::json!({
+        "run_id": run_id,
+        "reason": "journal_degraded",
+        "planned_event_type": event_type,
+        "planned_sequence": sequence,
+        "degraded": state.map(DegradedState::to_summary_json),
+        "cause": cause,
+        "written_at": chrono_now_compact(),
+        "note": "terminal event could not be appended; this sidecar is the enumerable terminal shape (design §4.3 item 5)",
+    });
+    let text = match serde_json::to_string_pretty(&payload) {
+        Ok(t) => t,
+        Err(_) => return,
+    };
+    let path = journal_dir.join("TERMINAL.json");
+    let result = std::fs::write(&path, &text);
+    eprintln!(
+        "orz journal: terminal event append failed (degraded); terminal shape written to {} \
+         (result: {})",
+        path.display(),
+        match &result {
+            Ok(()) => "ok".to_string(),
+            Err(e) => format!("failed: {e}"),
+        }
+    );
+}
+
+/// Compact UTC timestamp for the sidecar.
+fn chrono_now_compact() -> String {
+    chrono::Utc::now().to_rfc3339()
 }
 
 /// The shared handle to the journal recorder.
@@ -71,6 +187,23 @@ impl JournalRecorder {
         let (tx, rx) = mpsc::channel::<JournalCmd>(256);
 
         let writer_task = JournalWriterTask::new(journal_dir.join("events.jsonl"), rx);
+        tokio::spawn(writer_task.run());
+
+        JournalRecorder { tx, journal_dir }
+    }
+
+    /// Test seam (design §7-C "故障注入层"): a recorder whose first
+    /// `fault_attempts` write attempts fail with a storage-full error — the
+    /// ENOSPC injection the degraded-mode ladder is verified against. Hidden
+    /// from the documented surface; never used by production code.
+    #[doc(hidden)]
+    pub fn new_with_write_faults_for_tests(journal_dir: PathBuf, fault_attempts: u32) -> Self {
+        let (tx, rx) = mpsc::channel::<JournalCmd>(256);
+
+        let mut writer_task = JournalWriterTask::new(journal_dir.join("events.jsonl"), rx);
+        writer_task.fault = Some(WriteFaultScript {
+            failures_remaining: fault_attempts,
+        });
         tokio::spawn(writer_task.run());
 
         JournalRecorder { tx, journal_dir }
@@ -230,6 +363,30 @@ struct JournalWriterTask {
     /// Set once a terminal event (run_finished/run_failed/...) has been
     /// written — further appends are refused to preserve chain integrity.
     terminal_seen: bool,
+    /// FUS-HOST-RESOURCE-SAFETY §4.3 (0z S2): `Some` once the storage-full
+    /// backoff ladder was exhausted — the journal then accepts chain-skeleton
+    /// events only and the run_id's terminal shape is guaranteed one way or
+    /// the other (`run_terminated`/terminal on the chain, else TERMINAL.json).
+    degraded: Option<DegradedState>,
+    /// Test seam: scripted write faults (see `new_with_write_faults_for_tests`).
+    fault: Option<WriteFaultScript>,
+}
+
+/// Test-seam fault script: the first `failures_remaining` write attempts fail
+/// with a storage-full error, later attempts succeed.
+struct WriteFaultScript {
+    failures_remaining: u32,
+}
+
+impl WriteFaultScript {
+    fn take_fault(&mut self) -> Option<std::io::Error> {
+        if self.failures_remaining > 0 {
+            self.failures_remaining -= 1;
+            Some(std::io::Error::from_raw_os_error(112)) // ERROR_DISK_FULL
+        } else {
+            None
+        }
+    }
 }
 
 impl JournalWriterTask {
@@ -240,6 +397,8 @@ impl JournalWriterTask {
             file: None,
             closed: false,
             terminal_seen: false,
+            degraded: None,
+            fault: None,
         }
     }
 
@@ -259,11 +418,13 @@ impl JournalWriterTask {
         Ok(self.file.as_mut().unwrap())
     }
 
-    /// Write one event as a JSONL line and fsync.
-    fn write_event(
+    /// Append one event as a JSONL line and fsync. Returns the serialized line
+    /// length on success so the caller can distinguish "nothing written" from
+    /// a partial append.
+    fn append_event(
         file: &mut BufWriter<File>,
         event: &RunEvent,
-    ) -> Result<(), JournalRecorderError> {
+    ) -> Result<usize, JournalRecorderError> {
         // Serialize to compact JSON (matching Python: sort_keys + compact separators)
         let mut buf = Vec::new();
         let mut ser = serde_json::Serializer::new(&mut buf);
@@ -272,14 +433,149 @@ impl JournalWriterTask {
         file.write_all(&buf)?;
         file.flush()?;
         file.get_ref().sync_all()?;
-        Ok(())
+        Ok(buf.len())
+    }
+
+    /// Repair a partially-appended line after a failed write (0z S2): the
+    /// append-only file may hold a torn tail — everything after the last
+    /// complete line is dropped so the next append starts on a line boundary.
+    /// Without this, a backoff retry would splice a new event into the middle
+    /// of a torn line and the chain would be unreplayable.
+    fn repair_partial_tail(&mut self) {
+        let Some(file) = self.file.as_mut() else {
+            return;
+        };
+        let _ = file.flush();
+        let Ok(_) = file.get_ref().sync_all() else {
+            return;
+        };
+        let mut f = file.get_ref();
+        let Ok(len) = f.metadata().map(|m| m.len()) else {
+            return;
+        };
+        let read_from = len.saturating_sub(4096);
+        let mut tail = vec![0u8; (len - read_from) as usize];
+        use std::io::{Read, Seek, SeekFrom};
+        if f.seek(SeekFrom::Start(read_from)).is_err() {
+            return;
+        }
+        if f.read_exact(&mut tail).is_err() {
+            // A torn tail can also mean the read itself fails on exotic
+            // volumes; fall through to the conservative truncation below only
+            // when the scan succeeded, otherwise leave the file untouched —
+            // the next open will surface the corruption loudly.
+            return;
+        }
+        let last_newline = tail.iter().rposition(|&b| b == b'\n');
+        let keep = match last_newline {
+            Some(pos) => read_from + pos as u64 + 1,
+            // No complete line at all: start from scratch rather than keep a
+            // torn prefix.
+            None => 0,
+        };
+        if keep != len {
+            let _ = f.set_len(keep);
+            let _ = f.sync_all();
+        }
+    }
+
+    /// The storage-full backoff ladder (design §4.3 item 2): 10 / 40 / 160 ms
+    /// retries of the same append; every failed attempt is preceded by a
+    /// partial-tail repair so retries always start from a clean line boundary.
+    async fn append_with_backoff(&mut self, event: &RunEvent) -> Result<usize, std::io::Error> {
+        let mut attempt = 0;
+        loop {
+            if let Some(script) = self.fault.as_mut()
+                && let Some(e) = script.take_fault()
+            {
+                self.repair_partial_tail();
+                attempt += 1;
+                if attempt > 3 {
+                    return Err(e);
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(1)).await;
+                continue;
+            }
+            let write_result = match self.ensure_file() {
+                Ok(file) => Self::append_event(file, event).map_err(|e| match e {
+                    JournalRecorderError::Io(io) => io,
+                    other => std::io::Error::other(other.to_string()),
+                }),
+                Err(e) => Err(e),
+            };
+            match write_result {
+                Ok(len) => return Ok(len),
+                Err(e) if is_storage_full_error(&e) => {
+                    self.repair_partial_tail();
+                    attempt += 1;
+                    if attempt > 3 {
+                        return Err(e);
+                    }
+                    // 10 / 40 / 160 ms — the design's ladder.
+                    tokio::time::sleep(std::time::Duration::from_millis(
+                        10 * 4u64.pow(attempt - 1),
+                    ))
+                    .await;
+                }
+                Err(e) => return Err(e),
+            }
+        }
+    }
+
+    /// Enter degraded mode after the ladder is exhausted (design §4.3 item 3).
+    fn enter_degraded(&mut self, dropped_sequence: u64, cause: String) {
+        if self.degraded.is_some() {
+            return;
+        }
+        tracing::warn!(
+            sequence = dropped_sequence,
+            "journal degraded mode entered: storage-full backoff ladder exhausted; \
+             chain-skeleton events only (FUS-HOST-RESOURCE-SAFETY §4.3)"
+        );
+        self.degraded = Some(DegradedState {
+            entered_at: chrono_now_compact(),
+            cause,
+            dropped_events: 1,
+            first_dropped_sequence: Some(dropped_sequence),
+            reserved_bytes: journal_reserved_bytes(),
+        });
+    }
+
+    /// Degraded-mode terminal append: inject the degraded summary into the
+    /// payload, truncate overlong string values so the serialized line fits
+    /// the 8 KiB bound (design §4.3 item 3), re-seal, and append. The summary
+    /// marker is the on-disk evidence the `degraded_complete` classification
+    /// keys on; the original seal travels inside it as the pointer.
+    fn prepare_degraded_terminal(&self, event: &mut RunEvent) {
+        let Some(state) = self.degraded.as_ref() else {
+            return;
+        };
+        if event.payload.get("degraded").is_none() {
+            event.payload["degraded"] = state.to_summary_json();
+        }
+        seal_event(event).expect("re-seal after degraded summary injection");
+        // Bound the line: truncate the longest string values until the
+        // serialized event fits. Mechanical, shape-preserving — the row stays
+        // schema-valid and the chain stays replayable.
+        for _ in 0..16 {
+            let mut buf = Vec::new();
+            let mut ser = serde_json::Serializer::new(&mut buf);
+            if event.serialize(&mut ser).is_err() {
+                break;
+            }
+            if buf.len() < DEGRADED_EVENT_BOUND_BYTES {
+                break;
+            }
+            truncate_longest_string(&mut event.payload);
+            seal_event(event).expect("re-seal after degraded truncation");
+        }
     }
 
     async fn run(mut self) {
         use JournalCmd::*;
         while let Some(cmd) = self.rx.recv().await {
             match cmd {
-                WriteEvent { event, ack } => {
+                WriteEvent { mut event, ack } => {
                     if self.closed {
                         let _ = ack.send(Err(JournalRecorderError::Closed));
                         continue;
@@ -297,23 +593,73 @@ impl JournalWriterTask {
                             ack.send(Err(JournalRecorderError::TerminalAppended(event.sequence)));
                         continue;
                     }
-                    match Self::ensure_file(&mut self) {
-                        Ok(file) => {
-                            if let Err(e) = Self::write_event(file, &event) {
-                                tracing::error!("journal write error: {e}");
-                                self.closed = true;
-                                let _ = ack.send(Err(e));
-                            } else {
-                                if event.is_terminal() {
-                                    self.terminal_seen = true;
-                                }
-                                // 0v-C: report the sealed hash the caller must
-                                // thread into the next event's `previous` link.
-                                let _ = ack.send(Ok(event.event_sha256.clone()));
+                    // Degraded skeleton filter (design §4.3 item 3): only
+                    // chain-skeleton-necessary events land — terminal shapes.
+                    // Everything else (mechanical_audit, snapshots, ledger
+                    // folds, big payloads…) is regenerable face and is refused
+                    // WITHOUT consuming a sequence number (the caller must not
+                    // advance its bookkeeping — the `DegradedDropped` ack).
+                    if let Some(state) = self.degraded.as_mut()
+                        && !event.is_terminal()
+                    {
+                        state.dropped_events += 1;
+                        if state.first_dropped_sequence.is_none() {
+                            state.first_dropped_sequence = Some(event.sequence);
+                        }
+                        let _ = ack.send(Err(JournalRecorderError::DegradedDropped {
+                            sequence: event.sequence,
+                            event_type: event.event_type.to_string(),
+                        }));
+                        continue;
+                    }
+                    if self.degraded.is_some() {
+                        self.prepare_degraded_terminal(&mut event);
+                    }
+                    match self.append_with_backoff(&event).await {
+                        Ok(_) => {
+                            if event.is_terminal() {
+                                self.terminal_seen = true;
                             }
+                            // 0v-C: report the sealed hash the caller must
+                            // thread into the next event's `previous` link.
+                            // Degraded rewrites re-seal inside the writer, so
+                            // the returned hash is still the on-disk seal.
+                            let _ = ack.send(Ok(event.event_sha256.clone()));
+                        }
+                        Err(e) if is_storage_full_error(&e) => {
+                            // The ladder is exhausted: enter degraded mode and
+                            // refuse THIS event (the caller keeps its chain
+                            // bookkeeping). The journal stays open — space may
+                            // return, and the terminal shape is still owed.
+                            let seq = event.sequence;
+                            let was_terminal = event.is_terminal();
+                            let event_type = event.event_type.to_string();
+                            self.enter_degraded(seq, format!("{e}"));
+                            if was_terminal {
+                                // 判据 6: a terminal event that cannot land on
+                                // the chain still leaves an enumerable terminal
+                                // shape — the TERMINAL.json sidecar + stderr.
+                                let journal_dir = self
+                                    .path
+                                    .parent()
+                                    .map(Path::to_path_buf)
+                                    .unwrap_or_else(|| PathBuf::from("."));
+                                write_terminal_sidecar(
+                                    &journal_dir,
+                                    &event.run_id,
+                                    self.degraded.as_ref(),
+                                    seq,
+                                    &event_type,
+                                    &e.to_string(),
+                                );
+                            }
+                            let _ = ack.send(Err(JournalRecorderError::DegradedDropped {
+                                sequence: seq,
+                                event_type,
+                            }));
                         }
                         Err(e) => {
-                            tracing::error!("journal file open error: {e}");
+                            tracing::error!("journal write error: {e}");
                             self.closed = true;
                             let _ = ack.send(Err(JournalRecorderError::Io(e)));
                         }
@@ -344,6 +690,38 @@ impl JournalWriterTask {
                 }
             }
         }
+    }
+}
+
+/// Truncate the longest string value in the payload (recursively) to a bounded
+/// head + pointer marker. Shape-preserving: keys, nesting and value kinds are
+/// untouched, so the row stays schema-valid.
+fn truncate_longest_string(value: &mut serde_json::Value) {
+    use serde_json::Value;
+    const HEAD: usize = 256;
+    match value {
+        Value::Object(map) => {
+            if let Some((_, longest)) = map
+                .iter_mut()
+                .filter(|(_, v)| v.as_str().is_some_and(|s| s.chars().count() > HEAD))
+                .max_by_key(|(_, v)| v.as_str().map(|s| s.len()).unwrap_or(0))
+            {
+                if let Value::String(s) = longest {
+                    let head: String = s.chars().take(HEAD).collect();
+                    *s = format!("{head}…[degraded-truncated]");
+                }
+                return;
+            }
+            for (_, v) in map.iter_mut() {
+                truncate_longest_string(v);
+            }
+        }
+        Value::Array(items) => {
+            for item in items {
+                truncate_longest_string(item);
+            }
+        }
+        _ => {}
     }
 }
 
@@ -645,6 +1023,278 @@ mod tests {
 
         let content = std::fs::read_to_string(dir.join("events.jsonl")).unwrap();
         assert_eq!(content.lines().count(), 2);
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    // ── 0z S2 §4.3: 状态链抗饿死（ENOSPC 三退 → Degraded → 显式收尾）────
+
+    /// EventWriter's degraded contract, replayed at the recorder level: a
+    /// `DegradedDropped` ack means the event was NOT written and the caller
+    /// must keep its sequence/hash bookkeeping — the on-disk chain stays
+    /// contiguous because dropped events never consume a sequence number.
+    struct ChainBookkeeping {
+        seq: u64,
+        prev: Option<String>,
+    }
+
+    impl ChainBookkeeping {
+        fn new() -> Self {
+            Self { seq: 0, prev: None }
+        }
+
+        async fn record(
+            &mut self,
+            recorder: &JournalRecorder,
+            event_type: EventType,
+            payload: serde_json::Value,
+        ) -> Result<(), JournalRecorderError> {
+            let event = RunEvent::new_v01(
+                "RUN-DEGRADED".into(),
+                self.seq,
+                event_type,
+                "test-manifest-sha256-64chars-long___________________".into(),
+                self.prev.clone(),
+                "test-schema".into(),
+                payload,
+                Redaction::None,
+                "2026-09-12T00:00:00Z".into(),
+            );
+            match recorder.record_async(event).await {
+                Ok(hash) => {
+                    self.prev = Some(hash);
+                    self.seq += 1;
+                    Ok(())
+                }
+                Err(JournalRecorderError::DegradedDropped { .. }) => Ok(()),
+                Err(e) => Err(e),
+            }
+        }
+    }
+
+    /// Design §4.3 items 2-3: the ladder (initial + 3 retries) is exhausted →
+    /// degraded mode → regenerable events are refused without consuming a
+    /// sequence number → the terminal lands WITH the degraded summary marker
+    /// → the chain replays valid. 判据 6's `run_terminated`/terminal leg.
+    #[tokio::test]
+    async fn storage_full_ladder_enters_degraded_and_chain_stays_replayable() {
+        let dir = temp_dir();
+        // The first event's four attempts (initial + 10/40/160 ms retries)
+        // all fail; later attempts succeed (transient ENOSPC that recovered).
+        let recorder = JournalRecorder::new_with_write_faults_for_tests(dir.clone(), 4);
+
+        let mut chain = ChainBookkeeping::new();
+        chain
+            .record(
+                &recorder,
+                EventType::RunStarted,
+                serde_json::json!({"i": 0}),
+            )
+            .await
+            .expect("degraded drop is not an error at the writer level");
+        chain
+            .record(
+                &recorder,
+                EventType::ModelOutput,
+                serde_json::json!({"i": 1, "big": "regenerable face"}),
+            )
+            .await
+            .expect("dropped regenerable event");
+        chain
+            .record(
+                &recorder,
+                EventType::RunFinished,
+                serde_json::json!({"status": "completed"}),
+            )
+            .await
+            .expect("terminal lands in degraded mode");
+        recorder.shutdown_async().await.unwrap();
+
+        let events_path = dir.join("events.jsonl");
+        let content = std::fs::read_to_string(&events_path).unwrap();
+        let rows: Vec<serde_json::Value> = content
+            .lines()
+            .map(|line| serde_json::from_str(line).unwrap())
+            .collect();
+        // run_started (seq 0) and model_output were dropped; run_finished is
+        // the journal's FIRST line and carries sequence 0 — the caller's
+        // bookkeeping never advanced for the dropped events.
+        assert_eq!(rows.len(), 1, "only the terminal landed: {content}");
+        assert_eq!(rows[0]["sequence"], serde_json::json!(0));
+        assert_eq!(rows[0]["event_type"], serde_json::json!("run_finished"));
+        let degraded = rows[0]["payload"]["degraded"]
+            .as_object()
+            .expect("degraded summary marker injected by the writer");
+        assert_eq!(
+            degraded["dropped_events"],
+            serde_json::json!(2),
+            "run_started + model_output were dropped while degraded"
+        );
+        assert_eq!(degraded["first_dropped_sequence"], serde_json::json!(0));
+
+        // The skeleton replays: contiguous sequences, unbroken hash chain,
+        // exactly one terminal.
+        let replay =
+            super::super::verifier::replay_journal(&events_path, Some("RUN-DEGRADED"), None, true);
+        assert!(
+            replay.valid,
+            "degraded skeleton must replay: {:?}",
+            replay.errors
+        );
+
+        // No sidecar — the terminal landed on the chain.
+        assert!(!dir.join("TERMINAL.json").exists());
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// 判据 6's TERMINAL.json leg: when even the terminal event cannot land
+    /// (persistent ENOSPC), the sidecar is the enumerable terminal shape.
+    #[tokio::test]
+    async fn persistent_enospc_terminal_falls_back_to_sidecar() {
+        let dir = temp_dir();
+        // Fail far more attempts than any ladder can absorb.
+        let recorder = JournalRecorder::new_with_write_faults_for_tests(dir.clone(), 100);
+
+        let mut chain = ChainBookkeeping::new();
+        chain
+            .record(
+                &recorder,
+                EventType::RunStarted,
+                serde_json::json!({"i": 0}),
+            )
+            .await
+            .expect("degraded drop");
+        chain
+            .record(
+                &recorder,
+                EventType::RunTerminated,
+                serde_json::json!({"reason": "journal_degraded"}),
+            )
+            .await
+            .expect("terminal refused via the degraded contract, sidecar written");
+        recorder.shutdown_async().await.unwrap();
+
+        // Nothing landed on the chain, but the terminal shape exists.
+        let content = std::fs::read_to_string(dir.join("events.jsonl"));
+        assert!(
+            content.as_deref().map(str::is_empty).unwrap_or(true),
+            "no event may have landed: {content:?}"
+        );
+        let sidecar = std::fs::read_to_string(dir.join("TERMINAL.json")).expect("sidecar exists");
+        let sidecar: serde_json::Value = serde_json::from_str(&sidecar).unwrap();
+        assert_eq!(sidecar["reason"], serde_json::json!("journal_degraded"));
+        assert_eq!(
+            sidecar["planned_event_type"],
+            serde_json::json!("run_terminated")
+        );
+        assert!(
+            sidecar["degraded"].is_object(),
+            "sidecar carries the degraded summary"
+        );
+        let size = std::fs::metadata(dir.join("TERMINAL.json")).unwrap().len();
+        assert!(size < 4096, "the sidecar is bounded (< 4 KiB), got {size}");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A transient ENOSPC that recovers inside the ladder never degrades the
+    /// journal: the event lands on the retry and the chain is untouched.
+    #[tokio::test]
+    async fn transient_enospc_recovers_within_the_ladder() {
+        let dir = temp_dir();
+        // One failed attempt: the initial try of the first event; the first
+        // retry succeeds.
+        let recorder = JournalRecorder::new_with_write_faults_for_tests(dir.clone(), 1);
+
+        let mut chain = ChainBookkeeping::new();
+        chain
+            .record(
+                &recorder,
+                EventType::RunStarted,
+                serde_json::json!({"i": 0}),
+            )
+            .await
+            .expect("retry succeeds");
+        chain
+            .record(
+                &recorder,
+                EventType::RunFinished,
+                serde_json::json!({"status": "completed"}),
+            )
+            .await
+            .expect("normal terminal");
+        recorder.shutdown_async().await.unwrap();
+
+        let events_path = dir.join("events.jsonl");
+        let content = std::fs::read_to_string(&events_path).unwrap();
+        let rows: Vec<serde_json::Value> = content
+            .lines()
+            .map(|line| serde_json::from_str(line).unwrap())
+            .collect();
+        assert_eq!(rows.len(), 2, "both events landed: {content}");
+        assert!(
+            rows.iter().all(|r| r["payload"].get("degraded").is_none()),
+            "no degraded marker may exist on a non-degraded journal: {content}"
+        );
+        let replay =
+            super::super::verifier::replay_journal(&events_path, Some("RUN-DEGRADED"), None, true);
+        assert!(replay.valid, "chain broken: {:?}", replay.errors);
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The degraded summary injection re-seals the row — the returned hash is
+    /// the on-disk seal (the 0v-C contract survives the S2 rewrite path).
+    #[tokio::test]
+    async fn degraded_terminal_ack_returns_the_ondisk_seal() {
+        let dir = temp_dir();
+        let recorder = JournalRecorder::new_with_write_faults_for_tests(dir.clone(), 4);
+
+        // Consume the fault script: the non-terminal event exhausts the ladder
+        // and enters degraded mode (its ack is a DegradedDropped).
+        let dropped = RunEvent::new_v01(
+            "RUN-SEAL".into(),
+            0,
+            EventType::RunStarted,
+            "test-manifest-sha256-64chars-long___________________".into(),
+            None,
+            "test-schema".into(),
+            serde_json::json!({"i": 0}),
+            Redaction::None,
+            "2026-09-12T00:00:00Z".into(),
+        );
+        assert!(matches!(
+            recorder.record_async(dropped).await,
+            Err(JournalRecorderError::DegradedDropped { .. })
+        ));
+
+        let event = RunEvent::new_v01(
+            "RUN-SEAL".into(),
+            0,
+            EventType::RunFinished,
+            "test-manifest-sha256-64chars-long___________________".into(),
+            None,
+            "test-schema".into(),
+            serde_json::json!({"status": "completed"}),
+            Redaction::None,
+            "2026-09-12T00:00:00Z".into(),
+        );
+        let acked = recorder.record_async(event).await.expect("terminal lands");
+        recorder.shutdown_async().await.unwrap();
+
+        let content = std::fs::read_to_string(dir.join("events.jsonl")).unwrap();
+        let on_disk: serde_json::Value =
+            serde_json::from_str(content.lines().next().unwrap()).unwrap();
+        assert_eq!(
+            acked,
+            on_disk["event_sha256"].as_str().unwrap(),
+            "the acked hash must be the on-disk seal (post-degraded-rewrite)"
+        );
+        assert!(
+            on_disk["payload"]["degraded"].is_object(),
+            "the rewritten row carries the degraded summary"
+        );
 
         let _ = std::fs::remove_dir_all(&dir);
     }

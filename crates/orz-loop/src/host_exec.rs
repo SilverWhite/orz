@@ -122,6 +122,60 @@ impl AgentLoopController {
             .await
     }
 
+    /// 0z S2 §4.2（2026-09-12，FUS-HOST-RESOURCE-SAFETY）：进程树扫除的
+    /// journal 面——宿主扫除器的 planned/executed 行落 `process_tree_reaped`
+    /// 事件（审计先行：planned 行先于任何 kill 落盘）。run 收尾 drain 一次。
+    pub(crate) async fn journal_pending_process_tree_reaps(
+        &self,
+        host: &dyn LoopHost,
+        writer: &mut EventWriter<'_>,
+    ) -> Result<(), AgentLoopError> {
+        let facts = host.drain_process_tree_reap_facts().await;
+        for fact in facts {
+            writer
+                .record(
+                    EventType::ProcessTreeReaped,
+                    serde_json::json!({
+                        "phase": fact.phase,
+                        "reason": fact.reason,
+                        "pids": fact.pids,
+                        "call_ids": fact.call_ids,
+                    }),
+                )
+                .await?;
+        }
+        Ok(())
+    }
+
+    /// 0z S2 §5（2026-09-12，FUS-HOST-RESOURCE-SAFETY）：宿主资源事实的
+    /// journal 面——`reclaim_performed`（审计先行由宿主保证）/
+    /// `resource_exhausted`（hard 档 planned/executed）/ `host_resource_denied`
+    /// （pre-issue 拒绝，含读数与动作分档）。run 收尾 drain 一次。
+    pub(crate) async fn journal_pending_host_resource_facts(
+        &self,
+        host: &dyn LoopHost,
+        writer: &mut EventWriter<'_>,
+    ) -> Result<(), AgentLoopError> {
+        const EVENT_TYPE_BY_FACT: &[(&str, EventType)] = &[
+            ("reclaim_performed", EventType::ReclaimPerformed),
+            ("resource_exhausted", EventType::ResourceExhausted),
+            ("host_resource_denied", EventType::HostResourceDenied),
+            ("resource_limit_hit", EventType::ResourceLimitHit),
+        ];
+        for fact in host.drain_host_resource_facts().await {
+            let Some(kind) = fact.get("event").and_then(Value::as_str) else {
+                continue;
+            };
+            let Some((_, event_type)) = EVENT_TYPE_BY_FACT.iter().find(|(k, _)| *k == kind) else {
+                continue;
+            };
+            let mut payload = fact.clone();
+            payload.as_object_mut().map(|o| o.remove("event"));
+            writer.record(event_type.clone(), payload).await?;
+        }
+        Ok(())
+    }
+
     /// 0v-A 引擎级取证面（2026-09-12，0v 第二批 S1；设计 §8.6/§8.7）：
     /// 把一次 `browser_control search` 的**引擎级事实**落盘到
     /// `{journal_dir}/serp-attempts/{tool_round}.json`（与
@@ -3578,6 +3632,10 @@ impl AgentLoopController {
                 // auto-bg 调用的 running:true 完成事件恒为后续（链规则），
                 // 且本调用自身的完成先落账，避免自身事件序错位。
                 self.journal_pending_idle_kills(host, writer).await?;
+                self.journal_pending_process_tree_reaps(host, writer)
+                    .await?;
+                self.journal_pending_host_resource_facts(host, writer)
+                    .await?;
                 // 2026-08-08 blackboard partition: fold the executed call
                 // into the tool-action section (category from the dispatcher).
                 // P2-14 S1：共享折叠分区按执行窗主轮章盖章。

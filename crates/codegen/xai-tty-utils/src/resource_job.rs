@@ -193,6 +193,31 @@ impl RunResourceJob {
     pub fn contains_process(&self, _pid: u32) -> io::Result<bool> {
         Ok(false)
     }
+
+    /// Hard-tier tree kill (design §4.8 表 1 / §4.7.1 第 14 条, 0z S2):
+    /// terminate every process associated with the run's root job — the whole
+    /// run's tool tree, not one call. Constraints live with the caller (only
+    /// hard tier, audit first via `resource_exhausted(planned)`, only heavy
+    /// classes, readable failure afterwards); this handle only guarantees the
+    /// kernel-level blast radius is exactly the run's job tree.
+    ///
+    /// Non-Windows: no kernel job — the caller's process-group teardown is the
+    /// only face, so this reports honest non-enforcement.
+    #[cfg(windows)]
+    pub fn kill(&self) -> io::Result<()> {
+        use windows::Win32::System::JobObjects::TerminateJobObject;
+
+        unsafe { TerminateJobObject(self.job, 1) }
+            .map_err(|e| io::Error::other(format!("TerminateJobObject(run): {e}")))
+    }
+
+    /// Non-Windows: no kernel job to terminate — honest non-enforcement.
+    #[cfg(not(windows))]
+    pub fn kill(&self) -> io::Result<()> {
+        Err(io::Error::other(
+            "run job kill: not kernel-enforced on this platform",
+        ))
+    }
 }
 
 #[cfg(windows)]
@@ -264,6 +289,133 @@ pub fn record_attach_failure() {
 /// Total attach failures observed in this process (observation face / S2).
 pub fn attach_failure_count() -> u64 {
     ATTACH_FAILURES.load(AtomicOrdering::Relaxed)
+}
+
+// ---------------------------------------------------------------------------
+// Spawn registration sink (FUS-HOST-RESOURCE-SAFETY §4.2 item 3, 0z S2)
+// ---------------------------------------------------------------------------
+
+/// One child-spawn observation, delivered to the ambient sink by
+/// [`crate::ProcessGroup::attach_pid`] — the single choke point every tool
+/// child already flows through. The host owns the call id and the session
+/// volume and turns this into the `.gsa/process_trees/<call_id>.json` record;
+/// the executor layer (orz-tools) attaches children without knowing about
+/// either, which is why the seam lives in the lowest common crate.
+#[derive(Clone, Debug)]
+pub struct SpawnObservation {
+    pub pid: u32,
+    /// sha256 over the **normalized** (canonicalized, lowercased) executable
+    /// image path — the fingerprint the sweep's condition ② re-queries on the
+    /// candidate process and compares against the registry record. `None` when
+    /// the platform cannot provide it (the sweep then refuses to kill:
+    /// 归属不明一律不杀).
+    pub image_sha256: Option<String>,
+    /// Unix milliseconds.
+    pub started_at: u64,
+}
+
+type SinkFn = dyn Fn(SpawnObservation) + Send + Sync;
+
+/// The ambient registration sink — `Some` exactly while a tool call is being
+/// dispatched by the host on this seam.
+static SPAWN_SINK: Mutex<Option<Arc<SinkFn>>> = Mutex::new(None);
+
+fn spawn_sink_slot() -> std::sync::MutexGuard<'static, Option<Arc<SinkFn>>> {
+    SPAWN_SINK
+        .lock()
+        .unwrap_or_else(|poison| poison.into_inner())
+}
+
+/// Install the registration sink for the duration of one tool call. Returns a
+/// guard; dropping it removes the sink (no nested-call ambiguity — the host
+/// dispatches one call at a time on this seam).
+pub fn set_spawn_sink(sink: Arc<SinkFn>) -> SpawnSinkGuard {
+    *spawn_sink_slot() = Some(sink);
+    SpawnSinkGuard
+}
+
+/// Guard removing the spawn sink on drop.
+pub struct SpawnSinkGuard;
+
+impl Drop for SpawnSinkGuard {
+    fn drop(&mut self) {
+        *spawn_sink_slot() = None;
+    }
+}
+
+/// Deliver one spawn observation to the ambient sink, if any. Best-effort by
+/// contract: registration failure never blocks a spawn.
+pub fn register_spawn(observation: SpawnObservation) {
+    let sink = spawn_sink_slot().clone();
+    if let Some(sink) = sink {
+        sink(observation);
+    }
+}
+
+/// The normalized image fingerprint for a still-open process handle:
+/// `QueryFullProcessImageNameW`, canonicalized + lowercased, sha256'd.
+#[cfg(windows)]
+pub fn image_fingerprint_from_handle(handle: windows::Win32::Foundation::HANDLE) -> Option<String> {
+    use windows::Win32::System::Threading::PROCESS_NAME_WIN32;
+    use windows::Win32::System::Threading::QueryFullProcessImageNameW;
+    use windows::core::PWSTR;
+
+    let mut buf = [0u16; 1024];
+    let mut size = buf.len() as u32;
+    let result = unsafe {
+        QueryFullProcessImageNameW(
+            handle,
+            PROCESS_NAME_WIN32,
+            PWSTR(buf.as_mut_ptr()),
+            &mut size,
+        )
+    };
+    if result.is_err() {
+        return None;
+    }
+    let path = String::from_utf16_lossy(&buf[..size as usize]);
+    // Normalize: Windows paths are case-insensitive and may arrive with mixed
+    // separators / prefixes; a canonical, lowercased form keeps the fingerprint
+    // stable across query sites (hardening b).
+    Some(sha256_hex_string(&path.replace('/', "\\").to_lowercase()))
+}
+
+/// Windows fingerprint by pid: open a query handle and read the image path.
+#[cfg(windows)]
+pub fn image_fingerprint_from_pid(pid: u32) -> Option<String> {
+    use windows::Win32::Foundation::CloseHandle;
+    use windows::Win32::System::Threading::{OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION};
+
+    unsafe {
+        let handle = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid).ok()?;
+        let hash = image_fingerprint_from_handle(handle);
+        let _ = CloseHandle(handle);
+        hash
+    }
+}
+
+/// Linux fingerprint: the `/proc/<pid>/exe` target, sha256'd.
+#[cfg(target_os = "linux")]
+pub fn image_fingerprint_from_pid(pid: u32) -> Option<String> {
+    let target = std::fs::read_link(format!("/proc/{pid}/exe")).ok()?;
+    Some(sha256_hex_string(&target.display().to_string()))
+}
+
+/// Other platforms: no image fingerprint — the sweep refuses to kill
+/// fingerprint-less candidates (归属不明一律不杀).
+#[cfg(not(any(windows, target_os = "linux")))]
+pub fn image_fingerprint_from_pid(_pid: u32) -> Option<String> {
+    None
+}
+
+/// sha256 hex of a string (small local helper — keeps the fingerprint format
+/// owned by this module).
+pub fn sha256_hex_string(input: &str) -> String {
+    use sha2::{Digest, Sha256};
+    let mut hasher = Sha256::new();
+    hasher.update(input.as_bytes());
+    let digest = hasher.finalize();
+    digest.iter().map(|b| format!("{b:02x}")).collect()
 }
 
 // ---------------------------------------------------------------------------

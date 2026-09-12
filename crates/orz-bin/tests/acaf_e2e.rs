@@ -324,7 +324,13 @@ async fn signer_process_full_lifecycle() {
         "an absent trigger must keep binding the periodic built-in"
     );
     let outcome = client
-        .verify_and_consume(&periodic, &"0".repeat(64), None, None, Some("initial_round"))
+        .verify_and_consume(
+            &periodic,
+            &"0".repeat(64),
+            None,
+            None,
+            Some("initial_round"),
+        )
         .await
         .expect("verify periodic ticket as the initial round");
     assert!(

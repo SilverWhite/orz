@@ -1219,6 +1219,9 @@ async fn run(
             .await?;
 
         handle.journal.shutdown_async().await?;
+        // 0z S2 §4.2：收尾扫除——本 run 泄漏的工具子进程（breakaway/attach
+        // 失败逃出两级 Job 者）在 run 结束时回收（宿主持登记表）。
+        host.finalize_process_trees();
 
         // P2-13 B3（2026-09-03，ADR-0010 §14.52 / 设计 §11.2 E9；B3 复审
         // 裁决：只按黑板水位、无压缩轮数门槛）：CLI 单 run = 单会话、无

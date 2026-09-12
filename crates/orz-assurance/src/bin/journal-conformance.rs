@@ -60,6 +60,17 @@ fn main() -> ExitCode {
     };
 
     match orz_assurance::journal::validate_journal_file(&journal, &repo_root) {
+        report if report.valid && report.degraded_complete => {
+            // FUS-HOST-RESOURCE-SAFETY §4.3 item 6 (0z S2): degraded-complete
+            // journals are chain-valid but knowingly event-incomplete — their
+            // own classification, never mixed with `invalid`.
+            println!(
+                "OK (degraded_complete) {} events — {}",
+                report.event_count,
+                journal.display()
+            );
+            ExitCode::SUCCESS
+        }
         report if report.valid => {
             println!("OK {} events — {}", report.event_count, journal.display());
             ExitCode::SUCCESS

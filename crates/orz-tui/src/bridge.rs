@@ -462,6 +462,22 @@ pub fn run_event_to_tui(event: &RunEvent) -> TuiEvent {
         EventType::ActionApproved => TuiEvent::ActionApproved {
             action_id: get_str(p, "action_id"),
         },
+        // FUS-HOST-RESOURCE-SAFETY §5 (2026-09-12, 0z S2): the host-resource
+        // fact families and the explicit terminal shape. The TUI shows the
+        // degraded terminal as a failed run (the detail carries the original
+        // terminal's fact) and the fact rows degrade to Unknown — no dedicated
+        // TUI surface yet (S2 观测面归 session 面读数).
+        EventType::RunTerminated => TuiEvent::RunFailed {
+            error: get_str(p, "detail"),
+        },
+        EventType::HostResourceSnapshot
+        | EventType::HostResourceDenied
+        | EventType::ResourceExhausted
+        | EventType::ProcessTreeReaped
+        | EventType::ReclaimPerformed
+        | EventType::ResourceLimitHit => TuiEvent::Unknown {
+            event_type: event.event_type.to_string(),
+        },
     }
 }
 
