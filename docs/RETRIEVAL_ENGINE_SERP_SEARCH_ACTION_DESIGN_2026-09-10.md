@@ -759,7 +759,7 @@ DuckDuckGo」，静态文本（0t 静态标注纪律），两条车道一致。`
 - **复审处理（2026-09-12 同日三面复审：实现+测试面 pass（0 P0/0 P1）、记录符合性面 pass（0 P0/2 P1 已修）、设计合理性面 pass）**：
   - **P2「逐字同源」表述限定（已修，纯文档）**：精确口径 = **内容逐字段同源、经 `orz_secrets::redact_secrets` 机械脱敏后落盘**——脱敏命中时（如结果 URL 含 token/key/`password =` 等值形态）落盘信封**不等于**模型所见，key 不落卷不变量有意优先（与 `persist_result_artifact` 同漏斗的既定安全偏离，非缺陷）；且落盘为 `to_string_pretty` 重序列化、模型所见为紧凑串，「逐字」从不指字节序一致。宿主侧代码注释在同一漏斗句内已声明脱敏，不改码；「脱敏确实发生在取证漏斗」无专用测试钉住——登记为可选项（S3 前或随 S4 一并补，一行测试即可），不阻塞。
   - P1×2 文档状态行同步滞后（TODO P0-0v 小节标题、BACKLOG P0 工作集 0v 片段仍停在「S1 已落码」/「S4 复跑待放行」）——已随本批修正。
-  - P3×5 登记：成功路径循环接线仅靠纯函数测试 + 视读覆盖（真实成功需浏览器，S4 实机取证补位）；`mark_unreached_as_not_attempted` 抽取等价性因 S1/S2 同提交无中间态 git 证据（终态语义 + 唯一调用点核证相符）；`SERP_MAX_SEARCH_QUERY_CHARS=500` 跨 crate 硬复制（注释已钉口径，生产恒为防御性 no-op）；`mod.rs:1728` 测试 fixture 残留旧失败文案（装饰性，不动）；`serp_budget=None`（lane=null）成功落盘内容路径未测（低价值补位可缓）。
+  - P3 登记 + 同日收口（orz `b1e9ac65`）：**已补**——脱敏漏斗钉字测试（`serp_attempts_forensic_funnel_redacts_secrets_without_touching_model_output`：信封含 `token=…` 与 `password =` 形态时落盘脱敏、模型输出原样；断言按不变量而非单一形态——URL 参数值 `redacted` 本身会被赋值形态 regex 再脱敏）、`lane=null` 无预算面测试（`serp_attempts_lane_is_null_without_budget_surface`）、`mod.rs` fixture 残留旧失败文案同步为生产现行 reason；回归 orz-loop lib 767/0/3（+2）、orz-host lib 290/0/5、fmt/clippy 干净。**登记不动**——成功路径循环接线（真实成功需浏览器，S4 实机取证补位）；`mark_unreached_as_not_attempted` 抽取等价性（终态语义 + 唯一调用点核证相符）；`SERP_MAX_SEARCH_QUERY_CHARS=500` 跨 crate 硬复制（注释已钉口径，生产恒为防御性 no-op）。
 - **登记观察（不动码，留用户裁决）**：`SerpSessionState::begin_search` 的
   pacing 公式 `SERP_SEARCH_COOLDOWN.saturating_sub(elapsed) + jitter` 中
   jitter 为**无条件相加**——冷却早已过期后的每次 search 仍付 0–2.5s 等待
