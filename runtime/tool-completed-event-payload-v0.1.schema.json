@@ -15,7 +15,7 @@
     "exit_code": { "type": ["integer", "null"] },
     "output_encoding": {
       "type": ["string", "null"],
-      "description": "Decode stage that produced the tool output (GAP-ENCODING-GATE, OPS-PROTOCOL §8): utf-8 / utf-8-sig / gb18030 / utf-8-lossy, comma-joined for multi-chunk streams."
+      "description": "Decode stage that produced the tool output (GAP-ENCODING-GATE, OPS-PROTOCOL §8): utf-8 / utf-8-sig / gb18030 / utf-8-lossy, comma-joined for multi-chunk streams. FUS-HOST-RESOURCE-SAFETY §4.4 (2026-09-12, 0z S1) adds the wide-text stages produced by read_file's decode-first gate for text-family files: utf-16le / utf-16be."
     },
     "delivery_phase": {
       "enum": ["requested", "confirmed"],

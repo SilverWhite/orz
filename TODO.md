@@ -17,7 +17,7 @@
 ## 开放项路由（2026-09-09 同步；勾选与计数权威在 BACKLOG）
 
 - 未闭合总数：**26 项**（BACKLOG 计数口径；逐次计数流水见 [`docs/BACKLOG_AND_PRIORITIES.md`](docs/BACKLOG_AND_PRIORITIES.md) 未闭合计数，TODO 不重复维护）。TODO `[ ]` 明细含父/子项，计数以 BACKLOG 为准。
-- P0：0b 验证③④（⑤ 89 题独立用户门）；0d 后续 3/4/5 S4 复验；0j W1-R1 S4 复验 + W3-R3 余项 + W4-R4 S5-2 总项；0l ⑥⑦（⑧ TER 见 [`TODO2.md`](TODO2.md)）；0m S3/S4；0n GAP-APPROVAL-PROMPTER（延期，S1 设计定稿前置）；0o T3 批次 W2 chunk3 + T4 批次 L + T5 批次 O + T6 统一收口；0t S4 实机复验待续；0u R4 15 题官方复跑（0t S4 载体，2026-09-10 放行）；0v 检索引擎 SERP + browser_control 分类修正（S1–S3′ 完成；S4 复跑 2026-09-12 F1/F2 确认修复、本体判据未取得；**第二批（软备忘 + 0v-A 取证面，2026-09-12 放行合批）S1–S4 执行完毕（S4 判据 1/2/6/7/11/12 成立、9/10 未取得，闭合留用户裁决）**）；0w TB 4.0 单题摩擦探针（第三跑成立并跑完（2026-09-11））；0y NP1 机械身体集成支线（2026-09-11 用户裁决立项，实施未开始；§14.2 验证载体已裁决引入模拟器（2026-09-12），S1 载体搭建待放行，M0 定版为首个无依赖里程碑）。（0x 初始轮中立问询已于 2026-09-11 S1–S4 全部闭合转 `implemented`，计数 27 → 26；ADR-0010 §14.66 / v1.67。）
+- P0：0b 验证③④（⑤ 89 题独立用户门）；0d 后续 3/4/5 S4 复验；0j W1-R1 S4 复验 + W3-R3 余项 + W4-R4 S5-2 总项；0l ⑥⑦（⑧ TER 见 [`TODO2.md`](TODO2.md)）；0m S3/S4；0n GAP-APPROVAL-PROMPTER（延期，S1 设计定稿前置）；0o T3 批次 W2 chunk3 + T4 批次 L + T5 批次 O + T6 统一收口；0t S4 实机复验待续；0u R4 15 题官方复跑（0t S4 载体，2026-09-10 放行）；0v 检索引擎 SERP + browser_control 分类修正（**2026-09-12 用户裁决闭合入账：S1–S4 全部转 `implemented`，计数 26 → 25；0v-C 修复落码并**闭合**（`ba934af8`：回传落盘 `event_sha256` + 四处调用方线程化 + 全链重放钉子；根因实锤 = 漏斗无痕改写，Run A 4 处断链前序行全为含 URL 的 `model_output`））**；0w TB 4.0 单题摩擦探针（第三跑成立并跑完（2026-09-11））；0y NP1 机械身体集成支线（2026-09-11 用户裁决立项，实施未开始；§14.2 验证载体已裁决引入模拟器（2026-09-12），S1 载体搭建待放行，M0 定版为首个无依赖里程碑）；0z 真机资源安全边界与崩溃收尾（2026-09-12 用户裁决立项，设计完成待放行实施；S1–S4，**不与 0v-C 搭车**）。（0x 初始轮中立问询已于 2026-09-11 S1–S4 全部闭合转 `implemented`，计数 27 → 26；**0v 闭合 26 → 25、0z 立项 25 → 26**；ADR-0010 §14.66 / v1.67。）
 - P1：FUS-COMPONENT-REGISTER 组件审计；GAP-WINDOWS-EVIDENCE 三项；IMPL-DEEPSEEK-TRANSPORT live 晋级证据；ORZ-SESSION-CONTEXT-MONITOR 四项。
 - P2：IMPL-CONTROL-FABRIC Slice 3/4；OPS-PROTOCOL 裁剪与接线裁决；P2-11 余项（PULL 自描述 S3/S4、retryable 分类位、依赖图 S3/S4）；P2-12 S4 复验；P2-13 B4；P2-14 S3/S4。
 - P3：EVIDENCE-LOCAL-BROWSER、GATE-CHAIN、observed-scope 枚举、V11-IMPL-003、V11-IMPL-007、orz-host flaky。
@@ -605,6 +605,22 @@ GLM F2 处置转排期（2026-09-06 用户裁决）：`orz-host/src/approval.rs`
 - [x] §14.2 验证载体决策（**2026-09-12 用户裁决**）：引入模拟器为常设验证载体——载体集 = 模拟器（新增、常设）+ NP2（既有，流程纪律）+ NP1（端到端终验）；模拟器承担自有代码验证 + M5 补丁流程纪律干跑（坏补丁代价 = 删快照）；不验证厂商框架与 NP1 专属内核面（设计 §12 裁决段）。
 - [ ] S1 验证载体搭建（待放行）：无头 x86_64 安卓镜像选型与搭建（候选 ATD 类自动化镜像）；orz 0.4.2 x86_64 musl 三件套直接上机冒烟（静态 ELF 在安卓内核执行，与 BODY-PRE-01 同理，无需新构建）；Magisk-in-AVD 模块打包/安装/禁用/恢复实机化演练；M5 补丁流程纪律干跑首轮。
 
+
+### P0-0z 真机资源安全边界与崩溃收尾（2026-09-12 用户裁决立项；**设计完成、S1（A + D + F）与 S1.1 复核收口均已落码**；不换盘不换卷）
+
+> 设计权威：[`HOST_RESOURCE_SAFETY_DESIGN_2026-09-12`](docs/HOST_RESOURCE_SAFETY_DESIGN_2026-09-12.md)；BACKLOG 0z；索引 `FUS-HOST-RESOURCE-SAFETY` + `GAP-READ-FILE-TEXT-ENCODING`。
+> 触发：本轮真机自举两轮非正常终止（Run `RUN-CLI-6aa4f384` 盘满致命退出 / Run `RUN-CLI-6aa50fdf` commit 耗尽 abort）。
+> 追加裁决（2026-09-12）：**不挂沙箱**——以「机械硬门 + 回收兜底 + 必在收尾」替代（设计 §3.4）；借镜调研走一手来源： [`HOST_RESOURCE_MANAGEMENT_BORROW_RESEARCH_2026-09-12`](docs/HOST_RESOURCE_MANAGEMENT_BORROW_RESEARCH_2026-09-12.md)。
+> 追加裁决（2026-09-12 二轮）：**机械层优先 + 信息返回**（沿用 `OPS-PROTOCOL`"判断下沉机械层"正典）；**资源硬上限替代动态并发限流**（Job Object 内核强制：commit / 并发进程数 / CPU 速率）。承接：`OPS-PROTOCOL`（删除安全 → E）、`GAP-ENCODING-GATE`（编码门 → D 复用，不新造字段）。
+> 追加裁决（2026-09-12 三轮，终裁）：回收保留策略由"容量溢出"改**轮数窗口（默认 2 轮、最多扩至 3）**，**超预算缩减或拒绝、不向模型二次确认**；**回收站整体取消**（同卷不释放空间、可恢复价值被窗口覆盖；容量口径与 `trash` 态仅作历史回查记录）；`unknown` 类改 **fail-closed 拒绝**；**主撤销面 = git 兜底**（tracked 内容；既有 `snapshot_created`，本轮实测 25 次）+ `cache` 可再生 + 证据面拒绝；hard 档跳过窗口直删 `cache`（设计 §4.6.1）。
+
+- [x] **S1 代码面（缺口 A + D + F）落码完成并提交（2026-09-12，orz `73a8f25c`）**：派发前资源预检门（动作分档 + 余量读数准入 + 四档阶梯计算 + `HostCapacitySnapshot` 装配期注入；`orz-host/src/resource_gate.rs`）；编码门复用（`read_file` 文本族 decode-first，复用既有 `output_encoding`，**不新造字段**）；资源硬上限（run 级 ceilings 决策 + 每个工具调用 Job 承载 `JOB_OBJECT_LIMIT_JOB_MEMORY` / `ACTIVE_PROCESS` / CPU hard cap / `KILL_ON_JOB_CLOSE` + 内核读回；`xai-tty-utils/src/resource_job.rs`）。manifest 重算 1444 条 + 门禁 `valid: true`；证据与三处偏离：[`S1 实施审计`](docs/audits/0Z_S1_IMPLEMENTATION_AUDIT_2026-09-12.md)。
+- [x] **S1.1 复核收口落码完成并提交（2026-09-12，orz `ea794f90`，6 文件 +1234/−178）**：独立复核 10 项全部处置（[`复核`](docs/audits/0Z_S1_INDEPENDENT_REVIEW_2026-09-12.md) / [`收口审计`](docs/audits/0Z_S1_REVIEW_CLOSURE_2026-09-12.md)）——**F-1 两级 Job 恢复**（run 级 job 持限项 + 调用级 job 持 `KILL_ON_JOB_CLOSE`，**先根后子**指派；一手来源 Nested Jobs + 本机探针；并发聚合残余消除）、**F-2 `run_tests` 入门 + 挂 Job**、**F-3 `ACTIVE_PROCESS = 2×核数+8`（下限 16）**、**F-4 commit 上限改 `min(帽, 装配期余量−1 GiB)`（下限 2 GiB）+ 盘—内存轴间耦合登记**、**F-5 目标卷静态写入判定 + 逐卷读数**、**F-6 新增 `unknown` 档**、**F-7 here-string/heredoc 剥体留头（语料误判 56→49、零漏判）**、**F-8 命名/计数/注释收口**、**F-9 端到端钉子 + attach 失败计数**。回归 xai-tty-utils 27/0、orz-host lib 317/0/5 单线程、orz-tools encoding 20/0 与 read_file 121/0、fmt 干净；manifest 重算 1444 条 + 门禁 `valid: true`。设计同批更新（§4.2 补注 / §4.7.1 裁决表 / §9 耦合与代价 / §11 裁决 11–14）。
+- [ ] S2 机制与合约收口（缺口 C + B + E）：状态链抗饿死（ENOSPC 分类 → 退避 → Degraded 骨架模式 + reserve + 显式终止形态 + `journal-conformance` 的 `degraded_complete` 分类）；进程树生命周期（`.gsa/process_trees/` 登记 + 归属三条件扫除 + 三硬化；两级 Job 已由 S1.1 落地，S2 接手**树杀接线**与 `RunResourceJob::kill`）；回收机制（分类/fail-closed/白名单/指纹/审计先行四纪律 + **轮数窗口延迟删除（默认 2 轮、上限 3）** + **超预算缩减或拒绝不询问** + `unknown` 拒绝（不入回收站；回收站整体取消）+ hard 档跳窗直删；git 兜底边界 + **§4.7.1 第 14 条：不得删除在跑重活的产物面**）；事件族（含 `resource_limit_hit` / `host_resource_denied`，档位词表用 snake_case 机器键）/fixture/法官同批（子模块提交与 manifest 重算随批收口）。
+- [ ] S3 载体重建：版本 bump **0.4.3 → 0.4.4**，双平台三件套 + staging/哈希/manifest（纪律同 0.4.2/0.4.3）。
+- [ ] S4 实机复验（判据 1–13）：真机长任务复跑（含重活路径）+ 满盘注入 + abort 注入 + 编码样本；**0v-C 已另行闭合（`ba934af8`），本轮不搭车**。
+- [x] 裁决封闭（2026-09-12）：阈值（8 GiB / 25% / 16-8-**5**-2 GiB 阶梯）、硬上限（commit 80% 类 + CPU 80% + 并发=核数）、Job 限项（启用 commit/并发/CPU/KILL_ON_JOB_CLOSE；不启用每进程内存与 working set）、hard 档树杀（允许，四条限制）、孤儿扫除（三条件 + 三硬化）、soft 档柔性降级（默认关）、回收（轮数窗口 2 轮/上限 3、reclaim-direct 5 GiB、超预算拒绝不询问、**回收站取消**）、0z 与 0v-C 不合批。**设计无开放裁决项**；详见设计 §11 裁决记录 / §4.8。
+- [x] **S1.1 裁决修订（2026-09-12，用户授权工程裁决；设计 §4.7.1 + §11 裁决 11–14）**：**两级 Job 保留**（先根后子；修订 S1 的降级结论）、**`ACTIVE_PROCESS = 2 × 核数 + 8`（下限 16；修订原"核数"臂）**、**commit 上限 = `min(min(80%×limit, limit−4 GiB), 装配期余量 − 1 GiB)`（下限 2 GiB）**、`run_tests` 入门、目标卷按静态写入目标判定、新增 `unknown` 档、here-string/heredoc 剥体留头；**盘—内存轴间耦合登记**；**回收与在跑重活的次序**登记为 S2 承重项。
 
 ### P0-B FUS-RETRIEVAL-MECH（`implemented`；批次 1-6 全部闭合 2026-08-14，保留供核对）
 

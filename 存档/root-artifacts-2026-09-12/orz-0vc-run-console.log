@@ -1,0 +1,7 @@
+[2m2026-09-12T06:39:00.882569Z[0m [32m INFO[0m [2morz_config::shell[0m[2m:[0m Windows shell: powershell.exe
+[2m2026-09-12T06:39:00.891228Z[0m [32m INFO[0m [2morz_host[0m[2m:[0m web_search client configured: Enabled { api_key: "***REDACTED***", base_url: "https://api.deepseek.com", model: "deepseek-v4-flash", extra_headers: {}, alpha_test_key: None }
+[2m2026-09-12T07:58:47.741780Z[0m [32m INFO[0m [2morz_tools::computer::local::terminal[0m[2m:[0m Foreground command transitioned to background [3mtool_call_id[0m[2m=[0mcall_00_pVqhp2Xx7cgtmj5k4vBD9312 [3mreason[0m[2m=[0mForegroundTimeout
+[2m2026-09-12T08:09:01.908791Z[0m [32m INFO[0m [2morz_tools::computer::local::terminal[0m[2m:[0m Foreground command transitioned to background [3mtool_call_id[0m[2m=[0mcall_00_WqqpvNdhCO1YU6afBYxa9362 [3mreason[0m[2m=[0mForegroundTimeout
+[2m2026-09-12T08:17:10.392268Z[0m [33m WARN[0m [2morz_tools::persistence[0m[2m:[0m Failed to save resources state [3merror[0m[2m=[0mOs { code: 112, kind: StorageFull, message: "磁盘空间不足。" } [3mstate_path[0m[2m=[0m"D:\\CLI\\.gsa\\resources_state.json"
+[2m2026-09-12T08:17:16.487877Z[0m [31mERROR[0m [2morz_assurance::journal::recorder[0m[2m:[0m journal write error: journal io error: 磁盘空间不足。 (os error 112)
+error: journal error: journal io error: 磁盘空间不足。 (os error 112)
