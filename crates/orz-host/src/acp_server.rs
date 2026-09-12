@@ -2016,6 +2016,9 @@ impl AcpServer {
             policy,
         )
         .map_err(AcpError::Host)?
+        // FUS-HOST-RESOURCE-SAFETY (2026-09-12, 0z S1): 真机 ACP/stdio 路径的
+        // 生产装配点——run 级 Job 硬上限 + 派发前资源预检门。
+        .with_host_resource_safety()
         .with_permit_signer(handle.permit_signer.clone());
         if let Some(timeout) = tool_timeout {
             host = host.with_tool_timeout(timeout);

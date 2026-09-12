@@ -19,6 +19,7 @@ pub mod local_browser;
 pub mod pdf_evidence;
 pub mod permission;
 pub mod project_doc_index;
+pub mod resource_gate;
 pub mod retention;
 pub mod session;
 pub mod stdio;
@@ -127,6 +128,11 @@ pub struct OrzHost {
     /// 误报 `BrowserLaunchFailed`）。只串行「检查+启动」窗口；启动完成后
     /// 的页面动作仍可并发（browser_read tab 池语义不变）。
     browser_launch_lock: tokio::sync::Mutex<()>,
+    /// FUS-HOST-RESOURCE-SAFETY §4.1（2026-09-12，0z S1）：派发前资源预检门
+    /// ——`call_tool` 汇点上的机械硬门。`None` = 未注入（测试与嵌入式宿主
+    /// 维持零行为变化）；生产装配（`-p` 与 ACP 两路）经
+    /// [`OrzHost::with_host_resource_safety`] 注入真实探针并同时安装 run 硬上限。
+    resource_gate: Option<crate::resource_gate::ResourceGate>,
 }
 
 impl OrzHost {
@@ -239,7 +245,52 @@ impl OrzHost {
                 ),
             ))),
             browser_launch_lock: tokio::sync::Mutex::new(()),
+            resource_gate: None,
         })
+    }
+
+    /// FUS-HOST-RESOURCE-SAFETY（2026-09-12，0z S1）：装配期注入资源面——
+    /// ①安装 run 级硬上限（`JOB_OBJECT_LIMIT_JOB_MEMORY` commit /
+    /// `ACTIVE_PROCESS` 并发 / CPU hard cap，内核强制，覆盖此后每个工具调用的
+    /// 进程树）；②挂上派发前资源预检门（§4.1）。两步都按「读数不可得即
+    /// fail-closed」处理：上限读数拿不到就不挂 commit 上限（预检门独立承担
+    /// 准入），预检读数拿不到就拒绝重活。
+    ///
+    /// 生产装配点是 `orz-bin` 的 `-p` 路径与 `acp_server` 的 ACP 路径；测试
+    /// 与嵌入式宿主不调用本方法 → 行为与本批之前逐字一致。
+    pub fn with_host_resource_safety(mut self) -> Self {
+        let probe = Arc::new(crate::resource_gate::SystemCapacityProbe);
+        let snapshot = crate::resource_gate::CapacityProbe::probe(probe.as_ref(), &self.cwd);
+        let limits = crate::resource_gate::default_job_limits(&snapshot);
+        match xai_tty_utils::install_global_run_job(limits) {
+            Ok(job) => tracing::info!(
+                ceilings = %job.describe(),
+                "host resource ceilings installed (0z S1)"
+            ),
+            Err(e) => tracing::warn!(
+                error = %e,
+                "host resource ceilings unavailable — the pre-dispatch gate is the \
+                 remaining defence"
+            ),
+        }
+        tracing::info!(
+            headroom = %snapshot.describe(),
+            tier = %crate::resource_gate::tier_for(&snapshot).as_str(),
+            "host resource probe installed (0z S1)"
+        );
+        self.resource_gate = Some(crate::resource_gate::ResourceGate::new(probe));
+        self
+    }
+
+    /// The injected resource gate, when one is wired.
+    pub fn resource_gate(&self) -> Option<&crate::resource_gate::ResourceGate> {
+        self.resource_gate.as_ref()
+    }
+
+    /// Inject a specific gate (test seam + hosts that bring their own probe).
+    pub fn with_resource_gate(mut self, gate: crate::resource_gate::ResourceGate) -> Self {
+        self.resource_gate = Some(gate);
+        self
     }
 
     /// local_browser (2026-08-10) + 0t (2026-09-09, S2-R P3 / P2-3): inject
@@ -714,6 +765,44 @@ impl OrzHost {
         // 模型未传 `timeout` 时，宿主按命令形态注入两档默认（普通 300s /
         // 程序脚本 600s，毫秒）；显式传入以模型为准（工具层再按
         // max_timeout_secs=900 封顶）。注入只发生在执行侧，模型面不变。
+        // FUS-HOST-RESOURCE-SAFETY §4.1（2026-09-12，0z S1）：派发前资源
+        // 预检门——本汇点与权限门/web_search semaphore 同一处，机械硬门在
+        // 任何进程启动之前。重活（编译/测试/安装/解包/大输出重定向）需要
+        // 目标卷余量与 commit 余量达标；读数不可得即 fail-closed。拒绝以
+        // 结构化信封回传读数（模型面看到事实与读数，不需要自觉检查——
+        // design §2 item 7）。S1 只做「拒/放 + 读数」；soft/hard 档的回收与
+        // 树杀落在 S2（§4.6/§4.8）。
+        if let Some(gate) = &self.resource_gate {
+            let class = crate::resource_gate::classify_action(name, &args);
+            if let crate::resource_gate::GateDecision::Refuse {
+                code,
+                reason,
+                class,
+                tier,
+                snapshot,
+            } = gate.evaluate(&self.cwd, class)
+            {
+                tracing::warn!(
+                    tool = name,
+                    action_class = class.as_str(),
+                    tier = tier.map(|t| t.as_str()).unwrap_or("unavailable"),
+                    "pre-dispatch resource gate refused a heavy action"
+                );
+                return Ok(ToolResult {
+                    output: reason,
+                    exit_code: Some(1),
+                    output_encoding: None,
+                    structured: Some(serde_json::json!({
+                        "error": code,
+                        "phase": "pre_issue",
+                        "action_class": class.as_str(),
+                        "tier": tier.map(|t| t.as_str()).unwrap_or("unknown"),
+                        "readings": snapshot.to_json(),
+                    })),
+                    ..Default::default()
+                });
+            }
+        }
         let args = if name == "run_terminal_cmd" {
             crate::tools::inject_terminal_default_timeout(args)
         } else {
@@ -1679,6 +1768,179 @@ mod tests {
         assert_eq!(a.expect("ok a").exit_code, Some(0));
         assert_eq!(b.expect("ok b").exit_code, Some(0));
 
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    // ── FUS-HOST-RESOURCE-SAFETY §4.1（0z S1）汇点接线 ─────────────────
+
+    /// 判据 1/2 的汇点面：预检门在 `call_tool_inner` 里于**任何进程启动之前**
+    /// 拒绝重活，并回传读数 + 动作分档；轻活即使读数不可得也照常放行。
+    #[tokio::test]
+    async fn resource_gate_refuses_heavy_dispatch_at_the_call_tool_seam() {
+        use crate::resource_gate::{
+            ActionClass, CODE_RESOURCE_INSUFFICIENT, CapacityProbe, GIB, HostCapacitySnapshot,
+            ResourceGate, SourceQuality,
+        };
+
+        struct Fixed(HostCapacitySnapshot);
+        impl CapacityProbe for Fixed {
+            fn probe(&self, _path: &std::path::Path) -> HostCapacitySnapshot {
+                self.0
+            }
+        }
+        let low = HostCapacitySnapshot {
+            collected_at_ms: 7,
+            volume_free_bytes: GIB,
+            volume_total_bytes: 100 * GIB,
+            commit_limit_bytes: 32 * GIB,
+            commit_used_bytes: 30 * GIB,
+            source_quality: SourceQuality::Available,
+        };
+        let dir = test_dir();
+        let host = OrzHost::new(
+            JournalRecorder::new(dir.clone()),
+            &dir,
+            WorkspaceTrust::ObservedTrusted,
+        )
+        .unwrap()
+        .with_resource_gate(ResourceGate::new(Arc::new(Fixed(low))));
+
+        // Heavy command → refused before dispatch, with readings in the
+        // structured envelope (pre-issue family, same shape as the other
+        // pre-dispatch refusals).
+        let refused = host
+            .call_tool(
+                "run_terminal_cmd",
+                serde_json::json!({"command": "cargo build --release"}),
+                "c-heavy",
+            )
+            .await
+            .expect("refusal is an Ok tool result, not a host error");
+        assert_eq!(refused.exit_code, Some(1));
+        assert!(
+            refused.output.contains("Nothing was started"),
+            "{}",
+            refused.output
+        );
+        let envelope = refused.structured.expect("structured refusal envelope");
+        assert_eq!(envelope["error"], CODE_RESOURCE_INSUFFICIENT);
+        assert_eq!(envelope["phase"], "pre_issue");
+        assert_eq!(envelope["action_class"], "heavy");
+        assert_eq!(envelope["tier"], "hard");
+        assert_eq!(envelope["readings"]["volume_free_bytes"], GIB);
+        assert_eq!(envelope["readings"]["commit_free_bytes"], 2 * GIB);
+
+        // Light command through the same gate → executes normally (zero
+        // false refusals for reads/small writes).
+        let allowed = host
+            .call_tool(
+                "run_terminal_cmd",
+                serde_json::json!({
+                    "command": "echo gate-open",
+                    "description": "proxy: prove the gate lets light work through"
+                }),
+                "c-light",
+            )
+            .await
+            .expect("light call");
+        assert_eq!(allowed.exit_code, Some(0));
+        assert!(allowed.output.contains("gate-open"), "{}", allowed.output);
+        assert_eq!(
+            crate::resource_gate::classify_action(
+                "run_terminal_cmd",
+                &serde_json::json!({
+                    "command": "echo gate-open",
+                    "description": "proxy"
+                })
+            ),
+            ActionClass::Light
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// 判据 3：读数不可得时重活被拒（fail-closed），轻活不受影响。
+    #[tokio::test]
+    async fn resource_gate_is_fail_closed_when_readings_are_unavailable() {
+        use crate::resource_gate::{CapacityProbe, HostCapacitySnapshot, ResourceGate};
+
+        struct Blind;
+        impl CapacityProbe for Blind {
+            fn probe(&self, _path: &std::path::Path) -> HostCapacitySnapshot {
+                HostCapacitySnapshot::unavailable()
+            }
+        }
+        let dir = test_dir();
+        let host = OrzHost::new(
+            JournalRecorder::new(dir.clone()),
+            &dir,
+            WorkspaceTrust::ObservedTrusted,
+        )
+        .unwrap()
+        .with_resource_gate(ResourceGate::new(Arc::new(Blind)));
+
+        let refused = host
+            .call_tool(
+                "run_terminal_cmd",
+                serde_json::json!({"command": "cargo test"}),
+                "c-blind",
+            )
+            .await
+            .expect("refusal");
+        assert_eq!(refused.exit_code, Some(1));
+        let envelope = refused.structured.expect("envelope");
+        assert_eq!(envelope["tier"], "unknown");
+        assert_eq!(envelope["readings"]["source_quality"], "unavailable");
+
+        let allowed = host
+            .call_tool(
+                "run_terminal_cmd",
+                serde_json::json!({
+                    "command": "echo still-works",
+                    "description": "proxy: fail-closed gate must not block light work"
+                }),
+                "c-blind-light",
+            )
+            .await
+            .expect("light call");
+        assert_eq!(allowed.exit_code, Some(0));
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// F 的装配面（真机）：`with_host_resource_safety` 用真实探针装上限——本机
+    /// 读数可得、且内核读回至少一条限项（判据 12 的 S1 半段）。
+    #[tokio::test]
+    async fn host_resource_safety_installs_real_probe_and_ceilings() {
+        let dir = test_dir();
+        let host = OrzHost::new(
+            JournalRecorder::new(dir.clone()),
+            &dir,
+            WorkspaceTrust::ObservedTrusted,
+        )
+        .unwrap()
+        .with_host_resource_safety();
+        let gate = host.resource_gate().expect("gate wired at assembly");
+        let snapshot = gate.last_snapshot();
+        // The gate probes lazily, so ask it once through the public seam.
+        let decision = gate.evaluate(&dir, crate::resource_gate::ActionClass::Light);
+        assert!(
+            decision.is_allowed(),
+            "light actions are never refused: {decision:?}"
+        );
+        let job = xai_tty_utils::global_run_job().expect("run ceilings installed");
+        assert!(
+            job.is_kernel_enforced(),
+            "at least one ceiling must be kernel-visible on Windows: {}",
+            job.describe()
+        );
+        // `snapshot` is what the *assembly* probe read (may predate the call
+        // above); both paths must agree that the reading source is real.
+        assert!(
+            snapshot.is_none()
+                || snapshot.unwrap().source_quality
+                    == crate::resource_gate::SourceQuality::Available
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 

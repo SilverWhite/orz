@@ -5725,6 +5725,7 @@ dependencies = [
  "filetime",
  "flate2",
  "futures",
+ "libc",
  "orz-assurance",
  "orz-config",
  "orz-loop",
@@ -5746,6 +5747,7 @@ dependencies = [
  "windows 0.61.3",
  "xai-acp-lib",
  "xai-tool-runtime",
+ "xai-tty-utils",
 ]
 
 [[package]]

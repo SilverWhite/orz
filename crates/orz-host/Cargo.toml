@@ -25,6 +25,9 @@ orz-workspace = { path = "../codegen/orz-workspace" }
 orz-paths = { path = "../codegen/orz-paths" }
 orz-config = { path = "../codegen/orz-config" }
 xai-tool-runtime = { path = "../common/xai-tool-runtime" }
+# FUS-HOST-RESOURCE-SAFETY §4.7 (0z S1): the run-level job ceilings
+# (`JobLimits` / `install_global_run_job`) the host installs at assembly.
+xai-tty-utils = { workspace = true }
 
 # Runtime
 tokio = { workspace = true, features = ["full"] }
@@ -62,7 +65,16 @@ flate2 = { workspace = true }
 base64 = { workspace = true }
 
 [target.'cfg(windows)'.dependencies]
-windows = { workspace = true }
+# 0z S1 §4.1: the capacity probe reads volume free space
+# (`Win32_Storage_FileSystem`) and host commit (`Win32_System_SystemInformation`).
+windows = { workspace = true, features = [
+    "Win32_Storage_FileSystem",
+    "Win32_System_SystemInformation",
+] }
+
+[target.'cfg(unix)'.dependencies]
+# 0z S1 §4.1: the Linux capacity probe reads volume free space via `statvfs`.
+libc = { workspace = true }
 
 [dev-dependencies]
 # A5 retention tests: backdate record mtimes deterministically (workspace

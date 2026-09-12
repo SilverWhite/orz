@@ -1350,6 +1350,10 @@ fn build_cli_host(
     )?
     // P1 permit keystore — the session's DPAPI-backed signer.
     .with_permit_signer(handle.permit_signer.clone())
+    // FUS-HOST-RESOURCE-SAFETY (2026-09-12, 0z S1): 装配期注入资源面——
+    // run 级 Job 硬上限（commit / 并发 / CPU，内核强制）+ 派发前资源预检门。
+    // 这是真机 `-p` 路径的生产装配点。
+    .with_host_resource_safety()
     // D-9: fixed test-runner command (harness feedback loop).
     .with_test_runner(test_runner);
     if let Some(timeout) = tool_timeout {

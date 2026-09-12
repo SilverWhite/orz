@@ -44,6 +44,11 @@ pub use process_scope::{ProcessScope, global_process_scope};
 
 pub mod runtime;
 
+mod resource_job;
+pub use resource_job::{
+    JobLimits, JobReadback, RunResourceJob, global_run_job, install_global_run_job,
+};
+
 // ---------------------------------------------------------------------------
 // TTY detach — pre_exec building block
 // ---------------------------------------------------------------------------
@@ -375,43 +380,61 @@ unsafe impl Send for ProcessGroup {}
 unsafe impl Sync for ProcessGroup {}
 
 impl ProcessGroup {
+    /// Create a per-call job (Windows) / process-group handle (Unix) with the
+    /// historical semantics: `KILL_ON_JOB_CLOSE` on Windows, nothing on Unix.
+    ///
+    /// FUS-HOST-RESOURCE-SAFETY §4.7 (0z S1): when a run-level
+    /// [`RunResourceJob`] has been installed (production assembly, see
+    /// [`install_global_run_job`]), the new job is created carrying that run's
+    /// commit / concurrency / CPU ceilings, so the kernel enforces them on this
+    /// call's whole process tree. See the module docs for why the ceilings sit
+    /// on the per-call job rather than on a nested run job.
     pub fn new() -> io::Result<Self> {
+        Self::new_with_limits(JobLimits::default())
+    }
+
+    /// Create a per-call job. Explicit `limits` win; otherwise the installed
+    /// run ceilings apply (S1 uses the run-level decision; this is also the
+    /// seam for a per-call override).
+    pub fn new_with_limits(limits: JobLimits) -> io::Result<Self> {
         #[cfg(unix)]
         {
+            let _ = limits;
             Ok(Self { leader: None })
         }
         #[cfg(windows)]
         {
-            use std::mem::{size_of, zeroed};
             use windows::Win32::Foundation::CloseHandle;
-            use windows::Win32::System::JobObjects::{
-                CreateJobObjectW, JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
-                JOBOBJECT_EXTENDED_LIMIT_INFORMATION, JobObjectExtendedLimitInformation,
-                SetInformationJobObject,
+
+            // One run-level decision, applied to every call job (module docs):
+            // explicit limits win, otherwise the installed run ceilings apply.
+            let effective = if limits.is_empty() {
+                crate::resource_job::global_run_job()
+                    .map(|job| job.limits())
+                    .unwrap_or(limits)
+            } else {
+                limits
             };
-            use windows::core::PCWSTR;
-
-            let job = unsafe { CreateJobObjectW(None, PCWSTR::null()) }
-                .map_err(|e| io::Error::other(format!("CreateJobObjectW: {e}")))?;
-
-            let mut info: JOBOBJECT_EXTENDED_LIMIT_INFORMATION = unsafe { zeroed() };
-            info.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
-
-            let result = unsafe {
-                SetInformationJobObject(
-                    job,
-                    JobObjectExtendedLimitInformation,
-                    (&info as *const JOBOBJECT_EXTENDED_LIMIT_INFORMATION).cast(),
-                    size_of::<JOBOBJECT_EXTENDED_LIMIT_INFORMATION>() as u32,
-                )
-            };
-            if let Err(e) = result {
+            let job = crate::resource_job::windows_create_job()?;
+            if let Err(e) = crate::resource_job::apply_limits_to_job(job, &effective) {
                 let _ = unsafe { CloseHandle(job) };
-                return Err(io::Error::other(format!("SetInformationJobObject: {e}")));
+                return Err(e);
             }
-
             Ok(Self { job })
         }
+    }
+
+    /// Read back the ceilings this call job carries
+    /// (FUS-HOST-RESOURCE-SAFETY §4.7 — the mechanical "is it really set" face).
+    #[cfg(windows)]
+    pub fn readback_limits(&self) -> io::Result<crate::resource_job::JobReadback> {
+        crate::resource_job::readback_job(self.job)
+    }
+
+    /// No-op on non-Windows (no kernel job ceilings available).
+    #[cfg(not(windows))]
+    pub fn readback_limits(&self) -> io::Result<crate::resource_job::JobReadback> {
+        Ok(crate::resource_job::JobReadback::default())
     }
 
     pub fn attach(&mut self, child: &tokio::process::Child) -> io::Result<()> {

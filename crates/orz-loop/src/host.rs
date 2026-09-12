@@ -131,7 +131,9 @@ pub struct ToolResult {
     /// OPS-PROTOCOL §8): `utf-8` / `utf-8-sig` / `gb18030` / `utf-8-lossy`
     /// (comma-joined for multi-chunk streams). `None` when the tool has no
     /// mechanical decode stage. The controller journals it as
-    /// `tool_completed.output_encoding`.
+    /// `tool_completed.output_encoding`. FUS-HOST-RESOURCE-SAFETY §4.4
+    /// (2026-09-12, 0z S1) adds `utf-16le` / `utf-16be` for text-family files
+    /// that `read_file`'s decode-first gate recovers instead of rejecting.
     pub output_encoding: Option<String>,
     /// TER T1.11 (W-F13b)：run_terminal_cmd 输出被截断时的结构化事实——
     /// 完整输出已落盘为检索对象（`output_object_id` 可 pattern/行区间/

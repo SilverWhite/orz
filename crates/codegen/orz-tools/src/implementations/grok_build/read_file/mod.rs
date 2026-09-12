@@ -756,7 +756,21 @@ pub(crate) async fn run_read_file(
     if extension == "pptx" {
         return handle_pptx(file_bytes, &path).await;
     }
-    if crate::util::binary::is_binary(&extension, &file_bytes) {
+    // FUS-HOST-RESOURCE-SAFETY §4.4 (2026-09-12, 0z S1): decode-first gate for
+    // text-family files. The historical order (`is_binary` before any decode)
+    // rejected PowerShell-5 `>` output as "binary" because UTF-16LE text is
+    // riddled with NUL bytes — the model then had to work around a file the
+    // framework had just told it to write. Text-family extensions now try the
+    // mechanical decode chain FIRST (`util::encoding::sniff_text_bytes`: UTF-16
+    // BOM → UTF-8 → no-BOM UTF-16 heuristic → GB18030) and only fall through to
+    // the binary judgement when the bytes are not decodable text. Non-text
+    // families keep the old order, `BINARY_EXTENSIONS` first, unchanged.
+    let decoded = if crate::util::encoding::is_text_family_extension(&extension) {
+        crate::util::encoding::sniff_text_bytes(&file_bytes)
+    } else {
+        None
+    };
+    if decoded.is_none() && crate::util::binary::is_binary(&extension, &file_bytes) {
         tracing::info!(
             path = %path.display(),
             extension = %extension,
@@ -772,8 +786,17 @@ pub(crate) async fn run_read_file(
     // GAP-ENCODING-GATE (OPS-PROTOCOL §8): fixed decode chain — strip BOM →
     // UTF-8 strict → GB18030 → lossy; the hit stage is recorded on the
     // journal as `tool_completed.output_encoding` (model sees plain text).
-    let (file_content, output_encoding) = crate::util::encoding::decode_text(&file_bytes);
-    let output_encoding = Some(output_encoding.to_string());
+    // 0z S1 §4.4: a wide/legacy hit from the decode-first gate above reuses
+    // the same field (`output_encoding`, 裁决 9 — no new field), and the raw
+    // byte digest stays on the read anchor (`read_anchor.sha256` / the
+    // `ReadHandle` envelope's `content_sha256`).
+    let (file_content, output_encoding) = match decoded {
+        Some((text, label)) => (text, Some(label.to_string())),
+        None => {
+            let (text, label) = crate::util::encoding::decode_text(&file_bytes);
+            (text, Some(label.to_string()))
+        }
+    };
     // FUS-READ-ANCHOR-WRITE-GUARD (ADR-0010 §14.38): text path carries the
     // content anchor in both the envelope and the small-file output; PDF/PPTX/
     // image/binary paths returned earlier keep `None`.
@@ -1377,6 +1400,98 @@ mod tests {
             other => panic!("Expected FileContent, got {:?}", other),
         }
     }
+
+    fn utf16le(text: &str) -> Vec<u8> {
+        text.encode_utf16()
+            .flat_map(u16::to_le_bytes)
+            .collect::<Vec<u8>>()
+    }
+
+    /// FUS-HOST-RESOURCE-SAFETY §4.4 (0z S1): a UTF-16LE log with BOM — what
+    /// PowerShell 5's `>` produces — must read back as text, not
+    /// `Cannot read binary file`, and carry the hit stage on
+    /// `output_encoding` (裁决 9: no new field).
+    #[tokio::test]
+    async fn read_file_utf16le_bom_decodes_and_labels() {
+        let mut bytes = vec![0xff, 0xfe];
+        bytes.extend_from_slice(&utf16le("构建失败：缺少依赖\r\n"));
+        let result = run_read_file_on("out.log", &bytes).await;
+        match result {
+            ReadFileOutput::FileContent(content) => {
+                assert!(
+                    content.content.contains("构建失败"),
+                    "content: {:?}",
+                    content.content
+                );
+                assert_eq!(content.output_encoding.as_deref(), Some("utf-16le"));
+                // Raw bytes stay the read anchor digest source (undecoded).
+                let anchor = content.read_anchor.expect("text path carries the anchor");
+                assert_eq!(anchor.size, bytes.len());
+            }
+            other => panic!("Expected FileContent for UTF-16LE log, got {:?}", other),
+        }
+    }
+
+    /// The exact Run-B friction shape: a BOM-less UTF-16LE file produced by a
+    /// shell redirection. The NUL-alternation heuristic must catch it.
+    #[tokio::test]
+    async fn read_file_bom_less_utf16le_redirection_decodes() {
+        let bytes = utf16le("error: link failed\r\n");
+        let result = run_read_file_on("build.err", &bytes).await;
+        match result {
+            ReadFileOutput::FileContent(content) => {
+                assert!(
+                    content.content.contains("error: link failed"),
+                    "content: {:?}",
+                    content.content
+                );
+                assert_eq!(content.output_encoding.as_deref(), Some("utf-16le"));
+            }
+            other => panic!("Expected FileContent for UTF-16LE log, got {:?}", other),
+        }
+    }
+
+    /// A text-family extension is a *permission to try decoding*, not a
+    /// promise of text: real binary bytes with a text extension are still
+    /// rejected with the historical message.
+    #[tokio::test]
+    async fn read_file_text_family_binary_content_still_rejected() {
+        // NUL-bearing blob that is neither an image, a PDF, nor a valid
+        // UTF-16 parity pattern (those have their own gates).
+        let blob: Vec<u8> = (0..200u32)
+            .map(|i| {
+                if i % 4 < 2 {
+                    0x00
+                } else {
+                    b'A' + (i % 16) as u8
+                }
+            })
+            .collect();
+        let result = run_read_file_on("out.txt", &blob).await;
+        match result {
+            ReadFileOutput::FileReadError(msg) => assert!(
+                msg.contains("Cannot read binary file"),
+                "expected binary rejection, got: {msg}"
+            ),
+            other => panic!("Expected FileReadError for binary content, got {:?}", other),
+        }
+    }
+
+    /// Non-text families keep the historical order — `BINARY_EXTENSIONS`
+    /// still wins outright (design §4.4 item 4).
+    #[tokio::test]
+    async fn read_file_non_text_family_keeps_extension_priority() {
+        let bytes = utf16le("plain utf-16 ascii text");
+        let result = run_read_file_on("data.dat", &bytes).await;
+        match result {
+            ReadFileOutput::FileReadError(msg) => assert!(
+                msg.contains("Cannot read binary file"),
+                "expected binary rejection, got: {msg}"
+            ),
+            other => panic!("Expected FileReadError for .dat, got {:?}", other),
+        }
+    }
+
     #[tokio::test]
     async fn legacy_read_file_not_found_returns_exact_historical_message() {
         let tmp = TempDir::new().unwrap();
