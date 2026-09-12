@@ -88,10 +88,41 @@ Linux-only；Windows 仅有 Job Object kill-on-close 进程树收容（`job_obje
 授权 `--allow-shell` 的 Windows 会话对写盘/出网无内核限制，仅靠 ACAF 兜底。至少应
 在 README/安全文档明示，或补 Windows 侧限制。
 
+> **后记（2026-09-13，用户裁决：走「无沙盒 + 机械层限制」方向）**：本项与
+> 0z 设计 §3.4 显式登记的残余风险是同一缺口（"模型发起的进程仍可写到工作区
+> 之外、可长时间占满 CPU/IO"），在「机械硬门 + 回收兜底 + 必在收尾」三前提
+> 下作为**已接受残余风险**闭环；机械层替代件即 0z 已落码的 §4.1 预检门 +
+> §4.7 Job Object 硬上限 + §4.2 两级 Job 树杀（进程收容）+ §4.6/§4.3 回收
+> 与收尾。报告建议的「README/安全文档明示」保留为微项待后续批（现行明示
+> 载体 = 0z 设计 §3.4 等价性表与残余风险登记 + BACKLOG 治理注记）。相关
+> 连带裁决项另行登记：IMPL-CONTROL-FABRIC Slice 4（Windows Sandbox
+> backend，待实施）在无沙盒方向下应重新裁决去留。
+
 **P1-4　Linux bwrap profile resolve 失败静默降级为无沙箱计划**
 （`orz-sandbox/lib.rs:461-469`），对 write-deny 是 fail-open；read-deny 有
 `requires_read_deny` fail-closed 启动路径防护（lib.rs:415-441），两形态不一致，
 应统一 fail-closed。
+
+> **后记（2026-09-13，用户裁决选项 b，已实施）**：write-deny 统一 fail-closed。
+> `bwrap_deny_plan` Result 化——resolve 失败且该档案内在要求 deny 执法
+> （`requires_hook_write_deny ∨ requires_read_deny`，与 `requires_read_deny`
+> 同纪律：按 profile 配置内在分类，不用空-on-错误的解析结果判定）时返回 Err；
+> hook prepare 报 NotRequired/空计划、deny glob 扩展拒绝，三处原 fail-open
+> 出口全部转 Err；`bwrap_reexec_for_profile` 改 `Result<Option<Command>>`；
+> e2e 路由同步三分支；新增 fail-closed 钉子（`extends="off"` 的 deny 档
+> resolve 必 Err；Off 档仍优雅 `Ok(None)`）。与 `SandboxManager::apply` 既有
+> `?` 传播形态一致。边界：orz-sandbox 现状未接线生产（orz-host Cargo.toml
+> 注明 intentionally not yet declared），本修复为休眠面纪律统一，不改变
+> 「无沙盒」产品方向。**连带发现并修复（同一提交 orz `0b2a8f5b`）**：
+> 验证用 Docker Linux 实测暴露 0z S2/S2R 引入的两处 Linux 构建断裂
+> （纯 Windows 面回归无法发现，不修则 0z S3 musl 载体重建必败）——
+> ① xai-tty-utils lib.rs re-export 无条件导入 cfg(windows) 的
+> `duplicate_job_handle`/`image_fingerprint_from_handle`（E0432）；② sha2
+> 依赖误挂 cfg(windows) 桶而 Linux 指纹 `image_fingerprint_from_pid`
+> （`/proc/<pid>/exe` sha256，0z B 扫除指纹）需要它（E0432）。
+> 验证：Docker Linux rust:1.97.1 `cargo test --offline -p orz-sandbox`
+> 83 测全绿（含新钉子）；Windows xai-tty-utils 28/0 与 S2R 基线一致 +
+> orz-host all-targets check 干净 + fmt 干净。
 
 **P1-5　账本三处同步断裂（主会话复核确认）**。`CLI_PROJECT_INDEX.md:3-5`（v2.86，
 2026-09-12 14:15）已宣布 0v 闭合入账、计数 26 → 25、FUS-RETRIEVAL-ENGINE-SERP 转
