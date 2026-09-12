@@ -86,7 +86,43 @@
    内 search ≤4），判据 9/10 未取得实机样本。再探针需在 instruction 中
    约束"一次激活内完成全部查询"或改由主车道直调——留用户裁决是否加跑。
 
-## 4. 结论与边界
+## 4. 0v-C 深挖：断链根因定位（2026-09-12 同日，静态分析 + 最小复现）
+
+排查路径：数据面四重排除（行级全部自洽——重写假说否；sequence 单调无重复——双写/乱序否；单
+`run_started` + manifest 唯一——进程重启否；正常结束历史 journal 链全部完整）；代码面单 writer 纪律
+核证（recorder 单 task 串行 + 每行 fsync、EventWriter prev 单赋值点、子代理与主车道共用 writer、
+host RunRecorder 仅独立 run）；**最终以最小复现实锤**——
+
+**根因（结构性缺陷，`JournalRecorder::record_async`，orz `crates/orz-assurance/src/journal/recorder.rs:116`）**：
+
+```rust
+let mut event = event;
+orz_secrets::redact_json_string_values(&mut event.payload);  // 0p S2 B5 脱敏漏斗（改 payload）
+seal_event(&mut event)?;                                     // 重 seal —— 行内 sha = 脱敏后
+```
+
+而 emit 侧（`EventWriter::record`，orz-loop controller.rs）在调用 record_async **之前**已 seal 一次并取
+`event.event_sha256` 作为链推进值：
+
+```
+emit: seal(原文) -> event_hash = sha(原文) -> record_async（脱敏改 payload -> 重 seal -> 落盘 sha(脱敏后)）
+      -> writer.prev_hash = sha(原文)   ← 脱敏后该哈希对应的原文从未落盘
+```
+
+**任何 payload 被脱敏命中的事件都会使其后一行的 `previous_event_sha256` 指向一个不存在于文件的内容
+版本 → 链断裂**。最小复现（临时测试，已删）输出：落盘行文本带 `[REDACTED_SECRET]`、行内 sha
+`4a0758…`、emit 侧推进值 `fefd93…`——`prev 链断`形态与两份实机 journal 的 7 处断链逐项吻合。
+
+- **引入点**：0p S2 B5 脱敏漏斗（2026-09-07，0.3.2）——**该缺陷自 0.3.2 起存在，与本批 0v 改动无关**；
+  正常结束的历史 journal（0.3.x/0.4.1/0.4.2）链完整只是**恰无脱敏命中**（回放兼容判据 8 不受影响）。
+- **修复方向**（待立项）：①record_async 把重 seal 后的 hash 回传调用方（改返回类型为
+  `Result<String, _>`，emit 侧以回传值推进）；或②脱敏上移到 emit 侧构造 payload 时（seal 前一次完成）。
+  修复须配正式钉子测试（脱敏命中事件的后一行 prev == 行内 sha）+ 旧断链 journal 的只读回放兼容注记。
+- **残留疑点（交 orz 真机同步复核）**：s4a@98/196 的前一行（seq97/195 model_output）payload 用
+  `redact_secrets` 全文重放**零改动**——脱敏触发源未逐行定位（候选：payload 深层字段/URL 规范化
+  无痕改写/其他 record_async 调用点）。触发源定位不阻塞修复立项（机制已实锤）。
+
+## 5. 结论与边界
 
 - **0v 第二批 S4 执行完毕**：判据 1/2/6/7/11/12 成立（其中 1/7/11/12 为
   决定性实机证据）、3/4/5 部分成立（观察项 §3.1–3.3）、8 成立、9/10 未
