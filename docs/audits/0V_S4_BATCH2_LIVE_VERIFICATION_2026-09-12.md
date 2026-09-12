@@ -121,6 +121,21 @@ emit: seal(原文) -> event_hash = sha(原文) -> record_async（脱敏改 paylo
 - **残留疑点（交 orz 真机同步复核）**：s4a@98/196 的前一行（seq97/195 model_output）payload 用
   `redact_secrets` 全文重放**零改动**——脱敏触发源未逐行定位（候选：payload 深层字段/URL 规范化
   无痕改写/其他 record_async 调用点）。触发源定位不阻塞修复立项（机制已实锤）。
+- **✅ 修复已实施并端到端验证（2026-09-12 当日，orz 真机自修）**：将本问题整体交给 orz 0.4.3 真机
+  载体（宿主机首跑：工作区信任（重定向 grok-home）、ACAF fail-closed（provision manifest/keystore、
+  signer sha256 与 S3 锁定一致）、权限门（--allow-write/shell/network 40/40 全放行）、ACAF 票据链
+  25 次签发/消费——全链首次宿主机实机贯通）自主完成修复（orz `ba934af8`，run
+  RUN-CLI-6aa4f384/6aa50fdf 两轮，中途死于磁盘满/OOM 两次、产出完好由执行代理接手机械收尾）：
+  **`record/record_async` 返回落盘（脱敏后重 seal）`event_sha256` 经 ack 回传，调用方
+  （EventWriter::record + orz-host RunRecorder::record）以回传值推进 prev 链**，废除漏斗外预封印；
+  新增全链重放回归测试 `pipeline_journal_replays_valid_after_funnel_rewrite` + redact_forensics
+  取证 example。回归 orz-assurance 213/0/5、orz-loop 768/0/3、orz-host 290/0/5、fmt 干净、新增
+  代码 clippy 零告警。**端到端决定性验证**（修复后载体重建 `ba934af8`）：①正常任务 run
+  RUN-CLI-6aa51e61 conformance OK 22 events；②**强制触发轮 RUN-CLI-6aa51ee1**（prompt 含
+  `token=supersecretvalue123`）→ 4 事件落盘 `[REDACTED_SECRET]`（脱敏命中）→ **conformance OK
+  9 events 链完整**——「脱敏命中 + 链完整」共存，修复实锤。**触发源答案**（orz 测试注释揭示）：
+  命中不止敏感值替换，`redact_urls_in` 的 `Url::parse → to_string` **规范化改写**（如空路径补
+  `/`）同样无痕迹改动内容——解释了实机断点前行「重放零改动」的假象（重放时规范化幂等）。
 
 ## 5. 结论与边界
 
