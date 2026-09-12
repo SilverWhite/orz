@@ -1,4 +1,11 @@
-# 0x / 0v S4 实机复验 — 单题执行器（2026-09-11）
+# 0v-B 定向探针执行器（2026-09-12，0v 第二批 S4(b)）
+#
+# 用途：本地任务 D:/tb-eval/probe-0vb（固定 12 查询 + 显式连续 search），
+#   一次取证判据 1/5/7 与 9（主车道预算打穿）；判据 10 视会话头寸
+#   是否降到 16 而定（检索车道档位不定，不硬求）。
+# 口径与主 runner 同（k=1、-r 0、官方墙钟、直连、Chromium 只读挂载），
+# 任务源为本地目录（harbor -p），镜像引用本地 alexgshaw/protein-assembly。
+
 #
 # 用途：一题（可多题）单次实机，为两条 S4 同时取证——
 #   0x 初始轮中立问询：验证「开局一次、动作中不复发」（journal 面：
@@ -39,12 +46,13 @@ VOL_ROOT = Path('D:/tb-eval/gsa-volumes')
 BINARY = Path('D:/tb-eval/orz-linux/orz')
 BROWSER_DIR = Path('D:/tb-eval/browser/chrome-linux')
 MODEL = 'deepseek-v4-flash'
-JOB_PREFIX = 's4-0x-0v-b2'
+JOB_PREFIX = 's4-0vb-probe'
 # agent 准备阶段超时余量：harbor 默认 360s，eval_browser=true 需在容器内装
 # Chromium（坏线路下 ~15min），故 ×4（沿 0w 第二跑后修订）。
 AGENT_SETUP_TIMEOUT_MULTIPLIER = '4'
 
-TASKS = ['dna-assembly']
+TASK_DIR = Path('D:/tb-eval/probe-0vb')
+TASKS = ['serp-probe-0vb']
 
 
 def log(msg: str) -> None:
@@ -98,7 +106,7 @@ def invoke_one_task(task: str) -> int:
         log(f'browser mount skipped: {BROWSER_DIR} not found (falling back to harness bootstrap)')
     mounts = json.dumps(mount_list)
     args = [
-        'run', '-t', f'terminal-bench/{task}', '-n', '1', '-r', '0',
+        'run', '-p', str(TASK_DIR), '--disable-verification', '-n', '1', '-r', '0',
         '--agent-setup-timeout-multiplier', AGENT_SETUP_TIMEOUT_MULTIPLIER,
         '-a', 'tb_agents.orz:Orz', '-m', MODEL,
         '--ak', f'orz_binary={BINARY.as_posix()}',
