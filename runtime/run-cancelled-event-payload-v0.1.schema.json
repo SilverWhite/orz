@@ -8,6 +8,22 @@
     "reason"
   ],
   "properties": {
-    "reason": { "enum": ["user_cancelled"] }
+    "reason": { "enum": ["user_cancelled"] },
+    "degraded": {
+      "type": "object",
+      "description": "FUS-HOST-RESOURCE-SAFETY §4.3 (2026-09-12, 0z S2): journal-degraded 降级摘要——recorder 进入 Degraded 模式后由写入任务注入（可选；出现即 degraded_complete 分类证据）。",
+      "additionalProperties": false,
+      "required": [
+        "entered_at",
+        "dropped_events"
+      ],
+      "properties": {
+        "entered_at": { "type": "string", "minLength": 1 },
+        "dropped_events": { "type": "integer", "minimum": 0 },
+        "first_dropped_sequence": { "type": ["integer", "null"], "minimum": 0 },
+        "reserved_bytes": { "type": ["integer", "null"], "minimum": 0 },
+        "cause": { "type": "string", "minLength": 1 }
+      }
+    }
   }
 }

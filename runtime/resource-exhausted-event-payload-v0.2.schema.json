@@ -1,0 +1,41 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://local.scientific-assurance.invalid/schema/resource-exhausted-event-payload-v0.2.schema.json",
+  "title": "Resource exhausted event payload (Rust track, v0.2)",
+  "description": "FUS-HOST-RESOURCE-SAFETY §4.8 表 1 / §5 (2026-09-12, 0z S2): hard 档触发——审计先行（planned 行携带将杀的 call_id 集）+ 杀后事实行（executed）。四条限制：仅 hard 档触发、审计先行、只杀重档、产出可读失败并收尾（run_terminated 跟随）。",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "phase",
+    "tier",
+    "call_ids",
+    "readings"
+  ],
+  "properties": {
+    "phase": {
+      "type": "string",
+      "enum": ["planned", "executed"]
+    },
+    "tier": {
+      "type": "string",
+      "const": "hard"
+    },
+    "call_ids": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "string",
+        "minLength": 1
+      },
+      "description": "planned = 将杀的重档 call_id 集；executed = 实杀结果集。"
+    },
+    "readings": {
+      "type": "object",
+      "minProperties": 1
+    },
+    "detail": {
+      "type": "string",
+      "minLength": 1
+    }
+  }
+}

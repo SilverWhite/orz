@@ -1,0 +1,9 @@
+{
+  "class": "cache",
+  "outcome": "pending_delete",
+  "tier": "soft",
+  "paths": ["D:/CLI/orz/target/debug/incremental"],
+  "fingerprints": ["argv-sha256:9a1c..."],
+  "freed_bytes": 0,
+  "window_rounds": 2
+}

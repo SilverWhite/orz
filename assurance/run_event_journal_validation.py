@@ -147,7 +147,16 @@ PRODUCER_SCHEMAS: dict[str, Path | None] = {
 GSA_PREFLIGHT_FRAGMENT = "gsa-runtime-preflight-projection-v0.1.schema.json#runtime_event_payload"
 GSA_PREFLIGHT_SCHEMA = ASSURANCE / "gsa-runtime-preflight-projection-v0.1.schema.json"
 
-_TERMINAL_TYPES = {"run_finished", "run_failed", "run_cancelled", "run_invalidated"}
+# FUS-HOST-RESOURCE-SAFETY §4.3 (2026-09-12, 0z S2): `run_terminated` joins
+# the terminal set (mirror of the Rust conformance verifier's TERMINAL_TYPES) —
+# the explicit terminal shape for resource-exhausted / journal-degraded endings.
+_TERMINAL_TYPES = {
+    "run_finished",
+    "run_failed",
+    "run_cancelled",
+    "run_invalidated",
+    "run_terminated",
+}
 
 # The 12 fields Rust's chain.rs projects when recomputing event_sha256.
 _EVENT_HASH_FIELDS = (
@@ -3706,3 +3715,182 @@ def validate_journal_file(journal_path: Path) -> list[str]:
     except OSError:
         return [f"journal file not found: {journal_path}"]
     return validate_journal_text(text)
+
+# ---------------------------------------------------------------------------
+# FUS-HOST-RESOURCE-SAFETY §5 families (2026-09-12, 0z S2) — frozen mirror of
+# the Rust verifiers (`orz-assurance/src/journal/families.rs`, seven
+# host-resource fact families). Verdict-for-verdict parity: bool(errors) must
+# match the Rust `Vec<String>` emptiness for every corpus item.
+# ---------------------------------------------------------------------------
+
+_HOST_RESOURCE_TIERS = {"normal", "watch", "soft", "reclaim_direct", "hard", "unknown"}
+_RECLAIM_TIERS = {"soft", "reclaim_direct", "hard", "unknown"}
+
+
+def _host_is_snake_case_key(value):
+    if not isinstance(value, str) or not value:
+        return False
+    return all(c.isascii() and (c.islower() or c.isdigit() or c == "_") for c in value)
+
+
+def _host_is_non_empty_str(value):
+    return isinstance(value, str) and value != ""
+
+
+def _verify_v02_host_resource_snapshot(events):
+    errors = []
+    for event in events:
+        if event.get("event_type") != "host_resource_snapshot":
+            continue
+        payload = event.get("payload") or {}
+        if payload.get("tier") not in _HOST_RESOURCE_TIERS:
+            errors.append("host_resource_snapshot: tier is not a machine key")
+        if payload.get("trigger") not in ("tier_change", "run_start"):
+            errors.append("host_resource_snapshot: trigger must be tier_change|run_start")
+        if not isinstance(payload.get("readings"), dict):
+            errors.append("host_resource_snapshot: readings must be an object")
+    return errors
+
+
+def _verify_v02_host_resource_denied(events):
+    errors = []
+    for event in events:
+        if event.get("event_type") != "host_resource_denied":
+            continue
+        payload = event.get("payload") or {}
+        if payload.get("phase") != "pre_issue":
+            errors.append("host_resource_denied: phase must be pre_issue")
+        if not _host_is_snake_case_key(payload.get("action_class")):
+            errors.append("host_resource_denied: action_class must be a snake_case key")
+        if payload.get("tier") not in _HOST_RESOURCE_TIERS:
+            errors.append("host_resource_denied: tier is not a machine key")
+        if not _host_is_non_empty_str(payload.get("tool")) or not _host_is_non_empty_str(
+            payload.get("call_id")
+        ):
+            errors.append("host_resource_denied: tool/call_id required")
+        if not _host_is_non_empty_str(payload.get("reason")):
+            errors.append("host_resource_denied: reason required")
+        if not isinstance(payload.get("readings"), dict):
+            errors.append("host_resource_denied: readings must be an object")
+    return errors
+
+
+def _verify_v02_resource_exhausted(events):
+    errors = []
+    for event in events:
+        if event.get("event_type") != "resource_exhausted":
+            continue
+        payload = event.get("payload") or {}
+        if payload.get("tier") != "hard":
+            errors.append("resource_exhausted: only the hard tier may produce this row")
+        if payload.get("phase") not in ("planned", "executed"):
+            errors.append("resource_exhausted: phase must be planned|executed")
+        call_ids = payload.get("call_ids")
+        if not isinstance(call_ids, list):
+            errors.append("resource_exhausted: call_ids required")
+            continue
+        if not call_ids or not all(_host_is_non_empty_str(c) for c in call_ids):
+            errors.append("resource_exhausted: call_ids must be non-empty id strings")
+        if not isinstance(payload.get("readings"), dict):
+            errors.append("resource_exhausted: readings must be an object")
+    return errors
+
+
+def _verify_v02_run_terminated(events):
+    errors = []
+    for event in events:
+        if event.get("event_type") != "run_terminated":
+            continue
+        payload = event.get("payload") or {}
+        reason = payload.get("reason")
+        if reason == "resource_exhausted":
+            continue
+        if reason == "journal_degraded":
+            degraded = payload.get("degraded")
+            if not isinstance(degraded, dict) or "entered_at" not in degraded or "dropped_events" not in degraded:
+                errors.append(
+                    "run_terminated: reason journal_degraded requires the degraded summary"
+                )
+            continue
+        errors.append("run_terminated: reason must be resource_exhausted|journal_degraded")
+    return errors
+
+
+def _verify_v02_process_tree_reaped(events):
+    errors = []
+    for event in events:
+        if event.get("event_type") != "process_tree_reaped":
+            continue
+        payload = event.get("payload") or {}
+        if payload.get("phase") not in ("planned", "executed"):
+            errors.append("process_tree_reaped: phase must be planned|executed")
+        if payload.get("reason") not in ("parent_abort", "run_shutdown"):
+            errors.append("process_tree_reaped: reason must be parent_abort|run_shutdown")
+        pids = payload.get("pids")
+        if not isinstance(pids, list):
+            errors.append("process_tree_reaped: pids required")
+            continue
+        pids_ok = all(isinstance(p, int) and not isinstance(p, bool) and p >= 1 for p in pids)
+        if not pids or not pids_ok:
+            errors.append("process_tree_reaped: pids must be positive integers")
+    return errors
+
+
+def _verify_v02_reclaim_performed(events):
+    errors = []
+    for event in events:
+        if event.get("event_type") != "reclaim_performed":
+            continue
+        payload = event.get("payload") or {}
+        cls = payload.get("class")
+        if cls not in ("cache", "unknown", "evidence"):
+            errors.append("reclaim_performed: class must be cache|unknown|evidence")
+        outcome = payload.get("outcome")
+        if outcome not in ("pending_delete", "permanent", "rejected"):
+            errors.append("reclaim_performed: outcome must be pending_delete|permanent|rejected")
+            continue
+        if payload.get("tier") not in _RECLAIM_TIERS:
+            errors.append(
+                "reclaim_performed: tier must be a reclaim tier (soft|reclaim_direct|hard|unknown)"
+            )
+        freed = payload.get("freed_bytes", 0)
+        if not isinstance(freed, int) or isinstance(freed, bool):
+            freed = 0
+        paths = payload.get("paths")
+        if outcome == "pending_delete":
+            window = payload.get("window_rounds")
+            if not (isinstance(window, int) and not isinstance(window, bool) and 1 <= window <= 3):
+                errors.append("reclaim_performed: pending_delete requires the window (1..=3)")
+            if freed != 0:
+                errors.append("reclaim_performed: pending_delete rows freed nothing yet")
+            if not isinstance(paths, list) or not paths:
+                errors.append("reclaim_performed: pending_delete rows carry the queued paths")
+        elif outcome == "rejected":
+            if freed != 0:
+                errors.append("reclaim_performed: rejected rows freed nothing")
+        elif outcome == "permanent":
+            if not isinstance(paths, list) or not paths:
+                errors.append("reclaim_performed: permanent rows carry the deleted paths")
+        if cls in ("evidence", "unknown") and outcome != "rejected":
+            errors.append("reclaim_performed: evidence/unknown classes must be rejected (fail-closed)")
+    return errors
+
+
+def _verify_v02_resource_limit_hit(events):
+    errors = []
+    for event in events:
+        if event.get("event_type") != "resource_limit_hit":
+            continue
+        payload = event.get("payload") or {}
+        if payload.get("limit") not in (
+            "commit",
+            "active_process",
+            "cpu_rate",
+            "kill_on_job_close",
+        ):
+            errors.append(
+                "resource_limit_hit: limit must be commit|active_process|cpu_rate|kill_on_job_close"
+            )
+        if not _host_is_non_empty_str(payload.get("call_id")):
+            errors.append("resource_limit_hit: call_id required")
+    return errors

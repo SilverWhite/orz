@@ -1,0 +1,63 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://local.scientific-assurance.invalid/schema/run-terminated-event-payload-v0.2.schema.json",
+  "title": "Run terminated event payload (Rust track, v0.2)",
+  "description": "FUS-HOST-RESOURCE-SAFETY §4.3/§5 (2026-09-12, 0z S2): 显式终止形态——资源耗尽（hard 档）与 journal 降级两类非正常收尾的事件面。设计判据 6：ENOSPC 注入下 run 仍产出可枚举终止形态——run_terminated 落链或 TERMINAL.json 侧车二者必居其一；终端事件后不得再有追加（recorder TerminalAppended 纪律不变）。",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "reason"
+  ],
+  "properties": {
+    "reason": {
+      "type": "string",
+      "enum": ["resource_exhausted", "journal_degraded"]
+    },
+    "detail": {
+      "type": "string",
+      "minLength": 1
+    },
+    "degraded": {
+      "type": "object",
+      "description": "journal_degraded 终止时的降级摘要——进入降级的时刻、丢事件计数、保留量口径（recorder DegradedState）。",
+      "additionalProperties": false,
+      "required": [
+        "entered_at",
+        "dropped_events"
+      ],
+      "properties": {
+        "entered_at": {
+          "type": "string",
+          "minLength": 1
+        },
+        "dropped_events": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "first_dropped_sequence": {
+          "type": ["integer", "null"],
+          "minimum": 0
+        },
+        "reserved_bytes": {
+          "type": ["integer", "null"],
+          "minimum": 0
+        },
+        "cause": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": { "reason": { "const": "journal_degraded" } },
+        "required": ["reason"]
+      },
+      "then": {
+        "required": ["degraded"]
+      }
+    }
+  ]
+}

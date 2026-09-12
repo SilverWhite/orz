@@ -1,0 +1,19 @@
+{
+  "schema_version": "0.2.0-draft",
+  "run_id": "RUN-CONF-RESOURCE-LIMIT-HIT",
+  "event_id": "EVT-CONF-006",
+  "sequence": 0,
+  "timestamp": "2026-09-12T00:00:00Z",
+  "event_type": "resource_limit_hit",
+  "run_manifest_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+  "previous_event_sha256": null,
+  "payload_schema": "run-event-v0.2.schema.json",
+  "payload": {
+    "limit": "commit",
+    "call_id": "call-job-hit-1",
+    "tool": "run_terminal_cmd"
+  },
+  "payload_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+  "redaction": "none",
+  "event_sha256": "0000000000000000000000000000000000000000000000000000000000000000"
+}

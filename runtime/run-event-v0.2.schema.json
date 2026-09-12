@@ -82,7 +82,14 @@
         "run_finished",
         "run_failed",
         "run_cancelled",
-        "run_invalidated"
+        "run_invalidated",
+        "run_terminated",
+        "host_resource_snapshot",
+        "host_resource_denied",
+        "resource_exhausted",
+        "process_tree_reaped",
+        "reclaim_performed",
+        "resource_limit_hit"
       ]
     },
     "run_manifest_sha256": { "$ref": "#/$defs/sha256" },

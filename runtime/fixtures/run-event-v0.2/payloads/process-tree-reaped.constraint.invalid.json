@@ -1,0 +1,6 @@
+{
+  "phase": "executed",
+  "reason": "run_shutdown",
+  "pids": [0],
+  "call_ids": ["call-tree-1"]
+}

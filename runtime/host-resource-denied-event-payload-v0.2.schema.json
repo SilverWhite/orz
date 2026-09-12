@@ -1,0 +1,56 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://local.scientific-assurance.invalid/schema/host-resource-denied-event-payload-v0.2.schema.json",
+  "title": "Host resource denied event payload (Rust track, v0.2)",
+  "description": "FUS-HOST-RESOURCE-SAFETY §5 (2026-09-12, 0z S2): 预检门/soft 档机械拒绝的事实事件——含动作分档、档位、逐卷读数。走 0q 单一失败漏斗的 pre-issue 家族（工具结果信封仍是对模型面的事实返回；本事件是对评估面的事实留痕）。判据 1：拒绝事件含读数与动作分档，可逐条复核。",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "tool",
+    "call_id",
+    "phase",
+    "action_class",
+    "tier",
+    "reason",
+    "readings"
+  ],
+  "properties": {
+    "tool": {
+      "type": "string",
+      "minLength": 1
+    },
+    "call_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "phase": {
+      "type": "string",
+      "enum": ["pre_issue"]
+    },
+    "action_class": {
+      "type": "string",
+      "minLength": 1,
+      "description": "动作分档机器键（heavy/light 等，S1 分档器 snake_case 键）。",
+      "pattern": "^[a-z][a-z0-9_]*$"
+    },
+    "tier": {
+      "type": "string",
+      "enum": ["normal", "watch", "soft", "reclaim_direct", "hard", "unknown"]
+    },
+    "reason": {
+      "type": "string",
+      "minLength": 1
+    },
+    "readings": {
+      "type": "object",
+      "minProperties": 1
+    },
+    "write_targets": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "minProperties": 1
+      }
+    }
+  }
+}

@@ -1,0 +1,22 @@
+{
+  "schema_version": "0.2.0-draft",
+  "run_id": "RUN-CONF-HOST-RESOURCE-SNAPSHOT",
+  "event_id": "EVT-CONF-001",
+  "sequence": 0,
+  "timestamp": "2026-09-12T00:00:00Z",
+  "event_type": "host_resource_snapshot",
+  "run_manifest_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+  "previous_event_sha256": null,
+  "payload_schema": "run-event-v0.2.schema.json",
+  "payload": {
+    "tier": "watch",
+    "trigger": "tier_change",
+    "readings": {
+      "volume_free_bytes": 9000000000,
+      "source_quality": "measured"
+    }
+  },
+  "payload_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+  "redaction": "none",
+  "event_sha256": "0000000000000000000000000000000000000000000000000000000000000000"
+}

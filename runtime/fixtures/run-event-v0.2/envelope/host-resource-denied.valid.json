@@ -1,0 +1,26 @@
+{
+  "schema_version": "0.2.0-draft",
+  "run_id": "RUN-CONF-HOST-RESOURCE-DENIED",
+  "event_id": "EVT-CONF-002",
+  "sequence": 0,
+  "timestamp": "2026-09-12T00:00:00Z",
+  "event_type": "host_resource_denied",
+  "run_manifest_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+  "previous_event_sha256": null,
+  "payload_schema": "run-event-v0.2.schema.json",
+  "payload": {
+    "tool": "run_terminal_cmd",
+    "call_id": "call-res-denied-1",
+    "phase": "pre_issue",
+    "action_class": "heavy",
+    "tier": "hard",
+    "reason": "target volume free space below the heavy-action floor",
+    "readings": {
+      "volume_free_bytes": 1073741824,
+      "source_quality": "measured"
+    }
+  },
+  "payload_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+  "redaction": "none",
+  "event_sha256": "0000000000000000000000000000000000000000000000000000000000000000"
+}

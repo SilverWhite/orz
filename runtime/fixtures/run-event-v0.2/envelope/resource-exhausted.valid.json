@@ -1,0 +1,24 @@
+{
+  "schema_version": "0.2.0-draft",
+  "run_id": "RUN-CONF-RESOURCE-EXHAUSTED",
+  "event_id": "EVT-CONF-003",
+  "sequence": 0,
+  "timestamp": "2026-09-12T00:00:00Z",
+  "event_type": "resource_exhausted",
+  "run_manifest_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+  "previous_event_sha256": null,
+  "payload_schema": "run-event-v0.2.schema.json",
+  "payload": {
+    "phase": "planned",
+    "tier": "hard",
+    "call_ids": [
+      "call-heavy-1"
+    ],
+    "readings": {
+      "volume_free_bytes": 1073741824
+    }
+  },
+  "payload_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+  "redaction": "none",
+  "event_sha256": "0000000000000000000000000000000000000000000000000000000000000000"
+}

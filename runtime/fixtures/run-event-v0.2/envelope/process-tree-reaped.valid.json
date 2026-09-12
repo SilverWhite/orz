@@ -1,0 +1,24 @@
+{
+  "schema_version": "0.2.0-draft",
+  "run_id": "RUN-CONF-PROCESS-TREE-REAPED",
+  "event_id": "EVT-CONF-004",
+  "sequence": 0,
+  "timestamp": "2026-09-12T00:00:00Z",
+  "event_type": "process_tree_reaped",
+  "run_manifest_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+  "previous_event_sha256": null,
+  "payload_schema": "run-event-v0.2.schema.json",
+  "payload": {
+    "phase": "executed",
+    "reason": "run_shutdown",
+    "pids": [
+      4242
+    ],
+    "call_ids": [
+      "call-tree-1"
+    ]
+  },
+  "payload_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+  "redaction": "none",
+  "event_sha256": "0000000000000000000000000000000000000000000000000000000000000000"
+}

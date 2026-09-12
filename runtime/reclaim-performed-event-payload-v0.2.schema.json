@@ -1,0 +1,111 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://local.scientific-assurance.invalid/schema/reclaim-performed-event-payload-v0.2.schema.json",
+  "title": "Reclaim performed event payload (Rust track, v0.2)",
+  "description": "FUS-HOST-RESOURCE-SAFETY §4.6/§4.6.1/§5 (2026-09-12, 0z S2): 回收审计——先于任何删除落盘（四纪律 1：回收行为本身不得破坏链）。回收站已整体取消（终裁）：无 trash 态、无恢复入口；outcome ∈ pending_delete（入待删集合，轮数窗口默认 2 轮上限 3，到期真删）/ permanent（窗口到期真删或 reclaim-direct 跳窗直删）/ rejected（白名单外、归属不明、证据面、超预算——fail-closed 不询问）。审计 outcome 按行终态：pending_delete 行由到期真删时的 permanent 行闭合。",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "class",
+    "outcome",
+    "tier",
+    "paths",
+    "freed_bytes"
+  ],
+  "properties": {
+    "class": {
+      "type": "string",
+      "enum": ["cache", "unknown", "evidence"]
+    },
+    "outcome": {
+      "type": "string",
+      "enum": ["pending_delete", "permanent", "rejected"]
+    },
+    "tier": {
+      "type": "string",
+      "enum": ["soft", "reclaim_direct", "hard", "unknown"]
+    },
+    "paths": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      }
+    },
+    "fingerprints": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      },
+      "description": "归属指纹（规范化 argv+关键 env 或路径指纹；与 paths 同序对齐，unknown/rejected 行可为空）。",
+      "default": []
+    },
+    "freed_bytes": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "window_rounds": {
+      "type": ["integer", "null"],
+      "minimum": 1,
+      "maximum": 3,
+      "description": "pending_delete 行必填：本轮回收进入待删集合时的窗口轮数（默认 2）。"
+    },
+    "budget_bytes": {
+      "type": ["integer", "null"],
+      "minimum": 1
+    },
+    "detail": {
+      "type": "string",
+      "minLength": 1
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": { "outcome": { "const": "pending_delete" } },
+        "required": ["outcome"]
+      },
+      "then": {
+        "required": ["window_rounds"],
+        "properties": {
+          "freed_bytes": { "const": 0 },
+          "paths": { "minItems": 1 }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": { "outcome": { "const": "rejected" } },
+        "required": ["outcome"]
+      },
+      "then": {
+        "properties": {
+          "freed_bytes": { "const": 0 }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": { "class": { "const": "evidence" } },
+        "required": ["class"]
+      },
+      "then": {
+        "properties": {
+          "outcome": { "const": "rejected" }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": { "class": { "const": "unknown" } },
+        "required": ["class"]
+      },
+      "then": {
+        "properties": {
+          "outcome": { "const": "rejected" }
+        }
+      }
+    }
+  ]
+}

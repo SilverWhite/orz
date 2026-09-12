@@ -253,6 +253,34 @@
       "transport_retry": {
         "schema": "runtime/transport-retry-event-payload-v0.2.schema.json",
         "slug": "transport-retry"
+      },
+      "run_terminated": {
+        "schema": "runtime/run-terminated-event-payload-v0.2.schema.json",
+        "slug": "run-terminated"
+      },
+      "host_resource_snapshot": {
+        "schema": "runtime/host-resource-snapshot-event-payload-v0.2.schema.json",
+        "slug": "host-resource-snapshot"
+      },
+      "host_resource_denied": {
+        "schema": "runtime/host-resource-denied-event-payload-v0.2.schema.json",
+        "slug": "host-resource-denied"
+      },
+      "resource_exhausted": {
+        "schema": "runtime/resource-exhausted-event-payload-v0.2.schema.json",
+        "slug": "resource-exhausted"
+      },
+      "process_tree_reaped": {
+        "schema": "runtime/process-tree-reaped-event-payload-v0.2.schema.json",
+        "slug": "process-tree-reaped"
+      },
+      "reclaim_performed": {
+        "schema": "runtime/reclaim-performed-event-payload-v0.2.schema.json",
+        "slug": "reclaim-performed"
+      },
+      "resource_limit_hit": {
+        "schema": "runtime/resource-limit-hit-event-payload-v0.2.schema.json",
+        "slug": "resource-limit-hit"
       }
     }
   },

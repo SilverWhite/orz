@@ -1,0 +1,35 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://local.scientific-assurance.invalid/schema/resource-limit-hit-event-payload-v0.2.schema.json",
+  "title": "Resource limit hit event payload (Rust track, v0.2)",
+  "description": "FUS-HOST-RESOURCE-SAFETY §4.7 失败语义 / §5 (2026-09-12, 0z S2): 工具进程树命中内核强制 Job 硬上限——失败被标注为「因资源上限失败」（含命中的限项与读数），绝不可静默。限项词表 = S1/S1.1 裁决启用的三轴 + 树杀：commit / active_process / cpu_rate / kill_on_job_close。",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "limit",
+    "call_id"
+  ],
+  "properties": {
+    "limit": {
+      "type": "string",
+      "enum": ["commit", "active_process", "cpu_rate", "kill_on_job_close"]
+    },
+    "call_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "tool": {
+      "type": "string",
+      "minLength": 1
+    },
+    "readings": {
+      "type": "object",
+      "description": "命中时的读数快照（可选—— violation 信息由内核读回，读不到时不伪装）。",
+      "minProperties": 1
+    },
+    "detail": {
+      "type": "string",
+      "minLength": 1
+    }
+  }
+}

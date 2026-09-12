@@ -1,0 +1,5 @@
+{
+  "tier": "watch",
+  "trigger": "tier_change",
+  "readings": { "volume_free_bytes": 9000000000, "source_quality": "measured" }
+}

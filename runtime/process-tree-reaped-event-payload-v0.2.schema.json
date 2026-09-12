@@ -1,0 +1,43 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://local.scientific-assurance.invalid/schema/process-tree-reaped-event-payload-v0.2.schema.json",
+  "title": "Process tree reaped event payload (Rust track, v0.2)",
+  "description": "FUS-HOST-RESOURCE-SAFETY §4.2/§4.8 表 2 / §5 (2026-09-12, 0z S2): 孤儿扫除审计。三条件（父链死 + cmd_sha256 匹配 + started_at 落窗）同时满足才杀；三条硬化：只处理登记表内 pid、指纹=规范化 argv+关键 env、审计先行——sweep_planned 行先落盘再杀，实际回收行以 run_shutdown/parent_abort 落。归属不明一律不杀。",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "phase",
+    "reason",
+    "pids"
+  ],
+  "properties": {
+    "phase": {
+      "type": "string",
+      "enum": ["planned", "executed"]
+    },
+    "reason": {
+      "type": "string",
+      "enum": ["parent_abort", "run_shutdown"]
+    },
+    "pids": {
+      "type": "array",
+      "items": {
+        "type": "integer",
+        "minimum": 1
+      }
+    },
+    "call_ids": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      },
+      "description": "被回收登记条目的 call_id 集（与 pids 同序对齐；planned/executed 行均携带）。",
+      "minItems": 1
+    },
+    "detail": {
+      "type": "string",
+      "minLength": 1
+    }
+  }
+}

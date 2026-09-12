@@ -1,0 +1,28 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://local.scientific-assurance.invalid/schema/host-resource-snapshot-event-payload-v0.2.schema.json",
+  "title": "Host resource snapshot event payload (Rust track, v0.2)",
+  "description": "FUS-HOST-RESOURCE-SAFETY §4.5/§5 (2026-09-12, 0z S2): 低频读数事实面——档位跨档才落一行（tier 变化驱动，非每轮必发）。读数只作信息（机械层优先 + 信息返回），硬门在预检门；档位机器键为 S1 定案的 snake_case 词表（normal/watch/soft/reclaim_direct/hard/unknown）。",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "tier",
+    "trigger",
+    "readings"
+  ],
+  "properties": {
+    "tier": {
+      "type": "string",
+      "enum": ["normal", "watch", "soft", "reclaim_direct", "hard", "unknown"]
+    },
+    "trigger": {
+      "type": "string",
+      "enum": ["tier_change", "run_start"]
+    },
+    "readings": {
+      "type": "object",
+      "description": "HostCapacitySnapshot 读数（volume_free_bytes / commit 系 / source_quality）。",
+      "minProperties": 1
+    }
+  }
+}
