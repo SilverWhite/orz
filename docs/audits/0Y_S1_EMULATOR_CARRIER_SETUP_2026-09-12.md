@@ -1,11 +1,11 @@
 # 0y / S1 模拟器验证载体搭建记录（2026-09-12）
 
 > **文档类型**：实施记录（S1 前四项中的 ①②③ 完成）
-> **状态**：S1 ①无头镜像选型搭建、②orz 载体上机冒烟、③Magisk 模块打包 / 安装 / 禁用 / 恢复演练 **完成**；④M5 流程纪律干跑 **未开始**
+> **状态**：S1 ①无头镜像选型搭建、②orz 载体上机冒烟、③Magisk 模块打包 / 安装 / 禁用 / 恢复演练（**含 ③ 遗留项：SELinux 规则注入闭环**）**完成**；④M5 流程纪律干跑 **未开始**
 > **日期**：2026-09-12
 > **范围**：NP1 机械身体集成支线设计 §12「2026-09-12 用户裁决」引入的常设验证载体——模拟器——的搭建与能力判据
 > **边界**：本记录只登记载体搭建事实与判据，不修改设计权威；发现的两处 §12 偏差只登记、待用户裁决（用户裁决回填见 §8）。
-> **证据**：模拟器运行 stdout/stderr 与设备侧证据落 `D:\tb-eval\s1_emulator\logs\`；干净基线副本落 `D:\tb-eval\s1_emulator\baseline_avd\`；③ 批次的补丁 ramdisk / 模块包 / 容器脚本落 `D:\tb-eval\s1_emulator\{ramdisk,module,bin,magisk}\`。
+> **证据**：模拟器运行 stdout/stderr 与设备侧证据落 `D:\tb-eval\s1_emulator\logs\`（含 ③ 遗留项的策略全量 dump 与两组差异 `preinit_rules_{control,injected,diff}.txt`、观测序列 `preinit_ab_summary.txt`）；干净基线副本落 `D:\tb-eval\s1_emulator\baseline_avd\`；补丁 ramdisk / 模块包 / 容器脚本落 `D:\tb-eval\s1_emulator\{ramdisk,module,bin,magisk}\`。
 
 ---
 
@@ -197,8 +197,36 @@ ELF 自包含性（设备自带 toybox `readelf` 0.8.11-android 核验，三件�
 
 ### 7.7 本轮**未**取得的两项（如实登记）
 
-- **`sepolicy.rule` 未生效**：安装时 Magisk 报 `- Unable to find preinit dir`。注入式 Magisk 的 `.backup/.magisk` 配置里没有 `PREINITDEVICE`（真机由应用在安装时写入），`/debug_ramdisk/.magisk/preinit` 不存在，模块 sepolicy 规则无处暂存；设备侧 `magisk --preinit-device` 的回答是 `vdd1`。**修法已知**（把 `PREINITDEVICE` 写进补丁 ramdisk 的配置后重装模块），本轮未做 → 登记为 S1-③ 遗留项（§11），不构成设计缺口：真机由 Magisk 应用安装，preinit 面在位。
+- **`sepolicy.rule` 未生效**：安装时 Magisk 报 `- Unable to find preinit dir`。注入式 Magisk 的 `.backup/.magisk` 配置里没有 `PREINITDEVICE`（真机由应用在安装时写入），`/debug_ramdisk/.magisk/preinit` 不存在，模块 sepolicy 规则无处暂存；设备侧 `magisk --preinit-device` 的回答是 `vdd1`。**修法已知**（把 `PREINITDEVICE` 写进补丁 ramdisk 的配置后重装模块）→ **同日第二轮已闭环，见 §7.8**。
 - **priv-app 白名单与 keylayout 只验证了「同批 overlay 不破坏开机」**：真实特权授予与按键行为都需要真实薄壳 APK / 真机，按设计 §12 的载体边界留给 NP1 终验。
+
+### 7.8 ③ 遗留项闭环：`PREINITDEVICE` 与 SELinux 规则真正生效（2026-09-12 同日第二轮）
+
+**修法**：重建补丁 ramdisk 时把 preinit 分区写进配置（`build_magisk_ramdisk.sh` 参数化：`PREINITDEVICE=vdd1`，取值来自设备侧 `magisk --preinit-device`，即 `/dev/block/vdd1` → 挂载于 `/metadata`），重新启动后 Magisk 建出 `.magisk/preinit -> /metadata/watchdog/magisk`；此后安装模块不再报错，规则写入 `/metadata/watchdog/magisk/sepolicy.rule`（上下文 `u:object_r:watchdog_metadata_file:s0`），`magiskinit` 开机按该暂存文件注入内核策略。
+
+**判据（可复核）**：以 `/data/adb/magisk/magiskpolicy --print-rules`（打印当前 live 策略全部规则）与 `/sys/fs/selinux/policy` 的 SHA256 为观测面，探针规则取 `allow shell magisk process { getsched }`（选它的理由：对照组里 shell→magisk 只有一条 `unix_stream_socket` 规则，该形态必然不存在，因而可归因）。
+
+| # | 引导 `boot_id` | 模块 | 暂存文件 | 策略哈希（前 8） | 规则在否 | 说明 |
+| --- | --- | --- | --- | --- | --- | --- |
+| 1 | `205b8a47…` | 启用 | 不存在 | `8242a06d` | 否 | 对照组：旧 ramdisk（无 `PREINITDEVICE`），规则未暂存 |
+| 2 | `65963a19…` | 启用 | 安装时写入 | `8242a06d` | 否 | 新 ramdisk：preinit 面就位（`.magisk/preinit` 软链），本轮内装模块 |
+| 3 | `babf1da8…` | 启用 | 存在 | `d2365b61` | **是** | 重启后规则进入内核策略 |
+| 4 | `153e915c…` | **禁用** | 仍在 | `d2365b61` | **是** | **【新发现】**禁用只摘 overlay，规则不撤销 |
+| 5 | `7c86f1ff…` | 禁用 | 已删除 | `8242a06d` | 否 | 清掉暂存文件后重启，策略哈希**精确回到**对照组 |
+| 6 | `1f530b87…` | 启用 | 重装写入 | `d2365b61` | 是 | 清 `disable` + 重装（重写暂存）→ 恢复注入态（收尾态） |
+
+**最强判据**：对照组与注入组的**规则全量差异恰好一条**——`=> allow shell magisk process { getsched }`（两份 dump 各 42,4xx 行，落 `logs\preinit_rules_{control,injected,diff}.txt`）。
+
+**新发现（登记待用户裁决）**：**「禁用模块 + 重启」不撤销已注入的 SELinux 规则**——暂存文件只在模块**安装/更新**时重写（`copy_preinit_files` 跳过带 `disable`/`remove`/`update` 标志的模块），开机注入读的是暂存文件，因此第 4 行实测「overlay 已摘、规则仍在、策略哈希不变」。彻底撤销需**重写暂存**（安装/更新任一模块触发）或**清掉暂存文件后重启**。残留物是加性 allow 规则，不改变 §10.3 层 1 对框架代码（overlay / 脚本）的回滚效果，但设计「回滚 = 禁用模块 + 重启」对本条不完整 → 已同步设计 §9.3 登记附注 5 与 §10.3 层 1 附注。
+
+**工件（本批新增）**：
+
+| 工件 | 字节 | SHA256 |
+| --- | --- | --- |
+| `ramdisk.magisk.preinit.img`（写入 `PREINITDEVICE=vdd1`） | 2,834,491 | `ac0c532f5734c5cba5fef6d1861b2899986de7a723d8b9b2e4ab2d551b59628f` |
+| `orz_body-0.1.1-s1drill.zip`（探针规则，versionCode 2） | 3,653 | `3f5ace575df1f136f73be37bfe0cad0506e741c5d486c077fc55d6912e1110e1` |
+
+观测序列另存 `logs\preinit_ab_summary.txt`；本轮共 6 次开机，每次 `boot_id` 互不相同。
 
 ---
 
@@ -217,7 +245,8 @@ ELF 自包含性（设备自带 toybox `readelf` 0.8.11-android 核验，三件�
 - **`ro.adb.secure=0`**：模拟器 adb 免授权，因此**不能**验证「目标侧授权」前提（真机与其它安卓设备都需要授权）。模拟器不覆盖任何授权/同意面。
 - **AOSP ≠ Nothing 系统**：设计 §12 已写明的边界不变——不验证厂商框架、Glyph、NP1 内核 config 与平台签名行为。
 - **ATD 无头形态**：无 GPU、无 Play Store、无启动器，界面类与图形类能力不代表真机。
-- **注入式 Magisk 少了应用安装面**（见 §7.3 / §7.7）：模块 sepolicy 规则的 preinit 暂存未走通、priv-app 白名单与 keylayout 只做了「不破坏开机」级核证——属**本载体形态限制**，不是设计缺口。
+- **注入式 Magisk 少了应用安装面**（见 §7.3 / §7.7 / §7.8）：模块 sepolicy 规则的 preinit 暂存需手动补 `PREINITDEVICE`（已闭环）、priv-app 白名单与 keylayout 仍只做了「不破坏开机」级核证——属**本载体形态限制**，不是设计缺口。
+- **SELinux 规则的撤销不完全跟随模块禁用**（§7.8 新发现）：设计侧「回滚 = 禁用模块 + 重启」对本条不完整，已登记设计 §9.3 附注 5 与 §10.3 层 1 附注，**待用户裁决**。
 - 全程未做任何真机（NP1）操作；所有 adb 命令均显式指名 `emulator-5554`。
 
 ---
@@ -232,6 +261,9 @@ ELF 自包含性（设备自带 toybox `readelf` 0.8.11-android 核验，三件�
 6. **容器镜像名写死拉取失败**：首次用 `alpine:3.20` 触发拉取，本机容器仓库不可达而失败；改用本机已有镜像 ID 后成立。属操作层失误，不影响判据。
 7. **脚本阅读被打字习惯绊倒**：读 APK 内 shell 脚本时把函数名写成 `R`，与 PowerShell 内置别名 `Invoke-History` 冲突而失败；改名后成立。
 8. **一处非预期报错留痕**：末次证据收集时 `getprop | head` 触发一次 `Segmentation fault` 输出；判据不依赖该命令，未复现、未追查，只登记事实。
+9. **遗留项轮的一处预期被实测否定**：开工时的先验是「禁用模块 + 重启会把 SELinux 规则一并撤销」（设计 §10.3 层 1 的写法），实测被否定（§7.8 第 4 行：规则仍在、策略哈希不变）。教训：**加性策略规则的撤销要单独取证，不能从「模块禁用」推**；同时说明 §7.7 初版把该问题写成「不构成设计缺口」过早——现已在 §7.8 与设计附注 5 更正为「设计文本对本条不完整，待裁决」。
+10. **容器命令引号层数没算清**：首次用一段带 `for ... done` 的嵌套引号命令查二进制字符串，经 PowerShell → docker → sh 三层后解析失败；改写成两条简单命令后成立。属操作层失误，不影响判据。
+11. **一次日志落盘为空**：遗留项第二轮的模拟器 stdout 重定向文件为空（0 B），未追查原因；该轮判据全部来自设备侧取证（策略哈希、规则 dump、文件属性），不依赖该日志。登记为证据留痕缺口。
 
 ---
 
@@ -240,7 +272,7 @@ ELF 自包含性（设备自带 toybox `readelf` 0.8.11-android 核验，三件�
 | 项 | 内容 | 前置 |
 | --- | --- | --- |
 | S1-③ | ~~Magisk-in-AVD：模块打包 / 安装 / 禁用 / 恢复实机化演练~~ **已完成（2026-09-12，见 §7）** | — |
-| S1-③ 遗留 | 补丁 ramdisk 的 `.magisk` 配置写入 `PREINITDEVICE` → 重装模块 → 核证模块 sepolicy 规则真的被暂存与注入 | §7.7；需重建一次补丁 ramdisk + 一轮重装 |
+| S1-③ 遗留 | ~~补丁 ramdisk 的 `.magisk` 配置写入 `PREINITDEVICE` → 重装模块 → 核证模块 sepolicy 规则真的被暂存与注入~~ **已完成（2026-09-12 同日，见 §7.8；含新发现“禁用不撤销已注入规则”）** | — |
 | S1-④ | M5 补丁「打补丁 → 进系统 → 开机 → 回滚」流程纪律干跑首轮 | S1-③（已完成）+ 基线副本回滚原语（已就绪） |
 
 ---
@@ -254,11 +286,11 @@ AVD 根        D:\android\avd            （ANDROID_AVD_HOME）
 临时目录      D:\android\tmp            （JAVA_TOOL_OPTIONS=-Djava.io.tmpdir=…；TEMP/TMP）
 设备序列      emulator-5554
 启动参数      -avd orz_body_a35 -no-window -no-audio -no-boot-anim -gpu swiftshader_indirect -port 5554 -no-snapshot
-Magisk 态启动 追加 -ramdisk D:\tb-eval\s1_emulator\ramdisk\ramdisk.magisk.img
+Magisk 态启动 追加 -ramdisk D:\tb-eval\s1_emulator\ramdisk\ramdisk.magisk.preinit.img（含 PREINITDEVICE=vdd1，现行件；旧件 ramdisk.magisk.img 无该键，保留作对照）
 干净基线      D:\tb-eval\s1_emulator\baseline_avd   （回滚 = robocopy /MIR 回 AVD 目录）
 证据日志      D:\tb-eval\s1_emulator\logs\
-补丁 ramdisk  D:\tb-eval\s1_emulator\ramdisk\   （ramdisk.stock.img / ramdisk.magisk.img / build_magisk_ramdisk.sh）
-模块包        D:\tb-eval\s1_emulator\module\orz_body-0.1.0-s1drill.zip
+补丁 ramdisk  D:\tb-eval\s1_emulator\ramdisk\   （ramdisk.stock.img / ramdisk.magisk.img / ramdisk.magisk.preinit.img / build_magisk_ramdisk.sh）
+模块包        D:\tb-eval\s1_emulator\module\orz_body-0.1.1-s1drill.zip（探针规则版；0.1.0 保留作对照）
 Magisk 工件   D:\tb-eval\s1_emulator\magisk\    （Magisk-v30.7.apk / apk 解包 / materialize_env.sh）
 ```
 
@@ -274,7 +306,7 @@ Magisk 工件   D:\tb-eval\s1_emulator\magisk\    （Magisk-v30.7.apk / apk 解�
 | --- | --- |
 | `D:\android\Sdk` | 2,903 MB |
 | `D:\android\avd` | 3,168 MB |
-| `D:\tb-eval\s1_emulator`（基线副本 561 MB + Magisk 工件 + 补丁 ramdisk + 模块包 + 日志） | 621 MB |
-| 收尾时 C 盘 / D 盘可用 | 10.76 GB / 22.70 GB |
+| `D:\tb-eval\s1_emulator`（基线副本 561 MB + Magisk 工件 + 补丁 ramdisk ×2 + 模块包 ×2 + 日志含两份策略 dump） | 629 MB |
+| 收尾时 C 盘 / D 盘可用 | 10.7 GB / 22.6 GB |
 
-收尾状态：模拟器已关机（无残留 emulator / qemu 进程），真机 NP1 连接与授权未受影响。**AVD 现处于「Magisk 已装 + 演练模块已装并生效」的可用态**（为 S1-④ 备用）；因模拟器会把补丁 ramdisk 落进 AVD 目录的 `initrd`，该状态由「AVD 目录 + 启动时带 `-ramdisk`」共同定义——**回滚仍是单步**（还原基线副本即同时清掉 `/data` 改动与补丁 `initrd`，已在 §7.5 实测）。
+收尾状态：模拟器已关机（无残留 emulator / qemu 进程），真机 NP1 连接与授权未受影响。**AVD 现处于「Magisk 已装 + 模块 v0.1.1 已装且 SELinux 规则已注入」的可用态**（为 S1-④ 备用；引导须带 `ramdisk.magisk.preinit.img`）；因模拟器会把补丁 ramdisk 落进 AVD 目录的 `initrd`，该状态由「AVD 目录 + 启动时带 `-ramdisk`」共同定义——**回滚仍是单步**（还原基线副本即同时清掉 `/data` 改动与补丁 `initrd`，已在 §7.5 实测）。

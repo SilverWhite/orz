@@ -17,7 +17,7 @@
 ## 开放项路由（2026-09-09 同步；勾选与计数权威在 BACKLOG）
 
 - 未闭合总数：**26 项**（BACKLOG 计数口径；逐次计数流水见 [`docs/BACKLOG_AND_PRIORITIES.md`](docs/BACKLOG_AND_PRIORITIES.md) 未闭合计数，TODO 不重复维护）。TODO `[ ]` 明细含父/子项，计数以 BACKLOG 为准。
-- P0：0b 验证③④（⑤ 89 题独立用户门）；0d 后续 3/4/5 S4 复验；0j W1-R1 S4 复验 + W3-R3 余项 + W4-R4 S5-2 总项；0l ⑥⑦（⑧ TER 见 [`TODO2.md`](TODO2.md)）；0m S3/S4；0n GAP-APPROVAL-PROMPTER（延期，S1 设计定稿前置）；0o T3 批次 W2 chunk3 + T4 批次 L + T5 批次 O + T6 统一收口；0t S4 实机复验待续；0u R4 15 题官方复跑（0t S4 载体，2026-09-10 放行）；0v 检索引擎 SERP + browser_control 分类修正（S1–S3′ 完成；S4 复跑 2026-09-12 F1/F2 确认修复、本体判据未取得；**第二批（软备忘 + 0v-A 取证面，2026-09-12 放行合批）S1–S4 执行完毕（S4 判据 1/2/6/7/11/12 成立、9/10 未取得，闭合留用户裁决）**）；0w TB 4.0 单题摩擦探针（第三跑成立并跑完（2026-09-11））；0y NP1 机械身体集成支线（2026-09-11 用户裁决立项；**M0 定版 2026-09-12 全部完成**；§14.2 验证载体已裁决引入模拟器（2026-09-12），**S1 载体搭建 ①②③ 完成、④待续**）。（0x 初始轮中立问询已于 2026-09-11 S1–S4 全部闭合转 `implemented`，计数 27 → 26；ADR-0010 §14.66 / v1.67。）
+- P0：0b 验证③④（⑤ 89 题独立用户门）；0d 后续 3/4/5 S4 复验；0j W1-R1 S4 复验 + W3-R3 余项 + W4-R4 S5-2 总项；0l ⑥⑦（⑧ TER 见 [`TODO2.md`](TODO2.md)）；0m S3/S4；0n GAP-APPROVAL-PROMPTER（延期，S1 设计定稿前置）；0o T3 批次 W2 chunk3 + T4 批次 L + T5 批次 O + T6 统一收口；0t S4 实机复验待续；0u R4 15 题官方复跑（0t S4 载体，2026-09-10 放行）；0v 检索引擎 SERP + browser_control 分类修正（S1–S3′ 完成；S4 复跑 2026-09-12 F1/F2 确认修复、本体判据未取得；**第二批（软备忘 + 0v-A 取证面，2026-09-12 放行合批）S1–S4 全部闭合（2026-09-12 用户裁决，计数 26 → 25）**）；0w TB 4.0 单题摩擦探针（第三跑成立并跑完（2026-09-11））；0y NP1 机械身体集成支线（2026-09-11 用户裁决立项；**M0 定版 2026-09-12 全部完成**；§14.2 验证载体已裁决引入模拟器（2026-09-12），**S1 载体搭建 ①②③ 完成、④待续**）。（0x 初始轮中立问询已于 2026-09-11 S1–S4 全部闭合转 `implemented`，计数 27 → 26；ADR-0010 §14.66 / v1.67。）
 - P1：FUS-COMPONENT-REGISTER 组件审计；GAP-WINDOWS-EVIDENCE 三项；IMPL-DEEPSEEK-TRANSPORT live 晋级证据；ORZ-SESSION-CONTEXT-MONITOR 四项。
 - P2：IMPL-CONTROL-FABRIC Slice 3/4；OPS-PROTOCOL 裁剪与接线裁决；P2-11 余项（PULL 自描述 S3/S4、retryable 分类位、依赖图 S3/S4）；P2-12 S4 复验；P2-13 B4；P2-14 S3/S4。
 - P3：EVIDENCE-LOCAL-BROWSER、GATE-CHAIN、observed-scope 枚举、V11-IMPL-003、V11-IMPL-007、orz-host flaky。
@@ -541,7 +541,7 @@ GLM F2 处置转排期（2026-09-06 用户裁决）：`orz-host/src/approval.rs`
 - [x] 余额受影响 4 题补跑（2026-09-10 完成，r4b 批次当日收尾）：4/4 真实试次，账面 64/89 → **65/89**（唯一翻案 path-tracing-reverse）；protein-assembly / train-fasttext / filter-js pass-2 为官方墙钟耗尽 0.0。入口：[R4 复跑审计 §2A](docs/audits/OFFICIAL_R4_UNSOLVED15_RERUN_2026-09-10.md)。
 - [ ] 收口余项：0t S4 判据 6 宿主机日常可用性另线；计数按 0t 小节闭合时入账。
 
-### P0-0v 检索引擎 SERP 接入与 `browser_control` 车道分类修正（2026-09-10 立项；**第二批（软备忘 + 0v-A 取证面合批）S1–S4 全部执行完毕（S4 判据 1/2/6/7/11/12 成立、8 成立、3/4/5 部分成立、9/10 未取得）；0v 闭合与判据遗留/0v-C 缺口立项留用户裁决**）
+### P0-0v 检索引擎 SERP 接入与 `browser_control` 车道分类修正（2026-09-10 立项；**2026-09-12 用户裁决闭合（不强硬取证）——S1–S4 全部闭合转 `implemented`，计数 26 → 25**；判据 9/10 与 CAPTCHA 样本按用户裁决不再追、观察项归档；0v-C 缺口（journal 脱敏双 seal 断链）单独立项待修）
 
 > 裁决：navigate 被拒应满足模型需求 + 坐实 DeepSeek 后端慢（调查已闭合）+ 按既有 SERP 设计补实现（候选 Bing）；区域固定 `en-US`；Bing 无登录态污染专项优化；低质量域名加权复用既有 `SourceWeightConfig`（标注 + 稳定排序，不硬过滤，不承担恶意域识别）。
 > 设计：[`RETRIEVAL_ENGINE_SERP_SEARCH_ACTION_DESIGN_2026-09-10`](docs/RETRIEVAL_ENGINE_SERP_SEARCH_ACTION_DESIGN_2026-09-10.md)；BACKLOG 0v。
@@ -595,7 +595,7 @@ GLM F2 处置转排期（2026-09-06 用户裁决）：`orz-host/src/approval.rs`
 - [x] **闭合入账（2026-09-11 用户裁决）**：S1–S4 全部闭合、S4 实机判据通过 → 转 `implemented`，未闭合 **27 → 26**。
 
 
-### P0-0y NP1 机械身体集成支线（2026-09-11 用户裁决立项；设计定稿 + 全模块化承载确认；**M0 全部完成（含救援通道演练，2026-09-12 按事实更正收尾）；S1 载体搭建 ①②③ 完成、④待续**）
+### P0-0y NP1 机械身体集成支线（2026-09-11 用户裁决立项；设计定稿 + 全模块化承载确认；**M0 全部完成（含救援通道演练，2026-09-12 按事实更正收尾）；S1 载体搭建 ①②③ 完成（含 ③ 遗留项闭环）、④待续**）
 
 > 设计权威：[`NP1_ORZ_BODY_INTEGRATION_DESIGN_2026-09-11`](docs/NP1_ORZ_BODY_INTEGRATION_DESIGN_2026-09-11.md)（§9.3 全模块化承载确认 + 附录 D 登记前实机复核）；BACKLOG 0y；索引 `AUTH-NP1-BODY-INTEGRATION`。orz 之外扩展面：不修改 ADR-0010 与模型工具面。
 
@@ -608,7 +608,7 @@ GLM F2 处置转排期（2026-09-06 用户裁决）：`orz-host/src/approval.rs`
   - [x] ② orz 载体上机冒烟：用**当前冻结载体 0.4.3**（非设计文本写的 0.4.2——载体已随 0v S3 同日 bump）；`e_type=DYN`、`INTERP=0`、`NEEDED=0` 静态 PIE，主机↔设备 SHA256 逐件吻合，三件套均在 Android 15 内核上实际执行（`BODY-PRE-01` 的 x86_64 对应判据成立）。
   - [x] 载体能力判据（本批一并取得）：**持久化**默认不成立（AVD 默认数据分区是临时的，`/data` 重启即失）→ 移除 `disk.dataPartition.path = <temp>` 后成立；**回滚原语改判**——快照保存 OK 但两条恢复路径均不可用（热加载 WHPX `hr=c0350015` 后模拟器退出；冷加载 guest 持续 adb offline 242 s），改用 AVD 目录基线副本（561 MB，已用「改动 → 还原 → 复读」验证）；root 前置探明（`adb root` 得 `uid=0`/`u:r:su:s0`，`/`与`/vendor` 只读、`adb remount` 需解锁引导，当前无 Magisk）。
   - [x] ③ Magisk 模块打包 / 安装 / 禁用 / 恢复演练（**2026-09-12 完成**）：Magisk **v30.7**（与真机同版本，APK SHA256 与官方 release digest 吻合）以 **ramdisk 注入**进模拟器（解压 lz4_legacy cpio → 按官方 `boot_patch.sh` 的 ramdisk 段替换 `/init` → `-ramdisk` 启动），44 s 达 `boot_completed`、`magisk -V`=30700、三个 init 触发器全部回执；补齐 `/data/adb/magisk/` 持久环境后模块正常安装（此前报 `Incomplete Magisk install`）。演练模块 `orz_body` v0.1.0-s1drill（12 项：`module.prop` / `customize.sh` / `post-fs-data.sh` / `service.sh` / `system` overlay / privapp 白名单 / keylayout / `sepolicy.rule` / `uninstall.sh` / `META-INF`）**六轮判据全过**：安装 → 开机生效（overlay 三件带 `u:object_r:system_file:s0`、两脚本执行、守护进程被 init 收养）→ `disable` + 重启（overlay 摘除、脚本不执行、Magisk 本体不受影响）→ 去 `disable` + 重启（恢复）→ `remove` + 重启（卸载钩子清状态目录）→ 还原基线副本 + 不带 `-ramdisk` 启动（Magisk 与模块痕迹全消）。**两项未取得（如实登记）**：模块 `sepolicy.rule` 未生效（注入式 Magisk 缺 `PREINITDEVICE`/preinit 目录，安装报 `Unable to find preinit dir`）、priv-app 白名单与 keylayout 只验证「同批 overlay 不破坏开机」。入口：[S1 载体搭建记录 §7](docs/audits/0Y_S1_EMULATOR_CARRIER_SETUP_2026-09-12.md)。
-  - [ ] ③ 遗留：补丁 ramdisk 的 `.magisk` 配置写入 `PREINITDEVICE` → 重装模块 → 核证模块 sepolicy 规则真的被暂存与注入（设计 §9.3 SELinux 承载点；真机走应用安装不涉及，属注入式载体形态限制）。
+  - [x] ③ 遗留（**2026-09-12 同日闭环**）：补丁 ramdisk 写入 `PREINITDEVICE=vdd1`（取值来自设备侧 `magisk --preinit-device`，即 `/dev/block/vdd1` → `/metadata`）后，`.magisk/preinit -> /metadata/watchdog/magisk` 就位、安装不再报 `Unable to find preinit dir`，规则写入 preinit 暂存并由 `magiskinit` 开机注入。判据用 `magiskpolicy --print-rules` 全量 + `/sys/fs/selinux/policy` 哈希：对照组 `8242a06d…`（无规则）→ 注入后 `d2365b61…`，两组规则全量差异**恰好一条**（`allow shell magisk process { getsched }`）。**同时实测发现（登记待裁决，设计 §9.3 附注 5 / §10.3 层 1 附注）**：「禁用模块 + 重启」**不撤销**已注入的 allow 规则（overlay 已摘、规则仍在、策略哈希不变）；彻底撤销需重写 preinit 暂存（安装/更新任一模块触发）或清掉暂存文件后重启——已在第 5 次开机用「清暂存 → 哈希精确回到对照组」证完。入口：[S1 载体搭建记录 §7.8](docs/audits/0Y_S1_EMULATOR_CARRIER_SETUP_2026-09-12.md)。
   - [ ] ④ M5 补丁「打补丁 → 进系统 → 开机 → 回滚」流程纪律干跑首轮（依赖 ③ + 基线副本回滚原语，后者已就绪）。
 - [x] 防滥用边界（**2026-09-12 用户裁决**）：不引入「防持有者滥用」强制机制（鉴权被改即锁死、鉴权被改即自毁两项提案否决）与目标机通告/许可流程（锁定 + 响铃 + 弹窗、一次性/限时许可两项提案否决）——威胁模型错位（被防对象即设备 root 持有者；该能力本身不依赖 orz；开源可自行构建 ⇒ 客户端自校验无意义）+ 自毁/锁死违 §10.1/§4.3/§10.3/§9.3 且先销毁取证面 + 目标机通告由载体机发出即可被跳过且其形态本身是骚扰原语。既有内部鉴权与防篡改对「持有者危害第三方」不做断言、作者侧无法约束，属**范围外已裁决边界（非缺口）**。保留三句最小纪律（外部控制不豁免记账 / 不做降低目标侧可见性的便捷特性 / 前提与责任归属）。入口：设计 §10.5 + `EXT-BOUNDARY-01`。登记不动计数。
 
