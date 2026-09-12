@@ -1725,7 +1725,8 @@ pub(crate) mod tests {
                 action_status: "error".to_string(),
                 error_class: Some("all_engines_failed".to_string()),
                 nav_phase: "error".to_string(),
-                log: "[browser_log]\n  error: all SERP engines failed for this session".to_string(),
+                log: "[browser_log]\n  error: all three SERP engines were attempted and failed"
+                    .to_string(),
                 engine_attempts: Some(vec![
                     SerpEngineAttempt {
                         engine: super::serp::SerpEngine::Google,

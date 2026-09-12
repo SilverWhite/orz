@@ -8932,4 +8932,185 @@ mod tests {
         assert!(blocker.is_file(), "placeholder file must be untouched");
         let _ = std::fs::remove_dir_all(&dir);
     }
+
+    /// 0v-A 取证面脱敏漏斗钉字（2026-09-12 复审 P2 项收口）：落盘前
+    /// `orz_secrets::redact_secrets` 确实运行——信封内含敏感查询参数与
+    /// `password =` 赋值形态时，**落盘文件脱敏、模型实际收到的输出原样**；
+    /// 这同时把「内容逐字段同源、脱敏命中时不逐字」的精确口径钉进机械面。
+    #[tokio::test]
+    async fn serp_attempts_forensic_funnel_redacts_secrets_without_touching_model_output() {
+        let dir = test_dir();
+        let journal = JournalRecorder::new(dir.clone());
+        let secret_url = "https://farm.example/page?token=supersecretvalue&x=1";
+        let envelope = serde_json::json!({
+            "action": "search",
+            "action_status": "ok",
+            "engine": "bing",
+            "engine_attempts": [
+                {"engine": "google", "status": "failed", "error_class": "network", "wall_ms": 10},
+                {"engine": "bing", "status": "ok", "wall_ms": 20},
+                {"engine": "duckduckgo", "status": "not_attempted",
+                 "reason": "not attempted in this call: the chain succeeded on an earlier engine"},
+            ],
+            "results": [
+                {"title": "t", "url": secret_url,
+                 "snippet": "docs mention password=hunter2secret in passing"},
+            ],
+        });
+        let host = TestHost {
+            journal,
+            tool_result: Some(ToolResult {
+                output: envelope.to_string(),
+                exit_code: Some(0),
+                output_encoding: None,
+                structured: None,
+                ..Default::default()
+            }),
+        };
+        let controller = with_retrieval_enabled(AgentLoopController::with_gateway(Arc::new(
+            FakeProvider::new(vec![ScriptedResponse::text("x")]),
+        )));
+        let mut messages: Vec<Message> = Vec::new();
+        let mut writer = EventWriter::new(
+            Some(host.journal()),
+            EventTrack::V02,
+            "RUN-SERP-FORENSIC-REDACT",
+            "",
+            0,
+            None,
+            None,
+        );
+        let call = ToolCall {
+            name: "browser_control".to_string(),
+            arguments: serde_json::json!({ "action": "search", "query": "q" }),
+            call_id: "serp-redact".to_string(),
+        };
+        let (result, _) = controller
+            .run_host_tool_with_plan_gate(
+                &host,
+                &mut writer,
+                &call,
+                "",
+                orz_assurance::gates::ipg::WorkspaceTrust::ObservedTrusted,
+                &mut messages,
+                4,
+                None,
+                Some("act-1"),
+                None,
+                None,
+                false,
+                false,
+                None,
+                None,
+            )
+            .await
+            .unwrap();
+
+        // 模型实际收到的输出不脱敏。
+        assert!(
+            result.output.contains("supersecretvalue"),
+            "model output must not be redacted: {}",
+            result.output
+        );
+        // 落盘文件脱敏：原始秘密值不得存活，且至少出现一种脱敏标记
+        // （URL 参数值 → redacted / [REDACTED_SECRET]；赋值形态 →
+        // [REDACTED_SECRET]——两族 regex 的叠加次序可能让 URL 值最终落到
+        // 任一形态，故按不变量断言而非钉死单一形态）。
+        let record = std::fs::read_to_string(dir.join("serp-attempts").join("0004.json")).unwrap();
+        assert!(
+            !record.contains("supersecretvalue") && !record.contains("hunter2secret"),
+            "raw secrets must not survive the forensic funnel: {record}"
+        );
+        assert!(
+            record.contains("REDACTED"),
+            "at least one redaction marker must be present on disk: {record}"
+        );
+        assert!(
+            record.contains("farm.example") && record.contains("docs mention"),
+            "non-secret content survives the funnel: {record}"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// 0v-A 取证面无预算面形态（2026-09-12 复审 P3 项收口）：`serp_budget=None`
+    /// 时 `lane` 记 null、不写 `lane_budget` 键——取证文件在 legacy/测试形态下
+    /// 不虚构造数。
+    #[tokio::test]
+    async fn serp_attempts_lane_is_null_without_budget_surface() {
+        let dir = test_dir();
+        let journal = JournalRecorder::new(dir.clone());
+        let envelope = serde_json::json!({
+            "action": "search",
+            "action_status": "ok",
+            "engine": "google",
+            "engine_attempts": [
+                {"engine": "google", "status": "ok", "wall_ms": 5},
+                {"engine": "bing", "status": "not_attempted",
+                 "reason": "not attempted in this call: the chain succeeded on an earlier engine"},
+                {"engine": "duckduckgo", "status": "not_attempted",
+                 "reason": "not attempted in this call: the chain succeeded on an earlier engine"},
+            ],
+            "results": [],
+        });
+        let host = TestHost {
+            journal,
+            tool_result: Some(ToolResult {
+                output: envelope.to_string(),
+                exit_code: Some(0),
+                output_encoding: None,
+                structured: None,
+                ..Default::default()
+            }),
+        };
+        let controller = with_retrieval_enabled(AgentLoopController::with_gateway(Arc::new(
+            FakeProvider::new(vec![ScriptedResponse::text("x")]),
+        )));
+        let mut messages: Vec<Message> = Vec::new();
+        let mut writer = EventWriter::new(
+            Some(host.journal()),
+            EventTrack::V02,
+            "RUN-SERP-FORENSIC-NOBUDGET",
+            "",
+            0,
+            None,
+            None,
+        );
+        let call = ToolCall {
+            name: "browser_control".to_string(),
+            arguments: serde_json::json!({ "action": "search", "query": "q" }),
+            call_id: "serp-nobudget".to_string(),
+        };
+        let (result, _) = controller
+            .run_host_tool_with_plan_gate(
+                &host,
+                &mut writer,
+                &call,
+                "",
+                orz_assurance::gates::ipg::WorkspaceTrust::ObservedTrusted,
+                &mut messages,
+                5,
+                None,
+                Some("act-1"),
+                None,
+                None,
+                false,
+                false,
+                None,
+                None,
+            )
+            .await
+            .unwrap();
+        assert_eq!(result.exit_code, Some(0));
+        let record: serde_json::Value = serde_json::from_str(
+            &std::fs::read_to_string(dir.join("serp-attempts").join("0005.json")).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(record["lane"], serde_json::Value::Null);
+        assert!(
+            record.get("lane_budget").is_none(),
+            "no budget surface → no lane_budget key: {record}"
+        );
+        assert_eq!(record["envelope"], envelope);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }
