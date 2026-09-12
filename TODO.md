@@ -17,7 +17,7 @@
 ## 开放项路由（2026-09-09 同步；勾选与计数权威在 BACKLOG）
 
 - 未闭合总数：**26 项**（BACKLOG 计数口径；逐次计数流水见 [`docs/BACKLOG_AND_PRIORITIES.md`](docs/BACKLOG_AND_PRIORITIES.md) 未闭合计数，TODO 不重复维护）。TODO `[ ]` 明细含父/子项，计数以 BACKLOG 为准。
-- P0：0b 验证③④（⑤ 89 题独立用户门）；0d 后续 3/4/5 S4 复验；0j W1-R1 S4 复验 + W3-R3 余项 + W4-R4 S5-2 总项；0l ⑥⑦（⑧ TER 见 [`TODO2.md`](TODO2.md)）；0m S3/S4；0n GAP-APPROVAL-PROMPTER（延期，S1 设计定稿前置）；0o T3 批次 W2 chunk3 + T4 批次 L + T5 批次 O + T6 统一收口；0t S4 实机复验待续；0u R4 15 题官方复跑（0t S4 载体，2026-09-10 放行）；0v 检索引擎 SERP + browser_control 分类修正（S1–S3′ 完成；S4 复跑 2026-09-12 F1/F2 确认修复、本体判据未取得；**第二批（软备忘 + 0v-A 取证面，2026-09-12 放行合批）S1–S4 执行完毕（S4 判据 1/2/6/7/11/12 成立、9/10 未取得，闭合留用户裁决）**）；0w TB 4.0 单题摩擦探针（第三跑成立并跑完（2026-09-11））；0y NP1 机械身体集成支线（2026-09-11 用户裁决立项，实施未开始；§14.2 验证载体已裁决引入模拟器（2026-09-12），S1 载体搭建待放行，M0 定版为首个无依赖里程碑）。（0x 初始轮中立问询已于 2026-09-11 S1–S4 全部闭合转 `implemented`，计数 27 → 26；ADR-0010 §14.66 / v1.67。）
+- P0：0b 验证③④（⑤ 89 题独立用户门）；0d 后续 3/4/5 S4 复验；0j W1-R1 S4 复验 + W3-R3 余项 + W4-R4 S5-2 总项；0l ⑥⑦（⑧ TER 见 [`TODO2.md`](TODO2.md)）；0m S3/S4；0n GAP-APPROVAL-PROMPTER（延期，S1 设计定稿前置）；0o T3 批次 W2 chunk3 + T4 批次 L + T5 批次 O + T6 统一收口；0t S4 实机复验待续；0u R4 15 题官方复跑（0t S4 载体，2026-09-10 放行）；0v 检索引擎 SERP + browser_control 分类修正（S1–S3′ 完成；S4 复跑 2026-09-12 F1/F2 确认修复、本体判据未取得；**第二批（软备忘 + 0v-A 取证面，2026-09-12 放行合批）S1–S4 执行完毕（S4 判据 1/2/6/7/11/12 成立、9/10 未取得，闭合留用户裁决）**）；0w TB 4.0 单题摩擦探针（第三跑成立并跑完（2026-09-11））；0y NP1 机械身体集成支线（2026-09-11 用户裁决立项；**M0 定版 2026-09-12 全部完成**；§14.2 验证载体已裁决引入模拟器（2026-09-12），**S1 载体搭建 ①②③ 完成、④待续**）。（0x 初始轮中立问询已于 2026-09-11 S1–S4 全部闭合转 `implemented`，计数 27 → 26；ADR-0010 §14.66 / v1.67。）
 - P1：FUS-COMPONENT-REGISTER 组件审计；GAP-WINDOWS-EVIDENCE 三项；IMPL-DEEPSEEK-TRANSPORT live 晋级证据；ORZ-SESSION-CONTEXT-MONITOR 四项。
 - P2：IMPL-CONTROL-FABRIC Slice 3/4；OPS-PROTOCOL 裁剪与接线裁决；P2-11 余项（PULL 自描述 S3/S4、retryable 分类位、依赖图 S3/S4）；P2-12 S4 复验；P2-13 B4；P2-14 S3/S4。
 - P3：EVIDENCE-LOCAL-BROWSER、GATE-CHAIN、observed-scope 枚举、V11-IMPL-003、V11-IMPL-007、orz-host flaky。
@@ -595,19 +595,20 @@ GLM F2 处置转排期（2026-09-06 用户裁决）：`orz-host/src/approval.rs`
 - [x] **闭合入账（2026-09-11 用户裁决）**：S1–S4 全部闭合、S4 实机判据通过 → 转 `implemented`，未闭合 **27 → 26**。
 
 
-### P0-0y NP1 机械身体集成支线（2026-09-11 用户裁决立项；设计定稿 + 全模块化承载确认；**M0 全部完成（含救援通道演练，2026-09-12 按事实更正收尾）**）
+### P0-0y NP1 机械身体集成支线（2026-09-11 用户裁决立项；设计定稿 + 全模块化承载确认；**M0 全部完成（含救援通道演练，2026-09-12 按事实更正收尾）；S1 载体搭建 ①②③ 完成、④待续**）
 
 > 设计权威：[`NP1_ORZ_BODY_INTEGRATION_DESIGN_2026-09-11`](docs/NP1_ORZ_BODY_INTEGRATION_DESIGN_2026-09-11.md)（§9.3 全模块化承载确认 + 附录 D 登记前实机复核）；BACKLOG 0y；索引 `AUTH-NP1-BODY-INTEGRATION`。orz 之外扩展面：不修改 ADR-0010 与模型工具面。
 
 - [x] M0 定版（无依赖；本支线唯一分区写入批，前置全量分区备份）：升级官方最终版 `V3.2-260618-1045` → 全量备份 → 重新 root（Magisk）→ 重建去预装（`nothing_debloat` 模块）→ **救援通道演练**（收尾验收，口径见下）。**首次执行尝试已中止（2026-09-12，用户接管）**：全量备份（86 分区双侧哈希吻合）与 260618 官方镜像/预打补丁 boot 等产物已就位并保留；装置零改动回退；关键结论（unlock_critical 策略拒绝 / update_engine_client headers 失效 / sideload 瞬败待查）与复用路线见 [M0 中止记录](docs/audits/0Y_M0_ABORTED_FIRST_ATTEMPT_2026-09-12.md)。**2026-09-12 全部完成**：官方离线 OTA 链（本机自带 `com.nothing.OfflineOTAUpgradeApp`，`*#*#682#*#*`）六级通过至 260618（更正①：critical 分区不可 fastboot 写，升级载体改为签名 OTA）+ fastboot 刷预打补丁 boot 恢复 root（Magisk 30.7）+ 去预装反证验证有效（301 → 271，30 项吻合，含回滚演练）+ 救援通道演练（更正②：本机 Magisk 30.7 无按键检测代码，原「音量上禁用模块」不成立；改以已实测的「音量下 → fastboot」与「模块 `disable` 标志」两条通道验收，Android 安全模式按键组合登记待查）。设计 §9.3/§10.3/§13 已同批更正。入口：[M0 离线 OTA 执行记录](docs/audits/0Y_M0_OFFLINE_OTA_EXECUTION_2026-09-12.md)。
 - [ ] aarch64 载体重建（M1 前置）：orz 0.4.2 aarch64 musl 三件套（现机三件为早期源状态产物，设计附录 A-01；版本冻结 + 哈希入 manifest，与 x86_64 S3 同纪律）。
 - [ ] M1 前置：接口定义（事件 schema / 动作契约 / 策略注册表形态）与 orz 机械层共同确定（设计 §14.1）。
-- [x] §14.2 验证载体决策（**2026-09-12 用户裁决**）：引入模拟器为常设验证载体——载体集 = 模拟器（新增、常设）+ NP2（既有，流程纪律）+ NP1（端到端终验）；模拟器承担自有代码验证 + M5 补丁流程纪律干跑（坏补丁代价 = 删快照）；不验证厂商框架与 NP1 专属内核面（设计 §12 裁决段）。
-- [ ] S1 验证载体搭建（**2026-09-12 已放行；前两项完成，③④未开始**）：入口 [S1 载体搭建记录](docs/audits/0Y_S1_EMULATOR_CARRIER_SETUP_2026-09-12.md)。
+- [x] §14.2 验证载体决策（**2026-09-12 用户裁决**）：引入模拟器为常设验证载体——载体集 = 模拟器（新增、常设）+ NP2（既有，流程纪律）+ NP1（端到端终验）；模拟器承担自有代码验证 + M5 补丁流程纪律干跑（坏补丁代价 = **还原 AVD 目录基线副本 + 重启一次**，2026-09-12 实测定案；原写「删快照」已被本机实测否定）；不验证厂商框架与 NP1 专属内核面（设计 §12 裁决段）。
+- [ ] S1 验证载体搭建（**2026-09-12 已放行；①②③ 完成，④未开始**）：入口 [S1 载体搭建记录](docs/audits/0Y_S1_EMULATOR_CARRIER_SETUP_2026-09-12.md)。
   - [x] ① 无头 x86_64 安卓镜像选型与搭建：`system-images;android-35;aosp_atd;x86_64`（Android 15）+ emulator 37.1.11.0 + cmdline-tools 19.0，全部落 `D:\android`（C 盘仅余 1.8 GB 为硬约束）；AVD `orz_body_a35`（4 核 / 2 GB / 数据分区 6 GB）；WHPX 加速自检可用；无头启动 35 s 达 `boot_completed=1`。
   - [x] ② orz 载体上机冒烟：用**当前冻结载体 0.4.3**（非设计文本写的 0.4.2——载体已随 0v S3 同日 bump）；`e_type=DYN`、`INTERP=0`、`NEEDED=0` 静态 PIE，主机↔设备 SHA256 逐件吻合，三件套均在 Android 15 内核上实际执行（`BODY-PRE-01` 的 x86_64 对应判据成立）。
   - [x] 载体能力判据（本批一并取得）：**持久化**默认不成立（AVD 默认数据分区是临时的，`/data` 重启即失）→ 移除 `disk.dataPartition.path = <temp>` 后成立；**回滚原语改判**——快照保存 OK 但两条恢复路径均不可用（热加载 WHPX `hr=c0350015` 后模拟器退出；冷加载 guest 持续 adb offline 242 s），改用 AVD 目录基线副本（561 MB，已用「改动 → 还原 → 复读」验证）；root 前置探明（`adb root` 得 `uid=0`/`u:r:su:s0`，`/`与`/vendor` 只读、`adb remount` 需解锁引导，当前无 Magisk）。
-  - [ ] ③ Magisk-in-AVD 模块打包 / 安装 / 禁用 / 恢复实机化演练（前置已探明；需定 Magisk 版本冻结与 `-writable-system` 方案）。
+  - [x] ③ Magisk 模块打包 / 安装 / 禁用 / 恢复演练（**2026-09-12 完成**）：Magisk **v30.7**（与真机同版本，APK SHA256 与官方 release digest 吻合）以 **ramdisk 注入**进模拟器（解压 lz4_legacy cpio → 按官方 `boot_patch.sh` 的 ramdisk 段替换 `/init` → `-ramdisk` 启动），44 s 达 `boot_completed`、`magisk -V`=30700、三个 init 触发器全部回执；补齐 `/data/adb/magisk/` 持久环境后模块正常安装（此前报 `Incomplete Magisk install`）。演练模块 `orz_body` v0.1.0-s1drill（12 项：`module.prop` / `customize.sh` / `post-fs-data.sh` / `service.sh` / `system` overlay / privapp 白名单 / keylayout / `sepolicy.rule` / `uninstall.sh` / `META-INF`）**六轮判据全过**：安装 → 开机生效（overlay 三件带 `u:object_r:system_file:s0`、两脚本执行、守护进程被 init 收养）→ `disable` + 重启（overlay 摘除、脚本不执行、Magisk 本体不受影响）→ 去 `disable` + 重启（恢复）→ `remove` + 重启（卸载钩子清状态目录）→ 还原基线副本 + 不带 `-ramdisk` 启动（Magisk 与模块痕迹全消）。**两项未取得（如实登记）**：模块 `sepolicy.rule` 未生效（注入式 Magisk 缺 `PREINITDEVICE`/preinit 目录，安装报 `Unable to find preinit dir`）、priv-app 白名单与 keylayout 只验证「同批 overlay 不破坏开机」。入口：[S1 载体搭建记录 §7](docs/audits/0Y_S1_EMULATOR_CARRIER_SETUP_2026-09-12.md)。
+  - [ ] ③ 遗留：补丁 ramdisk 的 `.magisk` 配置写入 `PREINITDEVICE` → 重装模块 → 核证模块 sepolicy 规则真的被暂存与注入（设计 §9.3 SELinux 承载点；真机走应用安装不涉及，属注入式载体形态限制）。
   - [ ] ④ M5 补丁「打补丁 → 进系统 → 开机 → 回滚」流程纪律干跑首轮（依赖 ③ + 基线副本回滚原语，后者已就绪）。
 - [x] 防滥用边界（**2026-09-12 用户裁决**）：不引入「防持有者滥用」强制机制（鉴权被改即锁死、鉴权被改即自毁两项提案否决）与目标机通告/许可流程（锁定 + 响铃 + 弹窗、一次性/限时许可两项提案否决）——威胁模型错位（被防对象即设备 root 持有者；该能力本身不依赖 orz；开源可自行构建 ⇒ 客户端自校验无意义）+ 自毁/锁死违 §10.1/§4.3/§10.3/§9.3 且先销毁取证面 + 目标机通告由载体机发出即可被跳过且其形态本身是骚扰原语。既有内部鉴权与防篡改对「持有者危害第三方」不做断言、作者侧无法约束，属**范围外已裁决边界（非缺口）**。保留三句最小纪律（外部控制不豁免记账 / 不做降低目标侧可见性的便捷特性 / 前提与责任归属）。入口：设计 §10.5 + `EXT-BOUNDARY-01`。登记不动计数。
 
