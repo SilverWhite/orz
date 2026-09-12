@@ -14,7 +14,7 @@ use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
 
 use orz_assurance::lif::{DomainSpike, TemporalSessionSnapshot};
-use orz_assurance::{EventTrack, EventType, JournalRecorderError, Redaction, RunEvent, seal_event};
+use orz_assurance::{EventTrack, EventType, JournalRecorderError, Redaction, RunEvent};
 use orz_loop::AgentLoopController;
 use orz_loop::acaf::AcafClient;
 use orz_loop::blackboard::{Blackboard, ExternalRetSection, InternalRetSection};
@@ -170,7 +170,7 @@ impl<'a> RunRecorder<'a> {
         event_type: EventType,
         payload: serde_json::Value,
     ) -> Result<(), JournalRecorderError> {
-        let mut event = RunEvent::new_v02(
+        let event = RunEvent::new_v02(
             self.run_id.clone(),
             self.seq,
             event_type,
@@ -181,12 +181,14 @@ impl<'a> RunRecorder<'a> {
             Redaction::None,
             chrono::Utc::now().to_rfc3339(),
         );
-        seal_event(&mut event).map_err(JournalRecorderError::Serde)?;
-        let event_hash = event.event_sha256.clone();
+        // 0v-C（2026-09-12）：不在漏斗外预封印——记录器先做 payload 脱敏
+        // （sk-shape / URL 归一化等确定性改写）再封印，并返回**落盘**哈希。
+        // 链只能串这个哈希（调用方自算的是未改写形态，重放报
+        // `previous hash mismatch`）。
         // Only advance the chain link after the write is accepted (a refused
         // append must not pollute the caller's bookkeeping — 2026-08-04
         // review P2-7 precedent).
-        self.journal.record_async(event).await?;
+        let event_hash = self.journal.record_async(event).await?;
         self.prev_hash = Some(event_hash);
         self.seq += 1;
         Ok(())

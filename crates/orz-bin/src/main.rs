@@ -725,7 +725,7 @@ async fn record_plan_event(
     event_type: orz_assurance::EventType,
     payload: serde_json::Value,
 ) -> Result<String, String> {
-    let mut event = orz_assurance::RunEvent::new_v02(
+    let event = orz_assurance::RunEvent::new_v02(
         handle.run_id.clone(),
         seq,
         event_type,
@@ -736,14 +736,15 @@ async fn record_plan_event(
         orz_assurance::Redaction::None,
         chrono_utc_now(),
     );
-    orz_assurance::seal_event(&mut event).map_err(|e| e.to_string())?;
-    let hash = event.event_sha256.clone();
+    // 0v-C（2026-09-12）：不在漏斗外预封印——记录器先对 payload 做机械脱敏
+    // （sk-shape / URL 归一化等确定性改写）再封印，并返回**落盘**的
+    // event_sha256。链必须串这个哈希：调用方自算的哈希描述的是未改写形态，
+    // 会让链上链接指向盘上不存在的值（重放报 `previous hash mismatch`）。
     handle
         .journal
         .record_async(event)
         .await
-        .map_err(|e| e.to_string())?;
-    Ok(hash)
+        .map_err(|e| e.to_string())
 }
 
 /// Parse the max-wallclock budget from a raw value (`ORZ_MAX_WALLCLOCK`).

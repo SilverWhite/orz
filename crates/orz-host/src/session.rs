@@ -187,7 +187,7 @@ pub async fn bootstrap_session(
         orz_assurance::sha256_hex(&orz_assurance::canonical_json(&manifest).unwrap_or_default());
 
     // Record run_preflight as event 0
-    let mut preflight = RunEvent::new_v02(
+    let preflight = RunEvent::new_v02(
         run_id.into(),
         0,
         EventType::RunPreflight,
@@ -198,14 +198,16 @@ pub async fn bootstrap_session(
         Redaction::None,
         chrono::Utc::now().to_rfc3339(),
     );
-    orz_assurance::seal_event(&mut preflight)
-        .map_err(|e| SessionError::Journal(orz_assurance::JournalRecorderError::Serde(e)))?;
+    // 0v-C（2026-09-12）：不在漏斗外预封印——record_async 先对 payload 做
+    // 机械脱敏再封印，并返回**落盘**的 event_sha256。链首链接必须取这个
+    // 返回值：本地预封印得到的是未改写形态的哈希，一旦漏斗改写 payload
+    // （sk-shape / URL 归一化），后续每个事件都会因 `previous hash
+    // mismatch` 被重放判无效。
+    let preflight_event_sha256 = journal.record_async(preflight).await?;
 
-    // The chain continues from the sealed preflight event (read before move).
-    let next_sequence = preflight.sequence + 1;
-    let last_event_sha256 = Some(preflight.event_sha256.clone());
-
-    journal.record_async(preflight).await?;
+    // The chain continues from the sealed preflight event.
+    let next_sequence = 1;
+    let last_event_sha256 = Some(preflight_event_sha256);
 
     Ok(SessionHandle {
         run_id: run_id.into(),

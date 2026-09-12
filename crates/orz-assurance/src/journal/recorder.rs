@@ -21,11 +21,13 @@ use super::event::RunEvent;
 /// Commands sent to the background writer task.
 enum JournalCmd {
     /// Record a single event (blocking send — event must not be lost).
-    /// The ack reports the write result, including terminal-state refusal.
+    /// The ack reports the write result plus the sealed on-disk
+    /// `event_sha256` (0v-C — the caller threads *that* hash into the next
+    /// event's `previous_event_sha256`, never a pre-funnel seal of its own).
     WriteEvent {
         // Boxed — `RunEvent` is large; the enum travels the writer channel.
         event: Box<RunEvent>,
-        ack: oneshot::Sender<Result<(), JournalRecorderError>>,
+        ack: oneshot::Sender<Result<String, JournalRecorderError>>,
     },
     /// Flush all buffered writes to disk and fsync.
     Flush {
@@ -74,18 +76,23 @@ impl JournalRecorder {
         JournalRecorder { tx, journal_dir }
     }
 
-    /// Record an event to the journal.
+    /// Record an event to the journal. Returns the **on-disk** `event_sha256`.
     ///
     /// **Blocking send** — if the channel is full (backpressure from slow I/O),
     /// this will wait until the writer task catches up. Events are never dropped.
     ///
-    /// Events are automatically sealed (payload_sha256 + event_sha256 computed)
-    /// before being sent.
+    /// Events are sealed (payload_sha256 + event_sha256 computed) inside this
+    /// funnel, *after* the payload scrub. The returned hash is therefore the
+    /// authoritative preimage for the next event's `previous_event_sha256`:
+    /// callers must thread **this** value, never a hash they computed
+    /// themselves before calling. (0v-C, 2026-09-12: a caller-side pre-seal ran
+    /// on the un-scrubbed payload, so every chained link pointed at a hash that
+    /// never reached disk and replay failed with `previous hash mismatch`.)
     ///
     /// Returns an error when the append is refused — `Closed` after shutdown,
     /// `TerminalAppended` after a terminal event. Callers must treat a refused
     /// append as a journal integrity violation (the event was NOT recorded).
-    pub fn record(&self, event: RunEvent) -> Result<(), JournalRecorderError> {
+    pub fn record(&self, event: RunEvent) -> Result<String, JournalRecorderError> {
         let mut event = event;
         // 0p S2 B5（2026-09-07，ADR-0010 §14.61 设计 B5）：journal 落
         // `.gsa/runs/`，是会话卷持久化面——写盘前在唯一漏斗对 payload 全部
@@ -93,11 +100,13 @@ impl JournalRecorder {
         // 替换，确定性）；脱敏先于哈希封印，链与落盘内容一致。key 不落卷
         // 是两段门放开的前提不变量。
         orz_secrets::redact_json_string_values(&mut event.payload);
-        // Auto-seal the event (compute hashes)
+        // 0v-C：封印必须发生在脱敏之后——哈希描述的必须是落盘字节，
+        // 而不是调用方提交前的暂存形态（否则链上链接指向不存在的哈希）。
         seal_event(&mut event)?;
 
         // POST-PLANA BUGFIX #1: blocking send — never silently drop.
-        // The ack carries the writer's decision so refusal is observable.
+        // The ack carries the writer's decision so refusal is observable,
+        // and (0v-C) the sealed hash the next event must link to.
         let (ack_tx, ack_rx) = oneshot::channel();
         self.tx
             .blocking_send(JournalCmd::WriteEvent {
@@ -105,18 +114,23 @@ impl JournalRecorder {
                 ack: ack_tx,
             })
             .map_err(|_| JournalRecorderError::Closed)?;
-        ack_rx
-            .blocking_recv()
-            .unwrap_or(Err(JournalRecorderError::Closed))
+        match ack_rx.blocking_recv() {
+            Ok(result) => result,
+            // Writer task gone without answering — no hash to thread.
+            Err(_) => Err(JournalRecorderError::Closed),
+        }
     }
 
     /// Async version of `record()` — safe to call from within a Tokio runtime.
     ///
-    /// Uses `send().await` instead of `blocking_send`. Otherwise identical to `record()`.
-    pub async fn record_async(&self, event: RunEvent) -> Result<(), JournalRecorderError> {
+    /// Uses `send().await` instead of `blocking_send`. Otherwise identical to
+    /// `record()` — including the 0v-C contract: the returned hash is the
+    /// on-disk seal (post-scrub) and is what the next event must link to.
+    pub async fn record_async(&self, event: RunEvent) -> Result<String, JournalRecorderError> {
         let mut event = event;
         // 0p S2 B5：与 record 同一漏斗纪律（见上）。
         orz_secrets::redact_json_string_values(&mut event.payload);
+        // 0v-C：与 record 一致——先脱敏再封印，返回落盘哈希。
         seal_event(&mut event)?;
 
         let (ack_tx, ack_rx) = oneshot::channel();
@@ -127,7 +141,10 @@ impl JournalRecorder {
             })
             .await
             .map_err(|_| JournalRecorderError::Closed)?;
-        ack_rx.await.unwrap_or(Err(JournalRecorderError::Closed))
+        match ack_rx.await {
+            Ok(result) => result,
+            Err(_) => Err(JournalRecorderError::Closed),
+        }
     }
 
     /// Flush all buffered writes to disk and fsync.
@@ -290,7 +307,9 @@ impl JournalWriterTask {
                                 if event.is_terminal() {
                                     self.terminal_seen = true;
                                 }
-                                let _ = ack.send(Ok(()));
+                                // 0v-C: report the sealed hash the caller must
+                                // thread into the next event's `previous` link.
+                                let _ = ack.send(Ok(event.event_sha256.clone()));
                             }
                         }
                         Err(e) => {
@@ -440,6 +459,96 @@ mod tests {
         assert_eq!(replay.terminal_event.as_deref(), Some("run_finished"));
 
         // Clean up
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// 0v-C（2026-09-12）：`record()` 返回的是漏斗内、脱敏**之后**的封印
+    /// 哈希。调用方必须在提交后才拿到它——修复前 controller 自己预先封印，
+    /// 得到的是未改写 payload 的哈希，与盘上内容永远对不上。
+    #[test]
+    fn record_returns_post_funnel_sealed_hash() {
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        let _guard = rt.enter();
+        let dir = temp_dir();
+        let recorder = JournalRecorder::new(dir.clone());
+
+        // URL 归一化是确定性漏斗改写：url crate 给空路径补 "/"，于是落盘
+        // 形态必然不同于调用方提交的形态（等价于线上 0v-C 触发条件）。
+        let payload = serde_json::json!({
+            "tool": "web_fetch",
+            "output": "see https://example.com?q=1 for details",
+        });
+
+        // 调用方“自作聪明”的预封印（= 修复前的 controller 行为）。
+        let mut prescal = make_event("RUN-HASH", 0, EventType::ToolCompleted, None);
+        prescal.payload = payload.clone();
+        seal_event(&mut prescal).unwrap();
+
+        let mut e = make_event("RUN-HASH", 0, EventType::ToolCompleted, None);
+        e.payload = payload;
+        let returned = recorder.record(e).unwrap();
+        recorder.shutdown().unwrap();
+
+        let content = std::fs::read_to_string(dir.join("events.jsonl")).unwrap();
+        let on_disk: RunEvent = serde_json::from_str(content.lines().next().unwrap()).unwrap();
+
+        assert_eq!(
+            returned, on_disk.event_sha256,
+            "record() must report the on-disk seal"
+        );
+        assert_ne!(
+            returned, prescal.event_sha256,
+            "test premise: the funnel must rewrite this payload (URL normalization)"
+        );
+        assert!(
+            !content.contains("https://example.com?q=1"),
+            "funnel rewrite must be visible on disk: {content}"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// 0v-C（2026-09-12）：链按 `record()` 返回的哈希串联时，重放必须通过。
+    /// 这正是线上 pipeline 上 `previous hash mismatch` 的最小反例。
+    #[test]
+    fn chain_threads_returned_hash_and_replays_valid_after_funnel_rewrite() {
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        let _guard = rt.enter();
+        let dir = temp_dir();
+        let recorder = JournalRecorder::new(dir.clone());
+
+        let mut e0 = make_event("RUN-URLCHAIN", 0, EventType::RunStarted, None);
+        e0.payload = serde_json::json!({
+            "cwd": "D:/CLI/orz",
+            "note": "seed https://example.com?q=1",
+        });
+        // 修复后：链上链接 = record() 返回值（落盘哈希）。
+        let h0 = recorder.record(e0).unwrap();
+
+        let e1 = make_event("RUN-URLCHAIN", 1, EventType::RunFinished, Some(h0));
+        recorder.record(e1).unwrap();
+        recorder.shutdown().unwrap();
+
+        let events_path = dir.join("events.jsonl");
+        let content = std::fs::read_to_string(&events_path).unwrap();
+        let rows: Vec<RunEvent> = content
+            .lines()
+            .map(|line| serde_json::from_str(line).unwrap())
+            .collect();
+        assert_eq!(
+            rows[1].previous_event_sha256.as_deref(),
+            Some(rows[0].event_sha256.as_str()),
+            "link must point at the on-disk hash"
+        );
+
+        let replay =
+            super::super::verifier::replay_journal(&events_path, Some("RUN-URLCHAIN"), None, true);
+        assert!(
+            replay.valid,
+            "chain broken after funnel rewrite: {:?}",
+            replay.errors
+        );
+
         let _ = std::fs::remove_dir_all(&dir);
     }
 

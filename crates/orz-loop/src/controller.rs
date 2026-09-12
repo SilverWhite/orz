@@ -27,7 +27,7 @@ use std::sync::{Arc, Mutex};
 use orz_assurance::acaf::TicketKind;
 use orz_assurance::{
     EventTrack, EventType, JournalRecorder, JournalRecorderError, Redaction, RunEvent,
-    canonical_json, seal_event, sha256_hex,
+    canonical_json, sha256_hex,
 };
 
 use orz_assurance::lif::{Domain, TemporalSessionSnapshot};
@@ -3881,7 +3881,7 @@ impl<'a> EventWriter<'a> {
         if let Some(h) = &self.heartbeat {
             h.stamp();
         }
-        let mut event = match self.track {
+        let event = match self.track {
             EventTrack::V02 => RunEvent::new_v02(
                 self.run_id.clone(),
                 self.seq,
@@ -3905,12 +3905,15 @@ impl<'a> EventWriter<'a> {
                 chrono_utc_now(),
             ),
         };
-        seal_event(&mut event).map_err(|e| AgentLoopError::Assurance(e.to_string()))?;
-        let event_hash = event.event_sha256.clone();
+        // 0v-C（2026-09-12）：不要在漏斗外预封印——记录器先做 payload 脱敏
+        // （sk-shape / URL 归一化等确定性改写）再封印，并在 ack 里返回**落盘**
+        // 的 event_sha256。链只能串这个哈希；调用方自己先算的哈希描述的是
+        // 未改写形态，会让每条链上链接指向盘上不存在的值（重放报
+        // `previous hash mismatch`）。
         // Only advance the chain link after the write is accepted — a
         // refused append (Closed/TerminalAppended) must not pollute the
         // caller's bookkeeping (2026-08-04 review P2-7).
-        journal.record_async(event).await?;
+        let event_hash = journal.record_async(event).await?;
         self.prev_hash = Some(event_hash);
         self.seq += 1;
         Ok(())
@@ -3984,6 +3987,48 @@ mod tests {
         assert_eq!(turn_count_of(Some(1)).await, 1);
         assert_eq!(turn_count_of(None).await, 1, "缺省 = 单提示语义不变");
         assert_eq!(turn_count_of(Some(0)).await, 1, "n<1 钳为 1");
+    }
+
+    /// 0v-C（2026-09-12）：全链重放回归——prompt 里的 URL 会被 journal 漏斗
+    /// 做确定性归一化（url crate 给空路径补 "/"），链必须按**落盘**哈希串联。
+    /// 修复前 controller 在漏斗外预封印（未改写形态），链上每条链接都指向
+    /// 盘上不存在的值，重放报 `previous hash mismatch`（S4 B2 Z2 线上症状）。
+    #[tokio::test]
+    async fn pipeline_journal_replays_valid_after_funnel_rewrite() {
+        let dir = test_dir();
+        let journal = JournalRecorder::new(dir.clone());
+        let host = TestHost {
+            journal,
+            tool_result: None,
+        };
+        let gateway: Arc<dyn ModelGateway> =
+            Arc::new(FakeProvider::from_texts(vec!["完成", "完成"]));
+        let controller = AgentLoopController::with_gateway(gateway);
+        controller
+            .run_turn(
+                &host,
+                "核对 https://example.com?q=1 的记录",
+                "RUN-0VC",
+                MANIFEST,
+                0,
+                None,
+                None,
+                None,
+            )
+            .await
+            .unwrap();
+
+        let events_path = dir.join("events.jsonl");
+        let content = std::fs::read_to_string(&events_path).unwrap();
+        assert!(
+            !content.contains("https://example.com?q=1"),
+            "test premise: the funnel must rewrite the prompt URL on disk: {content}"
+        );
+        let replay =
+            orz_assurance::replay_journal(&events_path, Some("RUN-0VC"), Some(MANIFEST), true);
+        assert!(replay.valid, "chain broken: {:?}", replay.errors);
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// 0p S2 / W2 D-3（2026-09-07，ADR-0010 §14.61 设计 C）：权限门拒绝的
