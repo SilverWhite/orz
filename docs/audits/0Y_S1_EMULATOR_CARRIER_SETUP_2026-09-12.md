@@ -1,11 +1,11 @@
 # 0y / S1 模拟器验证载体搭建记录（2026-09-12）
 
-> **文档类型**：实施记录（S1 前四项中的 ①②③ 完成）
-> **状态**：S1 ①无头镜像选型搭建、②orz 载体上机冒烟、③Magisk 模块打包 / 安装 / 禁用 / 恢复演练（**含 ③ 遗留项：SELinux 规则注入闭环**）**完成**；④M5 流程纪律干跑 **未开始**
+> **文档类型**：实施记录（S1 四项全部完成）
+> **状态**：S1 ①无头镜像选型搭建、②orz 载体上机冒烟、③Magisk 模块打包 / 安装 / 禁用 / 恢复演练（**含 ③ 遗留项：SELinux 规则注入闭环**）、**④M5 补丁「打补丁 → 进系统 → 开机 → 回滚」流程纪律干跑首轮（含坏补丁救援与策略回滚）全部完成**；载体已收尾回干净基线
 > **日期**：2026-09-12
 > **范围**：NP1 机械身体集成支线设计 §12「2026-09-12 用户裁决」引入的常设验证载体——模拟器——的搭建与能力判据
-> **边界**：本记录只登记载体搭建事实与判据，不修改设计权威；发现的两处 §12 偏差只登记、待用户裁决（用户裁决回填见 §8）。
-> **证据**：模拟器运行 stdout/stderr 与设备侧证据落 `D:\tb-eval\s1_emulator\logs\`（含 ③ 遗留项的策略全量 dump 与两组差异 `preinit_rules_{control,injected,diff}.txt`、观测序列 `preinit_ab_summary.txt`）；干净基线副本落 `D:\tb-eval\s1_emulator\baseline_avd\`；补丁 ramdisk / 模块包 / 容器脚本落 `D:\tb-eval\s1_emulator\{ramdisk,module,bin,magisk}\`。
+> **边界**：本记录只登记载体搭建事实与判据，不修改设计权威；两处 §12 偏差经用户裁决已回填（见 §9），SELinux 撤销边界经项目方裁决已落地设计（见 §8.6 与 [设计 §9.3 附注 5–7](../NP1_ORZ_BODY_INTEGRATION_DESIGN_2026-09-11.md)）。
+> **证据**：模拟器运行 stdout/stderr 与设备侧证据落 `D:\tb-eval\s1_emulator\logs\`（③ 遗留项：策略全量 dump 与两组差异 `preinit_rules_{control,injected,diff}.txt`、观测序列 `preinit_ab_summary.txt`；④：`s1d_01…s1d_15` 序列与回滚后策略全量 `preinit_rules_after_rollback.txt`）；干净基线副本落 `D:\tb-eval\s1_emulator\baseline_avd\`；补丁 ramdisk / 模块包 / 容器脚本落 `D:\tb-eval\s1_emulator\{ramdisk,module,bin,magisk}\`；**M5 补丁管线（原厂件 + 产物 + 脚本 + 工具）落 `D:\tb-eval\s1_emulator\pipeline\`**。
 
 ---
 
@@ -59,7 +59,7 @@ AVD 配置：x86_64 / 4 核 / 2 GB RAM / 数据分区 6 GB / 无 Play Store / �
 | `ro.product.cpu.abi` | `x86_64` |
 | `uname -r` | `6.6.30-android15-8-gdd9c02ccfe27-ab11987101` |
 | 默认 adb shell 身份 | `uid=2000(shell)` |
-| `ro.adb.secure` | `0`（边界见 §9） |
+| `ro.adb.secure` | `0`（边界见 §10） |
 
 ---
 
@@ -124,7 +124,7 @@ ELF 自包含性（设备自带 toybox `readelf` 0.8.11-android 核验，三件�
 
 判据：runB 写入 `/data/local/tmp/persist_probe.txt = gamma`，还原基线后 runC 复读为 **MISSING** → ✅ 回滚成立。
 
-`S1-CARRIER-02`：回滚语义由「快照」改为「基线副本」，代价仍在零成本量级（一次文件还原 + 一次正常启动），但机制与设计文本不同——登记为**设计偏差，待用户裁决**（§8 偏差二）。
+`S1-CARRIER-02`：回滚语义由「快照」改为「基线副本」，代价仍在零成本量级（一次文件还原 + 一次正常启动），但机制与设计文本不同——登记为**设计偏差，待用户裁决**（§9 偏差二）。
 
 ### 6.3 root 与系统分区形态（③ 的前置）
 
@@ -230,7 +230,90 @@ ELF 自包含性（设备自带 toybox `readelf` 0.8.11-android 核验，三件�
 
 ---
 
-## 8. 与设计文本的偏差（只登记，待裁决）
+## 8. S1-④ M5 补丁「打补丁 → 进系统 → 开机 → 回滚」流程纪律干跑首轮（2026-09-12）
+
+**本轮定位**：把设计 §10.4 的「PC 侧补丁管线（反编译 → 改 → 重打包 → 重编 dex）」与 §10.3 层 1 / §9.3 附注 5 的回滚口径，在模拟器上**整条走一遍**，并把「坏补丁 → 起不来 → 救援」这一最坏档跑出实测形态。**边界**：本轮补丁是**结构最小、无语义**的加性补丁（既有类上新增常量与方法 + 一个探针类），只验证管线与纪律，不验证 M5 的框架语义（见 §10）。
+
+### 8.1 判据与结果一览
+
+| # | 判据 | 结果 |
+| --- | --- | --- |
+| 1 | 管线可产出**可复现**产物（两次独立构建哈希逐字相同） | ✅ |
+| 2 | 补丁面**最小且可逐条字节核对**（smali 树差异恰好一处且全为新增行；重打包后除目标 dex 外逐条字节同一、MANIFEST 逐字节相同） | ✅ |
+| 3 | 产物满足平台装载前提（ZIP 条目数据 4 字节对齐） | ✅（首版**不满足**，见 §8.3 / §11-12；修正后告警清零） |
+| 4 | 补丁**落位真实**且 systemless（设备路径哈希 = 产物哈希；只读 overlay 挂载；系统分区零写入） | ✅ |
+| 5 | 补丁**在运行期被采用**（补丁代码从 live 路径加载并执行；被改写既有类的新增成员可见可调） | ✅ |
+| 6 | 坏补丁 → **起不来** → 救援 → 恢复 | ✅（小 jar 档**不成立**——系统照常开机，见 §8.4；换成系统服务自身依赖的 jar 后成立，见 §8.5–8.6） |
+| 7 | 回滚完整（含内核策略面） | ✅（两件回原厂哈希、挂载消失、脚本停跑；策略哈希回对照 + 规则全量 0 行差异） |
+
+### 8.2 补丁管线（工具 / 目标件 / 产物 / 最小化核对）
+
+**工具链**（全部官方来源，落 `pipeline\tools\`）：反编译与重编 `baksmali`/`smali` **3.0.7**（Google 官方 Maven `dl.google.com/android/maven2`，依赖 guava 31.1-android / jcommander 1.64 / antlr 3.5.2）；dex 编译 **d8 8.9.27**（Android SDK cmdline-tools 自带，未另装 build-tools）；`javac` 用宿主 JDK 21（`--release 11`）。
+
+**目标件**：`/system/framework/android.hidl.base-V1.0-java.jar`（**12,890 B**，原厂 SHA256 `e60b7e33…`，dex 版本 039、5 个类）——选它做"好补丁"是因为体量小、管线耗时可控且**在系统开机路径的映射清单内**；选它做"坏补丁一"是因为它**不是开机必需件**（见 §8.4）。
+
+**补丁内容**（真实改写既有类 + 新增类）：`android.hidl.base.V1_0.DebugInfo$Architecture` 上**新增**一个静态常量与一个静态方法（既有方法体零改动）；另新增探针类 `orz.body.m5.ProbeMain`（新 dex 条目 `classes2.dex`）。
+
+**产物**（`pipeline\out\`）：
+
+| 产物 | 字节 | SHA256 |
+| --- | --- | --- |
+| 好补丁 `orc-m5-good-a.jar`（与 `-b` 两次独立构建**逐字相同**） | 16,073 | `1e8a33ab6f1649d27e3a44a307b7a8578892c2bfde67107f89581d22a3bb9054` |
+| 坏补丁（小 jar 档）`orc-m5-bad.jar` | 16,073 | `061009d883deb41f9eae4c5eb5466c5e8751687a4142b5c6488b7db742f88988` |
+| 坏补丁（系统服务档）`orc-m5-badservices.jar` | 21,445,455 | `05a0fa2f32f7baa9d12506f4ba1253f13f28564bb57b922ecf7d546989f0a1b7` |
+
+**最小化核对**：`smali_stock` 与 `smali_patched` 全树比对 → **只有 1 个文件不同**（目标类），且该文件差异**全为新增行**；对补丁 dex 重新反编译做往返比对 → 与补丁后 smali 树**唯一差异是注释与空行**（dex 不承载注释）；重打包后 `classes.dex` 被替换、`META-INF/MANIFEST.MF` **逐字节相同**、`unzip -t` 通过。
+
+**模块包**（`module\`）：好补丁 `orz_body-0.2.2-s1drill.zip`（11,685 B / `7ca9a539…`，overlay = 好补丁件）；坏补丁 `orz_body-0.2.3-baddrill.zip`（11,703 B / `d292a280…`）与 `orz_body-0.3.0-badservices.zip`（9,119,260 B / `c8b67942…`）。
+
+### 8.3 好补丁：落位 → 开机 → 生效核证
+
+装模块（`magisk --install-module`）→ 重启 → `boot_id=1fa2e2d3…`、`boot_completed=1`：
+
+- **落位**：设备上该路径 SHA256 = `1e8a33ab…`（= 产物哈希）；`unzip -p <live 路径> classes2.dex | grep -c 标记` = 2。
+- **systemless**：`mount` 显示 `/dev/block/dm-43 on /system/framework/android.hidl.base-V1.0-java.jar type ext4 (ro,seclabel,noatime,…,errors=panic)`——模块件以**只读挂载**覆盖该路径，**系统分区零写入**（与 §7.6 事实 2 一致）。
+- **运行期采用**：`CLASSPATH=<live 路径> app_process64 … orz.body.m5.ProbeMain` 输出 `marker=ORZ-BODY-M5-DRYRUN-MARKER-9F31`、`patched_field=…`、`patched_method=…`，`exit=0` ⇒ 探针类**与被改写的既有类**都从 live 路径加载并执行、新增成员可见（未被启动镜像遮蔽）。
+- **系统健康**：`system_server` / `zygote64` 在位；进程数 340、包数 168、`dumpsys activity` 正常输出。
+- **对齐面**：首版产物 ZIP 条目数据未对齐，ART 报 `Can't mmap dex file … please zipalign to 4 bytes`（6 行）并退化为"解压装载"；加入 4 字节对齐后（条目数据偏移全部 `mod4=0`，与原厂件同对齐纪律）**告警清零**（`warn_lines=0`）。该缺陷与修正登记于 §11 第 12 条。
+
+### 8.4 坏补丁（小 jar 档）：**没有**导致"起不来"——一条对 M5 有价值的反例
+
+同一管线把目标件 `classes.dex` 打坏（其余条目逐字保留、仍 4 字节对齐）后装模块重启：**系统照常起完**（`boot_completed=1`，24.3 s，`boot_id=cc693a5d…`）。故障面取证：
+
+- 显式加载该 live 路径：`Failure to verify dex file '/system/framework/android.hidl.base-V1.0-java.jar': Bad checksum (7111b0f5, expected 952435d1)` → 类找不到 → `SIGABRT`（进程级）。
+- 开机路径：ART 对该件**记告警后丢弃**——`grep -c android.hidl.base /proc/<zygote64>/maps` = **0**（对照：好补丁轮该件在映射内），系统其余部分不受影响。
+
+**结论（登记为 M5 纪律）**：坏框架补丁的后果**不必然是"起不来"**，也可能是**该件在运行期被静默丢弃**（只留一条 logcat 告警）。因此 M5 的验收**不能只核"文件落位"**，必须单列「补丁件在运行期真的被采用」的判据——本轮以「补丁代码可加载执行 + 被改写成员可见 + 与运行期映射面一致」三项收口。
+
+### 8.5 坏补丁（系统服务档）：真正的"起不来"档
+
+改用系统服务自身依赖的 `/system/framework/services.jar`（21,446,365 B，原厂 SHA256 `1a921dbd…`，159 个条目、3 个 dex），只把它的 `classes.dex` 打坏（其余条目逐字保留、4 字节对齐）→ 产物 `05a0fa2f…` → 装模块 `0.3.0-badservices` 后重启：
+
+- **`boot_completed` 在 168.1 s 内始终为空**（`boot_id=7a824f56…`）。
+- 故障形态：`zygote64` 启动 `system_server` 时在 `DexPathList.makeDexElements → DexFile.openDexFileNative` 处 `SIGABRT`（signal 6）；日志逐条为 `Zygote failed to write to system_server FD: Connection refused`、`Process … exited due to signal 6 (Aborted)`，`system_server` **反复重启**。
+- 该状态下 **adb 仍然可用**（adbd 属早期启动面）：`adb shell` 得 `uid=2000(shell)`，`adb root` 后 `uid=0`，`/data/adb/modules/orz_body/` 可直接操作。**载体差异登记**：真机在系统起不来时未必有 adb，其等价通道是**音量下 → fastboot**（M0 已实测）。
+
+### 8.6 救援 → 策略回滚 → 整体回滚（判据表）
+
+| 步骤 | 操作 | 判据 | 结果 |
+| --- | --- | --- | --- |
+| 救援① | `touch /data/adb/modules/orz_body/disable` + 重启 | `boot_completed=1`（`boot_id=f7a0baa2…`）；两件均回原厂哈希（`services.jar`=`1a921dbd…`、hidl jar=`e60b7e33…`）；overlay 挂载消失；`service.marker` 未刷新（**模块脚本本轮不执行**） | ✅ |
+| （顺带实证） | 同上（模块已禁用态） | `/sys/fs/selinux/policy` = `d2365b61…` **仍是注入态**、暂存文件仍在 ⇒ §7.8「禁用不撤销规则」在**故障救援场景二次成立** | ✅ |
+| 策略回滚（面 B） | `rm -f /metadata/watchdog/magisk/sepolicy.rule` + 重启 | 策略哈希精确回到对照值 `8242a06d…`；`magiskpolicy --print-rules` 全量 **42,409 行**与此前对照 dump **0 行差异**（`logs\preinit_rules_after_rollback.txt`） | ✅ |
+| 整体回滚 | 关模拟器 → 还原 AVD 基线副本 → **不带** `-ramdisk` 启动 | `boot_completed=1`（26.4 s，`boot_id=cb365959…`）；`command -v magisk` 空、`/debug_ramdisk` 与 `/data/adb` 均不存在、两件 = 原厂哈希、无 overlay 挂载 | ✅ |
+
+形态差异说明：干净基线（无 Magisk）的策略哈希 `d1749c5d…` 与「Magisk 在位、无模块规则」对照值 `8242a06d…` **不同**——属正常形态差异（Magisk 本体也会调整部分策略面）；面 B 的对照口径固定用后者。
+
+### 8.7 本轮产出的纪律（对设计与实施）
+
+1. **管线三条硬要求**：产物冻结哈希且**两次构建一致**；改动面**可逐条字节核对**（smali 树 + ZIP 条目双面）；**ZIP 条目数据 4 字节对齐**（否则 ART 退化为解压装载，且属可避免的缺陷）。
+2. **新增验收判据**：M5 补丁必须核「**运行期被采用**」——见 §8.4 反例；只核文件落位会把"静默丢弃"放过去。
+3. **回滚两步**：面 A 框架代码 + 面 B 内核策略（承接 §7.8，设计侧已裁决落地）；策略面判据 = 哈希回对照值 + 规则全量 0 行差异。
+4. **坏补丁代价口径照旧**：起不来 → **还原 AVD 目录基线副本 + 重启一次**（本轮实测 26.4 s 起完）；模拟器上另有一条更便宜的通道（禁用标志 + 重启），真机侧对应物理键通道。
+
+---
+
+## 9. 与设计文本的偏差（裁决前记录 + 裁决回填）
 
 **偏差一（低风险，建议直接更正）**：设计 §12 裁决段写「orz **x86_64 musl 三件套直接复用 0.4.2 载体**」。载体已随同日 0v 第二批 S3 重建 bump 到 **0.4.3**（orz `f9fb70e4`），0.4.2 仅存 `.bak`。本批按「复用当前冻结载体」的本意使用 0.4.3，未新建任何构建。
 
@@ -240,18 +323,19 @@ ELF 自包含性（设备自带 toybox `readelf` 0.8.11-android 核验，三件�
 
 ---
 
-## 9. 边界与未覆盖
+## 10. 边界与未覆盖
 
 - **`ro.adb.secure=0`**：模拟器 adb 免授权，因此**不能**验证「目标侧授权」前提（真机与其它安卓设备都需要授权）。模拟器不覆盖任何授权/同意面。
 - **AOSP ≠ Nothing 系统**：设计 §12 已写明的边界不变——不验证厂商框架、Glyph、NP1 内核 config 与平台签名行为。
 - **ATD 无头形态**：无 GPU、无 Play Store、无启动器，界面类与图形类能力不代表真机。
 - **注入式 Magisk 少了应用安装面**（见 §7.3 / §7.7 / §7.8）：模块 sepolicy 规则的 preinit 暂存需手动补 `PREINITDEVICE`（已闭环）、priv-app 白名单与 keylayout 仍只做了「不破坏开机」级核证——属**本载体形态限制**，不是设计缺口。
-- **SELinux 规则的撤销不完全跟随模块禁用**（§7.8 新发现）：设计侧「回滚 = 禁用模块 + 重启」对本条不完整，已登记设计 §9.3 附注 5 与 §10.3 层 1 附注，**待用户裁决**。
+- **SELinux 规则的撤销不完全跟随模块禁用**（§7.8 新发现）：设计侧「回滚 = 禁用模块 + 重启」对本条不完整——**已裁决收口**（2026-09-12）：回滚拆成面 A（框架代码）+ 面 B（内核策略），面 B 判据 = 策略哈希回对照值 + 规则全量 0 行差异；见设计 §9.3 附注 5–7 与 §10.3 层 1，S1-④ 二次实证见 §8.6。
+- **S1-④ 的边界（本轮未覆盖面）**：①**补丁语义未验证**——本轮补丁是无语义的加性改动，只验证管线与纪律，不代表 M5 真实改动（如 `RTH-B-*` 上下文前摄）可用；②**M5 真实目标档未做正补丁**——`services.jar` 体量与耗时（3 个 dex、21 MB）不属首轮范围，本轮只把它用于"坏补丁"档；③**行为级证据限于探针类**（"补丁代码确实执行"），不构成对框架语义正确性的断言；④**故障态下的救援通道属载体形态**——模拟器上 adb 在系统起不来时仍可用，真机侧对应通道是音量下 → fastboot（M0 已验），不能由本轮推出"真机坏补丁也能靠 adb 救"。
 - 全程未做任何真机（NP1）操作；所有 adb 命令均显式指名 `emulator-5554`。
 
 ---
 
-## 10. 失误与纠正（如实登记）
+## 11. 失误与纠正（如实登记）
 
 1. **第 9 步判据期望值设错**：首轮回滚测试期望「还原回 marker-1」，但快照是在 marker 已丢失之后拍的，因此「仍缺失」其实是自洽结果——该轮**不构成证据**，已按正确顺序（先写标记 → 拍快照 → 改标记 → 还原）重做。教训：快照回滚测试必须先确认拍快照时刻的状态。
 2. **重启 adb 服务影响真机**：清理残留进程时执行了 adb 服务重启，导致真机 NP1 在设备列表中显示 `unauthorized`，需在手机上重新确认授权。手机本身无任何改动，但这是一次对用户设备的非预期打扰。
@@ -264,20 +348,27 @@ ELF 自包含性（设备自带 toybox `readelf` 0.8.11-android 核验，三件�
 9. **遗留项轮的一处预期被实测否定**：开工时的先验是「禁用模块 + 重启会把 SELinux 规则一并撤销」（设计 §10.3 层 1 的写法），实测被否定（§7.8 第 4 行：规则仍在、策略哈希不变）。教训：**加性策略规则的撤销要单独取证，不能从「模块禁用」推**；同时说明 §7.7 初版把该问题写成「不构成设计缺口」过早——现已在 §7.8 与设计附注 5 更正为「设计文本对本条不完整，待裁决」。
 10. **容器命令引号层数没算清**：首次用一段带 `for ... done` 的嵌套引号命令查二进制字符串，经 PowerShell → docker → sh 三层后解析失败；改写成两条简单命令后成立。属操作层失误，不影响判据。
 11. **一次日志落盘为空**：遗留项第二轮的模拟器 stdout 重定向文件为空（0 B），未追查原因；该轮判据全部来自设备侧取证（策略哈希、规则 dump、文件属性），不依赖该日志。登记为证据留痕缺口。
+12. **重打包产物丢了 ZIP 对齐（S1-④）**：首版重打包按「逐条原样复制」写 ZIP，条目数据偏移变成 `mod4≠0`（原厂件是对齐的），ART 因此在加载时报 `Can't mmap dex file … please zipalign to 4 bytes` 并退化为"解压装载"。**这条缺陷是靠设备侧告警发现的，不是我们自己看出来的**——说明"产物冻结"必须把**平台装载前提（对齐）**纳入核对项。修正 = 写 extra 字段补齐对齐（全部 `mod4=0`），复测告警清零。教训：**打包脚本本身就会引入质量退化；产物核对不能只看内容哈希**。
+13. **探针首版自身有空指针（S1-④）**：探针读取 `getProtectionDomain().getCodeSource()` 时未做空值保护，`app_process` 在第一行输出后即 `FATAL EXCEPTION`（`exit=137`），一度看起来像"系统杀掉了补丁进程"。按 logcat 的 `at orz.body.m5.ProbeMain.main(ProbeMain.java:15)` 定位后改为空值保护，复跑 `exit=0` 并取到全部判据。教训：**探针自身必须写成不会崩的形式**，否则会污染对系统行为的判断。
+14. **模块包里的 overlay 落点写错（S1-④）**：首次打包把 overlay 落成**产物名**（`orc-m5-good-a.jar`），而 Magisk 按路径覆盖，等于没有命中 `/system/framework/android.hidl.base-V1.0-java.jar`。靠打包脚本自报的条目清单发现并修正（overlay 必须落成**目标原名**）。教训：**模块 overlay 落点要按目标路径逐条核对**，不能只看"打包成功"。
+15. **d8 输出目录必须预先存在（S1-④）**：首调报 `Invalid output: …\dex2 / Output must be .zip/.jar or an existing directory`，建目录后成立。属操作层失误，不影响判据。
+16. **「坏补丁 → 起不来」的先验被实测修正（S1-④）**：开工时的先验是"打坏任一个框架 jar 就等于系统起不来"，实测在小 jar 上**不成立**（ART 记告警后丢弃该件，系统照常起完，见 §8.4）；改用**开机必需件**（系统服务自身依赖的 `services.jar`）才复现出真正的"起不来"档（§8.5）。教训：**故障注入点要按依赖关系选（必需件 vs 非必需件），不能按"是不是框架件"选**。
 
 ---
 
-## 11. 未完成项（S1 余下）
+## 12. S1 项目状态（四项全部完成）
 
 | 项 | 内容 | 前置 |
 | --- | --- | --- |
 | S1-③ | ~~Magisk-in-AVD：模块打包 / 安装 / 禁用 / 恢复实机化演练~~ **已完成（2026-09-12，见 §7）** | — |
 | S1-③ 遗留 | ~~补丁 ramdisk 的 `.magisk` 配置写入 `PREINITDEVICE` → 重装模块 → 核证模块 sepolicy 规则真的被暂存与注入~~ **已完成（2026-09-12 同日，见 §7.8；含新发现“禁用不撤销已注入规则”）** | — |
-| S1-④ | M5 补丁「打补丁 → 进系统 → 开机 → 回滚」流程纪律干跑首轮 | S1-③（已完成）+ 基线副本回滚原语（已就绪） |
+| S1-④ | ~~M5 补丁「打补丁 → 进系统 → 开机 → 回滚」流程纪律干跑首轮~~ **已完成（2026-09-12，见 §8：好补丁全链路 + 坏补丁两档 + 救援 + 策略回滚 + 整体回滚）** | — |
+
+**S1 无余下项**。下一阶段（另批、需用户放行）：**M1 前置** = 设计 §14.1 接口定义（事件 schema / 动作契约 / 策略注册表形态）与 **aarch64 musl 三件套重建**；M5 侧则可按 §8.7 的三条管线纪律起正式补丁批。
 
 ---
 
-## 12. 复现参数速查
+## 13. 复现参数速查
 
 ```text
 SDK 根        D:\android\Sdk
@@ -292,21 +383,24 @@ Magisk 态启动 追加 -ramdisk D:\tb-eval\s1_emulator\ramdisk\ramdisk.magisk.p
 补丁 ramdisk  D:\tb-eval\s1_emulator\ramdisk\   （ramdisk.stock.img / ramdisk.magisk.img / ramdisk.magisk.preinit.img / build_magisk_ramdisk.sh）
 模块包        D:\tb-eval\s1_emulator\module\orz_body-0.1.1-s1drill.zip（探针规则版；0.1.0 保留作对照）
 Magisk 工件   D:\tb-eval\s1_emulator\magisk\    （Magisk-v30.7.apk / apk 解包 / materialize_env.sh）
+补丁管线      D:\tb-eval\s1_emulator\pipeline\ （stock\ 原厂件 · out\ 产物 · src\ 探针源码 · tools\ 反编译件 · build.ps1 / repack.py / repack_bad.py / mkmodule.py / extract_dex.py）
 ```
 
 统一纪律：所有命令显式 `-s emulator-5554`。真机 NP1 与本模拟器同挂一台电脑，省略设备号会打到真机。
 
 ③ 的操作链（可整段复现）：`build_magisk_ramdisk.sh`（容器内）→ `-ramdisk` 启动 → 推 `magisk\apk` 并跑 `materialize_env.sh` → 推模块包 → `magisk --install-module` → 重启；禁用/恢复/卸载分别是 `touch disable` / `rm disable` / `touch remove` 加一次重启；回滚是「关模拟器 → 还原基线副本 → 不带 `-ramdisk` 启动」。
 
+④ 的操作链（可整段复现）：`build.ps1 -Mode good`（反编译 → 改既有类 → 重编 dex → javac+d8 编探针 → 重打包，两次跑哈希应逐字相同）→ `mkmodule.py`（overlay 必须落成**目标原名**）→ 推模块包 → `magisk --install-module` → 重启 → 取证（路径哈希 / `mount` / `app_process64` 执行探针 / 系统健康）；坏补丁档分别是 `-Mode bad`（小 jar 档，实测**不起不来**）与 `repack_bad.py` + `mkmodule.py`（系统服务档，`services.jar` 只坏 `classes.dex`，实测起不来）；救援 = `touch disable` + 重启；**策略回滚 = `rm -f /metadata/watchdog/magisk/sepolicy.rule` + 重启**（判据：策略哈希回 `8242a06d…` 且规则全量与对照 dump 0 行差异）；整体回滚同 ③。**注意**：`adb root` 在每次重启后需重做，否则 `/data/adb` 与 `/sys/fs/selinux/policy` 读不到。
+
 ---
 
-## 13. 占用小结
+## 14. 占用小结
 
 | 位置 | 占用 |
 | --- | --- |
-| `D:\android\Sdk` | 2,903 MB |
-| `D:\android\avd` | 3,168 MB |
-| `D:\tb-eval\s1_emulator`（基线副本 561 MB + Magisk 工件 + 补丁 ramdisk ×2 + 模块包 ×2 + 日志含两份策略 dump） | 629 MB |
-| 收尾时 C 盘 / D 盘可用 | 10.7 GB / 22.6 GB |
+| `D:\android\Sdk` | 2,903 MB（未装 build-tools：d8 由 cmdline-tools 自带） |
+| `D:\android\avd` | 3,136 MB |
+| `D:\tb-eval\s1_emulator`（基线副本 561 MB + Magisk 工件 + 补丁 ramdisk ×3 + 模块包 ×4 + 日志含三份策略 dump + **M5 补丁管线 49 MB**） | 691 MB |
+| 收尾时 C 盘 / D 盘可用 | 10.5 GB / 19.6 GB |
 
-收尾状态：模拟器已关机（无残留 emulator / qemu 进程），真机 NP1 连接与授权未受影响。**AVD 现处于「Magisk 已装 + 模块 v0.1.1 已装且 SELinux 规则已注入」的可用态**（为 S1-④ 备用；引导须带 `ramdisk.magisk.preinit.img`）；因模拟器会把补丁 ramdisk 落进 AVD 目录的 `initrd`，该状态由「AVD 目录 + 启动时带 `-ramdisk`」共同定义——**回滚仍是单步**（还原基线副本即同时清掉 `/data` 改动与补丁 `initrd`，已在 §7.5 实测）。
+收尾状态：模拟器已关机（无残留 emulator / qemu 进程），真机 NP1 连接与授权未受影响。**S1-④ 收尾态 = 干净基线**（关模拟器 → 还原 AVD 基线副本 → 不带 `-ramdisk` 启动并核验：`magisk` 命令不存在、`/debug_ramdisk` 与 `/data/adb` 不存在、两件框架 jar = 原厂哈希、无 overlay 挂载）——即 ③ 建立的「Magisk 已装 + 模块已装 + 规则已注入」那套现成态**已被本轮整体回滚清掉**；若要复跑 ③/④ 的 Magisk 侧，按 §13 的 ③ 操作链从 `-ramdisk` 启动起重建（`materialize_env.sh` 一步不可省）。因模拟器会把补丁 ramdisk 落进 AVD 目录的 `initrd`，该状态由「AVD 目录 + 启动时带 `-ramdisk`」共同定义——**回滚仍是单步**（还原基线副本即同时清掉 `/data` 改动与补丁 `initrd`，§7.5 与 §8.6 两次实测）。
