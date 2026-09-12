@@ -182,18 +182,36 @@ pub struct ReclaimLadder {
     pending: Mutex<Vec<PendingDeletion>>,
     window_rounds: u32,
     budget_bytes: u64,
+    /// §4.6 Discipline 4, third bound (review F-BE-11): the cumulative
+    /// deletion cap for one run. `0` = uncapped (tests).
+    run_total_cap_bytes: u64,
+    run_total_deleted: Mutex<u64>,
     facts: Mutex<Vec<ReclaimFact>>,
 }
 
 impl ReclaimLadder {
     pub fn new(workspace_root: &Path) -> Self {
+        let budget = reclaim_budget_bytes();
+        // Default run-total cap = 3× the single-reclaim budget
+        // (ORZ_RECLAIM_RUN_TOTAL_BYTES overrides; review F-BE-11).
+        let run_cap = std::env::var("ORZ_RECLAIM_RUN_TOTAL_BYTES")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(budget.saturating_mul(3));
         Self {
             workspace_root: workspace_root.to_path_buf(),
             pending: Mutex::new(Vec::new()),
             window_rounds: DEFAULT_WINDOW_ROUNDS,
-            budget_bytes: reclaim_budget_bytes(),
+            budget_bytes: budget,
+            run_total_cap_bytes: run_cap,
+            run_total_deleted: Mutex::new(0),
             facts: Mutex::new(Vec::new()),
         }
+    }
+
+    /// Cumulative bytes deleted in this run so far (observation face).
+    pub fn run_total_deleted(&self) -> u64 {
+        *self.run_total_deleted.lock().unwrap()
     }
 
     /// The configured window (clamped to the 3-round ceiling).
@@ -227,6 +245,15 @@ impl ReclaimLadder {
                 .map(|p| p.size_bytes)
                 .sum(),
         );
+        // §4.6 Discipline 4 (review F-BE-11): the run-total cap shrinks the
+        // effective remaining budget — once the run deleted its share, later
+        // passes reject rather than oscillate delete/rebuild forever.
+        if self.run_total_cap_bytes > 0 {
+            let headroom = self
+                .run_total_cap_bytes
+                .saturating_sub(*self.run_total_deleted.lock().unwrap());
+            remaining = remaining.min(headroom);
+        }
         for candidate in candidates {
             if classify_path(&self.workspace_root, &candidate.path) != ReclaimClass::Cache {
                 decisions.push((
@@ -353,6 +380,7 @@ impl ReclaimLadder {
                 freed += candidate.size_bytes;
             }
         }
+        *self.run_total_deleted.lock().unwrap() += freed;
         freed
     }
 
@@ -361,9 +389,27 @@ impl ReclaimLadder {
     pub fn execute_expiry(
         &self,
         current_round: u32,
+        is_in_flight: &dyn Fn(&Path) -> bool,
         delete: &dyn Fn(&Path) -> io::Result<()>,
     ) -> u64 {
         let due = self.expire_window(current_round);
+        if due.is_empty() {
+            return 0;
+        }
+        // §4.7.1 第 14 条 (review F-BE-2): rows whose surface went in-flight
+        // while pending are REQUEUED (window restarts), never deleted.
+        let (due, requeued): (Vec<_>, Vec<_>) =
+            due.into_iter().partition(|p| !is_in_flight(&p.path));
+        if !requeued.is_empty() {
+            let mut pending = self.pending.lock().unwrap();
+            for row in requeued {
+                pending.push(PendingDeletion {
+                    path: row.path,
+                    size_bytes: row.size_bytes,
+                    enqueued_round: current_round,
+                });
+            }
+        }
         if due.is_empty() {
             return 0;
         }

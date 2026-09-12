@@ -188,10 +188,34 @@ impl<'a> RunRecorder<'a> {
         // Only advance the chain link after the write is accepted (a refused
         // append must not pollute the caller's bookkeeping — 2026-08-04
         // review P2-7 precedent).
-        let event_hash = self.journal.record_async(event).await?;
-        self.prev_hash = Some(event_hash);
-        self.seq += 1;
-        Ok(())
+        match self.journal.record_async(event).await {
+            Ok(event_hash) => {
+                self.prev_hash = Some(event_hash);
+                self.seq += 1;
+                Ok(())
+            }
+            Err(JournalRecorderError::DegradedDropped {
+                sequence,
+                event_type,
+            }) => {
+                // 0z S2 review F-C-4 (2026-09-13): a degraded-mode refusal is
+                // the skeleton contract, not an integrity violation — the run
+                // must still reach its enumerable terminal shape. For a
+                // terminal event the writer either landed it (skeleton filter
+                // admits terminal rows) or wrote the TERMINAL.json sidecar;
+                // for any other event the row was intentionally not written.
+                // Either way the caller's chain bookkeeping stays untouched
+                // and the run proceeds (mirror of EventWriter::record in
+                // orz-loop/controller.rs).
+                tracing::warn!(
+                    sequence,
+                    event_type,
+                    "RunRecorder: journal degraded mode dropped an event;                      chain bookkeeping untouched"
+                );
+                Ok(())
+            }
+            Err(e) => Err(e),
+        }
     }
 }
 

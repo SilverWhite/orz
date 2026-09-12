@@ -854,7 +854,11 @@ async fn record_guard_terminal(
     let last_type = last["event_type"].as_str().unwrap_or_default();
     if matches!(
         last_type,
-        "run_finished" | "run_failed" | "run_cancelled" | "run_invalidated"
+        // review F-C-7 (2026-09-13): `run_terminated` joins the guard's
+        // terminal whitelist — a degraded journal's explicit terminal must
+        // not be double-terminated (the recorder would refuse the second
+        // append and surface a guard error).
+        "run_finished" | "run_failed" | "run_cancelled" | "run_invalidated" | "run_terminated"
     ) {
         return Ok(format!(
             "({status}) guard fired but the run already terminated ({last_type}) — no extra event"

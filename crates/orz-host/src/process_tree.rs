@@ -49,6 +49,11 @@ pub struct ProcessTreeRecord {
     /// Root `run` + per-call granularity marker.
     #[serde(default)]
     pub job_name: String,
+    /// The gate's action class for the call that spawned this child
+    /// (`heavy` / `light` / ...) — lets the hard-tier face enumerate the
+    /// heavy call_ids set (§4.8 表 1) without re-classifying.
+    #[serde(default)]
+    pub action_class: String,
 }
 
 /// Why a sweep row was refused — the negative side of the three-condition
@@ -66,9 +71,31 @@ pub enum SweepRefusal {
     FingerprintMismatch,
     /// No fingerprint available on either side — 归属不明.
     FingerprintUnknown,
+    /// The candidate's process-creation time drifted from the registered
+    /// `started_at` beyond tolerance — same-image pid reuse (review F-BE-5).
+    CreationTimeMismatch,
+    /// The record belongs to another run (finalize sweep scope guard,
+    /// review F-BE-1) — never touched by this run.
+    ForeignRun,
     /// The record's started_at does not place it in the sweep's window.
     OutsideWindow,
 }
+
+/// Which sweep is being planned (see [`ProcessTreeRegistry::plan_sweep`]).
+#[derive(Clone, Copy, Debug)]
+pub enum SweepMode<'a> {
+    /// Assembly-time orphan sweep over previous-run rows.
+    Start { run_started_at: u64 },
+    /// Shutdown sweep over THIS run's rows only.
+    Finalize { own_run_id: &'a str, own_pid: u32 },
+}
+
+/// Creation-time tolerance for the pid-reuse guard (review F-BE-5): the
+/// registry stores the attach-time clock; the candidate's kernel creation
+/// time may drift by scheduling/clock granularity, so anything within this
+/// window counts as the same process. 5 s is far below any realistic
+/// pid-recycle horizon and far above clock jitter.
+pub const CREATION_TIME_TOLERANCE_MS: u64 = 5_000;
 
 /// The sweep's decision for one registry record.
 #[derive(Clone, Debug)]
@@ -106,11 +133,16 @@ fn refusal_key(why: &SweepRefusal) -> &'static str {
         SweepRefusal::ParentAlive => "parent_alive",
         SweepRefusal::FingerprintMismatch => "fingerprint_mismatch",
         SweepRefusal::FingerprintUnknown => "fingerprint_unknown",
+        SweepRefusal::CreationTimeMismatch => "creation_time_mismatch",
+        SweepRefusal::ForeignRun => "foreign_run",
         SweepRefusal::OutsideWindow => "outside_window",
     }
 }
 
-fn audit_targets(records: &[&ProcessTreeRecord], refusal: &SweepRefusal) -> Vec<AuditTarget> {
+/// Reap targets carry an explicit `"reap"` label instead of a borrowed
+/// refusal key (review F-BE-12: `"not_running"` on planned/executed rows
+/// was a false observation-face label).
+fn audit_targets_reap(records: &[&ProcessTreeRecord]) -> Vec<AuditTarget> {
     records
         .iter()
         .map(|r| AuditTarget {
@@ -118,7 +150,7 @@ fn audit_targets(records: &[&ProcessTreeRecord], refusal: &SweepRefusal) -> Vec<
             pid: r.pid,
             image_sha256: r.image_sha256.clone(),
             started_at: r.started_at,
-            refusal: refusal_key(refusal).to_string(),
+            refusal: "reap".to_string(),
         })
         .collect()
 }
@@ -193,33 +225,75 @@ impl ProcessTreeRegistry {
     }
 
     /// Plan the sweep for `records` — PURE decision matrix, no side effects
-    /// (the testability seam). `alive_of(pid)` / `image_hash_of(pid)` are
-    /// host probes; `run_started_at` bounds the window (records older than it
-    /// are cross-run orphans; `None` = finalize sweep over this run's rows).
-    /// `now_ms` is only used to keep the signature explicit about ordering.
+    /// (the testability seam).
+    ///
+    /// `mode` selects the sweep:
+    /// - [`SweepMode::Start`] (assembly): window = records older than
+    ///   `run_started_at`; the full three conditions hold for every row — a
+    ///   parallel instance's live children are protected by their parent
+    ///   chain (its orz pid is alive → ParentAlive).
+    /// - [`SweepMode::Finalize`] (shutdown): ONLY rows registered by this run
+    ///   (`run_id == own_run_id`) are candidates; foreign rows are skipped
+    ///   untouched — review F-BE-1 (2026-09-13): the old signature let the
+    ///   finalize sweep reap a *parallel instance's* in-flight children
+    ///   (shared registry dir + fingerprint matches by construction + parent
+    ///   check skipped). Within own rows the parent check exempts only our
+    ///   own pid (review F-BE-1); any other live ancestor still refuses.
+    ///
+    /// Hardening (review F-BE-5): the image fingerprint alone cannot see pid
+    /// reuse by the *same* executable, so the sweep additionally compares the
+    /// candidate's process-creation time against the registered `started_at`
+    /// (tolerance [`CREATION_TIME_TOLERANCE_MS`]) whenever both sides are
+    /// available; a mismatch refuses the kill.
     pub fn plan_sweep(
         &self,
         records: &[ProcessTreeRecord],
-        run_started_at: Option<u64>,
-        require_parents_dead: bool,
+        mode: SweepMode<'_>,
         alive_of: &dyn Fn(u32) -> bool,
         image_hash_of: &dyn Fn(u32) -> Option<String>,
+        creation_time_of: &dyn Fn(u32) -> Option<u64>,
     ) -> Vec<SweepDecision> {
         let mut decisions = Vec::new();
-        for record in records {
-            // ① parent chain dead. The recorded chain includes the spawning
-            // orz pid — for this run's own rows that pid is alive, so the
-            // start sweep refuses them (in-flight protection, §4.7.1 第 14
-            // 条). The finalize sweep runs at shutdown with
-            // `require_parents_dead = false`: the run is over, its leaked
-            // children are exactly the target, and the pid-reuse guard (②)
-            // still refuses anything whose image does not match its record.
-            if require_parents_dead && record.parent_chain.iter().any(|pid| alive_of(*pid)) {
+        'records: for record in records {
+            // ① Start sweep: the full parent chain must be dead — this is the
+            // in-flight protection (§4.7.1 第 14 条): a parallel instance's
+            // children carry its live orz pid and are refused here.
+            if let SweepMode::Start { .. } = mode
+                && record.parent_chain.iter().any(|pid| alive_of(*pid))
+            {
                 decisions.push(SweepDecision::Refuse(
                     record.clone(),
                     SweepRefusal::ParentAlive,
                 ));
                 continue;
+            }
+            // Finalize: foreign rows are another run's business — skip both
+            // the kill AND the cleanup (their owner will reap them).
+            if let SweepMode::Finalize {
+                own_run_id,
+                own_pid,
+            } = mode
+            {
+                if record.run_id != own_run_id {
+                    decisions.push(SweepDecision::Refuse(
+                        record.clone(),
+                        SweepRefusal::ForeignRun,
+                    ));
+                    continue;
+                }
+                // Within own rows: only our own pid is exempt from the
+                // parent-alive check; a live foreign ancestor refuses.
+                let other_live_ancestor = record
+                    .parent_chain
+                    .iter()
+                    .any(|pid| *pid != own_pid && alive_of(*pid));
+                if other_live_ancestor {
+                    decisions.push(SweepDecision::Refuse(
+                        record.clone(),
+                        SweepRefusal::ParentAlive,
+                    ));
+                    continue;
+                }
             }
             // Not running at all — nothing to reap; the record can go.
             if !alive_of(record.pid) {
@@ -252,18 +326,27 @@ impl ProcessTreeRegistry {
                 ));
                 continue;
             }
-            // ③ window: start sweep takes previous-run rows; finalize sweep
-            // takes this run's own rows.
-            let in_window = match run_started_at {
-                Some(start) => record.started_at < start,
-                None => true,
-            };
-            if !in_window {
+            // ②b creation-time guard (review F-BE-5): same image + reused pid
+            // is refused when the creation time drifted from the registry.
+            if let Some(created) = creation_time_of(record.pid)
+                && record.started_at != 0
+                && created.abs_diff(record.started_at) > CREATION_TIME_TOLERANCE_MS
+            {
+                decisions.push(SweepDecision::Refuse(
+                    record.clone(),
+                    SweepRefusal::CreationTimeMismatch,
+                ));
+                continue;
+            }
+            // ③ window: start sweep takes rows older than this run's start.
+            if let SweepMode::Start { run_started_at } = mode
+                && record.started_at >= run_started_at
+            {
                 decisions.push(SweepDecision::Refuse(
                     record.clone(),
                     SweepRefusal::OutsideWindow,
                 ));
-                continue;
+                continue 'records;
             }
             decisions.push(SweepDecision::Reap(record.clone()));
         }
@@ -290,6 +373,17 @@ impl ProcessTreeRegistry {
         if reaped.is_empty() {
             // Refusals still get their audit row: the negative matrix is
             // evidence too (判据 5's mechanical face on the observation side).
+            // NotRunning rows are dropped here (review F-BE-5): a stale
+            // record left in the shared registry would keep feeding future
+            // sweeps and grow the pid-reuse collision surface.
+            for (record, why) in decisions.iter().filter_map(|d| match d {
+                SweepDecision::Refuse(record, why) => Some((record, why)),
+                SweepDecision::Reap(..) => None,
+            }) {
+                if matches!(why, SweepRefusal::NotRunning) {
+                    self.remove(&record.call_id, record.pid);
+                }
+            }
             let refusals: Vec<(&ProcessTreeRecord, &SweepRefusal)> = decisions
                 .iter()
                 .filter_map(|d| match d {
@@ -321,11 +415,7 @@ impl ProcessTreeRegistry {
             pids: reaped.iter().map(|r| r.pid).collect(),
             call_ids: reaped.iter().map(|r| r.call_id.clone()).collect(),
         });
-        self.append_audit_row(
-            reason,
-            "planned",
-            &audit_targets(&reaped, &SweepRefusal::NotRunning),
-        );
+        self.append_audit_row(reason, "planned", &audit_targets_reap(&reaped));
 
         let mut killed: Vec<&ProcessTreeRecord> = Vec::new();
         for record in &reaped {
@@ -350,11 +440,7 @@ impl ProcessTreeRegistry {
                 call_ids: killed.iter().map(|r| r.call_id.clone()).collect(),
             });
         }
-        self.append_audit_row(
-            reason,
-            "executed",
-            &audit_targets(&killed, &SweepRefusal::NotRunning),
-        );
+        self.append_audit_row(reason, "executed", &audit_targets_reap(&killed));
     }
 
     /// Drain the accumulated sweep facts for the journal face
@@ -472,6 +558,44 @@ pub fn pid_alive(pid: u32) -> bool {
     }
 }
 
+/// The process creation time of `pid` in Unix milliseconds (sweep probe;
+/// `None` = unavailable — the guard then stays silent for this candidate).
+pub fn creation_time_of_pid(pid: u32) -> Option<u64> {
+    #[cfg(windows)]
+    {
+        use windows::Win32::Foundation::CloseHandle;
+        use windows::Win32::Foundation::FILETIME;
+        use windows::Win32::System::Threading::{
+            GetProcessTimes, OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION,
+        };
+        unsafe {
+            let handle = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid).ok()?;
+            let (mut create, mut exit, mut kernel, mut user) = (
+                FILETIME::default(),
+                FILETIME::default(),
+                FILETIME::default(),
+                FILETIME::default(),
+            );
+            let ok = GetProcessTimes(handle, &mut create, &mut exit, &mut kernel, &mut user);
+            let _ = CloseHandle(handle);
+            if !ok.is_ok() {
+                return None;
+            }
+            // FILETIME = 100-ns intervals since 1601-01-01.
+            let ft = ((create.dwHighDateTime as u64) << 32) | create.dwLowDateTime as u64;
+            const EPOCH_DIFF_100NS: u64 = 11_644_473_600 * 10_000_000;
+            Some(ft.saturating_sub(EPOCH_DIFF_100NS) / 10_000)
+        }
+    }
+    #[cfg(not(windows))]
+    {
+        // Linux: field 22 of /proc/<pid>/stat = starttime in clock ticks
+        // since boot; without boot-time anchoring we report unavailable —
+        // the guard stays silent (fail-safe direction).
+        None
+    }
+}
+
 /// The current normalized image hash of `pid` (sweep probe; `None` = unknown).
 pub fn image_hash_of_pid(pid: u32) -> Option<String> {
     #[cfg(windows)]
@@ -495,8 +619,7 @@ pub fn image_hash_of_pid(pid: u32) -> Option<String> {
 mod tests {
     use super::*;
 
-    /// Spawn a real, long-lived child (`ping`) and return its pid + the
-    /// normalized image fingerprint the sweep would compare.
+    /// Spawn a real, long-lived child (`ping`) and return its pid.
     #[cfg(windows)]
     fn spawn_long_lived_child() -> u32 {
         let child = std::process::Command::new("cmd")
@@ -508,19 +631,53 @@ mod tests {
         child.id()
     }
 
+    /// A guaranteed-dead pid (spawn + reap) — reserved pseudo-pids like
+    /// 0xFFFFFFFE are queryable on Windows and NOT dead.
+    #[cfg(windows)]
+    fn dead_pid() -> u32 {
+        let mut child = std::process::Command::new("cmd")
+            .args(["/c", "exit 0"])
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .expect("spawn dead-pid probe");
+        let pid = child.id();
+        child.wait().expect("reap dead-pid probe");
+        std::thread::sleep(std::time::Duration::from_millis(100));
+        pid
+    }
+
     fn unique_dir(tag: &str) -> PathBuf {
         let n = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
             .as_nanos();
         let dir =
-            std::env::temp_dir().join(format!("orz-proctree-{}-{}-{}", tag, std::process::id(), n));
+            std::env::temp_dir().join(format!("orz-proctree-{tag}-{}-{n}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         dir
     }
 
-    /// 三条件正例：父链死（探针 pid 不存在）+ 指纹匹配 + 窗口内（上一 run
-    /// 的记录）→ Reap，且 kill 真的终止子进程。
+    fn record(
+        pid: u32,
+        fingerprint: Option<String>,
+        parent: Vec<u32>,
+        run: &str,
+    ) -> ProcessTreeRecord {
+        ProcessTreeRecord {
+            call_id: format!("call-{pid}"),
+            pid,
+            parent_chain: parent,
+            image_sha256: fingerprint,
+            started_at: 1,
+            run_id: run.to_string(),
+            job_name: "call".into(),
+            action_class: "heavy".into(),
+        }
+    }
+
+    /// 三条件正例（start sweep）：父链死 + 指纹匹配 + 窗口内 → Reap，
+    /// kill 真的终止子进程（判据 5 正例）。
     #[test]
     fn sweep_reaps_a_matching_orphan_and_kills_it() {
         #[cfg(windows)]
@@ -528,35 +685,29 @@ mod tests {
             let pid = spawn_long_lived_child();
             let fingerprint = image_hash_of_pid(pid).expect("probe child fingerprint");
             let registry = ProcessTreeRegistry::new(&unique_dir("reap"));
-            let record = ProcessTreeRecord {
-                call_id: "call-orphan-1".into(),
-                pid,
-                parent_chain: vec![u32::MAX - 1], // never a live pid → parent dead
-                image_sha256: Some(fingerprint),
-                started_at: 1, // before any run window → in window
-                run_id: "RUN-PREV".into(),
-                job_name: "call".into(),
-            };
+            let mut record = record(pid, Some(fingerprint), vec![dead_pid()], "RUN-PREV");
+            record.started_at = creation_time_of_pid(pid).unwrap_or(1);
             let decisions = registry.plan_sweep(
                 &[record],
-                Some(u64::MAX / 2),
-                true,
+                SweepMode::Start {
+                    run_started_at: u64::MAX / 2,
+                },
                 &pid_alive,
                 &image_hash_of_pid,
+                &creation_time_of_pid,
             );
-            assert_eq!(decisions.len(), 1);
             assert!(
                 matches!(decisions[0], SweepDecision::Reap(_)),
-                "a matching orphan must be reaped: {decisions:?}"
+                "{decisions:?}"
             );
             kill_pid(pid).expect("kill the orphan");
-            // 等待内核回收句柄后确认死亡。
             std::thread::sleep(std::time::Duration::from_millis(200));
             assert!(!pid_alive(pid), "the orphan must be dead after the kill");
         }
     }
 
-    /// 判据 5 负例矩阵：三条件各自不满足的进程一律不被杀。
+    /// 判据 5 负例矩阵 + review F-BE-5 创建时间守卫：三条件各自不满足的
+    /// 进程一律不被杀。
     #[test]
     fn sweep_refuses_every_condition_mismatch() {
         #[cfg(windows)]
@@ -569,173 +720,225 @@ mod tests {
                 .unwrap()
                 .as_millis() as u64;
 
-            // ① 父链活：parent_chain = 本进程（在跑重活保护，§4.7.1 第 14 条）。
-            let live_parent = ProcessTreeRecord {
-                call_id: "call-in-flight".into(),
-                pid,
-                parent_chain: vec![std::process::id()],
-                image_sha256: Some(fingerprint.clone()),
-                started_at: 1,
-                run_id: String::new(),
-                job_name: "call".into(),
-            };
-            // ② 指纹不匹配：pid 复用防护。
-            let wrong_fingerprint = ProcessTreeRecord {
-                call_id: "call-reuse".into(),
-                pid,
-                parent_chain: vec![u32::MAX - 1],
-                image_sha256: Some("0".repeat(64)),
-                started_at: 1,
-                run_id: String::new(),
-                job_name: "call".into(),
-            };
-            // ② 指纹不可得：归属不明一律不杀。
-            let unknown_fingerprint = ProcessTreeRecord {
-                call_id: "call-unknown".into(),
-                pid,
-                parent_chain: vec![u32::MAX - 1],
-                image_sha256: None,
-                started_at: 1,
-                run_id: String::new(),
-                job_name: "call".into(),
-            };
+            // ① 父链活（本进程）。
+            let live_parent = record(pid, Some(fingerprint.clone()), vec![std::process::id()], "");
+            // ② 指纹不匹配（pid 复用防护）。
+            let wrong_fp = record(pid, Some("0".repeat(64)), vec![dead_pid()], "");
+            // ② 指纹不可得。
+            let unknown_fp = record(pid, None, vec![dead_pid()], "");
+            // ②b 探针缺席 → 守卫静默（started_at=1 与 probe None）。
+            let probe_absent = record(pid, Some(fingerprint.clone()), vec![dead_pid()], "");
+
             let decisions = registry.plan_sweep(
-                &[live_parent, wrong_fingerprint, unknown_fingerprint],
-                Some(now_ms),
-                true,
+                &[live_parent, wrong_fp, unknown_fp, probe_absent],
+                SweepMode::Start {
+                    run_started_at: now_ms,
+                },
                 &pid_alive,
                 &image_hash_of_pid,
+                &|_| None,
             );
-            assert_eq!(decisions.len(), 3);
             assert!(
                 matches!(
                     &decisions[0],
                     SweepDecision::Refuse(_, SweepRefusal::ParentAlive)
                 ),
-                "a live parent must refuse the kill: {decisions:?}"
+                "{decisions:?}"
             );
+            assert!(matches!(
+                &decisions[1],
+                SweepDecision::Refuse(_, SweepRefusal::FingerprintMismatch)
+            ));
+            assert!(matches!(
+                &decisions[2],
+                SweepDecision::Refuse(_, SweepRefusal::FingerprintUnknown)
+            ));
             assert!(
-                matches!(
-                    &decisions[1],
-                    SweepDecision::Refuse(_, SweepRefusal::FingerprintMismatch)
-                ),
-                "a fingerprint mismatch (pid reuse) must refuse: {decisions:?}"
-            );
-            assert!(
-                matches!(
-                    &decisions[2],
-                    SweepDecision::Refuse(_, SweepRefusal::FingerprintUnknown)
-                ),
-                "an unknown fingerprint must refuse: {decisions:?}"
+                matches!(decisions[3], SweepDecision::Reap(_)),
+                "{decisions:?}"
             );
 
-            // ③ 窗口外：start 扫除不碰本 run 之后才登记的记录。
-            let future_record = ProcessTreeRecord {
-                call_id: "call-future".into(),
-                pid,
-                parent_chain: vec![u32::MAX - 1],
-                image_sha256: Some(fingerprint),
-                started_at: now_ms + 60_000,
-                run_id: String::new(),
-                job_name: "call".into(),
-            };
+            // ②b 正例：真实创建时间（≈now）vs started_at=1 → drift → refuse。
+            let time_drift = record(pid, Some(fingerprint.clone()), vec![dead_pid()], "");
             let decisions = registry.plan_sweep(
-                &[future_record],
-                Some(now_ms),
-                true,
+                &[time_drift],
+                SweepMode::Start {
+                    run_started_at: now_ms,
+                },
                 &pid_alive,
                 &image_hash_of_pid,
+                &creation_time_of_pid,
+            );
+            match &decisions[0] {
+                SweepDecision::Refuse(_, SweepRefusal::CreationTimeMismatch) => {}
+                other => panic!("creation-time guard should refuse, got {other:?}"),
+            }
+
+            // ③ 窗口外（start sweep 不碰未来登记）。
+            let mut future = record(pid, Some(fingerprint), vec![dead_pid()], "");
+            future.started_at = now_ms + 60_000;
+            let decisions = registry.plan_sweep(
+                &[future],
+                SweepMode::Start {
+                    run_started_at: now_ms,
+                },
+                &pid_alive,
+                &image_hash_of_pid,
+                &|_| None,
             );
             assert!(matches!(
                 decisions[0],
                 SweepDecision::Refuse(_, SweepRefusal::OutsideWindow)
             ));
 
-            // 硬化 (a)：不在登记表内的 pid 根本不进矩阵（plan 只看记录）。
-            // 进程仍活着（从未被扫除触碰）。
             assert!(pid_alive(pid), "the probe child must survive every refusal");
             kill_pid(pid).expect("cleanup");
         }
     }
 
-    /// 收尾扫除（run_shutdown）：`require_parents_dead = false`——本 run 的
-    /// 泄漏子进程（父=本进程，仍活）在收尾时被回收。
+    /// Review F-BE-1：finalize 只豁免**本 run** 的行；他 run 的在跑记录
+    /// （ForeignRun）绝不触碰——同工作区并行实例互杀的封堵钉子。
     #[test]
-    fn finalize_sweep_reaps_this_run_leaks_without_parent_death() {
+    fn finalize_sweep_never_touches_foreign_rows() {
         #[cfg(windows)]
         {
             let pid = spawn_long_lived_child();
             let fingerprint = image_hash_of_pid(pid).expect("probe child fingerprint");
-            let registry = ProcessTreeRegistry::new(&unique_dir("finalize"));
-            let record = ProcessTreeRecord {
-                call_id: "call-leak".into(),
+            let registry = ProcessTreeRegistry::new(&unique_dir("foreign"));
+
+            // 模拟"另一个实例"的在跑记录：run_id=RUN-OTHER。
+            let foreign = record(
                 pid,
-                parent_chain: vec![std::process::id()], // alive during shutdown
-                image_sha256: Some(fingerprint),
-                started_at: 1,
-                run_id: String::new(),
-                job_name: "call".into(),
-            };
-            let decisions =
-                registry.plan_sweep(&[record], None, false, &pid_alive, &image_hash_of_pid);
-            assert!(matches!(decisions[0], SweepDecision::Reap(_)));
+                Some(fingerprint.clone()),
+                vec![dead_pid()],
+                "RUN-OTHER",
+            );
+            let decisions = registry.plan_sweep(
+                &[foreign],
+                SweepMode::Finalize {
+                    own_run_id: "RUN-MINE",
+                    own_pid: std::process::id(),
+                },
+                &pid_alive,
+                &image_hash_of_pid,
+                &creation_time_of_pid,
+            );
+            assert!(
+                matches!(
+                    &decisions[0],
+                    SweepDecision::Refuse(_, SweepRefusal::ForeignRun)
+                ),
+                "a foreign run's live child must never be reaped at finalize: {decisions:?}"
+            );
+
+            // 本 run 的同形记录 → Reap（父链 = 本进程，豁免成立）。
+            let own = record(pid, Some(fingerprint), vec![std::process::id()], "RUN-MINE");
+            let decisions = registry.plan_sweep(
+                &[own],
+                SweepMode::Finalize {
+                    own_run_id: "RUN-MINE",
+                    own_pid: std::process::id(),
+                },
+                &pid_alive,
+                &image_hash_of_pid,
+                &|_| None,
+            );
+            assert!(
+                matches!(decisions[0], SweepDecision::Reap(_)),
+                "{decisions:?}"
+            );
             kill_pid(pid).expect("kill the leak");
         }
     }
 
-    /// 登记表文件面：写读回一致；审计行落 sweep-log.jsonl；drain 出队即清。
+    /// 登记表文件面：写读回一致；NotRunning 行清理；审计行 refusal 标签；
+    /// drain 出队即清。
     #[test]
     fn registry_roundtrip_and_audit_rows() {
         let dir = unique_dir("roundtrip");
-        // 登记表目录 = dir/.gsa/process_trees（new() 拼接 .gsa/process_trees）。
         std::fs::create_dir_all(&dir).unwrap();
         let registry = ProcessTreeRegistry::new(&dir);
         let record = ProcessTreeRecord {
             call_id: "call-reg-1".into(),
             pid: 4242,
-            parent_chain: vec![std::process::id()],
+            parent_chain: vec![dead_pid()],
             image_sha256: Some("a".repeat(64)),
             started_at: 42,
             run_id: "RUN-X".into(),
             job_name: "call".into(),
+            action_class: "heavy".into(),
         };
         registry.register(&record).expect("register");
         let loaded = registry.load_all();
         assert_eq!(loaded.len(), 1);
         assert_eq!(loaded[0].call_id, "call-reg-1");
-        assert_eq!(loaded[0].pid, 4242);
-        assert_eq!(
-            loaded[0].image_sha256.as_deref(),
-            Some("a".repeat(64).as_str())
+        assert_eq!(loaded[0].run_id, "RUN-X");
+        assert_eq!(loaded[0].action_class, "heavy");
+
+        // NotRunning 拒绝行被清理（review F-BE-5：陈旧记录不再喂未来 sweep）。
+        let decisions = registry.plan_sweep(
+            &[record.clone()],
+            SweepMode::Finalize {
+                own_run_id: "RUN-X",
+                own_pid: std::process::id(),
+            },
+            &|_| false,
+            &|_| Some("a".repeat(64)),
+            &|_| None,
+        );
+        assert!(matches!(
+            &decisions[0],
+            SweepDecision::Refuse(_, SweepRefusal::NotRunning)
+        ));
+        registry.execute_sweep(decisions, "run_shutdown", &|_| Ok(()));
+        assert!(
+            registry.load_all().is_empty(),
+            "the stale row must be dropped"
         );
 
-        // 审计行（planned + executed）落盘：kill 闭包用 Ok(())，真实回收
-        // 语义由上两个测试用真实进程覆盖；此处只验文件与 drain 面。
-        let record2 = ProcessTreeRecord {
-            call_id: "call-reg-1".into(),
-            pid: 4242,
-            parent_chain: vec![u32::MAX - 1],
-            image_sha256: Some("a".repeat(64)),
-            started_at: 42,
-            run_id: "RUN-X".into(),
-            job_name: "call".into(),
-        };
-        let decisions = registry.plan_sweep(&[record2], None, false, &|_| true, &|_| {
-            Some("a".repeat(64))
-        });
-        registry.execute_sweep(decisions, "run_shutdown", &|_| Ok(()));
         let log = std::fs::read_to_string(
             dir.join(".gsa")
                 .join("process_trees")
                 .join("sweep-log.jsonl"),
         )
         .expect("sweep log exists");
-        assert!(log.contains("\"phase\":\"planned\""), "{log}");
-        assert!(log.contains("\"phase\":\"executed\""), "{log}");
-
-        // drain 语义：facts 出队即清空（planned + executed 两行）。
+        assert!(log.contains("\"phase\":\"refused\""), "{log}");
+        assert!(log.contains("\"refusal\":\"not_running\""), "{log}");
         let facts = registry.drain_facts();
-        assert_eq!(facts.len(), 2);
+        assert!(facts.is_empty(), "no kill, no facts: {facts:?}");
+
+        // planned/executed 行的 refusal 标签 = "reap"（review F-BE-12）。
+        let record2 = ProcessTreeRecord {
+            call_id: "call-reg-2".into(),
+            pid: 4243,
+            parent_chain: vec![],
+            image_sha256: Some("b".repeat(64)),
+            started_at: 43,
+            run_id: "RUN-X".into(),
+            job_name: "call".into(),
+            action_class: "heavy".into(),
+        };
+        registry.register(&record2).unwrap();
+        let decisions = registry.plan_sweep(
+            &[record2],
+            SweepMode::Finalize {
+                own_run_id: "RUN-X",
+                own_pid: std::process::id(),
+            },
+            &|_| true,
+            &|_| Some("b".repeat(64)),
+            &|_| None,
+        );
+        registry.execute_sweep(decisions, "run_shutdown", &|_| Ok(()));
+        let log = std::fs::read_to_string(
+            dir.join(".gsa")
+                .join("process_trees")
+                .join("sweep-log.jsonl"),
+        )
+        .unwrap();
+        assert!(log.contains("\"refusal\":\"reap\""), "{log}");
+        let facts = registry.drain_facts();
+        assert_eq!(facts.len(), 2, "planned + executed");
         assert!(registry.drain_facts().is_empty());
 
         let _ = std::fs::remove_dir_all(&dir);

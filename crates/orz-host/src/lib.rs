@@ -24,19 +24,66 @@ pub mod reclaim;
 pub mod resource_gate;
 
 /// Recursive byte size of `path` (bounded by the fixed candidate set's depth).
-fn dir_size_sync(path: &Path) -> u64 {
+fn dir_size_sync(path: &Path, depth: u32) -> u64 {
+    // Depth-bounded (review F-BE-14): sizing runs on the disk-pressure
+    // critical path; deep trees beyond `depth` contribute a fixed estimate
+    // instead of a full stat walk.
+    const ESTIMATED_BEYOND_DEPTH: u64 = 512 * 1024 * 1024;
+    if depth == 0 {
+        return ESTIMATED_BEYOND_DEPTH;
+    }
     let mut total = 0u64;
     if let Ok(entries) = std::fs::read_dir(path) {
         for entry in entries.flatten() {
             let p = entry.path();
             if p.is_dir() {
-                total += dir_size_sync(&p);
+                total += dir_size_sync(&p, depth - 1);
             } else {
                 total += entry.metadata().map(|m| m.len()).unwrap_or(0);
             }
         }
     }
     total
+}
+
+/// Total order over tiers for the change detector (`host_resource_snapshot`
+/// trigger). Order follows the design ladder: normal < watch < soft <
+/// reclaim_direct < hard < unknown (unknown is kept distinct — never folded).
+fn tier_rank(tier: &crate::resource_gate::ResourceTier) -> u8 {
+    match tier {
+        crate::resource_gate::ResourceTier::Normal => 1,
+        crate::resource_gate::ResourceTier::Watch => 2,
+        crate::resource_gate::ResourceTier::Soft => 3,
+        crate::resource_gate::ResourceTier::ReclaimDirect => 4,
+        crate::resource_gate::ResourceTier::Hard => 5,
+        crate::resource_gate::ResourceTier::Unknown => 6,
+    }
+}
+
+/// Does any in-flight write target contain `path` (both canonicalized where
+/// possible)? Used by the expiry re-check (review F-BE-2).
+fn in_flight_contains(in_flight: &[std::path::PathBuf], path: &Path) -> bool {
+    in_flight.iter().any(|target| {
+        let target = dunce::canonicalize(target).unwrap_or_else(|_| target.clone());
+        let path = dunce::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
+        path.starts_with(&target) || target.starts_with(&path)
+    })
+}
+
+/// The in-flight registration guard: removes this call's targets on drop.
+pub struct InFlightGuard<'a> {
+    host: &'a OrzHost,
+    token: u64,
+}
+
+impl Drop for InFlightGuard<'_> {
+    fn drop(&mut self) {
+        self.host
+            .in_flight_targets
+            .lock()
+            .unwrap()
+            .retain(|(token, _)| *token != self.token);
+    }
 }
 pub mod retention;
 pub mod session;
@@ -158,10 +205,19 @@ pub struct OrzHost {
     reclaim: Option<crate::reclaim::ReclaimLadder>,
     /// 回收冷却（ms 单调时间戳）——两次回收至少间隔 60s（§4.6 四纪律 4）。
     reclaim_cooldown_ms: std::sync::atomic::AtomicU64,
-    /// 本 run 已执行的工具调用计数（窗口轮数计数）。
+    /// 本 run 已执行的工具调用计数（窗口轮数计数——按工具调用轮推进，
+    /// review F-BE-8）。
     reclaim_round: std::sync::atomic::AtomicU64,
     /// 0z S2 journal facts 暂存（reclaim_performed / resource_exhausted）。
     resource_facts: std::sync::Mutex<Vec<serde_json::Value>>,
+    /// 在跑工具调用的静态写入目标（review F-BE-2）：每次调用在门判定前
+    /// 登记、调用结束由 guard 摘除；回收阶梯据此排除在跑重活的产物面
+    /// （§4.7.1 第 14 条）。
+    in_flight_targets: std::sync::Mutex<Vec<(u64, Vec<std::path::PathBuf>)>>,
+    in_flight_token: std::sync::atomic::AtomicU64,
+    /// 上一次读到的档位（u8 编码，见 `tier_rank`）——跨档才落
+    /// `host_resource_snapshot`（§4.5 低频，跨档才落；review F-EV-7）。
+    last_resource_tier: std::sync::atomic::AtomicU8,
 }
 
 impl OrzHost {
@@ -280,6 +336,9 @@ impl OrzHost {
             reclaim_cooldown_ms: std::sync::atomic::AtomicU64::new(0),
             reclaim_round: std::sync::atomic::AtomicU64::new(0),
             resource_facts: std::sync::Mutex::new(Vec::new()),
+            in_flight_targets: std::sync::Mutex::new(Vec::new()),
+            in_flight_token: std::sync::atomic::AtomicU64::new(0),
+            last_resource_tier: std::sync::atomic::AtomicU8::new(0),
         })
     }
 
@@ -349,15 +408,69 @@ impl OrzHost {
                 .unwrap_or(0);
             let decisions = registry.plan_sweep(
                 &records,
-                Some(now_ms),
-                true,
+                crate::process_tree::SweepMode::Start {
+                    run_started_at: now_ms,
+                },
                 &crate::process_tree::pid_alive,
                 &crate::process_tree::image_hash_of_pid,
+                &crate::process_tree::creation_time_of_pid,
             );
             registry.execute_sweep(decisions, "parent_abort", &crate::process_tree::kill_pid);
         }
         self.process_trees = Some(registry);
         self.reclaim = Some(crate::reclaim::ReclaimLadder::new(&self.cwd));
+
+        // §4.5 (review F-EV-7): the run-start reading row — the snapshot
+        // family's second trigger, emitted once at assembly.
+        let snapshot = crate::resource_gate::CapacityProbe::probe(
+            &crate::resource_gate::SystemCapacityProbe,
+            &self.cwd,
+        );
+        self.resource_facts.lock().unwrap().push(serde_json::json!({
+            "event": "host_resource_snapshot",
+            "tier": crate::resource_gate::tier_for(&snapshot).as_str(),
+            "trigger": "run_start",
+            "readings": snapshot.to_json(),
+        }));
+        self.last_resource_tier.store(
+            tier_rank(&crate::resource_gate::tier_for(&snapshot)),
+            std::sync::atomic::Ordering::Relaxed,
+        );
+    }
+
+    /// The run id this host journals under (derived from the journal
+    /// directory name — `.gsa/runs/{run_id}`), used to scope registry rows
+    /// and the finalize sweep (review F-BE-1).
+    fn own_run_id(&self) -> String {
+        self.journal
+            .journal_dir()
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_default()
+    }
+
+    /// Register this call's static write targets as in-flight (review
+    /// F-BE-2); the returned guard removes them. Overlapping registrations
+    /// are fine — protection is a union, and stale entries only ever
+    /// *reduce* reclaim scope, never widen it.
+    fn register_in_flight(&self, targets: Vec<std::path::PathBuf>) -> InFlightGuard<'_> {
+        let token = self
+            .in_flight_token
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        self.in_flight_targets
+            .lock()
+            .unwrap()
+            .push((token, targets));
+        InFlightGuard { host: self, token }
+    }
+
+    fn in_flight_snapshot(&self) -> Vec<std::path::PathBuf> {
+        self.in_flight_targets
+            .lock()
+            .unwrap()
+            .iter()
+            .flat_map(|(_, targets)| targets.iter().cloned())
+            .collect()
     }
 
     /// 0z S2 §4.6：soft/reclaim-direct/hard 档的回收触发缝——门判定后调用。
@@ -375,38 +488,29 @@ impl OrzHost {
             .reclaim_cooldown_ms
             .load(std::sync::atomic::Ordering::Relaxed);
         if now_ms.saturating_sub(last) < 60_000 {
+            // Cooldown gates NEW reclaims only — the window expiry below
+            // still runs (review F-BE-8: expiry must not starve behind the
+            // cooldown).
+            self.run_reclaim_expiry(tier);
             return;
         }
         self.reclaim_cooldown_ms
             .store(now_ms, std::sync::atomic::Ordering::Relaxed);
         let round = self
             .reclaim_round
-            .fetch_add(1, std::sync::atomic::Ordering::Relaxed) as u32;
+            .load(std::sync::atomic::Ordering::Relaxed) as u32;
 
-        // 候选集：知名 cache 根（存在才进矩阵；固定有界，不做全盘扫描）。
-        let known = [
-            "target/debug/incremental",
-            "target/release/incremental",
-            "node_modules",
-            "__pycache__",
-            "tmp_rebuild_scratch",
-        ];
-        let candidates: Vec<crate::reclaim::ReclaimCandidate> = known
-            .iter()
-            .map(|rel| self.cwd.join(rel))
-            .filter(|p| p.exists())
-            .map(|p| {
-                let size = dir_size_sync(&p);
-                crate::reclaim::ReclaimCandidate {
-                    path: p,
-                    size_bytes: size,
-                }
-            })
-            .collect();
+        // 候选集（review F-BE-6/F-BE-7）：知名 cache 根按 §4.6 阶梯排序
+        // （scratch 最先——在跑概率最低；构建缓存最后），并做深度 2 的
+        // 嵌套 workspace 根发现（事故工作区的重灾面在嵌套目录）。
+        let candidates = self.discover_reclaim_candidates();
         if candidates.is_empty() {
+            self.run_reclaim_expiry(tier);
             return;
         }
-        let decisions = ladder.plan(&candidates, direct, round, &[]);
+        // §4.7.1 第 14 条：在跑重活的产物面进入矩阵（review F-BE-2）。
+        let in_flight = self.in_flight_snapshot();
+        let decisions = ladder.plan(&candidates, direct, round, &in_flight);
         ladder.execute(tier, &decisions, &|p| {
             if p.is_dir() {
                 std::fs::remove_dir_all(p)
@@ -414,14 +518,36 @@ impl OrzHost {
                 std::fs::remove_file(p)
             }
         });
-        // 窗口到期行真删（soft 档延迟删除的兑现）。
-        ladder.execute_expiry(round, &|p| {
-            if p.is_dir() {
-                std::fs::remove_dir_all(p)
-            } else {
-                std::fs::remove_file(p)
-            }
-        });
+        self.run_reclaim_expiry(tier);
+        self.push_reclaim_facts(ladder);
+    }
+
+    /// Window expiry — callable on every gate pass without the cooldown
+    /// (review F-BE-8); rows whose surface went in-flight are requeued
+    /// instead of deleted (§4.7.1 第 14 条).
+    fn run_reclaim_expiry(&self, _tier: &str) {
+        let Some(ladder) = self.reclaim.as_ref() else {
+            return;
+        };
+        let round = self
+            .reclaim_round
+            .load(std::sync::atomic::Ordering::Relaxed) as u32;
+        let in_flight = self.in_flight_snapshot();
+        ladder.execute_expiry(
+            round,
+            &|p: &std::path::Path| in_flight_contains(&in_flight, p),
+            &|p| {
+                if p.is_dir() {
+                    std::fs::remove_dir_all(p)
+                } else {
+                    std::fs::remove_file(p)
+                }
+            },
+        );
+        self.push_reclaim_facts(ladder);
+    }
+
+    fn push_reclaim_facts(&self, ladder: &crate::reclaim::ReclaimLadder) {
         for fact in ladder.drain_facts() {
             self.resource_facts.lock().unwrap().push(serde_json::json!({
                 "event": "reclaim_performed",
@@ -434,6 +560,66 @@ impl OrzHost {
                 "budget_bytes": fact.budget_bytes,
             }));
         }
+    }
+
+    /// Known cache roots ordered by the §4.6 ladder (scratch → package
+    /// caches → build caches), discovered under `cwd` and its first/second
+    /// level directories (review F-BE-6: the incident workspace's heavy
+    /// surface lives under a nested workspace root). Bounded: at most 64
+    /// candidates, depth ≤ 3 for sizing.
+    fn discover_reclaim_candidates(&self) -> Vec<crate::reclaim::ReclaimCandidate> {
+        // Ladder order = evaluation order (plan consumes in order).
+        const LADDER: &[&str] = &[
+            // 1. run/work scratch (lowest in-flight risk)
+            "tmp_rebuild_scratch",
+            // 2. package caches
+            "node_modules",
+            "__pycache__",
+            // 3. build caches (regenerable, highest in-flight risk)
+            "target/debug/incremental",
+            "target/release/incremental",
+        ];
+        let mut roots: Vec<std::path::PathBuf> = vec![self.cwd.clone()];
+        if let Ok(entries) = std::fs::read_dir(&self.cwd) {
+            for entry in entries.flatten() {
+                let p = entry.path();
+                if p.is_dir() {
+                    roots.push(p.clone());
+                    if let Ok(inner) = std::fs::read_dir(&p) {
+                        for e2 in inner.flatten() {
+                            let p2 = e2.path();
+                            if p2.is_dir() {
+                                roots.push(p2);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        let mut candidates: Vec<crate::reclaim::ReclaimCandidate> = Vec::new();
+        for rel in LADDER {
+            for root in &roots {
+                let path = root.join(rel);
+                if candidates
+                    .iter()
+                    .any(|c: &crate::reclaim::ReclaimCandidate| c.path == path)
+                {
+                    continue;
+                }
+                if !path.exists() {
+                    continue;
+                }
+                let size = dir_size_sync(&path, 3);
+                candidates.push(crate::reclaim::ReclaimCandidate {
+                    path,
+                    size_bytes: size,
+                });
+                if candidates.len() >= 64 {
+                    return candidates;
+                }
+            }
+        }
+        candidates
     }
 
     /// Drain the accumulated resource facts (journal face, loop side).
@@ -459,12 +645,18 @@ impl OrzHost {
         if records.is_empty() {
             return;
         }
+        // Review F-BE-1 (2026-09-13): ONLY this run's rows are candidates;
+        // foreign rows (parallel instances, older runs) are skipped — their
+        // owner reaps them via its own finalize or the next assembly sweep.
         let decisions = registry.plan_sweep(
             &records,
-            None,
-            false,
+            crate::process_tree::SweepMode::Finalize {
+                own_run_id: &self.own_run_id(),
+                own_pid: std::process::id(),
+            },
             &crate::process_tree::pid_alive,
             &crate::process_tree::image_hash_of_pid,
+            &crate::process_tree::creation_time_of_pid,
         );
         registry.execute_sweep(decisions, "run_shutdown", &crate::process_tree::kill_pid);
     }
@@ -959,33 +1151,51 @@ impl OrzHost {
         // 结构化信封回传读数（模型面看到事实与读数，不需要自觉检查——
         // design §2 item 7）。S1 只做「拒/放 + 读数」；soft/hard 档的回收与
         // 树杀落在 S2（§4.6/§4.8）。
+        // 0z S2 review F-BE-1/F-BE-2: classify + targets BEFORE the gate
+        // block — the spawn sink (below) carries both into the registry rows.
+        let class = crate::resource_gate::classify_action(name, &args);
+        let targets = crate::resource_gate::write_targets(name, &args, &self.cwd);
         if let Some(gate) = &self.resource_gate {
-            let class = crate::resource_gate::classify_action(name, &args);
-            // Review F-5: the gate judges every volume the action would *write*
-            // to (cwd plus any static write target), not only the session cwd.
-            let targets = crate::resource_gate::write_targets(name, &args, &self.cwd);
-            // 0z S2 §4.6：门判定一次拿到档位（Allow 与 Refuse 都带 tier）。
-            let gate_tier_after = match gate.evaluate_for_volumes(&targets, class) {
-                crate::resource_gate::GateDecision::Allow { tier, .. } => Some(tier),
-                crate::resource_gate::GateDecision::Refuse { tier, .. } => Some(tier),
+            // 0z S2 review F-BE-12（2026-09-13）：门只判一次——原实现
+            // evaluate_for_volumes 调两次（回收用第一次的档位、拒绝用第二次的
+            // 判决，探针可跨档位分歧）。在跑保护（review F-BE-2）：本调用的
+            // 静态写入目标在门判定前登记（已在上方 hoist），guard 在调用结束时摘除。
+            // review F-BE-8：延迟删除窗口按工具调用轮推进。
+            self.reclaim_round
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            let gate_decision = gate.evaluate_for_volumes(&targets, class);
+            let gate_tier_after = match &gate_decision {
+                crate::resource_gate::GateDecision::Allow { tier, .. } => Some(*tier),
+                crate::resource_gate::GateDecision::Refuse { tier, .. } => Some(*tier),
             };
-            // 0z S2 §4.6：soft 及以上档位由机械层发起回收（不问模型）。
+            // §4.5（review F-EV-7）：跨档才落 host_resource_snapshot。
+            if let Some(tier) = gate_tier_after {
+                let rank = tier_rank(&tier);
+                let last = self
+                    .last_resource_tier
+                    .swap(rank, std::sync::atomic::Ordering::Relaxed);
+                if last != rank
+                    && let Some(snapshot_now) = gate.last_snapshot()
+                {
+                    self.resource_facts.lock().unwrap().push(serde_json::json!({
+                        "event": "host_resource_snapshot",
+                        "tier": tier.as_str(),
+                        "trigger": "tier_change",
+                        "readings": snapshot_now.to_json(),
+                    }));
+                }
+            }
+            // 0z S2 §4.6：soft/reclaim-direct 档由机械层发起回收（不问模型）。
+            // hard 档的回收推迟到树杀之后（§4.7.1 末段：先杀再回收，
+            // review F-BE-2 次序倒置修正；见下方 Refuse 臂）。
             if let Some(tier) = gate_tier_after
                 && matches!(
                     tier,
                     crate::resource_gate::ResourceTier::Soft
                         | crate::resource_gate::ResourceTier::ReclaimDirect
-                        | crate::resource_gate::ResourceTier::Hard
                 )
             {
-                self.run_reclaim_pass(
-                    tier.as_str(),
-                    matches!(
-                        tier,
-                        crate::resource_gate::ResourceTier::ReclaimDirect
-                            | crate::resource_gate::ResourceTier::Hard
-                    ),
-                );
+                self.run_reclaim_pass(tier.as_str(), false);
             }
             if let crate::resource_gate::GateDecision::Refuse {
                 code,
@@ -1019,15 +1229,38 @@ impl OrzHost {
                         .map(crate::resource_gate::VolumeReading::to_json)
                         .collect::<Vec<_>>(),
                 }));
-                // 0z S2 §4.8 表 1：hard 档树杀——审计先行（planned 行含读数）
-                // → 杀本 run 全部工具进程树（RunResourceJob::kill）→ executed
-                // 行。只在此处触发（仅 hard 档、仅重档拒绝路径）。
+                // 0z S2 §4.8 表 1：hard 档树杀——审计先行（planned 行含读数
+                // 与将杀 call_id 集，review F-EV-1）→ 杀本 run 全部工具进程
+                // 树（RunResourceJob::kill）→ executed 行 → 回收（先杀再
+                // 回收，§4.7.1 末段，review F-BE-2 次序倒置修正）。只在此处
+                // 触发（仅 hard 档、仅重档拒绝路径；轻活永不进本臂）。
                 if tier == crate::resource_gate::ResourceTier::Hard {
                     let readings = snapshot.to_json();
+                    // 将杀的 call_id 集 = 本 run 登记表内的在跑记录（§4.8
+                    // 表 1「含将杀的 call_id 集」）；登记缺席时以当前被拒
+                    // 调用兜底，保证 call_ids 非空（schema minItems:1）。
+                    let in_flight_calls: Vec<String> = self
+                        .process_trees
+                        .as_ref()
+                        .map(|registry| {
+                            registry
+                                .load_all()
+                                .into_iter()
+                                .filter(|record| record.run_id == self.own_run_id())
+                                .map(|record| record.call_id)
+                                .collect()
+                        })
+                        .unwrap_or_default();
+                    let call_ids: Vec<String> = if in_flight_calls.is_empty() {
+                        vec![call_id.to_string()]
+                    } else {
+                        in_flight_calls
+                    };
                     self.resource_facts.lock().unwrap().push(serde_json::json!({
                         "event": "resource_exhausted",
                         "phase": "planned",
                         "tier": "hard",
+                        "call_ids": call_ids,
                         "readings": readings,
                     }));
                     if let Some(job) = xai_tty_utils::global_run_job() {
@@ -1037,6 +1270,7 @@ impl OrzHost {
                                     "event": "resource_exhausted",
                                     "phase": "executed",
                                     "tier": "hard",
+                                    "call_ids": call_ids,
                                     "readings": readings,
                                 }));
                                 tracing::warn!(
@@ -1048,6 +1282,8 @@ impl OrzHost {
                             }
                         }
                     }
+                    // 先杀后回收（review F-BE-2 次序修正）。
+                    self.run_reclaim_pass("hard", true);
                 }
                 return Ok(ToolResult {
                     output: reason,
@@ -1086,6 +1322,10 @@ impl OrzHost {
             .map(|registry| registry.dir().to_path_buf());
         let spawn_sink_guard = process_trees_dir.map(|dir| {
             let call_id = call_id.to_string();
+            // Review F-BE-1: rows carry the owning run id — the finalize
+            // sweep's scope guard keys on it.
+            let run_id = self.own_run_id();
+            let action_class = class.as_str().to_string();
             xai_tty_utils::set_spawn_sink(std::sync::Arc::new(
                 move |observation: xai_tty_utils::SpawnObservation| {
                     let record = crate::process_tree::ProcessTreeRecord {
@@ -1094,8 +1334,9 @@ impl OrzHost {
                         parent_chain: vec![std::process::id()],
                         image_sha256: observation.image_sha256,
                         started_at: observation.started_at,
-                        run_id: String::new(),
+                        run_id: run_id.clone(),
                         job_name: "call".to_string(),
+                        action_class: action_class.clone(),
                     };
                     if let Err(e) = crate::process_tree::write_record(&dir, &record) {
                         tracing::debug!("process tree registration failed: {e}");
@@ -1448,8 +1689,15 @@ impl LoopHost for OrzHost {
 
     /// 0z S2 §4.2（2026-09-12）：进程树扫除事实源——登记表的 drain 面
     /// （planned/executed 行；审计先行由扫除器保证）。
+    /// 0z S2 §5（review F-EV-11 注释归位）：宿主资源事实源——
+    /// `reclaim_performed` / `resource_exhausted` / `host_resource_denied`
+    /// 暂存行的 drain 面（与进程树 drain 分开）。
     async fn drain_host_resource_facts(&self) -> Vec<serde_json::Value> {
         self.drain_resource_facts()
+    }
+
+    async fn finalize_process_trees(&self) {
+        OrzHost::finalize_process_trees(self)
     }
 
     async fn drain_process_tree_reap_facts(&self) -> Vec<orz_loop::host::ProcessTreeReapFact> {

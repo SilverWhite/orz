@@ -164,9 +164,19 @@ impl AgentLoopController {
         ];
         for fact in host.drain_host_resource_facts().await {
             let Some(kind) = fact.get("event").and_then(Value::as_str) else {
+                // review F-EV-11: an unlabelled fact is an audit-face loss —
+                // never fail-open silently.
+                tracing::warn!(
+                    fact = %fact,
+                    "host resource fact without an `event` label; dropped"
+                );
                 continue;
             };
             let Some((_, event_type)) = EVENT_TYPE_BY_FACT.iter().find(|(k, _)| *k == kind) else {
+                tracing::warn!(
+                    kind,
+                    "unknown host resource fact kind; dropped (audit-face loss)"
+                );
                 continue;
             };
             let mut payload = fact.clone();

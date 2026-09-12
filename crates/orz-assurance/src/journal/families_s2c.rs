@@ -838,6 +838,11 @@ const TERMINAL_TYPES: &[&str] = &[
     "run_failed",
     "run_cancelled",
     "run_invalidated",
+    // FUS-HOST-RESOURCE-SAFETY §4.3 (2026-09-12, 0z S2): the explicit
+    // terminal shape for resource-exhausted / journal-degraded endings
+    // (mirror of conformance.rs TERMINAL_TYPES and the Python frozen
+    // reference's _TERMINAL_TYPES).
+    "run_terminated",
 ];
 
 /// Python `_verify_v02_receipt_event_isomorphism` (F11 §5.4, B 族): receipt ↔
@@ -945,9 +950,14 @@ pub fn verify_receipt_event_isomorphism(events: &[Value]) -> Vec<String> {
     }
 
     for (key, start_index) in &started {
+        // 0z S2 review F-C-3 (2026-09-13): `run_terminated` joins the
+        // exemption set — a degraded journal drops tool_completed rows by
+        // design (skeleton-only), and a hard-tier tree kill legitimately
+        // leaves in-flight tools without completions (§4.8 表 1). Both are
+        // the same wall-clock-kill family of exemptions.
         let exempt = match terminal_type.get(&key.0) {
-            None => true,                            // interrupted run — no completion obligation
-            Some(term) => term == "run_invalidated", // 墙钟超时豁免 (S4)
+            None => true, // interrupted run — no completion obligation
+            Some(term) => term == "run_invalidated" || term == "run_terminated", // 墙钟超时豁免 (S4) / 0z 降级与树杀豁免
         };
         if exempt {
             continue;

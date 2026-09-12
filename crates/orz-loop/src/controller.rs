@@ -2639,6 +2639,16 @@ impl AgentLoopController {
                 };
                 // 0z S2 §4.3：降级卷的失败终态同样改走 `run_terminated`
                 // （原失败事实进 detail，不丢失）。
+                // review F-EV-3：Err 臂同样 drain（idle-kill 先例在此有、
+                // 新两通道此前缺失）——原始错误不被 drain 失败遮蔽。
+                host.finalize_process_trees().await;
+                let _ = self.journal_pending_idle_kills(host, &mut writer).await;
+                let _ = self
+                    .journal_pending_process_tree_reaps(host, &mut writer)
+                    .await;
+                let _ = self
+                    .journal_pending_host_resource_facts(host, &mut writer)
+                    .await;
                 let _ = writer.record_terminal(event, payload).await;
                 let _ = journal.flush_async().await;
                 Err(e)
@@ -3484,6 +3494,16 @@ impl AgentLoopController {
         // idle-kill 时，事件仍会落在 RunFinished 之前（链规则要求晚于原
         // auto-bg 调用的 running:true 完成事件，此处恒满足）。
         self.journal_pending_idle_kills(host, writer).await?;
+        // 0z S2 review F-EV-3 (2026-09-13)：run 终态前补两路 drain——
+        // 进程树扫除与宿主资源事实（reclaim_performed /
+        // host_resource_denied / resource_exhausted）在链关停前落盘；
+        // 收尾扫除（finalize）先于 drain 执行，其 planned/executed 行
+        // 因此真落链（run_shutdown reason 不再结构性不可达）。
+        host.finalize_process_trees().await;
+        self.journal_pending_process_tree_reaps(host, writer)
+            .await?;
+        self.journal_pending_host_resource_facts(host, writer)
+            .await?;
         // 0z S2 §4.3：降级卷以 `run_terminated { reason: journal_degraded }`
         // 显式收尾（正常完成时本调用恒为 RunFinished，行为不变）。
         writer

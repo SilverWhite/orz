@@ -203,6 +203,29 @@ impl JournalRecorder {
         let mut writer_task = JournalWriterTask::new(journal_dir.join("events.jsonl"), rx);
         writer_task.fault = Some(WriteFaultScript {
             failures_remaining: fault_attempts,
+            partial_bytes: 0,
+        });
+        tokio::spawn(writer_task.run());
+
+        JournalRecorder { tx, journal_dir }
+    }
+
+    /// Test seam with a realistic torn write (review F-C-1/F-C-2): the first
+    /// `fault_attempts` attempts write a `partial_bytes`-byte prefix of the
+    /// line to disk, THEN fail with storage-full — the partial-write shape
+    /// real ENOSPC produces.
+    #[doc(hidden)]
+    pub fn new_with_torn_write_faults_for_tests(
+        journal_dir: PathBuf,
+        fault_attempts: u32,
+        partial_bytes: usize,
+    ) -> Self {
+        let (tx, rx) = mpsc::channel::<JournalCmd>(256);
+
+        let mut writer_task = JournalWriterTask::new(journal_dir.join("events.jsonl"), rx);
+        writer_task.fault = Some(WriteFaultScript {
+            failures_remaining: fault_attempts,
+            partial_bytes,
         });
         tokio::spawn(writer_task.run());
 
@@ -373,9 +396,12 @@ struct JournalWriterTask {
 }
 
 /// Test-seam fault script: the first `failures_remaining` write attempts fail
-/// with a storage-full error, later attempts succeed.
+/// with a storage-full error, later attempts succeed. `partial_bytes > 0`
+/// additionally writes a torn prefix of the failing line to the file before
+/// the error — the partial-write shape real ENOSPC produces (review F-C-1b).
 struct WriteFaultScript {
     failures_remaining: u32,
+    partial_bytes: usize,
 }
 
 impl WriteFaultScript {
@@ -436,46 +462,63 @@ impl JournalWriterTask {
         Ok(buf.len())
     }
 
-    /// Repair a partially-appended line after a failed write (0z S2): the
-    /// append-only file may hold a torn tail — everything after the last
-    /// complete line is dropped so the next append starts on a line boundary.
-    /// Without this, a backoff retry would splice a new event into the middle
-    /// of a torn line and the chain would be unreplayable.
+    /// Repair a partially-appended line after a failed write (0z S2; review
+    /// F-C-1/F-C-2, 2026-09-13): the append-only file may hold a torn tail —
+    /// everything after the last complete line is dropped so the next append
+    /// starts on a line boundary.
+    ///
+    /// Two review findings fixed here. **F-C-1**: the original 4 KiB tail
+    /// window truncated the WHOLE journal to zero whenever the torn line was
+    /// longer than the window (no `\n` inside the window ⇒ `keep = 0`) — the
+    /// scan now walks backward in 64 KiB chunks until it finds the last
+    /// newline, so `keep = 0` happens only when the file truly contains no
+    /// complete line at all. **F-C-2**: a failed `flush` can leave the
+    /// unwritten suffix inside the BufWriter; repairing only the file while
+    /// keeping the buffer would splice the residue into the next line, so the
+    /// buffered writer is discarded (self.file = None) before the repair and
+    /// the next `ensure_file` opens a fresh one.
     fn repair_partial_tail(&mut self) {
-        let Some(file) = self.file.as_mut() else {
-            return;
+        // F-C-2: drop the BufWriter with any unwritten residue.
+        self.file = None;
+        let mut f = match OpenOptions::new().read(true).write(true).open(&self.path) {
+            Ok(f) => f,
+            Err(e) => {
+                tracing::warn!("journal tail repair: reopen failed: {e}");
+                return;
+            }
         };
-        let _ = file.flush();
-        let Ok(_) = file.get_ref().sync_all() else {
-            return;
-        };
-        let mut f = file.get_ref();
         let Ok(len) = f.metadata().map(|m| m.len()) else {
             return;
         };
-        let read_from = len.saturating_sub(4096);
-        let mut tail = vec![0u8; (len - read_from) as usize];
         use std::io::{Read, Seek, SeekFrom};
-        if f.seek(SeekFrom::Start(read_from)).is_err() {
-            return;
+        const CHUNK: u64 = 64 * 1024;
+        let mut keep = 0u64; // 0 = no complete line anywhere in the file
+        let mut scan_from = len;
+        while scan_from > 0 {
+            let read_from = scan_from.saturating_sub(CHUNK);
+            let mut buf = vec![0u8; (scan_from - read_from) as usize];
+            if f.seek(SeekFrom::Start(read_from)).is_err() {
+                tracing::warn!("journal tail repair: seek failed; file left untouched");
+                return;
+            }
+            if f.read_exact(&mut buf).is_err() {
+                tracing::warn!("journal tail repair: tail read failed; file left untouched");
+                return;
+            }
+            if let Some(pos) = buf.iter().rposition(|&b| b == b'\n') {
+                keep = read_from + pos as u64 + 1;
+                break;
+            }
+            scan_from = read_from;
         }
-        if f.read_exact(&mut tail).is_err() {
-            // A torn tail can also mean the read itself fails on exotic
-            // volumes; fall through to the conservative truncation below only
-            // when the scan succeeded, otherwise leave the file untouched —
-            // the next open will surface the corruption loudly.
-            return;
-        }
-        let last_newline = tail.iter().rposition(|&b| b == b'\n');
-        let keep = match last_newline {
-            Some(pos) => read_from + pos as u64 + 1,
-            // No complete line at all: start from scratch rather than keep a
-            // torn prefix.
-            None => 0,
-        };
         if keep != len {
-            let _ = f.set_len(keep);
-            let _ = f.sync_all();
+            if let Err(e) = f.set_len(keep) {
+                tracing::warn!("journal tail repair: truncate to {keep} failed: {e}");
+                return;
+            }
+            if let Err(e) = f.sync_all() {
+                tracing::warn!("journal tail repair: sync failed: {e}");
+            }
         }
     }
 
@@ -488,6 +531,28 @@ impl JournalWriterTask {
             if let Some(script) = self.fault.as_mut()
                 && let Some(e) = script.take_fault()
             {
+                // Test seam realism (review F-C-1b): a scripted fault with
+                // `partial_bytes > 0` first writes a torn prefix of THIS line
+                // to the file, then fails — the "torn write longer than any
+                // fixed window" shape the repair must survive. Zero partial
+                // bytes keeps the historical clean-failure behavior.
+                let partial = script.partial_bytes;
+                if partial > 0 {
+                    let mut buf = Vec::new();
+                    let mut ser = serde_json::Serializer::new(&mut buf);
+                    let _ = event.serialize(&mut ser);
+                    buf.push(b'\n');
+                    let cut = partial.clamp(1, buf.len().saturating_sub(1));
+                    if let Ok(mut f) = OpenOptions::new()
+                        .create(true)
+                        .append(true)
+                        .open(&self.path)
+                    {
+                        use std::io::Write;
+                        let _ = f.write_all(&buf[..cut]);
+                        let _ = f.sync_all();
+                    }
+                }
                 self.repair_partial_tail();
                 attempt += 1;
                 if attempt > 3 {
@@ -699,11 +764,15 @@ impl JournalWriterTask {
 fn truncate_longest_string(value: &mut serde_json::Value) {
     use serde_json::Value;
     const HEAD: usize = 256;
+    const MARKER: &str = "\u{2026}[degraded-truncated]";
     match value {
         Value::Object(map) => {
             if let Some((_, longest)) = map
                 .iter_mut()
-                .filter(|(_, v)| v.as_str().is_some_and(|s| s.chars().count() > HEAD))
+                .filter(|(_, v)| {
+                    v.as_str()
+                        .is_some_and(|s| s.chars().count() > HEAD && !s.ends_with(MARKER))
+                })
                 .max_by_key(|(_, v)| v.as_str().map(|s| s.len()).unwrap_or(0))
             {
                 if let Value::String(s) = longest {
@@ -1240,6 +1309,82 @@ mod tests {
         let replay =
             super::super::verifier::replay_journal(&events_path, Some("RUN-DEGRADED"), None, true);
         assert!(replay.valid, "chain broken: {:?}", replay.errors);
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Review F-C-1/F-C-2 end-to-end (2026-09-13): a torn write LONGER than
+    /// any fixed window (an 80 KiB event half-written by ENOSPC), followed by
+    /// recovery, must never truncate earlier events nor splice the residue
+    /// into the next line. The historical 4 KiB-window repair failed both.
+    #[tokio::test]
+    async fn torn_long_write_is_repaired_without_losing_earlier_events() {
+        let dir = temp_dir();
+        // Fault 1: clean failure of event A's first attempt (its retry
+        // succeeds and lands event A). Faults 2: a TORN 80_000-byte prefix of
+        // event B's first attempt, then failure; B's retry succeeds. The torn
+        // prefix contains no newline, so the old window scan saw "no line" and
+        // truncated the whole file; the residue in the buffer (F-C-2) would
+        // have spliced into B's retry line.
+        let recorder = JournalRecorder::new_with_torn_write_faults_for_tests(dir.clone(), 1, 0);
+        let big = "x".repeat(80_000);
+        let e0 = RunEvent::new_v01(
+            "RUN-TORN".into(),
+            0,
+            EventType::RunStarted,
+            "test-manifest-sha256-64chars-long___________________".into(),
+            None,
+            "test-schema".into(),
+            serde_json::json!({"i": 0, "pad": big}),
+            Redaction::None,
+            "2026-09-13T00:00:00Z".into(),
+        );
+        let h0 = recorder.record_async(e0).await.expect("event A lands");
+        recorder.shutdown_async().await.unwrap();
+        drop(recorder);
+
+        let recorder =
+            JournalRecorder::new_with_torn_write_faults_for_tests(dir.clone(), 1, 80_000);
+        let e1 = RunEvent::new_v01(
+            "RUN-TORN".into(),
+            1,
+            EventType::RunFinished,
+            "test-manifest-sha256-64chars-long___________________".into(),
+            Some(h0),
+            "test-schema".into(),
+            serde_json::json!({"status": "completed"}),
+            Redaction::None,
+            "2026-09-13T00:00:01Z".into(),
+        );
+        recorder
+            .record_async(e1)
+            .await
+            .expect("terminal lands after torn write");
+        recorder.shutdown_async().await.unwrap();
+
+        let events_path = dir.join("events.jsonl");
+        let content = std::fs::read_to_string(&events_path).unwrap();
+        let rows: Vec<serde_json::Value> =
+            content
+                .lines()
+                .map(|line| {
+                    serde_json::from_str(line).unwrap_or_else(|e| {
+                panic!("every line must be valid JSON (F-C-2 residue check): {e} in {content:?}")
+            })
+                })
+                .collect();
+        assert_eq!(
+            rows.len(),
+            2,
+            "F-C-1: the torn write must not have truncated earlier events: {content:?}"
+        );
+        assert_eq!(rows[0]["event_type"], serde_json::json!("run_started"));
+        assert_eq!(rows[1]["event_type"], serde_json::json!("run_finished"));
+        assert_eq!(rows[1]["sequence"], serde_json::json!(1));
+
+        let replay =
+            super::super::verifier::replay_journal(&events_path, Some("RUN-TORN"), None, true);
+        assert!(replay.valid, "chain must replay: {:?}", replay.errors);
 
         let _ = std::fs::remove_dir_all(&dir);
     }

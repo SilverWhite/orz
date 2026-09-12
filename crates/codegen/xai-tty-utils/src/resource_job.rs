@@ -327,19 +327,25 @@ fn spawn_sink_slot() -> std::sync::MutexGuard<'static, Option<Arc<SinkFn>>> {
 }
 
 /// Install the registration sink for the duration of one tool call. Returns a
-/// guard; dropping it removes the sink (no nested-call ambiguity — the host
-/// dispatches one call at a time on this seam).
+/// guard that RESTORES the previous sink on drop (review F-BE-9: clearing the
+/// slot unconditionally would unregister spawns of a still-running call when
+/// a concurrent call finishes first). Cross-thread attribution races remain
+/// possible — the sweep never trusts the label alone (pid + fingerprint +
+/// creation-time + window decide the kill), so the race degrades audit
+/// attribution, never kill safety.
 pub fn set_spawn_sink(sink: Arc<SinkFn>) -> SpawnSinkGuard {
-    *spawn_sink_slot() = Some(sink);
-    SpawnSinkGuard
+    let previous = spawn_sink_slot().replace(sink);
+    SpawnSinkGuard { previous }
 }
 
-/// Guard removing the spawn sink on drop.
-pub struct SpawnSinkGuard;
+/// Guard restoring the previous spawn sink on drop.
+pub struct SpawnSinkGuard {
+    previous: Option<Arc<SinkFn>>,
+}
 
 impl Drop for SpawnSinkGuard {
     fn drop(&mut self) {
-        *spawn_sink_slot() = None;
+        *spawn_sink_slot() = self.previous.take();
     }
 }
 

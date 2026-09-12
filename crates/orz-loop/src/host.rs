@@ -785,6 +785,12 @@ pub trait LoopHost: Send + Sync {
         Vec::new()
     }
 
+    /// 0z S2 §4.2 / review F-EV-3 (2026-09-13)：run 收尾扫除——本 run 泄漏
+    /// 的工具子进程（breakaway/attach 失败逃出两级 Job 者）在终态事件之前
+    /// 由宿主回收，其 planned/executed 行随后经 drain 落链。默认无操作
+    /// （不支持的后端零行为，不伪造）。
+    async fn finalize_process_trees(&self) {}
+
     /// P2-3（2026-09-10）：本会话浏览器 SERP 的物理事实（已用导航 / 会话
     /// 上限），供 loop 层为检索车道保留底线额度（0v 设计 §3.2.5）。`None`
     /// （默认）= 该宿主没有浏览器会话或未接入该事实面——此时 loop 不施加
