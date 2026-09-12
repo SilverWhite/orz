@@ -47,10 +47,13 @@ pub mod runtime;
 mod resource_job;
 pub use resource_job::{
     JobLimits, JobReadback, RunResourceJob, SpawnObservation, SpawnSinkGuard, attach_failure_count,
-    duplicate_job_handle, global_run_job, image_fingerprint_from_handle,
-    image_fingerprint_from_pid, install_global_run_job, record_attach_failure,
+    global_run_job, image_fingerprint_from_pid, install_global_run_job, record_attach_failure,
     replace_global_run_job_for_tests, set_spawn_sink, terminate_job_handle,
 };
+// HANDLE-backed helpers exist only where Job Object handles do; the unconditional
+// re-export broke every non-Windows build of the workspace (E0432 on Linux).
+#[cfg(windows)]
+pub use resource_job::{duplicate_job_handle, image_fingerprint_from_handle};
 
 // ---------------------------------------------------------------------------
 // TTY detach — pre_exec building block

@@ -448,7 +448,7 @@ struct BwrapDenyPlan {
     has_globs: bool,
 }
 #[cfg(all(feature = "enforce", target_os = "linux"))]
-fn bwrap_deny_plan(profile: &ProfileName, workspace: &Path) -> Option<BwrapDenyPlan> {
+fn bwrap_deny_plan(profile: &ProfileName, workspace: &Path) -> anyhow::Result<BwrapDenyPlan> {
     let config = profiles::load_sandbox_config(workspace);
     let deny_write_optional: Vec<String> = if is_devbox_based(profile, &config) {
         vec!["/data".to_string()]
@@ -461,9 +461,17 @@ fn bwrap_deny_plan(profile: &ProfileName, workspace: &Path) -> Option<BwrapDenyP
         match profile.resolve_profile(workspace, &config) {
             Ok(r) => Some(r),
             Err(e) => {
-                if requires_hook_write_deny(profile, workspace) {
-                    eprintln!("error: sandbox profile resolve failed: {e}");
-                    return None;
+                // Fail closed when the profile intrinsically requires kernel
+                // deny enforcement (read-deny via custom `deny`, write-deny
+                // via hooks): silently degrading to an empty plan would run
+                // the workload without the enforcement its profile promises.
+                // Same discipline as `requires_read_deny` — classified from
+                // the profile config, never from the empty-on-error resolved
+                // set.
+                if requires_hook_write_deny(profile, workspace)
+                    || requires_read_deny(profile, workspace)
+                {
+                    return Err(anyhow::anyhow!("sandbox profile resolve failed: {e}"));
                 }
                 None
             }
@@ -476,18 +484,19 @@ fn bwrap_deny_plan(profile: &ProfileName, workspace: &Path) -> Option<BwrapDenyP
     let needs_hooks = requires_hook_write_deny(profile, workspace);
     let hook_plan = if needs_hooks {
         match hook_write_deny::prepare_hook_write_deny(profile) {
-            Ok(hook_write_deny::HookWriteDenyPrepare::NotRequired) => None,
-            Ok(hook_write_deny::HookWriteDenyPrepare::Plan(plan)) => Some(plan),
-            Err(e) => {
-                eprintln!("error: hook write-deny plan failed: {e}");
-                return None;
+            Ok(hook_write_deny::HookWriteDenyPrepare::NotRequired) => {
+                anyhow::bail!(
+                    "profile requires hook write-deny but preparation reported it not required"
+                )
             }
+            Ok(hook_write_deny::HookWriteDenyPrepare::Plan(plan)) => Some(plan),
+            Err(e) => return Err(anyhow::anyhow!("hook write-deny plan failed: {e}")),
         }
     } else {
         None
     };
     if needs_hooks && hook_plan.is_none() {
-        return None;
+        anyhow::bail!("hook write-deny required but no plan was prepared");
     }
     let (exact, globs) = deny::partition_deny_entries(&entries);
     let mut deny_read = deny::exact_deny_path_strings(workspace, &exact);
@@ -498,15 +507,18 @@ fn bwrap_deny_plan(profile: &ProfileName, workspace: &Path) -> Option<BwrapDenyP
             "sandbox deny globs are enforced best-effort on Linux (expanded at launch); \
              files matching them that are created later are NOT covered"
         );
-        deny_read.extend(deny::expand_deny_globs(
+        let Some(expanded) = deny::expand_deny_globs(
             workspace,
             &globs,
             deny::DENY_GLOB_MAX_DEPTH,
             deny::DENY_GLOB_MAX_MATCHES,
             deny::DENY_GLOB_MAX_ENTRIES,
-        )?);
+        ) else {
+            anyhow::bail!("sandbox deny glob could not be enforced on Linux (expansion refused)");
+        };
+        deny_read.extend(expanded);
     }
-    Some(BwrapDenyPlan {
+    Ok(BwrapDenyPlan {
         deny_write_optional,
         hook_plan,
         deny_read,
@@ -514,7 +526,7 @@ fn bwrap_deny_plan(profile: &ProfileName, workspace: &Path) -> Option<BwrapDenyP
     })
 }
 #[cfg(all(not(feature = "enforce"), target_os = "linux"))]
-fn bwrap_deny_plan(profile: &ProfileName, workspace: &Path) -> Option<BwrapDenyPlan> {
+fn bwrap_deny_plan(profile: &ProfileName, workspace: &Path) -> anyhow::Result<BwrapDenyPlan> {
     let config = profiles::load_sandbox_config(workspace);
     let deny_write_optional: Vec<String> = if is_devbox_based(profile, &config) {
         vec!["/data".to_string()]
@@ -523,17 +535,18 @@ fn bwrap_deny_plan(profile: &ProfileName, workspace: &Path) -> Option<BwrapDenyP
     };
     let hook_plan = if requires_hook_write_deny(profile, workspace) {
         match hook_write_deny::prepare_hook_write_deny(profile) {
-            Ok(hook_write_deny::HookWriteDenyPrepare::NotRequired) => None,
-            Ok(hook_write_deny::HookWriteDenyPrepare::Plan(plan)) => Some(plan),
-            Err(e) => {
-                eprintln!("error: hook write-deny plan failed: {e}");
-                return None;
+            Ok(hook_write_deny::HookWriteDenyPrepare::NotRequired) => {
+                anyhow::bail!(
+                    "profile requires hook write-deny but preparation reported it not required"
+                )
             }
+            Ok(hook_write_deny::HookWriteDenyPrepare::Plan(plan)) => Some(plan),
+            Err(e) => return Err(anyhow::anyhow!("hook write-deny plan failed: {e}")),
         }
     } else {
         None
     };
-    Some(BwrapDenyPlan {
+    Ok(BwrapDenyPlan {
         deny_write_optional,
         hook_plan,
         deny_read: Vec::new(),
@@ -544,7 +557,7 @@ fn bwrap_deny_plan(profile: &ProfileName, workspace: &Path) -> Option<BwrapDenyP
 pub fn bwrap_reexec_for_profile(
     profile: &ProfileName,
     workspace: &Path,
-) -> Option<std::process::Command> {
+) -> anyhow::Result<Option<std::process::Command>> {
     let BwrapDenyPlan {
         deny_write_optional,
         hook_plan,
@@ -552,11 +565,15 @@ pub fn bwrap_reexec_for_profile(
         has_globs,
     } = bwrap_deny_plan(profile, workspace)?;
     if deny_write_optional.is_empty() && hook_plan.is_none() && deny_read.is_empty() && !has_globs {
-        return None;
+        return Ok(None);
     }
     let write_opt: Vec<&str> = deny_write_optional.iter().map(String::as_str).collect();
     let read_refs: Vec<&str> = deny_read.iter().map(String::as_str).collect();
-    bwrap_reexec_command_ex(&write_opt, hook_plan.as_ref(), &read_refs)
+    Ok(bwrap_reexec_command_ex(
+        &write_opt,
+        hook_plan.as_ref(),
+        &read_refs,
+    ))
 }
 #[cfg(test)]
 mod tests {
@@ -847,6 +864,34 @@ mod tests {
     #[test]
     #[serial(bwrap_env)]
     #[cfg(all(feature = "enforce", target_os = "linux"))]
+    fn bwrap_reexec_fails_closed_when_resolve_breaks_a_deny_profile() {
+        let _g = EnvGuard::remove(BWRAP_ENV_VAR);
+        // `extends = "off"` is accepted by config parsing but rejected at
+        // resolve time — a deterministic resolve failure for a profile that
+        // promises read-deny enforcement.
+        let ws = temp_workspace_with_sandbox_toml(
+            "bwrap-resolve-fail-closed",
+            "[profiles.broken]\nextends = \"off\"\ndeny = [\"/etc\"]\n",
+        );
+        let broken = ProfileName::Custom("broken".to_string());
+        assert!(requires_read_deny(&broken, &ws));
+        let err = bwrap_reexec_for_profile(&broken, &ws)
+            .err()
+            .expect("resolve failure on a deny profile must fail closed");
+        assert!(
+            err.to_string().contains("resolve failed"),
+            "unexpected error: {err}"
+        );
+        // A profile that promises no enforcement still degrades gracefully.
+        assert!(matches!(
+            bwrap_reexec_for_profile(&ProfileName::Off, &ws),
+            Ok(None)
+        ));
+        let _ = std::fs::remove_dir_all(&ws);
+    }
+    #[test]
+    #[serial(bwrap_env)]
+    #[cfg(all(feature = "enforce", target_os = "linux"))]
     fn bwrap_reexec_uses_dir_placeholder_for_directories() {
         let _g = EnvGuard::remove(BWRAP_ENV_VAR);
         let dir = std::env::temp_dir().join(format!("grok-deny-dir-{}", std::process::id()));
@@ -881,7 +926,8 @@ mod tests {
             "[profiles.devcustom]\nextends = \"devbox\"\ndeny = [\"secret.pem\"]\n",
         );
         let cmd = bwrap_reexec_for_profile(&ProfileName::Custom("devcustom".to_string()), &ws)
-            .expect("devbox-extending custom with deny should build a re-exec command");
+            .expect("devbox-extending custom with deny plan should build")
+            .expect("devbox-extending custom with deny should produce a re-exec command");
         let args: Vec<String> = cmd
             .get_args()
             .map(|a| a.to_string_lossy().to_string())
@@ -906,6 +952,7 @@ mod tests {
         );
         assert!(
             bwrap_reexec_for_profile(&ProfileName::Custom("devempty".to_string()), &ws_empty)
+                .expect("devempty re-exec plan should build")
                 .is_some(),
             "devbox-extending custom must compose the /data write-deny re-exec"
         );
@@ -915,7 +962,9 @@ mod tests {
             "[profiles.wsempty]\nextends = \"workspace\"\n",
         );
         assert!(
-            bwrap_reexec_for_profile(&ProfileName::Custom("wsempty".to_string()), &ws_ws).is_some(),
+            bwrap_reexec_for_profile(&ProfileName::Custom("wsempty".to_string()), &ws_ws)
+                .expect("wsempty re-exec plan should build")
+                .is_some(),
             "non-devbox custom must re-exec for direct-hook write-deny"
         );
         let _ = std::fs::remove_dir_all(&ws_ws);

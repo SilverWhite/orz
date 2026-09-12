@@ -291,16 +291,21 @@ fn subprocess_profile_and_bwrap_reexec(profile: &orz_sandbox::ProfileName, works
             // closed on a partial bind — rather than hand-rolling a single-path
             // `bwrap_reexec_command`.
             match orz_sandbox::bwrap_reexec_for_profile(profile, workspace) {
-                Some(mut cmd) => {
+                Ok(Some(mut cmd)) => {
                     use std::os::unix::process::CommandExt;
                     let err = cmd.exec(); // returns only if exec failed
                     eprintln!("bwrap re-exec failed: {err}");
                     std::process::exit(2);
                 }
-                // Outside bwrap with no command means the deny set could not
-                // be secured. The shell fails closed here; mirror that.
-                None => {
+                // Outside bwrap, both "no command needed" and "plan could not
+                // be secured" must never silently continue: the shell fails
+                // closed here; mirror that.
+                Ok(None) => {
                     eprintln!("FAIL: bwrap_reexec_for_profile returned None outside bwrap");
+                    std::process::exit(2);
+                }
+                Err(e) => {
+                    eprintln!("FAIL: bwrap_reexec_for_profile errored outside bwrap: {e}");
                     std::process::exit(2);
                 }
             }
