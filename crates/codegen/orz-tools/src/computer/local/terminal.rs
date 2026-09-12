@@ -892,7 +892,9 @@ impl LocalTerminalActor {
         let mut process_group = crate::util::ProcessGroup::new()
             .map_err(|e| ComputerError::io(format!("ProcessGroup::new: {e}")))?;
         if let Err(e) = process_group.attach(&child) {
-            tracing::debug!("Failed to attach static-shell child to ProcessGroup: {e}");
+            // 0z S1 复核 F-9：attach 失败 = 该子进程不受 run 级限项与树回收覆盖，
+            // 必须可见（计数在 attach_pid 内，日志级别提到 warn）。
+            tracing::warn!("Failed to attach static-shell child to ProcessGroup: {e}");
         }
 
         let snapshot = static_shell.snapshot.clone();
@@ -1018,7 +1020,7 @@ impl LocalTerminalActor {
         let mut process_group = crate::util::ProcessGroup::new()
             .map_err(|e| ComputerError::io(format!("ProcessGroup::new: {e}")))?;
         if let Err(e) = process_group.attach(&child) {
-            tracing::debug!("Failed to attach persistent-shell child to ProcessGroup: {e}");
+            tracing::warn!("Failed to attach persistent-shell child to ProcessGroup: {e}");
         }
 
         // Write prior snapshot to fd 3 (state input pipe) in a background task.
@@ -3618,8 +3620,9 @@ fn spawn_shell_command(
             Err(e) if e.raw_os_error() == Some(5) => {
                 // Parent's containing Job Object does not allow breakaway.
                 // Retry without CREATE_BREAKAWAY_FROM_JOB. We lose the
-                // ability to assign the child to our own job (so the
-                // attach() below will also fail), but the command runs.
+                // ability to assign the child to our own job as a breakaway
+                // member (Windows 8+ nesting can still associate it via the
+                // root-then-child order in attach_pid), but the command runs.
                 // kill_on_drop + child.kill() still terminate the immediate
                 // child via TerminateProcess.
                 tracing::debug!(
@@ -3636,7 +3639,7 @@ fn spawn_shell_command(
     };
 
     if let Err(e) = group.attach(&child) {
-        tracing::debug!("Failed to attach child to ProcessGroup: {e}");
+        tracing::warn!("Failed to attach child to ProcessGroup: {e}");
     }
     Ok((child, group))
 }

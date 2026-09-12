@@ -25,7 +25,7 @@
 //! (cache reclaim, tree kill) belong to §4.6/§4.8 and land in S2. What S1 owns
 //! is that the refusal happens **before dispatch** and carries its readings.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
 use xai_tty_utils::JobLimits;
@@ -56,6 +56,21 @@ pub const HARD_COMMIT_USED_PERCENT: u32 = 95;
 pub const RUN_COMMIT_LIMIT_PERCENT: u64 = 80;
 pub const RUN_COMMIT_RESERVE_BYTES: u64 = 4 * GIB;
 pub const RUN_CPU_RATE_PERCENT: u32 = 80;
+/// Headroom rule (independent review F-4, 2026-09-12): the ceiling must express
+/// what *this run* may still consume, not a fraction of the host limit a busy
+/// machine cannot hand out. The binding value is the assembly-time commit
+/// headroom minus this reserve, floored so light work can still spawn, and
+/// capped by the historical `min(80% × limit, limit − 4 GiB)` arm.
+pub const RUN_COMMIT_HEADROOM_RESERVE_BYTES: u64 = GIB;
+pub const RUN_COMMIT_FLOOR_BYTES: u64 = 2 * GIB;
+/// Active-process ceiling (independent review F-3): `2 × cores + 8`, at least
+/// 16. The value the user's ruling originally fixed (cores) is exactly cargo's
+/// default `-j`, so cargo + its rustc children + linkers + test harnesses would
+/// cross it and the kernel would refuse a legitimate `CreateProcess`. This
+/// ceiling exists to contain a runaway, not to schedule.
+pub const RUN_ACTIVE_PROCESS_MULTIPLIER: u32 = 2;
+pub const RUN_ACTIVE_PROCESS_BASE: u32 = 8;
+pub const RUN_ACTIVE_PROCESS_MIN: u32 = 16;
 
 // ---------------------------------------------------------------------------
 // Action classification
@@ -248,22 +263,186 @@ pub fn classify_action(tool: &str, args: &serde_json::Value) -> ActionClass {
     if HEAVY_TOOLS.contains(&tool) {
         return ActionClass::Heavy;
     }
-    if tool != "run_terminal_cmd" {
-        return ActionClass::Light;
-    }
-    let Some(command) = args
-        .get("command")
-        .and_then(|c| c.as_str())
-        .or_else(|| args.get("cmd").and_then(|c| c.as_str()))
-    else {
+    let Some(command) = command_of(tool, args) else {
         return ActionClass::Light;
     };
     classify_command(command)
 }
 
+/// The command string of a tool call, when the tool carries one.
+fn command_of<'a>(tool: &str, args: &'a serde_json::Value) -> Option<&'a str> {
+    if tool != "run_terminal_cmd" {
+        return None;
+    }
+    args.get("command")
+        .and_then(|c| c.as_str())
+        .or_else(|| args.get("cmd").and_then(|c| c.as_str()))
+}
+
+/// The volumes a tool call would **write to** (design §4.1 "目标卷";
+/// independent review F-5). Always includes `cwd` (the session volume, and the
+/// `不换盘不换卷` default); a command that statically redirects output, changes
+/// directory, or re-points a build output directory adds that volume.
+///
+/// This is a static read of the command string — no shell runs, no environment
+/// is resolved. A path that cannot be parsed contributes nothing, and a path
+/// that does not exist yet still resolves to its volume (the probe walks up to
+/// the nearest existing ancestor).
+pub fn write_targets(tool: &str, args: &serde_json::Value, cwd: &Path) -> Vec<PathBuf> {
+    let mut targets: Vec<PathBuf> = vec![cwd.to_path_buf()];
+    let Some(command) = command_of(tool, args) else {
+        return targets;
+    };
+    for segment in split_segments(&strip_payload_bodies(command)) {
+        let tokens = tokenize(&segment);
+        if tokens.is_empty() {
+            continue;
+        }
+        for candidate in segment_write_targets(&tokens) {
+            if !looks_absolute(&candidate) {
+                continue;
+            }
+            let path = PathBuf::from(candidate.trim_matches(|c| c == '"' || c == '\''));
+            if targets.iter().any(|existing| same_path(existing, &path)) {
+                continue;
+            }
+            targets.push(path);
+            // Defensive: a pathological command must not turn into an unbounded
+            // probe list.
+            if targets.len() >= MAX_WRITE_TARGETS {
+                return targets;
+            }
+        }
+    }
+    targets
+}
+
+const MAX_WRITE_TARGETS: usize = 6;
+
+fn same_path(left: &Path, right: &Path) -> bool {
+    left.to_string_lossy().to_ascii_lowercase() == right.to_string_lossy().to_ascii_lowercase()
+}
+
+/// Path shapes that can name another volume on this platform.
+#[cfg(windows)]
+fn looks_absolute(token: &str) -> bool {
+    let bytes = token.as_bytes();
+    (bytes.len() >= 3
+        && bytes[0].is_ascii_alphabetic()
+        && bytes[1] == b':'
+        && (bytes[2] == b'\\' || bytes[2] == b'/'))
+        || token.starts_with("\\\\")
+}
+
+#[cfg(not(windows))]
+fn looks_absolute(token: &str) -> bool {
+    token.starts_with('/')
+}
+
+/// Write-target tokens inside one segment: redirection targets, explicit
+/// output-directory flags, directory-changing commands, and build-cache env
+/// assignments.
+fn segment_write_targets(tokens: &[String]) -> Vec<String> {
+    // A quoted wrapper command (`cmd /c "cd /d X && cargo test"`) arrives as one
+    // token containing whitespace; re-tokenize those interiors so the flags and
+    // operands inside are visible. One pass is enough: the re-tokenized pieces
+    // are single words or flag/value pairs.
+    let expanded: Vec<String> = tokens
+        .iter()
+        .flat_map(|token| {
+            if token.split_whitespace().count() > 1 {
+                tokenize(token)
+            } else {
+                vec![token.clone()]
+            }
+        })
+        .collect();
+    let tokens = expanded.as_slice();
+    let mut found = Vec::new();
+    for (index, token) in tokens.iter().enumerate() {
+        let raw = token.trim_matches(|c| c == '"' || c == '\'');
+        // `> file` / `>> file` (a bare `>` takes the next token).
+        if let Some(target) = redirection_target(tokens, index) {
+            found.push(target);
+            continue;
+        }
+        let lowered = raw.to_ascii_lowercase();
+        let env_key = lowered
+            .trim_start_matches("$env:")
+            .trim_start_matches('%')
+            .trim_end_matches('%');
+        if matches!(
+            env_key,
+            "cargo_target_dir" | "cargo_home" | "npm_config_cache" | "pip_cache_dir"
+        ) {
+            // `NAME=value`, `NAME = value`, `$env:NAME = 'value'`.
+            if let Some((_, value)) = raw.split_once('=') {
+                if !value.trim().is_empty() {
+                    found.push(value.trim().to_string());
+                }
+            } else if let Some(next) = tokens[index + 1..].iter().find(|next| next.trim() != "=") {
+                found.push(next.clone());
+            }
+            continue;
+        }
+        for flag in ["--target-dir", "--out-dir"] {
+            if let Some(value) = flag_value(&lowered, flag) {
+                found.push(value);
+            } else if lowered == flag
+                && let Some(next) = tokens.get(index + 1)
+            {
+                found.push(next.clone());
+            }
+        }
+        if matches!(lowered.as_str(), "--target-dir" | "--out-dir") {
+            continue;
+        }
+        if matches!(
+            lowered.as_str(),
+            "cd" | "chdir" | "set-location" | "sl" | "pushd"
+        ) {
+            if let Some(next) = tokens[index + 1..].iter().find(|next| {
+                let candidate = next.trim_matches(|c| c == '"' || c == '\'');
+                !candidate.starts_with('-') && !candidate.starts_with('/')
+            }) {
+                found.push(next.clone());
+            }
+        }
+    }
+    found
+}
+
+/// `--flag=value` → the value (`--flag value` is handled by the caller, which
+/// has the token list).
+fn flag_value(lowered: &str, flag: &str) -> Option<String> {
+    lowered
+        .strip_prefix(flag)?
+        .strip_prefix('=')
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
+}
+
+/// The redirection target at `index`, when the token there redirects to a real
+/// file (`> NUL` / `/dev/null` / `$null` do not count).
+fn redirection_target(tokens: &[String], index: usize) -> Option<String> {
+    let token = &tokens[index];
+    if token.contains(">&") {
+        return None;
+    }
+    if !token.starts_with('>') {
+        return None;
+    }
+    let trimmed = token.trim_start_matches('>').trim();
+    if !trimmed.is_empty() {
+        return (!is_null_target(trimmed)).then(|| trimmed.to_string());
+    }
+    let next = tokens.get(index + 1)?;
+    (!is_null_target(next)).then(|| next.clone())
+}
+
 /// Classify a shell command string (static; no shell actually runs).
 pub fn classify_command(command: &str) -> ActionClass {
-    for segment in split_segments(command) {
+    for segment in split_segments(&strip_payload_bodies(command)) {
         let tokens = tokenize(&segment);
         if tokens.is_empty() {
             continue;
@@ -303,6 +482,107 @@ fn split_segments(command: &str) -> Vec<String> {
     }
     segments.push(current);
     segments
+}
+
+/// Drop the **bodies** of PowerShell here-strings (`@' … '@` / `@" … "@`) and
+/// POSIX heredocs (`<<EOF … EOF`), keeping every header line.
+///
+/// Independent review F-7: an inline script's `x = 1 > 0` was read as a file
+/// redirection because the body is not in a quoting state for [`tokenize`]. The
+/// bodies are payload, so dropping them cannot hide a real redirection (the
+/// header line — where `cat <<EOF > file` lives — is preserved). A body is only
+/// dropped when its terminator actually exists later in the command; otherwise
+/// the text is left alone, so a stray `<<` can never silently swallow real
+/// command lines (the direction that would *miss* heavy work).
+fn strip_payload_bodies(command: &str) -> String {
+    let lines: Vec<&str> = command.split_inclusive('\n').collect();
+    let mut out = String::with_capacity(command.len());
+    let mut skip_until: Option<usize> = None;
+    for (index, line) in lines.iter().enumerate() {
+        let body = line.trim_end_matches(['\n', '\r']);
+        if let Some(limit) = skip_until {
+            if index <= limit {
+                continue;
+            }
+            skip_until = None;
+        }
+        if let Some((delimiter, here_string)) = payload_start(body)
+            && let Some(end) = find_terminator(&lines, index + 1, &delimiter, here_string)
+        {
+            out.push_str(line);
+            skip_until = Some(end);
+            continue;
+        }
+        out.push_str(line);
+    }
+    out
+}
+
+/// The opener on this line: `(terminator-word, is_power_shell_here_string)`.
+fn payload_start(line: &str) -> Option<(String, bool)> {
+    if let Some(quote) = here_string_quote(line) {
+        // PowerShell terminates with the same quote followed by `@`.
+        return Some((format!("{quote}@"), true));
+    }
+    heredoc_delimiter(line).map(|delimiter| (delimiter, false))
+}
+
+/// `@'` / `@"` at the end of a line (the PowerShell here-string opener rule).
+fn here_string_quote(line: &str) -> Option<char> {
+    let trimmed = line.trim_end();
+    let mut chars = trimmed.chars().rev();
+    match (chars.next(), chars.next()) {
+        (Some('\''), Some('@')) => Some('\''),
+        (Some('"'), Some('@')) => Some('"'),
+        _ => None,
+    }
+}
+
+/// `<<EOF`, `<< 'EOF'`, `<<-"EOF"` → the delimiter word.
+fn heredoc_delimiter(line: &str) -> Option<String> {
+    let bytes = line.as_bytes();
+    let mut index = 0;
+    while let Some(position) = line[index..].find("<<") {
+        let at = index + position;
+        let preceded_by_space = at == 0 || bytes[at - 1].is_ascii_whitespace();
+        if preceded_by_space && bytes.get(at + 2) != Some(&b'<') {
+            let rest = &line[at + 2..];
+            let rest = rest.strip_prefix('-').unwrap_or(rest);
+            let rest = rest.trim_start();
+            let quote = rest.chars().next().filter(|c| *c == '\'' || *c == '"');
+            let word = quote.map_or(rest, |q| &rest[q.len_utf8()..]);
+            let word: String = word
+                .chars()
+                .take_while(|c| c.is_ascii_alphanumeric() || *c == '_')
+                .collect();
+            if !word.is_empty() && !word.chars().all(|c| c.is_ascii_digit()) {
+                return Some(word);
+            }
+        }
+        index = at + 2;
+    }
+    None
+}
+
+/// The index of the line that terminates a payload opened at `start`.
+fn find_terminator(
+    lines: &[&str],
+    start: usize,
+    delimiter: &str,
+    here_string: bool,
+) -> Option<usize> {
+    for (offset, line) in lines.iter().enumerate().skip(start) {
+        let body = line.trim_end_matches(['\n', '\r']);
+        let matched = if here_string {
+            body.trim_start().starts_with(delimiter)
+        } else {
+            body.trim_start_matches('\t').trim() == delimiter
+        };
+        if matched {
+            return Some(offset);
+        }
+    }
+    None
 }
 
 /// Whitespace tokenizer with minimal quote handling.
@@ -596,7 +876,7 @@ pub struct SystemCapacityProbe;
 
 impl CapacityProbe for SystemCapacityProbe {
     fn probe(&self, path: &Path) -> HostCapacitySnapshot {
-        match (probe_volume(path), probe_commit()) {
+        match (probe_volume_nearest(path), probe_commit()) {
             (Some((free, total)), Some((limit, used))) => HostCapacitySnapshot {
                 collected_at_ms: now_ms(),
                 volume_free_bytes: free,
@@ -610,6 +890,21 @@ impl CapacityProbe for SystemCapacityProbe {
             _ => HostCapacitySnapshot::unavailable(),
         }
     }
+}
+
+/// Probe the volume holding `path`, walking up to the nearest existing
+/// ancestor first. A write target that does not exist yet (`--target-dir` into a
+/// fresh directory) must still be judged by its volume, not reported as an
+/// unreadable machine (independent review F-5).
+fn probe_volume_nearest(path: &Path) -> Option<(u64, u64)> {
+    let mut candidate = Some(path);
+    while let Some(current) = candidate {
+        if let Some(reading) = probe_volume(current) {
+            return Some(reading);
+        }
+        candidate = current.parent().filter(|parent| *parent != current);
+    }
+    None
 }
 
 fn now_ms() -> u64 {
@@ -716,6 +1011,11 @@ pub enum ResourceTier {
     Soft,
     ReclaimDirect,
     Hard,
+    /// Readings could not be taken. Machine-readable key `unknown` — never
+    /// folded into `hard` (independent review F-6): S2 hangs reclaim/tree-kill
+    /// decisions on the tier, and a probe failure must not look like a full
+    /// disk.
+    Unknown,
 }
 
 impl ResourceTier {
@@ -727,6 +1027,7 @@ impl ResourceTier {
             ResourceTier::Soft => "soft",
             ResourceTier::ReclaimDirect => "reclaim_direct",
             ResourceTier::Hard => "hard",
+            ResourceTier::Unknown => "unknown",
         }
     }
 }
@@ -734,6 +1035,9 @@ impl ResourceTier {
 /// Derive the ladder tier from a reading. The tier is *reported* (and drives
 /// the refusal reason); the upper-tier actions (reclaim, tree kill) are S2.
 pub fn tier_for(snapshot: &HostCapacitySnapshot) -> ResourceTier {
+    if snapshot.source_quality == SourceQuality::Unavailable {
+        return ResourceTier::Unknown;
+    }
     let used = snapshot.commit_used_percent().unwrap_or(0);
     let free = snapshot.volume_free_bytes;
     if free < HARD_FREE_BYTES || used > HARD_COMMIT_USED_PERCENT {
@@ -749,6 +1053,25 @@ pub fn tier_for(snapshot: &HostCapacitySnapshot) -> ResourceTier {
     }
 }
 
+/// One volume's reading inside a (possibly multi-volume) decision.
+#[derive(Clone, Debug)]
+pub struct VolumeReading {
+    /// The path whose volume was probed (the work's write target, design §4.1
+    /// "目标卷").
+    pub path: String,
+    pub snapshot: HostCapacitySnapshot,
+}
+
+impl VolumeReading {
+    /// `{ path, readings }` — mechanical, never prose.
+    pub fn to_json(&self) -> serde_json::Value {
+        serde_json::json!({
+            "path": self.path,
+            "readings": self.snapshot.to_json(),
+        })
+    }
+}
+
 /// The gate's verdict.
 #[derive(Clone, Debug)]
 pub enum GateDecision {
@@ -758,13 +1081,15 @@ pub enum GateDecision {
         tier: ResourceTier,
         snapshot: HostCapacitySnapshot,
     },
-    /// Dispatch is refused before anything starts.
+    /// Dispatch is refused before anything starts. `snapshot` is the binding
+    /// (worst-headroom) reading; `volumes` carries every probed volume.
     Refuse {
         code: &'static str,
         reason: String,
         class: ActionClass,
-        tier: Option<ResourceTier>,
+        tier: ResourceTier,
         snapshot: HostCapacitySnapshot,
+        volumes: Vec<VolumeReading>,
     },
 }
 
@@ -801,9 +1126,38 @@ impl ResourceGate {
     }
 
     /// Decide whether `class` may be dispatched with the work running on the
-    /// volume holding `volume_path`.
+    /// volume holding `volume_path`. Single-volume convenience wrapper over
+    /// [`Self::evaluate_for_volumes`].
     pub fn evaluate(&self, volume_path: &Path, class: ActionClass) -> GateDecision {
-        let snapshot = self.probe.probe(volume_path);
+        self.evaluate_for_volumes(std::slice::from_ref(&volume_path.to_path_buf()), class)
+    }
+
+    /// Decide whether `class` may be dispatched, probing **every** volume the
+    /// action would write to (design §4.1 "目标卷"; independent review F-5).
+    ///
+    /// All volumes must clear the release thresholds — the action is only as
+    /// safe as its worst write target — and the binding reading (the one with
+    /// the least headroom) is what the refusal carries as `snapshot`.
+    pub fn evaluate_for_volumes(&self, volumes: &[PathBuf], class: ActionClass) -> GateDecision {
+        let readings: Vec<VolumeReading> = volumes
+            .iter()
+            .map(|path| VolumeReading {
+                path: path.display().to_string(),
+                snapshot: self.probe.probe(path),
+            })
+            .collect();
+        let binding = readings
+            .iter()
+            .enumerate()
+            .min_by_key(|(_, reading)| {
+                (
+                    reading.snapshot.source_quality != SourceQuality::Available,
+                    reading.snapshot.volume_free_bytes,
+                )
+            })
+            .map(|(index, _)| index)
+            .unwrap_or(0);
+        let snapshot = readings[binding].snapshot;
         *self.last.lock().unwrap() = Some(snapshot);
         // Light actions are never gated: the gate exists for build-shaped work,
         // and gating reads would make an out-of-space machine unusable.
@@ -814,22 +1168,34 @@ impl ResourceGate {
                 snapshot,
             };
         }
-        if snapshot.source_quality == SourceQuality::Unavailable {
+        if readings
+            .iter()
+            .any(|reading| reading.snapshot.source_quality == SourceQuality::Unavailable)
+        {
+            let unreadable: Vec<String> = readings
+                .iter()
+                .filter(|reading| reading.snapshot.source_quality == SourceQuality::Unavailable)
+                .map(|reading| reading.path.clone())
+                .collect();
             return GateDecision::Refuse {
                 code: CODE_RESOURCE_INSUFFICIENT,
                 reason: format!(
-                    "heavy action refused before dispatch — {}: headroom cannot be \
-                     verified, so it is treated as insufficient (fail-closed). \
-                     Nothing was started.",
-                    snapshot.describe()
+                    "heavy action refused before dispatch — headroom cannot be verified \
+                     for {} (fail-closed). Nothing was started.",
+                    unreadable.join(", ")
                 ),
                 class,
-                tier: None,
+                tier: ResourceTier::Unknown,
                 snapshot,
+                volumes: readings,
             };
         }
         let tier = tier_for(&snapshot);
-        let free_ok = snapshot.volume_free_bytes >= HEAVY_RELEASE_FREE_BYTES;
+        let short_volumes: Vec<&VolumeReading> = readings
+            .iter()
+            .filter(|reading| reading.snapshot.volume_free_bytes < HEAVY_RELEASE_FREE_BYTES)
+            .collect();
+        let free_ok = short_volumes.is_empty();
         let commit_headroom_ok = snapshot.commit_free_bytes().is_some_and(|free| {
             (free as u128 * 100)
                 >= HEAVY_RELEASE_COMMIT_HEADROOM_PERCENT as u128
@@ -844,11 +1210,18 @@ impl ResourceGate {
         }
         let mut shortfalls = Vec::new();
         if !free_ok {
-            shortfalls.push(format!(
-                "volume free {} < {} required",
-                gib(snapshot.volume_free_bytes),
-                gib(HEAVY_RELEASE_FREE_BYTES)
-            ));
+            let listed: Vec<String> = short_volumes
+                .iter()
+                .map(|reading| {
+                    format!(
+                        "{} free {} < {} required",
+                        reading.path,
+                        gib(reading.snapshot.volume_free_bytes),
+                        gib(HEAVY_RELEASE_FREE_BYTES)
+                    )
+                })
+                .collect();
+            shortfalls.push(listed.join("; "));
         }
         if !commit_headroom_ok {
             shortfalls.push(format!(
@@ -870,17 +1243,20 @@ impl ResourceGate {
                 snapshot.describe()
             ),
             class,
-            tier: Some(tier),
+            tier,
             snapshot,
+            volumes: readings,
         }
     }
 }
 
 /// Run-level hard ceilings derived from a reading (design §4.7 / §11 裁决 4).
 ///
-/// `commit = min(80% × limit, limit − 4 GiB)`, CPU 80%, concurrency = cores.
-/// Unknown commit limit → no commit ceiling (the gate, not the kernel, is then
-/// the only defence — recorded rather than silently invented).
+/// `commit = min(cap, headroom − 1 GiB)` where the cap is the historical
+/// `min(80% × limit, limit − 4 GiB)` and the floor keeps light work able to
+/// spawn; CPU 80%; active processes `2 × cores + 8` (≥ 16). Unknown commit
+/// limit → no commit ceiling (the gate, not the kernel, is then the only
+/// defence — recorded rather than silently invented).
 pub fn default_job_limits(snapshot: &HostCapacitySnapshot) -> JobLimits {
     let commit_limit_bytes = (snapshot.commit_limit_bytes > 0)
         .then(|| {
@@ -888,7 +1264,20 @@ pub fn default_job_limits(snapshot: &HostCapacitySnapshot) -> JobLimits {
             let reserved = snapshot
                 .commit_limit_bytes
                 .saturating_sub(RUN_COMMIT_RESERVE_BYTES);
-            eighty.min(reserved)
+            let cap = eighty.min(reserved);
+            // The binding value answers "how much may this run still commit?" —
+            // assembly-time headroom minus the reserve, never below the floor,
+            // never above the cap (independent review F-4: the cap alone sat
+            // above the point where this host actually died).
+            let binding = snapshot
+                .commit_free_bytes()
+                .map(|headroom| {
+                    headroom
+                        .saturating_sub(RUN_COMMIT_HEADROOM_RESERVE_BYTES)
+                        .max(RUN_COMMIT_FLOOR_BYTES)
+                })
+                .unwrap_or(cap);
+            binding.min(cap)
         })
         // The reserve rule can floor the ceiling at zero (a machine whose whole
         // commit limit is the reserve): a zero ceiling would make the job
@@ -896,13 +1285,20 @@ pub fn default_job_limits(snapshot: &HostCapacitySnapshot) -> JobLimits {
         .filter(|value| *value > 0);
     JobLimits {
         commit_limit_bytes,
-        active_process: Some(
-            std::thread::available_parallelism()
-                .map(|n| n.get() as u32)
-                .unwrap_or(4),
-        ),
+        active_process: Some(run_active_process_limit()),
         cpu_rate_percent: Some(RUN_CPU_RATE_PERCENT),
     }
+}
+
+/// The run's active-process ceiling: `2 × cores + 8`, at least 16.
+pub fn run_active_process_limit() -> u32 {
+    let cores = std::thread::available_parallelism()
+        .map(|n| n.get() as u32)
+        .unwrap_or(4);
+    cores
+        .saturating_mul(RUN_ACTIVE_PROCESS_MULTIPLIER)
+        .saturating_add(RUN_ACTIVE_PROCESS_BASE)
+        .max(RUN_ACTIVE_PROCESS_MIN)
 }
 
 /// Render bytes as GiB with two decimals (audit text only).
@@ -917,6 +1313,23 @@ mod tests {
 
     struct StubProbe {
         snapshot: HostCapacitySnapshot,
+    }
+
+    /// A probe that answers differently per path — the multi-volume seam.
+    struct PerPathProbe {
+        cwd: PathBuf,
+        cwd_snapshot: HostCapacitySnapshot,
+        other_snapshot: HostCapacitySnapshot,
+    }
+
+    impl CapacityProbe for PerPathProbe {
+        fn probe(&self, path: &Path) -> HostCapacitySnapshot {
+            if path == self.cwd {
+                self.cwd_snapshot
+            } else {
+                self.other_snapshot
+            }
+        }
     }
 
     impl StubProbe {
@@ -1128,6 +1541,11 @@ mod tests {
             tier_for(&snapshot(40 * GIB, 100 * GIB, 71 * GIB)),
             ResourceTier::Watch
         );
+        // Unreadable readings are their own tier, never `hard` (review F-6).
+        assert_eq!(
+            tier_for(&HostCapacitySnapshot::unavailable()),
+            ResourceTier::Unknown
+        );
     }
 
     // ── decisions ───────────────────────────────────────────────────────
@@ -1155,7 +1573,7 @@ mod tests {
             } => {
                 assert_eq!(code, CODE_RESOURCE_INSUFFICIENT);
                 assert_eq!(class, ActionClass::Heavy);
-                assert_eq!(tier, Some(ResourceTier::Soft));
+                assert_eq!(tier, ResourceTier::Soft);
                 assert!(
                     reason.contains("commit headroom"),
                     "reason must name the shortfall: {reason}"
@@ -1216,7 +1634,7 @@ mod tests {
                 snapshot,
                 ..
             } => {
-                assert_eq!(tier, None);
+                assert_eq!(tier, ResourceTier::Unknown);
                 assert_eq!(snapshot.source_quality, SourceQuality::Unavailable);
                 assert!(
                     reason.contains("fail-closed"),
@@ -1239,7 +1657,7 @@ mod tests {
         else {
             panic!("expected refusal");
         };
-        assert_eq!(tier, Some(ResourceTier::ReclaimDirect));
+        assert_eq!(tier, ResourceTier::ReclaimDirect);
         let json = snapshot.to_json();
         assert_eq!(json["source_quality"], "available");
         assert_eq!(json["volume_free_bytes"], 3 * GIB);
@@ -1252,18 +1670,29 @@ mod tests {
 
     #[test]
     fn job_limits_use_the_eighty_percent_or_reserve_rule() {
-        // 30 GiB limit: 80% vs limit−4 GiB = 26 GiB → the 80% arm (integer
-        // math, so the expectation mirrors the formula exactly).
+        // 30 GiB limit with 8 GiB already committed: the cap is 80% = 24 GiB,
+        // and the binding value is the assembly-time headroom minus 1 GiB
+        // reserve = 21 GiB (review F-4 — a busy host cannot hand out the cap).
         let limits = default_job_limits(&snapshot(40 * GIB, 30 * GIB, 8 * GIB));
-        assert_eq!(limits.commit_limit_bytes, Some(30 * GIB / 100 * 80));
-        assert!(limits.commit_limit_bytes.unwrap() < 30 * GIB - RUN_COMMIT_RESERVE_BYTES);
+        assert_eq!(
+            limits.commit_limit_bytes,
+            Some(30 * GIB - 8 * GIB - RUN_COMMIT_HEADROOM_RESERVE_BYTES)
+        );
+        assert!(limits.commit_limit_bytes.unwrap() < 30 * GIB / 100 * 80);
         assert_eq!(limits.cpu_rate_percent, Some(RUN_CPU_RATE_PERCENT));
-        assert!(limits.active_process.is_some_and(|n| n >= 1));
+        assert_eq!(limits.active_process, Some(run_active_process_limit()));
 
-        // Large limit: the 80% arm wins (100 GiB → 80 vs 96).
+        // An idle host: the cap is the binding value (headroom − 1 GiB = 91 GiB
+        // is above the 80% arm at 80 GiB).
         assert_eq!(
             default_job_limits(&snapshot(40 * GIB, 100 * GIB, 8 * GIB)).commit_limit_bytes,
             Some(80 * GIB)
+        );
+        // A host that is nearly out of headroom: the ceiling collapses to the
+        // floor instead of the cap — a tool failure, not a dead machine.
+        assert_eq!(
+            default_job_limits(&snapshot(40 * GIB, 30 * GIB, 27 * GIB)).commit_limit_bytes,
+            Some(RUN_COMMIT_FLOOR_BYTES)
         );
         // Small limit: the reserve arm floors the ceiling at 0, which means
         // "no commit ceiling" (a zero ceiling would block every spawn).
@@ -1276,6 +1705,17 @@ mod tests {
             default_job_limits(&snapshot(40 * GIB, 0, 0)).commit_limit_bytes,
             None
         );
+        // The active-process ceiling leaves room for cargo's own default
+        // parallelism plus its children (review F-3).
+        let cores = std::thread::available_parallelism()
+            .map(|n| n.get() as u32)
+            .unwrap_or(4);
+        assert_eq!(
+            run_active_process_limit(),
+            (cores * RUN_ACTIVE_PROCESS_MULTIPLIER + RUN_ACTIVE_PROCESS_BASE)
+                .max(RUN_ACTIVE_PROCESS_MIN)
+        );
+        assert!(run_active_process_limit() > cores);
     }
 
     #[cfg(windows)]
@@ -1291,5 +1731,172 @@ mod tests {
         assert!(snapshot.commit_limit_bytes > 0);
         assert!(snapshot.volume_free_bytes <= snapshot.volume_total_bytes);
         assert!(snapshot.describe().contains("volume"));
+    }
+
+    // ── write targets (review F-5) ──────────────────────────────────────
+
+    #[cfg(windows)]
+    #[test]
+    fn write_targets_follow_the_real_corpus_shapes() {
+        let cwd = PathBuf::from(r"D:\CLI");
+        let cases: [(&str, &[&str]); 5] = [
+            ("cargo build --release", &[]),
+            (r"cd D:\CLI\orz; cargo test -p orz-host", &[r"D:\CLI\orz"]),
+            (
+                r"cargo build --target-dir D:\CLI\.gsa\cargo-target",
+                &[r"D:\CLI\.gsa\cargo-target"],
+            ),
+            (
+                r"cargo build --target-dir=D:\other\target",
+                &[r"D:\other\target"],
+            ),
+            (
+                "cmd /c \"cd /d C:\\builds\\orz && cargo test\"",
+                &[r"C:\builds\orz"],
+            ),
+        ];
+        for (command, expected) in cases {
+            let args = serde_json::json!({ "command": command });
+            let targets = write_targets("run_terminal_cmd", &args, &cwd);
+            assert_eq!(targets[0], cwd, "cwd is always the first target");
+            for want in expected {
+                assert!(
+                    targets.iter().any(|target| target == &PathBuf::from(want)),
+                    "command {command:?} must include {want}: {targets:?}"
+                );
+            }
+        }
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn write_targets_ignore_reads_and_null_redirection() {
+        let cwd = PathBuf::from(r"D:\CLI");
+        for command in [
+            r"grep -n cargo D:\other\Cargo.toml",
+            r"cargo test 2>$null",
+            r"dir > NUL",
+            r"echo hi >> nul",
+        ] {
+            let args = serde_json::json!({ "command": command });
+            assert_eq!(
+                write_targets("run_terminal_cmd", &args, &cwd),
+                vec![cwd.clone()],
+                "no real write target in {command:?}"
+            );
+        }
+        // A non-terminal tool never carries a command string.
+        assert_eq!(
+            write_targets("read_file", &serde_json::json!({"target_file": "x"}), &cwd),
+            vec![cwd]
+        );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn write_targets_capture_redirection_and_build_cache_env() {
+        let cwd = PathBuf::from(r"D:\CLI");
+        let args = serde_json::json!({
+            "command": r#"$env:CARGO_TARGET_DIR = "C:\cache\target"; echo hi > D:\logs\out.txt"#
+        });
+        let targets = write_targets("run_terminal_cmd", &args, &cwd);
+        assert!(
+            targets.contains(&PathBuf::from(r"C:\cache\target")),
+            "{targets:?}"
+        );
+        assert!(
+            targets.contains(&PathBuf::from(r"D:\logs\out.txt")),
+            "{targets:?}"
+        );
+    }
+
+    #[test]
+    fn any_short_write_target_volume_refuses_the_heavy_action() {
+        let cwd = PathBuf::from(".");
+        let elsewhere = PathBuf::from("..");
+        let probe = Arc::new(PerPathProbe {
+            cwd: cwd.clone(),
+            cwd_snapshot: HostCapacitySnapshot {
+                collected_at_ms: 1,
+                volume_free_bytes: 40 * GIB,
+                volume_total_bytes: 100 * GIB,
+                commit_limit_bytes: 32 * GIB,
+                commit_used_bytes: 4 * GIB,
+                source_quality: SourceQuality::Available,
+            },
+            other_snapshot: HostCapacitySnapshot {
+                collected_at_ms: 1,
+                volume_free_bytes: 3 * GIB,
+                volume_total_bytes: 100 * GIB,
+                commit_limit_bytes: 32 * GIB,
+                commit_used_bytes: 4 * GIB,
+                source_quality: SourceQuality::Available,
+            },
+        });
+        let gate = ResourceGate::new(probe);
+        // The session volume alone would sail through.
+        assert!(gate.evaluate(&cwd, ActionClass::Heavy).is_allowed());
+        // With the second write target in play the action is refused, and the
+        // refusal names the short volume.
+        match gate.evaluate_for_volumes(&[cwd.clone(), elsewhere.clone()], ActionClass::Heavy) {
+            GateDecision::Refuse {
+                reason,
+                volumes,
+                tier,
+                ..
+            } => {
+                assert_eq!(tier, ResourceTier::ReclaimDirect);
+                assert!(reason.contains("free"), "{reason}");
+                assert_eq!(volumes.len(), 2, "every probed volume is reported");
+                assert_eq!(volumes[1].path, elsewhere.display().to_string());
+                assert!(volumes[1].to_json()["readings"]["volume_free_bytes"] == 3 * GIB);
+            }
+            other => panic!("expected refusal, got {other:?}"),
+        }
+        // And the light path still passes on the same volumes.
+        assert!(
+            gate.evaluate_for_volumes(&[cwd, elsewhere], ActionClass::Light)
+                .is_allowed()
+        );
+    }
+
+    // ── payload bodies (review F-7) ─────────────────────────────────────
+
+    #[test]
+    fn here_string_bodies_are_not_command_syntax() {
+        let command = "cd D:\\CLI; @'\nimport json\nx = 1 > 0\n'@ | python -";
+        assert_eq!(
+            classify_command(command),
+            ActionClass::Light,
+            "a comparison inside a here-string body is payload, not a redirection"
+        );
+        // The header line still counts: a real redirection next to the opener
+        // keeps the command heavy.
+        assert_eq!(
+            classify_command("cat > D:\\out.txt <<EOF\nhello\nEOF"),
+            ActionClass::Heavy
+        );
+    }
+
+    #[test]
+    fn heredoc_bodies_are_not_command_syntax() {
+        let command = "python - <<'PY'\nprint(1 > 0)\nPY\necho done";
+        assert_eq!(classify_command(command), ActionClass::Light);
+        // The body carries the heavy program, not the command line.
+        assert_eq!(
+            classify_command("sh -c 'true' <<EOF\ncargo build\nEOF"),
+            ActionClass::Light
+        );
+    }
+
+    #[test]
+    fn unterminated_payload_markers_do_not_swallow_commands() {
+        // `<<` without a terminator must leave the text alone, so the cargo
+        // line after it is still classified (false negatives are the dangerous
+        // direction).
+        assert_eq!(
+            classify_command("echo a << b;\ncargo build"),
+            ActionClass::Heavy
+        );
     }
 }

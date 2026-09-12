@@ -761,10 +761,13 @@ pub(crate) async fn run_read_file(
     // rejected PowerShell-5 `>` output as "binary" because UTF-16LE text is
     // riddled with NUL bytes — the model then had to work around a file the
     // framework had just told it to write. Text-family extensions now try the
-    // mechanical decode chain FIRST (`util::encoding::sniff_text_bytes`: UTF-16
-    // BOM → UTF-8 → no-BOM UTF-16 heuristic → GB18030) and only fall through to
-    // the binary judgement when the bytes are not decodable text. Non-text
-    // families keep the old order, `BINARY_EXTENSIONS` first, unchanged.
+    // mechanical decode chain FIRST (`util::encoding::sniff_text_bytes`:
+    // UTF-16LE/BE BOM → no-BOM UTF-16 parity heuristic → NUL-free UTF-8) and
+    // only fall through to the binary judgement when the bytes are not
+    // decodable text. GB18030 deliberately stays on the *historical* path
+    // (`decode_text`, after the binary judgement): pulling it in front would
+    // turn "text extension + real binary bytes" from a rejection into mojibake.
+    // Non-text families keep the old order, `BINARY_EXTENSIONS` first, unchanged.
     let decoded = if crate::util::encoding::is_text_family_extension(&extension) {
         crate::util::encoding::sniff_text_bytes(&file_bytes)
     } else {

@@ -259,10 +259,32 @@ impl OrzHost {
     /// 生产装配点是 `orz-bin` 的 `-p` 路径与 `acp_server` 的 ACP 路径；测试
     /// 与嵌入式宿主不调用本方法 → 行为与本批之前逐字一致。
     pub fn with_host_resource_safety(mut self) -> Self {
+        self.install_resource_safety(None);
+        self
+    }
+
+    /// Test seam for the end-to-end "the tool's process tree really is inside
+    /// the bounded run job" check: same wiring as
+    /// [`OrzHost::with_host_resource_safety`], but the run ceilings are given
+    /// explicitly (a deliberately small commit ceiling is the only way to
+    /// observe kernel enforcement without a full-size machine).
+    pub fn with_host_resource_safety_limits(mut self, limits: xai_tty_utils::JobLimits) -> Self {
+        self.install_resource_safety(Some(limits));
+        self
+    }
+
+    /// Shared assembly: probe once, install the run job, wire the gate.
+    fn install_resource_safety(&mut self, limits_override: Option<xai_tty_utils::JobLimits>) {
         let probe = Arc::new(crate::resource_gate::SystemCapacityProbe);
         let snapshot = crate::resource_gate::CapacityProbe::probe(probe.as_ref(), &self.cwd);
-        let limits = crate::resource_gate::default_job_limits(&snapshot);
-        match xai_tty_utils::install_global_run_job(limits) {
+        let limits =
+            limits_override.unwrap_or_else(|| crate::resource_gate::default_job_limits(&snapshot));
+        let installed = if limits_override.is_some() {
+            xai_tty_utils::replace_global_run_job_for_tests(limits)
+        } else {
+            xai_tty_utils::install_global_run_job(limits)
+        };
+        match installed {
             Ok(job) => tracing::info!(
                 ceilings = %job.describe(),
                 "host resource ceilings installed (0z S1)"
@@ -279,7 +301,6 @@ impl OrzHost {
             "host resource probe installed (0z S1)"
         );
         self.resource_gate = Some(crate::resource_gate::ResourceGate::new(probe));
-        self
     }
 
     /// The injected resource gate, when one is wired.
@@ -774,18 +795,23 @@ impl OrzHost {
         // 树杀落在 S2（§4.6/§4.8）。
         if let Some(gate) = &self.resource_gate {
             let class = crate::resource_gate::classify_action(name, &args);
+            // Review F-5: the gate judges every volume the action would *write*
+            // to (cwd plus any static write target), not only the session cwd.
+            let targets = crate::resource_gate::write_targets(name, &args, &self.cwd);
             if let crate::resource_gate::GateDecision::Refuse {
                 code,
                 reason,
                 class,
                 tier,
                 snapshot,
-            } = gate.evaluate(&self.cwd, class)
+                volumes,
+            } = gate.evaluate_for_volumes(&targets, class)
             {
                 tracing::warn!(
                     tool = name,
                     action_class = class.as_str(),
-                    tier = tier.map(|t| t.as_str()).unwrap_or("unavailable"),
+                    tier = tier.as_str(),
+                    write_targets = volumes.len(),
                     "pre-dispatch resource gate refused a heavy action"
                 );
                 return Ok(ToolResult {
@@ -796,8 +822,12 @@ impl OrzHost {
                         "error": code,
                         "phase": "pre_issue",
                         "action_class": class.as_str(),
-                        "tier": tier.map(|t| t.as_str()).unwrap_or("unknown"),
+                        "tier": tier.as_str(),
                         "readings": snapshot.to_json(),
+                        "write_targets": volumes
+                            .iter()
+                            .map(crate::resource_gate::VolumeReading::to_json)
+                            .collect::<Vec<_>>(),
                     })),
                     ..Default::default()
                 });
@@ -1208,6 +1238,36 @@ impl LoopHost for OrzHost {
             return Err(ToolError::ExecutionFailed("empty test command".into()));
         }
         let timeout = runner.timeout.unwrap_or(orz_loop::host::RUN_TESTS_TIMEOUT);
+        // FUS-HOST-RESOURCE-SAFETY §4.1（2026-09-12 独立复核 F-2）：`run_tests`
+        // 是 host-owned 固定命令路径，不经过 `call_tool_inner` 汇点——此前它是
+        // 唯一「被判重档却两侧（门 / 硬上限）都不覆盖」的工具。这里补上门：
+        // 判据、读数与拒绝文案与汇点同口径（同一分档器 + 同一读探针）。
+        if let Some(gate) = &self.resource_gate {
+            // The runner command is a command string like any other: classify
+            // and locate its write targets through the same mechanical面.
+            let synthetic = serde_json::json!({ "command": runner.command.join(" ") });
+            let class = crate::resource_gate::classify_action("run_terminal_cmd", &synthetic);
+            let targets =
+                crate::resource_gate::write_targets("run_terminal_cmd", &synthetic, &self.cwd);
+            if let crate::resource_gate::GateDecision::Refuse { reason, tier, .. } =
+                gate.evaluate_for_volumes(&targets, class)
+            {
+                tracing::warn!(
+                    runner = %runner.command.join(" "),
+                    tier = tier.as_str(),
+                    "pre-dispatch resource gate refused the host test runner"
+                );
+                return Ok(orz_loop::host::TestRunResult {
+                    output: format!("[run_tests] {reason}"),
+                    exit_code: Some(1),
+                    timed_out: false,
+                    full_output_path: None,
+                    output_encoding: None,
+                    workspace_delta: Vec::new(),
+                    workspace_delta_truncated: false,
+                });
+            }
+        }
         // RT-003 (2026-08-11): workspace delta — snapshot the worktree
         // metadata before the run; after the run the diff (added/modified/
         // deleted, capped) is the audit trace of the test's file side
@@ -1243,29 +1303,32 @@ impl LoopHost for OrzHost {
         let mut child = cmd
             .spawn()
             .map_err(|e| ToolError::ExecutionFailed(format!("test runner spawn: {e}")))?;
-        // Stability fix (2026-08-07, design review D2 #3/#4): bind the child
-        // into a kill-on-close Job Object. This closes the original hang
-        // mechanism end-to-end: when orz ITSELF is killed (the harness's
-        // timeout path), the job handle closes with the process and the
-        // kernel terminates the whole contained tree — the orphaned pytest
-        // that held our capture pipes and blocked the harness forever (the
-        // 52-minute forth hang) cannot survive orz. Assigning after spawn
-        // (running) is a millisecond window vs CREATE_SUSPENDED, accepted
-        // and recorded; descendants spawned after assignment inherit the job.
-        // Non-Windows (or job creation failure): Option::None falls back to
-        // the TaskKill tree-kill path below.
-        let supervisor: Option<orz_assurance::sandbox::job_object::JobObjectSupervisor> =
-            orz_assurance::sandbox::job_object::JobObjectSupervisor::new().ok();
-        if let (Some(sup), Some(pid)) = (supervisor.as_ref(), child.id())
-            && let Err(e) = sup.assign_process(pid)
+        // Stability fix (2026-08-07, design review D2 #3/#4) + FUS-HOST-
+        // RESOURCE-SAFETY §4.7（复核 F-2）：bind the child into the **run's**
+        // job hierarchy through the shared `ProcessGroup` — root job (run-wide
+        // commit / concurrency / CPU ceilings) first, then the per-call job
+        // (`KILL_ON_JOB_CLOSE`). This closes the original hang mechanism
+        // end-to-end: when orz ITSELF is killed (the harness's timeout path),
+        // the job handle closes with the process and the kernel terminates the
+        // whole contained tree — the orphaned pytest that held our capture pipes
+        // and blocked the harness forever (the 52-minute forth hang) cannot
+        // survive orz. Assigning after spawn (running) is a millisecond window
+        // vs CREATE_SUSPENDED, accepted and recorded; descendants spawned after
+        // assignment inherit both jobs.
+        //
+        // Before 2026-09-12 this used a separate `JobObjectSupervisor` that
+        // carried `KILL_ON_JOB_CLOSE` only, so the test runner was the one heavy
+        // path outside the §4.7 ceilings. Non-Windows (or job creation failure):
+        // `None` falls back to the TaskKill tree-kill path below.
+        let mut test_group = xai_tty_utils::ProcessGroup::new().ok();
+        if let Some(group) = test_group.as_mut()
+            && let Err(e) = group.attach(&child)
         {
             tracing::warn!(
-                "run_tests: job-object assignment failed ({e}); \
-                            falling back to TaskKill on timeout"
+                error = %e,
+                "run_tests: child NOT associated with the run job — run-wide ceilings do \
+                 not cover this test run; falling back to TaskKill on timeout"
             );
-            // Note: `supervisor` is deliberately not rebound here — the
-            // assignment failure leaves a live job with no members, which is
-            // harmless to drop; the TaskKill path covers the timeout case.
         }
         let stdout = child.stdout.take().ok_or_else(|| {
             ToolError::ExecutionFailed("test runner stdout pipe unreadable".into())
@@ -1293,6 +1356,11 @@ impl LoopHost for OrzHost {
                 // orphans and keep `read_capped` blocked on EOF forever (the
                 // 52-minute forth hang). Kill the whole tree on Windows via
                 // TaskKill; unix keeps the plain kill (recorded limitation).
+                // The process-group kill runs first when the child is in the
+                // run hierarchy (terminates the whole job tree).
+                if let Some(group) = test_group.as_ref() {
+                    let _ = group.kill();
+                }
                 kill_process_tree(&mut child).await;
                 // RT-003: the timed-out run may still have written files —
                 // record what it changed before returning.
@@ -1773,6 +1841,16 @@ mod tests {
 
     // ── FUS-HOST-RESOURCE-SAFETY §4.1（0z S1）汇点接线 ─────────────────
 
+    /// Serializes the tests that install/replace the process-wide run job (the
+    /// slot is process-wide by design).
+    static RESOURCE_SAFETY_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    fn resource_safety_lock() -> std::sync::MutexGuard<'static, ()> {
+        RESOURCE_SAFETY_LOCK
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner())
+    }
+
     /// 判据 1/2 的汇点面：预检门在 `call_tool_inner` 里于**任何进程启动之前**
     /// 拒绝重活，并回传读数 + 动作分档；轻活即使读数不可得也照常放行。
     #[tokio::test]
@@ -1908,10 +1986,65 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    /// 独立复核 F-2：host-owned `run_tests` 路径同样过预检门——读数不足时固定
+    /// 测试命令**不启动**，并以与汇点同口径的回执（读数 + "Nothing was started"）
+    /// 反馈。这条面此前是"被判重档却不受门覆盖"的缺口（评测 harness 经
+    /// `ORZ_TEST_RUNNER` 可达）。
+    #[tokio::test]
+    async fn run_tests_is_gated_like_any_heavy_action() {
+        use crate::resource_gate::{
+            CapacityProbe, GIB, HostCapacitySnapshot, ResourceGate, SourceQuality,
+        };
+
+        struct Fixed(HostCapacitySnapshot);
+        impl CapacityProbe for Fixed {
+            fn probe(&self, _path: &std::path::Path) -> HostCapacitySnapshot {
+                self.0
+            }
+        }
+        let dir = test_dir();
+        let runner = orz_loop::host::TestRunner {
+            command: vec!["cargo".to_string(), "test".to_string()],
+            timeout: Some(std::time::Duration::from_secs(5)),
+            env: Vec::new(),
+        };
+        let host = OrzHost::new(
+            JournalRecorder::new(dir.clone()),
+            &dir,
+            WorkspaceTrust::ObservedTrusted,
+        )
+        .unwrap()
+        .with_test_runner(Some(runner))
+        .with_resource_gate(ResourceGate::new(Arc::new(Fixed(HostCapacitySnapshot {
+            collected_at_ms: 7,
+            volume_free_bytes: GIB,
+            volume_total_bytes: 100 * GIB,
+            commit_limit_bytes: 32 * GIB,
+            commit_used_bytes: 30 * GIB,
+            source_quality: SourceQuality::Available,
+        }))));
+
+        let result = host.run_tests().await.expect("refusal is a test result");
+        assert_eq!(result.exit_code, Some(1));
+        assert!(!result.timed_out, "a refusal is not a timeout");
+        assert!(
+            result.output.contains("refused before dispatch"),
+            "{}",
+            result.output
+        );
+        assert!(
+            result.output.contains("Nothing was started"),
+            "{}",
+            result.output
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     /// F 的装配面（真机）：`with_host_resource_safety` 用真实探针装上限——本机
     /// 读数可得、且内核读回至少一条限项（判据 12 的 S1 半段）。
     #[tokio::test]
     async fn host_resource_safety_installs_real_probe_and_ceilings() {
+        let _guard = resource_safety_lock();
         let dir = test_dir();
         let host = OrzHost::new(
             JournalRecorder::new(dir.clone()),
@@ -1940,6 +2073,60 @@ mod tests {
             snapshot.is_none()
                 || snapshot.unwrap().source_quality
                     == crate::resource_gate::SourceQuality::Available
+        );
+        // Review F-1: the ceilings live on the **run** job (aggregate), and the
+        // readback the assembly face publishes is that same job.
+        assert!(
+            job.readback().is_enforced(),
+            "the run job must be the enforcement point: {}",
+            job.describe()
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// 判据 12 的端到端面（独立复核 F-1/F-9）：一次**轻档**工具调用（不受预检门
+    /// 限制）经终端 spawn 拉起子进程，子进程的超额提交必须被 **run 级** job 拒绝
+    /// —— 证明这条生产 spawn 链真的把工具进程树挂进了带限 job，而不是只有单测里
+    /// 手工 attach 的那条路径。
+    #[cfg(windows)]
+    #[tokio::test]
+    async fn tool_spawn_is_really_bounded_by_the_run_job() {
+        let _guard = resource_safety_lock();
+        let dir = test_dir();
+        let host = OrzHost::new(
+            JournalRecorder::new(dir.clone()),
+            &dir,
+            WorkspaceTrust::ObservedTrusted,
+        )
+        .unwrap()
+        // A ceiling small enough to observe: the per-call job carries none, so a
+        // refusal can only come from the run job.
+        .with_host_resource_safety_limits(xai_tty_utils::JobLimits {
+            commit_limit_bytes: Some(300 * 1024 * 1024),
+            active_process: None,
+            cpu_rate_percent: None,
+        });
+        let result = host
+            .call_tool(
+                "run_terminal_cmd",
+                serde_json::json!({
+                    // `python -c` is a conditional program without a build word,
+                    // so the call classifies Light and the gate never refuses it
+                    // — exactly the shape that has to be bounded by the kernel.
+                    // (Single quotes on purpose: the tool runs this through
+                    // PowerShell, which would expand a `$name` before the inner
+                    // interpreter ever sees it.)
+                    "command": "python -c 'b = bytearray(1073741824)'",
+                    "description": "proxy: end-to-end job ceiling check"
+                }),
+                "c-e2e-job",
+            )
+            .await
+            .expect("light call returns a tool result");
+        assert!(
+            result.output.contains("MemoryError"),
+            "the run job must bound the tool's child; output was: {}",
+            result.output
         );
         let _ = std::fs::remove_dir_all(&dir);
     }

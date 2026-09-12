@@ -46,7 +46,8 @@ pub mod runtime;
 
 mod resource_job;
 pub use resource_job::{
-    JobLimits, JobReadback, RunResourceJob, global_run_job, install_global_run_job,
+    JobLimits, JobReadback, RunResourceJob, attach_failure_count, global_run_job,
+    install_global_run_job, record_attach_failure, replace_global_run_job_for_tests,
 };
 
 // ---------------------------------------------------------------------------
@@ -383,19 +384,20 @@ impl ProcessGroup {
     /// Create a per-call job (Windows) / process-group handle (Unix) with the
     /// historical semantics: `KILL_ON_JOB_CLOSE` on Windows, nothing on Unix.
     ///
-    /// FUS-HOST-RESOURCE-SAFETY §4.7 (0z S1): when a run-level
-    /// [`RunResourceJob`] has been installed (production assembly, see
-    /// [`install_global_run_job`]), the new job is created carrying that run's
-    /// commit / concurrency / CPU ceilings, so the kernel enforces them on this
-    /// call's whole process tree. See the module docs for why the ceilings sit
-    /// on the per-call job rather than on a nested run job.
+    /// FUS-HOST-RESOURCE-SAFETY §4.7 (0z S1, two-level form restored 2026-09-12):
+    /// the run's ceilings live on the run-level [`RunResourceJob`] installed at
+    /// assembly ([`install_global_run_job`]); this per-call job carries the
+    /// teardown granularity, and [`Self::attach`] first associates the child with
+    /// the run job, then with this one (root first — see the `resource_job`
+    /// module docs). Explicit `limits` still land on the call job for callers
+    /// that want a tighter bound for one call.
     pub fn new() -> io::Result<Self> {
         Self::new_with_limits(JobLimits::default())
     }
 
-    /// Create a per-call job. Explicit `limits` win; otherwise the installed
-    /// run ceilings apply (S1 uses the run-level decision; this is also the
-    /// seam for a per-call override).
+    /// Create a per-call job. Explicit `limits` are applied to this job (a
+    /// per-call tightening); with no explicit limits the job carries only
+    /// `KILL_ON_JOB_CLOSE` and the run-level ceilings come from the run job.
     pub fn new_with_limits(limits: JobLimits) -> io::Result<Self> {
         #[cfg(unix)]
         {
@@ -406,34 +408,50 @@ impl ProcessGroup {
         {
             use windows::Win32::Foundation::CloseHandle;
 
-            // One run-level decision, applied to every call job (module docs):
-            // explicit limits win, otherwise the installed run ceilings apply.
-            let effective = if limits.is_empty() {
-                crate::resource_job::global_run_job()
-                    .map(|job| job.limits())
-                    .unwrap_or(limits)
-            } else {
-                limits
-            };
             let job = crate::resource_job::windows_create_job()?;
-            if let Err(e) = crate::resource_job::apply_limits_to_job(job, &effective) {
-                let _ = unsafe { CloseHandle(job) };
-                return Err(e);
+            // `windows_create_job` already set KILL_ON_JOB_CLOSE; only explicit
+            // per-call limits are added here.
+            if !limits.is_empty() {
+                if let Err(e) = crate::resource_job::apply_limits_to_job(job, &limits) {
+                    let _ = unsafe { CloseHandle(job) };
+                    return Err(e);
+                }
             }
             Ok(Self { job })
         }
     }
 
-    /// Read back the ceilings this call job carries
-    /// (FUS-HOST-RESOURCE-SAFETY §4.7 — the mechanical "is it really set" face).
+    /// Read back the ceilings **actually in force** for this call's tree: the
+    /// explicit per-call limits when there are any, otherwise the run-level
+    /// ceilings (FUS-HOST-RESOURCE-SAFETY §4.7 — the mechanical "is it really
+    /// set" face).
     #[cfg(windows)]
     pub fn readback_limits(&self) -> io::Result<crate::resource_job::JobReadback> {
+        let call = crate::resource_job::readback_job(self.job)?;
+        if call.is_enforced() {
+            return Ok(call);
+        }
+        Ok(crate::resource_job::global_run_job()
+            .map(|job| job.readback())
+            .unwrap_or_default())
+    }
+
+    /// Read back only what **this call job** carries (no run-level fallback) —
+    /// the face that shows the ceilings are *not* duplicated per call.
+    #[cfg(windows)]
+    pub fn readback_call_job_limits(&self) -> io::Result<crate::resource_job::JobReadback> {
         crate::resource_job::readback_job(self.job)
     }
 
     /// No-op on non-Windows (no kernel job ceilings available).
     #[cfg(not(windows))]
     pub fn readback_limits(&self) -> io::Result<crate::resource_job::JobReadback> {
+        Ok(crate::resource_job::JobReadback::default())
+    }
+
+    /// No-op on non-Windows (no kernel job ceilings available).
+    #[cfg(not(windows))]
+    pub fn readback_call_job_limits(&self) -> io::Result<crate::resource_job::JobReadback> {
         Ok(crate::resource_job::JobReadback::default())
     }
 
@@ -472,11 +490,28 @@ impl ProcessGroup {
                 unsafe { OpenProcess(PROCESS_SET_QUOTA | PROCESS_TERMINATE, false, pid) }
                     .map_err(|e| io::Error::other(format!("OpenProcess({pid}): {e}")))?;
 
+            // Root first, then the call job (Nested Jobs: assign to the job at
+            // the root of the hierarchy, then a subset to the child job). The
+            // run job carries the run-wide ceilings; this job carries teardown.
+            // A run-job failure is counted and logged, not fatal: the call job —
+            // the historical behaviour — still gets its chance.
+            if let Some(run) = crate::resource_job::global_run_job()
+                && let Err(e) = run.assign_process_handle(process_handle)
+            {
+                // No logging dependency in this crate: count it (the spawn
+                // paths log the attach error they get back from here) so the
+                // failure still has a mechanical face (review F-9).
+                crate::resource_job::record_attach_failure();
+                let _ = e;
+            }
+
             let assign_result = unsafe { AssignProcessToJobObject(self.job, process_handle) };
             let _ = unsafe { CloseHandle(process_handle) };
 
-            assign_result
-                .map_err(|e| io::Error::other(format!("AssignProcessToJobObject({pid}): {e}")))
+            assign_result.map_err(|e| {
+                crate::resource_job::record_attach_failure();
+                io::Error::other(format!("AssignProcessToJobObject({pid}): {e}"))
+            })
         }
     }
 

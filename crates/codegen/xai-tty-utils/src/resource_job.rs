@@ -15,26 +15,35 @@
 //! | CPU rate | `JOB_OBJECT_CPU_RATE_CONTROL_HARD_CAP` | per-scheduling-interval CPU ceiling |
 //! | tree teardown | `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE` | no orphans when orz dies (design §4.2) |
 //!
-//! # Scope: per tool call, decided per run (S1 finding, 2026-09-12)
+//! # Two levels, root first (design §4.2 item 1 / §4.7; restored 2026-09-12)
 //!
-//! Design §4.7 described two levels — one run-level job carrying the ceilings
-//! plus one per-call job nested inside it. The nesting half does not exist on
-//! this platform in the form we need: `AssignProcessToJobObject(job, job)`
-//! returns `ERROR_INVALID_HANDLE` (reproduced), and the documented nesting
-//! routes are implicit rather than explicit — a job nested in another job is
-//! created by a process that *is itself* in the outer job. That would require
-//! putting `orz.exe` into the job, which caps orz's own commit and lets the
-//! job's `KILL_ON_JOB_CLOSE` kill the agent — strictly worse than the failure
-//! it prevents (§4.8 rejected per-process limits for the same class of reason).
+//! One **run-level** job carries the ceilings and lives as long as the process
+//! ([`install_global_run_job`]); every **tool call** gets its own job carrying
+//! `KILL_ON_JOB_CLOSE` (the tree-teardown granularity). A spawned tool process
+//! is assigned to the run job **first** and to its call job **second** — the
+//! order Microsoft documents for building a valid hierarchy:
 //!
-//! So S1 enforces the ceilings on **every per-call job** while keeping
-//! **one** run-level decision: [`install_global_run_job`] takes the ceilings
-//! once, proves the kernel accepts them (read-back, §6 判据 12), and every
-//! [`crate::ProcessGroup`] created afterwards carries them. One heavy call —
-//! the shape of both 2026-09-12 incidents — is bounded exactly as designed.
-//! The residual (N *concurrent* calls each get their own ceiling rather than
-//! one shared aggregate) is registered for S2, where the process-tree
-//! lifecycle (design §4.2/B) owns the hierarchy question.
+//! > To ensure that the job hierarchy is valid, first assign all processes to
+//! > the job at the root of the hierarchy, then assign a subset of processes to
+//! > the immediate child job object, and so on.
+//! > — Nested Jobs, learn.microsoft.com/windows/win32/procthread/nested-jobs
+//!
+//! Nesting is a Windows 8+ property of *process assignment*, not of linking two
+//! job handles: "A process can be associated with more than one job in a
+//! hierarchy of nested jobs" (Job Objects page). S1 originally read
+//! `AssignProcessToJobObject(job, job) -> ERROR_INVALID_HANDLE` as "nesting is
+//! unavailable"; that call passes a **job** handle where a **process** handle
+//! belongs, so it said nothing about nesting. The independent review
+//! (`docs/audits/0Z_S1_INDEPENDENT_REVIEW_2026-09-12.md`, F-1) reproduced the
+//! correct route: assign to a plain job, then to a ceiling-carrying job, and
+//! the ceiling still refuses an over-commit.
+//!
+//! Why the root level matters (Microsoft's wording): `JOB_OBJECT_LIMIT_JOB_MEMORY`
+//! "causes all processes associated with the job to limit the job-wide sum of
+//! their committed memory". With the ceilings on the run job the bound is the
+//! **run's** aggregate — N concurrent tool calls share one ceiling instead of
+//! each holding a full copy — and the CPU-rate and active-process limits become
+//! run-wide as well. The per-call job keeps deciding *when* a tree dies.
 //!
 //! **A job cannot bound disk.** Volume headroom stays with the pre-dispatch
 //! gate and the reclaim ladder (design §4.7 盘侧例外).
@@ -44,7 +53,8 @@
 //! `enforced: false` — an honest reading, never a silent claim of enforcement.
 
 use std::io;
-use std::sync::{Arc, OnceLock};
+use std::sync::atomic::{AtomicU64, Ordering as AtomicOrdering};
+use std::sync::{Arc, Mutex};
 
 /// Kernel-enforced ceiling for tool process trees.
 ///
@@ -105,22 +115,34 @@ impl JobReadback {
     }
 }
 
-/// The run's ceiling decision plus the kernel's read-back of it.
+/// The run's **root job**: it holds the ceilings for the whole run and its
+/// handle is the kernel's reference for the run's process hierarchy.
+///
+/// The handle lives as long as the process (the global slot below), so
+/// `KILL_ON_JOB_CLOSE` on this job is the crash-path teardown of design §4.2:
+/// however orz dies — including `abort()`, which runs no destructors — closing
+/// the handle terminates every tool process still associated with the run.
 pub struct RunResourceJob {
     limits: JobLimits,
     readback: JobReadback,
+    #[cfg(windows)]
+    job: windows::Win32::Foundation::HANDLE,
 }
 
+#[cfg(windows)]
+unsafe impl Send for RunResourceJob {}
+#[cfg(windows)]
+unsafe impl Sync for RunResourceJob {}
+
 impl RunResourceJob {
-    /// Install the ceilings and read back what the kernel accepted.
+    /// Install the run's root job: `KILL_ON_JOB_CLOSE` + the ceilings, then read
+    /// back what the kernel accepted (design §6 判据 12).
     ///
-    /// The ceilings themselves live on the per-call jobs ([`crate::ProcessGroup`]);
-    /// this handle is the run-level decision + its proof. An axis the kernel
-    /// refuses shows up as `None` in [`Self::readback`], so `is_kernel_enforced`
-    /// never over-claims.
+    /// An axis the kernel refuses shows up as `None` in [`Self::readback`], so
+    /// `is_kernel_enforced` never over-claims. The handle is kept open: it is the
+    /// root of the run's job hierarchy and the ceilings' enforcement point.
     pub fn install(limits: JobLimits) -> io::Result<Arc<Self>> {
-        let readback = probe_readback(&limits)?;
-        Ok(Arc::new(Self { limits, readback }))
+        inspect_run_job(limits)
     }
 
     /// The ceilings this run decided on.
@@ -146,49 +168,164 @@ impl RunResourceJob {
             self.is_kernel_enforced()
         )
     }
+
+    /// Assign an already-associated process handle to the run's root job.
+    ///
+    /// Contract (Nested Jobs): the caller assigns to the root **before** the
+    /// per-call job, so the per-call job is always a subset of the root.
+    #[cfg(windows)]
+    pub(crate) fn assign_process_handle(
+        &self,
+        process: windows::Win32::Foundation::HANDLE,
+    ) -> io::Result<()> {
+        assign_handle_to_job(self.job, process)
+    }
+
+    /// Is `pid` associated with the run's root job? The mechanical face of the
+    /// end-to-end test (design §6 判据 12: the tree really is inside the job).
+    #[cfg(windows)]
+    pub fn contains_process(&self, pid: u32) -> io::Result<bool> {
+        process_in_job(self.job, pid)
+    }
+
+    /// Non-Windows: no kernel job, so nothing is ever contained.
+    #[cfg(not(windows))]
+    pub fn contains_process(&self, _pid: u32) -> io::Result<bool> {
+        Ok(false)
+    }
 }
 
-static GLOBAL_RUN_JOB: OnceLock<Arc<RunResourceJob>> = OnceLock::new();
+#[cfg(windows)]
+impl Drop for RunResourceJob {
+    fn drop(&mut self) {
+        // Closing the handle is what fires `KILL_ON_JOB_CLOSE`. Production keeps
+        // the run job in the global slot for the process lifetime, so this runs
+        // at process exit (or when a test replaces the handle).
+        let _ = unsafe { windows::Win32::Foundation::CloseHandle(self.job) };
+    }
+}
 
-/// The process-wide run ceiling decision, when one was installed.
+/// The process-wide root job, when one was installed. `Mutex<Option<_>>` rather
+/// than `OnceLock` so the test seam below can replace it; the production path
+/// installs exactly once.
+static GLOBAL_RUN_JOB: Mutex<Option<Arc<RunResourceJob>>> = Mutex::new(None);
+
+fn global_slot() -> std::sync::MutexGuard<'static, Option<Arc<RunResourceJob>>> {
+    GLOBAL_RUN_JOB
+        .lock()
+        .unwrap_or_else(|poison| poison.into_inner())
+}
+
+/// The process-wide run ceilings, when one was installed.
 ///
 /// orz serves one run per process (the `-p` and ACP paths both build the host
 /// once at assembly), so process lifetime is the run lifetime this handle
-/// tracks. Every [`crate::ProcessGroup`] created afterwards carries these
-/// ceilings — see [`crate::ProcessGroup::new`].
+/// tracks. Every [`crate::ProcessGroup`] attaches its child to this job.
 pub fn global_run_job() -> Option<Arc<RunResourceJob>> {
-    GLOBAL_RUN_JOB.get().cloned()
+    global_slot().clone()
 }
 
 /// Install the process-wide ceilings. First caller wins (later calls return the
 /// existing handle): the ceilings are a run-level contract, not a per-call
 /// tuning knob.
 pub fn install_global_run_job(limits: JobLimits) -> io::Result<Arc<RunResourceJob>> {
-    if let Some(existing) = GLOBAL_RUN_JOB.get() {
+    let mut slot = global_slot();
+    if let Some(existing) = slot.as_ref() {
         return Ok(existing.clone());
     }
     let job = RunResourceJob::install(limits)?;
-    let _ = GLOBAL_RUN_JOB.set(job.clone());
+    *slot = Some(job.clone());
     Ok(job)
+}
+
+/// Replace the process-wide ceilings — the **test seam** for suites that need a
+/// deliberately small ceiling to observe enforcement.
+///
+/// Dropping the previous job closes its handle, which (by `KILL_ON_JOB_CLOSE`)
+/// terminates any process still associated with it. Production code must not
+/// call this; `install_global_run_job` is the only production entry point.
+pub fn replace_global_run_job_for_tests(limits: JobLimits) -> io::Result<Arc<RunResourceJob>> {
+    let job = RunResourceJob::install(limits)?;
+    let mut slot = global_slot();
+    *slot = Some(job.clone());
+    Ok(job)
+}
+
+/// How many times a spawn path failed to put its child into the run's job —
+/// the mechanical visibility face for "the ceilings are not in force here"
+/// (independent review F-9). A failure is never silent, only counted.
+static ATTACH_FAILURES: AtomicU64 = AtomicU64::new(0);
+
+/// Count one failed attach (called by the spawn paths that swallow the error).
+pub fn record_attach_failure() {
+    ATTACH_FAILURES.fetch_add(1, AtomicOrdering::Relaxed);
+}
+
+/// Total attach failures observed in this process (observation face / S2).
+pub fn attach_failure_count() -> u64 {
+    ATTACH_FAILURES.load(AtomicOrdering::Relaxed)
 }
 
 // ---------------------------------------------------------------------------
 // Windows implementation
 // ---------------------------------------------------------------------------
 
-/// Create a job with `KILL_ON_JOB_CLOSE` + `limits` and read back what stuck.
 #[cfg(windows)]
-fn probe_readback(limits: &JobLimits) -> io::Result<JobReadback> {
-    let job = windows_create_job()?;
-    let applied = apply_limits_to_job(job, limits);
-    let readback = applied.and_then(|()| readback_job(job));
-    let _ = unsafe { windows::Win32::Foundation::CloseHandle(job) };
-    readback
+fn assign_handle_to_job(
+    job: windows::Win32::Foundation::HANDLE,
+    process: windows::Win32::Foundation::HANDLE,
+) -> io::Result<()> {
+    use windows::Win32::System::JobObjects::AssignProcessToJobObject;
+
+    unsafe { AssignProcessToJobObject(job, process) }
+        .map_err(|e| io::Error::other(format!("AssignProcessToJobObject(run): {e}")))
 }
 
+#[cfg(windows)]
+fn process_in_job(job: windows::Win32::Foundation::HANDLE, pid: u32) -> io::Result<bool> {
+    use windows::Win32::Foundation::CloseHandle;
+    use windows::Win32::System::JobObjects::IsProcessInJob;
+    use windows::Win32::System::Threading::{OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION};
+
+    let process = unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid) }
+        .map_err(|e| io::Error::other(format!("OpenProcess({pid}) for job query: {e}")))?;
+    let mut inside = windows::core::BOOL::default();
+    let result = unsafe { IsProcessInJob(process, Some(job), &mut inside) };
+    let _ = unsafe { CloseHandle(process) };
+    result.map_err(|e| io::Error::other(format!("IsProcessInJob({pid}): {e}")))?;
+    Ok(inside.as_bool())
+}
+
+/// Create the run's root job (`KILL_ON_JOB_CLOSE` + ceilings) and keep it.
+#[cfg(windows)]
+fn inspect_run_job(limits: JobLimits) -> io::Result<Arc<RunResourceJob>> {
+    let job = windows_create_job()?;
+    if let Err(e) = apply_limits_to_job(job, &limits) {
+        let _ = unsafe { windows::Win32::Foundation::CloseHandle(job) };
+        return Err(e);
+    }
+    let readback = match readback_job(job) {
+        Ok(readback) => readback,
+        Err(e) => {
+            let _ = unsafe { windows::Win32::Foundation::CloseHandle(job) };
+            return Err(e);
+        }
+    };
+    Ok(Arc::new(RunResourceJob {
+        limits,
+        readback,
+        job,
+    }))
+}
+
+/// Linux has no job object without cgroups (design §3.4): record the intent and
+/// report honestly that nothing is kernel-enforced.
 #[cfg(not(windows))]
-fn probe_readback(_limits: &JobLimits) -> io::Result<JobReadback> {
-    Ok(JobReadback::default())
+fn inspect_run_job(limits: JobLimits) -> io::Result<Arc<RunResourceJob>> {
+    Ok(Arc::new(RunResourceJob {
+        limits,
+        readback: JobReadback::default(),
+    }))
 }
 
 #[cfg(windows)]
@@ -340,6 +477,17 @@ pub(crate) fn readback_job(job: windows::Win32::Foundation::HANDLE) -> io::Resul
 mod tests {
     use super::*;
 
+    /// Serializes every test that installs/replaces the process-wide run job or
+    /// spawns a bounded child: the slot is process-wide by design, so parallel
+    /// tests would otherwise observe each other's ceilings.
+    static TOPOLOGY_LOCK: Mutex<()> = Mutex::new(());
+
+    fn topology_lock() -> std::sync::MutexGuard<'static, ()> {
+        TOPOLOGY_LOCK
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner())
+    }
+
     #[test]
     fn empty_limits_describe_unlimited() {
         let limits = JobLimits::default();
@@ -368,6 +516,7 @@ mod tests {
     #[cfg(windows)]
     #[test]
     fn windows_job_limits_are_kernel_visible_after_install() {
+        let _guard = topology_lock();
         let limits = JobLimits {
             commit_limit_bytes: Some(1_500_000_000),
             active_process: Some(7),
@@ -394,68 +543,108 @@ mod tests {
     #[cfg(windows)]
     #[test]
     fn windows_empty_limits_report_not_enforced() {
+        let _guard = topology_lock();
         let job = RunResourceJob::install(JobLimits::default()).expect("install run ceilings");
         assert!(!job.is_kernel_enforced());
         assert!(!job.readback().is_enforced());
         assert!(job.describe().contains("kernel_enforced=false"));
     }
 
-    /// The per-call job the spawn path actually uses carries the run ceilings —
-    /// this is the seam that makes the ceiling real for a heavy tool call.
+    /// 两级拓扑（复核 F-1）：调用级 job 只带 `KILL_ON_JOB_CLOSE`，限项在 run 级
+    /// job 上；`attach` 之后子进程确实**同时**在 run job 内（先根后子），
+    /// `readback_limits()` 报的是这条调用实际受制的限项。
     #[cfg(windows)]
     #[test]
-    fn per_call_job_inherits_the_run_ceilings() {
-        let run = crate::install_global_run_job(JobLimits {
+    fn per_call_group_nests_under_the_run_job_and_reports_its_ceilings() {
+        let _guard = topology_lock();
+        let run = crate::replace_global_run_job_for_tests(JobLimits {
             commit_limit_bytes: Some(3_000_000_000),
             active_process: Some(11),
             cpu_rate_percent: Some(80),
         })
         .expect("install run ceilings");
-        let group = crate::ProcessGroup::new().expect("per-call job");
-        let readback = group.readback_limits().expect("readback");
-        let commit = readback
-            .commit_limit_bytes
-            .expect("commit ceiling on the call job");
+
+        let mut group = crate::ProcessGroup::new().expect("per-call job");
+        // The call job itself must NOT duplicate the ceilings — that duplication
+        // was the S1 shape the review withdrew (N concurrent calls each holding a
+        // full copy instead of one run-wide bound).
+        assert!(
+            !group
+                .readback_call_job_limits()
+                .expect("call job readback")
+                .is_enforced(),
+            "the per-call job carries teardown, not the run ceilings"
+        );
+
+        let readback = group.readback_limits().expect("effective readback");
+        let commit = readback.commit_limit_bytes.expect("run commit ceiling");
         assert!(
             (3_000_000_000 - 65_536..=3_000_000_000).contains(&commit),
-            "call job commit ceiling came back as {commit}"
+            "effective commit ceiling came back as {commit}"
         );
         assert_eq!(readback.active_process, Some(11));
         assert_eq!(readback.cpu_rate_percent, Some(80));
-        assert_eq!(
-            run.readback(),
-            readback,
-            "the run decision is what the call job carries"
+        assert_eq!(run.readback(), readback);
+
+        // End-to-end at this layer: a real child of this group is inside the run
+        // job (design §6 判据 12's mechanical face).
+        let mut cmd = std::process::Command::new("cmd");
+        cmd.args(["/c", "ping -n 8 127.0.0.1 > NUL"])
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null());
+        let mut child = cmd.spawn().expect("spawn a long-lived child");
+        group.attach_std(&child).expect("attach child");
+        assert!(
+            run.contains_process(child.id()).expect("query run job"),
+            "the tool child must be associated with the run job"
+        );
+        let _ = child.kill();
+        let _ = child.wait();
+    }
+
+    /// 复核 F-1 的执行面：**run 级** commit 上限对「调用级 job 的子进程」同样
+    /// 咬合 —— 调用侧一条显式限项都不给，1 GiB 提交仍必须被拒。
+    #[cfg(windows)]
+    #[test]
+    fn run_job_ceiling_bounds_a_child_of_a_per_call_group() {
+        let _guard = topology_lock();
+        crate::replace_global_run_job_for_tests(JobLimits {
+            commit_limit_bytes: Some(300 * 1024 * 1024),
+            active_process: None,
+            cpu_rate_percent: None,
+        })
+        .expect("install a small run ceiling");
+
+        let mut group = crate::ProcessGroup::new().expect("per-call job");
+        let child = spawn_over_committing_child();
+        group.attach_std(&child).expect("attach child");
+        let output = cmd_output(child);
+        assert!(
+            output.contains("OutOfMemoryException"),
+            "the run-level ceiling must bound the call's tree; child said: {output}"
         );
     }
 
-    /// 判据 12 的执行面：job 的 commit 上限真的挡住超额提交 —— 子进程请求
-    /// 1 GiB，job 只给 256 MiB，分配必须失败。
+    /// 判据 12 的执行面：调用级显式限项仍然自己咬合（显式覆盖通道未被拓扑改动
+    /// 削弱）——子进程请求 1 GiB，调用级只给 256 MiB，分配必须失败。
     #[cfg(windows)]
     #[test]
     fn commit_ceiling_actually_stops_an_over_committing_child() {
-        use std::process::Stdio;
-
+        let _guard = topology_lock();
         let mut group = crate::ProcessGroup::new_with_limits(JobLimits {
             commit_limit_bytes: Some(256 * 1024 * 1024),
             active_process: None,
             cpu_rate_percent: None,
         })
         .expect("per-call job with a commit ceiling");
-        // PowerShell commits the array on assignment; with a 256 MiB job
-        // ceiling a 1 GiB array cannot be committed.
-        let mut cmd = std::process::Command::new("powershell");
-        cmd.args([
-            "-NoProfile",
-            "-NonInteractive",
-            "-Command",
-            "$a = New-Object byte[] 1073741824; Write-Output 'COMMITTED'",
-        ])
-        // Piped on purpose: inherited stdio would make the assertion below
-        // vacuous (observed while writing this test).
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped());
-        let child = cmd.spawn().expect("spawn over-committing child");
+        assert!(
+            group
+                .readback_call_job_limits()
+                .expect("call job readback")
+                .is_enforced(),
+            "explicit limits live on the call job"
+        );
+        let child = spawn_over_committing_child();
         group
             .attach_std(&child)
             .expect("attach child to the bounded job");
@@ -466,6 +655,25 @@ mod tests {
         );
     }
 
+    /// PowerShell commits the array on assignment; under any commit ceiling a
+    /// 1 GiB array cannot be committed. Piped on purpose: inherited stdio would
+    /// make the assertions above vacuous (observed while writing this test).
+    #[cfg(windows)]
+    fn spawn_over_committing_child() -> std::process::Child {
+        use std::process::Stdio;
+
+        let mut cmd = std::process::Command::new("powershell");
+        cmd.args([
+            "-NoProfile",
+            "-NonInteractive",
+            "-Command",
+            "$a = New-Object byte[] 1073741824; Write-Output 'COMMITTED'",
+        ])
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+        cmd.spawn().expect("spawn over-committing child")
+    }
+
     #[cfg(windows)]
     fn cmd_output(child: std::process::Child) -> String {
         let out = child.wait_with_output().expect("wait for the probe child");
@@ -474,10 +682,23 @@ mod tests {
         text
     }
 
+    /// 复核 F-9：attach 失败必须有**机械可见面**（单调计数），不能只留一行日志
+    /// ——否则"限项没生效"这件事在真机上完全不可观测。
+    #[test]
+    fn attach_failures_are_counted() {
+        let before = attach_failure_count();
+        record_attach_failure();
+        assert!(
+            attach_failure_count() >= before + 1,
+            "the counter must be monotonic"
+        );
+    }
+
     /// Non-Windows records the intent and reports it as not kernel-enforced.
     #[cfg(not(windows))]
     #[test]
     fn non_windows_limits_report_not_enforced() {
+        let _guard = topology_lock();
         let job = RunResourceJob::install(JobLimits {
             commit_limit_bytes: Some(1024),
             active_process: Some(1),
