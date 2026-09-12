@@ -112,6 +112,7 @@
 - 常驻进程以 root 运行，但**运行在受限 SELinux 域内**（2026-09-12 机械层两级化，§3 / §10.6）；崩溃后由看护脚本重启，不阻塞系统。
 - 会话与 journal 落在设备持久目录；黑板归档与事件链沿用 orz 既有机制。
 - 设备无网络授时时必须在启动自检中报错（见 `BODY-PRE-13`）。
+- **`BODY-WAKE-01` 常驻亮屏按需（2026-09-12 用户裁决；S3 探索轮落点）**：屏幕**只在需要时点亮**——用户唤起 / 语音唤醒 / 需要人看的输出（弹窗、确认、票据请求）/ 明确依赖视觉的任务；心跳、采样、长任务计算与后台动作**不点亮**。不做常亮（不靠 `stay_on_while_plugged_in` 常开、不持永久显示 wake lock）；需要持续算力时用**定向 CPU wake lock** 并给时长上限。两条理由：**OLED 烧屏**（静止界面长时间点亮直接损坏面板，而面板是感知面的一部分）与**功耗/温度**（真机电池与温控是"模型自身存活"的物质前提）。与 §10.6 的分工：那条管"别把系统弄死"，本条管"别把身体烤坏、别把电耗干"。**2026-09-12 S3 实测佐证**：模型自身把"常驻/定时执行点"列为"必须先有"，同时明确不需要"桌面/动画/壁纸/高分辨率屏"（见 [S3 记录 §5.2/§5.3](audits/0Y_S3_AUTONOMOUS_EXPLORATION_2026-09-12.md)）。
 
 ### 4.2 感知（`PERC-*`）
 
@@ -518,7 +519,10 @@ PC 侧补丁管线（反编译 → 改 → 重打包 → 重编 dex）
 > **载体侧实测（另册，非 NP1）**：S1 模拟器载体搭建四项全部完成；
 > S2 机械层接入面实测一轮（软层零拦截力、读工具对感知目标 8/8 拒、设备侧环境面）。
 > 记录见 [`0Y_S1_EMULATOR_CARRIER_SETUP_2026-09-12`](audits/0Y_S1_EMULATOR_CARRIER_SETUP_2026-09-12.md) /
-> [`0Y_S2_MECHANICAL_INTERFACE_PROBE_2026-09-12`](audits/0Y_S2_MECHANICAL_INTERFACE_PROBE_2026-09-12.md)。
+> [`0Y_S2_MECHANICAL_INTERFACE_PROBE_2026-09-12`](audits/0Y_S2_MECHANICAL_INTERFACE_PROBE_2026-09-12.md) /
+> [`0Y_S3_AUTONOMOUS_EXPLORATION_2026-09-12`](audits/0Y_S3_AUTONOMOUS_EXPLORATION_2026-09-12.md)
+> （S3 = 自主探索轮：终端通道 shell 依赖诊断与修复、模型自造 Magisk 模块、
+> 模型交付的[要求清单原文](audits/0Y_S3_MODEL_REQUIREMENTS_REPORT_2026-09-12.md)）。
 
 ---
 
