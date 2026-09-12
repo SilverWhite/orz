@@ -232,6 +232,10 @@ CREATE_NEW_PROCESS_GROUP` + `kill_on_drop(true)`，回收依赖 Rust 析构；
    历史 622 份 journal 的既有分类不变。
 7. **与 0v-C 的关系**：0v-C（`ba934af8`）修的是"链写入的内容哈希与推进值分叉"；
    本条修的是"链能否存在、能否闭合"。两条独立，互为前提。
+8. **入口 fail-closed（2026-09-13 用户裁决，S2R 裁决 16）**：run 装配期的
+`run_preflight` 写入遇 DegradedDropped（降级拒绝）时**拒绝 run 启动**——
+盘满时不起新 run，避免写入面在满盘状态下扩张（不换卷约束下不向任何位置
+新增写入压力）；此为既有 bootstrap 行为的显式确认，非降级语义破洞。
 
 ### 4.4 缺口 D：工具面文本编码宽容（摩擦项）
 
@@ -408,7 +412,7 @@ fail-closed）为 host-owned 工具；2026-08-16 成熟复用评估认定 Window
 
 | # | 议题 | 裁决 | 理由 |
 |---|---|---|---|
-| 1 | hard 档是否允许树杀在跑重活 | **允许**，限四条：①仅 hard 档触发；②**审计先行**（先落 `resource_exhausted(planned)`，含将杀的 `call_id` 集）；③**只杀重档**（动作分档判定为重者，轻活不杀）；④杀后必须产出可读失败（`resource_limit_hit` / `resource_exhausted`）并走 §4.3 收尾 | 机器死 = 全盘损失（含审计链），工具失败 = 可重跑；预检已挡住多数情形，该路径预期极少走到 |
+| 1 | hard 档是否允许树杀在跑重活 | **允许**，限四条：①仅 hard 档触发；②**审计先行**（先落 `resource_exhausted(planned)`，含将杀的 `call_id` 集）；③**只杀重档**（动作分档判定为重者，轻活不杀）；④杀后必须产出可读失败（`resource_limit_hit` / `resource_exhausted`）并走 §4.3 收尾 | 机器死 = 全盘损失（含审计链），工具失败 = 可重跑；预检已挡住多数情形，该路径预期极少走到。**2026-09-13 用户裁决（S2R，裁决 15）**：③的落法 = **per-call-job 杀面（选项 a）**——宿主持在跑调用的 call job 复制句柄（SpawnObservation 下发），hard 档只 `TerminateJobObject` 重档调用的 call job（内核整树粒度 = 单调用树），run job 不整体终止，轻活/后台任务不在爆半径；爆半径由内核级测试钉死 |
 | 2 | 孤儿扫除归属三条件 | **三条件保留 + 三条硬化**：只处理登记表内 pid；指纹 = 规范化 argv 序列 + 关键 env 哈希；审计先于动作（默认无延迟、保留可回退间隔） | 上一轮误杀外部构建的教训——宽口径识别、严口径执行 |
 | 3 | Job 限项清单 | **启用** `KILL_ON_JOB_CLOSE`（§4.2）+ `JOB_OBJECT_LIMIT_JOB_MEMORY` + `JOB_OBJECT_LIMIT_ACTIVE_PROCESS` + `JOB_OBJECT_CPU_RATE_CONTROL_HARD_CAP`；**不启用** `JOB_OBJECT_LIMIT_PROCESS_MEMORY`（易误伤 rustc）与 working set 类限项（引发抖动且非 commit 级防爆） | 四条限项恰好覆盖本轮两次事故的两条线（commit/盘）+ 并发与 CPU；不启用项都是"会误伤正常重活"的 |
 | 4 | soft 档柔性降级开关 | **默认关闭**（不注入 `CARGO_BUILD_JOBS` 等），保留为可配逃生阀 | Job 硬限已覆盖该功能；少一个"改写模型命令环境"的争议面与调试面 |
@@ -533,6 +537,8 @@ fixture 正负例同批；`check_repository` 门禁与 manifest 重算同批。
 | 12 | 其余复核项的处置 | `run_tests` 入门 + 挂 Job；目标卷按静态写入目标判定；新增 `unknown` 档；here-string/heredoc 剥体留头——§4.7.1 / §4.6 次序补注 |
 | 13 | 盘—内存轴间耦合 | **登记**（盘满 → 页面文件不增长 → commit 提前失败）；F 为次级防线，盘侧为承重件——§4.7.1 / §9 |
 | 14 | 回收阶梯与在跑重活 | 回收**不得删除在跑重活的产物面**；次序（在跑判定 → 不在用 cache / 先树杀后回收）由 S2 落码——§4.7.1 末段 |
+| 15 | hard 档树杀爆半径（S2R，2026-09-13） | **per-call-job 杀面（选项 a）**：宿主持在跑调用 call job 复制句柄，hard 档只终止重档调用的 call job（单调用树粒度），run job 不整体终止；轻活/后台任务不在爆半径——§4.8 表 1 ③ |
+| 16 | 盘满起新 run（S2R，2026-09-13） | **fail-closed 维持**：run_preflight 遇降级拒绝即拒绝 run 启动（避免写入面在满盘下扩张）——§4.3 第 8 条 |
 
 **设计状态：完结（无开放裁决项；S1.1 复核收口已并入 §4.7.1）**；下一步为 **S2**
 （事件族/fixture/法官 + C + B + E + §4.7.1 第 14 条的回收次序）。

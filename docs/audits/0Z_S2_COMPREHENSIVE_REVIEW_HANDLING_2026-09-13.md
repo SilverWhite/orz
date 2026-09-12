@@ -26,7 +26,7 @@
 - **F-BE-6** 回收在事故场景失效 → 候选发现改深度 2 嵌套 workspace 根扫描（上限 64 候选，阶梯排序）；预算口径不变（默认 8 GiB 可 env 覆盖），run 总量上限（下条）+ 在跑保护共同兜住误删面。
 - **F-BE-7** 回收阶梯次序偏离 §4.6 → 候选按 scratch→包缓存→构建缓存排序（次序即裁决 14 的风险排序）；「限窗更早 run 的 scratch」整层**未实现**，登记 S4（需 run-scratch 台账，见 §4）。
 - **F-BE-3（留裁决）** hard 树杀爆半径 = 全 run 树 vs §4.8 表 1 ③「只杀重档」——TerminateJobObject 无法分轻重。两案待裁决：(a) per-call-job 杀面（宿主按 call_id 持重档 call job 句柄，只 terminate 重档）；(b) 重释 ③ 为「重档拒绝触发、全树爆半径」并转录设计。另：是否收敛回 TER kill 面（`kill_foreground_commands`/`kill_all_background_tasks`）一并裁决。当前实现为 (b) 的事实形态 + `action_class` 已入登记表（(a) 的数据面就绪）。
-- **F-C-8（留裁决）** bootstrap 的 run_preflight 在 DegradedDropped 时拒绝 run 启动——「盘满拒起新 run」是否符合预期语义，待裁决（两案：接受 fail-closed 并登记设计 §4.3；或 bootstrap 吞降级拒绝交棒 EventWriter 收尾）。
+- **F-C-8（已裁决，2026-09-13 用户裁决 16：fail-closed 维持）** bootstrap 的 run_preflight 在 DegradedDropped 时拒绝 run 启动——裁决 = 接受 fail-closed（盘满不起新 run，避免写入面在满盘下扩张），已显式登记设计 §4.3 第 8 条 + §11 裁决 16；bootstrap 行为零改动。
 
 ## 3. P2/P3（随批处理或登记）
 
