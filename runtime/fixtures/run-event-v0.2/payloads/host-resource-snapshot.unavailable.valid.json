@@ -1,0 +1,7 @@
+{
+  "tier": "unknown",
+  "trigger": "tier_change",
+  "readings": {
+    "source_quality": "unavailable"
+  }
+}

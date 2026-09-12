@@ -32,7 +32,7 @@ parseability and `schema_version` are NOT checked beyond the envelope schema
 itself plus the chain rules.
 
 Single registry authority (Task D S3 flip, 2026-09-06): the mapping lives in
-`runtime/run-event-payload-registry-v0.1.json` (v01=34 / v02=27); the
+`runtime/run-event-payload-registry-v0.1.json` (v01=34 / v02=35; 0z S2 adds seven host-resource families + run_terminated terminal); the
 `PAYLOAD_SCHEMA_BY_EVENT_TYPE(_V02)` dicts below are import-time derived
 views consumed by this module, `runtime/tests/test_run_event_conformance.py`
 and `scripts/check_repository.py`. The former export script
@@ -2783,7 +2783,7 @@ def _verify_v02_receipt_event_isomorphism(
     for key, start_index in started.items():
         run, tool, call_id = key
         term = terminal_type.get(run)
-        if term is None or term == "run_invalidated":
+        if term is None or term in ("run_invalidated", "run_terminated"):
             # 无终止事件（中断 run）或墙钟超时杀（in-flight 豁免，S4）——
             # 不要求补终止完成事件。
             continue
@@ -3634,88 +3634,6 @@ def _load_events(lines: list[str]) -> tuple[list[dict[str, Any]], list[str]]:
     return events, errors
 
 
-def validate_journal_text(text: str) -> list[str]:
-    """Validate a journal's full text; [] == valid. One string per problem."""
-    events, errors = _load_events(text.splitlines())
-    if errors:
-        # Parse/blank-line errors are reported first and chain verification
-        # is skipped over the partial event set. NOTE: the Rust replay
-        # collects parse errors and still validates the chain of the parsed
-        # events — the verdicts coincide (both invalid), but Python is
-        # deliberately stricter (the reference side) and reports fewer
-        # secondary chain messages on a malformed journal.
-        return errors
-    if not events:
-        return ["journal contains no valid events"]
-
-    for index, event in enumerate(events):
-        errors.extend(_envelope_errors(event, index))
-    if errors:
-        # Envelope failures can leave fields missing that hashing needs.
-        return errors
-
-    payload_errors: list[str] = []
-    for index, event in enumerate(events):
-        try:
-            payload_errors.extend(_payload_errors(event, index))
-        except ValueError as exc:
-            payload_errors.append(f"event {index}: {exc}")
-    errors.extend(payload_errors)
-    errors.extend(_verify_chain(events))
-    if not payload_errors:
-        # Cross-layer checks (inquiry_kind, §4.4 lifecycle, retrieval mode /
-        # result / restore) need complete payloads — with payload schema
-        # violations present they would crash or report misleading facts, so
-        # they run only on schema-valid input.
-        errors.extend(_verify_v02_inquiry_kind(events))
-        errors.extend(_verify_v02_initial_round_inquiry(events))
-        errors.extend(_verify_v02_plan_write(events))
-        errors.extend(_verify_v02_console_mode_transition(events))
-        # console_order_written retired 2026-09-06 (ADR-0010 §14.57, 任务 D
-        # S2d 裁决一): the write-order chain is retired with §14.39 and is
-        # deliberately NOT converted into a negative check (historical
-        # 2026-08-16~24 v0.2 journals legally carry written chains).
-        errors.extend(_verify_v02_console_order_rejected(events))
-        errors.extend(_verify_v02_ledger_fold_advance(events))
-        errors.extend(_verify_v02_ledger_fold_write_failed(events))
-        errors.extend(_verify_v02_lifecycle(events))
-        errors.extend(_verify_v02_tool_running(events))
-        errors.extend(_verify_v02_output_truncation(events))
-        errors.extend(_verify_v02_budget_cue_injected(events))
-        errors.extend(_verify_v02_retrieval_mode(events))
-        errors.extend(_verify_v02_retrieval_enable_gate(events))
-        errors.extend(_verify_v02_browser_launch_result(events))
-        errors.extend(_verify_v02_result_consistency(events))
-        errors.extend(_verify_v02_reason_codes(events))
-        errors.extend(_verify_v02_source_weighting(events))
-        errors.extend(_verify_v02_search_candidate_pool(events))
-        errors.extend(_verify_v02_candidate_prefilter(events))
-        errors.extend(_verify_v02_candidate_count(events))
-        errors.extend(_verify_v02_inject_budget(events))
-        errors.extend(_verify_v02_policy_denial(events))
-        errors.extend(_verify_v02_failure_target(events))
-        errors.extend(_verify_v02_failure_agg_coverage(events))
-        errors.extend(_verify_v02_receipt_event_isomorphism(events))
-        errors.extend(_verify_v02_dep_graph_events(events))
-        errors.extend(_verify_v02_mechanical_audit(events))
-        errors.extend(_verify_v02_recovery_truncation(events))
-        errors.extend(_verify_v02_context_compressed(events))
-        errors.extend(_verify_v02_activation_restore(events))
-        errors.extend(_verify_v02_control_tickets(events))
-        errors.extend(_verify_v02_tool_availability_probe(events))
-        errors.extend(_verify_v02_request_header(events))
-        errors.extend(_verify_v02_probe_accuracy(events))
-    return errors
-
-
-def validate_journal_file(journal_path: Path) -> list[str]:
-    """Validate a journal file; [] == valid. One string per problem."""
-    try:
-        text = journal_path.read_text(encoding="utf-8")
-    except OSError:
-        return [f"journal file not found: {journal_path}"]
-    return validate_journal_text(text)
-
 # ---------------------------------------------------------------------------
 # FUS-HOST-RESOURCE-SAFETY §5 families (2026-09-12, 0z S2) — frozen mirror of
 # the Rust verifiers (`orz-assurance/src/journal/families.rs`, seven
@@ -3729,6 +3647,10 @@ _RECLAIM_TIERS = {"soft", "reclaim_direct", "hard", "unknown"}
 
 def _host_is_snake_case_key(value):
     if not isinstance(value, str) or not value:
+        return False
+    # Review F-EV-5 (2026-09-13): the first character must be a lowercase
+    # letter (mirror of the Rust is_snake_case_key alpha-start rule).
+    if not (value[0].isascii() and value[0].islower()):
         return False
     return all(c.isascii() and (c.islower() or c.isdigit() or c == "_") for c in value)
 
@@ -3894,3 +3816,96 @@ def _verify_v02_resource_limit_hit(events):
         if not _host_is_non_empty_str(payload.get("call_id")):
             errors.append("resource_limit_hit: call_id required")
     return errors
+
+
+def validate_journal_text(text: str) -> list[str]:
+    """Validate a journal's full text; [] == valid. One string per problem."""
+    events, errors = _load_events(text.splitlines())
+    if errors:
+        # Parse/blank-line errors are reported first and chain verification
+        # is skipped over the partial event set. NOTE: the Rust replay
+        # collects parse errors and still validates the chain of the parsed
+        # events — the verdicts coincide (both invalid), but Python is
+        # deliberately stricter (the reference side) and reports fewer
+        # secondary chain messages on a malformed journal.
+        return errors
+    if not events:
+        return ["journal contains no valid events"]
+
+    for index, event in enumerate(events):
+        errors.extend(_envelope_errors(event, index))
+    if errors:
+        # Envelope failures can leave fields missing that hashing needs.
+        return errors
+
+    payload_errors: list[str] = []
+    for index, event in enumerate(events):
+        try:
+            payload_errors.extend(_payload_errors(event, index))
+        except ValueError as exc:
+            payload_errors.append(f"event {index}: {exc}")
+    errors.extend(payload_errors)
+    errors.extend(_verify_chain(events))
+    if not payload_errors:
+        # Cross-layer checks (inquiry_kind, §4.4 lifecycle, retrieval mode /
+        # result / restore) need complete payloads — with payload schema
+        # violations present they would crash or report misleading facts, so
+        # they run only on schema-valid input.
+        errors.extend(_verify_v02_inquiry_kind(events))
+        errors.extend(_verify_v02_initial_round_inquiry(events))
+        errors.extend(_verify_v02_plan_write(events))
+        errors.extend(_verify_v02_console_mode_transition(events))
+        # console_order_written retired 2026-09-06 (ADR-0010 §14.57, 任务 D
+        # S2d 裁决一): the write-order chain is retired with §14.39 and is
+        # deliberately NOT converted into a negative check (historical
+        # 2026-08-16~24 v0.2 journals legally carry written chains).
+        errors.extend(_verify_v02_console_order_rejected(events))
+        errors.extend(_verify_v02_ledger_fold_advance(events))
+        errors.extend(_verify_v02_ledger_fold_write_failed(events))
+        errors.extend(_verify_v02_lifecycle(events))
+        errors.extend(_verify_v02_tool_running(events))
+        errors.extend(_verify_v02_output_truncation(events))
+        errors.extend(_verify_v02_budget_cue_injected(events))
+        errors.extend(_verify_v02_retrieval_mode(events))
+        errors.extend(_verify_v02_retrieval_enable_gate(events))
+        errors.extend(_verify_v02_browser_launch_result(events))
+        errors.extend(_verify_v02_result_consistency(events))
+        errors.extend(_verify_v02_reason_codes(events))
+        errors.extend(_verify_v02_source_weighting(events))
+        errors.extend(_verify_v02_search_candidate_pool(events))
+        errors.extend(_verify_v02_candidate_prefilter(events))
+        errors.extend(_verify_v02_candidate_count(events))
+        errors.extend(_verify_v02_inject_budget(events))
+        errors.extend(_verify_v02_policy_denial(events))
+        errors.extend(_verify_v02_failure_target(events))
+        errors.extend(_verify_v02_failure_agg_coverage(events))
+        errors.extend(_verify_v02_receipt_event_isomorphism(events))
+        errors.extend(_verify_v02_dep_graph_events(events))
+        errors.extend(_verify_v02_mechanical_audit(events))
+        errors.extend(_verify_v02_recovery_truncation(events))
+        errors.extend(_verify_v02_context_compressed(events))
+        errors.extend(_verify_v02_activation_restore(events))
+        errors.extend(_verify_v02_control_tickets(events))
+        errors.extend(_verify_v02_tool_availability_probe(events))
+        errors.extend(_verify_v02_request_header(events))
+        errors.extend(_verify_v02_probe_accuracy(events))
+        # FUS-HOST-RESOURCE-SAFETY §5 (2026-09-12, 0z S2; review F-EV-2):
+        # the seven host-resource fact families join the frozen entry point
+        # so the reference judge and the Rust judge stay verdict-identical.
+        errors.extend(_verify_v02_host_resource_snapshot(events))
+        errors.extend(_verify_v02_host_resource_denied(events))
+        errors.extend(_verify_v02_resource_exhausted(events))
+        errors.extend(_verify_v02_run_terminated(events))
+        errors.extend(_verify_v02_process_tree_reaped(events))
+        errors.extend(_verify_v02_reclaim_performed(events))
+        errors.extend(_verify_v02_resource_limit_hit(events))
+    return errors
+
+
+def validate_journal_file(journal_path: Path) -> list[str]:
+    """Validate a journal file; [] == valid. One string per problem."""
+    try:
+        text = journal_path.read_text(encoding="utf-8")
+    except OSError:
+        return [f"journal file not found: {journal_path}"]
+    return validate_journal_text(text)

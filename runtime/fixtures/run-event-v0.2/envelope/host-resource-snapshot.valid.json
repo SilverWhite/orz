@@ -13,7 +13,7 @@
     "trigger": "tier_change",
     "readings": {
       "volume_free_bytes": 9000000000,
-      "source_quality": "measured"
+      "source_quality": "available"
     }
   },
   "payload_sha256": "0000000000000000000000000000000000000000000000000000000000000000",

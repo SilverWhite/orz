@@ -2335,6 +2335,11 @@ def check_repository() -> dict[str, Any]:
         run_event_v02_payload_root
         / "tool-running.idle-killed-missing-reason.constraint.invalid.json"
     ] = tool_running_v02_schema
+    # 0z S2 (2026-09-13, review F-EV-9 / 判据 3): the fail-closed readings
+    # shape — source_quality=unavailable with the `unknown` tier.
+    run_event_v02_payload_positive_contracts[
+        run_event_v02_payload_root / "host-resource-snapshot.unavailable.valid.json"
+    ] = ROOT / "runtime/host-resource-snapshot-event-payload-v0.2.schema.json"
     for instance_path, schema_path in run_event_v02_payload_positive_contracts.items():
         errors.extend(
             _validate_instance(

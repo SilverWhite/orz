@@ -2,5 +2,5 @@
   "phase": "planned",
   "tier": "hard",
   "call_ids": ["call-heavy-1", "call-heavy-2"],
-  "readings": { "volume_free_bytes": 1073741824, "source_quality": "measured" }
+  "readings": { "volume_free_bytes": 1073741824, "source_quality": "available" }
 }
