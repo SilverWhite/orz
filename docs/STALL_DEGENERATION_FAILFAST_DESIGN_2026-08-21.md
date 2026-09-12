@@ -64,7 +64,7 @@ stall 占大头（8×64K）；rep 均为「连续 5 个相同 delta」秒级触�
 无 journal，触发上下文仅 orz.txt + 容器实时日志（启动 21:53:47 → stall
 22:00:12，间隔 374s，无任何工具事件，确认首请求）。
 
-### 1.1b S0 采集口径与方法（sweep-s0/collect_s0.ps1，产物 sweep-s0/）
+### 1.1b S0 采集口径与方法（原 `sweep-s0/collect_s0.ps1`，产物原 `sweep-s0/`；2026-09-13 一次性产物归档至 [`存档/root-artifacts-2026-09-13/sweep-s0/`](../存档/root-artifacts-2026-09-13/sweep-s0/)）
 
 - 每对 WARN（stream interrupted + degrading to）计 1 次哨兵触发；记录 kind、
   consecutive、降档目标、持续秒数、估算 token。

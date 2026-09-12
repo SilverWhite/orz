@@ -6,7 +6,7 @@
 > [`0v 第二批 S4 实机复验记录`](audits/0V_S4_BATCH2_LIVE_VERIFICATION_2026-09-12.md) §4；
 > run `RUN-CLI-6aa4f384`（`.gsa/runs/`，4,982 事件 / 98.2 min，**盘满致命退出**）；
 > run `RUN-CLI-6aa50fdf`（798 事件 / 20.2 min，**commit 耗尽 abort**）；
-> 复扫 `tmp0vc/rescan_stdout.txt`（622 份 journal）。
+> 复扫 `tmp0vc/rescan_stdout.txt`（622 份 journal；2026-09-13 取证现场归档至 `存档/root-artifacts-2026-09-13/tmp0vc/`）。
 > 边界：本设计不修改 ADR-0010 已冻结语义，只在其机械层上新增「宿主资源」这一
 > 事实面与门控面；不改变模型工具面语义（除 §4.4 的编码宽容）。
 

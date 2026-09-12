@@ -707,7 +707,19 @@ GLM F2 处置转排期（2026-09-06 用户裁决）：`orz-host/src/approval.rs`
 
 - [x] 全部闭合：fold 三态 + 有状态请求视图 + loop-top 推进触发（128K）+ 压缩联动/摘要同源/恢复 + 参数接线（192K/256K）+ 二次全面审查收口（冻结台账进摘要存档、v0.2 `ledger_fold_advance` 事件、完整性回退、死代码删除）；orz-loop 452 / conformance 15 + journal validation 214。入口：ADR-0010 §14.26 / BACKLOG 6g / [审计](docs/audits/GAP_LEDGER_FOLD_STATE_IMPL_AUDIT_2026-08-18.md)。
 
+### 0aa 历史卷 journal 全量 verifier 复扫（P1；2026-09-13 立项，深审附带建议①）
+
+- [ ] 卷清单先行（工作区 `.gsa/` + `jobs-official` 等评测批次 + 存档卷，覆盖率判据 100%）→ `journal-conformance` 全量复扫 → 断链分布审计落档（按批次/时间窗/事件族分桶，区分脱敏改写断链 vs 墙钟杀死接缝断链）→ `recover_torn_journal` 适用性只读评估。边界：只读、不改写历史卷、不重跑 run。入口：[深审 §2 P0-2](docs/audits/FULL_PROJECT_DEEP_REVIEW_2026-09-12.md) / [BACKLOG 0aa](docs/BACKLOG_AND_PRIORITIES.md)。
+
+### 0ab 账本一致性与瘦身机械化（P1；2026-09-13 立项，深审附带建议②）
+
+- [ ] `check_repository.py` 增计数一致性四点交叉核对（BACKLOG 总数 ↔ 各节开放项 ↔ TODO 勾选 ↔ 索引状态速查）+ 账本瘦身检查（台账行长限/行龄）；负例钉子（人为不一致可检出）；首批账本瘦身随 S1 做。入口：[深审 §3](docs/audits/FULL_PROJECT_DEEP_REVIEW_2026-09-12.md) / [BACKLOG 0ab](docs/BACKLOG_AND_PRIORITIES.md)。
+
 ## P2 — 生产化决策门
+
+### 15. EVALUATION-CORPUS-FREEZE（P2；2026-09-13 立项，深审 S-13 注册）
+
+- [ ] S1 考卷语料冻结（域/规模选型 + sha256 清单 + 存放形态定案 + 阈值基线草案）；S2 小样本干跑校准 evaluation/holdout 阈值；S3 首轮真实 evaluation 跑批（oracle isolation 生效）；S4 报告与闭合裁决。边界：排期在 0z S3/S4 之后。入口：[深审 §2 S-13](docs/audits/FULL_PROJECT_DEEP_REVIEW_2026-09-12.md) / [BACKLOG P2-15](docs/BACKLOG_AND_PRIORITIES.md) / `assurance/evaluation_runner.py`。
 
 ### IMPL-CONTROL-FABRIC（`partial`）
 
