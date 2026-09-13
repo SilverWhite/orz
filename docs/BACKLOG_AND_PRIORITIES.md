@@ -912,7 +912,7 @@ GLM F2 处置转排期（2026-09-06 用户裁决）：`orz-host/src/approval.rs`
 - 入口：[`FULL_PROJECT_DEEP_REVIEW` §3](audits/FULL_PROJECT_DEEP_REVIEW_2026-09-12.md) / [`check_repository.py`](../scripts/check_repository.py)。
 
 
-### 0ac. GAP-MECH-IMMEDIATE-FEEDBACK 机械层即时回报与流式检索（P0；2026-09-13 用户裁决登记；**设计定稿待放行实施**）
+### 0ac. GAP-MECH-IMMEDIATE-FEEDBACK 机械层即时回报与流式检索（P0；2026-09-13 用户裁决登记；**S1 探针完成 2026-09-13，S2 机器合约待放行**）
 
 - 来源（本轮 TB 2.1 V4.1 跑批 + 全框架时间预算语义审计）：**用户口径**——可用性探针要扩大；关键在返回时间的确定性——"不怕检索子代理每次起来都试一遍，关键是**功能明确不可达时为什么还要正常等待后才返回**"；浏览器/硬设施没拉起来要有明确日志并**立刻**返回；检索/网络是毫秒级场景，**10 秒拿不到结果就应当立刻明确回报网络问题**；**不止浏览器——一切需求，机械层都要即时回报**。一手证据：[`第 0 轮起跑记录 §6.13`](audits/TB21_V41_ROUND0_MEMORY_HEAVY_START_2026-09-13.md)（`web_search` 单次最高 26.8 s、合计 807–977 s、5 次 `subagent_wallclock_timeout_mid_tool`；`tool_availability_check` 的 `probe_scope` 只覆盖主工作面）。
 - 关联审计（证据基座）：[`FRAMEWORK_TIME_BUDGET_SEMANTICS_AUDIT_2026-09-13`](audits/FRAMEWORK_TIME_BUDGET_SEMANTICS_AUDIT_2026-09-13.md)——逐部件判定 D1–D7 七处等待化/延迟形态（D1 检索子代理 600 s 到期才回报 / D2 `web_search` 非流式整包 / D3 信号量 acquire 无独立截止 / D4 浏览器能力级不可达无 run 级记忆 + 探针不含检索族 + 失败载荷不含 cause / D5 agent 超时后 orz 孤儿 / D6 verifier 通道吃满 900 s / D7 后台完成按"下一次工具边界"带回）；给出 R1–R10 修正批次与**四本时限分账**（`first_result_deadline` ≤10 s / `operation_deadline` / `total_budget` / `run_wallclock`）。
@@ -921,6 +921,9 @@ GLM F2 处置转排期（2026-09-06 用户裁决）：`orz-host/src/approval.rs`
 - 判据：检索类**首个结果** `wall_ms` p99 ≤ 10 s；`subagent_wallclock_timeout_mid_tool` = 0；任何等待型调用在截止后必须产出带稳定码的结果、无"到点前零事件"路径。
 - 边界：**不改 FP-2**（能力级确定不可达按"如实汇报 + 有结果即发回"实现，本在 FP-2 语义内；只有引入"不重复尝试 / 失败计数反馈 / 移除车道"才需回查冲突）；**不新增容器内浏览器**；**不改官方口径**（流式化只改 agent 侧，A/B 记录必须保留）；10 s 截止会砍检索长尾 ⇒ 保留放宽开关 + A/B 对照。
 - 计数：立项 **29 → 30**（2026-09-13）。入口：[`设计稿`](IMMEDIATE_RESULT_DELIVERY_AND_STREAMING_RETRIEVAL_DESIGN_2026-09-13.md) / [`审计`](audits/FRAMEWORK_TIME_BUDGET_SEMANTICS_AUDIT_2026-09-13.md) / TODO P0-0ac；索引 `GAP-MECH-IMMEDIATE-FEEDBACK`。
+- **S1 探针完成（2026-09-13，用户放行真实 API 调用；不动计数，仍开放）**：① 流式 SSE 全序列实测（`deepseek-v4-pro`）——`response.web_search_call.in_progress/searching/completed` 逐事件带时间戳、TTFB 9.3 s / 首检索进度 10.5 s / 首检索完成 11.1 s、无 `[DONE]` 哨兵（终态 = `response.completed` + EOF）⇒ **流式路线确认、分段检索后备不启用**；判活锚点修正为 SSE 通道首字节（TTFB 主导，首个检索进度事件受 reasoning 阶段摆布不承担 10 s 判活）。② 分段续写 3/3 通过（三模型名均接受部分 assistant+`reasoning_content`+注入事实，从句号边界继续、无重复、无配对破损）。③ **重大运行面发现**：`deepseek-v4-flash` / `deepseek-flash` 上 web_search 工具**确定性不绑定**（4/4 对照零 `web_search_call`、模型 reasoning 自述"没有工具"后编造来源），而同日早些时候第 0 轮跑批同模型名有 116 条真实检索 ⇒ 服务端兼容路由行为当日变化或间歇性——`web_search_call` 存在性必须进 `retrieval_family` 探针读数（flash 静默失绑即 `capability_unreachable` 的真实形态）。入口：[`0AC_S1_PROBE_RECORD_2026-09-13`](audits/0AC_S1_PROBE_RECORD_2026-09-13.md)；探针件 `D:\tb-eval\probe-0ac-s1\`（不入仓）。**下一步 S2 机器合约（待放行）**。
+- **路径改定 + S1′ 本地检索探针（2026-09-13 晚，用户裁决，不动计数）**：S1 深挖定性服务端 web_search 系 **DeepSeek 官方下架**（Responses API 文档明载"内置工具忽略"、flash 路由 4/4 静默失绑、v4-pro 残余通道随 2026-09-14 12:00 路由切换预计关闭）⇒ 用户裁决**全面转向本地检索**（"大不了只做本地，好好优化一下"；pro 不用）。**偏离登记：检索后端 服务端 web_search → 本地分段检索**（agent 侧能力，官方口径四要素不动、不构成违反；可比性注记 + A/B 对照入台账）。**S1′ 实测（含同日二次更正——用户指出 DDG 早已排除，复核证实宿主机系统代理 127.0.0.1:7890 污染首测）**：**直连（= 容器形态）下 Bing HTML TTFB 0.4 s，DDG/Google 直连不可达**（0v R4「duckduckgo 本地不可达」实证成立）⇒ 默认引擎集 = **Bing HTML 直连单引擎**（提取器需重写）；**截止按引擎单独计时 + 整体兜底 30 s**（用户裁决）；页面抓取 83%。0v SERP 语义资产（引擎链/重定向解码/域名加权/边界常量）全复用，CDP 换纯 HTTP。入口：[`0AC_S1_PROBE_RECORD_2026-09-13` §5/§6/§7](audits/0AC_S1_PROBE_RECORD_2026-09-13.md) / 设计稿 §9 修订。**下一步 S2 机器合约（双路径：本地分段为主、流式为恢复预留），待放行**。
+- **引擎选路与工具面裁决（2026-09-13 晚，用户，不动计数）**：① cn.bing.com = 无代理默认引擎；② 有代理时引擎交模型自选（0v §6 留存的 `engine ∈ {auto,…}` 方案升格实施）；③ **工具面保留 `web_search` 名称**（8 工具面冻结不破），实现明确改指本地检索、模型可见描述如实标注本地来源。见设计稿 §9.6。
 
 ## P2 — 生产化决策门
 

@@ -653,7 +653,7 @@ GLM F2 处置转排期（2026-09-06 用户裁决）：`orz-host/src/approval.rs`
 - [x] 裁决封闭（2026-09-12）：阈值（8 GiB / 25% / 16-8-**5**-2 GiB 阶梯）、硬上限（commit 80% 类 + CPU 80% + 并发=核数）、Job 限项（启用 commit/并发/CPU/KILL_ON_JOB_CLOSE；不启用每进程内存与 working set）、hard 档树杀（允许，四条限制）、孤儿扫除（三条件 + 三硬化）、soft 档柔性降级（默认关）、回收（轮数窗口 2 轮/上限 3、reclaim-direct 5 GiB、超预算拒绝不询问、**回收站取消**）、0z 与 0v-C 不合批。**设计无开放裁决项**；详见设计 §11 裁决记录 / §4.8。
 - [x] **S1.1 裁决修订（2026-09-12，用户授权工程裁决；设计 §4.7.1 + §11 裁决 11–14）**：**两级 Job 保留**（先根后子；修订 S1 的降级结论）、**`ACTIVE_PROCESS = 2 × 核数 + 8`（下限 16；修订原"核数"臂）**、**commit 上限 = `min(min(80%×limit, limit−4 GiB), 装配期余量 − 1 GiB)`（下限 2 GiB）**、`run_tests` 入门、目标卷按静态写入目标判定、新增 `unknown` 档、here-string/heredoc 剥体留头；**盘—内存轴间耦合登记**；**回收与在跑重活的次序**登记为 S2 承重项。
 
-### P0-0ac GAP-MECH-IMMEDIATE-FEEDBACK 机械层即时回报与流式检索（2026-09-13 用户裁决登记；设计定稿待放行实施）
+### P0-0ac GAP-MECH-IMMEDIATE-FEEDBACK 机械层即时回报与流式检索（2026-09-13 用户裁决登记；S1 探针完成 2026-09-13，S2 机器合约待放行）
 
 > 需求口径（用户 2026-09-13）：机械层对**每个**模型请求都要**即时且有信息量**地回报——确定性不可达必须立刻返回、检索/网络 10 s 拿不到首个结果就立刻明确回报网络问题、等待必须可见（日志 + 事件）、超时必须有稳定码与原因。**10 s = 请求发出后等首个结果的上限，不是检索任务总时限**（总预算另计）。入口：设计稿 [`IMMEDIATE_RESULT_DELIVERY_AND_STREAMING_RETRIEVAL_DESIGN_2026-09-13`](docs/IMMEDIATE_RESULT_DELIVERY_AND_STREAMING_RETRIEVAL_DESIGN_2026-09-13.md) / 审计 [`FRAMEWORK_TIME_BUDGET_SEMANTICS_AUDIT_2026-09-13`](docs/audits/FRAMEWORK_TIME_BUDGET_SEMANTICS_AUDIT_2026-09-13.md) / [`第 0 轮起跑记录 §6.13`](docs/audits/TB21_V41_ROUND0_MEMORY_HEAVY_START_2026-09-13.md) / BACKLOG 0ac / 索引 `GAP-MECH-IMMEDIATE-FEEDBACK`。计数：立项 **29 → 30**（2026-09-13）。
 
@@ -665,6 +665,7 @@ GLM F2 处置转排期（2026-09-06 用户裁决）：`orz-host/src/approval.rs`
 - [ ] ⑥ 检索子代理提前收口（确定不可达 / 连续确定失败 / 结果已形成 → close activation 并立即回传；墙钟只作最后兜底）。
 - [ ] ⑦ `web_search` 信号量 acquire 独立短截止 + 排队即时回报（不再被 900 s 外层包住）。
 - [ ] ⑧ S1 探针 → S2 机器合约 → S3 实现（带开关 + A/B）→ S4 实机复验 + 整轮重跑 89 题（与设计 S1–S4 同轨）。
+- [x] **S1 探针完成（2026-09-13，用户放行真实 API 调用）**：① 流式 `/responses`+`web_search` 实测 SSE 全序列——`response.web_search_call.in_progress/searching/completed` 实测存在、逐事件带时间戳（`deepseek-v4-pro`：TTFB 9.3 s + 首检索进度 10.5 s + 首检索完成 11.1 s，全程 19.6 s，无 `[DONE]` 哨兵、终态=`response.completed`+EOF）⇒ **流式路线确认、分段检索后备不启用**；判活锚点修正为 SSE 通道首字节（TTFB 主导）。② 分段续写 3/3 通过（`deepseek-flash`/`deepseek-v4-flash`/`deepseek-v4-pro` 均接受「部分 assistant+reasoning_content+注入事实」、从句号边界继续、无重复、无配对破损；token 预算须为重 reasoning 留量）。③ **重大运行面发现**：`deepseek-v4-flash`/`deepseek-flash` 上 web_search 工具**确定性不绑定**（4/4 对照零 `web_search_call`，模型 reasoning 自述"没有工具"后编造来源）——而同日早些时候第 0 轮跑批同模型名有 116 条真实检索 ⇒ 服务端兼容路由行为当日变化或间歇；`web_search_call` 存在性必须进 `retrieval_family` 探针读数（flash 静默失绑 = `capability_unreachable` 的真实形态）。入口：[`0AC_S1_PROBE_RECORD_2026-09-13`](docs/audits/0AC_S1_PROBE_RECORD_2026-09-13.md)；探针件 `D:\tb-eval\probe-0ac-s1\`（不入仓）。**下一步 S2 机器合约（待放行）**。
 - 验收：检索类**首个结果** `wall_ms` p99 ≤ 10 s；`subagent_wallclock_timeout_mid_tool` = 0；等待路径零事件为 0。风险：10 s 截止会砍检索长尾 ⇒ 保留放宽开关 + 「10 s vs 现状」A/B 记录。
 - 边界：**不改 FP-2**（能力级不可达如实汇报 + 有结果即发回本在 FP-2 语义内）；**不新增容器内浏览器**；官方口径不变（流式化只改 agent 侧）。
 
@@ -901,3 +902,7 @@ GLM F2 处置转排期（2026-09-06 用户裁决）：`orz-host/src/approval.rs`
 - [x] GAP-ENCODING-GATE：机械编码门控闭合。
 - [x] GAP-ACAF-SLICE1 / SLICE2A / SLICE2B / FAILCLOSED 与 GAP-DENIAL-POLICY-REVISION：ACAF 实施切片闭合（fail-closed 生产启用已随 P2 IMPL-CONTROL-FABRIC 闭合）。
 - [x] OPS-PROTOCOL 审查判定登记（裁剪方向定案；裁剪设计待产出）。
+
+> **2026-09-13 晚补记（P0-0ac 路径改定）**：用户裁决**全面转向本地检索**（服务端 web_search 被 DeepSeek 下架，官方文档明载"内置工具忽略"；flash 路由静默失绑 4/4；v4-pro 残余通道随 2026-09-14 12:00 路由切换预计关闭）。**偏离登记：检索后端 服务端 web_search → 本地分段检索**（agent 侧能力，TB 2.1 官方口径四要素不动，不构成违反；可比性注记入台账）。**S1′ 本地检索探针完成**：DDG html 纯 HTTP 可用（12/12 解析、命中 9.8 条、TTFB 冷 11 s/热 5.8 s）；Bing HTML 有结果块、提取器需修（非 bot 墙）、RSS 相关性差不作主通道；Google 无浏览器弃用；串行流水线首 SERP p50 21 s（Bing 先验白等）不可行 ⇒ **10 s 截止落法 = 多引擎并行竞速 + 预热，默认值待容器内复验后定**；页面抓取成功率 83%。入口：[`0AC_S1_PROBE_RECORD_2026-09-13` §6](docs/audits/0AC_S1_PROBE_RECORD_2026-09-13.md) / 设计稿 §9 修订。**下一步 S2 机器合约（双路径：本地分段为主、流式为恢复预留），待放行**。
+> **2026-09-13 晚二次更正（S1′ 代理假象）**：用户指出 DDG 早已排除 ⇒ 复核证实首测走系统代理（127.0.0.1:7890），**直连（= 容器形态）下 Bing HTML TTFB 0.4 s、DDG/Google 不可达**——0v R4「duckduckgo 本地不可达」实证成立。更正：默认引擎集 = **Bing HTML 直连单引擎**（提取器需重写）；**截止按引擎单独计时 + 整体兜底 30 s**（用户裁决）。探针记录 §7 / 设计稿 §9.4 已更正。
+> **2026-09-13 晚三补（用户裁决：引擎选路与工具面）**：① cn.bing.com = 无代理默认引擎；② 有代理时引擎交模型自选（接 0v §6 留存的引擎自选方案）；③ **工具面保留 `web_search` 名称**，实现改指本地检索（8 工具面冻结不破），模型可见描述如实标注本地来源。已入设计稿 §9.6。
