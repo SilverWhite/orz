@@ -669,6 +669,8 @@ GLM F2 处置转排期（2026-09-06 用户裁决）：`orz-host/src/approval.rs`
 - 验收：检索类**首个结果** `wall_ms` p99 ≤ 10 s；`subagent_wallclock_timeout_mid_tool` = 0；等待路径零事件为 0。风险：10 s 截止会砍检索长尾 ⇒ 保留放宽开关 + 「10 s vs 现状」A/B 记录。
 - 边界：**不改 FP-2**（能力级不可达如实汇报 + 有结果即发回本在 FP-2 语义内）；**不新增容器内浏览器**；官方口径不变（流式化只改 agent 侧）。
 
+- 审记（2026-09-14）：S3①② 部分落地（orz `4c892951` + 法官面 `ac5d6375`）后全面审记——设计面 0 问题级缺陷（2 口径注记）；实现面 **G1** 本地检索核心解析器 panic（P0）/ **G2** `fmt` 门未过（P1）/ **G3** 投递侧未落（符合性 P1）⇒ 0ac 仍 open，⑤⑥⑦ 维持未落，裁决点三枚待用户。入口：[`0AC_S3_IMPLEMENTATION_AUDIT_2026-09-14`](docs/audits/0AC_S3_IMPLEMENTATION_AUDIT_2026-09-14.md) / 摩擦台账 F-014/F-015。
+
 ### P0-B FUS-RETRIEVAL-MECH（`implemented`；批次 1-6 全部闭合 2026-08-14，保留供核对）
 
 - [x] 全部闭合：B-1 citations 结构化透传 / 步骤 2 web_fetch 候选计数门禁（cap=8）/ 步骤 3 机械预筛（canonical 去重 + 失败形态剔除 + tier/weight）/ 步骤 4 browser_read 模式扩展 + 计数域复用 / 步骤 5 输出级引用校验器 / 步骤 6 提示词缩短。入口：[检索机械控制设计](docs/RETRIEVAL_MECHANICAL_CONTROLS_DESIGN_2026-08-13.md) / 各步骤实施审计 / BACKLOG 0B。

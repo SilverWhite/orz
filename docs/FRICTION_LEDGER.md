@@ -66,6 +66,22 @@
 > - 父仓 `git status --porcelain` → `M assurance/run_event_journal_validation.py` + `M orz`；`git diff --stat` → `2 files changed, 250 insertions(+)`。
 > - 0ac S3①② 建造段（已折叠）的逐条核证命令与运行结果存档于 `D:\CLI\.gsa\ledger\current.md`（按行检索）。
 
+### F-014 | 2026-09-14 | RUN-CLI-6aa6c9b3 | 模型习惯（落码交付门；F-009 同族第 2 次）| open（缺口 G1/G2，修复批次待裁决）
+**0ac S3①② 落码批（orz `4c892951`，当前 HEAD）带 3 例自测红与格式门未过**：① 新文件 `crates/codegen/orz-tools/src/implementations/web_search/local_segmented.rs:339:30` 按字节切片解码 HTML 实体造成字符边界 panic——`cargo test -p orz-tools --lib local_segmented` 实测 `6 passed; 3 failed`（红：`parse_bing_serp_reads_current_structure_and_skips_ads` / `search_returns_hits_with_stable_shape` / `empty_serp_is_empty_result_and_chain_falls_through`），panic 原文 `end byte index 12 is not a char boundary; it is inside '方' (bytes 11..14 of string)`；② `cargo fmt --all -- --check` 退出 1、16 处 diff（4 个本批文件：`local_segmented.rs`×9 / `host_exec.rs`×2 / `retrieval/projection.rs`×3 / `tool_probe.rs`×2）；③ `cargo clippy -p orz-tools --lib` 本批新文件 2 处风格警告（`:110/:111`）。**代价**：开关 `ORZ_WEB_SEARCH_LOCAL` 默认关是唯一护栏——打开前本地检索路径不可实机复验（dev/release 均 `panic="abort"`，同输入在生产形态为进程中止）；审记轮取证 1 段测试跑批。**处置**：按用户 2026-09-14 边界只登记不动手——缺口 G1（P0）/G2（P1）见审计文档 §3.1/§3.2 与 §6；修复批次划分待裁决。
+
+### F-015 | 2026-09-14 | RUN-CLI-6aa6c9b3 | 装置侧（工具：`grep` 空返，F-008 第 5 次复现）| open（根因未定）
+**`grep` 工具继续空返**：本会话审记段复现 3 次（审计文档 §5 已注），收尾段再复现 3 次（本轮实做，原文）：`pattern=RUN-CLI-`（`D:\CLI\docs\FRICTION_LEDGER.md`）、`pattern=F-01[0-9]|run|Run|RUN`（同文件）、`pattern=0ac|GAP-MECH-IMMEDIATE-FEEDBACK|IMMEDIATE_RESULT`（`D:\CLI\CLI_PROJECT_INDEX.md`）三次均返回 `tool 'grep' completed with no output (exit_code=Some(0))`；三份目标该时刻确有大量命中（同刻 `Select-String` 命中 5 行、`rg.exe` 命中即返回）。**代价**：审记全段检索改道 `rg.exe`（`B:\Zcode\resources\tools\ripgrep\rg.exe`）+ `Select-String`，每轮额外 1–2 次工具调用。**处置**：事实留痕；根因线索见 F-013（未复刻参数形状以区分 wrapper 丢输出）。
+
+> **本轮机械核证留痕（RUN-CLI-6aa6c9b3，输出摘录）**
+> - `cargo test -p orz-tools --lib` → `test result: FAILED. 2819 passed; 49 failed; 6 ignored; 0 measured; 0 filtered out; finished in 32.57s`；`cargo test -p orz-tools --lib local_segmented` → `test result: FAILED. 6 passed; 3 failed; 0 ignored; 2865 filtered out; finished in 0.10s`，panic 原文 `panicked at crates\codegen\orz-tools\src\implementations\web_search\local_segmented.rs:339:30: end byte index 12 is not a char boundary; it is inside '方' (bytes 11..14 of string)`。
+> - `Select-String -Path Cargo.toml -Pattern "panic"` → `Cargo.toml:311:panic = "abort"`（release）/ `:352:panic = "abort"`（dev）。
+> - `cargo fmt --all -- --check` → `FMT_EXIT=1`，16 处 diff（分布同上）；`cargo clippy -p orz-tools --lib --message-format short` → `--> ...local_segmented.rs:110:9` / `:111:9`（本批新文件 2 处；无 `error:` 行）。
+> - `cargo test -p orz-assurance --lib` → `226 passed; 0 failed; 0 measured`；`cargo test -p orz-loop --lib`（清常驻 `ORZ_MAX_WALLCLOCK` 后）→ `771 passed; 0 failed; 3 ignored`，不清空 → `770 passed; 1 failed`（`blackboard::tests::blackboard_read_serves_session_section`，F-012 同形）。
+> - `python scripts/check_repository.py` → `"error_count": 0` / `"valid": true`（EXIT=0）。
+> - `rg -n "retrieval_progress|retrieval_result_segment|result_delivered" crates --glob "*.rs"` → 产品码零命中（仅 `orz-assurance` 法官读取面）；`rg -n "ResultDelivered|RetrievalProgress|RetrievalResultSegment"` → 零命中。
+> - `grep`（工具）空返原文见 F-015；对照：`Select-String -Path CLI_PROJECT_INDEX.md -Pattern "0ac"` → 5 行命中（L3/L5/L8/L59/L331，L331 = `GAP-MECH-IMMEDIATE-FEEDBACK` 路由行）、`rg.exe -n "RUN-CLI" D:\CLI\.gsa\ledger\current.md` → 命中 8 行（L35/L108/L110/L116–L120/L147）。
+> - `git -C orz log --oneline -3` → `4c892951`（S3①/②）/ `ac5d6375`（S3-a）/ `ea777918`；`git -C orz status --porcelain` → 空（工作区干净）；父仓 `git status --short` → 仅 `?? docs/audits/0AC_S3_IMPLEMENTATION_AUDIT_2026-09-14.md`。
+
 ## 统计
 
 | 日期 | run | 摩擦条目 | 立案候选 | 已修 | 观察 |
@@ -73,3 +89,4 @@
 | 2026-09-13 | RUN-CLI-6aa6a868 / 6aa6ac42 | F-001…F-006 | F-001②/F-002②（待立案） | F-001①/F-002①/F-006 | F-003（并入 0ac）/F-004/F-005 |
 | 2026-09-13 | RUN-CLI-6aa6b63d（0ac S3-a 落码） | F-007…F-010 | F-007（判据口径待裁决）/F-008 | F-009 | F-007/F-008/F-010 |
 | 2026-09-13 | RUN-CLI-6aa6bd3f（0ac S3② 裁决(a) 落地 / S3① 生产者面） | F-011…F-013 | F-013（根因待定，待立案） | F-011/F-012 | F-007 已按裁决(a) 翻宽口径落地；F-008 第 4 次复现未修 |
+| 2026-09-14 | RUN-CLI-6aa6c9b3（0ac S3 实现审记） | F-014…F-015 | F-014（G1–G3 修复批次划分待裁决）/F-015（F-008 同族，根因待定） | — | F-008 第 5 次复现；G1–G3 详见 [0ac S3 审记](audits/0AC_S3_IMPLEMENTATION_AUDIT_2026-09-14.md) |
