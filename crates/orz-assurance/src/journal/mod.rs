@@ -26,12 +26,16 @@
 //! - `families` — v0.2 rule-family verifiers, S2b first six families
 //!   (Task D, 2026-09-06; mirrors `_verify_v02_*` in the Python judge)
 //! - `families_s2c` — the remaining 24 rule families (Task D S2c, 2026-09-06)
+//! - `immediate_feedback` — the 0ac S3 judge rules over the S2 machine contract
+//!   (`retrieval_progress` / `retrieval_result_segment` / `result_delivered` /
+//!   `tool_completed.cause` / `retrieval_family` probe), 2026-09-13
 
 pub mod chain;
 pub mod conformance;
 pub mod event;
 pub mod families;
 pub mod families_s2c;
+pub mod immediate_feedback;
 pub mod recorder;
 pub mod verifier;
 
