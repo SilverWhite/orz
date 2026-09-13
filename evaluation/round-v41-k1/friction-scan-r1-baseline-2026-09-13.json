@@ -1,0 +1,4158 @@
+{
+  "schema": "tb21-friction-scan-v0.1",
+  "scanned_at": "2026-09-13",
+  "jobs_root": "D:\\tb-eval\\jobs-official",
+  "job_prefixes": [
+    "official-r1-"
+  ],
+  "population": {
+    "trials": 97,
+    "tasks": 89,
+    "tool_calls": 2837,
+    "retrieval_requests": 119,
+    "note": "attention_weight is a heuristic ranking aid for triage, not a quality or score metric"
+  },
+  "signals": {
+    "tool_calls_by_tool": {
+      "run_terminal_cmd": 1546,
+      "read_file": 445,
+      "submit": 128,
+      "plan_write": 124,
+      "search_replace": 122,
+      "grep": 95,
+      "list_dir": 83,
+      "web_fetch": 68,
+      "web_search": 51,
+      "blackboard_read": 50,
+      "todo_write": 42,
+      "run_tests": 29,
+      "update_goal": 10,
+      "project_doc_index": 9,
+      "retrieval_disposition": 8,
+      "run_terminal_cell": 6,
+      "search_tool": 4,
+      "run_terminal_calls": 3,
+      "run_terminal_cdot": 2,
+      "run_terminal_cpt": 2,
+      "compaction_whitelist_add": 2,
+      "run_terminal_cplet": 1,
+      "run_terminal_cord": 1,
+      "run_terminal_cpt_cmd": 1,
+      "run_terminal_catch": 1,
+      "run_terminal_cdir_cmd": 1,
+      "run_terminal_ccmd": 1,
+      "run_terminal_call": 1,
+      "run_terminal_craft": 1
+    },
+    "tool_errors_by_tool": {
+      "plan_write": 20,
+      "search_replace": 14,
+      "run_terminal_cmd": 10,
+      "web_fetch": 8,
+      "update_goal": 8,
+      "list_dir": 4,
+      "web_search": 4,
+      "submit": 3,
+      "read_file": 3,
+      "run_tests": 3,
+      "compaction_whitelist_add": 1
+    },
+    "model_tool_name_errors_by_requested_name": {
+      "run_terminal_cell": 6,
+      "run_terminal_calls": 3,
+      "run_terminal_cdot": 2,
+      "run_terminal_cpt": 2,
+      "run_terminal_cplet": 1,
+      "run_terminal_cord": 1,
+      "run_terminal_cpt_cmd": 1,
+      "run_terminal_catch": 1,
+      "run_terminal_cdir_cmd": 1,
+      "run_terminal_ccmd": 1,
+      "run_terminal_call": 1,
+      "run_terminal_craft": 1
+    },
+    "framework_signals": {
+      "plan_write:refill_requested": 42
+    },
+    "role_denials": {
+      "run_terminal_cmd:retrieval_role_write_denied": 9,
+      "todo_write:retrieval_role_write_denied": 6,
+      "search_tool:retrieval_role_write_denied": 4,
+      "update_goal:retrieval_role_write_denied": 2,
+      "search_replace:retrieval_role_write_denied": 1,
+      "submit:retrieval_role_write_denied": 1
+    },
+    "nonzero_exit_by_tool": {
+      "run_terminal_cmd": 119,
+      "run_tests": 26
+    },
+    "non_shell_exit_codes_by_tool": {
+      "plan_write": 62,
+      "search_replace": 15,
+      "todo_write": 6,
+      "search_tool": 4,
+      "submit": 4,
+      "list_dir": 3,
+      "update_goal": 2
+    },
+    "permission_denials_by_tool": {
+      "grep": 6,
+      "read_file": 5,
+      "list_dir": 1
+    },
+    "permission_decisions": {
+      "allow_once": 2668,
+      "deny": 12
+    },
+    "policy_denials": {},
+    "transport_retry": {
+      "recovered/midstream": 4
+    },
+    "sentinel_trips": 9,
+    "terminal_states": {},
+    "resource_events": {},
+    "longsession_events": {
+      "context_compressed": 1
+    },
+    "browser_failures": {},
+    "serp_at_cap_trials": 0,
+    "timed_out_tool_calls": 0,
+    "trials_with_exception": 34,
+    "trials_with_any_tool_error": 33,
+    "trials_with_model_tool_name_errors": 15,
+    "trials_with_any_denial": 6,
+    "trials_with_zero_reward": 28
+  },
+  "error_examples": {
+    "tool:web_fetch": "tool execution failed: unsupported content type application/x-gzip from https://www.ibiblio.org/pub/linux/apps/graphics/rays/pov/povsrc-2.2.tar.gz",
+    "tool:update_goal": "tool execution failed: No active goal to update (GoalUpdateHandle not registered)",
+    "tool:search_replace": "content_anchor_mismatch",
+    "tool:plan_write": "validation_failed_after_refill",
+    "tool:run_terminal_cmd": "tool execution failed: Remove the background '&' from your command; background execution is disabled.",
+    "tool:list_dir": "plan_round_tool_denied",
+    "tool:submit": "submit_no_plan",
+    "tool:web_search": "activation_awaiting_disposition",
+    "tool:compaction_whitelist_add": "compaction whitelist is only writable during the first tool batch (first round)",
+    "tool:read_file": "tool execution failed: missing field `target_file`",
+    "tool:run_tests": "run_tests failed: tool execution failed: test runner spawn: No such file or directory (os error 2)"
+  },
+  "friction_trials": [
+    {
+      "task": "winning-avg-corewars",
+      "trial": "winning-avg-corewars__KC2EzL7",
+      "reward": 1.0,
+      "wall_minutes": 30.08,
+      "exception": false,
+      "attention_weight": 10,
+      "tool_calls": {
+        "plan_write": 6,
+        "list_dir": 1,
+        "run_terminal_cmd": 155,
+        "read_file": 11,
+        "run_terminal_catch": 1,
+        "run_terminal_cell": 1,
+        "update_goal": 2,
+        "run_terminal_calls": 1,
+        "run_terminal_cdir_cmd": 1,
+        "search_replace": 1,
+        "submit": 2
+      },
+      "tool_errors": {
+        "plan_write": 4,
+        "update_goal": 2
+      },
+      "model_tool_name_errors": {
+        "run_terminal_catch": 1,
+        "run_terminal_cell": 1,
+        "run_terminal_calls": 1,
+        "run_terminal_cdir_cmd": 1
+      },
+      "framework_signals": {
+        "plan_write:refill_requested": 1
+      },
+      "role_denials": {},
+      "nonzero_exit": {
+        "run_terminal_cmd": 1
+      },
+      "non_shell_exit_codes": {
+        "plan_write": 5
+      },
+      "permission_denials": {},
+      "permission_decisions": {
+        "allow_once": 182
+      },
+      "policy_denials": {},
+      "transport_retry": {},
+      "sentinel_trips": 0,
+      "terminal": {},
+      "resource_events": {},
+      "longsession_events": {},
+      "browser_failures": {},
+      "retrieval_requests": 0,
+      "serp_at_cap": 0,
+      "timed_out": 0,
+      "error_examples": {
+        "tool:plan_write": "validation_failed_after_refill",
+        "tool:update_goal": "tool execution failed: No active goal to update (GoalUpdateHandle not registered)"
+      },
+      "job": "official-r1-c4"
+    },
+    {
+      "task": "regex-chess",
+      "trial": "regex-chess__LcN3HZH",
+      "reward": 1.0,
+      "wall_minutes": 63.67,
+      "exception": false,
+      "attention_weight": 10,
+      "tool_calls": {
+        "blackboard_read": 5,
+        "plan_write": 2,
+        "list_dir": 4,
+        "run_terminal_cmd": 41,
+        "update_goal": 1,
+        "read_file": 44,
+        "web_search": 19,
+        "web_fetch": 12,
+        "retrieval_disposition": 2,
+        "grep": 3,
+        "run_terminal_cdot": 1,
+        "run_tests": 1,
+        "submit": 2
+      },
+      "tool_errors": {
+        "web_search": 1,
+        "web_fetch": 3,
+        "plan_write": 1
+      },
+      "model_tool_name_errors": {
+        "run_terminal_cdot": 1
+      },
+      "framework_signals": {},
+      "role_denials": {
+        "update_goal:retrieval_role_write_denied": 1,
+        "run_terminal_cmd:retrieval_role_write_denied": 1
+      },
+      "nonzero_exit": {
+        "run_terminal_cmd": 9,
+        "run_tests": 1
+      },
+      "non_shell_exit_codes": {
+        "update_goal": 1,
+        "plan_write": 1
+      },
+      "permission_denials": {
+        "grep": 1
+      },
+      "permission_decisions": {
+        "allow_once": 102,
+        "deny": 1
+      },
+      "policy_denials": {},
+      "transport_retry": {
+        "recovered/midstream": 1
+      },
+      "sentinel_trips": 2,
+      "terminal": {},
+      "resource_events": {},
+      "longsession_events": {},
+      "browser_failures": {},
+      "retrieval_requests": 31,
+      "serp_at_cap": 0,
+      "timed_out": 0,
+      "error_examples": {
+        "tool:web_search": "activation_awaiting_disposition",
+        "tool:web_fetch": "web_fetch_candidate_cap_exceeded",
+        "tool:plan_write": "validation_failed"
+      },
+      "job": "official-r1-c8"
+    },
+    {
+      "task": "sam-cell-seg",
+      "trial": "sam-cell-seg__vaKTfjV",
+      "reward": 1.0,
+      "wall_minutes": 39.3,
+      "exception": false,
+      "attention_weight": 8,
+      "tool_calls": {
+        "plan_write": 3,
+        "list_dir": 14,
+        "run_terminal_cmd": 35,
+        "todo_write": 3,
+        "read_file": 6,
+        "web_search": 1,
+        "web_fetch": 8,
+        "project_doc_index": 1,
+        "grep": 3,
+        "search_replace": 5,
+        "retrieval_disposition": 1,
+        "run_tests": 1,
+        "submit": 3,
+        "update_goal": 1
+      },
+      "tool_errors": {
+        "list_dir": 1,
+        "run_terminal_cmd": 1,
+        "plan_write": 1,
+        "web_fetch": 1,
+        "search_replace": 1,
+        "submit": 1,
+        "update_goal": 1
+      },
+      "model_tool_name_errors": {},
+      "framework_signals": {
+        "plan_write:refill_requested": 1
+      },
+      "role_denials": {
+        "todo_write:retrieval_role_write_denied": 1,
+        "run_terminal_cmd:retrieval_role_write_denied": 1,
+        "search_replace:retrieval_role_write_denied": 1
+      },
+      "nonzero_exit": {
+        "run_terminal_cmd": 10,
+        "run_tests": 1
+      },
+      "non_shell_exit_codes": {
+        "plan_write": 2,
+        "list_dir": 1,
+        "todo_write": 1,
+        "search_replace": 2,
+        "submit": 1
+      },
+      "permission_denials": {
+        "read_file": 1
+      },
+      "permission_decisions": {
+        "allow_once": 69,
+        "deny": 1
+      },
+      "policy_denials": {},
+      "transport_retry": {},
+      "sentinel_trips": 0,
+      "terminal": {},
+      "resource_events": {},
+      "longsession_events": {},
+      "browser_failures": {},
+      "retrieval_requests": 9,
+      "serp_at_cap": 0,
+      "timed_out": 0,
+      "error_examples": {
+        "tool:list_dir": "plan_round_tool_denied",
+        "tool:run_terminal_cmd": "plan_round_tool_denied",
+        "tool:plan_write": "validation_failed_after_refill",
+        "tool:web_fetch": "activation_awaiting_disposition",
+        "tool:search_replace": "content_anchor_mismatch",
+        "tool:submit": "submit_no_plan",
+        "tool:update_goal": "tool execution failed: No active goal to update (GoalUpdateHandle not registered)"
+      },
+      "job": "official-r1-c2"
+    },
+    {
+      "task": "fix-ocaml-gc",
+      "trial": "fix-ocaml-gc__mymTkNo",
+      "reward": 1.0,
+      "wall_minutes": 37.6,
+      "exception": false,
+      "attention_weight": 8,
+      "tool_calls": {
+        "blackboard_read": 2,
+        "list_dir": 4,
+        "plan_write": 2,
+        "run_terminal_cmd": 38,
+        "grep": 24,
+        "read_file": 31,
+        "project_doc_index": 1,
+        "todo_write": 3,
+        "web_search": 3,
+        "web_fetch": 10,
+        "search_tool": 1,
+        "search_replace": 1,
+        "submit": 2
+      },
+      "tool_errors": {
+        "list_dir": 1,
+        "web_fetch": 1,
+        "run_terminal_cmd": 2
+      },
+      "model_tool_name_errors": {},
+      "framework_signals": {
+        "plan_write:refill_requested": 1
+      },
+      "role_denials": {
+        "run_terminal_cmd:retrieval_role_write_denied": 2,
+        "todo_write:retrieval_role_write_denied": 1,
+        "search_tool:retrieval_role_write_denied": 1
+      },
+      "nonzero_exit": {
+        "run_terminal_cmd": 6
+      },
+      "non_shell_exit_codes": {
+        "list_dir": 1,
+        "plan_write": 1,
+        "todo_write": 1,
+        "search_tool": 1
+      },
+      "permission_denials": {
+        "grep": 1,
+        "read_file": 3
+      },
+      "permission_decisions": {
+        "allow_once": 104,
+        "deny": 4
+      },
+      "policy_denials": {},
+      "transport_retry": {},
+      "sentinel_trips": 0,
+      "terminal": {},
+      "resource_events": {},
+      "longsession_events": {
+        "context_compressed": 1
+      },
+      "browser_failures": {},
+      "retrieval_requests": 13,
+      "serp_at_cap": 0,
+      "timed_out": 0,
+      "error_examples": {
+        "tool:list_dir": "plan_round_tool_denied",
+        "tool:web_fetch": "web_fetch_candidate_cap_exceeded",
+        "tool:run_terminal_cmd": "tool execution failed: Remove the background '&' from your command; background execution is disabled."
+      },
+      "job": "official-r1-c6"
+    },
+    {
+      "task": "build-cython-ext",
+      "trial": "build-cython-ext__VQGYgfp",
+      "reward": 1.0,
+      "wall_minutes": 11.0,
+      "exception": false,
+      "attention_weight": 6,
+      "tool_calls": {
+        "plan_write": 3,
+        "run_terminal_cmd": 48,
+        "read_file": 33,
+        "search_replace": 25,
+        "grep": 1,
+        "blackboard_read": 2,
+        "submit": 2
+      },
+      "tool_errors": {
+        "search_replace": 5,
+        "plan_write": 1
+      },
+      "model_tool_name_errors": {},
+      "framework_signals": {
+        "plan_write:refill_requested": 1
+      },
+      "role_denials": {},
+      "nonzero_exit": {
+        "run_terminal_cmd": 3
+      },
+      "non_shell_exit_codes": {
+        "plan_write": 2,
+        "search_replace": 5
+      },
+      "permission_denials": {},
+      "permission_decisions": {
+        "allow_once": 109
+      },
+      "policy_denials": {},
+      "transport_retry": {},
+      "sentinel_trips": 0,
+      "terminal": {},
+      "resource_events": {},
+      "longsession_events": {},
+      "browser_failures": {},
+      "retrieval_requests": 0,
+      "serp_at_cap": 0,
+      "timed_out": 0,
+      "error_examples": {
+        "tool:search_replace": "content_anchor_mismatch",
+        "tool:plan_write": "validation_failed"
+      },
+      "job": "official-r1-c2"
+    },
+    {
+      "task": "install-windows-3.11",
+      "trial": "install-windows-3.11__YS2M95t",
+      "reward": 1.0,
+      "wall_minutes": 31.4,
+      "exception": false,
+      "attention_weight": 6,
+      "tool_calls": {
+        "plan_write": 2,
+        "run_terminal_cmd": 118,
+        "compaction_whitelist_add": 1,
+        "read_file": 12,
+        "run_terminal_cell": 1,
+        "search_replace": 3,
+        "blackboard_read": 1,
+        "run_tests": 1
+      },
+      "tool_errors": {
+        "plan_write": 1,
+        "run_terminal_cmd": 2,
+        "search_replace": 1,
+        "run_tests": 1
+      },
+      "model_tool_name_errors": {
+        "run_terminal_cell": 1
+      },
+      "framework_signals": {
+        "plan_write:refill_requested": 1
+      },
+      "role_denials": {},
+      "nonzero_exit": {
+        "run_terminal_cmd": 13
+      },
+      "non_shell_exit_codes": {
+        "plan_write": 2,
+        "search_replace": 1
+      },
+      "permission_denials": {},
+      "permission_decisions": {
+        "allow_once": 138
+      },
+      "policy_denials": {},
+      "transport_retry": {},
+      "sentinel_trips": 0,
+      "terminal": {},
+      "resource_events": {},
+      "longsession_events": {},
+      "browser_failures": {},
+      "retrieval_requests": 0,
+      "serp_at_cap": 0,
+      "timed_out": 0,
+      "error_examples": {
+        "tool:plan_write": "validation_failed_after_refill",
+        "tool:run_terminal_cmd": "tool execution failed: Remove the background '&' from your command; background execution is disabled.",
+        "tool:search_replace": "content_anchor_mismatch",
+        "tool:run_tests": "run_tests failed: tool execution failed: test runner spawn: No such file or directory (os error 2)"
+      },
+      "job": "official-r1-c6"
+    },
+    {
+      "task": "compile-compcert",
+      "trial": "compile-compcert__CqmDzkr",
+      "reward": 1.0,
+      "wall_minutes": 26.45,
+      "exception": false,
+      "attention_weight": 6,
+      "tool_calls": {
+        "plan_write": 3,
+        "run_terminal_cmd": 62,
+        "run_terminal_cell": 1,
+        "grep": 23,
+        "read_file": 18,
+        "blackboard_read": 3,
+        "list_dir": 6,
+        "web_fetch": 7,
+        "web_search": 1,
+        "project_doc_index": 2,
+        "run_tests": 1,
+        "retrieval_disposition": 1,
+        "todo_write": 1,
+        "submit": 2
+      },
+      "tool_errors": {
+        "plan_write": 1,
+        "run_terminal_cmd": 1,
+        "run_tests": 1
+      },
+      "model_tool_name_errors": {
+        "run_terminal_cell": 1
+      },
+      "framework_signals": {
+        "plan_write:refill_requested": 1
+      },
+      "role_denials": {
+        "run_terminal_cmd:retrieval_role_write_denied": 2
+      },
+      "nonzero_exit": {
+        "run_terminal_cmd": 4,
+        "run_tests": 1
+      },
+      "non_shell_exit_codes": {
+        "plan_write": 2
+      },
+      "permission_denials": {},
+      "permission_decisions": {
+        "allow_once": 119
+      },
+      "policy_denials": {},
+      "transport_retry": {
+        "recovered/midstream": 2
+      },
+      "sentinel_trips": 0,
+      "terminal": {},
+      "resource_events": {},
+      "longsession_events": {},
+      "browser_failures": {},
+      "retrieval_requests": 8,
+      "serp_at_cap": 0,
+      "timed_out": 0,
+      "error_examples": {
+        "tool:plan_write": "validation_failed_after_refill",
+        "tool:run_terminal_cmd": "tool execution failed: Remove the background '&' from your command; background execution is disabled.",
+        "tool:run_tests": "retrieval_role_execution_denied"
+      },
+      "job": "official-r1-c8"
+    },
+    {
+      "task": "reshard-c4-data",
+      "trial": "reshard-c4-data__6cHhmZB",
+      "reward": 1.0,
+      "wall_minutes": 16.23,
+      "exception": false,
+      "attention_weight": 5,
+      "tool_calls": {
+        "plan_write": 2,
+        "list_dir": 2,
+        "run_terminal_cmd": 18,
+        "project_doc_index": 1,
+        "compaction_whitelist_add": 1,
+        "todo_write": 1,
+        "search_replace": 6,
+        "read_file": 7,
+        "grep": 2,
+        "submit": 2,
+        "blackboard_read": 1
+      },
+      "tool_errors": {
+        "compaction_whitelist_add": 1,
+        "search_replace": 1
+      },
+      "model_tool_name_errors": {},
+      "framework_signals": {
+        "plan_write:refill_requested": 1
+      },
+      "role_denials": {},
+      "nonzero_exit": {
+        "run_terminal_cmd": 1
+      },
+      "non_shell_exit_codes": {
+        "plan_write": 1,
+        "search_replace": 1
+      },
+      "permission_denials": {
+        "grep": 3
+      },
+      "permission_decisions": {
+        "allow_once": 42,
+        "deny": 3
+      },
+      "policy_denials": {},
+      "transport_retry": {},
+      "sentinel_trips": 0,
+      "terminal": {},
+      "resource_events": {},
+      "longsession_events": {},
+      "browser_failures": {},
+      "retrieval_requests": 0,
+      "serp_at_cap": 0,
+      "timed_out": 0,
+      "error_examples": {
+        "tool:compaction_whitelist_add": "compaction whitelist is only writable during the first tool batch (first round)",
+        "tool:search_replace": "content_anchor_mismatch"
+      },
+      "job": "official-r1-c4"
+    },
+    {
+      "task": "db-wal-recovery",
+      "trial": "db-wal-recovery__TbuLw7V",
+      "reward": 1.0,
+      "wall_minutes": 7.82,
+      "exception": false,
+      "attention_weight": 5,
+      "tool_calls": {
+        "plan_write": 5,
+        "list_dir": 1,
+        "run_terminal_cmd": 23,
+        "run_terminal_ccmd": 1,
+        "submit": 3
+      },
+      "tool_errors": {
+        "plan_write": 3,
+        "submit": 1
+      },
+      "model_tool_name_errors": {
+        "run_terminal_ccmd": 1
+      },
+      "framework_signals": {
+        "plan_write:refill_requested": 1
+      },
+      "role_denials": {},
+      "nonzero_exit": {
+        "run_terminal_cmd": 2
+      },
+      "non_shell_exit_codes": {
+        "plan_write": 4,
+        "submit": 1
+      },
+      "permission_denials": {},
+      "permission_decisions": {
+        "allow_once": 33
+      },
+      "policy_denials": {},
+      "transport_retry": {},
+      "sentinel_trips": 0,
+      "terminal": {},
+      "resource_events": {},
+      "longsession_events": {},
+      "browser_failures": {},
+      "retrieval_requests": 0,
+      "serp_at_cap": 0,
+      "timed_out": 0,
+      "error_examples": {
+        "tool:plan_write": "validation_failed_after_refill",
+        "tool:submit": "submit_no_plan"
+      },
+      "job": "official-r1-c5"
+    },
+    {
+      "task": "mailman",
+      "trial": "mailman__HSizKgC",
+      "reward": 1.0,
+      "wall_minutes": 14.59,
+      "exception": false,
+      "attention_weight": 5,
+      "tool_calls": {
+        "plan_write": 4,
+        "read_file": 12,
+        "run_terminal_cmd": 52,
+        "grep": 1,
+        "run_terminal_call": 1,
+        "search_replace": 4,
+        "run_terminal_craft": 1,
+        "blackboard_read": 2,
+        "submit": 2
+      },
+      "tool_errors": {
+        "search_replace": 1,
+        "plan_write": 2
+      },
+      "model_tool_name_errors": {
+        "run_terminal_call": 1,
+        "run_terminal_craft": 1
+      },
+      "framework_signals": {
+        "plan_write:refill_requested": 1
+      },
+      "role_denials": {},
+      "nonzero_exit": {
+        "run_terminal_cmd": 7
+      },
+      "non_shell_exit_codes": {
+        "plan_write": 3,
+        "search_replace": 1
+      },
+      "permission_denials": {},
+      "permission_decisions": {
+        "allow_once": 78
+      },
+      "policy_denials": {},
+      "transport_retry": {},
+      "sentinel_trips": 0,
+      "terminal": {},
+      "resource_events": {},
+      "longsession_events": {},
+      "browser_failures": {},
+      "retrieval_requests": 0,
+      "serp_at_cap": 0,
+      "timed_out": 0,
+      "error_examples": {
+        "tool:search_replace": "content_anchor_mismatch",
+        "tool:plan_write": "validation_failed"
+      },
+      "job": "official-r1-c6"
+    },
+    {
+      "task": "build-pov-ray",
+      "trial": "build-pov-ray__ujszr6h",
+      "reward": 0.0,
+      "wall_minutes": 16.31,
+      "exception": false,
+      "attention_weight": 4,
+      "tool_calls": {
+        "plan_write": 2,
+        "run_terminal_cmd": 35,
+        "todo_write": 3,
+        "web_search": 7,
+        "web_fetch": 9,
+        "retrieval_disposition": 2,
+        "search_tool": 3,
+        "blackboard_read": 3,
+        "list_dir": 3,
+        "read_file": 12,
+        "search_replace": 3,
+        "submit": 2,
+        "update_goal": 1
+      },
+      "tool_errors": {
+        "web_fetch": 3,
+        "update_goal": 1
+      },
+      "model_tool_name_errors": {},
+      "framework_signals": {
+        "plan_write:refill_requested": 1
+      },
+      "role_denials": {
+        "todo_write:retrieval_role_write_denied": 2,
+        "run_terminal_cmd:retrieval_role_write_denied": 1,
+        "search_tool:retrieval_role_write_denied": 3
+      },
+      "nonzero_exit": {
+        "run_terminal_cmd": 2
+      },
+      "non_shell_exit_codes": {
+        "plan_write": 1,
+        "todo_write": 2,
+        "search_tool": 3
+      },
+      "permission_denials": {},
+      "permission_decisions": {
+        "allow_once": 61
+      },
+      "policy_denials": {},
+      "transport_retry": {},
+      "sentinel_trips": 0,
+      "terminal": {},
+      "resource_events": {},
+      "longsession_events": {},
+      "browser_failures": {},
+      "retrieval_requests": 16,
+      "serp_at_cap": 0,
+      "timed_out": 0,
+      "error_examples": {
+        "tool:web_fetch": "tool execution failed: unsupported content type application/x-gzip from https://www.ibiblio.org/pub/linux/apps/graphics/rays/pov/povsrc-2.2.tar.gz",
+        "tool:update_goal": "tool execution failed: No active goal to update (GoalUpdateHandle not registered)"
+      },
+      "job": "official-r1-c1"
+    },
+    {
+      "task": "video-processing",
+      "trial": "video-processing__AVgooee",
+      "reward": 0.0,
+      "wall_minutes": 56.84,
+      "exception": false,
+      "attention_weight": 4,
+      "tool_calls": {
+        "plan_write": 2,
+        "list_dir": 3,
+        "run_terminal_cmd": 108,
+        "read_file": 131,
+        "run_terminal_cell": 1,
+        "project_doc_index": 1,
+        "web_search": 6,
+        "web_fetch": 8,
+        "todo_write": 1,
+        "submit": 3,
+        "retrieval_disposition": 1,
+        "run_tests": 3,
+        "run_terminal_cord": 1,
+        "search_replace": 2
+      },
+      "tool_errors": {
+        "web_search": 1,
+        "search_replace": 1
+      },
+      "model_tool_name_errors": {
+        "run_terminal_cell": 1,
+        "run_terminal_cord": 1
+      },
+      "framework_signals": {
+        "plan_write:refill_requested": 1
+      },
+      "role_denials": {
+        "run_terminal_cmd:retrieval_role_write_denied": 1,
+        "todo_write:retrieval_role_write_denied": 1,
+        "submit:retrieval_role_write_denied": 1
+      },
+      "nonzero_exit": {
+        "run_terminal_cmd": 14,
+        "run_tests": 3
+      },
+      "non_shell_exit_codes": {
+        "plan_write": 1,
+        "todo_write": 1,
+        "submit": 1,
+        "search_replace": 1
+      },
+      "permission_denials": {},
+      "permission_decisions": {
+        "allow_once": 252
+      },
+      "policy_denials": {},
+      "transport_retry": {},
+      "sentinel_trips": 0,
+      "terminal": {},
+      "resource_events": {},
+      "longsession_events": {},
+      "browser_failures": {},
+      "retrieval_requests": 14,
+      "serp_at_cap": 0,
+      "timed_out": 0,
+      "error_examples": {
+        "tool:web_search": "activation_awaiting_disposition",
+        "tool:search_replace": "content_anchor_mismatch"
+      },
+      "job": "official-r1-c2"
+    },
+    {
+      "task": "feal-linear-cryptanalysis",
+      "trial": "feal-linear-cryptanalysis__giSzKWp",
+      "reward": 1.0,
+      "wall_minutes": 8.83,
+      "exception": false,
+      "attention_weight": 3,
+      "tool_calls": {
+        "plan_write": 2,
+        "read_file": 8,
+        "run_terminal_cmd": 12,
+        "search_replace": 5,
+        "run_terminal_cdot": 1,
+        "submit": 2
+      },
+      "tool_errors": {
+        "search_replace": 2
+      },
+      "model_tool_name_errors": {
+        "run_terminal_cdot": 1
+      },
+      "framework_signals": {
+        "plan_write:refill_requested": 1
+      },
+      "role_denials": {},
+      "nonzero_exit": {
+        "run_terminal_cmd": 4
+      },
+      "non_shell_exit_codes": {
+        "plan_write": 1,
+        "search_replace": 2
+      },
+      "permission_denials": {},
+      "permission_decisions": {
+        "allow_once": 28
+      },
+      "policy_denials": {},
+      "transport_retry": {},
+      "sentinel_trips": 0,
+      "terminal": {},
+      "resource_events": {},
+      "longsession_events": {},
+      "browser_failures": {},
+      "retrieval_requests": 0,
+      "serp_at_cap": 0,
+      "timed_out": 0,
+      "error_examples": {
+        "tool:search_replace": "content_anchor_mismatch"
+      },
+      "job": "official-r1-c1"
+    },
+    {
+      "task": "cobol-modernization",
+      "trial": "cobol-modernization__SUJEhq5",
+      "reward": 1.0,
+      "wall_minutes": 7.63,
+      "exception": false,
+      "attention_weight": 3,
+      "tool_calls": {
+        "plan_write": 2,
+        "blackboard_read": 2,
+        "read_file": 4,
+        "list_dir": 3,
+        "run_terminal_cmd": 17,
+        "run_terminal_cpt": 1,
+        "search_replace": 3,
+        "todo_write": 1,
+        "run_tests": 2,
+        "submit": 2
+      },
+      "tool_errors": {
+        "search_replace": 1
+      },
+      "model_tool_name_errors": {
+        "run_terminal_cpt": 1
+      },
+      "framework_signals": {
+        "plan_write:refill_requested": 1
+      },
+      "role_denials": {},
+      "nonzero_exit": {
+        "run_terminal_cmd": 2,
+        "run_tests": 2
+      },
+      "non_shell_exit_codes": {
+        "plan_write": 1,
+        "search_replace": 1
+      },
+      "permission_denials": {
+        "list_dir": 1
+      },
+      "permission_decisions": {
+        "allow_once": 36,
+        "deny": 1
+      },
+      "policy_denials": {},
+      "transport_retry": {},
+      "sentinel_trips": 0,
+      "terminal": {},
+      "resource_events": {},
+      "longsession_events": {},
+      "browser_failures": {},
+      "retrieval_requests": 0,
+      "serp_at_cap": 0,
+      "timed_out": 0,
+      "error_examples": {
+        "tool:search_replace": "content_anchor_mismatch"
+      },
+      "job": "official-r1-c3"
+    },
+    {
+      "task": "constraints-scheduling",
+      "trial": "constraints-scheduling__X8cxKqw",
+      "reward": 1.0,
+      "wall_minutes": 3.94,
+      "exception": false,
+      "attention_weight": 3,
+      "tool_calls": {
+        "plan_write": 1,
+        "read_file": 7,
+        "run_terminal_cmd": 2,
+        "submit": 2,
+        "blackboard_read": 1
+      },
+      "tool_errors": {
+        "read_file": 3
+      },
+      "model_tool_name_errors": {},
+      "framework_signals": {},
+      "role_denials": {},
+      "nonzero_exit": {},
+      "non_shell_exit_codes": {},
+      "permission_denials": {},
+      "permission_decisions": {
+        "allow_once": 13
+      },
+      "policy_denials": {},
+      "transport_retry": {},
+      "sentinel_trips": 0,
+      "terminal": {},
+      "resource_events": {},
+      "longsession_events": {},
+      "browser_failures": {},
+      "retrieval_requests": 0,
+      "serp_at_cap": 0,
+      "timed_out": 0,
+      "error_examples": {
+        "tool:read_file": "tool execution failed: missing field `target_file`"
+      },
+      "job": "official-r1-c5"
+    },
+    {
+      "task": "pytorch-model-cli",
+      "trial": "pytorch-model-cli__iguthSj",
+      "reward": 0.0,
+      "wall_minutes": 13.3,
+      "exception": false,
+      "attention_weight": 3,
+      "tool_calls": {
+        "plan_write": 3,
+        "list_dir": 1,
+        "run_terminal_cmd": 44,
+        "read_file": 1,
+        "grep": 1,
+        "run_terminal_calls": 1,
+        "update_goal": 1,
+        "run_tests": 2,
+        "submit": 2,
+        "blackboard_read": 1
+      },
+      "tool_errors": {
+        "plan_write": 1,
+        "update_goal": 1
+      },
+      "model_tool_name_errors": {
+        "run_terminal_calls": 1
+      },
+      "framework_signals": {
+        "plan_write:refill_requested": 1
+      },
+      "role_denials": {},
+      "nonzero_exit": {
+        "run_terminal_cmd": 7,
+        "run_tests": 2
+      },
+      "non_shell_exit_codes": {
+        "plan_write": 2
+      },
+      "permission_denials": {},
+      "permission_decisions": {
+        "allow_once": 57
+      },
+      "policy_denials": {},
+      "transport_retry": {},
+      "sentinel_trips": 0,
+      "terminal": {},
+      "resource_events": {},
+      "longsession_events": {},
+      "browser_failures": {},
+      "retrieval_requests": 0,
+      "serp_at_cap": 0,
+      "timed_out": 0,
+      "error_examples": {
+        "tool:plan_write": "validation_failed_after_refill",
+        "tool:update_goal": "tool execution failed: No active goal to update (GoalUpdateHandle not registered)"
+      },
+      "job": "official-r1-c7"
+    },
+    {
+      "task": "protein-assembly",
+      "trial": "protein-assembly__8tfod8c",
+      "reward": 0.0,
+      "wall_minutes": 18.18,
+      "exception": false,
+      "attention_weight": 3,
+      "tool_calls": {
+        "plan_write": 1,
+        "list_dir": 1,
+        "read_file": 3,
+        "grep": 1,
+        "run_terminal_cmd": 19,
+        "web_search": 6,
+        "web_fetch": 6,
+        "project_doc_index": 1,
+        "retrieval_disposition": 1,
+        "run_tests": 2,
+        "submit": 2,
+        "blackboard_read": 1,
+        "todo_write": 1
+      },
+      "tool_errors": {
+        "web_search": 1
+      },
+      "model_tool_name_errors": {},
+      "framework_signals": {},
+      "role_denials": {
+        "run_terminal_cmd:retrieval_role_write_denied": 1
+      },
+      "nonzero_exit": {
+        "run_terminal_cmd": 1,
+        "run_tests": 2
+      },
+      "non_shell_exit_codes": {},
+      "permission_denials": {
+        "grep": 1,
+        "read_file": 1
+      },
+      "permission_decisions": {
+        "allow_once": 31,
+        "deny": 2
+      },
+      "policy_denials": {},
+      "transport_retry": {},
+      "sentinel_trips": 0,
+      "terminal": {},
+      "resource_events": {},
+      "longsession_events": {},
+      "browser_failures": {},
+      "retrieval_requests": 12,
+      "serp_at_cap": 0,
+      "timed_out": 0,
+      "error_examples": {
+        "tool:web_search": "activation_awaiting_disposition"
+      },
+      "job": "official-r1-c8"
+    },
+    {
+      "task": "custom-memory-heap-crash",
+      "trial": "custom-memory-heap-crash__MB4ausG",
+      "reward": 0.0,
+      "wall_minutes": 15.39,
+      "exception": false,
+      "attention_weight": 2,
+      "tool_calls": {
+        "plan_write": 2,
+        "list_dir": 2,
+        "run_terminal_cmd": 61,
+        "read_file": 8,
+        "run_terminal_cplet": 1,
+        "run_terminal_calls": 1,
+        "todo_write": 2,
+        "search_replace": 1,
+        "submit": 2,
+        "blackboard_read": 1
+      },
+      "tool_errors": {},
+      "model_tool_name_errors": {
+        "run_terminal_cplet": 1,
+        "run_terminal_calls": 1
+      },
+      "framework_signals": {
+        "plan_write:refill_requested": 1
+      },
+      "role_denials": {},
+      "nonzero_exit": {},
+      "non_shell_exit_codes": {
+        "plan_write": 1
+      },
+      "permission_denials": {},
+      "permission_decisions": {
+        "allow_once": 81
+      },
+      "policy_denials": {},
+      "transport_retry": {},
+      "sentinel_trips": 0,
+      "terminal": {},
+      "resource_events": {},
+      "longsession_events": {},
+      "browser_failures": {},
+      "retrieval_requests": 0,
+      "serp_at_cap": 0,
+      "timed_out": 0,
+      "error_examples": {},
+      "job": "official-r1-c4-c"
+    },
+    {
+      "task": "dna-assembly",
+      "trial": "dna-assembly__M3mKqLM",
+      "reward": 0.0,
+      "wall_minutes": 31.68,
+      "exception": true,
+      "attention_weight": 2,
+      "tool_calls": {},
+      "tool_errors": {},
+      "model_tool_name_errors": {},
+      "framework_signals": {},
+      "role_denials": {},
+      "nonzero_exit": {},
+      "non_shell_exit_codes": {},
+      "permission_denials": {},
+      "permission_decisions": {},
+      "policy_denials": {},
+      "transport_retry": {},
+      "sentinel_trips": 2,
+      "terminal": {},
+      "resource_events": {},
+      "longsession_events": {},
+      "browser_failures": {},
+      "retrieval_requests": 0,
+      "serp_at_cap": 0,
+      "timed_out": 0,
+      "error_examples": {},
+      "job": "official-r1-c1"
+    },
+    {
+      "task": "circuit-fibsqrt",
+      "trial": "circuit-fibsqrt__ZcJp6HV",
+      "reward": 0.0,
+      "wall_minutes": 60.69,
+      "exception": true,
+      "attention_weight": 2,
+      "tool_calls": {},
+      "tool_errors": {},
+      "model_tool_name_errors": {},
+      "framework_signals": {},
+      "role_denials": {},
+      "nonzero_exit": {},
+      "non_shell_exit_codes": {},
+      "permission_denials": {},
+      "permission_decisions": {},
+      "policy_denials": {},
+      "transport_retry": {},
+      "sentinel_trips": 2,
+      "terminal": {},
+      "resource_events": {},
+      "longsession_events": {},
+      "browser_failures": {},
+      "retrieval_requests": 0,
+      "serp_at_cap": 0,
+      "timed_out": 0,
+      "error_examples": {},
+      "job": "official-r1-c6"
+    },
+    {
+      "task": "filter-js-from-html",
+      "trial": "filter-js-from-html__JxEPmJu",
+      "reward": 0.0,
+      "wall_minutes": 17.6,
+      "exception": false,
+      "attention_weight": 2,
+      "tool_calls": {
+        "plan_write": 1,
+        "list_dir": 1,
+        "run_terminal_cmd": 41,
+        "todo_write": 1,
+        "search_replace": 14,
+        "run_terminal_cpt": 1,
+        "run_tests": 3,
+        "read_file": 1,
+        "submit": 2,
+        "blackboard_read": 1
+      },
+      "tool_errors": {},
+      "model_tool_name_errors": {
+        "run_terminal_cpt": 1
+      },
+      "framework_signals": {},
+      "role_denials": {},
+      "nonzero_exit": {
+        "run_terminal_cmd": 3,
+        "run_tests": 3
+      },
+      "non_shell_exit_codes": {},
+      "permission_denials": {},
+      "permission_decisions": {
+        "allow_once": 66
+      },
+      "policy_denials": {},
+      "transport_retry": {
+        "recovered/midstream": 1
+      },
+      "sentinel_trips": 0,
+      "terminal": {},
+      "resource_events": {},
+      "longsession_events": {},
+      "browser_failures": {},
+      "retrieval_requests": 0,
+      "serp_at_cap": 0,
+      "timed_out": 0,
+      "error_examples": {},
+      "job": "official-r1-c8"
+    },
+    {
+      "task": "build-pmars",
+      "trial": "build-pmars__Q36KYT9",
+      "reward": 1.0,
+      "wall_minutes": 12.88,
+      "exception": false,
+      "attention_weight": 2,
+      "tool_calls": {
+        "blackboard_read": 2,
+        "plan_write": 3,
+        "todo_write": 3,
+        "run_terminal_cmd": 60,
+        "read_file": 10,
+        "search_replace": 3,
+        "submit": 3
+      },
+      "tool_errors": {
+        "plan_write": 1,
+        "submit": 1
+      },
+      "model_tool_name_errors": {},
+      "framework_signals": {
+        "plan_write:refill_requested": 1
+      },
+      "role_denials": {},
+      "nonzero_exit": {},
+      "non_shell_exit_codes": {
+        "plan_write": 2,
+        "submit": 1
+      },
+      "permission_denials": {},
+      "permission_decisions": {
+        "allow_once": 84
+      },
+      "policy_denials": {},
+      "transport_retry": {},
+      "sentinel_trips": 0,
+      "terminal": {},
+      "resource_events": {},
+      "longsession_events": {},
+      "browser_failures": {},
+      "retrieval_requests": 0,
+      "serp_at_cap": 0,
+      "timed_out": 0,
+      "error_examples": {
+        "tool:plan_write": "validation_failed_after_refill",
+        "tool:submit": "submit_no_plan"
+      },
+      "job": "official-r1-c9"
+    },
+    {
+      "task": "overfull-hbox",
+      "trial": "overfull-hbox__kb9vkru",
+      "reward": 1.0,
+      "wall_minutes": 8.92,
+      "exception": false,
+      "attention_weight": 2,
+      "tool_calls": {
+        "plan_write": 1,
+        "list_dir": 2,
+        "read_file": 10,
+        "run_terminal_cmd": 12,
+        "grep": 1,
+        "search_replace": 9,
+        "submit": 2
+      },
+      "tool_errors": {
+        "list_dir": 1,
+        "search_replace": 1
+      },
+      "model_tool_name_errors": {},
+      "framework_signals": {},
+      "role_denials": {},
+      "nonzero_exit": {
+        "run_terminal_cmd": 4
+      },
+      "non_shell_exit_codes": {
+        "search_replace": 1
+      },
+      "permission_denials": {},
+      "permission_decisions": {
+        "allow_once": 36
+      },
+      "policy_denials": {},
+      "transport_retry": {},
+      "sentinel_trips": 0,
+      "terminal": {},
+      "resource_events": {},
+      "longsession_events": {},
+      "browser_failures": {},
+      "retrieval_requests": 0,
+      "serp_at_cap": 0,
+      "timed_out": 0,
+      "error_examples": {
+        "tool:list_dir": "tool execution failed: missing field `target_directory`",
+        "tool:search_replace": "content_anchor_mismatch"
+      },
+      "job": "official-r1-c9"
+    },
+    {
+      "task": "polyglot-c-py",
+      "trial": "polyglot-c-py__LCp2qMN",
+      "reward": 1.0,
+      "wall_minutes": 6.11,
+      "exception": false,
+      "attention_weight": 1,
+      "tool_calls": {
+        "plan_write": 1,
+        "list_dir": 2,
+        "read_file": 3,
+        "run_terminal_cmd": 17,
+        "search_replace": 2,
+        "update_goal": 1,
+        "submit": 2
+      },
+      "tool_errors": {
+        "update_goal": 1
+      },
+      "model_tool_name_errors": {},
+      "framework_signals": {},
+      "role_denials": {},
+      "nonzero_exit": {
+        "run_terminal_cmd": 2
+      },
+      "non_shell_exit_codes": {},
+      "permission_denials": {},
+      "permission_decisions": {
+        "allow_once": 28
+      },
+      "policy_denials": {},
+      "transport_retry": {},
+      "sentinel_trips": 0,
+      "terminal": {},
+      "resource_events": {},
+      "longsession_events": {},
+      "browser_failures": {},
+      "retrieval_requests": 0,
+      "serp_at_cap": 0,
+      "timed_out": 0,
+      "error_examples": {
+        "tool:update_goal": "tool execution failed: No active goal to update (GoalUpdateHandle not registered)"
+      },
+      "job": "official-r1-c1"
+    },
+    {
+      "task": "sqlite-db-truncate",
+      "trial": "sqlite-db-truncate__VU3MwD9",
+      "reward": 1.0,
+      "wall_minutes": 5.75,
+      "exception": false,
+      "attention_weight": 1,
+      "tool_calls": {
+        "plan_write": 3,
+        "run_terminal_cmd": 8,
+        "todo_write": 1,
+        "submit": 2,
+        "blackboard_read": 2
+      },
+      "tool_errors": {
+        "plan_write": 1
+      },
+      "model_tool_name_errors": {},
+      "framework_signals": {
+        "plan_write:refill_requested": 1
+      },
+      "role_denials": {},
+      "nonzero_exit": {
+        "run_terminal_cmd": 2
+      },
+      "non_shell_exit_codes": {
+        "plan_write": 2
+      },
+      "permission_denials": {},
+      "permission_decisions": {
+        "allow_once": 16
+      },
+      "policy_denials": {},
+      "transport_retry": {},
+      "sentinel_trips": 0,
+      "terminal": {},
+      "resource_events": {},
+      "longsession_events": {},
+      "browser_failures": {},
+      "retrieval_requests": 0,
+      "serp_at_cap": 0,
+      "timed_out": 0,
+      "error_examples": {
+        "tool:plan_write": "validation_failed_after_refill"
+      },
+      "job": "official-r1-c1"
+    },
+    {
+      "task": "fix-git",
+      "trial": "fix-git__v3qYUoX",
+      "reward": 1.0,
+      "wall_minutes": 2.23,
+      "exception": false,
+      "attention_weight": 1,
+      "tool_calls": {
+        "plan_write": 2,
+        "list_dir": 1,
+        "run_terminal_cmd": 8,
+        "run_terminal_cell": 1,
+        "submit": 2
+      },
+      "tool_errors": {},
+      "model_tool_name_errors": {
+        "run_terminal_cell": 1
+      },
+      "framework_signals": {
+        "plan_write:refill_requested": 1
+      },
+      "role_denials": {},
+      "nonzero_exit": {},
+      "non_shell_exit_codes": {
+        "plan_write": 1
+      },
+      "permission_denials": {},
+      "permission_decisions": {
+        "allow_once": 14
+      },
+      "policy_denials": {},
+      "transport_retry": {},
+      "sentinel_trips": 0,
+      "terminal": {},
+      "resource_events": {},
+      "longsession_events": {},
+      "browser_failures": {},
+      "retrieval_requests": 0,
+      "serp_at_cap": 0,
+      "timed_out": 0,
+      "error_examples": {},
+      "job": "official-r1-c2"
+    },
+    {
+      "task": "mcmc-sampling-stan",
+      "trial": "mcmc-sampling-stan__mKq34Ai",
+      "reward": 1.0,
+      "wall_minutes": 20.25,
+      "exception": false,
+      "attention_weight": 1,
+      "tool_calls": {
+        "plan_write": 1,
+        "run_terminal_cmd": 39,
+        "search_replace": 2,
+        "read_file": 2,
+        "submit": 2
+      },
+      "tool_errors": {
+        "run_terminal_cmd": 1
+      },
+      "model_tool_name_errors": {},
+      "framework_signals": {},
+      "role_denials": {},
+      "nonzero_exit": {},
+      "non_shell_exit_codes": {},
+      "permission_denials": {},
+      "permission_decisions": {
+        "allow_once": 46
+      },
+      "policy_denials": {},
+      "transport_retry": {},
+      "sentinel_trips": 0,
+      "terminal": {},
+      "resource_events": {},
+      "longsession_events": {},
+      "browser_failures": {},
+      "retrieval_requests": 0,
+      "serp_at_cap": 0,
+      "timed_out": 0,
+      "error_examples": {
+        "tool:run_terminal_cmd": "tool execution failed: Remove the background '&' from your command; background execution is disabled."
+      },
+      "job": "official-r1-c2"
+    },
+    {
+      "task": "portfolio-optimization",
+      "trial": "portfolio-optimization__NRDSHDv",
+      "reward": 1.0,
+      "wall_minutes": 7.43,
+      "exception": false,
+      "attention_weight": 1,
+      "tool_calls": {
+        "blackboard_read": 2,
+        "list_dir": 2,
+        "plan_write": 2,
+        "read_file": 7,
+        "search_replace": 4,
+        "run_terminal_cmd": 5,
+        "grep": 2,
+        "submit": 2
+      },
+      "tool_errors": {
+        "list_dir": 1
+      },
+      "model_tool_name_errors": {},
+      "framework_signals": {
+        "plan_write:refill_requested": 1
+      },
+      "role_denials": {},
+      "nonzero_exit": {},
+      "non_shell_exit_codes": {
+        "list_dir": 1,
+        "plan_write": 1
+      },
+      "permission_denials": {},
+      "permission_decisions": {
+        "allow_once": 25
+      },
+      "policy_denials": {},
+      "transport_retry": {},
+      "sentinel_trips": 0,
+      "terminal": {},
+      "resource_events": {},
+      "longsession_events": {},
+      "browser_failures": {},
+      "retrieval_requests": 0,
+      "serp_at_cap": 0,
+      "timed_out": 0,
+      "error_examples": {
+        "tool:list_dir": "plan_round_tool_denied"
+      },
+      "job": "official-r1-c2"
+    },
+    {
+      "task": "break-filter-js-from-html",
+      "trial": "break-filter-js-from-html__wswVnzP",
+      "reward": 1.0,
+      "wall_minutes": 6.62,
+      "exception": false,
+      "attention_weight": 1,
+      "tool_calls": {
+        "plan_write": 1,
+        "read_file": 3,
+        "list_dir": 2,
+        "run_terminal_cmd": 13,
+        "update_goal": 1,
+        "run_tests": 2,
+        "submit": 2,
+        "blackboard_read": 2
+      },
+      "tool_errors": {
+        "update_goal": 1
+      },
+      "model_tool_name_errors": {},
+      "framework_signals": {},
+      "role_denials": {},
+      "nonzero_exit": {
+        "run_tests": 1
+      },
+      "non_shell_exit_codes": {},
+      "permission_denials": {},
+      "permission_decisions": {
+        "allow_once": 26
+      },
+      "policy_denials": {},
+      "transport_retry": {},
+      "sentinel_trips": 0,
+      "terminal": {},
+      "resource_events": {},
+      "longsession_events": {},
+      "browser_failures": {},
+      "retrieval_requests": 0,
+      "serp_at_cap": 0,
+      "timed_out": 0,
+      "error_examples": {
+        "tool:update_goal": "tool execution failed: No active goal to update (GoalUpdateHandle not registered)"
+      },
+      "job": "official-r1-c3"
+    },
+    {
+      "task": "code-from-image",
+      "trial": "code-from-image__7BVDLqZ",
+      "reward": 1.0,
+      "wall_minutes": 3.78,
+      "exception": false,
+      "attention_weight": 1,
+      "tool_calls": {
+        "plan_write": 2,
+        "blackboard_read": 1,
+        "read_file": 1,
+        "list_dir": 1,
+        "run_terminal_cmd": 17,
+        "run_terminal_cpt_cmd": 1,
+        "todo_write": 1,
+        "submit": 2
+      },
+      "tool_errors": {},
+      "model_tool_name_errors": {
+        "run_terminal_cpt_cmd": 1
+      },
+      "framework_signals": {
+        "plan_write:refill_requested": 1
+      },
+      "role_denials": {},
+      "nonzero_exit": {},
+      "non_shell_exit_codes": {
+        "plan_write": 1
+      },
+      "permission_denials": {},
+      "permission_decisions": {
+        "allow_once": 26
+      },
+      "policy_denials": {},
+      "transport_retry": {},
+      "sentinel_trips": 0,
+      "terminal": {},
+      "resource_events": {},
+      "longsession_events": {},
+      "browser_failures": {},
+      "retrieval_requests": 0,
+      "serp_at_cap": 0,
+      "timed_out": 0,
+      "error_examples": {},
+      "job": "official-r1-c3"
+    },
+    {
+      "task": "sanitize-git-repo",
+      "trial": "sanitize-git-repo__fP9e3fc",
+      "reward": 1.0,
+      "wall_minutes": 4.59,
+      "exception": false,
+      "attention_weight": 1,
+      "tool_calls": {
+        "plan_write": 3,
+        "list_dir": 1,
+        "grep": 7,
+        "run_terminal_cmd": 10,
+        "read_file": 4,
+        "search_replace": 4,
+        "submit": 2
+      },
+      "tool_errors": {
+        "plan_write": 1
+      },
+      "model_tool_name_errors": {},
+      "framework_signals": {
+        "plan_write:refill_requested": 1
+      },
+      "role_denials": {},
+      "nonzero_exit": {},
+      "non_shell_exit_codes": {
+        "plan_write": 2
+      },
+      "permission_denials": {},
+      "permission_decisions": {
+        "allow_once": 31
+      },
+      "policy_denials": {},
+      "transport_retry": {},
+      "sentinel_trips": 0,
+      "terminal": {},
+      "resource_events": {},
+      "longsession_events": {},
+      "browser_failures": {},
+      "retrieval_requests": 0,
+      "serp_at_cap": 0,
+      "timed_out": 0,
+      "error_examples": {
+        "tool:plan_write": "validation_failed_after_refill"
+      },
+      "job": "official-r1-c3"
+    },
+    {
+      "task": "log-summary-date-ranges",
+      "trial": "log-summary-date-ranges__vS9gRTG",
+      "reward": 1.0,
+      "wall_minutes": 2.38,
+      "exception": false,
+      "attention_weight": 1,
+      "tool_calls": {
+        "plan_write": 3,
+        "list_dir": 1,
+        "run_terminal_cmd": 8,
+        "submit": 2
+      },
+      "tool_errors": {
+        "plan_write": 1
+      },
+      "model_tool_name_errors": {},
+      "framework_signals": {
+        "plan_write:refill_requested": 1
+      },
+      "role_denials": {},
+      "nonzero_exit": {
+        "run_terminal_cmd": 1
+      },
+      "non_shell_exit_codes": {
+        "plan_write": 2
+      },
+      "permission_denials": {},
+      "permission_decisions": {
+        "allow_once": 14
+      },
+      "policy_denials": {},
+      "transport_retry": {},
+      "sentinel_trips": 0,
+      "terminal": {},
+      "resource_events": {},
+      "longsession_events": {},
+      "browser_failures": {},
+      "retrieval_requests": 0,
+      "serp_at_cap": 0,
+      "timed_out": 0,
+      "error_examples": {
+        "tool:plan_write": "validation_failed_after_refill"
+      },
+      "job": "official-r1-c4"
+    },
+    {
+      "task": "adaptive-rejection-sampler",
+      "trial": "adaptive-rejection-sampler__GpPctmb",
+      "reward": 0.0,
+      "wall_minutes": 16.79,
+      "exception": true,
+      "attention_weight": 1,
+      "tool_calls": {},
+      "tool_errors": {},
+      "model_tool_name_errors": {},
+      "framework_signals": {},
+      "role_denials": {},
+      "nonzero_exit": {},
+      "non_shell_exit_codes": {},
+      "permission_denials": {},
+      "permission_decisions": {},
+      "policy_denials": {},
+      "transport_retry": {},
+      "sentinel_trips": 1,
+      "terminal": {},
+      "resource_events": {},
+      "longsession_events": {},
+      "browser_failures": {},
+      "retrieval_requests": 0,
+      "serp_at_cap": 0,
+      "timed_out": 0,
+      "error_examples": {},
+      "job": "official-r1-c5"
+    },
+    {
+      "task": "kv-store-grpc",
+      "trial": "kv-store-grpc__bhtCZ2J",
+      "reward": 1.0,
+      "wall_minutes": 2.73,
+      "exception": false,
+      "attention_weight": 1,
+      "tool_calls": {
+        "plan_write": 2,
+        "list_dir": 1,
+        "run_terminal_cmd": 12,
+        "submit": 2
+      },
+      "tool_errors": {
+        "run_terminal_cmd": 1
+      },
+      "model_tool_name_errors": {},
+      "framework_signals": {
+        "plan_write:refill_requested": 1
+      },
+      "role_denials": {},
+      "nonzero_exit": {
+        "run_terminal_cmd": 1
+      },
+      "non_shell_exit_codes": {
+        "plan_write": 1
+      },
+      "permission_denials": {},
+      "permission_decisions": {
+        "allow_once": 17
+      },
+      "policy_denials": {},
+      "transport_retry": {},
+      "sentinel_trips": 0,
+      "terminal": {},
+      "resource_events": {},
+      "longsession_events": {},
+      "browser_failures": {},
+      "retrieval_requests": 0,
+      "serp_at_cap": 0,
+      "timed_out": 0,
+      "error_examples": {
+        "tool:run_terminal_cmd": "tool execution failed: Remove the background '&' from your command; background execution is disabled."
+      },
+      "job": "official-r1-c5"
+    },
+    {
+      "task": "password-recovery",
+      "trial": "password-recovery__tbGXkA2",
+      "reward": 1.0,
+      "wall_minutes": 5.75,
+      "exception": false,
+      "attention_weight": 1,
+      "tool_calls": {
+        "plan_write": 2,
+        "run_terminal_cmd": 29,
+        "run_terminal_cell": 1,
+        "todo_write": 1,
+        "submit": 2
+      },
+      "tool_errors": {},
+      "model_tool_name_errors": {
+        "run_terminal_cell": 1
+      },
+      "framework_signals": {
+        "plan_write:refill_requested": 1
+      },
+      "role_denials": {},
+      "nonzero_exit": {
+        "run_terminal_cmd": 2
+      },
+      "non_shell_exit_codes": {
+        "plan_write": 1
+      },
+      "permission_denials": {},
+      "permission_decisions": {
+        "allow_once": 35
+      },
+      "policy_denials": {},
+      "transport_retry": {},
+      "sentinel_trips": 0,
+      "terminal": {},
+      "resource_events": {},
+      "longsession_events": {},
+      "browser_failures": {},
+      "retrieval_requests": 0,
+      "serp_at_cap": 0,
+      "timed_out": 0,
+      "error_examples": {},
+      "job": "official-r1-c5"
+    },
+    {
+      "task": "prove-plus-comm",
+      "trial": "prove-plus-comm__4EonDBz",
+      "reward": 1.0,
+      "wall_minutes": 2.75,
+      "exception": false,
+      "attention_weight": 1,
+      "tool_calls": {
+        "plan_write": 2,
+        "list_dir": 1,
+        "read_file": 2,
+        "search_replace": 1,
+        "run_terminal_cmd": 2,
+        "todo_write": 2,
+        "run_tests": 1,
+        "submit": 2
+      },
+      "tool_errors": {
+        "run_tests": 1
+      },
+      "model_tool_name_errors": {},
+      "framework_signals": {
+        "plan_write:refill_requested": 1
+      },
+      "role_denials": {},
+      "nonzero_exit": {},
+      "non_shell_exit_codes": {
+        "plan_write": 1
+      },
+      "permission_denials": {},
+      "permission_decisions": {
+        "allow_once": 13
+      },
+      "policy_denials": {},
+      "transport_retry": {},
+      "sentinel_trips": 0,
+      "terminal": {},
+      "resource_events": {},
+      "longsession_events": {},
+      "browser_failures": {},
+      "retrieval_requests": 0,
+      "serp_at_cap": 0,
+      "timed_out": 0,
+      "error_examples": {
+        "tool:run_tests": "run_tests failed: tool execution failed: test runner spawn: No such file or directory (os error 2)"
+      },
+      "job": "official-r1-c5"
+    },
+    {
+      "task": "pytorch-model-recovery",
+      "trial": "pytorch-model-recovery__74kB4Vf",
+      "reward": 1.0,
+      "wall_minutes": 8.1,
+      "exception": false,
+      "attention_weight": 1,
+      "tool_calls": {
+        "plan_write": 2,
+        "run_terminal_cmd": 9,
+        "update_goal": 1,
+        "submit": 2
+      },
+      "tool_errors": {
+        "update_goal": 1
+      },
+      "model_tool_name_errors": {},
+      "framework_signals": {
+        "plan_write:refill_requested": 1
+      },
+      "role_denials": {},
+      "nonzero_exit": {},
+      "non_shell_exit_codes": {
+        "plan_write": 1
+      },
+      "permission_denials": {},
+      "permission_decisions": {
+        "allow_once": 14
+      },
+      "policy_denials": {},
+      "transport_retry": {},
+      "sentinel_trips": 0,
+      "terminal": {},
+      "resource_events": {},
+      "longsession_events": {},
+      "browser_failures": {},
+      "retrieval_requests": 0,
+      "serp_at_cap": 0,
+      "timed_out": 0,
+      "error_examples": {
+        "tool:update_goal": "tool execution failed: No active goal to update (GoalUpdateHandle not registered)"
+      },
+      "job": "official-r1-c5"
+    },
+    {
+      "task": "pypi-server",
+      "trial": "pypi-server__5w7KqZg",
+      "reward": 1.0,
+      "wall_minutes": 2.48,
+      "exception": false,
+      "attention_weight": 1,
+      "tool_calls": {
+        "plan_write": 2,
+        "blackboard_read": 1,
+        "run_terminal_cmd": 13,
+        "search_replace": 2,
+        "read_file": 2,
+        "submit": 2
+      },
+      "tool_errors": {
+        "run_terminal_cmd": 1
+      },
+      "model_tool_name_errors": {},
+      "framework_signals": {
+        "plan_write:refill_requested": 1
+      },
+      "role_denials": {},
+      "nonzero_exit": {},
+      "non_shell_exit_codes": {
+        "plan_write": 1
+      },
+      "permission_denials": {},
+      "permission_decisions": {
+        "allow_once": 22
+      },
+      "policy_denials": {},
+      "transport_retry": {},
+      "sentinel_trips": 0,
+      "terminal": {},
+      "resource_events": {},
+      "longsession_events": {},
+      "browser_failures": {},
+      "retrieval_requests": 0,
+      "serp_at_cap": 0,
+      "timed_out": 0,
+      "error_examples": {
+        "tool:run_terminal_cmd": "tool execution failed: Remove the background '&' from your command; background execution is disabled."
+      },
+      "job": "official-r1-c7"
+    },
+    {
+      "task": "write-compressor",
+      "trial": "write-compressor__6HUgCxt",
+      "reward": 0.0,
+      "wall_minutes": 16.48,
+      "exception": true,
+      "attention_weight": 1,
+      "tool_calls": {},
+      "tool_errors": {},
+      "model_tool_name_errors": {},
+      "framework_signals": {},
+      "role_denials": {},
+      "nonzero_exit": {},
+      "non_shell_exit_codes": {},
+      "permission_denials": {},
+      "permission_decisions": {},
+      "policy_denials": {},
+      "transport_retry": {},
+      "sentinel_trips": 1,
+      "terminal": {},
+      "resource_events": {},
+      "longsession_events": {},
+      "browser_failures": {},
+      "retrieval_requests": 0,
+      "serp_at_cap": 0,
+      "timed_out": 0,
+      "error_examples": {},
+      "job": "official-r1-c7"
+    },
+    {
+      "task": "dna-insert",
+      "trial": "dna-insert__zbdME4c",
+      "reward": 0.0,
+      "wall_minutes": 16.41,
+      "exception": false,
+      "attention_weight": 1,
+      "tool_calls": {
+        "plan_write": 1,
+        "blackboard_read": 3,
+        "list_dir": 2,
+        "read_file": 2,
+        "run_terminal_cmd": 12,
+        "project_doc_index": 1,
+        "todo_write": 1,
+        "web_search": 8,
+        "web_fetch": 8,
+        "update_goal": 1,
+        "submit": 2
+      },
+      "tool_errors": {
+        "web_search": 1
+      },
+      "model_tool_name_errors": {},
+      "framework_signals": {},
+      "role_denials": {
+        "todo_write:retrieval_role_write_denied": 1,
+        "update_goal:retrieval_role_write_denied": 1
+      },
+      "nonzero_exit": {
+        "run_terminal_cmd": 2
+      },
+      "non_shell_exit_codes": {
+        "todo_write": 1,
+        "update_goal": 1
+      },
+      "permission_denials": {},
+      "permission_decisions": {
+        "allow_once": 23
+      },
+      "policy_denials": {},
+      "transport_retry": {},
+      "sentinel_trips": 0,
+      "terminal": {},
+      "resource_events": {},
+      "longsession_events": {},
+      "browser_failures": {},
+      "retrieval_requests": 16,
+      "serp_at_cap": 0,
+      "timed_out": 0,
+      "error_examples": {
+        "tool:web_search": "tool execution failed: Failed to read response body: error decoding response body"
+      },
+      "job": "official-r1-c8"
+    },
+    {
+      "task": "polyglot-rust-c",
+      "trial": "polyglot-rust-c__u9mEaDN",
+      "reward": 1.0,
+      "wall_minutes": 9.65,
+      "exception": false,
+      "attention_weight": 1,
+      "tool_calls": {
+        "plan_write": 1,
+        "run_terminal_cmd": 2,
+        "todo_write": 1,
+        "submit": 2
+      },
+      "tool_errors": {},
+      "model_tool_name_errors": {},
+      "framework_signals": {},
+      "role_denials": {},
+      "nonzero_exit": {},
+      "non_shell_exit_codes": {},
+      "permission_denials": {},
+      "permission_decisions": {
+        "allow_once": 6
+      },
+      "policy_denials": {},
+      "transport_retry": {},
+      "sentinel_trips": 1,
+      "terminal": {},
+      "resource_events": {},
+      "longsession_events": {},
+      "browser_failures": {},
+      "retrieval_requests": 0,
+      "serp_at_cap": 0,
+      "timed_out": 0,
+      "error_examples": {},
+      "job": "official-r1-c8"
+    },
+    {
+      "task": "hf-model-inference",
+      "trial": "hf-model-inference__dRTw4bT",
+      "reward": 1.0,
+      "wall_minutes": 3.94,
+      "exception": false,
+      "attention_weight": 1,
+      "tool_calls": {
+        "plan_write": 1,
+        "run_terminal_cmd": 14,
+        "read_file": 1,
+        "search_replace": 2,
+        "todo_write": 1,
+        "submit": 2,
+        "run_tests": 2
+      },
+      "tool_errors": {
+        "run_terminal_cmd": 1
+      },
+      "model_tool_name_errors": {},
+      "framework_signals": {},
+      "role_denials": {},
+      "nonzero_exit": {
+        "run_tests": 2
+      },
+      "non_shell_exit_codes": {},
+      "permission_denials": {},
+      "permission_decisions": {
+        "allow_once": 23
+      },
+      "policy_denials": {},
+      "transport_retry": {},
+      "sentinel_trips": 0,
+      "terminal": {},
+      "resource_events": {},
+      "longsession_events": {},
+      "browser_failures": {},
+      "retrieval_requests": 0,
+      "serp_at_cap": 0,
+      "timed_out": 0,
+      "error_examples": {
+        "tool:run_terminal_cmd": "tool execution failed: Remove the background '&' from your command; background execution is disabled."
+      },
+      "job": "official-r1-c9"
+    },
+    {
+      "task": "query-optimize",
+      "trial": "query-optimize__7zQGz3W",
+      "reward": 0.0,
+      "wall_minutes": 18.37,
+      "exception": false,
+      "attention_weight": 1,
+      "tool_calls": {
+        "plan_write": 3,
+        "read_file": 2,
+        "run_terminal_cmd": 13,
+        "search_replace": 1,
+        "submit": 2
+      },
+      "tool_errors": {
+        "plan_write": 1
+      },
+      "model_tool_name_errors": {},
+      "framework_signals": {
+        "plan_write:refill_requested": 1
+      },
+      "role_denials": {},
+      "nonzero_exit": {
+        "run_terminal_cmd": 3
+      },
+      "non_shell_exit_codes": {
+        "plan_write": 2
+      },
+      "permission_denials": {},
+      "permission_decisions": {
+        "allow_once": 21
+      },
+      "policy_denials": {},
+      "transport_retry": {},
+      "sentinel_trips": 0,
+      "terminal": {},
+      "resource_events": {},
+      "longsession_events": {},
+      "browser_failures": {},
+      "retrieval_requests": 0,
+      "serp_at_cap": 0,
+      "timed_out": 0,
+      "error_examples": {
+        "tool:plan_write": "validation_failed_after_refill"
+      },
+      "job": "official-r1-c9"
+    },
+    {
+      "task": "break-filter-js-from-html",
+      "trial": "break-filter-js-from-html__rcUX29n",
+      "reward": null,
+      "wall_minutes": 4.9,
+      "exception": true,
+      "attention_weight": 0,
+      "tool_calls": {},
+      "tool_errors": {},
+      "model_tool_name_errors": {},
+      "framework_signals": {},
+      "role_denials": {},
+      "nonzero_exit": {},
+      "non_shell_exit_codes": {},
+      "permission_denials": {},
+      "permission_decisions": {},
+      "policy_denials": {},
+      "transport_retry": {},
+      "sentinel_trips": 0,
+      "terminal": {},
+      "resource_events": {},
+      "longsession_events": {},
+      "browser_failures": {},
+      "retrieval_requests": 0,
+      "serp_at_cap": 0,
+      "timed_out": 0,
+      "error_examples": {},
+      "job": "official-r1-c3"
+    },
+    {
+      "task": "cobol-modernization",
+      "trial": "cobol-modernization__uiSLNJh",
+      "reward": null,
+      "wall_minutes": 4.93,
+      "exception": true,
+      "attention_weight": 0,
+      "tool_calls": {},
+      "tool_errors": {},
+      "model_tool_name_errors": {},
+      "framework_signals": {},
+      "role_denials": {},
+      "nonzero_exit": {},
+      "non_shell_exit_codes": {},
+      "permission_denials": {},
+      "permission_decisions": {},
+      "policy_denials": {},
+      "transport_retry": {},
+      "sentinel_trips": 0,
+      "terminal": {},
+      "resource_events": {},
+      "longsession_events": {},
+      "browser_failures": {},
+      "retrieval_requests": 0,
+      "serp_at_cap": 0,
+      "timed_out": 0,
+      "error_examples": {},
+      "job": "official-r1-c3"
+    },
+    {
+      "task": "mteb-retrieve",
+      "trial": "mteb-retrieve__KaB7dkA",
+      "reward": null,
+      "wall_minutes": 4.92,
+      "exception": true,
+      "attention_weight": 0,
+      "tool_calls": {},
+      "tool_errors": {},
+      "model_tool_name_errors": {},
+      "framework_signals": {},
+      "role_denials": {},
+      "nonzero_exit": {},
+      "non_shell_exit_codes": {},
+      "permission_denials": {},
+      "permission_decisions": {},
+      "policy_denials": {},
+      "transport_retry": {},
+      "sentinel_trips": 0,
+      "terminal": {},
+      "resource_events": {},
+      "longsession_events": {},
+      "browser_failures": {},
+      "retrieval_requests": 0,
+      "serp_at_cap": 0,
+      "timed_out": 0,
+      "error_examples": {},
+      "job": "official-r1-c3"
+    },
+    {
+      "task": "sanitize-git-repo",
+      "trial": "sanitize-git-repo__MLVSpNY",
+      "reward": 0.0,
+      "wall_minutes": 4.15,
+      "exception": true,
+      "attention_weight": 0,
+      "tool_calls": {},
+      "tool_errors": {},
+      "model_tool_name_errors": {},
+      "framework_signals": {},
+      "role_denials": {},
+      "nonzero_exit": {},
+      "non_shell_exit_codes": {},
+      "permission_denials": {},
+      "permission_decisions": {},
+      "policy_denials": {},
+      "transport_retry": {},
+      "sentinel_trips": 0,
+      "terminal": {},
+      "resource_events": {},
+      "longsession_events": {},
+      "browser_failures": {},
+      "retrieval_requests": 0,
+      "serp_at_cap": 0,
+      "timed_out": 0,
+      "error_examples": {},
+      "job": "official-r1-c3"
+    },
+    {
+      "task": "custom-memory-heap-crash",
+      "trial": "custom-memory-heap-crash__BH8i4WV",
+      "reward": null,
+      "wall_minutes": 4.31,
+      "exception": true,
+      "attention_weight": 0,
+      "tool_calls": {},
+      "tool_errors": {},
+      "model_tool_name_errors": {},
+      "framework_signals": {},
+      "role_denials": {},
+      "nonzero_exit": {},
+      "non_shell_exit_codes": {},
+      "permission_denials": {},
+      "permission_decisions": {},
+      "policy_denials": {},
+      "transport_retry": {},
+      "sentinel_trips": 0,
+      "terminal": {},
+      "resource_events": {},
+      "longsession_events": {},
+      "browser_failures": {},
+      "retrieval_requests": 0,
+      "serp_at_cap": 0,
+      "timed_out": 0,
+      "error_examples": {},
+      "job": "official-r1-c4"
+    },
+    {
+      "task": "winning-avg-corewars",
+      "trial": "winning-avg-corewars__sqmLgX8",
+      "reward": null,
+      "wall_minutes": 4.31,
+      "exception": true,
+      "attention_weight": 0,
+      "tool_calls": {},
+      "tool_errors": {},
+      "model_tool_name_errors": {},
+      "framework_signals": {},
+      "role_denials": {},
+      "nonzero_exit": {},
+      "non_shell_exit_codes": {},
+      "permission_denials": {},
+      "permission_decisions": {},
+      "policy_denials": {},
+      "transport_retry": {},
+      "sentinel_trips": 0,
+      "terminal": {},
+      "resource_events": {},
+      "longsession_events": {},
+      "browser_failures": {},
+      "retrieval_requests": 0,
+      "serp_at_cap": 0,
+      "timed_out": 0,
+      "error_examples": {},
+      "job": "official-r1-c4"
+    },
+    {
+      "task": "winning-avg-corewars",
+      "trial": "winning-avg-corewars__YHJiBxz",
+      "reward": null,
+      "wall_minutes": 0.37,
+      "exception": true,
+      "attention_weight": 0,
+      "tool_calls": {},
+      "tool_errors": {},
+      "model_tool_name_errors": {},
+      "framework_signals": {},
+      "role_denials": {},
+      "nonzero_exit": {},
+      "non_shell_exit_codes": {},
+      "permission_denials": {},
+      "permission_decisions": {},
+      "policy_denials": {},
+      "transport_retry": {},
+      "sentinel_trips": 0,
+      "terminal": {},
+      "resource_events": {},
+      "longsession_events": {},
+      "browser_failures": {},
+      "retrieval_requests": 0,
+      "serp_at_cap": 0,
+      "timed_out": 0,
+      "error_examples": {},
+      "job": "official-r1-c4-b"
+    },
+    {
+      "task": "feal-differential-cryptanalysis",
+      "trial": "feal-differential-cryptanalysis__ZeHkAUs",
+      "reward": 1.0,
+      "wall_minutes": 8.92,
+      "exception": false,
+      "attention_weight": 0,
+      "tool_calls": {
+        "plan_write": 2,
+        "read_file": 2,
+        "list_dir": 1,
+        "run_terminal_cmd": 9,
+        "search_replace": 2,
+        "run_tests": 1,
+        "submit": 2
+      },
+      "tool_errors": {},
+      "model_tool_name_errors": {},
+      "framework_signals": {
+        "plan_write:refill_requested": 1
+      },
+      "role_denials": {},
+      "nonzero_exit": {
+        "run_tests": 1
+      },
+      "non_shell_exit_codes": {
+        "plan_write": 1
+      },
+      "permission_denials": {},
+      "permission_decisions": {
+        "allow_once": 19
+      },
+      "policy_denials": {},
+      "transport_retry": {},
+      "sentinel_trips": 0,
+      "terminal": {},
+      "resource_events": {},
+      "longsession_events": {},
+      "browser_failures": {},
+      "retrieval_requests": 0,
+      "serp_at_cap": 0,
+      "timed_out": 0,
+      "error_examples": {},
+      "job": "official-r1-c1"
+    },
+    {
+      "task": "llm-inference-batching-scheduler",
+      "trial": "llm-inference-batching-scheduler__CL3Dn8u",
+      "reward": 1.0,
+      "wall_minutes": 11.91,
+      "exception": true,
+      "attention_weight": 0,
+      "tool_calls": {},
+      "tool_errors": {},
+      "model_tool_name_errors": {},
+      "framework_signals": {},
+      "role_denials": {},
+      "nonzero_exit": {},
+      "non_shell_exit_codes": {},
+      "permission_denials": {},
+      "permission_decisions": {},
+      "policy_denials": {},
+      "transport_retry": {},
+      "sentinel_trips": 0,
+      "terminal": {},
+      "resource_events": {},
+      "longsession_events": {},
+      "browser_failures": {},
+      "retrieval_requests": 0,
+      "serp_at_cap": 0,
+      "timed_out": 0,
+      "error_examples": {},
+      "job": "official-r1-c1"
+    },
+    {
+      "task": "qemu-startup",
+      "trial": "qemu-startup__6Zh5Pms",
+      "reward": 1.0,
+      "wall_minutes": 15.77,
+      "exception": true,
+      "attention_weight": 0,
+      "tool_calls": {},
+      "tool_errors": {},
+      "model_tool_name_errors": {},
+      "framework_signals": {},
+      "role_denials": {},
+      "nonzero_exit": {},
+      "non_shell_exit_codes": {},
+      "permission_denials": {},
+      "permission_decisions": {},
+      "policy_denials": {},
+      "transport_retry": {},
+      "sentinel_trips": 0,
+      "terminal": {},
+      "resource_events": {},
+      "longsession_events": {},
+      "browser_failures": {},
+      "retrieval_requests": 0,
+      "serp_at_cap": 0,
+      "timed_out": 0,
+      "error_examples": {},
+      "job": "official-r1-c1"
+    },
+    {
+      "task": "schemelike-metacircular-eval",
+      "trial": "schemelike-metacircular-eval__xAtfwpb",
+      "reward": 1.0,
+      "wall_minutes": 44.1,
+      "exception": true,
+      "attention_weight": 0,
+      "tool_calls": {},
+      "tool_errors": {},
+      "model_tool_name_errors": {},
+      "framework_signals": {},
+      "role_denials": {},
+      "nonzero_exit": {},
+      "non_shell_exit_codes": {},
+      "permission_denials": {},
+      "permission_decisions": {},
+      "policy_denials": {},
+      "transport_retry": {},
+      "sentinel_trips": 0,
+      "terminal": {},
+      "resource_events": {},
+      "longsession_events": {},
+      "browser_failures": {},
+      "retrieval_requests": 0,
+      "serp_at_cap": 0,
+      "timed_out": 0,
+      "error_examples": {},
+      "job": "official-r1-c1"
+    },
+    {
+      "task": "vulnerable-secret",
+      "trial": "vulnerable-secret__Ttf3Jha",
+      "reward": 1.0,
+      "wall_minutes": 2.21,
+      "exception": false,
+      "attention_weight": 0,
+      "tool_calls": {
+        "plan_write": 2,
+        "list_dir": 2,
+        "run_terminal_cmd": 13,
+        "read_file": 1,
+        "submit": 2
+      },
+      "tool_errors": {},
+      "model_tool_name_errors": {},
+      "framework_signals": {
+        "plan_write:refill_requested": 1
+      },
+      "role_denials": {},
+      "nonzero_exit": {},
+      "non_shell_exit_codes": {
+        "plan_write": 1
+      },
+      "permission_denials": {},
+      "permission_decisions": {
+        "allow_once": 20
+      },
+      "policy_denials": {},
+      "transport_retry": {},
+      "sentinel_trips": 0,
+      "terminal": {},
+      "resource_events": {},
+      "longsession_events": {},
+      "browser_failures": {},
+      "retrieval_requests": 0,
+      "serp_at_cap": 0,
+      "timed_out": 0,
+      "error_examples": {},
+      "job": "official-r1-c1"
+    },
+    {
+      "task": "configure-git-webserver",
+      "trial": "configure-git-webserver__yroACdp",
+      "reward": 1.0,
+      "wall_minutes": 3.55,
+      "exception": false,
+      "attention_weight": 0,
+      "tool_calls": {
+        "plan_write": 1,
+        "run_terminal_cmd": 11,
+        "submit": 2
+      },
+      "tool_errors": {},
+      "model_tool_name_errors": {},
+      "framework_signals": {},
+      "role_denials": {},
+      "nonzero_exit": {},
+      "non_shell_exit_codes": {},
+      "permission_denials": {},
+      "permission_decisions": {
+        "allow_once": 14
+      },
+      "policy_denials": {},
+      "transport_retry": {},
+      "sentinel_trips": 0,
+      "terminal": {},
+      "resource_events": {},
+      "longsession_events": {},
+      "browser_failures": {},
+      "retrieval_requests": 0,
+      "serp_at_cap": 0,
+      "timed_out": 0,
+      "error_examples": {},
+      "job": "official-r1-c2"
+    },
+    {
+      "task": "git-multibranch",
+      "trial": "git-multibranch__fEhgLAu",
+      "reward": 1.0,
+      "wall_minutes": 6.16,
+      "exception": false,
+      "attention_weight": 0,
+      "tool_calls": {
+        "plan_write": 2,
+        "run_terminal_cmd": 23,
+        "todo_write": 5,
+        "search_replace": 2,
+        "blackboard_read": 3,
+        "submit": 2
+      },
+      "tool_errors": {},
+      "model_tool_name_errors": {},
+      "framework_signals": {
+        "plan_write:refill_requested": 1
+      },
+      "role_denials": {},
+      "nonzero_exit": {
+        "run_terminal_cmd": 1
+      },
+      "non_shell_exit_codes": {
+        "plan_write": 1
+      },
+      "permission_denials": {},
+      "permission_decisions": {
+        "allow_once": 37
+      },
+      "policy_denials": {},
+      "transport_retry": {},
+      "sentinel_trips": 0,
+      "terminal": {},
+      "resource_events": {},
+      "longsession_events": {},
+      "browser_failures": {},
+      "retrieval_requests": 0,
+      "serp_at_cap": 0,
+      "timed_out": 0,
+      "error_examples": {},
+      "job": "official-r1-c2"
+    },
+    {
+      "task": "headless-terminal",
+      "trial": "headless-terminal__mQAGSyh",
+      "reward": 1.0,
+      "wall_minutes": 6.18,
+      "exception": false,
+      "attention_weight": 0,
+      "tool_calls": {
+        "plan_write": 2,
+        "list_dir": 1,
+        "grep": 2,
+        "read_file": 2,
+        "run_terminal_cmd": 8,
+        "search_replace": 1,
+        "run_tests": 2,
+        "todo_write": 1,
+        "submit": 2,
+        "blackboard_read": 1
+      },
+      "tool_errors": {},
+      "model_tool_name_errors": {},
+      "framework_signals": {
+        "plan_write:refill_requested": 1
+      },
+      "role_denials": {},
+      "nonzero_exit": {
+        "run_tests": 2
+      },
+      "non_shell_exit_codes": {
+        "plan_write": 1
+      },
+      "permission_denials": {},
+      "permission_decisions": {
+        "allow_once": 22
+      },
+      "policy_denials": {},
+      "transport_retry": {},
+      "sentinel_trips": 0,
+      "terminal": {},
+      "resource_events": {},
+      "longsession_events": {},
+      "browser_failures": {},
+      "retrieval_requests": 0,
+      "serp_at_cap": 0,
+      "timed_out": 0,
+      "error_examples": {},
+      "job": "official-r1-c2"
+    },
+    {
+      "task": "merge-diff-arc-agi-task",
+      "trial": "merge-diff-arc-agi-task__yfYDMrc",
+      "reward": 1.0,
+      "wall_minutes": 4.95,
+      "exception": false,
+      "attention_weight": 0,
+      "tool_calls": {
+        "plan_write": 1,
+        "run_terminal_cmd": 15,
+        "read_file": 2,
+        "submit": 2,
+        "blackboard_read": 1
+      },
+      "tool_errors": {},
+      "model_tool_name_errors": {},
+      "framework_signals": {},
+      "role_denials": {},
+      "nonzero_exit": {
+        "run_terminal_cmd": 1
+      },
+      "non_shell_exit_codes": {},
+      "permission_denials": {},
+      "permission_decisions": {
+        "allow_once": 21
+      },
+      "policy_denials": {},
+      "transport_retry": {},
+      "sentinel_trips": 0,
+      "terminal": {},
+      "resource_events": {},
+      "longsession_events": {},
+      "browser_failures": {},
+      "retrieval_requests": 0,
+      "serp_at_cap": 0,
+      "timed_out": 0,
+      "error_examples": {},
+      "job": "official-r1-c2"
+    },
+    {
+      "task": "fix-code-vulnerability",
+      "trial": "fix-code-vulnerability__VrkUEgk",
+      "reward": 1.0,
+      "wall_minutes": 1.83,
+      "exception": false,
+      "attention_weight": 0,
+      "tool_calls": {
+        "plan_write": 1,
+        "list_dir": 1,
+        "run_terminal_cmd": 7,
+        "grep": 4,
+        "read_file": 2,
+        "search_replace": 1,
+        "submit": 2
+      },
+      "tool_errors": {},
+      "model_tool_name_errors": {},
+      "framework_signals": {},
+      "role_denials": {},
+      "nonzero_exit": {},
+      "non_shell_exit_codes": {},
+      "permission_denials": {},
+      "permission_decisions": {
+        "allow_once": 18
+      },
+      "policy_denials": {},
+      "transport_retry": {},
+      "sentinel_trips": 0,
+      "terminal": {},
+      "resource_events": {},
+      "longsession_events": {},
+      "browser_failures": {},
+      "retrieval_requests": 0,
+      "serp_at_cap": 0,
+      "timed_out": 0,
+      "error_examples": {},
+      "job": "official-r1-c3"
+    },
+    {
+      "task": "git-leak-recovery",
+      "trial": "git-leak-recovery__Jokq6NJ",
+      "reward": 1.0,
+      "wall_minutes": 3.0,
+      "exception": false,
+      "attention_weight": 0,
+      "tool_calls": {
+        "plan_write": 1,
+        "blackboard_read": 1,
+        "list_dir": 2,
+        "run_terminal_cmd": 12,
+        "submit": 2
+      },
+      "tool_errors": {},
+      "model_tool_name_errors": {},
+      "framework_signals": {},
+      "role_denials": {},
+      "nonzero_exit": {},
+      "non_shell_exit_codes": {},
+      "permission_denials": {},
+      "permission_decisions": {
+        "allow_once": 18
+      },
+      "policy_denials": {},
+      "transport_retry": {},
+      "sentinel_trips": 0,
+      "terminal": {},
+      "resource_events": {},
+      "longsession_events": {},
+      "browser_failures": {},
+      "retrieval_requests": 0,
+      "serp_at_cap": 0,
+      "timed_out": 0,
+      "error_examples": {},
+      "job": "official-r1-c3"
+    },
+    {
+      "task": "mteb-retrieve",
+      "trial": "mteb-retrieve__F2J7jAj",
+      "reward": 0.0,
+      "wall_minutes": 8.92,
+      "exception": false,
+      "attention_weight": 0,
+      "tool_calls": {
+        "plan_write": 1,
+        "list_dir": 1,
+        "run_terminal_cmd": 24,
+        "read_file": 3,
+        "grep": 6,
+        "todo_write": 2,
+        "submit": 2
+      },
+      "tool_errors": {},
+      "model_tool_name_errors": {},
+      "framework_signals": {},
+      "role_denials": {},
+      "nonzero_exit": {
+        "run_terminal_cmd": 1
+      },
+      "non_shell_exit_codes": {},
+      "permission_denials": {},
+      "permission_decisions": {
+        "allow_once": 39
+      },
+      "policy_denials": {},
+      "transport_retry": {},
+      "sentinel_trips": 0,
+      "terminal": {},
+      "resource_events": {},
+      "longsession_events": {},
+      "browser_failures": {},
+      "retrieval_requests": 0,
+      "serp_at_cap": 0,
+      "timed_out": 0,
+      "error_examples": {},
+      "job": "official-r1-c3"
+    },
+    {
+      "task": "path-tracing-reverse",
+      "trial": "path-tracing-reverse__9HkMW6y",
+      "reward": 0.0,
+      "wall_minutes": 31.04,
+      "exception": true,
+      "attention_weight": 0,
+      "tool_calls": {},
+      "tool_errors": {},
+      "model_tool_name_errors": {},
+      "framework_signals": {},
+      "role_denials": {},
+      "nonzero_exit": {},
+      "non_shell_exit_codes": {},
+      "permission_denials": {},
+      "permission_decisions": {},
+      "policy_denials": {},
+      "transport_retry": {},
+      "sentinel_trips": 0,
+      "terminal": {},
+      "resource_events": {},
+      "longsession_events": {},
+      "browser_failures": {},
+      "retrieval_requests": 0,
+      "serp_at_cap": 0,
+      "timed_out": 0,
+      "error_examples": {},
+      "job": "official-r1-c3"
+    },
+    {
+      "task": "sparql-university",
+      "trial": "sparql-university__RMoBfYc",
+      "reward": 1.0,
+      "wall_minutes": 5.81,
+      "exception": false,
+      "attention_weight": 0,
+      "tool_calls": {
+        "plan_write": 2,
+        "blackboard_read": 2,
+        "list_dir": 1,
+        "run_terminal_cmd": 14,
+        "read_file": 4,
+        "grep": 2,
+        "todo_write": 2,
+        "search_replace": 2,
+        "submit": 2
+      },
+      "tool_errors": {},
+      "model_tool_name_errors": {},
+      "framework_signals": {
+        "plan_write:refill_requested": 1
+      },
+      "role_denials": {},
+      "nonzero_exit": {},
+      "non_shell_exit_codes": {
+        "plan_write": 1
+      },
+      "permission_denials": {},
+      "permission_decisions": {
+        "allow_once": 31
+      },
+      "policy_denials": {},
+      "transport_retry": {},
+      "sentinel_trips": 0,
+      "terminal": {},
+      "resource_events": {},
+      "longsession_events": {},
+      "browser_failures": {},
+      "retrieval_requests": 0,
+      "serp_at_cap": 0,
+      "timed_out": 0,
+      "error_examples": {},
+      "job": "official-r1-c3"
+    },
+    {
+      "task": "tune-mjcf",
+      "trial": "tune-mjcf__mtvv68r",
+      "reward": 0.0,
+      "wall_minutes": 16.53,
+      "exception": true,
+      "attention_weight": 0,
+      "tool_calls": {},
+      "tool_errors": {},
+      "model_tool_name_errors": {},
+      "framework_signals": {},
+      "role_denials": {},
+      "nonzero_exit": {},
+      "non_shell_exit_codes": {},
+      "permission_denials": {},
+      "permission_decisions": {},
+      "policy_denials": {},
+      "transport_retry": {},
+      "sentinel_trips": 0,
+      "terminal": {},
+      "resource_events": {},
+      "longsession_events": {},
+      "browser_failures": {},
+      "retrieval_requests": 0,
+      "serp_at_cap": 0,
+      "timed_out": 0,
+      "error_examples": {},
+      "job": "official-r1-c3"
+    },
+    {
+      "task": "caffe-cifar-10",
+      "trial": "caffe-cifar-10__wJfZYAK",
+      "reward": null,
+      "wall_minutes": 64.06,
+      "exception": true,
+      "attention_weight": 0,
+      "tool_calls": {},
+      "tool_errors": {},
+      "model_tool_name_errors": {},
+      "framework_signals": {},
+      "role_denials": {},
+      "nonzero_exit": {},
+      "non_shell_exit_codes": {},
+      "permission_denials": {},
+      "permission_decisions": {},
+      "policy_denials": {},
+      "transport_retry": {},
+      "sentinel_trips": 0,
+      "terminal": {},
+      "resource_events": {},
+      "longsession_events": {},
+      "browser_failures": {},
+      "retrieval_requests": 0,
+      "serp_at_cap": 0,
+      "timed_out": 0,
+      "error_examples": {},
+      "job": "official-r1-c4"
+    },
+    {
+      "task": "custom-memory-heap-crash",
+      "trial": "custom-memory-heap-crash__unW6UnQ",
+      "reward": 1.0,
+      "wall_minutes": 5.27,
+      "exception": false,
+      "attention_weight": 0,
+      "tool_calls": {
+        "plan_write": 2,
+        "list_dir": 3,
+        "read_file": 9,
+        "run_terminal_cmd": 12,
+        "grep": 2,
+        "todo_write": 2,
+        "search_replace": 1,
+        "submit": 2
+      },
+      "tool_errors": {},
+      "model_tool_name_errors": {},
+      "framework_signals": {
+        "plan_write:refill_requested": 1
+      },
+      "role_denials": {},
+      "nonzero_exit": {},
+      "non_shell_exit_codes": {
+        "plan_write": 1
+      },
+      "permission_denials": {},
+      "permission_decisions": {
+        "allow_once": 33
+      },
+      "policy_denials": {},
+      "transport_retry": {},
+      "sentinel_trips": 0,
+      "terminal": {},
+      "resource_events": {},
+      "longsession_events": {},
+      "browser_failures": {},
+      "retrieval_requests": 0,
+      "serp_at_cap": 0,
+      "timed_out": 0,
+      "error_examples": {},
+      "job": "official-r1-c4"
+    },
+    {
+      "task": "extract-moves-from-video",
+      "trial": "extract-moves-from-video__gWgG98R",
+      "reward": null,
+      "wall_minutes": 34.38,
+      "exception": true,
+      "attention_weight": 0,
+      "tool_calls": {},
+      "tool_errors": {},
+      "model_tool_name_errors": {},
+      "framework_signals": {},
+      "role_denials": {},
+      "nonzero_exit": {},
+      "non_shell_exit_codes": {},
+      "permission_denials": {},
+      "permission_decisions": {},
+      "policy_denials": {},
+      "transport_retry": {},
+      "sentinel_trips": 0,
+      "terminal": {},
+      "resource_events": {},
+      "longsession_events": {},
+      "browser_failures": {},
+      "retrieval_requests": 0,
+      "serp_at_cap": 0,
+      "timed_out": 0,
+      "error_examples": {},
+      "job": "official-r1-c4"
+    },
+    {
+      "task": "gpt2-codegolf",
+      "trial": "gpt2-codegolf__LnenJYK",
+      "reward": 0.0,
+      "wall_minutes": 16.06,
+      "exception": true,
+      "attention_weight": 0,
+      "tool_calls": {},
+      "tool_errors": {},
+      "model_tool_name_errors": {},
+      "framework_signals": {},
+      "role_denials": {},
+      "nonzero_exit": {},
+      "non_shell_exit_codes": {},
+      "permission_denials": {},
+      "permission_decisions": {},
+      "policy_denials": {},
+      "transport_retry": {},
+      "sentinel_trips": 0,
+      "terminal": {},
+      "resource_events": {},
+      "longsession_events": {},
+      "browser_failures": {},
+      "retrieval_requests": 0,
+      "serp_at_cap": 0,
+      "timed_out": 0,
+      "error_examples": {},
+      "job": "official-r1-c4"
+    },
+    {
+      "task": "mteb-leaderboard",
+      "trial": "mteb-leaderboard__Lo8noyW",
+      "reward": null,
+      "wall_minutes": 63.5,
+      "exception": true,
+      "attention_weight": 0,
+      "tool_calls": {},
+      "tool_errors": {},
+      "model_tool_name_errors": {},
+      "framework_signals": {},
+      "role_denials": {},
+      "nonzero_exit": {},
+      "non_shell_exit_codes": {},
+      "permission_denials": {},
+      "permission_decisions": {},
+      "policy_denials": {},
+      "transport_retry": {},
+      "sentinel_trips": 0,
+      "terminal": {},
+      "resource_events": {},
+      "longsession_events": {},
+      "browser_failures": {},
+      "retrieval_requests": 0,
+      "serp_at_cap": 0,
+      "timed_out": 0,
+      "error_examples": {},
+      "job": "official-r1-c4"
+    },
+    {
+      "task": "openssl-selfsigned-cert",
+      "trial": "openssl-selfsigned-cert__SVoRvSW",
+      "reward": 1.0,
+      "wall_minutes": 2.6,
+      "exception": false,
+      "attention_weight": 0,
+      "tool_calls": {
+        "plan_write": 1,
+        "run_terminal_cmd": 12,
+        "search_replace": 2,
+        "read_file": 1,
+        "submit": 2
+      },
+      "tool_errors": {},
+      "model_tool_name_errors": {},
+      "framework_signals": {},
+      "role_denials": {},
+      "nonzero_exit": {},
+      "non_shell_exit_codes": {},
+      "permission_denials": {},
+      "permission_decisions": {
+        "allow_once": 18
+      },
+      "policy_denials": {},
+      "transport_retry": {},
+      "sentinel_trips": 0,
+      "terminal": {},
+      "resource_events": {},
+      "longsession_events": {},
+      "browser_failures": {},
+      "retrieval_requests": 0,
+      "serp_at_cap": 0,
+      "timed_out": 0,
+      "error_examples": {},
+      "job": "official-r1-c4"
+    },
+    {
+      "task": "rstan-to-pystan",
+      "trial": "rstan-to-pystan__c5sahWf",
+      "reward": null,
+      "wall_minutes": 34.35,
+      "exception": true,
+      "attention_weight": 0,
+      "tool_calls": {},
+      "tool_errors": {},
+      "model_tool_name_errors": {},
+      "framework_signals": {},
+      "role_denials": {},
+      "nonzero_exit": {},
+      "non_shell_exit_codes": {},
+      "permission_denials": {},
+      "permission_decisions": {},
+      "policy_denials": {},
+      "transport_retry": {},
+      "sentinel_trips": 0,
+      "terminal": {},
+      "resource_events": {},
+      "longsession_events": {},
+      "browser_failures": {},
+      "retrieval_requests": 0,
+      "serp_at_cap": 0,
+      "timed_out": 0,
+      "error_examples": {},
+      "job": "official-r1-c4"
+    },
+    {
+      "task": "cancel-async-tasks",
+      "trial": "cancel-async-tasks__HwJagRv",
+      "reward": 1.0,
+      "wall_minutes": 6.48,
+      "exception": false,
+      "attention_weight": 0,
+      "tool_calls": {
+        "plan_write": 1,
+        "run_terminal_cmd": 3,
+        "search_replace": 2,
+        "read_file": 1,
+        "submit": 2,
+        "run_tests": 1
+      },
+      "tool_errors": {},
+      "model_tool_name_errors": {},
+      "framework_signals": {},
+      "role_denials": {},
+      "nonzero_exit": {
+        "run_tests": 1
+      },
+      "non_shell_exit_codes": {},
+      "permission_denials": {},
+      "permission_decisions": {
+        "allow_once": 10
+      },
+      "policy_denials": {},
+      "transport_retry": {},
+      "sentinel_trips": 0,
+      "terminal": {},
+      "resource_events": {},
+      "longsession_events": {},
+      "browser_failures": {},
+      "retrieval_requests": 0,
+      "serp_at_cap": 0,
+      "timed_out": 0,
+      "error_examples": {},
+      "job": "official-r1-c5"
+    },
+    {
+      "task": "raman-fitting",
+      "trial": "raman-fitting__JpdVyRL",
+      "reward": 0.0,
+      "wall_minutes": 15.73,
+      "exception": true,
+      "attention_weight": 0,
+      "tool_calls": {},
+      "tool_errors": {},
+      "model_tool_name_errors": {},
+      "framework_signals": {},
+      "role_denials": {},
+      "nonzero_exit": {},
+      "non_shell_exit_codes": {},
+      "permission_denials": {},
+      "permission_decisions": {},
+      "policy_denials": {},
+      "transport_retry": {},
+      "sentinel_trips": 0,
+      "terminal": {},
+      "resource_events": {},
+      "longsession_events": {},
+      "browser_failures": {},
+      "retrieval_requests": 0,
+      "serp_at_cap": 0,
+      "timed_out": 0,
+      "error_examples": {},
+      "job": "official-r1-c5"
+    },
+    {
+      "task": "torch-pipeline-parallelism",
+      "trial": "torch-pipeline-parallelism__uHHrgnC",
+      "reward": 0.0,
+      "wall_minutes": 21.57,
+      "exception": true,
+      "attention_weight": 0,
+      "tool_calls": {},
+      "tool_errors": {},
+      "model_tool_name_errors": {},
+      "framework_signals": {},
+      "role_denials": {},
+      "nonzero_exit": {},
+      "non_shell_exit_codes": {},
+      "permission_denials": {},
+      "permission_decisions": {},
+      "policy_denials": {},
+      "transport_retry": {},
+      "sentinel_trips": 0,
+      "terminal": {},
+      "resource_events": {},
+      "longsession_events": {},
+      "browser_failures": {},
+      "retrieval_requests": 0,
+      "serp_at_cap": 0,
+      "timed_out": 0,
+      "error_examples": {},
+      "job": "official-r1-c5"
+    },
+    {
+      "task": "crack-7z-hash",
+      "trial": "crack-7z-hash__kBdxdDx",
+      "reward": 1.0,
+      "wall_minutes": 5.31,
+      "exception": false,
+      "attention_weight": 0,
+      "tool_calls": {
+        "plan_write": 2,
+        "run_terminal_cmd": 19,
+        "submit": 2
+      },
+      "tool_errors": {},
+      "model_tool_name_errors": {},
+      "framework_signals": {
+        "plan_write:refill_requested": 1
+      },
+      "role_denials": {},
+      "nonzero_exit": {
+        "run_terminal_cmd": 1
+      },
+      "non_shell_exit_codes": {
+        "plan_write": 1
+      },
+      "permission_denials": {},
+      "permission_decisions": {
+        "allow_once": 23
+      },
+      "policy_denials": {},
+      "transport_retry": {},
+      "sentinel_trips": 0,
+      "terminal": {},
+      "resource_events": {},
+      "longsession_events": {},
+      "browser_failures": {},
+      "retrieval_requests": 0,
+      "serp_at_cap": 0,
+      "timed_out": 0,
+      "error_examples": {},
+      "job": "official-r1-c6"
+    },
+    {
+      "task": "large-scale-text-editing",
+      "trial": "large-scale-text-editing__dE82Z3H",
+      "reward": 1.0,
+      "wall_minutes": 10.06,
+      "exception": false,
+      "attention_weight": 0,
+      "tool_calls": {
+        "plan_write": 2,
+        "run_terminal_cmd": 16,
+        "run_tests": 2,
+        "submit": 2
+      },
+      "tool_errors": {},
+      "model_tool_name_errors": {},
+      "framework_signals": {
+        "plan_write:refill_requested": 1
+      },
+      "role_denials": {},
+      "nonzero_exit": {
+        "run_terminal_cmd": 3,
+        "run_tests": 2
+      },
+      "non_shell_exit_codes": {
+        "plan_write": 1
+      },
+      "permission_denials": {},
+      "permission_decisions": {
+        "allow_once": 22
+      },
+      "policy_denials": {},
+      "transport_retry": {},
+      "sentinel_trips": 0,
+      "terminal": {},
+      "resource_events": {},
+      "longsession_events": {},
+      "browser_failures": {},
+      "retrieval_requests": 0,
+      "serp_at_cap": 0,
+      "timed_out": 0,
+      "error_examples": {},
+      "job": "official-r1-c6"
+    },
+    {
+      "task": "modernize-scientific-stack",
+      "trial": "modernize-scientific-stack__gw4G586",
+      "reward": 1.0,
+      "wall_minutes": 2.22,
+      "exception": false,
+      "attention_weight": 0,
+      "tool_calls": {
+        "plan_write": 1,
+        "read_file": 4,
+        "list_dir": 1,
+        "search_replace": 2,
+        "run_terminal_cmd": 4,
+        "submit": 2,
+        "todo_write": 1
+      },
+      "tool_errors": {},
+      "model_tool_name_errors": {},
+      "framework_signals": {},
+      "role_denials": {},
+      "nonzero_exit": {},
+      "non_shell_exit_codes": {},
+      "permission_denials": {},
+      "permission_decisions": {
+        "allow_once": 15
+      },
+      "policy_denials": {},
+      "transport_retry": {},
+      "sentinel_trips": 0,
+      "terminal": {},
+      "resource_events": {},
+      "longsession_events": {},
+      "browser_failures": {},
+      "retrieval_requests": 0,
+      "serp_at_cap": 0,
+      "timed_out": 0,
+      "error_examples": {},
+      "job": "official-r1-c6"
+    },
+    {
+      "task": "multi-source-data-merger",
+      "trial": "multi-source-data-merger__kxbBQb8",
+      "reward": 1.0,
+      "wall_minutes": 3.34,
+      "exception": false,
+      "attention_weight": 0,
+      "tool_calls": {
+        "plan_write": 2,
+        "list_dir": 3,
+        "run_terminal_cmd": 7,
+        "read_file": 2,
+        "project_doc_index": 1,
+        "run_tests": 2,
+        "submit": 2
+      },
+      "tool_errors": {},
+      "model_tool_name_errors": {},
+      "framework_signals": {
+        "plan_write:refill_requested": 1
+      },
+      "role_denials": {},
+      "nonzero_exit": {
+        "run_tests": 2
+      },
+      "non_shell_exit_codes": {
+        "plan_write": 1
+      },
+      "permission_denials": {},
+      "permission_decisions": {
+        "allow_once": 19
+      },
+      "policy_denials": {},
+      "transport_retry": {},
+      "sentinel_trips": 0,
+      "terminal": {},
+      "resource_events": {},
+      "longsession_events": {},
+      "browser_failures": {},
+      "retrieval_requests": 0,
+      "serp_at_cap": 0,
+      "timed_out": 0,
+      "error_examples": {},
+      "job": "official-r1-c6"
+    },
+    {
+      "task": "path-tracing",
+      "trial": "path-tracing__AAgDqnE",
+      "reward": 0.0,
+      "wall_minutes": 31.25,
+      "exception": true,
+      "attention_weight": 0,
+      "tool_calls": {},
+      "tool_errors": {},
+      "model_tool_name_errors": {},
+      "framework_signals": {},
+      "role_denials": {},
+      "nonzero_exit": {},
+      "non_shell_exit_codes": {},
+      "permission_denials": {},
+      "permission_decisions": {},
+      "policy_denials": {},
+      "transport_retry": {},
+      "sentinel_trips": 0,
+      "terminal": {},
+      "resource_events": {},
+      "longsession_events": {},
+      "browser_failures": {},
+      "retrieval_requests": 0,
+      "serp_at_cap": 0,
+      "timed_out": 0,
+      "error_examples": {},
+      "job": "official-r1-c6"
+    },
+    {
+      "task": "train-fasttext",
+      "trial": "train-fasttext__GnQX8zP",
+      "reward": 0.0,
+      "wall_minutes": 61.42,
+      "exception": true,
+      "attention_weight": 0,
+      "tool_calls": {},
+      "tool_errors": {},
+      "model_tool_name_errors": {},
+      "framework_signals": {},
+      "role_denials": {},
+      "nonzero_exit": {},
+      "non_shell_exit_codes": {},
+      "permission_denials": {},
+      "permission_decisions": {},
+      "policy_denials": {},
+      "transport_retry": {},
+      "sentinel_trips": 0,
+      "terminal": {},
+      "resource_events": {},
+      "longsession_events": {},
+      "browser_failures": {},
+      "retrieval_requests": 0,
+      "serp_at_cap": 0,
+      "timed_out": 0,
+      "error_examples": {},
+      "job": "official-r1-c6"
+    },
+    {
+      "task": "chess-best-move",
+      "trial": "chess-best-move__wZ9nRYy",
+      "reward": 0.0,
+      "wall_minutes": 16.13,
+      "exception": true,
+      "attention_weight": 0,
+      "tool_calls": {},
+      "tool_errors": {},
+      "model_tool_name_errors": {},
+      "framework_signals": {},
+      "role_denials": {},
+      "nonzero_exit": {},
+      "non_shell_exit_codes": {},
+      "permission_denials": {},
+      "permission_decisions": {},
+      "policy_denials": {},
+      "transport_retry": {},
+      "sentinel_trips": 0,
+      "terminal": {},
+      "resource_events": {},
+      "longsession_events": {},
+      "browser_failures": {},
+      "retrieval_requests": 0,
+      "serp_at_cap": 0,
+      "timed_out": 0,
+      "error_examples": {},
+      "job": "official-r1-c7"
+    },
+    {
+      "task": "extract-elf",
+      "trial": "extract-elf__muwAaa4",
+      "reward": 0.0,
+      "wall_minutes": 16.18,
+      "exception": true,
+      "attention_weight": 0,
+      "tool_calls": {},
+      "tool_errors": {},
+      "model_tool_name_errors": {},
+      "framework_signals": {},
+      "role_denials": {},
+      "nonzero_exit": {},
+      "non_shell_exit_codes": {},
+      "permission_denials": {},
+      "permission_decisions": {},
+      "policy_denials": {},
+      "transport_retry": {},
+      "sentinel_trips": 0,
+      "terminal": {},
+      "resource_events": {},
+      "longsession_events": {},
+      "browser_failures": {},
+      "retrieval_requests": 0,
+      "serp_at_cap": 0,
+      "timed_out": 0,
+      "error_examples": {},
+      "job": "official-r1-c7"
+    },
+    {
+      "task": "largest-eigenval",
+      "trial": "largest-eigenval__VcJv2fm",
+      "reward": 0.0,
+      "wall_minutes": 15.68,
+      "exception": true,
+      "attention_weight": 0,
+      "tool_calls": {},
+      "tool_errors": {},
+      "model_tool_name_errors": {},
+      "framework_signals": {},
+      "role_denials": {},
+      "nonzero_exit": {},
+      "non_shell_exit_codes": {},
+      "permission_denials": {},
+      "permission_decisions": {},
+      "policy_denials": {},
+      "transport_retry": {},
+      "sentinel_trips": 0,
+      "terminal": {},
+      "resource_events": {},
+      "longsession_events": {},
+      "browser_failures": {},
+      "retrieval_requests": 0,
+      "serp_at_cap": 0,
+      "timed_out": 0,
+      "error_examples": {},
+      "job": "official-r1-c7"
+    },
+    {
+      "task": "make-doom-for-mips",
+      "trial": "make-doom-for-mips__C4YXLFg",
+      "reward": 0.0,
+      "wall_minutes": 16.43,
+      "exception": true,
+      "attention_weight": 0,
+      "tool_calls": {},
+      "tool_errors": {},
+      "model_tool_name_errors": {},
+      "framework_signals": {},
+      "role_denials": {},
+      "nonzero_exit": {},
+      "non_shell_exit_codes": {},
+      "permission_denials": {},
+      "permission_decisions": {},
+      "policy_denials": {},
+      "transport_retry": {},
+      "sentinel_trips": 0,
+      "terminal": {},
+      "resource_events": {},
+      "longsession_events": {},
+      "browser_failures": {},
+      "retrieval_requests": 0,
+      "serp_at_cap": 0,
+      "timed_out": 0,
+      "error_examples": {},
+      "job": "official-r1-c7"
+    },
+    {
+      "task": "nginx-request-logging",
+      "trial": "nginx-request-logging__k4s8gPe",
+      "reward": 1.0,
+      "wall_minutes": 2.63,
+      "exception": false,
+      "attention_weight": 0,
+      "tool_calls": {
+        "plan_write": 1,
+        "run_terminal_cmd": 8,
+        "read_file": 1,
+        "search_replace": 4,
+        "submit": 2,
+        "blackboard_read": 1
+      },
+      "tool_errors": {},
+      "model_tool_name_errors": {},
+      "framework_signals": {},
+      "role_denials": {},
+      "nonzero_exit": {},
+      "non_shell_exit_codes": {},
+      "permission_denials": {},
+      "permission_decisions": {
+        "allow_once": 17
+      },
+      "policy_denials": {},
+      "transport_retry": {},
+      "sentinel_trips": 0,
+      "terminal": {},
+      "resource_events": {},
+      "longsession_events": {},
+      "browser_failures": {},
+      "retrieval_requests": 0,
+      "serp_at_cap": 0,
+      "timed_out": 0,
+      "error_examples": {},
+      "job": "official-r1-c7"
+    },
+    {
+      "task": "regex-log",
+      "trial": "regex-log__KBm33Md",
+      "reward": 1.0,
+      "wall_minutes": 5.47,
+      "exception": false,
+      "attention_weight": 0,
+      "tool_calls": {
+        "plan_write": 1,
+        "list_dir": 1,
+        "run_terminal_cmd": 6,
+        "read_file": 1,
+        "todo_write": 1,
+        "submit": 2
+      },
+      "tool_errors": {},
+      "model_tool_name_errors": {},
+      "framework_signals": {},
+      "role_denials": {},
+      "nonzero_exit": {
+        "run_terminal_cmd": 1
+      },
+      "non_shell_exit_codes": {},
+      "permission_denials": {},
+      "permission_decisions": {
+        "allow_once": 12
+      },
+      "policy_denials": {},
+      "transport_retry": {},
+      "sentinel_trips": 0,
+      "terminal": {},
+      "resource_events": {},
+      "longsession_events": {},
+      "browser_failures": {},
+      "retrieval_requests": 0,
+      "serp_at_cap": 0,
+      "timed_out": 0,
+      "error_examples": {},
+      "job": "official-r1-c7"
+    },
+    {
+      "task": "torch-tensor-parallelism",
+      "trial": "torch-tensor-parallelism__ZMkTCYW",
+      "reward": 1.0,
+      "wall_minutes": 22.3,
+      "exception": true,
+      "attention_weight": 0,
+      "tool_calls": {},
+      "tool_errors": {},
+      "model_tool_name_errors": {},
+      "framework_signals": {},
+      "role_denials": {},
+      "nonzero_exit": {},
+      "non_shell_exit_codes": {},
+      "permission_denials": {},
+      "permission_decisions": {},
+      "policy_denials": {},
+      "transport_retry": {},
+      "sentinel_trips": 0,
+      "terminal": {},
+      "resource_events": {},
+      "longsession_events": {},
+      "browser_failures": {},
+      "retrieval_requests": 0,
+      "serp_at_cap": 0,
+      "timed_out": 0,
+      "error_examples": {},
+      "job": "official-r1-c7"
+    },
+    {
+      "task": "bn-fit-modify",
+      "trial": "bn-fit-modify__W2bAaiN",
+      "reward": 1.0,
+      "wall_minutes": 5.88,
+      "exception": false,
+      "attention_weight": 0,
+      "tool_calls": {
+        "plan_write": 2,
+        "run_terminal_cmd": 14,
+        "submit": 2,
+        "blackboard_read": 1
+      },
+      "tool_errors": {},
+      "model_tool_name_errors": {},
+      "framework_signals": {
+        "plan_write:refill_requested": 1
+      },
+      "role_denials": {},
+      "nonzero_exit": {
+        "run_terminal_cmd": 2
+      },
+      "non_shell_exit_codes": {
+        "plan_write": 1
+      },
+      "permission_denials": {},
+      "permission_decisions": {
+        "allow_once": 19
+      },
+      "policy_denials": {},
+      "transport_retry": {},
+      "sentinel_trips": 0,
+      "terminal": {},
+      "resource_events": {},
+      "longsession_events": {},
+      "browser_failures": {},
+      "retrieval_requests": 0,
+      "serp_at_cap": 0,
+      "timed_out": 0,
+      "error_examples": {},
+      "job": "official-r1-c8"
+    },
+    {
+      "task": "distribution-search",
+      "trial": "distribution-search__T3dRoTS",
+      "reward": 1.0,
+      "wall_minutes": 6.58,
+      "exception": false,
+      "attention_weight": 0,
+      "tool_calls": {
+        "plan_write": 2,
+        "run_terminal_cmd": 5,
+        "submit": 2
+      },
+      "tool_errors": {},
+      "model_tool_name_errors": {},
+      "framework_signals": {
+        "plan_write:refill_requested": 1
+      },
+      "role_denials": {},
+      "nonzero_exit": {},
+      "non_shell_exit_codes": {
+        "plan_write": 1
+      },
+      "permission_denials": {},
+      "permission_decisions": {
+        "allow_once": 9
+      },
+      "policy_denials": {},
+      "transport_retry": {},
+      "sentinel_trips": 0,
+      "terminal": {},
+      "resource_events": {},
+      "longsession_events": {},
+      "browser_failures": {},
+      "retrieval_requests": 0,
+      "serp_at_cap": 0,
+      "timed_out": 0,
+      "error_examples": {},
+      "job": "official-r1-c8"
+    },
+    {
+      "task": "financial-document-processor",
+      "trial": "financial-document-processor__nkNFzGn",
+      "reward": 1.0,
+      "wall_minutes": 6.58,
+      "exception": false,
+      "attention_weight": 0,
+      "tool_calls": {
+        "plan_write": 2,
+        "list_dir": 2,
+        "run_terminal_cmd": 11,
+        "read_file": 11,
+        "submit": 2
+      },
+      "tool_errors": {},
+      "model_tool_name_errors": {},
+      "framework_signals": {
+        "plan_write:refill_requested": 1
+      },
+      "role_denials": {},
+      "nonzero_exit": {},
+      "non_shell_exit_codes": {
+        "plan_write": 1
+      },
+      "permission_denials": {},
+      "permission_decisions": {
+        "allow_once": 28
+      },
+      "policy_denials": {},
+      "transport_retry": {},
+      "sentinel_trips": 0,
+      "terminal": {},
+      "resource_events": {},
+      "longsession_events": {},
+      "browser_failures": {},
+      "retrieval_requests": 0,
+      "serp_at_cap": 0,
+      "timed_out": 0,
+      "error_examples": {},
+      "job": "official-r1-c8"
+    },
+    {
+      "task": "make-mips-interpreter",
+      "trial": "make-mips-interpreter__6qKLkt8",
+      "reward": 0.0,
+      "wall_minutes": 31.36,
+      "exception": true,
+      "attention_weight": 0,
+      "tool_calls": {},
+      "tool_errors": {},
+      "model_tool_name_errors": {},
+      "framework_signals": {},
+      "role_denials": {},
+      "nonzero_exit": {},
+      "non_shell_exit_codes": {},
+      "permission_denials": {},
+      "permission_decisions": {},
+      "policy_denials": {},
+      "transport_retry": {},
+      "sentinel_trips": 0,
+      "terminal": {},
+      "resource_events": {},
+      "longsession_events": {},
+      "browser_failures": {},
+      "retrieval_requests": 0,
+      "serp_at_cap": 0,
+      "timed_out": 0,
+      "error_examples": {},
+      "job": "official-r1-c8"
+    },
+    {
+      "task": "count-dataset-tokens",
+      "trial": "count-dataset-tokens__yV2hvb3",
+      "reward": 0.0,
+      "wall_minutes": 15.7,
+      "exception": true,
+      "attention_weight": 0,
+      "tool_calls": {},
+      "tool_errors": {},
+      "model_tool_name_errors": {},
+      "framework_signals": {},
+      "role_denials": {},
+      "nonzero_exit": {},
+      "non_shell_exit_codes": {},
+      "permission_denials": {},
+      "permission_decisions": {},
+      "policy_denials": {},
+      "transport_retry": {},
+      "sentinel_trips": 0,
+      "terminal": {},
+      "resource_events": {},
+      "longsession_events": {},
+      "browser_failures": {},
+      "retrieval_requests": 0,
+      "serp_at_cap": 0,
+      "timed_out": 0,
+      "error_examples": {},
+      "job": "official-r1-c9"
+    },
+    {
+      "task": "gcode-to-text",
+      "trial": "gcode-to-text__J3vty9D",
+      "reward": 0.0,
+      "wall_minutes": 15.79,
+      "exception": true,
+      "attention_weight": 0,
+      "tool_calls": {},
+      "tool_errors": {},
+      "model_tool_name_errors": {},
+      "framework_signals": {},
+      "role_denials": {},
+      "nonzero_exit": {},
+      "non_shell_exit_codes": {},
+      "permission_denials": {},
+      "permission_decisions": {},
+      "policy_denials": {},
+      "transport_retry": {},
+      "sentinel_trips": 0,
+      "terminal": {},
+      "resource_events": {},
+      "longsession_events": {},
+      "browser_failures": {},
+      "retrieval_requests": 0,
+      "serp_at_cap": 0,
+      "timed_out": 0,
+      "error_examples": {},
+      "job": "official-r1-c9"
+    },
+    {
+      "task": "model-extraction-relu-logits",
+      "trial": "model-extraction-relu-logits__gDoi99t",
+      "reward": null,
+      "wall_minutes": 30.66,
+      "exception": true,
+      "attention_weight": 0,
+      "tool_calls": {},
+      "tool_errors": {},
+      "model_tool_name_errors": {},
+      "framework_signals": {},
+      "role_denials": {},
+      "nonzero_exit": {},
+      "non_shell_exit_codes": {},
+      "permission_denials": {},
+      "permission_decisions": {},
+      "policy_denials": {},
+      "transport_retry": {},
+      "sentinel_trips": 0,
+      "terminal": {},
+      "resource_events": {},
+      "longsession_events": {},
+      "browser_failures": {},
+      "retrieval_requests": 0,
+      "serp_at_cap": 0,
+      "timed_out": 0,
+      "error_examples": {},
+      "job": "official-r1-c9"
+    },
+    {
+      "task": "qemu-alpine-ssh",
+      "trial": "qemu-alpine-ssh__aETzAok",
+      "reward": 1.0,
+      "wall_minutes": 11.92,
+      "exception": false,
+      "attention_weight": 0,
+      "tool_calls": {
+        "plan_write": 2,
+        "run_terminal_cmd": 43,
+        "submit": 2
+      },
+      "tool_errors": {},
+      "model_tool_name_errors": {},
+      "framework_signals": {
+        "plan_write:refill_requested": 1
+      },
+      "role_denials": {},
+      "nonzero_exit": {
+        "run_terminal_cmd": 3
+      },
+      "non_shell_exit_codes": {
+        "plan_write": 1
+      },
+      "permission_denials": {},
+      "permission_decisions": {
+        "allow_once": 47
+      },
+      "policy_denials": {},
+      "transport_retry": {},
+      "sentinel_trips": 0,
+      "terminal": {},
+      "resource_events": {},
+      "longsession_events": {},
+      "browser_failures": {},
+      "retrieval_requests": 0,
+      "serp_at_cap": 0,
+      "timed_out": 0,
+      "error_examples": {},
+      "job": "official-r1-c9"
+    },
+    {
+      "task": "sqlite-with-gcov",
+      "trial": "sqlite-with-gcov__GbtJBQZ",
+      "reward": 1.0,
+      "wall_minutes": 8.91,
+      "exception": false,
+      "attention_weight": 0,
+      "tool_calls": {
+        "plan_write": 2,
+        "list_dir": 2,
+        "run_terminal_cmd": 18,
+        "read_file": 1,
+        "grep": 10,
+        "submit": 2,
+        "blackboard_read": 1
+      },
+      "tool_errors": {},
+      "model_tool_name_errors": {},
+      "framework_signals": {
+        "plan_write:refill_requested": 1
+      },
+      "role_denials": {},
+      "nonzero_exit": {},
+      "non_shell_exit_codes": {
+        "plan_write": 1
+      },
+      "permission_denials": {},
+      "permission_decisions": {
+        "allow_once": 36
+      },
+      "policy_denials": {},
+      "transport_retry": {},
+      "sentinel_trips": 0,
+      "terminal": {},
+      "resource_events": {},
+      "longsession_events": {},
+      "browser_failures": {},
+      "retrieval_requests": 0,
+      "serp_at_cap": 0,
+      "timed_out": 0,
+      "error_examples": {},
+      "job": "official-r1-c9"
+    }
+  ]
+}

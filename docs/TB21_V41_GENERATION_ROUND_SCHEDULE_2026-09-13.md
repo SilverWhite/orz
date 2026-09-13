@@ -96,6 +96,53 @@
   榜单成绩。执行入口已参数化：`run_official_2.1.sh` 的 `K="${K:-5}"`，默认 5
   （榜单口径），`K=1 bash run_official_2.1.sh 1` 即单次扫描；两种口径的语料身份
   完全相同（冻结清单按题不按试次）。
+- **本轮定性 = 筛查轮（2026-09-13 用户裁决）**：与项目此前 k=1 的 89 题批次同形
+  ——**严格遵守官方口径设置，但仅 k=1**，**不直接作为正式分数**。是否升级为
+  正式成绩按下述门槛判。
+
+### 3.1 本轮正文与参照线（**不卡死**）
+
+**本轮不是单纯跑分**（2026-09-13 用户裁决）：分数只作参考，**首要产出是校验 orz 本体
+与发现摩擦项**，为下一轮优化提供输入。三者优先序：
+
+1. **orz 载体自校验**——0z 新增面（预检门 / 回收阶梯 / Job 硬上限 / 七族事件 /
+   进程树与回收）在真机整轮的实测表现；前几轮的死机形态（盘满致命退出、commit
+   耗尽 abort、墙钟杀死）是否复现或已消除。
+2. **摩擦项发现**——工具失败、模型侧工具名错、策略/权限拒绝、检索与长会话摩擦、
+   终端异常态，逐项归因（orz 侧 / 模型侧 / 装置侧）→ 优化候选。
+3. **成绩参考**——k=1 准确率与下述参照线对照，仅作"是否值得补 k=5 取正式成绩"
+   的判断依据。
+
+| 项 | 内容 |
+|---|---|
+| 参照线（**软**） | k=1 成绩达官方 DeepSeek-V4.1-Flash 的 TB 2.1 公布值 **90.6** 时，才值得补 k=5 降方差并进一步取正式成绩；**未达不阻断**，本轮照常产出校验与摩擦项结论 |
+| 一手来源 | `https://api-docs.deepseek.com/updates/` Change Log **2026-09-10**「DeepSeek-V4.1-Flash Release」条目：`Terminal-Bench 2.1: 90.6`（2026-09-13 抓取） |
+| 参照线边界 | 厂商公布值；09-10 条目未标注试次数与聚合方式（家族口径见 08-21 条目脚注：DeepSeek Harness minimal mode + max effort），与本轮（orz 载体、官方 TB harness、k=1、默认档位）**非逐项同构**——只作参照，不作同口径对账 |
+| 成绩读数件（**静默旁路**） | [`tb21_round_gate.py`](../scripts/tb21_round_gate.py)：按任务聚合出 k=1 准确率并与参照线比对；**回测**（既有 R1 批，同 k=1 口径）= 89 题全覆、58 题通过 = **65.17%**（差 −25.43 pt） |
+| 摩擦读数件（**静默旁路**） | [`tb21_friction_scan.py`](../scripts/tb21_friction_scan.py)：把整轮 journal/日志折叠成摩擦清单（工具失败 / 模型侧工具名错 / 框架信号 / 角色拒绝 / 权限拒绝 / 传输重试 / 哨兵 / 长会话 / 检索 / 终端态 / 0z 资源事件），逐项归因后可转优化项 |
+| 两件共同契约（2026-09-13 用户指示） | **静默旁路：不阻断跑分流程**——只读、容忍跑批中/半程数据（逐行跳过写中行）、`--quiet` 可零输出，**退出码恒 0**，不得接入跑批链作为阻断步；用途只是跑批中/后**快速初步分析** |
+
+**R1 批次（V4 Flash 期、同 k=1 口径）摩擦基线**（2026-09-13 扫描，作为本轮对照
+起点；97 试次 / 89 题 / 2,837 次工具调用，其中检索 119 次）：
+
+- **真工具失败 33 试次**：`plan_write` 20（含 `validation_failed_after_refill`）、
+  `search_replace` 14（`content_anchor_mismatch`）、`run_terminal_cmd` 10（含
+  "background execution is disabled"）、`web_fetch` 8（`unsupported content type`）、
+  `update_goal` 8（"No active goal to update"）、`list_dir` 4（`plan_round_tool_denied`）、
+  `web_search` 4、`submit` 3、`read_file` 3、`run_tests` 3、`compaction_whitelist_add` 1。
+- **模型侧工具名错 15 试次**（12 种错名，全部是 `run_terminal_c*` 变体：cell 6 /
+  calls 3 / cdot 2 / cpt 2 / cplet / cord / cpt_cmd / catch / cdir_cmd / ccmd /
+  call / craft）——**一手证据**：`model_output` 里模型自己就发的是错名，
+  运行期正确回 `Tool not found`。这是代际对比的高价值信号（V4 Flash 产物）。
+- **框架信号 42 次**（`plan_write:refill_requested`，非故障）；**角色/策略拒绝 23 次**
+  （`retrieval_role_write_denied`：run_terminal_cmd 9 / todo_write 6 / search_tool 4 /
+  update_goal 2 / search_replace 1 / submit 1）。
+- **权限门拒绝 11 次**（grep 6 / read_file 5 / list_dir 1）——只读工具被拒值得单独看。
+- 其他：shell 非零退出 `run_terminal_cmd` 119 / `run_tests` 26；传输重试 4（recovered/
+  midstream）；哨兵触发 9；`context_compressed` 1；**0z 资源事件 0**（0.5.0 首轮才落地）。
+- 边界：`status=error` 一个通道里混了四类语义（真失败 / 模型错名 / 框架信号 /
+  策略拒绝），本扫描器按 error 文本分类；原始 `exit_code` 对非 shell 工具不是进程
+  退出码，已单列不混算。
 - **第 0 步：语料与阈值冻结（P2-15 S1/S2）**——89 题 + sha256 清单 + 阈值干跑校准，
   runner 与 oracle isolation 已在位。起跑时刻即该立项的天然窗口；不冻则本轮数据
   同样不可复现。
@@ -166,11 +213,10 @@
 
 1. **0z S4 是否放行**（载体已 0.5.0；判据 1–13，含两项受控注入）。
 2. **0u 是否正式由本轮取代并注销**（含 0t S4 单批合并）。
-2b. **每任务试次数口径**：用户指示 **k=1**（2026-09-13）；但官方榜单 CI 要求
-   每题 ≥5 试次 → k=1 只能作「官方流程单次扫描」上传 Harbor，**不能**作为榜单
-   提交。待确认：① 接受"非榜单口径"（则本轮只作新代际基线，Harbor 记录不外投
-   榜单）；② 或按 K=5 跑以便具备榜单可提交性；③ 或先 K=1 全量扫描、后续对
-   入选子集补 K=5。执行入口同为 `run_official_2.1.sh`（`K` 变量）。
+2b. ~~**每任务试次数口径**~~ **已落定（2026-09-13 用户裁决）**：本轮 = **k=1
+   筛查轮**（严格官方口径设置、仅 k=1、不作正式分数）；晋级门槛 = 至少达到官方
+   DeepSeek-V4.1-Flash 的 TB 2.1 公布值 **90.6**（§3.1），达标才补 k=5 降方差并
+   进一步取正式成绩。执行入口 `run_official_2.1.sh`（`K` 变量，本轮 `K=1`）。
 2c. **内部 evaluation/holdout 阈值路线**：本项目**无评审人**（用户说明），故
    「密封 evaluation/holdout 分区 + 双人盲审 baseline」不成立——该路线**按其
    设计停在 `not_calibrated`**（GAP 修复后已机械化保证），S3 只能产出
