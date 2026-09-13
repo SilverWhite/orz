@@ -8,8 +8,14 @@ trial and in aggregate, the signals that historically turned into work items:
 
   * tool failures / non-zero exits (``tool_completed.status == "error"``,
     ``exit_code != 0``), broken down by tool;
-  * permission denials and policy denials (``permission_decision.decision``,
-    ``tool_completed.policy_denial``);
+    * permission denials and policy denials (``permission_decision.decision``,
+    ``tool_completed.policy_denial``) — with the **requested target** attached,
+    because a denial's meaning lives in the target: R1's denials were all reads
+    of the runtime's own ``.gsa`` evidence surface (ledger / session caches)
+    through the dedicated read tools, while the *same* files were read
+    successfully through ``run_terminal_cmd`` (shell lane).  The scan therefore
+    reports ``gsa_internal`` denials and shell-lane ``.gsa`` reads separately
+    instead of lumping them into "read-only tool denials";
   * transport retries (``transport_retry``: outcome/kind) and output-health
     guard trips (``output-health guard trip`` in the agent log);
   * long-session friction (``context_compressed`` / ``context_recovery_truncated``
@@ -35,6 +41,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 from collections import Counter
 from datetime import datetime
 from pathlib import Path
@@ -62,6 +69,19 @@ RESOURCE_EVENTS = (
 LONGSESSION_EVENTS = ("context_compressed", "context_recovery_truncated", "session_archive")
 TERMINAL_EVENTS = ("run_invalidated", "run_failed", "run_cancelled", "run_terminated")
 RETRIEVAL_TOOLS = ("web_search", "web_fetch", "browser_read", "browser_control")
+GSA_MARKER = ".gsa"
+# `--exclude-dir=.gsa` merely *mentions* the tree; it is not a read target.
+GSA_EXCLUDE_NOISE = re.compile(r"--exclude(-dir)?=\.?gsa", re.IGNORECASE)
+
+
+def is_gsa_target(tool: str, target: str | None) -> bool:
+    """True only when the call actually targets the runtime's `.gsa` tree."""
+    if not target or GSA_MARKER not in target:
+        return False
+    if tool == "run_terminal_cmd":
+        cleaned = GSA_EXCLUDE_NOISE.sub("", target)
+        return ".gsa/" in cleaned or cleaned.rstrip().endswith(".gsa")
+    return True
 
 
 def parse_ts(value: str | None) -> datetime | None:
@@ -114,6 +134,19 @@ def scan_trial(trial_dir: Path) -> dict[str, object] | None:
     timed_out = 0
     retrieval_requests = 0
     error_examples: dict[str, str] = {}
+    call_args: dict[str, object] = {}
+    pending_request: dict[str, object] | None = None
+    denial_details: list[dict[str, object]] = []
+    gsa_reads_allowed: list[dict[str, object]] = []
+
+    def target_of(name: str, arguments: object) -> str | None:
+        if not isinstance(arguments, dict):
+            return None
+        for key in ("target_file", "path", "target_directory", "directory", "command"):
+            value = arguments.get(key)
+            if isinstance(value, str) and value:
+                return value
+        return None
 
     for journal in trial_dir.glob("agent/gsa/runs/*/events.jsonl"):
         try:
@@ -132,7 +165,35 @@ def scan_trial(trial_dir: Path) -> dict[str, object] | None:
             payload = event.get("payload") or {}
             if not isinstance(payload, dict):
                 payload = {}
-            if etype == "tool_completed":
+            if etype == "model_output":
+                for call in payload.get("tool_calls") or []:
+                    if isinstance(call, dict) and call.get("call_id"):
+                        call_args[str(call["call_id"])] = call.get("arguments")
+            elif etype == "permission_requested":
+                pending_request = payload
+            elif etype == "permission_decision":
+                decision = str(payload.get("decision"))
+                decisions[decision] += 1
+                call_id = str((pending_request or {}).get("call_id") or "")
+                arguments = call_args.get(call_id)
+                target = target_of(str(payload.get("tool") or "?"), arguments)
+                gsa_hit = is_gsa_target(str(payload.get("tool") or "?"), target)
+                if decision == "deny":
+                    denials[str(payload.get("tool") or "?")] += 1
+                    denial_details.append({
+                        "tool": payload.get("tool"),
+                        "risk": (pending_request or {}).get("risk"),
+                        "target": target,
+                        "gsa_internal": gsa_hit,
+                    })
+                elif gsa_hit:
+                    gsa_reads_allowed.append({
+                        "tool": payload.get("tool"),
+                        "target": target,
+                        "risk": (pending_request or {}).get("risk"),
+                    })
+                pending_request = None
+            elif etype == "tool_completed":
                 tool = str(payload.get("tool") or "?")
                 tool_calls[tool] += 1
                 error_text = str(payload.get("error") or "")
@@ -165,11 +226,6 @@ def scan_trial(trial_dir: Path) -> dict[str, object] | None:
                     serp_at_cap += 1
                 if tool in RETRIEVAL_TOOLS:
                     retrieval_requests += 1
-            elif etype == "permission_decision":
-                decision = str(payload.get("decision"))
-                decisions[decision] += 1
-                if decision == "deny":
-                    denials[str(payload.get("tool") or "?")] += 1
             elif etype == "transport_retry":
                 transport[f"{payload.get('outcome')}/{payload.get('kind')}"] += 1
             elif etype in TERMINAL_EVENTS:
@@ -215,6 +271,8 @@ def scan_trial(trial_dir: Path) -> dict[str, object] | None:
         "nonzero_exit": dict(nonzero_exit),
         "non_shell_exit_codes": dict(non_shell_exit_codes),
         "permission_denials": dict(denials),
+        "denial_details": denial_details,
+        "gsa_reads_allowed": gsa_reads_allowed,
         "permission_decisions": dict(decisions),
         "policy_denials": dict(policy_denials),
         "transport_retry": dict(transport),
@@ -292,6 +350,9 @@ def main(argv: list[str] | None = None) -> int:
     browser: Counter = Counter()
     decisions: Counter = Counter()
     error_examples: dict[str, str] = {}
+    denial_targets: Counter = Counter()
+    gsa_allowed: Counter = Counter()
+    gsa_denials = 0
     for t in trials:
         tools.update(t["tool_calls"])
         tool_errors.update(t["tool_errors"])
@@ -310,6 +371,12 @@ def main(argv: list[str] | None = None) -> int:
         decisions.update(t["permission_decisions"])
         for k, v in t["error_examples"].items():
             error_examples.setdefault(k, v)
+        for d in t["denial_details"]:
+            denial_targets[f"{d['tool']}:{'gsa_internal' if d['gsa_internal'] else 'other'}"] += 1
+            if d["gsa_internal"]:
+                gsa_denials += 1
+        for a in t["gsa_reads_allowed"]:
+            gsa_allowed[str(a["tool"])] += 1
 
     def affected(key: str) -> int:
         return sum(1 for t in trials if t[key])
@@ -338,6 +405,9 @@ def main(argv: list[str] | None = None) -> int:
             "nonzero_exit_by_tool": dict(nonzero.most_common()),
             "non_shell_exit_codes_by_tool": dict(non_shell_codes.most_common()),
             "permission_denials_by_tool": dict(denials.most_common()),
+            "permission_denial_target_classes": dict(denial_targets.most_common()),
+            "gsa_internal_denials": gsa_denials,
+            "gsa_reads_allowed_by_lane": dict(gsa_allowed.most_common()),
             "permission_decisions": dict(decisions.most_common()),
             "policy_denials": dict(policy.most_common()),
             "transport_retry": dict(transport.most_common()),
@@ -383,6 +453,9 @@ def main(argv: list[str] | None = None) -> int:
     print(f"nonzero exit (shell): {s['nonzero_exit_by_tool']}")
     print(f"other status codes  : {s['non_shell_exit_codes_by_tool']}")
     print(f"permission denials  : {s['permission_denials_by_tool']}")
+    print(f"denial target class : {s['permission_denial_target_classes']}")
+    print(f"  .gsa-internal denials: {s['gsa_internal_denials']}"
+          f"   .gsa reads ALLOWED by lane: {s['gsa_reads_allowed_by_lane']}")
     print(f"transport retries   : {s['transport_retry']}  sentinel trips: {s['sentinel_trips']}")
     print(f"terminal states     : {s['terminal_states']}")
     print(f"resource events     : {s['resource_events']}")

@@ -137,7 +137,20 @@
 - **框架信号 42 次**（`plan_write:refill_requested`，非故障）；**角色/策略拒绝 23 次**
   （`retrieval_role_write_denied`：run_terminal_cmd 9 / todo_write 6 / search_tool 4 /
   update_goal 2 / search_replace 1 / submit 1）。
-- **权限门拒绝 11 次**（grep 6 / read_file 5 / list_dir 1）——只读工具被拒值得单独看。
+- **权限门拒绝 12 次，且全部是 `.gsa` 内部面**（grep 6 / read_file 5 / list_dir 1，
+  分布 6 试次，**无 `tool_started`** = 执行前拦下）。**注意口径**：`permission_requested`
+  的 `risk=ReadOnly` 只是控制器侧风险类，真正的事实是目标路径——
+  ① 被拒目标 = `.gsa/ledger/current.md`（4×）、`.gsa/session/web_fetch/*.txt|md`（6×）、
+  `list_dir /app/.gsa`（1×）；
+  ② **同一批内部面走 `run_terminal_cmd` 共 13 次被放行且 `exit_code=0` 真读到**
+  （`grep/sed /app/.gsa/ledger/current.md`、`ls -la /app/.gsa/`、
+  `cat .gsa/resources_state.json` 等）——即「`.gsa` 证据面对模型不可见」这条硬边界
+  **只在工具车道成立**；
+  ③ 专用工具放行的 `.gsa` 读取只有两种白名单形态：`run_tests_output.txt`（4 次）与
+  `session/terminal/*.log`（2 次），与设计一致。
+  摩擦代价 = 模型对同一缓存反复试错（fix-ocaml-gc 同一文件 4 次、reshard-c4-data
+  同一 ledger 3 次；6 试次中 5 个仍通过）。已登记 `OBS-GSA-READ-LANE-ASYMMETRY`
+  （见 BACKLOG 遗留小项连带观察；待裁决方向：对齐两车道，或在 deny 信封里给可操作原因）。
 - 其他：shell 非零退出 `run_terminal_cmd` 119 / `run_tests` 26；传输重试 4（recovered/
   midstream）；哨兵触发 9；`context_compressed` 1；**0z 资源事件 0**（0.5.0 首轮才落地）。
 - 边界：`status=error` 一个通道里混了四类语义（真失败 / 模型错名 / 框架信号 /

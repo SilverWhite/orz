@@ -100,6 +100,16 @@
       "read_file": 5,
       "list_dir": 1
     },
+    "permission_denial_target_classes": {
+      "grep:gsa_internal": 6,
+      "read_file:gsa_internal": 5,
+      "list_dir:gsa_internal": 1
+    },
+    "gsa_internal_denials": 12,
+    "gsa_reads_allowed_by_lane": {
+      "run_terminal_cmd": 13,
+      "read_file": 6
+    },
     "permission_decisions": {
       "allow_once": 2668,
       "deny": 12
@@ -178,6 +188,14 @@
         "plan_write": 5
       },
       "permission_denials": {},
+      "denial_details": [],
+      "gsa_reads_allowed": [
+        {
+          "tool": "run_terminal_cmd",
+          "target": "cd /app && grep -nE \"my_warrior|MyG2|g2|winrate|win rate|75%|33%\" /app/.gsa/ledger/current.md | tail -40",
+          "risk": "LocalMutation"
+        }
+      ],
       "permission_decisions": {
         "allow_once": 182
       },
@@ -243,6 +261,21 @@
       "permission_denials": {
         "grep": 1
       },
+      "denial_details": [
+        {
+          "tool": "grep",
+          "risk": "ReadOnly",
+          "target": "/app/.gsa/ledger/current.md",
+          "gsa_internal": true
+        }
+      ],
+      "gsa_reads_allowed": [
+        {
+          "tool": "read_file",
+          "target": "/app/.gsa/run_tests_output.txt",
+          "risk": "ReadOnly"
+        }
+      ],
       "permission_decisions": {
         "allow_once": 102,
         "deny": 1
@@ -321,6 +354,15 @@
       "permission_denials": {
         "read_file": 1
       },
+      "denial_details": [
+        {
+          "tool": "read_file",
+          "risk": "ReadOnly",
+          "target": "/app/.gsa/session/web_fetch/1.md",
+          "gsa_internal": true
+        }
+      ],
+      "gsa_reads_allowed": [],
       "permission_decisions": {
         "allow_once": 69,
         "deny": 1
@@ -395,6 +437,33 @@
         "grep": 1,
         "read_file": 3
       },
+      "denial_details": [
+        {
+          "tool": "grep",
+          "risk": "ReadOnly",
+          "target": "/app/.gsa/session/web_fetch/1.txt",
+          "gsa_internal": true
+        },
+        {
+          "tool": "read_file",
+          "risk": "ReadOnly",
+          "target": "/app/.gsa/session/web_fetch/1.txt",
+          "gsa_internal": true
+        },
+        {
+          "tool": "read_file",
+          "risk": "ReadOnly",
+          "target": "/app/.gsa/session/web_fetch/3.txt",
+          "gsa_internal": true
+        },
+        {
+          "tool": "read_file",
+          "risk": "ReadOnly",
+          "target": ".gsa/session/web_fetch/1.txt",
+          "gsa_internal": true
+        }
+      ],
+      "gsa_reads_allowed": [],
       "permission_decisions": {
         "allow_once": 104,
         "deny": 4
@@ -451,6 +520,8 @@
         "search_replace": 5
       },
       "permission_denials": {},
+      "denial_details": [],
+      "gsa_reads_allowed": [],
       "permission_decisions": {
         "allow_once": 109
       },
@@ -508,6 +579,24 @@
         "search_replace": 1
       },
       "permission_denials": {},
+      "denial_details": [],
+      "gsa_reads_allowed": [
+        {
+          "tool": "read_file",
+          "target": "/app/.gsa/session/terminal/call_00_ZuQYyYQxJ4EIYSjjmoei5086.log",
+          "risk": "ReadOnly"
+        },
+        {
+          "tool": "read_file",
+          "target": "/app/.gsa/session/terminal/call_00_ZuQYyYQxJ4EIYSjjmoei5086.log",
+          "risk": "ReadOnly"
+        },
+        {
+          "tool": "run_terminal_cmd",
+          "target": "grep -n -iE 'screenshot|screendump|vnc.*png|png' /app/.gsa/ledger/current.md | head -20; echo \"---\"; which import scrot vncdotool 2>/dev/null; python3 -c \"import vncdotool, PIL; print('vncdotool+PIL OK')\" 2>&1",
+          "risk": "LocalMutation"
+        }
+      ],
       "permission_decisions": {
         "allow_once": 138
       },
@@ -574,6 +663,8 @@
         "plan_write": 2
       },
       "permission_denials": {},
+      "denial_details": [],
+      "gsa_reads_allowed": [],
       "permission_decisions": {
         "allow_once": 119
       },
@@ -635,6 +726,27 @@
       "permission_denials": {
         "grep": 3
       },
+      "denial_details": [
+        {
+          "tool": "grep",
+          "risk": "ReadOnly",
+          "target": "/app/.gsa/ledger/current.md",
+          "gsa_internal": true
+        },
+        {
+          "tool": "grep",
+          "risk": "ReadOnly",
+          "target": "/app/.gsa/ledger/current.md",
+          "gsa_internal": true
+        },
+        {
+          "tool": "grep",
+          "risk": "ReadOnly",
+          "target": "/app/.gsa/ledger/current.md",
+          "gsa_internal": true
+        }
+      ],
+      "gsa_reads_allowed": [],
       "permission_decisions": {
         "allow_once": 42,
         "deny": 3
@@ -688,6 +800,8 @@
         "submit": 1
       },
       "permission_denials": {},
+      "denial_details": [],
+      "gsa_reads_allowed": [],
       "permission_decisions": {
         "allow_once": 33
       },
@@ -745,6 +859,8 @@
         "search_replace": 1
       },
       "permission_denials": {},
+      "denial_details": [],
+      "gsa_reads_allowed": [],
       "permission_decisions": {
         "allow_once": 78
       },
@@ -808,6 +924,8 @@
         "search_tool": 3
       },
       "permission_denials": {},
+      "denial_details": [],
+      "gsa_reads_allowed": [],
       "permission_decisions": {
         "allow_once": 61
       },
@@ -877,6 +995,29 @@
         "search_replace": 1
       },
       "permission_denials": {},
+      "denial_details": [],
+      "gsa_reads_allowed": [
+        {
+          "tool": "read_file",
+          "target": "/app/.gsa/run_tests_output.txt",
+          "risk": "ReadOnly"
+        },
+        {
+          "tool": "run_terminal_cmd",
+          "target": "grep -n \"top=\" /app/.gsa/ledger/current.md | sed -n '1,80p'",
+          "risk": "LocalMutation"
+        },
+        {
+          "tool": "run_terminal_cmd",
+          "target": "grep -n \"f48\\|f49\\|f63\\|takeoff\\|landing\" /app/.gsa/ledger/current.md | head -60",
+          "risk": "LocalMutation"
+        },
+        {
+          "tool": "run_terminal_cmd",
+          "target": "sed -n '167p' /app/.gsa/ledger/current.md | head -c 4000",
+          "risk": "LocalMutation"
+        }
+      ],
       "permission_decisions": {
         "allow_once": 252
       },
@@ -929,6 +1070,8 @@
         "search_replace": 2
       },
       "permission_denials": {},
+      "denial_details": [],
+      "gsa_reads_allowed": [],
       "permission_decisions": {
         "allow_once": 28
       },
@@ -987,6 +1130,21 @@
       "permission_denials": {
         "list_dir": 1
       },
+      "denial_details": [
+        {
+          "tool": "list_dir",
+          "risk": "ReadOnly",
+          "target": "/app/.gsa",
+          "gsa_internal": true
+        }
+      ],
+      "gsa_reads_allowed": [
+        {
+          "tool": "read_file",
+          "target": "/app/.gsa/run_tests_output.txt",
+          "risk": "ReadOnly"
+        }
+      ],
       "permission_decisions": {
         "allow_once": 36,
         "deny": 1
@@ -1029,6 +1187,8 @@
       "nonzero_exit": {},
       "non_shell_exit_codes": {},
       "permission_denials": {},
+      "denial_details": [],
+      "gsa_reads_allowed": [],
       "permission_decisions": {
         "allow_once": 13
       },
@@ -1085,6 +1245,19 @@
         "plan_write": 2
       },
       "permission_denials": {},
+      "denial_details": [],
+      "gsa_reads_allowed": [
+        {
+          "tool": "run_terminal_cmd",
+          "target": "cat /app/.gsa/run_tests_output.txt 2>/dev/null | tail -10; echo \"=== .gsa listing ===\"; ls -la /app/.gsa/ 2>/dev/null | head -20",
+          "risk": "LocalMutation"
+        },
+        {
+          "tool": "run_terminal_cmd",
+          "target": "cat /app/.gsa/resources_state.json 2>/dev/null; echo; echo \"=== runs ===\"; ls -la /app/.gsa/runs/ 2>/dev/null | head; echo \"=== find pytest test files ===\"; find / -name \"test_*.py\" -o -name \"*_test.py\" 2>/dev/null | grep -v -E \"site-packages|dist-packages|/usr/\" | head -20",
+          "risk": "LocalMutation"
+        }
+      ],
       "permission_decisions": {
         "allow_once": 57
       },
@@ -1143,6 +1316,27 @@
         "grep": 1,
         "read_file": 1
       },
+      "denial_details": [
+        {
+          "tool": "grep",
+          "risk": "ReadOnly",
+          "target": "/app/.gsa/session/web_fetch/3.md",
+          "gsa_internal": true
+        },
+        {
+          "tool": "read_file",
+          "risk": "ReadOnly",
+          "target": "/app/.gsa/session/web_fetch/3.md",
+          "gsa_internal": true
+        }
+      ],
+      "gsa_reads_allowed": [
+        {
+          "tool": "run_terminal_cmd",
+          "target": "cat /app/.gsa/run_tests_output.txt 2>/dev/null | head -20; echo \"---\"; ls /app/.gsa 2>/dev/null | head; echo \"---\"; which pytest; pip list 2>/dev/null | grep -i -E \"pytest|bio\" | head",
+          "risk": "LocalMutation"
+        }
+      ],
       "permission_decisions": {
         "allow_once": 31,
         "deny": 2
@@ -1195,6 +1389,8 @@
         "plan_write": 1
       },
       "permission_denials": {},
+      "denial_details": [],
+      "gsa_reads_allowed": [],
       "permission_decisions": {
         "allow_once": 81
       },
@@ -1226,6 +1422,8 @@
       "nonzero_exit": {},
       "non_shell_exit_codes": {},
       "permission_denials": {},
+      "denial_details": [],
+      "gsa_reads_allowed": [],
       "permission_decisions": {},
       "policy_denials": {},
       "transport_retry": {},
@@ -1255,6 +1453,8 @@
       "nonzero_exit": {},
       "non_shell_exit_codes": {},
       "permission_denials": {},
+      "denial_details": [],
+      "gsa_reads_allowed": [],
       "permission_decisions": {},
       "policy_denials": {},
       "transport_retry": {},
@@ -1300,6 +1500,19 @@
       },
       "non_shell_exit_codes": {},
       "permission_denials": {},
+      "denial_details": [],
+      "gsa_reads_allowed": [
+        {
+          "tool": "run_terminal_cmd",
+          "target": "cat /app/.gsa/run_tests_output.txt; echo '===APP==='; ls -la /app; echo '===PYVER==='; python3 --version; pip list 2>/dev/null | head -30",
+          "risk": "LocalMutation"
+        },
+        {
+          "tool": "run_terminal_cmd",
+          "target": "grep -n -i -E '(filter|pytest|hidden|grader|test)' /app/.gsa/ledger/current.md | head -40; echo '===SIZE==='; wc -l /app/.gsa/ledger/current.md",
+          "risk": "LocalMutation"
+        }
+      ],
       "permission_decisions": {
         "allow_once": 66
       },
@@ -1349,6 +1562,8 @@
         "submit": 1
       },
       "permission_denials": {},
+      "denial_details": [],
+      "gsa_reads_allowed": [],
       "permission_decisions": {
         "allow_once": 84
       },
@@ -1398,6 +1613,8 @@
         "search_replace": 1
       },
       "permission_denials": {},
+      "denial_details": [],
+      "gsa_reads_allowed": [],
       "permission_decisions": {
         "allow_once": 36
       },
@@ -1444,6 +1661,8 @@
       },
       "non_shell_exit_codes": {},
       "permission_denials": {},
+      "denial_details": [],
+      "gsa_reads_allowed": [],
       "permission_decisions": {
         "allow_once": 28
       },
@@ -1491,6 +1710,8 @@
         "plan_write": 2
       },
       "permission_denials": {},
+      "denial_details": [],
+      "gsa_reads_allowed": [],
       "permission_decisions": {
         "allow_once": 16
       },
@@ -1536,6 +1757,8 @@
         "plan_write": 1
       },
       "permission_denials": {},
+      "denial_details": [],
+      "gsa_reads_allowed": [],
       "permission_decisions": {
         "allow_once": 14
       },
@@ -1575,6 +1798,8 @@
       "nonzero_exit": {},
       "non_shell_exit_codes": {},
       "permission_denials": {},
+      "denial_details": [],
+      "gsa_reads_allowed": [],
       "permission_decisions": {
         "allow_once": 46
       },
@@ -1624,6 +1849,8 @@
         "plan_write": 1
       },
       "permission_denials": {},
+      "denial_details": [],
+      "gsa_reads_allowed": [],
       "permission_decisions": {
         "allow_once": 25
       },
@@ -1670,6 +1897,14 @@
       },
       "non_shell_exit_codes": {},
       "permission_denials": {},
+      "denial_details": [],
+      "gsa_reads_allowed": [
+        {
+          "tool": "read_file",
+          "target": "/app/.gsa/run_tests_output.txt",
+          "risk": "ReadOnly"
+        }
+      ],
       "permission_decisions": {
         "allow_once": 26
       },
@@ -1718,6 +1953,8 @@
         "plan_write": 1
       },
       "permission_denials": {},
+      "denial_details": [],
+      "gsa_reads_allowed": [],
       "permission_decisions": {
         "allow_once": 26
       },
@@ -1763,6 +2000,8 @@
         "plan_write": 2
       },
       "permission_denials": {},
+      "denial_details": [],
+      "gsa_reads_allowed": [],
       "permission_decisions": {
         "allow_once": 31
       },
@@ -1809,6 +2048,8 @@
         "plan_write": 2
       },
       "permission_denials": {},
+      "denial_details": [],
+      "gsa_reads_allowed": [],
       "permission_decisions": {
         "allow_once": 14
       },
@@ -1842,6 +2083,8 @@
       "nonzero_exit": {},
       "non_shell_exit_codes": {},
       "permission_denials": {},
+      "denial_details": [],
+      "gsa_reads_allowed": [],
       "permission_decisions": {},
       "policy_denials": {},
       "transport_retry": {},
@@ -1884,6 +2127,8 @@
         "plan_write": 1
       },
       "permission_denials": {},
+      "denial_details": [],
+      "gsa_reads_allowed": [],
       "permission_decisions": {
         "allow_once": 17
       },
@@ -1931,6 +2176,8 @@
         "plan_write": 1
       },
       "permission_denials": {},
+      "denial_details": [],
+      "gsa_reads_allowed": [],
       "permission_decisions": {
         "allow_once": 35
       },
@@ -1977,6 +2224,8 @@
         "plan_write": 1
       },
       "permission_denials": {},
+      "denial_details": [],
+      "gsa_reads_allowed": [],
       "permission_decisions": {
         "allow_once": 13
       },
@@ -2021,6 +2270,8 @@
         "plan_write": 1
       },
       "permission_denials": {},
+      "denial_details": [],
+      "gsa_reads_allowed": [],
       "permission_decisions": {
         "allow_once": 14
       },
@@ -2067,6 +2318,8 @@
         "plan_write": 1
       },
       "permission_denials": {},
+      "denial_details": [],
+      "gsa_reads_allowed": [],
       "permission_decisions": {
         "allow_once": 22
       },
@@ -2100,6 +2353,8 @@
       "nonzero_exit": {},
       "non_shell_exit_codes": {},
       "permission_denials": {},
+      "denial_details": [],
+      "gsa_reads_allowed": [],
       "permission_decisions": {},
       "policy_denials": {},
       "transport_retry": {},
@@ -2151,6 +2406,8 @@
         "update_goal": 1
       },
       "permission_denials": {},
+      "denial_details": [],
+      "gsa_reads_allowed": [],
       "permission_decisions": {
         "allow_once": 23
       },
@@ -2189,6 +2446,8 @@
       "nonzero_exit": {},
       "non_shell_exit_codes": {},
       "permission_denials": {},
+      "denial_details": [],
+      "gsa_reads_allowed": [],
       "permission_decisions": {
         "allow_once": 6
       },
@@ -2232,6 +2491,14 @@
       },
       "non_shell_exit_codes": {},
       "permission_denials": {},
+      "denial_details": [],
+      "gsa_reads_allowed": [
+        {
+          "tool": "run_terminal_cmd",
+          "target": "cat /app/.gsa/run_tests_output.txt; echo \"===\"; ls -la /app/.gsa/ 2>/dev/null | head -30; echo \"===\"; find / -maxdepth 3 -name \"test_*.py\" -not -path \"*/site-packages/*\" -not -path \"*/node_modules/*\" 2>/dev/null | head -20",
+          "risk": "LocalMutation"
+        }
+      ],
       "permission_decisions": {
         "allow_once": 23
       },
@@ -2279,6 +2546,8 @@
         "plan_write": 2
       },
       "permission_denials": {},
+      "denial_details": [],
+      "gsa_reads_allowed": [],
       "permission_decisions": {
         "allow_once": 21
       },
@@ -2312,6 +2581,8 @@
       "nonzero_exit": {},
       "non_shell_exit_codes": {},
       "permission_denials": {},
+      "denial_details": [],
+      "gsa_reads_allowed": [],
       "permission_decisions": {},
       "policy_denials": {},
       "transport_retry": {},
@@ -2341,6 +2612,8 @@
       "nonzero_exit": {},
       "non_shell_exit_codes": {},
       "permission_denials": {},
+      "denial_details": [],
+      "gsa_reads_allowed": [],
       "permission_decisions": {},
       "policy_denials": {},
       "transport_retry": {},
@@ -2370,6 +2643,8 @@
       "nonzero_exit": {},
       "non_shell_exit_codes": {},
       "permission_denials": {},
+      "denial_details": [],
+      "gsa_reads_allowed": [],
       "permission_decisions": {},
       "policy_denials": {},
       "transport_retry": {},
@@ -2399,6 +2674,8 @@
       "nonzero_exit": {},
       "non_shell_exit_codes": {},
       "permission_denials": {},
+      "denial_details": [],
+      "gsa_reads_allowed": [],
       "permission_decisions": {},
       "policy_denials": {},
       "transport_retry": {},
@@ -2428,6 +2705,8 @@
       "nonzero_exit": {},
       "non_shell_exit_codes": {},
       "permission_denials": {},
+      "denial_details": [],
+      "gsa_reads_allowed": [],
       "permission_decisions": {},
       "policy_denials": {},
       "transport_retry": {},
@@ -2457,6 +2736,8 @@
       "nonzero_exit": {},
       "non_shell_exit_codes": {},
       "permission_denials": {},
+      "denial_details": [],
+      "gsa_reads_allowed": [],
       "permission_decisions": {},
       "policy_denials": {},
       "transport_retry": {},
@@ -2486,6 +2767,8 @@
       "nonzero_exit": {},
       "non_shell_exit_codes": {},
       "permission_denials": {},
+      "denial_details": [],
+      "gsa_reads_allowed": [],
       "permission_decisions": {},
       "policy_denials": {},
       "transport_retry": {},
@@ -2529,6 +2812,8 @@
         "plan_write": 1
       },
       "permission_denials": {},
+      "denial_details": [],
+      "gsa_reads_allowed": [],
       "permission_decisions": {
         "allow_once": 19
       },
@@ -2560,6 +2845,8 @@
       "nonzero_exit": {},
       "non_shell_exit_codes": {},
       "permission_denials": {},
+      "denial_details": [],
+      "gsa_reads_allowed": [],
       "permission_decisions": {},
       "policy_denials": {},
       "transport_retry": {},
@@ -2589,6 +2876,8 @@
       "nonzero_exit": {},
       "non_shell_exit_codes": {},
       "permission_denials": {},
+      "denial_details": [],
+      "gsa_reads_allowed": [],
       "permission_decisions": {},
       "policy_denials": {},
       "transport_retry": {},
@@ -2618,6 +2907,8 @@
       "nonzero_exit": {},
       "non_shell_exit_codes": {},
       "permission_denials": {},
+      "denial_details": [],
+      "gsa_reads_allowed": [],
       "permission_decisions": {},
       "policy_denials": {},
       "transport_retry": {},
@@ -2657,6 +2948,8 @@
         "plan_write": 1
       },
       "permission_denials": {},
+      "denial_details": [],
+      "gsa_reads_allowed": [],
       "permission_decisions": {
         "allow_once": 20
       },
@@ -2692,6 +2985,8 @@
       "nonzero_exit": {},
       "non_shell_exit_codes": {},
       "permission_denials": {},
+      "denial_details": [],
+      "gsa_reads_allowed": [],
       "permission_decisions": {
         "allow_once": 14
       },
@@ -2736,6 +3031,8 @@
         "plan_write": 1
       },
       "permission_denials": {},
+      "denial_details": [],
+      "gsa_reads_allowed": [],
       "permission_decisions": {
         "allow_once": 37
       },
@@ -2784,6 +3081,8 @@
         "plan_write": 1
       },
       "permission_denials": {},
+      "denial_details": [],
+      "gsa_reads_allowed": [],
       "permission_decisions": {
         "allow_once": 22
       },
@@ -2823,6 +3122,8 @@
       },
       "non_shell_exit_codes": {},
       "permission_denials": {},
+      "denial_details": [],
+      "gsa_reads_allowed": [],
       "permission_decisions": {
         "allow_once": 21
       },
@@ -2862,6 +3163,8 @@
       "nonzero_exit": {},
       "non_shell_exit_codes": {},
       "permission_denials": {},
+      "denial_details": [],
+      "gsa_reads_allowed": [],
       "permission_decisions": {
         "allow_once": 18
       },
@@ -2899,6 +3202,8 @@
       "nonzero_exit": {},
       "non_shell_exit_codes": {},
       "permission_denials": {},
+      "denial_details": [],
+      "gsa_reads_allowed": [],
       "permission_decisions": {
         "allow_once": 18
       },
@@ -2940,6 +3245,8 @@
       },
       "non_shell_exit_codes": {},
       "permission_denials": {},
+      "denial_details": [],
+      "gsa_reads_allowed": [],
       "permission_decisions": {
         "allow_once": 39
       },
@@ -2971,6 +3278,8 @@
       "nonzero_exit": {},
       "non_shell_exit_codes": {},
       "permission_denials": {},
+      "denial_details": [],
+      "gsa_reads_allowed": [],
       "permission_decisions": {},
       "policy_denials": {},
       "transport_retry": {},
@@ -3014,6 +3323,8 @@
         "plan_write": 1
       },
       "permission_denials": {},
+      "denial_details": [],
+      "gsa_reads_allowed": [],
       "permission_decisions": {
         "allow_once": 31
       },
@@ -3045,6 +3356,8 @@
       "nonzero_exit": {},
       "non_shell_exit_codes": {},
       "permission_denials": {},
+      "denial_details": [],
+      "gsa_reads_allowed": [],
       "permission_decisions": {},
       "policy_denials": {},
       "transport_retry": {},
@@ -3074,6 +3387,8 @@
       "nonzero_exit": {},
       "non_shell_exit_codes": {},
       "permission_denials": {},
+      "denial_details": [],
+      "gsa_reads_allowed": [],
       "permission_decisions": {},
       "policy_denials": {},
       "transport_retry": {},
@@ -3116,6 +3431,8 @@
         "plan_write": 1
       },
       "permission_denials": {},
+      "denial_details": [],
+      "gsa_reads_allowed": [],
       "permission_decisions": {
         "allow_once": 33
       },
@@ -3147,6 +3464,8 @@
       "nonzero_exit": {},
       "non_shell_exit_codes": {},
       "permission_denials": {},
+      "denial_details": [],
+      "gsa_reads_allowed": [],
       "permission_decisions": {},
       "policy_denials": {},
       "transport_retry": {},
@@ -3176,6 +3495,8 @@
       "nonzero_exit": {},
       "non_shell_exit_codes": {},
       "permission_denials": {},
+      "denial_details": [],
+      "gsa_reads_allowed": [],
       "permission_decisions": {},
       "policy_denials": {},
       "transport_retry": {},
@@ -3205,6 +3526,8 @@
       "nonzero_exit": {},
       "non_shell_exit_codes": {},
       "permission_denials": {},
+      "denial_details": [],
+      "gsa_reads_allowed": [],
       "permission_decisions": {},
       "policy_denials": {},
       "transport_retry": {},
@@ -3240,6 +3563,8 @@
       "nonzero_exit": {},
       "non_shell_exit_codes": {},
       "permission_denials": {},
+      "denial_details": [],
+      "gsa_reads_allowed": [],
       "permission_decisions": {
         "allow_once": 18
       },
@@ -3271,6 +3596,8 @@
       "nonzero_exit": {},
       "non_shell_exit_codes": {},
       "permission_denials": {},
+      "denial_details": [],
+      "gsa_reads_allowed": [],
       "permission_decisions": {},
       "policy_denials": {},
       "transport_retry": {},
@@ -3309,6 +3636,8 @@
       },
       "non_shell_exit_codes": {},
       "permission_denials": {},
+      "denial_details": [],
+      "gsa_reads_allowed": [],
       "permission_decisions": {
         "allow_once": 10
       },
@@ -3340,6 +3669,8 @@
       "nonzero_exit": {},
       "non_shell_exit_codes": {},
       "permission_denials": {},
+      "denial_details": [],
+      "gsa_reads_allowed": [],
       "permission_decisions": {},
       "policy_denials": {},
       "transport_retry": {},
@@ -3369,6 +3700,8 @@
       "nonzero_exit": {},
       "non_shell_exit_codes": {},
       "permission_denials": {},
+      "denial_details": [],
+      "gsa_reads_allowed": [],
       "permission_decisions": {},
       "policy_denials": {},
       "transport_retry": {},
@@ -3408,6 +3741,8 @@
         "plan_write": 1
       },
       "permission_denials": {},
+      "denial_details": [],
+      "gsa_reads_allowed": [],
       "permission_decisions": {
         "allow_once": 23
       },
@@ -3451,6 +3786,14 @@
         "plan_write": 1
       },
       "permission_denials": {},
+      "denial_details": [],
+      "gsa_reads_allowed": [
+        {
+          "tool": "run_terminal_cmd",
+          "target": "cd /app && ls -la && echo \"--- pytest config ---\" && cat pytest.ini pyproject.toml setup.cfg tox.ini conftest.py 2>/dev/null; echo \"--- test-like files ---\" && find / -maxdepth 4 \\( -name 'test_*.py' -o -name '*_test.py' -o -name 'conftest.py' -o -name 'test_*.sh' \\) 2>/dev/null | grep -vE 'site-packages|dist-packages|/usr/|/proc/' | head -20; echo \"--- run_tests output ---\"; cat /app/.gsa/run_tests_output.txt 2>/dev/null | head -30",
+          "risk": "LocalMutation"
+        }
+      ],
       "permission_decisions": {
         "allow_once": 22
       },
@@ -3490,6 +3833,8 @@
       "nonzero_exit": {},
       "non_shell_exit_codes": {},
       "permission_denials": {},
+      "denial_details": [],
+      "gsa_reads_allowed": [],
       "permission_decisions": {
         "allow_once": 15
       },
@@ -3535,6 +3880,14 @@
         "plan_write": 1
       },
       "permission_denials": {},
+      "denial_details": [],
+      "gsa_reads_allowed": [
+        {
+          "tool": "run_terminal_cmd",
+          "target": "cat /app/.gsa/run_tests_output.txt 2>/dev/null; echo \"---\"; pip install pytest 2>&1 | tail -2",
+          "risk": "LocalMutation"
+        }
+      ],
       "permission_decisions": {
         "allow_once": 19
       },
@@ -3566,6 +3919,8 @@
       "nonzero_exit": {},
       "non_shell_exit_codes": {},
       "permission_denials": {},
+      "denial_details": [],
+      "gsa_reads_allowed": [],
       "permission_decisions": {},
       "policy_denials": {},
       "transport_retry": {},
@@ -3595,6 +3950,8 @@
       "nonzero_exit": {},
       "non_shell_exit_codes": {},
       "permission_denials": {},
+      "denial_details": [],
+      "gsa_reads_allowed": [],
       "permission_decisions": {},
       "policy_denials": {},
       "transport_retry": {},
@@ -3624,6 +3981,8 @@
       "nonzero_exit": {},
       "non_shell_exit_codes": {},
       "permission_denials": {},
+      "denial_details": [],
+      "gsa_reads_allowed": [],
       "permission_decisions": {},
       "policy_denials": {},
       "transport_retry": {},
@@ -3653,6 +4012,8 @@
       "nonzero_exit": {},
       "non_shell_exit_codes": {},
       "permission_denials": {},
+      "denial_details": [],
+      "gsa_reads_allowed": [],
       "permission_decisions": {},
       "policy_denials": {},
       "transport_retry": {},
@@ -3682,6 +4043,8 @@
       "nonzero_exit": {},
       "non_shell_exit_codes": {},
       "permission_denials": {},
+      "denial_details": [],
+      "gsa_reads_allowed": [],
       "permission_decisions": {},
       "policy_denials": {},
       "transport_retry": {},
@@ -3711,6 +4074,8 @@
       "nonzero_exit": {},
       "non_shell_exit_codes": {},
       "permission_denials": {},
+      "denial_details": [],
+      "gsa_reads_allowed": [],
       "permission_decisions": {},
       "policy_denials": {},
       "transport_retry": {},
@@ -3747,6 +4112,8 @@
       "nonzero_exit": {},
       "non_shell_exit_codes": {},
       "permission_denials": {},
+      "denial_details": [],
+      "gsa_reads_allowed": [],
       "permission_decisions": {
         "allow_once": 17
       },
@@ -3787,6 +4154,8 @@
       },
       "non_shell_exit_codes": {},
       "permission_denials": {},
+      "denial_details": [],
+      "gsa_reads_allowed": [],
       "permission_decisions": {
         "allow_once": 12
       },
@@ -3818,6 +4187,8 @@
       "nonzero_exit": {},
       "non_shell_exit_codes": {},
       "permission_denials": {},
+      "denial_details": [],
+      "gsa_reads_allowed": [],
       "permission_decisions": {},
       "policy_denials": {},
       "transport_retry": {},
@@ -3858,6 +4229,8 @@
         "plan_write": 1
       },
       "permission_denials": {},
+      "denial_details": [],
+      "gsa_reads_allowed": [],
       "permission_decisions": {
         "allow_once": 19
       },
@@ -3897,6 +4270,8 @@
         "plan_write": 1
       },
       "permission_denials": {},
+      "denial_details": [],
+      "gsa_reads_allowed": [],
       "permission_decisions": {
         "allow_once": 9
       },
@@ -3938,6 +4313,8 @@
         "plan_write": 1
       },
       "permission_denials": {},
+      "denial_details": [],
+      "gsa_reads_allowed": [],
       "permission_decisions": {
         "allow_once": 28
       },
@@ -3969,6 +4346,8 @@
       "nonzero_exit": {},
       "non_shell_exit_codes": {},
       "permission_denials": {},
+      "denial_details": [],
+      "gsa_reads_allowed": [],
       "permission_decisions": {},
       "policy_denials": {},
       "transport_retry": {},
@@ -3998,6 +4377,8 @@
       "nonzero_exit": {},
       "non_shell_exit_codes": {},
       "permission_denials": {},
+      "denial_details": [],
+      "gsa_reads_allowed": [],
       "permission_decisions": {},
       "policy_denials": {},
       "transport_retry": {},
@@ -4027,6 +4408,8 @@
       "nonzero_exit": {},
       "non_shell_exit_codes": {},
       "permission_denials": {},
+      "denial_details": [],
+      "gsa_reads_allowed": [],
       "permission_decisions": {},
       "policy_denials": {},
       "transport_retry": {},
@@ -4056,6 +4439,8 @@
       "nonzero_exit": {},
       "non_shell_exit_codes": {},
       "permission_denials": {},
+      "denial_details": [],
+      "gsa_reads_allowed": [],
       "permission_decisions": {},
       "policy_denials": {},
       "transport_retry": {},
@@ -4095,6 +4480,8 @@
         "plan_write": 1
       },
       "permission_denials": {},
+      "denial_details": [],
+      "gsa_reads_allowed": [],
       "permission_decisions": {
         "allow_once": 47
       },
@@ -4138,6 +4525,8 @@
         "plan_write": 1
       },
       "permission_denials": {},
+      "denial_details": [],
+      "gsa_reads_allowed": [],
       "permission_decisions": {
         "allow_once": 36
       },

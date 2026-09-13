@@ -1197,7 +1197,20 @@ GLM F2 处置转排期（2026-09-06 用户裁决）：`orz-host/src/approval.rs`
   `read_file_rejects_gsa_symlink_resolving_outside_git_root_even_when_gitignored`
   （orz `a29f7377`）；连带观察：orz-host `permission.rs` `.gsa` terminal-log
   白名单在 Task C 工具级沙箱后对 read_file 不可达，会话卷形态豁免待用户
-  裁决（见 00a）。入口：
+  裁决（见 00a）。**2026-09-13 场数据补强**（R1 k=1 批 97 试次全扫，见索引
+  `OBS-GSA-READ-LANE-ASYMMETRY`）：`.gsa` 内部面读取在**两条车道上判定不一致**——
+  ① 专用读工具读 `.gsa/ledger/current.md`、`.gsa/session/web_fetch/*`、`ls .gsa`
+  共 **12 次被权限门 deny**（grep 6 / read_file 5 / list_dir 1，分布于 6 试次，
+  **无 tool_started**，即执行前拦下）；② 同一批内部面走 `run_terminal_cmd`
+  共 **13 次 allow_once 且 exit 0 真读到**（含 `grep/sed ledger/current.md`、
+  `ls -la /app/.gsa/`、`cat .gsa/resources_state.json`）；③ 专用工具能读到的
+  `.gsa` 只有两种白名单形态（`run_tests_output.txt` 精确文件名 4 次、
+  `session/terminal/*.log` 2 次）。即「运行时自己的 `.gsa` 证据面不可见」这条
+  硬边界目前只在工具车道成立，shell 车道是通径；摩擦面 = 模型对同一缓存反复
+  试错（fix-ocaml-gc 同文件 4 次、reshard-c4-data 同 ledger 3 次，6 试次中 5 个
+  仍通过，代价是浪费轮次）。待裁决方向：**对齐两车道**（放宽工具车道会话卷豁免
+  vs 收紧 shell 车道）、或在 deny 信封里加可操作原因（如"该证据面不可读，改用
+  web_fetch 重新取"）。入口：
   [处置审计 §5](audits/P0_GOV_GLM_DISPOSITION_AND_TASK_D_S2_SCHEDULE_2026-09-06.md)
   / [read_file 测试](../orz/crates/codegen/orz-tools/src/implementations/grok_build/read_file/mod.rs)。
 - DC 硬信号 4/6（`same_module_no_evidence` / `key_surface_unexamined`）——
