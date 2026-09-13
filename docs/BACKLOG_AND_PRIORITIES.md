@@ -553,6 +553,28 @@ GLM F2 处置转排期（2026-09-06 用户裁决）：`orz-host/src/approval.rs`
   `ORZ-PLATFORM-TARGET-001` 同族）。**本轮不修载体**（影响取证面而非动作面）；
   立案（GAP）+ 端到端钉子 + 修复待裁决。入口：
   [`第 0 轮起跑记录 §6.1–§6.6`](audits/TB21_V41_ROUND0_MEMORY_HEAVY_START_2026-09-13.md)。
+  **停跑先修（2026-09-13 用户裁决）**：补跑作业 `official-r0-netretry` **18:37 停止**
+  （进程按命令行精确终止并排除本 shell；容器按显式 ID 移除；容器清零、镜像 8 个与过程证据保留）。
+  **`GAP-ORZ-HOST-RESOURCE-SNAPSHOT-DROP` 已修复（orz `ea777918`）**：映射表提取为
+  `pub(crate) const HOST_RESOURCE_FACT_EVENT_TYPES`（唯一映射、可测）+ 补
+  `host_resource_snapshot → EventType::HostResourceSnapshot` + 钉子
+  `host_resource_fact_table_covers_producer_kinds`（生产侧全集覆盖 + 与 `ALL_FAMILIES` 同名；
+  **反向对照会红**）；`cargo test -p orz-loop --lib` **770 通过 / 0 失败 / 3 忽略**、
+  `cargo fmt --check` 干净、父仓 `orz_source_manifest.sha256` 重算 **1446 条**。
+  **影响面（用户裁定：不止取证面）**：loop 侧该事实唯一消费者 = journal 面，另有 TUI 桥
+  消费者 ⇒ 控制流不受影响、**取证与操作面受影响**（缺 run_start / 跨档读数 ⇒ 无法判定任务
+  是否在资源压力下运行）。**修复进载体须双平台重建（Windows + Linux musl，待放行）**，
+  重建后产生 0.5.x 新载体哈希，代际记录 / 适配器锁定值 / 冻结清单 `harness_artifacts` 同批更新。
+  **另立案 `GAP-ORZ-ADAPTER-FLAG-DRIFT`（`candidate`；仅记录）**：适配器旗标契约漂移两条——
+  `--max-tool-rounds 999`（0.5.0 无此旗标、静默忽略）与 `--retrieval-mode local_browser`
+  （0.5.0 已弃用后忽略，0t γ / ADR-0010 §14.65）；候选动作 = 起跑前「适配器旗标 ⊆ 载体接受表」
+  机械对账（把 `eval_browser` 开关一并纳入）。**两处提问核实**：① `torch-tensor-parallelism`
+  未记账不是「没 submit」，是用满官方 agent 墙钟（`submit` 0 次 / `run_finished` 0 次），
+  题目实际已解出（verifier 13/13、`reward.txt`=1），未记账次因是 verifier 阶段同样吃满 900 s
+  （R1 同题当时记了 `reward=1.0`）⇒ 新观察项 **agent 超时后 orz 未随之终止**；
+  ② 浏览器车道全败 = **`eval_browser` 注入开关未传**（默认关；本轮与 R1 都没传），
+  `browser_control`/`browser_read` 因必须先启动浏览器而连带失败，`web_search`/`web_fetch`
+  走纯 HTTP 不受影响；**相对 R1 非回归，相对 R3/R4/R4b 是能力回退**。
 
 ### 0p. 模型自信息面补强与 `.gsa` 两段门（P0；2026-09-07 设计定稿同日排期；**S1–S5 全部闭合 2026-09-08，转 `implemented`**）
 

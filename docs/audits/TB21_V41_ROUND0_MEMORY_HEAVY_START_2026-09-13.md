@@ -248,6 +248,85 @@ R1 试次的 `config.json` 同样只有 gsa 一个 mount ⇒ **不是新回归**
 - **已知残余风险（登记）**：`torch-pipeline-parallelism` 的 verifier 需现下 torch（825 MB）
   与 CUDA 系列轮子，上一轮即在此处 `UV_HTTP_TIMEOUT=30s` 崩；若再次发生，属**装置侧网络**
   导致该题 reward 无效（不改官方参数规避，必要时由用户裁决是否放宽 verifier 侧网络容忍）。
+- **本作业已于 18:37 按用户裁决停止**（"重跑停下吧，先修 bug"）——launcher/harbor 精确终止、
+  容器按显式 ID 移除，容器清零、镜像 8 个保留；详见 §6.8。
+
+### 6.7 两处提问的核实（2026-09-13）
+
+**Q1：`torch-tensor-parallelism` 没被判过，是因为到时间了但没有 submit 吗？**
+
+- **不是"没 submit"这一条，而是"agent 用满官方墙钟"**。一手证据：该试次 journal 里
+  **`submit` 0 次、`run_finished` 0 次**（对照正常完成的 `mcmc-sampling-stan`：`submit`
+  相关 8 行、`run_finished` 1 次）⇒ agent 在 07:46:01 被 900 s 墙钟掐断时**还在工作**，
+  从未走到"提交"那一步。
+- **但题目其实是解出来的**：被掐断后 harbor 仍照跑 verifier，`tests/test_outputs.py`
+  **13/13 全过（51.51 s）**、`verifier/reward.txt` = **1**。
+- **没被记账的原因**：harbor 以 agent 阶段超时为准，把试次记为 `AgentTimeoutError`；而 R0
+  这轮**verifier 阶段也吃满 900 s**（`VerifierTimeoutError`），于是 `verifier_result` 没能
+  写进试次 `result.json`（**R1 同题当时写进了 `{"rewards":{"reward":1.0}}`**，那一次算了一次
+  通过）⇒ **R0 比 R1 少记一次通过**。
+- **新增观察项（未定根因）**：agent 阶段结束后 orz **没有随之终止**——该 run 的 journal 在
+  agent 阶段结束（07:46）之后继续写到 **08:00:49**（正是 verifier 窗口），而 verifier 的测试
+  本身 51 s 就跑完了。高度怀疑「agent 超时后 orz 未被终止、继续占用容器通道，把 verifier
+  阶段拖到墙钟」。属装置/载体交互面；**若成立，修它能把"已解出但没记账"的试次救回来**。
+
+**Q2：什么是"没有浏览器可执行文件"？为什么 `browser_control` / `browser_read` 跟着一起失败？**
+
+- **浏览器不是镜像自带，而是适配器按开关注入**：`tb_agents/orz.py` 在
+  `--ak eval_browser=true`（或 `ORZ_EVAL_BROWSER=1`）时在容器内装 Chromium
+  （apt `/usr/bin/chromium`，或经代理取快照落 `/opt/chrome-linux/chrome`），再以
+  `ORZ_BROWSER_PATH` + `ORZ_BROWSER_HEADLESS=1` 交给 orz；**该开关默认关闭**。
+- 本轮与 R1 **都没传这个开关**（试次 config 的 agent kwargs 只有 `orz_binary` / `model_id` /
+  `gsa_volume`）⇒ 容器内没有任何浏览器可执行文件、`ORZ_BROWSER_PATH` 未设 ⇒ orz 依次找
+  `chrome / google-chrome / google-chrome-stable / chromium …` 全落空，回
+  `browser_not_found`（14 次）。
+- **连累机制**：`browser_control`（导航/操作页面）与 `browser_read`（取渲染后正文）都必须
+  **先启动浏览器**，启动失败即 `browser_launch_failed`（分别 13 / 5 次）。而 `web_search` /
+  `web_fetch` 走**纯 HTTP 通道**、不需要浏览器，所以照常可用——这就是"检索在干活、浏览器车道
+  全红"的原因。
+- **更正/补正（我先前结论的不完整处）**："R1 同形 ⇒ 非回归"对 R1 成立（R1 也没开），但
+  **相对 R3 / R4 / R4b 是能力回退**——那三批执行器都显式带了 `--ak eval_browser=true`
+  （`run_r3_unsolved20_per_task.ps1:77`、`run_r4_unsolved15_per_task.py:101`、
+  `run_r4b_supplement4_per_task.py:92`）。⇒ **"官方 89 题批次没有浏览器车道"是跑批命令的选择
+  问题**（`run_official_2.1.sh` 未传该开关），不是镜像缺陷。
+
+### 6.8 修 bug（用户裁决：停跑先修）
+
+- **停跑**：补跑作业 `official-r0-netretry` **18:37 停止**（launcher / harbor 按命令行精确
+  终止并强制排除本 shell；容器按**显式 ID** `docker rm -f 052b1d87c283` 移除）
+  ⇒ 容器清零、镜像 8 个保留、`official-r0-netretry` 目录与卷保留作过程证据。
+- **修复（orz `ea777918`）**：把映射表从函数内 `const` 提取为模块级
+  `pub(crate) const HOST_RESOURCE_FACT_EVENT_TYPES`（**唯一映射、可测**），并补上缺项
+  `("host_resource_snapshot", EventType::HostResourceSnapshot)`；新增钉子
+  `host_resource_fact_table_covers_producer_kinds`——断言①生产侧全集全覆盖、
+  ②每个键名都在 `orz-assurance` 的 `ALL_FAMILIES` 族注册表里（防拼写漂移）。
+  **反向对照**：临时去掉补项后钉子如期**变红**，报错文本即缺陷形态（`…不在映射表内 ⇒
+  drain 时会被丢弃（audit-face loss）`）。
+- **验证**：`cargo test -p orz-loop --lib` = **770 通过 / 0 失败 / 3 忽略**；
+  `cargo fmt -p orz-loop -- --check` 干净；父仓 `orz_source_manifest.sha256` 重算 **1446 条**。
+- **影响面（按用户裁定：不止取证面）**：代码层面，loop 侧该事实的**唯一消费者**就是 journal
+  面（`drain_host_resource_facts` → `journal_pending_host_resource_facts`），另有
+  `EventType::HostResourceSnapshot` 的 **TUI 桥**消费者 ⇒ **控制流不受影响、取证面与操作面
+  受影响**：缺了 run_start / 跨档读数，**就无法判定任务是否在资源压力下运行**、也无法复现
+  档位变化序列（本轮 8 个重题恰是内存临界集，这一面正是它们最需要的观测）。据此**停跑先修**。
+- **修复进载体必须重建（等你放行）**：0.5.0 三件套是冻结产物，生产车道源码变更 ⇒ 需走
+  双平台重建（Windows release + Linux musl）才能让后续批次带上本修复；预计 40–60 min，
+  并产生 **0.5.x 新载体哈希**（代际记录、适配器锁定值、冻结清单 `harness_artifacts` 须同批更新）。
+
+### 6.9 契约漂移立案（用户裁决：需要记录）
+
+**`GAP-ORZ-ADAPTER-FLAG-DRIFT`（`candidate`；记录处理，不阻断）**——适配器
+`tb_agents/orz.py` 与 0.5.0 载体之间的**旗标契约漂移**，本轮实测两条：
+
+| 旗标 | 适配器行为 | 0.5.0 实际 | 风险 |
+|---|---|---|---|
+| `--max-tool-rounds 999` | 每次调用都传 | **无此旗标**，静默忽略 | 当前无害（TER 后主车道本就无轮限）；**若将来未知识别旗标改为致命 ⇒ 适配器直接失败** |
+| `--retrieval-mode local_browser` | 每次调用都传 | **已弃用**（0t γ / ADR-0010 §14.65），运行时 WARN 后忽略；车道选择自主 | 归因误导：命令"声明了车道"而载体不按它走 |
+
+- 与 §6.7 Q2 合并看：适配器**声称**的浏览器车道（`local_browser`）与**未开启**的浏览器注入
+  开关（`eval_browser`）叠在一起，最容易把"装置缺件"误读成"镜像缺陷"。
+- 处置：**只记录**（沿用既定口径）；候选后续动作 = 把 `eval_browser` 与这两条漂移旗标纳入
+  `run_official_2.1.sh` 的**旗标对账清单**（起跑前机械核对"适配器会传的旗标 ⊆ 载体接受表"）。
 
 ### 6.6 操作事故自记（本轮两处自伤，须登记）
 
