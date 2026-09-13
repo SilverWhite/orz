@@ -11,6 +11,15 @@
   逐个 ``docker pull``（默认每镜像最多 4 次重试、**实时落盘日志**），并把**解析后的
   repo digest** 记入轮次日志——本轮的镜像缺口与拉取中断已证明「按需拉取」不可靠；
   ``--no-pre-pull`` 可跳过（仅在镜像已确认在位时使用）；
+* **墙钟预算必传（2026-09-13 用户裁决回看 P0-2 既有修复）**：每题的**官方 agent 超时值**
+  经 ``--ak max_wallclock=<sec>`` 透传给 orz（"官方值 = 唯一评测墙钟"，不再自加派生余量；
+  见 ``docs/FRAMEWORK_EFFECTIVE_DESIGN_INVENTORY_2026-08-29.md`` §墙钟 与 09-02 口径收口）。
+  orz 因此会在 harness 硬杀之前**优雅收尾**（``run_invalidated{status: wallclock}``），
+  既避免"超时后孤儿继续跑、与 verifier 抢容器"（第 0 轮实测代价：一次已通过未记账），
+  也让"预算内交付"成为真实压力测试。
+  ``--ak`` 是**作业级**参数而各题超时不同 ⇒ 本执行器按超时**分组作业**
+  （组名后缀 ``-t<sec>``，如 ``official-r0-heavy-t900``），组内预算一致，逐组串行。
+  ``--no-wallclock`` 可关闭（仅用于对照复现）。
 * 形态：``-k 1``（每题 1 试次）、``-n 1``（串行，降并发落点）、``--upload --public``、
   官方数据集 pin、无时间倍率、无 ``max_wallclock``、无 ``--max-retries``（= 官方默认 0）；
 * 归属：第 0 轮**计入**本轮 89 题（2026-09-13 用户裁决）——后续 1–5 批据此显式剔除这 8 题
@@ -216,7 +225,11 @@ def snapshot(tag: str) -> None:
 
 
 def build_argv(
-    vol_dir: Path, mounts: str, tasks: list[tuple[str, str, int]], job_name: str
+    vol_dir: Path,
+    mounts: str,
+    tasks: list[tuple[str, str, int]],
+    job_name: str,
+    wallclock: int | None = None,
 ) -> list[str]:
     args = ['run', '-d', DATASET]
     for task, _batch, _timeout in tasks:
@@ -227,6 +240,12 @@ def build_argv(
         '--ak', f'orz_binary={ORZ.as_posix()}',
         '--ak', f'model_id={MODEL}',
         '--ak', f'gsa_volume={vol_dir.as_posix()}',
+    ]
+    if wallclock:
+        # P0-2 既有修复（2026-08-08）＋ 2026-09-02 口径收口（官方值即唯一墙钟）：
+        # agent 侧自预算，不改 harness 墙钟 / 题目 / verifier。
+        args += ['--ak', f'max_wallclock={wallclock}']
+    args += [
         '--mounts', mounts,
         '--env-file', ENV_FILE.as_posix(),
         '--job-name', job_name,
@@ -281,6 +300,8 @@ def main(argv: list[str] | None = None) -> int:
                     help='跳过预拉（仅在确认镜像已全在位时使用）')
     ap.add_argument('--pull-only', action='store_true',
                     help='只预拉镜像，不起跑')
+    ap.add_argument('--no-wallclock', action='store_true',
+                    help='不传 agent 侧墙钟预算（仅用于对照复现；默认按每题官方超时传 max_wallclock）')
     args = ap.parse_args(argv)
 
     tasks = select_tasks(args.tasks)
@@ -289,41 +310,53 @@ def main(argv: list[str] | None = None) -> int:
     CONSOLE_LOG = JOBS_DIR / f'{JOB_NAME}-console.log'
 
     vol_dir = VOL_ROOT / JOB_NAME
-    mounts = json.dumps([{
-        'type': 'bind',
-        'source': vol_dir.as_posix(),
-        'target': '/orz-gsa',
-    }])
-    harbor_argv = build_argv(vol_dir, mounts, tasks, JOB_NAME)
-
     carrier = sha256_file(ORZ)
     adapter = sha256_file(ADAPTER)
+
+    # 墙钟预算按题分组（`--ak` 是作业级参数）：各题官方 agent 超时不同 ⇒ 同超时一作业。
+    groups: dict[int, list[tuple[str, str, int]]] = {}
+    for t in tasks:
+        groups.setdefault(int(t[2]), []).append(t)
+    multi = len(groups) > 1
+    jobs: list[tuple[str, int | None, list[tuple[str, str, int]], Path]] = []
+    for timeout, grp in sorted(groups.items(), reverse=True):
+        job = f'{args.job_name}-t{timeout}' if multi else args.job_name
+        jobs.append((job, (None if args.no_wallclock else timeout), grp, VOL_ROOT / job))
+
     plan = {
-        'job_name': JOB_NAME,
-        'tasks': [t for t, _b, _s in tasks],
+        'base_job_name': args.job_name,
+        'jobs': [
+            {'job_name': j, 'max_wallclock': w, 'tasks': [t for t, _b, _s in g]}
+            for j, w, g, _v in jobs
+        ],
         'n_attempts_k': 1,
         'n_concurrent': 1,
         'upload': 'public',
         'dataset': DATASET,
         'model': MODEL,
-        'volume': vol_dir.as_posix(),
         'carrier_orz_sha256': carrier,
         'adapter_orz_py_sha256': adapter,
         'worst_case_agent_seconds': sum(s for _t, _b, s in tasks),
         'pre_pull': not args.no_pre_pull,
+        'wallclock_rule': 'per-task official agent timeout (P0-2; 2026-09-02 口径收口)',
     }
 
     if args.dry_run:
         print(json.dumps(plan, indent=2, ensure_ascii=False))
+        index = manifest_index()
         for task, _b, _s in tasks:
-            print('image:', (manifest_index().get(task) or {}).get('image'))
-        print('argv:', ' '.join([str(HARBOR), *harbor_argv]))
+            print('image:', (index.get(task) or {}).get('image'))
+        for job, wallclock, grp, vd in jobs:
+            m = json.dumps([{'type': 'bind', 'source': vd.as_posix(), 'target': '/orz-gsa'}])
+            print(f'[{job}] max_wallclock={wallclock}')
+            print('  argv:', ' '.join([str(HARBOR), *build_argv(vd, m, grp, job, wallclock)]))
         return 0
 
-    vol_dir.mkdir(parents=True, exist_ok=True)
+    for _j, _w, _g, vd in jobs:
+        vd.mkdir(parents=True, exist_ok=True)
     JOBS_DIR.mkdir(parents=True, exist_ok=True)
-    log(f'== {time.strftime("%Y-%m-%d %H:%M:%S")} 起跑 job={JOB_NAME} '
-        f'{len(tasks)} 题 ==')
+    log(f'== {time.strftime("%Y-%m-%d %H:%M:%S")} 起跑 base_job={args.job_name} '
+        f'{len(tasks)} 题 / {len(jobs)} 组 ==')
     log(f'plan {json.dumps(plan, ensure_ascii=False)}')
 
     if carrier != EXPECTED_CARRIER_SHA256 or adapter != EXPECTED_ADAPTER_SHA256:
@@ -347,21 +380,28 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     snapshot('pre')
-    log(f'harness {HARBOR} ; console log -> {CONSOLE_LOG}')
     env = {**os.environ, 'PYTHONPATH': TB_EVAL.as_posix()}
-    started = time.time()
-    with open(CONSOLE_LOG, 'wb') as f:
-        code = subprocess.run(
-            [str(HARBOR), *harbor_argv], stdout=f, stderr=subprocess.STDOUT, env=env
-        ).returncode
-    elapsed = time.time() - started
+    rc_all = 0
+    for job, wallclock, grp, vd in jobs:
+        console_log = JOBS_DIR / f'{job}-console.log'
+        mounts = json.dumps([{
+            'type': 'bind', 'source': vd.as_posix(), 'target': '/orz-gsa',
+        }])
+        argv = build_argv(vd, mounts, grp, job, wallclock)
+        log(f'--- job {job} : {len(grp)} 题 | max_wallclock={wallclock} | vol={vd}')
+        started = time.time()
+        with open(console_log, 'wb') as f:
+            code = subprocess.run(
+                [str(HARBOR), *argv], stdout=f, stderr=subprocess.STDOUT, env=env
+            ).returncode
+        log(f'--- job {job} exit={code} elapsed={(time.time() - started) / 3600:.2f} h')
+        log(f'per-task[{job}] {json.dumps(job_summary(job)["tasks"], ensure_ascii=False)}')
+        if code and not rc_all:
+            rc_all = code
     snapshot('post')
-    summary = job_summary(JOB_NAME)
-    log(f'harbor exit={code} elapsed={elapsed / 3600:.2f} h')
-    log(f'per-task {json.dumps(summary["tasks"], ensure_ascii=False)}')
-    log(f'== {time.strftime("%Y-%m-%d %H:%M:%S")} 结束 job={JOB_NAME} '
-        f'（exit={code}）==')
-    return code
+    log(f'== {time.strftime("%Y-%m-%d %H:%M:%S")} 结束 base_job={args.job_name} '
+        f'（exit={rc_all}）==')
+    return rc_all
 
 
 if __name__ == '__main__':
