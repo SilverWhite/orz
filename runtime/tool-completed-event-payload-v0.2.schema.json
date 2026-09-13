@@ -116,6 +116,21 @@
       "const": true,
       "description": "0q 统一失败事件管线 (2026-09-08, ADR-0010 §14.63): 「漏斗已评估、有意不聚合」标记 —— identity-capable 工具（四族并集）的 error 形状完成未过聚合时的 journal 可见事实（None-identity / 非四写点拒绝形状 / 0p S2 信封优先口径除外——后者自带 policy_denial，无本字段）。与 failure_target 互斥（XOR，failure_agg_coverage 法官族执法）；仅 funnel-v1 之后的刊出现（run_started.failure_pipeline = \"funnel-v1\"）。"
     },
+    "cause": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 200,
+      "not": {
+        "enum": [
+          "browser_launch_failed",
+          "tool_failed",
+          "failed",
+          "error",
+          "unknown_error"
+        ]
+      },
+      "description": "0ac S2 机器合约 (2026-09-13, IMMEDIATE_RESULT_DELIVERY_AND_STREAMING_RETRIEVAL_DESIGN §5): 单事件自描述失败原因（真实类别）—— 失败载荷不再只给 browser_launch_failed 这类壳码。只在失败形状出现；与 failure_target 并行（identity 与 cause 是两面，可同时出现）。壳码集合由 schema 机械拒绝（not.enum）；cause 须命名真实类别（如 dns_resolution_failed / tcp_connect_refused / tls_handshake_failed / engine_no_results / page_fetch_timeout / channel_deadline_exceeded）。中性事实命名，不给建议。"
+    },
     "failure_target": {
       "type": "object",
       "additionalProperties": false,

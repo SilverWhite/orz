@@ -1,0 +1,6 @@
+{
+  "tool": "browser_read",
+  "call_id": "CALL-RET-0010",
+  "exit_code": 1,
+  "cause": "browser_launch_failed"
+}

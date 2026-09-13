@@ -14,7 +14,8 @@
   ],
   "properties": {
     "probe_scope": {
-      "const": "main_agent_work_tools"
+      "enum": ["main_agent_work_tools", "retrieval_family"],
+      "description": "0ac S2 (2026-09-13, IMMEDIATE_RESULT_DELIVERY_AND_STREAMING_RETRIEVAL_DESIGN §5): main_agent_work_tools = 既有 23 工具面单探针；retrieval_family = 检索族三类硬设施在位读数（浏览器 / 搜索引擎 / web 通道），run 起始一次，与工具面探针各自成事件。"
     },
     "probe_timestamp": {
       "type": "string",
@@ -41,6 +42,56 @@
     "gate_decision": {
       "type": "string",
       "enum": ["pass", "warn", "block", "defer", "not_applicable"]
+    },
+    "retrieval_family": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["browser", "search_engine", "web_channel"],
+      "description": "0ac S2 (2026-09-13, 设计 §5): 检索族三类硬设施在位读数 —— 如实汇报（FP-2 精神），不教学、不给建议；present=false 必须带 reason。probe_scope=retrieval_family 时必填。",
+      "properties": {
+        "browser": { "$ref": "#/$defs/family_reading" },
+        "search_engine": { "$ref": "#/$defs/family_reading" },
+        "web_channel": { "$ref": "#/$defs/family_reading" }
+      }
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": { "probe_scope": { "const": "retrieval_family" } },
+        "required": ["probe_scope"]
+      },
+      "then": { "required": ["retrieval_family"] }
+    },
+    {
+      "if": { "required": ["retrieval_family"] },
+      "then": { "properties": { "probe_scope": { "const": "retrieval_family" } } }
+    }
+  ],
+  "$defs": {
+    "family_reading": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["present"],
+      "properties": {
+        "present": { "type": "boolean" },
+        "reason": {
+          "type": "string",
+          "minLength": 1,
+          "description": "present=false 时的如实原因（真实类别，非壳码）。"
+        },
+        "detail": {
+          "type": "string",
+          "minLength": 1,
+          "description": "present=true 时的在位读数（可达域名/版本等中性事实）。"
+        }
+      },
+      "allOf": [
+        {
+          "if": { "properties": { "present": { "const": false } }, "required": ["present"] },
+          "then": { "required": ["reason"] }
+        }
+      ]
     }
   }
 }

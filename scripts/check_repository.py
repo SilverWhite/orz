@@ -2340,6 +2340,47 @@ def check_repository() -> dict[str, Any]:
     run_event_v02_payload_positive_contracts[
         run_event_v02_payload_root / "host-resource-snapshot.unavailable.valid.json"
     ] = ROOT / "runtime/host-resource-snapshot-event-payload-v0.2.schema.json"
+    # 0ac S2 (2026-09-13, IMMEDIATE_RESULT_DELIVERY_AND_STREAMING_RETRIEVAL_
+    # DESIGN §5/§9): 即时结果回报与流式检索机器合约——三个新事件面
+    # (retrieval_progress / retrieval_result_segment / result_delivered) 的
+    # 最小正例由 registry slug 自动派生，本块登记带契约字段的额外正例与负例锁：
+    # ① no-progress 形态（stage=no_progress + since_last_event_ms + 五码之一）；
+    # ② 部分段形态（is_partial=true + segment_count_hint）；
+    # ③ 被抑制投递形态（suppressed=true + suppressed_reason）；④ tool_completed
+    # 失败载荷 cause（schema not.enum 机械拒绝壳码）；⑤ 检索族探针形态
+    # （probe_scope=retrieval_family + 三类在位读数，缺 retrieval_family 为负例）。
+    retrieval_progress_schema = (
+        ROOT / "runtime/retrieval-progress-event-payload-v0.2.schema.json"
+    )
+    retrieval_result_segment_schema = (
+        ROOT / "runtime/retrieval-result-segment-event-payload-v0.2.schema.json"
+    )
+    result_delivered_schema = (
+        ROOT / "runtime/result-delivered-event-payload-v0.2.schema.json"
+    )
+    run_event_v02_payload_positive_contracts[
+        run_event_v02_payload_root / "retrieval-progress.no-progress.valid.json"
+    ] = retrieval_progress_schema
+    run_event_v02_payload_positive_contracts[
+        run_event_v02_payload_root / "retrieval-result-segment.partial.valid.json"
+    ] = retrieval_result_segment_schema
+    run_event_v02_payload_positive_contracts[
+        run_event_v02_payload_root / "result-delivered.suppressed.valid.json"
+    ] = result_delivered_schema
+    run_event_v02_payload_positive_contracts[
+        run_event_v02_payload_root / "tool-completed.cause.valid.json"
+    ] = tool_completed_v02_schema
+    run_event_v02_payload_negative_contracts[
+        run_event_v02_payload_root
+        / "tool-completed.cause-shellcode.constraint.invalid.json"
+    ] = tool_completed_v02_schema
+    run_event_v02_payload_positive_contracts[
+        run_event_v02_payload_root / "tool-availability-check.retrieval-family.valid.json"
+    ] = ROOT / "runtime/tool-availability-check-event-payload-v0.2.schema.json"
+    run_event_v02_payload_negative_contracts[
+        run_event_v02_payload_root
+        / "tool-availability-check.retrieval-family-missing.constraint.invalid.json"
+    ] = ROOT / "runtime/tool-availability-check-event-payload-v0.2.schema.json"
     for instance_path, schema_path in run_event_v02_payload_positive_contracts.items():
         errors.extend(
             _validate_instance(

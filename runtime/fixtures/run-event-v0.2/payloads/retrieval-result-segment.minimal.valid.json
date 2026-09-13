@@ -1,0 +1,14 @@
+{
+  "tool": "web_search",
+  "call_id": "CALL-RET-0001",
+  "retrieval_path": "local_segmented",
+  "segment_index": 0,
+  "is_partial": false,
+  "waited_ms": 420,
+  "dedupe_key": "retrieval_segment:CALL-RET-0001:0",
+  "result_summary": {
+    "visibility": "full_text_observed",
+    "source_url": "https://example.invalid/doc",
+    "content_sha256": "0000000000000000000000000000000000000000000000000000000000000000"
+  }
+}

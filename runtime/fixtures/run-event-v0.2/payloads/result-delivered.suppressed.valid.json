@@ -1,0 +1,12 @@
+{
+  "result_source": "background_task",
+  "source_id": "TASK-0007",
+  "boundary": "B2_turn_end",
+  "delivery_mode": "digest",
+  "delivery_class": "I2_immediate_progress",
+  "suppressed": true,
+  "suppressed_reason": "duplicate",
+  "latency_ms": 420,
+  "dedupe_key": "result_delivered:TASK-0007:digest",
+  "delivered_at": "2026-09-13T00:01:00Z"
+}

@@ -1,0 +1,56 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://local.scientific-assurance.invalid/schema/retrieval-result-segment-event-payload-v0.2.schema.json",
+  "title": "retrieval_result_segment runtime event payload (immediate-feedback contract, v0.2)",
+  "description": "0ac S2 机器合约 (2026-09-13, IMMEDIATE_RESULT_DELIVERY_AND_STREAMING_RETRIEVAL_DESIGN §5/§9): 每段/每个结果项到达即入账的到达面事实（规则 3：每个结果项/段到达即投递；同一 URL 去重）。与既有 retrieval_result_committed（slug retrieval-result，机械账本提交/可见性事实）区分：本事件是到达面，一条 call 可有多段，is_partial=true 表示非终段。双路径通用（retrieval_path 同 retrieval_progress）。visibility 沿用检索可见性词汇（full_text_observed / partial_text_observed / metadata_only）。",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "tool",
+    "call_id",
+    "retrieval_path",
+    "segment_index",
+    "is_partial",
+    "waited_ms",
+    "dedupe_key",
+    "result_summary"
+  ],
+  "properties": {
+    "tool": { "type": "string", "minLength": 1 },
+    "call_id": { "type": "string", "minLength": 1 },
+    "retrieval_path": { "enum": ["local_segmented", "server_streaming"] },
+    "engine": { "type": "string", "minLength": 1 },
+    "segment_index": { "type": "integer", "minimum": 0 },
+    "is_partial": {
+      "type": "boolean",
+      "description": "true = 非终段（后续还有段/终止事实）；false = 终段。"
+    },
+    "waited_ms": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "据该检索请求发出时刻的已等待 ms（首个结果 wall_ms 观测点）。"
+    },
+    "segment_count_hint": { "type": "integer", "minimum": 1 },
+    "dedupe_key": {
+      "type": "string",
+      "minLength": 1,
+      "description": "机械去重键（段身份，如 retrieval_segment:<call_id>:<segment_index>）。"
+    },
+    "result_summary": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["visibility"],
+      "anyOf": [{ "required": ["source_url"] }, { "required": ["content_sha256"] }],
+      "properties": {
+        "visibility": {
+          "enum": ["full_text_observed", "partial_text_observed", "metadata_only"]
+        },
+        "source_url": { "type": "string", "minLength": 1 },
+        "title": { "type": "string", "minLength": 1 },
+        "content_sha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+        "byte_len": { "type": "integer", "minimum": 0 },
+        "observed_scope": { "type": "string", "minLength": 1 }
+      }
+    }
+  }
+}

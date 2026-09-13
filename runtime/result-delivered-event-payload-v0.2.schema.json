@@ -1,0 +1,70 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://local.scientific-assurance.invalid/schema/result-delivered-event-payload-v0.2.schema.json",
+  "title": "result_delivered runtime event payload (immediate-feedback contract, v0.2)",
+  "description": "0ac S2 机器合约 (2026-09-13, IMMEDIATE_RESULT_DELIVERY_AND_STREAMING_RETRIEVAL_DESIGN §4.2/§5): 框架向模型投递结果的审计事实——来源（后台任务/子代理/检索段/工具结果）、边界类型 B1–B3（B4 pending 工具窗口无合法注入点，只能等 B1）、投递方式（direct / sentence_resume 句号边界分段续写 / digest）、是否被抑制及抑制原因。去重纪律：同一结果只投递一次（dedupe_key）；框架投递与「模型自己读到」分开记账（suppressed_reason=model_read_directly 即旧 consumed 抑制面）。中性事实、单事件自描述。",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "result_source",
+    "source_id",
+    "boundary",
+    "delivery_mode",
+    "suppressed",
+    "dedupe_key",
+    "delivered_at"
+  ],
+  "properties": {
+    "result_source": {
+      "enum": ["background_task", "subagent_result", "retrieval_segment", "retrieval_progress", "tool_result"]
+    },
+    "source_id": {
+      "type": "string",
+      "minLength": 1,
+      "description": "来源身份：任务 id / 子代理结果 id / call_id。"
+    },
+    "boundary": {
+      "enum": ["B1_tool_result", "B2_turn_end", "B3_mid_generation"],
+      "description": "投递边界（设计 §2.1）。B4 pending 工具等待无合法注入点，不构成边界。"
+    },
+    "delivery_mode": {
+      "enum": ["direct", "sentence_resume", "digest"],
+      "description": "direct = 合法边界直接投递；sentence_resume = 生成中按句号边界分段续写（M1）；digest = 摘要合并（I3）。"
+    },
+    "delivery_class": {
+      "enum": ["I1_immediate_material", "I2_immediate_progress", "I3_deferred_digest"],
+      "description": "投递分级（设计 §2.2）。"
+    },
+    "suppressed": { "type": "boolean" },
+    "suppressed_reason": {
+      "enum": ["duplicate", "model_read_directly", "class_capped"],
+      "description": "suppressed=true 时必填：duplicate = 同一 dedupe_key 已投；model_read_directly = 模型自己读到了产物；class_capped = I3 类目封顶。"
+    },
+    "latency_ms": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "结果到达 → 投递的延迟 ms（B3 目标 p95 ≤ 2 s，实测校准）。"
+    },
+    "dedupe_key": { "type": "string", "minLength": 1 },
+    "delivered_at": { "type": "string", "format": "date-time" }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": { "boundary": { "const": "B3_mid_generation" } },
+        "required": ["boundary"]
+      },
+      "then": {
+        "properties": { "delivery_mode": { "const": "sentence_resume" } },
+        "required": ["delivery_mode"]
+      }
+    },
+    {
+      "if": { "properties": { "suppressed": { "const": true } }, "required": ["suppressed"] },
+      "then": { "required": ["suppressed_reason"] },
+      "else": {
+        "not": { "required": ["suppressed_reason"] }
+      }
+    }
+  ]
+}

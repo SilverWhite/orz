@@ -1,0 +1,8 @@
+{
+  "tool": "web_search",
+  "call_id": "CALL-RET-0001",
+  "retrieval_path": "local_segmented",
+  "stage": "channel_alive",
+  "waited_ms": 380,
+  "dedupe_key": "retrieval_progress:CALL-RET-0001:channel_alive"
+}

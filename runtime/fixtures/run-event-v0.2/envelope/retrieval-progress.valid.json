@@ -1,0 +1,22 @@
+{
+  "schema_version": "0.2.0-draft",
+  "run_id": "RUN-CONF-RETRIEVAL-PROGRESS",
+  "event_id": "EVT-CONF-101",
+  "sequence": 0,
+  "timestamp": "2026-09-13T00:00:00Z",
+  "event_type": "retrieval_progress",
+  "run_manifest_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+  "previous_event_sha256": null,
+  "payload_schema": "run-event-v0.2.schema.json",
+  "payload": {
+    "tool": "web_search",
+    "call_id": "CALL-RET-0001",
+    "retrieval_path": "local_segmented",
+    "stage": "channel_alive",
+    "waited_ms": 380,
+    "dedupe_key": "retrieval_progress:CALL-RET-0001:channel_alive"
+  },
+  "payload_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+  "redaction": "none",
+  "event_sha256": "0000000000000000000000000000000000000000000000000000000000000000"
+}

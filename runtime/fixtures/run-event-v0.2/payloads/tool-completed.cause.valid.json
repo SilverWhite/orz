@@ -1,0 +1,6 @@
+{
+  "tool": "web_search",
+  "call_id": "CALL-RET-0009",
+  "exit_code": 1,
+  "cause": "channel_deadline_exceeded"
+}

@@ -1,0 +1,12 @@
+{
+  "probe_scope": "retrieval_family",
+  "probe_timestamp": "2026-09-13T00:00:00Z",
+  "complete": [],
+  "incomplete": [],
+  "gate_decision": "pass",
+  "retrieval_family": {
+    "browser": { "present": false, "reason": "容器内无浏览器二进制" },
+    "search_engine": { "present": true, "detail": "cn_bing 直连可达；DDG/Google 直连不可达" },
+    "web_channel": { "present": true, "detail": "HTTP 直连出网可用" }
+  }
+}

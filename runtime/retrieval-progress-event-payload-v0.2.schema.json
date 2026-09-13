@@ -1,0 +1,83 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://local.scientific-assurance.invalid/schema/retrieval-progress-event-payload-v0.2.schema.json",
+  "title": "retrieval_progress runtime event payload (immediate-feedback contract, v0.2)",
+  "description": "0ac S2 机器合约 (2026-09-13, IMMEDIATE_RESULT_DELIVERY_AND_STREAMING_RETRIEVAL_DESIGN §5/§9): 检索通道判活与进度回报事实。channel_alive = 请求发出后首事件判活读数（首个结果/首事件截止的首观测点，设计 §3.3 规则 1）；no_progress = 判活后超过 stall 窗口无新事件（规则 4，含 since_last_event_ms，不是静默等满）；failed = 设计 §3.4 稳定码（capability_unreachable / network_no_response / network_error / empty_result）。双路径通用：retrieval_path=local_segmented（主路径=本地分段检索）或 server_streaming（服务端流式恢复时复用，设计 §9.5）。全部为中性事实、单事件自描述，不给建议；dedupe_key 为机械去重键（同一事实只入账/投递一次）。",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "tool",
+    "call_id",
+    "retrieval_path",
+    "stage",
+    "waited_ms",
+    "dedupe_key"
+  ],
+  "properties": {
+    "tool": { "type": "string", "minLength": 1 },
+    "call_id": { "type": "string", "minLength": 1 },
+    "retrieval_path": {
+      "enum": ["local_segmented", "server_streaming"],
+      "description": "检索路径：local_segmented = 本地分段检索（0ac 主路径）；server_streaming = 服务端流式（恢复时复用）。同一 call 内不改路（改路即新 call）。"
+    },
+    "engine": {
+      "type": "string",
+      "minLength": 1,
+      "description": "SERP 引擎 id（cn_bing / bing / google / duckduckgo）。引擎单独计时、不共用一个钟（设计 §9.4）。"
+    },
+    "stage": {
+      "enum": ["dispatched", "channel_alive", "progress", "no_progress", "failed", "finished"]
+    },
+    "waited_ms": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "据该检索请求发出时刻的已等待 ms（首个结果 wall_ms 观测点）。"
+    },
+    "since_last_event_ms": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "据上一个同 call 进度事件的间隔 ms；stage=no_progress 必填。"
+    },
+    "deadline_ms": {
+      "type": "integer",
+      "minimum": 1,
+      "description": "本引擎生效的截止 ms（可配 ORZ_RETRIEVAL_DEADLINE_MS；整体兜底见设计 §9.4）。"
+    },
+    "stable_code": {
+      "enum": [
+        "capability_unreachable",
+        "network_no_response",
+        "network_error",
+        "empty_result",
+        "no_progress"
+      ],
+      "description": "设计 §3.4 稳定码；stage=failed 或 stage=no_progress 时必填，其余形态缺省。"
+    },
+    "result_count": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "目前已到达的结果段数（progress / finished）。"
+    },
+    "dedupe_key": {
+      "type": "string",
+      "minLength": 1,
+      "description": "机械去重键：同一事实只入账/投递一次。"
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": { "stage": { "enum": ["failed", "no_progress"] } },
+        "required": ["stage"]
+      },
+      "then": { "required": ["stable_code"] }
+    },
+    {
+      "if": {
+        "properties": { "stage": { "const": "no_progress" } },
+        "required": ["stage"]
+      },
+      "then": { "required": ["since_last_event_ms"] }
+    }
+  ]
+}

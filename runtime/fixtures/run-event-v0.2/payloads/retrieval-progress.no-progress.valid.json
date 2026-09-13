@@ -1,0 +1,13 @@
+{
+  "tool": "web_search",
+  "call_id": "CALL-RET-0001",
+  "retrieval_path": "local_segmented",
+  "engine": "cn_bing",
+  "stage": "no_progress",
+  "waited_ms": 30000,
+  "since_last_event_ms": 12500,
+  "deadline_ms": 30000,
+  "stable_code": "no_progress",
+  "result_count": 2,
+  "dedupe_key": "retrieval_progress:CALL-RET-0001:no_progress:1"
+}

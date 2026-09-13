@@ -912,7 +912,7 @@ GLM F2 处置转排期（2026-09-06 用户裁决）：`orz-host/src/approval.rs`
 - 入口：[`FULL_PROJECT_DEEP_REVIEW` §3](audits/FULL_PROJECT_DEEP_REVIEW_2026-09-12.md) / [`check_repository.py`](../scripts/check_repository.py)。
 
 
-### 0ac. GAP-MECH-IMMEDIATE-FEEDBACK 机械层即时回报与流式检索（P0；2026-09-13 用户裁决登记；**S1 探针完成 2026-09-13，S2 机器合约待放行**）
+### 0ac. GAP-MECH-IMMEDIATE-FEEDBACK 机械层即时回报与流式检索（P0；2026-09-13 用户裁决登记；**S1 探针 + S2 机器合约完成 2026-09-13（用户放行「直接进行」），S3 实现待放行**）
 
 - 来源（本轮 TB 2.1 V4.1 跑批 + 全框架时间预算语义审计）：**用户口径**——可用性探针要扩大；关键在返回时间的确定性——"不怕检索子代理每次起来都试一遍，关键是**功能明确不可达时为什么还要正常等待后才返回**"；浏览器/硬设施没拉起来要有明确日志并**立刻**返回；检索/网络是毫秒级场景，**10 秒拿不到结果就应当立刻明确回报网络问题**；**不止浏览器——一切需求，机械层都要即时回报**。一手证据：[`第 0 轮起跑记录 §6.13`](audits/TB21_V41_ROUND0_MEMORY_HEAVY_START_2026-09-13.md)（`web_search` 单次最高 26.8 s、合计 807–977 s、5 次 `subagent_wallclock_timeout_mid_tool`；`tool_availability_check` 的 `probe_scope` 只覆盖主工作面）。
 - 关联审计（证据基座）：[`FRAMEWORK_TIME_BUDGET_SEMANTICS_AUDIT_2026-09-13`](audits/FRAMEWORK_TIME_BUDGET_SEMANTICS_AUDIT_2026-09-13.md)——逐部件判定 D1–D7 七处等待化/延迟形态（D1 检索子代理 600 s 到期才回报 / D2 `web_search` 非流式整包 / D3 信号量 acquire 无独立截止 / D4 浏览器能力级不可达无 run 级记忆 + 探针不含检索族 + 失败载荷不含 cause / D5 agent 超时后 orz 孤儿 / D6 verifier 通道吃满 900 s / D7 后台完成按"下一次工具边界"带回）；给出 R1–R10 修正批次与**四本时限分账**（`first_result_deadline` ≤10 s / `operation_deadline` / `total_budget` / `run_wallclock`）。

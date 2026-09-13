@@ -189,3 +189,38 @@
 4. **首结果截止在本地路径的实现形态（2026-09-13 晚二次修订，S1′ 代理假象更正）**：宿主机系统代理（`127.0.0.1:7890`）污染了首测读数——**直连（= 评测容器形态）下 Bing HTML TTFB 0.4 s**；DDG/Google **直连不可达**（与 0v R4「duckduckgo 本地不可达 20 s 失败」同源，正是引擎链事实排除 DDG 的原因，用户口径获得实证）⇒ **默认引擎集 = Bing HTML 直连单引擎**（提取器按现行 `b_algo` 结构重写）；DDG/Google 仅在显式代理配置下可用，容器无代理不进默认集。**截止按引擎单独计时（不共用一个钟），整体兜底 30 s**（用户裁决原文：「10s不够就提升到30s兜底，每个搜索引擎单独计时，不一起计时」）；`ORZ_RETRIEVAL_DEADLINE_MS` 可配 + A/B 记录保留；默认值仍待容器内复验后定。更正详见探针记录 §7。
 5. §5/§6 阶段表相应修订：S2 机器合约按**双路径覆盖**（本地分段为主、流式为恢复预留）；S3 实现清单中"流式检索客户端"替换为"本地分段检索前端（SERP 竞速 + 页面抓取 + 段抽取）"，其余（探针扩面、稳定码、投递策略、M1–M3、semaphore 截止）不变。
 6. **引擎选择与工具面（2026-09-13 晚，用户裁决）**：① **cn.bing.com（CN Bing）为无代理形态的默认引擎**（直连稳定可达；`www.bing.com` 直连实测 TTFB 0.4 s 同族，具体 cn 域名以容器内复验为准）；② **有代理配置时引擎交由模型自选**（接 0v 设计 §6 留存的 `engine ∈ {auto,google,bing,duckduckgo}` 引擎自选方案——当时"只留文档"，此处升格为代理形态下的实施路径）；③ **工具面保留 `web_search` 名称不变**（8 工具面冻结不破、模型提示词与调用习惯零迁移），实现明确改指本地分段检索：`web_search` = 本地 SERP（引擎按上两条选路）+ 逐页抓取 + 段抽取；模型可见描述如实标注数据来源形态（本地检索，非服务端）。
+
+---
+
+## 10. S2 机器合约落档（2026-09-13 晚；用户放行「直接进行」）
+
+> 放行记录：用户 2026-09-13 指令「当前需要处理的是 0ac S2 部分，请直接进行」= **S2（机器合约）放行**；S1/S1′ 探针记录已入档（[`0AC_S1_PROBE_RECORD_2026-09-13`](audits/0AC_S1_PROBE_RECORD_2026-09-13.md)）。本节的判据：§5 的五项契约逐条落到可机械核对的 schema / fixture / 门禁映射；**S2 只定契约，不写生产代码**（S3 才实现生产者与法官规则）。
+
+### 10.1 契约 diff（§5 五项 → 落档产物）
+
+| §5 契约 | 落档产物（新增/扩展） | 覆盖 |
+|---|---|---|
+| 检索进度/结果事件 | **新增** `retrieval_progress`（`runtime/retrieval-progress-event-payload-v0.2.schema.json`，slug `retrieval-progress`）：`retrieval_path`（`local_segmented`主路径 / `server_streaming`恢复预留）、`stage`（dispatched/channel_alive/progress/no_progress/failed/finished）、`waited_ms`、`since_last_event_ms`、`deadline_ms`、**稳定码**、`result_count`、`dedupe_key` | 判活（channel_alive）/无进度（no_progress）/失败（failed）+ 双路径 |
+| 检索结果（到达面） | **新增** `retrieval_result_segment`（`runtime/retrieval-result-segment-event-payload-v0.2.schema.json`，slug `retrieval-result-segment`）：`segment_index`、`is_partial`、`segment_count_hint`、`waited_ms`、`dedupe_key`、`result_summary{visibility, source_url, content_sha256, observed_scope, byte_len}` | 每个结果项/段到达即入账（规则 3）；与既有 `retrieval_result_committed`（slug `retrieval-result`，账本提交/可见性面）**分立**，到达面 ≠ 提交面 |
+| 投递事件 | **新增** `result_delivered`（`runtime/result-delivered-event-payload-v0.2.schema.json`，slug `result-delivered`）：`result_source`（background_task/subagent_result/retrieval_segment/retrieval_progress/tool_result）、`boundary` B1–B3、`delivery_mode`（direct/sentence_resume/digest）、`delivery_class` I1–I3、`suppressed` + `suppressed_reason`（duplicate/model_read_directly/class_capped）、`latency_ms`、`dedupe_key`、`delivered_at` | §2.2 分级 + §4.2 边界/去重/抑制：**框架投递与「模型自己读到」分开记账** |
+| `tool_completed` 失败载荷补 cause | **扩展** `runtime/tool-completed-event-payload-v0.2.schema.json`：新增可选 `cause`（真实类别，单事件自描述）；**壳码集合 `{browser_launch_failed, tool_failed, failed, error, unknown_error}` 由 schema `not.enum` 机械拒绝** | 不再只给壳码；cause 与 `failure_target` 并行（identity 与 cause 两面） |
+| 探针扩 `retrieval_family` | **扩展** `runtime/tool-availability-check-event-payload-v0.2.schema.json`：`probe_scope` 由 `const` 放开为 `enum{main_agent_work_tools, retrieval_family}`；新增 `retrieval_family{browser, search_engine, web_channel}`，每类 `present` + `present=false ⇒ reason` / `present=true` 可带 `detail`（如实汇报，FP-2 精神） | run 起始一次三类硬设施在位读数；与 23 工具面探针各自成事件 |
+| 稳定码进 assurance 家族 | 五码 `capability_unreachable` / `network_no_response` / `network_error` / `empty_result` / `no_progress` 已闭枚举进 schema（`retrieval_progress.stable_code`）；投递侧抑制码进 `result_delivered.suppressed_reason` | 枚举层面封闭；**法官族规则随 S3 实现**（见 10.3） |
+
+### 10.2 机器核对证据（本批实测）
+
+- 注册表 `runtime/run-event-payload-registry-v0.1.json` v02 轨新增 3 条（`retrieval_progress` / `retrieval_result_segment` / `result_delivered`），Python 视图（`assurance/run_event_journal_validation.py` 派生）与 Rust 法官（`orz-assurance .../journal/conformance.rs` 直读）自动跟进，**无镜像改动**。
+- 信封枚举 `runtime/run-event-v0.2.schema.json#/properties/event_type` 新增同名三型。
+- fixture：三个 slug 的 `minimal.valid` + `constraint.invalid` 自动派生；另登记 7 个契约锁（`retrieval-progress.no-progress.valid`、`retrieval-result-segment.partial.valid`、`result-delivered.suppressed.valid`、`tool-completed.cause.valid`、`tool-completed.cause-shellcode.constraint.invalid`、`tool-availability-check.retrieval-family.valid`、`tool-availability-check.retrieval-family-missing.constraint.invalid`）+ 3 个信封正例。
+- 门禁：`python scripts/check_repository.py` → `error_count: 0`；`run_event_v02_payload_positive_contracts: 67`、`run_event_v02_payload_negative_contracts: 49`、`run_event_v02_envelope_positive_contracts: 66`。
+
+### 10.3 明确留给 S3（契约已定、实现未做）
+
+1. **生产者**：三个新事件的实际写点（本地分段检索前端 / 投递策略 I1–I3 / M1–M3 / 探针扩面）与开关、A/B 记录；全部带开关，默认关闭直至复验。
+2. **法官规则**：① 每个 `call_id` 的 `dedupe_key` 唯一性（同一事实只入账一次）；② `result_delivered` 的 `dedupe_key` 与真实投递一一对应（不许"投了但被抑制"混记）；③ `retrieval_family` 探针 run 起始一次（不多不少）；④ `cause` 与 `failure_target` 的失败形状一致性；⑤ 首个结果 `wall_ms ≤ deadline_ms` 的判据族（索引 0ac 判据 ①）。
+3. **回归钉子**：「及时且有信息量」的框架契约随 S3 落进机械审查层与回归集。
+
+### 10.4 判据现状
+
+索引 0ac 判据 ①（检索类首个结果 `wall_ms` p99 ≤ 10 s，本地路径按 §9.4 引擎单独计时 + 30 s 兜底）与 ②（`subagent_wallclock_timeout_mid_tool` = 0）**均为 S3/S4 实测判据**，S2 不作数值结论；S2 的完成门 = 上文 10.1/10.2 全部可机械核对。
+

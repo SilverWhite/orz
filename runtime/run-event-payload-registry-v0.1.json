@@ -230,6 +230,18 @@
         "schema": "runtime/retrieval-parent-disposition-event-payload-v0.2.schema.json",
         "slug": "retrieval-parent-disposition"
       },
+      "retrieval_progress": {
+        "schema": "runtime/retrieval-progress-event-payload-v0.2.schema.json",
+        "slug": "retrieval-progress"
+      },
+      "retrieval_result_segment": {
+        "schema": "runtime/retrieval-result-segment-event-payload-v0.2.schema.json",
+        "slug": "retrieval-result-segment"
+      },
+      "result_delivered": {
+        "schema": "runtime/result-delivered-event-payload-v0.2.schema.json",
+        "slug": "result-delivered"
+      },
       "retrieval_result_committed": {
         "schema": "runtime/retrieval-result-event-payload-v0.2.schema.json",
         "slug": "retrieval-result"

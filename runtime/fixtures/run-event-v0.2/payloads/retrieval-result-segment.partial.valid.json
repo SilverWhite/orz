@@ -1,0 +1,17 @@
+{
+  "tool": "web_search",
+  "call_id": "CALL-RET-0001",
+  "retrieval_path": "local_segmented",
+  "engine": "cn_bing",
+  "segment_index": 1,
+  "is_partial": true,
+  "waited_ms": 1180,
+  "segment_count_hint": 3,
+  "dedupe_key": "retrieval_segment:CALL-RET-0001:1",
+  "result_summary": {
+    "visibility": "partial_text_observed",
+    "source_url": "https://example.invalid/thread",
+    "observed_scope": "first section",
+    "byte_len": 4096
+  }
+}

@@ -1,0 +1,8 @@
+{
+  "result_source": "tool_result",
+  "source_id": "CALL-0001",
+  "boundary": "B1_tool_result",
+  "delivery_mode": "direct",
+  "suppressed": false,
+  "dedupe_key": "result_delivered:CALL-0001"
+}
