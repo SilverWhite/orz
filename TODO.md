@@ -8,6 +8,7 @@
 > 2026-09-09 整理轮：P0-GOV 00/00a、P0-0p、P1-0q 等已闭合区再次压缩为单行核对（明细见全量快照）；开放项路由同步至 BACKLOG 当前口径。全量快照：[`存档/todo/TODO_FULL_2026-09-09.md`](存档/todo/TODO_FULL_2026-09-09.md)。
 > 2026-09-10 滞后入账轮：0o T0（2026-09-07）已达成的 S3 型闭合——0b 验证② / P2-14 S3 / P2-11×3 S3——按 BACKLOG 各条目小节入账后同步补勾与状态注记；勾选状态以 BACKLOG 为权威。
 > 2026-09-12 审查入档轮：全项目只读深审报告入档（[`docs/audits/FULL_PROJECT_DEEP_REVIEW_2026-09-12.md`](docs/audits/FULL_PROJECT_DEEP_REVIEW_2026-09-12.md)；不立项、不动计数——0v-C 两项 P0 已被同日 orz `ba934af8` 修复闭合覆盖且触发源实锤与报告独立判断（URL 无痕改写）吻合，账本三处同步断裂已回补，其余 P1/P2 与体系面发现留用户裁决，BACKLOG 治理注记为登记权威）。
+> 2026-09-13 跑批待办入账轮：TB 2.1 V4.1 第 0 轮 + 全框架时间预算语义审计 + 即时结果回报/流式检索设计产生的全部开放项一次入账——新增 **0ac `GAP-MECH-IMMEDIATE-FEEDBACK`（P0，设计定稿待放行实施）**、即时结果回报与流式检索设计 **S1–S4**、时间预算语义审计修正批次 **R1–R10 / E1–E9**、`GAP-ORZ-HOST-RESOURCE-SNAPSHOT-DROP` **载体重建待放行**，并更正 **C6 撤回（本轮第 0 轮全部重跑）**。勾选与计数权威仍是 BACKLOG（本轮 **29 → 30**）。
 
 ## 使用说明
 
@@ -15,12 +16,12 @@
 - 每项标注 canonical ID / 优先级 / 关键内容 / 入口；同一概念只出现一次，不复制 BACKLOG 的决策记录。
 - 已闭合项单行核对格式：`[x] <ID>：<一句话>（闭合日期；入口：<文档/审计>）`。
 
-## 开放项路由（2026-09-09 同步；勾选与计数权威在 BACKLOG）
+## 开放项路由（2026-09-13 同步；勾选与计数权威在 BACKLOG）
 
-- 未闭合总数：**26 项**（BACKLOG 计数口径；逐次计数流水见 [`docs/BACKLOG_AND_PRIORITIES.md`](docs/BACKLOG_AND_PRIORITIES.md) 未闭合计数，TODO 不重复维护）。TODO `[ ]` 明细含父/子项，计数以 BACKLOG 为准。
-- P0：0b 验证③④（⑤ 89 题独立用户门）；0d 后续 3/4/5 S4 复验；0j W1-R1 S4 复验 + W3-R3 余项 + W4-R4 S5-2 总项；0l ⑥⑦（⑧ TER 见 [`TODO2.md`](TODO2.md)）；0m S3/S4；0n GAP-APPROVAL-PROMPTER（延期，S1 设计定稿前置）；0o T3 批次 W2 chunk3 + T4 批次 L + T5 批次 O + T6 统一收口；0t S4 实机复验待续；0u R4 15 题官方复跑（0t S4 载体，2026-09-10 放行）；0v 检索引擎 SERP + browser_control 分类修正（**2026-09-12 用户裁决闭合入账：S1–S4 全部转 `implemented`，计数 26 → 25；0v-C 修复落码并**闭合**（`ba934af8`：回传落盘 `event_sha256` + 四处调用方线程化 + 全链重放钉子；根因实锤 = 漏斗无痕改写，Run A 4 处断链前序行全为含 URL 的 `model_output`））**；0w TB 4.0 单题摩擦探针（第三跑成立并跑完（2026-09-11））；0y NP1 机械身体集成支线（2026-09-11 用户裁决立项，实施未开始；§14.2 验证载体已裁决引入模拟器（2026-09-12），S1 载体搭建待放行，M0 定版为首个无依赖里程碑）；0z 真机资源安全边界与崩溃收尾（2026-09-12 用户裁决立项，设计完成待放行实施；S1–S4，**不与 0v-C 搭车**）。（0x 初始轮中立问询已于 2026-09-11 S1–S4 全部闭合转 `implemented`，计数 27 → 26；**0v 闭合 26 → 25、0z 立项 25 → 26**；ADR-0010 §14.66 / v1.67。）
-- P1：FUS-COMPONENT-REGISTER 组件审计；GAP-WINDOWS-EVIDENCE 三项；IMPL-DEEPSEEK-TRANSPORT live 晋级证据；ORZ-SESSION-CONTEXT-MONITOR 四项。
-- P2：IMPL-CONTROL-FABRIC Slice 3/4；OPS-PROTOCOL 裁剪与接线裁决；P2-11 余项（PULL 自描述 S3/S4、retryable 分类位、依赖图 S3/S4）；P2-12 S4 复验；P2-13 B4；P2-14 S3/S4。
+- 未闭合总数：**30 项**（BACKLOG 计数口径；逐次计数流水见 [`docs/BACKLOG_AND_PRIORITIES.md`](docs/BACKLOG_AND_PRIORITIES.md) 未闭合计数，TODO 不重复维护）。TODO `[ ]` 明细含父/子项，计数以 BACKLOG 为准。**2026-09-13 跑批待办入账流水**：深审处置 **26 → 29**（P2-15 / 0aa / 0ab），TB 2.1 V4.1 轮 **`GAP-MECH-IMMEDIATE-FEEDBACK` 立项 29 → 30**（0ac，P0，设计定稿待放行实施）；同轮 `GAP-ORZ-HOST-RESOURCE-SNAPSHOT-DROP`（立案并同日修复，代码 `implemented`，载体重建并入 0z S3/S4 面）与 `GAP-ORZ-ADAPTER-FLAG-DRIFT`（`candidate`，仅记录）不动计数。
+- P0：0b 验证③④（⑤ 89 题独立用户门）；0d 后续 3/4/5 S4 复验；0j W1-R1 S4 复验 + W3-R3 余项 + W4-R4 S5-2 总项；0l ⑥⑦（⑧ TER 见 [`TODO2.md`](TODO2.md)）；0m S3/S4；0n GAP-APPROVAL-PROMPTER（延期，S1 设计定稿前置）；0o T3 批次 W2 chunk3 + T4 批次 L + T5 批次 O + T6 统一收口；0t S4 实机复验待续；0u R4 15 题官方复跑（0t S4 载体，2026-09-10 放行）；0v 检索引擎 SERP + browser_control 分类修正（**2026-09-12 用户裁决闭合入账：S1–S4 全部转 `implemented`，计数 26 → 25；0v-C 修复落码并**闭合**（`ba934af8`：回传落盘 `event_sha256` + 四处调用方线程化 + 全链重放钉子；根因实锤 = 漏斗无痕改写，Run A 4 处断链前序行全为含 URL 的 `model_output`））**；0w TB 4.0 单题摩擦探针（第三跑成立并跑完（2026-09-11））；0y NP1 机械身体集成支线（2026-09-11 用户裁决立项，实施未开始；§14.2 验证载体已裁决引入模拟器（2026-09-12），S1 载体搭建待放行，M0 定版为首个无依赖里程碑）；0z 真机资源安全边界与崩溃收尾（2026-09-12 用户裁决立项，设计完成待放行实施；S1–S4，**不与 0v-C 搭车**）。（0x 初始轮中立问询已于 2026-09-11 S1–S4 全部闭合转 `implemented`，计数 27 → 26；**0v 闭合 26 → 25、0z 立项 25 → 26**；ADR-0010 §14.66 / v1.67。）**本轮新增（2026-09-13）**：0ac 即时结果回报与流式检索（`GAP-MECH-IMMEDIATE-FEEDBACK`，设计定稿待放行实施，S1 探针为第一门）；`GAP-ORZ-HOST-RESOURCE-SNAPSHOT-DROP` 载体重建待放行。
+- P1：FUS-COMPONENT-REGISTER 组件审计；GAP-WINDOWS-EVIDENCE 三项；IMPL-DEEPSEEK-TRANSPORT live 晋级证据；ORZ-SESSION-CONTEXT-MONITOR 四项；0aa 历史卷 journal 全量 verifier 复扫；0ab 账本一致性与瘦身机械化。
+- P2：IMPL-CONTROL-FABRIC Slice 3/4；OPS-PROTOCOL 裁剪与接线裁决；P2-11 余项（PULL 自描述 S3/S4、retryable 分类位、依赖图 S3/S4）；P2-12 S4 复验；P2-13 B4；P2-14 S3/S4；P2-15 EVALUATION-CORPUS-FREEZE（S1/S2 完成；附属 `GAP-EVAL-RESULT-SCHEMA-DRIFT` 已修复）。
 - P3：EVIDENCE-LOCAL-BROWSER、GATE-CHAIN、observed-scope 枚举、V11-IMPL-003、V11-IMPL-007、orz-host flaky。
 - 审计登记边界（条件触发，不占当前优先级）：orz-host 可选后端、headless 计划信号、23 工具分区 journals、B-1 后续、ORZ-RECOVERY-TOOL-OUTCOME、ORZ-STAGNATION-TOOL-SIGNAL。
 - 已闭合分组（单行核对见下）：P0-GOV 00/00a、P0-E、0c、0d 主项与后续 1/2/6/7/8、0e、0f、0g、0h、0i、0k、0p、P0-B、P0-C、P0-C2、P0-D、P1-0q、P1 已闭合项、P2-10 全部闭合。
@@ -447,6 +448,10 @@ GLM F2 处置转排期（2026-09-06 用户裁决）：`orz-host/src/approval.rs`
 - [x] **墙钟预算必传（2026-09-13 用户裁决；回看 P0-2 既有修复）**：`--max-wallclock` 属 P0-2（2026-08-08）既有修复，2026-09-02 已收口为「官方 agent 超时值即唯一墙钟」。执行器改为**每题官方超时经 `--ak max_wallclock=<sec>` 透传**（不改 harness 墙钟/题目/verifier），并按超时**分组作业**（`-t<sec>`；5 题补跑集 = `t3600`/`t1800`/`t900`），`--no-wallclock` 留作对照；**偏离登记** = 由「每批一作业名」改为「按超时分组的同名族作业」。
 - [ ] **`GAP-MECH-IMMEDIATE-FEEDBACK`（新需求，设计定稿待放行实施）**：机械层对**每个**模型请求都要**即时且有信息量**地回报——① 探针 `probe_scope` 扩 `retrieval_family`（浏览器/搜索引擎/web 通道三类硬设施在位读数，run 起始一次入 journal）；② 检索/网络请求统一**截止时间默认 10 000 ms**（`ORZ_RETRIEVAL_DEADLINE_MS` 可配），到点**立刻**返结构化错误，不等引擎自身 120 s；③ 新增稳定码 `capability_unreachable`（确定性不可达）与 `network_no_response`（到点无响应），返回面与 journal 双写、单事件自描述；④ 写进框架契约并加回归钉子。验收：检索类 `wall_ms` p99 ≤ 10 s、`subagent_wallclock_timeout_mid_tool` = 0。风险：会砍检索长尾 ⇒ 保留放宽开关 + 「10 s vs 现状」A/B 记录。
 - [x] **两处提问核实（2026-09-13）**：① `torch-tensor-parallelism` 未记账**不是「没 submit」**，是**用满官方墙钟**（`submit` 0 次、`run_finished` 0 次），题目实际已解出（verifier 13/13、`reward.txt`=1），未记账的次因是 **verifier 阶段同样吃满 900 s**（R1 同题当时记了 `reward=1.0`）⇒ 新观察项：**agent 超时后 orz 未随之终止**；② 浏览器车道全败 = **`eval_browser` 注入开关未传**（浏览器由适配器按开关注入，默认关；本轮与 R1 都没传），`browser_control`/`browser_read` 因必须先启动浏览器而连带失败，`web_search`/`web_fetch` 走纯 HTTP 不受影响；**更正**：相对 R1 非回归，但相对 R3/R4/R4b 是能力回退。
+- [ ] **`C6` 撤回 / 本轮第 0 轮全部重跑（2026-09-13 用户裁决）**：时间预算语义审计 §4 C6 **撤回**——本轮**全部重新跑**（含已跑 6 个 run）；第 0 轮账面**只作摩擦证据**，不再修计数、不再局部补跑，也不作成绩/基线。故上面两行「中止与补跑 / 有效试次 = 补跑 5 + 本地保留 3」的记账**仅作过程史**，不构成本轮 89 题的有效试次口径；大改（E1–E8）完成后按新载体整轮重跑 89 题（E9/R10）。入口：[`时间预算语义审计 §4/§5`](docs/audits/FRAMEWORK_TIME_BUDGET_SEMANTICS_AUDIT_2026-09-13.md)。
+- [ ] **即时结果回报与流式检索设计 S1–S4（2026-09-13 落档，`current-design`；未实施）**：设计稿 [`IMMEDIATE_RESULT_DELIVERY_AND_STREAMING_RETRIEVAL_DESIGN_2026-09-13`](docs/IMMEDIATE_RESULT_DELIVERY_AND_STREAMING_RETRIEVAL_DESIGN_2026-09-13.md)（索引 `DESIGN-IMMEDIATE-RESULT-STREAMING-RETRIEVAL`）。**S1 探针（待用户放行；要发真实 API 调用）** = ①流式 `/responses` + `web_search` 记录 SSE 事件序列/时间戳，确认 10 s 内有无可用首事件；②分段续写探针（部分 assistant + reasoning + 注入事实，验证继续生成、无重复、无配对破损）——该实验决定走流式还是退分段。**S2** 机器合约先行（schema/verifier/fixtures：`retrieval_progress`/`retrieval_result`、`result_delivered`、`tool_completed` 失败载荷补 cause、探针扩检索族、五稳定码）。**S3** 实现（流式检索客户端 + 投递策略 I1–I3 + D7 机制 M1–M3 + 子代理提前收口 + semaphore acquire 截止 + 检索族探针 + cause 自描述，全部带开关 + A/B）。**S4** 小任务实机复验（不评正式分）通过后整轮重跑 89 题。
+- [ ] **时间预算语义审计修正批次 R1–R10 / E1–E9（仅登记，待放行）**：审计 [`FRAMEWORK_TIME_BUDGET_SEMANTICS_AUDIT_2026-09-13`](docs/audits/FRAMEWORK_TIME_BUDGET_SEMANTICS_AUDIT_2026-09-13.md)（索引 `AUDIT-TIME-BUDGET-SEMANTICS`，`reference`）逐部件判定 7 处等待化/延迟形态——**D1** 检索子代理墙钟 600 s 到期才回报（3 次 ≈1800 s）/ **D2** `web_search` 非流式整包（n=116、p50 29.9 s、96.6% ≥10 s）/ **D3** 信号量 acquire 无独立截止（被 900 s 外层包住）/ **D4** 浏览器能力级不可达无 run 级记忆 + 探针不含检索族 + 失败载荷不含 cause / **D5** agent 超时后 orz 孤儿 14.5 min / **D6** verifier 通道吃满 900 s / **D7** 后台完成按「下一次工具边界」带回（用户裁决改掉、新增机制）。修正口径 = **四本时限分账**（`first_result_deadline` ≤10 s / `operation_deadline` / `total_budget` / `run_wallclock`）+ 通用契约「及时且有信息量」。**FP-2 不改、不是例外**（见审计附录 C）。
+- [ ] **载体侧重建（`GAP-ORZ-HOST-RESOURCE-SNAPSHOT-DROP` 进载体，待放行）**：orz `ea777918` 修复已落码；进载体须**双平台重建**（Windows + Linux musl，约 40–60 min），重建后产生 0.5.x 新载体哈希 ⇒ 代际记录 / 适配器锁定值 / 冻结清单 `harness_artifacts` 同批更新；与 0ac 大改批次合并或单独排期，**待用户放行**。
 
 ### P0-0p 模型自信息面补强与 `.gsa` 两段门（2026-09-07 设计定稿同日排期；**T0/S1/S2/T2/S4/S5 全部闭合 2026-09-08**；BACKLOG 0p 转 `implemented`）
 
@@ -646,6 +651,21 @@ GLM F2 处置转排期（2026-09-06 用户裁决）：`orz-host/src/approval.rs`
 - [ ] S4 实机复验（判据 1–13）：真机长任务复跑（含重活路径）+ 满盘注入 + abort 注入 + 编码样本；**0v-C 已另行闭合（`ba934af8`），本轮不搭车**；载体 0.5.0；S2 复审登记残段（F-BE-4/EV-7 producer 读回、F-BE-7 残段、F-C-5/6/11）随取证核验。
 - [x] 裁决封闭（2026-09-12）：阈值（8 GiB / 25% / 16-8-**5**-2 GiB 阶梯）、硬上限（commit 80% 类 + CPU 80% + 并发=核数）、Job 限项（启用 commit/并发/CPU/KILL_ON_JOB_CLOSE；不启用每进程内存与 working set）、hard 档树杀（允许，四条限制）、孤儿扫除（三条件 + 三硬化）、soft 档柔性降级（默认关）、回收（轮数窗口 2 轮/上限 3、reclaim-direct 5 GiB、超预算拒绝不询问、**回收站取消**）、0z 与 0v-C 不合批。**设计无开放裁决项**；详见设计 §11 裁决记录 / §4.8。
 - [x] **S1.1 裁决修订（2026-09-12，用户授权工程裁决；设计 §4.7.1 + §11 裁决 11–14）**：**两级 Job 保留**（先根后子；修订 S1 的降级结论）、**`ACTIVE_PROCESS = 2 × 核数 + 8`（下限 16；修订原"核数"臂）**、**commit 上限 = `min(min(80%×limit, limit−4 GiB), 装配期余量 − 1 GiB)`（下限 2 GiB）**、`run_tests` 入门、目标卷按静态写入目标判定、新增 `unknown` 档、here-string/heredoc 剥体留头；**盘—内存轴间耦合登记**；**回收与在跑重活的次序**登记为 S2 承重项。
+
+### P0-0ac GAP-MECH-IMMEDIATE-FEEDBACK 机械层即时回报与流式检索（2026-09-13 用户裁决登记；设计定稿待放行实施）
+
+> 需求口径（用户 2026-09-13）：机械层对**每个**模型请求都要**即时且有信息量**地回报——确定性不可达必须立刻返回、检索/网络 10 s 拿不到首个结果就立刻明确回报网络问题、等待必须可见（日志 + 事件）、超时必须有稳定码与原因。**10 s = 请求发出后等首个结果的上限，不是检索任务总时限**（总预算另计）。入口：设计稿 [`IMMEDIATE_RESULT_DELIVERY_AND_STREAMING_RETRIEVAL_DESIGN_2026-09-13`](docs/IMMEDIATE_RESULT_DELIVERY_AND_STREAMING_RETRIEVAL_DESIGN_2026-09-13.md) / 审计 [`FRAMEWORK_TIME_BUDGET_SEMANTICS_AUDIT_2026-09-13`](docs/audits/FRAMEWORK_TIME_BUDGET_SEMANTICS_AUDIT_2026-09-13.md) / [`第 0 轮起跑记录 §6.13`](docs/audits/TB21_V41_ROUND0_MEMORY_HEAVY_START_2026-09-13.md) / BACKLOG 0ac / 索引 `GAP-MECH-IMMEDIATE-FEEDBACK`。计数：立项 **29 → 30**（2026-09-13）。
+
+- [ ] ① 探针 `probe_scope` 扩 `retrieval_family`（浏览器可执行 / 搜索引擎端点 / web 通道三类硬设施在位读数），run 起始一次并写 journal——每 run ≥1 条含检索族结论的 `tool_availability_check`。
+- [ ] ② 检索/网络请求统一**截止时间**（`ORZ_RETRIEVAL_DEADLINE_MS` 默认 10 000 ms），到点**立刻**返结构化错误，不等引擎自身 120 s。
+- [ ] ③ 稳定码 `capability_unreachable`（确定性不可达）/ `network_no_response`（到点无响应）——返回面与 journal 双写、单事件自描述（`tool_completed` 失败载荷补 cause，不再只给壳码）。
+- [ ] ④ 框架契约「机械层对任何模型请求都必须及时且有信息量」+ 回归钉子：任何等待型调用在截止后必须产出带稳定码的结果，无「到点前零事件」的等待路径。
+- [ ] ⑤ 投递策略 I1–I3 + D7 机制 M1–M3（后台完成 / 生成中结果即时回报；常规=最早安全边界、极端=思维链句号边界分段续写；不打断当前思维链）——设计 §2/§4。
+- [ ] ⑥ 检索子代理提前收口（确定不可达 / 连续确定失败 / 结果已形成 → close activation 并立即回传；墙钟只作最后兜底）。
+- [ ] ⑦ `web_search` 信号量 acquire 独立短截止 + 排队即时回报（不再被 900 s 外层包住）。
+- [ ] ⑧ S1 探针 → S2 机器合约 → S3 实现（带开关 + A/B）→ S4 实机复验 + 整轮重跑 89 题（与设计 S1–S4 同轨）。
+- 验收：检索类**首个结果** `wall_ms` p99 ≤ 10 s；`subagent_wallclock_timeout_mid_tool` = 0；等待路径零事件为 0。风险：10 s 截止会砍检索长尾 ⇒ 保留放宽开关 + 「10 s vs 现状」A/B 记录。
+- 边界：**不改 FP-2**（能力级不可达如实汇报 + 有结果即发回本在 FP-2 语义内）；**不新增容器内浏览器**；官方口径不变（流式化只改 agent 侧）。
 
 ### P0-B FUS-RETRIEVAL-MECH（`implemented`；批次 1-6 全部闭合 2026-08-14，保留供核对）
 

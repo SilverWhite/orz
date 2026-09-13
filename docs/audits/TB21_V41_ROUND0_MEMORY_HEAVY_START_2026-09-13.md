@@ -499,3 +499,11 @@ R1 试次的 `config.json` 同样只有 gsa 一个 mount ⇒ **不是新回归**
   本轮首要产出是 orz 自校验与摩擦项。
 - 容器内磁盘读数（`volume … free of …`）只反映盘内视角，**不作宿主余量证据**（审计 §2.3）。
 - `D:\AGI` 为不可触碰禁区；本轮产物、缓存与可达范围止于 `D:\CLI` 与 `D:\tb-eval`。
+
+## 9. 待办入账（2026-09-13 账本同步轮）
+
+本记录产生的开放项已一次入账（§6.1–§6.13 的逐项结论不变，仅补账本入口）：
+
+- BACKLOG [`0ac`](../BACKLOG_AND_PRIORITIES.md) `GAP-MECH-IMMEDIATE-FEEDBACK`（**29 → 30**，P0，设计定稿待放行实施）；0o 节补 `GAP-ORZ-HOST-RESOURCE-SNAPSHOT-DROP`（代码 `implemented`，**载体重建待放行**）、`GAP-ORZ-ADAPTER-FLAG-DRIFT`（`candidate`，仅记录）、C6 撤回与设计/审计入口。
+- TODO `P0-0ac` 段 + P0-0o 段新增四条：**C6 撤回 / 第 0 轮全部重跑**、**即时结果回报与流式检索设计 S1–S4（S1 探针待放行）**、**时间预算语义审计修正批次 R1–R10 / E1–E9**、**载体重建待放行**；开放项路由同步为 30 项。
+- 索引 v3.14：§6 增 `GAP-MECH-IMMEDIATE-FEEDBACK` 路由（§3.1 已有 `DESIGN-IMMEDIATE-RESULT-STREAMING-RETRIEVAL` 与 `AUDIT-TIME-BUDGET-SEMANTICS`）。

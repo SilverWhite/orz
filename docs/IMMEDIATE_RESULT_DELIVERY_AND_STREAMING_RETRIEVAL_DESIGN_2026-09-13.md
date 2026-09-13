@@ -4,7 +4,7 @@
 >
 > 用户裁决（2026-09-13）：① 10 s = **检索请求发出后等“首个结果”** 的上限，不是检索任务总时限；总预算是另一本账；② 检索路径**先选流式**，不做实现，先完成设计；③ **D7 改掉，新增机制，明确的缺口必须补**，唯一约束= 不打断当前思维链（可选更极端：监控思维链文字，结果到达后在第一个句号处即时回报）；④ **FP-2 不改**，能力级不可达的如实汇报不是例外；⑤ 第 0 轮**全部重新跑**，本轮账面只作摩擦证据。
 >
-> 输入：[`框架时间预算语义审计 v1.2`](audits/FRAMEWORK_TIME_BUDGET_SEMANTICS_AUDIT_2026-09-13.md)；第 0 轮起跑记录 §6.1–§6.13；`MODEL_RESIDUAL_PRESSURE_DISCUSSION_2026-08-31.md`；`THIN_HARNESS_REDESIGN_V2_DESIGN_2026-08-28.md` §9.7；`COMMAND_TIMEOUT_AND_WEB_SEARCH_TIMEOUT_RESEARCH_2026-08-29.md`；`RETRIEVAL_SUBAGENT_DUAL_LANE_DESIGN_2026-09-09.md`。
+> 输入：[`框架时间预算语义审计 v1.4`](audits/FRAMEWORK_TIME_BUDGET_SEMANTICS_AUDIT_2026-09-13.md)；第 0 轮起跑记录 §6.1–§6.13；`MODEL_RESIDUAL_PRESSURE_DISCUSSION_2026-08-31.md`；`THIN_HARNESS_REDESIGN_V2_DESIGN_2026-08-28.md` §9.7；`COMMAND_TIMEOUT_AND_WEB_SEARCH_TIMEOUT_RESEARCH_2026-08-29.md`；`RETRIEVAL_SUBAGENT_DUAL_LANE_DESIGN_2026-09-09.md`。
 
 ## 1. 问题与一手证据
 
@@ -174,3 +174,5 @@
 
 - 不实施任何代码；不改预算值；不改 FP-2；不移除车道；不新增容器内浏览器；不重建；不重跑；不触碰 `D:\AGI`。
 - 设计完成的门 = S1 探针记录 + S2 机器合约 + 本稿的验收判据全部可机械核对。
+
+> 账本入口（2026-09-13 待办入账轮同步）：BACKLOG **0ac** `GAP-MECH-IMMEDIATE-FEEDBACK`（**29 → 30**）/ TODO `P0-0ac` / 索引 `GAP-MECH-IMMEDIATE-FEEDBACK`（§6 路由）+ `DESIGN-IMMEDIATE-RESULT-STREAMING-RETRIEVAL`（§3.1 路由）。S1 探针为第一门，**待用户放行**（要发一次真实 API 调用）。

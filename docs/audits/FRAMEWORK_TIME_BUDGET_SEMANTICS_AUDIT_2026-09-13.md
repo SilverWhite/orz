@@ -6,11 +6,13 @@
 >
 > 修订 v1.3（2026-09-13，用户裁决）：检索路径**选定流式优先**（分段为后备，通道判活+操作预算只作补充护栏）；**D7 改掉、新增机制**；**FP-2 不改、不是例外**；先完成设计、不动实现。设计稿：[`即时结果回报与流式检索设计`](../IMMEDIATE_RESULT_DELIVERY_AND_STREAMING_RETRIEVAL_DESIGN_2026-09-13.md)。
 >
+> 修订 v1.4（2026-09-13，账本同步）：本审计关联的 `GAP-MECH-IMMEDIATE-FEEDBACK` 登记位置由误引 `docs/BACKLOG_AND_PRIORITIES.md:448` 更正为 **BACKLOG `0ac` 节**（`:448` 实为 `TODO.md` 行号；BACKLOG 原无该条，已随本轮待办入账补入）；同时补入索引 v3.14 路由与 TODO `P0-0ac` 段。
+>
 > 触发（用户 2026-09-13 口径）：预算是**运行预算**，不是**等待预算**；结果一旦出现就是新的结果动作，机械层应立刻回报；不只是检索部分，其他部件也一样；查全框架各部分的预算，强制等待化的部分要全改掉；**先调查并写入文档，不直接行动**。
 >
 > 方法：`CLI_PROJECT_INDEX` 路由 → ADR/设计/实施审计回查 → 源码逐一核对 → 用 TB 2.1 第 0 轮 6 个 run 的 `.gsa` journal 实测校准。
 >
-> 关联：`GAP-MECH-IMMEDIATE-FEEDBACK`（`docs/BACKLOG_AND_PRIORITIES.md:448`，设计定稿待放行）。本审计是它的证据基座，同时**修正其两条验收判据与两条已入档计数口径**（见 §4 C5/C6、§6.5）。
+> 关联：`GAP-MECH-IMMEDIATE-FEEDBACK`（BACKLOG **0ac**，2026-09-13 裁决登记，设计定稿待放行实施）。本审计是它的证据基座，同时**修正其两条验收判据与两条已入档计数口径**（见 §4 C5/C6、§6.5）。〔v1.4 更正：原引 `docs/BACKLOG_AND_PRIORITIES.md:448` 系误记，该行实为 `TODO.md:448`；BACKLOG 登记已于 2026-09-13 补入 0ac 节。〕
 
 ## 0. 直接回答
 
@@ -441,7 +443,7 @@
 | agent 超时后 orz 不停（孤儿）+ verifier 900 s 代价 | 同 §6.10 |
 | 浏览器车道工具反馈（原因文案/重复尝试/探针面/失败载荷） | 同 §6.11 |
 | 墙钟预算按既有修复口径落进执行器 | 同 §6.12；`scripts/run_r0_heavy_official.py` |
-| 新需求「机械层即时回报」（设计定稿） | 同 §6.13；`docs/BACKLOG_AND_PRIORITIES.md:448` `GAP-MECH-IMMEDIATE-FEEDBACK` |
+| 新需求「机械层即时回报」（设计定稿） | 同 §6.13；`docs/BACKLOG_AND_PRIORITIES.md` **0ac** `GAP-MECH-IMMEDIATE-FEEDBACK`（原引 `:448` 误，实为 `TODO.md:448`，2026-09-13 更正） |
 | P2-15 语料冻结 + 阈值校准 | `docs/audits/P2-15_CORPUS_FREEZE_AND_THRESHOLD_CALIBRATION_2026-09-13.md`；`evaluation/corpus-freeze/*` |
 | GAP-EVAL-RESULT-SCHEMA-DRIFT 立案与修复 | `docs/audits/GAP_EVAL_RESULT_SCHEMA_DRIFT_FIX_2026-09-13.md` |
 | R1 摩擦基线 / 轮次门回测 | `evaluation/round-v41-k1/friction-scan-r1-baseline-2026-09-13.json`；`evaluation/round-v41-k1/round-gate-r1-backtest-2026-09-13.json` |
