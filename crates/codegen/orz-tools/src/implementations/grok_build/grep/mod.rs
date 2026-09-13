@@ -3215,8 +3215,12 @@ mod tests {
         )
         .await
         .unwrap();
-        assert_eq!(out2.exit_code, 0, "second read must execute, not re-notify");
         let stdout = String::from_utf8_lossy(&out2.stdout);
+        let stderr = String::from_utf8_lossy(&out2.stderr);
+        assert_eq!(
+            out2.exit_code, 0,
+            "second read must execute, not re-notify\nstdout: {stdout}\nstderr: {stderr}"
+        );
         assert!(stdout.contains("pip install"), "hit expected: {stdout}");
     }
 

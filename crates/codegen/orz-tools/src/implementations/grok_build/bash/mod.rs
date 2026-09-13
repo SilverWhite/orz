@@ -3369,6 +3369,10 @@ mod tests {
         // POSIX shell semantics (bash tool executes through the detected
         // Windows shell) — skip under a PowerShell backend where `printf`
         // would not run as bash (d48b724 platform-awareness precedent).
+        // On unix the shell is native bash, so the guard does not apply (and the
+        // Windows-only detection API is absent, which previously broke the
+        // unix test target).
+        #[cfg(not(unix))]
         if !matches!(
             orz_config::shell::detect_windows_shell(),
             orz_config::shell::WindowsShell::GitBash(_)

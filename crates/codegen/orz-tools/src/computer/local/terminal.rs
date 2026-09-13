@@ -3711,14 +3711,25 @@ mod tests {
     /// PowerShell error output — skip explicitly instead of failing
     /// (d48b724 platform-awareness precedent).
     fn require_git_bash_backend() -> bool {
-        let detected = orz_config::shell::detect_windows_shell();
-        if matches!(detected, orz_config::shell::WindowsShell::GitBash(_)) {
+        // POSIX shell semantics are native on unix; the Git Bash precondition
+        // only exists because Windows picks a shell through the detection
+        // cascade (d48b724 platform-awareness precedent).  The Windows-only
+        // API is gated so the unix test target still compiles.
+        #[cfg(unix)]
+        {
             true
-        } else {
-            eprintln!(
-                "skipped: POSIX shell semantics require the Git Bash backend (detected {detected:?})"
-            );
-            false
+        }
+        #[cfg(not(unix))]
+        {
+            let detected = orz_config::shell::detect_windows_shell();
+            if matches!(detected, orz_config::shell::WindowsShell::GitBash(_)) {
+                true
+            } else {
+                eprintln!(
+                    "skipped: POSIX shell semantics require the Git Bash backend (detected {detected:?})"
+                );
+                false
+            }
         }
     }
 
