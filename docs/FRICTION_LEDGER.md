@@ -28,8 +28,29 @@
 ### F-006 | 2026-09-13 | 传话流程 | 装置侧（流程）| fixed
 **摩擦自报模板未随任务下发**：首轮传话按用户指示"仅告知"任务原话，run 末自报未发生，摩擦只能由主会话从 journal 反向提取。处置：本文件写入协议第 1 条已立；**下轮起传话模板固定附带自报指令**（见协议）。
 
+### F-007 | 2026-09-13 | RUN-CLI-6aa6b63d | 设计内门（判据与既有契约互斥）| open
+**0ac S3-a 法官规则按设计字面执法会误判既有合法语料**：按设计 §10.3 ③「`retrieval_family` 探针 run 起始一次（不多不少）」与 ④「`cause` 与 `failure_target` 的失败形状一致性」的字面落地，首版规则在既有合法形状上产出三类误判——① "缺探针=违规"会把既有 17 份 fixture journal **全部**判违规（生产者尚未落地）；② "`cause` 必须带 `failure_target`"与 S2 合法 fixture `runtime/fixtures/run-event-v0.2/payloads/tool-completed.cause.valid.json`（`exit_code=1` + `cause=channel_deadline_exceeded`，无 target）冲突；③ "`failure_target` 必须带 `cause`"与既有合法语料 `runtime/fixtures/run-event-v0.2/journals/local-browser-capability.jsonl` 第 14 行（`status=error` + `failure_target` + 无 cause）冲突。证据：三份 fixture 原文（本轮实读）。**代价**：发现经 3 次核对轮；因未注册进 `ALL_FAMILIES`，未污染任何门禁。处置：改为「探针 present ⇒ 校验（不多于一次/位置/读数完整），absent 不判」并挂开关 `REQUIRE_RETRIEVAL_FAMILY_PROBE=false`；新增语料回归测试把三类合法形状钉死（`s2_contract_fixtures_are_judged_as_the_contract_says`）。
+
+### F-008 | 2026-09-13 | RUN-CLI-6aa6b63d | 装置侧（工具/工作区）| open
+**`grep` 工具在本工作区返回空结果**：对 `D:\CLI\CLI_PROJECT_INDEX.md`（绝对路径）与 `docs`（相对路径）检索 `0ac` / `S3` / `FRICTION_LEDGER`，均返回 `no output (exit_code=0)`，尽管同文件同处存在大量匹配（同参数 `rg.exe` 与 PowerShell `Select-String` 立即命中）。证据：两次空返调用记录 + `Select-String` 命中行（前轮实做）；本轮再复现 1 次——对 `D:\CLI\orz\crates\orz-assurance\src\journal` 检索 `REQUIRE_RETRIEVAL_FAMILY_PROBE|pub mod immediate_feedback|verify_all_immediate_feedback` 同样空返，改 `rg.exe` 后 6 行全中（本轮实做），合计 3 次。**代价**：2 轮工具调用；`findstr` 输出为 GBK 乱码，另需 `[Console]::OutputEncoding=UTF8` 校正。处置：本轮改用 `B:\Zcode\resources\tools\ripgrep\rg.exe` + `Select-String`，事实留痕。
+
+### F-009 | 2026-09-13 | RUN-CLI-6aa6b63d | 模型习惯（自报）| fixed
+**S3-a 首版未过机械门就交付**：新建 `crates/orz-assurance/src/journal/immediate_feedback.rs` 首版带 1 个 dead-code 警告（`payload_int` 未被使用）与 2 处 rustfmt diff（`cargo fmt --check` 非 0 退出）。证据：`warning: function payload_int is never used --> ...immediate_feedback.rs:73`；`Diff in ...immediate_feedback.rs:134` / `:176`。**代价**：1 轮清理。处置：删除未用函数 + `cargo fmt -p orz-assurance`（`--check` 退出 0、全库 226 测全绿）——已修。
+
+### F-010 | 2026-09-13 | RUN-CLI-6aa6b63d | 设计内门（S3 范围只落一块）| open
+**S3 三块中本轮只闭合第 ② 块的 S3-a 切片**：设计 §10.3 = ① 生产者（本地分段检索前端/投递策略/M1–M3/探针扩面 + 开关 + A/B）、② 法官规则（五条）、③ 回归钉子。本轮落 ② 的五族 Rust 实现（`immediate_feedback`：`retrieval_dedupe` / `result_delivered_accounting` / `retrieval_family_probe` / `failure_cause_shape` / `first_result_deadline`）+ 7 项单测（含 fixture 与全语料扫查）；**未注册进 `ALL_FAMILIES`**（与现有 41 族 parity 交叉核对无交集），Python 法官镜像与两族清单同步未做；① 整块未动。证据：`git status --porcelain` 仅新增该文件；模块文档头显式标注未注册原因。处置：事实留痕；注册 + Python 镜像 + 生产者三件待放行。
+
+> **本轮机械核证留痕（RUN-CLI-6aa6b63d，输出摘录）**
+> - `cargo test -p orz-assurance --lib immediate_feedback` → `test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 219 filtered out; finished in 0.01s`（首次 6 项，补 fixture 测试后 7 项）。
+> - `cargo test -p orz-assurance --lib` → `test result: ok. 226 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.08s`。
+> - `cargo fmt -p orz-assurance -- --check` → `FMT_CHECK_EXIT=0`（清理前为 2 处 diff）。
+> - 语料对照（`Select-String`）：`run-event-v0.2\journals\local-browser-capability.jsonl` 命中 2 行（第 13 行 `browser_launch_result` cause / 第 14 行 `tool_completed` status=error + failure_target + 无 cause）；全 17 份 journal 中 `failure_target` 仅出现 1 处。
+> - `git -C orz status --porcelain` → `?? crates/orz-assurance/src/journal/immediate_feedback.rs` + `M crates/orz-assurance/src/journal/mod.rs`；`git diff --stat` → `1 file changed, 4 insertions(+)`（mod.rs 仅加文档条目与 `pub mod immediate_feedback;`）。
+> - `rg.exe -n "REQUIRE_RETRIEVAL_FAMILY_PROBE|pub mod immediate_feedback|verify_all_immediate_feedback"`（journal/ 目录）→ 6 行命中：`immediate_feedback.rs:54: pub const REQUIRE_RETRIEVAL_FAMILY_PROBE: bool = false;`、`immediate_feedback.rs:183: if REQUIRE_RETRIEVAL_FAMILY_PROBE {`、`immediate_feedback.rs:398: pub fn verify_all_immediate_feedback(...)`、`immediate_feedback.rs:530: assert!(!REQUIRE_RETRIEVAL_FAMILY_PROBE);`、`mod.rs:38: pub mod immediate_feedback;` 等。
+
 ## 统计
 
 | 日期 | run | 摩擦条目 | 立案候选 | 已修 | 观察 |
 |---|---|---|---|---|---|
 | 2026-09-13 | RUN-CLI-6aa6a868 / 6aa6ac42 | F-001…F-006 | F-001②/F-002②（待立案） | F-001①/F-002①/F-006 | F-003（并入 0ac）/F-004/F-005 |
+| 2026-09-13 | RUN-CLI-6aa6b63d（0ac S3-a 落码） | F-007…F-010 | F-007（判据口径待裁决）/F-008 | F-009 | F-007/F-008/F-010 |
