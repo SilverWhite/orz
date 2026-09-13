@@ -1495,6 +1495,15 @@ mod tests {
             .iter()
             .find(|m| m.tool_call_id.as_deref() == Some("call-se1"))
             .expect("session tool result message");
+        // F-012（2026-09-14）：宿主环境可常驻 ORZ_MAX_WALLCLOCK（本机实测
+        // 3600）——会话面的限额字段随环境取值；本测试钉「会话面渲染口径」，
+        // 不承担「环境无预算」的断言义务（并行测试下改进程 env 不可靠）。
+        // 期望值走与渲染同一解析入口，环境事实不再误报成产品回归。
+        let expected_wallclock_limit = match crate::controller::main_wallclock_limit_secs_override()
+        {
+            Some(secs) => format!("WALLCLOCK_LIMIT: {secs}s"),
+            None => "WALLCLOCK_LIMIT: none".to_string(),
+        };
         assert!(
             reply.content.contains("TOOL_ROUNDS_USED: 0")
                 && reply.content.contains("TOOL_ROUNDS_REMAINING: 120")
@@ -1502,7 +1511,7 @@ mod tests {
                     .content
                     .contains("TOOL_ROUND_BUDGET: 120 tool rounds per turn")
                 && reply.content.contains("WALLCLOCK_ELAPSED:")
-                && reply.content.contains("WALLCLOCK_LIMIT: none")
+                && reply.content.contains(&expected_wallclock_limit)
                 && reply.content.contains("[任务状态 v0.1]"),
             "session reply: {:?}",
             round.messages

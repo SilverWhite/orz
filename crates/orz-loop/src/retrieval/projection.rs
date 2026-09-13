@@ -125,9 +125,7 @@ impl AgentLoopController {
                 "reason": "retrieval family disabled for this run (retrieval_enabled=false)",
             })
         };
-        let missing = |reason: &str| {
-            serde_json::json!({ "present": false, "reason": reason })
-        };
+        let missing = |reason: &str| serde_json::json!({ "present": false, "reason": reason });
 
         let browser = if !retrieval_enabled {
             disabled()
@@ -1202,7 +1200,10 @@ mod tests {
                 "retrieval_family.{member} must always be present: {family}"
             );
             assert!(
-                family[member].get("present").and_then(|p| p.as_bool()).is_some(),
+                family[member]
+                    .get("present")
+                    .and_then(|p| p.as_bool())
+                    .is_some(),
                 "retrieval_family.{member}.present must be a boolean"
             );
         }
@@ -1211,7 +1212,11 @@ mod tests {
         assert_eq!(family["search_engine"]["present"], true);
         assert_eq!(family["web_channel"]["present"], true);
         assert_eq!(family["browser"]["present"], false);
-        assert!(family["browser"]["reason"].as_str().is_some_and(|r| !r.is_empty()));
+        assert!(
+            family["browser"]["reason"]
+                .as_str()
+                .is_some_and(|r| !r.is_empty())
+        );
 
         let disabled = AgentLoopController::retrieval_family_payload(&base, false);
         for member in ["browser", "search_engine", "web_channel"] {

@@ -625,10 +625,7 @@ mod tests {
     /// 事件面现在承载**两个探针**——工作面 `main_agent_work_tools` 与检索族
     /// `retrieval_family`（各自成事件）。本模块的工作面钉子只数工作面事件。
     fn is_work_tool_probe(e: &RunEvent) -> bool {
-        e.payload
-            .get("probe_scope")
-            .and_then(|s| s.as_str())
-            != Some("retrieval_family")
+        e.payload.get("probe_scope").and_then(|s| s.as_str()) != Some("retrieval_family")
     }
 
     #[test]
@@ -1419,7 +1416,9 @@ mod tests {
         let flip_idx = all
             .iter()
             .enumerate()
-            .filter(|(_, e)| e.event_type == EventType::ToolAvailabilityCheck && is_work_tool_probe(e))
+            .filter(|(_, e)| {
+                e.event_type == EventType::ToolAvailabilityCheck && is_work_tool_probe(e)
+            })
             .map(|(i, _)| i)
             .nth(1)
             .expect("second availability event");

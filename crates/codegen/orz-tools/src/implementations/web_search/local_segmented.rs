@@ -57,11 +57,11 @@ pub const CAUSE_NO_PROGRESS: &str = "no_progress";
 /// `ORZ_RETRIEVAL_ENGINES`（代理形态）下进入引擎链（§9.4 第 4 条/§9.6）。
 pub const ENGINE_REGISTRY: &[(&str, &str)] = &[
     ("bing_cn", "https://cn.bing.com/search?q={query}&count=10"),
-    ("bing_global", "https://www.bing.com/search?q={query}&count=10"),
     (
-        "duckduckgo",
-        "https://html.duckduckgo.com/html/?q={query}",
+        "bing_global",
+        "https://www.bing.com/search?q={query}&count=10",
     ),
+    ("duckduckgo", "https://html.duckduckgo.com/html/?q={query}"),
     ("google", "https://www.google.com/search?q={query}"),
 ];
 
@@ -107,13 +107,18 @@ impl LocalSegmentedConfig {
     /// Environment-independent seam (tests never mutate the process env —
     /// the crate's test binary runs in parallel).
     pub fn from_env_with(get: impl Fn(&str) -> Option<String>) -> Self {
-        let mut config = Self::default();
-        config.enabled = get(ENV_SWITCH)
-            .map(|v| {
-                let v = v.trim().to_ascii_lowercase();
-                matches!(v.as_str(), "1" | "true" | "on" | "yes")
-            })
-            .unwrap_or(false);
+        // F-014③（0ac S3 审记 2026-09-14）：clippy 的
+        // `field_reassign_with_default` 警告——enabled 并入初值，
+        // 其余旋钮保持就地覆盖。
+        let mut config = Self {
+            enabled: get(ENV_SWITCH)
+                .map(|v| {
+                    let v = v.trim().to_ascii_lowercase();
+                    matches!(v.as_str(), "1" | "true" | "on" | "yes")
+                })
+                .unwrap_or(false),
+            ..Self::default()
+        };
         if let Some(ms) = get(ENV_PER_ENGINE_DEADLINE_MS)
             .and_then(|v| v.trim().parse::<u64>().ok())
             .filter(|ms| *ms > 0)
@@ -134,13 +139,12 @@ impl LocalSegmentedConfig {
                 .split(',')
                 .filter_map(|id| {
                     let id = id.trim().to_ascii_lowercase();
-                    ENGINE_REGISTRY
-                        .iter()
-                        .find(|(known, _)| *known == id)
-                        .map(|(known, template)| EngineSpec {
+                    ENGINE_REGISTRY.iter().find(|(known, _)| *known == id).map(
+                        |(known, template)| EngineSpec {
                             id: (*known).to_string(),
                             search_url: (*template).to_string(),
-                        })
+                        },
+                    )
                 })
                 .collect();
             if !engines.is_empty() {
@@ -261,8 +265,7 @@ static BLOCK_RE: LazyLock<Regex> = LazyLock::new(|| {
 });
 static TITLE_RE: LazyLock<Regex> = LazyLock::new(|| {
     // 属性序不再固定（S1′ 教训）：h2 → 第一个带 href 的 a，属性任意序。
-    Regex::new(r#"(?is)<h2[^>]*>\s*<a\b([^>]*)>(.*?)</a>"#)
-        .expect("valid SERP title regex")
+    Regex::new(r#"(?is)<h2[^>]*>\s*<a\b([^>]*)>(.*?)</a>"#).expect("valid SERP title regex")
 });
 static HREF_RE: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r#"(?i)href="([^"]*)""#).expect("valid href regex"));
@@ -280,9 +283,8 @@ static TAG_RE: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r#"(?is)<[^>]+>"#).expect("valid tag regex"));
 static WS_RE: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"\s+").expect("valid whitespace regex"));
-static BING_REDIRECT_RE: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r#"(?i)[?&]u=a1([A-Za-z0-9_\-]+)"#).expect("valid redirect regex")
-});
+static BING_REDIRECT_RE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r#"(?i)[?&]u=a1([A-Za-z0-9_\-]+)"#).expect("valid redirect regex"));
 
 /// Parse the organic results out of a Bing SERP HTML page (the 0v selector
 /// semantics `#b_results > li.b_algo`, on raw HTML instead of the DOM).
@@ -336,7 +338,10 @@ pub fn decode_html_entities(value: &str) -> String {
     while let Some(index) = rest.find('&') {
         out.push_str(&rest[..index]);
         rest = &rest[index..];
-        let Some(semi) = rest[..rest.len().min(12)].find(';') else {
+        // G1（0ac S3 实现审记 2026-09-14）：原实现按字节切 12 字节窗口，
+        // 末端落进多字节字符（CJK 标题/摘要极常见）即 char boundary
+        // panic。`;` 是 ASCII：整体查找 + 窗口谓词收窄，语义等价。
+        let Some(semi) = rest.find(';').filter(|index| *index < rest.len().min(12)) else {
             out.push('&');
             rest = &rest[1..];
             continue;
@@ -349,6 +354,14 @@ pub fn decode_html_entities(value: &str) -> String {
             "quot" => Some("\"".to_string()),
             "apos" | "#39" | "#x27" | "#X27" => Some("'".to_string()),
             "nbsp" => Some(" ".to_string()),
+            // SERP 正文常见命名实体（fixture 钉住 mdash/hellip）。
+            "mdash" => Some("—".to_string()),
+            "ndash" => Some("–".to_string()),
+            "hellip" => Some("…".to_string()),
+            "lsquo" => Some("‘".to_string()),
+            "rsquo" => Some("’".to_string()),
+            "ldquo" => Some("“".to_string()),
+            "rdquo" => Some("”".to_string()),
             other if other.starts_with('#') => other[1..]
                 .trim_start_matches(['x', 'X'])
                 .parse::<u32>()
@@ -382,11 +395,7 @@ pub fn normalize_hit_url(url: &str) -> String {
         return url.to_string();
     };
     let encoded = caps.get(1).map(|m| m.as_str()).unwrap_or_default();
-    let padded = format!(
-        "{}{}",
-        encoded,
-        "=".repeat((4 - encoded.len() % 4) % 4)
-    );
+    let padded = format!("{}{}", encoded, "=".repeat((4 - encoded.len() % 4) % 4));
     for engine in [
         base64::engine::general_purpose::URL_SAFE,
         base64::engine::general_purpose::URL_SAFE_NO_PAD,
@@ -606,7 +615,9 @@ async fn fetch_engine(
     // 逐页抓取 → 逐段抽取。页级失败不致命（SERP 命中仍交付）；
     // 每页截止 = per-engine 预算，且不越过整体兜底。
     for hit in hits.iter_mut().take(config.segment_pages) {
-        let remaining = config.overall_deadline.saturating_sub(overall_started.elapsed());
+        let remaining = config
+            .overall_deadline
+            .saturating_sub(overall_started.elapsed());
         if remaining.is_zero() {
             break;
         }
@@ -701,9 +712,25 @@ mod tests {
     #[test]
     fn entity_and_redirect_helpers() {
         assert_eq!(decode_html_entities("a&amp;b&#39;s"), "a&b's");
-        assert_eq!(decode_html_entities("keep &unknown; text"), "keep &unknown; text");
-        assert_eq!(normalize_hit_url("https://example.com/x"), "https://example.com/x");
+        assert_eq!(
+            decode_html_entities("keep &unknown; text"),
+            "keep &unknown; text"
+        );
+        assert_eq!(
+            normalize_hit_url("https://example.com/x"),
+            "https://example.com/x"
+        );
         assert_eq!(urlencode_query("a b&c"), "a+b%26c");
+    }
+
+    #[test]
+    fn decode_html_entities_keeps_multibyte_window_boundary_intact() {
+        // G1 钉子（0ac S3 实现审记 2026-09-14）：`&` 后 12 字节窗口跨到
+        // 多字节字符边界时不得 panic（原先按字节切片，dev/release 下
+        // `panic = "abort"` 直接进程中止）。
+        assert_eq!(decode_html_entities("A &mdash; 官方站点"), "A — 官方站点");
+        assert_eq!(decode_html_entities("B &hellip; 中文"), "B … 中文");
+        assert_eq!(decode_html_entities("未闭合 &amp"), "未闭合 &amp");
     }
 
     #[test]
@@ -722,7 +749,10 @@ mod tests {
     #[test]
     fn config_defaults_and_env_seam() {
         let default = LocalSegmentedConfig::from_env_with(|_| None);
-        assert!(!default.is_enabled(), "switch defaults to off (design §10.3)");
+        assert!(
+            !default.is_enabled(),
+            "switch defaults to off (design §10.3)"
+        );
         assert_eq!(default.per_engine_deadline.as_millis(), 10_000);
         assert_eq!(default.overall_deadline.as_millis(), 30_000);
         assert_eq!(default.engines.len(), 1);
@@ -798,7 +828,9 @@ mod tests {
             id: "second".to_string(),
             search_url: good.uri(),
         });
-        let outcome = search(&http, &config, "rust").await.expect("second engine wins");
+        let outcome = search(&http, &config, "rust")
+            .await
+            .expect("second engine wins");
         assert_eq!(outcome.engine, "second");
         assert_eq!(outcome.attempts.len(), 2);
         assert_eq!(outcome.attempts[0].outcome, CAUSE_EMPTY_RESULT);

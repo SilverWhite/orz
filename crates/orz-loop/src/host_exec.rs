@@ -399,12 +399,12 @@ impl AgentLoopController {
         payload: &serde_json::Value,
         outcome: &ToolFailureOutcome<'_>,
     ) -> Option<String> {
-        let failure_shaped =
-            payload.get("status").and_then(serde_json::Value::as_str) == Some("error")
-                || payload
-                    .get("exit_code")
-                    .and_then(serde_json::Value::as_i64)
-                    .is_some_and(|code| code != 0);
+        let failure_shaped = payload.get("status").and_then(serde_json::Value::as_str)
+            == Some("error")
+            || payload
+                .get("exit_code")
+                .and_then(serde_json::Value::as_i64)
+                .is_some_and(|code| code != 0);
         if !failure_shaped {
             return None;
         }
@@ -430,7 +430,9 @@ impl AgentLoopController {
                 other => other,
             },
             ToolFailureOutcome::Refused(code) => code,
-            ToolFailureOutcome::CommandExit(Some(code)) => return Some(format!("command_exit_{code}")),
+            ToolFailureOutcome::CommandExit(Some(code)) => {
+                return Some(format!("command_exit_{code}"));
+            }
             ToolFailureOutcome::CommandExit(None) => return None,
             ToolFailureOutcome::SyntheticTimeout => CODE_TOOL_TIMEOUT,
         };
