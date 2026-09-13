@@ -606,10 +606,10 @@ GLM F2 处置转排期（2026-09-06 用户裁决）：`orz-host/src/approval.rs`
 > 设计权威：[`NP1_ORZ_BODY_INTEGRATION_DESIGN_2026-09-11`](docs/NP1_ORZ_BODY_INTEGRATION_DESIGN_2026-09-11.md)（§9.3 全模块化承载确认 + 附录 D 登记前实机复核）；BACKLOG 0y；索引 `AUTH-NP1-BODY-INTEGRATION`。orz 之外扩展面：不修改 ADR-0010 与模型工具面。
 
 - [ ] M0 定版（无依赖；本支线唯一分区写入批，前置全量分区备份）：升级官方最终版 `V3.2-260618-1045` → 全量备份 → 重新 root（Magisk）→ 重建去预装（`nothing_debloat` 模块）→ **Magisk 安全模式演练**（收尾验收，设计 §9.3）。**首次执行尝试已中止（2026-09-12，用户接管）**：全量备份（86 分区双侧哈希吻合）与 260618 官方镜像/预打补丁 boot 等产物已就位并保留；装置零改动回退；关键结论（unlock_critical 策略拒绝 / update_engine_client headers 失效 / sideload 瞬败待查）与复用路线见 [M0 中止记录](docs/audits/0Y_M0_ABORTED_FIRST_ATTEMPT_2026-09-12.md)。
-- [ ] aarch64 载体重建（M1 前置）：orz 0.4.2 aarch64 musl 三件套（现机三件为早期源状态产物，设计附录 A-01；版本冻结 + 哈希入 manifest，与 x86_64 S3 同纪律）。
+- [x] **aarch64 载体重建（M1 前置）完成（2026-09-13，按 0.5.0 同源重建）**：源冻结 orz `1f13e5ec`（与 x86_64 S3 同源）→ x86 容器 + zig cc + rust-lld 交叉编译（12m11s，`BUILD_EXIT=0`）→ `orz` 73,007,720 B / `orz-signer` 1,757,984 B / `orz-acaf-provision` 1,595,128 B（AArch64 静态 ET_EXEC + `PT_INTERP=0`）；bookworm/alpine 双向加载冒烟绿 + 0z 七族符号全命中；旧 0.2.0 三件就地备份（`*-0.2.0.bak`）。复现入口 `scripts/build_orz_aarch64_musl_cross.sh`（LIFECYCLE `active`）。入口：[记录](docs/audits/0Y_AARCH64_REBUILD_2026-09-13.md)。
 - [ ] M1 前置：接口定义（事件 schema / 动作契约 / 策略注册表形态）与 orz 机械层共同确定（设计 §14.1）。
 - [x] §14.2 验证载体决策（**2026-09-12 用户裁决**）：引入模拟器为常设验证载体——载体集 = 模拟器（新增、常设）+ NP2（既有，流程纪律）+ NP1（端到端终验）；模拟器承担自有代码验证 + M5 补丁流程纪律干跑（坏补丁代价 = 删快照）；不验证厂商框架与 NP1 专属内核面（设计 §12 裁决段）。
-- [ ] S1 验证载体搭建（待放行）：无头 x86_64 安卓镜像选型与搭建（候选 ATD 类自动化镜像）；orz 0.4.2 x86_64 musl 三件套直接上机冒烟（静态 ELF 在安卓内核执行，与 BODY-PRE-01 同理，无需新构建）；Magisk-in-AVD 模块打包/安装/禁用/恢复实机化演练；M5 补丁流程纪律干跑首轮。
+- [ ] S1 验证载体搭建（待放行）：无头 x86_64 安卓镜像选型与搭建（候选 ATD 类自动化镜像）；orz x86_64 musl 三件套直接上机冒烟（静态 ELF 在安卓内核执行，与 BODY-PRE-01 同理，无需新构建）；Magisk-in-AVD 模块打包/安装/禁用/恢复实机化演练；M5 补丁流程纪律干跑首轮。**2026-09-13 盘面注记**：`D:\tb-eval\s1_emulator\` 已有 baseline AVD、Magisk 模块、M5 补丁流水线，并完成「好补丁→进系统→坏补丁（service 失败）→自愈→回滚」干跑（回滚后 `services.jar` 与 SELinux 策略哈希回到注入前）——S1 定案与入账待补，账本状态同步见 BACKLOG 0y。
 
 
 ### P0-0z 真机资源安全边界与崩溃收尾（2026-09-12 用户裁决立项；**设计完成、S1（A + D + F）与 S1.1 复核收口均已落码**；不换盘不换卷）
