@@ -33,12 +33,14 @@
 
 ### F-008 | 2026-09-13 | RUN-CLI-6aa6b63d | 装置侧（工具/工作区）| open
 **`grep` 工具在本工作区返回空结果**：对 `D:\CLI\CLI_PROJECT_INDEX.md`（绝对路径）与 `docs`（相对路径）检索 `0ac` / `S3` / `FRICTION_LEDGER`，均返回 `no output (exit_code=0)`，尽管同文件同处存在大量匹配（同参数 `rg.exe` 与 PowerShell `Select-String` 立即命中）。证据：两次空返调用记录 + `Select-String` 命中行（前轮实做）；本轮再复现 1 次——对 `D:\CLI\orz\crates\orz-assurance\src\journal` 检索 `REQUIRE_RETRIEVAL_FAMILY_PROBE|pub mod immediate_feedback|verify_all_immediate_feedback` 同样空返，改 `rg.exe` 后 6 行全中（本轮实做），合计 3 次。**代价**：2 轮工具调用；`findstr` 输出为 GBK 乱码，另需 `[Console]::OutputEncoding=UTF8` 校正。处置：本轮改用 `B:\Zcode\resources\tools\ripgrep\rg.exe` + `Select-String`，事实留痕。
+> **补注（2026-09-14，RUN-CLI-6aa6d379）**：根因候选已定——PATH 上 `rg` 首解曾是**悬空** WinGet 垫片（见 F-016）；修复后本轮 harness `grep` 工具 3 次调用全部正常命中（15/12/59 行）。F-008 三次复现与 F-013/F-015 的空返同属该窗，登记为**根因候选**（未做工具侧参数复刻，故不作终局定论）。
 
 ### F-009 | 2026-09-13 | RUN-CLI-6aa6b63d | 模型习惯（自报）| fixed
 **S3-a 首版未过机械门就交付**：新建 `crates/orz-assurance/src/journal/immediate_feedback.rs` 首版带 1 个 dead-code 警告（`payload_int` 未被使用）与 2 处 rustfmt diff（`cargo fmt --check` 非 0 退出）。证据：`warning: function payload_int is never used --> ...immediate_feedback.rs:73`；`Diff in ...immediate_feedback.rs:134` / `:176`。**代价**：1 轮清理。处置：删除未用函数 + `cargo fmt -p orz-assurance`（`--check` 退出 0、全库 226 测全绿）——已修。
 
 ### F-010 | 2026-09-13 | RUN-CLI-6aa6b63d | 设计内门（S3 范围只落一块）| open
 **S3 三块中本轮只闭合第 ② 块的 S3-a 切片**：设计 §10.3 = ① 生产者（本地分段检索前端/投递策略/M1–M3/探针扩面 + 开关 + A/B）、② 法官规则（五条）、③ 回归钉子。本轮落 ② 的五族 Rust 实现（`immediate_feedback`：`retrieval_dedupe` / `result_delivered_accounting` / `retrieval_family_probe` / `failure_cause_shape` / `first_result_deadline`）+ 7 项单测（含 fixture 与全语料扫查）；**未注册进 `ALL_FAMILIES`**（与现有 41 族 parity 交叉核对无交集），Python 法官镜像与两族清单同步未做；① 整块未动。证据：`git status --porcelain` 仅新增该文件；模块文档头显式标注未注册原因。处置：事实留痕；注册 + Python 镜像 + 生产者三件待放行。
+> **补注（2026-09-14，RUN-CLI-6aa6d379）**：② 法官面五族已注册且本轮自测复绿（`orz-assurance --lib` 226/0）；③ 回归钉子的 3 例红随 G1 修复闭合；**① 生产者面**中「本地分段检索前端 + `cause` 自描述」已落（`ORZ_WEB_SEARCH_LOCAL` 默认关），**投递侧仍零写点** ⇒ 转 F-017 立案候选。
 
 > **本轮机械核证留痕（RUN-CLI-6aa6b63d，输出摘录）**
 > - `cargo test -p orz-assurance --lib immediate_feedback` → `test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 219 filtered out; finished in 0.01s`（首次 6 项，补 fixture 测试后 7 项）。
@@ -53,9 +55,11 @@
 
 ### F-012 | 2026-09-13 | RUN-CLI-6aa6bd3f | 装置侧（宿主环境继承）| 观察
 **宿主任 shell 常驻 `ORZ_MAX_WALLCLOCK=3600` 使测试红**：在 `ORZ_ACAF_FAIL_CLOSED=0` 已设的前提下，`cargo test -p orz-loop --lib` → `test result: FAILED. 770 passed; 1 failed; 3 ignored`（失败用例 `blackboard::tests::blackboard_read_serves_session_section`）；两次运行唯一环境差为清空 `ORZ_MAX_WALLCLOCK`，清空后同一命令 → `test result: ok. 771 passed; 0 failed`，其间未改任何代码。证据：`Get-ChildItem Env:` 原样输出（另有 `ORZ_ACAF_BINARY`/`ORZ_ACAF_KEYSTORE`/`ORZ_ACAF_MANIFEST`/`ORZ_ALLOW_*`/`ORZ_REAL`/`ORZ_DEEPSEEK_API_KEY` 常驻）+ 两份测试摘要；未读该用例的断言差文本。**代价**：1 轮重跑。
+> **补注（2026-09-14，RUN-CLI-6aa6d379）**：**已修**——会话面用例的期望墙钟改为与产品**同源解析**（`controller::main_wallclock_limit_secs_override()`），不再依赖「宿主未设该变量」的隐式前提。核证：常驻 `ORZ_MAX_WALLCLOCK=3600` 下单例 `ok`（`1 passed; 0 failed`）、全量 `orz-loop --lib` `771 passed; 0 failed; 3 ignored`；清空变量后单例同样 `ok`（等价对照）。落码 orz `96d2b263`。
 
 ### F-013 | 2026-09-13 | RUN-CLI-6aa6bd3f | 装置侧（工具：`grep` 空返，F-008 第 4 次复现）| open（根因未定）
 **`grep` 工具在本工作区再次空返，本轮未修**：对 `D:\CLI\docs`（其中 `FRICTION_LEDGER.md` 确有 3 处 `F-007`）以 `pattern=F-007` 调用 → `tool 'grep' completed with no output (exit_code=Some(0))`；紧邻的 `B:\Zcode\resources\tools\ripgrep\rg.exe -n --no-heading 'F-007' docs` 同工作区立即命中。定位进展（本轮事实）：① 工具描述串「Search file contents with regular expressions (ripgrep).」全仓唯一命中 `crates/codegen/orz-tools/src/implementations/grok_build/grep/mod.rs:269`；② rg 调用点 `mod.rs:1049` `rg_path()` → `:1051` `Command::new(rg_exec)`，参数形状 `--heading --with-filename --line-number --color=never --max-columns 1000 --max-columns-preview [-l|-c] -e <pattern> <workdir> --max-filesize 5M`（`:1052`–`:1125`），stdout/stderr 皆 pipe（`:1126`）+ `crate::util::detach_command`（`:1128`）+ `stdin(Stdio::null())`（`:1129`）；③ `rg_path()` 解析在 `grep/ripgrep.rs`（`bundle_rg` 分支落 `~/.grok/vendor/`，非 bundle 分支先读 `RG_BIN_PATH`，否则视为 PATH 上的 `rg`）。未复刻同一参数形状以区分「rg 真无命中」与「wrapper 丢输出」——根因未定，按「如定位简单才一并修」的限定条件本轮未改代码、未留钉子。**代价**：本轮 5 次工具调用（1 复现 + 4 定位）后让位于收尾（账本 + 提交）。
+> **补注（2026-09-14，RUN-CLI-6aa6d379）**：根因候选 = PATH 上 `rg` 首解为悬空 WinGet 垫片（F-016，已修）；修后 harness `grep` 工具 3/3 正常命中。**修复是绕行**（PATH 前置真 rg），垫片本体仍悬空 ⇒ 残留见 F-019。
 
 > **本轮机械核证留痕（RUN-CLI-6aa6bd3f，收尾段实做输出摘录）**
 > - `cargo test -p orz-loop --lib`（`ORZ_ACAF_FAIL_CLOSED=0` 且清空 `ORZ_MAX_WALLCLOCK`）→ `test result: ok. 771 passed; 0 failed; 3 ignored; 0 measured; 0 filtered out; finished in 9.96s`。
@@ -68,9 +72,11 @@
 
 ### F-014 | 2026-09-14 | RUN-CLI-6aa6c9b3 | 模型习惯（落码交付门；F-009 同族第 2 次）| open（缺口 G1/G2，修复批次待裁决）
 **0ac S3①② 落码批（orz `4c892951`，当前 HEAD）带 3 例自测红与格式门未过**：① 新文件 `crates/codegen/orz-tools/src/implementations/web_search/local_segmented.rs:339:30` 按字节切片解码 HTML 实体造成字符边界 panic——`cargo test -p orz-tools --lib local_segmented` 实测 `6 passed; 3 failed`（红：`parse_bing_serp_reads_current_structure_and_skips_ads` / `search_returns_hits_with_stable_shape` / `empty_serp_is_empty_result_and_chain_falls_through`），panic 原文 `end byte index 12 is not a char boundary; it is inside '方' (bytes 11..14 of string)`；② `cargo fmt --all -- --check` 退出 1、16 处 diff（4 个本批文件：`local_segmented.rs`×9 / `host_exec.rs`×2 / `retrieval/projection.rs`×3 / `tool_probe.rs`×2）；③ `cargo clippy -p orz-tools --lib` 本批新文件 2 处风格警告（`:110/:111`）。**代价**：开关 `ORZ_WEB_SEARCH_LOCAL` 默认关是唯一护栏——打开前本地检索路径不可实机复验（dev/release 均 `panic="abort"`，同输入在生产形态为进程中止）；审记轮取证 1 段测试跑批。**处置**：按用户 2026-09-14 边界只登记不动手——缺口 G1（P0）/G2（P1）见审计文档 §3.1/§3.2 与 §6；修复批次划分待裁决。
+> **补注（2026-09-14，RUN-CLI-6aa6d379）**：**G1/G2 已修并核证**（orz `96d2b263`）：G1 = `decode_html_entities` 去字节切片（整体 `find(';')` + 窗口谓词）＋ 命名实体 ＋ 钉子 `decode_html_entities_keeps_multibyte_window_boundary_intact`（`local_segmented` 6/3 → 10/0）；G2 = `fmt --check` 16 处 → 0、新文件 clippy 2 处 → 0（`orz-tools --lib` 2819/49 → 2869/0）。**G3 维持 open** ⇒ 转 F-017。报告：[`0AC_S3_FIX_REPORT_2026-09-14`](audits/0AC_S3_FIX_REPORT_2026-09-14.md)。
 
 ### F-015 | 2026-09-14 | RUN-CLI-6aa6c9b3 | 装置侧（工具：`grep` 空返，F-008 第 5 次复现）| open（根因未定）
 **`grep` 工具继续空返**：本会话审记段复现 3 次（审计文档 §5 已注），收尾段再复现 3 次（本轮实做，原文）：`pattern=RUN-CLI-`（`D:\CLI\docs\FRICTION_LEDGER.md`）、`pattern=F-01[0-9]|run|Run|RUN`（同文件）、`pattern=0ac|GAP-MECH-IMMEDIATE-FEEDBACK|IMMEDIATE_RESULT`（`D:\CLI\CLI_PROJECT_INDEX.md`）三次均返回 `tool 'grep' completed with no output (exit_code=Some(0))`；三份目标该时刻确有大量命中（同刻 `Select-String` 命中 5 行、`rg.exe` 命中即返回）。**代价**：审记全段检索改道 `rg.exe`（`B:\Zcode\resources\tools\ripgrep\rg.exe`）+ `Select-String`，每轮额外 1–2 次工具调用。**处置**：事实留痕；根因线索见 F-013（未复刻参数形状以区分 wrapper 丢输出）。
+> **补注（2026-09-14，RUN-CLI-6aa6d379）**：**本轮 0 复现**——修复 PATH `rg` 解析（F-016）后 harness `grep` 工具 3 次调用全部正常命中（`D:\CLI\.gsa\ledger\current.md` 12/59 行、`D:\CLI\docs\FRICTION_LEDGER.md` 15 行）。与 F-008/F-013 合并看，F-008 族（共 5 次空返）的**根因候选 = PATH 上 `rg` 首解为悬空 WinGet 垫片**；因未做工具侧参数复刻，保留「候选」口径。
 
 > **本轮机械核证留痕（RUN-CLI-6aa6c9b3，输出摘录）**
 > - `cargo test -p orz-tools --lib` → `test result: FAILED. 2819 passed; 49 failed; 6 ignored; 0 measured; 0 filtered out; finished in 32.57s`；`cargo test -p orz-tools --lib local_segmented` → `test result: FAILED. 6 passed; 3 failed; 0 ignored; 2865 filtered out; finished in 0.10s`，panic 原文 `panicked at crates\codegen\orz-tools\src\implementations\web_search\local_segmented.rs:339:30: end byte index 12 is not a char boundary; it is inside '方' (bytes 11..14 of string)`。
@@ -82,6 +88,35 @@
 > - `grep`（工具）空返原文见 F-015；对照：`Select-String -Path CLI_PROJECT_INDEX.md -Pattern "0ac"` → 5 行命中（L3/L5/L8/L59/L331，L331 = `GAP-MECH-IMMEDIATE-FEEDBACK` 路由行）、`rg.exe -n "RUN-CLI" D:\CLI\.gsa\ledger\current.md` → 命中 8 行（L35/L108/L110/L116–L120/L147）。
 > - `git -C orz log --oneline -3` → `4c892951`（S3①/②）/ `ac5d6375`（S3-a）/ `ea777918`；`git -C orz status --porcelain` → 空（工作区干净）；父仓 `git status --short` → 仅 `?? docs/audits/0AC_S3_IMPLEMENTATION_AUDIT_2026-09-14.md`。
 
+### F-016 | 2026-09-14 | RUN-CLI-6aa6d379 | 装置侧（工具/工作区：PATH 上 `rg` 解析）| fixed（绕行）
+**PATH 上 `rg` 首解曾是悬空 WinGet 垫片**：`where rg` 三个候选中 `C:\Users\1\AppData\Local\Microsoft\WinGet\Links\rg.exe` 为**符号链接**（`Length=0`，写于 2026-08-04），Target = `…\WinGet\Packages\BurntSushi.ripgrep.MSVC_…\ripgrep-15.2.0-x86_64-pc-windows-msvc\rg.exe`，而该**包目录缺失**（`PKG_DIR_MISSING`）；对该路径 spawn 报 `程序"rg.exe"无法运行: No application is associated with the specified file for this operation`。**代价**：修前 `cargo test -p orz-tools --lib` = `2819 passed; 49 failed`（其中 3 例 = 审记 G1，余 **46 例 = spawn 面**：审记 §3.4 点名 `grok_build::grep` 20 / `opencode::glob` 13 / `opencode::grep` 13）；同窗 harness `grep` 工具 5 次空返（F-008/F-013/F-015）。**复现实验（本轮实做，不改任何代码，仅把坏垫片目录前置到 PATH）**：全量 `FAILED. 2822 passed; 47 failed`（对照正常 PATH `2869 passed; 0 failed`）；`grok_build::grep::tests` `FAILED. 29 passed; 20 failed`（对照 `49 passed; 0 failed`）。**修复（绕行，01:00）**：在 PATH 更早位置补入真 ripgrep `C:\Users\1\.local\bin\rg.exe`（14.1.1，5,400,984 B）⇒ `where rg` 首解改为该项；`orz-tools --lib` 同批 **0 failed**（其间代码改动仅 G1/fmt/F-012，均不触及 spawn 面）。**残留**：垫片本体未修 ⇒ F-019。
+
+### F-017 | 2026-09-14 | RUN-CLI-6aa6d379 | 设计内门（S3 范围）| open（立案候选）
+**S3① 投递侧未落 = 审记 G3 维持 open**：本轮复核 `retrieval_progress|retrieval_result_segment|result_delivered` 全 crates **29 命中全部在 `orz-assurance`**（`journal/families.rs` / `immediate_feedback.rs` / `mod.rs`），`ResultDelivered|RetrievalProgress|RetrievalResultSegment` **0 命中**（`EventType` 无变体）⇒ 三事件**无产品码写点**；I1–I3 / M1–M3 / 子代理提前收口 / semaphore 截止（TODO ⑤⑥⑦）本批无落码。**代价**：设计 §10.3 的「①生产者②法官③钉子」与「S3 已落」并列时易被读成已闭合（审记 §3.3 即为此而立）。处置：不动手（结构性）⇒ 立案候选，待裁决是否拆 `S3①-a 检索侧（已落）/ S3①-b 投递侧（未落）`。入口：审记 §3.3/§6-G3/§8、设计稿 §10.5-3。
+
+### F-018 | 2026-09-14 | RUN-CLI-6aa6d379 | 装置侧（文档与实现漂移）| fixed
+**审记把开关当前态记为 `false`，实为已移除**：审记 §1/§2.3/§6-③ 按 `ac5d6375` 时刻写「`REQUIRE_RETRIEVAL_FAMILY_PROBE=false` 开关（F-007 裁决(a)）」，但 `4c892951` 已随宽口径落地**删除该开关与执法分支**；本轮实查全 crates 仅剩 **2 处文档注释**提到该名（`crates\orz-assurance\src\journal\immediate_feedback.rs:41` / `:50`）。**代价**：审记 §6 裁决点③「是否翻转（当前 false）」提给用户时**失去对象**（1 轮复核，0 次实际决策成本）。处置：本轮闭合——审记新增 §8 勘误（连带 §2.3 口径注记 A 的「文档口径滞后，P3」）＋ 设计稿新增 §10.5 回写；本条留痕。
+
+### F-019 | 2026-09-14 | RUN-CLI-6aa6d379 | 装置侧（观察）| open
+**WinGet `rg` 垫片本体仍悬空**：F-016 的修复是**绕行**（PATH 前置真 rg），`C:\Users\1\AppData\Local\Microsoft\WinGet\Links\rg.exe` 仍是指向缺失包目录的符号链接（`Length=0`，Target 不存在）。**风险形态（事实）**：任何不继承该 PATH 顺序、或 PATH 被重排/改写的进程仍会解析到坏垫片，spawn 面红与 `grep` 空返同形复发。处置：观察（修需重装 `BurntSushi.ripgrep.MSVC` 包，属用户环境面，本轮未动）。
+
+### F-020 | 2026-09-14 | RUN-CLI-6aa6d379 | 装置侧（文档回写）| fixed
+**修复报告的部分回写条目先于动作写成「已办」，收尾核证发现未落地**：`0AC_S3_FIX_REPORT_2026-09-14` §6 把索引三项回写（`GAP-MECH-IMMEDIATE-FEEDBACK` 路由行 / 本报告路由 / 摩擦台账路由行）与 §0「父仓提交见 §6」记作已办；收尾核证时 `git -C D:\CLI diff --stat` 显示 `CLI_PROJECT_INDEX.md` 实改仅 **1 行**（版本头，`0AC_S3_FIX_REPORT` 索引内命中 1 处），路由行与台账行未动、§6 无父仓提交行。**代价**：收尾核证 1 轮（diff / Select-String 对照即发现）。**处置**：收尾补齐索引 L331 路由行（G1/G2 已修 + G3 维持 open + 修复报告入口）、L128 台账行注记、§6 父仓提交行（哈希回写）；本条留痕。
+
+> **本轮机械核证留痕（RUN-CLI-6aa6d379，修复轮收尾段实做输出摘录）**
+> - `cargo fmt --all -- --check` → `FMT_CHECK_EXIT=0`（修前 `FMT_EXIT=1`，16 处 diff）。
+> - `cargo clippy -p orz-tools --lib --message-format short` → 过滤 `local_segmented` **0 行**（修前 `:110:9` / `:111:9`）；全量 `orz-tools (lib) generated 3 warnings`（既有文件）＋ `xai-tty-utils (lib) generated 2 warnings`（依赖 crate）。
+> - `cargo test -p orz-tools --lib` → `test result: ok. 2869 passed; 0 failed; 6 ignored; 0 measured; 0 filtered out; finished in 44.98s`（修前 `FAILED. 2819 passed; 49 failed; 6 ignored`）。
+> - `cargo test -p orz-tools --lib local_segmented` → `ok. 10 passed; 0 failed`（修前 `6 passed; 3 failed`）；新钉子 `decode_html_entities_keeps_multibyte_window_boundary_intact ... ok`。
+> - `$env:ORZ_MAX_WALLCLOCK="3600"; $env:ORZ_ACAF_FAIL_CLOSED="0"; cargo test -p orz-loop --lib blackboard::tests::blackboard_read_serves_session_section -- --exact` → `ok. 1 passed; 0 failed; 773 filtered out`（修前同场景 `FAILED. 770 passed; 1 failed; 3 ignored`）；全量 `cargo test -p orz-loop --lib` → `ok. 771 passed; 0 failed; 3 ignored; finished in 10.15s`。
+> - `cargo test -p orz-assurance --lib` → `ok. 226 passed; 0 failed`.
+> - F-016 复现实验（PATH 前置 `C:\Users\1\AppData\Local\Microsoft\WinGet\Links`）→ 全量 `FAILED. 2822 passed; 47 failed; finished in 45.18s`；`grok_build::grep::tests` → `FAILED. 29 passed; 20 failed`；正常 PATH 同模块对照 → `ok. 49 passed; 0 failed`。
+> - `where rg` → `C:\Users\1\.local\bin\rg.exe` | `…\WinGet\Links\rg.exe` | `B:\Zcode\resources\tools\ripgrep\rg.exe`；`rg --version` → `ripgrep 14.1.1 (rev 4649aa9700)`；坏垫片直跑 → `程序"rg.exe"无法运行: No application is associated with the specified file for this operation`；`dir` 显示垫片 `Length=0`、Target 指向缺失包目录（`PKG_DIR_MISSING`）。
+> - 检索面复核（G3）：`rg -n "retrieval_progress|retrieval_result_segment|result_delivered" crates --glob "*.rs"` → **29 命中**（三文件全在 `orz-assurance`）；`rg -n "ResultDelivered|RetrievalProgress|RetrievalResultSegment"` → **0 命中**；`rg -n "REQUIRE_RETRIEVAL_FAMILY_PROBE"` → **2 命中**（`immediate_feedback.rs:41/:50`，均为文档注释）。
+> - harness `grep` 工具（本轮 3 次）→ 正常命中（`D:\CLI\.gsa\ledger\current.md` 12 行 / 59 行、`D:\CLI\docs\FRICTION_LEDGER.md` 15 行）；对照 F-008/F-013/F-015 共 5 次空返。
+> - `python scripts/generate_orz_source_manifest.py` → `wrote 1448 entries`，差异面 5 行（本批 5 文件）；`python scripts/check_repository.py` → `"error_count": 0` / `"valid": true`（EXIT=0）。
+> - `git -C orz log --oneline -1` → `96d2b263 fix(0ac S3): 审记 G1/G2 修复…`；`git -C orz status --porcelain` → 空；`git -C orz show --stat HEAD` → `5 files changed, 96 insertions(+), 49 deletions(-)`。
+
 ## 统计
 
 | 日期 | run | 摩擦条目 | 立案候选 | 已修 | 观察 |
@@ -90,3 +125,4 @@
 | 2026-09-13 | RUN-CLI-6aa6b63d（0ac S3-a 落码） | F-007…F-010 | F-007（判据口径待裁决）/F-008 | F-009 | F-007/F-008/F-010 |
 | 2026-09-13 | RUN-CLI-6aa6bd3f（0ac S3② 裁决(a) 落地 / S3① 生产者面） | F-011…F-013 | F-013（根因待定，待立案） | F-011/F-012 | F-007 已按裁决(a) 翻宽口径落地；F-008 第 4 次复现未修 |
 | 2026-09-14 | RUN-CLI-6aa6c9b3（0ac S3 实现审记） | F-014…F-015 | F-014（G1–G3 修复批次划分待裁决）/F-015（F-008 同族，根因待定） | — | F-008 第 5 次复现；G1–G3 详见 [0ac S3 审记](audits/0AC_S3_IMPLEMENTATION_AUDIT_2026-09-14.md) |
+| 2026-09-14 | RUN-CLI-6aa6d379（0ac S3 修复批） | F-016…F-020 | F-017（S3① 投递侧未落；拆子阶段待裁决） | F-016（绕行）/F-018/F-020（收尾补齐）；F-012、F-014 的 G1/G2 同批翻 fixed（见其补注） | F-019（WinGet 垫片本体仍悬空）；F-008/013/015 根因候选；G3 与核证详见 [修复报告](audits/0AC_S3_FIX_REPORT_2026-09-14.md) |

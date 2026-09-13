@@ -224,3 +224,13 @@
 
 索引 0ac 判据 ①（检索类首个结果 `wall_ms` p99 ≤ 10 s，本地路径按 §9.4 引擎单独计时 + 30 s 兜底）与 ②（`subagent_wallclock_timeout_mid_tool` = 0）**均为 S3/S4 实测判据**，S2 不作数值结论；S2 的完成门 = 上文 10.1/10.2 全部可机械核对。
 
+### 10.5 回写：S3 落地后的口径终态（2026-09-14 追加；**不改契约**）
+
+> 来源：0ac S3 实现审记 §2.3「口径注记 A（文档口径滞后，P3）」——本节是它的回写面。回写只钉**口径与状态**，不改 10.1/10.2 的契约产物。
+
+1. **法官规则③（上文 10.3-2③）的终态 = 宽口径**：字面「`retrieval_family` 探针 run 起始一次（**不多不少**）」按 F-007 裁决(a) 落地为「**present ⇒ 校验（不多于一次/位置/读数完整）；absent 不判**」（历史 17 份语料不误判）。S3-a 首版以开关 `REQUIRE_RETRIEVAL_FAMILY_PROBE=false` 兜住；`4c892951` 已**移除该开关及其执法分支**（实现面无开关，全 crates 仅存 2 处文档注释 `…/journal/immediate_feedback.rs:41/:50`）⇒ **本节口径以「存在即校验」为终态**，等待生产者落地后新 run 均带探针，实际执法面即等于该口径。
+2. **口径注记 B 回写（上文 10.3-1 的例外）**：生产者面的**探针事件本身无开关**——run 起始无条件 +1 条 `tool_availability_check`（`probe_scope=retrieval_family`，`gate_decision` 恒 `pass`，读数事件无阻断语义）；「全部带开关」适用于其余生产者件（本地分段检索前端 / 投递侧）。
+3. **生产者面状态（截至 2026-09-14）**：三事件写点（`retrieval_progress` / `retrieval_result_segment` / `result_delivered`）与 I1–I3 / M1–M3 **仍无产品码写点**（全 crates 扫描仅 `orz-assurance` 法官读取面命中）⇒ §10.3-1 未闭合（台账 F-017）；本地分段检索前端与 `cause` 自描述已落（`ORZ_WEB_SEARCH_LOCAL` 默认关）。
+4. **回归钉子状态**：法官五族已注册、Python 镜像在位；本轮修复后 `orz-tools --lib` 2869/0/6、`orz-loop --lib` 771/0/3、`orz-assurance --lib` 226/0/0（修复详情：[`0AC_S3_FIX_REPORT_2026-09-14`](audits/0AC_S3_FIX_REPORT_2026-09-14.md)）。
+5. **0ac 状态**：**仍 open**（G3 未闭）；S3 不得按「已闭合」读（与审记 §6/§8 同口径）。
+

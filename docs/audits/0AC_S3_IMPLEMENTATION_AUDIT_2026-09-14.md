@@ -1,6 +1,7 @@
 # 0ac S3 实现审记（0AC_S3_IMPLEMENTATION_AUDIT_2026-09-14）
 
 > 状态：`current`；范围＝**只审与登记**（用户 2026-09-14 指令边界：不改实现代码；发现问题按项目状态语义登记为**缺口/待裁决**，不擅自动手修）。
+> **2026-09-14 追记（run `RUN-CLI-6aa6d379`）**：G1/G2 与 F-012/F-016 已修复并机械核证（orz `96d2b263`，5 文件 +96/−49）；§2.3 与 §6-③ 的开关口径**勘误**（「当前 false」实为**已移除**）；**G3 维持 open**。§1–§7 保持审记时刻原样，状态以新增 **§8** 为准；修复全文见 [`0AC_S3_FIX_REPORT_2026-09-14`](0AC_S3_FIX_REPORT_2026-09-14.md)。
 > 被审对象：orz `ac5d6375`（S3-a 法官面）+ orz `4c892951`（S3①②：检索族探针扩面 / 本地分段检索前端 / `cause` 自描述 / 法官镜像同步），父仓 `d7642d26`（manifest 重算）与 `859a5480`/`e719de5b`（S3-a 入账）。
 > 设计基线：[`IMMEDIATE_RESULT_DELIVERY_AND_STREAMING_RETRIEVAL_DESIGN_2026-09-13`](../IMMEDIATE_RESULT_DELIVERY_AND_STREAMING_RETRIEVAL_DESIGN_2026-09-13.md) §9/§10.3；账本：TODO `P0-0ac` ①–⑧ / BACKLOG `0ac`。
 > **结论一行**：设计面 0 问题级缺陷（2 条口径注记）；实现面 **1×P0**（本地路径核心解析器 panic，3 自测红；dev/release 均 `panic="abort"`）+ **1×P1**（`cargo fmt --check` 非 0，16 处）+ **1×P1 符合性缺口**（S3① 投递侧未落：三事件写点 / M1–M3 / A/B 记录）。
@@ -126,3 +127,15 @@ $ rg -n "ResultDelivered|RetrievalProgress|RetrievalResultSegment" D:\CLI\orz\cr
 - **已跑（收尾段追加）**：`cargo clippy -p orz-tools -p orz-loop --lib`——本批新文件 2 处风格警告（§3.2/§5），无 error；**未跑**：Linux/musl 构建（本轮无跨平台改动面无需求）；S4 实机复验（待放行）；载体重建、推送（用户边界明示）。
 - **既有红边界**：46 例 grep/glob 族红为环境性既有事实（§3.4），本轮只登记不归因、不修复。
 - 核证时点：2026-09-14 00:20–00:40（CST），工作区 `orz` HEAD=`4c892951` 干净、父仓 `main` 干净（审计前）。
+
+## 8. 修复回写与勘误（2026-09-14 追记，run `RUN-CLI-6aa6d379`）
+
+> §1–§7 是审记时刻的快照，本节是**当前态**。修复提交 orz `96d2b263`（父 `4c892951`；5 文件 +96/−49）；报告全文 [`0AC_S3_FIX_REPORT_2026-09-14`](0AC_S3_FIX_REPORT_2026-09-14.md)；摩擦面台账 F-016…F-020。
+
+- **G1（§3.1，P0）已修**：`decode_html_entities` 去掉 12 字节**字节切片**，改「整体 `find(';')` + 窗口谓词收窄」（`;` 是 ASCII，语义等价、无切片）；顺带补 `mdash/ndash/hellip/lsquo/rsquo/ldquo/rdquo` 命名实体；新增钉子 `decode_html_entities_keeps_multibyte_window_boundary_intact`。核证：`local_segmented` **6 passed / 3 failed → 10 passed / 0 failed**。
+- **G2（§3.2，P1）已修**：`cargo fmt` 应用后 `cargo fmt --all -- --check` **退出 0**（16 处 → 0）；`local_segmented.rs` 的 clippy 命中 **2 → 0**（其余 3 条为既有文件、另有依赖 crate 2 条，均非本批）。
+- **F-012 同批修**（原 §5 记录为「须清 `ORZ_MAX_WALLCLOCK`」）：`blackboard` 会话面用例的期望墙钟改为**与产品同源解析**；核证 = 常驻 `ORZ_MAX_WALLCLOCK=3600` 下单例 `ok`、全量 `771 passed / 0 failed / 3 ignored`（修前同场景 770/1/3）。
+- **F-016（本轮新登记，已修）**：§3.4 的「46 例既有环境红」获直接成因——PATH 上 `rg` 首解曾是**悬空** WinGet 符号链接（`…\BurntSushi.ripgrep.MSVC_…\ripgrep-15.2.0-…\rg.exe`，包目录缺失，`Length=0`）。**复现实验**（不改代码、仅前置坏垫片目录）：全量 `2822 passed / 47 failed`、`grok_build::grep::tests` `29 passed / 20 failed`（对照 2869/0 与 49/0）。修法 = 在 PATH 更早位置补入真 ripgrep 14.1.1 ⇒ `orz-tools --lib` **0 failed**（其间代码改动仅 G1/fmt/F-012，均不触及 spawn 面）。**§3.4 的「不作根因定论」在本节更新为：成因复现（坏 `rg` 解析），垫片本体仍未修（观察，F-019）。**
+- **G3（§3.3，P1 符合性）维持 open**：本轮复核 `retrieval_progress|retrieval_result_segment|result_delivered` 全 crates 29 命中**全部在 `orz-assurance`**、`ResultDelivered|RetrievalProgress|RetrievalResultSegment` **0 命中** ⇒ 三事件仍无产品码写点；TODO ⑤⑥⑦ 未落。转台账 **F-017**（立案候选，待裁决是否拆 `S3①-a / S3①-b`）。
+- **勘误（§2.3 口径注记 A 与 §6 裁决点③）**：`REQUIRE_RETRIEVAL_FAMILY_PROBE` 的**当前态不是 `false`，而是已被移除**——开关与执法分支在 `4c892951` 随 F-007 裁决(a) 的宽口径落地一并删除，全 crates 仅剩 2 处**文档注释**提到该名（`immediate_feedback.rs:41/:50`）。因此 §6 裁决点③「是否翻转（当前 false）」**失去对象**；§2.3 的「文档口径滞后」在本轮闭合（设计稿新增 §10.5 回写）。台账新登记 **F-018**。
+- **核证摘要（本轮实做原文见修复报告 §3）**：`orz-tools --lib` 2869/0/6；`orz-loop --lib` 771/0/3；`orz-assurance --lib` 226/0/0；`fmt --check` 0；父仓门禁 `error_count: 0 / valid: true`（EXIT=0）；`orz` 工作区干净（`96d2b263`）。**未做**：推送、载体重建、S4 实机复验（用户边界）。
