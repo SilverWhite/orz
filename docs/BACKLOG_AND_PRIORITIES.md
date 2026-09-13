@@ -1196,21 +1196,21 @@ GLM F2 处置转排期（2026-09-06 用户裁决）：`orz-host/src/approval.rs`
   冲突——裁决=对齐 Task C，旧测试改写为拒读安全回归测试
   `read_file_rejects_gsa_symlink_resolving_outside_git_root_even_when_gitignored`
   （orz `a29f7377`）；连带观察：orz-host `permission.rs` `.gsa` terminal-log
-  白名单在 Task C 工具级沙箱后对 read_file 不可达，会话卷形态豁免待用户
-  裁决（见 00a）。**2026-09-13 场数据补强**（R1 k=1 批 97 试次全扫，见索引
-  `OBS-GSA-READ-LANE-ASYMMETRY`）：`.gsa` 内部面读取在**两条车道上判定不一致**——
-  ① 专用读工具读 `.gsa/ledger/current.md`、`.gsa/session/web_fetch/*`、`ls .gsa`
-  共 **12 次被权限门 deny**（grep 6 / read_file 5 / list_dir 1，分布于 6 试次，
-  **无 tool_started**，即执行前拦下）；② 同一批内部面走 `run_terminal_cmd`
-  共 **13 次 allow_once 且 exit 0 真读到**（含 `grep/sed ledger/current.md`、
-  `ls -la /app/.gsa/`、`cat .gsa/resources_state.json`）；③ 专用工具能读到的
-  `.gsa` 只有两种白名单形态（`run_tests_output.txt` 精确文件名 4 次、
-  `session/terminal/*.log` 2 次）。即「运行时自己的 `.gsa` 证据面不可见」这条
-  硬边界目前只在工具车道成立，shell 车道是通径；摩擦面 = 模型对同一缓存反复
-  试错（fix-ocaml-gc 同文件 4 次、reshard-c4-data 同 ledger 3 次，6 试次中 5 个
-  仍通过，代价是浪费轮次）。待裁决方向：**对齐两车道**（放宽工具车道会话卷豁免
-  vs 收紧 shell 车道）、或在 deny 信封里加可操作原因（如"该证据面不可读，改用
-  web_fetch 重新取"）。入口：
+  白名单在 Task C 工具级沙箱后对 read_file 不可达——**2026-09-13 回查收口：
+  该"不可达"已被 ADR-0010 §14.61（2026-09-07 用户裁决）修订并落码**：`.gsa`
+  内部区（ledger / journal runs / conversations 侧车）改**两段式有界开放**——
+  首读返通知信封（`code=session_volume_notice`）、**二读放行**记
+  `open_after_notice`、通知状态会话卷级持久化；terminal-log / run_tests /
+  resources_state 三窗口维持直读；§14.61 第 5 条另已裁定 **shell 直读内部区
+  = "跳过教育的旁路"，标注不对称但**不作为缺陷追打**。**实测核证**：容器 Linux
+  跑 `cargo test -p orz-tools --lib two_stage` → **7/7 通过**（read_file 4 +
+  list_dir 1 + grep 1 + 窗口豁免 1）；0.5.0 双载体均含 `session_volume_notice`
+  / `open_after_notice` / `session_volume_opened` 符号。**因此 R1（2026-08-25，
+  orz 0.1.x）账面上那 12 次 `.gsa` 内部面 deny 属 §14.56 时代的旧行为，不是
+  当前缺口**；同日实测另发现并修复一个**真缺陷**（见下条
+  `GAP-ORZ-TEST-TARGET-UNIX-BUILD`）。历史场数据（12 次 deny / 13 次 shell
+  直读放行）保留在 `evaluation/round-v41-k1/` 供代际对照，口径按索引
+  `OBS-GSA-READ-LANE-ASYMMETRY` 复述。入口：
   [处置审计 §5](audits/P0_GOV_GLM_DISPOSITION_AND_TASK_D_S2_SCHEDULE_2026-09-06.md)
   / [read_file 测试](../orz/crates/codegen/orz-tools/src/implementations/grok_build/read_file/mod.rs)。
 - DC 硬信号 4/6（`same_module_no_evidence` / `key_surface_unexamined`）——

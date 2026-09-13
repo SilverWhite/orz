@@ -434,6 +434,8 @@ GLM F2 处置转排期（2026-09-06 用户裁决）：`orz-host/src/approval.rs`
 - [ ] **参照线（软，不卡死）**：k=1 成绩达官方 DeepSeek-V4.1-Flash 的 TB 2.1 公布值 **90.6**（`api-docs.deepseek.com/updates/` 2026-09-10 条目）才值得补 k=5 取正式成绩；**未达不阻断本轮**。读数件：`scripts/tb21_round_gate.py`（R1 同口径回测 58/89 = 65.17%）。
 - [ ] **摩擦清单产出（静默旁路）**：`scripts/tb21_friction_scan.py` 把整轮 journal/日志折叠成摩擦清单并归因；**R1 基线已扫描入档**（33 试次真工具失败 / 15 试次模型侧工具名错 / 42 框架信号 / 23 角色拒绝 / 11 权限拒绝 / 9 哨兵 / 0 资源事件），本轮结果与之对照。
 - [ ] **两件读数件共同契约（2026-09-13 用户指示）**：**静默旁路、不阻断跑分流程**——只读、容忍半程数据、`--quiet` 零输出、**退出码恒 0**、不得接入跑批链作为阻断步；只作跑批中/后的快速初步分析。
+- [x] **`.gsa` 放开按既有裁决回查收口（2026-09-13）**：ADR-0010 §14.56（09-06）→ **§14.61（09-07 用户裁决）修订为"内部区两段式有界开放"**（首读通知信封 → 二读放行 `open_after_notice`；shell 直读=已裁决接受的旁路）；容器实测 `cargo test -p orz-tools --lib two_stage` **7/7 通过**，0.5.0 双载体含三件符号。此前基于 R1（§14.61 之前）得出的"两车道不一致=缺口"结论**已作废并改写为历史基线**。
+- [x] **GAP-ORZ-TEST-TARGET-UNIX-BUILD 立案并同日修复（2026-09-13，orz `23e7a378`）**：`cargo test -p orz-tools --lib` 在 Linux 编不过（5 处：`detect_windows_shell`/`WindowsShell` 未加 cfg 门，涉及 `terminal.rs::require_git_bash_backend` 与 `bash/mod.rs` 测试）；生产目标不受影响；修法=unix 放行/非 unix 维持；全量 orz-tools lib 2923 通过 / 17 失败（`lsp::tests::*`×16 与 `opencode::glob::gitignore_respected`×1，形态为容器缺件）。
 
 ### P0-0p 模型自信息面补强与 `.gsa` 两段门（2026-09-07 设计定稿同日排期；**T0/S1/S2/T2/S4/S5 全部闭合 2026-09-08**；BACKLOG 0p 转 `implemented`）
 
