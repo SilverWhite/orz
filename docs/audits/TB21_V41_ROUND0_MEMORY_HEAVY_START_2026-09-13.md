@@ -88,6 +88,11 @@
 | 15:29:22 | 起跑：身份门通过、清空态快照入账、harbor 作业启动 |
 | 15:29:29 | 首试次 `torch-tensor-parallelism` 建立（作业目录 + 试次目录） |
 | 15:31:01 | 首份会话卷运行目录 `RUN-CLI-6aa65135` 落卷（agent 已在容器内工作） |
+| 15:31:37 | 卷内落 `process_trees/call_00_…json`、`session/terminal/call_00_….log`（进程树与终端面在位） |
+| 15:32:40 | 卷内落 `resources_state.json`（**0z 资源遥测面在真机整轮中在位**） |
+| 15:34:01 | `events.jsonl` 34 → 70 行（agent 持续工作）；作业/试次日志为适配器 POSIX-sh 包装 + `--real --allow-write --allow-shell --max-tool-rounds 999 --allow-network --retrieval-mode local_browser` |
+| 15:34 | 容器实测：`mem_limit=8 GiB`（8,589,934,592 B）**高于** Docker VM 总内存 **7.677 GiB**（8,243,064,832 B）、`memswap=16 GiB`、`nano_cpus=1.0`；串行 `-n 1` 下同时仅 1 个容器 ⇒ 审计 §2.4 的内存形态在真机确认（这正是"降并发 + 重题前置"的依据） |
+| 15:34 | 宿主视角 `docker info`：12 CPU / 1 镜像 / 1 容器；镜像按需拉取首个完成（`alexgshaw/torch-tensor-parallelism:20251031`） |
 
 ## 7. 复现入口与产物位置
 
@@ -98,6 +103,10 @@
 - 过程证据：`D:/tb-eval/jobs-official/official-r0-heavy-round.log`（起止与快照）、
   `official-r0-heavy-console.log`（harbor 会话输出）、
   `official-r0-heavy/`（作业与逐题产物）、`gsa-volumes/official-r0-heavy/`（会话卷）。
+- **过程观测口径（实操）**：harbor 的 `*-console.log` 在非 TTY 下**缓冲**（起跑 5 分钟时仅 30 B），
+  故跑批中的体检以**会话卷**为主（`events.jsonl` 行数递增、
+  `process_trees/`、`session/terminal/`、`resources_state.json` 落卷时间戳）加上试次目录
+  （`*/trial.log`、`*/agent/`、`*/artifacts/`）；作业级 `result.json` 与 `job.log` 在收尾时才成形。
 
 ## 8. 边界与不做项
 
