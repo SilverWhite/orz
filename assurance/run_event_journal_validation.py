@@ -3818,6 +3818,248 @@ def _verify_v02_resource_limit_hit(events):
     return errors
 
 
+# ── 0ac S3-b immediate-feedback families (2026-09-13, F-007 裁决 (a)) ──
+# Rust twins: `orz-assurance/src/journal/immediate_feedback.rs` (registered in
+# `families::ALL_FAMILIES` the same day; keep the two rosters in lockstep).
+
+# The shell-code set the S2 contract rejects via `not.enum` (no real category).
+_CAUSE_SHELL_CODES = frozenset(
+    {
+        "browser_launch_failed",
+        "tool_failed",
+        "failed",
+        "error",
+        "unknown_error",
+    }
+)
+
+
+def _py_int(value: Any) -> int | None:
+    """Mirror of the Rust judge's `families::py_int` — Python `isinstance`
+    over JSON values: ints and bools count (bool is an int in Python), floats,
+    strings and null do not."""
+    if isinstance(value, bool):
+        return int(value)
+    if isinstance(value, int):
+        return value
+    return None
+
+
+def _verify_v02_retrieval_dedupe(events: list[dict[str, Any]]) -> list[str]:
+    """0ac S3 §10.3 item 2①: a `dedupe_key` is unique per `call_id` across
+    both retrieval arrival faces. Rust twin: `verify_retrieval_dedupe`."""
+    errors: list[str] = []
+    seen: list[tuple[str, str]] = []
+    for event in events:
+        if not _is_v02(event):
+            continue
+        event_type = event.get("event_type")
+        if event_type not in ("retrieval_progress", "retrieval_result_segment"):
+            continue
+        payload = event.get("payload") or {}
+        call_id = payload.get("call_id")
+        dedupe_key = payload.get("dedupe_key")
+        if not _host_is_non_empty_str(call_id) or not _host_is_non_empty_str(dedupe_key):
+            # Presence is the schema's job; keep the family silent instead of
+            # double-reporting (mirrors the Rust twin).
+            continue
+        key = (call_id, dedupe_key)
+        if key in seen:
+            errors.append(
+                f"duplicate dedupe_key {dedupe_key!r} for call_id {call_id!r} ({event_type})"
+            )
+        else:
+            seen.append(key)
+    return errors
+
+
+def _verify_v02_result_delivered_accounting(events: list[dict[str, Any]]) -> list[str]:
+    """0ac S3 §10.3 item 2①: one real delivery per `dedupe_key`; anything
+    after it must be journalled as suppressed. Rust twin:
+    `verify_result_delivered_accounting`."""
+    errors: list[str] = []
+    delivered: list[tuple[str, str]] = []  # (dedupe_key, source_id)
+    for event in events:
+        if not _is_v02(event):
+            continue
+        if event.get("event_type") != "result_delivered":
+            continue
+        payload = event.get("payload") or {}
+        dedupe_key = payload.get("dedupe_key")
+        source_id = payload.get("source_id")
+        suppressed = payload.get("suppressed")
+        if not _host_is_non_empty_str(dedupe_key):
+            continue
+        if suppressed is False:
+            first_source = next((s for k, s in delivered if k == dedupe_key), None)
+            if first_source is not None:
+                errors.append(
+                    f"dedupe_key {dedupe_key!r} delivered twice "
+                    f"({first_source!r} and {source_id!r})"
+                )
+            else:
+                delivered.append(
+                    (dedupe_key, source_id if isinstance(source_id, str) else "")
+                )
+        elif suppressed is True:
+            if not isinstance(payload.get("suppressed_reason"), str):
+                errors.append(
+                    f"suppressed result_delivered {dedupe_key!r} carries no suppressed_reason"
+                )
+    return errors
+
+
+def _verify_v02_retrieval_family_probe(events: list[dict[str, Any]]) -> list[str]:
+    """0ac S3 §10.3 item 2② (F-007 口径裁决 (a) 宽松口径, 2026-09-13): when a
+    run carries the `retrieval_family` probe it runs exactly once, before the
+    first model request, with the three readings present; an absent probe is
+    never a violation. Rust twin: `verify_retrieval_family_probe`."""
+    errors: list[str] = []
+    probe_indices: list[int] = []
+    for index, event in enumerate(events):
+        if not _is_v02(event) or event.get("event_type") != "tool_availability_check":
+            continue
+        payload = event.get("payload") or {}
+        if payload.get("probe_scope") == "retrieval_family":
+            probe_indices.append(index)
+    if not probe_indices:
+        return errors  # 宽松口径：absent ⇒ 不判违规。
+    if len(probe_indices) > 1:
+        errors.append(
+            f"retrieval_family probe emitted {len(probe_indices)} times "
+            "(run must carry exactly one)"
+        )
+        return errors
+    index = probe_indices[0]
+    family = (events[index].get("payload") or {}).get("retrieval_family")
+    complete = isinstance(family, dict) and all(
+        key in family for key in ("browser", "search_engine", "web_channel")
+    )
+    if not complete:
+        errors.append(
+            "retrieval_family probe reading is incomplete (browser/search_engine/web_channel)"
+        )
+    first_model_request = next(
+        (
+            i
+            for i, e in enumerate(events)
+            if _is_v02(e) and e.get("event_type") == "model_request"
+        ),
+        None,
+    )
+    if first_model_request is not None and index > first_model_request:
+        errors.append(
+            "retrieval_family probe appears after the first model_request (not run-start)"
+        )
+    return errors
+
+
+def _verify_v02_failure_cause_shape(events: list[dict[str, Any]]) -> list[str]:
+    """0ac S3 §10.3 item 2②: the failure faces of `tool_completed` must not
+    contradict each other or the failure shape (cause non-empty, non-shell,
+    failure-shape-only; `failure_target` likewise). Rust twin:
+    `verify_failure_cause_shape`."""
+    errors: list[str] = []
+    for event in events:
+        if not _is_v02(event) or event.get("event_type") != "tool_completed":
+            continue
+        payload = event.get("payload") or {}
+        exit_code = _py_int(payload.get("exit_code"))
+        is_failure_shape = (
+            exit_code is not None and exit_code != 0
+        ) or payload.get("status") == "error"
+        cause = payload.get("cause")
+        if cause is not None and not isinstance(cause, str):
+            cause = None  # Python `.get()` view: non-string reads as absent.
+        if cause is not None:
+            if not cause.strip():
+                errors.append("tool_completed cause is empty")
+            elif cause in _CAUSE_SHELL_CODES:
+                errors.append(
+                    f"tool_completed cause {cause!r} is a shell code (no real category)"
+                )
+            if not is_failure_shape:
+                errors.append(
+                    f"tool_completed cause {cause!r} on a non-failure shape"
+                )
+        if payload.get("failure_target") is not None and not is_failure_shape:
+            errors.append("tool_completed failure_target on a non-failure shape")
+    return errors
+
+
+def _verify_v02_first_result_deadline(events: list[dict[str, Any]]) -> list[str]:
+    """0ac S3 §10.3 item 2③: first-result deadline family + the "no zero-event
+    dispatch" regression nail. Rust twin: `verify_first_result_deadline`."""
+    errors: list[str] = []
+    deadlines: list[tuple[str, int]] = []
+    first_segments: list[tuple[str, int]] = []  # (call_id, waited_ms)
+    progress_seen: list[tuple[str, str]] = []  # (call_id, stage)
+    no_response_calls: list[str] = []
+    for event in events:
+        if not _is_v02(event):
+            continue
+        event_type = event.get("event_type")
+        if event_type not in ("retrieval_progress", "retrieval_result_segment"):
+            continue
+        payload = event.get("payload") or {}
+        call_id = payload.get("call_id")
+        if not _host_is_non_empty_str(call_id):
+            continue
+        if event_type == "retrieval_progress":
+            stage = payload.get("stage")
+            stage = stage if isinstance(stage, str) else ""
+            progress_seen.append((call_id, stage))
+            if payload.get("stable_code") == "network_no_response":
+                no_response_calls.append(call_id)
+            deadline = _py_int(payload.get("deadline_ms"))
+            if deadline is not None and not any(
+                cid == call_id for cid, _ in deadlines
+            ):
+                deadlines.append((call_id, deadline))
+            if stage == "channel_alive" and deadline is not None:
+                waited = _py_int(payload.get("waited_ms"))
+                if waited is not None and waited > deadline:
+                    errors.append(
+                        f"call_id {call_id!r} channel_alive at {waited}ms "
+                        f"beyond deadline_ms={deadline}"
+                    )
+        else:
+            index = _py_int(payload.get("segment_index"))
+            index = 0 if index is None else index
+            waited = _py_int(payload.get("waited_ms"))
+            waited = 0 if waited is None else waited
+            found = False
+            for position, (cid, _best) in enumerate(first_segments):
+                if cid == call_id:
+                    if index == 0:
+                        first_segments[position] = (cid, waited)
+                    found = True
+                    break
+            if not found and index == 0:
+                first_segments.append((call_id, waited))
+    for call_id, waited in first_segments:
+        deadline = next((d for cid, d in deadlines if cid == call_id), None)
+        if deadline is None:
+            continue
+        if waited > deadline and call_id not in no_response_calls:
+            errors.append(
+                f"call_id {call_id!r} first result waited_ms={waited} > "
+                f"deadline_ms={deadline} without a network_no_response fact"
+            )
+    for call_id, stage in progress_seen:
+        if stage != "dispatched":
+            continue
+        observed = any(
+            cid == call_id and s != "dispatched" for cid, s in progress_seen
+        ) or any(cid == call_id for cid, _ in first_segments)
+        if not observed:
+            errors.append(
+                f"call_id {call_id!r} dispatched with no follow-up event "
+                "(zero-event waiting path)"
+            )
+    return errors
+
+
 def validate_journal_text(text: str) -> list[str]:
     """Validate a journal's full text; [] == valid. One string per problem."""
     events, errors = _load_events(text.splitlines())
@@ -3899,6 +4141,14 @@ def validate_journal_text(text: str) -> list[str]:
         errors.extend(_verify_v02_process_tree_reaped(events))
         errors.extend(_verify_v02_reclaim_performed(events))
         errors.extend(_verify_v02_resource_limit_hit(events))
+        # 0ac S3-b (2026-09-13, F-007 裁决 (a)): the five immediate-feedback
+        # families — Rust twins in `journal/immediate_feedback.rs`; probe
+        # absence is never a violation (宽松口径).
+        errors.extend(_verify_v02_retrieval_dedupe(events))
+        errors.extend(_verify_v02_result_delivered_accounting(events))
+        errors.extend(_verify_v02_retrieval_family_probe(events))
+        errors.extend(_verify_v02_failure_cause_shape(events))
+        errors.extend(_verify_v02_first_result_deadline(events))
     return errors
 
 

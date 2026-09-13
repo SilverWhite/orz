@@ -48,9 +48,28 @@
 > - `git -C orz status --porcelain` → `?? crates/orz-assurance/src/journal/immediate_feedback.rs` + `M crates/orz-assurance/src/journal/mod.rs`；`git diff --stat` → `1 file changed, 4 insertions(+)`（mod.rs 仅加文档条目与 `pub mod immediate_feedback;`）。
 > - `rg.exe -n "REQUIRE_RETRIEVAL_FAMILY_PROBE|pub mod immediate_feedback|verify_all_immediate_feedback"`（journal/ 目录）→ 6 行命中：`immediate_feedback.rs:54: pub const REQUIRE_RETRIEVAL_FAMILY_PROBE: bool = false;`、`immediate_feedback.rs:183: if REQUIRE_RETRIEVAL_FAMILY_PROBE {`、`immediate_feedback.rs:398: pub fn verify_all_immediate_feedback(...)`、`immediate_feedback.rs:530: assert!(!REQUIRE_RETRIEVAL_FAMILY_PROBE);`、`mod.rs:38: pub mod immediate_feedback;` 等。
 
+### F-011 | 2026-09-13 | RUN-CLI-6aa6bd3f | 装置侧（测试与事件面耦合）| fixed（本轮同批修）
+**检索族探针新增的 run-start 事件直接撞红既有流式测试**：0ac S3① 落地后 `crates/orz-loop/src/host_exec.rs:4423` 的 `host_exec::tests::text_deltas_forwarded_in_order_before_model_output` 字面事件序列断言失败——期望序列比实际少一个 run-start 探针事件。证据（本轮实做原文）：`assertion left == right failed`，`left: [ToolAvailabilityCheck, ToolAvailabilityCheck, RunStarted, PromptSubmitted, RequestHeaderChange, ModelOutput, CounterexampleGate, ModelOutput, RunFinished]` / `right: [ToolAvailabilityCheck, RunStarted, …]`。**代价**：1 轮定位 + 1 轮改期望序列（同批机械动作）；改后 `cargo test -p orz-loop --lib` 全绿（771 passed; 0 failed; 3 ignored）。
+
+### F-012 | 2026-09-13 | RUN-CLI-6aa6bd3f | 装置侧（宿主环境继承）| 观察
+**宿主任 shell 常驻 `ORZ_MAX_WALLCLOCK=3600` 使测试红**：在 `ORZ_ACAF_FAIL_CLOSED=0` 已设的前提下，`cargo test -p orz-loop --lib` → `test result: FAILED. 770 passed; 1 failed; 3 ignored`（失败用例 `blackboard::tests::blackboard_read_serves_session_section`）；两次运行唯一环境差为清空 `ORZ_MAX_WALLCLOCK`，清空后同一命令 → `test result: ok. 771 passed; 0 failed`，其间未改任何代码。证据：`Get-ChildItem Env:` 原样输出（另有 `ORZ_ACAF_BINARY`/`ORZ_ACAF_KEYSTORE`/`ORZ_ACAF_MANIFEST`/`ORZ_ALLOW_*`/`ORZ_REAL`/`ORZ_DEEPSEEK_API_KEY` 常驻）+ 两份测试摘要；未读该用例的断言差文本。**代价**：1 轮重跑。
+
+### F-013 | 2026-09-13 | RUN-CLI-6aa6bd3f | 装置侧（工具：`grep` 空返，F-008 第 4 次复现）| open（根因未定）
+**`grep` 工具在本工作区再次空返，本轮未修**：对 `D:\CLI\docs`（其中 `FRICTION_LEDGER.md` 确有 3 处 `F-007`）以 `pattern=F-007` 调用 → `tool 'grep' completed with no output (exit_code=Some(0))`；紧邻的 `B:\Zcode\resources\tools\ripgrep\rg.exe -n --no-heading 'F-007' docs` 同工作区立即命中。定位进展（本轮事实）：① 工具描述串「Search file contents with regular expressions (ripgrep).」全仓唯一命中 `crates/codegen/orz-tools/src/implementations/grok_build/grep/mod.rs:269`；② rg 调用点 `mod.rs:1049` `rg_path()` → `:1051` `Command::new(rg_exec)`，参数形状 `--heading --with-filename --line-number --color=never --max-columns 1000 --max-columns-preview [-l|-c] -e <pattern> <workdir> --max-filesize 5M`（`:1052`–`:1125`），stdout/stderr 皆 pipe（`:1126`）+ `crate::util::detach_command`（`:1128`）+ `stdin(Stdio::null())`（`:1129`）；③ `rg_path()` 解析在 `grep/ripgrep.rs`（`bundle_rg` 分支落 `~/.grok/vendor/`，非 bundle 分支先读 `RG_BIN_PATH`，否则视为 PATH 上的 `rg`）。未复刻同一参数形状以区分「rg 真无命中」与「wrapper 丢输出」——根因未定，按「如定位简单才一并修」的限定条件本轮未改代码、未留钉子。**代价**：本轮 5 次工具调用（1 复现 + 4 定位）后让位于收尾（账本 + 提交）。
+
+> **本轮机械核证留痕（RUN-CLI-6aa6bd3f，收尾段实做输出摘录）**
+> - `cargo test -p orz-loop --lib`（`ORZ_ACAF_FAIL_CLOSED=0` 且清空 `ORZ_MAX_WALLCLOCK`）→ `test result: ok. 771 passed; 0 failed; 3 ignored; 0 measured; 0 filtered out; finished in 9.96s`。
+> - 同上但保留 `ORZ_MAX_WALLCLOCK=3600` → `test result: FAILED. 770 passed; 1 failed; 3 ignored; 0 measured; 0 filtered out; finished in 9.94s`（失败用例 `blackboard::tests::blackboard_read_serves_session_section`）。
+> - 探针面修复前原文：`crates\orz-loop\src\host_exec.rs:4423:9: assertion left == right failed`（左含两个 `ToolAvailabilityCheck`，右仅一个）。
+> - `grep`（`path=D:\CLI\docs`, `pattern=F-007`）→ `tool 'grep' completed with no output (exit_code=Some(0))`；`rg.exe -n --no-heading 'F-007' docs\FRICTION_LEDGER.md` → `13:### F-007 | …` 等命中。
+> - `git -C orz status --porcelain` → 12 个 `M` + 1 个 `?? crates/codegen/orz-tools/src/implementations/web_search/local_segmented.rs`；`git -C orz diff --stat` → `12 files changed, 520 insertions(+), 57 deletions(-)`。
+> - 父仓 `git status --porcelain` → `M assurance/run_event_journal_validation.py` + `M orz`；`git diff --stat` → `2 files changed, 250 insertions(+)`。
+> - 0ac S3①② 建造段（已折叠）的逐条核证命令与运行结果存档于 `D:\CLI\.gsa\ledger\current.md`（按行检索）。
+
 ## 统计
 
 | 日期 | run | 摩擦条目 | 立案候选 | 已修 | 观察 |
 |---|---|---|---|---|---|
 | 2026-09-13 | RUN-CLI-6aa6a868 / 6aa6ac42 | F-001…F-006 | F-001②/F-002②（待立案） | F-001①/F-002①/F-006 | F-003（并入 0ac）/F-004/F-005 |
 | 2026-09-13 | RUN-CLI-6aa6b63d（0ac S3-a 落码） | F-007…F-010 | F-007（判据口径待裁决）/F-008 | F-009 | F-007/F-008/F-010 |
+| 2026-09-13 | RUN-CLI-6aa6bd3f（0ac S3② 裁决(a) 落地 / S3① 生产者面） | F-011…F-013 | F-013（根因待定，待立案） | F-011/F-012 | F-007 已按裁决(a) 翻宽口径落地；F-008 第 4 次复现未修 |
