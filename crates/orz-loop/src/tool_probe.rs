@@ -621,6 +621,16 @@ mod tests {
         );
     }
 
+    /// 0ac S3①（2026-09-13，设计稿 §9/§10.2）：`tool_availability_check`
+    /// 事件面现在承载**两个探针**——工作面 `main_agent_work_tools` 与检索族
+    /// `retrieval_family`（各自成事件）。本模块的工作面钉子只数工作面事件。
+    fn is_work_tool_probe(e: &RunEvent) -> bool {
+        e.payload
+            .get("probe_scope")
+            .and_then(|s| s.as_str())
+            != Some("retrieval_family")
+    }
+
     #[test]
     fn narrow_to_declared_sealed_flip_is_not_an_availability_flip() {
         // A sealed tool flipping complete↔incomplete must NOT produce a
@@ -1234,7 +1244,7 @@ mod tests {
         let all = events(&dir);
         let checks: Vec<&RunEvent> = all
             .iter()
-            .filter(|e| e.event_type == EventType::ToolAvailabilityCheck)
+            .filter(|e| e.event_type == EventType::ToolAvailabilityCheck && is_work_tool_probe(e))
             .collect();
         assert_eq!(
             checks.len(),
@@ -1243,7 +1253,7 @@ mod tests {
         );
         let first_idx = all
             .iter()
-            .position(|e| e.event_type == EventType::ToolAvailabilityCheck)
+            .position(|e| e.event_type == EventType::ToolAvailabilityCheck && is_work_tool_probe(e))
             .unwrap();
         let run_started_idx = all
             .iter()
@@ -1393,7 +1403,7 @@ mod tests {
         let all = events(&dir);
         let checks: Vec<&RunEvent> = all
             .iter()
-            .filter(|e| e.event_type == EventType::ToolAvailabilityCheck)
+            .filter(|e| e.event_type == EventType::ToolAvailabilityCheck && is_work_tool_probe(e))
             .collect();
         assert_eq!(checks.len(), 2, "initial + recovery flip");
         // The failure itself is audited as ToolCompleted(error).
@@ -1409,7 +1419,7 @@ mod tests {
         let flip_idx = all
             .iter()
             .enumerate()
-            .filter(|(_, e)| e.event_type == EventType::ToolAvailabilityCheck)
+            .filter(|(_, e)| e.event_type == EventType::ToolAvailabilityCheck && is_work_tool_probe(e))
             .map(|(i, _)| i)
             .nth(1)
             .expect("second availability event");
@@ -1474,9 +1484,9 @@ mod tests {
             .filter(|t| **t == EventType::ToolAvailabilityCheck)
             .count();
         assert_eq!(
-            availability_count, 1,
-            "R1 auto-close: initial availability event only — no activation \
-             flip and no lane-local pollution: {types:?}"
+            availability_count, 2,
+            "0ac S3① probe face = work-tool + retrieval-family events, both \
+             run-start (no activation flip and no lane-local pollution): {types:?}"
         );
         // The lane failure itself is still audited via ToolCompleted(error).
         assert!(
@@ -1514,12 +1524,12 @@ mod tests {
         let run1 = events(&dir1);
         let r1_count = run1
             .iter()
-            .filter(|e| e.event_type == EventType::ToolAvailabilityCheck)
+            .filter(|e| e.event_type == EventType::ToolAvailabilityCheck && is_work_tool_probe(e))
             .count();
         assert_eq!(r1_count, 1, "run 1 must emit exactly one event");
         assert!(
             run1.iter()
-                .find(|e| e.event_type == EventType::ToolAvailabilityCheck)
+                .find(|e| e.event_type == EventType::ToolAvailabilityCheck && is_work_tool_probe(e))
                 .unwrap()
                 .payload["complete"]
                 .as_array()
@@ -1542,7 +1552,7 @@ mod tests {
         let run2 = events(&dir2);
         let r2_count = run2
             .iter()
-            .filter(|e| e.event_type == EventType::ToolAvailabilityCheck)
+            .filter(|e| e.event_type == EventType::ToolAvailabilityCheck && is_work_tool_probe(e))
             .count();
         assert_eq!(
             r2_count,
@@ -1552,7 +1562,7 @@ mod tests {
         );
         assert!(
             run2.iter()
-                .find(|e| e.event_type == EventType::ToolAvailabilityCheck)
+                .find(|e| e.event_type == EventType::ToolAvailabilityCheck && is_work_tool_probe(e))
                 .unwrap()
                 .payload["incomplete"]
                 .as_array()

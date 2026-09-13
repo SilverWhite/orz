@@ -1475,12 +1475,49 @@ impl OrzHost {
                     tool = name,
                     "web_search: acquiring the global semaphore (concurrency=1)"
                 );
-                let _permit = self
-                    .web_search_semaphore
-                    .clone()
-                    .acquire_owned()
-                    .await
-                    .map_err(|e| {
+                let acquire = self.web_search_semaphore.clone().acquire_owned();
+                // 0ac S3① (2026-09-13, design §10.3 item 1)：acquire 独立截止
+                // —— 检索车道（concurrency=1，主代理与检索子代理共用）排队
+                // 等待不得吃掉整个工具墙钟，也不得静默等成「零观测」。超时
+                // 以自描述 cause `retrieval_lane_busy` 立即返回（工具错误
+                // details.cause → `tool_completed.cause`，F-003 验收样本）。
+                let _permit = match crate::tools::retrieval_lane_wait_budget() {
+                    Some(budget) => match tokio::time::timeout(budget, acquire).await {
+                        Ok(permit) => permit.map_err(|e| {
+                            // P3-4 (review 2026-08-10): the map_tool_error
+                            // bridge surfaces only the Display text — inline the
+                            // code so a model never sees a bare "semaphore
+                            // closed" that reads like a tool being switched off.
+                            xai_tool_runtime::ToolError::custom(
+                                "web_search_semaphore",
+                                format!("web_search_semaphore: {e}"),
+                            )
+                        })?,
+                        Err(_) => {
+                            tracing::warn!(
+                                tool = name,
+                                waited_ms = budget.as_millis() as u64,
+                                "web_search: retrieval lane (semaphore) acquire deadline reached"
+                            );
+                            return Err(xai_tool_runtime::ToolError::custom(
+                                "retrieval_lane_busy",
+                                format!(
+                                    "retrieval_lane_busy: web_search waited {}ms for the single \
+                                     retrieval lane (concurrency=1) and gave up — another \
+                                     retrieval call holds the lane; this call never started",
+                                    budget.as_millis()
+                                ),
+                            )
+                            .with_details(serde_json::json!({
+                                "tool_id": "web_search",
+                                "cause": "retrieval_lane_busy",
+                                "lane": "web_search_semaphore",
+                                "concurrency": 1,
+                                "waited_ms": budget.as_millis() as u64,
+                            })));
+                        }
+                    },
+                    None => acquire.await.map_err(|e| {
                         // P3-4 (review 2026-08-10): the map_tool_error
                         // bridge surfaces only the Display text — inline the
                         // code so a model never sees a bare "semaphore
@@ -1489,7 +1526,8 @@ impl OrzHost {
                             "web_search_semaphore",
                             format!("web_search_semaphore: {e}"),
                         )
-                    })?;
+                    })?,
+                };
                 started_exec.store(true, std::sync::atomic::Ordering::SeqCst);
                 self.registry
                     .toolset()

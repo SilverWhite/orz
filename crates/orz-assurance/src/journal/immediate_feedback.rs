@@ -18,10 +18,10 @@
 //!    `dedupe_key` 与真实投递一一对应：一个去重键至多一条实际投递
 //!    （`suppressed=false`），后续同键行必须如实标 `suppressed=true` +
 //!    `duplicate`（不许"投了但被抑制"混记）。
-//! 3. [`verify_retrieval_family_probe`] — `retrieval_family` 探针：present ⇒
-//!    不许多于一次、须在首个 `model_request` 之前、三类读数齐全；absent
-//!    目前不判（presence 挂 [`REQUIRE_RETRIEVAL_FAMILY_PROBE`]，生产者未
-//!    落地前执法会把既有合法 journal 全判违规）。
+//! 3. [`verify_retrieval_family_probe`] — `retrieval_family` 探针（F-007
+//!    口径裁决 (a) 宽松口径，2026-09-13）：absent **不构成违规**，法官只在
+//!    探针存在时校验其内容：不许多于一次、须在首个 `model_request` 之前、
+//!    三类读数齐全。
 //! 4. [`verify_failure_cause_shape`] — 失败两面不得互相矛盾：`cause` 非空、
 //!    非壳码、只许出现在失败形状（非零 `exit_code` / `status=error`）；
 //!    `failure_target` 同样只许出现在失败形状。两类混合形状（cause 无
@@ -33,25 +33,22 @@
 //! 把五族钉到 S2 机器合约上：`.valid` fixture 零违规、`.constraint.invalid`
 //! 对应族必须判违规、既有 17 份 journal 全语料零违规（禁止回溯误判）。
 //!
-//! Scope note (S3-a, 2026-09-13): the families are exposed through
-//! [`verify_all_immediate_feedback`] and are deliberately NOT yet registered
-//! in [`super::families::ALL_FAMILIES`] — that registry is asserted for
-//! verdict parity against the Python judge, and the Python mirror of these
-//! five families has not landed yet. Registration + Python parity is the
-//! remaining S3 slice (see the session report), so the Rust side can be
-//! exercised today without breaking the parity crosscheck.
+//! Registry note (S3-b, 2026-09-13, 用户裁决 F-007=(a) 宽松口径): the five
+//! families are registered in [`super::families::ALL_FAMILIES`] and mirrored
+//! 1:1 by the Python judge (`assurance/run_event_journal_validation.py`,
+//! `_verify_v02_*` twins) so the Rust↔Python parity crosscheck
+//! (`families::tests::s2b_family_verdicts_match_python`) covers the full
+//! roster. The S3-a strict switch `REQUIRE_RETRIEVAL_FAMILY_PROBE` was
+//! removed by that ruling — no mode fails an absent probe.
 
 use serde_json::Value;
 
 use super::families::{is_v02, py_int, str_of};
 
-/// S3-a switch for family 3: whether a run **must** carry the
-/// `retrieval_family` probe. Kept `false` because the producer side
-/// (TODO 0ac ① / design §10.3 item 1) is not landed yet — enforcing presence
-/// today would fail every journal for a fact whose writer does not exist yet,
-/// including the S2-valid fixture corpus. Flip together with the producer and
-/// its A/B record (design §10.3: "全部带开关，默认关闭直至复验").
-pub const REQUIRE_RETRIEVAL_FAMILY_PROBE: bool = false;
+// F-007 口径裁决 (a)（2026-09-13）: probe absence is NOT a violation; the
+// judge only checks the content of a probe that exists. The S3-a strict
+// switch (`REQUIRE_RETRIEVAL_FAMILY_PROBE`) and its enforcing branch were
+// removed by this ruling — there is no mode that fails an absent probe.
 
 /// Shell-code set the S2 contract rejects (`not.enum` in
 /// `runtime/tool-completed-event-payload-v0.2.schema.json`): a `cause` that
@@ -166,7 +163,8 @@ pub fn verify_result_delivered_accounting(events: &[Value]) -> Vec<String> {
 /// Family 3: when a run carries the `retrieval_family` probe, it runs exactly
 /// once and before the first model request, with the three readings present.
 ///
-/// Presence is governed by [`REQUIRE_RETRIEVAL_FAMILY_PROBE`].
+/// Absence is never a violation — F-007 口径裁决 (a) 宽松口径 (2026-09-13):
+/// the judge only checks the content of a probe that exists.
 pub fn verify_retrieval_family_probe(events: &[Value]) -> Vec<String> {
     let mut errors = Vec::new();
     let mut probe_indices: Vec<usize> = Vec::new();
@@ -179,13 +177,8 @@ pub fn verify_retrieval_family_probe(events: &[Value]) -> Vec<String> {
         }
     }
     match probe_indices.len() {
-        0 => {
-            if REQUIRE_RETRIEVAL_FAMILY_PROBE {
-                errors.push(
-                    "retrieval_family probe missing (run must carry exactly one)".to_string(),
-                );
-            }
-        }
+        // F-007 裁决 (a) 宽松口径: absent ⇒ 不判（探针缺失不构成违规）。
+        0 => {}
         1 => {
             let index = probe_indices[0];
             let family = payload(&events[index]).and_then(|p| p.get("retrieval_family"));
@@ -525,9 +518,8 @@ mod tests {
     fn retrieval_family_probe_is_exactly_once_at_run_start() {
         let request = event("model_request", json!({ "model": "m" }));
 
-        // Presence is producer-gated (S3-a switch): without the writer landed,
-        // an absent probe is not a violation.
-        assert!(!REQUIRE_RETRIEVAL_FAMILY_PROBE);
+        // F-007 口径裁决 (a) 宽松口径（2026-09-13）：absent ⇒ 不判违规
+        // （法官只在探针存在时校验内容）。
         assert!(verify_retrieval_family_probe(&[request.clone()]).is_empty());
 
         let ok = vec![family_probe("2026-09-13T00:00:00Z"), request.clone()];

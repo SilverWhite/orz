@@ -316,6 +316,15 @@ pub enum ToolError {
     NotFound(String),
     #[error("tool execution failed: {0}")]
     ExecutionFailed(String),
+    /// 0ac S3①（2026-09-13，设计稿 §10.1 / §10.3 第 1 项）：真实 cause 与人类
+    /// 消息**同行**回传——工具侧 `xai_tool_runtime::ToolError.details.cause`
+    /// 的结构化自报码（`retrieval_lane_busy` / `network_no_response` /
+    /// `network_error` / `capability_unreachable` / `empty_result` /
+    /// `no_progress` …）经宿主桥接保留，loop 在 `tool_completed.cause` 上原样
+    /// 落真实原因，而不是只落壳码 `execution_failed`（F-003 验收样本）。
+    /// 稳定码族不变：本变体仍归 `execution_failed` 系（不新增码）。
+    #[error("tool execution failed ({cause}): {message}")]
+    ExecutionFailedCaused { cause: String, message: String },
     /// 0t (2026-09-09, ADR-0010 §14.65 / 设计 §3.3): 浏览器启动/探活尝试
     /// 失败——cause 是真实原因类别（browser_not_found/网络/超时等），按
     /// 普通 host 错误回传（§3.4），非模式拒绝。loop 在 ToolCompleted 前落

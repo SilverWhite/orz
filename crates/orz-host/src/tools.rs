@@ -43,6 +43,21 @@ pub fn web_search_config(reader: &dyn CredentialReader) -> WebSearchConfig {
     }
 }
 
+/// 0ac S3① (2026-09-13, design §10.3 item 1): the retrieval lane's acquire
+/// budget. `web_search` runs on a concurrency=1 semaphore shared by the main
+/// agent and the retrieval subagent, so a queued call can otherwise burn the
+/// whole tool wall-clock with zero observable events. The acquire therefore
+/// gets its **own** deadline (`ORZ_RETRIEVAL_SEMAPHORE_WAIT_MS`, default
+/// 10_000 ms; `0` disables the bound). A bounded acquire failure is a
+/// self-describing `retrieval_lane_busy` cause, not a bare timeout.
+pub fn retrieval_lane_wait_budget() -> Option<std::time::Duration> {
+    let ms: u64 = std::env::var("ORZ_RETRIEVAL_SEMAPHORE_WAIT_MS")
+        .ok()
+        .and_then(|value| value.trim().parse().ok())
+        .unwrap_or(10_000);
+    (ms > 0).then(|| std::time::Duration::from_millis(ms))
+}
+
 /// GAP-WEB-SEARCH-SEMAPHORE (2026-08-10): the global `web_search` tool
 /// family — the exact `web_search` name plus any `web_search_*` variant
 /// (ADR-0010 §3.7.7/§11.3: global web_search concurrency is 1; the main
@@ -511,7 +526,25 @@ pub fn map_tool_error(err: &xai_tool_runtime::ToolError) -> orz_loop::host::Tool
         xai_tool_runtime::ToolErrorKind::Timeout => {
             orz_loop::host::ToolError::Timeout(err.to_string())
         }
-        _ => orz_loop::host::ToolError::ExecutionFailed(err.to_string()),
+        // 0ac S3①（2026-09-13，设计稿 §10.1）：结构化自报 cause 过桥——
+        // `details.cause`（本地分段检索的 `network_no_response` /
+        // `capability_unreachable` / `no_progress` …、检索车道 `retrieval_lane_busy`）
+        // 不再在桥接处被丢弃；loop 侧按真实码落 `tool_completed.cause`
+        // （F-003 验收样本）。无 cause 的旧错误保持原映射（零形状变化）。
+        _ => match err
+            .details
+            .as_ref()
+            .and_then(|d| d.get("cause"))
+            .and_then(serde_json::Value::as_str)
+            .map(str::trim)
+            .filter(|cause| !cause.is_empty())
+        {
+            Some(cause) => orz_loop::host::ToolError::ExecutionFailedCaused {
+                cause: cause.to_string(),
+                message: err.to_string(),
+            },
+            None => orz_loop::host::ToolError::ExecutionFailed(err.to_string()),
+        },
     }
 }
 

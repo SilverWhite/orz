@@ -3247,6 +3247,21 @@ impl AgentLoopController {
             .await?;
         self.probe_state_seed(&probe_snapshot);
 
+        // 0ac S3①（2026-09-13，设计稿 §9 / §10.2）：检索族探针——与工作工具面
+        // 探针各自成事件（`probe_scope="retrieval_family"`），run-start 恰好
+        // 一次、先于 `run_started`。读数取 registry 声明面（`browser_read` 在
+        // 主面被 R1 封存，故不取投影后 `tool_defs`）。F-007 口径裁决 (a) 宽松
+        // 口径：探针缺失不构成违规，法官仅在存在时校验其内容。
+        writer
+            .record(
+                EventType::ToolAvailabilityCheck,
+                Self::retrieval_family_payload(
+                    &host.tools_registry().list(),
+                    self.retrieval_enabled,
+                ),
+            )
+            .await?;
+
         // 2. run_started + prompt_submitted
         // 0q（ADR-0010 §14.63）：`failure_pipeline: "funnel-v1"` 是失败
         // 事件管线的 journal 级 grandfather 锚——法官对账族
@@ -4353,6 +4368,10 @@ mod tests {
         assert_eq!(
             types,
             vec![
+                // 0ac S3①（2026-09-13, 设计稿 §9/§10.2）：探针面现在**两个**
+                // 事件——工作面（main_agent_work_tools）与检索族
+                // （retrieval_family），都先于 run_started。
+                EventType::ToolAvailabilityCheck,
                 EventType::ToolAvailabilityCheck,
                 EventType::RunStarted,
                 EventType::PromptSubmitted,

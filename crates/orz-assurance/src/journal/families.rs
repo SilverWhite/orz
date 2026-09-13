@@ -1531,15 +1531,18 @@ pub const S2C_FAMILIES: &[&str] = &[
     "resource_limit_hit",
 ];
 
-/// All 34 families in the Python `validate_journal_text` call order
+/// All rule families in the Python `validate_journal_text` call order
 /// (Py order; `console_order_written` retired 2026-09-06, S2d 裁决一 /
 /// ADR-0010 §14.57 — the write-order chain rule is gone on both judges and
 /// NOT converted into a negative check, so historical journals replay clean)
 /// `failure_agg_coverage` added 2026-09-08 (0q / ADR-0010 §14.63);
 /// `retrieval_enable_gate` + `browser_launch_result` added 2026-09-09
 /// (0t / ADR-0010 §14.65);
-/// `initial_round_inquiry` added 2026-09-11 (0x S2 / ADR-0010 §14.66))
-/// — the S2d full-corpus crosscheck order.
+/// `initial_round_inquiry` added 2026-09-11 (0x S2 / ADR-0010 §14.66);
+/// the five 0ac immediate-feedback families (`retrieval_dedupe`,
+/// `result_delivered_accounting`, `retrieval_family_probe`,
+/// `failure_cause_shape`, `first_result_deadline`) added 2026-09-13
+/// (S3-b, F-007 裁决 (a)) — the S2d full-corpus crosscheck order.
 pub const ALL_FAMILIES: &[&str] = &[
     "inquiry_kind",
     "initial_round_inquiry",
@@ -1583,6 +1586,13 @@ pub const ALL_FAMILIES: &[&str] = &[
     "process_tree_reaped",
     "reclaim_performed",
     "resource_limit_hit",
+    // 0ac S3-b (2026-09-13, F-007 裁决 (a)): immediate-feedback families
+    // (`journal/immediate_feedback.rs`); Rust↔Python parity covered.
+    "retrieval_dedupe",
+    "result_delivered_accounting",
+    "retrieval_family_probe",
+    "failure_cause_shape",
+    "first_result_deadline",
 ];
 
 // ---------------------------------------------------------------------------
@@ -1915,6 +1925,14 @@ pub fn verify_family(family: &str, events: &[Value]) -> Vec<String> {
         "process_tree_reaped" => verify_process_tree_reaped(events),
         "reclaim_performed" => verify_reclaim_performed(events),
         "resource_limit_hit" => verify_resource_limit_hit(events),
+        // 0ac S3-b (2026-09-13, F-007 裁决 (a)): immediate-feedback families.
+        "retrieval_dedupe"
+        | "result_delivered_accounting"
+        | "retrieval_family_probe"
+        | "failure_cause_shape"
+        | "first_result_deadline" => {
+            super::immediate_feedback::verify_immediate_feedback_family(family, events)
+        }
         family => super::families_s2c::verify_s2c_family(family, events),
     }
 }
@@ -5821,9 +5839,11 @@ mod tests {
     }
 
     /// Task D acceptance: per-family verdict parity with the Python judge on
-    /// the same corpus (all 34 families since the S2d 裁决一 written-rule
-    /// retirement, ADR-0010 §14.57; +0q failure pipeline +0t retrieval gate
-    /// / browser_launch_result 两族, 2026-09-09) — the synthetic scenarios
+    /// the same corpus (the full `ALL_FAMILIES` roster since the S2d 裁决一
+    /// written-rule retirement, ADR-0010 §14.57; +0q failure pipeline +0t
+    /// retrieval gate / browser_launch_result 两族 2026-09-09; +0z
+    /// host-resource 七族 2026-09-12; +0ac immediate-feedback 五族 2026-09-13)
+    /// — the synthetic scenarios
     /// above PLUS every real v0.2 fixture journal. Verdict parity =
     /// (errors empty) agrees on both sides; message text is deliberately
     /// Rust-form.
@@ -5891,8 +5911,9 @@ mod tests {
         }
         fixture_names.sort();
 
-        // Python side: run the 30 `_verify_v02_*` functions per corpus item
-        // (console_order_written retired 2026-09-06, ADR-0010 §14.57).
+        // Python side: run every `_verify_v02_*` function per corpus item
+        // (console_order_written retired 2026-09-06, ADR-0010 §14.57);
+        // the five 0ac immediate-feedback twins joined 2026-09-13 (S3-b).
         let script = r#"
 import sys, json
 sys.path.insert(0, sys.argv[1])
@@ -5939,6 +5960,11 @@ fams = {
     "process_tree_reaped": v._verify_v02_process_tree_reaped,
     "reclaim_performed": v._verify_v02_reclaim_performed,
     "resource_limit_hit": v._verify_v02_resource_limit_hit,
+    "retrieval_dedupe": v._verify_v02_retrieval_dedupe,
+    "result_delivered_accounting": v._verify_v02_result_delivered_accounting,
+    "retrieval_family_probe": v._verify_v02_retrieval_family_probe,
+    "failure_cause_shape": v._verify_v02_failure_cause_shape,
+    "first_result_deadline": v._verify_v02_first_result_deadline,
 }
 data = json.load(sys.stdin)
 out = {}

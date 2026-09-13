@@ -90,6 +90,122 @@ impl AgentLoopController {
         }
     }
 
+    /// 0ac S3①（2026-09-13，设计稿 §9 / §10.2）：检索族探针读数——与 23 工作
+    /// 工具面探针**各自成事件**（`probe_scope="retrieval_family"`），run-start
+    /// 恰好一次、先于 `run_started`。
+    ///
+    /// 三个成员（browser / search_engine / web_channel）取**registry 声明面**
+    /// 读数（未投影的 base 列表——检索 lane 面的 `browser_read` 在主面被 R1
+    /// 封存，主面列表会把「子代理看得到」读成 absent，故不取投影后列表）：
+    /// * browser——`browser_read` / `local_browser` 任一在册即为 present；
+    /// * search_engine——`web_search` 在册 + 引擎链/开关的环境读数（本地分段
+    ///   检索族；引擎清单由 `ORZ_RETRIEVAL_ENGINES` 给出，缺省 = 内建链）；
+    /// * web_channel——`web_fetch` 族（本地 HTTP 通道）在册。
+    ///
+    /// 检索族对本 run 关闭（`retrieval_enabled=false`）时三个成员一律读
+    /// absent + 中性原因（家族不在本 run 的声明面上——读数只报事实）。
+    /// `gate_decision` 恒为 `"pass"`：探针不阻断（设计不变式 2）。
+    ///
+    /// F-007 口径裁决 (a) 宽松口径（2026-09-13）：探针缺失不构成违规，法官
+    /// 仅在探针存在时校验其内容
+    /// （`orz-assurance::journal::immediate_feedback::verify_retrieval_family_probe`）。
+    pub(crate) fn retrieval_family_payload(
+        base: &[ToolDef],
+        retrieval_enabled: bool,
+    ) -> serde_json::Value {
+        fn declared<'a>(base: &[ToolDef], names: &[&'a str]) -> Option<&'a str> {
+            names
+                .iter()
+                .copied()
+                .find(|name| base.iter().any(|t| t.name == *name))
+        }
+        let disabled = || {
+            serde_json::json!({
+                "present": false,
+                "reason": "retrieval family disabled for this run (retrieval_enabled=false)",
+            })
+        };
+        let missing = |reason: &str| {
+            serde_json::json!({ "present": false, "reason": reason })
+        };
+
+        let browser = if !retrieval_enabled {
+            disabled()
+        } else {
+            match declared(base, &["browser_read", "local_browser"]) {
+                Some(name) => serde_json::json!({ "present": true, "detail": name }),
+                None => missing("no local browser tool in this build's registry"),
+            }
+        };
+        let search_engine = if !retrieval_enabled {
+            disabled()
+        } else {
+            match declared(base, &["web_search"]) {
+                Some(name) => {
+                    let engines = std::env::var("ORZ_RETRIEVAL_ENGINES")
+                        .ok()
+                        .map(|v| v.trim().to_string())
+                        .filter(|v| !v.is_empty())
+                        .unwrap_or_else(|| "builtin".to_string());
+                    let local = std::env::var("ORZ_WEB_SEARCH_LOCAL")
+                        .map(|v| {
+                            matches!(
+                                v.trim().to_ascii_lowercase().as_str(),
+                                "1" | "true" | "on" | "yes"
+                            )
+                        })
+                        .unwrap_or(false);
+                    serde_json::json!({
+                        "present": true,
+                        "detail": format!("{name} engines={engines} local_segmented={local}"),
+                    })
+                }
+                None => missing("web_search not declared by this build's registry"),
+            }
+        };
+        let web_channel = if !retrieval_enabled {
+            disabled()
+        } else {
+            match declared(base, &["web_fetch", "web_fetch_url", "read_url", "fetch"]) {
+                Some(name) => serde_json::json!({ "present": true, "detail": name }),
+                None => missing("no local HTTP channel tool in this build's registry"),
+            }
+        };
+
+        let mut complete: Vec<&str> = Vec::new();
+        let mut incomplete: Vec<serde_json::Value> = Vec::new();
+        for (member, reading) in [
+            ("browser", &browser),
+            ("search_engine", &search_engine),
+            ("web_channel", &web_channel),
+        ] {
+            if reading.get("present").and_then(serde_json::Value::as_bool) == Some(true) {
+                complete.push(member);
+            } else {
+                incomplete.push(serde_json::json!({
+                    "tool": member,
+                    "reason": reading
+                        .get("reason")
+                        .and_then(serde_json::Value::as_str)
+                        .unwrap_or("absent"),
+                }));
+            }
+        }
+        serde_json::json!({
+            "probe_scope": "retrieval_family",
+            "probe_timestamp": crate::controller::chrono_utc_now(),
+            "retrieval_enabled": retrieval_enabled,
+            "complete": complete,
+            "incomplete": incomplete,
+            "gate_decision": "pass",
+            "retrieval_family": {
+                "browser": browser,
+                "search_engine": search_engine,
+                "web_channel": web_channel,
+            },
+        })
+    }
+
     /// RETRIEVAL-SUBAGENT-WIRING 审查处理 (2026-08-25)：检索任务契约构建
     /// ——`query` 必填（缺省回退 prompt），可选 `scope`/`max_results` 机械
     /// 并入 goal 文本。子代理只收到 goal（`SystemPromptKind::Retrieval`），
@@ -1067,5 +1183,42 @@ mod tests {
 
         let _ = std::fs::remove_dir_all(&dir);
         let _ = std::fs::remove_dir_all(&dir2);
+    }
+
+    /// 0ac S3①（2026-09-13, 设计稿 §9 / §10.2）：检索族探针读数形状钉子——
+    /// 三成员键恒在（browser/search_engine/web_channel），`probe_scope`
+    /// 为 `retrieval_family`，`gate_decision` 恒 pass（探针不阻断）；
+    /// 家族在本 run 关闭时三成员一律 absent + 中性原因（读数只报事实）。
+    #[test]
+    fn retrieval_family_payload_pins_three_members() {
+        let base = R1SurfaceRegistry::all();
+        let enabled = AgentLoopController::retrieval_family_payload(&base, true);
+        assert_eq!(enabled["probe_scope"], "retrieval_family");
+        assert_eq!(enabled["gate_decision"], "pass");
+        let family = &enabled["retrieval_family"];
+        for member in ["browser", "search_engine", "web_channel"] {
+            assert!(
+                family.get(member).is_some(),
+                "retrieval_family.{member} must always be present: {family}"
+            );
+            assert!(
+                family[member].get("present").and_then(|p| p.as_bool()).is_some(),
+                "retrieval_family.{member}.present must be a boolean"
+            );
+        }
+        // R1SurfaceRegistry 只在册 web_search / web_fetch：search_engine 与
+        // web_channel 读 present，browser 读 absent（中性原因、无教学句）。
+        assert_eq!(family["search_engine"]["present"], true);
+        assert_eq!(family["web_channel"]["present"], true);
+        assert_eq!(family["browser"]["present"], false);
+        assert!(family["browser"]["reason"].as_str().is_some_and(|r| !r.is_empty()));
+
+        let disabled = AgentLoopController::retrieval_family_payload(&base, false);
+        for member in ["browser", "search_engine", "web_channel"] {
+            assert_eq!(
+                disabled["retrieval_family"][member]["present"], false,
+                "retrieval family off ⇒ {member} must read absent"
+            );
+        }
     }
 }

@@ -1,3 +1,4 @@
+use super::local_segmented::{self, LocalSegmentedConfig};
 use super::types::WebSearchConfig;
 use crate::attribution::{SharedAttributionCallback, ToolConsumer};
 use crate::types::SharedApiKeyProvider;
@@ -16,6 +17,12 @@ pub struct WebSearchClient {
     /// from the Responses API emits an `auth_401_attribution` event
     /// with `consumer == "WebSearch"`.
     attribution_callback: Option<SharedAttributionCallback>,
+    /// 0ac S3① (2026-09-13, design §9/§10): `Some` ⇒ the local segmented
+    /// retrieval path (SERP 引擎链 → 逐页抓取 → 逐段抽取) is active and the
+    /// server-side `/responses` search path is never used.
+    local_segmented: Option<LocalSegmentedConfig>,
+    /// The plain HTTP client of the local path (no backend auth headers).
+    local_http: Option<reqwest::Client>,
 }
 impl WebSearchClient {
     /// Create a new web search client from `WebSearchConfig::Enabled`.
@@ -88,7 +95,34 @@ impl WebSearchClient {
             model: model.clone(),
             api_key_provider,
             attribution_callback: None,
+            local_segmented: None,
+            local_http: None,
         })
+    }
+
+    /// 0ac S3① (2026-09-13, design §9/§10): point this client at the **local
+    /// segmented retrieval** front-end. Enabled ⇒ every `search` /
+    /// `search_with_titles` call short-circuits to the local path; the
+    /// server-side `/responses` search (withdrawn by the provider, S1 probe
+    /// §5/§6) is not called at all. A config that is switched off is a no-op.
+    pub fn with_local_segmented(mut self, config: LocalSegmentedConfig) -> Self {
+        if config.is_enabled() {
+            match local_segmented::build_http_client(config.overall_deadline) {
+                Ok(http) => {
+                    self.local_http = Some(http);
+                    self.local_segmented = Some(config);
+                }
+                Err(e) => {
+                    tracing::warn!("local segmented retrieval http client build failed: {e}");
+                }
+            }
+        }
+        self
+    }
+
+    /// The active local-path config (`None` ⇒ the server-side path).
+    pub fn local_segmented(&self) -> Option<&LocalSegmentedConfig> {
+        self.local_segmented.as_ref()
     }
     /// Wire a 401-attribution callback into this client. Idempotent;
     /// safe to call before or after the first request.
@@ -159,6 +193,26 @@ impl WebSearchClient {
         query: &str,
         allowed_domains: Option<Vec<String>>,
     ) -> Result<(String, Vec<String>), xai_tool_runtime::ToolError> {
+        // 0ac S3① (design §9.1/§10.3 item 1): the local segmented path takes
+        // over entirely when switched on — SERP engine chain (default Bing
+        // HTML direct) → 逐页抓取 → 逐段抽取, per-engine deadline + overall
+        // bound; failures ride a self-describing stable `cause`.
+        if let (Some(config), Some(http)) =
+            (self.local_segmented.as_ref(), self.local_http.as_ref())
+        {
+            let mut outcome = local_segmented::search(http, config, query)
+                .await
+                .map_err(|e| e.to_tool_error())?;
+            if let Some(domains) = allowed_domains.as_deref().filter(|d| !d.is_empty()) {
+                outcome
+                    .hits
+                    .retain(|hit| domains.iter().any(|d| host_matches(&hit.url, d)));
+            }
+            return Ok((
+                local_segmented::render_content(&outcome),
+                local_segmented::citations(&outcome),
+            ));
+        }
         let web_search = rs::WebSearchToolArgs::default()
             .filters(rs::WebSearchToolFilters { allowed_domains })
             .build()
@@ -254,6 +308,25 @@ impl WebSearchClient {
         query: &str,
         allowed_domains: Option<Vec<String>>,
     ) -> Result<(String, Vec<(String, String)>), xai_tool_runtime::ToolError> {
+        // 0ac S3①: same local short-circuit as [`Self::search`], with titles.
+        if let (Some(config), Some(http)) =
+            (self.local_segmented.as_ref(), self.local_http.as_ref())
+        {
+            let mut outcome = local_segmented::search(http, config, query)
+                .await
+                .map_err(|e| e.to_tool_error())?;
+            if let Some(domains) = allowed_domains.as_deref().filter(|d| !d.is_empty()) {
+                outcome
+                    .hits
+                    .retain(|hit| domains.iter().any(|d| host_matches(&hit.url, d)));
+            }
+            let pairs = outcome
+                .hits
+                .iter()
+                .map(|hit| (hit.title.clone(), hit.url.clone()))
+                .collect();
+            return Ok((local_segmented::render_content(&outcome), pairs));
+        }
         let web_search = rs::WebSearchToolArgs::default()
             .filters(rs::WebSearchToolFilters { allowed_domains })
             .build()
@@ -334,6 +407,32 @@ impl WebSearchClient {
         Ok((content, pairs))
     }
 }
+/// 0ac S3① (2026-09-13): `allowed_domains` filtering for the local segmented
+/// path — a hit matches when the URL host equals the domain or is one of its
+/// subdomains (leading dot tolerated). The server-side path leaves this to the
+/// API filter; locally the contract is enforced here.
+fn host_matches(url: &str, domain: &str) -> bool {
+    let host = url
+        .split("://")
+        .nth(1)
+        .unwrap_or(url)
+        .split(['/', '?', '#'])
+        .next()
+        .unwrap_or("")
+        .rsplit('@')
+        .next()
+        .unwrap_or("")
+        .split(':')
+        .next()
+        .unwrap_or("")
+        .to_ascii_lowercase();
+    let domain = domain.trim().trim_start_matches('.').to_ascii_lowercase();
+    if host.is_empty() || domain.is_empty() {
+        return false;
+    }
+    host == domain || host.ends_with(&format!(".{domain}"))
+}
+
 /// The `output` array of a Responses API payload (as raw JSON).
 fn response_output(response: &serde_json::Value) -> Vec<&serde_json::Value> {
     response

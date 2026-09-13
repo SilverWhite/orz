@@ -369,10 +369,72 @@ impl AgentLoopController {
             ToolError::NotFound(_) => CODE_TOOL_NOT_FOUND,
             ToolError::Timeout(_) => CODE_TOOL_TIMEOUT,
             ToolError::ExecutionFailed(_) => CODE_EXECUTION_FAILED,
+            // 0ac S3①：真实 cause 同族——稳定壳码不变（cause 另在
+            // `tool_completed.cause` 上自描述）。
+            ToolError::ExecutionFailedCaused { .. } => CODE_EXECUTION_FAILED,
             ToolError::BrowserLaunchFailed(_) => CODE_BROWSER_LAUNCH_FAILED,
             // P1-2a：启动成功但动作失败——不新增稳定码，归 ExecutionFailed 系。
             ToolError::BrowserStepFailed { .. } => CODE_EXECUTION_FAILED,
         }
+    }
+
+    /// 0ac S3① (2026-09-13, design §10.1 / §10.3 item 1)：失败载荷的
+    /// **真实 `cause`** ——「单事件自描述」的写入侧（F-003 验收样本：
+    /// 确定性不可达必须一步报因，而不是只给壳码）。取值优先级：
+    ///
+    /// 1. 工具错误 `details.cause`（生产侧自报的稳定码：本地分段检索的
+    ///    `network_no_response` / `network_error` / `capability_unreachable`
+    ///    / `empty_result` / `no_progress` 即由此进 `tool_completed`）；
+    /// 2. 宿主错误码（`tool_not_found` / `tool_timeout` /
+    ///    `execution_failed` 等真实类别）；
+    /// 3. 拒绝码 / 命令退出码（`command_exit_<n>`）/ 合成超时
+    ///    （`tool_timeout`）。
+    ///
+    /// 形状门与法官族 4（`failure_cause_shape`）**同一谓词**：只在失败形状
+    /// （`exit_code != 0` 或 `status == "error"`）上写，绝不把 cause 挂到成功
+    /// 形状。S2 壳码集合（`browser_launch_failed` / `tool_failed` / `failed`
+    /// / `error` / `unknown_error`）由 schema `not.enum` 机械拒绝，故
+    /// `browser_launch_failed` 映射到真实类别 `capability_unreachable`。
+    fn failure_cause(
+        payload: &serde_json::Value,
+        outcome: &ToolFailureOutcome<'_>,
+    ) -> Option<String> {
+        let failure_shaped =
+            payload.get("status").and_then(serde_json::Value::as_str) == Some("error")
+                || payload
+                    .get("exit_code")
+                    .and_then(serde_json::Value::as_i64)
+                    .is_some_and(|code| code != 0);
+        if !failure_shaped {
+            return None;
+        }
+        if let ToolFailureOutcome::HostError(e) = outcome
+            && let ToolError::ExecutionFailedCaused { cause, .. } = e
+            && !cause.trim().is_empty()
+        {
+            return Some(cause.to_string());
+        }
+        // 宿主桥接未带 cause 时退回载荷上的既有 cause（外部生产侧自报），
+        // 仍限失败形状（形状门在上方）。
+        if let Some(cause) = payload
+            .get("cause")
+            .and_then(serde_json::Value::as_str)
+            .map(str::trim)
+            .filter(|cause| !cause.is_empty())
+        {
+            return Some(cause.to_string());
+        }
+        let derived = match outcome {
+            ToolFailureOutcome::HostError(e) => match Self::host_error_code(e) {
+                CODE_BROWSER_LAUNCH_FAILED => "capability_unreachable",
+                other => other,
+            },
+            ToolFailureOutcome::Refused(code) => code,
+            ToolFailureOutcome::CommandExit(Some(code)) => return Some(format!("command_exit_{code}")),
+            ToolFailureOutcome::CommandExit(None) => return None,
+            ToolFailureOutcome::SyntheticTimeout => CODE_TOOL_TIMEOUT,
+        };
+        (!derived.is_empty()).then(|| derived.to_string())
     }
 
     /// 0q 统一失败事件管线（2026-09-08，ADR-0010 §14.63）：写入侧边界
@@ -403,6 +465,13 @@ impl AgentLoopController {
         arguments: &serde_json::Value,
         outcome: ToolFailureOutcome<'_>,
     ) {
+        // 0ac S3① (2026-09-13, design §10.1 / §10.3 item 1)：失败载荷补 `cause`
+        // ——每个 error 形状恰过一次本漏斗，cause 与身份面
+        // （`failure_target`）并行、互不依赖（S2 契约：cause 无 target /
+        // target 无 cause 两种形状都合法）。详见 `Self::failure_cause`。
+        if let Some(cause) = Self::failure_cause(payload, &outcome) {
+            payload["cause"] = serde_json::json!(cause);
+        }
         // 身份不可及工具：谓词与标记都不适用（法官族按同表跳过）。
         if !crate::failure_target::identity_capable(tool) {
             return;
@@ -3868,6 +3937,7 @@ impl AgentLoopController {
                             ToolError::NotFound(_) => crate::host::ToolErrorKind::NotFound,
                             ToolError::Timeout(_) => crate::host::ToolErrorKind::Timeout,
                             ToolError::ExecutionFailed(_)
+                            | ToolError::ExecutionFailedCaused { .. }
                             | ToolError::BrowserLaunchFailed(_)
                             | ToolError::BrowserStepFailed { .. } => {
                                 crate::host::ToolErrorKind::ExecutionFailed
@@ -4353,6 +4423,9 @@ mod tests {
         assert_eq!(
             types,
             vec![
+                // 0ac S3①（2026-09-13, 设计稿 §9/§10.2）：探针面两个 run-start
+                // 事件（工作面 + 检索族）——流式本身仍不新增事件。
+                EventType::ToolAvailabilityCheck,
                 EventType::ToolAvailabilityCheck,
                 EventType::RunStarted,
                 EventType::PromptSubmitted,

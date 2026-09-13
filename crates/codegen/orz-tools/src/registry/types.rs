@@ -1067,7 +1067,17 @@ impl ToolRegistryBuilder {
             &ctx.web_search_config,
             ctx.api_key_provider.clone(),
         ) {
-            let client = client.with_attribution_callback(ctx.attribution_callback.clone());
+            // 0ac S3① (2026-09-13, design §9.1/§10.3 item 1): the tool keeps its
+            // `web_search` face but its implementation follows
+            // `ORZ_WEB_SEARCH_LOCAL` — on ⇒ local segmented retrieval
+            // (SERP engine chain → 逐页抓取 → 逐段抽取), off (default) ⇒ the
+            // historical server-side `/responses` path. A switched-off config
+            // is a no-op.
+            let client = client
+                .with_local_segmented(
+                    crate::implementations::web_search::local_segmented::LocalSegmentedConfig::from_env(),
+                )
+                .with_attribution_callback(ctx.attribution_callback.clone());
             resources.insert(client);
         }
         if let Some(lsp) = ctx.lsp {
