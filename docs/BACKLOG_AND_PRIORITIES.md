@@ -1202,12 +1202,17 @@ GLM F2 处置转排期（2026-09-06 用户裁决）：`orz-host/src/approval.rs`
   首读返通知信封（`code=session_volume_notice`）、**二读放行**记
   `open_after_notice`、通知状态会话卷级持久化；terminal-log / run_tests /
   resources_state 三窗口维持直读；§14.61 第 5 条另已裁定 **shell 直读内部区
-  = "跳过教育的旁路"，标注不对称但**不作为缺陷追打**。**实测核证**：容器 Linux
-  跑 `cargo test -p orz-tools --lib two_stage` → **7/7 通过**（read_file 4 +
-  list_dir 1 + grep 1 + 窗口豁免 1）；0.5.0 双载体均含 `session_volume_notice`
-  / `open_after_notice` / `session_volume_opened` 符号。**因此 R1（2026-08-25，
+  = "跳过教育的旁路"，标注不对称但**不作为缺陷追打**。**分层实现核证（容器
+  Linux，2026-09-13）**：工具层 `cargo test -p orz-tools --lib two_stage`
+  **7/7**（read_file 5 / list_dir 1 / grep 1）；host 接线层
+  `bridge_yields_internal_reads_and_envelope_lands`（带桥生产装配形态：桥放行
+  内部读 → 通知信封 → 二读 `session_volume_opened`）**通过**、
+  `session_volume_symlink_windows_end_to_end`（symlink 会话卷＝评测容器挂载
+  形态）**通过**、并发旗标归属 **通过**；loop 审计层
+  `tool_completed_journals_policy_denial_and_opened_marker` **通过** ⇒
+  **§14.61 无实现偏误**。0.5.0 双载体另含三件符号。**因此 R1（2026-08-25，
   orz 0.1.x）账面上那 12 次 `.gsa` 内部面 deny 属 §14.56 时代的旧行为，不是
-  当前缺口**；同日实测另发现并修复一个**真缺陷**（见下条
+  当前缺口**；同日实测另发现并修复两个**真缺陷**（见下条
   `GAP-ORZ-TEST-TARGET-UNIX-BUILD`）。历史场数据（12 次 deny / 13 次 shell
   直读放行）保留在 `evaluation/round-v41-k1/` 供代际对照，口径按索引
   `OBS-GSA-READ-LANE-ASYMMETRY` 复述。入口：
