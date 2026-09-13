@@ -1453,10 +1453,17 @@ impl OrzHost {
                         live_call_jobs.lock().unwrap().push(LiveCallJob {
                             token: dispatch_token,
                             call_id: call_id.clone(),
+                            // Non-Windows has no job handle: register with 0 so
+                            // the call id still shows up in the heavy set (the
+                            // terminate step warns and skips a 0 handle).
+                            #[cfg(windows)]
                             job_handle: observation.job_handle_dup,
+                            #[cfg(not(windows))]
+                            job_handle: 0,
                             action_class: action_class.clone(),
                         });
                     } else {
+                        #[cfg(windows)]
                         OrzHost::close_job_handle(observation.job_handle_dup);
                     }
                 },
