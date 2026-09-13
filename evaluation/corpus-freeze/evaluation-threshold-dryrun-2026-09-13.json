@@ -13,9 +13,14 @@
       "FEP-REG-003",
       "FEP-REG-004",
       "FEP-REG-005",
-      "FEP-REG-006"
+      "FEP-REG-006",
+      "FEP-SYN-002",
+      "FEP-SYN-004",
+      "FEP-SYN-005",
+      "FEP-SYN-007",
+      "FEP-SYN-010"
     ],
-    "export_id": "EXPORT-20260913T044715",
+    "export_id": "EXPORT-20260913T051217",
     "export_total_cases_in_corpus": 40,
     "skipped_count": 0,
     "skip_reasons": [],
@@ -29,58 +34,52 @@
       "task",
       "visible_facts"
     ],
-    "oracle_bundle_case_count": 6,
-    "journal_head_sha256": "df383589c5dba6c498e9d09277cc59de3719251e1c7c7370e3a45692869ba980",
-    "evaluation_id": "EVAL-ADF53BDBC9B544B6",
-    "attempt_id": "ATTEMPT-4723BEF2"
+    "oracle_bundle_case_count": 11,
+    "journal_head_sha256": "20edc93b952e0abdfbdadfb22016b3f3ef2b2dfc410e67690e9fbfc8a213778d",
+    "evaluation_id": "EVAL-FE916B6D826E47C8",
+    "attempt_id": "ATTEMPT-DBE327D7",
+    "coverage_matrix_sha256": "56bdaa2e1c4bbcc5787fe800cae3e2d972c4a0db8ea919dd25203bb51d9e7796",
+    "clusters_in_sample": [
+      "CLU-01",
+      "CLU-02",
+      "CLU-03",
+      "CLU-04",
+      "CLU-07",
+      "CLU-09",
+      "CLU-10"
+    ],
+    "pairs_in_sample": 6
   },
   "threshold_layer_state": {
     "run_status": "descriptive_only",
     "acceptance_block_emitted": {
-      "status": "requires_review",
-      "limiting_factors": []
+      "status": "not_calibrated",
+      "threshold_set": null,
+      "reasons": [
+        "No sealed evaluation/holdout partition has been created.",
+        "No two-reviewer blind human baseline has been run.",
+        "SCORING_PROTOCOL §9 therefore forbids emitting pass/fail."
+      ]
     },
     "limits": [
-      "Scoring is automated against oracle — no human calibration.",
-      "Cluster-level aggregation is preliminary.",
-      "No evaluation/holdout partitions exist — status capped at descriptive_only."
+      "Scoring is automated against the oracle — the §5.3 adjudicated dimensions (scope/limitation wording, falsifier preservation) are not computed and are emitted with a zero denominator.",
+      "The red-line kinds historical_case_as_current_evidence and false_independent_n require a claim-level evidence surface the runner does not have; they stay adjudicated-only.",
+      "No evaluation/holdout partition exists for this corpus, so the status is capped at descriptive_only (SCORING_PROTOCOL §9)."
     ],
     "red_lines_triggered": [],
-    "schema_validation_error_count": 76,
-    "schema_validation_error_paths": {
-      "red_lines": 24,
-      "system_profile": 11,
-      "counts": 8,
-      "metrics": 8,
-      "adjudication": 7,
-      "protocol_ref": 6,
-      "corpus_ref": 4,
-      "acceptance": 4,
-      "integrity": 3,
-      "artifacts": 1
+    "counts": {
+      "planned_cases": 11,
+      "completed_cases": 11,
+      "valid_cases": 11,
+      "clusters": 7,
+      "contrast_pairs": 6,
+      "model_calls": 0,
+      "retries": 0
     },
-    "schema_validation_errors": [
-      "acceptance: Additional properties are not allowed ('limiting_factors' was unexpected)",
-      "acceptance: 'threshold_set' is a required property",
-      "acceptance: 'reasons' is a required property",
-      "acceptance/status: 'requires_review' is not one of ['not_calibrated', 'pass', 'fail']",
-      "adjudication: Additional properties are not allowed ('adjudicator', 'divergence_count', 'notes' were unexpected)",
-      "adjudication: 'required' is a required property",
-      "adjudication: 'completed' is a required property",
-      "adjudication: 'reviewer_count' is a required property",
-      "adjudication: 'identity_blinded' is a required property",
-      "adjudication: 'raw_agreement' is a required property",
-      "adjudication: 'disagreement_count' is a required property",
-      "artifacts: {'journal_sha256': '2a9cc62211203b4ee4916a83563fd9347ec717d130859e0ff8dc0f3c62145497', 'journal_path': 'C:\\\\Users\\\\1\\\\AppData\\\\Local\\\\Temp\\\\p215-dryrun-faiicg11\\\\run\\\\evaluation_journal.jsonl', 'output_dir': 'C:\\\\Users\\\\1\\\\AppData\\\\Local\\\\Temp\\\\p215-dryrun-faiicg11\\\\run'} is not of type 'array'",
-      "corpus_ref: Additional properties are not allowed ('digest' was unexpected)",
-      "corpus_ref: 'sha256' is a required property",
-      "corpus_ref: 'partitions' is a required property",
-      "corpus_ref: 'oracle_default_mode' is a required property",
-      "counts: Additional properties are not allowed ('acceptable_claims', 'completed', 'total', 'with_precommitment' were unexpected)",
-      "counts: 'planned_cases' is a required property",
-      "counts: 'completed_cases' is a required property",
-      "counts: 'valid_cases' is a required property"
-    ],
+    "status_never_claims_comparability": true,
+    "schema_validation_error_count": 0,
+    "schema_validation_error_paths": {},
+    "schema_validation_errors": [],
     "threshold_set": null,
     "conclusion": "no acceptance threshold is derivable from this dry run: the runner caps status at descriptive_only and emits no threshold_set; per SCORING_PROTOCOL §9 the acceptance block must remain not_calibrated until a sealed evaluation/holdout split plus a two-reviewer blind human baseline exist"
   },
@@ -91,5 +90,10 @@
     "audit reviewer divergence, case difficulty, cluster dependency and countercase false positives",
     "freeze the split, then set per-dimension minimums plus zero-tolerance red lines (never a single mean score)"
   ],
-  "boundary": "the placeholder responses carry no information about any model; this record calibrates the threshold machinery, it is not an evaluation result and must never be reported as a score"
+  "boundary": "the placeholder responses carry no information about any model; this record calibrates the threshold machinery, it is not an evaluation result and must never be reported as a score",
+  "contract": {
+    "result_schema": "evaluation/evaluation-result-v0.1.schema.json",
+    "conformant": true,
+    "note": "GAP-EVAL-RESULT-SCHEMA-DRIFT (2026-09-13): the runner now emits the registered schema shape; this dry run is the end-to-end regression evidence (0 validation errors) and the same assertion is enforced in assurance/tests/test_evaluation_runner.py"
+  }
 }

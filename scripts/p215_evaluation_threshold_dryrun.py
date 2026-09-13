@@ -42,6 +42,7 @@ from assurance.evaluation_runner import (  # noqa: E402
     FrozenSystemProfile,
     ScenarioResponse,
     build_evaluation_oracle_bundle,
+    load_coverage_matrix,
 )
 from assurance.scenario_exporter import (  # noqa: E402
     DEFAULT_CORPUS_PATH,
@@ -80,6 +81,16 @@ def main(argv: list[str] | None = None) -> int:
         print(f"no '{args.partition}' cases found in {args.corpus}", file=sys.stderr)
         return 2
 
+    # Pull each sampled historical case's paired countercase as well, so the dry
+    # run actually exercises the pair/countercase blocks of the contract instead
+    # of leaving them empty.
+    matrix = load_coverage_matrix()
+    partners = sorted({
+        matrix["pair_map"][case_id] for case_id in case_ids
+        if case_id in matrix["pair_map"]
+    })
+    case_ids = sorted({*case_ids, *partners})
+
     workdir = Path(tempfile.mkdtemp(prefix="p215-dryrun-"))
     try:
         export = export_scenarios(
@@ -112,7 +123,26 @@ def main(argv: list[str] | None = None) -> int:
             budget_seconds=300,
             mode="guarded",
             seed=42,
+            system_id="P2-15-DRY-RUN",
+            provider="none",
+            adapter_version="p2-15-dry-run",
         )
+        # Cluster/pair/contrast authority is the registered coverage matrix;
+        # it is what makes the cluster_results and pair_results blocks real.
+        cluster_map = {
+            case_id: clusters
+            for case_id, clusters in matrix["cluster_map"].items()
+            if case_id in exported_ids
+        }
+        pair_map = {
+            hist: challenge for hist, challenge in matrix["pair_map"].items()
+            if hist in exported_ids and challenge in exported_ids
+        }
+        contrast_types = {
+            challenge: contrast
+            for challenge, contrast in matrix["contrast_types"].items()
+            if challenge in exported_ids
+        }
         output_dir = workdir / "run"
         runner = EvaluationRunner(
             profile=profile,
@@ -120,6 +150,10 @@ def main(argv: list[str] | None = None) -> int:
             oracle_bundle=oracles,
             output_dir=output_dir,
             corpus_revision=export.corpus_revision,
+            cluster_map=cluster_map,
+            pair_map=pair_map,
+            contrast_types=contrast_types,
+            corpus_partitions=(args.partition,),
         )
 
         # Placeholder responses: no model ran.  Every gate is left unassessed,
@@ -177,14 +211,21 @@ def main(argv: list[str] | None = None) -> int:
                 "journal_head_sha256": runner._journal.head_sha256(),
                 "evaluation_id": runner.evaluation_id,
                 "attempt_id": runner.attempt_id,
+                "coverage_matrix_sha256": matrix["sha256"],
+                "clusters_in_sample": sorted({c for v in cluster_map.values() for c in v}),
+                "pairs_in_sample": len(pair_map),
             },
             "threshold_layer_state": {
                 "run_status": result.get("status"),
                 "acceptance_block_emitted": result.get("acceptance"),
                 "limits": result.get("limitations"),
                 "red_lines_triggered": [
-                    r["rule"] for r in result.get("red_lines", []) if r.get("triggered")
+                    r["kind"] for r in result.get("red_lines", [])
                 ],
+                "counts": result.get("counts"),
+                "status_never_claims_comparability": (
+                    result.get("status") != "eligible_for_comparison"
+                ),
                 "schema_validation_error_count": len(schema_errors),
                 "schema_validation_error_paths": dict(
                     sorted(schema_error_paths.items(), key=lambda kv: -kv[1])
@@ -214,6 +255,17 @@ def main(argv: list[str] | None = None) -> int:
                 "this record calibrates the threshold machinery, it is not an "
                 "evaluation result and must never be reported as a score"
             ),
+            "contract": {
+                "result_schema": "evaluation/evaluation-result-v0.1.schema.json",
+                "conformant": not schema_errors,
+                "note": (
+                    "GAP-EVAL-RESULT-SCHEMA-DRIFT (2026-09-13): the runner now "
+                    "emits the registered schema shape; this dry run is the "
+                    "end-to-end regression evidence (0 validation errors) and the "
+                    "same assertion is enforced in "
+                    "assurance/tests/test_evaluation_runner.py"
+                ),
+            },
         }
         args.out.parent.mkdir(parents=True, exist_ok=True)
         args.out.write_text(

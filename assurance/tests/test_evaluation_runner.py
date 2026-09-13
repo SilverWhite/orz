@@ -1,4 +1,9 @@
-"""Tests for EvaluationRunner — frozen evaluation with oracle isolation."""
+"""Tests for EvaluationRunner — frozen evaluation with oracle isolation.
+
+The emitted document must validate against the registered contract
+``evaluation/evaluation-result-v0.1.schema.json``; that is asserted here rather
+than assumed (GAP-EVAL-RESULT-SCHEMA-DRIFT, 2026-09-13).
+"""
 
 from __future__ import annotations
 
@@ -14,8 +19,26 @@ from assurance.evaluation_runner import (
     FrozenSystemProfile,
     ScenarioResponse,
     build_evaluation_oracle_bundle,
+    file_sha256,
+    load_coverage_matrix,
+    protocol_ref_block,
 )
 from assurance.utils import sha256_bytes
+
+REPO_ROOT = Path(__file__).resolve().parents[2]
+RESULT_SCHEMA = REPO_ROOT / "evaluation" / "evaluation-result-v0.1.schema.json"
+
+
+def _validate_result(result: dict) -> list[str]:
+    """Return contract violations of *result* (empty list = conformant)."""
+    import jsonschema
+
+    schema = json.loads(RESULT_SCHEMA.read_text(encoding="utf-8"))
+    validator = jsonschema.Draft202012Validator(schema, format_checker=jsonschema.FormatChecker())
+    return [
+        f"{'/'.join(str(p) for p in e.absolute_path) or '<root>'}: {e.message}"
+        for e in validator.iter_errors(result)
+    ]
 
 
 # ── helpers ──────────────────────────────────────────────────────────────────
@@ -37,15 +60,16 @@ def _make_profile(**overrides) -> FrozenSystemProfile:
 
 
 def _make_scenario_bundle() -> list[dict]:
+    # Case ids must follow the corpus format fixed by the result schema.
     return [
         {
-            "case_id": "FEP-TEST-001",
+            "case_id": "FEP-REG-001",
             "title": "Test case one",
             "task": "Evaluate claim X.",
             "visible_facts": ["Fact A", "Fact B"],
         },
         {
-            "case_id": "FEP-TEST-002",
+            "case_id": "FEP-REG-002",
             "title": "Test case two",
             "task": "Evaluate claim Y.",
             "visible_facts": ["Fact C"],
@@ -56,7 +80,7 @@ def _make_scenario_bundle() -> list[dict]:
 def _make_oracle_bundle() -> list[dict]:
     return [
         {
-            "case_id": "FEP-TEST-001",
+            "case_id": "FEP-REG-001",
             "title": "Test case one",
             "expected_gate_decisions": [
                 {"gate_id": "EVD-PROVENANCE-001", "decision": "defer"},
@@ -71,7 +95,7 @@ def _make_oracle_bundle() -> list[dict]:
             "correction_summary": "Check the source first.",
         },
         {
-            "case_id": "FEP-TEST-002",
+            "case_id": "FEP-REG-002",
             "title": "Test case two",
             "expected_gate_decisions": [
                 {"gate_id": "CLM-STRENGTH-001", "decision": "defer"},
@@ -266,11 +290,15 @@ class EvaluationFlowTests(unittest.TestCase):
         # Finalize
         result = runner.finalize()
         self.assertEqual(result["status"], "descriptive_only")
-        self.assertEqual(result["counts"]["total"], 2)
-        self.assertEqual(result["counts"]["completed"], 2)
-        self.assertTrue(result["integrity"]["oracle_isolated"])
-        self.assertEqual(len(result["integrity"]["responses_digest"]), 64)
-        self.assertIsNotNone(result["integrity"]["scenario_bundle_digest"])
+        self.assertEqual(result["counts"]["planned_cases"], 2)
+        self.assertEqual(result["counts"]["completed_cases"], 2)
+        self.assertEqual(result["counts"]["valid_cases"], 2)
+        self.assertTrue(result["integrity"]["valid"])
+        check_ids = {c["check_id"] for c in result["integrity"]["checks"]}
+        self.assertIn("INT-ORACLE-ISOLATION", check_ids)
+        self.assertEqual(result["acceptance"]["status"], "not_calibrated")
+        self.assertIsNone(result["acceptance"]["threshold_set"])
+        self.assertEqual(_validate_result(result), [])
 
     def test_finalize_without_all_responses_raises(self) -> None:
         runner = EvaluationRunner(
@@ -279,7 +307,7 @@ class EvaluationFlowTests(unittest.TestCase):
             oracle_bundle=_make_oracle_bundle(),
             output_dir=self._output_dir,
         )
-        response = _make_response("FEP-TEST-001")
+        response = _make_response("FEP-REG-001")
         runner.record_response(response)
         with self.assertRaises(AssuranceError):
             runner.finalize()
@@ -291,7 +319,7 @@ class EvaluationFlowTests(unittest.TestCase):
             oracle_bundle=_make_oracle_bundle(),
             output_dir=self._output_dir,
         )
-        response = _make_response("FEP-TEST-001")
+        response = _make_response("FEP-REG-001")
         runner.record_response(response)
         with self.assertRaises(AssuranceError):
             runner.record_response(response)
@@ -354,10 +382,9 @@ class EvaluationFlowTests(unittest.TestCase):
             response.candidate_claims = ["Claim is supported by source."]
             runner.record_response(response)
         result = runner.finalize()
-        forbidden_line = [
-            r for r in result["red_lines"] if r["rule"] == "RL-NO-FORBIDDEN-CLAIMS"
-        ][0]
-        self.assertFalse(forbidden_line["triggered"])
+        kinds = [r["kind"] for r in result["red_lines"]]
+        self.assertNotIn("forbidden_claim", kinds)
+        self.assertEqual(_validate_result(result), [])
 
     def test_red_line_forbidden_claims_triggered(self) -> None:
         runner = EvaluationRunner(
@@ -371,10 +398,137 @@ class EvaluationFlowTests(unittest.TestCase):
             response.candidate_claims = ["Claim is definitely true."]
             runner.record_response(response)
         result = runner.finalize()
-        forbidden_line = [
-            r for r in result["red_lines"] if r["rule"] == "RL-NO-FORBIDDEN-CLAIMS"
-        ][0]
-        self.assertTrue(forbidden_line["triggered"])
+        forbidden = [r for r in result["red_lines"] if r["kind"] == "forbidden_claim"]
+        # Only case one forbids "Claim is definitely true."; case two forbids a
+        # different sentence, so exactly one case is flagged.
+        self.assertEqual(len(forbidden), 1)
+        self.assertEqual(forbidden[0]["case_id"], "FEP-REG-001")
+        self.assertEqual(forbidden[0]["evidence_refs"][0], forbidden[0]["case_id"])
+        self.assertEqual(_validate_result(result), [])
+
+
+class ResultContractTests(unittest.TestCase):
+    """The emitted document must satisfy the registered result contract."""
+
+    def setUp(self) -> None:
+        self._tmp = tempfile.TemporaryDirectory()
+        self._output_dir = Path(self._tmp.name)
+        self._profile = _make_profile()
+
+    def tearDown(self) -> None:
+        self._tmp.cleanup()
+
+    def _run(self, **runner_kwargs) -> dict:
+        runner = EvaluationRunner(
+            profile=self._profile,
+            scenario_bundle=_make_scenario_bundle(),
+            oracle_bundle=_make_oracle_bundle(),
+            output_dir=self._output_dir,
+            **runner_kwargs,
+        )
+        for scenario in runner.scenario_feed():
+            runner.record_response(_make_response(scenario["case_id"]))
+        return runner.finalize()
+
+    def test_result_matches_registered_schema(self) -> None:
+        self.assertEqual(_validate_result(self._run()), [])
+
+    def test_unknown_case_id_format_is_rejected(self) -> None:
+        """A bundle that cannot produce a schema-valid document fails closed."""
+        bad = [{
+            "case_id": "CASE-001",
+            "title": "off-contract id",
+            "task": "t",
+            "visible_facts": [],
+        }]
+        bad_oracle = [{
+            "case_id": "CASE-001",
+            "expected_gate_decisions": [],
+            "required_questions": [],
+            "expected_state": {},
+            "allowed_claims": [],
+            "forbidden_claims": [],
+            "correction_summary": "",
+        }]
+        with self.assertRaises(AssuranceError) as ctx:
+            EvaluationRunner(
+                profile=self._profile,
+                scenario_bundle=bad,
+                oracle_bundle=bad_oracle,
+                output_dir=self._output_dir,
+            )
+        self.assertIn("case_id", str(ctx.exception))
+
+    def test_corpus_revision_must_be_positive(self) -> None:
+        with self.assertRaises(AssuranceError):
+            EvaluationRunner(
+                profile=self._profile,
+                scenario_bundle=_make_scenario_bundle(),
+                oracle_bundle=_make_oracle_bundle(),
+                output_dir=self._output_dir,
+                corpus_revision=0,
+            )
+
+    def test_no_result_ever_claims_comparability(self) -> None:
+        """SCORING_PROTOCOL §9: no sealed split ⇒ never eligible_for_comparison."""
+        result = self._run()
+        self.assertNotEqual(result["status"], "eligible_for_comparison")
+        self.assertEqual(result["acceptance"]["status"], "not_calibrated")
+        self.assertNotIn(result["acceptance"]["status"], ("pass", "fail"))
+
+    def test_protocol_ref_hashes_registered_artifacts(self) -> None:
+        block = protocol_ref_block()
+        self.assertEqual(
+            block["scoring_protocol_sha256"],
+            file_sha256(REPO_ROOT / "evaluation" / "SCORING_PROTOCOL_v0.1.md"),
+        )
+        self.assertEqual(
+            block["coverage_matrix_sha256"],
+            file_sha256(REPO_ROOT / "regression" / "coverage-matrix-v0.1.yaml"),
+        )
+        self.assertEqual(len(block["gate_matrix_sha256"]), 64)
+
+    def test_coverage_matrix_pairs_carry_contrast_type(self) -> None:
+        """A pair without a registered contrast type fails closed, not silently."""
+        runner = EvaluationRunner(
+            profile=self._profile,
+            scenario_bundle=_make_scenario_bundle(),
+            oracle_bundle=_make_oracle_bundle(),
+            output_dir=self._output_dir,
+            pair_map={"FEP-REG-001": "FEP-REG-002"},
+        )
+        for scenario in runner.scenario_feed():
+            runner.record_response(_make_response(scenario["case_id"]))
+        with self.assertRaises(AssuranceError):
+            runner.finalize()
+
+    def test_load_coverage_matrix_is_cluster_and_pair_authority(self) -> None:
+        matrix = load_coverage_matrix()
+        self.assertEqual(matrix["matrix_revision"], 3)
+        distinct_clusters = {
+            cluster for clusters in matrix["cluster_map"].values() for cluster in clusters
+        }
+        self.assertEqual(len(distinct_clusters), 10)
+        # The seed corpus has overlapping clusters (SCORING_PROTOCOL §2).
+        self.assertTrue(any(len(v) > 1 for v in matrix["cluster_map"].values()))
+        self.assertTrue(matrix["pair_map"])
+        for challenge_id, contrast in matrix["contrast_types"].items():
+            self.assertIn(contrast, ("permission_reversal", "root_cause_contrast", "mode_boundary"))
+            self.assertTrue(challenge_id.startswith("FEP-SYN-"))
+
+    def test_clustered_run_reports_cluster_and_pair_blocks(self) -> None:
+        matrix = load_coverage_matrix()
+        scoped_cases = ["FEP-REG-001", "FEP-REG-002"]
+        cluster_map = {c: matrix["cluster_map"][c] for c in scoped_cases}
+        result = self._run(
+            cluster_map=cluster_map,
+            corpus_partitions=("development",),
+        )
+        self.assertEqual(_validate_result(result), [])
+        expected_clusters = {c for clusters in cluster_map.values() for c in clusters}
+        self.assertEqual(result["counts"]["clusters"], len(expected_clusters))
+        for cluster in result["cluster_results"]:
+            self.assertIn(cluster["cluster_id"], expected_clusters)
 
 
 # ══════════════════════════════════════════════════════════════════════════════

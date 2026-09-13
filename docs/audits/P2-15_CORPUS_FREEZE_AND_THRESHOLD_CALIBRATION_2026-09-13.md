@@ -174,9 +174,12 @@ oracle bundle → 以占位（全 `unassessed`）响应驱动 `EvaluationRunner`
    `requires_review` 不在枚举内、`threshold_set`/`reasons` 缺失。即**产出与其
    自身注册 schema 不兼容**，阈值无从挂靠。
 
-**处置建议（不本批实施，待裁决）**：登记 **GAP-EVAL-RESULT-SCHEMA-DRIFT**
-（runner 产出 vs 注册 schema 的机械对齐 + schema 校验进测试面），作为 P2-15 S3
-（首轮真实 evaluation 跑批）的前置项；未对齐前 S3 不具备可核对产出。
+**处置（2026-09-13 用户裁决：立案并修复）**：**GAP-EVAL-RESULT-SCHEMA-DRIFT**
+已同日立案并修复——按权威顺序「机器合约 > 实现事实」改造实现对齐注册 schema，
+并把 schema 校验纳入测试面；修复后本干跑再生为 **0 校验错误**（样本同时扩为
+"历史案 + 其配对反例"11 案 / 7 簇 / 6 配对）。详见
+[`修复记录`](GAP_EVAL_RESULT_SCHEMA_DRIFT_FIX_2026-09-13.md)。
+本节上表的"76 处"是**修复前**的实测值，保留为立案证据。
 
 ## 3. 冻结机制怎么用（本轮起跑的机械动作）
 
