@@ -116,6 +116,7 @@
 > - harness `grep` 工具（本轮 3 次）→ 正常命中（`D:\CLI\.gsa\ledger\current.md` 12 行 / 59 行、`D:\CLI\docs\FRICTION_LEDGER.md` 15 行）；对照 F-008/F-013/F-015 共 5 次空返。
 > - `python scripts/generate_orz_source_manifest.py` → `wrote 1448 entries`，差异面 5 行（本批 5 文件）；`python scripts/check_repository.py` → `"error_count": 0` / `"valid": true`（EXIT=0）。
 > - `git -C orz log --oneline -1` → `96d2b263 fix(0ac S3): 审记 G1/G2 修复…`；`git -C orz status --porcelain` → 空；`git -C orz show --stat HEAD` → `5 files changed, 96 insertions(+), 49 deletions(-)`。
+> - 收尾补记（父仓核证）：`python scripts/check_repository.py` → `"error_count": 0` / `"valid": true`（EXIT=0，含本批全部文档改动）；父仓账本提交 `57214be0`（`账本: 0ac S3 修复批落档…`，9 files +229/−10；**未推送**），本次哈希回写为其后一条补记。
 
 ## 统计
 

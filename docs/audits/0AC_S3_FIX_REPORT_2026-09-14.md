@@ -3,7 +3,7 @@
 > 状态：`current`；run_id：`RUN-CLI-6aa6d379`（CST 2026-09-14 01:00–01:25 落定）。
 > 范围 = [`0AC_S3 实现审记`](0AC_S3_IMPLEMENTATION_AUDIT_2026-09-14.md) 的 **G1/G2/G3** 与摩擦台账 **F-008…F-015** 中**当前可直接处理**的问题：动手修 + 机械核证 + 账本/文档回写。
 > 边界（用户 2026-09-14 指令）：**不推送、不重建载体**；结构性/待裁决项（G3 投递侧、开关翻转）只登记不动手。
-> 修复提交：orz `96d2b263`（父 `4c892951` → `96d2b263`，分支 `feat/fusion-architecture`，5 文件 +96/−49）；父仓提交见 §6。
+> 修复提交：orz `96d2b263`（父 `4c892951` → `96d2b263`，分支 `feat/fusion-architecture`，5 文件 +96/−49）；父仓提交 `57214be0`（本批账本提交，含本报告；本地提交、未推送，见 §6 表末行）。
 
 ## 0. 结果一行
 
@@ -151,8 +151,9 @@ $ git -C orz status --porcelain →  （空，工作区干净）
 |---|---|
 | 本报告 | 新建（`docs/audits/0AC_S3_FIX_REPORT_2026-09-14.md`） |
 | [`0AC_S3_IMPLEMENTATION_AUDIT_2026-09-14`](0AC_S3_IMPLEMENTATION_AUDIT_2026-09-14.md) | 头部追记 + 新增 §8（修复回写与勘误） |
-| [`FRICTION_LEDGER`](../FRICTION_LEDGER.md) | F-008/F-012/F-013/F-014/F-015 补注；新增 F-016…F-019；本轮核证留痕；统计行 |
+| [`FRICTION_LEDGER`](../FRICTION_LEDGER.md) | F-008/F-012/F-013/F-014/F-015 补注；新增 F-016…F-020；本轮核证留痕（含收尾补记）；统计行 |
 | [`设计稿`](../IMMEDIATE_RESULT_DELIVERY_AND_STREAMING_RETRIEVAL_DESIGN_2026-09-13.md) | 新增 §10.5 回写（P3 闭合） |
 | [`TODO.md`](../../TODO.md) | `P0-0ac` 增修复行 |
 | [`BACKLOG_AND_PRIORITIES`](../BACKLOG_AND_PRIORITIES.md) | `0ac` 小节标题状态 + 增修复行 |
-| [`CLI_PROJECT_INDEX.md`](../../CLI_PROJECT_INDEX.md) | v3.18 → v3.19（版本头 + `GAP-MECH-IMMEDIATE-FEEDBACK` 路由行 + 本报告路由 + 摩擦台账路由行） |
+| [`CLI_PROJECT_INDEX.md`](../../CLI_PROJECT_INDEX.md) | v3.18 → v3.19（版本头 + `GAP-MECH-IMMEDIATE-FEEDBACK` 路由行 + 本报告路由 + 摩擦台账路由行；路由/入口于收尾补齐，见台账 F-020） |
+| 父仓账本提交 | `57214be0`（`账本: 0ac S3 修复批落档…`，9 files +229/−10，含本报告）；其后一条为本次哈希回写补记；**本地提交，未推送** |
