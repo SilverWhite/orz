@@ -328,6 +328,73 @@ R1 试次的 `config.json` 同样只有 gsa 一个 mount ⇒ **不是新回归**
 - 处置：**只记录**（沿用既定口径）；候选后续动作 = 把 `eval_browser` 与这两条漂移旗标纳入
   `run_official_2.1.sh` 的**旗标对账清单**（起跑前机械核对"适配器会传的旗标 ⊆ 载体接受表"）。
 
+### 6.10 深挖 A：agent 阶段超时后 **orz 没有停**（实证 + 代价 + 机制）
+
+**事实（一手，`torch-tensor-parallelism` 试次）**
+
+| 时点（UTC） | 事件 |
+|---|---|
+| 07:46:01 | harbor agent 阶段 `wait_for` 到期 ⇒ `AgentTimeoutError`（adapter 侧 orz **仍在跑**） |
+| 07:46:20 | **agent 阶段结束后仍有事件**：窗口内共 **272 条**（`model_output` **34**、`tool_started` 56 / `tool_completed` 61、控制票据 27、权限请求 18） |
+| 窗口内工具 | `web_search` 21 / `web_fetch` 16 / `run_terminal_cmd` 10 / `grep` 4 / `read_file` 3 / `browser_control` 1 / `blackboard_read` 1 |
+| 08:00:49 | 该 run 最后一条事件（`mechanical_audit_update`）——**11 分钟后才停**（容器删除时随之终止） |
+| 08:01:01 | harbor verifier 阶段到期（`VerifierTimeoutError`，整 900 s） |
+| 08:01:14 | 试次结束（容器删除） |
+
+**机制**：适配器的启动脚本把 orz 放在**后台子壳**里（`{ orz …; echo $? > exit_file; } &` +
+`wait`）。harbor 的 agent 阶段超时是**取消自己的等待**，**没有任何一步去杀容器内的 orz**；
+`docker exec` 会话结束不会杀死容器内的进程 ⇒ **orz 变成孤儿继续跑**，直到试次收尾删容器。
+适配器其实留了自终止开关：`--ak max_wallclock=<秒>`（"orz ends itself with a graceful
+`run_invalidated` terminal before the harness hard-kill"）——**本轮官方口径没有传它**。
+
+**代价（已实际发生）**：
+
+1. **继续烧 API 与工具**：14.5 分钟里 34 次模型往返 + 56 次工具调用（这段没有任何产出意义）。
+2. **与 verifier 抢同一个容器**：verifier 就在这段时间里跑（下面第 3 点）。
+3. **一次"已通过"没被记账**：该题 verifier 的 `tests/test.sh` **自己跑完了**（`13 passed in
+   51.51 s`、`reward.txt`=1），脚本按序只做 apt/curl → 装 uv → `uvx … pytest …`，**没有会挂住的
+   收尾步**。但 harbor 的 verifier 阶段整整吃满 900 s ⇒ 是**执行通道没有返回**，不是测试挂死。
+   对照三个同样被 agent 超时掐断的试次：它们的 verifier 阶段分别 **17 s / 104 s / 9 min** 正常返回
+   ⇒ **唯一显著不同形态 = 该容器里还有一个仍在跑的 orz 会话**（其子进程与 exec 通道交织）。
+   ⇒ **致因判断：agent 超时后不终止 orz，是本次"verifier 挂死 + 已通过未记账"的最可疑来源。**
+
+**处置建议（待裁决）**：
+
+- **建议 1（首选）**：给官方批次传 `--ak max_wallclock=<agent 超时 − 余量>`（如 900 s → 840 s）。
+  这是** agent 侧自预算**，不改 harness 墙钟、不改题目、不改 verifier ⇒ 与官方口径不冲突；
+  收益 = orz 优雅收尾（落 `run_terminated/run_invalidated` 终态）、不再与 verifier 重叠、
+  不再空烧 API。若采纳须按"偏离"登记。
+- **建议 2**：装置侧在 agent 阶段超时后**显式清理容器内 orz**（写 pid 文件 → 收尾时
+  `kill` 该 pid 组），避免孤儿进程跨阶段存活。属装置改造，需单独放行。
+- **建议 3（闭环所需）**：**定向复现**——同题各跑一次"带/不带 `max_wallclock`"，比对 verifier
+  阶段是否挂死；这是把上面的"最可疑"变成"确定"的最小实验。
+
+### 6.11 深挖 B：浏览器车道的**工具反馈**（用户提问：是不是反馈缺失）
+
+**先回答"缺不缺"：原因文案不缺，缺的是"别再来一次"的机制。**
+
+| 面 | 证据 | 判断 |
+|---|---|---|
+| 失败原因是否给到模型 | 设计语义（0t / ADR-0010 §14.65；P1 设计 §3.2 场景 S1）：**故意不做能力预检**——"an ENABLED session with no usable browser backend does **NOT** refuse at a mode/capability gate… 失败走普通 host error 路径（FP-2 真实原因）"；文案 = `Degraded("browser_launch_failed: no browser executable found (ORZ_BROWSER_PATH unset; searched: chrome, google-chrome, google-chrome-stable, chromium, chromium-browser, msedge)")`（`local_browser/discovery.rs:45`，并注明"so the model sees an explicit, actionable cause"） | **不缺**：真实原因 + 搜过的路径都给了 |
+| 模型有没有读懂 | 模型自述逐字命中：`"Browser lane is unavailable (no browser executable), so I'll switch to the native retrieval lane."`／`"browser lane is dead (no executable) and terminal is denied for this retrieval role, so I'm working with web_search + web_fetch (1 web_fetch candidate left)"` | **读懂了**，并主动切到 web 族 |
+| 那为什么还试了 13 次 | ①**惰性启动按 dispatch 重复**：每次检索派发都重新尝试一次浏览器启动（不做 run 级记忆）；②**可用性探针不覆盖检索族**：`tool_availability_check` 只探 `main_agent_work_tools`（`read_file` / `grep` / `search_replace` / `blackboard_read` / `run_terminal_cmd`），**从未探 `browser_control`/`browser_read`**；③设计上明确拒绝"能力预检" | **结构性问题**，不是"反馈没给" |
+| 代价落在哪 | 单次尝试很便宜（`wall_ms` 3–13 ms），**贵的是模型轮次与检索子代理预算**：本轮出现 5 次 `subagent_wallclock_timeout_mid_tool`（子代理把整段预算烧在死车道上） | 用 900 s 预算的题上代价显著 |
+| 事后取证面 | `tool_completed` 的失败载荷只有 `{status:error, error:"browser_launch_failed"}`，**不含 cause**；cause 只在相邻的 `browser_launch_result` 事实里 ⇒ 单看一条事件无法自证原因（需两事件 join） | **取证面可改进** |
+
+**修法候选（未实施，待裁决；注意与既有 S1 裁决的关系）**
+
+1. **run 级"车道已死"粘性**：首次 `browser_not_found` 后把该 run 的浏览器车道标为 dead，
+   后续 dispatch **不再尝试启动**、直接回一条明确文案（"browser lane disabled for this run
+   (no executable); use web_search/web_fetch"）。
+2. **把探针扩到检索族**（或加一条等价的 lane-status 检查），让保护主工作面的机械门同样覆盖
+   检索车道。
+3. **收窄 S1 语义（建议的精确表述）**：保留"**首次不预检、如实报因**"，但允许"**已证终态失败后
+   不重复尝试**"——区分"首次如实报因"与"反复重试"，不推翻 FP-2 的初衷。
+4. **取证面**：把 cause（或稳定 `cause_ref`）并入 `tool_completed` 失败载荷，使单事件自描述。
+
+> 边界：本条属**反馈/机制面**的发现，**不是镜像缺陷**；`eval_browser` 开关的取舍已由用户裁决
+> （**不增加容器内浏览器**），故修法方向是"**更明确的反馈 + 不重复尝试**"，而不是"补上浏览器"。
+
 ### 6.6 操作事故自记（本轮两处自伤，须登记）
 
 排障期间由**本代理自己的进程筛选方式**引入两处误伤：

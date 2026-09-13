@@ -575,6 +575,32 @@ GLM F2 处置转排期（2026-09-06 用户裁决）：`orz-host/src/approval.rs`
   ② 浏览器车道全败 = **`eval_browser` 注入开关未传**（默认关；本轮与 R1 都没传），
   `browser_control`/`browser_read` 因必须先启动浏览器而连带失败，`web_search`/`web_fetch`
   走纯 HTTP 不受影响；**相对 R1 非回归，相对 R3/R4/R4b 是能力回退**。
+  **两处深挖定案（2026-09-13，处置待裁决）**：① **agent 超时后 orz 不停**——
+  `torch-tensor-parallelism` 实证：agent 阶段 07:46:01 被掐断后该 run **仍有 272 条事件**
+  （`model_output` 34 / 工具调用 56：`web_search` 21、`web_fetch` 16、`run_terminal_cmd` 10 …），
+  写到 **08:00:49**（容器删除才停）；机制 = 适配器**后台子壳**起 orz（`{ orz … } &` + `wait`）
+  ＋ harbor 的 agent 超时**只取消自身等待、不杀容器内进程**（`docker exec` 结束不杀进程）
+  ⇒ 孤儿继续跑；适配器本有 `--ak max_wallclock`（优雅 `run_invalidated` 自救），官方口径未传。
+  代价：空烧 API/工具 14.5 min、**与 verifier 抢同一容器**、**一次"已通过"没被记账**——该题
+  verifier 的 `tests/test.sh` 自身跑完（`13 passed in 51.51 s`、`reward.txt`=1、脚本无收尾挂点），
+  但 harbor verifier 阶段**整 900 s 未返回**；其余三个被 agent 超时掐断的试次 verifier 阶段
+  分别 **17 s / 104 s / 9 min** 正常返回 ⇒ **唯一显著不同 = 容器里另有在跑的 orz**。
+  处置候选：**传 `--ak max_wallclock=<超时−余量>`**（agent 侧自预算、**不改 harness 墙钟**，
+  采纳则按偏离登记）／装置侧在 agent 超时后**显式清理 orz**（pid 文件 + 收尾 kill）／
+  **定向复现**（同题带 vs 不带，比对 verifier 是否挂死）闭环。② **浏览器车道反馈面**——
+  **原因文案不缺**（0t / ADR-0010 §14.65 与 P1 §3.2 S1 故意不做能力预检；失败带真实 cause
+  `no browser executable found (ORZ_BROWSER_PATH unset; searched: chrome, …, msedge)`；模型已逐字
+  读懂："Browser lane is unavailable (no browser executable), so I'll switch to the native
+  retrieval lane"）；**缺的是"别再来一次"**——惰性启动**按 dispatch 重复**、
+  `tool_availability_check` **只探主工作面**（read_file/grep/search_replace/blackboard_read/
+  run_terminal_cmd）不探检索族、S1 明确拒绝 capability precheck ⇒ 13 次尝试属**结构性**；
+  代价落在**模型轮次与检索子代理预算**（5 次 `subagent_wallclock_timeout_mid_tool`），单次尝试
+  仅 3–13 ms；事后取证面上 `tool_completed` 失败载荷**不含 cause**（cause 只在相邻
+  `browser_launch_result`）。修法候选：run 级车道粘性／探针扩到检索族／收窄 S1 为"首次如实
+  报因、终态失败后不重复尝试"／cause 并入失败载荷——**方向是更明确的反馈＋不重复尝试，
+  不是补浏览器**（用户已裁决不增加容器内浏览器）。
+  **载体修复待重建**：`GAP-ORZ-HOST-RESOURCE-SNAPSHOT-DROP` 已落码（orz `ea777918`），
+  进载体须双平台重建（Windows + Linux musl，约 40–60 min），**待放行**。
 
 ### 0p. 模型自信息面补强与 `.gsa` 两段门（P0；2026-09-07 设计定稿同日排期；**S1–S5 全部闭合 2026-09-08，转 `implemented`**）
 
