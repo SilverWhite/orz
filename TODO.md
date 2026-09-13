@@ -624,7 +624,7 @@ GLM F2 处置转排期（2026-09-06 用户裁决）：`orz-host/src/approval.rs`
 - [x] **闭合入账（2026-09-11 用户裁决）**：S1–S4 全部闭合、S4 实机判据通过 → 转 `implemented`，未闭合 **27 → 26**。
 
 
-### P0-0y NP1 机械身体集成支线（2026-09-11 用户裁决立项；设计定稿 + 全模块化承载确认；实施未开始）
+### P0-0y NP1 机械身体集成支线（2026-09-11 用户裁决立项；设计定稿 + 全模块化承载确认；S1 模拟器验证载体已定案入账（2026-09-13）；M0 定版与 M1 接口定义未开始）
 
 > 设计权威：[`NP1_ORZ_BODY_INTEGRATION_DESIGN_2026-09-11`](docs/NP1_ORZ_BODY_INTEGRATION_DESIGN_2026-09-11.md)（§9.3 全模块化承载确认 + 附录 D 登记前实机复核）；BACKLOG 0y；索引 `AUTH-NP1-BODY-INTEGRATION`。orz 之外扩展面：不修改 ADR-0010 与模型工具面。
 
@@ -632,7 +632,8 @@ GLM F2 处置转排期（2026-09-06 用户裁决）：`orz-host/src/approval.rs`
 - [x] **aarch64 载体重建（M1 前置）完成（2026-09-13，按 0.5.0 同源重建）**：源冻结 orz `1f13e5ec`（与 x86_64 S3 同源）→ x86 容器 + zig cc + rust-lld 交叉编译（12m11s，`BUILD_EXIT=0`）→ `orz` 73,007,720 B / `orz-signer` 1,757,984 B / `orz-acaf-provision` 1,595,128 B（AArch64 静态 ET_EXEC + `PT_INTERP=0`）；bookworm/alpine 双向加载冒烟绿 + 0z 七族符号全命中；旧 0.2.0 三件就地备份（`*-0.2.0.bak`）。复现入口 `scripts/build_orz_aarch64_musl_cross.sh`（LIFECYCLE `active`）。入口：[记录](docs/audits/0Y_AARCH64_REBUILD_2026-09-13.md)。
 - [ ] M1 前置：接口定义（事件 schema / 动作契约 / 策略注册表形态）与 orz 机械层共同确定（设计 §14.1）。
 - [x] §14.2 验证载体决策（**2026-09-12 用户裁决**）：引入模拟器为常设验证载体——载体集 = 模拟器（新增、常设）+ NP2（既有，流程纪律）+ NP1（端到端终验）；模拟器承担自有代码验证 + M5 补丁流程纪律干跑（坏补丁代价 = 删快照）；不验证厂商框架与 NP1 专属内核面（设计 §12 裁决段）。
-- [ ] S1 验证载体搭建（待放行）：无头 x86_64 安卓镜像选型与搭建（候选 ATD 类自动化镜像）；orz x86_64 musl 三件套直接上机冒烟（静态 ELF 在安卓内核执行，与 BODY-PRE-01 同理，无需新构建）；Magisk-in-AVD 模块打包/安装/禁用/恢复实机化演练；M5 补丁流程纪律干跑首轮。**2026-09-13 盘面注记**：`D:\tb-eval\s1_emulator\` 已有 baseline AVD、Magisk 模块、M5 补丁流水线，并完成「好补丁→进系统→坏补丁（service 失败）→自愈→回滚」干跑（回滚后 `services.jar` 与 SELinux 策略哈希回到注入前）——S1 定案与入账待补，账本状态同步见 BACKLOG 0y。
+- [x] **S1 验证载体搭建 + 定案与入账完成（2026-09-13 入账；盘面实做 2026-09-12）**：形态定案 = AVD `orz_body_a35`（android-35 `aosp_atd` x86_64、无头 `swiftshader_indirect`、`-no-snapshot`、port 5554）+ Magisk 30.7（ramdisk 直注 `PREINITDEVICE=vdd1` + `/data/adb/magisk` 持久面）+ `orz_body` 模块承载五面 + M5 补丁流水线（冻结 jar → baksmali 加性补丁 → smali 重组 → 反射探针 → 4 字节对齐重打包 → 确定性模块）。判据 1–7 成立：五面承载落点齐、两阶段 marker 同 `boot_id` 且守护 `ppid=1`、PREINITDEVICE A/B 六次引导（两组规则差异恰好一条）、M5 五态干跑（好补丁机械读回 MARKER / 坏补丁安装 / 坏 services 补丁 `zygote64` SIGABRT 开不了机 / `disable` 自救回原厂件 / 策略回退）。**同批三条发现**：A「禁用模块 + 重启」不撤销已入内核的 SELinux 规则（设计 §10.3 层 1 对该条不完整，候选处置待裁决）；B 策略哈希三态更正（`8242a06d` 对照组 / `d2365b61` 注入态 / `d1749c5d` 无 Magisk 干净态）；C 补丁生效判据需带「装载时机」字段（与 §14.1 同批定）。入口：[S1 定案记录](docs/audits/0Y_S1_EMULATOR_CARRIER_2026-09-13.md)。
+- [ ] **S1 收尾：orz x86_64 musl 三件套上机冒烟**（判据 8，未成立）——真 orz 替换 busybox 桩守护，验静态 ELF 在安卓内核直接执行（与 `BODY-PRE-01` 同理、无需新构建）；同批把干跑串成一键复现脚本（当前只有制品 + 逐条命令历史）。
 
 
 ### P0-0z 真机资源安全边界与崩溃收尾（2026-09-12 用户裁决立项；**设计完成、S1（A + D + F）与 S1.1 复核收口均已落码**；不换盘不换卷）
