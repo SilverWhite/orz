@@ -18,7 +18,7 @@
 | `build_global_progress_checkpoint.py` | 全局进度 checkpoint 构建 | 门禁配套 |
 | `generate_run_event_fixtures.py` | run-event fixture 生成器 | schema 配套 |
 | `run_r3_unsolved20_per_task.ps1` / `run_r4_unsolved15_per_task.py` / `run_r4b_supplement4_per_task.py` | 官方复跑执行器（0s / 0u / r4b） | 结果复现入口 |
-| `run_r0_heavy_official.py` | V4.1 代际新一轮**第 0 轮**（内存重题前置轮：8 题 / `-k 1` / `-n 1` / 单作业 `official-r0-heavy` / 官方口径 + 上传）起跑器；含代际身份硬门（载体 + 适配器哈希）与起止快照 | 本轮结果复现入口（2026-09-13 设立，口径见容器侧排查 §5.3；**不修改冻结 runner**） |
+| `run_r0_heavy_official.py` | V4.1 代际新一轮起跑器（官方口径 `-k 1` / `-n 1` / 单作业 / `--upload --public`）；含**代际身份硬门**（载体 + 适配器哈希）、**预拉镜像**（默认开：逐题 `docker pull` + 4 次重试 + digest 入档 + 不全绿即中止，2026-09-13 用户裁决）、`--tasks` / `--job-name` / `--pull-only` 子集与补跑用法、起止快照 | 本轮结果复现入口（2026-09-13 设立；口径见容器侧排查 §5.3 与第 0 轮起跑记录 §6.5；**不修改冻结 runner**） |
 | `run_tb40_ctr_probe.py` | TB 4.0 单题摩擦探针执行器（0w） | 结果复现入口 |
 | `rerun_failures_k1.ps1` / `run_failures_chunked_10.*` / `run_official_chunked_10.sh` | 官方批次补跑/分块执行器 | 结果复现入口 |
 | `orz_acaf_run.ps1` | ACAF harbor 透传跑批入口 | `GAP-ACAF-HARNESS-PASSTHROUGH` 登记件 |

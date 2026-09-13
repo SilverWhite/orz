@@ -528,6 +528,31 @@ GLM F2 处置转排期（2026-09-06 用户裁决）：`orz-host/src/approval.rs`
   载体 `393eee34…` + 适配器 `2737cfad…`，不符即中止）。入口：
   [`第 0 轮起跑记录`](audits/TB21_V41_ROUND0_MEMORY_HEAVY_START_2026-09-13.md) /
   [`排期 §3.3`](TB21_V41_GENERATION_ROUND_SCHEDULE_2026-09-13.md)；登记不动计数。
+  **第 0 轮中止 + 补跑 + 两条硬发现（2026-09-13，用户在起跑后追加裁决）**：① **中止**——
+  第 8 题 `rstan-to-pystan` 被**外部影响**（本代理操作事故：`Get-Process -Name docker` 宽匹配
+  误杀跑批中的 `docker compose exec`，记录 §6.6）⇒ 按裁决**杀掉、不放行**；主作业
+  `official-r0-heavy` **中止不上传**（账面 6/8 报错，作为发布记录无意义，本地过程证据保真）；
+  **89 题口径更正**：有效试次 = 补跑 5 题 ＋ 本地保留 3 题（`torch-tensor-parallelism` /
+  `mteb-leaderboard` / `gpt2-codegolf`）= 8 题，代价为保留 3 题无 Harbor 记录。② **补跑
+  `official-r0-netretry`（18:32 起跑）**：5 题 = 4 个网络因素题 ＋ `rstan-to-pystan`；
+  **首次执行「预拉镜像」裁决**（逐题 `docker pull` + 4 次重试 + digest 入档 + 不全绿即
+  `return 3` 中止，实测 5/5 全绿）；执行器新增 `--tasks`/`--job-name`/`--pull-only`。
+  ③ **硬发现一（模型动作面）**：检索类占工具调用 **38%**（R1 全局基线 4.2%），四个检索型
+  试次 **`web_search` 独占官方 agent 预算 54–91%**（torch-tensor 807/900 s、torch-pipeline
+  817/900 s、gpt2 488/900 s、mteb 977/3600 s）⇒ **超时主因是检索耗时而非模型慢**（时延
+  p50 2.3–8.9 s）；**容器内无浏览器** ⇒ `browser_control` 13 / `browser_read` 5 / launch 14
+  **全败**（R1 试次 config 同样只有 gsa mount ⇒ 非新回归，但 V4.1 更常走该车道）；失败/拒绝
+  分 11 类并**三层归因（装置侧 20 / 设计内门 37 / 模型习惯 4）**；第二条契约漂移
+  `--retrieval-mode local_browser` 已弃用并被忽略。④ **硬发现二（0z 资源面在生产车道漏接）**：
+  `host_resource_snapshot` **未进** `orz-loop/src/host_exec.rs:154` 的 `EVENT_TYPE_BY_FACT`
+  判定表 ⇒ 6 run **13 次 `unknown host resource fact kind; dropped (audit-face loss)`、
+  journal 0 事件**（资源族仅 `reclaim_performed` 1 次，`outcome=rejected`、回收 0 B）；
+  **设计要求（设计 §4.5 + F-EV-7「producer 已补」）＋发射端（`orz-host/src/lib.rs:463`/`:1284`）
+  ＋事件类型（`orz-assurance/src/journal/event.rs:45` + TUI bridge + 校验器）三处齐备** ⇒
+  **判定为实现漏接、非设计内**；放大器 = **符号在位 ≠ 端到端接线**（与
+  `ORZ-PLATFORM-TARGET-001` 同族）。**本轮不修载体**（影响取证面而非动作面）；
+  立案（GAP）+ 端到端钉子 + 修复待裁决。入口：
+  [`第 0 轮起跑记录 §6.1–§6.6`](audits/TB21_V41_ROUND0_MEMORY_HEAVY_START_2026-09-13.md)。
 
 ### 0p. 模型自信息面补强与 `.gsa` 两段门（P0；2026-09-07 设计定稿同日排期；**S1–S5 全部闭合 2026-09-08，转 `implemented`**）
 

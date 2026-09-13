@@ -139,11 +139,148 @@
 AgentTimeout（**R1 已有 6/8 命中 AgentTimeout**）。⇒ **"重题集用满官方墙钟"不是新回归**；
 本轮新增的差别主要是**出网不稳**（R1 期未出现镜像拉取中断）。
 
+### 6.2 作业中止（18:26–18:31，用户裁决）
+
+**裁决**：第 8 题（`rstan-to-pystan`）已被外部影响（§6.6 操作事故自记）⇒ **不再放行，直接杀掉
+并与其题一起重跑**。
+
+**中止动作与结果**
+
+| 时点 | 动作 | 结果 |
+|---|---|---|
+| 18:26 | 终止 launcher（python `21288`）、harbor（`10736`/`400`/`8024`）、该试次 `docker-compose`（`20352`） | 进程清点 0；**无其他 docker 进程被牵连**（见 §6.6 操作事故自记） |
+| 18:30 | `docker rm -f f9760a5f41a0`（被中止试次容器，显式目标 ID） | 容器 0；镜像 8 个在位（caffe / filter-js 已预拉） |
+
+**中止时刻账面**：7 完成（其中 6 报错）+ 1 运行中；被中止试次的 journal 已写到 **463 行**
+（末次 18:28:51）⇒ **该试次不纳入本轮有效试次**，与四个网络因素题一起重跑。
+**过程证据保留不删**：6 个 gsa run 目录 + 8 个试次目录（含 `torch-tensor-parallelism` 的
+verifier 13/13 通过记录、三条 agent 日志、`reclaim_performed` 事件）。
+
+**本轮 89 题口径的账（更正后）**
+
+- **R0 主作业 `official-r0-heavy` 中止、不上传**（账面 6/8 报错、1 题被中止，作为 Harbor
+  记录无意义；本地过程证据保真）。
+- **有效试次构成**：补跑作业 `official-r0-netretry` 5 题（§6.5）
+  ＋ R0 本地保留 3 题（`torch-tensor-parallelism` 已解出但超墙钟 / `mteb-leaderboard` /
+  `gpt2-codegolf`）= 8 题，仍满足"8 题各 1 次"的口径；**代价**：保留的 3 题没有 Harbor 记录
+  （k=1 本就不构成榜单提交，此代价已登记）。
+
+### 6.3 深挖一：本轮模型动作实况（V4.1 Flash）
+
+数据源 = 会话卷 `events.jsonl`（6 个 run，622 次工具调用 / 379 次 model_output）。
+
+| 题 | model 轮 | 工具调用 | 工具构成（前几） | 工具墙钟 | 模型时延 p50/max |
+|---|---|---|---|---|---|
+| `torch-tensor-parallelism` | 71 | 112 | web_search 31 / run_terminal_cmd 28 / web_fetch 24 / search_replace 9 | 17.3 min | 3.9 s / 149.3 s |
+| `torch-pipeline-parallelism` | 51 | 95 | web_search 35 / web_fetch 24 / run_terminal_cmd 14 | 17.0 min | 3.7 s / 103.4 s |
+| `mteb-leaderboard` | 155 | 245 | run_terminal_cmd 122 / web_search 41 / web_fetch 30 / grep 18 | 34.3 min | 7.1 s / 41.6 s |
+| `gpt2-codegolf` | 30 | 76 | web_search 25 / web_fetch 15 / blackboard_read 11 / read_file 11 | 8.8 min | 8.9 s / 33.5 s |
+| `mcmc-sampling-stan` | 43 | 51 | run_terminal_cmd 38 / search_replace 9 | 16.1 min | 2.3 s / 26.9 s |
+| `rstan-to-pystan`（被中止） | 32 | 51 | run_terminal_cmd 51（全程终端） | 11.6 min | 3.4 s / 37.8 s |
+
+**解读 1 — 检索倾向暴涨，且直接吃掉官方预算**：检索类调用占工具调用比
+`torch-pipeline 68%` / `gpt2 56%` / `torch-tensor 53%` / `mteb 31%` / `mcmc 0%` / `rstan 0%`
+（本轮合计 **239/622 = 38%**；R1 全局基线 **119/2837 = 4.2%**）。四个检索型试次里
+**`web_search` 一项独占官方 agent 预算**：torch-tensor **807 s / 900 s（90%）**、
+torch-pipeline **817/900（91%）**、gpt2 **488/900（54%）**、mteb **977/3600（27%）**
+——**超时的主要成因是检索耗时，不是模型慢**（模型时延 p50 仅 2.3–8.9 s）。
+**对照边界**：R1 可得的同题 journal 只有 2 题（`filter-js` 66 次调用 0 检索、
+`mcmc` 46 次 0 检索），故"V4.1 更爱检索"成立但要等第二轮全量同题对照收口。
+
+**解读 2 — 浏览器通道 100% 死，而模型反复去撞**：`browser_launch_result` **14 次全 failure**
+（`browser_not_found: no browser executable found (ORZ_BROWSER_PATH unset; searched: chrome,
+google-chrome, … chromium …)`），连带 `browser_control` 13 次、`browser_read` 5 次全部失败。
+R1 试次的 `config.json` 同样只有 gsa 一个 mount ⇒ **不是新回归**（容器内本就没有浏览器），
+但**V4.1 比 V4 Flash 更常走浏览器车道**，代价因此放大。
+
+**解读 3 — 失败/拒绝分类（6 run 合计）**：命令非零退出 20（`run_terminal_cmd`）/
+**角色门拒绝 16**（`retrieval_role_write_denied`；检索子代理写盘被拒，设计内）/
+**容器无浏览器 14** / **检索候选上限 13**（`candidate_cap_exceeded`，机械层 cap）/ 网络 5 /
+检索子代理墙钟 5 / 工作区沙箱拒绝 5（`outside_workspace`，含 `/tmp`）/
+**模型习惯 4**（命令里带 `&`，orz 回"Remove the background '&' …, set `is_background=true`"）/
+`.gsa` 两段门首读通知 3 / DNS 失败 1 / 非文本内容 1。
+⇒ 其中**装置侧 14+5+1=20 次**、**设计内门 16+13+5+3=37 次**、
+**模型习惯 4 次**——三者须分开归因，不得混算成"工具失败率"。
+
+**解读 4 — 两条契约漂移（适配器 → 0.5.0）**：除已登记的 `--max-tool-rounds 999`
+（0.5.0 无此旗标、静默忽略）外，本轮实测第二条：适配器传
+`--retrieval-mode local_browser`，0.5.0 回
+`warning: --retrieval-mode / ORZ_RETRIEVAL_MODE is deprecated (0t γ, ADR-0010 §14.65)`
+——**已弃用且被忽略**（车道选择自主）。两条都只记录、本轮不处理（用户裁决口径）。
+
+### 6.4 深挖二定案：0z 资源面在 orz 内部被丢弃（**生产车道实现漏接**）
+
+**结论**：`host_resource_snapshot` **不是设计内走别的面**，而是 **orz 内部两 crate 之间的
+映射表漏项**——`orz-host` 发射的事实被 `orz-loop` 丢弃。
+
+| 环节 | 一手证据 |
+|---|---|
+| 设计要求 | [`HOST_RESOURCE_SAFETY_DESIGN_2026-09-12`](../HOST_RESOURCE_SAFETY_DESIGN_2026-09-12.md) §4.5 明列 `host_resource_snapshot`（"档位变化时的读数…低频，跨档才落"）；`0Z_S2_COMPREHENSIVE_REVIEW_HANDLING` 记 F-EV-7"producer 已补（run_start + 跨档 tier_change 两触发）" |
+| 发射端（有） | `crates/orz-host/src/lib.rs:463`（run_start 一次）与 `:1284`（跨档 tier_change）`push(json!({"event": "host_resource_snapshot", …}))` |
+| 事件类型（有） | `crates/orz-assurance/src/journal/event.rs:45` `EventType::HostResourceSnapshot`；`orz-tui/src/bridge.rs:473` 亦处理该类型；assurance 侧有 `verify_host_resource_snapshot` 校验器与 v0.2 注册 |
+| **接收端（缺）** | `crates/orz-loop/src/host_exec.rs:154` 的 `EVENT_TYPE_BY_FACT` **只有 4 项**：`reclaim_performed` / `resource_exhausted` / `host_resource_denied` / `resource_limit_hit`——**没有 `host_resource_snapshot`** ⇒ 命中 `180` 行 `else` 分支，WARN `unknown host resource fact kind; dropped (audit-face loss)` |
+| 运行时后果 | 6 个 run 共 **13 次 WARN**（agent 日志），journal 事件统计里 `host_resource_snapshot` **0 次**（资源族仅 `reclaim_performed` 1 次）；即 **每个 run 至少应有的 1 行 run_start 读数全部丢失** |
+
+**为什么既有核证没抓到**：0z S3 的接线核证是**符号在位**（`host_resource_snapshot` 3/3+，
+[`0Z_S3_DUAL_PLATFORM_REBUILD`](0Z_S3_DUAL_PLATFORM_REBUILD_2026-09-13.md)），**不是
+「事实 → 判定表 → journal」的端到端**；`host_exec.rs` 的判定表**没有覆盖该 kind 的测试**
+（同文件 3647 行的调用点在工具执行边界，测试覆盖的是别族）。与
+`ORZ-PLATFORM-TARGET-001` 同族放大器：**"在位"≠"接线"**。
+
+**登记与边界**：本条按 `ORZ-VERDICT-EPOCH-001` 纪律先回查再判断——已核对设计文档、发射端、
+事件类型、接收端四处一手来源，**判定为实现漏接（生产车道）**，非设计内。处置建议：
+立案 GAP（补判定表一项）＋ 端到端钉子（`run_start` 必落 1 行 `host_resource_snapshot`
+进 journal）＋ 与"符号核证"分开标注。**本轮不修载体**（用户对重建的既有裁决：不影响框架
+实际动作则不重建；此处影响的是**取证面**而非动作面）。
+
+### 6.5 补跑作业起跑（`official-r0-netretry`，18:32）
+
+- **题集 5 题**（用户裁决）：4 个网络因素题（`caffe-cifar-10` / `filter-js-from-html` /
+  `mcmc-sampling-stan` / `torch-pipeline-parallelism`）＋ 被中止的 `rstan-to-pystan`。
+- **预拉（本轮新纪律）**：起跑前逐题 `docker pull`，**5/5 全绿**，解析后 digest 入档
+  （`caffe-cifar-10@sha256:929a6d63…`、`filter-js-from-html@sha256:92acda0f…`、
+  `mcmc-sampling-stan@sha256:073fc36a…`、`torch-pipeline-parallelism@sha256:3cb7b39d…`、
+  `rstan-to-pystan@sha256:b23d4883…`）；**预拉不全绿即不带残批起跑**（执行器 `return 3`）。
+- **口径**：单作业、`-k 1`、`-n 1`、`--upload --public`、官方数据集 pin、无时间倍率、
+  无 `--max-retries`；卷 `gsa-volumes/official-r0-netretry`、产物 `jobs-official/official-r0-netretry`。
+- **代际身份门**同前（载体 `393eee34…` + 适配器 `2737cfad…`）。
+- **起跑前快照**：宿主 `D:` 可用 **30.79 GiB**、镜像 8、容器 0。
+- **已知残余风险（登记）**：`torch-pipeline-parallelism` 的 verifier 需现下 torch（825 MB）
+  与 CUDA 系列轮子，上一轮即在此处 `UV_HTTP_TIMEOUT=30s` 崩；若再次发生，属**装置侧网络**
+  导致该题 reward 无效（不改官方参数规避，必要时由用户裁决是否放宽 verifier 侧网络容忍）。
+
+### 6.6 操作事故自记（本轮两处自伤，须登记）
+
+排障期间由**本代理自己的进程筛选方式**引入两处误伤：
+
+1. **18:26（第一处）**：改用「可观察的重试式预拉」前，为停掉卡死的拉取，用
+   `Get-Process -Name docker` 宽匹配逐个终止——`docker` 这个**进程名**同时命中
+   **正在跑批试次的 `docker compose exec` CLI（pid 17872）**，该试次的 agent 阶段流被切断
+   ⇒ `rstan-to-pystan` 试次作废（容器内 orz 仍存活、journal 继续写到 463 行，故**结果不可用**）。
+2. **18:30（第二处）**：改按命令行过滤终止时，过滤条件里包含 `official-r0-heavy` 等字样，
+   **未排除本 shell 自身**，于是把**正在执行该命令的 shell（pid 6032）**一并杀掉，
+   命令以 `-1` 中断（后续清点步骤未跑完，已另起命令补齐）。
+
+**影响与处置**：仅 `rstan-to-pystan` 一个试次受影响，且已按裁决并入补跑
+（§6.2 / §6.5）；无其他数据损失，本地过程证据完整。
+
+**更正纪律（本轮新增，供后续批沿用）**
+
+- 终止进程一律**按完整命令行 + 白名单式显式目标**筛选，并**强制排除本 shell 及其祖先**；
+  `docker` / `harbor` 等**进程名匹配不得用于杀进程**（会牵连跑批中的 exec）。
+- 容器一律**用显式 ID** `docker rm -f <id>`，不用模式匹配。
+- 排障动作前先取一次「谁是跑批进程」快照，排障后再取一次，逐项对比。
+- 泛化候选：本条属 `harness_environment` 类的**操作摩擦**（与"缺件伪装成失败"同族：
+  装置操作动作污染跑批结果），可入案例库。
+
 ## 7. 复现入口与产物位置
 
 - 起跑器：[`scripts/run_r0_heavy_official.py`](../../scripts/run_r0_heavy_official.py)
-  （`scripts/LIFECYCLE.md` 登记为 `active`；`--dry-run` 打印解析后的 argv 与前置，
-  不触碰装置）。
+  （`scripts/LIFECYCLE.md` 登记为 `active`）。参数：`--dry-run`（只打印解析后的 argv、镜像与
+  前置，不触碰装置）／`--tasks a,b,c`（题集子集，批次与超时取自冻结清单，供补跑复用）／
+  `--job-name`（作业名）／**预拉默认开**（逐题 `docker pull`、最多 4 次重试、实时落盘
+  `preroll-images.log`、记录解析后 digest，**不全绿即 `return 3` 中止**）／
+  `--no-pre-pull`（仅在确认镜像全在位时）／`--pull-only`（只拉不跑）。
 - 命令等价形式：审计 §5.3（逐题 `-i` 显式列表 + `-k 1 -n 1 --upload --public`）。
 - 过程证据：`D:/tb-eval/jobs-official/official-r0-heavy-round.log`（起止与快照）、
   `official-r0-heavy-console.log`（harbor 会话输出）、
