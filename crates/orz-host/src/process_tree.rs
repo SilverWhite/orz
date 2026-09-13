@@ -647,6 +647,22 @@ mod tests {
         pid
     }
 
+    /// Same contract as the Windows variant (spawn + reap = guaranteed-dead
+    /// pid) so the unix test target compiles and runs the sweep tests too.
+    #[cfg(unix)]
+    fn dead_pid() -> u32 {
+        let mut child = std::process::Command::new("sh")
+            .args(["-c", "exit 0"])
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .expect("spawn dead-pid probe");
+        let pid = child.id();
+        child.wait().expect("reap dead-pid probe");
+        std::thread::sleep(std::time::Duration::from_millis(100));
+        pid
+    }
+
     fn unique_dir(tag: &str) -> PathBuf {
         let n = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
