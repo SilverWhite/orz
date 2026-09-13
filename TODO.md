@@ -732,7 +732,10 @@ GLM F2 处置转排期（2026-09-06 用户裁决）：`orz-host/src/approval.rs`
 
 ### 15. EVALUATION-CORPUS-FREEZE（P2；2026-09-13 立项，深审 S-13 注册）
 
-- [ ] S1 考卷语料冻结（域/规模选型 + sha256 清单 + 存放形态定案 + 阈值基线草案）；S2 小样本干跑校准 evaluation/holdout 阈值；S3 首轮真实 evaluation 跑批（oracle isolation 生效）；S4 报告与闭合裁决。边界：排期在 0z S3/S4 之后。入口：[深审 §2 S-13](docs/audits/FULL_PROJECT_DEEP_REVIEW_2026-09-12.md) / [BACKLOG P2-15](docs/BACKLOG_AND_PRIORITIES.md) / `assurance/evaluation_runner.py`。
+- [x] **S1 考卷语料冻结（2026-09-13 完成，TB 2.1 官方 89 题线）**：pin `terminal-bench/terminal-bench-2-1@sha256:7d7bdc1c…` + 注册表逐题 sha256（89 题，与账面 lock/result 逐题全等）+ 本地 checkout `7131e437` + 批次 16/17/19/18/19 + 装置件 digest；存放形态 = 清单入仓、语料本体不入仓；发现本地 `dataset.toml` 对 `sanitize-git-repo` 过期（逐文件比对证明 88/89 等价、唯一差异为该题 `tests/test_outputs.py` 假密钥拆串写法，语义等价）。入口：[P2-15 记录](docs/audits/P2-15_CORPUS_FREEZE_AND_THRESHOLD_CALIBRATION_2026-09-13.md) / 清单 `evaluation/corpus-freeze/tb21-official-89-2026-09-13.manifest.json`。
+- [x] **S2 阈值校准（2026-09-13 完成）**：① 官方三阈值工作点——命中率 ≥90% 在 116 试次 p10 91.29%/达标 106 条（91.4%，有区分度）；哨兵 ≤3 历史最大 2 次、245/245（尚未受压）；零 400 在 journal/agent 日志/trial.log 三面为零（须连 marker 集合登记）；② evaluation/holdout 阈值层干跑（6 题 development 小样本，oracle 隔离通过）实测封顶 `descriptive_only`、不产出 `threshold_set`，并查出 runner 产出与注册 schema **76 处不兼容**（acceptance 块 `requires_review` 不在枚举内 + 缺 `threshold_set`/`reasons`）。入口：[校准件](docs/audits/P2-15_CORPUS_FREEZE_AND_THRESHOLD_CALIBRATION_2026-09-13.md) / `evaluation/corpus-freeze/threshold-calibration-2026-09-13.json` / `evaluation/corpus-freeze/evaluation-threshold-dryrun-2026-09-13.json`。
+- [ ] **S3 前置（待裁决）**：立项 GAP-EVAL-RESULT-SCHEMA-DRIFT（runner 产出 ↔ `evaluation-result-v0.1.schema.json` 机械对齐 + schema 校验进测试面）；另需密封 evaluation/holdout 分区与双人 blind baseline（人力项）。
+- [ ] S3 首轮真实 evaluation 跑批（runner 全链 + oracle isolation 生效）；S4 报告与闭合裁决。边界：排期在 0z S3/S4 之后。入口：[深审 §2 S-13](docs/audits/FULL_PROJECT_DEEP_REVIEW_2026-09-12.md) / [BACKLOG P2-15](docs/BACKLOG_AND_PRIORITIES.md) / `assurance/evaluation_runner.py`。
 
 ### IMPL-CONTROL-FABRIC（`partial`）
 
