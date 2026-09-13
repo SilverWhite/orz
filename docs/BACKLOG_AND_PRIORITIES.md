@@ -1218,6 +1218,17 @@ GLM F2 处置转排期（2026-09-06 用户裁决）：`orz-host/src/approval.rs`
   `OBS-GSA-READ-LANE-ASYMMETRY` 复述。入口：
   [处置审计 §5](audits/P0_GOV_GLM_DISPOSITION_AND_TASK_D_S2_SCHEDULE_2026-09-06.md)
   / [read_file 测试](../orz/crates/codegen/orz-tools/src/implementations/grok_build/read_file/mod.rs)。
+- **案例库泛化沉淀（2026-09-13 用户裁决，登记不入任务计数）**：本轮两条同族经验晋级
+  精选案例候选——[`ORZ-PLATFORM-TARGET-001`](cases/harness_environment/ORZ-PLATFORM-TARGET-001-platform-target-coverage.md)
+  （平台目标覆盖：**Windows 面全绿 ≠ 非 Windows 目标可编**，同窗口三批 9 处，生产目标与
+  测试目标互不覆盖）与
+  [`ORZ-VERDICT-EPOCH-001`](cases/harness_environment/ORZ-VERDICT-EPOCH-001-verdict-epoch-discipline.md)
+  （结论代际纪律：**数据正确 ≠ 结论当前有效**，证据时点 + 载体版本 + 依据裁决 ID/日期 +
+  先回查后判断）；「缺件伪装成失败」不新立案例，补入既有
+  [`ORZ-TOOL-BINARY-COMPAT-001`](cases/harness_environment/ORZ-TOOL-BINARY-COMPAT-001-bundled-rg-glibc.md)
+  验证记录。事故原件：
+  [`ORZ-PLATFORM-TARGET-001`](incidents/ORZ-PLATFORM-TARGET-001.md) /
+  [`ORZ-VERDICT-EPOCH-001`](incidents/ORZ-VERDICT-EPOCH-001.md)。
 - DC 硬信号 4/6（`same_module_no_evidence` / `key_surface_unexamined`）——
   **2026-08-31 随 [P2 §11](#11-model-residual-pressure-followupp22026-08-31-二次讨论裁决登记设计实施待放行)
   DC 强制模板轮清理一并退役**（信号与机制随删除，不再单独接线）。

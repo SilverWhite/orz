@@ -28,6 +28,16 @@
   端到端 `orz --real`（ACAF 签发器 + 文件密钥库）grep vm.js `syscallNum`
   命中 20 行并 done、exit 0；证据
   `D:\tb-eval\jobs\2026-08-17__GREP-FIX-SMOKE\smoke-notes.md`。
+- **验证记录（2026-09-13 追加）**：容器 Linux 核证批（`rust:1.97-slim`，按
+  `ORZ-BUILD-MOUNT-001` 形态挂父仓 + `RUSTUP_TOOLCHAIN` 定名）——① **缺件形态**：该批
+  配方须备 `protobuf-compiler` + `ripgrep` + `python3` 三件，缺一即在构建或测试面报
+  **与产品缺陷同形**的失败；补齐后同一命令通过，该批全部读数均以三件齐备为前提。
+  ② **同形判读**：全量 `cargo test -p orz-tools --lib` = **2923 通过 / 17 失败 / 6 跳过**，
+  其中 17 项为 `lsp::tests::*`×16 与 `opencode::glob::gitignore_respected`×1（容器缺 LSP
+  二进制 / git 的形态），**未逐项归因，不登记为产品缺陷**。③ **工具链面**：`RUSTUP_TOOLCHAIN`
+  定名可绕开 rustup 组件同步失败，同为「先排查环境与机械因素」的实例。本批同窗口另暴露
+  `ORZ-PLATFORM-TARGET-001`（6 处 Linux 测试目标编译失败，已修）与 `ORZ-VERDICT-EPOCH-001`
+  （结论时点纪律）。
 - **复盘要点（归因纪律）**：命令或操作出现错误、或结果与已知事实明显矛盾（如
   pattern 实测存在却空结果）时，先按顺序排查环境与机械因素：①二进制/运行时兼容
   （动态链接、glibc/musl、架构）；②工具包装是否吞掉 stderr/退出码；③路径与
