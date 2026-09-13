@@ -78,6 +78,24 @@ pub(crate) enum ToolFailureOutcome<'a> {
     SyntheticTimeout,
 }
 
+/// 0z S2 §5（2026-09-12，FUS-HOST-RESOURCE-SAFETY）宿主资源事实 → journal 事件的
+/// **唯一映射表**。生产者全集见 `orz-host` 的 `resource_facts` push 点
+/// （run_start / tier_change 快照、回收、资源耗尽 planned+executed、pre-issue 拒绝）
+/// 与设计文档 [`HOST_RESOURCE_SAFETY_DESIGN_2026-09-12`] §5 的事件表。
+///
+/// **GAP-ORZ-HOST-RESOURCE-SNAPSHOT-DROP（2026-09-13）**：0.5.0 中本表缺
+/// `host_resource_snapshot` 一项，导致 run_start 与跨档读数在 drain 时被丢弃
+/// （`unknown host resource fact kind; dropped (audit-face loss)`；实测 6 run
+/// 13 次 WARN、journal 0 事件）。新增宿主事实时**必须同批在本表落行**，并由
+/// `host_resource_fact_table_covers_producer_kinds` 钉子守住覆盖性与族名一致性。
+pub(crate) const HOST_RESOURCE_FACT_EVENT_TYPES: &[(&str, EventType)] = &[
+    ("host_resource_snapshot", EventType::HostResourceSnapshot),
+    ("reclaim_performed", EventType::ReclaimPerformed),
+    ("resource_exhausted", EventType::ResourceExhausted),
+    ("host_resource_denied", EventType::HostResourceDenied),
+    ("resource_limit_hit", EventType::ResourceLimitHit),
+];
+
 impl AgentLoopController {
     /// P2-10 R2 (2026-08-31): feed a structured denial event into the LIF
     /// deny channel — the shared entry point for every refusal path
@@ -148,20 +166,25 @@ impl AgentLoopController {
     }
 
     /// 0z S2 §5（2026-09-12，FUS-HOST-RESOURCE-SAFETY）：宿主资源事实的
-    /// journal 面——`reclaim_performed`（审计先行由宿主保证）/
+    /// journal 面——`host_resource_snapshot`（run_start 一次 + 跨档 tier_change）/
+    /// `reclaim_performed`（审计先行由宿主保证）/
     /// `resource_exhausted`（hard 档 planned/executed）/ `host_resource_denied`
-    /// （pre-issue 拒绝，含读数与动作分档）。run 收尾 drain 一次。
+    /// （pre-issue 拒绝，含读数与动作分档）/ `resource_limit_hit`（Job 硬上限）。
+    /// run 收尾 drain 一次。
+    ///
+    /// **纪律（GAP-ORZ-HOST-RESOURCE-SNAPSHOT-DROP，2026-09-13）**：本表是
+    /// `orz-host` → journal 的**唯一映射**；宿主每新增一种
+    /// `resource_facts` 事件名，本表必须同批落行，否则该事实 drain 时被丢弃，
+    /// 而 journal 只会留一行 `unknown host resource fact kind; dropped
+    /// (audit-face loss)` —— 这正是 0.5.0 中 `host_resource_snapshot` 的实例
+    /// （6 个 run 13 次 WARN、journal 0 事件）。覆盖性由
+    /// `host_resource_fact_table_covers_producer_kinds` 钉子守住。
     pub(crate) async fn journal_pending_host_resource_facts(
         &self,
         host: &dyn LoopHost,
         writer: &mut EventWriter<'_>,
     ) -> Result<(), AgentLoopError> {
-        const EVENT_TYPE_BY_FACT: &[(&str, EventType)] = &[
-            ("reclaim_performed", EventType::ReclaimPerformed),
-            ("resource_exhausted", EventType::ResourceExhausted),
-            ("host_resource_denied", EventType::HostResourceDenied),
-            ("resource_limit_hit", EventType::ResourceLimitHit),
-        ];
+        use HOST_RESOURCE_FACT_EVENT_TYPES as EVENT_TYPE_BY_FACT;
         for fact in host.drain_host_resource_facts().await {
             let Some(kind) = fact.get("event").and_then(Value::as_str) else {
                 // review F-EV-11: an unlabelled fact is an audit-face loss —
@@ -4227,6 +4250,36 @@ mod tests {
     use orz_assurance::{JournalRecorder, RunEvent};
     use std::sync::Arc;
     use std::sync::atomic::{AtomicU64, Ordering};
+
+    /// GAP-ORZ-HOST-RESOURCE-SNAPSHOT-DROP 钉子（2026-09-13）：宿主资源事实
+    /// 判定表必须覆盖**生产侧全集**，且每个键名都必须与 `orz-assurance` 的族
+    /// 注册表同名（防拼写漂移）。0.5.0 缺 `host_resource_snapshot` 一项 ⇒
+    /// run_start 与跨档读数全被丢弃（6 run 13 次 WARN、journal 0 事件）。
+    #[test]
+    fn host_resource_fact_table_covers_producer_kinds() {
+        // 生产侧全集 = `orz-host` 的 `resource_facts` push 点 ∪ 设计文档 §5 事件表。
+        const PRODUCER_KINDS: &[&str] = &[
+            "host_resource_snapshot",
+            "reclaim_performed",
+            "resource_exhausted",
+            "host_resource_denied",
+            "resource_limit_hit",
+        ];
+        for kind in PRODUCER_KINDS {
+            assert!(
+                HOST_RESOURCE_FACT_EVENT_TYPES
+                    .iter()
+                    .any(|(k, _)| k == kind),
+                "宿主资源事实 `{kind}` 不在映射表内 ⇒ drain 时会被丢弃（audit-face loss）"
+            );
+        }
+        for (kind, _event_type) in HOST_RESOURCE_FACT_EVENT_TYPES {
+            assert!(
+                orz_assurance::journal::ALL_FAMILIES.contains(kind),
+                "映射表项 `{kind}` 不在 orz-assurance 族注册表内（拼写漂移）"
+            );
+        }
+    }
 
     #[tokio::test]
     async fn text_deltas_forwarded_in_order_before_model_output() {
