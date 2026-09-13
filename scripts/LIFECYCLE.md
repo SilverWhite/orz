@@ -24,6 +24,7 @@
 | `run_0x_0v_s4_live_verify.py` / `analyze_0x_0v_s4_journal.py` / `run_0vb_probe.py` | 0x/0v S4 实机复验执行器与分析器 | S4 记录引用 |
 | `setup_harbor_proxy.ps1` / `setup_chrome_cdp.py` | 评测装置供给 | 装置复用件 |
 | `build_orz_aarch64_musl_cross.sh` | aarch64 musl 三件套交叉编译入口（x86 容器 + zig cc + rust-lld） | 0y 安卓载体复现入口（2026-09-13 设立） |
+| `s4_vm_checkpoint_slim.ps1` | win-s4 测试 VM 的 checkpoint 合并 + VHDX 压实（管理员执行；数据不保留的收敛清理） | 0l 环境维护一次性件（2026-09-13 设立） |
 | `ops_bridge.ps1` / `ops_bridge.sh` / `ops_executor.ps1` + `ops-bridges.json` | OPS-PROTOCOL 参考执行器 | `reference` 面（不生产接线） |
 
 ## retained（批次开放中的常设工具件）
