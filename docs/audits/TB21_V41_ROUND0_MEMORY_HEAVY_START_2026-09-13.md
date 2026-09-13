@@ -89,10 +89,55 @@
 | 15:29:29 | 首试次 `torch-tensor-parallelism` 建立（作业目录 + 试次目录） |
 | 15:31:01 | 首份会话卷运行目录 `RUN-CLI-6aa65135` 落卷（agent 已在容器内工作） |
 | 15:31:37 | 卷内落 `process_trees/call_00_…json`、`session/terminal/call_00_….log`（进程树与终端面在位） |
-| 15:32:40 | 卷内落 `resources_state.json`（**0z 资源遥测面在真机整轮中在位**） |
+| 15:32:40 | 卷内落 `resources_state.json`——**更正（18:20 回查）**：该件是**工具面状态/参数 sidecar**（`grok_build.*` 工具参数与 `ReportedTaskCompletions`），**不是 0z 主机资源遥测面**；早前把它读作「0z 资源面在位」是误读，0z 资源面的真实情形见 §6.1 |
 | 15:34:01 | `events.jsonl` 34 → 70 行（agent 持续工作）；作业/试次日志为适配器 POSIX-sh 包装 + `--real --allow-write --allow-shell --max-tool-rounds 999 --allow-network --retrieval-mode local_browser` |
 | 15:34 | 容器实测：`mem_limit=8 GiB`（8,589,934,592 B）**高于** Docker VM 总内存 **7.677 GiB**（8,243,064,832 B）、`memswap=16 GiB`、`nano_cpus=1.0`；串行 `-n 1` 下同时仅 1 个容器 ⇒ 审计 §2.4 的内存形态在真机确认（这正是"降并发 + 重题前置"的依据） |
 | 15:34 | 宿主视角 `docker info`：12 CPU / 1 镜像 / 1 容器；镜像按需拉取首个完成（`alexgshaw/torch-tensor-parallelism:20251031`） |
+
+### 6.1 中途体检（18:20；作业仍在跑，8 题中 7 题已出结局）
+
+**结局分布：4 × AgentTimeoutError ＋ 2 × RuntimeError（镜像拉取）＋ 1 × 正常完成（reward 0）；
+第 8 题 `rstan-to-pystan` 运行中。** 逐题一手情形：
+
+| 试次 | 用时 | 账面结局 | verifier 侧实际情况 | 归因 |
+|---|---|---|---|---|
+| `torch-tensor-parallelism` | 31.7 min | AgentTimeout（agent 用满 900 s）＋ verifier 阶段 900 s 超时 | **13/13 全过**（`verifier/reward.txt` = 1，51.5 s 跑完） | **题目实际已解出**，只是用满官方墙钟；与 R1 同题（rate 1.0 ＋ AgentTimeoutError）同形 |
+| `mteb-leaderboard` | 61.9 min | AgentTimeout（3600 s） | 2 failed：`/app/result.txt` 不存在 | agent 侧未产出（R1 同形） |
+| `torch-pipeline-parallelism` | 25.7 min | AgentTimeout（900 s） | verifier 依赖下载失败：`nvidia-cusparse-cu12` **network timeout**（`UV_HTTP_TIMEOUT=30s`），torch 轮子 825 MB 未下完 | **装置侧网络** ⇒ reward 0 不代表 agent |
+| `gpt2-codegolf` | 18.2 min | AgentTimeout（900 s） | 1 failed：`/app/gpt2.c` 不存在 | agent 侧未产出（R1 同形） |
+| `mcmc-sampling-stan` | 20.7 min | 正常完成，reward **0** | verifier 自身 `curl: (18) Transferred a partial file` 拉 `uv` 失败 ⇒ `/root/.local/bin/env: No such file` ⇒ `uvx: command not found`，**测试根本没跑** | **装置侧网络**；R1 同题 **reward 1.0** ⇒ 本试次 reward **无效** |
+| `caffe-cifar-10` | 0.6 min | RuntimeError | 镜像层 `short read: expected 183436527 bytes but got 136456798: unexpected EOF` | **装置侧**（Docker Hub 拉取中断） |
+| `filter-js-from-html` | 0.2 min | RuntimeError | 镜像 `registry-1.docker.io … manifests/sha256:92acda0f…: EOF` | **装置侧**（Docker Hub 拉取中断） |
+| `rstan-to-pystan` | 运行中 | —（18:09 起，1800 s 上限） | — | — |
+
+**硬发现 1 — 出网路径在大文件传输上不稳（装置侧；本轮最大干扰项）**
+
+- 同一窗口出现三类中断：Docker Hub 镜像层 EOF / short read（2 题完全没跑起来）、
+  GitHub 释放包 partial file（`uv`）、PyPI 大轮子 network timeout（torch 825 MB ＋ CUDA 系列）。
+- 波及面：**2 题未起跑 ＋ 1 题 reward 被判 0（R1 同题曾 1.0）＋ 1 题 verifier 未能运行** ⇒
+  **本轮成绩轴被污染**，不可按"通过率"直接读；须以"逐题实际情形"归因。
+
+**硬发现 2 — 0z 资源面在 orz 内部被丢弃（载体侧，真缺口候选）**
+
+- 一手证据：`orz_host` 报 `host resource probe installed (0z S1) headroom=… tier=normal`，
+  但 `orz_loop::host_exec` 反复 WARN：
+  `unknown host resource fact kind; dropped (audit-face loss) kind="host_resource_snapshot"`——
+  共 **13 次**，落在 **6 个试次**的 agent 日志里（`torch-tensor-parallelism` 7 次、
+  `rstan-to-pystan` 2 次、其余各 1 次）。
+- 后果：6 个 run 的 journal 事件类型统计中，**`host_resource_snapshot` 一次都没有**；
+  资源族只落了 **`reclaim_performed` ×1**（payload：`budget_bytes=8589934592`、`class=cache`、
+  `tier=soft`、`outcome=rejected`、`paths=["/app/__pycache__"]`、`freed_bytes=0`）。
+- 即：本轮要校验的 0z 遥测面**在 orz 内部被丢在管道上**（自述 `audit-face loss`）；
+  回收阶梯本身有真实动作记录（1 次，且**被拒**、回收 0 B）。
+  **回查纪律**：本条按 `ORZ-VERDICT-EPOCH-001` 先回查再裁决——是否属设计内（例如快照走
+  sidecar 面）还是实现偏误，须对 0.5.0 源码 + ADR-0010 §0z 段逐条核对后再定性。
+- 另 1 条小口径：`resources_state.json` 是**工具面状态/参数 sidecar**（`grok_build.*` 参数
+  ＋ `ReportedTaskCompletions`），早前把它当作 0z 资源面是误读，已在 §6 更正。
+
+**与 R1 的代际对照（同 k=1、同 8 题）**：R1 结局 = `mcmc-sampling-stan` **1.00**、
+`torch-tensor-parallelism` **1.00**（同样伴 AgentTimeoutError），其余 6 题为 0 / 未产出或
+AgentTimeout（**R1 已有 6/8 命中 AgentTimeout**）。⇒ **"重题集用满官方墙钟"不是新回归**；
+本轮新增的差别主要是**出网不稳**（R1 期未出现镜像拉取中断）。
 
 ## 7. 复现入口与产物位置
 
