@@ -18,8 +18,8 @@
   "runner_script": {
     "path": "D:\\tb-eval\\run_official_2.1.sh",
     "present": true,
-    "bytes": 4787,
-    "sha256": "b42c0d7af01080d65698023c6803ac290951dbbbe543193af2ff201223f4aa60"
+    "bytes": 4981,
+    "sha256": "54492c22368e7898951f02540b93dcd0d1353450a1c01054aab5ed3d933578a1"
   },
   "dataset_registry": {
     "path": "D:\\tb-eval\\terminal-bench-2-1\\tasks\\dataset.toml",
@@ -6544,7 +6544,7 @@
     }
   ],
   "published_copy_comparison": {
-    "other_root": "C:\\Users\\1\\AppData\\Local\\Temp\\tb21-registry-pin-20260913\\terminal-bench-2-1",
+    "other_root": "C:\\Users\\1\\AppData\\Local\\Temp\\tb21-registry-pin-20260913b\\terminal-bench-2-1",
     "mode": "eol_normalised",
     "ignored_names": [
       ".gitignore"
