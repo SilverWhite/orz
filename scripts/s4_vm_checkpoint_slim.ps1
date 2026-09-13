@@ -109,6 +109,16 @@ Say ('checkpoints remaining: ' + @(Get-VMSnapshot -VMName $VMName).Count)
 # --- compact the base VHDX -------------------------------------------------
 if (-not $SkipCompact) {
     foreach ($hd in (Get-VMHardDiskDrive -VMName $VMName)) {
+        $vhd = Get-VHD -Path $hd.Path -ErrorAction SilentlyContinue
+        if ($vhd -and $vhd.VhdType -eq 'Differencing') {
+            # Explicit skip (2026-09-13 实测): Optimize-VHD does not support a
+            # differencing leaf - it fails with 0x800700AA "resource in use".
+            # The checkpoint merge above is what actually reclaims space; to
+            # compact the BASE disk, remove the checkpoints first (base becomes
+            # the active disk), compact, then recreate a checkpoint.
+            Say ("skip compact: {0} is a differencing leaf (Optimize-VHD unsupported)" -f (Split-Path $hd.Path -Leaf))
+            continue
+        }
         Say ("compacting: {0}" -f $hd.Path)
         try {
             Optimize-VHD -Path $hd.Path -Mode Full -ErrorAction Stop

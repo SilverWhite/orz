@@ -380,6 +380,16 @@
   仅作主 BACKLOG 指针。设计稿
   [TOOL_EXECUTION_LAYER_REFORM_DESIGN_2026-09-03.md](TOOL_EXECUTION_LAYER_REFORM_DESIGN_2026-09-03.md)
   为设计权威；S4_PROGRESS §16.17/§16.18 为进度记录。
+- **测试环境收敛（2026-09-13 用户裁决，登记不动计数）**：win-s4 测试 VM
+  只需能跑 high-nist 策略即可、**内部数据不保存**（日常不使用虚拟机，只留
+  测试环境）→ 管理员执行 [`s4_vm_checkpoint_slim.ps1`](../scripts/s4_vm_checkpoint_slim.ps1)：
+  两条 checkpoint（`S4-BASE-INSTALLED` 09-01、`S4-BASE-NET-2026-09-02` 09-02）
+  整链并入基础盘 → `D:\VMs` **42.85 → 20.35 GB（回收 22.5 GB）**，D: 空余
+  **25.07 → 47.57 GB**；随后重建单一回退点 `S4-BASE-2026-09-13`（0.00 GB
+  差分子盘）。客户机当前态（硬化后的测试环境）保留、VM 仍可跑三臂策略。
+  边界：差分叶盘不可压实（`Optimize-VHD` 不支持差分链，"资源在使用中"
+  0x800700AA，已在脚本内显式跳过；如需再压实基础盘须先删回退点再压再建）。
+  证据 `_windows_high_nist/evidence-vm-slim-20260913/vm-slim-20260913_122757.log`。
 
 ### 0m. GSA-SESSION-VOLUME-BOTTOM-LAYER（P0；2026-09-06 设计定稿，同日用户裁决放行，排期实施）
 
