@@ -139,6 +139,26 @@
 > - `git -C D:\CLI status --short` → `M CLI_PROJECT_INDEX.md` / `M TODO.md` / `?? docs/audits/0AC_S3_DUAL_PLATFORM_REBUILD_2026-09-14.md` / `?? releases/orz-0.5.1-x86_64/`（C2 回写面；收尾段核对）。
 > - 收尾补记（父仓核证）：`git -C D:\CLI push origin main` → `c4491629..8c7529ee main -> main`；**C2 = `8c7529ee`**（6 files +316/−5，含本台账 F-021…F-023）；`python scripts/check_repository.py` → `"error_count": 0` / `"valid": true`（EXIT=0）；`git -C D:\CLI log --oneline -1 origin/main` → `8c7529ee 账本: 0ac S3 载体重建与发布落档…`。
 
+### F-025 | 2026-09-14 | RUN-CLI-6aa7bee3 | 装置侧（网络面：GitHub 推送瞬时 TLS 失败）| 重试成功
+**实现提交后首次 `git push cli HEAD` 失败**：输出原文 `fatal: unable to access 'https://github.com/SilverWhite/CLI.git/': TLS connect error: error:00000000:lib(0)::reason(0)`（`D:\CLI\.gsa\session\terminal\call_00_UNEYgRl7XTRKx4QyVLTM6886.log`）。**事实**：同一命令第二次执行成功——`dbb42b1d..f03b2a4f  HEAD -> feat/fusion-architecture`，远端 `git ls-remote cli refs/heads/feat/fusion-architecture` 回 `f03b2a4f463827d4d8004c3a15b03991375fc0b6`。**代价**：1 次推送重试。**处置**：重试（无配置改动）。
+
+### F-026 | 2026-09-14 | RUN-CLI-6aa7bee3 | 装置侧（检索工具：PowerShell 不展开 glob）| 观察
+**两次 `rg` 调用因把 glob 当路径传入而报错**：`rg ... D:\CLI\orz\crates\orz-loop\src\*.rs` → `文件名、目录名或卷标语法不正确。 (os error 123)`；`rg -F "web_search" *.rs`（cwd 内）→ 同类 IO error。**事实**：改传目录 + `--glob "*.rs"`（或直接传单文件路径）后立即命中。**代价**：2 次工具调用往返。**处置**：观察（本轮内已改用手法；不改装置）。
+
+### F-027 | 2026-09-14 | RUN-CLI-6aa7bee3 | 模型习惯（自报：测试里改进程 env）| 已修（本轮内）
+**首轮 `cargo test -p orz-loop immediate_delivery` 编译失败**：`error[E0133]: call to unsafe function std::env::set_var/remove_var ... requires unsafe block`（5 处，crate 为 edition 2024）。**事实**：删除 env 变更测试、抽出纯函数 `switch_truthy(&str)` 后再跑 → `test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 774 filtered out; finished in 0.00s`。**代价**：1 轮编译往返（`Finished test profile ... in 22.89s`）。**处置**：已修（契约改由纯函数单测钉住 + `switch_enabled()` 默认关断言）。
+
+### F-028 | 2026-09-14 | RUN-CLI-6aa7bee3 | 装置侧（行显示：源文件裸 CR 致 PowerShell 吞行）| 观察
+**`Get-Content | Select-Object -Skip N` 的显示行号与 rg 行号漂移 13 行**：同一文件同一位置，PowerShell 显示 `3528: domain,`，而 `rg -n -B 16 -A 16 "host\.call_tool_with_timeout" host_exec.rs` 显示 `3528: host.call_tool_with_timeout(...)`。**事实**：该文件部分注释行含裸 `\r`（mojibake 注释），控制台把两条源行合并成一行显示（如 `3510:` 一行里同时出现 `目。` 与 `let (round, domain) = ...`），故按显示行号定位不可靠；rg 带上下文的行号与真实文件一致（编辑锚点最终以 rg 上下文 + 文本锚点为准，两次 `search_replace` 均一次命中）。**代价**：1 次额外定位往返。**处置**：观察（不改装置）。
+
+> **本批机械核证留痕（RUN-CLI-6aa7bee3，0ac S3①-b 落产品码写点段实做输出摘录）**
+> - `cargo test -p orz-loop immediate_delivery` → `test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 774 filtered out; finished in 0.00s`（5 单测：渲染无头拒收 / 渲染头+逐项逐段解析 / 三 payload 字段shape / 稳定码不猜 / 开关默认关）。
+> - S2 schema 交叉核证（python + jsonschema，`runtime/*.schema.json` 三件）→ `segment required_ok no_extra` / `segment jsonschema: PASS`、`progress required_ok no_extra` / `progress jsonschema: PASS`、`delivered required_ok no_extra` / `delivered jsonschema: PASS`。
+> - `git -C D:\CLI\orz show --stat HEAD` → `crates/orz-assurance/src/journal/event.rs | 14 ++` / `crates/orz-loop/src/host_exec.rs | 95 ++++++++` / `crates/orz-loop/src/immediate_delivery.rs | 366 ++++` / `crates/orz-loop/src/lib.rs | 1 +`，`4 files changed, 476 insertions(+)`；`git -C D:\CLI\orz log --oneline -1` → `f03b2a4f feat(0ac S3-b): immediate-feedback arrival/delivery write points (retrieval_progress / retrieval_result_segment / result_delivered)`；`git -C D:\CLI\orz status --porcelain` 提交前 = `M crates/orz-assurance/src/journal/event.rs` / `M crates/orz-loop/src/host_exec.rs` / `M crates/orz-loop/src/lib.rs` / `?? crates/orz-loop/src/immediate_delivery.rs`，提交后为空。
+> - 推送核证：`git push cli HEAD`（第二次）→ `dbb42b1d..f03b2a4f  HEAD -> feat/fusion-architecture`；`git ls-remote cli refs/heads/feat/fusion-architecture` → `f03b2a4f463827d4d8004c3a15b03991375fc0b6`（= 本地 `rev-parse HEAD`）。
+> - 写点定位核证（rg 上下文）→ `3527: let call =` / `3528: host.call_tool_with_timeout(&tc.name, tc.arguments.clone(), &tc.call_id, timeout);` / `3540: let (mut result, succeeded) = match call_result {`（到达面/交付面写点插于 3527 之前与 3540 之前）。
+> - 本轮**未做**：全量 `cargo test -p orz-loop`、`cargo fmt/clippy` 全量、载体重建（用户指示「暂时不做重建」）；S3①-b 的失败面（`stable_code`）无真实网络失败样本核证（`stable_code_from_error` 仅单测钉住契约）。
+
 ## 统计
 
 | 日期 | run | 摩擦条目 | 立案候选 | 已修 | 观察 |
@@ -148,4 +168,5 @@
 | 2026-09-13 | RUN-CLI-6aa6bd3f（0ac S3② 裁决(a) 落地 / S3① 生产者面） | F-011…F-013 | F-013（根因待定，待立案） | F-011/F-012 | F-007 已按裁决(a) 翻宽口径落地；F-008 第 4 次复现未修 |
 | 2026-09-14 | RUN-CLI-6aa6c9b3（0ac S3 实现审记） | F-014…F-015 | F-014（G1–G3 修复批次划分待裁决）/F-015（F-008 同族，根因待定） | — | F-008 第 5 次复现；G1–G3 详见 [0ac S3 审记](audits/0AC_S3_IMPLEMENTATION_AUDIT_2026-09-14.md) |
 | 2026-09-14 | RUN-CLI-6aa6d379（0ac S3 修复批） | F-016…F-020 | F-017（S3① 投递侧未落；拆子阶段待裁决） | F-016（绕行）/F-018/F-020（收尾补齐）；F-012、F-014 的 G1/G2 同批翻 fixed（见其补注） | F-019（WinGet 垫片本体仍悬空）；F-008/013/015 根因候选；G3 与核证详见 [修复报告](audits/0AC_S3_FIX_REPORT_2026-09-14.md) |
+| 2026-09-14 | RUN-CLI-6aa7bee3（0ac S3①-b 落产品码写点） | F-025…F-028 | —（本批无新立案） | F-027（edition 2024 env unsafe → 纯函数化后通过） | F-025（push 首次 TLS 失败，重试成功）/F-026（PowerShell 不展开 glob）/F-028（裸 CR 注释致显示吞行、行号漂移 13 行）；F-019（WinGet 垫片本体）仍悬空 |
 | 2026-09-14 | RUN-CLI-6aa77e19（0ac S3 载体重建与发布） | F-021…F-024 | —（本批无新立案） | F-022（Docker daemon 冷机，启动后重试成功）/F-023（载体换装改 rename 绕行） | F-021（Docker Desktop 无 HTTPS 代理、registry-1.docker.io 直连无响应；本地既有镜像支撑，未阻塞）；F-024（模型习惯自报：1 次写入运行时受管路径被拒）；核证与发布详见 [重建记录](audits/0AC_S3_DUAL_PLATFORM_REBUILD_2026-09-14.md) |
