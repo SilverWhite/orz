@@ -93,6 +93,7 @@
 
 ### F-017 | 2026-09-14 | RUN-CLI-6aa6d379 | 设计内门（S3 范围）| open（立案候选）
 **S3① 投递侧未落 = 审记 G3 维持 open**：本轮复核 `retrieval_progress|retrieval_result_segment|result_delivered` 全 crates **29 命中全部在 `orz-assurance`**（`journal/families.rs` / `immediate_feedback.rs` / `mod.rs`），`ResultDelivered|RetrievalProgress|RetrievalResultSegment` **0 命中**（`EventType` 无变体）⇒ 三事件**无产品码写点**；I1–I3 / M1–M3 / 子代理提前收口 / semaphore 截止（TODO ⑤⑥⑦）本批无落码。**代价**：设计 §10.3 的「①生产者②法官③钉子」与「S3 已落」并列时易被读成已闭合（审记 §3.3 即为此而立）。处置：不动手（结构性）⇒ 立案候选，待裁决是否拆 `S3①-a 检索侧（已落）/ S3①-b 投递侧（未落）`。入口：审记 §3.3/§6-G3/§8、设计稿 §10.5-3。
+> **补注（2026-09-14，用户裁决）**：**采纳拆分**——S3① = ①-a 检索侧（已落，orz `4c892951`+`96d2b263`）/ **①-b 投递侧（未落，下一实现批次**：三事件 EventType 变体+写点、I1–I3、M1–M3（M2 先行、M1 带开关+A/B）、子代理提前收口、semaphore 截止**）**。TODO P0-0ac 与 BACKLOG 0ac 已同步裁决行。本条转**已裁决**，实现完成前 0ac 维持 open。
 
 ### F-018 | 2026-09-14 | RUN-CLI-6aa6d379 | 装置侧（文档与实现漂移）| fixed
 **审记把开关当前态记为 `false`，实为已移除**：审记 §1/§2.3/§6-③ 按 `ac5d6375` 时刻写「`REQUIRE_RETRIEVAL_FAMILY_PROBE=false` 开关（F-007 裁决(a)）」，但 `4c892951` 已随宽口径落地**删除该开关与执法分支**；本轮实查全 crates 仅剩 **2 处文档注释**提到该名（`crates\orz-assurance\src\journal\immediate_feedback.rs:41` / `:50`）。**代价**：审记 §6 裁决点③「是否翻转（当前 false）」提给用户时**失去对象**（1 轮复核，0 次实际决策成本）。处置：本轮闭合——审记新增 §8 勘误（连带 §2.3 口径注记 A 的「文档口径滞后，P3」）＋ 设计稿新增 §10.5 回写；本条留痕。
