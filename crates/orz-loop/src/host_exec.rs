@@ -1722,6 +1722,248 @@ impl AgentLoopController {
                 None,
             ));
         }
+        // 0ae D0（2026-09-15，设计 §3，用户裁决 DP-6）：`blackboard_write`
+        // ——模型写入面（8 工具面冻结的用户主导显式例外 +1）。可写分区限
+        // plan 与 notes 两域（机械单写者分区所有权不变）；单次 ≤8K 字符；
+        // 写入走既有结构化盖章（(round, domain) 写时盖章 + ts 墙钟）；落
+        // journal 复用 `plan_write` 事件族并扩展 `section` 字段（schema
+        // v0.2 增量，零新族）。
+        if tc.name == "blackboard_write" {
+            let section_raw = tc.arguments.get("section").and_then(|v| v.as_str());
+            let content = tc.arguments.get("content").and_then(|v| v.as_str());
+            let section = section_raw.and_then(crate::blackboard::ModelNoteSection::parse);
+            let section_label = section.map(|sec| sec.as_str()).unwrap_or("<invalid>");
+            let Some(section) = section else {
+                {
+                    let error: String = format!(
+                        "invalid blackboard_write section: {{section_raw:?}} — 可写分区限 \\
+                     plan|notes（机械单写者分区 edits/exec/actions/processes/temporal/\\
+                     session 不开放模型写入）"
+                    );
+                    let mut completed = serde_json::json!({
+                        "tool": tc.name,
+                        "call_id": tc.call_id,
+                        "exit_code": 1,
+                        "section": section_label,
+                        "error": error,
+                    });
+                    // F3 (2026-08-16 审查收口): direct 盖章对称。
+                    stamp_direct(&mut completed);
+                    writer.record(EventType::ToolCompleted, completed).await?;
+                    self.push_tool_action_stamped(
+                        ToolDispatcher::action_category(&tc.name).to_string(),
+                        tc.name.clone(),
+                        chrono_utc_now(),
+                    );
+                    let result = ToolResult {
+                        output: error,
+                        exit_code: Some(1),
+                        output_encoding: None,
+                        structured: None,
+                        ..Default::default()
+                    };
+                    messages.push(Message {
+                        role: Role::Tool,
+                        content: result.output.clone(),
+                        tool_call_id: Some(tc.call_id.clone()),
+                        tool_calls: Vec::new(),
+                        reasoning_content: None,
+                        round: None,
+                    });
+                    return Ok((result, None));
+                }
+            };
+            let Some(content) = content else {
+                {
+                    let error: String =
+                        "invalid blackboard_write content: content 必须是字符串".to_string();
+                    let mut completed = serde_json::json!({
+                        "tool": tc.name,
+                        "call_id": tc.call_id,
+                        "exit_code": 1,
+                        "section": section_label,
+                        "error": error,
+                    });
+                    // F3 (2026-08-16 审查收口): direct 盖章对称。
+                    stamp_direct(&mut completed);
+                    writer.record(EventType::ToolCompleted, completed).await?;
+                    self.push_tool_action_stamped(
+                        ToolDispatcher::action_category(&tc.name).to_string(),
+                        tc.name.clone(),
+                        chrono_utc_now(),
+                    );
+                    let result = ToolResult {
+                        output: error,
+                        exit_code: Some(1),
+                        output_encoding: None,
+                        structured: None,
+                        ..Default::default()
+                    };
+                    messages.push(Message {
+                        role: Role::Tool,
+                        content: result.output.clone(),
+                        tool_call_id: Some(tc.call_id.clone()),
+                        tool_calls: Vec::new(),
+                        reasoning_content: None,
+                        round: None,
+                    });
+                    return Ok((result, None));
+                }
+            };
+            let content_chars = content.chars().count();
+            if content.trim().is_empty() {
+                {
+                    let error: String = "invalid blackboard_write content: 内容为空".to_string();
+                    let mut completed = serde_json::json!({
+                        "tool": tc.name,
+                        "call_id": tc.call_id,
+                        "exit_code": 1,
+                        "section": section_label,
+                        "error": error,
+                    });
+                    // F3 (2026-08-16 审查收口): direct 盖章对称。
+                    stamp_direct(&mut completed);
+                    writer.record(EventType::ToolCompleted, completed).await?;
+                    self.push_tool_action_stamped(
+                        ToolDispatcher::action_category(&tc.name).to_string(),
+                        tc.name.clone(),
+                        chrono_utc_now(),
+                    );
+                    let result = ToolResult {
+                        output: error,
+                        exit_code: Some(1),
+                        output_encoding: None,
+                        structured: None,
+                        ..Default::default()
+                    };
+                    messages.push(Message {
+                        role: Role::Tool,
+                        content: result.output.clone(),
+                        tool_call_id: Some(tc.call_id.clone()),
+                        tool_calls: Vec::new(),
+                        reasoning_content: None,
+                        round: None,
+                    });
+                    return Ok((result, None));
+                }
+            }
+            if content_chars > crate::blackboard::MODEL_NOTE_MAX_CHARS {
+                {
+                    let error: String = format!(
+                        "blackboard_write content 超出单次上限（{content_chars} > {max} 字符）：请精炼后分次写入",
+                        max = crate::blackboard::MODEL_NOTE_MAX_CHARS
+                    );
+                    let mut completed = serde_json::json!({
+                        "tool": tc.name,
+                        "call_id": tc.call_id,
+                        "exit_code": 1,
+                        "section": section_label,
+                        "error": error,
+                    });
+                    // F3 (2026-08-16 审查收口): direct 盖章对称。
+                    stamp_direct(&mut completed);
+                    writer.record(EventType::ToolCompleted, completed).await?;
+                    self.push_tool_action_stamped(
+                        ToolDispatcher::action_category(&tc.name).to_string(),
+                        tc.name.clone(),
+                        chrono_utc_now(),
+                    );
+                    let result = ToolResult {
+                        output: error,
+                        exit_code: Some(1),
+                        output_encoding: None,
+                        structured: None,
+                        ..Default::default()
+                    };
+                    messages.push(Message {
+                        role: Role::Tool,
+                        content: result.output.clone(),
+                        tool_call_id: Some(tc.call_id.clone()),
+                        tool_calls: Vec::new(),
+                        reasoning_content: None,
+                        round: None,
+                    });
+                    return Ok((result, None));
+                }
+            }
+            // 写入（(round, domain) 写时盖章 + ts 墙钟；分区版本计数同源）。
+            let (round, domain) = self.effective_blackboard_stamp();
+            let entry = crate::blackboard::NoteEntry {
+                round,
+                domain: Some(domain),
+                timestamp: chrono_utc_now(),
+                content: content.to_string(),
+            };
+            self.blackboard.write().push_model_note(section, entry);
+            self.push_tool_action_stamped(
+                ToolDispatcher::action_category(&tc.name).to_string(),
+                tc.name.clone(),
+                chrono_utc_now(),
+            );
+            // journal：复用 plan_write 事件族 + section/content_chars 扩展
+            // （schema v0.2 增量字段；outcome=accepted 在法官规则下无附加
+            // 约束；goal 槽 = 内容首行预览 ≤120 字符）。
+            let preview: String = content
+                .lines()
+                .next()
+                .unwrap_or_default()
+                .chars()
+                .take(120)
+                .collect();
+            writer
+                .record(
+                    EventType::PlanWrite,
+                    serde_json::json!({
+                        "plan_id": "blackboard_write",
+                        "goal": preview,
+                        "step_count": 0,
+                        "outcome": "accepted",
+                        "attempt": 1,
+                        "validation": {
+                            "valid": true,
+                            "section": section.as_str(),
+                            "content_chars": content_chars,
+                        },
+                        "degrade_reason": serde_json::Value::Null,
+                        "section": section.as_str(),
+                        "content_chars": content_chars,
+                    }),
+                )
+                .await?;
+            let watermark = self.blackboard_watermark_label();
+            let output = format!(
+                "已写入黑板 {}（{} 字符）；live 水位{}。用 blackboard_read \
+                 section={} 回读。",
+                section.as_str(),
+                content_chars,
+                watermark,
+                section.as_str()
+            );
+            let mut completed = serde_json::json!({
+                "tool": tc.name,
+                "call_id": tc.call_id,
+                "exit_code": 0,
+                "section": section.as_str(),
+            });
+            stamp_direct(&mut completed);
+            writer.record(EventType::ToolCompleted, completed).await?;
+            let result = ToolResult {
+                output,
+                exit_code: Some(0),
+                output_encoding: None,
+                structured: None,
+                ..Default::default()
+            };
+            messages.push(Message {
+                role: Role::Tool,
+                content: result.output.clone(),
+                tool_call_id: Some(tc.call_id.clone()),
+                tool_calls: Vec::new(),
+                reasoning_content: None,
+                round: None,
+            });
+            return Ok((result, None));
+        }
         // 2026-08-08 blackboard partition (A3): `blackboard_read` is served
         // from the controller's own blackboard — no host dispatch. The
         // permission gate already ran (ReadOnly class auto-allows under
@@ -2510,6 +2752,10 @@ impl AgentLoopController {
                         return Ok((result, None));
                     }
                 }
+            } else if section == "notes" {
+                // 0ae D0：模型自有工作笔记分区（blackboard_write 落点）。
+                let bb = self.blackboard.read();
+                bb.render_notes_section()
             } else if section == "exec" && (failures_only.is_some() || search.is_some()) {
                 // 0p S1（2026-09-07，ADR-0010 §14.61 设计 A1/A2）：自信息面
                 // 派发——failures_only 走 failure_agg 聚合行集（P2-12 行语义
@@ -2522,13 +2768,25 @@ impl AgentLoopController {
                     crate::selfhistory::render_failures_only(&bb.failure_agg)
                 }
             } else {
-                self.render_blackboard_section_fold(
+                let rendered = self.render_blackboard_section_fold(
                     &section,
                     since,
                     epoch,
                     receipt_id.as_deref(),
                     expand.as_ref(),
-                )
+                );
+                // 0ae D0：plan 读取追加模型笔记尾段（live 读且非错误形状）。
+                if section == "plan"
+                    && epoch.is_none()
+                    && !crate::controller::AgentLoopController::is_blackboard_render_error(
+                        &rendered,
+                    )
+                    && let Some(tail) = self.blackboard.read().render_plan_model_notes_tail()
+                {
+                    format!("{rendered}\n—— 模型笔记（blackboard_write section=plan）——\n{tail}")
+                } else {
+                    rendered
+                }
             };
             // PULL 自描述 (2026-08-31, P2-11 第 1 项 / 设计 §3-§4): 成功的
             // live 读取挂「自上次读取以来」增量头并推进本次分区游标；归档
@@ -6474,6 +6732,7 @@ mod tests {
             vec![
                 "bash",
                 "blackboard_read",
+                "blackboard_write",
                 "grep",
                 "read_file",
                 "search_replace",
@@ -6519,7 +6778,13 @@ mod tests {
         declared.sort();
         assert_eq!(
             declared,
-            vec!["bash", "blackboard_read", "grep", "read_file",],
+            vec![
+                "bash",
+                "blackboard_read",
+                "blackboard_write",
+                "grep",
+                "read_file",
+            ],
             "ReadOnly single-face projection (R1 封存 list_dir/compaction_whitelist_add，写/执行工具探针不完整移除): {declared:?}"
         );
 

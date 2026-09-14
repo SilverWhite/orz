@@ -39,6 +39,17 @@ pub(crate) enum PendingCheckpoint {
         streak: u32,
         order_ids: Vec<String>,
     },
+    /// 0ae D3（2026-09-15，设计 §6，用户裁决 DP-7）：920K 注意力阶梯
+    /// 触发的**模型参与压缩窗口**——打断全部动作的无工具轮（语义同
+    /// console 询问轮：不投影注册面、不探针）；模型固化必要内容
+    /// （blackboard_write）＋标注可弃范围。≤3 轮（DP-7）；窗口结束 ⇒
+    /// 机械无差别折叠兜底照旧执行，`model_participated` 如实落账。
+    ModelCompression {
+        rounds_left: u32,
+        /// 窗口开始时的模型写入面计数（notes + plan.model_notes）——
+        /// 窗口内是否发生过写入 = `model_participated` 判定位。
+        window_start_writes: usize,
+    },
 }
 
 impl PendingCheckpoint {
@@ -53,6 +64,15 @@ impl PendingCheckpoint {
                 attempt,
                 streak: *streak,
                 order_ids: order_ids.clone(),
+            },
+            // D3 窗口轮不重填 attempt——轮数预算由 agent_loop 的消费分支
+            // 递减管理（with_attempt 只服务 console 询问轮）。
+            PendingCheckpoint::ModelCompression {
+                rounds_left,
+                window_start_writes,
+            } => PendingCheckpoint::ModelCompression {
+                rounds_left: *rounds_left,
+                window_start_writes: *window_start_writes,
             },
         }
     }
@@ -83,6 +103,10 @@ pub(crate) fn commit_pending(
         // decision is journaled by the transition event (switch/stay) and
         // the mode state is updated by the caller (agent_loop).
         PendingCheckpoint::ConsoleModeInquiry { .. } => {}
+        // D3 压缩窗口同样不进 orientation 状态——窗口结果（
+        // model_participated / 轮数）由 agent_loop 消费分支以
+        // mechanical_audit_update 事件落账。
+        PendingCheckpoint::ModelCompression { .. } => {}
     }
 }
 

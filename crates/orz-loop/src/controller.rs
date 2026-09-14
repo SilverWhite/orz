@@ -2272,6 +2272,19 @@ impl AgentLoopController {
     /// - 归档 epoch 读不经过本方法（历史视图不推进游标、不挂增量头）；
     ///   失败路径由调用方在成功分支才调用（失败不算读过）。
     /// - 并行读竞态登记为已知边界（设计 §7）。
+    /// 0ae D0：水位状态标读数——`【3.2M/10M】` 形态（live 字节 /
+    /// 10MiB 软上限；env `ORZ_BLACKBOARD_LIVE_BUDGET_BYTES` 改配时
+    /// 分母随之）。复用 fatigue 的预算口径，不设第二把尺。
+    pub(crate) fn blackboard_watermark_label(&self) -> String {
+        let bytes = self.blackboard.read().live_compact_bytes();
+        let budget = crate::fatigue::live_budget_bytes();
+        format!(
+            "【{:.1}M/{}M】",
+            bytes as f64 / 1_000_000.0,
+            budget / 1_000_000
+        )
+    }
+
     pub(crate) fn attach_pull_delta(
         &self,
         section: &str,
@@ -2279,6 +2292,10 @@ impl AgentLoopController {
         tool_rounds: u32,
     ) -> String {
         const HEADER_CAP: usize = 256;
+        // 0ae D0（2026-09-15，设计 §3，用户定案）：水位状态标——黑板 live
+        // 字节水位明示为【x.xM/10M】式读数，随每个 live 读取响应头携带
+        // （既有 10MiB 疲劳提醒机制不变；固化写入为 KB 量级，水位无虞）。
+        let watermark = self.blackboard_watermark_label();
         let mut items = self.blackboard.read().partition_revisions();
         let (temporal_round, migration_count, last_migration) = {
             let lif = self.lif.lock().unwrap();
@@ -2295,7 +2312,7 @@ impl AgentLoopController {
             .get(Self::MIGRATION_CURSOR_KEY)
             .copied()
             .unwrap_or(0);
-        let mut header = String::from("[黑板增量]");
+        let mut header = format!("[黑板 增量 水位{watermark}]");
         let mut badges: Vec<String> = Vec::new();
         for (name, revision) in &items {
             let last = cursors.get(*name).copied().unwrap_or(0);
@@ -2319,10 +2336,9 @@ impl AgentLoopController {
                 m.at_round
             ));
         }
-        if header == "[黑板增量]" {
-            // 无增量且无迁移——零噪音，不加头。
-            return body;
-        }
+        // 0ae D0：水位状态标恒挂（用户定案「各分区响应头带读数」）；
+        // 增量徽章与域迁移段只在有变化时追加（原「零噪音」纪律对徽章
+        // 部分继续成立）。
         let header = orz_assurance::tool_envelope::enforce_bound(header, HEADER_CAP);
         // 推进本次读取分区的游标（成功 live 读语义）。读 temporal 时同时
         // 推进 round 徽章游标与迁移计数基线（未读徽章模型：迁移摘要跟随
@@ -3014,6 +3030,33 @@ impl AgentLoopController {
                         },
                     },
                     "required": ["section"],
+                }),
+            });
+        }
+        // 0ae D0（2026-09-15，设计 §3，用户裁决 DP-6）：`blackboard_write`
+        // ——模型写入面（section ∈ {plan, notes}，单次 ≤8K）。8 工具面
+        // 冻结纪律的**用户主导显式例外 +1**（2026-09-15 口径「明确提示
+        // 可使用黑板」）；只写内存黑板，无外部副作用 → ReadOnly 类（所有
+        // 策略自动放行）。无条件声明（不随 plan_first 门）。
+        if !tool_defs.iter().any(|t| t.name == "blackboard_write") {
+            tool_defs.push(ToolDef {
+                name: "blackboard_write".to_string(),
+                description: "Write a note to the blackboard — the fold-proof                      memory: blackboard content survives context folding, and at                      the 920K compression only blackboard content plus the                      retention tail survives. `section` is \"plan\" (task plan +                      key intermediate conclusions) or \"notes\" (free-form working                      notes). Single write is capped at 8K chars — split longer                      content across writes. The live watermark 【x.xM/10M】 rides                      every blackboard_read response header. Writes are stamped                      (round, domain) and journaled; mechanical partitions                      (edits/exec/actions/processes/temporal/session) are NOT                      writable.".to_string(),
+                parameters: serde_json::json!({
+                    "type": "object",
+                    "properties": {
+                        "section": {
+                            "type": "string",
+                            "enum": ["plan", "notes"],
+                            "description": "目标分区：plan = 工作计划与关键中间结论；notes = 自由工作笔记。",
+                        },
+                        "content": {
+                            "type": "string",
+                            "maxLength": 8192,
+                            "description": "写入内容（纯文本；单次 ≤8K 字符，超出请精炼分次）。",
+                        },
+                    },
+                    "required": ["section", "content"],
                 }),
             });
         }
@@ -5714,14 +5757,16 @@ mod tests {
         }
         // 首次读 plan：tool_actions+2 / exec+1 徽章，plan 自身无变化。
         let first = controller.attach_pull_delta("plan", "== plan ==\nbody".to_string(), 0);
-        assert!(first.starts_with("[黑板增量]"), "{first}");
+        // 0ae D0：水位状态标恒挂（设计 §3 用户定案），头前缀随之更新。
+        assert!(first.starts_with("[黑板 增量 水位"), "{first}");
+        assert!(first.contains("水位【0.0M/10M】"), "{first}");
         assert!(first.contains("tool_actions+2"), "{first}");
         assert!(first.contains("exec+1"), "{first}");
         assert!(!first.contains("plan+"), "{first}");
         // 再读 plan：plan 徽章已清零，但 exec/tool_actions 未读徽章保留
         // （读某分区只清该分区——未读徽章模型）。
         let second = controller.attach_pull_delta("plan", "== plan ==\nbody".to_string(), 0);
-        assert!(second.starts_with("[黑板增量]"), "{second}");
+        assert!(second.starts_with("[黑板 增量 水位"), "{second}");
         assert!(second.contains("exec+1"), "{second}");
         assert!(second.contains("tool_actions+2"), "{second}");
         assert!(!second.contains("plan+"), "{second}");
@@ -5742,11 +5787,14 @@ mod tests {
         let fifth = controller.attach_pull_delta("exec", "== exec ==\n".to_string(), 5);
         assert!(fifth.contains("session+5"), "{fifth}");
         assert!(!fifth.contains("exec+"), "{fifth}");
-        // 读 session：清 session 徽章 → 全部清零 → 无增量头。
+        // 读 session：清 session 徽章 → 全部清零 → 无徽章（0ae D0：水位恒挂）。
         let sixth = controller.attach_pull_delta("session", "== session ==\n".to_string(), 5);
         assert!(sixth.contains("session+5"), "{sixth}");
         let seventh = controller.attach_pull_delta("session", "== session ==\n".to_string(), 5);
-        assert_eq!(seventh, "== session ==\n", "{seventh}");
+        assert_eq!(
+            seventh, "[黑板 增量 水位【0.0M/10M】]\n== session ==\n",
+            "{seventh}"
+        );
     }
 
     /// PULL 自描述 §4：temporal 域迁移摘要随任意分区读取携带，读 temporal
@@ -5769,7 +5817,10 @@ mod tests {
         let out2 = controller.attach_pull_delta("temporal", "body".to_string(), 0);
         assert!(out2.contains("域迁移+1: normal→stuck@r2"), "{out2}");
         let out3 = controller.attach_pull_delta("temporal", "body".to_string(), 0);
-        assert_eq!(out3, "body", "{out3}");
+        // 0ae D0：水位恒挂 ⇒ 无增量时头仍存在（只剩水位，无徽章/迁移段）。
+        assert!(out3.starts_with("[黑板 增量 水位【0.0M/10M】]"), "{out3}");
+        assert!(out3.ends_with("\nbody"), "{out3}");
+        assert!(!out3.contains("+"), "无徽章段: {out3}");
     }
 
     /// PULL 自描述 §5：temporal 单次查询按意图一次返回——now 带近 5 轮趋势
@@ -5853,7 +5904,8 @@ mod tests {
         assert!(first.contains("域迁移+3"), "{first}");
         // 读 temporal 后双基线推进 → 无增量时零噪音。
         let quiet = controller.attach_pull_delta("temporal", "body".to_string(), 0);
-        assert_eq!(quiet, "body", "{quiet}");
+        // 0ae D0：水位恒挂；无增量时仅水位头 + 正文。
+        assert_eq!(quiet, "[黑板 增量 水位【0.0M/10M】]\nbody", "{quiet}");
         // 之后新发生 2 次迁移（round 5→7、migration 3→5）：读 plan 应显示
         // temporal+2 与 域迁移+2（准确新迁移计数，而非 migration−round）。
         {
@@ -5869,7 +5921,12 @@ mod tests {
         let temporal_read = controller.attach_pull_delta("temporal", "body".to_string(), 0);
         assert!(temporal_read.contains("域迁移+2"), "{temporal_read}");
         let quiet2 = controller.attach_pull_delta("temporal", "body".to_string(), 0);
-        assert_eq!(quiet2, "body", "{quiet2}");
+        assert_eq!(
+            quiet2,
+            "[黑板 增量 水位【0.0M/10M】]
+body",
+            "{quiet2}"
+        );
     }
 
     /// PULL 自描述 §4（2026-08-31 审查处理 N1）：增量头自身 ≤256 B——全分区
@@ -5906,7 +5963,7 @@ mod tests {
         }
         let out = controller.attach_pull_delta("plan", "== plan ==\nbody".to_string(), u32::MAX);
         let first_line = out.lines().next().expect("header line");
-        assert!(first_line.starts_with("[黑板增量]"), "{out}");
+        assert!(first_line.starts_with("[黑板 增量 水位"), "{out}");
         assert!(
             first_line.len() <= 256,
             "header exceeds 256 B: {} ({} B)",

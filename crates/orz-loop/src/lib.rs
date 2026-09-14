@@ -13,6 +13,7 @@ mod acaf_flow;
 pub mod action_ledger;
 mod agent_loop;
 pub mod agents;
+pub mod attention_ladder;
 pub mod blackboard;
 pub(crate) mod checkpoint;
 mod compact;

@@ -197,6 +197,48 @@ pub struct PlanSection {
     pub analysis: Vec<String>,
     pub decisions: Vec<String>,
     pub auth_grants: Vec<String>,
+    /// 0ae D0（2026-09-15，用户裁决 DP-6）：模型写入面——`blackboard_write
+    /// section=plan` 的落点（模型自有工作计划笔记，与机械单写者结构化
+    /// plan 字段分立；折叠不灭、随 plan epoch 快照归档）。单次写入 ≤8K。
+    #[serde(default)]
+    pub model_notes: Vec<NoteEntry>,
+}
+
+/// 0ae D0：`blackboard_write` 的目标分区（DP-6：限 plan 与 notes 两域；
+/// 机械单写者分区不开放写入，所有权不变）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ModelNoteSection {
+    Plan,
+    Notes,
+}
+
+impl ModelNoteSection {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            ModelNoteSection::Plan => "plan",
+            ModelNoteSection::Notes => "notes",
+        }
+    }
+
+    pub fn parse(raw: &str) -> Option<Self> {
+        match raw {
+            "plan" => Some(ModelNoteSection::Plan),
+            "notes" => Some(ModelNoteSection::Notes),
+            _ => None,
+        }
+    }
+}
+
+/// 0ae D0（2026-09-15，设计 §3）：模型写黑板的一条盖章记录——(round,
+/// domain) 写时盖章 + ts 墙钟，同 EditRecord/ExecEntry 纪律；`content`
+/// 单条 ≤8K（工具面 maxLength 机械钳制）。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct NoteEntry {
+    pub round: u64,
+    #[serde(default)]
+    pub domain: Option<Domain>,
+    pub timestamp: String,
+    pub content: String,
 }
 
 /// 一条 exec 结果/错误行（B1 会话化基础，2026-09-03，P2-13 / 设计 §9.4
@@ -583,6 +625,35 @@ impl std::fmt::Display for ActionBoardError {
 
 impl std::error::Error for ActionBoardError {}
 
+/// 0ae D0：单次写入字符上限（设计 §3「单次写入 ≤8K」）。
+pub const MODEL_NOTE_MAX_CHARS: usize = 8192;
+
+/// 0ae D0：NoteEntry 列表渲染（逐条 (r轮/域) 盖章头 + 内容；时间正序）。
+pub fn render_note_entries(notes: &[NoteEntry]) -> String {
+    if notes.is_empty() {
+        return "（无）".to_string();
+    }
+    notes
+        .iter()
+        .enumerate()
+        .map(|(index, note)| {
+            let domain = note
+                .domain
+                .map(|d| d.as_str().to_string())
+                .unwrap_or_else(|| "-".to_string());
+            format!(
+                "[笔记 {}] r{}@{} {}\n{}",
+                index + 1,
+                note.round,
+                domain,
+                note.timestamp,
+                note.content
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("\n\n")
+}
+
 /// The full blackboard with 5 sections + 2 controller-written partitions +
 /// the console action board (assistant writes registration/results, the
 /// model writes the single order slot).
@@ -624,6 +695,11 @@ pub struct Blackboard {
     /// 不是 `blackboard_read` 的查询分区（PULL 面不变）。
     #[serde(default)]
     pub failure_agg: crate::failure_agg::FailureAgg,
+    /// 0ae D0（2026-09-15，设计 §3）：模型自有工作笔记分区——
+    /// `blackboard_write section=notes` 的落点（折叠不灭、随会话延续；
+    /// 机械单写者分区所有权不变，本分区唯一写者是模型写入面）。
+    #[serde(default)]
+    pub notes: Vec<NoteEntry>,
     /// PULL 自描述分区版本计数（2026-08-31，P2-11 第 1 项）——每个分区
     /// 可见内容变化计 1 次，供 `blackboard_read` 增量头读取；仅内存、
     /// 不进任何序列化面（`#[serde(skip)]`，epoch 快照/会话存档不携带）。
@@ -637,6 +713,7 @@ pub struct Blackboard {
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct PartitionRevisions {
     pub plan: u64,
+    pub notes: u64,
     pub exec: u64,
     pub edits: u64,
     pub tool_actions: u64,
@@ -650,7 +727,7 @@ impl Blackboard {
     }
 
     /// Capture the current plan-epoch-scoped work state as an archive
-    /// snapshot — plan + edits + tool_actions + exec. Gate log, whitelist
+    /// snapshot — plan + notes + edits + tool_actions + exec. Gate log, whitelist
     /// and the retrieval partitions are NOT part of an epoch snapshot
     /// (they survive rotation by design).
     pub fn epoch_snapshot(&self, persisted_at: &str) -> EpochSnapshot {
@@ -658,6 +735,7 @@ impl Blackboard {
             plan_id: self.plan.plan_id.clone(),
             plan_epoch: self.plan.plan_epoch,
             plan: self.plan.clone(),
+            notes: self.notes.clone(),
             edits: self.edits.clone(),
             tool_actions: self.tool_actions.clone(),
             exec: self.exec.clone(),
@@ -671,6 +749,8 @@ impl Blackboard {
     /// retrieval partitions / gate log / whitelist are left untouched.
     pub fn restore_epoch_snapshot(&mut self, snapshot: &EpochSnapshot) {
         self.plan = snapshot.plan.clone();
+        self.notes = snapshot.notes.clone();
+        self.revisions.notes = self.revisions.notes.saturating_add(1);
         self.edits = snapshot.edits.clone();
         self.tool_actions = snapshot.tool_actions.clone();
         self.exec = snapshot.exec.clone();
@@ -688,6 +768,41 @@ impl Blackboard {
     pub fn push_edit(&mut self, record: EditRecord) {
         self.edits.push(record);
         self.revisions.edits = self.revisions.edits.saturating_add(1);
+    }
+
+    /// 0ae D0：模型写入面追加（section=notes → `notes` 分区；
+    /// section=plan → `plan.model_notes`）。分区版本计数同一落点。
+    pub fn push_model_note(&mut self, section: ModelNoteSection, entry: NoteEntry) {
+        match section {
+            ModelNoteSection::Plan => {
+                self.plan.model_notes.push(entry);
+                self.revisions.plan = self.revisions.plan.saturating_add(1);
+            }
+            ModelNoteSection::Notes => {
+                self.notes.push(entry);
+                self.revisions.notes = self.revisions.notes.saturating_add(1);
+            }
+        }
+    }
+
+    /// 0ae D1 补救规则读数：模型写入面累计条数（notes + plan.model_notes）。
+    pub fn model_note_count(&self) -> usize {
+        self.notes.len() + self.plan.model_notes.len()
+    }
+
+    /// 0ae D0：`blackboard_read section=notes` 渲染（时间正序、逐条盖章头；
+    /// 空分区 = 「（无）」同空槽纪律）。
+    pub fn render_notes_section(&self) -> String {
+        render_note_entries(&self.notes)
+    }
+
+    /// 0ae D0：`blackboard_read section=plan` 的模型笔记尾段（plan 视图
+    /// 主体由既有 render_section 渲染，本段追加其后）。
+    pub fn render_plan_model_notes_tail(&self) -> Option<String> {
+        if self.plan.model_notes.is_empty() {
+            return None;
+        }
+        Some(render_note_entries(&self.plan.model_notes))
     }
 
     /// 工具动作记录追加（单写者纪律 + 分区版本计数同一落点）。
@@ -738,6 +853,7 @@ impl Blackboard {
         // 会话快照置空（空图保持版本 0，直到 run 内重新建图）。
         self.revisions = PartitionRevisions {
             plan: 1,
+            notes: 1,
             exec: 1,
             edits: 1,
             tool_actions: 1,
@@ -915,6 +1031,7 @@ impl Blackboard {
             analysis: Vec::new(),
             decisions: Vec::new(),
             auth_grants: Vec::new(),
+            model_notes: Vec::new(),
         };
         self.plan.steps.extend(steps);
         self.edits.clear();
@@ -985,6 +1102,10 @@ pub struct EpochSnapshot {
     pub plan_id: Option<String>,
     pub plan_epoch: u64,
     pub plan: PlanSection,
+    /// 0ae D0（2026-09-15）：模型自有工作笔记随 epoch 归档/恢复；
+    /// 旧归档（无该字段）经 serde default 兼容读取。
+    #[serde(default)]
+    pub notes: Vec<NoteEntry>,
     pub edits: Vec<EditRecord>,
     pub tool_actions: Vec<ToolActionRecord>,
     pub exec: ExecSection,
@@ -2047,7 +2168,7 @@ mod tests {
                 .lines()
                 .next()
                 .unwrap()
-                .starts_with("[黑板增量]"),
+                .starts_with("[黑板 增量 水位"),
             "{:?}",
             exec_round.messages
         );
@@ -2144,7 +2265,7 @@ mod tests {
                 .lines()
                 .next()
                 .unwrap()
-                .starts_with("[黑板增量]"),
+                .starts_with("[黑板 增量 水位"),
             "{:?}",
             round.messages
         );
@@ -2449,7 +2570,7 @@ mod tests {
                 .lines()
                 .next()
                 .unwrap()
-                .starts_with("[黑板增量]"),
+                .starts_with("[黑板 增量 水位"),
             "{:?}",
             fo_round.messages
         );
@@ -3310,11 +3431,7 @@ mod tests {
             "{:?}",
             round.messages
         );
-        assert!(
-            !reply.content.contains("[黑板增量]"),
-            "{:?}",
-            round.messages
-        );
+        assert!(!reply.content.contains("黑板 增量"), "{:?}", round.messages);
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -3733,7 +3850,7 @@ mod tests {
                 .messages
                 .iter()
                 .filter(|m| m.tool_call_id.as_deref() == Some("call-b4"))
-                .all(|m| !m.content.starts_with("[黑板增量]")),
+                .all(|m| !m.content.starts_with("[黑板 增量")),
             "error shape must not carry the delta header: {:?}",
             round.messages
         );

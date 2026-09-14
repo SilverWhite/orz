@@ -1193,6 +1193,29 @@ pub(crate) async fn run_agent_loop(
     // 由模型自行决策）。
     let mut retrieval_early_close: Option<String> = None;
     let mut retrieval_failure_streak: u32 = 0;
+    // 0ae D2/D3（2026-09-15，设计 §5/§6，用户已定框架）：注意力阶梯
+    // 状态（per-run 本地；920K 压缩完成后 rearm）＋压缩窗口结束后的
+    // 机械折叠兜底旗标。仅主车道启用（检索车道不折叠、无阶梯）。
+    let mut attention_ladder = if profile.role == AgentRole::Main {
+        crate::attention_ladder::AttentionLadder::from_env()
+    } else {
+        crate::attention_ladder::AttentionLadder::default()
+    };
+    // `Some(participated)` = 模型压缩窗口已结束，下一 loop-top 强制走
+    // 机械模板压缩（DP-7 兜底），participated 为窗口内是否发生黑板写入。
+    let mut force_compact_after_window: Option<bool> = None;
+    // 0ae D1（2026-09-15，设计 §4，用户裁决 DP-2）：补救规则——至第
+    // N=20 轮仍无任何 blackboard_write ⇒ 再提醒一次；此后不再提醒、
+    // 不设硬门。
+    const PLAN_WRITE_REMINDER_ROUND: u32 = 20;
+    let mut plan_reminder_done = false;
+    // 0ae D4（2026-09-15，设计 §7，用户裁决 DP-4）：run 起始基线
+    // （HEAD + worktree 干净与否；git 失败/非 git 工作区 = None）。
+    let run_baseline = if profile.role == AgentRole::Main {
+        crate::action_ledger::capture_run_baseline(&host.session_cwd())
+    } else {
+        None
+    };
 
     loop {
         // Cooperative cancellation checkpoint (Phase 3 slice #7): polled
@@ -1250,14 +1273,94 @@ pub(crate) async fn run_agent_loop(
         // A pending checkpoint round has priority over compaction — the
         // injected template block must reach the model before any window
         // collapse (§14.16: 触发点下一安全动作间隙暂停).
+        // 0ae D2（2026-09-15，设计 §5，用户已定框架）：注意力阶梯——
+        // 主车道 loop-top 安全间隙按上一轮实测 token 检查越线级；打断式
+        // （128K）与截断式（800K）= 独立注入块，提醒式/软提醒 = 单行
+        // 附注（每级恰好一次，fire 事件经 mechanical_audit_update 落账）。
+        // D3：920K ⇒ 开模型参与压缩窗口（打断全部动作的无工具轮，
+        // PendingCheckpoint::ModelCompression）。
+        if pending_checkpoint.is_none()
+            && profile.role == AgentRole::Main
+            && let Some(measured) = last_prompt_tokens
+        {
+            for fire in attention_ladder.due(measured) {
+                let form = match fire.level {
+                    crate::attention_ladder::LadderLevel::Interrupt
+                    | crate::attention_ladder::LadderLevel::Hard => "standalone_block",
+                    _ => "one_line",
+                };
+                messages.push(Message {
+                    role: Role::User,
+                    content: fire.block.clone(),
+                    tool_call_id: None,
+                    tool_calls: Vec::new(),
+                    reasoning_content: None,
+                    round: None,
+                });
+                writer
+                    .record(
+                        EventType::MechanicalAuditUpdate,
+                        serde_json::json!({
+                            "kind": "attention_ladder",
+                            "payload": {
+                                "level": fire.level.as_str(),
+                                "threshold_k": fire.threshold_k,
+                                "measured_tokens": measured,
+                                "form": form,
+                            }
+                        }),
+                    )
+                    .await?;
+            }
+            if attention_ladder.compress_due(measured) {
+                let k = crate::attention_ladder::DEFAULT_COMPRESS_K;
+                pending_checkpoint = Some(PendingCheckpoint::ModelCompression {
+                    rounds_left: crate::attention_ladder::COMPRESSION_WINDOW_ROUNDS,
+                    window_start_writes: svc.blackboard.read().model_note_count(),
+                });
+                messages.push(Message {
+                    role: Role::User,
+                    content: crate::attention_ladder::compression_window_block(k),
+                    tool_call_id: None,
+                    tool_calls: Vec::new(),
+                    reasoning_content: None,
+                    round: None,
+                });
+                writer
+                    .record(
+                        EventType::MechanicalAuditUpdate,
+                        serde_json::json!({
+                            "kind": "attention_ladder",
+                            "payload": {
+                                "level": "compress_window_open",
+                                "threshold_k": k,
+                                "measured_tokens": measured,
+                                "window_rounds":
+                                    crate::attention_ladder::COMPRESSION_WINDOW_ROUNDS,
+                            }
+                        }),
+                    )
+                    .await?;
+            }
+        }
         let fallback_now = pending_checkpoint.is_none()
             && last_prompt_tokens.is_some_and(|m| m > svc.context_compact.safety_tokens);
         let rhythm_now = pending_checkpoint.is_none()
             && last_prompt_tokens.is_some_and(|m| m > svc.context_compact.trigger_tokens)
             && rounds_since_compact >= svc.context_compact.min_rounds;
-        let summary_now = fallback_now || rhythm_now;
+        // 0ae D3：压缩窗口结束 ⇒ 机械无差别折叠兜底（绕过阈值与冷却；
+        // DP-7：模型未完成固化/标注也照旧执行，model_participated 已在
+        // 窗口结束点如实落账）。
+        let summary_now = fallback_now || rhythm_now || force_compact_after_window.is_some();
         if summary_now && let Some(measured) = last_prompt_tokens {
-            let reason = if fallback_now { "fallback" } else { "rhythm" };
+            let forced_window = force_compact_after_window.take();
+            let reason = if forced_window.is_some() {
+                "attention_920k_window"
+            } else if fallback_now {
+                "fallback"
+            } else {
+                "rhythm"
+            };
             let tail = svc.context_compact.recent_tail_rounds;
             // P2-14 S1：主会话压缩才走 v0.3 折叠快照（取压缩触发点 LIF
             // round/domain 作快照上下文）；检索/grill 车道传 None 保持
@@ -1297,9 +1400,17 @@ pub(crate) async fn run_agent_loop(
                     // cooldown restarts and the guard retry chain resets.
                     guard_failures = 0;
                     rounds_since_compact = 0;
+                    // 0ae D2：920K 压缩完成后全阶梯重新武装（设计 §5，
+                    // 从 128K 起）。
+                    if forced_window.is_some() {
+                        attention_ladder.rearm();
+                    }
                 }
                 CompactDecision::NoOp => {
                     guard_failures = 0;
+                    if forced_window.is_some() {
+                        attention_ladder.rearm();
+                    }
                 }
                 CompactDecision::GuardBlocked => {
                     // The guard cannot be satisfied THIS round — retry on
@@ -1376,11 +1487,20 @@ pub(crate) async fn run_agent_loop(
             if view_estimate >= svc.context_compact.fold_trigger_tokens {
                 let ledger_path = crate::action_ledger::ledger_file_path(&host.session_cwd());
                 let prev_fold = fold_state.clone();
+                // 0ae D4：机械段（基线 + 自编辑清单 + 最近编辑指纹）随
+                // 推进冻结进桥。
+                let run_context_block = run_baseline.as_deref().map(|baseline| {
+                    crate::action_ledger::render_run_context_block(
+                        Some(baseline),
+                        &svc.blackboard.read().edits,
+                    )
+                });
                 if let Some(rows) = crate::action_ledger::advance_fold(
                     messages,
                     &mut fold_state,
                     fold_tail_budget,
                     &ledger_path,
+                    run_context_block,
                 ) {
                     if let Err(append_err) =
                         crate::action_ledger::append_ledger_rows(&ledger_path, &rows)
@@ -2069,6 +2189,68 @@ pub(crate) async fn run_agent_loop(
                         round: None,
                     });
                 }
+                continue;
+            }
+            // 0ae D3：模型参与压缩窗口轮（2026-09-15，设计 §6，DP-7）——
+            // 模型固化 + 标注；≤3 轮（COMPRESSION_WINDOW_ROUNDS）；窗口
+            // 结束 ⇒ 机械无差别折叠兜底照旧执行（force_compact_after_
+            // window），model_participated 如实落账（窗口内是否发生
+            // blackboard_write）。
+            if let PendingCheckpoint::ModelCompression {
+                rounds_left,
+                window_start_writes,
+            } = &pending
+            {
+                let writes_now = svc.blackboard.read().model_note_count();
+                let participated = writes_now > *window_start_writes;
+                // 模型的窗口轮回答保留在会话中。
+                if let Some(text) = response.text.clone().filter(|t| !t.is_empty()) {
+                    messages.push(Message {
+                        role: Role::Assistant,
+                        content: text,
+                        tool_call_id: None,
+                        tool_calls: Vec::new(),
+                        reasoning_content: response.reasoning_content.clone(),
+                        round: None,
+                    });
+                }
+                if *rounds_left > 1 && !participated {
+                    // 未完成固化：再给一轮（有限窗口，不挂死）。
+                    pending_checkpoint = Some(PendingCheckpoint::ModelCompression {
+                        rounds_left: rounds_left.saturating_sub(1),
+                        window_start_writes: *window_start_writes,
+                    });
+                    messages.push(Message {
+                        role: Role::User,
+                        content: format!(
+                            "[模型参与压缩] 窗口剩余 {} 轮：尚未检测到 blackboard_write。                             请固化必要内容并标注可弃范围；窗口结束即执行机械折叠。",
+                            rounds_left.saturating_sub(1)
+                        ),
+                        tool_call_id: None,
+                        tool_calls: Vec::new(),
+                        reasoning_content: None,
+                        round: None,
+                    });
+                    continue;
+                }
+                let rounds_used = crate::attention_ladder::COMPRESSION_WINDOW_ROUNDS
+                    .saturating_sub(*rounds_left)
+                    + 1;
+                writer
+                    .record(
+                        EventType::MechanicalAuditUpdate,
+                        serde_json::json!({
+                            "kind": "model_compression",
+                            "payload": {
+                                "model_participated": participated,
+                                "rounds_used": rounds_used,
+                                "window_start_writes": window_start_writes,
+                                "writes_now": writes_now,
+                            }
+                        }),
+                    )
+                    .await?;
+                force_compact_after_window = Some(participated);
                 continue;
             }
             // Orientation soft gate — 消费并续跑（详见分支上方注释）。
@@ -3137,6 +3319,7 @@ pub(crate) async fn run_agent_loop(
         // P0-0x S1（ADR-0010 §14.66）：本间隙同时是**初始轮中立问询**的
         // 触发点——主车道首个含工具调用的动作批次结束时，`maybe_fire_orientation`
         // 优先派发一次性初始轮 record（会话内恰好一次）。
+        let mut fired_initial_round = false;
         if pending_checkpoint.is_none()
             && let Some(role) = profile.orientation_role
             && let Some(record) = controller
@@ -3151,7 +3334,61 @@ pub(crate) async fn run_agent_loop(
                 )
                 .await?
         {
+            // 0ae D1（2026-09-15，设计 §4，用户已同意方向）：初始轮问询
+            // 追加一问——引导把工作计划/关键中间结论写入黑板（复用 0x
+            // 注入机制与间隙，0x 模板块本身不改——签名模板 sha256 面不动）。
+            fired_initial_round = record.is_initial_round();
             pending_checkpoint = Some(PendingCheckpoint::Orientation { record });
+        }
+        if fired_initial_round {
+            messages.push(Message {
+                role: Role::User,
+                content: "[工作台] 请将本任务的工作计划与关键中间结论写入黑板                           （blackboard_write section=plan|notes）；黑板不受上下文折叠影响，                          920K 压缩时只有黑板内容与保留尾可依托。"
+                    .to_string(),
+                tool_call_id: None,
+                tool_calls: Vec::new(),
+                reasoning_content: None,
+                round: None,
+            });
+            writer
+                .record(
+                    EventType::MechanicalAuditUpdate,
+                    serde_json::json!({
+                        "kind": "plan_write_guidance",
+                        "payload": { "trigger": "initial_round" }
+                    }),
+                )
+                .await?;
+        }
+        // 0ae D1 补救规则（DP-2）：至第 N=20 轮仍无任何 blackboard_write
+        // ⇒ 再提醒一次；此后不再提醒、不设硬门。
+        if pending_checkpoint.is_none()
+            && profile.role == AgentRole::Main
+            && !plan_reminder_done
+            && tool_rounds >= PLAN_WRITE_REMINDER_ROUND
+            && svc.blackboard.read().model_note_count() == 0
+        {
+            plan_reminder_done = true;
+            messages.push(Message {
+                role: Role::User,
+                content: format!(
+                    "[工作台] 已 {} 轮未写入黑板：请把工作计划与关键中间结论固化到黑板                      （blackboard_write section=plan|notes）。此为唯一一次提醒。",
+                    PLAN_WRITE_REMINDER_ROUND
+                ),
+                tool_call_id: None,
+                tool_calls: Vec::new(),
+                reasoning_content: None,
+                round: None,
+            });
+            writer
+                .record(
+                    EventType::MechanicalAuditUpdate,
+                    serde_json::json!({
+                        "kind": "plan_write_guidance",
+                        "payload": { "trigger": "n_round_reminder" }
+                    }),
+                )
+                .await?;
         }
         // P0-C orz 内嵌集成 S2 (2026-08-15): 轮末机械发放——动作栏有未消费
         // 订单时在 post-tool-batch 安全间隙发放（副作用只发生在单一出口；

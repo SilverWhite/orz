@@ -463,6 +463,7 @@ mod tests {
             "search_replace",
             "web_search",
             "blackboard_read",
+            "blackboard_write",
             "submit",
         ];
         for tool in &expected {
@@ -524,6 +525,7 @@ mod tests {
             "run_terminal_cmd",
             "web_search",
             "blackboard_read",
+            "blackboard_write",
             "submit",
         ] {
             assert!(
@@ -611,9 +613,10 @@ mod tests {
         assert_eq!(
             declared,
             vec![
-                "bash",            // non-work tool — untouched
-                "blackboard_read", // storage chain complete
-                "read_file",       // read chain complete
+                "bash",             // non-work tool — untouched
+                "blackboard_read",  // storage chain complete
+                "blackboard_write", // 0ae D0: model notes write (ReadOnly class)
+                "read_file",        // read chain complete
             ],
             "R1 single-face list projection (todo_write / compaction_whitelist_add \
              sealed): {declared:?}"
@@ -1040,7 +1043,10 @@ mod tests {
         declared.sort();
         assert_eq!(
             declared,
-            vec!["bash"],
+            vec![
+                "bash",             // non-work tool — untouched
+                "blackboard_write", // 0ae D0: in-memory write, no workspace probe
+            ],
             "unreadable workspace removes every work tool: {declared:?}"
         );
         let all_events = events(&dir);

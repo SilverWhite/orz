@@ -81,6 +81,12 @@ impl ToolDispatcher {
             // policy; the plan epoch archive write is a mechanical best-
             // effort audit append, not a worktree mutation).
             || tool_name == "plan_write"
+            // 0ae D0 (2026-09-15, 用户裁决 DP-6): `blackboard_write` writes
+            // ONLY the in-memory blackboard notes faces (plan/notes) — no
+            // file, no network, no external side effect — ReadOnly-classed
+            // like `plan_write` (auto-allowed under every policy; the 8-tool
+            // face freeze's user-led explicit exception +1).
+            || tool_name == "blackboard_write"
             // GAP-RETRIEVAL-TOOLS (2026-08-10): `project_doc_index` is a
             // workspace-local read (discovery + query) — ReadOnly class
             // (auto-allowed under every policy; the retrieval subagent's
@@ -152,6 +158,10 @@ impl ToolDispatcher {
         } else if tool_name == "plan_write" {
             // PLAN-FIRST 阶段 A: the plan-section write is session
             // bookkeeping (in-memory blackboard only) — honest "other" fold.
+            "other"
+        } else if tool_name == "blackboard_write" {
+            // 0ae D0: the model notes write is session bookkeeping
+            // (in-memory blackboard only) — honest "other" fold.
             "other"
         } else if Self::is_shell_tool(tool_name) {
             "terminal"

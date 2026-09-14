@@ -74,6 +74,94 @@ pub fn build_pointer_message(ledger_path: &std::path::Path) -> String {
 /// token ≈ 8K 真实 token）。
 pub const FOLD_TAIL_CHARS_PER_TOKEN: u64 = 2;
 
+/// 0ae D4（2026-09-15，设计 §7）：run 起始基线捕获——`git rev-parse HEAD`
+/// + `git status --porcelain`（零模型调用，run 起始一次）；非 git 工作区
+/// 或 git 失败 = `None`（不渲染基线段，其余两段照常）。解决「362 行
+/// 自产代码被表述为上一轮遗留」的出处失忆与基线失忆。
+pub fn capture_run_baseline(cwd: &std::path::Path) -> Option<String> {
+    let head = std::process::Command::new("git")
+        .args(["rev-parse", "--short=12", "HEAD"])
+        .current_dir(cwd)
+        .output()
+        .ok()?;
+    if !head.status.success() {
+        return None;
+    }
+    let dirty = std::process::Command::new("git")
+        .args(["status", "--porcelain"])
+        .current_dir(cwd)
+        .output()
+        .map(|out| out.status.success() && !out.stdout.is_empty())
+        .unwrap_or(false);
+    Some(format!(
+        "HEAD={}（run 起始 worktree：{}）",
+        String::from_utf8_lossy(&head.stdout).trim(),
+        if dirty {
+            "含未提交改动"
+        } else {
+            "干净"
+        }
+    ))
+}
+
+/// 最近编辑指纹条数（设计 §7③「最近 N 次」，首版 N=5）。
+pub const RUN_CONTEXT_RECENT_EDITS: usize = 5;
+
+/// 0ae D4：折叠桥机械段渲染——①本 run 自编辑文件清单（路径 + 次数 +
+/// 末次时间）②run 起始基线 ③最近 N 次编辑指纹。数据源 = 黑板 edits
+/// 分区（机械单写者，模型不可伪造）。
+pub fn render_run_context_block(
+    baseline: Option<&str>,
+    edits: &[crate::blackboard::EditRecord],
+) -> String {
+    let mut lines = Vec::new();
+    if let Some(baseline) = baseline {
+        lines.push(format!("【本 run 基线】{baseline}"));
+    }
+    if !edits.is_empty() {
+        // 文件聚合（路径 + 次数 + 末次时间；保序）。
+        let mut order: Vec<&str> = Vec::new();
+        let mut counts: std::collections::HashMap<&str, (usize, &str)> =
+            std::collections::HashMap::new();
+        for record in edits {
+            match counts.get_mut(record.file.as_str()) {
+                Some((count, last)) => {
+                    *count += 1;
+                    *last = record.timestamp.as_str();
+                }
+                None => {
+                    order.push(record.file.as_str());
+                    counts.insert(record.file.as_str(), (1, record.timestamp.as_str()));
+                }
+            }
+        }
+        let files: Vec<String> = order
+            .iter()
+            .map(|file| {
+                let (count, last) = counts.get(file).copied().expect("registered above");
+                format!("{file} ×{count}（末次 {last}）")
+            })
+            .collect();
+        lines.push(format!("【本 run 自编辑文件】{}", files.join("；")));
+        let recent: Vec<String> = edits
+            .iter()
+            .rev()
+            .take(RUN_CONTEXT_RECENT_EDITS)
+            .map(|record| {
+                format!(
+                    "[{}] {} +{}/-{}",
+                    record.timestamp, record.file, record.new_lines, record.old_lines
+                )
+            })
+            .collect();
+        lines.push(format!("【最近编辑指纹】{}", recent.join("；")));
+    }
+    lines.join(
+        "
+",
+    )
+}
+
 /// 桥预算换算（真实 token 目标 → `estimate_messages_tokens` 估计口径）。
 pub fn fold_tail_estimate_budget(fold_tail_tokens: u64) -> u64 {
     fold_tail_tokens.saturating_mul(FOLD_TAIL_CHARS_PER_TOKEN) / 2
@@ -263,6 +351,12 @@ pub struct LedgerFoldState {
     /// the first advance — the folded rows live in the external ledger
     /// file, not in the request view).
     pub folded_ledger: Option<String>,
+    /// 0ae D4（2026-09-15，设计 §7，用户裁决 DP-4）：折叠桥机械段——
+    /// run 起始基线（HEAD + worktree 干净与否）＋本 run 自编辑文件清单
+    /// ＋最近编辑指纹。内容在推进时冻结（随桥字节稳定，缓存纪律），
+    /// 渲染在指针消息之后；解决出处失忆与基线失忆（+数百 token，零
+    /// 模型调用）。
+    pub run_context_block: Option<String>,
 }
 
 impl LedgerFoldState {
@@ -646,6 +740,18 @@ pub fn build_request_view(
         reasoning_content: None,
         round: None,
     });
+    // 0ae D4：折叠桥机械段（基线 + 自编辑清单 + 最近编辑指纹）——紧跟
+    // 指针消息、桥之前；内容推进时冻结（见 LedgerFoldState 注释）。
+    if let Some(block) = &fold.run_context_block {
+        view.push(Message {
+            role: Role::User,
+            content: block.clone(),
+            tool_call_id: None,
+            tool_calls: Vec::new(),
+            reasoning_content: None,
+            round: None,
+        });
+    }
     // FUS-LEDGER-FOLD-BRIDGE (2026-08-19, ADR-0010 §14.32 / 设计 §3.1/§3.2):
     // 桥 = 最近一次推进冻结的 `[cut..bridge_end)`（推进时 messages 末尾）——
     // 该区间内容级截断到预算（仅最新一轮单独超预算的例外情形）；`bridge_end`
@@ -887,6 +993,7 @@ pub fn advance_fold(
     fold: &mut LedgerFoldState,
     budget_estimate: u64,
     ledger_path: &std::path::Path,
+    run_context_block: Option<String>,
 ) -> Option<Vec<ActionLedgerRow>> {
     let kept_start = bridge_cut(messages, budget_estimate)?;
     let old_cut = fold.fold_cut;
@@ -948,6 +1055,9 @@ pub fn advance_fold(
     if fold.folded_ledger.is_none() {
         fold.folded_ledger = Some(build_pointer_message(ledger_path));
     }
+    // 0ae D4：机械段随推进刷新（推进本身即前缀失效点，附加内容不改变
+    // 「推进之间字节稳定」的纪律）。
+    fold.run_context_block = run_context_block;
     Some(rows)
 }
 
@@ -1394,8 +1504,14 @@ mod tests {
         let ledger_path = std::path::Path::new(".gsa/ledger/current.md");
         let mut fold = LedgerFoldState::default();
         // 预算恰容纳最新一轮（c4）：c1–c3 折进台账，桥 = c4。
-        let rows = advance_fold(&messages, &mut fold, est_budget(&messages, 7), ledger_path)
-            .expect("first advance folds old rounds");
+        let rows = advance_fold(
+            &messages,
+            &mut fold,
+            est_budget(&messages, 7),
+            ledger_path,
+            None,
+        )
+        .expect("first advance folds old rounds");
         assert!(fold.is_folded());
         assert_eq!(fold.fold_start, Some(1), "first tool declaration index");
         // kept_start = the start of the newest tail=1 round (c4 at idx 7).
@@ -1442,19 +1558,33 @@ mod tests {
         let mut fold = LedgerFoldState::default();
         // 预算恰容纳最新两轮（c2+c3）：c1 折进台账。
         assert!(
-            advance_fold(&messages, &mut fold, est_budget(&messages, 3), ledger_path).is_some()
+            advance_fold(
+                &messages,
+                &mut fold,
+                est_budget(&messages, 3),
+                ledger_path,
+                None
+            )
+            .is_some()
         );
         let before = fold.clone();
         // No new complete round outside the tail — no-op.
         assert!(
-            advance_fold(&messages, &mut fold, est_budget(&messages, 3), ledger_path).is_none()
+            advance_fold(
+                &messages,
+                &mut fold,
+                est_budget(&messages, 3),
+                ledger_path,
+                None
+            )
+            .is_none()
         );
         assert_eq!(fold, before);
         // 仅 1 个完整轮：桥恒含 ≥1 轮结构、无可折叠轮 — no-op。
         let mut sparse = vec![msg(Role::User, "任务")];
         sparse.extend(round("c1", "read_file", "a.py", "内容A"));
         let mut sparse_fold = LedgerFoldState::default();
-        assert!(advance_fold(&sparse, &mut sparse_fold, 1_000_000, ledger_path).is_none());
+        assert!(advance_fold(&sparse, &mut sparse_fold, 1_000_000, ledger_path, None).is_none());
         assert!(!sparse_fold.is_folded());
     }
 
@@ -1470,7 +1600,7 @@ mod tests {
         // 预算恰容纳 c3+c4：首次推进折 c1/c2；预算先取一次、跨追加复用
         // （第二次推进前 messages 已含 c5/c6，重算会把预算放大到整段）。
         let budget = est_budget(&messages, 5);
-        let first = advance_fold(&messages, &mut fold, budget, ledger_path).unwrap();
+        let first = advance_fold(&messages, &mut fold, budget, ledger_path, None).unwrap();
         assert_eq!(first.len(), 2, "rounds c1/c2");
         assert!(
             first
@@ -1483,7 +1613,7 @@ mod tests {
         // newly folded c3/c4 rows — the pointer is never rewritten.
         messages.extend(round("c5", "read_file", "e.py", "E"));
         messages.extend(round("c6", "read_file", "f.py", "F"));
-        let second = advance_fold(&messages, &mut fold, budget, ledger_path).unwrap();
+        let second = advance_fold(&messages, &mut fold, budget, ledger_path, None).unwrap();
         assert_eq!(second.len(), 2, "rounds c3/c4 only");
         assert!(
             second
@@ -1518,7 +1648,7 @@ mod tests {
         }
         let mut fold = LedgerFoldState::default();
         let budget = est_budget(&messages, 7);
-        assert!(advance_fold(&messages, &mut fold, budget, ledger_path).is_some());
+        assert!(advance_fold(&messages, &mut fold, budget, ledger_path, None).is_some());
         let view1 = build_request_view(&messages, &fold, budget);
         // Preamble + fixed pointer: byte-stable across ALL advances.
         let prefix_len = fold.fold_start.unwrap() + 1;
@@ -1531,7 +1661,7 @@ mod tests {
                 &format!("{k}.py"),
                 &format!("内容{k}"),
             ));
-            let advanced = advance_fold(&messages, &mut fold, budget, ledger_path).is_some();
+            let advanced = advance_fold(&messages, &mut fold, budget, ledger_path, None).is_some();
             let view = build_request_view(&messages, &fold, budget);
             let prefix: Vec<Message> = view.iter().take(prefix_len).cloned().collect();
             assert_eq!(prefix, prefix1, "folded prefix rewritten at round {k}");
@@ -1631,7 +1761,8 @@ mod tests {
             ));
         }
         let mut fold = LedgerFoldState::default();
-        let rows = advance_fold(&messages, &mut fold, est_budget(&messages, 5), &path).unwrap();
+        let rows =
+            advance_fold(&messages, &mut fold, est_budget(&messages, 5), &path, None).unwrap();
         append_ledger_rows(&path, &rows).unwrap();
         assert_eq!(std::fs::read_to_string(&path).unwrap().lines().count(), 2);
 
@@ -1651,7 +1782,8 @@ mod tests {
             ));
         }
         let mut fresh_fold = LedgerFoldState::default();
-        let rows2 = advance_fold(&fresh, &mut fresh_fold, est_budget(&fresh, 5), &path).unwrap();
+        let rows2 =
+            advance_fold(&fresh, &mut fresh_fold, est_budget(&fresh, 5), &path, None).unwrap();
         append_ledger_rows(&path, &rows2).unwrap();
         let text = std::fs::read_to_string(&path).unwrap();
         let lines: Vec<&str> = text.lines().collect();
@@ -1915,8 +2047,14 @@ mod tests {
         let ledger_path = std::path::Path::new(".gsa/ledger/current.md");
         let mut fold = LedgerFoldState::default();
         // 预算恰容纳 c2+c3（c3 为不完整声明）：行走会停在 c1 之后。
-        let rows =
-            advance_fold(&messages, &mut fold, est_budget(&messages, 3), ledger_path).unwrap();
+        let rows = advance_fold(
+            &messages,
+            &mut fold,
+            est_budget(&messages, 3),
+            ledger_path,
+            None,
+        )
+        .unwrap();
         assert_eq!(rows.len(), 1, "只有 c1 被折叠");
         assert_eq!(fold.fold_cut, Some(3), "cut 回退到 c2 轮起点");
         let view = build_request_view(&messages, &fold, est_budget(&messages, 3));
@@ -1952,7 +2090,7 @@ mod tests {
         };
         let ledger_path = std::path::Path::new(".gsa/ledger/current.md");
         assert!(
-            advance_fold(&messages, &mut fold, 1_000_000, ledger_path).is_none(),
+            advance_fold(&messages, &mut fold, 1_000_000, ledger_path, None).is_none(),
             "preamble 边界不合格必须放弃推进"
         );
         assert_eq!(fold.fold_start, Some(2), "状态保持不动");
@@ -2063,6 +2201,7 @@ mod tests {
             fold_cut: Some(1),
             folded_ledger: Some("ledger".to_string()),
             bridge_end: Some(messages.len()),
+            run_context_block: None,
         };
         let view = build_request_view(&messages, &fold, 1_000_000);
         assert_eq!(view.len(), 4, "U0 + pointer + A + T");
@@ -2121,6 +2260,7 @@ mod tests {
             fold_cut: Some(1),
             folded_ledger: Some("ledger".to_string()),
             bridge_end: Some(messages.len()),
+            run_context_block: None,
         };
         let view = build_request_view(&messages, &fold, 1_000_000);
         let expected: Vec<Message> = messages[1..]
@@ -2181,6 +2321,7 @@ mod tests {
             fold_cut: Some(1),
             folded_ledger: Some("ledger".to_string()),
             bridge_end: Some(messages.len()),
+            run_context_block: None,
         };
         let view = build_request_view(&messages, &fold, 1_000_000);
         let plain = view
@@ -2235,6 +2376,7 @@ mod tests {
             fold_cut: Some(1),
             folded_ledger: Some("ledger".to_string()),
             bridge_end: Some(messages.len()),
+            run_context_block: None,
         };
         // 预算 200 估计 token：整桥必然超限，工具回复必须截断到预算内。
         let budget = 200;
@@ -2300,6 +2442,7 @@ round: None,        });
             fold_cut: Some(1),
             folded_ledger: Some("ledger".to_string()),
             bridge_end: Some(messages.len()),
+            run_context_block: None,
         };
         let view = build_request_view(&messages, &fold, 200);
         let tool = view.iter().find(|m| m.role == Role::Tool).unwrap();
@@ -2361,6 +2504,7 @@ round: None,        });
             fold_cut: Some(1),
             folded_ledger: Some("ledger".to_string()),
             bridge_end: Some(messages.len()),
+            run_context_block: None,
         };
         let view = build_request_view(&messages, &fold, 200);
         let final_text = view
@@ -2392,6 +2536,7 @@ round: None,        });
             fold_cut: Some(1),
             folded_ledger: Some("ledger".to_string()),
             bridge_end: Some(messages.len()),
+            run_context_block: None,
         };
         let budget = 600;
         let view = build_request_view(&messages, &fold, budget);
@@ -2453,6 +2598,7 @@ round: None,        });
             fold_cut: Some(1),
             folded_ledger: Some("ledger".to_string()),
             bridge_end: Some(messages.len()),
+            run_context_block: None,
         };
         let view = build_request_view(&messages, &fold, 100);
         assert_eq!(
@@ -2480,6 +2626,7 @@ round: None,        });
             fold_cut: Some(1),
             folded_ledger: Some("ledger".to_string()),
             bridge_end: Some(bridge_end),
+            run_context_block: None,
         };
         let budget = 200;
         let view = build_request_view(&messages, &fold, budget);
