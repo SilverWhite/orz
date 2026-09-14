@@ -2320,7 +2320,18 @@ mod tests {
                 // only on the session-level 7-round trigger).
                 // THIN-HARNESS-REDESIGN R2a 审查处理 (2026-08-27): plan 门
                 // 普适摘除——不再有 plan 轮（原 18 → 9，与无门轮次一致）。
-                assert_eq!(replay.event_count, 9);
+                // 0ac S3①-b 收尾批（2026-09-15，基线 worktree 实测回填）：
+                // 9 → 11——已提交批带入的三件合法事件在旧期望落笔之后：
+                // ① 检索族探针（`tool_availability_check`
+                // probe_scope=retrieval_family，run 起始无条件 +1，
+                // 4c892951）；② `request_header_change`（请求头指纹首次
+                // journal，ORZ-CACHE-CONTEXT-COST）；③
+                // `host_resource_snapshot`（run 起始档位读数，0z S2
+                // F-EV-7）。实测序列：preflight / availability×2 /
+                // started / prompt_submitted / header_change /
+                // model_output / counterexample_gate / model_output /
+                // snapshot / finished。
+                assert_eq!(replay.event_count, 11);
                 assert_eq!(replay.terminal_event.as_deref(), Some("run_finished"));
 
                 let _ = std::fs::remove_dir_all(&base);
@@ -2385,7 +2396,10 @@ mod tests {
                     assert!(replay.valid, "run journal invalid: {:?}", replay.errors);
                     // THIN-HARNESS-REDESIGN R2a 审查处理 (2026-08-27): plan
                     // 门普适摘除——两个 prompt 均为无门轮次（9 事件）。
-                    assert_eq!(replay.event_count, 9, "preflight + turn events");
+                    // 0ac S3①-b 收尾批（2026-09-15）：9 → 11，同上三件
+                    // 已提交批合法事件（检索族探针 / 请求头指纹 /
+                    // 资源档位快照）。
+                    assert_eq!(replay.event_count, 11, "preflight + turn events");
                     assert_eq!(replay.terminal_event.as_deref(), Some("run_finished"));
                 }
 

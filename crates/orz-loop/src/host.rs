@@ -277,6 +277,26 @@ pub struct TerminalIdleKillFact {
     pub reason: String,
 }
 
+/// 0ac S3①-b M2（2026-09-14, IMMEDIATE_RESULT_DELIVERY_AND_STREAMING_
+/// RETRIEVAL_DESIGN §2.1/§4.1「合法边界投递」）：**后台任务完成**的投递
+/// 事实——host 在合法投递边界（B1 工具结果 / B2 轮结束）drain 自上次回收
+/// 以来**新完成且尚未报告**的任务；loop 侧据此在边界注入模型可见事实并
+/// 落 `result_delivered`（真投递面：`suppressed=false`）。
+///
+/// 与工具结果内联的 `TaskCompletionReminder` 互斥：两者共用同一「已报告」
+/// 记账（mark_reported 语义），同一任务只经一个通道投给模型一次
+/// （设计 §2.3「同一结果只投递一次」）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CompletedTaskFact {
+    /// 后台任务 id（auto-background 语义下即原工具调用 id）。
+    pub task_id: String,
+    /// 模型可见的机械事实文本（含输出指针；由来源侧单一源格式化——
+    /// loop 只注入不重写）。
+    pub report: String,
+    /// 任务退出码（终端能提供时；完成即确定事实）。
+    pub exit_code: Option<i32>,
+}
+
 /// TER T1.12 (W-F11, 2026-09-04)：黑板 `section=env` 的机械层代码工具
 /// 环境快照事实（PULL 白名单面）。`kind` 取值 tool / language / package /
 /// input / connectivity（渲染层白名单登记；越权 kind 渲染层拒绝）。
@@ -813,6 +833,14 @@ pub trait LoopHost: Send + Sync {
 
     /// FUS-TOOL-PROBE P0-A-2: whether a workspace language-service backend
     /// is configured (`lsp` probe source). Fail-closed default.
+    /// 0ac S3①-b M2（2026-09-14）：合法边界投递的**来源面**——drain 自上次
+    /// 调用以来新完成、且尚未经任何通道报告的后台任务（见
+    /// [`CompletedTaskFact`]）。drain 语义同 idle-kill 面：同一任务只返回
+    /// 一次；默认空 = 无来源（且零成本），子代理/测试宿主无需实现。
+    async fn drain_completed_tasks(&self) -> Vec<CompletedTaskFact> {
+        Vec::new()
+    }
+
     fn lsp_configured(&self) -> bool {
         false
     }

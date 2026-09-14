@@ -341,6 +341,13 @@ pub enum AgentLoopError {
     /// （resumable，无 assessment/digest）。
     #[error("retrieval subagent wallclock exceeded")]
     RetrievalSubagentTimeout,
+    /// 0ac S3①-b ⑥ (2026-09-15, IMMEDIATE_RESULT_DELIVERY_AND_STREAMING_
+    /// RETRIEVAL_DESIGN §7 风险 6): 检索子代理提前收口——确定性不可达
+    /// （`capability_unreachable`）或连续确定失败达阈值，post-tool-batch
+    /// 间隙中止（本批 tool replies 已回传，协议形态完整）；激活以
+    /// `subagent_failed` 收口，cause 随错误文本自描述。墙钟只作最后兜底。
+    #[error("retrieval subagent early close: {0}")]
+    RetrievalSubagentEarlyClose(String),
 }
 
 /// ACAF Slice 2 fail-closed (2026-08-13): the ticket lifecycle's decision

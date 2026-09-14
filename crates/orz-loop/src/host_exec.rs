@@ -3550,10 +3550,44 @@ impl AgentLoopController {
         let call =
             host.call_tool_with_timeout(&tc.name, tc.arguments.clone(), &tc.call_id, timeout);
         tokio::pin!(call);
+        // 0ac S3①-b M3（2026-09-15，设计 §4.1 表 M3「长工具中途回报」）：
+        // 检索族调用在等待窗内每 tick（ORZ_RETRIEVAL_PROGRESS_TICK_MS，
+        // 默认 10 s、0=禁用——与 T_first 同阶）落一条
+        // `retrieval_progress{stage:"progress"}`（逐 tick 唯一去重键、
+        // 只带已等待 ms、不猜稳定码），使「到点前零事件」路径不存在；
+        // ⑦ 的信号量排队等待同窗覆盖（排队可见性）。非检索调用维持
+        // 既有 60 s 心跳（stall 保活语义不变）；主开关关时
+        // immediate_arrival=false ⇒ 本段零事件、零行为变化。
+        let tick_ms = if immediate_arrival {
+            crate::immediate_delivery::progress_tick_ms()
+        } else {
+            0
+        };
+        let heartbeat_ms = if tick_ms > 0 {
+            tick_ms.min(60_000)
+        } else {
+            60_000
+        };
+        let mut progress_tick: u64 = 0;
         let call_result = loop {
             tokio::select! {
                 r = &mut call => break r,
-                _ = tokio::time::sleep(std::time::Duration::from_secs(60)) => {
+                _ = tokio::time::sleep(std::time::Duration::from_millis(heartbeat_ms)) => {
+                    if tick_ms > 0 {
+                        progress_tick += 1;
+                        let waited_ms = arrival_started.elapsed().as_millis() as u64;
+                        writer
+                            .record(
+                                EventType::RetrievalProgress,
+                                crate::immediate_delivery::progress_tick_payload(
+                                    &tc.name,
+                                    &tc.call_id,
+                                    waited_ms,
+                                    progress_tick,
+                                ),
+                            )
+                            .await?;
+                    }
                     if let Some(h) = heartbeat {
                         h.stamp();
                     }

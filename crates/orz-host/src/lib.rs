@@ -1859,6 +1859,40 @@ impl LoopHost for OrzHost {
         self.drain_resource_facts()
     }
 
+    /// 0ac S3①-b M2（2026-09-15，IMMEDIATE_RESULT_DELIVERY_AND_STREAMING_
+    /// RETRIEVAL_DESIGN §2.1/§4.1「合法边界投递」）：后台任务完成的投递
+    /// 事实源——与 per-call `TaskCompletionReminder` 共用同一
+    /// `ReportedTaskCompletions` 记账（`drain_between_turn_bash_completions`
+    /// 内部 mark_reported），同一任务只经一个通道投给模型一次；owner
+    /// 会话过滤同源（子代理不泄漏父/兄弟会话的任务）。文本由来源侧
+    /// 单一源 `format_bash_completion` 格式化——loop 只注入不重写。
+    async fn drain_completed_tasks(&self) -> Vec<orz_loop::host::CompletedTaskFact> {
+        let bridge = orz_tools::bridge::ToolBridge::from_parts(
+            self.registry.toolset().clone(),
+            Some(self.terminal.clone()),
+        );
+        let tasks = bridge.drain_between_turn_bash_completions(&[]).await;
+        if tasks.is_empty() {
+            return Vec::new();
+        }
+        let task_output_name =
+            orz_tools::reminders::task_completion::resolve_task_output_tool_name(&bridge).await;
+        let read_tool_name =
+            orz_tools::reminders::task_completion::resolve_read_tool_name(&bridge).await;
+        tasks
+            .into_iter()
+            .map(|t| orz_loop::host::CompletedTaskFact {
+                report: orz_tools::reminders::task_completion::format_bash_completion(
+                    &t,
+                    task_output_name.as_deref(),
+                    read_tool_name.as_deref(),
+                ),
+                task_id: t.task_id,
+                exit_code: t.exit_code,
+            })
+            .collect()
+    }
+
     async fn finalize_process_trees(&self) {
         OrzHost::finalize_process_trees(self)
     }

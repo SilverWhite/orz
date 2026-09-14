@@ -695,6 +695,18 @@ impl ToolBridge {
             terminal: None,
         }
     }
+
+    /// 0ac S3①-b M2（2026-09-15）：从既有部件装配桥——宿主（`OrzHost`）
+    /// 与工具集共用同一 `FinalizedToolset` 与 terminal backend，drain 面
+    /// 在宿侧就地重建桥即可取到 `drain_between_turn_bash_completions`，
+    /// 与 per-call `TaskCompletionReminder` 共用同一 `ReportedTaskCompletions`
+    /// 记账（同一任务只经一个通道投给模型一次）。
+    pub fn from_parts(
+        registry: Arc<FinalizedToolset>,
+        terminal: Option<Arc<dyn TerminalBackend>>,
+    ) -> Self {
+        Self { registry, terminal }
+    }
 }
 
 #[cfg(test)]

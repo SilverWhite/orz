@@ -860,6 +860,10 @@ impl AgentLoopController {
                 let reason = match &e {
                     AgentLoopError::Cancelled => "subagent_cancelled",
                     AgentLoopError::RetrievalSubagentTimeout => "subagent_timeout",
+                    // 0ac S3①-b ⑥：提前收口（确定性不可达 / 连续确定失败）
+                    // ——用既有闭枚举值承载，cause 随错误文本自描述
+                    // （交接件 §5-D 核对结论：契约面不扩枚举）。
+                    AgentLoopError::RetrievalSubagentEarlyClose(_) => "subagent_failed",
                     _ => "subagent_failed",
                 };
                 self.close_activation(writer, role, reason, None, None)

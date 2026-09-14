@@ -1179,6 +1179,20 @@ pub(crate) async fn run_agent_loop(
     // 压缩仍兜底窗口。
     let mut fold_write_failures: u32 = 0;
     let mut fold_disabled = false;
+    // 0ac S3①-b M2（2026-09-15，IMMEDIATE_RESULT_DELIVERY_AND_STREAMING_
+    // RETRIEVAL_DESIGN §2.1/§4.1「合法边界投递」）：per-run 投递队列——
+    // run 生命周期 = 队列生命周期（不跨 run 存活）；B1/B2 边界投递与
+    // M1 收尾注入共用。主开关关时队列恒空（admit 只在开关下被调用），
+    // 零事件、零行为变化。
+    let mut delivery_queue = crate::immediate_delivery::DeliveryQueue::from_env();
+    let mut m1_used = false;
+    // 0ac S3①-b ⑥（2026-09-15，同稿 §7 风险 6）：检索子代理提前收口——
+    // 确定性不可达（`capability_unreachable`）立即收口；连续确定失败
+    // （network_no_response / empty_result，成功即清零）达到阈值收口；
+    // 墙钟只作最后兜底。仅检索车道启用（Main 车道检索失败照常回传，
+    // 由模型自行决策）。
+    let mut retrieval_early_close: Option<String> = None;
+    let mut retrieval_failure_streak: u32 = 0;
 
     loop {
         // Cooperative cancellation checkpoint (Phase 3 slice #7): polled
@@ -2186,6 +2200,54 @@ pub(crate) async fn run_agent_loop(
                 counterexample_fired = true;
                 continue;
             }
+            // 0ac S3①-b M1（2026-09-15，设计 §4.1「句号边界分段续写」的
+            // 收尾注入形态）：本轮已是纯文本终答候选而队列仍有未投递事实
+            // 时，保留该轮 assistant 文本（含 reasoning_content）、注入
+            // 一次机械事实消息后 `continue` 续跑——把这一轮切成一段；
+            // 每 run 至多一次，用尽即按原路径收尾（绝不挂死、绝不重复
+            // 注入）。子开关从属主开关（A/B 面）；boundary 取闭枚举
+            // B2_turn_end（轮末边界的最近语义位）。
+            if !m1_used && crate::immediate_delivery::m1_enabled() && !delivery_queue.is_empty() {
+                if let Some(text) = response.text.clone().filter(|t| !t.is_empty()) {
+                    messages.push(Message {
+                        role: Role::Assistant,
+                        content: text,
+                        tool_call_id: None,
+                        tool_calls: Vec::new(),
+                        reasoning_content: response.reasoning_content.clone(),
+                        round: None,
+                    });
+                }
+                let now_ms = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map(|d| d.as_millis() as u64)
+                    .unwrap_or(0);
+                let deliveries = delivery_queue.due(u64::from(tool_rounds), now_ms);
+                for d in &deliveries {
+                    writer
+                        .record(
+                            EventType::ResultDelivered,
+                            crate::immediate_delivery::delivered_fact_payload(
+                                d,
+                                crate::immediate_delivery::BOUNDARY_B2,
+                            ),
+                        )
+                        .await?;
+                }
+                messages.push(Message {
+                    role: Role::User,
+                    content: format!(
+                        "[结果投递] {}",
+                        crate::immediate_delivery::render_delivery_message(&deliveries)
+                    ),
+                    tool_call_id: None,
+                    tool_calls: Vec::new(),
+                    reasoning_content: None,
+                    round: None,
+                });
+                m1_used = true;
+                continue;
+            }
             // Include the final assistant message in the conversation so
             // the rebuilt dialogue matches what a real transport would have
             // received
@@ -2870,6 +2932,36 @@ pub(crate) async fn run_agent_loop(
                 Some(PolicyFeedback::Succeeded) => round_had_success = true,
                 None => {}
             }
+            // 0ac S3①-b ⑥（2026-09-15，设计 §7 风险 6）：检索子代理提前
+            // 收口计数——仅检索车道。`capability_unreachable` = 确定性
+            // 不可达，一次即收口；`network_no_response` / `empty_result`
+            // 连续达到阈值（ORZ_RETRIEVAL_EARLY_CLOSE_FAILURES，默认 3，
+            // 0=禁用）收口；成功清零；其他失败码中性（不计不清，与
+            // §3.5.4 分开记账同纪律）。中止判定在 post-tool-batch 间隙
+            // （本批全部 tool replies 已回传后，协议形态完整）。
+            if profile.role != AgentRole::Main && crate::relay::is_web_retrieval_tool(&tc.name) {
+                if result.exit_code == Some(0) {
+                    retrieval_failure_streak = 0;
+                } else if let Some(code) =
+                    crate::immediate_delivery::stable_code_from_error(&result.output)
+                {
+                    if code == "capability_unreachable" {
+                        retrieval_early_close =
+                            Some(format!("deterministic retrieval failure: {code}"));
+                    } else if code == "network_no_response" || code == "empty_result" {
+                        retrieval_failure_streak += 1;
+                        if crate::immediate_delivery::early_close_failure_limit() > 0
+                            && u64::from(retrieval_failure_streak)
+                                >= crate::immediate_delivery::early_close_failure_limit()
+                        {
+                            retrieval_early_close = Some(format!(
+                                "consecutive deterministic retrieval failures: \
+                                 {retrieval_failure_streak} (last: {code})"
+                            ));
+                        }
+                    }
+                }
+            }
             // Count this result against the per-round injection budget (the
             // same `[tool] output` text the model receives).
             round_inject_tokens =
@@ -2974,6 +3066,65 @@ pub(crate) async fn run_agent_loop(
                 reasoning_content: None,
                 round: None,
             });
+        }
+        // 0ac S3①-b ⑥（2026-09-15）：提前收口中止判定——本批 tool
+        // replies 已全部回传、协议形态完整处退出；父侧 dispatch 以
+        // `subagent_failed` 收口，cause 随错误文本自描述（wallclock
+        // 只作最后兜底）。
+        if let Some(cause) = retrieval_early_close.take() {
+            return Err(AgentLoopError::RetrievalSubagentEarlyClose(cause));
+        }
+        // 0ac S3①-b M2 B1（2026-09-15，设计 §2.1/§4.1「合法边界投递」）：
+        // 全部 tool replies 之后的合法间隙 drain 宿侧后台任务完成事实，
+        // 到达即投——真投递落 `result_delivered`（suppressed=false、
+        // boundary=B1_tool_result）+ 一条中性事实消息（与 pending_policy /
+        // [本轮编辑] 同间隙，不插进 assistant 声明与 tool replies 之间）。
+        // 主开关关 ⇒ 不 drain、零事件、零行为变化。
+        if crate::immediate_delivery::switch_enabled() {
+            let facts = host.drain_completed_tasks().await;
+            if !facts.is_empty() {
+                let now_ms = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map(|d| d.as_millis() as u64)
+                    .unwrap_or(0);
+                for f in facts {
+                    delivery_queue.admit(crate::immediate_delivery::PendingFact::background_task(
+                        &f.task_id,
+                        f.report,
+                        now_ms,
+                        u64::from(tool_rounds),
+                    ));
+                }
+            }
+            if !delivery_queue.is_empty() {
+                let now_ms = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map(|d| d.as_millis() as u64)
+                    .unwrap_or(0);
+                let deliveries = delivery_queue.due(u64::from(tool_rounds), now_ms);
+                for d in &deliveries {
+                    writer
+                        .record(
+                            EventType::ResultDelivered,
+                            crate::immediate_delivery::delivered_fact_payload(
+                                d,
+                                crate::immediate_delivery::BOUNDARY_B1,
+                            ),
+                        )
+                        .await?;
+                }
+                messages.push(Message {
+                    role: Role::User,
+                    content: format!(
+                        "[结果投递] {}",
+                        crate::immediate_delivery::render_delivery_message(&deliveries)
+                    ),
+                    tool_call_id: None,
+                    tool_calls: Vec::new(),
+                    reasoning_content: None,
+                    round: None,
+                });
+            }
         }
         // GAP-INQUIRY-SPLIT (2026-08-09) — MAIN orientation injection
         // point: the post-tool-batch gap (a safe action gap: the tool
@@ -3097,6 +3248,17 @@ pub(crate) async fn run_agent_loop(
             });
             budget_exhausted = true;
         }
+    }
+
+    // 0ac S3①-b（2026-09-15，设计 §4.2「不跨 run 存活」）：run 尾关闭
+    // 队列——B1 投递在同一间隙 drain+due，正常路径恒空；此处的 close_drop
+    // 是安全网（非空 = 异常残留，warn 留痕后丢弃，绝不跨 run 泄漏）。
+    let dropped = delivery_queue.close_drop();
+    if !dropped.is_empty() {
+        tracing::warn!(
+            ids = ?dropped.iter().map(|f| f.source_id.clone()).collect::<Vec<_>>(),
+            "delivery queue non-empty at run end — dropped (per-run lifecycle)"
+        );
     }
 
     Ok(LoopOutcome {
