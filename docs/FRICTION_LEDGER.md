@@ -134,6 +134,7 @@
 > - `git -C D:\CLI rev-parse origin/main` → `c4491629b2abd65bddd9295493c862781cabb31b`；`git -C D:\CLI log --oneline -1 origin/main` → `c4491629 chore(submodule): orz 指针 -> dbb42b1d …`（C1 已在远端）。
 > - `Get-FileHash …\staging-0ac-s3-20260914\orz-0.5.1-linux-x86_64.tar.gz -Algorithm SHA256` → `49DF6CEBBCE12375CB2969F2BED03DFDFC8F4B02F5B89764F6475FB05CE7CDF0`（34,987,981 B）；同法 zip → `F7E8274C706C9B0CF202CCC126D220E4719097BF98847FE3478C6B368689432F`（26,472,460 B）＝ GitHub 服务端 digest 逐字一致。
 > - `git -C D:\CLI status --short` → `M CLI_PROJECT_INDEX.md` / `M TODO.md` / `?? docs/audits/0AC_S3_DUAL_PLATFORM_REBUILD_2026-09-14.md` / `?? releases/orz-0.5.1-x86_64/`（C2 回写面；收尾段核对）。
+> - 收尾补记（父仓核证）：`git -C D:\CLI push origin main` → `c4491629..8c7529ee main -> main`；**C2 = `8c7529ee`**（6 files +316/−5，含本台账 F-021…F-023）；`python scripts/check_repository.py` → `"error_count": 0` / `"valid": true`（EXIT=0）；`git -C D:\CLI log --oneline -1 origin/main` → `8c7529ee 账本: 0ac S3 载体重建与发布落档…`。
 
 ## 统计
 

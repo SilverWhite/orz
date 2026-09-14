@@ -145,7 +145,11 @@
   `evidence-0ac-s3-20260914\gh-v0.5.1-download\`，重哈希
   `49DF6CEB…CDF0` / `F7E8274C…432F` 与 staging 资产**三方一致**。
 - **账本回写（C2）**：本审计 + 索引 v3.20 + TODO/BACKLOG +
-  摩擦台账 F-021…F-023 同批提交推送（sha 见 `git log`）。
+  摩擦台账 F-021…F-023 同批提交推送——**C2 = `8c7529ee`**（6 files
+  +316/−5，含本审计与 `releases/orz-0.5.1-x86_64/README.md` 新建）；
+  推送回执 `c4491629..8c7529ee main -> main`（`origin/main` 头 = C2）；
+  门禁 `python scripts/check_repository.py` → `"error_count": 0` /
+  `"valid": true`（EXIT=0，含本批全部文档改动）。
 
 ## 6. 配套项（TODO L454「代际记录 / 适配器锁定值 / 冻结清单 `harness_artifacts` 同批更新」核查）
 
