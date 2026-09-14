@@ -742,4 +742,113 @@ mod tests {
             assert!(!m1_enabled(), "主开关未开时 M1 必须关");
         }
     }
+
+    // ── 0af 契约面机械对账（2026-09-15，新增项）───────────────────────
+    //
+    // 摩擦 C 治本（交接件 [`0AC_S3B_HANDOVER_2026-09-15`] §7-C / §5-A）：
+    // 「实现侧先写常量、契约枚举不参与编译期校验」是事件面静默失配的
+    // 温床。本钉子把 §5-A 人工核对点升级为**机械对账**——S2 契约 schema
+    // 闭枚举与实现常量在测试期逐字互证：实现常量 ⊆ schema 枚举（写出去
+    // 的事件必被契约接受）+ 稳定码闭集全等（不猜码纪律的契约侧镜像）。
+
+    fn runtime_schema(name: &str) -> serde_json::Value {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../../runtime")
+            .join(name);
+        serde_json::from_str(
+            &std::fs::read_to_string(&path)
+                .unwrap_or_else(|e| panic!("runtime schema readable: {}: {e}", path.display())),
+        )
+        .expect("schema json")
+    }
+
+    fn schema_enum(schema: &serde_json::Value, pointer: &str) -> Vec<String> {
+        schema
+            .pointer(pointer)
+            .and_then(|v| v.get("enum"))
+            .and_then(|v| v.as_array())
+            .map(|a| {
+                a.iter()
+                    .map(|x| x.as_str().expect("enum string").to_string())
+                    .collect()
+            })
+            .unwrap_or_else(|| panic!("enum at {pointer}"))
+    }
+
+    #[test]
+    fn schema_closed_enums_verbatim_match_implementation_constants() {
+        let delivered = runtime_schema("result-delivered-event-payload-v0.2.schema.json");
+        // 实现常量 ⊆ schema 闭枚举（B3/sentence_resume/I2 是契约预留形态，
+        // 实现未用——单向包含而非全等）。
+        let boundary = schema_enum(&delivered, "/properties/boundary");
+        for constant in [BOUNDARY_B1, BOUNDARY_B2] {
+            assert!(
+                boundary.contains(&constant.to_string()),
+                "{constant} ∉ {boundary:?}"
+            );
+        }
+        let mode = schema_enum(&delivered, "/properties/delivery_mode");
+        for constant in [MODE_DIRECT, MODE_DIGEST] {
+            assert!(
+                mode.contains(&constant.to_string()),
+                "{constant} ∉ {mode:?}"
+            );
+        }
+        let class = schema_enum(&delivered, "/properties/delivery_class");
+        for constant in [CLASS_I1, CLASS_I3] {
+            assert!(
+                class.contains(&constant.to_string()),
+                "{constant} ∉ {class:?}"
+            );
+        }
+        let source = schema_enum(&delivered, "/properties/result_source");
+        assert!(
+            source.contains(&SOURCE_BACKGROUND_TASK.to_string()),
+            "{SOURCE_BACKGROUND_TASK} ∉ {source:?}"
+        );
+        // 抑制码全等（「投了但被抑制」的记账面闭集）。
+        let suppressed = schema_enum(&delivered, "/properties/suppressed_reason");
+        assert_eq!(
+            suppressed,
+            vec![
+                "duplicate".to_string(),
+                "model_read_directly".to_string(),
+                "class_capped".to_string()
+            ]
+        );
+
+        let progress = runtime_schema("retrieval-progress-event-payload-v0.2.schema.json");
+        let stage = schema_enum(&progress, "/properties/stage");
+        for constant in [
+            STAGE_DISPATCHED,
+            STAGE_PROGRESS,
+            STAGE_FAILED,
+            STAGE_FINISHED,
+        ] {
+            assert!(
+                stage.contains(&constant.to_string()),
+                "{constant} ∉ {stage:?}"
+            );
+        }
+        let path_enum = schema_enum(&progress, "/properties/retrieval_path");
+        assert!(path_enum.contains(&PATH_LOCAL_SEGMENTED.to_string()));
+        // 稳定码闭集全等（schema 侧镜像 = 不猜码纪律）。
+        let codes = schema_enum(&progress, "/properties/stable_code");
+        assert_eq!(
+            codes,
+            vec![
+                "capability_unreachable".to_string(),
+                "network_no_response".to_string(),
+                "network_error".to_string(),
+                "empty_result".to_string(),
+                "no_progress".to_string()
+            ]
+        );
+
+        // 0ae D0：blackboard_write 的 section 扩展枚举与 ModelNoteSection
+        // 同源（复用 plan_write 事件族的契约面）。
+        let plan_write = runtime_schema("plan-write-event-payload-v0.2.schema.json");
+        let section = schema_enum(&plan_write, "/properties/section");
+        assert_eq!(section, vec!["plan".to_string(), "notes".to_string()]);
+    }
 }
