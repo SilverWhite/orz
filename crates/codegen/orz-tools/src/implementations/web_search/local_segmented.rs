@@ -18,6 +18,24 @@
 //!   §10.1），随 `cause` 附进 `ToolError` details，供 S3①的
 //!   `tool_completed.cause` 写点读取（F-003 验收样本）。
 //! - **开关**：`ORZ_WEB_SEARCH_LOCAL`（默认关闭直至复验；§10.3 item 1）。
+//!
+//! 补强批（2026-09-15，[`RETRIEVAL_LOCAL_SEGMENTED_HARDENING_DESIGN`] §10
+//! 裁决，落码顺序 G2 → G1 → G3 → G4）：
+//! - **G2** 降级页相关性闸门（默认开，`ORZ_RETRIEVAL_RELEVANCE_GATE`）：
+//!   HTTP 200 + 整页无关 `b_algo` 不再判成功——前 3 条 ∩ 查询词集
+//!   （ASCII ≥3 字符词 + CJK bigram，25% 阈值 + 词集封顶 12），判负复用
+//!   `empty_result` 并继续引擎链，不新增稳定码。
+//! - **G1** 计时三段：`T_acquire`（客户端 connect_timeout，5s）⊂
+//!   `T_first`（每引擎钟，10s，`ORZ_RETRIEVAL_DEADLINE_MS` 语义收窄为
+//!   此）⊂ `T_overall`（30s 兜底）；`T_segment` 每页独立 10s
+//!   （`ORZ_RETRIEVAL_SEGMENT_MS`），页级失败不再吃掉已解析命中的交付。
+//! - **G3** 引擎面收尾：google/baidu 跳转包装并发解包（6 worker / 单条
+//!   6s，`ORZ_RETRIEVAL_UNWRAP_WORKERS`/`_MS`）+ 页抓取最终 URL 回填
+//!   （取值序：回填 > 解包 > 包装原样）。
+//! - **G4** 代理管道：只加在分段检索专用客户端 `local_http`；读取序
+//!   `ORZ_RETRIEVAL_PROXY` → `HTTPS_PROXY` → `HTTP_PROXY`（`none` 显式
+//!   关）；**不设引擎白名单**（显式 `ORZ_RETRIEVAL_ENGINES` 永远优先），
+//!   有代理默认链 `duckduckgo,google,bing_cn,bing_global`。
 
 use std::sync::LazyLock;
 use std::time::{Duration, Instant};
@@ -35,10 +53,31 @@ pub const ENV_OVERALL_DEADLINE_MS: &str = "ORZ_RETRIEVAL_OVERALL_DEADLINE_MS";
 pub const ENV_ENGINES: &str = "ORZ_RETRIEVAL_ENGINES";
 /// 逐页抓取段抽取的页数上限（默认 3；0 = 只回 SERP 命中，不抓页）。
 pub const ENV_SEGMENT_PAGES: &str = "ORZ_RETRIEVAL_SEGMENT_PAGES";
+/// G1：建连/预热预算 `T_acquire`（ms，默认 5_000）——专用客户端
+/// `connect_timeout`；失败归 `capability_unreachable`，不吃检索预算。
+pub const ENV_ACQUIRE_MS: &str = "ORZ_RETRIEVAL_ACQUIRE_MS";
+/// G1：单页抓取预算 `T_segment`（ms/页，默认 10_000）。
+pub const ENV_SEGMENT_MS: &str = "ORZ_RETRIEVAL_SEGMENT_MS";
+/// G2：降级页相关性闸门（`0`/`false`/`off`/`no` 关；缺省/其余 = 开）。
+pub const ENV_RELEVANCE_GATE: &str = "ORZ_RETRIEVAL_RELEVANCE_GATE";
+/// G3：跳转包装并发解包 worker 数（默认 6）。
+pub const ENV_UNWRAP_WORKERS: &str = "ORZ_RETRIEVAL_UNWRAP_WORKERS";
+/// G3：跳转包装单条解包超时（ms，默认 6_000）。
+pub const ENV_UNWRAP_MS: &str = "ORZ_RETRIEVAL_UNWRAP_MS";
+/// G4：分段检索专用代理（读取序第一位；`none` 显式关闭）。
+pub const ENV_PROXY: &str = "ORZ_RETRIEVAL_PROXY";
 
 pub const DEFAULT_PER_ENGINE_DEADLINE_MS: u64 = 10_000;
 pub const DEFAULT_OVERALL_DEADLINE_MS: u64 = 30_000;
 pub const DEFAULT_SEGMENT_PAGES: usize = 3;
+pub const DEFAULT_ACQUIRE_MS: u64 = 5_000;
+pub const DEFAULT_SEGMENT_MS: u64 = 10_000;
+pub const DEFAULT_UNWRAP_WORKERS: usize = 6;
+pub const DEFAULT_UNWRAP_MS: u64 = 6_000;
+/// G2：查询词集封顶（长查询判据退化为「命中 ≥3」，防过严误杀）。
+pub const RELEVANCE_TERM_CAP: usize = 12;
+/// G2：只取前 3 条的 title+snippet 判相关（区分「整页无关」与「某条不相关」）。
+pub const RELEVANCE_TOP_HITS: usize = 3;
 /// 单页段数上限与单段字节上限（防超大页拖垮整体兜底）。
 pub const MAX_SEGMENTS_PER_PAGE: usize = 5;
 pub const MAX_SEGMENT_CHARS: usize = 1_200;
@@ -73,15 +112,35 @@ pub struct EngineSpec {
 }
 
 /// The local segmented retrieval configuration (switch + engine chain +
-/// deadlines). Built from the environment once at tool-registry construction.
+/// deadlines + 补强批 G1/G2/G3/G4 knobs). Built from the environment once
+/// at tool-registry construction.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LocalSegmentedConfig {
     enabled: bool,
     pub engines: Vec<EngineSpec>,
+    /// G1：`T_first`——请求发出 → 首个可解析结果（每引擎独立钟）。
     pub per_engine_deadline: Duration,
+    /// G1：`T_overall`——全程硬上限，三段预算的共同从属。
     pub overall_deadline: Duration,
     pub segment_pages: usize,
+    /// G1：`T_acquire`——专用客户端 connect_timeout（建连失败归
+    /// `capability_unreachable`，不吃检索预算）。
+    pub acquire_timeout: Duration,
+    /// G1：`T_segment`——单页抓取预算（页级失败不致命、不占 T_first）。
+    pub segment_deadline: Duration,
+    /// G2：降级页相关性闸门（默认开；关闭时行为与现状逐字节一致）。
+    pub relevance_gate: bool,
+    /// G3：跳转包装并发解包 worker 数。
+    pub unwrap_workers: usize,
+    /// G3：跳转包装单条解包超时。
+    pub unwrap_timeout: Duration,
+    /// G4：代理（已按读取序解析；`None` = 直连）。只加在专用客户端。
+    pub proxy: Option<String>,
 }
+
+/// G4：有代理时的默认引擎链（§6.1 按实测可达性排序；四个引擎都在集内，
+/// 不构成白名单）。
+pub const PROXY_DEFAULT_CHAIN: &[&str] = &["duckduckgo", "google", "bing_cn", "bing_global"];
 
 impl Default for LocalSegmentedConfig {
     fn default() -> Self {
@@ -94,6 +153,12 @@ impl Default for LocalSegmentedConfig {
             per_engine_deadline: Duration::from_millis(DEFAULT_PER_ENGINE_DEADLINE_MS),
             overall_deadline: Duration::from_millis(DEFAULT_OVERALL_DEADLINE_MS),
             segment_pages: DEFAULT_SEGMENT_PAGES,
+            acquire_timeout: Duration::from_millis(DEFAULT_ACQUIRE_MS),
+            segment_deadline: Duration::from_millis(DEFAULT_SEGMENT_MS),
+            relevance_gate: true,
+            unwrap_workers: DEFAULT_UNWRAP_WORKERS,
+            unwrap_timeout: Duration::from_millis(DEFAULT_UNWRAP_MS),
+            proxy: None,
         }
     }
 }
@@ -134,7 +199,45 @@ impl LocalSegmentedConfig {
         if let Some(spec) = get(ENV_SEGMENT_PAGES).and_then(|v| v.trim().parse::<usize>().ok()) {
             config.segment_pages = spec;
         }
-        if let Some(list) = get(ENV_ENGINES) {
+        if let Some(ms) = get(ENV_ACQUIRE_MS)
+            .and_then(|v| v.trim().parse::<u64>().ok())
+            .filter(|ms| *ms > 0)
+        {
+            config.acquire_timeout = Duration::from_millis(ms);
+        }
+        if let Some(ms) = get(ENV_SEGMENT_MS)
+            .and_then(|v| v.trim().parse::<u64>().ok())
+            .filter(|ms| *ms > 0)
+        {
+            config.segment_deadline = Duration::from_millis(ms);
+        }
+        // G2：默认开；显式 falsey 值才关（关闭 = 行为与现状逐字节一致）。
+        config.relevance_gate = !get(ENV_RELEVANCE_GATE)
+            .map(|v| {
+                matches!(
+                    v.trim().to_ascii_lowercase().as_str(),
+                    "0" | "false" | "off" | "no"
+                )
+            })
+            .unwrap_or(false);
+        if let Some(n) = get(ENV_UNWRAP_WORKERS)
+            .and_then(|v| v.trim().parse::<usize>().ok())
+            .filter(|n| *n > 0)
+        {
+            config.unwrap_workers = n;
+        }
+        if let Some(ms) = get(ENV_UNWRAP_MS)
+            .and_then(|v| v.trim().parse::<u64>().ok())
+            .filter(|ms| *ms > 0)
+        {
+            config.unwrap_timeout = Duration::from_millis(ms);
+        }
+        // G4：代理解析（读取序见 resolve_proxy_from）。显式
+        // ORZ_RETRIEVAL_ENGINES 永远优先（不设引擎白名单）；未显式配置时
+        // 默认链随代理形态切换：直连 = bing_cn 单引擎（§9.4），有代理 =
+        // duckduckgo,google,bing_cn,bing_global（§6.1）。
+        config.proxy = resolve_proxy_from(&get);
+        let explicit_engines = get(ENV_ENGINES).and_then(|list| {
             let engines: Vec<EngineSpec> = list
                 .split(',')
                 .filter_map(|id| {
@@ -147,10 +250,29 @@ impl LocalSegmentedConfig {
                     )
                 })
                 .collect();
-            if !engines.is_empty() {
-                config.engines = engines;
+            if engines.is_empty() {
+                None
+            } else {
+                Some(engines)
             }
-        }
+        });
+        config.engines = explicit_engines.unwrap_or_else(|| {
+            if config.proxy.is_some() {
+                PROXY_DEFAULT_CHAIN
+                    .iter()
+                    .filter_map(|id| {
+                        ENGINE_REGISTRY.iter().find(|(known, _)| known == id).map(
+                            |(known, template)| EngineSpec {
+                                id: (*known).to_string(),
+                                search_url: (*template).to_string(),
+                            },
+                        )
+                    })
+                    .collect()
+            } else {
+                config.engines.clone()
+            }
+        });
         config
     }
 
@@ -159,13 +281,20 @@ impl LocalSegmentedConfig {
     }
 
     /// The engine-chain reading for the `retrieval_family` probe
-    /// (`retrieval_family.search_engine.detail`).
+    /// (`retrieval_family.search_engine.detail`)。G4：读数带
+    /// `proxy=on|off` 与端点（脱敏至 host:port），探针可区分直连/代理
+    /// 两种形态（§6.1 形态差异登记）。
     pub fn engine_chain_detail(&self) -> String {
-        self.engines
+        let chain = self
+            .engines
             .iter()
             .map(|e| e.id.as_str())
             .collect::<Vec<_>>()
-            .join(",")
+            .join(",");
+        match &self.proxy {
+            Some(proxy) => format!("{chain}; proxy=on {}", proxy_display(proxy)),
+            None => format!("{chain}; proxy=off"),
+        }
     }
 }
 
@@ -217,6 +346,8 @@ pub struct SegmentedError {
     pub detail: String,
     pub waited_ms: u64,
     pub attempts: Vec<EngineAttempt>,
+    /// G2：判负时的相关命中数（全链判负取分数最高者定 detail）。
+    pub gate_score: Option<u64>,
 }
 
 impl SegmentedError {
@@ -451,14 +582,132 @@ pub fn urlencode_query(query: &str) -> String {
     out
 }
 
-// ── 执行（每引擎独立截止 + 整体兜底）────────────────────────────────────
+// ── G2：降级页相关性闸门 ────────────────────────────────────────────────
 
-/// Run the local segmented retrieval: engine chain → SERP → 逐页抓取 → 逐段抽取.
+fn is_cjk(c: char) -> bool {
+    matches!(c as u32, 0x4E00..=0x9FFF | 0x3400..=0x4DBF)
+}
+
+/// G2（设计 §4.2）：查询词集 Q = ASCII 长度 ≥3 的词（小写化）+ CJK
+/// 二元组（bigram），去重保序、封顶 [`RELEVANCE_TERM_CAP`]。
+/// 纯符号/纯数字查询词集为空 ⇒ 闸门直接放行（防误杀）。
+pub fn query_terms(query: &str) -> Vec<String> {
+    let lower = query.to_lowercase();
+    let mut terms: Vec<String> = Vec::new();
+    let mut word = String::new();
+    for ch in lower.chars() {
+        if ch.is_ascii_alphanumeric() {
+            word.push(ch);
+        } else if !word.is_empty() {
+            if word.chars().count() >= 3 {
+                terms.push(std::mem::take(&mut word));
+            } else {
+                word.clear();
+            }
+        }
+    }
+    if word.chars().count() >= 3 {
+        terms.push(word);
+    }
+    let chars: Vec<char> = lower.chars().collect();
+    for pair in chars.windows(2) {
+        if is_cjk(pair[0]) && is_cjk(pair[1]) {
+            terms.push(pair.iter().collect());
+        }
+    }
+    let mut seen = std::collections::HashSet::new();
+    terms
+        .into_iter()
+        .filter(|t| seen.insert(t.clone()))
+        .take(RELEVANCE_TERM_CAP)
+        .collect()
+}
+
+/// G2 判定（设计 §4.2）：前 [`RELEVANCE_TOP_HITS`] 条的 title+snippet 与
+/// 查询词集求交。`Ok(())` = 放行（词集空或命中 ≥ need）；`Err((score,
+/// need))` = 判负。need = max(1, ceil(0.25 × min(|Q|, 12)))——词集封顶
+/// 后长查询的判据 = 命中 ≥3（宁可放过、不可误杀，F-007(a) 宽口径）。
+pub fn relevance_gate_verdict(hits: &[SerpHit], query: &str) -> Result<(), (usize, usize)> {
+    let terms = query_terms(query);
+    if terms.is_empty() {
+        return Ok(());
+    }
+    let need = terms.len().div_ceil(4).max(1);
+    let text = hits
+        .iter()
+        .take(RELEVANCE_TOP_HITS)
+        .map(|h| format!("{} {}", h.title.to_lowercase(), h.snippet.to_lowercase()))
+        .collect::<Vec<_>>()
+        .join("\n");
+    let score = terms.iter().filter(|t| text.contains(t.as_str())).count();
+    if score >= need {
+        Ok(())
+    } else {
+        Err((score, need))
+    }
+}
+
+// ── G3：跳转包装网络解包 + G4：代理解析 ─────────────────────────────────
+
+/// G3：google/baidu 的不透明跳转包装（bing 的 base64 形态已由
+/// `normalize_hit_url` 离线解包）需要跟随一次跳转才能得到真实 URL。
+pub fn needs_network_unwrap(url: &str) -> bool {
+    url.contains("google.com/goto") || url.contains("baidu.com/link")
+}
+
+/// G3：跟随跳转取最终 URL（reqwest 默认跟随重定向，单条受 unwrap
+/// 超时约束）；失败返 `None`——调用方保留包装 URL，不阻断交付。
+async fn unwrap_redirect(http: reqwest::Client, url: String, timeout: Duration) -> Option<String> {
+    let response = http.get(&url).timeout(timeout).send().await.ok()?;
+    let final_url = response.url().to_string();
+    (final_url.starts_with("http") && final_url != url).then_some(final_url)
+}
+
+/// G4 读取序：`ORZ_RETRIEVAL_PROXY` → `HTTPS_PROXY` → `HTTP_PROXY`；
+/// `ORZ_RETRIEVAL_PROXY=none` 显式关闭（优先级高于其余来源）——容器/
+/// 评测基线借此保证与无代理形态逐字节一致。
+pub fn resolve_proxy_from(get: &impl Fn(&str) -> Option<String>) -> Option<String> {
+    if let Some(v) = get(ENV_PROXY) {
+        let v = v.trim().to_string();
+        return if v.is_empty() || v.eq_ignore_ascii_case("none") {
+            None
+        } else {
+            Some(v)
+        };
+    }
+    for key in ["HTTPS_PROXY", "HTTP_PROXY"] {
+        if let Some(v) = get(key) {
+            let v = v.trim().to_string();
+            if !v.is_empty() {
+                return Some(v);
+            }
+        }
+    }
+    None
+}
+
+/// G4 读数面脱敏：scheme 与凭据剥除，仅留 `host:port` 形态。
+pub fn proxy_display(proxy: &str) -> String {
+    let rest = proxy.split("://").nth(1).unwrap_or(proxy);
+    let authority = rest.split(['/', '?']).next().unwrap_or(rest);
+    match authority.rsplit_once('@') {
+        Some((_, host)) => host.to_string(),
+        None => authority.to_string(),
+    }
+}
+
+// ── 执行（G1 三段账：T_acquire ⊂ T_first ⊂ T_overall；T_segment 每页独立）──
+
+/// Run the local segmented retrieval: engine chain → SERP → (G2 闸门) →
+/// 逐页抓取 → 逐段抽取.
 ///
-/// Deadlines (design §9.4): 每个引擎**独立** `per_engine_deadline`（默认
-/// 10s，`ORZ_RETRIEVAL_DEADLINE_MS` 可配）；整体兜底 `overall_deadline`
-/// （默认 30s）。整体预算耗尽即返结构化错误（`network_no_response`），
-/// 不等引擎自身的 120s 黑洞。
+/// G1 计时三段（设计 §3）：`T_acquire` = 专用客户端 connect_timeout
+/// （建连失败 → `capability_unreachable`）；`T_first` = 每引擎独立钟
+/// （默认 10s；`ORZ_RETRIEVAL_DEADLINE_MS` 语义收窄为此——请求发出 →
+/// 首个可解析结果）；`T_segment` = 单页预算（默认 10s/页），页级失败
+/// 不致命、已解析命中照常交付；`T_overall`（默认 30s）是三段共同从属
+/// 的全程硬上限。G2：闸门判负 = `empty_result`（不新增稳定码）并继续
+/// 引擎链；全链判负时 detail 取分数最高的一次尝试。
 pub async fn search(
     http: &reqwest::Client,
     config: &LocalSegmentedConfig,
@@ -467,6 +716,7 @@ pub async fn search(
     let started = Instant::now();
     let mut attempts: Vec<EngineAttempt> = Vec::new();
     let mut last: Option<SegmentedError> = None;
+    let mut best_empty: Option<SegmentedError> = None;
     for engine in &config.engines {
         let remaining = config.overall_deadline.saturating_sub(started.elapsed());
         if remaining.is_zero() {
@@ -480,17 +730,18 @@ pub async fn search(
                 ),
                 waited_ms: started.elapsed().as_millis() as u64,
                 attempts: attempts.clone(),
+                gate_score: None,
             });
             break;
         }
+        // G1 `T_first`：只包「请求发出 → SERP 解析完成」；页抓取挪出。
         let budget = config.per_engine_deadline.min(remaining);
         let engine_started = Instant::now();
         let url = engine
             .search_url
             .replace("{query}", &urlencode_query(query));
-        let outcome =
-            tokio::time::timeout(budget, fetch_engine(http, config, engine, &url, started)).await;
-        match outcome {
+        let serp = tokio::time::timeout(budget, fetch_serp(http, engine, &url)).await;
+        match serp {
             Err(_elapsed) => {
                 attempts.push(EngineAttempt {
                     engine: engine.id.clone(),
@@ -506,34 +757,7 @@ pub async fn search(
                     ),
                     waited_ms: engine_started.elapsed().as_millis() as u64,
                     attempts: attempts.clone(),
-                });
-            }
-            Ok(Ok(hits)) => {
-                if hits.is_empty() {
-                    attempts.push(EngineAttempt {
-                        engine: engine.id.clone(),
-                        waited_ms: engine_started.elapsed().as_millis() as u64,
-                        outcome: CAUSE_EMPTY_RESULT.to_string(),
-                    });
-                    last = Some(SegmentedError {
-                        cause: CAUSE_EMPTY_RESULT,
-                        engine: engine.id.clone(),
-                        detail: "SERP parsed but carried no organic b_algo hit".to_string(),
-                        waited_ms: engine_started.elapsed().as_millis() as u64,
-                        attempts: attempts.clone(),
-                    });
-                    continue;
-                }
-                attempts.push(EngineAttempt {
-                    engine: engine.id.clone(),
-                    waited_ms: engine_started.elapsed().as_millis() as u64,
-                    outcome: "ok".to_string(),
-                });
-                return Ok(SegmentedOutcome {
-                    engine: engine.id.clone(),
-                    hits,
-                    waited_ms: started.elapsed().as_millis() as u64,
-                    attempts,
+                    gate_score: None,
                 });
             }
             Ok(Err(error)) => {
@@ -547,24 +771,156 @@ pub async fn search(
                     ..error
                 });
             }
+            Ok(Ok(serp_hits)) => {
+                if serp_hits.is_empty() {
+                    attempts.push(EngineAttempt {
+                        engine: engine.id.clone(),
+                        waited_ms: engine_started.elapsed().as_millis() as u64,
+                        outcome: CAUSE_EMPTY_RESULT.to_string(),
+                    });
+                    last = Some(SegmentedError {
+                        cause: CAUSE_EMPTY_RESULT,
+                        engine: engine.id.clone(),
+                        detail: "SERP parsed but carried no organic b_algo hit".to_string(),
+                        waited_ms: engine_started.elapsed().as_millis() as u64,
+                        attempts: attempts.clone(),
+                        gate_score: None,
+                    });
+                    continue;
+                }
+                // G2：解析成功但整页无关（引擎兜底页）≠ 成功——判负复用
+                // `empty_result` 继续引擎链；detail 带分数与 need，供
+                // A/B 与法官核对（不新增稳定码）。
+                if config.relevance_gate
+                    && let Err((score, need)) = relevance_gate_verdict(&serp_hits, query)
+                {
+                    attempts.push(EngineAttempt {
+                        engine: engine.id.clone(),
+                        waited_ms: engine_started.elapsed().as_millis() as u64,
+                        outcome: CAUSE_EMPTY_RESULT.to_string(),
+                    });
+                    let error = SegmentedError {
+                        cause: CAUSE_EMPTY_RESULT,
+                        engine: engine.id.clone(),
+                        detail: format!(
+                            "SERP 命中与查询无关（引擎兜底页，非解析故障）；\
+                             relevance score={score}/{need}"
+                        ),
+                        waited_ms: engine_started.elapsed().as_millis() as u64,
+                        attempts: attempts.clone(),
+                        gate_score: Some(score as u64),
+                    };
+                    if best_empty
+                        .as_ref()
+                        .is_none_or(|best| best.gate_score.is_none_or(|s| score as u64 > s))
+                    {
+                        best_empty = Some(error.clone());
+                    }
+                    last = Some(error);
+                    continue;
+                }
+                attempts.push(EngineAttempt {
+                    engine: engine.id.clone(),
+                    waited_ms: engine_started.elapsed().as_millis() as u64,
+                    outcome: "ok".to_string(),
+                });
+                let mut hits: Vec<SegmentedHit> = serp_hits
+                    .into_iter()
+                    .enumerate()
+                    .map(|(index, hit)| SegmentedHit {
+                        index,
+                        title: hit.title,
+                        url: hit.url,
+                        snippet: hit.snippet,
+                        segments: Vec::new(),
+                    })
+                    .collect();
+                // G3：跳转包装并发解包——信号量封 worker 上限（6/6s）；
+                // 任务先行启动、与页抓取并发推进，段末统一 await（§5）。
+                // 解包失败保留包装 URL，不阻断交付。
+                let semaphore =
+                    std::sync::Arc::new(tokio::sync::Semaphore::new(config.unwrap_workers.max(1)));
+                let handles: Vec<tokio::task::JoinHandle<(usize, Option<String>)>> = hits
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, hit)| needs_network_unwrap(&hit.url))
+                    .map(|(index, hit)| {
+                        let http = http.clone();
+                        let semaphore = std::sync::Arc::clone(&semaphore);
+                        let url = hit.url.clone();
+                        let timeout = config.unwrap_timeout;
+                        tokio::spawn(async move {
+                            let _permit = semaphore.acquire_owned().await;
+                            let final_url = unwrap_redirect(http, url, timeout).await;
+                            (index, final_url)
+                        })
+                    })
+                    .collect();
+                // G1 `T_segment`：每页独立预算 = min(segment，剩余整体)；
+                // 页级失败不致命；成功页回填最终 URL（G3 取值序最高位）。
+                let mut backfilled = std::collections::HashSet::new();
+                for hit in hits.iter_mut().take(config.segment_pages) {
+                    let remaining = config.overall_deadline.saturating_sub(started.elapsed());
+                    if remaining.is_zero() {
+                        break;
+                    }
+                    let page_budget = config.segment_deadline.min(remaining);
+                    let page =
+                        tokio::time::timeout(page_budget, fetch_page_text(http, &hit.url)).await;
+                    if let Ok(Ok((html, final_url))) = page {
+                        hit.segments = extract_segments(&html);
+                        hit.url = final_url;
+                        backfilled.insert(hit.index);
+                    }
+                }
+                for handle in handles {
+                    if let Ok((index, Some(final_url))) = handle.await
+                        && let Some(hit) = hits.get_mut(index)
+                        && !backfilled.contains(&index)
+                    {
+                        hit.url = final_url;
+                    }
+                }
+                return Ok(SegmentedOutcome {
+                    engine: engine.id.clone(),
+                    hits,
+                    waited_ms: started.elapsed().as_millis() as u64,
+                    attempts,
+                });
+            }
         }
     }
-    Err(last.unwrap_or(SegmentedError {
+    // G2：全链判负时 detail 取分数最高的一次尝试（避免只报最后一个引擎）。
+    let mut final_error = last.unwrap_or(SegmentedError {
         cause: CAUSE_NO_PROGRESS,
         engine: "none".to_string(),
         detail: "engine chain is empty (no engine configured)".to_string(),
         waited_ms: started.elapsed().as_millis() as u64,
         attempts,
-    }))
+        gate_score: None,
+    });
+    if final_error.cause == CAUSE_EMPTY_RESULT
+        && let Some(best) = &best_empty
+        && best
+            .gate_score
+            .is_some_and(|s| s > final_error.gate_score.unwrap_or(0))
+    {
+        final_error.engine = best.engine.clone();
+        final_error.detail = best.detail.clone();
+        final_error.gate_score = best.gate_score;
+    }
+    Err(final_error)
 }
 
-async fn fetch_engine(
+/// G1：SERP 请求 → 首个可解析结果（`T_first` 钟内）。建连超时由专用
+/// 客户端的 `connect_timeout`（`T_acquire`）先到先归因：`is_connect`
+/// ⇒ `capability_unreachable`，建连完成到不了首个结果 ⇒ 引擎钟到点
+/// `network_no_response`。
+async fn fetch_serp(
     http: &reqwest::Client,
-    config: &LocalSegmentedConfig,
     engine: &EngineSpec,
     url: &str,
-    overall_started: Instant,
-) -> Result<Vec<SegmentedHit>, SegmentedError> {
+) -> Result<Vec<SerpHit>, SegmentedError> {
     let engine_started = Instant::now();
     let response = http.get(url).send().await.map_err(|e| {
         let cause = if e.is_connect() {
@@ -578,6 +934,7 @@ async fn fetch_engine(
             detail: format!("request failed: {e}"),
             waited_ms: engine_started.elapsed().as_millis() as u64,
             attempts: Vec::new(),
+            gate_score: None,
         }
     })?;
     let status = response.status();
@@ -588,6 +945,7 @@ async fn fetch_engine(
             detail: format!("SERP returned HTTP {status}"),
             waited_ms: engine_started.elapsed().as_millis() as u64,
             attempts: Vec::new(),
+            gate_score: None,
         });
     }
     let html = response.text().await.map_err(|e| SegmentedError {
@@ -596,45 +954,22 @@ async fn fetch_engine(
         detail: format!("reading SERP body failed: {e}"),
         waited_ms: engine_started.elapsed().as_millis() as u64,
         attempts: Vec::new(),
+        gate_score: None,
     })?;
-    let serp = parse_bing_serp(&html);
-    let mut hits: Vec<SegmentedHit> = serp
-        .into_iter()
-        .enumerate()
-        .map(|(index, hit)| SegmentedHit {
-            index,
-            title: hit.title,
-            url: hit.url,
-            snippet: hit.snippet,
-            segments: Vec::new(),
-        })
-        .collect();
-    if hits.is_empty() {
-        return Ok(hits);
-    }
-    // 逐页抓取 → 逐段抽取。页级失败不致命（SERP 命中仍交付）；
-    // 每页截止 = per-engine 预算，且不越过整体兜底。
-    for hit in hits.iter_mut().take(config.segment_pages) {
-        let remaining = config
-            .overall_deadline
-            .saturating_sub(overall_started.elapsed());
-        if remaining.is_zero() {
-            break;
-        }
-        let budget = config.per_engine_deadline.min(remaining);
-        let page = tokio::time::timeout(budget, fetch_page_text(http, &hit.url)).await;
-        if let Ok(Ok(html)) = page {
-            hit.segments = extract_segments(&html);
-        }
-    }
-    Ok(hits)
+    Ok(parse_bing_serp(&html))
 }
 
-async fn fetch_page_text(http: &reqwest::Client, url: &str) -> Result<String, reqwest::Error> {
+/// 页抓取返回 `(正文, 最终 URL)`——G3：reqwest 跟随重定向后
+/// `response.url()` 即最终落点，零额外请求即可回填交付 URL。
+async fn fetch_page_text(
+    http: &reqwest::Client,
+    url: &str,
+) -> Result<(String, String), reqwest::Error> {
     let response = http.get(url).send().await?;
-    response.text().await
+    let final_url = response.url().to_string();
+    let text = response.text().await?;
+    Ok((text, final_url))
 }
-
 /// Render the outcome as the model-visible content (per-segment, 去重纪律：
 /// 每段自带 URL，模型可直接引用；不合成、不补写).
 pub fn render_content(outcome: &SegmentedOutcome) -> String {
@@ -674,12 +1009,17 @@ pub fn citations(outcome: &SegmentedOutcome) -> Vec<String> {
 }
 
 /// Build the plain HTTP client used by the local path (no backend auth
-/// headers; connect budget 5s; total = overall deadline + slack).
-pub fn build_http_client(overall: Duration) -> Result<reqwest::Client, reqwest::Error> {
-    reqwest::Client::builder()
-        .connect_timeout(Duration::from_secs(5))
-        .timeout(overall + Duration::from_secs(5))
-        .build()
+/// headers)。G1：`connect_timeout` = `T_acquire`（专用客户端装配期建连
+/// 预算）；G4：代理只加在此专用客户端上（服务端 `/responses` 客户端
+/// 带凭证边界，不受影响；容器不设代理 env ⇒ 行为与现状一致）。
+pub fn build_http_client(config: &LocalSegmentedConfig) -> Result<reqwest::Client, reqwest::Error> {
+    let mut builder = reqwest::Client::builder()
+        .connect_timeout(config.acquire_timeout)
+        .timeout(config.overall_deadline + Duration::from_secs(5));
+    if let Some(proxy) = &config.proxy {
+        builder = builder.proxy(reqwest::Proxy::all(proxy)?);
+    }
+    builder.build()
 }
 
 #[cfg(test)]
@@ -757,6 +1097,13 @@ mod tests {
         assert_eq!(default.overall_deadline.as_millis(), 30_000);
         assert_eq!(default.engines.len(), 1);
         assert_eq!(default.engines[0].id, "bing_cn");
+        assert_eq!(default.acquire_timeout.as_millis(), 5_000, "G1 T_acquire");
+        assert_eq!(default.segment_deadline.as_millis(), 10_000, "G1 T_segment");
+        assert!(default.relevance_gate, "G2 闸门默认开");
+        assert_eq!(default.unwrap_workers, 6, "G3 worker");
+        assert_eq!(default.unwrap_timeout.as_millis(), 6_000, "G3 单条超时");
+        assert!(default.proxy.is_none(), "G4 直连缺省");
+        assert_eq!(default.engine_chain_detail(), "bing_cn; proxy=off");
         let enabled = LocalSegmentedConfig::from_env_with(|key| match key {
             ENV_SWITCH => Some("on".to_string()),
             ENV_PER_ENGINE_DEADLINE_MS => Some("7000".to_string()),
@@ -769,7 +1116,10 @@ mod tests {
         assert_eq!(enabled.overall_deadline.as_millis(), 21_000);
         let ids: Vec<&str> = enabled.engines.iter().map(|e| e.id.as_str()).collect();
         assert_eq!(ids, vec!["bing_global", "duckduckgo"]);
-        assert_eq!(enabled.engine_chain_detail(), "bing_global,duckduckgo");
+        assert_eq!(
+            enabled.engine_chain_detail(),
+            "bing_global,duckduckgo; proxy=off"
+        );
     }
 
     fn config_for(url: String, per_engine_ms: u64, overall_ms: u64) -> LocalSegmentedConfig {
@@ -781,8 +1131,46 @@ mod tests {
             }],
             per_engine_deadline: Duration::from_millis(per_engine_ms),
             overall_deadline: Duration::from_millis(overall_ms),
+            // 单测不联网：只回 SERP 命中，不抓页（既有口径）。
             segment_pages: 0,
+            ..LocalSegmentedConfig::default()
         }
+    }
+
+    fn test_http() -> reqwest::Client {
+        build_http_client(&LocalSegmentedConfig::default()).expect("client")
+    }
+
+    /// G2 降级页样本（设计 §8-1）：HTTP 200 + 结构完整的无关 `b_algo`
+    /// （§2 实测形态：4399/Steam/知乎/四六级/阿里云族）。
+    fn degraded_serp_fixture() -> String {
+        let sites = [
+            ("https://www.4399.com/", "4399 小游戏大全"),
+            ("https://store.steampowered.com/", "Steam 夏季特卖"),
+            ("https://www.zhihu.com/hot", "知乎热榜"),
+            ("https://cet.neea.edu.cn/", "全国大学英语四六级考试"),
+            ("https://www.aliyun.com/", "阿里云服务平台"),
+        ];
+        let blocks: String = sites
+            .iter()
+            .map(|(url, title)| {
+                format!(
+                    "<li class=\"b_algo\"><h2><a href=\"{url}\">{title}</a></h2>\
+                     <div class=\"b_caption\"><p class=\"b_lineclamp4\">热门推荐与榜单内容，与任何技术查询无关。</p></div></li>"
+                )
+            })
+            .collect();
+        format!("<!DOCTYPE html><html><body><ol id=\"b_results\">{blocks}</ol></body></html>")
+    }
+
+    /// 运行期 SERP 样本：自定义命中 URL（G3 解包 / G1 慢页测试用）。
+    fn serp_fixture_with_hit(url: &str) -> String {
+        format!(
+            "<!DOCTYPE html><html><body><ol id=\"b_results\">\
+             <li class=\"b_algo\"><h2><a href=\"{url}\">包装命中</a></h2>\
+             <div class=\"b_caption\"><p class=\"b_lineclamp4\">rust programming language book 摘要。</p></div></li>\
+             </ol></body></html>"
+        )
     }
 
     #[tokio::test]
@@ -792,7 +1180,7 @@ mod tests {
             .respond_with(wiremock::ResponseTemplate::new(200).set_body_string(SERP_FIXTURE))
             .mount(&server)
             .await;
-        let http = build_http_client(Duration::from_secs(30)).expect("client");
+        let http = test_http();
         let config = config_for(server.uri(), 5_000, 30_000);
         let outcome = search(&http, &config, "rust book").await.expect("hits");
         assert_eq!(outcome.engine, "mock_bing");
@@ -822,7 +1210,7 @@ mod tests {
             .respond_with(wiremock::ResponseTemplate::new(200).set_body_string(SERP_FIXTURE))
             .mount(&good)
             .await;
-        let http = build_http_client(Duration::from_secs(30)).expect("client");
+        let http = test_http();
         let mut config = config_for(empty.uri(), 5_000, 30_000);
         config.engines.push(EngineSpec {
             id: "second".to_string(),
@@ -844,7 +1232,7 @@ mod tests {
             .respond_with(wiremock::ResponseTemplate::new(503))
             .mount(&server)
             .await;
-        let http = build_http_client(Duration::from_secs(30)).expect("client");
+        let http = test_http();
         let config = config_for(server.uri(), 5_000, 30_000);
         let error = search(&http, &config, "rust").await.expect_err("503");
         assert_eq!(error.code(), CAUSE_NETWORK_ERROR);
@@ -866,7 +1254,7 @@ mod tests {
             )
             .mount(&server)
             .await;
-        let http = build_http_client(Duration::from_secs(30)).expect("client");
+        let http = test_http();
         // 每引擎 80ms 截止、整体 30s：引擎到期即返回，不等整体钟。
         let config = config_for(server.uri(), 80, 30_000);
         let started = Instant::now();
@@ -892,7 +1280,7 @@ mod tests {
             )
             .mount(&slow)
             .await;
-        let http = build_http_client(Duration::from_secs(30)).expect("client");
+        let http = test_http();
         // 整体兜底 60ms：即便引擎钟更长，整体钟先到 → 结构化错误。
         let config = config_for(slow.uri(), 5_000, 60);
         let started = Instant::now();
@@ -903,5 +1291,358 @@ mod tests {
             "overall bound must clip the engine budget, elapsed={:?}",
             started.elapsed()
         );
+    }
+
+    // ── G2：降级页相关性闸门 ──────────────────────────────────────────
+
+    #[test]
+    fn gate_verdict_word_set_bigrams_and_cap() {
+        // ASCII ≥3 字符词 + CJK bigram，去重保序。
+        let terms = query_terms("Rust theBook 编程入门");
+        assert!(terms.contains(&"rust".to_string()));
+        assert!(terms.contains(&"thebook".to_string()));
+        assert!(terms.contains(&"编程".to_string()));
+        assert!(terms.contains(&"程入".to_string()));
+        assert!(
+            !terms.contains(&"the".to_string()),
+            "短词被剥离（<3 字符在词内断开）"
+        );
+        // 词集封顶 12。
+        let long = query_terms("aaa bbb ccc ddd eee fff ggg hhh iii jjj kkk lll mmm nnn");
+        assert_eq!(long.len(), RELEVANCE_TERM_CAP, "词集封顶 12");
+        // 纯符号/纯数字查询：词集为空。
+        assert!(query_terms("v1.2.3 #7 %^&").is_empty());
+    }
+
+    #[test]
+    fn gate_long_query_capped_need_is_three() {
+        // 16 词查询 → 词集封顶 12 → need = ceil(0.25×12) = 3。
+        let query = "w01 w02 w03 w04 w05 w06 w07 w08 w09 w10 w11 w12 w13 w14 w15 w16";
+        let hit = |words: &[&str]| {
+            let title = words.join(" ");
+            vec![SerpHit {
+                title,
+                url: "https://example.com/x".to_string(),
+                snippet: String::new(),
+            }]
+        };
+        // 前 3 条合计命中 3 个词 ⇒ 放行。
+        assert!(relevance_gate_verdict(&hit(&["w01 x", "w02 x", "w03 x"]), query).is_ok());
+        // 命中 2 个词 ⇒ 判负（score=2, need=3）。
+        assert_eq!(
+            relevance_gate_verdict(&hit(&["w01 x", "w02 x", "无关内容"]), query),
+            Err((2, 3))
+        );
+    }
+
+    #[tokio::test]
+    async fn gate_rejects_degraded_page_and_chain_falls_through() {
+        let degraded = wiremock::MockServer::start().await;
+        wiremock::Mock::given(wiremock::matchers::method("GET"))
+            .respond_with(
+                wiremock::ResponseTemplate::new(200).set_body_string(degraded_serp_fixture()),
+            )
+            .mount(&degraded)
+            .await;
+        let good = wiremock::MockServer::start().await;
+        wiremock::Mock::given(wiremock::matchers::method("GET"))
+            .respond_with(wiremock::ResponseTemplate::new(200).set_body_string(SERP_FIXTURE))
+            .mount(&good)
+            .await;
+        let http = test_http();
+        let mut config = config_for(degraded.uri(), 5_000, 30_000);
+        config.engines.push(EngineSpec {
+            id: "second".to_string(),
+            search_url: good.uri(),
+        });
+        let outcome = search(&http, &config, "rust book language")
+            .await
+            .expect("second engine wins after gate rejection");
+        assert_eq!(outcome.engine, "second");
+        assert_eq!(outcome.attempts[0].outcome, CAUSE_EMPTY_RESULT);
+        assert_eq!(outcome.attempts[1].outcome, "ok");
+    }
+
+    #[tokio::test]
+    async fn gate_disabled_keeps_legacy_behavior() {
+        let degraded = wiremock::MockServer::start().await;
+        wiremock::Mock::given(wiremock::matchers::method("GET"))
+            .respond_with(
+                wiremock::ResponseTemplate::new(200).set_body_string(degraded_serp_fixture()),
+            )
+            .mount(&degraded)
+            .await;
+        let http = test_http();
+        let mut config = config_for(degraded.uri(), 5_000, 30_000);
+        config.relevance_gate = false;
+        let outcome = search(&http, &config, "rust book language")
+            .await
+            .expect("闸门关闭 = 现状行为（非空即成功）");
+        assert_eq!(outcome.hits.len(), degraded_serp_hits());
+    }
+
+    fn degraded_serp_hits() -> usize {
+        parse_bing_serp(&degraded_serp_fixture()).len()
+    }
+
+    #[tokio::test]
+    async fn all_chain_gate_failures_report_the_highest_score_attempt() {
+        // 引擎 1：零重叠（score 0）；引擎 2：标题带一个查询词（score 1）。
+        // 查询 5 词 → need 2 ⇒ 两引擎都判负；最终 detail 取分数最高者。
+        let query = "rust programming language book tutorial";
+        let one = wiremock::MockServer::start().await;
+        wiremock::Mock::given(wiremock::matchers::method("GET"))
+            .respond_with(
+                wiremock::ResponseTemplate::new(200).set_body_string(degraded_serp_fixture()),
+            )
+            .mount(&one)
+            .await;
+        let two = wiremock::MockServer::start().await;
+        let semi = format!(
+            "<!DOCTYPE html><html><body><ol id=\"b_results\">\
+             <li class=\"b_algo\"><h2><a href=\"https://example.com/a\">rust 教程站</a></h2>\
+             <div class=\"b_caption\"><p class=\"b_lineclamp4\">无关推荐位。</p></div></li>\
+             </ol></body></html>"
+        );
+        wiremock::Mock::given(wiremock::matchers::method("GET"))
+            .respond_with(wiremock::ResponseTemplate::new(200).set_body_string(semi))
+            .mount(&two)
+            .await;
+        let http = test_http();
+        let mut config = config_for(one.uri(), 5_000, 30_000);
+        config.engines.push(EngineSpec {
+            id: "second".to_string(),
+            search_url: two.uri(),
+        });
+        let error = search(&http, &config, query).await.expect_err("全链判负");
+        assert_eq!(error.cause, CAUSE_EMPTY_RESULT);
+        assert_eq!(error.engine, "second", "detail 取分数最高的尝试");
+        assert!(
+            error.detail.contains("score=1/2"),
+            "detail={}",
+            error.detail
+        );
+        assert_eq!(error.gate_score, Some(1));
+        assert_eq!(error.attempts.len(), 2);
+    }
+
+    #[test]
+    fn symbol_only_query_passes_the_gate() {
+        let hits = parse_bing_serp(&degraded_serp_fixture());
+        assert!(
+            relevance_gate_verdict(&hits, "v1.2.3 #7 %^&").is_ok(),
+            "词集空 ⇒ 放行"
+        );
+    }
+
+    // ── G3：跳转包装解包 + 最终 URL 回填 ──────────────────────────────
+
+    #[test]
+    fn network_unwrap_targets_google_and_baidu_wrappers_only() {
+        assert!(needs_network_unwrap(
+            "https://www.google.com/goto?url=OPAQUE"
+        ));
+        assert!(needs_network_unwrap("https://www.baidu.com/link?url=xyz"));
+        assert!(!needs_network_unwrap("https://docs.rust-lang.org/book/"));
+        assert!(!needs_network_unwrap(
+            "https://www.bing.com/ck/a?!&&u=a1aHR0cA"
+        ));
+    }
+
+    #[tokio::test]
+    async fn unwrap_backfills_the_real_url_when_no_page_fetch() {
+        let serp = wiremock::MockServer::start().await;
+        let redirector = wiremock::MockServer::start().await;
+        let final_server = wiremock::MockServer::start().await;
+        let fixture =
+            serp_fixture_with_hit(&format!("{}/google.com/goto?url=OPAQUE", redirector.uri()));
+        wiremock::Mock::given(wiremock::matchers::method("GET"))
+            .respond_with(wiremock::ResponseTemplate::new(200).set_body_string(fixture))
+            .mount(&serp)
+            .await;
+        wiremock::Mock::given(wiremock::matchers::method("GET"))
+            .respond_with(
+                wiremock::ResponseTemplate::new(302)
+                    .insert_header("Location", format!("{}/real", final_server.uri())),
+            )
+            .mount(&redirector)
+            .await;
+        wiremock::Mock::given(wiremock::matchers::method("GET"))
+            .respond_with(wiremock::ResponseTemplate::new(200).set_body_string("final"))
+            .mount(&final_server)
+            .await;
+        let http = test_http();
+        let mut config = config_for(serp.uri(), 5_000, 30_000);
+        config.segment_pages = 0;
+        let outcome = search(&http, &config, "rust programming language book")
+            .await
+            .expect("hits");
+        assert_eq!(outcome.hits.len(), 1);
+        assert_eq!(
+            outcome.hits[0].url,
+            format!("{}/real", final_server.uri()),
+            "解包结果回填（无页抓取回填时）"
+        );
+    }
+
+    #[tokio::test]
+    async fn page_fetch_backfill_beats_unwrap_and_wrapper() {
+        let serp = wiremock::MockServer::start().await;
+        let redirector = wiremock::MockServer::start().await;
+        let page = wiremock::MockServer::start().await;
+        let fixture =
+            serp_fixture_with_hit(&format!("{}/baidu.com/link?url=xyz", redirector.uri()));
+        wiremock::Mock::given(wiremock::matchers::method("GET"))
+            .respond_with(wiremock::ResponseTemplate::new(200).set_body_string(fixture))
+            .mount(&serp)
+            .await;
+        wiremock::Mock::given(wiremock::matchers::method("GET"))
+            .respond_with(
+                wiremock::ResponseTemplate::new(302)
+                    .insert_header("Location", format!("{}/real", page.uri())),
+            )
+            .mount(&redirector)
+            .await;
+        let body = format!("<html><body><p>{}</p></body></html>", "x".repeat(80));
+        wiremock::Mock::given(wiremock::matchers::method("GET"))
+            .respond_with(wiremock::ResponseTemplate::new(200).set_body_string(body))
+            .mount(&page)
+            .await;
+        let http = test_http();
+        let mut config = config_for(serp.uri(), 5_000, 30_000);
+        config.segment_pages = 1;
+        let outcome = search(&http, &config, "rust programming language book")
+            .await
+            .expect("hits");
+        assert_eq!(
+            outcome.hits[0].url,
+            format!("{}/real", page.uri()),
+            "页抓取回填优先"
+        );
+        assert_eq!(outcome.hits[0].segments.len(), 1, "正文段照常抽取");
+    }
+
+    // ── G1：T_segment 独立于 T_first（页级超时不吞已解析命中）─────────
+
+    #[tokio::test]
+    async fn slow_page_does_not_kill_delivered_hits() {
+        let serp = wiremock::MockServer::start().await;
+        let page = wiremock::MockServer::start().await;
+        let fixture = serp_fixture_with_hit("https://docs.rust-lang.org/book/");
+        wiremock::Mock::given(wiremock::matchers::method("GET"))
+            .respond_with(wiremock::ResponseTemplate::new(200).set_body_string(fixture))
+            .mount(&serp)
+            .await;
+        wiremock::Mock::given(wiremock::matchers::method("GET"))
+            .respond_with(
+                wiremock::ResponseTemplate::new(200)
+                    .set_delay(Duration::from_millis(400))
+                    .set_body_string("<html><body><p>slow</p></body></html>"),
+            )
+            .mount(&page)
+            .await;
+        let http = test_http();
+        let mut config = config_for(serp.uri(), 5_000, 30_000);
+        config.segment_pages = 1;
+        config.engines.push(EngineSpec {
+            id: "pages".to_string(),
+            search_url: page.uri(),
+        });
+        // 页级预算 80ms：页抓取超时被吞掉，SERP 命中照常交付。
+        let mut config = LocalSegmentedConfig {
+            segment_deadline: Duration::from_millis(80),
+            engines: config.engines,
+            ..config
+        };
+        config.segment_pages = 1;
+        let started = Instant::now();
+        let outcome = search(&http, &config, "rust programming language book")
+            .await
+            .expect("SERP 命中不被页级超时吞掉");
+        assert!(started.elapsed() < Duration::from_millis(3_000));
+        assert_eq!(outcome.hits[0].url, "https://docs.rust-lang.org/book/");
+        assert!(outcome.hits[0].segments.is_empty(), "慢页无段，命中仍交付");
+    }
+
+    // ── G4：代理解析与默认链序 ────────────────────────────────────────
+
+    #[test]
+    fn proxy_resolution_order_none_and_fallbacks() {
+        let none_first = |key: &str| match key {
+            ENV_PROXY => Some("none".to_string()),
+            "HTTPS_PROXY" => Some("http://leak:1".to_string()),
+            _ => None,
+        };
+        assert_eq!(resolve_proxy_from(&none_first), None, "none 显式关优先");
+        let override_wins = |key: &str| match key {
+            ENV_PROXY => Some("http://first:1".to_string()),
+            "HTTPS_PROXY" => Some("http://second:1".to_string()),
+            _ => None,
+        };
+        assert_eq!(
+            resolve_proxy_from(&override_wins).as_deref(),
+            Some("http://first:1")
+        );
+        let https_fallback = |key: &str| match key {
+            "HTTPS_PROXY" => Some(" http://secure:1 ".to_string()),
+            _ => None,
+        };
+        assert_eq!(
+            resolve_proxy_from(&https_fallback).as_deref(),
+            Some("http://secure:1")
+        );
+        let http_fallback = |key: &str| match key {
+            "HTTP_PROXY" => Some("http://plain:1".to_string()),
+            _ => None,
+        };
+        assert_eq!(
+            resolve_proxy_from(&http_fallback).as_deref(),
+            Some("http://plain:1")
+        );
+        assert_eq!(resolve_proxy_from(&|_| None), None);
+    }
+
+    #[test]
+    fn proxy_display_strips_scheme_and_credentials() {
+        assert_eq!(proxy_display("http://127.0.0.1:7890"), "127.0.0.1:7890");
+        assert_eq!(
+            proxy_display("http://user:pass@10.0.0.1:8080"),
+            "10.0.0.1:8080",
+            "凭据脱敏"
+        );
+        assert_eq!(proxy_display("socks5://1.2.3.4:1080"), "1.2.3.4:1080");
+    }
+
+    #[test]
+    fn proxy_switches_default_chain_and_probe_detail() {
+        let proxied = LocalSegmentedConfig::from_env_with(|key| match key {
+            ENV_SWITCH => Some("on".to_string()),
+            ENV_PROXY => Some("http://user:pass@127.0.0.1:7890".to_string()),
+            _ => None,
+        });
+        let ids: Vec<&str> = proxied.engines.iter().map(|e| e.id.as_str()).collect();
+        assert_eq!(ids, PROXY_DEFAULT_CHAIN, "有代理默认链（不构成白名单）");
+        assert_eq!(
+            proxied.engine_chain_detail(),
+            "duckduckgo,google,bing_cn,bing_global; proxy=on 127.0.0.1:7890",
+            "探针读数带 proxy 状态与脱敏端点"
+        );
+        // 显式 ORZ_RETRIEVAL_ENGINES 永远优先（不设引擎白名单）。
+        let explicit = LocalSegmentedConfig::from_env_with(|key| match key {
+            ENV_PROXY => Some("http://127.0.0.1:7890".to_string()),
+            ENV_ENGINES => Some("bing_cn".to_string()),
+            _ => None,
+        });
+        assert_eq!(explicit.engines.len(), 1);
+        assert_eq!(explicit.engines[0].id, "bing_cn");
+        // 显式 none = 关闭（不落回 HTTPS_PROXY）。
+        let off = LocalSegmentedConfig::from_env_with(|key| match key {
+            ENV_PROXY => Some("none".to_string()),
+            "HTTPS_PROXY" => Some("http://leak:1".to_string()),
+            _ => None,
+        });
+        assert!(off.proxy.is_none());
+        assert_eq!(off.engines.len(), 1);
+        assert_eq!(off.engines[0].id, "bing_cn");
     }
 }

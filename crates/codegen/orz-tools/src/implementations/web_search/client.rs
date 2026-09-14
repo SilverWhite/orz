@@ -107,7 +107,7 @@ impl WebSearchClient {
     /// §5/§6) is not called at all. A config that is switched off is a no-op.
     pub fn with_local_segmented(mut self, config: LocalSegmentedConfig) -> Self {
         if config.is_enabled() {
-            match local_segmented::build_http_client(config.overall_deadline) {
+            match local_segmented::build_http_client(&config) {
                 Ok(http) => {
                     self.local_http = Some(http);
                     self.local_segmented = Some(config);
