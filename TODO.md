@@ -18,9 +18,9 @@
 
 ## 开放项路由（2026-09-13 同步；勾选与计数权威在 BACKLOG）
 
-- 未闭合总数：**30 项**（BACKLOG 计数口径；逐次计数流水见 [`docs/BACKLOG_AND_PRIORITIES.md`](docs/BACKLOG_AND_PRIORITIES.md) 未闭合计数，TODO 不重复维护）。TODO `[ ]` 明细含父/子项，计数以 BACKLOG 为准。**2026-09-13 跑批待办入账流水**：深审处置 **26 → 29**（P2-15 / 0aa / 0ab），TB 2.1 V4.1 轮 **`GAP-MECH-IMMEDIATE-FEEDBACK` 立项 29 → 30**（0ac，P0，设计定稿待放行实施）；同轮 `GAP-ORZ-HOST-RESOURCE-SNAPSHOT-DROP`（立案并同日修复，代码 `implemented`，载体重建并入 0z S3/S4 面）与 `GAP-ORZ-ADAPTER-FLAG-DRIFT`（`candidate`，仅记录）不动计数。
+- 未闭合总数：**31 项**（BACKLOG 计数口径；逐次计数流水见 [`docs/BACKLOG_AND_PRIORITIES.md`](docs/BACKLOG_AND_PRIORITIES.md) 未闭合计数，TODO 不重复维护）。TODO `[ ]` 明细含父/子项，计数以 BACKLOG 为准。**2026-09-13 跑批待办入账流水**：深审处置 **26 → 29**（P2-15 / 0aa / 0ab），TB 2.1 V4.1 轮 **`GAP-MECH-IMMEDIATE-FEEDBACK` 立项 29 → 30**（0ac，P0，设计定稿待放行实施）；同轮 `GAP-ORZ-HOST-RESOURCE-SNAPSHOT-DROP`（立案并同日修复，代码 `implemented`，载体重建并入 0z S3/S4 面）与 `GAP-ORZ-ADAPTER-FLAG-DRIFT`（`candidate`，仅记录）不动计数。**2026-09-14 狗粮 run 对账批**：**`GAP-ORZ-CARRIER-SIGNER-MANIFEST-STALE` 立案 30 → 31**（0ad，P1，摩擦台账 F-029 注册、F-002 同形第 2 次；F-030 交付门同族第 4 次 `candidate` 仅记录）。
 - P0：0b 验证③④（⑤ 89 题独立用户门）；0d 后续 3/4/5 S4 复验；0j W1-R1 S4 复验 + W3-R3 余项 + W4-R4 S5-2 总项；0l ⑥⑦（⑧ TER 见 [`TODO2.md`](TODO2.md)）；0m S3/S4；0n GAP-APPROVAL-PROMPTER（延期，S1 设计定稿前置）；0o T3 批次 W2 chunk3 + T4 批次 L + T5 批次 O + T6 统一收口；0t S4 实机复验待续；0u R4 15 题官方复跑（0t S4 载体，2026-09-10 放行）；0v 检索引擎 SERP + browser_control 分类修正（**2026-09-12 用户裁决闭合入账：S1–S4 全部转 `implemented`，计数 26 → 25；0v-C 修复落码并**闭合**（`ba934af8`：回传落盘 `event_sha256` + 四处调用方线程化 + 全链重放钉子；根因实锤 = 漏斗无痕改写，Run A 4 处断链前序行全为含 URL 的 `model_output`））**；0w TB 4.0 单题摩擦探针（第三跑成立并跑完（2026-09-11））；0y NP1 机械身体集成支线（2026-09-11 用户裁决立项，实施未开始；§14.2 验证载体已裁决引入模拟器（2026-09-12），S1 载体搭建待放行，M0 定版为首个无依赖里程碑）；0z 真机资源安全边界与崩溃收尾（2026-09-12 用户裁决立项，设计完成待放行实施；S1–S4，**不与 0v-C 搭车**）。（0x 初始轮中立问询已于 2026-09-11 S1–S4 全部闭合转 `implemented`，计数 27 → 26；**0v 闭合 26 → 25、0z 立项 25 → 26**；ADR-0010 §14.66 / v1.67。）**本轮新增（2026-09-13）**：0ac 即时结果回报与流式检索（`GAP-MECH-IMMEDIATE-FEEDBACK`，设计定稿待放行实施，S1 探针为第一门）；`GAP-ORZ-HOST-RESOURCE-SNAPSHOT-DROP` 载体重建待放行。
-- P1：FUS-COMPONENT-REGISTER 组件审计；GAP-WINDOWS-EVIDENCE 三项；IMPL-DEEPSEEK-TRANSPORT live 晋级证据；ORZ-SESSION-CONTEXT-MONITOR 四项；0aa 历史卷 journal 全量 verifier 复扫；0ab 账本一致性与瘦身机械化。
+- P1：FUS-COMPONENT-REGISTER 组件审计；GAP-WINDOWS-EVIDENCE 三项；IMPL-DEEPSEEK-TRANSPORT live 晋级证据；ORZ-SESSION-CONTEXT-MONITOR 四项；0aa 历史卷 journal 全量 verifier 复扫；0ab 账本一致性与瘦身机械化；0ad 载体换装 signer-manifest 重算核对缺失（GAP-ORZ-CARRIER-SIGNER-MANIFEST-STALE）。
 - P2：IMPL-CONTROL-FABRIC Slice 3/4；OPS-PROTOCOL 裁剪与接线裁决；P2-11 余项（PULL 自描述 S3/S4、retryable 分类位、依赖图 S3/S4）；P2-12 S4 复验；P2-13 B4；P2-14 S3/S4；P2-15 EVALUATION-CORPUS-FREEZE（S1/S2 完成；附属 `GAP-EVAL-RESULT-SCHEMA-DRIFT` 已修复）。
 - P3：EVIDENCE-LOCAL-BROWSER、GATE-CHAIN、observed-scope 枚举、V11-IMPL-003、V11-IMPL-007、orz-host flaky。
 - 审计登记边界（条件触发，不占当前优先级）：orz-host 可选后端、headless 计划信号、23 工具分区 journals、B-1 后续、ORZ-RECOVERY-TOOL-OUTCOME、ORZ-STAGNATION-TOOL-SIGNAL。
@@ -765,6 +765,10 @@ GLM F2 处置转排期（2026-09-06 用户裁决）：`orz-host/src/approval.rs`
 ### 0ab 账本一致性与瘦身机械化（P1；2026-09-13 立项，深审附带建议②）
 
 - [ ] `check_repository.py` 增计数一致性四点交叉核对（BACKLOG 总数 ↔ 各节开放项 ↔ TODO 勾选 ↔ 索引状态速查）+ 账本瘦身检查（台账行长限/行龄）；负例钉子（人为不一致可检出）；首批账本瘦身随 S1 做。入口：[深审 §3](docs/audits/FULL_PROJECT_DEEP_REVIEW_2026-09-12.md) / [BACKLOG 0ab](docs/BACKLOG_AND_PRIORITIES.md)。
+
+### 0ad 载体换装 signer-manifest 重算核对缺失（P1；2026-09-14 立案，摩擦台账 F-002/F-029 注册）
+
+- [ ] 机械核对步骤落位：发布/换装清单加「二进制更新 ⇒ `orz-acaf-provision` 重算 manifest + `Get-FileHash` 逐对核对」固定步骤；`check_repository.py`（或并入 0ab 门禁扩展）增载体一致性检查（`signer-manifest.json` 的 `binary_sha256` ↔ 同目录 `orz-signer.exe` 实测哈希，不一致即 fail）；signer 拒签报因改善并入 0ac `cause` 面。边界：不改 ACAF fail-closed 语义（拒签本身正确）。入口：[摩擦台账 F-002/F-029](docs/FRICTION_LEDGER.md) / [BACKLOG 0ad](docs/BACKLOG_AND_PRIORITIES.md)。
 
 ### 重文件拆分勘察（2026-09-13 落档；拆分立项留用户裁决，未计数）
 
