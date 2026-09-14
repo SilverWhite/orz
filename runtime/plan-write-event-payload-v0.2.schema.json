@@ -15,36 +15,82 @@
     "degrade_reason"
   ],
   "properties": {
-    "plan_id": { "type": "string" },
-    "goal": { "type": "string" },
-    "step_count": { "type": "integer", "minimum": 0 },
+    "plan_id": {
+      "type": "string"
+    },
+    "goal": {
+      "type": "string"
+    },
+    "step_count": {
+      "type": "integer",
+      "minimum": 0
+    },
     "outcome": {
       "type": "string",
-      "enum": ["accepted", "refill_requested", "degraded"]
+      "enum": [
+        "accepted",
+        "refill_requested",
+        "degraded"
+      ]
     },
-    "attempt": { "type": "integer", "minimum": 1, "maximum": 2 },
-    "validation": { "$ref": "#/$defs/validation" },
+    "attempt": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 2
+    },
+    "validation": {
+      "$ref": "#/$defs/validation"
+    },
     "degrade_reason": {
       "oneOf": [
-        { "type": "null" },
-        { "type": "string", "minLength": 1 }
+        {
+          "type": "null"
+        },
+        {
+          "type": "string",
+          "minLength": 1
+        }
       ]
+    },
+    "section": {
+      "enum": [
+        "plan",
+        "notes"
+      ],
+      "description": "0ae D0 (2026-09-15): blackboard_write 复用 plan_write 事件族时的目标分区（plan|notes）；plan-first 结构化计划写不带此字段（缺省 = 结构化计划面）。"
+    },
+    "content_chars": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "0ae D0: blackboard_write 的内容字符数（≤8192 单次上限）。"
     }
   },
   "$defs": {
     "validation": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["valid", "errors", "ignored_fields"],
+      "required": [
+        "valid",
+        "errors",
+        "ignored_fields"
+      ],
       "properties": {
-        "valid": { "type": "boolean" },
+        "valid": {
+          "type": "boolean"
+        },
         "errors": {
           "type": "array",
-          "items": { "type": "string", "minLength": 1 }
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
         },
         "ignored_fields": {
           "type": "array",
-          "items": { "type": "string", "minLength": 1 }
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
         }
       }
     }
