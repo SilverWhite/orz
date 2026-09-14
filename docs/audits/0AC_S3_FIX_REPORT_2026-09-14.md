@@ -151,7 +151,7 @@ $ git -C orz status --porcelain →  （空，工作区干净）
 |---|---|
 | 本报告 | 新建（`docs/audits/0AC_S3_FIX_REPORT_2026-09-14.md`） |
 | [`0AC_S3_IMPLEMENTATION_AUDIT_2026-09-14`](0AC_S3_IMPLEMENTATION_AUDIT_2026-09-14.md) | 头部追记 + 新增 §8（修复回写与勘误） |
-| [`FRICTION_LEDGER`](../FRICTION_LEDGER.md) | F-008/F-012/F-013/F-014/F-015 补注；新增 F-016…F-020；本轮核证留痕（含收尾补记）；统计行 |
+| FRICTION_LEDGER（2026-09-14 删档） | F-008/F-012/F-013/F-014/F-015 补注；新增 F-016…F-020；本轮核证留痕（含收尾补记）；统计行 |
 | [`设计稿`](../IMMEDIATE_RESULT_DELIVERY_AND_STREAMING_RETRIEVAL_DESIGN_2026-09-13.md) | 新增 §10.5 回写（P3 闭合） |
 | [`TODO.md`](../../TODO.md) | `P0-0ac` 增修复行 |
 | [`BACKLOG_AND_PRIORITIES`](../BACKLOG_AND_PRIORITIES.md) | `0ac` 小节标题状态 + 增修复行 |
