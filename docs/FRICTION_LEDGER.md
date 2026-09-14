@@ -119,6 +119,22 @@
 > - `git -C orz log --oneline -1` → `96d2b263 fix(0ac S3): 审记 G1/G2 修复…`；`git -C orz status --porcelain` → 空；`git -C orz show --stat HEAD` → `5 files changed, 96 insertions(+), 49 deletions(-)`。
 > - 收尾补记（父仓核证）：`python scripts/check_repository.py` → `"error_count": 0` / `"valid": true`（EXIT=0，含本批全部文档改动）；父仓账本提交 `57214be0`（`账本: 0ac S3 修复批落档…`，9 files +229/−10；**未推送**），本次哈希回写为其后一条补记。
 
+### F-021 | 2026-09-14 | RUN-CLI-6aa77e19 | 装置侧（外部网络面：Docker 镜像拉取）| 观察
+**`docker pull rust:1.97-slim` 失败**：报错原文 `Error response from daemon: failed to resolve reference "docker.io/library/rust:1.97-slim" … dialing registry-1.docker.io:443 … because Docker Desktop has no HTTPS proxy … host has failed to respond`（`evidence-0ac-s3-20260914\docker-pull-rust.log`）。事实：本机 Docker Desktop 未配 HTTPS 代理，`registry-1.docker.io:443` 直连无响应。**影响面**：本轮 Linux musl 构建的常规镜像获取路径不可用；**未阻塞**——本地既有 `rust:1.97-slim`（1.27 GB，5 周前拉取）支撑全部容器构建（`Finished release … in 42m 05s`）。**代价**：1 次拉取尝试（至超时报错）。**处置**：观察（未改动本机 Docker 网络配置）。
+
+### F-022 | 2026-09-14 | RUN-CLI-6aa77e19 | 装置侧（容器环境：Docker daemon 冷机）| fixed（重试）
+**容器构建首轮 `BUILD_EXIT=1`**：13:30 起的构建输出 `failed to connect to the docker API at npipe:////./pipe/dockerDesktopLinuxEngine … the daemon is not running`（`D:\tb-eval\orz-linux\build-20260914-1330.log`）。**处置**：启动 Docker Desktop 后 13:40 重试，进入容器并完成构建（`build-20260914-1340.log`；终态 `linux-build-container-full.log` L1788 `Finished release [optimized] target(s) in 42m 05s`）。**同形前例**：2026-09-13 0z S3 载体构建同形（其审计 §2 操作记录）。**代价**：约 10 min 墙钟（13:30 失败 → 13:40 重试）。
+
+### F-023 | 2026-09-14 | RUN-CLI-6aa77e19 | 装置侧（文件占用：载体目录内运行中进程持旧镜像）| fixed（绕行）
+**载体内原位替换不可行**：`D:\tb-eval\orz-windows` 内运行中宿主进程持有旧 `orz.exe` / `orz-signer.exe` 映像，原位覆盖路径不可用；实际换装记录为 `fresh-copy-to-tmp -> rename old to *.0.5.0-bak -> move tmp into place`（`windows-carrier-sync-0.5.1.txt` 的 `swap method=` 行）。**结果**：post-swap 三件与 staging 逐对 `MATCH=True` ×3；留档 `orz.exe.0.5.0-bak` / `orz-signer.exe.0.5.0-bak` 两件实物。**代价**：换装由 1 步变 3 步（多 1 次 rename + 1 次留档），无额外失败重试。
+
+> **本批机械核证留痕（RUN-CLI-6aa77e19，收尾核证段实做输出摘录）**
+> - `gh release view v0.5.1 --repo SilverWhite/CLI --json tagName,name,isDraft,isPrerelease,publishedAt,url,assets --jq '{…}'` → `{"assets":[{"digest":"sha256:49df6cebbce12375cb2969f2bed03dfdfc8f4b02f5b89764f6475fb05ce7cdf0","name":"orz-0.5.1-linux-x86_64.tar.gz","size":34987981,"state":"uploaded"},{"digest":"sha256:f7e8274c706c9b0cf202ccc126d220e4719097bf98847fe3478c6b368689432f","name":"orz-0.5.1-windows-x86_64.zip","size":26472460,"state":"uploaded"}],"draft":false,"name":"orz 0.5.1（0ac S3 载体重建）","pre":false,"published":"2026-09-14T07:32:43Z","tag":"v0.5.1","url":"https://github.com/SilverWhite/CLI/releases/tag/v0.5.1"}`。
+> - `git -C D:\CLI\orz ls-remote cli refs/heads/feat/fusion-architecture` → `dbb42b1d0ac5be56e68aa4e5ca307ff168f465a6`；`git -C D:\CLI\orz rev-parse HEAD` → 同值（本地 = 远端）。`git -C D:\CLI\orz log --oneline -3` → `dbb42b1d chore(release): 版本 bump 0.5.0 → 0.5.1…` / `96d2b263 fix(0ac S3): 审记 G1/G2 修复…` / `4c892951 0ac S3①/②…`。
+> - `git -C D:\CLI rev-parse origin/main` → `c4491629b2abd65bddd9295493c862781cabb31b`；`git -C D:\CLI log --oneline -1 origin/main` → `c4491629 chore(submodule): orz 指针 -> dbb42b1d …`（C1 已在远端）。
+> - `Get-FileHash …\staging-0ac-s3-20260914\orz-0.5.1-linux-x86_64.tar.gz -Algorithm SHA256` → `49DF6CEBBCE12375CB2969F2BED03DFDFC8F4B02F5B89764F6475FB05CE7CDF0`（34,987,981 B）；同法 zip → `F7E8274C706C9B0CF202CCC126D220E4719097BF98847FE3478C6B368689432F`（26,472,460 B）＝ GitHub 服务端 digest 逐字一致。
+> - `git -C D:\CLI status --short` → `M CLI_PROJECT_INDEX.md` / `M TODO.md` / `?? docs/audits/0AC_S3_DUAL_PLATFORM_REBUILD_2026-09-14.md` / `?? releases/orz-0.5.1-x86_64/`（C2 回写面；收尾段核对）。
+
 ## 统计
 
 | 日期 | run | 摩擦条目 | 立案候选 | 已修 | 观察 |
@@ -128,3 +144,4 @@
 | 2026-09-13 | RUN-CLI-6aa6bd3f（0ac S3② 裁决(a) 落地 / S3① 生产者面） | F-011…F-013 | F-013（根因待定，待立案） | F-011/F-012 | F-007 已按裁决(a) 翻宽口径落地；F-008 第 4 次复现未修 |
 | 2026-09-14 | RUN-CLI-6aa6c9b3（0ac S3 实现审记） | F-014…F-015 | F-014（G1–G3 修复批次划分待裁决）/F-015（F-008 同族，根因待定） | — | F-008 第 5 次复现；G1–G3 详见 [0ac S3 审记](audits/0AC_S3_IMPLEMENTATION_AUDIT_2026-09-14.md) |
 | 2026-09-14 | RUN-CLI-6aa6d379（0ac S3 修复批） | F-016…F-020 | F-017（S3① 投递侧未落；拆子阶段待裁决） | F-016（绕行）/F-018/F-020（收尾补齐）；F-012、F-014 的 G1/G2 同批翻 fixed（见其补注） | F-019（WinGet 垫片本体仍悬空）；F-008/013/015 根因候选；G3 与核证详见 [修复报告](audits/0AC_S3_FIX_REPORT_2026-09-14.md) |
+| 2026-09-14 | RUN-CLI-6aa77e19（0ac S3 载体重建与发布） | F-021…F-023 | —（本批无新立案） | F-022（Docker daemon 冷机，启动后重试成功）/F-023（载体换装改 rename 绕行） | F-021（Docker Desktop 无 HTTPS 代理、registry-1.docker.io 直连无响应；本地既有镜像支撑，未阻塞）；核证与发布详见 [重建记录](audits/0AC_S3_DUAL_PLATFORM_REBUILD_2026-09-14.md) |
