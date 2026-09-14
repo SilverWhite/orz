@@ -10,6 +10,8 @@
 > 2026-09-12 审查入档轮：全项目只读深审报告入档（[`docs/audits/FULL_PROJECT_DEEP_REVIEW_2026-09-12.md`](docs/audits/FULL_PROJECT_DEEP_REVIEW_2026-09-12.md)；不立项、不动计数——0v-C 两项 P0 已被同日 orz `ba934af8` 修复闭合覆盖且触发源实锤与报告独立判断（URL 无痕改写）吻合，账本三处同步断裂已回补，其余 P1/P2 与体系面发现留用户裁决，BACKLOG 治理注记为登记权威）。
 > 2026-09-13 跑批待办入账轮：TB 2.1 V4.1 第 0 轮 + 全框架时间预算语义审计 + 即时结果回报/流式检索设计产生的全部开放项一次入账——新增 **0ac `GAP-MECH-IMMEDIATE-FEEDBACK`（P0，设计定稿待放行实施）**、即时结果回报与流式检索设计 **S1–S4**、时间预算语义审计修正批次 **R1–R10 / E1–E9**、`GAP-ORZ-HOST-RESOURCE-SNAPSHOT-DROP` **载体重建待放行**，并更正 **C6 撤回（本轮第 0 轮全部重跑）**。勾选与计数权威仍是 BACKLOG（本轮 **29 → 30**）。
 
+> 2026-09-15 检索补强裁决轮：本地分段检索补强设计稿定稿（v1.0）并落裁决——用户裁决**代理不做引擎白名单**（真机开代理即生效）、其余四点授权工程裁决（G1 三段预算 10 s/5 s/10 s·页、G2 闸门默认开 + 25% + 词集封顶 12、G3 解包 6 worker/6 s、落码顺序 G2 → G1 → G3 → G4）；新增 **S3①-a 补强**开放项（服务 ①-a 检索侧，非 ①-b 投递侧）与索引条目 `DESIGN-RETRIEVAL-LOCAL-SEGMENTED-HARDENING`；**0ac 子切片 ⇒ 不动计数**（未闭合总数维持 **30 项**，勾选与计数权威仍是 BACKLOG）。
+
 ## 使用说明
 
 - `[ ]` = 待办；`[x]` = 已完成（保留单行供核对，不计入开放项）。
@@ -676,6 +678,8 @@ GLM F2 处置转排期（2026-09-06 用户裁决）：`orz-host/src/approval.rs`
   - **S3①-b 投递侧（未落，下一实现批次）**：三事件 `EventType` 变体 + 族注册 + 产品码写点（`retrieval_progress` / `retrieval_result_segment` / `result_delivered`）、**⑤** 投递策略 I1–I3 + M1–M3（M2 合法边界投递先行、M1 句号边界分段续写带开关 + A/B——S1 探针②已证续写可行 3/3）、**⑥** 子代理提前收口、**⑦** semaphore acquire 独立截止。实施顺序：机械件 + M2 → M1/M3。
   - 0ac S3 出口条件 = ①-b 落码 + ③ 跨 run 时序钉子 + 门禁/镜像全绿；之后载体重建（0.5.1 冻结基线）与 S4 实机复验另行放行。
 > 勘误（2026-09-15，交接件 §7 摩擦 A）：⑦ 的 acquire 独立截止已随 `4c892951` 落码（`orz-host` `retrieval_lane_wait_budget`，`ORZ_RETRIEVAL_SEMAPHORE_WAIT_MS` 默认 10 000 ms、`0`=禁用＋有界 acquire `retrieval_lane_busy` cause）——实际只差「排队即时回报」可见性，随 ①-b 收尾批落。
+
+- [ ] **S3①-a 补强（检索侧补强稿 `DESIGN-RETRIEVAL-LOCAL-SEGMENTED-HARDENING`；2026-09-15 设计定稿 + 裁决，未实施）**：设计稿 [`RETRIEVAL_LOCAL_SEGMENTED_HARDENING_DESIGN_2026-09-15`](docs/RETRIEVAL_LOCAL_SEGMENTED_HARDENING_DESIGN_2026-09-15.md)（v1.0；服务 **①-a 检索侧**，不是 ①-b 投递侧）——五处缺口 + 裁决：**G1 计时语义**（三段账 `T_acquire` 5 s ⊂ `T_first` 10 s ⊂ `T_overall` 30 s、`T_segment` 10 s·页；`ORZ_RETRIEVAL_ACQUIRE_MS`/`ORZ_RETRIEVAL_SEGMENT_MS` 可配，`ORZ_RETRIEVAL_DEADLINE_MS` 语义收窄为 `T_first`）；**G2 降级页相关性闸门**（HTTP 200 + 整页无关 `b_algo` 现被判成功 ⇒ 闸门**默认开**：前 3 条 ∩ 查询词集，阈值 25% + 词集**封顶 12**；判负复用 `empty_result` + detail 并继续引擎链、**不新增稳定码**；开关 `ORZ_RETRIEVAL_RELEVANCE_GATE`）；**G3 引擎面收尾**（跳转包装并发解包 **6 worker / 单条 6 s** + 页抓取最终 URL 回填；`ORZ_RETRIEVAL_UNWRAP_WORKERS`/`_MS`）；**G4 代理管道**（只加在分段检索专用客户端 `local_http`；读取序 `ORZ_RETRIEVAL_PROXY` → `HTTPS_PROXY` → `HTTP_PROXY`，`none` 显式关；**不设引擎白名单**）；**G5** 无头/有头仅登记（待容器内复验）。**落码顺序 G2 → G1 → G3 → G4**；每项按「改动 + fixture + 法官镜像 + A/B 读数」走（设计稿 §8），**不合批进 ①-b**（两件代码面/验收面互不重叠）；落码后需载体重建，建议与本批 ①-b 或 0z S4 共用一次三件套。判据沿用：检索类首个结果 `wall_ms` p99 ≤ 10 s、`subagent_wallclock_timeout_mid_tool` = 0。未决/复验条件见设计稿 §10.7。入口：设计稿 / 索引 `DESIGN-RETRIEVAL-LOCAL-SEGMENTED-HARDENING` / BACKLOG 0ac「检索侧补强设计定稿与裁决」（子切片，**不动计数**）。
 
 ### 0ae 上下文软门与模型参与压缩（P1；2026-09-15 设计定稿并排期，实施待放行）
 
