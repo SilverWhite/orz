@@ -33,6 +33,7 @@ pub mod fatigue;
 pub mod gateway;
 pub mod host;
 mod host_exec;
+mod immediate_delivery;
 pub(crate) mod mechanical_audit;
 pub mod orientation;
 pub(crate) mod planning;

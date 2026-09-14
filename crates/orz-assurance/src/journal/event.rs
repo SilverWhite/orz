@@ -135,6 +135,20 @@ pub enum EventType {
     /// 事件——success/failure + 真实原因（三值模式退役后浏览器可用性纯
     /// 事件事实化）。v0.2 非终态机制事件。
     BrowserLaunchResult,
+    // 0ac S3①-b (2026-09-14, IMMEDIATE_RESULT_DELIVERY_AND_STREAMING_
+    // RETRIEVAL_DESIGN §5/§9/§10.3①): 即时结果回报三事件面——S2 落契约
+    // （schema / registry / 法官族 / fixtures），S3①-b 落产品码写点。
+    // ① `RetrievalProgress`：检索通道判活/进度/失败到达面
+    //   （dispatched/channel_alive/progress/no_progress/failed/finished +
+    //   五稳定码，双路径 retrieval_path）；
+    // ② `RetrievalResultSegment`：每个结果项/段到达即入账的到达面
+    //   （与 `RetrievalResultCommitted` 账本提交面分立）；
+    // ③ `ResultDelivered`：框架→模型投递审计面（来源 / 边界 B1–B3 /
+    //   投递方式 / I1–I3 分级 / 抑制原因 / 去重键）。
+    // 三型均为 v0.2 非终态机制事件。
+    RetrievalProgress,
+    RetrievalResultSegment,
+    ResultDelivered,
     // MECHANICAL-AUDIT-LAYER (2026-08-24, ADR-0010 §14.39 / BACKLOG 0g):
     // 机械审查层轻量事件留痕——每次对象键覆盖写（含 step/契约类检查）以
     // `{kind, payload:{key, round, summary, anomaly}}` 记一条，供回放与

@@ -3524,6 +3524,29 @@ impl AgentLoopController {
         // 只收模型侧静默挂死（权限等待/重试背压/轮间代码），不再误杀长
         // 工具。挂死工具仍由工具超时树杀（模型继续），stall 不与工具超时
         // 等窗竞态（2026-08-08 review P2-1/D2-1 纪律）。
+        // 0ac S3①-b (2026-09-14, IMMEDIATE_RESULT_DELIVERY_AND_STREAMING_
+        // RETRIEVAL_DESIGN §5/§9/§10.3①): 到达面开闸——检索派发即落
+        // `retrieval_progress{stage:"dispatched"}`（本地分段路径无服务端
+        // 通道，逐项到达/结束在调用返回时补落）。开关默认关；关时
+        // 零事件、零行为变化。去重键 = call_id + 阶段。
+        let immediate_arrival = crate::immediate_delivery::switch_enabled()
+            && crate::relay::is_web_retrieval_tool(&tc.name);
+        let arrival_started = std::time::Instant::now();
+        if immediate_arrival {
+            writer
+                .record(
+                    EventType::RetrievalProgress,
+                    crate::immediate_delivery::progress_payload(
+                        &tc.name,
+                        &tc.call_id,
+                        crate::immediate_delivery::STAGE_DISPATCHED,
+                        0,
+                        None,
+                        None,
+                    ),
+                )
+                .await?;
+        }
         let call =
             host.call_tool_with_timeout(&tc.name, tc.arguments.clone(), &tc.call_id, timeout);
         tokio::pin!(call);
@@ -3537,6 +3560,78 @@ impl AgentLoopController {
                 }
             }
         };
+        // 0ac S3①-b: 到达面 + 交付面写点——逐项到达事实
+        // （`retrieval_result_segment`，每个结果项一条）、通道结束
+        // （`retrieval_progress{stage:"finished"}`）与交付记账
+        // （`result_delivered`：产物已随本工具结果被模型直接读到 ⇒
+        // suppressed=model_read_directly / boundary=B1_tool_result /
+        // latency_ms=0，框架不重复注入）。失败面只在错误文本自带稳定码时
+        // 落账（`stable_code_from_error`：不猜码）。
+        if immediate_arrival {
+            let waited_ms = arrival_started.elapsed().as_millis() as u64;
+            match &call_result {
+                Ok(res) => {
+                    if let Some(arrivals) = crate::immediate_delivery::parse_render(&res.output) {
+                        for hit in &arrivals.hits {
+                            writer
+                                .record(
+                                    EventType::RetrievalResultSegment,
+                                    crate::immediate_delivery::segment_payload(
+                                        &tc.name,
+                                        &tc.call_id,
+                                        arrivals.waited_ms,
+                                        hit,
+                                    ),
+                                )
+                                .await?;
+                            writer
+                                .record(
+                                    EventType::ResultDelivered,
+                                    crate::immediate_delivery::delivered_payload(
+                                        &tc.call_id,
+                                        hit.index,
+                                        0,
+                                    ),
+                                )
+                                .await?;
+                        }
+                        writer
+                            .record(
+                                EventType::RetrievalProgress,
+                                crate::immediate_delivery::progress_payload(
+                                    &tc.name,
+                                    &tc.call_id,
+                                    crate::immediate_delivery::STAGE_FINISHED,
+                                    arrivals.waited_ms,
+                                    Some(arrivals.hits.len()),
+                                    None,
+                                ),
+                            )
+                            .await?;
+                    }
+                }
+                Err(e) => {
+                    let code_text = e.to_string();
+                    if let Some(code) =
+                        crate::immediate_delivery::stable_code_from_error(&code_text)
+                    {
+                        writer
+                            .record(
+                                EventType::RetrievalProgress,
+                                crate::immediate_delivery::progress_payload(
+                                    &tc.name,
+                                    &tc.call_id,
+                                    crate::immediate_delivery::STAGE_FAILED,
+                                    waited_ms,
+                                    Some(0),
+                                    Some(code),
+                                ),
+                            )
+                            .await?;
+                    }
+                }
+            }
+        }
         let (mut result, succeeded) = match call_result {
             Ok(res) => {
                 // 0t (2026-09-09, ADR-0010 §14.65 / 设计 §3.3): 本次调用发生
