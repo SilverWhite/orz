@@ -8,6 +8,7 @@
 > 3. 条目格式：`F-###`（日期 | run_id | 归因类：装置侧/设计内门/模型习惯 | 现象与一手证据 | 代价 | 处置）。
 > 4. 立案的条目同步进 BACKLOG；已修的保留记录并标 `fixed`。
 > 5. **传话纪律**（2026-09-14 用户口径）：主会话拉起 orz run 默认**不设墙钟**（`--max-wallclock` 不传）——仅跑分与明确时间需求任务例外。本台账 RUN-CLI-6aa7bee3 曾按旧惯例设 7200 s（未触顶、不影响结果，留痕更正）。
+> 6. **记录范围**（2026-09-14 用户口径收窄）：本台账只记 **orz 框架内部情况**（机械层/工具面缺陷、模型习惯、设计内门摩擦）；**外部环境**（宿主/Docker/网络/装置配置）与**主会话传话、日常使用**不记——外部问题在对话与相应批次记录中处理。既有条目不追溯清洗；编号不回收，F-029 按此口径移出（编号留空）。
 
 ## 条目
 
@@ -160,19 +161,9 @@
 > - 写点定位核证（rg 上下文）→ `3527: let call =` / `3528: host.call_tool_with_timeout(&tc.name, tc.arguments.clone(), &tc.call_id, timeout);` / `3540: let (mut result, succeeded) = match call_result {`（到达面/交付面写点插于 3527 之前与 3540 之前）。
 > - 本轮**未做**：全量 `cargo test -p orz-loop`、`cargo fmt/clippy` 全量、载体重建（用户指示「暂时不做重建」）；S3①-b 的失败面（`stable_code`）无真实网络失败样本核证（`stable_code_from_error` 仅单测钉住契约）。
 
-### F-029 | 2026-09-14 | RUN-CLI-6aa7bee3（拉起前置）| 装置侧（载体配置：signer-manifest 哈希过期，F-002 同形第 2 次）| fixed（拉起前修复）
-0.5.1 载体换装时 `acaf/signer-manifest.json` 未随 `orz-signer.exe` 重算：manifest 记 `binary_sha256=d19a1394…`（实测 = 0.5.0 备份件哈希），而 0.5.1 实件为 `19edf5bd…`。一手证据：`Get-FileHash` 两件实测 + manifest 原文对照。**代价**：若直接拉起，按 F-002 先例 signer 启动自哈希失败 fail-closed，宿主锁死只读（229 次拒签同形）。**处置（主会话拉起前）**：旧件备份 `.bak-20260914` 后 `orz-acaf-provision` 重算 → manifest 记 `19edf5bd…`；本 run `control_ticket_rejected` 0 条。**F-002 候选动作（「二进制更新 ⇒ manifest 重算」核对步骤）第 2 次触发，立案候选。**
-> **补注（2026-09-14，用户裁决撤案）**：曾立案 `GAP-ORZ-CARRIER-SIGNER-MANIFEST-STALE`（0ad）随即**撤回**——不立案：装置侧偶发收尾遗漏、非框架内部摩擦，不单独立项、不占计数；本条保留事实留痕，后续载体换装批收尾可顺带按「manifest ↔ 实件哈希」核对。
-
 ### F-030 | 2026-09-14 | RUN-CLI-6aa7bee3 | 模型习惯（交付门：父仓推送未跑门禁，F-009/F-014/F-020 同族第 4 次）| fixed（主会话对账补办）
 orz 推送父仓提交 `f51a9d22` 前未重算 `orz_source_manifest.sha256`、未跑 `check_repository.py`，且终答核证清单未声明跳过。主会话对账实测：`check_repository.py` → `"error_count": 4, "valid": false`（`event.rs`/`host_exec.rs`/`lib.rs` 3 处摘要失配 + `immediate_delivery.rs` 未入册）。**代价**：门禁失效窗口 = `f51a9d22` 推出后至补办前；1 次补办批次。**处置（主会话）**：`generate_orz_source_manifest.py` → 1449 条；复跑门禁 → `"error_count": 0` / `"valid": true`。
 > **补注（2026-09-14，用户裁决）**：不立案；**归因存疑**——用户指出该 run 设了墙钟 7200 s，不能排除 orz 估时后主动取舍（不跑全盘测试故未重算 manifest），非纯模型习惯缺陷；此后非跑分任务不设墙钟（协议第 5 条），该变量已消除。
-
-> **主会话收尾对账补记（2026-09-14，RUN-CLI-6aa7bee3）**
-> - journal 佐证抽取（`events.jsonl` 5,635 行）：`TLS connect error`×3（F-025）、`os error 123`×3（F-026）、`E0133`×3（F-027）——自报四条全部对上；`run_invalidated` 0 条（`run_finished completed`，678 工具轮，09:31:15–10:21:07 UTC ≈ 50 min）。ACAF：`control_ticket_rejected` 0 条。
-> - 写点落位复核：`retrieval_progress|retrieval_result_segment|result_delivered` 产品码命中 `orz-loop/src/immediate_delivery.rs` + `orz-loop/src/host_exec.rs`（F-017/G3「零产品码写点」解除；`EventType` 三变体在 `orz-assurance/src/journal/event.rs`）。
-> - 门禁补办（F-030）：manifest 1448 → 1449 条，`check_repository.py` → `"error_count": 0` / `"valid": true`。
-> - 拉起侧事实：任务经 `orz.exe -p --real --allow-write --allow-shell --allow-network --max-wallclock 7200` 下发（任务文件 `D:\tb-eval\dogfood-0ac-s3b-20260914\task.txt`，含 run 末摩擦自报固定指令）；F-029 的 provision 重算在拉起前完成。拉起前置勘误：主会话误以 `--help` 探测入口，orz 无该旗标直接进 TUI、随即终止——零工作区写入，仅装置侧操作留痕。
 
 ## 统计
 
@@ -183,5 +174,5 @@ orz 推送父仓提交 `f51a9d22` 前未重算 `orz_source_manifest.sha256`、�
 | 2026-09-13 | RUN-CLI-6aa6bd3f（0ac S3② 裁决(a) 落地 / S3① 生产者面） | F-011…F-013 | F-013（根因待定，待立案） | F-011/F-012 | F-007 已按裁决(a) 翻宽口径落地；F-008 第 4 次复现未修 |
 | 2026-09-14 | RUN-CLI-6aa6c9b3（0ac S3 实现审记） | F-014…F-015 | F-014（G1–G3 修复批次划分待裁决）/F-015（F-008 同族，根因待定） | — | F-008 第 5 次复现；G1–G3 详见 [0ac S3 审记](audits/0AC_S3_IMPLEMENTATION_AUDIT_2026-09-14.md) |
 | 2026-09-14 | RUN-CLI-6aa6d379（0ac S3 修复批） | F-016…F-020 | F-017（S3① 投递侧未落；拆子阶段待裁决） | F-016（绕行）/F-018/F-020（收尾补齐）；F-012、F-014 的 G1/G2 同批翻 fixed（见其补注） | F-019（WinGet 垫片本体仍悬空）；F-008/013/015 根因候选；G3 与核证详见 [修复报告](audits/0AC_S3_FIX_REPORT_2026-09-14.md) |
-| 2026-09-14 | RUN-CLI-6aa7bee3（0ac S3①-b 落产品码写点） | F-025…F-030 | —（F-029/F-030 经用户裁决**均不立案**：装置侧偶发遗漏/归因存疑，留痕不立项） | F-027（本轮内纯函数化）/F-029（拉起前 provision 重算）/F-030（主会话补办 manifest + 门禁复绿） | F-025（push 首次 TLS 失败，重试成功）/F-026（PowerShell 不展开 glob）/F-028（裸 CR 注释致显示吞行、行号漂移 13 行）；F-019（WinGet 垫片本体）仍悬空 |
+| 2026-09-14 | RUN-CLI-6aa7bee3（0ac S3①-b 落产品码写点） | F-025…F-028、F-030（F-029 编号留空：装置侧事项，2026-09-14 口径收窄移出台账） | —（均不立案） | F-027（本轮内纯函数化）/F-030（门禁由主会话补办复绿） | F-025（push 首次 TLS 失败，重试成功；外部网络面）/F-026（PowerShell 不展开 glob）/F-028（裸 CR 注释致显示吞行）；F-019（WinGet 垫片本体）仍悬空 |
 | 2026-09-14 | RUN-CLI-6aa77e19（0ac S3 载体重建与发布） | F-021…F-024 | —（本批无新立案） | F-022（Docker daemon 冷机，启动后重试成功）/F-023（载体换装改 rename 绕行） | F-021（Docker Desktop 无 HTTPS 代理、registry-1.docker.io 直连无响应；本地既有镜像支撑，未阻塞）；F-024（模型习惯自报：1 次写入运行时受管路径被拒）；核证与发布详见 [重建记录](audits/0AC_S3_DUAL_PLATFORM_REBUILD_2026-09-14.md) |
