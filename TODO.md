@@ -20,9 +20,9 @@
 
 ## 开放项路由（2026-09-13 同步；勾选与计数权威在 BACKLOG）
 
-- 未闭合总数：**31 项**（BACKLOG 计数口径；逐次计数流水见 [`docs/BACKLOG_AND_PRIORITIES.md`](docs/BACKLOG_AND_PRIORITIES.md) 未闭合计数，TODO 不重复维护）。TODO `[ ]` 明细含父/子项，计数以 BACKLOG 为准。**2026-09-13 跑批待办入账流水**：深审处置 **26 → 29**（P2-15 / 0aa / 0ab），TB 2.1 V4.1 轮 **`GAP-MECH-IMMEDIATE-FEEDBACK` 立项 29 → 30**（0ac，P0，设计定稿待放行实施）；同轮 `GAP-ORZ-HOST-RESOURCE-SNAPSHOT-DROP`（立案并同日修复，代码 `implemented`，载体重建并入 0z S3/S4 面）与 `GAP-ORZ-ADAPTER-FLAG-DRIFT`（`candidate`，仅记录）不动计数。**2026-09-14 狗粮 run 对账批**：F-029（F-002 同形第 2 次）曾立案 0ad 随即**撤案**（用户裁决：装置侧偶发收尾遗漏、非框架内部摩擦，不立案）——计数不变；F-030 `candidate` 仅记录（归因存疑补注见台账）。**2026-09-15 设计排期入账**：0ae 上下文软门与模型参与压缩立项 30 → 31（P1；设计稿 docs/CONTEXT_SOFT_GATE_MODEL_PARTICIPATED_COMPRESSION_DESIGN_2026-09-15.md；排期独立批前置 ①-b 收尾批）。
+- 未闭合总数：**32 项**（BACKLOG 计数口径；逐次计数流水见 [`docs/BACKLOG_AND_PRIORITIES.md`](docs/BACKLOG_AND_PRIORITIES.md) 未闭合计数，TODO 不重复维护）。TODO `[ ]` 明细含父/子项，计数以 BACKLOG 为准。**2026-09-13 跑批待办入账流水**：深审处置 **26 → 29**（P2-15 / 0aa / 0ab），TB 2.1 V4.1 轮 **`GAP-MECH-IMMEDIATE-FEEDBACK` 立项 29 → 30**（0ac，P0，设计定稿待放行实施）；同轮 `GAP-ORZ-HOST-RESOURCE-SNAPSHOT-DROP`（立案并同日修复，代码 `implemented`，载体重建并入 0z S3/S4 面）与 `GAP-ORZ-ADAPTER-FLAG-DRIFT`（`candidate`，仅记录）不动计数。**2026-09-14 狗粮 run 对账批**：F-029（F-002 同形第 2 次）曾立案 0ad 随即**撤案**（用户裁决：装置侧偶发收尾遗漏、非框架内部摩擦，不立案）——计数不变；F-030 `candidate` 仅记录（归因存疑补注见台账）。**2026-09-15 设计排期入账**：0ae 上下文软门与模型参与压缩立项 30 → 31（P1；设计稿 docs/CONTEXT_SOFT_GATE_MODEL_PARTICIPATED_COMPRESSION_DESIGN_2026-09-15.md；排期独立批前置 ①-b 收尾批）。**同日 0af 立项**：资源门拒绝文案明确化 31 → 32（P1，深审摩擦 B 注册；「宿主机内存/储存资源即将耗尽，无法新增派发，请寻找其他方案」按轴标注＋读数）。
 - P0：0b 验证③④（⑤ 89 题独立用户门）；0d 后续 3/4/5 S4 复验；0j W1-R1 S4 复验 + W3-R3 余项 + W4-R4 S5-2 总项；0l ⑥⑦（⑧ TER 见 [`TODO2.md`](TODO2.md)）；0m S3/S4；0n GAP-APPROVAL-PROMPTER（延期，S1 设计定稿前置）；0o T3 批次 W2 chunk3 + T4 批次 L + T5 批次 O + T6 统一收口；0t S4 实机复验待续；0u R4 15 题官方复跑（0t S4 载体，2026-09-10 放行）；0v 检索引擎 SERP + browser_control 分类修正（**2026-09-12 用户裁决闭合入账：S1–S4 全部转 `implemented`，计数 26 → 25；0v-C 修复落码并**闭合**（`ba934af8`：回传落盘 `event_sha256` + 四处调用方线程化 + 全链重放钉子；根因实锤 = 漏斗无痕改写，Run A 4 处断链前序行全为含 URL 的 `model_output`））**；0w TB 4.0 单题摩擦探针（第三跑成立并跑完（2026-09-11））；0y NP1 机械身体集成支线（2026-09-11 用户裁决立项，实施未开始；§14.2 验证载体已裁决引入模拟器（2026-09-12），S1 载体搭建待放行，M0 定版为首个无依赖里程碑）；0z 真机资源安全边界与崩溃收尾（2026-09-12 用户裁决立项，设计完成待放行实施；S1–S4，**不与 0v-C 搭车**）。（0x 初始轮中立问询已于 2026-09-11 S1–S4 全部闭合转 `implemented`，计数 27 → 26；**0v 闭合 26 → 25、0z 立项 25 → 26**；ADR-0010 §14.66 / v1.67。）**本轮新增（2026-09-13）**：0ac 即时结果回报与流式检索（`GAP-MECH-IMMEDIATE-FEEDBACK`，设计定稿待放行实施，S1 探针为第一门）；`GAP-ORZ-HOST-RESOURCE-SNAPSHOT-DROP` 载体重建待放行。
-- P1：FUS-COMPONENT-REGISTER 组件审计；GAP-WINDOWS-EVIDENCE 三项；IMPL-DEEPSEEK-TRANSPORT live 晋级证据；ORZ-SESSION-CONTEXT-MONITOR 四项；0aa 历史卷 journal 全量 verifier 复扫；0ab 账本一致性与瘦身机械化；0ae 上下文软门与模型参与压缩（注意力阶梯+plan 问询+黑板写入面）。
+- P1：FUS-COMPONENT-REGISTER 组件审计；GAP-WINDOWS-EVIDENCE 三项；IMPL-DEEPSEEK-TRANSPORT live 晋级证据；ORZ-SESSION-CONTEXT-MONITOR 四项；0aa 历史卷 journal 全量 verifier 复扫；0ab 账本一致性与瘦身机械化；0ae 上下文软门与模型参与压缩（注意力阶梯+plan 问询+黑板写入面）；0af 资源门拒绝文案明确化。
 - P2：IMPL-CONTROL-FABRIC Slice 3/4；OPS-PROTOCOL 裁剪与接线裁决；P2-11 余项（PULL 自描述 S3/S4、retryable 分类位、依赖图 S3/S4）；P2-12 S4 复验；P2-13 B4；P2-14 S3/S4；P2-15 EVALUATION-CORPUS-FREEZE（S1/S2 完成；附属 `GAP-EVAL-RESULT-SCHEMA-DRIFT` 已修复）。
 - P3：EVIDENCE-LOCAL-BROWSER、GATE-CHAIN、observed-scope 枚举、V11-IMPL-003、V11-IMPL-007、orz-host flaky。
 - 审计登记边界（条件触发，不占当前优先级）：orz-host 可选后端、headless 计划信号、23 工具分区 journals、B-1 后续、ORZ-RECOVERY-TOOL-OUTCOME、ORZ-STAGNATION-TOOL-SIGNAL。
@@ -690,7 +690,11 @@ GLM F2 处置转排期（2026-09-06 用户裁决）：`orz-host/src/approval.rs`
 - [ ] D4 折叠桥增补（自编辑清单＋run 起始基线＋编辑指纹，随批先落）。
 - 排期：独立批，前置＝0ac ①-b 收尾批（不与 ①-b 合批）。入口：[设计稿](docs/CONTEXT_SOFT_GATE_MODEL_PARTICIPATED_COMPRESSION_DESIGN_2026-09-15.md) / [深审](docs/audits/0AC_S3B_RUN_DEEP_REVIEW_2026-09-15.md) / [BACKLOG 0ae](docs/BACKLOG_AND_PRIORITIES.md)。
 
-### P0-B FUS-RETRIEVAL-MECH（`implemented`；批次 1-6 全部闭合 2026-08-14，保留供核对）
+### 0af 资源门拒绝文案明确化（P1；2026-09-15 立案，深审摩擦 B 注册）
+
+- [ ] `orz-host` resource_gate 拦截信封原因文案改为「宿主机内存/储存资源即将耗尽，无法新增派发，请寻找其他方案」（按实际耗尽轴标注内存/储存＋readings 随附）；同步涉及文案断言的测试/fixture。边界：不改 fail-closed 判定逻辑与阈值。入口：[深审 §5-B](docs/audits/0AC_S3B_RUN_DEEP_REVIEW_2026-09-15.md) / [BACKLOG 0af](docs/BACKLOG_AND_PRIORITIES.md)。
+
+### P0-B FUS-RETRIEVAL-MECH### P0-B FUS-RETRIEVAL-MECH（`implemented`；批次 1-6 全部闭合 2026-08-14，保留供核对）
 
 - [x] 全部闭合：B-1 citations 结构化透传 / 步骤 2 web_fetch 候选计数门禁（cap=8）/ 步骤 3 机械预筛（canonical 去重 + 失败形态剔除 + tier/weight）/ 步骤 4 browser_read 模式扩展 + 计数域复用 / 步骤 5 输出级引用校验器 / 步骤 6 提示词缩短。入口：[检索机械控制设计](docs/RETRIEVAL_MECHANICAL_CONTROLS_DESIGN_2026-08-13.md) / 各步骤实施审计 / BACKLOG 0B。
 - 注：DC 剩余两信号（`same_module_no_evidence` / `key_surface_unexamined`）已转 P3 遗留小项，2026-08-31 随 P2-11 DC 清理退役。
