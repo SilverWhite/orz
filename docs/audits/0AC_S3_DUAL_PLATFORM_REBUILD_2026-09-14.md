@@ -145,7 +145,8 @@
   `evidence-0ac-s3-20260914\gh-v0.5.1-download\`，重哈希
   `49DF6CEB…CDF0` / `F7E8274C…432F` 与 staging 资产**三方一致**。
 - **账本回写（C2）**：本审计 + 索引 v3.20 + TODO/BACKLOG +
-  摩擦台账 F-021…F-023 同批提交推送——**C2 = `8c7529ee`**（6 files
+  摩擦台账 F-021…F-023 同批提交推送（收尾段自我报告另追加
+  **F-024**，见 §8）——**C2 = `8c7529ee`**（6 files
   +316/−5，含本审计与 `releases/orz-0.5.1-x86_64/README.md` 新建）；
   推送回执 `c4491629..8c7529ee main -> main`（`origin/main` 头 = C2）；
   门禁 `python scripts/check_repository.py` → `"error_count": 0` /
@@ -176,7 +177,7 @@
   G3 状态不变；⑤⑥⑦ 未落。
 - TODO L652 S4 条目载体口径已更新为 0.5.1（见账本回写）。
 
-## 8. 摩擦（台账同步：F-021…F-023）
+## 8. 摩擦（台账同步：F-021…F-024）
 
 - **F-021**（装置侧·外部网络面，观察）：`docker pull rust:1.97-slim`
   失败——**Docker Desktop 无 HTTPS 代理、直连 `registry-1.docker.io:443`
@@ -192,6 +193,10 @@
   持旧镜像**致原位替换不可行；swap 记录明示
   `rename old to *.0.5.0-bak -> move tmp into place`（rename 绕行成功，
   post-swap `MATCH=True` ×3）。
+- **F-024**（模型习惯·自报，收尾段）：收尾核证开始时对运行时会话卷
+  `D:\CLI\.gsa\ledger\current.md` 发起 1 次编辑，被工具拒绝（原文
+  `inside the runtime-owned .gsa session volume, which is not
+  model-writable`）；该调用零写入、无内容变更，**代价 1 次工具调用**。
 
 > **本批机械核证留痕（RUN-CLI-6aa77e19，重建与发布段实做输出摘录）**
 > - `docker pull rust:1.97-slim` → `Error response from daemon: failed to

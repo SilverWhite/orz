@@ -128,6 +128,9 @@
 ### F-023 | 2026-09-14 | RUN-CLI-6aa77e19 | 装置侧（文件占用：载体目录内运行中进程持旧镜像）| fixed（绕行）
 **载体内原位替换不可行**：`D:\tb-eval\orz-windows` 内运行中宿主进程持有旧 `orz.exe` / `orz-signer.exe` 映像，原位覆盖路径不可用；实际换装记录为 `fresh-copy-to-tmp -> rename old to *.0.5.0-bak -> move tmp into place`（`windows-carrier-sync-0.5.1.txt` 的 `swap method=` 行）。**结果**：post-swap 三件与 staging 逐对 `MATCH=True` ×3；留档 `orz.exe.0.5.0-bak` / `orz-signer.exe.0.5.0-bak` 两件实物。**代价**：换装由 1 步变 3 步（多 1 次 rename + 1 次留档），无额外失败重试。
 
+### F-024 | 2026-09-14 | RUN-CLI-6aa77e19 | 模型习惯（自报：写运行时受管路径）| 登记（无修复动作）
+**收尾核证开始时对运行时会话卷发起 1 次编辑**：目标 `D:\CLI\.gsa\ledger\current.md`，`search_replace` 被拒，工具原文 `Error: D:\CLI\.gsa\ledger\current.md is inside the runtime-owned .gsa session volume, which is not model-writable.`。**事实**：该调用零写入、目标文件内容与 mtime 未变（其后读取正常）；**代价**：1 次工具调用。**面向澄清（事实）**：本轮自报写入面是本台账 `docs/FRICTION_LEDGER.md`；`.gsa/ledger/current.md` 是历史折叠存档（只读）。提交与推送随本批账本处理（F-021…F-024 同批，回执见 `git log`）。
+
 > **本批机械核证留痕（RUN-CLI-6aa77e19，收尾核证段实做输出摘录）**
 > - `gh release view v0.5.1 --repo SilverWhite/CLI --json tagName,name,isDraft,isPrerelease,publishedAt,url,assets --jq '{…}'` → `{"assets":[{"digest":"sha256:49df6cebbce12375cb2969f2bed03dfdfc8f4b02f5b89764f6475fb05ce7cdf0","name":"orz-0.5.1-linux-x86_64.tar.gz","size":34987981,"state":"uploaded"},{"digest":"sha256:f7e8274c706c9b0cf202ccc126d220e4719097bf98847fe3478c6b368689432f","name":"orz-0.5.1-windows-x86_64.zip","size":26472460,"state":"uploaded"}],"draft":false,"name":"orz 0.5.1（0ac S3 载体重建）","pre":false,"published":"2026-09-14T07:32:43Z","tag":"v0.5.1","url":"https://github.com/SilverWhite/CLI/releases/tag/v0.5.1"}`。
 > - `git -C D:\CLI\orz ls-remote cli refs/heads/feat/fusion-architecture` → `dbb42b1d0ac5be56e68aa4e5ca307ff168f465a6`；`git -C D:\CLI\orz rev-parse HEAD` → 同值（本地 = 远端）。`git -C D:\CLI\orz log --oneline -3` → `dbb42b1d chore(release): 版本 bump 0.5.0 → 0.5.1…` / `96d2b263 fix(0ac S3): 审记 G1/G2 修复…` / `4c892951 0ac S3①/②…`。
@@ -145,4 +148,4 @@
 | 2026-09-13 | RUN-CLI-6aa6bd3f（0ac S3② 裁决(a) 落地 / S3① 生产者面） | F-011…F-013 | F-013（根因待定，待立案） | F-011/F-012 | F-007 已按裁决(a) 翻宽口径落地；F-008 第 4 次复现未修 |
 | 2026-09-14 | RUN-CLI-6aa6c9b3（0ac S3 实现审记） | F-014…F-015 | F-014（G1–G3 修复批次划分待裁决）/F-015（F-008 同族，根因待定） | — | F-008 第 5 次复现；G1–G3 详见 [0ac S3 审记](audits/0AC_S3_IMPLEMENTATION_AUDIT_2026-09-14.md) |
 | 2026-09-14 | RUN-CLI-6aa6d379（0ac S3 修复批） | F-016…F-020 | F-017（S3① 投递侧未落；拆子阶段待裁决） | F-016（绕行）/F-018/F-020（收尾补齐）；F-012、F-014 的 G1/G2 同批翻 fixed（见其补注） | F-019（WinGet 垫片本体仍悬空）；F-008/013/015 根因候选；G3 与核证详见 [修复报告](audits/0AC_S3_FIX_REPORT_2026-09-14.md) |
-| 2026-09-14 | RUN-CLI-6aa77e19（0ac S3 载体重建与发布） | F-021…F-023 | —（本批无新立案） | F-022（Docker daemon 冷机，启动后重试成功）/F-023（载体换装改 rename 绕行） | F-021（Docker Desktop 无 HTTPS 代理、registry-1.docker.io 直连无响应；本地既有镜像支撑，未阻塞）；核证与发布详见 [重建记录](audits/0AC_S3_DUAL_PLATFORM_REBUILD_2026-09-14.md) |
+| 2026-09-14 | RUN-CLI-6aa77e19（0ac S3 载体重建与发布） | F-021…F-024 | —（本批无新立案） | F-022（Docker daemon 冷机，启动后重试成功）/F-023（载体换装改 rename 绕行） | F-021（Docker Desktop 无 HTTPS 代理、registry-1.docker.io 直连无响应；本地既有镜像支撑，未阻塞）；F-024（模型习惯自报：1 次写入运行时受管路径被拒）；核证与发布详见 [重建记录](audits/0AC_S3_DUAL_PLATFORM_REBUILD_2026-09-14.md) |
