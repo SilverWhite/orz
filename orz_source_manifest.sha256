@@ -1112,7 +1112,7 @@ cf317beb373f369ea47e677f6497170adf34821a3c3246cdc17eb22bf5588137  crates/orz-loo
 aa6d1a6c4c73dea982c0205933a5732b010de7a3b34679e39bdc2e257b23105e  crates/orz-loop/src/acaf.rs
 89685879f66f71da068f8d2ae597a6106d0574ef8886a02855b77c9ec3006ba1  crates/orz-loop/src/acaf_flow.rs
 44ae8205a3e942bb29daae66e733fa558a41a3f8b8acba35e6fde09caac74297  crates/orz-loop/src/action_ledger.rs
-bf4f3afe5956b1a46cd8e4e3ea57a2de068f6dd52ded08d5cea3137e71e09d68  crates/orz-loop/src/agent_loop.rs
+553aa21c96ff773e4a71fce7fb11977cd2e49dcefdc827aa9866322d54e2ed9f  crates/orz-loop/src/agent_loop.rs
 6ede834f3c0a770396ac3a478e9288eef455329739c1c4243d241188b96cdf0f  crates/orz-loop/src/agents/main.rs
 48909de972714ddad9370cd5bc794ef3c26d10a24f1d8a562265900d4234dd34  crates/orz-loop/src/agents/mod.rs
 59f39f773fc6d8e2e0451dea964c1b8ab0cfaef92afd16d6a166bab5bcb0d7f9  crates/orz-loop/src/agents/retrieval.rs

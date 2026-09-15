@@ -211,6 +211,9 @@
 | 0AE-C7（P2） | 压缩 NoOp 不再 rearm（rhythm 路径逐轮重试机械压缩，不停摆） |
 | 0AE-C8/C9/C10（P3） | section 错误文案转义修正；`partition_revisions` 补 notes 徽章；plan-gate 轮面补 `blackboard_write` |
 | 顺手项 | C13 其余成串空格（首轮引导/N 轮提醒/窗口块文案）；`immediate_delivery.rs` 注释 0af→0ag 更正；controller 分区序文档补 notes |
+| 窄边沿追加（同日修复二批，orz `1f303cf4`；用户裁定「触发面窄也得修」） | §10 原登记观察「窗口轮落穿后同迭代恰遇 budget 耗尽收尾 break（D-8）或 IPG block 时收口状态随循环终止丢弃」——收口逻辑抽为统一出口 `finalize_model_compression_close`（`take` 幂等），接入四点：下一轮 loop-top / budget 收尾 break 前 / IPG block break 前 / run 尾安全网；e2e 钉 `compression_window_close_survives_budget_exhaustion_break`（break 前落地＋`model_not_participated`＋`writes_now=0`）。`?` Err 传播路径仍丢弃＝0AC-A6 同类，维持挂账 |
+
+**修复批门禁汇总**：首批（`183fbb08`）orz-loop 796/0/3；追加批（`1f303cf4`）orz-loop **797**/0/3（含新钉）、fmt 干净、agent_loop.rs clippy 零告警（全 crate 65 条均在未触碰区域、既有）；manifest 随批重算。
 
 **门禁（修复批合并态）**：orz-loop 796/0/3、orz-tools 2884/0/6（首跑 1 例 flaky 未留名，全量复跑×2 绿＋local_segmented 定向 5 连绿）、orz-host 324/0/5 单线程、orz-assurance 226/0、Python 镜像（mechanical）11 通过、fmt 干净、clippy 零新增。
 
@@ -223,4 +226,4 @@
 - RET-B1 完整解析器（DDG/Google）、RET-B5–B10：S4 面（真机样本前置）。
 - LED-D2（slider 设计稿入库）：归邻线处置，未代提交。
 - 0af（资源门文案）实施：独立 pending 项按其立项排期，未并入本批；其实施注意三条已补进 §6 路由条目。
-- 已登记新观察：窗口轮落穿后若同轮恰命中 budget-exhausted/IPG 终止路径，`model_compression_close` 随 loop 终止丢弃（收口审计事件不落账；触发面极窄，920K 窗口×恰耗尽）。「blackboard_write」名字在 controller 注册处与新过滤函数仍为两份字面副本（已注释互指）。
+- 已登记新观察（→ **已修复**，见上表窄边沿行）：窗口轮落穿后若同轮恰命中 budget-exhausted/IPG 终止路径，`model_compression_close` 随 loop 终止丢弃、收口审计事件不落账——修复批追加（orz `1f303cf4`）以统一收口出口闭合；残余面仅剩 `?` Err 传播路径（0AC-A6 同类挂账）。「blackboard_write」名字在 controller 注册处与新过滤函数仍为两份字面副本（已注释互指）。
