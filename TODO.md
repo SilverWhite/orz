@@ -692,7 +692,7 @@ GLM F2 处置转排期（2026-09-06 用户裁决）：`orz-host/src/approval.rs`
 - [x] D4 折叠桥增补——`run_context_block`（基线 `capture_run_baseline` + 自编辑清单 + 最近 5 指纹）随推进冻结，前缀字节稳定保持。
 - [ ] S4 型 A/B 判据（设计 §8 八项）——实机长 run 验证，待放行。
 - [x] **审查修复批（2026-09-15，orz `183fbb08`；[审计件](docs/audits/QUAD_BATCH_DEEP_REVIEW_2026-09-15.md)）**：D3 压缩窗口参与修复（窗口轮仅 `blackboard_write` 面＋派发＋延迟收口，审查 P0 闭合）；`mechanical_audit_update` 契约合规（schema kind 枚举 3→6＋Python 镜像＋常量单一源＋逐字钉子）；plan_write `validation` 形状；D4 非 git 降级；阶梯水位；压缩 NoOp 不 rearm；plan-gate 轮面补 `blackboard_write`。
-- **死面披露（审查 0AE-C4，待裁决）**：阶梯量尺＝折叠后实测 prompt，机械 fold@128K 未动 ⇒ D2≥160K 各级与 D3 920K 窗口默认配置下常态不可达；激活须同批裁决 fold 触发线上调/退役（与 slider 设计稿 §3.4 前置项同源）。
+- **死面披露（审查 0AE-C4）**：阶梯量尺＝折叠后实测 prompt，机械 fold@128K 未动 ⇒ D2≥160K 各级与 D3 920K 窗口默认配置下常态不可达。**用户裁决（2026-09-15）：0ae 暂不动、后续还要整体修改，死面维持登记不激活；slider 由邻线补全中**（细节见审计件 §10/§11）。
 - 排期：独立批，前置＝0ac ①-b 收尾批（不与 ①-b 合批）。入口：[设计稿](docs/CONTEXT_SOFT_GATE_MODEL_PARTICIPATED_COMPRESSION_DESIGN_2026-09-15.md) / [深审](docs/audits/0AC_S3B_RUN_DEEP_REVIEW_2026-09-15.md) / [BACKLOG 0ae](docs/BACKLOG_AND_PRIORITIES.md)。
 
 ### 0ag 契约面机械对账（P2；2026-09-15 立项并当日闭合，orz `8512fc71`；ID 冲突更正：0af 归邻线资源门项〔先占〕，本项改名 0ag，计数 32 净不变）
