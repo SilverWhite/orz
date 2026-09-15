@@ -131,12 +131,40 @@ orz-assurance / orz-tools，均不依赖 orz-tui），且 0.5.1 载体先于 `f0
 - **无墙钟**：`ORZ_MAX_WALLCLOCK=0` 显式置 0（`parse_max_wallclock`：0 =
   unbounded；兼中和宿主可能的常驻值）。stall 哨兵维持默认（生成期输出健康
   哨兵，非墙钟）。
-- 启动形态：`cd <workspace> && ORZ_MAX_WALLCLOCK=0 orz.exe -p "$(cat
-  task.txt)" --real --allow-write --allow-shell --allow-network > run.log 2>&1`
-  （凭据＝Windows 凭据管理器 `orz-deepseek/agent` 既有通道，实测在册；
-  ACAF 无 env＝影子模式，与既往狗粮 run 一致）。
+- 启动形态（最终生效版）：
+  `cd <workspace> && ORZ_MAX_WALLCLOCK=0 ORZ_ACAF_MANIFEST=D:\tb-eval\orz-windows\acaf\signer-manifest.json ORZ_ACAF_KEYSTORE=D:\tb-eval\orz-windows\acaf\keystore ORZ_ACAF_BINARY=D:\tb-eval\orz-windows\orz-signer.exe orz.exe -p "$(cat task.txt)" --real --allow-write --allow-shell --allow-network > run.log 2>&1`
+  （ACAF 走 `orz-acaf-provision` 现场重配，工具直出 launch env；signer
+  `binary_sha256=5b363aca…` 恰为 0.5.2 载体值）。
+- **run_id＝`RUN-CLI-6aa999d6`**（2026-09-16 03:17:42 UTC+8 启动）；journal＝
+  `D:\tb-eval\dogfood-0ai-20260916\cli\.gsa\runs\RUN-CLI-6aa999d6\events.jsonl`。
+  **启动 +2 min 健康快照**：82 事件（run_started/prompt_submitted 齐、
+  model_output 7、tool_started/completed 12/11、mechanical_audit_update 10、
+  permission 12/12）；**ACAF fail-closed 实活——control_ticket_issued /
+  consumed 各 5**；资源门 watch 档挂载（commit 9.89 GiB ceilings）。
+- **启动摩擦登记（编号留台账，全部亲手取证）**：
+  1. **信任库定位陷阱（主因，4 次启动失败）**：release 二进制按 L1 写入位
+     裁决在 main 顶部把 `$GROK_HOME` 重定向到**安装目录**
+     `D:\tb-eval\orz-windows\grok-home`（`redirect_grok_home`：env 未设 →
+     install dir 可写即认领），信任库实际＝
+     `orz-windows\grok-home\trusted_folders.toml`，**不是** `~/.grok/`；
+     headless `-p` 的失败输出只给 `workspace not trusted: <cwd>`，不带库路
+     径。处置＝向真实库追加工作区条目后一次通过。判定链（先 store 后
+     repo-configs）与 fail-closed 语义本身工作正常。
+  2. **`~/.grok/trusted_folders.toml` 既有重复表头（旁带发现）**：该文件存在
+     `[folders.'D:\CLI']` 双表头（decided_at 1785560354/1789194414），任何
+     严格 TOML 解析器报错（本机 python tomllib 实证）；orz 侧
+     `TrustStore::read_doc` 若读到会在 warn 后整库判空。本机 release 栈因
+     安装目录重定向不读该文件，故为休眠缺陷；已在调试后原样还原该文件、
+     不动其历史形态。
+  3. **ACAF headless 装配摩擦**：非 D:\CLI 工作区 headless 启动若不携带
+     `ORZ_ACAF_MANIFEST/KEYSTORE(/BINARY)` 三 env，fail-closed 生产门
+     （默认开）拒绝起跑；provision 工具输出即启动 env，但「先 provision 后
+     转写 env」在既往狗粮启动惯例文档中未登记。
+  4. **工作区信任门 × 隔离工作区首用**：既往狗粮 run 全部以 D:\CLI 为 cwd
+     （信任条目早已在册），本批为隔离工作区首用，以上 1/3 才首次暴露。
+     建议随 0ai 收尾批评估「dogfood 启动器脚本化」（env + 信任 + 载体路径
+     一次装配，考核测试可复跑）。
 - **考核口径（2026-09-16 用户裁决，不动）**：单轮/少样本如实标注、不作架构
   结论；判据读数（四件套机械读数＋驱逐增幅＋存档三键＋本地增长）与 0ai 产
   出（S1 切分图 → S2 机械搬移 → S3 回归核验）**待 run 完成后收口**；产出暂
-  不提交/推送，经 S3 复核后按正常批次合回主仓。run_id 与 journal 路径落工作
-  区 `.gsa/runs/`，随收尾批登记。
+  不提交/推送，经 S3 复核后按正常批次合回主仓。

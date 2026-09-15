@@ -926,7 +926,7 @@ GLM F2 处置转排期（2026-09-06 用户裁决）：`orz-host/src/approval.rs`
 - 定案（工程化任务，非研究任务）：沿 `AUTH-CONTROLLER-SPLIT` 先例做 **`pub(crate)` 机械拆分**——**S1 切分图**（按职责域定模块边界与迁移清单）→ **S2 机械搬移**（行为不变：事件序列与 journal 哈希链不动、可见性收敛、无逻辑改写）→ **S3 回归核验**（orz-loop／orz-host／orz-assurance ＋ fmt/clippy ＋ 门禁）。验收＝**单文件 ≤10,000 行 ＋ 职责域单一 ＋ 行为不变**。
 - **考核测试定位（用户 2026-09-16 裁决）**：本项同时是**狗粮线修复的考核测试任务**——以真实工程任务考察 0ah S1（常驻滑窗＋压缩双轨＋500K/900K 提醒＋950K 兜底）在长会话下的实际表现。**不做严格 A/B 采样**（工程化任务不做研究式对照）；四件套读数与其余判据按实跑可得如实给出并显式标注单轮/少样本，**不作架构结论**（「单 run 不支撑架构结论」纪律仍适用）。执行者＝orz（隔离工作区＋题面 `task.txt`）；产出经 S3 复核后按正常批次合回主仓。
 - 前置（已完成 2026-09-16）：**载体重建 0.5.2**——源冻结基线 orz `a580eb08`（含 0ah S1 `61982a56`），双平台三件套＋载体换装＋manifest 重算＋门禁 `valid: true`；`GAP-ORZ-HOST-RESOURCE-SNAPSHOT-DROP`（`ea777918` 实测为基线祖先）随批闭合「重建待放行」。重建拦下 orz-tui 非穷尽 match 构建断裂（`a580eb08` 机械修复）。入口：[`052 重建与放行记录`](audits/052_CARRIER_REBUILD_AND_0AI_RELEASE_2026-09-16.md)。
-- **狗粮考核测试放行（2026-09-16 用户指示）**：隔离工作区 `D:\tb-eval\dogfood-0ai-20260916`（冻结基线 `a580eb08` 整链克隆）＋题面原文 `task.txt`＋`ORZ_MAX_WALLCLOCK=0` 无墙钟单轮 run（0.5.2 载体、`--real --allow-write --allow-shell --allow-network`）；产出暂不提交/推送，run_id 与判据读数待 run 完成收尾批登记。
+- **狗粮考核测试放行（2026-09-16 用户指示）**：隔离工作区 `D:\tb-eval\dogfood-0ai-20260916`（冻结基线 `a580eb08` 整链克隆）＋题面原文 `task.txt`＋`ORZ_MAX_WALLCLOCK=0` 无墙钟单轮 run（0.5.2 载体、`--real --allow-write --allow-shell --allow-network`＋ACAF fail-closed 三 env 实装配）；**run_id＝`RUN-CLI-6aa999d6`**（ACAF 票据实活，启动摩擦四项登记于重建记录 §6）；产出暂不提交/推送，判据读数待 run 完成收尾批登记。
 - 入口：[`HEAVY_FILE_SPLIT_SURVEY`](audits/HEAVY_FILE_SPLIT_SURVEY_2026-09-13.md) / [`orz-loop/src/host_exec.rs`](../orz/crates/orz-loop/src/host_exec.rs) / TODO P1-0ai / 索引 `GAP-HEAVY-FILE-SPLIT`。
 - 关键词：重文件拆分、host_exec、狗粮考核测试、S1 切分图、机械搬移、行为不变、单文件 ≤10,000、0ai。
 
