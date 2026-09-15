@@ -170,6 +170,14 @@ pub fn run_event_to_tui(event: &RunEvent) -> TuiEvent {
         EventType::BudgetCueInjected => TuiEvent::Unknown {
             event_type: event.event_type.to_string(),
         },
+        // 0ac S3①-b (2026-09-15): retrieval delivery facts — journal-only
+        // neutral events (no TUI surface); degrade to Unknown for replay
+        // display (same posture as BudgetCueInjected above).
+        EventType::RetrievalProgress
+        | EventType::RetrievalResultSegment
+        | EventType::ResultDelivered => TuiEvent::Unknown {
+            event_type: event.event_type.to_string(),
+        },
         EventType::OrientationCheckpoint => TuiEvent::OrientationCheckpoint {
             checkpoint_id: get_str(p, "checkpoint_id"),
             trigger: get_str(p, "trigger"),
