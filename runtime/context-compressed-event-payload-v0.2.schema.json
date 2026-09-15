@@ -7,7 +7,7 @@
   "additionalProperties": false,
   "properties": {
     "trigger_tokens": {
-      "description": "Measured prompt tokens of the previous (collapsed) model round — the value that crossed the trigger.",
+      "description": "Measured prompt tokens of the previous (collapsed) model round — the value that crossed the trigger. v7 (S1 修订批): the model_summary path reports the ACTUAL-context estimate (全量会话估算 chars/2) instead, because the semantic track is triggered by the model's own summary block (model_selected) or the actual-context 900K window (context_scale_window), not by a prompt-token crossing.",
       "type": "integer",
       "minimum": 0
     },
@@ -42,11 +42,19 @@
       "minimum": 0
     },
     "mode": {
-      "enum": ["template_summary", "mechanical"]
+      "description": "Compactation carrier. \"mechanical\" = the structured track (2026-08-18 B 定案: zero model calls — tools/commands/results are pointer-ized and drained, ADR-0010 §14.29). \"template_summary\" = historical journals only. \"model_summary\" = v7 semantic track (动态上下文滑块 S1 修订批, 2026-09-15, 设计 §3.4.1 DP-14/DP-17): the model produced a structured semantic summary block ([SEMANTIC_SUMMARY …]) and it replaced the region outside the slider; the mechanical track still drained the structured content.",
+      "enum": ["template_summary", "mechanical", "model_summary"]
     },
     "reason": {
-      "description": "Trigger class: rhythm = measured tokens crossed the 160K ordinary trigger with the 2-round cooldown met; fallback = the 200K window guard bypassed the cooldown; session_end = the end-of-session compaction that pins the summary into the sidecar before write-back.",
-      "enum": ["rhythm", "fallback", "session_end"]
+      "description": "Trigger class: rhythm = measured tokens crossed the H+buffer ordinary trigger with the 2-round cooldown met（动态上下文滑块 S1 起：H＝滑窗上限、缓冲默认 32K ⇒ 保守档 192K；滑块把视图压在上限内 ⇒ 该线退化为「驱逐停滞兜底」）; fallback = the view-scale window guard (safety_tokens) bypassed the cooldown（S1 起常态不可达，保留为 S2 展开膨胀时的视图面兜底）; context_scale = the ACTUAL-context hard guard (全量会话估算 ≥ ORZ_CONTEXT_SCALE_HARD_TOKENS，默认 950K，实际上下文刻度) forced one compaction — **also covers the fail-soft degradation** when the compression-window upload would exceed ORZ_CONTEXT_SCALE_WINDOW_CAP_TOKENS（默认 1.10M；审查修正批 2026-09-15）：窗口**不开**，同迭代改走机械强制压缩，事实经 `mechanical_audit_update{key=context_scale:<档位>}` 的 `anomaly=window_upload_over_cap` 如实落账（用户 2026-09-15 裁定：950K 档压不下线时改走「**硬截留＋明确告知**」——滑块之外清零并注入「上一轮上下文压缩失败，已机械截留」，事实记 `mechanical_audit_update{key=context_scale:hard_950k_intercepted}` 的 `anomaly=hard_context_compaction_failed_*`，该档不再强制开窗）; context_scale_window = the model-participated compression window closed (最高刻度 900K 提醒开窗后 ≤3 轮) — with mode model_summary the model's semantic summary replaced the region, with mode mechanical the fallback compaction ran（S1 前该路径写作 `attention_920k_window`——不在闭枚举内，属契约漂移，S1 批按契约同步）; model_selected = the model emitted a [SEMANTIC_SUMMARY] block OUTSIDE a window（500K 纯提醒后的自选压缩，v7 DP-14）; session_end = the end-of-session compaction that pins the summary into the sidecar before write-back.",
+      "enum": [
+        "rhythm",
+        "fallback",
+        "context_scale",
+        "context_scale_window",
+        "model_selected",
+        "session_end"
+      ]
     },
     "guard_failed": {
       "description": "Reduction-guard retry exhausted: the guard was evaluated but not satisfiable on three consecutive trigger rounds, so one compaction was forced without the guard (2026-08-14 review fix). Absent/omitted on older v0.2 payloads; the producer always writes it (false unless forced).",
@@ -82,7 +90,7 @@
       "type": "boolean"
     },
     "retained_rounds": {
-      "description": "Recent tail rounds configured for verbatim retention after the summary (2 normally). The retired termination state widened it by 1 — historical template_summary journals only (2026-08-18 B 定案 removed the widening along with the LLM slots).",
+      "description": "Recent tail rounds configured for verbatim retention after the summary (2 normally). The retired termination state widened it by 1 — historical template_summary journals only (2026-08-18 B 定案 removed the widening along with the LLM slots). 审查修正批 (2026-09-15): on the **model_summary** path the retention boundary is the slider resident band, not the drain tail — the producer reports the number of complete rounds still present in `messages` after the replacement (the mechanical path keeps reporting the configured tail).",
       "type": "integer",
       "minimum": 0
     }

@@ -4649,6 +4649,43 @@ class ContextCompressedV02RuleTests(unittest.TestCase):
         errors = validate_journal_text(journal)
         self.assertIn("not one of", " | ".join(errors))
 
+    # v7（S1 修订批，2026-09-15，设计 §3.4.1 DP-14/DP-17）：语义轨载体
+    # `mode=model_summary`（模型产出摘要替换被压区）与模型自选 reason
+    # `model_selected` 进闭枚举；`model_summary` 与 `mechanical` 同为机械
+    # 收口路径 ⇒ 不得 `summary_incomplete`。
+    def test_model_summary_mode_validates(self) -> None:
+        journal = _v02_journal(
+            [_context_compressed(mode="model_summary", reason="model_selected")]
+        )
+        self.assertEqual(validate_journal_text(journal), [])
+
+    def test_model_summary_on_window_close_validates(self) -> None:
+        journal = _v02_journal(
+            [_context_compressed(mode="model_summary", reason="context_scale_window")]
+        )
+        self.assertEqual(validate_journal_text(journal), [])
+
+    def test_model_summary_never_incomplete(self) -> None:
+        journal = _v02_journal(
+            [
+                _context_compressed(
+                    mode="model_summary",
+                    reason="model_selected",
+                    summary_incomplete=True,
+                    summary_id=None,
+                    summary_digest=None,
+                    summary_path=None,
+                )
+            ]
+        )
+        errors = validate_journal_text(journal)
+        self.assertIn("must never be", " | ".join(errors))
+
+    def test_unknown_mode_rejected(self) -> None:
+        journal = _v02_journal([_context_compressed(mode="shadow")])
+        errors = validate_journal_text(journal)
+        self.assertIn("mode", " | ".join(errors))
+
 
 _H1 = "1" * 64
 _H2 = "2" * 64

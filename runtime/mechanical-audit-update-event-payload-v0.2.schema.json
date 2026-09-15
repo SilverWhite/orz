@@ -2,14 +2,14 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://local.scientific-assurance.invalid/schema/mechanical-audit-update-event-payload-v0.2.schema.json",
   "title": "mechanical_audit_update event payload v0.2 (MECHANICAL-AUDIT-LAYER)",
-  "description": "ADR-0010 §14.39 / MECHANICAL_AUDIT_LAYER_DESIGN_2026-08-24 §2.4: 机械审查层轻量事件留痕——每次对象键覆盖写（含 step/契约类检查）以一条记录留痕，供回放与验证；报告块本身不进归档（与 counterexample 注入同语义）。kind 为写入来源（tool_result=工具结果分类、plan_gate=首轮计划门结果、budget=轮末预算覆盖写、attention_ladder=注意力阶梯触发与压缩窗口开启、model_compression=模型参与压缩窗口收口、plan_write_guidance=首轮黑板写入引导与 N 轮一次性补救提醒）；payload 为审查表条目 {key, round, summary, anomaly}——key 为对象键（file:<path> / cmd:<call_id> / plan / budget / retrieval:<n> / attention_ladder:<K>k / model_compression / plan_write_guidance / plan_write_reminder）、round 为写入时的轮计数、summary 为机械事实摘要（无建议、无引导）、anomaly 为异常事实（exit code/超时/锚点拒单/候选超限/模型未参与压缩）或 null。主车道专属：检索子代理车道不产生本事件。",
+  "description": "ADR-0010 §14.39 / MECHANICAL_AUDIT_LAYER_DESIGN_2026-08-24 §2.4: 机械审查层轻量事件留痕——每次对象键覆盖写（含 step/契约类检查）以一条记录留痕，供回放与验证；报告块本身不进归档（与 counterexample 注入同语义）。kind 为写入来源（tool_result=工具结果分类、plan_gate=首轮计划门结果、budget=轮末预算覆盖写、attention_ladder=**已退役**的注意力阶梯触发与压缩窗口开启〔动态上下文滑块 S1 起生产零写入，保留仅供历史 journal 回放校验〕、context_scale=实际上下文刻度提醒与压缩开窗〔500K/900K ＋ 首次驱逐固化提醒〕、model_compression=模型参与压缩窗口收口、plan_write_guidance=首轮黑板写入引导与 N 轮一次性补救提醒）；payload 为审查表条目 {key, round, summary, anomaly}——key 为对象键（file:<path> / cmd:<call_id> / plan / budget / retrieval:<n> / attention_ladder:<K>k〔历史〕 / context_scale:<500k|900k|first_fold|hard_950k_intercepted> / model_compression / plan_write_guidance / plan_write_reminder）、round 为写入时的轮计数、summary 为机械事实摘要（无建议、无引导）、anomaly 为异常事实（exit code/超时/锚点拒单/候选超限/模型未参与压缩/窗口上传越上限 window_upload_over_cap〔审查修正批 2026-09-15〕/950K 失败截留 hard_context_compaction_failed_truncated／hard_context_compaction_failed_result_pointerized／hard_context_compaction_failed_slider_bound〔用户 2026-09-15 裁定：压不动 ⇒ 硬截留＋明确告知，不再停手／不开窗；其中 _result_pointerized ＝ 窗口内超大工具结果正文被换成「头部＋回读指针」（summary 另带 dropped_rounds=／pointerized_results=／freed_tokens=）〕；`semantic_compaction_stalled` 系 2026-09-15 前的历史值，生产已改走截留）或 null。主车道专属：检索子代理车道不产生本事件。",
   "type": "object",
   "additionalProperties": false,
   "required": ["kind", "payload"],
   "properties": {
     "kind": {
       "type": "string",
-      "enum": ["tool_result", "plan_gate", "budget", "attention_ladder", "model_compression", "plan_write_guidance"]
+      "enum": ["tool_result", "plan_gate", "budget", "attention_ladder", "context_scale", "model_compression", "plan_write_guidance"]
     },
     "payload": {
       "type": "object",

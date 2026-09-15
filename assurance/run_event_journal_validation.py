@@ -1800,12 +1800,16 @@ def _verify_v02_mechanical_audit(events: list[dict[str, Any]]) -> list[str]:
     （与 counterexample 注入同语义）。规则：
 
     - kind ∈ {tool_result, plan_gate, budget, attention_ladder,
-      model_compression, plan_write_guidance}；
+      context_scale, model_compression, plan_write_guidance}；
+      （`attention_ladder` 为 **已退役** 的 0ae D2 阶梯 kind——动态上下文
+      滑块 S1 起生产零写入，保留枚举值只为历史 journal 仍可校验；
+      `context_scale` = 实际上下文刻度提醒与压缩开窗，键形
+      `context_scale:<500k|900k|first_fold>`。）
     - payload 必须携带 key（对象键，非空）/ round（非负整数）/ summary
       （非空机械事实摘要）/ anomaly（字符串或 null）；
     - 键形为 file:<path> / cmd:<call_id> / plan / budget / retrieval:<n> /
-      attention_ladder:<K>k / model_compression / plan_write_guidance /
-      plan_write_reminder。
+      attention_ladder:<K>k（历史）/ context_scale:<500k|900k|first_fold> /
+      model_compression / plan_write_guidance / plan_write_reminder。
     """
     errors: list[str] = []
     for index, event in enumerate(events):
@@ -1819,13 +1823,14 @@ def _verify_v02_mechanical_audit(events: list[dict[str, Any]]) -> list[str]:
             "plan_gate",
             "budget",
             "attention_ladder",
+            "context_scale",
             "model_compression",
             "plan_write_guidance",
         ):
             errors.append(
                 f"event {index}: mechanical_audit_update kind {kind!r} must be "
                 "tool_result / plan_gate / budget / attention_ladder / "
-                "model_compression / plan_write_guidance"
+                "context_scale / model_compression / plan_write_guidance"
             )
         if not isinstance(entry, dict):
             errors.append(
@@ -1901,23 +1906,43 @@ def _verify_v02_context_compressed(events: list[dict[str, Any]]) -> list[str]:
     retry/force path reports `guard_failed` (only on rhythm/fallback — the
     session-end compaction is deliberately forced and never reports a guard
     failure); an `archive_write_failed` report may only ride a COMPLETE
-    summary (a failed summary never attempts the archive write)."""
+    summary (a failed summary never attempts the archive write).
+
+    动态上下文滑块 S1（2026-09-15，CONTEXT_DYNAMIC_SLIDER_DESIGN §3.4）：
+    reason 闭枚举扩两级——`context_scale`（**实际上下文**硬兜底 ≥950K 强制
+    压缩）与 `context_scale_window`（实际上下文 500K/900K 提醒开窗后 ≤3 轮
+    的机械兜底）；修复前该开窗路径写 `attention_920k_window`（不在枚举内，
+    一旦触发即产出 schema-invalid journal，与 0AE-C2 同族契约漂移）。
+
+    S1 修订批 v7（2026-09-15，设计 §3.4.1 DP-14/DP-17）：mode 增
+    `model_summary`（模型产出语义摘要**替换**被压区；结构化轨仍由机械 drain
+    ——语义摘要路径同样不得 `summary_incomplete`），reason 增
+    `model_selected`（模型在窗口之外自选压缩；窗口收口仍用
+    `context_scale_window`，两条路径由 mode 区分）。"""
     errors: list[str] = []
     for index, event in enumerate(events):
         if not _is_v02(event) or event.get("event_type") != "context_compressed":
             continue
         payload = event["payload"]
         mode = payload.get("mode")
-        if mode not in ("template_summary", "mechanical"):
+        if mode not in ("template_summary", "mechanical", "model_summary"):
             errors.append(
                 f"event {index}: context_compressed mode must be "
-                "template_summary/mechanical"
+                "template_summary/mechanical/model_summary"
             )
         reason = payload.get("reason")
-        if reason not in ("rhythm", "fallback", "session_end"):
+        if reason not in (
+            "rhythm",
+            "fallback",
+            "context_scale",
+            "context_scale_window",
+            "model_selected",
+            "session_end",
+        ):
             errors.append(
                 f"event {index}: context_compressed reason must be "
-                "rhythm/fallback/session_end"
+                "rhythm/fallback/context_scale/context_scale_window/"
+                "model_selected/session_end"
             )
         guard_failed = payload.get("guard_failed", False)
         if guard_failed and reason == "session_end":
@@ -1926,9 +1951,9 @@ def _verify_v02_context_compressed(events: list[dict[str, Any]]) -> list[str]:
                 "triggers, never session_end"
             )
         incomplete = payload.get("summary_incomplete", False)
-        if mode == "mechanical" and incomplete:
+        if mode in ("mechanical", "model_summary") and incomplete:
             errors.append(
-                f"event {index}: mechanical compaction must never be "
+                f"event {index}: {mode} compaction must never be "
                 "summary_incomplete (no model slots to fail)"
             )
         archive_fields = (

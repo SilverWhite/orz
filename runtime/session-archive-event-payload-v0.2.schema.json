@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://local.fep-agent.invalid/schema/session-archive-event-payload-v0.2.schema.json",
   "title": "Conversation single-package archive runtime event payload v0.2",
-  "description": "P2-13 B3 (2026-09-03, ADR-0010 §14.52 / BLACKBOARD_CONVERSATION_SCOPE_FOLD_DESIGN §12 R3): a conversation (对话 + 黑板 live 视图 + 会话元数据) was archived at session close into one gzip package under `.gsa/archives/<session8>.json.gz` — pure packaging (no content transform), atomic write + digest, original sidecars retained until the retention sweep. Each conversation is archived at most once per close; the event is the audit trace (archive_id/path/digest/status/attempts/fatigue_pct).",
+  "description": "P2-13 B3 (2026-09-03, ADR-0010 §14.52 / BLACKBOARD_CONVERSATION_SCOPE_FOLD_DESIGN §12 R3): a conversation (对话 + 黑板 live 视图 + 会话元数据) was archived into one gzip package under `.gsa/archives/<session8>.json.gz` — atomic write + digest, original sidecars retained until the retention sweep; the event is the audit trace (archive_id/path/digest/status/attempts/fatigue_pct). 动态上下文滑块 S1 (2026-09-15, CONTEXT_DYNAMIC_SLIDER_DESIGN §3.5 / DP-11): ① 包内结构升为**信封**——`{\"schema\":\"session-archive-package-v0.2\",\"conversation\":<sidecar 原始 JSON 文本，零内容变换>,\"archive_keys\":{…}}`，`archive_keys` 为**三键互标**段（会话相对 LIF 轮跨度／台账行全局序号 `[seq]` 跨度／journal run+sequence，外加窗口轮跨度临时键与 A 类压缩摘要存档清单；逐段 LIF 轮区间随尾批 §7 落地）；② **归档时点**＝会话关闭一次 ＋ **实际上下文（全量会话 chars/2，非视图刻度）跨 500K 里程碑追加一次增量归档**（`incremental: true`；水位落 `.gsa/archives/<session8>.milestones.json`，单调幂等，长单对话不再「不结束就没有存档」）。旧包（裸 StoredConversation）由读取侧 tolerant 解码兼容。",
   "type": "object",
   "additionalProperties": false,
   "required": [
@@ -42,6 +42,10 @@
       "type": "integer",
       "minimum": 0,
       "maximum": 100
+    },
+    "incremental": {
+      "description": "动态上下文滑块 S1（设计 §3.5 DP-11④）：`true` = 本次为**里程碑增量归档**（实际上下文跨 500K 追加一次），省略/`false` = 会话关闭归档。",
+      "type": "boolean"
     }
   }
 }
