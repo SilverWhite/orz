@@ -4,6 +4,7 @@ import hashlib
 import io
 import json
 import os
+from datetime import date
 from pathlib import Path, PurePosixPath
 import re
 import subprocess
@@ -821,6 +822,498 @@ def _check_markdown_links() -> list[str]:
                         f"{path.relative_to(ROOT)}:{line_number}: broken local link {target}"
                     )
     return errors
+
+
+# ---------------------------------------------------------------------------
+# Ledger consistency & slimming checks (0ab, 2026-09-13 立项 / S1 2026-09-15)
+#
+# The three living ledgers (BACKLOG / TODO / index §8) are kept in sync by
+# mechanical cross-checks instead of prose discipline.  Only structured
+# anchors are parsed — no semantic review; reported mismatches are fixed by
+# humans in ledger batches, never auto-rewritten by this gate.
+#
+# Anchors:
+#   1. BACKLOG `未闭合总数：**N 项**`  ↔  TODO route-section count line.
+#   2. BACKLOG `开放项：a / b / c。` lines (P0/P1/P2 sections, strict token
+#      grammar)  ↔  the 优先级总览 table row cells (`（tok…）`)  ↔  the TODO
+#      route-section `- P0：…` lines.  0xx-family tokens are compared across
+#      all three; the numeric family (4 / 6d / P2-11 …) is compared between
+#      the two BACKLOG anchors for P0-P2 and against the TODO P2 route line
+#      (TODO P0/P1 route lines name those items by alias only — a documented
+#      blind spot, not a check).
+#   3. TODO checkbox state per `###` section (token extracted from the
+#      heading, a `P<prio>-<tok>` prefix, or a `BACKLOG <tok>` reference):
+#      a token with any unchecked box must appear in the BACKLOG open-item
+#      union, an all-checked token must not.
+#   4. Index §8 status buckets: closed status vocabulary (index §0.2),
+#      per-entry status vocabulary, no ID in two buckets, no duplicate ID
+#      within a bucket, well-formed bucket elements.
+#   5. No heading line may embed a second heading marker (drift artifact
+#      seen as `## A## A`).
+#
+# Slimming: header ledger/count lines (BACKLOG 未闭合计数 + 优先级总览 rows,
+# TODO 开放项路由, index `> 索引版本：`/`> 近版摘要：`) are length-capped and
+# age-checked; over-limit / stale lines are flagged for archiving into the
+# `存档/` snapshots — the gate never rewrites the ledgers itself.
+# ---------------------------------------------------------------------------
+
+LEDGER_BACKLOG_RELATIVE_PATH = Path("docs") / "BACKLOG_AND_PRIORITIES.md"
+LEDGER_TODO_RELATIVE_PATH = Path("TODO.md")
+LEDGER_INDEX_RELATIVE_PATH = Path("CLI_PROJECT_INDEX.md")
+
+LEDGER_ALLOWED_STATUSES = {
+    "current-design",
+    "implemented",
+    "partial",
+    "pending",
+    "candidate",
+    "reference",
+    "historical",
+    "withdrawn",
+}
+LEDGER_LINE_CHAR_LIMIT = 1200
+LEDGER_LINE_AGE_DAYS = 21
+
+_LEDGER_TOTAL_RE = re.compile(r"未闭合总数：\*\*(\d+) 项\*\*")
+_LEDGER_TOKEN_SHAPE_RE = re.compile(
+    r"(?:0[a-z]{1,4}|[0-9]{1,3}[a-z]{0,4}|P[0-3]-[0-9]{1,3})"
+)
+_LEDGER_TABLE_CELL_TOKEN_RE = re.compile(
+    r"（((?:0[a-z]{1,4}|[0-9]{1,3}[a-z]{0,4}|P[0-3]-[0-9]{1,3}))"
+    r"(?![0-9A-Za-z-])[^）]*）"
+)
+_LEDGER_TODO_ZERO_TOKEN_RE = re.compile(
+    r"(?<![0-9A-Za-z-])0[a-z]{1,4}(?![0-9A-Za-z-])"
+)
+_LEDGER_TODO_PFORM_TOKEN_RE = re.compile(r"P[0-3]-([0-9]{1,3})(?![0-9A-Za-z-])")
+_LEDGER_INDEX_ENTRY_STATUS_RE = re.compile(
+    r"\*\*([A-Za-z0-9][A-Za-z0-9-]*)\*\* \(`?([a-z][a-z_-]*)`?[；;：:]"
+)
+_LEDGER_HEADING_RE = re.compile(r"^(#{1,6}) (.+)$")
+_LEDGER_DATE_RE = re.compile(r"\d{4}-\d{2}-\d{2}")
+
+
+def _ledger_normalize_token(token: str) -> str:
+    if token.startswith(("P0-", "P1-", "P2-", "P3-")):
+        return token[3:]
+    return token
+
+
+def _ledger_read(root: Path, relative_path: Path, errors: list[str]) -> str:
+    path = root / relative_path
+    if not path.is_file():
+        errors.append(f"ledger consistency: missing ledger file {relative_path}")
+        return ""
+    return path.read_text(encoding="utf-8")
+
+
+def _ledger_section(text: str, start_prefix: str) -> str:
+    lines = text.splitlines()
+    start = next(
+        (i for i, line in enumerate(lines) if line.startswith(start_prefix)), None
+    )
+    if start is None:
+        return ""
+    end = next(
+        (
+            i
+            for i in range(start + 1, len(lines))
+            if lines[i].startswith("## ")
+        ),
+        len(lines),
+    )
+    return "\n".join(lines[start + 1 : end])
+
+
+def _parse_backlog_open_lines(
+    backlog_text: str, errors: list[str]
+) -> dict[str, set[str]]:
+    open_items: dict[str, set[str]] = {}
+    for priority in ("P0", "P1", "P2"):
+        section = _ledger_section(backlog_text, f"## {priority} ")
+        list_line = next(
+            (
+                line
+                for line in section.splitlines()
+                if line.startswith("开放项：")
+            ),
+            None,
+        )
+        if list_line is None:
+            errors.append(
+                f"ledger consistency: BACKLOG {priority} 节缺「开放项：」锚点行"
+            )
+            open_items[priority] = set()
+            continue
+        tokens: set[str] = set()
+        listing = list_line[len("开放项：") :].split("。", 1)[0]
+        for element in listing.split(" / "):
+            element = element.strip()
+            if not element:
+                continue
+            if not _LEDGER_TOKEN_SHAPE_RE.fullmatch(element):
+                errors.append(
+                    f"ledger consistency: BACKLOG {priority} 开放项清单含"
+                    f"不可解析元素「{element}」（锚点语法：开放项：tok / tok / …。）"
+                )
+                continue
+            tokens.add(_ledger_normalize_token(element))
+        open_items[priority] = tokens
+    return open_items
+
+
+def _parse_priority_table_rows(
+    backlog_text: str, errors: list[str]
+) -> dict[str, set[str]]:
+    rows: dict[str, set[str]] = {}
+    table_section = _ledger_section(backlog_text, "## 优先级总览")
+    if not table_section:
+        errors.append("ledger consistency: BACKLOG 缺「## 优先级总览」节")
+        return {priority: set() for priority in ("P0", "P1", "P2")}
+    for line in table_section.splitlines():
+        match = re.match(r"\| (P[0-3]) \|", line)
+        if not match:
+            continue
+        priority = match.group(1)
+        tokens = {
+            _ledger_normalize_token(token)
+            for token in _LEDGER_TABLE_CELL_TOKEN_RE.findall(line)
+        }
+        if not tokens:
+            errors.append(
+                f"ledger consistency: BACKLOG 优先级总览 {priority} 行无（tok）"
+                "入口小节锚点"
+            )
+        rows[priority] = tokens
+    for priority in ("P0", "P1", "P2"):
+        rows.setdefault(priority, set())
+    return rows
+
+
+def _parse_todo_route_tokens(
+    todo_text: str, errors: list[str]
+) -> dict[str, set[str]]:
+    route_tokens: dict[str, set[str]] = {}
+    route_section = _ledger_section(todo_text, "## 开放项路由")
+    if not route_section:
+        errors.append("ledger consistency: TODO 缺「## 开放项路由」节")
+        return {priority: set() for priority in ("P0", "P1", "P2")}
+    for line in route_section.splitlines():
+        match = re.match(r"- (P[0-3])：", line)
+        if not match:
+            continue
+        priority = match.group(1)
+        tokens = set(_LEDGER_TODO_ZERO_TOKEN_RE.findall(line))
+        tokens.update(_LEDGER_TODO_PFORM_TOKEN_RE.findall(line))
+        route_tokens[priority] = tokens
+    for priority in ("P0", "P1", "P2"):
+        route_tokens.setdefault(priority, set())
+    return route_tokens
+
+
+def _todo_checkbox_open_tokens(todo_text: str) -> tuple[set[str], set[str]]:
+    """Return (tokens with any unchecked box, tokens fully checked)."""
+    open_state: dict[str, bool] = {}
+    current_priority: str | None = None
+    header: str | None = None
+    body: list[str] = []
+
+    def close_section() -> None:
+        if header is None:
+            return
+        token_match = (
+            re.search(rf"^P[0-3]-({_LEDGER_TOKEN_SHAPE_RE.pattern})", header)
+            or re.search(
+                rf"^({_LEDGER_TOKEN_SHAPE_RE.pattern})[\.：:，,（( ]", header
+            )
+        )
+        if token_match is None:
+            blockquote = next(
+                (line for line in body if line.strip().startswith(">")), ""
+            )
+            token_match = re.search(
+                rf"BACKLOG[：: ]+({_LEDGER_TOKEN_SHAPE_RE.pattern})\b",
+                header + "\n" + blockquote,
+            )
+        if token_match is None:
+            return
+        token = _ledger_normalize_token(token_match.group(1))
+        has_open = any(
+            line.strip().startswith("- [ ]") for line in body
+        )
+        open_state[token] = open_state.get(token, False) or has_open
+
+    for line in todo_text.splitlines():
+        priority_match = re.match(r"## P[0-3][ —]", line)
+        if priority_match:
+            close_section()
+            header = None
+            body = []
+            current_priority = "active"
+            continue
+        if line.startswith("## "):
+            close_section()
+            header = None
+            body = []
+            current_priority = None
+            continue
+        if line.startswith("### "):
+            close_section()
+            header = line[4:].strip()
+            body = []
+            continue
+        if current_priority == "active" and header is not None:
+            body.append(line)
+    close_section()
+    open_tokens = {token for token, is_open in open_state.items() if is_open}
+    closed_tokens = {
+        token for token, is_open in open_state.items() if not is_open
+    }
+    return open_tokens, closed_tokens
+
+
+def _strip_balanced_parens(text: str) -> str:
+    """Remove balanced （…） spans (annotations may nest and contain 、/ /)."""
+    kept: list[str] = []
+    depth = 0
+    for char in text:
+        if char == "（":
+            depth += 1
+        elif char == "）":
+            if depth > 0:
+                depth -= 1
+        elif depth == 0:
+            kept.append(char)
+    return "".join(kept)
+
+
+def _parse_index_status_buckets(
+    index_text: str, errors: list[str]
+) -> dict[str, list[str]]:
+    buckets: dict[str, list[str]] = {}
+    section = _ledger_section(index_text, "## 8. 状态速查")
+    if not section:
+        errors.append("ledger consistency: 索引缺「## 8. 状态速查」节")
+        return buckets
+    for line in section.splitlines():
+        match = re.match(r"- `([a-z-]+)`：(.+)$", line)
+        if not match:
+            continue
+        status, body = match.groups()
+        if status not in LEDGER_ALLOWED_STATUSES:
+            errors.append(
+                f"ledger consistency: 索引 §8 使用了非法状态桶「{status}」"
+                f"（允许集：{sorted(LEDGER_ALLOWED_STATUSES)}）"
+            )
+        ids: list[str] = []
+        for element in re.split(r"、| / ", _strip_balanced_parens(body)):
+            canonical = element.strip().rstrip("。").strip()
+            if not canonical:
+                continue
+            if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9.-]*", canonical):
+                errors.append(
+                    f"ledger consistency: 索引 §8 {status} 桶含不可解析元素"
+                    f"「{element.strip()[:60]}」"
+                )
+                continue
+            ids.append(canonical)
+        buckets.setdefault(status, []).extend(ids)
+    return buckets
+
+
+def _ledger_zero_family(tokens: set[str]) -> set[str]:
+    return {
+        token for token in tokens if re.fullmatch(r"0[a-z]{1,4}", token)
+    }
+
+
+def _check_ledger_consistency(root: Path) -> list[str]:
+    errors: list[str] = []
+    backlog_text = _ledger_read(root, LEDGER_BACKLOG_RELATIVE_PATH, errors)
+    todo_text = _ledger_read(root, LEDGER_TODO_RELATIVE_PATH, errors)
+    index_text = _ledger_read(root, LEDGER_INDEX_RELATIVE_PATH, errors)
+    if not (backlog_text and todo_text and index_text):
+        return errors
+
+    backlog_total = _LEDGER_TOTAL_RE.search(backlog_text)
+    todo_total = _LEDGER_TOTAL_RE.search(todo_text)
+    if backlog_total is None or todo_total is None:
+        errors.append(
+            "ledger consistency: BACKLOG/TODO 缺「未闭合总数：**N 项**」锚点"
+        )
+    elif backlog_total.group(1) != todo_total.group(1):
+        errors.append(
+            "ledger consistency: 未闭合总数不一致——BACKLOG 为 "
+            f"{backlog_total.group(1)} 项，TODO 为 {todo_total.group(1)} 项"
+        )
+
+    backlog_open = _parse_backlog_open_lines(backlog_text, errors)
+    table_rows = _parse_priority_table_rows(backlog_text, errors)
+    route_tokens = _parse_todo_route_tokens(todo_text, errors)
+    union_open = set().union(*backlog_open.values()) if backlog_open else set()
+
+    for priority in ("P0", "P1", "P2"):
+        section_tokens = backlog_open[priority]
+        row_tokens = table_rows[priority]
+        route_set = route_tokens[priority]
+        if section_tokens != row_tokens:
+            errors.append(
+                f"ledger consistency: {priority} 开放项清单不一致——"
+                f"节清单=({', '.join(sorted(section_tokens)) or '空'}) vs "
+                f"优先级总览表=({', '.join(sorted(row_tokens)) or '空'})"
+            )
+        if priority == "P2":
+            # TODO P2 route line carries `P2-NN` markers → numeric family is
+            # comparable in full; P0/P1 route lines name those items by alias
+            # only, so only the 0xx family is comparable there (documented
+            # limitation).
+            route_comparable = route_set
+            section_comparable = section_tokens
+        else:
+            route_comparable = _ledger_zero_family(route_set)
+            section_comparable = _ledger_zero_family(section_tokens)
+        if section_comparable != route_comparable:
+            errors.append(
+                f"ledger consistency: {priority} 开放项清单不一致——"
+                f"节清单=({', '.join(sorted(section_comparable)) or '空'}) vs "
+                f"TODO 路由=({', '.join(sorted(route_comparable)) or '空'})"
+            )
+
+    todo_open_tokens, todo_closed_tokens = _todo_checkbox_open_tokens(todo_text)
+    unexpected_open = sorted(
+        token
+        for token in todo_open_tokens
+        if token not in union_open
+    )
+    if unexpected_open:
+        errors.append(
+            "ledger consistency: TODO 存在未勾选节但 BACKLOG 已记闭合——"
+            f"token: {', '.join(unexpected_open)}"
+        )
+    unexpected_closed = sorted(token for token in todo_closed_tokens if token in union_open)
+    if unexpected_closed:
+        errors.append(
+            "ledger consistency: TODO 全部勾选但 BACKLOG 仍记开放——"
+            f"token: {', '.join(unexpected_closed)}"
+        )
+
+    buckets = _parse_index_status_buckets(index_text, errors)
+    seen: dict[str, str] = {}
+    for status, ids in buckets.items():
+        for canonical_id in ids:
+            if canonical_id in seen:
+                errors.append(
+                    f"ledger consistency: 索引 §8 状态速查中 {canonical_id} "
+                    f"同时出现在 {seen[canonical_id]} 与 {status} 桶"
+                )
+            else:
+                seen[canonical_id] = status
+        duplicates = sorted({
+            canonical_id
+            for canonical_id in ids
+            if ids.count(canonical_id) > 1
+        })
+        if duplicates:
+            errors.append(
+                f"ledger consistency: 索引 §8 {status} 桶内重复 ID: "
+                f"{', '.join(duplicates)}"
+            )
+
+    for entry_match in _LEDGER_INDEX_ENTRY_STATUS_RE.finditer(index_text):
+        entry_id, status = entry_match.groups()
+        if status not in LEDGER_ALLOWED_STATUSES:
+            errors.append(
+                f"ledger consistency: 索引条目 {entry_id} 使用非法状态"
+                f"「{status}」（允许集：{sorted(LEDGER_ALLOWED_STATUSES)}）"
+            )
+
+    for ledger_name, text in (
+        (LEDGER_BACKLOG_RELATIVE_PATH, backlog_text),
+        (LEDGER_TODO_RELATIVE_PATH, todo_text),
+        (LEDGER_INDEX_RELATIVE_PATH, index_text),
+    ):
+        for line_number, line in enumerate(text.splitlines(), 1):
+            heading = _LEDGER_HEADING_RE.match(line)
+            if heading is None:
+                continue
+            if re.search(r"#{1,6} ", heading.group(2)):
+                errors.append(
+                    f"ledger consistency: {ledger_name}:{line_number} 标题行"
+                    f"内嵌第二个标题记号（漂移伪影）"
+                )
+
+    return errors
+
+
+def _ledger_slimming_covered_lines(
+    backlog_text: str, todo_text: str, index_text: str
+) -> list[tuple[str, int, str]]:
+    covered: list[tuple[str, int, str]] = []
+    backlog_lines = backlog_text.splitlines()
+    todo_lines = todo_text.splitlines()
+
+    def located(section: str, lines: list[str]) -> list[tuple[int, str]]:
+        section_lines = set(section.splitlines())
+        return [
+            (number, line)
+            for number, line in enumerate(lines, 1)
+            if line in section_lines and (line.startswith("- ") or line.startswith("| P"))
+        ]
+
+    for number, line in located(
+        _ledger_section(backlog_text, "## 未闭合计数"), backlog_lines
+    ):
+        covered.append((str(LEDGER_BACKLOG_RELATIVE_PATH), number, line))
+    for number, line in located(
+        _ledger_section(backlog_text, "## 优先级总览"), backlog_lines
+    ):
+        covered.append((str(LEDGER_BACKLOG_RELATIVE_PATH), number, line))
+    for number, line in located(
+        _ledger_section(todo_text, "## 开放项路由"), todo_lines
+    ):
+        covered.append((str(LEDGER_TODO_RELATIVE_PATH), number, line))
+    for number, line in enumerate(index_text.splitlines(), 1):
+        if re.match(r"^> (索引版本|近版摘要)：", line):
+            covered.append((str(LEDGER_INDEX_RELATIVE_PATH), number, line))
+    return covered
+
+
+def _check_ledger_slimming(
+    root: Path, today: Any = None
+) -> tuple[list[str], int]:
+    if today is None:
+        today = date.today()
+    errors: list[str] = []
+    backlog_text = _ledger_read(root, LEDGER_BACKLOG_RELATIVE_PATH, errors)
+    todo_text = _ledger_read(root, LEDGER_TODO_RELATIVE_PATH, errors)
+    index_text = _ledger_read(root, LEDGER_INDEX_RELATIVE_PATH, errors)
+    covered = _ledger_slimming_covered_lines(
+        backlog_text, todo_text, index_text
+    )
+    if not (backlog_text and todo_text and index_text):
+        return errors, len(covered)
+
+    for name, number, line in _ledger_slimming_covered_lines(
+        backlog_text, todo_text, index_text
+    ):
+        if len(line) > LEDGER_LINE_CHAR_LIMIT:
+            errors.append(
+                f"ledger slimming: {name}:{number} 头部台账/计数行超长"
+                f"（{len(line)} > {LEDGER_LINE_CHAR_LIMIT} 字符）——提示归档至"
+                "存档快照后收缩本行；门禁不自动改写"
+            )
+        dates = _LEDGER_DATE_RE.findall(line)
+        if dates:
+            newest = max(dates)
+            age_days = (today - date.fromisoformat(newest)).days
+            if age_days > LEDGER_LINE_AGE_DAYS:
+                errors.append(
+                    f"ledger slimming: {name}:{number} 头部台账/计数行行龄超限"
+                    f"（最新日期 {newest}，距今 {age_days} > "
+                    f"{LEDGER_LINE_AGE_DAYS} 天）——提示归档至存档快照；"
+                    "门禁不自动改写"
+                )
+    return errors, len(covered)
 
 
 def check_repository() -> dict[str, Any]:
@@ -2930,6 +3423,10 @@ def check_repository() -> dict[str, Any]:
     counts["orz_source_manifest_files"] = orz_count
     errors.extend(orz_errors)
     errors.extend(_check_markdown_links())
+    errors.extend(_check_ledger_consistency(ROOT))
+    ledger_slimming_errors, ledger_slimming_lines = _check_ledger_slimming(ROOT)
+    errors.extend(ledger_slimming_errors)
+    counts["ledger_slimming_lines_covered"] = ledger_slimming_lines
     errors.sort()
     return {
         "valid": not errors,
