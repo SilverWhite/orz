@@ -187,3 +187,40 @@
 - b_algo 复用：`orz/crates/codegen/orz-tools/src/implementations/web_search/local_segmented.rs:959`、`:391-396`。
 - 探针未接线：`local_segmented.rs:287-298`（detail 定义）vs `orz-loop/src/retrieval/projection.rs:138-163`（另行重读 env）。
 - 门禁：`check_repository.py` → `valid: true / error_count: 0 / 1450`（本审查落档前复跑）。
+
+---
+
+## 10. 处置批注（2026-09-15 修复批，orz `183fbb08`，父仓随批账本 v3.31）
+
+按用户指示「能修复的问题先修完」，机械可修集已全部落码（修复实施＝三路并行代理按文件所有权分组＋主会话收口；契约面 schema 与 Python 镜像随批同步）：
+
+**已修（13 项）**：
+
+| 发现 | 修复要点 |
+|---|---|
+| 0AE-C1（P0） | 窗口轮仅暴露 `blackboard_write` 工具面；消费分支过滤派发（其余动作丢弃＋机械提示）；延迟收口使 `model_participated` 基于派发后真实写数；端到端钉子×3（参与/混合声明丢弃/纯文本耗尽） |
+| 0AC-A1（P1） | 终答候选分支补 B2 drain+admit（gate=`m1_enabled()`＋`!m1_used`，避免只进不投）——M1「已接线」主张自此为真 |
+| RET-B1（P1） | 有代理默认链改序不改集：`bing_cn,bing_global,duckduckgo,google`（止损序；**偏离 v3.26 记录序**——DDG/Google 无解析器恒空转；守卫钉防回退；完整解析器留 S4） |
+| RET-B2（P1） | resolve=None 时 `local_http` 加 `.no_proxy()`——`none` 显式关在传输层生效，A/B 对照不再被 ALL_PROXY/小写 env 污染 |
+| RET-B3（P1) | `from_env()` 装配期写 OnceLock 快照＋`assembled_local_segmented()` accessor；探针 `search_engine` 分支消费单一源（`proxy=on|off`＋脱敏端点入读数，代理四链不再误报 `builtin`） |
+| 0AE-C2（P1） | runtime schema kind 枚举 3→6＋Python 镜像同步；六 kind 常量单一源（`mechanical_audit.rs`）；五处写入收敛为 `{key,round,summary,anomaly}`；逐字对账钉子（schema 枚举↔常量全等＋payload required） |
+| 0AE-C3（P1） | plan_write `validation` 改为 `{valid,errors:[],ignored_fields:[]}`（section/content_chars 仅顶层） |
+| 0AC-A2（P2） | ⑥ 确定失败 streak 仅认 `network_no_response`（`empty_result`=合法 I1 信息退出计数） |
+| 0AE-C5（P2） | D4 无条件渲染（非 git 工作区仅基线段缺席，清单/指纹照常） |
+| 0AE-C6（P2） | 阶梯提醒与窗口块注入带水位行＋审计 summary 带 `watermark=` |
+| 0AE-C7（P2） | 压缩 NoOp 不再 rearm（rhythm 路径逐轮重试机械压缩，不停摆） |
+| 0AE-C8/C9/C10（P3） | section 错误文案转义修正；`partition_revisions` 补 notes 徽章；plan-gate 轮面补 `blackboard_write` |
+| 顺手项 | C13 其余成串空格（首轮引导/N 轮提醒/窗口块文案）；`immediate_delivery.rs` 注释 0af→0ag 更正；controller 分区序文档补 notes |
+
+**门禁（修复批合并态）**：orz-loop 796/0/3、orz-tools 2884/0/6（首跑 1 例 flaky 未留名，全量复跑×2 绿＋local_segmented 定向 5 连绿）、orz-host 324/0/5 单线程、orz-assurance 226/0、Python 镜像（mechanical）11 通过、fmt 干净、clippy 零新增。
+
+**留裁决/未修**（责任面与理由）：
+- 0AC-A3（接线钉扩展）：C1 端到端钉×3 已随批落地；B1 投递/宿主 drain 两枚接线钉仍缺（需 fake host 基建扩展，建议随下批）。
+- 0AC-A5（⑥ 第三触发「结果已形成」）：未落码，静默缩围转显式挂账（本件 §2.2 维持登记）。
+- 0AC-A6（Err 路径 close_drop 留痕）：loop 终止路径多点 `?` 传播，单一收口点不存在，涉及结构改造，留裁决。
+- 0AE-C4（fold 线 vs 阶梯死面）：需用户裁决 fold 触发线上调/退役；死面已披露进 BACKLOG/TODO 0ae。
+- 0AE-C11/C12（编辑清单跨 run 归属标签、跳变齐发）：行为语义裁决项，未动。
+- RET-B1 完整解析器（DDG/Google）、RET-B5–B10：S4 面（真机样本前置）。
+- LED-D2（slider 设计稿入库）：归邻线处置，未代提交。
+- 0af（资源门文案）实施：独立 pending 项按其立项排期，未并入本批；其实施注意三条已补进 §6 路由条目。
+- 已登记新观察：窗口轮落穿后若同轮恰命中 budget-exhausted/IPG 终止路径，`model_compression_close` 随 loop 终止丢弃（收口审计事件不落账；触发面极窄，920K 窗口×恰耗尽）。「blackboard_write」名字在 controller 注册处与新过滤函数仍为两份字面副本（已注释互指）。

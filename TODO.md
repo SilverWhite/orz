@@ -683,7 +683,7 @@ GLM F2 处置转排期（2026-09-06 用户裁决）：`orz-host/src/approval.rs`
 - [ ] **S3①-a 补强（检索侧补强稿 `DESIGN-RETRIEVAL-LOCAL-SEGMENTED-HARDENING`；2026-09-15 设计定稿 + 裁决，未实施）**：设计稿 [`RETRIEVAL_LOCAL_SEGMENTED_HARDENING_DESIGN_2026-09-15`](docs/RETRIEVAL_LOCAL_SEGMENTED_HARDENING_DESIGN_2026-09-15.md)（v1.0；服务 **①-a 检索侧**，不是 ①-b 投递侧）——五处缺口 + 裁决：**G1 计时语义**（三段账 `T_acquire` 5 s ⊂ `T_first` 10 s ⊂ `T_overall` 30 s、`T_segment` 10 s·页；`ORZ_RETRIEVAL_ACQUIRE_MS`/`ORZ_RETRIEVAL_SEGMENT_MS` 可配，`ORZ_RETRIEVAL_DEADLINE_MS` 语义收窄为 `T_first`）；**G2 降级页相关性闸门**（HTTP 200 + 整页无关 `b_algo` 现被判成功 ⇒ 闸门**默认开**：前 3 条 ∩ 查询词集，阈值 25% + 词集**封顶 12**；判负复用 `empty_result` + detail 并继续引擎链、**不新增稳定码**；开关 `ORZ_RETRIEVAL_RELEVANCE_GATE`）；**G3 引擎面收尾**（跳转包装并发解包 **6 worker / 单条 6 s** + 页抓取最终 URL 回填；`ORZ_RETRIEVAL_UNWRAP_WORKERS`/`_MS`）；**G4 代理管道**（只加在分段检索专用客户端 `local_http`；读取序 `ORZ_RETRIEVAL_PROXY` → `HTTPS_PROXY` → `HTTP_PROXY`，`none` 显式关；**不设引擎白名单**）；**G5** 无头/有头仅登记（待容器内复验）。**落码顺序 G2 → G1 → G3 → G4**；每项按「改动 + fixture + 法官镜像 + A/B 读数」走（设计稿 §8），**不合批进 ①-b**（两件代码面/验收面互不重叠）；落码后需载体重建，建议与本批 ①-b 或 0z S4 共用一次三件套。判据沿用：检索类首个结果 `wall_ms` p99 ≤ 10 s、`subagent_wallclock_timeout_mid_tool` = 0。未决/复验条件见设计稿 §10.7。入口：设计稿 / 索引 `DESIGN-RETRIEVAL-LOCAL-SEGMENTED-HARDENING` / BACKLOG 0ac「检索侧补强设计定稿与裁决」（子切片，**不动计数**）。
 - **[x] S3①-a 补强落地（2026-09-15 过夜批，orz `7e151ed1`）——G2→G1→G3→G4 全落**：相关性闸门默认开（词集封顶 12、判负复用 `empty_result` + 分数 detail、全链取最高分、词集空放行）/ 三段账（`T_acquire` 5s connect_timeout · `T_first` 10s 每引擎钟只包 SERP · `T_segment` 10s/页 慢页不吞命中 · `T_overall` 30s 从属）/ 跳转解包 6worker·6s + 页抓取最终 URL 回填取值序 / 代理管道（`local_http` 专用、读取序 + `none` 显式关、无引擎白名单、有代理默认链四引擎 + 探针 `proxy=on|off`+脱敏端点）。23 单测绿。**A/B 实机读数与 G5 复验留 S4**。
 
-### 0ae 上下文软门与模型参与压缩（P1；2026-09-15 设计定稿并排期，实施待放行）
+### 0ae 上下文软门与模型参与压缩（P1；2026-09-15 设计定稿并实施落码（orz `f0040557`），同日审查修复批（`183fbb08`）；A/B 判据留 S4 实机）
 
 - [x] **D0–D4 全部落码（2026-09-15 过夜批，orz `f0040557`）**——D0 黑板写入面：`blackboard_write(section∈{plan,notes}, ≤8K)` ＋ 水位状态标【x.xM/10M】恒挂 live 读响应头（`plan_write` 事件族 + schema `section`/`content_chars` 增量；notes 分区随 epoch 快照；ReadOnly 类无条件声明；8 工具面显式例外 +1）。
 - [x] D1 首轮 plan 问询＋补救规则——initial-round 间隙追加一问（0x 模板与 signer 摘要面不动）+ N=20 一次性提醒（`model_note_count()==0` 判定）。
@@ -691,6 +691,8 @@ GLM F2 处置转排期（2026-09-06 用户裁决）：`orz-host/src/approval.rs`
 - [x] D3 920K 压缩轮——`PendingCheckpoint::ModelCompression` ≤3 轮无工具窗口；窗口结束机械模板压缩兜底（`attention_920k_window`）+ `model_participated` 如实落账；**按标注分区选择性折叠 v1 留 S4 精化**。
 - [x] D4 折叠桥增补——`run_context_block`（基线 `capture_run_baseline` + 自编辑清单 + 最近 5 指纹）随推进冻结，前缀字节稳定保持。
 - [ ] S4 型 A/B 判据（设计 §8 八项）——实机长 run 验证，待放行。
+- [x] **审查修复批（2026-09-15，orz `183fbb08`；[审计件](docs/audits/QUAD_BATCH_DEEP_REVIEW_2026-09-15.md)）**：D3 压缩窗口参与修复（窗口轮仅 `blackboard_write` 面＋派发＋延迟收口，审查 P0 闭合）；`mechanical_audit_update` 契约合规（schema kind 枚举 3→6＋Python 镜像＋常量单一源＋逐字钉子）；plan_write `validation` 形状；D4 非 git 降级；阶梯水位；压缩 NoOp 不 rearm；plan-gate 轮面补 `blackboard_write`。
+- **死面披露（审查 0AE-C4，待裁决）**：阶梯量尺＝折叠后实测 prompt，机械 fold@128K 未动 ⇒ D2≥160K 各级与 D3 920K 窗口默认配置下常态不可达；激活须同批裁决 fold 触发线上调/退役（与 slider 设计稿 §3.4 前置项同源）。
 - 排期：独立批，前置＝0ac ①-b 收尾批（不与 ①-b 合批）。入口：[设计稿](docs/CONTEXT_SOFT_GATE_MODEL_PARTICIPATED_COMPRESSION_DESIGN_2026-09-15.md) / [深审](docs/audits/0AC_S3B_RUN_DEEP_REVIEW_2026-09-15.md) / [BACKLOG 0ae](docs/BACKLOG_AND_PRIORITIES.md)。
 
 ### 0ag 契约面机械对账（P2；2026-09-15 立项并当日闭合，orz `8512fc71`；ID 冲突更正：0af 归邻线资源门项〔先占〕，本项改名 0ag，计数 32 净不变）

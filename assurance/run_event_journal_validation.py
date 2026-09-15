@@ -1799,10 +1799,13 @@ def _verify_v02_mechanical_audit(events: list[dict[str, Any]]) -> list[str]:
     step/契约类检查）以一条记录留痕，供回放与验证；报告块本身不进归档
     （与 counterexample 注入同语义）。规则：
 
-    - kind ∈ {tool_result, plan_gate, budget}；
+    - kind ∈ {tool_result, plan_gate, budget, attention_ladder,
+      model_compression, plan_write_guidance}；
     - payload 必须携带 key（对象键，非空）/ round（非负整数）/ summary
       （非空机械事实摘要）/ anomaly（字符串或 null）；
-    - 键形为 file:<path> / cmd:<call_id> / plan / budget / retrieval:<n>。
+    - 键形为 file:<path> / cmd:<call_id> / plan / budget / retrieval:<n> /
+      attention_ladder:<K>k / model_compression / plan_write_guidance /
+      plan_write_reminder。
     """
     errors: list[str] = []
     for index, event in enumerate(events):
@@ -1811,10 +1814,18 @@ def _verify_v02_mechanical_audit(events: list[dict[str, Any]]) -> list[str]:
         payload = event["payload"]
         kind = payload.get("kind")
         entry = payload.get("payload")
-        if kind not in ("tool_result", "plan_gate", "budget"):
+        if kind not in (
+            "tool_result",
+            "plan_gate",
+            "budget",
+            "attention_ladder",
+            "model_compression",
+            "plan_write_guidance",
+        ):
             errors.append(
                 f"event {index}: mechanical_audit_update kind {kind!r} must be "
-                "tool_result / plan_gate / budget"
+                "tool_result / plan_gate / budget / attention_ladder / "
+                "model_compression / plan_write_guidance"
             )
         if not isinstance(entry, dict):
             errors.append(
