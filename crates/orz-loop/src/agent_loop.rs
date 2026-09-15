@@ -1079,6 +1079,53 @@ pub(crate) fn compression_window_tool_defs(tool_defs: &[ToolDef]) -> Vec<ToolDef
         .collect()
 }
 
+/// 0ae D3 窗口收口的**统一出口**（2026-09-15 窄边沿修复）：凡携带未收口
+/// `model_compression_close` 状态离开本迭代的路径——下一轮 loop-top、
+/// budget 耗尽收尾 break、IPG block break、run 尾安全网——都必须先经本
+/// 函数，保证收口审计事件要么落地、要么明确无窗口可收（`take` 幂等，
+/// 多处调用安全）。按派发后真实黑板写数判定 `model_participated`、按 C2
+/// 形状落 `model_compression` 审计事件并置机械折叠兜底旗标；break 路径
+/// 上该旗标无消费方（run 即止），统一设置以保持单一出口语义。
+/// 边界：`?` 错误传播路径仍会丢弃状态（与 0AC-A6 Err 留痕同类，已挂账）。
+async fn finalize_model_compression_close(
+    state: &mut Option<(usize, u32)>,
+    audit: &mut crate::mechanical_audit::MechanicalAuditState,
+    svc: &SharedLoopServices<'_>,
+    writer: &mut EventWriter<'_>,
+    tool_rounds: u32,
+    force_compact_after_window: &mut Option<bool>,
+) -> Result<(), AgentLoopError> {
+    let Some((window_start_writes, rounds_used)) = state.take() else {
+        return Ok(());
+    };
+    let writes_now = svc.blackboard.read().model_note_count();
+    let participated = writes_now > window_start_writes;
+    let payload = audit.record(
+        "model_compression",
+        tool_rounds,
+        format!(
+            "model_participated={participated} rounds_used={rounds_used} \
+             window_start_writes={window_start_writes} writes_now={writes_now}"
+        ),
+        if participated {
+            None
+        } else {
+            Some("model_not_participated".to_string())
+        },
+    );
+    writer
+        .record(
+            EventType::MechanicalAuditUpdate,
+            serde_json::json!({
+                "kind": crate::mechanical_audit::KIND_MODEL_COMPRESSION,
+                "payload": payload,
+            }),
+        )
+        .await?;
+    *force_compact_after_window = Some(participated);
+    Ok(())
+}
+
 /// The shared model↔tool loop (M1 extraction, 2026-08-10).
 ///
 /// Semantics preserved verbatim from `run_turn_inner`'s loop body:
@@ -1389,34 +1436,18 @@ pub(crate) async fn run_agent_loop(
         // 轮携带 blackboard_write 落穿了正常派发路径——写入此刻已派发完成，
         // 黑板读数真实。按 C2 形状落账 `model_compression` 并置机械折叠
         // 兜底旗标；本迭代稍后的 summary_now 块即执行机械折叠
-        // （reason=attention_920k_window 既有路径）。
-        if let Some((window_start_writes, rounds_used)) = model_compression_close.take() {
-            let writes_now = svc.blackboard.read().model_note_count();
-            let participated = writes_now > window_start_writes;
-            let payload = mechanical_audit.record(
-                "model_compression",
-                tool_rounds,
-                format!(
-                    "model_participated={participated} rounds_used={rounds_used} \
-                     window_start_writes={window_start_writes} writes_now={writes_now}"
-                ),
-                if participated {
-                    None
-                } else {
-                    Some("model_not_participated".to_string())
-                },
-            );
-            writer
-                .record(
-                    EventType::MechanicalAuditUpdate,
-                    serde_json::json!({
-                        "kind": crate::mechanical_audit::KIND_MODEL_COMPRESSION,
-                        "payload": payload,
-                    }),
-                )
-                .await?;
-            force_compact_after_window = Some(participated);
-        }
+        // （reason=attention_920k_window 既有路径）。收口逻辑统一在
+        // `finalize_model_compression_close`（budget 收尾 / IPG block /
+        // run 尾三条异常出口同走此函数，窄边沿修复 2026-09-15）。
+        finalize_model_compression_close(
+            &mut model_compression_close,
+            &mut mechanical_audit,
+            svc,
+            writer,
+            tool_rounds,
+            &mut force_compact_after_window,
+        )
+        .await?;
         let fallback_now = pending_checkpoint.is_none()
             && last_prompt_tokens.is_some_and(|m| m > svc.context_compact.safety_tokens);
         let rhythm_now = pending_checkpoint.is_none()
@@ -2467,6 +2498,19 @@ pub(crate) async fn run_agent_loop(
                 });
             }
             last_text = response.text;
+            // 0ae D3 窄边沿修复（2026-09-15）：耗尽前最后一轮恰为窗口轮
+            // 落穿时，保留的 blackboard_write 声明因 D-8 不再派发——收口
+            // 审计事件必须在本 break 前落地（model_not_participated 如实），
+            // 否则状态随循环终止丢弃（审查登记观察）。
+            finalize_model_compression_close(
+                &mut model_compression_close,
+                &mut mechanical_audit,
+                svc,
+                writer,
+                tool_rounds,
+                &mut force_compact_after_window,
+            )
+            .await?;
             break;
         }
 
@@ -2641,6 +2685,18 @@ pub(crate) async fn run_agent_loop(
                     .push("IPG: block (tool phase)".to_string());
             }
             last_text = response.text;
+            // 0ae D3 窄边沿修复（2026-09-15）：IPG block 在派发前终止本轮
+            // ——窗口落穿保留的 blackboard_write 声明不会派发，收口审计
+            // 事件必须在本 break 前落地（model_not_participated 如实）。
+            finalize_model_compression_close(
+                &mut model_compression_close,
+                &mut mechanical_audit,
+                svc,
+                writer,
+                tool_rounds,
+                &mut force_compact_after_window,
+            )
+            .await?;
             break;
         }
 
@@ -3676,6 +3732,18 @@ pub(crate) async fn run_agent_loop(
         }
     }
 
+    // 0ae D3 窄边沿修复（2026-09-15）：run 尾安全网——前两条 break 路径
+    // 之外的未知正常出口若仍携带未收口窗口状态，在此兜底落账（take 幂等，
+    // 已收口时为空操作）。
+    finalize_model_compression_close(
+        &mut model_compression_close,
+        &mut mechanical_audit,
+        svc,
+        writer,
+        tool_rounds,
+        &mut force_compact_after_window,
+    )
+    .await?;
     // 0ac S3①-b（2026-09-15，设计 §4.2「不跨 run 存活」）：run 尾关闭
     // 队列——B1 投递在同一间隙 drain+due，正常路径恒空；此处的 close_drop
     // 是安全网（非空 = 异常残留，warn 留痕后丢弃，绝不跨 run 泄漏）。
@@ -5151,6 +5219,74 @@ mod tests {
         let summary = payload["summary"].as_str().unwrap();
         assert!(summary.contains("model_participated=false"), "{summary}");
         assert!(summary.contains("rounds_used=3"), "{summary}");
+        assert_eq!(payload["anomaly"], "model_not_participated");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// 窄边沿修复钉（2026-09-15 审查登记观察）：窗口轮落穿的同迭代若被
+    /// budget 耗尽收尾 break 截停（D-8：耗尽后不再派发任何工具），收口
+    /// 状态不得随循环终止丢弃——收口审计事件必须在 break 前落地，且如实
+    /// 记 model_not_participated（blackboard_write 因 D-8 未派发）。
+    #[tokio::test]
+    async fn compression_window_close_survives_budget_exhaustion_break() {
+        let fake = Arc::new(FakeProvider::new(vec![
+            // 第 1 轮：普通工具轮，measured 950K ⇒ 第 2 轮 loop-top 开窗；
+            // 轮末 tool_rounds(1) ≥ max_tool_rounds(1) ⇒ budget_exhausted。
+            ScriptedResponse::tool_calls(vec![tool_call("read_file", "call-r1")])
+                .with_prompt_tokens(950 * 1024),
+            // 第 2 轮（窗口轮）：模型声明 blackboard_write → 落穿 →
+            // D-8 耗尽收尾 break（不派发）→ break 前收口。
+            ScriptedResponse::tool_calls(vec![window_write_call("call-w1")])
+                .with_prompt_tokens(950 * 1024),
+        ]));
+        let gateway: Arc<dyn ModelGateway> = fake.clone();
+        let controller = AgentLoopController::with_gateway(gateway).with_max_tool_rounds(1);
+        let dir = test_dir();
+        let host = TestHost {
+            journal: JournalRecorder::new(dir.clone()),
+            tool_result: Some(ok_result()),
+        };
+        let _ = controller
+            .run_turn(
+                &host,
+                "窗口预算边沿测试",
+                "RUN-WIN-D",
+                MANIFEST,
+                0,
+                None,
+                None,
+                None,
+            )
+            .await
+            .unwrap();
+
+        // 恰两轮请求：第 2 轮窗口面只有 blackboard_write；无第 3 轮。
+        let requests = fake.received_requests();
+        assert_eq!(requests.len(), 2);
+        assert_eq!(
+            requests[1]
+                .tools
+                .iter()
+                .map(|t| t.name.as_str())
+                .collect::<Vec<_>>(),
+            vec!["blackboard_write"]
+        );
+
+        // 收口事件在 break 前落地：未参与如实落账（写入未派发）。
+        let mc: Vec<_> = audit_events(&dir)
+            .into_iter()
+            .filter(|e| e.payload["kind"] == crate::mechanical_audit::KIND_MODEL_COMPRESSION)
+            .collect();
+        assert_eq!(
+            mc.len(),
+            1,
+            "close event must land before the break: {mc:?}"
+        );
+        let payload = &mc[0].payload["payload"];
+        let summary = payload["summary"].as_str().unwrap();
+        assert!(summary.contains("model_participated=false"), "{summary}");
+        assert!(summary.contains("writes_now=0"), "{summary}");
         assert_eq!(payload["anomaly"], "model_not_participated");
 
         let _ = std::fs::remove_dir_all(&dir);
