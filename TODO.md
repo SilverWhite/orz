@@ -703,7 +703,9 @@ GLM F2 处置转排期（2026-09-06 用户裁决）：`orz-host/src/approval.rs`
 
 - [ ] `orz-host` resource_gate 拦截信封原因文案改为「宿主机内存/储存资源即将耗尽，无法新增派发，请寻找其他方案」（按实际耗尽轴标注内存/储存＋readings 随附）；同步涉及文案断言的测试/fixture。边界：不改 fail-closed 判定逻辑与阈值。入口：[深审 §5-B](docs/audits/0AC_S3B_RUN_DEEP_REVIEW_2026-09-15.md) / [BACKLOG 0af](docs/BACKLOG_AND_PRIORITIES.md)。
 
-### 0ah 动态上下文滑块（常驻滑窗；P1；2026-09-15 立项，**S1 实施批／v7 修订批／审查修正批／950K 截留二次改判均已落码；A/B 待放行**）
+### 0ah 动态上下文滑块（常驻滑窗；P1；2026-09-15 立项，**S1 五连批（实施批／v7 修订批／审查修正批／950K 失败处置改判／窗口内溢出二次改判）均已落码并提交入账；A/B 待放行**）
+
+- [x] **S1 五连批提交收尾与门禁回绿**（2026-09-15 用户确认放行「第 ① 步提交收尾」）：orz 子模块单笔 `61982a56`（13 文件 +4588/−850：`context_scale.rs` 新增、`attention_ladder.rs` 删除）＋父仓账本/契约单笔 `524518fe`（12 文件）；`orz_source_manifest.sha256` 重算 1450 条（差异面 12 行）；**门禁 `valid: true`（`error_count: 0`）**。下列各子批行内的「门禁 `valid: false`（唯一 error＝orz 未提交）／代码未提交」为**提交前读数**，已由本项闭合（内文不改写）。入口：[索引 v3.40 头行](CLI_PROJECT_INDEX.md) / [任务书 §10.5](docs/CONTEXT_DYNAMIC_SLIDER_S1_IMPLEMENTATION_TASK_2026-09-15.md)。
 
 - [x] **950K 截留二次改判（2026-09-15 用户三条裁定并当日落码；回执＝[`S1 任务书 §10.10`](docs/CONTEXT_DYNAMIC_SLIDER_S1_IMPLEMENTATION_TASK_2026-09-15.md)）**：① **窗口内溢出可机械消化**——`action_ledger::pointerize_oversized_tool_results`：截留后仍在线之上时，把超过 **8K** 估计（`OVERSIZED_TOOL_RESULT_CAP_TOKENS`）的 `Role::Tool` 正文换成「**原文头部 ≤400 字符 ＋ 回读指针**」（指向 run journal `events.jsonl`，按 `call_id=` 检索；声明「读取当时的快照、编辑/决策前新鲜读取」），**大者优先**直到降线；**`role`/`tool_call_id` 不动（配对不破坏）／幂等／不动非工具消息**（先例＝OUTPUT-DEGENERATION-GUARD／ADR-0010 §14.33）；② **模型面措辞统一「当前上下文窗口」**——500K／900K 提醒、首次驱逐固化提醒、窗口任务块、窗口降级块、压缩失败告知块、S1 台账固定指针一律去「滑块／驻留带」（内部注释与设计稿保留分区术语）；③ **截留告知不报容量读数**（本地存量无上限；500K/900K 提醒仍按 A6 带读数），告知改为逐项如实：窗口外 N 轮已移出／窗口内 M 个超大结果已指针化（含 `call_id` 指引）／两者皆无即「机械层到此为止」。**落账**：anomaly 三值 `hard_context_compaction_failed_truncated`／`_result_pointerized`（新）／`_slider_bound`，summary 增 `pointerized_results=`／`freed_tokens=`。**读数**：orz-loop **818/0/3**（+2 钉）、orz-host **325/0/5**（串行）、orz-assurance 229＋fixtures 全绿、fmt 干净、clippy 新增零告警、门禁 `valid: false`（唯一 error＝orz 未提交）。入口：[`设计稿 §3.4.1／§5／§8`](docs/CONTEXT_DYNAMIC_SLIDER_DESIGN_2026-09-15.md)。
 
