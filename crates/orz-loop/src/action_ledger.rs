@@ -51,11 +51,15 @@ pub fn ledger_file_path(session_cwd: &std::path::Path) -> std::path::PathBuf {
 /// 均固定（本会话内不变），不含任何变化 ID/序号——推进不重渲染，前缀稳定。
 /// 2026-08-18 审查修复：措辞避免绝对化——压缩会另存「未折叠即被 drain」的
 /// 轮次（压缩存档 + marker），外挂文件是折叠轮次的归档投影。
+/// 动态上下文滑块 S1（2026-09-15，设计 §3.1 纪律）：**参数不得进文案**——
+/// 驻留带 L 由「固定 8K 桥」改为可配档位（64K/80K/96K…），故文案不再报
+/// 数值（改 env 即一次性前缀失效；配置固定性优先于精确表述），改述「最近
+/// 若干完整轮」（＝驻留带）。
 pub fn build_pointer_message(ledger_path: &std::path::Path) -> String {
     format!(
         "{LEDGER_FOLD_POINTER_PREFIX}更早轮次的机械摘要已外挂存档：{}（本会话内固定）。\n\
          需要回顾历史时按行检索该文件，例如 grep \"轮次\" {}、\n\
-         grep <工具名> {}。当前会话仅保留最近约 8K 桥接内容，更早轮次已按行归档于 {}。",
+         grep <工具名> {}。当前**上下文窗口**只保留最近若干完整轮，更早轮次已按行归档于 {}。",
         ledger_path.display(),
         ledger_path.display(),
         ledger_path.display(),
@@ -162,9 +166,129 @@ pub fn render_run_context_block(
     )
 }
 
-/// 桥预算换算（真实 token 目标 → `estimate_messages_tokens` 估计口径）。
-pub fn fold_tail_estimate_budget(fold_tail_tokens: u64) -> u64 {
-    fold_tail_tokens.saturating_mul(FOLD_TAIL_CHARS_PER_TOKEN) / 2
+/// 用户 2026-09-15 裁定（窗口内溢出处置）：**超大工具结果指针化**的正文前缀
+/// ——`Role::Tool` 消息内容被换成「短头部 ＋ 回读指针」后的可识别标记
+/// （幂等判定用；Tool 消息不属注入块过滤面，无需注册 `is_injected_block_text`）。
+pub const TOOL_RESULT_POINTERIZED_PREFIX: &str = "[工具结果已机械指针化";
+
+/// 指针化时保留的原文头部字符数（让模型仍认得这个结果是什么）。
+const TOOL_RESULT_POINTER_HEAD_CHARS: usize = 400;
+
+/// 「超大结果」门槛（估计口径 chars/2）：**超过**此值才是指针化候选。
+/// 依据：实测多数读/计划轮 1–3K、终端执行轮 5–7K（08-19 桥预算同源读数）
+/// ⇒ 8K 以下不指针化，避免把正常工作现场磨成指针。
+pub const OVERSIZED_TOOL_RESULT_CAP_TOKENS: u64 = 8_000;
+
+/// 指针化统计（用户 2026-09-15 裁定；落账与告知均用这两个读数）。
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct PointerizeStats {
+    /// 被换成指针的工具结果条数。
+    pub replaced: u32,
+    /// 释放的估算 token（估计口径 chars/2）。
+    pub freed_tokens: u64,
+}
+
+/// **窗口内超大工具结果指针化**（用户 2026-09-15 裁定；先例＝
+/// OUTPUT-DEGENERATION-GUARD／ADR-0010 §14.33「落盘 ＋ 回读指针 ＋
+/// `read_file` 分页」）：硬线截留（移出窗口外轮次）之后仍在线之上、而溢出
+/// 体量位于**当前上下文窗口内**（单轮／单结果过大）时，把超过
+/// [`OVERSIZED_TOOL_RESULT_CAP_TOKENS`] 的**工具结果正文**换成
+/// 「原文头部（≤400 字符）＋ 回读指针」，直到估算 ≤ `target_estimate` 或没有
+/// 候选；**大者优先**（用最少条数换最多空间），不动非工具消息。
+///
+/// 不变量：① **配对不破坏**——只改 `content`，`role`／`tool_call_id` 一律不动
+/// （否则重放必 400）；② **幂等**——已带
+/// [`TOOL_RESULT_POINTERIZED_PREFIX`] 的结果不再入选；③ **不假装新鲜**——
+/// 指针行显式声明「这是读取当时的快照，可能已陈旧，编辑/决策前以新鲜读取为准」。
+pub fn pointerize_oversized_tool_results(
+    messages: &mut [Message],
+    target_estimate: u64,
+    per_result_cap: u64,
+    journal_path: Option<&std::path::Path>,
+    run_id: &str,
+) -> PointerizeStats {
+    let mut stats = PointerizeStats::default();
+    if per_result_cap == 0 {
+        return stats;
+    }
+    let mut estimate = crate::controller::estimate_messages_tokens(messages);
+    while estimate > target_estimate {
+        // 大者优先：选当前最大的合格候选（已指针化/未超门槛者不入围）。
+        let mut best: Option<(usize, u64)> = None;
+        for (idx, m) in messages.iter().enumerate() {
+            if m.role != Role::Tool || m.content.starts_with(TOOL_RESULT_POINTERIZED_PREFIX) {
+                continue;
+            }
+            let est = crate::controller::estimate_message_tokens(m);
+            if est <= per_result_cap {
+                continue;
+            }
+            if best.is_none_or(|(_, b)| est > b) {
+                best = Some((idx, est));
+            }
+        }
+        let Some((idx, before)) = best else { break };
+        let original = messages[idx].content.clone();
+        let replacement = tool_result_pointer_line(
+            &original,
+            journal_path,
+            run_id,
+            messages[idx].tool_call_id.as_deref(),
+        );
+        let after = replacement.chars().count() as u64 / 2;
+        messages[idx].content = replacement;
+        stats.replaced += 1;
+        let freed = before.saturating_sub(after);
+        stats.freed_tokens = stats.freed_tokens.saturating_add(freed);
+        estimate = estimate.saturating_sub(freed);
+    }
+    stats
+}
+
+/// 指针行文本（头部 ＋ 回读指针；位置＝run journal 的 `events.jsonl`，
+/// 按 `call_id` 检索该次工具结果事件）。
+fn tool_result_pointer_line(
+    original: &str,
+    journal_path: Option<&std::path::Path>,
+    run_id: &str,
+    call_id: Option<&str>,
+) -> String {
+    let chars = original.chars().count();
+    let head: String = original
+        .chars()
+        .take(TOOL_RESULT_POINTER_HEAD_CHARS)
+        .collect();
+    let call = call_id.unwrap_or("（无）");
+    let location = match journal_path {
+        Some(p) => format!(
+            "run journal {}（按 `call_id={call}` 检索该次工具结果；grep 或 read_file 分页均可）",
+            p.display()
+        ),
+        None => format!("run journal（{run_id}；按 `call_id={call}` 检索）"),
+    };
+    format!(
+        "{TOOL_RESULT_POINTERIZED_PREFIX}（窗口内超大结果）] 正文 {chars} 字符已移出模型上下文\
+         ——**原文仍在本地档案、逐字可回读**。\n\
+         回读指针：{location}；终端输出的完整日志另见其结果尾部原有指针。\n\
+         需要时请用 read_file 读取（大文件用 offset/limit 分页）。这是**读取当时的快照**，\
+         可能已陈旧：编辑或据此决策前请以新鲜读取为准。\n\
+         == 原文头部（前 {head_chars} 字符） ==\n{head}",
+        head_chars = TOOL_RESULT_POINTER_HEAD_CHARS
+    )
+}
+
+/// 驻留带预算换算（真实 token 目标 → `estimate_messages_tokens` 估计口径）。
+///
+/// 动态上下文滑块 S1（2026-09-15，设计 §3.1/§3.3）：驻留带 **L** 以真实
+/// token 计量（`ORZ_SLIDER_RESIDENT_TOKENS`，默认 64K），而驱逐判定的视图
+/// 估算是 chars/2 口径 ⇒ 需按 `FOLD_TAIL_CHARS_PER_TOKEN`（2 字符/真实
+/// token，S4 实测校准）换算真实 token → 字符 → 估计口径。换算后
+/// `bridge_estimate_budget(64_000) == 64_000`（估计口径数值 ≈ 真实 token）。
+///
+/// 命名沿革：本函数原为 08-19 的 8K 桥预算换算（`fold_tail_estimate_budget`）；
+/// S1 把桥语义并入驻留带（桥＝驻留带的尾部投影），改名并改量级（8K → L）。
+pub fn bridge_estimate_budget(resident_tokens: u64) -> u64 {
+    resident_tokens.saturating_mul(FOLD_TAIL_CHARS_PER_TOKEN) / 2
 }
 
 /// One external-file row: `[<全局序号>] 轮次 <窗口内轮次>: <工具> 目标=…
@@ -283,14 +407,32 @@ fn tail_seq(path: &std::path::Path) -> std::io::Result<u64> {
 /// caller — a failed append must NOT advance the fold state (the rows
 /// would be lost from both the view and the file; the next trigger retries).
 pub fn append_ledger_rows(path: &std::path::Path, rows: &[ActionLedgerRow]) -> std::io::Result<()> {
+    append_ledger_rows_range(path, rows).map(|_| ())
+}
+
+/// v7 原文定位指针（S1 修订批，2026-09-15，设计 §3.5.1）：与
+/// [`append_ledger_rows`] 同一实现，但把本次实际分配的 `[seq]` 闭区间
+/// 返回给调用方（压缩 marker 的「台账 `[seq]` 区间」指针来源；空输入
+/// 返回 `None`）。行序号跨压缩连续，故区间可直接用于回读定位。
+///
+/// 审查修正批（2026-09-15，审查 P3⑩）：序号分配是「读尾号 → 追加」两步，
+/// **非跨进程原子**——同一 `session_cwd` 下若有并行主车道会话同时折叠，两者
+/// 可能交错追加（深审 §3-4 记录过同工作区并发事实）。故本区间按「**本 epoch
+/// 观测到的行跨度**」读：指针仍可定位，但并发场景下可能覆盖到别的会话写入的
+/// 行（后续若要严格隔离，须给台账文件加会话域或写锁——本批不动）。
+pub fn append_ledger_rows_range(
+    path: &std::path::Path,
+    rows: &[ActionLedgerRow],
+) -> std::io::Result<Option<(u64, u64)>> {
     use std::io::Write;
     if rows.is_empty() {
-        return Ok(());
+        return Ok(None);
     }
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)?;
     }
     let mut seq = tail_seq(path)?;
+    let first_assigned = seq + 1;
     let mut buf = String::new();
     for row in rows {
         seq += 1;
@@ -306,11 +448,14 @@ pub fn append_ledger_rows(path: &std::path::Path, rows: &[ActionLedgerRow]) -> s
         .append(true)
         .open(path)?;
     file.write_all(buf.as_bytes())?;
-    file.flush()
+    file.flush()?;
+    Ok(Some((first_assigned, seq)))
 }
 
 /// FUS-LEDGER-FOLD-STATE (2026-08-18, ADR-0010 §14.26): the stateful fold
-/// point of one loop invocation.
+/// point of one loop invocation — 动态上下文滑块 S1（2026-09-15，设计 §3.1）
+/// 起即「常驻滑窗」状态：`fold_cut` ＝ **驻留带起点 `L_start`**，`bridge_end`
+/// ＝ 冻结桥末端，两者之间为驻留带（估计预算 = `slider_resident_tokens`）。
 ///
 /// The stateless `build_collapsed_request` recomputes the fold boundary
 /// before EVERY model request — as each new complete round shifts the
@@ -318,7 +463,8 @@ pub fn append_ledger_rows(path: &std::path::Path, rows: &[ActionLedgerRow]) -> s
 /// prefix cache misses every round (measured ≈ 67% hit rate; see the
 /// 2026-08-18 ledger-fold design). This struct freezes the fold point:
 /// between advances the request view is `messages[..fold_start]` +
-/// `folded_ledger` + `messages[fold_cut..]` — byte-stable, pure append.
+/// `folded_ledger` + `messages[fold_cut..]` — byte-stable, pure append
+/// （滑窗下「驱逐」＝一次性前缀重写，谷值恒 ≥L——设计 §3.1 不变量）。
 /// FUS-LEDGER-FOLD-STATE external-file design (2026-08-18, ADR-0010
 /// §14.28): `folded_ledger` is the byte-FIXED pointer message (not a
 /// growing ledger block) — the folded rows are appended to the external
@@ -335,17 +481,18 @@ pub struct LedgerFoldState {
     /// Fold anchor: the first assistant tool declaration index (the
     /// preamble ends here). Set at the first advance, then immutable.
     pub fold_start: Option<usize>,
-    /// Closed-end index of the folded region — the verbatim retention
-    /// region of the request view is `[fold_cut..]`.
+    /// Closed-end index of the folded (evicted) region ＝ 驻留带起点
+    /// `L_start`（设计 §3.2）：视图的逐字保留区为 `[fold_cut..]`，其头部
+    /// `[fold_cut..bridge_end)` 是冻结桥、其后是纯追加尾部。S1 起驱逐深度
+    /// ＝H−L（每次只失最旧一段，视图谷值恒 ≥L）。
     pub fold_cut: Option<usize>,
-    /// FUS-LEDGER-FOLD-BRIDGE (2026-08-19, ADR-0010 §14.32 / 设计 §3.1):
-    /// closed-end index of the FROZEN bridge — `messages.len()` at the last
-    /// advance. The request view renders `[fold_cut..bridge_end)` as the
-    /// bridge (reasoning stripped; content truncated to the budget only when
-    /// the newest round alone overran it) and `[bridge_end..]` verbatim —
-    /// between advances the bridge is fixed, so the view stays a pure
-    /// append of the previous request (byte-stable prefix, cache discipline;
-    /// the growing tail is never re-truncated per request).
+    /// 冻结桥末端（FUS-LEDGER-FOLD-BRIDGE 2026-08-19 §14.32 × 动态上下文滑块
+    /// S1 2026-09-15 设计 §3.1）：＝上一次推进时的 `messages.len()`。视图把
+    /// `[fold_cut..bridge_end)` 渲染为**驻留带**（剥推理；仅当最新一轮单独
+    /// 超预算时按预算截断），`[bridge_end..]` 逐字渲染——推进之间桥固定，
+    /// 视图恒为上一次请求的纯追加（前缀字节稳定、缓存纪律；增长的尾部绝不
+    /// 按请求重新截断）。**L（预算）由 8K 桥改为驻留带 `slider_resident_tokens`
+    /// （默认 64K）**；`fold_cut` 即设计 §3.2 的 `L_start`（驻留带起点）。
     pub bridge_end: Option<usize>,
     /// The byte-fixed pointer message (external-file design; set once on
     /// the first advance — the folded rows live in the external ledger
@@ -968,9 +1115,15 @@ fn is_round_balanced(messages: &[Message], range: (usize, usize)) -> bool {
 
 /// FUS-LEDGER-FOLD-STATE (2026-08-18, ADR-0010 §14.26 + §14.28
 /// external-file design) × FUS-LEDGER-FOLD-BRIDGE (2026-08-19, ADR-0010
-/// §14.32): advance the fold point — fold the NEW complete old rounds
-/// before the bridge (newest complete rounds within `budget_estimate`,
-/// `estimate_messages_tokens` 口径) and move `fold_cut` forward.
+/// §14.32) × 动态上下文滑块 S1 (2026-09-15, CONTEXT_DYNAMIC_SLIDER_DESIGN
+/// §3.1/§3.2): advance the fold point ＝ **一次驱逐**——把驻留带之前的
+/// NEW complete old rounds 折进台账并前移 `fold_cut`（＝`L_start`）。
+///
+/// `budget_estimate` ＝ 驻留带预算（估计口径，由调用方按
+/// `bridge_estimate_budget(slider_resident_tokens)` 给出）：自最旧驻留轮
+/// 起收集**连续完整轮**，直到剩余（最新）轮累计估算 ≤ 预算 ⇒ 移出的是
+/// 一整段连续完整轮（段边界整轮对齐，按 token 硬切否决）。驱逐深度 ≈ H−L
+/// （调用方的触发线为视图估算 ≥ H）。
 ///
 /// Returns `Some(rows)` — ONLY the rows newly folded since the last
 /// advance — and the caller appends them to the external ledger file
@@ -2145,26 +2298,158 @@ mod tests {
     }
 
     #[test]
-    fn fold_tail_estimate_budget_converts_tokens_to_chars_half() {
-        // 默认 8K 真实 token → 16K 字符 → 8K 估计口径（chars/2）——
-        // S4 实测校准（2026-08-19）：≈ 2 字符/真实 token，估计口径 ≈ 真实
-        // token（path-tracing 07:08 运行，桥 12,948 字符 → 重付 6,493）。
-        assert_eq!(fold_tail_estimate_budget(8_000), 8_000);
-        assert_eq!(fold_tail_estimate_budget(1), 1);
-        assert_eq!(fold_tail_estimate_budget(0), 0);
+    fn bridge_estimate_budget_converts_tokens_to_chars_half() {
+        // 驻留带 L 以真实 token 计量 → 2 字符/真实 token → chars/2 估计口径
+        // ⇒ 数值恒等（估计口径 ≈ 真实 token；S4 实测校准 2026-08-19：
+        // path-tracing 07:08 运行桥 12,948 字符 → 重付 6,493 真实 token）。
+        // S1（2026-09-15）把预算量级从 8K 桥改为 L（默认 64_000）。
+        assert_eq!(bridge_estimate_budget(64_000), 64_000);
+        assert_eq!(bridge_estimate_budget(8_000), 8_000);
+        assert_eq!(bridge_estimate_budget(1), 1);
+        assert_eq!(bridge_estimate_budget(0), 0);
         assert_eq!(
-            fold_tail_estimate_budget(u64::MAX),
+            bridge_estimate_budget(u64::MAX),
             u64::MAX / 2,
             "饱和乘法后 ÷2"
         );
     }
 
+    /// 动态上下文滑块 S1（2026-09-15，设计 §3.1/§3.2）：**一次驱逐**＝自最旧
+    /// 驻留轮起收集**连续完整轮**，直到剩余（最新）轮累计估算 ≤ 驻留带预算 L
+    /// ——移出的恒是整段连续完整轮（段边界整轮对齐；按 token 硬切否决），
+    /// 驻留带恒含 ≥1 个完整轮（最新轮单独超预算时仍保留 ⇒ 视图谷值的物理
+    /// 下限）；L 越深驱逐越浅（cut 单调右移）；二次推进只带**新**驱逐轮的行。
     #[test]
-    fn pointer_message_mentions_8k_bridge() {
+    fn slider_evicts_contiguous_rounds_keeping_the_resident_band() {
+        let mut messages = vec![msg(Role::User, "任务")];
+        for k in 0..4 {
+            messages.extend(round(
+                &format!("c{k}"),
+                "read_file",
+                "a.py",
+                &"A".repeat(1_000),
+            ));
+        }
+        // 轮起点：1(c0) / 3(c1) / 5(c2) / 7(c3)（每轮 = 声明 + 结果）。
+        let round_cost = est_budget(&messages, 7);
+        let ledger = std::path::PathBuf::from("unused-ledger.md");
+
+        let mut fold = LedgerFoldState::default();
+        let rows = advance_fold(&messages, &mut fold, round_cost, &ledger, None).unwrap();
+        assert_eq!(fold.fold_start, Some(1), "preamble 边界＝首个工具声明");
+        assert_eq!(fold.fold_cut, Some(7), "L_start 落在最新轮起点（整轮对齐）");
+        assert_eq!(rows.len(), 3, "驱逐 c0/c1/c2 三个连续完整轮");
+        assert_eq!(
+            fold.bridge_end,
+            Some(messages.len()),
+            "冻结桥末端＝推进时末尾"
+        );
+        assert_eq!(
+            fold.folded_ledger.as_deref(),
+            Some(build_pointer_message(&ledger).as_str()),
+            "指针消息字节固定（set-once）"
+        );
+
+        // 驻留带加深 ⇒ 驱逐变浅（保留更多轮）：cut 单调右移。
+        let mut deeper = LedgerFoldState::default();
+        let rows_deep =
+            advance_fold(&messages, &mut deeper, round_cost * 2 + 10, &ledger, None).unwrap();
+        assert_eq!(deeper.fold_cut, Some(5), "L 更深 ⇒ 只驱逐 c0/c1");
+        assert_eq!(rows_deep.len(), 2);
+        assert!(
+            deeper.fold_cut.unwrap() <= fold.fold_cut.unwrap(),
+            "驻留带越深、L_start 越靠前（驱逐越浅）"
+        );
+
+        // 二次推进：L_start 前移，只带新驱逐轮的行（旧行已在外挂文件里）。
+        messages.extend(round("c4", "read_file", "a.py", &"A".repeat(1_000)));
+        let rows2 = advance_fold(&messages, &mut fold, round_cost, &ledger, None).unwrap();
+        assert_eq!(fold.fold_cut, Some(9), "L_start 前移至新驻留带起点");
+        assert_eq!(rows2.len(), 1, "只有新驱逐轮产生行（不重复已归档轮）");
+        assert_eq!(rows2[0].tool, "read_file");
+    }
+
+    #[test]
+    fn oversized_tool_results_are_pointerized_idempotently() {
+        let mut messages = vec![msg(Role::User, "任务")];
+        // 小结果（200 字符 ≈100 估计）与超大结果（60K 字符 ≈30K 估计）。
+        messages.extend(round("c1", "read_file", "small.py", &"s".repeat(200)));
+        messages.extend(round("c2", "read_file", "big.py", &"B".repeat(60_000)));
+        let target = 1_000;
+        let stats = pointerize_oversized_tool_results(
+            &mut messages,
+            target,
+            OVERSIZED_TOOL_RESULT_CAP_TOKENS,
+            Some(std::path::Path::new(".gsa/runs/RUN-X/events.jsonl")),
+            "RUN-X",
+        );
+        assert_eq!(stats.replaced, 1, "只替换超门槛的那一条");
+        assert!(
+            stats.freed_tokens > 25_000,
+            "释放读数: {}",
+            stats.freed_tokens
+        );
+        assert!(
+            crate::controller::estimate_messages_tokens(&messages) <= target,
+            "达线即停"
+        );
+        let big = messages
+            .iter()
+            .find(|m| m.tool_call_id.as_deref() == Some("c2"))
+            .expect("超大工具结果仍在（配对未破坏）");
+        assert!(big.content.starts_with(TOOL_RESULT_POINTERIZED_PREFIX));
+        assert!(big.content.contains("call_id=c2"), "{}", big.content);
+        assert!(big.content.contains("events.jsonl"), "{}", big.content);
+        assert!(
+            big.content.contains("新鲜读取"),
+            "不假装新鲜: {}",
+            big.content
+        );
+        assert!(
+            big.content.contains("原文头部"),
+            "保留头部: {}",
+            big.content
+        );
+        let small = messages
+            .iter()
+            .find(|m| m.tool_call_id.as_deref() == Some("c1"))
+            .expect("小结果");
+        assert!(
+            !small.content.starts_with(TOOL_RESULT_POINTERIZED_PREFIX),
+            "未超门槛不得指针化"
+        );
+        assert_eq!(declared_ids(&messages).len(), 2, "声明配对未破坏");
+        assert!(
+            messages
+                .iter()
+                .any(|m| m.role == Role::Assistant && m.tool_calls.len() == 1),
+            "assistant 声明原样"
+        );
+        // 幂等：重复调用不再替换（不重复消耗/不重复改写）。
+        let again = pointerize_oversized_tool_results(
+            &mut messages,
+            target,
+            OVERSIZED_TOOL_RESULT_CAP_TOKENS,
+            None,
+            "RUN-X",
+        );
+        assert_eq!(again.replaced, 0);
+        assert_eq!(again.freed_tokens, 0);
+    }
+
+    #[test]
+    fn pointer_message_is_parameter_free_and_points_at_the_ledger() {
         let pointer = build_pointer_message(std::path::Path::new(".gsa/ledger/current.md"));
         assert!(pointer.starts_with(LEDGER_FOLD_POINTER_PREFIX), "{pointer}");
         assert!(pointer.contains(".gsa/ledger/current.md"), "{pointer}");
-        assert!(pointer.contains("约 8K 桥接内容"), "{pointer}");
+        // S1（2026-09-15，设计 §3.1 纪律）：参数不进文案——L 已成可配档位，
+        // 指针文案只说「最近若干完整轮（驻留带）」，不报 8K/64K 等数值。
+        // 用户 2026-09-15 裁定：模型面措辞统一为「当前上下文窗口」（不再说「滑块/驻留带」）。
+        assert!(
+            pointer.contains("当前**上下文窗口**只保留最近若干完整轮"),
+            "{pointer}"
+        );
+        assert!(!pointer.contains("8K"), "参数不得进指针文案: {pointer}");
         assert!(
             pointer.contains("更早轮次已按行归档于 .gsa/ledger/current.md"),
             "指针文案与设计 §3.4 定稿措辞一致（审查处理 N1）: {pointer}"

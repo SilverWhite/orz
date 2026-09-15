@@ -505,12 +505,15 @@ pub fn build_summary_marker(
     // §14.28): the fixed external ledger path — the marker line points a
     // restored conversation at the surviving append-only history.
     ledger_path: Option<&Path>,
+    // v7（S1 修订批）：原文定位指针四项（设计 §3.5.1）——每条压缩 marker 必带。
+    locators: &LocatorPointers,
 ) -> String {
     // 机械模式（2026-08-18 B 定案，ADR-0010 §14.29）：压缩恒写存档，
     // digest 恒存在——无「摘要重试失败」终止态。
     let digest_line = format!("摘要 digest: sha256:{digest}");
     let ledger_line =
         ledger_path.map_or_else(String::new, |p| format!("历史摘要累积于 {}\n", p.display()));
+    let locator_lines = locators.render_marker_lines(archive_path, digest);
     format!(
         "[前文上下文已压缩 v0.2]\n\
          {guard_note}\
@@ -519,6 +522,7 @@ pub fn build_summary_marker(
          摘要 ID: {id}\n被压轮次: {rounds_dropped} 轮\n\
          摘要存档: {}\n{digest_line}\n\
          黑板会话: {}\n\
+         {locator_lines}\n\
          目的: {}\n\
          计划: {}\n\
          变动文件路径: {}\n\
@@ -553,6 +557,116 @@ pub fn build_summary_marker(
             ""
         },
         ledger_line = ledger_line,
+    )
+}
+
+/// **v7 语义轨 marker**（S1 修订批，2026-09-15，设计 §3.4.1／§3.5.1；用户
+/// 裁定 DP-14／DP-17）：模型产出的**语义摘要替换被压区**——marker 承载该
+/// 摘要正文（这就是压缩后继续携带的语义面）、四项原文定位指针、以及结构化
+/// 轨的分工声明（机械层只做指针化，**不宣称语义保全**）。
+///
+/// prefix 仍为 `[前文上下文已压缩`（滚动单 marker 的删除口径与注入块识别
+/// 共用同一前缀；`is_injected_block_text` 已登记）——`v0.3-语义` 版本号区分
+/// 机械快照与模型摘要两条轨。
+#[allow(clippy::too_many_arguments)]
+pub fn build_model_summary_marker(
+    id: &str,
+    digest: &str,
+    archive_path: &Path,
+    summary: &str,
+    reason: &str,
+    rounds_dropped: u32,
+    round_from: Option<u64>,
+    r_keep: u64,
+    session_snapshot: Option<&str>,
+    archive_write_failed: bool,
+    ledger_path: Option<&Path>,
+    locators: &LocatorPointers,
+) -> String {
+    let ledger_line =
+        ledger_path.map_or_else(String::new, |p| format!("历史摘要累积于 {}\n", p.display()));
+    let locator_lines = locators.render_marker_lines(archive_path, digest);
+    let round_note = match round_from {
+        Some(f) if f <= r_keep.saturating_sub(1) => {
+            format!(
+                "（会话轮 r{f}–r{}，保留尾首轮 r_keep={r_keep}）",
+                r_keep - 1
+            )
+        }
+        _ => format!("（保留尾首轮 r_keep={r_keep}）"),
+    };
+    format!(
+        "[前文上下文已压缩 {version}]\n\
+         {archive_note}\
+         {ledger_line}\
+         摘要 ID: {id}\n被压轮次: {rounds_dropped} 轮{round_note}\n\
+         摘要存档: {archive_path}\n摘要 digest: sha256:{digest}\n\
+         黑板会话: {session}\n\
+         语义摘要来源: 模型产出（reason={reason}，mode=model_summary）\n\
+         {locator_lines}\n\
+         == 语义摘要（模型产出，原文替换） ==\n{summary}\n\n\
+         == 结构化轨（机械） ==\n\
+         工具／命令／结果类原文已由机械压缩移出模型上下文（台账摘要行每字段上限 \
+         300 字符——机械层只做指针化，不宣称语义保全）。**逐字原文的权威载体是 \
+         journal（上表 journal run+seq）**：台账只有摘要行、本 compaction 存档只存 \
+         摘要与指针、sidecar 不含已被移出的区间（逐字分页回读属 S2、尚未实现）。\n\
+         == 查询指针 ==\n{pointer}\n\
+         [/前文上下文已压缩]",
+        version = MODEL_SUMMARY_MARKER_VERSION,
+        archive_note = if archive_write_failed {
+            "存档写入失败：摘要未落盘，需处理\n"
+        } else {
+            ""
+        },
+        archive_path = archive_path.display(),
+        session = session_snapshot.unwrap_or("（无）"),
+        pointer = FOLD_SNAPSHOT_POINTER_TEXT,
+    )
+}
+
+/// v7 语义轨 marker 版本号（机械快照 v0.3 ／ 语义摘要 v0.3-语义）。
+pub const MODEL_SUMMARY_MARKER_VERSION: &str = "v0.3-语义";
+
+/// 语义轨 marker／存档的固定开销估算（token，chars/2 估算口径）：框架行 ＋
+/// 四项定位指针 ＋ 分工声明。缩减判定用（摘要块不小于被压区 ⇒ 不替换）。
+pub const MODEL_SUMMARY_MARKER_OVERHEAD_TOKENS: u64 = 1_200;
+
+/// 语义轨替换文本的估算体量（token）＝ 摘要正文字数/2 ＋ 固定开销。
+pub fn model_summary_marker_estimate(summary: &str) -> u64 {
+    summary.chars().count() as u64 / 2 + MODEL_SUMMARY_MARKER_OVERHEAD_TOKENS
+}
+
+/// 语义轨压缩存档（审计副本）：模型产出的语义摘要 ＋ 四项原文定位指针 ＋
+/// 结构化轨的分工声明。**不复制被压区逐字原文**——原文在 run journal 与
+/// conversation sidecar（`.gsa/compaction/` 只留摘要与指针，避免同一份逐字
+/// 内容在三处重复膨胀，设计 §3.5「A 与 B 两类留存量」）。
+#[allow(clippy::too_many_arguments)]
+pub fn model_summary_archive_markdown(
+    id: &str,
+    reason: &str,
+    rounds_dropped: u32,
+    r_keep: u64,
+    session: Option<&str>,
+    archive_path: &Path,
+    summary: &str,
+    locators: &LocatorPointers,
+) -> String {
+    let locator_lines = locators.render_marker_lines(archive_path, "（见 marker 行）");
+    format!(
+        "# ORZ 会话压缩摘要（语义轨 {version}，模型产出）{id}\n\n\
+         - 状态: complete（mode=model_summary；模型产出摘要替换被压区）\n\
+         - 事件 reason: {reason}\n\
+         - 被压轮次: {rounds_dropped} 轮\n- 保留尾首轮 r_keep: {r_keep}\n\
+         - 黑板会话: {session}\n- 摘要存档: {path}\n\n\
+         ## 原文定位（四项）\n{locator_lines}\n\n\
+         ## 语义摘要（模型产出，原文替换；被压区逐字本体以 journal 为准——\
+         sidecar 只含未被移出的对话）\n{summary}\n\n\
+         ## 结构化轨（机械）\n\
+         工具／命令／结果类原文由机械压缩移出模型上下文（台账摘要行每字段上限 300 \
+         字符）；机械层只做指针化，**不宣称语义保全**。\n",
+        version = MODEL_SUMMARY_MARKER_VERSION,
+        path = archive_path.display(),
+        session = session.unwrap_or("（无）"),
     )
 }
 
@@ -650,6 +764,68 @@ pub struct FoldSnapshotCtx {
     pub current_domain: Domain,
 }
 
+/// **v7 原文定位指针**（S1 修订批，2026-09-15，设计 §3.5.1；用户裁定）：
+/// 每次压缩产出的 marker／摘要块必须携带四项定位指针，使模型（与事后审计）
+/// 能按指针回读逐字原文——S1 只有 compaction 存档路径＋digest＋台账路径，
+/// 缺 journal 与 sidecar 定位。
+///
+/// 1. compaction 存档路径 ＋ digest（下两字段之外的 `archive_path`/`digest`）；
+/// 2. 台账 `[seq]` 区间（本窗口 epoch 内已折叠行；跨压缩连续的全局行键）；
+/// 3. journal `run id ＋ sequence 区间`（本窗口 epoch 的事件跨度）；
+/// 4. conversation sidecar 路径（`.gsa/conversations/<session8>.json`）。
+///
+/// 口径（设计 §3.5.1「三键口径」同源）：S1／修订批给**窗口 epoch 级**跨度
+/// （段级 LIF 轮区间随尾批 §7 落地）；缺项如实渲染「（无）」，不虚构。
+/// 逐字分页回读（按区间重放）仍属 S2。
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct LocatorPointers {
+    /// 台账 `[seq]` 区间（闭区间；None = 本窗口未折叠/无外挂台账）。
+    pub ledger_seq: Option<(u64, u64)>,
+    /// 外挂台账文件路径（None = 无）。
+    pub ledger_path: Option<String>,
+    /// journal run id（None = grill 丢弃模式 / 无 journal 的测试面）。
+    pub journal_run: Option<String>,
+    /// journal sequence 闭区间（本窗口 epoch）。
+    pub journal_seq: Option<(u64, u64)>,
+    /// conversation sidecar 路径。
+    pub conversation_path: Option<String>,
+}
+
+impl LocatorPointers {
+    /// 四项定位指针的 marker／摘要块渲染（缺项如实写「（无）」）。
+    pub fn render_marker_lines(&self, archive_path: &Path, digest: &str) -> String {
+        fn range(r: Option<(u64, u64)>) -> String {
+            match r {
+                Some((a, b)) => format!("{a}–{b}"),
+                None => "（无）".to_string(),
+            }
+        }
+        // 审查修正批（2026-09-15，审查 P2③）：**逐项标注载体到哪一层**——
+        // 原文案「逐字原文见上方四项定位指针」过承诺：被压区经 `drain` 后
+        // 不在 `messages`（⇒ 不在 sidecar），compaction 存档按设计只存摘要与
+        // 指针，台账行每字段 300 字符上限 ⇒ **逐字原文的权威载体只有
+        // journal**（逐事件全文、链式 sha256）。逐字分页回读仍属 S2。
+        let ledger_file = self
+            .ledger_path
+            .as_deref()
+            .map(|p| format!("（文件 {p}；每字段 300 字符摘要行）"))
+            .unwrap_or_default();
+        format!(
+            "原文定位（四项）:\n\
+             - compaction 存档: {}（sha256:{}；只存摘要与指针，不含被压区逐字原文）\n\
+             - 台账 [seq] 区间: {}{ledger_file}\n\
+             - journal: run={} seq={}（逐事件全文＝**逐字原文的权威载体**）\n\
+             - 会话档案（sidecar）: {}（未被移出的对话；被压区不在其中）",
+            archive_path.display(),
+            digest,
+            range(self.ledger_seq),
+            self.journal_run.as_deref().unwrap_or("（无）"),
+            range(self.journal_seq),
+            self.conversation_path.as_deref().unwrap_or("（无）"),
+        )
+    }
+}
+
 /// 单次 v0.3 marker 生成的输入（调用方在 drain 后定稿）。
 #[derive(Debug, Clone, Copy)]
 pub struct FoldSnapshotInput<'a> {
@@ -670,6 +846,8 @@ pub struct FoldSnapshotInput<'a> {
     /// 存档「冻结折叠视图」段的字节固定指针消息（`fold_state.folded_ledger`
     /// 原文；与 v0.2 存档段一致，None = 未折叠/无指针）。
     pub frozen_ledger: Option<&'a str>,
+    /// v7 原文定位指针四项（S1 修订批；缺项如实渲染「（无）」）。
+    pub locators: &'a LocatorPointers,
     pub budget: CompactionBudget,
 }
 
@@ -924,6 +1102,9 @@ fn assemble_marker_text(
     guard_failed: bool,
     archive_write_failed: bool,
     ledger: Option<&str>,
+    // v7（S1 修订批）：原文定位指针四项——每次压缩的 marker 必带，使模型
+    // 与事后审计都能回读被压区原文（设计 §3.5.1）。
+    locators: &LocatorPointers,
     blocks: &FoldBlocks,
 ) -> String {
     let mut head = format!("[前文上下文已压缩 {version}]\n");
@@ -942,9 +1123,11 @@ fn assemble_marker_text(
         }
         _ => format!("保留尾首轮 r_keep={r_keep}"),
     };
+    let locator_lines = locators.render_marker_lines(archive_path, digest);
     format!(
         "{head}摘要 ID: {id}\n被压轮次: {rounds_dropped} 轮（{paren}）\n\
          摘要存档: {}\n摘要 digest: sha256:{digest}\n黑板会话: {}\n\n\
+         {locator_lines}\n\n\
          == 近窗明细（round < r_keep，已排除保留尾） ==\n{}\n\n\
          == 旧段聚合（≤{segment_cap} 条标注行） ==\n{}\n\n\
          == 失败目标聚合 ==\n{}\n\n\
@@ -1051,6 +1234,7 @@ pub fn build_fold_snapshot_marker(
             input.guard_failed,
             input.archive_write_failed,
             input.ledger_note,
+            input.locators,
             &blocks,
         );
         if probe.chars().count() <= budget.total_chars || b_sections.is_empty() {
@@ -1137,6 +1321,7 @@ pub fn build_fold_snapshot_marker(
         input.guard_failed,
         input.archive_write_failed,
         input.ledger_note,
+        input.locators,
         &blocks,
     );
     let marker_chars = marker.chars().count();
@@ -1254,6 +1439,7 @@ mod tests {
             false,
             None,
             None,
+            test_locators(),
         );
         for expected in [
             "目的: （无）",
@@ -1735,6 +1921,7 @@ mod tests {
             false,
             Some("SESSION-abc"),
             Some(Path::new(".gsa/ledger/current.md")),
+            test_locators(),
         );
         assert!(marker.starts_with(crate::prompt::CONTEXT_COMPRESSED_PREFIX));
         assert!(marker.contains(&digest));
@@ -1780,6 +1967,7 @@ mod tests {
             false,
             Some("SESSION-abc"),
             Some(Path::new(".gsa/ledger/current.md")),
+            test_locators(),
         );
         assert!(marker.starts_with(crate::prompt::CONTEXT_COMPRESSED_PREFIX));
     }
@@ -1811,12 +1999,87 @@ mod tests {
             false,
             Some("SESSION-abc"),
             None,
+            test_locators(),
         );
         assert!(!marker.contains("summary_incomplete"));
         assert!(marker.contains(NOTES_FACTS_EMPTY));
         assert!(marker.contains(MECHANICAL_CONTINUATION_PLACEHOLDER));
         assert!(marker.contains(&format!("sha256:{digest}")));
         assert!(marker.contains("黑板会话: SESSION-abc"));
+    }
+
+    /// v7（S1 修订批，设计 §3.5.1，DP-17）：每条压缩 marker 必须携带**四项
+    /// 原文定位指针**（compaction 存档＋digest／台账 `[seq]` 区间／journal
+    /// run+sequence／conversation sidecar 路径），缺项如实写「（无）」——
+    /// 机械 marker 与语义 marker 共用同一渲染函数（本钉走语义 marker）。
+    #[test]
+    fn compact_marker_carries_four_locator_pointers() {
+        let locators = LocatorPointers {
+            ledger_seq: Some((7, 23)),
+            ledger_path: Some(".gsa/ledger/current.md".to_string()),
+            journal_run: Some("RUN-LOC-0".to_string()),
+            journal_seq: Some((11, 88)),
+            conversation_path: Some(".gsa/conversations/session1.json".to_string()),
+        };
+        let summary = "[SEMANTIC_SUMMARY]\n目标: x\n已完成: y\n[/SEMANTIC_SUMMARY]";
+        let marker = build_model_summary_marker(
+            "compaction-RUN-LOC-0001",
+            &"a".repeat(64),
+            Path::new(".gsa/compaction/compaction-RUN-LOC-0001.md"),
+            summary,
+            "model_selected",
+            2,
+            Some(1),
+            3,
+            Some("SESSION-loc"),
+            false,
+            Some(Path::new(".gsa/ledger/current.md")),
+            &locators,
+        );
+        for expected in [
+            "原文定位（四项）",
+            "compaction 存档: .gsa/compaction/compaction-RUN-LOC-0001.md",
+            "台账 [seq] 区间: 7–23（文件 .gsa/ledger/current.md；每字段 300 字符摘要行）",
+            "journal: run=RUN-LOC-0 seq=11–88",
+            "会话档案（sidecar）: .gsa/conversations/session1.json",
+            "mode=model_summary",
+        ] {
+            assert!(marker.contains(expected), "missing {expected:?}: {marker}");
+        }
+        // 模型摘要正文进 marker（压缩后被压区由它承载）；机械层不宣称语义保全。
+        assert!(marker.contains(summary), "{marker}");
+        assert!(marker.contains("不宣称语义保全"), "{marker}");
+        // 审查修正批（2026-09-15，审查 P2③）：四项指针必须**逐项标注载体到
+        // 哪一层**——被压区逐字原文只在 journal（drain 后不在 messages/sidecar，
+        // compaction 存档只存摘要与指针、台账行 300 字符上限），不得再写
+        // 「逐字原文见四项指针」的过承诺。
+        for expected in [
+            "不含被压区逐字原文",
+            "每字段 300 字符摘要行",
+            "逐字原文的权威载体",
+            "被压区不在其中",
+        ] {
+            assert!(marker.contains(expected), "missing {expected:?}: {marker}");
+        }
+        assert!(marker.starts_with(crate::prompt::CONTEXT_COMPRESSED_PREFIX));
+        // 缺项如实渲染「（无）」（不虚构指针）。
+        let empty = build_model_summary_marker(
+            "compaction-RUN-LOC-0002",
+            &"b".repeat(64),
+            Path::new(".gsa/compaction/x.md"),
+            summary,
+            "model_selected",
+            1,
+            None,
+            2,
+            None,
+            false,
+            None,
+            &LocatorPointers::default(),
+        );
+        assert!(empty.contains("台账 [seq] 区间: （无）"), "{empty}");
+        assert!(empty.contains("journal: run=（无） seq=（无）"), "{empty}");
+        assert!(empty.contains("会话档案（sidecar）: （无）"), "{empty}");
     }
 
     #[test]
@@ -1832,6 +2095,7 @@ mod tests {
             true,
             None,
             None,
+            test_locators(),
         );
         assert!(marker.contains("机制失败：缩减守卫连续不满足"));
         assert!(marker.contains("存档写入失败：摘要未落盘"));
@@ -1886,6 +2150,9 @@ mod tests {
         let gateway: Arc<dyn ModelGateway> = fake.clone();
         let controller = AgentLoopController::with_gateway(gateway)
             .with_context_compact(150_000, 400, 20, 100_000)
+            // v7（S1 修订批）：未折叠路径以驻留带 L 为界（不再按轮数切）——
+            // 钉成「最新 2 轮」的估计量以复现既有 fallback 重触发。
+            .with_slider_resident_tokens(800)
             .with_summary_guards(1, 1.0);
         controller
             .run_turn(
@@ -1934,6 +2201,12 @@ mod tests {
 
     const FOLD_ID: &str = "compaction-RUN-V03-001";
 
+    /// v7（S1 修订批）：测试用定位指针（None 项如实渲染「（无）」）。
+    fn test_locators() -> &'static LocatorPointers {
+        static CELL: std::sync::OnceLock<LocatorPointers> = std::sync::OnceLock::new();
+        CELL.get_or_init(LocatorPointers::default)
+    }
+
     fn fold_input(budget: CompactionBudget, r_keep: u64) -> FoldSnapshotInput<'static> {
         FoldSnapshotInput {
             id: FOLD_ID,
@@ -1950,6 +2223,8 @@ mod tests {
             archive_write_failed: false,
             ledger_note: None,
             frozen_ledger: None,
+            // v7（S1 修订批）：直调测试的定位指针（None 项如实渲染「（无）」）。
+            locators: test_locators(),
             budget,
         }
     }

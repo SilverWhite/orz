@@ -1170,6 +1170,17 @@ pub fn verify_recovery_truncation(events: &[Value]) -> Vec<String> {
 /// reason vocabularies, guard_failed only on rhythm/fallback, mechanical
 /// never incomplete, incomplete ⇔ null archive fields, archive_write_failed
 /// only on a complete summary.
+///
+/// 动态上下文滑块 S1（2026-09-15，CONTEXT_DYNAMIC_SLIDER_DESIGN §3.4）：reason
+/// 闭枚举扩两级——`context_scale`（**实际上下文**硬兜底 ≥950K 强制压缩）与
+/// `context_scale_window`（实际上下文 500K/900K 提醒开窗后 ≤3 轮的机械兜底）。
+/// 修复前该开窗路径写 `attention_920k_window`（不在枚举内 ⇒ 一旦触发即产出
+/// schema-invalid journal；与 0AE-C2 同族契约漂移）。
+///
+/// S1 修订批 v7（2026-09-15，设计 §3.4.1 DP-14/DP-17）：mode 增
+/// `model_summary`（模型产出语义摘要**替换**被压区），reason 增
+/// `model_selected`（窗口之外的自选压缩）；`model_summary` 与 `mechanical`
+/// 同为机械收口路径（无模型槽位失败面）⇒ 不得 `summary_incomplete`。
 pub fn verify_context_compressed(events: &[Value]) -> Vec<String> {
     let mut errors = Vec::new();
     for (index, event) in events.iter().enumerate() {
@@ -1180,20 +1191,29 @@ pub fn verify_context_compressed(events: &[Value]) -> Vec<String> {
         }
         let payload = event.get("payload").cloned().unwrap_or(Value::Null);
         let mode = str_of(payload.get("mode"));
-        if !matches!(mode, Some("template_summary") | Some("mechanical")) {
+        if !matches!(
+            mode,
+            Some("template_summary") | Some("mechanical") | Some("model_summary")
+        ) {
             errors.push(format!(
                 "event {index}: context_compressed mode must be \
-                 template_summary/mechanical"
+                 template_summary/mechanical/model_summary"
             ));
         }
         let reason = str_of(payload.get("reason"));
         if !matches!(
             reason,
-            Some("rhythm") | Some("fallback") | Some("session_end")
+            Some("rhythm")
+                | Some("fallback")
+                | Some("context_scale")
+                | Some("context_scale_window")
+                | Some("model_selected")
+                | Some("session_end")
         ) {
             errors.push(format!(
                 "event {index}: context_compressed reason must be \
-                 rhythm/fallback/session_end"
+                 rhythm/fallback/context_scale/context_scale_window/\
+                 model_selected/session_end"
             ));
         }
         let guard_failed = py_truthy(payload.get("guard_failed"));
@@ -1204,9 +1224,9 @@ pub fn verify_context_compressed(events: &[Value]) -> Vec<String> {
             ));
         }
         let incomplete = py_truthy(payload.get("summary_incomplete"));
-        if mode == Some("mechanical") && incomplete {
+        if matches!(mode, Some("mechanical") | Some("model_summary")) && incomplete {
             errors.push(format!(
-                "event {index}: mechanical compaction must never be \
+                "event {index}: mechanical/model_summary compaction must never be \
                  summary_incomplete (no model slots to fail)"
             ));
         }
@@ -2527,5 +2547,87 @@ pub fn verify_s2c_family(family: &str, events: &[Value]) -> Vec<String> {
         "request_header" => verify_request_header(events),
         "probe_accuracy" => verify_probe_accuracy(events),
         _ => Vec::new(),
+    }
+}
+
+#[cfg(test)]
+mod s1_revision_context_compressed_tests {
+    use super::*;
+    use serde_json::json;
+
+    /// v7（S1 修订批，2026-09-15，设计 §3.4.1 DP-14/DP-17）：`mode` 增
+    /// `model_summary`（模型产出语义摘要替换被压区）、`reason` 增
+    /// `model_selected`（窗口外的自选压缩）——两者都在闭枚举内；`model_summary`
+    /// 与 `mechanical` 同为机械收口路径（不得 `summary_incomplete`）；未知
+    /// mode/reason 照旧被拒。
+    fn ev(payload: Value) -> Value {
+        json!({
+            "schema_version": "0.2.0-draft",
+            "payload_schema": "run-event-v0.2.schema.json",
+            "event_type": "context_compressed",
+            "run_id": "run-1",
+            "payload": payload,
+        })
+    }
+
+    fn complete(mode: &str, reason: &str) -> Value {
+        ev(json!({
+            "trigger_tokens": 165000,
+            "target_tokens": 12000,
+            "rounds_since_last_compaction": 3,
+            "rounds_dropped": 12,
+            "messages_dropped": 40,
+            "messages_kept": 9,
+            "estimated_tokens_after": 11000,
+            "mode": mode,
+            "reason": reason,
+            "summary_id": "compaction-RUN-X-0001",
+            "summary_digest": "d".repeat(64),
+            "summary_path": ".gsa/compaction/compaction-RUN-X-0001.md",
+            "summary_incomplete": false,
+            "retained_rounds": 2,
+            "guard_failed": false,
+            "archive_write_failed": false,
+        }))
+    }
+
+    #[test]
+    fn model_summary_mode_and_model_selected_reason_are_accepted() {
+        for reason in ["model_selected", "context_scale_window"] {
+            let events = vec![complete("model_summary", reason)];
+            assert_eq!(
+                verify_context_compressed(&events),
+                Vec::<String>::new(),
+                "model_summary/{reason} 必须在闭枚举内"
+            );
+        }
+    }
+
+    #[test]
+    fn model_summary_never_incomplete() {
+        let mut event = complete("model_summary", "model_selected");
+        event["payload"]["summary_incomplete"] = json!(true);
+        event["payload"]["summary_id"] = Value::Null;
+        event["payload"]["summary_digest"] = Value::Null;
+        event["payload"]["summary_path"] = Value::Null;
+        let errors = verify_context_compressed(&[event]);
+        assert!(
+            errors.iter().any(|e| e.contains("must never be")),
+            "{errors:?}"
+        );
+    }
+
+    #[test]
+    fn unknown_mode_and_reason_still_rejected() {
+        let errors = verify_context_compressed(&[complete("shadow", "model_selected")]);
+        assert!(
+            errors.iter().any(|e| e.contains("mode must be")),
+            "{errors:?}"
+        );
+        let errors = verify_context_compressed(&[complete("model_summary", "bored")]);
+        assert!(
+            errors.iter().any(|e| e.contains("reason must be")),
+            "{errors:?}"
+        );
     }
 }

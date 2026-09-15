@@ -31,10 +31,20 @@ use crate::host::LoopHost;
 ///   (zero model calls, `recent_tail_rounds` kept verbatim); the
 ///   persisted conversation keeps the full records. FUS-LEDGER-FOLD-STATE
 ///   (2026-08-18, ADR-0010 §14.26): the collapse is stateful — the fold
-///   point advances only when the estimated request view reaches
-///   `fold_trigger_tokens` (128K), and between advances the request view
-///   prefix is byte-stable (pure append), restoring the v1.9 prefix-cache
+///   point advances only when the estimated request view reaches the
+///   window cap, and between advances the request view prefix is
+///   byte-stable (pure append), restoring the v1.9 prefix-cache
 ///   discipline that the old per-request stateless recomputation broke.
+///   动态上下文滑块 S1（2026-09-15，CONTEXT_DYNAMIC_SLIDER_DESIGN §3.1/§3.2
+///   ＋ §3.3 成本律，用户裁定 R1/R2/R4）**把「锯齿折叠」换成「常驻滑窗」**：
+///   触发＝视图估算 ≥ `slider_window_tokens`（H），动作＝自最旧驻留轮起
+///   收集**连续完整轮**至累计估算 ≥ H−L（L ＝ `slider_resident_tokens`），
+///   一次性移出视图；视图＝`preamble ＋ 固定指针 ＋ D4 机械段 ＋ 驻留带
+///   ＋ 逐字尾部`，谷值恒 ≥L（锯齿形态的折后谷值实测仅 9,600 token ⇒
+///   死亡螺旋根因）。参数 **L/H 同比例放大成本不变**（R≈0.925/(1−L/H)），
+///   故「处理巨大/高压长任务」的正解是抬 H。**旧 `fold_tail_tokens`（8K
+///   桥预算）与 `fold_trigger_tokens`（128K 触发）及其 `ORZ_FOLD_*` env
+///   随之退役**：桥＝驻留带的尾部投影，语义并入 L。
 /// - Recovery pre-check (D2-2): a restored conversation estimated over
 ///   `recovery_trigger_tokens` (200K conservative) is mechanically
 ///   truncated toward `recovery_target_tokens` (160K) before the first
@@ -45,24 +55,65 @@ use crate::host::LoopHost;
 /// `compact_messages` unit surface; the loop no longer uses it.
 #[derive(Debug, Clone, Copy)]
 pub struct ContextCompactConfig {
-    pub trigger_tokens: u64,
     pub target_tokens: u64,
     pub min_rounds: u32,
     pub safety_tokens: u64,
-    /// FUS-LEDGER-FOLD-STATE (2026-08-18, ADR-0010 §14.26): mechanical
-    /// fold-advance threshold — when the ESTIMATED request view
-    /// (folded view, chars/2) is ≥ this, the loop folds the next complete
-    /// old rounds into the frozen ledger once (loop-top gap, checkpoint
-    /// rounds first). Default 128K = the MRCR quality plateau boundary
-    /// (V4-Flash-Max 0.870); env `ORZ_FOLD_TRIGGER_TOKENS` overrides.
-    pub fold_trigger_tokens: u64,
-    /// FUS-LEDGER-FOLD-BRIDGE (2026-08-19, ADR-0010 §14.32): the bridge
-    /// real-token budget of the FOLDED request view after the fixed pointer
-    /// message (default `DEFAULT_FOLD_TAIL_TOKENS` = 8K; env
-    /// `ORZ_FOLD_TAIL_TOKENS` overrides). `fold_tail_rounds` semantics
-    /// retired. Separate from `recent_tail_rounds` (the compaction drain
-    /// tail, unchanged).
-    pub fold_tail_tokens: u64,
+    /// 动态上下文滑块 S1（2026-09-15，设计 §3.2/§3.3）：常驻滑窗上限 **H**
+    /// ——当**估算的请求视图**（折叠后视图，chars/2）≥ H 时，循环在
+    /// loop-top 安全间隙一次性驱逐最旧的连续完整轮。默认
+    /// `DEFAULT_SLIDER_WINDOW_TOKENS` = 160K（保守档，用户裁定 R4）；env
+    /// `ORZ_SLIDER_WINDOW_TOKENS` 覆盖。取代旧 `fold_trigger_tokens`
+    /// （128K）与 `ORZ_FOLD_TRIGGER_TOKENS`。
+    pub slider_window_tokens: u64,
+    /// 滑块驻留带 **L**：驱逐后视图保留的连续完整轮预算（估计口径
+    /// chars/2，与 H 同尺）。默认 `DEFAULT_SLIDER_RESIDENT_TOKENS` = 64K
+    /// ⇒ 驱逐深度 = H−L = 96K、成本比 R ≈ ×1.54（设计 §3.3 表）；env
+    /// `ORZ_SLIDER_RESIDENT_TOKENS` 覆盖。取代旧 8K 桥预算
+    /// （`fold_tail_tokens` / `ORZ_FOLD_TAIL_TOKENS`）。
+    ///
+    /// 纪律：**L 与 H 不得进指针文案**（改 env 即一次性前缀失效；配置
+    /// 固定性优先于精确表述，设计 §3.1）。
+    pub slider_resident_tokens: u64,
+    /// 机械压缩 rhythm 缓冲动量：**rhythm 阈值 = H ＋ 本缓冲**（视图刻度
+    /// ——滑块把视图恒压在上限内，故 rhythm 退化为「驱逐停滞兜底」而非
+    /// 周期性打断；用户裁定 R1 第 4 条＝打断频率上限）。默认
+    /// `DEFAULT_SLIDER_RHYTHM_BUFFER_TOKENS` = 32K ⇒ 保守档 192K（与旧
+    /// 192K rhythm 同值、新推导）；env `ORZ_SLIDER_RHYTHM_BUFFER_TOKENS`
+    /// 覆盖。
+    pub slider_rhythm_buffer_tokens: u64,
+    /// rhythm 阈值的显式覆盖（**测试缝隙**；`None` = H ＋ 缓冲）。
+    /// 生产路径不设；`with_context_compact` 用它维持旧测试口径。
+    pub rhythm_tokens_override: Option<u64>,
+    /// 机械压缩硬兜底（**实际上下文刻度**，非视图刻度）：全量会话估算
+    /// ≥ 本值时无条件压缩一次（绕过冷却）。默认
+    /// `DEFAULT_CONTEXT_SCALE_HARD_TOKENS` = 950K（设计 §3.4「硬兜底改挂
+    /// 实际上下文」——滑窗下视图刻度不可达，兜底必须换尺）；env
+    /// `ORZ_CONTEXT_SCALE_HARD_TOKENS` 覆盖。
+    pub hard_context_tokens: u64,
+    /// **压缩窗口的上传上限**（实际上下文估算刻度；审查修正批 2026-09-15）：
+    /// v7 V3 的窗口轮要上传「滑块之外的携带内容 ＋ 滑块」＝`messages` 全量
+    /// （`agent_loop` `window_loads_pending_region`）——**上传面无上限时，
+    /// 实际上下文一旦越过 provider 单请求窗口，该轮请求就是硬失败**（run
+    /// 直接报错，而非降级）。故开窗前先比对本阈值：越线则**不开窗**（按
+    /// `context_scale` 走机械强制压缩 ＋ `mechanical_audit_update` 异常如实
+    /// 落账），上传视图仍由常驻滑窗压在上限内 ⇒ 请求恒安全。
+    ///
+    /// 默认 `DEFAULT_WINDOW_UPLOAD_CAP_TOKENS` = 1.10M：provider 窗口 1M
+    /// 真实 token × 实测换算系数 0.77（设计 §3.3.2：真实 token ≈ 0.77 ×
+    /// 估算）⇒ 该上限对应 ≈0.85M 真实 token＋系统提示／工具面／输出预算的
+    /// 余量。env `ORZ_CONTEXT_SCALE_WINDOW_CAP_TOKENS` 覆盖。
+    /// **设计「过大时分段」仍是备选（S1 未实现）**：本阈值是 fail-soft
+    /// 降级（不开必定失败的窗口），不是分段。
+    pub window_upload_cap_tokens: u64,
+    /// v7 压缩档位表（S1 修订批，2026-09-15，设计 §3.4.1「档位分工」；
+    /// 用户裁定）：**实际上下文估算**（chars/2，全量会话）的两级刻度。
+    /// 语义＝**除最后一档外全是纯提醒**（默认 500K：不打断、不开窗、
+    /// 不强制，模型可延后）；**最后一档＝必须压缩一次**（默认 900K：
+    /// 提醒 ＋ 开压缩窗口，窗口轮把「滑块之外的携带内容」连同滑块一并
+    /// 上传给模型产出语义摘要）。**生产固定**（用户裁定值，无 env——
+    /// 刻度值进文案，改值即改语义）；`with_context_scale_milestones`
+    /// 仅供测试用极小值驱动。
+    pub context_scale_milestones: [u64; 2],
     /// D2-2 (2026-08-14, ADR-0010 v1.10 / CONTEXT_COMPACTION_DESIGN §6):
     /// a restored conversation is pre-checked before the first request;
     /// when the ESTIMATE exceeds this conservative threshold (min of the
@@ -93,12 +144,16 @@ pub struct ContextCompactConfig {
 impl Default for ContextCompactConfig {
     fn default() -> Self {
         Self {
-            trigger_tokens: 192_000,
             target_tokens: 90_000,
             min_rounds: 2,
             safety_tokens: 256_000,
-            fold_trigger_tokens: DEFAULT_FOLD_TRIGGER_TOKENS,
-            fold_tail_tokens: DEFAULT_FOLD_TAIL_TOKENS,
+            slider_window_tokens: DEFAULT_SLIDER_WINDOW_TOKENS,
+            slider_resident_tokens: DEFAULT_SLIDER_RESIDENT_TOKENS,
+            slider_rhythm_buffer_tokens: DEFAULT_SLIDER_RHYTHM_BUFFER_TOKENS,
+            rhythm_tokens_override: None,
+            hard_context_tokens: DEFAULT_CONTEXT_SCALE_HARD_TOKENS,
+            window_upload_cap_tokens: DEFAULT_WINDOW_UPLOAD_CAP_TOKENS,
+            context_scale_milestones: DEFAULT_CONTEXT_SCALE_MILESTONES,
             recovery_trigger_tokens: 200_000,
             recovery_target_tokens: 160_000,
             session_end_trigger_tokens: 160_000,
@@ -109,26 +164,45 @@ impl Default for ContextCompactConfig {
     }
 }
 
+impl ContextCompactConfig {
+    /// mechanical rhythm 阈值（视图刻度）＝ H ＋ 缓冲；测试缝隙可显式覆盖
+    /// （`with_context_compact`）。
+    pub fn rhythm_tokens(&self) -> u64 {
+        self.rhythm_tokens_override.unwrap_or_else(|| {
+            self.slider_window_tokens
+                .saturating_add(self.slider_rhythm_buffer_tokens)
+        })
+    }
+}
+
 impl AgentLoopController {
     /// A6 (2026-08-08): override the explicit context-compaction parameters
     /// (tests use tiny values; production keeps the design §5 A6 defaults).
+    ///
+    /// 动态上下文滑块 S1（2026-09-15）：本缝隙设置的是 **rhythm** 阈值
+    /// （视图刻度）＋ safety 兜底；**滑块两参数 H/L 不在本缝隙内**（保留
+    /// 调用者已设的值，理由同 2026-08-19 对 `fold_tail_tokens` 的修复：
+    /// 结构更新不得重置别处设好的参数），滑块测试用
+    /// `with_slider_window_tokens` / `with_slider_resident_tokens`。
     pub fn with_context_compact(
         mut self,
-        trigger_tokens: u64,
+        rhythm_tokens: u64,
         target_tokens: u64,
         min_rounds: u32,
         safety_tokens: u64,
     ) -> Self {
         self.context_compact = ContextCompactConfig {
-            trigger_tokens,
             target_tokens,
             min_rounds,
             safety_tokens,
-            // FUS-LEDGER-FOLD-BRIDGE (2026-08-19, ADR-0010 §14.32): 结构更新
-            // 不再重置 fold_tail_tokens ——`with_fold_tail_tokens` 与
-            // `with_context_compact` 的调用顺序从此无关（此前
-            // `..Default::default()` 会把 fold_tail_rounds 重置回 1）。
-            fold_tail_tokens: self.context_compact.fold_tail_tokens,
+            rhythm_tokens_override: Some(rhythm_tokens),
+            // 滑块两参数＋硬兜底：保留既有值（调用顺序无关）。
+            slider_window_tokens: self.context_compact.slider_window_tokens,
+            slider_resident_tokens: self.context_compact.slider_resident_tokens,
+            slider_rhythm_buffer_tokens: self.context_compact.slider_rhythm_buffer_tokens,
+            hard_context_tokens: self.context_compact.hard_context_tokens,
+            window_upload_cap_tokens: self.context_compact.window_upload_cap_tokens,
+            context_scale_milestones: self.context_compact.context_scale_milestones,
             ..ContextCompactConfig::default()
         };
         self
@@ -156,19 +230,42 @@ impl AgentLoopController {
         self
     }
 
-    /// FUS-LEDGER-FOLD-STATE (2026-08-18, ADR-0010 §14.26): pin the
-    /// fold-advance threshold (test seam; production reads
-    /// `ORZ_FOLD_TRIGGER_TOKENS` at construction, default 128K).
-    pub fn with_fold_trigger_tokens(mut self, tokens: u64) -> Self {
-        self.context_compact.fold_trigger_tokens = tokens.max(1);
+    /// 动态上下文滑块 S1（2026-09-15，设计 §3.2）：pin 滑窗上限 H（测试
+    /// 缝隙；生产在构造时读 `ORZ_SLIDER_WINDOW_TOKENS`，默认 160K）。
+    pub fn with_slider_window_tokens(mut self, tokens: u64) -> Self {
+        self.context_compact.slider_window_tokens = tokens.max(1);
         self
     }
 
-    /// FUS-LEDGER-FOLD-BRIDGE (2026-08-19, ADR-0010 §14.32): pin the bridge
-    /// real-token budget (test seam; production reads
-    /// `ORZ_FOLD_TAIL_TOKENS` at construction, default 8K).
-    pub fn with_fold_tail_tokens(mut self, tokens: u64) -> Self {
-        self.context_compact.fold_tail_tokens = tokens.max(1);
+    /// 动态上下文滑块 S1：pin 驻留带 L（测试缝隙；生产在构造时读
+    /// `ORZ_SLIDER_RESIDENT_TOKENS`，默认 64K）。驱逐后视图保留的完整轮
+    /// 预算＝L（估计口径 chars/2），驱逐深度＝H−L。
+    pub fn with_slider_resident_tokens(mut self, tokens: u64) -> Self {
+        self.context_compact.slider_resident_tokens = tokens.max(1);
+        self
+    }
+
+    /// 动态上下文滑块 S1：pin 实际上下文硬兜底阈值（测试缝隙；生产读
+    /// `ORZ_CONTEXT_SCALE_HARD_TOKENS`，默认 950K）。
+    pub fn with_hard_context_tokens(mut self, tokens: u64) -> Self {
+        self.context_compact.hard_context_tokens = tokens.max(1);
+        self
+    }
+
+    /// 审查修正批（2026-09-15，P2⑤「900K 窗口无上限守卫」）：pin 压缩窗口的
+    /// 上传上限（测试缝隙；生产读 `ORZ_CONTEXT_SCALE_WINDOW_CAP_TOKENS`，
+    /// 默认 1.10M）。窗口轮全量上传越线 ⇒ 不开窗、走机械强制压缩＋异常落账。
+    pub fn with_window_upload_cap_tokens(mut self, tokens: u64) -> Self {
+        self.context_compact.window_upload_cap_tokens = tokens.max(1);
+        self
+    }
+
+    /// v7 压缩档位表测试缝隙（S1 修订批，2026-09-15）：用极小刻度驱动
+    /// 「纯提醒／必须压缩」两级路径（生产固定 500K/900K，不暴露 env——刻度
+    /// 值进文案，改值即改语义）。传入值自动升序化，避免测试写出倒序表。
+    pub fn with_context_scale_milestones(mut self, first: u64, second: u64) -> Self {
+        let (a, b) = (first.max(1), second.max(1));
+        self.context_compact.context_scale_milestones = [a.min(b), a.max(b)];
         self
     }
 
@@ -264,59 +361,94 @@ impl AgentLoopController {
     }
 }
 
-/// FUS-LEDGER-FOLD-STATE (2026-08-18, ADR-0010 §14.26): the mechanical
-/// fold-advance threshold — the estimated request view that triggers one
-/// stateful fold advance at the loop-top gap. Default 128K (2026-08-18
-/// user adjudication; MRCR-8-needle quality plateau boundary for
-/// V4-Flash-Max; allows reading the full key-document set — index 30.5K
-/// + ADR 43K + BACKLOG 27.8K ≈ 101K + preamble 8K — without a fold).
-pub const DEFAULT_FOLD_TRIGGER_TOKENS: u64 = 128_000;
+/// 动态上下文滑块 S1（2026-09-15，CONTEXT_DYNAMIC_SLIDER_DESIGN §3.3 参数律，
+/// 用户裁定 R2/R4）：滑窗上限 **H** 默认取**保守档 160K**——R ≈ 0.925/(1−L/H)
+/// ＝0.925/0.6 ≈ ×1.54，平均工作点 (H+L)/2 ＝ 112K 仍在 128K 质量平台期内
+/// ⇒ 本档**不需要质量读数**（DP-9 只在启用 192K/256K 长任务档时生效）。
+/// 均衡档 192K/80K（R≈×1.59）、长任务档 256K/96K（R≈×1.48）仅巨大/高压
+/// 长任务启用。env `ORZ_SLIDER_WINDOW_TOKENS` 覆盖（构造时解析；缺省/非法/0
+/// ＝默认）。**取代** `ORZ_FOLD_TRIGGER_TOKENS`（128K）。
+pub const DEFAULT_SLIDER_WINDOW_TOKENS: u64 = 160_000;
 
-/// Env override for the fold-advance threshold
-/// (`ORZ_FOLD_TRIGGER_TOKENS`). Parsed at controller construction;
-/// absent/invalid/zero = the default.
-pub fn fold_trigger_tokens_override() -> Option<u64> {
-    std::env::var("ORZ_FOLD_TRIGGER_TOKENS")
-        .ok()
-        .and_then(|s| parse_fold_trigger_tokens(&s))
-}
+/// 动态上下文滑块 S1：驻留带 **L** 默认 64K（L/H ＝ 0.40 ⇒ R ≈ ×1.54，设计
+/// §3.3 建议线）。谷值恒 ≥L（对比锯齿形态折后实测谷值 9,600 token——死亡
+/// 螺旋根因）。env `ORZ_SLIDER_RESIDENT_TOKENS` 覆盖。**取代** 8K 桥预算
+/// `ORZ_FOLD_TAIL_TOKENS`。
+pub const DEFAULT_SLIDER_RESIDENT_TOKENS: u64 = 64_000;
 
-/// Pure parse rule for the fold-threshold env value (tested without env
-/// mutation): trimmed, positive integer; absent/invalid/zero → None.
-pub(crate) fn parse_fold_trigger_tokens(s: &str) -> Option<u64> {
+/// 动态上下文滑块 S1：rhythm 缓冲（rhythm ＝ H ＋ 缓冲；视图刻度）。32K ⇒
+/// 保守档 192K（与旧 192K rhythm 同值、新推导）。env
+/// `ORZ_SLIDER_RHYTHM_BUFFER_TOKENS` 覆盖。
+pub const DEFAULT_SLIDER_RHYTHM_BUFFER_TOKENS: u64 = 32_000;
+
+/// 动态上下文滑块 S1：机械压缩硬兜底（**实际上下文刻度**）。默认 950K——
+/// 设计 §3.4「硬兜底改挂实际上下文（建议 ≥950K 强制一次）」。env
+/// `ORZ_CONTEXT_SCALE_HARD_TOKENS` 覆盖。
+pub const DEFAULT_CONTEXT_SCALE_HARD_TOKENS: u64 = 950_000;
+
+/// 审查修正批（2026-09-15；审查 P2⑤）：**压缩窗口上传上限**默认值——1.10M
+/// （实际上下文估算刻度）。v7 V3 的窗口轮上传 `messages` 全量；provider 单
+/// 请求窗口 1M 真实 token ÷ 实测换算 0.77（设计 §3.3.2）≈1.30M 估算，
+/// 再留系统提示／工具面／输出预算余量 ⇒ 取 1.10M（对应 ≈0.85M 真实
+/// token）。越线不开窗（fail-soft），上传视图照旧被常驻滑窗压在上限内。
+/// env `ORZ_CONTEXT_SCALE_WINDOW_CAP_TOKENS` 覆盖。
+pub const DEFAULT_WINDOW_UPLOAD_CAP_TOKENS: u64 = 1_100_000;
+
+/// v7 压缩档位表默认值（S1 修订批，2026-09-15；用户裁定保留两级实际上下文
+/// 提醒）：**500K ＝ 纯提醒**（不打断、不开窗、不强制，模型可延后）、
+/// **900K ＝ 必须压缩一次**（提醒 ＋ 压缩窗口，模型产出语义摘要）。无 env
+/// 覆盖——刻度值进文案（改值即改语义）；测试经
+/// `with_context_scale_milestones`。
+pub const DEFAULT_CONTEXT_SCALE_MILESTONES: [u64; 2] = [500_000, 900_000];
+
+/// Env override 名（单一源；测试缝隙不经进程 env——`parse_*` 纯函数）。
+pub const ENV_SLIDER_WINDOW_TOKENS: &str = "ORZ_SLIDER_WINDOW_TOKENS";
+pub const ENV_SLIDER_RESIDENT_TOKENS: &str = "ORZ_SLIDER_RESIDENT_TOKENS";
+pub const ENV_SLIDER_RHYTHM_BUFFER_TOKENS: &str = "ORZ_SLIDER_RHYTHM_BUFFER_TOKENS";
+pub const ENV_CONTEXT_SCALE_HARD_TOKENS: &str = "ORZ_CONTEXT_SCALE_HARD_TOKENS";
+pub const ENV_CONTEXT_SCALE_WINDOW_CAP_TOKENS: &str = "ORZ_CONTEXT_SCALE_WINDOW_CAP_TOKENS";
+
+/// Pure parse rule for every slider env value (tested without env mutation):
+/// trimmed, positive integer; absent/invalid/zero → None (＝默认).
+pub(crate) fn parse_slider_tokens(s: &str) -> Option<u64> {
     s.trim().parse().ok().filter(|v| *v > 0)
 }
 
-/// FUS-LEDGER-FOLD-BRIDGE (2026-08-19, ADR-0010 §14.32): the folded request
-/// view keeps only the newest complete rounds within this real-token bridge
-/// budget (`[U0][固定指针消息][桥]`); older rounds are appended to the
-/// external ledger file as before. Default 8K (实测读/计划轮 1–3K、终端执行
-/// 轮 5–7K——多数折叠时刻能整轮装下，截断为例外；S4 以折叠后首请求实际重付
-/// 校准换算系数). `recent_tail_rounds` (compaction drain tail) is untouched.
-/// Env `ORZ_FOLD_TAIL_TOKENS` overrides (trimmed positive integer;
-/// absent/invalid/zero = default). 换算: 真实 token → 字符预算
-/// (`action_ledger::FOLD_TAIL_CHARS_PER_TOKEN` = 2，S4 实测校准) → 估计口径
-/// (`estimate_messages_tokens`, chars/2)。
-pub fn fold_tail_tokens_override() -> Option<u64> {
-    std::env::var("ORZ_FOLD_TAIL_TOKENS")
+/// Env override for the slider window cap H. Parsed at controller
+/// construction; absent/invalid/zero = the default.
+pub fn slider_window_tokens_override() -> Option<u64> {
+    std::env::var(ENV_SLIDER_WINDOW_TOKENS)
         .ok()
-        .and_then(|s| parse_fold_tail_tokens(&s))
+        .and_then(|s| parse_slider_tokens(&s))
 }
 
-/// Pure parse rule for the bridge-budget env value (tested without env
-/// mutation): trimmed, positive integer; absent/invalid/zero → None.
-pub(crate) fn parse_fold_tail_tokens(s: &str) -> Option<u64> {
-    s.trim().parse().ok().filter(|v| *v > 0)
+/// Env override for the resident band L（驱逐后保留的完整轮预算）。
+pub fn slider_resident_tokens_override() -> Option<u64> {
+    std::env::var(ENV_SLIDER_RESIDENT_TOKENS)
+        .ok()
+        .and_then(|s| parse_slider_tokens(&s))
 }
 
-/// FUS-LEDGER-FOLD-BRIDGE (2026-08-19, ADR-0010 §14.32 / 设计 §3.6): 折叠后
-/// 视图桥的默认真实 token 预算。8K 依据=S4 实测读/计划轮 1–3K、终端执行轮
-/// 5–7K——多数折叠时刻能整轮装下（截断为例外；截断频率 >30% 视为桥偏小，
-/// S4 校准）；4K 命中率仅多约 0.5pp 但会频繁截断正常终端轮；10K+ 收益递减。
-/// `ORZ_FOLD_TAIL_TOKENS` 可配；实现按
-/// `action_ledger::FOLD_TAIL_CHARS_PER_TOKEN`（2 字符/真实 token，S4 实测
-/// 校准——path-tracing 07:08 运行桥 12,948 字符 → 重付 6,493）换算。
-pub const DEFAULT_FOLD_TAIL_TOKENS: u64 = 8_000;
+/// Env override for the rhythm buffer（rhythm ＝ H ＋ 缓冲）。
+pub fn slider_rhythm_buffer_tokens_override() -> Option<u64> {
+    std::env::var(ENV_SLIDER_RHYTHM_BUFFER_TOKENS)
+        .ok()
+        .and_then(|s| parse_slider_tokens(&s))
+}
+
+/// Env override for the actual-context hard fallback（机械压缩兜底刻度）。
+pub fn context_scale_hard_tokens_override() -> Option<u64> {
+    std::env::var(ENV_CONTEXT_SCALE_HARD_TOKENS)
+        .ok()
+        .and_then(|s| parse_slider_tokens(&s))
+}
+
+/// Env override for the compression-window upload cap（审查修正批 2026-09-15）。
+pub fn window_upload_cap_tokens_override() -> Option<u64> {
+    std::env::var(ENV_CONTEXT_SCALE_WINDOW_CAP_TOKENS)
+        .ok()
+        .and_then(|s| parse_slider_tokens(&s))
+}
 
 /// A6 §8 C.2 (2026-08-08): default cumulative character cap for the
 /// compaction whitelist (16K — user decision; ≈8K tokens ≈ ~9% of the
@@ -619,6 +751,10 @@ mod tests {
         let gateway: Arc<dyn ModelGateway> = fake.clone();
         let controller = AgentLoopController::with_gateway(gateway)
             .with_context_compact(1_000, 400, 2, 100_000)
+            // v7（S1 修订批）：未折叠路径的切断点改以**驻留带 L** 为界
+            // （不再按 `recent_tail_rounds` 轮数切）⇒ 本测试把 L 钉成
+            // 「最新 2 轮」的估计量，复现既有切断点（每轮 ≈320 估计）。
+            .with_slider_resident_tokens(800)
             .with_summary_guards(1, 1.0);
         controller
             .run_turn(
@@ -1276,6 +1412,9 @@ mod tests {
         // (100_000) must fire regardless of the cooldown.
         let controller = AgentLoopController::with_gateway(gateway)
             .with_context_compact(150_000, 400, 20, 100_000)
+            // v7（S1 修订批）：未折叠路径以驻留带 L 为界（不再按轮数切）——
+            // 钉成「最新 2 轮」的估计量以复现既有切断点。
+            .with_slider_resident_tokens(800)
             .with_summary_guards(1, 1.0);
         controller
             .run_turn(
@@ -1360,6 +1499,9 @@ mod tests {
         let gateway: Arc<dyn ModelGateway> = fake.clone();
         let controller = AgentLoopController::with_gateway(gateway)
             .with_context_compact(150_000, 400, 20, 100_000)
+            // v7（S1 修订批）：未折叠路径以驻留带 L 为界（不再按轮数切）——
+            // 钉成「最新 2 轮」的估计量以复现既有切断点。
+            .with_slider_resident_tokens(800)
             .with_summary_guards(1, 1.0);
         controller
             .run_turn(
@@ -1429,35 +1571,65 @@ mod tests {
         assert_eq!(cfg.recovery_trigger_tokens, 200_000);
         assert_eq!(cfg.recovery_target_tokens, 160_000);
         assert_eq!(cfg.recent_tail_rounds, 2);
-        // FUS-LEDGER-FOLD-BRIDGE (2026-08-19, ADR-0010 §14.32): the folded
-        // view keeps the newest complete rounds within an 8K real-token
-        // bridge budget after the fixed pointer (`fold_tail_rounds`
-        // semantics retired; compaction drain tail stays 2).
-        assert_eq!(cfg.fold_tail_tokens, DEFAULT_FOLD_TAIL_TOKENS);
-        assert_eq!(DEFAULT_FOLD_TAIL_TOKENS, 8_000);
-        // 2026-08-18 adjudication (ADR-0010 §14.26): 192K rhythm / 256K
-        // fallback / 128K fold-advance trigger.
-        assert_eq!(cfg.trigger_tokens, 192_000);
+        // 动态上下文滑块 S1（2026-09-15，设计 §3.3，用户裁定 R4）：默认
+        // **保守档 H=160K / L=64K**（R≈×1.54、工作点均值 112K 仍在 128K
+        // 平台期内 ⇒ 不需要质量读数）；rhythm ＝ H＋缓冲 ＝ 192K（与旧
+        // 192K 同值、新推导）；硬兜底挂**实际上下文** 950K。
+        assert_eq!(cfg.slider_window_tokens, DEFAULT_SLIDER_WINDOW_TOKENS);
+        assert_eq!(DEFAULT_SLIDER_WINDOW_TOKENS, 160_000);
+        assert_eq!(cfg.slider_resident_tokens, DEFAULT_SLIDER_RESIDENT_TOKENS);
+        assert_eq!(DEFAULT_SLIDER_RESIDENT_TOKENS, 64_000);
+        assert_eq!(
+            cfg.slider_rhythm_buffer_tokens,
+            DEFAULT_SLIDER_RHYTHM_BUFFER_TOKENS
+        );
+        assert_eq!(DEFAULT_SLIDER_RHYTHM_BUFFER_TOKENS, 32_000);
+        assert_eq!(cfg.rhythm_tokens(), 192_000, "rhythm ＝ H ＋ 缓冲");
+        assert_eq!(cfg.hard_context_tokens, DEFAULT_CONTEXT_SCALE_HARD_TOKENS);
+        assert_eq!(DEFAULT_CONTEXT_SCALE_HARD_TOKENS, 950_000);
+        // 审查修正批（2026-09-15，P2⑤）：压缩窗口上传上限（fail-soft 降级线）。
+        assert_eq!(
+            cfg.window_upload_cap_tokens,
+            DEFAULT_WINDOW_UPLOAD_CAP_TOKENS
+        );
+        assert_eq!(DEFAULT_WINDOW_UPLOAD_CAP_TOKENS, 1_100_000);
+        // 驱逐深度 = H−L = 96K（成本律 R ≈ 0.925/(1−0.4) ≈ ×1.54）。
+        assert_eq!(
+            cfg.slider_window_tokens - cfg.slider_resident_tokens,
+            96_000
+        );
+        // 2026-08-18 adjudication (ADR-0010 §14.26): 256K 视图刻度兜底
+        // （S1 起常态不可达，保留为 S2 展开膨胀路径）。
         assert_eq!(cfg.safety_tokens, 256_000);
-        assert_eq!(cfg.fold_trigger_tokens, DEFAULT_FOLD_TRIGGER_TOKENS);
-        assert_eq!(DEFAULT_FOLD_TRIGGER_TOKENS, 128_000);
     }
 
-    /// FUS-LEDGER-FOLD-BRIDGE (2026-08-19, ADR-0010 §14.32): env parse rule
-    /// for `ORZ_FOLD_TAIL_TOKENS` — trimmed positive integer; absent/invalid/
-    /// zero = default.
+    /// 动态上下文滑块 S1（2026-09-15，设计 §3.2/§3.3）：四个 `ORZ_SLIDER_*`
+    /// /`ORZ_CONTEXT_SCALE_*` env 共用同一解析规则——trim 后正整数；缺省/
+    /// 非法/0 ⇒ 默认（测试不经进程 env：纯函数缝隙）。
     #[test]
-    fn fold_tail_tokens_parse_rule() {
-        assert_eq!(crate::compact::parse_fold_tail_tokens("8000"), Some(8_000));
+    fn slider_tokens_parse_rule() {
+        assert_eq!(crate::compact::parse_slider_tokens("64000"), Some(64_000));
+        assert_eq!(crate::compact::parse_slider_tokens(" 64000 "), Some(64_000));
+        assert_eq!(crate::compact::parse_slider_tokens("1"), Some(1));
+        assert_eq!(crate::compact::parse_slider_tokens("0"), None, "0 = 默认");
+        assert_eq!(crate::compact::parse_slider_tokens("-1"), None);
+        assert_eq!(crate::compact::parse_slider_tokens("abc"), None);
+        assert_eq!(crate::compact::parse_slider_tokens(""), None);
+        // env 名是契约面（文档/账本逐字引用）。
+        assert_eq!(ENV_SLIDER_WINDOW_TOKENS, "ORZ_SLIDER_WINDOW_TOKENS");
+        assert_eq!(ENV_SLIDER_RESIDENT_TOKENS, "ORZ_SLIDER_RESIDENT_TOKENS");
         assert_eq!(
-            crate::compact::parse_fold_tail_tokens(" 8000 "),
-            Some(8_000)
+            ENV_SLIDER_RHYTHM_BUFFER_TOKENS,
+            "ORZ_SLIDER_RHYTHM_BUFFER_TOKENS"
         );
-        assert_eq!(crate::compact::parse_fold_tail_tokens("1"), Some(1));
-        assert_eq!(crate::compact::parse_fold_tail_tokens("0"), None);
-        assert_eq!(crate::compact::parse_fold_tail_tokens("-1"), None);
-        assert_eq!(crate::compact::parse_fold_tail_tokens("abc"), None);
-        assert_eq!(crate::compact::parse_fold_tail_tokens(""), None);
+        assert_eq!(
+            ENV_CONTEXT_SCALE_HARD_TOKENS,
+            "ORZ_CONTEXT_SCALE_HARD_TOKENS"
+        );
+        assert_eq!(
+            ENV_CONTEXT_SCALE_WINDOW_CAP_TOKENS,
+            "ORZ_CONTEXT_SCALE_WINDOW_CAP_TOKENS"
+        );
     }
 
     /// FUS-LEDGER-FOLD-STATE (2026-08-18, ADR-0010 §14.26): the fold point
@@ -1552,11 +1724,11 @@ mod tests {
             .with_context_compact(100_000_000, 400, 20, 100_000_000)
             // 阈值高于「preamble + 指针 + 桥（100 token → 100 估计）」的
             // 固定基线，使触发复位断言（推进后估算 < 阈值）真实成立。
-            .with_fold_trigger_tokens(2_000)
+            .with_slider_window_tokens(2_000)
             // FUS-LEDGER-FOLD-BRIDGE (2026-08-19, ADR-0010 §14.32): 测试轮
             // 输出 ~800 字符（估计 ~400），桥预算 100 token（估计 200）
             // 使推进时只保留最新 1 轮——否则 9 轮全在 8K 桥内、永不推进。
-            .with_fold_tail_tokens(100);
+            .with_slider_resident_tokens(100);
         controller
             .run_turn(&host, "折叠测试", "RUN-FOLD", MANIFEST, 0, None, None, None)
             .await
@@ -1769,11 +1941,11 @@ mod tests {
         let gateway: Arc<dyn ModelGateway> = fake.clone();
         let controller = AgentLoopController::with_gateway(gateway)
             .with_context_compact(100_000_000, 400, 20, 100_000_000)
-            .with_fold_trigger_tokens(1_000)
+            .with_slider_window_tokens(1_000)
             // FUS-LEDGER-FOLD-BRIDGE (2026-08-19, ADR-0010 §14.32): 桥预算
             // 100 token（估计 200）——否则 9 轮全在桥内、推进永不发生、
             // 写失败路径无法复现。
-            .with_fold_tail_tokens(100);
+            .with_slider_resident_tokens(100);
         controller
             .run_turn(
                 &host,
@@ -1928,11 +2100,11 @@ mod tests {
         let controller = AgentLoopController::with_gateway(gateway)
             .with_context_compact(1_000, 400, 5, 100_000_000)
             .with_summary_guards(1, 1.0)
-            .with_fold_trigger_tokens(1_000)
+            .with_slider_window_tokens(1_000)
             // FUS-LEDGER-FOLD-BRIDGE (2026-08-19, ADR-0010 §14.32): 桥预算
             // 100 token（估计 200）——否则 11 轮全在桥内、折叠不推进，
             // 「折叠先于压缩」的联动断言无法成立。
-            .with_fold_tail_tokens(100);
+            .with_slider_resident_tokens(100);
         controller
             .run_turn(
                 &host,
@@ -2078,6 +2250,9 @@ mod tests {
         let controller = AgentLoopController::with_gateway(gateway)
             .with_context_compact(150_000, 400, 20, 100_000)
             // The guard can never be satisfied — min_compactable is huge.
+            // v7（S1 修订批）：未折叠路径以驻留带 L 为界（不再按轮数切）——
+            // 钉成「最新 2 轮」的估计量，使守卫路径可达（否则无可压内容）。
+            .with_slider_resident_tokens(800)
             .with_summary_guards(u64::MAX, 1.0);
         controller
             .run_turn(
@@ -2331,6 +2506,9 @@ mod tests {
         ]));
         let controller = AgentLoopController::with_gateway(fake.clone())
             .with_context_compact(5_000, 400, 2, 100_000)
+            // v7（S1 修订批）：未折叠路径以驻留带 L 为界（不再按轮数切）——
+            // 钉成「最新 2 轮」的估计量以复现既有串行触发链。
+            .with_slider_resident_tokens(800)
             .with_summary_guards(1, 1.0)
             .with_session_end_trigger(1);
         let mut conversation = vec![conv_message(Role::User, "第一问")];

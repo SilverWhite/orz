@@ -102,6 +102,16 @@ pub fn is_injected_block_text(content: &str) -> bool {
         // conversation; registered so it can never pollute the injected-block/restore filters or
         // restore filters.
         || content.starts_with(crate::action_ledger::ACTION_LEDGER_PREFIX)
+        // 动态上下文滑块 S1（2026-09-15，设计 §3.2/§3.4）：`[CONTEXT_SCALE …]`
+        // 提醒块（首次驱逐固化提醒 + 实际上下文 500K/900K）是机械注入文本，
+        // 每 run 只出现一次——绝不写回持久化会话（否则长单对话的 sidecar
+        // 会累积固定注入文本，且与「固定文本不是模型输出」纪律冲突）。
+        || content.starts_with(crate::context_scale::REMINDER_INJECTED_PREFIX)
+        // S1 修订批（v7，2026-09-15，设计 §3.4.1）：压缩窗口内的机械提示
+        // （「窗口内仅 blackboard_write 可执行」/「窗口剩余 N 轮」）此前未
+        // 注册 ⇒ 会被写回持久化会话（0AE 遗留缺口，审查 P2 记录）。窗口轮
+        // 提示是机械注入文本，同 `[CONTEXT_SCALE` 纪律。
+        || content.starts_with(crate::context_scale::WINDOW_NOTICE_PREFIX)
 }
 
 /// 2026-08-08 blackboard partition (A2): prefix of the incremental-push

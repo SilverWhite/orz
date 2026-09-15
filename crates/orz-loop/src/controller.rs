@@ -305,8 +305,11 @@ pub use crate::compact::ContextCompactConfig;
 /// 模式面 → `retrieval/mode.rs`；压缩/消息预算 → `compact.rs`；
 /// denial 状态机 → `denial.rs`。
 pub use crate::compact::{
-    DEFAULT_FOLD_TAIL_TOKENS, DEFAULT_FOLD_TRIGGER_TOKENS, DEFAULT_WHITELIST_CAP,
-    fold_tail_tokens_override, fold_trigger_tokens_override,
+    DEFAULT_CONTEXT_SCALE_HARD_TOKENS, DEFAULT_SLIDER_RESIDENT_TOKENS,
+    DEFAULT_SLIDER_RHYTHM_BUFFER_TOKENS, DEFAULT_SLIDER_WINDOW_TOKENS, DEFAULT_WHITELIST_CAP,
+    DEFAULT_WINDOW_UPLOAD_CAP_TOKENS, context_scale_hard_tokens_override,
+    slider_resident_tokens_override, slider_rhythm_buffer_tokens_override,
+    slider_window_tokens_override, window_upload_cap_tokens_override,
 };
 pub(crate) use crate::compact::{
     compact_messages, estimate_message_tokens, estimate_messages_tokens,
@@ -519,6 +522,12 @@ pub struct AgentLoopController {
     /// P3-5, 2026-08-05). User-paced TUIs are naturally safe (turn gaps
     /// ≫ 50ms) — this covers automated clients.
     pub(crate) pacing_rounds: std::sync::atomic::AtomicU32,
+    /// 动态上下文滑块 S1 修订批（v7，2026-09-15，设计 §3.5.1，DP-16）：
+    /// **会话级提醒水位**（已 fire 的实际上下文刻度键，`["500k","900k"]`）。
+    /// 与黑板同族：跨 prompt 延续、新会话独立；host 在 prompt 起始经
+    /// `with_context_scale_notified` 注入、run 成功后随 conversation sidecar
+    /// 落盘（SUCCESS-ONLY 同疲劳档位）。
+    context_scale_notified: Mutex<Vec<String>>,
     /// IP2a denial circuit breaker (D-3, FIX_PLAN 2026-08-06): consecutive
     /// policy denials in the current run. Mutex since `run_turn_inner` is
     /// `&self` and a turn may run on any thread; reset at turn start.
@@ -842,15 +851,30 @@ impl AgentLoopController {
             blackboard_archive_dir: None,
             epoch_archive_errors: Mutex::new(Vec::new()),
             pacing_rounds: std::sync::atomic::AtomicU32::new(0),
+            // v7（S1 修订批）：会话级提醒水位——构造时为空（新会话从零开始；
+            // ACP 会话在 prompt 起始经 `with_context_scale_notified` 注入侧车值）。
+            context_scale_notified: Mutex::new(Vec::new()),
             denial_state: Mutex::new(DenialState::default()),
-            // FUS-LEDGER-FOLD-STATE (2026-08-18, ADR-0010 §14.26):
-            // production reads `ORZ_FOLD_TRIGGER_TOKENS` at construction;
-            // tests pin tiny thresholds via
-            // `ContextCompactConfig::with_fold_trigger_tokens` (compact.rs).
+            // 动态上下文滑块 S1（2026-09-15，设计 §3.2/§3.3）：生产在构造时
+            // 读 `ORZ_SLIDER_WINDOW_TOKENS`（H）与 `ORZ_SLIDER_RESIDENT_TOKENS`
+            // （L）＋ `ORZ_SLIDER_RHYTHM_BUFFER_TOKENS`（rhythm ＝ H ＋ 缓冲）
+            // ＋ `ORZ_CONTEXT_SCALE_HARD_TOKENS`（实际上下文硬兜底）；测试用
+            // `with_slider_window_tokens` / `with_slider_resident_tokens` /
+            // `with_context_compact`（rhythm 缝隙，compact.rs）。
+            // 旧 `ORZ_FOLD_TRIGGER_TOKENS` / `ORZ_FOLD_TAIL_TOKENS` 随本批退役
+            // （14.32 桥预算并入驻留带 L；显式翻转登记见设计 DP-8）。
             context_compact: ContextCompactConfig {
-                fold_trigger_tokens: fold_trigger_tokens_override()
-                    .unwrap_or(DEFAULT_FOLD_TRIGGER_TOKENS),
-                fold_tail_tokens: fold_tail_tokens_override().unwrap_or(DEFAULT_FOLD_TAIL_TOKENS),
+                slider_window_tokens: slider_window_tokens_override()
+                    .unwrap_or(DEFAULT_SLIDER_WINDOW_TOKENS),
+                slider_resident_tokens: slider_resident_tokens_override()
+                    .unwrap_or(DEFAULT_SLIDER_RESIDENT_TOKENS),
+                slider_rhythm_buffer_tokens: slider_rhythm_buffer_tokens_override()
+                    .unwrap_or(DEFAULT_SLIDER_RHYTHM_BUFFER_TOKENS),
+                hard_context_tokens: context_scale_hard_tokens_override()
+                    .unwrap_or(DEFAULT_CONTEXT_SCALE_HARD_TOKENS),
+                // 审查修正批（2026-09-15，P2⑤）：窗口轮全量上传上限（越线不开窗）。
+                window_upload_cap_tokens: window_upload_cap_tokens_override()
+                    .unwrap_or(DEFAULT_WINDOW_UPLOAD_CAP_TOKENS),
                 ..ContextCompactConfig::default()
             },
             whitelist: Mutex::new(Vec::new()),
@@ -1451,6 +1475,8 @@ impl AgentLoopController {
             blackboard_archive_dir: None,
             epoch_archive_errors: Mutex::new(Vec::new()),
             pacing_rounds: std::sync::atomic::AtomicU32::new(0),
+            // v7（S1 修订批）：会话级提醒水位（构造时空）。
+            context_scale_notified: Mutex::new(Vec::new()),
             denial_state: Mutex::new(DenialState::default()),
             context_compact: ContextCompactConfig::default(),
             whitelist: Mutex::new(Vec::new()),
@@ -2283,6 +2309,39 @@ impl AgentLoopController {
             bytes as f64 / 1_000_000.0,
             budget / 1_000_000
         )
+    }
+
+    /// 动态上下文滑块 S1 修订批（v7，2026-09-15，设计 §3.5.1，用户裁定
+    /// DP-16）：**会话级提醒水位**——已提醒刻度键（`["500k", "900k"]`）。
+    /// 与黑板同族：跨 prompt 延续、新会话从零开始、恢复不重发（先例
+    /// `StoredConversation.fatigue_tiers_notified`）。host 侧在 prompt 起始
+    /// 注入（`with_context_scale_notified`）、run 成功后随侧车落盘。
+    pub fn context_scale_notified_keys(&self) -> Vec<String> {
+        self.context_scale_notified
+            .lock()
+            .map(|k| k.clone())
+            .unwrap_or_default()
+    }
+
+    /// DP-16：某个刻度 fire 后回写会话级水位（去重、稳定序）。
+    pub(crate) fn mark_context_scale_notified(&self, key: &str) {
+        let Ok(mut keys) = self.context_scale_notified.lock() else {
+            return;
+        };
+        if !keys.iter().any(|k| k == key) {
+            keys.push(key.to_string());
+            keys.sort();
+        }
+    }
+
+    /// DP-16：prompt 起始注入会话级水位（host 侧从侧车读出的已提醒键）。
+    pub fn with_context_scale_notified(self, keys: Vec<String>) -> Self {
+        if let Ok(mut slot) = self.context_scale_notified.lock() {
+            *slot = keys;
+            slot.sort();
+            slot.dedup();
+        }
+        self
     }
 
     pub(crate) fn attach_pull_delta(
@@ -3550,6 +3609,32 @@ impl AgentLoopController {
                         current_domain: bb_domain,
                     }),
                     &mut fold_state,
+                    // v7（S1 修订批）＋ 审查修正批（2026-09-15，审查 P3⑥）：
+                    // 收尾压缩的定位指针——journal 取**整 run 事件跨度**
+                    // （`0 → 当前 seq`，run 从 `run_started`(seq=0) 起连续编号，
+                    // 该区间是真实跨度而非占位值）；台账 `[seq]` 跨度属 loop
+                    // 内态、收尾路径确实不可得 ⇒ 如实留「（无）」（`ledger_seq`
+                    // 不设）；sidecar 路径按会话 id 前 8 字符同源给出。
+                    &crate::summary::LocatorPointers {
+                        ledger_path: Some(
+                            crate::action_ledger::ledger_file_path(&host.session_cwd())
+                                .display()
+                                .to_string(),
+                        ),
+                        journal_run: Some(writer.run_id().to_string()),
+                        journal_seq: Some((0, writer.seq())),
+                        conversation_path: self.session_id.as_deref().map(|id| {
+                            let suffix: String = id.chars().take(8).collect();
+                            host.session_cwd()
+                                .join(".gsa")
+                                .join("conversations")
+                                .join(format!("{suffix}.json"))
+                                .display()
+                                .to_string()
+                        }),
+                        ..crate::summary::LocatorPointers::default()
+                    },
+                    None,
                 )
                 .await?;
             }

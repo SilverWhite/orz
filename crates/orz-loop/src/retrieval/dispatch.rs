@@ -524,6 +524,16 @@ impl AgentLoopController {
                         // 适用），不传折叠快照 LIF 上下文。
                         None,
                         &mut fold_state,
+                        // v7（S1 修订批）＋ 审查修正批（2026-09-15，审查 P3⑥）：
+                        // 检索车道不折叠、无外挂台账 ⇒ 定位指针只有 journal
+                        // run＋**整 run 事件跨度**（`0 → 当前 seq`，非占位值）；
+                        // sidecar/台账如实留「（无）」。
+                        &crate::summary::LocatorPointers {
+                            journal_run: Some(writer.run_id().to_string()),
+                            journal_seq: Some((0, writer.seq())),
+                            ..crate::summary::LocatorPointers::default()
+                        },
+                        None,
                     )
                     .await?;
                 }

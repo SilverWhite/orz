@@ -35,7 +35,17 @@ pub(crate) const MECHANICAL_AUDIT_CAPACITY: usize = 128;
 pub(crate) const KIND_TOOL_RESULT: &str = "tool_result";
 pub(crate) const KIND_PLAN_GATE: &str = "plan_gate";
 pub(crate) const KIND_BUDGET: &str = "budget";
+/// **已退役（历史回放保留）**：0ae D2 注意力阶梯的触发 kind。动态上下文
+/// 滑块 S1（2026-09-15，设计 §3.4 用户裁定 R3）把 D2 整体下线，生产侧
+/// **零写入点**；枚举值保留只为**历史 journal 仍可校验**（移动端/A-B 会
+/// 回放旧 run 的 journal，删值＝让旧刊判 invalid）。新写入一律用
+/// [`KIND_CONTEXT_SCALE`]。
+#[allow(dead_code)] // 保留供历史 journal 校验与 schema 枚举钉子（生产零写入）
 pub(crate) const KIND_ATTENTION_LADDER: &str = "attention_ladder";
+/// 动态上下文滑块 S1（2026-09-15，设计 §3.2/§3.4）：实际上下文刻度提醒
+/// 与压缩开窗的落账 kind——键形 `context_scale:<500k|900k|first_fold>`
+/// （A4 首次驱逐固化提醒、A6 两级刻度提醒、A7 随提醒开窗）。
+pub(crate) const KIND_CONTEXT_SCALE: &str = "context_scale";
 pub(crate) const KIND_MODEL_COMPRESSION: &str = "model_compression";
 pub(crate) const KIND_PLAN_WRITE_GUIDANCE: &str = "plan_write_guidance";
 
@@ -741,6 +751,7 @@ mod tests {
                 KIND_PLAN_GATE.to_string(),
                 KIND_BUDGET.to_string(),
                 KIND_ATTENTION_LADDER.to_string(),
+                KIND_CONTEXT_SCALE.to_string(),
                 KIND_MODEL_COMPRESSION.to_string(),
                 KIND_PLAN_WRITE_GUIDANCE.to_string(),
             ]

@@ -473,6 +473,14 @@ struct StoredConversation {
     /// 故不持久化压缩累计。）
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     fatigue_tiers_notified: Vec<String>,
+    /// 动态上下文滑块 S1 修订批（v7，2026-09-15，设计 §3.5.1，用户裁定
+    /// DP-16）：**会话级提醒水位**——已 fire 的实际上下文刻度键
+    /// （`["500k", "900k"]`）。与黑板同族（先例 `fatigue_tiers_notified`）：
+    /// 每级每会话一次、跨 prompt 延续、新会话从零开始、恢复不重发。
+    /// prompt 起始经 `with_context_scale_notified` 注入 loop，run 成功后由
+    /// controller 回写（SUCCESS-ONLY，同疲劳档位语义）。
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    context_scale_notified: Vec<String>,
 }
 
 impl StoredConversation {
@@ -488,6 +496,7 @@ impl StoredConversation {
             lif: None,
             blackboard: None,
             fatigue_tiers_notified: Vec::new(),
+            context_scale_notified: Vec::new(),
         }
     }
 
@@ -513,6 +522,8 @@ impl StoredConversation {
             lif: Some(temporal.clone()),
             blackboard: Some(blackboard.clone()),
             fatigue_tiers_notified: Vec::new(),
+            // v7（S1 修订批）：水位在 run 成功后由调用方按 controller 回写。
+            context_scale_notified: Vec::new(),
         }
     }
 }
@@ -676,7 +687,16 @@ struct PackagedSessionArchive {
     status: String,
     attempts: u32,
     fatigue_pct: u64,
+    /// 动态上下文滑块 S1（2026-09-15，设计 §3.5 DP-11④）：本次归档时该会话
+    /// 的**全量会话 token 估算**（chars/2，与 orz-loop `estimate_messages_tokens`
+    /// 同口径）——写成功后落 `.gsa/archives/<session8>.milestones.json`，作为
+    /// 「上次归档读数」，使增量归档按里程碑幂等（不重复打包同一刻度）。
+    conversation_tokens: u64,
 }
+
+/// 动态上下文滑块 S1（2026-09-15，设计 §3.5 / DP-11④）：增量归档里程碑
+/// 步长——实际上下文每跨 500K，附加一次增量归档（会话关闭仍照旧打包一次）。
+const ARCHIVE_INCREMENT_TOKENS: u64 = 500_000;
 
 /// 归档票：会话关闭时若仍有 run 在进行，先把归档挂起，待该 run 收尾
 /// （sidecar 更新落盘后）再补触发——保证存档包含会话最后一段内容
@@ -686,6 +706,10 @@ struct PendingArchiveTicket {
     base_dir: PathBuf,
     prompt_count: u64,
     trust_policy: crate::session::TrustPolicy,
+    /// 动态上下文滑块 S1（设计 §3.5 DP-11④）：`true` = 里程碑增量归档
+    /// （`session_archive` 事件带 `incremental: true`），`false` = 会话关闭
+    /// 归档（原有口径）。
+    incremental: bool,
 }
 
 /// P2-13 B3（2026-09-03，ADR-0010 §14.52 / 设计 §11.3/§12 R3）：会话关闭/
@@ -698,11 +722,19 @@ struct PendingArchiveTicket {
 /// `session_archive` v0.2 事件（每条会话存档一次）。best-effort：失败只
 /// warn、绝不阻断会话关闭。同步文件 IO + gzip 放入 blocking 池执行，
 /// 避免阻塞 async worker。
+/// 归档主实现（`incremental` = 本次是否为里程碑增量归档）。
+///
+/// 动态上下文滑块 S1（2026-09-15，设计 §3.5）：包内改为**信封**结构——
+/// `{"schema":"session-archive-package-v0.2","conversation":<sidecar 原文>,"archive_keys":{…}}`；
+/// `conversation` 成员是把磁盘 sidecar 的**原始字节原样嵌为 JSON 成员值**
+/// （不 parse→re-serialize，保证「纯打包零内容变换」不变量仍成立），
+/// `archive_keys` 为三键互标段（机械派生，见 `build_archive_keys`）。
 async fn archive_session_package(
     base_dir: &Path,
     session_id: &str,
     prompt_count: u64,
     trust_policy: crate::session::TrustPolicy,
+    incremental: bool,
 ) {
     let base_dir = base_dir.to_path_buf();
     let session_id = session_id.to_string();
@@ -729,6 +761,15 @@ async fn archive_session_package(
     });
     if pkg.fatigue_pct > 0 {
         payload["fatigue_pct"] = serde_json::Value::from(pkg.fatigue_pct);
+    }
+    if incremental {
+        payload["incremental"] = serde_json::Value::Bool(true);
+    }
+    // 动态上下文滑块 S1（设计 §3.5 DP-11④）：包落盘成功即更新「上次归档
+    // 读数」（单调水位）——增量归档的幂等锚点；失败不动水位（下次 run 尾
+    // 重判）。best-effort：写失败只 warn。
+    if pkg.status == "completed" {
+        record_archived_tokens(&base_dir, &session_id, pkg.conversation_tokens);
     }
     let run_id = pkg.run_id;
     match bootstrap_session(&run_id, Some(base_dir), trust_policy).await {
@@ -787,6 +828,19 @@ fn package_session_archive(
         "{session_id}-{}",
         chrono::Utc::now().format("%Y%m%dT%H%M%SZ")
     );
+    // 动态上下文滑块 S1（2026-09-15，设计 §3.5）：包内容改为信封——
+    // `conversation` 成员＝磁盘 sidecar 的原始字节（零内容变换），
+    // `archive_keys`＝三键互标段（LIF 会话轮跨度／台账 `[seq]` 跨度／
+    // journal run+sequence，外加窗口轮跨度临时键与 A 类压缩存档清单）。
+    let archive_keys = build_archive_keys(base_dir, session_id, &parsed);
+    let conversation_tokens = estimate_conversation_tokens(&parsed);
+    let Some(package_bytes) = build_archive_envelope(&raw_sidecar, &archive_keys) else {
+        tracing::warn!(
+            "session archive skipped: sidecar is not valid UTF-8 ({})",
+            sidecar_path.display()
+        );
+        return None;
+    };
     // 终点疲劳水位（百分比，0–100）：黑板 live 紧凑 JSON 字节 / W。
     let fatigue_pct = parsed
         .blackboard
@@ -810,7 +864,7 @@ fn package_session_archive(
         let write_ok = (|| -> std::io::Result<()> {
             let file = std::fs::File::create(&tmp_path)?;
             let mut enc = GzEncoder::new(file, Compression::default());
-            enc.write_all(&raw_sidecar)?;
+            enc.write_all(&package_bytes)?;
             enc.finish()?;
             Ok(())
         })();
@@ -852,7 +906,294 @@ fn package_session_archive(
         status: status.to_string(),
         attempts,
         fatigue_pct,
+        conversation_tokens,
     })
+}
+
+/// 动态上下文滑块 S1（2026-09-15，设计 §3.5）：归档包信封装配——
+/// `conversation` 成员直接嵌入 sidecar 的**原始 JSON 文本**（不 parse→
+/// re-serialize ⇒ 纯打包零内容变换不变量保持；旧读者仍可由 `decode_archive_package`
+/// 兼容读取）。`raw_sidecar` 非 UTF-8 ⇒ `None`（调用方 warn 后跳过，与
+/// 损坏 sidecar 同语义）。`archive_keys` 序列化失败同样回落 `None`（结构由
+/// 本模块机械构造，正常不可达；fail-closed 优于写半个包）。
+fn build_archive_envelope(raw_sidecar: &[u8], archive_keys: &serde_json::Value) -> Option<Vec<u8>> {
+    let conversation = std::str::from_utf8(raw_sidecar).ok()?;
+    let keys = serde_json::to_string(archive_keys).ok()?;
+    Some(format!(
+        "{{\"schema\":\"{ARCHIVE_PACKAGE_SCHEMA}\",\"conversation\":{conversation},\"archive_keys\":{keys}}}"
+    )
+    .into_bytes())
+}
+
+/// 归档包信封的 schema 标识（S1 起；`decode_archive_package` 用它区分
+/// 新信封与旧裸包）。
+const ARCHIVE_PACKAGE_SCHEMA: &str = "session-archive-package-v0.2";
+
+/// 动态上下文滑块 S1（2026-09-15，设计 §3.5）：归档包 tolerant 解码——
+/// 新信封（`conversation` ＋ `archive_keys`）与**旧裸包**（gzip 内容直接是
+/// `StoredConversation`）都接受，返回 (对话, 可选的 archive_keys)。
+/// 回读路径与测试共用同一入口，避免两处各自解析漂移。
+/// 当前生产侧无包回读点（会话续接走 conversation sidecar，journal 走逐事件
+/// 链）——本入口先服务归档一致性测试与将来的离线回读/核验工具，故显式
+/// `allow(dead_code)` 而非删除（删掉就得让每个读者各自实现信封判别）。
+#[allow(dead_code)]
+fn decode_archive_package(bytes: &[u8]) -> Option<(StoredConversation, Option<serde_json::Value>)> {
+    if let Ok(stored) = serde_json::from_slice::<StoredConversation>(bytes) {
+        return Some((stored, None));
+    }
+    let value: serde_json::Value = serde_json::from_slice(bytes).ok()?;
+    let conversation = value.get("conversation")?;
+    let stored: StoredConversation = serde_json::from_value(conversation.clone()).ok()?;
+    Some((stored, value.get("archive_keys").cloned()))
+}
+
+/// 动态上下文滑块 S1（设计 §3.5 判据「存档一致性（三键）」）：归档包
+/// `archive_keys` 段——**机械派生、零模型调用、best-effort**（数据源缺失给
+/// 确定结构 `exists=false`/空数组，绝不 panic，也绝不整段缺失）。
+///
+/// 三键口径（v6 更正后的键名，尾批 §7 落地前给会话级退化）：
+/// 1. **会话相对 LIF 轮**：S1 给会话级跨度（`entry_round`→`round`，
+///    来自 sidecar 的 `lif` 快照）＋ `window_rounds` 临时键（窗口内声明轮
+///    跨度，`axis="window"`，尾批换成逐段 LIF 轮区间）；
+/// 2. **台账 `[seq]`**：`.gsa/ledger/current.md` 的全局行序号跨度与行数
+///    （行格式见 `orz-loop/action_ledger.rs::external_row_line`：`[<seq>] …`，
+///    一条逻辑记录＝一个物理行）；
+/// 3. **journal run+sequence**：本会话 run 目录（`.gsa/runs/RUN-<session8>-*`，
+///    run id 口径见本文件 `format!("RUN-{suffix}-{prompt_number}")`）的
+///    事件数与该文件首/末 `sequence`（首末两行各解析一次，避免整刊反序列化）。
+///
+/// 另附 A 类（机械压缩部分）清单：`.gsa/compaction/compaction-*.md` 的
+/// 路径与字节数（B 类以 journal 为准，包内只留 run id/路径指针，避免整包膨胀）。
+fn build_archive_keys(
+    base_dir: &Path,
+    session_id: &str,
+    parsed: &StoredConversation,
+) -> serde_json::Value {
+    let suffix: String = session_id.chars().take(8).collect();
+    let lif = parsed.lif.as_ref();
+    let tool_rounds = parsed
+        .messages
+        .iter()
+        .filter(|m| m.role == Role::Assistant && !m.tool_calls.is_empty())
+        .count() as u64;
+    let ledger = ledger_key_facts(&base_dir.join(".gsa").join("ledger").join("current.md"));
+    let journal = journal_key_facts(&base_dir.join(".gsa").join("runs"), &suffix);
+    let compaction = compaction_archive_facts(&base_dir.join(".gsa").join("compaction"));
+    serde_json::json!({
+        "axis_note": "LIF 逐段映射随尾批（CONTEXT_DYNAMIC_SLIDER_DESIGN §7）落地；\
+                      S1 提供会话级 LIF 轮跨度（entry_round→round）与窗口轮跨度\
+                      （window_rounds.axis=\"window\"，临时代用键，非全局键）。",
+        "lif": {
+            "round_start": lif.map(|l| l.entry_round),
+            "round_end": lif.map(|l| l.round),
+            "domain": lif.map(|l| l.current_domain.as_str()),
+            "session_started_at": parsed.session_started_at,
+        },
+        "window_rounds": {
+            "axis": "window",
+            "provisional": true,
+            "start": 1,
+            "end": tool_rounds,
+        },
+        "ledger": ledger,
+        "journal": journal,
+        "compaction": compaction,
+    })
+}
+
+/// 台账文件的 `[seq]` 跨度（不存在 ⇒ `exists=false` 且其余为 null/0）。
+fn ledger_key_facts(path: &Path) -> serde_json::Value {
+    let mut rows = 0u64;
+    let mut first_seq: Option<u64> = None;
+    let mut last_seq: Option<u64> = None;
+    if let Ok(text) = std::fs::read_to_string(path) {
+        for line in text.lines() {
+            let seq = line
+                .trim_start()
+                .strip_prefix('[')
+                .and_then(|rest| rest.split(']').next())
+                .and_then(|s| s.trim().parse::<u64>().ok());
+            if let Some(seq) = seq {
+                rows += 1;
+                first_seq.get_or_insert(seq);
+                last_seq = Some(seq);
+            }
+        }
+        return serde_json::json!({
+            "path": ".gsa/ledger/current.md",
+            "exists": true,
+            "first_seq": first_seq,
+            "last_seq": last_seq,
+            "rows": rows,
+        });
+    }
+    serde_json::json!({
+        "path": ".gsa/ledger/current.md",
+        "exists": false,
+        "first_seq": serde_json::Value::Null,
+        "last_seq": serde_json::Value::Null,
+        "rows": 0,
+    })
+}
+
+/// 本会话 journal run 事实：`RUN-<session8>-*` 目录的事件数与首/末 sequence。
+fn journal_key_facts(runs_dir: &Path, suffix: &str) -> serde_json::Value {
+    let mut runs: Vec<serde_json::Value> = Vec::new();
+    if let Ok(entries) = std::fs::read_dir(runs_dir) {
+        let mut ids: Vec<String> = entries
+            .flatten()
+            .filter(|e| e.path().is_dir())
+            .filter_map(|e| e.file_name().into_string().ok())
+            .filter(|name| name.starts_with(&format!("RUN-{suffix}-")))
+            .collect();
+        ids.sort();
+        for run_id in ids {
+            let events_path = runs_dir.join(&run_id).join("events.jsonl");
+            let Ok(text) = std::fs::read_to_string(&events_path) else {
+                continue;
+            };
+            let lines: Vec<&str> = text.lines().filter(|l| !l.trim().is_empty()).collect();
+            let seq_of = |line: &str| -> Option<u64> {
+                serde_json::from_str::<serde_json::Value>(line)
+                    .ok()?
+                    .get("sequence")?
+                    .as_u64()
+            };
+            let first_sequence = lines.first().and_then(|l| seq_of(l)).unwrap_or(0);
+            let last_sequence = lines
+                .last()
+                .and_then(|l| seq_of(l))
+                .unwrap_or(first_sequence);
+            runs.push(serde_json::json!({
+                "run_id": run_id,
+                "first_sequence": first_sequence,
+                "last_sequence": last_sequence,
+                "events": lines.len() as u64,
+            }));
+        }
+    }
+    serde_json::json!({ "runs": runs })
+}
+
+/// A 类压缩摘要存档清单（`.gsa/compaction/compaction-*.md`）——只列路径与
+/// 字节数，内容留在原文件（包内不复制，避免整包膨胀）。
+fn compaction_archive_facts(dir: &Path) -> serde_json::Value {
+    let mut items: Vec<serde_json::Value> = Vec::new();
+    if let Ok(entries) = std::fs::read_dir(dir) {
+        let mut files: Vec<PathBuf> = entries
+            .flatten()
+            .map(|e| e.path())
+            .filter(|p| {
+                p.is_file()
+                    && p.file_name()
+                        .and_then(|n| n.to_str())
+                        .is_some_and(|n| n.starts_with("compaction-") && n.ends_with(".md"))
+            })
+            .collect();
+        files.sort();
+        for path in files {
+            let id = path
+                .file_stem()
+                .and_then(|s| s.to_str())
+                .unwrap_or_default()
+                .to_string();
+            let bytes = std::fs::metadata(&path).map(|m| m.len()).unwrap_or(0);
+            items.push(serde_json::json!({
+                "id": id,
+                "path": format!(".gsa/compaction/{}", path.file_name().and_then(|n| n.to_str()).unwrap_or_default()),
+                "bytes": bytes,
+            }));
+        }
+    }
+    serde_json::Value::Array(items)
+}
+
+/// 全量会话 token 估算——与 orz-loop `compact::estimate_messages_tokens`
+/// **同口径**（每消息 content ＋ reasoning ＋ tool_calls 名/参数 字符数 ÷2
+/// 求和；该函数为 `pub(crate)`，跨 crate 无法复用，故此处镜像并在此注明
+/// 单一来源）。用于增量归档里程碑（实际上下文刻度，非视图刻度）。
+///
+/// 审查修正批（2026-09-15，审查 P2④）：**「同尺」指口径同源，不等于读数等值**
+/// ——本函数量的是**写回 sidecar 的会话**（机械注入块已被 `is_injected_block_text`
+/// 过滤剔除），而 loop 侧 `estimate_messages_tokens(messages)` 量的是**含注入块的
+/// 运行期会话**（`[CONTEXT_SCALE …]`／窗口提示／orientation／预算块…）⇒ 同一时刻
+/// 本读数系统性偏低，差值＝会话内注入块累积量（长单对话下不可忽略）。里程碑只需
+/// 单调＋幂等，故不要求与提醒读数逐 token 对齐（设计 §3.5.1「同尺」按此口径读）。
+fn estimate_conversation_tokens(conversation: &StoredConversation) -> u64 {
+    conversation
+        .messages
+        .iter()
+        .map(|m| {
+            let mut chars = m.content.chars().count() as u64;
+            if let Some(reasoning) = &m.reasoning_content {
+                chars += reasoning.chars().count() as u64;
+            }
+            for call in &m.tool_calls {
+                chars += call.name.chars().count() as u64;
+                chars += serde_json::to_string(&call.arguments)
+                    .map(|s| s.chars().count() as u64)
+                    .unwrap_or(0);
+            }
+            chars / 2
+        })
+        .sum()
+}
+
+/// 「上次归档读数」文件（会话级；单调水位）。
+fn archive_milestone_path(base_dir: &Path, session_id: &str) -> PathBuf {
+    let suffix: String = session_id.chars().take(8).collect();
+    base_dir
+        .join(".gsa")
+        .join("archives")
+        .join(format!("{suffix}.milestones.json"))
+}
+
+/// 读「上次归档读数」（缺失/损坏 ⇒ None ⇒ 视为尚无归档）。
+fn last_archived_tokens(base_dir: &Path, session_id: &str) -> Option<u64> {
+    let raw = std::fs::read_to_string(archive_milestone_path(base_dir, session_id)).ok()?;
+    serde_json::from_str::<serde_json::Value>(&raw)
+        .ok()?
+        .get("archived_tokens")?
+        .as_u64()
+}
+
+/// 写「上次归档读数」（best-effort：失败只 warn，绝不影响归档结论）。
+fn record_archived_tokens(base_dir: &Path, session_id: &str, tokens: u64) {
+    let path = archive_milestone_path(base_dir, session_id);
+    if let Some(parent) = path.parent()
+        && let Err(e) = std::fs::create_dir_all(parent)
+    {
+        tracing::warn!(
+            "archive milestone dir create failed ({}): {e}",
+            parent.display()
+        );
+        return;
+    }
+    let payload = serde_json::json!({
+        "archived_tokens": tokens,
+        "archived_at": chrono::Utc::now().format("%Y-%m-%dT%H:%M:%SZ").to_string(),
+    });
+    if let Err(e) = std::fs::write(&path, payload.to_string()) {
+        tracing::warn!("archive milestone write failed ({}): {e}", path.display());
+    }
+}
+
+/// 动态上下文滑块 S1（设计 §3.5 DP-11④）：增量归档**是否到期**——
+/// 实际上下文估算 ≥500K 且（尚无归档 或 ≥ 上次归档读数 ＋500K）。纯机械、
+/// 单调（水位只在包写成功后推进）⇒ 同一里程碑不会重复打包。
+fn incremental_archive_due(
+    base_dir: &Path,
+    session_id: &str,
+    conversation: &StoredConversation,
+) -> bool {
+    let tokens = estimate_conversation_tokens(conversation);
+    if tokens < ARCHIVE_INCREMENT_TOKENS {
+        return false;
+    }
+    match last_archived_tokens(base_dir, session_id) {
+        Some(previous) => tokens >= previous.saturating_add(ARCHIVE_INCREMENT_TOKENS),
+        None => true,
+    }
 }
 
 /// Grill-mode session state (2026-08-08 write-placement slice, design §3):
@@ -1366,6 +1707,9 @@ impl AcpServer {
         // （SUCCESS-ONLY 纪律：失败 run 不更新；提醒只按水位判定，无压缩
         // 轮数门槛——B3 复审裁决）。
         let mut fatigue_tiers_notified = continuation.fatigue_tiers_notified.clone();
+        // v7（S1 修订批，设计 §3.5.1，DP-16）：会话级刻度水位随续接包跨
+        // prompt 延续（新会话为空；恢复侧车不重发）。
+        let restored_context_scale_notified = continuation.context_scale_notified.clone();
         drop(continuation);
         // IP5: attach the session's pre-mutation snapshot store — mutation
         // tools with knowable targets get tracked before execution.
@@ -1414,6 +1758,9 @@ impl AcpServer {
             .with_acaf_fail_closed(self.acaf_fail_closed)
             .with_retrieval_enabled(activation_snapshot.retrieval_enabled)
             .with_session_id(Some(session_id.to_string()))
+            // v7（S1 修订批，设计 §3.5.1，DP-16）：会话级刻度水位注入 loop
+            // ——每级每会话一次（跨 prompt 不重发；fire 时 controller 回写）。
+            .with_context_scale_notified(restored_context_scale_notified.clone())
             .with_activation_snapshot(Some(&activation_snapshot_json))
             // P2-13 B1 (2026-09-03)：会话级 live 黑板续载——上个成功
             // prompt 的整板快照灌回（含 exec/edits/tool_actions/actions
@@ -1552,6 +1899,9 @@ impl AcpServer {
                 fatigue_notice_text = Some(decision.notice.text);
             }
             full.fatigue_tiers_notified = fatigue_tiers_notified.clone();
+            // v7（S1 修订批，DP-16）：刻度水位随侧车落盘（跨 prompt 延续；
+            // 失败 run 不更新——SUCCESS-ONLY 同疲劳档位）。
+            full.context_scale_notified = controller.context_scale_notified_keys();
             persist_conversation_sidecar(&base_dir, &full);
             if let Some(session) = self.sessions.lock().unwrap().get_mut(session_id) {
                 session.continuation = Some(full);
@@ -1566,6 +1916,23 @@ impl AcpServer {
         // 收尾、成功路径的 sidecar 已同步落盘；失败/取消路径不更新
         // sidecar，存档最近一次成功内容）。会话未被 close（无票）= 无操作。
         self.take_deferred_archive(session_id);
+        // 动态上下文滑块 S1（2026-09-15，设计 §3.5 DP-11④）：**增量归档
+        // 时点**＝会话关闭一次（上方既有路径）＋ **实际上下文跨 500K 里程碑
+        // 追加一次**——长单对话「不结束就没有存档」的缺口由此闭合。判据机械
+        // （全量会话估算 chars/2，非视图刻度）、单调水位幂等；best-effort：
+        // 水位只在包写成功后推进，失败留给下次 run 尾重判。
+        if let Some(session) = self.sessions.lock().unwrap().get(session_id)
+            && let Some(continuation) = session.continuation.as_ref()
+            && incremental_archive_due(&session.base_dir, session_id, continuation)
+        {
+            Self::spawn_archive_task(PendingArchiveTicket {
+                session_id: session_id.to_string(),
+                base_dir: session.base_dir.clone(),
+                prompt_count: session.prompt_count,
+                trust_policy: session.trust_policy,
+                incremental: true,
+            });
+        }
         // P1-1（2026-09-09, S2-R P2）：浏览器生命周期跨 prompt 复用——run
         // 内懒启动换入的真实句柄在 host drop 前回写会话（host 每次 prompt
         // 新建；run 前不再预存默认 unavailable 句柄，见审查处理 §2 P1-1）。
@@ -1925,6 +2292,7 @@ impl AcpServer {
                 &ticket.session_id,
                 ticket.prompt_count,
                 ticket.trust_policy,
+                ticket.incremental,
             )
             .await;
         });
@@ -1967,6 +2335,7 @@ impl AcpServer {
                 base_dir: session.base_dir.clone(),
                 prompt_count: session.prompt_count,
                 trust_policy: session.trust_policy,
+                incremental: false,
             };
             if run_in_flight {
                 self.pending_archives
@@ -2728,7 +3097,14 @@ mod tests {
         );
         persist_conversation_sidecar(&base, &full);
 
-        archive_session_package(&base, session_id, 3, crate::session::TrustPolicy::Skip).await;
+        archive_session_package(
+            &base,
+            session_id,
+            3,
+            crate::session::TrustPolicy::Skip,
+            false,
+        )
+        .await;
 
         let suffix: String = session_id.chars().take(8).collect();
         let gz_path = base
@@ -2747,11 +3123,49 @@ mod tests {
         decoder
             .read_to_end(&mut decoded)
             .expect("archive package decodes");
-        let stored: StoredConversation =
-            serde_json::from_slice(&decoded).expect("archive content parses");
+        // 动态上下文滑块 S1（2026-09-15，设计 §3.5）：包内为信封结构，读取
+        // 一律走 tolerant 解码（新信封 + 旧裸包都接受）。
+        let (stored, keys) =
+            decode_archive_package(&decoded).expect("archive package decodes (envelope)");
         assert_eq!(stored.session_id, session_id);
         assert_eq!(stored.messages.len(), 1);
         assert_eq!(stored.messages[0].content, "任务");
+        // 三键互标段齐备（判据「存档一致性」：缺一即判存档不完整）。
+        let keys = keys.expect("archive_keys present");
+        assert_eq!(keys["window_rounds"]["axis"], "window");
+        assert_eq!(
+            keys["window_rounds"]["end"], 0,
+            "本测试对话无工具声明轮 ⇒ 窗口轮跨度 end=0（不给伪值）"
+        );
+        assert_eq!(keys["lif"]["round_end"], 1, "LIF 轮跨度取 sidecar 快照");
+        assert_eq!(keys["lif"]["domain"], "normal");
+        assert_eq!(keys["lif"]["session_started_at"], 1_700_000_000.0);
+        assert_eq!(
+            keys["ledger"]["exists"], false,
+            "本测试无外挂台账 ⇒ 确定性结构（不整段缺失）"
+        );
+        assert!(keys["ledger"]["first_seq"].is_null());
+        assert!(keys["journal"]["runs"].is_array());
+        assert!(keys["compaction"].is_array());
+        assert!(
+            keys["axis_note"].as_str().unwrap().contains("尾批"),
+            "临时键必须显式标注尾批前的退化口径: {keys}"
+        );
+
+        // 「上次归档读数」水位（增量归档幂等锚点）在包写成功后落地。
+        assert_eq!(
+            last_archived_tokens(&base, session_id),
+            Some(estimate_conversation_tokens(&stored)),
+            "里程碑水位 = 本次归档的会话估算读数"
+        );
+        assert!(
+            !incremental_archive_due(&base, session_id, &stored),
+            "刚归档过 ⇒ 同一里程碑不得重复打包"
+        );
+        assert!(
+            !incremental_archive_due(&base, "sess-arch-fresh-x", &stored),
+            "小会话（<500K）永不触发增量归档"
+        );
 
         // 专用 ARC run journal：run_preflight（bootstrap）→ session_archive
         // → run_finished。
@@ -2770,6 +3184,117 @@ mod tests {
             "{events}"
         );
         assert!(events.contains("\"status\":\"completed\""), "{events}");
+
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// 动态上下文滑块 S1（2026-09-15，设计 §3.5 / DP-11）：① 旧裸包仍可
+    /// tolerant 解码；② `archive_keys` 的三键由**真实文件**机械派生（台账
+    /// `[seq]` 跨度、journal run+sequence、A 类压缩清单）；③ 增量归档里程碑
+    /// 挂**实际上下文**刻度（≥500K 且比上次归档读数多 500K），单调幂等。
+    #[tokio::test]
+    async fn archive_keys_and_incremental_milestones_follow_the_design() {
+        let base = test_dir();
+        let session_id = "sess-keys-test-0002";
+        let suffix: String = session_id.chars().take(8).collect();
+        let snapshot = TemporalSessionSnapshot {
+            round: 7,
+            has_success: true,
+            current_domain: orz_assurance::lif::Domain::Pressure,
+            entry_round: 3,
+            spikes: Vec::new(),
+        };
+        let conversation = |chars: usize| {
+            StoredConversation::full(
+                session_id,
+                vec![Message {
+                    role: Role::User,
+                    content: "z".repeat(chars),
+                    tool_call_id: None,
+                    tool_calls: Vec::new(),
+                    reasoning_content: None,
+                    round: None,
+                }],
+                &snapshot,
+                Some(1_700_000_000.0),
+                &Blackboard::default(),
+            )
+        };
+        let small = conversation(10);
+
+        // ① 旧包（裸 StoredConversation）兼容：tautan 解码返回无 keys。
+        let legacy_bytes = serde_json::to_vec(&small).unwrap();
+        let (decoded, keys) =
+            decode_archive_package(&legacy_bytes).expect("legacy package decodes");
+        assert_eq!(decoded.session_id, session_id);
+        assert!(keys.is_none(), "旧包没有 archive_keys 段");
+
+        // ② 真实文件派生（台账行 / run journal / 压缩存档清单）。
+        let ledger_dir = base.join(".gsa").join("ledger");
+        std::fs::create_dir_all(&ledger_dir).unwrap();
+        std::fs::write(
+            ledger_dir.join("current.md"),
+            "[1] 轮次 1: read_file 目标=a.py 结果=sha256:x 最终回复=（无）\n\
+             [2] 轮次 2: grep 目标=b.rs 结果=sha256:y 最终回复=ok\n",
+        )
+        .unwrap();
+        let session_run = base
+            .join(".gsa")
+            .join("runs")
+            .join(format!("RUN-{suffix}-0"));
+        std::fs::create_dir_all(&session_run).unwrap();
+        std::fs::write(
+            session_run.join("events.jsonl"),
+            "{\"sequence\":0,\"event_type\":\"run_started\"}\n\
+             {\"sequence\":1,\"event_type\":\"run_finished\"}\n",
+        )
+        .unwrap();
+        // 非本会话的 run 不得混入（run id 前缀是唯一会话键）。
+        let other_run = base.join(".gsa").join("runs").join("RUN-othe0000-0");
+        std::fs::create_dir_all(&other_run).unwrap();
+        std::fs::write(other_run.join("events.jsonl"), "{\"sequence\":0}\n").unwrap();
+        let compaction_dir = base.join(".gsa").join("compaction");
+        std::fs::create_dir_all(&compaction_dir).unwrap();
+        std::fs::write(compaction_dir.join("compaction-RUN-x-0001.md"), "# 摘要").unwrap();
+
+        let keys = build_archive_keys(&base, session_id, &small);
+        assert_eq!(keys["ledger"]["exists"], true);
+        assert_eq!(keys["ledger"]["first_seq"], 1);
+        assert_eq!(keys["ledger"]["last_seq"], 2);
+        assert_eq!(keys["ledger"]["rows"], 2);
+        assert_eq!(
+            keys["journal"]["runs"].as_array().unwrap().len(),
+            1,
+            "只纳入本会话 RUN-<session8>-* 的 run: {keys}"
+        );
+        assert_eq!(
+            keys["journal"]["runs"][0]["run_id"],
+            format!("RUN-{suffix}-0")
+        );
+        assert_eq!(keys["journal"]["runs"][0]["events"], 2);
+        assert_eq!(keys["journal"]["runs"][0]["last_sequence"], 1);
+        assert_eq!(keys["compaction"][0]["id"], "compaction-RUN-x-0001");
+        assert_eq!(keys["lif"]["round_start"], 3);
+        assert_eq!(keys["lif"]["round_end"], 7);
+        assert_eq!(keys["lif"]["domain"], "pressure");
+
+        // ③ 增量归档里程碑（实际上下文刻度，单调幂等）。
+        let unarchived = "sess-milestone-x";
+        assert!(
+            !incremental_archive_due(&base, unarchived, &conversation(900_000)),
+            "≈450K < 500K ⇒ 不触发"
+        );
+        let first = conversation(1_100_000); // ≈550K
+        assert!(incremental_archive_due(&base, unarchived, &first));
+        record_archived_tokens(&base, unarchived, estimate_conversation_tokens(&first));
+        assert!(
+            !incremental_archive_due(&base, unarchived, &first),
+            "同一里程碑（水位未再跨 500K）不得重复打包"
+        );
+        assert!(
+            incremental_archive_due(&base, unarchived, &conversation(2_200_000)),
+            "跨下一个 500K 里程碑再归档一次"
+        );
 
         let _ = std::fs::remove_dir_all(&base);
     }
@@ -4228,6 +4753,9 @@ mod tests {
         // B3 复审裁决移除压缩轮数门槛）。
         let mut full = full;
         full.fatigue_tiers_notified = vec![orz_loop::fatigue::FATIGUE_TIER_50.to_string()];
+        // v7（S1 修订批，设计 §3.5.1，DP-16）：会话级刻度水位同信封往返
+        // （每级每会话一次；跨 prompt 不重发、新会话从零开始）。
+        full.context_scale_notified = vec!["500k".to_string(), "900k".to_string()];
         persist_conversation_sidecar(&base, &full);
         let stored = load_conversation_sidecar(&base, "sess-roundtrip").expect("sidecar loads");
         assert_eq!(stored.session_id, "sess-roundtrip");
@@ -4254,6 +4782,11 @@ mod tests {
         assert_eq!(
             stored.fatigue_tiers_notified,
             vec![orz_loop::fatigue::FATIGUE_TIER_50.to_string()]
+        );
+        assert_eq!(
+            stored.context_scale_notified,
+            vec!["500k".to_string(), "900k".to_string()],
+            "会话级刻度水位随侧车往返"
         );
         // Exact path shape.
         assert!(conv_sidecar_path(&base, "sess-roundtrip").exists());
@@ -4303,6 +4836,9 @@ mod tests {
         let stored = load_conversation_sidecar(&base, "sess-legacy").expect("legacy parses");
         assert_eq!(stored.messages.len(), 1);
         assert!(stored.temporal_spikes.is_none());
+        // v7（S1 修订批）：缺字段的 legacy 侧车按空水位解析（serde default）
+        // ——新字段不破坏既有侧车。
+        assert!(stored.context_scale_notified.is_empty());
         let _ = std::fs::remove_dir_all(&base);
     }
 
@@ -4347,6 +4883,16 @@ mod tests {
                     .await
                     .unwrap();
                 assert_eq!(r1["response"], "第一答");
+                // v7（S1 修订批，设计 §3.5.1，DP-16）：把会话级刻度水位预置进
+                // **内存续接包**（prompt 2 从这里取态，等同侧车恢复路径）——
+                // prompt 2 起始注入 loop、成功后由 controller 回写；下方断言
+                // 证明「注入 → 回写」整条接线（任一环断掉都会把水位丢成空）。
+                {
+                    let mut sessions = server.sessions.lock().unwrap();
+                    let session = sessions.get_mut("sess-conv").expect("session");
+                    let continuation = session.continuation.as_mut().expect("continuation");
+                    continuation.context_scale_notified = vec!["500k".to_string()];
+                }
                 let r2 = server
                     .handle_session_prompt("sess-conv", "第二问")
                     .await
@@ -4374,6 +4920,15 @@ mod tests {
                 let stored = load_conversation_sidecar(&base, "sess-conv").expect("sidecar");
                 assert!(stored.messages.iter().any(|m| m.content == "第一问"));
                 assert!(stored.messages.iter().any(|m| m.content == "第二答"));
+                // v7（S1 修订批，设计 §3.5.1，DP-16）：会话级刻度水位在 ACP
+                // 路径上「prompt 起始注入 loop → run 成功后回写侧车」——
+                // 预置值原样往返即证明注入/回写接线成立（本会话未越刻度，
+                // 故不新增水位键）。
+                assert_eq!(
+                    stored.context_scale_notified,
+                    vec!["500k".to_string()],
+                    "v7 DP-16：预置会话级水位必须原样往返（注入 loop → 成功回写）"
+                );
 
                 // Two run journals exist (one per prompt) — the conversation
                 // path adds no extra runs.
