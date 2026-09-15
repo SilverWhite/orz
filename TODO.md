@@ -814,13 +814,14 @@ GLM F2 处置转排期（2026-09-06 用户裁决）：`orz-host/src/approval.rs`
 - [x] `check_repository.py` 增计数一致性四点交叉核对（BACKLOG 总数 ↔ 各节开放项 ↔ TODO 勾选 ↔ 索引状态速查）+ 账本瘦身检查（台账行长限/行龄）；负例钉子（人为不一致可检出）；首批账本瘦身随 S1 做。入口：[深审 §3](docs/audits/FULL_PROJECT_DEEP_REVIEW_2026-09-12.md) / [BACKLOG 0ab](docs/BACKLOG_AND_PRIORITIES.md)。
 - [x] S1 完成（2026-09-15）：两组检查进 `check_repository.py` 常驻门禁（计数一致性交叉核对＋状态词封闭集＋标题漂移检查；头部台账行 ≤1200 字符/行龄 ≤21 天提示归档）＋钉子 `assurance/tests/test_ledger_consistency_nails.py`（13 合成负例＋真实仓库常驻零错 2 钉）＋首批瘦身随批执行（索引 54 行滚出归档、BACKLOG 计数流水行收缩入档、P0/P1 清单对账修复、0v 残留勾选补勾、P2 重复标题修复）；门禁 `valid: true`，不动计数。
 
-### 0ai 重文件拆分（`host_exec.rs` 优先；**本轮狗粮线修复考核测试任务**；P1；2026-09-16 立项）
+### 0ai 重文件拆分（`host_exec.rs` 优先；**本轮狗粮线修复考核测试任务**；P1；2026-09-16 立项；**实施件已落隔离工作区＋独立复核过，合回主仓留用户裁决**）
 
-- [ ] S1 切分图：按职责域定 `orz-loop/src/host_exec.rs`（9,184 行）模块边界与迁移清单（沿 CONTROLLER-SPLIT 先例；验收＝单文件 ≤10,000 行＋职责域单一）。
-- [ ] S2 机械搬移：`pub(crate)` 机械拆分，**行为不变**（事件序列与 journal 哈希链不动、可见性收敛、无逻辑改写）。
-- [ ] S3 回归核验：orz-loop／orz-host／orz-assurance ＋ fmt/clippy ＋ 门禁 `valid: true`；产出按正常批次合回。
-- [ ] 狗粮考核测试：以本项为题跑 orz（隔离工作区＋`task.txt`；用户 2026-09-16 裁决不做严格 A/B 采样，少样本如实标注、不作架构结论）；读数＝设计稿 §5 四件套＋尾部塌缩／提醒面／存档三键／本地增长。
+- [x] S1 切分图：`host_exec.rs`（拆分基线实读 9,710 行）按职责域拆 7 模块（mod 24 / tool_run 6,784 / failure 917 / facts 855 / serp 817 / dep_graph 269 / candidate 186）；产出 [`run 报告`](docs/audits/0AI_HOST_EXEC_SPLIT_REPORT_2026-09-16.md)（工作区件，随批合回）。
+- [x] S2 机械搬移：代码实体逐行搬迁零逻辑改写；行多重集等价（MISSING 9/INVENTED 118 全为胶水）＋差分自检非空转；`pub(crate) use` 保 `crate::host_exec::*` 旧路径。
+- [x] S3 回归核验：orz-loop **818/0/3**（主会话独立复跑同值）、**clippy 52→52 零新增**（主会话补跑，agent 沙箱无 protoc）、orz-host 串行 **325/0/5**（并行 8 失败复跑归因抖动）、fmt 干净；agent 报告 §6 读数齐。
+- [x] 狗粮考核测试：run **`RUN-CLI-6aa999d6`**（46m47s、234 轮、2097 事件；无墙钟）——命中率 **96.70%**（≥90% ✓）、5 窗驱逐（折叠后 view 21–29K）、500K 纯提醒如实、`read_file` 38 全文读零 offset；**存档三键 N/A**（archives 接线在 ACP 车道，`-p` 不可达）；**考出接线缺口三条**（blackboard_write 未进 `-p` 声明面／增量归档 `-p` 不可达／门禁冻结克隆 F2）＋agent 摩擦 F1–F8。读数全文：[`0AI_DOGFOOD_ASSESSMENT_CLOSURE_2026-09-16`](docs/audits/0AI_DOGFOOD_ASSESSMENT_CLOSURE_2026-09-16.md)。单轮如实标注、不作架构结论。
 - [x] 前置：**载体重建**——已完成 **0.5.2**（2026-09-16，源冻结基线 orz `a580eb08`＝`61982a56`＋bump＋orz-tui 断裂修复；双平台三件套＋冒烟＋换装＋manifest 1450 条＋门禁 `valid: true`；`GAP-ORZ-HOST-RESOURCE-SNAPSHOT-DROP` 随批闭合）。入口：[`052 重建与放行记录`](docs/audits/052_CARRIER_REBUILD_AND_0AI_RELEASE_2026-09-16.md)。
+- [ ] **产出合回主仓**（`D host_exec.rs`＋`?? host_exec/`＋agent 报告；留用户裁决）。
 - 入口：[重文件拆分勘察](docs/audits/HEAVY_FILE_SPLIT_SURVEY_2026-09-13.md) / [BACKLOG 0ai](docs/BACKLOG_AND_PRIORITIES.md) / [索引 `GAP-HEAVY-FILE-SPLIT`](CLI_PROJECT_INDEX.md)。
 
 ### 重文件拆分勘察（2026-09-13 落档；候选 1 已立项 0ai（2026-09-16），候选 2/3 未计数）
