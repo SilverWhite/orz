@@ -898,6 +898,7 @@ impl Blackboard {
     pub fn partition_revisions(&self) -> Vec<(&'static str, u64)> {
         vec![
             ("plan", self.revisions.plan),
+            ("notes", self.revisions.notes),
             ("exec", self.revisions.exec),
             ("edits", self.revisions.edits),
             ("tool_actions", self.revisions.tool_actions),
@@ -4202,6 +4203,7 @@ mod tests {
         assert_eq!(get("edits"), 3);
         assert_eq!(get("tool_actions"), 3);
         assert_eq!(get("actions"), 2);
+        assert_eq!(get("notes"), 1);
     }
 
     /// PULL 自描述 §2：ActionBoard 四类变化（注册替换 / 订单写入 / 消费 /
@@ -4372,8 +4374,8 @@ mod tests {
         let rev = restored.partition_revisions();
         for (name, value) in rev {
             match name {
-                "plan" | "exec" | "edits" | "tool_actions" | "actions" | "internal_ret"
-                | "external_ret" | "entities" => {
+                "plan" | "notes" | "exec" | "edits" | "tool_actions" | "actions"
+                | "internal_ret" | "external_ret" | "entities" => {
                     assert_eq!(value, 1, "{name} shows one restore change")
                 }
                 "deps" => assert_eq!(value, 0, "deps stays silent (empty graph until touched)"),

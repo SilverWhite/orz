@@ -247,9 +247,9 @@ fn hard_block(k: u64) -> String {
 pub fn compression_window_block(k: u64) -> String {
     format!(
         "[注意力 {k}K · 模型参与压缩] 已打断全部动作。请在有限轮内完成两件事：
-         1. 把继续工作必需的内容固化到黑板（blackboard_write section=plan|notes；         黑板不受折叠影响）；
+         1. 把继续工作必需的内容固化到黑板（blackboard_write section=plan|notes；黑板不受折叠影响）；
          2. 在回复中标注可弃范围（哪些轮次/读数/尝试可以丢弃）。
-         窗口结束后机械层执行折叠：标注区按标注折叠，未标注区按保留尾策略；         未完成时机械无差别折叠照旧执行并如实落账（model_participated: false）。"
+         窗口结束后机械层执行折叠：标注区按标注折叠，未标注区按保留尾策略；未完成时机械无差别折叠照旧执行并如实落账（model_participated: false）。"
     )
 }
 

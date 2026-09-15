@@ -8,6 +8,9 @@ description = "orz agent loop engine — AgentLoopController, Blackboard, Mechan
 [dependencies]
 # Self-built
 orz-assurance = { path = "../orz-assurance" }
+# RET-B3（2026-09-15）：检索族探针读数单一源化——消费 orz-tools 装配期
+# 快照 `assembled_local_segmented()`（orz-tools 不依赖 orz-loop，无环）。
+orz-tools = { workspace = true }
 # RT-002 (2026-08-11): test-output scrubbing before it enters the model
 # context (redact_secrets/redact_user_paths) — self-built workspace crate,
 # zero new third-party deps.

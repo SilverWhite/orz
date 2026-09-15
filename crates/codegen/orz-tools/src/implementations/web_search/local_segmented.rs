@@ -34,10 +34,16 @@
 //!   （取值序：回填 > 解包 > 包装原样）。
 //! - **G4** 代理管道：只加在分段检索专用客户端 `local_http`；读取序
 //!   `ORZ_RETRIEVAL_PROXY` → `HTTPS_PROXY` → `HTTP_PROXY`（`none` 显式
-//!   关）；**不设引擎白名单**（显式 `ORZ_RETRIEVAL_ENGINES` 永远优先），
-//!   有代理默认链 `duckduckgo,google,bing_cn,bing_global`。
+//!   关，传输层 `.no_proxy()` 钉死直连）；**不设引擎白名单**（显式
+//!   `ORZ_RETRIEVAL_ENGINES` 永远优先），有代理默认链
+//!   `bing_cn,bing_global,duckduckgo,google`。
+//!
+//! 检索侧补强（2026-09-15，QUAD 批深审 RET-B1/B2/B3/B4 裁决）：
+//! 有代理默认链改序不改集（DDG/Google 解析器缺位下的止损排序，见
+//! [`PROXY_DEFAULT_CHAIN`]）；G3 解包段按剩余整体预算钳制（设计 §5.3）；
+//! 探针读数经装配期快照 [`assembled_local_segmented`] 单一源化。
 
-use std::sync::LazyLock;
+use std::sync::{LazyLock, OnceLock};
 use std::time::{Duration, Instant};
 
 use base64::Engine as _;
@@ -138,9 +144,12 @@ pub struct LocalSegmentedConfig {
     pub proxy: Option<String>,
 }
 
-/// G4：有代理时的默认引擎链（§6.1 按实测可达性排序；四个引擎都在集内，
-/// 不构成白名单）。
-pub const PROXY_DEFAULT_CHAIN: &[&str] = &["duckduckgo", "google", "bing_cn", "bing_global"];
+/// G4：有代理时的默认引擎链。RET-B1（2026-09-15 裁决）**改序不改集**：
+/// DDG/Google 的 SERP 解析器缺位（`fetch_serp` 统一走 `parse_bing_serp`，
+/// 对二者恒 0 命中），领头只会各烧满 `T_first` 死重——Bing 系领先是解析
+/// 器就位前的止损排序（完整解析器 = S4 待办）。四引擎集合不变、不构成
+/// 白名单（显式 `ORZ_RETRIEVAL_ENGINES` 永远优先）。
+pub const PROXY_DEFAULT_CHAIN: &[&str] = &["bing_cn", "bing_global", "duckduckgo", "google"];
 
 impl Default for LocalSegmentedConfig {
     fn default() -> Self {
@@ -165,8 +174,14 @@ impl Default for LocalSegmentedConfig {
 
 impl LocalSegmentedConfig {
     /// Read the switch and tuning knobs from the process environment.
+    ///
+    /// RET-B3：装配期（registry 构造）单次快照——解析完成的配置存入进程级
+    /// [`ASSEMBLED_LOCAL_SEGMENTED`]（首次写入获胜），探针只读快照、不重
+    /// 读 env，防装配后 env 变化导致读数漂移。
     pub fn from_env() -> Self {
-        Self::from_env_with(|key| std::env::var(key).ok())
+        let config = Self::from_env_with(|key| std::env::var(key).ok());
+        let _ = ASSEMBLED_LOCAL_SEGMENTED.set(config.clone());
+        config
     }
 
     /// Environment-independent seam (tests never mutate the process env —
@@ -235,7 +250,8 @@ impl LocalSegmentedConfig {
         // G4：代理解析（读取序见 resolve_proxy_from）。显式
         // ORZ_RETRIEVAL_ENGINES 永远优先（不设引擎白名单）；未显式配置时
         // 默认链随代理形态切换：直连 = bing_cn 单引擎（§9.4），有代理 =
-        // duckduckgo,google,bing_cn,bing_global（§6.1）。
+        // bing_cn,bing_global,duckduckgo,google（§6.1；RET-B1 止损排序，
+        // 见 PROXY_DEFAULT_CHAIN）。
         config.proxy = resolve_proxy_from(&get);
         let explicit_engines = get(ENV_ENGINES).and_then(|list| {
             let engines: Vec<EngineSpec> = list
@@ -296,6 +312,17 @@ impl LocalSegmentedConfig {
             None => format!("{chain}; proxy=off"),
         }
     }
+}
+
+/// RET-B3：装配期单次快照（`LocalSegmentedConfig::from_env()` 首次调用
+/// 写入，首次写入获胜）——探针只读不重读 env，防漂移。
+static ASSEMBLED_LOCAL_SEGMENTED: OnceLock<LocalSegmentedConfig> = OnceLock::new();
+
+/// RET-B3 读数面（单一源）：registry 装配期（`registry/types.rs` 构造时
+/// 调 [`LocalSegmentedConfig::from_env`]）存下的配置快照；未装配（纯单测
+/// /未建 registry）返回 `None`，调用方回退自己的 env 读取。
+pub fn assembled_local_segmented() -> Option<&'static LocalSegmentedConfig> {
+    ASSEMBLED_LOCAL_SEGMENTED.get()
 }
 
 // ── SERP 提取（按现行 b_algo 结构重写）──────────────────────────────────
@@ -873,12 +900,31 @@ pub async fn search(
                         backfilled.insert(hit.index);
                     }
                 }
-                for handle in handles {
-                    if let Ok((index, Some(final_url))) = handle.await
-                        && let Some(hit) = hits.get_mut(index)
-                        && !backfilled.contains(&index)
-                    {
-                        hit.url = final_url;
+                // RET-B4（2026-09-15 裁决，设计 §5.3「整段取 min(剩余整体
+                // 预算)」）：单条 6s 只约束单个请求，await-all 若不按剩余
+                // 整体预算钳制，T_overall 可被 ⌈n/worker⌉×6s 突破。每轮
+                // 重算 remaining，到点 abort 并停止等待；已收到的解包结果
+                // 照常回填。timeout 只借 `&mut handle`（JoinHandle 的
+                // Future 实现），超时后仍持有所有权才能 abort。
+                for mut handle in handles {
+                    let remaining = config.overall_deadline.saturating_sub(started.elapsed());
+                    match tokio::time::timeout(remaining, &mut handle).await {
+                        Ok(Ok((index, Some(final_url)))) => {
+                            if let Some(hit) = hits.get_mut(index)
+                                && !backfilled.contains(&index)
+                            {
+                                hit.url = final_url;
+                            }
+                        }
+                        // 整体预算到点：abort 未完成解包任务，不再等待；
+                        // 已收到的结果照常回填。
+                        Err(_elapsed) => {
+                            handle.abort();
+                            break;
+                        }
+                        // 解包任务自身失败（panic）或未取到最终 URL：保留
+                        // 包装 URL，不阻断交付（与既有语义一致）。
+                        Ok(Ok((_, None))) | Ok(Err(_)) => {}
                     }
                 }
                 return Ok(SegmentedOutcome {
@@ -1018,6 +1064,16 @@ pub fn build_http_client(config: &LocalSegmentedConfig) -> Result<reqwest::Clien
         .timeout(config.overall_deadline + Duration::from_secs(5));
     if let Some(proxy) = &config.proxy {
         builder = builder.proxy(reqwest::Proxy::all(proxy)?);
+    } else {
+        // RET-B2（2026-09-15 裁决）：resolve=None 有两种来源——三个 env
+        // 全空，或显式 `ORZ_RETRIEVAL_PROXY=none`。reqwest 0.12 缺省
+        // auto_sys_proxy 还会读 resolve 层不读的 ALL_PROXY（及小写变体），
+        // env 有代理时显式 `none` 与不设同态走代理，污染 A/B「代理 vs
+        // 直连」对照读数——此处 `.no_proxy()` 钉死直连：env 全无时行为
+        // 不变（本就无代理可读），显式 `none` 时真正强制直连。reqwest
+        // Client 无法内省代理配置，传输面行为不加单测（resolve 层语义
+        // 由 `proxy_resolution_order_none_and_fallbacks` 钉住）。
+        builder = builder.no_proxy();
     }
     builder.build()
 }
@@ -1522,6 +1578,48 @@ mod tests {
         assert_eq!(outcome.hits[0].segments.len(), 1, "正文段照常抽取");
     }
 
+    /// RET-B4（2026-09-15，设计 §5.3「整段取 min(剩余整体预算)」）：解包
+    /// 段整体受剩余预算钳制——单条解包钟远长于剩余整体预算时，await 不
+    /// 得把 T_overall 拖破；被 abort 的解包保留包装 URL、不阻断交付。
+    #[tokio::test]
+    async fn unwrap_await_is_clamped_by_remaining_overall_budget() {
+        let serp = wiremock::MockServer::start().await;
+        let redirector = wiremock::MockServer::start().await;
+        let fixture =
+            serp_fixture_with_hit(&format!("{}/google.com/goto?url=OPAQUE", redirector.uri()));
+        wiremock::Mock::given(wiremock::matchers::method("GET"))
+            .respond_with(wiremock::ResponseTemplate::new(200).set_body_string(fixture))
+            .mount(&serp)
+            .await;
+        // 跳转方悬挂：远超整体剩余预算，解包只能被 abort（而非等单条钟）。
+        wiremock::Mock::given(wiremock::matchers::method("GET"))
+            .respond_with(
+                wiremock::ResponseTemplate::new(302)
+                    .set_delay(Duration::from_secs(30))
+                    .insert_header("Location", "https://docs.rust-lang.org/book/"),
+            )
+            .mount(&redirector)
+            .await;
+        let http = test_http();
+        let mut config = config_for(serp.uri(), 5_000, 1_000);
+        config.segment_pages = 0;
+        // 单条解包钟（30s）远长于剩余整体预算（≈1s）——整体钳制必须先到。
+        config.unwrap_timeout = Duration::from_secs(30);
+        let started = Instant::now();
+        let outcome = search(&http, &config, "rust programming language book")
+            .await
+            .expect("SERP 命中不被解包段拖死");
+        assert!(
+            started.elapsed() < Duration::from_secs(5),
+            "解包 await 必须按剩余整体预算截断，elapsed={:?}",
+            started.elapsed()
+        );
+        assert!(
+            outcome.hits[0].url.contains("google.com/goto"),
+            "解包被 abort：包装 URL 原样保留",
+        );
+    }
+
     // ── G1：T_segment 独立于 T_first（页级超时不吞已解析命中）─────────
 
     #[tokio::test]
@@ -1613,6 +1711,28 @@ mod tests {
         assert_eq!(proxy_display("socks5://1.2.3.4:1080"), "1.2.3.4:1080");
     }
 
+    /// RET-B1 守卫钉（2026-09-15）：`fetch_serp` 统一走 `parse_bing_serp`，
+    /// DDG/Google 恒 0 命中——有代理默认链若以这两引擎领头，链首各烧满
+    /// `T_first` 死重。完整解析器就位（S4）前改链，前两引擎必须保持在
+    /// Bing 系；集合不变（改序不改集，不构成白名单）。
+    #[test]
+    fn proxy_default_chain_leads_with_bing_parsers() {
+        let leads: Vec<&str> = PROXY_DEFAULT_CHAIN.iter().take(2).copied().collect();
+        assert!(
+            leads
+                .iter()
+                .all(|id| matches!(id, &"bing_cn" | &"bing_global")),
+            "有代理默认链前两引擎必须是带解析器的 Bing 系（防死重回潮）：{leads:?}"
+        );
+        let mut sorted = PROXY_DEFAULT_CHAIN.to_vec();
+        sorted.sort_unstable();
+        assert_eq!(
+            sorted,
+            vec!["bing_cn", "bing_global", "duckduckgo", "google"],
+            "四引擎集合不变（改序不改集，不构成白名单）"
+        );
+    }
+
     #[test]
     fn proxy_switches_default_chain_and_probe_detail() {
         let proxied = LocalSegmentedConfig::from_env_with(|key| match key {
@@ -1624,7 +1744,7 @@ mod tests {
         assert_eq!(ids, PROXY_DEFAULT_CHAIN, "有代理默认链（不构成白名单）");
         assert_eq!(
             proxied.engine_chain_detail(),
-            "duckduckgo,google,bing_cn,bing_global; proxy=on 127.0.0.1:7890",
+            "bing_cn,bing_global,duckduckgo,google; proxy=on 127.0.0.1:7890",
             "探针读数带 proxy 状态与脱敏端点"
         );
         // 显式 ORZ_RETRIEVAL_ENGINES 永远优先（不设引擎白名单）。

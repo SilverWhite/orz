@@ -2259,7 +2259,7 @@ impl AgentLoopController {
     /// live `blackboard_read` 响应附加「自上次读取以来」增量头，并推进本次
     /// 读取分区的游标（其余分区保持未读徽章）。
     ///
-    /// - 徽章：固定分区序（plan/exec/edits/tool_actions/actions/
+    /// - 徽章：固定分区序（plan/notes/exec/edits/tool_actions/actions/
     ///   internal_ret/external_ret/entities/deps/session/temporal），只列
     ///   delta>0 者；session 派生自 `tool_rounds`，temporal 派生自 LIF round。
     /// - 域迁移段：`temporal.migration_count` 超过**独立迁移基线**（上次

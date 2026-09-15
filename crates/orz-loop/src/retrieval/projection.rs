@@ -90,6 +90,42 @@ impl AgentLoopController {
         }
     }
 
+    /// RET-B3（2026-09-15）：search_engine 探针 detail 单一源化。快照命中
+    /// 时读数形如
+    /// `web_search local_segmented=on chain_detail="bing_cn,…; proxy=on host:port"`
+    /// （`chain_detail` = orz-tools `engine_chain_detail()`，已含引擎链与
+    /// proxy=on|off + 脱敏端点）；快照为 None（未装配）时回退既有读 env
+    /// 逻辑、保持原 detail 格式。present/missing 语义不受影响。
+    pub(crate) fn search_engine_probe_detail(
+        name: &str,
+        assembled: Option<
+            &orz_tools::implementations::web_search::local_segmented::LocalSegmentedConfig,
+        >,
+    ) -> String {
+        if let Some(config) = assembled {
+            return format!(
+                "{name} local_segmented={} chain_detail=\"{}\"",
+                if config.is_enabled() { "on" } else { "off" },
+                config.engine_chain_detail(),
+            );
+        }
+        // 回退（未装配）：既有读 env 逻辑原样保留。
+        let engines = std::env::var("ORZ_RETRIEVAL_ENGINES")
+            .ok()
+            .map(|v| v.trim().to_string())
+            .filter(|v| !v.is_empty())
+            .unwrap_or_else(|| "builtin".to_string());
+        let local = std::env::var("ORZ_WEB_SEARCH_LOCAL")
+            .map(|v| {
+                matches!(
+                    v.trim().to_ascii_lowercase().as_str(),
+                    "1" | "true" | "on" | "yes"
+                )
+            })
+            .unwrap_or(false);
+        format!("{name} engines={engines} local_segmented={local}")
+    }
+
     /// 0ac S3①（2026-09-13，设计稿 §9 / §10.2）：检索族探针读数——与 23 工作
     /// 工具面探针**各自成事件**（`probe_scope="retrieval_family"`），run-start
     /// 恰好一次、先于 `run_started`。
@@ -98,8 +134,11 @@ impl AgentLoopController {
     /// 读数（未投影的 base 列表——检索 lane 面的 `browser_read` 在主面被 R1
     /// 封存，主面列表会把「子代理看得到」读成 absent，故不取投影后列表）：
     /// * browser——`browser_read` / `local_browser` 任一在册即为 present；
-    /// * search_engine——`web_search` 在册 + 引擎链/开关的环境读数（本地分段
-    ///   检索族；引擎清单由 `ORZ_RETRIEVAL_ENGINES` 给出，缺省 = 内建链）；
+    /// * search_engine——`web_search` 在册 + 本地分段检索族的引擎链/开关/
+    ///   代理读数。RET-B3（2026-09-15）单一源化：优先消费 orz-tools 装配期
+    ///   快照 `assembled_local_segmented()`（detail 带引擎链 +
+    ///   `proxy=on|off` + 脱敏端点，不再另行重读 env，防漂移）；未装配
+    ///   （registry 未建）时回退既有读 env 逻辑、保持原 detail 格式；
     /// * web_channel——`web_fetch` 族（本地 HTTP 通道）在册。
     ///
     /// 检索族对本 run 关闭（`retrieval_enabled=false`）时三个成员一律读
@@ -140,22 +179,16 @@ impl AgentLoopController {
         } else {
             match declared(base, &["web_search"]) {
                 Some(name) => {
-                    let engines = std::env::var("ORZ_RETRIEVAL_ENGINES")
-                        .ok()
-                        .map(|v| v.trim().to_string())
-                        .filter(|v| !v.is_empty())
-                        .unwrap_or_else(|| "builtin".to_string());
-                    let local = std::env::var("ORZ_WEB_SEARCH_LOCAL")
-                        .map(|v| {
-                            matches!(
-                                v.trim().to_ascii_lowercase().as_str(),
-                                "1" | "true" | "on" | "yes"
-                            )
-                        })
-                        .unwrap_or(false);
+                    // RET-B3：单一源——优先消费 orz-tools 装配期快照（链 +
+                    // proxy 读数同源）；未装配时回退读 env（原格式）。
+                    let detail = Self::search_engine_probe_detail(
+                        name,
+                        orz_tools::implementations::web_search::local_segmented::assembled_local_segmented(
+                        ),
+                    );
                     serde_json::json!({
                         "present": true,
-                        "detail": format!("{name} engines={engines} local_segmented={local}"),
+                        "detail": detail,
                     })
                 }
                 None => missing("web_search not declared by this build's registry"),
@@ -1231,5 +1264,47 @@ mod tests {
                 "retrieval family off ⇒ {member} must read absent"
             );
         }
+    }
+
+    /// RET-B3（2026-09-15）：探针读数单一源化——装配期快照命中时 detail
+    /// 带 `local_segmented=on|off` 与 `chain_detail`（含 proxy=on|off +
+    /// 脱敏端点）；构造用 `from_env_with`（env 无关 seam），与进程级快照
+    /// 无关、确定性。
+    #[test]
+    fn search_engine_probe_detail_reads_assembled_config_with_proxy_state() {
+        use orz_tools::implementations::web_search::local_segmented::{
+            self as ls, LocalSegmentedConfig,
+        };
+        // 无代理（缺省直连 bing_cn 单引擎）：proxy=off。
+        let direct = LocalSegmentedConfig::from_env_with(|_| None);
+        let detail = AgentLoopController::search_engine_probe_detail("web_search", Some(&direct));
+        assert_eq!(
+            detail, "web_search local_segmented=off chain_detail=\"bing_cn; proxy=off\"",
+            "无代理快照读数：{detail}"
+        );
+        // 有代理（开关开 + 代理四链）：proxy=on + 脱敏端点（scheme/凭据剥除）。
+        let proxied = LocalSegmentedConfig::from_env_with(|key| match key {
+            ls::ENV_SWITCH => Some("on".to_string()),
+            ls::ENV_PROXY => Some("http://user:pass@127.0.0.1:7890".to_string()),
+            _ => None,
+        });
+        let detail = AgentLoopController::search_engine_probe_detail("web_search", Some(&proxied));
+        assert_eq!(
+            detail,
+            "web_search local_segmented=on chain_detail=\"bing_cn,bing_global,duckduckgo,\
+             google; proxy=on 127.0.0.1:7890\"",
+            "有代理快照读数带 proxy=on 与脱敏端点：{detail}"
+        );
+    }
+
+    /// RET-B3：快照为 None（registry 未装配）时回退既有读 env 逻辑、原
+    /// detail 格式（读数随环境变化，这里只钉形状，不钉具体值）。
+    #[test]
+    fn search_engine_probe_detail_falls_back_to_env_without_assembly() {
+        let detail = AgentLoopController::search_engine_probe_detail("web_search", None);
+        assert!(
+            detail.starts_with("web_search engines=") && detail.contains(" local_segmented="),
+            "回退读数保持既有格式：{detail}"
+        );
     }
 }

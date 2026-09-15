@@ -26,6 +26,19 @@ pub(crate) const MECHANICAL_AUDIT_PREFIX: &str = "[MECHANICAL_AUDIT";
 /// 审查表容量上限（超限丢最旧键；每键保留最新）。
 pub(crate) const MECHANICAL_AUDIT_CAPACITY: usize = 128;
 
+/// `mechanical_audit_update` 事件 `kind` 闭枚举（单一源；写入点一律引用
+/// 常量）。runtime schema
+/// `mechanical-audit-update-event-payload-v0.2.schema.json` 的 kind 枚举与
+/// payload required 由本模块测试的契约钉子逐字互证——新增 kind 必须同批
+/// 同步 schema 与钉子（0AE-C2：0ae 批「实现常量先行、枚举不对账」曾使
+/// 首次阶梯触发即产生 schema-invalid journal）。
+pub(crate) const KIND_TOOL_RESULT: &str = "tool_result";
+pub(crate) const KIND_PLAN_GATE: &str = "plan_gate";
+pub(crate) const KIND_BUDGET: &str = "budget";
+pub(crate) const KIND_ATTENTION_LADDER: &str = "attention_ladder";
+pub(crate) const KIND_MODEL_COMPRESSION: &str = "model_compression";
+pub(crate) const KIND_PLAN_WRITE_GUIDANCE: &str = "plan_write_guidance";
+
 /// 一条对象键的审查结果（每键至多一条，新结果覆盖旧结果）。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct AuditEntry {
@@ -205,7 +218,7 @@ pub(crate) async fn record_tool_result(
         .record(
             EventType::MechanicalAuditUpdate,
             serde_json::json!({
-                "kind": "tool_result",
+                "kind": KIND_TOOL_RESULT,
                 "payload": payload,
             }),
         )
@@ -677,21 +690,76 @@ mod tests {
         assert!(
             audit_events
                 .iter()
-                .any(|e| e.payload["kind"] == "plan_gate"),
+                .any(|e| e.payload["kind"] == KIND_PLAN_GATE),
             "plan gate entry journaled: {audit_events:?}"
         );
         assert!(
-            audit_events.iter().any(|e| e.payload["kind"] == "budget"),
+            audit_events
+                .iter()
+                .any(|e| e.payload["kind"] == KIND_BUDGET),
             "budget entry journaled: {audit_events:?}"
         );
         assert!(
             audit_events.iter().any(|e| {
-                e.payload["kind"] == "tool_result"
+                e.payload["kind"] == KIND_TOOL_RESULT
                     && e.payload["payload"]["key"] == "cmd:call-term-1"
             }),
             "tool_result entry journaled: {audit_events:?}"
         );
 
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    // ── 0ag 同型契约钉子（2026-09-15，0AE-C2 修复）─────────────────────
+    //
+    // runtime schema `mechanical-audit-update-event-payload-v0.2` 的 kind
+    // 闭枚举与上方实现常量**逐字全等**（顺序即钉子断言序）；payload 的
+    // required 键集同步互证。实现侧新增/改名 kind 而忘记同步 schema 时
+    // 此钉变红（0AE-C2：0ae 批新写三种越界 kind，首次 128K 阶梯触发即
+    // 会判 journal invalid）。
+
+    #[test]
+    fn mechanical_audit_update_schema_matches_kind_constants() {
+        let path = concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../../runtime/mechanical-audit-update-event-payload-v0.2.schema.json"
+        );
+        let raw = std::fs::read_to_string(path)
+            .unwrap_or_else(|e| panic!("runtime schema readable: {path}: {e}"));
+        let schema: serde_json::Value = serde_json::from_str(&raw).expect("schema json");
+        let kind_enum: Vec<String> = schema
+            .pointer("/properties/kind/enum")
+            .and_then(|v| v.as_array())
+            .expect("kind enum present")
+            .iter()
+            .map(|v| v.as_str().expect("enum string").to_string())
+            .collect();
+        assert_eq!(
+            kind_enum,
+            vec![
+                KIND_TOOL_RESULT.to_string(),
+                KIND_PLAN_GATE.to_string(),
+                KIND_BUDGET.to_string(),
+                KIND_ATTENTION_LADDER.to_string(),
+                KIND_MODEL_COMPRESSION.to_string(),
+                KIND_PLAN_WRITE_GUIDANCE.to_string(),
+            ]
+        );
+        let required: Vec<String> = schema
+            .pointer("/properties/payload/required")
+            .and_then(|v| v.as_array())
+            .expect("payload required present")
+            .iter()
+            .map(|v| v.as_str().expect("required key").to_string())
+            .collect();
+        assert_eq!(
+            required,
+            vec![
+                "key".to_string(),
+                "round".to_string(),
+                "summary".to_string(),
+                "anomaly".to_string(),
+            ]
+        );
     }
 }

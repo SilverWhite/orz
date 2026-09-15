@@ -1736,9 +1736,9 @@ impl AgentLoopController {
             let Some(section) = section else {
                 {
                     let error: String = format!(
-                        "invalid blackboard_write section: {{section_raw:?}} — 可写分区限 \\
-                     plan|notes（机械单写者分区 edits/exec/actions/processes/temporal/\\
-                     session 不开放模型写入）"
+                        "invalid blackboard_write section: {section_raw:?} — 可写分区限 \
+                         plan|notes（机械单写者分区 edits/exec/actions/processes/temporal/\
+                         session 不开放模型写入）"
                     );
                     let mut completed = serde_json::json!({
                         "tool": tc.name,
@@ -1919,10 +1919,14 @@ impl AgentLoopController {
                         "step_count": 0,
                         "outcome": "accepted",
                         "attempt": 1,
+                        // validation 子对象须满足 schema v0.2 $defs.validation
+                        // （required=[valid,errors,ignored_fields] 且
+                        // additionalProperties:false）；section/content_chars
+                        // 只在顶层携带。
                         "validation": {
                             "valid": true,
-                            "section": section.as_str(),
-                            "content_chars": content_chars,
+                            "errors": [],
+                            "ignored_fields": [],
                         },
                         "degrade_reason": serde_json::Value::Null,
                         "section": section.as_str(),
