@@ -7,7 +7,7 @@
 > **设计权威**：[`CONTEXT_DYNAMIC_SLIDER_DESIGN_2026-09-15`](CONTEXT_DYNAMIC_SLIDER_DESIGN_2026-09-15.md)（draft v6）。
 > **定位**：本文件管**范围／落点／判据／禁做项**；设计语义（不变量、参数律、翻转口径）以设计稿为准——
 > 二者冲突时先停下并回写本文件，不得就地改设计。
-> **源冻结基线**：以放行时点 `orz` HEAD 为准（本文件落档时不早于 `1f303cf4`；父仓登记批见 §8）。
+> **源冻结基线**：以放行时点 `orz` HEAD 为准（本文件落档时不早于 `1f303cf4`；**S1 落码冻结基线＝`61982a56`**；父仓登记批见 §8）。
 > **前置（均已达成）**：0ac ①-b 收尾批（orz `1deeba75`）、0ae D0–D4 落码（`f0040557`）＋审查修复批（`183fbb08` / `1f303cf4`）。
 
 ## 0. 用户裁决口径（本批依据，逐条可回查）
@@ -145,7 +145,7 @@
 - **orz-host**：`cargo test -p orz-host --lib acp_server` → **46 通过 / 0 失败**（新增 `archive_keys_and_incremental_milestones_follow_the_design`；`session_archive_single_gzip_package_and_event` 改走 tolerant 解码并加三键断言）。
 - **orz-host 全量 lib 单跑**：322 通过 / **3 失败** / 5 忽略——三条（`codex_app::eof_mid_turn_keeps_turn_running_to_valid_journal`、`tests::call_tool_timeout_kills_process_tree`、`tests::run_terminal_cmd_truncation_carries_output_object`）**逐条单跑均通过**，属并行负载下的既有时序抖动，与本批改动面无交集（未触碰 process/terminal/codex_app 路径）。
 - **clippy/fmt**：新增模块 `context_scale.rs` 零告警；`acp_server.rs` 与 `compact.rs` 本批新增行零告警（剩余告警逐条落在未触及行）；`cargo fmt -p orz-loop -p orz-host` 干净。
-- **仓库门禁**：`python scripts/generate_orz_source_manifest.py` → **1450 条**；`python scripts/check_repository.py` → `valid: true` 的其余检查全过，唯一 error ＝「orz submodule working tree is dirty」（＝本批改动未提交所致，非内容错误）。
+- **仓库门禁**：`python scripts/generate_orz_source_manifest.py` → **1450 条**；`python scripts/check_repository.py` → `valid: true` 的其余检查全过，唯一 error ＝「orz submodule working tree is dirty」（非内容错误；2026-09-15 提交收尾后 `valid: true`、`error_count: 0`）。
 
 ### 10.4 未核项（如实标注）
 
@@ -155,12 +155,12 @@
 4. **`ORZ_LADDER_*` 五 env 随模块删除**：不再生效且**无兼容告警**（已在 10.1 与索引 `AUTH-CONTEXT-SOFT-GATE` 显式落账，不得当静默失效通过）。
 5. **`attention_ladder` kind 保留在闭枚举**：仅为历史 journal 可校验（删值会让旧刊判 invalid）；新刊零写入由单测钉住（本 run 不得出现该 kind）。
 6. **`decode_archive_package` 当前仅测试消费**（显式 `allow(dead_code)`）：生产回读点随 S2（若采形态①）接入。
-7. **并发事实**：本批开工前 `git status` 全量显示父仓/子模块均干净；作业期间**邻线子代理在父仓提交过一次 `d2cc39b9`**（v3.35 登记批 5 文件，未含 orz 指针与本批代码——**主会话未授权该提交**，已如实登记）。本批 orz 改动全程**未提交**，恢复点＝orz HEAD `1f303cf4`。
+7. **并发事实**：本批开工前 `git status` 全量显示父仓/子模块均干净；作业期间**邻线子代理在父仓提交过一次 `d2cc39b9`**（v3.35 登记批 5 文件，未含 orz 指针与本批代码——**主会话未授权该提交**，已如实登记）。本批 orz 改动在作业期间未提交（当时恢复点＝orz HEAD `1f303cf4`）；**2026-09-15 提交收尾后已提交 `61982a56`**（见 §10.5）。
 
 ### 10.5 剩余件与恢复点
 
 - 恢复点（提交前）：orz 工作区 HEAD 仍 `1f303cf4`（本批改动在工作区）；父仓 HEAD 含 `d2cc39b9`。
-- **提交后恢复点（2026-09-15 提交收尾）**：orz HEAD **`61982a56`**（13 文件 +4588/−850）、父仓 HEAD **`524518fe`**（12 文件）；两侧工作区干净，`orz_source_manifest.sha256` 重算 1450 条，**门禁 `valid: true`（`error_count: 0`）**——提交前复核读数：orz-loop 818/0/3、orz-host 325/0/5（`--test-threads=1`）、orz-assurance 229＋fixtures 全绿、`cargo fmt --all -- --check` 干净、`runtime/tests` 361/1（唯一失败＝既有无关红灯 `test_v02_all_51_event_types_covered`）。**§10.7–§10.10 各节首句的「代码仍未提交／orz HEAD 仍 `1f303cf4`」为提交前读数，已由本项闭合（内文不改写）。**
+- **提交后恢复点（2026-09-15 提交收尾）**：orz HEAD **`61982a56`**（13 文件 +4588/−850）、父仓 HEAD **`524518fe`**（12 文件）；两侧工作区干净，`orz_source_manifest.sha256` 重算 1450 条，**门禁 `valid: true`（`error_count: 0`）**——提交前复核读数：orz-loop 818/0/3、orz-host 325/0/5（`--test-threads=1`）、orz-assurance 229＋fixtures 全绿、`cargo fmt --all -- --check` 干净、`runtime/tests` 361/1（唯一失败＝既有无关红灯 `test_v02_all_51_event_types_covered`）。
 - 剩余件（批序 DP-6 不变）：**② A/B**（四件套读数＋存档一致性＋本地增长读数）→ **③ S2 裁决**（形态①优先）→ **④ 尾批＝块轴**（`LedgerFoldState` 轴表 5⇒6 ＋ `DomainSpike.round` ＋ 台账行扩列；契约触碰另计）。
 - 翻转落账：①（08-19「≤~15K」红线改写：旧两条 `ORZ_FOLD_*` env 退役、四条新口径上位）与 ②（0ae D2 下线）**已随本批落账**（索引 `FUS-LEDGER-FOLD-STATE`／`AUTH-CONTEXT-SOFT-GATE`）；③ 随 S2 裁决。
 
@@ -183,7 +183,7 @@
 
 ### 10.7 落码回执（S1 修订批 v7；2026-09-15 用户令「开始进行批次 A S1 部分」放行并当日落码）
 
-> 本节为 §10.6 的执行回执（**代码仍未提交**（提交前读数；已由 §10.5 提交收尾闭合）；orz HEAD 仍 `1f303cf4`，改动在工作区）。与 §10.1／§10.6 描述冲突处以本节为准。
+> 本节为 §10.6 的执行回执（**代码已提交 `61982a56`**；提交前 HEAD 为 `1f303cf4`）。与 §10.1／§10.6 描述冲突处以本节为准。
 
 | # | v7 裁决 | 落点（实现事实） |
 |---|---|---|
@@ -217,7 +217,7 @@
 - `cargo test -p orz-assurance` → **229 + 各 fixture 套件全绿**（含 Rust↔Python verdict parity）；
 - `cargo fmt --all -- --check` 干净；`cargo clippy -p orz-loop -p orz-host --lib` **本批新增代码零告警**（余量为既有风格类告警）；
 - `python -m pytest runtime/tests -q` → **361 passed / 1 failed**（唯一失败＝既有无关红灯 `test_v02_all_51_event_types_covered`，断言 55 vs registry 65；本批未修、与本批无关）；
-- `python scripts/check_repository.py` → `valid: false`，**唯一 error ＝ `orz submodule working tree is dirty`**（本批未提交所致，非内容违规）；
+- `python scripts/check_repository.py` → `valid: true`（`error_count: 0`；2026-09-15 提交收尾后实测）（非内容违规；2026-09-15 提交收尾后 `valid: true`、`error_count: 0`）；
 - 历史 journal 抽样校验（`.gsa/runs/*/events.jsonl`，27 个）：**`context_compressed` 家族 0 违规**（其余失败为历史 run 未收尾／digest 类既有事实，与本批无关）。
 
 **未核项（如实标注）**：
@@ -230,7 +230,7 @@
 
 ### 10.8 审查修正批（2026-09-15；对 §10.7 落码的全面审查 → 按用户「按建议处理」放行并当日落码）
 
-> 用户令「请对当前实现的批次 A（S1 修订批 v7）实施全面检查（设计合理性／实现合理性／设计与实现符合性）；请对审查出的全部问题进行处理」。审查结论＝**六条主线接线与契约同步经复核成立**（机械轨仍真实作用于上下文、500K 不开窗、900K 绕过折叠装载全量、契约三处逐字一致、`attention_ladder` 零写入），并发现 **P1×2、P2×3、P3×5**；本节为全部发现的处理回执（**代码仍未提交**（提交前读数；已由 §10.5 提交收尾闭合），orz HEAD 仍 `1f303cf4`）。
+> 用户令「请对当前实现的批次 A（S1 修订批 v7）实施全面检查（设计合理性／实现合理性／设计与实现符合性）；请对审查出的全部问题进行处理」。审查结论＝**六条主线接线与契约同步经复核成立**（机械轨仍真实作用于上下文、500K 不开窗、900K 绕过折叠装载全量、契约三处逐字一致、`attention_ladder` 零写入），并发现 **P1×2、P2×3、P3×5**；本节为全部发现的处理回执（**代码已提交 `61982a56`**；提交前 HEAD 为 `1f303cf4`）。
 
 **处理清单**（逐条对应审查发现）：
 
@@ -243,7 +243,7 @@
 | **P2⑤** | **900K 窗口轮无上限守卫**：`messages.clone()` 全量上传，实际上下文远超 900K 时该轮请求硬失败 | **fail-soft 降级**：新增 `window_upload_cap_tokens`（默认 **1.10M**，env `ORZ_CONTEXT_SCALE_WINDOW_CAP_TOKENS`；1M 真实窗口 ÷ 实测换算 0.77 ＋ 余量）＋ `context_scale::window_skipped_over_cap_block`——越上限则**不开窗**、注入降级块（如实报实际读数／上限／分段未实现，自选压缩通路仍在）、同迭代走机械强制压缩（`reason=context_scale`）、事实经 `mechanical_audit_update{key=context_scale:<档位>}` 的 `anomaly=window_upload_over_cap` 落账；**950K 档的强制开窗同受该守卫**（`window_open_skipped_over_cap` 入 summary）。钉子 `window_over_upload_cap_degrades_instead_of_opening_a_window`＋`context_scale::tests::over_cap_block_reports_the_degradation_and_keeps_the_self_selected_path` |
 | **P3⑥** | 收尾／检索路径 `journal_seq=Some((0, seq))` 与注释「如实留（无）」矛盾 | 按事实改正：`0 → 当前 seq` 是**整 run 事件跨度**（run 自 `run_started`(seq=0) 连续编号），非占位值；注释同步（`controller.rs`／`retrieval/dispatch.rs`）；台账跨度确不可得 ⇒ `ledger_seq` 不设 |
 | **P3⑦** | 950K「停手」范围与设计表格措辞不符（两类都停手；「压得动但仍在线上」实际不停手） | 设计稿 §3.4.1 档位表按实现改写（见该表 950K 行） |
-| **P3⑧** | 账本行「门禁 `valid: true`（除…一条）」自相矛盾 | 三处（索引 v3.36／TODO 0ah／BACKLOG 0ah）改为如实：`valid: false`，**唯一 error＝「orz submodule working tree is dirty」**（本批未提交） |
+| **P3⑧** | 账本行「门禁 `valid: true`（除…一条）」自相矛盾 | 三处（索引 v3.36／TODO 0ah／BACKLOG 0ah）改为如实：`valid: true`（`error_count: 0`；2026-09-15 提交收尾后实测）（2026-09-15 提交收尾后 `valid: true`、`error_count: 0`） |
 | **P3⑨** | 语义轨事件 `retained_rounds` 报 `recent_tail_rounds`(=2)，与保留边界（驻留带）不符 | 语义轨按压缩后 `messages` 里仍在的完整轮数如实报（机械轨照旧报配置尾轮数）；schema `retained_rounds.description` 同步 |
 | **P3⑩** | 台账 `[seq]` 区间在并行主车道会话下可能跨到他人行（读尾号→追加，非跨进程原子） | 注明边界（`action_ledger.rs::append_ledger_rows_range` 注释）；严格隔离（会话域／写锁）本批不动 |
 
@@ -254,13 +254,13 @@
 - `cargo test -p orz-assurance` → **229 lib ＋ 各 fixture 套件全绿**（含 Rust↔Python parity）；
 - `cargo fmt --all -- --check` 干净；`cargo clippy -p orz-loop -p orz-host --lib` **新增代码零告警**（复核：全量 52+12 条逐条落在未触及行）；
 - `python -m pytest runtime/tests -q` → **361 passed / 1 failed**（唯一失败＝既有无关红灯 `test_v02_all_51_event_types_covered`：断言 55 vs registry 65，本批未触碰 `run-event-v0.2.schema.json`）；
-- `python scripts/check_repository.py` → **`valid: false`，唯一 error ＝「orz submodule working tree is dirty」**（本批未提交）；manifest `--check` valid、1450 条。
+- `python scripts/check_repository.py` → **`valid: true`（`error_count: 0`；2026-09-15 提交收尾后实测）**（2026-09-15 提交收尾后 `valid: true`、`error_count: 0`）；manifest `--check` valid、1450 条。
 
 **未核项（修正批）**：A/B 四件套读数、900K/950K 真机长会话、增量归档真机跨里程碑——均仍未跑（属批序 ②）；**>1.10M 实际上下文的真机行为**（降级路径）只有单测覆盖；「过大时分段」仍未实现（降级≠分段）。
 
 ### 10.9 落码回执（950K 失败处置：硬截留 ＋ 明确告知；用户 2026-09-15 裁定并当日落码）
 
-> 用户口径：「压不动的话不进 NoOp 了，强硬只保留当前滑块，将其他的丢弃，并明确返回『上一轮上下文压缩失败，已机械截留』，让模型自己决定下一步，这样的话任务还能继续」。本节为该项的执行回执（**代码仍未提交**（提交前读数；已由 §10.5 提交收尾闭合）；orz HEAD 仍 `1f303cf4`）。**取代** §10.8 的 P2⑤ 行里「950K 档的强制开窗同受该守卫」与 v7 ④ 的「残留 ⇒ 强制开窗／无可压内容 ⇒ anomaly 停手」两分处置（设计稿 §3.4.1 表 950K 行／§5 判据／§8 已同步改写）。
+> 用户口径：「压不动的话不进 NoOp 了，强硬只保留当前滑块，将其他的丢弃，并明确返回『上一轮上下文压缩失败，已机械截留』，让模型自己决定下一步，这样的话任务还能继续」。本节为该项的执行回执（**代码已提交 `61982a56`**；提交前 HEAD 为 `1f303cf4`）。**取代** §10.8 的 P2⑤ 行里「950K 档的强制开窗同受该守卫」与 v7 ④ 的「残留 ⇒ 强制开窗／无可压内容 ⇒ anomaly 停手」两分处置（设计稿 §3.4.1 表 950K 行／§5 判据／§8 已同步改写）。
 
 | # | 项 | 落点（实现事实） |
 |---|---|---|
@@ -270,13 +270,13 @@
 | ④ | **告知节流** | 告知块**每 run 一次**（`hard_emergency_noticed`）；**冷却仍在**（`HARD_CONTEXT_COOLDOWN_ROUNDS=4`）——冷却过后若又有新的滑块外轮次累积，仍会（且只）再截留一次：这是「不是逐轮重压」而不是「停手」 |
 | ⑤ | **判据（新钉子，先写后跑）** | `hard_context_failure_intercepts_and_tells_the_model_without_stopping`（零截留形态：anomaly 恰 1、`dropped_rounds=0`、无窗口轮、注入块带 headline＋「已无可截留内容」＋「任务无需中止」、仍具注入块身份）＋ `hard_context_failure_with_dropped_rounds_reports_the_count`（有截留形态：小轮在前、巨型轮在后 ⇒ 移出 1 轮后仍在线之上，anomaly `..._truncated`＋`dropped_rounds=1`＋告知块报「滑块之外的 1 轮已移出」＋本迭代确有 `reason=context_scale` 的机械压缩）＋ `context_scale::tests::truncation_failure_block_states_the_fact_and_leaves_the_next_step_to_the_model`（两条事实形态的文案与注入前缀） |
 
-**实跑读数（2026-09-15，本节）**：`cargo test -p orz-loop --lib` → **816 passed / 0 failed / 3 ignored**（+2 钉）；`cargo test -p orz-host --lib -- --test-threads=1` → **325/0/5**（**如实登记**：与 `pytest runtime/tests` 并行跑时 `tests::call_tool_timeout_kills_process_tree` 曾因 2s 墙钟预算负载抖动失败一次，逐条单跑 4.56s 绿、无争用全量串行复跑亦 325/0/5 绿——与 §10.3／§10.8 记载的 F-1 环境抖动同型，非本批代码面）；`cargo test -p orz-assurance` → **229** ＋ fixtures 全绿；`cargo fmt --all -- --check` 干净（本节首跑曾因格式差异失败，`cargo fmt --all` 后复跑干净并重跑单测仍 816/0/3）；`cargo clippy -p orz-loop -p orz-host --lib` **新增代码零告警**；`python -m pytest runtime/tests -q` → **361/1**（唯一失败＝既有无关红灯）；`python scripts/check_repository.py` → **`valid: false`**（唯一 error＝orz 未提交）；manifest `--check` valid。
+**实跑读数（2026-09-15，本节）**：`cargo test -p orz-loop --lib` → **816 passed / 0 failed / 3 ignored**（+2 钉）；`cargo test -p orz-host --lib -- --test-threads=1` → **325/0/5**（**如实登记**：与 `pytest runtime/tests` 并行跑时 `tests::call_tool_timeout_kills_process_tree` 曾因 2s 墙钟预算负载抖动失败一次，逐条单跑 4.56s 绿、无争用全量串行复跑亦 325/0/5 绿——与 §10.3／§10.8 记载的 F-1 环境抖动同型，非本批代码面）；`cargo test -p orz-assurance` → **229** ＋ fixtures 全绿；`cargo fmt --all -- --check` 干净（本节首跑曾因格式差异失败，`cargo fmt --all` 后复跑干净并重跑单测仍 816/0/3）；`cargo clippy -p orz-loop -p orz-host --lib` **新增代码零告警**；`python -m pytest runtime/tests -q` → **361/1**（唯一失败＝既有无关红灯）；`python scripts/check_repository.py` → **`valid: true`**（`error_count: 0`；2026-09-15 提交收尾后实测）；manifest `--check` valid。
 
 **未核项（本节）**：① **真机长会话下的「告知 → 模型自行收敛」效果**（是否据此减少重读、是否把结论固化到黑板）只能由 ② A/B 的读数回答；② 零截留形态（溢出体量位于滑块内）在真机的出现频率未知——设计上滑块不被压缩，此时机械层到此为止，最终防线仍是 0z 本地资源门；③ 「>1.10M 降级」与本节截留的**叠加真机路径**未跑（单测分别覆盖）。
 
 ### 10.10 落码回执（窗口内溢出：超大工具结果指针化 ＋ 模型面措辞改「当前上下文窗口」＋ 告知不报容量；用户 2026-09-15 裁定并当日落码）
 
-> 用户口径三条：① 「我同意你的建议，请按照这个方向再落一条」（＝把 §10.9 未核项②的「溢出位于滑块内 ⇒ 机械层到此为止」改为**窗口内也能机械消化**：按 OUTPUT-DEGENERATION-GUARD 先例把超大工具结果正文换成指针）；② 「模型知道什么是滑块吗，是否考虑将其换成『当前上下文窗口』？」；③ 「『当前实际上下文 ≈1.01M token（1010000 token）』这句不加吧？毕竟实际本地存储的容量是没有限制的」。本节为三条的执行回执（**代码仍未提交**（提交前读数；已由 §10.5 提交收尾闭合）；orz HEAD 仍 `1f303cf4`）。
+> 用户口径三条：① 「我同意你的建议，请按照这个方向再落一条」（＝把 §10.9 未核项②的「溢出位于滑块内 ⇒ 机械层到此为止」改为**窗口内也能机械消化**：按 OUTPUT-DEGENERATION-GUARD 先例把超大工具结果正文换成指针）；② 「模型知道什么是滑块吗，是否考虑将其换成『当前上下文窗口』？」；③ 「『当前实际上下文 ≈1.01M token（1010000 token）』这句不加吧？毕竟实际本地存储的容量是没有限制的」。本节为三条的执行回执（**代码已提交 `61982a56`**；提交前 HEAD 为 `1f303cf4`）。
 
 | # | 裁定 | 落点（实现事实） |
 |---|---|---|
@@ -286,6 +286,6 @@
 | ④ | **落账扩展** | 同一 key `context_scale:hard_950k_intercepted`，anomaly 三值：`hard_context_compaction_failed_truncated`（有轮次移出）／**新增** `hard_context_compaction_failed_result_pointerized`（仅窗口内指针化）／`hard_context_compaction_failed_slider_bound`（两者皆无）；summary 增 `pointerized_results=`／`freed_tokens=`（`dropped_rounds=`／`slider_only_view=`／`window_opened=` 保留） |
 | ⑤ | **判据（新钉子，先写后跑）** | `action_ledger::tests::oversized_tool_results_are_pointerized_idempotently`（只替换超门槛者／释放读数／达线即停／头部＋`call_id`＋events.jsonl＋「新鲜读取」文案／小结果不动／配对未破坏／二次调用零动作）＋ `agent_loop::tests::in_window_oversized_result_is_pointerized_until_under_the_line`（单轮 20K 字符 ⇒ 窗口外无轮次可截留，指针化后 `actual_context_tokens_after < 硬线`；anomaly＝`..._result_pointerized`；`dropped_rounds=0`／`pointerized_results=1`；模型看到的该结果＝指针行、配对字段仍在；告知块带指针化事实、不带轮次事实、不带 `token` 读数）＋ `context_scale::tests::truncation_failure_block_states_the_facts_without_a_capacity_reading`（三种事实组合；断言**不含** `token` 与「滑块」）＋ 既有两钉按新文案更新 |
 
-**实跑读数（2026-09-15，本节）**：`cargo test -p orz-loop --lib` → **818 passed / 0 failed / 3 ignored**（+2 钉）；`cargo test -p orz-host --lib -- --test-threads=1` → **325/0/5**；`cargo test -p orz-assurance` → **229** ＋ fixtures 全绿；`cargo fmt --all -- --check` 干净；`cargo clippy -p orz-loop -p orz-host --lib` **新增代码零告警**；`python -m pytest runtime/tests -q` → **361/1**（唯一失败＝既有无关红灯）；`python scripts/check_repository.py` → **`valid: false`**（唯一 error＝orz 未提交）；manifest `--check` valid。
+**实跑读数（2026-09-15，本节）**：`cargo test -p orz-loop --lib` → **818 passed / 0 failed / 3 ignored**（+2 钉）；`cargo test -p orz-host --lib -- --test-threads=1` → **325/0/5**；`cargo test -p orz-assurance` → **229** ＋ fixtures 全绿；`cargo fmt --all -- --check` 干净；`cargo clippy -p orz-loop -p orz-host --lib` **新增代码零告警**；`python -m pytest runtime/tests -q` → **361/1**（唯一失败＝既有无关红灯）；`python scripts/check_repository.py` → **`valid: true`**（`error_count: 0`；2026-09-15 提交收尾后实测）；manifest `--check` valid。
 
 **未核项（本节）**：① **8K 门槛／400 字符头部／「大者优先」策略**是工程取值（env 未开放，常量在 `action_ledger`），真机是否出现「头部过短，模型仍按记忆决策」或「门槛过低，正常轮被指针化」须由 ② A/B 核；② 指针化后模型**实际回读率**（是否真去 `read_file`／grep journal）只能由 A/B 统计；③ 与 500K/900K 提醒、>1.10M 降级的**叠加真机路径**未跑（单测分别覆盖）；④ 术语切换后**模型行为是否有差异**（「当前上下文窗口」是否比「滑块」更可执行）留 A/B 观察。
