@@ -729,24 +729,35 @@ struct PendingArchiveTicket {
 /// `conversation` 成员是把磁盘 sidecar 的**原始字节原样嵌为 JSON 成员值**
 /// （不 parse→re-serialize，保证「纯打包零内容变换」不变量仍成立），
 /// `archive_keys` 为三键互标段（机械派生，见 `build_archive_keys`）。
+/// `explicit_runs`（0ak，GAP-INCREMENTAL-ARCHIVE-HEADLESS）：除按
+/// `RUN-{session8}-` 前缀扫描外，显式纳入的 run id——无头 run id
+/// （`RUN-CLI-{ts}`）不携带会话段，前缀扫描不中，由调用方注入本次 run；
+/// ACP 车道传 `&[]`（行为零变化）。
 async fn archive_session_package(
     base_dir: &Path,
     session_id: &str,
     prompt_count: u64,
     trust_policy: crate::session::TrustPolicy,
     incremental: bool,
-) {
+    explicit_runs: &[String],
+) -> Option<PackagedSessionArchive> {
     let base_dir = base_dir.to_path_buf();
     let session_id = session_id.to_string();
     let package_base_dir = base_dir.clone();
     let package_session_id = session_id.clone();
+    let explicit = explicit_runs.to_vec();
     let packaged = tokio::task::spawn_blocking(move || {
-        package_session_archive(&package_base_dir, &package_session_id, prompt_count)
+        package_session_archive(
+            &package_base_dir,
+            &package_session_id,
+            prompt_count,
+            &explicit,
+        )
     })
     .await;
     let Some(pkg) = packaged.ok().flatten() else {
         // 任务 panic 或无可归档内容/源损坏：无成品可记事件。
-        return;
+        return None;
     };
 
     // `session_archive` v0.2 事件 → 专用 ARC run journal（run_preflight 由
@@ -771,7 +782,7 @@ async fn archive_session_package(
     if pkg.status == "completed" {
         record_archived_tokens(&base_dir, &session_id, pkg.conversation_tokens);
     }
-    let run_id = pkg.run_id;
+    let run_id = pkg.run_id.clone();
     match bootstrap_session(&run_id, Some(base_dir), trust_policy).await {
         Ok(handle) => {
             let mut recorder = RunRecorder::new(
@@ -799,6 +810,7 @@ async fn archive_session_package(
             tracing::warn!("session archive journal bootstrap failed ({run_id}): {e}");
         }
     }
+    Some(pkg)
 }
 
 /// 同步打包阶段：读 sidecar → 校验 → gzip → digest（tmp + rename）。
@@ -806,6 +818,7 @@ fn package_session_archive(
     base_dir: &Path,
     session_id: &str,
     prompt_count: u64,
+    explicit_runs: &[String],
 ) -> Option<PackagedSessionArchive> {
     let sidecar_path = conversation_sidecar_path(base_dir, session_id);
     // 纯打包 = 对磁盘上的既有 sidecar 原样压缩；无文件（从未有成功
@@ -832,7 +845,7 @@ fn package_session_archive(
     // `conversation` 成员＝磁盘 sidecar 的原始字节（零内容变换），
     // `archive_keys`＝三键互标段（LIF 会话轮跨度／台账 `[seq]` 跨度／
     // journal run+sequence，外加窗口轮跨度临时键与 A 类压缩存档清单）。
-    let archive_keys = build_archive_keys(base_dir, session_id, &parsed);
+    let archive_keys = build_archive_keys(base_dir, session_id, &parsed, explicit_runs);
     let conversation_tokens = estimate_conversation_tokens(&parsed);
     let Some(package_bytes) = build_archive_envelope(&raw_sidecar, &archive_keys) else {
         tracing::warn!(
@@ -968,6 +981,7 @@ fn build_archive_keys(
     base_dir: &Path,
     session_id: &str,
     parsed: &StoredConversation,
+    explicit_runs: &[String],
 ) -> serde_json::Value {
     let suffix: String = session_id.chars().take(8).collect();
     let lif = parsed.lif.as_ref();
@@ -977,7 +991,7 @@ fn build_archive_keys(
         .filter(|m| m.role == Role::Assistant && !m.tool_calls.is_empty())
         .count() as u64;
     let ledger = ledger_key_facts(&base_dir.join(".gsa").join("ledger").join("current.md"));
-    let journal = journal_key_facts(&base_dir.join(".gsa").join("runs"), &suffix);
+    let journal = journal_key_facts(&base_dir.join(".gsa").join("runs"), &suffix, explicit_runs);
     let compaction = compaction_archive_facts(&base_dir.join(".gsa").join("compaction"));
     serde_json::json!({
         "axis_note": "LIF 逐段映射随尾批（CONTEXT_DYNAMIC_SLIDER_DESIGN §7）落地；\
@@ -1036,41 +1050,51 @@ fn ledger_key_facts(path: &Path) -> serde_json::Value {
     })
 }
 
-/// 本会话 journal run 事实：`RUN-<session8>-*` 目录的事件数与首/末 sequence。
-fn journal_key_facts(runs_dir: &Path, suffix: &str) -> serde_json::Value {
-    let mut runs: Vec<serde_json::Value> = Vec::new();
+/// run journal 键事实：按 `RUN-{suffix}-*` 前缀扫描 run 目录，外加
+/// `explicit_runs` 显式注入（0ak——无头 run id `RUN-CLI-{ts}` 不携带会话段，
+/// 前缀扫描不中，由收尾归档注入本次 run；重复注入去重，合并后排序保证
+/// 键序确定）。逐 run 读取 `events.jsonl` 的首末 sequence 与事件数。
+fn journal_key_facts(runs_dir: &Path, suffix: &str, explicit_runs: &[String]) -> serde_json::Value {
+    let mut ids: Vec<String> = Vec::new();
     if let Ok(entries) = std::fs::read_dir(runs_dir) {
-        let mut ids: Vec<String> = entries
-            .flatten()
-            .filter(|e| e.path().is_dir())
-            .filter_map(|e| e.file_name().into_string().ok())
-            .filter(|name| name.starts_with(&format!("RUN-{suffix}-")))
-            .collect();
-        ids.sort();
-        for run_id in ids {
-            let events_path = runs_dir.join(&run_id).join("events.jsonl");
-            let Ok(text) = std::fs::read_to_string(&events_path) else {
-                continue;
-            };
-            let lines: Vec<&str> = text.lines().filter(|l| !l.trim().is_empty()).collect();
-            let seq_of = |line: &str| -> Option<u64> {
-                serde_json::from_str::<serde_json::Value>(line)
-                    .ok()?
-                    .get("sequence")?
-                    .as_u64()
-            };
-            let first_sequence = lines.first().and_then(|l| seq_of(l)).unwrap_or(0);
-            let last_sequence = lines
-                .last()
-                .and_then(|l| seq_of(l))
-                .unwrap_or(first_sequence);
-            runs.push(serde_json::json!({
-                "run_id": run_id,
-                "first_sequence": first_sequence,
-                "last_sequence": last_sequence,
-                "events": lines.len() as u64,
-            }));
+        ids.extend(
+            entries
+                .flatten()
+                .filter(|e| e.path().is_dir())
+                .filter_map(|e| e.file_name().into_string().ok())
+                .filter(|name| name.starts_with(&format!("RUN-{suffix}-"))),
+        );
+    }
+    for run_id in explicit_runs {
+        if !ids.contains(run_id) {
+            ids.push(run_id.clone());
         }
+    }
+    ids.sort();
+    let mut runs: Vec<serde_json::Value> = Vec::new();
+    for run_id in ids {
+        let events_path = runs_dir.join(&run_id).join("events.jsonl");
+        let Ok(text) = std::fs::read_to_string(&events_path) else {
+            continue;
+        };
+        let lines: Vec<&str> = text.lines().filter(|l| !l.trim().is_empty()).collect();
+        let seq_of = |line: &str| -> Option<u64> {
+            serde_json::from_str::<serde_json::Value>(line)
+                .ok()?
+                .get("sequence")?
+                .as_u64()
+        };
+        let first_sequence = lines.first().and_then(|l| seq_of(l)).unwrap_or(0);
+        let last_sequence = lines
+            .last()
+            .and_then(|l| seq_of(l))
+            .unwrap_or(first_sequence);
+        runs.push(serde_json::json!({
+            "run_id": run_id,
+            "first_sequence": first_sequence,
+            "last_sequence": last_sequence,
+            "events": lines.len() as u64,
+        }));
     }
     serde_json::json!({ "runs": runs })
 }
@@ -1194,6 +1218,91 @@ fn incremental_archive_due(
         Some(previous) => tokens >= previous.saturating_add(ARCHIVE_INCREMENT_TOKENS),
         None => true,
     }
+}
+
+/// 无头一次性 run 收尾归档的结果（0ak）。`archived = false` 时其余字段
+/// 均为初始值——未跨里程碑 ⇒ 零产物（不落侧车、不打包、无 ARC journal）。
+#[derive(Debug, Clone)]
+pub struct HeadlessRunArchive {
+    pub session_id: String,
+    /// 对话侧车是否落盘。无头口径：仅在归档到期时落（侧车的唯一消费者是
+    /// 归档打包；未到期不留 `.gsa/conversations/` 产物——与 ACP 车道
+    /// 「每个成功 prompt 都落侧车」的差异属设计边界，ADR-0010 §14.68）。
+    pub sidecar_written: bool,
+    /// 里程碑增量归档包是否写盘成功（含 ARC `session_archive` 事件）。
+    pub archived: bool,
+    pub archive_path: Option<PathBuf>,
+    /// 归档发生时的全量会话 token 估算（chars/2，与增量归档判据同尺）。
+    pub conversation_tokens: Option<u64>,
+}
+
+/// 0ak（2026-09-16 用户裁决采 B，`GAP-INCREMENTAL-ARCHIVE-HEADLESS`）：无头
+/// `-p` 一次性 run 的会话持久化与里程碑增量归档。一次性 run 现在携带会话
+/// 对话（调用方以空 `Vec` 起点随 run 线程携带、成功后取回传入），本函数按
+/// `StoredConversation` 既有形态装配侧车，并在跨 500K 里程碑时打包
+/// `.gsa/archives/<session8>.json.gz` 三键包——判定（`incremental_archive_due`）、
+/// 打包（`package_session_archive`）与 ARC 审计 journal 全部复用 ACP 车道
+/// 同一套原语，禁第二套实现。
+///
+/// 与 ACP 车道的口径差异（设计边界，须与 ADR-0010 §14.68 保持一致）：
+/// ① 一次性 run 无 close 语义 ⇒ 只做里程碑增量归档，会话关闭归档不适用；
+/// ② 侧车仅在归档到期时落盘（消费者只有打包）；③ 跨调用对话恢复不开启
+/// ——每次 `-p` 生成全新会话身份（GAP-CONVERSATION-RESTORE 边界不变）。
+/// best-effort：源损坏/打包失败只 warn，绝不影响 run 结局。
+#[allow(clippy::too_many_arguments)]
+pub async fn headless_session_archive(
+    base_dir: &Path,
+    session_id: &str,
+    run_id: &str,
+    messages: Vec<Message>,
+    temporal: &TemporalSessionSnapshot,
+    session_started_at: Option<f64>,
+    blackboard: &Blackboard,
+    context_scale_notified: Vec<String>,
+    trust_policy: crate::session::TrustPolicy,
+) -> HeadlessRunArchive {
+    let mut result = HeadlessRunArchive {
+        session_id: session_id.to_string(),
+        sidecar_written: false,
+        archived: false,
+        archive_path: None,
+        conversation_tokens: None,
+    };
+    let mut full = StoredConversation::full(
+        session_id,
+        messages,
+        temporal,
+        session_started_at,
+        blackboard,
+    );
+    // v7（DP-16）水位随侧车同源落盘（一次性 run 恢复不开启，纯审计保真）。
+    full.context_scale_notified = context_scale_notified;
+    if !incremental_archive_due(base_dir, session_id, &full) {
+        return result;
+    }
+    persist_conversation_sidecar(base_dir, &full);
+    result.sidecar_written = !full.messages.is_empty();
+    // 三键 journal 键按 `RUN-{session8}-` 前缀扫描；无头 run id
+    // （`RUN-CLI-{ts}`）不携带会话段 ⇒ 显式注入本次 run（去重合并）。
+    let explicit = [run_id.to_string()];
+    let Some(pkg) = archive_session_package(
+        base_dir,
+        session_id,
+        1, // 一次性 run = 单 prompt（ARC 审计 run id 的计数段）
+        trust_policy,
+        true,
+        &explicit,
+    )
+    .await
+    else {
+        return result;
+    };
+    if pkg.status == "completed" {
+        result.archived = true;
+        result.archive_path = Some(pkg.path);
+        result.conversation_tokens = Some(pkg.conversation_tokens);
+    }
+    result
 }
 
 /// Grill-mode session state (2026-08-08 write-placement slice, design §3):
@@ -2293,6 +2402,9 @@ impl AcpServer {
                 ticket.prompt_count,
                 ticket.trust_policy,
                 ticket.incremental,
+                // ACP 车道 run id 自带 `RUN-{session8}-` 会话段，前缀扫描
+                // 足够；显式注入是无头车道（0ak）专用。
+                &[],
             )
             .await;
         });
@@ -3103,6 +3215,7 @@ mod tests {
             3,
             crate::session::TrustPolicy::Skip,
             false,
+            &[],
         )
         .await;
 
@@ -3257,7 +3370,7 @@ mod tests {
         std::fs::create_dir_all(&compaction_dir).unwrap();
         std::fs::write(compaction_dir.join("compaction-RUN-x-0001.md"), "# 摘要").unwrap();
 
-        let keys = build_archive_keys(&base, session_id, &small);
+        let keys = build_archive_keys(&base, session_id, &small, &[]);
         assert_eq!(keys["ledger"]["exists"], true);
         assert_eq!(keys["ledger"]["first_seq"], 1);
         assert_eq!(keys["ledger"]["last_seq"], 2);
@@ -3295,6 +3408,225 @@ mod tests {
             incremental_archive_due(&base, unarchived, &conversation(2_200_000)),
             "跨下一个 500K 里程碑再归档一次"
         );
+
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// 0ak（GAP-INCREMENTAL-ARCHIVE-HEADLESS，2026-09-16 用户裁决采 B）钉子：
+    /// 无头一次性 run 收尾归档端到端——跨 500K 里程碑产出「对话侧车 ＋
+    /// 三键包 ＋ ARC 审计 journal（incremental 标记）＋ 里程碑水位」，且
+    /// 三键 journal 键**显式纳入无头 run**（`RUN-CLI-{ts}` 不匹配
+    /// `RUN-{session8}-` 前缀，靠 `explicit_runs` 注入；缺失即三键不齐）。
+    #[tokio::test]
+    async fn headless_run_archive_produces_three_key_package_with_explicit_run() {
+        use std::io::Read;
+
+        let base = test_dir();
+        let ts = "6aa999d6";
+        // 会话身份口径：`{ts}-cli` ⇒ session8 = ts，与 `RUN-CLI-{ts}` 一眼互认。
+        let session_id = format!("{ts}-cli");
+        let run_id = format!("RUN-CLI-{ts}");
+        let full = StoredConversation::full(
+            &session_id,
+            // 1.1M chars ⇒ 估算 ≈550K ≥ 500K（判据同尺）。
+            vec![Message {
+                role: Role::User,
+                content: "z".repeat(1_100_000),
+                tool_call_id: None,
+                tool_calls: Vec::new(),
+                reasoning_content: None,
+                round: None,
+            }],
+            &TemporalSessionSnapshot {
+                round: 9,
+                has_success: true,
+                current_domain: orz_assurance::lif::Domain::Normal,
+                entry_round: 1,
+                spikes: Vec::new(),
+            },
+            Some(1_700_000_000.0),
+            &Blackboard::default(),
+        );
+
+        // 无头 run 的 journal（生产中归档时点必已 shutdown 落盘；缺失的
+        // run 与前缀扫描同纪律——静默跳过，不编造键值）。
+        let run_dir = base.join(".gsa").join("runs").join(&run_id);
+        std::fs::create_dir_all(&run_dir).unwrap();
+        std::fs::write(
+            run_dir.join("events.jsonl"),
+            "{\"sequence\":0,\"event_type\":\"run_started\"}\n\
+             {\"sequence\":1,\"event_type\":\"run_finished\"}\n",
+        )
+        .unwrap();
+
+        let result = headless_session_archive(
+            &base,
+            &session_id,
+            &run_id,
+            full.messages.clone(),
+            full.lif.as_ref().expect("lif snapshot"),
+            full.session_started_at,
+            full.blackboard.as_ref().expect("blackboard"),
+            vec!["500k".to_string()],
+            crate::session::TrustPolicy::Skip,
+        )
+        .await;
+
+        assert!(result.archived, "跨里程碑 ⇒ 归档落盘: {result:?}");
+        assert!(result.sidecar_written);
+        let tokens = result.conversation_tokens.expect("token estimate");
+        assert!(tokens >= 500_000, "估算读数须与判据同尺: {tokens}");
+
+        // 侧车（归档源）与包（三键信封）都在。
+        let sidecar = base
+            .join(".gsa")
+            .join("conversations")
+            .join(format!("{ts}.json"));
+        assert!(sidecar.is_file(), "sidecar missing: {}", sidecar.display());
+        let gz_path = result.archive_path.expect("archive path");
+        assert!(gz_path.is_file(), "archive missing: {}", gz_path.display());
+        let mut decoder = flate2::read::GzDecoder::new(std::fs::File::open(&gz_path).unwrap());
+        let mut decoded = Vec::new();
+        decoder.read_to_end(&mut decoded).unwrap();
+        let (stored, keys) = decode_archive_package(&decoded).expect("envelope decodes");
+        assert_eq!(stored.session_id, session_id);
+        assert_eq!(
+            stored.context_scale_notified,
+            vec!["500k".to_string()],
+            "v7 水位随侧车同源落盘"
+        );
+        let keys = keys.expect("archive_keys present");
+        let runs = keys["journal"]["runs"].as_array().expect("runs array");
+        assert!(
+            runs.iter().any(|r| r["run_id"] == run_id),
+            "三键 journal 键必须显式纳入无头 run（前缀扫描不中）: {keys}"
+        );
+        assert_eq!(keys["lif"]["round_end"], 9);
+
+        // ARC 审计 journal：incremental 里程碑归档（一次性 run = 单 prompt）。
+        let arc_journal = base
+            .join(".gsa")
+            .join("runs")
+            .join(format!("ARC-{ts}-1"))
+            .join("events.jsonl");
+        let events = std::fs::read_to_string(&arc_journal).expect("ARC journal written");
+        assert!(
+            events.contains("\"event_type\":\"session_archive\""),
+            "{events}"
+        );
+        assert!(events.contains("\"incremental\":true"), "{events}");
+
+        // 里程碑水位落地（幂等锚点）。
+        assert!(last_archived_tokens(&base, &session_id).is_some());
+
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// 0ak 钉子：阈值下（<500K）无头收尾**零产物**——不落侧车、不打包、
+    /// 无 ARC journal、无水位文件。
+    #[tokio::test]
+    async fn headless_run_archive_below_threshold_writes_nothing() {
+        let base = test_dir();
+        let session_id = "0000abcd-cli";
+        let result = headless_session_archive(
+            &base,
+            session_id,
+            "RUN-CLI-0000abcd",
+            vec![Message {
+                role: Role::User,
+                content: "短任务".to_string(),
+                tool_call_id: None,
+                tool_calls: Vec::new(),
+                reasoning_content: None,
+                round: None,
+            }],
+            &TemporalSessionSnapshot {
+                round: 1,
+                has_success: true,
+                current_domain: orz_assurance::lif::Domain::Normal,
+                entry_round: 1,
+                spikes: Vec::new(),
+            },
+            Some(1_700_000_000.0),
+            &Blackboard::default(),
+            Vec::new(),
+            crate::session::TrustPolicy::Skip,
+        )
+        .await;
+
+        assert!(!result.archived);
+        assert!(!result.sidecar_written);
+        assert!(result.archive_path.is_none());
+        assert!(result.conversation_tokens.is_none());
+        assert!(
+            !base.join(".gsa").join("conversations").exists(),
+            "阈值下不得产生 conversations 产物"
+        );
+        assert!(
+            !base.join(".gsa").join("archives").exists(),
+            "阈值下不得产生 archives 产物"
+        );
+
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// 0ak 钉子：幂等——同一会话同一里程碑内第二次收尾不重复打包
+    /// （水位单调锚点；未到期连侧车都不重落）。
+    #[tokio::test]
+    async fn headless_run_archive_is_idempotent_per_milestone() {
+        let base = test_dir();
+        let session_id = "1111beef-cli";
+        let args = |content: String| {
+            (
+                vec![Message {
+                    role: Role::User,
+                    content,
+                    tool_call_id: None,
+                    tool_calls: Vec::new(),
+                    reasoning_content: None,
+                    round: None,
+                }],
+                TemporalSessionSnapshot {
+                    round: 2,
+                    has_success: true,
+                    current_domain: orz_assurance::lif::Domain::Normal,
+                    entry_round: 1,
+                    spikes: Vec::new(),
+                },
+            )
+        };
+        let (messages, temporal) = args("z".repeat(1_100_000));
+        let first = headless_session_archive(
+            &base,
+            session_id,
+            "RUN-CLI-1111beef",
+            messages,
+            &temporal,
+            Some(1_700_000_000.0),
+            &Blackboard::default(),
+            Vec::new(),
+            crate::session::TrustPolicy::Skip,
+        )
+        .await;
+        assert!(first.archived, "首归档成立");
+
+        // 同一里程碑内（水位 +500K 未跨）第二次收尾：零重复产物。
+        let (messages, temporal) = args("z".repeat(1_200_000));
+        let second = headless_session_archive(
+            &base,
+            session_id,
+            "RUN-CLI-1111beef",
+            messages,
+            &temporal,
+            Some(1_700_000_000.0),
+            &Blackboard::default(),
+            Vec::new(),
+            crate::session::TrustPolicy::Skip,
+        )
+        .await;
+        assert!(!second.archived, "同一里程碑不得重复打包: {second:?}");
+        assert!(!second.sidecar_written);
+        assert!(second.archive_path.is_none());
 
         let _ = std::fs::remove_dir_all(&base);
     }

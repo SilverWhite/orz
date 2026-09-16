@@ -13,7 +13,7 @@ use std::time::Duration;
 
 use orz_host::session::{SessionHandle, bootstrap_session};
 use orz_loop::gateway::fake::{FakeProvider, ScriptedResponse};
-use orz_loop::gateway::model::{ModelGateway, ToolCall};
+use orz_loop::gateway::model::{Message, ModelGateway, ToolCall};
 
 /// FUS-BENCHMARK-FULL-EXEC (2026-08-18)：解析 headless benchmark 两轴旗标。
 /// 只接受无值精确形式 `--allow-shell` / `--allow-network`；`=value` 形式
@@ -1143,7 +1143,18 @@ async fn run(
     wallclock: Option<Duration>,
     stall_timeout: Option<Duration>,
 ) -> Result<(String, PathBuf), Box<dyn std::error::Error>> {
-    let run_id = format!("RUN-CLI-{}", timestamp_suffix());
+    let ts = timestamp_suffix();
+    let run_id = format!("RUN-CLI-{ts}");
+    // 0ak（GAP-INCREMENTAL-ARCHIVE-HEADLESS，2026-09-16 用户裁决采 B）：一次性
+    // run 的会话身份——与 run 同秒后缀的 `{ts}-cli`（session8 = ts，与
+    // `RUN-CLI-{ts}` journal 目录一眼互认）。每次 `-p` 都是全新会话，跨调用
+    // 对话恢复不开启（GAP-CONVERSATION-RESTORE 边界不变）。
+    let headless_session_id = format!("{ts}-cli");
+    // 会话轴原点（StoredConversation.session_started_at 同义）。
+    let session_started_at = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs_f64())
+        .unwrap_or(0.0);
     let cwd = std::env::current_dir()?;
 
     // Journals land in `{cwd}/.gsa/runs/{run_id}/`. Workspace trust is
@@ -1202,6 +1213,11 @@ async fn run(
         // 由 `ORZ_ORIENTATION_THRESHOLD` 解析（默认 50）。
         let mut orientation =
             orz_loop::orientation::OrientationSessionState::new(handle.run_id.clone());
+        // 0ak（采 B）：一次性 run 现在随线程携带会话对话（空 Vec 起点＝ACP
+        // 全新会话同形；「one-shot 不携带会话对话」的设计边界由此改写，
+        // ADR-0010 §14.68）。带来的一项内在行为＝长 run 收尾的会话末机械
+        // 压缩（session_end，零模型调用）与 ACP 车道同源生效。
+        let mut conversation: Vec<Message> = Vec::new();
         let (response, _, _) = controller
             .run_turn_with_guards(
                 &host,
@@ -1213,12 +1229,9 @@ async fn run(
                 None,
                 Some(&heartbeat),
                 // THIN-HARNESS-REDESIGN R1: 无头路径已接通 orientation
-                // （run 内存态）；会话恢复仍不携带对话（GAP-CONVERSATION-
-                // RESTORE: one-shot CLI runs carry no session conversation）。
-                // GAP-CONVERSATION-RESTORE: one-shot CLI runs carry no
-                // session conversation either.
+                // （run 内存态）。
                 Some(&mut orientation),
-                None,
+                Some(&mut conversation),
             )
             .await?;
 
@@ -1226,6 +1239,28 @@ async fn run(
         // 0z S2 §4.2：收尾扫除——本 run 泄漏的工具子进程（breakaway/attach
         // 失败逃出两级 Job 者）在 run 结束时回收（宿主持登记表）。
         host.finalize_process_trees();
+
+        // 0ak（采 B）收尾：会话持久化＋里程碑增量归档——跨 500K 里程碑时落
+        // 对话侧车并打包 `.gsa/archives/<session8>.json.gz` 三键包（判定/
+        // 打包/ARC 审计复用 ACP 车道同一套原语）。best-effort：内部失败只
+        // warn，绝不影响 run 结局；归档成功给用户侧一行 stderr 指引。
+        let archive = orz_host::acp_server::headless_session_archive(
+            &cwd,
+            &headless_session_id,
+            &run_id,
+            conversation,
+            &controller.lif_session_snapshot(),
+            Some(session_started_at),
+            &controller.blackboard_conversation_snapshot(),
+            controller.context_scale_notified_keys(),
+            orz_host::session::TrustPolicy::Enforce,
+        )
+        .await;
+        if archive.archived {
+            if let Some(path) = &archive.archive_path {
+                eprintln!("session archive: {}", path.display());
+            }
+        }
 
         // P2-13 B3（2026-09-03，ADR-0010 §14.52 / 设计 §11.2 E9；B3 复审
         // 裁决：只按黑板水位、无压缩轮数门槛）：CLI 单 run = 单会话、无
