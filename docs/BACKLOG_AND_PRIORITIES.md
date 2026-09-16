@@ -9,7 +9,7 @@
 
 ## 未闭合计数（2026-09-16 口径）
 
-- 未闭合总数：**36 项**（口径日期 2026-09-16；最近变动：2026-09-16 **0am LIF 动力学升级线立项 35 → 36**（P1 轮次预算换算先行＋RLI 自研谐振基座与观测判据预注册）、同日 **0ai 闭合入账 33 → 32**（产出合回主仓，orz `b682a67f`）与 **三项摩擦立项 32 → 35**（0aj 黑板写权限层 deny〔旧摩擦残余〕／0ak 增量归档 `-p` 车道不可达／0al 门禁克隆树漂移）。此前 2026-09-16：0ab 闭合 33 → 32、0ai 立项 32 → 33。完整计数流水已收缩入档：[`存档/backlog/BACKLOG_AND_PRIORITIES_FULL_2026-09-15.md`](../存档/backlog/BACKLOG_AND_PRIORITIES_FULL_2026-09-15.md)。TODO`[ ]` 明细含父/子项，计数以 BACKLOG 为准。本行与 P0/P1/P2 开放项清单、优先级总览表、TODO 路由/勾选、索引 §8 受 `check_repository.py` 计数一致性与行宽/行龄机械检查约束（0ab S1，2026-09-15 常驻）。）
+- 未闭合总数：**35 项**（口径日期 2026-09-16；最近变动：2026-09-16 **0af 资源门拒绝文案闭合入账 36 → 35**（定案文案＋轴标注＋Unknown 变体句＋一位小数取整落码，orz `b6ed78d9`）。此前 2026-09-16：**0am LIF 动力学升级线立项 35 → 36**（P1 轮次预算换算先行＋RLI 自研谐振基座与观测判据预注册）、同日 **0ai 闭合入账 33 → 32**（产出合回主仓，orz `b682a67f`）与 **三项摩擦立项 32 → 35**（0aj 黑板写权限层 deny〔旧摩擦残余〕／0ak 增量归档 `-p` 车道不可达／0al 门禁克隆树漂移）。完整计数流水已收缩入档：[`存档/backlog/BACKLOG_AND_PRIORITIES_FULL_2026-09-15.md`](../存档/backlog/BACKLOG_AND_PRIORITIES_FULL_2026-09-15.md)。TODO`[ ]` 明细含父/子项，计数以 BACKLOG 为准。本行与 P0/P1/P2 开放项清单、优先级总览表、TODO 路由/勾选、索引 §8 受 `check_repository.py` 计数一致性与行宽/行龄机械检查约束（0ab S1，2026-09-15 常驻）。）
 
 
 - **2026-09-12（本轮）**：0v 闭合入账 **26 → 25**（用户裁决「不强硬取证」——判据 9/10 与 CAPTCHA 样本不再追、命中率与 chrome-error 分类偏差观察归档，S1–S4 全部闭合转 `implemented`）；**0z 真机资源安全边界立项登记 25 → 26**（P0，设计完成待放行实施——本轮真机自举两次满占用卡死处置：三个缺口 + 一个摩擦项）；**同日全项目只读深审入档**（[`FULL_PROJECT_DEEP_REVIEW`](audits/FULL_PROJECT_DEEP_REVIEW_2026-09-12.md)，登记不动计数——0v-C 两项 P0 被同日 orz `ba934af8` 修复闭合覆盖且触发源实锤与报告独立判断（URL 无痕改写）吻合、账本三处同步断裂（报告 P1-5）同日回补，其余 P1/P2 与体系面发现留用户裁决未立项，详见 [治理注记](#治理注记历史决策不新增独立实施项)）。
@@ -21,7 +21,7 @@
 | 优先级 | 含义 | 开放项（入口小节） |
 |---|---|---|
 | P0 | 当前工作集：设计已冻结，裁决后立即实施 | FUS-BENCHMARK-FULL-EXEC 验证③④⑤（0b）；0d 后续 3/4/5 S4 复验（0d）；THIN-HARNESS-REDESIGN-V2 余项（0j）；WINDOWS-HIGH-NIST-MAX-FRICTION ⑥⑦（0l）；GSA-SESSION-VOLUME-BOTTOM-LAYER S3/S4（0m）；GAP-APPROVAL-PROMPTER 延期项（0n）；S3/S4 集中实机验证批 T3–T6（0o）；检索子代理双车道 S4（0t）；官方 R4 15 题复跑（0u）；TB 4.0 摩擦探针审计 O1–O7（0w）；NP1 机械身体集成支线（0y）；真机资源安全边界 S4 复验（0z）；机械层即时回报与流式检索 S4（0ac）。已闭合 00/00a/0a/0c/0e/0f/0g/0h/0i/0k/0p/0q/0r/0s/0v/0x/1/1b/2/3/3a/3b 与 0d 主项以 `[x]` 单行核对保留在 P0 节各小节 |
-| P1 | 无需裁决，可与 P0 并行 | FUS-COMPONENT-REGISTER（4）；GAP-WINDOWS-EVIDENCE（5）；IMPL-DEEPSEEK-TRANSPORT / SEC-CREDENTIALS live 证据（6）；ORZ-SESSION-CONTEXT-MONITOR（6d）；历史卷 journal 全量 verifier 复扫（0aa，2026-09-13 立项，深审附带建议①）；0ae 上下文软门与模型参与压缩（0ae，2026-09-15 立项并落码，A/B 判据留 S4 实机）；0af 资源门拒绝文案明确化（0af，2026-09-15 立项，深审摩擦 B 注册）；滑块上下文（0ah，2026-09-15 立项；**2026-09-16 勘误**为 v8 模型自控注意力窗口，S1 五连批系依错误记录落码，实现更正批已落码（未提交）＋只读审查处置同日闭合＋**审查 R-12 余项已处置**（阶梯一轮只注入最高档／回放窗口裁定不扩白名单／0.77 换算与五项真机读数待实测），登记待放行）；0aj 黑板写权限层放行（0aj，2026-09-16 立项，旧摩擦残余——ReadOnly 应自动放行被 deny，0ai 狗粮考核测出）；0al 门禁冻结克隆树漂移（0al，2026-09-16 立项，0ai 狗粮考核测出，可静默校验错误树）；0am LIF 动力学升级线（0am，2026-09-16 立项，P1 轮次预算换算先行＋RLI 自研谐振基座与观测判据预注册）。已闭合 0ai（2026-09-16，产出合回主仓 orz `b682a67f`） |
+| P1 | 无需裁决，可与 P0 并行 | FUS-COMPONENT-REGISTER（4）；GAP-WINDOWS-EVIDENCE（5）；IMPL-DEEPSEEK-TRANSPORT / SEC-CREDENTIALS live 证据（6）；ORZ-SESSION-CONTEXT-MONITOR（6d）；历史卷 journal 全量 verifier 复扫（0aa，2026-09-13 立项，深审附带建议①）；0ae 上下文软门与模型参与压缩（0ae，2026-09-15 立项并落码，A/B 判据留 S4 实机）；滑块上下文（0ah，2026-09-15 立项；**2026-09-16 勘误**为 v8 模型自控注意力窗口，S1 五连批系依错误记录落码，实现更正批已落码＋只读审查处置同日闭合＋**收口清理批已落码**（v7 折叠族退役，orz `501447c0`）＋**审查 R-12 余项已处置**（阶梯一轮只注入最高档／回放窗口裁定不扩白名单／0.77 换算与五项真机读数待实测），登记待放行）；0aj 黑板写权限层放行（0aj，2026-09-16 立项，旧摩擦残余——ReadOnly 应自动放行被 deny，0ai 狗粮考核测出）；0al 门禁冻结克隆树漂移（0al，2026-09-16 立项，0ai 狗粮考核测出，可静默校验错误树）；0am LIF 动力学升级线（0am，2026-09-16 立项，P1 轮次预算换算先行＋RLI 自研谐振基座与观测判据预注册）。已闭合 0ai（2026-09-16，产出合回主仓 orz `b682a67f`）与 0af（2026-09-16，文案定案落码 orz `b6ed78d9`） |
 | P2 | 生产化决策门：需用户裁决 | IMPL-CONTROL-FABRIC Slice 3/4（7）；OPS-PROTOCOL 裁剪与接线裁决（8）；MODEL-RESIDUAL-PRESSURE-FOLLOWUP（11）；COMPRESSION-LINGUISTIC-FORMAL-LAYER（12）；BLACKBOARD-CONVERSATION-SCOPE-FOLD B2–B4（13）；COMPACTION-FOLD-SNAPSHOT S4（14）；EVALUATION-CORPUS-FREEZE 评测语料冻结与首轮执行（15，2026-09-13 立项，深审 S-13 注册；S1/S2 同日完成）；GAP-EVAL-RESULT-SCHEMA-DRIFT 评测结果合约对齐（15 附，2026-09-13 立案并同日修复 `implemented`）；0ak 增量归档/三键存档 `-p` 车道不可达（0ak，2026-09-16 立项，0ai 狗粮考核测出；裁决采 B＝`-p` 车道接归档，**实施已同日放行落码**，判据待下一轮狗粮 run 收取） |
 | P3 | 收尾 / 清理 | EVIDENCE-LOCAL-BROWSER（9）；GATE-CHAIN（10）；遗留小项（11） |
 | 条件触发 | 不占当前优先级 | ORZ-RECOVERY-TOOL-OUTCOME、ORZ-STAGNATION-TOOL-SIGNAL |
@@ -844,7 +844,7 @@ GLM F2 处置转排期（2026-09-06 用户裁决）：`orz-host/src/approval.rs`
 
 ## P1 — 可并行审计 / 证据
 
-开放项：4 / 5 / 6 / 6d / 0aa / 0ae / 0af / 0ah / 0aj / 0al / 0am。已闭合 0ai（2026-09-16，产出合回）与 0q（2026-09-08）、6b / 6c / 6e / 6f / 6g 以单行核对保留（6c 与 6e 为退役条目）。
+开放项：4 / 5 / 6 / 6d / 0aa / 0ae / 0ah / 0aj / 0al / 0am。已闭合 0af（2026-09-16，文案定案落码 orz `b6ed78d9`）、0ai（2026-09-16，产出合回）与 0q（2026-09-08）、6b / 6c / 6e / 6f / 6g 以单行核对保留（6c 与 6e 为退役条目）。
 
 ### 4. FUS-COMPONENT-REGISTER（`partial`）
 
@@ -1013,18 +1013,20 @@ GLM F2 处置转排期（2026-09-06 用户裁决）：`orz-host/src/approval.rs`
 - 落地：`immediate_delivery` 测试期机械对账钉子——读 S2 runtime schema（`CARGO_MANIFEST_DIR/../../../runtime`，与 ORZ-BUILD-MOUNT-001 同布局）断言：实现常量 ⊆ schema 闭枚举（boundary/delivery_mode/delivery_class/result_source/stage/retrieval_path）；`suppressed_reason` 与五稳定码为**全等闭集**；0ae plan_write `section` 扩展枚举 = `ModelNoteSection` 值。§5-A 人工核对点自此退役为机械检查（每批自动跑）。
 - 状态：**implemented（当日闭合）**；立项即闭合，计数 32 净不变。入口：orz `crates/orz-loop/src/immediate_delivery.rs` `schema_closed_enums_verbatim_match_implementation_constants`。关键词：契约对账、闭枚举钉子、摩擦 C 治本。
 
-### 0af. 资源门拒绝文案明确化（P1；2026-09-15 用户裁决立案，深审摩擦 B 注册）
+### 0af. 资源门拒绝文案明确化（P1；2026-09-15 用户裁决立案，深审摩擦 B 注册；**2026-09-16 闭合入账：文案定案落码 orz `b6ed78d9`，36 → 35**）
 
 - 来源：狗粮 run `RUN-CLI-6aa7e0aa` 15:50 两次 watch 档拒绝（commit 余量 7.16–7.28 GiB < 25% 线，fail-closed 正确）——信封原因文案 `commit headroom insufficient` 属术语化表述，模型需解码才能行动；用户定案拒绝文案（[深审 §5-B/§8-3](audits/0AC_S3B_RUN_DEEP_REVIEW_2026-09-15.md)）。
 - 开放内容：资源门（0z 各档）拦截信封原因文案改为「**宿主机内存/储存资源即将耗尽，无法新增派发，请寻找其他方案**」，按实际耗尽轴标注（内存 commit / 储存 free），既有 readings 随附；不做建议引擎/恢复指引。涉及 `orz-host` resource_gate 拒绝信封构造与相关测试/fixture 文案断言同步。
 - 边界：不改 fail-closed 判定逻辑与阈值，只改文案与轴标注。
-- 计数：立案 **31 → 32**（2026-09-15）。入口：[深审 §5-B](audits/0AC_S3B_RUN_DEEP_REVIEW_2026-09-15.md) / TODO P1-0af。
+- 计数：立案 **31 → 32**（2026-09-15）；**闭合入账 36 → 35**（2026-09-16）。入口：[深审 §5-B](audits/0AC_S3B_RUN_DEEP_REVIEW_2026-09-15.md) / [本批审计](audits/0AF_0AH_CLEANUP_2026-09-16.md) / TODO P1-0af。
 - 关键词：资源门拒绝文案、cause 自描述、watch 档、commit 余量、拦截原因明示。
+- **落码闭合（2026-09-16，orz `b6ed78d9`，用户令「直接进行0af」）**：①定案句四常量按轴标注（储存 free／内存 commit／双轴合并）＋机械读数英文随附；②**混排明示为有意选择**（模块头登记段，审查补充③）；③**Unknown 档变体句**「读数不可得，无法确认余量，已按 fail-closed 规则拒绝…」（审查补充①——防不实陈述）；④headroom 百分比**一位小数向下取整＋字节直读**（审查补充②——根除整数截断致「25% < 25% required」字面自相矛盾）；⑤**连带完成 F-BE-12 残留**（拒绝臂第二次 `evaluate_for_volumes` 改用唯一一次判定——两次探针可跨档位分歧的形态就此消除）。钉子 4 条；读数 orz-host 串行 **332/0/5**（+4）、fmt 干净、clippy 与 HEAD 基线逐位一致零新增、契约面零改动。入口：[`0AF_0AH_CLEANUP_2026-09-16`](audits/0AF_0AH_CLEANUP_2026-09-16.md) §1。
 
 ### 0ah. 滑块上下文（v8 模型自控注意力窗口）（P1；2026-09-15 立项；**2026-09-16 勘误**——v7「常驻滑窗／机械驱逐」系**记录错误**，S1 五连批**依错误记录落码**；更正稿 v8 已落档，**实现更正待放行**）
 
 - **2026-09-16 实现更正批（落码未提交）＋只读审查处置**：五条指令全部落地（模型面投影层／块表与块号去重／新阶梯 H1·T1／退役 192K rhythm 与 256K 兜底／按块回放面）；只读审查结论「有条件不通过」（P0×1／P1×2／P2×7／P3×1），**同日全部处置**（T1 只截已闭合分块＋隐藏区间钳到主滑块起点／分块表落窗口尾部／主车道收尾压缩与 D2-2 恢复预检退役＝本地面全程逐字全量／指针化前先落盘／先裁回放块／量尺计入静态开销／卫生清零）；**用户裁定**：守卫 1.10M→700K 估算＋H1/T1 按越线重新武装。读数：orz-loop 805/0/3、orz-host 串行 328/0/5、orz-assurance 229＋fixtures、fmt 干净、clippy 50/12（基线）、测试构建告警 0、门禁唯一 error＝子模块未提交。入口：[`实施回执 §8`](audits/0AH_V8_IMPLEMENTATION_2026-09-16.md) / [`只读审查 §9`](audits/0AH_V8_IMPLEMENTATION_REVIEW_2026-09-16.md)。
 - **审查 R-12 余项处置批（2026-09-16 同日追加，落码未提交）**：① **阶梯批量触发＝已修**——单轮暴涨**一轮内只注入最高档**（低档水位与事件照记，`form=suppressed_superseded_by_higher_tier`／`deferred_to_truncation_notice`）；T1 同轮只发**截断告知块**且补**截断后读数**（`truncation_notice_block`／`guard_truncation_notice_block` 增 `model_face_tokens`）；新钉子 `a_single_round_surge_injects_only_the_highest_tier`／`a_truncation_round_injects_only_the_notice_with_the_post_cut_reading`。② **`.gsa` 回放窗口＝裁定不扩白名单**——内部区走**两段门**（读判决 `InternalAfterNotice`；通知键 `access_state.json` 卷级持久化 ⇒ 通知给过一次后后续读**直接放行**），白名单两窗口只是「免通知恒放行」窗口；扩窗口无功能增益而动 `AUTH-GSA-SESSION-VOLUME` 授权面。③ **0.77 换算复测与五项真机读数＝待真机、不拍数**（实施回执 §9 给离线取数配方：`context_scale:<档>` 行的 `model_face_estimate_tokens` ↔ 其后第一条 `model_output` 的 `cache_hit＋miss`；另含工作点分位／H1 消费率／T1 次数／回放使用率）。读数：orz-loop **807/0/3**（+2 钉）、orz-host 串行 328/0/5、fmt 干净、clippy 50（持平）、**契约面零改动**。入口：[`实施回执 §9`](audits/0AH_V8_IMPLEMENTATION_2026-09-16.md) / [`只读审查 §3.7/§9`](audits/0AH_V8_IMPLEMENTATION_REVIEW_2026-09-16.md)。
+- **收口清理批落码（2026-09-16 用户令「直接进行0ah」，orz `501447c0`）**：**v7→v8 收口＝实施回执 §8.4 登记的待清理项执行**——有状态折叠族整体退役：`LedgerFoldState`／`advance_fold`／`build_request_view`／桥渲染族／`safe_fold_cut`／`is_round_balanced`／`bridge_estimate_budget`／`build_collapsed_request` 删除（`action_ledger.rs` 3,145 → 1,422 行）；`run_template_compact` 退役 `fold_state` 传参（唯一生产调用方＝检索/grill 车道 session-end，保留起点一律无状态 `collapsed_cut` 重算）；`LoopOutcome.fold_state` 字段退役。**保留面逐项取证**：`bridge_cut`（v8 投影层 `slider_start` 复用）／`collapsed_cut`／台账行装配族／`capture_run_baseline`／`render_run_context_block`（face D4）／`pointerize_*`；**P2-14 v0.3 折叠快照分支保留**（`fold_ctx` 不动，域属 P2-14）。25 个死测试删除＋五测试改写直测存留件（**782 = 807 − 25** 零误伤）。读数：orz-loop **782/0/3**、orz-host 串行 332/0/5、orz-assurance 229、fmt 干净、clippy 与 HEAD 基线逐位一致、runtime 判官 361/1（既有无关红灯）、契约面零改动、门禁 `valid: true`。**0ah 状态维持 `partial`**（判据读数／S2／尾批仍待各自放行）。入口：[`0AF_0AH_CLEANUP_2026-09-16`](audits/0AF_0AH_CLEANUP_2026-09-16.md) §2。
 
 - **2026-09-16 勘误（用户裁定＋放行登记）**：定性＝**记录错误→实现错误**（非设计更迭）。v8 机制＝**模型自控**：模型面＝主滑块 x（最近 160K 估算≈123K 真实）＋主滑块以外 y=32K 分块（**仅分块、不流出模型面**）＋机械摘要行；减少模型面的动作只有**模型压缩**与 **T1 硬截断**；阶梯按 **1M 上下文模型普遍注意力水平**定稿（软提醒 192/224/256/288K → **320K 硬打断** → **500K 硬截断**；**950K 取消**）；机械轨（结构化）与语义轨（模型摘要）**并存**、均作用于模型面；模型压缩**不覆盖本地面**（全量留档＋按块回放，回放面由「gate 后置」升为 v8 组成部分）。**机械轨边界（同日追加裁定）**：机械轨照常按其内容策略工作，但**不再承担总窗口压缩**——退役 rhythm 192K（H＋缓冲，视图尺）触发与视图兜底 256K（`compact_messages` 截断至 160K）；模型面总量只由模型自压与 H1/T1 管。成本重算：hit≈60M（3.5× v7）／miss≈778K（1.3×）。入口：[`v8 设计稿`](CONTEXT_SLIDER_V8_DESIGN_2026-09-16.md) / [`成本重算记录`](CONTEXT_SLIDER_V8_COST_RECOMPUTATION_2026-09-16.md) / ADR-0010 §14.69（v1.70）。
 
