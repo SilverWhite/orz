@@ -828,16 +828,19 @@ GLM F2 处置转排期（2026-09-06 用户裁决）：`orz-host/src/approval.rs`
 
 - [ ] 权限桥对 `blackboard_write`（ReadOnly 类）按设计自动放行（各策略面核对；现状＝每次调用 `permission_decision{deny}`，journal 实证 run `RUN-CLI-6aa999d6`）；探针注册面补声明（现与请求面脱同步）；`plan_write` 事件族端到端钉子。
 - [ ] 判据：无头 run 中调用 → allow → `plan_write` 出账 → `blackboard_read` 读回一致。入口：[BACKLOG 0aj](docs/BACKLOG_AND_PRIORITIES.md) / [`0AI_DOGFOOD_ASSESSMENT_CLOSURE` §3.1](docs/audits/0AI_DOGFOOD_ASSESSMENT_CLOSURE_2026-09-16.md)。
+- [x] **落码（2026-09-16，orz `12396e6a`）**：权限桥 `access_kind` 补 `blackboard_write` 内存类 arm（`Read(None)` 自动放行）＋探针面 `WORK_TOOLS` 23 → 24 三处同批（orz-loop `tool_probe`／orz-assurance `families`／Python `_WORK_TOOLS`，判据 `probe_storage`）＋三钉（表级断言＝修复前实跑红／跨表护栏样本补齐＝漏网直接原因／端到端链：调用 → `tool_completed{exit_code 0}` → `plan_write` 出账 → `blackboard_read` 读回一致）。读数 orz-loop 819/0/3、orz-host 串行 325/0/5、orz-assurance 229、fmt 干净、clippy 52→52 零新增。**判据行维持未勾**（要求无头 run 内实证；用户 2026-09-16 指示暂不开始新狗粮线）。入口：[`0aj/0al 修复与 0.5.3 载体` §1](docs/audits/0AJ_0AL_FRICTION_FIX_AND_053_CARRIER_2026-09-16.md)。
 
 ### 0ak 增量归档/三键存档 `-p` 车道不可达（P2；2026-09-16 立项，0ai 考核测出）
 
 - [ ] `-p` 车道里程碑增量归档接线（现接线在 ACP 车道 `acp_server.rs`；跨 500K 无 archives 产出）或显式登记「归档面 ACP-only」并改判据口径。
 - [ ] 判据：无头长 run（≥500K）产出 `.gsa/archives/<session8>.json.gz` 且 `archive_keys` 三键齐备。入口：[BACKLOG 0ak](docs/BACKLOG_AND_PRIORITIES.md) / [`0AI_DOGFOOD_ASSESSMENT_CLOSURE` §2/§3.2](docs/audits/0AI_DOGFOOD_ASSESSMENT_CLOSURE_2026-09-16.md)。
+- [ ] **取证完成（2026-09-16，留用户裁决）**：打包内容＝**对话侧车原文**（`package_session_archive`），而 `-p` 一次性 run 不写对话侧车（GAP-CONVERSATION-RESTORE）⇒ 该车道**无归档源**（非"漏接一个调用"）。**选项 A**＝登记「归档面 ACP-only」＋0ah S1 存档三键判据口径改挂 ACP 车道（零代码）；**选项 B**＝为一次性 run 引入对话持久化（会话身份＋侧车落盘＋里程碑归档，触设计边界）。入口：[`0aj/0al 修复与 0.5.3 载体` §4](docs/audits/0AJ_0AL_FRICTION_FIX_AND_053_CARRIER_2026-09-16.md)。
 
 ### 0al 门禁冻结克隆树漂移（`check_repository` 导入原始树；P1；2026-09-16 立项，0ai 考核测出）
 
 - [ ] 门禁 ROOT 按脚本位置显式锚定（禁依赖 site-packages 可编辑安装；现状＝克隆内按文档口径调用会崩或静默校验错误的树）；补「克隆内校验克隆树」钉子。
 - [ ] 判据：冻结克隆内 `python scripts/check_repository.py` 校验克隆自身且与 `-m` 形态读数一致。入口：[BACKLOG 0al](docs/BACKLOG_AND_PRIORITIES.md) / [`0AI_DOGFOOD_ASSESSMENT_CLOSURE` §3.3](docs/audits/0AI_DOGFOOD_ASSESSMENT_CLOSURE_2026-09-16.md)。
+- [x] **落码（2026-09-16，父仓）**：`sys.path` 首位锚定脚本推导 `ROOT`（禁可编辑安装遮蔽）＋ `_check_reference_root_anchor` fail-closed（来源树 ≠ 本树即 `valid: false`）＋钉子 `assurance/tests/test_gate_root_anchor_nails.py` 4 例（本树锚定／reference 归属／外来模块负例／克隆形态自证）。实测对照：修复前模拟克隆内 `reference_module_root = D:\CLI`（错树）→ 修复后＝克隆自身；门禁 `valid: true`、新钉 4/4。**判据行维持未勾**（真克隆内复验待日后 run）。入口：[`0aj/0al 修复与 0.5.3 载体` §2](docs/audits/0AJ_0AL_FRICTION_FIX_AND_053_CARRIER_2026-09-16.md)。
 
 ### 0am LIF 动力学升级线（P1 轮次预算换算先行＋LIF3D 影子基座与观测判据预注册；P1；2026-09-16 立项）
 

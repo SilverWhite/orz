@@ -2075,6 +2075,10 @@ _WORK_TOOLS = frozenset(
         "ask_user_question",
         # Former Face A — control tools with real mechanical chains.
         "blackboard_read",
+        # 0aj（2026-09-16）：`blackboard_write`（0ae D0 模型写入面）——
+        # 与 Rust 侧 `tool_probe::WORK_TOOLS` / `journal::toolsets::WORK_TOOLS`
+        # 三处同批（探针面与请求面脱同步的修复面）。
+        "blackboard_write",
         "todo_write",
         "update_goal",
         "enter_plan_mode",

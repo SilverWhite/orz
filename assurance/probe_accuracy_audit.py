@@ -28,7 +28,7 @@ from __future__ import annotations
 from typing import Any
 
 
-# The 23 main-agent work tools — single source of truth is the reference
+# The 24 main-agent work tools — single source of truth is the reference
 # verifier's `_WORK_TOOLS` (2026-08-15 review fix: duplicated lists drift).
 try:  # package context (pytest / check_repository)
     from .run_event_journal_validation import _WORK_TOOLS as WORK_TOOLS

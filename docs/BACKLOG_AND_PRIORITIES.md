@@ -937,6 +937,7 @@ GLM F2 处置转排期（2026-09-06 用户裁决）：`orz-host/src/approval.rs`
 - 判据：狗粮/无头 run 中 `blackboard_write` 调用 → `permission_decision=allow` → `plan_write` 出账 → `blackboard_read` 读回一致。
 - 计数：立项 **32 → 35** 三项之一。入口：[`0AI_DOGFOOD_ASSESSMENT_CLOSURE_2026-09-16` §3.1](audits/0AI_DOGFOOD_ASSESSMENT_CLOSURE_2026-09-16.md) / [`0ae 设计 D0`](CONTEXT_SOFT_GATE_MODEL_PARTICIPATED_COMPRESSION_DESIGN_2026-09-15.md) / TODO P1-0aj。
 - 关键词：blackboard_write、权限桥、ReadOnly 放行、旧摩擦、plan_write、探针面脱同步、0aj。
+- **落码（2026-09-16，orz `12396e6a`）：修复面两半**——①权限桥 `orz-host/src/permission.rs::access_kind` 补内存类 arm（`Read(None)`，自动放行无路径限制；缺此 arm 时整工具落 `Edit` ⇒ 无头/死网关部署确定性 deny，与 review P1-1 `blackboard_read`、0x/0v S4 `browser_control` **同形第三例**）；②探针面补声明 `WORK_TOOLS` 23 → 24 三处同批（orz-loop tool_probe／orz-assurance families／Python `_WORK_TOOLS`），判据并入 `probe_storage`。**钉子三处**：`access_kind_mapping` 断言（修复前实跑红）／跨表护栏样本补齐（该样本表漏列本工具即漏网直接原因）／端到端链（调用 → `tool_completed{exit_code 0}` → `plan_write` 出账 → `blackboard_read` 读回一致）。读数：orz-loop 819/0/3、orz-host 串行 325/0/5、orz-assurance 229 全绿、fmt 干净、clippy 52→52 新增零。**判据未闭环**（要求无头 run 内实证；用户 2026-09-16 指示暂不开始新狗粮线 ⇒ 搭日后 run 收取）。入口：[`0aj/0al 修复与 0.5.3 载体`](audits/0AJ_0AL_FRICTION_FIX_AND_053_CARRIER_2026-09-16.md) §1。
 
 ### 0ak. 增量归档/三键存档 `-p` 车道不可达（P2；2026-09-16 用户裁决立项；0ai 狗粮考核测出）
 
@@ -945,6 +946,7 @@ GLM F2 处置转排期（2026-09-06 用户裁决）：`orz-host/src/approval.rs`
 - 判据：无头长 run（≥500K）产出 `.gsa/archives/<session8>.json.gz` 且 `archive_keys` 三键齐备。
 - 计数：立项 **32 → 35** 三项之一。入口：[`0AI_DOGFOOD_ASSESSMENT_CLOSURE_2026-09-16` §2/§3.2](audits/0AI_DOGFOOD_ASSESSMENT_CLOSURE_2026-09-16.md) / [`0ah S1 任务书`](CONTEXT_DYNAMIC_SLIDER_S1_IMPLEMENTATION_TASK_2026-09-15.md) / TODO P2-0ak。
 - 关键词：增量归档、三键存档、archives、ACP 车道、-p 不可达、里程碑归档、0ak。
+- **取证完成与选项（2026-09-16，留用户裁决）：代码路径取证**——增量归档判定 `incremental_archive_due` 与打包 `package_session_archive` 均挂 **ACP 车道**（`acp_server.rs` prompt 尾 ＋ `close_session`），打包内容＝**对话侧车原文**；而 `-p` 一次性 run **不写对话侧车**（GAP-CONVERSATION-RESTORE），该车道**无归档源**（非"漏接一个调用"）。**选项 A**：登记「归档面 ACP-only」＋0ah S1 存档三键判据口径改挂 ACP 车道（零代码、如实登记边界）；**选项 B**：为一次性 run 引入对话持久化（会话身份＋侧车落盘＋里程碑归档），触及「one-shot run 不携带会话对话」设计边界（需 ADR 级登记）。两选项对 orz 可用性均无阻断。入口：同上审计 §4。
 
 ### 0al. 门禁冻结克隆树漂移（`check_repository` 导入原始树）（P1；2026-09-16 用户裁决立项；0ai 狗粮考核测出）
 
@@ -953,6 +955,7 @@ GLM F2 处置转排期（2026-09-06 用户裁决）：`orz-host/src/approval.rs`
 - 判据：冻结克隆内 `python scripts/check_repository.py` 校验克隆自身且与 `-m` 形态读数一致。
 - 计数：立项 **32 → 35** 三项之一。入口：[`0AI_DOGFOOD_ASSESSMENT_CLOSURE_2026-09-16` §3.3](audits/0AI_DOGFOOD_ASSESSMENT_CLOSURE_2026-09-16.md) / [`check_repository.py`](../scripts/check_repository.py) / TODO P1-0al。
 - 关键词：门禁、冻结克隆、可编辑安装、静默错误树、ROOT 锚定、0al。
+- **落码（2026-09-16，父仓）：修复面三处**——①模块级显式锚定（`sys.path` 首位插入脚本推导的 `ROOT`，早于任何 `assurance` 导入，禁依赖可编辑安装）；②**fail-closed 复核** `_check_reference_root_anchor`（载入模块来源树 ≠ 本树即报 `gate would validate the wrong tree` ⇒ `valid: false`，杜绝"崩不了的错树"）；③钉子 `assurance/tests/test_gate_root_anchor_nails.py` 4 例（本树锚定／reference 归属／外来模块负例／克隆形态自证含投毒与还原）。**实测对照**：修复前模拟克隆内 `reference_module_root = D:\CLI`（错树），修复后 = 克隆自身。读数：门禁 `valid: true`／`error_count: 0`、新钉 4/4、关联 51 例全绿。**判据未闭环**（要求冻结克隆内跑 `python scripts/check_repository.py` 校验克隆自身；模拟克隆对照已取证，真克隆复验搭日后 run——用户指示暂不开始新狗粮线）。入口：[`0aj/0al 修复与 0.5.3 载体`](audits/0AJ_0AL_FRICTION_FIX_AND_053_CARRIER_2026-09-16.md) §2。
 - 入口：[`HEAVY_FILE_SPLIT_SURVEY`](audits/HEAVY_FILE_SPLIT_SURVEY_2026-09-13.md) / [`orz-loop/src/host_exec.rs`](../orz/crates/orz-loop/src/host_exec.rs) / TODO P1-0ai / 索引 `GAP-HEAVY-FILE-SPLIT`。
 - 关键词：重文件拆分、host_exec、狗粮考核测试、S1 切分图、机械搬移、行为不变、单文件 ≤10,000、0ai。
 

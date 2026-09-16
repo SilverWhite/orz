@@ -17,6 +17,18 @@ import yaml
 
 
 ROOT = Path(__file__).resolve().parents[1]
+
+# 0al（2026-09-16，狗粮 run RUN-CLI-6aa999d6 agent 报告 F2）：门禁必须校验
+# **本脚本所在的树**。按文档口径 `python scripts/check_repository.py` 执行时
+# `sys.path[0]` ＝ `scripts/`，`assurance` 只能经 site-packages 解析——若环境
+# 里存在指向**另一棵树**的可编辑安装（冻结克隆场景的常态），门禁会导入那棵树
+# 的 `assurance.run_event_journal_validation`（其 `ROOT` 是那棵树的根）：
+# 路径不同形 → `relative_to` 抛错（门禁崩）；两侧路径同形 → **静默校验错误的
+# 树**（证据面可信度问题）。故此处把本树显式锚在 `sys.path` 首位，禁依赖
+# 可编辑安装；`_check_reference_root_anchor` 另做 fail-closed 复核。
+if sys.path[:1] != [str(ROOT)]:
+    sys.path.insert(0, str(ROOT))
+
 NON_REPOSITORY_PARTS = {
     ".git",
     ".gsa",
@@ -1316,9 +1328,42 @@ def _check_ledger_slimming(
     return errors, len(covered)
 
 
+def _check_reference_root_anchor(errors: list[str]) -> None:
+    """0al（2026-09-16，狗粮 run RUN-CLI-6aa999d6 agent 报告 F2）：
+    import 到的 reference 模块必须属于**本树**——fail-closed 复核。
+
+    模块级已把 `ROOT` 锚在 `sys.path[0]`（禁可编辑安装遮蔽）；此处再核对
+    载入模块的真实来源，确保「冻结克隆内校验克隆自身」成立：指向别处的
+    reference 模块会让 `relative_to(ROOT)` 崩（路径不同形）或**静默校验
+    错误的树**（路径同形），两种都不得以 `valid: true` 收场。
+    """
+    try:
+        from assurance import run_event_journal_validation as reference
+    except Exception as exc:  # pragma: no cover — 环境级故障
+        errors.append(
+            f"cannot import the reference verifier for this tree: "
+            f"{type(exc).__name__}: {exc}"
+        )
+        return
+    module_path = getattr(reference, "__file__", None)
+    if not module_path:
+        errors.append("reference verifier module has no __file__ — cannot anchor ROOT")
+        return
+    module_root = Path(module_path).resolve().parents[1]
+    if module_root != ROOT.resolve():
+        errors.append(
+            "gate would validate the wrong tree: reference verifier resolved from "
+            f"{module_root} but this gate lives in {ROOT.resolve()} "
+            "(an editable install must not shadow the script's own tree; "
+            "run `python -m scripts.check_repository` or fix sys.path anchoring)"
+        )
+
+
 def check_repository() -> dict[str, Any]:
     errors: list[str] = []
     counts: dict[str, int] = {}
+
+    _check_reference_root_anchor(errors)
 
     schema_paths = sorted(
         path for path in ROOT.rglob("*.schema.json")
