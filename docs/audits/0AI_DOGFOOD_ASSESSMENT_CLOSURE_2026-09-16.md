@@ -65,12 +65,17 @@ archives（历史一致，非本 run 特异）。
 
 ## 3. 考核测出的框架缺口（本 run 增量发现；编号留台账）
 
-1. **`blackboard_write` 未进 `-p` 车道声明面**（agent 报告 F5 的根因，主会话
-   实证）：本 run 探针面 `main_agent_work_tools` 仅 5 工具（read_file/grep/
-   search_replace/blackboard_read/run_terminal_cmd），**无 `blackboard_write`**
-   ⇒ journal `plan_write` 0 条、计划/笔记面恒空——D0「模型经黑板固化记忆」
-   在无头车道**不可达**（同「符号在位≠端到端接线」族；QUAD 审查补的是
-   plan-gate 轮面与消费分支，声明面在 direct 车道缺席）。
+1. **`blackboard_write` 权限层 deny（旧摩擦残余；2026-09-16 用户指认旧账＋主会话逐帧实证）**：
+   工具**已声明**（controller.rs:3100 无条件注入请求面，模型实际发起多次调用，
+   journal 17 处痕迹）→ 每次均 `permission_requested{risk: ReadOnly}` →
+   **`permission_decision{decision: deny}`**——设计口径「ReadOnly 类所有策略
+   自动放行」未在权限桥落地 ⇒ 计划/笔记面恒空（agent 报告 F5 的根因；模型
+   自己在 notes 里写下「blackboard_write 三次被门禁拒」）。两处伴生症状：
+   探针面 `main_agent_work_tools` 仍缺该工具（探针注册面与请求面脱同步）；
+   `plan_write` 事件族 0 条（调用未达执行层）。旧账脉络：上一代狗粮 run
+   （`RUN-CLI-6aa7e0aa` 深审「模型面无黑板写工具」）催生 0ae D0 加工具＋
+   QUAD 审查补窗口轮消费，但 `-p` 车道权限桥的放行缺失使能力仍未达模型——
+   **「符号在位≠端到端接线」族第三例**。
 2. **增量归档/三键存档 `-p` 车道不可达**（§2 存档三键 N/A 的根因）——
    「长单对话不结束就没有存档」的闭合只覆盖 ACP 车道。
 3. **门禁冻结克隆失效面（agent F2，严重）**：可编辑安装指向原始树 ⇒
@@ -79,8 +84,12 @@ archives（历史一致，非本 run 特异）。
 4. agent 报告 F1–F8 全文见工作区报告 §7（clippy protoc 阻塞／控制台 GBK／
    折叠台账无摘要／TER 旧文断链×7／终端工具面缺失／orz-host 并行抖动）。
 
-## 4. 后续（留用户裁决）
+## 4. 用户裁决与执行（2026-09-16）
 
-- **0ai 产出合回主仓**：实施件＋agent 报告按正常批次提交（0ai 项闭合待此）。
-- 三条接线缺口（§3.1/§3.2/§3.3）是否立项待裁决；§3.1/§3.2 同族，可同批。
-- orz-host `grok_home` 4 条既有失败独立立项（agent 报告 §9 同判）。
+- **产出合回主仓**：已执行——orz `b682a67f`（7 文件 +4603/−4461，git 识别
+  `host_exec.rs → host_exec/tool_run.rs` rename 71%）；agent 报告随批入库；
+  合回后主仓复跑 orz-loop 818/0/3＋fmt 干净。**0ai 闭合**（33 → 32）。
+- **三项摩擦直接立项**（用户 2026-09-16 指示）：**0aj**（`blackboard_write`
+  权限层 deny，旧摩擦残余，P1）／**0ak**（增量归档 `-p` 车道不可达，P2）／
+  **0al**（门禁冻结克隆静默校验错误树，P1）；计数 32 → 35。
+- orz-host `grok_home` 4 条既有失败：维持独立立项候选（未立项，留裁决）。

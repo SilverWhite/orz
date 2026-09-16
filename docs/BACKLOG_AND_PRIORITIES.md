@@ -9,7 +9,7 @@
 
 ## 未闭合计数（2026-09-16 口径）
 
-- 未闭合总数：**33 项**（口径日期 2026-09-16；最近变动：2026-09-16 **0ab 闭合入账 33 → 32**（邻线 GLM 完成，提交 `d190a17a`）、同日 **0ai 重文件拆分立项 32 → 33**（狗粮线修复考核测试题）。此前 2026-09-15：0ah 立项 32 → 33、0af 31 → 32、0ae 30 → 31。完整计数流水（2026-08-31 起逐次 38 → 33）已收缩入档：[`存档/backlog/BACKLOG_AND_PRIORITIES_FULL_2026-09-15.md`](../存档/backlog/BACKLOG_AND_PRIORITIES_FULL_2026-09-15.md)。TODO`[ ]` 明细含父/子项，计数以 BACKLOG 为准。本行与 P0/P1/P2 开放项清单、优先级总览表、TODO 路由/勾选、索引 §8 受 `check_repository.py` 计数一致性与行宽/行龄机械检查约束（0ab S1，2026-09-15 常驻）。）
+- 未闭合总数：**35 项**（口径日期 2026-09-16；最近变动：2026-09-16 **0ai 闭合入账 33 → 32**（产出合回主仓，orz `b682a67f`）、同日 **三项摩擦立项 32 → 35**（0aj 黑板写权限层 deny〔旧摩擦残余〕／0ak 增量归档 `-p` 车道不可达／0al 门禁克隆树漂移）。此前 2026-09-16：0ab 闭合 33 → 32、0ai 立项 32 → 33。完整计数流水已收缩入档：[`存档/backlog/BACKLOG_AND_PRIORITIES_FULL_2026-09-15.md`](../存档/backlog/BACKLOG_AND_PRIORITIES_FULL_2026-09-15.md)。TODO`[ ]` 明细含父/子项，计数以 BACKLOG 为准。本行与 P0/P1/P2 开放项清单、优先级总览表、TODO 路由/勾选、索引 §8 受 `check_repository.py` 计数一致性与行宽/行龄机械检查约束（0ab S1，2026-09-15 常驻）。）
 
 
 - **2026-09-12（本轮）**：0v 闭合入账 **26 → 25**（用户裁决「不强硬取证」——判据 9/10 与 CAPTCHA 样本不再追、命中率与 chrome-error 分类偏差观察归档，S1–S4 全部闭合转 `implemented`）；**0z 真机资源安全边界立项登记 25 → 26**（P0，设计完成待放行实施——本轮真机自举两次满占用卡死处置：三个缺口 + 一个摩擦项）；**同日全项目只读深审入档**（[`FULL_PROJECT_DEEP_REVIEW`](audits/FULL_PROJECT_DEEP_REVIEW_2026-09-12.md)，登记不动计数——0v-C 两项 P0 被同日 orz `ba934af8` 修复闭合覆盖且触发源实锤与报告独立判断（URL 无痕改写）吻合、账本三处同步断裂（报告 P1-5）同日回补，其余 P1/P2 与体系面发现留用户裁决未立项，详见 [治理注记](#治理注记历史决策不新增独立实施项)）。
@@ -21,8 +21,8 @@
 | 优先级 | 含义 | 开放项（入口小节） |
 |---|---|---|
 | P0 | 当前工作集：设计已冻结，裁决后立即实施 | FUS-BENCHMARK-FULL-EXEC 验证③④⑤（0b）；0d 后续 3/4/5 S4 复验（0d）；THIN-HARNESS-REDESIGN-V2 余项（0j）；WINDOWS-HIGH-NIST-MAX-FRICTION ⑥⑦（0l）；GSA-SESSION-VOLUME-BOTTOM-LAYER S3/S4（0m）；GAP-APPROVAL-PROMPTER 延期项（0n）；S3/S4 集中实机验证批 T3–T6（0o）；检索子代理双车道 S4（0t）；官方 R4 15 题复跑（0u）；TB 4.0 摩擦探针审计 O1–O7（0w）；NP1 机械身体集成支线（0y）；真机资源安全边界 S4 复验（0z）；机械层即时回报与流式检索 S4（0ac）。已闭合 00/00a/0a/0c/0e/0f/0g/0h/0i/0k/0p/0q/0r/0s/0v/0x/1/1b/2/3/3a/3b 与 0d 主项以 `[x]` 单行核对保留在 P0 节各小节 |
-| P1 | 无需裁决，可与 P0 并行 | FUS-COMPONENT-REGISTER（4）；GAP-WINDOWS-EVIDENCE（5）；IMPL-DEEPSEEK-TRANSPORT / SEC-CREDENTIALS live 证据（6）；ORZ-SESSION-CONTEXT-MONITOR（6d）；历史卷 journal 全量 verifier 复扫（0aa，2026-09-13 立项，深审附带建议①）；0ae 上下文软门与模型参与压缩（0ae，2026-09-15 立项并落码，A/B 判据留 S4 实机）；0af 资源门拒绝文案明确化（0af，2026-09-15 立项，深审摩擦 B 注册）；动态上下文滑块常驻滑窗 S1 实施（0ah，2026-09-15 立项，S1 五连批落码提交，S2/尾批待放行）；重文件拆分 host_exec.rs（0ai，2026-09-16 立项，狗粮线修复考核测试题） |
-| P2 | 生产化决策门：需用户裁决 | IMPL-CONTROL-FABRIC Slice 3/4（7）；OPS-PROTOCOL 裁剪与接线裁决（8）；MODEL-RESIDUAL-PRESSURE-FOLLOWUP（11）；COMPRESSION-LINGUISTIC-FORMAL-LAYER（12）；BLACKBOARD-CONVERSATION-SCOPE-FOLD B2–B4（13）；COMPACTION-FOLD-SNAPSHOT S4（14）；EVALUATION-CORPUS-FREEZE 评测语料冻结与首轮执行（15，2026-09-13 立项，深审 S-13 注册；S1/S2 同日完成）；GAP-EVAL-RESULT-SCHEMA-DRIFT 评测结果合约对齐（15 附，2026-09-13 立案并同日修复 `implemented`） |
+| P1 | 无需裁决，可与 P0 并行 | FUS-COMPONENT-REGISTER（4）；GAP-WINDOWS-EVIDENCE（5）；IMPL-DEEPSEEK-TRANSPORT / SEC-CREDENTIALS live 证据（6）；ORZ-SESSION-CONTEXT-MONITOR（6d）；历史卷 journal 全量 verifier 复扫（0aa，2026-09-13 立项，深审附带建议①）；0ae 上下文软门与模型参与压缩（0ae，2026-09-15 立项并落码，A/B 判据留 S4 实机）；0af 资源门拒绝文案明确化（0af，2026-09-15 立项，深审摩擦 B 注册）；动态上下文滑块常驻滑窗 S1 实施（0ah，2026-09-15 立项，S1 五连批落码提交，S2/尾批待放行）；0aj 黑板写权限层放行（0aj，2026-09-16 立项，旧摩擦残余——ReadOnly 应自动放行被 deny，0ai 狗粮考核测出）；0al 门禁冻结克隆树漂移（0al，2026-09-16 立项，0ai 狗粮考核测出，可静默校验错误树）。已闭合 0ai（2026-09-16，产出合回主仓 orz `b682a67f`） |
+| P2 | 生产化决策门：需用户裁决 | IMPL-CONTROL-FABRIC Slice 3/4（7）；OPS-PROTOCOL 裁剪与接线裁决（8）；MODEL-RESIDUAL-PRESSURE-FOLLOWUP（11）；COMPRESSION-LINGUISTIC-FORMAL-LAYER（12）；BLACKBOARD-CONVERSATION-SCOPE-FOLD B2–B4（13）；COMPACTION-FOLD-SNAPSHOT S4（14）；EVALUATION-CORPUS-FREEZE 评测语料冻结与首轮执行（15，2026-09-13 立项，深审 S-13 注册；S1/S2 同日完成）；GAP-EVAL-RESULT-SCHEMA-DRIFT 评测结果合约对齐（15 附，2026-09-13 立案并同日修复 `implemented`）；0ak 增量归档/三键存档 `-p` 车道不可达（0ak，2026-09-16 立项，0ai 狗粮考核测出） |
 | P3 | 收尾 / 清理 | EVIDENCE-LOCAL-BROWSER（9）；GATE-CHAIN（10）；遗留小项（11） |
 | 条件触发 | 不占当前优先级 | ORZ-RECOVERY-TOOL-OUTCOME、ORZ-STAGNATION-TOOL-SIGNAL |
 
@@ -844,7 +844,7 @@ GLM F2 处置转排期（2026-09-06 用户裁决）：`orz-host/src/approval.rs`
 
 ## P1 — 可并行审计 / 证据
 
-开放项：4 / 5 / 6 / 6d / 0aa / 0ae / 0af / 0ah / 0ai。已闭合 0q（2026-09-08）与 6b / 6c / 6e / 6f / 6g 以单行核对保留（6c 与 6e 为退役条目）。
+开放项：4 / 5 / 6 / 6d / 0aa / 0ae / 0af / 0ah / 0aj / 0al。已闭合 0ai（2026-09-16，产出合回）与 0q（2026-09-08）、6b / 6c / 6e / 6f / 6g 以单行核对保留（6c 与 6e 为退役条目）。
 
 ### 4. FUS-COMPONENT-REGISTER（`partial`）
 
@@ -920,14 +920,39 @@ GLM F2 处置转排期（2026-09-06 用户裁决）：`orz-host/src/approval.rs`
 - **S1 完成（2026-09-15，父仓本批提交）**：两组机械检查进 `check_repository.py` 门禁常驻——①计数一致性（BACKLOG 未闭合总数 ↔ P0/P1/P2 `开放项：` 行 ↔ 优先级总览表 ↔ TODO 路由/勾选状态 ↔ 索引 §8 状态桶交叉核对＋§0.2 状态词封闭集检查＋标题行漂移伪影检查；只做结构化锚点核对、报错由人处置、门禁不自动改账本）；②账本瘦身（头部台账/计数行单行 ≤1200 字符＋行龄 ≤21 天，超限提示归档存档快照）。负例钉子 `assurance/tests/test_ledger_consistency_nails.py`：合成账本单缺陷注入 13 例逐一检出＋真实仓库常驻零错两钉。**首批瘦身随批执行**：BACKLOG 计数流水行（4205 字符）与 P0 超长行收缩入档 [`BACKLOG_AND_PRIORITIES_FULL_2026-09-15`](../存档/backlog/BACKLOG_AND_PRIORITIES_FULL_2026-09-15.md)；P0 开放项行改写（补 0m/0n/0o/0t/0u/0w/0y/0z/0ac、0v/0x 归入已闭合枚举）；P1 行/表补 0ae/0af/0ah；P2 重复标题修复；TODO P0 路由撤 0v/0x、P2 路由补（P2-7）/（P2-8）记号、0v 残留勾选按 2026-09-12 闭合入账补勾；索引 54 行头部版本/摘要行滚出 [`CLI_PROJECT_INDEX_FULL_2026-09-15`](../存档/index/CLI_PROJECT_INDEX_FULL_2026-09-15.md)＋`GAP-MECH-IMMEDIATE-FEEDBACK` 条目状态 `in_progress` → `partial`。检查检出的既有漂移（P1-5 同类：P0 行缺 9 项、P1 行缺 3 项、P2 标题重复、0v 勾选残留）全部随批对账修复；门禁 `valid: true`。判据①（检查项进门禁且 deterministic）②（负例钉子）③（常驻生效）全部满足——**0ab 闭合入账待用户裁决**（若裁闭合：33 → 32）。本批不动计数。
 - **0ab 闭合入账（2026-09-16 用户裁决）**：用户口径「0ab 已由邻线 GLM 完成」；两组机械检查（计数一致性四点交叉核对＋状态词封闭集＋标题漂移伪影；头部台账行 ≤1200 字符／行龄 ≤21 天）已常驻 `check_repository.py`，负例钉子 13 例＋真实仓库零错两钉就位，首批瘦身三面已执行 ⇒ **判据①②③全部满足、闭合入账 33 → 32**（执行提交 `d190a17a`，索引 v3.41）。
 
-### 0ai. 重文件拆分（`host_exec.rs` 优先；**本轮狗粮线修复考核测试任务**）（P1；2026-09-16 用户裁决立项）
+### 0ai. 重文件拆分（`host_exec.rs` 优先；**本轮狗粮线修复考核测试任务**）（P1；2026-09-16 用户裁决立项；**2026-09-16 闭合入账：产出合回主仓 orz `b682a67f`，33 → 32**）
 
 - 来源与设计输入：[`HEAVY_FILE_SPLIT_SURVEY`](audits/HEAVY_FILE_SPLIT_SURVEY_2026-09-13.md)（只读勘察，生产车道三候选）。用户 2026-09-16 裁决：**候选 1 `orz-loop/src/host_exec.rs`（9,184 行）立项 0ai**；候选 2（`gateway/transport.rs`，与深审 P2-7 同批）与候选 3（`journal/families.rs`）不在本项；休眠/血统车道六超重件不拆（OBS-PERMISSION-DUAL-IMPL 终局治理）。
 - 定案（工程化任务，非研究任务）：沿 `AUTH-CONTROLLER-SPLIT` 先例做 **`pub(crate)` 机械拆分**——**S1 切分图**（按职责域定模块边界与迁移清单）→ **S2 机械搬移**（行为不变：事件序列与 journal 哈希链不动、可见性收敛、无逻辑改写）→ **S3 回归核验**（orz-loop／orz-host／orz-assurance ＋ fmt/clippy ＋ 门禁）。验收＝**单文件 ≤10,000 行 ＋ 职责域单一 ＋ 行为不变**。
 - **考核测试定位（用户 2026-09-16 裁决）**：本项同时是**狗粮线修复的考核测试任务**——以真实工程任务考察 0ah S1（常驻滑窗＋压缩双轨＋500K/900K 提醒＋950K 兜底）在长会话下的实际表现。**不做严格 A/B 采样**（工程化任务不做研究式对照）；四件套读数与其余判据按实跑可得如实给出并显式标注单轮/少样本，**不作架构结论**（「单 run 不支撑架构结论」纪律仍适用）。执行者＝orz（隔离工作区＋题面 `task.txt`）；产出经 S3 复核后按正常批次合回主仓。
 - 前置（已完成 2026-09-16）：**载体重建 0.5.2**——源冻结基线 orz `a580eb08`（含 0ah S1 `61982a56`），双平台三件套＋载体换装＋manifest 重算＋门禁 `valid: true`；`GAP-ORZ-HOST-RESOURCE-SNAPSHOT-DROP`（`ea777918` 实测为基线祖先）随批闭合「重建待放行」。重建拦下 orz-tui 非穷尽 match 构建断裂（`a580eb08` 机械修复）。入口：[`052 重建与放行记录`](audits/052_CARRIER_REBUILD_AND_0AI_RELEASE_2026-09-16.md)。
 - **狗粮考核测试放行（2026-09-16 用户指示）**：隔离工作区 `D:\tb-eval\dogfood-0ai-20260916`（冻结基线 `a580eb08` 整链克隆）＋题面原文 `task.txt`＋`ORZ_MAX_WALLCLOCK=0` 无墙钟单轮 run（0.5.2 载体、`--real --allow-write --allow-shell --allow-network`＋ACAF fail-closed 三 env 实装配）；**run_id＝`RUN-CLI-6aa999d6`**（ACAF 票据实活，启动摩擦四项登记于重建记录 §6）；产出暂不提交/推送，判据读数待 run 完成收尾批登记。
-- **run 完成与收口（2026-09-16）**：46m47s、234 轮、2097 事件、`run_finished{completed}`；拆分 7 模块（最大 6,784 行 <10,000 ✓）＋独立复核全过（818/0/3、clippy 52→52 零新增、orz-host 串行 325/0/5）；考核读数：命中率 **96.70%** ✓、5 窗驱逐（折叠后 view 21–29K）、500K 纯提醒如实、零 offset 续读；**存档三键 N/A**（ACP 车道接线、`-p` 不可达）。**考出接线缺口三条**：`blackboard_write` 未进 `-p` 声明面（F5 根因）、增量归档 `-p` 不可达、门禁冻结克隆 F2；agent 摩擦 F1–F8。0ai 项**保持开放**（产出合回主仓留用户裁决，不动计数）。入口：[`0AI_DOGFOOD_ASSESSMENT_CLOSURE_2026-09-16`](audits/0AI_DOGFOOD_ASSESSMENT_CLOSURE_2026-09-16.md)。
+- **run 完成与收口（2026-09-16）**：46m47s、234 轮、2097 事件、`run_finished{completed}`；拆分 7 模块（最大 6,784 行 <10,000 ✓）＋独立复核全过（818/0/3、clippy 52→52 零新增、orz-host 串行 325/0/5）；考核读数：命中率 **96.70%** ✓、5 窗驱逐（折叠后 view 21–29K）、500K 纯提醒如实、零 offset 续读；**存档三键 N/A**（ACP 车道接线、`-p` 不可达）。**考出接线缺口三条**：`blackboard_write` 权限层 deny（F5 根因，旧摩擦残余）、增量归档 `-p` 不可达、门禁冻结克隆 F2；agent 摩擦 F1–F8。入口：[`0AI_DOGFOOD_ASSESSMENT_CLOSURE_2026-09-16`](audits/0AI_DOGFOOD_ASSESSMENT_CLOSURE_2026-09-16.md)。
+- **闭合入账（2026-09-16 用户裁决「将 0ai 产出合回主仓」）**：orz **`b682a67f`**（7 文件 +4603/−4461，`host_exec.rs → host_exec/tool_run.rs` rename 71%；合回前逐文件哈希对照 MATCH、合回后主仓复跑 orz-loop 818/0/3＋fmt 干净）；agent 报告随批入库 [`0AI_HOST_EXEC_SPLIT_REPORT_2026-09-16`](audits/0AI_HOST_EXEC_SPLIT_REPORT_2026-09-16.md)；manifest 1450 → 1456 条。**判据①单文件 ≤10,000 ②职责域单一 ③行为不变全部满足、闭合 33 → 32**。同批考出三条摩擦经用户裁决直接立项：**0aj／0ak／0al**（见下，32 → 35）。
+
+### 0aj. 黑板写权限层放行（`blackboard_write` ReadOnly deny）（P1；2026-09-16 用户裁决立项；0ai 狗粮考核测出，**旧摩擦残余**）
+
+- 来源与定性：0ae D0 已实现 `blackboard_write`（controller.rs:3100 无条件注入请求面），但 run `RUN-CLI-6aa999d6` journal 实证模型多次调用均 `permission_requested{risk: ReadOnly}` → **`permission_decision{decision: deny}`**——设计口径「ReadOnly 类所有策略自动放行」未在权限桥落地 ⇒ `plan_write` 事件 0 条、计划/笔记面恒空（agent 报告 F5 根因；模型自己在 notes 写下「blackboard_write 三次被门禁拒」）。**旧账脉络（用户 2026-09-16 指认）**：上一代狗粮 run `RUN-CLI-6aa7e0aa` 深审「模型面无黑板写工具」催生 0ae D0；本项为其在 `-p` 直执行车道的残余新形态（「符号在位≠端到端接线」族）。伴生：探针面 `main_agent_work_tools` 缺该工具（与请求面脱同步）。
+- 开放内容：权限桥对 `blackboard_write`（ReadOnly 类）按设计自动放行（各策略面核对）＋探针注册面补声明＋`plan_write` 事件族端到端钉子。
+- 判据：狗粮/无头 run 中 `blackboard_write` 调用 → `permission_decision=allow` → `plan_write` 出账 → `blackboard_read` 读回一致。
+- 计数：立项 **32 → 35** 三项之一。入口：[`0AI_DOGFOOD_ASSESSMENT_CLOSURE_2026-09-16` §3.1](audits/0AI_DOGFOOD_ASSESSMENT_CLOSURE_2026-09-16.md) / [`0ae 设计 D0`](CONTEXT_SOFT_GATE_MODEL_PARTICIPATED_COMPRESSION_DESIGN_2026-09-15.md) / TODO P1-0aj。
+- 关键词：blackboard_write、权限桥、ReadOnly 放行、旧摩擦、plan_write、探针面脱同步、0aj。
+
+### 0ak. 增量归档/三键存档 `-p` 车道不可达（P2；2026-09-16 用户裁决立项；0ai 狗粮考核测出）
+
+- 来源：run `RUN-CLI-6aa999d6` 跨 500K 里程碑（actual 501,845）但 `.gsa/archives/` 0 件——增量归档/三键存档接线在 **ACP 会话车道**（`orz-host/acp_server.rs` `incremental_archive_due`：「会话关闭＋500K 里程碑」两点），headless `-p`（狗粮/无头主用车道）不经过该路径；主仓 `D:\CLI\.gsa` 历史一致无 archives。0ah S1 判据「存档一致性（三键齐备率）」在无头车道不可判。
+- 开放内容：`-p` 车道里程碑增量归档接线（或显式登记「归档面 ACP-only」并把判据口径改到 ACP 车道）；三键齐备率判据随接线修复恢复可判。
+- 判据：无头长 run（≥500K）产出 `.gsa/archives/<session8>.json.gz` 且 `archive_keys` 三键齐备。
+- 计数：立项 **32 → 35** 三项之一。入口：[`0AI_DOGFOOD_ASSESSMENT_CLOSURE_2026-09-16` §2/§3.2](audits/0AI_DOGFOOD_ASSESSMENT_CLOSURE_2026-09-16.md) / [`0ah S1 任务书`](CONTEXT_DYNAMIC_SLIDER_S1_IMPLEMENTATION_TASK_2026-09-15.md) / TODO P2-0ak。
+- 关键词：增量归档、三键存档、archives、ACP 车道、-p 不可达、里程碑归档、0ak。
+
+### 0al. 门禁冻结克隆树漂移（`check_repository` 导入原始树）（P1；2026-09-16 用户裁决立项；0ai 狗粮考核测出）
+
+- 来源（agent 报告 F2，严重）：site-packages 存在指向原始树的可编辑安装 ⇒ 冻结克隆内按文档口径 `python scripts/check_repository.py`（`sys.path[0]`＝`scripts/`）会导入**原始树** `assurance.run_event_journal_validation`（其 `ROOT=D:\CLI`），与克隆根 `relative_to` 抛错（门禁崩）；**两侧路径同形时更会静默校验错误的树**——门禁证据面可信度问题。绕行＝`python -m scripts.check_repository` 或 `PYTHONPATH=<克隆根>`。
+- 开放内容：门禁入口按脚本位置显式锚定 ROOT（禁依赖 site-packages 可编辑安装）＋补「克隆内校验克隆树」钉子。
+- 判据：冻结克隆内 `python scripts/check_repository.py` 校验克隆自身且与 `-m` 形态读数一致。
+- 计数：立项 **32 → 35** 三项之一。入口：[`0AI_DOGFOOD_ASSESSMENT_CLOSURE_2026-09-16` §3.3](audits/0AI_DOGFOOD_ASSESSMENT_CLOSURE_2026-09-16.md) / [`check_repository.py`](../scripts/check_repository.py) / TODO P1-0al。
+- 关键词：门禁、冻结克隆、可编辑安装、静默错误树、ROOT 锚定、0al。
 - 入口：[`HEAVY_FILE_SPLIT_SURVEY`](audits/HEAVY_FILE_SPLIT_SURVEY_2026-09-13.md) / [`orz-loop/src/host_exec.rs`](../orz/crates/orz-loop/src/host_exec.rs) / TODO P1-0ai / 索引 `GAP-HEAVY-FILE-SPLIT`。
 - 关键词：重文件拆分、host_exec、狗粮考核测试、S1 切分图、机械搬移、行为不变、单文件 ≤10,000、0ai。
 
@@ -1001,7 +1026,7 @@ GLM F2 处置转排期（2026-09-06 用户裁决）：`orz-host/src/approval.rs`
 
 ## P2 — 生产化决策门
 
-开放项：7 / 8 / 11 / 12 / 13 / 14 / 15。已闭合 10（MECHANICAL-LAYER-MATH-CALCULUS）以单行核对保留。
+开放项：7 / 8 / 11 / 12 / 13 / 14 / 15 / 0ak。已闭合 10（MECHANICAL-LAYER-MATH-CALCULUS）以单行核对保留。
 
 ### 7. IMPL-CONTROL-FABRIC（`partial`）
 
