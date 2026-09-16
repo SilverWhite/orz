@@ -31,7 +31,15 @@
      `StoredConversation` 同源装配侧车并跨 500K 里程碑打包 `.gsa/archives/<session8>.json.gz`
      三键包；判定/打包/ARC 审计全部复用 ACP 车道原语（禁第二套实现）；跨调用对话恢复
      不开启（每次 `-p` 全新会话身份 `{ts}-cli`）；与 ACP 的口径差异（无 close 归档／
-     侧车仅到期落盘／journal 键显式注入 run id）见 §14.68。
+    侧车仅到期落盘／journal 键显式注入 run id）见 §14.68。
+   - 冻结版本补记（2026-09-16 追加 v1.70）：**0ah v8 实现更正批登记**——模型面投影层（本地面
+     零覆盖）／块表与块号去重／新阶梯 H1·T1／退役 192K rhythm 与 256K 视图兜底／按块回放面；
+     同日只读审查处置（P0×1／P1×2／P2×7／P3×1）与审查 R-12 余项处置（阶梯一轮只注入最高档／
+     T1 告知块自带截断后读数／`.gsa` 回放窗口裁定不扩白名单），见 §14.69。
+   - 冻结版本补记（2026-09-16 追加 v1.71）：**推送与分支口径登记**——把「远端/分支」简写
+     （`cli/feat/fusion-architecture`）当作 refspec 使用，曾在远端造出一条同名分支（已删：零
+     独有提交、四个历史 tip 全为主线祖先；子模块上游已改正），口径固化为 **`<remote>:<branch>`**
+     且推送必须给显式 refspec；NP1 安卓支线 `codex/np1-body` 同日入远端，见 §14.70。
    - 日期：2026-08-09（v1.1 补充裁决同日冻结）
 - 决策范围：产品 runtime 所有权、成熟组件复用、自研准入、主/子 Agent 架构、模型与 transport、工具与权限、检索证据、context/compaction、问询与活性守卫、journal/snapshot、隐私、UI、Windows 兼容性、Schema 演进与设计文档治理
 - 取代/修订：
@@ -3759,7 +3767,7 @@ ADR §3.6 正文修订随实施登记。
    省略 400），新增流式文本轮回归测试
    `generate_stream_text_round_preserves_empty_reasoning`；orz-loop
    559 / 0 / 3、fmt 干净、clippy 无新增；修复后最小题 6/6 通过。
-   对应源码 orz 8bcf18c（已推送 cli/feat/fusion-architecture）。登记于
+   对应源码 orz 8bcf18c（已推送 cli:feat/fusion-architecture）。登记于
    [初版发布包](../releases/orz-0.1.0-linux-x86_64/README.md)。
 
 8. **初版发布 0.1.0（2026-08-25；计数不动）**：双平台发布——Windows
@@ -3776,7 +3784,7 @@ ADR §3.6 正文修订随实施登记。
 
 9. **0.2.0 发布（2026-08-31；计数不动）**：双平台发布——版本号
    orz-bin 0.1.0 → 0.2.0（orz a539a21b，已推送
-   cli/feat/fusion-architecture）；Windows x86_64 release 构建
+   cli:feat/fusion-architecture）；Windows x86_64 release 构建
    （orz.exe 50,398,720 B / orz-signer.exe 6,737,920 B /
    orz-acaf-provision.exe 6,642,176 B，续编 9m51s）+ Linux musl
    三件套（orz 106,905,448 B / orz-signer 1,390,072 B /
@@ -3796,7 +3804,7 @@ ADR §3.6 正文修订随实施登记。
 
 10. **0.3.0 发布（2026-09-03；计数不动）**：双平台发布——版本号
     orz-bin 0.2.0 → 0.3.0（orz d4a37fdb，已推送
-    cli/feat/fusion-architecture）；Windows x86_64 release 构建
+    cli:feat/fusion-architecture）；Windows x86_64 release 构建
     （orz.exe 51,263,488 B / orz-signer.exe 6,737,920 B /
     orz-acaf-provision.exe 6,642,176 B，续编 2m37s）+ Linux musl
     三件套（orz 108,205,944 B / orz-signer 1,394,504 B /
@@ -3821,7 +3829,7 @@ ADR §3.6 正文修订随实施登记。
 
 11. **0.4.0 发布（2026-09-09；里程碑；计数不动）**：双平台发布——版本号
     orz-bin 0.3.2 → 0.4.0（orz a467d0f9，已推送
-    cli/feat/fusion-architecture；父仓库 6a97820）；Windows x86_64
+    cli:feat/fusion-architecture；父仓库 6a97820）；Windows x86_64
     release 构建（orz.exe 51,982,336 B / orz-signer.exe 6,737,920 B /
     orz-acaf-provision.exe 6,642,176 B，续编 54s）+ Linux musl 三件套
     （orz 109,066,552 B / orz-signer 1,396,200 B / orz-acaf-provision
@@ -5454,3 +5462,40 @@ registry/manifest 随批）→ S3 覆盖面矩阵与法官正反两测 → S4 �
    - ③ **不拍数**：§3.1 的 0.77 换算复测与 H1 消费率／T1 次数／回放使用率／工作点分位等真机读数，
      取数配方落于[`实施回执 §9`](../docs/audits/0AH_V8_IMPLEMENTATION_2026-09-16.md)
      （读 journal 即可离线算，不改契约面）。
+
+#### §14.70 推送与分支口径登记（2026-09-16，v1.71）
+
+**性质**：仓库卫生修正 ＋ 口径固化（**不改任何机制定性**；勘误与更正叙事不变）。
+
+1. **事故与成因（远端已修正）**：远端 `SilverWhite/CLI.git` 上曾存在一条名为
+   `cli/feat/fusion-architecture` 的分支（tip `0b2a8f5b`）。成因＝**把本库长期使用的简写当成推送
+   目标**：本库文档里 `cli/feat/fusion-architecture` 表示「远端 `cli` 的 `feat/fusion-architecture`
+   分支」，而 git 对「只给名字、不给冒号」的推送源有一档回退解析 `refs/remotes/<名字>` ⇒
+   `git push cli cli/feat/fusion-architecture` 会把**本地跟踪引用**当源，并以同名在远端建出
+   `refs/heads/cli/feat/fusion-architecture`；同一操作若带 `-u`（或 `--set-upstream`），还会把它写进
+   `branch.feat/fusion-architecture.merge` ⇒ 子模块 `git status` 长期显示 `ahead N`，且
+   **裸 `git push` 被 git 拒绝**并提示改用 `git push cli HEAD:cli/feat/fusion-architecture`
+   （故危害是"吵＋误导"，不是"误推"；路径已实测复核）。子模块 reflog 显示该引用有 **4 次
+   `update by push`**（2026-08-30×2、2026-09-13×2，每次推的都是当时的 orz HEAD）⇒ 同一命令被
+   反复复用，非一次性手滑。附带成本：orz 源码树自带 `.github/workflows/rustfmt.yml`（触发条件
+   `push`、不限分支）⇒ 这条错链每次被推都会额外跑一轮 CI。
+   **处置（2026-09-16，用户放行）**：① 删除该远端分支——删前核证 4 个历史 tip
+   （`b71881e1`／`1a9a63e3`／`a42fa0c3`／`0b2a8f5b`）**全部是当前 `feat/fusion-architecture` 的
+   祖先、零独有提交**（删除不损失任何内容，提交仍在主线历史内）；② 子模块上游由
+   `refs/heads/cli/feat/fusion-architecture` 改回 `refs/heads/feat/fusion-architecture`；
+   ③ 两仓剪枝陈旧跟踪引用（父仓 `origin/cli/…` 随删、子模块 `cli/cli/…` 随删）。
+   **远端终态**＝`main`（账本线）／`feat/fusion-architecture`（orz 源码线）／`codex/np1-body`
+   （安卓支线）三条。
+2. **口径固化（本节为权威写法）**：
+   - 表示「某远端上的某分支」一律写 **`<remote>:<branch>`**（例：`cli:feat/fusion-architecture`、
+     `origin:main`）；**旧写法 `cli/feat/fusion-architecture` 仅存于历史件，视为该简写，绝不可作为
+     refspec／分支名使用**。
+   - 推送一律给**显式 refspec**：`git push cli feat/fusion-architecture:feat/fusion-architecture`
+     （本地分支名与远端同名时可简写为 `git push cli feat/fusion-architecture`）；**不得**把
+     `git status` 输出里的 `<remote>/<branch>` 形态、或本文档的简写，直接粘进推送命令。
+   - 上游跟踪只在「远端分支名＝本地分支名」时建立；名不一致时应显式指定 refspec 而不是用 `-u`
+     固化一个不一致的名字。
+3. **安卓支线入远端（2026-09-16，用户指示「顺手推上去」）**：NP1 安卓线 `codex/np1-body`
+   （12 提交、170 文件，纯文档／设计／审计件，无二进制与密钥类改动）此前**仅存在于本地工作树**
+   （`.tools/np1-body`，无上游 ⇒ 无远端备份）⇒ 已推送并建立上游跟踪。该支线在远端触发父仓
+   `ci.yml`（`push` 不限分支）属预期。
