@@ -777,26 +777,26 @@ mod tests {
         ));
     }
 
-    /// 跨表护栏（0v S4 修复同刀）：控制器侧 `risk_class`(orz-loop `tool.rs`)
-    /// 判为 ReadOnly 的工具，宿主侧这里**不得**落进 `Edit` 兜底——否则无头
-    /// 部署会在权限门确定性拒绝（0v 的 `browser_control` 正是这样被判死的；
-    /// 此前 project_doc_index / browser_read 也是同形，见 review P1-1）。
-    /// 任一侧漏改即在此报错，把「双面修一面」变成机械可查。
+    /// 跨表护栏（0v S4 修复同刀；0aj-review 2026-09-16 改**表驱动**）：
+    /// 控制器侧 `risk_class`(orz-loop `tool.rs`) 判为 ReadOnly 的工具，宿主侧
+    /// 这里**不得**落进 `Edit` 兜底——否则无头部署会在权限门确定性拒绝
+    /// （`project_doc_index` / `browser_read` / `browser_control` / 第四例
+    /// `blackboard_write` 都是这一形态）。
+    ///
+    /// 0aj 的漏网直接原因就是本护栏当时是**手写样本表**、样本漏列该工具。
+    /// 现在遍历控制器侧单一源
+    /// [`ToolDispatcher::READ_ONLY_EXEMPT_TOOLS`]，并断言「代表参数表恰好覆盖
+    /// 该表」——新增显式 ReadOnly 工具只在那里登记一处，本护栏自动覆盖：
+    /// 缺 `access_kind` arm ⇒ 落 `Edit` ⇒ 此处报红；漏补代表参数 ⇒ 覆盖断言报红。
     #[test]
     fn read_only_tools_never_fall_into_the_edit_bucket() {
         use orz_loop::tool::ToolDispatcher;
 
+        // 单一源表每一项的代表调用参数（工具 → 一次合法代表调用）。
         let samples: &[(&str, serde_json::Value)] = &[
-            ("read_file", serde_json::json!({"target_file": "a"})),
-            ("list_dir", serde_json::json!({"target_directory": "/tmp"})),
-            ("grep", serde_json::json!({"pattern": "x"})),
             ("blackboard_read", serde_json::json!({"section": "plan"})),
             ("blackboard_action_write", serde_json::json!({"order": "x"})),
             ("plan_write", serde_json::json!({"plan": {}})),
-            // 0aj（2026-09-16）：本护栏样本表漏列 `blackboard_write`，正是
-            // 0ae D0 加工具后「同族第三例」得以漏网的原因——控制器侧
-            // `risk_class` 已 ReadOnly，本表却落 Edit。样本补齐（跨表护栏
-            // 的完整性即其有效性）。
             (
                 "blackboard_write",
                 serde_json::json!({"section": "plan", "content": "x"}),
@@ -819,6 +819,20 @@ mod tests {
                 serde_json::json!({"action": "navigate", "url": "https://example.com"}),
             ),
         ];
+        // 覆盖率断言（0aj-review）：样本表必须恰好覆盖单一源表——多一个
+        // 名字说明单一源已改名/删除，少一个说明漏补代表参数。
+        let sampled: std::collections::BTreeSet<&str> =
+            samples.iter().map(|(tool, _)| *tool).collect();
+        let single_source: std::collections::BTreeSet<&str> =
+            ToolDispatcher::READ_ONLY_EXEMPT_TOOLS
+                .iter()
+                .copied()
+                .collect();
+        assert_eq!(
+            sampled, single_source,
+            "guardrail samples must cover ToolDispatcher::READ_ONLY_EXEMPT_TOOLS exactly \
+             (add representative args for any new entry)"
+        );
         for (tool, args) in samples {
             assert_eq!(
                 ToolDispatcher::risk_class(tool),
@@ -831,6 +845,38 @@ mod tests {
                  (headless deployments would deny it deterministically)"
             );
         }
+        // 前缀族（`read_` / `list_` / `grep` / `search`）不在单一源表内：它们是
+        // 规则式（开放集）。引入新的前缀族工具名时必须同样在此补宿主映射；
+        // 未知名字保持 `Edit` fail-closed（见本文件 `access_kind` 末尾 else）。
+        for (tool, args) in [
+            ("read_file", serde_json::json!({"target_file": "a"})),
+            ("list_dir", serde_json::json!({"target_directory": "/tmp"})),
+            ("grep", serde_json::json!({"pattern": "x"})),
+        ]
+        .iter()
+        {
+            assert_eq!(
+                ToolDispatcher::risk_class(tool),
+                orz_loop::host::RiskClass::ReadOnly,
+                "prefix-family sample {tool} is expected to be ReadOnly"
+            );
+            assert!(
+                !matches!(access_kind(tool, args), AccessKind::Edit(_)),
+                "prefix-family {tool} is ReadOnly on the controller side but maps to the \
+                 Edit bucket here (headless deployments would deny it deterministically)"
+            );
+        }
+        // 反空转控制（0aj-review）：未映射的工具名必须**仍然落 `Edit`**
+        // （fail-closed 是这张表的设计），否则本护栏在「access_kind 无条件
+        // 放行」的实现下会退化成空转——四条同形缺陷的保护会静默消失。
+        assert!(
+            matches!(
+                access_kind("blackboard_write_unknown_probe", &serde_json::json!({})),
+                AccessKind::Edit(_)
+            ),
+            "an unmapped tool name must stay in the Edit bucket (fail-closed); \
+             otherwise this guardrail cannot discriminate"
+        );
     }
 
     // ── P1 scope enforcement ─────────────────────────────────────────────

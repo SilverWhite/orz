@@ -716,11 +716,13 @@ pub fn verify_ledger_fold_write_failed(events: &[Value]) -> Vec<String> {
 pub fn verify_policy_denial(events: &[Value]) -> Vec<String> {
     use toolsets::{ACAF_TICKETED_TOOLS, WORK_TOOLS, contains, is_retrieval_mode_gated_tool};
     // Python `_PERMISSION_GATED_TOOLS = _WORK_TOOLS | _RETRIEVAL_MODE_GATED_TOOLS`
-    // is an EXACT name set (26 entries, Py 2419) — NOT the prefix predicate
-    // `_is_retrieval_mode_gated_tool` (which additionally admits web_search/
-    // web_fetch/retrieve_project_*). Using the predicate here would let
-    // source=permission through on web-family tools where Python errors
-    // (S2b review P1, 2026-09-06).
+    // is an EXACT name set, derived from the two tables on both sides
+    // (`|WORK_TOOLS| + |RETRIEVAL_MODE_GATED_TOOLS|`; 0aj-review 2026-09-16:
+    // 24 + 4 = 28 after `blackboard_write` joined the work table, was 23 + 4 = 27)
+    // — NOT the prefix predicate `_is_retrieval_mode_gated_tool` (which
+    // additionally admits web_search/web_fetch/retrieve_project_*). Using the
+    // predicate here would let source=permission through on web-family tools
+    // where Python errors (S2b review P1, 2026-09-06).
     const RETRIEVAL_MODE_GATED_TOOLS: &[&str] = toolsets::RETRIEVAL_MODE_GATED_TOOLS;
     let permission_gated = |name: Option<&str>| {
         contains(WORK_TOOLS, name) || contains(RETRIEVAL_MODE_GATED_TOOLS, name)

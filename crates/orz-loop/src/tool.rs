@@ -30,6 +30,76 @@ impl ToolDispatcher {
         ToolDispatcher
     }
 
+    /// 0aj-review（2026-09-16）：控制器侧「显式命名」的 ReadOnly 工具表——
+    /// **单一源**。`risk_class` 与宿主侧孪生（`orz-host`
+    /// `permission.rs::access_kind` 的跨表护栏 `read_only_tools_never_fall_
+    /// into_the_edit_bucket`）都消费本表。
+    ///
+    /// 为什么单源：本形态（控制器 `risk_class` 已 ReadOnly、宿主 `access_kind`
+    /// 无 arm ⇒ 整工具落 `Edit` ⇒ 无头/死网关部署在权限门确定性 deny）在项目内
+    /// 已出现**四次**——`project_doc_index`（2026-08-08 review P1-1）／
+    /// `browser_read`（同轮）／`browser_control`（0x/0v S4，2026-09-11）／
+    /// `blackboard_write`（0aj，2026-09-16；见 ADR-0010 §14.58／§14.66／§14.67）。
+    /// 此前守护靠宿主侧**手写样本表**，样本漏列即漏网；现在新增显式 ReadOnly
+    /// 工具只在本表登记一处，宿主护栏遍历本表自动覆盖——缺 `access_kind` arm
+    /// 立即报红（护栏侧另断言「样本表恰好覆盖本表」，漏补代表参数同样报红）。
+    ///
+    /// 前缀族（`read_` / `list_` / `grep` / `search`）**不在此表**：它们是规则式
+    /// （开放集），宿主侧名字级映射须在引入新名前单独补 arm；未知名字保持
+    /// `Edit` fail-closed（见 `permission.rs` 末尾 else 分支注释）。
+    pub const READ_ONLY_EXEMPT_TOOLS: &[&str] = &[
+        // 2026-08-08 review closure (3-agent consensus): `blackboard_read`
+        // reads the controller's blackboard — a pure read with no side
+        // effects. The `blackboard_` prefix misses the `read_`/`list_`/
+        // `grep`/`search` prefixes, so without the explicit name it fell
+        // into LocalMutation: ReadOnly sessions declared it but the
+        // permission gate denied every call, and the tool-action section
+        // folded it under "edit". One fix corrects declaration filter,
+        // permission gate, action category and snapshot exclusion.
+        "blackboard_read",
+        // A6 §8 C.2 (2026-08-08): `compaction_whitelist_add` writes ONLY
+        // in-memory session state (the whitelist) — no file, no network, no
+        // external side effect — so it is ReadOnly-classed (declared and
+        // auto-allowed under every policy; its .gsa archive write is a
+        // mechanical best-effort audit append, not a worktree mutation).
+        "compaction_whitelist_add",
+        // P0-C S2 (2026-08-15): `blackboard_action_write` writes ONLY the
+        // in-memory blackboard action-bar slot (the order) — no file, no
+        // network, no external side effect — ReadOnly-classed like the
+        // whitelist write (side effects happen only at the mechanical
+        // issuance exit).
+        "blackboard_action_write",
+        // PLAN-FIRST 阶段 A (2026-08-16, ADR-0010 §14.17): `plan_write`
+        // writes ONLY the in-memory blackboard plan section — ReadOnly-classed
+        // like the whitelist/action-bar writes (the plan epoch archive write
+        // is a mechanical best-effort audit append, not a worktree mutation).
+        "plan_write",
+        // 0ae D0 (2026-09-15, 用户裁决 DP-6): `blackboard_write` writes ONLY
+        // the in-memory blackboard notes faces (plan/notes) — no file, no
+        // network, no external side effect — ReadOnly-classed like
+        // `plan_write` (the 8-tool face freeze's user-led explicit
+        // exception +1).
+        "blackboard_write",
+        // GAP-RETRIEVAL-TOOLS (2026-08-10): `project_doc_index` is a
+        // workspace-local read (discovery + query) — ReadOnly class
+        // (auto-allowed under every policy; the retrieval subagent's
+        // primary tool).
+        "project_doc_index",
+        // local_browser (2026-08-10): `browser_read` navigates the session's
+        // headless browser and returns page text — a pure read with no
+        // worktree/network-to-host side effects (the mode gate in the
+        // controller governs when it is reachable at all).
+        "browser_read",
+        // P0-0v (2026-09-10): `browser_control` navigates the session's
+        // headless browser and reports page state / bounded SERP results —
+        // a pure read in the same sense as `browser_read`. One classification
+        // fix repaired permission gate, action section and pre-mutation
+        // snapshot simultaneously. Future Phase 2 interactive actions
+        // (click/type/eval) must re-review this — the host side gates those
+        // by ACTION (unknown actions stay `Edit`).
+        "browser_control",
+    ];
+
     /// IP3a: evaluate the instruction provenance gate for the tool-call
     /// context. The user prompt is the routable `user` source; its content is
     /// scanned for injection patterns. `workspace_trust` feeds the
@@ -46,67 +116,15 @@ impl ToolDispatcher {
     }
 
     /// Mechanical risk classification for permission requests (IP3a helper).
+    ///
+    /// 判定 = 前缀族（`read_` / `list_` / `grep` / `search`）∪
+    /// [`Self::READ_ONLY_EXEMPT_TOOLS`]（显式命名单一源，宿主跨表护栏消费）。
     pub fn risk_class(tool_name: &str) -> RiskClass {
         if tool_name.starts_with("read_")
             || tool_name.starts_with("list_")
             || tool_name.starts_with("grep")
             || tool_name == "search"
-            // 2026-08-08 review closure (3-agent consensus): `blackboard_read`
-            // reads the controller's blackboard — a pure read with no side
-            // effects. The `blackboard_` prefix misses the `read_`/`list_`/
-            // `grep`/`search` prefixes, so without the explicit name it fell
-            // into LocalMutation: ReadOnly sessions declared it but the
-            // permission gate denied every call, and the tool-action section
-            // folded it under "edit". One fix corrects declaration filter,
-            // permission gate, action category and snapshot exclusion.
-            || tool_name == "blackboard_read"
-            // A6 §8 C.2 (2026-08-08): `compaction_whitelist_add` writes
-            // ONLY in-memory session state (the whitelist) — no file, no
-            // network, no external side effect — so it is ReadOnly-classed:
-            // declared and auto-allowed under every policy, never snapshot-
-            // triggering. (Its .gsa archive write is a mechanical best-
-            // effort audit append, not a worktree mutation.)
-            || tool_name == "compaction_whitelist_add"
-            // P0-C S2 (2026-08-15): `blackboard_action_write` writes ONLY
-            // the in-memory blackboard action-bar slot (the order) — no
-            // file, no network, no external side effect — so it is
-            // ReadOnly-classed like the whitelist write (declared and
-            // auto-allowed under every policy; side effects happen only at
-            // the mechanical issuance exit).
-            || tool_name == "blackboard_action_write"
-            // PLAN-FIRST 阶段 A (2026-08-16, ADR-0010 §14.17): `plan_write`
-            // writes ONLY the in-memory blackboard plan section — no file,
-            // no network, no external side effect — so it is ReadOnly-classed
-            // like the whitelist/action-bar writes (auto-allowed under every
-            // policy; the plan epoch archive write is a mechanical best-
-            // effort audit append, not a worktree mutation).
-            || tool_name == "plan_write"
-            // 0ae D0 (2026-09-15, 用户裁决 DP-6): `blackboard_write` writes
-            // ONLY the in-memory blackboard notes faces (plan/notes) — no
-            // file, no network, no external side effect — ReadOnly-classed
-            // like `plan_write` (auto-allowed under every policy; the 8-tool
-            // face freeze's user-led explicit exception +1).
-            || tool_name == "blackboard_write"
-            // GAP-RETRIEVAL-TOOLS (2026-08-10): `project_doc_index` is a
-            // workspace-local read (discovery + query) — ReadOnly class
-            // (auto-allowed under every policy; the retrieval subagent's
-            // primary tool).
-            || tool_name == "project_doc_index"
-            // local_browser (2026-08-10): `browser_read` navigates the
-            // session's headless browser and returns page text — a pure read
-            // with no worktree/network-to-host side effects. ReadOnly class
-            // (auto-allowed under every policy; the mode gate in the
-            // controller governs when it is reachable at all).
-            || tool_name == "browser_read"
-            // P0-0v (2026-09-10): `browser_control` navigates the session's
-            // headless browser and reports page state / bounded SERP results
-            // — a pure read in the same sense as `browser_read`. The
-            // retrieval write gate previously folded it into LocalMutation
-            // and refused `navigate`/`search` in the external lane; one
-            // classification fix repairs permission gate, action section and
-            // pre-mutation snapshot simultaneously. Future Phase 2
-            // interactive actions (click/type/eval) must re-review this.
-            || tool_name == "browser_control"
+            || Self::READ_ONLY_EXEMPT_TOOLS.contains(&tool_name)
         {
             RiskClass::ReadOnly
         } else if tool_name.starts_with("web_") {
@@ -344,6 +362,40 @@ mod tests {
             RiskClass::ReadOnly
         );
         assert!(!ToolDispatcher::modifies_files("plan_write"));
+    }
+
+    /// 0aj-review（2026-09-16）：**单一源自证**——`risk_class` 对
+    /// [`ToolDispatcher::READ_ONLY_EXEMPT_TOOLS`] 每一项都必须判 ReadOnly。
+    /// 宿主侧跨表护栏遍历的正是同一张表，所以「控制器侧 ReadOnly ⇒ 宿主侧
+    /// 不得落 Edit」这条不变量不再依赖手写样本的完整性（0aj 的漏网形态）。
+    #[test]
+    fn read_only_exempt_table_is_the_single_source_for_risk_class() {
+        let mut seen = std::collections::BTreeSet::new();
+        for tool in ToolDispatcher::READ_ONLY_EXEMPT_TOOLS {
+            assert!(
+                seen.insert(*tool),
+                "duplicate entry in READ_ONLY_EXEMPT_TOOLS: {tool}"
+            );
+            assert_eq!(
+                ToolDispatcher::risk_class(tool),
+                RiskClass::ReadOnly,
+                "{tool} is listed as a ReadOnly exemption but risk_class disagrees"
+            );
+            assert!(
+                !ToolDispatcher::modifies_files(tool),
+                "{tool} is ReadOnly-classed and must never trigger a pre-mutation snapshot"
+            );
+        }
+        // 前缀族与显式表互不重复（`search` 是前缀族里的唯一等值名）。
+        for tool in ToolDispatcher::READ_ONLY_EXEMPT_TOOLS {
+            assert!(
+                !tool.starts_with("read_")
+                    && !tool.starts_with("list_")
+                    && !tool.starts_with("grep")
+                    && *tool != "search",
+                "{tool} duplicates a prefix rule — keep the single source minimal"
+            );
+        }
     }
 
     #[test]

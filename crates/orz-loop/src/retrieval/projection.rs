@@ -657,6 +657,79 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    /// 0aj-review（2026-09-16）：**声明面分类护栏**——进入主车道声明面的工具
+    /// 必须要么是工作工具（⇒ 有机械链探针、按探针完整集投影），要么属于**规则式
+    /// 非工作族**（shell 族 / 外部检索族 / 交付 `submit` / 检索模式门工具）。
+    ///
+    /// 为什么需要：0aj 摩擦的另一半正是「`blackboard_write` 被无条件声明
+    /// （0ae D0）却不在 `WORK_TOOLS`」——声明面有、探针面无（该 run 的
+    /// `request_header_change` 7 件 vs `tool_availability_check` 5 件），记账
+    /// 不完整，且工作区不可读时它仍留在可见面（看得见摸不着）。此前无机械可查：
+    /// 本测试即补上该面——新增声明面工具若既不进 `WORK_TOOLS` 又不属上述族，
+    /// 此处报红（豁免是**族规则**，不是"再列一个名字就过"）。
+    #[tokio::test]
+    async fn declared_face_tools_are_work_tools_or_rule_based_non_work_families() {
+        use crate::tool_probe::is_main_agent_work_tool;
+
+        fn is_declared_non_work_family(name: &str) -> bool {
+            // shell 族：非工作工具，声明规则不受探针管辖（IP2a 名级排除）。
+            matches!(
+                name,
+                "bash" | "sh" | "cmd" | "powershell" | "pwsh" | "run_terminal_cmd"
+            )
+                // 外部检索族（web_search / web_fetch 及其变体）：检索 lane 自执行。
+                || crate::relay::is_web_retrieval_tool(name)
+                // 终端交付工具（交付期声明，机械链即交付出口本身）。
+                || name == "submit"
+                // 检索模式门工具（宿主路由检索族；主面由模式门与 R1 封存管辖）。
+                || name == "pdf_read"
+                || name.starts_with("retrieve_project_")
+        }
+        let assert_classified = |tool: &str, source: &str| {
+            assert!(
+                is_main_agent_work_tool(tool) || is_declared_non_work_family(tool),
+                "declared tool {tool} ({source}) is neither a work tool (no probe verdict) \
+                 nor a rule-based non-work family — add it to tool_probe::WORK_TOOLS with a \
+                 probe criterion, or classify it here"
+            );
+        };
+
+        // ① 真实 run 形态：跑一轮，取模型实际看到的声明面。
+        let dir = test_dir();
+        let host = MixedProjectionHost {
+            journal: JournalRecorder::new(dir.clone()),
+            interactive: false,
+            cwd: dir.clone(),
+        };
+        let fake = Arc::new(FakeProvider::from_texts(vec!["完成", "完成"]));
+        let gateway: Arc<dyn ModelGateway> = fake.clone();
+        let controller = AgentLoopController::with_gateway(gateway);
+        controller
+            .run_turn(&host, "hi", "RUN-PROJ-CLASS", MANIFEST, 0, None, None, None)
+            .await
+            .unwrap();
+        let received = fake.received_requests();
+        for tool in received[0].tools.iter().map(|t| t.name.as_str()) {
+            assert_classified(tool, "live run-start face");
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+
+        // ② 生产 `-p` 车道冻结样本（狗粮 run `RUN-CLI-6aa999d6` 的
+        //    `request_header_change.tools`，seq=5 实测 7 件）——0aj 漏网形态
+        //    的回归样本：`blackboard_write` 当时在这一面却不在探针面。
+        for tool in [
+            "grep",
+            "run_terminal_cmd",
+            "read_file",
+            "search_replace",
+            "blackboard_read",
+            "blackboard_write",
+            "submit",
+        ] {
+            assert_classified(tool, "frozen RUN-CLI-6aa999d6 header sample");
+        }
+    }
+
     /// 门禁观察 P1 修复（2026-08-30，方向 A）：主面封存 `browser_read`——
     /// P0-B 步骤 4（2026-08-14）"主 Agent 不执行检索任务、主车道投影移除
     /// browser_read"在 local_browser 主面上重新生效。relay::route 将
