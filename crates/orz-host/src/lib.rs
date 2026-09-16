@@ -1300,6 +1300,10 @@ impl OrzHost {
             {
                 self.run_reclaim_pass(tier.as_str(), false);
             }
+            // 0af 批连带（F-BE-12 残留完成，2026-09-16）：拒绝臂此前仍第二次
+            // 调 evaluate_for_volumes——两次探针可分歧（档位/回收用第一次、
+            // 拒绝信封用第二次），正是 F-BE-12 要消除的形态；改用上方唯一的
+            // 一次判定（钉子 resource_gate_judges_once_per_call_tool）。
             if let crate::resource_gate::GateDecision::Refuse {
                 code,
                 reason,
@@ -1307,7 +1311,7 @@ impl OrzHost {
                 tier,
                 snapshot,
                 volumes,
-            } = gate.evaluate_for_volumes(&targets, class)
+            } = gate_decision
             {
                 tracing::warn!(
                     tool = name,
@@ -2669,6 +2673,59 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    /// 0af 批连带钉子（F-BE-12 残留完成，2026-09-16）：资源门对每次工具调用
+    /// **只判一次**——修复前拒绝臂会第二次调 `evaluate_for_volumes`（同一探针
+    /// 被读两次，两次读数可跨档位分歧：档位/回收用第一次、拒绝信封用第二次，
+    /// 正是 review F-BE-12 要消除的形态）。单写入目标 ⇒ 一次判定恰好一次探针。
+    #[tokio::test]
+    async fn resource_gate_judges_once_per_call_tool() {
+        use crate::resource_gate::{
+            CapacityProbe, GIB, HostCapacitySnapshot, ResourceGate, SourceQuality,
+        };
+        use std::sync::Mutex;
+
+        struct Counting(Arc<Mutex<u32>>);
+        impl CapacityProbe for Counting {
+            fn probe(&self, _path: &std::path::Path) -> HostCapacitySnapshot {
+                *self.0.lock().unwrap() += 1;
+                HostCapacitySnapshot {
+                    collected_at_ms: 7,
+                    volume_free_bytes: GIB,
+                    volume_total_bytes: 100 * GIB,
+                    commit_limit_bytes: 32 * GIB,
+                    commit_used_bytes: 30 * GIB,
+                    source_quality: SourceQuality::Available,
+                }
+            }
+        }
+        let reads = Arc::new(Mutex::new(0u32));
+        let dir = test_dir();
+        let host = OrzHost::new(
+            JournalRecorder::new(dir.clone()),
+            &dir,
+            WorkspaceTrust::ObservedTrusted,
+        )
+        .unwrap()
+        .with_resource_gate(ResourceGate::new(Arc::new(Counting(Arc::clone(&reads)))));
+
+        let refused = host
+            .call_tool(
+                "run_terminal_cmd",
+                serde_json::json!({"command": "cargo build --release"}),
+                "c-once",
+            )
+            .await
+            .expect("refusal is an Ok tool result, not a host error");
+        assert_eq!(refused.exit_code, Some(1));
+        assert_eq!(
+            *reads.lock().unwrap(),
+            1,
+            "one heavy call ⇒ exactly one gate evaluation (one probe read)"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     /// 判据 3：读数不可得时重活被拒（fail-closed），轻活不受影响。
     #[tokio::test]
     async fn resource_gate_is_fail_closed_when_readings_are_unavailable() {
@@ -2759,8 +2816,12 @@ mod tests {
         let result = host.run_tests().await.expect("refusal is a test result");
         assert_eq!(result.exit_code, Some(1));
         assert!(!result.timed_out, "a refusal is not a timeout");
+        // 0af：run_tests 路径与汇点同口径的定案文案（轴标注按读数——本例
+        // 双轴同短 ⇒ 合并标注「内存/储存」）。
         assert!(
-            result.output.contains("refused before dispatch"),
+            result
+                .output
+                .contains("宿主机内存/储存资源即将耗尽，无法新增派发"),
             "{}",
             result.output
         );

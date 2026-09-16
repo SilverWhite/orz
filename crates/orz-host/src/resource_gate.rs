@@ -24,6 +24,11 @@
 //! and reported with every decision; the *actions* attached to the upper tiers
 //! (cache reclaim, tree kill) belong to §4.6/§4.8 and land in S2. What S1 owns
 //! is that the refusal happens **before dispatch** and carries its readings.
+//!
+//! 模型面 reason 的语言形态（0af，2026-09-15 用户定案）：**中文定案句 ＋ 英文
+//! 机械读数的混排是有意选择**——定案句用用户工作语言让模型不必解码术语即可
+//! 行动，读数（短少明细／`readings` 信封）保持英文机械原样以便逐字核对。
+//! 不做建议引擎／恢复指引（定案边界）。
 
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
@@ -36,6 +41,16 @@ pub const GIB: u64 = 1024 * 1024 * 1024;
 /// Stable refusal code (design §5: pre-issue family, same envelope shape as the
 /// budget / candidate / order refusals).
 pub const CODE_RESOURCE_INSUFFICIENT: &str = "resource_insufficient";
+
+// 0af（2026-09-15 用户定案）：拦截理由的模型面定案句，按**实际耗尽轴**标注
+// （内存＝commit、储存＝卷余量，双轴同短时合并标注）；机械读数以英文随附
+// （见模块头「混排是有意选择」）。Unknown 档（读数不可得、fail-closed 拒绝）
+// 用**变体句**——读数缺席时不得断言「即将耗尽」，防不实陈述。
+const DENIAL_HEADLINE_STORAGE: &str = "宿主机储存资源即将耗尽，无法新增派发，请寻找其他方案";
+const DENIAL_HEADLINE_MEMORY: &str = "宿主机内存资源即将耗尽，无法新增派发，请寻找其他方案";
+const DENIAL_HEADLINE_BOTH: &str = "宿主机内存/储存资源即将耗尽，无法新增派发，请寻找其他方案";
+const DENIAL_HEADLINE_UNREADABLE: &str =
+    "主机资源读数不可得，无法确认余量，已按 fail-closed 规则拒绝新增派发，请寻找其他方案";
 
 /// Heavy-work release: the target volume must have at least this much free.
 pub const HEAVY_RELEASE_FREE_BYTES: u64 = 8 * GIB;
@@ -1180,8 +1195,7 @@ impl ResourceGate {
             return GateDecision::Refuse {
                 code: CODE_RESOURCE_INSUFFICIENT,
                 reason: format!(
-                    "heavy action refused before dispatch — headroom cannot be verified \
-                     for {} (fail-closed). Nothing was started.",
+                    "{DENIAL_HEADLINE_UNREADABLE}（unreadable targets: {}）。Nothing was started.",
                     unreadable.join(", ")
                 ),
                 class,
@@ -1224,20 +1238,30 @@ impl ResourceGate {
             shortfalls.push(listed.join("; "));
         }
         if !commit_headroom_ok {
+            // 0af 审查补充：headroom 百分比一律**一位小数、向下取整**——整数
+            // 截断曾把实值 24.4% 显示成「25% < 25% required」的字面自相矛盾；
+            // 向下取整保证显示值 ≤ 真值，故拒绝理由里不可能出现「25.0% < 25%
+            // required」形态。字节直读同行随附。
+            let commit_free = snapshot.commit_free_bytes().unwrap_or(0);
             shortfalls.push(format!(
-                "commit headroom {}% < {}% required",
-                snapshot
-                    .commit_used_percent()
-                    .map(|used| 100u32.saturating_sub(used))
-                    .unwrap_or(0),
+                "commit headroom {} ({} of {}) < {}% required",
+                headroom_percent_floor(commit_free, snapshot.commit_limit_bytes),
+                gib(commit_free),
+                gib(snapshot.commit_limit_bytes),
                 HEAVY_RELEASE_COMMIT_HEADROOM_PERCENT
             ));
         }
+        // 0af：按实际耗尽轴标注定案句（储存＝卷余量、内存＝commit）。
+        let headline = match (!free_ok, !commit_headroom_ok) {
+            (true, true) => DENIAL_HEADLINE_BOTH,
+            (false, true) => DENIAL_HEADLINE_MEMORY,
+            (true, false) => DENIAL_HEADLINE_STORAGE,
+            (false, false) => unreachable!("both axes cleared — the allow arm returned above"),
+        };
         GateDecision::Refuse {
             code: CODE_RESOURCE_INSUFFICIENT,
             reason: format!(
-                "heavy action refused before dispatch — resource headroom insufficient \
-                 (tier {}): {}; {}. Nothing was started.",
+                "{headline}（tier {}；{}；readings: {}）。Nothing was started.",
                 tier.as_str(),
                 shortfalls.join("; "),
                 snapshot.describe()
@@ -1304,6 +1328,20 @@ pub fn run_active_process_limit() -> u32 {
 /// Render bytes as GiB with two decimals (audit text only).
 pub fn gib(bytes: u64) -> String {
     format!("{:.2} GiB", bytes as f64 / GIB as f64)
+}
+
+/// Commit headroom as a percentage string with exactly one decimal, **floored**
+/// (never rounded up). The refusal copy must never display a headroom that is
+/// at or above the required threshold: flooring keeps the displayed value ≤ the
+/// true value, so `25.0% < 25% required` (the literal self-contradiction the
+/// integer-truncation copy once produced) cannot be rendered. Integer math
+/// throughout — no float formatting in the mechanical face.
+fn headroom_percent_floor(free: u64, limit: u64) -> String {
+    if limit == 0 {
+        return "0.0%".to_string();
+    }
+    let tenths = (u128::from(free) * 1000 / u128::from(limit)) as u64;
+    format!("{}.{}%", tenths / 10, tenths % 10)
 }
 
 #[cfg(test)]
@@ -1582,12 +1620,73 @@ mod tests {
                     reason.contains("Nothing was started"),
                     "refusal must state that nothing ran: {reason}"
                 );
+                // 0af：定案句按轴标注——只有内存（commit）轴短 ⇒ 不带「储存」。
+                assert!(
+                    reason.contains("宿主机内存资源即将耗尽"),
+                    "memory-axis headline missing: {reason}"
+                );
+                assert!(
+                    !reason.contains("储存资源即将耗尽"),
+                    "storage axis is not short here: {reason}"
+                );
             }
             other => panic!("expected refusal, got {other:?}"),
         }
         // Free space below the release threshold, commit healthy.
         let gate = make_gate(StubProbe::available(7 * GIB, 32 * GIB, 4 * GIB));
         assert!(!gate.evaluate(&path(), ActionClass::Heavy).is_allowed());
+    }
+
+    /// 0af 审查补充钉子：headroom 百分比一位小数、向下取整——整数截断曾把
+    /// 实值 24.4% 显示成「commit headroom 25% < 25% required」的字面自相
+    /// 矛盾（真机 run 实录）。构造实值 24.375%（used 整数截断 75% ⇒ 旧文案
+    /// 恰好显示 25%）的读数：新文案必须显示 24.3% 且不出现「25% <」形态。
+    #[test]
+    fn refusal_headroom_percent_never_self_contradicts() {
+        let used = GIB * 242 / 10; // 24.2 GiB of a 32 GiB limit
+        let gate = make_gate(StubProbe::available(40 * GIB, 32 * GIB, used));
+        match gate.evaluate(&path(), ActionClass::Heavy) {
+            GateDecision::Refuse { reason, .. } => {
+                assert!(
+                    reason.contains("24.3%"),
+                    "true headroom 24.375% must floor-display as 24.3%: {reason}"
+                );
+                assert!(
+                    !reason.contains("25% <"),
+                    "the displayed headroom may never reach the required line: {reason}"
+                );
+                // 字节直读同行随附。
+                assert!(reason.contains("of 32.00 GiB"), "{reason}");
+            }
+            other => panic!("expected refusal, got {other:?}"),
+        }
+    }
+
+    /// 0af：双轴同短 ⇒ 定案句合并标注「内存/储存」。
+    #[test]
+    fn denial_headline_names_every_short_axis() {
+        let gate = make_gate(StubProbe::available(3 * GIB, 32 * GIB, 30 * GIB));
+        match gate.evaluate(&path(), ActionClass::Heavy) {
+            GateDecision::Refuse { reason, .. } => {
+                assert!(
+                    reason.contains("宿主机内存/储存资源即将耗尽"),
+                    "both axes short must merge into one headline: {reason}"
+                );
+            }
+            other => panic!("expected refusal, got {other:?}"),
+        }
+    }
+
+    /// 0af：`headroom_percent_floor` 的取整方向钉子——四舍五入陷阱值
+    /// （真值 24.99%）必须显示 24.9%，不得进位成 25.0%。
+    #[test]
+    fn headroom_percent_floor_never_rounds_up() {
+        assert_eq!(headroom_percent_floor(2_499, 10_000), "24.9%");
+        assert_eq!(headroom_percent_floor(2_500, 10_000), "25.0%");
+        assert_eq!(headroom_percent_floor(0, 10_000), "0.0%");
+        assert_eq!(headroom_percent_floor(9_999, 10_000), "99.9%");
+        assert_eq!(headroom_percent_floor(10_000, 10_000), "100.0%");
+        assert_eq!(headroom_percent_floor(1, 0), "0.0%", "unknown limit");
     }
 
     #[test]
@@ -1639,6 +1738,16 @@ mod tests {
                 assert!(
                     reason.contains("fail-closed"),
                     "reason must state the fail-closed rule: {reason}"
+                );
+                // 0af 审查补充：读数不可得的变体句——不得断言「即将耗尽」
+                //（读数缺席时这是不实陈述），须如实说「无法确认余量」。
+                assert!(
+                    reason.contains("读数不可得，无法确认余量"),
+                    "unknown tier must use the honest variant copy: {reason}"
+                );
+                assert!(
+                    !reason.contains("即将耗尽"),
+                    "unreadable readings must not claim exhaustion: {reason}"
                 );
             }
             other => panic!("expected refusal, got {other:?}"),
@@ -1847,6 +1956,11 @@ mod tests {
             } => {
                 assert_eq!(tier, ResourceTier::ReclaimDirect);
                 assert!(reason.contains("free"), "{reason}");
+                // 0af：只有卷余量短 ⇒ 定案句标「储存」轴。
+                assert!(
+                    reason.contains("宿主机储存资源即将耗尽"),
+                    "storage-axis headline missing: {reason}"
+                );
                 assert_eq!(volumes.len(), 2, "every probed volume is reported");
                 assert_eq!(volumes[1].path, elsewhere.display().to_string());
                 assert!(volumes[1].to_json()["readings"]["volume_free_bytes"] == 3 * GIB);
