@@ -9,7 +9,7 @@
 
 ## 未闭合计数（2026-09-16 口径）
 
-- 未闭合总数：**36 项**（口径日期 2026-09-16；最近变动：2026-09-16 **0am LIF 动力学升级线立项 35 → 36**（P1 轮次预算换算先行＋LIF3D 影子基座与观测判据预注册）、同日 **0ai 闭合入账 33 → 32**（产出合回主仓，orz `b682a67f`）与 **三项摩擦立项 32 → 35**（0aj 黑板写权限层 deny〔旧摩擦残余〕／0ak 增量归档 `-p` 车道不可达／0al 门禁克隆树漂移）。此前 2026-09-16：0ab 闭合 33 → 32、0ai 立项 32 → 33。完整计数流水已收缩入档：[`存档/backlog/BACKLOG_AND_PRIORITIES_FULL_2026-09-15.md`](../存档/backlog/BACKLOG_AND_PRIORITIES_FULL_2026-09-15.md)。TODO`[ ]` 明细含父/子项，计数以 BACKLOG 为准。本行与 P0/P1/P2 开放项清单、优先级总览表、TODO 路由/勾选、索引 §8 受 `check_repository.py` 计数一致性与行宽/行龄机械检查约束（0ab S1，2026-09-15 常驻）。）
+- 未闭合总数：**36 项**（口径日期 2026-09-16；最近变动：2026-09-16 **0am LIF 动力学升级线立项 35 → 36**（P1 轮次预算换算先行＋RLI 自研谐振基座与观测判据预注册）、同日 **0ai 闭合入账 33 → 32**（产出合回主仓，orz `b682a67f`）与 **三项摩擦立项 32 → 35**（0aj 黑板写权限层 deny〔旧摩擦残余〕／0ak 增量归档 `-p` 车道不可达／0al 门禁克隆树漂移）。此前 2026-09-16：0ab 闭合 33 → 32、0ai 立项 32 → 33。完整计数流水已收缩入档：[`存档/backlog/BACKLOG_AND_PRIORITIES_FULL_2026-09-15.md`](../存档/backlog/BACKLOG_AND_PRIORITIES_FULL_2026-09-15.md)。TODO`[ ]` 明细含父/子项，计数以 BACKLOG 为准。本行与 P0/P1/P2 开放项清单、优先级总览表、TODO 路由/勾选、索引 §8 受 `check_repository.py` 计数一致性与行宽/行龄机械检查约束（0ab S1，2026-09-15 常驻）。）
 
 
 - **2026-09-12（本轮）**：0v 闭合入账 **26 → 25**（用户裁决「不强硬取证」——判据 9/10 与 CAPTCHA 样本不再追、命中率与 chrome-error 分类偏差观察归档，S1–S4 全部闭合转 `implemented`）；**0z 真机资源安全边界立项登记 25 → 26**（P0，设计完成待放行实施——本轮真机自举两次满占用卡死处置：三个缺口 + 一个摩擦项）；**同日全项目只读深审入档**（[`FULL_PROJECT_DEEP_REVIEW`](audits/FULL_PROJECT_DEEP_REVIEW_2026-09-12.md)，登记不动计数——0v-C 两项 P0 被同日 orz `ba934af8` 修复闭合覆盖且触发源实锤与报告独立判断（URL 无痕改写）吻合、账本三处同步断裂（报告 P1-5）同日回补，其余 P1/P2 与体系面发现留用户裁决未立项，详见 [治理注记](#治理注记历史决策不新增独立实施项)）。
@@ -21,7 +21,7 @@
 | 优先级 | 含义 | 开放项（入口小节） |
 |---|---|---|
 | P0 | 当前工作集：设计已冻结，裁决后立即实施 | FUS-BENCHMARK-FULL-EXEC 验证③④⑤（0b）；0d 后续 3/4/5 S4 复验（0d）；THIN-HARNESS-REDESIGN-V2 余项（0j）；WINDOWS-HIGH-NIST-MAX-FRICTION ⑥⑦（0l）；GSA-SESSION-VOLUME-BOTTOM-LAYER S3/S4（0m）；GAP-APPROVAL-PROMPTER 延期项（0n）；S3/S4 集中实机验证批 T3–T6（0o）；检索子代理双车道 S4（0t）；官方 R4 15 题复跑（0u）；TB 4.0 摩擦探针审计 O1–O7（0w）；NP1 机械身体集成支线（0y）；真机资源安全边界 S4 复验（0z）；机械层即时回报与流式检索 S4（0ac）。已闭合 00/00a/0a/0c/0e/0f/0g/0h/0i/0k/0p/0q/0r/0s/0v/0x/1/1b/2/3/3a/3b 与 0d 主项以 `[x]` 单行核对保留在 P0 节各小节 |
-| P1 | 无需裁决，可与 P0 并行 | FUS-COMPONENT-REGISTER（4）；GAP-WINDOWS-EVIDENCE（5）；IMPL-DEEPSEEK-TRANSPORT / SEC-CREDENTIALS live 证据（6）；ORZ-SESSION-CONTEXT-MONITOR（6d）；历史卷 journal 全量 verifier 复扫（0aa，2026-09-13 立项，深审附带建议①）；0ae 上下文软门与模型参与压缩（0ae，2026-09-15 立项并落码，A/B 判据留 S4 实机）；0af 资源门拒绝文案明确化（0af，2026-09-15 立项，深审摩擦 B 注册）；动态上下文滑块常驻滑窗 S1 实施（0ah，2026-09-15 立项，S1 五连批落码提交，S2/尾批待放行）；0aj 黑板写权限层放行（0aj，2026-09-16 立项，旧摩擦残余——ReadOnly 应自动放行被 deny，0ai 狗粮考核测出）；0al 门禁冻结克隆树漂移（0al，2026-09-16 立项，0ai 狗粮考核测出，可静默校验错误树）；0am LIF 动力学升级线（0am，2026-09-16 立项，P1 轮次预算换算先行＋LIF3D 影子基座与观测判据预注册）。已闭合 0ai（2026-09-16，产出合回主仓 orz `b682a67f`） |
+| P1 | 无需裁决，可与 P0 并行 | FUS-COMPONENT-REGISTER（4）；GAP-WINDOWS-EVIDENCE（5）；IMPL-DEEPSEEK-TRANSPORT / SEC-CREDENTIALS live 证据（6）；ORZ-SESSION-CONTEXT-MONITOR（6d）；历史卷 journal 全量 verifier 复扫（0aa，2026-09-13 立项，深审附带建议①）；0ae 上下文软门与模型参与压缩（0ae，2026-09-15 立项并落码，A/B 判据留 S4 实机）；0af 资源门拒绝文案明确化（0af，2026-09-15 立项，深审摩擦 B 注册）；动态上下文滑块常驻滑窗 S1 实施（0ah，2026-09-15 立项，S1 五连批落码提交，S2/尾批待放行）；0aj 黑板写权限层放行（0aj，2026-09-16 立项，旧摩擦残余——ReadOnly 应自动放行被 deny，0ai 狗粮考核测出）；0al 门禁冻结克隆树漂移（0al，2026-09-16 立项，0ai 狗粮考核测出，可静默校验错误树）；0am LIF 动力学升级线（0am，2026-09-16 立项，P1 轮次预算换算先行＋RLI 自研谐振基座与观测判据预注册）。已闭合 0ai（2026-09-16，产出合回主仓 orz `b682a67f`） |
 | P2 | 生产化决策门：需用户裁决 | IMPL-CONTROL-FABRIC Slice 3/4（7）；OPS-PROTOCOL 裁剪与接线裁决（8）；MODEL-RESIDUAL-PRESSURE-FOLLOWUP（11）；COMPRESSION-LINGUISTIC-FORMAL-LAYER（12）；BLACKBOARD-CONVERSATION-SCOPE-FOLD B2–B4（13）；COMPACTION-FOLD-SNAPSHOT S4（14）；EVALUATION-CORPUS-FREEZE 评测语料冻结与首轮执行（15，2026-09-13 立项，深审 S-13 注册；S1/S2 同日完成）；GAP-EVAL-RESULT-SCHEMA-DRIFT 评测结果合约对齐（15 附，2026-09-13 立案并同日修复 `implemented`）；0ak 增量归档/三键存档 `-p` 车道不可达（0ak，2026-09-16 立项，0ai 狗粮考核测出；**同日裁决采 B＝`-p` 车道接归档，实施待排期**） |
 | P3 | 收尾 / 清理 | EVIDENCE-LOCAL-BROWSER（9）；GATE-CHAIN（10）；遗留小项（11） |
 | 条件触发 | 不占当前优先级 | ORZ-RECOVERY-TOOL-OUTCOME、ORZ-STAGNATION-TOOL-SIGNAL |
@@ -962,14 +962,15 @@ GLM F2 处置转排期（2026-09-06 用户裁决）：`orz-host/src/approval.rs`
 - 入口：[`HEAVY_FILE_SPLIT_SURVEY`](audits/HEAVY_FILE_SPLIT_SURVEY_2026-09-13.md) / [`orz-loop/src/host_exec.rs`](../orz/crates/orz-loop/src/host_exec.rs) / TODO P1-0ai / 索引 `GAP-HEAVY-FILE-SPLIT`。
 - 关键词：重文件拆分、host_exec、狗粮考核测试、S1 切分图、机械搬移、行为不变、单文件 ≤10,000、0ai。
 
-### 0am. LIF 动力学升级线（P1 轮次预算换算先行＋LIF3D 基座影子并行与观测判据预注册）（P1；2026-09-16 用户裁决立项；专利查新线引出）
+### 0am. LIF 动力学升级线（P1 轮次预算换算先行＋RLI 谐振漏积分基座影子并行与观测判据预注册）（P1；2026-09-16 用户裁决立项；专利查新线引出）
 
-- 来源：2026-09-16 专利查新线对 LIF 部件的结论（数学核心为教科书级在先技术、stuck 通道 0/102 无效果证据、生产形态为无消费者的参考系）经用户裁决转为升级线：LIF 必须长出消费者与在线自适应（「不可能只作离线判断组件」）。公式来源＝用户主项目 `D:\AGI`（只读提取，出处钉死 `models/lif3d_neurons.py@2026-05-24`＋`training/train_lif3d.py@2026-08-15`；2026-09-13 红线禁写不禁读）。
-- 开放内容（批序）：**S1 Part A 先行批**＝T̂→墙钟↔轮次换算面（明确给模型：resident 任务状态行＋SESSION PULL 面；1-2-5 阶梯保守取整、永不高于真值；不阻断；fail-soft；零契约面）；**S2 LIF3D 影子并行**＝三态 β-锚点公式族（V/A/θ_eff＋BCM/IP 局部塑性）旁路影子通道，生产 1D 不动、影子状态序列化入侧车、塑性默认关＋env 显式开、学习件不移植（fc/β_mod-A）、版本钉（AGI 演进不自动跟移）；**S3 102-run 回放对照**＝1D vs 3D 按预注册三判据评估＋C1–C4 重跑；**S4 真实任务摩擦探针一轮**（0ai 先例：单轮如实标注、不作架构结论）；**翻转裁决**＝按读数替换或降回 1D（含参数纪律 ADR 级修订＋ADR-0010 §14 转录）。
-- 判据（预注册，先于看数据冻结，详见提取稿 §7）：Q1 分离＝held-out episode ≥1 主特征 AUC ≥0.70；Q2 增量＝3D 对 [1D＋闭式二阶] ΔAUC ≥0.05 且 run 级 bootstrap 95%CI 下界 >0；Q3 及时＝lead time ≥3 轮。run 为独立样本单位；主特征集预注册（err/prog 通道）；全部读数含负结果如实入档。
-- 翻转期待裁：通道升 3D 范围（建议 err/prog 先行）／不应期语义（A+θ_eff 替换 vs 并存）／二阶 stuck 通道去留（建议 v1 并存、V2 按读数）。
-- 计数：立项 **35 → 36**。入口：[`LIF3D_BASE_PORT_EXTRACTION_2026-09-16`](LIF3D_BASE_PORT_EXTRACTION_2026-09-16.md) / [`LIF_DYNAMICS_PROJECTION_AND_ROUND_BUDGET_DESIGN_2026-09-16`](LIF_DYNAMICS_PROJECTION_AND_ROUND_BUDGET_DESIGN_2026-09-16.md) / 索引 `AUTH-LIF3D-BASE-SHADOW` / TODO P1-0am。
-- 关键词：LIF3D、影子并行、分化特征、判据预注册、β 锚点、BCM/IP 塑性、轮次预算换算、观测判据、0am。
+- 来源：2026-09-16 专利查新线对 LIF 部件的结论（数学核心为教科书级在先技术、stuck 通道 0/102 无效果证据、生产形态为无消费者的参考系）经用户裁决转为升级线：LIF 必须长出消费者与在线自适应（「不可能只作离线判断组件」）。基座公式＝**orz 自研 RLI 谐振漏积分**（二阶欠阻尼通道族；独立推导、自含自洽，与任何外部公式族无关；[`RLI_RESONANT_CHANNEL_BASE_DESIGN_2026-09-16`](RLI_RESONANT_CHANNEL_BASE_DESIGN_2026-09-16.md)）。
+- **专利线关闭（2026-09-16 用户裁决）**：0am 相关发明（RLI 基座及全部 orz 自研机制）**不申请专利**——财产价值评估为零（窄权利要求、无执行能力、开源即防御性公开且免费）；**开源改为无条件动作**（无学校分支、无申请日时序锁——该锁随专利线关闭作废）；Q2 判据门仅服务论文与证据问题。
+- 开放内容（批序）：**S1 Part A 先行批**＝T̂→墙钟↔轮次换算面（明确给模型：resident 任务状态行＋SESSION PULL 面；1-2-5 阶梯保守取整、永不高于真值；不阻断；fail-soft；零契约面）；**S2 RLI 影子并行**＝二阶欠阻尼通道族（u/v 状态闭式精确更新、解析包络收敛确认、节律计数）＋分位数自校准阈值，旁路影子通道，生产 1D 不动、影子整体 env 门控、影子状态序列化入侧车；**S3 102-run 回放对照**＝1D vs RLI 按预注册三判据评估＋C1–C5 证伪门；**S4 真实任务摩擦探针一轮**（0ai 先例：单轮如实标注、不作架构结论）；**翻转裁决**＝按读数替换或维持 1D（含参数纪律 ADR 级修订＋ADR-0010 §14 转录）。
+- 判据（预注册，先于看数据冻结）：Q1 分离＝held-out episode ≥1 主特征 AUC ≥0.70；Q2 增量＝RLI 对 [现行 1D 基座＋闭式二阶] ΔAUC ≥0.05 且 run 级 bootstrap 95%CI 下界 >0；Q3 及时＝lead time ≥3 轮。run 为独立样本单位；主特征集预注册（err/prog 通道锚点）；全部读数含负结果如实入档。
+- 翻转期待裁：通道升 RLI 范围（建议 err/prog 先行）／复位语义（RLI 无复位连续状态替换 full-reset+refractory）／现行二阶 stuck 闭式通道去留（RLI 的 v/E 锚点原生覆盖其语义，建议 v1 并存、翻转批裁决）。
+- 计数：立项 **35 → 36**。入口：[`RLI_RESONANT_CHANNEL_BASE_DESIGN_2026-09-16`](RLI_RESONANT_CHANNEL_BASE_DESIGN_2026-09-16.md) / [`LIF_DYNAMICS_PROJECTION_AND_ROUND_BUDGET_DESIGN_2026-09-16`](LIF_DYNAMICS_PROJECTION_AND_ROUND_BUDGET_DESIGN_2026-09-16.md) / 索引 `AUTH-RLI-BASE-SHADOW` / TODO P1-0am。
+- 关键词：RLI、谐振漏积分、影子并行、分化特征、判据预注册、分位数自校准、预期锚点、包络检测、节律检测、轮次预算换算、0am。
 
 ### 0ac. GAP-MECH-IMMEDIATE-FEEDBACK 机械层即时回报与流式检索（P0；2026-09-13 用户裁决登记；**S1 探针 + S2 机器合约完成 2026-09-13（用户放行「直接进行」）；S3①② 部分落地（2026-09-13），2026-09-14 审记登记 G1–G3；同轮修复：G1/G2 已闭合（orz `96d2b263`）；2026-09-15 ①-b 收尾（`1deeba75`：M2/M1/M3/⑥/③）＋①-a 检索补强（`7e151ed1`：G1–G4）＋审查修复批（`183fbb08`：M1 B2-drain 接线补全、⑥ empty_result 退出确定失败计数、探针 chain_detail 接线、代理默认链 bing 领头止损序、`ORZ_RETRIEVAL_PROXY=none` 传输层显式关）全落 ⇒ S3 出口达成、S4 待放行**）
 
