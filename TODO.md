@@ -834,7 +834,8 @@ GLM F2 处置转排期（2026-09-06 用户裁决）：`orz-host/src/approval.rs`
 
 - [ ] `-p` 车道里程碑增量归档接线（现接线在 ACP 车道 `acp_server.rs`；跨 500K 无 archives 产出）或显式登记「归档面 ACP-only」并改判据口径。
 - [ ] 判据：无头长 run（≥500K）产出 `.gsa/archives/<session8>.json.gz` 且 `archive_keys` 三键齐备。入口：[BACKLOG 0ak](docs/BACKLOG_AND_PRIORITIES.md) / [`0AI_DOGFOOD_ASSESSMENT_CLOSURE` §2/§3.2](docs/audits/0AI_DOGFOOD_ASSESSMENT_CLOSURE_2026-09-16.md)。
-- [ ] **取证完成（2026-09-16，留用户裁决）**：打包内容＝**对话侧车原文**（`package_session_archive`），而 `-p` 一次性 run 不写对话侧车（GAP-CONVERSATION-RESTORE）⇒ 该车道**无归档源**（非"漏接一个调用"）。**选项 A**＝登记「归档面 ACP-only」＋0ah S1 存档三键判据口径改挂 ACP 车道（零代码）；**选项 B**＝为一次性 run 引入对话持久化（会话身份＋侧车落盘＋里程碑归档，触设计边界）。入口：[`0aj/0al 修复与 0.5.3 载体` §4](docs/audits/0AJ_0AL_FRICTION_FIX_AND_053_CARRIER_2026-09-16.md)。
+- [ ] **取证完成（2026-09-16）**：打包内容＝**对话侧车原文**（`package_session_archive`），而 `-p` 一次性 run 不写对话侧车（GAP-CONVERSATION-RESTORE）⇒ 该车道**无归档源**（非"漏接一个调用"）。**选项 A**＝登记「归档面 ACP-only」＋0ah S1 存档三键判据口径改挂 ACP 车道（零代码）；**选项 B**＝为一次性 run 引入对话持久化（会话身份＋侧车落盘＋里程碑归档）。
+- [ ] **用户裁决（2026-09-16，零代码登记）：采 B，实施待另行排期放行**。理由（用户口径）：「UI 部分估计还要相当一段时间才能进行适配」⇒ 归档能力不押 ACP/UI 车道。实施面要点：一次性 run 会话身份／侧车按既有 `StoredConversation` 形态（禁第二套对话格式）／里程碑判定与打包复用 `incremental_archive_due`＋`package_session_archive`／**设计边界登记**（触及「one-shot run 不携带会话对话」⇒ ADR 级登记＋§14 转录）／届时 0ah S1 三键判据在无头车道恢复可判；**判据行（上）届时可勾**。入口：[`0ak 裁决 §4.3`](docs/audits/0AJ_0AL_FRICTION_FIX_AND_053_CARRIER_2026-09-16.md)。
 
 ### 0al 门禁冻结克隆树漂移（`check_repository` 导入原始树；P1；2026-09-16 立项，0ai 考核测出）
 
