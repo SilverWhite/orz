@@ -1077,8 +1077,11 @@ mod tests {
         assert_eq!(
             declared,
             vec![
-                "bash",             // non-work tool — untouched
-                "blackboard_write", // 0ae D0: in-memory write, no workspace probe
+                // 0aj（2026-09-16）：`blackboard_write` 现已入工作工具表并
+                // 走 `probe_storage`（黑板/台账/journal 的持久化面均在会话
+                // 工作区 `.gsa/` 下，与 `blackboard_read` 同判据）⇒ 工作区
+                // 不可读时与其余工作工具一同从可见面移除，不再豁免。
+                "bash", // non-work tool — untouched
             ],
             "unreadable workspace removes every work tool: {declared:?}"
         );

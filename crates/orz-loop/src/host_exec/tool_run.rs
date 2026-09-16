@@ -4214,6 +4214,106 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    /// 0aj（2026-09-16，狗粮 run RUN-CLI-6aa999d6 摩擦 F5 端到端钉子）：
+    /// `blackboard_write` 的判据链——**调用 → 执行 → `plan_write` 出账 →
+    /// `blackboard_read` 读回一致**。
+    ///
+    /// 分工说明：权限门那一半（`risk_class`=ReadOnly 与权限桥 `access_kind`
+    /// 两表必须同向）钉在 orz-host `permission.rs`
+    /// （`access_kind_mapping` / `read_only_tools_never_fall_into_the_edit_bucket`
+    /// / `controller_owned_tools_auto_allow_under_every_policy`——本测试宿主
+    /// 的 AllowOnce 是测试 seam，不能证伪权限门）。本测试钉的是**另一半**：
+    /// 只要调用到达执行层，写就必须落黑板、出 `plan_write` 事件、且能被
+    /// `blackboard_read` 读回——防「符号在位≠端到端接线」族再次以别的形态
+    /// 复发（0ae D0 加工具时缺的正是这条链的可判性）。
+    #[tokio::test]
+    async fn blackboard_write_lands_plan_write_event_and_reads_back() {
+        let dir = test_dir();
+        let journal = JournalRecorder::new(dir.clone());
+        let host = TestHost {
+            journal,
+            tool_result: None,
+        };
+        let fake = Arc::new(FakeProvider::new(vec![
+            // 轮 1：模型写笔记（notes 域）。
+            ScriptedResponse::tool_calls(vec![ToolCall {
+                name: "blackboard_write".to_string(),
+                arguments: serde_json::json!({
+                    "section": "notes",
+                    "content": "0aj 钉子：写黑板必须可回读",
+                }),
+                call_id: "call-bbw-1".to_string(),
+            }]),
+            // 轮 2：模型回读同一分区。
+            ScriptedResponse::tool_calls(vec![ToolCall {
+                name: "blackboard_read".to_string(),
+                arguments: serde_json::json!({ "section": "notes" }),
+                call_id: "call-bbr-1".to_string(),
+            }]),
+            ScriptedResponse::text("完成"),
+            ScriptedResponse::text("完成"),
+        ]));
+        let gateway: Arc<dyn ModelGateway> = fake.clone();
+        let controller = AgentLoopController::with_gateway(gateway);
+        controller
+            .run_turn(
+                &host,
+                "写笔记并回读",
+                "RUN-BBW",
+                MANIFEST,
+                0,
+                None,
+                None,
+                None,
+            )
+            .await
+            .unwrap();
+
+        // ① 写入成功：`tool_completed{blackboard_write, exit_code 0}`。
+        let completed: Vec<serde_json::Value> = events(&dir)
+            .into_iter()
+            .filter(|e| e.event_type == EventType::ToolCompleted)
+            .map(|e| e.payload)
+            .collect();
+        assert!(
+            completed.iter().any(|p| {
+                p["tool"] == serde_json::json!("blackboard_write")
+                    && p["exit_code"] == serde_json::json!(0)
+                    && p["section"] == serde_json::json!("notes")
+            }),
+            "blackboard_write must complete with exit_code 0: {completed:?}"
+        );
+        // ② `plan_write` 出账（0ae D0 复用该事件族 + section 扩展）。
+        let plan_writes: Vec<serde_json::Value> = events(&dir)
+            .into_iter()
+            .filter(|e| e.event_type == EventType::PlanWrite)
+            .map(|e| e.payload)
+            .collect();
+        assert!(
+            plan_writes.iter().any(|p| {
+                p["plan_id"] == serde_json::json!("blackboard_write")
+                    && p["section"] == serde_json::json!("notes")
+                    && p["outcome"] == serde_json::json!("accepted")
+            }),
+            "blackboard_write must journal a plan_write event: {plan_writes:?}"
+        );
+        // ③ 回读一致：第二轮的 `blackboard_read(section=notes)` 工具消息
+        //    必须带回同一条内容（读回面 = 模型实际拿到的那一段）。
+        let received = fake.received_requests();
+        let read_back = received
+            .iter()
+            .flat_map(|r| r.messages.iter())
+            .filter(|m| m.role == Role::Tool)
+            .map(|m| m.content.clone())
+            .find(|c| c.contains("0aj 钉子：写黑板必须可回读"));
+        assert!(
+            read_back.is_some(),
+            "blackboard_read(section=notes) must return the written note verbatim"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     /// TER T1.11 (W-F13b)：截断的 run_terminal_cmd 输出在 tool_completed
     /// 落 output_truncated/total_bytes/output_object_id（schema T0.2 配对：
     /// object_id ⇒ truncated + total_bytes）。

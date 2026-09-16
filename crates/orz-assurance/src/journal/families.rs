@@ -50,6 +50,10 @@ pub(crate) mod toolsets {
         "run_tests",
         "ask_user_question",
         "blackboard_read",
+        // 0aj（2026-09-16）：`blackboard_write`（0ae D0 模型写入面）入工作
+        // 工具表——与 orz-loop `tool_probe::WORK_TOOLS` 及 Python
+        // `_WORK_TOOLS` 三处同批（探针面与请求面脱同步的修复面）。
+        "blackboard_write",
         "todo_write",
         "update_goal",
         "enter_plan_mode",

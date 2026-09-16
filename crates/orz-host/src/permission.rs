@@ -581,6 +581,16 @@ fn access_kind(tool: &str, args: &serde_json::Value) -> AccessKind {
         // writes ONLY the in-memory blackboard plan section — the same
         // controller-owned in-memory class as the action-bar write.
         || tool == "plan_write"
+        // 0aj（2026-09-16，狗粮 run RUN-CLI-6aa999d6 摩擦 F5）：`blackboard_write`
+        // （0ae D0，设计稿 docs/CONTEXT_SOFT_GATE_MODEL_PARTICIPATED_COMPRESSION_DESIGN_2026-09-15.md
+        // §3 用户裁决 DP-6）写 ONLY 内存黑板的
+        // plan/notes 两域——无文件、无网络、无外部副作用，与 `plan_write`
+        // 同族。本 arm 缺失时它落进下方 Edit else 分支 ⇒ 无头 `-p`／死网关
+        // 部署在权限门确定性 deny（journal `risk: ReadOnly` → `deny`，
+        // 模型计划/笔记面恒空、`plan_write` 事件 0 条）。与 review P1-1
+        // （`blackboard_read`）、0x/0v S4（`browser_control`）同形第三例：
+        // 控制器 `risk_class` 与权限桥 `access_kind` 两表必须同时改。
+        || tool == "blackboard_write"
     {
         // Controller-owned in-memory tools (A3 blackboard_read / A6 §8 C.2
         // compaction_whitelist_add): NO external side effect — no file, no
@@ -721,6 +731,20 @@ mod tests {
             ),
             AccessKind::Read(None)
         ));
+        // 0aj（2026-09-16，狗粮 run RUN-CLI-6aa999d6 摩擦 F5 根因钉）：
+        // `blackboard_write` 写的是**内存黑板**（plan/notes），无文件／网络／
+        // 外部副作用，控制器侧 `risk_class` 已定 ReadOnly（0ae D0）。本表
+        // 缺 arm 时它会落进 Edit else 分支 ⇒ 无头 `-p`/死网关部署在权限门
+        // 确定性拒掉每一次调用（journal：`risk: ReadOnly` → `deny`；模型
+        // 计划/笔记面恒空）。与 review P1-1（`blackboard_read`）、0x/0v S4
+        // （`browser_control`）**同形第三例**——两表必须同时改。
+        assert!(matches!(
+            access_kind(
+                "blackboard_write",
+                &serde_json::json!({"section": "notes", "content": "笔记"})
+            ),
+            AccessKind::Read(None)
+        ));
         // P0-0v S4 修复 (2026-09-11): browser_control must NOT fall into the
         // Edit else-branch — headless deployments deny Edit deterministically
         // (0x/0v S4: 3/3 `search` calls denied). Every现行 action is a read or
@@ -769,6 +793,14 @@ mod tests {
             ("blackboard_read", serde_json::json!({"section": "plan"})),
             ("blackboard_action_write", serde_json::json!({"order": "x"})),
             ("plan_write", serde_json::json!({"plan": {}})),
+            // 0aj（2026-09-16）：本护栏样本表漏列 `blackboard_write`，正是
+            // 0ae D0 加工具后「同族第三例」得以漏网的原因——控制器侧
+            // `risk_class` 已 ReadOnly，本表却落 Edit。样本补齐（跨表护栏
+            // 的完整性即其有效性）。
+            (
+                "blackboard_write",
+                serde_json::json!({"section": "plan", "content": "x"}),
+            ),
             (
                 "compaction_whitelist_add",
                 serde_json::json!({"content": "x"}),
@@ -1071,6 +1103,15 @@ mod tests {
                 (
                     "compaction_whitelist_add",
                     serde_json::json!({"content": "任务背景"}),
+                ),
+                // 0aj（2026-09-16，狗粮 run RUN-CLI-6aa999d6 摩擦 F5）：同族
+                // 第三例——`risk_class` 侧已把 `blackboard_write` 定为
+                // ReadOnly（0ae D0），但本表的 arm 缺失 ⇒ 无头 `-p` 车道
+                // 每次调用确定性 deny（journal `risk: ReadOnly` →
+                // `decision: deny`），模型计划/笔记面恒空。
+                (
+                    "blackboard_write",
+                    serde_json::json!({"section": "notes", "content": "笔记"}),
                 ),
             ] {
                 let decision = bridge
