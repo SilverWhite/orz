@@ -1865,7 +1865,12 @@ def _verify_v02_recovery_truncation(events: list[dict[str, Any]]) -> list[str]:
     a `context_recovery_truncated` event is the controller's pre-request
     recovery pre-check — it must appear after `prompt_submitted` and before
     the first `model_request`, and it must drop at least one whole round
-    (a no-op recovery truncation is never journaled)."""
+    (a no-op recovery truncation is never journaled).
+
+    滑块上下文 v8 实现批（2026-09-16，审查 R-3）：**判定规则不变**（历史
+    journal 仍按上句校验），但该事件**生产零写入**——D2-2 恢复预检随勘误批
+    退役（本地面＝单对话全量，恢复后的体积约束由 loop-top 的模型面阶梯/守卫
+    在发请求前承担）。"""
     errors: list[str] = []
     seen_model_request = False
     for index, event in enumerate(events):
@@ -1919,6 +1924,11 @@ def _verify_v02_context_compressed(events: list[dict[str, Any]]) -> list[str]:
     ——语义摘要路径同样不得 `summary_incomplete`），reason 增
     `model_selected`（模型在窗口之外自选压缩；窗口收口仍用
     `context_scale_window`，两条路径由 mode 区分）。"""
+    # 滑块上下文 v8（2026-09-16 勘误批）：**闭枚举值不变**——生产写入面收敛为
+    # `model_selected`／`context_scale_window`（按块压缩：被压块移出**模型面**、
+    # 本地面逐字全量留存、可按块回放）与 `session_end`（检索/grill 车道与会话
+    # 收尾的机械模板压缩）；`rhythm`／`fallback`／`context_scale` 仅存于历史
+    # journal（对应触发随勘误退役）。判定规则逐条不变（parity 不受影响）。
     errors: list[str] = []
     for index, event in enumerate(events):
         if not _is_v02(event) or event.get("event_type") != "context_compressed":

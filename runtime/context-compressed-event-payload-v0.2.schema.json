@@ -7,12 +7,12 @@
   "additionalProperties": false,
   "properties": {
     "trigger_tokens": {
-      "description": "Measured prompt tokens of the previous (collapsed) model round — the value that crossed the trigger. v7 (S1 修订批): the model_summary path reports the ACTUAL-context estimate (全量会话估算 chars/2) instead, because the semantic track is triggered by the model's own summary block (model_selected) or the actual-context 900K window (context_scale_window), not by a prompt-token crossing.",
+      "description": "Measured prompt tokens of the previous (collapsed) model round — the value that crossed the trigger. v7 (S1 修订批): the model_summary path reports the ACTUAL-context estimate (全量会话估算 chars/2) instead, because the semantic track is triggered by the model's own summary block (model_selected) or the actual-context 900K window (context_scale_window), not by a prompt-token crossing. **v8 滑块勘误（2026-09-16）**: 按块压缩（mode=model_summary/mechanical，reason=model_selected/context_scale_window）报的读数＝**模型面估算**（投影层装配出的请求视图 chars/2）——本地面（`messages`）**不再被压缩 drain**，逐字原文全量留存并可**按块回放**。",
       "type": "integer",
       "minimum": 0
     },
     "target_tokens": {
-      "description": "Kept-conversation estimate after the summary (marker + preamble + recent tail).",
+      "description": "Kept-conversation estimate after the summary (marker + preamble + recent tail). v8：按块压缩路径＝压缩后的**模型面估算**（投影层视图；本地面不受影响）。",
       "type": "integer",
       "minimum": 0
     },
@@ -27,26 +27,26 @@
       "minimum": 0
     },
     "messages_dropped": {
-      "description": "Messages removed from the conversation.",
+      "description": "Messages removed from the conversation. **v8 勘误（2026-09-16）**：按块压缩路径＝从**模型面**移出的消息条数（被压缩/被截断块的区间）——本地面 `messages` 一条不删。",
       "type": "integer",
       "minimum": 0
     },
     "messages_kept": {
-      "description": "Messages remaining after the summary plus the injected marker.",
+      "description": "Messages remaining after the summary plus the injected marker. **v8 勘误（2026-09-16）**：按块压缩路径＝压缩后**模型面**的消息条数。",
       "type": "integer",
       "minimum": 0
     },
     "estimated_tokens_after": {
-      "description": "Estimated kept-conversation tokens (chars/2 — conservative CJK-aware estimate).",
+      "description": "Estimated kept-conversation tokens (chars/2 — conservative CJK-aware estimate). **v8 勘误（2026-09-16）**：按块压缩路径＝压缩后**模型面估算**。",
       "type": "integer",
       "minimum": 0
     },
     "mode": {
-      "description": "Compactation carrier. \"mechanical\" = the structured track (2026-08-18 B 定案: zero model calls — tools/commands/results are pointer-ized and drained, ADR-0010 §14.29). \"template_summary\" = historical journals only. \"model_summary\" = v7 semantic track (动态上下文滑块 S1 修订批, 2026-09-15, 设计 §3.4.1 DP-14/DP-17): the model produced a structured semantic summary block ([SEMANTIC_SUMMARY …]) and it replaced the region outside the slider; the mechanical track still drained the structured content.",
+      "description": "Compactation carrier. \"mechanical\" = the structured track (2026-08-18 B 定案: zero model calls — tools/commands/results are pointer-ized and drained, ADR-0010 §14.29); 检索/grill 车道与会话收尾的模板压缩仍走该 mode。 \"template_summary\" = historical journals only. \"model_summary\" = 语义轨（v7 S1 修订批 2026-09-15 DP-14/DP-17；**v8 勘误 2026-09-16** 改按块执行）: 模型产出结构化语义摘要块（[SEMANTIC_SUMMARY …]），机械层把**主滑块以外**的指定分块从**模型面**下移并替换为「机械摘要行（结构化轨）＋语义摘要」，本地面逐字全量留存、可按块回放。",
       "enum": ["template_summary", "mechanical", "model_summary"]
     },
     "reason": {
-      "description": "Trigger class: rhythm = measured tokens crossed the H+buffer ordinary trigger with the 2-round cooldown met（动态上下文滑块 S1 起：H＝滑窗上限、缓冲默认 32K ⇒ 保守档 192K；滑块把视图压在上限内 ⇒ 该线退化为「驱逐停滞兜底」）; fallback = the view-scale window guard (safety_tokens) bypassed the cooldown（S1 起常态不可达，保留为 S2 展开膨胀时的视图面兜底）; context_scale = the ACTUAL-context hard guard (全量会话估算 ≥ ORZ_CONTEXT_SCALE_HARD_TOKENS，默认 950K，实际上下文刻度) forced one compaction — **also covers the fail-soft degradation** when the compression-window upload would exceed ORZ_CONTEXT_SCALE_WINDOW_CAP_TOKENS（默认 1.10M；审查修正批 2026-09-15）：窗口**不开**，同迭代改走机械强制压缩，事实经 `mechanical_audit_update{key=context_scale:<档位>}` 的 `anomaly=window_upload_over_cap` 如实落账（用户 2026-09-15 裁定：950K 档压不下线时改走「**硬截留＋明确告知**」——滑块之外清零并注入「上一轮上下文压缩失败，已机械截留」，事实记 `mechanical_audit_update{key=context_scale:hard_950k_intercepted}` 的 `anomaly=hard_context_compaction_failed_*`，该档不再强制开窗）; context_scale_window = the model-participated compression window closed (最高刻度 900K 提醒开窗后 ≤3 轮) — with mode model_summary the model's semantic summary replaced the region, with mode mechanical the fallback compaction ran（S1 前该路径写作 `attention_920k_window`——不在闭枚举内，属契约漂移，S1 批按契约同步）; model_selected = the model emitted a [SEMANTIC_SUMMARY] block OUTSIDE a window（500K 纯提醒后的自选压缩，v7 DP-14）; session_end = the end-of-session compaction that pins the summary into the sidecar before write-back.",
+      "description": "Trigger class. **v8 滑块勘误（2026-09-16）生产写入面＝`model_selected`（模型自选按块压缩）与 `context_scale_window`（H1 硬提醒窗口收口后由模型摘要触发的按块压缩）＋ `session_end`（**实现批后仅检索/grill 车道**的一次性历史收口；主车道收尾压缩已退役——本地面全程逐字全量）**；其余三值保留仅供历史 journal 回放（生产零写入，同 attention_ladder 先例）：rhythm = v7 的 H＋缓冲（192K，视图尺）普通触发——**随勘误退役**（机械层不再以「总量超线」为由压缩模型面）； fallback = v7 的视图兜底（safety_tokens 256K 绕冷却）——**随勘误退役**（含其 `compact_messages` 截断至 recovery_target_tokens 的第二段）； context_scale = v7 的实际上下文 ≥950K 硬兜底／窗口越上限降级（anomaly=window_upload_over_cap）／压不动硬截留（anomaly=hard_context_compaction_failed_*）——**整体退役**，由 v8 的 T1 硬截断（500K 估算、**按越线重新武装**，事实记 `mechanical_audit_update{key=context_scale:hard_truncate}` 的 `anomaly=hard_context_truncated_blocks`）与 **700K** 上限守卫（anomaly=hard_context_guard_truncated_blocks）取代; context_scale_window = the model-participated compression window closed (v8：H1 硬提醒后 ≤3 轮) — 模型产出了语义摘要 ⇒ 按块压缩（mode=model_summary）；未产出 ⇒ 机械层**不做压缩兜底**（如实落账 `model_participated=false`，模型面总量只由模型自压与 H1/T1 管）; model_selected = the model emitted a [SEMANTIC_SUMMARY] block OUTSIDE a window（模型自选按块压缩，设计 §4）; session_end = the end-of-session compaction that pins the summary into the sidecar before write-back（v8 实现批后主车道不再产生该值）。",
       "enum": [
         "rhythm",
         "fallback",
