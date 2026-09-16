@@ -943,7 +943,7 @@ GLM F2 处置转排期（2026-09-06 用户裁决）：`orz-host/src/approval.rs`
 ### 0ak. 增量归档/三键存档 `-p` 车道不可达（P2；2026-09-16 用户裁决立项；0ai 狗粮考核测出）
 
 - 来源：run `RUN-CLI-6aa999d6` 跨 500K 里程碑（actual 501,845）但 `.gsa/archives/` 0 件——增量归档/三键存档接线在 **ACP 会话车道**（`orz-host/acp_server.rs` `incremental_archive_due`：「会话关闭＋500K 里程碑」两点），headless `-p`（狗粮/无头主用车道）不经过该路径；主仓 `D:\CLI\.gsa` 历史一致无 archives。0ah S1 判据「存档一致性（三键齐备率）」在无头车道不可判。
-- 开放内容：~~`-p` 车道里程碑增量归档接线~~（**2026-09-16 已落码**，见实施行）；~~载体 0.5.4 重建~~（**同日已完成并发布 Release v0.5.4**，双平台换装 MATCH，[`054_CARRIER_REBUILD`](audits/054_CARRIER_REBUILD_2026-09-16.md)）；余项＝判据收取（搭下一轮狗粮 run）。
+- 开放内容：~~`-p` 车道里程碑增量归档接线~~（**2026-09-16 已落码**，见实施行）；~~载体重建~~（0.5.4 随 `054` 完成；**2026-09-16 再重建 0.6.0 并发版**——0.6.0 起含 0ah v8/0af/收口，为判据收取载体，[`060_CARRIER_REBUILD`](audits/060_CARRIER_REBUILD_2026-09-16.md)）；余项＝判据收取（搭下一轮狗粮 run）。
 - 判据：无头长 run（≥500K）产出 `.gsa/archives/<session8>.json.gz` 且 `archive_keys` 三键齐备。
 - 计数：立项 **32 → 35** 三项之一。入口：[`0AI_DOGFOOD_ASSESSMENT_CLOSURE_2026-09-16` §2/§3.2](audits/0AI_DOGFOOD_ASSESSMENT_CLOSURE_2026-09-16.md) / [`0ah S1 任务书`](CONTEXT_DYNAMIC_SLIDER_S1_IMPLEMENTATION_TASK_2026-09-15.md) / TODO P2-0ak。
 - 关键词：增量归档、三键存档、archives、ACP 车道、-p 不可达、里程碑归档、0ak。
