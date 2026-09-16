@@ -66,17 +66,43 @@ SHA256 对照：
 生成器定义两处（`PAYLOAD_GOOD_V02`／`PAYLOAD_BAD_V02`）与三件生成物同步补入
 `blackboard_write`，位置与 `WORK_TOOLS` 同序（紧随 `blackboard_read`）。
 
-## 4. 过程新观察（未立项，留用户裁决）
+## 4. 过程观察 O1 → **已处置**（2026-09-16 用户裁决：并入生成器）
 
-**O1（P2）**：`scripts/generate_run_event_fixtures.py` 的 docstring 自称
-“the single source of truth for the good/bad fixture shapes”，但**重跑会删除 38 个
+**O1（P2，已处置）**：`scripts/generate_run_event_fixtures.py` 的 docstring 自称
+“the single source of truth for the good/bad fixture shapes”，但复核时**重跑会删除 38 个
 已入库 fixture**（0z 资源族 `host-resource-denied`／`host-resource-snapshot`／
 `process-tree-reaped`／`reclaim-performed`／`resource-exhausted`／`resource-limit-hit`、
 0ac 检索族 `retrieval-progress`／`retrieval-result-segment`／`result-delivered`、
-`run-terminated` 等；生成器源码对这些事件名**零命中**）。取证：临时副本内跑生成器 ⇒
-fixture 文件数 **347 → 309**（差 38，恰为上述集）。建议二选一：①把这些 payload 表
-并入生成器（恢复 single source of truth）；②把生成器 docstring 与 README 口径改为
-「部分来源」，并登记手工维护集。**是否立项留用户裁决**（本批计数不动）。
+`run-terminated` 等；生成器源码对这些事件名零命中）。取证：临时副本内跑生成器 ⇒
+fixture 文件数 **347 → 309**（差 38，恰为上述集）。**用户裁决：把这些 payload 表
+并入生成器**（选「恢复 single source of truth」，不选「口径降级为部分来源」）。
+
+**处置（本批落码）**：
+
+1. 生成器补入 **10 个事件**的表项——`SLUGS_V02`／`V02_PAYLOAD_EVENTS`／
+   `V02_EVENT_TYPES`／`V02_ENVELOPE_IDENTITY_OVERRIDES`／`PAYLOAD_GOOD_V02`／
+   `PAYLOAD_BAD_V02`，其中 6 个事件的信封样例与 payload 最小正例分轨（走
+   `V02_ENVELOPE_PAYLOAD_OVERRIDES`）：0z 资源族 6 件（2026-09-12）＋
+   `run_terminated`；0ac S3 检索投递 3 件（2026-09-13，`EVT-CONF-101..103`）。
+2. 补入 **8 个追加正/负例**：新事件变体（`host-resource-snapshot.unavailable.valid`／
+   `result-delivered.suppressed.valid`／`retrieval-progress.no-progress.valid`／
+   `retrieval-result-segment.partial.valid`）＋既有事件两组
+   （`tool-availability-check.retrieval-family.valid` 与
+   `…retrieval-family-missing.constraint.invalid`／`tool-completed.cause.valid` 与
+   `…cause-shellcode.constraint.invalid`）。
+3. **28 个此前手工入库的 fixture 做格式归一化**：旧文件带 Prettier 式「短容器单行」
+   排版，生成器统一为 `json.dumps(indent=2)`；逐文件 JSON 解析后语义**完全相等**
+   （脚本核对 `whitespace_only_diffs_ok`），且全仓库无任何哈希/字节级依赖这些
+   fixture 的引用（门禁是「路径 → schema」映射，随后按 schema 校验语义）。
+4. **验收：重跑生成器 = 零差异**——把 `scripts/`＋`assurance/`＋`runtime/` 复制到临时
+   目录（生成器按脚本位置推导 ROOT）、跑生成器、与仓库逐文件 SHA256 对照：
+   `only_in_repo=0`／`only_in_gen=0`／`content_diffs=0`（**347 件全等**，脚本输出
+   `IDEMPOTENT`）。生成器恢复 single source of truth，重跑不再删除任何已入库文件。
+5. 回归：门禁 `valid: true`；`runtime/tests/test_run_event_journal_validation.py`
+   ＋`test_run_event_conformance.py` = **276 passed / 1 failed**（唯一红＝既有陈旧断言
+   `test_v02_all_51_event_types_covered`：`fixture_events == enum_events` 成立，仅
+   `len(enum_events) == 55` 与现状 65 不符，非本批引入）；`test_grok_event_normalizer.py`
+   5 passed。
 
 ## 5. 未闭合与遗留（如实登记）
 
@@ -84,7 +110,8 @@ fixture 文件数 **347 → 309**（差 38，恰为上述集）。建议二选�
 2. **orz 源超前于 0.5.3 载体**：本批 orz 改动为**行为中性**（ReadOnly 名单单一源重构 ＋
    测试 ＋ 注释），0.5.3 仍是 0aj 行为的忠实制品；下一次需要载体时随批 bump 重建
    （Linux musl 三件套与 GitHub Release 一并补齐）。
-3. **O1**（生成器与入库 fixture 树分叉）未立项，见 §4。
+3. **O1**（生成器与入库 fixture 树分叉）**已处置**（用户裁决并入生成器，重跑零差异），
+   见 §4。
 4. **既有无关红灯**（形态不变，非本批引入）：`test_v02_all_51_event_types_covered`
    （`65 != 55`）；`assurance/tests/test_retrieval_subagent_real.py::
    test_search_p3_action_authorization`（排位漂移）；orz-tui 三例夹具红。

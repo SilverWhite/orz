@@ -1909,6 +1909,450 @@ EXTRA_V02_PAYLOAD_BADS[
 # compaction (guard_failed), and the explicit archive-write failure. The
 # guard_failed×session_end prohibition is a verifier cross-rule, exercised
 # synthetically in runtime/tests/test_run_event_journal_validation.py.
+# ── 0aj-review（2026-09-16）：生成器表补全 ─────────────────────────────
+# 背景：0z 资源族（2026-09-12）与 0ac S3 检索投递族（2026-09-13）的事件
+# fixture 是手工入库的——生成器不产出它们，重跑会删除 38 个已入库文件
+# （见 docs/audits/0AJ_0AL_REVIEW_HANDLING_2026-09-16.md §4-O1 / ADR-0010
+# §14.67 第 6 项）。本表把它们补入生成器，恢复 single source of truth：
+# 重跑生成器 = 零差异（逐文件 SHA256 对照，临时副本内实跑取证）。
+# 分组：① host_resource_* / process_tree_reaped / reclaim_performed /
+# resource_* / run_terminated（0z S2 资源门与进程树生命周期）；②
+# retrieval_progress / retrieval_result_segment / result_delivered
+# （0ac S3 检索投递三件）；③ 追加正/负例——新事件的变体样例
+# （unavailable / suppressed / no-progress / partial）＋既有事件两组：
+# tool_availability_check 的 retrieval_family 探针面（0ac S2）与
+# tool_completed 的 cause 面（0ac S3，壳码进 schema 枚举=机械拒绝）。
+# 信封样例与 payload 最小正例分轨的事件走 V02_ENVELOPE_PAYLOAD_OVERRIDES
+# （identity/时间戳同表登记，保持既有已验收信封逐字节可复现）。
+
+SLUGS_V02.update({
+    "host_resource_denied": "host-resource-denied",
+    "host_resource_snapshot": "host-resource-snapshot",
+    "process_tree_reaped": "process-tree-reaped",
+    "reclaim_performed": "reclaim-performed",
+    "resource_exhausted": "resource-exhausted",
+    "resource_limit_hit": "resource-limit-hit",
+    "result_delivered": "result-delivered",
+    "retrieval_progress": "retrieval-progress",
+    "retrieval_result_segment": "retrieval-result-segment",
+    "run_terminated": "run-terminated",
+})
+
+V02_PAYLOAD_EVENTS += [
+    "host_resource_denied",
+    "host_resource_snapshot",
+    "process_tree_reaped",
+    "reclaim_performed",
+    "resource_exhausted",
+    "resource_limit_hit",
+    "result_delivered",
+    "retrieval_progress",
+    "retrieval_result_segment",
+    "run_terminated",
+]
+
+V02_EVENT_TYPES += [
+    "host_resource_denied",
+    "host_resource_snapshot",
+    "process_tree_reaped",
+    "reclaim_performed",
+    "resource_exhausted",
+    "resource_limit_hit",
+    "result_delivered",
+    "retrieval_progress",
+    "retrieval_result_segment",
+    "run_terminated",
+]
+
+V02_ENVELOPE_IDENTITY_OVERRIDES.update({
+    "host_resource_denied": (None, "EVT-CONF-002", "2026-09-12T00:00:00Z"),
+    "host_resource_snapshot": (None, "EVT-CONF-001", "2026-09-12T00:00:00Z"),
+    "process_tree_reaped": (None, "EVT-CONF-004", "2026-09-12T00:00:00Z"),
+    "reclaim_performed": (None, "EVT-CONF-005", "2026-09-12T00:00:00Z"),
+    "resource_exhausted": (None, "EVT-CONF-003", "2026-09-12T00:00:00Z"),
+    "resource_limit_hit": (None, "EVT-CONF-006", "2026-09-12T00:00:00Z"),
+    "result_delivered": (None, "EVT-CONF-103", "2026-09-13T00:00:00Z"),
+    "retrieval_progress": (None, "EVT-CONF-101", "2026-09-13T00:00:00Z"),
+    "retrieval_result_segment": ("RUN-CONF-RETRIEVAL-SEGMENT", "EVT-CONF-102", "2026-09-13T00:00:00Z"),
+    "run_terminated": (None, None, "2026-09-12T00:00:00Z"),
+})
+
+PAYLOAD_GOOD_V02["host_resource_denied"] = {
+    "tool": "run_terminal_cmd",
+    "call_id": "call-res-denied-1",
+    "phase": "pre_issue",
+    "action_class": "heavy",
+    "tier": "hard",
+    "reason": "target volume free space below the heavy-action floor",
+    "readings": {
+        "volume_free_bytes": 1073741824,
+        "source_quality": "available",
+    },
+    "write_targets": [
+        {
+            "path": "D:/CLI/orz/target",
+            "volume_free_bytes": 1073741824,
+        },
+    ],
+}
+
+PAYLOAD_BAD_V02["host_resource_denied"] = {
+    "tool": "run_terminal_cmd",
+    "call_id": "call-res-denied-1",
+    "phase": "post_issue",
+    "action_class": "heavy",
+    "tier": "hard",
+    "reason": "target volume free space below the heavy-action floor",
+    "readings": {
+        "volume_free_bytes": 1073741824,
+        "source_quality": "available",
+    },
+}
+
+V02_ENVELOPE_PAYLOAD_OVERRIDES["host_resource_denied"] = {
+    "tool": "run_terminal_cmd",
+    "call_id": "call-res-denied-1",
+    "phase": "pre_issue",
+    "action_class": "heavy",
+    "tier": "hard",
+    "reason": "target volume free space below the heavy-action floor",
+    "readings": {
+        "volume_free_bytes": 1073741824,
+        "source_quality": "available",
+    },
+}
+
+PAYLOAD_GOOD_V02["host_resource_snapshot"] = {
+    "tier": "watch",
+    "trigger": "tier_change",
+    "readings": {
+        "volume_free_bytes": 9000000000,
+        "source_quality": "available",
+    },
+}
+
+PAYLOAD_BAD_V02["host_resource_snapshot"] = {
+    "tier": "full",
+    "trigger": "tier_change",
+    "readings": {
+        "volume_free_bytes": 9000000000,
+        "source_quality": "available",
+    },
+}
+
+PAYLOAD_GOOD_V02["process_tree_reaped"] = {
+    "phase": "executed",
+    "reason": "run_shutdown",
+    "pids": [
+        4242,
+        4243,
+    ],
+    "call_ids": [
+        "call-tree-1",
+    ],
+}
+
+PAYLOAD_BAD_V02["process_tree_reaped"] = {
+    "phase": "executed",
+    "reason": "run_shutdown",
+    "pids": [
+        0,
+    ],
+    "call_ids": [
+        "call-tree-1",
+    ],
+}
+
+V02_ENVELOPE_PAYLOAD_OVERRIDES["process_tree_reaped"] = {
+    "phase": "executed",
+    "reason": "run_shutdown",
+    "pids": [
+        4242,
+    ],
+    "call_ids": [
+        "call-tree-1",
+    ],
+}
+
+PAYLOAD_GOOD_V02["reclaim_performed"] = {
+    "class": "cache",
+    "outcome": "pending_delete",
+    "tier": "soft",
+    "paths": [
+        "D:/CLI/orz/target/debug/incremental",
+    ],
+    "fingerprints": [
+        "argv-sha256:9a1c...",
+    ],
+    "freed_bytes": 0,
+    "window_rounds": 2,
+}
+
+PAYLOAD_BAD_V02["reclaim_performed"] = {
+    "class": "cache",
+    "outcome": "pending_delete",
+    "tier": "soft",
+    "paths": [
+        "D:/CLI/orz/target/debug/incremental",
+    ],
+    "fingerprints": [
+        "argv-sha256:9a1c...",
+    ],
+    "freed_bytes": 14857600,
+    "window_rounds": 2,
+}
+
+V02_ENVELOPE_PAYLOAD_OVERRIDES["reclaim_performed"] = {
+    "class": "cache",
+    "outcome": "pending_delete",
+    "tier": "soft",
+    "paths": [
+        "D:/CLI/orz/target/debug/incremental",
+    ],
+    "freed_bytes": 0,
+    "window_rounds": 2,
+}
+
+PAYLOAD_GOOD_V02["resource_exhausted"] = {
+    "phase": "planned",
+    "tier": "hard",
+    "call_ids": [
+        "call-heavy-1",
+        "call-heavy-2",
+    ],
+    "readings": {
+        "volume_free_bytes": 1073741824,
+        "source_quality": "available",
+    },
+}
+
+PAYLOAD_BAD_V02["resource_exhausted"] = {
+    "phase": "planned",
+    "tier": "soft",
+    "call_ids": [
+        "call-heavy-1",
+        "call-heavy-2",
+    ],
+    "readings": {
+        "volume_free_bytes": 1073741824,
+        "source_quality": "available",
+    },
+}
+
+V02_ENVELOPE_PAYLOAD_OVERRIDES["resource_exhausted"] = {
+    "phase": "planned",
+    "tier": "hard",
+    "call_ids": [
+        "call-heavy-1",
+    ],
+    "readings": {
+        "volume_free_bytes": 1073741824,
+    },
+}
+
+PAYLOAD_GOOD_V02["resource_limit_hit"] = {
+    "limit": "commit",
+    "call_id": "call-job-hit-1",
+    "tool": "run_terminal_cmd",
+    "readings": {
+        "commit_limit_bytes": 4294967296,
+    },
+}
+
+PAYLOAD_BAD_V02["resource_limit_hit"] = {
+    "limit": "bandwidth",
+    "call_id": "call-job-hit-1",
+    "tool": "run_terminal_cmd",
+    "readings": {
+        "commit_limit_bytes": 4294967296,
+    },
+}
+
+V02_ENVELOPE_PAYLOAD_OVERRIDES["resource_limit_hit"] = {
+    "limit": "commit",
+    "call_id": "call-job-hit-1",
+    "tool": "run_terminal_cmd",
+}
+
+PAYLOAD_GOOD_V02["result_delivered"] = {
+    "result_source": "tool_result",
+    "source_id": "CALL-0001",
+    "boundary": "B1_tool_result",
+    "delivery_mode": "direct",
+    "suppressed": False,
+    "dedupe_key": "result_delivered:CALL-0001",
+    "delivered_at": "2026-09-13T00:00:00Z",
+}
+
+PAYLOAD_BAD_V02["result_delivered"] = {
+    "result_source": "tool_result",
+    "source_id": "CALL-0001",
+    "boundary": "B1_tool_result",
+    "delivery_mode": "direct",
+    "suppressed": False,
+    "dedupe_key": "result_delivered:CALL-0001",
+}
+
+PAYLOAD_GOOD_V02["retrieval_progress"] = {
+    "tool": "web_search",
+    "call_id": "CALL-RET-0001",
+    "retrieval_path": "local_segmented",
+    "stage": "channel_alive",
+    "waited_ms": 380,
+    "dedupe_key": "retrieval_progress:CALL-RET-0001:channel_alive",
+}
+
+PAYLOAD_BAD_V02["retrieval_progress"] = {
+    "tool": "web_search",
+    "call_id": "CALL-RET-0001",
+    "retrieval_path": "local_segmented",
+    "stage": "channel_alive",
+    "waited_ms": 380,
+}
+
+PAYLOAD_GOOD_V02["retrieval_result_segment"] = {
+    "tool": "web_search",
+    "call_id": "CALL-RET-0001",
+    "retrieval_path": "local_segmented",
+    "segment_index": 0,
+    "is_partial": False,
+    "waited_ms": 420,
+    "dedupe_key": "retrieval_segment:CALL-RET-0001:0",
+    "result_summary": {
+        "visibility": "full_text_observed",
+        "source_url": "https://example.invalid/doc",
+        "content_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+    },
+}
+
+PAYLOAD_BAD_V02["retrieval_result_segment"] = {
+    "tool": "web_search",
+    "call_id": "CALL-RET-0001",
+    "retrieval_path": "local_segmented",
+    "segment_index": 0,
+    "is_partial": False,
+    "waited_ms": -1,
+    "dedupe_key": "retrieval_segment:CALL-RET-0001:0",
+    "result_summary": {
+        "visibility": "full_text_observed",
+        "source_url": "https://example.invalid/doc",
+    },
+}
+
+PAYLOAD_GOOD_V02["run_terminated"] = {
+    "reason": "resource_exhausted",
+}
+
+PAYLOAD_BAD_V02["run_terminated"] = {
+    "reason": "journal_degraded",
+}
+
+V02_ENVELOPE_PAYLOAD_OVERRIDES["run_terminated"] = {
+    "reason": "journal_degraded",
+    "degraded": {
+        "entered_at": "2026-09-12T00:00:00Z",
+        "dropped_events": 3,
+    },
+}
+
+EXTRA_V02_PAYLOAD_POSITIVES["host-resource-snapshot.unavailable.valid"] = {
+    "tier": "unknown",
+    "trigger": "tier_change",
+    "readings": {
+        "source_quality": "unavailable",
+    },
+}
+
+EXTRA_V02_PAYLOAD_POSITIVES["result-delivered.suppressed.valid"] = {
+    "result_source": "background_task",
+    "source_id": "TASK-0007",
+    "boundary": "B2_turn_end",
+    "delivery_mode": "digest",
+    "delivery_class": "I2_immediate_progress",
+    "suppressed": True,
+    "suppressed_reason": "duplicate",
+    "latency_ms": 420,
+    "dedupe_key": "result_delivered:TASK-0007:digest",
+    "delivered_at": "2026-09-13T00:01:00Z",
+}
+
+EXTRA_V02_PAYLOAD_POSITIVES["retrieval-progress.no-progress.valid"] = {
+    "tool": "web_search",
+    "call_id": "CALL-RET-0001",
+    "retrieval_path": "local_segmented",
+    "engine": "cn_bing",
+    "stage": "no_progress",
+    "waited_ms": 30000,
+    "since_last_event_ms": 12500,
+    "deadline_ms": 30000,
+    "stable_code": "no_progress",
+    "result_count": 2,
+    "dedupe_key": "retrieval_progress:CALL-RET-0001:no_progress:1",
+}
+
+EXTRA_V02_PAYLOAD_POSITIVES["retrieval-result-segment.partial.valid"] = {
+    "tool": "web_search",
+    "call_id": "CALL-RET-0001",
+    "retrieval_path": "local_segmented",
+    "engine": "cn_bing",
+    "segment_index": 1,
+    "is_partial": True,
+    "waited_ms": 1180,
+    "segment_count_hint": 3,
+    "dedupe_key": "retrieval_segment:CALL-RET-0001:1",
+    "result_summary": {
+        "visibility": "partial_text_observed",
+        "source_url": "https://example.invalid/thread",
+        "observed_scope": "first section",
+        "byte_len": 4096,
+    },
+}
+
+EXTRA_V02_PAYLOAD_POSITIVES["tool-availability-check.retrieval-family.valid"] = {
+    "probe_scope": "retrieval_family",
+    "probe_timestamp": "2026-09-13T00:00:00Z",
+    "complete": [],
+    "incomplete": [],
+    "gate_decision": "pass",
+    "retrieval_family": {
+        "browser": {
+            "present": False,
+            "reason": "容器内无浏览器二进制",
+        },
+        "search_engine": {
+            "present": True,
+            "detail": "cn_bing 直连可达；DDG/Google 直连不可达",
+        },
+        "web_channel": {
+            "present": True,
+            "detail": "HTTP 直连出网可用",
+        },
+    },
+}
+
+EXTRA_V02_PAYLOAD_POSITIVES["tool-completed.cause.valid"] = {
+    "tool": "web_search",
+    "call_id": "CALL-RET-0009",
+    "exit_code": 1,
+    "cause": "channel_deadline_exceeded",
+}
+
+EXTRA_V02_PAYLOAD_BADS["tool-availability-check.retrieval-family-missing.constraint.invalid"] = {
+    "probe_scope": "retrieval_family",
+    "probe_timestamp": "2026-09-13T00:00:00Z",
+    "complete": [],
+    "incomplete": [],
+    "gate_decision": "pass",
+}
+
+EXTRA_V02_PAYLOAD_BADS["tool-completed.cause-shellcode.constraint.invalid"] = {
+    "tool": "browser_read",
+    "call_id": "CALL-RET-0010",
+    "exit_code": 1,
+    "cause": "browser_launch_failed",
+}
+
+
 def _v02_context_compressed_payload() -> dict:
     return json.loads(json.dumps(PAYLOAD_GOOD_V02["context_compressed"]))
 

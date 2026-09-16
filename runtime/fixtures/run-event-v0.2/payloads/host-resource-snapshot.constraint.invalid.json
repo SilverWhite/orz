@@ -1,5 +1,8 @@
 {
   "tier": "full",
   "trigger": "tier_change",
-  "readings": { "volume_free_bytes": 9000000000, "source_quality": "available" }
+  "readings": {
+    "volume_free_bytes": 9000000000,
+    "source_quality": "available"
+  }
 }

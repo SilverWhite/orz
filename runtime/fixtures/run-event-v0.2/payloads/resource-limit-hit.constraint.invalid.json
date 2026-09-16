@@ -2,5 +2,7 @@
   "limit": "bandwidth",
   "call_id": "call-job-hit-1",
   "tool": "run_terminal_cmd",
-  "readings": { "commit_limit_bytes": 4294967296 }
+  "readings": {
+    "commit_limit_bytes": 4294967296
+  }
 }

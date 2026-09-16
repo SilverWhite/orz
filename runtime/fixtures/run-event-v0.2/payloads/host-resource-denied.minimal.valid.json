@@ -5,8 +5,14 @@
   "action_class": "heavy",
   "tier": "hard",
   "reason": "target volume free space below the heavy-action floor",
-  "readings": { "volume_free_bytes": 1073741824, "source_quality": "available" },
+  "readings": {
+    "volume_free_bytes": 1073741824,
+    "source_quality": "available"
+  },
   "write_targets": [
-    { "path": "D:/CLI/orz/target", "volume_free_bytes": 1073741824 }
+    {
+      "path": "D:/CLI/orz/target",
+      "volume_free_bytes": 1073741824
+    }
   ]
 }

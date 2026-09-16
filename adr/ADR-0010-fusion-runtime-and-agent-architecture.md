@@ -22,7 +22,9 @@
      须恰好覆盖单一源）＋新增**声明面分类护栏**（声明面工具必须 ∈ 工作工具 ∪ 规则式
      非工作族）；0al（门禁冻结克隆树漂移）补 **fail-fast 锚定判据**（错误树诊断不再被
      异常路径吞掉）＋**克隆口径定义**（整树复制、保留未入库工作件）＋临时目录 `.tmp*`
-     排除；见 §14.67。
+     排除；**同日追补（用户裁决）**：O1 fixture 生成器表补全——0z 资源族／0ac 检索投递族
+     10 事件 ＋ 8 个追加正负例入生成器，重跑生成器零差异（347 件逐文件 SHA256 全等）；
+     见 §14.67。
    - 日期：2026-08-09（v1.1 补充裁决同日冻结）
 - 决策范围：产品 runtime 所有权、成熟组件复用、自研准入、主/子 Agent 架构、模型与 transport、工具与权限、检索证据、context/compaction、问询与活性守卫、journal/snapshot、隐私、UI、Windows 兼容性、Schema 演进与设计文档治理
 - 取代/修订：
@@ -5292,8 +5294,13 @@ registry/manifest 随批）→ S3 覆盖面矩阵与法官正反两测 → S4 �
    新狗粮线）；本批新增/修改的机械钉全部实跑绿（orz-loop `--lib` 821/0/3、orz-host
    `permission::tests` 20/20、orz-assurance 229、门禁锚定钉子 7/7、Python fixture
    回放 262 passed、门禁 `valid: true`）。
-6. **过程新观察（未立项，留用户裁决）**：`scripts/generate_run_event_fixtures.py`
-   自称 fixture 树的 single source of truth，但重跑会**删除 38 个已入库 fixture**
-   （0z 资源族、0ac 检索族、`run-terminated` 等在该脚本内零命中；临时副本实跑
-   fixture 数 347 → 309）。本批因此改为「生成器定义同步 ＋ 三件生成物手工同步 ＋
-   逐件 SHA256 与生成器新输出对照（全部 MATCH）」。
+6. **过程观察 O1 → 已处置（2026-09-16 用户裁决「把这些 payload 表并入生成器」）**：
+   `scripts/generate_run_event_fixtures.py` 自称 fixture 树的 single source of truth，
+   但复核时重跑会**删除 38 个已入库 fixture**（0z 资源族 6 件 ＋ `run_terminated`、
+   0ac S3 检索投递 3 件、以及 8 个追加正/负例在该脚本内零命中；临时副本实跑
+   fixture 数 347 → 309）。处置＝把这些表**补入生成器**（10 事件的 slug／
+   payload 正负例／信封样例与 identity·时间戳分轨登记 ＋ 8 个追加正负例），并把
+   28 个此前手工入库文件的**排版归一化为生成器规范**（逐文件 JSON 语义相等，无
+   哈希/字节级依赖）。验收＝**重跑生成器零差异**：临时副本逐文件 SHA256 对照
+   347 件全等（`IDEMPOTENT`）；回归＝门禁 `valid: true`、run-event 判官回放
+   262 passed、契约测试 14 passed（既有陈旧断言红不变）、grok normalizer 5 passed。
