@@ -499,13 +499,9 @@ impl AgentLoopController {
                         session_id: self.session_id.as_deref(),
                         in_flight_tools: Some(&in_flight_tools),
                     };
-                    // FUS-LEDGER-FOLD-STATE (2026-08-18, ADR-0010
-                    // §14.26): the session-end compaction uses the
-                    // loop's final fold state — the summary input is
-                    // the same stateful view the main requests saw and
-                    // the drain cut is `fold_cut` (never a recomputed
-                    // stateless tail).
-                    let mut fold_state = outcome_ref.fold_state.clone();
+                    // 0ah 收口清理批（2026-09-16，v7→v8 收口）：有状态折叠点
+                    // 退役 ⇒ session-end 的保留起点按无状态 `collapsed_cut`
+                    // 重算（本车道从不折叠）。
                     let _ = run_template_compact(
                         &svc,
                         writer,
@@ -523,7 +519,6 @@ impl AgentLoopController {
                         // 五段模板（子会话消息无主决策轮章，fold 快照轴不
                         // 适用），不传折叠快照 LIF 上下文。
                         None,
-                        &mut fold_state,
                         // v7（S1 修订批）＋ 审查修正批（2026-09-15，审查 P3⑥）：
                         // 检索车道不折叠、无外挂台账 ⇒ 定位指针只有 journal
                         // run＋**整 run 事件跨度**（`0 → 当前 seq`，非占位值）；

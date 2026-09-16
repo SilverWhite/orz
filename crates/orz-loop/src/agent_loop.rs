@@ -734,13 +734,6 @@ pub(crate) struct LoopOutcome {
     /// Rounds since the last compaction at loop exit — the session-end
     /// compaction reports it honestly (P0-D review fix 2026-08-14).
     pub rounds_since_compact: u32,
-    /// FUS-LEDGER-FOLD-STATE (2026-08-18, ADR-0010 §14.26): the loop's
-    /// final fold state — the caller's session-end compaction uses the
-    /// same stateful view for its summary input and drains up to
-    /// `fold_cut`. Per-loop local (each lane has its own conversation;
-    /// a controller-level field would be clobbered by the nested
-    /// subagent dispatch), so it is reset at every loop start.
-    pub fold_state: crate::action_ledger::LedgerFoldState,
     /// Read by the subagent terminal mapping (M3) — the main caller's
     /// terminal event carries `tool_rounds` only.
     #[allow(dead_code)] // consumed by the subagent path (GAP-SUBAGENT-RUNTIME M3)
@@ -788,15 +781,19 @@ fn conversation_sidecar_hint(host: &dyn LoopHost, session_id: Option<&str>) -> O
 }
 
 /// The shared mechanical compaction flow (P0-D S3 + review fixes +
-/// 2026-08-18 B 定案, ADR-0010 §14.29 + P2-14 v0.3 折叠快照 marker，
-/// ADR-0010 §14.54).
+/// 2026-08-18 B 定案, ADR-0010 §14.29；v0.2 五段模板 marker).
 ///
-/// Used by the loop-top rhythm/fallback trigger and by the end-of-session
-/// compaction (reason = "session_end", forced). Makes ZERO model calls.
+/// **0ah 收口清理批（2026-09-16，v7→v8 收口）后的生产形态**：唯一生产调用方
+/// ＝**检索/grill 车道的 session-end 压缩**（`retrieval::dispatch`；主车道的
+/// loop-top 触发与收尾压缩已随 v8 勘误退役——模型面由投影层承载，本地面
+/// 全程逐字全量）。保留起点一律按无状态 `collapsed_cut(messages, tail)` 重算。
+///
+/// Makes ZERO model calls.
 /// Marker 双轨（2026-09-04 复审处理，车道范围裁决）：
 /// - `fold_ctx = Some(主车道 LIF round/domain)` 且保留尾首条声明消息带轮章
 ///   时 → v0.3 压缩点冻结黑板折叠视图快照（A–E 块，r_keep 排除保留尾行；
-///   主会话压缩专用）；
+///   P2-14 域，主会话压缩专用——v8 后生产恒走 None 路径，机制保留待 P2-14
+///   S3/S4 裁决）；
 /// - 其余（检索/grill 车道、旧会话消息无轮章）→ v0.2 五段模板（既有语义
 ///   原样保留：目的/计划/变动文件路径机械填充、注意事项 = HA 结构化事实
 ///   聚合、后续衔接 = 固定中性占位）。
@@ -825,11 +822,6 @@ pub(crate) async fn run_template_compact(
     // 非 Main 车道（检索/grill）传 None → 保持 v0.2 五段模板（车道范围
     // 裁决见模块注释）；调用方在压缩触发点取 `blackboard_stamp()`。
     fold_ctx: Option<crate::summary::FoldSnapshotCtx>,
-    // FUS-LEDGER-FOLD-STATE (2026-08-18, ADR-0010 §14.26): the loop's
-    // stateful fold point — the summary input uses the same folded view
-    // as the main requests (同源), the drain cut is `fold_cut` when
-    // folded, and the state is reset once the conversation is mutated.
-    fold_state: &mut crate::action_ledger::LedgerFoldState,
     // v7（S1 修订批，2026-09-15，设计 §3.5.1）：原文定位指针四项——每条压缩
     // marker／摘要块必带（compaction 存档＋digest／台账 `[seq]` 区间／
     // journal run+sequence／conversation sidecar 路径）。
@@ -837,27 +829,21 @@ pub(crate) async fn run_template_compact(
 ) -> Result<CompactDecision, AgentLoopError> {
     // FUS-LEDGER-FOLD-STATE 400 修复 (2026-08-18, ADR-0010 §14.27 / 处理文档
     // LEDGER_FOLD_MARKER_INDEX_FIX_HANDLING_2026-08-18 §2.1): the rolling
-    // single marker is NOT removed on the guard path — the frozen fold
-    // indices (`fold_start`/`fold_cut`) are positions into the CURRENT
-    // `messages` slice, and any in-place mutation before the fold state is
-    // reset invalidates them. The previous unconditional `retain()` deleted
-    // the marker even when the reduction guard then returned
-    // `GuardBlocked` (fold untouched) → stale preamble `[U0, A[...]]`
-    // (declaration without its tool reply in the fold region) → provider
-    // 400 `insufficient tool messages`. The marker is removed only once
-    // execution is confirmed; the indices are recomputed below.
-    // FUS-LEDGER-FOLD-STATE (2026-08-18, ADR-0010 §14.26): the drain cut
-    // comes from the frozen fold state when folded (保留起点基于 fold_cut
-    // 而非重算 tail); otherwise the stateless tail cut as before.
+    // single marker is NOT removed on the guard path — any in-place mutation
+    // before execution is confirmed would leave a stale preamble
+    // `[U0, A[...]]` (declaration without its tool reply) → provider 400
+    // `insufficient tool messages`. The marker is removed only once
+    // execution is confirmed; the cut is recomputed below.
+    // 0ah 收口清理批（2026-09-16，v7→v8 收口）：**有状态折叠点退役**——
+    // `LedgerFoldState`／`fold_cut` 随 v8 勘误整体下线后，本函数（唯一生产
+    // 调用方＝检索/grill 车道 session-end）恒为未折叠态，保留起点一律按
+    // 无状态 `collapsed_cut(messages, tail)` 重算。
     let cfg = svc.context_compact;
     // v8（2026-09-16 勘误批）：主车道的**机械驱逐／推进随勘误退役**——模型面
     // 由投影层（`model_face`）承载、`messages` 不再被压缩 drain，故本函数的
     // 主车道按块压缩路径不再存在；保留语义＝**检索/grill 车道**与**会话收尾**
     // （模型已离场）的机械模板压缩：`collapsed_cut(messages, tail)`。
-    let Some(kept_start) = fold_state
-        .fold_cut
-        .or_else(|| compact_fallback_cut(messages, tail))
-    else {
+    let Some(kept_start) = compact_fallback_cut(messages, tail) else {
         return Ok(CompactDecision::NoOp);
     };
     // Guard 口径：含旧 marker 的数组 + 冻结 kept_start（触发时不动数组）。
@@ -875,10 +861,8 @@ pub(crate) async fn run_template_compact(
         return Ok(CompactDecision::GuardBlocked);
     }
 
-    // 执行已确认：删除旧 marker 并重算 kept_start——marker 删除使冻结索引
-    // 整体左移一位（折叠态 `fold_cut - had_marker`；marker 恒在 fold_cut
-    // 之前：marker 插入点为首个声明，折叠 cut 恒在其后）。未折叠态按无
-    // marker 数组重算 `collapsed_cut`。事件估计在 drain + marker 插入后
+    // 执行已确认：删除旧 marker 并重算 kept_start（无状态重算，marker 删除
+    // 使消息索引整体左移一位）。事件估计在 drain + marker 插入后
     // 由实际数组重算（见下方 final_after），与执行后数组一致。
     let had_marker = messages.iter().any(|m| {
         m.content
@@ -890,10 +874,7 @@ pub(crate) async fn run_template_compact(
                 .starts_with(crate::prompt::CONTEXT_COMPRESSED_PREFIX)
         });
     }
-    let kept_start = fold_state
-        .fold_cut
-        .map(|cut| cut.saturating_sub(usize::from(had_marker)))
-        .or_else(|| compact_fallback_cut(messages, tail))
+    let kept_start = compact_fallback_cut(messages, tail)
         .expect("guard path already resolved a kept_start for the same messages");
 
     let rounds_dropped = crate::action_ledger::rounds_before(messages, kept_start) as u32;
@@ -901,10 +882,10 @@ pub(crate) async fn run_template_compact(
     // §14.28 审查修复): the marker carries the fixed external-ledger path
     // hint so a restored conversation points the model at the surviving
     // history (the file is append-only and NOT reset by compaction). The
-    // hint is written only when the file exists or the current window is
-    // folded — never a dangling pointer for a conversation that never
-    // folded.
-    let ledger_hint = ledger_path.filter(|p| p.exists() || fold_state.is_folded());
+    // hint is written only when the file exists — never a dangling pointer
+    // for a conversation that never folded（0ah 收口清理批：`is_folded`
+    // 折叠态条件随有状态折叠点退役）.
+    let ledger_hint = ledger_path.filter(|p| p.exists());
     // The archive id rides the writer's CURRENT seq — no event is recorded
     // between here and the `context_compressed` journal, so the id is
     // stable and unique within the run.
@@ -974,7 +955,9 @@ pub(crate) async fn run_template_compact(
                     guard_failed,
                     archive_write_failed,
                     ledger_note: ledger_hint_text.as_deref(),
-                    frozen_ledger: fold_state.folded_ledger.as_deref(),
+                    // 0ah 收口清理批：有状态折叠点退役 ⇒ 冻结台账指针恒缺席
+                    //（折叠态才可能产出 `folded_ledger`）。
+                    frozen_ledger: None,
                     locators,
                     budget,
                 },
@@ -1010,7 +993,8 @@ pub(crate) async fn run_template_compact(
             dropped,
             guard_failed,
             failure_annex.as_deref(),
-            fold_state.folded_ledger.as_deref(),
+            // 0ah 收口清理批：有状态折叠点退役 ⇒ 恒 None（该槽渲染「（无）」）。
+            None,
         );
         let digest = crate::summary::archive_digest(&markdown);
         archive_write_failed =
@@ -1042,10 +1026,8 @@ pub(crate) async fn run_template_compact(
         },
     );
     // FUS-LEDGER-FOLD-STATE (2026-08-18, ADR-0010 §14.26): the conversation
-    // was mutated (drain + marker + possibly mechanical truncation) — the
-    // frozen fold indices are stale. Reset; the view re-accumulates from
-    // the marker (折叠重置为 None，marker 之后重新累积).
-    fold_state.reset();
+    // was mutated (drain + marker) — 0ah 收口清理批（2026-09-16）：有状态
+    // 折叠点已退役，无需再 reset；冻结索引/`fold_cut` 语义随 v8 下线。
     // 审查修复（2026-08-19）：事件估计在 marker 插入后重算（含 marker，
     // 与 schema「marker + preamble + recent tail」口径一致；fallback 的
     // 截断目标估算不再单独使用——真值含 marker）。
@@ -1902,11 +1884,6 @@ pub(crate) async fn run_agent_loop(
     // until the first request, so the first request journals `initial` and
     // only real prefix changes journal `change`.
     let mut last_request_header: Option<RequestHeader> = None;
-    // FUS-LEDGER-FOLD-STATE (2026-08-18, ADR-0010 §14.26) × 滑块上下文 v8
-    // （2026-09-16 勘误批）：**主车道的机械驱逐／推进随勘误退役** ⇒ 本 loop
-    // 恒为未折叠态（滑窗投影层承载模型面），此状态只剩「向外传递」的接口
-    // 语义（`LoopOutcome.fold_state`，收尾/检索路径的机械模板压缩读它）。
-    let fold_state = crate::action_ledger::LedgerFoldState::default();
     // 0ac S3①-b M2（2026-09-15，IMMEDIATE_RESULT_DELIVERY_AND_STREAMING_
     // RETRIEVAL_DESIGN §2.1/§4.1「合法边界投递」）：per-run 投递队列——
     // run 生命周期 = 队列生命周期（不跨 run 存活）；B1/B2 边界投递与
@@ -4480,7 +4457,6 @@ pub(crate) async fn run_agent_loop(
         last_text,
         tool_rounds,
         rounds_since_compact,
-        fold_state,
         budget_exhausted,
     })
 }
@@ -4957,8 +4933,9 @@ mod tests {
     }
 
     // ---- FUS-LEDGER-FOLD-STATE 400 修复 (2026-08-18, ADR-0010 §14.27) ----
+    // 0ah 收口清理批（2026-09-16）：`LedgerFoldState` 导入随有状态折叠点退役
+    // 移除（压缩直调测试改走无状态 `collapsed_cut` 语义）。
 
-    use crate::action_ledger::LedgerFoldState;
     use crate::host::ToolRegistry;
     use orz_assurance::journal::JournalRecorder;
     use std::path::PathBuf;
@@ -5017,8 +4994,8 @@ mod tests {
     }
 
     /// 取证形态：0=user, 1=marker, 2=assistant(c1), 3=tool(c1),
-    /// 4=assistant(c2), 5=tool(c2)——折叠冻结态 fold_start=2/fold_cut=4
-    /// （与 make-doom-for-mips 复验 400 的 marker 在索引 1 场景同构）。
+    /// 4=assistant(c2), 5=tool(c2)——0ah 收口清理批后有状态折叠点退役，
+    /// 保留起点一律按无状态 `collapsed_cut(messages, tail)` 重算。
     fn compact_test_messages() -> Vec<Message> {
         let mut messages = vec![Message {
             role: Role::User,
@@ -5061,18 +5038,9 @@ mod tests {
         messages
     }
 
-    fn compact_folded_state() -> LedgerFoldState {
-        LedgerFoldState {
-            fold_start: Some(2),
-            fold_cut: Some(4),
-            folded_ledger: Some("ledger".to_string()),
-            ..Default::default()
-        }
-    }
-
-    /// 压缩触发但缩减守卫不满足 → `GuardBlocked`：messages 与折叠三态均
-    /// 不变（旧代码在此路径删除了 marker、折叠索引未失效 → 后续视图
-    /// preamble 裸露声明 → provider 400）。
+    /// 压缩触发但缩减守卫不满足 → `GuardBlocked`：messages 不变（旧代码在此
+    /// 路径删除了 marker → 后续保留起点重算裸露声明 → provider 400——
+    /// marker 仅在执行确认后删除的纪律，0ah 收口后仍以无状态重算保持）。
     #[tokio::test]
     async fn guard_blocked_leaves_messages_and_fold_untouched() {
         let dir = std::env::temp_dir().join(format!("orz-compact-guard-{}", std::process::id()));
@@ -5087,9 +5055,7 @@ mod tests {
         let svc = compact_test_svc(&cfg, &blackboard, &denial_state, &pacing, &policy);
         let mut writer = crate::controller::discard_event_writer("test-run");
         let mut messages = compact_test_messages();
-        let mut fold = compact_folded_state();
         let before_messages = messages.clone();
-        let before_fold = fold.clone();
         let decision = run_template_compact(
             &svc,
             &mut writer,
@@ -5100,11 +5066,11 @@ mod tests {
             false,
             false,
             0,
-            2,
+            // 0ah 收口清理批：tail=1 ⇒ 两轮里压掉 1 轮，kept_start 可解。
+            1,
             None,
             // P2-14 S1 测试直调：消息构造无轮章 → 保持 v0.2 模板路径。
             None,
-            &mut fold,
             // v7（S1 修订批）：直调测试的定位指针（None 项如实渲染「（无）」）。
             &crate::summary::LocatorPointers::default(),
         )
@@ -5115,15 +5081,11 @@ mod tests {
             messages, before_messages,
             "guard path must not mutate messages (marker stays)"
         );
-        assert_eq!(
-            fold, before_fold,
-            "guard path must not touch the fold state"
-        );
     }
 
-    /// 执行路径：确认执行后删除旧 marker 并重算 kept_start（折叠态
-    /// `fold_cut - had_marker`）——drain 数量与事件口径一致，折叠状态
-    /// 在 drain 后重置。
+    /// 执行路径：确认执行后删除旧 marker 并按无状态 `collapsed_cut` 重算
+    /// kept_start——drain 数量与事件口径一致（0ah 收口清理批后有状态折叠点
+    /// 退役，语义不变）。
     #[tokio::test]
     async fn compaction_execution_recomputes_kept_start_after_marker_removal() {
         let dir = std::env::temp_dir().join(format!("orz-compact-exec-{}", std::process::id()));
@@ -5138,7 +5100,6 @@ mod tests {
         let svc = compact_test_svc(&cfg, &blackboard, &denial_state, &pacing, &policy);
         let mut writer = crate::controller::discard_event_writer("test-run");
         let mut messages = compact_test_messages();
-        let mut fold = compact_folded_state();
         let decision = run_template_compact(
             &svc,
             &mut writer,
@@ -5149,19 +5110,20 @@ mod tests {
             true,
             false,
             0,
-            2,
+            // tail=1 ⇒ marker 删除后重算保留起点（c2 轮起点），压掉 c1 轮。
+            1,
             None,
             // P2-14 S1 测试直调：消息构造无轮章 → 保持 v0.2 模板路径。
             None,
-            &mut fold,
             // v7（S1 修订批）：直调测试的定位指针（None 项如实渲染「（无）」）。
             &crate::summary::LocatorPointers::default(),
         )
         .await
         .expect("execution path returns a decision");
         assert_eq!(decision, CompactDecision::Executed);
-        // marker 删除使 fold_cut 4→3；drain [first_round_start=1..3) 丢弃
-        // c1 轮（声明+回复 2 条）；新 marker 插入索引 1 → U0+marker+c2 轮。
+        // marker 删除后 collapsed_cut(messages,1)=c2 轮起点（原索引 4→3）；
+        // drain [first_round_start=1..3) 丢弃 c1 轮（声明+回复 2 条）；
+        // 新 marker 插入索引 1 → U0+marker+c2 轮。
         assert_eq!(messages.len(), 4, "U0 + marker + c2 轮");
         assert_eq!(messages[0].role, Role::User);
         assert_eq!(messages[1].role, Role::User);
@@ -5174,7 +5136,6 @@ mod tests {
         assert_eq!(messages[2].tool_calls.len(), 1, "c2 声明保留");
         assert_eq!(messages[2].tool_calls[0].call_id, "c2");
         assert_eq!(messages[3].tool_call_id.as_deref(), Some("c2"));
-        assert!(!fold.is_folded(), "执行后折叠状态重置");
         // 阶段 (c)（ADR-0010 §14.30 / 设计 §4.4.1）+ P2-13 D4：空黑板 →
         // 注意事项槽显示「（无）」；marker 携带回查入口与后续衔接占位。
         assert!(
@@ -5271,8 +5232,7 @@ mod tests {
         let svc = compact_test_svc(&cfg, &blackboard, &denial_state, &pacing, &policy);
         let mut writer = crate::controller::discard_event_writer("test-run");
         let mut messages = compact_test_messages();
-        // 与既有执行路径测试同构：折叠冻结态 fold_cut=4 → 压掉 c1 轮。
-        let mut fold = compact_folded_state();
+        // 与既有执行路径测试同构：tail=1 ⇒ 压掉 c1 轮。
         let decision = run_template_compact(
             &svc,
             &mut writer,
@@ -5283,11 +5243,10 @@ mod tests {
             true,
             false,
             0,
-            2,
+            1,
             None,
             // P2-14 S1 测试直调：消息构造无轮章 → 保持 v0.2 模板路径。
             None,
-            &mut fold,
             // v7（S1 修订批）：直调测试的定位指针（None 项如实渲染「（无）」）。
             &crate::summary::LocatorPointers::default(),
         )
