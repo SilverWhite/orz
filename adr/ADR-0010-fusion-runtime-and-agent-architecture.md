@@ -14,6 +14,15 @@
      批次结束**时一次性注入三问（交付物与判定口径 / 大方向与阶段 / 做法优劣与任务评估）；
      **不携带机械审查报告**（审查依旧只在结尾）、不落黑板、不做消费审计、复用
      `OrientationV1` 票据；见 §14.66。
+   - 冻结版本补记（2026-09-16 追加 v1.68）：**0aj／0al 独立复核处理登记**——0aj
+     （`blackboard_write` 权限层 deny）确认为「控制器 `risk_class` ↔ 宿主 `access_kind`
+     两表脱同步」同形**第四例**（前例 project_doc_index／browser_read／browser_control，
+     见 §14.66 第 10 项），处置＝控制器侧 ReadOnly 显式名单收为**单一源**
+     （`ToolDispatcher::READ_ONLY_EXEMPT_TOOLS`）＋宿主跨表护栏改**遍历式**（代表参数表
+     须恰好覆盖单一源）＋新增**声明面分类护栏**（声明面工具必须 ∈ 工作工具 ∪ 规则式
+     非工作族）；0al（门禁冻结克隆树漂移）补 **fail-fast 锚定判据**（错误树诊断不再被
+     异常路径吞掉）＋**克隆口径定义**（整树复制、保留未入库工作件）＋临时目录 `.tmp*`
+     排除；见 §14.67。
    - 日期：2026-08-09（v1.1 补充裁决同日冻结）
 - 决策范围：产品 runtime 所有权、成熟组件复用、自研准入、主/子 Agent 架构、模型与 transport、工具与权限、检索证据、context/compaction、问询与活性守卫、journal/snapshot、隐私、UI、Windows 兼容性、Schema 演进与设计文档治理
 - 取代/修订：
@@ -5195,6 +5204,11 @@ registry/manifest 随批）→ S3 覆盖面矩阵与法官正反两测 → S4 �
    **287 passed / 0 failed / 5 ignored**（单线程；首跑 1 例
    `codex_app::tests::approval_allow_persists_for_identical_bash` 超时为既知负载 flake，
    单测与复跑均绿）、`permission` 模块 20 全绿、`cargo fmt` 干净、新增代码 clippy 零告警。
+   （**0aj 更正（2026-09-16，见 §14.67）**：本形态的**第四次**发生在
+   `blackboard_write`——0ae D0 于 2026-09-15 加工具（`risk_class` 侧已 ReadOnly、宿主
+   `access_kind` 未补 arm），当时本护栏为**手写样本表**、样本漏列即漏网，且 2026-09-15
+   深审 §4.1 据此误判「orz-host permission.rs 无需改动」（该结论已在原报告就地更正）。
+   0aj 修复后本护栏改为**遍历单一源**：样本漏列这一类不再可复发。）
    ③**0v F2 装置侧改造（用户裁决：改用容器内真实 chromium）**：宿主侧经代理一次性取
    官方 Chromium 快照（rev `1696156`、246,549,653 B、10.7s）解压至
    `D:\tb-eval\browser\chrome-linux\`（`chrome` 为 ELF、523,032,168 B），跑批时以只读
@@ -5235,3 +5249,51 @@ registry/manifest 随批）→ S3 覆盖面矩阵与法官正反两测 → S4 �
    CARGO_HOME，依赖指纹每轮重新推导——原因未隔离，只作事实登记。
    证据：[`0v S4 复跑重建记录`](../docs/audits/0V_S4_REFRESH_REBUILD_2026-09-11.md)。
    **0v S4 复跑待放行；未跑实机。**
+
+### 14.67 v1.68 补写登记（2026-09-16）
+
+本节为 **0aj／0al 独立复核处理**转录：用户 2026-09-16 指示「请对当前实现的 0aj 和
+0al 部分进行全面检查，包括设计合理性、实现合理性、设计与实现的符合性」→「请先直接
+对审查出的全部问题进行处理」。复核对象＝orz `12396e6a`（0aj 修复）／父仓 `3846bb17`
+（0aj 载体 ＋ 0al 修复）／账本 v3.47–v3.48。报告：
+[`0aj／0al 独立复核与问题处理`](../docs/audits/0AJ_0AL_REVIEW_HANDLING_2026-09-16.md)。
+本批**不新增未闭合项**（计数维持 36）。
+
+1. **0aj＝同形第四例（设计面口径统一）**：「控制器侧 `ToolDispatcher::risk_class` 判
+   ReadOnly、宿主侧 `permission.rs::access_kind` 无 arm ⇒ 整工具落 `Edit` ⇒ 无头/死网关
+   部署在权限门确定性 deny」这一形态，继 project_doc_index／browser_read（2026-08-08
+   review P1-1）、browser_control（0x/0v S4，2026-09-11）之后，第四次发生在
+   `blackboard_write`（0ae D0 于 2026-09-15 加工具）。§14.66 第 10 项的「第三次」计数
+   就地更正为第四次；2026-09-15 深审该批的「D0 ReadOnly 判定真实…orz-host 无需改动」
+   结论**为误判**（该结论由「控制器分类函数被消费」错推为「两类映射表已同步」），已在
+   原报告就地更正。
+2. **加固：单一源 + 遍历式护栏（取代手写样本）**：控制器侧新增
+   `ToolDispatcher::READ_ONLY_EXEMPT_TOOLS`（显式命名 ReadOnly 名单的**单一源**）并驱动
+   `risk_class`（前缀族 `read_`/`list_`/`grep`/`search` 仍为规则式，不在此表）；宿主
+   `orz-host` 跨表护栏 `read_only_tools_never_fall_into_the_edit_bucket` 改为**遍历该
+   单一源**，并断言「代表参数表**恰好覆盖**单一源」（漏补代表参数同样报红）。同批新增
+   **声明面分类护栏**（`retrieval::projection` 测试）：主车道声明面工具必须 ∈
+   `tool_probe::WORK_TOOLS`（含探针判据）∪ 规则式非工作族（shell 族／外部检索族／
+   `submit`／检索模式门族），并以狗粮 run `RUN-CLI-6aa999d6` 的 7 件声明面作冻结样本。
+   设计依据＝§14.58／§14.59 的「单一探针面 ∩ 声明面」记账口径（该 run 实测声明面 7 件
+   vs 可用性分区 5 件，缺的正是 `blackboard_write`）。
+3. **0al 加固：锚定 fail-fast ＋ 克隆口径定义 ＋ 临时目录排除**：门禁
+   `check_repository()` 在锚定复核失败时**立即收口返回**（只带锚定错误）——因为
+   `main()` 的异常路径会丢弃已收集 errors，而「校验错误树」正是后续检查抛错的高发面
+   （0al 修复前实测 `relative_to` ValueError），否则 `gate would validate the wrong
+   tree` 这句诊断会被吞掉；锚定判据改按**解析后路径**比较（`-m` 形态下 cwd 与 ROOT
+   字符串形态不同，旧比较会重复插入）；非仓库内容排除前缀补 `.tmp`（此前 `.tmp*`
+   草稿目录被当作仓库内容，实测可把门禁打成 `valid: false`）。**冻结克隆口径**＝
+   **整树复制（保留未入库工作件）**：git 派生克隆（`git clone`／`git archive`）在本
+   仓库必然红（门禁链接检查依赖未入库工作件），不得用于 0al 判据取证。
+4. **0ak 裁决保持**（§4.3 采 B，零代码）：实施仍待另行排期；实施时的设计边界登记
+   （GAP-CONVERSATION-RESTORE 语义变更）与 §14 转录义务不变。
+5. **判据状态**：0aj／0al 判据闭合仍搭下一轮狗粮 run（用户 2026-09-16 指示暂不开始
+   新狗粮线）；本批新增/修改的机械钉全部实跑绿（orz-loop `--lib` 821/0/3、orz-host
+   `permission::tests` 20/20、orz-assurance 229、门禁锚定钉子 7/7、Python fixture
+   回放 262 passed、门禁 `valid: true`）。
+6. **过程新观察（未立项，留用户裁决）**：`scripts/generate_run_event_fixtures.py`
+   自称 fixture 树的 single source of truth，但重跑会**删除 38 个已入库 fixture**
+   （0z 资源族、0ac 检索族、`run-terminated` 等在该脚本内零命中；临时副本实跑
+   fixture 数 347 → 309）。本批因此改为「生成器定义同步 ＋ 三件生成物手工同步 ＋
+   逐件 SHA256 与生成器新输出对照（全部 MATCH）」。

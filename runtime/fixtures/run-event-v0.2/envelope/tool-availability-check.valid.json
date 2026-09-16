@@ -18,6 +18,7 @@
       "search_tool",
       "search_replace",
       "blackboard_read",
+      "blackboard_write",
       "todo_write",
       "update_goal",
       "compaction_whitelist_add"

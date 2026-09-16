@@ -988,6 +988,11 @@ PAYLOAD_GOOD_V02: dict[str, dict] = {
             "search_tool",
             "search_replace",
             "blackboard_read",
+            # 0aj-review（2026-09-16）：`blackboard_write` 随 0aj 入工作工具表
+            # （WORK_TOOLS 23 → 24，两侧 + Python reference 三处同批），本
+            # fixture 的 complete 面同步补入——否则样本仍是旧 23 全集形态，
+            # 「全分区」只作子集形态回放（§14.59 合法，但失真）。
+            "blackboard_write",
             "todo_write",
             "update_goal",
             "compaction_whitelist_add",
@@ -1390,6 +1395,10 @@ PAYLOAD_BAD_V02: dict[str, dict] = {
             "search_tool",
             "search_replace",
             "blackboard_read",
+            # 0aj-review（2026-09-16）：同 PAYLOAD_GOOD_V02——工作工具表 23 → 24
+            # 后「全分区」形态须含 `blackboard_write`（本 fixture 的唯一违规点
+            # 不在工具面，补入不改变其单约束违反性）。
+            "blackboard_write",
             "todo_write",
             "update_goal",
             "compaction_whitelist_add",

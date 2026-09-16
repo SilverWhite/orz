@@ -829,6 +829,7 @@ GLM F2 处置转排期（2026-09-06 用户裁决）：`orz-host/src/approval.rs`
 - [ ] 权限桥对 `blackboard_write`（ReadOnly 类）按设计自动放行（各策略面核对；现状＝每次调用 `permission_decision{deny}`，journal 实证 run `RUN-CLI-6aa999d6`）；探针注册面补声明（现与请求面脱同步）；`plan_write` 事件族端到端钉子。
 - [ ] 判据：无头 run 中调用 → allow → `plan_write` 出账 → `blackboard_read` 读回一致。入口：[BACKLOG 0aj](docs/BACKLOG_AND_PRIORITIES.md) / [`0AI_DOGFOOD_ASSESSMENT_CLOSURE` §3.1](docs/audits/0AI_DOGFOOD_ASSESSMENT_CLOSURE_2026-09-16.md)。
 - [x] **落码（2026-09-16，orz `12396e6a`）**：权限桥 `access_kind` 补 `blackboard_write` 内存类 arm（`Read(None)` 自动放行）＋探针面 `WORK_TOOLS` 23 → 24 三处同批（orz-loop `tool_probe`／orz-assurance `families`／Python `_WORK_TOOLS`，判据 `probe_storage`）＋三钉（表级断言＝修复前实跑红／跨表护栏样本补齐＝漏网直接原因／端到端链：调用 → `tool_completed{exit_code 0}` → `plan_write` 出账 → `blackboard_read` 读回一致）。读数 orz-loop 819/0/3、orz-host 串行 325/0/5、orz-assurance 229、fmt 干净、clippy 52→52 零新增。**判据行维持未勾**（要求无头 run 内实证；用户 2026-09-16 指示暂不开始新狗粮线）。入口：[`0aj/0al 修复与 0.5.3 载体` §1](docs/audits/0AJ_0AL_FRICTION_FIX_AND_053_CARRIER_2026-09-16.md)。
+- [x] **复核处理（2026-09-16，用户指示「全面检查设计/实现/符合性」＋「处理全部问题」）**：跨表护栏改**单一源 ＋ 遍历式**——控制器侧新增 `ToolDispatcher::READ_ONLY_EXEMPT_TOOLS` 并驱动 `risk_class`，宿主护栏遍历该表且断言「代表参数表恰好覆盖单一源」（漏补参数同样报红）；新增**声明面分类护栏**（声明面工具必须 ∈ 工作工具 ∪ 规则式非工作族；含 `RUN-CLI-6aa999d6` 7 件声明面冻结样本）；**归因补正**（漏网两因＝样本表漏列 ＋ 0ae 深审 §4.1「orz-host 无需改动」误判，原报告已就地更正）；例次口径统一为**同形第四例**；`families.rs` 过期计数改派生式；fixture 生成器两处 payload ＋ 3 件生成物补 `blackboard_write`（逐件 SHA256 与生成器新输出全部 MATCH）。读数：orz-loop 821/0/3、orz-host `permission::tests` 20/20。**判据行仍维持未勾**。入口：[`0aj/0al 独立复核与问题处理`](docs/audits/0AJ_0AL_REVIEW_HANDLING_2026-09-16.md)。
 
 ### 0ak 增量归档/三键存档 `-p` 车道不可达（P2；2026-09-16 立项，0ai 考核测出）
 
@@ -840,8 +841,9 @@ GLM F2 处置转排期（2026-09-06 用户裁决）：`orz-host/src/approval.rs`
 ### 0al 门禁冻结克隆树漂移（`check_repository` 导入原始树；P1；2026-09-16 立项，0ai 考核测出）
 
 - [ ] 门禁 ROOT 按脚本位置显式锚定（禁依赖 site-packages 可编辑安装；现状＝克隆内按文档口径调用会崩或静默校验错误的树）；补「克隆内校验克隆树」钉子。
-- [ ] 判据：冻结克隆内 `python scripts/check_repository.py` 校验克隆自身且与 `-m` 形态读数一致。入口：[BACKLOG 0al](docs/BACKLOG_AND_PRIORITIES.md) / [`0AI_DOGFOOD_ASSESSMENT_CLOSURE` §3.3](docs/audits/0AI_DOGFOOD_ASSESSMENT_CLOSURE_2026-09-16.md)。
+- [ ] 判据：**冻结克隆＝整树复制（保留未入库工作件；git 派生克隆不适用——门禁链接检查依赖未入库工作件，必然红）**，克隆内 `python scripts/check_repository.py` 校验克隆自身且与 `-m` 形态读数一致。入口：[BACKLOG 0al](docs/BACKLOG_AND_PRIORITIES.md) / [`0AI_DOGFOOD_ASSESSMENT_CLOSURE` §3.3](docs/audits/0AI_DOGFOOD_ASSESSMENT_CLOSURE_2026-09-16.md)。
 - [x] **落码（2026-09-16，父仓）**：`sys.path` 首位锚定脚本推导 `ROOT`（禁可编辑安装遮蔽）＋ `_check_reference_root_anchor` fail-closed（来源树 ≠ 本树即 `valid: false`）＋钉子 `assurance/tests/test_gate_root_anchor_nails.py` 4 例（本树锚定／reference 归属／外来模块负例／克隆形态自证）。实测对照：修复前模拟克隆内 `reference_module_root = D:\CLI`（错树）→ 修复后＝克隆自身；门禁 `valid: true`、新钉 4/4。**判据行维持未勾**（真克隆内复验待日后 run）。入口：[`0aj/0al 修复与 0.5.3 载体` §2](docs/audits/0AJ_0AL_FRICTION_FIX_AND_053_CARRIER_2026-09-16.md)。
+- [x] **复核处理（2026-09-16，用户指示「处理全部问题」）**：锚定判据 **fail-fast**（错误树立即收口返回，杜绝 `main()` 异常路径吞掉 `gate would validate the wrong tree` 诊断）＋锚定按**解析后路径**比较（`-m` 形态不再重复插入同树条目）＋非仓库内容排除前缀补 `.tmp`（此前 `.tmp*` 草稿目录被当仓库内容，实测可把门禁打成 `valid: false`）；钉子 4 → **7 例**（+B2 诊断保留／+B3 草稿排除／+B4 锚定幂等）。**真实克隆形态 A/B 取证**：修复前脚本在真克隆内逐字同形崩（`ValueError: … is not in the subpath of '<克隆根>'`），修复后不崩、无错误树，余 8 条错全为克隆既有事项（TER 失效链接 ×7＝既有摩擦 F6 ＋ 复刻剔除 `.git` 致 orz 子模块清单不可列 1 条）。判据行仍维持未勾（真克隆整链读数待日后 run）。入口：[`0aj/0al 独立复核与问题处理`](docs/audits/0AJ_0AL_REVIEW_HANDLING_2026-09-16.md)。
 
 ### 0am LIF 动力学升级线（P1 轮次预算换算先行＋LIF3D 影子基座与观测判据预注册；P1；2026-09-16 立项）
 

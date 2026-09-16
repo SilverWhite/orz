@@ -26,7 +26,20 @@ ROOT = Path(__file__).resolve().parents[1]
 # 路径不同形 → `relative_to` 抛错（门禁崩）；两侧路径同形 → **静默校验错误的
 # 树**（证据面可信度问题）。故此处把本树显式锚在 `sys.path` 首位，禁依赖
 # 可编辑安装；`_check_reference_root_anchor` 另做 fail-closed 复核。
-if sys.path[:1] != [str(ROOT)]:
+#
+# 0al-review（2026-09-16，B4）：锚定判据按**解析后路径**比较，而非字符串——
+# `python -m scripts.check_repository` 形态下 `sys.path[0]` 是 cwd（与 ROOT
+# 的字符串形态可能不同），旧比较会重复插入同一棵树。同树即不再插入。
+def _sys_path_is_anchored_to_root() -> bool:
+    if not sys.path:
+        return False
+    try:
+        return Path(sys.path[0] or ".").resolve() == ROOT
+    except OSError:  # pragma: no cover — 环境级故障（坏路径/权限）
+        return False
+
+
+if not _sys_path_is_anchored_to_root():
     sys.path.insert(0, str(ROOT))
 
 NON_REPOSITORY_PARTS = {
@@ -41,7 +54,11 @@ NON_REPOSITORY_PARTS = {
     # governed by the orz repo's own review, not this repository check
     "orz",
 }
-NON_REPOSITORY_PREFIXES = ("tmp",)
+# 0al-review（2026-09-16，B3）：临时/草稿目录不算仓库内容。原先只有 `tmp` 前缀，
+# 带点的变体（`.tmp-review` 一类）会被当作仓库内容，实测可直接把门禁打成
+# `valid: false`（链接检查扫到草稿里的失效链接）。项目惯例临时目录用 `tmp*`，
+# 此处同时容纳 `.tmp*` 变体，避免评审/复现用的临时目录污染门禁读数。
+NON_REPOSITORY_PREFIXES = ("tmp", ".tmp")
 
 
 def _is_non_repository_path(path: Path) -> bool:
@@ -1359,11 +1376,32 @@ def _check_reference_root_anchor(errors: list[str]) -> None:
         )
 
 
+LIMITATIONS = [
+    "This is a deterministic repository-integrity check, not scientific validation.",
+    "It does not establish oracle-free semantics or evaluation/holdout readiness.",
+]
+
+
 def check_repository() -> dict[str, Any]:
     errors: list[str] = []
     counts: dict[str, int] = {}
 
+    # 0al-review（2026-09-16，B2）：锚定判据 **fail-fast** —— reference 模块若
+    # 来自别的树，本函数立即收口返回（只带锚定错误）。原因：`main()` 把本函数
+    # 整体包在 try/except 里，异常路径会**丢弃已收集的 errors**，而"校验错误树"
+    # 的后续检查正是抛错高发面（0al 修复前的实测形态：`relative_to` ValueError）
+    # ——继续往下跑会把 `gate would validate the wrong tree` 这句诊断吞掉。
+    # fail-closed 语义不变：`valid: false`、进程退出码 1。
     _check_reference_root_anchor(errors)
+    if errors:
+        errors.sort()
+        return {
+            "valid": False,
+            "counts": counts,
+            "error_count": len(errors),
+            "errors": errors,
+            "limitations": LIMITATIONS,
+        }
 
     schema_paths = sorted(
         path for path in ROOT.rglob("*.schema.json")
@@ -3478,10 +3516,7 @@ def check_repository() -> dict[str, Any]:
         "counts": counts,
         "error_count": len(errors),
         "errors": errors,
-        "limitations": [
-            "This is a deterministic repository-integrity check, not scientific validation.",
-            "It does not establish oracle-free semantics or evaluation/holdout readiness.",
-        ],
+        "limitations": LIMITATIONS,
     }
 
 

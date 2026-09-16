@@ -92,6 +92,8 @@
 
 - **D0 工具注册与约束**：`blackboard_write` 在 `controller.rs:3036-3060` 无条件注册（不随 plan_first 门）；`section` 双闭集——ToolDef JSON `enum:["plan","notes"]` ＋ `blackboard.rs` `ModelNoteSection::parse` 拒绝式解析；≤8K 为**拒绝非截断**（`host_exec.rs:1850-1857`，`MODEL_NOTE_MAX_CHARS=8192`）；写入走 (round,domain)+ts 盖章。
 - **D0 ReadOnly 判定真实**（非 0v F1 的未知工具 fail-closed Edit 桶）：orz-loop `tool.rs:84-89` `risk_class` 收录 `blackboard_write → ReadOnly`，权限门 `host_exec.rs:1119-1132` 消费的正是同一 `ToolDispatcher::risk_class` ⇒ 全策略自动放行；orz-host permission.rs 无需改动——落点澄清，无「漏改 orz-host」问题。
+
+  > **❗0aj 更正（2026-09-16，就地注记；见 [`0aj/0al 复核处理`](0AJ_0AL_REVIEW_HANDLING_2026-09-16.md) / ADR-0010 §14.67）**：本条结论**错误**。宿主权限桥 `orz-host/src/permission.rs::access_kind` 是**独立映射表**，「控制器 `risk_class` 被 `host_exec` 消费」**推不出**「权限门必然放行」——`access_kind` 缺 arm 时整工具落 `Edit`，无头/死网关部署在权限门**确定性 deny**。狗粮 run `RUN-CLI-6aa999d6` 实测 `blackboard_write` **4/4** `permission_requested{risk:"ReadOnly"}` → `permission_decision{deny}`（无 `tool_started`）、`plan_write` **0** 条。这是「两表脱同步」同形**第四例**（前三例 project_doc_index／browser_read／browser_control，见 §14.66 第 10 项）。教训：两个分类函数「同名概念、两处实现」时，必须以**遍历式跨表断言**而非人工比对确认同向；0aj 已把该名单收为单一源并改遍历式护栏。
 - **notes 随 epoch 快照**：`epoch_snapshot` 携带 notes、`restore_epoch_snapshot` 恢复并推计数、`#[serde(default)]` 兼容旧档；机械单写者分区未开放写入。
 - **水位状态标**：`blackboard_watermark_label` 恒挂于每个 live `blackboard_read` 响应头（`controller.rs:2275-2320`，含零增量时）；blackboard_write 成功回执亦带；分母随 `ORZ_BLACKBOARD_LIVE_BUDGET_BYTES`（`render_fold.rs:31/39`，默认 10MiB，复用 fatigue 单一预算源）。
 - **D1 落点与顺序**：落点在 `agent_loop.rs:3345-3360` 而非 prompt.rs（prompt.rs 确未动）；0x 模板块先推（`controller.rs:3755-3762`）、guidance 后推——「追加一问」顺序正确、0x 模板零改动；N=20 一次性补救＝`plan_reminder_done` 旗标＋`model_note_count()==0` 判据＋MechanicalAuditUpdate 留痕。

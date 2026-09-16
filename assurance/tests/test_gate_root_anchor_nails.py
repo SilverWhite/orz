@@ -15,6 +15,7 @@ comes from that tree, and a foreign reference module fails closed.
 from __future__ import annotations
 
 import importlib.util
+import os
 from pathlib import Path
 import sys
 import tempfile
@@ -158,6 +159,96 @@ class GateRootAnchorNails(unittest.TestCase):
                 sys.modules[_REFERENCE_MODULE] = original_module
             if original_package is not None:
                 sys.modules[_REFERENCE_PACKAGE] = original_package
+
+    def test_wrong_tree_fails_fast_with_the_diagnosis_kept(self) -> None:
+        """0al-review (2026-09-16) B2: the anchor verdict must survive.
+
+        `main()` wraps `check_repository()` in a try/except that **replaces** the
+        collected errors, and an unanchored gate is exactly the shape whose later
+        sections raise (pre-fix: `relative_to` ValueError). So the wrong-tree
+        verdict has to be returned by `check_repository()` itself, before any
+        other section runs — otherwise the diagnosis is swallowed in the very
+        scenario it was written for.
+        """
+        original_path = list(sys.path)
+        import assurance
+
+        original_module = sys.modules.get(_REFERENCE_MODULE)
+        original_attribute = getattr(assurance, "run_event_journal_validation", None)
+        try:
+            gate = _load_gate(_SCRIPT, "check_repository_anchor_fail_fast")
+            with tempfile.TemporaryDirectory() as tmp:
+                foreign_root = Path(tmp) / "other-tree"
+                package = foreign_root / "assurance"
+                package.mkdir(parents=True)
+                reference = package / "run_event_journal_validation.py"
+                reference.write_text(
+                    "from pathlib import Path\n"
+                    "ROOT = Path(__file__).resolve().parents[1]\n",
+                    encoding="utf-8",
+                )
+
+                class _ForeignModule:
+                    __file__ = str(reference)
+
+                setattr(assurance, "run_event_journal_validation", _ForeignModule())
+                report = gate.check_repository()
+                self.assertFalse(report["valid"])
+                self.assertEqual(report["error_count"], 1, report["errors"])
+                self.assertIn("wrong tree", report["errors"][0])
+                # Early return: no other section ran (no counts collected).
+                self.assertEqual(report["counts"], {})
+        finally:
+            sys.path[:] = original_path
+            if original_attribute is not None:
+                setattr(assurance, "run_event_journal_validation", original_attribute)
+            elif hasattr(assurance, "run_event_journal_validation"):
+                delattr(assurance, "run_event_journal_validation")
+            if original_module is not None:
+                sys.modules[_REFERENCE_MODULE] = original_module
+
+    def test_scratch_directories_are_not_repository_content(self) -> None:
+        """0al-review (2026-09-16) B3: scratch dirs must not pollute the gate.
+
+        The exclusion is prefix-based on path components; a scratch directory
+        named `.tmp…` (leading dot) used to count as repository content, which
+        flipped a real run of the gate to `valid: false` via broken links inside
+        the scratch copy.
+        """
+        gate = _load_gate(_SCRIPT, "check_repository_anchor_scratch")
+        for relative in (".tmp_review/x.md", ".tmp-0al/x.md", "tmp_review/x.md"):
+            self.assertTrue(
+                gate._is_non_repository_path(_ROOT / relative),
+                f"{relative} must be excluded as scratch",
+            )
+        self.assertFalse(
+            gate._is_non_repository_path(_ROOT / "docs" / "audits" / "x.md"),
+            "real repository content must stay covered",
+        )
+
+    def test_anchoring_is_idempotent_for_the_same_tree(self) -> None:
+        """0al-review (2026-09-16) B4: anchoring compares resolved paths.
+
+        `python -m scripts.check_repository` leaves the cwd on `sys.path[0]` — a
+        different string shape for the same tree. The old string comparison
+        inserted the root a second time; the resolved-path check leaves it alone.
+        """
+        original_path = list(sys.path)
+        try:
+            same_tree_other_shape = str(_ROOT) + os.sep
+            sys.path.insert(0, same_tree_other_shape)
+            before_load = list(sys.path)
+            gate = _load_gate(_SCRIPT, "check_repository_anchor_idempotent")
+            after_load = list(sys.path)
+            self.assertEqual(gate.ROOT.resolve(), _ROOT.resolve())
+            self.assertEqual(
+                after_load,
+                before_load,
+                "the gate must not add a sys.path entry when position 0 already "
+                f"resolves to this tree (before={before_load}, after={after_load})",
+            )
+        finally:
+            sys.path[:] = original_path
 
 
 if __name__ == "__main__":
