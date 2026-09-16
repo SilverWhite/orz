@@ -33,9 +33,7 @@ use orz_assurance::{
 use orz_assurance::lif::{Domain, TemporalSessionSnapshot};
 use orz_assurance::session::snapshot::SnapshotStore;
 
-use crate::agent_loop::{
-    LoopOutcome, LoopProfile, SharedLoopServices, run_agent_loop, run_template_compact,
-};
+use crate::agent_loop::{LoopOutcome, LoopProfile, SharedLoopServices, run_agent_loop};
 use crate::agents::MainAgent;
 use crate::blackboard::{
     Blackboard, EditRecord, ExternalRetSection, InternalRetSection, SharedBlackboard,
@@ -305,15 +303,11 @@ pub use crate::compact::ContextCompactConfig;
 /// 模式面 → `retrieval/mode.rs`；压缩/消息预算 → `compact.rs`；
 /// denial 状态机 → `denial.rs`。
 pub use crate::compact::{
-    DEFAULT_CONTEXT_SCALE_HARD_TOKENS, DEFAULT_SLIDER_RESIDENT_TOKENS,
-    DEFAULT_SLIDER_RHYTHM_BUFFER_TOKENS, DEFAULT_SLIDER_WINDOW_TOKENS, DEFAULT_WHITELIST_CAP,
-    DEFAULT_WINDOW_UPLOAD_CAP_TOKENS, context_scale_hard_tokens_override,
-    slider_resident_tokens_override, slider_rhythm_buffer_tokens_override,
-    slider_window_tokens_override, window_upload_cap_tokens_override,
+    DEFAULT_MODEL_FACE_BLOCK_TOKENS, DEFAULT_MODEL_FACE_GUARD_TOKENS,
+    DEFAULT_MODEL_FACE_SLIDER_TOKENS, DEFAULT_WHITELIST_CAP, model_face_block_tokens_override,
+    model_face_guard_tokens_override, model_face_slider_tokens_override,
 };
-pub(crate) use crate::compact::{
-    compact_messages, estimate_message_tokens, estimate_messages_tokens,
-};
+pub(crate) use crate::compact::{estimate_message_tokens, estimate_messages_tokens};
 pub use crate::denial::DENIAL_BREAKER_CONSECUTIVE;
 pub(crate) use crate::denial::{DenialKey, DenialState, PolicyFeedback};
 pub use crate::retrieval::mode::RetrievalMode;
@@ -483,6 +477,10 @@ pub struct AgentLoopController {
     /// tool-result injection budget (estimated tokens, chars/2).
     /// `ORZ_MAX_INJECT_TOKENS_PER_ROUND`, default 50K. Settable for tests.
     pub(crate) max_inject_tokens_per_round: u64,
+    /// **模型面静态开销读数**（系统提示词 ＋ 工具定义）：`None` ＝ 生产按
+    /// **上一轮请求实测**（v8 实现批，审查 R-9）；`Some(0)` ＝ 测试缝隙
+    /// （小刻度钉子按「只量会话面」的既有语义驱动）。
+    pub(crate) model_face_static_overhead_pin: Option<u64>,
     /// IP5 pre-mutation snapshot store (session-scoped). `None` disables
     /// snapshotting (tests / hosts that opted out).
     pub(crate) snapshot_store: Option<Arc<SnapshotStore>>,
@@ -847,6 +845,7 @@ impl AgentLoopController {
                 .unwrap_or(DEFAULT_WEB_FETCH_CANDIDATE_CAP),
             max_inject_tokens_per_round: max_inject_tokens_per_round_override()
                 .unwrap_or(DEFAULT_MAX_INJECT_TOKENS_PER_ROUND),
+            model_face_static_overhead_pin: None,
             snapshot_store: None,
             blackboard_archive_dir: None,
             epoch_archive_errors: Mutex::new(Vec::new()),
@@ -855,26 +854,24 @@ impl AgentLoopController {
             // ACP 会话在 prompt 起始经 `with_context_scale_notified` 注入侧车值）。
             context_scale_notified: Mutex::new(Vec::new()),
             denial_state: Mutex::new(DenialState::default()),
-            // 动态上下文滑块 S1（2026-09-15，设计 §3.2/§3.3）：生产在构造时
-            // 读 `ORZ_SLIDER_WINDOW_TOKENS`（H）与 `ORZ_SLIDER_RESIDENT_TOKENS`
-            // （L）＋ `ORZ_SLIDER_RHYTHM_BUFFER_TOKENS`（rhythm ＝ H ＋ 缓冲）
-            // ＋ `ORZ_CONTEXT_SCALE_HARD_TOKENS`（实际上下文硬兜底）；测试用
-            // `with_slider_window_tokens` / `with_slider_resident_tokens` /
-            // `with_context_compact`（rhythm 缝隙，compact.rs）。
-            // 旧 `ORZ_FOLD_TRIGGER_TOKENS` / `ORZ_FOLD_TAIL_TOKENS` 随本批退役
-            // （14.32 桥预算并入驻留带 L；显式翻转登记见设计 DP-8）。
+            // 滑块上下文 v8（2026-09-16 勘误批，设计 §2 §3 §8）：生产在构造时
+            // 读 `ORZ_MODEL_FACE_SLIDER_TOKENS`（主滑块 x）、
+            // `ORZ_MODEL_FACE_BLOCK_TOKENS`（分块 y）、
+            // `ORZ_MODEL_FACE_GUARD_TOKENS`（1.10M 上限守卫＝异常保险）；测试用
+            // `with_slider_window_tokens` / `with_model_face_block_tokens` /
+            // `with_model_face_guard_tokens` / `with_context_scale_ladder`。
+            // **v7 五 env 随勘误退役**（`ORZ_SLIDER_WINDOW_TOKENS`／
+            // `ORZ_SLIDER_RESIDENT_TOKENS`／`ORZ_SLIDER_RHYTHM_BUFFER_TOKENS`／
+            // `ORZ_CONTEXT_SCALE_HARD_TOKENS`／
+            // `ORZ_CONTEXT_SCALE_WINDOW_CAP_TOKENS`——构造时不再读取，同
+            // `ORZ_LADDER_*` 先例显式作废而非静默失效）。
             context_compact: ContextCompactConfig {
-                slider_window_tokens: slider_window_tokens_override()
-                    .unwrap_or(DEFAULT_SLIDER_WINDOW_TOKENS),
-                slider_resident_tokens: slider_resident_tokens_override()
-                    .unwrap_or(DEFAULT_SLIDER_RESIDENT_TOKENS),
-                slider_rhythm_buffer_tokens: slider_rhythm_buffer_tokens_override()
-                    .unwrap_or(DEFAULT_SLIDER_RHYTHM_BUFFER_TOKENS),
-                hard_context_tokens: context_scale_hard_tokens_override()
-                    .unwrap_or(DEFAULT_CONTEXT_SCALE_HARD_TOKENS),
-                // 审查修正批（2026-09-15，P2⑤）：窗口轮全量上传上限（越线不开窗）。
-                window_upload_cap_tokens: window_upload_cap_tokens_override()
-                    .unwrap_or(DEFAULT_WINDOW_UPLOAD_CAP_TOKENS),
+                slider_window_tokens: model_face_slider_tokens_override()
+                    .unwrap_or(DEFAULT_MODEL_FACE_SLIDER_TOKENS),
+                model_face_block_tokens: model_face_block_tokens_override()
+                    .unwrap_or(DEFAULT_MODEL_FACE_BLOCK_TOKENS),
+                model_face_guard_tokens: model_face_guard_tokens_override()
+                    .unwrap_or(DEFAULT_MODEL_FACE_GUARD_TOKENS),
                 ..ContextCompactConfig::default()
             },
             whitelist: Mutex::new(Vec::new()),
@@ -1238,6 +1235,12 @@ impl AgentLoopController {
         self
     }
 
+    /// v8 实现批（2026-09-16，审查 R-9）：模型面**静态开销读数**（系统提示词
+    /// ＋ 工具定义）的测试缝隙 pin。`None` ＝ 生产（按上一轮请求实测）。
+    pub(crate) fn model_face_static_overhead_pin(&self) -> Option<u64> {
+        self.model_face_static_overhead_pin
+    }
+
     /// 2026-08-08 blackboard partition (A4) + v1.15 (2026-08-14): ingest an
     /// approved plan — `plan_id` + `plan_epoch` identity, goal + step
     /// descriptions — into the blackboard plan section (the plan-mode
@@ -1471,6 +1474,7 @@ impl AgentLoopController {
             retrieval_max_tool_rounds: None,
             candidate_cap: DEFAULT_WEB_FETCH_CANDIDATE_CAP,
             max_inject_tokens_per_round: DEFAULT_MAX_INJECT_TOKENS_PER_ROUND,
+            model_face_static_overhead_pin: None,
             snapshot_store: None,
             blackboard_archive_dir: None,
             epoch_archive_errors: Mutex::new(Vec::new()),
@@ -3444,67 +3448,15 @@ impl AgentLoopController {
                 m
             }
         };
-        // D2-2 (2026-08-14, ADR-0010 v1.10 / CONTEXT_COMPACTION_DESIGN §6):
-        // a restored conversation may exceed the provider window before the
-        // first request. Estimate it and, when over the conservative
-        // recovery threshold (200K), mechanically drop whole OLD rounds
-        // toward the recovery target — preamble/whitelist and the newest
-        // rounds stay verbatim. The FULL sidecar is copied into the run
-        // journal as the audit copy (the sidecar file itself is not modified
-        // here), a recovery marker is inserted, and the truncation is
-        // journaled. Grill turns are excluded (grill keeps its own history
-        // path; conversation and grill are mutually exclusive).
-        if conversation.is_some() {
-            let before_estimate = estimate_messages_tokens(&messages);
-            let cfg = self.context_compact;
-            if before_estimate > cfg.recovery_trigger_tokens {
-                let restored_full = conversation.as_deref().cloned().unwrap_or_default();
-                let stats = compact_messages(&mut messages, cfg.recovery_target_tokens);
-                if stats.rounds_dropped > 0 {
-                    let audit_path = host
-                        .journal()
-                        .journal_dir()
-                        .join("recovery-conversation-full.json");
-                    if let Ok(payload) = serde_json::to_string_pretty(&restored_full) {
-                        if let Some(parent) = audit_path.parent() {
-                            let _ = std::fs::create_dir_all(parent);
-                        }
-                        let _ = std::fs::write(&audit_path, payload);
-                    }
-                    let marker = crate::prompt::recovery_truncation_marker(
-                        stats.rounds_dropped,
-                        before_estimate,
-                        stats.estimated_tokens_after,
-                        &audit_path.display().to_string(),
-                    );
-                    messages.insert(
-                        stats.marker_index,
-                        Message {
-                            role: Role::User,
-                            content: marker,
-                            tool_call_id: None,
-                            tool_calls: Vec::new(),
-                            reasoning_content: None,
-                            round: None,
-                        },
-                    );
-                    writer
-                        .record(
-                            EventType::ContextRecoveryTruncated,
-                            serde_json::json!({
-                                "before_estimate_tokens": before_estimate,
-                                "target_tokens": cfg.recovery_target_tokens,
-                                "after_estimate_tokens": stats.estimated_tokens_after,
-                                "rounds_dropped": stats.rounds_dropped,
-                                "messages_dropped": stats.messages_dropped,
-                                "messages_kept": stats.messages_kept + 1,
-                                "audit_path": audit_path.display().to_string(),
-                            }),
-                        )
-                        .await?;
-                }
-            }
-        }
+        // D2-2（2026-08-14）**随 v8 实现批退役**（2026-09-16，审查 R-3）：
+        // 恢复会话「首请求前机械截断本地面」的语义与 v8 的两面设计冲突——
+        // 本地面＝单对话全量（不因任何模型面动作丢失），而首请求的体积约束
+        // 已由**模型面投影层 ＋ 按越线重新武装的 H1/T1 ＋ 上限守卫**在前一个
+        // loop-top 承担（loop-top 判定先于请求装配；恢复后若读数越线，先截断
+        // 模型面再发请求）。⇒ `context_recovery_truncated` 事件自此**生产零
+        // 写入**（闭枚举值保留仅供历史 journal 回放，同 `attention_ladder`
+        // 先例）；`compact_messages` 与 `recovery_*` 配置随之下线。
+        // Grill turns 本就不走本车道（各自一次性历史）。
         // GAP-SUBAGENT-RUNTIME (2026-08-10): the model↔tool loop body is
         // the shared `run_agent_loop` (agent_loop.rs) — the main agent and
         // both retrieval subagents run the SAME loop; the main profile
@@ -3549,8 +3501,6 @@ impl AgentLoopController {
         let LoopOutcome {
             last_text,
             tool_rounds,
-            rounds_since_compact,
-            mut fold_state,
             ..
         } = outcome;
 
@@ -3561,84 +3511,14 @@ impl AgentLoopController {
         // "completed" unless a hard error path (degeneration / wallclock)
         // invalidated it earlier.
         let (terminal_event, status) = (EventType::RunFinished, "completed");
-        // P0-D review fix (2026-08-14, ADR-0010 v1.14): end-of-session
-        // compaction — 治本 for restore. A successful run compacts its
-        // conversation BEFORE the terminal event and the sidecar write-back,
-        // pinning the summary marker into the persisted conversation (D3-1
-        // retains it on restore); the D2-2 recovery pre-check remains the
-        // fallback for older sidecars that never ran this path. Grill turns
-        // are excluded (they keep their own one-shot history). The summary
-        // call is forced (terminal housekeeping, not a mid-task cost gate).
-        if conversation.is_some() {
-            let estimate = estimate_messages_tokens(&messages);
-            if estimate > self.context_compact.session_end_trigger_tokens {
-                let svc = SharedLoopServices {
-                    blackboard: &self.blackboard,
-                    denial_state: &self.denial_state,
-                    pacing_rounds: &self.pacing_rounds,
-                    context_compact: &self.context_compact,
-                    evidence: Some(&self.main_evidence),
-                    policy_revision: &self.policy_revision,
-                    max_inject_tokens_per_round: self.max_inject_tokens_per_round,
-                    blackboard_archive_dir: self.blackboard_archive_dir(),
-                    session_id: self.session_id.as_deref(),
-                    in_flight_tools: None,
-                };
-                let (bb_round, bb_domain) = self.blackboard_stamp();
-                let _ = run_template_compact(
-                    &svc,
-                    writer,
-                    host,
-                    &mut messages,
-                    estimate,
-                    "session_end",
-                    true,
-                    false,
-                    rounds_since_compact,
-                    self.context_compact.recent_tail_rounds,
-                    // FUS-LEDGER-FOLD-STATE external-file design
-                    // (2026-08-18, ADR-0010 §14.28 审查修复): 主车道收尾
-                    // 压缩的 marker 携带外挂台账路径提示（内部再按
-                    // 文件存在/已折叠过滤）。
-                    Some(&crate::action_ledger::ledger_file_path(&host.session_cwd())),
-                    // P2-14 S1：主会话收尾压缩走 v0.3 折叠快照（此处即
-                    // 主会话 —— grill 已在上文排除、检索车道走 dispatch.rs
-                    // 自己的 session-end 调用并传 None）。
-                    Some(crate::summary::FoldSnapshotCtx {
-                        current_round: bb_round,
-                        current_domain: bb_domain,
-                    }),
-                    &mut fold_state,
-                    // v7（S1 修订批）＋ 审查修正批（2026-09-15，审查 P3⑥）：
-                    // 收尾压缩的定位指针——journal 取**整 run 事件跨度**
-                    // （`0 → 当前 seq`，run 从 `run_started`(seq=0) 起连续编号，
-                    // 该区间是真实跨度而非占位值）；台账 `[seq]` 跨度属 loop
-                    // 内态、收尾路径确实不可得 ⇒ 如实留「（无）」（`ledger_seq`
-                    // 不设）；sidecar 路径按会话 id 前 8 字符同源给出。
-                    &crate::summary::LocatorPointers {
-                        ledger_path: Some(
-                            crate::action_ledger::ledger_file_path(&host.session_cwd())
-                                .display()
-                                .to_string(),
-                        ),
-                        journal_run: Some(writer.run_id().to_string()),
-                        journal_seq: Some((0, writer.seq())),
-                        conversation_path: self.session_id.as_deref().map(|id| {
-                            let suffix: String = id.chars().take(8).collect();
-                            host.session_cwd()
-                                .join(".gsa")
-                                .join("conversations")
-                                .join(format!("{suffix}.json"))
-                                .display()
-                                .to_string()
-                        }),
-                        ..crate::summary::LocatorPointers::default()
-                    },
-                    None,
-                )
-                .await?;
-            }
-        }
+        // P0-D 收尾压缩（2026-08-14）**随 v8 实现批退役**（2026-09-16，审查 R-3）：
+        // 会话关闭前「按总量把旧轮 drain 出本地面 ＋ 把摘要 marker 钉进侧车」的
+        // 语义与 v8 §7 冲突——本地面＝单对话全量逐字、**归档时随黑板一起打包**
+        // （无实际上限，储量不足由 0z 资源门兜底），而 v8 的模型面收缩已由
+        // 投影层 ＋ H1/T1 ＋ 守卫在 loop 内完成，恢复面也不再需要「侧车里的小
+        // 会话」：恢复后第一个 loop-top 会在发请求前按读数截断**模型面**。
+        // ⇒ 侧车（进而归档包）自此保持逐字全量；检索／grill 车道各自的一次性
+        // 历史仍按自己的 session-end 路径收口（它们不写回本会话侧车）。
         // TER 全面审查 P1-1 (2026-09-04)：run 收尾 drain 一次 idle-kill
         // 生命周期事件——后台任务在最后一次工具调用之后、run 结束前被
         // idle-kill 时，事件仍会落在 RunFinished 之前（链规则要求晚于原
@@ -5455,13 +5335,16 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
-    /// D2-2 (2026-08-14, ADR-0010 v1.10 / CONTEXT_COMPACTION_DESIGN §6): a
-    /// restored conversation over the recovery window is mechanically
-    /// truncated before the first request — whole old rounds dropped, the
-    /// recovery marker inserted, the full sidecar copied into the run
-    /// journal as the audit copy, and `context_recovery_truncated` journaled.
+    /// v8 实现批（2026-09-16，审查 R-3）：**恢复后的体积约束改由模型面承担**。
+    ///
+    /// D2-2（恢复会话在首个请求前机械截断本地面）随勘误批退役 ⇒
+    /// ① `context_recovery_truncated` **生产零写入**；② 本地面（侧车）**逐字
+    /// 全量**保留；③ 越线由 loop-top 的阶梯/守卫在**发请求之前**把模型面
+    /// 压回线上（首个请求已是投影面：被截断块的原文不在请求里，而是在本地
+    /// 会话与按块档案里）。
     #[tokio::test]
-    async fn recovery_conversation_over_window_truncates_before_first_request() {
+    async fn restore_keeps_the_local_face_verbatim_and_projects_the_model_face() {
+        use crate::context_scale::{LadderStep, LadderTier};
         let dir = test_dir();
         let journal = JournalRecorder::new(dir.clone());
         let host = TestHost {
@@ -5472,17 +5355,48 @@ mod tests {
             ScriptedResponse::text("收到"),
             ScriptedResponse::text("收到"),
         ]));
-        let controller =
-            AgentLoopController::with_gateway(fake.clone()).with_recovery_compact(10, 2);
+        let fat = "F".repeat(4_000); // ≈2K 估算/轮
+        // 极小阶梯：T1 钉在 2K 模型面估算 ⇒ 首个 loop-top 必然越线。
+        let ladder = [
+            LadderStep {
+                tokens: u64::MAX,
+                tier: LadderTier::Soft,
+            },
+            LadderStep {
+                tokens: u64::MAX,
+                tier: LadderTier::Soft,
+            },
+            LadderStep {
+                tokens: u64::MAX,
+                tier: LadderTier::Soft,
+            },
+            LadderStep {
+                tokens: u64::MAX,
+                tier: LadderTier::Soft,
+            },
+            LadderStep {
+                tokens: u64::MAX,
+                tier: LadderTier::HardReminder,
+            },
+            LadderStep {
+                tokens: 2_000,
+                tier: LadderTier::HardTruncate,
+            },
+        ];
+        let controller = AgentLoopController::with_gateway(fake.clone())
+            .with_slider_window_tokens(1_000)
+            .with_model_face_block_tokens(500)
+            .with_context_scale_ladder(ladder)
+            .with_session_id(Some("SESSION-RESTORE".to_string()));
         let mut conversation = vec![conv_message(Role::User, "第一问")];
-        conversation.extend(tool_round("call-r1", "第一轮工具结果"));
-        conversation.extend(tool_round("call-r2", "第二轮工具结果"));
-        let before = conversation.clone();
+        conversation.extend(tool_round("call-r1", &fat));
+        conversation.extend(tool_round("call-r2", &fat));
+        let before_len = conversation.len();
         let _ = controller
             .run_turn(
                 &host,
                 "第二问",
-                "RUN-REC",
+                "RUN-RESTORE",
                 MANIFEST,
                 0,
                 None,
@@ -5492,39 +5406,37 @@ mod tests {
             .await
             .unwrap();
         let evs = events(&dir);
-        let trunc: Vec<&RunEvent> = evs
-            .iter()
-            .filter(|e| e.event_type == EventType::ContextRecoveryTruncated)
-            .collect();
-        assert_eq!(trunc.len(), 1, "{evs:?}");
+        // ① D2-2 生产零写入。
         assert!(
-            trunc[0].payload["rounds_dropped"].as_u64().unwrap() >= 1,
-            "must drop whole rounds: {:?}",
-            trunc[0].payload
+            evs.iter()
+                .all(|e| e.event_type != EventType::ContextRecoveryTruncated),
+            "D2-2 恢复预检已退役: {evs:?}"
         );
-        let audit = dir.join("recovery-conversation-full.json");
-        assert!(audit.exists(), "full sidecar audit copy must exist");
-        let audit_payload: serde_json::Value =
-            serde_json::from_str(&std::fs::read_to_string(&audit).unwrap()).unwrap();
-        assert_eq!(audit_payload, serde_json::to_value(&before).unwrap());
-        // The recovery marker reaches the first model request and survives
-        // the restore write-back (D3-1).
+        // ② 本地面逐字全量：两条 fat 原文都在、条数只增不减（无 drain）。
+        assert_eq!(
+            conversation.iter().filter(|m| m.content == fat).count(),
+            2,
+            "本地面逐字原文必须保留: {conversation:?}"
+        );
+        assert!(
+            conversation.len() >= before_len,
+            "本地面不得被 drain: {conversation:?}"
+        );
+        // ③ 首个请求已是**投影面**：越线块的原文不在请求里，且带截断告知块。
         let reqs = fake.received_requests();
         let first = &reqs[0].messages;
-        assert!(
-            first.iter().any(|m| m
-                .content
-                .starts_with(crate::prompt::CONTEXT_COMPRESSED_PREFIX)),
-            "recovery marker must reach the first request: {first:?}"
+        assert_eq!(
+            first.iter().filter(|m| m.content == fat).count(),
+            1,
+            "越线块的原文本地保留、模型面移出（投影）: {first:?}"
         );
         assert!(
-            conversation.iter().any(|m| m
-                .content
-                .starts_with(crate::prompt::CONTEXT_COMPRESSED_PREFIX)),
-            "marker must survive write-back: {conversation:?}"
+            first
+                .iter()
+                .any(|m| m.content.starts_with("[CONTEXT_SCALE")),
+            "首个请求必须带截断告知块（投影已在发请求前完成）: {first:?}"
         );
-        // No orphaned tool results after truncation: every Tool message's
-        // call id must be declared by a surviving assistant message.
+        // ④ 无孤儿工具结果：存活 Tool 消息的 call_id 都必须有声明。
         let declared: Vec<&str> = conversation
             .iter()
             .filter(|m| m.role == Role::Assistant)
@@ -5535,7 +5447,7 @@ mod tests {
                 m.tool_call_id
                     .as_deref()
                     .is_some_and(|id| declared.contains(&id)),
-                "orphan tool result after truncation: {m:?}"
+                "orphan tool result: {m:?}"
             );
         }
         let _ = std::fs::remove_dir_all(&dir);

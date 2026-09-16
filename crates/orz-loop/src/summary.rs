@@ -789,6 +789,10 @@ pub struct LocatorPointers {
     pub journal_seq: Option<(u64, u64)>,
     /// conversation sidecar 路径。
     pub conversation_path: Option<String>,
+    /// **本地面是否全量保留**（2026-09-16 v8 实现批）：v8 的按块压缩/截断
+    /// **不 drain** 会话本体 ⇒ sidecar 仍含被处理分块的逐字原文，定位文案必须
+    /// 如实说「在被其中」（v7 的「被压区不在其中」是 drain 语义，随勘误作废）。
+    pub local_face_full: bool,
 }
 
 impl LocatorPointers {
@@ -801,27 +805,40 @@ impl LocatorPointers {
             }
         }
         // 审查修正批（2026-09-15，审查 P2③）：**逐项标注载体到哪一层**——
-        // 原文案「逐字原文见上方四项定位指针」过承诺：被压区经 `drain` 后
-        // 不在 `messages`（⇒ 不在 sidecar），compaction 存档按设计只存摘要与
-        // 指针，台账行每字段 300 字符上限 ⇒ **逐字原文的权威载体只有
-        // journal**（逐事件全文、链式 sha256）。逐字分页回读仍属 S2。
+        // compaction 存档按设计只存摘要与指针，台账行每字段 300 字符上限。
+        //
+        // v8 实现批（2026-09-16，审查 R-4）：`local_face_full` ＝ 按块压缩/
+        // 截断路径（**不 drain**，本地面全量保留）⇒ sidecar 与**按块档案**都是
+        // 逐字载体，「被压区不在其中」不再成立（那是 v7 drain 语义）；模板轨
+        // （检索/grill 车道与会话收尾的机械 drain）仍按原口径如实标注。
         let ledger_file = self
             .ledger_path
             .as_deref()
             .map(|p| format!("（文件 {p}；每字段 300 字符摘要行）"))
             .unwrap_or_default();
+        let sidecar_line = match (self.local_face_full, self.conversation_path.as_deref()) {
+            (true, Some(path)) => format!(
+                "会话档案（sidecar）: {path}（**含被处理分块的逐字原文**——v8 按块压缩/截断不 drain 会话本体）"
+            ),
+            (true, None) => {
+                "会话档案（sidecar）: （无）——本地面全量留档于会话本体（未 drain）".to_string()
+            }
+            (false, Some(path)) => {
+                format!("会话档案（sidecar）: {path}（未被移出的对话；被压区不在其中）")
+            }
+            (false, None) => "会话档案（sidecar）: （无）".to_string(),
+        };
         format!(
             "原文定位（四项）:\n\
-             - compaction 存档: {}（sha256:{}；只存摘要与指针，不含被压区逐字原文）\n\
+             - compaction 存档: {}（sha256:{}；只存摘要与指针，不含被处理分块逐字原文）\n\
              - 台账 [seq] 区间: {}{ledger_file}\n\
              - journal: run={} seq={}（逐事件全文＝**逐字原文的权威载体**）\n\
-             - 会话档案（sidecar）: {}（未被移出的对话；被压区不在其中）",
+             - {sidecar_line}",
             archive_path.display(),
             digest,
             range(self.ledger_seq),
             self.journal_run.as_deref().unwrap_or("（无）"),
             range(self.journal_seq),
-            self.conversation_path.as_deref().unwrap_or("（无）"),
         )
     }
 }
@@ -1345,13 +1362,6 @@ mod tests {
     use crate::blackboard::{
         ActionResult, EditRecord, FailedEvidence, PlanStep, SharedBlackboard, StepStatus,
     };
-    use crate::controller::AgentLoopController;
-    use crate::controller_test_support::*;
-    use crate::gateway::fake::{FakeProvider, ScriptedResponse};
-    use crate::gateway::model::{FinishReason, ModelGateway, ToolCall};
-    use crate::host::ToolResult;
-    use orz_assurance::{EventType, JournalRecorder};
-    use std::sync::Arc;
 
     fn slots() -> SummarySlots {
         SummarySlots {
@@ -2020,6 +2030,7 @@ mod tests {
             journal_run: Some("RUN-LOC-0".to_string()),
             journal_seq: Some((11, 88)),
             conversation_path: Some(".gsa/conversations/session1.json".to_string()),
+            local_face_full: false,
         };
         let summary = "[SEMANTIC_SUMMARY]\n目标: x\n已完成: y\n[/SEMANTIC_SUMMARY]";
         let marker = build_model_summary_marker(
@@ -2053,8 +2064,10 @@ mod tests {
         // 哪一层**——被压区逐字原文只在 journal（drain 后不在 messages/sidecar，
         // compaction 存档只存摘要与指针、台账行 300 字符上限），不得再写
         // 「逐字原文见四项指针」的过承诺。
+        // v8 实现批（2026-09-16，审查 R-4）：模板轨（本钉，`local_face_full=false`）
+        // 口径不变；按块压缩/截断路径置真 ⇒ 文案改口为「含被处理分块的逐字原文」。
         for expected in [
-            "不含被压区逐字原文",
+            "不含被处理分块逐字原文",
             "每字段 300 字符摘要行",
             "逐字原文的权威载体",
             "被压区不在其中",
@@ -2101,99 +2114,6 @@ mod tests {
         assert!(marker.contains("存档写入失败：摘要未落盘"));
         assert!(marker.contains("黑板会话: （无）"));
         assert!(crate::prompt::is_restore_retained_block(&marker));
-    }
-
-    /// P0-D review fix (2026-08-14, ADR-0010 v1.14): a summary archive write
-    /// failure is retried and then EXPLICITLY reported in the event and the
-    /// marker — never swallowed.
-    #[tokio::test]
-    async fn summary_archive_write_failure_is_reported() {
-        let dir = test_dir();
-        let journal = JournalRecorder::new(dir.clone());
-        let blocked_cwd = test_dir();
-        // `.gsa` exists as a FILE — create_dir_all(.gsa/compaction) fails.
-        std::fs::write(blocked_cwd.join(".gsa"), "occupied").unwrap();
-        let host = BlockedArchiveHost {
-            inner: TestHost {
-                journal,
-                tool_result: Some(ToolResult {
-                    output: "x".repeat(600),
-                    exit_code: Some(0),
-                    output_encoding: None,
-                    structured: None,
-                    ..Default::default()
-                }),
-            },
-            blocked_cwd: blocked_cwd.clone(),
-        };
-        let tool_call = |id: &str| ScriptedResponse {
-            text: None,
-            tool_calls: vec![ToolCall {
-                name: "read_file".to_string(),
-                arguments: serde_json::json!({"target_file": "a.txt"}),
-                call_id: id.to_string(),
-            }],
-            finish_reason: FinishReason::ToolCalls,
-            reasoning_content: None,
-            prompt_tokens: Some(300_000),
-        };
-        let fake = Arc::new(FakeProvider::new(vec![
-            tool_call("call-a1"),
-            tool_call("call-a2"),
-            tool_call("call-a3"),
-            tool_call("call-a4"),
-            // Round a4 also reports 300K — the fallback re-fires on the next
-            // loop-top (机械模式：两次压缩均零模型调用，无摘要项).
-            ScriptedResponse::text("候选答案"),
-            ScriptedResponse::text("最终答案"),
-        ]));
-        let gateway: Arc<dyn ModelGateway> = fake.clone();
-        let controller = AgentLoopController::with_gateway(gateway)
-            .with_context_compact(150_000, 400, 20, 100_000)
-            // v7（S1 修订批）：未折叠路径以驻留带 L 为界（不再按轮数切）——
-            // 钉成「最新 2 轮」的估计量以复现既有 fallback 重触发。
-            .with_slider_resident_tokens(800)
-            .with_summary_guards(1, 1.0);
-        controller
-            .run_turn(
-                &host,
-                "压缩测试",
-                "RUN-COMPACT-ARCHIVE",
-                MANIFEST,
-                0,
-                None,
-                None,
-                None,
-            )
-            .await
-            .unwrap();
-
-        let compact_events: Vec<serde_json::Value> = events(&dir)
-            .into_iter()
-            .filter(|e| e.event_type == EventType::ContextCompressed)
-            .map(|e| e.payload)
-            .collect();
-        // The fallback re-fires while the measured tokens stay over the
-        // safety line — every summary attempt reports the write failure.
-        assert_eq!(compact_events.len(), 2, "{compact_events:?}");
-        for event in &compact_events {
-            assert_eq!(event["archive_write_failed"], true);
-            assert_eq!(event["summary_incomplete"], false);
-            assert!(event["summary_path"].as_str().is_some());
-        }
-        // The archive path/digest are still reported (the intended pointer),
-        // and the marker carries the explicit failure note.
-        let received = fake.received_requests();
-        assert!(
-            received.iter().any(|r| r
-                .messages
-                .iter()
-                .any(|m| { m.content.contains("存档写入失败：摘要未落盘") })),
-            "archive failure must reach the model: {received:?}"
-        );
-
-        let _ = std::fs::remove_dir_all(&dir);
-        let _ = std::fs::remove_dir_all(&blocked_cwd);
     }
 
     // ---- P2-14 S1：v0.3 折叠视图快照 marker（2026-09-04，ADR-0010

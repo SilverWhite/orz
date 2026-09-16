@@ -26,7 +26,7 @@ use crate::blackboard::SharedBlackboard;
 use crate::checkpoint::{self, PendingCheckpoint};
 use crate::controller::{
     AgentLoopController, AgentLoopError, ContextCompactConfig, DENIAL_BREAKER_CONSECUTIVE,
-    DenialKey, DenialState, EventWriter, PolicyFeedback, TEXT_DELTA_PACING, compact_messages,
+    DenialKey, DenialState, EventWriter, PolicyFeedback, TEXT_DELTA_PACING,
     estimate_message_tokens, estimate_messages_tokens, format_edit_record,
 };
 use crate::gateway::model::{
@@ -747,35 +747,6 @@ pub(crate) struct LoopOutcome {
     pub budget_exhausted: bool,
 }
 
-/// P0-D review fix (2026-08-14, ADR-0010 v1.14): the reduction-guard retry
-/// budget — a guard that cannot be satisfied retries on the next trigger
-/// rounds (without interrupting content) and only after three consecutive
-/// failures forces one compaction and reports `guard_failed`.
-pub(crate) const GUARD_RETRY_LIMIT: u32 = 3;
-
-/// FUS-LEDGER-FOLD-STATE external-file design (2026-08-18, ADR-0010
-/// §14.28 审查修复): consecutive external-ledger append failures tolerated
-/// before folding is disabled for the rest of the loop invocation — a
-/// persistent write failure (disk full / permission / `.gsa/ledger` path
-/// conflict) must degrade to the pre-fold full view, never spin the loop
-/// on retries (设计 §8「推进失败不阻塞会话」).
-pub(crate) const FOLD_WRITE_FAILURE_LIMIT: u32 = 3;
-
-/// v7 压缩分工（S1 修订批，2026-09-15，设计 §3.4.1；用户裁定 DP-14）：
-/// **语义轨来源**——`Some` ＝ 用模型产出的语义摘要**替换**被压区
-/// （`mode=model_summary`）；`None` ＝ 既有机械模板轨（结构化轨，照常
-/// 作用于上下文）。两轨共用同一条 drain / marker / 存档 / 事件路径，
-/// 差别只在替换文本的来源与事件 mode。
-#[derive(Debug, Clone, Copy)]
-pub(crate) struct SemanticCompaction<'a> {
-    /// 模型产出的语义摘要块正文（机械识别，见
-    /// `context_scale::extract_model_summary`）。
-    pub summary: &'a str,
-    /// 事件 reason：窗口收口＝`context_scale_window`；模型自选＝
-    /// `model_selected`（两者都在 `context_compressed.reason` 闭枚举内）。
-    pub reason: &'a str,
-}
-
 /// Outcome of one template-summary attempt.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum CompactDecision {
@@ -789,34 +760,14 @@ pub(crate) enum CompactDecision {
     Executed,
 }
 
-/// **用户 2026-09-15 裁定**（950K 最后防线的失败处置，取代 v7「压不动 ⇒
-/// anomaly 停手／只开窗」）：硬兜底压完仍在硬线之上时收口的**压缩失败事实**
-/// ——机械层此时已把「滑块（驻留带）之外」能移出的都移出了（视图只剩前置＋
-/// 固定指针＋当前滑块），模型必须被明确告知该事实并自行决定下一步，任务继续。
-#[derive(Debug, Clone, Copy)]
-struct HardContextFailure {
-    /// 本轮机械层实际移出的完整轮数（`0` ＝ 滑块之外已无可截留内容）。
-    dropped_rounds: u32,
-}
-
-/// v7 未折叠降级路径的保留起点（S1 修订批，设计 §3.4.1「对象边界
-/// （不变量）」）：**主车道**（有外挂台账＝折叠车道）且非 session_end ⇒
-/// 按**驻留带预算 L** 换算的完整轮切点（与驱逐同一把尺）；没有可移出内容
-/// （全部落在驻留带内）返回 `None`（NoOp，**不得**退化成「保留最近 2 轮」
-/// ——那会吃掉滑块内容）。检索/grill 等非主车道与 session_end 终局清理保持
-/// 既有 `collapsed_cut(tail)` 语义（车道范围裁决 / 设计 §3.4.1 末条）。
-fn compact_fallback_cut(
-    messages: &[Message],
-    main_lane: bool,
-    reason: &str,
-    resident_budget: u64,
-    tail: usize,
-) -> Option<usize> {
-    if main_lane && reason != "session_end" {
-        crate::action_ledger::bridge_cut(messages, resident_budget)
-    } else {
-        crate::action_ledger::collapsed_cut(messages, tail)
-    }
+/// 机械模板压缩的保留起点（**v8 起＝收尾／检索车道既有语义**）。
+///
+/// 主车道的**机械驱逐／推进**随滑块勘误退役（设计 v8 §10：`advance_fold`／
+/// 驻留带预算 L／H−L 参数体系退役）——模型面改由投影层承载、`messages`
+/// 不再被压缩 drain。本函数因此只保留 `collapsed_cut(tail)` 一条语义，
+/// 供**检索/grill 车道**与**会话收尾**（模型已离场）的机械模板压缩使用。
+fn compact_fallback_cut(messages: &[Message], tail: usize) -> Option<usize> {
+    crate::action_ledger::collapsed_cut(messages, tail)
 }
 
 /// v7 原文定位指针（S1 修订批，设计 §3.5.1）：conversation sidecar 路径提示
@@ -883,8 +834,6 @@ pub(crate) async fn run_template_compact(
     // marker／摘要块必带（compaction 存档＋digest／台账 `[seq]` 区间／
     // journal run+sequence／conversation sidecar 路径）。
     locators: &crate::summary::LocatorPointers,
-    // v7 压缩分工（设计 §3.4.1，DP-14）：语义轨来源（None ＝ 机械模板轨）。
-    semantic: Option<SemanticCompaction<'_>>,
 ) -> Result<CompactDecision, AgentLoopError> {
     // FUS-LEDGER-FOLD-STATE 400 修复 (2026-08-18, ADR-0010 §14.27 / 处理文档
     // LEDGER_FOLD_MARKER_INDEX_FIX_HANDLING_2026-08-18 §2.1): the rolling
@@ -901,45 +850,29 @@ pub(crate) async fn run_template_compact(
     // comes from the frozen fold state when folded (保留起点基于 fold_cut
     // 而非重算 tail); otherwise the stateless tail cut as before.
     let cfg = svc.context_compact;
-    // v7 对象边界（S1 修订批，设计 §3.4.1「对象边界（不变量）」）：两条压缩轨
-    // 都只作用于「**滑块（驻留带）之外**」的携带内容——`kept_start` 取
-    // `fold_state.fold_cut`（驻留带起点）。**未折叠的降级路径不得沿用「保留
-    // 最近 2 轮」**（会吃掉滑块内容）：主车道改用**按驻留带预算 L 换算的完整
-    // 轮切点**（与驱逐同一把尺 `bridge_estimate_budget(L)`）；没有可移出内容
-    // （全部落在驻留带内）＝ NoOp，不做统计口径的 tail 截断。
-    // 例外（既有语义保持不变）：检索/grill 等非主车道（无外挂台账、窗口小、
-    // 不折叠）与 session_end 终局清理（会话关闭时模型已离场）继续按
-    // `collapsed_cut(messages, tail)`。
-    let main_lane = ledger_path.is_some();
-    let resident_budget = crate::action_ledger::bridge_estimate_budget(cfg.slider_resident_tokens);
+    // v8（2026-09-16 勘误批）：主车道的**机械驱逐／推进随勘误退役**——模型面
+    // 由投影层（`model_face`）承载、`messages` 不再被压缩 drain，故本函数的
+    // 主车道按块压缩路径不再存在；保留语义＝**检索/grill 车道**与**会话收尾**
+    // （模型已离场）的机械模板压缩：`collapsed_cut(messages, tail)`。
     let Some(kept_start) = fold_state
         .fold_cut
-        .or_else(|| compact_fallback_cut(messages, main_lane, reason, resident_budget, tail))
+        .or_else(|| compact_fallback_cut(messages, tail))
     else {
         return Ok(CompactDecision::NoOp);
     };
     // Guard 口径：含旧 marker 的数组 + 冻结 kept_start（触发时不动数组）。
-    // v7 语义轨（S1 修订批）：替换文本＝**模型摘要块**，marker 体量按实际
-    // 摘要字数估算（不再套机械 marker 的固定 11K）；且语义轨只接受「**确能
-    // 缩减**」的替换——摘要块不小于被压区 ⇒ NoOp（正文按普通内容留在会话
-    // 里，不做无收益的替换，也不留 marker）。机械轨守卫（缩减比 + 最小可压）
-    // 与 force 语义一律不变。
-    let marker_estimate = semantic.map_or(crate::summary::SUMMARY_MARKER_ESTIMATE_TOKENS, |s| {
-        crate::summary::model_summary_marker_estimate(s.summary)
-    });
+    // Guard 仍是「缩减比 ＋ 最小可压」，force 语义不变。
+    // **v8（2026-09-16 勘误批）：语义轨的 drain 替换路径退役**——模型自压改走
+    // `compress_blocks_now`（按块、本地面零覆盖），本函数只剩机械模板轨
+    // （检索/grill 车道与会话收尾）。
+    let marker_estimate = crate::summary::SUMMARY_MARKER_ESTIMATE_TOKENS;
     let after = estimate_messages_tokens(&messages[..kept_start])
         + estimate_messages_tokens(&messages[kept_start..])
         + marker_estimate;
     let removable = measured.saturating_sub(after);
-    if semantic.is_some() {
-        if marker_estimate >= estimate_messages_tokens(&messages[..kept_start]) {
-            return Ok(CompactDecision::NoOp);
-        }
-    } else {
-        let reduction_ok = after as f64 <= measured as f64 * cfg.max_reduction_ratio;
-        if !force && (removable < cfg.min_compactable || !reduction_ok) {
-            return Ok(CompactDecision::GuardBlocked);
-        }
+    let reduction_ok = after as f64 <= measured as f64 * cfg.max_reduction_ratio;
+    if !force && (removable < cfg.min_compactable || !reduction_ok) {
+        return Ok(CompactDecision::GuardBlocked);
     }
 
     // 执行已确认：删除旧 marker 并重算 kept_start——marker 删除使冻结索引
@@ -960,7 +893,7 @@ pub(crate) async fn run_template_compact(
     let kept_start = fold_state
         .fold_cut
         .map(|cut| cut.saturating_sub(usize::from(had_marker)))
-        .or_else(|| compact_fallback_cut(messages, main_lane, reason, resident_budget, tail))
+        .or_else(|| compact_fallback_cut(messages, tail))
         .expect("guard path already resolved a kept_start for the same messages");
 
     let rounds_dropped = crate::action_ledger::rounds_before(messages, kept_start) as u32;
@@ -1000,26 +933,12 @@ pub(crate) async fn run_template_compact(
         .iter()
         .find(|m| m.role == Role::Assistant && !m.tool_calls.is_empty())
         .and_then(|m| m.round);
-    let mut dropped = rounds_dropped;
-    let mut messages_dropped = messages.drain(first_round_start..kept_start).count();
-    // FALLBACK 紧急口径保持（D2-2）：200K 兜底触发时，常规 drain 后再按
-    // recovery_target_tokens 机械截断，保证 run 绝不滞留在窗口之上
-    // （机械模式无失败路径，此步为纯兜底）。
-    let mut insert_at = first_round_start;
-    if reason == "fallback" {
-        let stats = compact_messages(messages, cfg.recovery_target_tokens);
-        if stats.rounds_dropped > 0 {
-            // 审查修复（2026-08-19）：事件/存档/marker 的轮数 = 常规 drain
-            // + fallback 截断之和（此前覆盖赋值导致事件少报，且 marker/
-            // 存档与事件三方口径不一致）。
-            dropped += stats.rounds_dropped;
-            messages_dropped += stats.messages_dropped;
-            insert_at = messages
-                .iter()
-                .position(|m| m.role == Role::Assistant && !m.tool_calls.is_empty())
-                .unwrap_or(messages.len());
-        }
-    }
+    let dropped = rounds_dropped;
+    let messages_dropped = messages.drain(first_round_start..kept_start).count();
+    // v8 勘误（2026-09-16）：**fallback 第二段截断退役**（`reason == "fallback"`
+    // 已不再由任何生产路径产生——它是 v7 的 256K 视图兜底，属「总窗口压缩」，
+    // 随用户裁定整体退役）。收尾／检索车道的机械模板压缩只有一段 drain。
+    let insert_at = first_round_start;
     // 机械模式（2026-08-18 B 定案）：存档恒写入（审计副本 + digest），
     // marker 恒携带真实 digest/路径——无 summary_incomplete 终止态。
     // 审查修复（2026-08-19）：存档/marker 在 drain + fallback 截断后定稿，
@@ -1032,48 +951,17 @@ pub(crate) async fn run_template_compact(
         .find(|m| m.role == Role::Assistant && !m.tool_calls.is_empty())
         .and_then(|m| m.round);
     let ledger_hint_text = ledger_hint.map(|p| p.display().to_string());
-    // 三分支各自赋值（语义轨 / v0.3 / v0.2），事件与 marker 共用。
+    // 两分支各自赋值（v0.3 折叠快照 / v0.2 五段模板），事件与 marker 共用。
+    // **v8（2026-09-16 勘误批）：语义轨 drain 分支退役**——模型自压改走
+    // `compress_blocks_now`（按块、本地面零覆盖、`v0.4-分块压缩` marker）。
     let archive_write_failed;
-    let (markdown, marker) = if let Some(sem) = semantic {
-        // v7 语义轨（S1 修订批，设计 §3.4.1／§3.5.1；DP-14/DP-17）：模型产出
-        // 的语义摘要**替换**被压区。存档＝语义摘要 ＋ 四项定位指针（审计
-        // 副本；原文在 journal/sidecar，本存档不复制逐字正文以免重复膨胀）；
-        // marker ＝ 同一摘要（模型此后携带的语义面）＋ 定点指针 ＋ 分工声明。
-        let markdown = crate::summary::model_summary_archive_markdown(
-            &id,
-            sem.reason,
-            dropped,
-            r_keep.unwrap_or(0),
-            session_snapshot,
-            &archive_path,
-            sem.summary,
-            locators,
-        );
-        archive_write_failed =
-            !crate::summary::write_archive_retry(&archive_dir, &archive_path, &markdown);
-        let digest = crate::summary::archive_digest(&markdown);
-        let marker = crate::summary::build_model_summary_marker(
-            &id,
-            &digest,
-            &archive_path,
-            sem.summary,
-            sem.reason,
-            dropped,
-            drained_first_round,
-            r_keep.unwrap_or(0),
-            session_snapshot,
-            archive_write_failed,
-            ledger_hint,
-            locators,
-        );
-        (markdown, marker)
-    } else if let (Some(ctx), Some(r_keep)) = (fold_ctx, r_keep) {
+    let (markdown, marker) = if let (Some(ctx), Some(r_keep)) = (fold_ctx, r_keep) {
         // v0.3：先装配存档文本（不含 digest 自引用）→ 写盘 → 得
         // archive_write_failed → 再以真实失败态生成 marker（A 注记）。
         let budget = crate::summary::CompactionBudget::from_env();
         let make = |archive_write_failed: bool| {
             let bb = svc.blackboard.read();
-            let out = crate::summary::build_fold_snapshot_marker(
+            crate::summary::build_fold_snapshot_marker(
                 &bb,
                 &crate::summary::FoldSnapshotInput {
                     id: &id,
@@ -1090,8 +978,7 @@ pub(crate) async fn run_template_compact(
                     locators,
                     budget,
                 },
-            );
-            out
+            )
         };
         let first = make(false);
         archive_write_failed =
@@ -1163,15 +1050,8 @@ pub(crate) async fn run_template_compact(
     // 与 schema「marker + preamble + recent tail」口径一致；fallback 的
     // 截断目标估算不再单独使用——真值含 marker）。
     let final_after = estimate_messages_tokens(messages);
-    // 审查修正批（2026-09-15，审查 P3⑨）：`retained_rounds` 在机械路径＝
-    // drain 尾轮数（既有口径，2）；**语义路径的保留边界是驻留带而非 tail**
-    // ——照抄 tail 会「报 2、实际保留几十轮」的读数偏差。故语义路径按压缩后
-    // 仍在 `messages` 里的完整轮数如实报（同一函数、同一数组口径）。
-    let retained_rounds = if semantic.is_some() {
-        crate::action_ledger::rounds_before(messages, messages.len()) as u32
-    } else {
-        tail as u32
-    };
+    // `retained_rounds`＝压缩后 drain 尾轮数（机械模板轨既有口径，2）。
+    let retained_rounds = tail as u32;
     writer
         .record(
             EventType::ContextCompressed,
@@ -1183,11 +1063,11 @@ pub(crate) async fn run_template_compact(
                 "messages_dropped": messages_dropped,
                 "messages_kept": messages.len(),
                 "estimated_tokens_after": final_after,
-                // v7 压缩分工（S1 修订批）：语义轨事件 mode=model_summary、
-                // reason 取语义来源（model_selected / context_scale_window）；
-                // 机械轨 mode=mechanical、reason 照旧。两者共用同一事件形状。
-                "mode": if semantic.is_some() { "model_summary" } else { "mechanical" },
-                "reason": semantic.map_or(reason, |s| s.reason),
+                // 机械模板轨：mode=mechanical、reason 照旧（检索/grill 车道与
+                // 会话收尾）。模型自压的按块压缩事件由 `compress_blocks_now`
+                // 产出（mode=model_summary、v0.4-分块 marker）。
+                "mode": "mechanical",
+                "reason": reason,
                 "summary_id": id,
                 "summary_digest": digest,
                 "summary_path": archive_path.display().to_string(),
@@ -1221,8 +1101,10 @@ pub(crate) fn compression_window_tool_defs(tool_defs: &[ToolDef]) -> Vec<ToolDef
 /// budget 耗尽收尾 break、IPG block break、run 尾安全网——都必须先经本
 /// 函数，保证收口审计事件要么落地、要么明确无窗口可收（`take` 幂等，
 /// 多处调用安全）。按派发后真实黑板写数判定 `model_participated`、按 C2
-/// 形状落 `model_compression` 审计事件并置机械折叠兜底旗标；break 路径
-/// 上该旗标无消费方（run 即止），统一设置以保持单一出口语义。
+/// 形状落 `model_compression` 审计事件。**v8（2026-09-16 勘误批）：不再置
+/// 机械兜底旗标**——窗口收口只有两条去路：模型产出了语义摘要（⇒ 下一次
+/// loop-top 按块压缩）或没产出（⇒ 如实落账 `model_participated=false`，
+/// 机械层不做任何压缩，设计 §4「模型面总量只由模型自压与 H1/T1 管」）。
 /// 边界：`?` 错误传播路径仍会丢弃状态（与 0AC-A6 Err 留痕同类，已挂账）。
 async fn finalize_model_compression_close(
     state: &mut Option<(usize, u32)>,
@@ -1230,7 +1112,6 @@ async fn finalize_model_compression_close(
     svc: &SharedLoopServices<'_>,
     writer: &mut EventWriter<'_>,
     tool_rounds: u32,
-    force_compact_after_window: &mut Option<bool>,
 ) -> Result<(), AgentLoopError> {
     let Some((window_start_writes, rounds_used)) = state.take() else {
         return Ok(());
@@ -1259,8 +1140,668 @@ async fn finalize_model_compression_close(
             }),
         )
         .await?;
-    *force_compact_after_window = Some(participated);
     Ok(())
+}
+
+/// v8（2026-09-16 勘误批）分块压缩的执行结果。
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct BlockCompaction {
+    pub(crate) blocks: usize,
+    pub(crate) rounds: u32,
+    pub(crate) freed_tokens: u64,
+}
+
+/// 黑板水位标记（与 `AgentLoopController::blackboard_watermark_label` 同口径；
+/// 供不带 controller 的截断路径复用）。
+fn blackboard_watermark_label(svc: &SharedLoopServices<'_>) -> String {
+    let bytes = svc.blackboard.read().live_compact_bytes();
+    let budget = crate::fatigue::live_budget_bytes();
+    format!(
+        "【{:.1}M/{}M】",
+        bytes as f64 / 1_000_000.0,
+        budget / 1_000_000
+    )
+}
+
+/// 请求**静态开销**估算（chars/2 同尺）：系统提示词 ＋ 工具定义 JSON。
+///
+/// 2026-09-16 实现批（审查 R-9）：阶梯与守卫量的是「发往模型商的上下文」，
+/// 只算投影层消息会系统性偏小（系统提示词与工具定义动辄数 K 估算，且工具面
+/// 声明会随会话变化）⇒ 把它们计入读数，阶梯落点才与设计意图对齐。
+fn estimate_static_overhead(system: &str, tool_defs: &[ToolDef]) -> u64 {
+    let mut chars = system.chars().count() as u64;
+    for def in tool_defs {
+        // ToolDef 不是 Serialize ⇒ 按字段逐项量（名 ＋ 描述 ＋ 参数 schema）。
+        chars += def.name.chars().count() as u64;
+        chars += def.description.chars().count() as u64;
+        chars += serde_json::to_string(&def.parameters)
+            .map(|s| s.chars().count() as u64)
+            .unwrap_or(0);
+    }
+    chars / 2
+}
+
+/// **按块压缩**（滑块上下文 v8，设计 §4 §6；取代 v7 的「摘要替换被压区」drain
+/// 形态）——模型产出的语义摘要（可带 `压缩块: 1-4` 区间指令）⇒ 机械层把指定
+/// 的**已闭合**分块从模型面下移：
+///
+/// ① **结构化轨**：被压块的工具／命令／结果调用取 `rows_for_round` 成台账
+///    摘要行，追加外挂台账（`[seq]` 续号；**写失败 ⇒ 整体回滚不压**，同 v7
+///    纪律）；
+/// ② **回放面**（形态①）：每块逐字原文落盘
+///    `.gsa/compaction/blocks/<tag>-block-<k>.md` ＋ 陈旧性标注（Z形指针的
+///    回放口，零新工具）；
+/// ③ 压缩存档（`.gsa/compaction/<id>.md`，摘要＋机械行＋四项定位指针，不复制
+///    逐字正文）＋ `context_compressed` 事件（`mode=model_summary|mechanical`，
+///    `reason=model_selected|context_scale_window`）；
+/// ④ 往会话**追加**压缩 marker（`[前文上下文已压缩 v0.4-分块压缩]`，restore-
+///    retained）——**本地面一条不删**（不变量 I3；块状态按块号幂等、恢复后由
+///    marker 重建）。
+///
+/// 返回 `None` ＝ NoOp（无可压闭合块 / 区间无命中 / 台账写失败），**不虚构
+/// 事件、不改模型面**。
+#[allow(clippy::too_many_arguments)]
+async fn compress_blocks_now(
+    svc: &SharedLoopServices<'_>,
+    writer: &mut EventWriter<'_>,
+    host: &dyn LoopHost,
+    messages: &mut Vec<Message>,
+    params: &crate::model_face::ModelFaceParams,
+    archive_tag: &str,
+    selection: Option<Vec<u32>>,
+    summary: Option<&str>,
+    reason: &str,
+    locators: &crate::summary::LocatorPointers,
+) -> Result<Option<BlockCompaction>, AgentLoopError> {
+    let blocks = crate::model_face::blocks_outside_slider(
+        messages,
+        params.slider_tokens,
+        params.block_tokens,
+    );
+    let markers = crate::model_face::face_markers(messages);
+    // 只压**已闭合**且仍为原文的块（末块仍在增长 ⇒ 摘要会与正文漂移而落空）；
+    // 同一块在会话内不重复计数（去重键＝块号，设计 §12）。
+    let mut selected: Vec<crate::model_face::ContextBlock> = blocks
+        .iter()
+        .filter(|b| b.closed && markers.state(b.number) == crate::model_face::BlockState::Live)
+        .filter(|b| selection.as_ref().is_none_or(|sel| sel.contains(&b.number)))
+        .cloned()
+        .collect();
+    // 未指定区间 ⇒ **最旧块优先**（设计 §4）：2026-09-16 实现批收窄为**只压
+    // 最旧一个已闭合块**——此前会把全部已闭合块一次压掉（一个摘要吞掉最多
+    // 数百 K 估算的历史），与「模型自己控制压多少」相反、也没有界。要一次压
+    // 多块，模型在摘要块里写明 `压缩块: 1-4` 即可（该口径由钉子锁定）。
+    if selection.is_none() && selected.len() > 1 {
+        selected.truncate(1);
+    }
+    if selected.is_empty() {
+        return Ok(None);
+    }
+    let ranges = crate::action_ledger::round_ranges(messages);
+    // ① 结构化轨 → 外挂台账（写失败 ⇒ 回滚：行丢了、视图又不能改，宁可不压）。
+    let mut rows = Vec::new();
+    // 每块写了几行（用于把批次 `[seq]` 区间**拆成分块级三键**，设计 §2 §11）。
+    let mut per_block_rows: Vec<(u32, usize)> = Vec::new();
+    for block in &selected {
+        let before_rows = rows.len();
+        for round in block.first_round..=block.last_round {
+            if let Some(&range) = ranges.get(round) {
+                rows.extend(crate::action_ledger::rows_for_round(messages, range, round));
+            }
+        }
+        per_block_rows.push((block.number, rows.len().saturating_sub(before_rows)));
+    }
+    let ledger_seq = match params.ledger_path.as_deref() {
+        Some(path) => match crate::action_ledger::append_ledger_rows_range(path, &rows) {
+            Ok(seq) => seq,
+            Err(err) => {
+                tracing::warn!(
+                    ledger_path = %path.display(),
+                    error = %err,
+                    "v8 block compaction: external ledger append failed — compaction skipped"
+                );
+                return Ok(None);
+            }
+        },
+        None => None,
+    };
+    // 分块级台账定位（批次区间按行数拆；无工具行的块不虚构键）。
+    let ledger_locators: Vec<(u32, (u64, u64))> = match ledger_seq {
+        Some((first, _)) => {
+            let mut cursor = first;
+            per_block_rows
+                .iter()
+                .filter(|(_, count)| *count > 0)
+                .map(|(number, count)| {
+                    let from = cursor;
+                    let to = cursor + *count as u64 - 1;
+                    cursor = to + 1;
+                    (*number, (from, to))
+                })
+                .collect()
+        }
+        None => Vec::new(),
+    };
+    // ② 回放面：每块逐字原文落盘（失败如实标注，不阻塞压缩）。
+    let mut replay = Vec::new();
+    let mut block_archive_failed = false;
+    for block in &selected {
+        let path =
+            crate::model_face::block_archive_path(&host.session_cwd(), archive_tag, block.number);
+        let markdown = crate::model_face::block_archive_markdown(
+            block,
+            messages,
+            params.run_id.as_str(),
+            svc.session_id,
+        );
+        let dir = path.parent().map(|p| p.to_path_buf()).unwrap_or_default();
+        if !crate::summary::write_archive_retry(dir.as_path(), &path, &markdown) {
+            block_archive_failed = true;
+        }
+        replay.push(crate::model_face::replay_line(
+            block,
+            &crate::model_face::relative_block_archive(archive_tag, block.number),
+        ));
+    }
+    // ③ 压缩存档 ＋ 事件 ＋ ④ marker（本地面零覆盖：只追加、不 drain）。
+    let id = format!("compaction-{}-{:04}", writer.run_id(), writer.seq());
+    let archive_dir = host.session_cwd().join(".gsa").join("compaction");
+    let archive_path = archive_dir.join(format!("{id}.md"));
+    let before = crate::model_face::estimate_model_face_tokens(messages, params);
+    let numbers: Vec<u32> = selected.iter().map(|b| b.number).collect();
+    let first_round = selected.first().map(|b| b.first_round).unwrap_or(0);
+    let last_round = selected.last().map(|b| b.last_round).unwrap_or(0);
+    let rounds: u32 = selected
+        .iter()
+        .map(|b| (b.last_round - b.first_round + 1) as u32)
+        .sum();
+    let freed_tokens: u64 = selected.iter().map(|b| b.estimate_tokens).sum();
+    let messages_hidden: usize = selected
+        .iter()
+        .map(|b| b.msg_end.saturating_sub(b.msg_start))
+        .sum();
+    let mechanical_rows = crate::action_ledger::build_ledger_block(&rows);
+    let locators = crate::summary::LocatorPointers {
+        ledger_seq,
+        // v8：按块压缩**不 drain** 会话本体 ⇒ sidecar 仍含逐字原文（审查 R-4）。
+        local_face_full: true,
+        ..locators.clone()
+    };
+    let markdown = format!(
+        "# ORZ 会话压缩摘要（v8 分块压缩 {id}）\n\n\
+         - 状态: complete（mode={mode}；按块压缩，主滑块以外的分块被替换为摘要）\n\
+         - 事件 reason: {reason}\n- 处理分块: {numbers}\n\
+         - 被处理轮次: 轮 {from}–{to}（{rounds} 轮）\n\
+         - 模型面估算: 压缩前 {before}（释放 ≈{freed_tokens}tk token；压缩后读数见 marker 行）\n\
+         - 黑板会话: {session}\n- 摘要存档: {path}\n\
+         - 回放档案: {replay}\n\n\
+         ## 原文定位（四项）\n{locator_lines}\n\n\
+         ## 机械摘要行（结构化轨）\n{rows}\n\n\
+         ## 语义摘要（模型产出）\n{summary}\n\n\
+         ## 模型面声明\n{declaration}\n",
+        mode = if summary.is_some() {
+            "model_summary"
+        } else {
+            "mechanical"
+        },
+        numbers = crate::model_face::render_block_numbers(&numbers),
+        from = first_round + 1,
+        to = last_round + 1,
+        session = svc.session_id.unwrap_or("（无）"),
+        path = archive_path.display(),
+        replay = replay.join("\n"),
+        locator_lines = locators.render_marker_lines(&archive_path, "（见 marker 行）"),
+        rows = mechanical_rows,
+        summary = summary.unwrap_or("（无：纯结构化轨）"),
+        declaration = crate::model_face::MODEL_FACE_DECLARATION,
+    );
+    let archive_write_failed =
+        !crate::summary::write_archive_retry(&archive_dir, &archive_path, &markdown);
+    let digest = crate::summary::archive_digest(&markdown);
+    let marker = crate::model_face::compression_marker(
+        &numbers,
+        first_round,
+        last_round,
+        &id,
+        &digest,
+        &archive_path,
+        svc.session_id,
+        &mechanical_rows,
+        summary,
+        &replay.join("\n"),
+        &locators,
+        &ledger_locators,
+    );
+    let insert_at = ranges
+        .get(first_round)
+        .map(|&(start, _)| start)
+        .unwrap_or(messages.len());
+    messages.insert(
+        insert_at,
+        Message {
+            role: Role::User,
+            content: marker,
+            tool_call_id: None,
+            tool_calls: Vec::new(),
+            reasoning_content: None,
+            round: None,
+        },
+    );
+    let after = crate::model_face::estimate_model_face_tokens(messages, params);
+    let face = crate::model_face::build_model_face(messages, params);
+    writer
+        .record(
+            EventType::ContextCompressed,
+            serde_json::json!({
+                "trigger_tokens": before,
+                "target_tokens": after,
+                "rounds_since_last_compaction": 0,
+                "rounds_dropped": rounds,
+                "messages_dropped": messages_hidden,
+                "messages_kept": face.len(),
+                "estimated_tokens_after": after,
+                "mode": if summary.is_some() { "model_summary" } else { "mechanical" },
+                "reason": reason,
+                "summary_id": id,
+                "summary_digest": digest,
+                "summary_path": archive_path.display().to_string(),
+                "summary_incomplete": false,
+                "retained_rounds": crate::action_ledger::rounds_before(messages, messages.len()) as u32,
+                "guard_failed": false,
+                "archive_write_failed": archive_write_failed || block_archive_failed,
+            }),
+        )
+        .await?;
+    Ok(Some(BlockCompaction {
+        blocks: selected.len(),
+        rounds,
+        freed_tokens,
+    }))
+}
+
+/// **T1 硬截断 / 1.10M 异常保险**（滑块上下文 v8，设计 §5）：把**主滑块以外
+/// 的全部分块**移出模型面——本地面逐字一条不删（不变量 I3）、每块逐字原文
+/// 落盘可按块回放、机械层注入告知块（①已截断 N 块／≈M token；②可按块回放；
+/// ③任务无需中止），事实经 `mechanical_audit_update` 的 anomaly
+/// `hard_context_truncated_blocks` 落账。
+///
+/// 返回 `None` ＝ 主滑块之外已无分块（无从截断、零事件）。
+#[allow(clippy::too_many_arguments)]
+async fn truncate_model_face_blocks(
+    svc: &SharedLoopServices<'_>,
+    writer: &mut EventWriter<'_>,
+    host: &dyn LoopHost,
+    messages: &mut Vec<Message>,
+    params: &crate::model_face::ModelFaceParams,
+    archive_tag: &str,
+    guard_hit: bool,
+    audit: &mut crate::mechanical_audit::MechanicalAuditState,
+    tool_rounds: u32,
+) -> Result<Option<(usize, u64)>, AgentLoopError> {
+    let blocks = crate::model_face::blocks_outside_slider(
+        messages,
+        params.slider_tokens,
+        params.block_tokens,
+    );
+    let markers = crate::model_face::face_markers(messages);
+    // 2026-09-16 实现批（审查 R-1）：只截**已闭合**块。未闭合的**残段**
+    // 留在模型面（它仍在增长；截断它＝隐藏工作现场，违反 I1）。
+    let live: Vec<crate::model_face::ContextBlock> = blocks
+        .iter()
+        .filter(|b| b.closed && markers.state(b.number) == crate::model_face::BlockState::Live)
+        .cloned()
+        .collect();
+    // 触发线：T1＝阶梯的硬截断档；守卫＝1.10M 异常保险。
+    let target_line = if guard_hit {
+        svc.context_compact.model_face_guard_tokens
+    } else {
+        crate::model_face::ladder_truncate_tokens(&svc.context_compact.context_scale_ladder)
+    };
+    let archive_dir = host.session_cwd().join(".gsa").join("compaction");
+    // 指针化原文的落盘目录（审查 R-7：改前先落逐字原文）。
+    let pointerized_dir = archive_dir.join("pointerized");
+    if live.is_empty() {
+        // 主滑块之外已无分块（溢出体量在**主滑块内**——例：单轮超大工具结果）
+        // ⇒ 走**窗口内超大结果指针化**（0ah §10.10 用户裁定；先例
+        // OUTPUT-DEGENERATION-GUARD）把正文换成「原文头部＋回读指针」，
+        // 配对字段不动、幂等、大者优先。两者皆无 ⇒ 如实 NoOp（不改模型面、
+        // 不虚构事件）。
+        // 顺序（设计 §6/§12）：① **先裁回放块**（可再生——原文仍在该按块档案里）
+        // ② 再把其余超大工具结果换成「头部 ＋ 落盘指针」（改前先把逐字原文落盘，
+        // 审查 R-7：journal 不带结果正文，旧文案的「按 call_id 回读」对读类结果
+        // 不成立）。
+        let replay_reclaimed = crate::action_ledger::pointerize_replay_tool_results(
+            messages,
+            target_line,
+            &host.session_cwd(),
+        );
+        let pointerized = crate::action_ledger::pointerize_oversized_tool_results(
+            messages,
+            target_line,
+            crate::action_ledger::OVERSIZED_TOOL_RESULT_CAP_TOKENS,
+            &pointerized_dir,
+            archive_tag,
+            Some(host.journal().events_path().as_path()),
+            writer.run_id(),
+        );
+        if replay_reclaimed.replaced == 0 && pointerized.replaced == 0 {
+            return Ok(None);
+        }
+        let freed = replay_reclaimed
+            .freed_tokens
+            .saturating_add(pointerized.freed_tokens);
+        let payload = audit.record(
+            "context_scale:hard_truncate",
+            tool_rounds,
+            format!(
+                "truncated_blocks=0 pointerized_results={} replay_reclaimed={} freed_tokens={freed} \
+                 guard_hit={guard_hit} archive_write_failed=false ledger_write_failed=false \
+                 model_face_estimate_after={}",
+                pointerized.replaced,
+                replay_reclaimed.replaced,
+                crate::model_face::estimate_model_face_tokens(messages, params),
+            ),
+            Some(if guard_hit {
+                "hard_context_guard_result_pointerized".to_string()
+            } else {
+                "hard_context_result_pointerized".to_string()
+            }),
+        );
+        writer
+            .record(
+                EventType::MechanicalAuditUpdate,
+                serde_json::json!({
+                    "kind": crate::mechanical_audit::KIND_CONTEXT_SCALE,
+                    "payload": payload,
+                }),
+            )
+            .await?;
+        let notice = if guard_hit {
+            crate::context_scale::guard_truncation_notice_block(
+                0,
+                freed,
+                crate::model_face::estimate_model_face_tokens(messages, params),
+                target_line,
+                &format!(
+                    "- （工作现场之外无**已闭合**分块；本轮把 {} 条回放块与 {} 个超大工具结果\
+                     正文换成指针，逐字原文均已落盘）",
+                    replay_reclaimed.replaced, pointerized.replaced
+                ),
+                false,
+            )
+        } else {
+            crate::context_scale::truncation_notice_block(
+                0,
+                freed,
+                crate::model_face::estimate_model_face_tokens(messages, params),
+                &format!(
+                    "- （工作现场之外无**已闭合**分块；本轮把 {} 条回放块与 {} 个超大工具结果\
+                     正文换成指针，逐字原文均已落盘）",
+                    replay_reclaimed.replaced, pointerized.replaced
+                ),
+                "- （无已闭合分块：溢出体量在工作现场内）",
+                false,
+            )
+        };
+        let watermark = blackboard_watermark_label(svc);
+        messages.push(Message {
+            role: Role::User,
+            content: format!("{notice}\n{watermark}"),
+            tool_call_id: None,
+            tool_calls: Vec::new(),
+            reasoning_content: None,
+            round: None,
+        });
+        return Ok(Some((0, freed)));
+    }
+    let ranges = crate::action_ledger::round_ranges(messages);
+    // ①a 分块台账行（三键之一；best-effort——截断是安全闸门，台账失败不阻断，
+    // 但必须如实落账，不静默）。
+    let mut rows = Vec::new();
+    let mut per_block_rows: Vec<(u32, usize)> = Vec::new();
+    for block in &live {
+        let before_rows = rows.len();
+        for round in block.first_round..=block.last_round {
+            if let Some(&range) = ranges.get(round) {
+                rows.extend(crate::action_ledger::rows_for_round(messages, range, round));
+            }
+        }
+        per_block_rows.push((block.number, rows.len().saturating_sub(before_rows)));
+    }
+    let mut ledger_write_failed = false;
+    let ledger_seq = match params.ledger_path.as_deref() {
+        Some(path) => match crate::action_ledger::append_ledger_rows_range(path, &rows) {
+            Ok(seq) => seq,
+            Err(err) => {
+                ledger_write_failed = true;
+                tracing::warn!(
+                    ledger_path = %path.display(),
+                    error = %err,
+                    "v8 truncation: external ledger append failed — truncation continues"
+                );
+                None
+            }
+        },
+        None => None,
+    };
+    let ledger_locators: Vec<(u32, (u64, u64))> = match ledger_seq {
+        Some((first, _)) => {
+            let mut cursor = first;
+            per_block_rows
+                .iter()
+                .filter(|(_, count)| *count > 0)
+                .map(|(number, count)| {
+                    let from = cursor;
+                    let to = cursor + *count as u64 - 1;
+                    cursor = to + 1;
+                    (*number, (from, to))
+                })
+                .collect()
+        }
+        None => Vec::new(),
+    };
+    // ①b 回放面：逐字原文落盘（形态①，零新工具；失败如实落账，不再静默）。
+    let mut replay = Vec::new();
+    let mut archive_write_failed = false;
+    for block in &live {
+        let path =
+            crate::model_face::block_archive_path(&host.session_cwd(), archive_tag, block.number);
+        let markdown = crate::model_face::block_archive_markdown(
+            block,
+            messages,
+            params.run_id.as_str(),
+            svc.session_id,
+        );
+        let dir = path.parent().map(|p| p.to_path_buf()).unwrap_or_default();
+        if !crate::summary::write_archive_retry(dir.as_path(), &path, &markdown) {
+            archive_write_failed = true;
+        }
+        replay.push(crate::model_face::replay_line(
+            block,
+            &crate::model_face::relative_block_archive(archive_tag, block.number),
+        ));
+    }
+    let numbers: Vec<u32> = live.iter().map(|b| b.number).collect();
+    let first_round = live.first().map(|b| b.first_round).unwrap_or(0);
+    let last_round = live.last().map(|b| b.last_round).unwrap_or(0);
+    let freed_tokens: u64 = live.iter().map(|b| b.estimate_tokens).sum();
+    // ② 会话内**追加**截断 marker（restore-retained ⇒ 恢复后块状态仍为已截断）。
+    let id = format!("compaction-{}-{:04}", writer.run_id(), writer.seq());
+    let archive_path = archive_dir.join(format!("{id}.md"));
+    let locators = crate::summary::LocatorPointers {
+        ledger_seq,
+        ledger_path: params.ledger_path.as_ref().map(|p| p.display().to_string()),
+        journal_run: Some(writer.run_id().to_string()),
+        journal_seq: Some((0, writer.seq())),
+        conversation_path: None,
+        // v8：截断不 drain 本地面 ⇒ sidecar 仍含逐字原文（审查 R-4）。
+        local_face_full: true,
+    };
+    let replay_text = replay.join("\n");
+    let markdown = format!(
+        "# ORZ 上下文分块截断记录（T1 {id}）\n\n\
+         - 处理分块: {numbers}\n- 被截断: {count} 块 ≈{freed}tk token\n\
+         - 被处理轮次: 轮 {from}–{to}\n- 触发: {trigger}\n\
+         - 黑板会话: {session}\n- 记录存档: {path}\n\
+         - 回放档案写入失败: {failed}\n- 台账写入失败: {ledger_failed}\n\
+         - 回放档案:\n{replay_text}\n\n\
+         ## 模型面声明\n{declaration}\n",
+        numbers = crate::model_face::render_block_numbers(&numbers),
+        count = live.len(),
+        freed = freed_tokens,
+        from = first_round + 1,
+        to = last_round + 1,
+        trigger = if guard_hit {
+            "上限守卫（异常保险：单轮暴涨/换算漂移）"
+        } else {
+            "T1 硬截断（阶梯 500K 估算 ≈385K 真实；按越线重新武装）"
+        },
+        session = svc.session_id.unwrap_or("（无）"),
+        path = archive_path.display(),
+        failed = archive_write_failed,
+        ledger_failed = ledger_write_failed,
+        declaration = crate::model_face::MODEL_FACE_DECLARATION,
+    );
+    if !crate::summary::write_archive_retry(&archive_dir, &archive_path, &markdown) {
+        archive_write_failed = true;
+    }
+    let marker = crate::model_face::truncation_marker(
+        &numbers,
+        first_round,
+        last_round,
+        freed_tokens,
+        &archive_path,
+        &locators,
+        &replay_text,
+        &ledger_locators,
+    );
+    let insert_at = ranges
+        .get(first_round)
+        .map(|&(start, _)| start)
+        .unwrap_or(messages.len());
+    messages.insert(
+        insert_at,
+        Message {
+            role: Role::User,
+            content: marker,
+            tool_call_id: None,
+            tool_calls: Vec::new(),
+            reasoning_content: None,
+            round: None,
+        },
+    );
+    // ③ 二级消化（设计 §6/§12）：截断后**仍在线之上**时，先裁回放块（可再生），
+    // 再把其余超大工具结果换成「头部 ＋ 落盘指针」。
+    let mut replay_reclaimed = crate::action_ledger::PointerizeStats::default();
+    let mut pointerized = crate::action_ledger::PointerizeStats::default();
+    if crate::model_face::estimate_model_face_tokens(messages, params) > target_line {
+        replay_reclaimed = crate::action_ledger::pointerize_replay_tool_results(
+            messages,
+            target_line,
+            &host.session_cwd(),
+        );
+        if crate::model_face::estimate_model_face_tokens(messages, params) > target_line {
+            pointerized = crate::action_ledger::pointerize_oversized_tool_results(
+                messages,
+                target_line,
+                crate::action_ledger::OVERSIZED_TOOL_RESULT_CAP_TOKENS,
+                &pointerized_dir,
+                archive_tag,
+                Some(host.journal().events_path().as_path()),
+                writer.run_id(),
+            );
+        }
+    }
+    let extra_freed = replay_reclaimed
+        .freed_tokens
+        .saturating_add(pointerized.freed_tokens);
+    let escalation = if replay_reclaimed.replaced == 0 && pointerized.replaced == 0 {
+        String::new()
+    } else {
+        format!(
+            "\n补充（截断后仍越线）：已按「先裁回放块（可再生）」移出 {replay} 条回放结果，\
+             并把 {pointerized} 个超大工具结果换成指针——两者逐字原文均已落盘，可按指针重读。",
+            replay = replay_reclaimed.replaced,
+            pointerized = pointerized.replaced,
+        )
+    };
+    // ④ 告知块（注入文本；截断事实 ＋ 回放口径 ＋ 任务无需中止）。
+    let table = crate::model_face::render_block_table(
+        &crate::model_face::blocks_outside_slider(
+            messages,
+            params.slider_tokens,
+            params.block_tokens,
+        ),
+        &crate::model_face::face_markers(messages),
+        params,
+    );
+    let notice = if guard_hit {
+        format!(
+            "{}{escalation}",
+            crate::context_scale::guard_truncation_notice_block(
+                live.len(),
+                freed_tokens,
+                crate::model_face::estimate_model_face_tokens(messages, params),
+                svc.context_compact.model_face_guard_tokens,
+                &replay_text,
+                archive_write_failed || ledger_write_failed,
+            )
+        )
+    } else {
+        format!(
+            "{}{escalation}",
+            crate::context_scale::truncation_notice_block(
+                live.len(),
+                freed_tokens,
+                crate::model_face::estimate_model_face_tokens(messages, params),
+                &replay_text,
+                &table,
+                archive_write_failed || ledger_write_failed,
+            )
+        )
+    };
+    let watermark = blackboard_watermark_label(svc);
+    messages.push(Message {
+        role: Role::User,
+        content: format!("{notice}\n{watermark}"),
+        tool_call_id: None,
+        tool_calls: Vec::new(),
+        reasoning_content: None,
+        round: None,
+    });
+    // ⑤ 事实落账（设计 §5：`anomaly=hard_context_truncated_blocks`）。
+    let payload = audit.record(
+        "context_scale:hard_truncate",
+        tool_rounds,
+        format!(
+            "truncated_blocks={} freed_tokens={} rounds={}-{} guard_hit={guard_hit} \
+             replay_reclaimed={} pointerized_results={} freed_tokens_extra={extra_freed} \
+             archive_write_failed={archive_write_failed} ledger_write_failed={ledger_write_failed} \
+             model_face_estimate_after={}",
+            live.len(),
+            freed_tokens.saturating_add(extra_freed),
+            first_round + 1,
+            last_round + 1,
+            replay_reclaimed.replaced,
+            pointerized.replaced,
+            crate::model_face::estimate_model_face_tokens(messages, params),
+        ),
+        Some(if guard_hit {
+            "hard_context_guard_truncated_blocks".to_string()
+        } else {
+            "hard_context_truncated_blocks".to_string()
+        }),
+    );
+    writer
+        .record(
+            EventType::MechanicalAuditUpdate,
+            serde_json::json!({
+                "kind": crate::mechanical_audit::KIND_CONTEXT_SCALE,
+                "payload": payload,
+            }),
+        )
+        .await?;
+    Ok(Some((live.len(), freed_tokens.saturating_add(extra_freed))))
 }
 
 /// The shared model↔tool loop (M1 extraction, 2026-08-10).
@@ -1350,34 +1891,22 @@ pub(crate) async fn run_agent_loop(
         plan_gate = Some(crate::planning::PlanGateState::start());
     }
     // P0-D (2026-08-14, ADR-0010 v1.10 / v1.14): template-summary state —
-    // the previous round's MEASURED prompt tokens (provider usage; None
-    // until the first round reports usage), the rounds since the last
-    // summary (the 2-model-round cooldown; the 200K fallback bypasses it)
-    // and the reduction-guard retry chain (GUARD_RETRY_LIMIT consecutive
-    // failures force one compaction and report `guard_failed`).
-    let mut last_prompt_tokens: Option<u64> = None;
+    // the rounds since the last compaction（事件读数 + `LoopOutcome` 出口）。
+    // **v8（2026-09-16 勘误批）：provider 实测 prompt 量尺随勘误退役**——
+    // rhythm／fallback 两档「视图刻度」触发先后被 v7-S1 与 v8 取消，模型面
+    // 阶梯改吃投影层估算，故上一轮实测 token 不再参与任何判定（字段一并移除，
+    // 避免留一个「看着还在量、实际没人读」的死量尺）。
     let mut rounds_since_compact: u32 = 0;
-    let mut guard_failures: u32 = 0;
     // ORZ-CACHE-CONTEXT-COST (2026-08-15, ADR-0010 §3.5 条6): the previous
     // model-request header fingerprint of THIS loop invocation — `None`
     // until the first request, so the first request journals `initial` and
     // only real prefix changes journal `change`.
     let mut last_request_header: Option<RequestHeader> = None;
-    // FUS-LEDGER-FOLD-STATE (2026-08-18, ADR-0010 §14.26): the loop's own
-    // stateful fold point — per-loop local (see `LoopOutcome.fold_state`):
-    // the same controller drives the main lane AND the nested retrieval
-    // subagent lanes (each with its own conversation), so a controller-
-    // shared field would be clobbered by the nested dispatch. Every loop
-    // invocation starts unfolded and re-accumulates (restore semantics —
-    // ADR-0010 §14.26 恢复路径: 恢复后均为 None，首次推进重写一次前缀，低频接受).
-    let mut fold_state = crate::action_ledger::LedgerFoldState::default();
-    // FUS-LEDGER-FOLD-STATE external-file design (2026-08-18, ADR-0010
-    // §14.28 审查修复): consecutive append-failure budget + degrade flag.
-    // 失败时不再 `continue` 跳过本轮请求（持久失败 = 会话空转）；连续
-    // FOLD_WRITE_FAILURE_LIMIT 次失败后本循环禁用折叠，视图退回全量原文，
-    // 压缩仍兜底窗口。
-    let mut fold_write_failures: u32 = 0;
-    let mut fold_disabled = false;
+    // FUS-LEDGER-FOLD-STATE (2026-08-18, ADR-0010 §14.26) × 滑块上下文 v8
+    // （2026-09-16 勘误批）：**主车道的机械驱逐／推进随勘误退役** ⇒ 本 loop
+    // 恒为未折叠态（滑窗投影层承载模型面），此状态只剩「向外传递」的接口
+    // 语义（`LoopOutcome.fold_state`，收尾/检索路径的机械模板压缩读它）。
+    let fold_state = crate::action_ledger::LedgerFoldState::default();
     // 0ac S3①-b M2（2026-09-15，IMMEDIATE_RESULT_DELIVERY_AND_STREAMING_
     // RETRIEVAL_DESIGN §2.1/§4.1「合法边界投递」）：per-run 投递队列——
     // run 生命周期 = 队列生命周期（不跨 run 存活）；B1/B2 边界投递与
@@ -1392,44 +1921,44 @@ pub(crate) async fn run_agent_loop(
     // 仅检索车道启用（Main 车道检索失败照常回传，由模型自行决策）。
     let mut retrieval_early_close: Option<String> = None;
     let mut retrieval_failure_streak: u32 = 0;
-    // 动态上下文滑块 S1 修订批（v7，2026-09-15，设计 §3.4.1，用户裁定
-    // DP-15/DP-16）：**D2 注意力阶梯整体退役**，改由「**实际上下文刻度
-    // 提醒**」承载（量尺＝全量会话估算 chars/2，slider 基座）。水位
-    // **会话级**——已提醒键由会话侧车经 controller 注入 loop、fire 时回写
-    // （与黑板同族：跨 prompt 延续、新会话独立、恢复不重发）；每级一次、
-    // 不 rearm（机械压缩不重置提醒面）。仅主车道启用（检索车道不折叠、
-    // 不提醒——同 0ae 车道范围裁决）。
+    // 滑块上下文 v8（2026-09-16 勘误批，设计 §3）：**注意力阶梯**（192/224/
+    // 256/288K 软提醒 → 320K 硬提醒 → 500K 硬截断），量尺＝**模型面估算**。
+    // 水位**会话级**——已提醒键由会话侧车经 controller 注入 loop、fire 时回写
+    // （与黑板同族：跨 prompt 延续、新会话独立、恢复不重发）；每档一次、
+    // 不 rearm。仅主车道启用（检索车道不提醒——同 0ae 车道范围裁决）。
     let mut context_scale = crate::context_scale::ContextScaleState::from_notified_keys(
         &controller.context_scale_notified_keys(),
     );
-    // v7 压缩分工（S1 修订批，设计 §3.4.1，DP-14）：**语义轨**——模型在回复
-    // 里产出的语义摘要块（机械可识别前缀，`response.text` 上取）在下一个
-    // loop-top 安全间隙执行一次「摘要替换被压区」。工具轮的文本不进 `messages`
-    // （只留 model_output 事件），故识别点在**响应处理**而非会话扫描。
+    // v8 压缩分工（设计 §4）：**语义轨**——模型在回复里产出的语义摘要块
+    // （机械可识别前缀，`response.text` 上取）在下一个 loop-top 安全间隙执行
+    // 一次**按块压缩**（可带 `压缩块: 1-4` 区间指令）。工具轮的文本不进
+    // `messages`（只留 model_output 事件），故识别点在**响应处理**而非会话扫描。
     let mut pending_semantic: Option<String> = None;
     // 本窗口 epoch 是否开过压缩窗口（决定语义摘要的事件 reason：窗口收口＝
     // `context_scale_window`，模型自选＝`model_selected`）。
     let mut window_opened_since_compaction = false;
-    // v7 950K 最后防线（V4「once ＋ 冷却」）× 用户 2026-09-15 裁定（压不动
-    // ⇒ **硬截留 ＋ 明确告知**，不停手、不进 NoOp）：`hard_force_at_round`
-    // 是**冷却**（避免逐轮重压）；`hard_emergency_noticed` 只用来把「压缩
-    // 失败已截留」这条告知控制为**每 run 一次**（避免逐轮噪声），不阻止后续
-    // 轮次在冷却后再做一次截留（新累积的滑块外轮次仍可被移出）。
-    let mut hard_emergency_noticed = false;
-    let mut hard_force_at_round: Option<u32> = None;
-    // loop 迭代计数（每迭代至多一个模型轮）——冷却判定的时间轴。
+    // loop 迭代计数（每迭代至多一个模型轮）。
     let mut loop_rounds: u32 = 0;
-    // v7 原文定位指针（V7，设计 §3.5.1）：journal 窗口 epoch 起点 / 台账
-    // `[seq]` 区间（本 epoch 已折叠行）/ conversation sidecar 路径。
+    // v8 原文定位指针（设计 §4 §6）：journal 窗口 epoch 起点 / 台账 `[seq]`
+    // 区间（本 epoch 已压缩块写入的行）/ conversation sidecar 路径。
     let mut journal_epoch_start_seq: u64 = writer.seq();
     let mut ledger_seq_epoch: Option<(u64, u64)> = None;
     let conversation_sidecar_path = conversation_sidecar_hint(host, svc.session_id);
-    // A4：首次**真实驱逐**的一次性固化提醒（复用 0ae D2 128K 梯文案语义；
-    // 每 run 恰一次）。触发点 = 首次成功推进（写失败回滚不计）。
-    let mut first_fold_reminder_done = false;
-    // `Some(participated)` = 模型压缩窗口已结束，下一 loop-top 强制走
-    // 机械模板压缩（DP-7 兜底），participated 为窗口内是否发生黑板写入。
-    let mut force_compact_after_window: Option<bool> = None;
+    // v8 模型面投影的固定入参（不随轮次变化）：外挂台账路径 ＋ 分块档案标签。
+    let face_ledger_path = (profile.role == AgentRole::Main)
+        .then(|| crate::action_ledger::ledger_file_path(&host.session_cwd()));
+    let face_archive_tag = crate::model_face::archive_tag(svc.session_id, writer.run_id());
+    // A4（v8 触发改锚「首个分块形成」）：一次性固化提醒——2026-09-16 实现批
+    // 由 **per-run 变量**改为**会话级水位**（键 `first_block`，随侧车持久化；
+    // 「一次性」指的是一次会话，不是一次 run）。
+    //
+    // v8（2026-09-16 实现批，审查 R-9）：阶梯/守卫的量尺＝模型面估算 ＋
+    // **静态开销**（系统提示词 ＋ 工具定义；取**上一轮请求**的实测值，首轮为 0）。
+    // 不含静态开销的估算会系统性偏小、把阶梯落点整体推后。
+    let mut face_static_overhead: u64 = 0;
+    // v8 D4 机械段（基线 ＋ 自编辑清单 ＋ 编辑指纹）：按 epoch 冻结，压缩/
+    // 截断后重渲一次（前缀字节稳定，不变量 I6）。
+    let mut face_d4_block: Option<String> = None;
     // 0AE-C1 修复（2026-09-15 深审）：压缩窗口轮携带 blackboard_write 落穿
     // 正常派发路径时的**延迟收口**状态——(窗口开始写入面计数, 窗口已用
     // 轮数)。写入在消费分支落穿后派发完成，下一 loop-top 读数真实，据实
@@ -1505,98 +2034,186 @@ pub(crate) async fn run_agent_loop(
         // A pending checkpoint round has priority over compaction — the
         // injected template block must reach the model before any window
         // collapse (§14.16: 触发点下一安全动作间隙暂停).
-        // 动态上下文滑块 S1 修订批（v7，2026-09-15，设计 §3.4.1，用户裁定
-        // DP-15/DP-16）：主车道 loop-top 安全间隙按**实际上下文估算**（全量
-        // 会话 chars/2——**不是**视图估算、**不是** provider 实测 prompt）
-        // 检查刻度（默认 500K/900K）：
-        //   - **500K ＝ 纯提醒**（不打断、不开窗、不强制，模型可延后）；
-        //   - **900K ＝ 必须压缩一次**（提醒 ＋ 开压缩窗口：窗口轮把「滑块
-        //     之外的携带内容」连同滑块一并上传，模型产出语义摘要）；
-        // 每级**每会话**一次（水位随侧车持久化，DP-16）、不 rearm；fire 经
-        // `mechanical_audit_update{kind:context_scale}` 落账。旧 D2 阶梯
-        // （128K/160K/300·500·600·700K/800K/920K）整体退役——滑块把视图恒
-        // 压在 H 内，旧梯级全成不可达阈值。
-        // 审查修正批（2026-09-15，审查 P2⑤「900K 窗口无上限守卫」）：最高
-        // 刻度的压缩窗口按 V3 要上传 `messages` **全量**——上传估算越过
-        // `window_upload_cap_tokens`（默认 1.10M，对应 provider 1M 窗口 ÷
-        // 实测换算 0.77 ＋ 余量）时，开窗只会让该轮请求硬失败，故改为
-        // **降级**：不开窗、注入降级块（自选压缩通路仍在）、机械层同迭代
-        // 强制压一次、事实经异常字段如实落账（`window_upload_over_cap`）。
-        let mut window_over_cap_now = false;
+        // 滑块上下文 v8（2026-09-16 勘误批，设计 §1 §2 §3 §5）：loop-top 安全
+        // 间隙（绝不在工具批内；pending checkpoint 优先）做四件事——
+        // ① 装配**模型面投影**（前置 ＋ 固定指针 ＋ 分块表 ＋ D4 机械段 ＋
+        //    各分块 ＋ 主滑块）并取**模型面估算**当阶梯量尺（设计 §3.1：不是
+        //    本地全量、不是 provider 实测——v7 量错对象正是本次勘误的实质处）；
+        // ② 阶梯（每档每会话一次）：192/224/256/288K 软提醒 → **320K 硬提醒**
+        //    （打断 ＋ 开压缩窗口）→ **500K 硬截断**（把主滑块以外的全部分块
+        //    移出模型面，本地面不动）；
+        // ③ 首个分块形成时一次性固化提醒（A4 文案语义保留、触发改锚）；
+        // ④ **1.10M 估算异常保险**：越线＝强制截断到线上（v7 的「不开窗降级」
+        //    随勘误作废）。
+        // **减少模型面的动作只有两个**：模型自压（`[SEMANTIC_SUMMARY]` ⇒ 按块
+        // 压缩）与 T1 硬截断——机械层不再以「总量超线」为由压缩或截断模型面。
+        let face_slider_tokens = svc.context_compact.slider_window_tokens;
+        let face_block_tokens = svc.context_compact.model_face_block_tokens;
+        let face_blocks = crate::model_face::blocks_outside_slider(
+            messages,
+            face_slider_tokens,
+            face_block_tokens,
+        );
+        // D4 机械段（run 基线 ＋ 自编辑清单 ＋ 最近编辑指纹）按 **epoch 冻结**：
+        // 下一次压缩/截断后重渲一次，两次之间模型面前缀字节稳定（不变量 I6）。
+        // 0AE-C5（2026-09-15 深审修复）：无条件渲染——baseline=None（非 git
+        // 工作区/git 失败）只省略基线段，自编辑清单与编辑指纹两段照常。
+        if !face_blocks.is_empty() && face_d4_block.is_none() {
+            face_d4_block = Some(crate::action_ledger::render_run_context_block(
+                run_baseline.as_deref(),
+                &svc.blackboard.read().edits,
+            ));
+        }
+        let face_params = crate::model_face::ModelFaceParams {
+            slider_tokens: face_slider_tokens,
+            block_tokens: face_block_tokens,
+            ledger_path: face_ledger_path.clone(),
+            archive_tag: Some(face_archive_tag.clone()),
+            run_id: writer.run_id().to_string(),
+            d4_block: face_d4_block.clone(),
+            // 静态开销＝**上一轮请求**的实测值（首轮 0，保守侧偏差）。
+            static_overhead_tokens: face_static_overhead,
+        };
+        let mut model_face_tokens =
+            crate::model_face::estimate_model_face_tokens(messages, &face_params);
+        // A4（2026-09-15，设计 §3.2，用户裁定 R3；v8 触发改锚「首个分块形成」）：
+        // **首次出现主滑块之外的分块**后发射一次固化提醒（**每会话**恰一次）。
+        if profile.role == AgentRole::Main
+            && !face_blocks.is_empty()
+            && !context_scale.has_flag(crate::context_scale::FLAG_FIRST_BLOCK)
+        {
+            context_scale.mark_flag(crate::context_scale::FLAG_FIRST_BLOCK);
+            controller.mark_context_scale_notified(crate::context_scale::FLAG_FIRST_BLOCK);
+            let watermark = controller.blackboard_watermark_label();
+            messages.push(Message {
+                role: Role::User,
+                content: format!(
+                    "{}\n{watermark}",
+                    crate::context_scale::first_block_reminder_block()
+                ),
+                tool_call_id: None,
+                tool_calls: Vec::new(),
+                reasoning_content: None,
+                round: None,
+            });
+            let payload = mechanical_audit.record(
+                "context_scale:first_block",
+                tool_rounds,
+                format!(
+                    "form=standalone_block model_face_estimate_tokens={model_face_tokens} \
+                     blocks={} watermark={watermark}",
+                    face_blocks.len()
+                ),
+                None,
+            );
+            writer
+                .record(
+                    EventType::MechanicalAuditUpdate,
+                    serde_json::json!({
+                        "kind": crate::mechanical_audit::KIND_CONTEXT_SCALE,
+                        "payload": payload,
+                    }),
+                )
+                .await?;
+        }
+        // 阶梯（量尺＝**模型面估算**；每档每会话一次、不 rearm）。
+        let mut truncate_now = false;
         if pending_checkpoint.is_none() && profile.role == AgentRole::Main {
-            let actual_context = estimate_messages_tokens(messages);
-            for fire in context_scale.due(
-                actual_context,
-                &svc.context_compact.context_scale_milestones,
-            ) {
-                // 提醒文本携带当时水位（沿用 0AE-C6 口径：黑板水位是提醒
-                // 可执行性的必要信息）。
-                let watermark = controller.blackboard_watermark_label();
-                let upload_estimate = estimate_messages_tokens(messages);
-                let over_cap = fire.opens_window
-                    && upload_estimate > svc.context_compact.window_upload_cap_tokens;
-                let block = if over_cap {
-                    crate::context_scale::window_skipped_over_cap_block(
-                        fire.milestone_tokens,
-                        actual_context,
-                        svc.context_compact.window_upload_cap_tokens,
-                    )
-                } else {
-                    fire.block
-                };
-                messages.push(Message {
-                    role: Role::User,
-                    content: format!("{block}\n{watermark}"),
-                    tool_call_id: None,
-                    tool_calls: Vec::new(),
-                    reasoning_content: None,
-                    round: None,
-                });
-                if fire.opens_window && !over_cap {
-                    // 压缩窗口（DP-7：≤3 轮无工具轮；模型未完成 ⇒ 机械层按
-                    // 既定兜底收口、`model_participated` 如实落账）。窗口轮
-                    // 的请求视图**绕过折叠**（装载滑块之外的携带内容，见
-                    // 请求装配处 `window_loads_pending_region`）。
-                    pending_checkpoint = Some(PendingCheckpoint::ModelCompression {
-                        rounds_left: crate::context_scale::COMPRESSION_WINDOW_ROUNDS,
-                        window_start_writes: svc.blackboard.read().model_note_count(),
-                    });
-                    window_opened_since_compaction = true;
+            let ladder = svc.context_compact.context_scale_ladder;
+            let truncate_tokens = crate::model_face::ladder_truncate_tokens(&ladder);
+            let fires = context_scale.due(model_face_tokens, &ladder);
+            let has_truncate = fires
+                .iter()
+                .any(|f| f.tier == crate::context_scale::LadderTier::HardTruncate);
+            // **一轮内只注入最高档**（只读审查 R-12③ 处置，2026-09-16）：单轮
+            // 暴涨会让 `due()` 一次返回 4–5 档；逐档注入等于把同一段文案（只有
+            // 刻度字样不同）连发数遍——最高档的文案已含当前读数、分块表、压缩
+            // 方法与下一档承诺，低档无独立信息。**水位与事件照记**（journal 保留
+            // 「本轮越过了哪几档」的完整事实，payload 以 `form=` 注明是否真的注入）。
+            // T1 本轮生效时同理只发**截断告知块**（内容即将被截断，软／硬提醒都
+            // 已无意义）；告知块由 `truncate_model_face_blocks` 在截断**之后**渲染，
+            // 并如实携带截断后的当前读数（故压掉低档提醒是无损的）。
+            let highest_tokens = fires.iter().map(|f| f.milestone_tokens).max();
+            let watermark = controller.blackboard_watermark_label();
+            for fire in &fires {
+                let injected = !has_truncate && Some(fire.milestone_tokens) == highest_tokens;
+                if injected {
+                    let block = match fire.tier {
+                        crate::context_scale::LadderTier::Soft => {
+                            Some(crate::context_scale::soft_reminder_block(
+                                fire.milestone_tokens,
+                                model_face_tokens,
+                            ))
+                        }
+                        crate::context_scale::LadderTier::HardReminder => {
+                            let table = crate::model_face::render_block_table(
+                                &face_blocks,
+                                &crate::model_face::face_markers(messages),
+                                &face_params,
+                            );
+                            Some(format!(
+                                "{}\n{}",
+                                crate::context_scale::hard_reminder_block(
+                                    fire.milestone_tokens,
+                                    truncate_tokens,
+                                    model_face_tokens,
+                                    &table,
+                                ),
+                                crate::context_scale::compression_window_block(
+                                    fire.milestone_tokens
+                                ),
+                            ))
+                        }
+                        // 硬截断的告知块在截断**之后**渲染（需要截断事实读数）。
+                        crate::context_scale::LadderTier::HardTruncate => None,
+                    };
+                    if let Some(block) = block {
+                        messages.push(Message {
+                            role: Role::User,
+                            content: format!("{block}\n{watermark}"),
+                            tool_call_id: None,
+                            tool_calls: Vec::new(),
+                            reasoning_content: None,
+                            round: None,
+                        });
+                        if fire.tier == crate::context_scale::LadderTier::HardReminder {
+                            // H1 硬提醒＝**打断**：≤3 轮压缩窗口（只暴露
+                            // blackboard_write）；窗口结束仍未产出摘要 ⇒ 如实落账
+                            // `model_participated=false`，**不再机械兜底压缩**。
+                            pending_checkpoint = Some(PendingCheckpoint::ModelCompression {
+                                rounds_left: crate::context_scale::COMPRESSION_WINDOW_ROUNDS,
+                                window_start_writes: svc.blackboard.read().model_note_count(),
+                            });
+                            window_opened_since_compaction = true;
+                        }
+                    }
                 }
-                if over_cap {
-                    window_over_cap_now = true;
-                }
-                // DP-16 会话级水位：fire 即回写（随侧车持久化；新会话独立、
-                // 恢复不重发）。SUCCESS-ONLY 由 host 侧落盘语义保证。
+                // 会话级水位：fire 即回写（随侧车持久化；新会话独立、恢复不重发）。
                 controller.mark_context_scale_notified(&fire.key);
-                // 0AE-C2 形状 {key, round, summary, anomaly}（schema v0.2）。
+                let form = if injected {
+                    "standalone_block"
+                } else if has_truncate {
+                    "deferred_to_truncation_notice"
+                } else {
+                    "suppressed_superseded_by_higher_tier"
+                };
                 let payload = mechanical_audit.record(
                     format!("context_scale:{}", fire.key),
                     tool_rounds,
                     format!(
-                        "milestone_tokens={} actual_context_tokens={} form=standalone_block \
-                         opens_window={} window_rounds={} window_upload_cap_tokens={} \
-                         window_upload_estimate_tokens={} window_skipped_over_cap={} \
-                         watermark={watermark}",
+                        "milestone_tokens={} model_face_estimate_tokens={} form={form} \
+                         tier={} truncate_tokens={} blocks={} watermark={watermark}",
                         fire.milestone_tokens,
-                        actual_context,
-                        fire.opens_window && !over_cap,
-                        if fire.opens_window && !over_cap {
-                            crate::context_scale::COMPRESSION_WINDOW_ROUNDS
-                        } else {
-                            0
+                        model_face_tokens,
+                        match fire.tier {
+                            crate::context_scale::LadderTier::Soft => "soft",
+                            crate::context_scale::LadderTier::HardReminder => "hard_reminder",
+                            crate::context_scale::LadderTier::HardTruncate => "hard_truncate",
                         },
-                        svc.context_compact.window_upload_cap_tokens,
-                        upload_estimate,
-                        over_cap,
+                        truncate_tokens,
+                        face_blocks.len(),
                     ),
-                    // 降级事实＝异常（审查修正批）：窗口该开而未开，语义层
-                    // 本轮仍只能靠模型自选压缩。
-                    if over_cap {
-                        Some("window_upload_over_cap".to_string())
-                    } else {
-                        None
-                    },
+                    None,
                 );
                 writer
                     .record(
@@ -1608,6 +2225,42 @@ pub(crate) async fn run_agent_loop(
                     )
                     .await?;
             }
+            truncate_now = has_truncate;
+        }
+        // T1 硬截断 ＋ 1.10M 异常保险：把**主滑块以外的全部分块**移出模型面
+        // （设计 §5）：本地面逐字不动、可按块回放、任务无需中止。T1 一次/会话
+        // （会话级水位）；守卫线可重复触发（截断后新累积的分块才会再次越线）。
+        model_face_tokens = crate::model_face::estimate_model_face_tokens(messages, &face_params);
+        let guard_hit = model_face_tokens >= svc.context_compact.model_face_guard_tokens;
+        if pending_checkpoint.is_none()
+            && profile.role == AgentRole::Main
+            && (truncate_now || guard_hit)
+        {
+            let cut_outcome = truncate_model_face_blocks(
+                svc,
+                writer,
+                host,
+                messages,
+                &face_params,
+                &face_archive_tag,
+                guard_hit && !truncate_now,
+                &mut mechanical_audit,
+                tool_rounds,
+            )
+            .await?;
+            if cut_outcome.is_none() && truncate_now {
+                // 越线为真但本轮**无可执行动作**（无已闭合分块／无回放块／无超大
+                // 结果）⇒ 不消费 T1 闩位：下一轮继续试（内容一旦可动即压回线上）。
+                context_scale.rearm(crate::model_face::ladder_truncate_tokens(
+                    &svc.context_compact.context_scale_ladder,
+                ));
+            }
+            // 截断后本 epoch 的 D4 机械段与分块表随之重渲（前缀重写＝一次
+            // 压缩级事件，设计 §9「重写税」口径）。
+            face_d4_block = None;
+            window_opened_since_compaction = false;
+            journal_epoch_start_seq = writer.seq();
+            ledger_seq_epoch = None;
         }
         // 0ae D3 延迟收口（0AE-C1 修复，2026-09-15 深审）：上一迭代的窗口
         // 轮携带 blackboard_write 落穿了正常派发路径——写入此刻已派发完成，
@@ -1624,562 +2277,59 @@ pub(crate) async fn run_agent_loop(
             svc,
             writer,
             tool_rounds,
-            &mut force_compact_after_window,
         )
         .await?;
-        // v7 语义轨（S1 修订批，设计 §3.4.1，DP-14/DP-17）：模型产出的语义
-        // 摘要 ⇒ 在下一个安全间隙执行一次「摘要替换被压区」。与机械轨共用
-        // drain／存档／marker／事件路径，只有 mode=model_summary 与 reason
-        // 不同（窗口收口＝`context_scale_window`；模型自选＝`model_selected`）。
-        let mut semantic_compacted = false;
+        // v8 模型自压（设计 §4；取代 v7 的「摘要替换被压区」drain 形态）：
+        // 模型在回复里产出**语义摘要块** ⇒ 下一个安全间隙按**块**压缩——
+        // 机械层把「机械摘要行（结构化轨）＋语义摘要（模型产出）」写到 marker
+        // 里，模型面随之下移；**本地面一条不删**（不变量 I3）。reason：窗口
+        // 收口＝`context_scale_window`，模型自选＝`model_selected`。
         if let Some(summary) = pending_semantic.take() {
             let semantic_reason = if window_opened_since_compaction {
                 "context_scale_window"
             } else {
                 "model_selected"
             };
-            let measured = estimate_messages_tokens(messages);
+            let selection = crate::context_scale::extract_block_selection(&summary);
             let locators = crate::summary::LocatorPointers {
                 ledger_seq: ledger_seq_epoch,
-                ledger_path: (profile.role == AgentRole::Main)
-                    .then(|| crate::action_ledger::ledger_file_path(&host.session_cwd()))
-                    .map(|p| p.display().to_string()),
+                ledger_path: face_ledger_path.as_ref().map(|p| p.display().to_string()),
                 journal_run: Some(writer.run_id().to_string()),
                 journal_seq: Some((journal_epoch_start_seq, writer.seq())),
                 conversation_path: conversation_sidecar_path.clone(),
+                // 按块压缩不 drain 本地面（`compress_blocks_now` 内部会再置真）。
+                local_face_full: false,
             };
-            let ledger_hint = (profile.role == AgentRole::Main)
-                .then(|| crate::action_ledger::ledger_file_path(&host.session_cwd()));
-            let fold_ctx = (profile.role == AgentRole::Main).then(|| {
-                let (round, domain) = controller.blackboard_stamp();
-                crate::summary::FoldSnapshotCtx {
-                    current_round: round,
-                    current_domain: domain,
-                }
-            });
-            match run_template_compact(
+            if let Some(outcome) = compress_blocks_now(
                 svc,
                 writer,
                 host,
                 messages,
-                measured,
+                &face_params,
+                &face_archive_tag,
+                selection,
+                Some(&summary),
                 semantic_reason,
-                true,
-                false,
-                rounds_since_compact,
-                svc.context_compact.recent_tail_rounds,
-                ledger_hint.as_deref(),
-                fold_ctx,
-                &mut fold_state,
                 &locators,
-                Some(SemanticCompaction {
-                    summary: &summary,
-                    reason: semantic_reason,
-                }),
             )
             .await?
             {
-                CompactDecision::Executed => {
-                    semantic_compacted = true;
-                    guard_failures = 0;
-                    rounds_since_compact = 0;
-                    // 语义轨已替换被压区 ⇒ 窗口旗标不再额外触发机械兜底；
-                    // 窗口 epoch 与定位指针随本次压缩收口重启。
-                    force_compact_after_window = None;
-                    window_opened_since_compaction = false;
-                    journal_epoch_start_seq = writer.seq();
-                    ledger_seq_epoch = None;
-                }
-                CompactDecision::NoOp | CompactDecision::GuardBlocked => {
-                    // 无收益（摘要不小于被压区）或无可压内容：正文按普通内容
-                    // 留在会话里，不替换、不留 marker（游标已前进，不重试）。
-                }
-            }
-        }
-        // 三量尺（设计 §9-3「量尺二义性是本批最大实现陷阱」，逐处写明）：
-        // ① `fallback_now` ＝ **provider 实测上一请求 prompt_tokens**（视图
-        //    刻度）——滑块下视图恒 ≤H ⇒ 常态不可达，保留为 S2 展开膨胀
-        //    时的视图面兜底（设计 §1 表口径）；
-        // ② `rhythm_now` ＝ 同一实测尺度 vs **H＋缓冲**（视图刻度，S1 起
-        //    rhythm 退化为「驱逐停滞兜底」——驱逐正常时视图回到 ≈H−L，
-        //    该线只在驱逐无法推进时可达，故不构成周期性打断，满足用户
-        //    裁定 R1 第 4 条「打断频率上限」）；
-        // ③ `hard_context_now` ＝ **实际上下文估算**（全量会话 chars/2，
-        //    非视图、非 provider 读数）≥ 硬兜底（默认 950K）——A8①
-        //    「硬兜底改挂实际上下文」，机械压缩并存不名存实亡。
-        let fallback_now = pending_checkpoint.is_none()
-            && last_prompt_tokens.is_some_and(|m| m > svc.context_compact.safety_tokens);
-        let rhythm_now = pending_checkpoint.is_none()
-            && last_prompt_tokens.is_some_and(|m| m > svc.context_compact.rhythm_tokens())
-            && rounds_since_compact >= svc.context_compact.min_rounds;
-        let actual_context_now = estimate_messages_tokens(messages);
-        // v7 V4（S1 修订批）：950K 最后防线＝**once ＋ 冷却**——压不动落
-        // anomaly 并停手（`hard_context_stopped`），不逐轮重压；两次强制之间
-        // 至少隔 `HARD_CONTEXT_COOLDOWN_ROUNDS` 个 loop 迭代。
-        // 用户 2026-09-15 裁定：**不设永久停手**——压不动 ⇒ 硬截留 ＋ 告知，
-        // 冷却过后若又有新的滑块外轮次累积，仍会再截留一次（不是逐轮重压：
-        // 冷却 ≥ `HARD_CONTEXT_COOLDOWN_ROUNDS` 个 loop 迭代）。
-        let hard_context_now = pending_checkpoint.is_none()
-            && actual_context_now >= svc.context_compact.hard_context_tokens
-            && hard_force_at_round.is_none_or(|at| {
-                loop_rounds.saturating_sub(at) >= crate::context_scale::HARD_CONTEXT_COOLDOWN_ROUNDS
-            });
-        // 0ae D3：压缩窗口结束 ⇒ 机械无差别折叠兜底（绕过阈值与冷却；
-        // DP-7：模型未完成固化/标注也照旧执行，model_participated 已在
-        // 窗口结束点如实落账）。
-        let summary_now = !semantic_compacted
-            && (fallback_now
-                || rhythm_now
-                || hard_context_now
-                // 审查修正批（2026-09-15，审查 P2⑤）：窗口越上限降级 ⇒ 同
-                // 迭代补一次机械强制压缩（reason=context_scale），保证
-                // 「结构化轨照常压」不因不开窗而缺席。
-                || window_over_cap_now
-                || force_compact_after_window.is_some());
-        // v7 V4（S1 修订批）× 用户 2026-09-15 裁定：硬兜底「压不动」事实——
-        // 压缩后仍在硬线之上 ⇒ 收口一次 **硬截留事实**（滑块之外内容已全部
-        // 移出／已无可移出），并由下方统一块**明确告知模型**、任务继续；
-        // 不再 NoOp、不再永久停手、不再靠强制开窗要求模型压缩。
-        let mut hard_context_failure: Option<HardContextFailure> = None;
-        if summary_now && let Some(measured_prompt) = last_prompt_tokens {
-            let forced_window = force_compact_after_window.take();
-            let reason = if forced_window.is_some() {
-                "context_scale_window"
-            } else if fallback_now {
-                "fallback"
-            } else if hard_context_now || window_over_cap_now {
-                "context_scale"
-            } else {
-                "rhythm"
-            };
-            // 量尺对齐（设计 §9-3「量尺二义性是本批最大实现陷阱」）＋
-            // 「强制一次」（任务书 A8①）：**实际上下文触发的硬兜底**必须
-            // 用**同一把尺**当读数——否则 guard 的基数是视图实测 prompt、
-            // 被比较的对象却是全量会话估算，`removable` 恒为 0 ⇒ 每一次
-            // 都判 GuardBlocked，兜底退化成「重试三次后才靠 guard_failed
-            // 强制」，与「≥950K 强制一次」的裁定不符。故：read = 实际上下文
-            // 估算，force = true（绕过 reduce guard，仍走同一 drain/marker/
-            // 存档路径与同一事件形状）。视图刻度触发的节奏/兜底（rhythm /
-            // fallback）与模型窗口收尾（context_scale_window）**读数与
-            // force 语义一律照旧**（0ae 已审行为不动）。
-            let measured = if reason == "context_scale" {
-                actual_context_now
-            } else {
-                measured_prompt
-            };
-            let force_context_scale = reason == "context_scale";
-            let tail = svc.context_compact.recent_tail_rounds;
-            // P2-14 S1：主会话压缩才走 v0.3 折叠快照（取压缩触发点 LIF
-            // round/domain 作快照上下文）；检索/grill 车道传 None 保持
-            // v0.2 五段模板（车道范围裁决 2026-09-04 复审处理）。
-            let fold_ctx = (profile.role == AgentRole::Main).then(|| {
-                let (round, domain) = controller.blackboard_stamp();
-                crate::summary::FoldSnapshotCtx {
-                    current_round: round,
-                    current_domain: domain,
-                }
-            });
-            // FUS-LEDGER-FOLD-STATE external-file design (2026-08-18,
-            // ADR-0010 §14.28 审查修复): the external ledger is the MAIN
-            // lane's conversation projection — retrieval lanes never fold,
-            // so their compaction marker carries no ledger hint.
-            let ledger_hint = (profile.role == AgentRole::Main)
-                .then(|| crate::action_ledger::ledger_file_path(&host.session_cwd()));
-            // v7 原文定位指针四项（S1 修订批，设计 §3.5.1）：台账 `[seq]`
-            // 区间＝本窗口 epoch 已折叠行；journal＝本 epoch 序列区间；
-            // sidecar 路径＝会话档案。机械轨 marker 与语义轨 marker 共用。
-            let locators = crate::summary::LocatorPointers {
-                ledger_seq: ledger_seq_epoch,
-                ledger_path: ledger_hint.as_ref().map(|p| p.display().to_string()),
-                journal_run: Some(writer.run_id().to_string()),
-                journal_seq: Some((journal_epoch_start_seq, writer.seq())),
-                conversation_path: conversation_sidecar_path.clone(),
-            };
-            // 用户 2026-09-15 裁定：硬兜底的成效读数——截留前后各数一次完整
-            // 轮数（同一数组口径），供「已机械截留 N 轮」如实告知模型。
-            let rounds_before_force =
-                crate::action_ledger::rounds_before(messages, messages.len()) as u32;
-            match run_template_compact(
-                svc,
-                writer,
-                host,
-                messages,
-                measured,
-                reason,
-                force_context_scale,
-                false,
-                rounds_since_compact,
-                tail,
-                ledger_hint.as_deref(),
-                fold_ctx,
-                &mut fold_state,
-                &locators,
-                None,
-            )
-            .await?
-            {
-                CompactDecision::Executed => {
-                    // A compaction consumed the window (机械模式): the
-                    // cooldown restarts and the guard retry chain resets.
-                    guard_failures = 0;
-                    rounds_since_compact = 0;
-                    // 动态上下文滑块 S1 修订批（v7，设计 §3.4.1）：**旧 D2
-                    // 阶梯的 rearm 随之消失**——实际上下文刻度提醒每级
-                    // 「每会话一次」且**不 rearm**（用户裁定 DP-16；机械压缩
-                    // 不重置提醒面，否则长单对话里同一刻度会反复提醒）。
-                    // 本窗口 epoch 同时收口：定位指针跨度与摘要扫描游标随新
-                    // epoch 重新累积（语义摘要在响应处理点捕获，无扫描游标）。
-                    journal_epoch_start_seq = writer.seq();
-                    ledger_seq_epoch = None;
-                    window_opened_since_compaction = false;
-                    if reason == "context_scale" {
-                        hard_force_at_round = Some(loop_rounds);
-                        // 用户 2026-09-15 裁定：压完仍在硬线之上 ⇒ 收口
-                        // **压缩失败事实**（本轮实际移出的轮数如实计数）；
-                        // 压到线下 ⇒ 正常收口，不落 anomaly、不告知。
-                        let still_over = estimate_messages_tokens(messages)
-                            >= svc.context_compact.hard_context_tokens;
-                        hard_context_failure = still_over.then_some(HardContextFailure {
-                            dropped_rounds: rounds_before_force.saturating_sub(
-                                crate::action_ledger::rounds_before(messages, messages.len())
-                                    as u32,
-                            ),
-                        });
-                    }
-                }
-                CompactDecision::NoOp => {
-                    guard_failures = 0;
-                    if reason == "context_scale" {
-                        // 机械层无可压内容（滑块之外已无完整旧轮）⇒ 硬兜底
-                        // 压不动：截留轮数 0，仍须如实告知（用户裁定）。
-                        hard_context_failure = Some(HardContextFailure { dropped_rounds: 0 });
-                    }
-                    // 0AE-C7（2026-09-15 深审裁决）：NoOp 不 rearm——强制
-                    // 窗口旗标在进本块前已消耗，而 rhythm 路径（920K 远超
-                    // trigger_tokens、冷却已过）仍会逐轮重试机械压缩，机制
-                    // 不会停摆；此处 rearm 只会重开 3 个 920K 级模型窗口轮
-                    // ＝纯浪费（NoOp→开窗→NoOp 循环烧请求）。
-                }
-                CompactDecision::GuardBlocked => {
-                    // The guard cannot be satisfied THIS round — retry on
-                    // the next trigger rounds without interrupting content;
-                    // after the retry budget is exhausted, force one
-                    // compaction and report the mechanism failure.
-                    if reason == "context_scale" {
-                        // force=true 的硬兜底路径正常不会走到这里（防御口径）。
-                        hard_context_failure = Some(HardContextFailure { dropped_rounds: 0 });
-                    }
-                    guard_failures += 1;
-                    if guard_failures >= GUARD_RETRY_LIMIT {
-                        match run_template_compact(
-                            svc,
-                            writer,
-                            host,
-                            messages,
-                            measured,
-                            reason,
-                            true,
-                            true,
-                            rounds_since_compact,
-                            tail,
-                            ledger_hint.as_deref(),
-                            fold_ctx,
-                            &mut fold_state,
-                            &locators,
-                            None,
-                        )
-                        .await?
-                        {
-                            CompactDecision::Executed => {
-                                rounds_since_compact = 0;
-                            }
-                            _ => {}
-                        }
-                        guard_failures = 0;
-                    }
-                }
-            }
-        }
-
-        // **用户 2026-09-15 裁定**（950K 最后防线的失败处置；取代 v7 的
-        // 「残留 ⇒ anomaly ＋ 强制开窗」与「无可压内容 ⇒ anomaly 停手」）：
-        // 压不动 ⇒ **强横截留 ＋ 明确告知 ＋ 任务继续**——机械层已把滑块
-        // （驻留带）之外能移出的都移出了（视图只剩前置＋固定指针＋当前滑块），
-        // 此处**不再开窗要求模型压缩、也不永久停手**：把「压缩失败、已机械
-        // 截留（N 轮 / 已无可截留内容）」作为注入块明确交给模型，由它决定
-        // 下一步；冷却过后若又有滑块外轮次累积，仍会（且只）再做一次截留。
-        if let Some(failure) = hard_context_failure {
-            let ledger_hint = (profile.role == AgentRole::Main)
-                .then(|| crate::action_ledger::ledger_file_path(&host.session_cwd()));
-            let tell_now = !hard_emergency_noticed;
-            // 用户 2026-09-15 裁定（第二条）：窗口**内**溢出（单结果过大）⇒ 把
-            // 超大工具结果正文换成「原文头部＋回读指针」（先例＝
-            // OUTPUT-DEGENERATION-GUARD）——配对字段不动、幂等、大者优先，
-            // 直到降到硬线之下或没有候选。这一步使「窗口内也能降线」，不再
-            // 只能停在「已无可截留内容」。
-            let mut pointerized = crate::action_ledger::PointerizeStats::default();
-            if estimate_messages_tokens(messages) >= svc.context_compact.hard_context_tokens {
-                let journal_path = host.journal().events_path();
-                pointerized = crate::action_ledger::pointerize_oversized_tool_results(
-                    messages,
-                    svc.context_compact.hard_context_tokens,
-                    crate::action_ledger::OVERSIZED_TOOL_RESULT_CAP_TOKENS,
-                    Some(journal_path.as_path()),
-                    writer.run_id(),
+                tracing::debug!(
+                    blocks = outcome.blocks,
+                    rounds = outcome.rounds,
+                    freed_tokens = outcome.freed_tokens,
+                    reason = semantic_reason,
+                    "v8 block compaction executed"
                 );
-            }
-            let actual_after = estimate_messages_tokens(messages);
-            // 有实际截留 ⇒ 每次都如实落账（模型上下文确实变了）；零截留的
-            // 重复发生只落一次（避免同一持久条件逐轮刷账）。
-            let intervened = failure.dropped_rounds > 0 || pointerized.replaced > 0;
-            if intervened || tell_now {
-                let payload = mechanical_audit.record(
-                    "context_scale:hard_950k_intercepted",
-                    tool_rounds,
-                    format!(
-                        "hard_context_tokens={} actual_context_tokens_before={} \
-                         actual_context_tokens_after={} dropped_rounds={} \
-                         pointerized_results={} freed_tokens={} slider_only_view=true \
-                         window_opened=false",
-                        svc.context_compact.hard_context_tokens,
-                        actual_context_now,
-                        actual_after,
-                        failure.dropped_rounds,
-                        pointerized.replaced,
-                        pointerized.freed_tokens
-                    ),
-                    Some(
-                        if failure.dropped_rounds > 0 {
-                            "hard_context_compaction_failed_truncated"
-                        } else if pointerized.replaced > 0 {
-                            // 用户 2026-09-15 裁定第二条：只有窗口内超大结果被
-                            // 指针化（窗口之外本来就无可截留轮次）。
-                            "hard_context_compaction_failed_result_pointerized"
-                        } else {
-                            "hard_context_compaction_failed_slider_bound"
-                        }
-                        .to_string(),
-                    ),
-                );
-                writer
-                    .record(
-                        EventType::MechanicalAuditUpdate,
-                        serde_json::json!({
-                            "kind": crate::mechanical_audit::KIND_CONTEXT_SCALE,
-                            "payload": payload,
-                        }),
-                    )
-                    .await?;
-            }
-            if tell_now {
-                hard_emergency_noticed = true;
-                let watermark = controller.blackboard_watermark_label();
-                let ledger_text = ledger_hint.as_ref().map(|p| p.display().to_string());
-                messages.push(Message {
-                    role: Role::User,
-                    content: format!(
-                        "{}\n{watermark}",
-                        crate::context_scale::compaction_failed_truncation_block(
-                            failure.dropped_rounds,
-                            pointerized.replaced,
-                            ledger_text.as_deref(),
-                        )
-                    ),
-                    tool_call_id: None,
-                    tool_calls: Vec::new(),
-                    reasoning_content: None,
-                    round: None,
-                });
+                rounds_since_compact = 0;
+                // 压缩已落地 ⇒ 本 epoch 收口：D4 机械段重渲、定位指针跨度与
+                // 台账 `[seq]` 游标重启（下一次压缩从新 epoch 起算）。
+                face_d4_block = None;
+                window_opened_since_compaction = false;
+                journal_epoch_start_seq = writer.seq();
+                ledger_seq_epoch = None;
             }
         }
-
-        // 动态上下文滑块 S1 驱逐（2026-09-15，设计 §3.1/§3.2；取代
-        // FUS-LEDGER-FOLD-STATE 的 128K 锯齿折叠）：**同一 loop-top 安全
-        // 间隙**（绝不在工具批内；pending checkpoint 优先——此处
-        // `pending_checkpoint` 为 None）。当**估算的请求视图**（chars/2）≥
-        // **H**（`slider_window_tokens`，默认 160K）且驻留带之外存在完整
-        // 旧轮时，把**新**轮折进外挂台账文件 ONCE 并前移 `fold_cut`
-        // （＝`L_start`）——一次驱逐移出的是一段**连续完整轮**，深度 ≈H−L，
-        // 视图谷值恒 ≥L（锯齿形态折后实测谷值仅 9,600 token ＝死亡螺旋
-        // 根因）。视图变为 preamble ＋ 字节固定指针 ＋ 驻留带 ＋ 逐字尾部，
-        // 前缀跨**所有**驱逐保持字节稳定（无按窗重写）＝v1.9 前缀缓存纪律
-        // （实测命中率 81.9% → ~91–93%；2026-08-18 设计 §1.3/§5）。推进
-        // 绝不改 `messages` 本体（journal/sidecar 保留逐字全量——审计双轨
-        // 不变；外挂文件是可确定性重推的投影）。
-        if pending_checkpoint.is_none() && profile.role == AgentRole::Main && !fold_disabled {
-            // FUS-LEDGER-FOLD-STATE external-file design (2026-08-18,
-            // ADR-0010 §14.28 审查修复): 仅主车道折叠——检索子车道共享
-            // session_cwd，外挂文件是主会话的模型可读投影；子车道窗口小，
-            // 压缩机制已覆盖，避免多车道行混入同一文件（指针消息「本会话
-            // 内固定」契约）。`fold_disabled` = 连续写失败后的降级开关。
-            // 驻留带预算换算（真实 token L → estimate_messages_tokens 估计
-            // 口径，2 字符/token ÷ 2；S4 实测校准）。**参数不进指针文案**
-            // （改 env 即一次性前缀失效；设计 §3.1 纪律）。
-            let resident_budget = crate::action_ledger::bridge_estimate_budget(
-                svc.context_compact.slider_resident_tokens,
-            );
-            let view_estimate = {
-                let view = crate::action_ledger::build_request_view(
-                    messages,
-                    &fold_state,
-                    resident_budget,
-                );
-                estimate_messages_tokens(&view)
-            };
-            if view_estimate >= svc.context_compact.slider_window_tokens {
-                let ledger_path = crate::action_ledger::ledger_file_path(&host.session_cwd());
-                let prev_fold = fold_state.clone();
-                // 0ae D4：机械段（基线 + 自编辑清单 + 最近编辑指纹）随
-                // 推进冻结进桥。0AE-C5（2026-09-15 深审修复）：无条件渲染
-                // ——baseline=None（非 git 工作区/git 失败）只省略基线段，
-                // 自编辑清单与编辑指纹两段照常（render 函数的 None 分支
-                // 即为此设计；修复前 baseline 缺失使整块机械段消失）。
-                let run_context_block = Some(crate::action_ledger::render_run_context_block(
-                    run_baseline.as_deref(),
-                    &svc.blackboard.read().edits,
-                ));
-                if let Some(rows) = crate::action_ledger::advance_fold(
-                    messages,
-                    &mut fold_state,
-                    resident_budget,
-                    &ledger_path,
-                    run_context_block,
-                ) {
-                    // v7 原文定位指针（S1 修订批，设计 §3.5.1）：本次推进写入的
-                    // 行序号区间并入本窗口 epoch 的 `[seq]` 跨度——压缩 marker
-                    // 的「台账 `[seq]` 区间」指针由此可得（跨压缩连续的全局行
-                    // 键；段级轮区间随尾批 §7）。
-                    match crate::action_ledger::append_ledger_rows_range(&ledger_path, &rows) {
-                        Err(append_err) => {
-                            // External-file write failure must NOT advance the
-                            // fold — the rows would be lost from both the view
-                            // and the file. Roll back, count the failure and
-                            // journal it; after the budget folding is disabled
-                            // for this loop. Deliberately NOT `continue`: the
-                            // session keeps making progress with the
-                            // rolled-back (unfolded) view and the next loop-top
-                            // retries — a persistent failure must never spin
-                            // the loop without a model call (设计 §8「推进失败
-                            // 不阻塞会话」, 2026-08-18 审查修复).
-                            fold_state = prev_fold;
-                            fold_write_failures += 1;
-                            let disabled = fold_write_failures >= FOLD_WRITE_FAILURE_LIMIT;
-                            if disabled {
-                                fold_disabled = true;
-                            }
-                            tracing::warn!(
-                                ledger_path = %ledger_path.display(),
-                                rows = rows.len(),
-                                attempts = fold_write_failures,
-                                disabled,
-                                error = %append_err,
-                                "external ledger append failed — fold state rolled back; folding disabled after the budget"
-                            );
-                            writer
-                                .record(
-                                    EventType::LedgerFoldWriteFailed,
-                                    serde_json::json!({
-                                        "ledger_path": ledger_path.display().to_string(),
-                                        "attempt": fold_write_failures,
-                                        "disabled": disabled,
-                                        "rows": rows.len(),
-                                        "view_estimate_tokens": view_estimate,
-                                        "agent_role": profile.role.as_str(),
-                                    }),
-                                )
-                                .await?;
-                        }
-                        Ok(seq_range) => {
-                            if let Some((from, to)) = seq_range {
-                                ledger_seq_epoch = Some(match ledger_seq_epoch {
-                                    Some((first, _)) => (first, to),
-                                    None => (from, to),
-                                });
-                            }
-                            fold_write_failures = 0;
-                            // FUS-LEDGER-FOLD-STATE (2026-08-18, ADR-0010
-                            // §14.26): one mechanical fold advance — the
-                            // request-view prefix is stable (pointer never
-                            // rewritten), but `fold_cut` moves and the view
-                            // grows by pure append; the event carries the new
-                            // fold point, the triggering estimate and the
-                            // POST-advance estimate (触发复位证明：推进后视图
-                            // < 阈值——2026-08-18 审查修复补足 S2 测试 #3 的直接
-                            // 断言口径). Emitted only on a real advance.
-                            let view_after = {
-                                let view = crate::action_ledger::build_request_view(
-                                    messages,
-                                    &fold_state,
-                                    resident_budget,
-                                );
-                                estimate_messages_tokens(&view)
-                            };
-                            writer
-                            .record(
-                                EventType::LedgerFoldAdvance,
-                                serde_json::json!({
-                                    "fold_start": fold_state.fold_start,
-                                    "fold_cut": fold_state.fold_cut,
-                                    "rounds_folded": fold_state
-                                        .fold_cut
-                                        .map(|cut| crate::action_ledger::rounds_before(messages, cut))
-                                        .unwrap_or(0),
-                                    "view_estimate_tokens": view_estimate,
-                                    "view_estimate_after": view_after,
-                                    "agent_role": profile.role.as_str(),
-                                }),
-                            )
-                            .await?;
-                            // A4（2026-09-15，设计 §3.2，用户裁定 R3）：**首次
-                            // 真实驱逐**后发射一次打断式固化提醒（复用 0ae D2
-                            // 128K 梯文案语义）。量尺对齐说明：本触发吃**视图
-                            // 估算 chars/2**，提醒文本里的动作指向黑板写入面；
-                            // 时点取「首次成功推进」＝首次真实驱逐（写失败回滚
-                            // 不计，`first_fold_reminder_done` 只在 append 成功
-                            // 分支置位）。每 run 恰一次。
-                            if !first_fold_reminder_done {
-                                first_fold_reminder_done = true;
-                                let watermark = controller.blackboard_watermark_label();
-                                messages.push(Message {
-                                    role: Role::User,
-                                    content: format!(
-                                        "{}\n{watermark}",
-                                        crate::context_scale::first_fold_reminder_block()
-                                    ),
-                                    tool_call_id: None,
-                                    tool_calls: Vec::new(),
-                                    reasoning_content: None,
-                                    round: None,
-                                });
-                                let payload = mechanical_audit.record(
-                                "context_scale:first_fold",
-                                tool_rounds,
-                                format!(
-                                    "form=standalone_block view_estimate_tokens={view_estimate} \
-                                     view_estimate_after={view_after} watermark={watermark}"
-                                ),
-                                None,
-                            );
-                                writer
-                                    .record(
-                                        EventType::MechanicalAuditUpdate,
-                                        serde_json::json!({
-                                            "kind": crate::mechanical_audit::KIND_CONTEXT_SCALE,
-                                            "payload": payload,
-                                        }),
-                                    )
-                                    .await?;
-                            }
-                        }
-                    }
-                } else {
-                    // Anti-spin no-op (no complete round outside the
-                    // tail): emits nothing — the repeated O(view)
-                    // estimation until a new round arrives is accepted.
-                }
-            }
-        }
-
         // GAP-INQUIRY-SPLIT (2026-08-09) — FALLBACK orientation injection
         // point (loop-top): a post-tool-batch gap exists only on tool
         // rounds. When the threshold round is a FINAL round (no tool
@@ -2355,6 +2505,16 @@ pub(crate) async fn run_agent_loop(
         } else {
             system
         };
+        // v8（2026-09-16 实现批，审查 R-9）：阶梯/守卫量尺＝模型面估算 ＋
+        // **静态开销**（系统提示词 ＋ 工具定义）。此处与请求装配同刻刷新，
+        // 供下一轮 loop-top 的阶梯判定与守卫使用（首轮为 0，属保守侧偏差）。
+        if profile.role == AgentRole::Main {
+            // 测试缝隙（`with_model_face_static_overhead`）优先：pin 0 ＝ 只量
+            // 会话面（既有小刻度钉子语义不变）。
+            face_static_overhead = controller
+                .model_face_static_overhead_pin()
+                .unwrap_or_else(|| estimate_static_overhead(&system, &current_tool_defs));
+        }
         // D-6 (FIX_PLAN 2026-08-06): subagents get the full 256K budget too
         // (the main agent's request-level cap — §3.4.2 same defaults;
         // OUTPUT-BUDGET-RESTORE-AND-STALL-GUARD 2026-08-20, ADR-0010
@@ -2443,27 +2603,13 @@ pub(crate) async fn run_agent_loop(
         // stateful fold point — `messages` verbatim until the first
         // mechanical advance, then preamble ＋ 固定指针 ＋ 驻留带
         // `[fold_cut..bridge_end)` ＋ 逐字尾部（byte-stable prefix, pure
-        // append）。驻留带预算 = L（`slider_resident_tokens`，估计口径
-        // chars/2）；桥渲染沿用 FUS-LEDGER-FOLD-BRIDGE（2026-08-19 §14.32：
-        // 剥推理 ＋ 仅最新轮单独超预算时按预算截断）。**视图与驱逐共用同一
-        // 预算**——两处必须同源，否则推进判定与渲染会互相打架。
-        let resident_budget = crate::action_ledger::bridge_estimate_budget(
-            svc.context_compact.slider_resident_tokens,
-        );
-        // v7 V3（S1 修订批，设计 §3.4.1「900K ＝ 必须压缩一次」）：**压缩窗口
-        // 轮绕过折叠**——窗口内要上传的正是「**滑块之外的携带内容** ＋ 滑块」
-        // （否则模型看不到待压区，语义摘要无从产出）。窗口外照旧只上传滑窗
-        // 视图（前缀字节稳定纪律不变）。窗口轮数 ≤3、只在刻度越线时发生，
-        // 成本按设计 §3.3 接受。
-        let window_loads_pending_region = matches!(
-            pending_checkpoint.as_ref(),
-            Some(PendingCheckpoint::ModelCompression { .. })
-        );
-        let request_messages = if window_loads_pending_region {
-            messages.clone()
-        } else {
-            crate::action_ledger::build_request_view(messages, &fold_state, resident_budget)
-        };
+        // 滑块上下文 v8（2026-09-16 勘误批，设计 §1）：**模型面＝投影层装配**。
+        // 视图＝前置 ＋ 固定指针 ＋ 分块表 ＋ D4 机械段 ＋ 各分块（原文，或被
+        // 压缩/截断块的 marker 摘要行）＋ 主滑块（最近 x K 连续完整轮，逐字）
+        // ＋ 尾部。`messages`（本地面）逐字全量、不受影响；**没有机械驱逐**，
+        // 故两次压缩之间前缀只追加（不变量 I2/I6）。压缩窗口轮与普通轮装配
+        // 同形——v8 的模型面本来就包含全部携带内容（不存在「窗口绕过折叠」）。
+        let request_messages = crate::model_face::build_model_face(messages, &face_params);
         // FUS-LEDGER-FOLD-STATE 复验取证 (2026-08-18)：`ORZ_DEBUG_VIEW=1`
         // 时在请求失败路径 dump 实际发送的视图角色序列（定位折叠/压缩
         // 交互下的消息配对破坏点；正常路径零成本）。
@@ -2732,10 +2878,8 @@ pub(crate) async fn run_agent_loop(
             Some(controller.pin_main_board_stamp())
         };
 
-        // P0-D: track the round — measured prompt tokens feed the next
-        // loop-top trigger check; the round counter is the summary
-        // cooldown.
-        last_prompt_tokens = response.prompt_tokens;
+        // P0-D: track the round — 自上一次压缩以来的模型轮数（事件读数）；
+        // **v8 起实测 prompt token 不再参与触发**（阶梯吃模型面估算）。
         rounds_since_compact += 1;
 
         // GAP-INQUIRY-SPLIT (2026-08-09): the model round just COMPLETED —
@@ -2937,7 +3081,10 @@ pub(crate) async fn run_agent_loop(
                             }),
                         )
                         .await?;
-                    force_compact_after_window = Some(participated);
+                    // v8（2026-09-16 勘误批）：窗口收口**不再**置机械兜底旗标
+                    // ——机械层不替模型决定模型面收缩（设计 §4）。窗口内模型产出
+                    // 的语义摘要已由 `pending_semantic` 承载，在下一次 loop-top
+                    // 按块压缩；未产出则如实落账 `model_participated=false`。
                     continue;
                 }
             } else {
@@ -3030,7 +3177,6 @@ pub(crate) async fn run_agent_loop(
                 svc,
                 writer,
                 tool_rounds,
-                &mut force_compact_after_window,
             )
             .await?;
             break;
@@ -3216,7 +3362,6 @@ pub(crate) async fn run_agent_loop(
                 svc,
                 writer,
                 tool_rounds,
-                &mut force_compact_after_window,
             )
             .await?;
             break;
@@ -4263,19 +4408,14 @@ pub(crate) async fn run_agent_loop(
         svc,
         writer,
         tool_rounds,
-        &mut force_compact_after_window,
     )
     .await?;
-    // v7 修正批（2026-09-15，审查 P1②）：**终止轮的语义摘要必须在此消费**。
-    // `pending_semantic` 此前**只有 loop-top 一个消费点**：模型若把
-    // `[SEMANTIC_SUMMARY]` 块放在终止轮（预算耗尽轮 / IPG 截停轮 / 反例门
-    // 之后的那次终答轮——首次终答候选因反例门 `continue` 而侥幸被消费），
-    // run 随即 break，摘要被静默丢弃（无事件、无 marker、无落账），与设计
-    // 「机械层识别后执行一次摘要替换被压区」不符。run 尾是**安全间隙**
-    // （模型已离场、无工具在途、无后续请求），在此补一次与 loop-top 同形的
-    // 语义压缩：压得动 ⇒ 落 `mode=model_summary` 事件并把被压区移出会话
-    // （写回侧车的内容随之收敛）；压不动（摘要不小于被压区 / 无可移出内容）
-    // ⇒ 如实 NoOp，不虚构事件。
+    // v7 修正批（2026-09-15，审查 P1②）× v8（2026-09-16 勘误批）：
+    // **终止轮的语义摘要仍必须在此消费**——run 尾是安全间隙（模型已离场、无
+    // 工具在途、无后续请求）。v8 下消费形态改为**按块压缩**（不再 drain 会话
+    // 本体）：压得动 ⇒ 落 `mode=model_summary` 事件、被压块从模型面下移
+    // （本地面逐字保留）；压不动（无可压闭合块 / 块区间非法）⇒ 如实 NoOp，
+    // 不虚构事件。
     // 边界：`?` 错误传播路径仍会丢弃该状态（与 0AC-A6 Err 留痕同类，挂账）。
     if let Some(summary) = pending_semantic.take() {
         let semantic_reason = if window_opened_since_compaction {
@@ -4283,44 +4423,46 @@ pub(crate) async fn run_agent_loop(
         } else {
             "model_selected"
         };
-        let measured = estimate_messages_tokens(messages);
-        let ledger_hint = (profile.role == AgentRole::Main)
-            .then(|| crate::action_ledger::ledger_file_path(&host.session_cwd()));
+        // run 尾重建投影入参（loop 内的 `face_params` 已出作用域；D4 机械段
+        // 允许按 epoch 重渲——此处已无后续请求，代价为零）。
+        let face_params = crate::model_face::ModelFaceParams {
+            slider_tokens: svc.context_compact.slider_window_tokens,
+            block_tokens: svc.context_compact.model_face_block_tokens,
+            ledger_path: face_ledger_path.clone(),
+            archive_tag: Some(face_archive_tag.clone()),
+            run_id: writer.run_id().to_string(),
+            d4_block: face_d4_block.clone(),
+            static_overhead_tokens: face_static_overhead,
+        };
+        let selection = crate::context_scale::extract_block_selection(&summary);
         let locators = crate::summary::LocatorPointers {
             ledger_seq: ledger_seq_epoch,
-            ledger_path: ledger_hint.as_ref().map(|p| p.display().to_string()),
+            ledger_path: face_ledger_path.as_ref().map(|p| p.display().to_string()),
             journal_run: Some(writer.run_id().to_string()),
             journal_seq: Some((journal_epoch_start_seq, writer.seq())),
             conversation_path: conversation_sidecar_path.clone(),
+            local_face_full: false,
         };
-        match run_template_compact(
+        if let Some(outcome) = compress_blocks_now(
             svc,
             writer,
             host,
             messages,
-            measured,
+            &face_params,
+            &face_archive_tag,
+            selection,
+            Some(&summary),
             semantic_reason,
-            true,
-            false,
-            rounds_since_compact,
-            svc.context_compact.recent_tail_rounds,
-            ledger_hint.as_deref(),
-            // 语义轨不使用折叠快照上下文（三分支中语义分支优先，marker 只需
-            // 保留尾首轮 r_keep）——与 loop-top 路径的差别仅此一处。
-            None,
-            &mut fold_state,
             &locators,
-            Some(SemanticCompaction {
-                summary: &summary,
-                reason: semantic_reason,
-            }),
         )
         .await?
         {
-            CompactDecision::Executed => {
-                rounds_since_compact = 0;
-            }
-            CompactDecision::NoOp | CompactDecision::GuardBlocked => {}
+            tracing::debug!(
+                blocks = outcome.blocks,
+                freed_tokens = outcome.freed_tokens,
+                "v8 block compaction executed at the run tail"
+            );
+            rounds_since_compact = 0;
         }
     }
     // 0ac S3①-b（2026-09-15，设计 §4.2「不跨 run 存活」）：run 尾关闭
@@ -4965,7 +5107,6 @@ mod tests {
             &mut fold,
             // v7（S1 修订批）：直调测试的定位指针（None 项如实渲染「（无）」）。
             &crate::summary::LocatorPointers::default(),
-            None,
         )
         .await
         .expect("guard path returns a decision");
@@ -5015,7 +5156,6 @@ mod tests {
             &mut fold,
             // v7（S1 修订批）：直调测试的定位指针（None 项如实渲染「（无）」）。
             &crate::summary::LocatorPointers::default(),
-            None,
         )
         .await
         .expect("execution path returns a decision");
@@ -5150,7 +5290,6 @@ mod tests {
             &mut fold,
             // v7（S1 修订批）：直调测试的定位指针（None 项如实渲染「（无）」）。
             &crate::summary::LocatorPointers::default(),
-            None,
         )
         .await
         .expect("execution path returns a decision");
@@ -5201,111 +5340,6 @@ mod tests {
         assert!(!archive_text.contains("[执行错误]"));
     }
 
-    /// 审查修复（2026-08-19）：fallback 触发下常规 drain + 紧急截断双段
-    /// 都可能丢轮——事件/存档/marker 的「被压轮次」必须是两段之和（此前
-    /// 覆盖赋值导致事件只报第二段，且 marker/存档/事件三方口径不一致）。
-    #[tokio::test]
-    async fn fallback_second_stage_truncation_accounts_total_rounds() {
-        let dir = std::env::temp_dir().join(format!("orz-compact-fallback-{}", std::process::id()));
-        let host = CompactTestHost {
-            journal: JournalRecorder::new(dir.clone()),
-        };
-        // 小回收目标 + 大轮内容：第一段 drain（tail=2 保留 c3/c4）后，
-        // compact_messages 仍需再丢 1 轮（保留最新 c4）。
-        let cfg = ContextCompactConfig {
-            recovery_target_tokens: 1_000,
-            recent_tail_rounds: 2,
-            ..ContextCompactConfig::default()
-        };
-        let blackboard = Arc::new(SharedBlackboard::new());
-        let denial_state = Mutex::new(DenialState::default());
-        let pacing = AtomicU32::new(0);
-        let policy = AtomicU64::new(0);
-        let svc = compact_test_svc(&cfg, &blackboard, &denial_state, &pacing, &policy);
-        let mut writer = crate::controller::journal_event_writer(&host.journal, "test-run");
-        // 4 轮 c1..c4，每轮工具结果 ~4K 字符（≈2K tokens 估算）——远超
-        // recovery_target_tokens，保证第二段截断确实丢轮。
-        let mut messages = vec![Message {
-            role: Role::User,
-            content: "U0".to_string(),
-            tool_call_id: None,
-            tool_calls: Vec::new(),
-            reasoning_content: None,
-            round: None,
-        }];
-        for (id, target) in [
-            ("c1", "a.py"),
-            ("c2", "b.rs"),
-            ("c3", "c.rs"),
-            ("c4", "d.rs"),
-        ] {
-            messages.push(Message {
-                role: Role::Assistant,
-                content: String::new(),
-                tool_call_id: None,
-                tool_calls: vec![ToolCall {
-                    name: "read_file".to_string(),
-                    arguments: serde_json::json!({"path": target}),
-                    call_id: id.to_string(),
-                }],
-                reasoning_content: None,
-                round: None,
-            });
-            messages.push(Message {
-                role: Role::Tool,
-                content: "x".repeat(4_000),
-                tool_call_id: Some(id.to_string()),
-                tool_calls: Vec::new(),
-                reasoning_content: None,
-                round: None,
-            });
-        }
-        let mut fold = LedgerFoldState::default();
-        let decision = run_template_compact(
-            &svc,
-            &mut writer,
-            &host,
-            &mut messages,
-            100_000, // force=true 跳过缩减守卫，measured 仅用于事件口径
-            "fallback",
-            true,
-            false,
-            0,
-            2, // recent_tail_rounds
-            None,
-            // P2-14 S1 测试直调：消息构造无轮章 → 保持 v0.2 模板路径。
-            None,
-            &mut fold,
-            // v7（S1 修订批）：直调测试的定位指针（None 项如实渲染「（无）」）。
-            &crate::summary::LocatorPointers::default(),
-            None,
-        )
-        .await
-        .expect("fallback execution path returns a decision");
-        assert_eq!(decision, CompactDecision::Executed);
-        // 第一段 drain 丢 c1/c2（tail=2 保留 c3/c4），第二段截断再丢 c3
-        // ——共 3 轮。marker、事件与存档均须报 3。
-        assert_eq!(messages.len(), 4, "U0 + marker + c4 轮");
-        let marker = &messages[1];
-        assert!(marker.content.contains("被压轮次: 3 轮"), "{marker:?}");
-        let events = std::fs::read_to_string(dir.join("events.jsonl")).unwrap();
-        let compact: serde_json::Value = events
-            .lines()
-            .map(|l| serde_json::from_str::<serde_json::Value>(l).unwrap())
-            .find(|e| e["event_type"] == "context_compressed")
-            .expect("context_compressed event journaled");
-        assert_eq!(compact["payload"]["rounds_dropped"], 3, "{compact}");
-        assert_eq!(compact["payload"]["mode"], "mechanical");
-        assert_eq!(compact["payload"]["reason"], "fallback");
-        let archive = dir
-            .join(".gsa")
-            .join("compaction")
-            .join("compaction-test-run-0000.md");
-        let archive_text = std::fs::read_to_string(archive).unwrap();
-        assert!(archive_text.contains("被压轮次: 3"), "{archive_text}");
-        let _ = std::fs::remove_dir_all(&dir);
-    }
-
     /// **用户 2026-09-15 裁定第二条**（窗口内溢出 ⇒ 超大工具结果指针化）：
     /// 溢出体量位于**当前上下文窗口内**（单结果过大、窗口外无可截留轮次）时，
     /// 正文换成「原文头部＋回读指针」⇒ 也能降到硬线之下；anomaly 记
@@ -5321,12 +5355,13 @@ mod tests {
             ScriptedResponse::text("终答"),
         ]));
         let gateway: Arc<dyn ModelGateway> = fake.clone();
-        // 硬线 5K：单轮 20_000 字符（≈10K 估计）⇒ 首个越线点只有 1 个完整轮
-        // （窗口外无可截留轮次）⇒ 只能靠窗口内指针化降线。
+        // v8（2026-09-16 勘误批）：T1 硬截断线钉在 5K **模型面估算**；分块关掉
+        // （x 巨大）⇒ 20_000 字符（≈10K 估计）的单轮工具结果落在**主滑块内**
+        // ⇒ 主滑块之外无可截断分块，只能靠**窗口内超大结果指针化**降线
+        // （0ah §10.10 用户裁定，先例 OUTPUT-DEGENERATION-GUARD）。
         let controller = AgentLoopController::with_gateway(gateway)
             .with_slider_window_tokens(100_000_000)
-            .with_slider_resident_tokens(400)
-            .with_hard_context_tokens(5_000);
+            .with_context_scale_ladder(v8_test_ladder(u64::MAX, 5_000));
         let dir = test_dir();
         let host = TestHost {
             journal: JournalRecorder::new(dir.clone()),
@@ -5352,24 +5387,24 @@ mod tests {
         let audit = audit_events(&dir);
         let event = audit
             .iter()
-            .find(|e| e.payload["payload"]["key"] == "context_scale:hard_950k_intercepted")
-            .expect("截留落账");
+            .find(|e| e.payload["payload"]["key"] == "context_scale:hard_truncate")
+            .expect("截断/指针化落账");
         assert_eq!(
             event.payload["payload"]["anomaly"],
-            "hard_context_compaction_failed_result_pointerized"
+            "hard_context_result_pointerized"
         );
         let summary = event.payload["payload"]["summary"]
             .as_str()
             .unwrap_or_default();
-        assert!(summary.contains("dropped_rounds=0"), "{summary}");
+        assert!(summary.contains("truncated_blocks=0"), "{summary}");
         assert!(summary.contains("pointerized_results=1"), "{summary}");
         let after: u64 = summary
-            .split("actual_context_tokens_after=")
+            .split("model_face_estimate_after=")
             .nth(1)
             .and_then(|s| s.split_whitespace().next())
             .and_then(|s| s.parse().ok())
-            .expect("干预后读数");
-        assert!(after < 5_000, "窗口内指针化须真降线: {after}");
+            .expect("干预后模型面读数");
+        assert!(after < 5_000, "主滑块内指针化须真降线: {after}");
 
         // 模型看到的是「头部＋回读指针」，且工具配对字段未动。
         let requests = fake.received_requests();
@@ -5395,153 +5430,19 @@ mod tests {
             "{}",
             tool_msg.content
         );
-        // 告知块：指针化事实（本例无轮次截留），且不带容量读数。
+        // 告知块：指针化事实（本例无分块截断）。
         let told = requests
             .iter()
             .flat_map(|r| r.messages.iter())
-            .find(|m| {
-                m.content
-                    .contains(crate::context_scale::TRUNCATION_FAILURE_HEADLINE)
-            })
+            .find(|m| m.content.contains("硬截断"))
             .expect("告知块");
         assert!(told.content.contains("个超大工具结果"), "{}", told.content);
-        assert!(!told.content.contains("轮已移出"), "{}", told.content);
-        assert!(!told.content.contains("token"), "{}", told.content);
-
-        let _ = std::fs::remove_dir_all(&dir);
-    }
-
-    /// **用户 2026-09-15 裁定**（950K 最后防线）：**有内容可截留但压完仍在
-    /// 硬线之上** ⇒ 如实告知「已机械截留 N 轮」——本钉取该形态：第 1 轮小、
-    /// 第 2 轮巨大（滑块内单轮本身超硬线）⇒ 机械层移出旧的 1 轮后仍在线之上，
-    /// anomaly 记 `..._truncated` ＋ `dropped_rounds=1`，注入块带 N 轮事实。
-    #[tokio::test]
-    async fn hard_context_failure_with_dropped_rounds_reports_the_count() {
-        let outputs = std::sync::Mutex::new(vec![
-            ToolResult {
-                output: "s".repeat(200),
-                ..ok_result()
-            },
-            ToolResult {
-                output: "B".repeat(20_000),
-                ..ok_result()
-            },
-        ]);
-        struct SeqHost {
-            journal: JournalRecorder,
-            outputs: std::sync::Mutex<Vec<ToolResult>>,
-        }
-        #[async_trait::async_trait]
-        impl LoopHost for SeqHost {
-            fn journal(&self) -> &JournalRecorder {
-                &self.journal
-            }
-            fn tools_registry(&self) -> &dyn ToolRegistry {
-                &EmptyRegistry
-            }
-            fn session_cwd(&self) -> std::path::PathBuf {
-                self.journal.journal_dir().to_path_buf()
-            }
-            async fn call_tool(
-                &self,
-                _name: &str,
-                _arguments: serde_json::Value,
-                _call_id: &str,
-            ) -> Result<ToolResult, ToolError> {
-                let mut outputs = self.outputs.lock().unwrap();
-                if outputs.is_empty() {
-                    return Ok(ok_result());
-                }
-                Ok(outputs.remove(0))
-            }
-            async fn request_permission(
-                &self,
-                _risk: RiskClass,
-                _tool: &str,
-                _arguments: &serde_json::Value,
-            ) -> Result<PermitDecision, PermitError> {
-                Ok(PermitDecision::AllowOnce)
-            }
-        }
-        let fake = Arc::new(FakeProvider::new(vec![
-            ScriptedResponse::tool_calls(vec![tool_call("read_file", "call-r1")])
-                .with_prompt_tokens(100),
-            ScriptedResponse::tool_calls(vec![tool_call("read_file", "call-r2")])
-                .with_prompt_tokens(100),
-            ScriptedResponse::text("终答"),
-            ScriptedResponse::text("终答"),
-        ]));
-        let gateway: Arc<dyn ModelGateway> = fake.clone();
-        // 硬线 5K（第 1 轮后 ≈122 未越线 ⇒ 越线发生在已有 2 个完整轮时）；
-        // 驻留带 400 ⇒ 只保留最新（巨大）轮，旧轮被截留；滑块大 ⇒ 驱逐不介入。
-        let controller = AgentLoopController::with_gateway(gateway)
-            .with_slider_window_tokens(100_000_000)
-            .with_slider_resident_tokens(400)
-            .with_hard_context_tokens(5_000);
-        let dir = test_dir();
-        let host = SeqHost {
-            journal: JournalRecorder::new(dir.clone()),
-            outputs,
-        };
-        controller
-            .run_turn(
-                &host,
-                "硬截留计数测试",
-                "RUN-HARD-TRUNC",
-                MANIFEST,
-                0,
-                None,
-                None,
-                None,
-            )
-            .await
-            .unwrap();
-
-        let requests = fake.received_requests();
-        let told = requests
-            .iter()
-            .flat_map(|r| r.messages.iter())
-            .find(|m| {
-                m.content
-                    .contains(crate::context_scale::TRUNCATION_FAILURE_HEADLINE)
-            })
-            .expect("必须明确告知「压缩失败、已机械截留」");
+        assert!(told.content.contains("工作现场"), "{}", told.content);
         assert!(
-            told.content.contains("当前上下文窗口之外") && told.content.contains("的 1 轮已移出"),
-            "截留轮数须如实: {}",
             told.content
-        );
-        // 用户 2026-09-15 裁定第二条：窗口内超大结果同时被指针化（本例第 2 轮
-        // 结果 20_000 字符 ≈10K 估计 > 8K 门槛）。
-        assert!(
-            told.content.contains("个超大工具结果**正文已换成指针**"),
-            "窗口内指针化须如实告知: {}",
+                .contains(crate::model_face::MODEL_FACE_DECLARATION),
+            "{}",
             told.content
-        );
-        assert!(
-            !told.content.contains("已无可截留内容"),
-            "有实际截留时不得写成零截留: {}",
-            told.content
-        );
-        let intercepted = audit_events(&dir);
-        assert!(
-            intercepted.iter().any(|e| {
-                e.payload["payload"]["key"] == "context_scale:hard_950k_intercepted"
-                    && e.payload["payload"]["anomaly"] == "hard_context_compaction_failed_truncated"
-                    && e.payload["payload"]["summary"]
-                        .as_str()
-                        .is_some_and(|s| s.contains("dropped_rounds=1"))
-            }),
-            "截留事实须落账: {intercepted:?}"
-        );
-        // 结构化轨照常压过：本迭代有一次 context_scale 机械压缩。
-        assert!(
-            events(&dir)
-                .into_iter()
-                .any(|e| e.event_type == EventType::ContextCompressed
-                    && e.payload["reason"] == "context_scale"
-                    && e.payload["mode"] == "mechanical"),
-            "截留路径仍走机械压缩（结构化轨照常作用）"
         );
 
         let _ = std::fs::remove_dir_all(&dir);
@@ -5750,6 +5651,44 @@ mod tests {
     // `with_prompt_tokens(950 * 1024)` 直驱法不再成立（实测 token 与
     // 实际上下文是两个量尺）。新驱动件 `s1_actual_context_prompt()` ＋
     // `s1_fat_result()` 把**实际上下文**推过 500K 而不碰视图刻度。
+    //
+    // **滑块上下文 v8（2026-09-16 勘误批，设计 §3）**：开窗量尺＝**模型面
+    // 估算**（投影层装配出的请求视图 chars/2），阶梯改为 192/224/256/288K
+    // 软提醒 → **320K 硬提醒（打断 ＋ 开窗）** → **500K 硬截断**。旧刻度缝隙
+    // `with_context_scale_milestones` 退役，改由 `v8_test_ladder` 把 H1／T1
+    // 钉到任意刻度。
+
+    /// v8 阶梯测试缝隙：四档软提醒抬到不可达刻度，**H1 硬打断**与
+    /// **T1 硬截断**分别钉在 `hard`／`truncate`（模型面估算刻度）。
+    fn v8_test_ladder(hard: u64, truncate: u64) -> [crate::context_scale::LadderStep; 6] {
+        use crate::context_scale::{LadderStep, LadderTier};
+        [
+            LadderStep {
+                tokens: u64::MAX - 3,
+                tier: LadderTier::Soft,
+            },
+            LadderStep {
+                tokens: u64::MAX - 2,
+                tier: LadderTier::Soft,
+            },
+            LadderStep {
+                tokens: u64::MAX - 1,
+                tier: LadderTier::Soft,
+            },
+            LadderStep {
+                tokens: u64::MAX,
+                tier: LadderTier::Soft,
+            },
+            LadderStep {
+                tokens: hard,
+                tier: LadderTier::HardReminder,
+            },
+            LadderStep {
+                tokens: truncate,
+                tier: LadderTier::HardTruncate,
+            },
+        ]
+    }
 
     /// 把初始 prompt 推大到 800K 字符（估算 ≈400K < 500K ⇒ 首轮 loop-top
     /// **不**越线），配合 `s1_fat_result()` 的首轮工具结果 ⇒ 次轮 loop-top
@@ -5765,6 +5704,259 @@ mod tests {
             output: "y".repeat(300_000),
             ..ok_result()
         }
+    }
+
+    /// 只读审查 R-12③（2026-09-16 处置）：**一轮内只注入最高档**。
+    ///
+    /// 单轮暴涨（例：会话冷启就带着长上下文）会让 `due()` 在同一次 loop-top
+    /// 返回 4–5 档；逐档注入等于把「只有刻度字样不同」的同一段文案连发数遍。
+    /// 处置＝**只注入最高档**，低档**水位与事件照记**（journal 保留「本轮越过了
+    /// 哪几档」的完整事实，`form=` 注明未注入）。
+    #[tokio::test]
+    async fn a_single_round_surge_injects_only_the_highest_tier() {
+        use crate::context_scale::{LadderStep, LadderTier};
+        let fake = Arc::new(FakeProvider::new(vec![
+            ScriptedResponse::text("终答").with_prompt_tokens(100),
+            ScriptedResponse::text("终答").with_prompt_tokens(100),
+            ScriptedResponse::text("终答").with_prompt_tokens(100),
+        ]));
+        let gateway: Arc<dyn ModelGateway> = fake.clone();
+        // 初始 prompt 估算 ≈400K（800K 字符）⇒ 四个软档在**同一次 loop-top**
+        // 一起越线；硬档抬到不可达（本钉只测软档合并）。
+        let ladder = [
+            LadderStep {
+                tokens: 100_000,
+                tier: LadderTier::Soft,
+            },
+            LadderStep {
+                tokens: 150_000,
+                tier: LadderTier::Soft,
+            },
+            LadderStep {
+                tokens: 200_000,
+                tier: LadderTier::Soft,
+            },
+            LadderStep {
+                tokens: 250_000,
+                tier: LadderTier::Soft,
+            },
+            LadderStep {
+                tokens: u64::MAX,
+                tier: LadderTier::HardReminder,
+            },
+            LadderStep {
+                tokens: u64::MAX,
+                tier: LadderTier::HardTruncate,
+            },
+        ];
+        let controller = AgentLoopController::with_gateway(gateway)
+            .with_slider_window_tokens(100_000_000)
+            .with_context_scale_ladder(ladder);
+        let dir = test_dir();
+        let host = TestHost {
+            journal: JournalRecorder::new(dir.clone()),
+            tool_result: None,
+        };
+        controller
+            .run_turn(
+                &host,
+                &s1_actual_context_prompt(),
+                "RUN-SCALE-SURGE",
+                MANIFEST,
+                0,
+                None,
+                None,
+                None,
+            )
+            .await
+            .unwrap();
+
+        // 注入面：恰一块提醒，且是**最高档**（250K）。
+        let requests = fake.received_requests();
+        let injected: Vec<_> = requests[0]
+            .messages
+            .iter()
+            .filter(|m| {
+                m.content
+                    .starts_with(crate::context_scale::REMINDER_INJECTED_PREFIX)
+            })
+            .collect();
+        assert_eq!(injected.len(), 1, "一轮暴涨只注入最高档: {injected:?}");
+        assert!(
+            injected[0].content.starts_with("[CONTEXT_SCALE 250K]"),
+            "最高档＝250K: {}",
+            injected[0].content
+        );
+
+        // 水位面：四档照记（会话级事实不留缺口）。
+        assert_eq!(
+            controller.context_scale_notified_keys(),
+            vec![
+                "100k".to_string(),
+                "150k".to_string(),
+                "200k".to_string(),
+                "250k".to_string()
+            ]
+        );
+
+        // 事件面：四行照落，只有最高档 form=standalone_block。
+        let scale: Vec<_> = audit_events(&dir)
+            .into_iter()
+            .filter(|e| e.payload["kind"] == crate::mechanical_audit::KIND_CONTEXT_SCALE)
+            .collect();
+        assert_eq!(scale.len(), 4, "四档事件照落: {scale:?}");
+        let summary_of = |key: &str| -> String {
+            scale
+                .iter()
+                .find(|e| e.payload["payload"]["key"] == key)
+                .map(|e| {
+                    e.payload["payload"]["summary"]
+                        .as_str()
+                        .unwrap_or("")
+                        .to_string()
+                })
+                .unwrap_or_else(|| panic!("{key} 事件缺失: {scale:?}"))
+        };
+        assert!(
+            summary_of("context_scale:250k").contains("form=standalone_block"),
+            "最高档须实际注入: {}",
+            summary_of("context_scale:250k")
+        );
+        for key in [
+            "context_scale:100k",
+            "context_scale:150k",
+            "context_scale:200k",
+        ] {
+            assert!(
+                summary_of(key).contains("form=suppressed_superseded_by_higher_tier"),
+                "{key} 须记为「被更高档吞掉」: {}",
+                summary_of(key)
+            );
+        }
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// 只读审查 R-12③ 的另一面：**T1 与本轮提醒同轮**时只发**截断告知块**
+    /// （内容即将被截断，软／硬提醒已无意义），且告知块自带**截断后读数**
+    /// ——压掉低档提醒因此是无损的。
+    #[tokio::test]
+    async fn a_truncation_round_injects_only_the_notice_with_the_post_cut_reading() {
+        use crate::context_scale::{LadderStep, LadderTier};
+        let fake = Arc::new(FakeProvider::new(vec![
+            ScriptedResponse::tool_calls(vec![tool_call("read_file", "call-r1")])
+                .with_prompt_tokens(100),
+            ScriptedResponse::text("终答").with_prompt_tokens(100),
+            ScriptedResponse::text("终答").with_prompt_tokens(100),
+            ScriptedResponse::text("终答").with_prompt_tokens(100),
+        ]));
+        let gateway: Arc<dyn ModelGateway> = fake.clone();
+        // 首轮工具结果 20K 字符（估算 +10K）⇒ 软档（3K）与 T1（4K）在**同一次
+        // loop-top** 一起越线；H1 与其余软档抬到不可达。
+        let ladder = [
+            LadderStep {
+                tokens: 3_000,
+                tier: LadderTier::Soft,
+            },
+            LadderStep {
+                tokens: u64::MAX - 2,
+                tier: LadderTier::Soft,
+            },
+            LadderStep {
+                tokens: u64::MAX - 1,
+                tier: LadderTier::Soft,
+            },
+            LadderStep {
+                tokens: u64::MAX,
+                tier: LadderTier::Soft,
+            },
+            LadderStep {
+                tokens: u64::MAX,
+                tier: LadderTier::HardReminder,
+            },
+            LadderStep {
+                tokens: 4_000,
+                tier: LadderTier::HardTruncate,
+            },
+        ];
+        let controller = AgentLoopController::with_gateway(gateway)
+            .with_slider_window_tokens(1_000)
+            .with_model_face_block_tokens(500)
+            .with_context_scale_ladder(ladder)
+            .with_session_id(Some("SESSION-T1-SAME-ROUND".to_string()));
+        let dir = test_dir();
+        let host = TestHost {
+            journal: JournalRecorder::new(dir.clone()),
+            tool_result: Some(ToolResult {
+                output: "T".repeat(20_000),
+                ..ok_result()
+            }),
+        };
+        controller
+            .run_turn(
+                &host,
+                "截断同轮测试",
+                "RUN-T1-SAME-ROUND",
+                MANIFEST,
+                0,
+                None,
+                None,
+                None,
+            )
+            .await
+            .unwrap();
+
+        // 事件面：软档与 T1 档都如实记为「让位给截断告知块」（水位与事实不留缺口）。
+        let scale: Vec<_> = audit_events(&dir)
+            .into_iter()
+            .filter(|e| e.payload["kind"] == crate::mechanical_audit::KIND_CONTEXT_SCALE)
+            .collect();
+        let summary_of = |key: &str| -> String {
+            scale
+                .iter()
+                .find(|e| e.payload["payload"]["key"] == key)
+                .map(|e| {
+                    e.payload["payload"]["summary"]
+                        .as_str()
+                        .unwrap_or("")
+                        .to_string()
+                })
+                .unwrap_or_else(|| panic!("{key} 事件缺失: {scale:?}"))
+        };
+        assert!(
+            summary_of("context_scale:3k").contains("form=deferred_to_truncation_notice"),
+            "{}",
+            summary_of("context_scale:3k")
+        );
+        assert!(
+            summary_of("context_scale:4k").contains("form=deferred_to_truncation_notice"),
+            "{}",
+            summary_of("context_scale:4k")
+        );
+
+        // 注入面：本轮无软／硬提醒（`压缩交给你自选` 只见于软提醒文案），
+        // 只有截断告知块，且它带着截断后的当前读数。
+        let requests = fake.received_requests();
+        let last = requests.last().expect("至少一轮请求");
+        assert!(
+            !last
+                .messages
+                .iter()
+                .any(|m| m.content.contains("压缩交给你自选")),
+            "T1 同轮不得注入软／硬提醒: {last:?}"
+        );
+        let notice = last
+            .messages
+            .iter()
+            .find(|m| m.content.contains("硬截断] 已把"))
+            .expect("截断告知块");
+        assert!(
+            notice.content.contains("截断后当前读数"),
+            "告知块须带截断后读数: {}",
+            notice.content
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     fn window_write_call(call_id: &str) -> ToolCall {
@@ -5825,13 +6017,11 @@ mod tests {
             ScriptedResponse::text("终答"),
         ]));
         let gateway: Arc<dyn ModelGateway> = fake.clone();
-        // 滑窗关掉（H 巨大）——本钉只管 D3 窗口语义；滑块行为另钉覆盖。
-        // v7（S1 修订批）：500K 档已降为**纯提醒**（不开窗）——本钉只测窗口
-        // 语义，故用刻度缝隙把「开窗档」钉在 500K（两档同值 ⇒ 单次 fire 且
-        // 开窗，与旧行为同形）。
+        // 分块关掉（x 巨大）＋阶梯缝隙：本钉只管**窗口语义**——H1 钉在
+        // 1K（模型面估算）即刻打断并开窗；T1 抬到不可达（另钉覆盖截断）。
         let controller = AgentLoopController::with_gateway(gateway)
             .with_slider_window_tokens(100_000_000)
-            .with_context_scale_milestones(500_000, 500_000);
+            .with_context_scale_ladder(v8_test_ladder(1_000, 1_000_000_000));
         let dir = test_dir();
         let host = TestHost {
             journal: JournalRecorder::new(dir.clone()),
@@ -5840,7 +6030,7 @@ mod tests {
         let (answer, _, _) = controller
             .run_turn(
                 &host,
-                &s1_actual_context_prompt(),
+                "窗口开启量尺测试任务",
                 "RUN-WIN-A",
                 MANIFEST,
                 0,
@@ -5873,14 +6063,15 @@ mod tests {
             window_block.content.contains("【"),
             "watermark rides the window block: {window_block:?}"
         );
-        // v7（S1 修订批）：注入块＝实际上下文刻度提醒（含实际读数）＋ 压缩窗
-        // 任务；开局档已是「必须压缩」语气（500K 纯提醒档另钉覆盖）。
+        // v8（设计 §5）：注入块＝**H1 硬提醒**（模型面读数 ＋ 宣告 T1 硬截断
+        // 口径 ＋ 分块表 ＋「不压缩也可以」）＋ 压缩窗口任务（同块注入）。
         assert!(
             window_block.content.starts_with("[CONTEXT_SCALE")
-                && window_block.content.contains("当前实际上下文 ≈0.5")
-                && window_block.content.contains("500K · 必须压缩")
+                && window_block.content.contains("硬提醒")
+                && window_block.content.contains("当前上下文窗口")
+                && window_block.content.contains("硬性截断")
                 && window_block.content.contains("模型参与压缩 · 窗口"),
-            "刻度提醒须携带实际读数并与窗口任务同块注入: {window_block:?}"
+            "硬提醒须携带模型面读数并与窗口任务同块注入: {window_block:?}"
         );
 
         // journal：恰一条 model_compression 收口事件（延迟收口，参与为真，
@@ -5900,30 +6091,30 @@ mod tests {
         assert!(payload["anomaly"].is_null());
         assert_eq!(payload["round"], 2, "close recorded at the deferred round");
 
-        // 实际上下文刻度事件新形状：key=context_scale:<500k|900k>（C2 形状
-        // {key, round, summary, anomaly}，summary 必含**实际读数**——用户
-        // 裁定「提醒里要告知模型当前实际上下文大小」）。D2 阶梯 kind 已退役
-        // ⇒ 本 run 不得出现 attention_ladder 事件。
+        // 阶梯事件形状：key=context_scale:<刻度>（C2 形状 {key, round, summary,
+        // anomaly}，summary 必含**模型面读数**——v8 量尺＝投影层估算）。
+        // D2 阶梯 kind 已退役 ⇒ 本 run 不得出现 attention_ladder 事件。
         let scale: Vec<_> = audit_events(&dir)
             .into_iter()
             .filter(|e| e.payload["kind"] == crate::mechanical_audit::KIND_CONTEXT_SCALE)
             .collect();
-        let fire_500 = scale
+        let fire_h1 = scale
             .iter()
-            .find(|e| e.payload["payload"]["key"] == "context_scale:500k")
-            .unwrap_or_else(|| panic!("500K 刻度提醒事件缺失: {scale:?}"));
-        let summary_500 = fire_500.payload["payload"]["summary"].as_str().unwrap();
+            .find(|e| e.payload["payload"]["key"] == "context_scale:1k")
+            .unwrap_or_else(|| panic!("H1 硬提醒事件缺失: {scale:?}"));
+        let summary_h1 = fire_h1.payload["payload"]["summary"].as_str().unwrap();
         assert!(
-            summary_500.contains("milestone_tokens=500000")
-                && summary_500.contains("actual_context_tokens=")
-                && summary_500.contains("watermark=【"),
-            "刻度事件须含实际读数与水位的 C2 形状: {summary_500}"
+            summary_h1.contains("milestone_tokens=1000")
+                && summary_h1.contains("model_face_estimate_tokens=")
+                && summary_h1.contains("tier=hard_reminder")
+                && summary_h1.contains("watermark=【"),
+            "阶梯事件须含模型面读数与水位的 C2 形状: {summary_h1}"
         );
         assert!(
             !scale
                 .iter()
-                .any(|e| e.payload["payload"]["key"] == "context_scale:900k"),
-            "≈550K 实际上下文不得越 900K 刻度: {scale:?}"
+                .any(|e| e.payload["payload"]["key"] == "context_scale:500k"),
+            "T1 已抬到不可达刻度，本 run 不得出现截断档: {scale:?}"
         );
         assert!(
             audit_events(&dir)
@@ -5951,10 +6142,10 @@ mod tests {
             ScriptedResponse::text("终答"),
         ]));
         let gateway: Arc<dyn ModelGateway> = fake.clone();
-        // v7（S1 修订批）：把「开窗档」钉在 500K（500K 已降为纯提醒）。
+        // v8：H1 打断档钉在 1K（模型面估算），T1 抬到不可达。
         let controller = AgentLoopController::with_gateway(gateway)
             .with_slider_window_tokens(100_000_000)
-            .with_context_scale_milestones(500_000, 500_000);
+            .with_context_scale_ladder(v8_test_ladder(1_000, 1_000_000_000));
         let dir = test_dir();
         let host = TestHost {
             journal: JournalRecorder::new(dir.clone()),
@@ -5963,7 +6154,7 @@ mod tests {
         let (answer, _, _) = controller
             .run_turn(
                 &host,
-                &s1_actual_context_prompt(),
+                "窗口开启量尺测试任务",
                 "RUN-WIN-B",
                 MANIFEST,
                 0,
@@ -6029,10 +6220,10 @@ mod tests {
             ScriptedResponse::text("终答"),
         ]));
         let gateway: Arc<dyn ModelGateway> = fake.clone();
-        // v7（S1 修订批）：把「开窗档」钉在 500K（500K 已降为纯提醒）。
+        // v8：H1 打断档钉在 1K（模型面估算），T1 抬到不可达。
         let controller = AgentLoopController::with_gateway(gateway)
             .with_slider_window_tokens(100_000_000)
-            .with_context_scale_milestones(500_000, 500_000);
+            .with_context_scale_ladder(v8_test_ladder(1_000, 1_000_000_000));
         let dir = test_dir();
         let host = TestHost {
             journal: JournalRecorder::new(dir.clone()),
@@ -6041,7 +6232,7 @@ mod tests {
         let (answer, _, _) = controller
             .run_turn(
                 &host,
-                &s1_actual_context_prompt(),
+                "窗口开启量尺测试任务",
                 "RUN-WIN-C",
                 MANIFEST,
                 0,
@@ -6122,8 +6313,8 @@ mod tests {
         let gateway: Arc<dyn ModelGateway> = fake.clone();
         let controller = AgentLoopController::with_gateway(gateway)
             .with_slider_window_tokens(100_000_000)
-            // v7（S1 修订批）：把「开窗档」钉在 500K（500K 已降为纯提醒）。
-            .with_context_scale_milestones(500_000, 500_000)
+            // v8：H1 打断档钉在 1K（模型面估算），T1 抬到不可达。
+            .with_context_scale_ladder(v8_test_ladder(1_000, 1_000_000_000))
             .with_max_tool_rounds(1);
         let dir = test_dir();
         let host = TestHost {
@@ -6133,7 +6324,7 @@ mod tests {
         let _ = controller
             .run_turn(
                 &host,
-                &s1_actual_context_prompt(),
+                "窗口开启量尺测试任务",
                 "RUN-WIN-D",
                 MANIFEST,
                 0,
@@ -6175,13 +6366,13 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
-    // ── 动态上下文滑块 S1（2026-09-15，设计 §3.1/§3.2/§3.4）──────────────
+    // ── 滑块上下文 v8（2026-09-16 勘误批，设计 §2/§3/§6）────────────────
 
-    /// A4（设计 §3.2）：**首次真实驱逐**后发射一次打断式固化提醒——每 run
-    /// 恰一次、且只在 append 成功（真实推进）之后（写失败回滚不算）。
-    /// 量尺＝**视图估算 chars/2**（驱逐触发尺），与 A6 的实际上下文尺不同。
+    /// A4（设计 §3.2；**v8 触发改锚「首个分块形成」**——滑窗驱逐随勘误退役）：
+    /// 主滑块之外首次出现分块后发射一次固化提醒——每 run 恰一次、指向黑板
+    /// 写入面；同时模型面投影层开始带**分块表**（设计 §2）。
     #[tokio::test]
-    async fn first_fold_reminder_fires_exactly_once_after_the_first_real_eviction() {
+    async fn first_block_reminder_fires_exactly_once_after_the_first_block() {
         let fake = Arc::new(FakeProvider::new(vec![
             ScriptedResponse::tool_calls(vec![tool_call("read_file", "call-r1")])
                 .with_prompt_tokens(100),
@@ -6195,13 +6386,12 @@ mod tests {
             ScriptedResponse::text("终答"),
         ]));
         let gateway: Arc<dyn ModelGateway> = fake.clone();
-        // 触发器 H 很小、驻留带 L 极小 ⇒ 首轮之后即发生真实驱逐（视图估算
-        // ≥H），且每次驱逐只留最新一轮（谷值 <H 但恒 ≥1 完整轮）。
+        // 主滑块 x 很小 ⇒ 首轮之后即出现主滑块之外的分块（投影层据此挂分块表
+        // 与指针）；阶梯抬到不可达 ⇒ 本钉只测分块面与 A4 提醒。
         let controller = AgentLoopController::with_gateway(gateway)
             .with_slider_window_tokens(2_000)
-            .with_slider_resident_tokens(100)
-            .with_context_compact(100_000_000, 400, 20, 100_000_000)
-            .with_hard_context_tokens(100_000_000);
+            .with_model_face_block_tokens(1_000)
+            .with_context_scale_ladder(v8_test_ladder(u64::MAX, u64::MAX));
         let dir = test_dir();
         let host = TestHost {
             journal: JournalRecorder::new(dir.clone()),
@@ -6213,7 +6403,7 @@ mod tests {
         let (answer, _, _) = controller
             .run_turn(
                 &host,
-                "滑窗首次驱逐测试",
+                "首个分块提醒测试",
                 "RUN-SLIDE-A4",
                 MANIFEST,
                 0,
@@ -6225,13 +6415,6 @@ mod tests {
             .unwrap();
         assert_eq!(answer, "终答");
 
-        // 真实推进确实发生（台账推进事件）。
-        let advances = events(&dir)
-            .into_iter()
-            .filter(|e| e.event_type == EventType::LedgerFoldAdvance)
-            .count();
-        assert!(advances >= 1, "首次驱逐必须真实发生: {advances}");
-
         // 提醒恰一次（审计）＋ 注入面恰一次（跨全部请求计数）。
         let reminders: Vec<_> = audit_events(&dir)
             .into_iter()
@@ -6240,36 +6423,36 @@ mod tests {
         assert_eq!(
             reminders.len(),
             1,
-            "首次驱逐提醒每 run 恰一次: {reminders:?}"
+            "首个分块提醒每 run 恰一次: {reminders:?}"
         );
         let payload = &reminders[0].payload["payload"];
-        assert_eq!(payload["key"], "context_scale:first_fold");
+        assert_eq!(payload["key"], "context_scale:first_block");
         let summary = payload["summary"].as_str().unwrap();
         assert!(
             summary.contains("form=standalone_block")
-                && summary.contains("view_estimate_tokens=")
-                && summary.contains("view_estimate_after=")
+                && summary.contains("model_face_estimate_tokens=")
+                && summary.contains("blocks=")
                 && summary.contains("watermark=【"),
-            "提醒事件须带触发/复位读数与水位的 C2 形状: {summary}"
+            "提醒事件须带模型面读数、分块数与水位的 C2 形状: {summary}"
         );
         let requests = fake.received_requests();
         let injected = requests
             .iter()
             .flat_map(|r| r.messages.iter())
-            .filter(|m| m.content.starts_with("[CONTEXT_SCALE 首次驱逐]"))
+            .filter(|m| m.content.starts_with("[CONTEXT_SCALE 首个分块]"))
             .count();
-        assert_eq!(injected, 1, "提醒块恰注入一次（后续驱逐不再重复）");
+        // 注入面：提醒块进入 `messages` 后随会话延续（故跨请求计数 ≥1）；
+        // 「恰一次」由上面的审计事件计数钉住。
+        assert!(injected >= 1, "提醒块须已注入: {injected}");
         assert!(
             requests.iter().any(|r| r
                 .messages
                 .iter()
                 .any(|m| m.content.contains("blackboard_write section=plan|notes"))),
-            "提醒文案复用 D2 128K 梯的固化语义"
+            "提醒文案保留 A4 的固化语义（指向黑板写入面）"
         );
-        // 驱逐后视图带**字节固定**的指针消息（本会话内不变；压缩会重置折叠
-        // 态 ⇒ 复位后重新累积，故不要求每个后续请求都带——前缀稳定性由
-        // action_ledger 的 `fold_state_advances_once_and_prefix_stays_stable`
-        // 逐字节钉住）。
+        // 模型面带**固定指针**与**分块表**（投影层结构；设计 §2「块表挂在
+        // 固定指针之后」）。
         let pointer_rounds = requests
             .iter()
             .filter(|r| {
@@ -6281,309 +6464,31 @@ mod tests {
             .count();
         assert!(
             pointer_rounds >= 1,
-            "驱逐后视图须带固定指针消息（滑窗视图结构 {requests:?}）"
-        );
-
-        let _ = std::fs::remove_dir_all(&dir);
-    }
-
-    /// v7（S1 修订批，设计 §3.4.1）：实际上下文一次性越两级 ⇒ **两级都提醒**
-    /// （500K 纯提醒 ＋ 900K 必须压缩），文案均含**实际读数**；最高档开
-    /// 压缩窗口（首个请求面即窗口面）。
-    #[tokio::test]
-    async fn context_scale_900k_escalates_with_the_actual_reading() {
-        let fake = Arc::new(FakeProvider::new(vec![
-            ScriptedResponse::tool_calls(vec![window_write_call("call-w1")])
-                .with_prompt_tokens(100),
-            ScriptedResponse::text("终答"),
-            ScriptedResponse::text("终答"),
-            ScriptedResponse::text("终答"),
-            ScriptedResponse::text("终答"),
-        ]));
-        let gateway: Arc<dyn ModelGateway> = fake.clone();
-        let controller = AgentLoopController::with_gateway(gateway);
-        let dir = test_dir();
-        let host = TestHost {
-            journal: JournalRecorder::new(dir.clone()),
-            tool_result: Some(ok_result()),
-        };
-        // 1.9M 字符 ⇒ 实际上下文估算 ≈950K ⇒ 500K 与 900K 同时越线。
-        let prompt = "q".repeat(1_900_000);
-        let (answer, _, _) = controller
-            .run_turn(
-                &host,
-                &prompt,
-                "RUN-SLIDE-A6",
-                MANIFEST,
-                0,
-                None,
-                None,
-                None,
-            )
-            .await
-            .unwrap();
-        assert_eq!(answer, "终答");
-
-        let scale: Vec<_> = audit_events(&dir)
-            .into_iter()
-            .filter(|e| e.payload["kind"] == crate::mechanical_audit::KIND_CONTEXT_SCALE)
-            .collect();
-        let keys: Vec<&str> = scale
-            .iter()
-            .map(|e| e.payload["payload"]["key"].as_str().unwrap())
-            .collect();
-        assert_eq!(
-            keys,
-            vec!["context_scale:500k", "context_scale:900k"],
-            "一次性越两级须两级都提醒: {scale:?}"
-        );
-        let requests = fake.received_requests();
-        let first_round = &requests[0].messages;
-        let block_500 = first_round
-            .iter()
-            .find(|m| m.content.contains("[CONTEXT_SCALE 500K]"))
-            .expect("500K 提醒块");
-        let block_900 = first_round
-            .iter()
-            .find(|m| m.content.contains("[CONTEXT_SCALE 900K · 必须压缩]"))
-            .expect("900K 升级块");
-        assert!(
-            block_500.content.contains("≈0.9") || block_500.content.contains("≈1.0"),
-            "500K 块须含实际读数: {block_500:?}"
+            "分块出现后模型面须带固定指针消息（{requests:?}）"
         );
         assert!(
-            // 用户 2026-09-15 裁定：模型面措辞统一为「当前上下文窗口」（不再说「滑块」）。
-            block_900.content.contains("当前上下文窗口之外的携带内容"),
-            "900K 块须说明窗口装载待压区: {block_900:?}"
-        );
-        // 开窗量尺＝实际上下文：首个请求面即窗口面（只 blackboard_write）。
-        assert_eq!(
-            requests[0]
-                .tools
+            requests.iter().any(|r| r
+                .messages
                 .iter()
-                .map(|t| t.name.as_str())
-                .collect::<Vec<_>>(),
-            vec!["blackboard_write"],
-            "500K/900K 越线即开模型参与压缩窗（A7）"
+                .any(|m| m.content.starts_with(crate::model_face::BLOCK_TABLE_PREFIX))),
+            "模型面须带分块表"
         );
-
-        let _ = std::fs::remove_dir_all(&dir);
-    }
-
-    /// A8①（设计 §3.4）＋ v7 V4（S1 修订批）：机械压缩硬兜底改挂**实际
-    /// 上下文**刻度——全量会话估算越线即强制压缩一次（绕过冷却），reason＝
-    /// `context_scale`。v7 起压缩对象边界＝**驻留带 L 之外**（`fold` 未激活
-    /// 时按 L 预算切），故本钉把 L 钉成小值，使压完确实回落到硬线之下
-    /// （不落入「压不动 ⇒ anomaly ＋ 停手」分支）。
-    #[tokio::test]
-    async fn hard_context_fallback_fires_on_the_actual_context_scale() {
-        let fake = Arc::new(FakeProvider::new(vec![
-            ScriptedResponse::tool_calls(vec![tool_call("read_file", "call-r1")])
-                .with_prompt_tokens(100),
-            ScriptedResponse::tool_calls(vec![tool_call("read_file", "call-r2")])
-                .with_prompt_tokens(100),
-            ScriptedResponse::tool_calls(vec![tool_call("read_file", "call-r3")])
-                .with_prompt_tokens(100),
-            ScriptedResponse::tool_calls(vec![tool_call("read_file", "call-r4")])
-                .with_prompt_tokens(100),
-            ScriptedResponse::tool_calls(vec![tool_call("read_file", "call-r5")])
-                .with_prompt_tokens(100),
-            ScriptedResponse::tool_calls(vec![tool_call("read_file", "call-r6")])
-                .with_prompt_tokens(100),
-            ScriptedResponse::text("终答"),
-            ScriptedResponse::text("终答"),
-            ScriptedResponse::text("终答"),
-        ]));
-        let gateway: Arc<dyn ModelGateway> = fake.clone();
-        let controller = AgentLoopController::with_gateway(gateway)
-            .with_context_compact(100_000_000, 400, 20, 100_000_000)
-            .with_summary_guards(1, 1.0)
-            // 驻留带 L＝1K（估计口径）：保留带 ≈ 最新 1 轮 ⇒ 压掉前面的轮。
-            .with_slider_resident_tokens(1_000)
-            // 硬兜底门槛压到 20K（测试缝隙）——视图刻度与 provider 刻度都被
-            // 上面的巨大阈值关掉，故唯一可达的压缩原因是**实际上下文**。
-            .with_hard_context_tokens(20_000);
-        let dir = test_dir();
-        // 每轮 ≈5K 估算（10K 字符工具结果）：4 轮累计 ≈20K ⇒ 第 5 个 loop-top
-        // 越硬线；压缩后保留带 ≈1 轮（≈5K）＋ marker ⇒ 远低于 20K（不逐轮重触发）。
-        let results = std::sync::Mutex::new(vec![
-            ToolResult {
-                output: "k".repeat(10_000),
-                ..ok_result()
-            };
-            6
-        ]);
-        struct SeqHost {
-            journal: JournalRecorder,
-            results: std::sync::Mutex<Vec<ToolResult>>,
-        }
-        #[async_trait::async_trait]
-        impl LoopHost for SeqHost {
-            fn journal(&self) -> &JournalRecorder {
-                &self.journal
-            }
-            fn tools_registry(&self) -> &dyn ToolRegistry {
-                &CompactEmptyRegistry
-            }
-            fn session_cwd(&self) -> PathBuf {
-                self.journal.journal_dir().to_path_buf()
-            }
-            // 显式授权（trait 默认 fail-closed Deny；无此覆写工具结果会是
-            // 拒单文案，实际上下文永远长不起来——本钉初版即因此静默失败）。
-            async fn request_permission(
-                &self,
-                _risk: RiskClass,
-                _tool: &str,
-                _args: &serde_json::Value,
-            ) -> Result<PermitDecision, PermitError> {
-                Ok(PermitDecision::AllowOnce)
-            }
-            async fn call_tool(
-                &self,
-                _name: &str,
-                _args: serde_json::Value,
-                _call_id: &str,
-            ) -> Result<ToolResult, ToolError> {
-                let mut results = self.results.lock().unwrap();
-                if results.is_empty() {
-                    return Ok(ok_result());
-                }
-                Ok(results.remove(0))
-            }
-        }
-        let host = SeqHost {
-            journal: JournalRecorder::new(dir.clone()),
-            results,
-        };
-        let (answer, _, _) = controller
-            .run_turn(
-                &host,
-                "硬兜底测试",
-                "RUN-SLIDE-A8",
-                MANIFEST,
-                0,
-                None,
-                None,
-                None,
-            )
-            .await
-            .unwrap();
-        assert_eq!(answer, "终答");
-
-        let compact: Vec<_> = events(&dir)
-            .into_iter()
-            .filter(|e| e.event_type == EventType::ContextCompressed)
-            .map(|e| e.payload)
-            .collect();
-        assert_eq!(compact.len(), 1, "硬兜底恰压一次: {compact:?}");
-        assert_eq!(compact[0]["reason"], "context_scale");
-        assert_eq!(compact[0]["mode"], "mechanical");
-        // v7 V4：压得下来 ⇒ 不得落「压不动」anomaly、不得强制开窗。
-        let stalled = audit_events(&dir)
-            .into_iter()
-            .any(|e| e.payload["payload"]["key"] == "context_scale:hard_950k_stalled");
-        assert!(!stalled, "压得动时不得落语义层停滞 anomaly");
 
         let _ = std::fs::remove_dir_all(&dir);
     }
 
     // ── v7（S1 修订批）档位分工 / 压缩分工 / 会话级水位 / 停手纪律 ──────
 
-    /// v7 V2（设计 §3.4.1 档位表）：**500K ＝ 纯提醒**——不打断、不开窗、
-    /// 不设 pending；文案给出「自选压缩」方法（语义摘要块）与可延后语义。
-    /// 对照＝最高档（900K）必须压缩一次（见
-    /// `compression_window_participates_via_blackboard_write_and_closes_deferred`）。
-    #[tokio::test]
-    async fn context_scale_500k_is_a_pure_reminder_without_a_window() {
-        let fake = Arc::new(FakeProvider::new(vec![
-            ScriptedResponse::tool_calls(vec![tool_call("read_file", "call-r1")])
-                .with_prompt_tokens(100),
-            ScriptedResponse::text("终答"),
-            ScriptedResponse::text("终答"),
-        ]));
-        let gateway: Arc<dyn ModelGateway> = fake.clone();
-        let controller =
-            AgentLoopController::with_gateway(gateway).with_slider_window_tokens(100_000_000);
-        let dir = test_dir();
-        let host = TestHost {
-            journal: JournalRecorder::new(dir.clone()),
-            tool_result: Some(s1_fat_result()),
-        };
-        controller
-            .run_turn(
-                &host,
-                &s1_actual_context_prompt(),
-                "RUN-SCALE-500",
-                MANIFEST,
-                0,
-                None,
-                None,
-                None,
-            )
-            .await
-            .unwrap();
-
-        let requests = fake.received_requests();
-        // 越线后的那一轮仍是常规工具面 —— 500K 不得开窗（不开窗＝不打断）。
-        // 窗口轮的工具面恒为 `["blackboard_write"]`（仅写入面），故非窗口轮
-        // 必有其它工具（本测试基面含 blackboard_read）。
-        assert!(
-            requests[1]
-                .tools
-                .iter()
-                .any(|t| t.name != "blackboard_write"),
-            "500K 纯提醒不得收缩工具面（开窗）: {:?}",
-            requests[1].tools
-        );
-        let block = requests[1]
-            .messages
-            .iter()
-            .find(|m| {
-                m.content
-                    .starts_with(crate::context_scale::REMINDER_INJECTED_PREFIX)
-            })
-            .expect("500K 提醒块");
-        assert!(block.content.contains("可延后"), "{block:?}");
-        assert!(
-            block
-                .content
-                .contains(crate::context_scale::MODEL_SUMMARY_PREFIX),
-            "500K 须给出自选压缩方法（语义摘要块格式）: {block:?}"
-        );
-        assert!(
-            !block.content.contains("模型参与压缩 · 窗口"),
-            "500K 不得携带窗口任务块: {block:?}"
-        );
-
-        let scale = audit_events(&dir);
-        assert!(
-            scale.iter().any(|e| {
-                e.payload["payload"]["key"] == "context_scale:500k"
-                    && e.payload["payload"]["summary"]
-                        .as_str()
-                        .is_some_and(|s| s.contains("opens_window=false"))
-            }),
-            "500K 事件须如实记 opens_window=false: {scale:?}"
-        );
-        assert!(
-            !scale
-                .iter()
-                .any(|e| e.payload["kind"] == crate::mechanical_audit::KIND_MODEL_COMPRESSION),
-            "500K 不得开模型参与压缩窗: {scale:?}"
-        );
-        // 会话级水位如实回写（DP-16）。
-        assert_eq!(
-            controller.context_scale_notified_keys(),
-            vec!["500k".to_string()]
-        );
-
-        let _ = std::fs::remove_dir_all(&dir);
-    }
-
-    /// v7 DP-16（设计 §3.5.1）：**会话级水位**——已提醒刻度随会话状态注入
-    /// loop ⇒ 同一刻度跨 prompt 不重发（新会话独立由 host 侧侧车保证）。
+    /// v8 DP-16（设计 §3）＋ 2026-09-16 实现批：
+    ///
+    /// ① **软档＝会话级水位**——已提醒刻度随会话状态注入 loop ⇒ 同一刻度跨
+    ///    prompt 不重发（新会话独立由 host 侧侧车保证）；四个软刻度全部预置 ⇒
+    ///    本 prompt 零提醒、零阶梯事件、水位原样。
+    /// ② 硬档（H1／T1）改为**按越线重新武装**（用户 2026-09-16 裁定），故它们的
+    ///    抑制不走水位——见姊妹钉 `context_scale_hard_tiers_rearm_above_the_line`。
     #[tokio::test]
     async fn context_scale_watermark_is_session_level() {
+        use crate::context_scale::{LadderStep, LadderTier};
         let fake = Arc::new(FakeProvider::new(vec![
             ScriptedResponse::tool_calls(vec![tool_call("read_file", "call-r1")])
                 .with_prompt_tokens(100),
@@ -6591,9 +6496,42 @@ mod tests {
             ScriptedResponse::text("终答"),
         ]));
         let gateway: Arc<dyn ModelGateway> = fake.clone();
+        // 四个软刻度钉在会话面量级（静态开销由阶梯缝隙 pin 0）；硬档抬到不可达。
+        let ladder = [
+            LadderStep {
+                tokens: 100_000,
+                tier: LadderTier::Soft,
+            },
+            LadderStep {
+                tokens: 200_000,
+                tier: LadderTier::Soft,
+            },
+            LadderStep {
+                tokens: 300_000,
+                tier: LadderTier::Soft,
+            },
+            LadderStep {
+                tokens: 400_000,
+                tier: LadderTier::Soft,
+            },
+            LadderStep {
+                tokens: u64::MAX,
+                tier: LadderTier::HardReminder,
+            },
+            LadderStep {
+                tokens: u64::MAX,
+                tier: LadderTier::HardTruncate,
+            },
+        ];
         let controller = AgentLoopController::with_gateway(gateway)
             .with_slider_window_tokens(100_000_000)
-            .with_context_scale_notified(vec!["500k".to_string()]);
+            .with_context_scale_ladder(ladder)
+            .with_context_scale_notified(
+                ["100k", "200k", "300k", "400k"]
+                    .iter()
+                    .map(|k| (*k).to_string())
+                    .collect(),
+            );
         let dir = test_dir();
         let host = TestHost {
             journal: JournalRecorder::new(dir.clone()),
@@ -6618,189 +6556,60 @@ mod tests {
             !requests.iter().any(|r| r.messages.iter().any(|m| m
                 .content
                 .starts_with(crate::context_scale::REMINDER_INJECTED_PREFIX))),
-            "会话已提醒过 500K ⇒ 本 prompt 不再注入提醒块"
+            "软刻度已提醒过 ⇒ 本 prompt 不再注入提醒块"
         );
         assert!(
             !audit_events(&dir)
                 .iter()
-                .any(|e| { e.payload["payload"]["key"] == "context_scale:500k" }),
-            "会话级水位不得重复落 500K 事件"
+                .any(|e| { e.payload["kind"] == crate::mechanical_audit::KIND_CONTEXT_SCALE }),
+            "会话级水位已全部预置 ⇒ 不得再落任何阶梯事件"
         );
         assert_eq!(
             controller.context_scale_notified_keys(),
-            vec!["500k".to_string()],
-            "水位键原样（不含未越线的 900k）"
+            vec![
+                "100k".to_string(),
+                "200k".to_string(),
+                "300k".to_string(),
+                "400k".to_string()
+            ],
+            "水位键原样保留（顺序＝升序）"
         );
 
         let _ = std::fs::remove_dir_all(&dir);
     }
 
-    /// v7 V3（设计 §3.4.1「900K ＝ 必须压缩一次」）：**压缩窗口轮装载
-    /// 「滑块之外的携带内容」**——非窗口轮已被折叠（旧轮原文不可见），窗口轮
-    /// 必须把待压区原文重新上传（否则模型无从产出语义摘要）。
+    /// v8 实现批（用户 2026-09-16 裁定「守卫降值 ＋ 重新武装」）：**硬档按越线
+    /// 重新武装**——预置水位**不**抑制 T1：恢复会话若仍在线上，必须先按读数把
+    /// 模型面压回线上（这里走「工作现场之外无已闭合分块」⇒ 窗口内超大结果指针化
+    /// 分支），水位键照旧保留（审计事实）。
     #[tokio::test]
-    async fn compression_window_request_loads_the_pending_region() {
-        let round_a = "A".repeat(1_200);
-        let round_b = "B".repeat(1_200);
-        let round_c = "C".repeat(1_200);
-        let outputs = std::sync::Mutex::new(vec![
-            ToolResult {
-                output: round_a.clone(),
-                ..ok_result()
-            },
-            ToolResult {
-                output: round_b.clone(),
-                ..ok_result()
-            },
-            ToolResult {
-                output: round_c.clone(),
-                ..ok_result()
-            },
-        ]);
-        struct SeqHost {
-            journal: JournalRecorder,
-            outputs: std::sync::Mutex<Vec<ToolResult>>,
-        }
-        #[async_trait::async_trait]
-        impl LoopHost for SeqHost {
-            fn journal(&self) -> &JournalRecorder {
-                &self.journal
-            }
-            fn tools_registry(&self) -> &dyn ToolRegistry {
-                &EmptyRegistry
-            }
-            fn session_cwd(&self) -> std::path::PathBuf {
-                self.journal.journal_dir().to_path_buf()
-            }
-            async fn call_tool(
-                &self,
-                _name: &str,
-                _arguments: serde_json::Value,
-                _call_id: &str,
-            ) -> Result<ToolResult, ToolError> {
-                let mut outputs = self.outputs.lock().unwrap();
-                if outputs.is_empty() {
-                    return Ok(ok_result());
-                }
-                Ok(outputs.remove(0))
-            }
-            async fn request_permission(
-                &self,
-                _risk: RiskClass,
-                _tool: &str,
-                _arguments: &serde_json::Value,
-            ) -> Result<PermitDecision, PermitError> {
-                Ok(PermitDecision::AllowOnce)
-            }
-        }
+    async fn context_scale_hard_tiers_rearm_above_the_line() {
         let fake = Arc::new(FakeProvider::new(vec![
             ScriptedResponse::tool_calls(vec![tool_call("read_file", "call-r1")])
                 .with_prompt_tokens(100),
-            ScriptedResponse::tool_calls(vec![tool_call("read_file", "call-r2")])
-                .with_prompt_tokens(100),
-            ScriptedResponse::tool_calls(vec![tool_call("read_file", "call-r3")])
-                .with_prompt_tokens(100),
-            ScriptedResponse::text("终答"),
-            ScriptedResponse::text("终答"),
             ScriptedResponse::text("终答"),
             ScriptedResponse::text("终答"),
         ]));
         let gateway: Arc<dyn ModelGateway> = fake.clone();
-        // 滑窗上限 900 估计 ⇒ 视图越线即驱逐；驻留带 400；最高档钉在 500
-        // （刻度缝隙）⇒ 实际上下文（约 2K）越线后开窗。
         let controller = AgentLoopController::with_gateway(gateway)
-            .with_slider_window_tokens(900)
-            .with_slider_resident_tokens(400)
-            .with_context_scale_milestones(500, 500);
-        let dir = test_dir();
-        let host = SeqHost {
-            journal: JournalRecorder::new(dir.clone()),
-            outputs,
-        };
-        controller
-            .run_turn(
-                &host,
-                "窗口装载测试",
-                "RUN-WIN-LOAD",
-                MANIFEST,
-                0,
-                None,
-                None,
-                None,
-            )
-            .await
-            .unwrap();
-
-        let requests = fake.received_requests();
-        let window_idx = requests
-            .iter()
-            .position(|r| {
-                !r.tools.is_empty() && r.tools.iter().all(|t| t.name == "blackboard_write")
-            })
-            .unwrap_or_else(|| panic!("窗口轮缺失: {:?}", requests.len()));
-        assert!(window_idx > 0, "窗口轮之前须已有非窗口轮");
-        let before = &requests[window_idx - 1];
-        let window = &requests[window_idx];
-        assert!(
-            !before.messages.iter().any(|m| m.content.contains(&round_a)),
-            "非窗口轮的视图已把最旧轮折进台账（原文不可见）"
-        );
-        assert!(
-            window.messages.iter().any(|m| m.content.contains(&round_a)),
-            "窗口轮必须装载待压区原文（滑块之外的携带内容）: {:?}",
-            window
-                .messages
-                .iter()
-                .map(|m| m.content.chars().take(20).collect::<String>())
-                .collect::<Vec<_>>()
-        );
-        assert!(
-            estimate_messages_tokens(&window.messages)
-                >= estimate_messages_tokens(&before.messages),
-            "窗口轮请求估算不得小于滑窗视图（装载待压区）"
-        );
-
-        let _ = std::fs::remove_dir_all(&dir);
-    }
-
-    /// **用户 2026-09-15 裁定**（950K 最后防线）：**压不动 ⇒ 硬截留 ＋ 明确
-    /// 告知 ＋ 任务继续**——不进 NoOp、不永久停手、不再强制开窗。本钉取
-    /// 「零截留」形态（驻留带 L 远大于会话体量 ⇒ 滑块之外已无完整旧轮）：
-    /// anomaly 恰 1 次、如实报 `dropped_rounds=0`，且注入块明确告知模型
-    /// 「上一轮上下文压缩失败，已机械截留」，run 正常收尾（任务继续）。
-    #[tokio::test]
-    async fn hard_context_failure_intercepts_and_tells_the_model_without_stopping() {
-        let fake = Arc::new(FakeProvider::new(vec![
-            ScriptedResponse::tool_calls(vec![tool_call("read_file", "call-r1")])
-                .with_prompt_tokens(100),
-            ScriptedResponse::tool_calls(vec![tool_call("read_file", "call-r2")])
-                .with_prompt_tokens(100),
-            ScriptedResponse::text("终答"),
-            ScriptedResponse::text("终答"),
-            ScriptedResponse::text("终答"),
-            ScriptedResponse::text("终答"),
-        ]));
-        let gateway: Arc<dyn ModelGateway> = fake.clone();
-        // 驻留带 L 远大于会话体量（默认 64K）⇒ 滑块之外已无可截留内容；
-        // 硬线钉在 1K 使首轮即越线。
-        let controller = AgentLoopController::with_gateway(gateway)
-            .with_context_compact(100_000_000, 400, 20, 100_000_000)
-            .with_summary_guards(1, 1.0)
             .with_slider_window_tokens(100_000_000)
-            .with_hard_context_tokens(1_000);
+            .with_context_scale_ladder(v8_test_ladder(u64::MAX, 100))
+            .with_context_scale_notified(
+                ["192k", "224k", "256k", "288k", "320k", "500k"]
+                    .iter()
+                    .map(|k| (*k).to_string())
+                    .collect(),
+            );
         let dir = test_dir();
         let host = TestHost {
             journal: JournalRecorder::new(dir.clone()),
-            tool_result: Some(ToolResult {
-                output: "k".repeat(2_000),
-                ..ok_result()
-            }),
+            tool_result: Some(s1_fat_result()),
         };
         controller
             .run_turn(
                 &host,
-                "压不动测试",
-                "RUN-HARD-STALL",
+                &s1_actual_context_prompt(),
+                "RUN-SCALE-REARM",
                 MANIFEST,
                 0,
                 None,
@@ -6809,61 +6618,29 @@ mod tests {
             )
             .await
             .unwrap();
-
-        let stalls = audit_events(&dir)
+        let cut = audit_events(&dir)
             .into_iter()
-            .filter(|e| e.payload["payload"]["key"] == "context_scale:hard_950k_intercepted")
-            .count();
-        assert_eq!(stalls, 1, "零截留的重复发生只落一次账（避免逐轮刷账）");
-        assert!(
-            audit_events(&dir).iter().any(|e| {
-                e.payload["payload"]["anomaly"] == "hard_context_compaction_failed_slider_bound"
-            }),
-            "anomaly 事实须如实落账"
-        );
-        assert!(
-            audit_events(&dir)
-                .iter()
-                .any(|e| e.payload["payload"]["summary"]
-                    .as_str()
-                    .is_some_and(|s| s.contains("dropped_rounds=0"))),
-            "零截留须如实报 dropped_rounds=0"
-        );
-        // 机械层无可压内容 ⇒ 无压缩事件（也不得开窗空转）。
+            .find(|e| e.payload["payload"]["key"] == "context_scale:hard_truncate")
+            .expect("预置水位不得抑制 T1（重新武装）");
         assert_eq!(
-            events(&dir)
-                .into_iter()
-                .filter(|e| e.event_type == EventType::ContextCompressed)
-                .count(),
-            0,
-            "无可压内容不得产出 context_compressed"
+            cut.payload["payload"]["anomaly"],
+            "hard_context_result_pointerized"
         );
         assert!(
-            !fake.received_requests().iter().any(|r| {
-                !r.tools.is_empty() && r.tools.iter().all(|t| t.name == "blackboard_write")
-            }),
-            "该档不再强制开窗（用户 2026-09-15 裁定：改为截留＋告知）"
+            controller
+                .context_scale_notified_keys()
+                .contains(&"500k".to_string()),
+            "水位键为审计事实、不因重新武装被清除: {:?}",
+            controller.context_scale_notified_keys()
         );
-        // 明确告知：注入块带 headline 且不写回持久化会话（注入文本前缀注册）。
-        let requests = fake.received_requests();
-        let told = requests
-            .iter()
-            .flat_map(|r| r.messages.iter())
-            .find(|m| {
-                m.content
-                    .contains(crate::context_scale::TRUNCATION_FAILURE_HEADLINE)
-            })
-            .expect("必须把「压缩失败、已机械截留」明确返回给模型");
-        assert!(told.content.contains("已无可截留内容"), "{}", told.content);
-        assert!(told.content.contains("任务无需中止"), "{}", told.content);
-        assert!(crate::prompt::is_injected_block_text(&told.content));
-
         let _ = std::fs::remove_dir_all(&dir);
     }
 
-    /// v7 DP-14（设计 §3.4.1 语义轨）：模型在回复里产出语义摘要块 ⇒ 机械层
-    /// 执行一次「摘要替换被压区」（`mode=model_summary`，reason=
-    /// `model_selected`），marker 携带摘要正文与四项定位指针。
+    /// v8（2026-09-16 勘误批，设计 §4 §6）：模型在回复里产出语义摘要块 ⇒
+    /// 机械层执行一次**按块压缩**（`mode=model_summary`、reason=
+    /// `model_selected`）——被压块移出**模型面**、marker（v0.4-分块压缩）携带
+    /// 摘要正文＋机械摘要行＋四项定位指针＋**按块回放路径**；**本地面零覆盖**
+    /// （`messages` 一条不删，逐字原文另落 `.gsa/compaction/blocks/`）。
     #[tokio::test]
     async fn model_summary_block_replaces_the_region() {
         let semantic_block = "[SEMANTIC_SUMMARY]\n目标: 完成接线\n已完成: 台账接线\n\
@@ -6933,9 +6710,12 @@ mod tests {
             ScriptedResponse::text("终答"),
         ]));
         let gateway: Arc<dyn ModelGateway> = fake.clone();
+        // 主滑块 x 与分块 y 都取小值 ⇒ 首轮之后即有「主滑块之外的闭合分块」
+        // 可压；阶梯抬到不可达（本钉只测压缩面）。
         let controller = AgentLoopController::with_gateway(gateway)
-            .with_slider_window_tokens(100_000_000)
-            .with_slider_resident_tokens(400)
+            .with_slider_window_tokens(1_000)
+            .with_model_face_block_tokens(500)
+            .with_context_scale_ladder(v8_test_ladder(u64::MAX, u64::MAX))
             .with_session_id(Some("SESSION-SEM-1".to_string()));
         let dir = test_dir();
         let host = SeqHost {
@@ -6977,7 +6757,16 @@ mod tests {
                     .starts_with(crate::prompt::CONTEXT_COMPRESSED_PREFIX)
             })
             .expect("语义轨 marker");
-        assert!(marker.content.contains("v0.3-语义"), "{}", marker.content);
+        assert!(
+            marker.content.contains("v0.4-分块压缩"),
+            "{}",
+            marker.content
+        );
+        assert!(
+            marker.content.contains("已处理分块: 1"),
+            "{}",
+            marker.content
+        );
         assert!(
             marker.content.contains("关键决策: 保留滑块"),
             "{}",
@@ -6994,12 +6783,25 @@ mod tests {
                 marker.content
             );
         }
+        // 按块回放面（设计 §6 形态①）：marker 带 read_file 分页指针，且该
+        // 逐字档案确实落盘。
+        assert!(
+            marker.content.contains(".gsa/compaction/blocks/")
+                && marker.content.contains("read_file offset/limit"),
+            "{}",
+            marker.content
+        );
+        let replay_dir = dir.join(".gsa").join("compaction").join("blocks");
+        let replay_files = std::fs::read_dir(&replay_dir)
+            .map(|d| d.flatten().count())
+            .unwrap_or(0);
+        assert!(replay_files >= 1, "分块逐字回放档案须落盘: {replay_dir:?}");
         assert!(
             !after
                 .messages
                 .iter()
                 .any(|m| m.content.contains(&old_round)),
-            "被压区原文必须移出模型上下文（语义摘要替换）"
+            "被压块原文必须移出**模型面**（摘要替换；本地面仍留档）"
         );
 
         let _ = std::fs::remove_dir_all(&dir);
@@ -7078,8 +6880,9 @@ mod tests {
         ]));
         let gateway: Arc<dyn ModelGateway> = fake.clone();
         let controller = AgentLoopController::with_gateway(gateway)
-            .with_slider_window_tokens(100_000_000)
-            .with_slider_resident_tokens(400)
+            .with_slider_window_tokens(1_000)
+            .with_model_face_block_tokens(500)
+            .with_context_scale_ladder(v8_test_ladder(u64::MAX, u64::MAX))
             .with_session_id(Some("SESSION-SEM-TAIL".to_string()));
         let dir = test_dir();
         let host = SeqHost {
@@ -7122,52 +6925,272 @@ mod tests {
             std::path::Path::new(archive).exists(),
             "语义压缩存档须落盘: {archive}"
         );
-        // 会话级水位未被本路径污染（本测试未开窗口／无刻度越线）。
-        assert!(controller.context_scale_notified_keys().is_empty());
+        // 数值刻度水位未被本路径污染（本测试未开窗口／无刻度越线）；`first_block`
+        // 属字面水位（首个分块固化提醒，2026-09-16 实现批由 per-run 改会话级），
+        // 本路径出现分块时理应置位。
+        assert!(
+            controller
+                .context_scale_notified_keys()
+                .iter()
+                .all(|k| k == crate::context_scale::FLAG_FIRST_BLOCK),
+            "本路径不得写入数值刻度水位: {:?}",
+            controller.context_scale_notified_keys()
+        );
 
         let _ = std::fs::remove_dir_all(&dir);
     }
 
-    /// 审查修正批（2026-09-15，审查 P2⑤）：**窗口上传越上限 ⇒ 降级**——
-    /// 最高刻度必须压缩一次，但窗口轮要上传 `messages` 全量；越上限时开窗
-    /// 只会让该轮请求硬失败 ⇒ 不开窗、注入降级块（如实报读数与降级事实）、
-    /// 同迭代走一次机械强制压缩（`reason=context_scale`）、异常如实落账。
+    /// **v8 T1 硬截断**（设计 §5）：模型面估算越过 T1 ⇒ 机械层把**主滑块以外
+    /// 的全部分块**移出模型面——① 逐字原文落盘可按块回放（形态①）；② 注入
+    /// 告知块（已截断 N 块／可按块回放／任务无需中止／模型面声明）；③ 事实经
+    /// `anomaly=hard_context_truncated_blocks` 落账；④ **本地面零覆盖**：被截断
+    /// 轮的逐字原文仍在持久化会话里（不变量 I3）。
     #[tokio::test]
-    async fn window_over_upload_cap_degrades_instead_of_opening_a_window() {
+    async fn t1_truncation_moves_blocks_out_of_the_model_face_and_keeps_the_local_face() {
+        let old_round = "T".repeat(6_000);
         let fake = Arc::new(FakeProvider::new(vec![
             ScriptedResponse::tool_calls(vec![tool_call("read_file", "call-r1")])
                 .with_prompt_tokens(100),
             ScriptedResponse::tool_calls(vec![tool_call("read_file", "call-r2")])
                 .with_prompt_tokens(100),
-            ScriptedResponse::text("终答"),
-            ScriptedResponse::text("终答"),
+            ScriptedResponse::text("终答").with_prompt_tokens(100),
+            ScriptedResponse::text("终答").with_prompt_tokens(100),
         ]));
         let gateway: Arc<dyn ModelGateway> = fake.clone();
-        // 刻度钉在 750K（单档＝最高档 ⇒ 本应开窗）：每轮工具结果 1.0M 字符
-        // （≈500K 估计）⇒ 第 1 轮后 ≈500K（未越线，保证开窗判定发生在已有
-        // 2 个完整轮、最旧轮可被移出的时刻）；第 2 轮后 ≈1.0M ≥ 750K ⇒ 越线。
-        // 上传上限钉 1_000（远低于实际上传估算）⇒ 必须降级；硬兜底抬到 1e9
-        // 以隔离 950K 路径（本钉只测里程碑窗口的守卫）。驻留带 400 ⇒ 最旧轮
-        // 会被同迭代的机械强制压缩移出。
+        // x 小 ⇒ 首轮之后即有分块；T1 钉在 4K 模型面估算（首轮 6K 字符 ≈3K
+        // 估计 ＋ 次轮 ⇒ 越线）；H1 抬到不可达（本钉只测截断）。
         let controller = AgentLoopController::with_gateway(gateway)
-            .with_slider_window_tokens(100_000_000)
-            .with_slider_resident_tokens(400)
-            .with_window_upload_cap_tokens(1_000)
-            .with_hard_context_tokens(1_000_000_000)
-            .with_context_scale_milestones(750_000, 750_000);
+            .with_slider_window_tokens(1_000)
+            .with_model_face_block_tokens(500)
+            .with_context_scale_ladder(v8_test_ladder(u64::MAX, 4_000))
+            .with_session_id(Some("SESSION-T1".to_string()));
         let dir = test_dir();
         let host = TestHost {
             journal: JournalRecorder::new(dir.clone()),
             tool_result: Some(ToolResult {
-                output: "z".repeat(1_000_000),
+                output: old_round.clone(),
+                ..ok_result()
+            }),
+        };
+        let mut conversation = vec![conv_message(Role::User, "截断测试任务")];
+        controller
+            .run_turn(
+                &host,
+                "截断测试任务",
+                "RUN-T1",
+                MANIFEST,
+                0,
+                None,
+                None,
+                Some(&mut conversation),
+            )
+            .await
+            .unwrap();
+
+        // ① 事实落账（设计 §5：anomaly=hard_context_truncated_blocks）。
+        let cut = audit_events(&dir)
+            .into_iter()
+            .find(|e| e.payload["payload"]["key"] == "context_scale:hard_truncate")
+            .expect("截断事实落账");
+        assert_eq!(
+            cut.payload["payload"]["anomaly"],
+            "hard_context_truncated_blocks"
+        );
+        let summary = cut.payload["payload"]["summary"].as_str().unwrap_or("");
+        assert!(summary.contains("truncated_blocks="), "{summary}");
+        assert!(summary.contains("freed_tokens="), "{summary}");
+
+        // ② 告知块（注入文本）＋ ③ 回放档案落盘。
+        let requests = fake.received_requests();
+        let notice = requests
+            .iter()
+            .flat_map(|r| r.messages.iter())
+            .find(|m| m.content.contains("已把**工作现场以外**"))
+            .expect("T1 告知块");
+        assert!(
+            notice.content.contains("任务无需中止"),
+            "{}",
+            notice.content
+        );
+        assert!(notice.content.contains("可按块回放"), "{}", notice.content);
+        assert!(
+            notice
+                .content
+                .contains(crate::model_face::MODEL_FACE_DECLARATION),
+            "{}",
+            notice.content
+        );
+        let replay_dir = dir.join(".gsa").join("compaction").join("blocks");
+        let replay_files: Vec<std::path::PathBuf> = std::fs::read_dir(&replay_dir)
+            .map(|d| d.flatten().map(|e| e.path()).collect())
+            .unwrap_or_default();
+        assert!(
+            !replay_files.is_empty(),
+            "分块逐字回放档案须落盘: {replay_dir:?}"
+        );
+        let replay_text = std::fs::read_to_string(&replay_files[0]).unwrap();
+        assert!(replay_text.contains("陈旧性标注"), "{replay_text}");
+
+        // ④ 模型面：被截断块的工具结果不在请求面。
+        let last = requests.last().expect("至少一轮请求");
+        assert!(
+            !last
+                .messages
+                .iter()
+                .any(|m| m.tool_call_id.as_deref() == Some("call-r1")),
+            "被截断块必须移出模型面"
+        );
+        // ④b **主滑块逐字必须在场**（P0 修复钉子，审查 R-1）：截断只动
+        // 「已闭合分块」，工作现场（最新完整轮）与其后的新轮次一条不动。
+        assert!(
+            last.messages
+                .iter()
+                .any(|m| m.tool_call_id.as_deref() == Some("call-r2")),
+            "主滑块（工作现场）逐字不得被截断：{last:?}"
+        );
+
+        // ⑤ 本地面零覆盖：逐字原文仍在持久化会话（I3）＋ 截断 marker 在场。
+        assert!(
+            conversation.iter().any(|m| m.content.contains(&old_round)),
+            "本地面不得因截断丢失逐字原文"
+        );
+        assert!(
+            conversation.iter().any(|m| {
+                crate::model_face::parse_marker_blocks(&m.content)
+                    .is_some_and(|(state, _)| state == crate::model_face::BlockState::Truncated)
+            }),
+            "截断 marker 须随会话留存（恢复后块状态由此重建）"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// v8 实现批（审查 R-5）：**T1 档案写失败不得静默**——`.gsa` 落点被占用时，
+    /// 截断照常执行（安全闸门优先），但事实必须①落账（`archive_write_failed=true`）
+    /// ②如实告知模型（告知块写明回放档案未落盘，并指出逐字原文仍在会话档案与
+    /// journal），**不得向模型承诺一个不存在的回放档案**。
+    #[tokio::test]
+    async fn t1_archive_write_failure_is_reported_to_the_model_and_the_journal() {
+        let old_round = "T".repeat(6_000);
+        let fake = Arc::new(FakeProvider::new(vec![
+            ScriptedResponse::tool_calls(vec![tool_call("read_file", "call-r1")])
+                .with_prompt_tokens(100),
+            ScriptedResponse::tool_calls(vec![tool_call("read_file", "call-r2")])
+                .with_prompt_tokens(100),
+            ScriptedResponse::text("终答").with_prompt_tokens(100),
+            ScriptedResponse::text("终答").with_prompt_tokens(100),
+        ]));
+        let gateway: Arc<dyn ModelGateway> = fake.clone();
+        let controller = AgentLoopController::with_gateway(gateway)
+            .with_slider_window_tokens(1_000)
+            .with_model_face_block_tokens(500)
+            .with_context_scale_ladder(v8_test_ladder(u64::MAX, 4_000))
+            .with_session_id(Some("SESSION-T1-FAIL".to_string()));
+        let dir = test_dir();
+        let blocked_cwd = test_dir();
+        // `.gsa` 落成一个**文件** ⇒ `create_dir_all(.gsa/compaction/…)` 必失败。
+        std::fs::write(blocked_cwd.join(".gsa"), "occupied").unwrap();
+        let host = BlockedArchiveHost {
+            inner: TestHost {
+                journal: JournalRecorder::new(dir.clone()),
+                tool_result: Some(ToolResult {
+                    output: old_round.clone(),
+                    ..ok_result()
+                }),
+            },
+            blocked_cwd: blocked_cwd.clone(),
+        };
+        let mut conversation = vec![conv_message(Role::User, "截断落盘失败测试")];
+        controller
+            .run_turn(
+                &host,
+                "截断落盘失败测试",
+                "RUN-T1-FAIL",
+                MANIFEST,
+                0,
+                None,
+                None,
+                Some(&mut conversation),
+            )
+            .await
+            .unwrap();
+        // ① 截断照常执行（被截块移出模型面）且事实带失败读数。
+        let cut = audit_events(&dir)
+            .into_iter()
+            .find(|e| e.payload["payload"]["key"] == "context_scale:hard_truncate")
+            .expect("截断事实落账（不因落盘失败而停手）");
+        let summary = cut.payload["payload"]["summary"].as_str().unwrap_or("");
+        assert!(summary.contains("archive_write_failed=true"), "{summary}");
+        assert!(summary.contains("truncated_blocks="), "{summary}");
+        // ② 告知块如实说明「回放档案写入失败」，并指出逐字原文仍在别处。
+        let requests = fake.received_requests();
+        let notice = requests
+            .iter()
+            .flat_map(|r| r.messages.iter())
+            .find(|m| m.content.contains("已把**工作现场以外**"))
+            .expect("T1 告知块");
+        assert!(
+            notice.content.contains("回放档案写入失败"),
+            "{}",
+            notice.content
+        );
+        assert!(
+            notice.content.contains("会话档案") && notice.content.contains("journal"),
+            "失败时须给出真实载体: {}",
+            notice.content
+        );
+        // ③ 本地面零覆盖不变（逐字原文仍在持久化会话）。
+        assert!(
+            conversation.iter().any(|m| m.content.contains(&old_round)),
+            "本地面不得因落盘失败丢失逐字原文"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+        let _ = std::fs::remove_dir_all(&blocked_cwd);
+    }
+
+    /// **v8 块号幂等**（设计 §12「块表状态幂等；同一块不重复计数」）：同一块被
+    /// 压缩一次后再次被摘要点名 ⇒ NoOp（不产生第二条 `context_compressed`、
+    /// 不重复计数），分块表状态保持「已压缩」。
+    #[tokio::test]
+    async fn block_compaction_is_idempotent_by_block_number() {
+        let semantic_block = "[SEMANTIC_SUMMARY]\n压缩块: 1\n目标: 接线\n已完成: 一遍\n\
+                              [/SEMANTIC_SUMMARY]";
+        let fake = Arc::new(FakeProvider::new(vec![
+            ScriptedResponse::tool_calls(vec![tool_call("read_file", "call-r1")])
+                .with_prompt_tokens(100),
+            ScriptedResponse {
+                text: Some(semantic_block.to_string()),
+                ..ScriptedResponse::tool_calls(vec![tool_call("read_file", "call-r2")])
+            }
+            .with_prompt_tokens(100),
+            // 第二次点同一块：loop-top 压缩应 NoOp。
+            ScriptedResponse {
+                text: Some(semantic_block.to_string()),
+                ..ScriptedResponse::tool_calls(vec![tool_call("read_file", "call-r3")])
+            }
+            .with_prompt_tokens(100),
+            ScriptedResponse::text("终答").with_prompt_tokens(100),
+            ScriptedResponse::text("终答").with_prompt_tokens(100),
+        ]));
+        let gateway: Arc<dyn ModelGateway> = fake.clone();
+        let controller = AgentLoopController::with_gateway(gateway)
+            .with_slider_window_tokens(1_000)
+            .with_model_face_block_tokens(500)
+            .with_context_scale_ladder(v8_test_ladder(u64::MAX, u64::MAX))
+            .with_session_id(Some("SESSION-IDEM".to_string()));
+        let dir = test_dir();
+        let host = TestHost {
+            journal: JournalRecorder::new(dir.clone()),
+            tool_result: Some(ToolResult {
+                output: "I".repeat(6_000),
                 ..ok_result()
             }),
         };
         controller
             .run_turn(
                 &host,
-                "窗口降级测试",
-                "RUN-WIN-CAP",
+                "块号幂等测试",
+                "RUN-IDEM",
                 MANIFEST,
                 0,
                 None,
@@ -7177,53 +7200,156 @@ mod tests {
             .await
             .unwrap();
 
-        let requests = fake.received_requests();
-        assert!(
-            !requests.iter().any(
-                |r| !r.tools.is_empty() && r.tools.iter().all(|t| t.name == "blackboard_write")
-            ),
-            "越上限时不得开窗（该轮全量上传会硬失败）: {:?}",
-            requests.iter().map(|r| r.tools.len()).collect::<Vec<_>>()
-        );
-        assert!(
-            requests
-                .iter()
-                .any(|r| r.messages.iter().any(|m| m.content.contains("窗口降级"))),
-            "降级事实须如实告知模型（注入块）"
-        );
-
-        let scale = audit_events(&dir);
-        let fire = scale
-            .iter()
-            .find(|e| e.payload["payload"]["key"] == "context_scale:750k")
-            .expect("刻度事件");
-        let summary = fire.payload["payload"]["summary"]
-            .as_str()
-            .unwrap_or_default();
-        assert!(
-            summary.contains("opens_window=false"),
-            "降级须如实记 opens_window=false: {summary}"
-        );
-        assert!(
-            summary.contains("window_skipped_over_cap=true"),
-            "降级读数: {summary}"
-        );
-        assert_eq!(
-            fire.payload["payload"]["anomaly"], "window_upload_over_cap",
-            "降级＝异常事实，如实落账"
-        );
-        // 结构化轨照常作用：同迭代一次机械强制压缩（reason=context_scale）。
         let compact: Vec<serde_json::Value> = events(&dir)
             .into_iter()
             .filter(|e| e.event_type == EventType::ContextCompressed)
             .map(|e| e.payload)
             .collect();
-        assert!(
-            compact
-                .iter()
-                .any(|p| p["reason"] == "context_scale" && p["mode"] == "mechanical"),
-            "降级路径仍须压掉可指针化的结构化内容: {compact:?}"
+        assert_eq!(
+            compact.len(),
+            1,
+            "同一块只压一次（去重键＝块号）: {compact:?}"
         );
+        assert_eq!(compact[0]["mode"], "model_summary");
+        // 分块表状态：块 1 已压缩（模型面里带状态标注）。
+        let requests = fake.received_requests();
+        let table = requests
+            .iter()
+            .flat_map(|r| r.messages.iter())
+            .filter(|m| m.content.starts_with(crate::model_face::BLOCK_TABLE_PREFIX))
+            .last()
+            .expect("分块表");
+        assert!(table.content.contains("已压缩"), "{}", table.content);
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// **v8 上限守卫（异常保险）**（设计 §3 §8）：模型面估算越过 1.10M 估算
+    /// 守卫时**强制截断到线上**（v7 的「不开窗降级」随勘误作废），anomaly 记
+    /// 守卫口径。
+    #[tokio::test]
+    async fn model_face_guard_forces_truncation_above_the_safety_line() {
+        let fake = Arc::new(FakeProvider::new(vec![
+            ScriptedResponse::tool_calls(vec![tool_call("read_file", "call-r1")])
+                .with_prompt_tokens(100),
+            ScriptedResponse::tool_calls(vec![tool_call("read_file", "call-r2")])
+                .with_prompt_tokens(100),
+            ScriptedResponse::text("终答").with_prompt_tokens(100),
+            ScriptedResponse::text("终答").with_prompt_tokens(100),
+        ]));
+        let gateway: Arc<dyn ModelGateway> = fake.clone();
+        // 守卫钉在 4K（异常线测试化）；阶梯抬到不可达（不与 T1 混）。
+        let controller = AgentLoopController::with_gateway(gateway)
+            .with_slider_window_tokens(1_000)
+            .with_model_face_block_tokens(500)
+            .with_model_face_guard_tokens(4_000)
+            .with_context_scale_ladder(v8_test_ladder(u64::MAX, u64::MAX))
+            .with_session_id(Some("SESSION-GUARD".to_string()));
+        let dir = test_dir();
+        let host = TestHost {
+            journal: JournalRecorder::new(dir.clone()),
+            tool_result: Some(ToolResult {
+                output: "G".repeat(6_000),
+                ..ok_result()
+            }),
+        };
+        controller
+            .run_turn(
+                &host,
+                "守卫测试",
+                "RUN-GUARD",
+                MANIFEST,
+                0,
+                None,
+                None,
+                None,
+            )
+            .await
+            .unwrap();
+
+        let cut = audit_events(&dir)
+            .into_iter()
+            .find(|e| e.payload["payload"]["key"] == "context_scale:hard_truncate")
+            .expect("守卫截断落账");
+        assert_eq!(
+            cut.payload["payload"]["anomaly"],
+            "hard_context_guard_truncated_blocks"
+        );
+        let summary = cut.payload["payload"]["summary"].as_str().unwrap_or("");
+        assert!(summary.contains("guard_hit=true"), "{summary}");
+        let requests = fake.received_requests();
+        assert!(
+            requests.iter().flat_map(|r| r.messages.iter()).any(|m| {
+                m.content.contains("上限守卫") && m.content.contains("任务无需中止")
+            }),
+            "守卫告知块须注入"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// **v8 存档写入失败必须显式上报**（P0-D review fix 纪律 × v8 按块压缩）：
+    /// `.gsa/compaction` 落点被占（目录创建失败）⇒ 压缩照常执行（模型面已下移、
+    /// marker 落地），但事件的 `archive_write_failed=true`，**绝不静默吞掉**。
+    /// 台账落点（`.gsa/ledger/`）不受影响，故压缩不会被回滚。
+    #[tokio::test]
+    async fn block_compaction_reports_archive_write_failure_explicitly() {
+        let semantic_block = "[SEMANTIC_SUMMARY]\n压缩块: 1\n目标: 接线\n已完成: 一遍\n\
+                              [/SEMANTIC_SUMMARY]";
+        let fake = Arc::new(FakeProvider::new(vec![
+            ScriptedResponse::tool_calls(vec![tool_call("read_file", "call-r1")])
+                .with_prompt_tokens(100),
+            ScriptedResponse {
+                text: Some(semantic_block.to_string()),
+                ..ScriptedResponse::tool_calls(vec![tool_call("read_file", "call-r2")])
+            }
+            .with_prompt_tokens(100),
+            ScriptedResponse::text("终答").with_prompt_tokens(100),
+            ScriptedResponse::text("终答").with_prompt_tokens(100),
+        ]));
+        let gateway: Arc<dyn ModelGateway> = fake.clone();
+        let controller = AgentLoopController::with_gateway(gateway)
+            .with_slider_window_tokens(1_000)
+            .with_model_face_block_tokens(500)
+            .with_context_scale_ladder(v8_test_ladder(u64::MAX, u64::MAX))
+            .with_session_id(Some("SESSION-ARCHFAIL".to_string()));
+        let dir = test_dir();
+        // `.gsa/compaction` 占成**文件** ⇒ create_dir_all 失败 ⇒ 存档写不进去；
+        // `.gsa` 本身仍是目录 ⇒ 台账（`.gsa/ledger/`）照常可写。
+        std::fs::create_dir_all(dir.join(".gsa")).unwrap();
+        std::fs::write(dir.join(".gsa").join("compaction"), "occupied").unwrap();
+        let host = TestHost {
+            journal: JournalRecorder::new(dir.clone()),
+            tool_result: Some(ToolResult {
+                output: "A".repeat(6_000),
+                ..ok_result()
+            }),
+        };
+        controller
+            .run_turn(
+                &host,
+                "存档失败测试",
+                "RUN-ARCHFAIL",
+                MANIFEST,
+                0,
+                None,
+                None,
+                None,
+            )
+            .await
+            .unwrap();
+
+        let compact: Vec<serde_json::Value> = events(&dir)
+            .into_iter()
+            .filter(|e| e.event_type == EventType::ContextCompressed)
+            .map(|e| e.payload)
+            .collect();
+        assert_eq!(compact.len(), 1, "压缩仍须执行: {compact:?}");
+        assert_eq!(
+            compact[0]["archive_write_failed"], true,
+            "存档写入失败必须显式上报: {compact:?}"
+        );
+        assert_eq!(compact[0]["summary_incomplete"], false);
 
         let _ = std::fs::remove_dir_all(&dir);
     }

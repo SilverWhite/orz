@@ -1,60 +1,40 @@
-//! 动态上下文滑块 S1 修订批（v7，2026-09-15，[`CONTEXT_DYNAMIC_SLIDER_DESIGN`]
-//! §3.4.1／§3.5.1）——「实际上下文刻度 ＋ 压缩分工（机械结构化轨 ／ 模型
-//! 语义轨）」的非对话面实现：刻度状态、提醒与窗口文案、模型语义摘要块的
-//! 机械识别、会话级水位键。
+//! 滑块上下文 **v8**（2026-09-16 勘误批）——注意力阶梯、硬提醒与硬截断的
+//! 非对话面实现：阶梯状态、提醒／告知文案、模型语义摘要块的机械识别、
+//! 会话级水位键。
 //!
-//! **取代 0ae `attention_ladder`（D2 注意力阶梯）**：128K 打断式 / 160K
-//! 提醒式 / 300·500·600·700K 软提醒 / 800K 硬提醒 / 920K 开窗七级 ＋
-//! `rearm()` 整体**退役**（用户 2026-09-15 裁定：滑块把上传视图恒压在上限
-//! H 内，旧阶梯每一级都成了不可达阈值）。取而代之：
+//! ## 量尺（本次勘误的实质处，设计 §3.1）
 //!
-//! 1. **实际上下文刻度**（默认 500K / 900K，`ContextCompactConfig`
-//!    `.context_scale_milestones`；测试缝隙可改，生产固定）：
-//!    - **500K ＝ 纯提醒**（不打断、不开窗、不强制，模型可延后；文案给出
-//!      自选压缩方法＝产出语义摘要块）；
-//!    - **900K ＝ 必须压缩一次**（提醒 ＋ 开压缩窗口：窗口轮把「滑块之外
-//!      的携带内容」连同滑块一并上传，由模型产出**语义摘要**）；
-//!    - **上传越上限 ⇒ 降级**（审查修正批 2026-09-15）：窗口轮全量上传的
-//!      估算越过 `window_upload_cap_tokens`（默认 1.10M）时**不开窗**（该轮
-//!      请求必硬失败），改注入 [`window_skipped_over_cap_block`] ＋ 机械层
-//!      同迭代强制压一次，事实经 anomaly `window_upload_over_cap` 如实落账；
-//!    - **压不动 ⇒ 硬截留 ＋ 明确告知**（用户 2026-09-15 裁定，取代 v7 的
-//!      「anomaly 停手／强制开窗」）：硬线之上压不下来时，机械层把「滑块
-//!      （驻留带）之外」的内容全部移出（视图只剩前置＋固定指针＋当前滑块），
-//!      并注入 [`compaction_failed_truncation_block`]（headline
-//!      [`TRUNCATION_FAILURE_HEADLINE`]）由模型自行决定下一步——**不进 NoOp、
-//!      不永久停手**，冷却过后新累积的滑块外轮次仍可再截留一次；
-//!    - **窗口内超大结果指针化**（用户 2026-09-15 裁定第二条；先例＝
-//!      OUTPUT-DEGENERATION-GUARD）：溢出体量位于当前窗口内（单结果过大）时，
-//!      把超过 `action_ledger::OVERSIZED_TOOL_RESULT_CAP_TOKENS` 的工具结果
-//!      正文换成「原文头部＋回读指针」（配对字段不动、幂等），使窗口内也能降线；
+//! 本模块所有判定吃**模型面估算**＝投影层装配出的请求视图估算
+//! （`model_face::model_face_estimate`，chars/2）——**不是**本地全量估算、
+//! **不是** provider 实测 prompt。v7 把刻度挂在**本地全量**上（0ai 轮 130＝
+//! 501,845 估算，而该轮真实上传仅 73,006 real token）⇒ 提醒对着模型看不见
+//! 的量发，属**记录错误 → 实现错误**的勘误对象。
 //!
-//! **模型面措辞纪律（用户 2026-09-15 裁定）**：注入块与指针文案一律说
-//! 「**当前上下文窗口**」（不说「滑块／驻留带」——那是内部分区术语，模型未受
-//! 该词汇教学）；且截留告知**不报实际上下文读数**（本地存量无上限，读数对该
-//! 动作无指导意义）。
-//! 2. **首次真实驱逐**的一次性固化提醒（继承 D2 128K 梯的文案语义）；
-//! 3. **压缩窗口（D3）**保留（≤3 轮无工具轮）；窗口语义在 `checkpoint` /
-//!    `agent_loop`（`PendingCheckpoint::ModelCompression` /
-//!    `finalize_model_compression_close`）。
+//! ## 阶梯（设计 §3，按 1M 上下文模型普遍注意力水平定稿）
 //!
-//! **量尺（本批最大实现陷阱，设计 §9-3）**：本模块所有判定吃**实际上下文
-//! 估算**＝`estimate_messages_tokens(&messages)`（chars/2，全量会话）——**不是**
-//! 视图估算、**不是** provider 实测 `prompt_tokens`。滑块下三者在数值上彻底
-//! 分离（视图恒 ≈H，实际上下文可长期增长），故提醒必须挂前者——这也正是
-//! D2 旧量尺（视图）必然失灵的原因。
+//! | 档 | 模型面估算 | ≈真实 token | 形态 |
+//! |---|---|---|---|
+//! | R1–R4 | 192 / 224 / 256 / 288K | ≈148 / 172 / 197 / 222K | 软提醒 |
+//! | **H1** | **320K** | ≈246K | **硬提醒：打断（开压缩窗口）** |
+//! | **T1** | **500K** | ≈385K | **硬截断（主滑块以外的全部分块）** |
 //!
-//! **会话级水位（v7，DP-16）**：每级**每会话**一次——已提醒键随会话状态
-//! 持久化（先例 `StoredConversation.fatigue_tiers_notified`），prompt 起始
-//! 注入 loop、fire 时回写；取代 S1 的 per-run 语义（长单对话里同一刻度
-//! 每个 prompt 重发一次＝噪声）。
+//! 换算：`估算 ≈ 真实 ÷ 0.77`（设计 §3.1 换算纪律）。每档**每会话一次**；
+//! H1／T1 各一次/会话；950K 取消（它只是 provider 1M 窗口的安全上限、不是
+//! 质量许可额度）；1.10M 估算守卫降为**异常保险**（单轮暴涨／换算漂移），
+//! 越线**强制截断到线上**（v7 的「不开窗」行为随之作废）。
 //!
-//! 参数与读数纪律：**参数不进文案**（改 env 即一次性前缀失效；配置固定性
-//! 优先于精确表述，同设计 §3.1）；**读数必须进文案**（用户裁定）。
+//! ## 会话级水位
+//!
+//! 每档每会话一次——已提醒键随会话侧车持久化
+//! （`StoredConversation.context_scale_notified`），prompt 起始注入 loop、
+//! fire 时回写；新会话独立、恢复不重发。
 //!
 //! 注入文本纪律：提醒块以 [`REMINDER_INJECTED_PREFIX`] 开头、窗口机械提示以
-//! [`WINDOW_NOTICE_PREFIX`] 开头，二者均注册进 `prompt::is_injected_block_text`
-//! ⇒ 绝不写回持久化会话（机械注入文本，固定文本不是模型输出）。
+//! [`WINDOW_NOTICE_PREFIX`] 开头，二者均注册进
+//! `prompt::is_injected_block_text` ⇒ 绝不写回持久化会话。模型面术语统一用
+//! 「当前上下文窗口」「工作现场（你最近工作的连续轮次）」「分块」，不使用
+//! 「滑块／主滑块」「驻留带」「锯齿折叠」等
+//! 内部沿革词。
 
 use std::collections::HashSet;
 
@@ -62,23 +42,21 @@ use std::collections::HashSet;
 pub const REMINDER_INJECTED_PREFIX: &str = "[CONTEXT_SCALE";
 
 /// 压缩窗口内的机械提示前缀（注册进 `prompt::is_injected_block_text`）。
-/// 0AE 遗留缺口（S1 修订批补）：窗口轮的「仅 blackboard_write 可执行」提示
-/// 与「窗口剩余 N 轮」提示在修复前**未注册** ⇒ 会被写回持久化会话。
 pub const WINDOW_NOTICE_PREFIX: &str = "[模型参与压缩";
 
-/// **模型语义摘要块的机械可识别前缀**（v7 压缩分工的载体，DP-14）。
+/// **模型语义摘要块的机械可识别前缀**（压缩分工的载体）。
 ///
 /// 模型在回复中输出该块 ⇒ 机械层在下一个 loop-top 安全间隙执行一次
-/// 「语义摘要替换被压区」（`mode=model_summary`）。零新增工具面（8 工具面
-/// 冻结不动）——识别面是**回复文本**，不是工具。
+/// 「按块压缩」（`mode=model_summary`）。零新增工具面（8 工具面冻结不动）
+/// ——识别面是**回复文本**，不是工具。
 pub const MODEL_SUMMARY_PREFIX: &str = "[SEMANTIC_SUMMARY";
 
 /// 语义摘要块结束标记（缺失时按「到文本末尾」容错截取）。
 pub const MODEL_SUMMARY_END: &str = "[/SEMANTIC_SUMMARY]";
 
-/// 语义摘要块的六段结构（设计 §3.4.1「目标／已完成／关键决策／未决问题／
-/// 下一步／关键文件」）；机械识别要求至少命中 [`MODEL_SUMMARY_MIN_SECTIONS`]
-/// 段，避免正文里偶然出现前缀即被误判为摘要块。
+/// 语义摘要块的六段结构（目标／已完成／关键决策／未决问题／下一步／关键文件）；
+/// 机械识别要求至少命中 [`MODEL_SUMMARY_MIN_SECTIONS`] 段，避免正文里偶然
+/// 出现前缀即被误判为摘要块。
 pub const MODEL_SUMMARY_SECTIONS: [&str; 6] = [
     "目标",
     "已完成",
@@ -91,31 +69,94 @@ pub const MODEL_SUMMARY_SECTIONS: [&str; 6] = [
 /// 识别语义摘要块所需的最小段命中数。
 pub const MODEL_SUMMARY_MIN_SECTIONS: usize = 2;
 
-/// D3：模型实施压缩的有限轮数（DP-7：≤3 轮；超轮未完成 ⇒ 机械层按既定
-/// 兜底收口，`model_participated` 如实落账）。
+/// 摘要块内**可选**的块区间指令标签（模型按块区间指定压缩对象；缺省时机械层
+/// 按「最旧闭合块优先」，设计 §4）。
+pub const MODEL_SUMMARY_BLOCK_LABEL: &str = "压缩块:";
+
+/// 模型实施压缩的有限轮数（H1 打断后 ≤3 轮；超轮未产出摘要 ⇒ 如实落账
+/// `model_participated=false`，**不再机械兜底压缩**——机械层不替模型决定
+/// 模型面收缩，设计 §4）。
 pub const COMPRESSION_WINDOW_ROUNDS: u32 = 3;
 
-/// 950K 最后防线的冷却（模型轮）：一次强制之后至少隔这么多轮才允许再强制
-/// （v7 V4「once ＋ 冷却」；压不动则落 anomaly 并停手，不逐轮重压）。
-pub const HARD_CONTEXT_COOLDOWN_ROUNDS: u32 = 4;
+/// 一次性字面水位键：首个分块固化提醒（会话级；2026-09-16 实现批由 per-run
+/// 改为会话级——「一次性」指的是一次会话，不是一次 run）。
+pub const FLAG_FIRST_BLOCK: &str = "first_block";
 
-/// 一次里程碑提醒（刻度 + 机械读数位 + 注入块文案）。
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ContextScaleFire {
-    /// 越线的里程碑刻度（token，实际上下文估算口径）。
-    pub milestone_tokens: u64,
-    /// `mechanical_audit_update` 的 key 尾缀（`500k` / `900k`）。
-    pub key: String,
-    /// 该刻度是否**开压缩窗口**（v7：最后一档＝必须压缩一次；其余＝纯提醒）。
-    pub opens_window: bool,
-    pub block: String,
+/// 阶梯档位形态（设计 §3）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LadderTier {
+    /// 软提醒：只报读数与自选压缩方法，不打断、不开窗。
+    Soft,
+    /// **H1 硬提醒：打断**（注入 ＋ 开压缩窗口 ≤3 轮）。
+    HardReminder,
+    /// **T1 硬截断**：机械层把主滑块以外的全部分块移出模型面。
+    HardTruncate,
 }
 
-/// 里程碑状态（**会话级水位**，DP-16；每级恰好一次、**不 rearm**——机械
-/// 压缩不重置提醒面，否则长单对话里同一级会反复提醒）。
+/// 一档阶梯（模型面估算刻度）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct LadderStep {
+    pub tokens: u64,
+    pub tier: LadderTier,
+}
+
+/// v8 默认阶梯（生产固定——刻度值进文案，改值即改语义；测试经
+/// `with_context_scale_ladder` 用极小刻度驱动）。
+pub const DEFAULT_LADDER: [LadderStep; 6] = [
+    LadderStep {
+        tokens: 192_000,
+        tier: LadderTier::Soft,
+    },
+    LadderStep {
+        tokens: 224_000,
+        tier: LadderTier::Soft,
+    },
+    LadderStep {
+        tokens: 256_000,
+        tier: LadderTier::Soft,
+    },
+    LadderStep {
+        tokens: 288_000,
+        tier: LadderTier::Soft,
+    },
+    LadderStep {
+        tokens: 320_000,
+        tier: LadderTier::HardReminder,
+    },
+    LadderStep {
+        tokens: 500_000,
+        tier: LadderTier::HardTruncate,
+    },
+];
+
+/// 一次越线的阶梯事件（文案由调用方按形态渲染——硬截断的文案需要截断后的
+/// 事实读数）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LadderFire {
+    /// 越线的刻度（模型面估算口径）。
+    pub milestone_tokens: u64,
+    /// `mechanical_audit_update` 的 key 尾缀（`192k` / `320k` / `500k`）。
+    pub key: String,
+    pub tier: LadderTier,
+}
+
+/// 阶梯状态（**会话级水位**）。
+///
+/// 2026-09-16 实现批（用户裁定「守卫降值 ＋ 重新武装，双管齐下」）：
+///
+/// - **软提醒（192/224/256/288K）＝每会话一次**（水位随侧车持久化、恢复不重发）；
+/// - **H1／T1 ＝按越线重新武装**（`latched` 闩）：越过线发一次，落到线下即复位
+///   ⇒ 每次再越线都会再提醒/再截断。理由＝T1 只响一次时，模型面可以在无任何
+///   信号的情况下重新长到守卫线（实测口径），500K 天花板名存实亡；H1 随之重新
+///   武装，保证**每一次** T1 之前都先有过一次硬提醒。
 #[derive(Debug, Clone, Default)]
 pub struct ContextScaleState {
+    /// 已发出的档位（软提醒一次/会话；硬档记「发过」供审计与侧车水位）。
     fired: HashSet<u64>,
+    /// 硬档闩（越过线为真，落到线下复位）。
+    latched: HashSet<u64>,
+    /// 字面水位键（`first_block` 等）。
+    flags: HashSet<String>,
 }
 
 impl ContextScaleState {
@@ -123,47 +164,73 @@ impl ContextScaleState {
         Self::default()
     }
 
-    /// 从会话侧车水位键（`["500k", "900k"]`）恢复（跨 prompt 延续、新会话
-    /// 从零开始、恢复会话不重发——与黑板同族语义）。
+    /// 从会话侧车水位键（`["192k", "320k", "first_block"]`）恢复。
     pub fn from_notified_keys(keys: &[String]) -> Self {
-        let fired = keys.iter().filter_map(|k| parse_key(k)).collect();
-        Self { fired }
+        let mut fired = HashSet::new();
+        let mut flags = HashSet::new();
+        for key in keys {
+            match parse_key(key) {
+                Some(tokens) => {
+                    fired.insert(tokens);
+                }
+                None => {
+                    let key = key.trim();
+                    // 只认已知字面水位键；其它脏数据忽略（防旧/手工侧车注入）。
+                    if key == FLAG_FIRST_BLOCK {
+                        flags.insert(key.to_string());
+                    }
+                }
+            }
+        }
+        Self {
+            fired,
+            latched: HashSet::new(),
+            flags,
+        }
     }
 
     /// 当前水位键（升序、去重；随侧车持久化）。
     pub fn notified_keys(&self) -> Vec<String> {
-        let mut out: Vec<String> = self
+        let mut out: Vec<(String, String)> = self
             .fired
             .iter()
-            .map(|m| format!("{}k", m / 1000))
+            .map(|m| (format!("{:09}k", m / 1000), format!("{}k", m / 1000)))
             .collect();
+        out.extend(
+            self.flags
+                .iter()
+                .map(|flag| (format!("zz-{flag}"), flag.clone())),
+        );
         out.sort();
-        out
+        out.into_iter().map(|(_, k)| k).collect()
     }
 
-    /// 当前实际上下文读数下新越线的里程碑（每级恰好一次；重复查询零返回）。
+    /// 当前模型面读数下新越线的档位。
     ///
-    /// `milestones` 升序（默认 `[500_000, 900_000]`，见
-    /// `ContextCompactConfig::context_scale_milestones`）：**最后一档**
-    /// 开压缩窗口（900K ＝ 必须压缩一次），之前的档位是**纯提醒**
-    /// （500K ＝ 可延后，不打断、不开窗）。
-    pub fn due(&mut self, actual_tokens: u64, milestones: &[u64]) -> Vec<ContextScaleFire> {
+    /// 软档：每会话一次（重复查询零返回）；硬档：按越线重新武装（落到线下后
+    /// 再越线即再发）。
+    pub fn due(&mut self, model_face_tokens: u64, ladder: &[LadderStep]) -> Vec<LadderFire> {
         let mut out = Vec::new();
-        let forced_window_from = milestones.last().copied();
-        for &milestone in milestones {
-            if actual_tokens < milestone || !self.fired.insert(milestone) {
+        for step in ladder {
+            if model_face_tokens < step.tokens {
+                // 落到线下 ⇒ 硬档重新武装（软档水位不受影响）。
+                self.latched.remove(&step.tokens);
                 continue;
             }
-            let opens_window = forced_window_from == Some(milestone);
-            out.push(ContextScaleFire {
-                milestone_tokens: milestone,
-                key: format!("{}k", milestone / 1000),
-                opens_window,
-                block: if opens_window {
-                    reminder_with_window_block(milestone, actual_tokens)
-                } else {
-                    reminder_block(milestone, actual_tokens)
-                },
+            let fresh = match step.tier {
+                LadderTier::Soft => self.fired.insert(step.tokens),
+                LadderTier::HardReminder | LadderTier::HardTruncate => {
+                    self.latched.insert(step.tokens)
+                }
+            };
+            if !fresh {
+                continue;
+            }
+            self.fired.insert(step.tokens);
+            out.push(LadderFire {
+                milestone_tokens: step.tokens,
+                key: format!("{}k", step.tokens / 1000),
+                tier: step.tier,
             });
         }
         out
@@ -173,9 +240,26 @@ impl ContextScaleState {
     pub fn has_fired(&self, milestone_tokens: u64) -> bool {
         self.fired.contains(&milestone_tokens)
     }
+
+    /// 字面水位是否已置（`first_block` 等）。
+    pub fn has_flag(&self, flag: &str) -> bool {
+        self.flags.contains(flag)
+    }
+
+    /// 置字面水位（幂等）。
+    pub fn mark_flag(&mut self, flag: &str) {
+        self.flags.insert(flag.to_string());
+    }
+
+    /// **复位硬档闩位**（2026-09-16 实现批）：越线判定为真、但本轮**没有可执行
+    /// 的动作**（无已闭合分块／无回放块／无超大结果 ⇒ `Ok(None)`）时调用——
+    /// 不消费闩位，下一轮继续试，内容一旦可动就立刻压回线上。
+    pub fn rearm(&mut self, milestone_tokens: u64) {
+        self.latched.remove(&milestone_tokens);
+    }
 }
 
-/// 水位键（`"500k"`）→ 刻度（`500_000`）；非法键忽略（向后兼容/防脏数据）。
+/// 水位键（`"320k"`）→ 刻度（`320_000`）；非法键忽略（向后兼容/防脏数据）。
 fn parse_key(key: &str) -> Option<u64> {
     key.trim()
         .strip_suffix('k')
@@ -184,7 +268,7 @@ fn parse_key(key: &str) -> Option<u64> {
         .map(|k| k * 1000)
 }
 
-/// 机械读数渲染（文案必含实际读数，且同时给 M 记法与原始 token 数）。
+/// 机械读数渲染（文案必含当前读数，且同时给 M 记法与原始 token 数）。
 fn reading(tokens: u64) -> String {
     format!(
         "≈{:.2}M token（{tokens} token）",
@@ -192,188 +276,145 @@ fn reading(tokens: u64) -> String {
     )
 }
 
-/// 语义摘要块的输出说明（500K 纯提醒与 900K 窗口块共用——单一来源，
-/// 避免两处文案漂移）。
+/// 语义摘要块的输出说明（软提醒／硬提醒／窗口块共用——单一来源，避免漂移）。
 fn summary_block_guide() -> String {
     format!(
-        "在回复中输出一个语义摘要块（机械层据此把**当前上下文窗口之外**的旧内容替换成该摘要，\
-         原文仍留在本地档案、可按定位指针回读；窗口内的工作现场不动）：\n\
+        "在回复中输出一个语义摘要块，机械层据此把**工作现场之外**的旧分块替换成该摘要\
+         （逐字原文仍全量留档、可按块回放）：\n\
          {MODEL_SUMMARY_PREFIX}]\n\
+         {label} 1-4（可选：不给则由机械层按最旧闭合块优先）\n\
          目标: …\n已完成: …\n关键决策: …\n未决问题: …\n下一步: …\n关键文件: …\n\
-         {MODEL_SUMMARY_END}"
+         {MODEL_SUMMARY_END}",
+        label = MODEL_SUMMARY_BLOCK_LABEL,
     )
 }
 
-/// **500K ＝ 纯提醒**（v7：不打断、不开窗、不强制，模型可延后）。
-pub fn reminder_block(milestone_tokens: u64, actual_tokens: u64) -> String {
+/// **R1–R4 软提醒**（不打断、不开窗、不强制；压缩交还模型自选、可延后）。
+pub fn soft_reminder_block(milestone_tokens: u64, model_face_tokens: u64) -> String {
     let k = milestone_tokens / 1000;
-    let reading = reading(actual_tokens);
+    let reading = reading(model_face_tokens);
     format!(
-        "{REMINDER_INJECTED_PREFIX} {k}K] 当前实际上下文 {reading}。\
-         发送给你的内容仍被**当前上下文窗口**限制在上限内（更早轮次的逐字本体只在本地档案与 journal），\
-         但**压缩交给你自选、可延后**：若判断早期内容已可清理，{}\
-         \n延后不会打断你（窗口随新内容继续推进）；到最高刻度会强制要求一次。",
+        "{REMINDER_INJECTED_PREFIX} {k}K] 当前上下文窗口 {reading}。除你**最近工作的\
+         连续轮次**（工作现场）以外，更早的内容按**分块**累积在你的窗口里\
+         （分块表在窗口**尾部**、逐轮刷新），机械层不会替你删除它们。\
+         压缩交给你自选、可延后：{}",
         summary_block_guide()
     )
 }
 
-/// **最高刻度 ＝ 必须压缩一次**（v7：提醒 ＋ 开压缩窗口）。
-pub fn escalated_reminder_block(milestone_tokens: u64, actual_tokens: u64) -> String {
-    let k = milestone_tokens / 1000;
-    let reading = reading(actual_tokens);
-    format!(
-        "{REMINDER_INJECTED_PREFIX} {k}K · 必须压缩] 当前实际上下文 {reading}，已到强制线。\
-         本轮起开压缩窗口（≤{COMPRESSION_WINDOW_ROUNDS} 轮）：窗口内已把**当前上下文窗口之外的携带内容**\
-         连同窗口内内容一并上传给你，{}\
-         \n窗口内未完成 ⇒ 机械层按既定兜底收口并如实落账（`model_participated=false`）。",
-        summary_block_guide()
-    )
-}
-
-/// 首次真实驱逐的一次性固化提醒（A4，0ae D2 128K 梯文案语义复用）。
-pub fn first_fold_reminder_block() -> String {
-    format!(
-        "{REMINDER_INJECTED_PREFIX} 首次驱逐] 上传视图已按常驻滑窗移出最旧若干**完整轮**\
-         （视图＝前置＋固定指针＋当前上下文窗口；被移出轮次的逐字本体仍在本地档案与 journal，\
-         模型面只剩台账摘要行）。请把接线结论/关键读数固化到黑板\
-         （blackboard_write section=plan|notes）——黑板不属于上下文窗口，跨驱逐不失效。"
-    )
-}
-
-/// 最高刻度 ＋ 压缩窗口任务块的合并注入（一个越线事件＝一次提醒 ＋ 一次
-/// 开窗，避免同一刻度在视图里留下两块重复文本）。
-pub fn reminder_with_window_block(milestone_tokens: u64, actual_tokens: u64) -> String {
-    format!(
-        "{}\n{}",
-        escalated_reminder_block(milestone_tokens, actual_tokens),
-        compression_window_block(milestone_tokens)
-    )
-}
-
-/// 审查修正批（2026-09-15，审查 P2⑤「900K 窗口无上限守卫」）：**窗口上传
-/// 越上限 ⇒ 降级块**——最高刻度必须压缩一次，但窗口轮要上传 `messages`
-/// 全量，若该上传估算越过 [`crate::compact::ContextCompactConfig::window_upload_cap_tokens`]
-/// （默认 1.10M，对应 provider 1M 窗口 ÷ 实测换算 0.77 ＋ 余量），开窗只会
-/// 让该轮请求硬失败。故**不开窗**：如实告知读数与降级事实、给出语义摘要块
-/// 方法（自选压缩通路仍在），机械层同步走一次强制压缩兜底；事实另经
-/// 同一条 fire 的 `mechanical_audit_update` 落账（`key=context_scale:<档位>`，
-/// `summary` 带 `window_skipped_over_cap=true`，`anomaly=window_upload_over_cap`）。
-/// 前缀同 [`REMINDER_INJECTED_PREFIX`] ⇒ 绝不写回持久化会话。
-pub fn window_skipped_over_cap_block(
+/// **H1 硬提醒（打断式，320K 估算 ≈246K 真实）**——宣告 T1 时将硬性截断
+/// 主滑块以外的全部分块，给出当前分块表与压缩方法，并明确「不压缩也可以，
+/// 但到时这些块只能靠回查」（设计 §5）。
+pub fn hard_reminder_block(
     milestone_tokens: u64,
-    actual_tokens: u64,
-    cap_tokens: u64,
+    truncate_tokens: u64,
+    model_face_tokens: u64,
+    block_table: &str,
 ) -> String {
     let k = milestone_tokens / 1000;
-    let reading = reading(actual_tokens);
+    let t1 = truncate_tokens / 1000;
+    let reading = reading(model_face_tokens);
     format!(
-        "{REMINDER_INJECTED_PREFIX} {k}K · 窗口降级] 当前实际上下文 {reading}，已超过压缩窗口的\
-         上传上限 ≈{} token——窗口轮要把「当前上下文窗口之外的携带内容」连同窗口内内容一并上传，\
-         越线即超出单请求上限（硬失败），故**本轮不开压缩窗口**（设计「过大时分段」为备选、尚未实现）。\
-         发送给你的视图照旧被上下文窗口压在上限内，请求安全；机械层本轮就地强制压一次可指针化的\
-         结构化内容（无可压内容则如实落账）。语义层（任务线／决策／未决项）仍只能由你压缩：{}",
-        reading_only(cap_tokens),
-        summary_block_guide()
+        "{REMINDER_INJECTED_PREFIX} {k}K · 硬提醒] 当前上下文窗口 {reading}，已越过模型间开始分化的位置\
+         （≈246K 真实 token）。到 **{t1}K 估算（≈385K 真实 token）** 时，机械层将\
+         **硬性截断工作现场以外的全部已闭合分块**：此后这些内容只能按块回放（read_file 分页）。\
+         此后**每再越线一次都会再截断一次**（该线按越线重新武装）——每次截断前都会先收到\
+         这条硬提醒。不足一块的**残段**不参与截断，留在窗口内。\n\
+         不压缩也可以——但到时这些块只能靠回查。现在就压：{}\n\
+         {block_table}\n\
+         {declaration}",
+        summary_block_guide(),
+        declaration = crate::model_face::MODEL_FACE_DECLARATION,
     )
 }
 
-/// 上限读数的轻量渲染（只给 M 记法，避免与**实际读数**混淆——实际读数由
-/// [`reading`] 给全）。
+/// **T1 硬截断告知块**（设计 §5）：① 已截断 N 块／约 M token；② 可按块回放
+/// （给块表与回放口径）；③ 任务无需中止。
+///
+/// 2026-09-16 审查 R-12③ 处置补录：一轮内只注入最高档 ⇒ T1 那轮的软／硬提醒
+/// 被压掉，告知块必须自己带上**截断后的当前读数**（否则该轮模型看不到任何读数）。
+pub fn truncation_notice_block(
+    truncated_blocks: usize,
+    freed_tokens: u64,
+    model_face_tokens: u64,
+    replay: &str,
+    block_table: &str,
+    archive_write_failed: bool,
+) -> String {
+    let failure = if archive_write_failed {
+        "\n4. **回放档案写入失败**（`.gsa/compaction/blocks/` 落盘未成功）——\
+         被截断分块的逐字原文仍在本会话档案（sidecar）与 run journal 中；\
+         请按下方指针或检索 journal `call_id` 回读。\n"
+    } else {
+        ""
+    };
+    format!(
+        "{REMINDER_INJECTED_PREFIX} 硬截断] 已把**工作现场以外**的 {truncated_blocks} 个**已闭合分块**\
+         （≈{freed_tokens}tk token）移出当前上下文窗口（截断后当前读数 {}）：\n\
+         1. 已截断 {truncated_blocks} 块／≈{freed_tokens}tk token；\n\
+         2. **可按块回放**——逐字原文全量留档（会话档案 ＋ 按块档案 ＋ journal），\
+         用 read_file offset/limit 分页读回：\n{replay}\n\
+         3. **任务无需中止**：工作现场（最近若干完整轮）与残段逐字未动，继续即可。{failure}\n\
+         {block_table}\n\
+         {declaration}",
+        reading(model_face_tokens),
+        declaration = crate::model_face::MODEL_FACE_DECLARATION,
+    )
+}
+
+/// **700K 估算守卫**（异常保险：单轮暴涨／换算漂移）：越线即**强制截断到
+/// 线上**（v7 的「不开窗」行为随勘误作废）。文案如实报三条事实。
+pub fn guard_truncation_notice_block(
+    truncated_blocks: usize,
+    freed_tokens: u64,
+    model_face_tokens: u64,
+    guard_tokens: u64,
+    replay: &str,
+    archive_write_failed: bool,
+) -> String {
+    let failure = if archive_write_failed {
+        "\n（提示：回放档案写入失败，逐字原文仍在会话档案与 run journal 中。）"
+    } else {
+        ""
+    };
+    format!(
+        "{REMINDER_INJECTED_PREFIX} 上限守卫] 当前上下文窗口已越过单请求上限 ≈{} token\
+         （异常保险线：单轮暴涨或换算漂移才会触及）。机械层已强制截断工作现场以外的\
+         {truncated_blocks} 个**已闭合分块**（≈{freed_tokens}tk token）以把请求压回线上\
+         （截断后当前读数 {}）：\n\
+         {replay}\n\
+         任务无需中止（工作现场与残段逐字未动）；需要更早内容时按上表回放。{failure}",
+        reading_only(guard_tokens),
+        reading(model_face_tokens),
+    )
+}
+
+/// 上限读数的轻量渲染（只给 M 记法，避免与**当前读数**混淆）。
 fn reading_only(tokens: u64) -> String {
     format!("{:.2}M", tokens as f64 / 1_000_000.0)
 }
 
-/// **压缩失败 ⇒ 硬截留**（用户 2026-09-15 裁定，取代 v7「压不动 ⇒ anomaly
-/// 停手／只开窗」）：950K 最后防线压不动时**不进 NoOp、不永久停手**——机械层
-/// 强硬把「**滑块（驻留带）之外**」的内容全部移出模型上下文（视图只留
-/// 前置＋固定指针＋当前滑块；被移出的轮次行入台账、逐字原文留 run journal 与
-/// 本地档案），并把该事实**明确告知模型**，由模型自行决定下一步。
-pub const TRUNCATION_FAILURE_HEADLINE: &str = "上一轮上下文压缩失败，已机械截留";
-
-/// 压缩失败告知块（注入文本；headline ＝ [`TRUNCATION_FAILURE_HEADLINE`]）。
-///
-/// 事实三项（按实况任意组合，全部如实）：
-/// - `dropped_rounds > 0`：**窗口之外**确有轮次被截留（行入台账、原文留 journal）；
-/// - `pointerized_results > 0`：**窗口之内**的超大工具结果**正文已换成指针**
-///   （用户 2026-09-15 裁定第二条；先例＝OUTPUT-DEGENERATION-GUARD）；
-/// - 两项皆 0：窗口外已无可截留、窗口内也无可指针化的超大结果 ⇒ 机械层到此
-///   为止（溢出体量位于前置/窗口框架内）。
-///
-/// **不再报实际上下文读数**（用户 2026-09-15 裁定：本地存量没有上限，读数对
-/// 该动作无指导意义，只留「已截留」的事实与回读指针）。
-/// 语义＝「让模型自己决定下一步、任务还能继续」：给出可执行的低成本选项
-/// （按指针回读／避免重复整读超大文件／把必须长期保留的结论固化到黑板），
-/// 并显式声明**任务无需中止**。
-pub fn compaction_failed_truncation_block(
-    dropped_rounds: u32,
-    pointerized_results: u32,
-    ledger_hint: Option<&str>,
-) -> String {
-    let mut facts: Vec<String> = Vec::new();
-    if dropped_rounds > 0 {
-        let ledger = ledger_hint
-            .map(|p| format!("台账摘要行见 {p}（按 `轮次`/工具名 grep）"))
-            .unwrap_or_else(|| "台账摘要行见会话外挂台账文件".to_string());
-        facts.push(format!(
-            "**当前上下文窗口之外**的 {dropped_rounds} 轮已移出模型上下文（{ledger}；\
-             逐字原文在 run journal 与本地档案，可按定位指针回读）"
-        ));
-    }
-    if pointerized_results > 0 {
-        facts.push(format!(
-            "**窗口之内**的 {pointerized_results} 个超大工具结果**正文已换成指针**\
-             （原文仍在本地档案、逐字可回读：按结果里的 `call_id=` 检索 run journal，\
-             或用 read_file 分页读原文件）"
-        ));
-    }
-    let detail = if facts.is_empty() {
-        "窗口之外已无可截留内容、窗口之内也没有值得指针化的超大结果——溢出体量位于\
-         前置/窗口框架内，机械层到此为止"
-            .to_string()
-    } else {
-        facts.join("；")
-    };
+/// **首次出现主滑块之外的分块**时的一次性固化提醒（A4 文案语义保留，触发
+/// 从 v7 的「首次真实驱逐」改锚为「首个分块形成」——v8 没有驱逐）。
+pub fn first_block_reminder_block() -> String {
     format!(
-        "{REMINDER_INJECTED_PREFIX} 压缩失败已截留] {TRUNCATION_FAILURE_HEADLINE}：{detail}。\
-         当前发送给你的视图只保留「前置＋固定指针＋当前上下文窗口」。\
-         下一步由你决定：需要原文时按上面的指针回读（read_file 分页）、避免重复整读超大文件、\
-         把必须长期保留的结论固化到黑板（blackboard_write section=plan|notes）。**任务无需中止**。"
+        "{REMINDER_INJECTED_PREFIX} 首个分块] 你的当前上下文窗口里首次出现了**工作现场之外**的分块\
+         （分块表见下）。这只是一个索引事实：内容仍在你的窗口里，机械层不会替你删除。\
+         请把接线结论/关键读数固化到黑板（blackboard_write section=plan|notes）\
+         ——黑板不属于上下文窗口，跨压缩与截断都不失效。"
     )
 }
 
-/// D3：压缩窗口任务块（打断全部动作后的无工具轮注入）——产出语义摘要块
-/// （可选：另把必须留存的结论固化到黑板）。量尺＝实际上下文里程碑。
-///
-/// v7 更正：不再要求模型「标注可弃范围」——标注在 S1 实现里从未被消费
-/// （审查发现 P1⑤），语义侧改由**摘要块**承载（机械层识别后替换被压区）。
+/// H1 的压缩窗口任务块（打断全部动作后注入；量尺＝模型面阶梯）。
 pub fn compression_window_block(milestone_tokens: u64) -> String {
     let k = milestone_tokens / 1000;
     format!(
-        "{WINDOW_NOTICE_PREFIX} · 窗口 · 实际上下文 {k}K] 已打断全部动作。请在窗口内完成：\n\
-         1. 产出语义摘要块（见上）——机械层用它替换当前上下文窗口之外的旧内容；\n\
+        "{WINDOW_NOTICE_PREFIX} · 窗口 · 模型面 {k}K] 已打断全部动作。请在窗口内完成：\n\
+         1. 产出语义摘要块（见上）——机械层用它替换**工作现场之外**的分块（可按块区间指定）；\n\
          2. 若有关键结论需要跨压缩长期留存，一并固化到黑板\
          （blackboard_write section=plan|notes；黑板不受上下文窗口影响）。\n\
-         窗口结束仍未产出摘要块 ⇒ 机械层按既定兜底收口（结构化轨照常压，\
-         语义层未压如实落账 `model_participated=false`）。"
-    )
-}
-
-/// **950K 最后防线**注入块（v7 的原「强制开窗要求模型压缩」文案）。
-///
-/// **已退役（用户 2026-09-15 裁定）**：最后防线的失败处置改为**硬截留 ＋
-/// 明确告知**（[`compaction_failed_truncation_block`]），不再从该档强制开窗，
-/// 故本函数**生产零调用**；保留只为文案留档与将来可能的复用（同
-/// `mechanical_audit::KIND_ATTENTION_LADDER` 的退役留值纪律）。
-#[allow(dead_code)]
-pub fn last_resort_block(actual_tokens: u64) -> String {
-    let reading = reading(actual_tokens);
-    format!(
-        "{REMINDER_INJECTED_PREFIX} 最后防线] 当前实际上下文 {reading}，已越过硬兜底线。\
-         机械层已压掉可指针化的结构化内容（工具／命令／结果）；**语义层（任务线／决策／\
-         未决项）只能由你压缩**——请立即{}\
-         \n语义层始终不压时，实际上下文不再下降（v7 显式接受的责任划分；最终防线＝\
-         本地资源门）。",
-        summary_block_guide()
+         窗口结束仍未产出摘要块 ⇒ 机械层**不做压缩兜底**（模型面总量只由模型自压与\
+         H1/T1 管），如实落账 `model_participated=false`。"
     )
 }
 
@@ -381,8 +422,7 @@ pub fn last_resort_block(actual_tokens: u64) -> String {
 pub fn window_remaining_notice(rounds_left: u32) -> String {
     format!(
         "{WINDOW_NOTICE_PREFIX}] 窗口剩余 {rounds_left} 轮：尚未检测到语义摘要块。\
-         请输出 `{MODEL_SUMMARY_PREFIX}] … {MODEL_SUMMARY_END}`（或把必要结论写入黑板）；\
-         窗口结束即执行机械兜底收口。"
+         请输出 `{MODEL_SUMMARY_PREFIX}] … {MODEL_SUMMARY_END}`（或把必要结论写入黑板）。"
     )
 }
 
@@ -414,205 +454,166 @@ pub fn extract_model_summary(text: &str) -> Option<String> {
     Some(body.trim().to_string())
 }
 
+/// 摘要块内的**块区间指令**（可选）：`压缩块: 1-4, 6` → `[1,2,3,4,6]`。
+/// 缺省／非法 ⇒ `None`（机械层按「最旧闭合块优先」）。
+pub fn extract_block_selection(summary: &str) -> Option<Vec<u32>> {
+    let line = summary
+        .lines()
+        .map(str::trim_start)
+        .find(|l| l.starts_with(MODEL_SUMMARY_BLOCK_LABEL))?;
+    let spec = line.trim_start_matches(MODEL_SUMMARY_BLOCK_LABEL);
+    let mut out: Vec<u32> = Vec::new();
+    for part in spec.split([',', '，']).map(str::trim) {
+        if part.is_empty() {
+            continue;
+        }
+        let (a, b) = match part.split_once('-') {
+            Some((a, b)) => (a.trim(), b.trim()),
+            None => (part, part),
+        };
+        let (Ok(a), Ok(b)) = (a.parse::<u32>(), b.parse::<u32>()) else {
+            return None;
+        };
+        if a == 0 || b < a || b > 100_000 {
+            return None;
+        }
+        for n in a..=b {
+            if out.len() >= 512 {
+                return Some(out);
+            }
+            out.push(n);
+        }
+    }
+    (!out.is_empty()).then_some(out)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    const DEFAULT_MILESTONES: [u64; 2] = [500_000, 900_000];
-
     #[test]
-    fn milestones_fire_exactly_once_each() {
+    fn ladder_fires_each_tier_exactly_once_and_in_policy_order() {
         let mut state = ContextScaleState::new();
-        assert!(
-            state.due(499_999, &DEFAULT_MILESTONES).is_empty(),
-            "未越线零返回"
+        assert!(state.due(100_000, &DEFAULT_LADDER).is_empty());
+        let fires = state.due(330_000, &DEFAULT_LADDER);
+        assert_eq!(
+            fires.iter().map(|f| f.milestone_tokens).collect::<Vec<_>>(),
+            vec![192_000, 224_000, 256_000, 288_000, 320_000]
         );
-        let fires = state.due(500_001, &DEFAULT_MILESTONES);
+        assert_eq!(fires[0].tier, LadderTier::Soft);
+        assert_eq!(fires[4].tier, LadderTier::HardReminder);
+        // 每档一次：重复查询零返回；T1 单独一次。
+        assert!(state.due(330_000, &DEFAULT_LADDER).is_empty());
+        let fires = state.due(501_000, &DEFAULT_LADDER);
         assert_eq!(fires.len(), 1);
-        assert_eq!(fires[0].milestone_tokens, 500_000);
+        assert_eq!(fires[0].tier, LadderTier::HardTruncate);
         assert_eq!(fires[0].key, "500k");
-        assert!(!fires[0].opens_window, "500K ＝ 纯提醒（v7 V2）");
-        assert!(
-            state.due(500_001, &DEFAULT_MILESTONES).is_empty(),
-            "同位重查不重复"
-        );
-        assert!(
-            state.due(899_999, &DEFAULT_MILESTONES).is_empty(),
-            "900K 未到"
-        );
-        let fires = state.due(950_000, &DEFAULT_MILESTONES);
-        assert_eq!(fires.len(), 1, "900K 单级触发");
-        assert_eq!(fires[0].key, "900k");
-        assert!(fires[0].opens_window, "900K ＝ 必须压缩一次（v7 V3）");
-        assert!(state.has_fired(500_000) && state.has_fired(900_000));
-        assert_eq!(state.notified_keys(), vec!["500k", "900k"]);
+        assert!(state.due(900_000, &DEFAULT_LADDER).is_empty());
     }
 
     #[test]
-    fn both_milestones_fire_together_on_a_big_jump() {
-        let mut state = ContextScaleState::new();
-        let fires = state.due(1_200_000, &DEFAULT_MILESTONES);
-        let keys: Vec<&str> = fires.iter().map(|f| f.key.as_str()).collect();
-        assert_eq!(keys, vec!["500k", "900k"], "一次性越两级须两级都提醒");
-        assert!(fires[1].opens_window, "最高档开窗");
-    }
-
-    /// DP-16：会话级水位——已提醒键随侧车恢复，跨 prompt 不重发。
-    #[test]
-    fn session_level_watermark_suppresses_already_notified_milestones() {
-        let mut state =
-            ContextScaleState::from_notified_keys(&["500k".to_string(), "900k".to_string()]);
-        assert!(
-            state.due(1_500_000, &DEFAULT_MILESTONES).is_empty(),
-            "会话级不重发"
+    fn session_watermark_round_trips_and_suppresses_already_notified_tiers() {
+        let mut state = ContextScaleState::from_notified_keys(&[
+            "192k".to_string(),
+            "320k".to_string(),
+            FLAG_FIRST_BLOCK.to_string(),
+            "垃圾".to_string(),
+        ]);
+        // 软档＝水位压住；**硬档＝按越线重新武装**（恢复会话仍在线上 ⇒ H1 再提醒
+        // 一次，这是设计意图：先警告再发请求）。
+        let fires = state.due(330_000, &DEFAULT_LADDER);
+        assert_eq!(
+            fires.iter().map(|f| f.milestone_tokens).collect::<Vec<_>>(),
+            vec![224_000, 256_000, 288_000, 320_000]
         );
-        let mut partial = ContextScaleState::from_notified_keys(&["500k".to_string()]);
-        let fires = partial.due(1_500_000, &DEFAULT_MILESTONES);
-        assert_eq!(fires.len(), 1);
-        assert_eq!(fires[0].key, "900k", "只补未提醒的档");
-        // 脏键忽略（不 panic、不虚构刻度）。
+        // 字面水位随侧车往返（first_block），不参与数值刻度。
+        assert!(state.has_flag(FLAG_FIRST_BLOCK));
         assert!(
-            ContextScaleState::from_notified_keys(&["bogus".to_string()])
+            state
                 .notified_keys()
-                .is_empty()
+                .contains(&FLAG_FIRST_BLOCK.to_string())
+        );
+        // 落到线下 ⇒ 硬档复位；再越线 ⇒ H1/T1 各自**再发一次**。
+        state.due(100_000, &DEFAULT_LADDER);
+        let again = state.due(501_000, &DEFAULT_LADDER);
+        assert_eq!(
+            again.iter().map(|f| f.milestone_tokens).collect::<Vec<_>>(),
+            vec![320_000, 500_000]
+        );
+        assert_eq!(
+            state.notified_keys(),
+            vec![
+                "192k",
+                "224k",
+                "256k",
+                "288k",
+                "320k",
+                "500k",
+                FLAG_FIRST_BLOCK
+            ]
         );
     }
 
     #[test]
-    fn reminder_blocks_carry_the_actual_reading() {
-        let block = reminder_block(500_000, 512_345);
-        assert!(block.starts_with(REMINDER_INJECTED_PREFIX));
-        assert!(block.contains("512345 token"), "实际读数入文案：{block}");
-        assert!(
-            block.contains(MODEL_SUMMARY_PREFIX),
-            "500K 给出自选压缩方法：{block}"
+    fn reminder_blocks_carry_the_model_face_reading_and_state_the_truncation_line() {
+        let soft = soft_reminder_block(192_000, 194_321);
+        assert!(soft.starts_with(REMINDER_INJECTED_PREFIX));
+        assert!(soft.contains("194321 token"));
+        assert!(soft.contains("工作现场"));
+        assert!(!soft.contains("已打断"));
+        let hard = hard_reminder_block(
+            320_000,
+            500_000,
+            322_000,
+            "[上下文分块表 v0.1]\n[/上下文分块表]",
         );
-        assert!(block.contains("可延后"), "500K 允许延后：{block}");
-        let escalated = escalated_reminder_block(900_000, 901_000);
-        assert!(escalated.contains("必须压缩"), "900K 升级语气：{escalated}");
-        let last = last_resort_block(951_000);
-        assert!(
-            last.contains("最后防线") && last.contains("951000 token"),
-            "{last}"
-        );
+        assert!(hard.contains("320K · 硬提醒"));
+        assert!(hard.contains("500K"));
+        assert!(hard.contains("硬性截断"));
+        assert!(hard.contains("不压缩也可以"));
+        assert!(hard.contains(crate::model_face::MODEL_FACE_DECLARATION));
+        let notice =
+            truncation_notice_block(3, 41_000, 460_000, "- 块#1 …", "[上下文分块表 v0.1]", false);
+        assert!(notice.contains("已截断 3 块"));
+        assert!(notice.contains("任务无需中止"));
+        // 2026-09-16（审查 R-12③ 处置）：一层内只注入最高档 ⇒ 告知块自带
+        // **截断后读数**，压掉同轮软／硬提醒才是无损的。
+        assert!(notice.contains("截断后当前读数"), "{notice}");
+        assert!(notice.contains("≈0.46M token"), "{notice}");
+        assert!(notice.contains(crate::model_face::MODEL_FACE_DECLARATION));
     }
 
     #[test]
-    fn first_fold_reminder_reuses_the_d2_wording_and_is_injected_text() {
-        let block = first_fold_reminder_block();
-        assert!(block.starts_with(REMINDER_INJECTED_PREFIX));
-        assert!(block.contains("blackboard_write section=plan|notes"));
-        assert!(crate::prompt::is_injected_block_text(&block));
-    }
-
-    #[test]
-    fn compression_window_block_carries_the_scale_and_the_summary_task() {
-        let block = compression_window_block(900_000);
-        assert!(block.contains("实际上下文 900K"));
-        assert!(block.contains("语义摘要块"));
-        assert!(block.contains("blackboard_write"));
-        assert!(block.contains("model_participated"));
-        assert_eq!(COMPRESSION_WINDOW_ROUNDS, 3);
-    }
-
-    #[test]
-    fn window_notices_are_registered_as_injected_text() {
+    fn reminder_blocks_are_registered_injected_text() {
         for block in [
-            window_remaining_notice(2),
-            window_dropped_calls_notice(1),
-            compression_window_block(900_000),
-            reminder_with_window_block(900_000, 900_500),
-            window_skipped_over_cap_block(900_000, 1_300_000, 1_100_000),
+            soft_reminder_block(192_000, 192_000),
+            hard_reminder_block(320_000, 500_000, 320_000, "表"),
+            truncation_notice_block(1, 1_000, 460_000, "- 块#1 …", "表", false),
+            guard_truncation_notice_block(1, 1_000, 460_000, 700_000, "- 块#1 …", false),
+            first_block_reminder_block(),
+            compression_window_block(320_000),
         ] {
             assert!(
                 crate::prompt::is_injected_block_text(&block),
-                "窗口/提醒文案必须注册为注入块: {block}"
+                "injected block not registered: {block}"
             );
         }
     }
 
-    /// 审查修正批（2026-09-15，审查 P2⑤）：窗口上传越上限的降级块——带实际
-    /// 读数与上限读数、明示「不开窗」与分段未实现、仍给出自选压缩方法。
     #[test]
-    fn over_cap_block_reports_the_degradation_and_keeps_the_self_selected_path() {
-        let block = window_skipped_over_cap_block(900_000, 1_312_400, 1_100_000);
-        assert!(block.starts_with(REMINDER_INJECTED_PREFIX));
-        assert!(block.contains("窗口降级"), "{block}");
-        assert!(block.contains("1312400 token"), "实际读数必给全: {block}");
-        assert!(block.contains("1.10M"), "上限读数: {block}");
-        assert!(block.contains("本轮不开压缩窗口"), "{block}");
-        assert!(block.contains("尚未实现"), "分段未实现须如实: {block}");
+    fn summary_block_is_extracted_with_optional_block_selection() {
+        let text =
+            "先说明。\n[SEMANTIC_SUMMARY]\n压缩块: 2-4\n目标: x\n已完成: y\n[/SEMANTIC_SUMMARY]\n";
+        let summary = extract_model_summary(text).expect("summary extracted");
+        assert!(summary.starts_with(MODEL_SUMMARY_PREFIX));
+        assert_eq!(extract_block_selection(&summary), Some(vec![2, 3, 4]));
         assert!(
-            block.contains(MODEL_SUMMARY_PREFIX),
-            "自选通路仍在: {block}"
+            extract_model_summary("[SEMANTIC_SUMMARY]\n目标: 只有一个段\n[/SEMANTIC_SUMMARY]")
+                .is_none()
         );
-        assert!(
-            !block.contains("窗口内已把"),
-            "降级块不得复用窗口轮的「已上传待压区」措辞: {block}"
+        assert_eq!(
+            extract_block_selection("[SEMANTIC_SUMMARY]\n目标: x\n"),
+            None
         );
-    }
-
-    /// 用户 2026-09-15 裁定：压缩失败 ⇒ 硬截留 ＋ 明确告知（不是 NoOp／停手）。
-    /// 事实三项按实况组合；**不再报实际上下文读数**（本地存量无上限）；
-    /// 模型面措辞用「当前上下文窗口」（不再说「滑块」）。
-    #[test]
-    fn truncation_failure_block_states_the_facts_without_a_capacity_reading() {
-        // ① 只有窗口外轮次被截留。
-        let rounds_only = compaction_failed_truncation_block(3, 0, Some(".gsa/ledger/current.md"));
-        assert!(rounds_only.starts_with(REMINDER_INJECTED_PREFIX));
-        assert!(rounds_only.contains(TRUNCATION_FAILURE_HEADLINE));
-        assert!(rounds_only.contains("当前上下文窗口之外"), "{rounds_only}");
-        assert!(rounds_only.contains("3 轮已移出"), "{rounds_only}");
-        assert!(rounds_only.contains(".gsa/ledger/current.md"));
-        assert!(rounds_only.contains("下一步由你决定"));
-        assert!(rounds_only.contains("任务无需中止"));
-        assert!(
-            !rounds_only.contains("token"),
-            "不得再报容量读数: {rounds_only}"
-        );
-        assert!(
-            !rounds_only.contains("滑块"),
-            "模型面不出现「滑块」: {rounds_only}"
-        );
-        assert!(crate::prompt::is_injected_block_text(&rounds_only));
-
-        // ② 只有窗口内超大结果被指针化（第二条裁定）。
-        let pointer_only = compaction_failed_truncation_block(0, 2, None);
-        assert!(pointer_only.contains(TRUNCATION_FAILURE_HEADLINE));
-        assert!(pointer_only.contains("2 个超大工具结果"), "{pointer_only}");
-        assert!(pointer_only.contains("正文已换成指针"), "{pointer_only}");
-        assert!(pointer_only.contains("call_id="), "{pointer_only}");
-        assert!(
-            !pointer_only.contains("轮已移出"),
-            "无轮次截留不得虚报: {pointer_only}"
-        );
-
-        // ③ 两者皆无 ⇒ 如实说明机械层到此为止。
-        let nothing = compaction_failed_truncation_block(0, 0, None);
-        assert!(nothing.contains("已无可截留内容"), "{nothing}");
-        assert!(nothing.contains("机械层到此为止"), "{nothing}");
-        assert!(!nothing.contains("轮已移出"), "{nothing}");
-        assert!(!nothing.contains("超大工具结果"), "{nothing}");
-        assert!(crate::prompt::is_injected_block_text(&nothing));
-    }
-
-    #[test]
-    fn model_summary_block_is_extracted_from_the_reply_text() {
-        let reply = "先说明一句。\n[SEMANTIC_SUMMARY]\n目标: 修 A\n已完成: B\n\
-                     关键决策: C\n未决问题: 无\n下一步: D\n关键文件: e.rs\n[/SEMANTIC_SUMMARY]\n收尾一句";
-        let block = extract_model_summary(reply).expect("摘要块应被识别");
-        assert!(block.starts_with(MODEL_SUMMARY_PREFIX));
-        assert!(block.ends_with(MODEL_SUMMARY_END));
-        assert!(!block.contains("收尾一句"), "块外文本不入摘要: {block}");
-        // 结束标记缺失 → 取到文本末尾（容错）。
-        let unterminated = "[SEMANTIC_SUMMARY]\n目标: x\n已完成: y\n";
-        assert!(extract_model_summary(unterminated).is_some());
-        // 段命中不足 / 无前缀 → 不识别（防误判）。
-        assert!(extract_model_summary("[SEMANTIC_SUMMARY]\n随便一句\n").is_none());
-        assert!(extract_model_summary("目标: x\n已完成: y\n").is_none());
-        // 多块取最后一块（窗口内可能先叙述后产出）。
-        let twice = format!("{unterminated}...{reply}");
-        let picked = extract_model_summary(&twice).unwrap();
-        assert!(picked.contains("关键决策"), "{picked}");
     }
 }

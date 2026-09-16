@@ -533,7 +533,6 @@ impl AgentLoopController {
                             journal_seq: Some((0, writer.seq())),
                             ..crate::summary::LocatorPointers::default()
                         },
-                        None,
                     )
                     .await?;
                 }

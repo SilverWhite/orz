@@ -38,7 +38,10 @@ pub const DEFAULT_RECENT_TAIL_ROUNDS: usize = 2;
 /// rounds within the 8K real-token budget (形态甲: 先定裁剪、再内容截断);
 /// the pointer text was updated once for the bridge wording (deployment
 /// fingerprint change accepted by §3.4).
-pub const LEDGER_FOLD_POINTER_PREFIX: &str = "【历史折叠】";
+/// 滑块上下文 v8（2026-09-16 勘误批）：模型面文案纪律——不用「折叠／折叠桥」
+/// 等内部沿革词，改为「上下文分块」（模型可见的正名是「当前上下文窗口」＋
+/// 「主滑块」＋「分块」）。常量名保留（大量调用面沿用），仅前缀文案更名。
+pub const LEDGER_FOLD_POINTER_PREFIX: &str = "【上下文分块】";
 
 /// The append-only model-readable ledger projection file (per session;
 /// run dirs are naturally isolated). Design: 追加式写入、只增不轮转（压缩
@@ -47,20 +50,21 @@ pub fn ledger_file_path(session_cwd: &std::path::Path) -> std::path::PathBuf {
     session_cwd.join(".gsa").join("ledger").join("current.md")
 }
 
-/// The byte-fixed pointer message for the folded request view. 路径/文本
-/// 均固定（本会话内不变），不含任何变化 ID/序号——推进不重渲染，前缀稳定。
-/// 2026-08-18 审查修复：措辞避免绝对化——压缩会另存「未折叠即被 drain」的
-/// 轮次（压缩存档 + marker），外挂文件是折叠轮次的归档投影。
-/// 动态上下文滑块 S1（2026-09-15，设计 §3.1 纪律）：**参数不得进文案**——
-/// 驻留带 L 由「固定 8K 桥」改为可配档位（64K/80K/96K…），故文案不再报
-/// 数值（改 env 即一次性前缀失效；配置固定性优先于精确表述），改述「最近
-/// 若干完整轮」（＝驻留带）。
+/// The byte-fixed pointer message of the model face. 路径/文本均固定（本会话内
+/// 不变），不含任何变化 ID/序号 ⇒ 两次压缩之间前缀字节稳定（不变量 I6）。
+///
+/// **v8 勘误（2026-09-16）**：v7 文案称「当前上下文窗口只保留最近若干完整轮」
+/// ——那是**机械驱逐**语义（随勘误退役）。v8 模型面**累积**全部内容：更早轮次
+/// 按**分块**留在窗口内（分块表为索引），机械摘要行只是外挂台账里的结构化
+/// 投影；被压缩／被截断的分块可按块回放。文案不含任何参数值（改 env 即一次性
+/// 前缀失效；配置固定性优先于精确表述，同 v7 §3.1 纪律）。
 pub fn build_pointer_message(ledger_path: &std::path::Path) -> String {
     format!(
-        "{LEDGER_FOLD_POINTER_PREFIX}更早轮次的机械摘要已外挂存档：{}（本会话内固定）。\n\
-         需要回顾历史时按行检索该文件，例如 grep \"轮次\" {}、\n\
-         grep <工具名> {}。当前**上下文窗口**只保留最近若干完整轮，更早轮次已按行归档于 {}。",
-        ledger_path.display(),
+        "{LEDGER_FOLD_POINTER_PREFIX}更早轮次的**机械摘要行**（工具／命令／结果类的结构化投影）\
+         外挂存档于 {}（本会话内固定）。\n\
+         需要回顾时按行检索该文件，例如 grep \"轮次\" {}、grep <工具名> {}。\n\
+         你当前**上下文窗口**里的旧内容按**分块**累积（分块表是索引，见其后）；\
+         被压缩或被截断的分块仍**全量留档**、可按块回放（回放路径见分块表与压缩告知块）。",
         ledger_path.display(),
         ledger_path.display(),
         ledger_path.display(),
@@ -174,6 +178,14 @@ pub const TOOL_RESULT_POINTERIZED_PREFIX: &str = "[工具结果已机械指针�
 /// 指针化时保留的原文头部字符数（让模型仍认得这个结果是什么）。
 const TOOL_RESULT_POINTER_HEAD_CHARS: usize = 400;
 
+/// **回放块（可再生）**指针前缀（2026-09-16 实现批，设计 §6/§12「先裁回放块」）：
+/// 模型读按块档案产生的结果，其原文**仍在按块档案里**，重读即恢复 ⇒ 线上溢出时
+/// 它优先于原始内容被移出模型上下文。
+pub const REPLAY_TOOL_RESULT_PREFIX: &str = "[回放块（可再生）]";
+
+/// 按块回放档案的路径特征（判定一次工具调用是否为「回放读」）。
+const BLOCK_ARCHIVE_PATH_MARKERS: [&str; 2] = ["compaction/blocks", "compaction\\blocks"];
+
 /// 「超大结果」门槛（估计口径 chars/2）：**超过**此值才是指针化候选。
 /// 依据：实测多数读/计划轮 1–3K、终端执行轮 5–7K（08-19 桥预算同源读数）
 /// ⇒ 8K 以下不指针化，避免把正常工作现场磨成指针。
@@ -204,6 +216,8 @@ pub fn pointerize_oversized_tool_results(
     messages: &mut [Message],
     target_estimate: u64,
     per_result_cap: u64,
+    archive_dir: &std::path::Path,
+    archive_tag: &str,
     journal_path: Option<&std::path::Path>,
     run_id: &str,
 ) -> PointerizeStats {
@@ -211,11 +225,16 @@ pub fn pointerize_oversized_tool_results(
     if per_result_cap == 0 {
         return stats;
     }
+    // 落盘失败而被跳过的候选（保留正文，不指针化）。
+    let mut blocked: std::collections::BTreeSet<usize> = std::collections::BTreeSet::new();
     let mut estimate = crate::controller::estimate_messages_tokens(messages);
     while estimate > target_estimate {
         // 大者优先：选当前最大的合格候选（已指针化/未超门槛者不入围）。
         let mut best: Option<(usize, u64)> = None;
         for (idx, m) in messages.iter().enumerate() {
+            if blocked.contains(&idx) {
+                continue;
+            }
             if m.role != Role::Tool || m.content.starts_with(TOOL_RESULT_POINTERIZED_PREFIX) {
                 continue;
             }
@@ -229,8 +248,36 @@ pub fn pointerize_oversized_tool_results(
         }
         let Some((idx, before)) = best else { break };
         let original = messages[idx].content.clone();
+        let call_id = messages[idx].tool_call_id.clone().unwrap_or_default();
+        // 审查 R-7 修复（2026-09-16）：**改前先落逐字原文**——journal 的
+        // `tool_completed` 不带工具结果正文（只有工具/调用 id/退出码），旧文案
+        // 「原文仍在本地档案、按 call_id 从 journal 回读」对读类结果不成立。
+        // 落盘失败 ⇒ **不指针化**（不能让唯一副本消失）。
+        let archive_path = oversized_archive_path(archive_dir, archive_tag, &call_id);
+        let Some(parent) = archive_path.parent().map(|p| p.to_path_buf()) else {
+            break;
+        };
+        let body = format!(
+            "# ORZ 窗口内超大工具结果原文（指针化前落盘）\n\n\
+             - run: {run_id}\n- call_id: {}\n- 估算: ≈{before}tk token（chars/2）\n\
+             - 生成时间: {}\n\n\
+             > 该结果正文已从模型上下文移出（换成「头部 ＋ 回读指针」）；本文件是\n\
+             > **移出当时的逐字原文**，按 read_file offset/limit 分页回读。\n\n{original}\n",
+            if call_id.is_empty() {
+                "（无）"
+            } else {
+                call_id.as_str()
+            },
+            crate::controller::chrono_utc_now(),
+        );
+        if !crate::summary::write_archive_retry(parent.as_path(), &archive_path, &body) {
+            // 落盘失败：跳过本条（保留正文），尝试下一条候选；全失败即收手。
+            blocked.insert(idx);
+            continue;
+        }
         let replacement = tool_result_pointer_line(
             &original,
+            &archive_path,
             journal_path,
             run_id,
             messages[idx].tool_call_id.as_deref(),
@@ -245,10 +292,34 @@ pub fn pointerize_oversized_tool_results(
     stats
 }
 
-/// 指针行文本（头部 ＋ 回读指针；位置＝run journal 的 `events.jsonl`，
-/// 按 `call_id` 检索该次工具结果事件）。
+/// 指针化原文的落盘路径（`.gsa/compaction/pointerized/<tag>-<call_id>.md`）。
+fn oversized_archive_path(
+    archive_dir: &std::path::Path,
+    archive_tag: &str,
+    call_id: &str,
+) -> std::path::PathBuf {
+    let safe: String = call_id
+        .chars()
+        .filter(|c| c.is_ascii_alphanumeric() || *c == '-' || *c == '_')
+        .collect();
+    let safe = if safe.is_empty() {
+        "call".to_string()
+    } else {
+        safe
+    };
+    archive_dir.join(format!("{archive_tag}-{safe}.md"))
+}
+
+/// 指针行文本（头部 ＋ **逐字原文落盘指针**）。
+///
+/// 2026-09-16 实现批（审查 R-7）：v7/v8 早期文案称「原文仍在本地档案、按
+/// `call_id` 从 run journal 回读」——但 journal 的 `tool_completed` 只带
+/// 工具名/调用 id/退出码，**不带结果正文**（只有终端等截断输出族才有
+/// `output_object_id`）⇒ 对读类结果该承诺不成立。现在正文改前先落盘，指针
+/// 指向真实载体；journal 仍作为关联索引（`call_id`）如实并列。
 fn tool_result_pointer_line(
     original: &str,
+    archive_path: &std::path::Path,
     journal_path: Option<&std::path::Path>,
     run_id: &str,
     call_id: Option<&str>,
@@ -259,22 +330,136 @@ fn tool_result_pointer_line(
         .take(TOOL_RESULT_POINTER_HEAD_CHARS)
         .collect();
     let call = call_id.unwrap_or("（无）");
-    let location = match journal_path {
+    let journal = match journal_path {
         Some(p) => format!(
-            "run journal {}（按 `call_id={call}` 检索该次工具结果；grep 或 read_file 分页均可）",
+            "run journal {}（按 `call_id={call}` 检索该次调用的事件面；\
+             journal 不含结果正文，逐字原文以上面落盘文件为准）",
             p.display()
         ),
-        None => format!("run journal（{run_id}；按 `call_id={call}` 检索）"),
+        None => format!("run journal（{run_id}；按 `call_id={call}` 检索该次调用）"),
     };
     format!(
         "{TOOL_RESULT_POINTERIZED_PREFIX}（窗口内超大结果）] 正文 {chars} 字符已移出模型上下文\
-         ——**原文仍在本地档案、逐字可回读**。\n\
-         回读指针：{location}；终端输出的完整日志另见其结果尾部原有指针。\n\
-         需要时请用 read_file 读取（大文件用 offset/limit 分页）。这是**读取当时的快照**，\
-         可能已陈旧：编辑或据此决策前请以新鲜读取为准。\n\
+         ——**逐字原文已落盘**：{archive}（read_file offset/limit 分页；\
+         首读若收到 session_volume_notice 通知信封，再读一次即放行）。\n\
+         关联索引：{journal}；终端输出的完整日志另见其结果尾部原有指针。\n\
+         这是**读取当时的快照**，\
+        可能已陈旧：编辑或据此决策前请以新鲜读取为准。\n\
          == 原文头部（前 {head_chars} 字符） ==\n{head}",
+        archive = archive_path.display(),
         head_chars = TOOL_RESULT_POINTER_HEAD_CHARS
     )
+}
+
+/// **回放块优先指针化**（2026-09-16 实现批；设计 §6/§12「回放到线时先裁回放块
+/// ——可再生」）：模型读按块档案产生的结果，其原文仍在按块档案里 ⇒ 线上仍溢出
+/// 时**优先**把它换成指针（重读原路径即恢复），再考虑更旧的原始内容。
+///
+/// 判定＝按 `tool_call_id` 找回想该结果的声明消息，其 `arguments` 里出现
+/// `compaction/blocks` 即视为回放读；**大者优先**，直到 ≤ `target_estimate`
+/// 或没有候选。不变量：只改 `content`（配对不动）、已指针化者不再入选、
+/// 声明缺失时保守跳过（不猜）。
+pub fn pointerize_replay_tool_results(
+    messages: &mut [Message],
+    target_estimate: u64,
+    archive_root: &std::path::Path,
+) -> PointerizeStats {
+    let mut stats = PointerizeStats::default();
+    // tool_call_id → 回放档案路径（判定 + 指针文案均用真实路径）。
+    let mut replay_calls: std::collections::BTreeMap<String, String> =
+        std::collections::BTreeMap::new();
+    for m in messages.iter() {
+        for tc in &m.tool_calls {
+            let rendered = tc.arguments.to_string();
+            if !BLOCK_ARCHIVE_PATH_MARKERS
+                .iter()
+                .any(|marker| rendered.contains(marker))
+            {
+                continue;
+            }
+            let path = string_values(&tc.arguments)
+                .into_iter()
+                .find(|v| {
+                    BLOCK_ARCHIVE_PATH_MARKERS
+                        .iter()
+                        .any(|marker| v.contains(marker))
+                })
+                .unwrap_or_else(|| rendered.clone());
+            replay_calls.insert(tc.call_id.clone(), path);
+        }
+    }
+    if replay_calls.is_empty() {
+        return stats;
+    }
+    let mut estimate = crate::controller::estimate_messages_tokens(messages);
+    while estimate > target_estimate {
+        let mut best: Option<(usize, u64)> = None;
+        for (idx, m) in messages.iter().enumerate() {
+            if m.role != Role::Tool
+                || m.content.starts_with(TOOL_RESULT_POINTERIZED_PREFIX)
+                || m.content.starts_with(REPLAY_TOOL_RESULT_PREFIX)
+            {
+                continue;
+            }
+            let Some(call) = m.tool_call_id.as_deref() else {
+                continue;
+            };
+            if !replay_calls.contains_key(call) {
+                continue;
+            }
+            let est = crate::controller::estimate_message_tokens(m);
+            if best.is_none_or(|(_, b)| est > b) {
+                best = Some((idx, est));
+            }
+        }
+        let Some((idx, before)) = best else { break };
+        let call = messages[idx].tool_call_id.clone().unwrap_or_default();
+        let path = replay_calls.get(&call).cloned().unwrap_or_default();
+        let replacement = replay_pointer_line(&path, archive_root, &call);
+        let after = replacement.chars().count() as u64 / 2;
+        messages[idx].content = replacement;
+        stats.replaced += 1;
+        stats.freed_tokens = stats
+            .freed_tokens
+            .saturating_add(before.saturating_sub(after));
+        estimate = estimate.saturating_sub(before.saturating_sub(after));
+    }
+    stats
+}
+
+fn replay_pointer_line(path: &str, archive_root: &std::path::Path, call: &str) -> String {
+    let display = if path.is_empty() {
+        archive_root.display().to_string()
+    } else {
+        path.to_string()
+    };
+    format!(
+        "{REPLAY_TOOL_RESULT_PREFIX} 本条是**回放块**（当时按块读回的历史原文），已在溢出时\
+         优先移出模型上下文（可再生）：原文仍在该按块档案里，重读即恢复。\n\
+         重读指针：{display}（read_file offset/limit 分页；\
+         首读若收到 session_volume_notice 通知信封，再读一次即放行）。\n\
+         关联索引：call_id={call}。这是**读取当时的快照**，可能已陈旧。"
+    )
+}
+
+/// 递归收集 JSON 里的字符串值（回放路径提取用）。
+fn string_values(value: &serde_json::Value) -> Vec<String> {
+    let mut out = Vec::new();
+    match value {
+        serde_json::Value::String(s) => out.push(s.clone()),
+        serde_json::Value::Array(items) => {
+            for item in items {
+                out.extend(string_values(item));
+            }
+        }
+        serde_json::Value::Object(map) => {
+            for item in map.values() {
+                out.extend(string_values(item));
+            }
+        }
+        _ => {}
+    }
+    out
 }
 
 /// 驻留带预算换算（真实 token 目标 → `estimate_messages_tokens` 估计口径）。
@@ -538,7 +723,7 @@ pub struct ActionLedgerRow {
 
 /// Index ranges of complete tool rounds: each range starts at an assistant
 /// tool-call declaration and ends at the next declaration (or the end).
-fn round_ranges(messages: &[Message]) -> Vec<(usize, usize)> {
+pub(crate) fn round_ranges(messages: &[Message]) -> Vec<(usize, usize)> {
     let starts: Vec<usize> = messages
         .iter()
         .enumerate()
@@ -555,7 +740,7 @@ fn round_ranges(messages: &[Message]) -> Vec<(usize, usize)> {
 /// Every assistant tool call in the round has a matching tool reply — a
 /// round missing a result is never collapsed (an orphaned declaration would
 /// 400 on replay; D2-1 pairing discipline).
-fn is_round_complete(messages: &[Message], range: (usize, usize)) -> bool {
+pub(crate) fn is_round_complete(messages: &[Message], range: (usize, usize)) -> bool {
     let (start, end) = range;
     let declared: Vec<&str> = messages[start..end]
         .iter()
@@ -571,7 +756,7 @@ fn is_round_complete(messages: &[Message], range: (usize, usize)) -> bool {
 }
 
 /// Mechanical best-effort target extraction from tool-call arguments.
-fn target_of(tool_call: &ToolCall) -> String {
+pub(crate) fn target_of_call(tool_call: &ToolCall) -> String {
     const TARGET_FIELDS: &[&str] = &[
         "path",
         "file",
@@ -613,7 +798,7 @@ fn final_reply_of(messages: &[Message], range: (usize, usize)) -> String {
 }
 
 /// One row per tool call in the round ("多结果轮按条登记").
-fn rows_for_round(
+pub(crate) fn rows_for_round(
     messages: &[Message],
     range: (usize, usize),
     round_index: usize,
@@ -631,7 +816,7 @@ fn rows_for_round(
             rows.push(ActionLedgerRow {
                 round_index,
                 tool: tc.name.clone(),
-                target: target_of(tc),
+                target: target_of_call(tc),
                 pointer: pointer_of(tool_result),
                 final_reply: final_reply.clone(),
             });
@@ -2376,10 +2561,20 @@ mod tests {
         messages.extend(round("c1", "read_file", "small.py", &"s".repeat(200)));
         messages.extend(round("c2", "read_file", "big.py", &"B".repeat(60_000)));
         let target = 1_000;
+        let dir = std::env::temp_dir().join(format!(
+            "orz-pointerize-{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let archive_dir = dir.join(".gsa").join("compaction").join("pointerized");
         let stats = pointerize_oversized_tool_results(
             &mut messages,
             target,
             OVERSIZED_TOOL_RESULT_CAP_TOKENS,
+            archive_dir.as_path(),
+            "probe",
             Some(std::path::Path::new(".gsa/runs/RUN-X/events.jsonl")),
             "RUN-X",
         );
@@ -2430,11 +2625,14 @@ mod tests {
             &mut messages,
             target,
             OVERSIZED_TOOL_RESULT_CAP_TOKENS,
+            archive_dir.as_path(),
+            "probe",
             None,
             "RUN-X",
         );
         assert_eq!(again.replaced, 0);
         assert_eq!(again.freed_tokens, 0);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
@@ -2442,17 +2640,21 @@ mod tests {
         let pointer = build_pointer_message(std::path::Path::new(".gsa/ledger/current.md"));
         assert!(pointer.starts_with(LEDGER_FOLD_POINTER_PREFIX), "{pointer}");
         assert!(pointer.contains(".gsa/ledger/current.md"), "{pointer}");
-        // S1（2026-09-15，设计 §3.1 纪律）：参数不进文案——L 已成可配档位，
-        // 指针文案只说「最近若干完整轮（驻留带）」，不报 8K/64K 等数值。
-        // 用户 2026-09-15 裁定：模型面措辞统一为「当前上下文窗口」（不再说「滑块/驻留带」）。
+        // v8（2026-09-16 勘误批，设计 §1 §4 §6）：v7 的「窗口只保留最近若干
+        // 完整轮」（机械驱逐语义）随勘误退役——文案改为「旧内容按**分块**累积
+        // ＋被压缩/截断的分块可按块回放」；参数（x/y/阶梯）一律不进文案。
         assert!(
-            pointer.contains("当前**上下文窗口**只保留最近若干完整轮"),
+            pointer.contains("当前**上下文窗口**里的旧内容按**分块**累积"),
             "{pointer}"
+        );
+        assert!(
+            pointer.contains("可按块回放"),
+            "v8 指针文案须声明按块回放（I5）: {pointer}"
         );
         assert!(!pointer.contains("8K"), "参数不得进指针文案: {pointer}");
         assert!(
-            pointer.contains("更早轮次已按行归档于 .gsa/ledger/current.md"),
-            "指针文案与设计 §3.4 定稿措辞一致（审查处理 N1）: {pointer}"
+            pointer.contains("外挂存档于 .gsa/ledger/current.md"),
+            "指针文案必须给出外挂台账落点: {pointer}"
         );
         assert!(!pointer.contains("归档在该文件中"), "{pointer}");
         assert!(!pointer.contains("最近 1 轮原文"), "{pointer}");

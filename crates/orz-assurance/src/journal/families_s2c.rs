@@ -1180,6 +1180,10 @@ pub fn verify_recovery_truncation(events: &[Value]) -> Vec<String> {
 /// S1 修订批 v7（2026-09-15，设计 §3.4.1 DP-14/DP-17）：mode 增
 /// `model_summary`（模型产出语义摘要**替换**被压区），reason 增
 /// `model_selected`（窗口之外的自选压缩）；`model_summary` 与 `mechanical`
+/// 滑块上下文 v8（2026-09-16 勘误批）：**闭枚举值不变、判定规则不变**——
+/// 生产写入面收敛为 `model_selected`／`context_scale_window`（按块压缩：被压块
+/// 移出**模型面**、本地面逐字全量留存、可按块回放）与 `session_end`；
+/// `rhythm`／`fallback`／`context_scale` 仅存于历史 journal（触发随勘误退役）。
 /// 同为机械收口路径（无模型槽位失败面）⇒ 不得 `summary_incomplete`。
 pub fn verify_context_compressed(events: &[Value]) -> Vec<String> {
     let mut errors = Vec::new();

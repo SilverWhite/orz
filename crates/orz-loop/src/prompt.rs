@@ -112,6 +112,10 @@ pub fn is_injected_block_text(content: &str) -> bool {
         // 注册 ⇒ 会被写回持久化会话（0AE 遗留缺口，审查 P2 记录）。窗口轮
         // 提示是机械注入文本，同 `[CONTEXT_SCALE` 纪律。
         || content.starts_with(crate::context_scale::WINDOW_NOTICE_PREFIX)
+        // 滑块上下文 v8（2026-09-16 勘误批，设计 §2）：`[上下文分块表 …]`
+        // 是模型面投影层派生的**分块索引**（每轮现算／按 epoch 冻结），
+        // 只存在于请求视图，绝不写回持久化会话。
+        || content.starts_with(crate::model_face::BLOCK_TABLE_PREFIX)
 }
 
 /// 2026-08-08 blackboard partition (A2): prefix of the incremental-push
