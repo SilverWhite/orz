@@ -25,6 +25,13 @@
      排除；**同日追补（用户裁决）**：O1 fixture 生成器表补全——0z 资源族／0ac 检索投递族
      10 事件 ＋ 8 个追加正负例入生成器，重跑生成器零差异（347 件逐文件 SHA256 全等）；
      见 §14.67。
+   - 冻结版本补记（2026-09-16 追加 v1.69）：**0ak 无头归档实施登记（采 B 落码）**——
+     一次性 `-p` run 现在**携带会话对话**（空 Vec 起点随 run 线程携带、成功后取回，
+     `GAP-CONVERSATION-RESTORE` 的「one-shot 不携带会话对话」边界由此改写），收尾按
+     `StoredConversation` 同源装配侧车并跨 500K 里程碑打包 `.gsa/archives/<session8>.json.gz`
+     三键包；判定/打包/ARC 审计全部复用 ACP 车道原语（禁第二套实现）；跨调用对话恢复
+     不开启（每次 `-p` 全新会话身份 `{ts}-cli`）；与 ACP 的口径差异（无 close 归档／
+     侧车仅到期落盘／journal 键显式注入 run id）见 §14.68。
    - 日期：2026-08-09（v1.1 补充裁决同日冻结）
 - 决策范围：产品 runtime 所有权、成熟组件复用、自研准入、主/子 Agent 架构、模型与 transport、工具与权限、检索证据、context/compaction、问询与活性守卫、journal/snapshot、隐私、UI、Windows 兼容性、Schema 演进与设计文档治理
 - 取代/修订：
@@ -5304,3 +5311,44 @@ registry/manifest 随批）→ S3 覆盖面矩阵与法官正反两测 → S4 �
    哈希/字节级依赖）。验收＝**重跑生成器零差异**：临时副本逐文件 SHA256 对照
    347 件全等（`IDEMPOTENT`）；回归＝门禁 `valid: true`、run-event 判官回放
    262 passed、契约测试 14 passed（既有陈旧断言红不变）、grok normalizer 5 passed。
+
+### 14.68 v1.69 补写登记（2026-09-16）
+
+本节为 **0ak 实施（采 B 放行落码）**转录：用户 2026-09-16 裁决「采 B（`-p` 车道接
+归档）」登记于 0aj/0al 载体批审计 §4.3（当时明示零代码、实施待另行排期），同日
+用户放行实施（「请先进行 0ak 的剩余部分吧」）。实施＝为无头 `-p` 一次性 run 引入
+**会话持久化 ＋ 里程碑增量归档**，使无头长 run 产出
+`.gsa/archives/<session8>.json.gz` 三键包。审计：
+[`0AK_HEADLESS_ARCHIVE_IMPL_2026-09-16`](../docs/audits/0AK_HEADLESS_ARCHIVE_IMPL_2026-09-16.md)。
+本批不新增未闭合项（0ak 维持开放至判据收取，计数维持 36）。
+
+1. **设计边界改写（GAP-CONVERSATION-RESTORE）**：「one-shot CLI runs carry no
+   session conversation」语义由本裁决改写为——一次性 run 现在**携带会话对话**
+   （调用方以空 `Vec` 起点传入 `run_turn_with_guards`、成功后取回；空起点与 ACP
+   全新会话同形，seed 路径 byte-for-byte 等价）；随之与 ACP 车道同源生效的内在
+   行为＝长 run 收尾的**会话末机械压缩**（`session_end`，纯机械零模型调用）——属
+   本设计变更的登记组成部分，非静默漂移。**跨调用对话恢复不开启**：每次 `-p`
+   生成全新会话身份 `{ts}-cli`（ts = run id 同秒后缀，session8 = ts，与
+   `RUN-CLI-{ts}` journal 目录互认），无碰撞读取、无恢复路径。
+2. **归档原语单一源（禁第二套实现）**：里程碑判定（`incremental_archive_due`：
+   ≥500K 且 ≥ 水位 +500K，单调幂等）、打包（`package_session_archive`：sidecar
+   原始字节零变换嵌信封 ＋ 三键互标）、ARC 审计 journal（`session_archive` v0.2
+   带 `incremental:true` ＋ 水位落盘）全部复用 ACP 车道既有原语；新增公开入口
+   `orz_host::acp_server::headless_session_archive`（`-p` 收尾在 journal shutdown
+   之后调用，best-effort——失败只 warn、绝不影响 run 结局）。
+3. **与 ACP 车道的三点口径差异（登记为设计边界）**：① 一次性 run 无 close 语义
+   ⇒ 只做里程碑增量归档，**会话关闭归档不适用**；② **侧车仅在归档到期时落盘**
+   （无头侧车的唯一消费者是归档打包；ACP 是每个成功 prompt 恒落）——未跨 500K
+   的常规短 run 零新产物；③ 三键 journal 键按 `RUN-{session8}-` 前缀扫描，无头
+   run id（`RUN-CLI-{ts}`）不携带会话段 ⇒ 打包原语新增 `explicit_runs` 显式注入
+   （去重合并、键序确定；ACP 传空，行为零变化）。
+4. **载荷边界**：`session_archive` 事件族零契约变更（`incremental` 字段既有）、
+   Python 冻结镜像零同步、工具面零变化；controller `session_id` 在无头车道维持
+   None——session_end 压缩触发（160K）低于归档里程碑（500K），若注入会话身份会
+   让压缩 marker 写出指向不存在侧车的定位指针，**如实缺席优于不实指针**。
+5. **判据状态**：机械钉 3 例实跑绿（端到端三键＋显式 run 注入断言＋`incremental`
+   标记＋水位／阈值下零产物／同里程碑幂等）；**0ak 判据行（无头长 run ≥500K 实证
+   产出三键包）维持未勾**——搭下一轮狗粮 run 收取（届时 0ah S1「存档一致性三键
+   齐备率」在无头车道恢复可判）；收取载体须含本批（0.5.4 重建待排期，与 Linux
+   载体/Release 一并留裁决）。本批读数：orz-loop `--lib` 821/0/3、orz-host 串行
+   328/0/5、orz-assurance 229、fmt 干净、clippy 与基线持平（零新增）。
