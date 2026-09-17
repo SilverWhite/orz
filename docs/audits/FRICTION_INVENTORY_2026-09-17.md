@@ -2,7 +2,7 @@
 
 > 日期：2026-09-17；触发＝用户两项指示：①「LIF 组件暂时不做，留给狗粮线」（0am 线整体挂起）；②「统计目前暂存未被处理的全部摩擦项，不管该摩擦项是否有 journal 证据，先都整理出来看看」。
 > 性质＝**盘点档**：只收登记在案的摩擦/挂账项并归类，不新立案、不动代码、不动 BACKLOG/TODO/索引（账本路由与逐项处置全部留用户裁决）。不提交不推送（工作树状态随收口批口径）。
-> 计数速览：**未处理摩擦/挂账 36 条**（A 类 14 ＋ B 类 6 ＋ C 类 8 ＋ D 类 4 ＋ E 类 4）＋ 注记级 1 条；另有 **F 类**（摩擦衍生、已立项未闭环）7 项与 **G 类**（已有归属的移交/裁决面）4 条单列引用，**H 类**（已处置/裁决不处理）为排除面。
+> 计数速览：**未处理摩擦/挂账 36 条**（A 类 14 ＋ B 类 6 ＋ C 类 8 ＋ D 类 4 ＋ E 类 4）＋ 注记级 1 条；另有 **F 类**（摩擦衍生、已立项未闭环）7 项、**G 类**（已有归属的移交/裁决面）4 条与 **N 类**（本档落档后新发现并已修复）1 项单列引用，**H 类**（已处置/裁决不处理）为排除面。N 类不计入未处理计数（FR-N01 当天发现当天修复，不属未处理面）。
 > **2026-09-17 判定批注（§11，用户裁决）**：不处理 4（FR-A01/A02/A05/A09）／**FR-C05 已核实销项闭合、FR-C04 采②已落码（未提交）**／判定需要处理 30 条＋注记级 1（实施与排期待另行放行）。
 
 ---
@@ -109,6 +109,15 @@
 7. **0am**——本轮用户裁决挂起（「LIF 组件暂时不做，留给狗粮线」）；orz 10 文件未提交改动是否合回留裁决（血缘注意项见 0am 收口报告 M-2）。
 
 （0af 真机效果读数待下一轮狗粮 run——随 run 收取，不计立项。其余一般开放项（0aa、0w、0y、0z S4、组件审计、P2 系等）非摩擦衍生，不在本盘点范围，见 [BACKLOG](../BACKLOG_AND_PRIORITIES.md)。）
+
+## 7b. N 类（引用）：本档落档后新发现并已修复（1 项；不计入未处理摩擦计数）
+
+| ID | 摩擦 | 证据 | 状态与登记 |
+|---|---|---|---|
+| **FR-N01** | `orz-tools` 路径包含性判定的 Windows 分支按**字节**切多字节路径 ⇒ `panic: end byte index N is not a char boundary`（本次实测 base `D:\CLI\存档…` byte 11 落在 `档` 内），进程级中止、run 无收尾 | dogfood run [`FRICTION_INVENTORY_TREATMENT_DOGFOOD_2026-09-17`](FRICTION_INVENTORY_TREATMENT_DOGFOOD_2026-09-17.md) §2：`RUN-CLI-6aabf5eb` 于 `read_file("存档/docs/README.md")` 处 abort，stderr 原文＋崩点 `crates/codegen/orz-tools/src/types/resources.rs:509` | **已修复（2026-09-17，同日）**：改字节级 `eq_ignore_ascii_case` 比较（禁字符串字节切片）；钉子 2 条；orz-tools lib **2886/0/6**；载体 **0.6.1** 已重建换装并实证（`read_file 存档/docs/README.md` 正常返回）。主档登记：[FIX-BYTE-BOUNDARY-PANIC](../BACKLOG_AND_PRIORITIES.md) / [TODO P1](../..//TODO.md) / 索引 `GAP-BYTE-BOUNDARY-PANIC` |
+
+同步登记面：主档 [BACKLOG FIX-BYTE-BOUNDARY-PANIC](../BACKLOG_AND_PRIORITIES.md) ／ [TODO P1](../../TODO.md) ／ 索引 `GAP-BYTE-BOUNDARY-PANIC`。
+同族先例：2026-09-12 `decode_html_entities` 12 字节切片（0ac 修复批「去 12 字节切片→整体 `find`」）——本次为该族第二例，触发面更宽（任何含多字节路径的包含性判定）。
 
 ## 8. G 类（引用）：已有归属的移交/裁决面（4 条；不计入开放摩擦）
 
