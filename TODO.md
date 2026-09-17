@@ -861,7 +861,7 @@ GLM F2 处置转排期（2026-09-06 用户裁决）：`orz-host/src/approval.rs`
 ### 摩擦盘点 全仓未处理摩擦项（2026-09-17；**不计入未闭合总数**）
 
 - [ ] **盘点落档（已落）**：36 条未处理摩擦/挂账（A 14／B 6／C 8／D 4／E 4）＋注记级 1（`blackboard_write` 字面双副本）＋F 类 7／G 类 4 单列引用；全文见 [`FRICTION_INVENTORY_2026-09-17`](docs/audits/FRICTION_INVENTORY_2026-09-17.md)，路由见 [BACKLOG 摩擦盘点](docs/BACKLOG_AND_PRIORITIES.md) 与索引 `OBS-FRICTION-INVENTORY`。
-- [x] **判定批注（2026-09-17 用户）**：不处理 4（FR-A01/A02/A05/A09）／FR-C05 核实销项闭合／FR-C04 采②分 run 标注**已落码未提交**（`EditRecord.run` 章＋D4 分组渲染＋3 钉）。
+- [x] **判定批注（2026-09-17 用户）**：不处理 4（FR-A01/A02/A05/A09）／FR-C05 核实销项闭合／FR-C04 采②分 run 标注**已落码并提交**（orz `26dcce1b`：`EditRecord.run` 章＋D4 分组渲染＋3 钉）。
 - [ ] **判需处理 30 条＋注记级 1**：A 余 10（FR-A03/04/06/07/08/10/11/12/13/14）／B 6（FR-B01–B06）／C 余 6（FR-C01/02/03/06/07/08）／D 4（FR-D01–D04）／E 4（FR-E01–E04）／注记级 1；**处理批次、优先级与排期待另行裁决，本轮不实施**。随线收取与前置门：FR-D02／FR-C07 随 0ac S4；FR-B01–B06 随 0am 复审（**O2 裁决为门**）；**待复核销项** FR-A07／FR-C08／FR-E02 第一步为形态复核。**A14 狗粮启动器脚本化两次坐实，建议最高优先**；FR-A03 为唯一有 journal 证据的代码缺陷。入口：[盘点档 §10/§11](docs/audits/FRICTION_INVENTORY_2026-09-17.md)。
 - [x] **边界**：非 F-001 时代摩擦自报台账（`docs/FRICTION_LEDGER.md`，2026-09-14 删除）的复辟——不新增摩擦项记录文档、不重启自报管线；逐项处置后在对应行补批注，全部处置完毕整档转 `historical` 并入 `存档/`。
 
@@ -870,7 +870,8 @@ GLM F2 处置转排期（2026-09-06 用户裁决）：`orz-host/src/approval.rs`
 - [x] **发现（2026-09-17，run `RUN-CLI-6aabf5eb`）**：t+11m27s 对 `read_file("存档/docs/README.md")` 触发**进程 panic**（无 `run_finished`、journal 断链、全场产物丢失）——`orz-tools` 路径包含性判定 Windows 分支按字节切多字节路径名，`end byte index 11 is not a char boundary`，崩点 `crates/codegen/orz-tools/src/types/resources.rs:509`；可达面＝读工作区内任何含中文名目录。证据：[`处理狗粮报告 §2/§3`](docs/audits/FRICTION_INVENTORY_TREATMENT_DOGFOOD_2026-09-17.md) ／ [`摩擦盘点 §7b`](docs/audits/FRICTION_INVENTORY_2026-09-17.md)。
 - [x] **修复（2026-09-17 当日）**：`candidate_is_under_raw` 改字节级 `eq_ignore_ascii_case` 比较（禁字符串字节切片，语义等价）＋钉子 2 条（多字节不 panic／中文目录端到端）；读数 orz-tools lib **2886/0/6**、`fmt` 干净、clippy 零新增。
 - [x] **载体 0.6.1**：clean 全量重建 9m48s＋冒烟＋字面量 11 项与 0.6.0 基线一致；换装 `D:\tb-eval\orz-windows` 逐对 MATCH（旧件 `.0.6.0-bak`）；signer 哈希变更 ⇒ ACAF manifest 按 052 先例重 provision；**实证**＝0.6.1 读取 `存档/docs/README.md` 正常返回。
-- [ ] **待后续批（本项唯一未勾动作）**：Linux musl 三件套重建（用户 2026-09-17 指示「Linux 暂时用不上、重建不急」）＋代码提交口径（本批未提交，随 0am／FR-C04 合回批裁决）。入口：[BACKLOG 0an](docs/BACKLOG_AND_PRIORITIES.md) ／ [索引 `GAP-BYTE-BOUNDARY-PANIC`](CLI_PROJECT_INDEX.md)。
+- [x] **代码提交（2026-09-17，用户令「提交并推送」）**：orz `26dcce1b`（FR-C04）／`05db4b3d`（本修复）／`1b047158`（bump 0.6.1）；父仓 pin → `1b047158` ＋ `orz_source_manifest.sha256` 重算；两仓已推送（真机直连）。
+- [ ] **待后续批（本项唯一未勾动作）**：Linux musl 三件套重建（用户 2026-09-17 指示「Linux 暂时用不上、重建不急」）。入口：[BACKLOG 0an](docs/BACKLOG_AND_PRIORITIES.md) ／ [索引 `GAP-BYTE-BOUNDARY-PANIC`](CLI_PROJECT_INDEX.md)。
 
 ### 重文件拆分勘察（2026-09-13 落档；候选 1 已立项 0ai（2026-09-16），候选 2/3 未计数）
 

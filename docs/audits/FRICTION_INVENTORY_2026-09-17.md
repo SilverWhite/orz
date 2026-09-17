@@ -114,9 +114,9 @@
 
 | ID | 摩擦 | 证据 | 状态与登记 |
 |---|---|---|---|
-| **FR-N01** | `orz-tools` 路径包含性判定的 Windows 分支按**字节**切多字节路径 ⇒ `panic: end byte index N is not a char boundary`（本次实测 base `D:\CLI\存档…` byte 11 落在 `档` 内），进程级中止、run 无收尾 | dogfood run [`FRICTION_INVENTORY_TREATMENT_DOGFOOD_2026-09-17`](FRICTION_INVENTORY_TREATMENT_DOGFOOD_2026-09-17.md) §2：`RUN-CLI-6aabf5eb` 于 `read_file("存档/docs/README.md")` 处 abort，stderr 原文＋崩点 `crates/codegen/orz-tools/src/types/resources.rs:509` | **已修复（2026-09-17，同日）**：改字节级 `eq_ignore_ascii_case` 比较（禁字符串字节切片）；钉子 2 条；orz-tools lib **2886/0/6**；载体 **0.6.1** 已重建换装并实证（`read_file 存档/docs/README.md` 正常返回）。主档登记：[FIX-BYTE-BOUNDARY-PANIC](../BACKLOG_AND_PRIORITIES.md) / [TODO P1](../..//TODO.md) / 索引 `GAP-BYTE-BOUNDARY-PANIC` |
+| **FR-N01** | `orz-tools` 路径包含性判定的 Windows 分支按**字节**切多字节路径 ⇒ `panic: end byte index N is not a char boundary`（本次实测 base `D:\CLI\存档…` byte 11 落在 `档` 内），进程级中止、run 无收尾 | dogfood run [`FRICTION_INVENTORY_TREATMENT_DOGFOOD_2026-09-17`](FRICTION_INVENTORY_TREATMENT_DOGFOOD_2026-09-17.md) §2：`RUN-CLI-6aabf5eb` 于 `read_file("存档/docs/README.md")` 处 abort，stderr 原文＋崩点 `crates/codegen/orz-tools/src/types/resources.rs:509` | **已修复（2026-09-17，同日）**：改字节级 `eq_ignore_ascii_case` 比较（禁字符串字节切片）；钉子 2 条；orz-tools lib **2886/0/6**；载体 **0.6.1** 已重建换装并实证（`read_file 存档/docs/README.md` 正常返回）。**已提交（2026-09-17）**：orz `05db4b3d`（本修复）／`26dcce1b`（FR-C04）／`1b047158`（bump 0.6.1）；父仓 pin → `1b047158` |
 
-同步登记面：主档 [BACKLOG FIX-BYTE-BOUNDARY-PANIC](../BACKLOG_AND_PRIORITIES.md) ／ [TODO P1](../../TODO.md) ／ 索引 `GAP-BYTE-BOUNDARY-PANIC`。
+同步登记面：主档 [BACKLOG 0an](../BACKLOG_AND_PRIORITIES.md) ／ [TODO P1-0an](../../TODO.md) ／ 索引 `GAP-BYTE-BOUNDARY-PANIC` ／ [`OBS-FRICTION-INVENTORY`](../../CLI_PROJECT_INDEX.md)。
 同族先例：2026-09-12 `decode_html_entities` 12 字节切片（0ac 修复批「去 12 字节切片→整体 `find`」）——本次为该族第二例，触发面更宽（任何含多字节路径的包含性判定）。
 
 ## 8. G 类（引用）：已有归属的移交/裁决面（4 条；不计入开放摩擦）
