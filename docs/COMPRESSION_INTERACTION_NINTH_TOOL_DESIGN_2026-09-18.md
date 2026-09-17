@@ -1,6 +1,6 @@
 # 0ap 设计稿：压缩交互第九工具与滑块数可见化（`context_compress`；DESIGN-COMPRESSION-INTERACTION）
 
-> 日期：2026-09-18；状态：**draft（待用户审稿放行 S0/S1）**；来源＝[`处理批报告 §1.7`](audits/FRICTION_INVENTORY_TREATMENT_2026-09-17.md)（FR-A06）＋ 0ap 立项批。
+> 日期：2026-09-18；状态：**current-design（2026-09-18 用户审稿通过定稿；S0/S1 实施待放行）**；来源＝[`处理批报告 §1.7`](audits/FRICTION_INVENTORY_TREATMENT_2026-09-17.md)（FR-A06）＋ 0ap 立项批。
 > 上游设计：[`AUTH-CONTEXT-DYNAMIC-SLIDER`](CONTEXT_SLIDER_V8_DESIGN_2026-09-16.md)（v8 主滑块/分块）／[`AUTH-CONTEXT-SOFT-GATE`](CONTEXT_SOFT_GATE_MODEL_PARTICIPATED_COMPRESSION_DESIGN_2026-09-15.md)（D3 模型参与压缩）。
 > **用户裁决（2026-09-18，三点）**：①工具语义＝**直接常驻第九工具，工具面由八增长至九**（明确不取「压缩窗口轮换面」变体；用户确认工具面变动的坑〔0aj 权限桥 deny／探针面脱同步／工具名模式〕已知，按先例清单化硬防）；②计数口径＝同意（仅数量与估算 token，分块内容不流出模型面，advisory 不阻断）；③同步面＝同意（主面＝`blackboard_read` 响应头读时现算，搭水位标先例；不取常驻状态行，留档不采纳）。
 > **用户否决（同日）**：候选②「工具结果尾徽标」——注入次数＝工具轮数×频次，TER 后均不可控 ⇒ 注意力干扰不可控；与 2026-08-21 `CONTEXT-SCAFFOLDING-PULL-REDESIGN` 退役的逐轮尾随注入 PUSH 形态同族。
@@ -12,7 +12,7 @@
 
 | 项 | 定案 |
 |---|---|
-| 第九工具 | **`context_compress`**（常驻主面；命名备选 `compress_context`／`context_summary`，S0 终版） |
+| 第九工具 | **`context_compress`**（终版，2026-09-18 用户定名；常驻主面） |
 | 语义 | 模型主动请求开模型参与压缩窗口（D3 既有机制）＋响应自带滑块读数表；**不新增第二套摘要格式** |
 | 摘要产出通道 | 照旧＝压缩窗口轮内模型 `[SEMANTIC_SUMMARY]` 输出块（D3 既有）；本工具只负责「知情发起」，不改摘要载体 |
 | 计数口径 | 主滑块以外**未压缩分块数 N＋估算 token**（`context_scale` 已有 `blocks=N` 账）；只出数量与估算，分块内容不流出模型面 |
@@ -23,7 +23,7 @@
 
 ## 1. 工具语义（主案）
 
-**名称**：`context_compress`（`^[a-zA-Z0-9_-]+$` 合规；终版名 S0 定）。
+**名称**：`context_compress`（终版，2026-09-18 用户定名；`^[a-zA-Z0-9_-]+$` 合规）。
 
 **调用效果**：
 1. 机械层校验（预算/尺寸/窗口状态）后，按 **D3 既有机制**在下一个安全边界开模型参与压缩窗口——`PendingCheckpoint::ModelCompression` ≤3 轮、`finalize_model_compression_close` 统一出口、`context_compressed{mode=model_summary, reason=model_selected}` 事件、四项原文定位指针**全部照旧**；
@@ -78,8 +78,8 @@
 
 ## 7. 开放与留档
 
-- 工具名终版（S0）；窗口轮并存形态微调（S1）；「带目标分块区间的结构化摘要写入」＝**不做**，与 v8 尾批块轴合流另议；
+- ~~工具名终版（S0）~~ **已定（2026-09-18 用户定名 `context_compress`）**；窗口轮并存形态微调（S1）；「带目标分块区间的结构化摘要写入」＝**不做**，与 v8 尾批块轴合流另议；
 - 常驻成本登记：第 9 工具的 tool_defs 每请求常驻开销（描述控长后预计 ~百 token 级），S3 读数照收评估；
 - 本稿不修 ADR-0010（转录随实施批）；不动 `FUS-TOOL-PROBE` 探针语义本身（只加声明集）。
 
-> 维护口径：本稿为 0ap 的设计评估稿；「取舍随稿用户裁决」已完成主裁（§头部三点＋否决项），余下开放点（§7）随 S0/S1 收敛；实施回执落审计件后本稿状态改 `current-design` 并转录 ADR-0010 §14。
+> 维护口径：本稿为 0ap 的设计评估稿；主裁（§头部三点＋否决项）与工具名终版均经用户裁决（2026-09-18），**状态＝current-design**；实施回执落审计件后转录 ADR-0010 §14（8 工具面冻结例外 +2）。

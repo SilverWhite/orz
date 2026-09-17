@@ -881,7 +881,8 @@ GLM F2 处置转排期（2026-09-06 用户裁决）：`orz-host/src/approval.rs`
 ### 0ap FR-A06 压缩交互设计批（P2；2026-09-18 用户令纳入排期；处理批报告 §1.7 注册）
 
 - [x] **设计评估稿（2026-09-18 落档）**：[`COMPRESSION_INTERACTION_NINTH_TOOL_DESIGN_2026-09-18`](docs/COMPRESSION_INTERACTION_NINTH_TOOL_DESIGN_2026-09-18.md)——主案＝常驻第九工具 `context_compress`（发起 D3 压缩＋响应自带滑块读数；摘要通道照旧 `[SEMANTIC_SUMMARY]`，禁第二套格式）；九点位注册清单（0aj 教训硬防）＋契约面零改动＋S0 回查五项＋S1 四钉判据。用户裁决三点已录（常驻 8→9／计数口径／同步面）；尾徽标已否决。
-- [ ] **用户审稿放行 S0/S1**（余下开放点＝工具名终版、窗口轮并存微调；机制落码另行放行）。计数 36 → 37。入口：[BACKLOG 0ap](docs/BACKLOG_AND_PRIORITIES.md) ／ [设计稿](docs/COMPRESSION_INTERACTION_NINTH_TOOL_DESIGN_2026-09-18.md)。
+- [x] **用户审稿通过（2026-09-18，设计定稿转 current-design；工具名终版 `context_compress` 用户定名，其余无异议）**。
+- [ ] **S0/S1 实施待放行**（S0 回查五项 → S1 四钉落码；机制落码另行放行）。计数 36 → 37。入口：[BACKLOG 0ap](docs/BACKLOG_AND_PRIORITIES.md) ／ [设计稿](docs/COMPRESSION_INTERACTION_NINTH_TOOL_DESIGN_2026-09-18.md)。
 
 ### 重文件拆分勘察（2026-09-13 落档；候选 1 已立项 0ai（2026-09-16），候选 2/3 未计数）
 
