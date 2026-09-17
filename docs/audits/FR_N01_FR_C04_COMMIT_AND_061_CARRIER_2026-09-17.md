@@ -61,7 +61,10 @@
   （推送命令显式给出 refspec，遵循 ADR-0010 §14.70 口径）。
 - 目标引用：父仓 `origin`（`https://github.com/SilverWhite/CLI.git`）分支 `main`；orz 子模块
   `cli` 远端（同一仓库）分支 `feat/fusion-architecture`。
-- 结果：两仓推送成功；远端引用与本地一致（详值见本轮会话回执）。
+- 结果（真机直连实测）：父仓 `8d435551 → 7207e033`（`refs/heads/main`）；orz `5041c3dc → 1b047158`
+  （`refs/heads/feat/fusion-architecture`）——两次推送均 exit 0，推送后远端引用与本地一致
+  （`git status` 两仓均无 ahead/behind）。
+- 账本提交：父仓 **`7207e033`**（本报告与 pin／manifest／账本同步入库笔）。
 
 ## 6. 本轮新摩擦登记
 
