@@ -6,13 +6,13 @@
 > 合理性、实现合理性、设计与实现符合性。结论：**有条件 PASS**（无 P0；
 > P1 × 2 需先行定案，其余 P2/P3 可随 review-handling 批次收口）。
 >
-> 分片报告（原始证据，随本文保留）：
-> [`00 设计层审查`](../../.ter_review_2026-09-04/00_design_review.md) /
-> [`01 执行语义 T1.1–T1.5`](../../.ter_review_2026-09-04/01_m1_exec_semantics.md) /
-> [`02 循环面 T1.6–T1.9+T2.1`](../../.ter_review_2026-09-04/02_m1_loop_surface.md) /
-> [`03 阅读环境面 T1.10–T1.13`](../../.ter_review_2026-09-04/03_m1_read_env.md) /
-> [`04 M2 W-F12/T2.3`](../../.ter_review_2026-09-04/04_m2_wf12_t23.md) /
-> [`05 综述与门清单`](../../.ter_review_2026-09-04/05_review_summary_and_gate.md)。
+> 分片报告（原始证据，2026-09-17 已归入 `存档/ter-review-2026-09-04/`；摩擦项 FR-A08）：
+> [`00 设计层审查`](../../存档/ter-review-2026-09-04/00_design_review.md) /
+> [`01 执行语义 T1.1–T1.5`](../../存档/ter-review-2026-09-04/01_m1_exec_semantics.md) /
+> [`02 循环面 T1.6–T1.9+T2.1`](../../存档/ter-review-2026-09-04/02_m1_loop_surface.md) /
+> [`03 阅读环境面 T1.10–T1.13`](../../存档/ter-review-2026-09-04/03_m1_read_env.md) /
+> [`04 M2 W-F12/T2.3`](../../存档/ter-review-2026-09-04/04_m2_wf12_t23.md) /
+> [`05 综述与门清单`](../../存档/ter-review-2026-09-04/05_review_summary_and_gate.md)。
 
 ## 1. 审查基线
 

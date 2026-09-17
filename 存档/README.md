@@ -8,6 +8,7 @@
 - [`backlog/`](backlog/)：退出当前维护面的完整待办快照（含变更记录与已闭合分区明细）。
 - [`todo/`](todo/)：退出当前维护面的实施勾选清单全量快照（含已闭合条目勾选明细）。
 - [`readme/`](readme/)：退出当前维护面的仓库 README 快照和历史产品叙述。
+- [`ter-review-2026-09-04/`](ter-review-2026-09-04/)：TER M1/M2 全面审查的分片原始报告（2026-09-17 由未随仓的 `.ter_review_2026-09-04/` 工作目录入库；供 [`TER_M1_M2_COMPREHENSIVE_REVIEW`](../docs/audits/TER_M1_M2_COMPREHENSIVE_REVIEW_2026-09-04.md) 与 [`TER_REVIEW_HANDLING`](../docs/audits/TER_REVIEW_HANDLING_2026-09-04.md) 回溯）。
 
 当前设计入口仍位于 [`architecture/current/`](../architecture/current/README.md)，审计、事故与案例记录仍分别保留在 `docs/audits/`、`docs/incidents/` 和 `docs/cases/`。
 
