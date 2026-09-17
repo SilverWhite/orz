@@ -506,13 +506,18 @@ fn candidate_is_under_raw(base: &std::path::Path, candidate: &std::path::Path) -
         let candidate_str = candidate.to_string_lossy();
         let base_str = base.to_string_lossy();
         if candidate_str.len() >= base_str.len() {
-            let prefix = &candidate_str[..base_str.len()];
-            if prefix.eq_ignore_ascii_case(&base_str) {
+            // FR-N01：按**字节**比较，禁止字符串切片——`base_str.len()` 是字节
+            // 长度，路径含多字节字符（如 `存档`）时 `&candidate_str[..len]` 会落在
+            // 字符中间 panic（2026-09-17 `RUN-CLI-6aabf5eb` 实测进程级中止）。
+            // 字节级 `eq_ignore_ascii_case` 语义与原字符串比较一致（仅折叠 ASCII）。
+            let candidate_bytes = candidate_str.as_bytes();
+            let base_bytes = base_str.as_bytes();
+            if candidate_bytes[..base_bytes.len()].eq_ignore_ascii_case(base_bytes) {
                 if candidate_str.len() == base_str.len() {
                     return true;
                 }
-                let next_char = candidate_str.as_bytes()[base_str.len()];
-                if next_char == b'/' || next_char == b'\\' {
+                let next_byte = candidate_bytes[base_bytes.len()];
+                if next_byte == b'/' || next_byte == b'\\' {
                     return true;
                 }
             }
@@ -2398,6 +2403,47 @@ mod tests {
             Some(&outside),
             &[]
         ));
+    }
+
+    #[test]
+    fn candidate_containment_never_panics_on_multibyte_paths() {
+        // FR-N01（2026-09-17 `RUN-CLI-6aabf5eb` 进程级 abort）：Windows 分支曾按
+        // `base_str.len()` 字节数切 `candidate_str`，路径含多字节字符（实测 `存档`）
+        // 时切片落在字符中间 panic。本钉子断言该路径只返回布尔、永不 panic，
+        // 且语义不因此漂移（不同多字节根不误判为包含）。
+        let base = PathBuf::from(r"D:\CLI\存档");
+        let candidate = PathBuf::from(r"D:\CLI\存档\docs\README.md");
+        let sibling = PathBuf::from(r"D:\CLI\文档\README.md");
+
+        assert!(candidate_is_under_raw(&base, &candidate));
+        assert!(candidate_is_under(&base, &candidate));
+        assert!(!candidate_is_under_raw(&base, &sibling));
+        assert!(!candidate_is_under(&base, &sibling));
+
+        #[cfg(windows)]
+        {
+            // 字节级 ASCII 折叠：大小写差异仍判包含（原字符串兜底语义保留）。
+            let ascii_base = PathBuf::from(r"D:\CLI\Workspace");
+            let ascii_child = PathBuf::from(r"d:\cli\workspace\src\main.rs");
+            assert!(candidate_is_under_raw(&ascii_base, &ascii_child));
+            assert!(candidate_is_under(&ascii_base, &ascii_child));
+            // 同长度、仅大小写不同的多字节路径不得 panic（旧实现必崩）。
+            let mb_upper = PathBuf::from(r"D:\CLI\存档");
+            let mb_same_len = PathBuf::from(r"D:\CLI\文档");
+            assert!(!candidate_is_under_raw(&mb_upper, &mb_same_len));
+        }
+    }
+
+    #[test]
+    fn path_within_workspace_allows_multibyte_directory_targets() {
+        // FR-N01 端到端面：read_file 读工作区内含中文名的目录不得崩。
+        let tmp = TempDir::new().unwrap();
+        let ws = tmp.path().join("workspace");
+        let inside = ws.join("存档/docs/README.md");
+        std::fs::create_dir_all(inside.parent().unwrap()).unwrap();
+        std::fs::write(&inside, "x").unwrap();
+        assert!(is_path_within_workspace(&ws, &inside, None, &[]));
+        assert!(is_path_within_workspace(&ws, &inside, Some(&inside), &[]));
     }
 
     #[test]
