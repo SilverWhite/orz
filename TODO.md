@@ -830,7 +830,7 @@ GLM F2 处置转排期（2026-09-06 用户裁决）：`orz-host/src/approval.rs`
 ### 0aj 黑板写权限层放行（`blackboard_write` ReadOnly deny；P1；2026-09-16 立项，0ai 考核测出，**旧摩擦残余**）
 
 - [ ] 权限桥对 `blackboard_write`（ReadOnly 类）按设计自动放行（各策略面核对；现状＝每次调用 `permission_decision{deny}`，journal 实证 run `RUN-CLI-6aa999d6`）；探针注册面补声明（现与请求面脱同步）；`plan_write` 事件族端到端钉子。
-- [ ] 判据：无头 run 中调用 → allow → `plan_write` 出账 → `blackboard_read` 读回一致。入口：[BACKLOG 0aj](docs/BACKLOG_AND_PRIORITIES.md) / [`0AI_DOGFOOD_ASSESSMENT_CLOSURE` §3.1](docs/audits/0AI_DOGFOOD_ASSESSMENT_CLOSURE_2026-09-16.md)。
+- [x] **判据面满足（2026-09-17，run `RUN-CLI-6aaad7c8`）**：`blackboard_write` ×8 全 `allow_once`（全 run 205/205 零拒绝）→ `plan_write` ×8 一一对应 → 写后 `blackboard_read(section=plan)` exit 0；**闭合入账待用户裁决**。入口：[BACKLOG 0aj](docs/BACKLOG_AND_PRIORITIES.md) / [`0AM_DOGFOOD_CLOSURE` §3](docs/audits/0AM_DOGFOOD_CLOSURE_2026-09-17.md)。
 - [x] **落码（2026-09-16，orz `12396e6a`）**：权限桥 `access_kind` 补 `blackboard_write` 内存类 arm（`Read(None)` 自动放行）＋探针面 `WORK_TOOLS` 23 → 24 三处同批（orz-loop `tool_probe`／orz-assurance `families`／Python `_WORK_TOOLS`，判据 `probe_storage`）＋三钉（表级断言＝修复前实跑红／跨表护栏样本补齐＝漏网直接原因／端到端链：调用 → `tool_completed{exit_code 0}` → `plan_write` 出账 → `blackboard_read` 读回一致）。读数 orz-loop 819/0/3、orz-host 串行 325/0/5、orz-assurance 229、fmt 干净、clippy 52→52 零新增。**判据行维持未勾**（要求无头 run 内实证；用户 2026-09-16 指示暂不开始新狗粮线）。入口：[`0aj/0al 修复与 0.5.3 载体` §1](docs/audits/0AJ_0AL_FRICTION_FIX_AND_053_CARRIER_2026-09-16.md)。
 - [x] **复核处理（2026-09-16，用户指示「全面检查设计/实现/符合性」＋「处理全部问题」）**：跨表护栏改**单一源 ＋ 遍历式**——控制器侧新增 `ToolDispatcher::READ_ONLY_EXEMPT_TOOLS` 并驱动 `risk_class`，宿主护栏遍历该表且断言「代表参数表恰好覆盖单一源」（漏补参数同样报红）；新增**声明面分类护栏**（声明面工具必须 ∈ 工作工具 ∪ 规则式非工作族；含 `RUN-CLI-6aa999d6` 7 件声明面冻结样本）；**归因补正**（漏网两因＝样本表漏列 ＋ 0ae 深审 §4.1「orz-host 无需改动」误判，原报告已就地更正）；例次口径统一为**同形第四例**；`families.rs` 过期计数改派生式；fixture 生成器两处 payload ＋ 3 件生成物补 `blackboard_write`（逐件 SHA256 与生成器新输出全部 MATCH）。读数：orz-loop 821/0/3、orz-host `permission::tests` 20/20。**判据行仍维持未勾**。**同日追补（O1 处置）**：0z 资源族＋0ac 检索投递族 10 事件表项＋8 个追加正负例并入生成器、28 件手工 fixture 排版归一化，**重跑生成器零差异**（347 件 SHA256 全等）。入口：[`0aj/0al 独立复核与问题处理`](docs/audits/0AJ_0AL_REVIEW_HANDLING_2026-09-16.md)。
 
@@ -839,7 +839,7 @@ GLM F2 处置转排期（2026-09-06 用户裁决）：`orz-host/src/approval.rs`
 - [x] **取证完成（2026-09-16）**：打包内容＝**对话侧车原文**（`package_session_archive`），而 `-p` 一次性 run 不写对话侧车（GAP-CONVERSATION-RESTORE）⇒ 该车道**无归档源**（非"漏接一个调用"）。**选项 A**＝登记「归档面 ACP-only」＋0ah S1 存档三键判据口径改挂 ACP 车道（零代码）；**选项 B**＝为一次性 run 引入对话持久化（会话身份＋侧车落盘＋里程碑归档）。
 - [x] **用户裁决（2026-09-16，零代码登记）：采 B**。理由（用户口径）：「UI 部分估计还要相当一段时间才能进行适配」⇒ 归档能力不押 ACP/UI 车道。入口：[`0ak 裁决 §4.3`](docs/audits/0AJ_0AL_FRICTION_FIX_AND_053_CARRIER_2026-09-16.md)。
 - [x] **实施落码（2026-09-16 用户放行「请先进行 0ak 的剩余部分吧」）**：①会话身份 `{ts}-cli`（ts = run id 同秒后缀，session8 = ts 与 `RUN-CLI-{ts}` journal 目录互认；跨调用恢复不开启）＋空 `Vec` 对话随 run 线程携带（成功后取回；附带行为＝长 run 收尾会话末机械压缩同源生效，ADR 登记）；②新增 `orz_host::acp_server::headless_session_archive`——`StoredConversation::full` 同源装配＋`incremental_archive_due` 判定＋`package_session_archive` 打包＋ARC `session_archive{incremental:true}` 审计，全复用 ACP 原语（打包链新增 `explicit_runs` 显式注入 run id：`RUN-CLI-{ts}` 不匹配 `RUN-{session8}-` 前缀扫描，ACP 传空零变化）；③侧车仅归档到期时落盘（阈值下零产物）；④ADR-0010 **§14.68 / v1.69** 转录。**钉子 3 例**（端到端三键＋显式 run 注入断言／阈值下零产物／同里程碑幂等）。读数：orz-loop 821/0/3、orz-host 串行 328/0/5、orz-assurance 229、fmt 干净、clippy 与基线持平。入口：[`0AK_HEADLESS_ARCHIVE_IMPL_2026-09-16`](docs/audits/0AK_HEADLESS_ARCHIVE_IMPL_2026-09-16.md)。
-- [ ] 判据：无头长 run（≥500K）产出 `.gsa/archives/<session8>.json.gz` 且 `archive_keys` 三键齐备（**收取载体已就绪＝0.5.4 双平台重建换装并发布 Release**，[`054_CARRIER_REBUILD`](docs/audits/054_CARRIER_REBUILD_2026-09-16.md)；届时 0ah S1 三键判据在无头车道恢复可判）。入口：[BACKLOG 0ak](docs/BACKLOG_AND_PRIORITIES.md) / [`0AI_DOGFOOD_ASSESSMENT_CLOSURE` §2/§3.2](docs/audits/0AI_DOGFOOD_ASSESSMENT_CLOSURE_2026-09-16.md)。
+- [ ] 判据：无头长 run（≥500K）产出 `.gsa/archives/<session8>.json.gz` 且 `archive_keys` 三键齐备（**收取载体已就绪＝0.6.0 双平台重建换装并发布 Release**，`060_CARRIER_REBUILD_2026-09-16`；届时 0ah S1 三键判据在无头车道恢复可判）。**2026-09-17 读数（run `RUN-CLI-6aaad7c8`）＝未触发不可判**：最高模型面估算 324,739 ＜ 500K ⇒ `archives/` 未产生、会话侧车 0 件（「阈值下零产物」钉子的生产实证）；判据维持未勾，下轮狗粮 run 选题建议含「自然跨 500K」约束。入口：[BACKLOG 0ak](docs/BACKLOG_AND_PRIORITIES.md) / [`0AM_DOGFOOD_CLOSURE` §4](docs/audits/0AM_DOGFOOD_CLOSURE_2026-09-17.md)。
 
 ### 0al 门禁冻结克隆树漂移（`check_repository` 导入原始树；P1；2026-09-16 立项，0ai 考核测出）
 
@@ -854,9 +854,16 @@ GLM F2 处置转排期（2026-09-06 用户裁决）：`orz-host/src/approval.rs`
 - [ ] S2 RLI 影子并行：二阶欠阻尼谐振通道族旁路影子通道（u/v 闭式精确更新、解析包络、节律计数＋分位数自校准阈值；生产 1D 不动；影子整体 env 门控；影子状态序列化入侧车）。
 - [ ] S3 102-run 回放对照：1D vs RLI 按预注册三判据（分离 held-out AUC≥0.70／增量 RLI−[1D+闭式] ΔAUC≥0.05 且 run 级 bootstrap 95%CI>0／及时 lead time≥3 轮）评估＋C1–C5 证伪门。
 - [ ] S4 真实任务摩擦探针一轮（0ai 先例：单轮如实标注、不作架构结论）；翻转裁决（替换或维持 1D，含参数纪律 ADR 修订）留用户。
-- **决策登记（2026-09-17，用户；脱敏仅记决策）**：LIF 单组件内部升级为预测形态——动力学＋极简线性解码器一体（权重离线闭式求解、无优化器、运行时确定性不变），模型侧依旧仅参考其动力学状况与域判断（元认知外挂器、零注入不变）；「A/B 线」提法作废；影子解码器组/容量消融阶梯不引入（工程类非研究类）。落实随 O2 裁决放行。入口：[BACKLOG 0am](docs/BACKLOG_AND_PRIORITIES.md)。
+- **0am 线整体挂起（2026-09-17 用户指示「LIF 组件暂时不做，留给狗粮线」）**：上述未勾各项与随挂起的 B 类六条摩擦（FR-B01–B06）**一并挂起，以 O2 裁决为前置门**；本批零实施，orz 工作树在场的 0am 批保持未提交，合回口径留裁决。入口：[`摩擦盘点 §3/§7`](docs/audits/FRICTION_INVENTORY_2026-09-17.md)。
 - 入口：[重文件拆分勘察](docs/audits/HEAVY_FILE_SPLIT_SURVEY_2026-09-13.md) / [BACKLOG 0ai](docs/BACKLOG_AND_PRIORITIES.md) / [索引 `GAP-HEAVY-FILE-SPLIT`](CLI_PROJECT_INDEX.md)。
 - 入口：[重文件拆分勘察](docs/audits/HEAVY_FILE_SPLIT_SURVEY_2026-09-13.md) / [BACKLOG 0ai](docs/BACKLOG_AND_PRIORITIES.md) / [索引 `GAP-HEAVY-FILE-SPLIT`](CLI_PROJECT_INDEX.md)。
+
+### 摩擦盘点 全仓未处理摩擦项（2026-09-17；**不计入未闭合总数**）
+
+- [ ] **盘点落档（已落）**：36 条未处理摩擦/挂账（A 14／B 6／C 8／D 4／E 4）＋注记级 1（`blackboard_write` 字面双副本）＋F 类 7／G 类 4 单列引用；全文见 [`FRICTION_INVENTORY_2026-09-17`](docs/audits/FRICTION_INVENTORY_2026-09-17.md)，路由见 [BACKLOG 摩擦盘点](docs/BACKLOG_AND_PRIORITIES.md) 与索引 `OBS-FRICTION-INVENTORY`。
+- [x] **判定批注（2026-09-17 用户）**：不处理 4（FR-A01/A02/A05/A09）／FR-C05 核实销项闭合／FR-C04 采②分 run 标注**已落码未提交**（`EditRecord.run` 章＋D4 分组渲染＋3 钉）。
+- [ ] **判需处理 30 条＋注记级 1**：A 余 10（FR-A03/04/06/07/08/10/11/12/13/14）／B 6（FR-B01–B06）／C 余 6（FR-C01/02/03/06/07/08）／D 4（FR-D01–D04）／E 4（FR-E01–E04）／注记级 1；**处理批次、优先级与排期待另行裁决，本轮不实施**。随线收取与前置门：FR-D02／FR-C07 随 0ac S4；FR-B01–B06 随 0am 复审（**O2 裁决为门**）；**待复核销项** FR-A07／FR-C08／FR-E02 第一步为形态复核。**A14 狗粮启动器脚本化两次坐实，建议最高优先**；FR-A03 为唯一有 journal 证据的代码缺陷。入口：[盘点档 §10/§11](docs/audits/FRICTION_INVENTORY_2026-09-17.md)。
+- [x] **边界**：非 F-001 时代摩擦自报台账（`docs/FRICTION_LEDGER.md`，2026-09-14 删除）的复辟——不新增摩擦项记录文档、不重启自报管线；逐项处置后在对应行补批注，全部处置完毕整档转 `historical` 并入 `存档/`。
 
 ### 重文件拆分勘察（2026-09-13 落档；候选 1 已立项 0ai（2026-09-16），候选 2/3 未计数）
 
