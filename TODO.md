@@ -853,7 +853,9 @@ GLM F2 处置转排期（2026-09-06 用户裁决）：`orz-host/src/approval.rs`
 - [ ] S1 Part A：T̂→墙钟↔轮次换算面（resident 任务状态行＋SESSION 面渲染；1-2-5 阶梯保守取整、永不高于真值、不阻断、fail-soft；零契约面）；A1 方向安全／A2 桶保真钉子。
 - [ ] S2 RLI 影子并行：二阶欠阻尼谐振通道族旁路影子通道（u/v 闭式精确更新、解析包络、节律计数＋分位数自校准阈值；生产 1D 不动；影子整体 env 门控；影子状态序列化入侧车）。
 - [ ] S3 102-run 回放对照：1D vs RLI 按预注册三判据（分离 held-out AUC≥0.70／增量 RLI−[1D+闭式] ΔAUC≥0.05 且 run 级 bootstrap 95%CI>0／及时 lead time≥3 轮）评估＋C1–C5 证伪门。
-- [ ] S4 真实任务摩擦探针一轮（0ai 先例：单轮如实标注、不作架构结论）；翻转裁决（替换或维持 1D，含参数纪律 ADR 修订）留用户。入口：[BACKLOG 0am](docs/BACKLOG_AND_PRIORITIES.md) / [`RLI_RESONANT_CHANNEL_BASE_DESIGN`](docs/RLI_RESONANT_CHANNEL_BASE_DESIGN_2026-09-16.md) / [`LIF_DYNAMICS_PROJECTION_AND_ROUND_BUDGET`](docs/LIF_DYNAMICS_PROJECTION_AND_ROUND_BUDGET_DESIGN_2026-09-16.md)。
+- [ ] S4 真实任务摩擦探针一轮（0ai 先例：单轮如实标注、不作架构结论）；翻转裁决（替换或维持 1D，含参数纪律 ADR 修订）留用户。
+- **决策登记（2026-09-17，用户；脱敏仅记决策）**：LIF 单组件内部升级为预测形态——动力学＋极简线性解码器一体（权重离线闭式求解、无优化器、运行时确定性不变），模型侧依旧仅参考其动力学状况与域判断（元认知外挂器、零注入不变）；「A/B 线」提法作废；影子解码器组/容量消融阶梯不引入（工程类非研究类）。落实随 O2 裁决放行。入口：[BACKLOG 0am](docs/BACKLOG_AND_PRIORITIES.md)。
+- 入口：[重文件拆分勘察](docs/audits/HEAVY_FILE_SPLIT_SURVEY_2026-09-13.md) / [BACKLOG 0ai](docs/BACKLOG_AND_PRIORITIES.md) / [索引 `GAP-HEAVY-FILE-SPLIT`](CLI_PROJECT_INDEX.md)。
 - 入口：[重文件拆分勘察](docs/audits/HEAVY_FILE_SPLIT_SURVEY_2026-09-13.md) / [BACKLOG 0ai](docs/BACKLOG_AND_PRIORITIES.md) / [索引 `GAP-HEAVY-FILE-SPLIT`](CLI_PROJECT_INDEX.md)。
 
 ### 重文件拆分勘察（2026-09-13 落档；候选 1 已立项 0ai（2026-09-16），候选 2/3 未计数）
