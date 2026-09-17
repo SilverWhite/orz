@@ -3355,6 +3355,8 @@ impl AgentLoopController {
                         let timestamp = chrono_utc_now();
                         // P2-14 S1：edits 属共享折叠分区，按执行窗主轮章盖章。
                         let (round, domain) = self.effective_blackboard_stamp();
+                        // 0AE-C11 处置（2026-09-17，盘点 FR-C04 采②）：写时
+                        // 盖 run 章，D4 清单按「本 run / 会话历史」分组。
                         self.blackboard.write().push_edit(EditRecord {
                             file: file.clone(),
                             old_lines,
@@ -3362,6 +3364,7 @@ impl AgentLoopController {
                             timestamp,
                             round,
                             domain: Some(domain),
+                            run: writer.run_id().to_string(),
                         });
                         edits_payload.push(serde_json::json!({
                             "file": file,

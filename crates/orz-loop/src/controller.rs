@@ -6076,6 +6076,7 @@ body",
                     timestamp: format!("2026-09-03T00:00:{r:02}Z"),
                     round: r,
                     domain: Some(Domain::Normal),
+                    run: String::new(),
                 });
             }
             for r in 13..=18 {
@@ -6086,6 +6087,7 @@ body",
                     timestamp: format!("2026-09-03T00:00:{r:02}Z"),
                     round: r,
                     domain: Some(Domain::Pressure),
+                    run: String::new(),
                 });
             }
         }

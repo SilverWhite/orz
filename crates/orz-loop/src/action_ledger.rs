@@ -105,22 +105,30 @@ pub fn capture_run_baseline(cwd: &std::path::Path) -> Option<String> {
 pub const RUN_CONTEXT_RECENT_EDITS: usize = 5;
 
 /// 0ae D4：折叠桥机械段渲染——①本 run 自编辑文件清单（路径 + 次数 +
-/// 末次时间）②run 起始基线 ③最近 N 次编辑指纹。数据源 = 黑板 edits
-/// 分区（机械单写者，模型不可伪造）。
+/// 末次时间）②会话历史自编辑文件（此前 run / 无章旧行）③run 起始基线
+/// ④最近 N 次编辑指纹。数据源 = 黑板 edits 分区（机械单写者，模型不可
+/// 伪造）。0AE-C11 处置（2026-09-17，盘点 FR-C04 采②分 run 标注）：清单
+/// 按 run 章（`EditRecord.run`）分组——「本 run」段只含当前 run 的编辑，
+/// 跨 run 残留与旧无章行落「会话历史」段，多 run 会话不再被「本 run」
+/// 标签夸大归属；`current_run = None`（无章可对）时全部归历史段。
 pub fn render_run_context_block(
     baseline: Option<&str>,
     edits: &[crate::blackboard::EditRecord],
+    current_run: Option<&str>,
 ) -> String {
     let mut lines = Vec::new();
     if let Some(baseline) = baseline {
         lines.push(format!("【本 run 基线】{baseline}"));
     }
-    if !edits.is_empty() {
-        // 文件聚合（路径 + 次数 + 末次时间；保序）。
+    // 文件聚合（路径 + 次数 + 末次时间；保序）——本 run / 历史两组共用。
+    let summarize = |records: &[&crate::blackboard::EditRecord]| -> Option<String> {
+        if records.is_empty() {
+            return None;
+        }
         let mut order: Vec<&str> = Vec::new();
         let mut counts: std::collections::HashMap<&str, (usize, &str)> =
             std::collections::HashMap::new();
-        for record in edits {
+        for record in records {
             match counts.get_mut(record.file.as_str()) {
                 Some((count, last)) => {
                     *count += 1;
@@ -132,14 +140,44 @@ pub fn render_run_context_block(
                 }
             }
         }
-        let files: Vec<String> = order
+        Some(
+            order
+                .iter()
+                .map(|file| {
+                    let (count, last) = counts.get(file).copied().expect("registered above");
+                    format!("{file} ×{count}（末次 {last}）")
+                })
+                .collect::<Vec<_>>()
+                .join("；"),
+        )
+    };
+    let is_current = |record: &crate::blackboard::EditRecord| {
+        matches!(current_run, Some(run) if !run.is_empty()) && record.run == current_run.unwrap()
+    };
+    let current: Vec<&crate::blackboard::EditRecord> =
+        edits.iter().filter(|r| is_current(r)).collect();
+    let history: Vec<&crate::blackboard::EditRecord> =
+        edits.iter().filter(|r| !is_current(r)).collect();
+    if let Some(summary) = summarize(&current) {
+        lines.push(format!("【本 run 自编辑文件】{summary}"));
+    }
+    if let Some(summary) = summarize(&history) {
+        let prior_runs: std::collections::BTreeSet<&str> = history
             .iter()
-            .map(|file| {
-                let (count, last) = counts.get(file).copied().expect("registered above");
-                format!("{file} ×{count}（末次 {last}）")
-            })
+            .map(|record| record.run.as_str())
+            .filter(|run| !run.is_empty())
             .collect();
-        lines.push(format!("【本 run 自编辑文件】{}", files.join("；")));
+        let has_legacy = history.iter().any(|record| record.run.is_empty());
+        let mut label = String::from("【会话历史自编辑文件");
+        match (prior_runs.len(), has_legacy) {
+            (0, true) => label.push_str("（无章旧行）"),
+            (n, false) => label.push_str(&format!("（此前 {n} 个 run）")),
+            (n, true) => label.push_str(&format!("（此前 {n} 个 run ＋ 无章旧行）")),
+        }
+        label.push('】');
+        lines.push(format!("{label}{summary}"));
+    }
+    if !edits.is_empty() {
         let recent: Vec<String> = edits
             .iter()
             .rev()
@@ -1511,5 +1549,73 @@ mod tests {
         );
         assert!(!pointer.contains("归档在该文件中"), "{pointer}");
         assert!(!pointer.contains("最近 1 轮原文"), "{pointer}");
+    }
+
+    /// 0AE-C11 处置钉（2026-09-17，盘点 FR-C04 采②）：「本 run」段只含
+    /// 当前 run 章的编辑；此前 run 与无章旧行落「会话历史」段——多 run
+    /// 会话不再被「本 run」标签夸大归属。
+    #[test]
+    fn run_context_block_splits_current_run_from_history() {
+        let edits = vec![
+            edit("shared.rs", "RUN-2", "t3"),
+            edit("old_a.rs", "RUN-1", "t1"),
+            edit("legacy.rs", "", "t0"),
+            edit("shared.rs", "RUN-1", "t2"),
+        ];
+        let block = render_run_context_block(None, &edits, Some("RUN-2"));
+        let this_line = block
+            .lines()
+            .find(|l| l.starts_with("【本 run 自编辑文件】"))
+            .expect("本 run 段须存在");
+        assert!(this_line.contains("shared.rs"), "{this_line}");
+        assert!(
+            !this_line.contains("old_a.rs") && !this_line.contains("legacy.rs"),
+            "本 run 段不得混入历史 run 编辑: {this_line}"
+        );
+        let hist_line = block
+            .lines()
+            .find(|l| l.starts_with("【会话历史自编辑文件"))
+            .expect("历史段须存在");
+        assert!(
+            hist_line.contains("（此前 1 个 run ＋ 无章旧行）"),
+            "历史段标签须如实并列此前 run 数与无章旧行: {hist_line}"
+        );
+        assert!(hist_line.contains("old_a.rs"), "{hist_line}");
+        assert!(hist_line.contains("legacy.rs"), "{hist_line}");
+        assert!(hist_line.contains("shared.rs"), "{hist_line}");
+    }
+
+    /// 单 run 会话（全部编辑属当前 run）：不渲染历史段——不虚设「历史」。
+    #[test]
+    fn run_context_block_omits_history_when_all_edits_are_current() {
+        let edits = vec![edit("a.rs", "RUN-1", "t1"), edit("b.rs", "RUN-1", "t2")];
+        let block = render_run_context_block(None, &edits, Some("RUN-1"));
+        assert!(block.contains("【本 run 自编辑文件】"), "{block}");
+        assert!(!block.contains("会话历史"), "{block}");
+    }
+
+    /// 无当前 run 可对（current_run = None）：全部归历史段、不渲染「本
+    /// run」段——标签不夸大。
+    #[test]
+    fn run_context_block_without_current_run_marks_all_history() {
+        let edits = vec![edit("a.rs", "RUN-1", "t1")];
+        let block = render_run_context_block(None, &edits, None);
+        assert!(!block.contains("【本 run 自编辑文件】"), "{block}");
+        assert!(
+            block.contains("【会话历史自编辑文件（此前 1 个 run）】"),
+            "{block}"
+        );
+    }
+
+    fn edit(file: &str, run: &str, timestamp: &str) -> crate::blackboard::EditRecord {
+        crate::blackboard::EditRecord {
+            file: file.to_string(),
+            old_lines: 1,
+            new_lines: 2,
+            timestamp: timestamp.to_string(),
+            round: 1,
+            domain: None,
+            run: run.to_string(),
+        }
     }
 }

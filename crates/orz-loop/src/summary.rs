@@ -1394,6 +1394,7 @@ mod tests {
                 timestamp: "2026-08-14T00:00:00Z".into(),
                 round: 0,
                 domain: None,
+                run: String::new(),
             });
         }
         let (purpose, plan, paths) =
@@ -1474,6 +1475,7 @@ mod tests {
                     timestamp: "2026-08-14T00:00:00Z".into(),
                     round: 0,
                     domain: None,
+                    run: String::new(),
                 });
             }
         }

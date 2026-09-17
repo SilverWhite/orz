@@ -1421,6 +1421,7 @@ mod tests {
             timestamp: ts.to_string(),
             round,
             domain,
+            run: String::new(),
         }
     }
 
@@ -1815,6 +1816,7 @@ mod tests {
                 timestamp: "2026-09-04T00:00:01Z".to_string(),
                 round: 0,
                 domain: None,
+                run: String::new(),
             },
             crate::blackboard::EditRecord {
                 file: "b.rs".to_string(),
@@ -1823,6 +1825,7 @@ mod tests {
                 timestamp: "2026-09-04T00:00:02Z".to_string(),
                 round: 0,
                 domain: None,
+                run: String::new(),
             },
         ];
         let snap = render_edits_snapshot(&records, 1, Domain::Start, &p, u64::MAX);

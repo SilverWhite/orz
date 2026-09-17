@@ -444,6 +444,12 @@ pub struct EditRecord {
     /// B1：写时 LIF 域章（None = 旧无章行，pre-stamp）。
     #[serde(default)]
     pub domain: Option<Domain>,
+    /// 0AE-C11 处置（2026-09-17，盘点 FR-C04 采②分 run 标注）：写时
+    /// run 章（journal run id）。空 = 旧无章行（pre-stamp）——D4 渲染面
+    /// 按此把编辑分「本 run / 会话历史」两组，多 run 会话不再被「本 run」
+    /// 标签夸大归属。
+    #[serde(default)]
+    pub run: String,
 }
 
 /// 工具动作区 (blackboard partition, 2026-08-08): one classified tool action
@@ -1439,6 +1445,7 @@ mod tests {
                 timestamp: "2026-08-14T00:00:00Z".into(),
                 round: 0,
                 domain: None,
+                run: String::new(),
             });
         }
         // Rotate: epoch-1 archived with the old plan + edit record.
@@ -4133,6 +4140,7 @@ mod tests {
                 timestamp: "t".into(),
                 round: 0,
                 domain: None,
+                run: String::new(),
             });
             w.push_tool_action(ToolActionRecord {
                 category: "read".into(),
@@ -4322,6 +4330,7 @@ mod tests {
             timestamp: "2026-09-03T00:00:00Z".into(),
             round: 3,
             domain: Some(Domain::Normal),
+            run: String::new(),
         });
         bb.push_tool_action(ToolActionRecord {
             category: "read".into(),

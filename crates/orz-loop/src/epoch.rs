@@ -1768,6 +1768,7 @@ mod tests {
             timestamp: "2026-08-14T00:00:00Z".into(),
             round: 0,
             domain: None,
+            run: String::new(),
         });
         bb.tool_actions.push(ToolActionRecord {
             category: "read".to_string(),
@@ -1846,6 +1847,7 @@ mod tests {
                 timestamp: "2026-08-14T00:00:00Z".into(),
                 round: 0,
                 domain: None,
+                run: String::new(),
             });
         }
         let snapshot = bb.read().epoch_snapshot("2026-08-14T01:00:00Z");
@@ -1887,6 +1889,7 @@ mod tests {
             timestamp: "2026-08-14T00:00:00Z".into(),
             round: 0,
             domain: None,
+            run: String::new(),
         });
         let snapshot = bb.epoch_snapshot("2026-08-14T01:00:00Z");
         assert!(write_epoch_archive_retry(&dir, &snapshot));

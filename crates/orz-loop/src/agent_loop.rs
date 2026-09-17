@@ -2035,10 +2035,13 @@ pub(crate) async fn run_agent_loop(
         // 下一次压缩/截断后重渲一次，两次之间模型面前缀字节稳定（不变量 I6）。
         // 0AE-C5（2026-09-15 深审修复）：无条件渲染——baseline=None（非 git
         // 工作区/git 失败）只省略基线段，自编辑清单与编辑指纹两段照常。
+        // 0AE-C11 处置（2026-09-17，盘点 FR-C04 采②）：传入当前 run id，
+        // 清单按 run 章分「本 run / 会话历史」两组。
         if !face_blocks.is_empty() && face_d4_block.is_none() {
             face_d4_block = Some(crate::action_ledger::render_run_context_block(
                 run_baseline.as_deref(),
                 &svc.blackboard.read().edits,
+                Some(writer.run_id()),
             ));
         }
         let face_params = crate::model_face::ModelFaceParams {
