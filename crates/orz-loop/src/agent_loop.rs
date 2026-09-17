@@ -1064,8 +1064,9 @@ pub(crate) async fn run_template_compact(
 }
 
 /// 0ae D3 / 0AE-C1 修复（2026-09-15 深审）：模型参与压缩窗口轮的工具面
-/// ——只暴露 `blackboard_write`（模型固化写入面；名字与 controller
-/// `run_turn_inner` 注册处同字面，注册处无条件补声明）。其余基面工具不进
+/// ——只暴露 `blackboard_write`（模型固化写入面；名字经
+/// `crate::blackboard::BLACKBOARD_WRITE_TOOL_NAME` 单点——2026-09-17
+/// 处理批去重，注册处无条件补声明）。其余基面工具不进
 /// 窗口轮——「打断全部动作」语义保持：非写入动作即使被模型声明也在消费
 /// 分支丢弃不派发。修复前窗口轮落入 `Vec::new()`，模型连 blackboard_write
 /// 的声明都看不到 ⇒ `model_participated` 结构上恒 false。窗口轮的探针
@@ -1073,7 +1074,7 @@ pub(crate) async fn run_template_compact(
 pub(crate) fn compression_window_tool_defs(tool_defs: &[ToolDef]) -> Vec<ToolDef> {
     tool_defs
         .iter()
-        .filter(|t| t.name == "blackboard_write")
+        .filter(|t| t.name == crate::blackboard::BLACKBOARD_WRITE_TOOL_NAME)
         .cloned()
         .collect()
 }
@@ -2961,7 +2962,7 @@ pub(crate) async fn run_agent_loop(
                 let window_calls: Vec<ToolCall> = response
                     .tool_calls
                     .iter()
-                    .filter(|tc| tc.name == "blackboard_write")
+                    .filter(|tc| tc.name == crate::blackboard::BLACKBOARD_WRITE_TOOL_NAME)
                     .cloned()
                     .collect();
                 let dropped = response.tool_calls.len() - window_calls.len();

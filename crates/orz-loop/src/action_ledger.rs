@@ -657,8 +657,11 @@ pub struct ActionLedgerRow {
     pub round_index: usize,
     /// Tool name (mechanical, from the assistant's tool call).
     pub tool: String,
-    /// Best-effort target extracted from the call arguments (path/file/url/
-    /// target/document_id/directory/command); empty when none is present.
+    /// Best-effort target extracted from the call arguments (path/file/
+    /// file_path/target_file/url/target/document_id/directory/command);
+    /// empty when none is present. FR-A07（2026-09-17）：`file_path` 与
+    /// `target_file` 为 harness 实际参数名（search_replace / read_file），
+    /// 缺失时行退化为「目标=（无）」、不可按路径检索。
     pub target: String,
     /// `sha256:<hex>` of the tool-result content — the journal/sidecar
     /// pointer for audit look-back; `no_result` when the result is missing.
@@ -707,6 +710,8 @@ pub(crate) fn target_of_call(tool_call: &ToolCall) -> String {
     const TARGET_FIELDS: &[&str] = &[
         "path",
         "file",
+        "file_path",
+        "target_file",
         "url",
         "target",
         "document_id",
@@ -1119,6 +1124,37 @@ mod tests {
             build_ledger_block(&rows)
         };
         assert_eq!(build(), build());
+    }
+
+    /// FR-A07（2026-09-17 复核）：台账行「目标」提取须覆盖 harness 实际参数名
+    /// ——`read_file` 用 `target_file`、`search_replace` 用 `file_path`；缺失
+    /// 时行退化为「目标=（无）」，不可按路径检索。
+    #[test]
+    fn target_of_call_covers_harness_argument_names() {
+        let call = |args: serde_json::Value| ToolCall {
+            name: "x".to_string(),
+            arguments: args,
+            call_id: "c".to_string(),
+        };
+        assert_eq!(
+            target_of_call(&call(serde_json::json!({"target_file": "docs/a.md"}))),
+            "docs/a.md"
+        );
+        assert_eq!(
+            target_of_call(&call(
+                serde_json::json!({"file_path": "src/b.rs", "old_string": "o"})
+            )),
+            "src/b.rs"
+        );
+        assert_eq!(
+            target_of_call(&call(serde_json::json!({"command": "cargo test"}))),
+            "cargo test"
+        );
+        assert_eq!(
+            target_of_call(&call(serde_json::json!({"section": "plan"}))),
+            "",
+            "无目标字段的调用维持空（行渲染为「目标=（无）」）"
+        );
     }
 
     #[test]

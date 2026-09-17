@@ -15,6 +15,10 @@ use serde::{Deserialize, Serialize};
 
 use orz_assurance::lif::Domain;
 
+/// `blackboard_write` 工具名的唯一字面（0AE 收口去重）：controller
+/// `run_turn_inner` 注册处与 agent_loop 压缩窗口过滤面共享，避免双副本漂移。
+pub(crate) const BLACKBOARD_WRITE_TOOL_NAME: &str = "blackboard_write";
+
 /// One action instance inside a plan step (design §5: `{"step_id", "do",
 /// "with"}` — the step-id binds the action to its owning step; `with` is the
 /// action's parameter object).

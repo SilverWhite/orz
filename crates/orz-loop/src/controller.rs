@@ -3101,9 +3101,12 @@ impl AgentLoopController {
         // 冻结纪律的**用户主导显式例外 +1**（2026-09-15 口径「明确提示
         // 可使用黑板」）；只写内存黑板，无外部副作用 → ReadOnly 类（所有
         // 策略自动放行）。无条件声明（不随 plan_first 门）。
-        if !tool_defs.iter().any(|t| t.name == "blackboard_write") {
+        if !tool_defs
+            .iter()
+            .any(|t| t.name == crate::blackboard::BLACKBOARD_WRITE_TOOL_NAME)
+        {
             tool_defs.push(ToolDef {
-                name: "blackboard_write".to_string(),
+                name: crate::blackboard::BLACKBOARD_WRITE_TOOL_NAME.to_string(),
                 description: "Write a note to the blackboard — the fold-proof                      memory: blackboard content survives context folding, and at                      the 920K compression only blackboard content plus the                      retention tail survives. `section` is \"plan\" (task plan +                      key intermediate conclusions) or \"notes\" (free-form working                      notes). Single write is capped at 8K chars — split longer                      content across writes. The live watermark 【x.xM/10M】 rides                      every blackboard_read response header. Writes are stamped                      (round, domain) and journaled; mechanical partitions                      (edits/exec/actions/processes/temporal/session) are NOT                      writable.".to_string(),
                 parameters: serde_json::json!({
                     "type": "object",
