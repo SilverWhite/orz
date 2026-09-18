@@ -277,6 +277,12 @@ mod tests {
     #[tokio::test]
     async fn bootstrap_wires_snapshot_store_and_permit_signer() {
         let base = test_dir();
+        // CI runners expose TEMP in 8.3 short form (RUNNER~1) while
+        // bootstrap canonicalizes the worktree (dunce, long form), so the
+        // comparison must be canonical-to-canonical (RS-01 2026-09-18: dev
+        // TEMP is already long-form, which masked this for the whole life
+        // of the test).
+        let base = dunce::canonicalize(&base).expect("canonicalize session test base");
         let handle = bootstrap_session("RUN-WIRED", Some(base.clone()), TrustPolicy::Skip)
             .await
             .unwrap();
