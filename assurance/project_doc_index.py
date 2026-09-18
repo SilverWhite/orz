@@ -213,7 +213,12 @@ class ProjectDocIndex:
                     score,
                 ))
 
-        results.sort(key=lambda item: item[1], reverse=True)
+        # Deterministic ordering: score descending, then path ascending.
+        # A stable sort alone keeps filesystem-glob insertion order among
+        # tied scores, so the top-K window differed between machines
+        # (RS-01 2026-09-18: test_search_p3_action_authorization green on
+        # the dev worktree, red on a clean CI checkout).
+        results.sort(key=lambda item: (-item[1], item[0].path))
         return [doc for doc, _ in results[:max_results]]
 
     def _load_content_lower(self, rel_path: str) -> str:

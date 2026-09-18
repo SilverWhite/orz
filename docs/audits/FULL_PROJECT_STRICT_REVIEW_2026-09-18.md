@@ -31,7 +31,7 @@
   - 已落修复：①1128 链接改仓库相对路径 `../docs/...`——全库 `git grep` 扫描确认库内目标的盘符链接仅此一处，`存档/index` 冻结快照 3 处指向 `D:\tb-eval` 的库外证据指针属门禁存档豁免区、按冻结纪律不改写；②门禁平台对称化：`_check_markdown_links` 对盘符前缀/根斜杠/反斜杠目标一律报 `non-relative local link`（探针验证三病态形态全拦、既有 broken-link 规则不受扰、全库链接检查归零）——「Windows 绿、Linux 红」类缺陷今后在任一 OS 本地即拦。
   - 首轮 CI 复跑（run 35326045846，触发于 667d7d8d）：**断流根因已灭**——ubuntu 两 job「Check repository contracts」16 天来首次在 Linux runner 转绿，四 Python job 齐进到测试步骤；同轮暴露两个被断流掩盖的既有残点：〔A〕`runtime/tests` 单一过期计数钉（见下）＋〔B〕rust-tests 的 protoc 缺失（批注见 RS-02）。
   - 续批（5cda9957）：〔A〕校准——事件枚举钉 55 → 65（09-09 0t 批定 55 后，0ac 批 +3：result_delivered/retrieval_progress/retrieval_result_segment；0z 批 +7：host_resource_snapshot/host_resource_denied/resource_limit_hit/resource_exhausted/reclaim_performed/process_tree_reaped/run_terminated；两批落事件面时 CI 正断流，钉值漂移 9 天无人见）、测试名去计数尾缀改 `test_v02_all_event_types_covered`（「51」自 55 钉起即漂移）、docstring 钉值史补 0ac/0z 与断流注记；本地契约文件 15/15 过（含 `fixture_events == enum_events` 精确覆盖断言）。
-  - 第二轮 CI 复跑（run 35328029850，触发于 5cda9957）：ubuntu 两 job 仍红于 `runtime/tests` 步骤（3m38s/4m06s，晚于上轮失败点；具体用例待 run 完结日志解锁后定性）；windows 两 job 与 rust-tests 批注时点在途。**RS-01 验收（CI 全绿）未达，洋葱尚有下一层的迹象；绿后由账本闭合批勾选 RS-01 并附 run 证据。**
+  - 第二轮 CI 复跑（run 35328029850，触发于 5cda9957；〔勘误〕初稿凭在途信息误记失败步骤为 runtime/tests——实况：**runtime 步已绿＝钉值修复生效**，四 Python job 全数红于 assurance P0-P5 步骤内的 `assurance/tests/test_retrieval_subagent_real.py::test_search_p3_action_authorization`，每 job 恰此一败）：〔残点 C〕`ProjectDocIndex.search` 并列分数沿 glob 枚举序截断（Python 稳定排序保插入序＝机器间不一致）＋语料自 09-02 增长 → 干净 checkout 的 top-10 漏掉 `assurance/instruction_gate.py`（开发机工作树碰巧在列）——随批修：排序改「分数降序＋路径升序」确定性 tie-break（`project_doc_index.py`），测试改双断言（审计文档走广谱 top-10、gate 脚本走 `source_code` 限域检索）；〔残点 D〕rust-tests 侧 orz-assurance 两枚 `match_python` 对拍崩于 CI 无 `jsonschema`（对拍 shell 出 `python` 跑 `assurance/run_event_journal_validation.py`）——随批在 rust-tests job 补 `python -m pip install jsonschema`。**同轮实质好消息：`Run orz-loop lib tests` 在 CI 791/0/3 全绿**（＝干净 HEAD 基线，protoc 修复实证）。**RS-01 验收（CI 全绿）未达、第三轮复跑在途；绿后由账本闭合批勾选 RS-01 并附 run 证据。**
   - 账本口径：16 天断流与残点 A/B 的事实与修复已随 667d7d8d/5cda9957 提交信息与本批注入账（BACKLOG 治理注记「全项目全面严格审查入档（2026-09-18）」同记）。
 
 ### RS-02（P0→P1）CI 零 Rust 测试覆盖
@@ -43,7 +43,7 @@
   - 已落修复（667d7d8d）：ci.yml 新增 `rust-tests` job——windows-latest、timeout 60m、checkout `submodules: recursive`、`dtolnay/rust-toolchain@master` 钉 `1.97.1`（＝`orz/rust-toolchain.toml` 冻结版）、`cargo test --locked` 三连（orz-loop `--lib`／orz-assurance `--lib`／orz-host `--lib -- --test-threads=1`，与回执口径一致）；orz-bin/orz-tui 不入最小轨（RS-12/RS-04 另批）。
   - 首轮复跑暴露（35326045846）：rust-tests 首步崩于 `orz-tools-api` build.rs `protoc` 缺失——**修正本报告 §3 的一个局部判断**：三个 lib 测试在开发机能过纯属 `target` 缓存吞掉 build script 重跑（依赖链 orz-loop → orz-tools → orz-tools-api 实际在），并非不依赖 protoc；全新 checkout 即裸奔。
   - 续批（5cda9957）：ci.yml 补「Install protoc 35.1」步骤——官方 release `v35.1` win64 zip 下载解包入 `GITHUB_PATH`，版本钉死＝开发机 vendored `orz/bin/protoc.exe`（libprotoc 35.1）同源（URL 探活 302 实证）；RS-12 口径随之扩大：protoc 前置不止 orz-bin，三个 lib 测试的全新环境构建同样必需，README「从源码运行」补前置时应一并写清。
-  - 第二轮复跑（35328029850）：rust-tests 批注时点在途（工具链安装步上轮已验证可过）。**RS-02 验收（三步全绿）未达、待本轮出数**；绿后由账本闭合批勾选 RS-02 并附 run 证据。
+  - 第二轮复跑（35328029850）：protoc 步骤实证有效——`Run orz-loop lib tests` 在 CI **791/0/3 全绿**（干净 HEAD 基线；上轮 7m23s 崩点已灭）；红点移至 orz-assurance 两枚 `match_python` 对拍（＝CI 缺 `jsonschema`、非 Rust 侧缺陷），随批在 rust-tests job 补 `python -m pip install jsonschema`。**RS-02 验收（三步全绿）待第三轮出数**；绿后由账本闭合批勾选 RS-02 并附 run 证据。
 
 ### RS-03（P1）模型面残留文案「920K 压缩」与现行口径冲突
 

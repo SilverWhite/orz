@@ -228,8 +228,22 @@ class RealRetrievalIntegrationTests(unittest.TestCase):
         )
         paths = [r.path for r in results]
         self.assertTrue(
-            any("instruction_gate.py" in p for p in paths),
-            f"Should find instruction_gate.py in: {paths}",
+            any("P3_INSTRUCTION_AUTHORITY" in p for p in paths),
+            f"Should find P3 instruction authority audit doc in: {paths}",
+        )
+        # The gate script is asserted via a source_code-scoped search: the
+        # broad top-10 window is corpus-drift sensitive (docs accumulate),
+        # and pre-fix tie order followed filesystem glob order (RS-01
+        # 2026-09-18: green on the dev worktree, red on a clean CI checkout).
+        source_hits = index.search(
+            "P3 instruction authority action authorization",
+            max_results=10,
+            categories=["source_code"],
+        )
+        source_paths = [r.path for r in source_hits]
+        self.assertTrue(
+            any("instruction_gate.py" in p for p in source_paths),
+            f"Should find instruction_gate.py in source_code hits: {source_paths}",
         )
 
     def test_search_windows_sandbox(self) -> None:

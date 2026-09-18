@@ -94,6 +94,9 @@ jobs:
           Expand-Archive -Path $zip -DestinationPath $dest -Force
           Add-Content $env:GITHUB_PATH (Join-Path $dest 'bin')
 
+      - name: Install jsonschema (orz-assurance crosscheck tests shell out to python)
+        run: python -m pip install jsonschema
+
       - name: Run orz-loop lib tests
         working-directory: orz
         run: cargo test --locked -p orz-loop --lib
