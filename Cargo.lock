@@ -5594,7 +5594,7 @@ dependencies = [
 
 [[package]]
 name = "orz-bin"
-version = "0.6.1"
+version = "0.6.2"
 dependencies = [
  "agent-client-protocol",
  "async-trait",
