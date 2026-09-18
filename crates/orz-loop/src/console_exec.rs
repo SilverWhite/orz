@@ -113,6 +113,8 @@ impl AgentLoopController {
                 prompt,
                 workspace_trust,
                 &mut scratch,
+                // console 发放链自持会话本体（scratch 即会话）——无需外部视图。
+                None,
                 tool_rounds,
                 heartbeat,
                 None,

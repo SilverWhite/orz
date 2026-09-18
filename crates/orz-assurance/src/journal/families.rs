@@ -41,6 +41,7 @@ pub(crate) fn str_of(value: Option<&Value>) -> Option<&str> {
 
 /// Tool-family constants mirroring the Python module tables.
 pub(crate) mod toolsets {
+    use crate::tool_names::{BLACKBOARD_WRITE_TOOL_NAME, CONTEXT_COMPRESS_TOOL_NAME};
     pub const WORK_TOOLS: &[&str] = &[
         "read_file",
         "list_dir",
@@ -53,7 +54,12 @@ pub(crate) mod toolsets {
         // 0aj（2026-09-16）：`blackboard_write`（0ae D0 模型写入面）入工作
         // 工具表——与 orz-loop `tool_probe::WORK_TOOLS` 及 Python
         // `_WORK_TOOLS` 三处同批（探针面与请求面脱同步的修复面）。
-        "blackboard_write",
+        // 名字经 tool_names 单源（0ao）。
+        BLACKBOARD_WRITE_TOOL_NAME,
+        // 0ap（2026-09-18）：`context_compress` 入工作工具表（压缩交互
+        // 第九工具）——三处同批先例（探针/判官/Python 镜像），Python 侧
+        // `_WORK_TOOLS` 同批 +1（表格数据同步；判别规则零改动）。
+        CONTEXT_COMPRESS_TOOL_NAME,
         "todo_write",
         "update_goal",
         "enter_plan_mode",
@@ -718,7 +724,8 @@ pub fn verify_policy_denial(events: &[Value]) -> Vec<String> {
     // Python `_PERMISSION_GATED_TOOLS = _WORK_TOOLS | _RETRIEVAL_MODE_GATED_TOOLS`
     // is an EXACT name set, derived from the two tables on both sides
     // (`|WORK_TOOLS| + |RETRIEVAL_MODE_GATED_TOOLS|`; 0aj-review 2026-09-16:
-    // 24 + 4 = 28 after `blackboard_write` joined the work table, was 23 + 4 = 27)
+    // 24 + 4 = 28 after `blackboard_write` joined the work table, was 23 + 4 = 27;
+    // 0ap 2026-09-18: 25 + 4 = 29 after `context_compress` joined)
     // — NOT the prefix predicate `_is_retrieval_mode_gated_tool` (which
     // additionally admits web_search/web_fetch/retrieve_project_*). Using the
     // predicate here would let source=permission through on web-family tools

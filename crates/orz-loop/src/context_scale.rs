@@ -38,6 +38,9 @@
 
 use std::collections::HashSet;
 
+use crate::blackboard::BLACKBOARD_WRITE_TOOL_NAME;
+use orz_assurance::tool_names::CONTEXT_COMPRESS_TOOL_NAME;
+
 /// 提醒块注入前缀（注册进 `prompt::is_injected_block_text`，绝不持久化）。
 pub const REMINDER_INJECTED_PREFIX: &str = "[CONTEXT_SCALE";
 
@@ -400,7 +403,7 @@ pub fn first_block_reminder_block() -> String {
     format!(
         "{REMINDER_INJECTED_PREFIX} 首个分块] 你的当前上下文窗口里首次出现了**工作现场之外**的分块\
          （分块表见下）。这只是一个索引事实：内容仍在你的窗口里，机械层不会替你删除。\
-         请把接线结论/关键读数固化到黑板（blackboard_write section=plan|notes）\
+         请把接线结论/关键读数固化到黑板（{BLACKBOARD_WRITE_TOOL_NAME} section=plan|notes）\
          ——黑板不属于上下文窗口，跨压缩与截断都不失效。"
     )
 }
@@ -412,7 +415,9 @@ pub fn compression_window_block(milestone_tokens: u64) -> String {
         "{WINDOW_NOTICE_PREFIX} · 窗口 · 模型面 {k}K] 已打断全部动作。请在窗口内完成：\n\
          1. 产出语义摘要块（见上）——机械层用它替换**工作现场之外**的分块（可按块区间指定）；\n\
          2. 若有关键结论需要跨压缩长期留存，一并固化到黑板\
-         （blackboard_write section=plan|notes；黑板不受上下文窗口影响）。\n\
+         （{BLACKBOARD_WRITE_TOOL_NAME} section=plan|notes；黑板不受上下文窗口影响）。\n\
+         （读数与再发起可随时调用 {CONTEXT_COMPRESS_TOOL_NAME}：窗口在程中时它只返回当前\
+         读数，不会重复开窗。）\n\
          窗口结束仍未产出摘要块 ⇒ 机械层**不做压缩兜底**（模型面总量只由模型自压与\
          H1/T1 管），如实落账 `model_participated=false`。"
     )
@@ -429,8 +434,48 @@ pub fn window_remaining_notice(rounds_left: u32) -> String {
 /// 窗口内非白名单动作被丢弃时的机械提示（只报事实、不带建议）。
 pub fn window_dropped_calls_notice(dropped: usize) -> String {
     format!(
-        "{WINDOW_NOTICE_PREFIX}] 窗口内仅 blackboard_write 可执行，本轮其余动作已跳过（{dropped} 个）"
+        "{WINDOW_NOTICE_PREFIX}] 窗口内仅 {BLACKBOARD_WRITE_TOOL_NAME} / {CONTEXT_COMPRESS_TOOL_NAME} 可执行，本轮其余动作已跳过（{dropped} 个）"
     )
+}
+
+/// 0ap（2026-09-18，设计 §1/§0 表）：`context_compress` 调用的机械判定
+/// 三态（防抖；纯内存压缩状态操作，fail-soft——三态都是 exit 0 信封，
+/// 不报错不阻断）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CompressRequestState {
+    /// 请求受理：下一个 loop-top 安全边界开 D3 模型参与压缩窗口。
+    Requested,
+    /// 窗口已在程中：no-op 防连点，只返回当前读数。
+    InProgress,
+    /// 主滑块外无可压缩分块：中性说明返回、不开窗（不虚构动作；沿
+    /// Unknown 档文案纪律——如实说明而非报错）。
+    NothingToCompress,
+}
+
+/// 0ap：`context_compress` 响应文本（防抖三态说明＋滑块读数表；设计 §3
+/// 辅面——与 `blackboard_read` 头增段共用同一渲染）。只出数量与估算，
+/// 分块内容不流出模型面。
+pub fn context_compress_response(
+    state: CompressRequestState,
+    readout: &crate::model_face::SliderReadout,
+) -> String {
+    let table = crate::model_face::render_slider_readout_line(readout);
+    let total = readout.total_blocks;
+    let head = match state {
+        CompressRequestState::Requested => format!(
+            "压缩窗口已请求：下一个安全边界将开启模型参与压缩窗口（≤3 轮）。\
+             窗口轮请产出语义摘要块（机械层据以折叠主滑块外的已闭合分块），\
+             必要时用 {BLACKBOARD_WRITE_TOOL_NAME} 固化关键结论。"
+        ),
+        CompressRequestState::InProgress => {
+            "压缩窗口已在程中（in_progress）：本轮即窗口轮，请直接产出语义摘要块或固化黑板；无需重复发起。"
+                .to_string()
+        }
+        CompressRequestState::NothingToCompress => {
+            "主滑块之外没有可压缩分块：无需压缩，未开窗。".to_string()
+        }
+    };
+    format!("{head}\n滑块读数：{table}（主滑块外共 {total} 块）。")
 }
 
 /// **语义摘要块的机械识别**：从模型回复文本中抽取最后一块摘要（前缀到结束
@@ -490,6 +535,43 @@ pub fn extract_block_selection(summary: &str) -> Option<Vec<u32>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// 0ap S1 钉②（2026-09-18，设计 §6）：`context_compress` 响应信封
+    /// 三态——Requested / InProgress（no-op 防抖）/ NothingToCompress
+    /// （中性不开窗），全部携带滑块读数表（与 blackboard_read 头同渲染）。
+    #[test]
+    fn context_compress_response_covers_the_three_debounce_states() {
+        let readout = crate::model_face::SliderReadout {
+            compressible_blocks: 3,
+            compressible_estimate_tokens: 153_600,
+            total_blocks: 5,
+        };
+        let requested = context_compress_response(CompressRequestState::Requested, &readout);
+        assert!(requested.contains("压缩窗口已请求"), "{requested}");
+        assert!(requested.contains("blackboard_write"), "{requested}");
+        assert!(
+            requested.contains("滑块读数：滑块外可压缩 3 块 ≈ est 153K（主滑块外共 5 块）"),
+            "{requested}"
+        );
+
+        let in_progress = context_compress_response(CompressRequestState::InProgress, &readout);
+        assert!(
+            in_progress.contains("压缩窗口已在程中（in_progress）"),
+            "{in_progress}"
+        );
+        assert!(
+            !in_progress.contains("已请求"),
+            "in-progress 态不得再次宣请开窗: {in_progress}"
+        );
+
+        let nothing = context_compress_response(CompressRequestState::NothingToCompress, &readout);
+        assert!(nothing.contains("没有可压缩分块"), "{nothing}");
+        assert!(nothing.contains("未开窗"), "{nothing}");
+        // 读数表三态同源（设计 §3：辅面自带同表）。
+        for text in [requested, in_progress, nothing] {
+            assert!(text.contains("滑块读数："), "{text}");
+        }
+    }
 
     #[test]
     fn ladder_fires_each_tier_exactly_once_and_in_policy_order() {

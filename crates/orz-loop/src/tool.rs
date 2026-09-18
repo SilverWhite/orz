@@ -19,7 +19,9 @@ use orz_assurance::gates::ipg::{
     evaluate_instruction_provenance_gate,
 };
 
+use crate::blackboard::BLACKBOARD_WRITE_TOOL_NAME;
 use crate::host::{RiskClass, ToolPolicy};
+use orz_assurance::tool_names::CONTEXT_COMPRESS_TOOL_NAME;
 
 /// Dispatches tool calls with pre/post assurance checks.
 #[derive(Debug, Clone, Default)]
@@ -78,8 +80,13 @@ impl ToolDispatcher {
         // the in-memory blackboard notes faces (plan/notes) — no file, no
         // network, no external side effect — ReadOnly-classed like
         // `plan_write` (the 8-tool face freeze's user-led explicit
-        // exception +1).
-        "blackboard_write",
+        // exception +1). Name via `tool_names` single source (0ao).
+        BLACKBOARD_WRITE_TOOL_NAME,
+        // 0ap (2026-09-18, 设计 §4 用户裁决): `context_compress` 是**纯内存
+        // 压缩状态操作**——请求开 D3 模型参与压缩窗口 ＋返回滑块读数，无
+        // 文件/网络/黑板外部副作用，ReadOnly 类（所有策略自动放行）。8 工具
+        // 面冻结的用户主导显式例外 +2；名字自诞生即走 tool_names 单源。
+        CONTEXT_COMPRESS_TOOL_NAME,
         // GAP-RETRIEVAL-TOOLS (2026-08-10): `project_doc_index` is a
         // workspace-local read (discovery + query) — ReadOnly class
         // (auto-allowed under every policy; the retrieval subagent's
@@ -177,9 +184,14 @@ impl ToolDispatcher {
             // PLAN-FIRST 阶段 A: the plan-section write is session
             // bookkeeping (in-memory blackboard only) — honest "other" fold.
             "other"
-        } else if tool_name == "blackboard_write" {
+        } else if tool_name == BLACKBOARD_WRITE_TOOL_NAME {
             // 0ae D0: the model notes write is session bookkeeping
             // (in-memory blackboard only) — honest "other" fold.
+            "other"
+        } else if tool_name == CONTEXT_COMPRESS_TOOL_NAME {
+            // 0ap: the compression-window request mutates in-memory
+            // compression state only — honest "other" fold (same family as
+            // the whitelist/action-bar/plan writes).
             "other"
         } else if Self::is_shell_tool(tool_name) {
             "terminal"

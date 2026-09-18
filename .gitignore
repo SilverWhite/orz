@@ -16,3 +16,7 @@ bin/protoc.dotslash
 
 # orz runtime journals
 /.gsa
+
+# 批内过程件（`.tmp-<批名>-*`：基线读数日志／补丁等）——留工作树不入库
+# （0ap 复核批 2026-09-18；父仓同前缀规则同步）。
+.tmp-*

@@ -259,6 +259,69 @@ fn make_block(
     }
 }
 
+/// 0ap（2026-09-18，设计 §2/§3）：滑块读数——主滑块以外**未压缩**分块数
+/// N＋估算 token 合计（「可压缩量」）。数据源＝既有分块账
+/// （`blocks_outside_slider` ＋ `face_markers` 的 marker 反解），**读时
+/// 现算、零新增记账**；只暴露数量与估算，分块内容/原文不流出模型面（v8
+/// 「仅分块、不流出模型面」不变）；advisory——不联动任何硬门（H1/T1/
+/// 轮预算/资源门/orientation 全不接，设计 §2 纪律）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SliderReadout {
+    /// 已闭合且仍为原文（Live）的分块数——可被语义摘要压缩的量
+    /// （与 `compress_blocks_now` 的可压缩判定同源同尺：`closed ∧ Live`）。
+    pub compressible_blocks: usize,
+    /// 上述分块的估算体量合计（chars/2 口径）。
+    pub compressible_estimate_tokens: u64,
+    /// 主滑块以外全部分块数（含未闭合残段与已压缩/截断——上下文信息）。
+    pub total_blocks: usize,
+}
+
+/// 读时现算滑块读数（纯函数：不取任何锁、不改任何状态）。
+pub fn slider_readout(
+    messages: &[Message],
+    slider_tokens: u64,
+    block_tokens: u64,
+) -> SliderReadout {
+    let blocks = blocks_outside_slider(messages, slider_tokens, block_tokens);
+    let markers = face_markers(messages);
+    let mut compressible_blocks = 0usize;
+    let mut compressible_estimate_tokens = 0u64;
+    for b in &blocks {
+        if b.closed && markers.state(b.number) == BlockState::Live {
+            compressible_blocks += 1;
+            compressible_estimate_tokens += b.estimate_tokens;
+        }
+    }
+    SliderReadout {
+        compressible_blocks,
+        compressible_estimate_tokens,
+        total_blocks: blocks.len(),
+    }
+}
+
+/// 估算读数标签（与 v8 读数口径同族：≥1M 用 M 记法一位小数，≥1K 用 K，
+/// 其余原值照出）。
+pub fn estimate_tokens_label(tokens: u64) -> String {
+    if tokens >= 1_000_000 {
+        format!("{:.1}M", tokens as f64 / 1_000_000.0)
+    } else if tokens >= 1_000 {
+        format!("{}K", tokens / 1_000)
+    } else {
+        format!("{tokens}")
+    }
+}
+
+/// 滑块读数段文本（`blackboard_read` 响应头增段与 `context_compress` 响应
+/// 辅面**共用同一渲染**——设计 §3「辅面自带同表」；形态＝
+/// 「滑块外可压缩 N 块 ≈ est K」）。
+pub fn render_slider_readout_line(readout: &SliderReadout) -> String {
+    format!(
+        "滑块外可压缩 {} 块 ≈ est {}",
+        readout.compressible_blocks,
+        estimate_tokens_label(readout.compressible_estimate_tokens),
+    )
+}
+
 /// 反解会话内的分块状态（扫描 v8 marker；v0.1–v0.3 历史 marker 无块号 ⇒ 忽略）。
 pub fn face_markers(messages: &[Message]) -> FaceMarkers {
     let mut out = FaceMarkers::default();
@@ -906,6 +969,65 @@ mod tests {
             out.push(tool(&id, &"x".repeat(per_round_chars)));
         }
         out
+    }
+
+    /// 0ap S1 钉①（2026-09-18，设计 §6）：读数表与折叠状态**一致性对账**
+    /// ——`slider_readout` 的可压缩数/估算必须与 `blocks_outside_slider` ∩
+    /// `face_markers`（closed ∧ Live，即 `compress_blocks_now` 同一可压缩
+    /// 判定）逐块对账；压缩 marker 落地后读数恰降对应块；整段在滑块内 ⇒
+    /// 全零读数。读时现算（零新增记账）的对账钉。
+    #[test]
+    fn slider_readout_matches_block_and_marker_state() {
+        let messages = conversation(10, 8_000); // ≈4K 估算/轮
+        let blocks = blocks_outside_slider(&messages, 12_000, 12_000);
+        let markers = face_markers(&messages);
+        let compressible: Vec<&ContextBlock> = blocks
+            .iter()
+            .filter(|b| b.closed && markers.state(b.number) == BlockState::Live)
+            .collect();
+        assert!(compressible.len() >= 2, "fixture needs several blocks");
+
+        let readout = slider_readout(&messages, 12_000, 12_000);
+        assert_eq!(readout.compressible_blocks, compressible.len());
+        assert_eq!(
+            readout.compressible_estimate_tokens,
+            compressible.iter().map(|b| b.estimate_tokens).sum::<u64>()
+        );
+        assert_eq!(readout.total_blocks, blocks.len());
+
+        // 块 1 压缩落地（marker 反解）⇒ 读数恰降块 1 的数量与估算。
+        let first = compressible[0];
+        let mut compressed = messages.clone();
+        compressed.push(Message {
+            role: Role::User,
+            content: format!(
+                "[前文上下文已压缩 {}]\n已处理分块: {}",
+                BLOCK_MARKER_COMPRESSED_VERSION, first.number
+            ),
+            tool_call_id: None,
+            tool_calls: Vec::new(),
+            reasoning_content: None,
+            round: None,
+        });
+        let after = slider_readout(&compressed, 12_000, 12_000);
+        assert_eq!(after.compressible_blocks, readout.compressible_blocks - 1);
+        assert_eq!(
+            after.compressible_estimate_tokens,
+            readout.compressible_estimate_tokens - first.estimate_tokens
+        );
+        assert_eq!(after.total_blocks, readout.total_blocks);
+
+        // 整段放得下滑块 ⇒ 全零读数（NothingToCompress 的账面依据）。
+        let small = conversation(3, 1_000);
+        let empty = slider_readout(&small, 160_000, 32_000);
+        assert_eq!(
+            empty,
+            SliderReadout {
+                compressible_blocks: 0,
+                compressible_estimate_tokens: 0,
+                total_blocks: 0,
+            }
+        );
     }
 
     #[test]

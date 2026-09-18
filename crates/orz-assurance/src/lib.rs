@@ -19,6 +19,7 @@ pub mod sandbox;
 pub mod session;
 pub mod source_weighting;
 pub mod tool_envelope;
+pub mod tool_names;
 
 // Re-export commonly used types from journal
 pub use journal::{

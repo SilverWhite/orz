@@ -4,7 +4,7 @@
 
 use super::{ToolFailureOutcome, is_serp_search_call, serp_navigations_from_output};
 use crate::agent_loop::{SERP_SESSION_RETRIEVAL_FLOOR, SerpSearchBudget};
-use crate::blackboard::{ActionOrder, EditRecord, ToolActionRecord};
+use crate::blackboard::{ActionOrder, BLACKBOARD_WRITE_TOOL_NAME, EditRecord, ToolActionRecord};
 use crate::console::CODE_CONTENT_ANCHOR_MISMATCH;
 use crate::controller::{
     AgentLoopController, AgentLoopError, CandidateGateDecision, DenialKey, EventWriter,
@@ -17,8 +17,24 @@ use crate::host::{
 };
 use crate::tool::ToolDispatcher;
 use orz_assurance::EventType;
+use orz_assurance::tool_names::CONTEXT_COMPRESS_TOOL_NAME;
 use serde_json::Value;
 use std::sync::Mutex;
+
+/// 0ap 复核批（P1）：读数用的**只读会话视图**。
+///
+/// 串行路径 `conversation` 为 `None` ⇒ 以 `messages` 本体为会话（消息槽即
+/// 会话）；同轮读类并行批次（0k）传 `Some(批首会话快照)`——该路径的
+/// `messages` 只是本次调用的**注入槽**（批首为空 `Vec`，结果按声明序并回
+/// 主会话），把它当会话读会得出假读数（「滑块外可压缩 0 块」）。把两个角色
+/// 显式分开后，「工具面读数＝真会话读数」不再依赖「该工具是否恰好被排除在
+/// 并行集之外」这一隐式前提。
+fn readout_conversation<'a>(
+    messages: &'a [Message],
+    conversation: Option<&'a [Message]>,
+) -> &'a [Message] {
+    conversation.unwrap_or(messages)
+}
 
 impl AgentLoopController {
     /// Run a host tool call through the permission and execution gates.
@@ -67,6 +83,8 @@ impl AgentLoopController {
             _prompt,
             _workspace_trust,
             messages,
+            // 本形态＝测试／控制台直呼（消息槽即会话本体）——无需外部视图。
+            None,
             tool_rounds,
             heartbeat,
             activation_id,
@@ -98,6 +116,9 @@ impl AgentLoopController {
         _prompt: &str,
         _workspace_trust: orz_assurance::gates::ipg::WorkspaceTrust,
         messages: &mut Vec<Message>,
+        // 0ap 复核批（P1）：只读会话视图（见 `readout_conversation`）——
+        // 主车道同轮读类并行批次传批首会话快照；其余调用面传 `None`。
+        conversation: Option<&[Message]>,
         tool_rounds: u32,
         heartbeat: Option<&crate::gateway::model::ActivityClock>,
         activation_id: Option<&str>,
@@ -115,6 +136,7 @@ impl AgentLoopController {
             _prompt,
             _workspace_trust,
             messages,
+            conversation,
             tool_rounds,
             heartbeat,
             activation_id,
@@ -141,6 +163,8 @@ impl AgentLoopController {
         _prompt: &str,
         _workspace_trust: orz_assurance::gates::ipg::WorkspaceTrust,
         messages: &mut Vec<Message>,
+        // 0ap 复核批（P1）：只读会话视图（见 `readout_conversation`）。
+        conversation: Option<&[Message]>,
         tool_rounds: u32,
         heartbeat: Option<&crate::gateway::model::ActivityClock>,
         activation_id: Option<&str>,
@@ -1110,13 +1134,65 @@ impl AgentLoopController {
                 None,
             ));
         }
+        // 0ap（2026-09-18，设计 §1）：`context_compress`——知情发起 D3 模型
+        // 参与压缩窗口＋响应自带滑块读数表。纯内存压缩状态操作（无宿主
+        // 派发，同 `compaction_whitelist_add` 形态；权限桥已在上方按
+        // ReadOnly 放行——九点位 #2/#3 同批登记）。防抖三态：窗口在程中 ⇒
+        // no-op（in_progress）＋当前读数；主滑块外无可压缩分块 ⇒ 中性说明
+        // 返回、不开窗；否则置请求位（agent_loop 在下一个 loop-top 安全
+        // 边界开窗，见 agent_loop 消费点）。advisory——不联动任何硬门。
+        if tc.name == CONTEXT_COMPRESS_TOOL_NAME {
+            let readout = crate::model_face::slider_readout(
+                readout_conversation(messages, conversation),
+                self.context_compact.slider_window_tokens,
+                self.context_compact.model_face_block_tokens,
+            );
+            let state = if self.compression_window_active() {
+                crate::context_scale::CompressRequestState::InProgress
+            } else if readout.compressible_blocks == 0 {
+                crate::context_scale::CompressRequestState::NothingToCompress
+            } else {
+                self.request_compression_window();
+                crate::context_scale::CompressRequestState::Requested
+            };
+            let output = crate::context_scale::context_compress_response(state, &readout);
+            let mut completed = serde_json::json!({
+                "tool": tc.name,
+                "call_id": tc.call_id,
+                "exit_code": 0,
+            });
+            // F3 (2026-08-16 审查收口): direct 盖章对称。
+            stamp_direct(&mut completed);
+            writer.record(EventType::ToolCompleted, completed).await?;
+            self.push_tool_action_stamped(
+                ToolDispatcher::action_category(&tc.name).to_string(),
+                tc.name.clone(),
+                chrono_utc_now(),
+            );
+            let result = ToolResult {
+                output,
+                exit_code: Some(0),
+                output_encoding: None,
+                structured: None,
+                ..Default::default()
+            };
+            messages.push(Message {
+                role: Role::Tool,
+                content: result.output.clone(),
+                tool_call_id: Some(tc.call_id.clone()),
+                tool_calls: Vec::new(),
+                reasoning_content: None,
+                round: None,
+            });
+            return Ok((result, None));
+        }
         // 0ae D0（2026-09-15，设计 §3，用户裁决 DP-6）：`blackboard_write`
         // ——模型写入面（8 工具面冻结的用户主导显式例外 +1）。可写分区限
         // plan 与 notes 两域（机械单写者分区所有权不变）；单次 ≤8K 字符；
         // 写入走既有结构化盖章（(round, domain) 写时盖章 + ts 墙钟）；落
         // journal 复用 `plan_write` 事件族并扩展 `section` 字段（schema
         // v0.2 增量，零新族）。
-        if tc.name == "blackboard_write" {
+        if tc.name == BLACKBOARD_WRITE_TOOL_NAME {
             let section_raw = tc.arguments.get("section").and_then(|v| v.as_str());
             let content = tc.arguments.get("content").and_then(|v| v.as_str());
             let section = section_raw.and_then(crate::blackboard::ModelNoteSection::parse);
@@ -1124,7 +1200,7 @@ impl AgentLoopController {
             let Some(section) = section else {
                 {
                     let error: String = format!(
-                        "invalid blackboard_write section: {section_raw:?} — 可写分区限 \
+                        "invalid {BLACKBOARD_WRITE_TOOL_NAME} section: {section_raw:?} — 可写分区限 \
                          plan|notes（机械单写者分区 edits/exec/actions/processes/temporal/\
                          session 不开放模型写入）"
                     );
@@ -1163,8 +1239,9 @@ impl AgentLoopController {
             };
             let Some(content) = content else {
                 {
-                    let error: String =
-                        "invalid blackboard_write content: content 必须是字符串".to_string();
+                    let error: String = format!(
+                        "invalid {BLACKBOARD_WRITE_TOOL_NAME} content: content 必须是字符串"
+                    );
                     let mut completed = serde_json::json!({
                         "tool": tc.name,
                         "call_id": tc.call_id,
@@ -1201,7 +1278,8 @@ impl AgentLoopController {
             let content_chars = content.chars().count();
             if content.trim().is_empty() {
                 {
-                    let error: String = "invalid blackboard_write content: 内容为空".to_string();
+                    let error: String =
+                        format!("invalid {BLACKBOARD_WRITE_TOOL_NAME} content: 内容为空");
                     let mut completed = serde_json::json!({
                         "tool": tc.name,
                         "call_id": tc.call_id,
@@ -1238,7 +1316,7 @@ impl AgentLoopController {
             if content_chars > crate::blackboard::MODEL_NOTE_MAX_CHARS {
                 {
                     let error: String = format!(
-                        "blackboard_write content 超出单次上限（{content_chars} > {max} 字符）：请精炼后分次写入",
+                        "{BLACKBOARD_WRITE_TOOL_NAME} content 超出单次上限（{content_chars} > {max} 字符）：请精炼后分次写入",
                         max = crate::blackboard::MODEL_NOTE_MAX_CHARS
                     );
                     let mut completed = serde_json::json!({
@@ -1302,7 +1380,7 @@ impl AgentLoopController {
                 .record(
                     EventType::PlanWrite,
                     serde_json::json!({
-                        "plan_id": "blackboard_write",
+                        "plan_id": BLACKBOARD_WRITE_TOOL_NAME,
                         "goal": preview,
                         "step_count": 0,
                         "outcome": "accepted",
@@ -2175,7 +2253,9 @@ impl AgentLoopController {
                     )
                     && let Some(tail) = self.blackboard.read().render_plan_model_notes_tail()
                 {
-                    format!("{rendered}\n—— 模型笔记（blackboard_write section=plan）——\n{tail}")
+                    format!(
+                        "{rendered}\n—— 模型笔记（{BLACKBOARD_WRITE_TOOL_NAME} section=plan）——\n{tail}"
+                    )
                 } else {
                     rendered
                 }
@@ -2189,7 +2269,19 @@ impl AgentLoopController {
             let content = if epoch.is_none()
                 && !crate::controller::AgentLoopController::is_blackboard_render_error(&content)
             {
-                self.attach_pull_delta(&section, content, tool_rounds)
+                // 0ap（设计 §3 主面）：live 读取响应头搭**滑块读数段**——
+                // 读时现算（会话视图在执行点在握；纯函数零新增记账、零新
+                // 锁，不倒 attach_pull_delta 的既有锁序）。会话视图经
+                // `readout_conversation` 取——同轮读类并行批次传批首会话
+                // 快照，否则本调用的空注入槽会被当成会话（0ap 复核批 P1）。
+                let slider_segment = crate::model_face::render_slider_readout_line(
+                    &crate::model_face::slider_readout(
+                        readout_conversation(messages, conversation),
+                        self.context_compact.slider_window_tokens,
+                        self.context_compact.model_face_block_tokens,
+                    ),
+                );
+                self.attach_pull_delta(&section, content, tool_rounds, Some(&slider_segment))
             } else {
                 content
             };
@@ -4950,6 +5042,7 @@ mod tests {
                 "bash",
                 "blackboard_read",
                 "blackboard_write",
+                "context_compress",
                 "grep",
                 "read_file",
                 "search_replace",
@@ -4999,6 +5092,7 @@ mod tests {
                 "bash",
                 "blackboard_read",
                 "blackboard_write",
+                "context_compress",
                 "grep",
                 "read_file",
             ],

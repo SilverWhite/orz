@@ -532,6 +532,16 @@ pub struct AgentLoopController {
     pub(crate) denial_state: Mutex<DenialState>,
     /// A6 explicit context compaction parameters (settleable for tests).
     pub(crate) context_compact: ContextCompactConfig,
+    /// 0ap（2026-09-18，设计 §1/§4-1）：`context_compress` 的**窗口请求位**
+    /// ——工具执行点置位（幂等防连点），agent_loop 在下一个 loop-top 安全
+    /// 边界消费开窗（未消费前锁存）。run_turn_inner 为 `&self` 且请求产生于
+    /// loop-top 之间的派发段 ⇒ 跨段通信用原子位（非 Mutex——无复合不变量，
+    /// 单向置位/取走语义）。
+    pub(crate) compression_window_requested: std::sync::atomic::AtomicBool,
+    /// 0ap：**窗口在程位**（执行点防抖读取）——agent_loop 每个 loop-top 与
+    /// pending_checkpoint 对齐一次；工具执行只发生在 loop-top 之间的派发段，
+    /// 故该值在整段派发内恒真。
+    pub(crate) compression_window_active: std::sync::atomic::AtomicBool,
     /// A6 §8 C.2 compaction whitelist (user decision 2026-08-08): the
     /// model-written list of task facts that survive compaction. Written
     /// only during the FIRST tool batch; resident in the conversation's
@@ -850,6 +860,8 @@ impl AgentLoopController {
             blackboard_archive_dir: None,
             epoch_archive_errors: Mutex::new(Vec::new()),
             pacing_rounds: std::sync::atomic::AtomicU32::new(0),
+            compression_window_requested: std::sync::atomic::AtomicBool::new(false),
+            compression_window_active: std::sync::atomic::AtomicBool::new(false),
             // v7（S1 修订批）：会话级提醒水位——构造时为空（新会话从零开始；
             // ACP 会话在 prompt 起始经 `with_context_scale_notified` 注入侧车值）。
             context_scale_notified: Mutex::new(Vec::new()),
@@ -1479,6 +1491,8 @@ impl AgentLoopController {
             blackboard_archive_dir: None,
             epoch_archive_errors: Mutex::new(Vec::new()),
             pacing_rounds: std::sync::atomic::AtomicU32::new(0),
+            compression_window_requested: std::sync::atomic::AtomicBool::new(false),
+            compression_window_active: std::sync::atomic::AtomicBool::new(false),
             // v7（S1 修订批）：会话级提醒水位（构造时空）。
             context_scale_notified: Mutex::new(Vec::new()),
             denial_state: Mutex::new(DenialState::default()),
@@ -2315,6 +2329,39 @@ impl AgentLoopController {
         )
     }
 
+    // ── 0ap：压缩窗口请求位 / 在程位（原子；跨 loop-top 派发段通信）──────
+
+    /// `context_compress` 执行点置位：请求在下一个 loop-top 安全边界开窗
+    /// （幂等——连点只影响一次开窗）。
+    pub(crate) fn request_compression_window(&self) {
+        self.compression_window_requested
+            .store(true, std::sync::atomic::Ordering::Relaxed);
+    }
+
+    pub(crate) fn compression_window_requested(&self) -> bool {
+        self.compression_window_requested
+            .load(std::sync::atomic::Ordering::Relaxed)
+    }
+
+    /// agent_loop 消费：开窗时取走请求位（锁存语义由调用方保证——仅在
+    /// `pending_checkpoint.is_none()` 时取走）。
+    pub(crate) fn take_compression_window_request(&self) {
+        self.compression_window_requested
+            .store(false, std::sync::atomic::Ordering::Relaxed);
+    }
+
+    /// loop-top 对齐在程位（agent_loop 调用；工具执行点经
+    /// [`Self::compression_window_active`] 防抖读取）。
+    pub(crate) fn set_compression_window_active(&self, active: bool) {
+        self.compression_window_active
+            .store(active, std::sync::atomic::Ordering::Relaxed);
+    }
+
+    pub(crate) fn compression_window_active(&self) -> bool {
+        self.compression_window_active
+            .load(std::sync::atomic::Ordering::Relaxed)
+    }
+
     /// 动态上下文滑块 S1 修订批（v7，2026-09-15，设计 §3.5.1，用户裁定
     /// DP-16）：**会话级提醒水位**——已提醒刻度键（`["500k", "900k"]`）。
     /// 与黑板同族：跨 prompt 延续、新会话从零开始、恢复不重发（先例
@@ -2353,6 +2400,7 @@ impl AgentLoopController {
         section: &str,
         body: String,
         tool_rounds: u32,
+        slider_readout: Option<&str>,
     ) -> String {
         const HEADER_CAP: usize = 256;
         // 0ae D0（2026-09-15，设计 §3，用户定案）：水位状态标——黑板 live
@@ -2375,7 +2423,15 @@ impl AgentLoopController {
             .get(Self::MIGRATION_CURSOR_KEY)
             .copied()
             .unwrap_or(0);
-        let mut header = format!("[黑板 增量 水位{watermark}]");
+        // 0ap（2026-09-18，设计 §3 主面）：水位标旁增**滑块读数段**——主
+        // 滑块以外未压缩分块数 N＋估算 token（「滑块外可压缩 N 块 ≈ est K」）。
+        // 读时现算：分段文本由调用方在工具执行点现算传入（messages 在握、
+        // 纯函数、零新增记账），本方法不做任何新锁获取、不倒锁序（既有
+        // blackboard → lif → cursors 顺序不变）。None ＝不渲染（测试面）。
+        let mut header = match slider_readout {
+            Some(segment) => format!("[黑板 增量 水位{watermark} {segment}]"),
+            None => format!("[黑板 增量 水位{watermark}]"),
+        };
         let mut badges: Vec<String> = Vec::new();
         for (name, revision) in &items {
             let last = cursors.get(*name).copied().unwrap_or(0);
@@ -3123,6 +3179,29 @@ impl AgentLoopController {
                         },
                     },
                     "required": ["section", "content"],
+                }),
+            });
+        }
+        // 0ap（2026-09-18，设计 §4-1 用户裁决）：`context_compress`——压缩
+        // 交互第九工具（8 工具面冻结的用户主导显式例外 +2；工具名 2026-09-18
+        // 用户定名）。知情发起 D3 模型参与压缩窗口＋响应自带滑块读数表；纯
+        // 内存压缩状态操作 → ReadOnly 类（所有策略自动放行）。无条件声明
+        // （沿 blackboard_write 注册形态）；描述**自包含教学**并控常驻长度
+        // （~140 字符，设计 §4-1「≤120 字符目标」的贴近值——多出部分为
+        // [SEMANTIC_SUMMARY] 摘要协议必要教学；常驻成本读数 S3 照收）。
+        if !tool_defs
+            .iter()
+            .any(|t| t.name == orz_assurance::tool_names::CONTEXT_COMPRESS_TOOL_NAME)
+        {
+            tool_defs.push(ToolDef {
+                name: orz_assurance::tool_names::CONTEXT_COMPRESS_TOOL_NAME.to_string(),
+                description: "Open a compression window (≤3 rounds), then write a \
+                     [SEMANTIC_SUMMARY] block to fold blocks beyond the slider. \
+                     Returns the slider readout."
+                    .to_string(),
+                parameters: serde_json::json!({
+                    "type": "object",
+                    "properties": {},
                 }),
             });
         }
@@ -5756,41 +5835,61 @@ mod tests {
             w.push_exec_result("ok".into());
         }
         // 首次读 plan：tool_actions+2 / exec+1 徽章，plan 自身无变化。
-        let first = controller.attach_pull_delta("plan", "== plan ==\nbody".to_string(), 0);
+        let first = controller.attach_pull_delta("plan", "== plan ==\nbody".to_string(), 0, None);
         // 0ae D0：水位状态标恒挂（设计 §3 用户定案），头前缀随之更新。
         assert!(first.starts_with("[黑板 增量 水位"), "{first}");
         assert!(first.contains("水位【0.0M/10M】"), "{first}");
         assert!(first.contains("tool_actions+2"), "{first}");
         assert!(first.contains("exec+1"), "{first}");
         assert!(!first.contains("plan+"), "{first}");
+        // 0ap S1 钉（2026-09-18，设计 §3 主面）：水位标旁的**滑块读数段**——
+        // Some 时渲染「滑块外可压缩 N 块 ≈ est K」（调用方读时现算传入；
+        // None 时头形态与 0ae D0 基线逐字一致）。
+        let with_readout = controller.attach_pull_delta(
+            "plan",
+            "== plan ==
+body"
+                .to_string(),
+            0,
+            Some("滑块外可压缩 4 块 ≈ est 512K"),
+        );
+        assert!(
+            with_readout.starts_with("[黑板 增量 水位【0.0M/10M】 滑块外可压缩 4 块 ≈ est 512K]"),
+            "{with_readout}"
+        );
         // 再读 plan：plan 徽章已清零，但 exec/tool_actions 未读徽章保留
         // （读某分区只清该分区——未读徽章模型）。
-        let second = controller.attach_pull_delta("plan", "== plan ==\nbody".to_string(), 0);
+        let second = controller.attach_pull_delta("plan", "== plan ==\nbody".to_string(), 0, None);
         assert!(second.starts_with("[黑板 增量 水位"), "{second}");
         assert!(second.contains("exec+1"), "{second}");
         assert!(second.contains("tool_actions+2"), "{second}");
         assert!(!second.contains("plan+"), "{second}");
         // 读 tool_actions（session 推进到 5）：显示自身未读徽章后清空它，
         // exec 徽章保留。
-        let third =
-            controller.attach_pull_delta("tool_actions", "== tool_actions ==\n".to_string(), 5);
+        let third = controller.attach_pull_delta(
+            "tool_actions",
+            "== tool_actions ==\n".to_string(),
+            5,
+            None,
+        );
         assert!(third.contains("exec+1"), "{third}");
         assert!(third.contains("session+5"), "{third}");
         assert!(third.contains("tool_actions+2"), "{third}");
         // 读 exec：tool_actions 徽章已清；显示自身 exec+1 未读徽章；
         // session 保留。
-        let fourth = controller.attach_pull_delta("exec", "== exec ==\n".to_string(), 5);
+        let fourth = controller.attach_pull_delta("exec", "== exec ==\n".to_string(), 5, None);
         assert!(fourth.contains("session+5"), "{fourth}");
         assert!(fourth.contains("exec+1"), "{fourth}");
         assert!(!fourth.contains("tool_actions+"), "{fourth}");
         // 再读 exec：exec 徽章已清，仅剩 session。
-        let fifth = controller.attach_pull_delta("exec", "== exec ==\n".to_string(), 5);
+        let fifth = controller.attach_pull_delta("exec", "== exec ==\n".to_string(), 5, None);
         assert!(fifth.contains("session+5"), "{fifth}");
         assert!(!fifth.contains("exec+"), "{fifth}");
         // 读 session：清 session 徽章 → 全部清零 → 无徽章（0ae D0：水位恒挂）。
-        let sixth = controller.attach_pull_delta("session", "== session ==\n".to_string(), 5);
+        let sixth = controller.attach_pull_delta("session", "== session ==\n".to_string(), 5, None);
         assert!(sixth.contains("session+5"), "{sixth}");
-        let seventh = controller.attach_pull_delta("session", "== session ==\n".to_string(), 5);
+        let seventh =
+            controller.attach_pull_delta("session", "== session ==\n".to_string(), 5, None);
         assert_eq!(
             seventh, "[黑板 增量 水位【0.0M/10M】]\n== session ==\n",
             "{seventh}"
@@ -5810,13 +5909,13 @@ mod tests {
             temporal.record_round(1.0, 8.0, 0.9, 0.5, 0.1); // Normal
             temporal.record_round(2.0, 8.0, 0.2, 2.5, 5.0); // Stuck → 迁移 1
         }
-        let out = controller.attach_pull_delta("plan", "body".to_string(), 0);
+        let out = controller.attach_pull_delta("plan", "body".to_string(), 0, None);
         assert!(out.contains("temporal+2"), "{out}");
         assert!(out.contains("域迁移+1: normal→stuck@r2"), "{out}");
         // 读 temporal（仍显示未读徽章并推进 temporal 游标）→ 再读时清零。
-        let out2 = controller.attach_pull_delta("temporal", "body".to_string(), 0);
+        let out2 = controller.attach_pull_delta("temporal", "body".to_string(), 0, None);
         assert!(out2.contains("域迁移+1: normal→stuck@r2"), "{out2}");
-        let out3 = controller.attach_pull_delta("temporal", "body".to_string(), 0);
+        let out3 = controller.attach_pull_delta("temporal", "body".to_string(), 0, None);
         // 0ae D0：水位恒挂 ⇒ 无增量时头仍存在（只剩水位，无徽章/迁移段）。
         assert!(out3.starts_with("[黑板 增量 水位【0.0M/10M】]"), "{out3}");
         assert!(out3.ends_with("\nbody"), "{out3}");
@@ -5871,7 +5970,7 @@ mod tests {
         let body = controller
             .render_temporal_section(Some("recent"), Some(20), None)
             .unwrap();
-        let combined = controller.attach_pull_delta("temporal", body, 0);
+        let combined = controller.attach_pull_delta("temporal", body, 0, None);
         let bounded = orz_assurance::tool_envelope::enforce_bound(combined, 1024);
         assert!(
             bounded.len() <= 1024,
@@ -5899,11 +5998,11 @@ mod tests {
             temporal.record_round(4.0, 8.0, 0.2, 2.5, 5.0); // Stuck → 迁移 3
             temporal.record_round(5.0, 8.0, 0.2, 2.5, 5.0); // 仍 Stuck（无迁移）
         }
-        let first = controller.attach_pull_delta("temporal", "body".to_string(), 0);
+        let first = controller.attach_pull_delta("temporal", "body".to_string(), 0, None);
         assert!(first.contains("temporal+5"), "{first}");
         assert!(first.contains("域迁移+3"), "{first}");
         // 读 temporal 后双基线推进 → 无增量时零噪音。
-        let quiet = controller.attach_pull_delta("temporal", "body".to_string(), 0);
+        let quiet = controller.attach_pull_delta("temporal", "body".to_string(), 0, None);
         // 0ae D0：水位恒挂；无增量时仅水位头 + 正文。
         assert_eq!(quiet, "[黑板 增量 水位【0.0M/10M】]\nbody", "{quiet}");
         // 之后新发生 2 次迁移（round 5→7、migration 3→5）：读 plan 应显示
@@ -5914,13 +6013,13 @@ mod tests {
             temporal.record_round(6.0, 8.0, 0.9, 0.5, 0.1); // Normal → 迁移 4
             temporal.record_round(7.0, 8.0, 0.2, 2.5, 5.0); // Stuck → 迁移 5
         }
-        let plan_read = controller.attach_pull_delta("plan", "== plan ==\n".to_string(), 0);
+        let plan_read = controller.attach_pull_delta("plan", "== plan ==\n".to_string(), 0, None);
         assert!(plan_read.contains("temporal+2"), "{plan_read}");
         assert!(plan_read.contains("域迁移+2"), "{plan_read}");
         // 再读 temporal：仍显示未读迁移并清双基线。
-        let temporal_read = controller.attach_pull_delta("temporal", "body".to_string(), 0);
+        let temporal_read = controller.attach_pull_delta("temporal", "body".to_string(), 0, None);
         assert!(temporal_read.contains("域迁移+2"), "{temporal_read}");
-        let quiet2 = controller.attach_pull_delta("temporal", "body".to_string(), 0);
+        let quiet2 = controller.attach_pull_delta("temporal", "body".to_string(), 0, None);
         assert_eq!(
             quiet2,
             "[黑板 增量 水位【0.0M/10M】]
@@ -5961,7 +6060,8 @@ body",
             temporal.record_round(1.0, 8.0, 0.9, 0.5, 0.1); // Normal
             temporal.record_round(2.0, 8.0, 0.2, 2.5, 5.0); // Stuck → 迁移 1
         }
-        let out = controller.attach_pull_delta("plan", "== plan ==\nbody".to_string(), u32::MAX);
+        let out =
+            controller.attach_pull_delta("plan", "== plan ==\nbody".to_string(), u32::MAX, None);
         let first_line = out.lines().next().expect("header line");
         assert!(first_line.starts_with("[黑板 增量 水位"), "{out}");
         assert!(

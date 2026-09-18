@@ -21,6 +21,7 @@ use std::time::Duration;
 
 use agent_client_protocol as acp;
 use agent_client_protocol::{ToolCallId, ToolCallUpdate, ToolCallUpdateFields};
+use orz_assurance::tool_names::{BLACKBOARD_WRITE_TOOL_NAME, CONTEXT_COMPRESS_TOOL_NAME};
 use orz_loop::host::{PermitDecision, PermitError, RiskClass};
 use orz_workspace::permission::{
     AccessKind, ClientType, Decision, PermissionHandle, PermissionHookTransport,
@@ -590,7 +591,13 @@ fn access_kind(tool: &str, args: &serde_json::Value) -> AccessKind {
         // 模型计划/笔记面恒空、`plan_write` 事件 0 条）。与 review P1-1
         // （`blackboard_read`）、0x/0v S4（`browser_control`）同形第三例：
         // 控制器 `risk_class` 与权限桥 `access_kind` 两表必须同时改。
-        || tool == "blackboard_write"
+        || tool == BLACKBOARD_WRITE_TOOL_NAME
+        // 0ap（2026-09-18，设计 §4 用户裁决）：`context_compress` 纯内存
+        // 压缩状态操作（知情发起 D3 模型参与压缩窗口＋滑块读数），无文件/
+        // 网络/黑板外部副作用——与 `blackboard_write` 同族。沿 0aj 教训
+        // 两表同批：controller `risk_class`（READ_ONLY_EXEMPT_TOOLS）与本
+        // 桥 arm 必须同时登记，遍历式护栏（本文件测试）看护漏网。
+        || tool == CONTEXT_COMPRESS_TOOL_NAME
     {
         // Controller-owned in-memory tools (A3 blackboard_read / A6 §8 C.2
         // compaction_whitelist_add): NO external side effect — no file, no
@@ -798,9 +805,11 @@ mod tests {
             ("blackboard_action_write", serde_json::json!({"order": "x"})),
             ("plan_write", serde_json::json!({"plan": {}})),
             (
-                "blackboard_write",
+                BLACKBOARD_WRITE_TOOL_NAME,
                 serde_json::json!({"section": "plan", "content": "x"}),
             ),
+            // 0ap：压缩窗口请求无参数；空对象即代表调用形态。
+            (CONTEXT_COMPRESS_TOOL_NAME, serde_json::json!({})),
             (
                 "compaction_whitelist_add",
                 serde_json::json!({"content": "x"}),
@@ -1156,9 +1165,12 @@ mod tests {
                 // 每次调用确定性 deny（journal `risk: ReadOnly` →
                 // `decision: deny`），模型计划/笔记面恒空。
                 (
-                    "blackboard_write",
+                    BLACKBOARD_WRITE_TOOL_NAME,
                     serde_json::json!({"section": "notes", "content": "笔记"}),
                 ),
+                // 0ap：纯内存压缩状态操作——ReadOnly 类全策略自动放行
+                //（权限桥放行链钉，S1 判据④）。
+                (CONTEXT_COMPRESS_TOOL_NAME, serde_json::json!({})),
             ] {
                 let decision = bridge
                     .request(RiskClass::ReadOnly, tool, &args)

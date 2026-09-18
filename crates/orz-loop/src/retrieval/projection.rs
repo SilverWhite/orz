@@ -303,6 +303,11 @@ impl AgentLoopController {
             .filter(|t| {
                 t.name != "compaction_whitelist_add"
                     && t.name != "retrieval_disposition"
+                    // 0ap（2026-09-18，设计 §0「常驻主面」）：压缩交互第九
+                    // 工具 main-lane only——D3 压缩窗口是主车道结构（DP-7；
+                    // H1 开窗点与请求位消费点均 gate Main role），且 controller
+                    // 请求位跨车道共享，子代理声明会在主车道误触发开窗。
+                    && t.name != orz_assurance::tool_names::CONTEXT_COMPRESS_TOOL_NAME
                     // P0-C S2 (2026-08-15): the console write button is
                     // main-lane only — subagents never write action orders.
                     && t.name != "blackboard_action_write"
@@ -649,6 +654,7 @@ mod tests {
                 "bash",             // non-work tool — untouched
                 "blackboard_read",  // storage chain complete
                 "blackboard_write", // 0ae D0: model notes write (ReadOnly class)
+                "context_compress", // 0ap: compression window request (ReadOnly class)
                 "read_file",        // read chain complete
             ],
             "R1 single-face list projection (todo_write / compaction_whitelist_add \
@@ -728,6 +734,15 @@ mod tests {
         ] {
             assert_classified(tool, "frozen RUN-CLI-6aa999d6 header sample");
         }
+
+        // ③ 0ap（2026-09-18，设计 §4-⑤）：负例钉补新工具样本——
+        //    `context_compress`（压缩交互第九工具）经 WORK_TOOLS 分类
+        //    （工作工具 ⇒ 探针面有机械链判据）。它若从探针面漏网即在此
+        //    报红，防 0aj「声明面有、探针面无」同形第三例。
+        assert_classified(
+            orz_assurance::tool_names::CONTEXT_COMPRESS_TOOL_NAME,
+            "0ap ninth-tool sample",
+        );
     }
 
     /// 门禁观察 P1 修复（2026-08-30，方向 A）：主面封存 `browser_read`——

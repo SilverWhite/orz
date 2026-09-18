@@ -22,6 +22,7 @@ use orz_assurance::journal::chain::{payload_hash, sha256_hex};
 use orz_assurance::{EventType, GateDecision};
 
 use crate::agents::SubagentRole;
+use crate::blackboard::BLACKBOARD_WRITE_TOOL_NAME;
 use crate::blackboard::SharedBlackboard;
 use crate::checkpoint::{self, PendingCheckpoint};
 use crate::controller::{
@@ -1064,17 +1065,22 @@ pub(crate) async fn run_template_compact(
 }
 
 /// 0ae D3 / 0AE-C1 修复（2026-09-15 深审）：模型参与压缩窗口轮的工具面
-/// ——只暴露 `blackboard_write`（模型固化写入面；名字经
-/// `crate::blackboard::BLACKBOARD_WRITE_TOOL_NAME` 单点——2026-09-17
-/// 处理批去重，注册处无条件补声明）。其余基面工具不进
-/// 窗口轮——「打断全部动作」语义保持：非写入动作即使被模型声明也在消费
-/// 分支丢弃不派发。修复前窗口轮落入 `Vec::new()`，模型连 blackboard_write
-/// 的声明都看不到 ⇒ `model_participated` 结构上恒 false。窗口轮的探针
-/// 保持 None（无工具暂停语义不变：不投影注册面、不探针）。
+/// ——只暴露窗口内两件工具（0ap 2026-09-18 并存微调，设计 §4-8）：
+/// `blackboard_write`（模型固化写入面；名字经
+/// `crate::blackboard::BLACKBOARD_WRITE_TOOL_NAME` 单点）＋
+/// `context_compress`（压缩发起/读数面——窗口内调用为 in_progress no-op，
+/// 只返回滑块读数，不重复开窗）。其余基面工具不进窗口轮——「打断全部
+/// 动作」语义保持：非窗口工具即使被模型声明也在消费分支丢弃不派发。
+/// 修复前窗口轮落入 `Vec::new()`，模型连 blackboard_write 的声明都看不到
+/// ⇒ `model_participated` 结构上恒 false。窗口轮的探针保持 None（无工具
+/// 暂停语义不变：不投影注册面、不探针）。
 pub(crate) fn compression_window_tool_defs(tool_defs: &[ToolDef]) -> Vec<ToolDef> {
     tool_defs
         .iter()
-        .filter(|t| t.name == crate::blackboard::BLACKBOARD_WRITE_TOOL_NAME)
+        .filter(|t| {
+            t.name == crate::blackboard::BLACKBOARD_WRITE_TOOL_NAME
+                || t.name == orz_assurance::tool_names::CONTEXT_COMPRESS_TOOL_NAME
+        })
         .cloned()
         .collect()
 }
@@ -1787,6 +1793,35 @@ async fn truncate_model_face_blocks(
     Ok(Some((live.len(), freed_tokens.saturating_add(extra_freed))))
 }
 
+/// 语义压缩的事件归因（`context_compressed.reason`）：这次摘要由**哪个窗口**
+/// 促成。v8 语义轨＝模型在回复文本里产出 `[SEMANTIC_SUMMARY]` 块，故归因在
+/// **识别点随摘要一起固定**（写进 `pending_semantic`），不在落地时回看旗标：
+/// 后者会把「工具窗口收口未产出摘要（旗标残留）之后由 H1 窗口产出的压缩」
+/// 误记为 `model_selected`，也会被「落地前恰有 H1 开窗」抢走归因（0ap 复核
+/// 批 P2）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CompressionWindowKind {
+    /// H1 阶梯硬提醒打断式窗口 ⇒ `context_scale_window`。
+    Ladder,
+    /// 0ap `context_compress` 知情发起窗口 ⇒ `model_selected`（设计 §1）。
+    ModelRequested,
+}
+
+impl CompressionWindowKind {
+    fn semantic_reason(self) -> &'static str {
+        match self {
+            Self::Ladder => "context_scale_window",
+            Self::ModelRequested => "model_selected",
+        }
+    }
+}
+
+/// 归因终值：有窗口 ⇒ 按窗口种类；无窗口（模型自选摘要块，不经任何窗口）
+/// ＝ `model_selected`（既有口径不变）。
+fn semantic_compression_reason(kind: Option<CompressionWindowKind>) -> &'static str {
+    kind.map_or("model_selected", CompressionWindowKind::semantic_reason)
+}
+
 /// The shared model↔tool loop (M1 extraction, 2026-08-10).
 ///
 /// Semantics preserved verbatim from `run_turn_inner`'s loop body:
@@ -1911,10 +1946,14 @@ pub(crate) async fn run_agent_loop(
     // （机械可识别前缀，`response.text` 上取）在下一个 loop-top 安全间隙执行
     // 一次**按块压缩**（可带 `压缩块: 1-4` 区间指令）。工具轮的文本不进
     // `messages`（只留 model_output 事件），故识别点在**响应处理**而非会话扫描。
-    let mut pending_semantic: Option<String> = None;
-    // 本窗口 epoch 是否开过压缩窗口（决定语义摘要的事件 reason：窗口收口＝
-    // `context_scale_window`，模型自选＝`model_selected`）。
-    let mut window_opened_since_compaction = false;
+    // 0ap 复核批（P2）：归因**随摘要一起记录**——`(摘要文本, 促成它的窗口)`。
+    // 落地时只用记录值，不再回看「本 epoch 开过哪个窗口」的旗标：旗标残留会
+    // 让 H1 窗口产出的压缩被记成 `model_selected`（工具窗口未产出摘要即收口
+    // 的场景），落地前恰有 H1 开窗也会抢走已产出摘要的归因。
+    let mut pending_semantic: Option<(String, Option<CompressionWindowKind>)> = None;
+    // 在程压缩窗口的种类（`None` ＝ 无窗口在程）。开窗时置位、窗口不在程时
+    // 清空；识别语义摘要那一刻的值随摘要进 `pending_semantic`（归因固定点）。
+    let mut window_kind: Option<CompressionWindowKind> = None;
     // loop 迭代计数（每迭代至多一个模型轮）。
     let mut loop_rounds: u32 = 0;
     // v8 原文定位指针（设计 §4 §6）：journal 窗口 epoch 起点 / 台账 `[seq]`
@@ -2159,13 +2198,14 @@ pub(crate) async fn run_agent_loop(
                         });
                         if fire.tier == crate::context_scale::LadderTier::HardReminder {
                             // H1 硬提醒＝**打断**：≤3 轮压缩窗口（只暴露
-                            // blackboard_write）；窗口结束仍未产出摘要 ⇒ 如实落账
+                            // blackboard_write 与 context_compress，0ap §4-8）；
+                            // 窗口结束仍未产出摘要 ⇒ 如实落账
                             // `model_participated=false`，**不再机械兜底压缩**。
                             pending_checkpoint = Some(PendingCheckpoint::ModelCompression {
                                 rounds_left: crate::context_scale::COMPRESSION_WINDOW_ROUNDS,
                                 window_start_writes: svc.blackboard.read().model_note_count(),
                             });
-                            window_opened_since_compaction = true;
+                            window_kind = Some(CompressionWindowKind::Ladder);
                         }
                     }
                 }
@@ -2239,7 +2279,6 @@ pub(crate) async fn run_agent_loop(
             // 截断后本 epoch 的 D4 机械段与分块表随之重渲（前缀重写＝一次
             // 压缩级事件，设计 §9「重写税」口径）。
             face_d4_block = None;
-            window_opened_since_compaction = false;
             journal_epoch_start_seq = writer.seq();
             ledger_seq_epoch = None;
         }
@@ -2265,12 +2304,11 @@ pub(crate) async fn run_agent_loop(
         // 机械层把「机械摘要行（结构化轨）＋语义摘要（模型产出）」写到 marker
         // 里，模型面随之下移；**本地面一条不删**（不变量 I3）。reason：窗口
         // 收口＝`context_scale_window`，模型自选＝`model_selected`。
-        if let Some(summary) = pending_semantic.take() {
-            let semantic_reason = if window_opened_since_compaction {
-                "context_scale_window"
-            } else {
-                "model_selected"
-            };
+        if let Some((summary, summary_window)) = pending_semantic.take() {
+            // 0ap 复核批（P2）：归因取**摘要产出时**记录的窗口种类——工具
+            // 知情发起 ⇒ `model_selected`（设计 §1）；H1 阶梯窗口 ⇒
+            // `context_scale_window`；无窗口（模型自选）⇒ `model_selected`。
+            let semantic_reason = semantic_compression_reason(summary_window);
             let selection = crate::context_scale::extract_block_selection(&summary);
             let locators = crate::summary::LocatorPointers {
                 ledger_seq: ledger_seq_epoch,
@@ -2306,10 +2344,26 @@ pub(crate) async fn run_agent_loop(
                 // 压缩已落地 ⇒ 本 epoch 收口：D4 机械段重渲、定位指针跨度与
                 // 台账 `[seq]` 游标重启（下一次压缩从新 epoch 起算）。
                 face_d4_block = None;
-                window_opened_since_compaction = false;
                 journal_epoch_start_seq = writer.seq();
                 ledger_seq_epoch = None;
             }
+        }
+        // 0ap（2026-09-18，设计 §1/§4-1）：`context_compress` **知情发起**
+        // ——工具执行点只置请求位（幂等防连点；读数不可得即中性返回、不置
+        // 位），此处（下一个 loop-top 安全边界）统一消费开窗：D3 既有机制
+        // 照旧（`PendingCheckpoint::ModelCompression` ≤3 轮 +
+        // `finalize_model_compression_close` 统一出口）。软门/其他 pending
+        // 在程时请求位锁存顺延（不丢不绕）；窗口在程中 ⇒ 工具侧已 no-op。
+        if profile.role == AgentRole::Main
+            && controller.compression_window_requested()
+            && pending_checkpoint.is_none()
+        {
+            controller.take_compression_window_request();
+            pending_checkpoint = Some(PendingCheckpoint::ModelCompression {
+                rounds_left: crate::context_scale::COMPRESSION_WINDOW_ROUNDS,
+                window_start_writes: svc.blackboard.read().model_note_count(),
+            });
+            window_kind = Some(CompressionWindowKind::ModelRequested);
         }
         // GAP-INQUIRY-SPLIT (2026-08-09) — FALLBACK orientation injection
         // point (loop-top): a post-tool-batch gap exists only on tool
@@ -2406,13 +2460,26 @@ pub(crate) async fn run_agent_loop(
             } else {
                 None
             };
+        // 0ap：窗口在程位对齐（工具执行点防抖读取）。值＝本迭代 loop-top
+        // 的 pending 快照——工具执行只发生在 loop-top 之间的派发段，故该
+        // 值在整个派发段内恒真（H1 窗口轮与工具发起窗口轮同语义）。
+        let window_in_progress = matches!(
+            pending_checkpoint.as_ref(),
+            Some(PendingCheckpoint::ModelCompression { .. })
+        );
+        controller.set_compression_window_active(window_in_progress);
+        // 0ap 复核批（P2）：窗口不在程 ⇒ 种类作废（开窗点重新置位）。语义
+        // 摘要的归因已在识别点随摘要固定，本处清空不回改已记录的归因。
+        if !window_in_progress {
+            window_kind = None;
+        }
         let current_tool_defs: Vec<ToolDef> =
             if let Some(PendingCheckpoint::ModelCompression { .. }) = pending_checkpoint.as_ref() {
                 // 0ae D3 / 0AE-C1 修复（2026-09-15 深审）：压缩窗口轮只暴露
-                // blackboard_write——模型固化写入面（修复前落入 Vec::new()，
-                // 模型连 blackboard_write 的声明都看不到 ⇒ 窗口结构上不可
-                // 能成功）。probe 对窗口轮保持 None（下方无工具暂停语义
-                // 不变：不投影注册面、不探针）。
+                // blackboard_write 与 context_compress（0ap §4-8）——模型固化
+                // 写入面（修复前落入 Vec::new()，模型连 blackboard_write 的
+                // 声明都看不到 ⇒ 窗口结构上不可能成功）。probe 对窗口轮保持
+                // None（下方无工具暂停语义不变：不投影注册面、不探针）。
                 compression_window_tool_defs(tool_defs)
             } else if pending_checkpoint.is_some() && !pending_keeps_tools {
                 // §14.16: DC / console-inquiry checkpoint rounds expose no
@@ -2820,7 +2887,9 @@ pub(crate) async fn run_agent_loop(
                 .as_deref()
                 .and_then(crate::context_scale::extract_model_summary)
         {
-            pending_semantic = Some(summary);
+            // 0ap 复核批（P2）：归因随摘要**在产出时固定**——此刻在程窗口的
+            // 种类即促成者；无窗口在程（模型自选摘要块）记 `None`。
+            pending_semantic = Some((summary, window_kind));
         }
         if !response.tool_calls.is_empty() {
             controller
@@ -2949,11 +3018,12 @@ pub(crate) async fn run_agent_loop(
             // 0ae D3：模型参与压缩窗口轮（2026-09-15，设计 §6，DP-7）——
             // 模型固化（blackboard_write）＋标注；≤3 轮
             // （COMPRESSION_WINDOW_ROUNDS）。0AE-C1 修复（2026-09-15 深审）：
-            // 窗口轮工具面已只剩 blackboard_write（见上方 current_tool_defs
-            // 装配）——blackboard_write 调用落穿既有正常派发路径执行，
-            // 窗口收口延迟到下一 loop-top（写入派发完成后读数真实，
-            // `model_compression_close`）；其余动作丢弃不派发（打断语义
-            // 保持）并推一条机械提示。
+            // 窗口轮工具面只剩 blackboard_write 与 context_compress（0ap
+            // §4-8，见上方 current_tool_defs 装配）——两者落穿既有正常派发
+            // 路径执行，窗口收口延迟到下一 loop-top（写入派发完成后读数
+            // 真实，`model_compression_close`；窗口内 context_compress 调用
+            // 由执行点按 in_progress no-op 应答，不改变收口判定位）；其余
+            // 动作丢弃不派发（打断语义保持）并推一条机械提示。
             if let PendingCheckpoint::ModelCompression {
                 rounds_left,
                 window_start_writes,
@@ -2962,7 +3032,10 @@ pub(crate) async fn run_agent_loop(
                 let window_calls: Vec<ToolCall> = response
                     .tool_calls
                     .iter()
-                    .filter(|tc| tc.name == crate::blackboard::BLACKBOARD_WRITE_TOOL_NAME)
+                    .filter(|tc| {
+                        tc.name == crate::blackboard::BLACKBOARD_WRITE_TOOL_NAME
+                            || tc.name == orz_assurance::tool_names::CONTEXT_COMPRESS_TOOL_NAME
+                    })
                     .cloned()
                     .collect();
                 let dropped = response.tool_calls.len() - window_calls.len();
@@ -3438,6 +3511,11 @@ pub(crate) async fn run_agent_loop(
             }
             if run_len >= 2 {
                 let batch: Vec<&ToolCall> = response.tool_calls[..run_len].iter().collect();
+                // 0ap 复核批（P1）：并行批的**只读会话视图**＝批首会话——并发
+                // 语义即「各调用看到同一份批首上下文」。批内注入槽 `local_msgs`
+                // 批首为空 `Vec`、只承载本次调用的结果注入（按声明序并回主
+                // 会话），当会话读会得出假读数（「滑块外可压缩 0 块」）。
+                let batch_conversation: &[Message] = messages;
                 // RETRIEVAL-ORCHESTRATION-MECHANICAL 0k 第二批 (2026-08-30)：
                 // 委托契约复杂度分档——同轮 `browser_read` 并发上限（档位
                 // 机械映射；deep=不限）。host tab 池是最终物理上限，这里
@@ -3493,6 +3571,7 @@ pub(crate) async fn run_agent_loop(
                                 prompt,
                                 workspace_trust,
                                 &mut local_msgs,
+                                Some(batch_conversation),
                                 tool_rounds,
                                 heartbeat,
                                 activation_id.as_deref(),
@@ -3840,6 +3919,7 @@ pub(crate) async fn run_agent_loop(
                                 prompt,
                                 workspace_trust,
                                 messages,
+                                None,
                                 tool_rounds,
                                 heartbeat,
                                 // ACAF Slice 2 D-13 (2026-08-13): the lane's
@@ -4216,8 +4296,9 @@ pub(crate) async fn run_agent_loop(
         if fired_initial_round {
             messages.push(Message {
                 role: Role::User,
-                content: "[工作台] 请将本任务的工作计划与关键中间结论写入黑板（blackboard_write section=plan|notes）；黑板不受上下文折叠影响，920K 压缩时只有黑板内容与保留尾可依托。"
-                    .to_string(),
+                content: format!(
+                    "[工作台] 请将本任务的工作计划与关键中间结论写入黑板（{BLACKBOARD_WRITE_TOOL_NAME} section=plan|notes）；黑板不受上下文折叠影响，920K 压缩时只有黑板内容与保留尾可依托。"
+                ),
                 tool_call_id: None,
                 tool_calls: Vec::new(),
                 reasoning_content: None,
@@ -4252,7 +4333,7 @@ pub(crate) async fn run_agent_loop(
             messages.push(Message {
                 role: Role::User,
                 content: format!(
-                    "[工作台] 已 {} 轮未写入黑板：请把工作计划与关键中间结论固化到黑板（blackboard_write section=plan|notes）。此为唯一一次提醒。",
+                    "[工作台] 已 {} 轮未写入黑板：请把工作计划与关键中间结论固化到黑板（{BLACKBOARD_WRITE_TOOL_NAME} section=plan|notes）。此为唯一一次提醒。",
                     PLAN_WRITE_REMINDER_ROUND
                 ),
                 tool_call_id: None,
@@ -4398,12 +4479,10 @@ pub(crate) async fn run_agent_loop(
     // （本地面逐字保留）；压不动（无可压闭合块 / 块区间非法）⇒ 如实 NoOp，
     // 不虚构事件。
     // 边界：`?` 错误传播路径仍会丢弃该状态（与 0AC-A6 Err 留痕同类，挂账）。
-    if let Some(summary) = pending_semantic.take() {
-        let semantic_reason = if window_opened_since_compaction {
-            "context_scale_window"
-        } else {
-            "model_selected"
-        };
+    if let Some((summary, summary_window)) = pending_semantic.take() {
+        // 0ap：归因口径与 loop-top 主消费点一致——取摘要产出时记录的窗口种类
+        // （复核批 P2：不再回看旗标）。
+        let semantic_reason = semantic_compression_reason(summary_window);
         // run 尾重建投影入参（loop 内的 `face_params` 已出作用域；D4 机械段
         // 允许按 epoch 重渲——此处已无后续请求，代价为零）。
         let face_params = crate::model_face::ModelFaceParams {
@@ -5419,6 +5498,57 @@ mod tests {
         max_active: std::sync::Arc<std::sync::atomic::AtomicUsize>,
     }
 
+    /// 0ap 复核批（P1）钉专用 host：按 `call_id` 分档返回体量并记录并发峰值
+    /// ——`call-fat` 肥胖结果（第 1 轮形成闭合分块，读数需非零），其余小结果
+    /// （并行批内两条工具消息都保真入会话）；峰值断言证明批内确实并发。
+    struct SizedReadHost {
+        journal: JournalRecorder,
+        active: std::sync::Arc<std::sync::atomic::AtomicUsize>,
+        max_active: std::sync::Arc<std::sync::atomic::AtomicUsize>,
+    }
+
+    #[async_trait]
+    impl LoopHost for SizedReadHost {
+        fn journal(&self) -> &JournalRecorder {
+            &self.journal
+        }
+        fn tools_registry(&self) -> &dyn ToolRegistry {
+            &EmptyRegistry
+        }
+        fn session_cwd(&self) -> std::path::PathBuf {
+            self.journal.journal_dir().to_path_buf()
+        }
+        async fn request_permission(
+            &self,
+            _risk: RiskClass,
+            _tool: &str,
+            _args: &serde_json::Value,
+        ) -> Result<PermitDecision, PermitError> {
+            Ok(PermitDecision::AllowOnce)
+        }
+        async fn call_tool(
+            &self,
+            _name: &str,
+            _args: serde_json::Value,
+            call_id: &str,
+        ) -> Result<ToolResult, ToolError> {
+            let now = self
+                .active
+                .fetch_add(1, std::sync::atomic::Ordering::SeqCst)
+                + 1;
+            self.max_active
+                .fetch_max(now, std::sync::atomic::Ordering::SeqCst);
+            tokio::time::sleep(std::time::Duration::from_millis(40)).await;
+            self.active
+                .fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
+            if call_id == "call-fat" {
+                Ok(s1_fat_result())
+            } else {
+                Ok(ok_result())
+            }
+        }
+    }
+
     #[async_trait]
     impl LoopHost for ConcurrentReadHost {
         fn journal(&self) -> &JournalRecorder {
@@ -5922,6 +6052,14 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    fn context_compress_call(call_id: &str) -> ToolCall {
+        ToolCall {
+            name: "context_compress".to_string(),
+            arguments: serde_json::json!({}),
+            call_id: call_id.to_string(),
+        }
+    }
+
     fn window_write_call(call_id: &str) -> ToolCall {
         ToolCall {
             name: "blackboard_write".to_string(),
@@ -5948,23 +6086,229 @@ mod tests {
             .collect()
     }
 
-    /// 0AE-C1 修复第 1 处：压缩窗口轮工具面 = 仅 blackboard_write（按名
-    /// 过滤；基面未声明时为空面——注册处无条件补声明，空面仅防御态）。
+    /// 0AE-C1 修复第 1 处 ＋ 0ap 并存微调（2026-09-18，设计 §4-8）：压缩
+    /// 窗口轮工具面 = {blackboard_write, context_compress}（按名过滤；
+    /// 基面未声明时为空面——注册处无条件补声明，空面仅防御态）。
     #[test]
-    fn compression_window_tool_face_exposes_only_blackboard_write() {
+    fn compression_window_tool_face_exposes_only_window_tools() {
         let defs = vec![
             simple_def("read_file"),
             simple_def("blackboard_write"),
+            simple_def("context_compress"),
             simple_def("bash"),
         ];
         let face = compression_window_tool_defs(&defs);
-        assert_eq!(face.len(), 1);
+        assert_eq!(face.len(), 2);
         assert_eq!(face[0].name, "blackboard_write");
         assert_eq!(face[0].description, "tool blackboard_write");
+        assert_eq!(face[1].name, "context_compress");
 
-        // 无 blackboard_write 的基面 → 空面（不虚构声明）。
+        // 无窗口内工具的基面 → 空面（不虚构声明）。
         assert!(compression_window_tool_defs(&[simple_def("read_file")]).is_empty());
         assert!(compression_window_tool_defs(&[]).is_empty());
+    }
+
+    /// 0ap S1 钉③（2026-09-18，设计 §6）：端到端链——`context_compress`
+    /// 调用 → 请求位消费开窗（下一个 loop-top 安全边界，D3 既有机制）→
+    /// 窗口轮工具面并存（§4-8）→ 窗口内再调用＝in-progress no-op（防抖）
+    /// → 出窗后语义摘要 → 按块压缩落地 →
+    /// `context_compressed{mode=model_summary, reason=model_selected}`。
+    /// 窗口由工具知情发起（非 H1 阶梯：阶梯抬到不可达）⇒ 归因按设计 §1
+    /// 明文取 `model_selected`（与 H1 窗口的 `context_scale_window` 分流）。
+    #[tokio::test]
+    async fn context_compress_end_to_end_request_window_summary_and_selected_reason() {
+        let semantic_block = "[SEMANTIC_SUMMARY]\n目标: 完成接线\n已完成: 台账接线\n\
+                              关键决策: 分块压缩\n[/SEMANTIC_SUMMARY]";
+        let fake = Arc::new(FakeProvider::new(vec![
+            // 第 1 轮：正常工作——肥胖结果在 slider=1K/block=1K 下形成闭合分块。
+            ScriptedResponse::tool_calls(vec![tool_call("read_file", "call-r1")]),
+            // 第 2 轮：模型知情发起（响应 = Requested 形态＋滑块读数）。
+            ScriptedResponse::tool_calls(vec![context_compress_call("call-c1")]),
+            // 第 3 轮（窗口轮）：窗口内再调用 = in-progress no-op；本轮有
+            // 窗口调用 ⇒ 延迟收口（无写入/无摘要 ⇒ model_participated=false
+            // 如实落账——防抖调用不构成参与）。
+            ScriptedResponse::tool_calls(vec![context_compress_call("call-c2")]),
+            // 第 4 轮（已出窗，普通面）：模型产出语义摘要块。
+            ScriptedResponse::text(semantic_block),
+            // 第 5 轮 loop-top 按块压缩落地后的收尾。
+            ScriptedResponse::text("终答"),
+        ]));
+        let gateway: Arc<dyn ModelGateway> = fake.clone();
+        let controller = AgentLoopController::with_gateway(gateway)
+            .with_slider_window_tokens(1_000)
+            .with_model_face_block_tokens(1_000)
+            .with_context_scale_ladder(v8_test_ladder(1_000_000, 1_000_000_000));
+        let dir = test_dir();
+        let host = TestHost {
+            journal: JournalRecorder::new(dir.clone()),
+            tool_result: Some(s1_fat_result()),
+        };
+        let (answer, _, _) = controller
+            .run_turn(
+                &host,
+                "0ap 端到端",
+                "RUN-CC-E2E",
+                MANIFEST,
+                0,
+                None,
+                None,
+                None,
+            )
+            .await
+            .unwrap();
+        assert_eq!(answer, "终答");
+
+        // ① 两次调用都 exit 0（fail-soft 三态信封）。
+        let cc: Vec<_> = events(&dir)
+            .into_iter()
+            .filter(|e| {
+                e.event_type == EventType::ToolCompleted && e.payload["tool"] == "context_compress"
+            })
+            .collect();
+        assert_eq!(cc.len(), 2, "{:?}", cc.len());
+        assert!(cc.iter().all(|e| e.payload["exit_code"] == 0));
+
+        // ② 窗口轮（第 3 轮请求）工具面 = 两件窗口工具并存（0ap §4-8）。
+        let requests = fake.received_requests();
+        assert_eq!(
+            requests[2]
+                .tools
+                .iter()
+                .map(|t| t.name.as_str())
+                .collect::<Vec<_>>(),
+            vec!["blackboard_write", "context_compress"]
+        );
+        // ③ 第 2 轮工具结果 = Requested（含读数表）；第 3 轮 = in-progress。
+        assert!(
+            requests[2]
+                .messages
+                .iter()
+                .any(|m| m.content.contains("压缩窗口已请求") && m.content.contains("滑块读数："))
+        );
+        assert!(
+            requests[3]
+                .messages
+                .iter()
+                .any(|m| m.content.contains("压缩窗口已在程中（in_progress）"))
+        );
+
+        // ④ 窗口收口审计恰一条（防抖轮有窗口调用 ⇒ 延迟收口、未参与如实）。
+        let mc: Vec<_> = audit_events(&dir)
+            .into_iter()
+            .filter(|e| e.payload["kind"] == crate::mechanical_audit::KIND_MODEL_COMPRESSION)
+            .collect();
+        assert_eq!(mc.len(), 1, "{mc:?}");
+        let summary = mc[0].payload["payload"]["summary"].as_str().unwrap();
+        assert!(summary.contains("model_participated=false"), "{summary}");
+        assert!(summary.contains("rounds_used=1"), "{summary}");
+
+        // ⑤ 语义压缩落地：reason=model_selected（工具发起窗口；设计 §1）。
+        let compact: Vec<serde_json::Value> = events(&dir)
+            .into_iter()
+            .filter(|e| e.event_type == EventType::ContextCompressed)
+            .map(|e| e.payload)
+            .collect();
+        assert_eq!(compact.len(), 1, "语义轨恰压一次: {compact:?}");
+        assert_eq!(compact[0]["mode"], "model_summary");
+        assert_eq!(compact[0]["reason"], "model_selected");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// 0ap 复核批（P2）钉：语义压缩归因映射——H1 阶梯窗口 ⇒
+    /// `context_scale_window`；工具知情发起窗口与无窗口（模型自选摘要块）
+    /// ⇒ `model_selected`。归因在**摘要识别点**取值（见
+    /// `CompressionWindowKind`），故「工具窗口收口未产出摘要」之后的 H1
+    /// 窗口压缩不再被残留旗标误记为 `model_selected`。
+    #[test]
+    fn semantic_compression_reason_maps_window_kinds() {
+        assert_eq!(
+            semantic_compression_reason(Some(CompressionWindowKind::Ladder)),
+            "context_scale_window"
+        );
+        assert_eq!(
+            semantic_compression_reason(Some(CompressionWindowKind::ModelRequested)),
+            "model_selected"
+        );
+        assert_eq!(semantic_compression_reason(None), "model_selected");
+    }
+
+    /// 0ap 复核批（P1）钉：同轮读类并行批次里 `blackboard_read` 的滑块读数段
+    /// 必须读**批首会话**——该路径的 `messages` 只是本调用的注入槽（批首为空
+    /// `Vec`），修复前据此现算会恒定渲染「滑块外可压缩 0 块 ≈ est 0」。
+    /// 峰值并发断言证明本批确实走并行路径（否则钉子不成立）。
+    #[tokio::test]
+    async fn blackboard_read_slider_readout_reads_the_parallel_batch_conversation() {
+        let blackboard_read_call = ToolCall {
+            name: "blackboard_read".to_string(),
+            arguments: serde_json::json!({"section": "session"}),
+            call_id: "call-b2".to_string(),
+        };
+        let fake = Arc::new(FakeProvider::new(vec![
+            // 第 1 轮：肥胖结果在 slider=1K/block=1K 下形成闭合分块（单调用 ⇒ 串行）。
+            ScriptedResponse::tool_calls(vec![tool_call("read_file", "call-fat")]),
+            // 第 2 轮：批首三个连续只读调用 ⇒ 并行批次（run_len = 3）。
+            ScriptedResponse::tool_calls(vec![
+                // 两件 Host 读调用证明真并发（并发峰值只看 Host 调用；
+                // `blackboard_read` 在控制器内执行，不经过宿主）。
+                tool_call("read_file", "call-r2a"),
+                tool_call("read_file", "call-r2b"),
+                blackboard_read_call,
+            ]),
+            ScriptedResponse::text("终答"),
+            // 反例门（一次性）消费后仍需一轮收尾。
+            ScriptedResponse::text("终答"),
+        ]));
+        let gateway: Arc<dyn ModelGateway> = fake.clone();
+        let controller = AgentLoopController::with_gateway(gateway)
+            .with_slider_window_tokens(1_000)
+            .with_model_face_block_tokens(1_000)
+            // 并行批内两个结果都保真入会话（不被注入预算拒绝替换）。
+            .with_max_inject_tokens_per_round(10_000_000)
+            .with_context_scale_ladder(v8_test_ladder(1_000_000, 1_000_000_000));
+        let dir = test_dir();
+        let host = SizedReadHost {
+            journal: JournalRecorder::new(dir.clone()),
+            active: std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0)),
+            max_active: std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0)),
+        };
+        controller
+            .run_turn(
+                &host,
+                "并行批读数",
+                "RUN-PAR-READOUT",
+                MANIFEST,
+                0,
+                None,
+                None,
+                None,
+            )
+            .await
+            .unwrap();
+        assert!(
+            host.max_active.load(std::sync::atomic::Ordering::SeqCst) >= 2,
+            "并行批必须真并发（否则本钉不成立）"
+        );
+
+        let requests = fake.received_requests();
+        let header = requests[2]
+            .messages
+            .iter()
+            .find(|m| m.tool_call_id.as_deref() == Some("call-b2"))
+            .map(|m| m.content.lines().next().unwrap_or_default().to_string())
+            .expect("blackboard_read 工具消息带增量头");
+        let blocks: usize = header
+            .split("滑块外可压缩 ")
+            .nth(1)
+            .and_then(|rest| rest.split(' ').next())
+            .and_then(|n| n.parse().ok())
+            .unwrap_or_else(|| panic!("增量头缺滑块读数段: {header}"));
+        assert!(
+            blocks >= 1,
+            "并行批读数段必须读批首会话（修复前为 0）: {header}"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// 参与路径：窗口轮声明 blackboard_write → 落穿正常派发执行 → 下一
@@ -6005,7 +6349,8 @@ mod tests {
             .unwrap();
         assert_eq!(answer, "终答");
 
-        // 窗口轮请求面：只暴露 blackboard_write（修复前 Vec::new()），
+        // 窗口轮请求面：只暴露窗口内两件工具（0ap §4-8 并存：blackboard_
+        // write 固化 + context_compress 发起/读数；修复前 Vec::new()），
         // 任务块注入且携带水位（0AE-C6）。
         let requests = fake.received_requests();
         let window_round = &requests[1];
@@ -6015,7 +6360,7 @@ mod tests {
                 .iter()
                 .map(|t| t.name.as_str())
                 .collect::<Vec<_>>(),
-            vec!["blackboard_write"]
+            vec!["blackboard_write", "context_compress"]
         );
         let window_block = window_round
             .messages
@@ -6134,7 +6479,7 @@ mod tests {
         let round_after_window = &requests[2].messages;
         assert!(
             round_after_window.iter().any(|m| m.content.contains(
-                "[模型参与压缩] 窗口内仅 blackboard_write 可执行，本轮其余动作已跳过（1 个）"
+                "[模型参与压缩] 窗口内仅 blackboard_write / context_compress 可执行，本轮其余动作已跳过（1 个）"
             )),
             "drop notice injected: {round_after_window:?}"
         );
@@ -6207,7 +6552,7 @@ mod tests {
             .unwrap();
         assert_eq!(answer, "终答");
 
-        // 窗口恰耗 3 轮：3 个窗口轮请求全部只暴露 blackboard_write。
+        // 窗口恰耗 3 轮：3 个窗口轮请求全部只暴露窗口内两件工具（0ap）。
         let requests = fake.received_requests();
         for request in &requests[1..4] {
             assert_eq!(
@@ -6216,7 +6561,7 @@ mod tests {
                     .iter()
                     .map(|t| t.name.as_str())
                     .collect::<Vec<_>>(),
-                vec!["blackboard_write"]
+                vec!["blackboard_write", "context_compress"]
             );
             assert!(
                 request
@@ -6298,7 +6643,7 @@ mod tests {
             .await
             .unwrap();
 
-        // 恰两轮请求：第 2 轮窗口面只有 blackboard_write；无第 3 轮。
+        // 恰两轮请求：第 2 轮窗口面只有窗口内两件工具（0ap）；无第 3 轮。
         let requests = fake.received_requests();
         assert_eq!(requests.len(), 2);
         assert_eq!(
@@ -6307,7 +6652,7 @@ mod tests {
                 .iter()
                 .map(|t| t.name.as_str())
                 .collect::<Vec<_>>(),
-            vec!["blackboard_write"]
+            vec!["blackboard_write", "context_compress"]
         );
 
         // 收口事件在 break 前落地：未参与如实落账（写入未派发）。
