@@ -17,7 +17,7 @@
 | Linux musl 三件套 | 首轮 apt 经代理 5 连败（FR-D03 复现）⇒ 按先例切代理后 `LINUX_BUILD_EXIT=0`（**18m51s**）；PT_INTERP=0；bookworm/alpine 双向冒烟全绿；构建脚本直写 `/out` 完成换装 |
 | 字面量核证 | 双平台同表：0ap 三处新面 0→非零、0ao 收敛面 94→18（Win）／45→1（Lin）、v8／0af／0ak／退役面**逐项保持** |
 | 代理处置 | 切换前备份＋切换后**字节级还原**（还原件与备份件哈希相同、读数 `manual / http://127.0.0.1:7890` 复原） |
-| 未做 | 提交／推送／Release／计数变更／测试面复跑（读数沿用 0ap 回执 §5／§8） |
+| 未做（本重建批边界） | 提交／推送／Release／计数变更——**同日后续批已处置**（§9「提交、推送与发布」）；测试面读数沿用 0ap 回执 §5／§8 |
 
 ## 1. 前置基线核证（只读）
 
@@ -135,7 +135,8 @@ Windows 0.6.1 备份件／Linux 0.6.0 备份件；新件列＝Windows 构建产�
 2. **无源冻结提交**：本批 bump 与全部批内容仍在工作树（用户未指示提交）；「提交线」与
    「实际二进制源」之间的差异按 0.6.1 先例登记，不作隐性等价声明。合回后如需可重现二进制
    须再走一次重建。
-3. **未发 Release／未推送**：用户本批仅指示重建（0.5.1 先例：单项指示不沿用）。
+3. **未发 Release／未推送**（本重建批当时的边界）：用户重建轮仅指示重建；**同日后续批已放行**
+   「请提交并推送吧，双平台安装包也发布上去」并完成（§9）。
 4. **未复跑测试面**：本批相对 0ap／0ao 回执仅增 bump 两行（`Cargo.toml`／`Cargo.lock`），
    读数沿用回执 §5／§8（orz-loop 796/0/3、orz-assurance 246/0、orz-host 332/0/5、
    clippy 逐位持平、fmt 仅 0am 件）。承载判据的载体面读数见 §2–§4。
@@ -174,3 +175,72 @@ Windows 0.6.1 备份件／Linux 0.6.0 备份件；新件列＝Windows 构建产�
 [`BACKLOG 0an`](../BACKLOG_AND_PRIORITIES.md)。
 关键词：0.6.2、双平台、载体重建、换装、字面量核证、ACAF 重 provision、Linux musl static-pie、
 Docker 代理切换与还原、0ap S2、0ao 收敛面、0an Linux 载体。
+
+---
+
+## 9. 提交、推送与发布（2026-09-18 同日后续批）
+
+> 用户指示：「请提交并推送吧，双平台安装包也发布上去」。本节是重建批（§1–§7）之后的
+> **提交／推送／发布记录笔**，不改 §1–§7 的读数与结论。
+
+### 9.1 orz 两笔提交与 hunk 级分离
+
+| 序 | 提交 | 内容 | 复核读数 |
+|---|---|---|---|
+| 1 | **`ad8c0da3`** | 0ap 第九工具 `context_compress` ＋ 0ao 工具名单源全库收敛（17 文件，+1144/−104） | **隔离工作树**（`git stash push --keep-index -u` 把 0am 影子批搁置后实跑）：orz-loop `--lib` **791/0/3**（＝786 基线＋5 钉）、orz-assurance **231/0**（＝229＋2 钉）、orz-host 串行 **332/0/5**、`cargo fmt` 三 crate 干净 |
+| 2 | **`08ab194c`** | bump `0.6.1 → 0.6.2`（`crates/orz-bin/Cargo.toml` ＋ `Cargo.lock` 两文件两行）＝ 载体重建源冻结 | 见 §2–§4 载体面读数 |
+
+- **hunk 级分离**（0.6.1 先例）：混合文件仅 `blackboard.rs`（取 0ao hunk、剔 0am 的 `rli_shadow`
+  fixture hunk）、`controller.rs`（取 0ap 13 个 hunk、剔 0am 的 8 个：RLI 开关／`new_lif_engine`／
+  轮次预算状态行与投影行）、`Cargo.lock`（取 bump hunk、剔 0am 的 `libm`）；纯 0am 文件
+  （`Cargo.toml`、`orz-assurance/Cargo.toml`、`lif/*`、`prompt.rs`、`acp_server.rs`）与两个 0am
+  未跟踪件整批不进暂存。过滤补丁与全量差分留档 `.tmp-062/`（`orz-precommit-full.patch`／
+  `controller-ours.patch`／`blackboard-ours.patch`／`cargo-lock-bump.patch`＋隔离测试日志）。
+  **提交后工作树剩余项仅 0am 批**（10 改＋2 未跟踪）。
+- **隔离复核口径**：`git stash push --keep-index -u` → 实跑测试 → `git stash pop`（两处 auto-merge：
+  `blackboard.rs`／`controller.rs`，原子恢复无冲突）。
+
+### 9.2 父仓提交与账本
+
+- 父仓提交 **`ffdde3b3`**（16 文件，+633/−52）：pin → `08ab194c`＋`orz_source_manifest.sha256`
+  重算 **1458 条**（差异 19/18 行＝18 件改哈希＋1 件新增）；新增本档与 0ap／0ao 回执；ADR-0010
+  §14.72／v1.73、设计稿、fixture 样本、`scripts/DOCKER_PROXY_RECIPE.md` 第 0 步同批；索引 **v3.65**
+  头行＋`GAP-TOOLNAME-LITERAL-CONVERGENCE` 转 `implemented`＋§8 桶同步；BACKLOG／TODO 计数
+  **35 项**（0ao 37 → 36、0an 36 → 35 两项闭合；0ap 维持开放）。
+- 门禁：`error_count=1`，唯一＝`orz submodule working tree is dirty`（0am 未提交，合回前预期）；
+  `git diff --check` 两仓干净。
+
+### 9.3 推送
+
+| 仓 | refspec（显式） | 结果 |
+|---|---|---|
+| orz | `refs/heads/feat/fusion-architecture:refs/heads/feat/fusion-architecture`（远端 `cli`） | `07405e61..08ab194c`，exit 0 |
+| 父仓 | `refs/heads/main:refs/heads/main`（远端 `origin`） | `c5e99c6a..ffdde3b3`，exit 0 |
+| 标签 | `refs/tags/v0.6.2` | 新建并推送，exit 0 |
+
+- 推送后两仓 `status -sb` 均无 ahead/behind；代理路径沿用仓库配置 `http.proxy=127.0.0.1:7890`
+  （Clash 在跑，未触发 061 的直连回退）。
+
+### 9.4 双平台包与 Release
+
+- 暂存 `D:\tb-eval\rel-062-stage\`（本地件不入库）：`win/`／`lin/` 各＝三件二进制＋`README.md`
+  （0.6.2 适配：更新说明＋两平台快速开始＋边界注）＋`SHA256SUMS`。
+
+| 资产 | 大小 (B) | SHA256 |
+|---|---|---|
+| `orz-0.6.2-windows-x86_64.zip` | 27,511,203 | `8d158150452309518bbe857df64a00123a64d65edeb143cdeee317f64ef2717b` |
+| `orz-0.6.2-linux-x86_64.tar.gz` | 35,770,317 | `d7b8e0c4b58b43ec08b9e021f5b32e2f3f440b5f2ec081fb6286d8cb56560398` |
+
+- 包完整性：容器内 `sha256sum -c SHA256SUMS` 双侧全 OK；**解包回读**（zip 逐件展开比对＋tar 逐件
+  比对）与换装载体**同哈希**。
+- Release：**`v0.6.2`**（`https://github.com/SilverWhite/CLI/releases/tag/v0.6.2`，非 draft／非
+  prerelease）双资产上传；**三方一致**＝本地哈希 ↔ 服务端 `digest` ↔ 下载重哈希逐位相同。
+- 发布说明：`release-notes-0.6.2.md`（源冻结 `08ab194c`、载体哈希表、0.6.2 更新、验证摘要、边界）
+  随 Release 正文发布；`README.md` 随包分发（本地件留 `.tmp-062/`）。
+
+### 9.5 边界
+
+- 二进制含**未提交** 0am 影子面（env 门控、默认关闭），随 O2 裁决；本记录不作「二进制＝提交线」
+  的等价声明（§5-1/2 同格）。
+- 0ap 的 **S3 狗粮实证**待后续批次收取（读数表括号内总数 ↔ journal `blocks=N`／模型经新工具完成
+  至少一次 `model_selected` 压缩／常驻成本读数）。

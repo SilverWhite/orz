@@ -230,8 +230,13 @@ loop-top 消费点（GAP-INQUIRY-SPLIT 注入点之前；`pending_checkpoint.is_
   07405e61 先例做 hunk 级分离，0am 批维持未提交随 O2 裁决。
 - **S2 已放行并完成（2026-09-18，用户令「请进行重建吧，双平台」）**：0.6.2 双平台重建换装＋
   字面量核证（Windows `orz.exe` 53,989,888 B `d33d904b…`／Linux `orz` 111,394,672 B
-  `d14d6d9c…`；ACAF 按 052/061 先例重 provision）——详见
-  [`062 载体重建`](062_CARRIER_REBUILD_DUAL_PLATFORM_2026-09-18.md)。
+  `d14d6d9c…`；ACAF 按 052/061 先例重 provision）——同日后续批按用户令
+  「请提交并推送吧，双平台安装包也发布上去」完成：本批随 **orz `ad8c0da3`**（实现）／
+  **`08ab194c`**（bump 0.6.2 源冻结）／父仓 **`ffdde3b3`** 入库并推送（远端
+  `feat/fusion-architecture`／`main` 均已同步），**GitHub Release v0.6.2** 双平台包
+  （zip 27,511,203 B `8d158150…`／tar.gz 35,770,317 B `d7b8e0c4…`）已发布且
+  本地↔服务端↔下载重哈希三方一致。详见
+  [`062 载体重建 §9`](062_CARRIER_REBUILD_DUAL_PLATFORM_2026-09-18.md)。
 - **待放行**：S3 狗粮实证（单轮如实标注——读数表**括号内总数**与 journal
   `blocks=N` 一致〔主数＝可压缩子集 `closed ∧ Live`，与 `blocks=N` 不同量，只作
   advisory〕／模型经新工具完成至少一次 model_selected 压缩／常驻成本读数评估）。
