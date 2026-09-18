@@ -863,6 +863,13 @@ mod tests {
 
     static TEST_COUNTER: AtomicU32 = AtomicU32::new(0);
 
+    /// Wait bound for in-process stdio turn/completion exchanges. The old
+    /// dev-tuned 5s/8s bounds timed out on cold 2-core CI runners under the
+    /// serial suite load (RS-01 2026-09-18, run 35334716461: approval test
+    /// missed `turn/completed`); 30s keeps a real hang bounded while
+    /// tolerating slow machines. Single-sourced across this test module.
+    const TURN_WAIT: std::time::Duration = std::time::Duration::from_secs(30);
+
     fn test_dir() -> PathBuf {
         let n = TEST_COUNTER.fetch_add(1, Ordering::SeqCst);
         let dir =
@@ -945,9 +952,9 @@ mod tests {
         }
     }
 
-    /// Skip messages until one with the given method arrives (5s bound).
+    /// Skip messages until one with the given method arrives (TURN_WAIT bound).
     async fn recv_until<R: AsyncBufRead + Unpin>(r: &mut R, method: &str) -> JsonMessage {
-        tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        tokio::time::timeout(TURN_WAIT, async {
             loop {
                 let msg = recv(r).await;
                 if msg.method.as_deref() == Some(method) {
@@ -961,7 +968,7 @@ mod tests {
 
     /// Skip messages until the response for the given request id arrives.
     async fn recv_until_id<R: AsyncBufRead + Unpin>(r: &mut R, wanted: &Value) -> JsonMessage {
-        tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        tokio::time::timeout(TURN_WAIT, async {
             loop {
                 let msg = recv(r).await;
                 if msg.id.as_ref() == Some(wanted) {
@@ -1687,7 +1694,7 @@ mod tests {
                 // loop — a run failure asserts below instead of timing out.
                 let mut approval_count = 0u32;
                 let mut status = String::new();
-                tokio::time::timeout(std::time::Duration::from_secs(8), async {
+                tokio::time::timeout(TURN_WAIT, async {
                     loop {
                         let msg = recv(&mut r).await;
                         if msg.method.as_deref() == Some("approval/request") {
@@ -1780,7 +1787,7 @@ mod tests {
                 // moment it arrives (a pending approval blocks its turn).
                 let mut approvals: Vec<JsonMessage> = Vec::new();
                 let mut completed = 0u32;
-                tokio::time::timeout(std::time::Duration::from_secs(8), async {
+                tokio::time::timeout(TURN_WAIT, async {
                     while completed < 2 {
                         let msg = recv(&mut r).await;
                         if msg.method.as_deref() == Some("approval/request") {
@@ -2086,7 +2093,7 @@ mod tests {
                 // Both turns complete (order free — drain until two terminal
                 // notifications with status completed arrive).
                 let mut completed_count = 0u32;
-                tokio::time::timeout(std::time::Duration::from_secs(8), async {
+                tokio::time::timeout(TURN_WAIT, async {
                     while completed_count < 2 {
                         let msg = recv_until(&mut r, "turn/completed").await;
                         if msg.params.as_ref().unwrap()["turn"]["status"] == "completed" {
