@@ -894,7 +894,7 @@ GLM F2 处置转排期（2026-09-06 用户裁决）：`orz-host/src/approval.rs`
 - [x] **RS-01（P0）父仓 CI 断流修复（2026-09-18 闭合，run 35338101577 全绿）**：`S4_PROGRESS_2026-09-02.md:1128` 绝对路径链接改相对＋`check_repository.py` `_check_markdown_links` 平台对称化；修后确证 CI 全绿＋CI 状态纳入门禁口径。
 - [x] **RS-02（P0→P1）CI 补 Rust 测试轨（2026-09-18 闭合：用户裁决「直接处理」生效；run 35338101577 rust 三连全绿）**：最小 orz-loop／orz-assurance `--lib`＋orz-host 串行；提级与否待裁决。
 - [ ] **RS-03（P1）920K 模型面残留文案**：`controller.rs:3209`／`agent_loop.rs:4300` 按现行 320K/500K 口径改写＋顺修同串连续空格。
-- [ ] **RS-04（P1）测试封闭性**：orz-tui ACAF 依赖测试可忽略化／orz-host 串行要求文档化／assurance slow-e2e 分层。
+- [ ] **RS-04（P1）测试封闭性**：orz-tui ACAF 依赖测试可忽略化／orz-host 串行要求文档化／assurance slow-e2e 分层。（CI 实证载敏三例已随批修复，明细见 BACKLOG RS-04）
 - [ ] **RS-05（P1）锁中毒级联治理＋生产路径 unwrap Top 10**（清单见报告 §2-RS-05）。
 - [ ] **RS-06（P1）0am 批提交前钉**：libm `=0.2.15`＋example fmt＋P3 五小件（随 O2 裁决批）。
 - [ ] **RS-07（P2）高危模块测试补强**：权限桥 deny 路径集成测试＋acaf_e2e 非 Windows 缺口处置决策。

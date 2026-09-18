@@ -12,4 +12,4 @@
   ③**载敏测试（时序/进程/负载）入 CI 必须串行＋放宽上界**，系统性分层归 RS-04。
 - **回归入口**：rust-tests job 三步（CI 常驻即回归）；本地模拟＝清 `target` 后无 `PROTOC` 环境构建。
 - **同族先例**：`ORZ-TOOL-BINARY-COMPAT-001`（「容器缺件伪装成构建/测试失败」——本条补 CI runner 形态＋缓存掩盖机理）、`ORZ-ENV-POLLUTION-001`（读数口径前置核验）。
-- **验证记录**：2026-09-18 run 35338101577 rust-tests 八步全绿（安装步＋放宽后串行套件通过）。
+- **验证记录**：2026-09-18 run 35338101577 rust-tests 八步全绿（安装步＋放宽后串行套件通过）；**同日第三实例**——codex_app EOF 测试固定 900ms 睡眠在 CI 等不到 journal 落盘收尾（run 35341286834 `valid: false`；同树 run 35342374965 绿坐真 flaky），子仓 `9a1c3b2c` 改轮询 run_finished 终态／TURN_WAIT 封顶后 run 35344882087 绿。
