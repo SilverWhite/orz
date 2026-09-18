@@ -1015,8 +1015,8 @@ GLM F2 处置转排期（2026-09-06 用户裁决）：`orz-host/src/approval.rs`
 - 来源与方法：四路并行只读深查（①Rust 生产代码与未提交 0am 批／②文档-代码一致性／③测试·CI·保障体系／④仓库卫生·git·许可）＋主会话独立 fmt/clippy/cargo test 实跑复核与关键发现逐条亲核；范围＝父仓 `93220794`＋orz `08ab194c`（工作树含 0am 批）。
 - 总评：治理体系经得起核查（README 十项断言逐项属实、安全机制七项声明零虚标、事件 schema 抽查零漂移、git 指针一致、敏感信息零命中、0am 批为可提交质量）；**唯一 P0＝父仓 CI 自 2026-09-02 起连续红灯**（账本门禁未记录该事实，属治理盲区）。
 - 立项：全部发现以 **RS-01…RS-18** 立项为本线待修项（严重级为审查时点定级，随处置批复核）；**RS-01/RS-02（CI 修复与 Rust 测试轨）是否提级 P0 当前工作集待用户裁决**。证据明细一律以审查报告为准，本线只留勾选与路由。
-- [ ] **RS-01（P0）父仓 CI 断流修复**：`_windows_high_nist/S4_PROGRESS_2026-09-02.md:1128` 绝对路径链接改相对路径＋`scripts/check_repository.py` `_check_markdown_links` 盘符绝对路径拒绝/规范化（平台对称化）；修后确证 CI 全绿（4 matrix job），并将 CI 状态纳入门禁/账本口径（补 16 天断流的账本盲区）。
-- [ ] **RS-02（P0→P1）CI 补 Rust 测试轨**：最小 job＝orz-loop／orz-assurance `--lib`＋orz-host 串行（`-- --test-threads=1`）；子仓已有 rustfmt。
+- [x] **RS-01（P0）父仓 CI 断流修复（2026-09-18 当日闭合：用户令「请直接开始处理RS-01与RS-02吧」；处置六支 667d7d8d／5cda9957／db864130／子仓 546f9ec5・1ff6bb3d／父仓 cae0041f・08307b08；验收＝run 35338101577 五 job 全绿〔33m49s〕）**：`_windows_high_nist/S4_PROGRESS_2026-09-02.md:1128` 绝对路径链接改相对路径＋`scripts/check_repository.py` `_check_markdown_links` 盘符绝对路径拒绝/规范化（平台对称化）；修后确证 CI 全绿（4 matrix job），并将 CI 状态纳入门禁/账本口径（补 16 天断流的账本盲区）。
+- [x] **RS-02（P0→P1）CI 补 Rust 测试轨（2026-09-18 当日闭合：同上处置六支＋jsonschema／protoc 35.1 安装步；验收＝run 35338101577 rust-tests 八步全绿——orz-loop 791/0/3／orz-assurance／orz-host 串行 332）**：最小 job＝orz-loop／orz-assurance `--lib`＋orz-host 串行（`-- --test-threads=1`）；子仓已有 rustfmt。
 - [ ] **RS-03（P1）920K 模型面残留文案**：`controller.rs:3209`（blackboard_write 工具描述）与 `agent_loop.rs:4300`（首轮工作台提醒）按现行 320K/500K 口径改写（920K 阶梯已整档退役）＋顺修同串异常连续空格。
 - [ ] **RS-04（P1）测试封闭性**：orz-tui 9 个 ACAF 环境依赖测试 ignorable 化或测试 signer fixture；orz-host 串行要求文档化（README 开发者节）；assurance 全量 1,668 测试 30 分钟级无 slow/e2e 分层（CI 修复后 30min×4job 风险）。
 - [ ] **RS-05（P1）锁中毒级联治理**：204 处生产段 `lock().unwrap()` 按热点渐进去中毒化（acp_server 43／lib 26／tool_run 20／cdp 18／dispatch 15）＋生产路径 unwrap Top 10 清单处置（disposition.rs 三连／cdp.rs:694／codex_app.rs:352／journal/recorder.rs:621,635／acp_server.rs:2161,2175／plan/state_machine.rs 三处／transport.rs:2308／cdp.rs:538,542／action_ledger.rs:155——清单见报告 §2-RS-05）。

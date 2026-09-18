@@ -4,7 +4,7 @@
 > 发起：用户令「请对本项目进行一轮全面严格审查」（2026-09-18）；处置令（同日）：「请先落一份审查报告，随后将审查出的全部问题都立项为本轮审查的待修项」。
 > 方法：四路并行只读深查（①Rust 生产代码与未提交 0am 影子批；②文档-代码一致性；③测试·CI·保障体系；④仓库卫生·git·许可）＋主会话独立工具链复核（fmt／clippy／`cargo test` 实跑）与关键发现逐条亲核（CI 断链行、920K 残留文案、flaky 复跑、protoc 前置、`gh run list` 均为主会话复验）。
 > 范围：父仓 main @ `93220794`；orz 子模块 feat/fusion-architecture @ `08ab194c`（工作树含未提交 0am 影子 RLI 批）。审查对象为 2026-09-18 时点状态。
-> 处置：全部发现以 **RS-01…RS-18** 立项入 [BACKLOG 0aq](../../docs/BACKLOG_AND_PRIORITIES.md)（35 → 36）；RS-13a 本批当改随批闭合。**2026-09-18 同日用户令「请直接开始处理RS-01与RS-02吧」（提级裁决生效），处置批 667d7d8d＋5cda9957 已推送执行；批注见 §2 RS-01/RS-02 各条，验收（CI 全绿）进行中。**
+> 处置：全部发现以 **RS-01…RS-18** 立项入 [BACKLOG 0aq](../../docs/BACKLOG_AND_PRIORITIES.md)（35 → 36）；RS-13a 本批当改随批闭合。**2026-09-18 同日用户令「请直接开始处理RS-01与RS-02吧」（提级裁决生效），处置批 667d7d8d＋5cda9957 已推送执行；批注见 §2 RS-01/RS-02 各条。〔2026-09-18 收官〕处置共六支（父仓 667d7d8d／5cda9957／db864130／cae0041f／08307b08＋子仓 546f9ec5／1ff6bb3d），**验收达成＝run 35338101577 五 job 全绿〔33m49s〕**，账本闭合批勾选。**
 > 范围限制：未做真实 API 端到端行为评测、性能/内存剖析、Linux 运行时体验验证；未深审密码学实现正确性（ACAF 仅核机制存在性与门控逻辑）。此四项如需可另立专项。
 
 ---
@@ -33,6 +33,7 @@
   - 续批（5cda9957）：〔A〕校准——事件枚举钉 55 → 65（09-09 0t 批定 55 后，0ac 批 +3：result_delivered/retrieval_progress/retrieval_result_segment；0z 批 +7：host_resource_snapshot/host_resource_denied/resource_limit_hit/resource_exhausted/reclaim_performed/process_tree_reaped/run_terminated；两批落事件面时 CI 正断流，钉值漂移 9 天无人见）、测试名去计数尾缀改 `test_v02_all_event_types_covered`（「51」自 55 钉起即漂移）、docstring 钉值史补 0ac/0z 与断流注记；本地契约文件 15/15 过（含 `fixture_events == enum_events` 精确覆盖断言）。
   - 第二轮 CI 复跑（run 35328029850，触发于 5cda9957；〔勘误〕初稿凭在途信息误记失败步骤为 runtime/tests——实况：**runtime 步已绿＝钉值修复生效**，四 Python job 全数红于 assurance P0-P5 步骤内的 `assurance/tests/test_retrieval_subagent_real.py::test_search_p3_action_authorization`，每 job 恰此一败）：〔残点 C〕`ProjectDocIndex.search` 并列分数沿 glob 枚举序截断（Python 稳定排序保插入序＝机器间不一致）＋语料自 09-02 增长 → 干净 checkout 的 top-10 漏掉 `assurance/instruction_gate.py`（开发机工作树碰巧在列）——随批修：排序改「分数降序＋路径升序」确定性 tie-break（`project_doc_index.py`），测试改双断言（审计文档走广谱 top-10、gate 脚本走 `source_code` 限域检索）；〔残点 D〕rust-tests 侧 orz-assurance 两枚 `match_python` 对拍崩于 CI 无 `jsonschema`（对拍 shell 出 `python` 跑 `assurance/run_event_journal_validation.py`）——随批在 rust-tests job 补 `python -m pip install jsonschema`。**同轮实质好消息：`Run orz-loop lib tests` 在 CI 791/0/3 全绿**（＝干净 HEAD 基线，protoc 修复实证）。**RS-01 验收（CI 全绿）未达、第三轮复跑在途；绿后由账本闭合批勾选 RS-01 并附 run 证据。**
   - 账本口径：16 天断流与残点 A/B 的事实与修复已随 667d7d8d/5cda9957 提交信息与本批注入账（BACKLOG 治理注记「全项目全面严格审查入档（2026-09-18）」同记）。
+  - **〔2026-09-18 收官〕第四至六层与门禁面收口，验收达成**：第四轮（35334716461）暴露〔E〕session.rs worktree 相等断言栽在 CI runner TEMP 的 8.3 短路径（RUNNER~1 vs dunce 规范化长路径）——子仓 546f9ec5 改 canonical-to-canonical；〔F〕同轮四 Python job 死于门禁 manifest↔pin 摘要校验（cae0041f pin bump 漏重算 manifest——教训入账：manifest 系 index 口径摘要、门禁每轮 CI 校验一致性、pin bump 必随批重算）——08307b08 补算；第五轮前再修〔G〕codex_app 测试 5s/8s 等待上界在 2 核 runner 超时——子仓 1ff6bb3d 单源 TURN_WAIT 30s（五处收编）。**验收＝run 35338101577（push 08307b08，33m49s）五 job 全绿：契约门禁/compileall/PS 语法/grok/runtime/assurance 五步恢复常绿＋rust-tests 八步全绿（orz-loop 791/0/3／orz-assurance／orz-host 串行）；账本闭合批勾选 RS-01。**
 
 ### RS-02（P0→P1）CI 零 Rust 测试覆盖
 
@@ -43,6 +44,7 @@
   - 已落修复（667d7d8d）：ci.yml 新增 `rust-tests` job——windows-latest、timeout 60m、checkout `submodules: recursive`、`dtolnay/rust-toolchain@master` 钉 `1.97.1`（＝`orz/rust-toolchain.toml` 冻结版）、`cargo test --locked` 三连（orz-loop `--lib`／orz-assurance `--lib`／orz-host `--lib -- --test-threads=1`，与回执口径一致）；orz-bin/orz-tui 不入最小轨（RS-12/RS-04 另批）。
   - 首轮复跑暴露（35326045846）：rust-tests 首步崩于 `orz-tools-api` build.rs `protoc` 缺失——**修正本报告 §3 的一个局部判断**：三个 lib 测试在开发机能过纯属 `target` 缓存吞掉 build script 重跑（依赖链 orz-loop → orz-tools → orz-tools-api 实际在），并非不依赖 protoc；全新 checkout 即裸奔。
   - 续批（5cda9957）：ci.yml 补「Install protoc 35.1」步骤——官方 release `v35.1` win64 zip 下载解包入 `GITHUB_PATH`，版本钉死＝开发机 vendored `orz/bin/protoc.exe`（libprotoc 35.1）同源（URL 探活 302 实证）；RS-12 口径随之扩大：protoc 前置不止 orz-bin，三个 lib 测试的全新环境构建同样必需，README「从源码运行」补前置时应一并写清。
+  - **〔2026-09-18 收官〕验收达成＝run 35338101577 rust-tests 全步绿**（工具链 1.97.1／protoc 35.1／jsonschema／orz-loop 791/0/3／orz-assurance／orz-host 串行）；后续增强面归 RS-04（载敏测试分层与封闭性：本轮 CI 串行步相继翻出的 session.rs／codex_app 两处载敏断言即其实例）。
   - 第二轮复跑（35328029850）：protoc 步骤实证有效——`Run orz-loop lib tests` 在 CI **791/0/3 全绿**（干净 HEAD 基线；上轮 7m23s 崩点已灭）；红点移至 orz-assurance 两枚 `match_python` 对拍（＝CI 缺 `jsonschema`、非 Rust 侧缺陷），随批在 rust-tests job 补 `python -m pip install jsonschema`。**RS-02 验收（三步全绿）待第三轮出数**；绿后由账本闭合批勾选 RS-02 并附 run 证据。
 
 ### RS-03（P1）模型面残留文案「920K 压缩」与现行口径冲突
@@ -195,7 +197,7 @@
 ## §9 立项与计数
 
 - **0aq**「全项目全面严格审查处置线」立项入 BACKLOG（P1；**35 → 36**），RS-01…RS-18 挂线内勾选；**RS-01/RS-02（CI 修复与 Rust 测试轨）是否提级 P0 当前工作集待用户裁决**。
-  - **2026-09-18 处置批注**：用户令「请直接开始处理RS-01与RS-02吧」（提级裁决生效）——处置批 `667d7d8d`（根因修复＋门禁对称化＋rust-tests job）与 `5cda9957`（枚举钉校准＋protoc 步骤）已推送；同轮暴露并修复两个被 16 天断流掩盖的既有残点（runtime 过期计数钉 55→65、rust 链 protoc 前置）；RS-01/RS-02 验收（CI 全绿）进行中，绿后账本闭合批勾选并附 run 证据。详见 §2 RS-01/RS-02 批注。
+  - **2026-09-18 处置批注**：用户令「请直接开始处理RS-01与RS-02吧」（提级裁决生效）——处置批 `667d7d8d`（根因修复＋门禁对称化＋rust-tests job）与 `5cda9957`（枚举钉校准＋protoc 步骤）已推送；同轮暴露并修复两个被 16 天断流掩盖的既有残点（runtime 过期计数钉 55→65、rust 链 protoc 前置）；RS-01/RS-02 验收（CI 全绿）〔2026-09-18 收官〕达成＝run 35338101577 五 job 全绿，账本闭合批已勾选。详见 §2 RS-01/RS-02 批注。
 - **RS-13a 本批当改**：BACKLOG 优先级总览 P1 行 0am 挂起标注随本批补记闭合。
 - 本批零代码、零子仓改动；计数 35 → 36 一处；账本三处同步（BACKLOG／TODO／索引 v3.66）。
 
