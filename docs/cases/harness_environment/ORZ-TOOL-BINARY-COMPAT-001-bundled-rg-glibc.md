@@ -48,3 +48,8 @@
   list_dir ignored/truncated 计数未实施（FUS-TOOL-SCOPE-CONTRACT 后续项；
   **2026-08-18 全部闭合**——grep files_searched 全结局探针 + list_dir 目录
   信封，见实施审计「边界与后续项」）。
+- **同族验证追加（2026-09-18，RS-01/RS-02 处置）**：「容器缺件伪装」的 CI runner 形态实证——
+  `orz-tools-api` build.rs 缺 `protoc` 使 `cargo test -p orz-loop --lib` 首步即崩
+  （run 35326045846）；开发机因 target 缓存吞 build script 重跑而不可见。修复＝rust-tests job
+  「Install protoc 35.1」步（与 vendored `orz/bin/protoc.exe` libprotoc 35.1 钉版同源）；
+  机理与读数纪律沉淀至同族新条 [`ORZ-DEV-TUNED-BOUND-001`](ORZ-DEV-TUNED-BOUND-001-dev-tuned-waits.md)。

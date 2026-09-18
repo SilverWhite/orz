@@ -1035,6 +1035,7 @@ GLM F2 处置转排期（2026-09-06 用户裁决）：`orz-host/src/approval.rs`
 - [ ] **RS-16（P3）Python 测试面卫生**：pytest.ini 与 pyproject 去重；CI unittest vs 本地 pytest 口径；顶层散落 `test_*.py` 归置；`evaluation/`/`regression/` 零测试命名误导注记。
 - [ ] **RS-17（P3）TODO2 M3 复验启动决策**：T3.1–T3.5 全未勾选，明细落后两个载体版本（TER 明细权威定位不变）。
 - [ ] **RS-18（P3）巨型文档增长观察**：ADR-0010 475KB／BACKLOG 296KB／索引 211KB／TODO 201KB／1.3MB 证据 JSON——挂观察，超限随既有瘦身机制处置。
+- 案例库沉淀（2026-09-18，用户令问询「是否考虑CI修复过程存在值得进入案例库的内容」后登记；**登记不入任务计数**，沿 2026-09-13 先例）：事故台账补 [`ORZ-CI-BLINDOUT-001`](incidents/ORZ-CI-BLINDOUT-001.md)（16 天断流全程 Umbrella，盲区补登）＋五案例晋级——[`ORZ-CI-BLINDOUT-001`](cases/harness_environment/ORZ-CI-BLINDOUT-001-ci-red-blindout-cost.md)（红灯掩盖经济学）／[`ORZ-GATE-ASYM-001`](cases/harness_environment/ORZ-GATE-ASYM-001-gate-platform-asym-fake-green.md)（守门者平台不对称伪绿）／[`ORZ-DEV-TUNED-BOUND-001`](cases/harness_environment/ORZ-DEV-TUNED-BOUND-001-dev-tuned-waits.md)（开发机调参上界与缓存掩盖）／[`ORZ-GLOB-TIEBREAK-001`](cases/harness_environment/ORZ-GLOB-TIEBREAK-001-nondet-topk.md)（非确定 top-K）／`windows/ORZ-WIN-TEMP83-001`（TEMP 8.3 短路径断言）＋`ORZ-TOOL-BINARY-COMPAT-001` 同族验证追加（protoc 缺件 CI runner 形态）；README 第四批登记＋同族追加⑤⑥；索引 §8 reference 桶随批。
 - 关键词：全面审查、RS 立项、CI 断流、920K 残留文案、测试封闭性、锁中毒、仓库卫生、0aq。
 
 ### 0ap. FR-A06 压缩交互设计批（P2；2026-09-18 用户令纳入排期；处理批报告 §1.7 注册）
