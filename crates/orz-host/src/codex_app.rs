@@ -1971,18 +1971,27 @@ mod tests {
                 // Drop the client transport mid-turn (EOF — never a terminal).
                 drop(r);
                 drop(w);
-                // Give the server a beat to finish the run and the journal.
-                tokio::time::sleep(std::time::Duration::from_millis(900)).await;
-                let replay = orz_assurance::replay_journal(
-                    &base
-                        .join(".gsa")
-                        .join("runs")
-                        .join("RUN-thr_eof-0")
-                        .join("events.jsonl"),
-                    None,
-                    None,
-                    true,
-                );
+                // EOF 收尾是异步的：journal 写线程需要时间落盘到 run_finished
+                // 终态。固定 900ms 睡眠是开发机调参值，2 核 CI runner 高载下
+                // 等不到（run 35341286834 实证，ORZ-DEV-TUNED-BOUND-001 同族
+                // 第三例）——改为轮询至终态，TURN_WAIT 封顶。
+                let journal_path = base
+                    .join(".gsa")
+                    .join("runs")
+                    .join("RUN-thr_eof-0")
+                    .join("events.jsonl");
+                let deadline = tokio::time::Instant::now() + TURN_WAIT;
+                let replay = loop {
+                    let replay = orz_assurance::replay_journal(&journal_path, None, None, true);
+                    if replay.valid && replay.terminal_event.as_deref() == Some("run_finished") {
+                        break replay;
+                    }
+                    assert!(
+                        tokio::time::Instant::now() < deadline,
+                        "journal did not reach run_finished in time: {replay:?}"
+                    );
+                    tokio::time::sleep(std::time::Duration::from_millis(150)).await;
+                };
                 assert!(
                     replay.valid,
                     "journal must be valid despite EOF: {replay:?}"
