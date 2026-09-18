@@ -4,7 +4,7 @@
 > 发起：用户令「请对本项目进行一轮全面严格审查」（2026-09-18）；处置令（同日）：「请先落一份审查报告，随后将审查出的全部问题都立项为本轮审查的待修项」。
 > 方法：四路并行只读深查（①Rust 生产代码与未提交 0am 影子批；②文档-代码一致性；③测试·CI·保障体系；④仓库卫生·git·许可）＋主会话独立工具链复核（fmt／clippy／`cargo test` 实跑）与关键发现逐条亲核（CI 断链行、920K 残留文案、flaky 复跑、protoc 前置、`gh run list` 均为主会话复验）。
 > 范围：父仓 main @ `93220794`；orz 子模块 feat/fusion-architecture @ `08ab194c`（工作树含未提交 0am 影子 RLI 批）。审查对象为 2026-09-18 时点状态。
-> 处置：全部发现以 **RS-01…RS-18** 立项入 [BACKLOG 0aq](../../docs/BACKLOG_AND_PRIORITIES.md)（35 → 36）；RS-13a 本批当改随批闭合。
+> 处置：全部发现以 **RS-01…RS-18** 立项入 [BACKLOG 0aq](../../docs/BACKLOG_AND_PRIORITIES.md)（35 → 36）；RS-13a 本批当改随批闭合。**2026-09-18 同日用户令「请直接开始处理RS-01与RS-02吧」（提级裁决生效），处置批 667d7d8d＋5cda9957 已推送执行；批注见 §2 RS-01/RS-02 各条，验收（CI 全绿）进行中。**
 > 范围限制：未做真实 API 端到端行为评测、性能/内存剖析、Linux 运行时体验验证；未深审密码学实现正确性（ACAF 仅核机制存在性与门控逻辑）。此四项如需可另立专项。
 
 ---
@@ -27,12 +27,23 @@
 - 连锁后果：compileall、PowerShell 语法检查、Grok integration、runtime、assurance P0–P5 五个测试步骤自 09-02 起一次都没执行过。
 - 账本盲区：门禁 error_count 口径只记 orz 子模块未提交态，CI 红灯 16 天无任何账本记录。
 - 建议修法：①该行改相对路径；②`_check_markdown_links` 拒绝/规范化盘符绝对路径（平台对称化，杜绝同类复发）；③修后在 CI 上确证 4 job 全绿，并将「CI 状态」纳入门禁/账本口径。
+- **2026-09-18 处置批注（用户令「请直接开始处理RS-01与RS-02吧」；处置批 `667d7d8d`＋`5cda9957`，直连推送）**：
+  - 已落修复：①1128 链接改仓库相对路径 `../docs/...`——全库 `git grep` 扫描确认库内目标的盘符链接仅此一处，`存档/index` 冻结快照 3 处指向 `D:\tb-eval` 的库外证据指针属门禁存档豁免区、按冻结纪律不改写；②门禁平台对称化：`_check_markdown_links` 对盘符前缀/根斜杠/反斜杠目标一律报 `non-relative local link`（探针验证三病态形态全拦、既有 broken-link 规则不受扰、全库链接检查归零）——「Windows 绿、Linux 红」类缺陷今后在任一 OS 本地即拦。
+  - 首轮 CI 复跑（run 35326045846，触发于 667d7d8d）：**断流根因已灭**——ubuntu 两 job「Check repository contracts」16 天来首次在 Linux runner 转绿，四 Python job 齐进到测试步骤；同轮暴露两个被断流掩盖的既有残点：〔A〕`runtime/tests` 单一过期计数钉（见下）＋〔B〕rust-tests 的 protoc 缺失（批注见 RS-02）。
+  - 续批（5cda9957）：〔A〕校准——事件枚举钉 55 → 65（09-09 0t 批定 55 后，0ac 批 +3：result_delivered/retrieval_progress/retrieval_result_segment；0z 批 +7：host_resource_snapshot/host_resource_denied/resource_limit_hit/resource_exhausted/reclaim_performed/process_tree_reaped/run_terminated；两批落事件面时 CI 正断流，钉值漂移 9 天无人见）、测试名去计数尾缀改 `test_v02_all_event_types_covered`（「51」自 55 钉起即漂移）、docstring 钉值史补 0ac/0z 与断流注记；本地契约文件 15/15 过（含 `fixture_events == enum_events` 精确覆盖断言）。
+  - 第二轮 CI 复跑（run 35328029850，触发于 5cda9957）：ubuntu 两 job 仍红于 `runtime/tests` 步骤（3m38s/4m06s，晚于上轮失败点；具体用例待 run 完结日志解锁后定性）；windows 两 job 与 rust-tests 批注时点在途。**RS-01 验收（CI 全绿）未达，洋葱尚有下一层的迹象；绿后由账本闭合批勾选 RS-01 并附 run 证据。**
+  - 账本口径：16 天断流与残点 A/B 的事实与修复已随 667d7d8d/5cda9957 提交信息与本批注入账（BACKLOG 治理注记「全项目全面严格审查入档（2026-09-18）」同记）。
 
 ### RS-02（P0→P1）CI 零 Rust 测试覆盖
 
 - 现象：父仓 CI 只跑 Python 侧（ assurance/runtime/integration unittest＋契约门禁）；orz 约 1,400 个 Rust 测试只靠本地手工跑；orz 子仓 CI 仅一条 rustfmt。
 - 影响：产品主体（Rust workspace）的质量护栏完全依赖审计回执自述；本审查实测已证明该读数环境敏感（见 §3）。
 - 建议修法：CI 增加最小 Rust 测试 job＝`cargo test -p orz-loop --lib`＋`cargo test -p orz-assurance --lib`＋`cargo test -p orz-host --lib -- --test-threads=1`（串行，见 RS-04）。
+- **2026-09-18 处置批注（同上处置批 `667d7d8d`＋`5cda9957`）**：
+  - 已落修复（667d7d8d）：ci.yml 新增 `rust-tests` job——windows-latest、timeout 60m、checkout `submodules: recursive`、`dtolnay/rust-toolchain@master` 钉 `1.97.1`（＝`orz/rust-toolchain.toml` 冻结版）、`cargo test --locked` 三连（orz-loop `--lib`／orz-assurance `--lib`／orz-host `--lib -- --test-threads=1`，与回执口径一致）；orz-bin/orz-tui 不入最小轨（RS-12/RS-04 另批）。
+  - 首轮复跑暴露（35326045846）：rust-tests 首步崩于 `orz-tools-api` build.rs `protoc` 缺失——**修正本报告 §3 的一个局部判断**：三个 lib 测试在开发机能过纯属 `target` 缓存吞掉 build script 重跑（依赖链 orz-loop → orz-tools → orz-tools-api 实际在），并非不依赖 protoc；全新 checkout 即裸奔。
+  - 续批（5cda9957）：ci.yml 补「Install protoc 35.1」步骤——官方 release `v35.1` win64 zip 下载解包入 `GITHUB_PATH`，版本钉死＝开发机 vendored `orz/bin/protoc.exe`（libprotoc 35.1）同源（URL 探活 302 实证）；RS-12 口径随之扩大：protoc 前置不止 orz-bin，三个 lib 测试的全新环境构建同样必需，README「从源码运行」补前置时应一并写清。
+  - 第二轮复跑（35328029850）：rust-tests 批注时点在途（工具链安装步上轮已验证可过）。**RS-02 验收（三步全绿）未达、待本轮出数**；绿后由账本闭合批勾选 RS-02 并附 run 证据。
 
 ### RS-03（P1）模型面残留文案「920K 压缩」与现行口径冲突
 
@@ -184,6 +195,7 @@
 ## §9 立项与计数
 
 - **0aq**「全项目全面严格审查处置线」立项入 BACKLOG（P1；**35 → 36**），RS-01…RS-18 挂线内勾选；**RS-01/RS-02（CI 修复与 Rust 测试轨）是否提级 P0 当前工作集待用户裁决**。
+  - **2026-09-18 处置批注**：用户令「请直接开始处理RS-01与RS-02吧」（提级裁决生效）——处置批 `667d7d8d`（根因修复＋门禁对称化＋rust-tests job）与 `5cda9957`（枚举钉校准＋protoc 步骤）已推送；同轮暴露并修复两个被 16 天断流掩盖的既有残点（runtime 过期计数钉 55→65、rust 链 protoc 前置）；RS-01/RS-02 验收（CI 全绿）进行中，绿后账本闭合批勾选并附 run 证据。详见 §2 RS-01/RS-02 批注。
 - **RS-13a 本批当改**：BACKLOG 优先级总览 P1 行 0am 挂起标注随本批补记闭合。
 - 本批零代码、零子仓改动；计数 35 → 36 一处；账本三处同步（BACKLOG／TODO／索引 v3.66）。
 
