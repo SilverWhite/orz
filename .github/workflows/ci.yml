@@ -84,6 +84,16 @@ jobs:
         with:
           toolchain: "1.97.1"
 
+      - name: Install protoc 35.1 (pinned; mirrors dev-machine orz/bin/protoc)
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $zip = Join-Path $env:RUNNER_TEMP 'protoc-35.1-win64.zip'
+          $dest = Join-Path $env:RUNNER_TEMP 'protoc'
+          Invoke-WebRequest -Uri 'https://github.com/protocolbuffers/protobuf/releases/download/v35.1/protoc-35.1-win64.zip' -OutFile $zip
+          Expand-Archive -Path $zip -DestinationPath $dest -Force
+          Add-Content $env:GITHUB_PATH (Join-Path $dest 'bin')
+
       - name: Run orz-loop lib tests
         working-directory: orz
         run: cargo test --locked -p orz-loop --lib
