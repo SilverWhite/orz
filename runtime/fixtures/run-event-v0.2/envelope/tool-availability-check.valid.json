@@ -19,6 +19,7 @@
       "search_replace",
       "blackboard_read",
       "blackboard_write",
+      "context_compress",
       "todo_write",
       "update_goal",
       "compaction_whitelist_add"

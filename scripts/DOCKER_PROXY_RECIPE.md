@@ -10,6 +10,11 @@
 
 ## 配方（字节级还原口径；逐条照做）
 
+0. **预检优先（2026-09-18 补充，0.6.2 重建实证）**：先跑**实包预检**——`docker run --rm
+   rust:1.97-slim bash -c "apt-get update -qq && apt-get install -y -qq musl-tools"`。
+   **预检通过即跳过 3–4（不切换、不重启）**，直接走 6；失败才进入 3–4。理由：切换 +
+   两段重启是**处置**而非**仪式**——上游（Clash）可达时切换无收益，反而是两次 Docker
+   Desktop 重启的额外风险面。0.6.2 重建即预检一次通过（`APT_OK`），全流程零切换零还原。
 1. **备份**：复制 Docker Desktop 设置文件（`settings-store.json`，位置随 Docker Desktop 版本）到位旁备份 `settings-store.json.<批>-bak`（先例：`settings-store.json.052-bak`）。
 2. **记账**：记录原值（`ProxyHTTPMode`、`OverrideProxyHTTP(S)`）——还原判据。
 3. **临时切换**：`ProxyHTTPMode` 改 `disabled`（不动 Override 行）。

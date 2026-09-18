@@ -13,6 +13,11 @@ candidate-gates/
 tmp*/
 *.tmp/
 tmp_*
+# 批内过程件（`.tmp-<批名>-*`：基线读数日志／补丁／任务文本等）：留档在
+# 工作树即可，不入库。门禁侧同前缀已作非仓库内容豁免（0ap 复核批 2026-09-18：
+# 此前只覆盖 `tmp*/`、`*.tmp/`、`tmp_*`，点号前缀的过程件会以未跟踪态堆积，
+# 提交批若用 `git add -A` 会被一并扫入）。
+.tmp-*
 _review_lif_replay_check.json
 /HTTP
 /%{http_code}

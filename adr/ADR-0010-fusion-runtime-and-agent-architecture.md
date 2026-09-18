@@ -48,6 +48,20 @@
      「A/B 线」提法作废（不设内部组件分线）；影子解码器组／容量消融阶梯不引入（工程类
      非研究类；选型出处脱敏不录）；S3 134-run 回放负结果按「无解码器裸锚点秩检验」口径
      登记；实现未开始，落实随 0am O2 裁决放行，见 §14.71。
+   - 冻结版本补记（2026-09-18 追加 v1.73）：**压缩交互第九工具与工具名单源登记**——
+     ①8 工具面冻结的**用户主导显式例外 +2**（继 0ae D0 `blackboard_write` 后）：
+     常驻第九工具 `context_compress`（用户定名）——知情发起 D3 模型参与压缩窗口
+     （PendingCheckpoint ≤3 轮与统一出口照旧）＋响应自带滑块读数表（主滑块外未压缩
+     分块数 N＋估算 token，读时现算零新增记账，分块内容不流出模型面，advisory 不联动
+     硬门）；主同步面＝`blackboard_read` 响应头水位标旁增「滑块外可压缩 N 块」段；
+     防抖三态＝in-progress no-op／无可压缩中性返回；摘要产出通道照旧窗口轮
+     `[SEMANTIC_SUMMARY]`（禁第二套摘要格式）；工具发起窗口归因 `model_selected`
+     （与 H1 窗口 `context_scale_window` 分流）；契约面零新事件族、零 schema、判别
+     规则零 Python 镜像改动（工作工具表数据 +1 属三处同批先例）；注册九点位清单化
+     硬防（0aj 教训）；子代理面显式剔除（main-lane only）。②工具名字面**单一源**上移
+     `orz_assurance::tool_names` ＋机械扫描钉子（0ao 重名面全库收敛）。实施落码
+     2026-09-18 过夜批（工作树未提交）＋同日**主会话复核批处置**（并行批读数
+     只读会话视图／语义压缩归因固定点／fixture 样本同步），见 §14.72。
    - 日期：2026-08-09（v1.1 补充裁决同日冻结）
 - 决策范围：产品 runtime 所有权、成熟组件复用、自研准入、主/子 Agent 架构、模型与 transport、工具与权限、检索证据、context/compaction、问询与活性守卫、journal/snapshot、隐私、UI、Windows 兼容性、Schema 演进与设计文档治理
 - 取代/修订：
@@ -5532,3 +5546,75 @@ RLI 影子默认关、生产 1D 不动）。选型出处按用户裁决**脱敏�
    改变）与 C3 阻尼效应（ζ=0 反事实差异显著）为核的有效性证据。
 5. **落地路径**：随 0am O2 裁决一并放行；届时既有的「参数纪律 ADR 级修订」登记以本条为
    设计依据之一。基座设计见[`RLI_RESONANT_CHANNEL_BASE_DESIGN_2026-09-16`](../docs/RLI_RESONANT_CHANNEL_BASE_DESIGN_2026-09-16.md)。
+
+#### §14.72 压缩交互第九工具（`context_compress`）与工具名单源（2026-09-18，v1.73）
+
+**性质**：0ap 设计定稿（[`COMPRESSION_INTERACTION_NINTH_TOOL_DESIGN_2026-09-18`](../docs/COMPRESSION_INTERACTION_NINTH_TOOL_DESIGN_2026-09-18.md)；
+2026-09-18 用户审稿通过）的实施转录，同批含 0ao 工具名单源收敛。实施落码 2026-09-18
+过夜批（工作树未提交；S2 载体重建与 S3 狗粮实证待放行）。
+
+1. **第八例外与第九工具**：8 工具面冻结的**用户主导显式例外 +2**——继 0ae D0
+   `blackboard_write` 之后，注册常驻第九工具 `context_compress`（2026-09-18 用户
+   定名）。语义＝**知情发起**：模型主动请求在下一个 loop-top 安全边界开 D3 模型
+   参与压缩窗口；`PendingCheckpoint::ModelCompression` ≤3 轮、
+   `finalize_model_compression_close` 统一出口、四项原文定位指针**全部照旧**。本工具
+   与现行 model_selected 自发摘要路径的关系＝**收编为显式入口**（S0 (a) 取证：现行
+   路径＝模型回复文本携带 `[SEMANTIC_SUMMARY]` 且本 epoch 无 H1 窗口时按块压缩，
+   无显式动作面——本工具补足该入口，自发路径保留不变）。
+2. **计数口径（已裁决）**：主滑块以外**未压缩**分块数 N＋估算 token 合计（「可压缩
+   量」）＝既有分块账（`blocks_outside_slider` ∧ marker 反解 Live 态）读时现算，零
+   新增记账；只出数量与估算，分块内容不流出模型面；advisory——不联动任何硬门。
+3. **同步面（已裁决）**：主＝`blackboard_read` 响应头水位标旁增「滑块外可压缩 N 块
+   ≈ est K」段（读时现算，I6 前缀纪律天然满足）；辅＝`context_compress` 响应信封
+   自带同表（两处共用同一渲染函数）。常驻状态行形态**不采纳留档**（用户未取）。
+   **读数取只读会话视图**（2026-09-18 复核批 P1）：主车道同轮读类并行批次（0k）
+   的每次调用只有自己的**注入槽**（批首为空 `Vec`，结果按声明序并回主会话），
+   直接把它当会话读会渲染假读数（「滑块外可压缩 0 块」）——故工具执行面新增显式
+   只读会话视图形参（并行批传**批首会话**，串行路径＝消息槽本体），读数与压缩
+   机械层同尺的保证不再依赖「该工具恰不在并行集内」这一隐式前提。
+4. **防抖三态**：窗口在程中 ⇒ 调用 no-op（in_progress）返回当前读数（幂等防连点）；
+   主滑块外无可压缩分块 ⇒ 中性说明返回、不开窗（不虚构动作）；否则置请求位（原子
+   位，跨 loop-top 派发段通信）由 agent_loop 消费开窗（pending 未清前锁存顺延）。
+   设计稿 §0/§1 早期措辞「读数不可得／守卫越线 ⇒ 结构化拒绝」随本批更正为三态
+   口径（v8 勘误已把「越线不开窗＋降级块」退役为 T1 硬截断，该拒绝面不存在）。
+5. **归因分流**：工具发起窗口的语义压缩按设计 §1 明文归因 `context_compressed`
+   `reason=model_selected`；H1 阶梯窗口收口照旧 `reason=context_scale_window`。
+   **定案口径（2026-09-18 复核批 P2）**：归因在**语义摘要产出时随摘要固定**
+   （记录当时的在程窗口种类），不在落地时回看「本 epoch 开过哪个窗口」的旗标——
+   旗标残留会把「工具窗口收口未产出摘要」之后由 H1 窗口产出的压缩误记为
+   `model_selected`，落地前恰有 H1 开窗也会抢走已产出摘要的归因；现行 H1 通路
+   行为不变。
+6. **摘要产出通道照旧**：压缩窗口轮 `[SEMANTIC_SUMMARY]` 产出块（D3 既有），本工具
+   **不新增第二套摘要格式**；「带目标分块区间的结构化摘要写入」不做，与 v8 尾批块轴
+   合流另议。
+7. **注册九点位清单化硬防（0aj 教训）**：①controller `run_turn_inner` 无条件常驻
+   注册（描述自包含教学控常驻长度）；②权限桥 `access_kind` 内存类 arm（ReadOnly
+   全策略自动放行）；③`READ_ONLY_EXEMPT_TOOLS` 单源表收录（宿主遍历式护栏＋代表
+   参数表自动覆盖）；④探针面 `WORK_TOOLS` 24 → 25 三处同批（orz-loop 探针表／
+   orz-assurance 判官表／Python 冻结镜像 `_WORK_TOOLS` **表格数据** +1——
+   probe-partition 子集校验的既有约束，判别规则零改动）；⑤声明面分类护栏遍历自动
+   纳入＋新工具正例样本钉；⑥journal 零新事件族（复用 `context_compressed`＋
+   `tool_started/completed`）；⑦schema 零改动（计数走响应文本面）；⑧压缩窗口轮
+   工具面＝`blackboard_write`＋`context_compress` 并存（黑板固化 vs 压缩发起/读数
+   各司其职；窗口内调用即 in-progress 读数——S1「窗口轮并存微调」开放点就此定案）；
+   ⑨工具名 `^[a-zA-Z0-9_-]+$` 合规（GAP-CONSOLE-TOOLNAME-PATTERN 纪律）。边界：
+   `context_compress` **main-lane only**——子代理投影 denylist 显式剔除（D3 窗口为
+   主车道结构；controller 请求位跨车道共享，子代理声明会误触发主车道开窗）。
+8. **工具名单源（0ao）**：`blackboard_write`／`context_compress` 字面唯一权威＝
+   `orz_assurance::tool_names`（orz-loop → orz-assurance ← orz-host 依赖合法的唯一
+   公共层；判官工作工具表同源落位）；orz-loop 经零字面再导出别名沿用既有引用形态；
+   机械扫描钉子巡检全 crates 源树——字面仅容定义处／注释／测试（豁免清单当前为空，
+   新增豁免须具名登记理由）。
+9. **余项**：S2 载体重建换装＋字面量核证、S3 狗粮实证（读数表与 journal `blocks=N`
+   一致／模型经新工具完成至少一次 model_selected 压缩／常驻成本读数）待放行。
+10. **复核批处置（2026-09-18，主会话只读复核后同日落码）**：P1 并行批读数假值
+    （见第 3 条，新增只读会话视图＋真值钉，**修复前实跑红**）；P2 归因旗标残留
+    （见第 5 条，＋归因映射钉）；P2 设计稿三态与 Python 镜像措辞更正（设计稿
+    §0/§1/§4/§6/§7 就地修订，见第 4 条与本条）；P2 fixture 样本同步——工作工具表
+    24→25 后 `scripts/generate_run_event_fixtures.py` 的 tool-availability 样本
+    `complete` 面补 `context_compress`（重跑生成器零附带差异：340 件中仅 3 件按预期
+    变化，逐文件 SHA256 前后对照）；P3 读数对账口径收紧（读表括号内总数 ↔
+    journal `blocks=N`，可压缩子集只作 advisory）＋`context_scale` 模块 import/
+    文档注释归位＋批内过程件 `.tmp-*` 入 `.gitignore`（父仓与 orz 各一）。读数：
+    orz-loop 796/0/3、orz-assurance 246/0、orz-host 串行 332/0/5、clippy 三 crate
+    逐位持平、fmt 本批全净、门禁唯一错误＝orz 子模块未提交（合回前预期态）。

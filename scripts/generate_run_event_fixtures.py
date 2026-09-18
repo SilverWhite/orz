@@ -993,6 +993,9 @@ PAYLOAD_GOOD_V02: dict[str, dict] = {
             # fixture 的 complete 面同步补入——否则样本仍是旧 23 全集形态，
             # 「全分区」只作子集形态回放（§14.59 合法，但失真）。
             "blackboard_write",
+            # 0ap（2026-09-18 复核批）：`context_compress` 随 0ap 入工作工具表
+            # （WORK_TOOLS 24 → 25，同理同步）——样本恢复「全分区」形态。
+            "context_compress",
             "todo_write",
             "update_goal",
             "compaction_whitelist_add",
@@ -1399,6 +1402,9 @@ PAYLOAD_BAD_V02: dict[str, dict] = {
             # 后「全分区」形态须含 `blackboard_write`（本 fixture 的唯一违规点
             # 不在工具面，补入不改变其单约束违反性）。
             "blackboard_write",
+            # 0ap（2026-09-18 复核批）：同 PAYLOAD_GOOD_V02——工作工具表
+            # 24 → 25 后样本须含 `context_compress`（唯一违规点不在工具面）。
+            "context_compress",
             "todo_write",
             "update_goal",
             "compaction_whitelist_add",

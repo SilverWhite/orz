@@ -2089,6 +2089,11 @@ _WORK_TOOLS = frozenset(
         # 与 Rust 侧 `tool_probe::WORK_TOOLS` / `journal::toolsets::WORK_TOOLS`
         # 三处同批（探针面与请求面脱同步的修复面）。
         "blackboard_write",
+        # 0ap（2026-09-18）：`context_compress`（压缩交互第九工具）——三处
+        # 同批先例的**表格数据同步**（Rust 探针 / 判官 / 本表；设计 §4-4）。
+        # probe-partition 子集校验要求本表收录全部可声明工作工具；判别规则
+        # 零改动（0ap「零 Python 镜像改动」按零规则改动口径执行，S0 取证）。
+        "context_compress",
         "todo_write",
         "update_goal",
         "enter_plan_mode",
