@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://local.scientific-assurance.invalid/schema/information-sufficiency-assessment-event-payload-v0.2.schema.json",
   "title": "Mechanical information sufficiency assessment runtime event payload v0.2",
-  "description": "ADR-0010 §4.3/§5.2: purely mechanical assessment — no inquiry family, no model-generated conclusion. Inputs come from the structured task/retrieval contract, result/ledger and source visibility gate. Dedupe key (activation_id, contract_revision, result_digest, assessment_version) is recomputed by the verifier.",
+  "description": "ADR-0010 §4.3/§5.2: purely mechanical assessment — no inquiry family, no model-generated conclusion. Inputs come from the structured task/retrieval contract, result/ledger and source visibility gate. Dedupe key (activation_id, contract_revision, result_digest, assessment_version) is recomputed by the verifier. RETRIEVAL-BATCH-HANDOFF-AND-ROUND-SEAT 0ar S1 (2026-09-19, design v1.0 §3.3/§4.2/§7): two optional sufficiency readings join the payload — usable_source_count is the wide-caliber usable-evidence count (dedupe by content_sha256: visibility in {full_text_observed, partial_text_observed} and relevance = direct; the same single ruler as the D1 threshold/cap and the visible countdown) and sufficiency_gap records the shortfall against the batch target for partial-evidence hand-backs (D2 §4.2). Both are optional so every earlier assessment stays valid (zero behaviour change); when sufficiency_gap is present the usable count must be too.",
   "type": "object",
   "additionalProperties": false,
   "required": [
@@ -46,6 +46,23 @@
         "unavailable": { "type": "integer", "minimum": 0 }
       }
     },
+    "usable_source_count": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "0ar S1 (design v1.0 §3.3): wide-caliber usable-evidence count — visibility in {full_text_observed, partial_text_observed} AND relevance = direct, deduped by content_sha256. Same ruler as the D1 threshold/cap and the visible countdown; never a model self-report."
+    },
+    "sufficiency_gap": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["target", "missing"],
+      "description": "0ar S1 (design v1.0 §4.2): shortfall readings of a partial-evidence hand-back — target (the batch sufficiency target), missing (target - usable_source_count, floored at 0), retrieval_calls (retrieval invocations issued in the batch; reported separately from the entry allowance) and note (neutral fact phrase for the gap, e.g. the last three calls added no new sources).",
+      "properties": {
+        "target": { "type": "integer", "minimum": 0 },
+        "missing": { "type": "integer", "minimum": 0 },
+        "retrieval_calls": { "type": "integer", "minimum": 0 },
+        "note": { "type": "string", "minLength": 1 }
+      }
+    },
     "source_categories": {
       "type": "array",
       "items": { "type": "string" }
@@ -73,6 +90,17 @@
     },
     "assessment_version": { "type": "string", "pattern": "^[0-9]+(\\.[0-9]+)+$" }
   },
+  "allOf": [
+    {
+      "if": {
+        "properties": { "sufficiency_gap": { "type": "object" } },
+        "required": ["sufficiency_gap"]
+      },
+      "then": {
+        "required": ["usable_source_count"]
+      }
+    }
+  ],
   "$defs": {
     "sha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" }
   }

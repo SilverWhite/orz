@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://local.scientific-assurance.invalid/schema/retrieval-close-record-event-payload-v0.2.schema.json",
   "title": "Retrieval close record runtime event payload v0.2",
-  "description": "ADR-0010 §4.4/§5.2: mechanical receipt of the close commit (terminal record + live-state reset are one commit). normal_close must reference a validated decision=close disposition (verifier cross-check); termination authorities reference cancel/failure/wallclock reasons instead. auto_close (THIN-HARNESS-REDESIGN R1, 2026-08-27): every dispatch closes its activation immediately after result formation + assessment (no disposition round-trip). subagent_timeout (RETRIEVAL-ORCHESTRATION-MECHANICAL 0k, 2026-08-30): the retrieval subagent run-level wallclock budget exhausted mid-run — activation closes resumable with no assessment/digest.",
+  "description": "ADR-0010 §4.4/§5.2: mechanical receipt of the close commit (terminal record + live-state reset are one commit). normal_close must reference a validated decision=close disposition (verifier cross-check); termination authorities reference cancel/failure/wallclock reasons instead. auto_close (THIN-HARNESS-REDESIGN R1, 2026-08-27): every dispatch closes its activation immediately after result formation + assessment (no disposition round-trip). subagent_timeout (RETRIEVAL-ORCHESTRATION-MECHANICAL 0k, 2026-08-30): the retrieval subagent run-level wallclock budget exhausted mid-run — activation closes resumable with no assessment/digest. RETRIEVAL-BATCH-HANDOFF-AND-ROUND-SEAT 0ar S1 (2026-09-19, design v1.0 §7/§8): three normal-close reasons of the batch-handoff contract — evidence_threshold_met (D1: the subagent self-judged the usable-evidence target met and produced its result summary), dispatch_wallclock_bound (D2: the per-batch wallclock bound expired; the batch hands back partial evidence + gap normally, never as subagent_failed — its obtained-count/gap readings ride the referenced information_sufficiency_assessment, hence the assessment-chain requirement below), subagent_early_delivery (D1 §3.7: the subagent delivered early below target; a missing evidence pointer fails open to a normal close + anomaly, so no schema requirement rides this value).",
   "type": "object",
   "additionalProperties": false,
   "required": [
@@ -56,7 +56,10 @@
         "budget_exhausted",
         "subagent_failed",
         "subagent_cancelled",
-        "subagent_timeout"
+        "subagent_timeout",
+        "evidence_threshold_met",
+        "dispatch_wallclock_bound",
+        "subagent_early_delivery"
       ]
     },
     "effort": {
@@ -86,6 +89,22 @@
         },
         "required": [
           "validated_disposition_id",
+          "assessment_id",
+          "result_digest"
+        ]
+      }
+    },
+    {
+      "if": {
+        "properties": { "terminal_reason": { "const": "dispatch_wallclock_bound" } },
+        "required": ["terminal_reason"]
+      },
+      "then": {
+        "properties": {
+          "assessment_id": { "type": "string", "minLength": 1 },
+          "result_digest": { "$ref": "#/$defs/sha256" }
+        },
+        "required": [
           "assessment_id",
           "result_digest"
         ]

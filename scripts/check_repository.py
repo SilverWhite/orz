@@ -2805,10 +2805,41 @@ def check_repository() -> dict[str, Any]:
         run_event_v02_payload_positive_contracts[run_event_v02_payload_root / name] = (
             close_record_schema
         )
+    # 0ar S1 (2026-09-19, RETRIEVAL_BATCH_HANDOFF_AND_ROUND_SEAT_DESIGN v1.0
+    # §7/§9)：检索批次回送契约面——三个正常收尾 terminal_reason 正例
+    # （达标回送／到点交回／提前交付）＋到点交回必带 assessment 链的约束反例
+    # （§8 判据 1：「已得计数＋缺口」随 assessment 携带）；assessment 侧
+    # 可用计数/缺口字段正例与配对约束反例（宽口径读数，两字段可选）。
+    for name in (
+        "retrieval-close-record.evidence-threshold-met.valid.json",
+        "retrieval-close-record.dispatch-wallclock-bound.valid.json",
+        "retrieval-close-record.subagent-early-delivery.valid.json",
+    ):
+        run_event_v02_payload_positive_contracts[run_event_v02_payload_root / name] = (
+            close_record_schema
+        )
+    assessment_schema = (
+        ROOT / "runtime/information-sufficiency-assessment-event-payload-v0.2.schema.json"
+    )
+    run_event_v02_payload_positive_contracts[
+        run_event_v02_payload_root
+        / "information-sufficiency-assessment.partial-report.valid.json"
+    ] = assessment_schema
     run_event_v02_payload_negative_contracts = {
         run_event_v02_payload_root / f"{slug}.constraint.invalid.json": schema
         for slug, schema in run_event_v02_payload_schema_by_slug.items()
     }
+    # 0ar S1 约束反例（负例映射建立后登记）：① 到点交回缺 assessment 链
+    # （§8 判据 1：「已得计数＋缺口」随 assessment 携带）；② assessment
+    # 缺口字段缺可用计数（gap ⇒ count 配对约束）。
+    run_event_v02_payload_negative_contracts[
+        run_event_v02_payload_root
+        / "retrieval-close-record.wallclock-missing-assessment.constraint.invalid.json"
+    ] = close_record_schema
+    run_event_v02_payload_negative_contracts[
+        run_event_v02_payload_root
+        / "information-sufficiency-assessment.gap-without-count.constraint.invalid.json"
+    ] = assessment_schema
     # RETRIEVAL-ORCHESTRATION-MECHANICAL 0k 第二批 (2026-08-30)：
     # close-record 可选 `effort` 档的未知值负例（schema enum 拒绝）。
     run_event_v02_payload_negative_contracts[

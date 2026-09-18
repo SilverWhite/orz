@@ -90,7 +90,22 @@ $stamp = Get-Date -Format 'yyyyMMdd-HHmmss'
 $log = Join-Path $ws ".tmp-dogfood-$stamp.log"
 Write-Host "launching（日志：$log）"
 Push-Location -LiteralPath $ws
+$prevEap = $ErrorActionPreference
+$code = 1
 try {
-    & $orz -p $prompt --real --allow-write --allow-shell --allow-network *>&1 | Tee-Object -FilePath $log
-    exit $LASTEXITCODE
-} finally { Pop-Location }
+    # 原生 stderr 经 `2>&1`/`*>&1` 进管道会被包成 ErrorRecord；在
+    # $ErrorActionPreference='Stop'（本脚本前段设定）下，PowerShell 5.1 会把它
+    # 升级为终止错误 NativeCommandError ⇒ 脚本中止、管道被拆、进程树被收，
+    # 且 Tee 日志文件根本不落盘。2026-09-19 狗粮轮实测：RUN-CLI-6aad91f0 跑到
+    # 第 10 分钟／72 轮／97 次工具调用，仅因首条 transport WARN（stream idle 5s）
+    # 就被打断，journal 停在 seq 776、无任何终态事件。故此处局部降为 Continue：
+    # WARN 照常落日志，健康 run 不被误杀。
+    $ErrorActionPreference = 'Continue'
+    & $orz -p $prompt --real --allow-write --allow-shell --allow-network 2>&1 |
+        Tee-Object -FilePath $log
+    $code = $LASTEXITCODE
+} finally {
+    $ErrorActionPreference = $prevEap
+    Pop-Location
+}
+exit $code

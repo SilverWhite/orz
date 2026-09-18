@@ -1,0 +1,37 @@
+{
+  "assessment_id": "ASSESS-0001",
+  "activation_id": "ACT-EXT-0001",
+  "contract_id": "CONTRACT-EXT-0001",
+  "contract_revision": 0,
+  "result_digest": "0000000000000000000000000000000000000000000000000000000000000000",
+  "ledger_digest": "0000000000000000000000000000000000000000000000000000000000000000",
+  "source_counts": {
+    "total": 6,
+    "full_text_observed": 2,
+    "partial_text_observed": 1,
+    "metadata_only": 3,
+    "unavailable": 0
+  },
+  "sufficiency_gap": {
+    "target": 5,
+    "missing": 2,
+    "retrieval_calls": 12,
+    "note": "last three calls added no new sources"
+  },
+  "source_categories": [
+    "official_docs",
+    "source_code"
+  ],
+  "source_visibility_gate": "passed",
+  "missing_categories": [
+    "vendor_changelog"
+  ],
+  "filtering_reasons": [
+    "paywall"
+  ],
+  "status": "insufficient",
+  "reason_codes": [
+    "usable_below_target"
+  ],
+  "assessment_version": "0.2.0"
+}

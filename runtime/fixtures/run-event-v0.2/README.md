@@ -132,6 +132,27 @@ extension 2026-08-10):
   record `assessment_id` / `result_digest` are therefore required only for
   `terminal_reason=normal_close`. `budget_exhausted` is a distinct terminal
   reason (ADR-0010 §3.3.6), not a wallclock alias.
+- RETRIEVAL-BATCH-HANDOFF-AND-ROUND-SEAT 0ar S1 (2026-09-19, design v1.0
+  §7/§9): three normal-close reasons of the batch-handoff contract —
+  `evidence_threshold_met` (D1: usable-evidence target met, result summary
+  sent back), `dispatch_wallclock_bound` (D2: per-batch wallclock bound
+  expired, partial evidence handed back normally — never `subagent_failed`;
+  since its obtained-count/gap readings live in the referenced
+  `information_sufficiency_assessment`, this value carries a schema
+  requirement: `assessment_id` + `result_digest` non-null) and
+  `subagent_early_delivery` (D1 §3.7: early delivery below target — a
+  missing evidence pointer fails open to a normal close + anomaly, so no
+  schema requirement rides this value). Positives:
+  `retrieval-close-record.evidence-threshold-met.valid` /
+  `…dispatch-wallclock-bound.valid` / `…subagent-early-delivery.valid`;
+  negative lock: `retrieval-close-record.wallclock-missing-assessment.constraint.invalid`.
+  Assessment side: optional `usable_source_count` (wide caliber — dedupe by
+  `content_sha256`, visibility in {full_text_observed,
+  partial_text_observed} and relevance=direct) plus optional
+  `sufficiency_gap`{target, missing, retrieval_calls, note} with the pairing
+  rule gap ⇒ count; positives/negatives
+  `information-sufficiency-assessment.partial-report.valid` /
+  `…gap-without-count.constraint.invalid`.
 - **Scope completion** (§3.3.6): scope completion flows through the normal
   path (result → assessment → parent disposition `close` → close record), so
   it is represented by `normal_close`; no separate terminal value.

@@ -1712,6 +1712,60 @@ EXTRA_V02_PAYLOAD_POSITIVES: dict[str, dict] = {
         "live_state_reset": True,
         "archive_ref": "run-journal:RUN-0001",
     },
+    # 0ar S1 (2026-09-19, RETRIEVAL_BATCH_HANDOFF_AND_ROUND_SEAT_DESIGN v1.0
+    # §7/§9): 检索批次回送契约三个正常收尾 terminal_reason 的正例锁——
+    # ① 达标回送（D1 满 5 条可用来源即收尾）；② 到点交回（D2 单批墙钟到点
+    # 以部分证据＋缺口正常交回，非 subagent_failed；其计数/缺口随
+    # information_sufficiency_assessment 携带 ⇒ schema 要求 assessment 链）；
+    # ③ 提前交付（D1 §3.7 不满 5 条主动交付、须带证据指针）。
+    "retrieval-close-record.evidence-threshold-met.valid": {
+        "close_record_id": "CLOSE-0001",
+        "parent_session_id": "sess-main-1",
+        "subagent_session_id": "sess-ext-2",
+        "activation_id": "ACT-EXT-0001",
+        "contract_id": "CONTRACT-EXT-0001",
+        "contract_revision": 0,
+        "result_digest": ZERO_HASH,
+        "assessment_id": "ASSESS-0001",
+        "validated_disposition_id": None,
+        "terminal_reason": "evidence_threshold_met",
+        "effort": "extended",
+        "resumable": True,
+        "live_state_reset": True,
+        "archive_ref": "archive/ACT-EXT-0001",
+    },
+    "retrieval-close-record.dispatch-wallclock-bound.valid": {
+        "close_record_id": "CLOSE-0001",
+        "parent_session_id": "sess-main-1",
+        "subagent_session_id": "sess-ext-2",
+        "activation_id": "ACT-EXT-0001",
+        "contract_id": "CONTRACT-EXT-0001",
+        "contract_revision": 0,
+        "result_digest": ZERO_HASH,
+        "assessment_id": "ASSESS-0001",
+        "validated_disposition_id": None,
+        "terminal_reason": "dispatch_wallclock_bound",
+        "effort": "extended",
+        "resumable": True,
+        "live_state_reset": True,
+        "archive_ref": "run-journal:RUN-0001",
+    },
+    "retrieval-close-record.subagent-early-delivery.valid": {
+        "close_record_id": "CLOSE-0001",
+        "parent_session_id": "sess-main-1",
+        "subagent_session_id": "sess-ext-2",
+        "activation_id": "ACT-EXT-0001",
+        "contract_id": "CONTRACT-EXT-0001",
+        "contract_revision": 0,
+        "result_digest": ZERO_HASH,
+        "assessment_id": "ASSESS-0001",
+        "validated_disposition_id": None,
+        "terminal_reason": "subagent_early_delivery",
+        "effort": "standard",
+        "resumable": True,
+        "live_state_reset": True,
+        "archive_ref": "archive/ACT-EXT-0001",
+    },
     # P2-11 依赖图主线 (2026-09-01, ADR-0010 §14.51): tool_completed 可选
     # dep_graph 事件字段 read/write 正例。
     "tool-completed.dep-graph-read.valid": {
@@ -1851,6 +1905,92 @@ EXTRA_V02_PAYLOAD_BADS["retrieval-close-record.bad-effort.invalid"] = {
     "resumable": True,
     "live_state_reset": True,
     "archive_ref": "run-journal:RUN-0001",
+}
+# 0ar S1 (2026-09-19, RETRIEVAL_BATCH_HANDOFF_AND_ROUND_SEAT_DESIGN v1.0
+# §7/§8 判据 1)：到点交回的「已得计数＋缺口」只存在于
+# information_sufficiency_assessment ⇒ close record 必带 assessment 链
+# （assessment_id + result_digest）；缺 assessment_id 即单约束违反。
+EXTRA_V02_PAYLOAD_BADS[
+    "retrieval-close-record.wallclock-missing-assessment.constraint.invalid"
+] = {
+    "close_record_id": "CLOSE-0001",
+    "parent_session_id": "sess-main-1",
+    "subagent_session_id": "sess-ext-2",
+    "activation_id": "ACT-EXT-0001",
+    "contract_id": "CONTRACT-EXT-0001",
+    "contract_revision": 0,
+    "result_digest": ZERO_HASH,
+    "assessment_id": None,
+    "validated_disposition_id": None,
+    "terminal_reason": "dispatch_wallclock_bound",
+    "effort": "extended",
+    "resumable": True,
+    "live_state_reset": True,
+    "archive_ref": "run-journal:RUN-0001",
+}
+# 0ar S1：assessment 侧可用计数/缺口字段（宽口径）——到点交回的部分证据
+# 报告正例（可用 3/5、已发起 12 次检索调用、末三次无新增来源）＋
+# 配对约束反例（sufficiency_gap 出现而 usable_source_count 缺席）。
+EXTRA_V02_PAYLOAD_POSITIVES[
+    "information-sufficiency-assessment.partial-report.valid"
+] = {
+    "assessment_id": "ASSESS-0001",
+    "activation_id": "ACT-EXT-0001",
+    "contract_id": "CONTRACT-EXT-0001",
+    "contract_revision": 0,
+    "result_digest": ZERO_HASH,
+    "ledger_digest": ZERO_HASH,
+    "source_counts": {
+        "total": 6,
+        "full_text_observed": 2,
+        "partial_text_observed": 1,
+        "metadata_only": 3,
+        "unavailable": 0,
+    },
+    "usable_source_count": 3,
+    "sufficiency_gap": {
+        "target": 5,
+        "missing": 2,
+        "retrieval_calls": 12,
+        "note": "last three calls added no new sources",
+    },
+    "source_categories": ["official_docs", "source_code"],
+    "source_visibility_gate": "passed",
+    "missing_categories": ["vendor_changelog"],
+    "filtering_reasons": ["paywall"],
+    "status": "insufficient",
+    "reason_codes": ["usable_below_target"],
+    "assessment_version": "0.2.0",
+}
+EXTRA_V02_PAYLOAD_BADS[
+    "information-sufficiency-assessment.gap-without-count.constraint.invalid"
+] = {
+    "assessment_id": "ASSESS-0001",
+    "activation_id": "ACT-EXT-0001",
+    "contract_id": "CONTRACT-EXT-0001",
+    "contract_revision": 0,
+    "result_digest": ZERO_HASH,
+    "ledger_digest": ZERO_HASH,
+    "source_counts": {
+        "total": 6,
+        "full_text_observed": 2,
+        "partial_text_observed": 1,
+        "metadata_only": 3,
+        "unavailable": 0,
+    },
+    "sufficiency_gap": {
+        "target": 5,
+        "missing": 2,
+        "retrieval_calls": 12,
+        "note": "last three calls added no new sources",
+    },
+    "source_categories": ["official_docs", "source_code"],
+    "source_visibility_gate": "passed",
+    "missing_categories": ["vendor_changelog"],
+    "filtering_reasons": ["paywall"],
+    "status": "insufficient",
+    "reason_codes": ["usable_below_target"],
+    "assessment_version": "0.2.0",
 }
 # P2-11 依赖图主线 (2026-09-01, ADR-0010 §14.51): dep_graph 约束反例——
 # kind 未注册 / 额外字段（均落在 dep_graph 子对象内、单一约束违反）。
@@ -2815,6 +2955,27 @@ extension 2026-08-10):
   record `assessment_id` / `result_digest` are therefore required only for
   `terminal_reason=normal_close`. `budget_exhausted` is a distinct terminal
   reason (ADR-0010 §3.3.6), not a wallclock alias.
+- RETRIEVAL-BATCH-HANDOFF-AND-ROUND-SEAT 0ar S1 (2026-09-19, design v1.0
+  §7/§9): three normal-close reasons of the batch-handoff contract —
+  `evidence_threshold_met` (D1: usable-evidence target met, result summary
+  sent back), `dispatch_wallclock_bound` (D2: per-batch wallclock bound
+  expired, partial evidence handed back normally — never `subagent_failed`;
+  since its obtained-count/gap readings live in the referenced
+  `information_sufficiency_assessment`, this value carries a schema
+  requirement: `assessment_id` + `result_digest` non-null) and
+  `subagent_early_delivery` (D1 §3.7: early delivery below target — a
+  missing evidence pointer fails open to a normal close + anomaly, so no
+  schema requirement rides this value). Positives:
+  `retrieval-close-record.evidence-threshold-met.valid` /
+  `…dispatch-wallclock-bound.valid` / `…subagent-early-delivery.valid`;
+  negative lock: `retrieval-close-record.wallclock-missing-assessment.constraint.invalid`.
+  Assessment side: optional `usable_source_count` (wide caliber — dedupe by
+  `content_sha256`, visibility in {full_text_observed,
+  partial_text_observed} and relevance=direct) plus optional
+  `sufficiency_gap`{target, missing, retrieval_calls, note} with the pairing
+  rule gap ⇒ count; positives/negatives
+  `information-sufficiency-assessment.partial-report.valid` /
+  `…gap-without-count.constraint.invalid`.
 - **Scope completion** (§3.3.6): scope completion flows through the normal
   path (result → assessment → parent disposition `close` → close record), so
   it is represented by `normal_close`; no separate terminal value.
