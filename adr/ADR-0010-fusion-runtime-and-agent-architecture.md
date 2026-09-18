@@ -62,6 +62,14 @@
      `orz_assurance::tool_names` ＋机械扫描钉子（0ao 重名面全库收敛）。实施落码
      2026-09-18 过夜批（工作树未提交）＋同日**主会话复核批处置**（并行批读数
      只读会话视图／语义压缩归因固定点／fixture 样本同步），见 §14.72。
+   - 冻结版本补记（2026-09-18 追加 v1.74）：**主代理工具面冻结口径更订（10 工具，
+     地位平等）**——用户裁决：主代理常驻工具面自此冻结为 **10 工具**
+     （`read_file`／`grep`／`search_replace`／`run_terminal_cmd`／`web_search`／
+     `web_fetch`／`blackboard_read`／`submit`／`blackboard_write`／`context_compress`），
+     **全部工具地位平等**；「8 工具面冻结」「用户主导显式例外 +2」「第八/第九工具」等
+     表述仅描述注册路径历史（两次扩面的事实过程），不构成地位等级、不再作为工具面
+     现行口径；运行时机制差异照旧（压缩窗口轮工具面收窄、权限分类、READ_ONLY 豁免表、
+     子代理投影面等均属机制而非地位差异）。见 §14.72 第 11 条。
    - 日期：2026-08-09（v1.1 补充裁决同日冻结）
 - 决策范围：产品 runtime 所有权、成熟组件复用、自研准入、主/子 Agent 架构、模型与 transport、工具与权限、检索证据、context/compaction、问询与活性守卫、journal/snapshot、隐私、UI、Windows 兼容性、Schema 演进与设计文档治理
 - 取代/修订：
@@ -5618,3 +5626,10 @@ RLI 影子默认关、生产 1D 不动）。选型出处按用户裁决**脱敏�
     文档注释归位＋批内过程件 `.tmp-*` 入 `.gitignore`（父仓与 orz 各一）。读数：
     orz-loop 796/0/3、orz-assurance 246/0、orz-host 串行 332/0/5、clippy 三 crate
     逐位持平、fmt 本批全净、门禁唯一错误＝orz 子模块未提交（合回前预期态）。
+11. **工具面冻结口径更订（2026-09-18 用户裁决，v1.74）**：主代理常驻工具面自此冻结为
+    **10 工具**（`read_file`／`grep`／`search_replace`／`run_terminal_cmd`／`web_search`／
+    `web_fetch`／`blackboard_read`／`submit`／`blackboard_write`／`context_compress`），
+    **全部工具地位平等**；本节与更早文字中的「8 工具面冻结」「用户主导显式例外 +2」
+    「第八例外与第九工具」等表述仅描述注册路径历史（两次扩面的事实过程），不构成地位
+    等级、不再作为工具面现行口径；运行时机制差异照旧（压缩窗口轮工具面收窄、权限分类、
+    READ_ONLY 豁免表、子代理投影面等均属机制而非地位差异）。

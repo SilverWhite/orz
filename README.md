@@ -14,13 +14,13 @@
 
 | 步骤 | Windows（PowerShell） | Linux（sh） |
 |---|---|---|
-| 1. 解压 | 把 `orz.exe`、`orz-signer.exe`、`orz-acaf-provision.exe` 放入同一目录（例如 `C:\orz`）。 | `mkdir -p ~/orz && cd ~/orz`<br>`tar -xzf orz-0.3.0-linux-x86_64.tar.gz`<br>`chmod +x orz orz-signer orz-acaf-provision` |
+| 1. 解压 | 把 `orz.exe`、`orz-signer.exe`、`orz-acaf-provision.exe` 放入同一目录（例如 `C:\orz`）。 | `mkdir -p ~/orz && cd ~/orz`<br>`tar -xzf orz-0.6.2-linux-x86_64.tar.gz`<br>`chmod +x orz orz-signer orz-acaf-provision` |
 | 2. 配置 API Key | 存入 Windows 凭据管理器（Generic，目标名 `orz-deepseek/agent`；一次即可）：<br>`cmdkey /generic:orz-deepseek/agent /user:agent /pass:你的DeepSeek_API_Key` | 用环境变量（Windows 凭据管理器通道的显式例外）：<br>`export ORZ_DEEPSEEK_API_KEY=你的DeepSeek_API_Key` |
 | 3. 初始化安全签发（一次性） | `.\orz-acaf-provision.exe "$env:USERPROFILE\.orz-acaf\keystore" "$env:USERPROFILE\.orz-acaf\signer-manifest.json"`<br><br>ACAF 默认 fail-closed，未配置会拒绝启动。 | `./orz-acaf-provision "$HOME/.orz-acaf/keystore" "$HOME/.orz-acaf/signer-manifest.json"` |
 | 4. 设置启动环境 | `$env:ORZ_ACAF_KEYSTORE = "$env:USERPROFILE\.orz-acaf\keystore"`<br>`$env:ORZ_ACAF_MANIFEST = "$env:USERPROFILE\.orz-acaf\signer-manifest.json"`<br>`$env:ORZ_ACAF_BINARY = "C:\orz\orz-signer.exe"` | `export ORZ_ACAF_KEYSTORE="$HOME/.orz-acaf/keystore"`<br>`export ORZ_ACAF_MANIFEST="$HOME/.orz-acaf/signer-manifest.json"`<br>`export ORZ_ACAF_BINARY="$HOME/orz/orz-signer"` |
 | 5. 运行 | `.\orz.exe`（交互 TUI）<br>`.\orz.exe -p "你的任务" --real`（无头模式） | `./orz`（交互 TUI）<br>`./orz -p "你的任务" --real`（无头模式） |
 
-发布包说明与完整性校验见 [`releases/orz-0.3.0-linux-x86_64/README.md`](releases/orz-0.3.0-linux-x86_64/README.md)。
+发布包说明与完整性校验见 GitHub Release（最新 [v0.6.2](https://github.com/SilverWhite/CLI/releases/tag/v0.6.2)，双平台包＋`SHA256SUMS`）；0.1.0–0.5.1 试用包入口在 [`releases/`](releases/)。
 
 ### 从源码运行
 
@@ -43,9 +43,9 @@ cargo run -p orz-bin -- --fake-provider               # TUI
 | ACP stdio server | `orz --stdio` |
 | 只读回放 journal | `orz --replay <events.jsonl>` |
 | 离线试跑（无需凭据） | `orz --fake-provider -p "hello"` |
-| 显式检索模式 | `orz --retrieval-mode local_browser \| framework_fallback \| off` |
+| 联网检索开关 | `orz --retrieval-enabled`（默认关闭；旧 `--retrieval-mode` 已废弃，仅兼容解析） |
 
-联网检索默认关闭；需要联网的任务请显式选择 `--retrieval-mode local_browser`（推荐）或 `framework_fallback`。`local_browser` 下浏览器启动失败会自动降级到 `framework_fallback` 并在事件链留痕。
+联网检索默认关闭；需要联网的任务请显式加 `--retrieval-enabled`（独立检索启用门，fail-closed）。启用后由外部检索子代理执行：本地浏览器通道优先（引擎 SERP，Google 主序、Bing 回退），浏览器不可用时由模型自主改走原生 web 检索通道，启动结果与换道在事件链留痕（`browser_launch_result`）。
 
 无头与批量场景的权限开关：
 
@@ -64,21 +64,21 @@ orz 为本地优先、保障优先的终端 AI 编程 Agent/harness，制作全�
 
 ### Agent 层
 
-- **主 Agent**：唯一任务推进者。系统提示近零，只面对冻结的固定 8 工具面（`read_file`/`grep`/`search_replace`/`run_terminal_cmd`/`web_search`/`web_fetch`，加 `blackboard_read` 与 `submit`）；默认模型为 DeepSeek v4 flash（thinking 默认 max）。任务最终经 submit 两阶段（请求 → 确认）交付，终答前有一轮机械审计与反例自查。
-- **外部检索子代理**：联网检索经外部检索子代理执行（`web_search` 全局并发 1）。检索通道为显式三态：`local_browser`（本地浏览器，首选。已做人化输入延迟：逐字符键入 + 提交前停顿 + Enter，专门用于 Google 搜索路径）在启动失败时机械降级为 `framework_fallback`（原生 web 检索）并记录切换，页面级失败不降级；未选择时检索关闭。内部检索 lane 保留设计，触发工具当前封存。
-- **会话与计划**：交互会话（TUI/ACP）可跨进程恢复，一次性 `-p` 不携带旧会话。`--plan` 提供机械计划状态机工作流，生产路径中 plan_first 休眠。
+- **主 Agent**：唯一任务推进者。系统提示近零，面对冻结的固定 10 工具面：`read_file`/`grep`/`search_replace`/`run_terminal_cmd`/`web_search`/`web_fetch`，加 `blackboard_read`、`submit`、`blackboard_write`（向黑板计划/笔记区写入，单条 ≤8K）与 `context_compress`（知情发起模型参与压缩）；默认模型注册为 DeepSeek v4 flash（thinking 默认 max）。任务最终经 submit 两阶段（请求 → 确认）交付，终答前有一轮机械审计与反例自查。
+- **外部检索子代理**：联网检索经外部检索子代理执行（`web_search` 全局并发 1），未启用检索时关闭（启用见上方 `--retrieval-enabled`）。启用后子代理工具面恒注册本地浏览器与原生 web 双族检索工具（带车道名与推荐序的静态标注，本地浏览器优先），换道由模型自主选择：本地浏览器通道走引擎 SERP（Google 主序、Bing 回退；人化输入延迟＝逐字符键入 + 提交前停顿 + Enter，对模型不可见），浏览器启动可用性以事实事件（`browser_launch_result`）在事件链留痕。内部检索 lane 保留设计，触发工具当前封存。
+- **会话与计划**：交互会话（TUI/ACP）可跨进程恢复；一次性 `-p` 不开启跨调用恢复，但同样落会话持久化，并按里程碑增量归档到 `.gsa/archives/`。`--plan` 提供机械计划状态机工作流，生产路径中 plan_first 休眠。
 
 ### 机械层
 
 - **结构**：机械层承载全部机制、门禁与守卫；其执行侧可进一步拆解为**半助理层**（命令运行、写执行与检索派发，返回有界结构化结果）与**静默机械审查层**（运行中只记录审查事实、终答前给出事实报告，不给建议）。
-- **执行**：模型直接提议 8 工具调用，机械层按注册表路由 → 目标/契约校验 → 执行 → 验证逐层处理。命令、文件写入与联网访问（`web_fetch`/`browser_read`）先过权限与 ACAF 票据门，`web_search` 无 URL 目标不走票据；文件读写带内容锚点核证；去自身硬超时，长前台命令超阈（默认 180s）自动后台化并维持输出/CPU 活跃兜底（idle-kill）；失败由半助理层自动记录（进程/文件/环境实体登记），返回结构化错误信封（step/code/message/trace_id）。
+- **执行**：模型直接提议工具调用，机械层按注册表路由 → 目标/契约校验 → 执行 → 验证逐层处理。命令、文件写入与联网访问（`web_fetch`/`browser_read`）先过权限与 ACAF 票据门，`web_search` 无 URL 目标不走票据；文件读写带内容锚点核证；去自身硬超时，长前台命令超阈（默认 180s）自动后台化并维持输出/CPU 活跃兜底（idle-kill）；失败由半助理层自动记录（进程/文件/环境实体登记），返回结构化错误信封（step/code/message/trace_id）。
 - **安全**：指令来源门（IPG）、权限桥、ACAF（`orz-signer` 独立进程签发一次性票据，未配置即 fail-closed）、凭据目标注册与脱敏、URL 门禁与来源加权、检索候选计数。
-- **审计、状态、压缩**：每次运行写入 hash-chained 事件 journal（事件 schema v0.2）并经 verifier 交叉校验；机械审计事实报告、会话黑板单包归档；上下文完全由机械折叠/压缩承接，会话可恢复、journal 可 `--replay` 只读回放。
-- **生成期守卫与轮预算**：复读检测（滚动哈希 + 3-gram 兜底）、空响应重试链、stall 看门狗（`ORZ_STALL_TIMEOUT`，默认 360 秒无活动即收尾）与整轮墙钟上限；轮预算默认无限制（`MAX_TOOL_ROUNDS=0`，撤除默认 120 轮硬限）；默认每满 50 轮触发一次简短中立三问（软门，不禁工具），询问动作目标与进度。
+- **审计、状态、上下文**：每次运行写入 hash-chained 事件 journal（事件 schema v0.2）并经 verifier 交叉校验；机械审计事实报告、会话黑板单包归档；上下文由机械滑窗与模型共同承接——模型面是自控注意力窗口（主滑块＋主滑块以外的分块指针，分块内容不流出模型面），机械按阶梯收窄模型面（软提醒 → 320K 硬打断 → 500K 硬截断），语义压缩经压缩窗口由模型产出结构化摘要（可经 `context_compress` 知情发起）；压缩不覆盖本地面，全量留档、按块回放；会话可恢复、journal 可 `--replay` 只读回放。
+- **生成期守卫与轮预算**：复读检测（滚动哈希 + 3-gram 兜底）、空响应重试链、stall 看门狗（`ORZ_STALL_TIMEOUT`，默认 360 秒无活动即收尾）与整轮墙钟上限；轮预算默认无限制（`MAX_TOOL_ROUNDS=0`，撤除默认 120 轮硬限）；问询均为软门、不禁工具：首轮动作批次结束后一次性注入开局三问（方向自校验），此后每满 50 轮触发一次简短中立三问，询问动作目标与进度。
 
 ### 黑板
 
-黑板是主 Agent 与机械层共用的单会话状态面板：分区保存计划、执行动作、实体（文件/进程/环境）、会话与门禁记录。主 Agent 通过 `blackboard_read` 按需读取（PULL），不常驻提示词；写入与归档由机械层完成，黑板为单会话作用域（conversation-scoped，旧 plan-epoch 生产语义已退役），写时按 `(domain, round)` 盖章；`blackboard_read` 按需进行域与轮数的折叠渲染（render fold），会话结束时由 `session_archive` 打包为单 gzip 归档文件。
+黑板是主 Agent 与机械层共用的单会话状态面板：分区保存计划、执行动作、实体（文件/进程/环境）、会话与门禁记录。主 Agent 通过 `blackboard_read` 按需读取（PULL），不常驻提示词；模型可经 `blackboard_write` 向计划/笔记区写入（单条 ≤8K），盖章、发放与归档仍由机械层完成；黑板为单会话作用域（conversation-scoped，旧 plan-epoch 生产语义已退役），写时按 `(domain, round)` 盖章；`blackboard_read` 按需进行域与轮数的折叠渲染（render fold），响应头携带黑板水位（【x.xM/10M】）与「滑块外可压缩 N 块」读数；交互会话结束时由 `session_archive` 打包为单 gzip 归档文件，无头 run 按里程碑增量归档。
 
 ### 时间与动作域判断组件
 
@@ -90,7 +90,7 @@ orz 为本地优先、保障优先的终端 AI 编程 Agent/harness，制作全�
 - Rust 生产 workspace（`orz/`）：`orz-loop`（Agent loop、黑板与守卫）、`orz-host`（工具执行、权限桥、凭据、本地浏览器）、`orz-assurance`（journal、事件、ACAF、verifier）、`orz-bin`（CLI 入口）、`orz-tui`（终端工作台）。
 - 支撑体系：`assurance/` 为 Python reference/conformance 参考；`runtime/` 为事件 Schema；`protocol/` 为结构化操作协议草案。
 
-一次运行的路径大致是：入口 → 会话与 journal 初始化 → 主 Agent 轮次（近零提示 + 固定工具面）→ 8 工具直接调用执行 → 机械层权限/票据门 → 执行与检索 → 结果与事件回流 → submit 两阶段交付 → journal 收尾。之后可以 `--replay` 回放或恢复会话复查。
+一次运行的路径大致是：入口 → 会话与 journal 初始化 → 主 Agent 轮次（近零提示 + 冻结 10 工具面）→ 工具直接调用执行 → 机械层权限/票据门 → 执行与检索 → 结果与事件回流 → submit 两阶段交付 → journal 收尾。之后可以 `--replay` 回放或恢复会话复查。
 
 机制的完整状态、稳定 ID 与深入入口见下方「开发者入口」；设计权威为 [`ADR-0010`](adr/ADR-0010-fusion-runtime-and-agent-architecture.md)，当前投影在 [`architecture/current/README.md`](architecture/current/README.md)。
 
@@ -108,7 +108,7 @@ orz 为本地优先、保障优先的终端 AI 编程 Agent/harness，制作全�
 
 - **设计**：ADR-0010 是唯一自然语言设计权威，`accepted / frozen`。
 - **实现**：Rust production workspace 可运行，当前整体 `partial`；未闭合差距集中登记在 [`CLI_PROJECT_INDEX.md` §3.1](CLI_PROJECT_INDEX.md#31-已登记实现差距)，不在本 README 展开。
-- **发布**：0.1.0 / 0.2.0 / 0.3.0 试用发布包入口在 [`releases/`](releases/)；当前未提供 macOS 原生包。
+- **发布**：0.1.0–0.5.1 试用发布包入口在 [`releases/`](releases/)；0.5.4 起双平台安装包发布于 [GitHub Releases](https://github.com/SilverWhite/CLI/releases)（当前最新 v0.6.2，Windows zip／Linux tar.gz＋`SHA256SUMS`）；当前未提供 macOS 原生包。
 - 测试全绿或单次跑分不构成架构符合性结论；符合性状态以索引与审计为准。
 
 ## License

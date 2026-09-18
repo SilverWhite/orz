@@ -42,6 +42,7 @@
 - [x] **Phase 1 门禁与编译紧急修复**（2026-09-04 闭合）：Markdown 断链修复 / run-event v0.2 payload 夹具映射补齐 / `orz_source_manifest.sha256` 重生成 / dead_code 与 unused assignment 修复 / 门禁 Exit 0。
 - [x] **Phase 2 仓库卫生清理与 Git 规范化**（2026-09-04 闭合）：根目录 31 个临时调试目录与一次性脚本清理 + `.gitignore` 收拢本地测试输出。
 - [x] **Phase 3 权威与产品对齐（第一批）**（2026-09-04 闭合）：ADR-0010 导言区与主 README 过时描述重写 + `architecture/current/README.md` 产品面架构投影扩充 + 全仓 `cargo check --workspace` 64 members 全绿。
+- [x] **Phase 3 权威与产品对齐（第二批）**（2026-09-18 闭合，用户令「请对已经过时全部内容进行严格更新」）：主 README 与 `architecture/current/README.md` 过时描述对齐 2026-09-04 → 2026-09-18 漂移——工具面冻结 10 工具、十工具地位平等（用户裁决，ADR §14.72 第 11 条/v1.74 转录随批）、检索三值模式退役 → `--retrieval-enabled` 启用门＋双车道（§14.65）、v8 模型自控注意力窗口与模型参与压缩（§14.69）、黑板模型写入面与水位读数、0ak 无头会话持久化归档、0x 首轮问询、发布面对齐 v0.6.2 GitHub Releases；零代码、零计数。
 - [x] **Phase 4 任务 A（解耦寄生：`render_fold.rs` 从 `epoch.rs` 剥离生产折叠渲染）**（2026-09-04 闭合）。
 - [x] **Phase 4 任务 B（底座瘦身：剔除 15 个无头僵尸 crate，workspace members 64 → 49）**（2026-09-04 闭合）。
 - [x] **Phase 4 任务 C（安全收敛：读工具 CWD canonical 越界硬拦截 + ACAF fail-closed 默认强校验下沉 controller）**（2026-09-04 闭合）。
