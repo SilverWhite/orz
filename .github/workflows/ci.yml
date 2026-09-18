@@ -68,3 +68,30 @@ jobs:
 
       - name: Run General Assurance Kernel P0-P5 tests
         run: python -m unittest discover -s assurance/tests -v
+
+  rust-tests:
+    name: Rust tests (orz workspace / windows)
+    runs-on: windows-latest
+    timeout-minutes: 60
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Set up Rust toolchain (pinned by orz/rust-toolchain.toml)
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: "1.97.1"
+
+      - name: Run orz-loop lib tests
+        working-directory: orz
+        run: cargo test --locked -p orz-loop --lib
+
+      - name: Run orz-assurance lib tests
+        working-directory: orz
+        run: cargo test --locked -p orz-assurance --lib
+
+      - name: Run orz-host lib tests (serial — load-sensitive process/timing tests)
+        working-directory: orz
+        run: cargo test --locked -p orz-host --lib -- --test-threads=1

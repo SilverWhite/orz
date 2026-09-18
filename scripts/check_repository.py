@@ -840,6 +840,25 @@ def _check_markdown_links() -> list[str]:
                 target = match.group(1).split("#", 1)[0]
                 if not target or re.match(r"^(?:https?://|mailto:)", target):
                     continue
+                # Platform-symmetric local-link grammar (RS-01, 2026-09-18):
+                # drive-letter / root-anchored / backslash targets resolve on
+                # one OS only — on the other runner they silently become
+                # broken links this gate cannot see (the 2026-09-02..09-18 CI
+                # outage: S4_PROGRESS_2026-09-02.md linked `D:/CLI/docs/...`,
+                # green on Windows, red on Linux for 16 days). Local links
+                # must be repo-relative with forward slashes; frozen
+                # outside-of-repo pointers live in `存档/` (skipped above).
+                if (
+                    re.match(r"^[A-Za-z]:[\\/]", target)
+                    or target.startswith(("/", "\\"))
+                    or "\\" in target
+                ):
+                    errors.append(
+                        f"{path.relative_to(ROOT)}:{line_number}: "
+                        f"non-relative local link {target} — resolves on one "
+                        "OS only; use a repo-relative path"
+                    )
+                    continue
                 resolved = (path.parent / target).resolve()
                 # orz/ is a nested independent repository (own git history)
                 # excluded from this repository's scan (NON_REPOSITORY_PARTS):
