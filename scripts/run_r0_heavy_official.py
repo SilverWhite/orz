@@ -25,6 +25,14 @@
 * 归属：第 0 轮**计入**本轮 89 题（2026-09-13 用户裁决）——后续 1–5 批据此显式剔除这 8 题
   （16/15/15/17/18 = 81 题，81 + 8 = 89，每题恰 1 次）；分批偏离在台账登记；
 * 卷 / 产物：``gsa-volumes/official-r0-heavy``、``jobs-official/official-r0-heavy``；
+* **试次隔离（F1 修复，2026-09-19）**：同一作业的多试次共用一卷并整卷 bind 到
+  ``/orz-gsa``，历史上后跑试次可读到前序试次的 journal（``official-verify-timeout3``
+  r1–r3 三轮 100% 复现）⇒ 适配器 ``gsa_isolate_trials``（默认开）在容器启动前把
+  **兄弟试次移出挂载根**至 ``gsa-volumes/.quarantine/<job>/``（移动非删除）。
+  **取证口径随之变化**：末位试次留在 ``gsa-volumes/<job>/``，先跑者看
+  ``gsa-volumes/.quarantine/<job>/``；并发跑批（``-n>1``）须
+  ``--ak gsa_isolate_trials=false`` 关闭。见
+  ``docs/audits/TB21_V41_TIMEOUT3_VERIFY_2026-09-18.md`` §10.7；
 * 代际记录（排期 §2）：起跑时打印载体 / 适配器 / 数据集 pin 身份哈希与起止时间戳，
   身份不符即**硬中止**（跑出第二代人不可比的数据才是真代价）。
 
