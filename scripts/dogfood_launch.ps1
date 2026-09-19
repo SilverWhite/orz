@@ -92,6 +92,7 @@ Write-Host "launching（日志：$log）"
 Push-Location -LiteralPath $ws
 $prevEap = $ErrorActionPreference
 $code = 1
+$heartbeat = $null
 try {
     # 原生 stderr 经 `2>&1`/`*>&1` 进管道会被包成 ErrorRecord；在
     # $ErrorActionPreference='Stop'（本脚本前段设定）下，PowerShell 5.1 会把它
@@ -100,11 +101,35 @@ try {
     # 第 10 分钟／72 轮／97 次工具调用，仅因首条 transport WARN（stream idle 5s）
     # 就被打断，journal 停在 seq 776、无任何终态事件。故此处局部降为 Continue：
     # WARN 照常落日志，健康 run 不被误杀。
+    # F3 机理澄清（2026-09-19）：本 Tee 管道对载体（Rust stdout 按行 flush）
+    # 的日志是按行实时落盘的，不是缓冲病灶；F3 实测的「.tmp 0B 数分钟」病灶在
+    # run 内长命令的子进程块缓冲（如 python 无 -u 的 unittest 圆点），属模型
+    # 运行时命令纪律（python -u／分段落盘／Start-Process 直写），机械层不做
+    # 命令适配（F5/F6 同族边界）。日志静止时以下方心跳侧车判活性，勿以 0B 断死。
     $ErrorActionPreference = 'Continue'
+    # F3 活性侧车（2026-09-19 用户裁决「F3 要改」的启动器落点）：每 30s 把运行
+    # 时长与载体进程活性（PID/CPU/内存）写入 <log>.live，进程退出即自记终态。
+    # 侧车文件同属本 run 产物（ORZ-RUN-SEPARATION-001 归属纪律）。
+    $logLive = "$log.live"
+    $heartbeat = Start-Job -ScriptBlock {
+        param($livePath, $procName)
+        $t0 = Get-Date
+        while ($true) {
+            Start-Sleep -Seconds 30
+            $p = Get-Process -Name $procName -ErrorAction SilentlyContinue | Select-Object -First 1
+            $state = if ($p) { 'alive pid={0} cpu={1:n1}s ws={2:n0}MB' -f $p.Id, $p.CPU, ($p.WorkingSet64 / 1MB) } else { 'process-exited' }
+            Add-Content -LiteralPath $livePath -Value ('[{0:HH:mm:ss}] t+{1:n0}s {2}' -f (Get-Date), ((Get-Date) - $t0).TotalSeconds, $state)
+            if (-not $p) { break }
+        }
+    } -ArgumentList $logLive, 'orz'
     & $orz -p $prompt --real --allow-write --allow-shell --allow-network 2>&1 |
         Tee-Object -FilePath $log
     $code = $LASTEXITCODE
 } finally {
+    if ($heartbeat) {
+        Stop-Job $heartbeat -ErrorAction SilentlyContinue
+        Remove-Job $heartbeat -Force -ErrorAction SilentlyContinue
+    }
     $ErrorActionPreference = $prevEap
     Pop-Location
 }

@@ -207,8 +207,23 @@ def ensure_not_protected(path):
 
 
 def decode_text(data):
-    """Fixed decode chain: strip BOM -> UTF-8 strict -> GB18030 -> UTF-8 lossy.
-    Returns (text, encoding_label)."""
+    """Fixed decode chain: strip BOM -> UTF-8 strict -> GB18030 -> refined
+    UTF-8 lossy (0as, 2026-09-19 — mirrors orz-tools `util/encoding.rs`).
+    Returns (text, encoding_label). The refined lossy stage decodes per line
+    with a minimal-replacement choice; its label carries the degraded
+    fraction as `utf-8-lossy:<p>%` (units = placeholders + U+FFFD, over the
+    post-BOM-strip input bytes, two decimals).
+
+    Pinned table boundaries vs the Rust side (2026-09-19 full-space
+    differential, see assurance/tests/test_ops_executor_decode_text.py and
+    docs/audits/0AS_REVIEW_HANDLING_2026-09-19.md): CPython's gb18030 codec
+    keeps GB18030-2000 PUA mappings where encoding_rs (WHATWG /
+    GB18030-2005+) uses official characters (20 two-byte pairs + one
+    four-byte slot decode differently), replaces over-range four-byte forms
+    with two U+FFFD where encoding_rs uses one (can flip the lossy
+    minimal-replacement choice), and treats the bare euro byte 0x80 as an
+    error where encoding_rs decodes it cleanly — the one known label fork.
+    Both sides pin these boundaries."""
     label = "utf-8"
     if data.startswith(b"\xef\xbb\xbf"):
         data = data[3:]
@@ -221,7 +236,68 @@ def decode_text(data):
         return data.decode("gb18030"), "gb18030"
     except UnicodeDecodeError:
         pass
-    return data.decode("utf-8", errors="replace"), "utf-8-lossy"
+    text, units = _decode_lossy_segmented(data)
+    ratio = units / max(len(data), 1) * 100
+    return text, "utf-8-lossy:%.2f%%" % ratio
+
+
+def _decode_lossy_segmented(data):
+    """0as lossy stage: per-line ladder so one bad byte cannot degrade the
+    whole block. Neither UTF-8 nor GB18030 encodes 0x0A inside a multi-byte
+    sequence, so splitting on \\n cannot truncate a character."""
+    parts = []
+    units = 0
+    lines = data.split(b"\n")
+    for index, body in enumerate(lines):
+        text, line_units = _decode_lossy_line(body)
+        parts.append(text)
+        if index + 1 < len(lines):
+            parts.append("\n")
+        units += line_units
+    return "".join(parts), units
+
+
+def _decode_lossy_line(line):
+    """Same ladder per line: valid UTF-8 kept -> clean GB18030 kept ->
+    minimal-replacement lossy (fewer units wins; tie keeps the ladder order,
+    UTF-8). Units = placeholders + U+FFFD."""
+    try:
+        return line.decode("utf-8"), 0
+    except UnicodeDecodeError:
+        pass
+    try:
+        return line.decode("gb18030"), 0
+    except UnicodeDecodeError:
+        pass
+    utf8_text, utf8_units = _utf8_lossy_placeholders(line)
+    gb_text = line.decode("gb18030", errors="replace")
+    gb_units = gb_text.count("\ufffd")
+    if gb_units < utf8_units:
+        return gb_text, gb_units
+    return utf8_text, utf8_units
+
+
+def _utf8_lossy_placeholders(data):
+    """UTF-8 lossy walk with explicit byte placeholders (0as): each invalid
+    subsequence renders as `⟨0x8F⟩` / `⟨0xF0 0x9E 0x81⟩` instead of U+FFFD.
+    CPython's UnicodeDecodeError spans follow the same maximal-subpart
+    granularity as Rust's Utf8Error, so unit counts match `encoding.rs`."""
+    parts = []
+    units = 0
+    offset = 0
+    while offset < len(data):
+        try:
+            parts.append(data[offset:].decode("utf-8"))
+            break
+        except UnicodeDecodeError as error:
+            start = offset + error.start
+            end = offset + max(error.end, error.start + 1)
+            parts.append(data[offset:start].decode("utf-8"))
+            placeholder = " ".join("0x%02X" % b for b in data[start:end])
+            parts.append("⟨%s⟩" % placeholder)
+            units += 1
+            offset = end
+    return "".join(parts), units
 
 
 def get_process_allowlist():

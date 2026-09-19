@@ -18,7 +18,10 @@
   新摩擦 FR-N02/FR-N04；2026-09-18 第四批：`ORZ-CI-BLINDOUT-001` 红灯掩盖经济学、
   `ORZ-GATE-ASYM-001` 守门者平台不对称伪绿、`ORZ-DEV-TUNED-BOUND-001` 开发机调参上界与
   缓存掩盖、`ORZ-GLOB-TIEBREAK-001` 非确定 top-K，来源＝0aq RS-01/RS-02 处置
-  〔CI 断流 16 天修复，事故台账 `incidents/ORZ-CI-BLINDOUT-001.md`〕）。
+  〔CI 断流 16 天修复，事故台账 `incidents/ORZ-CI-BLINDOUT-001.md`〕）；2026-09-19 第五批：
+  `ORZ-RUN-SEPARATION-001` 跨 run 产物归属隔离候选，来源＝0ar S1 狗粮轮摩擦 F2
+  （`RUN-CLI-6aad91f0` 误杀后 WIP 交接现场；用户裁决「每不同 run 的产物明确归不同 run，
+  关键是不能混为一谈」，处置终点＝案例登记不立工程项）。
 
 归因纪律（2026-08-17 用户裁决）：命令或操作出现错误、或结果与已知事实明显矛盾时，
 先排查环境与机械因素（二进制/运行时兼容、工具包装是否吞错误、路径/作用域解析、
@@ -40,3 +43,7 @@ PowerShell 5.1 无 BOM 按 ANSI 解码，「字符串缺少终止符」先查编
 不可见、CI 干净 checkout 即裸奔；CI 步骤显式安装并钉版 protoc 35.1）；⑥**CI 状态入账本口径**
 （`ORZ-CI-BLINDOUT-001`：本地 error_count 门禁与远端 CI 是两套真相，红灯期发布须显式标记）。
 两条仍不新增阻断门。
+
+同族追加（2026-09-19）：⑦**读数先核 run 归属**（`ORZ-RUN-SEPARATION-001`：产物落盘即绑定
+run id/session8/时间戳、交接声明来源、断链 run 产物显式标记孤儿态；与 ③ 同属「读数结论
+产出前先核来源」族）。不新增阻断门。
