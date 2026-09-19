@@ -15,6 +15,7 @@
 3. **主项目 `D:\AGI` 未进入任何快照。** ZCode 工作区历史仅 `D:\CLI`、`D:\CLI\orz`、默认工作区三条；两份快照清单的 `workspaceKey` 分别为 `D:\CLI` 与默认工作区，`D:\AGI` 零命中，清单内 0 条路径位于工作区之外。但 `D:\AGI` 的内容**经模型通道**流出（`KNOWLEDGE_TRANSFER.md` 全文、`models/lif3d_neurons.py` 全文、`phase0_model.py`/`lif3d_only_model.py` 片段、实验 `lif3d_summary.json` 解析输出）——此为 API 形态的固有结果，与本档关注的「结构化归档上传」性质不同。
 4. **处置已落地并逐项实测**：投料区清空＋拒绝写入锁；`app.asar` 采集模块打桩为空实现；文件系统看门狗（状态哈希＋变动即杀进程）；`app.asar` 补丁看门狗（补丁丢失即杀进程、自动重打、自动重启）；阿里云监控出口 DNS 层封禁；微信机器人删除。2026-09-19 夜间加固：指纹盲区闭合、每日心跳、`-Rebaseline`、守卫无窗口化、兜底触发加密（§8）。
 5. **残余风险**：ZCode 自动更新会替换 `app.asar`（已由第二道守卫自动中和）；ACL 拒绝项对目录所有者不构成硬边界（已实测可被自身摘除），故真正的锁是代码打桩而非文件权限。
+6. **凭据与套餐分离（2026-09-19 深夜追加核查，见 §9）**：模型凭据**以明文**存放于 `C:\Users\1\.zcode\v2\config.json`；该密钥属用户自费的 **GLM Coding Lite**（已进入第 2 个计费周期、PayPal 自动续费），与活动发放的免费额度（`ZCode Weekend Build`，`glm-5.3-flash`）是**两条相互独立**的通道。付费密钥可脱离客户端使用（实测 HTTP 200）；免费通道带阿里云自动化验证，**无法脱离 ZCode 使用**（实测 `3007 captcha verify failed`）。
 
 ---
 
@@ -293,3 +294,70 @@ ZCode 的阿里云外发仅两个域名，均属纯监控，已在 hosts 指向 
 1. 本仓库 2026-09-13 时点的全部跟踪内容（含完整 `.git` 历史）已进入第三方云端；由于该仓库非公开（外部未认证访问返回 404），其性质属**私有源码与历史的结构化外泄**，而非「已在公网」。建议按此定性评估是否需要轮换历史中可能存在的任何凭据。
 2. 在本机使用任何第三方 AI 编程工具前，应先确认其是否存在工作区归档上传行为；本档记录的检测手法（`checkpoints` 产物 + `state.json` 字段 + 清单与 `git ls-tree` 对照）可直接复用。
 3. 若后续更换工具或版本升级，应重跑本文 §2.2 与 §4.2 的检查项。
+
+---
+
+## §9 凭据存放形态、套餐归属与「能否拿出去用」（2026-09-19 深夜补录）
+
+### 9.1 凭据存放：加密与明文并存
+
+| 文件 | 形态 | 内容 |
+| --- | --- | --- |
+| `C:\Users\1\.zcode\v2\credentials.json` | 加密（值前缀 `enc:v1:`，后接 base64 载荷） | 共 7 条：`oauth:zai:access_token`、`zcodejwttoken`、`oauth:zai:user_info`、`oauth:active_provider`、`web-remote-control:external-relay:pass_hash`、`account-provider:coding-plan:account:zai-individual-coding-plan:…:api-key`、`account-provider:coding-plan:account:zai-team-coding-plan:…:api-key` |
+| `C:\Users\1\.zcode\v2\config.json` | **明文** | `provider.builtin:zai-coding-plan.options.apiKey`（49 字符，启用中，模型调用实际使用的即这一份）、`provider.builtin:zai-start-plan.options.apiKey`（JWT，未启用） |
+
+结论：口令类凭据走加密，而**模型凭据以明文落盘**——这既是它可被直接取出使用的前提，也是本机任意进程均可读取它的原因。`config.json` 最后写入时间为 2026-09-16 23:03:52，至本次核查未再变动。该密钥 SHA256 前 12 位为 `CA1DF838B665`（本档不记录明文）。
+
+### 9.2 两份凭据各属哪个套餐
+
+本机账号上同时存在两条相互独立的额度通道：
+
+| 通道 | provider | 端点 | 凭据 | 套餐 |
+| --- | --- | --- | --- | --- |
+| 付费（个人） | `builtin:zai-coding-plan` / `account:zai-individual-coding-plan`（`scope=personal`、`organizationId=null`） | `https://api.z.ai/api/anthropic` | `config.json` 中的 49 字符 API Key | **GLM Coding Lite**（`product-52c6b5`，V3） |
+| 免费（活动发放） | `builtin:zai-start-plan` / `account:zai-start-plan` | `https://zcode.z.ai/api/v1/zcode-plan/anthropic` | `config.json` 中的 JWT | `zcode-v3-start-plan-wk-0918`「ZCode Weekend Build / ZCode 周末活动」 |
+
+付费侧证据（`GET https://api.z.ai/api/biz/subscription/list`，用上述 API Key 直接可查，`data` 仅 1 条）：`status=VALID`、`autoRenew=1`、`billingCycle=monthly`、`paymentChannel=PAYPAL`、`purchaseTime=2026-09-06 11:10:49`、`currentPeriod=2`、`nextRenewTime=2026-10-06`、价格 18.00（响应未带币种），另有 `refundable=false`（原因 `RATE_LIMITED`）。
+额度侧证据（`GET https://api.z.ai/api/monitor/usage/quota/limit`）：`level=lite`；窗口一容量 2000、已用 1（重置 2026-09-20 04:01）；窗口二容量 10000、**已用 9912（99%）、剩余 87**、重置 2026-09-20 11:10。
+
+免费侧证据（宿主日志 `coding-plan-availability` 全量 1,481 条）：历史仅出现 `zcode-v3-start-plan-0817`、`-wk-0904`、`-0911-wk`、`-wk-0918` 四个 `plan_id`，全部为活动发放；当前生效期为 `starts_at 2026-09-18 18:22:18` → `ends_at 2026-09-20 09:00:00`，一次性授予 3 亿 token 的 `model:glm-5.3-flash`，截至 09-19 11:09 已用约 629 万。该通道无订单号、无支付渠道、无自动续费，与付费侧形态完全不同。
+
+这也解释了 2026-09-19 的模型流量分布：`GLM-5.3-Flash` 共 1,241 次调用走免费 start-plan，`GLM-5.3` 仅 54 次走付费 coding-plan。
+
+### 9.3 免费通道无法脱离客户端使用（实测）
+
+对 `https://zcode.z.ai/api/v1/zcode-plan/anthropic/v1/messages` 直接用该 JWT 请求：
+
+- `x-api-key: <JWT>` ⇒ **HTTP 401**
+- `Authorization: Bearer <JWT>` ⇒ **HTTP 400**，`{"code":3007,"msg":"captcha verify failed"}`
+
+静态分析印证：该 provider 的运行时请求头由宿主**逐请求铸造**（`out/host/index.js` 的 `respondProviderRuntimeHeaders`，`source` 取 `send_preflight` 或 `captcha_retry`），附加 `X-Aliyun-Captcha-Verify-Param`（必要时另有 `X-Aliyun-Captcha-Verify-Region`）。该令牌在 Electron 渲染进程内由阿里云验证码 SDK 产生（`traceless_passed` 为静默通过，失败时升级为 `interactive_displayed` 交互式挑战），并非可复用的长效令牌；同批代码另有 `[captcha] certifyId 与上一轮相同，请求可能触发 F008 重复提交` 的告警，说明该值按请求级刷新。
+
+结论：免费额度与 ZCode 客户端**强绑定**，脱离客户端即不可用。绕过该验证属规避反自动化控制，本档不提供、不建议，也不进行验证性尝试；如需继续使用该免费额度，只能经由 ZCode 本体。
+
+### 9.4 付费通道可脱离客户端使用（实测）
+
+用 `builtin:zai-coding-plan` 的 API Key 直接调用，无需任何验证码头：
+
+| 端点 / 测试 | 结果 |
+| --- | --- |
+| `https://api.z.ai/api/anthropic/v1/messages` + `glm-5.3` | HTTP 200，正常返回 |
+| 同上 + `glm-5.3-flash` | HTTP 200，正常返回 |
+| 同上 + `glm-4.6` | HTTP 200，正常返回 |
+| 同上 + 未知模型（如 `glm-5.3-air`） | HTTP 400，`[1211][Unknown Model…]` ⇒ 端点确实校验模型名 |
+| `https://open.bigmodel.cn/api/anthropic/v1/messages` | HTTP 200，正常返回 |
+
+即该凭据是标准平台 API Key，**不绑定设备或客户端指纹**，可在任意 Anthropic 兼容客户端中经 `ANTHROPIC_BASE_URL` ＋ `ANTHROPIC_AUTH_TOKEN` 使用，消耗的即上述 Lite 订阅额度；同理，`glm-5.3-flash` 亦可通过付费密钥在客户端外调用。
+
+### 9.5 暴露面提示（本次调查自身引入的扩散）
+
+核查过程中，明文 API Key 因排查脚本直接打印配置，进入了本机两类明文文件：Codex 会话记录 `C:\Users\1\.codex\sessions\2026\09\19\*.jsonl`（同一会话文件内计数 47 处）与线程历史库 `C:\Users\1\.codex\thread_history_1.sqlite-wal`（3 处）。属**调查自身引入**的扩散，非 ZCode 行为。
+建议：如决定长期使用该凭据，先去 z.ai 控制台轮换，再以环境变量或客户端本地配置承载，避免再次落入会话记录。
+另需注意：核验快照上传内容时已确认 `config.json` **不在** 2026-09-13 那次上传的 8,043 条清单内（见 §2.4），即明文凭据未随快照通道外流。
+
+### 9.6 复现入口（均为只读）
+
+- 订阅查询：`GET https://api.z.ai/api/biz/subscription/list`，头 `Authorization: Bearer <api key>`
+- 额度查询：`GET https://api.z.ai/api/monitor/usage/quota/limit`，同上
+- 活动/免费额度查询：`GET https://zcode.z.ai/api/v1/zcode-plan/billing/balance?app_version=3.12.3`（需账号令牌；API Key 会被 401 拒绝）
+- 免费通道可用性判别：`C:\Users\1\.zcode\v2\logs\*.log` 中 `coding-plan-availability` 与 `billing/balance 请求完成` 记录
