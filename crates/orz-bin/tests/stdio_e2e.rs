@@ -146,12 +146,17 @@ fn session_new_and_prompt_over_real_frames() {
         replay.errors
     );
     // THIN-HARNESS-REDESIGN R2a 审查处理 (2026-08-27)：plan 门普适摘除
-    // ——preflight + started + prompt_submitted + tool_availability
-    // + request_header_change (ORZ-CACHE-CONTEXT-COST 2026-08-15)
-    // + model_output + counterexample_gate + model_output + finished
+    // ——preflight + tool_availability（main_agent_work_tools）
+    // + tool_availability（retrieval_family，检索未启用的探针面）
+    // + started + prompt_submitted + request_header_change
+    // (ORZ-CACHE-CONTEXT-COST 2026-08-15) + model_output + counterexample_gate
+    // + model_output + host_resource_snapshot（0z 资源安全 run_start 快照）
+    // + finished
     // (GAP-INQUIRY-SPLIT: no per-turn orientation event — the
     // orientation producer fires only on the session-level trigger)
-    assert_eq!(replay.event_count, 9);
+    // 2026-09-19 勘误：期望集自 6cc8586c（2026-08-28）后未随 0z 资源面与
+    // retrieval_family 探针面更新，属预存测试漂移；本批仅对齐实现事实。
+    assert_eq!(replay.event_count, 11);
     assert_eq!(replay.terminal_event.as_deref(), Some("run_finished"));
 
     let _ = std::fs::remove_dir_all(&dir);
