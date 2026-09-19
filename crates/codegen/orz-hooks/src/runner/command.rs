@@ -585,12 +585,12 @@ fn parse_stop_result(
 fn truncate_output(bytes: &[u8]) -> String {
     if bytes.len() <= MAX_OUTPUT_BYTES {
         let (text, label) = orz_tools::util::encoding::decode_text(bytes);
-        tracing::debug!(encoding = label, "hook output decoded");
+        tracing::debug!(encoding = label.as_str(), "hook output decoded");
         text
     } else {
         let (text, label) = orz_tools::util::encoding::decode_text(&bytes[..MAX_OUTPUT_BYTES]);
         let mut truncated = text;
-        tracing::debug!(encoding = label, "hook output decoded (truncated)");
+        tracing::debug!(encoding = label.as_str(), "hook output decoded (truncated)");
         truncated.push_str(" [truncated]");
         tracing::warn!(
             total_bytes = bytes.len(),

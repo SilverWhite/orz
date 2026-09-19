@@ -797,7 +797,7 @@ pub(crate) async fn run_read_file(
         Some((text, label)) => (text, Some(label.to_string())),
         None => {
             let (text, label) = crate::util::encoding::decode_text(&file_bytes);
-            (text, Some(label.to_string()))
+            (text, Some(label))
         }
     };
     // FUS-READ-ANCHOR-WRITE-GUARD (ADR-0010 §14.38): text path carries the

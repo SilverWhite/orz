@@ -492,7 +492,10 @@ impl AgentLoopController {
             // 所以事实由宿主上报（`serp_session_facts`），策略在本层施加。
             // 判定口径与宿主会话上限一致（检查点式，最坏再侵蚀 ≤2 次导航）。
             // 先取布尔再判，避免在 let-chain 条件里持有 MutexGuard 临时值。
-            let reserves_session_floor = budget.lock().unwrap().reserves_session_floor();
+            let reserves_session_floor = budget
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .reserves_session_floor();
             if reserves_session_floor
                 && let Some(facts) = host.serp_session_facts().await
                 && facts.headroom() <= SERP_SESSION_RETRIEVAL_FLOOR
@@ -510,11 +513,17 @@ impl AgentLoopController {
             }
             // 预留与用量读取分两次短锁（scrutinee 的临时 guard 会活到整个
             // match 结束，直接在 match 里二次加锁会自锁）。
-            let reservation = budget.lock().unwrap().reserve();
+            let reservation = budget
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .reserve();
             match reservation {
                 Ok(()) => serp_reserved = true,
                 Err(()) => {
-                    let (used, cap) = budget.lock().unwrap().usage();
+                    let (used, cap) = budget
+                        .lock()
+                        .unwrap_or_else(std::sync::PoisonError::into_inner)
+                        .usage();
                     let msg = format!(
                         "browser_control search 已拒绝 — 本车道 SERP 导航预算已用尽（{used}/{cap}）"
                     );
@@ -640,7 +649,10 @@ impl AgentLoopController {
             }
             // P2-4：被权限／模式门拒绝的 search 没有发生导航 → 释放预留。
             if serp_reserved && let Some(budget) = serp_budget {
-                budget.lock().unwrap().rollback();
+                budget
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .rollback();
             }
             // P2-10 R2 (2026-08-31): permission deny/defer = deny event.
             self.feed_lif_deny(None);
@@ -943,7 +955,10 @@ impl AgentLoopController {
                 // `action_kind_for_tool` 映射里、本分支对它不可达；此处是
                 // 形态对齐的防御（一旦它纳入票据面，额度不会静默多计）。
                 if serp_reserved && let Some(budget) = serp_budget {
-                    budget.lock().unwrap().rollback();
+                    budget
+                        .lock()
+                        .unwrap_or_else(std::sync::PoisonError::into_inner)
+                        .rollback();
                 }
                 return self
                     .refuse_ticketed_tool(writer, messages, tc, &gate, probe_writeback)
@@ -1035,7 +1050,10 @@ impl AgentLoopController {
                 .to_string();
             let window_ok = tool_rounds == 0;
             let cap_ok = {
-                let w = self.whitelist.lock().unwrap();
+                let w = self
+                    .whitelist
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
                 let used: usize = w.iter().map(|e| e.chars().count()).sum();
                 used + content.chars().count() <= self.whitelist_cap
             };
@@ -1082,7 +1100,10 @@ impl AgentLoopController {
                 ));
             }
             let entry_index = {
-                let mut w = self.whitelist.lock().unwrap();
+                let mut w = self
+                    .whitelist
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
                 w.push(content.clone());
                 w.len()
             };
@@ -2711,8 +2732,16 @@ impl AgentLoopController {
                     Ok(()) => {
                         plan_epoch = epoch;
                         if is_new_epoch {
-                            *self.delivery_baseline.lock().unwrap() = host.workspace_snapshot();
-                            *self.delivery_pending.lock().unwrap() = (epoch, false);
+                            *self
+                                .delivery_baseline
+                                .lock()
+                                .unwrap_or_else(std::sync::PoisonError::into_inner) =
+                                host.workspace_snapshot();
+                            *self
+                                .delivery_pending
+                                .lock()
+                                .unwrap_or_else(std::sync::PoisonError::into_inner) =
+                                (epoch, false);
                         }
                     }
                     Err(_) => {
@@ -2850,7 +2879,10 @@ impl AgentLoopController {
             // 纯状态展示（§9.3：放行、不拒绝）。
             let epoch = self.blackboard.read().plan.plan_epoch;
             let pending = {
-                let p = self.delivery_pending.lock().unwrap();
+                let p = self
+                    .delivery_pending
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
                 p.0 == epoch && p.1
             };
             let status = self.compute_delivery_status(host);
@@ -2860,7 +2892,10 @@ impl AgentLoopController {
                     w.plan.delivery_status = Some(status.clone());
                     w.bump_plan();
                 }
-                *self.delivery_pending.lock().unwrap() = (epoch, true);
+                *self
+                    .delivery_pending
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner) = (epoch, true);
                 (
                     format!(
                         "submit: 交付状态已渲染进黑板 plan 视图；核查后同动作再触发一次确认递交。\n{status}"
@@ -2884,7 +2919,10 @@ impl AgentLoopController {
                         w.bump_plan();
                     }
                 }
-                *self.delivery_pending.lock().unwrap() = (epoch, false);
+                *self
+                    .delivery_pending
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner) = (epoch, false);
                 (
                     Self::submit_confirm_message(terminal_id.as_deref(), &status),
                     serde_json::json!({
@@ -3029,7 +3067,10 @@ impl AgentLoopController {
                 ));
             }
             let (mode_ok, current_transition, trace_ok) = {
-                let state = self.console_mode_state.lock().unwrap();
+                let state = self
+                    .console_mode_state
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
                 (
                     state.is_direct(),
                     state.transition_id.clone(),
@@ -3181,7 +3222,11 @@ impl AgentLoopController {
                     None,
                 ));
             }
-            let is_direct = self.console_mode_state.lock().unwrap().is_direct();
+            let is_direct = self
+                .console_mode_state
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .is_direct();
             if !is_direct {
                 let msg = "console_return_to_console ignored — the run is already in console mode"
                     .to_string();
@@ -3594,13 +3639,16 @@ impl AgentLoopController {
                 } else {
                     orz_assurance::lif::ToolOutcome::Other
                 };
-                self.lif.lock().unwrap().on_tool_event(
-                    AgentLoopController::now_epoch_secs(),
-                    orz_assurance::lif::ToolEvent {
-                        outcome,
-                        wall_ms: Some(wall_started.elapsed().as_millis() as u64),
-                    },
-                );
+                self.lif
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .on_tool_event(
+                        AgentLoopController::now_epoch_secs(),
+                        orz_assurance::lif::ToolEvent {
+                            outcome,
+                            wall_ms: Some(wall_started.elapsed().as_millis() as u64),
+                        },
+                    );
                 stamp_direct(&mut completed_payload);
                 writer
                     .record(EventType::ToolCompleted, completed_payload)
@@ -3746,13 +3794,16 @@ impl AgentLoopController {
                     payload
                 };
                 // P2-10 F3 (I3): host-level tool error → LIF err event.
-                self.lif.lock().unwrap().on_tool_event(
-                    AgentLoopController::now_epoch_secs(),
-                    orz_assurance::lif::ToolEvent {
-                        outcome: orz_assurance::lif::ToolOutcome::Error,
-                        wall_ms: Some(wall_started.elapsed().as_millis() as u64),
-                    },
-                );
+                self.lif
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .on_tool_event(
+                        AgentLoopController::now_epoch_secs(),
+                        orz_assurance::lif::ToolEvent {
+                            outcome: orz_assurance::lif::ToolOutcome::Error,
+                            wall_ms: Some(wall_started.elapsed().as_millis() as u64),
+                        },
+                    );
                 stamp_direct(&mut err_payload);
                 writer.record(EventType::ToolCompleted, err_payload).await?;
                 // TER 全面审查 P1-1：执行出错边界同样 drain（错误也是工具
@@ -3837,7 +3888,10 @@ impl AgentLoopController {
         // 宿主事实回传，而不是靠信封解析。
         if serp_reserved && let Some(budget) = serp_budget {
             let navigations = serp_navigations_from_output(&result.output);
-            budget.lock().unwrap().settle(navigations);
+            budget
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .settle(navigations);
         }
 
         // 0v-A（2026-09-12）：引擎级取证面——每次 search 一份引擎级事实
@@ -3934,7 +3988,10 @@ mod tests {
                 Ok(PermitDecision::AllowOnce)
             }
             fn on_text_delta(&self, text: &str) {
-                self.deltas.lock().unwrap().push(text.to_string());
+                self.deltas
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .push(text.to_string());
             }
         }
 
@@ -3967,7 +4024,9 @@ mod tests {
 
         // Chunk order preserved across both rounds, concat == full text.
         assert_eq!(
-            *deltas.lock().unwrap(),
+            *deltas
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner),
             vec!["你好", "世界", "你好", "世界"],
             "chunks must arrive in order and cover both gate rounds"
         );

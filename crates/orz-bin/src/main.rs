@@ -41,7 +41,38 @@ fn parse_benchmark_flags(args: &[String]) -> Result<(bool, bool), String> {
     Ok((allow_shell, allow_network))
 }
 
+/// F4 / 0as (2026-09-19): switch the console output code page to UTF-8.
+/// Zero-dependency FFI (house precedent: orz-workspace foreign_sessions
+/// capability, xai-acp-lib stdin_reader) — a windows-sys edge on orz-bin
+/// would churn the shared Cargo.lock this batch must not touch.
+#[cfg(windows)]
+unsafe fn set_console_output_code_page_utf8() {
+    #[link(name = "kernel32")]
+    unsafe extern "system" {
+        #[link_name = "SetConsoleOutputCP"]
+        fn set_console_output_cp(w_code_page_id: u32) -> i32;
+    }
+    // SAFETY: kernel32 is always loaded; the call is per-console and
+    // best-effort — failure (no console, redirected pipes) is ignored and
+    // must never block startup.
+    unsafe {
+        let _ = set_console_output_cp(65001);
+    }
+}
+
 fn main() {
+    // F4 / 0as (2026-09-19): put the host console into UTF-8 mode on Windows
+    // so orz's UTF-8 output (receipts, tool-output echo) is not rendered as
+    // mojibake on GBK-codepage consoles, and child processes that follow the
+    // console code page (git, …) emit UTF-8 — the decode gate then reads it
+    // back cleanly. TUI/ACP lanes are unaffected (crossterm manages its own
+    // console modes). Cosmetic host-side fix: the model face was already
+    // clean via the mechanical encoding gate. Console CP is per-console, not
+    // persisted; failure is ignored (best effort, never fatal).
+    #[cfg(windows)]
+    unsafe {
+        set_console_output_code_page_utf8();
+    }
     // L1 (2026-08-08 write placement): redirect `$GROK_HOME` off the user
     // directory to the orz install dir (degradation chain → `{cwd}/.gsa/
     // grok-home` → user dir). MUST run before any `orz_config::grok_home()`

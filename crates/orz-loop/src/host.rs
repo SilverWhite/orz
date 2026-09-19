@@ -128,7 +128,7 @@ pub struct ToolResult {
     /// `script_timeout` (never text prefix parsing).
     pub timed_out: bool,
     /// Decode stage that produced `output` (GAP-ENCODING-GATE,
-    /// OPS-PROTOCOL §8): `utf-8` / `utf-8-sig` / `gb18030` / `utf-8-lossy`
+    /// OPS-PROTOCOL §8): `utf-8` / `utf-8-sig` / `gb18030` / `utf-8-lossy:<p>%`
     /// (comma-joined for multi-chunk streams). `None` when the tool has no
     /// mechanical decode stage. The controller journals it as
     /// `tool_completed.output_encoding`. FUS-HOST-RESOURCE-SAFETY §4.4
@@ -681,7 +681,7 @@ pub struct TestRunResult {
     /// never text-prefix judgment).
     pub timed_out: bool,
     /// Decoding stage(s) that produced `output` (GAP-ENCODING-GATE,
-    /// OPS-PROTOCOL §8): `utf-8` / `utf-8-sig` / `gb18030` / `utf-8-lossy`,
+    /// OPS-PROTOCOL §8): `utf-8` / `utf-8-sig` / `gb18030` / `utf-8-lossy:<p>%`,
     /// comma-joined when stdout/stderr used different stages.
     pub output_encoding: Option<String>,
     /// Path of the full (capped) output written by the host — readable via

@@ -100,7 +100,11 @@ impl Drop for DispatchGuard<'_> {
             .unwrap()
             .retain(|(token, _)| *token != self.token);
         let jobs: Vec<LiveCallJob> = {
-            let mut guard = self.host.live_call_jobs.lock().unwrap();
+            let mut guard = self
+                .host
+                .live_call_jobs
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
             std::mem::take(&mut *guard)
         };
         let (mine, rest): (Vec<_>, Vec<_>) = jobs
@@ -109,7 +113,11 @@ impl Drop for DispatchGuard<'_> {
         for entry in mine {
             OrzHost::close_job_handle(entry.job_handle);
         }
-        *self.host.live_call_jobs.lock().unwrap() = rest;
+        *self
+            .host
+            .live_call_jobs
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = rest;
     }
 }
 pub mod retention;
@@ -459,12 +467,15 @@ impl OrzHost {
             &crate::resource_gate::SystemCapacityProbe,
             &self.cwd,
         );
-        self.resource_facts.lock().unwrap().push(serde_json::json!({
-            "event": "host_resource_snapshot",
-            "tier": crate::resource_gate::tier_for(&snapshot).as_str(),
-            "trigger": "run_start",
-            "readings": snapshot.to_json(),
-        }));
+        self.resource_facts
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .push(serde_json::json!({
+                "event": "host_resource_snapshot",
+                "tier": crate::resource_gate::tier_for(&snapshot).as_str(),
+                "trigger": "run_start",
+                "readings": snapshot.to_json(),
+            }));
         self.last_resource_tier.store(
             tier_rank(&crate::resource_gate::tier_for(&snapshot)),
             std::sync::atomic::Ordering::Relaxed,
@@ -509,7 +520,10 @@ impl OrzHost {
             Self::close_job_handle(entry.job_handle);
             return;
         }
-        self.live_call_jobs.lock().unwrap().push(entry);
+        self.live_call_jobs
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .push(entry);
     }
 
     /// 0z S2R F-BE-3(a) (user ruling 2026-09-13, design §4.8 表 1 ③
@@ -520,7 +534,10 @@ impl OrzHost {
     /// `resource_exhausted` facts.
     fn terminate_heavy_call_jobs(&self) -> Vec<String> {
         let jobs: Vec<LiveCallJob> = {
-            let mut guard = self.live_call_jobs.lock().unwrap();
+            let mut guard = self
+                .live_call_jobs
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
             std::mem::take(&mut *guard)
         };
         let mut killed: Vec<String> = Vec::new();
@@ -545,7 +562,10 @@ impl OrzHost {
             }
             Self::close_job_handle(entry.job_handle);
         }
-        *self.live_call_jobs.lock().unwrap() = survivors;
+        *self
+            .live_call_jobs
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = survivors;
         killed
     }
 
@@ -647,16 +667,19 @@ impl OrzHost {
 
     fn push_reclaim_facts(&self, ladder: &crate::reclaim::ReclaimLadder) {
         for fact in ladder.drain_facts() {
-            self.resource_facts.lock().unwrap().push(serde_json::json!({
-                "event": "reclaim_performed",
-                "class": fact.class,
-                "outcome": fact.outcome,
-                "tier": fact.tier,
-                "paths": fact.paths,
-                "freed_bytes": fact.freed_bytes,
-                "window_rounds": fact.window_rounds,
-                "budget_bytes": fact.budget_bytes,
-            }));
+            self.resource_facts
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .push(serde_json::json!({
+                    "event": "reclaim_performed",
+                    "class": fact.class,
+                    "outcome": fact.outcome,
+                    "tier": fact.tier,
+                    "paths": fact.paths,
+                    "freed_bytes": fact.freed_bytes,
+                    "window_rounds": fact.window_rounds,
+                    "budget_bytes": fact.budget_bytes,
+                }));
         }
     }
 
@@ -722,7 +745,12 @@ impl OrzHost {
 
     /// Drain the accumulated resource facts (journal face, loop side).
     pub fn drain_resource_facts(&self) -> Vec<serde_json::Value> {
-        std::mem::take(&mut *self.resource_facts.lock().unwrap())
+        std::mem::take(
+            &mut *self
+                .resource_facts
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner),
+        )
     }
 
     /// The process-tree registry, when one is wired (0z S2 §4.2).
@@ -784,7 +812,10 @@ impl OrzHost {
     /// local_browser (2026-08-10): in-place variant for the async probe
     /// (which holds `&mut self`).
     pub fn set_browser_session(&mut self, browser: crate::local_browser::SharedBrowser) {
-        *self.browser.lock().unwrap() = browser;
+        *self
+            .browser
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = browser;
     }
 
     /// 0t (2026-09-09, ADR-0010 §14.65 / 设计 §3.1/§3.3): 检索启用会话把
@@ -798,7 +829,10 @@ impl OrzHost {
     /// 0t: 调用期懒启动成功后换入真实 manager（`&self` 安全——句柄在
     /// `Mutex` 内）。
     pub fn swap_browser_session(&self, browser: crate::local_browser::SharedBrowser) {
-        *self.browser.lock().unwrap() = browser;
+        *self
+            .browser
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = browser;
     }
 
     /// S2-R P3 / P2-1 + P1-2b（2026-09-09）：浏览器车道懒启动——check +
@@ -832,7 +866,12 @@ impl OrzHost {
         let mut launch_attempted = false;
         {
             let _launch_guard = self.browser_launch_lock.lock().await;
-            if !self.browser.lock().unwrap().ready() {
+            if !self
+                .browser
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .ready()
+            {
                 launch_attempted = true;
                 // profile 目录键沿用既有约定：ACP 会话 id 前 8 位；CLI
                 // 一次性运行（无 live session id）用稳定 "cli"。
@@ -849,12 +888,18 @@ impl OrzHost {
     /// Whether the browser lane is ready——调用期懒启动的判定源（就绪则
     /// 跳过 probe_launch，否则按需启动；不再驱动工具声明）。
     pub fn browser_ready(&self) -> bool {
-        self.browser.lock().unwrap().ready()
+        self.browser
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .ready()
     }
 
     /// The browser lane handle (for the probe and shutdown paths).
     pub fn browser_session(&self) -> crate::local_browser::SharedBrowser {
-        self.browser.lock().unwrap().clone()
+        self.browser
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone()
     }
 
     /// GAP-RETRIEVAL-TOOLS (2026-08-10): whether the web_search client is
@@ -1183,7 +1228,11 @@ impl OrzHost {
         // 也落 success fact（`BrowserStepFailed` 携带，设计 §3.2 场景 S3）。
         if matches!(name, "browser_read" | "browser_control") {
             let launch_attempted = self.ensure_browser_launched().await?;
-            let browser = self.browser.lock().unwrap().clone();
+            let browser = self
+                .browser
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .clone();
             let result = match name {
                 "browser_read" => {
                     crate::local_browser::handle_browser_read(browser.as_ref(), &args).await
@@ -1210,7 +1259,11 @@ impl OrzHost {
             )
         {
             let url = args.get("url").and_then(|u| u.as_str()).unwrap_or_default();
-            let browser = self.browser.lock().unwrap().clone();
+            let browser = self
+                .browser
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .clone();
             return crate::pdf_evidence::handle_browser_pdf(
                 &self.cwd,
                 self.session_id.as_deref(),
@@ -1280,12 +1333,15 @@ impl OrzHost {
                 if last != rank
                     && let Some(snapshot_now) = gate.last_snapshot()
                 {
-                    self.resource_facts.lock().unwrap().push(serde_json::json!({
-                        "event": "host_resource_snapshot",
-                        "tier": tier.as_str(),
-                        "trigger": "tier_change",
-                        "readings": snapshot_now.to_json(),
-                    }));
+                    self.resource_facts
+                        .lock()
+                        .unwrap_or_else(std::sync::PoisonError::into_inner)
+                        .push(serde_json::json!({
+                            "event": "host_resource_snapshot",
+                            "tier": tier.as_str(),
+                            "trigger": "tier_change",
+                            "readings": snapshot_now.to_json(),
+                        }));
                 }
             }
             // 0z S2 §4.6：soft/reclaim-direct 档由机械层发起回收（不问模型）。
@@ -1322,20 +1378,23 @@ impl OrzHost {
                 );
                 // 0z S2 §5：pre-issue 拒绝事实（含读数与动作分档，判据 1 的
                 // 可逐条复核面）。
-                self.resource_facts.lock().unwrap().push(serde_json::json!({
-                    "event": "host_resource_denied",
-                    "tool": name,
-                    "call_id": call_id,
-                    "phase": "pre_issue",
-                    "action_class": class.as_str(),
-                    "tier": tier.as_str(),
-                    "reason": reason,
-                    "readings": snapshot.to_json(),
-                    "write_targets": volumes
-                        .iter()
-                        .map(crate::resource_gate::VolumeReading::to_json)
-                        .collect::<Vec<_>>(),
-                }));
+                self.resource_facts
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .push(serde_json::json!({
+                        "event": "host_resource_denied",
+                        "tool": name,
+                        "call_id": call_id,
+                        "phase": "pre_issue",
+                        "action_class": class.as_str(),
+                        "tier": tier.as_str(),
+                        "reason": reason,
+                        "readings": snapshot.to_json(),
+                        "write_targets": volumes
+                            .iter()
+                            .map(crate::resource_gate::VolumeReading::to_json)
+                            .collect::<Vec<_>>(),
+                    }));
                 // 0z S2 §4.8 表 1：hard 档树杀——审计先行（planned 行含读数
                 // 与将杀 call_id 集，review F-EV-1）→ 杀本 run 全部工具进程
                 // 树（RunResourceJob::kill）→ executed 行 → 回收（先杀再
@@ -1353,7 +1412,10 @@ impl OrzHost {
                     // tasks are NOT in the blast radius (§4.8 表 1 ③).
                     // planned = the heavy set about to be killed.
                     let heavy_calls: Vec<String> = {
-                        let jobs = self.live_call_jobs.lock().unwrap();
+                        let jobs = self
+                            .live_call_jobs
+                            .lock()
+                            .unwrap_or_else(std::sync::PoisonError::into_inner);
                         jobs.iter()
                             .filter(|e| e.action_class == "heavy")
                             .map(|e| e.call_id.clone())
@@ -1364,26 +1426,32 @@ impl OrzHost {
                     } else {
                         heavy_calls
                     };
-                    self.resource_facts.lock().unwrap().push(serde_json::json!({
-                        "event": "resource_exhausted",
-                        "phase": "planned",
-                        "tier": "hard",
-                        "call_ids": planned_ids,
-                        "readings": readings,
-                    }));
+                    self.resource_facts
+                        .lock()
+                        .unwrap_or_else(std::sync::PoisonError::into_inner)
+                        .push(serde_json::json!({
+                            "event": "resource_exhausted",
+                            "phase": "planned",
+                            "tier": "hard",
+                            "call_ids": planned_ids,
+                            "readings": readings,
+                        }));
                     let killed_ids = self.terminate_heavy_call_jobs();
                     let executed_ids: Vec<String> = if killed_ids.is_empty() {
                         vec![call_id.to_string()]
                     } else {
                         killed_ids
                     };
-                    self.resource_facts.lock().unwrap().push(serde_json::json!({
-                        "event": "resource_exhausted",
-                        "phase": "executed",
-                        "tier": "hard",
-                        "call_ids": executed_ids,
-                        "readings": readings,
-                    }));
+                    self.resource_facts
+                        .lock()
+                        .unwrap_or_else(std::sync::PoisonError::into_inner)
+                        .push(serde_json::json!({
+                            "event": "resource_exhausted",
+                            "phase": "executed",
+                            "tier": "hard",
+                            "call_ids": executed_ids,
+                            "readings": readings,
+                        }));
                     tracing::warn!(
                         killed = executed_ids.len(),
                         "hard tier: heavy call jobs terminated (design §4.8 item 1, per-call face)"
@@ -1454,18 +1522,21 @@ impl OrzHost {
                     // call id shows up in the heavy set; the terminate step
                     // warns and skips a 0 handle.
                     if !dispatch_closed.load(std::sync::atomic::Ordering::Relaxed) {
-                        live_call_jobs.lock().unwrap().push(LiveCallJob {
-                            token: dispatch_token,
-                            call_id: call_id.clone(),
-                            // Non-Windows has no job handle: register with 0 so
-                            // the call id still shows up in the heavy set (the
-                            // terminate step warns and skips a 0 handle).
-                            #[cfg(windows)]
-                            job_handle: observation.job_handle_dup,
-                            #[cfg(not(windows))]
-                            job_handle: 0,
-                            action_class: action_class.clone(),
-                        });
+                        live_call_jobs
+                            .lock()
+                            .unwrap_or_else(std::sync::PoisonError::into_inner)
+                            .push(LiveCallJob {
+                                token: dispatch_token,
+                                call_id: call_id.clone(),
+                                // Non-Windows has no job handle: register with 0 so
+                                // the call id still shows up in the heavy set (the
+                                // terminate step warns and skips a 0 handle).
+                                #[cfg(windows)]
+                                job_handle: observation.job_handle_dup,
+                                #[cfg(not(windows))]
+                                job_handle: 0,
+                                action_class: action_class.clone(),
+                            });
                     } else {
                         #[cfg(windows)]
                         OrzHost::close_job_handle(observation.job_handle_dup);
@@ -1850,7 +1921,10 @@ impl LoopHost for OrzHost {
                 .map(|t| t.output_file);
             resolved.push((s, output_file));
         }
-        let mut reported = self.idle_kill_reported.lock().unwrap();
+        let mut reported = self
+            .idle_kill_reported
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         crate::terminal_idle_kill_facts_from(resolved, &mut reported)
     }
 
@@ -1927,7 +2001,11 @@ impl LoopHost for OrzHost {
     /// 跨车道共享同一计数器）；无浏览器会话时返回 `None`（loop 不施加
     /// 底线规则，调用按普通失败回传）。
     async fn serp_session_facts(&self) -> Option<orz_loop::host::SerpSessionFacts> {
-        let browser = self.browser.lock().unwrap().clone();
+        let browser = self
+            .browser
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone();
         let (navigations, ceiling) = browser.serp_session_navigations().await?;
         Some(orz_loop::host::SerpSessionFacts {
             navigations,
@@ -2120,7 +2198,7 @@ impl LoopHost for OrzHost {
                     // 文本前缀判定。
                     timed_out: true,
                     full_output_path: None,
-                    output_encoding: Some(output_encoding.to_string()),
+                    output_encoding: Some(output_encoding),
                     workspace_delta,
                     workspace_delta_truncated,
                 });
@@ -2139,7 +2217,7 @@ impl LoopHost for OrzHost {
             text.push_str(&err_text);
         }
         let output_encoding =
-            orz_tools::util::encoding::merge_encoding_labels(encodings.iter().copied());
+            orz_tools::util::encoding::merge_encoding_labels(encodings.iter().map(String::as_str));
         // 0p S2 复审 P1-2 修复（B5 第 5 漏斗，2026-09-07，ADR-0010 §14.61）：
         // run_tests 全量输出落 `.gsa/run_tests_output.txt`（恒直读窗口，
         // B1 直读类）——env_clear+allowlist 只隔离宿主 env，测试进程仍可能
@@ -2687,7 +2765,10 @@ mod tests {
         struct Counting(Arc<Mutex<u32>>);
         impl CapacityProbe for Counting {
             fn probe(&self, _path: &std::path::Path) -> HostCapacitySnapshot {
-                *self.0.lock().unwrap() += 1;
+                *self
+                    .0
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner) += 1;
                 HostCapacitySnapshot {
                     collected_at_ms: 7,
                     volume_free_bytes: GIB,
@@ -2718,7 +2799,9 @@ mod tests {
             .expect("refusal is an Ok tool result, not a host error");
         assert_eq!(refused.exit_code, Some(1));
         assert_eq!(
-            *reads.lock().unwrap(),
+            *reads
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner),
             1,
             "one heavy call ⇒ exactly one gate evaluation (one probe read)"
         );

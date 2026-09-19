@@ -683,6 +683,13 @@ pub(crate) struct SharedLoopServices<'a> {
     /// buffered writer 中、超时 drop 时整体丢弃，链上不产生孤儿，无需
     /// 入槽。主车道传 `None`（零开销）。
     pub in_flight_tools: Option<&'a Mutex<Vec<(String, String)>>>,
+    /// 0ar S2（2026-09-19，检索批次回送设计 §3.6/§4.2）：本批已发起检索
+    /// 调用计数——可见倒数行与 assessment `sufficiency_gap.retrieval_calls`
+    /// 的机械来源。放 `SharedLoopServices` 而非 loop 局部量的原因：墙钟
+    /// 到点路径 loop future 被丢弃、局部量随 drop 消失，而 dispatch 仍需
+    /// 该读数（已得计数＋缺口）。检索车道传 `Some`（dispatch 持有
+    /// AtomicU64），主车道传 `None`。
+    pub retrieval_calls: Option<&'a std::sync::atomic::AtomicU64>,
 }
 
 /// RETRIEVAL-ORCHESTRATION-MECHANICAL 0k (2026-08-30, TODO P0-0k 第一批
@@ -739,6 +746,17 @@ pub(crate) struct LoopOutcome {
     /// terminal event carries `tool_rounds` only.
     #[allow(dead_code)] // consumed by the subagent path (GAP-SUBAGENT-RUNTIME M3)
     pub budget_exhausted: bool,
+    /// 0ar S2（2026-09-19，检索批次回送设计 §3/§4）：检索批次收尾成因——
+    /// `Some` 仅在检索车道（阈值回送 / 机械护栏 / 墙钟到点）；主车道恒
+    /// `None`。dispatch 据此映射 `retrieval_close_record.terminal_reason`
+    /// 正常收尾臂（`evidence_threshold_met` / `dispatch_wallclock_bound`），
+    /// 不复用 `RetrievalSubagentEarlyClose` 失败臂。
+    pub retrieval_close: Option<crate::retrieval::batch_close::BatchCloseKind>,
+    /// 本批（车道会话）已发起检索调用次数——可见倒数与 assessment
+    /// `sufficiency_gap.retrieval_calls` 的机械来源（墙钟到点路径 loop
+    /// future 已丢弃，计数器必须在 dispatch 侧存活 ⇒ 走
+    /// `SharedLoopServices` 的 AtomicU64）。
+    pub retrieval_calls: u64,
 }
 
 /// Outcome of one template-summary attempt.
@@ -1883,6 +1901,15 @@ pub(crate) async fn run_agent_loop(
     // no-tools round to report a partial result; if it still requests
     // tools, the run ends there (no execution of post-budget calls).
     let mut budget_exhausted = false;
+    // 0ar S2-D1（2026-09-19，检索批次回送设计 §3.4 定案 β）：检索车道
+    // 阈值/护栏收尾状态——`batch_close` 记成因（进 `LoopOutcome` 供
+    // dispatch 映射 terminal_reason），`close_round_armed` 置位后下一轮
+    // 工具面收空、且该轮响应不再派发（唯一收尾回合）。主车道恒不置位。
+    let mut batch_close: Option<crate::retrieval::batch_close::BatchCloseKind> = None;
+    let mut close_round_armed = false;
+    // 0ar S2-D3（§5.5）：同轮溢出检索调用的未派发登记——本轮 post-batch
+    // 间隙注入一次性重述（每轮至多一条），防模型漏看丢覆盖。
+    let mut deferred_retrievals: Vec<String> = Vec::new();
     // §4.6 wiring state: the final-answer counterexample gate fires once
     // per run. The old mixed inquiry counters are gone (GAP-INQUIRY-SPLIT
     // 2026-08-09) — orientation counts live in the session-level
@@ -2473,42 +2500,45 @@ pub(crate) async fn run_agent_loop(
         if !window_in_progress {
             window_kind = None;
         }
-        let current_tool_defs: Vec<ToolDef> =
-            if let Some(PendingCheckpoint::ModelCompression { .. }) = pending_checkpoint.as_ref() {
-                // 0ae D3 / 0AE-C1 修复（2026-09-15 深审）：压缩窗口轮只暴露
-                // blackboard_write 与 context_compress（0ap §4-8）——模型固化
-                // 写入面（修复前落入 Vec::new()，模型连 blackboard_write 的
-                // 声明都看不到 ⇒ 窗口结构上不可能成功）。probe 对窗口轮保持
-                // None（下方无工具暂停语义不变：不投影注册面、不探针）。
-                compression_window_tool_defs(tool_defs)
-            } else if pending_checkpoint.is_some() && !pending_keeps_tools {
-                // §14.16: DC / console-inquiry checkpoint rounds expose no
-                // tools. The orientation soft gate (§9.2) keeps the normal
-                // projection — the model may answer and continue, or call
-                // tools directly on the trigger round.
-                Vec::new()
-            } else if plan_gate.is_some() {
-                // 首轮计划轮面：只暴露黑板读取 + plan_write（设计 §2.3/§3）。
-                tool_defs
-                    .iter()
-                    .filter(|t| {
-                        t.name == crate::planning::PLAN_WRITE_TOOL
-                            || t.name == crate::planning::BLACKBOARD_READ_TOOL
-                    })
-                    .cloned()
-                    .collect()
-            } else if let Some(snapshot) = probe_snapshot.as_ref() {
-                let projected =
-                    AgentLoopController::project_main_agent_tool_defs(tool_defs, snapshot);
-                // MECHANICAL-AUDIT-LAYER (2026-08-24, ADR-0010 §14.39 / 设计
-                // §2.1)：第 2 轮起 direct 执行面——模型直接调用工作工具（一次
-                // 调用一个往返）；console 订单面退役，不再收敛到只读+写单面。
-                // 半助理层背板（run_terminal_cmd/search_replace/run_tests/检索
-                // 派发）与 ACAF/权限/预算/候选计数硬门由调用面照常执行。
-                projected
-            } else {
-                tool_defs.to_vec()
-            };
+        let current_tool_defs: Vec<ToolDef> = if close_round_armed {
+            // 0ar S2-D1（β 收尾回合，设计 §3.4 定案）：工具面机械收空——
+            // 收尾回合不再烧检索（机械保证），模型只产出结果总结。
+            Vec::new()
+        } else if let Some(PendingCheckpoint::ModelCompression { .. }) = pending_checkpoint.as_ref()
+        {
+            // 0ae D3 / 0AE-C1 修复（2026-09-15 深审）：压缩窗口轮只暴露
+            // blackboard_write 与 context_compress（0ap §4-8）——模型固化
+            // 写入面（修复前落入 Vec::new()，模型连 blackboard_write 的
+            // 声明都看不到 ⇒ 窗口结构上不可能成功）。probe 对窗口轮保持
+            // None（下方无工具暂停语义不变：不投影注册面、不探针）。
+            compression_window_tool_defs(tool_defs)
+        } else if pending_checkpoint.is_some() && !pending_keeps_tools {
+            // §14.16: DC / console-inquiry checkpoint rounds expose no
+            // tools. The orientation soft gate (§9.2) keeps the normal
+            // projection — the model may answer and continue, or call
+            // tools directly on the trigger round.
+            Vec::new()
+        } else if plan_gate.is_some() {
+            // 首轮计划轮面：只暴露黑板读取 + plan_write（设计 §2.3/§3）。
+            tool_defs
+                .iter()
+                .filter(|t| {
+                    t.name == crate::planning::PLAN_WRITE_TOOL
+                        || t.name == crate::planning::BLACKBOARD_READ_TOOL
+                })
+                .cloned()
+                .collect()
+        } else if let Some(snapshot) = probe_snapshot.as_ref() {
+            let projected = AgentLoopController::project_main_agent_tool_defs(tool_defs, snapshot);
+            // MECHANICAL-AUDIT-LAYER (2026-08-24, ADR-0010 §14.39 / 设计
+            // §2.1)：第 2 轮起 direct 执行面——模型直接调用工作工具（一次
+            // 调用一个往返）；console 订单面退役，不再收敛到只读+写单面。
+            // 半助理层背板（run_terminal_cmd/search_replace/run_tests/检索
+            // 派发）与 ACAF/权限/预算/候选计数硬门由调用面照常执行。
+            projected
+        } else {
+            tool_defs.to_vec()
+        };
         // P0-C orz 内嵌集成 S2 (2026-08-15): 注册板块每轮机械刷新（主车道；
         // 检索车道无操作台）。内容 = 动作名 + 最小参数提示（最小提示由
         // `console::ServiceRegistry` 生成，不复制完整 schema）；板块常驻、
@@ -3236,6 +3266,33 @@ pub(crate) async fn run_agent_loop(
             break;
         }
 
+        // 0ar S2-D1（2026-09-19，β 收尾回合出口）：置位后的第一轮响应即为
+        // 收尾产物——工具面已收空，本轮不再派发任何调用（模型仍声明工具
+        // 属幻觉面，一律不执行，D-8 同纪律）；文本入会话，`last_text` 交
+        // dispatch 形成结果并按 `batch_close` 映射 terminal_reason。
+        if close_round_armed {
+            if let Some(text) = response.text.clone().filter(|t| !t.is_empty()) {
+                messages.push(Message {
+                    role: Role::Assistant,
+                    content: text,
+                    tool_call_id: None,
+                    tool_calls: Vec::new(),
+                    reasoning_content: response.reasoning_content.clone(),
+                    round: None,
+                });
+            }
+            last_text = response.text;
+            finalize_model_compression_close(
+                &mut model_compression_close,
+                &mut mechanical_audit,
+                svc,
+                writer,
+                tool_rounds,
+            )
+            .await?;
+            break;
+        }
+
         if response.tool_calls.is_empty() {
             // §4.6.1/4.6.2: the first no-tool-call response is a
             // final-answer candidate — before committing it, the
@@ -3545,6 +3602,13 @@ pub(crate) async fn run_agent_loop(
                     let serp_budget = profile.serp_budget.clone();
                     let activation_id = profile.activation_id.clone();
                     futures.push(async move {
+                        // 0ar S2：检索族调用发起即计数（发起≠成功——失败
+                        // 也计入「已发起检索调用」；主车道计数槽为 None）。
+                        if crate::retrieval::batch_close::is_lane_retrieval_tool(&tc_owned.name)
+                            && let Some(counter) = svc.retrieval_calls
+                        {
+                            counter.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                        }
                         // 档位并发上限：browser_read 先取 permit 再执行
                         // （permit 随 future drop 释放；信号量本批内不
                         // close，acquire 失败实际不可达——fail-closed 兜底）。
@@ -3662,6 +3726,26 @@ pub(crate) async fn run_agent_loop(
                     {
                         evidence.lock().unwrap().push(record);
                     }
+                    // 0ar S2：可见倒数行（设计 §3.6）——检索族结果尾部机械
+                    // 追加（本批证据快照＋已发起调用数，条目/调用分开报）。
+                    if svc.retrieval_calls.is_some()
+                        && crate::retrieval::batch_close::is_lane_retrieval_tool(&tc.name)
+                    {
+                        let snapshot = svc
+                            .evidence
+                            .map(|e| e.lock().unwrap().clone())
+                            .unwrap_or_default();
+                        let calls = svc
+                            .retrieval_calls
+                            .map(|c| c.load(std::sync::atomic::Ordering::Relaxed))
+                            .unwrap_or(0);
+                        crate::retrieval::batch_close::append_countdown_to_tool_message(
+                            messages,
+                            &tc.call_id,
+                            &snapshot,
+                            calls,
+                        );
+                    }
                     // 静默机械审查（主车道专属，与串行同构）。
                     if profile.role == AgentRole::Main {
                         crate::mechanical_audit::record_tool_result(
@@ -3697,6 +3781,49 @@ pub(crate) async fn run_agent_loop(
                 parallel_skip_until = run_len;
             }
         }
+        // 0ar S2-D3（2026-09-19，检索批次回送设计 §5.4 定案「合并优先＋
+        // 溢出拆轮」）：派发前预扫描本轮剩余调用中的检索派发调用（可派发
+        // 车道——检索车道 nested dispatch 已被单席位纪律拒绝，不入扫描）。
+        // 前 MERGE_MAX_QUERIES(3) 个调用**合并优先**：由首个调用承载单激
+        // 活多 query 任务，其余被合并调用以合并回执交回；溢出调用按 R-1
+        // 形态**未派发拒绝**（无 ToolStarted 的 gate 拒绝，§5.5 模板）。
+        // 二者互补：合并让子代理承担更重任务、消除 N 倍往返；溢出底座保
+        // 住「一轮发 N 个搜索也不会让主代理失去回合」。
+        let dispatch_bound: Vec<usize> = (parallel_skip_until..response.tool_calls.len())
+            .filter(|&i| {
+                let target = route(&response.tool_calls[i].name);
+                matches!(
+                    target,
+                    DispatchTarget::InternalRetrieval | DispatchTarget::ExternalRetrieval
+                ) && !profile.tool_filter.denies_nested_dispatch()
+            })
+            .collect();
+        let merged_positions: std::collections::BTreeSet<usize> = dispatch_bound
+            .iter()
+            .take(crate::retrieval::batch_close::MERGE_MAX_QUERIES)
+            .copied()
+            .collect();
+        let merged_extra_queries: Vec<(usize, String)> = dispatch_bound
+            .iter()
+            .take(crate::retrieval::batch_close::MERGE_MAX_QUERIES)
+            .skip(1)
+            .map(|&i| {
+                let tc = &response.tool_calls[i];
+                let q = tc
+                    .arguments
+                    .get("query")
+                    .or_else(|| tc.arguments.get("url"))
+                    .and_then(|v| v.as_str())
+                    .unwrap_or(tc.name.as_str())
+                    .to_string();
+                (i, q)
+            })
+            .collect();
+        let deferred_positions: std::collections::BTreeSet<usize> = dispatch_bound
+            .iter()
+            .skip(crate::retrieval::batch_close::MERGE_MAX_QUERIES)
+            .copied()
+            .collect();
         let mut tool_idx = 0usize;
         while tool_idx < response.tool_calls.len() {
             let tc = &response.tool_calls[tool_idx];
@@ -3782,6 +3909,120 @@ pub(crate) async fn run_agent_loop(
                 tool_idx += 1;
                 continue;
             }
+            // 0ar S2-D3：被合并调用回执（先于执行分支——本调用不再单独
+            // 派发；leader 已按声明序在前位以单激活多 query 执行完毕）。
+            // 事件面 ToolStarted+ToolCompleted 沿既有形状（真实被服务），
+            // 合并事实在结果文本与合并激活的 query_summary（判据 6）。
+            if merged_positions.contains(&tool_idx) && tool_idx != dispatch_bound[0] {
+                let q = merged_extra_queries
+                    .iter()
+                    .find(|(i, _)| *i == tool_idx)
+                    .map(|(_, q)| q.clone())
+                    .unwrap_or_default();
+                let target_name = match route(&tc.name) {
+                    DispatchTarget::InternalRetrieval => "internal_retrieval",
+                    _ => "external_retrieval",
+                };
+                let note = format!(
+                    "[{}] 本调用已与本轮首次检索调用合并为同一检索激活（合并上限 {}）；\
+                     本 query（\"{}\"）已由该激活统一执行，结果见其合并返回与 \
+                     query_summary 对应条目。",
+                    tc.name,
+                    crate::retrieval::batch_close::MERGE_MAX_QUERIES,
+                    q
+                );
+                writer
+                    .record(
+                        EventType::ToolStarted,
+                        serde_json::json!({
+                            "tool": tc.name,
+                            "call_id": tc.call_id,
+                            "target": target_name,
+                        }),
+                    )
+                    .await?;
+                writer
+                    .record(
+                        EventType::ToolCompleted,
+                        serde_json::json!({
+                            "tool": tc.name,
+                            "call_id": tc.call_id,
+                            "target": target_name,
+                            "exit_code": 0,
+                        }),
+                    )
+                    .await?;
+                messages.push(Message {
+                    role: Role::Tool,
+                    content: note.clone(),
+                    tool_call_id: Some(tc.call_id.clone()),
+                    tool_calls: Vec::new(),
+                    reasoning_content: None,
+                    round: None,
+                });
+                tool_idx += 1;
+                continue;
+            }
+            // 0ar S2-D3：溢出未派发拒绝（§5.4 R-1 兜底／§5.5 中性文案）。
+            // 无 ToolStarted 的 gate 拒绝（模板同族 refuse_inject_budget——
+            // F11 gate 段允许无起点的拒绝完成事件）；不喂 deny 断路器
+            // （推迟不是失败，一次性重述在 post-batch 间隙注入）。
+            if deferred_positions.contains(&tool_idx) {
+                let q = tc
+                    .arguments
+                    .get("query")
+                    .or_else(|| tc.arguments.get("url"))
+                    .and_then(|v| v.as_str())
+                    .unwrap_or(tc.name.as_str())
+                    .to_string();
+                deferred_retrievals.push(q.clone());
+                let leader_q = dispatch_bound
+                    .first()
+                    .and_then(|&i| {
+                        response.tool_calls[i]
+                            .arguments
+                            .get("query")
+                            .or_else(|| response.tool_calls[i].arguments.get("url"))
+                            .and_then(|v| v.as_str())
+                    })
+                    .unwrap_or_default();
+                let output = format!(
+                    "[{}] 本轮已派发 1 个检索激活（query: \"{}\"，合并上限 {}）；\
+                     本调用未派发（cause: {}，deferred_call_id: {}）。",
+                    tc.name,
+                    leader_q,
+                    crate::retrieval::batch_close::MERGE_MAX_QUERIES,
+                    crate::retrieval::batch_close::DEFERRED_CAUSE,
+                    tc.call_id
+                );
+                let mut payload = serde_json::json!({
+                    "tool": tc.name,
+                    "call_id": tc.call_id,
+                    "exit_code": 1,
+                    "status": "error",
+                    "error": crate::retrieval::batch_close::DEFERRED_CAUSE,
+                });
+                // 0q：gate 拒绝形状统一过漏斗（Refused 码，法官对账物齐备）。
+                controller.stamp_failure(
+                    &mut payload,
+                    &tc.name,
+                    &tc.arguments,
+                    crate::host_exec::ToolFailureOutcome::Refused(
+                        crate::retrieval::batch_close::DEFERRED_CAUSE,
+                    ),
+                );
+                writer.record(EventType::ToolCompleted, payload).await?;
+                messages.push(Message {
+                    role: Role::Tool,
+                    content: output,
+                    tool_call_id: Some(tc.call_id.clone()),
+                    tool_calls: Vec::new(),
+                    reasoning_content: None,
+                    round: None,
+                });
+                tool_idx += 1;
+                continue;
+            }
             let target = route(&tc.name);
             // C2-1 (2026-08-11, ADR-0006 web-search slice): lane
             // self-execution — inside a retrieval lane, web tools (routed
@@ -3825,6 +4066,18 @@ pub(crate) async fn run_agent_loop(
                         round_feedback = Some(f);
                         r
                     } else {
+                        // 0ar S2-D3 合并优先：leader 携带同轮其余被合并
+                        // query（单激活多任务；结果 query_summary 逐 query
+                        // 一条）。非 leader 位不会进入本分支（上方已回执）。
+                        let merged_queries: Vec<String> =
+                            if dispatch_bound.first() == Some(&tool_idx) {
+                                merged_extra_queries
+                                    .iter()
+                                    .map(|(_, q)| q.clone())
+                                    .collect()
+                            } else {
+                                Vec::new()
+                            };
                         controller
                             .run_retrieval_subagent(
                                 host,
@@ -3838,6 +4091,7 @@ pub(crate) async fn run_agent_loop(
                                 orientation.as_deref_mut(),
                                 cancel,
                                 heartbeat,
+                                &merged_queries,
                             )
                             .await?
                     }
@@ -3911,6 +4165,12 @@ pub(crate) async fn run_agent_loop(
                                 .unwrap()
                                 .push((tc.name.clone(), tc.call_id.clone()));
                         }
+                        // 0ar S2：检索族调用发起即计数（发起≠成功）。
+                        if crate::retrieval::batch_close::is_lane_retrieval_tool(&tc.name)
+                            && let Some(counter) = svc.retrieval_calls
+                        {
+                            counter.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                        }
                         let (result, feedback) = controller
                             .run_host_tool_with_plan_gate(
                                 host,
@@ -3982,6 +4242,26 @@ pub(crate) async fn run_agent_loop(
                             )
                         {
                             evidence.lock().unwrap().push(record);
+                        }
+                        // 0ar S2：可见倒数行（设计 §3.6）——检索族结果尾部
+                        // 机械追加（本批证据快照＋已发起调用数）。
+                        if svc.retrieval_calls.is_some()
+                            && crate::retrieval::batch_close::is_lane_retrieval_tool(&tc.name)
+                        {
+                            let snapshot = svc
+                                .evidence
+                                .map(|e| e.lock().unwrap().clone())
+                                .unwrap_or_default();
+                            let calls = svc
+                                .retrieval_calls
+                                .map(|c| c.load(std::sync::atomic::Ordering::Relaxed))
+                                .unwrap_or(0);
+                            crate::retrieval::batch_close::append_countdown_to_tool_message(
+                                messages,
+                                &tc.call_id,
+                                &snapshot,
+                                calls,
+                            );
                         }
                         round_feedback = feedback;
                         result
@@ -4202,12 +4482,77 @@ pub(crate) async fn run_agent_loop(
                 round: None,
             });
         }
+        // 0ar S2-D3（§5.5）：一次性重述——本轮有溢出未派发检索时，在
+        // post-batch 间隙注入一条中性事实（每轮至多一条，不跨轮累积），
+        // 防模型漏看丢覆盖；不教学（只报事实，不指导拆分）。
+        if !deferred_retrievals.is_empty() {
+            let note = format!(
+                "[上轮检索未派发] 上一轮有 {} 次检索未派发（cause: {}）：{}。",
+                deferred_retrievals.len(),
+                crate::retrieval::batch_close::DEFERRED_CAUSE,
+                deferred_retrievals
+                    .iter()
+                    .map(|q| format!("\"{q}\""))
+                    .collect::<Vec<_>>()
+                    .join("、")
+            );
+            messages.push(Message {
+                role: Role::User,
+                content: note,
+                tool_call_id: None,
+                tool_calls: Vec::new(),
+                reasoning_content: None,
+                round: None,
+            });
+            deferred_retrievals.clear();
+        }
+        // 0ar S2-D1（2026-09-19，设计 §3.1/§3.2/§3.4）：阈值回送判定——
+        // post-tool-batch gap（本批全部 tool replies 已回传的安全间隙）。
+        // 宽口径计数（§3.3 共用尺）达标即进入 β 收尾：下一轮工具面机械
+        // 收空、唯一收尾回合产出结果总结。护栏（10）优先于阈值（5）——
+        // 同一 β 形态、成因不同（terminal_reason 同为
+        // evidence_threshold_met，assessment reason_codes 区分）。
+        if !close_round_armed
+            && batch_close.is_none()
+            && profile.role != AgentRole::Main
+            && svc.retrieval_calls.is_some()
+        {
+            let snapshot = svc
+                .evidence
+                .map(|e| e.lock().unwrap().clone())
+                .unwrap_or_default();
+            let usable = crate::retrieval::batch_close::usable_source_count(&snapshot);
+            let kind = if usable >= crate::retrieval::batch_close::MECHANICAL_CAP {
+                Some(crate::retrieval::batch_close::BatchCloseKind::MechanicalCapForceClose)
+            } else if usable >= crate::retrieval::batch_close::SUFFICIENCY_TARGET {
+                Some(crate::retrieval::batch_close::BatchCloseKind::EvidenceThresholdMet)
+            } else {
+                None
+            };
+            if let Some(kind) = kind {
+                messages.push(Message {
+                    role: Role::User,
+                    content: crate::retrieval::batch_close::close_round_block(kind, usable),
+                    tool_call_id: None,
+                    tool_calls: Vec::new(),
+                    reasoning_content: None,
+                    round: None,
+                });
+                batch_close = Some(kind);
+                close_round_armed = true;
+            }
+        }
         // 0ac S3①-b ⑥（2026-09-15）：提前收口中止判定——本批 tool
         // replies 已全部回传、协议形态完整处退出；父侧 dispatch 以
         // `subagent_failed` 收口，cause 随错误文本自描述（wallclock
         // 只作最后兜底）。
+        // 0ar S2：阈值/护栏已武装时不再走失败臂——本批按正常收尾交回
+        //（确定性失败事实已在链上工具事件留痕，不因之丢掉已达标证据）。
         if let Some(cause) = retrieval_early_close.take() {
-            return Err(AgentLoopError::RetrievalSubagentEarlyClose(cause));
+            if !close_round_armed {
+                return Err(AgentLoopError::RetrievalSubagentEarlyClose(cause));
+            }
+            tracing::warn!(cause, "retrieval early close suppressed by batch close");
         }
         // 0ac S3①-b M2 B1（2026-09-15，设计 §2.1/§4.1「合法边界投递」）：
         // 全部 tool replies 之后的合法间隙 drain 宿侧后台任务完成事实，
@@ -4297,7 +4642,7 @@ pub(crate) async fn run_agent_loop(
             messages.push(Message {
                 role: Role::User,
                 content: format!(
-                    "[工作台] 请将本任务的工作计划与关键中间结论写入黑板（{BLACKBOARD_WRITE_TOOL_NAME} section=plan|notes）；黑板不受上下文折叠影响，920K 压缩时只有黑板内容与保留尾可依托。"
+                    "[工作台] 请将本任务的工作计划与关键中间结论写入黑板（{BLACKBOARD_WRITE_TOOL_NAME} section=plan|notes）；黑板不受上下文折叠与机械压缩影响，硬截断（500K 估算）后仍可经 blackboard_read 找回。"
                 ),
                 tool_call_id: None,
                 tool_calls: Vec::new(),
@@ -4541,6 +4886,12 @@ pub(crate) async fn run_agent_loop(
         tool_rounds,
         rounds_since_compact,
         budget_exhausted,
+        // 0ar S2：检索批次收尾成因（主车道恒 None）＋已发起检索调用数。
+        retrieval_close: batch_close,
+        retrieval_calls: svc
+            .retrieval_calls
+            .map(|c| c.load(std::sync::atomic::Ordering::Relaxed))
+            .unwrap_or(0),
     })
 }
 
@@ -5073,6 +5424,7 @@ mod tests {
             blackboard_archive_dir: None,
             session_id: None,
             in_flight_tools: None,
+            retrieval_calls: None,
         }
     }
 

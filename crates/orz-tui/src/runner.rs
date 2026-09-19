@@ -859,8 +859,21 @@ mod tests {
     /// `do_cancel` sends the ACP cancel, gives immediate feedback, and the
     /// run resolves with `StopReason::Cancelled` + a valid `run_cancelled`
     /// journal terminal (in-process duplex, like the host's stdio path).
+    /// RS-04（0aq，2026-09-19）：与 acp_client 同族——未 provision 签发器
+    /// 环境即显式跳过（详见 acp_client::tests 同名助手注释）。
+    fn skip_without_acaf_signer_env() -> bool {
+        std::env::var("ORZ_ACAF_MANIFEST").is_err() || std::env::var("ORZ_ACAF_KEYSTORE").is_err()
+    }
+
     #[tokio::test]
     async fn do_cancel_sends_cancel_and_feedback() {
+        // RS-04（0aq，2026-09-19）：生产 fail-closed 默认下，未 provision
+        // 签发器（ORZ_ACAF_MANIFEST/KEYSTORE）则 run 拒绝启动——环境缺席
+        // 显式跳过（在已 provision 机器上照常实跑）。
+        if skip_without_acaf_signer_env() {
+            eprintln!("skipped: ACAF signer env not provisioned (ORZ_ACAF_MANIFEST/KEYSTORE)");
+            return;
+        }
         use orz_loop::gateway::fake::{FakeProvider, ScriptedResponse};
         use std::time::Duration;
 
@@ -1016,6 +1029,13 @@ mod tests {
     /// clobbers a user-typed replacement (in-process duplex E2E).
     #[tokio::test]
     async fn cancel_restores_last_prompt_only_when_input_empty() {
+        // RS-04（0aq，2026-09-19）：生产 fail-closed 默认下，未 provision
+        // 签发器（ORZ_ACAF_MANIFEST/KEYSTORE）则 run 拒绝启动——环境缺席
+        // 显式跳过（在已 provision 机器上照常实跑）。
+        if skip_without_acaf_signer_env() {
+            eprintln!("skipped: ACAF signer env not provisioned (ORZ_ACAF_MANIFEST/KEYSTORE)");
+            return;
+        }
         use orz_loop::gateway::fake::{FakeProvider, ScriptedResponse};
         use std::time::Duration;
 
@@ -1307,6 +1327,13 @@ mod tests {
     /// restore path working against real journal payloads.
     #[tokio::test]
     async fn restore_after_mutation_run_e2e() {
+        // RS-04（0aq，2026-09-19）：生产 fail-closed 默认下，未 provision
+        // 签发器（ORZ_ACAF_MANIFEST/KEYSTORE）则 run 拒绝启动——环境缺席
+        // 显式跳过（在已 provision 机器上照常实跑）。
+        if skip_without_acaf_signer_env() {
+            eprintln!("skipped: ACAF signer env not provisioned (ORZ_ACAF_MANIFEST/KEYSTORE)");
+            return;
+        }
         use orz_loop::gateway::fake::{FakeProvider, ScriptedResponse};
         use orz_loop::gateway::model::ToolCall;
 

@@ -618,7 +618,12 @@ impl JournalWriterTask {
         if event.payload.get("degraded").is_none() {
             event.payload["degraded"] = state.to_summary_json();
         }
-        seal_event(event).expect("re-seal after degraded summary injection");
+        // RS-05 (0aq, 2026-09-19, Top-10 #4)：degraded 最坏时点的再盖章
+        // 失败不得 panic 写者线程——留显式错误日志，事件保持未盖章落盘
+        //（degraded 分类对未盖章行宽容，收尾链继续）。
+        if let Err(e) = seal_event(event) {
+            tracing::error!(error = %e, "degraded re-seal failed after summary injection");
+        }
         // Bound the line: truncate the longest string values until the
         // serialized event fits. Mechanical, shape-preserving — the row stays
         // schema-valid and the chain stays replayable.
@@ -632,7 +637,9 @@ impl JournalWriterTask {
                 break;
             }
             truncate_longest_string(&mut event.payload);
-            seal_event(event).expect("re-seal after degraded truncation");
+            if let Err(e) = seal_event(event) {
+                tracing::error!(error = %e, "degraded re-seal failed after truncation");
+            }
         }
     }
 

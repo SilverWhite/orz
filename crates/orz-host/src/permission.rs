@@ -650,6 +650,60 @@ mod tests {
             .await
     }
 
+    /// RS-07（0aq，2026-09-19）：**跨真实声明面的 deny 路径遍历**——
+    /// 历史缺陷族＝控制器 `risk_class` 表与宿主 `access_kind` 表脱同步
+    /// （project_doc_index／browser_read／browser_control／blackboard_write
+    /// 四例先例，0aj 复盘）。本测试对探针声明面
+    /// [`orz_loop::tool_probe::WORK_TOOLS`] 的**每一个**工具取控制器侧
+    /// 单源分类（`ToolDispatcher::risk_class`）后驱动权限桥，断言：
+    /// ① 判定**全总**（每工具都有 allow/deny，不悬挂不 panic 不漏分类）；
+    /// ② ReadOnly 类工具在 ReadOnly 策略下自动放行（0aj 缺陷形态的
+    /// 反向钉——漏 arm 即报红）；③ 其余各类在无客户端 fail-closed 桥上
+    /// 确定性；LocalMutation 的 manager 自动放行（0b 决策表现行行为）与
+    /// 其余 fail-closed 拒绝均须**两遍一致**——分类与桥臂脱同步或判定
+    /// 不确定即报红。
+    #[tokio::test]
+    async fn permission_bridge_decides_every_declared_work_tool() {
+        async fn traverse(dir: &std::path::Path, tag: &str) -> Vec<(String, String)> {
+            tokio::task::LocalSet::new()
+                .run_until(async move {
+                    let bridge =
+                        PermissionBridge::spawn(&format!("sess-rs07-{tag}"), None, dir).unwrap();
+                    let mut results = Vec::new();
+                    for name in orz_loop::tool_probe::WORK_TOOLS {
+                        let risk = orz_loop::tool::ToolDispatcher::risk_class(name);
+                        let decision = bridge
+                            .request(risk, name, &serde_json::json!({}))
+                            .await
+                            .unwrap_or_else(|e| {
+                                panic!("permission bridge error for {name}: {e:?}")
+                            });
+                        results.push((name.to_string(), format!("{decision:?}")));
+                    }
+                    results
+                })
+                .await
+        }
+        let dir = test_dir();
+        let first = traverse(&dir, "a").await;
+        let second = traverse(&dir, "b").await;
+        assert_eq!(
+            first.len(),
+            orz_loop::tool_probe::WORK_TOOLS.len(),
+            "every declared tool must get a total decision"
+        );
+        assert_eq!(first, second, "decisions must be deterministic");
+        for (name, decision) in &first {
+            let risk = orz_loop::tool::ToolDispatcher::risk_class(name);
+            if risk == RiskClass::ReadOnly {
+                assert_eq!(
+                    decision, "AllowOnce",
+                    "{name} is ReadOnly-classed but the bridge did not auto-allow (0aj desync family)"
+                );
+            }
+        }
+    }
+
     #[tokio::test]
     async fn ask_with_no_client_fails_closed() {
         // Bash (SandboxEscape) has no allow rule and no interactive client →

@@ -51,6 +51,10 @@ impl AgentLoopController {
         orientation: Option<&mut OrientationSessionState>,
         cancel: Option<&tokio_util::sync::CancellationToken>,
         heartbeat: Option<&crate::gateway::model::ActivityClock>,
+        // 0ar S2-D3（2026-09-19，设计 §5.4 合并优先）：同轮被合并的其余
+        // query（leader 调用承载单激活多任务）；空切片 = 普通单 query
+        // 派发，行为与旧形态逐字节一致。
+        merged_queries: &[String],
     ) -> Result<ToolResult, AgentLoopError> {
         let (role, target_name) = match target {
             DispatchTarget::InternalRetrieval => {
@@ -133,6 +137,30 @@ impl AgentLoopController {
             let goal = Self::build_retrieval_task_goal(&tc.arguments, prompt, Some(tier));
             (tier, goal)
         };
+        // 0ar S2-D3：合并优先（设计 §5.4）——被合并 query 机械并入任务
+        // 契约（中性事实行，不教学），并形成逐 query 列表供结果形成的
+        // `query_summary` 逐条产出（判据 6）。单 query 派发的 query_text
+        // 沿用任务契约全文（与既有 payload 逐字节一致，零漂移）。
+        let queries: Vec<String> = if merged_queries.is_empty() {
+            vec![goal.clone()]
+        } else {
+            let mut qs = vec![effort_inputs_from_args(&tc.arguments).0];
+            qs.extend(merged_queries.iter().cloned());
+            qs
+        };
+        let goal = if merged_queries.is_empty() {
+            goal
+        } else {
+            let mut g = goal;
+            g.push_str(&format!(
+                "\n[合并检索] 本激活共合并 {} 个同轮检索请求（收尾判定按批级可用计数）：",
+                merged_queries.len() + 1
+            ));
+            for (i, q) in merged_queries.iter().enumerate() {
+                g.push_str(&format!("\n[合并查询 {}] {}", i + 2, q));
+            }
+            g
+        };
 
         // Activation resolution (ADR-0010 §3.3): the state is REMOVED from
         // the registry so the std::Mutex guard never crosses an await; it is
@@ -195,7 +223,10 @@ impl AgentLoopController {
             });
         }
         let (mut act, task_goal) = {
-            let mut reg = self.activations.lock().unwrap();
+            let mut reg = self
+                .activations
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
             match reg.states.get(&role) {
                 Some(a) if a.status == ActivationStatus::Active => {
                     // Same activation, new task iteration. M4: a `continue`
@@ -381,7 +412,10 @@ impl AgentLoopController {
         // GAP-RETRIEVAL-TOOLS (2026-08-10): fresh evidence collection per
         // dispatch — the loop fills it from the lane's host calls; result
         // formation consumes it below.
-        self.evidence.lock().unwrap().clear();
+        self.evidence
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clear();
         // RETRIEVAL-ORCHESTRATION-MECHANICAL 0k (2026-08-30): 单次检索派发
         // 墙钟预算——包裹整个子代理 loop（轮数预算在其内）；超时即丢弃
         // loop future，父 run 继续，激活以 subagent_timeout 收口（Err 分支）。
@@ -392,6 +426,10 @@ impl AgentLoopController {
         // ToolStarted 补 ToolCompleted(error)（审计形态完整）。
         let in_flight_tools: std::sync::Mutex<Vec<(String, String)>> =
             std::sync::Mutex::new(Vec::new());
+        // 0ar S2（2026-09-19）：本批已发起检索调用计数——loop 内每次检索族
+        // 调用发起时 +1；可见倒数行与墙钟到点路径的 assessment 缺口读数
+        // 都从这里取（loop future 丢弃后仍存活）。
+        let retrieval_calls = std::sync::atomic::AtomicU64::new(0);
         let svc = SharedLoopServices {
             blackboard: &self.blackboard,
             denial_state: &self.denial_state,
@@ -404,6 +442,7 @@ impl AgentLoopController {
             blackboard_archive_dir: self.blackboard_archive_dir(),
             session_id: self.session_id.as_deref(),
             in_flight_tools: Some(&in_flight_tools),
+            retrieval_calls: Some(&retrieval_calls),
         };
         let loop_future = Box::pin(run_agent_loop(
             &svc,
@@ -437,8 +476,10 @@ impl AgentLoopController {
                     // ToolCompleted；合成收口让审计形态完整（tool/call_id
                     // 与孤儿 ToolStarted 配对，验证器 started→completed
                     // 形态闭合）。
-                    let interrupted: Vec<(String, String)> =
-                        in_flight_tools.lock().unwrap().clone();
+                    let interrupted: Vec<(String, String)> = in_flight_tools
+                        .lock()
+                        .unwrap_or_else(std::sync::PoisonError::into_inner)
+                        .clone();
                     for (tool, call_id) in interrupted {
                         let mut payload = serde_json::json!({
                             "tool": tool,
@@ -457,7 +498,31 @@ impl AgentLoopController {
                         );
                         writer.record(EventType::ToolCompleted, payload).await?;
                     }
-                    Err(AgentLoopError::RetrievalSubagentTimeout)
+                    // 0ar S2-D2（2026-09-19，检索批次回送设计 §4 定案）：
+                    // 到点交回＝部分证据报告——**不走失败臂**（旧形态以
+                    // `RetrievalSubagentTimeout`→`subagent_timeout` 收口、
+                    // 主代理拿不到任何证据）。loop future 已丢弃、会话仍
+                    // 在激活里：取子代理最近一条非空 assistant 文本供
+                    // [DOC]/[SOURCE] 声明行解析；成因挂 `WallclockBound`，
+                    // 由下方共用收尾路径形成部分结果、写 assessment
+                    // （已得计数＋缺口，判据 1）并以
+                    // `dispatch_wallclock_bound` 正常收口。
+                    let last_assistant_text = act.conversation.iter().rev().find_map(|m| {
+                        (m.role == Role::Assistant && !m.content.trim().is_empty())
+                            .then(|| m.content.clone())
+                    });
+                    Ok(LoopOutcome {
+                        last_text: last_assistant_text,
+                        // 轮数增量随 future 丢弃不可得：保留派发前已耗值
+                        //（诚实读数；旧 Err 口径同样不更新轮数）。
+                        tool_rounds: act.tool_rounds_used,
+                        rounds_since_compact: 0,
+                        budget_exhausted: false,
+                        retrieval_close: Some(
+                            crate::retrieval::batch_close::BatchCloseKind::WallclockBound,
+                        ),
+                        retrieval_calls: retrieval_calls.load(std::sync::atomic::Ordering::Relaxed),
+                    })
                 }
             },
             None => loop_future.await,
@@ -498,6 +563,9 @@ impl AgentLoopController {
                         blackboard_archive_dir: self.blackboard_archive_dir(),
                         session_id: self.session_id.as_deref(),
                         in_flight_tools: Some(&in_flight_tools),
+                        // 会话收尾压缩路径不发起检索——同一计数器只读传递
+                        //（保持 svc 形状一致，压缩路径零增量）。
+                        retrieval_calls: Some(&retrieval_calls),
                     };
                     // 0ah 收口清理批（2026-09-16，v7→v8 收口）：有状态折叠点
                     // 退役 ⇒ session-end 的保留起点按无状态 `collapsed_cut`
@@ -539,12 +607,19 @@ impl AgentLoopController {
         // Write the candidate counter back into the activation (every
         // path — success, error and cancel keep the count; the close
         // record still observes the consumed candidates).
-        act.candidate_urls = std::mem::take(&mut *fetch_candidates.lock().unwrap());
+        act.candidate_urls = std::mem::take(
+            &mut *fetch_candidates
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner),
+        );
         // P2-3/P2-2（2026-09-10）：SERP 引擎导航用量同样每条路径回写——
         // 与候选计数同生命周期（每激活累计、close 才清零），这样"每激活
         // 一张额度"在结构上成立，而不是"每次派发一张"。
         if let Some(budget) = &serp_budget {
-            act.serp_navigations_used = budget.lock().unwrap().used();
+            act.serp_navigations_used = budget
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .used();
         }
 
         // Re-insert the activation — the conversation is preserved on every
@@ -557,7 +632,11 @@ impl AgentLoopController {
         // GAP-RETRIEVAL-TOOLS: the subagent session id rides the committed
         // result payload — cloned before the move into the registry.
         let subagent_session_id = act.subagent_session_id.clone();
-        self.activations.lock().unwrap().states.insert(role, act);
+        self.activations
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .states
+            .insert(role, act);
 
         let tool_result = match result {
             Ok(outcome) => {
@@ -587,11 +666,18 @@ impl AgentLoopController {
                 // parsed lines by reference (ledger merge); `write_section`
                 // takes them by value afterwards.
                 let (activation_id, contract_id, contract_revision) = activation_identity;
-                let evidence = self.evidence.lock().unwrap().clone();
+                let evidence = self
+                    .evidence
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .clone();
                 // Run-unique source_id allocation (P0-B step 5 review fix):
                 // take the counter, consume it synchronously, write it back —
                 // the lock never spans the awaits below.
-                let mut source_seq = *self.next_source_seq.lock().unwrap();
+                let mut source_seq = *self
+                    .next_source_seq
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
                 let committed = build_structured_result(
                     &evidence,
                     &self.source_weighting,
@@ -608,9 +694,14 @@ impl AgentLoopController {
                     &contract_id,
                     contract_revision,
                     &tc.call_id,
-                    &goal,
+                    // 0ar S2-D3：逐 query 列表——合并激活逐条产出
+                    // query_summary（单 query 为任务契约全文，payload 不变）。
+                    &queries,
                 );
-                *self.next_source_seq.lock().unwrap() = source_seq;
+                *self
+                    .next_source_seq
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner) = source_seq;
                 // THIN-HARNESS-REDESIGN R2a 审查处理 (P2-2)：分区 ledger =
                 // 结构化 ledger 投影（source_id + 标题/URL）——机械证据以
                 // 模型可读形态进分区；internal/external 同口径。P2-3：
@@ -710,7 +801,10 @@ impl AgentLoopController {
                 // verifier binds `[来源: ...]` markers to them (ADR-0010
                 // §3.7.9; per-run cleared at run start).
                 if let Some(ledger) = committed.payload.get("source_ledger") {
-                    self.run_source_ledgers.lock().unwrap().push(ledger.clone());
+                    self.run_source_ledgers
+                        .lock()
+                        .unwrap_or_else(std::sync::PoisonError::into_inner)
+                        .push(ledger.clone());
                 }
                 let artifact_ref = self.persist_result_artifact(
                     writer,
@@ -718,6 +812,9 @@ impl AgentLoopController {
                     &activation_id,
                     contract_revision,
                 );
+                // 0ar S2-D2：到点交回报告的证据指针（下文 registry 写入会
+                // move 走 artifact_ref）。
+                let artifact_ref_for_report = artifact_ref.clone();
                 // Review P2-3 (2026-08-10): the id binds the CALL dimension
                 // too — two identical outputs on different activations must
                 // not collide (the §4.4 verifier rejects a replayed
@@ -730,7 +827,10 @@ impl AgentLoopController {
                     &sha256_hex(tc.call_id.as_bytes())[..8],
                 );
                 {
-                    let mut reg = self.activations.lock().unwrap();
+                    let mut reg = self
+                        .activations
+                        .lock()
+                        .unwrap_or_else(std::sync::PoisonError::into_inner);
                     if let Some(a) = reg.states.get_mut(&role) {
                         a.result_digest = Some(result_digest.clone());
                         a.result_archive_ref = artifact_ref;
@@ -750,29 +850,126 @@ impl AgentLoopController {
                         seen.into_iter().collect()
                     })
                     .unwrap_or_default();
+                // 0ar S2（2026-09-19）：宽口径可用计数——阈值/护栏/可见
+                // 倒数共用一把尺（设计 §3.3）；收尾成因映射正常收尾臂的
+                // terminal_reason（判据 1），提前交付（§3.7）在自然结束
+                // 路径按显式标记解析（缺指针 fail-open＋anomaly）。
+                let usable = crate::retrieval::batch_close::usable_source_count(&evidence);
+                let retrieval_calls = outcome.retrieval_calls;
                 let mut reason_codes = vec!["no_mechanical_coverage_requirement"];
                 if let Some(note) = &committed.validation_note {
                     reason_codes.push(note.as_str());
                 }
+                let (terminal_reason, sufficiency_gap) = match outcome.retrieval_close {
+                    Some(kind) => {
+                        // 阈值/护栏/墙钟收尾：连续提前交付 streak 被正常
+                        // 收尾打断（anomaly 观测线只数连续提前交付）。
+                        self.retrieval_early_delivery_streak
+                            .store(0, std::sync::atomic::Ordering::Relaxed);
+                        if kind
+                            == crate::retrieval::batch_close::BatchCloseKind::MechanicalCapForceClose
+                        {
+                            reason_codes.push("mechanical_cap_force_close");
+                        }
+                        if kind == crate::retrieval::batch_close::BatchCloseKind::WallclockBound {
+                            reason_codes.push("dispatch_wallclock_bound");
+                        }
+                        let gap = if kind
+                            == crate::retrieval::batch_close::BatchCloseKind::WallclockBound
+                            && usable < crate::retrieval::batch_close::SUFFICIENCY_TARGET
+                        {
+                            serde_json::json!({
+                                "target": crate::retrieval::batch_close::SUFFICIENCY_TARGET,
+                                "missing": crate::retrieval::batch_close::SUFFICIENCY_TARGET - usable,
+                                "retrieval_calls": retrieval_calls,
+                                "note": "wallclock bound; partial evidence returned",
+                            })
+                        } else {
+                            serde_json::Value::Null
+                        };
+                        (kind.terminal_reason(), gap)
+                    }
+                    None => {
+                        match crate::retrieval::batch_close::parse_early_delivery(&output) {
+                            Some(pointer)
+                                if !pointer.is_empty()
+                                    && usable
+                                        < crate::retrieval::batch_close::SUFFICIENCY_TARGET
+                                    && (!evidence.is_empty()
+                                        || artifact_ref_for_report.is_some()) =>
+                            {
+                                // 有效提前交付：显式标记＋证据指针＋可用
+                                // 计数 <5（§3.7）。连续提前交付达到观测线
+                                // 落 anomaly 码（可审计、不阻断）。
+                                let streak = self
+                                    .retrieval_early_delivery_streak
+                                    .fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+                                    + 1;
+                                if streak
+                                    >= crate::retrieval::batch_close::EARLY_DELIVERY_STREAK_ANOMALY
+                                {
+                                    reason_codes.push("early_delivery_streak");
+                                }
+                                let gap = serde_json::json!({
+                                    "target": crate::retrieval::batch_close::SUFFICIENCY_TARGET,
+                                    "missing": crate::retrieval::batch_close::SUFFICIENCY_TARGET - usable,
+                                    "retrieval_calls": retrieval_calls,
+                                    "note": "early delivery below target (model-declared)",
+                                });
+                                ("subagent_early_delivery", gap)
+                            }
+                            Some(_pointer) => {
+                                if usable >= crate::retrieval::batch_close::SUFFICIENCY_TARGET {
+                                    // 标记在场但可用计数已达标——按阈值
+                                    // 收尾如实登记（不虚报提前交付）。
+                                    reason_codes.push("early_delivery_at_threshold");
+                                    ("evidence_threshold_met", serde_json::Value::Null)
+                                } else {
+                                    // 缺证据指针——fail-open 按普通收尾
+                                    // 处理＋anomaly（§3.7 硬性要求）。
+                                    reason_codes.push("early_delivery_missing_pointer");
+                                    tracing::warn!(
+                                        usable,
+                                        "early delivery marker without evidence pointer — treated as normal close"
+                                    );
+                                    ("auto_close", serde_json::Value::Null)
+                                }
+                            }
+                            None => {
+                                self.retrieval_early_delivery_streak
+                                    .store(0, std::sync::atomic::Ordering::Relaxed);
+                                ("auto_close", serde_json::Value::Null)
+                            }
+                        }
+                    }
+                };
+                let mut assessment_payload = serde_json::json!({
+                    "assessment_id": assessment_id,
+                    "activation_id": activation_id,
+                    "contract_id": contract_id,
+                    "contract_revision": contract_revision,
+                    "result_digest": result_digest,
+                    "ledger_digest": ledger_digest,
+                    "source_counts": source_counts,
+                    "source_categories": categories,
+                    "missing_categories": [],
+                    "filtering_reasons": [],
+                    "status": "indeterminate",
+                    "reason_codes": reason_codes,
+                    "source_visibility_gate": "not_applicable",
+                    "assessment_version": "0.1.0",
+                    // 0ar S1/S2：可用计数（宽口径）恒在；缺口仅在本批以
+                    // 低于目标的终态（到点交回／有效提前交付）结束时携带
+                    //（`gap ⇒ count` 配对约束见 schema）。
+                    "usable_source_count": usable,
+                });
+                if !sufficiency_gap.is_null() {
+                    assessment_payload["sufficiency_gap"] = sufficiency_gap;
+                }
                 writer
                     .record(
                         EventType::InformationSufficiencyAssessment,
-                        serde_json::json!({
-                            "assessment_id": assessment_id,
-                            "activation_id": activation_id,
-                            "contract_id": contract_id,
-                            "contract_revision": contract_revision,
-                            "result_digest": result_digest,
-                            "ledger_digest": ledger_digest,
-                            "source_counts": source_counts,
-                            "source_categories": categories,
-                            "missing_categories": [],
-                            "filtering_reasons": [],
-                            "status": "indeterminate",
-                            "reason_codes": reason_codes,
-                            "source_visibility_gate": "not_applicable",
-                            "assessment_version": "0.1.0",
-                        }),
+                        assessment_payload,
                     )
                     .await?;
                 // M4: budget exhaustion on the subagent loop is a TERMINAL
@@ -790,16 +987,21 @@ impl AgentLoopController {
                     .await?;
                 }
                 // THIN-HARNESS-REDESIGN R1 (2026-08-27, §4.1/§4.4): 每次
-                // 调用即闭环——结果形成并机械评估后立即关闭激活
-                // （terminal_reason=auto_close），不再进入 AwaitingDisposition、
-                // 不再向主代理回传 [ASSESSMENT] 行、不再要求
-                // retrieval_disposition close/continue 往返（父代理需要继续
-                // 检索时直接再调 web 工具，新激活即开）。close_activation
-                // 幂等——budget_exhausted 已关闭时本调用为空操作。
+                // 调用即闭环——结果形成并机械评估后立即关闭激活，不再进入
+                // AwaitingDisposition、不再向主代理回传 [ASSESSMENT] 行、
+                // 不再要求 retrieval_disposition close/continue 往返（父代
+                // 理需要继续检索时直接再调 web 工具，新激活即开）。
+                // close_activation 幂等——budget_exhausted 已关闭时本调用
+                // 为空操作。
+                // 0ar S2：terminal_reason 按收尾成因映射（阈值/护栏 ⇒
+                // evidence_threshold_met；墙钟到点 ⇒ dispatch_wallclock_
+                // bound；自然结束 ⇒ auto_close 或 subagent_early_delivery）
+                // ——全部为**正常收尾臂**，不复用 RetrievalSubagentEarlyClose
+                // 失败臂（设计 §4.2/§7）。
                 self.close_activation(
                     writer,
                     role,
-                    "auto_close",
+                    terminal_reason,
                     Some(&assessment_id),
                     Some(&result_digest),
                 )
@@ -814,7 +1016,7 @@ impl AgentLoopController {
                 // write_section 与 build_structured_result 消费，这里
                 // 只决定回传主对话的文本。
                 let tool_output = match retrieval_result_channel_from_env() {
-                    RetrievalResultChannel::Inline => bounded.output,
+                    RetrievalResultChannel::Inline => bounded.output.clone(),
                     RetrievalResultChannel::Blackboard => {
                         let total_sources = committed.source_counts["total"].as_u64().unwrap_or(0);
                         // GAP-RETRIEVAL-STRUCTURED-RESULT 方向 C
@@ -836,6 +1038,35 @@ impl AgentLoopController {
                             role.section_name(),
                         )
                     }
+                };
+                // 0ar S2-D2（§4.2）：到点交回的模型面文本＝部分证据＋缺口
+                // ＋指针——exit 0 正常交回（主代理拿到回合决定下一步，
+                // 判据 3）；inline 通道附有界全文（通道语义不变）。
+                let tool_output = if outcome.retrieval_close
+                    == Some(crate::retrieval::batch_close::BatchCloseKind::WallclockBound)
+                {
+                    let mut report = format!(
+                        "[{}] 检索批次到点交回（单批墙钟到点，未达标也交回）：\
+                             可用证据 {}/{}（上限 {}），已发起检索调用 {} 次；\
+                             以下为部分证据与缺口。证据指针：blackboard section={}{}",
+                        tc.name,
+                        usable,
+                        crate::retrieval::batch_close::SUFFICIENCY_TARGET,
+                        crate::retrieval::batch_close::MECHANICAL_CAP,
+                        retrieval_calls,
+                        role.section_name(),
+                        artifact_ref_for_report
+                            .as_deref()
+                            .map(|a| format!("；archive: {a}"))
+                            .unwrap_or_default(),
+                    );
+                    if let RetrievalResultChannel::Inline = retrieval_result_channel_from_env() {
+                        report.push('\n');
+                        report.push_str(&bounded.output);
+                    }
+                    report
+                } else {
+                    tool_output
                 };
                 ToolResult {
                     output: tool_output,
@@ -946,6 +1177,54 @@ mod tests {
     /// 突变窗口；std::sync::MutexGuard 跨 await 仅对 current_thread
     /// 测试运行时成立，本文件 tokio::test 默认即此）。
     static RETRIEVAL_CHANNEL_ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    /// 0ar S2 测试宿主：逐调用弹出不同输出——宽口径计数按 content_sha256
+    /// 去重，阈值测试需要 N 条**不同内容**的 full_text 证据。
+    struct SeqOutputHost {
+        journal: JournalRecorder,
+        outputs: std::sync::Mutex<std::collections::VecDeque<String>>,
+    }
+    #[async_trait]
+    impl crate::host::LoopHost for SeqOutputHost {
+        fn journal(&self) -> &JournalRecorder {
+            &self.journal
+        }
+        fn tools_registry(&self) -> &dyn crate::host::ToolRegistry {
+            &EmptyRegistry
+        }
+        fn session_cwd(&self) -> std::path::PathBuf {
+            self.journal.journal_dir().to_path_buf()
+        }
+        async fn request_permission(
+            &self,
+            _risk: crate::host::RiskClass,
+            _tool: &str,
+            _args: &serde_json::Value,
+        ) -> Result<crate::host::PermitDecision, crate::host::PermitError> {
+            Ok(crate::host::PermitDecision::AllowOnce)
+        }
+        async fn call_tool(
+            &self,
+            _name: &str,
+            _args: serde_json::Value,
+            _call_id: &str,
+        ) -> Result<crate::host::ToolResult, crate::host::ToolError> {
+            let mut q = self
+                .outputs
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            let out = q
+                .pop_front()
+                .unwrap_or_else(|| "fallback distinct output".to_string());
+            Ok(ToolResult {
+                output: out,
+                exit_code: Some(0),
+                output_encoding: None,
+                structured: None,
+                ..Default::default()
+            })
+        }
+    }
 
     /// P2-14 S1 r_keep cadence 验证（2026-09-04，ADR-0010 §14.54 实施）：
     /// ① 共享 LIF 轮轴确实计入检索子车道决策轮（run 结束 temporal round
@@ -1869,7 +2148,13 @@ mod tests {
             "{}",
             result.output
         );
-        assert_eq!(counter.lock().unwrap().len(), 8);
+        assert_eq!(
+            counter
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .len(),
+            8
+        );
         // A NEW URL at the cap is refused — no ToolStarted, Denied key.
         let (result, feedback) = controller
             .run_host_tool(
@@ -1898,7 +2183,14 @@ mod tests {
             matches!(feedback, Some(PolicyFeedback::Denied(_))),
             "cap refusal must feed the denial breaker"
         );
-        assert_eq!(counter.lock().unwrap().len(), 8, "refused URL not counted");
+        assert_eq!(
+            counter
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .len(),
+            8,
+            "refused URL not counted"
+        );
 
         // Journal facts: allowed completions carry count/cap; the refusal
         // has no ToolStarted and the cap-exceeded error at the boundary.
@@ -2004,7 +2296,10 @@ mod tests {
             .unwrap();
         assert_eq!(result.exit_code, Some(0));
         assert_eq!(
-            budget.lock().unwrap().usage(),
+            budget
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .usage(),
             (2, 2),
             "three navigations settle the reservation up to the cap"
         );
@@ -2042,7 +2337,10 @@ mod tests {
             "budget refusal must feed the denial breaker"
         );
         assert_eq!(
-            budget.lock().unwrap().usage(),
+            budget
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .usage(),
             (2, 2),
             "a refused call consumes no extra budget"
         );
@@ -2200,7 +2498,13 @@ mod tests {
         );
         assert_eq!(structured["serp_session_ceiling"], serde_json::json!(40));
         // 会话底线拒绝不消耗车道额度（引擎根本没被触达）。
-        assert_eq!(budget.lock().unwrap().usage(), (0, 8));
+        assert_eq!(
+            budget
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .usage(),
+            (0, 8)
+        );
         let events = events(&dir);
         assert!(
             !events.iter().any(|e| {
@@ -2263,7 +2567,13 @@ mod tests {
             .unwrap();
         assert_eq!(result.exit_code, Some(0));
         assert!(matches!(feedback, Some(PolicyFeedback::Succeeded)));
-        assert_eq!(budget.lock().unwrap().usage(), (1, 8));
+        assert_eq!(
+            budget
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .usage(),
+            (1, 8)
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -2293,7 +2603,10 @@ mod tests {
         ]));
         let controller = with_retrieval_enabled(AgentLoopController::with_gateway(gateway));
         {
-            let mut reg = controller.activations.lock().unwrap();
+            let mut reg = controller
+                .activations
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
             reg.states.insert(
                 SubagentRole::ExternalRetrieval,
                 ActivationState {
@@ -2653,7 +2966,13 @@ mod tests {
             "{}",
             result.output
         );
-        assert_eq!(counter.lock().unwrap().len(), 8);
+        assert_eq!(
+            counter
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .len(),
+            8
+        );
         // A NEW URL at the cap is refused — no ToolStarted, Denied key.
         let (result, feedback) = controller
             .run_host_tool(
@@ -2849,7 +3168,10 @@ mod tests {
             "fresh URL under the cap must be allowed"
         );
         assert_eq!(
-            counter.lock().unwrap().len(),
+            counter
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .len(),
             1,
             "the gate must reserve atomically (check + push under one lock)"
         );
@@ -2866,7 +3188,10 @@ mod tests {
         assert_eq!(commit_candidate(&counter, "https://b.example", 8), (2, 8));
         rollback_candidate(&counter, "https://b.example");
         assert_eq!(
-            counter.lock().unwrap().len(),
+            counter
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .len(),
             1,
             "rollback releases the slot"
         );
@@ -2903,7 +3228,10 @@ mod tests {
         // The external activation's counter holds the lane's read URLs
         // (exact-string dedup, first-seen order) — written back after the
         // loop; the main-lane dispatch (call-1) never counted.
-        let registry = controller.activations.lock().unwrap();
+        let registry = controller
+            .activations
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let act = registry
             .states
             .get(&SubagentRole::ExternalRetrieval)
@@ -2969,7 +3297,10 @@ mod tests {
 
         // auto-close：第二次派发是新激活（fresh id、revision 0），候选
         // 计数从 1/8 重新起算——registry 里是最新激活（b.example）。
-        let registry = controller.activations.lock().unwrap();
+        let registry = controller
+            .activations
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let act = registry
             .states
             .get(&SubagentRole::ExternalRetrieval)
@@ -3031,7 +3362,10 @@ mod tests {
         // The external activation's counter holds the lane's fetched URLs
         // (exact-string dedup, first-seen order) — written back after the
         // loop; the main-lane dispatch (call-1) never counted.
-        let registry = controller.activations.lock().unwrap();
+        let registry = controller
+            .activations
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let act = registry
             .states
             .get(&SubagentRole::ExternalRetrieval)
@@ -3099,7 +3433,10 @@ mod tests {
 
         // auto-close：第二次派发是新激活（fresh id、revision 0），候选
         // 计数从 1/8 重新起算——registry 里是最新激活（b.example）。
-        let registry = controller.activations.lock().unwrap();
+        let registry = controller
+            .activations
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let act = registry
             .states
             .get(&SubagentRole::ExternalRetrieval)
@@ -3852,7 +4189,10 @@ mod tests {
     impl ModelGateway for ScriptThenHangGateway {
         async fn generate(&self, request: ModelRequest) -> Result<ModelResponse, GatewayError> {
             let next = {
-                let mut guard = self.script.lock().unwrap();
+                let mut guard = self
+                    .script
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
                 guard.pop_front()
             };
             match next {
@@ -3868,11 +4208,13 @@ mod tests {
         }
     }
 
-    /// RETRIEVAL-ORCHESTRATION-MECHANICAL 0k (2026-08-30)：单次检索派发
-    /// 墙钟预算耗尽 → 子代理 loop 被丢弃、激活以 `subagent_timeout` 收口、
-    /// 主 run 继续正常结束。
+    /// 0ar S2-D2（2026-09-19，检索批次回送设计 §4）：单批墙钟到点 →
+    /// **部分证据正常交回**——激活以 `dispatch_wallclock_bound` 收口
+    /// （必带 assessment_id＋result_digest，判据 1），主车道拿到
+    /// 「已得计数＋缺口＋指针」的 exit 0 工具结果（判据 3），不再以
+    /// `subagent_timeout` 失败收口。
     #[tokio::test]
-    async fn subagent_wallclock_timeout_closes_activation_and_main_continues() {
+    async fn subagent_wallclock_timeout_returns_partial_evidence_normally() {
         let dir = test_dir();
         let journal = JournalRecorder::new(dir.clone());
         let host = TestHost {
@@ -3885,9 +4227,11 @@ mod tests {
                 ..Default::default()
             }),
         };
-        // 主 #1 派发；子代理 #2 一个 read_file 工具轮；子代理 #3 挂起
-        // （脚本弹尽）→ 墙钟（150ms）触发；主 #4/#5 完成（counterexample
-        // 门需一次额外模型轮）。
+        // 主 #1 派发；子代理 #2 一个 read_file 工具轮后其第二请求挂起
+        //（脚本弹尽、弹尽即 pending）⇒ 墙钟（150ms）**确定**到点——子
+        // 代理在挂起点不可能自然结束（close reason 与时序无关）；usable
+        // 取 0 或 1（取决于 read_file 证据是否在到点前落账，动态断言）；
+        // 主 #3/#4 完成（counterexample 门需一次额外模型轮）。
         let script: std::collections::VecDeque<ScriptedResponse> = vec![
             ScriptedResponse::tool_calls(vec![tool_call("retrieve_project_docs", "call-1")]),
             ScriptedResponse::tool_calls(vec![tool_call("read_file", "call-s1")]),
@@ -3924,12 +4268,46 @@ mod tests {
                 .payload
                 .get("terminal_reason")
                 .and_then(|v| v.as_str()),
-            Some("subagent_timeout"),
+            Some("dispatch_wallclock_bound"),
             "{:?}",
             event_types(&dir)
         );
-        // 主车道派发错误恰 1 次（error 精确匹配——旧断言 contains("wallclock")
-        // 会把主车道错误与合成收口混计，2026-08-31 审查处理 N3 修正）。
+        // 判据 1：`dispatch_wallclock_bound` 必带 assessment 链（已得计数
+        // ＋缺口经 assessment 携带）——schema allOf 的实现面投影。
+        assert!(close.payload.get("assessment_id").is_some());
+        assert!(close.payload.get("result_digest").is_some());
+        let assessment = events
+            .iter()
+            .find(|e| e.event_type == EventType::InformationSufficiencyAssessment)
+            .expect("assessment on the wallclock path");
+        // 已得计数（宽口径；0 或 1 取决于 read_file 证据是否在到点前落账
+        // ——动态断言）＋缺口字段（判据 1：missing = target − usable）。
+        let usable = assessment
+            .payload
+            .get("usable_source_count")
+            .and_then(|v| v.as_u64())
+            .expect("usable_source_count present");
+        assert!(usable <= 1, "usable={usable}");
+        let gap = assessment
+            .payload
+            .get("sufficiency_gap")
+            .expect("gap on the wallclock path");
+        assert_eq!(gap.get("target"), Some(&serde_json::json!(5)));
+        assert_eq!(
+            gap.get("missing"),
+            Some(&serde_json::json!(5u64.saturating_sub(usable)))
+        );
+        assert!(gap.get("retrieval_calls").is_some());
+        assert!(
+            assessment.payload["reason_codes"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|c| c == "dispatch_wallclock_bound")
+        );
+        // 主车道派发结果是**正常交回**（exit 0、部分证据文本），不是
+        // 失败臂——旧的 `retrieval subagent wallclock exceeded` 错误不再
+        // 出现。
         let main_failed = events
             .iter()
             .filter(|e| {
@@ -3939,7 +4317,18 @@ mod tests {
                         == Some("retrieval subagent wallclock exceeded")
             })
             .count();
-        assert_eq!(main_failed, 1, "{:?}", event_types(&dir));
+        assert_eq!(main_failed, 0, "{:?}", event_types(&dir));
+        let dispatched = events
+            .iter()
+            .find(|e| {
+                e.event_type == EventType::ToolCompleted
+                    && e.payload.get("call_id").and_then(|v| v.as_str()) == Some("call-1")
+            })
+            .expect("dispatch tool completed");
+        assert_eq!(
+            dispatched.payload.get("exit_code"),
+            Some(&serde_json::json!(0))
+        );
         // 子代理侧合成收口（在途工具中断）至多 1 次：是否命中取决于超时
         // 瞬间子代理是否仍有在途工具，属时序相关合法形态，不作硬断言
         // （0 或 1 均正确——read_file 在 150 ms 内完成则无在途工具）。
@@ -3960,6 +4349,436 @@ mod tests {
                 .any(|e| e.event_type == EventType::RunFinished),
             "{:?}",
             event_types(&dir)
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// 0ar S2-D1（设计 §3.1/§3.4，判据 1/5）：宽口径可用证据满阈值（5）
+    /// ⇒ β 收尾——下一轮工具面机械收空、唯一收尾回合产出结果总结，激活
+    /// 以 `evidence_threshold_met` 正常收口。
+    #[tokio::test]
+    async fn threshold_close_returns_summary_when_five_usable_sources() {
+        let dir = test_dir();
+        let journal = JournalRecorder::new(dir.clone());
+        let host = SeqOutputHost {
+            journal,
+            outputs: std::sync::Mutex::new(
+                (0..5)
+                    .map(|i| format!("第 {i} 号来源的独特正文内容——去重键各不相同"))
+                    .collect(),
+            ),
+        };
+        // 主 #1 派发；子代理 #2 五个 read_file（5 条**互异** full_text 证据
+        // ——宽口径按 content_sha256 去重，同内容只计 1）；
+        // 批末间隙武装 β 收尾 → 子代理 #3 为收尾回合（工具面收空的总结）；
+        // 主 #4/#5 完成（counterexample 门一次）。
+        let script: std::collections::VecDeque<ScriptedResponse> = vec![
+            ScriptedResponse::tool_calls(vec![tool_call("retrieve_project_docs", "call-1")]),
+            ScriptedResponse::tool_calls(vec![
+                tool_call("read_file", "call-s1"),
+                tool_call("read_file", "call-s2"),
+                tool_call("read_file", "call-s3"),
+                tool_call("read_file", "call-s4"),
+                tool_call("read_file", "call-s5"),
+            ]),
+            ScriptedResponse::text("[DOC] a.md\n本批结果总结"),
+            ScriptedResponse::text("完成"),
+            ScriptedResponse::text("完成"),
+        ]
+        .into();
+        let fake = Arc::new(FakeProvider::new(script.into_iter().collect()));
+        let controller = with_retrieval_enabled(AgentLoopController::with_gateway(
+            Arc::clone(&fake) as Arc<dyn ModelGateway>,
+        ));
+        controller
+            .run_turn(
+                &host,
+                "查找项目文档",
+                "RUN-THRESH",
+                MANIFEST,
+                0,
+                None,
+                None,
+                None,
+            )
+            .await
+            .unwrap();
+
+        let events = events(&dir);
+        let close = events
+            .iter()
+            .find(|e| e.event_type == EventType::RetrievalCloseRecord)
+            .expect("close record");
+        assert_eq!(
+            close
+                .payload
+                .get("terminal_reason")
+                .and_then(|v| v.as_str()),
+            Some("evidence_threshold_met"),
+            "{:?}",
+            event_types(&dir)
+        );
+        let assessment = events
+            .iter()
+            .find(|e| e.event_type == EventType::InformationSufficiencyAssessment)
+            .expect("assessment");
+        assert_eq!(
+            assessment.payload.get("usable_source_count"),
+            Some(&serde_json::json!(5))
+        );
+        // 可用计数已达标 ⇒ 无缺口字段。
+        assert!(assessment.payload.get("sufficiency_gap").is_none());
+        // 收尾回合的模型请求工具面为空（机械收空，β 形态），且注入块在
+        // 消息面（FakeProvider 捕获请求可核）。
+        let received = fake.received_requests();
+        let close_round = received
+            .iter()
+            .find(|r| {
+                r.messages.iter().any(|m| {
+                    m.role == crate::gateway::model::Role::User
+                        && m.content.contains("检索批次收尾")
+                })
+            })
+            .expect("close round request captured");
+        assert!(
+            close_round.tools.is_empty(),
+            "close round must run with an emptied tool face"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// 0ar S2-D1（设计 §3.7）：提前交付——不满 5 条、显式标记＋证据指针
+    /// ⇒ `subagent_early_delivery`；缺指针 fail-open 按普通收尾＋anomaly
+    /// 码（判据 7 的指针要求）。
+    #[tokio::test]
+    async fn early_delivery_marker_parses_to_dedicated_close_reason() {
+        let dir = test_dir();
+        let journal = JournalRecorder::new(dir.clone());
+        let host = TestHost {
+            journal,
+            tool_result: Some(ToolResult {
+                output: "ok".to_string(),
+                exit_code: Some(0),
+                output_encoding: None,
+                structured: None,
+                ..Default::default()
+            }),
+        };
+        // 主 #1 派发；子代理 #2 一个 read_file（1 条证据）、#3 以带指针的
+        // 提前交付声明收尾；主 #4/#5 完成。
+        let script: std::collections::VecDeque<ScriptedResponse> = vec![
+            ScriptedResponse::tool_calls(vec![tool_call("retrieve_project_docs", "call-1")]),
+            ScriptedResponse::tool_calls(vec![tool_call("read_file", "call-s1")]),
+            ScriptedResponse::text("[DOC] a.md\n两处即够\n[EARLY_DELIVERY] ledger SRC-001"),
+            ScriptedResponse::text("完成"),
+            ScriptedResponse::text("完成"),
+        ]
+        .into();
+        let gateway = Arc::new(FakeProvider::new(script.into_iter().collect()));
+        let controller = with_retrieval_enabled(AgentLoopController::with_gateway(Arc::clone(
+            &gateway,
+        )
+            as Arc<dyn ModelGateway>));
+        controller
+            .run_turn(
+                &host,
+                "查找项目文档",
+                "RUN-EARLY",
+                MANIFEST,
+                0,
+                None,
+                None,
+                None,
+            )
+            .await
+            .unwrap();
+
+        let ev1 = events(&dir);
+        let close = ev1
+            .iter()
+            .find(|e| e.event_type == EventType::RetrievalCloseRecord)
+            .expect("close record");
+        assert_eq!(
+            close
+                .payload
+                .get("terminal_reason")
+                .and_then(|v| v.as_str()),
+            Some("subagent_early_delivery"),
+            "{:?}",
+            event_types(&dir)
+        );
+        let assessment = ev1
+            .iter()
+            .find(|e| e.event_type == EventType::InformationSufficiencyAssessment)
+            .expect("assessment");
+        assert_eq!(
+            assessment.payload.get("usable_source_count"),
+            Some(&serde_json::json!(1))
+        );
+        let gap = assessment.payload.get("sufficiency_gap").unwrap();
+        assert_eq!(gap.get("missing"), Some(&serde_json::json!(4)));
+
+        // 反例：标记在场但指针为空 ⇒ fail-open 普通收尾＋anomaly 码。
+        let dir2 = test_dir();
+        let journal2 = JournalRecorder::new(dir2.clone());
+        let host2 = TestHost {
+            journal: journal2,
+            tool_result: Some(ToolResult {
+                output: "ok".to_string(),
+                exit_code: Some(0),
+                output_encoding: None,
+                structured: None,
+                ..Default::default()
+            }),
+        };
+        let script2: std::collections::VecDeque<ScriptedResponse> = vec![
+            ScriptedResponse::tool_calls(vec![tool_call("retrieve_project_docs", "call-1")]),
+            ScriptedResponse::text("[DOC] a.md\n想提前交付但没给指针\n[EARLY_DELIVERY]"),
+            ScriptedResponse::text("完成"),
+            ScriptedResponse::text("完成"),
+        ]
+        .into();
+        let gateway2 = FakeProvider::new(script2.into_iter().collect());
+        let controller2 =
+            with_retrieval_enabled(AgentLoopController::with_gateway(Arc::new(gateway2)));
+        controller2
+            .run_turn(
+                &host2,
+                "查找项目文档",
+                "RUN-EARLY2",
+                MANIFEST,
+                0,
+                None,
+                None,
+                None,
+            )
+            .await
+            .unwrap();
+        let ev2 = events(&dir2);
+        let close2 = ev2
+            .iter()
+            .find(|e| e.event_type == EventType::RetrievalCloseRecord)
+            .expect("close record");
+        assert_eq!(
+            close2
+                .payload
+                .get("terminal_reason")
+                .and_then(|v| v.as_str()),
+            Some("auto_close"),
+            "{:?}",
+            event_types(&dir2)
+        );
+        let assessment2 = ev2
+            .iter()
+            .find(|e| e.event_type == EventType::InformationSufficiencyAssessment)
+            .expect("assessment");
+        assert!(
+            assessment2.payload["reason_codes"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|c| c == "early_delivery_missing_pointer")
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+        let _ = std::fs::remove_dir_all(&dir2);
+    }
+
+    /// 0ar S2-D3（设计 §5.4，判据 6）：同轮 2 个检索调用合并为单激活多
+    /// query——committed 结果 query_summary 恰 2 条（逐 query 一条、带
+    /// 逐 query 可用计数），被合并调用以合并回执交回（真实被服务）。
+    #[tokio::test]
+    async fn same_round_retrieval_calls_merge_into_one_activation() {
+        let dir = test_dir();
+        let journal = JournalRecorder::new(dir.clone());
+        let host = TestHost {
+            journal,
+            tool_result: Some(ToolResult {
+                output: "ok".to_string(),
+                exit_code: Some(0),
+                output_encoding: None,
+                structured: None,
+                ..Default::default()
+            }),
+        };
+        let mk = |name: &str, id: &str, q: &str| ToolCall {
+            name: name.to_string(),
+            arguments: serde_json::json!({ "query": q }),
+            call_id: id.to_string(),
+        };
+        // 主 #1 同轮两个 web_search；子代理 #2 立即文本收尾（零工具轮）；
+        // 主 #3/#4 完成。
+        let script: std::collections::VecDeque<ScriptedResponse> = vec![
+            ScriptedResponse::tool_calls(vec![
+                mk("web_search", "call-1", "q1"),
+                mk("web_search", "call-2", "q2"),
+            ]),
+            ScriptedResponse::text("[SOURCE] https://example.com/a"),
+            ScriptedResponse::text("完成"),
+            ScriptedResponse::text("完成"),
+        ]
+        .into();
+        let gateway = Arc::new(FakeProvider::new(script.into_iter().collect()));
+        let controller = with_retrieval_enabled(AgentLoopController::with_gateway(Arc::clone(
+            &gateway,
+        )
+            as Arc<dyn ModelGateway>));
+        controller
+            .run_turn(
+                &host,
+                "并发检索",
+                "RUN-MERGE",
+                MANIFEST,
+                0,
+                None,
+                None,
+                None,
+            )
+            .await
+            .unwrap();
+
+        let events = events(&dir);
+        // 单激活：RetrievalResultCommitted 恰 1 次。
+        assert_eq!(
+            events
+                .iter()
+                .filter(|e| e.event_type == EventType::RetrievalResultCommitted)
+                .count(),
+            1,
+            "{:?}",
+            event_types(&dir)
+        );
+        let committed = events
+            .iter()
+            .find(|e| e.event_type == EventType::RetrievalResultCommitted)
+            .unwrap();
+        let query_summary = committed.payload["query_summary"].as_array().unwrap();
+        assert_eq!(query_summary.len(), 2, "one entry per merged query");
+        assert_eq!(query_summary[0]["query_text"], serde_json::json!("q1"));
+        assert_eq!(query_summary[1]["query_text"], serde_json::json!("q2"));
+        assert!(
+            query_summary
+                .iter()
+                .all(|q| q.get("usable_source_count").is_some())
+        );
+        // 被合并调用有真实服务轨迹（ToolStarted+ToolCompleted 成对）。
+        for cid in ["call-1", "call-2"] {
+            assert!(
+                events.iter().any(|e| {
+                    e.event_type == EventType::ToolStarted
+                        && e.payload.get("call_id").and_then(|v| v.as_str()) == Some(cid)
+                }),
+                "missing ToolStarted for {cid}"
+            );
+            assert!(
+                events.iter().any(|e| {
+                    e.event_type == EventType::ToolCompleted
+                        && e.payload.get("call_id").and_then(|v| v.as_str()) == Some(cid)
+                        && e.payload.get("exit_code") == Some(&serde_json::json!(0))
+                }),
+                "missing merged completion for {cid}"
+            );
+        }
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// 0ar S2-D3（设计 §5.4/§5.5，判据 4）：同轮 4 个检索调用——前 3 个
+    /// 合并为单激活、第 4 个**未派发拒绝**（cause=
+    /// `retrieval_dispatch_deferred_one_per_round`、无 ToolStarted），
+    /// 下一轮开头注入一次性重述。
+    #[tokio::test]
+    async fn overflow_retrieval_calls_are_deferred_without_tool_started() {
+        let dir = test_dir();
+        let journal = JournalRecorder::new(dir.clone());
+        let host = TestHost {
+            journal,
+            tool_result: Some(ToolResult {
+                output: "ok".to_string(),
+                exit_code: Some(0),
+                output_encoding: None,
+                structured: None,
+                ..Default::default()
+            }),
+        };
+        let mk = |name: &str, id: &str, q: &str| ToolCall {
+            name: name.to_string(),
+            arguments: serde_json::json!({ "query": q }),
+            call_id: id.to_string(),
+        };
+        // 主 #1 同轮四个 web_search（上限 3 → 第 4 个溢出）；子代理 #2
+        // 立即文本收尾；主 #3 文本完成（其请求应携带一次性重述）；#4 反例
+        // 门补轮。
+        let script: std::collections::VecDeque<ScriptedResponse> = vec![
+            ScriptedResponse::tool_calls(vec![
+                mk("web_search", "call-1", "q1"),
+                mk("web_search", "call-2", "q2"),
+                mk("web_search", "call-3", "q3"),
+                mk("web_search", "call-4", "q4"),
+            ]),
+            ScriptedResponse::text("[SOURCE] https://example.com/x"),
+            ScriptedResponse::text("完成"),
+            ScriptedResponse::text("完成"),
+        ]
+        .into();
+        let fake = Arc::new(FakeProvider::new(script.into_iter().collect()));
+        let controller = with_retrieval_enabled(AgentLoopController::with_gateway(
+            Arc::clone(&fake) as Arc<dyn ModelGateway>,
+        ));
+        controller
+            .run_turn(
+                &host,
+                "并发检索",
+                "RUN-OVERFLOW",
+                MANIFEST,
+                0,
+                None,
+                None,
+                None,
+            )
+            .await
+            .unwrap();
+
+        let events = events(&dir);
+        let committed = events
+            .iter()
+            .find(|e| e.event_type == EventType::RetrievalResultCommitted)
+            .expect("committed merged result");
+        let query_summary = committed.payload["query_summary"].as_array().unwrap();
+        assert_eq!(query_summary.len(), 3, "merge cap = 3 queries");
+        // 第 4 个调用：无 ToolStarted（判据 4）＋无 ToolStarted 的拒绝
+        // 完成事件（cause 稳定码）。
+        assert!(
+            !events.iter().any(|e| {
+                e.event_type == EventType::ToolStarted
+                    && e.payload.get("call_id").and_then(|v| v.as_str()) == Some("call-4")
+            }),
+            "deferred call must not have a ToolStarted: {:?}",
+            event_types(&dir)
+        );
+        let deferred = events
+            .iter()
+            .find(|e| {
+                e.event_type == EventType::ToolCompleted
+                    && e.payload.get("call_id").and_then(|v| v.as_str()) == Some("call-4")
+            })
+            .expect("deferred completion event");
+        assert_eq!(
+            deferred.payload.get("error"),
+            Some(&serde_json::json!(
+                "retrieval_dispatch_deferred_one_per_round"
+            ))
+        );
+        // 一次性重述进入下一轮主请求消息面（每轮一条）。
+        let received = fake.received_requests();
+        assert!(
+            received.iter().any(|r| r.messages.iter().any(|m| {
+                m.role == crate::gateway::model::Role::User
+                    && m.content.contains("[上轮检索未派发]")
+            })),
+            "one-shot restatement must ride the next request"
         );
 
         let _ = std::fs::remove_dir_all(&dir);

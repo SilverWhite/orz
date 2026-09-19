@@ -118,7 +118,12 @@ impl PlanStateMachine {
         execution_policy: Option<&str>,
     ) -> Result<PlanApprovalRecord, AssuranceError> {
         self.require_awaiting()?;
-        let plan_id = self.current_plan.as_ref().unwrap().plan_id.clone();
+        let plan_id = self
+            .current_plan
+            .as_ref()
+            .expect("current_plan present (require_awaiting guards None)")
+            .plan_id
+            .clone();
         let record = PlanApprovalRecord {
             plan_id,
             decision: PlanApprovalDecision::Approve,
@@ -143,7 +148,12 @@ impl PlanStateMachine {
     pub fn revise(&mut self, authority: &str) -> Result<PlanApprovalRecord, AssuranceError> {
         self.require_awaiting()?;
         let record = PlanApprovalRecord {
-            plan_id: self.current_plan.as_ref().unwrap().plan_id.clone(),
+            plan_id: self
+                .current_plan
+                .as_ref()
+                .expect("current_plan present (require_awaiting guards None)")
+                .plan_id
+                .clone(),
             decision: PlanApprovalDecision::Revise,
             authority: authority.to_string(),
             timestamp: chrono::Utc::now().to_rfc3339(),
@@ -165,7 +175,12 @@ impl PlanStateMachine {
     pub fn reject(&mut self, authority: &str) -> Result<PlanApprovalRecord, AssuranceError> {
         self.require_awaiting()?;
         let record = PlanApprovalRecord {
-            plan_id: self.current_plan.as_ref().unwrap().plan_id.clone(),
+            plan_id: self
+                .current_plan
+                .as_ref()
+                .expect("current_plan present (require_awaiting guards None)")
+                .plan_id
+                .clone(),
             decision: PlanApprovalDecision::Reject,
             authority: authority.to_string(),
             timestamp: chrono::Utc::now().to_rfc3339(),

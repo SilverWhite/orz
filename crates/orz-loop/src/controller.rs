@@ -586,6 +586,12 @@ pub struct AgentLoopController {
     /// authority for final-answer `[来源: source_id]` / URL / document
     /// identity markers. Per-run: cleared at run_turn_inner start.
     pub(crate) run_source_ledgers: Mutex<Vec<serde_json::Value>>,
+    /// 0ar S2（2026-09-19，检索批次回送设计 §3.7/§10-5）：连续提前交付
+    /// streak——连续 N 次「有效提前交付且可用计数 <5」达到观测线即在
+    /// assessment `reason_codes` 落 `early_delivery_streak` anomaly 码
+    /// （可审计、不阻断）；阈值/护栏/墙钟正常收尾与普通 auto_close 均把
+    /// streak 清零。Per-run：run_turn_inner 起点复位。
+    pub(crate) retrieval_early_delivery_streak: std::sync::atomic::AtomicU32,
     /// FUS-RETRIEVAL-MECH P0-B step 5 review fix (2026-08-14): run-unique
     /// source_id allocation — the final-answer verifier binds `SRC-###` to
     /// THIS run's committed ledgers, and per-ledger renumbering would make
@@ -894,6 +900,7 @@ impl AgentLoopController {
             evidence: Mutex::new(Vec::new()),
             main_evidence: Mutex::new(Vec::new()),
             run_source_ledgers: Mutex::new(Vec::new()),
+            retrieval_early_delivery_streak: std::sync::atomic::AtomicU32::new(0),
             next_source_seq: Mutex::new(0),
             source_weighting:
                 orz_assurance::source_weighting::SourceWeightConfig::from_env_or_default(),
@@ -1505,6 +1512,7 @@ impl AgentLoopController {
             evidence: Mutex::new(Vec::new()),
             main_evidence: Mutex::new(Vec::new()),
             run_source_ledgers: Mutex::new(Vec::new()),
+            retrieval_early_delivery_streak: std::sync::atomic::AtomicU32::new(0),
             next_source_seq: Mutex::new(0),
             source_weighting:
                 orz_assurance::source_weighting::SourceWeightConfig::from_env_or_default(),
@@ -2918,6 +2926,9 @@ impl AgentLoopController {
         *self.main_evidence.lock().unwrap() = Vec::new();
         *self.run_source_ledgers.lock().unwrap() = Vec::new();
         *self.next_source_seq.lock().unwrap() = 0;
+        // 0ar S2：连续提前交付 streak 随 run 复位（run 内观测语义）。
+        self.retrieval_early_delivery_streak
+            .store(0, std::sync::atomic::Ordering::Relaxed);
         // PULL 自描述 (2026-08-31, P2-11 第 1 项 / 设计 §3): 读取游标随
         // run 复位——「自上次读取以来」增量是 run 内语义（LIF 参考系同
         // 纪律：每独立 run 从头确定）。
@@ -3163,7 +3174,7 @@ impl AgentLoopController {
         {
             tool_defs.push(ToolDef {
                 name: crate::blackboard::BLACKBOARD_WRITE_TOOL_NAME.to_string(),
-                description: "Write a note to the blackboard — the fold-proof                      memory: blackboard content survives context folding, and at                      the 920K compression only blackboard content plus the                      retention tail survives. `section` is \"plan\" (task plan +                      key intermediate conclusions) or \"notes\" (free-form working                      notes). Single write is capped at 8K chars — split longer                      content across writes. The live watermark 【x.xM/10M】 rides                      every blackboard_read response header. Writes are stamped                      (round, domain) and journaled; mechanical partitions                      (edits/exec/actions/processes/temporal/session) are NOT                      writable.".to_string(),
+ description: "Write a note to the blackboard — the fold-proof durable memory: blackboard content survives context folding and compaction — at the 500K hard truncation (T1) only the current slider window survives, so plan/notes on the blackboard remain recoverable via blackboard_read. `section` is \"plan\" (task plan + key intermediate conclusions) or \"notes\" (free-form working notes). Single write is capped at 8K chars — split longer content across writes. The live watermark 【x.xM/10M】 rides every blackboard_read response header. Writes are stamped (round, domain) and journaled; mechanical partitions (edits/exec/actions/processes/temporal/session) are NOT writable.".to_string(),
                 parameters: serde_json::json!({
                     "type": "object",
                     "properties": {
@@ -3565,6 +3576,9 @@ impl AgentLoopController {
                 session_id: self.session_id.as_deref(),
                 // 0k 审查处理 (P3-4)：主车道无子代理墙钟超时收口，槽不启用。
                 in_flight_tools: None,
+                // 0ar S2：检索调用计数仅检索车道启用；主车道证据另计
+                //（main_evidence），倒数不落主面。
+                retrieval_calls: None,
             },
             self,
             writer,

@@ -1426,7 +1426,9 @@ impl RestoreInflightGuard {
         runs: &Arc<Mutex<HashMap<String, RunInFlight>>>,
         session_id: &str,
     ) -> Result<Self, String> {
-        let mut guard = runs.lock().unwrap();
+        let mut guard = runs
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         if guard.contains_key(session_id) {
             return Err(session_id.to_string());
         }
@@ -1441,7 +1443,10 @@ impl RestoreInflightGuard {
 
 impl Drop for RestoreInflightGuard {
     fn drop(&mut self) {
-        self.runs.lock().unwrap().remove(&self.session);
+        self.runs
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .remove(&self.session);
     }
 }
 
@@ -1493,7 +1498,10 @@ impl AcpServer {
     /// after construction, before any turn; the transport must bound its own
     /// wait and fail closed (the hub path has no manager-side timeout).
     pub fn set_hub_permission(&self, hub: Arc<dyn PermissionHookTransport>) {
-        *self.hub_permission.lock().unwrap() = Some(hub);
+        *self
+            .hub_permission
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(hub);
     }
 
     /// Cancel the run currently in flight for a session (ACP `session/cancel`
@@ -1507,12 +1515,18 @@ impl AcpServer {
     /// return `false`.
     pub fn cancel_current_run(&self, session_id: &str) -> bool {
         {
-            let map = self.runs.lock().unwrap();
+            let map = self
+                .runs
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
             if let Some(RunInFlight::Prompt(token)) = map.get(session_id) {
                 token.cancel();
                 drop(map);
                 // The live-token path supersedes any remembered cancel.
-                self.pending_cancels.lock().unwrap().remove(session_id);
+                self.pending_cancels
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .remove(session_id);
                 return true;
             }
         }
@@ -1529,12 +1543,18 @@ impl AcpServer {
     /// Set the outbound ACP gateway (wired by the stdio server; consumed by
     /// the permission bridge).
     pub fn set_gateway(&self, sender: AcpAgentGatewaySender) {
-        *self.gateway.lock().unwrap() = Some(sender);
+        *self
+            .gateway
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(sender);
     }
 
     /// Outbound gateway, if interactive mode is active.
     pub fn gateway(&self) -> Option<AcpAgentGatewaySender> {
-        self.gateway.lock().unwrap().clone()
+        self.gateway
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone()
     }
 
     /// Handle a `session/new` request.
@@ -1614,20 +1634,23 @@ impl AcpServer {
         if continuation.session_started_at.is_none() {
             continuation.session_started_at = Some(now_epoch_secs());
         }
-        self.sessions.lock().unwrap().insert(
-            session_id.to_string(),
-            StoredSession {
-                base_dir: base,
-                trust_policy,
-                policy,
-                prompt_count: 0,
-                restore_count: 0,
-                orientation: Some(orientation),
-                activation_snapshot: Some(activation_snapshot),
-                browser: None,
-                continuation: Some(continuation),
-            },
-        );
+        self.sessions
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .insert(
+                session_id.to_string(),
+                StoredSession {
+                    base_dir: base,
+                    trust_policy,
+                    policy,
+                    prompt_count: 0,
+                    restore_count: 0,
+                    orientation: Some(orientation),
+                    activation_snapshot: Some(activation_snapshot),
+                    browser: None,
+                    continuation: Some(continuation),
+                },
+            );
 
         Ok(serde_json::json!({
             "session_id": session_id,
@@ -1647,7 +1670,10 @@ impl AcpServer {
         live: crate::local_browser::SharedBrowser,
     ) {
         if live.ready()
-            && let Some(session) = sessions.lock().unwrap().get_mut(session_id)
+            && let Some(session) = sessions
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .get_mut(session_id)
         {
             session.browser = Some(live);
         }
@@ -1669,7 +1695,10 @@ impl AcpServer {
         // a fresh run dir — reusing a failed run's dir would append to its
         // journal and corrupt the chain (2026-08-05 orz-tui review P2-2).
         let (base_dir, trust_policy, policy, prompt_number) = {
-            let mut sessions = self.sessions.lock().unwrap();
+            let mut sessions = self
+                .sessions
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
             let session = sessions
                 .get_mut(session_id)
                 .ok_or_else(|| AcpError::SessionNotFound(session_id.to_string()))?;
@@ -1706,14 +1735,21 @@ impl AcpServer {
         // (slice #7 P3 — the TUI guards `running`, stdio is sequential).
         let cancel = tokio_util::sync::CancellationToken::new();
         {
-            let mut map = self.runs.lock().unwrap();
+            let mut map = self
+                .runs
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
             if matches!(map.get(session_id), Some(RunInFlight::Restore)) {
                 return Err(AcpError::InvalidRequest(format!(
                     "prompt rejected: a snapshot restore is in flight for session {session_id}"
                 )));
             }
             map.insert(session_id.to_string(), RunInFlight::Prompt(cancel.clone()));
-            if let Some(stamped) = self.pending_cancels.lock().unwrap().remove(session_id)
+            if let Some(stamped) = self
+                .pending_cancels
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .remove(session_id)
                 && stamped.elapsed() < PENDING_CANCEL_WINDOW
             {
                 // A cancel within the bootstrap window — the run starts
@@ -1728,7 +1764,10 @@ impl AcpServer {
         // next successful prompt.
         let bootstrap = bootstrap_session(&run_id, Some(base_dir.clone()), trust_policy).await;
         if bootstrap.is_err() {
-            self.runs.lock().unwrap().remove(session_id);
+            self.runs
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .remove(session_id);
             // B3 复审 P2-3：close 若已在 run 注册后发生（归档票已挂），
             // bootstrap 失败中止 run 时补触发存档。
             self.take_deferred_archive(session_id);
@@ -1759,7 +1798,10 @@ impl AcpServer {
         // resets", ADR-0010 §4.2). The sidecar is the fallback for a session
         // created before this slice (`None`): resume from it, else start 0.
         let mut orientation = {
-            let mut sessions = self.sessions.lock().unwrap();
+            let mut sessions = self
+                .sessions
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
             let Some(session) = sessions.get_mut(session_id) else {
                 // B3 复审 P2-3：close 发生在 run 注册后、取态前——run 中止，
                 // 补触发 deferred 存档（读最近一次成功持久化的 sidecar）。
@@ -1776,7 +1818,10 @@ impl AcpServer {
         // discipline: only after every fallible step, so an early `?` never
         // leaves the session with a taken-out snapshot.
         let mut activation_snapshot = {
-            let mut sessions = self.sessions.lock().unwrap();
+            let mut sessions = self
+                .sessions
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
             let Some(session) = sessions.get_mut(session_id) else {
                 self.take_deferred_archive(session_id);
                 return Err(AcpError::SessionNotFound(session_id.to_string()));
@@ -1793,7 +1838,10 @@ impl AcpServer {
         // session with a taken-out continuation (the next prompt would
         // silently restart from zero and the sidecar would be overwritten).
         let mut continuation = {
-            let mut sessions = self.sessions.lock().unwrap();
+            let mut sessions = self
+                .sessions
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
             let Some(session) = sessions.get_mut(session_id) else {
                 self.take_deferred_archive(session_id);
                 return Err(AcpError::SessionNotFound(session_id.to_string()));
@@ -1929,7 +1977,12 @@ impl AcpServer {
         // run) to the sidecar, so the next prompt / process restart resumes
         // counting (§4.2).
         persist_orientation_sidecar(&base_dir, session_id, &orientation);
-        if let Some(session) = self.sessions.lock().unwrap().get_mut(session_id) {
+        if let Some(session) = self
+            .sessions
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .get_mut(session_id)
+        {
             session.orientation = Some(orientation);
         }
         // GAP-RETRIEVAL-TOOLS + 0t: persist the activation snapshot
@@ -1958,7 +2011,12 @@ impl AcpServer {
             activation_snapshot.external_ret = Some(bb.external_ret.clone());
         }
         persist_activation_sidecar(&base_dir, session_id, &activation_snapshot);
-        if let Some(session) = self.sessions.lock().unwrap().get_mut(session_id) {
+        if let Some(session) = self
+            .sessions
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .get_mut(session_id)
+        {
             session.activation_snapshot = Some(activation_snapshot);
         }
         // GAP-CONVERSATION-RESTORE + P2-13 B1: persist the full continuation
@@ -2012,7 +2070,12 @@ impl AcpServer {
             // 失败 run 不更新——SUCCESS-ONLY 同疲劳档位）。
             full.context_scale_notified = controller.context_scale_notified_keys();
             persist_conversation_sidecar(&base_dir, &full);
-            if let Some(session) = self.sessions.lock().unwrap().get_mut(session_id) {
+            if let Some(session) = self
+                .sessions
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .get_mut(session_id)
+            {
                 session.continuation = Some(full);
             }
         }
@@ -2020,7 +2083,10 @@ impl AcpServer {
         // Every path: release the run token here (stale cancels become
         // no-ops) — after persist, so the close-with-active-run detection in
         // `close_session` stays accurate through the whole tail window.
-        self.runs.lock().unwrap().remove(session_id);
+        self.runs
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .remove(session_id);
         // B3 复审 P2-3：close 在 run 进行中发生时，归档票在此消费（run 已
         // 收尾、成功路径的 sidecar 已同步落盘；失败/取消路径不更新
         // sidecar，存档最近一次成功内容）。会话未被 close（无票）= 无操作。
@@ -2030,7 +2096,11 @@ impl AcpServer {
         // 追加一次**——长单对话「不结束就没有存档」的缺口由此闭合。判据机械
         // （全量会话估算 chars/2，非视图刻度）、单调水位幂等；best-effort：
         // 水位只在包写成功后推进，失败留给下次 run 尾重判。
-        if let Some(session) = self.sessions.lock().unwrap().get(session_id)
+        if let Some(session) = self
+            .sessions
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .get(session_id)
             && let Some(continuation) = session.continuation.as_ref()
             && incremental_archive_due(&session.base_dir, session_id, continuation)
         {
@@ -2089,13 +2159,21 @@ impl AcpServer {
         user_input: &str,
     ) -> Result<String, AcpError> {
         let (base_dir, trust_policy) = {
-            let sessions = self.sessions.lock().unwrap();
+            let sessions = self
+                .sessions
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
             let session = sessions
                 .get(session_id)
                 .ok_or_else(|| AcpError::SessionNotFound(session_id.to_string()))?;
             (session.base_dir.clone(), session.trust_policy)
         };
-        if self.runs.lock().unwrap().contains_key(session_id) {
+        if self
+            .runs
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .contains_key(session_id)
+        {
             return Err(AcpError::InvalidRequest(
                 "grill turn rejected: a run is in flight for this session".into(),
             ));
@@ -2104,7 +2182,10 @@ impl AcpServer {
         // injected once — design §3, "会话开始"). A session switch rebinds
         // the grill session to the new session_id (at most one active).
         let (run_id, template) = {
-            let mut grill = self.grill.lock().unwrap();
+            let mut grill = self
+                .grill
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
             let suffix: String = session_id.chars().take(8).collect();
             let entry = grill.get_or_insert_with(|| GrillSession {
                 session_id: session_id.to_string(),
@@ -2155,7 +2236,10 @@ impl AcpServer {
         // would deadlock the single-threaded LocalSet). The messages are
         // taken out and written back after the turn.
         let mut messages = {
-            let mut grill = self.grill.lock().unwrap();
+            let mut grill = self
+                .grill
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
             let entry = grill
                 .as_mut()
                 .expect("grill session initialized above (single-threaded TUI)");
@@ -2171,7 +2255,10 @@ impl AcpServer {
                 // Audit record (best-effort; the JSONL is append-only
                 // Q/A/recommendation log — zero run-event schema involvement,
                 // design §3).
-                let mut grill = self.grill.lock().unwrap();
+                let mut grill = self
+                    .grill
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
                 let entry = grill.as_mut().expect("grill session still active");
                 entry.messages = messages;
                 append_grill_record(
@@ -2191,7 +2278,10 @@ impl AcpServer {
                 // (the answer is appended to the history) and the failure is
                 // audited in the JSONL. The turn counter advances so a retry
                 // gets a fresh GRILL-* dir (no duplicated seq-0 preflight).
-                let mut grill = self.grill.lock().unwrap();
+                let mut grill = self
+                    .grill
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
                 let entry = grill.as_mut().expect("grill session still active");
                 messages.push(Message {
                     role: Role::User,
@@ -2233,7 +2323,12 @@ impl AcpServer {
             ));
         }
         let response = self.run_grill_turn(session_id, GRILL_FINISH_PROMPT).await?;
-        if let Some(g) = self.grill.lock().unwrap().take() {
+        if let Some(g) = self
+            .grill
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .take()
+        {
             append_grill_terminal(&g.log_path, g.episode, &response);
         }
         Ok(response)
@@ -2284,7 +2379,10 @@ impl AcpServer {
         scope: Option<Vec<PathBuf>>,
     ) -> Result<serde_json::Value, AcpError> {
         let (base_dir, trust_policy, restore_number) = {
-            let mut sessions = self.sessions.lock().unwrap();
+            let mut sessions = self
+                .sessions
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
             let session = sessions
                 .get_mut(session_id)
                 .ok_or_else(|| AcpError::SessionNotFound(session_id.to_string()))?;
@@ -2389,7 +2487,12 @@ impl AcpServer {
 
     /// List active session IDs.
     pub fn list_sessions(&self) -> Vec<String> {
-        self.sessions.lock().unwrap().keys().cloned().collect()
+        self.sessions
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .keys()
+            .cloned()
+            .collect()
     }
 
     /// Spawn the archive task for a ticket（后台 best-effort，失败只 warn、
@@ -2413,7 +2516,12 @@ impl AcpServer {
     /// 消费 deferred 归档票并触发存档——run 收尾路径（以及注册后的早期
     /// 失败路径）调用；无票 = 无操作。
     fn take_deferred_archive(&self, session_id: &str) {
-        if let Some(ticket) = self.pending_archives.lock().unwrap().remove(session_id) {
+        if let Some(ticket) = self
+            .pending_archives
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .remove(session_id)
+        {
             Self::spawn_archive_task(ticket);
         }
     }
@@ -2426,13 +2534,19 @@ impl AcpServer {
     /// Returns `true` if the session existed and was removed.
     pub fn close_session(&self, session_id: &str) -> bool {
         let removed = {
-            let mut sessions = self.sessions.lock().unwrap();
+            let mut sessions = self
+                .sessions
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
             sessions.remove(session_id)
         };
         // 判定 close 瞬间是否仍有 run 在进行（Prompt）——必须在下面移除
         // runs token 之前检查。
         let run_in_flight = {
-            let runs = self.runs.lock().unwrap();
+            let runs = self
+                .runs
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
             matches!(runs.get(session_id), Some(RunInFlight::Prompt(_)))
         };
         // P2-13 B3（2026-09-03，ADR-0010 §14.52 / 设计 §11.3/§12 R3）：
@@ -2470,8 +2584,14 @@ impl AcpServer {
         // Release cancellation state too — a remembered cancel must not
         // outlive its session (2026-08-05 review P2-1). A stray run/restore
         // marker is dropped the same way (slice #11, P2-2).
-        self.runs.lock().unwrap().remove(session_id);
-        self.pending_cancels.lock().unwrap().remove(session_id);
+        self.runs
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .remove(session_id);
+        self.pending_cancels
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .remove(session_id);
         removed.is_some()
     }
 
@@ -2517,7 +2637,10 @@ impl AcpServer {
             &cwd,
             handle.workspace_trust,
             self.gateway(),
-            self.hub_permission.lock().unwrap().clone(),
+            self.hub_permission
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .clone(),
             policy,
         )
         .map_err(AcpError::Host)?
@@ -2954,7 +3077,10 @@ mod tests {
                     .await
                     .unwrap();
                 {
-                    let sessions = server.sessions.lock().unwrap();
+                    let sessions = server
+                        .sessions
+                        .lock()
+                        .unwrap_or_else(std::sync::PoisonError::into_inner);
                     let session = sessions.get("sess-browser-none").expect("session");
                     assert!(
                         session.browser.is_none(),
@@ -2966,7 +3092,10 @@ mod tests {
                     .await
                     .unwrap();
                 {
-                    let sessions = server.sessions.lock().unwrap();
+                    let sessions = server
+                        .sessions
+                        .lock()
+                        .unwrap_or_else(std::sync::PoisonError::into_inner);
                     let session = sessions.get("sess-browser-none").expect("session");
                     assert!(
                         session.browser.is_none(),
@@ -3001,7 +3130,10 @@ mod tests {
         assert!(!unavailable.ready());
         AcpServer::fold_back_browser(&server.sessions, "sess-fold-back", unavailable);
         {
-            let sessions = server.sessions.lock().unwrap();
+            let sessions = server
+                .sessions
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
             let session = sessions.get("sess-fold-back").expect("session");
             assert!(session.browser.is_none(), "unready handle must not seed");
         }
@@ -3010,7 +3142,10 @@ mod tests {
         let ready: crate::local_browser::SharedBrowser =
             crate::local_browser::tests::ready_stub_browser();
         {
-            let mut sessions = server.sessions.lock().unwrap();
+            let mut sessions = server
+                .sessions
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
             sessions.get_mut("sess-fold-back").expect("session").browser = Some(ready.clone());
         }
         // not-ready live 不得覆盖先前 ready 句柄。
@@ -3019,7 +3154,10 @@ mod tests {
         );
         AcpServer::fold_back_browser(&server.sessions, "sess-fold-back", unavailable2);
         {
-            let sessions = server.sessions.lock().unwrap();
+            let sessions = server
+                .sessions
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
             let session = sessions.get("sess-fold-back").expect("session");
             assert!(
                 Arc::ptr_eq(&ready, session.browser.as_ref().expect("ready handle")),
@@ -3031,7 +3169,10 @@ mod tests {
             crate::local_browser::tests::ready_stub_browser();
         AcpServer::fold_back_browser(&server.sessions, "sess-fold-back", live.clone());
         {
-            let sessions = server.sessions.lock().unwrap();
+            let sessions = server
+                .sessions
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
             let session = sessions.get("sess-fold-back").expect("session");
             assert!(
                 Arc::ptr_eq(&live, session.browser.as_ref().expect("live handle")),
@@ -3128,7 +3269,10 @@ mod tests {
                     drops: drops.clone(),
                 });
                 {
-                    let mut sessions = server.sessions.lock().unwrap();
+                    let mut sessions = server
+                        .sessions
+                        .lock()
+                        .unwrap_or_else(std::sync::PoisonError::into_inner);
                     sessions
                         .get_mut("sess-browser-lifecycle")
                         .expect("session")
@@ -3147,7 +3291,10 @@ mod tests {
                 // host 两轮 drop 后底层对象不得被释放（会话仍持同一 Arc）。
                 assert_eq!(drops.load(Ordering::SeqCst), 0, "host drop must not kill");
                 let same_handle = {
-                    let sessions = server.sessions.lock().unwrap();
+                    let sessions = server
+                        .sessions
+                        .lock()
+                        .unwrap_or_else(std::sync::PoisonError::into_inner);
                     let session = sessions.get("sess-browser-lifecycle").expect("session");
                     session.browser.clone().expect("browser handle")
                 };
@@ -3669,10 +3816,14 @@ mod tests {
             .await
             .unwrap();
         // 模拟 run 进行中（真实路径在 bootstrap 前注册 token）。
-        server.runs.lock().unwrap().insert(
-            session_id.to_string(),
-            RunInFlight::Prompt(tokio_util::sync::CancellationToken::new()),
-        );
+        server
+            .runs
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .insert(
+                session_id.to_string(),
+                RunInFlight::Prompt(tokio_util::sync::CancellationToken::new()),
+            );
 
         assert!(server.close_session(session_id));
         let suffix: String = session_id.chars().take(8).collect();
@@ -4606,10 +4757,14 @@ mod tests {
             .unwrap();
         // Simulate an in-flight prompt: a live cancellation token for the
         // session (registered at prompt start, slice #7).
-        server.runs.lock().unwrap().insert(
-            "sess-busy".into(),
-            RunInFlight::Prompt(tokio_util::sync::CancellationToken::new()),
-        );
+        server
+            .runs
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .insert(
+                "sess-busy".into(),
+                RunInFlight::Prompt(tokio_util::sync::CancellationToken::new()),
+            );
 
         let err = server
             .restore_snapshot("sess-busy", &"d".repeat(64), None)
@@ -4700,7 +4855,11 @@ mod tests {
                 );
                 assert!(
                     !matches!(
-                        server.runs.lock().unwrap().get("sess-restore-prompt"),
+                        server
+                            .runs
+                            .lock()
+                            .unwrap_or_else(std::sync::PoisonError::into_inner)
+                            .get("sess-restore-prompt"),
                         Some(RunInFlight::Prompt(_))
                     ),
                     "no run token registered on the rejected path"
@@ -4742,7 +4901,11 @@ mod tests {
             .await
             .unwrap();
         assert!(
-            !server.runs.lock().unwrap().contains_key("sess-release"),
+            !server
+                .runs
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .contains_key("sess-release"),
             "marker released after a successful restore"
         );
 
@@ -4758,7 +4921,11 @@ mod tests {
             "no false in-flight rejection after failure: {err:?}"
         );
         assert!(
-            !server.runs.lock().unwrap().contains_key("sess-release"),
+            !server
+                .runs
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .contains_key("sess-release"),
             "marker released after a failed restore"
         );
 
@@ -4799,7 +4966,11 @@ mod tests {
                 let result = server.handle_session_prompt("sess-token", "x").await;
                 assert!(result.is_err(), "bootstrap must fail: {result:?}");
                 assert!(
-                    !server.runs.lock().unwrap().contains_key("sess-token"),
+                    !server
+                        .runs
+                        .lock()
+                        .unwrap_or_else(std::sync::PoisonError::into_inner)
+                        .contains_key("sess-token"),
                     "token released on the bootstrap-failure path"
                 );
                 // A restore afterwards is NOT falsely rejected as in-flight
@@ -4948,7 +5119,10 @@ mod tests {
 
                 // A run in flight rejects a grill turn (sequencing guard).
                 {
-                    let mut runs = server.runs.lock().unwrap();
+                    let mut runs = server
+                        .runs
+                        .lock()
+                        .unwrap_or_else(std::sync::PoisonError::into_inner);
                     runs.insert(
                         "sess-grill".to_string(),
                         RunInFlight::Prompt(tokio_util::sync::CancellationToken::new()),
@@ -4959,7 +5133,11 @@ mod tests {
                     .await
                     .unwrap_err();
                 assert!(matches!(err, AcpError::InvalidRequest(_)), "{err}");
-                server.runs.lock().unwrap().remove("sess-grill");
+                server
+                    .runs
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .remove("sess-grill");
 
                 // finish: summary turn + terminal record + session cleared.
                 let summary = server.finish_grill("sess-grill").await.unwrap();
@@ -5220,7 +5398,10 @@ mod tests {
                 // prompt 2 起始注入 loop、成功后由 controller 回写；下方断言
                 // 证明「注入 → 回写」整条接线（任一环断掉都会把水位丢成空）。
                 {
-                    let mut sessions = server.sessions.lock().unwrap();
+                    let mut sessions = server
+                        .sessions
+                        .lock()
+                        .unwrap_or_else(std::sync::PoisonError::into_inner);
                     let session = sessions.get_mut("sess-conv").expect("session");
                     let continuation = session.continuation.as_mut().expect("continuation");
                     continuation.context_scale_notified = vec!["500k".to_string()];

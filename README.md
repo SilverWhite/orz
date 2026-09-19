@@ -120,6 +120,17 @@ cargo fmt --all               # rustfmt.toml at the repo root
 scripts/fmt_check.ps1         # formatting gate (scripts/fmt_check.sh on Linux)
 ```
 
+> [!IMPORTANT]
+> `orz-host` tests must run **serially**: `cargo test -p orz-host --lib --
+> --test-threads=1`. Under the default parallel runner a handful of
+> load-sensitive tests (process-tree sweep / truncation / call-tool timeout /
+> session-volume symlink end-to-end) fail from resource contention, not
+> regression. CI runs the same serial profile; the serial reading is the
+> only authoritative one (333 passed / 0 failed / 5 ignored). Also note
+> `orz-tools-api`'s build script needs `protoc` — set `PROTOC` to the
+> bundled `bin/protoc.exe` (or install `protobuf-compiler`) before the
+> first build in a clean environment.
+
 ## Contributing
 
 > [!NOTE]

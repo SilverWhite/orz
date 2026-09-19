@@ -4,8 +4,23 @@
 //! cross-process / cross-environment text surface decodes through the fixed
 //! chain — strip BOM → UTF-8 strict → GB18030 → UTF-8 lossy — and records
 //! which stage produced the text (`output_encoding`). Writes are always
-//! UTF-8 without BOM. The reference labels mirror
-//! `assurance/ops_executor.py::decode_text` so Rust and Python audits agree.
+//! UTF-8 without BOM. Ladder structure and label shapes mirror
+//! `assurance/ops_executor.py::decode_text`. A 2026-09-19 full-space
+//! differential (1-byte + 2-byte + all 1,587,600 four-byte forms) pinned the
+//! GB18030 table boundary between encoding_rs (WHATWG / GB18030-2005+) and
+//! the reference's CPython codec (GB18030-2000 PUA mappings): 20 two-byte
+//! pairs and one four-byte slot decode to different code points, over-range
+//! four-byte forms replace with two U+FFFD there vs one here (which can flip
+//! the lossy minimal-replacement choice), and cleanliness agrees everywhere
+//! except the bare euro byte 0x80 — the one known label fork. Both sides pin
+//! these boundaries: `gb18030_table_boundaries_vs_python_reference_pinned`
+//! and `assurance/tests/test_ops_executor_decode_text.py`.
+//!
+//! 0as (2026-09-19) refines the final lossy stage only: the first three
+//! stages keep their whole-buffer order and hit semantics. The lossy stage
+//! decodes per line with a minimal-replacement choice (UTF-8 walk with
+//! explicit byte placeholders vs GB18030 replacement) and the label carries
+//! the degraded fraction — `utf-8-lossy:<p>%`. See [`decode_text`].
 
 use std::io;
 use std::path::Path;
@@ -79,8 +94,20 @@ pub fn is_text_family_extension(extension: &str) -> bool {
 /// - `utf-8-sig`: UTF-8 with a leading BOM (BOM stripped);
 /// - `utf-8`: valid UTF-8 without BOM;
 /// - `gb18030`: not UTF-8, but a valid GB18030 sequence;
-/// - `utf-8-lossy`: neither UTF-8 nor valid GB18030 — replacement chars.
-pub fn decode_text(data: &[u8]) -> (String, &'static str) {
+/// - `utf-8-lossy:<p>%`: neither UTF-8 nor valid GB18030.
+///
+/// The lossy stage (0as, 2026-09-19) decodes **per line** so a single bad
+/// byte no longer degrades the whole block: each line walks the same ladder
+/// (valid UTF-8 kept as-is → clean GB18030 kept → minimal-replacement lossy).
+/// For a line failing both strict decodes, the UTF-8 lossy walk (invalid
+/// subsequences rendered as explicit placeholders, [`utf8_lossy_placeholders`])
+/// and the GB18030 replacement decode are compared and the one with fewer
+/// degraded units wins; ties keep the ladder order (UTF-8). Degraded units =
+/// placeholders + U+FFFD; the label suffix `<p>` = units ÷ post-BOM-strip
+/// input bytes × 100, two decimals. Readable text is byte-identical to the
+/// input wherever a strict stage can decode it, and the unit count is never
+/// higher than the previous whole-buffer `from_utf8_lossy` baseline.
+pub fn decode_text(data: &[u8]) -> (String, String) {
     let mut bytes = data;
     let mut label = "utf-8";
     if let Some(stripped) = bytes.strip_prefix(b"\xef\xbb\xbf") {
@@ -88,7 +115,7 @@ pub fn decode_text(data: &[u8]) -> (String, &'static str) {
         label = "utf-8-sig";
     }
     if let Ok(text) = std::str::from_utf8(bytes) {
-        return (text.to_string(), label);
+        return (text.to_string(), label.to_string());
     }
     // encoding_rs's GB18030 decoder is total; `had_errors` marks byte
     // sequences the reference Python decoder rejects (truncated / illegal
@@ -97,9 +124,91 @@ pub fn decode_text(data: &[u8]) -> (String, &'static str) {
     // assurance/ops_executor.py.
     let (text, had_errors) = encoding_rs::GB18030.decode_without_bom_handling(bytes);
     if !had_errors {
-        return (text.into_owned(), "gb18030");
+        return (text.into_owned(), "gb18030".to_string());
     }
-    (String::from_utf8_lossy(bytes).into_owned(), "utf-8-lossy")
+    let (text, units) = decode_lossy_segmented(bytes);
+    let ratio = units as f64 / bytes.len().max(1) as f64 * 100.0;
+    (text, format!("utf-8-lossy:{ratio:.2}%"))
+}
+
+/// Refined lossy stage (0as): per-line decode so one bad byte cannot degrade
+/// the whole block. Line granularity is safe because neither UTF-8 nor
+/// GB18030 encodes `0x0A` as part of a multi-byte sequence, so no multi-byte
+/// character can span the split. Returns `(text, degraded_units)`.
+fn decode_lossy_segmented(bytes: &[u8]) -> (String, usize) {
+    let mut out = String::with_capacity(bytes.len() + 16);
+    let mut units = 0usize;
+    for line in bytes.split_inclusive(|&b| b == b'\n') {
+        let (body, newline) = match line.last() {
+            Some(&b'\n') => (&line[..line.len() - 1], "\n"),
+            _ => (line, ""),
+        };
+        let (text, line_units) = decode_lossy_line(body);
+        out.push_str(&text);
+        out.push_str(newline);
+        units += line_units;
+    }
+    (out, units)
+}
+
+/// The fixed ladder applied to one line of the lossy stage: valid UTF-8 kept
+/// as-is → clean GB18030 kept → minimal-replacement lossy choice (ties keep
+/// the ladder order, UTF-8). Returns `(text, degraded_units)`.
+fn decode_lossy_line(line: &[u8]) -> (String, usize) {
+    if let Ok(text) = std::str::from_utf8(line) {
+        return (text.to_string(), 0);
+    }
+    let (gb_text, had_errors) = encoding_rs::GB18030.decode_without_bom_handling(line);
+    if !had_errors {
+        return (gb_text.into_owned(), 0);
+    }
+    let (utf8_text, utf8_units) = utf8_lossy_placeholders(line);
+    let gb_text = gb_text.into_owned();
+    let gb_units = gb_text.matches('\u{fffd}').count();
+    if gb_units < utf8_units {
+        (gb_text, gb_units)
+    } else {
+        (utf8_text, utf8_units)
+    }
+}
+
+/// UTF-8 lossy decode with explicit byte placeholders (0as).
+///
+/// Same granularity as `String::from_utf8_lossy` (each error spans one
+/// maximal subpart, so unit counts match the previous baseline 1:1), but an
+/// invalid subsequence renders as `⟨0x8F⟩` (single byte) or `⟨0xE4 0xB8⟩`
+/// (multi-byte run, upper-case hex, space-separated) instead of U+FFFD — the
+/// model keeps the byte-level fact instead of an uninformative run of
+/// replacement characters. Returns `(text, units)`.
+fn utf8_lossy_placeholders(bytes: &[u8]) -> (String, usize) {
+    let mut out = String::with_capacity(bytes.len() + 16);
+    let mut rest = bytes;
+    let mut units = 0usize;
+    loop {
+        match std::str::from_utf8(rest) {
+            Ok(text) => {
+                out.push_str(text);
+                return (out, units);
+            }
+            Err(error) => {
+                let valid_up_to = error.valid_up_to();
+                // `valid_up_to` is guaranteed valid by the Utf8Error contract.
+                out.push_str(std::str::from_utf8(&rest[..valid_up_to]).unwrap_or(""));
+                let start = valid_up_to;
+                let len = error.error_len().unwrap_or(rest.len() - start).max(1);
+                out.push('\u{27e8}');
+                for (index, byte) in rest[start..start + len].iter().enumerate() {
+                    if index > 0 {
+                        out.push(' ');
+                    }
+                    out.push_str(&format!("0x{byte:02X}"));
+                }
+                out.push('\u{27e9}');
+                units += 1;
+                rest = &rest[start + len..];
+            }
+        }
+    }
 }
 
 /// Decode-first gate for text-family files (FUS-HOST-RESOURCE-SAFETY §4.4).
@@ -292,18 +401,31 @@ mod tests {
     fn invalid_bytes_fall_through_to_lossy() {
         let bytes = [0xff, 0xfe, 0x80, 0x81];
         let (text, label) = decode_text(&bytes);
-        assert_eq!(label, "utf-8-lossy");
-        assert!(text.contains('\u{fffd}'));
+        assert!(label.starts_with("utf-8-lossy:") && label.ends_with('%'));
+        // The refined stage must never degrade more than the old whole-buffer
+        // baseline, and the label ratio must be recomputable from the text.
+        let baseline = String::from_utf8_lossy(&bytes);
+        let units = text.matches('\u{fffd}').count() + text.matches('\u{27e8}').count();
+        assert!(units <= baseline.matches('\u{fffd}').count());
+        let pct: f64 = label["utf-8-lossy:".len()..label.len() - 1]
+            .parse()
+            .unwrap();
+        let expected = units as f64 / bytes.len() as f64 * 100.0;
+        assert!((pct - expected).abs() < 0.005, "{label} vs {expected}");
     }
 
     #[test]
     fn invalid_gb18030_falls_through_to_lossy() {
         // 0x81 0x30 is an illegal GB18030 sequence (second byte below 0x40;
-        // also a truncated four-byte form) — Python's `decode("gb18030")`
-        // raises here, so the chain must NOT claim "gb18030".
+        // also the prefix of a truncated four-byte form) — Python's
+        // `decode("gb18030")` raises here, so the chain must NOT claim
+        // "gb18030". The whole three bytes form one truncated 4-byte GB18030
+        // sequence, so the GB18030 replacement decode wins the minimal-choice
+        // comparison with a single unit (the UTF-8 walk would spend two).
         let bytes = [0x81, 0x30, 0x81];
-        let (_, label) = decode_text(&bytes);
-        assert_eq!(label, "utf-8-lossy");
+        let (text, label) = decode_text(&bytes);
+        assert_eq!(text, "\u{fffd}");
+        assert_eq!(label, "utf-8-lossy:33.33%");
     }
 
     #[test]
@@ -337,6 +459,75 @@ mod tests {
         );
         assert_eq!(merge_encoding_labels([""]), None);
         assert_eq!(merge_encoding_labels([]), None);
+        // 0as: the refined lossy label merges like any other stage label.
+        assert_eq!(
+            merge_encoding_labels(["utf-8", "utf-8-lossy:1.23%"]).as_deref(),
+            Some("utf-8,utf-8-lossy:1.23%")
+        );
+    }
+
+    /// 判据① (0as): mixed sample — a valid-UTF-8 line, an isolated illegal
+    /// byte, and a GB18030 line. Readable text survives byte-identical; the
+    /// old whole-buffer lossy stage turned the GB18030 body into runs of
+    /// U+FFFD; the refined stage keeps it readable.
+    #[test]
+    fn lossy_mixed_sample_keeps_readable_parts_intact() {
+        let mut bytes = Vec::new();
+        bytes.extend_from_slice("readable 保持可读\n".as_bytes());
+        bytes.push(0x81);
+        bytes.push(b'\n');
+        bytes.extend_from_slice(&[0xd6, 0xd0, 0xce, 0xc4]);
+        bytes.extend_from_slice(b" tail\n");
+        let (text, label) = decode_text(&bytes);
+        assert_eq!(text, "readable 保持可读\n⟨0x81⟩\n中文 tail\n");
+        // 1 degraded unit over 34 post-BOM-strip input bytes.
+        assert_eq!(label, "utf-8-lossy:2.94%");
+    }
+
+    /// 判据① headline case (0as): GB18030 text with one hopeless byte — the
+    /// GB18030 body stays readable (strictly fewer replacements than the
+    /// UTF-8 walk, which would shred every GB pair).
+    #[test]
+    fn lossy_prefers_gb18030_when_it_has_fewer_replacements() {
+        let bytes = [0xd6, 0xd0, 0xff];
+        let (text, label) = decode_text(&bytes);
+        assert_eq!(text, "中\u{fffd}");
+        assert_eq!(label, "utf-8-lossy:33.33%");
+    }
+
+    /// Tie (equal degraded units) keeps the ladder order: the UTF-8 walk with
+    /// explicit byte placeholders wins over the opaque GB18030 replacement.
+    #[test]
+    fn lossy_tie_keeps_ladder_order_utf8() {
+        // [d6 d0 8f]: GB18030 = 中 + truncated lead (1 FFFD); UTF-8 walk =
+        // ⟨0xD6⟩ + the valid pair [d0 8f] = U+040F (1 unit).
+        let bytes = [0xd6, 0xd0, 0x8f];
+        let (text, label) = decode_text(&bytes);
+        assert_eq!(text, "⟨0xD6⟩\u{040f}");
+        assert_eq!(label, "utf-8-lossy:33.33%");
+    }
+
+    /// A multi-byte invalid UTF-8 subsequence renders as one placeholder
+    /// listing its bytes (tie with the GB18030 replacement count → UTF-8).
+    #[test]
+    fn lossy_multibyte_subsequence_placeholder_form() {
+        // [f0 9e 81]: a truncated 4-byte sequence; GB18030 decodes (f0,9e)
+        // cleanly then errors on the trailing lead — 1 unit vs 1 unit tie.
+        let bytes = [0xf0, 0x9e, 0x81];
+        let (text, label) = decode_text(&bytes);
+        assert_eq!(text, "⟨0xF0 0x9E 0x81⟩");
+        assert_eq!(label, "utf-8-lossy:33.33%");
+    }
+
+    /// 判据③ (0as): the BOM is stripped before the ratio denominator, so the
+    /// degraded fraction is measured on the actual decode input.
+    #[test]
+    fn lossy_label_ratio_excludes_stripped_bom() {
+        let mut bytes = b"\xef\xbb\xbf".to_vec();
+        bytes.push(0x81);
+        let (text, label) = decode_text(&bytes);
+        assert_eq!(text, "⟨0x81⟩");
+        assert_eq!(label, "utf-8-lossy:100.00%");
     }
 
     #[test]
@@ -454,5 +645,35 @@ mod tests {
         // caller can still reject it as binary.
         let bytes = vec![0xff, 0xfe, 0x00, 0x00, 0x00, 0x00];
         assert_eq!(sniff_text_bytes(&bytes), None);
+    }
+
+    /// 0as review handling (2026-09-19): pins where the encoding_rs GB18030
+    /// table (WHATWG / GB18030-2005+) intentionally differs from the Python
+    /// reference's CPython codec (GB18030-2000 PUA mappings) — see the module
+    /// header for the full-space differential evidence and the mirrored nails
+    /// in `assurance/tests/test_ops_executor_decode_text.py`.
+    #[test]
+    fn gb18030_table_boundaries_vs_python_reference_pinned() {
+        // Bare euro byte: encoding_rs decodes it cleanly (GB18030 euro slot);
+        // the CPython reference treats 0x80 as an error and falls to lossy —
+        // the one known label fork between the two chains.
+        assert_eq!(
+            decode_text(&[0x80]),
+            ("\u{20ac}".to_string(), "gb18030".to_string())
+        );
+        // A3A0: official U+3000 here, GB18030-2000 PUA U+E5E5 in the
+        // reference (both sides still label "gb18030").
+        assert_eq!(
+            decode_text(&[0xa3, 0xa0]),
+            ("\u{3000}".to_string(), "gb18030".to_string())
+        );
+        // Over-range/reserved four-byte form: encoding_rs replaces the whole
+        // sequence with ONE U+FFFD, so the GB side wins the minimal choice;
+        // the reference counts two, ties keep the ladder order (UTF-8) —
+        // the lossy-choice fork, pinned on both sides.
+        assert_eq!(
+            decode_text(&[0x84, 0x31, 0xa5, 0x30]),
+            ("\u{fffd}".to_string(), "utf-8-lossy:25.00%".to_string())
+        );
     }
 }

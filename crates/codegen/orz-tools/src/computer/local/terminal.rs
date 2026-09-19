@@ -444,11 +444,14 @@ impl ProcessState {
             );
             (
                 combined,
-                crate::util::encoding::merge_encoding_labels([front_label, back_label]),
+                crate::util::encoding::merge_encoding_labels([
+                    front_label.as_str(),
+                    back_label.as_str(),
+                ]),
             )
         } else {
             let (text, label) = crate::util::encoding::decode_text(&self.output_buffer);
-            (text, Some(label.to_string()))
+            (text, Some(label))
         };
         TerminalRunResult {
             combined_output,

@@ -265,7 +265,7 @@ pub struct FileContent {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub read_anchor: Option<ReadAnchor>,
     /// Decoding stage that produced this file's text (GAP-ENCODING-GATE,
-    /// OPS-PROTOCOL §8): `utf-8` / `utf-8-sig` / `gb18030` / `utf-8-lossy`.
+    /// OPS-PROTOCOL §8): `utf-8` / `utf-8-sig` / `gb18030` / `utf-8-lossy:<p>%`.
     /// Recorded on the journal's `tool_completed.output_encoding`; `None`
     /// for binary/document formats that have no decode stage.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -361,7 +361,7 @@ pub struct ReadHandleEnvelope {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub mtime: Option<u64>,
     /// Decode stage observed (GAP-ENCODING-GATE, OPS-PROTOCOL §8):
-    /// `utf-8` / `utf-8-sig` / `gb18030` / `utf-8-lossy`.
+    /// `utf-8` / `utf-8-sig` / `gb18030` / `utf-8-lossy:<p>%`.
     pub encoding: String,
     /// SHA-256 hex digest of the raw file bytes (content identity).
     pub content_sha256: String,
@@ -532,7 +532,7 @@ pub struct BashOutput {
     #[serde(default)]
     pub output_for_prompt: String,
     /// Decoding stage that produced the output text (GAP-ENCODING-GATE,
-    /// OPS-PROTOCOL §8): `utf-8` / `utf-8-sig` / `gb18030` / `utf-8-lossy`.
+    /// OPS-PROTOCOL §8): `utf-8` / `utf-8-sig` / `gb18030` / `utf-8-lossy:<p>%`.
     /// Recorded on the journal's `tool_completed.output_encoding`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub output_encoding: Option<String>,

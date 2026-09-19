@@ -152,7 +152,9 @@ pub fn render_run_context_block(
         )
     };
     let is_current = |record: &crate::blackboard::EditRecord| {
-        matches!(current_run, Some(run) if !run.is_empty()) && record.run == current_run.unwrap()
+        // RS-05 (0aq, 2026-09-19, Top-10 #9)：双重复核合一——matches! 一步
+        // 完成「在场＋非空＋相等」判定，无 unwrap。
+        matches!(current_run, Some(run) if !run.is_empty() && run == &record.run)
     };
     let current: Vec<&crate::blackboard::EditRecord> =
         edits.iter().filter(|r| is_current(r)).collect();

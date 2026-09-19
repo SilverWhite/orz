@@ -344,12 +344,19 @@ impl CodexAppServer {
         let mut threads = self.threads.lock().unwrap();
         let entry = threads.get_mut(thread_id)?;
         let turn_id = entry.active_turn.clone()?;
-        if entry.agent_item.is_none() {
-            let n = entry.next_item;
-            entry.next_item += 1;
-            entry.agent_item = Some(format!("item_{n}"));
-        }
-        Some((turn_id, entry.agent_item.clone().unwrap()))
+        // RS-05 (0aq, 2026-09-19, Top-10 #3): the just-assigned value is
+        // used directly — no unwrap after the assignment.
+        let item = match entry.agent_item.clone() {
+            Some(item) => item,
+            None => {
+                let n = entry.next_item;
+                entry.next_item += 1;
+                let item = format!("item_{n}");
+                entry.agent_item = Some(item.clone());
+                item
+            }
+        };
+        Some((turn_id, item))
     }
 
     /// Dispatch one inbound message. Errors become JSON-RPC error responses;

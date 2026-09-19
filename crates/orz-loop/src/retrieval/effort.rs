@@ -31,13 +31,16 @@ impl EffortTier {
         }
     }
 
-    /// 档位墙钟上限（秒）。设计定案：standard 240s / extended 600s（旧
-    /// 默认）/ deep 900s。`0` 禁用语义仍由显式 env 提供，档位默认恒启用。
+    /// 档位墙钟上限（秒）。0ar S2-D2（2026-09-19，检索批次回送设计 §4.3
+    /// 定案）：standard 180s / extended 300s / deep 450s——单批墙钟到点
+    /// 以「部分证据＋缺口」正常交回（未达标也交回），日常检索与调研由
+    /// 批数承载；旧表 240/600/900 退役。`0` 禁用语义仍由显式 env
+    /// （`ORZ_RETRIEVAL_SUBAGENT_TIMEOUT_SECS`）提供，优先级不变。
     pub fn wallclock_default(self) -> Duration {
         match self {
-            EffortTier::Standard => Duration::from_secs(240),
-            EffortTier::Extended => Duration::from_secs(600),
-            EffortTier::Deep => Duration::from_secs(900),
+            EffortTier::Standard => Duration::from_secs(180),
+            EffortTier::Extended => Duration::from_secs(300),
+            EffortTier::Deep => Duration::from_secs(450),
         }
     }
 
@@ -259,17 +262,19 @@ mod tests {
 
     #[test]
     fn tier_parameter_defaults_match_design_table() {
+        // 0ar S2-D2（2026-09-19 定案）：180/300/450——单批墙钟与「未达标
+        // 也交回」配对（设计 §4.1 余量提示：300s 对达标批 206s 仅 1.45×）。
         assert_eq!(
             EffortTier::Standard.wallclock_default(),
-            Duration::from_secs(240)
+            Duration::from_secs(180)
         );
         assert_eq!(
             EffortTier::Extended.wallclock_default(),
-            Duration::from_secs(600)
+            Duration::from_secs(300)
         );
         assert_eq!(
             EffortTier::Deep.wallclock_default(),
-            Duration::from_secs(900)
+            Duration::from_secs(450)
         );
         assert_eq!(EffortTier::Standard.max_tool_rounds_default(), 30);
         assert_eq!(EffortTier::Extended.max_tool_rounds_default(), 60);

@@ -321,6 +321,12 @@ pub(crate) struct StructuredCommittedResult {
 /// redefined: true iff the ledger carries NO text-level evidence (zero
 /// full/partial — metadata-only declarations or no tool calls), with an
 /// explicit `no_fulltext_evidence` reason record — never a silent downgrade.
+///
+/// 0ar S2-D3（2026-09-19，检索批次回送设计 §5.4）：`queries` 支持多元素
+/// ——同轮多检索合并为单激活多 query 时，`query_summary` 每query 一条
+/// （契约 `query_entry` 数组本就多元素；契约面同批增可选
+/// `usable_source_count` 逐 query 可用计数，宽口径按 search_query 归因，
+/// 派生证据多 query 下不归因——边界登记于 `per_query_usable_counts`）。
 #[allow(clippy::too_many_arguments)] // the full result-formation contract
 pub(crate) fn build_structured_result(
     evidence: &[EvidenceRecord],
@@ -335,7 +341,7 @@ pub(crate) fn build_structured_result(
     contract_id: &str,
     contract_revision: u32,
     call_id: &str,
-    task_goal: &str,
+    queries: &[String],
 ) -> StructuredCommittedResult {
     // 1. Mechanical ledger — tool-call evidence first (§3.7.4 identity/type/
     //    access time/visibility/observed-missing scope/digest + derived
@@ -508,15 +514,64 @@ pub(crate) fn build_structured_result(
     });
     let validation_note = degraded.then(|| "no_fulltext_evidence".to_string());
 
-    // 3. query_summary — one mechanical entry for the dispatch.
-    let query_summary = vec![serde_json::json!({
-        "query_id": format!("QRY-{}", &sha256_hex(call_id.as_bytes())[..8]),
-        "query_text": task_goal,
-        "source_category": if evidence.iter().any(|e| e.source_type == "project_doc" || e.source_type == "local_file") { "project_docs" } else { "web" },
-        "result_count": source_ledger.len(),
-        "action_taken": "searched",
-        "tool_used": evidence.first().map(|e| e.tool.as_str()).unwrap_or("retrieval_dispatch"),
-    })];
+    // 3. query_summary — one mechanical entry per query (0ar S2-D3,
+    //    2026-09-19 检索批次回送设计 §5.4：同轮多检索合并为单激活多 query
+    //    时逐 query 一条；单 query 与旧形态一致——query_text 为任务契约
+    //    全文、result_count 为全 ledger 条数，既有 payload 逐字节不变）。
+    //    契约面同批增可选 `usable_source_count`（宽口径逐 query 可用计数，
+    //    按 search_query 归因；单 query 全额归属——见
+    //    `batch_close::per_query_usable_counts`）。
+    let query_summary: Vec<serde_json::Value> = {
+        let effective_queries: &[String] = if queries.is_empty() {
+            &[String::from("(no query)")]
+        } else {
+            queries
+        };
+        let per_query_usable =
+            crate::retrieval::batch_close::per_query_usable_counts(effective_queries, evidence);
+        let query_hash = &sha256_hex(call_id.as_bytes())[..8];
+        let source_category = if evidence
+            .iter()
+            .any(|e| e.source_type == "project_doc" || e.source_type == "local_file")
+        {
+            "project_docs"
+        } else {
+            "web"
+        };
+        effective_queries
+            .iter()
+            .enumerate()
+            .map(|(i, q)| {
+                let mut entry = serde_json::json!({
+                    "query_id": if i == 0 {
+                        format!("QRY-{query_hash}")
+                    } else {
+                        format!("QRY-{query_hash}-{}", i + 1)
+                    },
+                    "query_text": q,
+                    "source_category": source_category,
+                    // 单 query：旧口径（全 ledger 条数）；多 query：按
+                    // search_query 归因的证据条数（派生证据不归因）。
+                    "result_count": if effective_queries.len() <= 1 {
+                        source_ledger.len()
+                    } else {
+                        evidence
+                            .iter()
+                            .filter(|e| e.search_query.as_deref() == Some(q.as_str()))
+                            .count()
+                    },
+                    "action_taken": "searched",
+                    "tool_used": evidence
+                        .first()
+                        .map(|e| e.tool.as_str())
+                        .unwrap_or("retrieval_dispatch"),
+                });
+                entry["usable_source_count"] =
+                    serde_json::json!(per_query_usable.get(i).copied().unwrap_or(0));
+                entry
+            })
+            .collect()
+    };
 
     // 4. filtering_log — mechanical filter events. GAP-RETRIEVAL-STRUCTURED-
     //    RESULT 方向 C (2026-08-30): source-annotation drops were the only
@@ -1187,7 +1242,7 @@ mod tests {
             "contract-1",
             0,
             "call-1",
-            "goal",
+            &["goal".to_string()],
         );
         let ledger = committed.payload["source_ledger"].as_array().unwrap();
         assert_eq!(ledger.len(), 1);
@@ -1261,7 +1316,7 @@ mod tests {
             "contract-1",
             0,
             "call-1",
-            "goal",
+            &["goal".to_string()],
         );
         let ledger = committed.payload["source_ledger"].as_array().unwrap();
         let entry = &ledger[0];
@@ -1349,7 +1404,7 @@ mod tests {
             "contract-1",
             0,
             "call-1",
-            "goal",
+            &["goal".to_string()],
         );
         let ledger = committed.payload["source_ledger"].as_array().unwrap();
         assert_eq!(ledger[0]["candidate_urls"], serde_json::json!([]));

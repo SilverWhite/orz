@@ -2305,7 +2305,11 @@ fn apply_tool_call_chunk(
         Some(e) => e,
         None => {
             tool_calls.push((chunk.index, StreamToolCall::default()));
-            tool_calls.last_mut().unwrap()
+            // RS-05 (0aq, 2026-09-19, Top-10 #7)：刚 push 的条目必然在尾
+            // 部（不变量显式化）。
+            tool_calls
+                .last_mut()
+                .expect("tool call entry was just pushed")
         }
     };
     if let Some(id) = &chunk.id {

@@ -120,8 +120,9 @@ mod tests {
         let content = b"\xff\xfe\n";
         let result = read_slice(content, 1, 10).unwrap();
         assert_eq!(result.len(), 1);
-        // Non-UTF8 bytes should be replaced with U+FFFD
-        assert!(result[0].contains('\u{FFFD}'));
+        // 0as: non-UTF8 bytes surface as explicit byte placeholders (the
+        // GB18030 replacement count ties, so the UTF-8 ladder side wins).
+        assert_eq!(result[0], "L1: ⟨0xFF⟩⟨0xFE⟩");
     }
 
     #[test]

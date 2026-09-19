@@ -268,7 +268,7 @@ impl xai_tool_runtime::Tool for CodexReadFileTool {
             limit: Some(input.limit),
             raw_output,
             total_lines,
-            output_encoding: Some(output_encoding.to_string()),
+            output_encoding: Some(output_encoding),
             extracted_images: Vec::new(),
             read_anchor: None,
         }))
@@ -408,7 +408,8 @@ mod tests {
             .unwrap();
         match result {
             ReadFileOutput::FileContent(fc) => {
-                assert_eq!(fc.content, format!("L1: {}{}", '\u{FFFD}', '\u{FFFD}'));
+                // 0as: explicit byte placeholders replace the U+FFFD pair.
+                assert_eq!(fc.content, "L1: ⟨0xFF⟩⟨0xFE⟩");
             }
             other => panic!("Expected FileContent, got {:?}", other),
         }

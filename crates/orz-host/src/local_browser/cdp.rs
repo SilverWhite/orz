@@ -303,7 +303,10 @@ impl WsSession {
         self.next_id += 1;
         let (tx, rx) = oneshot::channel();
         {
-            let mut pending = self.pending.lock().unwrap();
+            let mut pending = self
+                .pending
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
             pending.insert(id, tx);
         }
         let msg = json!({ "id": id, "method": method, "params": params });
@@ -384,7 +387,11 @@ async fn ws_reader_task(
             continue;
         };
         if let Some(id) = v.get("id").and_then(|i| i.as_u64()) {
-            if let Some(tx) = pending.lock().unwrap().remove(&(id as u32)) {
+            if let Some(tx) = pending
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .remove(&(id as u32))
+            {
                 let _ = tx.send(Ok(v));
             }
         } else if let Some(method) = v.get("method").and_then(|m| m.as_str()) {
@@ -533,14 +540,16 @@ fn seed_pdf_download_preference(profile_dir: &Path) -> Result<(), CdpError> {
     // Merge without clobbering existing profile state (cookies/logins and
     // Chrome's own bookkeeping survive a later cold relaunch on the same
     // profile dir).
-    let plugins = prefs
-        .as_object_mut()
-        .expect("seeded prefs object")
-        .entry("plugins")
-        .or_insert_with(|| json!({}));
+    // RS-05 (0aq, 2026-09-19, Top-10 #8)：环境敏感路径 Result 化——种子
+    // 对象形状与序列化失败都走 CdpError，不再 panic。
+    let Some(obj) = prefs.as_object_mut() else {
+        return Err(CdpError::Io("seeded prefs is not a JSON object".into()));
+    };
+    let plugins = obj.entry("plugins").or_insert_with(|| json!({}));
     plugins["always_open_pdf_externally"] = json!(true);
-    std::fs::write(&path, serde_json::to_string_pretty(&prefs).unwrap())
-        .map_err(|e| CdpError::Io(e.to_string()))
+    let serialized =
+        serde_json::to_string_pretty(&prefs).map_err(|e| CdpError::Io(e.to_string()))?;
+    std::fs::write(&path, serialized).map_err(|e| CdpError::Io(e.to_string()))
 }
 
 impl CdpBrowserSession {
@@ -925,7 +934,10 @@ impl CdpBrowserSession {
     ) -> Result<super::BrowserControlOutcome, CdpError> {
         let now = Instant::now();
         let wait = {
-            let mut state = self.serp_state.lock().unwrap();
+            let mut state = self
+                .serp_state
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
             if state.ceiling_reached() {
                 // 0v-A 复审 O-2（2026-09-12）：上限拒绝信封也携带全量
                 // `engine_attempts`（三引擎均 `not_attempted`，按当前
@@ -964,7 +976,10 @@ impl CdpBrowserSession {
         }
 
         let engines = {
-            let state = self.serp_state.lock().unwrap();
+            let state = self
+                .serp_state
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
             super::serp::ordered_engines(&state)
         };
         // Attempt sheet in attempt order: every engine starts `pending` and
@@ -1000,7 +1015,10 @@ impl CdpBrowserSession {
                 Err(failure) => {
                     let wall_ms = started.elapsed().as_millis() as u64;
                     {
-                        let mut state = self.serp_state.lock().unwrap();
+                        let mut state = self
+                            .serp_state
+                            .lock()
+                            .unwrap_or_else(std::sync::PoisonError::into_inner);
                         state.record_failure(engine, failure.class);
                     }
                     Self::set_attempt(
@@ -1039,7 +1057,10 @@ impl CdpBrowserSession {
     /// 会话上限）——只读出口，宿主把它上报给 loop；"检索保留额度"这类车道
     /// 策略在 loop 层施加（宿主没有车道身份，本层不做判定）。
     pub(crate) fn serp_session_navigations(&self) -> (u32, u32) {
-        let state = self.serp_state.lock().unwrap();
+        let state = self
+            .serp_state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         (
             state.navigations(),
             super::serp::SERP_MAX_NAVIGATIONS_PER_SESSION as u32,
@@ -1102,7 +1123,10 @@ impl CdpBrowserSession {
 
         let navigation = tokio::time::timeout_at(deadline, async {
             // P2-4：物理上限计的是真实导航（gate 未过的不算）。
-            self.serp_state.lock().unwrap().record_navigation();
+            self.serp_state
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .record_navigation();
             self.control_navigate(control, &url, &mut log_lines).await
         })
         .await;
@@ -1693,7 +1717,12 @@ impl CdpBrowserSession {
         super::check_navigation_url_sync(&url).map_err(CdpError::UrlGate)?;
         let host = url.host_str().unwrap_or_default().to_ascii_lowercase();
         let now = std::time::Instant::now();
-        let cached = self.dns.lock().unwrap().get(&host).cloned();
+        let cached = self
+            .dns
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .get(&host)
+            .cloned();
         if let Some(entry) = cached
             && now.duration_since(entry.at) < self.config.dns_ttl
         {
@@ -1702,12 +1731,15 @@ impl CdpBrowserSession {
         super::check_navigation_url(raw)
             .await
             .map_err(CdpError::UrlGate)?;
-        self.dns.lock().unwrap().insert(
-            host,
-            DnsCacheEntry {
-                at: std::time::Instant::now(),
-            },
-        );
+        self.dns
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .insert(
+                host,
+                DnsCacheEntry {
+                    at: std::time::Instant::now(),
+                },
+            );
         Ok(())
     }
 
@@ -1745,7 +1777,10 @@ impl CdpBrowserSession {
     async fn lease_tab(&self, deadline: tokio::time::Instant) -> Result<String, CdpError> {
         let now = std::time::Instant::now();
         let free_tab = || {
-            let mut pool = self.pool.lock().unwrap();
+            let mut pool = self
+                .pool
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
             pool.iter()
                 .enumerate()
                 .filter(|(_, t)| !t.busy)
@@ -1771,18 +1806,24 @@ impl CdpBrowserSession {
             .map_err(|_| CdpError::TotalTimeout {
                 timeout: self.config.total_budget.as_secs(),
             })??;
-        self.pool.lock().unwrap().push(PooledTab {
-            target_id: target_id.clone(),
-            page_ws: None,
-            busy: true,
-            last_used: now,
-        });
+        self.pool
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .push(PooledTab {
+                target_id: target_id.clone(),
+                page_ws: None,
+                busy: true,
+                last_used: now,
+            });
         Ok(target_id)
     }
 
     /// v2：取走池中 tab 的 page ws（短临界区，无 await）。
     fn pool_take_ws(&self, target_id: &str) -> Option<WsSession> {
-        let mut pool = self.pool.lock().unwrap();
+        let mut pool = self
+            .pool
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         pool.iter_mut()
             .find(|t| t.target_id == target_id)
             .and_then(|t| t.page_ws.take())
@@ -1790,7 +1831,10 @@ impl CdpBrowserSession {
 
     /// v2：归还 tab（busy=false + page ws 回存；短临界区，无 await）。
     fn release_tab(&self, target_id: &str, page_ws: Option<WsSession>) {
-        let mut pool = self.pool.lock().unwrap();
+        let mut pool = self
+            .pool
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         if let Some(t) = pool.iter_mut().find(|t| t.target_id == target_id) {
             t.busy = false;
             t.page_ws = page_ws;
@@ -2615,7 +2659,10 @@ mod tests {
     async fn control_search_cap_is_explicit_before_browser_work() {
         let session = test_session(CdpConfig::default());
         {
-            let mut state = session.serp_state.lock().unwrap();
+            let mut state = session
+                .serp_state
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
             let now = Instant::now();
             for _ in 0..super::super::serp::SERP_MAX_NAVIGATIONS_PER_SESSION {
                 state.record_navigation();
@@ -2705,7 +2752,10 @@ mod tests {
     async fn search_chain_really_retries_engines_failed_earlier_in_the_session() {
         let session = test_session(test_config());
         {
-            let mut dns = session.dns.lock().unwrap();
+            let mut dns = session
+                .dns
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
             for host in ["www.google.com", "www.bing.com", "html.duckduckgo.com"] {
                 dns.insert(
                     host.to_string(),
@@ -2749,7 +2799,10 @@ mod tests {
         // 预置 pacing 时间戳，让第二次调用不真睡冷却（jitter ≤ 2.5s 尾差
         // 可接受；underflow 时回退 now，最坏多等一个冷却，不 panics）。
         {
-            let mut state = session.serp_state.lock().unwrap();
+            let mut state = session
+                .serp_state
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
             let aged = std::time::Instant::now()
                 .checked_sub(Duration::from_secs(3600))
                 .unwrap_or_else(std::time::Instant::now);
@@ -2781,7 +2834,10 @@ mod tests {
         let ceiling = super::super::serp::SERP_MAX_NAVIGATIONS_PER_SESSION as u32;
         assert_eq!(session.serp_session_navigations(), (0, ceiling));
         {
-            let mut state = session.serp_state.lock().unwrap();
+            let mut state = session
+                .serp_state
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
             state.record_navigation();
             state.record_navigation();
             state.record_navigation();
@@ -3105,7 +3161,10 @@ mod tests {
         };
         let session = test_session(config);
         {
-            let mut pool = session.pool.lock().unwrap();
+            let mut pool = session
+                .pool
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
             pool.push(PooledTab {
                 target_id: "t-old".to_string(),
                 page_ws: None,
@@ -3124,7 +3183,10 @@ mod tests {
         let id = session.lease_tab(deadline).await.unwrap();
         assert_eq!(id, "t-old");
         {
-            let pool = session.pool.lock().unwrap();
+            let pool = session
+                .pool
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
             let old = pool.iter().find(|t| t.target_id == "t-old").unwrap();
             assert!(old.busy, "leased tab must be busy (exclusive)");
             let new = pool.iter().find(|t| t.target_id == "t-new").unwrap();
@@ -3156,7 +3218,10 @@ mod tests {
         };
         let session = test_session(config);
         {
-            let mut pool = session.pool.lock().unwrap();
+            let mut pool = session
+                .pool
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
             pool.push(PooledTab {
                 target_id: "t1".to_string(),
                 page_ws: None,
