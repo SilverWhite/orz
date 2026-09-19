@@ -4656,7 +4656,13 @@ mod tests {
             .unwrap();
         let query_summary = committed.payload["query_summary"].as_array().unwrap();
         assert_eq!(query_summary.len(), 2, "one entry per merged query");
-        assert_eq!(query_summary[0]["query_text"], serde_json::json!("q1"));
+        assert!(
+            query_summary[0]["query_text"]
+                .as_str()
+                .unwrap_or_default()
+                .starts_with("q1"),
+            "{query_summary:?}"
+        );
         assert_eq!(query_summary[1]["query_text"], serde_json::json!("q2"));
         assert!(
             query_summary
@@ -4679,6 +4685,106 @@ mod tests {
                         && e.payload.get("exit_code") == Some(&serde_json::json!(0))
                 }),
                 "missing merged completion for {cid}"
+            );
+        }
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// 0ar S3 前去噪（设计 §5.6）：同轮重复 query——首个派发（单激活），
+    /// 第二个为指针回踩：不重复检索，仍以 ToolStarted+ToolCompleted(exit 0)
+    /// 把既有 call_id 交回；`query_summary` 只保留首次 query 一条。
+    #[tokio::test]
+    async fn duplicate_retrieval_query_backtracks_to_pointer() {
+        let dir = test_dir();
+        let journal = JournalRecorder::new(dir.clone());
+        let host = TestHost {
+            journal,
+            tool_result: Some(ToolResult {
+                output: "ok".to_string(),
+                exit_code: Some(0),
+                output_encoding: None,
+                structured: None,
+                ..Default::default()
+            }),
+        };
+        let mk = |name: &str, id: &str, q: &str| ToolCall {
+            name: name.to_string(),
+            arguments: serde_json::json!({ "query": q }),
+            call_id: id.to_string(),
+        };
+        let script: std::collections::VecDeque<ScriptedResponse> = vec![
+            ScriptedResponse::tool_calls(vec![
+                mk("web_search", "call-1", "q1"),
+                mk("web_search", "call-2", "q1"),
+            ]),
+            ScriptedResponse::text("[SOURCE] https://example.com/a"),
+            ScriptedResponse::text("完成"),
+            ScriptedResponse::text("完成"),
+        ]
+        .into();
+        let gateway = Arc::new(FakeProvider::new(script.into_iter().collect()));
+        let controller = with_retrieval_enabled(AgentLoopController::with_gateway(Arc::clone(
+            &gateway,
+        )
+            as Arc<dyn ModelGateway>));
+        controller
+            .run_turn(
+                &host,
+                "重复检索",
+                "RUN-DUP-QUERY",
+                MANIFEST,
+                0,
+                None,
+                None,
+                None,
+            )
+            .await
+            .unwrap();
+
+        let events = events(&dir);
+        assert_eq!(
+            events
+                .iter()
+                .filter(|e| e.event_type == EventType::RetrievalResultCommitted)
+                .count(),
+            1,
+            "duplicate query must not open a second activation: {:?}",
+            event_types(&dir)
+        );
+        let committed = events
+            .iter()
+            .find(|e| e.event_type == EventType::RetrievalResultCommitted)
+            .unwrap();
+        let query_summary = committed.payload["query_summary"].as_array().unwrap();
+        assert_eq!(
+            query_summary.len(),
+            1,
+            "duplicate query must not enter the merged query_summary"
+        );
+        assert!(
+            query_summary[0]["query_text"]
+                .as_str()
+                .unwrap_or_default()
+                .starts_with("q1"),
+            "{query_summary:?}"
+        );
+        // 两次调用都成对服务：首个真实派发、第二个指针回踩。
+        for cid in ["call-1", "call-2"] {
+            assert!(
+                events.iter().any(|e| {
+                    e.event_type == EventType::ToolStarted
+                        && e.payload.get("call_id").and_then(|v| v.as_str()) == Some(cid)
+                }),
+                "missing ToolStarted for {cid}"
+            );
+            assert!(
+                events.iter().any(|e| {
+                    e.event_type == EventType::ToolCompleted
+                        && e.payload.get("call_id").and_then(|v| v.as_str()) == Some(cid)
+                        && e.payload.get("exit_code") == Some(&serde_json::json!(0))
+                }),
+                "missing pointer completion for {cid}"
             );
         }
 

@@ -61,6 +61,22 @@ impl BatchCloseKind {
     }
 }
 
+/// S3 前去噪（设计 §10-2「空批不唤醒」）：可用计数为 0 的批次绝不武装
+/// β 收尾回合——不产生收尾模型调用；1–4 条未达阈值同样不武装（等子代理
+/// 继续或由墙钟 D2 交回）。阈值/护栏共用一段判定，空批显式短路。
+pub(crate) fn should_arm_close(usable: u64) -> Option<BatchCloseKind> {
+    if usable == 0 {
+        return None;
+    }
+    if usable >= MECHANICAL_CAP {
+        Some(BatchCloseKind::MechanicalCapForceClose)
+    } else if usable >= SUFFICIENCY_TARGET {
+        Some(BatchCloseKind::EvidenceThresholdMet)
+    } else {
+        None
+    }
+}
+
 /// 宽口径可用计数（§3.3 定稿口径）：`visibility ∈ {full_text_observed,
 /// partial_text_observed}` 的工具证据、按 `content_sha256` 去重。
 /// 机械层从不采信模型自报；声明行恒 metadata-only，天然不入数。
@@ -179,6 +195,34 @@ pub(crate) fn append_countdown_to_tool_message(
     }
 }
 
+/// S3 前去噪（设计 §5.6「重复 query 回踩」）：取检索调用的去重键——
+/// `query` 优先、`url` 兜底（web_fetch/browser_read），trim 后为空视同无键。
+/// 精确字符串匹配（不做大小写/语义归一，避免越权改写检索意图）。
+pub(crate) fn query_key(arguments: &serde_json::Value) -> Option<String> {
+    arguments
+        .get("query")
+        .and_then(|v| v.as_str())
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .or_else(|| {
+            arguments
+                .get("url")
+                .and_then(|v| v.as_str())
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+        })
+        .map(str::to_string)
+}
+
+/// 重复 query 的中性指针回执（不改写检索语义、不教学）：明确未重复检索，
+/// 指向本 run 内首次派发的 call_id（模型消息面已有该结果）。
+pub(crate) fn duplicate_query_note(query: &str, original_call_id: &str) -> String {
+    format!(
+        "[机械] 本 query（\"{query}\"）已于本 run 派发过（原 call_id={original_call_id}）；\
+         未重复检索，结果见该次调用的既有返回。"
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -237,6 +281,51 @@ mod tests {
         // 到上限：剩余 0，不 panic、不出现负数。
         let at_cap = countdown_line(10, 20);
         assert!(at_cap.contains("还剩 0 条"), "{at_cap}");
+    }
+
+    /// S3 前去噪：空批不武装 β 收尾回合；阈值/护栏边界不变。
+    #[test]
+    fn empty_batch_never_arms_close_round() {
+        assert_eq!(should_arm_close(0), None);
+        assert_eq!(should_arm_close(1), None);
+        assert_eq!(should_arm_close(4), None);
+        assert_eq!(
+            should_arm_close(SUFFICIENCY_TARGET),
+            Some(BatchCloseKind::EvidenceThresholdMet)
+        );
+        assert_eq!(
+            should_arm_close(MECHANICAL_CAP),
+            Some(BatchCloseKind::MechanicalCapForceClose)
+        );
+    }
+
+    /// S3 前去噪：query/url 去重键与空值语义。
+    #[test]
+    fn query_key_prefers_query_then_url_and_rejects_blanks() {
+        assert_eq!(
+            query_key(&serde_json::json!({"query": "  rust policy  "})).as_deref(),
+            Some("rust policy")
+        );
+        assert_eq!(
+            query_key(&serde_json::json!({"url": "https://example.com/a"})).as_deref(),
+            Some("https://example.com/a")
+        );
+        assert_eq!(
+            query_key(&serde_json::json!({"query": "   ", "url": "https://example.com/b"}))
+                .as_deref(),
+            Some("https://example.com/b")
+        );
+        assert_eq!(query_key(&serde_json::json!({"query": ""})), None);
+        assert_eq!(query_key(&serde_json::json!({})), None);
+    }
+
+    /// S3 前去噪：重复 query 指针回执含原 call_id，且明确「未重复检索」。
+    #[test]
+    fn duplicate_query_note_points_back_to_original_call() {
+        let note = duplicate_query_note("rust policy", "call-1");
+        assert!(note.contains("call-1"), "{note}");
+        assert!(note.contains("未重复检索"), "{note}");
+        assert!(note.contains("rust policy"), "{note}");
     }
 
     /// 提前交付标记：整行前缀解析；行内提及不触发。

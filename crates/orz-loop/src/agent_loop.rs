@@ -1910,6 +1910,12 @@ pub(crate) async fn run_agent_loop(
     // 0ar S2-D3（§5.5）：同轮溢出检索调用的未派发登记——本轮 post-batch
     // 间隙注入一次性重述（每轮至多一条），防模型漏看丢覆盖。
     let mut deferred_retrievals: Vec<String> = Vec::new();
+    // 0ar S3 前去噪（设计 §5.6）：检索车道（子代理）在本激活内的 query
+    // 去重键 → 首次 call_id；重复 query 走指针回踩（不重复检索）。只对
+    // 检索车道跨轮持久；主车道改用每轮局部表（同轮重复去重、跨激活重派
+    // 仍按「每次派发新激活」语义执行）。
+    let mut lane_dispatched_queries: std::collections::HashMap<String, String> =
+        std::collections::HashMap::new();
     // §4.6 wiring state: the final-answer counterexample gate fires once
     // per run. The old mixed inquiry counters are gone (GAP-INQUIRY-SPLIT
     // 2026-08-09) — orientation counts live in the session-level
@@ -3798,12 +3804,39 @@ pub(crate) async fn run_agent_loop(
                 ) && !profile.tool_filter.denies_nested_dispatch()
             })
             .collect();
-        let merged_positions: std::collections::BTreeSet<usize> = dispatch_bound
+        // 0ar S3 前去噪（§5.6）：先按 query 去重——检索车道跨轮（同一
+        // 激活）持久、主车道仅同轮（跨激活重派仍新开）；重复 query 不再
+        // 进入合并/派发面，登记为指针回踩（原 call_id）。
+        let mut duplicate_positions: std::collections::HashMap<usize, String> =
+            std::collections::HashMap::new();
+        let mut dispatchable: Vec<usize> = Vec::new();
+        let mut round_dispatched_queries: std::collections::HashMap<String, String> =
+            std::collections::HashMap::new();
+        let dedupe_map = if svc.retrieval_calls.is_some() {
+            &mut lane_dispatched_queries
+        } else {
+            &mut round_dispatched_queries
+        };
+        for &i in &dispatch_bound {
+            let tc = &response.tool_calls[i];
+            match crate::retrieval::batch_close::query_key(&tc.arguments) {
+                Some(key) => {
+                    if let Some(original) = dedupe_map.get(&key) {
+                        duplicate_positions.insert(i, original.clone());
+                    } else {
+                        dedupe_map.insert(key, tc.call_id.clone());
+                        dispatchable.push(i);
+                    }
+                }
+                None => dispatchable.push(i),
+            }
+        }
+        let merged_positions: std::collections::BTreeSet<usize> = dispatchable
             .iter()
             .take(crate::retrieval::batch_close::MERGE_MAX_QUERIES)
             .copied()
             .collect();
-        let merged_extra_queries: Vec<(usize, String)> = dispatch_bound
+        let merged_extra_queries: Vec<(usize, String)> = dispatchable
             .iter()
             .take(crate::retrieval::batch_close::MERGE_MAX_QUERIES)
             .skip(1)
@@ -3819,7 +3852,7 @@ pub(crate) async fn run_agent_loop(
                 (i, q)
             })
             .collect();
-        let deferred_positions: std::collections::BTreeSet<usize> = dispatch_bound
+        let deferred_positions: std::collections::BTreeSet<usize> = dispatchable
             .iter()
             .skip(crate::retrieval::batch_close::MERGE_MAX_QUERIES)
             .copied()
@@ -3909,11 +3942,57 @@ pub(crate) async fn run_agent_loop(
                 tool_idx += 1;
                 continue;
             }
+            // 0ar S3 前去噪（§5.6）：重复 query 指针回踩——不发起新检索，
+            // 以中性回执把已有结果（原 call_id）交回模型；事件面成对
+            // ToolStarted+ToolCompleted（exit 0，真实被服务）。
+            if let Some(original_call_id) = duplicate_positions.get(&tool_idx) {
+                let q = crate::retrieval::batch_close::query_key(&tc.arguments).unwrap_or_default();
+                let target_name = match route(&tc.name) {
+                    DispatchTarget::InternalRetrieval => "internal_retrieval",
+                    _ => "external_retrieval",
+                };
+                writer
+                    .record(
+                        EventType::ToolStarted,
+                        serde_json::json!({
+                            "tool": tc.name,
+                            "call_id": tc.call_id,
+                            "target": target_name,
+                        }),
+                    )
+                    .await?;
+                writer
+                    .record(
+                        EventType::ToolCompleted,
+                        serde_json::json!({
+                            "tool": tc.name,
+                            "call_id": tc.call_id,
+                            "target": target_name,
+                            "exit_code": 0,
+                        }),
+                    )
+                    .await?;
+                messages.push(Message {
+                    role: Role::Tool,
+                    content: crate::retrieval::batch_close::duplicate_query_note(
+                        &q,
+                        original_call_id,
+                    ),
+                    tool_call_id: Some(tc.call_id.clone()),
+                    tool_calls: Vec::new(),
+                    reasoning_content: None,
+                    round: None,
+                });
+                tool_idx += 1;
+                continue;
+            }
             // 0ar S2-D3：被合并调用回执（先于执行分支——本调用不再单独
             // 派发；leader 已按声明序在前位以单激活多 query 执行完毕）。
             // 事件面 ToolStarted+ToolCompleted 沿既有形状（真实被服务），
             // 合并事实在结果文本与合并激活的 query_summary（判据 6）。
-            if merged_positions.contains(&tool_idx) && tool_idx != dispatch_bound[0] {
+            if merged_positions.contains(&tool_idx)
+                && dispatchable.first().copied() != Some(tool_idx)
+            {
                 let q = merged_extra_queries
                     .iter()
                     .find(|(i, _)| *i == tool_idx)
@@ -3976,7 +4055,7 @@ pub(crate) async fn run_agent_loop(
                     .unwrap_or(tc.name.as_str())
                     .to_string();
                 deferred_retrievals.push(q.clone());
-                let leader_q = dispatch_bound
+                let leader_q = dispatchable
                     .first()
                     .and_then(|&i| {
                         response.tool_calls[i]
@@ -4522,13 +4601,7 @@ pub(crate) async fn run_agent_loop(
                 .map(|e| e.lock().unwrap().clone())
                 .unwrap_or_default();
             let usable = crate::retrieval::batch_close::usable_source_count(&snapshot);
-            let kind = if usable >= crate::retrieval::batch_close::MECHANICAL_CAP {
-                Some(crate::retrieval::batch_close::BatchCloseKind::MechanicalCapForceClose)
-            } else if usable >= crate::retrieval::batch_close::SUFFICIENCY_TARGET {
-                Some(crate::retrieval::batch_close::BatchCloseKind::EvidenceThresholdMet)
-            } else {
-                None
-            };
+            let kind = crate::retrieval::batch_close::should_arm_close(usable);
             if let Some(kind) = kind {
                 messages.push(Message {
                     role: Role::User,
