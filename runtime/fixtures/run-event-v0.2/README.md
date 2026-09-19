@@ -146,13 +146,24 @@ extension 2026-08-10):
   `retrieval-close-record.evidence-threshold-met.valid` /
   `…dispatch-wallclock-bound.valid` / `…subagent-early-delivery.valid`;
   negative lock: `retrieval-close-record.wallclock-missing-assessment.constraint.invalid`.
-  Assessment side: optional `usable_source_count` (wide caliber — dedupe by
-  `content_sha256`, visibility in {full_text_observed,
-  partial_text_observed} and relevance=direct) plus optional
+  Assessment side: optional `usable_source_count` (wide caliber — visibility
+  in {full_text_observed, partial_text_observed}, dedupe by
+  `content_sha256`; the 2026-09-19 review handling drops the earlier
+  `relevance = direct` qualifier — relevance is unavailable at the mechanical
+  counting point and vacuous at the mechanical ledger, where every entry is
+  hardcoded relevance=direct) plus optional
   `sufficiency_gap`{target, missing, retrieval_calls, note} with the pairing
   rule gap ⇒ count; positives/negatives
   `information-sufficiency-assessment.partial-report.valid` /
   `…gap-without-count.constraint.invalid`.
+- RETRIEVAL-BATCH-HANDOFF-AND-ROUND-SEAT 0ar S2-D3 (2026-09-19, design v1.1
+  §5.4/§8 criterion 6): merged multi-query activation — `query_summary`
+  carries ONE entry per merged query and each `query_entry` gains the
+  optional `usable_source_count` (wide-scope per-query usable count,
+  mechanical attribution via the originating `web_search` query;
+  fetch-derived evidence stays unattributed in a merged activation and the
+  single-query form keeps the batch total). Positive lock:
+  `retrieval-result.merged-multi-query.valid`.
 - **Scope completion** (§3.3.6): scope completion flows through the normal
   path (result → assessment → parent disposition `close` → close record), so
   it is represented by `normal_close`; no separate terminal value.

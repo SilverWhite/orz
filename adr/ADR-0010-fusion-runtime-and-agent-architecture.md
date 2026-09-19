@@ -70,6 +70,13 @@
      表述仅描述注册路径历史（两次扩面的事实过程），不构成地位等级、不再作为工具面
      现行口径；运行时机制差异照旧（压缩窗口轮工具面收窄、权限分类、READ_ONLY 豁免表、
      子代理投影面等均属机制而非地位差异）。见 §14.72 第 11 条。
+   - 冻结版本补记（2026-09-19 追加 v1.75）：**检索批次回送与轮级单席位
+     （0ar S2）实施转录**——恢复 ADR §3.3/§4.4 的**裁决权（非仪式）**：
+     检索批次以子代理阈值回送／到点正常交回承担结构化 close 语义，主代理
+     以普通回合消费回送结果并自主续派，**不要求调用 `retrieval_disposition`**
+     （无仪式往返）；依据＝THIN_HARNESS §4.4 自述偏差「ADR 修订留待 R3 验证
+     通过后实施」，验证轮 r1–r3 已完成 ⇒ 现处裁决窗口（用户 2026-09-19 两轮
+     裁决定稿）。见 §14.73。
    - 日期：2026-08-09（v1.1 补充裁决同日冻结）
 - 决策范围：产品 runtime 所有权、成熟组件复用、自研准入、主/子 Agent 架构、模型与 transport、工具与权限、检索证据、context/compaction、问询与活性守卫、journal/snapshot、隐私、UI、Windows 兼容性、Schema 演进与设计文档治理
 - 取代/修订：
@@ -5633,3 +5640,46 @@ RLI 影子默认关、生产 1D 不动）。选型出处按用户裁决**脱敏�
     「第八例外与第九工具」等表述仅描述注册路径历史（两次扩面的事实过程），不构成地位
     等级、不再作为工具面现行口径；运行时机制差异照旧（压缩窗口轮工具面收窄、权限分类、
     READ_ONLY 豁免表、子代理投影面等均属机制而非地位差异）。
+
+#### §14.73 检索批次回送与轮级单席位（2026-09-19，v1.75）
+
+**性质**：0ar 设计定稿（[`RETRIEVAL_BATCH_HANDOFF_AND_ROUND_SEAT_DESIGN_2026-09-19`](../docs/RETRIEVAL_BATCH_HANDOFF_AND_ROUND_SEAT_DESIGN_2026-09-19.md)；
+2026-09-19 用户两轮裁决＋主会话批序裁决）的 S2 实施转录。S1 契约面已验收
+（2026-09-19，提交 `28e855b1`）；S2 落码于 2026-09-19 过夜批（**工作树未提交、
+未推送、未重建**）；S3 同三题 k=1 真机复验待放行。
+
+1. **裁决权恢复（非仪式）**：本设计恢复的是 ADR §3.3/§4.4 的**结构化裁决权**
+   ——检索批次以「子代理阈值回送／到点正常交回」承担 close 语义，主代理在下一
+   普通回合消费回送结果并自主决定续派或收口；**不恢复仪式**（不要求主代理调用
+   `retrieval_disposition` close/continue 往返；THIN_HARNESS §4.4 的 auto_close
+   主干保留）。依据＝THIN_HARNESS §4.4 自述「该偏差的 ADR 修订留待 R3 验证通过
+   后实施」，验证轮 r1–r3（2026-09-18/19）已完成 ⇒ 本转录在窗口内完成。
+2. **D1 阈值回送（定案参数）**：判定权归子代理，宽口径可用计数（`visibility ∈
+   {full_text, partial}` 且按 `content_sha256` 去重，机械层单一事实源）满
+   **5** 条即进入 β 收尾（注入中性事实＋工具面机械收空＋**唯一收尾回合**产出
+   结果总结）；机械护栏 **10** 条为强制收尾上限（二取一余地）；可见倒数对子
+   代理可见（每批检索结果尾行：条目额度与已发起调用数**分开报**）；提前交付
+   （`[EARLY_DELIVERY]` 显式标记＋证据指针，缺指针 fail-open 按普通收尾＋
+   anomaly）。软规则与机械护栏不一致时落 anomaly，不静默取其一。
+3. **D2 未达标交回（定案参数）**：单批墙钟 **300 s**（档位表 180／300／450 s；
+   `ORZ_RETRIEVAL_SUBAGENT_TIMEOUT_SECS` 显式 env 优先级不变）到点以「部分证据
+   ＋缺口＋指针」**正常交回**（`terminal_reason=dispatch_wallclock_bound` 必带
+   assessment 链——已得计数＋缺口字段），**不走 `subagent_failed`**。日常检索
+   与调研由批数承载。
+4. **D3 合并优先＋溢出拆轮（定案参数）**：同轮多检索先合并为**单激活多 query**
+   （上限 **3** query／激活；`query_summary` 逐 query 一条并带逐 query 宽口径
+   可用计数——收尾阈值按**批级合计**、逐 query 计数降为**可核披露**，未覆盖
+   query 由主代理按披露自主续派；逐 query 收尾语义经 2026-09-19 审查处置勘误
+   放弃：逐 query 5×3=15 与护栏 10 不相容，见设计稿 v1.1 §5.4）；溢出调用以
+   **无 `ToolStarted` 的预派发拒绝**交回（`cause=retrieval_dispatch_deferred_one_per_round`，
+   模板同族 gate 拒绝＋一次性重述）——既让子代理承担更重任务，又保住主代理回合。
+5. **契约面（S1 已验收）**：`retrieval_close_record.terminal_reason` 闭枚举
+   9 → 12（`evidence_threshold_met`／`dispatch_wallclock_bound`／
+   `subagent_early_delivery`）；`information_sufficiency_assessment` 增可选
+   `usable_source_count`／`sufficiency_gap`（`gap ⇒ count` 配对）；
+   `retrieval_result` 的 `query_entry` 增可选 `usable_source_count`（随 S2 同批
+   契约增量）。零新事件族；D3 未派发走 `tool_completed` 既有 cause 面。
+6. **关系与边界**：不恢复 disposition 仪式；不改 FP-2（能力级不可达如实汇报）；
+   不新增工具面；不针对单一 benchmark 调参（参数对日常检索／调研同时成立）；
+   恢复到 §3.3/§4.4 的是**裁决权而非仪式**（第 1 条）。S3 真机复验按设计稿
+   §8 判据 7 条＋验收读数五项收取，待放行。

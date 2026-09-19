@@ -1962,6 +1962,87 @@ EXTRA_V02_PAYLOAD_POSITIVES[
     "reason_codes": ["usable_below_target"],
     "assessment_version": "0.2.0",
 }
+# 0ar S2-D3 (2026-09-19, RETRIEVAL_BATCH_HANDOFF_AND_ROUND_SEAT_DESIGN v1.0
+# §5.4/§8 判据 6)：同轮多检索合并为单激活多 query——query_summary 逐 query
+# 一条、并携带契约新增可选字段 usable_source_count（宽口径逐 query 可用
+# 计数；派生证据多 query 下不归因）。本正例锁定两处：多 query 形态与
+# query_entry 的可选计数字段。
+EXTRA_V02_PAYLOAD_POSITIVES["retrieval-result.merged-multi-query.valid"] = {
+    "schema_version": "0.2.0-draft",
+    "result_kind": "retrieval_subagent_result",
+    "result_id": "RET-RES-0002",
+    "activation_id": "ACT-EXT-0002",
+    "subagent_session_id": "sess-ext-1",
+    "contract_id": "CONTRACT-EXT-0001",
+    "contract_revision": 0,
+    "result_digest": ZERO_HASH,
+    "ledger_digest": ZERO_HASH,
+    "query_summary": [
+        {
+            "query_id": "QRY-0001",
+            "query_text": "rust channel docs",
+            "source_category": "official_docs",
+            "result_count": 1,
+            "action_taken": "searched",
+            "tool_used": "web_search",
+            "usable_source_count": 1,
+        },
+        {
+            "query_id": "QRY-0001-2",
+            "query_text": "tokio select pitfalls",
+            "source_category": "official_docs",
+            "result_count": 1,
+            "action_taken": "searched",
+            "tool_used": "web_search",
+            "usable_source_count": 1,
+        },
+    ],
+    "source_ledger": [
+        {
+            "source_id": "SRC-0001",
+            "source_title": "Rust reference",
+            "source_url_or_ref": "https://doc.rust-lang.org/reference",
+            "source_type": "web_page",
+            "visibility": "full_text_observed",
+            "accessed_at": "2026-09-19T00:00:00Z",
+            "observed_scope": "full document",
+            "missing_scope": "none",
+            "relevance": "direct",
+            "content_sha256": ZERO_HASH,
+            "highest_allowed_claim": "observed",
+            "tier": "default",
+            "mechanical_weight": 1.0,
+            "weight_reason": "default",
+        },
+        {
+            "source_id": "SRC-0002",
+            "source_title": "Tokio tutorial",
+            "source_url_or_ref": "https://tokio.rs/tokio/tutorial",
+            "source_type": "web_page",
+            "visibility": "partial_text_observed",
+            "accessed_at": "2026-09-19T00:00:01Z",
+            "observed_scope": "first section",
+            "missing_scope": "rest of page",
+            "relevance": "direct",
+            "content_sha256": "aa" * 32,
+            "highest_allowed_claim": "derived",
+            "tier": "default",
+            "mechanical_weight": 1.0,
+            "weight_reason": "default",
+        },
+    ],
+    "filtering_log": [],
+    "raw_source_refs": [],
+    "prefilter_log": [],
+    "source_counts": {
+        "total": 2,
+        "full_text_observed": 1,
+        "partial_text_observed": 1,
+        "metadata_only": 0,
+        "unavailable": 0,
+    },
+    "visibility_degraded": False,
+}
 EXTRA_V02_PAYLOAD_BADS[
     "information-sufficiency-assessment.gap-without-count.constraint.invalid"
 ] = {
@@ -2969,13 +3050,24 @@ extension 2026-08-10):
   `retrieval-close-record.evidence-threshold-met.valid` /
   `…dispatch-wallclock-bound.valid` / `…subagent-early-delivery.valid`;
   negative lock: `retrieval-close-record.wallclock-missing-assessment.constraint.invalid`.
-  Assessment side: optional `usable_source_count` (wide caliber — dedupe by
-  `content_sha256`, visibility in {full_text_observed,
-  partial_text_observed} and relevance=direct) plus optional
+  Assessment side: optional `usable_source_count` (wide caliber — visibility
+  in {full_text_observed, partial_text_observed}, dedupe by
+  `content_sha256`; the 2026-09-19 review handling drops the earlier
+  `relevance = direct` qualifier — relevance is unavailable at the mechanical
+  counting point and vacuous at the mechanical ledger, where every entry is
+  hardcoded relevance=direct) plus optional
   `sufficiency_gap`{target, missing, retrieval_calls, note} with the pairing
   rule gap ⇒ count; positives/negatives
   `information-sufficiency-assessment.partial-report.valid` /
   `…gap-without-count.constraint.invalid`.
+- RETRIEVAL-BATCH-HANDOFF-AND-ROUND-SEAT 0ar S2-D3 (2026-09-19, design v1.1
+  §5.4/§8 criterion 6): merged multi-query activation — `query_summary`
+  carries ONE entry per merged query and each `query_entry` gains the
+  optional `usable_source_count` (wide-scope per-query usable count,
+  mechanical attribution via the originating `web_search` query;
+  fetch-derived evidence stays unattributed in a merged activation and the
+  single-query form keeps the batch total). Positive lock:
+  `retrieval-result.merged-multi-query.valid`.
 - **Scope completion** (§3.3.6): scope completion flows through the normal
   path (result → assessment → parent disposition `close` → close record), so
   it is represented by `normal_close`; no separate terminal value.

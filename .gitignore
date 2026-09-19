@@ -1,5 +1,7 @@
 _prototype_smoke/
 prototype/.pytest_cache/
+/.pytest_cache/
+/.agents/
 *.egg-info/
 .build/
 
@@ -62,3 +64,12 @@ _windows_high_nist/staging-*/
 
 # W2 跑批桥客户端过程日志（本地件，不入库；结果以 formal-2026-09-02/ 证据与 runlog 登记为准）
 _windows_high_nist/w2-chunk*-runlog*.txt
+
+# RS-10 残件收口（2026-09-19 复核批，用户令「补忽略规则」）：8 件历史入库日志已
+# `git rm --cached` 摘除跟踪，但按 LIFECYCLE 纪律文件保留磁盘作本地存档（日志应为
+# 默认不入库——FULL_PROJECT_STRICT_REVIEW_2026-09-18 §RS-10）；此前无忽略规则，故
+# 摘跟踪后仍以 `??` 挂在状态里。按下述作用域收口，勿再以未跟踪态冒头；
+# 确需入库的日志用 `git add -f` 显式声明。
+/_linux_arm_dryrun/build/*.log
+/_windows_high_nist/*.log
+/存档/root-artifacts-*/**/*.log

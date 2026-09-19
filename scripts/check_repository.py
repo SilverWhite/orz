@@ -2996,6 +2996,12 @@ def check_repository() -> dict[str, Any]:
     run_event_v02_payload_positive_contracts[
         run_event_v02_payload_root / "tool-completed.cause.valid.json"
     ] = tool_completed_v02_schema
+    # 0ar S2-D3 (2026-09-19, retrieval batch handoff design §5.4/§8-6):
+    # merged multi-query activation — per-query entries with the optional
+    # `usable_source_count` (wide-scope per-query usable count).
+    run_event_v02_payload_positive_contracts[
+        run_event_v02_payload_root / "retrieval-result.merged-multi-query.valid.json"
+    ] = ROOT / "runtime/retrieval-result-event-payload-v0.2.schema.json"
     run_event_v02_payload_negative_contracts[
         run_event_v02_payload_root
         / "tool-completed.cause-shellcode.constraint.invalid.json"

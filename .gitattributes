@@ -14,3 +14,6 @@
 *.yaml text eol=lf
 *.yml text eol=lf
 *.jsonl text eol=lf
+*.exe binary
+*.png binary
+*.ico binary

@@ -35,7 +35,3 @@ gsa-tui = "assurance.tui.main:main"
 [tool.setuptools.packages.find]
 where = ["."]
 include = ["assurance*"]
-
-[tool.pytest.ini_options]
-asyncio_mode = "strict"
-asyncio_default_fixture_loop_scope = "function"

@@ -89,7 +89,12 @@
         "source_category": { "$ref": "#/$defs/nonempty" },
         "result_count": { "type": "integer", "minimum": 0 },
         "action_taken": { "enum": ["searched", "refined", "aborted_scope_violation", "aborted_no_results"] },
-        "tool_used": { "$ref": "#/$defs/nonempty" }
+        "tool_used": { "$ref": "#/$defs/nonempty" },
+        "usable_source_count": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "0ar S2 (2026-09-19, retrieval batch handoff design §5.4/§8 criterion 6): wide-scope usable source count attributed to THIS query (visibility full/partial, deduplicated by content_sha256, mechanical — never model-reported). Per-query attribution keys on the originating web_search query; fetch-derived evidence in a merged multi-query activation is unattributed. Single-query activations carry the batch total."
+        }
       }
     },
     "source_entry": {

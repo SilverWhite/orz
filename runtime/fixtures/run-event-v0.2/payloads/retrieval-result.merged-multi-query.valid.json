@@ -1,0 +1,76 @@
+{
+  "schema_version": "0.2.0-draft",
+  "result_kind": "retrieval_subagent_result",
+  "result_id": "RET-RES-0002",
+  "activation_id": "ACT-EXT-0002",
+  "subagent_session_id": "sess-ext-1",
+  "contract_id": "CONTRACT-EXT-0001",
+  "contract_revision": 0,
+  "result_digest": "0000000000000000000000000000000000000000000000000000000000000000",
+  "ledger_digest": "0000000000000000000000000000000000000000000000000000000000000000",
+  "query_summary": [
+    {
+      "query_id": "QRY-0001",
+      "query_text": "rust channel docs",
+      "source_category": "official_docs",
+      "result_count": 1,
+      "action_taken": "searched",
+      "tool_used": "web_search",
+      "usable_source_count": 1
+    },
+    {
+      "query_id": "QRY-0001-2",
+      "query_text": "tokio select pitfalls",
+      "source_category": "official_docs",
+      "result_count": 1,
+      "action_taken": "searched",
+      "tool_used": "web_search",
+      "usable_source_count": 1
+    }
+  ],
+  "source_ledger": [
+    {
+      "source_id": "SRC-0001",
+      "source_title": "Rust reference",
+      "source_url_or_ref": "https://doc.rust-lang.org/reference",
+      "source_type": "web_page",
+      "visibility": "full_text_observed",
+      "accessed_at": "2026-09-19T00:00:00Z",
+      "observed_scope": "full document",
+      "missing_scope": "none",
+      "relevance": "direct",
+      "content_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+      "highest_allowed_claim": "observed",
+      "tier": "default",
+      "mechanical_weight": 1.0,
+      "weight_reason": "default"
+    },
+    {
+      "source_id": "SRC-0002",
+      "source_title": "Tokio tutorial",
+      "source_url_or_ref": "https://tokio.rs/tokio/tutorial",
+      "source_type": "web_page",
+      "visibility": "partial_text_observed",
+      "accessed_at": "2026-09-19T00:00:01Z",
+      "observed_scope": "first section",
+      "missing_scope": "rest of page",
+      "relevance": "direct",
+      "content_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "highest_allowed_claim": "derived",
+      "tier": "default",
+      "mechanical_weight": 1.0,
+      "weight_reason": "default"
+    }
+  ],
+  "filtering_log": [],
+  "raw_source_refs": [],
+  "prefilter_log": [],
+  "source_counts": {
+    "total": 2,
+    "full_text_observed": 1,
+    "partial_text_observed": 1,
+    "metadata_only": 0,
+    "unavailable": 0
+  },
+  "visibility_degraded": false
+}
