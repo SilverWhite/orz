@@ -33,13 +33,6 @@ cargo run -p orz-bin -- --real -p "你的任务"           # 真实 DeepSeek tra
 cargo run -p orz-bin -- --fake-provider               # TUI
 ```
 
-> [!IMPORTANT]
-> 构建前置：`orz-tools-api` 的 build script 需要 `protoc`（RS-12，
-> 2026-09-19 补记）。仓库自带 Windows 件 `orz/bin/protoc.exe`（未入库的
-> 本地依赖）——干净环境中先设 `PROTOC=<路径>/orz/bin/protoc.exe`（或安装
-> `protobuf-compiler`），否则依赖编译约 20 分钟后在 build script 处失败
-> （ORZ-BUILD-MOUNT-001 / ORZ-TOOL-BINARY-COMPAT-001 同族环境缺件）。
-
 ### 常用入口
 
 | 场景 | 命令 |
