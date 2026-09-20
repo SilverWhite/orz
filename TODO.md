@@ -25,7 +25,7 @@
 
 ## 开放项路由（2026-09-13 同步；勾选与计数权威在 BACKLOG）
 
-- 未闭合总数：**41 项**（BACKLOG 计数口径；**0ay 立项 40 → 41**（检索合成判定面落盘与可核复算——0ax 判定面不进 journal ⇒ `synthetic_answer_count` 不可由 journal 重算；批序 S1→S4；同批 F-1/F-4/F-5 即修零计数、案例库 `ORZ-DEV-LINKER-CRASH-001` 不入计数；报告 [`独立审计与裁决`](docs/audits/0AT_0AU_0AV_0AW_0AX_S1_INDEPENDENT_AUDIT_AND_ADJUDICATION_2026-09-20.md)）；**2026-09-20 深夜过夜批：S3 摩擦五项 S1 落码**（0aw 全量〔准入/分类器/两臂退役＋resource_hint 软提示〕／0au 保留判定＋回放 7/7／0at 双面＋契约／0av 批读数＋条件 schema／0ax 合成口径＋回放 21/37——未提交、不推送、不重建，计数不动；报告 [`过夜批报告`](docs/audits/0AT_0AU_0AV_0AW_0AX_S1_IMPL_OVERNIGHT_2026-09-20.md)）；逐次计数流水见 [`docs/BACKLOG_AND_PRIORITIES.md`](docs/BACKLOG_AND_PRIORITIES.md) 未闭合计数，TODO 不重复维护；更早流水收缩入档 [`存档/todo/`](存档/todo/) 与 BACKLOG 全量快照）。TODO `[ ]` 明细含父/子项，计数以 BACKLOG 为准。**2026-09-19 最近**：**0as 编码 lossy 兜底细化闭合 37 → 36**（提交批 orz `3d7d7a74`＋`e897dce2`）＋此前同日**编码 lossy 兜底细化立项 0as 36 → 37**（用户令「这点值得做，让模型自己看着舒服些」；F4 回查引出——四级梯最后一级整段替换字符）＋**0m S4 收口闭合 37 → 36**（过夜批；S3 实机 2026-09-07 经 0o T1 达成）＋**0ar S2 落码＋ADR §14.73 转录随批**（未提交、不推送、未重建，不动计数，余 S3 待放行）＋**0aq 机械项十二件勾选**（明细见 BACKLOG 0aq；报告 [`过夜批报告`](docs/audits/0AR_S2_RS_MECHANICAL_0M_S4_OVERNIGHT_2026-09-19.md)）。2026-09-18 及更早计数流水见 [`docs/BACKLOG_AND_PRIORITIES.md`](docs/BACKLOG_AND_PRIORITIES.md) 计数行与全量快照。
+- 未闭合总数：**41 项**（BACKLOG 计数口径；**2026-09-20 本批：0az 检索合成判定面收口闭合 42 → 41**（四子项全落码：F-1 判官代际门改「有字段才校验」／F-2 判官类内去重／F-3·F-4 schema 排他 `allOf`＋`prefilter_log` 必填／F-5 缩进／F-6 权威面 ADR §14.74／F-7 钉子；判据 ①–⑤ 全达成；未提交、不推送、不重建；报告 [`0az 实施与验证`](docs/audits/0AZ_SYNTHETIC_JUDGEMENT_AUDIT_CLOSURE_2026-09-20.md)）；**0ay S1/S2 独立审查立项 41 → 42**（0az 判定面收口；来源＝只读审查 F-1…F-7；报告 [`独立审查`](docs/audits/0AY_S1_S2_INDEPENDENT_REVIEW_2026-09-20.md)）；**0ay 立项 40 → 41**（判定面落盘与可核复算；批序 S1→S4；同批 F-1/F-4/F-5 即修零计数、案例库 `ORZ-DEV-LINKER-CRASH-001` 不入计数）；**2026-09-20 深夜过夜批：S3 摩擦五项 S1 落码**（0aw 全量／0au／0at／0av／0ax——计数不动；报告 [`过夜批报告`](docs/audits/0AT_0AU_0AV_0AW_0AX_S1_IMPL_OVERNIGHT_2026-09-20.md)）；逐次计数流水见 [`docs/BACKLOG_AND_PRIORITIES.md`](docs/BACKLOG_AND_PRIORITIES.md) 未闭合计数（含 2026-09-19 及更早：0as 立项 36→37／闭合 37→36、0m S4 闭合、0ar S2 落码＋§14.73 转录、0aq 机械项十二件勾选），TODO 不重复维护；更早流水收缩入档 [`存档/todo/`](存档/todo/) 与 BACKLOG 全量快照）。TODO `[ ]` 明细含父/子项，计数以 BACKLOG 为准。
 - P0：0b 验证③④（⑤ 89 题独立用户门）；0d 后续 3/4/5 S4 复验；0j W1-R1 S4 复验 + W3-R3 余项 + W4-R4 S5-2 总项；0l ⑥⑦（⑧ TER 见 [`TODO2.md`](TODO2.md)）；0n GAP-APPROVAL-PROMPTER（延期，S1 设计定稿前置）；0o T3 批次 W2 chunk3 + T4 批次 L + T5 批次 O + T6 统一收口；0t S4 实机复验待续；0u R4 15 题官方复跑（0t S4 载体，2026-09-10 放行）；0w TB 4.0 单题摩擦探针（第三跑成立并跑完（2026-09-11））；0y NP1 机械身体集成支线（2026-09-11 用户裁决立项，实施未开始；§14.2 验证载体已裁决引入模拟器（2026-09-12），S1 载体搭建待放行，M0 定版为首个无依赖里程碑）；0z 真机资源安全边界与崩溃收尾（2026-09-12 用户裁决立项，设计完成待放行实施；S1–S4，**不与 0v-C 搭车**）。**2026-09-13 新增**：0ac 即时结果回报与流式检索（`GAP-MECH-IMMEDIATE-FEEDBACK`，设计定稿待放行实施，S1 探针为第一门）；`GAP-ORZ-HOST-RESOURCE-SNAPSHOT-DROP` 载体重建待放行。**2026-09-20 闭合**：检索批次回送与轮级单席位线（S1 契约面／S2 实施／S3 同三题真机复验全部完成，ADR-0010 §14.73/v1.75 转录随 S2；未闭合 36 → 35）＋同日 N1–N6 摩擦深挖登记观察不立项。
 - P1：FUS-COMPONENT-REGISTER 组件审计；GAP-WINDOWS-EVIDENCE 三项；IMPL-DEEPSEEK-TRANSPORT live 晋级证据；ORZ-SESSION-CONTEXT-MONITOR 四项；0aa 历史卷 journal 全量 verifier 复扫；0aj 黑板写权限层放行（`blackboard_write` ReadOnly deny，旧摩擦残余）；0al 门禁冻结克隆树漂移；0ae 上下文软门与模型参与压缩（注意力阶梯+plan 问询+黑板写入面）；0ah 滑块上下文（v8 模型自控注意力窗口；v7 记录已勘误；**实现更正批已落码＋只读审查处置同日闭合＋收口清理批已落码**（v7 折叠族退役，orz `501447c0`；守卫 700K＋H1/T1 按越线重新武装；回放面＝v8 组成部分）＋**R-12 余项已处置**（阶梯一轮只注入最高档／回放窗口裁定不扩白名单／0.77 换算与五项真机读数待实测），登记待放行）；0am LIF 动力学升级线（轮次预算换算先行＋RLI 自研谐振基座与观测判据预注册；**2026-09-17 整体挂起，O2 为前置门**）；0aq 全项目全面严格审查处置线（RS-01…RS-18 待修：CI 断流修复＋CI Rust 测试轨〔提级待裁决〕、920K 模型面残留文案、测试封闭性、锁中毒级联、0am 批提交前钉、高危模块测试补强、仓库历史瘦身、入库日志清理、.gsa 磁盘卫生、构建前置文档化、文档漂移三件、gitignore 补、一次性产物清理、Python 测试面卫生、TODO2 M3、巨型文档观察）；S3 摩擦处置 0au（尾部派发预算）／0aw（OS 委派执行）／0ax（检索形态 URL 完整性）／0ay（判定面落盘与可核复算）。
 - P2：IMPL-CONTROL-FABRIC Slice 3/4（P2-7）；OPS-PROTOCOL 裁剪与接线裁决（P2-8）；P2-11 余项（PULL 自描述 S3/S4、retryable 分类位、依赖图 S3/S4）；P2-12 S4 复验；P2-13 B4；P2-14 S3/S4；P2-15 EVALUATION-CORPUS-FREEZE（S1/S2 完成；附属 `GAP-EVAL-RESULT-SCHEMA-DRIFT` 已修复）；0ap FR-A06 压缩交互设计批（首步设计评估稿，取舍随稿裁决）；S3 摩擦处置 0at（逐 query 归因）／0av（批次数读数落盘面）。
@@ -978,16 +978,28 @@ GLM F2 处置转排期（2026-09-06 用户裁决）：`orz-host/src/approval.rs`
 - [ ] **S4 真机复验**：同三题口径下「无 URL 结果占比／可引用来源数」可机械读数并进入审计。
 
 
-### P1-0ay 检索合成判定面落盘与可核复算（P1；2026-09-20 立项，BACKLOG 0ay；来源＝0ax S1 独立审计 F-2）
+### P1-0ay 检索合成判定面落盘与可核复算（P1；2026-09-20 立项，BACKLOG 0ay；来源＝0ax S1 独立审计 F-2；**S1/S2/S3 已完成 2026-09-20，S4 真机留待**）
 
-> 入口：[`独立审计与裁决 §2`](docs/audits/0AT_0AU_0AV_0AW_0AX_S1_INDEPENDENT_AUDIT_AND_ADJUDICATION_2026-09-20.md) / 索引 `GAP-RETRIEVAL-SYNTHETIC-JUDGEMENT-AUDITABILITY` / BACKLOG 0ay。
+> 入口：[`独立审计与裁决 §2`](docs/audits/0AT_0AU_0AV_0AW_0AX_S1_INDEPENDENT_AUDIT_AND_ADJUDICATION_2026-09-20.md) / [`S1/S2/S3 实施报告`](docs/audits/0AY_S1_S2_S3_IMPLEMENTATION_2026-09-20.md) / 索引 `GAP-RETRIEVAL-SYNTHETIC-JUDGEMENT-AUDITABILITY` / BACKLOG 0ay。
 
-- [ ] **S1 契约面**：`web_search_result` ledger 条目增可选 `citation_url_count`（非负整数；`candidate_urls` 非空才落计数）——schema＋fixture＋Python 镜像＋Rust verifier 四件同批；**重写 `merged-multi-query` fixture**（审计 F-3：合成条目改「查询串 identity ＋ `citation_url_count: 0`」形态，另加「有引用池」正例）。
-- [ ] **S2 实现**：`evidence.rs` 装配面单源落 `candidate_urls.len()`（与 `is_synthetic_answer` 判定同源，禁二把尺）；payload 字段条件落盘（不扰动单 query 批与无引用池批）。
-- [ ] **S3 语料复算**：S3 三 run 归档用新字段重算 `synthetic_answer_count`／收窄 `usable_source_count`，与实现判定逐格一致（含混合批正例）；旧 journal 回放零误报（字段可选）。
+- [x] **S1 契约面**（2026-09-20 完成）：`web_search_result` ledger 条目增可选 `citation_url_count`（**正整数**，原引用池非空才落——**勘误**：原写「非负整数／合成条目落 0」与 F-3 裁决正文及判据 ② 冲突，按裁决正文执行＝合成条目字段缺席）——schema＋fixture＋Python 镜像＋Rust verifier 四件同批；`merged-multi-query` fixture 重写（合成条目改查询串形态＋有引用池正例 3 = 1 + 2）。
+- [x] **S2 实现**（2026-09-20 完成）：`evidence.rs` 装配面单源落原池条数（同一 helper `batch_close::citation_url_count`，与 `is_synthetic_answer` 判定同源）；字段条件落盘（不扰动单 query 批与无引用池批）。
+- [x] **S3 语料复算**（2026-09-20 完成）：S3 三 run 七批归档重算逐格 **7/7 吻合**（旧 37／收窄 **16**／合成 21）；旧 journal 回放零新增报错（字段可选＋生成代际门）；混合批正例经真归档验证。驱动：`D:\tb-eval\_0ay_s3_recompute.py`。
 - [ ] **S4 真机复验**：同三题口径「无 URL 占比／可引用来源数」可机械读并进入审计（承接 0ax S4）。
 - 判据：① journal 侧可独立重算（与实现同源同值）；② 单 query 批与无引用池批 payload 逐字节不变；③ 不动阈值 5/10、FP-2、官方口径（`task.toml`／镜像／verifier／数据集 pin）。
 - 边界：与 0av（读数面）同族不同面——0ay 落判定**输入**；0ax S1 行为语义不变。
+
+### P1-0az 检索合成判定面收口（P1；2026-09-20 立项、同日实施批闭合 42 → 41，BACKLOG 0az；来源＝0ay S1/S2 独立审查批 F-1…F-7；**七项缺口合成单总项排期**）
+
+> 入口：[`独立审查`](docs/audits/0AY_S1_S2_INDEPENDENT_REVIEW_2026-09-20.md) / 索引 `GAP-RETRIEVAL-SYNTHETIC-JUDGEMENT-AUDIT-CLOSURE` / BACKLOG 0az / [`0ay 实施报告`](docs/audits/0AY_S1_S2_S3_IMPLEMENTATION_2026-09-20.md) / TODO P1-0ay。计数：立项 **41 → 42**（2026-09-20）；**同日实施批闭合 42 → 41**（报告 [`0az 实施与验证`](docs/audits/0AZ_SYNTHETIC_JUDGEMENT_AUDIT_CLOSURE_2026-09-20.md)）。
+
+- [x] **① 判官口径收口（F-1＋F-2，优先）**（2026-09-20 实施批）：代际门改「**有任一条目带 `citation_url_count` 才校验**」＋判官改**类内去重**（与生产者同尺）＋schema 代际门描述同步；**并收口审查 §5 指出的声明面**——单 query 逐值对拍／多 query `unattributed_usable_count` 恒等式对拍，均在门内（避免拿 pre-0ax 宽口径声明撞窄口径复算）。Python 冻结镜像与 Rust 离线判官同形。
+- [x] **② 契约面闭合（F-3／F-4／F-5）**（2026-09-20 实施批）：`allOf`（`citation_url_count` present ⇒ `source_type` const `web_search_result`）＋`prefilter_log` 进 `required`＋缩进回正；两条反例经 schema 直测各 1 错（此前 0 错）⇒ schema 接受集＝判官接受集。fixture 预期变化 3 件（minimal／v0.2 信封／tier-weight-mismatch 派生件）＋生成器同批，重跑 330/330 逐字节一致。
+- [x] **③ 权威面同步（F-6）**（2026-09-20 实施批）：`usable_source_count` 描述对齐窄口径＋**ADR-0010 §14.74（v1.76）**转录（本条第 1 项修订 §14.73 第 2 条宽口径）＋0ar 设计稿 v1.2 §3.3 勘误注（零行为变更）。
+- [x] **④ 钉子（含 F-7 覆盖缺口）**（2026-09-20 实施批）：Python 契约钉 +5（跨类同 digest／完全净化形态 raw 3→retained 0／0ax 时代混合批回放／声明可用面两条）＋schema 钉 +1＋Rust 对拍语料 +3（253 → 256，两侧逐族逐格对拍）。
+- 判据：① 0ax 时代「同批有池＋无池」形态不再误报（构造例＋回放例）；② 同去重键跨类时判官重算与声明逐值相等；③ schema 接受集 ＝ 判官接受集；④ 阈值 5／10、FP-2、官方口径零改动；⑤ 既有读数不回归。
+- 边界：只动判官与契约／文档面，**不动** 0ay S1/S2 生产语义（S2 语义等价重构保持）；S4 真机与 0ay 闭合裁决不受本项阻塞。
+
 ### P1-0as 编码 lossy 兜底细化（P1；2026-09-19 用户令「值得做」，BACKLOG 0as；由 0ar S1 狗粮轮 F4 回查引出；**实施批落码并于提交批闭合 2026-09-19（37 → 36；orz `3d7d7a74`＋`e897dce2`）**）
 
 > 入口：BACKLOG 0as / 索引 `GAP-ENCODING-LOSSY-REFINEMENT` / F4 记录 [`0AR_S1_CONTRACT_SURFACE_2026-09-19` §7](docs/audits/0AR_S1_CONTRACT_SURFACE_2026-09-19.md) / 编码门审计 [`GAP_ENCODING_GATE_IMPL_AUDIT_2026-08-13`](docs/audits/GAP_ENCODING_GATE_IMPL_AUDIT_2026-08-13.md) / 实施回执 [`0AS_ENCODING_LOSSY_REFINEMENT_2026-09-19`](docs/audits/0AS_ENCODING_LOSSY_REFINEMENT_2026-09-19.md) / `orz/crates/codegen/orz-tools/src/util/encoding.rs`。计数：立项 **36 → 37**（2026-09-19）。目标口径：可读部分保持可读、不可解码字节显式可见且噪声最小（现状＝四级梯最后一级整段 `�`；run `RUN-CLI-6aad9497` 实测 `utf-8-lossy` 1 次）。

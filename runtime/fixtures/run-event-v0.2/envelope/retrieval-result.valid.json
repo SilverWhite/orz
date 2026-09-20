@@ -61,6 +61,7 @@
         "weight_reason": "default"
       }
     ],
+    "prefilter_log": [],
     "filtering_log": [
       {
         "source_id": "SRC-0003",

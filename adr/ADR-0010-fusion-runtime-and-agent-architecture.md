@@ -77,6 +77,13 @@
      （无仪式往返）；依据＝THIN_HARNESS §4.4 自述偏差「ADR 修订留待 R3 验证
      通过后实施」，验证轮 r1–r3 已完成 ⇒ 现处裁决窗口（用户 2026-09-19 两轮
      裁决定稿）。见 §14.73。
+   - 冻结版本补记（2026-09-20 追加 v1.76）：**检索合成判定面与窄口径可用计数
+     转录（0ax S1／0ay S1-S2／0az 判定面收口）**——可用额度只计**可引用**证据
+     （文本级可见性 ∧ 排除无 URL 合成答案；合成答案改由 `synthetic_answer_count`
+     单列披露、倒数行如实标注），判定输入（原引用池大小）随 `citation_url_count`
+     落 journal 且被 result/ledger digest 覆盖，判官两侧同源复算（代际门＝该字段
+     出现、类内去重、声明面对拍），契约面由 `allOf` 与 `required` 机器化。本条第 1 项
+     **修订 §14.73 第 2 条的宽口径**（阈值 5／护栏 10／FP-2／官方口径不变）。见 §14.74。
    - 日期：2026-08-09（v1.1 补充裁决同日冻结）
 - 决策范围：产品 runtime 所有权、成熟组件复用、自研准入、主/子 Agent 架构、模型与 transport、工具与权限、检索证据、context/compaction、问询与活性守卫、journal/snapshot、隐私、UI、Windows 兼容性、Schema 演进与设计文档治理
 - 取代/修订：
@@ -5680,6 +5687,57 @@ RLI 影子默认关、生产 1D 不动）。选型出处按用户裁决**脱敏�
    `retrieval_result` 的 `query_entry` 增可选 `usable_source_count`（随 S2 同批
    契约增量）。零新事件族；D3 未派发走 `tool_completed` 既有 cause 面。
 6. **关系与边界**：不恢复 disposition 仪式；不改 FP-2（能力级不可达如实汇报）；
-   不新增工具面；不针对单一 benchmark 调参（参数对日常检索／调研同时成立）；
-   恢复到 §3.3/§4.4 的是**裁决权而非仪式**（第 1 条）。S3 真机复验按设计稿
+  不新增工具面；不针对单一 benchmark 调参（参数对日常检索／调研同时成立）；
+  恢复到 §3.3/§4.4 的是**裁决权而非仪式**（第 1 条）。S3 真机复验按设计稿
    §8 判据 7 条＋验收读数五项收取，待放行。
+
+#### §14.74 检索合成判定面与窄口径可用计数（0ax S1／0ay S1-S2／0az 判定面收口）（2026-09-20，v1.76）
+
+**性质**：§14.66/§14.73 线的继续——0ax S1 起的**行为语义**（无 URL 合成答案不计入
+可用额度）＋0ay S1/S2 的**判定输入落盘与可核复算**＋0az 的**判定面收口**（判官代际门／
+类内去重／契约面闭合／声明面对拍）转录为自然语言权威。依据＝
+[`0ay S1/S2/S3 实施报告`](../docs/audits/0AY_S1_S2_S3_IMPLEMENTATION_2026-09-20.md)／
+[`0ay S1/S2 独立审查`](../docs/audits/0AY_S1_S2_INDEPENDENT_REVIEW_2026-09-20.md)（F-1…F-7）／
+[`0az 实施报告`](../docs/audits/0AZ_SYNTHETIC_JUDGEMENT_AUDIT_CLOSURE_2026-09-20.md)。
+**本条第 1 项修订 §14.73 第 2 条的宽口径**（设计稿
+[`RETRIEVAL_BATCH_HANDOFF_AND_ROUND_SEAT_DESIGN_2026-09-19`](../docs/RETRIEVAL_BATCH_HANDOFF_AND_ROUND_SEAT_DESIGN_2026-09-19.md)
+§3.3 的宽口径表述由本条取代，该稿同批加勘误指针）。
+
+1. **窄口径定案（0ax S1，2026-09-20）**：可用额度——阈值 **5**、护栏 **10** 与倒数行
+   共用的**同一把尺**——只计**可引用**证据：`visibility ∈ {full_text_observed, partial_text_observed}`
+   且**排除无 URL 合成答案**（`source_type == web_search_result` 且**原**引用池为空）。
+   合成答案不入可用额度，改由 `synthetic_answer_count` **单列披露**：倒数行在 >0 时附
+   「另有 N 条为无 URL 合成文本，未计入可用额度（不可引用）」，=0 时整行与旧形态逐字节
+   一致。**依据**＝S3 实读：七批 37 条文本级证据中 **21** 条为无 URL 合成（56.8 %），
+   6/7 批因此凑满阈值、子代理按规则提前收尾而判分物未落盘；收窄后同语料读数为
+   **旧 37／收窄 16／合成 21**（宽口径读数保留为历史对照）。
+2. **判定输入落 journal（0ay S1/S2）**：判定输入＝`web_search_result` 条目的**原**引用池
+   大小，随可选字段 `citation_url_count`（正整数，**仅原池非空时落**）进 `source_ledger`，
+   故被 `result_digest`／`ledger_digest` 覆盖、改动必改 digest；恒等式
+   `citation_url_count == len(candidate_urls) ＋ 该条目 prefilter_log 移除数`
+   （`candidate_urls` 是**前置过滤后**的保留池）。字段**缺席**＝原池为空（合成形态）
+   或 pre-0ay 归档。生产侧判定单源＝`batch_close::citation_url_count`／
+   `is_synthetic_answer`（落盘装配点与判定共用同一 helper，禁二把尺）。落**计数**而非布尔
+   ——计数可与「保留池 ＋ 移除数」两张独立清单交叉复算。
+3. **判定面收口（0az ①/②）**：两处判官（Python 冻结镜像／Rust 离线判官）同源复算并同尺：
+   （a）**生成代际门**＝「有任一条目带 `citation_url_count`」——只有 0ay 生产者能写该字段，
+   故 0ax 时代「同批有池＋无池」归档不被误判（此前门认「声明了 `synthetic_answer_count`」，
+   而 0ax 生产者只要本批有合成答案即写该声明 ⇒ 会把有池旧条目读作合成、误报）；
+   （b）**类内去重**——合成与可用各自按 `content_sha256`（回退 `identity:`）**独立**去重，
+   与生产者「先分类后去重」同尺（此前判官「先去重后分类」，同一键跨类时丢计）。
+   **契约面**：`citation_url_count` 出现 ⇒ `source_type` const `web_search_result` 由
+   `allOf` 机器化；`prefilter_log` 进顶层 `required`（新恒等式的前置条件）；schema 接受集
+   自此等于判官接受集。
+4. **声明面可核（0az ①）**：判官除 `synthetic_answer_count` 外，还把**收窄后的声明可用值**
+   与自己的复算对拍——单 query 激活按值对拍（`query_summary[0].usable_source_count`
+   按构造成立即为批级值）；多 query 激活按 `unattributed_usable_count` 恒等式对拍
+   （`Σ 逐 query ＋ unattributed ＝ 批级可用`，**成立条件＝逐 query 桶按 digest 互斥**；
+   跨 query 重叠使缺口饱和到 0，此时对拍口径为 `max(0, 批级 − Σ 逐 query)`）。
+5. **不变量**：阈值 5／护栏 10、FP-2、官方口径（`task.toml`／镜像／verifier／数据集 pin）
+   零改动；单 query 批与无引用池批 payload **逐字节不变**（新字段仅随非空原池出现）；
+   pre-0ax 归档（无该字段）回放不新增报错；`usable_source_count` 描述与倒数行、阈值、
+   护栏同尺（契约文件内不再两说）。
+6. **边界与余项**：多 query 的**逐 query** 桶归属仍以生产者披露为准（归因键
+   `search_query` 精确匹配与 A 面 `origin_query_id` 谱系是两套键，判官只对拍
+   Σ 与缺口、不对拍逐 query 值）；S4 同三题真机读数（无 URL 占比／可引用来源数）待放行，
+   0ay 闭合与 S4 判读由用户裁决。

@@ -885,6 +885,12 @@ PAYLOAD_GOOD_V02: dict[str, dict] = {
                 "weight_reason": "default",
             },
         ],
+        # 0az ② (2026-09-20, GAP-RETRIEVAL-SYNTHETIC-JUDGEMENT-AUDIT-CLOSURE):
+        # prefilter_log is REQUIRED by the v0.2 payload schema — the 0ay
+        # citation identity `citation_url_count == retained + removals` cannot
+        # be checked without it, and the producer always writes it — so the
+        # minimal positive carries the empty array.
+        "prefilter_log": [],
         "filtering_log": [
             {
                 "source_id": "SRC-0003",
@@ -1992,8 +1998,19 @@ EXTRA_V02_PAYLOAD_POSITIVES[
 # unattributed ＝ 批级可用：2＋1＝3；仅多 query 批出现）。
 # 0ax S1（2026-09-20，S3 摩擦 N5）同例扩展：顶层可选
 # synthetic_answer_count（无 URL 合成答案单列数——不入可用额度；>0 才落）。
-# SRC-004 为 web_search_result 合成条目：不入 usable（usable=3=SRC-001/002
-# ＋未归因 SRC-003... 批级 usable=3），被单列披露。
+# SRC-004 为 web_search_result 合成条目：不入 usable，被单列披露。
+# 0ay S1（2026-09-20，GAP-RETRIEVAL-SYNTHETIC-JUDGEMENT-AUDITABILITY）同例
+# 重写（审计 F-3 勘误＋可核性正例）：① 合成条目 SRC-004 的原 URL 形态
+# （source_url_or_ref="https://search.example/synth"）在生产端**不可产出**
+# ——web_search_result 条目的 identity 恒取检索 query 串（`evidence.rs`
+# 的 path→url→query→document_id 序），故改写成查询串形态（形态与机制一
+# 致，且不再被「形如 URL ⇒ 非合成」的代理判据读反）；其 citation_url_count
+# **缺席**＝原引用池为空（判据 ②：无引用池批 payload 逐字节不变——空池
+# 条目不得落 0）。② 新增 SRC-0005＝**有引用池**正例：citation_url_count=3
+# （原池 3 条）∧ candidate_urls/candidate_pool＝前置过滤后保留 1 条 ∧
+# prefilter_log 记 2 次移除 ⇒ 机械恒等式
+# `citation_url_count == len(candidate_urls) ＋ 该源移除条数`（3 = 1 + 2）
+# 使判定输入在 journal 面可独立复算。
 EXTRA_V02_PAYLOAD_POSITIVES["retrieval-result.merged-multi-query.valid"] = {
     "schema_version": "0.2.0-draft",
     "result_kind": "retrieval_subagent_result",
@@ -2018,10 +2035,13 @@ EXTRA_V02_PAYLOAD_POSITIVES["retrieval-result.merged-multi-query.valid"] = {
             "query_id": "QRY-0001-2",
             "query_text": "tokio select pitfalls",
             "source_category": "official_docs",
-            "result_count": 1,
+            # 0ay S1 正例同步：该 query 桶现有两条可引用证据（SRC-0002 页
+            # ＋ SRC-0005 带引用池的检索条目）⇒ 逐 query 可用 2；批级可用
+            # 4 ＝ Σ 逐 query（1＋2）＋未归因 1（SRC-0003 派生证据）。
+            "result_count": 2,
             "action_taken": "searched",
             "tool_used": "web_search",
-            "usable_source_count": 1,
+            "usable_source_count": 2,
         },
     ],
     "source_ledger": [
@@ -2078,8 +2098,12 @@ EXTRA_V02_PAYLOAD_POSITIVES["retrieval-result.merged-multi-query.valid"] = {
         },
         {
             "source_id": "SRC-0004",
-            "source_title": "Synthesized answer (no URL)",
-            "source_url_or_ref": "https://search.example/synth",
+            # 0ay S1（审计 F-3）：web_search_result 条目的 identity 恒为检索
+            # query 串（生产形态）——标题与 source_url_or_ref 同取该串；
+            # 该检索串不与任何派发 query 逐字相等 ⇒ 谱系按 leader 兜底规则
+            # 归 QRY-0001（0at A 面五规则之一）。
+            "source_title": "rust channel docs official reference",
+            "source_url_or_ref": "rust channel docs official reference",
             "source_type": "web_search_result",
             "visibility": "partial_text_observed",
             "accessed_at": "2026-09-20T00:00:03Z",
@@ -2093,15 +2117,96 @@ EXTRA_V02_PAYLOAD_POSITIVES["retrieval-result.merged-multi-query.valid"] = {
             # 2026-09-20 审查修复批补齐，使契约示例与实现行为一致
             # （覆盖率由构造成立，合成答案不缺席谱系）。
             "origin_query_id": "QRY-0001",
+            # 0ay S1：原引用池为空 ⇒ citation_url_count 缺席（不得落 0——
+            # 判据 ② 要求无引用池批 payload 逐字节不变）。
+        },
+        {
+            # 0ay S1 正例：有引用池的 web_search_result——原池 3 条、前置
+            # 过滤保留 1 条、移除 2 条（恒等式 3 = 1 + 2）。该条目为可引用
+            # 证据 ⇒ 计入 usable、不计入 synthetic_answer_count。
+            "source_id": "SRC-0005",
+            "source_title": "tokio select pitfalls",
+            "source_url_or_ref": "tokio select pitfalls",
+            "source_type": "web_search_result",
+            "visibility": "partial_text_observed",
+            "accessed_at": "2026-09-20T00:00:04Z",
+            "observed_scope": "search snippet",
+            "missing_scope": "full page",
+            "relevance": "direct",
+            "content_sha256": "dd" * 32,
+            "highest_allowed_claim": "derived",
+            "origin_query_id": "QRY-0001-2",
+            "citation_url_count": 3,
+            "candidate_urls": [
+                "https://docs.rs/tokio/latest/tokio/macro.select.html",
+            ],
+            "candidate_pool": [
+                {
+                    "url": "https://docs.rs/tokio/latest/tokio/macro.select.html",
+                    "canonical_url": (
+                        "https://docs.rs/tokio/latest/tokio/macro.select.html"
+                    ),
+                    "tier": "default",
+                    "mechanical_weight": 1.0,
+                    "weight_reason": "default",
+                    "relevance": "direct",
+                    "form_reasons": [],
+                },
+            ],
         },
     ],
     "filtering_log": [],
-    "raw_source_refs": [],
-    "prefilter_log": [],
+    "raw_source_refs": [
+        {
+            "source_id": "SRC-0005",
+            "source_title": "tokio select pitfalls",
+            "source_url_or_ref": "tokio select pitfalls",
+            "visibility": "partial_text_observed",
+            "content_sha256": "dd" * 32,
+            "candidate_urls": [
+                "https://docs.rs/tokio/latest/tokio/macro.select.html",
+            ],
+            "candidate_pool": [
+                {
+                    "url": "https://docs.rs/tokio/latest/tokio/macro.select.html",
+                    "canonical_url": (
+                        "https://docs.rs/tokio/latest/tokio/macro.select.html"
+                    ),
+                    "tier": "default",
+                    "mechanical_weight": 1.0,
+                    "weight_reason": "default",
+                    "relevance": "direct",
+                    "form_reasons": [],
+                },
+            ],
+        },
+    ],
+    "prefilter_log": [
+        {
+            "source_id": "SRC-0005",
+            "url": "https://tracker.example/redirect?to=docs.rs%2Ftokio",
+            "reason": "redirect_chain",
+            "action": "removed",
+            "filtered_at": "2026-09-20T00:00:04Z",
+        },
+        {
+            "source_id": "SRC-0005",
+            "url": (
+                "https://docs.rs/tokio/latest/tokio/macro.select.html"
+                "?utm_source=serp"
+            ),
+            "canonical_url": (
+                "https://docs.rs/tokio/latest/tokio/macro.select.html"
+            ),
+            "reason": "duplicate_canonical",
+            "action": "removed",
+            "filtered_at": "2026-09-20T00:00:04Z",
+        },
+    ],
     "source_counts": {
-        "total": 4,
+        "total": 5,
         "full_text_observed": 1,
-        "partial_text_observed": 3,
+        "partial_text_observed": 4,
         "metadata_only": 0,
         "unavailable": 0,
     },

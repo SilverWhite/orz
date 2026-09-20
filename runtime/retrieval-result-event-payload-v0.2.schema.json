@@ -2,7 +2,7 @@
  "$schema": "https://json-schema.org/draft/2020-12/schema",
  "$id": "https://local.scientific-assurance.invalid/schema/retrieval-result-event-payload-v0.2.schema.json",
  "title": "Structured retrieval result runtime event payload v0.2",
- "description": "ADR-0010 §3.3.3/§3.7.4/§3.7 条 12/§5.2: the structured result the retrieval sub-agent forms before the mechanical assessment — query_summary, source_ledger, filtering_log and raw_source_refs, all built mechanically by the controller from tool-call evidence + [DOC]/[SOURCE] declaration lines (provider-neutral; the mechanical ledger is the single result track). GAP-RETRIEVAL-STRUCTURED-RESULT 方向 C (2026-08-30 用户裁决): the [RESULT_JSON] organized block and its organized_response are DELETED — the layer-3 sub-agent model weighting annotation (model_weight/reason/annotation_status, §3.7 条 12 ③) is retired with it. Source quality weighting: web-typed ledger entries carry the mechanical tier/weight (authoritative 1.1 / default 1.0 / low_quality 0.7); [SOURCE] declaration URLs are normalized (ACAF network-target rules). visibility_degraded=true iff the ledger carries NO text-level evidence (zero full_text_observed/partial_text_observed — metadata-only declarations or no tool calls), an explicit mechanical fallback signal (never a silent downgrade). FUS-RETRIEVAL-MECH B-1 (2026-08-13): web_search_result ledger entries may carry candidate_urls — the citation URL candidate pool forwarded mechanically from the host tool result (metadata-grade). FUS-RETRIEVAL-MECH step 3 (2026-08-14): candidate_urls is the POST-PREFILTER retained pool (canonical/host-level dedup, known failure forms removed, sorted by mechanical tier/weight + lexical relevance); candidate_pool mirrors it with per-candidate canonical_url/tier/mechanical_weight/weight_reason/relevance/form_reasons; prefilter_log records every removal with a stable reason (bad_url/login_wall/redirect_chain/duplicate_canonical/duplicate_host). raw_source_refs mirrors candidate_urls and candidate_pool for web_search_result entries. The assurance/retrieval-result-v0.1.schema.json twin is migration input and stays replay-only.",
+  "description": "ADR-0010 §3.3.3/§3.7.4/§3.7 条 12/§5.2: the structured result the retrieval sub-agent forms before the mechanical assessment — query_summary, source_ledger, filtering_log and raw_source_refs, all built mechanically by the controller from tool-call evidence + [DOC]/[SOURCE] declaration lines (provider-neutral; the mechanical ledger is the single result track). GAP-RETRIEVAL-STRUCTURED-RESULT 方向 C (2026-08-30 用户裁决): the [RESULT_JSON] organized block and its organized_response are DELETED — the layer-3 sub-agent model weighting annotation (model_weight/reason/annotation_status, §3.7 条 12 ③) is retired with it. Source quality weighting: web-typed ledger entries carry the mechanical tier/weight (authoritative 1.1 / default 1.0 / low_quality 0.7); [SOURCE] declaration URLs are normalized (ACAF network-target rules). visibility_degraded=true iff the ledger carries NO text-level evidence (zero full_text_observed/partial_text_observed — metadata-only declarations or no tool calls), an explicit mechanical fallback signal (never a silent downgrade). FUS-RETRIEVAL-MECH B-1 (2026-08-13): web_search_result ledger entries may carry candidate_urls — the citation URL candidate pool forwarded mechanically from the host tool result (metadata-grade). FUS-RETRIEVAL-MECH step 3 (2026-08-14): candidate_urls is the POST-PREFILTER retained pool (canonical/host-level dedup, known failure forms removed, sorted by mechanical tier/weight + lexical relevance); candidate_pool mirrors it with per-candidate canonical_url/tier/mechanical_weight/weight_reason/relevance/form_reasons; prefilter_log records every removal with a stable reason (bad_url/login_wall/redirect_chain/duplicate_canonical/duplicate_host). raw_source_refs mirrors candidate_urls and candidate_pool for web_search_result entries. 0ay S1 (2026-09-20, GAP-RETRIEVAL-SYNTHETIC-JUDGEMENT-AUDITABILITY): the RAW citation-pool size travels as the optional `citation_url_count` on web_search_result entries whenever the raw pool is non-empty, so the synthetic-answer judgement (raw pool empty) and the resulting `synthetic_answer_count` / narrowed usable count are recomputable from the journal alone; a web_search_result entry carries NO URL-shaped source_url_or_ref — its source_url_or_ref is the search query string (the identity of the web_search call). The assurance/retrieval-result-v0.1.schema.json twin is migration input and stays replay-only.",
  "type": "object",
  "additionalProperties": false,
  "required": [
@@ -17,6 +17,7 @@
   "ledger_digest",
   "query_summary",
   "source_ledger",
+  "prefilter_log",
   "filtering_log",
   "raw_source_refs",
   "source_counts",
@@ -129,7 +130,7 @@
   "synthetic_answer_count": {
    "type": "integer",
    "minimum": 1,
-   "description": "0ax S1 (2026-09-20, S3 friction N5): count of deduplicated web_search_result evidence entries with an EMPTY citation pool — URL-less synthesized answers that are NOT citable and are excluded from the usable counting (threshold 5 / cap 10). Emitted only when > 0; absence means the batch carries no synthetic answer."
+   "description": "0ax S1 (2026-09-20, S3 friction N5): count of deduplicated web_search_result evidence entries with an EMPTY citation pool — URL-less synthesized answers that are NOT citable and are excluded from the usable counting (threshold 5 / cap 10). Emitted only when > 0; absence means the batch carries no synthetic answer. 0ay S1 (2026-09-20, GAP-RETRIEVAL-SYNTHETIC-JUDGEMENT-AUDITABILITY): this count is mechanically RECOMPUTABLE from the ledger alone — synthetic ⇔ source_type == web_search_result ∧ citation_url_count ABSENT (deduplicated by content_sha256, falling back to source_url_or_ref, over full_text_observed/partial_text_observed, EACH CLASS DEDUPLICATED INDEPENDENTLY). Both the Rust and the Python judge recompute it and reject a mismatch. Generation gate (replay compatibility, 0az ① 2026-09-20): the cross-check runs only for payloads the 0ay producer could have written — i.e. one carrying citation_url_count on at least one ledger entry. Declaring this field is NOT a gate: the 0ax producer declares it for any batch with a pool-less entry, so a 0ax-era payload mixing pooled and pool-less entries (no citation_url_count anywhere) may be read as synthesized throughout and must NOT be cross-checked. Payloads with no citation_url_count anywhere are deliberately unchecked — every web_search_result entry in them is pool-less by construction."
   }
  },
  "$defs": {
@@ -189,7 +190,7 @@
     "usable_source_count": {
      "type": "integer",
      "minimum": 0,
-     "description": "0ar S2 (2026-09-19, retrieval batch handoff design §5.4/§8 criterion 6): wide-scope usable source count attributed to THIS query (visibility full/partial, deduplicated by content_sha256, mechanical — never model-reported). Per-query attribution keys on the originating web_search query; fetch-derived evidence in a merged multi-query activation is unattributed. Single-query activations carry the batch total."
+     "description": "0ar S2 (2026-09-19, retrieval batch handoff design §5.4/§8 criterion 6): usable source count attributed to THIS query — narrowed scope since 0ax S1 (2026-09-20, S3 friction N5): text-level evidence (visibility full_text_observed/partial_text_observed), EXCLUDING URL-less synthesized answers (web_search_result with an empty raw citation pool), deduplicated by content_sha256 within its own class, mechanical — never model-reported. Per-query attribution keys on the originating web_search query; fetch-derived evidence in a merged multi-query activation is unattributed. Single-query activations carry the batch total. 0az ③ (2026-09-20, GAP-RETRIEVAL-SYNTHETIC-JUDGEMENT-AUDIT-CLOSURE): this description was still the pre-0ax WIDE wording while synthetic_answer_count in the same file already described the narrowing — the two faces are now aligned (same ruler as the countdown line, threshold 5 and cap 10). Judge face: both judges recompute the batch count from the ledger and cross-check this declared value on 0ay-generation payloads (single-query per value; multi-query via the unattributed_usable_count identity)."
     }
    }
   },
@@ -277,11 +278,16 @@
       "$ref": "#/$defs/nonempty"
      }
     },
-    "candidate_pool": {
-     "type": "array",
-     "items": {
+   "candidate_pool": {
+    "type": "array",
+    "items": {
       "$ref": "#/$defs/candidate_pool_entry"
-     }
+    }
+   },
+    "citation_url_count": {
+     "type": "integer",
+     "minimum": 1,
+     "description": "0ay S1 (2026-09-20, GAP-RETRIEVAL-SYNTHETIC-JUDGEMENT-AUDITABILITY): size of the RAW web_search citation pool this entry was formed from — the pre-prefilter count, i.e. the exact input of the synthetic-answer judgement (web_search_result ∧ raw pool empty). Emitted only when the raw pool is NON-EMPTY (> 0); absence therefore means either an empty raw pool (a synthesized, non-citable answer) or a pre-0ay journal. candidate_urls/candidate_pool carry the POST-prefilter retained pool, so citation_url_count >= len(candidate_urls) whenever both are present. 0az ② (2026-09-20, GAP-RETRIEVAL-SYNTHETIC-JUDGEMENT-AUDIT-CLOSURE): the exclusivity below is MACHINE-ENFORCED by this entry's allOf clause (citation_url_count present ⇒ source_type const web_search_result), not merely stated here."
     },
     "origin_query_id": {
      "$ref": "#/$defs/query_entry/properties/query_id",
@@ -361,6 +367,20 @@
       "properties": {
        "mechanical_weight": {
         "const": 0.7
+       }
+      }
+     }
+    },
+    {
+     "if": {
+      "required": [
+       "citation_url_count"
+      ]
+     },
+     "then": {
+      "properties": {
+       "source_type": {
+        "const": "web_search_result"
        }
       }
      }

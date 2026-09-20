@@ -22,10 +22,10 @@
       "query_id": "QRY-0001-2",
       "query_text": "tokio select pitfalls",
       "source_category": "official_docs",
-      "result_count": 1,
+      "result_count": 2,
       "action_taken": "searched",
       "tool_used": "web_search",
-      "usable_source_count": 1
+      "usable_source_count": 2
     }
   ],
   "source_ledger": [
@@ -82,8 +82,8 @@
     },
     {
       "source_id": "SRC-0004",
-      "source_title": "Synthesized answer (no URL)",
-      "source_url_or_ref": "https://search.example/synth",
+      "source_title": "rust channel docs official reference",
+      "source_url_or_ref": "rust channel docs official reference",
       "source_type": "web_search_result",
       "visibility": "partial_text_observed",
       "accessed_at": "2026-09-20T00:00:03Z",
@@ -93,15 +93,82 @@
       "content_sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
       "highest_allowed_claim": "derived",
       "origin_query_id": "QRY-0001"
+    },
+    {
+      "source_id": "SRC-0005",
+      "source_title": "tokio select pitfalls",
+      "source_url_or_ref": "tokio select pitfalls",
+      "source_type": "web_search_result",
+      "visibility": "partial_text_observed",
+      "accessed_at": "2026-09-20T00:00:04Z",
+      "observed_scope": "search snippet",
+      "missing_scope": "full page",
+      "relevance": "direct",
+      "content_sha256": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+      "highest_allowed_claim": "derived",
+      "origin_query_id": "QRY-0001-2",
+      "citation_url_count": 3,
+      "candidate_urls": [
+        "https://docs.rs/tokio/latest/tokio/macro.select.html"
+      ],
+      "candidate_pool": [
+        {
+          "url": "https://docs.rs/tokio/latest/tokio/macro.select.html",
+          "canonical_url": "https://docs.rs/tokio/latest/tokio/macro.select.html",
+          "tier": "default",
+          "mechanical_weight": 1.0,
+          "weight_reason": "default",
+          "relevance": "direct",
+          "form_reasons": []
+        }
+      ]
     }
   ],
   "filtering_log": [],
-  "raw_source_refs": [],
-  "prefilter_log": [],
+  "raw_source_refs": [
+    {
+      "source_id": "SRC-0005",
+      "source_title": "tokio select pitfalls",
+      "source_url_or_ref": "tokio select pitfalls",
+      "visibility": "partial_text_observed",
+      "content_sha256": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+      "candidate_urls": [
+        "https://docs.rs/tokio/latest/tokio/macro.select.html"
+      ],
+      "candidate_pool": [
+        {
+          "url": "https://docs.rs/tokio/latest/tokio/macro.select.html",
+          "canonical_url": "https://docs.rs/tokio/latest/tokio/macro.select.html",
+          "tier": "default",
+          "mechanical_weight": 1.0,
+          "weight_reason": "default",
+          "relevance": "direct",
+          "form_reasons": []
+        }
+      ]
+    }
+  ],
+  "prefilter_log": [
+    {
+      "source_id": "SRC-0005",
+      "url": "https://tracker.example/redirect?to=docs.rs%2Ftokio",
+      "reason": "redirect_chain",
+      "action": "removed",
+      "filtered_at": "2026-09-20T00:00:04Z"
+    },
+    {
+      "source_id": "SRC-0005",
+      "url": "https://docs.rs/tokio/latest/tokio/macro.select.html?utm_source=serp",
+      "canonical_url": "https://docs.rs/tokio/latest/tokio/macro.select.html",
+      "reason": "duplicate_canonical",
+      "action": "removed",
+      "filtered_at": "2026-09-20T00:00:04Z"
+    }
+  ],
   "source_counts": {
-    "total": 4,
+    "total": 5,
     "full_text_observed": 1,
-    "partial_text_observed": 3,
+    "partial_text_observed": 4,
     "metadata_only": 0,
     "unavailable": 0
   },

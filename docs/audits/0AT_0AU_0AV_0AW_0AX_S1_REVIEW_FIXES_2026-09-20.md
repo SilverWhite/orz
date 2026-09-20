@@ -54,6 +54,13 @@ mechanical-audit/资源族内成立）。修复 schema 层后，校验器的跨�
 | 探针分区/翻转规则误吃检索族探针 | 6（每 run 2） | **活缺陷（校验器）**：`_verify_v02_tool_availability_probe`／`verify_tool_availability_probe` 把 retrieval_family 探针的 complete（family 成员名）当工作面分区判 extra；`_verify_v02_probe_accuracy`／`verify_probe_accuracy` 把它计入工作面翻转链（0ac S3① 起每 run 一条探针事件 ⇒ 每 run 两误报） | **双侧同修**：按 `probe_scope` 分流——family 探针不进工作面分区/翻转判定，改受「成员 ⊆ {browser, search_engine, web_channel}」约束；Python 与 Rust（`families_s2c.rs`）逐字镜像，裁决一致 |
 | `retrieval_result_committed` result/ledger_digest 与随行内容不符 | 2（run3 同一 commit） | **历史单件**：extract-02 批（…-02-r0-51）随行 digest 与其自身四段内容不匹配（同 journal 其余 6/7 commit 及全部 pytest 捕获语料均吻合；0.6.3 构建次序无 post-digest 突变；键集/数值/字节序逐项排除未命中） | **登记归档，不再深挖**：校验器行为正确（payload 确实自相矛盾），无现行生产者缺陷证据；留证（事件号 167、SRC-001..007、时间戳 16:38–16:39、候选字节形式穷举记录）供后续考古 |
 
+> **2026-09-20 勘误（0ay S3 复算随批补，读数与定性均不变）**：上表末行 stale-digest 单件的**文件标注**更正——
+> 该单件实为 **`extract-00`（`…-00-r0-8d`，run 3 journal 事件 **167**，activation `…-00`）**，非原文所写的
+> extract-02（`…-02-r0-51`）。三处独立读数互证：① 七件归档逐件 digest 重算仅 `…-00-r0-8d` 不符；
+> ② run 3 journal 逐 commit 复算，事件 167 不符、288／548 相符；③ 判官逐件过检同指 `…-00-r0-8d`（2 条）。
+> 原读数（2 条）、定性（旧二进制真实违约）与处置（登记归档、不再深挖）**不变**；证据见
+> [`0ay S1/S2/S3 实施报告 §5.1`](0AY_S1_S2_S3_IMPLEMENTATION_2026-09-20.md)。
+
 **修复后语料读数**：pytest 捕获语料 **277/0**；S3 三 run 历史 journal 剩余 **35＋2** 条——
 均为**旧二进制真实违约**（35 条 status＝本批生产者修复之前的产出；2 条 stale digest 同上），
 校验器如实报错是正确行为，不做历史豁免（不弱化在版契约）；新二进制起的 journal 由生产者

@@ -34,6 +34,7 @@ from assurance.run_event_journal_validation import (
     _verify_v02_probe_accuracy,
     _verify_v02_receipt_event_isomorphism,
     _verify_v02_request_header,
+    recompute_retrieval_batch_counts,
     validate_journal_file,
     validate_journal_text,
 )
@@ -3206,6 +3207,10 @@ def _committed_result() -> dict:
                 "weight_reason": "default",
             },
         ],
+        # 0az ② (2026-09-20): prefilter_log is a REQUIRED v0.2 payload field
+        # (the producer always writes it; the 0ay citation identity needs it),
+        # so the base payload carries the empty array.
+        "prefilter_log": [],
         "filtering_log": [],
         "raw_source_refs": [
             {
@@ -3929,11 +3934,21 @@ class RetrievalResultConsistencyTests(unittest.TestCase):
                 "candidate_pool": [_pool_entry(url) for url in candidates],
             }
         )
-        journal = _v02_journal(
-            [_mk_v02_event("retrieval_result_committed", result, 0, None)]
+        # 0az ② (F-4, 2026-09-20): the field is now REQUIRED by the payload
+        # schema (the 0ay citation identity cannot be checked without it), so
+        # the missing form fails the schema face. The family rule that names
+        # the retained pool is verified directly — the cross-layer pass
+        # deliberately does not run on schema-invalid input.
+        del result["prefilter_log"]
+        event = _mk_v02_event("retrieval_result_committed", result, 0, None)
+        errors = validate_journal_text(_v02_journal([event]))
+        self.assertIn("'prefilter_log' is a required property", " | ".join(errors))
+        from assurance.run_event_journal_validation import (
+            _verify_v02_candidate_prefilter,
         )
-        errors = validate_journal_text(journal)
-        self.assertIn("prefilter_log missing", " | ".join(errors))
+
+        family = " | ".join(_verify_v02_candidate_prefilter([event]))
+        self.assertIn("prefilter_log missing", family)
 
     def test_prefilter_log_removed_url_still_retained_rejected(self) -> None:
         result = _committed_result()
@@ -4213,6 +4228,330 @@ class RetrievalResultConsistencyTests(unittest.TestCase):
         )
         errors = validate_journal_text(journal)
         self.assertIn("empty with no prefilter_log removal", " | ".join(errors))
+
+
+class RetrievalSyntheticJudgementAuditabilityTests(unittest.TestCase):
+    """0ay S1 (2026-09-20, GAP-RETRIEVAL-SYNTHETIC-JUDGEMENT-AUDITABILITY):
+    the synthetic-answer judgement INPUT travels on the ledger — the RAW
+    citation-pool size (`citation_url_count`) on web_search_result entries
+    whenever the raw pool is non-empty, with the partition identity
+    `citation_url_count == len(candidate_urls) + prefilter removals` — so
+    `synthetic_answer_count` is recomputable from the journal alone. The
+    declared-vs-recompute cross-check is generation-gated for replay
+    compatibility (criterion 3)."""
+
+    def _payload_with_pools(self) -> dict:
+        """Base ledger + one pooled entry (raw 3 → retained 1 + 2 removals)
+        + one pool-less (synthetic) entry; counts and mirrors consistent."""
+        result = _committed_result()
+        pooled = "https://docs.rs/tokio/latest/tokio/macro.select.html"
+        result["source_ledger"].append(
+            {
+                "source_id": "SRC-3",
+                "source_title": "tokio select pitfalls",
+                "source_url_or_ref": "tokio select pitfalls",
+                "source_type": "web_search_result",
+                "visibility": "partial_text_observed",
+                "accessed_at": "2026-09-20T00:00:00Z",
+                "observed_scope": "search snippet",
+                "missing_scope": "full page",
+                "relevance": "direct",
+                "content_sha256": "d" * 64,
+                "highest_allowed_claim": "derived",
+                "citation_url_count": 3,
+                "candidate_urls": [pooled],
+                "candidate_pool": [
+                    {
+                        "url": pooled,
+                        "canonical_url": pooled,
+                        "tier": "default",
+                        "mechanical_weight": 1.0,
+                        "weight_reason": "default",
+                        "relevance": "direct",
+                        "form_reasons": [],
+                    }
+                ],
+            }
+        )
+        result["source_ledger"].append(
+            {
+                "source_id": "SRC-4",
+                "source_title": "tokio select",
+                "source_url_or_ref": "tokio select",
+                "source_type": "web_search_result",
+                "visibility": "partial_text_observed",
+                "accessed_at": "2026-09-20T00:00:01Z",
+                "observed_scope": "search snippet",
+                "missing_scope": "full page",
+                "relevance": "direct",
+                "content_sha256": "e" * 64,
+                "highest_allowed_claim": "derived",
+            }
+        )
+        result["raw_source_refs"].append(
+            {
+                "source_id": "SRC-3",
+                "source_title": "tokio select pitfalls",
+                "source_url_or_ref": "tokio select pitfalls",
+                "visibility": "partial_text_observed",
+                "content_sha256": "d" * 64,
+                "candidate_urls": [pooled],
+                "candidate_pool": result["source_ledger"][2]["candidate_pool"],
+            }
+        )
+        result["prefilter_log"] = [
+            {
+                "source_id": "SRC-3",
+                "url": "https://tracker.example/redirect?to=docs.rs",
+                "reason": "redirect_chain",
+                "action": "removed",
+                "filtered_at": "2026-09-20T00:00:00Z",
+            },
+            {
+                "source_id": "SRC-3",
+                "url": f"{pooled}?utm_source=serp",
+                "canonical_url": pooled,
+                "reason": "duplicate_canonical",
+                "action": "removed",
+                "filtered_at": "2026-09-20T00:00:00Z",
+            },
+        ]
+        result["source_counts"]["total"] = 4
+        result["source_counts"]["partial_text_observed"] = 3
+        result["synthetic_answer_count"] = 1
+        return result
+
+    def test_pooled_and_pool_less_entries_recompute_and_validate(self) -> None:
+        result = self._payload_with_pools()
+        journal = _v02_journal(
+            [_mk_v02_event("retrieval_result_committed", result, 0, None)]
+        )
+        self.assertEqual(validate_journal_text(journal), [])
+        recomputed = recompute_retrieval_batch_counts(result)
+        # SRC-1/SRC-2 (web pages) + SRC-3 (pooled search) are usable;
+        # SRC-4 is the pool-less synthetic answer.
+        self.assertEqual(recomputed["usable_source_count"], 3)
+        self.assertEqual(recomputed["synthetic_answer_count"], 1)
+        self.assertEqual(recomputed["citation_entries"], 2)
+        self.assertEqual(recomputed["citation_url_total"], 3)
+
+    def test_citation_url_count_partition_identity_enforced(self) -> None:
+        result = self._payload_with_pools()
+        result["source_ledger"][2]["citation_url_count"] = 5  # 1 + 2 != 5
+        journal = _v02_journal(
+            [_mk_v02_event("retrieval_result_committed", result, 0, None)]
+        )
+        errors = " | ".join(validate_journal_text(journal))
+        self.assertIn("citation_url_count", errors)
+        self.assertIn("partitions into retained + removed", errors)
+
+    def test_citation_url_count_requires_retained_pool(self) -> None:
+        result = self._payload_with_pools()
+        del result["source_ledger"][2]["candidate_urls"]
+        del result["source_ledger"][2]["candidate_pool"]
+        journal = _v02_journal(
+            [_mk_v02_event("retrieval_result_committed", result, 0, None)]
+        )
+        errors = " | ".join(validate_journal_text(journal))
+        self.assertIn("citation_url_count", errors)
+
+    def test_only_web_search_entries_may_carry_the_count(self) -> None:
+        result = self._payload_with_pools()
+        result["source_ledger"][0]["citation_url_count"] = 2
+        # 0az ② (F-3): the schema's exclusivity clause (citation_url_count
+        # present ⇒ source_type const web_search_result) rejects the web_page
+        # form as well — before 0az only the family rule caught it, while the
+        # schema accepted the payload (judge accept-set ⊊ schema accept-set).
+        event = _mk_v02_event("retrieval_result_committed", result, 0, None)
+        errors = " | ".join(validate_journal_text(_v02_journal([event])))
+        self.assertIn("'web_search_result' was expected", errors)
+        # The family rule still names the offending source; it is verified
+        # directly because the cross-layer pass does not run on
+        # schema-invalid input.
+        from assurance.run_event_journal_validation import _verify_v02_result_consistency
+
+        family = " | ".join(_verify_v02_result_consistency([event]))
+        self.assertIn("only web_search_result may carry a citation pool", family)
+
+    def test_synthetic_self_report_must_match_the_ledger(self) -> None:
+        result = self._payload_with_pools()
+        result["synthetic_answer_count"] = 2  # ledger holds exactly one
+        journal = _v02_journal(
+            [_mk_v02_event("retrieval_result_committed", result, 0, None)]
+        )
+        errors = " | ".join(validate_journal_text(journal))
+        self.assertIn("synthetic_answer_count", errors)
+        self.assertIn("mechanical recompute", errors)
+
+    def test_pre_0ay_journal_replays_unchanged(self) -> None:
+        """Criterion 3: a payload with pool-less web_search_result entries
+        and none of the 0ay fields (what the pre-0ay producer wrote) stays
+        error-free — the cross-check is generation-gated, and the same
+        recompute rule still reads the pool-less entries as synthetic."""
+        result = _committed_result()
+        result["source_ledger"].append(
+            {
+                "source_id": "SRC-3",
+                "source_title": "old news",
+                "source_url_or_ref": "old news",
+                "source_type": "web_search_result",
+                "visibility": "partial_text_observed",
+                "accessed_at": "2026-09-19T00:00:00Z",
+                "observed_scope": "search snippet",
+                "missing_scope": "full page",
+                "relevance": "direct",
+                "content_sha256": "f" * 64,
+                "highest_allowed_claim": "derived",
+            }
+        )
+        result["source_counts"]["total"] = 3
+        result["source_counts"]["partial_text_observed"] = 2
+        journal = _v02_journal(
+            [_mk_v02_event("retrieval_result_committed", result, 0, None)]
+        )
+        self.assertEqual(validate_journal_text(journal), [])
+        recomputed = recompute_retrieval_batch_counts(result)
+        self.assertEqual(recomputed["synthetic_answer_count"], 1)
+        self.assertEqual(recomputed["usable_source_count"], 2)
+
+    # ── 0az ①/④ (2026-09-20, GAP-RETRIEVAL-SYNTHETIC-JUDGEMENT-AUDIT-
+    #    CLOSURE): the F-1…F-7 gaps' nails. Each one is a reproduced
+    #    counterexample from the independent review, turned into a pin.
+
+    def test_0ax_era_mixed_batch_replays_without_false_positive(self) -> None:
+        """F-1 (P1, false positive): the 0ax producer wrote
+        `synthetic_answer_count` for ANY batch carrying a pool-less entry but
+        had no `citation_url_count` (the field is 0ay-only), so a batch mixing
+        a pooled entry with a pool-less one declared 1 while the judge — with
+        the gate keyed on the declaration — read the pooled entry as
+        synthesized and reported `1 != 2`. The gate now requires the field."""
+        result = self._payload_with_pools()
+        for entry in result["source_ledger"]:
+            entry.pop("citation_url_count", None)
+        journal = _v02_journal(
+            [_mk_v02_event("retrieval_result_committed", result, 0, None)]
+        )
+        self.assertEqual(validate_journal_text(journal), [])
+        # The unchecked old-form reading is exactly why it must stay closed:
+        # without the field every web_search_result entry reads as pool-less.
+        self.assertEqual(
+            recompute_retrieval_batch_counts(result)["synthetic_answer_count"], 2
+        )
+
+    def test_same_dedup_key_in_both_classes_counts_each_class(self) -> None:
+        """F-2 (P2, second ruler): the producer classifies first and dedups
+        inside each class, so one content digest may legally count once as
+        usable AND once as a synthesized answer. The judge used to dedup first
+        and classify by first sight ⇒ recompute 0 against the declared 1."""
+        result = self._payload_with_pools()
+        ledger = result["source_ledger"]
+        pooled = next(i for i, e in enumerate(ledger) if "citation_url_count" in e)
+        pool_less = next(
+            i
+            for i, e in enumerate(ledger)
+            if e.get("source_type") == "web_search_result" and "citation_url_count" not in e
+        )
+        ledger[pool_less]["content_sha256"] = ledger[pooled]["content_sha256"]
+        journal = _v02_journal(
+            [_mk_v02_event("retrieval_result_committed", result, 0, None)]
+        )
+        self.assertEqual(validate_journal_text(journal), [])
+        recomputed = recompute_retrieval_batch_counts(result)
+        # Declared synthetic 1 (payload) == recompute 1; the shared digest is
+        # still counted in the usable class (SRC-1, SRC-2, pooled entry).
+        self.assertEqual(recomputed["synthetic_answer_count"], 1)
+        self.assertEqual(recomputed["usable_source_count"], 3)
+
+    def test_fully_purified_pool_is_usable_not_synthetic(self) -> None:
+        """F-7 (coverage): the most discriminating citation shape — a RAW pool
+        that the prefilter emptied entirely (raw 3, retained 0, 3 removals) —
+        carries the count (⇒ NOT a synthesized answer), so it counts as
+        usable. The pre-0ay nail only asserted the empty pool shape."""
+        result = _committed_result()
+        result["source_ledger"].append(
+            {
+                "source_id": "SRC-3",
+                "source_title": "purified search snippet",
+                "source_url_or_ref": "purified query",
+                "source_type": "web_search_result",
+                "visibility": "partial_text_observed",
+                "accessed_at": "2026-09-20T00:00:00Z",
+                "observed_scope": "search snippet",
+                "missing_scope": "full page",
+                "relevance": "direct",
+                "content_sha256": "f" * 64,
+                "highest_allowed_claim": "derived",
+                "citation_url_count": 3,
+                "candidate_urls": [],
+                "candidate_pool": [],
+            }
+        )
+        result["raw_source_refs"].append(
+            {
+                "source_id": "SRC-3",
+                "source_title": "purified search snippet",
+                "source_url_or_ref": "purified query",
+                "visibility": "partial_text_observed",
+                "content_sha256": "f" * 64,
+                "candidate_urls": [],
+                "candidate_pool": [],
+            }
+        )
+        result["prefilter_log"] = [
+            {
+                "source_id": "SRC-3",
+                "url": f"https://purified.example/{index}",
+                "reason": "login_wall",
+                "action": "removed",
+                "filtered_at": "2026-09-20T00:00:00Z",
+            }
+            for index in range(3)
+        ]
+        result["source_counts"]["total"] = 3
+        result["source_counts"]["partial_text_observed"] = 2
+        journal = _v02_journal(
+            [_mk_v02_event("retrieval_result_committed", result, 0, None)]
+        )
+        self.assertEqual(validate_journal_text(journal), [])
+        recomputed = recompute_retrieval_batch_counts(result)
+        self.assertEqual(recomputed["synthetic_answer_count"], 0)
+        self.assertEqual(recomputed["usable_source_count"], 3)
+        self.assertEqual(recomputed["citation_url_total"], 3)
+
+    def test_declared_single_query_usable_must_match_the_ledger(self) -> None:
+        """0az ①/审查 §5: the narrowed usable face was recomputed and then
+        never compared with any declared value. Single-query activations
+        carry the batch count by construction ⇒ per-value cross-check."""
+        result = self._payload_with_pools()
+        result["query_summary"][0]["usable_source_count"] = 9
+        journal = _v02_journal(
+            [_mk_v02_event("retrieval_result_committed", result, 0, None)]
+        )
+        errors = " | ".join(validate_journal_text(journal))
+        self.assertIn("usable_source_count", errors)
+        self.assertIn("mechanical recompute", errors)
+
+    def test_multi_query_unattributed_usable_identity(self) -> None:
+        """0az ①: multi-query activations declare per-query counts plus the
+        unattributed remainder (saturating difference); the judge must
+        reproduce it from its own batch recompute."""
+        result = self._payload_with_pools()
+        first = dict(result["query_summary"][0])
+        result["query_summary"] = [
+            {**first, "query_id": "QRY-1", "usable_source_count": 2},
+            {**first, "query_id": "QRY-2", "usable_source_count": 0},
+        ]
+        result["unattributed_usable_count"] = 1  # Σ 2 + 1 == recomputed 3
+        journal = _v02_journal(
+            [_mk_v02_event("retrieval_result_committed", result, 0, None)]
+        )
+        self.assertEqual(validate_journal_text(journal), [])
+        result["unattributed_usable_count"] = 0  # drift: claims full attribution
+        journal = _v02_journal(
+            [_mk_v02_event("retrieval_result_committed", result, 0, None)]
+        )
+        errors = " | ".join(validate_journal_text(journal))
+        self.assertIn("unattributed_usable_count", errors)
 
 
 class WebFetchCandidateCountTests(unittest.TestCase):

@@ -252,6 +252,36 @@ class RunEventV02ContractTests(unittest.TestCase):
             with self.subTest(instance=instance_path.name):
                 self.assertTrue(errors_for(instance_path, schema_path))
 
+    def test_v02_retrieval_citation_clauses_are_machine_enforced(self) -> None:
+        """0az ② (2026-09-20, GAP-RETRIEVAL-SYNTHETIC-JUDGEMENT-AUDIT-CLOSURE):
+        two clauses that used to live only in prose/the judge's accept-set —
+        (F-3) `citation_url_count` may only ride on a `web_search_result`
+        entry, (F-4) `prefilter_log` is required (the 0ay citation identity
+        cannot be checked without it) — are now rejected by the schema itself,
+        so schema accept-set == judge accept-set."""
+        schema_path = (
+            RUNTIME / "retrieval-result-event-payload-v0.2.schema.json"
+        )
+        schema = load_json(schema_path)
+        payload = load_json(
+            PAYLOAD_DIR_V02 / "retrieval-result.merged-multi-query.valid.json"
+        )
+        validator = Draft202012Validator(schema, format_checker=FormatChecker())
+
+        misplaced = json.loads(json.dumps(payload))
+        misplaced["source_ledger"][0]["citation_url_count"] = 2  # web_page entry
+        with self.subTest(clause="citation_url_count exclusivity (F-3)"):
+            self.assertTrue(
+                [error.message for error in validator.iter_errors(misplaced)],
+                "a web_page entry carrying citation_url_count must be rejected",
+            )
+
+        missing_log = json.loads(json.dumps(payload))
+        del missing_log["prefilter_log"]
+        with self.subTest(clause="prefilter_log required (F-4)"):
+            messages = [error.message for error in validator.iter_errors(missing_log)]
+            self.assertIn("'prefilter_log' is a required property", messages)
+
     def test_v02_envelope_samples_validate(self) -> None:
         for instance_path, schema_path in ENVELOPE_POSITIVE_CONTRACTS_V02.items():
             with self.subTest(instance=instance_path.name):
