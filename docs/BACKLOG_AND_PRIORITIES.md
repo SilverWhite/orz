@@ -9,7 +9,7 @@
 
 ## 未闭合计数（2026-09-16 口径）
 
-- 未闭合总数：**40 项**（口径日期 2026-09-20；**2026-09-20 本批 0ay 闭合 41 → 40**＝检索合成判定面落盘与可核复算 S4 同三题真机达成（三批无 URL 占比 12/12＝100 %、可引用来源 0、收窄可用 18；声明面与 ledger-only 复算逐值一致；载体 0.6.4 重建并发布），用户令「0ay 可闭合」；同批裁决 **extract-elf 泄漏路径自判 0**（正式公布显式标注）；**同日 0az 闭合 42 → 41**＝检索合成判定面收口四子项全落码——裁判门改「有任一条目带 `citation_url_count` 才校验」（F-1）／判官类内去重与生产者同尺（F-2）／声明可用面对拍（审查 §5）／schema `allOf` 排他＋`prefilter_log` 必填（F-3·F-4）／权威面 ADR §14.74 与设计稿 v1.2 勘误（F-6）／两侧钉子含完全净化与跨类同 digest（F-7）；判据 ①–⑤ 全达成；**0ay S1/S2 独立审查立项 41 → 42**＝0az 检索合成判定面收口〔来源＝只读审查 F-1…F-7〕；**独立审计立项 40 → 41**＝0ay 判定面落盘与可核复算〔来源＝0ax S1 独立审计 F-2〕；**S3 摩擦立项 35 → 40**（N1–N5；N6 不立项）＋**0ar 闭合 36 → 35**。此前：**0as 闭合 37 → 36**（2026-09-19 提交批 orz `3d7d7a74`＋`e897dce2`）／**0as 立项 36 → 37**／**0m S4 闭合 37 → 36**／**0ar S2 三件落码＋§14.73 转录**与 **0aq 机械项十二件勾选**。更早流水已收缩入档：[`存档/backlog/BACKLOG_AND_PRIORITIES_FULL_2026-09-15.md`](../存档/backlog/BACKLOG_AND_PRIORITIES_FULL_2026-09-15.md)。TODO`[ ]` 明细含父/子项，计数以 BACKLOG 为准。本行与 P0/P1/P2 开放项清单、优先级总览表、TODO 路由/勾选、索引 §8 受 `check_repository.py` 计数一致性与行宽/行龄机械检查约束（0ab S1，2026-09-15 常驻）。）
+- 未闭合总数：**43 项**（口径日期 2026-09-20；**本批 0ba/0bb 立项 40 → 42**＝0am 轮 F13（run id 秒级撞名）／F15（命令行引号与长行）〔用户令「F13/15均立项」〕＋同批 **0am 报告补注＋方向登记**（解码器＝已定形态不参与评估；RLI 定位影子观测组件、预测步长先定 10；待转正）＋**0bc 立项 42 → 43**（资源层收口）；**本批 0ay 闭合 41 → 40**＝检索合成判定面落盘与可核复算 S4 同三题真机达成（三批无 URL 占比 12/12＝100 %、可引用来源 0、收窄可用 18；声明面与 ledger-only 复算逐值一致；载体 0.6.4 重建并发布），用户令「0ay 可闭合」；同批裁决 **extract-elf 泄漏路径自判 0**（正式公布显式标注）；**同日 0az 闭合 42 → 41**＝检索合成判定面收口四子项全落码——裁判门改「有任一条目带 `citation_url_count` 才校验」（F-1）／判官类内去重与生产者同尺（F-2）／声明可用面对拍（审查 §5）／schema `allOf` 排他＋`prefilter_log` 必填（F-3·F-4）／权威面 ADR §14.74 与设计稿 v1.2 勘误（F-6）／两侧钉子含完全净化与跨类同 digest（F-7）；判据 ①–⑤ 全达成；**0ay S1/S2 独立审查立项 41 → 42**＝0az 检索合成判定面收口〔来源＝只读审查 F-1…F-7〕；**独立审计立项 40 → 41**＝0ay 判定面落盘与可核复算〔来源＝0ax S1 独立审计 F-2〕；**S3 摩擦立项 35 → 40**（N1–N5；N6 不立项）＋**0ar 闭合 36 → 35**。此前：**0as 闭合 37 → 36**（2026-09-19 提交批 orz `3d7d7a74`＋`e897dce2`）／**0as 立项 36 → 37**／**0m S4 闭合 37 → 36**／**0ar S2 三件落码＋§14.73 转录**与 **0aq 机械项十二件勾选**。更早流水已收缩入档：[`存档/backlog/BACKLOG_AND_PRIORITIES_FULL_2026-09-15.md`](../存档/backlog/BACKLOG_AND_PRIORITIES_FULL_2026-09-15.md)。TODO`[ ]` 明细含父/子项，计数以 BACKLOG 为准。本行与 P0/P1/P2 开放项清单、优先级总览表、TODO 路由/勾选、索引 §8 受 `check_repository.py` 计数一致性与行宽/行龄机械检查约束（0ab S1，2026-09-15 常驻）。）
 
 - **2026-09-12（本轮）**：0v 闭合入账 **26 → 25**（用户裁决「不强硬取证」——判据 9/10 与 CAPTCHA 样本不再追、命中率与 chrome-error 分类偏差观察归档，S1–S4 全部闭合转 `implemented`）；**0z 真机资源安全边界立项登记 25 → 26**（P0，设计完成待放行实施——本轮真机自举两次满占用卡死处置：三个缺口 + 一个摩擦项）；**同日全项目只读深审入档**（[`FULL_PROJECT_DEEP_REVIEW`](audits/FULL_PROJECT_DEEP_REVIEW_2026-09-12.md)，登记不动计数——0v-C 两项 P0 被同日 orz `ba934af8` 修复闭合覆盖且触发源实锤与报告独立判断（URL 无痕改写）吻合、账本三处同步断裂（报告 P1-5）同日回补，其余 P1/P2 与体系面发现留用户裁决未立项，详见 [治理注记](#治理注记历史决策不新增独立实施项)）。
 
@@ -31,8 +31,8 @@
 | 优先级 | 含义 | 开放项（入口小节） |
 |---|---|---|
 | P0 | 当前工作集：设计已冻结，裁决后立即实施 | FUS-BENCHMARK-FULL-EXEC 验证③④⑤（0b）；0d 后续 3/4/5 S4 复验（0d）；THIN-HARNESS-REDESIGN-V2 余项（0j）；WINDOWS-HIGH-NIST-MAX-FRICTION ⑥⑦（0l）；GAP-APPROVAL-PROMPTER 延期项（0n）；S3/S4 集中实机验证批 T3–T6（0o）；检索子代理双车道 S4（0t）；官方 R4 15 题复跑（0u）；TB 4.0 摩擦探针审计 O1–O7（0w）；NP1 机械身体集成支线（0y）；真机资源安全边界 S4 复验（0z）；机械层即时回报与流式检索 S4（0ac）。已闭合 00/00a/0a/0c/0e/0f/0g/0h/0i/0k/0m（2026-09-19 S4 收口，37 → 36）/0p/0q/0r/0s/0v/0x/1/1b/2/3/3a/3b 与 0d 主项、0ar（2026-09-20 闭合，36 → 35）以 `[x]` 单行核对保留在 P0 节各小节 |
-| P1 | 无需裁决，可与 P0 并行 | FUS-COMPONENT-REGISTER（4）；GAP-WINDOWS-EVIDENCE（5）；IMPL-DEEPSEEK-TRANSPORT / SEC-CREDENTIALS live 证据（6）；ORZ-SESSION-CONTEXT-MONITOR（6d）；历史卷 journal 全量 verifier 复扫（0aa，2026-09-13 立项，深审附带建议①）；0ae 上下文软门与模型参与压缩（0ae，2026-09-15 立项并落码，A/B 判据留 S4 实机）；滑块上下文（0ah，2026-09-15 立项；**2026-09-16 勘误**为 v8 模型自控注意力窗口，S1 五连批系依错误记录落码，实现更正批已落码＋只读审查处置同日闭合＋**收口清理批已落码**（v7 折叠族退役，orz `501447c0`）＋**审查 R-12 余项已处置**（阶梯一轮只注入最高档／回放窗口裁定不扩白名单／0.77 换算与五项真机读数待实测），登记待放行）；0aj 黑板写权限层放行（0aj，2026-09-16 立项，旧摩擦残余——ReadOnly 应自动放行被 deny，0ai 狗粮考核测出）；0al 门禁冻结克隆树漂移（0al，2026-09-16 立项，0ai 狗粮考核测出，可静默校验错误树）；0am LIF 动力学升级线（0am，2026-09-16 立项，P1 轮次预算换算先行＋RLI 自研谐振基座与观测判据预注册；**2026-09-17 整体挂起，O2 为前置门**）；全项目全面严格审查处置线（0aq，2026-09-18 立项，RS-01…RS-18 待修挂线内勾选，RS-01/RS-02 提级待裁决）；S3 摩擦处置（0au 尾部派发预算）；（0aw OS 委派执行）；（0ax 检索形态 URL 完整性）。已闭合 0ay（2026-09-20 闭合 41 → 40，S4 真机达成）、0ai（2026-09-16，产出合回主仓 orz `b682a67f`）、0af（2026-09-16，文案定案落码 orz `b6ed78d9`）、0an（2026-09-18，Linux musl 三件套随 0.6.2 补平）、0ao（2026-09-18，字面单一源收敛 orz `ad8c0da3`）、0as（2026-09-19，编码 lossy 兜底细化闭合 37 → 36，orz `3d7d7a74`＋`e897dce2`）、0ay S1/S2 独立审查缺口收口 0az（2026-09-20 同日实施批闭合，未闭合 42 → 41，判据 ①–⑤ 全达成） |
-| P2 | 生产化决策门：需用户裁决 | IMPL-CONTROL-FABRIC Slice 3/4（7）；OPS-PROTOCOL 裁剪与接线裁决（8）；MODEL-RESIDUAL-PRESSURE-FOLLOWUP（11）；COMPRESSION-LINGUISTIC-FORMAL-LAYER（12）；BLACKBOARD-CONVERSATION-SCOPE-FOLD B2–B4（13）；COMPACTION-FOLD-SNAPSHOT S4（14）；EVALUATION-CORPUS-FREEZE 评测语料冻结与首轮执行（15，2026-09-13 立项，深审 S-13 注册；S1/S2 同日完成）；GAP-EVAL-RESULT-SCHEMA-DRIFT 评测结果合约对齐（15 附，2026-09-13 立案并同日修复 `implemented`）。已闭合 0ak（2026-09-18，run `RUN-CLI-6aac0af5` 判据达成：无头 run archived_tokens=505,560≥500K 三键包）；FR-A06 压缩交互设计批（0ap，2026-09-18 用户令纳入排期，首步设计评估稿、取舍随稿裁决）；S3 摩擦处置（0at 逐 query 归因）；（0av 批次数读数落盘面） |
+| P1 | 无需裁决，可与 P0 并行 | FUS-COMPONENT-REGISTER（4）；GAP-WINDOWS-EVIDENCE（5）；IMPL-DEEPSEEK-TRANSPORT / SEC-CREDENTIALS live 证据（6）；ORZ-SESSION-CONTEXT-MONITOR（6d）；历史卷 journal 全量 verifier 复扫（0aa，2026-09-13 立项，深审附带建议①）；0ae 上下文软门与模型参与压缩（0ae，2026-09-15 立项并落码，A/B 判据留 S4 实机）；滑块上下文（0ah，2026-09-15 立项；**2026-09-16 勘误**为 v8 模型自控注意力窗口，S1 五连批系依错误记录落码，实现更正批已落码＋只读审查处置同日闭合＋**收口清理批已落码**（v7 折叠族退役，orz `501447c0`）＋**审查 R-12 余项已处置**（阶梯一轮只注入最高档／回放窗口裁定不扩白名单／0.77 换算与五项真机读数待实测），登记待放行）；0aj 黑板写权限层放行（0aj，2026-09-16 立项，旧摩擦残余——ReadOnly 应自动放行被 deny，0ai 狗粮考核测出）；0al 门禁冻结克隆树漂移（0al，2026-09-16 立项，0ai 狗粮考核测出，可静默校验错误树）；0am LIF 动力学升级线（0am，2026-09-16 立项，P1 轮次预算换算先行＋RLI 自研谐振基座与观测判据预注册；**2026-09-17 整体挂起，O2 为前置门**）；全项目全面严格审查处置线（0aq，2026-09-18 立项，RS-01…RS-18 待修挂线内勾选，RS-01/RS-02 提级待裁决）；运行身份唯一性（0ba，2026-09-20 立项，0am 狗粮轮 F13 秒级撞名）；（0bc 资源层收口与可失败分配）；S3 摩擦处置（0au 尾部派发预算）；（0aw OS 委派执行）；（0ax 检索形态 URL 完整性）。已闭合 0ay（2026-09-20 闭合 41 → 40，S4 真机达成）、0ai（2026-09-16，产出合回主仓 orz `b682a67f`）、0af（2026-09-16，文案定案落码 orz `b6ed78d9`）、0an（2026-09-18，Linux musl 三件套随 0.6.2 补平）、0ao（2026-09-18，字面单一源收敛 orz `ad8c0da3`）、0as（2026-09-19，编码 lossy 兜底细化闭合 37 → 36，orz `3d7d7a74`＋`e897dce2`）、0ay S1/S2 独立审查缺口收口 0az（2026-09-20 同日实施批闭合，未闭合 42 → 41，判据 ①–⑤ 全达成） |
+| P2 | 生产化决策门：需用户裁决 | IMPL-CONTROL-FABRIC Slice 3/4（7）；OPS-PROTOCOL 裁剪与接线裁决（8）；MODEL-RESIDUAL-PRESSURE-FOLLOWUP（11）；COMPRESSION-LINGUISTIC-FORMAL-LAYER（12）；BLACKBOARD-CONVERSATION-SCOPE-FOLD B2–B4（13）；COMPACTION-FOLD-SNAPSHOT S4（14）；EVALUATION-CORPUS-FREEZE 评测语料冻结与首轮执行（15，2026-09-13 立项，深审 S-13 注册；S1/S2 同日完成）；GAP-EVAL-RESULT-SCHEMA-DRIFT 评测结果合约对齐（15 附，2026-09-13 立案并同日修复 `implemented`）。已闭合 0ak（2026-09-18，run `RUN-CLI-6aac0af5` 判据达成：无头 run archived_tokens=505,560≥500K 三键包）；FR-A06 压缩交互设计批（0ap，2026-09-18 用户令纳入排期，首步设计评估稿、取舍随稿裁决）；命令行引号与长行取用摩擦（0bb，2026-09-20 立项，0am 狗粮轮 F15）；S3 摩擦处置（0at 逐 query 归因）；（0av 批次数读数落盘面） |
 | P3 | 收尾 / 清理 | EVIDENCE-LOCAL-BROWSER（9）；GATE-CHAIN（10）；遗留小项（11） |
 | 条件触发 | 不占当前优先级 | ORZ-RECOVERY-TOOL-OUTCOME、ORZ-STAGNATION-TOOL-SIGNAL |
 
@@ -856,7 +856,7 @@ GLM F2 处置转排期（2026-09-06 用户裁决）：`orz-host/src/approval.rs`
 
 ## P1 — 可并行审计 / 证据
 
-开放项：4 / 5 / 6 / 6d / 0aa / 0ae / 0ah / 0aj / 0al / 0am / 0aq / 0au / 0aw / 0ax。已闭合 0ay（2026-09-20，检索合成判定面落盘与可核复算 S4 真机达成后用户裁决闭合 41 → 40）、0az（2026-09-20，检索合成判定面收口同日实施批闭合 42 → 41，判据 ①–⑤ 全达成）、0as（2026-09-19，编码 lossy 兜底细化闭合 37 → 36）、0af（2026-09-16，文案定案落码 orz `b6ed78d9`）、0ai（2026-09-16，产出合回）、0an（2026-09-18，Linux 载体随 0.6.2 补平）、0ao（2026-09-18，字面单一源收敛 orz `ad8c0da3`）与 0q（2026-09-08）、6b / 6c / 6e / 6f / 6g 以单行核对保留（6c 与 6e 为退役条目）。
+开放项：4 / 5 / 6 / 6d / 0aa / 0ae / 0ah / 0aj / 0al / 0am / 0aq / 0au / 0aw / 0ax / 0ba / 0bc。已闭合 0ay（2026-09-20，检索合成判定面落盘与可核复算 S4 真机达成后用户裁决闭合 41 → 40）、0az（2026-09-20，检索合成判定面收口同日实施批闭合 42 → 41，判据 ①–⑤ 全达成）、0as（2026-09-19，编码 lossy 兜底细化闭合 37 → 36）、0af（2026-09-16，文案定案落码 orz `b6ed78d9`）、0ai（2026-09-16，产出合回）、0an（2026-09-18，Linux 载体随 0.6.2 补平）、0ao（2026-09-18，字面单一源收敛 orz `ad8c0da3`）与 0q（2026-09-08）、6b / 6c / 6e / 6f / 6g 以单行核对保留（6c 与 6e 为退役条目）。
 ### 0au. 检索尾部派发预算（P1；2026-09-20 立项，来源＝0ar S3 摩擦深挖 N2；**S1 落码＋S2 回放已完成（2026-09-20 过夜批，未提交），S3 留真机**）
 
 - 来源：[`N1–N6 深挖`](audits/0AR_S3_FRICTION_DEEP_DIVE_N1_N6_2026-09-20.md) §3——派发前只判「同轮合并上限 3」，**无 run 级墙钟余量判定**；四轮共 5 次「余量 <300 s」批被 run 墙钟截断（trailing、无 close，余量 26–191 s），另有 1 次近失（S3 torch 117 s 侥幸收口）。
@@ -878,14 +878,15 @@ GLM F2 处置转排期（2026-09-06 用户裁决）：`orz-host/src/approval.rs`
 - **2026-09-20 裁决 ④（用户令「这两条 0z S2 动作臂一同退役吧」）**：**两条臂一并退役**——① 删 `terminate_heavy_call_jobs` 与 `resource_exhausted` 生产端；② 删门汇点/hard 臂内的回收触发与 `reclaim_performed` 生产端（回收**能力**降为「只在真 ENOSPC 面用」的候选，当前批不接线）；③ `host_resource_denied`／`resource_exhausted`／`reclaim_performed` 三条的 schema、fixtures、Python 镜像与 `journal/families.rs` **全部保留**供历史 journal 校验；④ `live_call_jobs` 登记表**保留**（`DispatchGuard::drop` 依赖它关本次调用的 per-call job 句柄），只删 `LiveCallJob` 与 `process_tree` 登记行上的 `action_class` 字段。**判据追加**：同语料回放 `resource_exhausted = 0` 且 `reclaim_performed = 0`（S3 基线本就为 0，改造后不得回涨）。详见 [`设计 §10.1`](HOST_RESOURCE_OS_DELEGATION_DESIGN_2026-09-20.md)。
 - **2026-09-20 S1–S4 落码（过夜批，未提交）**：`resource_gate.rs` → **`resource_hint.rs`**（分类器 15 件＋拒绝面整体删除；`VOLUME_HINT_FREE_BYTES=4 GiB`＋`ResourceHint` 每 run 每卷去重；tier 只作观测标签）；`lib.rs` 拆 Refuse/`host_resource_denied`/树杀臂/回收触发（`reclaim.rs` 保留不接线）、保留 `live_call_jobs` 句柄关闭与跨档快照；`process_tree.rs` 删 `action_class`；run 级 Job 推导保留只作上限（裁决点 B）；`run_tests` 门同步退役。S3 三 run 历史 journal 经保留 verifier 回放零错误（exhausted/reclaim 基线 0/0 实证）。判据 1/2/3/5/6/7 机制面达成（回放＋钉子），4 留真机。入口：[`过夜批报告 §2`](audits/0AT_0AU_0AV_0AW_0AX_S1_IMPL_OVERNIGHT_2026-09-20.md)。
 
-### 0ax. 检索形态 URL 完整性（P1；2026-09-20 立项，来源＝0ar S3 摩擦深挖 N5；**S1 落码＋S2 形态面评估已完成（2026-09-20 过夜批，未提交），S3 落码待放行，S4 留真机**）
+### 0ax. 检索形态 URL 完整性（P1；2026-09-20 立项，来源＝0ar S3 摩擦深挖 N5；**S1 落码已提交（orz `3a1e34c5`）；S2 形态面评估完成并经用户放行（2026-09-20）⇒ 进下一轮官方跑批；S3 落码待放行，S4 留真机**）
 
 - 来源：[`N1–N6 深挖`](audits/0AR_S3_FRICTION_DEEP_DIVE_N1_N6_2026-09-20.md) §6 ＋ [`调研档 §2`](audits/N1_N5_ITEM_REGISTRATION_AND_N4_N5_RESEARCH_2026-09-20.md)——**根因＝HTTP 形态本身**：`responses + tools[web_search]` 的引用只从 `url_citation` 注解取（代码注释：`DeepSeek: empty`），官方口径 `local_segmented=off`（能出 URL 的本地 SERP 车道默认关）⇒ S3 extract-elf 9/9 条搜索结果**无 URL**（子代理自述"returning synthesized answers rather than results with URLs"）；且宽口径把这些合成片段计入可用证据（act 01 的 5/5），阈值被凑满。grep.app 被 Vercel Security Checkpoint 拦＝次要加重项。
 - 方案：① 官方口径下评估**启用本地 SERP 车道**（分段自带 URL 是既有契约）；② 机械层识别「无 URL 合成答案」单列（不计入 5 条阈值、单列 `synthetic_answer` 计数），披露写入"可引用性"；③ fetch 侧兜底：Rust 指纹伪装（`rquest`／`wreq`）或 reader 服务，先覆盖判据要求的公共源。
 - 可借鉴开源面（GitHub）：`searxng/searxng`（自托管元搜索，回真 URL＋JSON API）／`deedy5/ddgs`（SERP 直取库）／`lwthiker/curl-impersonate`＋`penumbra-x/rquest`（TLS/HTTP2 指纹）／`unclecode/crawl4ai`＋Firecrawl（正文提取）／Jina Reader。
 - 判据：① 官方口径回放可机械读「无 URL 结果占比」与「可引用来源数」；② 检索批 `query_summary` 至少一条来源带 URL（或如实标注全为合成）；③ 不新增工具面、不改 FP-2。
 - **2026-09-20 S1 落码（过夜批，未提交）**：合成口径落 `usable_source_count`（web_search_result 无引用池 ⇒ 不入可用额度）＋`synthetic_answer_count` 单列＋倒数行可引用性披露＋payload 可选字段；S3 七批归档回放——合成占比 **21/37（56.8 %）**、6/7 批「合成凑阈提前收尾」结局翻转（唯一保持 MET 批次 5 条全部可引用）。判据 ① 达成、② 由字段承担（全合成批可机械读）、③ 达成。
-- **2026-09-20 S2 形态面评估（过夜批）**：`ORZ_WEB_SEARCH_LOCAL` 开关在位（默认 off）；可比性论证＝通道消融＋契约不变＋G1–G3 预设；启用＝装置侧 env 一行，**待用户放行**。S3 fetch 兜底路线评估（rquest 系 vs reader 服务）落报告，落码待放行。入口：[`过夜批报告 §6–§7`](audits/0AT_0AU_0AV_0AW_0AX_S1_IMPL_OVERNIGHT_2026-09-20.md)。
+- **2026-09-20 S2 形态面评估（过夜批）**：`ORZ_WEB_SEARCH_LOCAL` 开关在位（默认 off）；可比性论证＝通道消融＋契约不变＋G1–G3 预设；启用＝装置侧 env 一行，**2026-09-20 用户放行**。S3 fetch 兜底路线评估（rquest 系 vs reader 服务）落报告，落码待放行。入口：[`过夜批报告 §6–§7`](audits/0AT_0AU_0AV_0AW_0AX_S1_IMPL_OVERNIGHT_2026-09-20.md)。
+- **2026-09-20 S2 放行（用户令「请放行 0ax S2」）**：`ORZ_WEB_SEARCH_LOCAL` 由「待放行」转**已放行**。启用路径＝装置侧适配器 `tb_agents/orz.py` 容器 env 白名单透传一行（宿主导出即生效、缺席即零行为变化；不动 `task.toml`／镜像／verifier／数据集 pin、不启用 `eval_browser`）。**无需载体重建**——开关为运行时装配期读取（`LocalSegmentedConfig::from_env()`，取值 `1/true/on/yes`），车道代码在源冻结 `a47e9185` 内、已在 0.6.4 双平台载体中。下一轮官方跑批同批收取：0ax S4 形态判据（带 URL 占比 ≥90 %、`synthetic_answer_count` 恒 0、fetch 数不低于 r3）＋0ay 余项「带池样本面」（0az ① 代际门与 S2 恒等式至此首次可检）；同批 0au S3／0aw S5／0av S2／0at S3 读数须标注「本地分段车道」通道口径。
 
 ### 0ay. 检索合成判定面落盘与可核复算（P1；2026-09-20 立项，来源＝0ax S1 独立审计 F-2；**2026-09-20 用户裁决闭合（未闭合 41 → 40）**：S1/S2/S3 落码与语料复算收口＋S4 同三题真机达成＋载体 0.6.4 重建发布）
 
@@ -912,6 +913,27 @@ GLM F2 处置转排期（2026-09-06 用户裁决）：`orz-host/src/approval.rs`
 - 判据核对：① 0ax 时代「同批有池＋无池」形态不再误报——**达成**（构造例＝Python 钉；回放例＝0az 控制驱动在真实归档上复现旧判官 `4 != 5` 误报、新判官 clean）；② 同一去重键跨类时判官重算与声明逐值相等——**达成**（Python ＋ Rust 两侧钉，旧判官同例报 `4 != 3`）；③ schema 接受集 ＝ 判官接受集——**达成**；④ 阈值 5／10、FP-2、官方口径零改动——**达成**；⑤ 既有读数不回归——**达成**（orz-loop **819/0/3**、orz-assurance **246/0**、`runtime/tests` **378/0**、S3 七批 **ALL CELLS MATCH**〔旧 37／收窄 16／合成 21〕、155 件归档 0az 新规则命中 **0**）。
 - 边界：只动判官与契约／文档面，**未动** 0ay S1/S2 的生产语义（S2 语义等价重构保持，`citation_url_count` 生产 helper 零改动）；S4 真机与 0ay 闭合裁决不受本项阻塞（0ay 线维持开放）。余项＝多 query **逐 query 桶的值**不对拍（两套归因键，只对拍 Σ 与缺口）——已写入 ADR §14.74 第 6 项，属边界。
 - 计数：立项 **41 → 42**（2026-09-20），**闭合 42 → 41**（同日实施批；报告 [`0az 实施与验证`](audits/0AZ_SYNTHETIC_JUDGEMENT_AUDIT_CLOSURE_2026-09-20.md)）。**未提交、不推送、不重建**。TODO：[`P1-0az`](../TODO.md)。
+### 0ba. 运行身份唯一性（run id 秒级撞名）（P1；2026-09-20 用户令立项〔「F13/15均立项」〕，来源＝0am 狗粮轮 `RUN-CLI-6aafc998` 摩擦 F13）
+
+- 来源：0am 报告 [`§5-F13`](audits/0AM_DECODER_FORM_REPLAY_2026-09-20.md)——回放语料 137 journals 内 **7 组重复 run_id**（`6a8e2055`／`6a8e2058`／`6a8e2953`／`6a8f2be9`／`6a96ab1e`／`6a96ae3d`×2、`6a96b0b1`×3，均为**不同任务同 id**），旧版回放器按 run_id 作旁挂键首跑即 panic。
+- 根因（本批复核）：无头 run id ＝ `RUN-CLI-{ts}`，ts ＝ `format!("{:08x}", now.as_secs())`（[`main.rs:1439`](../orz/crates/orz-bin/src/main.rs:1439)，调用点 1178）——**秒级、无 pid、无计数**；同批并发 run 同秒必撞。同一 cwd 下两个并发 `-p` 会共用 `.gsa/runs/<run_id>/` 目录（orz-bin 测试注释已记录 `remove_dir_all` 抹掉对方 journal 的一次现场）。
+- 方案（待放行落码）：铸号引入 pid＋毫秒或进程内计数（保留 `RUN-CLI-*` 前缀与既有扫描口径），配两钉（同秒两次铸号互异／同 cwd 并发 journal 目录互异）；语料与工具侧改「路径＋run id」复合键并加兼容注。
+- 判据：① 同秒并发铸号必互异（钉子）；② 既有 `RUN-CLI-*` 扫描面（`.gsa/runs`、`session_archive` 前缀扫描）不回归；③ journal schema、ARC 命名与官方口径零改动。
+- 边界：历史语料重复 id 不回填；不改 run 目录命名族。
+- 入口：[`0am 报告 §5-F13`](audits/0AM_DECODER_FORM_REPLAY_2026-09-20.md) / [`main.rs`](../orz/crates/orz-bin/src/main.rs:1439) / TODO P1-0ba。
+
+### 0bc. 资源层收口与可失败分配（**复合狗粮任务**）（P1；2026-09-20 用户令立项，来源＝资源三层复核轮；设计裁决＝[`OS 委派执行设计 §11`](HOST_RESOURCE_OS_DELEGATION_DESIGN_2026-09-20.md)）
+
+- 裁决五条（用户 2026-09-20）：① **CPU 速率上限直接去掉**（CPU 饱和不杀进程、只降速；Run B 死因是内存／commit）；② **run 级 Job commit 上限改「通知式」**——临限只记事件＋软提示，不由 orz 硬顶／硬拒（Windows 原语＝`JOBOBJECT_NOTIFICATION_LIMIT_INFORMATION(_2)` 的 `JOB_OBJECT_LIMIT_JOB_MEMORY_LOW`＋作业完成端口）；③ **活动进程上限保留＋加 env 覆盖**（默认仍 `2×cores+8`、≥16）；④ **可失败分配＋降级（双平台）**——orz 自身巨量分配路径改 `try_reserve` 族，失败进降级链（与 0z C 的 ENOSPC→Degraded 同形；Windows＝Job 持有者自保，Linux 真机无强制面同靠自救）；⑤ **外部 supervisor 仅记录不实施**（其他用户无法复现该部署形态；业界形态留档于设计 §11）。
+- 落点（预判）：`orz-host/src/resource_hint.rs`（CPU 面／commit 通知／env 覆盖）、`orz-host/src/lib.rs`（汇点与读数）、`xai-tty-utils/src/resource_job.rs`（限额与通知、完成端口）、可失败分配触及 orz-loop 大缓冲与 journal 装配路径（清单随 S1 勘定）。
+- 批序：**S1 勘定与契约面**（可失败分配路径清单＋env 名＋临限事件形状）→ **S2 落码**（三面改造）→ **S3 复合狗粮轮**（真机长 run）→ **S4 收口入账**。各步独立放行。
+- 判据：① CPU 速率上限不再设置（读数面零出现）；② commit 越线只产生通知事件＋软提示，无 orz 侧硬拒；③ 活动进程上限受 env 覆盖且默认不变；④ 构造性注入分配失败时 orz 进降级并留终态（不 abort）；⑤ 双平台构建与既有钉子不回归；⑥ 官方口径（`task.toml`／镜像／verifier／pin）零改动。
+- **复合狗粮口径**：S3 轮同时观测 **0am 的 RLI 实际表现**（读数随轮收取）——繁杂交错任务正是 RLI 的观测场。**前置关系（2026-09-20 用户顺序裁决）**：0am RLI 改造与载体重建先行——**先改好 RLI → 重建 → 进 0bc**，故本项 S3 排期位于 0am 改造批之后。
+- 边界：三层资源面只在 Windows 生效（Linux 记 `enforced=false`＋读数）；容器内 `memory.max`／`cpus` 属装置侧，不在本项范围。
+- **0bc 杂项（2026-09-20 用户令「FR1/2 均可立项，并入 0bc 杂项中」）**：① **FR1 组合字符精确匹配**（`search_replace` 对含组合字符行（如 `T̂`＝`T`+U+0302）精确匹配报「string not found」，自 `read_file` 输出复制即成功；疑 NFC/NFD 规范化差异）⇒ 按 orz 内自报建议落「匹配失败时回显最近似行的码点／规范化提示」；② **FR2 狗粮会话 env 污染测试**（会话继承 `ORZ_ACAF_FAIL_CLOSED=1` 等四键 ⇒ 所有「起 run」类测试 panic，本批 19+30 例）⇒ 按自报建议落「测试入口 script化 unset 或测试内显式 ACAF override」，**不动 fail-closed 纪律**（该键系狗粮轮既定装置侧设置）。入口：[`0AM_RLI_RETROFIT §5`](audits/0AM_RLI_RETROFIT_2026-09-20.md)。
+- **0bc 长杂轮（2026-09-20 用户令「FR-3/5/6/7 全部进行处理，纳入 0bc 长杂轮」）**：① **FR-3 硬提醒层锁工具面**——**硬提醒仅是打断式提醒、不锁工具面**（撤掉「窗口内仅 `blackboard_write`／`context_compress`」式工具面收窄；本批实测 1 个工具动作被该收窄吃掉）；② **FR-5 `name` enum 参数面／校验面双源**；③ **FR-6 配极不进快照**（侧车快照未携带配极参数 ⇒ 跨会话恢复可能不一致）；④ **FR-7 旧侧车行 `v`/`E` = 0 真伪不分**。**同一杂轮的环境面**：FR-1（ACAF env 继承致测试拒跑，同「0bc 杂项」②）；FR-2（默认并行 LLVM OOM、`-j 1` 方可构建）归 F14 状态更新。**定位声明（用户 2026-09-20）**：0bc **主要仍是完成任务**；RLI 读数参考（消费率／转向相关）＝**任务完成后再看实际运行中 RLI 的状况**，不改变主任务口径。条目入口：[`0AM_RLI_RETROFIT_REMAINDER §5/§8`](audits/0AM_RLI_RETROFIT_REMAINDER_2026-09-20.md)。
+- 入口：[`设计 §11`](HOST_RESOURCE_OS_DELEGATION_DESIGN_2026-09-20.md) / TODO P1-0bc。
+
 ### 4. FUS-COMPONENT-REGISTER（`partial`）
 
 - 开放内容：65 组件全 `audit_required`，逐 crate 采用审计未开始（V11-IMPL-008）；不得从 crate 名/编译推断采用档位。
@@ -1041,6 +1063,10 @@ GLM F2 处置转排期（2026-09-06 用户裁决）：`orz-host/src/approval.rs`
 - **决策登记（2026-09-17，用户；脱敏仅记决策，出处不录——与 LIF 主项目尽可能解耦）**：① **任务形态定案＝单组件预测**：LIF 组件内部升级为预测形态——动力学＋极简线性解码器一体（单层线性、无输出压、以连续状态量为输入；解码器权重离线闭式求解、无优化器、运行时保持确定性），模型侧接口不变：依旧仅参考其动力学状况与域判断（元认知外挂器、零注入、PULL 参考面）。**「A/B 线」提法作废**（不设内部组件分线）；S3 回放负结果按「无解码器裸锚点秩检验」口径登记，不预判带解码器形态；禁拟合约束继续约束动力学参数，解码器权重为用户裁决的例外面。② **影子解码器组／容量消融阶梯不引入**（本项目工程类非研究类；更重的解码器选型因素属外部考量，本项目不深究不记录）。落实批序随 O2 裁决一并放行；已转录 **ADR-0010 §14.71 / v1.72**（含角色定性）。
 - **角色定性（2026-09-17，用户）**：本转向的实质＝LIF 角色从「提取状态、仅作外挂锚点的**判断者**」转为「**领航者**」——模型参考其预测信号做转向；域判断职能保留为底座（依旧判断域，但不再是终点）。区别于判断者时代的悬空裁决（无消费者、效果无测），领航信号被期待消费且效果可测。
 - **0am 线整体挂起（2026-09-17 用户指示「LIF 组件暂时不做，留给狗粮线」）**：本批**零实施**——落实批序（含 S1 Part A 收尾、S2 影子、S3 回放、S4 探针、翻转裁决）与随挂起的 B 类六条摩擦（FR-B01–B06）一并**以 O2 裁决为前置门**；orz 工作树在场的 0am 批（`lif/rli.rs`＋`rli_shadow_replay.rs` 等）保持未提交，合回口径留裁决（血缘注意项＝收口报告 M-2）。入口：[`摩擦盘点 §3/§7`](audits/FRICTION_INVENTORY_2026-09-17.md) / [`0AM_DOGFOOD_CLOSURE`](audits/0AM_DOGFOOD_CLOSURE_2026-09-17.md)。
+- **方向二次裁定＋执行顺序（2026-09-20 用户令；裁定补注见 [`0am 报告`](audits/0AM_DECODER_FORM_REPLAY_2026-09-20.md)）**：① **标签类与锚点类口径整体退役**——LIF 提取特征本就不用标签；RLI 是 **LIF 变体**（LIF 能做的它本身也能做，含**自行判断动作域**），**无需外部标签、亦无需人工设定提取规则**；② 预测／引导参考仅为**尝试方向**（当前把 RLI 往预测与引导参考上做），判据面＝观测**实际可用性**——原 Q1–Q3（分离 AUC≥0.70／增量 ΔAUC≥0.05 且 CI>0／及时 lead≥3 轮）与「标签锚点」一并**退役**（本条前述判据行、S3 回放对照行按本注口径重定，历史读数保留）；③ 预测时间步先定 **10**；④ **顺序裁决＝先改好 RLI → 载体重建 → 进 0bc**（0bc 本身即 RLI 效果观测任务）。
+- **判据读法定稿＋RLI 改造四项（2026-09-20 用户令「就按照你确定下来的读法即可」；开工＝0am 剩余部分，狗粮轮）**：判据＝观测**实际可用性**，三条**零标签**读数——① **消费率**（模型是否真的拉取 RLI 信号）／② **转向相关**（转向与该信号是否相关）／③ **域一致性**（RLI 自判动作域与框架实际动作结果是否同面一致）。**改造四项**＝① **域判定接上**（LIF 域状态机职能平移到 RLI，坐实「LIF 变体」名分：RLI 自判动作域）／② **预测步长改 10**（二阶闭式自由演化解对 Δt=10·T̂ 前推，不引入迭代、不引入噪声）／③ **零注入 PULL 参考面**（与 LIF PULL 同格、模型自行拉取；否则可用性无从观测）／④ **评估件重写**（`rli_shadow_replay.rs` 标签回路与 Q1–Q3 判据整体退役，历史读数保留）。**不动面**＝核（闭式精确解／五通道／分位数自校准）、env 门控、侧车持久化、生产 1D。
+- **下一批待办与裁决登记（2026-09-20 用户令；四项已裁、可开工，随 [`0AM_RLI_RETROFIT`](audits/0AM_RLI_RETROFIT_2026-09-20.md) §8）**：① **配极改＝批准**（数学形式不整体换——按设计 §11 极点配置表**按通道语义分配极点**：速率／压力类保留复极点（预期＋节律），水平／新鲜度类走实极点（持久／适应））／② **判断标准改写＝批准**（**不补** `stuck` 通道——按设计 §10.3 `v`／`E` 锚点原生覆盖 stuck 语义＋§9 谓词重推导）；**RLI 不再与 LIF 对照**：LIF 维持现役组件，RLI 无实际作用性则用已跑通的 LIF、有作用再替换（0am 立项本意不变）／③ **C3 直接明确分开**（固定 ω_d 只扫 ζ，把衰减与频率两效应拆开；现口径降格标注为「参数非惰性检验」）／④ **`feature` 序列面要补**（PULL 面增锚点**序列**面；现仅 now／recent／history 汇总面）／⑤ **FR4 形态已定**＝压缩白名单**挂在 `context_compress` 下**（模型处理压缩时可额外保存白名单文件；**不做独立工具**、保 10 工具面）／⑥ **`prog` 语义差先取活体读数再定**（随 0bc）／⑦ **FR3 更新 F14 状态**为「条件性可构建」／⑧ **FR5 留观察**。
+- **0am 改造批落码（2026-09-20，狗粮轮 `RUN-CLI-6aafe5d8`、载体 0.6.4、exit 0）**：**五项全部落码**——配极改（`prog` 实极点 ζ=2.0＋过阻尼双曲闭式分支）／判断标准改写（压力轴＝水平阈 ∨ `v`/`E` 原生覆盖，`stuck` 不补通道，**撤销与 LIF 现域对照**）／C3 分离（衰减列＋频率列）／`feature` 序列面（`blackboard_read section=rli selector=feature`）／FR4（白名单并入 `context_compress`，保 10 工具面）。**读数**：压力轴一致性 **95.6%**（**保守欠报**——主张 26 vs 实际 265）、进度轴 **82.2%**、双轴 joint **80.6%**（基准＝框架实际动作结果）；C3 衰减为主效应（\\|Δu\\| 0.247 vs 频率 0.03–0.06，小一量级）；`prog` run 均 u **0.519 → 0.734**（骑阈消除）。**FR-8 由主会话直接处置**（C3 补 `prog` 实极点列；恒等点三处全 0；`prog` 配极敏感度 0.04–0.07；新观察＝过阻尼分支下 `E ≡ u` ⇒ a3 在该通道不独立，登记待复核）。结束文档：[`0AM_RLI_RETROFIT_REMAINDER`](audits/0AM_RLI_RETROFIT_REMAINDER_2026-09-20.md)。
 - 关键词：RLI、谐振漏积分、影子并行、分化特征、判据预注册、分位数自校准、预期锚点、包络检测、节律检测、轮次预算换算、0am。
 
 ### 摩擦盘点. 全仓未处理摩擦项盘点（2026-09-17；**不计入未闭合总数**）
@@ -1224,7 +1250,7 @@ GLM F2 处置转排期（2026-09-06 用户裁决）：`orz-host/src/approval.rs`
 
 ## P2 — 生产化决策门
 
-开放项：7 / 8 / 11 / 12 / 13 / 14 / 15 / 0ap / 0at / 0av。已闭合 10（MECHANICAL-LAYER-MATH-CALCULUS）与 0ak（2026-09-18，run `RUN-CLI-6aac0af5` 无头三键包判据达成）以单行核对保留。
+开放项：7 / 8 / 11 / 12 / 13 / 14 / 15 / 0ap / 0at / 0av / 0bb。已闭合 10（MECHANICAL-LAYER-MATH-CALCULUS）与 0ak（2026-09-18，run `RUN-CLI-6aac0af5` 无头三键包判据达成）以单行核对保留。
 ### 0at. 逐 query 归因口径与谱系（P2；2026-09-20 立项，来源＝0ar S3 摩擦深挖 N1；**S1/S2 落码已完成（2026-09-20 过夜批，未提交），S3 口径同步留待**）
 
 - 来源：[`N1–N6 深挖`](audits/0AR_S3_FRICTION_DEEP_DIVE_N1_N6_2026-09-20.md) §2——`batch_close::per_query_usable_counts` 按**逐字 query 串**匹配 `EvidenceRecord::search_query`；子代理自查串与之不同、派生证据（web_fetch/read_file）无 query ⇒ 多 query 批 **4/4 失真**（未归因 4／6／3／6 条，占批级 60–100 %）；且 `source_ledger` 不落归因依据，事后无法复核。
@@ -1239,6 +1265,15 @@ GLM F2 处置转排期（2026-09-06 用户裁决）：`orz-host/src/approval.rs`
 - 方案：① **首选** 在既有 `mechanical_audit_update` 家族增 `kind="retrieval_batch"`，payload 落 `activation_id／usable／cap／retrieval_calls／terminal_reason`（与 `batch_close` 单源 helper 同值，模型面零改动）；② **可选** headless run 尾无条件落侧车（或 `ORZ_SESSION_SIDECAR_ALWAYS=1` 供评测轮），使整条模型面消息成为可审计面。
 - 判据：① 任一真机 run 的 journal 可机械重算「倒数行读数 ＝ 该批 `usable_source_count`」；② 不新增事件类型；③ 模型面字节不变。
 - **2026-09-20 S1 落码（过夜批，未提交）**：批收尾写 `mechanical_audit_update{kind:"retrieval_batch"}`（五键 payload 与 batch_close 单源 helper 同值）；kind 枚举 8 值＋schema 按 kind 条件分支＋契约钉改写＋Python 校验器分支（历史 journal 回放零错误）；新正例 fixture＋check_repository 登记。判据 ②③ 达成、① 机制面达成（真机演示随 S2）。入口：[`过夜批报告 §5`](audits/0AT_0AU_0AV_0AW_0AX_S1_IMPL_OVERNIGHT_2026-09-20.md)。
+
+### 0bb. 命令行引号与长行取用摩擦（P2；2026-09-20 用户令立项〔「F13/15均立项」〕，来源＝0am 狗粮轮 `RUN-CLI-6aafc998` 摩擦 F15）
+
+- 来源：0am 报告 [`§5-F15`](audits/0AM_DECODER_FORM_REPLAY_2026-09-20.md)——路由索引单行超长（`CLI_PROJECT_INDEX.md` 第 163 行 926 字符）＋会话 shell 对引号／`$` 形态敏感 ⇒ 该轮轮 6–11 连续 ParserError／`Substring` 越界，取一行条目耗 **6 轮试错**，最终以 .NET `ReadAllLines` 直读成功。
+- 两面：① **工具面**（orz 侧）——含引号／超长内容的取用要求模型自行试错；② **文档面**（项目侧）——账本条目切行可消除触发源。
+- 方案（待放行）：① 工具面沿既有阅读面纪律给稳定取行面（按行号直读的结构化路径／超长行截断标记类），**不做 shell 语义适配、不新增工具**；② 文档面随既有瘦身机制切行（账本批处置，不新立机制）。
+- 判据：① 同类「取长行」动作不再出现连续 ≥3 轮试错（下次狗粮轮观测）；② 10 工具冻结纪律与官方口径零改动。
+- 边界：F15 原始记录口径保留在 0am 报告内，本项只承接处置。
+- 入口：[`0am 报告 §5-F15`](audits/0AM_DECODER_FORM_REPLAY_2026-09-20.md) / TODO P2-0bb。
 
 ### 7. IMPL-CONTROL-FABRIC（`partial`）
 

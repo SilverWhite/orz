@@ -146,3 +146,31 @@ per-call job 句柄（`KILL_ON_JOB_CLOSE` 的调用级拆树），与分类器�
    只删其上与分类器绑定的 `action_class` 字段（`LiveCallJob` 与 `process_tree` 登记行两处）。
 5. **证据支持**：S3 三题 journal 中两条臂的产出本就为 0（`resource_exhausted = 0`、`reclaim_performed = 0`），
    退役不改变真机既成事实，只是把「未触发」变成「不再存在」。
+
+## §11 资源层二次裁决（2026-09-20 用户令；随 0bc 立项，**本批只记裁决与排期，实施另批**）
+
+前置事实（本轮复核）：**CPU 饱和不会杀死进程、只会降速**；2026-09-12 Run B 的 orz 被带走是
+**内存／commit 面**（满盘 ⇒ 系统托管页面文件无法增长 ⇒ commit 失败 ⇒
+`handle_alloc_error` abort），与 CPU 无关。故三层资源面的处置重新裁决如下。
+
+1. **③ CPU 速率上限：直接去掉**——20 % 硬顶保护的是人机共用开发机的响应性，不是安全面；
+   评测场景墙钟即分数，白扣无收益。真机狗粮若需保交互，另行以 env 手动降档（0bc 提供覆盖面）。
+2. **① run 级 Job commit 上限：硬上限改「通知式」**——不再由 orz 侧硬顶／硬拒；
+   改为临限通知＋事件＋软提示。Windows 对应原语：`JOBOBJECT_NOTIFICATION_LIMIT_INFORMATION(_2)`
+   的 `JOB_OBJECT_LIMIT_JOB_MEMORY_LOW`，经作业完成端口投递。读数面（`host_resource_snapshot`
+   与探针）保留。
+3. **② 活动进程上限：保留，并加 env 覆盖**——默认维持 `2 × cores + 8`（≥16）；覆盖变量随 0bc 落。
+4. **可失败分配＋降级（双平台）**：把 orz 自身可能巨量的分配路径改为**可失败分配**
+   （`try_reserve`／`try_reserve_exact` 族），失败即进降级链——与 0z 子项 C 的
+   ENOSPC → 退避 → Degraded → `degraded_complete` 同形。**Windows 与 Linux 两侧都考虑**：
+   Windows 侧是「Job 持有者自保」（orz 不在 Job 内，只有自己能兜）；Linux 真机无强制面，
+   同样只有 orz 自己能兜。
+5. **外部 supervisor：仅记录、不实施**（用户裁决：该部署形态其他用户无法复现）。
+   留档业界形态供参考：systemd `Restart=` ＋ `OOMScoreAdjust`；k8s `restartPolicy`
+   ＋ QoS／驱逐；Windows 服务恢复动作；Erlang/OTP 监督树。
+6. **附带口径**：本档 §1–§9 的设计权威不变；§11 为增量裁决，ADR 转录随实施批。
+   三层资源面只在 **Windows** 生效（Linux 侧记 `enforced=false` ＋读数）；评测容器内的
+   `memory.max`／`cpus` 由 harness 施加，属装置侧。
+
+实施与验证随 **0bc**（复合狗粮任务）：该轮同时承接 0am 的 **RLI 实际表现**观测（读数随轮收取；
+0am 预注册另行放行）。
