@@ -465,6 +465,12 @@ pub struct AgentLoopController {
     /// RETRIEVAL-ORCHESTRATION-MECHANICAL 0k (2026-08-30)：检索子代理单次
     /// 派发墙钟预算。`None` = 禁用（unbounded）。
     pub(crate) retrieval_subagent_wallclock: Option<std::time::Duration>,
+    /// 0au（2026-09-20，S3 摩擦 N2）：run 级墙钟上限的**测试 seam**——
+    /// 派发前余量判定（`run_agent_loop` 预扫描）的解析序为
+    /// 「env（`ORZ_MAX_WALLCLOCK`）> 本字段 > None（不判定）」。生产路径
+    /// 只吃 env（orz-bin `--max-wallclock` 的读源）；本字段仅供测试注入，
+    /// 避免 env 全局态污染并行测试。
+    pub(crate) run_wallclock_limit_secs: Option<u64>,
     /// 检索子代理工具轮上限（与 `max_tool_rounds` 取 min 生效）。
     /// `None` = 禁用（unbounded，仅用主车道上限；0k 审查处理 P3-5）。
     pub(crate) retrieval_max_tool_rounds: Option<u32>,
@@ -856,6 +862,7 @@ impl AgentLoopController {
             // 委托契约复杂度分档——构造时不再固化默认预算；dispatch 按
             // 「显式 env > controller 字段（seam） > 档位默认」解析。
             retrieval_subagent_wallclock: retrieval_subagent_wallclock_override().flatten(),
+            run_wallclock_limit_secs: None,
             retrieval_max_tool_rounds: retrieval_subagent_max_tool_rounds_override().flatten(),
             candidate_cap: web_fetch_candidate_cap_override()
                 .unwrap_or(DEFAULT_WEB_FETCH_CANDIDATE_CAP),
@@ -1081,6 +1088,13 @@ impl AgentLoopController {
     /// 与外部 lane 双族恒在；未启用会话无检索工具且派发拒绝。
     pub fn with_retrieval_enabled(mut self, enabled: bool) -> Self {
         self.retrieval_enabled = enabled;
+        self
+    }
+
+    /// 0au（2026-09-20）测试 seam：注入 run 级墙钟上限（秒），供派发前
+    /// 余量判定的确定性单测（生产读源仍是 env，见字段文档）。
+    pub fn with_run_wallclock_limit_secs(mut self, secs: u64) -> Self {
+        self.run_wallclock_limit_secs = Some(secs);
         self
     }
 
@@ -1490,6 +1504,7 @@ impl AgentLoopController {
             // 第二批分档：测试组件构造不固化预算默认，档位默认在 dispatch
             // 生效；需要显式预算的测试直接写 controller 字段。
             retrieval_subagent_wallclock: None,
+            run_wallclock_limit_secs: None,
             retrieval_max_tool_rounds: None,
             candidate_cap: DEFAULT_WEB_FETCH_CANDIDATE_CAP,
             max_inject_tokens_per_round: DEFAULT_MAX_INJECT_TOKENS_PER_ROUND,

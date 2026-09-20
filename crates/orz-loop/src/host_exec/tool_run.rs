@@ -3613,6 +3613,20 @@ impl AgentLoopController {
                         "reason": pd.reason,
                     });
                 }
+                // F4 契约（§5.3，2026-08-30）＋ 2026-09-20 审查修复批：
+                // failure_target 只许挂在失败完成（status=error）上——命令级
+                // 失败（exit≠0）本身就是失败形状（本路径经漏斗盖章
+                // failure_target），journal 面须带 status/error。此前仅
+                // policy_denial 臂设置 status，命令级失败完成缺 status，
+                // 校验器族（Python `_verify_v02_failure_target` ＋ Rust
+                // `journal/families.rs` 同规则）逐例报错。error 码与失败
+                // 聚合同族（`exit_{n}`）；有信封时 error=信封码、不覆盖
+                // （见上臂）。模型面零改动。
+                if res.policy_denial.is_none() && matches!(res.exit_code, Some(code) if code != 0) {
+                    completed_payload["status"] = serde_json::json!("error");
+                    completed_payload["error"] =
+                        serde_json::json!(format!("exit_{}", res.exit_code.unwrap()));
+                }
                 // 0q（ADR-0010 §14.63）：单一漏斗在事件发出前过一次——
                 // Ok 臂命令级失败盖章（写点 ②，原 0p S1 复审 F-C 散布
                 // 写点退役）；policy_denial 载荷由漏斗自检跳过（0p S2

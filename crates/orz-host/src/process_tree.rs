@@ -49,11 +49,10 @@ pub struct ProcessTreeRecord {
     /// Root `run` + per-call granularity marker.
     #[serde(default)]
     pub job_name: String,
-    /// The gate's action class for the call that spawned this child
-    /// (`heavy` / `light` / ...) — lets the hard-tier face enumerate the
-    /// heavy call_ids set (§4.8 表 1) without re-classifying.
-    #[serde(default)]
-    pub action_class: String,
+    // 0aw（2026-09-20 裁决 ④）：原 `action_class` 字段随动作分类器一并退役
+    // ——它只服务 hard 档树杀的「重档 call_id 集」枚举，该面已不存在。
+    // 历史登记行携带的该键经 `serde(default)` + 宽松反序列化自然兼容：
+    // 旧文件多出的键在默认 serde 语义下被忽略，扫除三条件不依赖它。
 }
 
 /// Why a sweep row was refused — the negative side of the three-condition
@@ -688,7 +687,6 @@ mod tests {
             started_at: 1,
             run_id: run.to_string(),
             job_name: "call".into(),
-            action_class: "heavy".into(),
         }
     }
 
@@ -882,14 +880,12 @@ mod tests {
             started_at: 42,
             run_id: "RUN-X".into(),
             job_name: "call".into(),
-            action_class: "heavy".into(),
         };
         registry.register(&record).expect("register");
         let loaded = registry.load_all();
         assert_eq!(loaded.len(), 1);
         assert_eq!(loaded[0].call_id, "call-reg-1");
         assert_eq!(loaded[0].run_id, "RUN-X");
-        assert_eq!(loaded[0].action_class, "heavy");
 
         // NotRunning 拒绝行被清理（review F-BE-5：陈旧记录不再喂未来 sweep）。
         let decisions = registry.plan_sweep(
@@ -932,7 +928,6 @@ mod tests {
             started_at: 43,
             run_id: "RUN-X".into(),
             job_name: "call".into(),
-            action_class: "heavy".into(),
         };
         registry.register(&record2).unwrap();
         let decisions = registry.plan_sweep(

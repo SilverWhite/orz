@@ -2257,6 +2257,30 @@ pub fn verify_tool_availability_probe(events: &[Value]) -> Vec<String> {
                  {incomplete_tools:?}"
             ));
         }
+        // 0ac S3① (2026-09-13): the retrieval_family probe is its OWN event
+        // stream (`probe_scope="retrieval_family"`, members are the three
+        // family names) — it never participates in the work-tools partition.
+        // 2026-09-20 review-fix batch: scope the partition rule to the
+        // work-tools face and give the family face its own member bound
+        // (previously every journal carrying the family probe failed the
+        // work-tools rule). Mirrors the Python `_verify_v02_tool_availability_probe`.
+        let scope = payload.get("probe_scope").and_then(Value::as_str);
+        if scope == Some("retrieval_family") {
+            let family: BTreeSet<String> = ["browser", "search_engine", "web_channel"]
+                .iter()
+                .map(|s| s.to_string())
+                .collect();
+            let mut family_union = complete.clone();
+            family_union.extend(incomplete.keys().cloned());
+            let family_extra: Vec<&String> = family_union.difference(&family).collect();
+            if !family_extra.is_empty() {
+                errors.push(format!(
+                    "event {index}: retrieval_family probe partition must be a \
+                     subset of the family members; extra={family_extra:?}"
+                ));
+            }
+            continue;
+        }
         let mut union = complete.clone();
         union.extend(incomplete.keys().cloned());
         let work: BTreeSet<String> = toolsets::WORK_TOOLS.iter().map(|s| s.to_string()).collect();
@@ -2471,6 +2495,15 @@ pub fn verify_probe_accuracy(events: &[Value]) -> Vec<String> {
         }
         let event_type = event.get("event_type").and_then(Value::as_str);
         if event_type == Some("tool_availability_check") {
+            // 0ac S3① (2026-09-13): the retrieval_family probe is its own
+            // event stream and never participates in the work-tools flip
+            // chain (2026-09-20 review-fix batch — mirrors the Python
+            // `_verify_v02_probe_accuracy` scope guard).
+            if event["payload"].get("probe_scope").and_then(Value::as_str)
+                == Some("retrieval_family")
+            {
+                continue;
+            }
             let complete: BTreeSet<String> = event["payload"]
                 .get("complete")
                 .and_then(Value::as_array)

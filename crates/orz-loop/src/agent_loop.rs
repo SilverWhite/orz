@@ -1910,6 +1910,10 @@ pub(crate) async fn run_agent_loop(
     // 0ar S2-D3（§5.5）：同轮溢出检索调用的未派发登记——本轮 post-batch
     // 间隙注入一次性重述（每轮至多一条），防模型漏看丢覆盖。
     let mut deferred_retrievals: Vec<String> = Vec::new();
+    // 0au（2026-09-20 立项，S3 摩擦 N2）：因 run 墙钟余量不足而保留的检索
+    // 登记——post-batch 间隙一次性重述（cause 自描述），只报事实不邀请
+    // 重派（保留窗内重派会被同一判定再拦）。
+    let mut reserved_retrievals: Vec<String> = Vec::new();
     // 0ar S3 前去噪（设计 §5.6）：检索车道（子代理）在本激活内的 query
     // 去重键 → 首次 call_id；重复 query 走指针回踩（不重复检索）。只对
     // 检索车道跨轮持久；主车道改用每轮局部表（同轮重复去重、跨激活重派
@@ -3857,6 +3861,39 @@ pub(crate) async fn run_agent_loop(
             .skip(crate::retrieval::batch_close::MERGE_MAX_QUERIES)
             .copied()
             .collect();
+        // 0au（2026-09-20 立项，S3 摩擦 N2）：派发前 run 级墙钟余量判定——
+        // 原预扫描只看「同轮合并上限」，run 还剩多少无人过问（S3 五次
+        // trailing：余量 26–191s 的批被 run 墙钟直接截断）。以**首个可派发
+        // 调用**的档位墙钟为本批批墙钟（合并激活共用同一批预算；档位表
+        // 180/300/450 单一来源），`remaining = 上限 − 已耗`；余量不足 ⇒
+        // 本批全部可派发位（含合并位与溢出位）保留不派发。上限解析序＝
+        // env（生产读源）> controller seam（测试）> None（不判定、不保留）。
+        let run_limit_secs = crate::controller::main_wallclock_limit_secs_override()
+            .or(controller.run_wallclock_limit_secs);
+        let remaining_run_wallclock = run_limit_secs
+            .map(|limit| limit.saturating_sub(run_started_at.elapsed().as_secs()))
+            .map(std::time::Duration::from_secs);
+        let batch_wallclock = dispatchable
+            .first()
+            .map(|&i| {
+                let tc = &response.tool_calls[i];
+                let (query, scope, max_results) =
+                    crate::retrieval::effort::effort_inputs_from_args(&tc.arguments);
+                let external = matches!(route(&tc.name), DispatchTarget::ExternalRetrieval);
+                crate::retrieval::effort::classify_retrieval_effort(
+                    &query,
+                    scope.as_deref(),
+                    max_results,
+                    external,
+                )
+                .wallclock_default()
+            })
+            .unwrap_or_default();
+        let wallclock_reserved = !dispatchable.is_empty()
+            && crate::retrieval::batch_close::wallclock_reserved(
+                remaining_run_wallclock,
+                batch_wallclock,
+            );
         let mut tool_idx = 0usize;
         while tool_idx < response.tool_calls.len() {
             let tc = &response.tool_calls[tool_idx];
@@ -3939,6 +3976,91 @@ pub(crate) async fn run_agent_loop(
                     PolicyFeedback::Denied(key) => round_denials.push(key),
                     PolicyFeedback::Succeeded => round_had_success = true,
                 }
+                tool_idx += 1;
+                continue;
+            }
+            // 0au：run 墙钟余量保留（预派发拒绝，模板同 D3——无 ToolStarted
+            // 的 gate 拒绝；stamp_failure(Refused)；不喂 deny 断路器——保留
+            // 不是失败）。本批全部可派发位（合并 leader/被合并/溢出）与
+            // **同轮重复位**一并保留（2026-09-20 审查修复批：保留轮的重复
+            // 位若照旧走指针回踩，会指向一条未派发回执，构成假指针——保留
+            // 判定整批同质，重复位的原调用必被保留，故回执同形）。文案只
+            // 报事实（批墙钟/run 剩余/保留额），不重述邀请——同轮重派会被
+            // 同一判定再拦。post-batch 间隙的 cause 自述重述见
+            // reserved_retrievals。
+            if wallclock_reserved
+                && (dispatchable.contains(&tool_idx) || duplicate_positions.contains_key(&tool_idx))
+            {
+                let q = tc
+                    .arguments
+                    .get("query")
+                    .or_else(|| tc.arguments.get("url"))
+                    .and_then(|v| v.as_str())
+                    .unwrap_or(tc.name.as_str())
+                    .to_string();
+                // 保留＝本调用从未派发，不得占用 query 去重槽（2026-09-20
+                // 审查修复批）——槽位若被保留调用认领，后续重发同 query
+                // 会得到「已派发过」的指针回踩、指向一条未派发回执。仅在
+                // 槽位仍指向本 call_id 时摘除（重复位与更早真实派发的槽位
+                // 不在摘除面内）。
+                if let Some(key) = crate::retrieval::batch_close::query_key(&tc.arguments) {
+                    let owned_by_this_call = if svc.retrieval_calls.is_some() {
+                        lane_dispatched_queries
+                            .get(&key)
+                            .map(|id| id == &tc.call_id)
+                    } else {
+                        round_dispatched_queries
+                            .get(&key)
+                            .map(|id| id == &tc.call_id)
+                    };
+                    if owned_by_this_call == Some(true) {
+                        if svc.retrieval_calls.is_some() {
+                            lane_dispatched_queries.remove(&key);
+                        } else {
+                            round_dispatched_queries.remove(&key);
+                        }
+                    }
+                }
+                reserved_retrievals.push(q.clone());
+                let remaining_secs = remaining_run_wallclock
+                    .map(|d| d.as_secs())
+                    .unwrap_or_default();
+                let output = format!(
+                    "[{}] 本调用未派发（cause: {}）：run 剩余墙钟 {}s，不足以容纳本批 \
+                     检索墙钟 {}s ＋收尾回合（保留 {}s）与落盘窗口（保留 {}s）。已发起部分 \
+                     不受影响。",
+                    tc.name,
+                    crate::retrieval::batch_close::WALLCLOCK_RESERVED_CAUSE,
+                    remaining_secs,
+                    batch_wallclock.as_secs(),
+                    crate::retrieval::batch_close::CLOSE_ROUND_MARGIN_SECS,
+                    crate::retrieval::batch_close::RUN_TAIL_RESERVE_SECS,
+                );
+                let mut payload = serde_json::json!({
+                    "tool": tc.name,
+                    "call_id": tc.call_id,
+                    "exit_code": 1,
+                    "status": "error",
+                    "error": crate::retrieval::batch_close::WALLCLOCK_RESERVED_CAUSE,
+                });
+                // 0q：gate 拒绝形状统一过漏斗（Refused 码，法官对账物齐备）。
+                controller.stamp_failure(
+                    &mut payload,
+                    &tc.name,
+                    &tc.arguments,
+                    crate::host_exec::ToolFailureOutcome::Refused(
+                        crate::retrieval::batch_close::WALLCLOCK_RESERVED_CAUSE,
+                    ),
+                );
+                writer.record(EventType::ToolCompleted, payload).await?;
+                messages.push(Message {
+                    role: Role::Tool,
+                    content: output,
+                    tool_call_id: Some(tc.call_id.clone()),
+                    tool_calls: Vec::new(),
+                    reasoning_content: None,
+                    round: None,
+                });
                 tool_idx += 1;
                 continue;
             }
@@ -4584,6 +4706,30 @@ pub(crate) async fn run_agent_loop(
                 round: None,
             });
             deferred_retrievals.clear();
+        }
+        // 0au：run 墙钟保留的一次性重述（cause 自描述；只报事实——尾部
+        // 保留窗内的重派会被同一判定再拦，文案不做重派邀请）。
+        if !reserved_retrievals.is_empty() {
+            let note = format!(
+                "[上轮检索未派发] 上一轮有 {} 次检索因 run 墙钟余量不足未派发 \
+                （cause: {}）：{}。run 剩余墙钟不足一个完整检索批，尾部保留给落盘。",
+                reserved_retrievals.len(),
+                crate::retrieval::batch_close::WALLCLOCK_RESERVED_CAUSE,
+                reserved_retrievals
+                    .iter()
+                    .map(|q| format!("\"{q}\""))
+                    .collect::<Vec<_>>()
+                    .join("、")
+            );
+            messages.push(Message {
+                role: Role::User,
+                content: note,
+                tool_call_id: None,
+                tool_calls: Vec::new(),
+                reasoning_content: None,
+                round: None,
+            });
+            reserved_retrievals.clear();
         }
         // 0ar S2-D1（2026-09-19，设计 §3.1/§3.2/§3.4）：阈值回送判定——
         // post-tool-batch gap（本批全部 tool replies 已回传的安全间隙）。
@@ -8083,6 +8229,165 @@ mod tests {
             "存档写入失败必须显式上报: {compact:?}"
         );
         assert_eq!(compact[0]["summary_incomplete"], false);
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    // ── 0au：派发前 run 墙钟余量保留（2026-09-20 立项，S3 摩擦 N2） ──────
+
+    /// 0au 钉子（判据 ②③）：run 余量不足时检索派发被保留——
+    /// ① 无 `ToolStarted` 配对（预派发拒绝，模板同 D3），`ToolCompleted`
+    ///   携带 cause `retrieval_dispatch_wallclock_reserved`；
+    /// ② 模型面文案只报事实（批墙钟／run 剩余／保留额）；
+    /// ③ 下一轮 post-batch 间隙一次性重述（cause 自描述、不邀请重派）。
+    /// 上限经 controller 测试 seam 注入（`with_run_wallclock_limit_secs`）
+    /// ——不触碰进程 env，无并行污染面；env 优先序由解析式
+    /// `.or(seam)` 结构保证（生产 env 在位时 seam 永不生效）。
+    #[tokio::test]
+    async fn retrieval_dispatch_reserved_when_run_wallclock_is_short() {
+        let dir = test_dir();
+        let host = TestHost {
+            journal: JournalRecorder::new(dir.clone()),
+            tool_result: None,
+        };
+        // 回应链：保留轮 → 重述后的续答轮 → 终答前的草稿/终答轮。
+        let fake = Arc::new(FakeProvider::new(vec![
+            ScriptedResponse::tool_calls(vec![tool_call("retrieve_project_docs", "call-0au")]),
+            ScriptedResponse::text("完成"),
+            ScriptedResponse::text("草稿"),
+            ScriptedResponse::text("终答"),
+        ]));
+        let gateway: Arc<dyn ModelGateway> = fake.clone();
+        let controller = with_retrieval_enabled(
+            AgentLoopController::with_gateway(gateway).with_run_wallclock_limit_secs(10),
+        );
+        controller
+            .run_turn(
+                &host,
+                "查文档",
+                "RUN-0AU-RESERVE",
+                MANIFEST,
+                0,
+                None,
+                None,
+                None,
+            )
+            .await
+            .expect("the run itself completes (reserve is not a failure)");
+
+        // ① journal：无 ToolStarted 配对；ToolCompleted.error = cause。
+        let journal_events = events(&dir);
+        let started: Vec<&orz_assurance::RunEvent> = journal_events
+            .iter()
+            .filter(|e| {
+                e.event_type == EventType::ToolStarted && e.payload["call_id"] == "call-0au"
+            })
+            .collect();
+        assert!(
+            started.is_empty(),
+            "reserved dispatch must not start: {started:?}"
+        );
+        let completed = journal_events
+            .iter()
+            .find(|e| {
+                e.event_type == EventType::ToolCompleted && e.payload["call_id"] == "call-0au"
+            })
+            .expect("reserved dispatch still completes (audit face)");
+        assert_eq!(
+            completed.payload["error"],
+            crate::retrieval::batch_close::WALLCLOCK_RESERVED_CAUSE,
+            "{:?}",
+            completed.payload
+        );
+
+        // ②③ 下一轮请求：post-batch 间隙的一次性重述（cause 自描述）。
+        let requests = fake.received_requests();
+        let restated = requests.iter().any(|r| {
+            r.messages
+                .iter()
+                .any(|m| m.content.contains("retrieval_dispatch_wallclock_reserved"))
+        });
+        assert!(
+            restated,
+            "the one-shot restatement must name the reserve cause"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// 0au 钉子（2026-09-20 审查修复批）：保留轮的同轮重复位也发保留回执
+    /// ——保留判定整批同质，重复位的指针回踩若照旧发出，会指向一条未派发
+    /// 回执（原调用同样被保留），构成「已派发过」的假指针。本钉：同轮两次
+    /// 同 query 检索在保留轮各得一条 cause 回执，指针回踩文案不出现。
+    #[tokio::test]
+    async fn reserved_round_holds_duplicates_with_the_reserve_receipt() {
+        let dir = test_dir();
+        let host = TestHost {
+            journal: JournalRecorder::new(dir.clone()),
+            tool_result: None,
+        };
+        // 回应链：保留轮（同 query 两次）→ 完成轮 → 草稿/终答轮。
+        let fake = Arc::new(FakeProvider::new(vec![
+            ScriptedResponse::tool_calls(vec![
+                tool_call("web_search", "call-0au-a"),
+                tool_call("web_search", "call-0au-b"),
+            ]),
+            ScriptedResponse::text("完成"),
+            ScriptedResponse::text("草稿"),
+            ScriptedResponse::text("终答"),
+        ]));
+        let gateway: Arc<dyn ModelGateway> = fake.clone();
+        let controller = with_retrieval_enabled(
+            AgentLoopController::with_gateway(gateway).with_run_wallclock_limit_secs(10),
+        );
+        controller
+            .run_turn(
+                &host,
+                "查文档",
+                "RUN-0AU-RESERVE-DUP",
+                MANIFEST,
+                0,
+                None,
+                None,
+                None,
+            )
+            .await
+            .expect("the run itself completes");
+
+        // 两个调用位都走保留臂：无 ToolStarted，ToolCompleted.error = cause。
+        let journal_events = events(&dir);
+        for call_id in ["call-0au-a", "call-0au-b"] {
+            let started = journal_events
+                .iter()
+                .filter(|e| {
+                    e.event_type == EventType::ToolStarted && e.payload["call_id"] == call_id
+                })
+                .count();
+            assert_eq!(started, 0, "{call_id} must not start");
+            let completed = journal_events
+                .iter()
+                .find(|e| {
+                    e.event_type == EventType::ToolCompleted && e.payload["call_id"] == call_id
+                })
+                .unwrap_or_else(|| panic!("{call_id} must complete"));
+            assert_eq!(
+                completed.payload["error"],
+                crate::retrieval::batch_close::WALLCLOCK_RESERVED_CAUSE,
+                "the duplicate of a reserved original must hold too: {:?}",
+                completed.payload
+            );
+        }
+        // 指针回踩文案（「已于本 run 派发过」）不得出现于任何模型面请求。
+        let requests = fake.received_requests();
+        let pointered_back = requests.iter().any(|r| {
+            r.messages
+                .iter()
+                .any(|m| m.content.contains("已于本 run 派发过"))
+        });
+        assert!(
+            !pointered_back,
+            "a reserved round must not yield the duplicate pointer note"
+        );
 
         let _ = std::fs::remove_dir_all(&dir);
     }

@@ -311,6 +311,23 @@ pub(crate) struct StructuredCommittedResult {
     pub validation_note: Option<String>,
 }
 
+/// 0at A 面（2026-09-20，S3 摩擦 N1）：query id 的**单一生成源**——
+/// `QRY-{sha256(call_id)[..8]}` 与多 query 的 `QRY-{hash}-{i+1}` 后缀，
+/// 与契约 `query_entry.query_id` 的形态约束（`^QRY-[A-Za-z0-9._-]+$`）逐
+/// 字对应。`query_summary` 与证据谱系（`origin_query_id`）共用本函数。
+pub(crate) fn query_ids_for(call_id: &str, query_count: usize) -> Vec<String> {
+    let query_hash = &sha256_hex(call_id.as_bytes())[..8];
+    (0..query_count)
+        .map(|i| {
+            if i == 0 {
+                format!("QRY-{query_hash}")
+            } else {
+                format!("QRY-{query_hash}-{}", i + 1)
+            }
+        })
+        .collect()
+}
+
 /// GAP-RETRIEVAL-TOOLS (2026-08-10): form the structured retrieval result
 /// (ADR-0010 §3.3.3/§3.7.4/§3.7.5). GAP-RETRIEVAL-STRUCTURED-RESULT 方向 C
 /// (2026-08-30 用户裁决): the `[RESULT_JSON]` organized block is DELETED —
@@ -521,6 +538,15 @@ pub(crate) fn build_structured_result(
     //    契约面同批增可选 `usable_source_count`（宽口径逐 query 可用计数，
     //    按 search_query 归因；单 query 全额归属——见
     //    `batch_close::per_query_usable_counts`）。
+    //    0at（2026-09-20，S3 摩擦 N1）：query id 生成收敛为单源
+    //    `query_ids_for`——`query_summary` 与证据谱系（A 面
+    //    `origin_query_id`）共用同一 id 域；多 query 批在每条工具证据的
+    //    ledger 条目上落派发谱系（规则见
+    //    `batch_close::origin_query_assignments`），单 query 批不落（payload
+    //    逐字节不变，判据 ③）。批级缺口由可选 `unattributed_usable_count`
+    //    披露（＝批级可用 − Σ 逐 query 可用，恒等式判据 ①）；0ax 的
+    //    「无 URL 合成答案」单列数由可选 `synthetic_answer_count` 披露
+    //    （>0 才落）。
     let query_summary: Vec<serde_json::Value> = {
         let effective_queries: &[String] = if queries.is_empty() {
             &[String::from("(no query)")]
@@ -529,7 +555,6 @@ pub(crate) fn build_structured_result(
         };
         let per_query_usable =
             crate::retrieval::batch_close::per_query_usable_counts(effective_queries, evidence);
-        let query_hash = &sha256_hex(call_id.as_bytes())[..8];
         let source_category = if evidence
             .iter()
             .any(|e| e.source_type == "project_doc" || e.source_type == "local_file")
@@ -538,16 +563,13 @@ pub(crate) fn build_structured_result(
         } else {
             "web"
         };
+        let query_ids = query_ids_for(call_id, effective_queries.len());
         effective_queries
             .iter()
             .enumerate()
             .map(|(i, q)| {
                 let mut entry = serde_json::json!({
-                    "query_id": if i == 0 {
-                        format!("QRY-{query_hash}")
-                    } else {
-                        format!("QRY-{query_hash}-{}", i + 1)
-                    },
+                    "query_id": query_ids[i],
                     "query_text": q,
                     "source_category": source_category,
                     // 单 query：旧口径（全 ledger 条数）；多 query：按
@@ -572,6 +594,24 @@ pub(crate) fn build_structured_result(
             })
             .collect()
     };
+    // 0at A 面：工具证据 ledger 条目的派发谱系（多 query 批限定；条目与
+    // 证据同序——source_ledger 前 evidence.len() 条即工具证据）。
+    if queries.len() > 1 {
+        let assignments = crate::retrieval::batch_close::origin_query_assignments(
+            queries,
+            evidence,
+            &query_ids_for(call_id, queries.len().max(1)),
+        );
+        for (entry, origin) in source_ledger
+            .iter_mut()
+            .take(evidence.len())
+            .zip(assignments)
+        {
+            if let Some(id) = origin {
+                entry["origin_query_id"] = serde_json::Value::String(id);
+            }
+        }
+    }
 
     // 4. filtering_log — mechanical filter events. GAP-RETRIEVAL-STRUCTURED-
     //    RESULT 方向 C (2026-08-30): source-annotation drops were the only
@@ -661,6 +701,38 @@ pub(crate) fn build_structured_result(
         "source_counts": source_counts,
         "visibility_degraded": degraded,
     });
+    let mut payload = payload;
+    // 0at B 面（多 query 批限定）：批级归因缺口显式披露——恒等式
+    // `Σ 逐 query usable ＋ unattributed ＝ 批级 usable`（判据 ①）。单
+    // query 批不落（全额归属、零缺口；payload 逐字节不变，判据 ③）。
+    // 跨 query 重叠（同一 digest 落两桶）使 Σ 逐 query 超过批级、缺口
+    // 饱和到 0——恒等式在该批不成立，留机械告警（可核、不阻断）。
+    if queries.len() > 1 {
+        let per_query_sum: u64 =
+            crate::retrieval::batch_close::per_query_usable_counts(queries, evidence)
+                .iter()
+                .sum();
+        let batch_usable = crate::retrieval::batch_close::usable_source_count(evidence);
+        if per_query_sum > batch_usable {
+            tracing::warn!(
+                batch_usable,
+                per_query_sum,
+                "per-query usable counts overlap across queries (same content \
+                 under multiple declared queries) — unattributed_usable_count \
+                 saturates at 0 and the identity sum(per-query) + unattributed \
+                 = batch does not hold this batch"
+            );
+        }
+        payload["unattributed_usable_count"] = serde_json::json!(
+            crate::retrieval::batch_close::unattributed_usable_count(queries, evidence)
+        );
+    }
+    // 0ax S1：无 URL 合成答案单列数（>0 才落；缺席即「本批无合成答案」，
+    // 不扰动单 query 批与既有 payload 形态）。
+    let synthetic = crate::retrieval::batch_close::synthetic_answer_count(evidence);
+    if synthetic > 0 {
+        payload["synthetic_answer_count"] = serde_json::json!(synthetic);
+    }
     StructuredCommittedResult {
         payload,
         result_digest,

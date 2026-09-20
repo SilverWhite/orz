@@ -1,35 +1,39 @@
-//! Pre-dispatch resource gate (FUS-HOST-RESOURCE-SAFETY §4.1, 0z S1).
+//! Post-OS-delegation resource observation + volume soft hint
+//! (HOST_RESOURCE_OS_DELEGATION_DESIGN_2026-09-20 §1–§6, 0aw).
 //!
-//! The 2026-09-12 real-machine run died twice on its own actions: once when
-//! `D:` filled up (journal `os error 112` → fatal), once when host commit ran
-//! out (`memory allocation of 200720 bytes failed`). Neither failure was a
-//! concurrency artifact — the neighbouring session was asleep. So the framework
-//! takes one job it can mechanize without becoming a host scheduler
-//! (design §2): **read the headroom before dispatching heavy work, and refuse
-//! when it is not there**.
+//! **orz 不做资源准入。** The 2026-09-20 user ruling retired the pre-dispatch
+//! admission gate (`HEAVY_RELEASE_COMMIT_HEADROOM_PERCENT` — structurally
+//! unsatisfiable on this machine's 83–87 % used baseline) together with the
+//! action classifier and both 0z S2 action arms (hard-tier tree kill + reclaim
+//! trigger, user ruling ④). Memory/CPU scheduling and limits belong to the
+//! operating system (Windows: the kernel-enforced run-level Job Object,
+//! `install_global_run_job`; Linux: whatever cgroup/systemd limit the
+//! deployment grants — with no enforcement face the run simply records
+//! `enforced=false`); disk headroom is a **pre-dispatch mechanical soft hint**.
+//! orz dispatches processes, collects results, and relays the OS's answers
+//! (`ERROR_DISK_FULL` / `ENOSPC` — the 0z C degradation chain owns the disk
+//! full face).
 //!
 //! Three mechanical pieces, all testable without a real machine:
 //!
-//! 1. [`classify_action`] — a static classifier. Tool name first (a heavy tool
-//!    is heavy whatever its arguments), then the command string for
-//!    `run_terminal_cmd`. No model self-reporting, no natural language.
-//! 2. [`CapacityProbe`] — read-only headroom readings for the volume the work
-//!    would actually run on (`cwd`; 不换盘不换卷, design §2) plus host commit.
-//! 3. [`ResourceGate::evaluate`] — the decision. Light actions are never gated;
-//!    heavy actions need `free ≥ 8 GiB` **and** `commit free ≥ 25% limit`;
-//!    readings that cannot be obtained are treated as insufficient
-//!    (fail-closed, design §2 item 4).
+//! 1. [`CapacityProbe`] — read-only headroom readings for the volume the work
+//!    would actually run on (`cwd`; 不换盘不换卷) plus host commit.
+//! 2. [`tier_for`] — the ladder tier (`watch → soft → reclaim-direct → hard`)
+//!    survives **as an observation label only**: the `host_resource_snapshot`
+//!    `tier` field keeps its meaning (deleting it would churn the event family,
+//!    verifier and e2e expectations for zero benefit). Nothing hangs actions on
+//!    the tier any more.
+//! 3. [`ResourceHint::soft_hint`] — the soft hint. When a target volume's free
+//!    space is below [`VOLUME_HINT_FREE_BYTES`] the dispatched action STILL
+//!    runs; its tool result carries one `[资源软提示]` line (中文短句 ＋ 英文
+//!    机械读数, 0af 混排定案). **Once per run per volume** (mechanical dedup —
+//!    no spam, same direction as the 0ar 去噪 discipline).
 //!
-//! The tier ladder (`watch → soft → reclaim-direct → hard`) is computed here
-//! and reported with every decision; the *actions* attached to the upper tiers
-//! (cache reclaim, tree kill) belong to §4.6/§4.8 and land in S2. What S1 owns
-//! is that the refusal happens **before dispatch** and carries its readings.
-//!
-//! 模型面 reason 的语言形态（0af，2026-09-15 用户定案）：**中文定案句 ＋ 英文
-//! 机械读数的混排是有意选择**——定案句用用户工作语言让模型不必解码术语即可
-//! 行动，读数（短少明细／`readings` 信封）保持英文机械原样以便逐字核对。
-//! 不做建议引擎／恢复指引（定案边界）。
+//! 模型面提示的语言形态（0af，2026-09-15 用户定案）：中文定案句 ＋ 英文机械
+//! 读数的混排是有意选择。软提示不是拒绝：没有 `resource_insufficient`、没有
+//! `Nothing was started`、没有建议引擎——模型读到读数后自行改方案（§2 决策者）。
 
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
@@ -38,26 +42,8 @@ use xai_tty_utils::JobLimits;
 /// One gibibyte, the unit every threshold in this module is expressed in.
 pub const GIB: u64 = 1024 * 1024 * 1024;
 
-/// Stable refusal code (design §5: pre-issue family, same envelope shape as the
-/// budget / candidate / order refusals).
-pub const CODE_RESOURCE_INSUFFICIENT: &str = "resource_insufficient";
-
-// 0af（2026-09-15 用户定案）：拦截理由的模型面定案句，按**实际耗尽轴**标注
-// （内存＝commit、储存＝卷余量，双轴同短时合并标注）；机械读数以英文随附
-// （见模块头「混排是有意选择」）。Unknown 档（读数不可得、fail-closed 拒绝）
-// 用**变体句**——读数缺席时不得断言「即将耗尽」，防不实陈述。
-const DENIAL_HEADLINE_STORAGE: &str = "宿主机储存资源即将耗尽，无法新增派发，请寻找其他方案";
-const DENIAL_HEADLINE_MEMORY: &str = "宿主机内存资源即将耗尽，无法新增派发，请寻找其他方案";
-const DENIAL_HEADLINE_BOTH: &str = "宿主机内存/储存资源即将耗尽，无法新增派发，请寻找其他方案";
-const DENIAL_HEADLINE_UNREADABLE: &str =
-    "主机资源读数不可得，无法确认余量，已按 fail-closed 规则拒绝新增派发，请寻找其他方案";
-
-/// Heavy-work release: the target volume must have at least this much free.
-pub const HEAVY_RELEASE_FREE_BYTES: u64 = 8 * GIB;
-/// Heavy-work release: commit headroom as a percentage of the commit limit.
-pub const HEAVY_RELEASE_COMMIT_HEADROOM_PERCENT: u32 = 25;
-
-/// Ladder thresholds (design §11 裁决 1/3).
+/// Ladder thresholds (kept as the observation label's scale; design v1.1 §4 —
+/// the tier is a readings summary, not a classifier).
 pub const WATCH_FREE_BYTES: u64 = 16 * GIB;
 pub const SOFT_FREE_BYTES: u64 = 8 * GIB;
 pub const RECLAIM_DIRECT_FREE_BYTES: u64 = 5 * GIB;
@@ -65,6 +51,12 @@ pub const HARD_FREE_BYTES: u64 = 2 * GIB;
 pub const WATCH_COMMIT_USED_PERCENT: u32 = 70;
 pub const SOFT_COMMIT_USED_PERCENT: u32 = 85;
 pub const HARD_COMMIT_USED_PERCENT: u32 = 95;
+
+/// 卷软水位（设计 v1.1 §4；2026-09-20 用户裁决 = 4 GiB）：目标卷
+/// `free < VOLUME_HINT_FREE_BYTES` 时派发前附一条机械软提示——**不阻断、
+/// 不改变动作**（§1 一句话设计：磁盘余量降为派发前的机械软提示；真失败面
+/// 回到 OS 的 `ERROR_DISK_FULL`／`ENOSPC`，由 0z C 的降级链承担）。
+pub const VOLUME_HINT_FREE_BYTES: u64 = 4 * GIB;
 
 /// Hard-limit derivation (design §4.7 / §11 裁决 4): commit = min(80% × limit,
 /// limit − 4 GiB); CPU 80%; concurrency = cores.
@@ -76,213 +68,22 @@ pub const RUN_CPU_RATE_PERCENT: u32 = 80;
 /// machine cannot hand out. The binding value is the assembly-time commit
 /// headroom minus this reserve, floored so light work can still spawn, and
 /// capped by the historical `min(80% × limit, limit − 4 GiB)` arm.
+///
+/// 0aw（设计 v1.1 §3/§4 裁决点 B，2026-09-20 用户采纳）：该推导**保留、只作
+/// 上限、不作拒绝**——内核强制的 run 级 Job Object 是 2026-09-12 Run B 死因
+/// 的承重保护面（orz 是 Job 持有者、不在 Job 内），退役准入门不可以连带退役
+/// Job 上限。
 pub const RUN_COMMIT_HEADROOM_RESERVE_BYTES: u64 = GIB;
 pub const RUN_COMMIT_FLOOR_BYTES: u64 = 2 * GIB;
 /// Active-process ceiling (independent review F-3): `2 × cores + 8`, at least
-/// 16. The value the user's ruling originally fixed (cores) is exactly cargo's
-/// default `-j`, so cargo + its rustc children + linkers + test harnesses would
-/// cross it and the kernel would refuse a legitimate `CreateProcess`. This
-/// ceiling exists to contain a runaway, not to schedule.
+/// 16. This ceiling exists to contain a runaway, not to schedule.
 pub const RUN_ACTIVE_PROCESS_MULTIPLIER: u32 = 2;
 pub const RUN_ACTIVE_PROCESS_BASE: u32 = 8;
 pub const RUN_ACTIVE_PROCESS_MIN: u32 = 16;
 
 // ---------------------------------------------------------------------------
-// Action classification
+// Write targets (目标卷解析 — kept from the former gate module)
 // ---------------------------------------------------------------------------
-
-/// What a tool call costs the host.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum ActionClass {
-    /// Reads, small writes, unclassified commands.
-    Light,
-    /// Builds, links, package installs, container work, archive extraction,
-    /// large output redirection.
-    Heavy,
-}
-
-impl ActionClass {
-    /// Machine-readable key (`light` | `heavy`).
-    pub fn as_str(&self) -> &'static str {
-        match self {
-            ActionClass::Light => "light",
-            ActionClass::Heavy => "heavy",
-        }
-    }
-}
-
-/// Tools that are heavy by name, whatever the arguments say.
-pub const HEAVY_TOOLS: &[&str] = &["run_tests"];
-
-/// Programs whose very invocation is heavy work.
-pub const HEAVY_PROGRAMS: &[&str] = &[
-    "7z",
-    "7za",
-    "7zr",
-    "ant",
-    "apk",
-    "apt",
-    "apt-get",
-    "ar",
-    "bazel",
-    "buck",
-    "buildah",
-    "bun",
-    "cargo",
-    "cargo-nextest",
-    "cc",
-    "choco",
-    "clang",
-    "clang++",
-    "clang-cl",
-    "cmake",
-    "compress-archive",
-    "conan",
-    "conda",
-    "convert",
-    "csc",
-    "ctest",
-    "cypress",
-    "deno",
-    "dnf",
-    "docker",
-    "docker-compose",
-    "dotnet",
-    "dune",
-    "esbuild",
-    "expand",
-    "expand-archive",
-    "ffmpeg",
-    "g++",
-    "gcc",
-    "ghc",
-    "go",
-    "gradle",
-    "gradlew",
-    "gunzip",
-    "gzip",
-    "hatch",
-    "jest",
-    "kotlinc",
-    "ld",
-    "ld.lld",
-    "libtool",
-    "lld",
-    "magick",
-    "make",
-    "makecab",
-    "mamba",
-    "meson",
-    "mingw32-make",
-    "mix",
-    "mold",
-    "msbuild",
-    "mvn",
-    "mvnw",
-    "nextest",
-    "ninja",
-    "nmake",
-    "npm",
-    "npx",
-    "nuget",
-    "nx",
-    "objcopy",
-    "opam",
-    "pacman",
-    "parcel",
-    "pdm",
-    "pip",
-    "pip3",
-    "pipenv",
-    "playwright",
-    "pnpm",
-    "podman",
-    "poetry",
-    "qemu-system-x86_64",
-    "qmake",
-    "rollup",
-    "rustc",
-    "rustup",
-    "sbt",
-    "scoop",
-    "soffice",
-    "stack",
-    "strip",
-    "tar",
-    "tsc",
-    "turbo",
-    "unzip",
-    "uv",
-    "vbcsc",
-    "vcpkg",
-    "vite",
-    "vitest",
-    "webpack",
-    "winget",
-    "wsl",
-    "xz",
-    "yarn",
-    "yum",
-    "zip",
-    "zstd",
-];
-
-/// Interpreters that are heavy *only* when the invocation asks for an install
-/// or a build — `python script.py` and `node -e …` stay light.
-pub const CONDITIONAL_PROGRAMS: &[&str] = &[
-    "java", "node", "perl", "php", "py", "python", "python3", "pythonw", "rscript", "ruby",
-];
-
-/// Sub-commands that make a [`CONDITIONAL_PROGRAMS`] entry heavy.
-pub const CONDITIONAL_HEAVY_TOKENS: &[&str] =
-    &["build", "bdist_wheel", "dist", "install", "sdist", "wheel"];
-
-/// Shell wrappers we look through to reach the real program.
-const WRAPPER_PROGRAMS: &[&str] = &[
-    "bash",
-    "cmd",
-    "dash",
-    "doas",
-    "env",
-    "ionice",
-    "ksh",
-    "nohup",
-    "nice",
-    "powershell",
-    "pwsh",
-    "setsid",
-    "sh",
-    "sudo",
-    "time",
-    "zsh",
-];
-
-/// Command flags that introduce a nested command string.
-const COMMAND_FLAGS: &[&str] = &[
-    "-c",
-    "-command",
-    "-encodedcommand",
-    "-ic",
-    "-lc",
-    "-xc",
-    "/c",
-    "/k",
-];
-
-/// Redirection targets that are not files.
-const NULL_TARGETS: &[&str] = &["$null", "/dev/null", "nul", "none"];
-
-/// Classify a tool call. The tool name decides first; only
-/// `run_terminal_cmd` inspects its command string.
-pub fn classify_action(tool: &str, args: &serde_json::Value) -> ActionClass {
-    if HEAVY_TOOLS.contains(&tool) {
-        return ActionClass::Heavy;
-    }
-    let Some(command) = command_of(tool, args) else {
-        return ActionClass::Light;
-    };
-    classify_command(command)
-}
 
 /// The command string of a tool call, when the tool carries one.
 fn command_of<'a>(tool: &str, args: &'a serde_json::Value) -> Option<&'a str> {
@@ -455,24 +256,8 @@ fn redirection_target(tokens: &[String], index: usize) -> Option<String> {
     (!is_null_target(next)).then(|| next.clone())
 }
 
-/// Classify a shell command string (static; no shell actually runs).
-pub fn classify_command(command: &str) -> ActionClass {
-    for segment in split_segments(&strip_payload_bodies(command)) {
-        let tokens = tokenize(&segment);
-        if tokens.is_empty() {
-            continue;
-        }
-        if segment_is_heavy(&tokens) {
-            return ActionClass::Heavy;
-        }
-    }
-    ActionClass::Light
-}
-
 /// Split a command line into independent commands (`;`, `&&`, `||`, `|`, `&`,
-/// newlines). Quote handling is deliberately crude — this is a static
-/// classifier, and a miss costs one extra reading or one refusal under
-/// pressure, never a wrong action.
+/// newlines) — the write-target parser's segment boundary.
 fn split_segments(command: &str) -> Vec<String> {
     let mut segments = Vec::new();
     let mut current = String::new();
@@ -508,7 +293,7 @@ fn split_segments(command: &str) -> Vec<String> {
 /// header line — where `cat <<EOF > file` lives — is preserved). A body is only
 /// dropped when its terminator actually exists later in the command; otherwise
 /// the text is left alone, so a stray `<<` can never silently swallow real
-/// command lines (the direction that would *miss* heavy work).
+/// command lines (the direction that would *miss* a write target).
 fn strip_payload_bodies(command: &str) -> String {
     let lines: Vec<&str> = command.split_inclusive('\n').collect();
     let mut out = String::with_capacity(command.len());
@@ -624,31 +409,6 @@ fn tokenize(segment: &str) -> Vec<String> {
     tokens
 }
 
-/// Does this segment write command output to a real file?
-fn has_file_redirection(tokens: &[String]) -> bool {
-    for (index, token) in tokens.iter().enumerate() {
-        // `2>&1`, `1>&2`, `&>` shuffle descriptors, they do not create files.
-        if token.contains(">&") {
-            continue;
-        }
-        if token.starts_with('>') {
-            let trimmed = token.trim_start_matches('>').trim();
-            if !trimmed.is_empty() {
-                if !is_null_target(trimmed) {
-                    return true;
-                }
-            } else if let Some(next) = tokens.get(index + 1) {
-                // Bare `>` / `>>`: the target is the next token.
-                if !is_null_target(next) {
-                    return true;
-                }
-            }
-            continue;
-        }
-    }
-    false
-}
-
 fn is_null_target(target: &str) -> bool {
     let normalized = target
         .trim_matches(|c| c == '"' || c == '\'')
@@ -656,125 +416,16 @@ fn is_null_target(target: &str) -> bool {
     NULL_TARGETS.contains(&normalized.as_str())
 }
 
-fn normalize_program(token: &str) -> String {
-    let trimmed = token.trim_matches(|c| c == '"' || c == '\'');
-    let base = trimmed
-        .rsplit(['/', '\\'])
-        .next()
-        .unwrap_or(trimmed)
-        .to_ascii_lowercase();
-    for suffix in [".exe", ".cmd", ".bat", ".com", ".ps1"] {
-        if let Some(stripped) = base.strip_suffix(suffix) {
-            return stripped.to_string();
-        }
-    }
-    base
-}
-
-fn is_env_assignment(token: &str) -> bool {
-    let Some((key, _)) = token.split_once('=') else {
-        return false;
-    };
-    !key.is_empty()
-        && key.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
-        && !key.starts_with('-')
-}
-
-/// What a wrapper's prologue asks us to do next.
-enum WrapperStep {
-    /// Keep scanning this segment's tokens from this index.
-    Next(usize),
-    /// The wrapper's own command string starts here — classify it as a command.
-    Nested(String),
-}
-
-/// Walk past wrappers and flags to the program that will actually run.
-fn segment_is_heavy(tokens: &[String]) -> bool {
-    if has_file_redirection(tokens) {
-        return true;
-    }
-    let mut index = 0usize;
-    let mut guard = 0usize;
-    while index < tokens.len() && guard < 8 {
-        guard += 1;
-        let raw = tokens[index].trim_matches(|c| c == '"' || c == '\'');
-        if raw.is_empty() || raw == "&" || is_env_assignment(raw) {
-            index += 1;
-            continue;
-        }
-        let program = normalize_program(raw);
-        if WRAPPER_PROGRAMS.contains(&program.as_str()) {
-            match skip_wrapper(tokens, index) {
-                WrapperStep::Next(next) => {
-                    index = next;
-                    continue;
-                }
-                WrapperStep::Nested(command) => {
-                    if command.trim().is_empty() {
-                        return false;
-                    }
-                    return classify_command(&command) == ActionClass::Heavy;
-                }
-            }
-        }
-        if HEAVY_PROGRAMS.contains(&program.as_str()) {
-            return true;
-        }
-        if CONDITIONAL_PROGRAMS.contains(&program.as_str()) {
-            return tokens[index + 1..].iter().any(|token| {
-                let lowered = token
-                    .trim_matches(|c| c == '"' || c == '\'')
-                    .to_ascii_lowercase();
-                CONDITIONAL_HEAVY_TOKENS.contains(&lowered.as_str())
-            });
-        }
-        // A real program that is neither heavy nor conditional: the segment is
-        // light unless a *later* pipeline member is heavy — those became their
-        // own segments in `split_segments`.
-        return false;
-    }
-    false
-}
-
-/// Interpret a wrapper's prologue.
-fn skip_wrapper(tokens: &[String], index: usize) -> WrapperStep {
-    let mut cursor = index + 1;
-    while cursor < tokens.len() {
-        let raw = tokens[cursor].trim_matches(|c| c == '"' || c == '\'');
-        let lowered = raw.to_ascii_lowercase();
-        if is_command_flag(&lowered) {
-            // Everything after the flag is the nested command string (the shell
-            // re-parses it, so we do too).
-            return WrapperStep::Nested(tokens[cursor + 1..].join(" "));
-        }
-        if raw.starts_with('-') || raw.starts_with('/') || is_env_assignment(raw) {
-            cursor += 1;
-            continue;
-        }
-        return WrapperStep::Next(cursor);
-    }
-    WrapperStep::Next(cursor)
-}
-
-/// `-c` / `-lc` / `-Command` / `/C` … — the flag that hands over a command.
-fn is_command_flag(lowered: &str) -> bool {
-    if COMMAND_FLAGS.contains(&lowered) {
-        return true;
-    }
-    // Bundled short flags (`-lc`, `-ic`, `-xc`): all letters, ends in `c`.
-    lowered.starts_with('-')
-        && !lowered.starts_with("--")
-        && lowered.len() >= 2
-        && lowered.ends_with('c')
-        && lowered[1..].chars().all(|c| c.is_ascii_alphabetic())
-}
+/// Redirection targets that are not files.
+const NULL_TARGETS: &[&str] = &["$null", "/dev/null", "nul", "none"];
 
 // ---------------------------------------------------------------------------
 // Readings
 // ---------------------------------------------------------------------------
 
-/// Quality of a reading set — `unavailable` is treated as "not enough"
-/// (fail-closed, design §2 item 4).
+/// Quality of a reading set — observation-only now (the former fail-closed
+/// admission is retired; an unreadable probe simply produces no hint and the
+/// `unknown` tier label).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SourceQuality {
     Available,
@@ -796,7 +447,7 @@ impl SourceQuality {
 pub struct HostCapacitySnapshot {
     /// Unix milliseconds when the reading was taken.
     pub collected_at_ms: u64,
-    /// Live volume free bytes (the volume the heavy work would run on).
+    /// Live volume free bytes (the volume the work would run on).
     pub volume_free_bytes: u64,
     /// Volume capacity in bytes (0 when unknown).
     pub volume_total_bytes: u64,
@@ -808,7 +459,7 @@ pub struct HostCapacitySnapshot {
 }
 
 impl HostCapacitySnapshot {
-    /// An unreadable probe result (fail-closed input).
+    /// An unreadable probe result (observation label `unknown`).
     pub fn unavailable() -> Self {
         Self {
             collected_at_ms: now_ms(),
@@ -835,8 +486,8 @@ impl HostCapacitySnapshot {
         })
     }
 
-    /// JSON rendering for the refusal/observation envelope (mechanical
-    /// readings, never prose).
+    /// JSON rendering for the observation envelope (mechanical readings,
+    /// never prose).
     pub fn to_json(&self) -> serde_json::Value {
         serde_json::json!({
             "collected_at_ms": self.collected_at_ms,
@@ -883,7 +534,9 @@ pub trait CapacityProbe: Send + Sync {
 ///
 /// Windows: `GetDiskFreeSpaceExW` + `GlobalMemoryStatusEx`
 /// (`ullTotalPageFile` is the commit limit Run B exhausted).
-/// Linux: `statvfs` + `/proc/meminfo` (`CommitLimit` / `Committed_AS`).
+/// Linux: `statvfs` + `/proc/meminfo` (`CommitLimit` / `Committed_AS` —
+/// observation fields only since 0aw: under the default overcommit policy
+/// neither is an enforcement threshold).
 /// Anything the platform cannot answer comes back as
 /// [`SourceQuality::Unavailable`] — never a guessed number.
 #[derive(Debug, Default)]
@@ -900,8 +553,6 @@ impl CapacityProbe for SystemCapacityProbe {
                 commit_used_bytes: used,
                 source_quality: SourceQuality::Available,
             },
-            // Partial readings are not enough to release heavy work: the
-            // decision needs both axes (fail-closed).
             _ => HostCapacitySnapshot::unavailable(),
         }
     }
@@ -1015,10 +666,14 @@ fn probe_commit() -> Option<(u64, u64)> {
 }
 
 // ---------------------------------------------------------------------------
-// Tier ladder and decision
+// Tier ladder (observation label only) and the soft hint
 // ---------------------------------------------------------------------------
 
 /// Where the machine currently sits on the ladder (design §4.1 table).
+/// **Observation label only** — the `host_resource_snapshot` `tier` field and
+/// the soft-hint context keep using it; no action hangs on the tier any more
+/// (the hard-tier tree kill and the reclaim trigger were retired with the
+/// admission gate, user ruling ④ 2026-09-20).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ResourceTier {
     Normal,
@@ -1027,9 +682,8 @@ pub enum ResourceTier {
     ReclaimDirect,
     Hard,
     /// Readings could not be taken. Machine-readable key `unknown` — never
-    /// folded into `hard` (independent review F-6): S2 hangs reclaim/tree-kill
-    /// decisions on the tier, and a probe failure must not look like a full
-    /// disk.
+    /// folded into `hard` (independent review F-6): an observation label must
+    /// not look like a full disk.
     Unknown,
 }
 
@@ -1047,8 +701,7 @@ impl ResourceTier {
     }
 }
 
-/// Derive the ladder tier from a reading. The tier is *reported* (and drives
-/// the refusal reason); the upper-tier actions (reclaim, tree kill) are S2.
+/// Derive the ladder tier from a reading. The tier is *reported* only.
 pub fn tier_for(snapshot: &HostCapacitySnapshot) -> ResourceTier {
     if snapshot.source_quality == SourceQuality::Unavailable {
         return ResourceTier::Unknown;
@@ -1068,7 +721,7 @@ pub fn tier_for(snapshot: &HostCapacitySnapshot) -> ResourceTier {
     }
 }
 
-/// One volume's reading inside a (possibly multi-volume) decision.
+/// One volume's reading inside a (possibly multi-volume) dispatch reading.
 #[derive(Clone, Debug)]
 pub struct VolumeReading {
     /// The path whose volume was probed (the work's write target, design §4.1
@@ -1087,46 +740,22 @@ impl VolumeReading {
     }
 }
 
-/// The gate's verdict.
-#[derive(Clone, Debug)]
-pub enum GateDecision {
-    /// Dispatch may proceed.
-    Allow {
-        class: ActionClass,
-        tier: ResourceTier,
-        snapshot: HostCapacitySnapshot,
-    },
-    /// Dispatch is refused before anything starts. `snapshot` is the binding
-    /// (worst-headroom) reading; `volumes` carries every probed volume.
-    Refuse {
-        code: &'static str,
-        reason: String,
-        class: ActionClass,
-        tier: ResourceTier,
-        snapshot: HostCapacitySnapshot,
-        volumes: Vec<VolumeReading>,
-    },
-}
-
-impl GateDecision {
-    /// True when the call was allowed.
-    pub fn is_allowed(&self) -> bool {
-        matches!(self, GateDecision::Allow { .. })
-    }
-}
-
-/// The gate: one probe handle, one last-reading cell for the observation face.
-pub struct ResourceGate {
+/// The per-dispatch observation + soft-hint face (the former admission gate).
+/// One probe handle, one last-reading cell for the observation face, and the
+/// per-run per-volume hint dedup set.
+pub struct ResourceHint {
     probe: Arc<dyn CapacityProbe>,
     last: Mutex<Option<HostCapacitySnapshot>>,
+    hinted: Mutex<HashSet<String>>,
 }
 
-impl ResourceGate {
-    /// Build a gate around a probe.
+impl ResourceHint {
+    /// Build the hint face around a probe.
     pub fn new(probe: Arc<dyn CapacityProbe>) -> Self {
         Self {
             probe,
             last: Mutex::new(None),
+            hinted: Mutex::new(HashSet::new()),
         }
     }
 
@@ -1135,25 +764,16 @@ impl ResourceGate {
         self.probe.clone()
     }
 
-    /// The most recent reading this gate took.
+    /// The most recent binding reading this face took.
     pub fn last_snapshot(&self) -> Option<HostCapacitySnapshot> {
         *self.last.lock().unwrap()
     }
 
-    /// Decide whether `class` may be dispatched with the work running on the
-    /// volume holding `volume_path`. Single-volume convenience wrapper over
-    /// [`Self::evaluate_for_volumes`].
-    pub fn evaluate(&self, volume_path: &Path, class: ActionClass) -> GateDecision {
-        self.evaluate_for_volumes(std::slice::from_ref(&volume_path.to_path_buf()), class)
-    }
-
-    /// Decide whether `class` may be dispatched, probing **every** volume the
-    /// action would write to (design §4.1 "目标卷"; independent review F-5).
-    ///
-    /// All volumes must clear the release thresholds — the action is only as
-    /// safe as its worst write target — and the binding reading (the one with
-    /// the least headroom) is what the refusal carries as `snapshot`.
-    pub fn evaluate_for_volumes(&self, volumes: &[PathBuf], class: ActionClass) -> GateDecision {
+    /// Read **every** volume the action would write to (design §4.1 "目标卷";
+    /// independent review F-5). The binding reading (the one with the least
+    /// headroom) is what the observation face publishes. Readings never gate —
+    /// they feed the tier-change snapshot and the soft hint.
+    pub fn read_for_volumes(&self, volumes: &[PathBuf]) -> Vec<VolumeReading> {
         let readings: Vec<VolumeReading> = volumes
             .iter()
             .map(|path| VolumeReading {
@@ -1172,105 +792,52 @@ impl ResourceGate {
             })
             .map(|(index, _)| index)
             .unwrap_or(0);
-        let snapshot = readings[binding].snapshot;
-        *self.last.lock().unwrap() = Some(snapshot);
-        // Light actions are never gated: the gate exists for build-shaped work,
-        // and gating reads would make an out-of-space machine unusable.
-        if class == ActionClass::Light {
-            return GateDecision::Allow {
-                class,
-                tier: tier_for(&snapshot),
-                snapshot,
-            };
-        }
-        if readings
+        *self.last.lock().unwrap() = Some(readings[binding].snapshot);
+        readings
+    }
+
+    /// The pre-dispatch soft hint for these readings, or `None` when every
+    /// target volume is at or above [`VOLUME_HINT_FREE_BYTES`], a reading is
+    /// unavailable (no hint without numbers — never a fabricated warning), or
+    /// every short volume was already hinted this run (机械去重：每 run 每卷
+    /// 至多一次；hinting marks the volume even when several volumes are short).
+    pub fn soft_hint(&self, readings: &[VolumeReading]) -> Option<String> {
+        let short: Vec<&VolumeReading> = readings
             .iter()
-            .any(|reading| reading.snapshot.source_quality == SourceQuality::Unavailable)
-        {
-            let unreadable: Vec<String> = readings
-                .iter()
-                .filter(|reading| reading.snapshot.source_quality == SourceQuality::Unavailable)
-                .map(|reading| reading.path.clone())
-                .collect();
-            return GateDecision::Refuse {
-                code: CODE_RESOURCE_INSUFFICIENT,
-                reason: format!(
-                    "{DENIAL_HEADLINE_UNREADABLE}（unreadable targets: {}）。Nothing was started.",
-                    unreadable.join(", ")
-                ),
-                class,
-                tier: ResourceTier::Unknown,
-                snapshot,
-                volumes: readings,
-            };
-        }
-        let tier = tier_for(&snapshot);
-        let short_volumes: Vec<&VolumeReading> = readings
-            .iter()
-            .filter(|reading| reading.snapshot.volume_free_bytes < HEAVY_RELEASE_FREE_BYTES)
+            .filter(|reading| {
+                reading.snapshot.source_quality == SourceQuality::Available
+                    && reading.snapshot.volume_free_bytes < VOLUME_HINT_FREE_BYTES
+            })
             .collect();
-        let free_ok = short_volumes.is_empty();
-        let commit_headroom_ok = snapshot.commit_free_bytes().is_some_and(|free| {
-            (free as u128 * 100)
-                >= HEAVY_RELEASE_COMMIT_HEADROOM_PERCENT as u128
-                    * snapshot.commit_limit_bytes as u128
-        });
-        if free_ok && commit_headroom_ok {
-            return GateDecision::Allow {
-                class,
-                tier,
-                snapshot,
-            };
+        if short.is_empty() {
+            return None;
         }
-        let mut shortfalls = Vec::new();
-        if !free_ok {
-            let listed: Vec<String> = short_volumes
-                .iter()
-                .map(|reading| {
-                    format!(
-                        "{} free {} < {} required",
-                        reading.path,
-                        gib(reading.snapshot.volume_free_bytes),
-                        gib(HEAVY_RELEASE_FREE_BYTES)
-                    )
-                })
-                .collect();
-            shortfalls.push(listed.join("; "));
+        let mut hinted = self.hinted.lock().unwrap();
+        let fresh: Vec<&&VolumeReading> = short
+            .iter()
+            .filter(|reading| hinted.insert(volume_hint_key(&reading.path)))
+            .collect();
+        if fresh.is_empty() {
+            return None;
         }
-        if !commit_headroom_ok {
-            // 0af 审查补充：headroom 百分比一律**一位小数、向下取整**——整数
-            // 截断曾把实值 24.4% 显示成「25% < 25% required」的字面自相矛盾；
-            // 向下取整保证显示值 ≤ 真值，故拒绝理由里不可能出现「25.0% < 25%
-            // required」形态。字节直读同行随附。
-            let commit_free = snapshot.commit_free_bytes().unwrap_or(0);
-            shortfalls.push(format!(
-                "commit headroom {} ({} of {}) < {}% required",
-                headroom_percent_floor(commit_free, snapshot.commit_limit_bytes),
-                gib(commit_free),
-                gib(snapshot.commit_limit_bytes),
-                HEAVY_RELEASE_COMMIT_HEADROOM_PERCENT
-            ));
-        }
-        // 0af：按实际耗尽轴标注定案句（储存＝卷余量、内存＝commit）。
-        let headline = match (!free_ok, !commit_headroom_ok) {
-            (true, true) => DENIAL_HEADLINE_BOTH,
-            (false, true) => DENIAL_HEADLINE_MEMORY,
-            (true, false) => DENIAL_HEADLINE_STORAGE,
-            (false, false) => unreachable!("both axes cleared — the allow arm returned above"),
-        };
-        GateDecision::Refuse {
-            code: CODE_RESOURCE_INSUFFICIENT,
-            reason: format!(
-                "{headline}（tier {}；{}；readings: {}）。Nothing was started.",
-                tier.as_str(),
-                shortfalls.join("; "),
-                snapshot.describe()
-            ),
-            class,
-            tier,
-            snapshot,
-            volumes: readings,
-        }
+        let details: Vec<String> = fresh
+            .into_iter()
+            .map(|reading| {
+                format!(
+                    "volume {} free {} of {} < {} hint threshold",
+                    reading.path,
+                    gib(reading.snapshot.volume_free_bytes),
+                    gib(reading.snapshot.volume_total_bytes),
+                    gib(VOLUME_HINT_FREE_BYTES)
+                )
+            })
+            .collect();
+        // 0af 混排定案：中文短句 ＋ 英文机械读数；只报事实，无建议。
+        Some(format!(
+            "[资源软提示] 目标卷余量低于软水位（{}），动作照常执行。{}",
+            gib(VOLUME_HINT_FREE_BYTES),
+            details.join("; ")
+        ))
     }
 }
 
@@ -1279,8 +846,11 @@ impl ResourceGate {
 /// `commit = min(cap, headroom − 1 GiB)` where the cap is the historical
 /// `min(80% × limit, limit − 4 GiB)` and the floor keeps light work able to
 /// spawn; CPU 80%; active processes `2 × cores + 8` (≥ 16). Unknown commit
-/// limit → no commit ceiling (the gate, not the kernel, is then the only
-/// defence — recorded rather than silently invented).
+/// limit → no commit ceiling (recorded rather than silently invented).
+///
+/// 0aw（裁决点 B）：推导**保留、只作上限**——超限的答复由内核给出
+/// （`JOB_OBJECT_LIMIT_JOB_MEMORY`：进程试图提交超过作业总额的内存时**它**
+/// 分配失败），orz 只如实转达，不再有 orz 侧预检拒绝。
 pub fn default_job_limits(snapshot: &HostCapacitySnapshot) -> JobLimits {
     let commit_limit_bytes = (snapshot.commit_limit_bytes > 0)
         .then(|| {
@@ -1330,18 +900,24 @@ pub fn gib(bytes: u64) -> String {
     format!("{:.2} GiB", bytes as f64 / GIB as f64)
 }
 
-/// Commit headroom as a percentage string with exactly one decimal, **floored**
-/// (never rounded up). The refusal copy must never display a headroom that is
-/// at or above the required threshold: flooring keeps the displayed value ≤ the
-/// true value, so `25.0% < 25% required` (the literal self-contradiction the
-/// integer-truncation copy once produced) cannot be rendered. Integer math
-/// throughout — no float formatting in the mechanical face.
-fn headroom_percent_floor(free: u64, limit: u64) -> String {
-    if limit == 0 {
-        return "0.0%".to_string();
+/// The per-run hint dedup key for "每 run 每卷一次" (设计 v1.1 §5). On
+/// Windows the volume identity is the path prefix (`D:` / `\\server\share`)
+/// — two write-target paths on one volume share a key, so a volume hints at
+/// most once per run regardless of how the command spelled the path. A
+/// relative path (no prefix; it lives on the cwd's volume) falls back to the
+/// path string. Non-Windows has no mount identity without statfs — the path
+/// string is the key (documented limitation: two mounts under `/` dedup as
+/// one; the session volume's cwd is in every target set, so the no-spam goal
+/// still holds).
+fn volume_hint_key(path: &str) -> String {
+    #[cfg(windows)]
+    {
+        use std::path::Component;
+        if let Some(Component::Prefix(prefix)) = Path::new(path).components().next() {
+            return prefix.as_os_str().to_string_lossy().to_ascii_lowercase();
+        }
     }
-    let tenths = (u128::from(free) * 1000 / u128::from(limit)) as u64;
-    format!("{}.{}%", tenths / 10, tenths % 10)
+    path.to_ascii_lowercase()
 }
 
 #[cfg(test)]
@@ -1397,144 +973,11 @@ mod tests {
         }
     }
 
-    fn make_gate(probe: Arc<dyn CapacityProbe>) -> ResourceGate {
-        ResourceGate::new(probe)
-    }
-
     fn path() -> PathBuf {
         PathBuf::from(".")
     }
 
-    // ── classifier ──────────────────────────────────────────────────────
-
-    #[test]
-    fn heavy_programs_are_heavy() {
-        for command in [
-            "cargo build --release",
-            "cargo test -p orz-host",
-            "rustc main.rs -o main",
-            "make -j8",
-            "cmake -B build",
-            "docker build -t x .",
-            "npm install",
-            "pnpm install --frozen-lockfile",
-            "7z x archive.7z",
-            "tar -xzf src.tar.gz",
-            "go build ./...",
-            "dotnet build",
-            "C:\\tools\\cargo.exe build",
-            "./build/rustc --version",
-        ] {
-            assert_eq!(
-                classify_command(command),
-                ActionClass::Heavy,
-                "expected heavy: {command}"
-            );
-        }
-    }
-
-    #[test]
-    fn light_commands_stay_light() {
-        for command in [
-            "git status --short",
-            "ls -la",
-            "dir",
-            "type README.md",
-            "rg --files",
-            "grep -r cargo src/",
-            "echo hello",
-            "python script.py --check",
-            "node -e \"console.log(1)\"",
-            "java -version",
-            "cat build.log",
-            "cmd /C ping -n 2 127.0.0.1 > NUL",
-            "echo done > /dev/null",
-            "echo done > $null",
-            "python -c \"print(1)\" 2>&1",
-        ] {
-            assert_eq!(
-                classify_command(command),
-                ActionClass::Light,
-                "expected light: {command}"
-            );
-        }
-    }
-
-    #[test]
-    fn wrappers_and_pipelines_reach_the_real_program() {
-        assert_eq!(classify_command("cmd /C cargo build"), ActionClass::Heavy);
-        assert_eq!(
-            classify_command("powershell -NoProfile -Command \"npm install\""),
-            ActionClass::Heavy
-        );
-        assert_eq!(classify_command("bash -lc 'make -j4'"), ActionClass::Heavy);
-        assert_eq!(
-            classify_command("sudo env FOO=1 cargo build"),
-            ActionClass::Heavy
-        );
-        assert_eq!(
-            classify_command("git pull && cargo test"),
-            ActionClass::Heavy
-        );
-        assert_eq!(
-            classify_command("cd /tmp | pip install requests"),
-            ActionClass::Heavy
-        );
-    }
-
-    #[test]
-    fn conditional_programs_need_a_build_word() {
-        assert_eq!(
-            classify_command("python -m pip install requests"),
-            ActionClass::Heavy
-        );
-        assert_eq!(
-            classify_command("python setup.py build"),
-            ActionClass::Heavy
-        );
-        assert_eq!(classify_command("npm run dev"), ActionClass::Heavy);
-        assert_eq!(
-            classify_command("node scripts/check.js"),
-            ActionClass::Light
-        );
-    }
-
-    #[test]
-    fn file_redirection_is_heavy_but_null_redirection_is_not() {
-        assert_eq!(classify_command("ls > listing.txt"), ActionClass::Heavy);
-        assert_eq!(classify_command("cmd /C dir > out.log"), ActionClass::Heavy);
-        assert_eq!(
-            classify_command("ping -n 1 127.0.0.1 > NUL"),
-            ActionClass::Light
-        );
-    }
-
-    #[test]
-    fn tool_name_decides_first() {
-        assert_eq!(
-            classify_action("run_tests", &serde_json::json!({})),
-            ActionClass::Heavy
-        );
-        assert_eq!(
-            classify_action("read_file", &serde_json::json!({ "path": "a.rs" })),
-            ActionClass::Light
-        );
-        assert_eq!(
-            classify_action(
-                "run_terminal_cmd",
-                &serde_json::json!({ "command": "cargo build" })
-            ),
-            ActionClass::Heavy
-        );
-        // Missing command string: nothing to classify → light (the tool's own
-        // validation owns a malformed call).
-        assert_eq!(
-            classify_action("run_terminal_cmd", &serde_json::json!({})),
-            ActionClass::Light
-        );
-    }
-
-    // ── tiers ───────────────────────────────────────────────────────────
+    // ── tiers（观测标签） ────────────────────────────────────────────────
 
     fn snapshot(free: u64, commit_limit: u64, commit_used: u64) -> HostCapacitySnapshot {
         HostCapacitySnapshot {
@@ -1586,196 +1029,74 @@ mod tests {
         );
     }
 
-    // ── decisions ───────────────────────────────────────────────────────
+    // ── soft hint（观测 ＋ 软提示；0aw 定案面） ──────────────────────────
 
     #[test]
-    fn heavy_allowed_with_ample_headroom() {
-        let gate = make_gate(StubProbe::available(40 * GIB, 32 * GIB, 8 * GIB));
-        match gate.evaluate(&path(), ActionClass::Heavy) {
-            GateDecision::Allow { tier, .. } => assert_eq!(tier, ResourceTier::Normal),
-            other => panic!("expected allow, got {other:?}"),
-        }
-    }
-
-    #[test]
-    fn heavy_refused_below_the_release_thresholds() {
-        // Volume fine, commit headroom only ~9% (design requires 25%).
-        let gate = make_gate(StubProbe::available(40 * GIB, 32 * GIB, 29 * GIB));
-        match gate.evaluate(&path(), ActionClass::Heavy) {
-            GateDecision::Refuse {
-                code,
-                reason,
-                tier,
-                class,
-                ..
-            } => {
-                assert_eq!(code, CODE_RESOURCE_INSUFFICIENT);
-                assert_eq!(class, ActionClass::Heavy);
-                assert_eq!(tier, ResourceTier::Soft);
-                assert!(
-                    reason.contains("commit headroom"),
-                    "reason must name the shortfall: {reason}"
-                );
-                assert!(
-                    reason.contains("Nothing was started"),
-                    "refusal must state that nothing ran: {reason}"
-                );
-                // 0af：定案句按轴标注——只有内存（commit）轴短 ⇒ 不带「储存」。
-                assert!(
-                    reason.contains("宿主机内存资源即将耗尽"),
-                    "memory-axis headline missing: {reason}"
-                );
-                assert!(
-                    !reason.contains("储存资源即将耗尽"),
-                    "storage axis is not short here: {reason}"
-                );
-            }
-            other => panic!("expected refusal, got {other:?}"),
-        }
-        // Free space below the release threshold, commit healthy.
-        let gate = make_gate(StubProbe::available(7 * GIB, 32 * GIB, 4 * GIB));
-        assert!(!gate.evaluate(&path(), ActionClass::Heavy).is_allowed());
-    }
-
-    /// 0af 审查补充钉子：headroom 百分比一位小数、向下取整——整数截断曾把
-    /// 实值 24.4% 显示成「commit headroom 25% < 25% required」的字面自相
-    /// 矛盾（真机 run 实录）。构造实值 24.375%（used 整数截断 75% ⇒ 旧文案
-    /// 恰好显示 25%）的读数：新文案必须显示 24.3% 且不出现「25% <」形态。
-    #[test]
-    fn refusal_headroom_percent_never_self_contradicts() {
-        let used = GIB * 242 / 10; // 24.2 GiB of a 32 GiB limit
-        let gate = make_gate(StubProbe::available(40 * GIB, 32 * GIB, used));
-        match gate.evaluate(&path(), ActionClass::Heavy) {
-            GateDecision::Refuse { reason, .. } => {
-                assert!(
-                    reason.contains("24.3%"),
-                    "true headroom 24.375% must floor-display as 24.3%: {reason}"
-                );
-                assert!(
-                    !reason.contains("25% <"),
-                    "the displayed headroom may never reach the required line: {reason}"
-                );
-                // 字节直读同行随附。
-                assert!(reason.contains("of 32.00 GiB"), "{reason}");
-            }
-            other => panic!("expected refusal, got {other:?}"),
-        }
-    }
-
-    /// 0af：双轴同短 ⇒ 定案句合并标注「内存/储存」。
-    #[test]
-    fn denial_headline_names_every_short_axis() {
-        let gate = make_gate(StubProbe::available(3 * GIB, 32 * GIB, 30 * GIB));
-        match gate.evaluate(&path(), ActionClass::Heavy) {
-            GateDecision::Refuse { reason, .. } => {
-                assert!(
-                    reason.contains("宿主机内存/储存资源即将耗尽"),
-                    "both axes short must merge into one headline: {reason}"
-                );
-            }
-            other => panic!("expected refusal, got {other:?}"),
-        }
-    }
-
-    /// 0af：`headroom_percent_floor` 的取整方向钉子——四舍五入陷阱值
-    /// （真值 24.99%）必须显示 24.9%，不得进位成 25.0%。
-    #[test]
-    fn headroom_percent_floor_never_rounds_up() {
-        assert_eq!(headroom_percent_floor(2_499, 10_000), "24.9%");
-        assert_eq!(headroom_percent_floor(2_500, 10_000), "25.0%");
-        assert_eq!(headroom_percent_floor(0, 10_000), "0.0%");
-        assert_eq!(headroom_percent_floor(9_999, 10_000), "99.9%");
-        assert_eq!(headroom_percent_floor(10_000, 10_000), "100.0%");
-        assert_eq!(headroom_percent_floor(1, 0), "0.0%", "unknown limit");
-    }
-
-    #[test]
-    fn release_thresholds_are_inclusive() {
-        // Exactly 8 GiB free and exactly 25% commit headroom → allowed.
-        let gate = make_gate(StubProbe::available(
-            HEAVY_RELEASE_FREE_BYTES,
-            32 * GIB,
-            24 * GIB,
-        ));
-        assert!(gate.evaluate(&path(), ActionClass::Heavy).is_allowed());
-        // One byte short on either axis → refused.
-        let gate = make_gate(StubProbe::available(
-            HEAVY_RELEASE_FREE_BYTES - 1,
-            32 * GIB,
-            24 * GIB,
-        ));
-        assert!(!gate.evaluate(&path(), ActionClass::Heavy).is_allowed());
-        let gate = make_gate(StubProbe::available(
-            HEAVY_RELEASE_FREE_BYTES,
-            32 * GIB,
-            24 * GIB + 1,
-        ));
-        assert!(!gate.evaluate(&path(), ActionClass::Heavy).is_allowed());
-    }
-
-    #[test]
-    fn watch_tier_does_not_change_behavior() {
-        // 12 GiB free → watch, still above the release threshold.
-        let gate = make_gate(StubProbe::available(12 * GIB, 32 * GIB, 8 * GIB));
-        match gate.evaluate(&path(), ActionClass::Heavy) {
-            GateDecision::Allow { tier, .. } => assert_eq!(tier, ResourceTier::Watch),
-            other => panic!("expected allow at watch tier, got {other:?}"),
-        }
-    }
-
-    #[test]
-    fn unavailable_readings_fail_closed_for_heavy_only() {
-        let gate = make_gate(StubProbe::unavailable());
-        match gate.evaluate(&path(), ActionClass::Heavy) {
-            GateDecision::Refuse {
-                reason,
-                tier,
-                snapshot,
-                ..
-            } => {
-                assert_eq!(tier, ResourceTier::Unknown);
-                assert_eq!(snapshot.source_quality, SourceQuality::Unavailable);
-                assert!(
-                    reason.contains("fail-closed"),
-                    "reason must state the fail-closed rule: {reason}"
-                );
-                // 0af 审查补充：读数不可得的变体句——不得断言「即将耗尽」
-                //（读数缺席时这是不实陈述），须如实说「无法确认余量」。
-                assert!(
-                    reason.contains("读数不可得，无法确认余量"),
-                    "unknown tier must use the honest variant copy: {reason}"
-                );
-                assert!(
-                    !reason.contains("即将耗尽"),
-                    "unreadable readings must not claim exhaustion: {reason}"
-                );
-            }
-            other => panic!("expected refusal, got {other:?}"),
-        }
+    fn soft_hint_fires_below_the_water_line_and_dedups_per_volume() {
+        // 3 GiB free < 4 GiB ⇒ one hint, once per volume per run.
+        let hint = ResourceHint::new(StubProbe::available(3 * GIB, 32 * GIB, 4 * GIB));
+        let readings = hint.read_for_volumes(&[path()]);
+        let line = hint.soft_hint(&readings).expect("hint below the line");
+        assert!(line.contains("[资源软提示]"), "{line}");
+        assert!(line.contains("动作照常执行"), "hint never blocks: {line}");
         assert!(
-            gate.evaluate(&path(), ActionClass::Light).is_allowed(),
-            "light actions are never gated, even without readings"
+            line.contains("volume . free 3.00 GiB of 100.00 GiB < 4.00 GiB"),
+            "mechanical readings ride the line: {line}"
+        );
+        // Second dispatch on the same volume: deduped, no second hint.
+        let readings = hint.read_for_volumes(&[path()]);
+        assert!(
+            hint.soft_hint(&readings).is_none(),
+            "per-run per-volume once"
         );
     }
 
     #[test]
-    fn refusal_envelope_renders_readings() {
-        let gate = make_gate(StubProbe::available(3 * GIB, 32 * GIB, 28 * GIB));
-        let GateDecision::Refuse { snapshot, tier, .. } =
-            gate.evaluate(&path(), ActionClass::Heavy)
-        else {
-            panic!("expected refusal");
-        };
-        assert_eq!(tier, ResourceTier::ReclaimDirect);
-        let json = snapshot.to_json();
-        assert_eq!(json["source_quality"], "available");
-        assert_eq!(json["volume_free_bytes"], 3 * GIB);
-        assert_eq!(json["commit_limit_bytes"], 32 * GIB);
-        assert!(json["commit_free_bytes"].as_u64().is_some());
-        assert_eq!(gate.last_snapshot(), Some(snapshot));
+    fn soft_hint_is_silent_at_or_above_the_water_line_and_without_readings() {
+        // 4 GiB exactly = at the threshold ⇒ no hint (strictly below fires).
+        let hint = ResourceHint::new(StubProbe::available(
+            VOLUME_HINT_FREE_BYTES,
+            32 * GIB,
+            4 * GIB,
+        ));
+        let readings = hint.read_for_volumes(&[path()]);
+        assert!(hint.soft_hint(&readings).is_none());
+        // Unavailable readings produce no hint either (never fabricate).
+        let blind = ResourceHint::new(StubProbe::unavailable());
+        let readings = blind.read_for_volumes(&[path()]);
+        assert!(blind.soft_hint(&readings).is_none());
+        // Observations still update the last-reading cell.
+        assert_eq!(
+            blind.last_snapshot().map(|s| s.source_quality),
+            Some(SourceQuality::Unavailable)
+        );
     }
 
-    // ── hard-limit derivation ───────────────────────────────────────────
+    #[test]
+    fn any_short_write_target_volume_hints_once_per_volume() {
+        let cwd = PathBuf::from(".");
+        let elsewhere = PathBuf::from("..");
+        let probe = Arc::new(PerPathProbe {
+            cwd: cwd.clone(),
+            cwd_snapshot: snapshot(40 * GIB, 32 * GIB, 4 * GIB),
+            other_snapshot: snapshot(3 * GIB, 32 * GIB, 4 * GIB),
+        });
+        let hint = ResourceHint::new(probe);
+        // The session volume alone stays silent.
+        let readings = hint.read_for_volumes(&[cwd.clone()]);
+        assert!(hint.soft_hint(&readings).is_none());
+        // With the second write target in play the hint names that volume…
+        let readings = hint.read_for_volumes(&[cwd.clone(), elsewhere.clone()]);
+        let line = hint.soft_hint(&readings).expect("short volume hinted");
+        assert!(line.contains(".."), "hint names the short volume: {line}");
+        assert_eq!(readings.len(), 2, "every probed volume is read");
+        // …and the same volume is not hinted twice, while the first dispatch's
+        // cwd (never short) stays eligible for a future hint.
+        let readings = hint.read_for_volumes(&[cwd, elsewhere]);
+        assert!(hint.soft_hint(&readings).is_none(), "per-volume dedup");
+    }
+
+    // ── hard-limit derivation（保留推导、只作上限——裁决点 B） ────────────
 
     #[test]
     fn job_limits_use_the_eighty_percent_or_reserve_rule() {
@@ -1825,6 +1146,33 @@ mod tests {
                 .max(RUN_ACTIVE_PROCESS_MIN)
         );
         assert!(run_active_process_limit() > cores);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn same_volume_paths_hint_once_per_run() {
+        // Two distinct absolute paths on ONE volume (`D:\a`, `D:\b`) share the
+        // volume dedup key — the volume hints once, naming the first fresh
+        // path, and a later dispatch on the sibling path stays silent
+        // (设计 v1.1 §5「每 run 每卷一次」：键是卷不是路径串).
+        let probe = Arc::new(PerPathProbe {
+            cwd: PathBuf::from(r"D:\a"),
+            cwd_snapshot: snapshot(3 * GIB, 32 * GIB, 4 * GIB),
+            other_snapshot: snapshot(3 * GIB, 32 * GIB, 4 * GIB),
+        });
+        let hint = ResourceHint::new(probe);
+        let readings = hint.read_for_volumes(&[PathBuf::from(r"D:\a"), PathBuf::from(r"D:\b")]);
+        let line = hint.soft_hint(&readings).expect("short volume hinted");
+        assert!(line.contains(r"D:\a"), "names the first fresh path: {line}");
+        assert!(
+            !line.contains(r"D:\b"),
+            "the sibling path is the same volume, not a second hint: {line}"
+        );
+        let readings = hint.read_for_volumes(&[PathBuf::from(r"D:\b")]);
+        assert!(
+            hint.soft_hint(&readings).is_none(),
+            "the volume was already hinted this run"
+        );
     }
 
     #[cfg(windows)]
@@ -1919,98 +1267,52 @@ mod tests {
         );
     }
 
-    #[test]
-    fn any_short_write_target_volume_refuses_the_heavy_action() {
-        let cwd = PathBuf::from(".");
-        let elsewhere = PathBuf::from("..");
-        let probe = Arc::new(PerPathProbe {
-            cwd: cwd.clone(),
-            cwd_snapshot: HostCapacitySnapshot {
-                collected_at_ms: 1,
-                volume_free_bytes: 40 * GIB,
-                volume_total_bytes: 100 * GIB,
-                commit_limit_bytes: 32 * GIB,
-                commit_used_bytes: 4 * GIB,
-                source_quality: SourceQuality::Available,
-            },
-            other_snapshot: HostCapacitySnapshot {
-                collected_at_ms: 1,
-                volume_free_bytes: 3 * GIB,
-                volume_total_bytes: 100 * GIB,
-                commit_limit_bytes: 32 * GIB,
-                commit_used_bytes: 4 * GIB,
-                source_quality: SourceQuality::Available,
-            },
-        });
-        let gate = ResourceGate::new(probe);
-        // The session volume alone would sail through.
-        assert!(gate.evaluate(&cwd, ActionClass::Heavy).is_allowed());
-        // With the second write target in play the action is refused, and the
-        // refusal names the short volume.
-        match gate.evaluate_for_volumes(&[cwd.clone(), elsewhere.clone()], ActionClass::Heavy) {
-            GateDecision::Refuse {
-                reason,
-                volumes,
-                tier,
-                ..
-            } => {
-                assert_eq!(tier, ResourceTier::ReclaimDirect);
-                assert!(reason.contains("free"), "{reason}");
-                // 0af：只有卷余量短 ⇒ 定案句标「储存」轴。
-                assert!(
-                    reason.contains("宿主机储存资源即将耗尽"),
-                    "storage-axis headline missing: {reason}"
-                );
-                assert_eq!(volumes.len(), 2, "every probed volume is reported");
-                assert_eq!(volumes[1].path, elsewhere.display().to_string());
-                assert!(volumes[1].to_json()["readings"]["volume_free_bytes"] == 3 * GIB);
-            }
-            other => panic!("expected refusal, got {other:?}"),
-        }
-        // And the light path still passes on the same volumes.
-        assert!(
-            gate.evaluate_for_volumes(&[cwd, elsewhere], ActionClass::Light)
-                .is_allowed()
-        );
-    }
-
-    // ── payload bodies (review F-7) ─────────────────────────────────────
+    // ── payload bodies (review F-7)：写目标解析的 here-string/heredoc 语义 ──
 
     #[test]
     fn here_string_bodies_are_not_command_syntax() {
+        let cwd = PathBuf::from(".");
         let command = "cd D:\\CLI; @'\nimport json\nx = 1 > 0\n'@ | python -";
+        let args = serde_json::json!({ "command": command });
+        let targets = write_targets("run_terminal_cmd", &args, &cwd);
+        // The `cd D:\CLI` prologue is a real write target; the `x = 1 > 0`
+        // comparison inside the here-string body must NOT add one.
         assert_eq!(
-            classify_command(command),
-            ActionClass::Light,
-            "a comparison inside a here-string body is payload, not a redirection"
+            targets,
+            vec![cwd.clone(), PathBuf::from("D:\\CLI")],
+            "body comparisons are payload, not redirections: {targets:?}"
         );
         // The header line still counts: a real redirection next to the opener
-        // keeps the command heavy.
-        assert_eq!(
-            classify_command("cat > D:\\out.txt <<EOF\nhello\nEOF"),
-            ActionClass::Heavy
+        // yields the target.
+        let args = serde_json::json!({ "command": "cat > D:\\out.txt <<EOF\nhello\nEOF" });
+        let targets = write_targets("run_terminal_cmd", &args, &cwd);
+        assert!(
+            targets.iter().any(|t| t == &PathBuf::from(r"D:\out.txt")),
+            "{targets:?}"
         );
     }
 
     #[test]
     fn heredoc_bodies_are_not_command_syntax() {
         let command = "python - <<'PY'\nprint(1 > 0)\nPY\necho done";
-        assert_eq!(classify_command(command), ActionClass::Light);
-        // The body carries the heavy program, not the command line.
+        let args = serde_json::json!({ "command": command });
         assert_eq!(
-            classify_command("sh -c 'true' <<EOF\ncargo build\nEOF"),
-            ActionClass::Light
+            write_targets("run_terminal_cmd", &args, &PathBuf::from(".")),
+            vec![PathBuf::from(".")],
+            "the heredoc body is payload"
         );
     }
 
     #[test]
     fn unterminated_payload_markers_do_not_swallow_commands() {
-        // `<<` without a terminator must leave the text alone, so the cargo
-        // line after it is still classified (false negatives are the dangerous
+        // `<<` without a terminator must leave the text alone, so the redirect
+        // after it is still parsed (false negatives are the dangerous
         // direction).
-        assert_eq!(
-            classify_command("echo a << b;\ncargo build"),
-            ActionClass::Heavy
+        let args = serde_json::json!({ "command": "echo a << b;\ncargo build > D:\\build.log" });
+        let targets = write_targets("run_terminal_cmd", &args, &PathBuf::from("."));
+        assert!(
+            targets.iter().any(|t| t == &PathBuf::from(r"D:\build.log")),
+            "{targets:?}"
         );
     }
 }

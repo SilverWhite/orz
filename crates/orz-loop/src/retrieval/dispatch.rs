@@ -972,6 +972,30 @@ impl AgentLoopController {
                         assessment_payload,
                     )
                     .await?;
+                // 0av S1（2026-09-20，S3 摩擦 N3）：检索批次数读数落盘面——
+                // 倒数行只入模型面消息、headless 侧车受 500K 归档里程碑门
+                // （ADR-0010 §14.68）⇒ 未达里程碑的 run 结构性无落盘面。
+                // 每批收尾在此落一条 `mechanical_audit_update
+                // {kind: retrieval_batch}` journal 读数，五值与 batch_close
+                // 单源 helper 同值——0ar 判据 7 后段（倒数行读数与该批
+                // usable_source_count 同口径）转为任何 run 都可机械重算。
+                // 模型面零改动、不进审查表/报告块（0AE「不加说明性内容」
+                // 纪律）；不新增事件类型（既有家族新增 kind）。
+                writer
+                    .record(
+                        EventType::MechanicalAuditUpdate,
+                        serde_json::json!({
+                            "kind": crate::mechanical_audit::KIND_RETRIEVAL_BATCH,
+                            "payload": {
+                                "activation_id": activation_id,
+                                "usable": usable,
+                                "cap": crate::retrieval::batch_close::MECHANICAL_CAP,
+                                "retrieval_calls": retrieval_calls,
+                                "terminal_reason": terminal_reason,
+                            },
+                        }),
+                    )
+                    .await?;
                 // M4: budget exhaustion on the subagent loop is a TERMINAL
                 // authority — a partial result was formed and assessed, then
                 // the activation closes with `budget_exhausted` (assessment +
@@ -4815,7 +4839,8 @@ mod tests {
             call_id: id.to_string(),
         };
         // 主 #1 同轮四个 web_search（上限 3 → 第 4 个溢出）；子代理 #2
-        // 立即文本收尾；主 #3 文本完成（其请求应携带一次性重述）；#4 反例
+        // 自查一次 web_search（合成形态——宿主静态回执无引用池）后 #3
+        // 文本收尾；主 #4 文本完成（其请求应携带一次性重述）；#5 反例
         // 门补轮。
         let script: std::collections::VecDeque<ScriptedResponse> = vec![
             ScriptedResponse::tool_calls(vec![
@@ -4824,6 +4849,11 @@ mod tests {
                 mk("web_search", "call-3", "q3"),
                 mk("web_search", "call-4", "q4"),
             ]),
+            ScriptedResponse::tool_calls(vec![mk(
+                "web_search",
+                "call-sub-1",
+                "subagent rewritten query",
+            )]),
             ScriptedResponse::text("[SOURCE] https://example.com/x"),
             ScriptedResponse::text("完成"),
             ScriptedResponse::text("完成"),
@@ -4854,6 +4884,61 @@ mod tests {
             .expect("committed merged result");
         let query_summary = committed.payload["query_summary"].as_array().unwrap();
         assert_eq!(query_summary.len(), 3, "merge cap = 3 queries");
+        // 0at B 面（多 query 批）：批级归因缺口显式披露（本例子代理自查为
+        // 合成形态、usable=0 ⇒ 缺口 0；字段在场即钉）。
+        assert_eq!(
+            committed.payload.get("unattributed_usable_count"),
+            Some(&serde_json::json!(0)),
+            "multi-query batch discloses the attribution gap"
+        );
+        // 0ax S1：子代理自查无引用池 ⇒ 合成答案单列（不入 usable 额度）。
+        assert_eq!(
+            committed.payload.get("synthetic_answer_count"),
+            Some(&serde_json::json!(1)),
+            "URL-less self-search is counted as a synthetic answer"
+        );
+        // 0at A 面：工具证据 ledger 条目携带派发谱系（leader 谱系——子代
+        // 理自查串归首个派发 query），且与 query_summary 的 query_id 同
+        // id 域。
+        let ledger = committed.payload["source_ledger"].as_array().unwrap();
+        let tool_evidence_origin = ledger
+            .iter()
+            .find(|e| e["source_type"] == "web_search_result")
+            .and_then(|e| e.get("origin_query_id"))
+            .and_then(|v| v.as_str())
+            .expect("tool evidence carries origin_query_id in a multi-query batch");
+        assert_eq!(
+            tool_evidence_origin,
+            query_summary[0]["query_id"].as_str().unwrap(),
+            "unmatched self-search follows the leader lineage"
+        );
+        // 0av S1：批收尾的 journal 读数（五值与 batch_close 单源 helper 同值
+        // ——usable=activation 的宽口径可用、cap=机械护栏、terminal_reason
+        // =收尾成因映射）。
+        let batch_reading = events
+            .iter()
+            .find(|e| {
+                e.event_type == EventType::MechanicalAuditUpdate
+                    && e.payload.get("kind").and_then(|v| v.as_str()) == Some("retrieval_batch")
+            })
+            .expect("retrieval batch reading journaled at close");
+        assert_eq!(
+            batch_reading.payload["payload"]["activation_id"],
+            committed.payload["activation_id"],
+        );
+        assert_eq!(batch_reading.payload["payload"]["usable"], 0);
+        assert_eq!(
+            batch_reading.payload["payload"]["cap"],
+            crate::retrieval::batch_close::MECHANICAL_CAP
+        );
+        assert_eq!(
+            batch_reading.payload["payload"]["retrieval_calls"], 1,
+            "the subagent's own web_search is the one lane retrieval call"
+        );
+        assert_eq!(
+            batch_reading.payload["payload"]["terminal_reason"],
+            "auto_close"
+        );
         // 第 4 个调用：无 ToolStarted（判据 4）＋无 ToolStarted 的拒绝
         // 完成事件（cause 稳定码）。
         assert!(

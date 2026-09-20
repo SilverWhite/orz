@@ -48,6 +48,14 @@ pub(crate) const KIND_ATTENTION_LADDER: &str = "attention_ladder";
 pub(crate) const KIND_CONTEXT_SCALE: &str = "context_scale";
 pub(crate) const KIND_MODEL_COMPRESSION: &str = "model_compression";
 pub(crate) const KIND_PLAN_WRITE_GUIDANCE: &str = "plan_write_guidance";
+/// 0av S1（2026-09-20 立项，S3 摩擦 N3）：检索批次数读数落盘面——倒数行
+/// 只入模型面消息、headless 侧车受 500K 归档里程碑门（ADR-0010 §14.68）
+/// ⇒ 未达里程碑的 run 结构性无落盘面，0ar 判据 7 后段不可核。本 kind 在
+/// **每批检索收尾时**落一条 journal 读数（activation_id/usable/cap/
+/// retrieval_calls/terminal_reason，与 batch_close 单源 helper 同值），
+/// 模型面零改动、不进审查表/报告块。payload 形状与本族其余 kind 的
+/// {key,round,summary,anomaly} 不同（schema 按 kind 条件分支校验）。
+pub(crate) const KIND_RETRIEVAL_BATCH: &str = "retrieval_batch";
 
 /// 一条对象键的审查结果（每键至多一条，新结果覆盖旧结果）。
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -754,23 +762,85 @@ mod tests {
                 KIND_CONTEXT_SCALE.to_string(),
                 KIND_MODEL_COMPRESSION.to_string(),
                 KIND_PLAN_WRITE_GUIDANCE.to_string(),
+                KIND_RETRIEVAL_BATCH.to_string(),
             ]
         );
-        let required: Vec<String> = schema
-            .pointer("/properties/payload/required")
+        // 0av S1：schema 按 kind 条件分支校验 payload——retrieval_batch 走
+        // 五键批读数形状，其余 kind 走 {key,round,summary,anomaly} 形状；
+        // 两分支键集与本断言逐字互证（新增/改名 kind 忘同步 schema 时本钉
+        // 变红）。
+        let batch_required: Vec<String> = schema
+            .pointer("/allOf/0/then/properties/payload/required")
             .and_then(|v| v.as_array())
-            .expect("payload required present")
+            .expect("retrieval_batch payload branch present")
             .iter()
             .map(|v| v.as_str().expect("required key").to_string())
             .collect();
         assert_eq!(
-            required,
+            batch_required,
+            vec![
+                "activation_id".to_string(),
+                "usable".to_string(),
+                "cap".to_string(),
+                "retrieval_calls".to_string(),
+                "terminal_reason".to_string(),
+            ]
+        );
+        let uniform_required: Vec<String> = schema
+            .pointer("/allOf/1/then/properties/payload/required")
+            .and_then(|v| v.as_array())
+            .expect("uniform payload branch present")
+            .iter()
+            .map(|v| v.as_str().expect("required key").to_string())
+            .collect();
+        assert_eq!(
+            uniform_required,
             vec![
                 "key".to_string(),
                 "round".to_string(),
                 "summary".to_string(),
                 "anomaly".to_string(),
             ]
+        );
+        // 2026-09-20 审查修复批：分支**触发面**互证——allOf/0 的 if 恰为
+        // retrieval_batch、allOf/1 的 if 恰为其余 7 个 kind。此前只互证
+        // required 键集，不校验分支触发条件：新增 kind 漏同步分支时其
+        // payload 形状会静默失去约束（本钉堵住该缺口）。
+        let batch_if: Vec<String> = schema
+            .pointer("/allOf/0/if/properties/kind/const")
+            .and_then(|v| v.as_str())
+            .map(|s| vec![s.to_string()])
+            .expect("batch branch if-const present");
+        assert_eq!(batch_if, vec![KIND_RETRIEVAL_BATCH.to_string()]);
+        let uniform_if: Vec<String> = schema
+            .pointer("/allOf/1/if/properties/kind/enum")
+            .and_then(|v| v.as_array())
+            .expect("uniform branch if-enum present")
+            .iter()
+            .map(|v| v.as_str().expect("enum string").to_string())
+            .collect();
+        assert_eq!(
+            uniform_if,
+            vec![
+                KIND_TOOL_RESULT.to_string(),
+                KIND_PLAN_GATE.to_string(),
+                KIND_BUDGET.to_string(),
+                KIND_ATTENTION_LADDER.to_string(),
+                KIND_CONTEXT_SCALE.to_string(),
+                KIND_MODEL_COMPRESSION.to_string(),
+                KIND_PLAN_WRITE_GUIDANCE.to_string(),
+            ]
+        );
+        // 分支触发面与 kind 枚举互补且不交——两分支并集恰为全枚举。
+        let mut covered = uniform_if.clone();
+        covered.push(KIND_RETRIEVAL_BATCH.to_string());
+        let mut sorted_covered = covered.clone();
+        sorted_covered.sort();
+        let mut sorted_enum = kind_enum.clone();
+        sorted_enum.sort();
+        assert_eq!(
+            sorted_covered, sorted_enum,
+            "the two branch triggers must exactly partition the kind enum"
         );
     }
 }

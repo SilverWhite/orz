@@ -21,69 +21,40 @@ pub mod permission;
 pub mod process_tree;
 pub mod project_doc_index;
 pub mod reclaim;
-pub mod resource_gate;
-
-/// Recursive byte size of `path` (bounded by the fixed candidate set's depth).
-fn dir_size_sync(path: &Path, depth: u32) -> u64 {
-    // Depth-bounded (review F-BE-14): sizing runs on the disk-pressure
-    // critical path; deep trees beyond `depth` contribute a fixed estimate
-    // instead of a full stat walk.
-    const ESTIMATED_BEYOND_DEPTH: u64 = 512 * 1024 * 1024;
-    if depth == 0 {
-        return ESTIMATED_BEYOND_DEPTH;
-    }
-    let mut total = 0u64;
-    if let Ok(entries) = std::fs::read_dir(path) {
-        for entry in entries.flatten() {
-            let p = entry.path();
-            if p.is_dir() {
-                total += dir_size_sync(&p, depth - 1);
-            } else {
-                total += entry.metadata().map(|m| m.len()).unwrap_or(0);
-            }
-        }
-    }
-    total
-}
+pub mod resource_hint;
 
 /// Total order over tiers for the change detector (`host_resource_snapshot`
 /// trigger). Order follows the design ladder: normal < watch < soft <
 /// reclaim_direct < hard < unknown (unknown is kept distinct — never folded).
-fn tier_rank(tier: &crate::resource_gate::ResourceTier) -> u8 {
+fn tier_rank(tier: &crate::resource_hint::ResourceTier) -> u8 {
     match tier {
-        crate::resource_gate::ResourceTier::Normal => 1,
-        crate::resource_gate::ResourceTier::Watch => 2,
-        crate::resource_gate::ResourceTier::Soft => 3,
-        crate::resource_gate::ResourceTier::ReclaimDirect => 4,
-        crate::resource_gate::ResourceTier::Hard => 5,
-        crate::resource_gate::ResourceTier::Unknown => 6,
+        crate::resource_hint::ResourceTier::Normal => 1,
+        crate::resource_hint::ResourceTier::Watch => 2,
+        crate::resource_hint::ResourceTier::Soft => 3,
+        crate::resource_hint::ResourceTier::ReclaimDirect => 4,
+        crate::resource_hint::ResourceTier::Hard => 5,
+        crate::resource_hint::ResourceTier::Unknown => 6,
     }
 }
 
-/// Does any in-flight write target contain `path` (both canonicalized where
-/// possible)? Used by the expiry re-check (review F-BE-2).
-fn in_flight_contains(in_flight: &[std::path::PathBuf], path: &Path) -> bool {
-    in_flight.iter().any(|target| {
-        let target = dunce::canonicalize(target).unwrap_or_else(|_| target.clone());
-        let path = dunce::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
-        path.starts_with(&target) || target.starts_with(&path)
-    })
-}
-
 /// One in-flight call's kill handle (0z S2R F-BE-3(a)).
+///
+/// 0aw（2026-09-20 用户裁决 ④）：登记表与 `DispatchGuard::drop` 的句柄关闭
+/// **保留**（`KILL_ON_JOB_CLOSE` 的调用级拆树仍靠它）；原挂在条目上的
+/// `action_class` 字段随分类器一并退役——它只服务 hard 档树杀的「重档
+/// call_id 集」枚举，该面已不存在。
 #[derive(Clone, Debug)]
 struct LiveCallJob {
     token: u64,
     call_id: String,
     /// Duplicated call-job handle (0 = none / platform without job handles).
     job_handle: isize,
-    action_class: String,
 }
 
-/// The dispatch registration guard: removes this call's in-flight write
-/// targets AND its live call-job entries (closing the duplicated handles) on
-/// drop. `closed` lets a late spawn observation (racy cross-thread attach)
-/// unregister itself immediately instead of leaking a kill handle.
+/// The dispatch registration guard: closes this call's live call-job entries
+/// (dropping the duplicated handles) on drop. `closed` lets a late spawn
+/// observation (racy cross-thread attach) unregister itself immediately
+/// instead of leaking a kill handle.
 pub struct DispatchGuard<'a> {
     host: &'a OrzHost,
     token: u64,
@@ -94,11 +65,6 @@ impl Drop for DispatchGuard<'_> {
     fn drop(&mut self) {
         self.closed
             .store(true, std::sync::atomic::Ordering::Relaxed);
-        self.host
-            .in_flight_targets
-            .lock()
-            .unwrap()
-            .retain(|(token, _)| *token != self.token);
         let jobs: Vec<LiveCallJob> = {
             let mut guard = self
                 .host
@@ -111,6 +77,10 @@ impl Drop for DispatchGuard<'_> {
             .into_iter()
             .partition(|entry| entry.token == self.token);
         for entry in mine {
+            tracing::debug!(
+                call_id = %entry.call_id,
+                "dispatch closed: closing per-call job handle (KILL_ON_JOB_CLOSE)"
+            );
             OrzHost::close_job_handle(entry.job_handle);
         }
         *self
@@ -228,33 +198,28 @@ pub struct OrzHost {
     /// 误报 `BrowserLaunchFailed`）。只串行「检查+启动」窗口；启动完成后
     /// 的页面动作仍可并发（browser_read tab 池语义不变）。
     browser_launch_lock: tokio::sync::Mutex<()>,
-    /// FUS-HOST-RESOURCE-SAFETY §4.1（2026-09-12，0z S1）：派发前资源预检门
-    /// ——`call_tool` 汇点上的机械硬门。`None` = 未注入（测试与嵌入式宿主
+    /// 0aw（2026-09-20，HOST_RESOURCE_OS_DELEGATION_DESIGN §6）：派发前
+    /// 目标卷读数 ＋ 卷软提示面（原「派发前资源预检门」——准入拒绝已退役，
+    /// 见 [`crate::resource_hint`]）。`None` = 未注入（测试与嵌入式宿主
     /// 维持零行为变化）；生产装配（`-p` 与 ACP 两路）经
-    /// [`OrzHost::with_host_resource_safety`] 注入真实探针并同时安装 run 硬上限。
-    resource_gate: Option<crate::resource_gate::ResourceGate>,
+    /// [`OrzHost::with_host_resource_safety`] 注入真实探针并同时安装 run
+    /// 硬上限。
+    resource_hint: Option<crate::resource_hint::ResourceHint>,
     /// 0z S2 §4.2：进程树登记表（`.gsa/process_trees/`）——装配期扫除
     /// 上轮孤儿 + 工具调用期登记 + facts drain（loop 侧 journal 面）。
     process_trees: Option<crate::process_tree::ProcessTreeRegistry>,
-    /// 0z S2 §4.6：回收阶梯（分类 + 轮数窗口 + 预算 + 审计先行）。
-    reclaim: Option<crate::reclaim::ReclaimLadder>,
-    /// 回收冷却（ms 单调时间戳）——两次回收至少间隔 60s（§4.6 四纪律 4）。
-    reclaim_cooldown_ms: std::sync::atomic::AtomicU64,
-    /// 本 run 已执行的工具调用计数（窗口轮数计数——按工具调用轮推进，
-    /// review F-BE-8）。
-    reclaim_round: std::sync::atomic::AtomicU64,
-    /// 0z S2 journal facts 暂存（reclaim_performed / resource_exhausted）。
+    /// 0z S2 journal facts 暂存（`host_resource_snapshot`；原
+    /// reclaim_performed / resource_exhausted / host_resource_denied 生产端
+    /// 已随 0aw 裁决 ④ 退役——schema/verifier 保留供历史 journal 校验）。
     resource_facts: std::sync::Mutex<Vec<serde_json::Value>>,
-    /// 在跑工具调用的静态写入目标（review F-BE-2）：每次调用在门判定前
-    /// 登记、调用结束由 guard 摘除；回收阶梯据此排除在跑重活的产物面
-    /// （§4.7.1 第 14 条）。
-    in_flight_targets: std::sync::Mutex<Vec<(u64, Vec<std::path::PathBuf>)>>,
-    in_flight_token: std::sync::atomic::AtomicU64,
     /// 0z S2R F-BE-3(a)（2026-09-13 用户裁决）：在跑调用的 call job
-    /// 句柄登记——hard 档树杀只 TerminateJobObject **重档**调用的
-    /// call job（内核树杀粒度 = 单调用树），轻活/后台任务不在爆半径内。
-    /// 条目随派发结束由 DispatchGuard 摘除并关闭复制句柄。
+    /// 句柄登记——`DispatchGuard::drop` 据此关闭本次调用的 per-call job
+    /// 句柄（调用级拆树）。条目随派发结束由 DispatchGuard 摘除并关闭
+    /// 复制句柄。
     live_call_jobs: std::sync::Arc<std::sync::Mutex<Vec<LiveCallJob>>>,
+    /// 派发序号源——`DispatchGuard` 的 token（作用域：本次调用的 live
+    /// call job 条目）。
+    dispatch_token: std::sync::atomic::AtomicU64,
     /// 上一次读到的档位（u8 编码，见 `tier_rank`）——跨档才落
     /// `host_resource_snapshot`（§4.5 低频，跨档才落；review F-EV-7）。
     last_resource_tier: std::sync::atomic::AtomicU8,
@@ -370,25 +335,23 @@ impl OrzHost {
                 ),
             ))),
             browser_launch_lock: tokio::sync::Mutex::new(()),
-            resource_gate: None,
+            resource_hint: None,
             process_trees: None,
-            reclaim: None,
-            reclaim_cooldown_ms: std::sync::atomic::AtomicU64::new(0),
-            reclaim_round: std::sync::atomic::AtomicU64::new(0),
             resource_facts: std::sync::Mutex::new(Vec::new()),
-            in_flight_targets: std::sync::Mutex::new(Vec::new()),
-            in_flight_token: std::sync::atomic::AtomicU64::new(0),
             live_call_jobs: std::sync::Arc::new(std::sync::Mutex::new(Vec::new())),
+            dispatch_token: std::sync::atomic::AtomicU64::new(0),
             last_resource_tier: std::sync::atomic::AtomicU8::new(0),
         })
     }
 
-    /// FUS-HOST-RESOURCE-SAFETY（2026-09-12，0z S1）：装配期注入资源面——
-    /// ①安装 run 级硬上限（`JOB_OBJECT_LIMIT_JOB_MEMORY` commit /
-    /// `ACTIVE_PROCESS` 并发 / CPU hard cap，内核强制，覆盖此后每个工具调用的
-    /// 进程树）；②挂上派发前资源预检门（§4.1）。两步都按「读数不可得即
-    /// fail-closed」处理：上限读数拿不到就不挂 commit 上限（预检门独立承担
-    /// 准入），预检读数拿不到就拒绝重活。
+    /// 0aw（2026-09-20，HOST_RESOURCE_OS_DELEGATION_DESIGN §6；原 0z S1
+    /// 装配语义由「门 ＋ 上限」改为「上限 ＋ 卷软提示」）：装配期注入资源面
+    /// ——①安装 run 级硬上限（`JOB_OBJECT_LIMIT_JOB_MEMORY` commit /
+    /// `ACTIVE_PROCESS` 并发 / CPU hard cap，内核强制，覆盖此后每个工具调用
+    /// 的进程树）；②挂上派发前目标卷读数 ＋ 卷软提示面（**不做准入**——
+    /// 内存/CPU 的调度与限额交操作系统，磁盘余量降为软提示，拒绝臂/树杀
+    /// 臂/回收触发随裁决 ④ 一并退役）。读数不可得时上限照装（commit 上限
+    /// 缺席记录在案），软提示静默。
     ///
     /// 生产装配点是 `orz-bin` 的 `-p` 路径与 `acp_server` 的 ACP 路径；测试
     /// 与嵌入式宿主不调用本方法 → 行为与本批之前逐字一致。
@@ -407,12 +370,12 @@ impl OrzHost {
         self
     }
 
-    /// Shared assembly: probe once, install the run job, wire the gate.
+    /// Shared assembly: probe once, install the run job, wire the hint face.
     fn install_resource_safety(&mut self, limits_override: Option<xai_tty_utils::JobLimits>) {
-        let probe = Arc::new(crate::resource_gate::SystemCapacityProbe);
-        let snapshot = crate::resource_gate::CapacityProbe::probe(probe.as_ref(), &self.cwd);
+        let probe = Arc::new(crate::resource_hint::SystemCapacityProbe);
+        let snapshot = crate::resource_hint::CapacityProbe::probe(probe.as_ref(), &self.cwd);
         let limits =
-            limits_override.unwrap_or_else(|| crate::resource_gate::default_job_limits(&snapshot));
+            limits_override.unwrap_or_else(|| crate::resource_hint::default_job_limits(&snapshot));
         let installed = if limits_override.is_some() {
             xai_tty_utils::replace_global_run_job_for_tests(limits)
         } else {
@@ -421,20 +384,20 @@ impl OrzHost {
         match installed {
             Ok(job) => tracing::info!(
                 ceilings = %job.describe(),
-                "host resource ceilings installed (0z S1)"
+                "host resource ceilings installed (kernel-enforced run job; 0aw)"
             ),
             Err(e) => tracing::warn!(
                 error = %e,
-                "host resource ceilings unavailable — the pre-dispatch gate is the \
-                 remaining defence"
+                "host resource ceilings unavailable — the OS answer surface \
+                 (allocation failure / OOM) is the remaining backstop"
             ),
         }
         tracing::info!(
             headroom = %snapshot.describe(),
-            tier = %crate::resource_gate::tier_for(&snapshot).as_str(),
-            "host resource probe installed (0z S1)"
+            tier = %crate::resource_hint::tier_for(&snapshot).as_str(),
+            "host resource observation installed (0aw; no admission gate)"
         );
-        self.resource_gate = Some(crate::resource_gate::ResourceGate::new(probe));
+        self.resource_hint = Some(crate::resource_hint::ResourceHint::new(probe));
 
         // 0z S2 §4.2 item 4 (start sweep): reap orphans left by crashed
         // previous runs BEFORE this run spawns anything. Records newer than
@@ -459,12 +422,11 @@ impl OrzHost {
             registry.execute_sweep(decisions, "parent_abort", &crate::process_tree::kill_pid);
         }
         self.process_trees = Some(registry);
-        self.reclaim = Some(crate::reclaim::ReclaimLadder::new(&self.cwd));
 
         // §4.5 (review F-EV-7): the run-start reading row — the snapshot
         // family's second trigger, emitted once at assembly.
-        let snapshot = crate::resource_gate::CapacityProbe::probe(
-            &crate::resource_gate::SystemCapacityProbe,
+        let snapshot = crate::resource_hint::CapacityProbe::probe(
+            &crate::resource_hint::SystemCapacityProbe,
             &self.cwd,
         );
         self.resource_facts
@@ -472,12 +434,12 @@ impl OrzHost {
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .push(serde_json::json!({
                 "event": "host_resource_snapshot",
-                "tier": crate::resource_gate::tier_for(&snapshot).as_str(),
+                "tier": crate::resource_hint::tier_for(&snapshot).as_str(),
                 "trigger": "run_start",
                 "readings": snapshot.to_json(),
             }));
         self.last_resource_tier.store(
-            tier_rank(&crate::resource_gate::tier_for(&snapshot)),
+            tier_rank(&crate::resource_hint::tier_for(&snapshot)),
             std::sync::atomic::Ordering::Relaxed,
         );
     }
@@ -493,80 +455,18 @@ impl OrzHost {
             .unwrap_or_default()
     }
 
-    /// Register this call's static write targets as in-flight (review
-    /// F-BE-2); the returned guard removes them. Overlapping registrations
-    /// are fine — protection is a union, and stale entries only ever
-    /// *reduce* reclaim scope, never widen it.
-    fn register_dispatch(&self, targets: Vec<std::path::PathBuf>) -> DispatchGuard<'_> {
+    /// Open this call's dispatch guard: the token scopes its live call-job
+    /// entries; the guard closes the duplicated per-call job handles on drop
+    /// (`KILL_ON_JOB_CLOSE` 的调用级拆树，0aw 裁决 ④ 保留面).
+    fn register_dispatch(&self) -> DispatchGuard<'_> {
         let token = self
-            .in_flight_token
+            .dispatch_token
             .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        self.in_flight_targets
-            .lock()
-            .unwrap()
-            .push((token, targets));
         DispatchGuard {
             host: self,
             token,
             closed: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
         }
-    }
-
-    /// The spawn sink's live-job registration hook (called per child attach;
-    /// review F-BE-3(a)). Late arrivals after the dispatch closed are closed
-    /// out immediately — no stale kill handles.
-    fn register_live_call_job(&self, closed: &std::sync::atomic::AtomicBool, entry: LiveCallJob) {
-        if closed.load(std::sync::atomic::Ordering::Relaxed) {
-            Self::close_job_handle(entry.job_handle);
-            return;
-        }
-        self.live_call_jobs
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .push(entry);
-    }
-
-    /// 0z S2R F-BE-3(a) (user ruling 2026-09-13, design §4.8 表 1 ③
-    /// option (a)): the hard tier terminates ONLY the in-flight **heavy**
-    /// calls' call jobs — whole-tree kernel granularity per call, without
-    /// the run job's blast radius (light calls and backgrounded tasks keep
-    /// running). Returns the killed call ids (dedup) for the
-    /// `resource_exhausted` facts.
-    fn terminate_heavy_call_jobs(&self) -> Vec<String> {
-        let jobs: Vec<LiveCallJob> = {
-            let mut guard = self
-                .live_call_jobs
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner);
-            std::mem::take(&mut *guard)
-        };
-        let mut killed: Vec<String> = Vec::new();
-        let mut survivors: Vec<LiveCallJob> = Vec::new();
-        for entry in jobs {
-            if entry.action_class != "heavy" {
-                survivors.push(entry);
-                continue;
-            }
-            match xai_tty_utils::terminate_job_handle(entry.job_handle) {
-                Ok(()) => {
-                    if !killed.contains(&entry.call_id) {
-                        killed.push(entry.call_id.clone());
-                    }
-                }
-                Err(e) => {
-                    tracing::warn!(
-                        call_id = %entry.call_id,
-                        "hard tier: per-call job terminate failed: {e}"
-                    );
-                }
-            }
-            Self::close_job_handle(entry.job_handle);
-        }
-        *self
-            .live_call_jobs
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner) = survivors;
-        killed
     }
 
     fn close_job_handle(handle: isize) {
@@ -580,167 +480,6 @@ impl OrzHost {
         }
         #[cfg(not(windows))]
         let _ = handle;
-    }
-
-    fn in_flight_snapshot(&self) -> Vec<std::path::PathBuf> {
-        self.in_flight_targets
-            .lock()
-            .unwrap()
-            .iter()
-            .flat_map(|(_, targets)| targets.iter().cloned())
-            .collect()
-    }
-
-    /// 0z S2 §4.6：soft/reclaim-direct/hard 档的回收触发缝——门判定后调用。
-    /// 候选集固定有界（workspace 下知名 cache 根）；冷却 60s；审计先行；
-    /// facts 进暂存由 loop drain 落 `reclaim_performed` 事件。
-    pub fn run_reclaim_pass(&self, tier: &str, direct: bool) {
-        let Some(ladder) = self.reclaim.as_ref() else {
-            return;
-        };
-        let now_ms = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_millis() as u64)
-            .unwrap_or(0);
-        let last = self
-            .reclaim_cooldown_ms
-            .load(std::sync::atomic::Ordering::Relaxed);
-        if now_ms.saturating_sub(last) < 60_000 {
-            // Cooldown gates NEW reclaims only — the window expiry below
-            // still runs (review F-BE-8: expiry must not starve behind the
-            // cooldown).
-            self.run_reclaim_expiry(tier);
-            return;
-        }
-        self.reclaim_cooldown_ms
-            .store(now_ms, std::sync::atomic::Ordering::Relaxed);
-        let round = self
-            .reclaim_round
-            .load(std::sync::atomic::Ordering::Relaxed) as u32;
-
-        // 候选集（review F-BE-6/F-BE-7）：知名 cache 根按 §4.6 阶梯排序
-        // （scratch 最先——在跑概率最低；构建缓存最后），并做深度 2 的
-        // 嵌套 workspace 根发现（事故工作区的重灾面在嵌套目录）。
-        let candidates = self.discover_reclaim_candidates();
-        if candidates.is_empty() {
-            self.run_reclaim_expiry(tier);
-            return;
-        }
-        // §4.7.1 第 14 条：在跑重活的产物面进入矩阵（review F-BE-2）。
-        let in_flight = self.in_flight_snapshot();
-        let decisions = ladder.plan(&candidates, direct, round, &in_flight);
-        ladder.execute(tier, &decisions, &|p| {
-            if p.is_dir() {
-                std::fs::remove_dir_all(p)
-            } else {
-                std::fs::remove_file(p)
-            }
-        });
-        self.run_reclaim_expiry(tier);
-        self.push_reclaim_facts(ladder);
-    }
-
-    /// Window expiry — callable on every gate pass without the cooldown
-    /// (review F-BE-8); rows whose surface went in-flight are requeued
-    /// instead of deleted (§4.7.1 第 14 条).
-    fn run_reclaim_expiry(&self, _tier: &str) {
-        let Some(ladder) = self.reclaim.as_ref() else {
-            return;
-        };
-        let round = self
-            .reclaim_round
-            .load(std::sync::atomic::Ordering::Relaxed) as u32;
-        let in_flight = self.in_flight_snapshot();
-        ladder.execute_expiry(
-            round,
-            &|p: &std::path::Path| in_flight_contains(&in_flight, p),
-            &|p| {
-                if p.is_dir() {
-                    std::fs::remove_dir_all(p)
-                } else {
-                    std::fs::remove_file(p)
-                }
-            },
-        );
-        self.push_reclaim_facts(ladder);
-    }
-
-    fn push_reclaim_facts(&self, ladder: &crate::reclaim::ReclaimLadder) {
-        for fact in ladder.drain_facts() {
-            self.resource_facts
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner)
-                .push(serde_json::json!({
-                    "event": "reclaim_performed",
-                    "class": fact.class,
-                    "outcome": fact.outcome,
-                    "tier": fact.tier,
-                    "paths": fact.paths,
-                    "freed_bytes": fact.freed_bytes,
-                    "window_rounds": fact.window_rounds,
-                    "budget_bytes": fact.budget_bytes,
-                }));
-        }
-    }
-
-    /// Known cache roots ordered by the §4.6 ladder (scratch → package
-    /// caches → build caches), discovered under `cwd` and its first/second
-    /// level directories (review F-BE-6: the incident workspace's heavy
-    /// surface lives under a nested workspace root). Bounded: at most 64
-    /// candidates, depth ≤ 3 for sizing.
-    fn discover_reclaim_candidates(&self) -> Vec<crate::reclaim::ReclaimCandidate> {
-        // Ladder order = evaluation order (plan consumes in order).
-        const LADDER: &[&str] = &[
-            // 1. run/work scratch (lowest in-flight risk)
-            "tmp_rebuild_scratch",
-            // 2. package caches
-            "node_modules",
-            "__pycache__",
-            // 3. build caches (regenerable, highest in-flight risk)
-            "target/debug/incremental",
-            "target/release/incremental",
-        ];
-        let mut roots: Vec<std::path::PathBuf> = vec![self.cwd.clone()];
-        if let Ok(entries) = std::fs::read_dir(&self.cwd) {
-            for entry in entries.flatten() {
-                let p = entry.path();
-                if p.is_dir() {
-                    roots.push(p.clone());
-                    if let Ok(inner) = std::fs::read_dir(&p) {
-                        for e2 in inner.flatten() {
-                            let p2 = e2.path();
-                            if p2.is_dir() {
-                                roots.push(p2);
-                            }
-                        }
-                    }
-                }
-            }
-        }
-        let mut candidates: Vec<crate::reclaim::ReclaimCandidate> = Vec::new();
-        for rel in LADDER {
-            for root in &roots {
-                let path = root.join(rel);
-                if candidates
-                    .iter()
-                    .any(|c: &crate::reclaim::ReclaimCandidate| c.path == path)
-                {
-                    continue;
-                }
-                if !path.exists() {
-                    continue;
-                }
-                let size = dir_size_sync(&path, 3);
-                candidates.push(crate::reclaim::ReclaimCandidate {
-                    path,
-                    size_bytes: size,
-                });
-                if candidates.len() >= 64 {
-                    return candidates;
-                }
-            }
-        }
-        candidates
     }
 
     /// Drain the accumulated resource facts (journal face, loop side).
@@ -787,14 +526,16 @@ impl OrzHost {
         registry.execute_sweep(decisions, "run_shutdown", &crate::process_tree::kill_pid);
     }
 
-    /// The injected resource gate, when one is wired.
-    pub fn resource_gate(&self) -> Option<&crate::resource_gate::ResourceGate> {
-        self.resource_gate.as_ref()
+    /// The injected resource hint face, when one is wired (0aw: observation
+    /// + soft hint; no admission).
+    pub fn resource_hint(&self) -> Option<&crate::resource_hint::ResourceHint> {
+        self.resource_hint.as_ref()
     }
 
-    /// Inject a specific gate (test seam + hosts that bring their own probe).
-    pub fn with_resource_gate(mut self, gate: crate::resource_gate::ResourceGate) -> Self {
-        self.resource_gate = Some(gate);
+    /// Inject a specific hint face (test seam + hosts that bring their own
+    /// probe).
+    pub fn with_resource_hint(mut self, hint: crate::resource_hint::ResourceHint) -> Self {
+        self.resource_hint = Some(hint);
         self
     }
 
@@ -1295,44 +1036,30 @@ impl OrzHost {
         // 模型未传 `timeout` 时，宿主按命令形态注入两档默认（普通 300s /
         // 程序脚本 600s，毫秒）；显式传入以模型为准（工具层再按
         // max_timeout_secs=900 封顶）。注入只发生在执行侧，模型面不变。
-        // FUS-HOST-RESOURCE-SAFETY §4.1（2026-09-12，0z S1）：派发前资源
-        // 预检门——本汇点与权限门/web_search semaphore 同一处，机械硬门在
-        // 任何进程启动之前。重活（编译/测试/安装/解包/大输出重定向）需要
-        // 目标卷余量与 commit 余量达标；读数不可得即 fail-closed。拒绝以
-        // 结构化信封回传读数（模型面看到事实与读数，不需要自觉检查——
-        // design §2 item 7）。S1 只做「拒/放 + 读数」；soft/hard 档的回收与
-        // 树杀落在 S2（§4.6/§4.8）。
-        // 0z S2 review F-BE-1/F-BE-2: classify + targets BEFORE the gate
-        // block — the spawn sink (below) carries both into the registry rows.
-        let class = crate::resource_gate::classify_action(name, &args);
-        let targets = crate::resource_gate::write_targets(name, &args, &self.cwd);
-        // 0z S2R F-BE-3(a)：派发登记（在跑写入面 + live call job 上下文）
-        // 先于门块创建——spawn sink 闭包（下方）据 token/closed 挂钩。
-        let dispatch_guard = self.register_dispatch(targets.clone());
+        // 0aw（2026-09-20，HOST_RESOURCE_OS_DELEGATION_DESIGN §5/§6；原
+        // 0z S1「派发前资源预检门」退役）：派发前取一次**目标卷**读数——
+        // ①观测面：tier 跨档照旧落 `host_resource_snapshot`（tier 只是读数
+        // 标签）；②软提示面：目标卷 free < 4 GiB 时**附一条机械软提示、
+        // 不阻断**（每 run 每卷至多一次）。没有任何拒绝臂——重活/轻活照常
+        // 派发，内存/磁盘的真实失败由 OS 以分配失败/写失败形式到达，宿主
+        // 如实转达。
+        let targets = crate::resource_hint::write_targets(name, &args, &self.cwd);
+        // 0z S2R F-BE-3(a)：派发登记（live call job 上下文）先于执行创建
+        // ——spawn sink 闭包（下方）据 token/closed 挂钩。
+        let dispatch_guard = self.register_dispatch();
         let dispatch_token = dispatch_guard.token;
         let dispatch_closed = dispatch_guard.closed.clone();
-        if let Some(gate) = &self.resource_gate {
-            // 0z S2 review F-BE-12（2026-09-13）：门只判一次——原实现
-            // evaluate_for_volumes 调两次（回收用第一次的档位、拒绝用第二次的
-            // 判决，探针可跨档位分歧）。在跑保护（review F-BE-2）：本调用的
-            // 静态写入目标在门判定前登记（已在上方 hoist），guard 在调用结束时摘除。
-            // review F-BE-8：延迟删除窗口按工具调用轮推进。
-            self.reclaim_round
-                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-            let gate_decision = gate.evaluate_for_volumes(&targets, class);
-            let gate_tier_after = match &gate_decision {
-                crate::resource_gate::GateDecision::Allow { tier, .. } => Some(*tier),
-                crate::resource_gate::GateDecision::Refuse { tier, .. } => Some(*tier),
-            };
+        let mut volume_hint: Option<String> = None;
+        if let Some(hint) = &self.resource_hint {
+            let readings = hint.read_for_volumes(&targets);
             // §4.5（review F-EV-7）：跨档才落 host_resource_snapshot。
-            if let Some(tier) = gate_tier_after {
+            if let Some(binding) = hint.last_snapshot() {
+                let tier = crate::resource_hint::tier_for(&binding);
                 let rank = tier_rank(&tier);
                 let last = self
                     .last_resource_tier
                     .swap(rank, std::sync::atomic::Ordering::Relaxed);
-                if last != rank
-                    && let Some(snapshot_now) = gate.last_snapshot()
-                {
+                if last != rank {
                     self.resource_facts
                         .lock()
                         .unwrap_or_else(std::sync::PoisonError::into_inner)
@@ -1340,142 +1067,18 @@ impl OrzHost {
                             "event": "host_resource_snapshot",
                             "tier": tier.as_str(),
                             "trigger": "tier_change",
-                            "readings": snapshot_now.to_json(),
+                            "readings": binding.to_json(),
                         }));
                 }
             }
-            // 0z S2 §4.6：soft/reclaim-direct 档由机械层发起回收（不问模型）。
-            // hard 档的回收推迟到树杀之后（§4.7.1 末段：先杀再回收，
-            // review F-BE-2 次序倒置修正；见下方 Refuse 臂）。
-            if let Some(tier) = gate_tier_after
-                && matches!(
-                    tier,
-                    crate::resource_gate::ResourceTier::Soft
-                        | crate::resource_gate::ResourceTier::ReclaimDirect
-                )
-            {
-                self.run_reclaim_pass(tier.as_str(), false);
-            }
-            // 0af 批连带（F-BE-12 残留完成，2026-09-16）：拒绝臂此前仍第二次
-            // 调 evaluate_for_volumes——两次探针可分歧（档位/回收用第一次、
-            // 拒绝信封用第二次），正是 F-BE-12 要消除的形态；改用上方唯一的
-            // 一次判定（钉子 resource_gate_judges_once_per_call_tool）。
-            if let crate::resource_gate::GateDecision::Refuse {
-                code,
-                reason,
-                class,
-                tier,
-                snapshot,
-                volumes,
-            } = gate_decision
-            {
-                tracing::warn!(
+            // 软提示（不阻断；每 run 每卷一次的机械去重在 hint 面内）。
+            volume_hint = hint.soft_hint(&readings);
+            if volume_hint.is_some() {
+                tracing::info!(
                     tool = name,
-                    action_class = class.as_str(),
-                    tier = tier.as_str(),
-                    write_targets = volumes.len(),
-                    "pre-dispatch resource gate refused a heavy action"
+                    write_targets = targets.len(),
+                    "pre-dispatch volume soft hint attached (admission retired, 0aw)"
                 );
-                // 0z S2 §5：pre-issue 拒绝事实（含读数与动作分档，判据 1 的
-                // 可逐条复核面）。
-                self.resource_facts
-                    .lock()
-                    .unwrap_or_else(std::sync::PoisonError::into_inner)
-                    .push(serde_json::json!({
-                        "event": "host_resource_denied",
-                        "tool": name,
-                        "call_id": call_id,
-                        "phase": "pre_issue",
-                        "action_class": class.as_str(),
-                        "tier": tier.as_str(),
-                        "reason": reason,
-                        "readings": snapshot.to_json(),
-                        "write_targets": volumes
-                            .iter()
-                            .map(crate::resource_gate::VolumeReading::to_json)
-                            .collect::<Vec<_>>(),
-                    }));
-                // 0z S2 §4.8 表 1：hard 档树杀——审计先行（planned 行含读数
-                // 与将杀 call_id 集，review F-EV-1）→ 杀本 run 全部工具进程
-                // 树（RunResourceJob::kill）→ executed 行 → 回收（先杀再
-                // 回收，§4.7.1 末段，review F-BE-2 次序倒置修正）。只在此处
-                // 触发（仅 hard 档、仅重档拒绝路径；轻活永不进本臂）。
-                if tier == crate::resource_gate::ResourceTier::Hard {
-                    let readings = snapshot.to_json();
-                    // 将杀的 call_id 集 = 本 run 登记表内的在跑记录（§4.8
-                    // 表 1「含将杀的 call_id 集」）；登记缺席时以当前被拒
-                    // 调用兜底，保证 call_ids 非空（schema minItems:1）。
-                    // 0z S2R F-BE-3(a) (user ruling 2026-09-13): the hard
-                    // tier kills ONLY the in-flight heavy calls' call jobs
-                    // (per-call whole-tree kernel granularity) — the run
-                    // job stays intact, so light calls and backgrounded
-                    // tasks are NOT in the blast radius (§4.8 表 1 ③).
-                    // planned = the heavy set about to be killed.
-                    let heavy_calls: Vec<String> = {
-                        let jobs = self
-                            .live_call_jobs
-                            .lock()
-                            .unwrap_or_else(std::sync::PoisonError::into_inner);
-                        jobs.iter()
-                            .filter(|e| e.action_class == "heavy")
-                            .map(|e| e.call_id.clone())
-                            .collect()
-                    };
-                    let planned_ids: Vec<String> = if heavy_calls.is_empty() {
-                        vec![call_id.to_string()]
-                    } else {
-                        heavy_calls
-                    };
-                    self.resource_facts
-                        .lock()
-                        .unwrap_or_else(std::sync::PoisonError::into_inner)
-                        .push(serde_json::json!({
-                            "event": "resource_exhausted",
-                            "phase": "planned",
-                            "tier": "hard",
-                            "call_ids": planned_ids,
-                            "readings": readings,
-                        }));
-                    let killed_ids = self.terminate_heavy_call_jobs();
-                    let executed_ids: Vec<String> = if killed_ids.is_empty() {
-                        vec![call_id.to_string()]
-                    } else {
-                        killed_ids
-                    };
-                    self.resource_facts
-                        .lock()
-                        .unwrap_or_else(std::sync::PoisonError::into_inner)
-                        .push(serde_json::json!({
-                            "event": "resource_exhausted",
-                            "phase": "executed",
-                            "tier": "hard",
-                            "call_ids": executed_ids,
-                            "readings": readings,
-                        }));
-                    tracing::warn!(
-                        killed = executed_ids.len(),
-                        "hard tier: heavy call jobs terminated (design §4.8 item 1, per-call face)"
-                    );
-                    // 先杀后回收（review F-BE-2 次序修正）。
-                    self.run_reclaim_pass("hard", true);
-                }
-                return Ok(ToolResult {
-                    output: reason,
-                    exit_code: Some(1),
-                    output_encoding: None,
-                    structured: Some(serde_json::json!({
-                        "error": code,
-                        "phase": "pre_issue",
-                        "action_class": class.as_str(),
-                        "tier": tier.as_str(),
-                        "readings": snapshot.to_json(),
-                        "write_targets": volumes
-                            .iter()
-                            .map(crate::resource_gate::VolumeReading::to_json)
-                            .collect::<Vec<_>>(),
-                    })),
-                    ..Default::default()
-                });
             }
         }
         let args = if name == "run_terminal_cmd" {
@@ -1499,7 +1102,6 @@ impl OrzHost {
             // Review F-BE-1: rows carry the owning run id — the finalize
             // sweep's scope guard keys on it.
             let run_id = self.own_run_id();
-            let action_class = class.as_str().to_string();
             let live_call_jobs = self.live_call_jobs.clone();
             xai_tty_utils::set_spawn_sink(std::sync::Arc::new(
                 move |observation: xai_tty_utils::SpawnObservation| {
@@ -1511,16 +1113,14 @@ impl OrzHost {
                         started_at: observation.started_at,
                         run_id: run_id.clone(),
                         job_name: "call".to_string(),
-                        action_class: action_class.clone(),
                     };
                     if let Err(e) = crate::process_tree::write_record(&dir, &record) {
                         tracing::debug!("process tree registration failed: {e}");
                     }
-                    // 0z S2R F-BE-3(a): the dispatch's live-call entry — the
-                    // hard tier's per-call kill face. `job_handle_dup == 0`
-                    // (dup failed / no job platform) still registers so the
-                    // call id shows up in the heavy set; the terminate step
-                    // warns and skips a 0 handle.
+                    // 0z S2R F-BE-3(a)：本调用的 live-call 登记——
+                    // `DispatchGuard::drop` 据它关闭本次调用的 per-call job
+                    // 句柄（KILL_ON_JOB_CLOSE 的调用级拆树）。0aw 裁决 ④：
+                    // 原 hard 档树杀消费面已退役，登记表只为句柄关闭存续。
                     if !dispatch_closed.load(std::sync::atomic::Ordering::Relaxed) {
                         live_call_jobs
                             .lock()
@@ -1529,13 +1129,11 @@ impl OrzHost {
                                 token: dispatch_token,
                                 call_id: call_id.clone(),
                                 // Non-Windows has no job handle: register with 0 so
-                                // the call id still shows up in the heavy set (the
-                                // terminate step warns and skips a 0 handle).
+                                // the drop path stays uniform (close is a no-op).
                                 #[cfg(windows)]
                                 job_handle: observation.job_handle_dup,
                                 #[cfg(not(windows))]
                                 job_handle: 0,
-                                action_class: action_class.clone(),
                             });
                     } else {
                         #[cfg(windows)]
@@ -1659,7 +1257,12 @@ impl OrzHost {
         };
         drop(spawn_sink_guard);
         let mut tool_result = ToolResult {
-            output: result.prompt_text,
+            // 0aw §5 模型面：软提示附在结果头部（动作照跑；每 run 每卷一次
+            // ——去重在 hint 面内完成），中文短句 ＋ 英文机械读数（0af 混排）。
+            output: match &volume_hint {
+                Some(line) => format!("{line}\n{}", result.prompt_text),
+                None => result.prompt_text,
+            },
             // 2026-08-08 blackboard-partition review closure (conformance
             // agent D1-1): the controller's edit-action gate keys on
             // `exit_code == Some(0)` ("实际变动" 才记). Previously this was
@@ -1931,8 +1534,9 @@ impl LoopHost for OrzHost {
     /// 0z S2 §4.2（2026-09-12）：进程树扫除事实源——登记表的 drain 面
     /// （planned/executed 行；审计先行由扫除器保证）。
     /// 0z S2 §5（review F-EV-11 注释归位）：宿主资源事实源——
-    /// `reclaim_performed` / `resource_exhausted` / `host_resource_denied`
-    /// 暂存行的 drain 面（与进程树 drain 分开）。
+    /// `host_resource_snapshot` 暂存行的 drain 面（0aw 后该族只剩快照；
+    /// `reclaim_performed`／`resource_exhausted`／`host_resource_denied`
+    /// 生产端已随裁决 ④ 退役，schema/verifier 保留供历史 journal 校验）。
     async fn drain_host_resource_facts(&self) -> Vec<serde_json::Value> {
         self.drain_resource_facts()
     }
@@ -2052,36 +1656,6 @@ impl LoopHost for OrzHost {
             return Err(ToolError::ExecutionFailed("empty test command".into()));
         }
         let timeout = runner.timeout.unwrap_or(orz_loop::host::RUN_TESTS_TIMEOUT);
-        // FUS-HOST-RESOURCE-SAFETY §4.1（2026-09-12 独立复核 F-2）：`run_tests`
-        // 是 host-owned 固定命令路径，不经过 `call_tool_inner` 汇点——此前它是
-        // 唯一「被判重档却两侧（门 / 硬上限）都不覆盖」的工具。这里补上门：
-        // 判据、读数与拒绝文案与汇点同口径（同一分档器 + 同一读探针）。
-        if let Some(gate) = &self.resource_gate {
-            // The runner command is a command string like any other: classify
-            // and locate its write targets through the same mechanical面.
-            let synthetic = serde_json::json!({ "command": runner.command.join(" ") });
-            let class = crate::resource_gate::classify_action("run_terminal_cmd", &synthetic);
-            let targets =
-                crate::resource_gate::write_targets("run_terminal_cmd", &synthetic, &self.cwd);
-            if let crate::resource_gate::GateDecision::Refuse { reason, tier, .. } =
-                gate.evaluate_for_volumes(&targets, class)
-            {
-                tracing::warn!(
-                    runner = %runner.command.join(" "),
-                    tier = tier.as_str(),
-                    "pre-dispatch resource gate refused the host test runner"
-                );
-                return Ok(orz_loop::host::TestRunResult {
-                    output: format!("[run_tests] {reason}"),
-                    exit_code: Some(1),
-                    timed_out: false,
-                    full_output_path: None,
-                    output_encoding: None,
-                    workspace_delta: Vec::new(),
-                    workspace_delta_truncated: false,
-                });
-            }
-        }
         // RT-003 (2026-08-11): workspace delta — snapshot the worktree
         // metadata before the run; after the run the diff (added/modified/
         // deleted, capped) is the audit trace of the test's file side
@@ -2665,13 +2239,13 @@ mod tests {
             .unwrap_or_else(|poison| poison.into_inner())
     }
 
-    /// 判据 1/2 的汇点面：预检门在 `call_tool_inner` 里于**任何进程启动之前**
-    /// 拒绝重活，并回传读数 + 动作分档；轻活即使读数不可得也照常放行。
+    /// 0aw 判据 2 的汇点面：低余量读数下派发**照常执行**，结果头部带一条
+    /// `[资源软提示]`（中文短句＋英文读数）；同一卷第二次派发不再重复提示
+    /// （每 run 每卷一次的机械去重）。没有任何拒绝臂。
     #[tokio::test]
-    async fn resource_gate_refuses_heavy_dispatch_at_the_call_tool_seam() {
-        use crate::resource_gate::{
-            ActionClass, CODE_RESOURCE_INSUFFICIENT, CapacityProbe, GIB, HostCapacitySnapshot,
-            ResourceGate, SourceQuality,
+    async fn volume_soft_hint_attaches_at_the_call_tool_seam() {
+        use crate::resource_hint::{
+            CapacityProbe, GIB, HostCapacitySnapshot, ResourceHint, SourceQuality,
         };
 
         struct Fixed(HostCapacitySnapshot);
@@ -2695,70 +2269,67 @@ mod tests {
             WorkspaceTrust::ObservedTrusted,
         )
         .unwrap()
-        .with_resource_gate(ResourceGate::new(Arc::new(Fixed(low))));
+        .with_resource_hint(ResourceHint::new(Arc::new(Fixed(low))));
 
-        // Heavy command → refused before dispatch, with readings in the
-        // structured envelope (pre-issue family, same shape as the other
-        // pre-dispatch refusals).
-        let refused = host
-            .call_tool(
-                "run_terminal_cmd",
-                serde_json::json!({"command": "cargo build --release"}),
-                "c-heavy",
-            )
-            .await
-            .expect("refusal is an Ok tool result, not a host error");
-        assert_eq!(refused.exit_code, Some(1));
-        assert!(
-            refused.output.contains("Nothing was started"),
-            "{}",
-            refused.output
-        );
-        let envelope = refused.structured.expect("structured refusal envelope");
-        assert_eq!(envelope["error"], CODE_RESOURCE_INSUFFICIENT);
-        assert_eq!(envelope["phase"], "pre_issue");
-        assert_eq!(envelope["action_class"], "heavy");
-        assert_eq!(envelope["tier"], "hard");
-        assert_eq!(envelope["readings"]["volume_free_bytes"], GIB);
-        assert_eq!(envelope["readings"]["commit_free_bytes"], 2 * GIB);
-
-        // Light command through the same gate → executes normally (zero
-        // false refusals for reads/small writes).
-        let allowed = host
+        // First dispatch: the action RUNS (exit 0 on its own merits), and the
+        // result head carries exactly one soft-hint line with readings.
+        let first = host
             .call_tool(
                 "run_terminal_cmd",
                 serde_json::json!({
-                    "command": "echo gate-open",
-                    "description": "proxy: prove the gate lets light work through"
+                    "command": "echo hint-once",
+                    "description": "proxy: hint attaches, dispatch proceeds"
                 }),
-                "c-light",
+                "c-hint-1",
             )
             .await
-            .expect("light call");
-        assert_eq!(allowed.exit_code, Some(0));
-        assert!(allowed.output.contains("gate-open"), "{}", allowed.output);
-        assert_eq!(
-            crate::resource_gate::classify_action(
+            .expect("hint is not a refusal");
+        assert_eq!(first.exit_code, Some(0));
+        let line_count = first.output.matches("[资源软提示]").count();
+        assert_eq!(line_count, 1, "exactly one hint line: {}", first.output);
+        assert!(first.output.contains("动作照常执行"), "{}", first.output);
+        assert!(
+            first
+                .output
+                .contains("free 1.00 GiB of 100.00 GiB < 4.00 GiB"),
+            "mechanical readings ride the line: {}",
+            first.output
+        );
+        assert!(
+            first.output.contains("hint-once"),
+            "the tool output itself is still there: {}",
+            first.output
+        );
+
+        // Second dispatch on the same volume: deduped — no second hint.
+        let second = host
+            .call_tool(
                 "run_terminal_cmd",
-                &serde_json::json!({
-                    "command": "echo gate-open",
-                    "description": "proxy"
-                })
-            ),
-            ActionClass::Light
+                serde_json::json!({
+                    "command": "echo hint-never",
+                    "description": "proxy: per-run per-volume dedup"
+                }),
+                "c-hint-2",
+            )
+            .await
+            .expect("second call");
+        assert_eq!(second.exit_code, Some(0));
+        assert!(
+            !second.output.contains("[资源软提示]"),
+            "no repeated hint: {}",
+            second.output
         );
 
         let _ = std::fs::remove_dir_all(&dir);
     }
 
-    /// 0af 批连带钉子（F-BE-12 残留完成，2026-09-16）：资源门对每次工具调用
-    /// **只判一次**——修复前拒绝臂会第二次调 `evaluate_for_volumes`（同一探针
-    /// 被读两次，两次读数可跨档位分歧：档位/回收用第一次、拒绝信封用第二次，
-    /// 正是 review F-BE-12 要消除的形态）。单写入目标 ⇒ 一次判定恰好一次探针。
+    /// 观测面纪律钉子（沿 0af F-BE-12 形态）：资源读数面对每次工具调用
+    /// **只读一次**——单写入目标 ⇒ 恰好一次探针（软提示与档位观测共用同
+    /// 一次读数，不存在第二次探针分歧面）。
     #[tokio::test]
-    async fn resource_gate_judges_once_per_call_tool() {
-        use crate::resource_gate::{
-            CapacityProbe, GIB, HostCapacitySnapshot, ResourceGate, SourceQuality,
+    async fn resource_hint_reads_once_per_call_tool() {
+        use crate::resource_hint::{
+            CapacityProbe, GIB, HostCapacitySnapshot, ResourceHint, SourceQuality,
         };
         use std::sync::Mutex;
 
@@ -2787,32 +2358,37 @@ mod tests {
             WorkspaceTrust::ObservedTrusted,
         )
         .unwrap()
-        .with_resource_gate(ResourceGate::new(Arc::new(Counting(Arc::clone(&reads)))));
+        .with_resource_hint(ResourceHint::new(Arc::new(Counting(Arc::clone(&reads)))));
 
-        let refused = host
+        let done = host
             .call_tool(
                 "run_terminal_cmd",
-                serde_json::json!({"command": "cargo build --release"}),
+                serde_json::json!({
+                    "command": "echo read-once",
+                    "description": "proxy: one call, one probe read"
+                }),
                 "c-once",
             )
             .await
-            .expect("refusal is an Ok tool result, not a host error");
-        assert_eq!(refused.exit_code, Some(1));
+            .expect("call completes");
+        assert_eq!(done.exit_code, Some(0));
         assert_eq!(
             *reads
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner),
             1,
-            "one heavy call ⇒ exactly one gate evaluation (one probe read)"
+            "one call ⇒ exactly one dispatch reading (one probe read)"
         );
 
         let _ = std::fs::remove_dir_all(&dir);
     }
 
-    /// 判据 3：读数不可得时重活被拒（fail-closed），轻活不受影响。
+    /// 0aw 边界钉子：读数不可得 ⇒ **无提示、照常派发**（观测标签落
+    /// `unknown`；准入时代的 fail-closed 拒绝语义已退役——不再有「因读数
+    /// 缺席而拒绝」的面）。
     #[tokio::test]
-    async fn resource_gate_is_fail_closed_when_readings_are_unavailable() {
-        use crate::resource_gate::{CapacityProbe, HostCapacitySnapshot, ResourceGate};
+    async fn unavailable_readings_hint_nothing_and_never_block() {
+        use crate::resource_hint::{CapacityProbe, HostCapacitySnapshot, ResourceHint};
 
         struct Blind;
         impl CapacityProbe for Blind {
@@ -2827,92 +2403,30 @@ mod tests {
             WorkspaceTrust::ObservedTrusted,
         )
         .unwrap()
-        .with_resource_gate(ResourceGate::new(Arc::new(Blind)));
+        .with_resource_hint(ResourceHint::new(Arc::new(Blind)));
 
-        let refused = host
-            .call_tool(
-                "run_terminal_cmd",
-                serde_json::json!({"command": "cargo test"}),
-                "c-blind",
-            )
-            .await
-            .expect("refusal");
-        assert_eq!(refused.exit_code, Some(1));
-        let envelope = refused.structured.expect("envelope");
-        assert_eq!(envelope["tier"], "unknown");
-        assert_eq!(envelope["readings"]["source_quality"], "unavailable");
-
-        let allowed = host
+        let done = host
             .call_tool(
                 "run_terminal_cmd",
                 serde_json::json!({
-                    "command": "echo still-works",
-                    "description": "proxy: fail-closed gate must not block light work"
+                    "command": "echo blind-still-runs",
+                    "description": "proxy: unavailable readings never block"
                 }),
-                "c-blind-light",
+                "c-blind",
             )
             .await
-            .expect("light call");
-        assert_eq!(allowed.exit_code, Some(0));
-
-        let _ = std::fs::remove_dir_all(&dir);
-    }
-
-    /// 独立复核 F-2：host-owned `run_tests` 路径同样过预检门——读数不足时固定
-    /// 测试命令**不启动**，并以与汇点同口径的回执（读数 + "Nothing was started"）
-    /// 反馈。这条面此前是"被判重档却不受门覆盖"的缺口（评测 harness 经
-    /// `ORZ_TEST_RUNNER` 可达）。
-    #[tokio::test]
-    async fn run_tests_is_gated_like_any_heavy_action() {
-        use crate::resource_gate::{
-            CapacityProbe, GIB, HostCapacitySnapshot, ResourceGate, SourceQuality,
-        };
-
-        struct Fixed(HostCapacitySnapshot);
-        impl CapacityProbe for Fixed {
-            fn probe(&self, _path: &std::path::Path) -> HostCapacitySnapshot {
-                self.0
-            }
-        }
-        let dir = test_dir();
-        let runner = orz_loop::host::TestRunner {
-            command: vec!["cargo".to_string(), "test".to_string()],
-            timeout: Some(std::time::Duration::from_secs(5)),
-            env: Vec::new(),
-        };
-        let host = OrzHost::new(
-            JournalRecorder::new(dir.clone()),
-            &dir,
-            WorkspaceTrust::ObservedTrusted,
-        )
-        .unwrap()
-        .with_test_runner(Some(runner))
-        .with_resource_gate(ResourceGate::new(Arc::new(Fixed(HostCapacitySnapshot {
-            collected_at_ms: 7,
-            volume_free_bytes: GIB,
-            volume_total_bytes: 100 * GIB,
-            commit_limit_bytes: 32 * GIB,
-            commit_used_bytes: 30 * GIB,
-            source_quality: SourceQuality::Available,
-        }))));
-
-        let result = host.run_tests().await.expect("refusal is a test result");
-        assert_eq!(result.exit_code, Some(1));
-        assert!(!result.timed_out, "a refusal is not a timeout");
-        // 0af：run_tests 路径与汇点同口径的定案文案（轴标注按读数——本例
-        // 双轴同短 ⇒ 合并标注「内存/储存」）。
+            .expect("call completes");
+        assert_eq!(done.exit_code, Some(0));
         assert!(
-            result
-                .output
-                .contains("宿主机内存/储存资源即将耗尽，无法新增派发"),
-            "{}",
-            result.output
+            !done.output.contains("[资源软提示]"),
+            "no hint without readings: {}",
+            done.output
         );
         assert!(
-            result.output.contains("Nothing was started"),
-            "{}",
-            result.output
+            done.structured.is_none(),
+            "no refusal envelope exists any more"
         );
+
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -2929,14 +2443,11 @@ mod tests {
         )
         .unwrap()
         .with_host_resource_safety();
-        let gate = host.resource_gate().expect("gate wired at assembly");
-        let snapshot = gate.last_snapshot();
-        // The gate probes lazily, so ask it once through the public seam.
-        let decision = gate.evaluate(&dir, crate::resource_gate::ActionClass::Light);
-        assert!(
-            decision.is_allowed(),
-            "light actions are never refused: {decision:?}"
-        );
+        let hint = host.resource_hint().expect("hint face wired at assembly");
+        let snapshot = hint.last_snapshot();
+        // The face probes lazily; read once through the public seam.
+        let readings = hint.read_for_volumes(&[dir.clone()]);
+        assert!(!readings.is_empty(), "the target volume is read");
         let job = xai_tty_utils::global_run_job().expect("run ceilings installed");
         assert!(
             job.is_kernel_enforced(),
@@ -2948,7 +2459,7 @@ mod tests {
         assert!(
             snapshot.is_none()
                 || snapshot.unwrap().source_quality
-                    == crate::resource_gate::SourceQuality::Available
+                    == crate::resource_hint::SourceQuality::Available
         );
         // Review F-1: the ceilings live on the **run** job (aggregate), and the
         // readback the assembly face publishes is that same job.
