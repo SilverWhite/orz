@@ -1809,6 +1809,24 @@ EXTRA_V02_PAYLOAD_POSITIVES: dict[str, dict] = {
         "status": "error",
         "error": "content_anchor_mismatch",
         "file_path": "src/lib.rs",
+        # FUS-READ-ANCHOR-WRITE-GUARD 锚点核证拒单的结构化上游明细
+        # （ToolError.upstream → journal `reason`，0q 起生产者恒在）；
+        # schema 于 2026-09-20 审查修复批回补（`reason` unexpected-key
+        # 漂移修复）。nullable 成员＝不可读面（actual.sha256 读失败即 null）。
+        "reason": {
+            "label": "call-ft-anchor",
+            "file_path": "src/lib.rs",
+            "expected": {
+                "size": 4096,
+                "mtime": None,
+                "sha256": "8f434346648f6b96df89dda901c5176b10a6d83961dd3c1ac88b59b2dc327aa4",
+            },
+            "actual": {
+                "size": 4095,
+                "mtime": 1789834125,
+                "sha256": None,
+            },
+        },
         "failure_target": {
             "kind": "anchor_target",
             "id": "8f434346648f6b96df89dda901c5176b10a6d83961dd3c1ac88b59b2dc327aa4",
@@ -1967,6 +1985,15 @@ EXTRA_V02_PAYLOAD_POSITIVES[
 # 一条、并携带契约新增可选字段 usable_source_count（宽口径逐 query 可用
 # 计数；派生证据多 query 下不归因）。本正例锁定两处：多 query 形态与
 # query_entry 的可选计数字段。
+# 0at（2026-09-20，S3 摩擦 N1）同例扩展：① source_entry 可选
+# origin_query_id（派发谱系——逐字/归一化/候选池回溯/leader 谱系，与
+# query_summary 的 query_id 同 id 域；仅多 query 批出现）；② 顶层可选
+# unattributed_usable_count（批级归因缺口，恒等式 Σ 逐 query ＋
+# unattributed ＝ 批级可用：2＋1＝3；仅多 query 批出现）。
+# 0ax S1（2026-09-20，S3 摩擦 N5）同例扩展：顶层可选
+# synthetic_answer_count（无 URL 合成答案单列数——不入可用额度；>0 才落）。
+# SRC-004 为 web_search_result 合成条目：不入 usable（usable=3=SRC-001/002
+# ＋未归因 SRC-003... 批级 usable=3），被单列披露。
 EXTRA_V02_PAYLOAD_POSITIVES["retrieval-result.merged-multi-query.valid"] = {
     "schema_version": "0.2.0-draft",
     "result_kind": "retrieval_subagent_result",
@@ -2010,6 +2037,7 @@ EXTRA_V02_PAYLOAD_POSITIVES["retrieval-result.merged-multi-query.valid"] = {
             "relevance": "direct",
             "content_sha256": ZERO_HASH,
             "highest_allowed_claim": "observed",
+            "origin_query_id": "QRY-0001",
             "tier": "default",
             "mechanical_weight": 1.0,
             "weight_reason": "default",
@@ -2026,22 +2054,75 @@ EXTRA_V02_PAYLOAD_POSITIVES["retrieval-result.merged-multi-query.valid"] = {
             "relevance": "direct",
             "content_sha256": "aa" * 32,
             "highest_allowed_claim": "derived",
+            "origin_query_id": "QRY-0001-2",
             "tier": "default",
             "mechanical_weight": 1.0,
             "weight_reason": "default",
+        },
+        {
+            "source_id": "SRC-0003",
+            "source_title": "Unattributed derivation",
+            "source_url_or_ref": "https://example.org/notes",
+            "source_type": "web_page",
+            "visibility": "partial_text_observed",
+            "accessed_at": "2026-09-20T00:00:02Z",
+            "observed_scope": "first portion",
+            "missing_scope": "rest of page",
+            "relevance": "direct",
+            "content_sha256": "bb" * 32,
+            "highest_allowed_claim": "derived",
+            "origin_query_id": "QRY-0001",
+            "tier": "default",
+            "mechanical_weight": 1.0,
+            "weight_reason": "default",
+        },
+        {
+            "source_id": "SRC-0004",
+            "source_title": "Synthesized answer (no URL)",
+            "source_url_or_ref": "https://search.example/synth",
+            "source_type": "web_search_result",
+            "visibility": "partial_text_observed",
+            "accessed_at": "2026-09-20T00:00:03Z",
+            "observed_scope": "search snippet",
+            "missing_scope": "full page",
+            "relevance": "direct",
+            "content_sha256": "cc" * 32,
+            "highest_allowed_claim": "derived",
+            # 0at A 面：多 query 批每条工具证据（含合成形态——其
+            # search_query 为子代理改写串）都携带谱系（此处＝leader 兜底）；
+            # 2026-09-20 审查修复批补齐，使契约示例与实现行为一致
+            # （覆盖率由构造成立，合成答案不缺席谱系）。
+            "origin_query_id": "QRY-0001",
         },
     ],
     "filtering_log": [],
     "raw_source_refs": [],
     "prefilter_log": [],
     "source_counts": {
-        "total": 2,
+        "total": 4,
         "full_text_observed": 1,
-        "partial_text_observed": 1,
+        "partial_text_observed": 3,
         "metadata_only": 0,
         "unavailable": 0,
     },
     "visibility_degraded": False,
+    "unattributed_usable_count": 1,
+    "synthetic_answer_count": 1,
+}
+# 0av S1 (2026-09-20, S3 摩擦 N3)：检索批次数读数落盘面——每批检索收尾时
+# 一条 mechanical_audit_update{kind: retrieval_batch} journal 读数（五键
+# payload 与 batch_close 单源 helper 同值；模型面零改动、不新增事件类型）。
+EXTRA_V02_PAYLOAD_POSITIVES[
+    "mechanical-audit-update.retrieval-batch.valid"
+] = {
+    "kind": "retrieval_batch",
+    "payload": {
+        "activation_id": "ACT-EXT-0001",
+        "usable": 3,
+        "cap": 10,
+        "retrieval_calls": 12,
+        "terminal_reason": "dispatch_wallclock_bound",
+    },
 }
 EXTRA_V02_PAYLOAD_BADS[
     "information-sufficiency-assessment.gap-without-count.constraint.invalid"
@@ -2538,6 +2619,10 @@ EXTRA_V02_PAYLOAD_POSITIVES["retrieval-result-segment.partial.valid"] = {
 EXTRA_V02_PAYLOAD_POSITIVES["tool-availability-check.retrieval-family.valid"] = {
     "probe_scope": "retrieval_family",
     "probe_timestamp": "2026-09-13T00:00:00Z",
+    # 0ac S3①（2026-09-13）检索族探针恒带的 run 级独立启用门读数；schema
+    # 于 2026-09-20 审查修复批回补（生产者先行、schema 补登——修复
+    # `retrieval_enabled` unexpected-key 的历史 journal 全量回放漂移）。
+    "retrieval_enabled": True,
     "complete": [],
     "incomplete": [],
     "gate_decision": "pass",

@@ -21,7 +21,9 @@
   〔CI 断流 16 天修复，事故台账 `incidents/ORZ-CI-BLINDOUT-001.md`〕）；2026-09-19 第五批：
   `ORZ-RUN-SEPARATION-001` 跨 run 产物归属隔离候选，来源＝0ar S1 狗粮轮摩擦 F2
   （`RUN-CLI-6aad91f0` 误杀后 WIP 交接现场；用户裁决「每不同 run 的产物明确归不同 run，
-  关键是不能混为一谈」，处置终点＝案例登记不立工程项）。
+  关键是不能混为一谈」，处置终点＝案例登记不立工程项）；2026-09-20 第六批：
+  `ORZ-DEV-LINKER-CRASH-001` 并行 `rust-lld` 崩溃与 target 缓存污染候选，来源＝0at/0au/0av/0aw/0ax
+  S1 批独立审计（同树对照：默认并行链接 `0xc000001d` 崩溃 vs `-j 1` 全绿）。
 
 归因纪律（2026-08-17 用户裁决）：命令或操作出现错误、或结果与已知事实明显矛盾时，
 先排查环境与机械因素（二进制/运行时兼容、工具包装是否吞错误、路径/作用域解析、
@@ -47,3 +49,8 @@ PowerShell 5.1 无 BOM 按 ANSI 解码，「字符串缺少终止符」先查编
 同族追加（2026-09-19）：⑦**读数先核 run 归属**（`ORZ-RUN-SEPARATION-001`：产物落盘即绑定
 run id/session8/时间戳、交接声明来源、断链 run 产物显式标记孤儿态；与 ③ 同属「读数结论
 产出前先核来源」族）。不新增阻断门。
+
+同族追加（2026-09-20）：⑧**构建/链接阶段的本机崩溃与缓存污染**（`ORZ-DEV-LINKER-CRASH-001`：`rust-lld`
+`0xc000001d`（STATUS_ILLEGAL_INSTRUCTION）崩溃会在 `target/**/deps` 残留零长度 `.rmeta`／半成品 rlib ⇒ 后续报
+`crate X required to be available in rlib format`／`invalid metadata files for crate`／`can't find crate`，
+形态**指向依赖而非崩溃本身**；纪律＝读数前先核环境、`-j 1` 串行复现、`cargo clean` 前后各记一次读数）。不新增阻断门。

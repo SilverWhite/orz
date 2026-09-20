@@ -1,6 +1,7 @@
 {
   "probe_scope": "retrieval_family",
   "probe_timestamp": "2026-09-13T00:00:00Z",
+  "retrieval_enabled": true,
   "complete": [],
   "incomplete": [],
   "gate_decision": "pass",

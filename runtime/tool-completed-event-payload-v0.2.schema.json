@@ -54,6 +54,18 @@
       "type": "string",
       "description": "FUS-READ-ANCHOR-WRITE-GUARD (2026-08-21): the target file path carried by search_replace refusal completions (content_anchor_mismatch). Kept as the producer's existing top-level field; the failure-target identity (F4, 2026-08-30) duplicates it inside failure_target.path for anchor_target."
     },
+    "reason": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["label", "file_path", "expected", "actual"],
+      "properties": {
+        "label": { "type": "string", "minLength": 1 },
+        "file_path": { "type": "string", "minLength": 1 },
+        "expected": { "$ref": "#/$defs/anchor_reading" },
+        "actual": { "$ref": "#/$defs/anchor_reading" }
+      },
+      "description": "FUS-READ-ANCHOR-WRITE-GUARD (2026-08-21) — the anchor-mismatch refusal's structured upstream detail (ToolError.upstream, journaled verbatim as `reason` by the host_exec completion assembly since 0q). Present only on content_anchor_mismatch completions, alongside `file_path`; the mechanical expected/actual readings (size / mtime / sha256, each nullable where unreadable) are the audit face of why the anchor failed. Schema widened 2026-09-20 review-fix batch: the field existed in the producer since 0q but was missing here, so every journal carrying an anchor refusal failed full replay validation (unexpected key)."
+    },
     "candidate_count": {
       "type": "integer",
       "minimum": 0,
@@ -253,6 +265,17 @@
     }
   },
   "$defs": {
+    "anchor_reading": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["size", "mtime", "sha256"],
+      "properties": {
+        "size": { "type": "integer", "minimum": 0 },
+        "mtime": { "type": ["integer", "null"] },
+        "sha256": { "type": ["string", "null"] }
+      },
+      "description": "One anchor-verification reading (expected = the anchor's recorded state; actual = what the file looked like at verification). Nullable members carry unreadable faces (e.g. actual.sha256=null when the read itself failed)."
+    },
     "dep_anchor": {
       "type": ["object", "null"],
       "additionalProperties": false,

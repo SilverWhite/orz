@@ -9,6 +9,7 @@
 | [`CLI_PROJECT_INDEX_FULL_2026-09-03.md`](CLI_PROJECT_INDEX_FULL_2026-09-03.md) | `CLI_PROJECT_INDEX.md` | 2026-09-03 | `historical_full_snapshot` | [`CLI_PROJECT_INDEX.md`](../../CLI_PROJECT_INDEX.md) |
 | [`CLI_PROJECT_INDEX_FULL_2026-09-09.md`](CLI_PROJECT_INDEX_FULL_2026-09-09.md) | `CLI_PROJECT_INDEX.md` | 2026-09-09 | `historical_full_snapshot` | [`CLI_PROJECT_INDEX.md`](../../CLI_PROJECT_INDEX.md) |
 | [`CLI_PROJECT_INDEX_FULL_2026-09-15.md`](CLI_PROJECT_INDEX_FULL_2026-09-15.md) | `CLI_PROJECT_INDEX.md`（增量：头部版本/摘要行） | 2026-09-15 | `historical_full_snapshot` | [`CLI_PROJECT_INDEX.md`](../../CLI_PROJECT_INDEX.md) |
+| [`CLI_PROJECT_INDEX_FULL_2026-09-20.md`](CLI_PROJECT_INDEX_FULL_2026-09-20.md) | `CLI_PROJECT_INDEX.md`（增量：头部版本行） | 2026-09-20 | `historical_full_snapshot` | [`CLI_PROJECT_INDEX.md`](../../CLI_PROJECT_INDEX.md) |
 
 该快照保留归档时的完整主题路由、状态路由、实施流水、测试数量、提交号和审计时间线。当前入口只使用仓库根目录的精简索引。
 
@@ -16,3 +17,4 @@
 2026-09-03 快照保留 v2.41 全量条目与头部实施流水，供瘦身轮后回查，不得回填污染当前索引。
 2026-09-09 快照保留 v2.68 全量条目与头部版本流水（v2.41→v2.68），供本轮瘦身（索引 v2.69）后回查，不得回填污染当前索引。
 2026-09-15 快照为增量件（0ab S1 瘦身批）：收存 v2.69–v3.39 区间内现存的全部 `索引版本：`／`近版摘要：` 头部行原文（54 行），主题/状态路由仍在活索引，不得回填污染当前索引。
+2026-09-20 快照为增量件（独立审计批 F-1 门禁回绿）：收存滚出活索引的 v3.40–v3.50 `索引版本：` 头部行原文（11 行，含 v3.49 两个变体与 v3.49/v3.50 两处尾部错位行），主题/状态路由仍在活索引，不得回填污染当前索引。

@@ -25,9 +25,9 @@
 
 ## 开放项路由（2026-09-13 同步；勾选与计数权威在 BACKLOG）
 
-- 未闭合总数：**40 项**（BACKLOG 计数口径；逐次计数流水见 [`docs/BACKLOG_AND_PRIORITIES.md`](docs/BACKLOG_AND_PRIORITIES.md) 未闭合计数，TODO 不重复维护；更早流水收缩入档 [`存档/todo/`](存档/todo/) 与 BACKLOG 全量快照）。TODO `[ ]` 明细含父/子项，计数以 BACKLOG 为准。**2026-09-19 最近**：**0as 编码 lossy 兜底细化闭合 37 → 36**（提交批 orz `3d7d7a74`＋`e897dce2`）＋此前同日**编码 lossy 兜底细化立项 0as 36 → 37**（用户令「这点值得做，让模型自己看着舒服些」；F4 回查引出——四级梯最后一级整段替换字符）＋**0m S4 收口闭合 37 → 36**（过夜批；S3 实机 2026-09-07 经 0o T1 达成）＋**0ar S2 落码＋ADR §14.73 转录随批**（未提交、不推送、未重建，不动计数，余 S3 待放行）＋**0aq 机械项十二件勾选**（明细见 BACKLOG 0aq；报告 [`过夜批报告`](docs/audits/0AR_S2_RS_MECHANICAL_0M_S4_OVERNIGHT_2026-09-19.md)）。2026-09-18 及更早计数流水见 [`docs/BACKLOG_AND_PRIORITIES.md`](docs/BACKLOG_AND_PRIORITIES.md) 计数行与全量快照。
+- 未闭合总数：**41 项**（BACKLOG 计数口径；**0ay 立项 40 → 41**（检索合成判定面落盘与可核复算——0ax 判定面不进 journal ⇒ `synthetic_answer_count` 不可由 journal 重算；批序 S1→S4；同批 F-1/F-4/F-5 即修零计数、案例库 `ORZ-DEV-LINKER-CRASH-001` 不入计数；报告 [`独立审计与裁决`](docs/audits/0AT_0AU_0AV_0AW_0AX_S1_INDEPENDENT_AUDIT_AND_ADJUDICATION_2026-09-20.md)）；**2026-09-20 深夜过夜批：S3 摩擦五项 S1 落码**（0aw 全量〔准入/分类器/两臂退役＋resource_hint 软提示〕／0au 保留判定＋回放 7/7／0at 双面＋契约／0av 批读数＋条件 schema／0ax 合成口径＋回放 21/37——未提交、不推送、不重建，计数不动；报告 [`过夜批报告`](docs/audits/0AT_0AU_0AV_0AW_0AX_S1_IMPL_OVERNIGHT_2026-09-20.md)）；逐次计数流水见 [`docs/BACKLOG_AND_PRIORITIES.md`](docs/BACKLOG_AND_PRIORITIES.md) 未闭合计数，TODO 不重复维护；更早流水收缩入档 [`存档/todo/`](存档/todo/) 与 BACKLOG 全量快照）。TODO `[ ]` 明细含父/子项，计数以 BACKLOG 为准。**2026-09-19 最近**：**0as 编码 lossy 兜底细化闭合 37 → 36**（提交批 orz `3d7d7a74`＋`e897dce2`）＋此前同日**编码 lossy 兜底细化立项 0as 36 → 37**（用户令「这点值得做，让模型自己看着舒服些」；F4 回查引出——四级梯最后一级整段替换字符）＋**0m S4 收口闭合 37 → 36**（过夜批；S3 实机 2026-09-07 经 0o T1 达成）＋**0ar S2 落码＋ADR §14.73 转录随批**（未提交、不推送、未重建，不动计数，余 S3 待放行）＋**0aq 机械项十二件勾选**（明细见 BACKLOG 0aq；报告 [`过夜批报告`](docs/audits/0AR_S2_RS_MECHANICAL_0M_S4_OVERNIGHT_2026-09-19.md)）。2026-09-18 及更早计数流水见 [`docs/BACKLOG_AND_PRIORITIES.md`](docs/BACKLOG_AND_PRIORITIES.md) 计数行与全量快照。
 - P0：0b 验证③④（⑤ 89 题独立用户门）；0d 后续 3/4/5 S4 复验；0j W1-R1 S4 复验 + W3-R3 余项 + W4-R4 S5-2 总项；0l ⑥⑦（⑧ TER 见 [`TODO2.md`](TODO2.md)）；0n GAP-APPROVAL-PROMPTER（延期，S1 设计定稿前置）；0o T3 批次 W2 chunk3 + T4 批次 L + T5 批次 O + T6 统一收口；0t S4 实机复验待续；0u R4 15 题官方复跑（0t S4 载体，2026-09-10 放行）；0w TB 4.0 单题摩擦探针（第三跑成立并跑完（2026-09-11））；0y NP1 机械身体集成支线（2026-09-11 用户裁决立项，实施未开始；§14.2 验证载体已裁决引入模拟器（2026-09-12），S1 载体搭建待放行，M0 定版为首个无依赖里程碑）；0z 真机资源安全边界与崩溃收尾（2026-09-12 用户裁决立项，设计完成待放行实施；S1–S4，**不与 0v-C 搭车**）。**2026-09-13 新增**：0ac 即时结果回报与流式检索（`GAP-MECH-IMMEDIATE-FEEDBACK`，设计定稿待放行实施，S1 探针为第一门）；`GAP-ORZ-HOST-RESOURCE-SNAPSHOT-DROP` 载体重建待放行。**2026-09-20 闭合**：检索批次回送与轮级单席位线（S1 契约面／S2 实施／S3 同三题真机复验全部完成，ADR-0010 §14.73/v1.75 转录随 S2；未闭合 36 → 35）＋同日 N1–N6 摩擦深挖登记观察不立项。
-- P1：FUS-COMPONENT-REGISTER 组件审计；GAP-WINDOWS-EVIDENCE 三项；IMPL-DEEPSEEK-TRANSPORT live 晋级证据；ORZ-SESSION-CONTEXT-MONITOR 四项；0aa 历史卷 journal 全量 verifier 复扫；0aj 黑板写权限层放行（`blackboard_write` ReadOnly deny，旧摩擦残余）；0al 门禁冻结克隆树漂移；0ae 上下文软门与模型参与压缩（注意力阶梯+plan 问询+黑板写入面）；0ah 滑块上下文（v8 模型自控注意力窗口；v7 记录已勘误；**实现更正批已落码＋只读审查处置同日闭合＋收口清理批已落码**（v7 折叠族退役，orz `501447c0`；守卫 700K＋H1/T1 按越线重新武装；回放面＝v8 组成部分）＋**R-12 余项已处置**（阶梯一轮只注入最高档／回放窗口裁定不扩白名单／0.77 换算与五项真机读数待实测），登记待放行）；0am LIF 动力学升级线（轮次预算换算先行＋RLI 自研谐振基座与观测判据预注册；**2026-09-17 整体挂起，O2 为前置门**）；0aq 全项目全面严格审查处置线（RS-01…RS-18 待修：CI 断流修复＋CI Rust 测试轨〔提级待裁决〕、920K 模型面残留文案、测试封闭性、锁中毒级联、0am 批提交前钉、高危模块测试补强、仓库历史瘦身、入库日志清理、.gsa 磁盘卫生、构建前置文档化、文档漂移三件、gitignore 补、一次性产物清理、Python 测试面卫生、TODO2 M3、巨型文档观察）；S3 摩擦处置 0au（尾部派发预算）／0aw（OS 委派执行）／0ax（检索形态 URL 完整性）。
+- P1：FUS-COMPONENT-REGISTER 组件审计；GAP-WINDOWS-EVIDENCE 三项；IMPL-DEEPSEEK-TRANSPORT live 晋级证据；ORZ-SESSION-CONTEXT-MONITOR 四项；0aa 历史卷 journal 全量 verifier 复扫；0aj 黑板写权限层放行（`blackboard_write` ReadOnly deny，旧摩擦残余）；0al 门禁冻结克隆树漂移；0ae 上下文软门与模型参与压缩（注意力阶梯+plan 问询+黑板写入面）；0ah 滑块上下文（v8 模型自控注意力窗口；v7 记录已勘误；**实现更正批已落码＋只读审查处置同日闭合＋收口清理批已落码**（v7 折叠族退役，orz `501447c0`；守卫 700K＋H1/T1 按越线重新武装；回放面＝v8 组成部分）＋**R-12 余项已处置**（阶梯一轮只注入最高档／回放窗口裁定不扩白名单／0.77 换算与五项真机读数待实测），登记待放行）；0am LIF 动力学升级线（轮次预算换算先行＋RLI 自研谐振基座与观测判据预注册；**2026-09-17 整体挂起，O2 为前置门**）；0aq 全项目全面严格审查处置线（RS-01…RS-18 待修：CI 断流修复＋CI Rust 测试轨〔提级待裁决〕、920K 模型面残留文案、测试封闭性、锁中毒级联、0am 批提交前钉、高危模块测试补强、仓库历史瘦身、入库日志清理、.gsa 磁盘卫生、构建前置文档化、文档漂移三件、gitignore 补、一次性产物清理、Python 测试面卫生、TODO2 M3、巨型文档观察）；S3 摩擦处置 0au（尾部派发预算）／0aw（OS 委派执行）／0ax（检索形态 URL 完整性）／0ay（判定面落盘与可核复算）。
 - P2：IMPL-CONTROL-FABRIC Slice 3/4（P2-7）；OPS-PROTOCOL 裁剪与接线裁决（P2-8）；P2-11 余项（PULL 自描述 S3/S4、retryable 分类位、依赖图 S3/S4）；P2-12 S4 复验；P2-13 B4；P2-14 S3/S4；P2-15 EVALUATION-CORPUS-FREEZE（S1/S2 完成；附属 `GAP-EVAL-RESULT-SCHEMA-DRIFT` 已修复）；0ap FR-A06 压缩交互设计批（首步设计评估稿，取舍随稿裁决）；S3 摩擦处置 0at（逐 query 归因）／0av（批次数读数落盘面）。
 - P3：EVIDENCE-LOCAL-BROWSER、GATE-CHAIN、observed-scope 枚举、V11-IMPL-003、V11-IMPL-007、orz-host flaky。
 - 审计登记边界（条件触发，不占当前优先级）：orz-host 可选后端、headless 计划信号、23 工具分区 journals、B-1 后续、ORZ-RECOVERY-TOOL-OUTCOME、ORZ-STAGNATION-TOOL-SIGNAL。
@@ -950,8 +950,8 @@ GLM F2 处置转排期（2026-09-06 用户裁决）：`orz-host/src/approval.rs`
 
 > 入口：[`深挖档 §3`](docs/audits/0AR_S3_FRICTION_DEEP_DIVE_N1_N6_2026-09-20.md) / BACKLOG 0au。批序待定（建议 S1 落码 → S2 语料回放 → S3 随下一轮官方跑批收取）。
 
-- [ ] **S1 落码**：派发前 run 余量判定＋尾部保留（落点 `agent_loop.rs` 派发预扫描；复用 D3 未派发模板，cause 另立 `retrieval_dispatch_wallclock_reserved`；参数与档位表 180／300／450 绑定）；带钉子（无 `ToolStarted` 配对、一次性重述、正常续派不误伤）。
-- [ ] **S2 语料回放**：S3／r1／r2 语料回放 `remaining < batch_wallclock` 的派发数 = 0；模型面文案只报事实。
+- [x] **S1 落码**（2026-09-20 过夜批）：`batch_close.rs` 三常数＋纯函数（`CLOSE_ROUND_MARGIN_SECS=60`／`RUN_TAIL_RESERVE_SECS=120`／`WALLCLOCK_RESERVED_CAUSE`；`wallclock_reserved` 两支任一即保留，无上限恒不保留）＋`agent_loop.rs` 预扫描余量判定（上限解析序＝env＞controller 测试 seam `run_wallclock_limit_secs`＞None；批墙钟＝首个可派发调用档位默认；保留批全位拒绝）＋保留拒绝臂（无 `ToolStarted`、`stamp_failure(Refused)`、post-batch cause 自述一次性重述、不喂 deny 断路器、无重派邀请）；钉子＝纯函数三件（S3/r1/r2 逐例回放＋边界方向）＋集成一件（seam 10 s ⇒ 无 ToolStarted＋cause＋重述）。
+- [x] **S2 语料回放**（2026-09-20 过夜批）：四轮横向表 14 例回放——摩擦例 **7/7 全拦**（26–191 s trailing＋117 s 近失）、健康批 **7/7 不受扰**、边界 1 例保守改变（S3 extract 224 s；其「达标」系合成凑阈，与 0ax 修正同向）。判据 ①③ 达成、② 由集成钉断言。
 - [ ] **S3 真机复验**：随下一轮官方跑批收取（可与 0ar S3 同口径）。
 
 ### P1-0aw 宿主资源面：OS 委派执行（P1；2026-09-20 立项、同日重定案＋设计定稿；BACKLOG 0aw；来源＝S3 摩擦 N4）
@@ -959,10 +959,10 @@ GLM F2 处置转排期（2026-09-06 用户裁决）：`orz-host/src/approval.rs`
 > 设计权威：[`OS 委派执行设计`](docs/HOST_RESOURCE_OS_DELEGATION_DESIGN_2026-09-20.md) / 入口：[`N4 重定案`](docs/audits/N4_OS_SCHEDULING_DELEGATION_2026-09-20.md) / [`N4 首版调研`](docs/audits/N4_RESOURCE_GATE_INDUSTRY_RESEARCH_2026-09-20.md) / [`深挖档 §5`](docs/audits/0AR_S3_FRICTION_DEEP_DIVE_N1_N6_2026-09-20.md) / BACKLOG 0aw。
 > 口径（用户 2026-09-20 澄清）：orz 只发进程、只收结果；资源与运行交给操作系统；linux 侧需顾及**真机**（不只容器）。原「基线校准／分级降速／压力优先」方案作废。
 
-- [ ] **S1 拆准入拒绝（小）**：heavy 的 25 % commit headroom 预检拒绝退役；`CommitLimit`／`Committed_AS` 降为观测字段、不再作阈值；带钉子（本机 83.3 % used 基线回放 heavy 不再被拒）。
-- [ ] **S2 分类器整体删除（小）**：`ActionClass`／`HEAVY_TOOLS`／`HEAVY_PROGRAMS`／`CONDITIONAL_PROGRAMS`／`classify_action`／`classify_command`／`WRAPPER_PROGRAMS`／`COMMAND_FLAGS`／`strip_payload_bodies` 及仅服务分类的辅助件**全部删除**（裁决点 C）；`host_resource_denied` 生产端退役、verifier 与 schema 保留供历史 journal；模块改名 `resource_gate.rs` → `resource_hint.rs`。
-- [ ] **S3 内核强制面校正（中）**：run 级 Job Object 保留（Windows 内核强制），`default_job_limits` 的 commit 上限脱离宿主 commit 百分比（默认不设／固定预算／仅作上限不作拒绝——**裁决点 B**）；`active_process`（2×cores+8）与 `cpu_rate` 80 % 维持；Linux 无强制面照旧记 `enforced=false`；**边界：run 级 Job 上限是 orz 自身的保护面（2026-09-12 Run B 死因），不得随准入门一并撤掉**。
-- [ ] **S4 卷余量轴：观测＋预派发软提示（中；裁决点 A 已裁决，软水位 = 4 GiB）**：派发前取目标卷读数，`free < VOLUME_HINT_FREE_BYTES = 4 GiB` 时**附机械软提示、不阻断**，**每 run 每卷只提示一次**（机械去重）；`HEAVY_RELEASE_FREE_BYTES` 放行语义退役；真失败面回到 OS（`ERROR_DISK_FULL`／`ENOSPC`）由 0z C 降级链承担（与 0z 边界分清）。
+- [x] **S1 拆准入拒绝（小）**（2026-09-20 过夜批）：25 % commit headroom 预检拒绝／`GateDecision`/`Refuse` 分支/`host_resource_denied` 注入/run_tests 预检门全部删除；`CommitLimit`／`Committed_AS` 降为观测字段（注释明示）；判据 5 历史兼容实测（S3 三 run journal 经保留 verifier 回放零错误）。
+- [x] **S2 分类器整体删除（小）**（2026-09-20 过夜批）：分类器 15 件＋拒绝文案族整体删除；`resource_gate.rs` → **`resource_hint.rs`**（保留快照/探针/写目标/tier 观测标签/job 限额推导，新增 `ResourceHint` 软提示＋每卷去重）；`lib.rs` 拆两臂（`terminate_heavy_call_jobs`＋`resource_exhausted` 生产端＝裁决 ④-1；`run_reclaim_pass` 调用与 `reclaim_performed` 生产端＝裁决 ④-2；`reclaim.rs` 保留不接线）、`live_call_jobs` 登记表保留只删 `action_class`（`LiveCallJob`＋`ProcessTreeRecord` 两处）；`families.rs`/schema/fixtures 未动。
+- [x] **S3 内核强制面校正（中）**（2026-09-20 过夜批）：裁决点 B 落码＝`default_job_limits` 推导**原样保留、只作上限**（注释补 Run B 因果依据）；`active_process`（2×cores+8≥16）与 `cpu_rate` 80 % 维持；既有 Windows e2e 钉（300 MB 预算子进程 MemoryError）与装配读回钉原样绿。
+- [x] **S4 卷余量轴：观测＋预派发软提示（中）**（2026-09-20 过夜批）：`VOLUME_HINT_FREE_BYTES = 4 GiB`；汇点 `write_targets` → 一次 `read_for_volumes` → 跨档快照（保留）→ 软提示附结果头部（中文短句＋英文读数，0af 混排；不阻断、每 run 每卷一次 `HashSet` 去重）；读数不可得 ⇒ 无提示、照常派发；钉子＝触发/去重/边界（恰 4 GiB 不提示）/双卷/单调用单探针五件。
 - [ ] **S5 真机复验（中）**：同语料回放 **heavy 类拒绝数 = 0**；无 OOM 杀；run 墙钟不因等待恶化；每次调用仍留可核观测（tier／readings／`enforced`）；只改 orz 侧，不动 `task.toml`／镜像／verifier／数据集 pin。
 
 - [x] **S0 裁决门（已裁决 2026-09-20）**：两条 0z S2 动作臂**一并退役**——删 `terminate_heavy_call_jobs` 与 `resource_exhausted` 生产端 ＋ 删回收触发与 `reclaim_performed` 生产端；三条事件 schema／verifier 保留供历史 journal；`live_call_jobs` 登记表保留、只删 `action_class`（详见 [`设计 §10.1`](docs/HOST_RESOURCE_OS_DELEGATION_DESIGN_2026-09-20.md)）。
@@ -972,12 +972,22 @@ GLM F2 处置转排期（2026-09-06 用户裁决）：`orz-host/src/approval.rs`
 
 > 入口：[`调研档 §2`](docs/audits/N1_N5_ITEM_REGISTRATION_AND_N4_N5_RESEARCH_2026-09-20.md) / BACKLOG 0ax。
 
-- [ ] **S1 口径面**：机械层识别「无 URL 合成答案」并单列计数（不计入 5 条阈值；披露写"可引用性"）；契约面按 S1 先例增可选字段。
-- [ ] **S2 形态面**：官方口径下评估启用本地 SERP 车道（`ORZ_WEB_SEARCH_LOCAL` 或等价路径）并做可比性论证；带判据（检索批至少一条来源带 URL，或如实标注全为合成）。
-- [ ] **S3 fetch 侧兜底**：Rust 指纹伪装（`rquest`／`wreq`）或 reader 服务，先覆盖判据要求的公共源；复测 grep.app 类反爬站点。
+- [x] **S1 口径面**（2026-09-20 过夜批）：`is_synthetic_answer`（web_search_result 且引用池空）＋`synthetic_answer_count` 单列；`usable_source_count` 剔除合成（阈值 5/护栏 10/倒数共用尺一致性不变；FP-2/阈值数值/工具面不动）；倒数行 `synthetic>0` 附可引用性披露（=0 逐字节不变）；payload 顶层可选 `synthetic_answer_count`（>0 才落）；契约面按 0ar S1 先例（schema＋fixture＋check_repository）。
+- [x] **S2 形态面（评估件）**（2026-09-20 过夜批）：评估落报告 §7.1——开关 `ORZ_WEB_SEARCH_LOCAL` 已在位（默认 off、off 即零行为变化）；可比性论证＝通道消融（任务/verifier/pin/墙钟不动）＋契约不变＋G1–G3 补强为网络形态预设；启用＝装置侧 env 一行、不动 `task.toml`、不启用 `eval_browser`；判据预登记（带 URL 占比 ≥90 %、synthetic 恒 0、fetch 数不低于 r3）。**启用进下一轮官方跑批待用户放行**。
+- [ ] **S3 fetch 侧兜底**：Rust 指纹伪装（`rquest`／`wreq`）或 reader 服务，先覆盖判据要求的公共源；复测 grep.app 类反爬站点。（2026-09-20 过夜批：路线评估落报告 §7.2——推荐先 S2 本地车道、S3 只兜残余面；依赖新增需网络实测核证与本批「不重建」边界冲突，落码待放行。）
 - [ ] **S4 真机复验**：同三题口径下「无 URL 结果占比／可引用来源数」可机械读数并进入审计。
 
 
+### P1-0ay 检索合成判定面落盘与可核复算（P1；2026-09-20 立项，BACKLOG 0ay；来源＝0ax S1 独立审计 F-2）
+
+> 入口：[`独立审计与裁决 §2`](docs/audits/0AT_0AU_0AV_0AW_0AX_S1_INDEPENDENT_AUDIT_AND_ADJUDICATION_2026-09-20.md) / 索引 `GAP-RETRIEVAL-SYNTHETIC-JUDGEMENT-AUDITABILITY` / BACKLOG 0ay。
+
+- [ ] **S1 契约面**：`web_search_result` ledger 条目增可选 `citation_url_count`（非负整数；`candidate_urls` 非空才落计数）——schema＋fixture＋Python 镜像＋Rust verifier 四件同批；**重写 `merged-multi-query` fixture**（审计 F-3：合成条目改「查询串 identity ＋ `citation_url_count: 0`」形态，另加「有引用池」正例）。
+- [ ] **S2 实现**：`evidence.rs` 装配面单源落 `candidate_urls.len()`（与 `is_synthetic_answer` 判定同源，禁二把尺）；payload 字段条件落盘（不扰动单 query 批与无引用池批）。
+- [ ] **S3 语料复算**：S3 三 run 归档用新字段重算 `synthetic_answer_count`／收窄 `usable_source_count`，与实现判定逐格一致（含混合批正例）；旧 journal 回放零误报（字段可选）。
+- [ ] **S4 真机复验**：同三题口径「无 URL 占比／可引用来源数」可机械读并进入审计（承接 0ax S4）。
+- 判据：① journal 侧可独立重算（与实现同源同值）；② 单 query 批与无引用池批 payload 逐字节不变；③ 不动阈值 5/10、FP-2、官方口径（`task.toml`／镜像／verifier／数据集 pin）。
+- 边界：与 0av（读数面）同族不同面——0ay 落判定**输入**；0ax S1 行为语义不变。
 ### P1-0as 编码 lossy 兜底细化（P1；2026-09-19 用户令「值得做」，BACKLOG 0as；由 0ar S1 狗粮轮 F4 回查引出；**实施批落码并于提交批闭合 2026-09-19（37 → 36；orz `3d7d7a74`＋`e897dce2`）**）
 
 > 入口：BACKLOG 0as / 索引 `GAP-ENCODING-LOSSY-REFINEMENT` / F4 记录 [`0AR_S1_CONTRACT_SURFACE_2026-09-19` §7](docs/audits/0AR_S1_CONTRACT_SURFACE_2026-09-19.md) / 编码门审计 [`GAP_ENCODING_GATE_IMPL_AUDIT_2026-08-13`](docs/audits/GAP_ENCODING_GATE_IMPL_AUDIT_2026-08-13.md) / 实施回执 [`0AS_ENCODING_LOSSY_REFINEMENT_2026-09-19`](docs/audits/0AS_ENCODING_LOSSY_REFINEMENT_2026-09-19.md) / `orz/crates/codegen/orz-tools/src/util/encoding.rs`。计数：立项 **36 → 37**（2026-09-19）。目标口径：可读部分保持可读、不可解码字节显式可见且噪声最小（现状＝四级梯最后一级整段 `�`；run `RUN-CLI-6aad9497` 实测 `utf-8-lossy` 1 次）。
@@ -1073,16 +1083,16 @@ GLM F2 处置转排期（2026-09-06 用户裁决）：`orz-host/src/approval.rs`
 
 > 入口：[`深挖档 §2`](docs/audits/0AR_S3_FRICTION_DEEP_DIVE_N1_N6_2026-09-20.md) / BACKLOG 0at。
 
-- [ ] **S1（B 面，小）**：`query_summary` 增 `unattributed_usable_count`＋车道披露同源；契约面（可选字段＋Python 冻结参照＋fixture）。
-- [ ] **S2（A 面，中）**：证据落 `origin_query_id` 派发谱系（dispatch → evidence 透传）；判据＝恒等式成立＋逐 query 覆盖率 ≥90 %（S3 语料回放）。
+- [x] **S1（B 面，小）**（2026-09-20 过夜批）：`unattributed_usable_count`＝批级可用 − Σ 逐 query 可用；**多 query 批限定落盘**（单 query 批 payload 逐字节不变，判据 ③）；契约面＝schema 可选字段＋`merged-multi-query` fixture 扩展＋check_repository 登记＋Python schema 校验同面（S3 归档回放 gap=4/6/3/6/0/0/0 与深挖档 §2.1 逐批一致）。
+- [x] **S2（A 面，中）**（2026-09-20 过夜批）：`origin_query_assignments` 五规则（单 query 全 None／逐字／归一化／候选池回溯／leader 谱系）＋`query_ids_for` 单源（`query_summary` 与谱系同 id 域）；多 query 批工具证据 ledger 条目落可选 `origin_query_id`；判据＝恒等式钉＋覆盖率由 leader 兜底构造 100 %（S3 归档无证据级 search_query，真机复核随 S3 收取）＋端到端钉（合并派发 ledger origin=query_summary[0]）。
 - [ ] **S3 口径同步**：设计稿 §5.4 与 ADR 转录同步（归因修好前不得据逐 query 披露做续派依据）。
 
 ### P2-0av 检索批次数读数落盘面（P2；2026-09-20 立项，BACKLOG 0av；来源＝S3 摩擦 N3）
 
 > 入口：[`深挖档 §4`](docs/audits/0AR_S3_FRICTION_DEEP_DIVE_N1_N6_2026-09-20.md) / BACKLOG 0av。
 
-- [ ] **S1 落码**：`mechanical_audit_update{kind:"retrieval_batch"}` 读数（activation_id／usable／cap／retrieval_calls／terminal_reason）；不新增事件类型、模型面字节不变。
-- [ ] **S2 可核判据**：真机 run 中「倒数行读数 ＝ 该批 `usable_source_count`」可机械重算（0ar 判据 7 后段转可核）。
+- [x] **S1 落码**（2026-09-20 过夜批）：`dispatch.rs` 批收尾写 `mechanical_audit_update{kind:"retrieval_batch"}`（五值与 batch_close 单源 helper 同值；Err 臂不落）；kind 枚举 8 值＋schema **按 kind 条件分支**（五键批读数／均一四键）＋契约钉改写＋Python 校验器分支（Rust↔Python 同步，历史 journal 回放零错误）；新正例 fixture＋check_repository 登记。
+- [ ] **S2 可核判据**：真机 run 中「倒数行读数 ＝ 该批 `usable_source_count`」可机械重算（0ar 判据 7 后段转可核）。（机制面已落：倒数/assessment/journal 读数三面共用 `usable_source_count` 单源；真机重算演示随下一轮官方跑批收取。）
 - [ ] **S3（可选）**：headless run 尾无条件落侧车（或评测开关）——使整条模型面消息可审计。
 
 

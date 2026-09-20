@@ -1800,16 +1800,22 @@ def _verify_v02_mechanical_audit(events: list[dict[str, Any]]) -> list[str]:
     （与 counterexample 注入同语义）。规则：
 
     - kind ∈ {tool_result, plan_gate, budget, attention_ladder,
-      context_scale, model_compression, plan_write_guidance}；
+      context_scale, model_compression, plan_write_guidance,
+      retrieval_batch}；
       （`attention_ladder` 为 **已退役** 的 0ae D2 阶梯 kind——动态上下文
       滑块 S1 起生产零写入，保留枚举值只为历史 journal 仍可校验；
       `context_scale` = 实际上下文刻度提醒与压缩开窗，键形
       `context_scale:<500k|900k|first_fold>`。）
-    - payload 必须携带 key（对象键，非空）/ round（非负整数）/ summary
-      （非空机械事实摘要）/ anomaly（字符串或 null）；
+    - 其余 kind 的 payload 必须携带 key（对象键，非空）/ round（非负整数）/
+      summary（非空机械事实摘要）/ anomaly（字符串或 null）；
     - 键形为 file:<path> / cmd:<call_id> / plan / budget / retrieval:<n> /
       attention_ladder:<K>k（历史）/ context_scale:<500k|900k|first_fold> /
       model_compression / plan_write_guidance / plan_write_reminder。
+    - `retrieval_batch`（0av S1，2026-09-20，S3 摩擦 N3）payload 形状独立：
+      {activation_id, usable, cap, retrieval_calls, terminal_reason} 五键
+      （与 Rust `batch_close` 单源 helper 同值；模型面零改动、不进审查表/
+      报告块），使 0ar 判据 7 后段在任何未达 500K 归档里程碑的 run 都可
+      机械重算。
     """
     errors: list[str] = []
     for index, event in enumerate(events):
@@ -1826,16 +1832,46 @@ def _verify_v02_mechanical_audit(events: list[dict[str, Any]]) -> list[str]:
             "context_scale",
             "model_compression",
             "plan_write_guidance",
+            "retrieval_batch",
         ):
             errors.append(
                 f"event {index}: mechanical_audit_update kind {kind!r} must be "
                 "tool_result / plan_gate / budget / attention_ladder / "
-                "context_scale / model_compression / plan_write_guidance"
+                "context_scale / model_compression / plan_write_guidance / "
+                "retrieval_batch"
             )
         if not isinstance(entry, dict):
             errors.append(
                 f"event {index}: mechanical_audit_update needs a payload object"
             )
+            continue
+        if kind == "retrieval_batch":
+            # 0av S1：批读数形状（五键全必带；数值非负整数；reason 非空）。
+            for key in ("activation_id", "usable", "cap", "retrieval_calls", "terminal_reason"):
+                if key not in entry:
+                    errors.append(
+                        f"event {index}: mechanical_audit_update retrieval_batch "
+                        f"payload needs {key}"
+                    )
+            for key in ("usable", "cap", "retrieval_calls"):
+                value = entry.get(key)
+                if key in entry and (not isinstance(value, int) or isinstance(value, bool) or value < 0):
+                    errors.append(
+                        f"event {index}: mechanical_audit_update retrieval_batch "
+                        f"{key} must be a non-negative integer"
+                    )
+            activation_id = entry.get("activation_id")
+            if "activation_id" in entry and (not isinstance(activation_id, str) or not activation_id):
+                errors.append(
+                    f"event {index}: mechanical_audit_update retrieval_batch "
+                    "activation_id must be a non-empty string"
+                )
+            reason = entry.get("terminal_reason")
+            if "terminal_reason" in entry and (not isinstance(reason, str) or not reason):
+                errors.append(
+                    f"event {index}: mechanical_audit_update retrieval_batch "
+                    "terminal_reason must be a non-empty string"
+                )
             continue
         key = entry.get("key")
         round_ = entry.get("round")
@@ -2156,6 +2192,25 @@ def _verify_v02_tool_availability_probe(events: list[dict[str, Any]]) -> list[st
                 f"event {index}: tool(s) in both complete and incomplete: "
                 f"{sorted(overlap)}"
             )
+        # 0ac S3① (2026-09-13): the retrieval_family probe is its OWN event
+        # stream (`probe_scope="retrieval_family"`, members are the three
+        # family names, readings live in `retrieval_family`) — it never
+        # participates in the work-tools partition. 2026-09-20 review-fix
+        # batch: scope the partition rule to the work-tools face and give
+        # the family face its own member bound (previously every journal
+        # carrying the family probe failed the work-tools rule).
+        if payload.get("probe_scope") == "retrieval_family":
+            family_extra = (complete | set(incomplete)) - {
+                "browser",
+                "search_engine",
+                "web_channel",
+            }
+            if family_extra:
+                errors.append(
+                    f"event {index}: retrieval_family probe partition must be "
+                    f"a subset of the family members; extra={sorted(family_extra)}"
+                )
+            continue
         extra = (complete | set(incomplete)) - _WORK_TOOLS
         if extra:
             errors.append(
@@ -2995,6 +3050,13 @@ def _verify_v02_probe_accuracy(events: list[dict[str, Any]]) -> list[str]:
             continue
         event_type = event.get("event_type")
         if event_type == "tool_availability_check":
+            # 0ac S3① (2026-09-13): the retrieval_family probe is its own
+            # event stream and never participates in the work-tools flip
+            # chain (2026-09-20 review-fix batch — previously its family
+            # member set registered as a work-tools "flip" with no header
+            # change to answer for).
+            if event["payload"].get("probe_scope") == "retrieval_family":
+                continue
             complete = frozenset(event["payload"].get("complete", []))
             if prev_complete is not None and complete != prev_complete:
                 pending_flip = (index, prev_complete, complete)

@@ -5,6 +5,20 @@
   "status": "error",
   "error": "content_anchor_mismatch",
   "file_path": "src/lib.rs",
+  "reason": {
+    "label": "call-ft-anchor",
+    "file_path": "src/lib.rs",
+    "expected": {
+      "size": 4096,
+      "mtime": null,
+      "sha256": "8f434346648f6b96df89dda901c5176b10a6d83961dd3c1ac88b59b2dc327aa4"
+    },
+    "actual": {
+      "size": 4095,
+      "mtime": 1789834125,
+      "sha256": null
+    }
+  },
   "failure_target": {
     "kind": "anchor_target",
     "id": "8f434346648f6b96df89dda901c5176b10a6d83961dd3c1ac88b59b2dc327aa4",

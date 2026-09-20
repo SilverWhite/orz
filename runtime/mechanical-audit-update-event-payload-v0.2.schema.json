@@ -1,26 +1,135 @@
 {
-  "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://local.scientific-assurance.invalid/schema/mechanical-audit-update-event-payload-v0.2.schema.json",
-  "title": "mechanical_audit_update event payload v0.2 (MECHANICAL-AUDIT-LAYER)",
-  "description": "ADR-0010 §14.39 / MECHANICAL_AUDIT_LAYER_DESIGN_2026-08-24 §2.4: 机械审查层轻量事件留痕——每次对象键覆盖写（含 step/契约类检查）以一条记录留痕，供回放与验证；报告块本身不进归档（与 counterexample 注入同语义）。kind 为写入来源（tool_result=工具结果分类、plan_gate=首轮计划门结果、budget=轮末预算覆盖写、attention_ladder=**已退役**的注意力阶梯触发与压缩窗口开启〔动态上下文滑块 S1 起生产零写入，保留仅供历史 journal 回放校验〕、context_scale=**模型面阶梯**提醒与硬截断事实〔v8 滑块勘误 2026-09-16：量尺＝模型面估算＋静态开销（系统提示词与工具定义），档位 192/224/256/288K 软提醒 → 320K 硬提醒（打断＋开窗）→ 500K 硬截断；**软档每会话一次、H1/T1 按越线重新武装**（实现批补录：越线发一次、落到线下复位；水位键保留为审计事实但不再抑制硬档）；v7 的 500K/900K 实际上下文刻度与 950K 硬兜底随之退役〕、model_compression=模型参与压缩窗口收口、plan_write_guidance=首轮黑板写入引导与 N 轮一次性补救提醒）；payload 为审查表条目 {key, round, summary, anomaly}——key 为对象键（file:<path> / cmd:<call_id> / plan / budget / retrieval:<n> / attention_ladder:<K>k〔历史〕 / context_scale:<192k|224k|256k|288k|320k|500k|first_block|hard_truncate> / model_compression / plan_write_guidance / plan_write_reminder；v7 的历史键 500k|900k|first_fold|hard_950k_intercepted 仅存在于历史 journal）、round 为写入时的轮计数、summary 为机械事实摘要（无建议、无引导）、anomaly 为异常事实（exit code/超时/锚点拒单/候选超限/模型未参与压缩 model_not_participated/**硬截断 hard_context_truncated_blocks〔T1：主滑块以外的**已闭合**分块移出模型面、不足一块的残段留在窗口内，summary 带 truncated_blocks=／freed_tokens=〕／上限守卫 hard_context_guard_truncated_blocks〔**700K 估算**异常保险线（实现批由 1.10M 下调），同上〕／模型面内超大工具结果指针化 hard_context_result_pointerized 与 hard_context_guard_result_pointerized〔溢出体量位于工作现场内时的窗口内指针化；**先裁回放块（可再生）再指针化**，指针指向改前落盘的逐字原文，summary 带 pointerized_results=／replay_reclaimed=／freed_tokens=／archive_write_failed=／ledger_write_failed=〕；v7 历史值 window_upload_over_cap／hard_context_compaction_failed_* ／`semantic_compaction_stalled` 仅供历史 journal 回放）或 null。主车道专属：检索子代理车道不产生本事件。",
-  "type": "object",
-  "additionalProperties": false,
-  "required": ["kind", "payload"],
-  "properties": {
-    "kind": {
-      "type": "string",
-      "enum": ["tool_result", "plan_gate", "budget", "attention_ladder", "context_scale", "model_compression", "plan_write_guidance"]
+ "$schema": "https://json-schema.org/draft/2020-12/schema",
+ "$id": "https://local.scientific-assurance.invalid/schema/mechanical-audit-update-event-payload-v0.2.schema.json",
+ "title": "mechanical_audit_update event payload v0.2 (MECHANICAL-AUDIT-LAYER)",
+ "description": "ADR-0010 §14.39 / MECHANICAL_AUDIT_LAYER_DESIGN_2026-08-24 §2.4: 机械审查层轻量事件留痕——每次对象键覆盖写（含 step/契约类检查）以一条记录留痕，供回放与验证；报告块本身不进归档（与 counterexample 注入同语义）。kind 为写入来源（tool_result=工具结果分类、plan_gate=首轮计划门结果、budget=轮末预算覆盖写、attention_ladder=**已退役**的注意力阶梯触发与压缩窗口开启〔动态上下文滑块 S1 起生产零写入，保留仅供历史 journal 回放校验〕、context_scale=**模型面阶梯**提醒与硬截断事实〔v8 滑块勘误 2026-09-16：量尺＝模型面估算＋静态开销（系统提示词与工具定义），档位 192/224/256/288K 软提醒 → 320K 硬提醒（打断＋开窗）→ 500K 硬截断；**软档每会话一次、H1/T1 按越线重新武装**（实现批补录：越线发一次、落到线下复位；水位键保留为审计事实但不再抑制硬档）；v7 的 500K/900K 实际上下文刻度与 950K 硬兜底随之退役〕、model_compression=模型参与压缩窗口收口、plan_write_guidance=首轮黑板写入引导与 N 轮一次性补救提醒）；payload 为审查表条目 {key, round, summary, anomaly}——key 为对象键（file:<path> / cmd:<call_id> / plan / budget / retrieval:<n> / attention_ladder:<K>k〔历史〕 / context_scale:<192k|224k|256k|288k|320k|500k|first_block|hard_truncate> / model_compression / plan_write_guidance / plan_write_reminder；v7 的历史键 500k|900k|first_fold|hard_950k_intercepted 仅存在于历史 journal）、round 为写入时的轮计数、summary 为机械事实摘要（无建议、无引导）、anomaly 为异常事实（exit code/超时/锚点拒单/候选超限/模型未参与压缩 model_not_participated/**硬截断 hard_context_truncated_blocks〔T1：主滑块以外的**已闭合**分块移出模型面、不足一块的残段留在窗口内，summary 带 truncated_blocks=／freed_tokens=〕／上限守卫 hard_context_guard_truncated_blocks〔**700K 估算**异常保险线（实现批由 1.10M 下调），同上〕／模型面内超大工具结果指针化 hard_context_result_pointerized 与 hard_context_guard_result_pointerized〔溢出体量位于工作现场内时的窗口内指针化；**先裁回放块（可再生）再指针化**，指针指向改前落盘的逐字原文，summary 带 pointerized_results=／replay_reclaimed=／freed_tokens=／archive_write_failed=／ledger_write_failed=〕；v7 历史值 window_upload_over_cap／hard_context_compaction_failed_* ／`semantic_compaction_stalled` 仅供历史 journal 回放）或 null。主车道专属：检索子代理车道不产生本事件。；retrieval_batch=0av S1（2026-09-20，S3 摩擦 N3）检索批次数读数落盘面——每批检索收尾时一条 journal 读数（payload 形状={activation_id, usable, cap, retrieval_calls, terminal_reason}，与 batch_close 单源 helper 同值；不进审查表/报告块、模型面零改动），使 0ar 判据 7 后段（倒数行读数与该批 usable_source_count 同口径）在任何未达 500K 归档里程碑的 run 都可机械重算",
+ "type": "object",
+ "additionalProperties": false,
+ "required": [
+  "kind",
+  "payload"
+ ],
+ "properties": {
+  "kind": {
+   "type": "string",
+   "enum": [
+    "tool_result",
+    "plan_gate",
+    "budget",
+    "attention_ladder",
+    "context_scale",
+    "model_compression",
+    "plan_write_guidance",
+    "retrieval_batch"
+   ]
+  },
+  "payload": {
+   "type": "object"
+  }
+ },
+ "allOf": [
+  {
+   "if": {
+    "properties": {
+     "kind": {
+      "const": "retrieval_batch"
+     }
     },
-    "payload": {
+    "required": [
+     "kind"
+    ]
+   },
+   "then": {
+    "properties": {
+     "payload": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["key", "round", "summary", "anomaly"],
+      "required": [
+       "activation_id",
+       "usable",
+       "cap",
+       "retrieval_calls",
+       "terminal_reason"
+      ],
       "properties": {
-        "key": { "type": "string", "minLength": 1 },
-        "round": { "type": "integer", "minimum": 0 },
-        "summary": { "type": "string", "minLength": 1 },
-        "anomaly": { "type": ["string", "null"] }
+       "activation_id": {
+        "type": "string",
+        "minLength": 1
+       },
+       "usable": {
+        "type": "integer",
+        "minimum": 0
+       },
+       "cap": {
+        "type": "integer",
+        "minimum": 0
+       },
+       "retrieval_calls": {
+        "type": "integer",
+        "minimum": 0
+       },
+       "terminal_reason": {
+        "type": "string",
+        "minLength": 1
+       }
       }
+     }
     }
+   }
+  },
+  {
+   "if": {
+    "properties": {
+     "kind": {
+      "enum": [
+       "tool_result",
+       "plan_gate",
+       "budget",
+       "attention_ladder",
+       "context_scale",
+       "model_compression",
+       "plan_write_guidance"
+      ]
+     }
+    },
+    "required": [
+     "kind"
+    ]
+   },
+   "then": {
+    "properties": {
+     "payload": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+       "key",
+       "round",
+       "summary",
+       "anomaly"
+      ],
+      "properties": {
+       "key": {
+        "type": "string",
+        "minLength": 1
+       },
+       "round": {
+        "type": "integer",
+        "minimum": 0
+       },
+       "summary": {
+        "type": "string",
+        "minLength": 1
+       },
+       "anomaly": {
+        "type": [
+         "string",
+         "null"
+        ]
+       }
+      }
+     }
+    }
+   }
   }
+ ]
 }

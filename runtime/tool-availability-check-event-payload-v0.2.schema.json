@@ -21,6 +21,10 @@
       "type": "string",
       "format": "date-time"
     },
+    "retrieval_enabled": {
+      "type": "boolean",
+      "description": "0ac S3① (2026-09-13, 设计 §9/§10.2): the run-level independent retrieval enablement gate reading carried by every retrieval_family probe (projection.rs retrieval_family_payload emits it unconditionally; false ⇒ all three family members read absent with a neutral reason). Schema widened 2026-09-20 review-fix batch: the field existed in the producer since 0ac S3① but was missing here, so every journal carrying the probe failed full replay validation (unexpected key)."
+    },
     "complete": {
       "type": "array",
       "items": { "type": "string" },

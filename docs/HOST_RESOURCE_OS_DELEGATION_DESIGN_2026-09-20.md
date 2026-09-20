@@ -50,8 +50,14 @@ orz **不在** Job 内（它是 Job 的持有者），所以只有 Job 上限能
 | run Job CPU rate | 80 % | 保留 |
 | 25 % commit headroom 门 | **删除** | `HEAVY_RELEASE_COMMIT_HEADROOM_PERCENT` |
 | `HEAVY_RELEASE_FREE_BYTES`（8 GiB 放行门） | **删除** | 放行／拒绝语义退役 |
-| 动作分类器（`ActionClass`／`HEAVY_TOOLS`／`HEAVY_PROGRAMS`／`CONDITIONAL_PROGRAMS`／`classify_action`／`classify_command`／`WRAPPER_PROGRAMS`／`COMMAND_FLAGS`／`strip_payload_bodies` 等**仅服务分类**的件） | **整体删除** | 用户裁决（点 C） |
+| 动作分类器（`ActionClass`／`HEAVY_TOOLS`／`HEAVY_PROGRAMS`／`CONDITIONAL_PROGRAMS`／`classify_action`／`classify_command`／`WRAPPER_PROGRAMS`／`COMMAND_FLAGS` 等**仅服务分类**的件） | **整体删除** | 用户裁决（点 C） |
 | tier 阶梯（`normal`／`watch`／`soft`／`reclaim_direct`／`hard`／`unknown`） | **保留，但只作观测标签** | 它是读数摘要，不是分类器；`host_resource_snapshot` 的 `tier` 字段与软提示语境继续用它（删除会牵动事件族＋verifier＋e2e 期望集且无收益） |
+
+> **勘误（2026-09-20 审查修复批）**：上表「整体删除」行首版把 `strip_payload_bodies` 列入删除清单，
+> 但它属 `write_targets`（§6 明令保留的**目标卷解析**）的 here-string/heredoc 剥离链——
+> `split_segments`／`tokenize`／`strip_payload_bodies`／`segment_write_targets` 等随 `write_targets`
+> **保留**，仅服务分类的件（分档表、`classify_*`、门定案句等）删除。实现批（0aw 过夜批）按此执行，
+> 本行仅补正文字。
 
 ## §5 三个面的去向（定案）
 

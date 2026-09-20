@@ -2889,15 +2889,21 @@ def check_repository() -> dict[str, Any]:
     # MECHANICAL-LAYER-MATH-CALCULUS F4 (2026-08-30, BACKLOG P2-10 / TODO I2):
     # failure-target identity fixtures — 4 valid (cmd/anchor/file/url) + 2
     # schema negatives (bad id format / unknown kind).
+    # 2026-09-20 review-fix batch: the ANCHOR fixture additionally carries the
+    # anchor-mismatch `reason` detail (producer emits it on the v0.2 track
+    # since 0q; the v0.2 schema was widened accordingly) — so it registers
+    # against the v0.2 schema; the other three stay on v0.1.
     for name in (
         "tool-completed.failure-target-cmd.valid.json",
-        "tool-completed.failure-target-anchor.valid.json",
         "tool-completed.failure-target-file.valid.json",
         "tool-completed.failure-target-url.valid.json",
     ):
         run_event_v02_payload_positive_contracts[run_event_v02_payload_root / name] = (
             tool_completed_schema
         )
+    run_event_v02_payload_positive_contracts[
+        run_event_v02_payload_root / "tool-completed.failure-target-anchor.valid.json"
+    ] = ROOT / "runtime/tool-completed-event-payload-v0.2.schema.json"
     for name in (
         "tool-completed.failure-target-bad-id.constraint.invalid.json",
         "tool-completed.failure-target-bad-kind.constraint.invalid.json",
@@ -3013,6 +3019,19 @@ def check_repository() -> dict[str, Any]:
         run_event_v02_payload_root
         / "tool-availability-check.retrieval-family-missing.constraint.invalid.json"
     ] = ROOT / "runtime/tool-availability-check-event-payload-v0.2.schema.json"
+    # 0at/0ax (2026-09-20, S3 frictions N1/N5): the merged-multi-query
+    # fixture above also carries the new optional fields — `origin_query_id`
+    # on source entries (dispatch lineage), `unattributed_usable_count` and
+    # `synthetic_answer_count` at the top level; all validated by the same
+    # retrieval-result schema registered above.
+    # 0av S1 (2026-09-20, S3 friction N3): retrieval batch reading — the
+    # `retrieval_batch` kind of the mechanical-audit family with the
+    # five-key payload {activation_id, usable, cap, retrieval_calls,
+    # terminal_reason} (conditional schema branch).
+    run_event_v02_payload_positive_contracts[
+        run_event_v02_payload_root
+        / "mechanical-audit-update.retrieval-batch.valid.json"
+    ] = ROOT / "runtime/mechanical-audit-update-event-payload-v0.2.schema.json"
     for instance_path, schema_path in run_event_v02_payload_positive_contracts.items():
         errors.extend(
             _validate_instance(

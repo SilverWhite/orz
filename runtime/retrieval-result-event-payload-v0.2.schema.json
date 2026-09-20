@@ -1,314 +1,618 @@
 {
-  "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://local.scientific-assurance.invalid/schema/retrieval-result-event-payload-v0.2.schema.json",
-  "title": "Structured retrieval result runtime event payload v0.2",
-  "description": "ADR-0010 §3.3.3/§3.7.4/§3.7 条 12/§5.2: the structured result the retrieval sub-agent forms before the mechanical assessment — query_summary, source_ledger, filtering_log and raw_source_refs, all built mechanically by the controller from tool-call evidence + [DOC]/[SOURCE] declaration lines (provider-neutral; the mechanical ledger is the single result track). GAP-RETRIEVAL-STRUCTURED-RESULT 方向 C (2026-08-30 用户裁决): the [RESULT_JSON] organized block and its organized_response are DELETED — the layer-3 sub-agent model weighting annotation (model_weight/reason/annotation_status, §3.7 条 12 ③) is retired with it. Source quality weighting: web-typed ledger entries carry the mechanical tier/weight (authoritative 1.1 / default 1.0 / low_quality 0.7); [SOURCE] declaration URLs are normalized (ACAF network-target rules). visibility_degraded=true iff the ledger carries NO text-level evidence (zero full_text_observed/partial_text_observed — metadata-only declarations or no tool calls), an explicit mechanical fallback signal (never a silent downgrade). FUS-RETRIEVAL-MECH B-1 (2026-08-13): web_search_result ledger entries may carry candidate_urls — the citation URL candidate pool forwarded mechanically from the host tool result (metadata-grade). FUS-RETRIEVAL-MECH step 3 (2026-08-14): candidate_urls is the POST-PREFILTER retained pool (canonical/host-level dedup, known failure forms removed, sorted by mechanical tier/weight + lexical relevance); candidate_pool mirrors it with per-candidate canonical_url/tier/mechanical_weight/weight_reason/relevance/form_reasons; prefilter_log records every removal with a stable reason (bad_url/login_wall/redirect_chain/duplicate_canonical/duplicate_host). raw_source_refs mirrors candidate_urls and candidate_pool for web_search_result entries. The assurance/retrieval-result-v0.1.schema.json twin is migration input and stays replay-only.",
-  "type": "object",
-  "additionalProperties": false,
-  "required": [
-    "schema_version",
-    "result_kind",
-    "result_id",
-    "activation_id",
-    "subagent_session_id",
-    "contract_id",
-    "contract_revision",
-    "result_digest",
-    "ledger_digest",
-    "query_summary",
-    "source_ledger",
-    "filtering_log",
-    "raw_source_refs",
-    "source_counts",
-    "visibility_degraded"
-  ],
-  "properties": {
-    "prefilter_log": {
-      "type": "array",
-      "items": { "$ref": "#/$defs/prefilter_entry" }
-    },
-    "schema_version": { "const": "0.2.0-draft" },
-    "result_kind": { "const": "retrieval_subagent_result" },
-    "result_id": { "type": "string", "pattern": "^RET-RES-[A-Za-z0-9._-]+$" },
-    "activation_id": { "type": "string", "minLength": 1 },
-    "subagent_session_id": { "type": "string", "minLength": 1 },
-    "contract_id": { "type": "string", "minLength": 1 },
-    "contract_revision": { "type": "integer", "minimum": 0 },
-    "result_digest": { "$ref": "#/$defs/sha256" },
-    "ledger_digest": { "$ref": "#/$defs/sha256" },
-    "query_summary": {
-      "type": "array",
-      "items": { "$ref": "#/$defs/query_entry" }
-    },
-    "source_ledger": {
-      "type": "array",
-      "items": { "$ref": "#/$defs/source_entry" }
-    },
-    "filtering_log": {
-      "type": "array",
-      "items": { "$ref": "#/$defs/filter_entry" }
-    },
-    "raw_source_refs": {
-      "type": "array",
-      "items": { "$ref": "#/$defs/ref_entry" }
-    },
-    "source_counts": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": [
-        "total",
-        "full_text_observed",
-        "partial_text_observed",
-        "metadata_only",
-        "unavailable"
-      ],
-      "properties": {
-        "total": { "type": "integer", "minimum": 0 },
-        "full_text_observed": { "type": "integer", "minimum": 0 },
-        "partial_text_observed": { "type": "integer", "minimum": 0 },
-        "metadata_only": { "type": "integer", "minimum": 0 },
-        "unavailable": { "type": "integer", "minimum": 0 }
-      }
-    },
-    "visibility_degraded": { "type": "boolean" }
+ "$schema": "https://json-schema.org/draft/2020-12/schema",
+ "$id": "https://local.scientific-assurance.invalid/schema/retrieval-result-event-payload-v0.2.schema.json",
+ "title": "Structured retrieval result runtime event payload v0.2",
+ "description": "ADR-0010 §3.3.3/§3.7.4/§3.7 条 12/§5.2: the structured result the retrieval sub-agent forms before the mechanical assessment — query_summary, source_ledger, filtering_log and raw_source_refs, all built mechanically by the controller from tool-call evidence + [DOC]/[SOURCE] declaration lines (provider-neutral; the mechanical ledger is the single result track). GAP-RETRIEVAL-STRUCTURED-RESULT 方向 C (2026-08-30 用户裁决): the [RESULT_JSON] organized block and its organized_response are DELETED — the layer-3 sub-agent model weighting annotation (model_weight/reason/annotation_status, §3.7 条 12 ③) is retired with it. Source quality weighting: web-typed ledger entries carry the mechanical tier/weight (authoritative 1.1 / default 1.0 / low_quality 0.7); [SOURCE] declaration URLs are normalized (ACAF network-target rules). visibility_degraded=true iff the ledger carries NO text-level evidence (zero full_text_observed/partial_text_observed — metadata-only declarations or no tool calls), an explicit mechanical fallback signal (never a silent downgrade). FUS-RETRIEVAL-MECH B-1 (2026-08-13): web_search_result ledger entries may carry candidate_urls — the citation URL candidate pool forwarded mechanically from the host tool result (metadata-grade). FUS-RETRIEVAL-MECH step 3 (2026-08-14): candidate_urls is the POST-PREFILTER retained pool (canonical/host-level dedup, known failure forms removed, sorted by mechanical tier/weight + lexical relevance); candidate_pool mirrors it with per-candidate canonical_url/tier/mechanical_weight/weight_reason/relevance/form_reasons; prefilter_log records every removal with a stable reason (bad_url/login_wall/redirect_chain/duplicate_canonical/duplicate_host). raw_source_refs mirrors candidate_urls and candidate_pool for web_search_result entries. The assurance/retrieval-result-v0.1.schema.json twin is migration input and stays replay-only.",
+ "type": "object",
+ "additionalProperties": false,
+ "required": [
+  "schema_version",
+  "result_kind",
+  "result_id",
+  "activation_id",
+  "subagent_session_id",
+  "contract_id",
+  "contract_revision",
+  "result_digest",
+  "ledger_digest",
+  "query_summary",
+  "source_ledger",
+  "filtering_log",
+  "raw_source_refs",
+  "source_counts",
+  "visibility_degraded"
+ ],
+ "properties": {
+  "prefilter_log": {
+   "type": "array",
+   "items": {
+    "$ref": "#/$defs/prefilter_entry"
+   }
   },
-  "$defs": {
-    "nonempty": { "type": "string", "minLength": 1 },
-    "sha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+  "schema_version": {
+   "const": "0.2.0-draft"
+  },
+  "result_kind": {
+   "const": "retrieval_subagent_result"
+  },
+  "result_id": {
+   "type": "string",
+   "pattern": "^RET-RES-[A-Za-z0-9._-]+$"
+  },
+  "activation_id": {
+   "type": "string",
+   "minLength": 1
+  },
+  "subagent_session_id": {
+   "type": "string",
+   "minLength": 1
+  },
+  "contract_id": {
+   "type": "string",
+   "minLength": 1
+  },
+  "contract_revision": {
+   "type": "integer",
+   "minimum": 0
+  },
+  "result_digest": {
+   "$ref": "#/$defs/sha256"
+  },
+  "ledger_digest": {
+   "$ref": "#/$defs/sha256"
+  },
+  "query_summary": {
+   "type": "array",
+   "items": {
+    "$ref": "#/$defs/query_entry"
+   }
+  },
+  "source_ledger": {
+   "type": "array",
+   "items": {
+    "$ref": "#/$defs/source_entry"
+   }
+  },
+  "filtering_log": {
+   "type": "array",
+   "items": {
+    "$ref": "#/$defs/filter_entry"
+   }
+  },
+  "raw_source_refs": {
+   "type": "array",
+   "items": {
+    "$ref": "#/$defs/ref_entry"
+   }
+  },
+  "source_counts": {
+   "type": "object",
+   "additionalProperties": false,
+   "required": [
+    "total",
+    "full_text_observed",
+    "partial_text_observed",
+    "metadata_only",
+    "unavailable"
+   ],
+   "properties": {
+    "total": {
+     "type": "integer",
+     "minimum": 0
+    },
+    "full_text_observed": {
+     "type": "integer",
+     "minimum": 0
+    },
+    "partial_text_observed": {
+     "type": "integer",
+     "minimum": 0
+    },
+    "metadata_only": {
+     "type": "integer",
+     "minimum": 0
+    },
+    "unavailable": {
+     "type": "integer",
+     "minimum": 0
+    }
+   }
+  },
+  "visibility_degraded": {
+   "type": "boolean"
+  },
+  "unattributed_usable_count": {
+   "type": "integer",
+   "minimum": 0,
+   "description": "0at B face (2026-09-20, S3 friction N1): batch-level usable count NOT attributable to any declared query by literal search_query match — batch usable minus the sum of per-query usable_source_count. Identity (criterion 1): sum(per-query) + unattributed = batch usable. Emitted on multi-query activations only; single-query activations attribute the whole batch and omit the field (payload byte-identical)."
+  },
+  "synthetic_answer_count": {
+   "type": "integer",
+   "minimum": 1,
+   "description": "0ax S1 (2026-09-20, S3 friction N5): count of deduplicated web_search_result evidence entries with an EMPTY citation pool — URL-less synthesized answers that are NOT citable and are excluded from the usable counting (threshold 5 / cap 10). Emitted only when > 0; absence means the batch carries no synthetic answer."
+  }
+ },
+ "$defs": {
+  "nonempty": {
+   "type": "string",
+   "minLength": 1
+  },
+  "sha256": {
+   "type": "string",
+   "pattern": "^[a-f0-9]{64}$"
+  },
+  "visibility": {
+   "type": "string",
+   "enum": [
+    "full_text_observed",
+    "partial_text_observed",
+    "metadata_only",
+    "unavailable"
+   ]
+  },
+  "query_entry": {
+   "type": "object",
+   "additionalProperties": false,
+   "required": [
+    "query_id",
+    "query_text",
+    "source_category",
+    "result_count",
+    "action_taken"
+   ],
+   "properties": {
+    "query_id": {
+     "type": "string",
+     "pattern": "^QRY-[A-Za-z0-9._-]+$"
+    },
+    "query_text": {
+     "$ref": "#/$defs/nonempty"
+    },
+    "source_category": {
+     "$ref": "#/$defs/nonempty"
+    },
+    "result_count": {
+     "type": "integer",
+     "minimum": 0
+    },
+    "action_taken": {
+     "enum": [
+      "searched",
+      "refined",
+      "aborted_scope_violation",
+      "aborted_no_results"
+     ]
+    },
+    "tool_used": {
+     "$ref": "#/$defs/nonempty"
+    },
+    "usable_source_count": {
+     "type": "integer",
+     "minimum": 0,
+     "description": "0ar S2 (2026-09-19, retrieval batch handoff design §5.4/§8 criterion 6): wide-scope usable source count attributed to THIS query (visibility full/partial, deduplicated by content_sha256, mechanical — never model-reported). Per-query attribution keys on the originating web_search query; fetch-derived evidence in a merged multi-query activation is unattributed. Single-query activations carry the batch total."
+    }
+   }
+  },
+  "source_entry": {
+   "type": "object",
+   "additionalProperties": false,
+   "required": [
+    "source_id",
+    "source_title",
+    "source_url_or_ref",
+    "source_type",
+    "visibility",
+    "accessed_at",
+    "observed_scope",
+    "missing_scope",
+    "relevance",
+    "highest_allowed_claim"
+   ],
+   "properties": {
+    "source_id": {
+     "type": "string",
+     "pattern": "^SRC-[A-Za-z0-9._-]+$"
+    },
+    "source_title": {
+     "$ref": "#/$defs/nonempty"
+    },
+    "source_url_or_ref": {
+     "$ref": "#/$defs/nonempty"
+    },
+    "source_type": {
+     "enum": [
+      "project_doc",
+      "web_page",
+      "web_search_result",
+      "local_file"
+     ]
+    },
     "visibility": {
-      "type": "string",
-      "enum": ["full_text_observed", "partial_text_observed", "metadata_only", "unavailable"]
+     "$ref": "#/$defs/visibility"
     },
-    "query_entry": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": ["query_id", "query_text", "source_category", "result_count", "action_taken"],
-      "properties": {
-        "query_id": { "type": "string", "pattern": "^QRY-[A-Za-z0-9._-]+$" },
-        "query_text": { "$ref": "#/$defs/nonempty" },
-        "source_category": { "$ref": "#/$defs/nonempty" },
-        "result_count": { "type": "integer", "minimum": 0 },
-        "action_taken": { "enum": ["searched", "refined", "aborted_scope_violation", "aborted_no_results"] },
-        "tool_used": { "$ref": "#/$defs/nonempty" },
-        "usable_source_count": {
-          "type": "integer",
-          "minimum": 0,
-          "description": "0ar S2 (2026-09-19, retrieval batch handoff design §5.4/§8 criterion 6): wide-scope usable source count attributed to THIS query (visibility full/partial, deduplicated by content_sha256, mechanical — never model-reported). Per-query attribution keys on the originating web_search query; fetch-derived evidence in a merged multi-query activation is unattributed. Single-query activations carry the batch total."
-        }
-      }
+    "accessed_at": {
+     "type": "string",
+     "format": "date-time"
     },
-    "source_entry": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": [
-        "source_id",
-        "source_title",
-        "source_url_or_ref",
-        "source_type",
-        "visibility",
-        "accessed_at",
-        "observed_scope",
-        "missing_scope",
-        "relevance",
-        "highest_allowed_claim"
-      ],
-      "properties": {
-        "source_id": { "type": "string", "pattern": "^SRC-[A-Za-z0-9._-]+$" },
-        "source_title": { "$ref": "#/$defs/nonempty" },
-        "source_url_or_ref": { "$ref": "#/$defs/nonempty" },
-        "source_type": { "enum": ["project_doc", "web_page", "web_search_result", "local_file"] },
-        "visibility": { "$ref": "#/$defs/visibility" },
-        "accessed_at": { "type": "string", "format": "date-time" },
-        "observed_scope": { "$ref": "#/$defs/nonempty" },
-        "missing_scope": { "$ref": "#/$defs/nonempty" },
-        "relevance": { "enum": ["direct", "partial", "tangential", "excluded"] },
-        "content_sha256": { "$ref": "#/$defs/sha256" },
-        "highest_allowed_claim": { "enum": ["observed", "derived", "synthesized", "none"] },
-        "limitation": { "$ref": "#/$defs/nonempty" },
-        "tier": { "$ref": "#/$defs/tier" },
-        "mechanical_weight": { "$ref": "#/$defs/source_weight" },
-        "weight_reason": { "$ref": "#/$defs/nonempty" },
-        "candidate_urls": {
-          "type": "array",
-          "items": { "$ref": "#/$defs/nonempty" }
-        },
-        "candidate_pool": {
-          "type": "array",
-          "items": { "$ref": "#/$defs/candidate_pool_entry" }
-        }
-      },
-      "allOf": [
-        {
-          "if": {
-            "properties": {
-              "source_type": { "const": "web_page" }
-            },
-            "required": ["source_type"]
-          },
-          "then": {
-            "required": ["tier", "mechanical_weight", "weight_reason"]
-          }
-        },
-        {
-          "if": {
-            "properties": { "tier": { "const": "authoritative" } },
-            "required": ["tier"]
-          },
-          "then": {
-            "properties": { "mechanical_weight": { "const": 1.1 } }
-          }
-        },
-        {
-          "if": {
-            "properties": { "tier": { "const": "default" } },
-            "required": ["tier"]
-          },
-          "then": {
-            "properties": { "mechanical_weight": { "const": 1.0 } }
-          }
-        },
-        {
-          "if": {
-            "properties": { "tier": { "const": "low_quality" } },
-            "required": ["tier"]
-          },
-          "then": {
-            "properties": { "mechanical_weight": { "const": 0.7 } }
-          }
-        }
-      ]
+    "observed_scope": {
+     "$ref": "#/$defs/nonempty"
     },
-    "filter_entry": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": ["source_id", "reason", "action", "filtered_at"],
-      "properties": {
-        "source_id": { "type": "string", "pattern": "^SRC-[A-Za-z0-9._-]+$" },
-        "reason": {
-          "enum": [
-            "scope_violation",
-            "visibility_insufficient",
-            "duplicate",
-            "low_relevance",
-            "source_type_forbidden",
-            "budget_exceeded",
-            "policy_blocked"
-          ]
-        },
-        "action": { "enum": ["excluded", "deferred_for_main_agent_review"] },
-        "filtered_at": { "type": "string", "format": "date-time" }
-      }
+    "missing_scope": {
+     "$ref": "#/$defs/nonempty"
     },
-    "ref_entry": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": ["source_id", "source_title", "source_url_or_ref", "visibility", "content_sha256"],
-      "properties": {
-        "source_id": { "type": "string", "pattern": "^SRC-[A-Za-z0-9._-]+$" },
-        "source_title": { "$ref": "#/$defs/nonempty" },
-        "source_url_or_ref": { "$ref": "#/$defs/nonempty" },
-        "visibility": { "$ref": "#/$defs/visibility" },
-        "content_sha256": {
-          "oneOf": [
-            { "$ref": "#/$defs/sha256" },
-            { "type": "null" }
-          ]
-        },
-        "retrieval_note": { "$ref": "#/$defs/nonempty" },
-        "candidate_urls": {
-          "type": "array",
-          "items": { "$ref": "#/$defs/nonempty" }
-        },
-        "candidate_pool": {
-          "type": "array",
-          "items": { "$ref": "#/$defs/candidate_pool_entry" }
-        }
-      }
+    "relevance": {
+     "enum": [
+      "direct",
+      "partial",
+      "tangential",
+      "excluded"
+     ]
     },
-    "candidate_pool_entry": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": [
-        "url",
-        "canonical_url",
-        "tier",
-        "mechanical_weight",
-        "weight_reason",
-        "relevance",
-        "form_reasons"
-      ],
-      "properties": {
-        "url": { "$ref": "#/$defs/nonempty" },
-        "canonical_url": { "$ref": "#/$defs/nonempty" },
-        "tier": { "$ref": "#/$defs/tier" },
-        "mechanical_weight": { "$ref": "#/$defs/source_weight" },
-        "weight_reason": { "$ref": "#/$defs/nonempty" },
-        "relevance": {
-          "enum": ["direct", "partial", "tangential"]
-        },
-        "form_reasons": {
-          "type": "array",
-          "items": { "$ref": "#/$defs/nonempty" }
-        }
-      },
-      "allOf": [
-        {
-          "if": {
-            "properties": { "tier": { "const": "authoritative" } },
-            "required": ["tier"]
-          },
-          "then": {
-            "properties": { "mechanical_weight": { "const": 1.1 } }
-          }
-        },
-        {
-          "if": {
-            "properties": { "tier": { "const": "default" } },
-            "required": ["tier"]
-          },
-          "then": {
-            "properties": { "mechanical_weight": { "const": 1.0 } }
-          }
-        },
-        {
-          "if": {
-            "properties": { "tier": { "const": "low_quality" } },
-            "required": ["tier"]
-          },
-          "then": {
-            "properties": { "mechanical_weight": { "const": 0.7 } }
-          }
-        }
-      ]
+    "content_sha256": {
+     "$ref": "#/$defs/sha256"
     },
-    "prefilter_entry": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": ["source_id", "url", "reason", "action", "filtered_at"],
-      "properties": {
-        "source_id": { "type": "string", "pattern": "^SRC-[A-Za-z0-9._-]+$" },
-        "url": { "$ref": "#/$defs/nonempty" },
-        "canonical_url": { "$ref": "#/$defs/nonempty" },
-        "reason": {
-          "enum": [
-            "bad_url",
-            "login_wall",
-            "redirect_chain",
-            "duplicate_canonical",
-            "duplicate_host"
-          ]
-        },
-        "action": { "enum": ["removed"] },
-        "filtered_at": { "type": "string", "format": "date-time" }
-      }
+    "highest_allowed_claim": {
+     "enum": [
+      "observed",
+      "derived",
+      "synthesized",
+      "none"
+     ]
+    },
+    "limitation": {
+     "$ref": "#/$defs/nonempty"
     },
     "tier": {
-      "type": "string",
-      "enum": ["authoritative", "default", "low_quality"]
+     "$ref": "#/$defs/tier"
     },
-    "source_weight": {
-      "type": "number",
-      "enum": [0.7, 1.0, 1.1]
+    "mechanical_weight": {
+     "$ref": "#/$defs/source_weight"
+    },
+    "weight_reason": {
+     "$ref": "#/$defs/nonempty"
+    },
+    "candidate_urls": {
+     "type": "array",
+     "items": {
+      "$ref": "#/$defs/nonempty"
+     }
+    },
+    "candidate_pool": {
+     "type": "array",
+     "items": {
+      "$ref": "#/$defs/candidate_pool_entry"
+     }
+    },
+    "origin_query_id": {
+     "$ref": "#/$defs/query_entry/properties/query_id",
+     "description": "0at A face (2026-09-20, S3 friction N1): dispatch lineage of THIS evidence entry — the query_id (same id domain as query_summary) of the dispatch query it serves. Attribution ladder: exact search_query match > normalized match > citation-pool backtracking (derived evidence follows the search whose candidate pool it came from) > leader lineage (first dispatch query of the activation). Emitted on multi-query activations only."
     }
+   },
+   "allOf": [
+    {
+     "if": {
+      "properties": {
+       "source_type": {
+        "const": "web_page"
+       }
+      },
+      "required": [
+       "source_type"
+      ]
+     },
+     "then": {
+      "required": [
+       "tier",
+       "mechanical_weight",
+       "weight_reason"
+      ]
+     }
+    },
+    {
+     "if": {
+      "properties": {
+       "tier": {
+        "const": "authoritative"
+       }
+      },
+      "required": [
+       "tier"
+      ]
+     },
+     "then": {
+      "properties": {
+       "mechanical_weight": {
+        "const": 1.1
+       }
+      }
+     }
+    },
+    {
+     "if": {
+      "properties": {
+       "tier": {
+        "const": "default"
+       }
+      },
+      "required": [
+       "tier"
+      ]
+     },
+     "then": {
+      "properties": {
+       "mechanical_weight": {
+        "const": 1.0
+       }
+      }
+     }
+    },
+    {
+     "if": {
+      "properties": {
+       "tier": {
+        "const": "low_quality"
+       }
+      },
+      "required": [
+       "tier"
+      ]
+     },
+     "then": {
+      "properties": {
+       "mechanical_weight": {
+        "const": 0.7
+       }
+      }
+     }
+    }
+   ]
+  },
+  "filter_entry": {
+   "type": "object",
+   "additionalProperties": false,
+   "required": [
+    "source_id",
+    "reason",
+    "action",
+    "filtered_at"
+   ],
+   "properties": {
+    "source_id": {
+     "type": "string",
+     "pattern": "^SRC-[A-Za-z0-9._-]+$"
+    },
+    "reason": {
+     "enum": [
+      "scope_violation",
+      "visibility_insufficient",
+      "duplicate",
+      "low_relevance",
+      "source_type_forbidden",
+      "budget_exceeded",
+      "policy_blocked"
+     ]
+    },
+    "action": {
+     "enum": [
+      "excluded",
+      "deferred_for_main_agent_review"
+     ]
+    },
+    "filtered_at": {
+     "type": "string",
+     "format": "date-time"
+    }
+   }
+  },
+  "ref_entry": {
+   "type": "object",
+   "additionalProperties": false,
+   "required": [
+    "source_id",
+    "source_title",
+    "source_url_or_ref",
+    "visibility",
+    "content_sha256"
+   ],
+   "properties": {
+    "source_id": {
+     "type": "string",
+     "pattern": "^SRC-[A-Za-z0-9._-]+$"
+    },
+    "source_title": {
+     "$ref": "#/$defs/nonempty"
+    },
+    "source_url_or_ref": {
+     "$ref": "#/$defs/nonempty"
+    },
+    "visibility": {
+     "$ref": "#/$defs/visibility"
+    },
+    "content_sha256": {
+     "oneOf": [
+      {
+       "$ref": "#/$defs/sha256"
+      },
+      {
+       "type": "null"
+      }
+     ]
+    },
+    "retrieval_note": {
+     "$ref": "#/$defs/nonempty"
+    },
+    "candidate_urls": {
+     "type": "array",
+     "items": {
+      "$ref": "#/$defs/nonempty"
+     }
+    },
+    "candidate_pool": {
+     "type": "array",
+     "items": {
+      "$ref": "#/$defs/candidate_pool_entry"
+     }
+    }
+   }
+  },
+  "candidate_pool_entry": {
+   "type": "object",
+   "additionalProperties": false,
+   "required": [
+    "url",
+    "canonical_url",
+    "tier",
+    "mechanical_weight",
+    "weight_reason",
+    "relevance",
+    "form_reasons"
+   ],
+   "properties": {
+    "url": {
+     "$ref": "#/$defs/nonempty"
+    },
+    "canonical_url": {
+     "$ref": "#/$defs/nonempty"
+    },
+    "tier": {
+     "$ref": "#/$defs/tier"
+    },
+    "mechanical_weight": {
+     "$ref": "#/$defs/source_weight"
+    },
+    "weight_reason": {
+     "$ref": "#/$defs/nonempty"
+    },
+    "relevance": {
+     "enum": [
+      "direct",
+      "partial",
+      "tangential"
+     ]
+    },
+    "form_reasons": {
+     "type": "array",
+     "items": {
+      "$ref": "#/$defs/nonempty"
+     }
+    }
+   },
+   "allOf": [
+    {
+     "if": {
+      "properties": {
+       "tier": {
+        "const": "authoritative"
+       }
+      },
+      "required": [
+       "tier"
+      ]
+     },
+     "then": {
+      "properties": {
+       "mechanical_weight": {
+        "const": 1.1
+       }
+      }
+     }
+    },
+    {
+     "if": {
+      "properties": {
+       "tier": {
+        "const": "default"
+       }
+      },
+      "required": [
+       "tier"
+      ]
+     },
+     "then": {
+      "properties": {
+       "mechanical_weight": {
+        "const": 1.0
+       }
+      }
+     }
+    },
+    {
+     "if": {
+      "properties": {
+       "tier": {
+        "const": "low_quality"
+       }
+      },
+      "required": [
+       "tier"
+      ]
+     },
+     "then": {
+      "properties": {
+       "mechanical_weight": {
+        "const": 0.7
+       }
+      }
+     }
+    }
+   ]
+  },
+  "prefilter_entry": {
+   "type": "object",
+   "additionalProperties": false,
+   "required": [
+    "source_id",
+    "url",
+    "reason",
+    "action",
+    "filtered_at"
+   ],
+   "properties": {
+    "source_id": {
+     "type": "string",
+     "pattern": "^SRC-[A-Za-z0-9._-]+$"
+    },
+    "url": {
+     "$ref": "#/$defs/nonempty"
+    },
+    "canonical_url": {
+     "$ref": "#/$defs/nonempty"
+    },
+    "reason": {
+     "enum": [
+      "bad_url",
+      "login_wall",
+      "redirect_chain",
+      "duplicate_canonical",
+      "duplicate_host"
+     ]
+    },
+    "action": {
+     "enum": [
+      "removed"
+     ]
+    },
+    "filtered_at": {
+     "type": "string",
+     "format": "date-time"
+    }
+   }
+  },
+  "tier": {
+   "type": "string",
+   "enum": [
+    "authoritative",
+    "default",
+    "low_quality"
+   ]
+  },
+  "source_weight": {
+   "type": "number",
+   "enum": [
+    0.7,
+    1.0,
+    1.1
+   ]
   }
+ }
 }

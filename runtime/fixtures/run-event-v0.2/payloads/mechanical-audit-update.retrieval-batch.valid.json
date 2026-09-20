@@ -1,0 +1,10 @@
+{
+  "kind": "retrieval_batch",
+  "payload": {
+    "activation_id": "ACT-EXT-0001",
+    "usable": 3,
+    "cap": 10,
+    "retrieval_calls": 12,
+    "terminal_reason": "dispatch_wallclock_bound"
+  }
+}
